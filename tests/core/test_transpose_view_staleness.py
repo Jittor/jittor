@@ -86,3 +86,22 @@ def test_general_permutation_and_its_gradient_follow_updated_base(transpose_devi
     np.testing.assert_array_equal(transposed.numpy(), (source + 1).transpose(1, 2, 0))
     np.testing.assert_array_equal(jt.grad(transposed.sum(), a).numpy(),
                                   np.ones_like(source))
+
+
+def test_a_size_changing_rebind_stales_a_lazy_view_instead_of_aborting(transpose_device):
+    """A rebind that changes the element count cannot re-derive a lazy view.
+
+    ``x.data = <different shape>`` is legal in torch, and vLLM-Omni's
+    layerwise offload uses it to swap a parameter for a zero-element
+    placeholder. ``flatten()`` records a storage view on that parameter, and
+    re-deriving the reshape against the emptied holder aborted with
+    "reshape shape is invalid for input of size [x_items(0) == y_items(1152)]".
+    A view that can no longer be derived keeps the data it was taken from,
+    which is what torch's views do after ``x.data = y`` replaces the storage
+    under them.
+    """
+    x = jt.array(np.arange(12, dtype="float32").reshape(3, 4))
+    flat = x.view(-1)
+    x._update(jt.zeros((0,), "float32"))
+    assert x.numel() == 0
+    np.testing.assert_array_equal(flat.numpy(), np.arange(12, dtype="float32"))

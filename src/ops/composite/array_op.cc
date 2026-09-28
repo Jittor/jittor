@@ -74,6 +74,14 @@ void ArrayOp::jit_prepare(JK& jk) {
 }
 
 void ArrayOp::run() {
+    // Run again, by a kept graph (`keep_graph`): the first run already handed
+    // the data to the output, which still holds it -- see
+    // `release_kept_storage`, which leaves a constant's memory alone. Running
+    // on would put a null pointer in the output.
+    if (!allocation.ptr) {
+        ASSERT(output->mem_ptr) << "a re-run array op has lost its data";
+        return;
+    }
     #ifdef HAS_ACCELERATOR
     if (allocation.allocator == &cuda_dual_allocator) {
         auto host_ptr = cuda_dual_allocator.get_dual_allocation(allocation.allocation).host_ptr;
@@ -90,16 +98,28 @@ void ArrayOp::run() {
     #endif
     // free prev allocation and move into it
     auto o = output;
-    // This replaces the output's memory without going through free_var_mem,
-    // so the share ring has to be told: whatever o was a sub-range of, it is
-    // not one any more (see share_group_link in var.cc).
-    if (PREDICT_BRANCH_NOT_TAKEN(o->share_next != nullptr))
-        share_group_unlink(o);
-    if (save_mem)
-        free_with_swap(o);
-    else
-        o->allocator->free(o->mem_ptr, o->size, o->allocation);
-    
+    // Through `free_var_mem`, not a hand-rolled copy of it. This used to read
+    // `o->mem_ptr`, `o->allocation` and `o->allocator`, free them, and only
+    // then overwrite the three fields -- so between the read and the free the
+    // var still named an allocation this thread had already given back, and a
+    // release on another thread freed the same id a second time. Pinned by the
+    // id-space event log (KI-EXEC-007): `set_occupied(16 MiB, thread A)`,
+    // `erase_occupied(16 MiB, thread B)`, the id reissued to another block,
+    // and then A's free of the same id reporting "allocation not found".
+    // `free_var_mem` clears the three fields *before* it calls the allocator,
+    // so a second release finds nothing to give back, and it is where the
+    // share-ring unlink and the swap path already live.
+    //
+    // The guard is still needed: this op's output is *created* here, and
+    // `create_output` gives it a shape and dtype without an allocation (the
+    // `_force_fuse`/scalar shapes take the element path and never get one).
+    // Calling `o->allocator->free(...)` on that null allocator is a null
+    // dereference -- a loader-bound `jt.array` segfaulted at address 0 inside
+    // this function, and the same null storage reaching a copy is the device-1
+    // illegal address during the TP weight load.
+    if (save_mem || (o->allocator && o->mem_ptr))
+        free_var_mem(o);
+
     o->mem_ptr = allocation.ptr;
     allocation.ptr = nullptr;
     o->allocator = allocation.allocator;

@@ -26,7 +26,7 @@ struct FP16OpType : OpByType {
         };
     }
 
-    string expand_op(const vector<string>& args) {
+    string expand_op(const vector<string>& args, bool is_cuda) {
         bool found_fp16 = 0;
         bool found_bf16 = 0;
         for (int i=1; i<args.size(); i+=2) {
@@ -67,6 +67,7 @@ struct FP16OpType : OpByType {
             {"tanh", "(($1) ::tanhf(($2)))"},
             {"atanh", "(($1) ::atanhf(($2)))"},
             {"sigmoid", "(($1) (1.0f/(1.0f+::expf((::min($1(-($2)), $1(@if(@strcmp($1,float16)==0,30,300))))))))"},
+            {"relu", "((($1)($2)>($1)(0.0f))?($1)($2):($1)(0.0f))"},
             {"erf", "(($1) ::erff(($2)))"},
             {"erfinv", "(($1) ::erfinvf(($1)($2)))"},
             {"cast", "(($1)($2))"},
@@ -111,16 +112,33 @@ struct FP16OpType : OpByType {
             {"tanh", "(($1) std::tanh(($2)))"},
             {"atanh", "(($1) std::atanh(($2)))"},
             {"sigmoid", "(($1) (1.0f/(1.0f+std::exp(std::min<float>($1(-($2)), $1(@if(@strcmp($1,float32)==0,30,300)))))))"},
+            {"relu", "((($1)($2)>($1)(0.0f))?($1)($2):($1)(0.0f))"},
             {"erf", "(($1) std::erf(($2)))"},
             {"erfinv", "(jittor::_erfinv($2))"},
             {"cast", "(($1)($2))"},
             {"pow", "std::pow(($2),($4))"},
-            {"maximum", "std::max<float>($1($2), $1($4))"},
-            {"minimum", "std::min<float>($1($2), $1($4))"},
+            // `jittor::_max`/`_min`, not `std::max`/`std::min`: the same
+            // NumPy/torch NaN rule the float32 table uses. `std::max(a, b)` is
+            // `a < b ? b : a`, so every comparison against a NaN is false and
+            // it returns whichever operand was written first -- `maximum(nan,
+            // 5)` was NaN and `maximum(5, nan)` was 5, where torch 2.13
+            // answers NaN both ways at every dtype, and a half `x.max()` over
+            // a Var containing a NaN dropped it entirely because the
+            // accumulator is always the first operand. See the note on
+            // `jittor::max(float16, float16)` in `type/fp16_compute.h`.
+            {"maximum", "jittor::_max<float32>(float32($2), float32($4))"},
+            {"minimum", "jittor::_min<float32>(float32($2), float32($4))"},
             {"mod", "$1(($2)-std::floor(($2)/($4))*($4))"},
             {"floor_divide", "$1(std::floor(($1($2))/($1($4))))"},
-            {"init_maximum", "-32768.0f"},
-            {"init_minimum", "32768.0f"},
+            // KI-OPS-012: an infinity, not a finite literal. `-32768.0f` is
+            // *above* float16's lowest finite value (-65504), so `max` of a
+            // tensor that is entirely -65504 -- an ordinary number, the edge of
+            // the format -- answered -32768, a value that was not in its input.
+            // `min` mirrored it. The rest of this table already widens to
+            // float32 (see `maximum`/`minimum` above), so the float32 infinity
+            // is the identity this path computes with.
+            {"init_maximum", "-std::numeric_limits<float>::infinity()"},
+            {"init_minimum", "std::numeric_limits<float>::infinity()"},
             {"equal", "(float($2)==float($4))"},
         };
 
@@ -130,11 +148,18 @@ struct FP16OpType : OpByType {
             {"subtract", "(($2)-($4))"},
             {"multiply", "(($2)*($4))"},
             {"divide", "($1(($1($2))/($1($4))))"},
-            {"less", "(($2)<($4))"},
-            {"less_equal", "(($2)<=($4))"},
-            {"greater", "(($2)>($4))"},
-            {"greater_equal", "(($2)>=($4))"},
-            {"not_equal", "(($2)!=($4))"},
+            // Compare through float, matching the CPU table's `equal`. jittor's
+            // host half types have both a converting constructor and a
+            // conversion to float, so a *mixed* comparison such as
+            // `bfloat16 > int32` has two viable candidates (half-vs-half via
+            // int->float->half, and the built-in float comparison via
+            // half->float) and is rejected as ambiguous. Converting explicitly
+            // is lossless for both half formats.
+            {"less", "(float($2)<float($4))"},
+            {"less_equal", "(float($2)<=float($4))"},
+            {"greater", "(float($2)>float($4))"},
+            {"greater_equal", "(float($2)>=float($4))"},
+            {"not_equal", "(float($2)!=float($4))"},
             {"left_shift", "(($2)<<($4))"},
             {"right_shift", "(($2)>>($4))"},
             {"logical_and", "(($2)&&($4))"},
@@ -164,11 +189,11 @@ struct FP16OpType : OpByType {
         string ret;
         if (both_map.count(args.at(0)))
             ret = both_map.at(args.at(0));
-        else if (execution_target_backend() != BackendId::Cpu)
+        else if (is_cuda)
             ret = lookup(cuda_map, args.at(0));
         else
             ret = lookup(cpu_map, args.at(0));
-        if (execution_target_backend() != BackendId::Cpu) {
+        if (is_cuda) {
             if (args[1] == "float32" && !both_map.count(args.at(0))) {
                 ret = common_op_type_cuda_map[args.at(0)];
             }
@@ -203,7 +228,23 @@ struct FP16OpType : OpByType {
         int i = src.rfind("#include");
         if (i<0) i=0;
         i = src.find('\n', i) + 1;
-        src = src.substr(0, i) + "#include \"type/fp16_compute.h\"\n" + 
+        // `type/minmax_compute.h` goes in unconditionally beside it, because
+        // `jittor::_max`/`_min` can still arrive *after* this pass has run.
+        // `CommonOpType::post_pass` adds that header when it finds the name in
+        // the source, which works for float32 because its own `maximum` entry
+        // is spelled `jittor::_max`. This table's is `::max($1($2), $1($4))`,
+        // so the name is not there yet -- and then `AtomicTunerPass`, which
+        // runs later on the kernel IR, hoists the per-thread accumulator and
+        // emits `tmp=jittor::_max(...)` into a translation unit that has no
+        // declaration for it. Every float16/bfloat16 `max`/`min` *reduction*
+        // on CUDA failed to compile with `namespace "jittor" has no member
+        // "_max"`, which is why `x.max(-1)` on a half Var answered float32:
+        // `reduce_dtype_infer` widened it to float32 before the kernel was
+        // ever built, and the half kernel that would have been built instead
+        // did not exist. The header is `#pragma once` and declares two
+        // function templates.
+        src = src.substr(0, i) + "#include \"type/fp16_compute.h\"\n"
+            "#include \"type/minmax_compute.h\"\n" + 
             src.substr(i);
         return;
     }

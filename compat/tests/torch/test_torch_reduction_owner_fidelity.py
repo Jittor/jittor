@@ -256,7 +256,7 @@ class TestReductionOwner(cu.JittorTestCase):
                 self.assertEqual(result._fields, ("values", "indices"))
                 np.testing.assert_array_equal(result.values.numpy(), values)
                 np.testing.assert_array_equal(result.indices.numpy(), indices)
-                self.assertEqual(str(result.indices.dtype), "int64")
+                self.assertEqual(str(result.indices.dtype), "torch.int64")
                 np.testing.assert_array_equal(
                     getattr(tensor, name)(axis=0).values.numpy(),
                     result.values.numpy())
@@ -268,7 +268,7 @@ class TestReductionOwner(cu.JittorTestCase):
                 ("argmin", np.argmin(MATRIX, axis=0))):
             with self.subTest(name=name):
                 through_module = getattr(torch, name)(tensor, axis=0)
-                self.assertEqual(str(through_module.dtype), "int64")
+                self.assertEqual(str(through_module.dtype), "torch.int64")
                 np.testing.assert_array_equal(through_module.numpy(), reference)
                 np.testing.assert_array_equal(
                     getattr(tensor, name)(axis=0).numpy(), reference)
@@ -288,8 +288,8 @@ class TestReductionOwner(cu.JittorTestCase):
                     tensor, dim=-1, dtype="float64")
                 through_method = getattr(tensor, name)(
                     dim=-1, dtype="float64")
-                self.assertEqual(str(through_module.dtype), "float64")
-                self.assertEqual(str(through_method.dtype), "float64")
+                self.assertEqual(str(through_module.dtype), "torch.float64")
+                self.assertEqual(str(through_method.dtype), "torch.float64")
                 np.testing.assert_array_equal(
                     through_module.numpy(), through_method.numpy())
 
@@ -356,7 +356,7 @@ class TestReductionOwner(cu.JittorTestCase):
         actual = torch.tensor(MATRIX).masked_scatter(
             torch.tensor(mask), torch.tensor(source))
         np.testing.assert_array_equal(actual.numpy(), expected)
-        self.assertEqual(str(actual.dtype), "float32")
+        self.assertEqual(str(actual.dtype), "torch.float32")
 
     def test_masked_scatter_inplace_returns_the_same_var(self, device):
         mask = MATRIX % 3 == 0

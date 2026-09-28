@@ -14,16 +14,27 @@ Run:  python -m pytest compat/tests/torch/test_torch_compat_svd.py
 """
 
 from _helpers import capability as _test_capability
+from _helpers.cupy_bridge import cuda_numpy_code_available
 import unittest
 import numpy as np
 import torch
 import jittor as jt
 
-_DEVICES = [("cpu", 0)] + ([("cuda", 1)] if _test_capability.any_accelerator_enabled(backend=jt) else [])
+# These reach jt.numpy_code, whose CUDA half goes through the CuPy bridge
+# (py_converter hands the callback `cupy` when use_cuda is on). Without
+# CuPy the operator raises from inside execution and leaves the CUDA work
+# pending for an unrelated later test to trip over.
+_DEVICES = [("cpu", 0)] + ([("cuda", 1)]
+                           if _test_capability.any_accelerator_enabled(backend=jt)
+                           and cuda_numpy_code_available() else [])
 
 
 def both_devices(fn):
     for name, use_cuda in _DEVICES:
+        if use_cuda and not cuda_numpy_code_available():
+            # The CUDA route through svd is a numpy-code operator and needs
+            # CuPy; tests/linalg covers it under the same guard.
+            continue
         with jt.flag_scope(use_cuda=use_cuda):
             fn(name)
 
@@ -56,20 +67,19 @@ class TestSVD(Base):
         both_devices(body)
 
     # ---- default is the reduced form (jittor-native contract) ----------------
-    def test_default_is_reduced(self):
-        # NOTE on torch parity: torch.linalg.svd defaults to full_matrices=True;
-        # this jittor-native svd keeps the reduced default (differentiable path +
-        # all internal callers + native test_linalg rely on it). full shapes are
-        # available via full_matrices=True. The torch-facing default is meant to
-        # be applied at the torch-compat boundary.
+    def test_default_is_full(self):
+        # torch.linalg.svd defaults to full_matrices=True, and that default is
+        # applied at the torch-compat boundary (NativeOperation._TORCH_DEFAULTS)
+        # -- the jittor-native svd keeps the reduced default, which its
+        # differentiable path, its internal callers and tests/linalg rely on.
         B = np.random.RandomState(100).randn(5, 3).astype("float32")
 
         def body(dev):
-            r = torch.linalg.svd(jt.array(B))           # no kwarg -> reduced
-            self.assertEqual(tuple(r.U.shape), (5, 3), f"default reduced U {dev}")
-            self.assertEqual(tuple(r.Vh.shape), (3, 3), f"default reduced Vh {dev}")
-            recon = r.U.numpy() @ np.diag(r.S.numpy()) @ r.Vh.numpy()
-            self.ac(recon, B, atol=1e-3, msg=f"default reduced recon {dev}")
+            r = torch.linalg.svd(jt.array(B))           # no kwarg -> full
+            self.assertEqual(tuple(r.U.shape), (5, 5), f"default full U {dev}")
+            self.assertEqual(tuple(r.Vh.shape), (3, 3), f"default full Vh {dev}")
+            recon = r.U.numpy()[:, :3] @ np.diag(r.S.numpy()) @ r.Vh.numpy()
+            self.ac(recon, B, atol=1e-3, msg=f"default full recon {dev}")
         both_devices(body)
 
     # ---- full_matrices shape semantics: TALL (m > n) -------------------------

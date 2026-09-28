@@ -69,6 +69,45 @@ Benchmarks and tests never share a cache.
   install that wheel outside the source tree, and run CPU self-test, NumPy array
   interop, and Python variable tracing probes. Python 3.13 is tested with NumPy 2.x.
 
+The repository also provides a uv lockfile and a Python 3.11 `dev` group. This
+is the supported uv setup for running the standalone CPU/CUDA suite from the
+checkout; put its environment under the external lab state root. The nox
+sessions still create their own isolated gate environments.
+
+```bash
+export JITTOR_LAB_ROOT="${JITTOR_LAB_ROOT:-$(cd .. && pwd)/jittor-lab}"
+export UV_PROJECT_ENVIRONMENT="$JITTOR_LAB_ROOT/_state/uv/venv"
+uv python install 3.11
+uv venv --python 3.11
+uv sync --locked --group dev
+uv run --locked python -m jittor.selftest
+uv run --locked python tools/run_test_suite.py --tier core --backend cpu
+```
+
+For a real CUDA run, verify `nvcc` and select the device explicitly:
+
+```bash
+export nvcc_path="$(command -v nvcc)"
+CUDA_VISIBLE_DEVICES=0 uv run --locked \
+    python tools/run_test_suite.py --tier core --backend cuda
+```
+
+Conda toolkits may store CUDA libraries below `targets/x86_64-linux` rather
+than a conventional root. Use a compatibility root exposing `bin/nvcc`,
+`bin/g++`, `include`, `lib64`, and `nvvm`, then keep the uv Python environment
+separate from that toolchain:
+
+```bash
+export CUDA_COMPAT_ROOT=/path/to/cuda-compat
+export CUDA_VISIBLE_DEVICES=2
+export nvcc_path="$CUDA_COMPAT_ROOT/bin/nvcc"
+export cc_path="$CUDA_COMPAT_ROOT/bin/g++"
+export CUDA_HOME="$CUDA_COMPAT_ROOT"
+export PATH="$CUDA_COMPAT_ROOT/bin:$PATH"
+export LD_LIBRARY_PATH="$CUDA_COMPAT_ROOT/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+uv run --locked python tools/run_test_suite.py --tier core --backend cuda
+```
+
 ```bash
 python -m pip install -e .
 python -m pip install -r requirements/dev-tools.txt
@@ -129,6 +168,39 @@ attention in that phase.
 export JITTOR_FLASH_ATTN_JITTOR_SRC=/path/to/flash-attention
 python -m nox -s optional
 ```
+
+#### `F.scaled_dot_product_attention` uses that extension only when it is named
+
+`compat/torch/installers/nn/attention.py` tries the native fused backend before
+falling back to jittor's composite `mul -> matmul -> softmax -> matmul`
+(`_try_flash_scaled_dot_product_attention`), but it can only load the extension
+when `JITTOR_FLASH_ATTN_JITTOR_SRC` points at a source checkout. With the
+variable unset every call misses with `no_backend` and the composite runs, which
+is easy to miss because the fallback is numerically correct and silent.
+
+The branch is instrumented, so this is readable rather than inferable:
+
+```python
+import jittor as jt
+from jittor.compat import diagnostics
+print(diagnostics.sdpa_flash_stats(jt))   # hits, misses-by-reason, backend
+```
+
+`misses={'no_backend': n}` means the extension was never configured. Set the
+three `JITTOR_FLASH_ATTN_JITTOR_SRC` / `_HEAD_DIMS` / `_DTYPES` variables to get
+the fused path; leave `JITTOR_FLASH_ATTN_JITTOR_REQUIRED` unset so shapes and
+dtypes the extension does not cover keep falling back instead of aborting, and
+leave `JITTOR_FLASH_ATTN_CAST_FLOAT32` unset unless rerouting float32 attention
+through a bf16 cast is the intended numerics.
+
+The cost of the silent fallback is model-dependent and can be most of a
+workload. On the MiniMax-H3 video VAE decoder's `(1, 32, 1797, 64)` fp16
+non-causal blocks, an attention-elided ablation priced the composite at
+3.82 s/decode against torch's fused cuDNN kernel at 0.54 s, out of a 3.48 s
+total gap; naming the source took that decode from 10.13 s to 8.30 s with
+identical output statistics. See
+[`docs/results/2026-09-14-vllm-omni-h3-enablement.md`](../../docs/results/2026-09-14-vllm-omni-h3-enablement.md)
+section 45.
 
 ### Ascend NPU
 

@@ -827,6 +827,9 @@ namespace jittor
                 auto *random = static_cast<RandomOp *>(op);
                 USER_CHECK(random->type == ns_uniform || random->type == ns_normal)
                     << "random requires uniform or normal";
+                const auto dtype = random->output->dtype();
+                if (dtype != ns_float16 && dtype != ns_bfloat16 && dtype != ns_float32)
+                    unsupported = "random requires float16, bfloat16 or float32 output";
                 const string name = random->type == ns_uniform ? "RandomUniform" : "RandomNormal";
                 if (!acl_op_registry().count(name)) unsupported = "unregistered ACL launcher: " + name;
             }
@@ -935,6 +938,16 @@ namespace jittor
     {
         register_backend_implementation_composer(
             BackendId::Acl, compose_acl_implementation, "acl-native-v1");
+        // Random's CPU OpDef deliberately does not advertise every accelerator;
+        // the composer cannot create an entry missing from its backend mask.
+        // Keep the generated jit callback: Op::run_jit uses it to enter the
+        // provider's compiler even when native execution is also available.
+        auto implementation = get_op_definition("random")->implementations.at(BackendId::Cpu);
+        implementation.kernel.native = exec_mapped_acl_ops;
+        implementation.kernel.compile = compile_acl_mapped;
+        implementation.kernel.fallback_only = false;
+        register_op_implementation("random", BackendId::Acl, implementation,
+            "acl-native-random-v1");
     }
 
 } // jittor

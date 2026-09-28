@@ -10,6 +10,8 @@ kernel), which is how ``jt.nn.AvgPool2d`` and ``jt.pool.AvgPool2d`` came to
 return different numbers for the same arguments.
 """
 
+import operator
+
 import jittor as jt
 from jittor.misc import _pair, _triple
 from jittor._runtime.dispatch import try_dispatch
@@ -156,17 +158,39 @@ def avg_pool3d(
 
 def adaptive_avg_pool2d(input, output_size):
     """Apply two-dimensional adaptive average pooling with overlapping bins."""
-    if isinstance(output_size, int):
-        out_height = out_width = output_size
-    elif hasattr(output_size, "__len__") and not isinstance(output_size, str):
-        out_height = input.shape[2] if output_size[0] is None else int(output_size[0])
-        out_width = input.shape[3] if output_size[1] is None else int(output_size[1])
+    if input.ndim not in (3, 4):
+        raise ValueError("adaptive_avg_pool2d expects a 3-D or 4-D input")
+    if isinstance(output_size, bool):
+        raise ValueError("adaptive_avg_pool2d output dimensions must be positive integers")
+    try:
+        scalar_size = operator.index(output_size)
+    except TypeError:
+        if (isinstance(output_size, str) or not hasattr(output_size, "__len__")
+                or len(output_size) != 2):
+            raise ValueError("adaptive_avg_pool2d output_size must be an int or a pair")
     else:
-        raise TypeError(
-            "AdaptiveAvgPool2d only support int, tuple or list input. Not support {} yet.".format(
-                type(output_size)
-            )
-        )
+        output_size = (scalar_size, scalar_size)
+    normalized_size = []
+    for i, size in enumerate(output_size):
+        size = input.shape[-2 + i] if size is None else size
+        if isinstance(size, bool):
+            raise ValueError("adaptive_avg_pool2d output dimensions must be positive integers")
+        try:
+            size = operator.index(size)
+        except TypeError:
+            raise ValueError("adaptive_avg_pool2d output dimensions must be positive integers") from None
+        if size <= 0:
+            raise ValueError("adaptive_avg_pool2d output dimensions must be positive integers")
+        normalized_size.append(size)
+    output_size = tuple(normalized_size)
+    if any(size <= 0 for size in input.shape[-3:]):
+        raise ValueError("adaptive_avg_pool2d requires nonempty channel and spatial dimensions")
+    if input.ndim == 3:
+        return adaptive_avg_pool2d(input.unsqueeze(0), output_size).squeeze(0)
+    out_height, out_width = output_size
+    dispatched = try_dispatch("nn.adaptive_avg_pool2d", input, output_size)
+    if dispatched is not None:
+        return dispatched
     n, channels, height, width = input.shape
     if out_height == 1 and out_width == 1:
         return input.reduce("mean", [2, 3], keepdims=True)

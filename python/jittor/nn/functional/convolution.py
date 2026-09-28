@@ -5,6 +5,8 @@ from jittor.misc import _pair, _triple
 from jittor._runtime.dispatch import select_kernel
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
+from ._amp import bias_for_compute_dtype
+
 def _check_conv2d_output_size(x, oh, ow, kernel_size, stride, padding, dilation):
     """Reject a geometry whose output has no elements, with the numbers in it."""
     if oh <= 0 or ow <= 0:
@@ -112,8 +114,16 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1,
     if groups == 1:
         N,C,H,W = x.shape
         oh, ow = out_height, out_width
-        with jt.flag_scope(amp_reg=jt.flags.amp_reg | jt.amp_flags.keep_reduce
-                      | jt.amp_flags.reduce16_no_fp32_acc):
+        # `keep_reduce` alone: the reduce below keeps the input's dtype, but it
+        # still takes the float32 intermediate that `ReduceOp` inserts for a
+        # half input. `reduce16_no_fp32_acc` sat here too and switched that
+        # intermediate off, so this fallback summed C*Kh*Kw float16 products in
+        # float16 -- 4608 terms for a plain 3x3 conv with 512 input channels --
+        # while cuDNN and the cuBLAS relays for the same convolution accumulate
+        # in float32 (`cublas_compute_type.h`, `float32_precision.h`). See
+        # `nn/functional/matrix.py::_contraction_scope`, which is the same bit
+        # for the same reason.
+        with jt.flag_scope(amp_reg=jt.flags.amp_reg | jt.amp_flags.keep_reduce):
             xx = x.reindex([N,out_channels,C,oh,ow,Kh,Kw], [
                     'i0', # Nid
                     'i2', # Cid
@@ -124,7 +134,7 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1,
             yy = xx*ww
             y = yy.sum([2,5,6]) # Kc, Kh, Kw
         if bias is not None:
-            b = bias.broadcast(y.shape, [0,2,3])
+            b = bias_for_compute_dtype(y, bias).broadcast(y.shape, [0,2,3])
             y = y + b
         return y
     else:
@@ -158,7 +168,7 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1,
                 'i5'
             ])
         if bias is not None:
-            b = bias.broadcast(y.shape, [0,2,3])
+            b = bias_for_compute_dtype(y, bias).broadcast(y.shape, [0,2,3])
             y = y + b
         return y
 
@@ -208,16 +218,23 @@ def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
         od = (D+padding[0]*2-Kd*dilation[0]+dilation[0]-1)//stride[0]+1
         oh = (H+padding[1]*2-Kh*dilation[1]+dilation[1]-1)//stride[1]+1
         ow = (W+padding[2]*2-Kw*dilation[2]+dilation[2]-1)//stride[2]+1
-        xx = x.reindex([N,out_channels,C,od,oh,ow,Kd,Kh,Kw], [
-                'i0', # Nid
-                'i2', # Cid
-                f'i3*{stride[0]}-{padding[0]}+i6*{dilation[0]}', # Hid+Khid
-                f'i4*{stride[1]}-{padding[1]}+i7*{dilation[1]}', # Wid+KWid
-                f'i5*{stride[2]}-{padding[2]}+i8*{dilation[2]}', # Did+KDid
-            ])
-        ww = weight.broadcast(xx.shape, [0,3,4,5])
-        yy = xx*ww
-        y = yy.sum([2,6,7,8]) # Kc, Kh, Kw,Kd
+        # The same register scope conv2d uses, for the same reasons: without
+        # `keep_reduce` the reduction widens the fp16 product back to float32
+        # under `amp_prefer16`, so this generic path ignored the register the
+        # cuDNN path honours -- and `reduce16_no_fp32_acc` is not the answer to
+        # that, because it also switches off the float32 accumulator. See the
+        # conv2d scope above and `nn/functional/matrix.py::_contraction_scope`.
+        with jt.flag_scope(amp_reg=jt.flags.amp_reg | jt.amp_flags.keep_reduce):
+            xx = x.reindex([N,out_channels,C,od,oh,ow,Kd,Kh,Kw], [
+                    'i0', # Nid
+                    'i2', # Cid
+                    f'i3*{stride[0]}-{padding[0]}+i6*{dilation[0]}', # Hid+Khid
+                    f'i4*{stride[1]}-{padding[1]}+i7*{dilation[1]}', # Wid+KWid
+                    f'i5*{stride[2]}-{padding[2]}+i8*{dilation[2]}', # Did+KDid
+                ])
+            ww = weight.broadcast(xx.shape, [0,3,4,5])
+            yy = xx*ww
+            y = yy.sum([2,6,7,8]) # Kc, Kh, Kw,Kd
     else:
         N,C,D,H,W = x.shape
         Kd, Kh, Kw = weight.shape[-3:]
@@ -254,7 +271,7 @@ def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
             ])
 
     if bias is not None:
-        b = bias.broadcast(y.shape, [0,2,3,4])
+        b = bias_for_compute_dtype(y, bias).broadcast(y.shape, [0,2,3,4])
         y = y + b
     return y
 

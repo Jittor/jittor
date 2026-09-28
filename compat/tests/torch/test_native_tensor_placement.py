@@ -101,6 +101,40 @@ def test_explicit_copy_roundtrip_and_gradient_keep_source_placement():
             np.testing.assert_array_equal(copied_grad.numpy(), [4., 6.])
 
 
+def test_a_device_var_parked_on_the_host_is_moved_back_by_to_device():
+    """Asking for the device must not accept host storage for a device Var.
+
+    jittor parks a device Var in host memory when a CPU op consumes it -- one
+    host read of a slice is enough -- while ``device_id`` keeps naming the
+    device it belongs to. Such a Var is not on its device: an extension handed
+    it reads a host pointer and fails its own ``is_cuda()`` check, so
+    ``.to("cuda:N")``/``.cuda()`` have to move it back rather than trust the
+    matching index.
+    """
+    import jittor as jt
+    import torch
+    with _cuda_runtime():
+        bounds = torch.tensor([0, 4, 8], dtype=torch.int32, device="cuda:0")
+        jt.sync_all(True)
+        assert bounds.device_id == 0 and bounds.location() == "device"
+
+        # The host read a packed-attention layout needs, which parks the Var.
+        assert int(bounds[1]) == 4
+        assert bounds.device_id == 0 and bounds.location() == "cpu"
+
+        back = bounds.to("cuda:0")
+        back.sync()
+        assert back.device_id == 0 and back.location() == "device"
+        np.testing.assert_array_equal(back.numpy(), [0, 4, 8])
+
+        assert int(bounds[1]) == 4
+        assert bounds.location() == "cpu"
+        shown = bounds.cuda()
+        shown.sync()
+        assert shown.device_id == 0 and shown.location() == "device"
+        np.testing.assert_array_equal(shown.numpy(), [0, 4, 8])
+
+
 def test_explicit_cuda_ignores_disabled_default_while_native_follows_runtime():
     import jittor as jt
     import torch

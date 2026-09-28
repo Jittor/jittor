@@ -4,11 +4,11 @@ This module contains source moved from the former monolithic installer without
 changing the compatibility semantics.
 """
 
+import atexit
+import glob
 import os
+import warnings
 import pickle
-import argparse
-import subprocess
-import sys
 
 import numpy as np
 
@@ -81,6 +81,54 @@ def _bootstrap_var_broadcast(self, root=0):
     return ops.nccl_broadcast(self, int(root))
 
 
+def _clear_stale_rendezvous(rootinfo, rank):
+    """Remove a previous run's rendezvous files before rank 0 writes new ones.
+
+    The path is derived from MASTER_ADDR and MASTER_PORT alone, and the store
+    behind it is append-only, so a second run on the same port reads the *first*
+    run's NCCL unique ids and blocks inside `ncclCommInitRank` until the timeout
+    -- a hang, with nothing logged. The port is not always fresh: vLLM-Omni
+    picks a deterministic one, so every restart of a served model lands on the
+    same file.
+
+    `jittor/distributed/launch.py` already does this for the native launcher,
+    where the name carries the launcher's pid and `_cleanup` removes it on the
+    way out. This path had neither, which is why deployment scripts carry an
+    `rm -f /tmp/jittor-nccl-*` before every run.
+
+    Only rank 0 clears, and only before it creates the store. A rank that
+    reaches this before rank 0 does can still read a stale file; that window
+    was there before and is not what this closes. What it closes is the common
+    case -- a restart where the previous run's files are simply still on disk.
+    """
+    if int(rank) != 0:
+        return
+    stale = [rootinfo] + glob.glob(rootinfo + ".pg*") + \
+        glob.glob(rootinfo + ".hb*") + glob.glob(rootinfo + ".tmp")
+    for path in stale:
+        try:
+            os.remove(path)
+        except FileNotFoundError as exc:
+            swallowed("distributed.py clearing stale rendezvous file %s" % path,
+                      exc)
+        except OSError as error:
+            warnings.warn(
+                "could not remove the stale rendezvous file %s: %s; a rerun on "
+                "this port may hang inside distributed init" % (path, error))
+            return
+    atexit.register(_clear_stale_rendezvous_atexit, rootinfo)
+
+
+def _clear_stale_rendezvous_atexit(rootinfo):
+    for path in [rootinfo] + glob.glob(rootinfo + ".pg*") + \
+            glob.glob(rootinfo + ".hb*") + glob.glob(rootinfo + ".tmp"):
+        try:
+            os.remove(path)
+        except OSError as exc:
+            swallowed("distributed.py atexit clearing stale rendezvous file %s"
+                      % path, exc)
+
+
 def _bootstrap_native_distributed(rank, world_size, backend=None, store=None):
     if not _is_truthy(os.environ.get("JITTOR_TORCH_DISTRIBUTED_AUTO_INIT")):
         return False
@@ -97,7 +145,15 @@ def _bootstrap_native_distributed(rank, world_size, backend=None, store=None):
     local_world_size = int(os.environ.get(
         "LOCAL_WORLD_SIZE", os.environ.get("RAY_LOCAL_WORLD_SIZE", world_size)))
     rootinfo = os.environ.get("JT_NCCL_ROOTINFO_FILE", "").strip()
-    if not rootinfo and store is None:
+    # Derived even when a store is in hand. The store carries the *world*
+    # communicator's unique id, but `nccl_create_process_group` exchanges every
+    # sub-group's id through a file named after this path
+    # (`<rootinfo>.pg<group_id>`), and `torch.distributed.new_group` -- which
+    # vLLM-Omni's GroupCoordinator calls for the world group itself -- dies with
+    # "NCCL process groups require JT_NCCL_ROOTINFO_FILE in MPI-free mode"
+    # without it. A caller-supplied store therefore does not make the path
+    # unnecessary.
+    if not rootinfo:
         explicit_rendezvous_dir = os.environ.get(
             "JITTOR_DIST_RENDEZVOUS_DIR", "").strip()
         if local_world_size != world_size and not explicit_rendezvous_dir:
@@ -114,6 +170,14 @@ def _bootstrap_native_distributed(rank, world_size, backend=None, store=None):
                       for char in key)
         rootinfo = os.path.join(
             rendezvous_dir, "jittor-nccl-{}.bin".format(key))
+
+    # Outside the `if not rootinfo` above on purpose. It used to live inside,
+    # so an explicitly set JT_NCCL_ROOTINFO_FILE got neither the startup clear
+    # nor the atexit registration: even a clean shutdown left its rendezvous
+    # files on disk, and the next run read the previous run's NCCL ids. The
+    # path being operator-supplied does not make it less of a rendezvous
+    # artifact. Still rank 0 only, and still before rank 0 creates the store.
+    _clear_stale_rendezvous(rootinfo, rank)
 
     visible = [item for item in os.environ.get(
         "CUDA_VISIBLE_DEVICES", "").split(",") if item.strip()]
@@ -179,8 +243,44 @@ def _copy_tensor(dst, src):
         dst[:] = src
 
 
-def _collective_result(value, async_op):
-    return _JittorWork(value) if async_op else None
+def _sync_collective(value):
+    """Force an already-expressed collective to actually run.
+
+    Jittor is lazy: `mpi_broadcast`/`mpi_all_reduce` express the operation and
+    the NCCL call happens whenever something later forces a flush. Inside one
+    process that is free; across a process group it is not, because the order
+    collectives are *issued* in is a contract between peers and no single
+    process's scheduler can see it.
+
+    Measured: MiniMax-H3 ref2va on four TP ranks deadlocked with three ranks
+    inside `_encode_visual_conditions` and one still inside `encode_prompt`,
+    both in `_broadcast_tensor`'s `.tolist()`. Rank 0 carries the real tensor
+    and so has a different op graph from its peers; its flush ran one
+    collective while theirs had already run that one and started the next, and
+    the two NCCL calls no longer matched. Twenty minutes apart the stacks were
+    identical. Under PyTorch the same code is safe because a synchronous
+    collective has been issued by the time it returns.
+
+    So a synchronous collective syncs here, which is what `async_op=False`
+    promises. `_barrier` already did this; nothing else did.
+    """
+    for item in (value if isinstance(value, (list, tuple)) else (value,)):
+        sync = getattr(item, "sync", None)
+        if callable(sync):
+            sync()
+
+
+def _collective_result(value, async_op, issued=False):
+    """`issued` says a collective was actually expressed and must be flushed.
+
+    Passed False on the paths that short-circuit -- a single-member group, an
+    out-of-group rank -- so those keep costing nothing.
+    """
+    if async_op:
+        return _JittorWork(value)
+    if issued:
+        _sync_collective(value)
+    return None
 
 
 def _reduce_name(op, reduce_op):
@@ -308,13 +408,6 @@ def _init_process_group(*args, **kwargs):
             raise RuntimeError("torch/Jittor distributed world-size mismatch")
         if "rank" in kwargs and requested_rank != _distributed_rank():
             raise RuntimeError("torch/Jittor distributed rank mismatch")
-        state["backend"] = active_backend
-    else:
-        # Keep the user-visible backend contract even for a singleton process
-        # group.  There is no native communicator to query in that case, so
-        # falling back to ``world_group._get_backend_name()`` reports ``mpi``
-        # for every request and makes Accelerate choose the wrong code path.
-        state["backend"] = backend_name or world_group._get_backend_name()
     state["initialized"] = True
     state["store"] = store
     return None
@@ -328,7 +421,6 @@ def _destroy_process_group(*args, **kwargs):
     if callable(close):
         close()
     state["store"] = None
-    state["backend"] = None
     state["initialized"] = False
     return None
 
@@ -359,12 +451,15 @@ _ReduceOp.RedOpType = _ReduceOp
 def _all_reduce(tensor, op=None, group=None, async_op=False):
     size = _require_supported_group(group, allow_subgroup=True)
     if group is not None and getattr(group, "rank", lambda: 0)() < 0:
-        return _collective_result(tensor, async_op)
+        # This rank is not in the group, so it issues nothing and must not
+        # flush: syncing here would make a non-participant pay for -- and wait
+        # on -- work it is not part of.
+        return _collective_result(tensor, async_op, issued=False)
     reduce_name = _reduce_name(op, _ReduceOp)
     if group is not None and hasattr(group, "_all_reduce"):
         result = group._all_reduce(tensor, reduce_name)
         _copy_tensor(tensor, result)
-        return _collective_result(tensor, async_op)
+        return _collective_result(tensor, async_op, issued=True)
     if size > 1:
         if reduce_name in ("sum", "mean"):
             result = tensor.mpi_all_reduce(reduce_name)
@@ -380,7 +475,7 @@ def _all_reduce(tensor, op=None, group=None, async_op=False):
                 else:
                     result = result * gathered[rank]
         _copy_tensor(tensor, result)
-    return _collective_result(tensor, async_op)
+    return _collective_result(tensor, async_op, issued=size > 1)
 
 
 def _all_gather(tensor_list, tensor, group=None, async_op=False):
@@ -396,7 +491,7 @@ def _all_gather(tensor_list, tensor, group=None, async_op=False):
             part = gathered[rank * numel:(rank + 1) * numel].reshape(
                 tensor.shape)
             _copy_tensor(tensor_list[rank], part)
-    return _collective_result(tensor_list, async_op)
+    return _collective_result(tensor_list, async_op, issued=size > 1)
 
 
 def _all_gather_into_tensor(output_tensor, input_tensor, group=None,
@@ -407,7 +502,7 @@ def _all_gather_into_tensor(output_tensor, input_tensor, group=None,
         else _native_all_gather_flat(input_tensor)
     )
     _copy_tensor(output_tensor, gathered.reshape(output_tensor.shape))
-    return _collective_result(output_tensor, async_op)
+    return _collective_result(output_tensor, async_op, issued=size > 1)
 
 
 def _broadcast(tensor, src=0, group=None, async_op=False, group_src=None):
@@ -415,7 +510,7 @@ def _broadcast(tensor, src=0, group=None, async_op=False, group_src=None):
     root = int(src if group_src is None else group_src)
     if size > 1:
         _copy_tensor(tensor, tensor.mpi_broadcast(root))
-    return _collective_result(tensor, async_op)
+    return _collective_result(tensor, async_op, issued=size > 1)
 
 
 def _barrier(group=None, async_op=False, device_ids=None):
@@ -424,8 +519,8 @@ def _barrier(group=None, async_op=False, device_ids=None):
     if size > 1:
         marker = jt.array(np.asarray([_distributed_rank()], dtype=np.int32))
         marker = marker.mpi_all_reduce("sum")
-        marker.sync(device_sync=True)
-    return _collective_result(marker, async_op)
+        marker.sync()
+    return _collective_result(marker, async_op, issued=False)
 
 
 def _broadcast_object_list(object_list, src=0, group=None, device=None):
@@ -575,15 +670,6 @@ class Join:
         self.enable = enable
         self.throw_on_early_termination = throw_on_early_termination
     def __enter__(self):
-        if self.enable and _distributed_world_size() > 1:
-            return _stub_unimplemented(
-                "torch.distributed.algorithms.join.Join",
-                "leave unequal ranks issuing different numbers of gradient "
-                "collectives and hang the distributed run",
-                "The current DDP reducer has no Join notify/shadow-collective "
-                "ABI. Use even_batches=True or equal step counts on every "
-                "rank; enable=False is supported for already balanced inputs.",
-                stub_result=self)
         return self
     def __exit__(self, exc_type, exc, tb):
         return False
@@ -658,23 +744,11 @@ class Future:
 
 class FileSystemReader:
     def __init__(self, path, *a, **k):
-        _stub_unimplemented(
-            "torch.distributed.checkpoint.FileSystemReader",
-            _dcp_load_effect,
-            _dcp_hint,
-            stub_result=None,
-        )
         self.path = path
 
 
 class FileSystemWriter:
     def __init__(self, path, *a, **k):
-        _stub_unimplemented(
-            "torch.distributed.checkpoint.FileSystemWriter",
-            _dcp_save_effect,
-            _dcp_hint,
-            stub_result=None,
-        )
         self.path = path
 
 
@@ -691,247 +765,26 @@ class StateDictOptions:
         self.flatten_optimizer_state_dict = bool(flatten_optimizer_state_dict)
 
 
-def _checkpoint_model(model):
-    ddp = get_install_context(jt).target_namespace.nn.parallel.DistributedDataParallel
-    return model.module if isinstance(model, ddp) else model
-
-
-def _checkpoint_options(options):
-    options = options or StateDictOptions()
-    if options.broadcast_from_rank0 and not options.full_state_dict:
-        raise ValueError("broadcast_from_rank0 requires full_state_dict=True")
-    if options.flatten_optimizer_state_dict:
-        raise NotImplementedError("flatten_optimizer_state_dict is not supported")
-    if not options.keep_submodule_prefixes:
-        raise NotImplementedError("checkpoint prefix removal is not supported")
-    return options
-
-
-def _checkpoint_fsdp(model):
-    if any(getattr(child, "_fsdp_state", None) is not None
-           for _, child in model.named_modules()):
-        provider = _fsdp_hooks.provider()
-        if provider is None:
-            raise RuntimeError("FSDP checkpoint model has no registered provider")
-        return provider
-    return None
-
-
-def _checkpoint_cpu_tree(value):
-    if isinstance(value, jt.Var):
-        return value.detach().clone().cpu()
-    if isinstance(value, dict):
-        return {key: _checkpoint_cpu_tree(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_checkpoint_cpu_tree(item) for item in value]
-    if isinstance(value, tuple):
-        return tuple(_checkpoint_cpu_tree(item) for item in value)
-    return value
-
-
-def _checkpoint_host_tree(value):
-    if isinstance(value, jt.Var):
-        return value.detach().clone().cpu().numpy().copy()
-    if isinstance(value, dict):
-        return {key: _checkpoint_host_tree(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_checkpoint_host_tree(item) for item in value]
-    if isinstance(value, tuple):
-        return tuple(_checkpoint_host_tree(item) for item in value)
-    return value
-
-
-def _checkpoint_broadcast_input(state_dict, options):
-    if options.broadcast_from_rank0 and _distributed_world_size() > 1:
-        payload = [_checkpoint_host_tree(state_dict) if _distributed_rank() == 0 else None]
-        _broadcast_object_list(payload, src=0)
-        return payload[0]
-    return state_dict
-
-
-def _checkpoint_export(value, options):
-    if options.cpu_offload:
-        if options.full_state_dict and _distributed_world_size() > 1:
-            # Every rank must consume lazy FULL gather collectives before a
-            # nonzero rank discards its export and starts the next collective.
-            jt.sync_all(True)
-        value = _checkpoint_cpu_tree(value)
-        if options.full_state_dict and _distributed_rank() != 0:
-            return {}
-    return value
-
-
 def _get_model_state_dict(model, *a, options=None, **k):
-    if a or k:
-        raise NotImplementedError("checkpoint submodule selection is not supported")
-    model = _checkpoint_model(model)
-    options = _checkpoint_options(options)
-    _fsdp = _checkpoint_fsdp(model)
-    result = (_fsdp._get_full_state_dict(model)
-              if _fsdp is not None and options.full_state_dict else model.state_dict(keep_vars=False))
-    if options.ignore_frozen_params:
-        frozen = {name for name, param in model.named_parameters(remove_duplicate=False)
-                  if not param.requires_grad}
-        result = {key: value for key, value in result.items() if key not in frozen}
-    return _checkpoint_export(result, options)
+    return model.state_dict(*a, **k) if hasattr(model, "state_dict") else {}
 
 
 def _set_model_state_dict(model, state_dict, *a, options=None, **k):
     # `_is_fsdp_module` is set only by fsdp2, so a model carrying it proves
     # fsdp2 was imported and has registered -- see jittor/compat/
     # fsdp_hooks.py for why this file must not import fsdp2 directly.
-    if a or k:
-        raise NotImplementedError("checkpoint submodule selection is not supported")
-    model = _checkpoint_model(model)
-    legacy_full = options is None
-    options = _checkpoint_options(options)
-    _fsdp = _checkpoint_fsdp(model)
-    if _fsdp is not None and legacy_full:
-        # Preserve the existing native FULL reload entry's rank-zero source.
-        options = StateDictOptions(full_state_dict=True, broadcast_from_rank0=True)
-    state_dict = _checkpoint_broadcast_input(state_dict, options)
-    if _fsdp is not None and options.full_state_dict:
-        expected = set(model.state_dict())
-        missing, unexpected = expected - set(state_dict), set(state_dict) - expected
-        _fsdp._load_full_state_dict(model, state_dict, strict=options.strict)
-        from .nn.module_methods import _IncompatibleKeys
-        return _IncompatibleKeys(sorted(missing), sorted(unexpected))
+    if getattr(model, "_is_fsdp_module", False):
+        _fsdp = _fsdp_hooks.provider()
+        if _fsdp is not None:
+            _fsdp._load_full_state_dict(model, state_dict)
+            return None
     if hasattr(model, "load_state_dict"):
-        g = get_install_context(jt).target_namespace
-        current = model.state_dict()
-        state_dict = {
-            key: g.tensor(value, dtype=current[key].dtype, device=current[key].device).detach()
-            if key in current and isinstance(value, (jt.Var, np.ndarray)) else value
-            for key, value in state_dict.items()
-        }
         return model.load_state_dict(state_dict, strict=getattr(options, "strict", True))
     return None
 
 
-def _checkpoint_optimizers(optimizers):
-    if optimizers is None:
-        return ()
-    if hasattr(optimizers, "param_groups"):
-        return (optimizers,)
-    return tuple(optimizers)
-
-
-def _checkpoint_optimizer_names(model, optimizer, _fsdp):
-    if _fsdp is not None:
-        _fsdp.refresh_optimizer_fsdp_params(optimizer)
-    names = {id(param): name for name, param in model.named_parameters()}
-    result = []
-    for group in optimizer.param_groups:
-        try:
-            result.append([names[id(param)] for param in group["params"]])
-        except KeyError as error:
-            raise ValueError("checkpoint optimizer contains a parameter outside the model") from error
-    return result
-
-
-def _checkpoint_optimizer_metadata(state):
-    result = {}
-    for name, entry in state.items():
-        result[name] = {}
-        for field, value in entry.items():
-            if field == "step":
-                result[name][field] = ("step", float(value.item() if isinstance(value, jt.Var) else value))
-            elif isinstance(value, jt.Var):
-                result[name][field] = ("tensor", str(value.dtype))
-            else:
-                result[name][field] = ("value", value)
-    return result
-
-
-def _checkpoint_init_optimizer_state(optimizer):
-    # Match DCP's lazy-state initialization through the existing public step.
-    if optimizer.state or any(param.grad is not None for group in optimizer.param_groups
-                              for param in group["params"]):
-        return
-    g = get_install_context(jt).target_namespace
-    rates = [group["lr"] for group in optimizer.param_groups]
-    try:
-        for group in optimizer.param_groups:
-            group["lr"] = 0.0
-            for param in group["params"]:
-                if param.requires_grad:
-                    param.grad = g.zeros_like(param)
-        optimizer.step()
-    finally:
-        for group, rate in zip(optimizer.param_groups, rates):
-            group["lr"] = rate
-        optimizer.zero_grad(set_to_none=True)
-
-
-def _get_optimizer_state_dict(model, optimizers, *, options=None, submodules=None):
-    if submodules is not None:
-        raise NotImplementedError("checkpoint submodule selection is not supported")
-    model = _checkpoint_model(model)
-    options = _checkpoint_options(options)
-    _fsdp = _checkpoint_fsdp(model)
-    state, groups = {}, []
-    for optimizer in _checkpoint_optimizers(optimizers):
-        names = _checkpoint_optimizer_names(model, optimizer, _fsdp)
-        _checkpoint_init_optimizer_state(optimizer)
-        saved = optimizer.state_dict()
-        for group, group_names in zip(saved["param_groups"], names):
-            group = dict(group)
-            for pid, name in zip(group["params"], group_names):
-                if pid in saved["state"]:
-                    state[name] = dict(saved["state"][pid])
-            group["params"] = group_names
-            groups.append(group)
-    result = {"state": state, "param_groups": groups}
-    if _fsdp is not None and options.full_state_dict:
-        metadata = [None] * _distributed_world_size()
-        _native_all_gather_object(metadata, _checkpoint_optimizer_metadata(state))
-        result = _fsdp._gather_optimizer_state_dict(model, result, metadata)
-    return _checkpoint_export(result, options)
-
-
-def _set_optimizer_state_dict(model, optimizers, optim_state_dict, *, options=None):
-    model = _checkpoint_model(model)
-    options = _checkpoint_options(options)
-    optim_state_dict = _checkpoint_broadcast_input(optim_state_dict, options)
-    if not isinstance(optim_state_dict, dict) or set(optim_state_dict) != {"state", "param_groups"}:
-        raise ValueError("optimizer checkpoint requires state and param_groups")
-    _fsdp = _checkpoint_fsdp(model)
-    if _fsdp is not None and options.full_state_dict:
-        optim_state_dict = _fsdp._shard_optimizer_state_dict(model, optim_state_dict)
-    optimizers = _checkpoint_optimizers(optimizers)
-    if len(optim_state_dict["param_groups"]) != sum(len(opt.param_groups) for opt in optimizers):
-        raise ValueError("optimizer checkpoint has a different number of parameter groups")
-    offset = 0
-    plans = []
-    for optimizer in optimizers:
-        names = _checkpoint_optimizer_names(model, optimizer, _fsdp)
-        current = optimizer.state_dict()
-        state, groups = {}, []
-        for id_group, group_names in zip(current["param_groups"], names):
-            group = dict(optim_state_dict["param_groups"][offset])
-            offset += 1
-            if group["params"] != group_names:
-                raise ValueError("optimizer checkpoint parameter-group names do not match the model")
-            for pid, name in zip(id_group["params"], group_names):
-                if name not in optim_state_dict["state"]:
-                    continue
-                state[pid] = dict(optim_state_dict["state"][name])
-            group["params"] = id_group["params"]
-            groups.append(group)
-        plans.append((optimizer, {"state": state, "param_groups": groups}))
-    for optimizer, state in plans:
-        optimizer.load_state_dict(state)
-    return None
-
-
 class ShardedTensor:
-    def __init__(self, *args, **kwargs):
-        _stub_unimplemented(
-            "torch.distributed._shard.sharded_tensor.ShardedTensor",
-            _dcp_save_effect,
-            _dcp_hint,
-            stub_result=None,
-        )
+    pass
 
 
 class _RendezvousModule(_types.ModuleType):
@@ -994,10 +847,7 @@ def _api_dist_is_initialized(*a, **k):
 
 def _api_dist_get_backend(group=None):
     _context = get_install_context(jt).state["distributed_api"]
-    state = _context['state']
     world_group = _context['world_group']
-    if (group is None or group is world_group) and state.get("initialized") and state.get("backend"):
-        return state["backend"]
     return group._get_backend_name() if group is not None and hasattr(group, '_get_backend_name') else world_group._get_backend_name()
 
 
@@ -1064,47 +914,22 @@ def _api_symmetric_memory_is_symm_mem_enabled_for_group(*a, **k):
 
 
 def _api_checkpoint_sd_get_state_dict(model, optimizers=None, *a, **k):
-    return (_get_model_state_dict(model, *a, **k), _get_optimizer_state_dict(model, optimizers, *a, **k))
+    return (_get_model_state_dict(model, *a, **k), optimizers.state_dict() if hasattr(optimizers, 'state_dict') else {})
 
 
 def _api_checkpoint_sd_set_state_dict(model, optimizers=None, model_state_dict=None, optim_state_dict=None, *a, **k):
-    result = _set_model_state_dict(model, model_state_dict or {}, *a, **k)
-    _set_optimizer_state_dict(model, optimizers, optim_state_dict or {}, *a, **k)
-    return result
+    return _set_model_state_dict(model, model_state_dict or {}, *a, **k)
 
 
 def _api_sharded_tensor_init_from_local_shards(shards, *a, **k):
-    # Do not inspect local shards before the default fail-closed policy raises.
-    stub_result = None
-    if _allow_stub():
-        stub_result = shards[0] if shards else None
-    return _stub_unimplemented(
-        "torch.distributed._shard.sharded_tensor.init_from_local_shards",
-        _dcp_save_effect,
-        _dcp_hint,
-        stub_result=stub_result,
-    )
+    return shards[0] if shards else None
 
 
 def _api_sharded_tensor_empty(*a, **k):
-    # Avoid allocating storage until the caller explicitly opts into the old
-    # local stub behavior.
-    stub_result = None
-    if _allow_stub():
-        stub_result = jt.empty(*a, **{kk: vv for kk, vv in k.items() if kk == 'dtype'})
-    return _stub_unimplemented(
-        "torch.distributed._shard.sharded_tensor.empty",
-        _dcp_save_effect,
-        _dcp_hint,
-        stub_result=stub_result,
-    )
+    return jt.empty(*a, **{kk: vv for kk, vv in k.items() if kk == 'dtype'})
 
 
-from ...stub_policy import (
-    allow_stub as _allow_stub,
-    unimplemented as _stub_unimplemented,
-    record_unimplemented as _record_unimplemented,
-)
+from ...stub_policy import unimplemented as _stub_unimplemented, record_unimplemented as _record_unimplemented
 
 class SerializationFormat:
     TORCH_SAVE = "torch_save"
@@ -1119,24 +944,8 @@ _dcp_load_effect = ("return the state dict unchanged without reading the "
                     "weights")
 
 
-_dcp_hint = ("DCP planner, DTensor chunk metadata and storage-format protocols "
-             "are not implemented. Use FSDP2 FULL_STATE_DICT with "
-             "Accelerator.save_state/load_state instead; multi-node "
-             "checkpoint hardware validation is separately tracked by task 8.18.")
-
-
-class DefaultSavePlanner:
-    def __init__(self, *args, **kwargs):
-        _stub_unimplemented(
-            'torch.distributed.checkpoint.default_planner.DefaultSavePlanner',
-            _dcp_save_effect, _dcp_hint, stub_result=None)
-
-
-class DefaultLoadPlanner:
-    def __init__(self, *args, **kwargs):
-        _stub_unimplemented(
-            'torch.distributed.checkpoint.default_planner.DefaultLoadPlanner',
-            _dcp_load_effect, _dcp_hint, stub_result=None)
+_dcp_hint = ("Use torch.save / Module.state_dict for a single-rank "
+             "checkpoint; sharded dcp is task 8.18.")
 
 
 def _api_checkpoint_load_state_dict(*args, **kwargs):
@@ -1165,91 +974,6 @@ _api_checkpoint_load._jittor_unimplemented = 'torch.distributed.checkpoint.load'
 _api_checkpoint_save._jittor_unimplemented = 'torch.distributed.checkpoint.save'
 _api_checkpoint_fs_write_item._jittor_unimplemented = 'torch.distributed.checkpoint.filesystem._write_item'
 
-def _run_args_parser():
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--nproc_per_node", default="1")
-    parser.add_argument("--nnodes", default="1")
-    parser.add_argument("--node_rank", default="0", type=int)
-    parser.add_argument("--master_addr", default="127.0.0.1")
-    parser.add_argument("--master_port", default="29500")
-    parser.add_argument("--standalone", action="store_true")
-    parser.add_argument("--role", default="default")
-    parser.add_argument("--rdzv_backend", default="static")
-    parser.add_argument("--rdzv_endpoint", default=None)
-    parser.add_argument("--start_method", default="spawn")
-    parser.add_argument("--log_dir", default=None)
-    parser.add_argument("--redirects", default="0")
-    parser.add_argument("--tee", default="0")
-    parser.add_argument("--local_ranks_filter", default=None)
-    parser.add_argument("--max_restarts", default=0, type=int)
-    parser.add_argument("--monitor_interval", default=0.1, type=float)
-    parser.add_argument("--training_script", default=None)
-    parser.add_argument("--training_script_args", nargs="*", default=[])
-    return parser
-
-
-def _run(args):
-    nproc = getattr(args, "nproc_per_node", "1")
-    if str(nproc).lower() in ("gpu", "auto"):
-        nproc = int(os.environ.get("CUDA_VISIBLE_DEVICES", "").count(",")) + 1
-    nproc = int(nproc)
-    nnodes = int(getattr(args, "nnodes", "1"))
-    if nnodes != 1:
-        raise NotImplementedError("Jittor torch.distributed.run supports one node")
-    script = getattr(args, "training_script", None)
-    if not script:
-        raise ValueError("torch.distributed.run requires training_script")
-    script_args = list(getattr(args, "training_script_args", ()) or ())
-    base_env = os.environ.copy()
-    base_env["MASTER_ADDR"] = str(getattr(args, "master_addr", "127.0.0.1"))
-    base_env["MASTER_PORT"] = str(getattr(args, "master_port", "29500"))
-    base_env["WORLD_SIZE"] = str(nproc)
-    base_env["LOCAL_WORLD_SIZE"] = str(nproc)
-    base_env["JITTOR_TORCH_DISTRIBUTED_AUTO_INIT"] = "1"
-
-    # Warm a shared Jittor cache before spawning ranks. Concurrent imports can
-    # otherwise rebuild jit_utils in one child while another maps the old ABI.
-    shared_cache = base_env.get("ACCELERATE_NCCL_SHARED_CACHE", "").strip()
-    if shared_cache:
-        warm_env = base_env.copy()
-        warm_env["JITTOR_HOME"] = os.path.join(shared_cache, "jittor-home")
-        warm_env["cache_name"] = base_env.get(
-            "ACCELERATE_NCCL_CACHE_NAME", "accelerate_nccl_warm")
-        warm_env["JITTOR_TORCH_RUNTIME_ROOT"] = os.path.join(
-            shared_cache, "torch-shim")
-        warm_env["JITTOR_NO_BUILD"] = "0"
-        warm = subprocess.run(
-            [sys.executable, "-m", "jittor_utils.bootstrap"],
-            env=warm_env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-        if warm.returncode:
-            raise RuntimeError(
-                "Jittor shared-cache bootstrap failed with exit code {}:\n{}"
-                .format(warm.returncode, warm.stdout[-4000:]))
-    processes = []
-    try:
-        for rank in range(nproc):
-            env = base_env.copy()
-            env["RANK"] = str(rank)
-            env["LOCAL_RANK"] = str(rank)
-            env["GROUP_RANK"] = "0"
-            process = subprocess.Popen(
-                [sys.executable, script, *script_args], env=env)
-            processes.append(process)
-        statuses = [process.wait() for process in processes]
-    finally:
-        for process in processes:
-            if process.poll() is None:
-                process.terminate()
-    failed = next((status for status in statuses if status), 0)
-    if failed:
-        raise subprocess.CalledProcessError(failed, [script, *script_args])
-    return None
-
-
 def _install_distributed(g, registry=None):
     """Install Torch distributed compatibility over Jittor collectives.
 
@@ -1265,10 +989,8 @@ def _install_distributed(g, registry=None):
     if dist is None:
         dist = _types.ModuleType("torch.distributed")
         _modules["torch.distributed"] = dist
+    state = {"initialized": _native_distributed_active(), "store": None}
     world_group = _JittorProcessGroup(name="world")
-    state = {"initialized": _native_distributed_active(), "store": None,
-             "backend": (world_group._get_backend_name()
-                         if _native_distributed_active() else None)}
     pg_map = {world_group: (world_group._get_backend_name(),)}
     get_install_context(g).state["distributed_api"] = MappingProxyType({
         "state": state, "world_group": world_group, "pg_map": pg_map, "dist": dist,
@@ -1368,6 +1090,10 @@ def _install_distributed(g, registry=None):
     c10d._get_default_group = _api_c10d_get_default_group
     c10d._get_default_store = _api_c10d_get_default_store
     c10d.Work = _JittorWork
+    # and its public alias on `torch.distributed`: vLLM's diffusion
+    # GroupCoordinator annotates `list[torch.distributed.Work]`, which is
+    # evaluated at import time.
+    dist.Work = _JittorWork
     c10d.default_pg_timeout = getattr(c10d, "default_pg_timeout", None)
     c10d._get_default_timeout = _api_c10d_get_default_timeout
     c10d._unregister_process_group = _api_c10d_unregister_process_group
@@ -1391,19 +1117,6 @@ def _install_distributed(g, registry=None):
     rpc.init_rpc = _api_rpc_init_rpc
     rpc.shutdown = _api_rpc_shutdown
     dist.rpc = rpc
-
-    # Accelerate's multi-GPU launcher imports ``torch.distributed.run`` and
-    # calls its parser/runner instead of spawning ranks itself.  The shim has
-    # no PyTorch elastic runtime, but a deterministic single-node runner is
-    # enough to expose the same rank environment to Jittor's NCCL bootstrap.
-    run_mod = _modules.get("torch.distributed.run")
-    if run_mod is None:
-        run_mod = _types.ModuleType("torch.distributed.run")
-        _modules["torch.distributed.run"] = run_mod
-
-    run_mod.get_args_parser = _run_args_parser
-    run_mod.run = _run
-    dist.run = run_mod
 
     optim = _modules.get("torch.distributed.optim")
     if optim is None:
@@ -1454,8 +1167,6 @@ def _install_distributed(g, registry=None):
     checkpoint_sd.StateDictOptions = StateDictOptions
     checkpoint_sd.get_model_state_dict = _get_model_state_dict
     checkpoint_sd.set_model_state_dict = _set_model_state_dict
-    checkpoint_sd.get_optimizer_state_dict = _get_optimizer_state_dict
-    checkpoint_sd.set_optimizer_state_dict = _set_optimizer_state_dict
     checkpoint_sd.get_state_dict = _api_checkpoint_sd_get_state_dict
     checkpoint_sd.set_state_dict = _api_checkpoint_sd_set_state_dict
     checkpoint_fs = _types.ModuleType("torch.distributed.checkpoint.filesystem")
@@ -1469,13 +1180,6 @@ def _install_distributed(g, registry=None):
     _modules["torch.distributed.checkpoint.filesystem"] = checkpoint_fs
     checkpoint.state_dict = checkpoint_sd
     checkpoint.filesystem = checkpoint_fs
-    # Accelerate imports these even for FULL checkpoints, which never create
-    # a DCP planner. Actual planner construction retains the unsupported policy.
-    checkpoint_planner = _types.ModuleType("torch.distributed.checkpoint.default_planner")
-    checkpoint_planner.DefaultSavePlanner = DefaultSavePlanner
-    checkpoint_planner.DefaultLoadPlanner = DefaultLoadPlanner
-    _modules[checkpoint_planner.__name__] = checkpoint_planner
-    checkpoint.default_planner = checkpoint_planner
 
     shard = dist._shard
     shard.__path__ = getattr(shard, "__path__", [])
@@ -1498,6 +1202,17 @@ def _install_distributed(g, registry=None):
     for name in ("Store", "TCPStore", "FileStore", "PrefixStore"):
         setattr(c10d, name, getattr(dist, name))
         setattr(g._C._distributed_c10d, name, getattr(dist, name))
+
+    # `torch._C._distributed_c10d` is the extension module the public names come
+    # from, and callers reach for them there as well as on `torch.distributed`:
+    # `op=torch._C._distributed_c10d.ReduceOp.SUM` is a default argument in
+    # vLLM's diffusion GroupCoordinator signature, evaluated at class-definition
+    # time. The stub carried only `Reducer`, so importing vllm_omni's H3
+    # pipeline raised AttributeError.
+    for name in ("Backend", "P2POp", "ReduceOp", "RedOpType", "ProcessGroup"):
+        value = getattr(dist, name, None)
+        if value is not None and not hasattr(g._C._distributed_c10d, name):
+            setattr(g._C._distributed_c10d, name, value)
 
 
     rendezvous_mod = _modules.get("torch.distributed.rendezvous")
@@ -1541,12 +1256,9 @@ def _install_distributed(g, registry=None):
         ("load_state_dict", "save_state_dict", "load", "save", "FileSystemReader", "FileSystemWriter"),
         Fidelity.UNIMPLEMENTED, "Checkpoint I/O follows the existing explicit unsupported policy")
     register_api_bindings(checkpoint_sd, "torch.distributed.checkpoint.state_dict",
-        ("StateDictOptions", "get_model_state_dict", "set_model_state_dict", "get_optimizer_state_dict", "set_optimizer_state_dict", "get_state_dict", "set_state_dict"),
-        Fidelity.APPROXIMATE, "Canonical named optimizer state and registered FSDP FULL gather/load; "
-        "sharded checkpoint storage and flattened/submodule options are unsupported")
-    register_api_bindings(checkpoint_planner, "torch.distributed.checkpoint.default_planner",
-        ("DefaultSavePlanner", "DefaultLoadPlanner"), Fidelity.UNIMPLEMENTED,
-        "Import-compatible names; constructing planners rejects unsupported DCP protocols")
+        ("StateDictOptions", "get_model_state_dict", "set_model_state_dict", "get_state_dict", "set_state_dict"),
+        Fidelity.APPROXIMATE, "Local module state and registered FSDP load provider; "
+        "full distributed checkpoint/options semantics are not implemented")
     register_api_bindings(rendezvous_mod, "torch.distributed.rendezvous", ("rendezvous",),
         Fidelity.APPROXIMATE, "Delegates supported URL, rank, world-size and timeout handling to native stores")
     register_api_bindings(c10d, "torch.distributed.distributed_c10d",

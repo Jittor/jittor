@@ -46,6 +46,8 @@ _NATIVE_CORE_EXPORTS = (
     "migrate_all_to_cpu", "number_of_hold_vars", "number_of_lived_ops",
     "number_of_lived_vars", "op_compiler", "ops", "print_trace", "profiler",
     "reuse_np_array", "seed", "set_cpu_num_threads", "set_cpu_rng_state", "set_cpu_seed", "set_device", "set_lock_fd", "set_seed",
+    "graph_capture_begin", "graph_capture_end", "graph_capture_supported",
+    "graph_launch", "graph_release",
     "sync", "sync_all", "tape_together", "ternary_out_hint", "tests",
     "wrap_var_addr",
 )
@@ -170,6 +172,10 @@ from .nn import matmul, \
 from .nn.functional.softmax import logsumexp
 from .nn.functional.tensor import kron, tensordot
 from . import numpy2cupy
+from ._runtime.graph_replay import graph_replay
+from ._runtime.step_capture import capture_step
+from . import profiling
+from .profiling import profile
 from .misc.concatenation import concat, cat
 from .misc.indexing import install_var_indexing as _install_var_indexing
 from .misc.indexing import var_getitem as getitem, var_setitem as setitem
@@ -192,6 +198,9 @@ _MISC_EXPORTS = tuple(misc.tensor_ops.__all__) + (
 _publish(globals(), misc, _MISC_EXPORTS)
 from . import sparse
 from . import optim
+# Mixed-precision policy (the loss scaler). Imported after optim, which it
+# steps and whose gradients it unscales.
+from . import amp
 from . import dataset
 from . import init
 from . import autograd
@@ -359,7 +368,9 @@ _ROOT_EXPORTS = (
     "init", "jittor_core", "kron", "linalg", "logsumexp", "lr_scheduler",
     "math_util", "matmul", "misc", "mkl_ops", "mpi", "mpi_ops", "nn",
     "numpy2cupy", "optim", "ops", "rank", "sparse", "tensordot",
-    "world_size", "config", "capability", "introspection",
+    "amp",
+    "world_size", "config", "capability", "introspection", "graph_replay", "capture_step",
+    "profile", "profiling",
 )
 
 __all__ = tuple(sorted(set(

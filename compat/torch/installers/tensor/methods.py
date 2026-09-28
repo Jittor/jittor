@@ -1,5 +1,5 @@
 """Torch tensor methods ownership."""
-from ...fidelity import Fidelity, register_api_bindings
+from ...fidelity import Fidelity, register_api_bindings, register_fidelity
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 from .method_api import (
@@ -7,7 +7,6 @@ from .method_api import (
     _api_fill,
     _api_zero,
     _api_add,
-    _tensor_iadd,
     _api_sub,
     _api_mul,
     _api_div,
@@ -54,12 +53,11 @@ from .method_api import (
     _TYPENAME_TO_DTYPE,
     _TorchGradFn,
     _add,
-    _mul,
-    _method_mul,
-    _sqrt,
-    _method_sqrt,
     _addmm_method,
     _as_strided,
+    _is_pinned,
+    _pin_memory,
+    _set_,
     _assign_data_owner,
     _backward,
     _baddbmm,
@@ -106,7 +104,6 @@ from .method_api import (
     _stride,
     _tile,
     _to,
-    _type_as,
     _torch_getitem,
     _torch_ne,
     _torch_setitem,
@@ -125,29 +122,6 @@ from .method_api import (
 from ...context import get_install_context
 from types import MappingProxyType
 
-
-def _install_expand_shape_adapter(Var):
-    """Accept scalar tensor dimensions in ``Tensor.expand`` shape arguments.
-
-    PyTorch permits a 0-D tensor (and SymInt-like scalar) as a dimension.  A
-    Jittor ``broadcast`` call receives a Python shape vector and therefore
-    needs those values materialized as integers.  Shape conversion is metadata
-    handling; the expanded tensor remains a native view on its original
-    device.
-    """
-    native = getattr(Var, "expand", None)
-    if native is None or getattr(native, "_torch_shape_adapter", False):
-        return
-
-    def expand(self, *shape):
-        if len(shape) == 1 and isinstance(shape[0], (tuple, list)):
-            shape = tuple(shape[0])
-        normalized = tuple(int(value) for value in shape)
-        return native(self, *normalized)
-
-    expand._torch_shape_adapter = True
-    Var.expand = expand
-
 def _type_attribute(Var, name):
     # A frontend subclass inherits C descriptors and numeric slots; reading
     # only its own __dict__ silently misses the native implementation.
@@ -164,13 +138,16 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     from importlib import import_module as _import_module
     _owner = _import_module(__package__)
     _NativeVar = _owner.jt.Var
-    _install_expand_shape_adapter(Var)
     _native_operators = {name: getattr(Var, name, None) for name in _BINARY_APIS}
 
     if _jittor_dtype_name(_DTYPE_OBJS) is not None and not getattr(Var, "_dtype_wrapped", False):
         try:
             _native_desc = _type_attribute(Var, "dtype")  # C getset_descriptor
             if _native_desc is not None:
+                # What `_dtype_get` needs, kept on the type it serves: the
+                # native descriptor and this installation's dtype objects.
+                Var._frontend_native_dtype = _native_desc
+                Var._frontend_dtype_objects = _DTYPE_OBJS
                 Var.dtype = property(_dtype_get)
                 Var._dtype_wrapped = True
         except _owner.EXPECTED as exc:
@@ -212,7 +189,6 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # constant source's stop-grad flag and permanently freeze the parameter.
     Var.fill_ = _api_fill
     Var.zero_ = _api_zero
-    Var.__iadd__ = _tensor_iadd
     Var.add_ = _api_add
     Var.sub_ = _api_sub
     Var.mul_ = _api_mul
@@ -303,14 +279,6 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
 
     _native_add = g.add
     g.add = _add
-    _native_mul = g.mul
-    g.mul = _mul
-    g.multiply = _mul
-    Var.mul = _method_mul
-    Var.multiply = _method_mul
-    _native_sqrt = g.sqrt
-    g.sqrt = _sqrt
-    Var.sqrt = _method_sqrt
 
     g.cumsum = _owner.cumsum
     Var.cumsum = _owner.cumsum
@@ -414,7 +382,6 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     Var.retains_grad = property(_api_retains_grad)
 
     Var.to = _to
-    Var.type_as = _type_as
 
     # Jittor stores torch 0-D scalars as one-element Vars. Preserve a lightweight
     # provenance marker through the copy-like methods used before host export,
@@ -484,9 +451,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # (int64/int32 -> float64, int8/int8 -> float16, float16/int64 -> float64),
     # which loses torch parity. Cast operands to the torch target float, then div.
 
-    # The refactored core exposes true strided storage. Preserve identity for
-    # dense tensors and materialize non-contiguous views before Torch callers
-    # reshape them.
+    # Preserve identity for dense storage; actual transpose/broadcast views
+    # materialize through the native contiguous op and retain their gradient.
     Var.contiguous = _api_contiguous
     # torch's Tensor.is_cuda / .is_cpu report the tensor's ACTUAL residency.
     # A Var built/migrated to host (torch.zeros(device='cpu'), .cpu()) is on the
@@ -519,6 +485,27 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # the backward is the correct scatter-add (overlapping windows read shared inputs).
     if not hasattr(Var, "as_strided"):
         Var.as_strided = _as_strided
+    # `set_` re-points a tensor at another's storage; the shim has no byte
+    # storage, so it materializes the source's elements (see _set_).
+    if not hasattr(Var, "set_"):
+        Var.set_ = _set_
+    if not hasattr(Var, "is_pinned"):
+        Var.is_pinned = _is_pinned
+    if not hasattr(Var, "pin_memory"):
+        Var.pin_memory = _pin_memory
+    # These two used to contradict each other -- `pin_memory()` returned
+    # `self` (a device tensor, on an accelerator) while `is_pinned()` was a
+    # bare `return False` -- so state the one restriction that is left.
+    register_fidelity(
+        "torch.Tensor.pin_memory", _pin_memory, Fidelity.APPROXIMATE,
+        "Returns an independent host-resident copy that is_pinned() reports as "
+        "pinned; jittor has no page-locked allocator, so a non_blocking "
+        "host-to-device transfer out of it is still synchronous, and a tensor "
+        "already on an accelerator is copied rather than refused.")
+    register_fidelity(
+        "torch.Tensor.is_pinned", _is_pinned, Fidelity.APPROXIMATE,
+        "True exactly for a tensor pin_memory() produced; the buffer is host "
+        "memory but not page-locked.")
 
     # torch's Tensor.where(condition, other): elements of *self* where condition is
     # True, else from `other`. jittor's native Var.where treats *self* as the condition
@@ -587,8 +574,6 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         '_DTYPE_OBJS': locals().get('_DTYPE_OBJS'),
         '_jt_var_where': locals().get('_jt_var_where'),
         '_native_add': locals().get('_native_add'),
-        '_native_mul': locals().get('_native_mul'),
-        '_native_sqrt': locals().get('_native_sqrt'),
         '_native_clamp': locals().get('_native_clamp'),
         '_native_data_descriptor': locals().get('_native_data_descriptor'),
         '_native_desc': locals().get('_native_desc'),
@@ -608,5 +593,5 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             setattr(Var, name, implementation)
 
     register_api_bindings(Var, 'torch.Tensor',
-        ('T', '__deepcopy__', '__getitem__', '__hash__', '__invert__', '__ne__', '__reduce__', '__reduce_ex__', '__setitem__', 'add_', 'addmm', 'argwhere', 'as_strided', 'backward', 'baddbmm', 'clamp', 'clamp_', 'clip', 'clip_', 'contiguous', 'copy_', 'cpu', 'cuda', 'cumprod', 'cumsum', 'data', 'data_ptr', 'detach', 'device', 'div_', 'dtype', 'element_size', 'fill_', 'get_device', 'grad', 'grad_fn', 'is_complex', 'is_contiguous', 'is_cpu', 'is_cuda', 'is_floating_point', 'is_leaf', 'is_meta', 'is_mps', 'is_nested', 'is_signed', 'is_xpu', 'mT', 'mul_', 'narrow', 'ne', 'nelement', 'new_empty', 'new_full', 'new_ones', 'new_tensor', 'new_zeros', 'nonzero', 'norm', 'normal_', 'numpy', 'requires_grad', 'requires_grad_', 'retain_grad', 'retains_grad', 'squeeze', 'storage', 'storage_offset', 'stride', 'sub_', 'tile', 'to', 'tolist', 'type', 'type_as', 'uniform_', 'untyped_storage', 'where', 'zero_') + tuple(_BINARY_APIS.keys() | _CAST_APIS.keys() | _UNARY_INPLACE_APIS.keys()),
+        ('T', '__deepcopy__', '__getitem__', '__hash__', '__invert__', '__ne__', '__reduce__', '__reduce_ex__', '__setitem__', 'add_', 'addmm', 'argwhere', 'as_strided', 'backward', 'baddbmm', 'clamp', 'clamp_', 'clip', 'clip_', 'contiguous', 'copy_', 'cpu', 'cuda', 'cumprod', 'cumsum', 'data', 'data_ptr', 'detach', 'device', 'div_', 'dtype', 'element_size', 'fill_', 'get_device', 'grad', 'grad_fn', 'is_complex', 'is_contiguous', 'is_cpu', 'is_cuda', 'is_floating_point', 'is_leaf', 'is_meta', 'is_mps', 'is_nested', 'is_pinned', 'is_signed', 'is_xpu', 'mT', 'mul_', 'narrow', 'ne', 'nelement', 'new_empty', 'new_full', 'new_ones', 'new_tensor', 'new_zeros', 'nonzero', 'norm', 'normal_', 'numpy', 'pin_memory', 'requires_grad', 'requires_grad_', 'retain_grad', 'retains_grad', 'set_', 'squeeze', 'storage', 'storage_offset', 'stride', 'sub_', 'tile', 'to', 'tolist', 'type', 'uniform_', 'untyped_storage', 'where', 'zero_') + tuple(_BINARY_APIS.keys() | _CAST_APIS.keys() | _UNARY_INPLACE_APIS.keys()),
         Fidelity.APPROXIMATE, 'Tensor operations share the native Var/Op graph and explicit frontend state; unsupported layouts, device capabilities, and retained compatibility approximations remain restricted')

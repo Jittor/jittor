@@ -6,6 +6,7 @@
 // ***************************************************************
 #include "core/var.h"
 #include "ops/ternary_op.h"
+#include "ops/layout_propagation.h"
 #include "ops/op_register.h"
 
 namespace jittor {
@@ -31,6 +32,15 @@ TernaryOp::TernaryOp(Var* cond, Var* x, Var* y) : cond(cond), x(x), y(y) {
         if (by) yy = make_broadcast(y, cond, NanoVector()), y = yy;
         forward(make_ternary(cond, x, y));
         return;
+    }
+    {
+        NanoVector axes;
+        vector<VarPtr> sources;
+        if (storage_layout_operands({cond, x, y}, axes, sources)) {
+            forward(storage_view_transpose(
+                make_ternary(sources[0], sources[1], sources[2]), axes));
+            return;
+        }
     }
     set_flag(OpFlags::_cpu);
     set_flag(OpFlags::_cuda);
@@ -75,12 +85,31 @@ void TernaryOp::infer_shape() {
 }
 
 void TernaryOp::jit_prepare(JK& jk) {
+    // Per operand, not one flag for all three: a strided condition used to put
+    // the full unflattening on the two value operands as well, which are
+    // usually the contiguous ones.
+    bool cs = !cond->is_contiguous(), xs = !x->is_contiguous(), ys = !y->is_contiguous();
+    int cmask = cs ? cond->stride_pattern() : 0;
+    int xmask = xs ? x->stride_pattern() : 0;
+    int ymask = ys ? y->stride_pattern() : 0;
     jk << "«Tc:" << cond->dtype();
     jk << "«Tx:" << x->dtype();
     jk << "«Ty:" << y->dtype();
     jk << "«Tz:" << z->dtype();
     jk << "«DIM=" << JK::hex1(z->shape.size());
-    jk << "«STRIDED=" << JK::hex1(!x->is_contiguous() || !y->is_contiguous() || !cond->is_contiguous());
+    jk << "«CSTRIDED=" << JK::hex1(cs);
+    jk << "«XSTRIDED=" << JK::hex1(xs);
+    jk << "«YSTRIDED=" << JK::hex1(ys);
+    // All four unconditionally: the template reads a per-operand mask from
+    // inside the shared chain's `@if(TSMASK...)`, which a contiguous operand
+    // still reaches, so leaving its mask out of the key would leave the
+    // template with an undefined name rather than a zero.
+    jk << "«CSMASK=" << JK::hex(cmask);
+    jk << "«XSMASK=" << JK::hex(xmask);
+    jk << "«YSMASK=" << JK::hex(ymask);
+    // The axes any strided operand actually moves. One shared remainder chain
+    // serves all three, so an axis none of them moves costs nothing.
+    jk << "«TSMASK=" << JK::hex(cmask | xmask | ymask);
 }
 
 #else // JIT
@@ -90,23 +119,31 @@ void TernaryOp::jit_run() {
     auto* __restrict__ yp = y->ptr<Ty>();
     auto* __restrict__ zp = z->ptr<Tz>();
     index_t num = z->num;
-    @if(STRIDED,
+    // The product of the shapes above each axis, so one axis' index is a single
+    // division away (`i / zabove@d % zstorage_shape@d`) instead of a chain of
+    // them; `(i/a)/b == i/(a*b)` for non-negative integers. See KI-CODEGEN-001,
+    // and keep the macro arguments comma-free -- the template parser splits them
+    // on commas.
+    @if(TSMASK,
         @for(d, 0, DIM, index_t zstorage_shape@d = z->shape[@d];)
-        @for(d, 0, DIM, index_t xstride@d = x->storage_stride(@d);)
-        @for(d, 0, DIM, index_t ystride@d = y->storage_stride(@d);)
-        @for(d, 0, DIM, index_t cstride@d = cond->storage_stride(@d);)
+        index_t zabove@{DIM-1} = 1;
+        @for(d, DIM-2, -1, -1, index_t zabove@d = zabove@{d+1} * zstorage_shape@{d+1};)
     )
+    @if(XSTRIDED, @for(d, 0, DIM, index_t xstride@d = x->storage_stride(@d);))
+    @if(YSTRIDED, @for(d, 0, DIM, index_t ystride@d = y->storage_stride(@d);))
+    @if(CSTRIDED, @for(d, 0, DIM, index_t cstride@d = cond->storage_stride(@d);))
     for (index_t i=0; i<num; i++) {
-        index_t xi=i;
-        index_t yi=i;
-        index_t ci=i;
-        @if(STRIDED,
-            index_t rem=i; xi=0; yi=0; ci=0;
-            @for(d, DIM-1, -1, -1,
-                xi += (rem % zstorage_shape@d) * xstride@d;
-                yi += (rem % zstorage_shape@d) * ystride@d;
-                ci += (rem % zstorage_shape@d) * cstride@d;
-                rem /= zstorage_shape@d;
+        // One axis index shared by whichever operands are strided on it; axis 0
+        // needs no modulo because `i` is already below its extent.
+        @if(XSTRIDED, index_t xi=0;, index_t xi=i;)
+        @if(YSTRIDED, index_t yi=0;, index_t yi=i;)
+        @if(CSTRIDED, index_t ci=0;, index_t ci=i;)
+        @for(d, 0, DIM,
+            @if(TSMASK>>d&1,
+                index_t q@d = @if(d, (i / zabove@d % zstorage_shape@d), (i / zabove@d));
+                @if(XSMASK>>d&1, xi += q@d * xstride@d;)
+                @if(YSMASK>>d&1, yi += q@d * ystride@d;)
+                @if(CSMASK>>d&1, ci += q@d * cstride@d;)
             )
         )
         Tz xd_ = xp[xi];

@@ -89,5 +89,18 @@ class TestRelu(unittest.TestCase):
         check_equal(arr, jnn.Softplus (2), tnn.Softplus (2))
         check_equal(arr, jnn.Softplus (2, 99.9), tnn.Softplus (2, 99.9))
         
+class TestNativeRelu(unittest.TestCase):
+    def test_leaky_relu_native_scale_alias(self):
+        source_np = np.array([-2.0, -0.5, 1.0, 3.0], dtype=np.float32)
+        with jt.flag_scope(use_cuda=0):
+            for kwargs, slope in (({"scale": 0.2}, 0.2),
+                                  ({"scale": 0.7, "negative_slope": 0.2}, 0.2)):
+                module = jnn.LeakyReLU(**kwargs)
+                actual = module(jt.array(source_np)).numpy()
+                np.testing.assert_array_equal(actual, np.where(source_np >= 0, source_np, source_np * slope))
+                self.assertEqual(module.negative_slope, slope)
+                self.assertFalse(module.inplace)
+
+
 if __name__ == "__main__":
     unittest.main()

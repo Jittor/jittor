@@ -52,6 +52,11 @@ static void cudnn_switch_device(int device) {
     auto& state = cudnn_state(device);
     if (!state.handle) {
         checkCudaErrors(cudnnCreate(&state.handle));
+        // Every library handle must agree with jittor's own launches on the
+        // stream; see `compute_stream` in backends/cuda/runtime/driver.cc.
+        // `cudaStreamPerThread` does not synchronise with the legacy stream,
+        // so a handle left on the default would race with no error.
+        checkCudaErrors(cudnnSetStream(state.handle, cudaStreamPerThread));
         LOGv << "cudnnCreate finished for device" << device;
     }
     cudnn_handle = state.handle;

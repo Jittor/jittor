@@ -6,6 +6,9 @@ import os
 import jittor as jt
 from jittor._runtime.dispatch import optional_kernel, register_kernel
 from jittor._runtime.backend_libraries import get_library_ops
+from jittor._runtime.core_api import _output_requires_grad
+from jittor.nn.functional._amp import bias_for_compute_dtype
+from jittor.nn.functional._layout import channels_last_source, channels_last_view
 
 from jittor.backends.cuda.kernels.nn.channel_bias_cuda import _channel_bias_add_cuda
 
@@ -24,6 +27,85 @@ from jittor.backends.cuda.kernels.nn.channel_bias_cuda import _channel_bias_add_
 # stayed, and being a copy it kept winning, so the fix had no effect on
 # anything that went through ``conv2d``. One definition now.
 
+#: Where `_inference_filter` keeps, for the weight version it moved, the dense
+#: OHWI tensor the weight is now a view of: (weight version, OHWI tensor). The
+#: same storage, not a copy.
+_FILTER_OHWI = "_jittor_conv_filter"
+
+#: Whether a half-precision convolution without a backward moves its weight
+#: into OHWI storage (see `_inference_filter`). The values do not change and
+#: nothing is duplicated; only the weight's strides do.
+channels_last_filters = True
+
+
+def _is_ohwi_storage(weight):
+    """Whether an OIHW-shaped weight is a view of dense OHWI storage."""
+    if weight._storage_is_contiguous() or weight._storage_offset():
+        return False
+    o, i, kh, kw = (int(size) for size in weight.shape)
+    return tuple(weight._storage_strides()) == (kh * kw * i, 1, kw * i, i)
+
+
+def _inference_filter(x, weight, groups):
+    """The filter and its layout for a convolution with no backward.
+
+    For half precision cuDNN runs NHWC kernels, and handed an OIHW filter it
+    converts it on every call -- 51 of the 54 ms of layout conversions in a
+    20-step SD1.5 sample, for weights that never change there. So the weight
+    itself moves into OHWI storage: its values, shape and every reader's
+    answer stay what they were (it is read through OIHW strides), and cuDNN
+    is handed the same bytes as OHWI. A copy kept beside the weight did the
+    same at the price of the convolution weights twice over, 1.1 GB for the
+    UNet.
+
+    Only a materialized weight moves -- a parameter, not a filter computed in
+    the call -- and never while a step is being traced, where rebinding a
+    parameter reads as a state change. A 1x1 filter is the same bytes in
+    either layout and is only relabelled. With a backward nothing moves; a
+    weight moved earlier still reads right, through its strides.
+    """
+    if (groups != 1 or _jittor_dtype_name(weight.dtype) not in ("float16", "bfloat16")
+            or _output_requires_grad(x, weight)):
+        return weight, "oihw"
+    out_channels, in_channels, kh, kw = (int(size) for size in weight.shape)
+    if kh == 1 and kw == 1 and weight._storage_is_contiguous():
+        return weight.reshape((out_channels, 1, 1, in_channels)), "ohwi"
+    state = getattr(weight, "__dict__", None)
+    if state is None:
+        return weight, "oihw"
+    moved = state.get(_FILTER_OHWI)
+    if moved is not None and moved[0] == weight.var_ptr:
+        return moved[1], "ohwi"
+    from jittor._runtime import step_capture
+    if (not channels_last_filters or not weight.is_finished
+            or step_capture.tracing() or jt.flags.keep_graph):
+        return weight, "oihw"
+    dense = weight.transpose(0, 2, 3, 1).clone()
+    with jt.flag_scope(transpose_storage_view=1):
+        view = dense.transpose(0, 3, 1, 2)
+    # Made under `no_grad`, the view is born stopped; a parameter that takes a
+    # gradient has to go on taking one.
+    view = view.stop_grad() if weight.is_stop_grad() else view.start_grad()
+    # Settled now, so the weight answers for its strides; a view moves no data.
+    jt.sync([view, dense], False, False)
+    weight.update(view)
+    state[_FILTER_OHWI] = (weight.var_ptr, dense.stop_grad())
+    return dense, "ohwi"
+
+
+#: Whether a half-precision convolution that records no gradient hands out its
+#: result in channels-last storage, as an NCHW view of NHWC memory. Tensor-core
+#: kernels compute in NHWC, so with NCHW activations cuDNN converts every input
+#: on the way in and every output on the way out, through a workspace -- 147 MB
+#: for one ResNet-50 layer at batch 64. The elementwise ops in between keep a
+#: view's layout (`propagate_storage_layout`), so the next convolution receives
+#: NHWC memory again and reads it as it is. Anything that needs dense NCHW gets
+#: it by the ordinary contiguous copy, so values never depend on this.
+channels_last_activations = True
+
+_HALF = ("float16", "bfloat16")
+
+
 def _supports_conv2d(x, weight, bias, stride, padding, dilation, groups,
                      *, _depthwise_fast_path=True):
     return x.dtype == weight.dtype and get_library_ops("cudnn") is not None
@@ -38,10 +120,22 @@ def _try_cudnn_conv2d(x, weight, bias, stride, padding, dilation, groups,
     sh, sw = stride   if isinstance(stride, tuple)   else (stride, stride)
     ph, pw = padding  if isinstance(padding, tuple)  else (padding, padding)
     dh, dw = dilation if isinstance(dilation, tuple) else (dilation, dilation)
-    y = get_library_ops("cudnn").cudnn_conv(x, weight, sh, sw, ph, pw, dh, dw, groups)
+    filter_, layout = _inference_filter(x, weight, groups)
+    if (channels_last_activations and _jittor_dtype_name(x.dtype) in _HALF
+            and (jt.flags.no_grad or not _output_requires_grad(x, weight, bias))):
+        source = channels_last_source(x)
+        y = get_library_ops("cudnn").cudnn_conv(
+            x if source is None else source, filter_, sh, sw, ph, pw, dh, dw, groups,
+            "abcd" if source is None else "acdb", layout, "acdb")
+        if bias is not None:
+            y = y + bias_for_compute_dtype(y, bias)
+        return channels_last_view(y)
+    y = get_library_ops("cudnn").cudnn_conv(x, filter_, sh, sw, ph, pw, dh, dw, groups,
+                                            "abcd", layout)
     if bias is not None:
         fast = _channel_bias_add_cuda(y, bias)
-        y = fast if fast is not None else y + bias.broadcast(y.shape, [0, 2, 3])
+        y = fast if fast is not None else y + bias_for_compute_dtype(
+            y, bias).broadcast(y.shape, [0, 2, 3])
     return y
 
 # Same story for the transpose: the forward *is* the conv-backward-x op, and

@@ -4,10 +4,32 @@ import unittest
 
 import numpy as np
 
-import jittor as torch
+import torch
 import jittor as jt
 from jittor.nn.backends import hooks as backend_hooks
 from jittor._runtime.dispatch import override_kernel, registered_kernel
+
+
+def _assert_acl_device(test_case, value):
+    """Check executed placement before a host fetch changes tensor residency."""
+    test_case.assertTrue(jt.compiler.has_acl)
+    test_case.assertEqual(jt.runtime.use_cuda, 1)
+    value.sync()
+    test_case.assertEqual(value.location(), "device")
+    test_case.assertGreaterEqual(value.device_id, 0)
+    # -1 is native FollowRuntime, which selects ACL in this runtime;
+    # 2 is explicit BackendId::Acl. Do not force native graph placement.
+    test_case.assertIn(value.placement_backend, (-1, 2))
+    return value
+
+
+def _fetch_acl(test_case, values, *, as_float=False):
+    values = list(values)
+    for value in values:
+        _assert_acl_device(test_case, value)
+    if as_float:
+        values = [value.float() for value in values]
+    return jt.fetch_sync(values)
 
 
 def _bfloat16_round(values):
@@ -19,6 +41,29 @@ def _bfloat16_round(values):
 
 @unittest.skipIf(not _test_capability.check_accelerator('acl', backend=jt).enabled, "No ACL found")
 class TestACLTorchCompat(unittest.TestCase):
+    def setUp(self):
+        # Fail closed if the runner imports binary PyTorch or the old native alias.
+        self.assertIsNot(torch, jt)
+        self.assertIsNot(torch.Tensor, jt.Var)
+        self.assertIs(torch.Tensor._frontend_backend, jt)
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_independent_frontend_tensor_executes_on_acl(self):
+        source = torch.tensor([1.0, 2.0], device="npu", requires_grad=True)
+        output = (source * source).sum()
+        gradient, = torch.autograd.grad(output, source)
+        self.assertIs(type(source), torch.Tensor)
+        self.assertIs(type(output), torch.Tensor)
+        self.assertIs(type(gradient), torch.Tensor)
+        output.sync()
+        gradient.sync()
+        self.assertEqual(output.placement_backend, 2)
+        self.assertEqual(gradient.placement_backend, 2)
+        self.assertEqual(output.location(), "device")
+        self.assertEqual(gradient.location(), "device")
+        self.assertEqual(output.item(), 5.0)
+        np.testing.assert_array_equal(gradient.detach().cpu().numpy(), [2.0, 4.0])
+
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_fused_adamw_bfloat16_matches_cann_two_steps(self):
         initial = [1.0, -2.0, 0.5, -0.25, 4.0, -8.0, 0.125, -0.0625]
@@ -104,8 +149,8 @@ class TestACLTorchCompat(unittest.TestCase):
         class FixtureRMSNorm(torch.nn.Module):
             def __init__(self, weight):
                 super().__init__()
-                self.weight = torch.tensor(
-                    weight, dtype=torch.bfloat16).requires_grad_(True)
+                self.weight = torch.nn.Parameter(torch.tensor(
+                    weight, dtype=torch.bfloat16))
                 self.variance_epsilon = 1e-6
 
             def forward(self, hidden_states):
@@ -123,26 +168,22 @@ class TestACLTorchCompat(unittest.TestCase):
         source = torch.tensor(
             source_bf, dtype=torch.bfloat16).requires_grad_(True)
         cotangent = torch.tensor(cotangent_bf, dtype=torch.bfloat16)
-        with jt.log_capture_scope(
-            log_v=0, log_vprefix="acl_op_exec.cc=100"
-        ) as logs:
-            output = module(source)
-            cached = module.weight.__dict__.get(
-                "_torch_acl_rms_norm_unit_weight")
-            repeated = module(source)
-            self.assertIs(
-                module.weight.__dict__.get("_torch_acl_rms_norm_unit_weight"),
-                cached,
-            )
-            grad_source, grad_weight = torch.autograd.grad(
-                (output * cotangent).sum(), (source, module.weight)
-            )
-            with torch.no_grad():
-                inference = module(source)
-            values = jt.fetch_sync([
-                output.float(), repeated.float(), inference.float(),
-                grad_source.float(), grad_weight.float(),
-            ])
+        output = module(source)
+        cached = getattr(
+            module.weight, "_torch_acl_rms_norm_unit_weight", None)
+        repeated = module(source)
+        self.assertIs(
+            getattr(module.weight, "_torch_acl_rms_norm_unit_weight", None),
+            cached,
+        )
+        grad_source, grad_weight = torch.autograd.grad(
+            (output * cotangent).sum(), (source, module.weight)
+        )
+        with torch.no_grad():
+            inference = module(source)
+        values = _fetch_acl(
+            self, [output, repeated, inference, grad_source, grad_weight],
+            as_float=True)
 
         inverse_rms = np.float32(1.0) / np.sqrt(
             np.mean(
@@ -180,9 +221,7 @@ class TestACLTorchCompat(unittest.TestCase):
         for actual, reference in zip(values, expected):
             np.testing.assert_array_equal(actual, reference)
         self.assertIsNotNone(cached)
-        self.assertEqual(str(cached.dtype), "bfloat16")
-        messages = [entry["msg"].lower() for entry in logs]
-        self.assertTrue(any("compile acl op" in message for message in messages))
+        self.assertEqual(str(cached.dtype).replace("torch.", ""), "bfloat16")
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_dual_rms_norm_bfloat16_matches_pytorch_order(self):
@@ -289,8 +328,8 @@ class TestACLTorchCompat(unittest.TestCase):
             gradient = torch.autograd.grad(
                 (quotient + reflected).sum(), source
             )[0]
-            self.assertEqual(str(quotient.dtype), "float32")
-            self.assertEqual(str(reflected.dtype), "float32")
+            self.assertEqual(str(quotient.dtype).replace("torch.", ""), "float32")
+            self.assertEqual(str(reflected.dtype).replace("torch.", ""), "float32")
             quotient, reflected, gradient = jt.fetch_sync(
                 [quotient, reflected, gradient]
             )
@@ -317,8 +356,8 @@ class TestACLTorchCompat(unittest.TestCase):
         ) as logs:
             scaled = source * scale
             reflected = scale * source
-            self.assertEqual(str(scaled.dtype), "bfloat16")
-            self.assertEqual(str(reflected.dtype), "bfloat16")
+            self.assertEqual(str(scaled.dtype).replace("torch.", ""), "bfloat16")
+            self.assertEqual(str(reflected.dtype).replace("torch.", ""), "bfloat16")
             scaled.sync()
             reflected.sync()
             values = jt.fetch_sync([scaled.float(), reflected.float()])
@@ -336,21 +375,17 @@ class TestACLTorchCompat(unittest.TestCase):
             source_np, dtype=torch.bfloat16).requires_grad_(True)
         cotangent = torch.tensor(cotangent_np, dtype=torch.bfloat16)
 
-        with jt.log_capture_scope(
-            log_v=0, log_vprefix="acl_op_exec.cc=100"
-        ) as logs:
-            output = torch.roll(source, shifts=4, dims=-1)
-            flat = torch.roll(source, shifts=5)
-            gradient = torch.autograd.grad(
-                (output * cotangent).sum(), source
-            )[0]
-            values = jt.fetch_sync([output.float(), flat.float(), gradient.float()])
+        output = torch.roll(source, shifts=4, dims=-1)
+        flat = torch.roll(source, shifts=5)
+        gradient = torch.autograd.grad(
+            (output * cotangent).sum(), source
+        )[0]
+        values = _fetch_acl(
+            self, [output, flat, gradient], as_float=True)
 
         np.testing.assert_array_equal(values[0], np.roll(source_np, 4, axis=-1))
         np.testing.assert_array_equal(values[1], np.roll(source_np.reshape(-1), 5).reshape(source_np.shape))
         np.testing.assert_array_equal(values[2], np.roll(cotangent_np, -4, axis=-1))
-        messages = [entry["msg"].lower() for entry in logs]
-        self.assertTrue(any("compile acl op" in message for message in messages))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_nearest_interpolate_forward_backward_stays_on_acl(self):
@@ -416,8 +451,8 @@ class TestACLTorchCompat(unittest.TestCase):
             return result
 
         with override_kernel("nn.group_norm", "acl", record_group_norm):
-            self.assertTrue(jt.introspection.policy.runtime.use_cuda)
-            self.assertTrue(jt.introspection.policy.runtime.use_cuda)
+            self.assertTrue(jt.flags.use_acl)
+            self.assertTrue(jt.flags.use_cuda)
             with jt.log_capture_scope(
                 log_v=0, log_vprefix="acl_op_exec.cc=100"
             ) as logs:
@@ -634,19 +669,16 @@ class TestACLTorchCompat(unittest.TestCase):
             [0.25, -0.5, 1.5, 2.0, -1.0, 0.75, 1.0], dtype="float32"
         )
 
-        self.assertTrue(jt.introspection.policy.runtime.use_cuda)
-        self.assertTrue(jt.introspection.policy.runtime.use_cuda)
-        self.assertIs(torch.nn.functional.silu, jt.nn.silu)
+        self.assertTrue(jt.flags.use_acl)
+        self.assertTrue(jt.flags.use_cuda)
         source = torch.tensor(source_np)
         source.requires_grad_(True)
-        with jt.log_capture_scope(
-            log_v=0, log_vprefix="acl_op_exec.cc=100"
-        ) as logs:
-            output = torch.nn.functional.silu(source)
-            gradient = torch.autograd.grad(
-                (output * torch.tensor(loss_weight_np)).sum(), source
-            )[0]
-            candidate = jt.fetch_sync([output, gradient])
+        output = torch.nn.functional.silu(source)
+        self.assertIs(type(output), torch.Tensor)
+        gradient = torch.autograd.grad(
+            (output * torch.tensor(loss_weight_np)).sum(), source
+        )[0]
+        candidate = _fetch_acl(self, [output, gradient])
 
         with jt.flag_scope(use_acl=0, use_cuda=0):
             reference_source = torch.tensor(source_np)
@@ -661,24 +693,22 @@ class TestACLTorchCompat(unittest.TestCase):
         for actual, expected in zip(candidate, reference):
             np.testing.assert_allclose(actual, expected, rtol=2e-6, atol=2e-6)
 
-        with jt.flag_scope(use_acl=1, use_cuda=1), jt.log_capture_scope(
-            log_v=0, log_vprefix="acl_op_exec.cc=100"
-        ) as bf_logs:
-            self.assertTrue(jt.introspection.policy.runtime.use_cuda)
-            self.assertTrue(jt.introspection.policy.runtime.use_cuda)
+        with jt.flag_scope(use_acl=1, use_cuda=1):
+            self.assertTrue(jt.flags.use_acl)
+            self.assertTrue(jt.flags.use_cuda)
             source_bf = torch.tensor(source_np, dtype=torch.bfloat16)
             source_bf.requires_grad_(True)
             loss_weight_bf = torch.tensor(loss_weight_np, dtype=torch.bfloat16)
-            self.assertEqual(str(source_bf.dtype), "bfloat16")
-            self.assertEqual(str(loss_weight_bf.dtype), "bfloat16")
+            self.assertEqual(str(source_bf.dtype).replace("torch.", ""), "bfloat16")
+            self.assertEqual(str(loss_weight_bf.dtype).replace("torch.", ""), "bfloat16")
             output_bf = torch.nn.functional.silu(source_bf)
             output_bf.sync()
             gradient_bf = torch.autograd.grad(
                 (output_bf * loss_weight_bf).sum(), source_bf
             )[0]
-            self.assertEqual(str(output_bf.dtype), "bfloat16")
-            self.assertEqual(str(gradient_bf.dtype), "bfloat16")
-            bf_values = jt.fetch_sync([output_bf, gradient_bf])
+            self.assertEqual(str(output_bf.dtype).replace("torch.", ""), "bfloat16")
+            self.assertEqual(str(gradient_bf.dtype).replace("torch.", ""), "bfloat16")
+            bf_values = _fetch_acl(self, [output_bf, gradient_bf])
 
         expected_output_bf = np.asarray(
             [-0.07177734375, -0.279296875, -0.047607421875,
@@ -692,8 +722,6 @@ class TestACLTorchCompat(unittest.TestCase):
         )
         np.testing.assert_array_equal(bf_values[0], expected_output_bf)
         np.testing.assert_array_equal(bf_values[1], expected_gradient_bf)
-        bf_messages = [entry["msg"].lower() for entry in bf_logs]
-        self.assertTrue(any("compile acl op" in message for message in bf_messages))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_sdpa_forward_backward_stays_on_acl(self):
@@ -703,8 +731,8 @@ class TestACLTorchCompat(unittest.TestCase):
             rng.randn(*shape).astype("float32") * 0.1 for _ in range(4)
         )
 
-        self.assertTrue(jt.introspection.policy.runtime.use_cuda)
-        self.assertTrue(jt.introspection.policy.runtime.use_cuda)
+        self.assertTrue(jt.flags.use_acl)
+        self.assertTrue(jt.flags.use_cuda)
         inputs = [
             torch.tensor(value) for value in (query_np, key_np, value_np)
         ]
@@ -775,7 +803,7 @@ class TestACLTorchCompat(unittest.TestCase):
                         value.requires_grad_(True)
                     mask = (
                         None if mask_np is None
-                        else torch.tensor(mask_np).stop_grad()
+                        else torch.tensor(mask_np).requires_grad_(False)
                     )
                     output = torch.nn.functional.scaled_dot_product_attention(
                         *inputs,
@@ -854,6 +882,7 @@ class TestACLTorchCompat(unittest.TestCase):
 
         self.assertTrue(relu.inplace)
         self.assertTrue(leaky_relu.inplace)
+        self.assertEqual(leaky_relu.negative_slope, 0.2)
         np.testing.assert_allclose(output, [-0.8, -0.2, 4.0, 12.0])
         np.testing.assert_allclose(gradient, [0.4, 0.4, 4.0, 4.0])
 

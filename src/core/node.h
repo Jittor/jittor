@@ -96,6 +96,18 @@ struct VarFlags {
         // whose whole purpose is to take those bytes off the device, so a
         // tensor larger than half the card could not be moved off it at all.
         _host_resident,
+        // This var belongs to a graph someone is keeping to run again, so the
+        // executor must not finish it -- not in the batch that built it, and
+        // not in any later batch that happens to collect it. `keep_graph`
+        // alone cannot express that: it is read at execution time, so a graph
+        // kept under it survives only until the next batch runs without it,
+        // and an ordinary `jt.sync_all()` is such a batch. Cleared by
+        // `Var::release_kept`, which is what gives the graph back.
+        _kept,
+        // Made from a Python number an operator was handed (`x - 1.0`), not
+        // from a tensor anyone holds. Under torch's rule it never asks for a
+        // gradient; see `is_constant_scalar` in op.cc.
+        _python_number,
         _end,
     };
 };

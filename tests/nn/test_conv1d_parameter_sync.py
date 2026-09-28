@@ -33,6 +33,8 @@ import numpy as np
 
 import jittor as jt
 
+from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
+
 
 def _reference_conv(x, weight, bias, ndim):
     """conv with kernel size 1, expressed so that the bias enters exactly once."""
@@ -43,6 +45,9 @@ def _reference_conv(x, weight, bias, ndim):
     return out + bias.reshape(1, -1, 1, 1, 1)
 
 
+# setUp pins the policy to CPU when this machine has no CUDA, which is a
+# process-global change nothing here puts back.
+@_test_preserve_policy(jt, 'use_cuda')
 class TestConv1dParameterSync(unittest.TestCase):
     #: Far outside the initialisation range, so a stale inner bias cannot pass
     #: by coincidence: the initialisation bound for fan_in=32 is 1/sqrt(32).

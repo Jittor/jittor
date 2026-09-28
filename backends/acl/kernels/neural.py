@@ -14,7 +14,7 @@ from .ops.upsample_op import UpsampleNearest2dACL
 from .ops.relu_op import ReLUACL, LeakyReLUACL
 from .ops.silu_op import SiLUACL, SwishACL, SwiGluACL
 from .ops.softmax_op import SoftmaxACL
-from .ops.pool_op import PoolACL
+from .ops.pool_op import PoolACL, AdaptiveAvgPool2dACL
 from .ops.rope_op import RotaryPositionEmbeddingACL
 
 
@@ -281,3 +281,7 @@ def rope_acl(xq, xk, freqs_cis=None, freq_sin=None, freq_cos=None):
         RotaryPositionEmbeddingACL()(xq, freq_cos, freq_sin),
         RotaryPositionEmbeddingACL()(xk, freq_cos, freq_sin),
     )
+
+
+def adaptive_avg_pool2d_acl(x, output_size):
+    return AdaptiveAvgPool2dACL()(x, output_size)

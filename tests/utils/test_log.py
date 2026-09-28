@@ -30,7 +30,7 @@ class TestLog(unittest.TestCase):
             assert logs[i]['level'] == 'iiiwe'[i]
             assert logs[i]['name'] == 'test_log.py'
         finished_log = [ l["msg"] for l in logs 
-            if l["name"]=="executor.cc" and "return vars:" in l["msg"]]
+            if l["name"]=="exec_runner.cc" and "return vars:" in l["msg"]]
         assert len(finished_log)==1 and "[10,]" in finished_log[0]
 
 

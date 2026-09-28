@@ -16,8 +16,31 @@ from .factories import _install_empty_like
 _COMPILE_DEFAULT_BACKENDS = (None, "", "inductor", "eager", "aot_eager")
 
 
+#: `torch.compile` modes that ask for CUDA graphs. PyTorch's answer to host
+#: overhead is to stop paying it per call -- record the step once, replay it
+#: -- and these are the modes that opt into that. Jittor's equivalent is a
+#: graph replay (`jittor._runtime.graph_replay`), so they map onto it. Every
+#: other mode is a compiler setting Jittor's own JIT already covers.
+_COMPILE_REPLAY_MODES = ("reduce-overhead", "max-autotune")
+
+
+def _wants_replay(mode, options):
+    if mode in _COMPILE_REPLAY_MODES:
+        return True
+    return bool(options and options.get("triton.cudagraphs"))
+
+
 def compile(model=None, *args, **kwargs):
-    """Expose the compiler-family callable as a stable module-level object."""
+    """`torch.compile`: graph replay for the CUDA-graph modes, else identity.
+
+    ``mode="reduce-overhead"`` (or ``"max-autotune"``, or
+    ``options={"triton.cudagraphs": True}``) wraps a module in an
+    `OptimizedModule` that replays its captured graph under ``no_grad``
+    instead of rebuilding it every call, and a function in a
+    `jittor._runtime.step_capture.StepCapture`, which replays the whole call
+    -- a training step's forward, backward and optimizer update included.
+    Any other mode runs as written.
+    """
     from ...stub_policy import unimplemented
     if kwargs.get("fullgraph"):
         unimplemented(
@@ -33,7 +56,21 @@ def compile(model=None, *args, **kwargs):
             "silently discard a custom compiler backend",
             "Jittor has no pluggable torch.compile backend.",
         )
-    return model if model is not None else (lambda value: value)
+    if model is None:
+        return lambda value: compile(value, *args, **kwargs)
+    if not _wants_replay(kwargs.get("mode"), kwargs.get("options")):
+        return model
+    if isinstance(model, jt.nn.Module):
+        if isinstance(model, OptimizedModule):
+            return model
+        cls = _compiler_context().state.get("nn_class_adapter", _identity)(OptimizedModule)
+        return cls(model)
+    from jittor._runtime.step_capture import StepCapture
+    if isinstance(model, StepCapture) or not callable(model):
+        return model
+    # A function -- typically a whole training step, forward, backward and
+    # optimizer update -- is captured and replayed as one graph.
+    return StepCapture(model)
 
 
 def script(obj=None, **kwargs):
@@ -93,7 +130,43 @@ class Node:
 
 
 class OptimizedModule(jt.nn.Module):
-    """Native module template; no Dynamo compilation is provided."""
+    """What `torch.compile` returns for a module in a CUDA-graph mode.
+
+    The module is kept as ``_orig_mod``, as PyTorch keeps it, so state-dict
+    keys and ``named_modules`` read the same, and every attribute this wrapper
+    does not have is read from it. A call under ``no_grad`` goes through a
+    `GraphReplay` of the module: captured on first use, re-run afterwards, and
+    re-captured when the inputs' shapes, the training mode or a parameter
+    change. A call that records gradients runs the module as written -- a
+    replay carries none.
+    """
+
+    def __init__(self, mod):
+        super().__init__()
+        self._orig_mod = mod
+        from jittor._runtime.graph_replay import GraphReplay, _AutoState
+        # Written through __dict__: Module.__setattr__ classifies assignments
+        # into parameters and buffers, and neither of these is one.
+        self.__dict__["_replay"] = GraphReplay(mod)
+        # The wrapper is itself an outermost module call, and the automatic
+        # policy would otherwise capture it around the explicit replay.
+        auto = _AutoState()
+        auto.give_up = True
+        self.__dict__["_auto_graph_replay"] = auto
+
+    def execute(self, *args, **kwargs):
+        if jt.flags.no_grad:
+            return self.__dict__["_replay"](*args, **kwargs)
+        return self._orig_mod(*args, **kwargs)
+
+    def forward(self, *args, **kwargs):
+        return self.execute(*args, **kwargs)
+
+    def __getattr__(self, name):
+        orig = self.__dict__.get("_orig_mod")
+        if orig is None or name.startswith("__"):
+            raise AttributeError(name)
+        return getattr(orig, name)
 
 
 class OperatorExportTypes:
@@ -273,11 +346,14 @@ def _api_cid(f=None, *a, **k):
 
 
 def _api_compiler_is_compiling():
-    return False
+    # True while `torch.compile` -- a graph replay or a step capture -- traces
+    # the call, which is what libraries ask this to find out.
+    from jittor._runtime.step_capture import tracing
+    return tracing()
 
 
 def _api_compiler_is_dynamo_compiling():
-    return False
+    return _api_compiler_is_compiling()
 
 
 def _api_compiler_is_exporting():
@@ -341,11 +417,11 @@ def _api_dynamo_assume_constant_result(f=None, **k):
 
 
 def _api_dynamo_is_compiling():
-    return False
+    return _api_compiler_is_compiling()
 
 
 def _api_dynamo_is_dynamo_compiling():
-    return False
+    return _api_compiler_is_compiling()
 
 
 def _api_dynamo_mark_static_address(*a, **k):

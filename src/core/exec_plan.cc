@@ -100,13 +100,29 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
     // its var indices into and that grad(), dump_all_graphs() and the
     // topological sorts also used, so a traversal starting while these were
     // live renumbered the graph under the executor.
+    plan.op_outputs.reserve(op_num);
+    plan.op_inputs.reserve(op_num);
     for (Node* node : bfs_q)
         if (!node->is_var()) {
-            node->set_batch_index(tt, ops.size());
+            int op_id = ops.size();
+            node->set_batch_index(tt, op_id);
             ops.push_back(node->op());
+            // Snapshot this op's edges while they are still the ones the BFS
+            // just walked; see the comment on `op_outputs` in exec_plan.h.
+            vector<Var*> outs;
+            for (Var* o : node->op()->outputs()) outs.push_back(o);
+            plan.op_outputs.emplace_back(move(outs));
+            vector<pair<Var*, int>> ins;
+            for (auto ve : node->op()->_inputs)
+                ins.emplace_back(ve.node->var(), ve.reverse().index);
+            plan.op_inputs.emplace_back(move(ins));
         } else {
             node->set_batch_index(tt, all_vars.size());
             all_vars.push_back(node->var());
+            Var* v = node->var();
+            int slot = 0;
+            if (!v->_inputs.empty()) slot = v->_inputs.front().reverse().index;
+            plan.var_producer[v] = {v->input(), slot};
         }
     int var_num = all_vars.size();
     plan.op_num = op_num;
@@ -191,6 +207,17 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
                 for (Var* v : op->inputs()) {
                     if (v->tflag != tt) continue;
                     Op* opi = v->input();
+                    // A var in the batch need not have a producer in it. A leaf
+                    // has none, and neither does one whose producer edge
+                    // `release_inputs` removed -- which is what a materialised
+                    // forward followed by a second `jt.grad(..., retain_graph=
+                    // True)` reaches. Such a var is a boundary: it already
+                    // exists in memory and no segment of this batch writes it,
+                    // so it creates no dependency between segments. Reading
+                    // `batch_index_at` off the null producer segfaults in the
+                    // planner instead, a long way from the release that caused
+                    // it. Phase 2 above already skips exactly this way.
+                    if (!opi || opi->tflag != tt) continue;
                     // if those two ops are not fused
                     if (father[opi->batch_index_at(tt)] != root) {
                         deps[root]++;
@@ -274,6 +301,7 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
                 for (Var* v : op->inputs()) {
                     if (v->tflag != tt) continue;
                     Op* opi = v->input();
+                    if (!opi || opi->tflag != tt) continue;   // boundary, see above
                     // if those two ops are fused
                     int opid = opi->batch_index_at(tt);
                     auto fopid = father[opid];
@@ -307,6 +335,15 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
                     if (var_fused[vi] == 1)
                         continue;
                     // if weak share, cut off
+                    //
+                    // Extending this cutoff to strong shares was tried for the
+                    // wide-kernel problem in section 47 of the H3 results and
+                    // is *not* where those kernels come from: with the bound at
+                    // 8 instead of unbounded, the decode's fusion widths were
+                    // byte-identical (mean 16.47, widest 361, 1,920,123
+                    // operator-executions either way) and the time did not move.
+                    // The width is `count_fuse`'s union-find group size, which
+                    // `fuse_op_limit` in fuser.cc bounds instead.
                     if (var_fused[vi] == 2) {
                         if (sharegraph.size() - sn < 32)
                             var_fused[vi] = 3;
@@ -316,6 +353,7 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
                         }
                     }
                     Op* opi = v->input();
+                    if (!opi || opi->tflag != tt) continue;   // boundary, see above
                     int opid = opi->batch_index_at(tt);
                     int& dep = deps[opid];
                     if (shared_id[opid] != root) {
@@ -340,6 +378,8 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
                     if (var_fused[vi] == 1)
                         continue;
                     Op* opi = v->input();
+                    // Balanced with the increment above: both skip a boundary.
+                    if (!opi || opi->tflag != tt) continue;
                     int opid = opi->batch_index_at(tt);
                     int& dep = deps[opid];
                     dep --;

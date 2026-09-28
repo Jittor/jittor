@@ -15,6 +15,7 @@
 namespace jittor {
 
 static auto make_reshape = op_constructor<VarPtr, Var*, NanoVector>("reshape");
+static auto make_contiguous = op_constructor<VarPtr, Var*>("contiguous");
 
 ReshapeOp::ReshapeOp(Var* x, NanoVector shape) : x(x), shape(shape) {
     set_flag(OpFlags::_cpu);
@@ -24,7 +25,11 @@ ReshapeOp::ReshapeOp(Var* x, NanoVector shape) : x(x), shape(shape) {
 }
 
 VarPtr ReshapeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
-    return make_reshape(dout, x->shape);
+    // The cotangent can arrive as a view over shared storage -- a reduction's
+    // backward hands back a stride-0 expand -- and a view cannot be re-viewed
+    // into the input's dense shape. Materialize it first; `contiguous`
+    // forwards when it is dense already, so the usual path is unchanged.
+    return make_reshape(make_contiguous(dout), x->shape);
 }
 
 void ReshapeOp::infer_shape() {

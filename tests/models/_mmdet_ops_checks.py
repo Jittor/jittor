@@ -32,6 +32,12 @@ enable_torch_shim(
     verbose=False,
 )
 
+# These checks are about API semantics and assume torch's defaults: a module
+# and a ``from_numpy`` tensor both live in host memory. The shim's default
+# device is the accelerator whenever ``use_cuda`` is on, so state CPU here.
+import jittor as _jt
+_jt.flags.use_cuda = 0
+
 import torch                       # the jittor torch-shim
 import torch.nn as nn
 import torch.nn.functional as F
@@ -67,7 +73,7 @@ Generator half histc index_select int int32 int64 isfinite isinf isnan kthvalue
 linspace log log2 logical_xor logsumexp long masked_select matmul max mean meshgrid
 min mm multinomial mul nan_to_num nan_to_num_ no_grad nonzero norm ones ones_like
 permute pow rand rand_like randint randint_like randn randperm repeat_interleave
-roll round scatter set_grad_enabled sigmoid sign size softmax sort sparse_coo_tensor
+roll round scatter set_grad_enabled sigmoid sign softmax sort sparse_coo_tensor
 split split_with_sizes sqrt squeeze stack std sum tensor topk transpose uint8 unique
 where zeros zeros_like is_grad_enabled _shape_as_tensor
 LongTensor FloatTensor BoolTensor ByteTensor Size Tensor

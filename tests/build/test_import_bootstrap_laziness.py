@@ -279,11 +279,37 @@ class TestCoreBuildStamp(unittest.TestCase):
             + ".tmp.*"))
         self.assertEqual(leftovers, [])
 
+    def test_the_stamp_path_can_be_pointed_somewhere_private(self):
+        """The override ``_looks_unbuilt`` relies on.
+
+        Not a convenience. The stamp is read by every process sharing this
+        ``JITTOR_HOME``, so the only way to ask "what happens when it is not
+        there" without answering for the other workers is to give this process
+        a path of its own -- and the process that has to be convinced is a
+        child, which re-reads ``os.environ``.
+        """
+        real = self.compiler.core_build_stamp_path()
+        self.assertTrue(os.path.isfile(real))
+        with tempfile.TemporaryDirectory() as scratch:
+            private = os.path.join(scratch, "elsewhere.build_stamp.json")
+            with mock.patch.dict(
+                    os.environ, {"JITTOR_CORE_BUILD_STAMP_PATH": private}):
+                self.assertEqual(self.compiler.core_build_stamp_path(),
+                                 private)
+                # No file at the reported path is exactly the state the tests
+                # need to produce: not known to be current, without anything
+                # having to be built to find out.
+                self.assertFalse(self.compiler.core_build_is_current())
+                self.assertTrue(
+                    os.path.isfile(real),
+                    "reading through the override moved the shared stamp")
+        self.assertEqual(self.compiler.core_build_stamp_path(), real)
+
     def test_an_edited_core_source_makes_the_stamp_stale(self):
         signature = self.compiler.core_source_signature()
         self.assertTrue(
             self.compiler.core_build_is_current(signature=signature))
-        name = os.path.join("src", "executor.cc")
+        name = os.path.join("src", "core", "executor.cc")
         self.assertIn(name, signature)
         edited = dict(signature)
         edited[name] = [signature[name][0] + 1, signature[name][1]]
@@ -379,7 +405,7 @@ _STAMP_HELPER_H = """
 
 _STAMP_OP_H = """
 #pragma once
-#include "op.h"
+#include "core/op.h"
 
 namespace jittor {
 
@@ -395,7 +421,7 @@ struct StampProbeOp : Op {
 """
 
 _STAMP_OP_CC = """
-#include "var.h"
+#include "core/var.h"
 #include "stamp_probe_op.h"
 #include "stamp_probe_helper.h"
 
@@ -733,23 +759,25 @@ def _looks_unbuilt(compiler):
     the fingerprint is fixed -- it is only unbuilt the *first* time it is ever
     run, so the test passes once and silently stops testing anything.
 
-    Moving the stamp aside asks the same question of the code under test
-    ("what happens when the core is not known to be current") for the price of
-    a rename, and it asks it every time.
+    Asked by giving this process a private stamp path instead. The real stamp
+    is shared by every process using this ``JITTOR_HOME``, and the gate spreads
+    one file's cases over four workers, so renaming it is a write to shared
+    state: measured 2026-09-22 under ``-n 4 --dist loadgroup``, a worker whose
+    child imports jittor while a sibling has the stamp moved aside sees a core
+    that is not known to be current, which under ``JITTOR_NO_BUILD=1`` is a
+    refusal -- reding cases in this file that hid nothing at all, including the
+    warm-cache one below. A private path asks each process the same question
+    about its own configuration and leaves the shared one alone.
+
+    An environment override rather than a patch, because the children decide
+    for themselves: they re-import the compiler and read ``os.environ``.
     """
-    path = compiler.core_build_stamp_path()
-    hidden = path + ".hidden-by-test"
-    os.replace(path, hidden)
-    try:
-        yield
-    finally:
-        if os.path.exists(path):
-            # A child was allowed to build and left a stamp describing the
-            # product that exists now. Keep that one: restoring the old stamp
-            # over it would describe a product that may have been relinked.
-            os.remove(hidden)
-        else:
-            os.replace(hidden, path)
+    real_name = os.path.basename(compiler.core_build_stamp_path())
+    with tempfile.TemporaryDirectory(prefix="jittor-unbuilt-") as scratch:
+        with mock.patch.dict(os.environ, {
+                "JITTOR_CORE_BUILD_STAMP_PATH":
+                    os.path.join(scratch, real_name)}):
+            yield
 
 
 class TestNoBuildOnImport(unittest.TestCase):
@@ -889,6 +917,9 @@ class TestBootstrapEntryPoint(unittest.TestCase):
         import jittor as jt
 
         self.compiler = jt.compiler
+        # What bootstrap reports as JITTOR_SRC: the package directory, which is
+        # not the directory compiler.py lives in any more.
+        self.jittor_src = os.path.dirname(jt.__file__)
 
     def test_bootstrap_builds_even_when_the_gate_is_set(self):
         """The environment that needs bootstrap most is the one that sets it.
@@ -905,6 +936,7 @@ class TestBootstrapEntryPoint(unittest.TestCase):
         self.assertIn("bootstrapped in", result.stdout)
 
     def test_check_reports_an_unbuilt_cache_without_building_it(self):
+        real_stamp = self.compiler.core_build_stamp_path()
         with _looks_unbuilt(self.compiler):
             result = run_python_child(
                 ["-m", "jittor_utils.bootstrap", "--check"],
@@ -913,10 +945,13 @@ class TestBootstrapEntryPoint(unittest.TestCase):
             self.assertIn("BuildNotAllowed", result.stdout)
             self.assertNotIn("Compiling jittor_core", result.stdout)
             # --check must leave the cache exactly as it found it, or the
-            # second --check would answer a question about the first one.
+            # second --check would answer a question about the first one. The
+            # stamp this run was pointed at is the private one, so that is
+            # where a build would have shown up; the shared one it never saw.
             self.assertFalse(
                 os.path.isfile(self.compiler.core_build_stamp_path()),
                 "--check built something")
+            self.assertTrue(os.path.isfile(real_stamp))
 
     def test_check_passes_on_a_warm_cache(self):
         result = run_python_child(
@@ -936,8 +971,7 @@ class TestBootstrapEntryPoint(unittest.TestCase):
         result = run_python_child(["-m", "jittor_utils.bootstrap"],
                                   cwd=_REPO_ROOT, merge_stderr=True)
         self.assertEqual(result.returncode, 0, result.stdout[-4000:])
-        self.assertIn("jittor:     %s" % os.path.dirname(self.compiler.__file__),
-                      result.stdout)
+        self.assertIn("jittor:     %s" % self.jittor_src, result.stdout)
 
 
 if __name__ == "__main__":

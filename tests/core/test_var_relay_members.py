@@ -110,8 +110,12 @@ class TestParseVarMembers(unittest.TestCase):
     def test_every_op_header_is_readable(self):
         import glob
         from jittor import compiler
-        headers = (glob.glob(os.path.join(compiler.jittor_path, "src/ops/*.h")) +
-                   glob.glob(os.path.join(compiler.jittor_path, "extern/**/*_op.h"),
+        from jittor_utils.backend_resources import core_root
+        # ``core_root`` is the C++ core itself (``src/`` in a checkout, not
+        # the Python package); the backend trees sit beside it.
+        core = core_root(compiler.jittor_path)
+        headers = (glob.glob(os.path.join(core, "ops/**/*.h"), recursive=True) +
+                   glob.glob(os.path.join(os.path.dirname(core), "backends/**/*_op.h"),
                              recursive=True))
         assert len(headers) > 20, headers
         for h in headers:

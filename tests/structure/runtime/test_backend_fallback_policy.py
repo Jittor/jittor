@@ -224,8 +224,10 @@ def test_standalone_runners_use_native_scope_instead_of_log_wording():
                    and node.module == "jittor._runtime.fallback"]
         assert any(alias.name == "forbid_backend_fallbacks"
                    for node in imports for alias in node.names), path
-        assert not any(isinstance(node, ast.Str)
-                       and any(word in node.s for word in ("fallback cpu", "compile cpu"))
+        # ``ast.Str``/``.s`` were removed in Python 3.12; a string literal is
+        # an ``ast.Constant``.
+        assert not any(isinstance(node, ast.Constant) and isinstance(node.value, str)
+                       and any(word in node.value for word in ("fallback cpu", "compile cpu"))
                        for node in ast.walk(tree)), path
         scopes = [node for node in ast.walk(tree) if isinstance(node, ast.With)
                   and any((isinstance(item.context_expr, ast.Name)

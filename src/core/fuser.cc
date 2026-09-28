@@ -16,6 +16,33 @@
 
 namespace jittor {
 
+// Operators one fused kernel may hold, for a chain of half-precision vars.
+//
+// Measured on the MiniMax-H3 video VAE decode under `autocast(float16)`, which
+// is the graph that made the question worth asking (section 47 of
+// docs/results/2026-09-14-vllm-omni-h3-enablement.md). Unbounded, that decode
+// builds kernels of up to 361 operators and takes 15.97 s; the same decode in
+// float32 caps itself at 17 operators and takes 8.32 s. The bound, by value:
+//
+//   limit    0     128    64     32     24     16     8
+//   decode   15.97 12.53  10.67  9.65   9.21   8.87   8.62
+//
+// 16 is the default because it takes 93% of the regression and costs nothing
+// measurable anywhere else. Going further is available and is not free: at 8
+// the float32 arm of the same decode drifts 8.32 -> 8.42.
+//
+// The bound applies to half-precision chains only, and that restriction is the
+// reason it is free. Applied to every dtype it costs 8.1% on a 40-operator
+// float32 elementwise chain (3.649 -> 3.944 ms) and 1.8% on a convolutional
+// training step, for no benefit -- a float32 chain stops itself, because the
+// casts that break it are there. Under `autocast` the chain is uniformly half
+// precision and nothing breaks it. 0 is unbounded, the behaviour before this.
+DEFINE_FLAG(int, fuse_op_limit, 16,
+    "Operators one fused kernel may hold when the vars between them are half "
+    "precision. Fusing a long elementwise chain into one kernel saves memory "
+    "traffic; a very wide one has to keep every live intermediate in registers, "
+    "and under autocast nothing breaks the chain. 0 is unbounded.");
+
 // count_fuse decides, for one execution batch, which ops end up inside the
 // same fused op and which intermediate vars survive as real memory.
 //
@@ -104,8 +131,13 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
             for (auto e : op->_inputs) {
                 auto var = e.node->var();
                 uint self_index = e.back_index;
-                if ((forward && self_index + 1 < var->_outputs.size()) ||
-                    (!forward && self_index > 0)) {
+                // The upper bound belongs on both directions. Backward only
+                // asked for `self_index > 0`, which says nothing about the end
+                // of a list that `erase_output` can have shortened since this
+                // edge recorded its index.
+                if (self_index < var->_outputs.size() &&
+                    ((forward && self_index + 1 < var->_outputs.size()) ||
+                     (!forward && self_index > 0))) {
                     auto& self = var->_outputs[self_index];
                     auto& sibling = var->_outputs[forward ? self_index + 1 : self_index - 1];
                     Op* other = sibling.node->op();
@@ -129,8 +161,21 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
         } else {
             for (auto e : op->_inputs) {
                 auto var = e.node->var();
-                if (var && var->tflag == tt)
-                    func(var, var->input(), 1, e.reverse().index < 0);
+                if (!var || var->tflag != tt) continue;
+                // The producer, not "whatever `input()` answers": a var in this
+                // batch need not have one. A leaf has none, and a var whose
+                // producer edge was released -- `release_inputs` runs when a
+                // finished var's producer is no longer pending, which a
+                // materialised forward followed by a second `jt.grad(...,
+                // retain_graph=True)` reaches -- has none either. The callback
+                // immediately asks for `other->batch_index_at(tt)`, so a null
+                // producer segfaults in the planner, far from the release that
+                // caused it. The forward walk above already filters its
+                // neighbours this way, and the two passes have to agree on
+                // which edges exist or pass 2's consumer counts go negative.
+                Op* other = var->input();
+                if (other && other->tflag == tt)
+                    func(var, other, 1, e.reverse().index < 0);
             }
         }
     };
@@ -152,6 +197,11 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
             unvisited_consumers[i]++;
             if (is_control_dep) return;
             if (var->flag(VarFlags::_force_fuse)) {
+                // `front()` on an op with no outputs is undefined, and an op
+                // can have none: `erase_output` removes the last one when a
+                // consumer releases its inputs. Such an op produces nothing
+                // this batch could fuse with, so there is no shape to agree on.
+                if (other->outputs().size() == 0) return;
                 auto shape = other->outputs().front()->shape;
                 if (!forced_shape.size()) {
                     forced_shape = shape;
@@ -190,22 +240,191 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
     }
 
     // Pass 3: union neighbours that sit on the same fuse level.
+    //
+    // The partition this produces has one hard invariant, owned by
+    // `build_exec_plan` phase 4: the fused groups, taken as nodes, must form a
+    // DAG. An unbounded union of same-level neighbours gives that, because a
+    // path between two ops of one level-connected component only passes
+    // through ops of that component, and the whole component becomes one group.
+    //
+    // `fuse_op_limit` is what breaks it. It bounds how many operators one
+    // fused kernel may hold -- see the top of this file for the measurements
+    // that set it: the MiniMax-H3 video VAE decode under `autocast(float16)`
+    // built kernels of 361 operators, because a uniformly half-precision
+    // chain has no dtype boundary to break it. Bounding a component means
+    // keeping only *part* of it together, and a greedy edge-by-edge bound
+    // happily unions A with C while refusing the B on the path A -> B -> C.
+    // Then {A, C} waits for B and B waits for {A, C}: phase 4 dequeues nothing
+    // of the cycle and dies on `queue.size() == roots.size()`. That is what an
+    // autocast forward + backward reached (`nn.Sequential(Linear, GELU,
+    // Linear)`, reading the gradients), and five float16 elementwise ops reach
+    // it with `fuse_op_limit=2` (tests/core/test_fuser.py).
+    //
+    // So pass 3 runs in two stages:
+    //   3a -- the unbounded union, as before the limit existed. It also records
+    //         which components a half-precision edge was unioned through.
+    //   3b -- only components that are over the limit *and* half precision
+    //         (float32 is never bounded; see `fuse_op_limit`) are split back
+    //         into single ops and re-merged in the same edge order, with two
+    //         refusals: the limit, and any merge that would put a path through
+    //         a third group between the two groups being merged.
+    // Every other component keeps exactly the grouping it had before.
+    vector<int> group_size(ops.size(), 1);
+    vector<char> forced_material(vars.size(), 0);
+    vector<char> half_union(ops.size(), 0);
+    auto is_half = [](Var* var) {
+        return var->dtype() == ns_float16 || var->dtype() == ns_bfloat16;
+    };
     for (uint i = 0; i < ops.size(); i++) {
         Op* op = ops[i];
-        int root = find_father(i);
         for_each_neighbor(op, 1, 1, [&](Var* var, Op* other, int relation, int is_control_dep) {
             if (is_control_dep) return;
             int other_id = other->batch_index_at(tt);
-            if (fuse_level[other_id] == fuse_level[i]) {
-                int other_root = find_father(other_id);
+            if (fuse_level[other_id] != fuse_level[i]) return;
+            // Re-find on every edge: an earlier edge of this same op may have
+            // already merged `i` into another tree, so the root read before the
+            // walk goes stale.
+            int root = find_father(i);
+            int other_root = find_father(other_id);
+            char half = is_half(var);
+            if (root != other_root) {
                 father[other_root] = root;
+                group_size[root] += group_size[other_root];
+                half |= half_union[other_root];
             }
+            half_union[root] |= half;
         });
+    }
+
+    vector<char> bounded(ops.size(), 0);
+    int any_bounded = 0;
+    if (fuse_op_limit > 0) {
+        for (uint i = 0; i < ops.size(); i++) {
+            int root = find_father(i);
+            if (half_union[root] && group_size[root] > fuse_op_limit) {
+                bounded[i] = 1;
+                any_bounded = 1;
+            }
+        }
+    }
+    if (any_bounded) {
+        // Stage 3b. The question a merge has to answer is about groups, not
+        // ops: a group is entered at one member and left from another, and the
+        // two need not be connected inside it. So the search walks groups --
+        // from `src`, through any group but the two being merged, to `dst`.
+        // It stays inside the level component: a group path that left the
+        // component and came back would be a cycle of the unbounded partition
+        // too, which the argument above rules out.
+        vector<int> component(ops.size());
+        for (uint i = 0; i < ops.size(); i++) component[i] = find_father(i);
+        vector<vector<int>> members(ops.size());
+        for (uint i = 0; i < ops.size(); i++) {
+            if (!bounded[i]) continue;
+            father[i] = i;
+            group_size[i] = 1;
+            members[i].assign(1, i);
+        }
+        // The consumers of `op` in this batch, over exactly the edges phase 4
+        // counts: control edges order ops as surely as data edges do.
+        auto for_each_consumer = [&](Op* op, auto&& func) {
+            for (auto e : op->_outputs) {
+                auto var = e.node->var();
+                if (!var || var->tflag != tt) continue;
+                for (auto o : var->_outputs) {
+                    Op* other = o.node->op();
+                    if (other && other->tflag == tt) func(other->batch_index_at(tt));
+                }
+            }
+        };
+        vector<int> seen(ops.size(), 0);
+        int seen_stamp = 0;
+        vector<int> stack;
+        // Does a group path src -> (a third group) -> ... -> dst exist? A
+        // direct src -> dst edge is fine: it becomes internal.
+        auto reaches_through_third = [&](int src, int dst) -> bool {
+            seen_stamp++;
+            stack.assign(1, src);
+            seen[src] = seen_stamp;
+            int comp = component[src];
+            while (stack.size()) {
+                int g = stack.back();
+                stack.pop_back();
+                for (int m : members[g]) {
+                    bool found = false;
+                    for_each_consumer(ops[m], [&](int y) {
+                        if (found || component[y] != comp) return;
+                        int r = find_father(y);
+                        if (r == dst) { found = g != src; return; }
+                        if (seen[r] == seen_stamp) return;
+                        seen[r] = seen_stamp;
+                        stack.push_back(r);
+                    });
+                    if (found) return true;
+                }
+            }
+            return false;
+        };
+        for (uint i = 0; i < ops.size(); i++) {
+            if (!bounded[i]) continue;
+            Op* op = ops[i];
+            for_each_neighbor(op, 1, 1, [&](Var* var, Op* other, int relation, int is_control_dep) {
+                if (is_control_dep) return;
+                int other_id = other->batch_index_at(tt);
+                if (fuse_level[other_id] != fuse_level[i]) return;
+                int root = find_father(i);
+                int other_root = find_father(other_id);
+                if (root == other_root) return;
+                bool refuse = is_half(var) &&
+                    group_size[root] + group_size[other_root] > fuse_op_limit;
+                refuse = refuse || reaches_through_third(root, other_root) ||
+                    reaches_through_third(other_root, root);
+                if (refuse) {
+                    // Producer/consumer only, and the restriction is
+                    // load-bearing twice over.
+                    //
+                    // It is what the mark is for. The two ops stay in
+                    // different kernels, so the var between them has to exist
+                    // in memory. The verdict loop does set it to 1 on the root
+                    // mismatch -- and then, if every individual edge was
+                    // fusable, falls into its `else if (var_fused[i])` arm and
+                    // re-decides that 1 into a 2 or a 3, i.e. recompute the
+                    // producer inside each consumer instead of writing it out.
+                    // A group whose every output went that way reaches the
+                    // executor with no outputs at all (`fused_op.cc: [check
+                    // failed: outputs().size()]`, which is what
+                    // `fuse_op_limit=16` hit). Forcing 1 here is what that arm
+                    // cannot undo.
+                    //
+                    // It is also the only safe spelling. `relation == 0` is
+                    // the sibling walk, whose `var` is an *input* of `op` --
+                    // and that is the one branch of for_each_neighbor that does
+                    // not filter on `var->tflag == tt`. It can hand us a var
+                    // outside the batch: `build_exec_plan` enqueues an input
+                    // node only when it is unfinished, so an already-computed
+                    // shared input is never stamped, and `batch_index_at`
+                    // asserts rather than returning a stale index. Nothing is
+                    // lost by skipping it -- separating two *consumers* of a
+                    // var cannot empty a group's outputs, and the verdict loop
+                    // materialises that var on its own, since one of the two
+                    // consumers now fails the `find_father(consumer) != root`
+                    // test.
+                    if (relation == 1)
+                        forced_material[var->batch_index_at(tt)] = 1;
+                    return;
+                }
+                father[other_root] = root;
+                group_size[root] += group_size[other_root];
+                auto& into = members[root];
+                into.insert(into.end(), members[other_root].begin(), members[other_root].end());
+                vector<int>().swap(members[other_root]);
+            });
+        }
     }
 
     if (V_ON(1000)) {
         for (uint i = 0; i < ops.size(); i++)
-            LOGvvvv << ops[i] << fuse_level[i] << unvisited_consumers[i];
+            LOGvvvv << ops[i] << fuse_level[i] << unvisited_consumers[i]
+                << "group" << find_father(i) << "bounded" << (int)bounded[i];
     }
     // Every op must have been dequeued exactly once. A smaller queue means the
     // walk above stopped early, i.e. the batch is not a DAG.
@@ -218,10 +437,27 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
             var_fused[i] = 1;
             continue;
         }
+        // A var on a boundary `fuse_op_limit` refused to cross is written out,
+        // whatever the edges say about it.
+        if (forced_material[i]) {
+            var_fused[i] = 1;
+            continue;
+        }
         if (var_fused[i]) continue;
         int all_consumers_fusable = 1;
         int all_consumers_reduce = 1;
         Op* producer = var->input();
+        // A var in the batch need not have a producer: a leaf has none, and so
+        // does one whose producer edge `release_inputs` has removed -- which is
+        // what a materialised forward followed by a second backward over the
+        // retained graph reaches. Nothing in this batch writes it, so it cannot
+        // be fused away, exactly like the vars above that are not in the batch
+        // at all. Reading `producer->batch_index_at(tt)` off a null producer
+        // segfaults in the planner, a long way from the release that caused it.
+        if (!producer || producer->tflag != tt) {
+            var_fused[i] = 1;
+            continue;
+        }
         int root = find_father(producer->batch_index_at(tt));
         for (auto o : var->_outputs) {
             if (o.index < 0) continue;  // control edge, carries no data

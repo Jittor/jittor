@@ -27,10 +27,14 @@ aliasing tricks.
 
 Correctness model (phase 1)
 ---------------------------
-The launch is bracketed by ``jt.sync_all(True)`` (so every input/output ``Var``
-is materialised and its device pointer valid) and a ``cuCtxSynchronize`` afterwards.
-This serialises at the boundary — correct but not maximally pipelined; phase 3
-moves the launch onto jittor's own stream as a graph node. See the plan.
+The launch is bracketed by a jittor barrier before it (so every input/output
+``Var`` has been materialised and its device pointer is valid) and a device wait
+after it. In bridge mode the barrier only *submits* the operand graph: jittor
+schedules its own ops on ``cudaStreamPerThread`` and the bridge launches on that
+same stream (see ``_launch_stream``), so producers, bounce copies and kernel are
+already ordered against each other without waiting. The trailing device wait is
+what remains of the old serialisation, and removing it is the "launch as a graph
+node" work the plan describes.
 
 This module is imported lazily (only when bridge mode is actually used), so
 importing :mod:`jittor.compat.triton` never imports jittor or triton eagerly.
@@ -39,6 +43,7 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import ctypes
 import os
 import threading
+import time
 from ..diagnostics import EXPECTED, swallowed
 
 __all__ = ["is_available", "run", "make_do_bench", "JittorTritonError"]
@@ -108,6 +113,44 @@ def is_available():
 # --------------------------------------------------------------------------- #
 #  ctypes CUDA driver wrapper (libcuda.so.1)
 # --------------------------------------------------------------------------- #
+# The stream bridge kernels are launched on.
+#
+# jittor puts every one of its own launches, copies and library calls on
+# `cudaStreamPerThread` -- `compute_stream` in
+# `backends/cuda/runtime/driver.cc`, which also says why: `cudaStreamPerThread`
+# and the legacy default stream do NOT synchronise with each other, so work left
+# on the legacy stream is "an unordered race that raises no error and produces
+# no message".
+#
+# This bridge used to launch with a NULL stream, i.e. the legacy default stream,
+# which made every triton kernel exactly that straggler: jittor scheduled its
+# own ops -- and its allocator's frees -- with no ordering against the kernel.
+# The observable result was a racy `cudaErrorIllegalAddress` when bridge
+# launches were packed, which is the hazard the trailing `jt.sync_all(True)` in
+# `run` exists to paper over and which the fast-sync path deliberately skips.
+# Handing `cuLaunchKernel` the per-thread default stream instead puts the kernel
+# inside jittor's own order.
+#
+# `cudaStreamPerThread` is the constant 0x2 -- `CU_STREAM_PER_THREAD` in the
+# driver API, which is what `cuLaunchKernel` accepts here; neither API has a
+# call that returns it. Set `JITTOR_TRITON_LEGACY_STREAM=1` to launch on the old
+# NULL stream.
+#
+# Note this does not by itself make the bridge usable during CUDA graph
+# capture: `run` still calls `drv.synchronize()` (a full-device sync, illegal
+# inside a capture) after the launch when `need_sync_after_launch` holds. That
+# predates this change and is what the "moves the launch onto jittor's own
+# stream as a graph node" plan in the module docstring has to fix as well.
+_CUDA_STREAM_PER_THREAD = 0x2
+
+
+def _launch_stream():
+    """The stream to hand `cuLaunchKernel`, or None for the legacy default."""
+    if _truthy_env("JITTOR_TRITON_LEGACY_STREAM"):
+        return None
+    return _CUDA_STREAM_PER_THREAD
+
+
 class _Driver:
     """Minimal, error-checked CUDA *driver* API surface over ``libcuda.so.1``.
 
@@ -117,7 +160,7 @@ class _Driver:
     so launching here touches the very same device memory jittor allocated.
     """
 
-    _inst = None
+    _insts = {}
     _lock = threading.Lock()
 
     @staticmethod
@@ -172,8 +215,13 @@ class _Driver:
             rt.cudaFree.restype = ctypes.c_int
             rt.cudaMemset.argtypes = [c_vp, ctypes.c_int, ctypes.c_size_t]
             rt.cudaMemset.restype = ctypes.c_int
-            rt.cudaMemcpy.argtypes = [c_vp, c_vp, ctypes.c_size_t, ctypes.c_int]
-            rt.cudaMemcpy.restype = ctypes.c_int
+            rt.cudaMemcpyAsync.argtypes = [c_vp, c_vp, ctypes.c_size_t,
+                                           ctypes.c_int, c_vp]
+            rt.cudaMemcpyAsync.restype = ctypes.c_int
+            rt.cudaSetDevice.argtypes = [ctypes.c_int]
+            rt.cudaSetDevice.restype = ctypes.c_int
+            rt.cudaGetDevice.argtypes = [ctypes.POINTER(ctypes.c_int)]
+            rt.cudaGetDevice.restype = ctypes.c_int
             rt.cudaDeviceSynchronize.argtypes = []
             rt.cudaDeviceSynchronize.restype = ctypes.c_int
         except EXPECTED as exc:
@@ -181,7 +229,8 @@ class _Driver:
             return None
         return rt
 
-    def __init__(self):
+    def __init__(self, ordinal=0):
+        self.ordinal = int(ordinal)
         lib = None
         last = None
         for name in ("libcuda.so.1", "libcuda.so"):
@@ -218,12 +267,22 @@ class _Driver:
 
         self.check(lib.cuInit(0), "cuInit")
         dev = c_i(0)
-        self.check(lib.cuDeviceGet(ctypes.byref(dev), 0), "cuDeviceGet")
+        # This driver owns ONE CUDA device: a CUmodule/CUfunction belongs to
+        # the context it was loaded into, so a rank whose operands live on
+        # device 1 cannot be served by device 0's handles. Pinning 0 here made
+        # a rank-1 triton launch run against another device's memory, which
+        # surfaced as a sticky cudaErrorIllegalAddress.
+        self.check(lib.cuDeviceGet(ctypes.byref(dev), self.ordinal), "cuDeviceGet")
         self.device = dev
         ctx = ctypes.c_void_p()
         self.check(lib.cuDevicePrimaryCtxRetain(ctypes.byref(ctx), dev),
                    "cuDevicePrimaryCtxRetain")
-        self.check(lib.cuCtxSetCurrent(ctx), "cuCtxSetCurrent")
+        # Deliberately NOT cuCtxSetCurrent here: merely *getting* a driver (e.g.
+        # for its compute capability during compilation) must not move the
+        # thread onto that device's context. Only ensure_ctx() switches, right
+        # where a launch or an allocation needs it -- otherwise compile-time
+        # driver creation for device 0 leaves device 0 current while the
+        # operands' device-1 streams are being synced.
         self.ctx = ctx
         # compute capability -> triton arch (e.g. 8.9 -> 89)
         maj, mino = c_i(0), c_i(0)
@@ -250,12 +309,22 @@ class _Driver:
                 what, res, s.value.decode() if s.value else "?"))
 
     @classmethod
-    def get(cls):
-        if cls._inst is None:
+    def get(cls, ordinal=0):
+        """The driver bound to CUDA device ``ordinal``.
+
+        One instance per device: the primary context, the loaded cubin modules
+        and the CUfunction handles are all context-specific, so device 1 needs
+        its own driver rather than device 0's.
+        """
+        ordinal = int(ordinal)
+        inst = cls._insts.get(ordinal)
+        if inst is None:
             with cls._lock:
-                if cls._inst is None:
-                    cls._inst = cls()
-        return cls._inst
+                inst = cls._insts.get(ordinal)
+                if inst is None:
+                    inst = cls(ordinal)
+                    cls._insts[ordinal] = inst
+        return inst
 
     def get_function(self, cubin, name):
         """Load (and cache) the cubin module + return the named CUfunction.
@@ -303,6 +372,14 @@ class _Driver:
             self.lib.cuCtxSetCurrent(self.ctx)
         except EXPECTED as exc:
             swallowed("triton/backend.py ensure_ctx: self.lib.cuCtxSetCurrent(self.ctx)", exc)
+        # The bounce buffers go through cudaMalloc (runtime API, current device)
+        # and are read by a kernel launched in the driver context above, so the
+        # runtime device has to be this one too.
+        if self.rt is not None:
+            try:
+                self.rt.cudaSetDevice(ctypes.c_int(self.ordinal))
+            except EXPECTED as exc:
+                swallowed("triton/backend.py ensure_ctx: self.rt.cudaSetDevice", exc)
 
     def alloc(self, nbytes):
         """Allocate device memory via the runtime API (works on jittor's context;
@@ -340,14 +417,27 @@ class _Driver:
     #: cudaMemcpyKind.cudaMemcpyDeviceToDevice
     _MEMCPY_D2D = 3
 
-    def copy_dtod(self, dst_ptr_int, src_ptr_int, nbytes):
+    def copy_dtod_async(self, dst_ptr_int, src_ptr_int, nbytes, stream=None):
+        """DtoD copy issued on ``stream`` -- by default the triton launch stream.
+
+        The guard's bounce copies are strictly ordered around the kernel: the
+        host writes the payload into the guarded buffer, the kernel reads (and
+        for an output writes) it, then the payload is copied back. Issuing all
+        three on one stream is enough for that ordering, so nothing needs to
+        wait in between -- which is what the blocking ``cudaMemcpy`` did. Each
+        blocking copy drains the device, and on MiniMax-H3's video VAE (4
+        bounced operands, 9,072 launches) the copy-back alone was 2.4 ms of a
+        5.0 ms launch.
+        """
         if nbytes <= 0:
             return
-        r = self.rt.cudaMemcpy(ctypes.c_void_p(int(dst_ptr_int)),
-                               ctypes.c_void_p(int(src_ptr_int)),
-                               ctypes.c_size_t(int(nbytes)), self._MEMCPY_D2D)
+        handle = ctypes.c_void_p(int(_launch_stream() if stream is None else stream))
+        r = self.rt.cudaMemcpyAsync(ctypes.c_void_p(int(dst_ptr_int)),
+                                    ctypes.c_void_p(int(src_ptr_int)),
+                                    ctypes.c_size_t(int(nbytes)),
+                                    self._MEMCPY_D2D, handle)
         if r != 0:
-            raise JittorTritonError("cudaMemcpy(D2D) -> cudaError %d" % r)
+            raise JittorTritonError("cudaMemcpyAsync(D2D) -> cudaError %d" % r)
 
     # ------------------------------------------------------------------ #
     #  guarded bounce-buffer pool (over-read tolerance — see run())
@@ -376,9 +466,19 @@ class _Driver:
             cap <<= 1
         pool = self._guard_pool()
         free = pool.get(cap)
-        base = free.pop() if free else self.alloc(cap)
+        if free:
+            base = free.pop()
+        else:
+            _t_alloc = time.perf_counter()
+            base = self.alloc(cap)
+            if _stats_on():
+                _STATS["alloc_t"] += time.perf_counter() - _t_alloc
+                _STATS["alloc_n"] += 1
         # zero the guard region right after the payload (payload is overwritten)
+        _t_zero = time.perf_counter()
         self.memset0(base + int(payload_bytes), cap - int(payload_bytes))
+        if _stats_on():
+            _STATS["memset_t"] += time.perf_counter() - _t_zero
         return base, cap
 
     def guard_release(self, base, cap):
@@ -413,7 +513,7 @@ class _Driver:
             func,
             ctypes.c_uint(gx), ctypes.c_uint(gy), ctypes.c_uint(gz),
             ctypes.c_uint(bx), ctypes.c_uint(by), ctypes.c_uint(bz),
-            ctypes.c_uint(shared), ctypes.c_void_p(0),
+            ctypes.c_uint(shared), ctypes.c_void_p(_launch_stream()),
             ctypes.cast(params, ctypes.POINTER(ctypes.c_void_p)),
             ctypes.cast(None, ctypes.POINTER(ctypes.c_void_p))),
             "cuLaunchKernel")
@@ -475,12 +575,35 @@ def _tensor_ptr(v):
     CUDA device pointer, so prefer the torch-shim-only ``device_raw_ptr`` when a
     Jittor build provides it.
     """
-    if _is_var(v):
-        ptr = getattr(v, "device_raw_ptr", None)
-        if ptr is not None:
-            return int(ptr)
-        return int(v.raw_ptr)
-    return int(v.data_ptr())
+    def _resolve():
+        if _is_var(v):
+            # The launch already syncs the graph once; reading the pointer per
+            # operand through `device_raw_ptr` repeated that sync for every
+            # argument (measured: the pack phase was ~99% of a 674 s decode).
+            # The launch materialises the graph once above; `device_raw_ptr`
+            # syncs the device on every read, and in the fast path
+            # (`JITTOR_TORCH_SHIM`) that per-argument sync was the *only*
+            # materialisation point -- so it flushed a larger and larger
+            # pending graph (3.6 ms per pointer early in a VAE decode, ~1.3 s
+            # later: 673 s of a 710 s request). `device_ptr_ready` reads the
+            # device pointer and still migrates a host-resident operand.
+            ready = getattr(v, "device_ptr_ready", None)
+            if ready is not None:
+                return int(ready)
+            ptr = getattr(v, "device_raw_ptr", None)
+            if ptr is not None:
+                return int(ptr)
+            return int(v.raw_ptr)
+        return int(v.data_ptr())
+
+    if not _stats_on():
+        return _resolve()
+    _t = time.perf_counter()
+    _STATS["ptr_n"] += 1
+    try:
+        return _resolve()
+    finally:
+        _STATS["ptr_t"] += time.perf_counter() - _t
 
 
 #: bytes per element, by triton type code (the value side of ``_DT``)
@@ -520,6 +643,66 @@ def _tensor_is_cuda(v):
         return bool(ic)
     dev = getattr(v, "device", None)
     return dev is not None and "cuda" in str(dev).lower()
+
+
+def _tensor_is_contiguous(v):
+    """Whether an operand's layout is flat, i.e. whether it may be bounced.
+
+    The guard path copies an operand with one flat ``copy_dtod_async`` of
+    ``numel * elsize`` bytes taken from ``data_ptr()`` and then hands the kernel
+    the *bounce* pointer, while the caller's own stride arguments still describe
+    the original layout. That is only self-consistent for a contiguous operand.
+
+    On a non-contiguous operand the copy picks up the wrong elements -- a
+    row-strided ``[M, H]`` view of a ``[M, k*H]`` buffer copies the first ``M*H``
+    elements of the parent rather than the view's rows -- and the kernel then
+    walks off the copied payload with the caller's strides, reading the zeroed
+    guard. The launch succeeds and returns silently wrong numbers.
+
+    Measured, MiniMax-H3's AdaLN modulation (``minimax_h3_modulation.py``): the
+    DiT passes ``chunk`` views with row stride ``6 * hidden``, and the fused
+    ``rms_norm_indexed_scale_shift`` then diverged from its own eager reference
+    by 40 (cos 0.985) where the contiguous call agreed bitwise.
+
+    Two operand flavours reach the launch: the shim's torch-shaped ``Tensor``
+    (``is_contiguous``) and a raw jittor ``Var`` (``_storage_is_contiguous``).
+    Only a genuine ``bool`` is trusted from either -- jittor's ``Var.__getattr__``
+    synthesises a proxy for unknown names, so a plain ``getattr`` probe can
+    return something that merely looks callable. Strides are the last resort, and
+    an operand whose layout cannot be established is reported as non-contiguous:
+    skipping the bounce only risks a masked over-read reaching the allocator's
+    slack instead of the guard, whereas bouncing something strided corrupts
+    results.
+    """
+    for name in ("_storage_is_contiguous", "is_contiguous"):
+        accessor = getattr(v, name, None)
+        if accessor is None:
+            continue
+        try:
+            result = accessor() if callable(accessor) else accessor
+        except EXPECTED as exc:
+            swallowed("triton/backend.py _tensor_is_contiguous: %s" % name, exc)
+            continue
+        if isinstance(result, bool):
+            return result
+    strides = getattr(v, "stride", None)
+    try:
+        shape = [int(s) for s in v.shape]
+        got = strides() if callable(strides) else getattr(v, "_storage_strides")
+        got = [int(s) for s in (got() if callable(got) else got)]
+    except EXPECTED as exc:
+        swallowed("triton/backend.py _tensor_is_contiguous: shape/stride", exc)
+        return False
+    if len(shape) != len(got):
+        return False
+    # Row-major check: walking inward, each kept dim's stride must be the product
+    # of the sizes already passed. Size-1 dims carry no information.
+    want = 1
+    for size, stride in zip(reversed(shape), reversed(got)):
+        if size > 1 and stride != want:
+            return False
+        want *= max(size, 1)
+    return True
 
 
 def _ptr_sig(var):
@@ -596,6 +779,48 @@ GUARD_MAX_PAYLOAD = 64 * 1024 * 1024
 GUARD_ENABLE = True
 
 
+#: Per-launch timing, printed under ``JITTOR_TRITON_STATS=1``. The bridge does
+#: a device sync, a per-argument pointer lookup and (with the guard on) a
+#: bounce copy for every launch, so "the decode is slow" is not actionable
+#: without knowing which of them dominates.
+_STATS = {"n": 0, "total": 0.0, "sync": 0.0, "pack": 0.0, "launch": 0.0,
+          "final": 0.0, "ptr_t": 0.0, "ptr_n": 0, "alloc_t": 0.0, "alloc_n": 0,
+          "memset_t": 0.0, "dtod_t": 0.0}
+_STATS_ON = None
+_STATS_EVERY = 50
+
+
+def _stats_on():
+    global _STATS_ON
+    if _STATS_ON is None:
+        _STATS_ON = _truthy_env("JITTOR_TRITON_STATS")
+    return _STATS_ON
+
+
+def _stats_atexit():
+    if _stats_on():
+        _stats_report(final=True)
+
+
+import atexit as _atexit
+
+_atexit.register(_stats_atexit)
+
+
+def _stats_report(final=False):
+    n = _STATS["n"]
+    if not n:
+        return
+    print("[triton-stats]%s launches=%d total=%.1fs sync=%.1fs pack=%.1fs "
+          "launch=%.1fs final=%.1fs avg=%.4fs | ptr=%.1fs/%d alloc=%.1fs/%d "
+          "memset=%.1fs dtod=%.1fs"
+          % (" final" if final else "", n, _STATS["total"], _STATS["sync"],
+             _STATS["pack"], _STATS["launch"], _STATS["final"],
+             _STATS["total"] / n, _STATS["ptr_t"], _STATS["ptr_n"],
+             _STATS["alloc_t"], _STATS["alloc_n"], _STATS["memset_t"],
+             _STATS["dtod_t"]), flush=True)
+
+
 def _truthy_env(name):
     return str(os.environ.get(name, "")).strip().lower() in ("1", "true", "yes", "on")
 
@@ -667,9 +892,24 @@ def _copy_bounced_inputs_back():
 
 
 def _sync_after_launch_enabled():
+    """Whether to wait for the device after a launch.
+
+    Default: the conservative answer outside the shim, and no wait inside it.
+    The launch, its bounce copies and the ops that produce its operands are all
+    on ``_launch_stream()``, so the kernel is already ordered against them; the
+    wait was there because the bridge used to launch on the legacy stream, which
+    has no such order. Measured on the H3 VAE's kernel shape, the wait is 2.07 ms
+    of a 2.50 ms launch while the launch stream drains in 0.008 ms -- so it buys
+    nothing but latency. ``JITTOR_TRITON_SYNC_AFTER_LAUNCH=1`` restores it,
+    ``=0`` removes it everywhere; a launch that allocates global scratch still
+    waits, because ``drv.free`` returns that memory to the driver rather than to
+    a stream.
+    """
+    if _truthy_env("JITTOR_TRITON_SYNC_AFTER_LAUNCH"):
+        return True
     if _falsey_env("JITTOR_TRITON_SYNC_AFTER_LAUNCH"):
         return False
-    return True
+    return not _fast_sync_enabled()
 
 
 def _sync_before_launch_enabled():
@@ -735,17 +975,24 @@ def _make_ast_source(ASTSource, jitfn, signature, constants):
             type(last).__name__ if last else "?", last))
 
 
-def _compile(jitfn, signature, constants, options=None):
+def _compile(jitfn, signature, constants, options=None, device=0):
     """Compile (cached) and return a dict with cubin/name/launch metadata.
 
     ``options`` is an optional dict of launch options forwarded to triton
     (currently ``num_warps`` / ``num_stages``); ``None``/empty lets triton pick
     its defaults.
+
+    ``device`` is the device the kernel will be launched on. A cubin is built
+    for one compute capability and the cache is keyed on it, so taking the
+    capability from device 0 is only right while every device in the box is the
+    same model -- and it also built (and primary-context-retained) a driver for
+    device 0 in a rank that uses another device and may not be allowed near
+    that one.
     """
     triton = real_triton()
     from triton.compiler import ASTSource
 
-    drv = _Driver.get()
+    drv = _Driver.get(device)
     opt_items = tuple(sorted((options or {}).items()))
     key = (id(jitfn), tuple(sorted(signature.items())),
            tuple(sorted(constants.items())), opt_items, drv.arch)
@@ -826,7 +1073,70 @@ def make_do_bench():
     return _do_bench
 
 
+#: A ``libcudart`` handle used only to read back and restore the calling
+#: thread's current device -- separate from any :class:`_Driver`, because the
+#: reading happens before ``run`` knows which device it will launch on.
+_AMBIENT_RT = None
+_ambient_lock = threading.Lock()
+
+
+def _ambient_runtime():
+    """The cudart handle for reading/restoring the thread's device, or None."""
+    global _AMBIENT_RT
+    if _AMBIENT_RT is None:
+        with _ambient_lock:
+            if _AMBIENT_RT is None:
+                _AMBIENT_RT = _Driver._load_cudart() or False
+    return _AMBIENT_RT or None
+
+
+def _current_device(rt):
+    """The CUDA device this host thread is bound to, or None if unknowable."""
+    if rt is None:
+        return None
+    dev = ctypes.c_int(-1)
+    try:
+        if rt.cudaGetDevice(ctypes.byref(dev)) != 0:
+            return None
+    except EXPECTED as exc:
+        swallowed("triton/backend.py _current_device: rt.cudaGetDevice", exc)
+        return None
+    return int(dev.value)
+
+
 def run(jitfn, args, kwargs, grid):
+    """Launch on the operands' device, and leave the caller's device current.
+
+    :func:`_run` makes the operands' device current (``_Driver.ensure_ctx``)
+    because that is where the launch, its module handles and its bounce buffers
+    have to be. A CUDA device is current per *host thread* until something sets
+    it back, and jittor caches which device each of its threads is bound to
+    (``tls_bound_device`` in ``backends/cuda/runtime/driver.cc``): it only
+    re-issues ``cudaSetDevice`` when its own bookkeeping moves, so a device this
+    bridge switched behind its back is one jittor never switches back. Every
+    later allocation, copy, event and library handle on this thread would then
+    run on the operands' device under the other device's bookkeeping -- the
+    cross-device mismatch whose signature is a Xid 31 and a sticky
+    ``cudaErrorIllegalAddress`` reported far from the launch that caused it.
+
+    Restoring the runtime device also restores the driver context, since both
+    devices' contexts here are the primary ones the runtime keeps current. A
+    failed launch leaves the switch behind exactly like a successful one, hence
+    the ``finally``.
+    """
+    rt = _ambient_runtime()
+    before = _current_device(rt)
+    try:
+        return _run(jitfn, args, kwargs, grid)
+    finally:
+        if before is not None and _current_device(rt) != before:
+            try:
+                rt.cudaSetDevice(ctypes.c_int(before))
+            except EXPECTED as exc:
+                swallowed("triton/backend.py run: rt.cudaSetDevice(before)", exc)
+
+
+def _run(jitfn, args, kwargs, grid):
     """Compile + launch a real ``@triton.jit`` kernel on jittor Vars.
 
     ``jitfn`` is the upstream triton ``JITFunction``; ``args``/``kwargs`` are the
@@ -969,6 +1279,26 @@ def run(jitfn, args, kwargs, grid):
             signature[name] = sig
             runtime_vals.append((name, sig, val))
 
+    # Device the launch must happen on: the operands'. The driver context, its
+    # module/function handles and the guard buffers are all per-device.
+    _launch_dev = None
+    for (_, _, _v) in runtime_vals:
+        if _is_tensor(_v):
+            _d = int(getattr(_v, "device_id", 0) or 0)
+            if _launch_dev is None:
+                _launch_dev = _d
+            elif _d != _launch_dev:
+                raise JittorTritonError(
+                    "triton kernel %r has operands on devices %d and %d; the "
+                    "jittor triton backend launches one kernel on one device"
+                    % (kname, _launch_dev, _d))
+    if _launch_dev is None:
+        _launch_dev = 0
+    # Operands' device current before anything else touches a device: the
+    # materialising ``sync_all`` below and the compilation path must not run
+    # with another device (or context) current.
+    _Driver.get(_launch_dev).ensure_ctx()
+
     if not any(_is_tensor(v) for (_, _, v) in runtime_vals):
         raise JittorTritonError(
             "triton kernel %r launched with no tensor arguments; the jittor "
@@ -976,7 +1306,7 @@ def run(jitfn, args, kwargs, grid):
             "torch-shim tensor) to launch on." % kname)
 
     # ASTSource needs the JITFunction itself (it reads .cache_key), not fn.
-    info = _compile(jitfn, signature, constants, options)
+    info = _compile(jitfn, signature, constants, options, device=_launch_dev)
 
     if os.environ.get("JT_TRITON_DEBUG"):
         import sys as _sys
@@ -997,6 +1327,7 @@ def run(jitfn, args, kwargs, grid):
             info["name"], info["n_ptx_params"], info["num_warps"], info["shared"],
             info["scratch"]), file=_sys.stderr)
 
+    _stats_t0 = time.perf_counter() if _stats_on() else 0.0
     # -- resolve grid (tuple or callable(meta)) ----------------------------- #
     if callable(grid):
         meta = dict(constants)
@@ -1018,14 +1349,47 @@ def run(jitfn, args, kwargs, grid):
             return {n: (_tensor_ptr(v) if _is_tensor(v) else -1)
                     for (n, s, v) in runtime_vals if _is_tensor(v)}
         print("  PTRTRACE before materialize: %r" % {k: hex(x) for k, x in _ptd().items()}, file=_sys.stderr)
+    # Materialise the graph exactly once, then every operand's device pointer is
+    # read without syncing again. Leaving that to the per-argument accessor is
+    # what made a 710 s VAE decode: see `_tensor_ptr`.
+    #
+    # In the fast path this is a *submission*, not a wait. jittor puts its own
+    # launches, copies and library calls on `cudaStreamPerThread`, and the
+    # bridge launches the kernel on that same stream (see `_launch_stream`), so
+    # the kernel and its bounce copies are already ordered behind the ops that
+    # produce the operands. Waiting here would only idle the device: the
+    # producers are submitted by this very call and there is nothing else on the
+    # stream to overlap them with. On MiniMax-H3's video VAE the waiting form
+    # measured 41.9 s of a 59.4 s bridge total -- four times the next-largest
+    # phase. `sync_all(False)` still plans, allocates and enqueues; it skips
+    # only the trailing device wait (`sync_all` in `core/var_holder.cc`).
+    #
+    # Target the operands rather than the process. `sync_all` collects *every*
+    # leaf var alive -- it walks `runtime_holder_state().holders()` and keeps
+    # each one with no consumers -- so what it costs is the size of the live
+    # holder set, not the work this launch needs. Measured on an idle graph:
+    # 1.2 us with nothing alive, 138 us at 10,000 live holders, 752 us at
+    # 50,000. One autocast VAE decode reaches here 4,536 times at 331 us each
+    # (1.50 s, 15% of the decode) to sweep holders this kernel never touches.
+    # `jt.sync` takes the operand list instead, and `_is_var` already says which
+    # operands are jittor Vars -- under the shim, all of them.
+    operand_vars = [v for (_, _, v) in runtime_vals if _is_var(v)]
+    if operand_vars:
+        jt.sync(operand_vars, not _fast_sync_enabled())
+    elif any(_is_tensor(v) for (_, _, v) in runtime_vals):
+        # A launchable tensor that is not a jittor Var (a genuine torch.Tensor)
+        # cannot be named to `jt.sync`; keep the broad sweep for that case.
+        jt.sync_all(not _fast_sync_enabled())
     if _sync_before_launch_enabled():
         jt.sync_all(True)
+    _stats_t1 = time.perf_counter() if _stats_on() else 0.0
     if _ptrtrace:
         import sys as _sys
         print("  PTRTRACE after  materialize: %r" % {k: hex(x) for k, x in _ptd().items()}, file=_sys.stderr)
 
     # -- pack kernel params (in param order; pointers first only if scratch) - #
-    drv = _Driver.get()
+    drv = _Driver.get(_launch_dev)
+    drv.ensure_ctx()
     keepalive = []
     cvals = []
     # bounced tensors to copy back + guard buffers to recycle after the launch:
@@ -1038,12 +1402,20 @@ def run(jitfn, args, kwargs, grid):
             else:
                 ptr = _tensor_ptr(val)
                 nbytes = _tensor_nbytes(val, sig) if _guard_enabled() else 0
-                if (not _looks_like_output_arg(name)) and 0 < nbytes <= _guard_max_payload():
+                # Only a contiguous operand can be bounced: the copy is a flat
+                # memcpy of the payload and the kernel keeps the caller's
+                # strides, so a strided view would be copied wrongly and then
+                # read out of the copied buffer (see `_tensor_is_contiguous`).
+                if (not _looks_like_output_arg(name)) and 0 < nbytes <= _guard_max_payload() \
+                        and _tensor_is_contiguous(val):
                     # bounce through a guarded buffer so a masked over-read past the
                     # operand's end hits zeroed slack instead of an unmapped page.
                     try:
                         bbase, bcap = drv.guard_acquire(nbytes, _guard_bytes())
-                        drv.copy_dtod(bbase, ptr, nbytes)
+                        _t_dtod = time.perf_counter()
+                        drv.copy_dtod_async(bbase, ptr, nbytes)
+                        if _stats_on():
+                            _STATS["dtod_t"] += time.perf_counter() - _t_dtod
                         bounced.append((ptr, bbase, nbytes, bcap))
                         cv = ctypes.c_uint64(bbase)
                     except EXPECTED as exc:
@@ -1094,6 +1466,7 @@ def run(jitfn, args, kwargs, grid):
         *[ctypes.cast(ctypes.byref(cv), ctypes.c_void_p) for cv in cvals])
 
     block = (info["num_warps"] * 32, 1, 1)
+    drv.ensure_ctx()
     func = drv.get_function(info["cubin"], info["name"])
     drv.ensure_dynamic_shared(func, info["shared"])  # flash-attn etc. need >48KB
     if os.environ.get("JT_TRITON_DEBUG"):
@@ -1101,12 +1474,38 @@ def run(jitfn, args, kwargs, grid):
         print("  grid=%r block=%r shared=%d n_cvals=%d bounced=%d" % (
             g, block, info["shared"], len(cvals), len(bounced)), file=_sys.stderr)
         _sys.stderr.flush()
+    _stats_t2 = time.perf_counter() if _stats_on() else 0.0
     drv.launch(func, g, block, info["shared"], params)
-    need_sync_after_launch = (
-        _sync_after_launch_enabled()
-        or bool(scratch_bases)
-        or (bounced and _copy_bounced_inputs_back())
-    )
+    _stats_t3 = time.perf_counter() if _stats_on() else 0.0
+
+    # -- copy bounced tensors' results back into their Vars -------------------- #
+    # The kernel wrote into the bounce buffers' payload region (a masked store
+    # never touches the guard tail), so DtoD the payload back to where the caller
+    # will read it. Inputs copy back byte-identical (a no-op functionally).
+    #
+    # These copies are issued on the launch stream, *before* the wait below, so
+    # the order kernel -> copy-back is stream order rather than a device sync.
+    # They used to be blocking ``cudaMemcpy`` calls guarded by their own
+    # ``drv.synchronize``: four shipped operands meant four pipeline drains plus
+    # an extra full-device wait per launch, which measured 2.4 ms of a 5.0 ms
+    # launch on MiniMax-H3's video VAE.
+    _copy_back = bool(bounced) and _copy_bounced_inputs_back()
+    if _copy_back:
+        for (orig_ptr, bbase, nbytes, _bcap) in bounced:
+            try:
+                _t_dtod = time.perf_counter()
+                drv.copy_dtod_async(orig_ptr, bbase, nbytes)
+                if _stats_on():
+                    _STATS["dtod_t"] += time.perf_counter() - _t_dtod
+            except EXPECTED as exc:
+                swallowed("triton/backend.py run: drv.copy_dtod_async(orig_ptr, bbase, nbytes)", exc)
+
+    # Only two things need the wait: a caller who asked for it, and global
+    # scratch, which `drv.free` hands back to the driver rather than to a stream.
+    # A bounce buffer does NOT: its copy-back is on the launch stream, and the
+    # only other access to a pooled buffer is `guard_acquire`'s memset of the
+    # *tail*, which is disjoint from the payload that copy-back reads.
+    need_sync_after_launch = _sync_after_launch_enabled() or bool(scratch_bases)
     if need_sync_after_launch:
         drv.synchronize()
     if _ptrtrace:
@@ -1123,18 +1522,7 @@ def run(jitfn, args, kwargs, grid):
     if not _fast_sync_enabled():
         jt.sync_all(True)
 
-    # -- copy bounced tensors' results back into their Vars, recycle guards ---- #
-    # The kernel wrote into the bounce buffers' payload region (a masked store
-    # never touches the guard tail), so DtoD the payload back to where the caller
-    # will read it. Inputs copy back byte-identical (a no-op functionally).
     if bounced:
-        if _copy_bounced_inputs_back():
-            for (orig_ptr, bbase, nbytes, bcap) in bounced:
-                try:
-                    drv.copy_dtod(orig_ptr, bbase, nbytes)
-                except EXPECTED as exc:
-                    swallowed("triton/backend.py run: drv.copy_dtod(orig_ptr, bbase, nbytes)", exc)
-            drv.synchronize()
         for (_orig_ptr, bbase, _nbytes, bcap) in bounced:
             drv.guard_release(bbase, bcap)
 
@@ -1144,6 +1532,17 @@ def run(jitfn, args, kwargs, grid):
     if _ptrtrace:
         import sys as _sys
         print("  PTRTRACE after  final   : %r" % {k: hex(x) for k, x in _ptd().items()}, file=_sys.stderr)
+
+    if _stats_on():
+        _stats_t4 = time.perf_counter()
+        _STATS["n"] += 1
+        _STATS["sync"] += _stats_t1 - _stats_t0
+        _STATS["pack"] += _stats_t2 - _stats_t1
+        _STATS["launch"] += _stats_t3 - _stats_t2
+        _STATS["final"] += _stats_t4 - _stats_t3
+        _STATS["total"] += _stats_t4 - _stats_t0
+        if _STATS["n"] % _STATS_EVERY == 0:
+            _stats_report()
 
     # keep Vars alive until the (synchronous) launch is done
     del keepalive, out_vars

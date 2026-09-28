@@ -125,7 +125,7 @@ class FlashAttentionACL:
             multi_grad_src=code_program(
                 [
                     "\n            // aclop\n            FlashAttentionBackwardOpRunner op;\n            op.add(in0, true);\n            op.add(in1, true);\n            op.add(in2, true);\n            op.add(dout, true);\n            op.add(in3, true);\n            op.add(in4, true);\n            op.add(in5, true);\n            op.add(in6, true);\n            op.add(pout0, true);\n            op.add(pout1, true);\n            op.add(pout2, true);\n            op.add(out0, false);\n            op.add(out1, false);\n            op.add(out2, false);\n            ",
-                    "\n            op.run();\n            ",
+                    "\n            op.run();\n",
                 ]
             ),
             multi_grad_attributes=attributes,
@@ -218,6 +218,11 @@ class KVCacheMemcpyACL(jt.Function):
         self.slots = [int(slot) for slot in slots]
 
     def execute(self, key, value, kv_cache):
+        # A zero-initialized cache can still be a scalar broadcast view. CodeOp
+        # outputs= requests a writable shared allocation, not materialization;
+        # publish dense storage first so a partial write cannot reuse a scalar.
+        if not kv_cache._storage_is_contiguous():
+            kv_cache.update(kv_cache.contiguous())
         attr_code = code_program(
             [
                 '\n        op.jt_name = "kv_cache_memcpy";\n        ',
@@ -230,7 +235,10 @@ class KVCacheMemcpyACL(jt.Function):
             ]
         )
         result = flashattention_cmd(
-            "KVCacheMemcpy", [key, value], outputs=[kv_cache], attr_code=attr_code
+            # This is a partial update: retain the previous cache producer so
+            # unwritten rows keep their initialized values and earlier tokens.
+            "KVCacheMemcpy", [key, value, kv_cache],
+            outputs=[kv_cache], attr_code=attr_code
         )
         return result[0]
 
@@ -306,7 +314,9 @@ def scaled_dot_product_attention_acl(
     if attn_mask is not None:
         if is_causal or not isinstance(attn_mask, jt.Var):
             return None
-        if training and not attn_mask.is_stop_grad():
+        # Explicit requires_grad_(False) preserves graph edges without setting
+        # stop_grad; the fused kernel only needs to reject a trainable mask.
+        if training and attn_mask.requires_grad:
             return None
         mask_dtype = _jittor_dtype_name(attn_mask.dtype)
         if _jittor_dtype_name(mask_dtype) != "float32":

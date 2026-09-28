@@ -1,4 +1,5 @@
 #include <aclnnop/aclnn_apply_adam_w_v2.h>
+#include <memory>
 
 #include "acl_jittor.h"
 #include "adamw_op_acl.h"
@@ -19,6 +20,15 @@ namespace jittor
         CHECK(count > 0);
         CHECK(inputTensors.size() == count * 4 + 1);
         CHECK(outputTensors.size() == count * 3);
+
+        // CANN's AdamW tiling requires a one-element vector. Native scalar
+        // Vars have rank zero, even though they contain the same single value.
+        auto* step = in_[count * 4];
+        int64_t one = 1;
+        std::unique_ptr<aclTensor, decltype(&aclDestroyTensor)> stepTensor(
+            aclCreateTensor(&one, 1, get_dtype(step->dtype()), &one, 0,
+                ACL_FORMAT_ND, &one, 1, step->mem_ptr), aclDestroyTensor);
+        CHECK(stepTensor != nullptr);
 
         for (int64_t index = 0; index < count; ++index)
         {
@@ -41,7 +51,7 @@ namespace jittor
             ret = aclnnApplyAdamWV2GetWorkspaceSize(
                 outputTensors[index], outputTensors[count + index],
                 outputTensors[count * 2 + index], nullptr,
-                inputTensors[count * 3 + index], inputTensors[count * 4],
+                inputTensors[count * 3 + index], stepTensor.get(),
                 attr->lr, attr->beta1, attr->beta2, attr->weightDecay,
                 attr->eps, false, false, &workspaceSize, &executor);
             launch(ret, aclnnApplyAdamWV2, false);

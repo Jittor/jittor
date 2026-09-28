@@ -19,6 +19,8 @@ contract here.
 import functools
 import unittest
 
+from _helpers.capability import require_accelerator
+
 import numpy as np
 import torch
 
@@ -151,7 +153,6 @@ class TestBasicPrecision(unittest.TestCase):
             rtol=1e-6, atol=1e-6)
 
 
-@requires_cuda
 class TestDeviceMemory(unittest.TestCase):
     """Device-memory accounting contracts for the basic transfer APIs."""
 
@@ -159,6 +160,9 @@ class TestDeviceMemory(unittest.TestCase):
     #: allocator noise, small enough to be safe on a shared card.
     ELEMENTS = 64 * 1024 * 1024          # 256 MiB of float32
     NBYTES = ELEMENTS * 4
+
+    def setUp(self):
+        require_accelerator("cuda")
 
     def _allocated(self):
         torch.cuda.synchronize()

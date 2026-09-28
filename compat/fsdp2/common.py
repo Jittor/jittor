@@ -8,7 +8,9 @@ import types
 import numpy as np
 
 import jittor as jt
-from jittor._core.var import _factory_scope_like
+# The branch already has this under its own name (see ffaf65d0); the PR shipped
+# a second copy called _factory_scope_like, which would be a duplicate.
+from jittor._core.var import placement_scope_like as _factory_scope_like
 from ..diagnostics import EXPECTED, swallowed
 # Rank/world queries and the two collectives moved down to jittor/compat/
 # collectives.py: compat/torch/installers/distributed.py needs

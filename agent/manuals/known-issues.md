@@ -1,10 +1,155 @@
 # Active Known-Issues Ledger
 
 - Status: Maintained
-- Last reviewed: 2026-09-11 -- a documentation pass over id collisions and
-  statements the `-Ofast` removal made stale, not a re-verification of every
-  entry
-- Baseline: `2d716db31`
+- Last reviewed: 2026-09-23. **The native smoke tier is green**, and the red it
+  used to carry was not KI-CODEGEN-001's guard -- that was a misattribution,
+  corrected here. The one failure
+  (`tests/codegen/test_parallel_pass.py::TestParallelPass3::test_reduce_with_merge_loop_var`)
+  was a separate regression `7e83d6da` had introduced into `ReduceOp`, and this
+  pass diagnosed and fixed it. `ReduceOp::jit_run` used to derive `xstride@i`
+  from `xshape`; `7e83d6da` replaced that with `x->storage_stride(@i)` read at
+  run time. For a contiguous input the two are the same number -- but the second
+  is an opaque call, so the input index stopped folding into the loop ids and
+  `MergeLoopVarPass` refused the merge. It is right to refuse: its template
+  `id_a*range_b*d + id_b*d + c` *is* the condition that the index is linear in
+  the merged loop, and an unresolvable stride product does not prove that. So
+  `check(3, 2, 1, [2], 0)` got parallel depth 2 where it asked for 1, and the
+  test went red although its expectation was never touched. The pass's own log
+  (`log_vprefix=merge_loop_var_pass.cc=1000,pass_manager.h=1000`) shows it
+  exactly: the y index expands to `((id0*range1)+id1)` and matches, the x index
+  expands to `id0*((((ReduceOp((ops[0])))->x)->storage_stride)(0))+…` and
+  "cannot match". The fix is the idiom `binary_op.cc` already uses -- `jit_prepare`
+  puts `«XSTRIDED=hex1(!x->is_contiguous())` in the jit key, and `jit_run` emits
+  the derived chain (the pre-`7e83d6da` form, with the `@if(DIM>0, …)` guard the
+  rank-0 case needs) for a contiguous input and the run-time read only for a
+  strided view. Verified: the test passes, 40 reduce forms (contiguous 3-D/4-D
+  over every axis and both keepdims values, mean/max/min, two axes at once, a
+  stepped slice, a broadcast view, rank 1, an empty axis) agree with NumPy, and
+  the strided path is still the code it was. The smoke tier on this tree, both
+  sessions, `other skipped: 0`: **native `exit=0`, 2157 passed, 1456 skipped, 8
+  xfailed, 1 xpassed; torch `exit=0`, 2835 passed, 483 skipped.** (2157 is 2156
+  plus the one that used to fail.) One caveat about the run itself, recorded
+  because it will happen again: the first combined attempt ran the native session
+  to green and then had the torch session **SIGKILLed at 74%** with 0 failures
+  logged -- `exit=-9`, a `PluggyTeardownRaisedWarning` on `pytest_sessionfinish`
+  and `OSError: cannot send (already closed?)`. The tool does not cap a session
+  (`timeout=0`, deliberately), the machine had 1.4 TB free and no cgroup limit,
+  and another writer was running `tests/structure` in the same hour, so the kill
+  was external (an oomd-style kill or someone clearing processes by pattern).
+  Re-running `--session torch` alone was green. A whole-session `-9` is not a
+  test result -- check the failures count before reading it as one.
+  On this box the tier is also ~6x its recorded cost right now: native took
+  **37 min** against the ~390 s the tier is budgeted at, because the box is
+  running ~17 processes at 98% CPU (16+ days of CPU time each) plus a second
+  suite. That is contention, not a regression.
+  KI-CODEGEN-001 stays open for the elementwise cost it describes; its "second
+  symptom" note about this test is updated below.
+  The same pass found one more of the KI-TUNER-001 class, in the slow set where
+  the smoke gate cannot see it:
+  `tests/codegen/test_conv_tuner.py::TestConvTuner::test_forward` and
+  `test_backward` assert that the tuner relayed the hand-written conv to
+  `mkl_conv`, which no `use_mkl=0` build can do, so both failed instead of
+  skipping. Its two siblings already carry `require_library("mkl")`
+  (`test_matmul_tuner.py`, `test_group_conv_tuner.py`, both of which now report
+  "library mkl is disabled" and land in the `environment` bucket); these two were
+  simply missed when that guard went in, and now have it too. The other two reds
+  the full `tests/codegen` run showed were not defects: `test3` is
+  KI-CODEGEN-001's guard described above, and
+  `test_parallel_compile_attribution.py::…ghost_workers_after_fork` failed only
+  under the busy four-worker run with `CHILD_STATUS 124` (a child timeout) and
+  passes serially.
+  The eighth pass earlier the same day: **the Torch tier is
+  green** (`exit=0`, 2829 passed, 0 failed, 0 errors, `other skipped: 0`) and the
+  native tier was at **1 failed / 0 errors / 2156 passed / `other skipped: 0`**,
+  that one misattributed to KI-CODEGEN-001. Much of this pass was
+  repairing another writer's work, and the cause is worth recording because it is
+  silent: my own `7cf7c5b2` (the store-rendezvous fix) had been created with a
+  *pathless* `git commit`, which commits the **whole index** -- and the index
+  still held older versions of six files another writer had since committed, so
+  that commit reverted their `transpose_storage_view` flag and implementation,
+  their CUDA RNG state, and the flag-policy registration. It surfaced as **8 reds
+  in the Torch tier**, five of them `AttributeError: 'jittor_core.Flags' object
+  has no attribute 'transpose_storage_view'` from a flag that only the *test*
+  mentioned. Restored from `7cf7c5b2^` in `bc1e5db0` (forward, never by rewriting
+  history).
+  The restore then exposed three real gate-side defects, all fixed this pass:
+  a sibling assertion pinned `torch.cuda.get_rng_state` as UNIMPLEMENTED while the
+  restored implementation declares APPROXIMATE (`e033cd61` -- approximate rather
+  than checked because the bytes are jittor's own format, not torch's CUDA state
+  bytes); an RNG test assigned `jt.flags.use_cuda` with nothing restoring it,
+  which is what the flag-scope gate exists to catch (`e033cd61`, now
+  `jt.flag_scope`, reshaped in `fd174f3a` so the collection-side-effect scanner
+  does not read the decorator factory as import-time work either); and the
+  optional-dependency probe test asserted `modules_available("torchvision...")`
+  was True while that helper correctly answers False for a *shim-provided*
+  torchvision -- already imported by the time a whole Torch-session run reaches
+  the file, so it passed alone and failed in the tier, reproduced in a second with
+  a `-p` plugin that merely imports torchvision (`7a9f133b`).
+  The worktree rule that prevented this from being worse, and the one to keep:
+  **commit by path** (`git add <paths> && git commit <paths> -F -`) and read
+  `git show --stat --format="" HEAD` afterwards -- a path you never touched
+  appearing there is the signature of the accident.
+  The seventh pass earlier the same day: the native smoke tier was down to
+  **1 failed / 0 errors / `other skipped: 0`**, and that one failure was read as
+  KI-CODEGEN-001's guard (`test_reduce_with_merge_loop_var`) and left red on
+  purpose as the price of the remaining 5.2x described below. That reading was
+  wrong (see the ninth pass above): the test is a reduce case with no broadcast
+  operand, and the red was a `ReduceOp` regression with its own cause. The four
+  KI-TUNER-001 reds were split and dealt with (`ba729d39`): the broadcast tuner
+  was genuinely broken by the view change and is fixed (it recognises the expand
+  by its producer now), and the three CPU relay cases were measuring the *build*
+  -- this gate is `use_mkl=0` and registers no capability at all, so they now
+  `require_library("mkl")` and skip as `environment` rather than failing. The
+  entry stays open for builds that do register one, with the measured mechanism
+  (relaxing the membership test is a landmine: it reaches `add_relay_group` and
+  the `var_relay.cc:66` abort).
+  The sixth pass earlier the same day: the tier went from 5 failed to that
+  split, KI-OPS-013 was withdrawn (its "472 MB held" was a rank-7 *shape* read as
+  a size: 83.8 MiB peak resident, no mapping over 100 MiB), KI-COMPILER-007's
+  suspected hazard was removed (the case no longer raises from the patched
+  `install_cuda` entry points; no reproduction in five shapes), and
+  KI-CODEGEN-001's arithmetic half was fixed (`3e8b4dfe`, `3018c597`): the
+  strided-index recovery folds its per-axis division chain into one division by
+  the product of the shapes above the axis, giving **914.8 -> 636.5 us** per
+  broadcast add (7.4x -> 5.2x) and **1199.3 -> 647.2 us** for `contiguous()` of a
+  broadcast view, verified bit-exact. A gate test that measured the machine was
+  fixed too (`7cf7c5b2`): the store rendezvous bound was 10 s while each child
+  must `import jittor` first.
+  The fifth pass earlier the same day: the native tier went from 27 failed / 1
+  error to **6 failed / 0 errors** with `other skipped: 0`, and four of the
+  removed reds came from the gate's own accounting rather than from a test (a
+  file whose tests the tier's `-m "not slow"` filtered out was counted as "this
+  session proved nothing about <path>"; 20 skips whose reasons name how the
+  cache was built, or a documented non-reproduction, classified as `other`; one
+  of the twenty was a placeholder reason string; and the summary printed that
+  count without naming a reason).
+  The fourth pass earlier the same day: KI-TEST-006 is fixed
+  (`6e0c2273`) and the pass was test-infrastructure work that lives in Git
+  rather than here: the core build stamp is now redirected per process instead of
+  renamed (the shared stamp is read by every worker of the same `JITTOR_HOME`, so
+  renaming it turned one file's three cases red under `-n 4 --dist loadgroup`,
+  including a warm-cache case that hid nothing), the IPython anti-vacuity control
+  was asserting that *the gate environment* has IPython -- which it does not,
+  IPython is declared in `requirements/docs.txt` only -- so it was replaced by a
+  meta-path trap that needs nothing installed, and three structure gates were
+  repaired (a hand-written stdlib allowlist that rejected `tempfile`, a stale
+  generated `MANIFEST.in`, and an RSS-bound case whose retained-bytes signal
+  disappears inside a busy worker).
+  Earlier the same day KI-COMPAT-005 is now
+  fixed (`e8105ecc`): `torch.div(..., rounding_mode=)` is implemented in the
+  compat layer and `torch.masked_fill` is published, which together are what
+  Longformer's forward needed. The first pass that day added KI-COMPAT-005 and
+  KI-TEST-006 (a standalone H3 reproduction that pytest collects as a test
+  file). The rest of both passes was test-side and is in Git rather than here:
+  two assertions stale against newer behaviour (`prod`'s half dtype, the gamma
+  kernel table), a triton class that raised instead of skipping without triton,
+  a child-process launch that had left the `_helpers.child_process` contract,
+  the CPU-only cores' absent `cuda_allow_tf32`, `np.row_stack`'s removal, a cast
+  region naming a device the operand could not be on, and three shim
+  diagnostics (the adapters' lazy-module version read, the generated-copy scan,
+  and `torch.cuda.set_device` / `map_location="cuda"` on a build with no
+  device).
+- Baseline: `7a9f133b`
 - Owner: Jittor core maintainers
 - Review cadence: on every strict XPASS, related fix, or quarterly maintenance
 
@@ -158,20 +303,54 @@ framework defects.
 
 ## KI-COMPILER-001: parallel compiler can corrupt process state
 
+This id covers two different failures that share the name "parallel compile".
+The **file-level** one (`run_cmds`, `multiprocessing.Pool`, deadlock) is fixed;
+the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
+
 - Severity: High
-- Status: Open for non-Jupyter workloads; Jupyter SIGCHLD path fixed
+- Status: File-level compile-pool deadlock fixed 2026-09-16; op-level state
+  corruption open for non-Jupyter workloads; Jupyter SIGCHLD path fixed
 - Owner: compiler/executor maintainers
 - Evidence: [investigation and reproduction](../../docs/development/known-issues/parallel-compiler-segfault.md)
 - Workaround: set `jt.flags.use_parallel_op_compiler = 0` for deterministic
-  validation workloads
+  validation workloads. That flag reaches **only** the op-level compiler; it
+  never reached the deadlock, which lived in `run_cmds()` and needed
+  `DISABLE_MULTIPROCESSING=1`. Measured, same cold cache, pre-fix code: with
+  `use_parallel_op_compiler=0` the script still hung; with
+  `DISABLE_MULTIPROCESSING=1` it completed.
+- Resolved subcase: the file-level compile pool deadlocked any bare
+  `python3 script.py` that had to compile. `run_cmds()` builds its
+  `multiprocessing.Pool` while `import jittor` holds `jittor.lock`; Python 3.14
+  made `forkserver` the default start method on Linux, and a fork server
+  preloads `__main__` by **re-running the script** when it has no `__spec__`.
+  The re-run blocks on that same lock, so the fork server never serves the
+  request the parent is blocked waiting for -- a closed cycle, with zero
+  `cc1plus` processes alive. The same compile succeeded under
+  `python3 -m pytest`, whose `__main__` has a `__spec__`. `run_cmds()` now
+  keeps the children from re-executing `__main__` at all, which is what the
+  Windows-only branch next to it had always done. Regression test:
+  `tests/build/test_compile_pool_main_reexec.py`.
 - Resolved subcase: Jittor's process-wide `SIGCHLD` handler quick-exited a
   Jupyter kernel when any child was killed. Jupyter now retains SIGCHLD
   ownership. A later complete notebook smoke still reproduced a separate death
   with eight compile workers, including with Jittor's signal handler disabled,
   so the maintained notebook gate remains serial. See the
   [SIGCHLD verification and addendum](../../refactor-wip/results/2026-08-21-jupyter-sigchld.md).
-- Review/expiry condition: remove only after sanitizer-backed root cause and
-  repeated cold/warm stress, deadlock, multiprocess-cache, and performance gates
+- Measured, do not re-litigate from intuition: inside one process the op-level
+  parallel compiler is worth about 6x (50 distinct CPU kernels, 7s at the
+  default against 42s at `use_parallel_op_compiler=0`, two trials), so turning
+  the default off is not on the table. Between two processes sharing a cache it
+  is worth nothing: two processes compiling disjoint kernel sets take the *sum*
+  of their times, not the max, at either setting, because `lock_guard` in
+  `parallel_compile_all_ops` holds the process-level `jittor.lock` for the whole
+  batch. That is the first thing to check for "xdist with 8 workers is only 7%
+  faster than serial"; the fix there is cross-process lock granularity, not the
+  flag.
+- Review/expiry condition: remove only after sanitizer-backed root cause of the
+  op-level corruption and repeated cold/warm stress, multiprocess-cache, and
+  performance gates. The deadlock gate is closed. A/B timings for the op-level
+  flag must restore the same cache snapshot before each variant; running
+  parallel first and serial second measures cache warming, not the flag.
 
 ## KI-COMPILER-005: fixed -- a relay group no longer frees inputs the fused op still points at
 
@@ -347,7 +526,10 @@ framework defects.
 ## KI-OPS-006: the NaN-correct CPU max/min reduction runs at half the speed
 
 - Severity: Medium (throughput; the answers are correct)
-- Status: Reproduced and measured on CPU, unfixed; CUDA is unaffected
+- Status: **Half fixed 2026-09-23** -- max/min now get the blocked shape, which
+  closes the dependency-chain half (measured up to **4.05x**); the random-data
+  row is branch-bound rather than chain-bound and is unchanged (1.02x). CUDA is
+  unaffected (the pass is CPU-only), as before.
 - Owner: reduction operator and CPU codegen maintainers
 - What this entry used to be: `maximum`/`minimum` and the `max()`/`min()`
   reductions dropped NaN. That is fixed -- see the KI-BACKEND-004 record below
@@ -374,6 +556,122 @@ framework defects.
   (16, 128, 1024), whose last-dim `max` is exactly this reduction, moves 1.175
   -> 1.207 ms while the `layernorm` control moves 1.690 -> 1.757 ms in the same
   run. The control moved more, so there is no measurable cost there.
+- Re-measured 2026-09-21, and the figure above is **data-dependent by 4.4x** --
+  which the table above does not say and does not control for. 16.7M float32,
+  five interleaved repetitions, minimum, this tree:
+
+  | input | `sum` (control) | `max` | `min` |
+  | --- | --- | --- | --- |
+  | ascending `arange` | 25.48 | **1.64** | 7.24 |
+  | descending `arange` | 25.39 | 7.24 | **1.64** |
+  | `randn` | 25.38 | 7.24 | 7.24 |
+  | all-equal | 25.34 | **1.64** | **1.64** |
+
+  So the 7.24 in the table above is the `randn` row, and a 16.7M `arange` --
+  the obvious thing to write in a quick harness -- reports `max` at 1.64. Two
+  consequences. Any attempt to close this entry must name the data, because
+  "within 10% of the `std::max` figures" is satisfiable on one row and not on
+  another. And it is not an asymmetry between the two ops: descending swaps
+  `max` and `min` exactly, so whatever the mechanism is, it is about what the
+  accumulator does, not about which comparison is used.
+- The accumulator lives in memory across the whole inner loop. Line 464 of
+  [`reduce_op.cc`](../../src/ops/reduce_op.cc) is
+  `yp[yid] = _max(yp[yid], xp[xid])` with `yid` invariant in the innermost
+  reduced loop -- a read-modify-write of one address per element. That is the
+  obvious lever and it is *not* what the paragraph above pursued (the stride):
+  an accumulator hoisted into a local, stored once per output, removes the
+  per-element RMW and shortens the dependency chain. The measured hint that this
+  is the right lever is already in this entry -- "eight partials of this same
+  `|` form reach 13.7 GB/s" -- because partials are what breaks that chain.
+  Not attempted here: restructuring the `@for` nest in that template is the
+  kind of change that needs its own before/after run, and 2026-09-21 had no
+  budget for it.
+- **Corrected 2026-09-23: the hoist is already in the tree, so the paragraph
+  above is describing a lever that has been pulled.** Read the generated kernel
+  instead of the template: every `OP_maximum` reduce entry in a warmed CPU cache
+  (`__opkey0_reduce__…OP_maximum…_op.cc`) contains
+  `auto jt_reduce_acc_op0_yid = op0_yp[op0_yid];` then
+  `jt_reduce_acc_op0_yid = jittor::_max<float32>(float32(jt_reduce_acc_op0_yid),
+  float32(op0_xp[op0_xid]));` and a single `op0_yp[op0_yid] =
+  jt_reduce_acc_op0_yid;` after the loop. That is `ReduceAccumulatorPass`, which
+  hoists the accumulator for *every* op it can read -- its gate is not the
+  reduction's kind. So the per-element read-modify-write through memory, and the
+  chain it creates, are not what is left.
+- What was left is the *shape*: max/min were never given the blocked form, and
+  the measured hint above says the blocked form is exactly what reaches
+  13.7 GB/s. The reason they were excluded is stated in
+  [`reduce_accumulator_pass.cc`](../../src/codegen/opt/pass/reduce_accumulator_pass.cc):
+  only float-additive reductions were recorded in `kir::reduce_acc`, because the
+  blocked shape was added for *accuracy* -- and max/min "gain nothing" from
+  reassociation. That is true of accuracy and false of speed; the blocked pass's
+  own comment says it is "also the faster shape".
+- **The trap, and why this was not a one-line gate change.**
+  [`blocked_reduction_pass.cc`](../../src/codegen/opt/pass/blocked_reduction_pass.cc)
+  was additive by construction in four places, and none of them is the gate:
+  the partials started from `decltype(acc)(0)` -- the additive identity, where
+  max needs the smallest value and min the largest -- and the combiner was a
+  literal `+` in the in-block pairwise fold, the push onto the stack and the
+  drain into the accumulator. Relaxing `is_float_additive_reduce` alone would
+  therefore have compiled and run, and computed *sums* for a `max`, silently,
+  with no test in the tree asserting the shape. That is why the fix below had to
+  make the combiner and the identity operation-aware first.
+- **Fixed 2026-09-23, the way the trap requires.**
+  `ReduceAccumulatorPass` now records each accumulator with the operation that
+  may fold it (`kir::reduce_acc` entries became `"<accumulator>:<combiner>"`,
+  `+` / `max` / `min`) instead of recording only a float sum, and
+  `BlockedReductionPass` folds with that combiner in all three places and seeds
+  a partial from the accumulator itself for max/min -- which is exact, because
+  the accumulator holds the reduction's identity at that point, and needs no
+  per-dtype table of infinities. `multiply`, the bitwise folds, complex and bool
+  are still refused.
+- **Measured before/after on one binary, 16.7M float32, minimum of 9 interleaved
+  repetitions.** "before" is this tree with `exclude_pass="blocked_reduction"`
+  (`exclude_pass` is not in the jit key, so each arm carries a distinct
+  `compile_options` marker to keep them from sharing a compiled kernel):
+
+  | input | op | before | after | speedup |
+  | --- | --- | --- | --- | --- |
+  | ascending `arange` | `max` | 1.65 GB/s | 6.65 GB/s | **4.04x** |
+  | ascending `arange` | `min` | 4.88 | 8.74 | 1.79x |
+  | ascending `arange` | `sum` (control) | 4.89 | 15.79 | 3.23x |
+  | descending `arange` | `max` | 4.88 | 8.73 | 1.79x |
+  | descending `arange` | `min` | 1.64 | 6.65 | **4.05x** |
+  | `randn` | `max` | 4.88 | 4.98 | 1.02x |
+  | `randn` | `min` | 4.88 | 4.98 | 1.02x |
+  | all-equal | `max` | 1.65 | 6.62 | **4.02x** |
+  | all-equal | `min` | 1.65 | 6.65 | 4.02x |
+
+  The `sum` row is the control for the shape itself, not a change here -- `sum`
+  was already blocked, and 3.23x is what blocking is worth on this box. The
+  direction of the entry's 4.4x data-dependence is reproduced exactly: the slow
+  cell follows the comparison's branch, `ascending` is slow for `max` and
+  `descending` for `min`, and blocking fixes precisely those. **`randn` gains
+  nothing (1.02x)**: on unpredictable data the loop is branch-bound, not
+  chain-bound, so the partials have nothing to hide. That is the half that is
+  left, and it is a different mechanism from the one this entry describes.
+- **Numerics**: 44 checks pass, built around the identity rather than the
+  values -- all-negative data under `max` and all-positive data under `min`
+  (a zero seed answers 0 for both), both directions of the same range, all-equal,
+  NaN-containing (`_max`'s NaN must survive either fold order), `int32`/`int64`
+  (a different identity), `float64`, a size below the blocked cutoff, two reduced
+  axes at once, `keepdims`, and the elementwise `maximum` as a control.
+  A regression test now guards the trap directly:
+  [`tests/codegen/test_blocked_reduction_pass.py`](../../tests/codegen/test_blocked_reduction_pass.py)
+  reads the generated kernel and asserts that a `max` folds its partials with
+  `jittor::_max<decltype(...)>` and not `+` (and likewise `_min`), that a partial
+  is seeded from the accumulator and not from a numeric zero, that `sum` keeps its
+  `+`, that blocked and unblocked `max` agree bit for bit, that NaN survives
+  either fold, and -- the value half of the same trap -- that an all-negative
+  `max` and an all-positive `min` answer the data rather than 0.
+  `tests/ops/test_reduce_op.py`, `test_reduce_accuracy.py`,
+  `test_arg_reduce_op.py`, `test_arg_reduce_1d.py`,
+  `test_reindex_reduce_op.py` and `test_minmax_nan_propagation.py` are green on
+  the CPU gate after the change, as is all of `tests/codegen` except the
+  pre-existing `test3` above.
+- Also re-measured the same day: the KI-OPS-008 fix (the identity dispatching to
+  `+-inf`) is **performance-neutral** here. The same harness against a worktree
+  without it reads `max` 1.63/1.64 and `min` 7.24/7.29 at 1M and 16M -- the same
+  numbers to within the run-to-run spread.
 - Cause, measured rather than assumed. `std::max(a, b)` is one `maxss`;
   NumPy's `maximum` is a compare, an or, and a select, and g++ does not
   recognise the result as a reduction. Timed in isolation on 16.7M float32 at
@@ -422,7 +720,10 @@ framework defects.
   compile-time constant when it is one -- the loop versioned, or `@if` on a
   unit-stride specialisation -- and the float32 `max`/`min` reduction is within
   10% of the `std::max` figures above on the same benchmark. Then this entry
-  goes.
+  goes. **Name the data pattern when you measure it**: as the 2026-09-21
+  re-measurement below shows, the same kernel answers 7.24 or 1.64 GB/s
+  depending only on whether the input's order makes the accumulator move every
+  element or never, so a figure without its input is not a figure.
 
 ## KI-OPS-007: fixed -- the CUDA unary math table dispatches on dtype
 
@@ -462,44 +763,99 @@ framework defects.
   it red: `log(1.0000000000000004) in float64 gave 0.0, NumPy gives
   4.440892098500625e-16`.
 
-## KI-OPS-008: the CPU max/min reduction starts from a finite identity
+## KI-OPS-012: the half-precision max/min reduction still folds from a finite literal
 
-- Severity: Critical
-- Status: Reproduced on CPU, unfixed; CUDA is already correct
+- Severity: Critical -- silent wrong value, on finite input as well as on
+  infinities, and only on the half dtypes.
+- Status: CPU half fixed and verified 2026-09-21; **CUDA half reproduced by
+  inspection only, unfixed** -- the fix needs a device to verify and there is
+  none on this machine. Distinct from [KI-OPS-008], which was the float32
+  float64 half of the same idea and is now closed (that CPU table dispatches on
+  `has_infinity`).
 - Owner: reduction operator maintainers
 - Evidence:
   [`test_minmax_reduction_identity.py`](../../tests/ops/test_minmax_reduction_identity.py)
-  `::TestMinMaxReductionIdentityCpu::test_infinite_reductions_use_the_right_identity`,
-  a strict expected failure; the CUDA class runs the same body and passes
-- Symptom: `jt.max` of a float32 tensor whose every element is -inf returns
-  -3.4028235e38 on CPU and -inf on CUDA; `jt.min` of an all +inf tensor is the
-  mirror image. NumPy and Torch return the infinity. A fully masked attention
-  row is exactly this input -- it is all -inf, and `logits.max(-1)` is exactly
-  this reduction -- so the wrong value is reachable without anyone writing an
-  infinity by hand.
-- Cause: `init_maximum` is `std::numeric_limits<$1>::lowest()` in the CPU table
-  of [`common_op_type.cc`](../../src/type/common_op_type.cc) and
-  `::numeric_min<$1>()` in the CUDA table, and the CUDA one resolves to
-  `-CUDART_INF` for float and double. `max(lowest(), -inf)` keeps the identity
-  instead of the element, so on CPU no reduction can ever report an infinity it
-  was given. It is the `init_maximum`/`init_minimum` rows that are wrong, not
-  the `maximum`/`minimum` rows beside them, which is why KI-BACKEND-004
-  changing the latter did nothing here. Integers are unaffected: `lowest()`
-  *is* their identity and they have no infinity to lose, so the fix has to
-  dispatch on the dtype rather than replace the row.
-- Distinct from KI-BACKEND-004, and untouched by it. That was the NaN
-  behaviour of the `maximum`/`minimum` *operators*, now fixed; this is the
-  identity the reduction folds *from* -- a per-output-element constant, with no
-  effect on the inner loop. Re-measured after that fix, 2026-09-10: CPU
-  `jt.max` of an all `-inf` float32 tensor still returns `-3.4028235e38` and
-  CUDA still returns `-inf`, and the strict expected failure above still
-  fails. `jittor::_max(lowest(), -inf)` is `lowest()`, exactly as
-  `std::max(lowest(), -inf)` was, so nothing about this entry moved.
-- Workaround: on CPU, treat a result equal to `numpy.finfo(dtype).min` (or
-  `.max` for `min()`) as possibly an infinity, or run the reduction on CUDA.
-- Review/expiry condition: the CPU identity resolves to `-inf`/`+inf` for
-  float32 and float64 while integers keep `lowest()`/`max()`, the strict
-  expected failure above turns red, and this entry is removed.
+  `::TestMinMaxReductionIdentityCpu::test_half_precision_reductions_use_the_right_identity`
+  now passes; the CUDA class carries the same body as a strict expected failure
+  and is skipped without a device.
+- Symptom, measured on CPU before the fix, `use_cuda=0`:
+
+      dtype       max([-inf,-inf])   min([+inf,+inf])   max([-65504,-65504])
+      float16     -3.277e+04         3.277e+04          -32768   (should be -65504)
+      bfloat16    -32768.0           32768.0            --       (bound is 3.39e38)
+
+  The third column is the worse half: -65504 is float16's *lowest finite value*,
+  an ordinary number, and `-32768` is above it -- so the reduction answered a
+  value that was not in its input. `min` mirrored it at +65504.
+- Cause: `init_maximum`/`init_minimum` are plain finite literals in
+  [`fp16_op_type.cc`](../../src/type/fp16_op_type.cc) -- `-32768.0f`/`32768.0f`
+  in the CPU map, `-65000.0f`/`-1e38` in the CUDA one -- while `-inf`/`+inf` is
+  representable in both float16 and bfloat16. The CPU map already widens its
+  operands to float32 for `maximum`/`minimum`, so the fixed CPU rows answer from
+  `std::numeric_limits<float>::infinity()`; `<limits>` is now included by
+  [`fp16_compute.h`](../../src/type/fp16_compute.h), which the post-pass injects
+  into every half kernel, because `core/common.h` pulls in neither `<limits>`
+  nor `<cmath>`.
+- What the CUDA half still needs: `-CUDART_INF_F`/`CUDART_INF_F` for float16 and
+  bfloat16 (both convert from float), which means reaching
+  `type/cuda_limits.h` -- today that header is pushed only by `parallel_pass`,
+  not by the half post-pass, so the change has to bring the include with it.
+  Not attempted here: it cannot be compiled or run without a device, and a
+  half-fix that breaks the half kernels' build on the main accelerator path
+  would be worse than the defect.
+- Integer and float32/float64 reductions are unaffected and are covered as
+  controls in the same file. Re-measured 2026-09-21 under the Torch-compat shim
+  as well, since the two frontends are separate sessions in the gate: with
+  `JITTOR_TORCH_SHIM=1`, `torch.max([-inf,-inf])` is `-inf` and
+  `torch.min([+inf,+inf])` is `inf` at both float32 and float64, and native
+  `jt`'s float64 `max` is `-inf` in the same process. So the identity fix
+  reaches both frontends, not just native.
+- Review/expiry condition: the CUDA half class's strict expected failure turns
+  red (i.e. the CUDA rows answer from an infinity), and the entry is removed.
+
+## KI-OPS-013: withdrawn -- the 7-dimensional convolution reindex is a view, and holds nothing
+
+- Severity: was Medium ("roughly 472 MB held per occurrence, which is the memory
+  the fusion exists to save"). Withdrawn: the graph's peak resident set is
+  under 100 MiB, so there is nothing to reclaim and no fusion defect here.
+- Status: Withdrawn 2026-09-22 at `489fb8ac`. The two rank-7 vars are still in
+  the graph and still rank 7; that is what the entry misread, and the assertion
+  it rested on has been replaced by a memory bound.
+- What the entry said: [`test_longest_dis_fuse.py`](../../tests/core/test_longest_dis_fuse.py)
+  fails on `[1,64,3,112,112,7,7]`, 118,013,952 float32 = 472 MB, "held twice",
+  and "the var has a non-null pointer, so it is storage the graph really holds".
+  The lever would be the materialisation decision in `src/core/fuser.cc`, and
+  the entry was left for a change with its own before/after measurement.
+- What is actually true, measured 2026-09-22 on the build the test runs on (CPU,
+  `use_mkl=0`), with the graph held alive:
+  * both rank-7 vars are **stride-0 views over small storage**, and one of them
+    has *the same pointer as the `[64,3,7,7]` weight var* -- 9,408 floats,
+    37 KB, shared;
+  * peak resident (`VmHWM`) after building the forward, the loss and the
+    gradient is **83.8 MiB**, and resident growth across the build is 33 MiB
+    (`VmRSS` 51 -> 84 MiB);
+  * **no mapping in the process is larger than 100 MiB** (`/proc/self/smaps`),
+    so there is not even a 450 MB reservation to point at. `VmSize` grows by
+    ~1.5 GiB across the build, but that is allocator arena and none of it is
+    resident.
+  A shape is not a size, and "the pointer is not null" says only that a var
+  *has* storage -- not that the storage is its own, nor that its shape
+  describes how much there is.
+- Why the assertion could not see that: it filtered on rank and a non-null
+  pointer, and a stride-0 view of the weight has both while owning nothing.
+- Fixed by asserting memory instead: the guard is now a 256 MiB bound on the
+  resident growth of the build (the graph legitimately uses 33 MiB), which is
+  what the original comment ("assert not alloc big tensor") asked for, and which
+  still catches a materialised 450 MiB intermediate. The rank-7 vars are
+  enumerated, but only in the failure message.
+- Residual, tracked elsewhere: `count_fuse` still refuses to fuse across an
+  `OpType::other` op -- its guard runs before it ever looks at `_force_fuse`,
+  which [`broadcast_to_op.cc:170`](../../src/ops/broadcast_to_op.cc) documents
+  as a deliberate trade-off -- and that is the same mechanism as KI-CODEGEN-001's
+  per-element cost and KI-TUNER-001's dead relay. A fusion complaint belongs in
+  those entries; this one was a measurement error.
+- Review/expiry condition: none -- withdrawn. Re-open only with a resident-set
+  measurement showing the graph holding the memory.
 
 ## KI-SEMANTICS-003: floating-comparison backend verification incomplete
 
@@ -536,6 +892,77 @@ framework defects.
   of the contract
 - Review/expiry condition: retain both default and explicit-dtype assertions until
   a public dtype-default decision changes them together
+
+## KI-DTYPE-003: a Python float against a float64 tensor arrives as float32
+
+- Severity: High -- silent loss of 29 mantissa bits in float64 arithmetic,
+  including in gradcheck, which is the tree's own correctness oracle.
+- Status: Open, found 2026-09-18. Distinct from [KI-DTYPE-002], which is about
+  an explicit `jt.array` of a NumPy array and has `dtype=` as an escape hatch.
+  This one has no escape hatch, because there is no construction to pass
+  `dtype=` to: the scalar is written inline.
+- Owner: dtype and compatibility maintainers
+- Evidence: [`TestScalarPromotion.test_float64_tensor_with_an_inexact_python_float_keeps_its_value`](../../tests/type/test_dtype_promotion.py)
+  -- the four inexact expressions below, an `expectedFailure` so that a strict
+  XPASS reports the day they start passing. Its companion
+  `test_float64_tensor_with_an_exact_python_float_is_exact` is the control that
+  must keep passing either way. `TestScalarPromotion.
+  test_float_tensor_keeps_its_own_width` pins the same operation's *dtype* using
+  `2.0`, which float32 represents exactly, so it cannot see this defect at all --
+  that is why the value had no gate until now.
+- Mechanism, one line. `ArrayOp::ArrayOp(PyObject*)` in
+  `src/bindings/pyjt/py_array_op.cc`:
+
+      if (PyFloat_CheckExact(obj)) {
+          scalar.f32 = PyFloat_AS_DOUBLE(obj);     // <- narrowed here
+          args = {&scalar, {}, ns_float32};
+      }
+
+  Every Python float reaches a kernel as a float32 constant. `_is_scalar` then
+  correctly keeps it out of dtype promotion, so the *result* is float64 --
+  which is what makes this invisible: the dtype is right and the value is not.
+- Measured, both modes, CPU. `v = ones(1, float64)`:
+
+      expression        answer                    correct
+      v * 0.1           0.10000000149011611938    0.10000000000000000555
+      v + 0.1           1.1000000014901161194     1.1000000000000000888
+      v * (2/3)         0.6666666865348815918     0.66666666666666662966
+      v * 2 ** 0.5      1.4142135381698608398     1.4142135623730951455
+      v / 3.0           0.33333333333333331483    exact (3.0 is exact in f32)
+
+  Seven correct significant digits where sixteen were asked for. Real torch
+  2.13 answers all five exactly: a Python float is a *weak double* there -- it
+  takes the tensor's dtype but keeps its value until it does.
+- How it was found. `tests/ops/test_ops.py::TestCommonCPU::
+  test_reference_interpolate_bilinear_float64` was the last failure in the
+  OpInfo battery. `jt.nn.interpolate` scaled its sampling coordinates by
+  `hid * (h / H)`, and the Python float `h / H` reached the kernel as float32,
+  so a float64 image was resampled with float32 weights. That call site is
+  fixed (the coordinates are now scaled by the integer ratio and cast to the
+  image's dtype), but the call site was not the bug.
+- Why it is not a one-line fix. `ArrayOp(PyObject*)` is the only Python-float
+  conversion in the tree, and it serves `jt.array(0.5)` as well as `v * 0.5`.
+  Widening it there would make `jt.array(0.5).dtype` float64, which is a
+  visible change to native jittor's float32-by-default contract and not one to
+  make silently. The two call sites have to be told apart first -- either an
+  argument on the conversion, or the weak-scalar model torch uses, where the
+  scalar carries its value and adopts a dtype at the point of use.
+  `auto_convert_64_to_32` is not the discriminator: it reads 1 in both native
+  and Torch mode, so the compatibility frontend preserves float64 some other
+  way and this path is common to both.
+- Half precision is *not* affected, and that has been measured rather than
+  assumed: float32 is wider than both float16 and bfloat16, so the narrowed
+  scalar still carries every bit the tensor can hold, and `v * 0.1`,
+  `v + 0.1`, `v * (2/3)` and `v * 2 ** 0.5` at fp16 and bf16 are bit-identical
+  to torch on both devices. Those four are pinned in
+  `TestHalfPythonScalar` (tests/type/test_half_precision_parity.py) so that
+  whoever builds the weak-scalar model keeps them true. This is a float64
+  problem, and a float32 one only where the scalar is inexact at float32.
+- Review/expiry condition: close when a Python float keeps its value against a
+  float64 operand in both modes, with the five expressions above as the test,
+  and the four half expressions still bit-identical to torch. The gate is
+  already in place: the expected failure above XPASSes the moment this closes,
+  and `xfail_strict` turns that into a red run until the decorator is dropped.
 
 ## KI-MEM-002: reading a device tensor relocates it to the host
 
@@ -671,6 +1098,16 @@ framework defects.
 - Evidence: real CUDA. `a = jt.ones((2048,2048)).cuda(); a.sync()` gives
   `a.location() == "device"`; `a.register_hook(lambda g: g)` then gives
   `a.location() == "none"`, the state of a Var whose data has not been produced.
+- Re-measured 2026-09-21 on **CPU**, which needs no device and is therefore the
+  cheap way to iterate on a fix: `jt.ones((4,4))` + `sync()` reads
+  `location == "cpu"`, and after `register_hook(lambda g: g)` it reads
+  `location == "none"` while `device == "cpu"` and the value still sums to 16.0.
+  So the two accessors do **not** agree, which the line above says they do:
+  only `location()` is wrong here, `device` is unchanged. The mechanism is
+  visible in `python/jittor/_core/hooks.py`: `register_hook` ends with
+  `v.swap(hooker(v)[0])`, so the Var the caller holds carries the state of the
+  hooker's not-yet-materialised output node -- and `location()` answers for that
+  node, not for the storage the value will resolve to.
 - Not what it looks like: the data is still there. Device memory does not drop
   (`+32 MiB` before and after), the value reads back correct, and the next
   device operation costs the same as without the hook -- 0.9x, measured with an
@@ -686,60 +1123,21 @@ framework defects.
   The probe reports *that* something changed, not what it costs -- the severity
   came from measurement afterwards, and the first reading of this entry claimed
   a recompute that measurement did not support.
+- Blast radius, measured 2026-09-21 so that Low is a measurement and not a
+  guess: of `shape`, `dtype`, `location()`, `device`, `is_stop_grad()`,
+  `numel()` and the value, **only `location()` moves** across the registration
+  -- everything else is identical before and after, and the hook still applies
+  (`jt.grad` with a `g*2` hook returns `[2,2,2]`). So this is one accessor
+  answering about the wrong node, which is why it stays Low.
+- It is also the only one of its kind, which is the rest of why Low is right:
+  `tools/side_effect_probe.py --device cpu` on 2026-09-21 reports
+  `probed=223 {'OK': 182, 'UNCALLED': 40, 'MUTATES': 1}`, and the single
+  undeclared mutation is this `location cpu->none`. The 40 uncalled are the ones
+  that need a device.
 - Workaround: none needed for correctness or speed; do not read `location()` or
   `device` immediately after registering a hook.
 - Review/expiry condition: `register_hook` leaves `location()` unchanged on CPU
   and real CUDA, and the side-effect probe reports no mutation for it.
-
-## KI-TEST-004: 28 ACL structure tests stopped executing and nobody read the report
-
-- Severity: High (a whole backend's structural gates proved nothing for two days)
-- Status: Partly fixed 2026-09-10 -- they execute again; the 28 mismatches they
-  now report are open
-- Owner: ACL backend maintainers
-- Evidence: `tests/structure/backends/acl/test_acl_python_registration.py`
-  collected 40 cases and executed **0** of them. Every one failed at fixture
-  setup with:
-
-  ```
-  ModuleNotFoundError: No module named 'jittor._core'
-  ```
-
-- Cause: the fixture loads `python/jittor/_runtime/dispatch.py` by path --
-  deliberately, so a static structure test does not pull the runtime in -- and
-  builds a stub package tree in `sys.modules` for it to import from. On
-  2026-09-08 (`7e83d6da4`) `dispatch.py` gained
-  `from jittor._core.dtypes import ...` at module scope, and `jittor._core` was
-  not one of the stubs. The module became unloadable in isolation, which is a
-  property nothing had written down.
-- Why it went unnoticed: the session report **said so** -- "files this session
-  proved nothing about: test_acl_python_registration.py 0 skipped, 0 executed"
-  -- and that report is marked "Reported only. Set
-  `JITTOR_TEST_REQUIRE_EXECUTION=1` (the gates do) to make an unexplained entry
-  fail the run." So the machinery for catching exactly this exists and works;
-  what was missing is that a red suite makes one more red line invisible.
-- Fix applied: the fixture stubs `jittor._core` and loads the real
-  `python/jittor/_core/dtypes.py` by path alongside `dispatch.py`. The real
-  module rather than a stub, because `dtypes.py` imports only `typing` at
-  module scope -- its `jittor_core` references are lazy, inside functions -- so
-  it costs nothing and the fixture stays honest about what it exercises.
-  40 errors / 0 executed became **28 failed / 12 passed**.
-- What the 28 are, and why they are left open: the ACL kernels moved to a
-  structured attribute dictionary (`code_with_attributes(..., attributes=...)`,
-  `backends/acl/kernels/ops/pool_op.py`) while the fixture's recorders still
-  model the older positional `attr_code`, so they fail with
-  `record_pool() got an unexpected keyword argument 'attributes'` and similar.
-  The signature moved during the window in which these tests were not running.
-  Reconciling them means deciding, per case, whether the test's expectation or
-  the kernel is the stale one; that needs the ACL maintainers, and this machine
-  has no NPU to settle a runtime question with.
-- Same shape as KI-EXEC-002 and the roundtrip sweep's device defect: a refactor
-  changed something no contract had written down, and a check went from
-  asserting to asserting nothing. The three were found on the same day by
-  asking one question of each gate -- *would this fail if the thing it checks
-  were broken?*
-- Review/expiry condition: the file reports 40 passed, or every remaining
-  failure has an entry saying which side is wrong and why.
 
 ## KI-EXEC-004: pipelined execution costs 43% more peak memory, and nobody measured it
 
@@ -800,6 +1198,251 @@ framework defects.
   absolute gap will grow with batch and resolution, the ratio need not.
   Nothing here identifies *which* tensors outlive their segment; that needs
   `use_stat_allocator` lifetimes and was not done.
+
+## KI-EXEC-006: a second backward over a retained graph found an input gone
+
+- Severity: High -- a supported operation aborted, and until 2026-09-18 it did
+  so as a segfault with nothing naming the var.
+- Status: **Fixed** 2026-09-18 in `src/core/node.cc`. Kept here because the
+  three dead ends below are worth not repeating and because the fix changes the
+  liveness model, not a call site.
+- Reproduction, three lines, deterministic, CPU, no threads:
+
+      x = jt.array(np.random.rand(1, 1, 3, 3).astype("float32"))
+      out = jt.nn.interpolate(x, size=(4, 4), mode="bilinear",
+                              align_corners=False).reshape(-1)
+      out.numpy()                                   # materialise the forward
+      jt.grad(out[0], [x], retain_graph=True)[0].numpy()   # fine
+      jt.grad(out[1], [x], retain_graph=True)[0].numpy()   # was a segfault
+
+  Found by `tests/ops/test_ops.py::TestGradientsCPU::test_gradcheck_interpolate
+  _bilinear`, whose gradcheck materialises the output (a dtype test) before
+  differentiating it element by element.
+- What it cost, which is why it was worth the chase. The abort did not stay in
+  its own test: the broken graph stayed in the process, and `sync_all()` --
+  which `flag_scope` calls whenever the device changes -- re-ran the same dead
+  fused op for the rest of the session. Measured on the OpInfo battery: with
+  `interpolate_bilinear` deselected, `gradcheck_inv` and `gradcheck_log1p` pass;
+  run it first and both fail, and so does every test after it. The battery's
+  "14 failures" was one bug and ~350 poisoned tests, and the run that reported
+  them was 1.55 s rather than 14.69 s because nothing after the first failure
+  did any work.
+- Mechanism. `jt.nn.interpolate`'s bilinear path gathers with `reindex_var`,
+  whose index operands come from `jt.index` -- a source op with no inputs. Those
+  vars are **fused away**: they hold no storage and the kernel recomputes them
+  from their producer on every use. Materialising the forward drops the last
+  *forward* need for the producer, `Node::free()` takes it, and the only
+  producer edge goes. What is left is a var that is alive, carries
+  `_needed_by_backward`, has `mem_ptr == nullptr`, and has no producer. The
+  planner takes it for a batch input that already exists, and the launch finds
+  it unbacked. `free_var_mem` is never called on it: there was never any
+  storage to free.
+- The fix, in `Node::free()`. An op's outputs' *backward* need keeps the op
+  alive, the way a var's producer being forward-live keeps the var alive.
+  Three parts, and all three are load-bearing:
+  1. `needs_recompute(v)`: `mem_ptr == nullptr` **and**
+     `_needed_by_backward` **and** `backward.active()`. Each reading rules out
+     a case the others let through -- see the comment at the function, which
+     names the var in this graph that each one excludes.
+  2. The var-side guard keeps the op's output *tuple* whole. An op kept with
+     only some of its outputs is a half-op: its jit source still names the
+     freed vars, and the code generator then reports "op 10 index names 4 vars
+     in its jit source but has 0 inputs and 2 outputs" (that message is new
+     too; it was `ASSERT(member.size() <= var_num)`).
+  3. The guard's second clause is now `!is_finished() && pending.active()`
+     rather than `!is_finished()`. A var internal to a `FusedOp` never becomes
+     finished -- `exec_runner.cc` finishes `op->outputs()` only -- so without
+     this the retained op pins a var that can never be freed, which is what
+     made attempt 2 leak.
+  One further change fell out of it, in `finish_pending_liveness`: rule b3's
+  withdrawal is now guarded by `liveness.backward.active()`. A node with no
+  backward liveness has no contribution to withdraw, and withdrawing anyway is
+  a second release against one owner. Reaching that needs a var that goes
+  backward-dead and is *then* finished, which cannot happen while such a var is
+  freed on the spot -- so this bug was unreachable until the retention above
+  made it reachable, and it aborted the process at teardown.
+- Measured after the fix:
+  * the three-line reproduction runs 16 successive retained gradients;
+  * 30 repetitions of the double-backward shape leave **0 lived ops, 0 lived
+    vars** (attempt 2 left 652 ops / 938 vars, growing without bound);
+  * a plain training loop stays flat at 25 ops / 31 vars from step 5 to 30;
+  * `tools/run_test_suite.py --tier core`: 310 passed, 0 failed, both sessions.
+- Three fixes tried and ruled out first, each measured. They are why the fix
+  looks the way it does:
+  1. **Mark source outputs `_needed_by_backward`** (drop `_inputs.size()==0`
+     from `manual_set_vnbb` in op.cc). No effect -- the var already carries the
+     flag, and the flag protects storage, which this var never had.
+  2. **Keep the source op alive whenever an output is needed backward.** Fixes
+     the crash and retains 92k ops: almost every backward-needed var *has*
+     storage, so the predicate has to exclude those, which is part 1 above.
+     Narrowing it to this var's state still left 652 lived ops through the
+     retention cycle that part 3 above removes.
+  3. **Force the var to materialise in the fuser** (`var_fused = 1` for a
+     backward-needed output of a source op). Breaks code generation: the fused
+     source references `op3_outputstride0` and friends that were never
+     declared. "Materialised" is not a valid verdict for a var in this position.
+  4. **`stop_fuse()` on the index grids** where the op builds them
+     (`jt.index` in `nn/functional/interpolation.py`). Fixes the crash -- it is
+     the documented way to say "this var keeps its own storage" -- and costs
+     the whole index grid, which is the size of the *output*, four times over.
+     Measured on one `interpolate(1x64x256x256 -> 512x512, bilinear)` with the
+     memory profiler on: peak 352.3 MB -> 620.8 MB, +76% for a single op. A
+     1024x1024 upsample of a batch would pay gigabytes. Not a general fix, and
+     the same objection applies to doing it inside `reindex_var` for every
+     caller.
+- What else changed on the way, and stays. `check_input_is_backed` reports the
+  var and the op instead of dereferencing a null allocator inside the generated
+  kernel. `exec_plan.cc` and `fuser.cc` stopped reading `v->input()` without
+  checking it -- a var in a batch need not have a producer, and four sites in
+  the planner would have faulted on the null one. The backward-liveness
+  underflow now names the node and its counts rather than asserting a number
+  inside a template.
+
+## KI-EXEC-007: four threads writing one parameter free an allocation twice
+
+- Severity: High -- a supported operation aborts, reproducibly, in the exact
+  pattern a multi-threaded weight loader uses.
+- Status: Open, found 2026-09-18 while building a reproduction for
+  [KI-EXEC-005]. Not caused by any change on this branch: reverting both the
+  KI-EXEC-006 fix and the KI-EXEC-005 phase-7 change makes it *more* frequent,
+  not less (below).
+- Owner: memory maintainers
+- Reproduction, ~25 lines, no torch, CUDA:
+
+      param = jt.zeros((4 * 4096, 256), "float32")
+      # four threads, each 30 rounds:
+      #   host = jt.array(np.random.rand(4096, 256).astype("float32"))
+      #   param[tid * 4096:(tid + 1) * 4096] = host
+      #   param.sync()
+
+  This is the pattern KI-EXEC-005 names as its own reproduction, so it is a
+  supported one. Checked in as
+  `agent/skills/jittor-allocator-flag-matrix/probe_shared_param_threads.py`.
+- Failure:
+
+      sfrl_allocator.cc:82: allocation not found: 3 [check failed: block != nullptr]
+      op: array   in: float32[16384,256,]   out: float32[4096,256,]
+
+  i.e. `SFRLAllocator::free` was handed an `allocation` handle that its id
+  space does not have registered -- the id was already freed, or it belongs to
+  a different allocator instance.
+- It needs contention, not just threads. Five runs each:
+
+      | threads | runs failed |
+      | --- | --- |
+      | 1 | 0 / 5 |
+      | 2 | 0 / 5 |
+      | 4 | 4 / 5 |
+
+- And it is not this branch's doing. Same probe, twenty runs at four threads,
+  rebuilding between each state:
+
+      | core | runs failed |
+      | --- | --- |
+      | this branch | 10 / 20 |
+      | KI-EXEC-005 phase-7 change reverted | 8 / 10 |
+      | that and the KI-EXEC-006 fix reverted | 10 / 10 |
+
+- Mechanism, pinned 2026-09-18 by the id-space event log plus a backtrace at
+  the failing free (`KI007_TRACE=1`, which turns both on). The allocator is not
+  the suspect: `alloc` and `free` both hold the instance's `recursive_mutex`,
+  and the id table has its own. The ledger for the failing id:
+
+      set_occupied(size=16777216, thread=A)     <- A allocates the parameter
+      erase_occupied(size=16777216, thread=B)   <- B releases it
+      recycle(thread=B)
+      reissued(thread=B)                        <- the id is now another block's
+      ... then A frees the same id: "allocation not found"
+
+  and the backtrace on that second free:
+
+      VarHolder::sync -> Executor::run_sync -> run_exec_plan
+        -> migrate_to_cpu -> SFRLAllocator::free
+
+  So: thread B's slice assignment rebinds the holder, the old parameter var
+  becomes garbage and `free_var_mem` releases its storage -- while thread A's
+  batch is between planning and its migrate loop. `migrate_to_cpu` then reads
+  `var->mem_ptr`, `var->allocation` and `var->allocator`, which still name the
+  released block, and frees it a second time. `migrate_to_gpu` has the same
+  shape. This is [KI-EXEC-005]'s situation one level down: the same "a var the
+  batch requested was released mid-batch", reaching the allocator instead of
+  the phase-7 assert.
+- What the fix has to say. The batch's hold keeps the *Var* alive; it does not
+  keep the var's *storage*, and `free_var_mem` exists precisely to release
+  storage from a var that stays alive. So the missing invariant is that a var
+  whose storage the running batch will read must not have that storage
+  released -- the in-flight equivalent of what `_needed_by_backward` does for
+  the backward pass. Reordering the migrate (publish the new storage, then
+  release the old) closes the window *after* the copy but not the one before
+  it, and claiming the storage by nulling `mem_ptr` up front makes the var look
+  unbacked to anything that looks at it mid-migration. The invariant is the
+  fix; the ordering is not.
+- One thing already changed. `ArrayOp::run` used to free the output's previous
+  storage with its own copy of `free_var_mem`'s body, reading the three fields
+  and only overwriting them after the free. It now calls `free_var_mem`, which
+  clears them first, so a concurrent release finds nothing to give back. That
+  is correct on its own account and it is not the fix for this entry: the
+  failure rate is unchanged, because the second free comes from the migrate
+  loop, not from here.
+- Blocks [KI-EXEC-005]: the probe that would show whether the phase-7 change
+  worked dies here first, before it reaches phase 7.
+
+## KI-EXEC-005: a var released by another thread mid-batch fails the batch
+
+- Severity: High -- a supported operation aborts. Rare, and the workaround
+  (serialise the threads) is practical, but the pattern is exactly a
+  multi-threaded weight loader and the sync that dies asked for nothing
+  unusual.
+- Status: Open, and now **unverifiable** rather than merely rare. The batch
+  stopped counting its own hold as a consumer, and phase 7 now reads the event
+  instead of the count (below); but the probe that would show whether that
+  worked dies in [KI-EXEC-007] first, in the allocator, before it reaches
+  phase 7. Both changes are in; neither is measured against this failure.
+- Owner: executor maintainers
+- Reproduction: four Python threads, each `jt.array(chunk)` then
+  `param[tid*N:(tid+1)*N] = host` then `param.sync()`, 30 rounds, on one shared
+  `param`. Measured on this box (8x H-series, 4 threads, 30 rounds per run):
+
+  | core | runs failed |
+  | --- | --- |
+  | as merged (`ceae1910`) | 2 / 15 |
+  | same, batch hold compiled out | 0 / 15 |
+  | with the phase-7 discount below | 1 / 20 |
+
+- Failure: `exec_runner.cc: [check failed: v->mem_ptr || v->size == 0 ||
+  v->flag(_is_swapped) || ...]` at phase 7, on the shared parameter var.
+- Mechanism. Thread B's slice assignment rebinds the holder, so the var thread
+  A's batch requested becomes garbage while that batch runs and its memory is
+  released -- which is what the last clause of the assert was written to
+  tolerate ("nobody needs this any more"). `ceae1910` added a `VarPtr` per plan
+  var for the batch's duration, and that hold counts towards the same backward
+  liveness the clause reads, so the clause stopped firing and a legitimate
+  release began failing the batch instead. Subtracting the hold
+  (`ExecPlan::batch_hold_per_var`) restores the intent and removes most of it.
+- What changed, 2026-09-18. A var carries backward liveness from consumers as
+  well as from holders, so subtracting the batch's own hold does not always
+  bring the count to zero, and the residual 1-in-20 remained. The counter was
+  the wrong thing to read: what phase 7 asks is *was this var's storage
+  released while this batch was in flight*, and that is a fact about an event.
+  `batch_released_vars` (var.h) records the event at the one place that can see
+  it -- `free_var_mem` -- and only while a batch is running, so the ordinary
+  free path pays one predictable branch and no allocation; phase 7 tolerates
+  precisely the vars on it. The count stays alongside it: it is the cheaper
+  test and it covers a release that happened before the batch began.
+  The alternative, serialising the entry points a threaded loader drives, is
+  what section 23 of the vLLM enablement results proposed before section 29's
+  fix superseded it; it moves the cost to every caller instead of to the batch
+  that needs the answer.
+- What is left: a measurement. The change is a strict widening of an assert, so
+  it cannot fail anything that passed -- the core tier is 310 passed with it --
+  but "it fixes the 1-in-20" is not claimed, because [KI-EXEC-007] aborts the
+  probe earlier. Close that first, then re-run the loader probe.
+- Not covered by a test. `ceae1910` changed five core files and shipped with no
+  in-repo regression case; its evidence is `probe_loader_race.py`, which lives
+  outside the tree. `tests/core/test_executor_entry_lock.py` is a different
+  property (threads inside the executor's call, each syncing its own graph).
+  A gate for this one needs the race to be deterministic first -- at 1-in-20 it
+  would be a flaky gate, which is worse than none.
 
 ## KI-EXEC-003: cuDNN autotuning is not isolated from execution scheduling
 
@@ -1100,10 +1743,13 @@ the element it is relative to.
   flush for 1e-45`. A build where the policy switch did nothing cannot satisfy
   it, which is the failure mode a one-sided "CUDA flushes" assertion would miss.
 
-## KI-CLEANUP-001: the duplicate-implementation gate is red with 24 groups and no decision
+## KI-CLEANUP-001: fixed -- the duplicate gate scans the test tree again and names the kind
 
 - Severity: Medium (a gate nobody can act on is a gate nobody reads)
-- Status: Reproduced and enumerated 2026-09-11, undecided
+- Status: Fixed 2026-09-21. It had been made green on 2026-09-11 by skipping
+  every path with a `tests` component, which is the option this entry argued
+  against: that also stops the gate noticing an implementation copied into a
+  test. The tree is back in scope and the two kinds are answered separately.
 - Owner: cleanup and packaging maintainers
 - Evidence:
   `tests/structure/test_cleanup_structure.py::TestCleanupStructure::test_cross_file_duplicate_implementations_are_reviewed`
@@ -1142,12 +1788,33 @@ the element it is relative to.
   was built for, but excluding the tree outright would also stop it noticing a
   real implementation copied into a test. Reporting the two kinds separately is
   the shape that keeps both.
+- What was done, 2026-09-21. The `tests` exclusion is gone, so the scan covers
+  `python/`, `backends/`, `compat/` and `tests/`. Duplicates are partitioned by
+  whether any path has a `tests` component and answered by kind:
+
+  * **shipped code** -- reviewed by *exact group*, unchanged from before, so a
+    kernel copied to a new pair of files is still not covered by having
+    reviewed the old pair. All 14 groups were already allowlisted.
+  * **test tree** -- reviewed by *name*, with one line of reason each, in
+    `reviewed_test_tree_names`. Re-enumerated with the tree in scope: 38 groups
+    over 93 paths and 27 name keys (`Base` ×5, `setUpModule` ×7, `both_devices`
+    ×2, the NumPy references the OpInfo definitions share, the sample model
+    repeated across the three example-derived test files, and the small probes
+    and permutation indices the backend tests repeat). By name rather than by
+    group because this scaffolding keeps being repeated; the honest cost is
+    that a *new* group reusing an allowed name is not caught, which the
+    docstring says.
+
+  Each of the two assertions carries its own message, so a failure says which
+  tree changed. Verified by teeth, not by reading: renaming `Base` in the
+  allowlist turns the gate red with
+  `test-tree definitions repeated across files with no reviewed reason: ['Base']`.
 - Workaround: none needed at runtime; this is a gate, not a defect in shipped
-  behaviour. Do not read its red as evidence of a new duplicate.
-- Review/expiry condition: every group above has an answer -- deduplicated, or
-  allowlisted with the reason written next to it -- and the gate distinguishes
-  a shipped-code duplicate from a test-tree one in its message, so the next
-  failure names what changed.
+  behaviour.
+- Review/expiry condition: met 2026-09-21 -- every group has an answer, and the
+  failure names the kind. Re-open if a name has to be added to
+  `reviewed_test_tree_names` without a reason, or if a shipped-code group is
+  allowlisted without one.
 
 ## KI-BACKEND-009: CUDA cannot compile a logical or narrow-integer reduction
 
@@ -1539,6 +2206,32 @@ about whether to take it.
   `tests/structure/torch_api_manifest.json` in the same commit, and remove this
   entry when the manifest no longer records them.
 
+## KI-COMPAT-002: `torch.ops.aten` has no native op surface, so vLLM-Omni stops at import
+
+- Severity: Medium
+- Status: Open
+- Owner: Torch compatibility frontend maintainers
+- Evidence: `import vllm_omni` (vLLM 0.29.0 + `vllm-omni` main) on this shim.
+  Four earlier gaps are fixed in `784ba203` (`finfo`/`iinfo` of metadata-only
+  dtypes, operator overloads, `torch.nn.parameter.Uninitialized*`,
+  `torch._C._distributed_c10d.ReduceOp` and `torch.distributed.Work`).
+- Symptom: the next stop is
+  `torch.ops.aten._scaled_dot_product_flash_attention`, assigned at module scope
+  by `vllm_omni/diffusion/attention/backends/ring/ring_kernels.py`. `torch.ops.aten`
+  is created on demand and holds only operators this process registered; PyTorch's
+  native aten library is not synthesized. vLLM/vLLM-Omni reference 18 distinct
+  `torch.ops.aten.*` names -- `clone`, `copy`, `copy_`, `view`, `reshape`,
+  `permute`, `unsqueeze`, `slice`, `slice_scatter`, `split_with_sizes`,
+  `sym_size`, `mm`, `_scaled_mm`, `_scaled_dot_product_flash_attention`,
+  `_scaled_dot_product_efficient_attention`,
+  `_scaled_dot_product_attention_flash_musa`, `_dyn_quant_matmul_4bit`,
+  `_dyn_quant_pack_4bit_weight` -- several with no shim equivalent.
+- Workaround: none. `JITTOR_TORCH_SKIP_EXT_BUILD=1` only stops the shim's
+  extension scan from trying to `build_ext` the `vllm-omni` checkout.
+- Review/expiry condition: add an aten bridge (map the structural ops to Jittor
+  primitives; refuse the quantized and flash variants with a clear error), then
+  re-run the import and a real H3 generation before removing this entry.
+
 ## KI-OPS-009: fixed -- an index Var that is a strided view is now read through its strides
 
 - Severity: was Critical (out-of-bounds read *and write*, silent wrong answers)
@@ -1782,6 +2475,133 @@ about whether to take it.
   now because tests that had been silently running on CPU do use the GPU and
   compile its kernels once.
 
+## KI-TEST-006: fixed -- a test-named script is refused by the collection policy
+
+- Severity: was Low (a pull-request gate red; no wrong result, no wrong answer)
+- Status: Fixed 2026-09-22 in `6e0c2273`. The file itself is unchanged and still
+  runs by path (`python3 tests/integration/test_h3_decode_thread_race.py 12 1`);
+  what changed is the policy, because a `test_*.py` under a test root *is* a
+  collection instruction and nothing refused one that defines no test.
+- Symptom (before): the file was collected and imported at module scope -- the
+  pytest argument reached `int(sys.argv[1])`, `open()` read a checkpoint,
+  `from_pretrained(...)` built a VAE on `cuda:0` -- so it contributed one
+  collection error to the native session on every run, which
+  `tools/run_test_suite.py --tier smoke` counts against the pull-request gate.
+  Two scanners in `tests/structure/test_pytest_contract.py` flagged its module
+  scope as well (`open`, `eval`, and two `decode()` calls), and
+  `test_native_tests_do_not_claim_torch_namespace_during_collection` flagged the
+  module-scope `import torch`: measured 2026-09-22 in the Torch session, those
+  two cases were the file's only red. No test in it is skipped or run; it is
+  unusable as a test and never was one.
+- Cause: the file name is the collection instruction, and
+  `tests/_helpers/pytest_policy.py` never asked whether a module had anything to
+  collect. The layout rule (independent experiments live under
+  `$JITTOR_LAB_ROOT/<topic>/`) is the only thing that would have caught it.
+- Fix: `pytest_policy._refuses_collection()` -- a `test_*.py` whose module scope
+  has no `def test*` and no class collection could reach (a `Test*` name, or
+  *any* base, which covers `unittest.TestCase` subclasses whatever they are
+  called and project mixins reached through a base) is refused by
+  `pytest_ignore_collect`. Refusing errs in the one direction that cannot hide a
+  test: a module is refused only when it could contribute nothing anyway, and
+  anything unparseable is collected and left to fail loudly.
+  `tests/structure/test_pytest_contract.py::_test_files()` now enumerates what
+  pytest will actually collect, which is what makes its two collection-time
+  scanners statements about collected modules rather than about parked scripts;
+  `test_test_named_scripts_are_refused_rather_than_collected` pins the refused
+  set to exactly this file -- a second script under a test root is a decision
+  someone writes down, not a file that quietly stops being collected -- and
+  `test_the_script_refusal_only_covers_modules_collection_cannot_use` pins the
+  shapes the rule must not touch.
+- Evidence: native `--collect-only tests/integration` goes from one collection
+  error to none; the two Torch-session structure cases go from failed to passed.
+- Workaround: none needed for the script itself; the gate was the casualty.
+- Review/expiry condition: every `test_*.py` under a test root either defines
+  something collectible or is named in `_REFUSED_TEST_SCRIPTS` with the reason
+  it stays where it is. Move this file to `$JITTOR_LAB_ROOT/` and the set
+  becomes empty -- update the entry and the set together.
+
+## KI-COMPILER-007: a CPU-only no-CUDA import aborts with heap corruption at exit, but only inside the gate
+
+- Severity: Critical if real -- the message is glibc heap corruption
+  (`double free or corruption (!prev)`, `corrupted size vs. prev_size while
+  consolidating`) and the process dies with SIGABRT. The *functional* contract of
+  the case that catches it holds; what fails is the child's exit status.
+- Status: Reproduced inside the smoke tier on 2026-09-22 (twice in whole-suite
+  runs, then 3/3 in `-k` runs that keep `-n 4`), **not** reproduced in 26 runs
+  outside it, and **not** in a fourth whole-suite `-n 4` run the same day after
+  the test-side commits that pass below. It is intermittent and gate-shaped.
+  Unfixed, and the reproduction recipe is exact so it does not have to be
+  rediscovered.
+- Evidence: the case is
+  `tests/build/test_backend_build_config.py::test_explicit_cpu_import_skips_cuda_services`
+  (the test, not the file the name suggests). Reproduce with
+
+      "$VENV/bin/python" tools/run_test_suite.py --tier smoke --session native \
+          -- -k explicit_cpu_import_skips_cuda_services
+
+  which reports `1 failed` with `assert -6 == 0` and the glibc line in the
+  child's tail. The child is a plain script (the test's own `script` string):
+  it patches five `jittor_utils.install_cuda` entry points to raise, imports
+  jittor under `JT_BACKEND=cpu nvcc_path=/must/not/probe/nvcc
+  JTCUDA_AUTO_INSTALL=1`, asserts the CPU-only build config four ways, prints
+  `CPU_BUILD_CONFIG={"cuda_services": 0, "backend": "cpu"}`, and exits. **All
+  four assertions pass and the line is printed** -- the corruption is in
+  teardown, after the last statement.
+- **The narrowing that matters**: it needs the tool's parallel workers. Every
+  abort was in a run where the case executed under the tool's default `-n 4`
+  -- the smoke tier, then two `-k ... <case>` runs, 3/3, each with a different
+  glibc sentence (`double free or corruption (!prev)`, `corrupted size vs.
+  prev_size while consolidating`, and with `MALLOC_CHECK_=3` the explicit
+  `free(): double free detected in tcache 2`). Six further `-k` runs with
+  `-n0 -s` were clean, 0/6. So the trigger is four pytest workers sharing one
+  `JITTOR_HOME` and its build lock while the child imports jittor -- i.e. the
+  child's import contends with a concurrent compile -- and not the child's
+  environment, which is what my direct runs varied.
+- What has been ruled out, measured (each of these is 0 failures):
+  - **five further attempts after the tree's core was rebuilt at the current
+    sources, all clean**: the case alone under the gate's environment at `-n 1`
+    twice and `-n 4 --dist loadgroup` twice, and once with the *whole-tree
+    collection* the tool performs (`pytest tests ... -n 4 -k <case>`, the shape
+    the aborts were seen in, 39.7 s, `1 passed`). So the narrowing above is a
+    statement about the runs that aborted, not a recipe that still fires: at
+    `f8657c8d` the case does not abort in any shape this box can produce. The
+    core at those aborts was `cfg8da7ae5d`; the rebuild since carries the
+    tree's newer `src/` (other writers' `a40ea7df`, `2689f7ad`, `65e2a215`),
+    which is the one thing that changed about the *child* this case spawns.
+  - an **instrumented sibling of the child** in the same whole-tree `-n 4` run:
+    the patch *records* instead of raising, `faulthandler.enable()` is on, and
+    markers bracket the last statement. Its output shows the child reaching its
+    last statement, `cuda_services=0`, reaching its own atexit, and exiting 0 --
+    no call into the patched entry points during teardown.
+  - the same child run directly, 16/16 clean, with and without a prefixed
+    `JT_USE_PARALLEL_OP_COMPILER`, and with `use_mkl` on and off;
+  - `MALLOC_CHECK_=3 MALLOC_PERTURB_=165` on that direct child, 10/10 clean --
+    so glibc's own aggressive checking does not see it in that shape;
+  - plain pytest of the same file under the gate's nine environment names, and
+    with the tool's thread-pool budget (`OMP_NUM_THREADS=96` etc. on this
+    box: 384 CPUs / 4 workers), all pass;
+  - the same cache directory and the same `jittor_core.so` (`cfg8da7ae5d`) is
+    used by both the aborting and the clean runs, so it is not a stale core --
+    as of that day; the core has since been rebuilt from newer sources, which is
+    what the five clean runs above were measured against;
+  - the child's own env report shows `use_parallel_op_compiler='0'`, i.e. the
+    workaround for KI-COMPILER-001's op-level corruption was **already in
+    force** -- do not assume that entry covers this one.
+- Hypothesis, partly tested: a teardown-time call into one of the patched
+  `install_cuda` entry points (the test's `JTCUDA_AUTO_INSTALL=1` is there to
+  prove the CPU path never reaches them), raising out of an atexit hook or a
+  destructor while jittor's globals are half-destroyed; the next allocation then
+  consolidates a corrupted chunk. That would explain why the functional
+  assertions pass and only the exit status is bad, and why it is timing-shaped.
+  The instrumented sibling above tested the teardown half of it and found no
+  call -- in a run that was clean anyway, which is the limit of what it can say.
+  Naming the double free still needs an allocator that reports a stack
+  (`MALLOC_CHECK_` does not), which this box does not have; the case no longer
+  *raises* from those entry points, so this hazard cannot be the mechanism from
+  now on, but that is a removal of one possible cause, not a fix of the abort.
+- Exit condition: the case passes inside `--tier smoke --session native` on a
+  repeat run, and the child exits 0 with its assertions intact.
+
 ## KI-COMPILER-004: fixed -- a CPU-only core no longer shadows the CUDA build
 
 - Severity: was High (silently disabled the accelerator for a whole run)
@@ -1798,3 +2618,653 @@ about whether to take it.
   CUDA build is still the one imported.
 - Effect: `tests/structure` went from 3 failed / 209 passed to 212 passed.
 - Guard: [cache path precedence](../../tests/build/test_cache_path_precedence.py)
+
+## KI-COMPILER-006: fixed -- the cache directory no longer depends on the compiler's message locale
+
+- Severity: was High (a warm cache silently presents as cold; a full rebuild of
+  the core, the bundled operators and every JIT kernel, for no change at all)
+- Status: Fixed 2026-09-16 in `python/jittor/build/utils/__init__.py`
+- Symptom it had: the `archXXXXXXXXXX` component of the cache path is a hash of
+  `cc -march=native -Q --help=target`, whose per-feature state is printed
+  through gettext. `LC_ALL=C` yields `[enabled]` and hashes to `arch0fe147db07`;
+  a Chinese locale yields `[启用]` and hashes to `arch6fe5b27f7d`. Same machine,
+  same compiler, same CPU, same flags, two unrelated cache trees. `noxfile.py`'s
+  `_session_env` sets `LC_ALL=C` and nothing else in the repository does, so the
+  gates used one tree and every manual run on a non-English host used the other.
+- Evidence: both trees were sitting side by side in `/root/.cache/jittor` when
+  this was found -- `arch0fe147db07` at 1.1 GB / 7801 kernels and
+  `arch6fe5b27f7d` at 113 MB / 196 kernels. With `JT_PROBE_CACHE=0` and an empty
+  home, `import jittor` cost 60s, then a second import differing only in
+  `LC_ALL` cost another 59s; after the fix the second import costs 2s.
+- Fix: probe in the C locale (`jittor_utils.c_locale_environment()`) rather than
+  asking callers to export it, **and** rename the memo slot to
+  `target_arch:c-locale:<cc>`. The rename is load-bearing: `probe.json` is keyed
+  on the compiler, not the locale, so a home that had memoised translated text
+  kept answering out of it and never converged.
+- Effect: the key collapses onto the one the nox gates already used, so their
+  caches stay warm and manual runs join them.
+- Guard: [build config cache](../../tests/build/test_build_config_cache.py)
+  `::test_the_instruction_set_key_does_not_depend_on_the_message_locale`, proven
+  red first (`{'C': 'arch0fe147db07', 'zh_CN.UTF-8': 'arch6fe5b27f7d'}`). It
+  skips with a reason when the toolchain has no translations installed, because
+  otherwise both locales print English and the assertion proves nothing.
+
+## KI-COMPAT-004: a factory result is not a backward leaf
+
+- Severity: Low (``is_leaf`` / ``grad_fn`` are introspection; gradients are
+  correct either way).
+- Status: Open. One attempt is recorded below because it looked like a
+  one-liner and was not.
+- Owner: torch compatibility / core autograd
+- Symptom: ``torch.ones(3, requires_grad=True).is_leaf`` is False here and
+  True in real torch, and ``grad_fn`` names ``broadcast_to``. Any code that
+  branches on "is this a leaf" -- parameter collection, gradient-clipping
+  helpers, some checkpointing wrappers -- takes the wrong branch.
+- Mechanism: ``jt.ones`` broadcasts a scalar literal (``_constant_scalar`` in
+  ``python/jittor/_core/var.py``). Every float Var requires grad by default,
+  the literal included, and ``backward_grad_fn`` (src/core/grad.cc) calls a
+  Var a leaf only when *no* input of its producer requires grad. So the
+  broadcast counts as a differentiable producer.
+- Attempt that did not hold (2026-09-17): making the literal ``stop_grad()``.
+  It gives exactly the torch answer and leaves every first-order gradient
+  unchanged (tests/ops and tests/autograd stay green except for the one
+  below), but it breaks the double-backward trick:
+  ``tests/autograd/test_autograd_functional_seeds.py::TestAutogradGradSeedAlignment::test_jvp_multi_input_is_unchanged``
+  then reads a tangent of 0.0 where it should be 348.0. ``jvp`` has no
+  forward mode; it differentiates a first backward graph a second time, and
+  a tangent built by a factory stops carrying the second-order edge. Reverted
+  rather than papered over; whoever closes this needs to understand that
+  interaction first.
+- Pinned by ``tests/torch/test_torch_compat_autograd_semantics.py::TestBackwardLeafAndGradFn::test_leaf_and_intermediate_report_torch_shape``,
+  which asserts the gap as it stands.
+- The same bookkeeping, from the other side: ``torch.Tensor(other)`` aliases
+  the graph in torch (the result requires grad and is not a leaf), while here
+  ``Tensor`` is a plain ``Var`` subclass with no constructor of its own, so
+  the call builds a fresh Var from the data and the linkage is lost. Pinned
+  by ``tests/torch/test_independent_frontend.py::test_independent_tensor_installation_preserves_native_type``.
+
+## KI-COMPAT-003: a nested tensor is not a Tensor
+
+- Severity: Low (it is a stand-in for the few ``torch.nested`` paths verl
+  reaches; nothing else asks).
+- Status: Open.
+- Owner: torch compatibility
+- Symptom: ``isinstance(torch.nested.as_nested_tensor(...), torch.Tensor)`` is
+  False here and True in real torch (checked against 2.13 on this machine).
+  Code that type-checks before branching therefore takes the dense path.
+- Why it is not a one-line fix: ``compat/torch/nested.py``'s ``_NestedTensor``
+  holds a list of Vars plus their concatenation, and reports ``shape ==
+  (3, -1)``. A Tensor subclass is a Var subclass, and no Var can hold a
+  ragged extent, so this needs a real jagged storage rather than a cast.
+- Pinned by ``tests/torch/test_torch_compat_ops.py::TestNestedTensor::test_nested_jagged_basic``,
+  which asserts the gap as it stands so that closing it turns the test red.
+
+## KI-CODEGEN-001: a broadcast of a real input is a strided view, and fused elementwise kernels pay a division and a modulo per element for it
+
+- Severity: Medium (a memory-bound broadcast add runs 4.22x its dense
+  counterpart, measured 2026-09-16; NumPy 1.01x on the same shapes).
+- Status: Open. A documented trade-off, not an accident:
+  `src/ops/broadcast_to_op.cc:166-181` chooses the view so a broadcast feeding
+  a *non-fused* consumer never materializes, and accepts the op becoming
+  `OpType::other`.
+- Owner: codegen maintainers
+- Symptom: `x + y` with `y` an expand of a real tensor. `y` reaches the binary
+  op as `YSTRIDED` with a `YSMASK` of the moving axes, and the template in
+  `src/ops/binary_op.cc:672-708` (likewise unary/ternary) recovers `yi` from
+  the flat index `i` with one `%` and one `/` per masked axis, per element.
+  Before 7e83d6da the expand was `OpType::broadcast`, fused by index
+  expression (`xid = id1`) and hoisted by the loop structure at no per-element
+  cost.
+- Second symptom: the merge-loop-var structure changed. The recovery math is
+  written to `yrem`/`yi`, names `MergeLoopVarPass` does not inspect (it checks
+  defines ending in `id`/`_i`), so it merges every loop it can: `a + x` with
+  `x=[1,10,1,1]` becomes one `range0_1_2_3` loop where `range2_3` under
+  `id0,id1` was expected. `TestMergeLoopVarPass::test3` and its CUDA twin fail
+  on that, and they are the only ones still red: the kernel is numerically right
+  (every ops gate passes) and the test is kept as the guard for the cost above
+  rather than rewritten to bless `range0_1_2_3`.
+  **Corrected 2026-09-23:** this paragraph used to name three more tests --
+  `TestMergeLoopVarPass::test` (`sum([2,3])`, no merge at all),
+  `TestMergeLoopVarPassCuda::test5` (`range0_2_3`) and
+  `TestParallelPass3::test_reduce_with_merge_loop_var` -- and to blame them on
+  "the blocked pairwise reduction (2026-09-10) restructured the reduce loops".
+  That was wrong. All three are *reduce* cases with no broadcast operand, and
+  they were the same `ReduceOp` regression: `7e83d6da` replaced the
+  shape-derived `xstride@i` with a run-time `x->storage_stride(@i)` read, which
+  no longer folds, so `MergeLoopVarPass` refused the merge. Deriving the strides
+  again when the input is contiguous (ninth pass, above) fixed all three: on the
+  CPU gate `::test` and `::test5` pass and `test_reduce_with_merge_loop_var`
+  passes, so the native smoke tier is green. (Their CUDA twins are skipped there
+  -- the gate has no GPU -- and this entry does not claim them.) They were never
+  this entry's guard, and the blocked reduction was never the cause.
+- Direction: keep the view for non-fused consumers, but in a *fused* kernel
+  express a strided operand's index in loop ids with the masked axes' strides
+  folded to zero at compile time (`YSMASK` is already in the jit key), so the
+  compiler hoists the invariant terms and the merge pass sees a linear index
+  again. Then re-derive the expected merge structure and update the tests.
+- **The other half of the same lever, landed 2026-09-23 (ninth pass): a
+  *contiguous* operand should not be expressed through `storage_stride` at all.**
+  `Var::storage_stride(i)` returns the shape-derived row-major product exactly
+  when the var carries no explicit stride vector, and `Var::is_contiguous()` is
+  true precisely then, so for a contiguous input the run-time read is the same
+  number written in a form the compiler cannot fold. `binary_op`, `unary_op` and
+  `ternary_op` already gate the read on an `XSTRIDED` jit-key bit and fall back
+  to `i` (or to the shape chain) when it is 0; `ReduceOp` never did, and that is
+  what `7e83d6da` broke in it (see the ninth pass at the top). It is fixed there
+  now, and the reduce merges came back. The same ungated read is still present in
+  two ops, left alone here because neither has a failing guard nor a measured
+  cost, and reindex is deliberately excluded from the merge pass
+  (`src/codegen/opt/pass/merge_loop_var_pass.cc:106` refuses a loop containing a
+  branch): `src/ops/reindex_op.cc:128` (`xstride`) and
+  `src/ops/reindex_reduce_op.cc:107` (`ystride`). `ContiguousOp`'s ungated read
+  (`src/ops/composite/contiguous_op.cc:32`) is *not* one of these -- its
+  constructor forwards and returns for a contiguous input, so it never sees one.
+  Apply the same shape when a reason appears.
+- **Measured again 2026-09-22, and the mechanism is now exact.** Interleaved,
+  repeated, minimum-of-15 on `64x64x64x64 + 1x64x1x1` (200 adds per sample, so
+  the per-call overhead is amortised; load average 14-16): jittor dense
+  **122.9 us/add**, jittor broadcast **914.8 us/add** -- **7.4x**, against NumPy
+  at 1.04x (0.0252 s vs 0.0262 s for the same shapes). The entry's 4.22x was
+  measured on a quieter box on 2026-09-16; the direction and the order of
+  magnitude both hold, and this is the number to quote now.
+  The generated kernel says why, exactly. The merged loop is a single
+  `id3` over `range0_1_2_3`, and the strided operand's index is recovered as
+
+      op0_yi = 0;
+      op0_yrem = op0_i;
+      op0_yrem /= op0_zstorage_shape3;                     // axis 3
+      op0_yrem /= op0_zstorage_shape2;                     // axis 2
+      op0_yi += (op0_yrem % op0_zstorage_shape1) * op0_ystride1;   // axis 1
+
+  -- **two divisions and a modulo per element** for an operand whose only
+  non-zero stride is on axis 1. The profiler on the same pair: dense 3.9 GB/s in
+  / 1.95 GB/s out, broadcast 1.39 / 0.71, i.e. the per-element integer work also
+  costs about 2.8x of the achieved bandwidth (it blocks vectorisation).
+  Quote 7.4x as the pre-fold number and **5.2x (636.5 us) as the current one**:
+  the arithmetic half of the fix landed the same day, see below.
+- Two things follow, and they are different sizes:
+  * **Arithmetic: landed 2026-09-22 in `3e8b4dfe`** (`binary_op.cc`, `unary_op.cc`,
+    `ternary_op.cc`) **and `3018c597`** (`composite/contiguous_op.cc`). Consecutive
+    `/shape` steps are folded into one division by the product of the shapes
+    above the axis, which the kernel already has, and axis 0 keeps its no-modulo
+    case. Measured on the same probe and protocol:
+    **914.8 -> 636.5 us per broadcast add** (dense arm unchanged at 122.9 us), so
+    the ratio is **7.4x -> 5.2x**; and `contiguous()` of a broadcast view
+    **1199.3 -> 647.2 us** (46% off), which is the other half of the same cost --
+    it was the one place that unflattened *every* axis with no stride mask in its
+    jit key at all, so a 4-dim view paid four divisions and four modulos to
+    compute an offset one axis determines. It now carries `«XSMASK=` in the key
+    and **deliberately has no `offset = i` shortcut**: this kernel can be handed a
+    view whose every stride is zero (a scalar broadcast), where `i` would index
+    past the four bytes the source owns -- the elementwise ops may take that
+    shortcut only because they know their input is contiguous in that branch.
+    Verified bit-exact: 46 broadcast patterns x float32/float64/int32 x
+    add/sub/mul x both operand orders, plus every 2^rank view of four base shapes
+    through `abs` and `where` (with an assertion that the kernel really took the
+    strided branch), plus every 2^rank broadcast, multi-axis stride slices,
+    transposes, ranks 1-4 and non-power-of-two shapes through `contiguous()`, plus
+    `tests/ops/{test_binary_op,test_broadcast_to_op,test_broadcast_index,test_unary_op,test_ternary_op,test_where_op,test_float64_unary_math,test_float64_unary_precision,test_reinterpret_view,test_reindex_op,test_reindex_reduce_op,test_slice,test_transpose_op,test_rank0_transpose}.py`
+    at 106 passed / 88 skipped / 0 failed and no change in the native smoke tier.
+  * **Structural, and what the remaining 5.2x needs**: the index needs no division
+    at all if the loop that carries the masked axis is *not* merged into the flat
+    one -- which is what the old shape was (`range2_3` under `id0,id1`, asserted
+    by `test_merge_loop_var_pass::test3`) and what
+    `test_reduce_with_merge_loop_var` counts as `tdim`.
+    **The IR, dumped 2026-09-22** (`jt.flags.log_v=1000`,
+    `log_vprefix="pass_manager=1000,loop_var_analyze=1000"`, on `[2,3,4,5] +
+    [1,3,1,1]`), says exactly where the decision is. The fused op's IR *enters*
+    the pass manager as a single flat loop with the recovery already in `i`:
+
+        for (op0_index_t op0_i = 0; op0_i<op0_num; op0_i++) {
+            op0_index_t op0_yi = 0;
+            op0_yi +=  (op0_i / op0_zabove1 % op0_zstorage_shape1) * op0_ystride1;
+            op0_zp[op0_i] = ((op0_xp[op0_xi])+(op0_yp[op0_yi]));
+        }
+
+    and *after* `LoopVarAnalyzePass` it is a four-level nest whose flat index is
+    reintroduced as a define:
+
+        for (op0_i0) for (op0_i1) for (op0_i2) for (op0_i3) {
+            op0_index_t op0_i = + op0_i0 * op0_zstride0 + op0_i1 * op0_zstride1
+                                + op0_i2 * op0_zstride2 + op0_i3 * op0_zstride3;
+            op0_yi +=  (op0_i / op0_zabove1 % op0_zstorage_shape1) * op0_ystride1;
+
+    The kernel that is finally compiled has one loop again (`range0_1_2_3`) with
+    `op0_i` reduced to `id3 * op0_zstride3`, so something in the split/merge
+    sequence puts the nest back together *and* the recovery stays `i`-based -- the
+    division is a consequence of the flattening, and an id-based alternative
+    (`op0_yi = op0_i1 * op0_ystride1`, which is what the old shape compiled to)
+    is available exactly while the nest is still a nest. That is the lever, and
+    it is why this is not a one-line change: `MergeLoopVarPass` decides the merge
+    from the *index defines themselves* (it matches
+    `id_a*range_b*d + id_b*d + c`, and `trace_and_expand`+`simplify` can rewrite
+    the division-based recovery into `i1*ystride1`, i.e. into the form that then
+    decides the merge), so teaching it to keep the masked axis' loop nested means
+    changing how that form is matched, with fused-op numerics at stake. A wrong
+    variant here fails as **silently wrong numbers**, which is why the guard is
+    kept red rather than the assertions rewritten to bless `range0_1_2_3`.
+    `MergeLoopVarPass` also checks defines ending in `id`/`_i`, and the recovery
+    is written to `yi`/`q@d`, so it sees no loop variable to respect and merges
+    every loop it can. A division per element is enough to stop vectorisation, so
+    this is the part that matters. That is why those tests fail: **they are the
+    cost's guard, not stale substring assertions** -- see the correction to
+    KI-TUNER-001's tail below.
+- Correction (2026-09-22) to what KI-TUNER-001's tail says about the same tests:
+  it calls `test_merge_loop_var_pass::test3` and four siblings "a stale substring
+  assertion, not a lost optimization". The numerics half of that is right (the
+  merge is correct, 0/10000 mismatches), but the merge *is* the lost
+  optimization: merging the masked axis away is what forces the per-element
+  divisions above. The two entries described the same tests as different things;
+  this entry's framing is the correct one, and the five cases stay red.
+
+## KI-TUNER-001: the matmul and conv relays never fire, so a hand-written meta-op product runs as a generic kernel
+
+- Severity: High (a supported operation runs orders of magnitude slower than
+  the library kernel that exists for it, with no error and no log)
+- Status: Open for the hand-written form; the paths users actually reach
+  (`jt.nn.matmul`, `nn.Linear`, `nn.Conv2d`) were routed around it on
+  2026-09-15 by registering the CPU rows of the kernel tables
+- **Split in two on 2026-09-22, and one half is fixed** (`ba729d39`):
+  * the **broadcast tuner was genuinely broken** and is fixed. It looked for
+    `op->type() == OpType::broadcast`, but an expand of more than one element is
+    a stride-0 *view* now (`OpType::other`) -- not a member of the fused op and
+    not that type -- so the tuner silently stopped running for every non-scalar
+    broadcast (the scalar case still sets `OpType::broadcast`, which is why only
+    that file's non-scalar case went red). It now recognises the view by its
+    *producer*: an input var of the fused op whose producer `is_op(broadcast_to())`.
+    `tests/codegen/test_broadcast_tuner.py` 5 passed.
+  * the **CPU relay cases measure the build, not the code**:
+    `test_matmul_tuner::test_matmul_tuner` and
+    `test_group_conv_tuner::{test_forward,test_backward}` find something to relay
+    *to* through `find_op_capability`, and the only CPU registration comes from
+    mkl (`backends/cpu/libraries/mkl/mkl_capabilities.cc`), which is compiled
+    into the core only with `use_mkl=1`. The gate is `use_mkl=0`: measured
+    2026-09-22, `jt.core.backend_capability_dtypes('cpu', ...)` returns `[]` for
+    `matmul`, `conv2d`, `random` and `transpose` alike, so the tuner declining is
+    the correct answer. They now `require_library("mkl")` and skip with a reason
+    that names the library, so the lost coverage shows up in the `environment`
+    bucket instead of as three failures. **This is not the entry closing**: on a
+    build that *does* register the capability they run again, and the relay still
+    cannot fire there -- see the mechanism below.
+- The mechanism, re-measured 2026-09-22 (the entry previously guessed at it):
+  with the `fop->has(...)` membership tests relaxed, the matmul tuner's *every*
+  other check passes -- the multiply is a member, both operand producers
+  `is_op(broadcast_to())`, the ranks are 3/2/2, the masks match -- and it stops
+  at exactly one place: `find_op_capability` returns nothing, because the build
+  registers no matmul implementation. So the recognition half is what the view
+  change broke, and the membership test is *not* by itself the blocker.
+  Relaxing it is a **landmine, not a fix**: on a build that does register the
+  capability the tuner would go on to `add_relay_group`, whose backward BFS
+  requires every operand of the relayed op to be a fused-op node
+  (`var_relay.cc:66`, `ASSERT(q.size()==2*group.size())`); the operands here are
+  the *broadcast sources*, which are no longer fused-op vars. That is the same
+  abort the entry recorded on 2026-09-17, and it is why the relaxation was
+  reverted rather than shipped.
+- Owner: compiler/tuner maintainers
+- Symptom: `MatmulTuner` and `ConvTuner` recognise a fused subgraph by asking
+  whether an operand's producer `is_op(broadcast_to())` *and* is a member of
+  the fused op. Neither holds any more. `BroadcastToOp` became a storage
+  descriptor -- `share_with` on the base, stride 0 on the broadcast axes,
+  `set_type(OpType::other)` -- so it no longer enters a fused op at all, and
+  the broadcast is expressed as strides on the binary op instead. Measured:
+  the fused key for a 2-D product is
+  `binary«…«DIM=3«XSTRIDED=1«YSTRIDED=1«XSMASK=3«YSMASK=6` plus `reduce«…`,
+  with no broadcast member, and the tuner reports
+  `Run tuner matmul: confidence(0) candidates({})`.
+- The declared-vs-actual gate notices it too, from the other side:
+  `tests/backends/cpu/test_onednn_contract.py` asks
+  `backend_capability_dtypes("cpu", "matmul")` what oneDNN claims and then
+  probes which implementation actually runs. It reports
+  "the capability declares ['float32'] but oneDNN's matmul actually ran for
+  []" -- because the shape it probes with is the broadcast/multiply/reduce
+  spelling, which its own docstring calls "the only form `MatmulTuner`
+  recognises". The declaration is right and the relay is what is missing.
+- Evidence: `tests/ops/test_matmul.py::TestMatmul::{test_matmul,
+  test_matmul_type,test_matmul_cuda,test_matmul_type_cuda}` (their
+  `check_matmul2` builds the product by hand out of `broadcast`/`*`/`sum`) and
+  `tests/backends/cpu/test_mkl_conv_op.py::TestMklConvOp::{test_forward,
+  test_backward,test_forward_nhwc_hwio,test_backward_nhwc_hwio}`, whose
+  `assert logs[0][0] == '20'` reads the conv tuner's confidence and gets `'0'`.
+  On CUDA, `tests/backends/cuda/test_cudnn_op.py::TestCudnnConvOp::{test,
+  test_backward}` run with `enable_tuner=1` and look for the
+  `Jit op key (not )?found: cudnn_conv…` line that only the relay emits.
+  `tests/backends/cuda/test_cuda_op_capabilities.py::{test_cuda_matmul_capability_relays_meta_operator_graph,
+  test_cuda_conv_capability_relays_meta_operator_graph}` build the product /
+  the convolution by hand out of `broadcast`/`reindex`/`*`/`sum` under
+  `compile_options={"_capability_matmul": 1}` (resp. `_capability_conv`) and
+  read the profiler for a `cublas_matmul` / `cudnn_conv` row: none appears.
+  `tests/codegen/test_conv_tuner.py::TestConvTuner::{test_forward,test_backward,
+  test_forward_cuda,test_backward_cuda}` are the tuner's own gate for the same
+  relay and fail the same way (`AssertionError: []`, no relayed row).
+  The broadcast tuner is a sixth face of the same change:
+  `src/codegen/opt/tuner/broadcast_tuner.cc:34` recognises its input by
+  `op->type() == OpType::broadcast`, which `BroadcastToOp` no longer is, so
+  `tests/codegen/test_broadcast_tuner.py::TestBroadcastTuner::test_broadcast_tuner`
+  never sees its `Run tuner broadcast: confidence(20)` line.
+  The tuners' own gates in `tests/codegen/` fail the same way:
+  `test_matmul_tuner.py::TestMatmulTuner::test_matmul_tuner` ("confidence of
+  reorder should be 20") and
+  `test_group_conv_tuner.py::TestGroupConvTuner::{test_forward,test_backward}`
+  (`assert 0 == 3` relayed kernels).
+  The profiler's relay accounting shows it from yet another side:
+  `tests/runtime/test_profiler.py::TestProfiler::test_profiler` compares the
+  `AvgTime` of the last two report rows to within 1e-3 -- which only ever
+  held for a fused op and the `mkl_matmul` the tuner relayed it to, recorded
+  as a pair -- and now finds a single `mkl_matmul` row (the CPU row the
+  workaround registers directly). `::test_marks` expects six rows for five
+  matmul calls under three marks and gets five; the relay row for the
+  unmarked context is the plausible sixth, unverified.
+- What it cost before the routing change, measured on this machine, float32:
+
+  | operation | jittor | reference | ratio |
+  | --- | --- | --- | --- |
+  | 1024-cube product | 3.5182 s | NumPy 0.0355 s | 99x |
+  | `8x64x56x56` * `64x64x3x3` | 0.1079 s | torch 0.0031 s | 35x |
+  | the same transposed, stride 2 | 2.4364 s | torch 0.0013 s | 1874x |
+
+  The transpose is the worst because the generic path's
+  `broadcast * broadcast -> reindex_reduce` is a scatter, not a gather.
+- Workaround (in tree): the CPU rows of the `matmul`, `conv2d` and
+  `conv_transpose2d` kernel tables now call `mkl_matmul` / `mkl_conv` /
+  `mkl_conv_backward_x` directly, the way the CUDA rows call cuBLAS and cuDNN,
+  so nothing depends on the pattern match. After: 0.0020 s, 0.0022 s and
+  0.0003 s. A product or convolution written out of meta-ops by hand still
+  gets the generic kernel.
+- A trap each of those three rows had to clear first: a library op that was
+  only ever reachable *as a relay* carries no gradient, because autograd ran
+  on the meta-op subgraph the relay stood in for. Put one in a forward graph
+  and it does not fail -- it silently returns a wrong gradient (measured:
+  `gx` relative error 1.0 on a batched `nn.Linear`). `MklMatmulOp`,
+  `MklConvOp` and `MklConvBackwardXOp` all needed `grad()` and the
+  `_needed_by_backward` flags added.
+- Measured 2026-09-17, by trying it: dropping the tuner's `fop->has(...)`
+  requirement on the two expands (they are still `BroadcastToOp` producers,
+  still carrying `x` and `bcast_mask` -- they are merely no longer *members*
+  of the fused op) does make the relay fire again. It then aborts inside the
+  relay machinery, which requires the relay op's operands to be fused-op
+  members in two separate places:
+  * `src/codegen/opt/var_relay.cc:66`, `ASSERT(q.size()==2*group.size())`
+    ("currently, we only support single op relay") -- the backward BFS from
+    the relay source stops at fused-op nodes, so it reaches exactly the relay
+    op and its output *only* when every operand is inside the fused op.
+    Observed failure: `var_relay.cc:66: [check failed: q.size()==2*group.size()]`
+    on `tests/ops/test_matmul.py::TestMatmul::test_matmul_type`.
+  * the `oprcs` loop below it, `ASSERT(fnodes.count(v))`, because
+    `relayed_members[i]` is a *fused-op node id*: that is the channel through
+    which the generated kernel hands an operand to the relay op. An operand
+    that is not a fused var has no id to put there.
+  With the expand a storage descriptor, the fused op's inputs are the stride-0
+  views and the underlying 2-D operands are not fused vars at all, so neither
+  requirement can be met by re-pointing the tuner. Two ways out, both real
+  work: (a) let a view expand join the fused op (`count_fuse` refuses every
+  edge touching an `OpType::other` op before it looks at `_force_fuse`), which
+  would also address KI-CODEGEN-001's per-element index cost; or (b) extend
+  the relay to carry operands that live outside the fused op -- a new sentinel
+  in `relayed_members` plus the execution support to pass such a var.
+- Why reviving the relay is not a one-line change: the relay substitutes a
+  fused-op var into the relay op's members at run time
+  (`OpRelayContext::set_var_member`). The fused op's vars are now the expanded
+  *views*, whose `mem_ptr` is right but whose shape is the broadcast shape, so
+  a library op that reads `a->shape` in `jit_run` would be handed rank 3 where
+  it needs rank 2. Matching the new form means teaching the tuner to read the
+  stride-0 axes and giving the relay a way to name the base rather than the
+  view.
+- A broadcast elementwise operation costs more than its dense counterpart,
+  which is the wrong way round. Measured on `64x64x64x64 + 1x64x1x1` on CPU:
+  jittor's broadcast add takes **4.22x** its own dense add of the same output
+  shape, where NumPy's takes **1.01x** -- and the broadcast reads *less*
+  memory, so it should if anything be the cheaper one. Jittor is still ~30x
+  faster than NumPy here in absolute terms, so this is a lost optimization
+  rather than a cliff, but bias add, normalisation scale and attention masks
+  are all this shape. **The mechanism is not established.** The obvious
+  suspect is that the non-zero stride is read at run time
+  (`op0_ystride1 = op0_y->storage_stride(1)`) where it used to be a compile-
+  time constant, which would block constant folding and vectorisation; that
+  has not been proven.
+- Not part of it, recorded here because it looks like it is:
+  `tests/codegen/test_merge_loop_var_pass.py::test3` asserts `"range2_3" in src`
+  for `a + x` with `x=[1,10,1,1]`, and it fails -- but the merge *does* happen,
+  and more aggressively than the assertion expects: the kernel collapses all four
+  dims into `range0_1_2_3`, which does not contain the substring `range2_3`.
+  Numerics were checked directly (`a + x` with distinct values, 0/10000
+  mismatches), and this is the only test in the file that is still red.
+  **Corrected 2026-09-22 (see KI-CODEGEN-001):** the numerics half stands, but
+  "not a lost optimization" does not. The aggressive merge is *what forces* the
+  per-element divisions that cost 7.4x on a broadcast add, so this case is the
+  cost's guard and stays red. Do not rewrite it to bless `range0_1_2_3`.
+  **Corrected 2026-09-23:** "and four siblings" was wrong. `::test` and `::test5`
+  also assert `range2_3`, and they were failing for an unrelated reason -- the
+  `ReduceOp` run-time-stride regression (see the ninth pass above). With the
+  strides derived again they pass, and `range2_3` is back in the reduce kernels
+  without any change to this entry. Only `::test3` (and its CUDA twin) is this
+  guard.
+- Exit condition: with `enable_tuner=1`, a hand-written `broadcast * broadcast
+  -> reduce` product on CPU emits a `mkl_matmul` jit op key and the conv
+  tuner's confidence is 20 again, with `tests/ops/test_matmul.py` and
+  `tests/backends/cpu/test_mkl_conv_op.py` green and no numerical change; and
+  a broadcast elementwise add costs about what its dense counterpart does.
+
+
+## KI-BACKEND-006: cublas_test / cudnn_test are dispatched to the host and have no kernel there
+
+- Severity: Medium (two library self-test ops cannot run; the libraries
+  themselves are fine)
+- Status: Open, reproduced, two repair attempts refuted -- see below
+- Symptom: `tests/backends/cuda/test_cublas_test_op.py` fails two of its three
+  classes with `op.cc:148: No kernel registered for cublas_test on cpu`
+  (likewise `cudnn_test`). The third class, `TestCubTestOp`, passes.
+- What distinguishes the one that works: `CubTestOp`'s constructor declares
+  `set_flag(OpFlags::_cpu, 0); set_flag(OpFlags::_cuda, 1);` and guards its
+  body with `#ifdef JIT_cuda`. `CublasTestOp` and `CudnnTestOp` declare no
+  backend at all and guard their bodies with `#ifdef JIT_cpu`, so they default
+  to the host, where `Op::implementation()` then finds nothing registered.
+- Two attempts, both measured and both reverted:
+  1. Adding only the two `set_flag` lines moves the op onto the accelerator,
+     and the CUDA build then produces a library with no `jit_run` in it:
+     `undefined symbol: _ZN6jittor12CublasTestOp7jit_runEv`. Consistent --
+     the body is still behind `#ifdef JIT_cpu`.
+  2. Adding the flags *and* switching the guard to `#ifdef JIT_cuda` made
+     things **worse**: 3 failed instead of 2, taking `TestCubTestOp` -- which
+     had been passing -- down with it. So the three ops are coupled through
+     something not visible in these three files (a shared generated OpInfo
+     unit is the obvious candidate) and the fix is not local to them.
+- Note: both entries (`cublas_test_entry`, `cudnn_test_entry`) are host
+  functions that drive the libraries through the CUDA runtime, so "host code"
+  does not by itself settle which backend the op belongs to.
+- Exit condition: all three classes in that file pass, with the mechanism
+  behind attempt 2's collateral damage understood rather than worked around.
+
+## KI-COMPAT-005: fixed -- `torch.div(..., rounding_mode=)` was unimplemented, which stopped Longformer
+
+- Status: Fixed 2026-09-22 in `e8105ecc`. Reproduced earlier the same day at
+  `4fa42270`: `AutoModel.from_config` on this suite's own tiny longformer config
+  died in the forward, at
+  `transformers/models/longformer/modeling_longformer.py:770` --
+
+      chunks_count = torch.div(seq_len, window_overlap, rounding_mode="trunc") - 1
+
+  with `RuntimeError: Wrong inputs arguments, Please refer to
+  examples(help(jt.ops.div)).` raised out of the native dispatch.
+- Cause: `torch.div` was published straight from `_NATIVE_NAMES` in
+  [`native_api.py`](../../compat/torch/native_api.py), i.e. it *was* `jt.div`,
+  which has no `rounding_mode`. Route (downstream-library-adaptation §0): the
+  capability exists -- `floor_divide`, `floor`, `round` -- and only the
+  *spelling* differs, so this belongs to `jittor.compat.torch`, not the core and
+  not an adapter.
+- Fix, in three parts that are each necessary: `"div"` and `"divide"` removed
+  from `_NATIVE_NAMES` (otherwise the native binding keeps the name); an adapted
+  `div` in [`installers/numerical/elementwise.py`](../../compat/torch/installers/numerical/elementwise.py)
+  registered for both spellings -- `None` is true division, `"floor"` is
+  `jt.floor_divide`, `"trunc"` rounds toward zero, computed in **integer**
+  arithmetic for an integral pair (floor corrected by one where the remainder is
+  non-zero and the signs differ) so it stays exact past the float32 mantissa;
+  and a **force-set** binding in `install()` (`g.div = div`), because
+  `_bind_missing` skips any name the module already has and would have bound
+  nothing. The adapter divides through a `_native_div` captured before install,
+  the way `_native_all`/`_native_any` already were -- after the force-set
+  `jt.div` *is* the adapter, so reaching for it would recurse. The invalid-mode
+  message mirrors torch's own wording.
+- The *method* spellings are part of the same fix: `x.div(y, rounding_mode=...)`
+  and `x.divide(...)` reach an auto-generated binary method that takes no such
+  keyword, so `Var.div`/`Var.divide` are bound to an adapter forwarding to the
+  same function (`82a8d67c`). Verified against the oracle for int32/float32 x
+  {None, "trunc", "floor"} on both spellings, twelve rows, values and dtypes
+  identical. `div_`/`divide_` stay on the native path and `true_divide` takes no
+  `rounding_mode` in torch either.
+- The same code path held a second gap, also fixed here: `torch.masked_fill` was
+  missing from the sealed facade (`AttributeError` out of the namespace proxy)
+  even though Jittor's own `jt.masked_fill` is already the same selection
+  (`jt.ternary(mask, value, x)`), broadcasting mask and output dtype included.
+  Publishing it is the whole fix, and `_bind_missing` cannot do it for the same
+  reason as `div`. That both gaps sat on one path is why the architecture could
+  not take a single forward pass.
+- Evidence, measured against **real torch 2.13** (the oracle venv, CPU) for
+  int32 and float32 over `7,-7` divided by `3,3,-3,-3`:
+
+  | dtype | mode | real torch | shim |
+  | --- | --- | --- | --- |
+  | int32 | `None` | float32 `2.33,-2.33,-2.33,2.33` | same |
+  | int32 | `"trunc"` | int32 `2,-2,-2,2` | same |
+  | int32 | `"floor"` | int32 `2,-3,-3,2` | same |
+  | float32 | `None` | float32 `2.33,-2.33,-2.33,2.33` | same |
+  | float32 | `"trunc"` | float32 `2.0,-2.0,-2.0,2.0` | same |
+  | float32 | `"floor"` | float32 `2.0,-3.0,-3.0,2.0` | same |
+
+  Every row agrees in value *and* dtype; `torch.divide` agrees with `torch.div`;
+  the scalar form Longformer calls (`div(16,4)`, `div(8,3)`, `div(-8,3)`) is
+  right; and the invalid-mode message matches. Suite: `test_torch_hf_models.py`
+  6 passed / 44 subtests, `compat/tests/structure` plus the two `tests/structure`
+  surface gates 121 passed / 408 subtests, and the whole torch half of the
+  gate 1480 passed / 0 failed.
+- Guard: the model-level outcome is what the suite pins
+  (`test_torch_hf_models.py::test_forward_and_eval_determinism[longformer]`);
+  the six-row probe lives in this entry's evidence rather than in the tree.
+
+## KI-COMPAT-006: `load_state_dict` shares the source's Vars, and an in-place optimizer then moves both models
+
+- Severity: High on CUDA (silent: a second model -- an EMA copy, a
+  reference model -- trains along with the first).
+- Status: Open. Found 2026-09-25 while comparing a captured training step
+  against an eager twin.
+- Owner: torch compatibility / optimizers
+- Symptom: after `b.load_state_dict(a.state_dict())` on CUDA, one
+  `torch.optim.AdamW(a.parameters()).step()` changes `b`'s weights too. On
+  CPU it does not. PyTorch copies in `load_state_dict`, so the two are
+  independent there.
+- Mechanism: loading binds `b`'s parameters to the very Vars `a` holds, which
+  is harmless while every update produces a new Var. The fused CUDA AdamW
+  (`src/ops/composite/fused_adamw_op.cc`) writes its results into the
+  parameters' own storage (`share_with`), so whatever else holds those Vars
+  sees the write. The per-parameter CPU path builds new Vars and does not.
+- Repro: `a, b = nn.Linear(2, 2, device="cuda"), nn.Linear(2, 2, device="cuda")`;
+  `b.load_state_dict(a.state_dict())`; a backward and an AdamW step on `a`;
+  `(a.weight == b.weight).all()` is True.
+- Workaround: copy through the host, e.g.
+  `p.copy_(torch.tensor(src.cpu().numpy(), device=src.device))`.
+
+## KI-COMPAT-007: `w.copy_(x)` under `no_grad` loses `w`'s gradient when `x` requires grad
+
+- Severity: Medium (silent: `w.grad` stays None after a backward).
+- Status: Open. Found 2026-09-25.
+- Owner: torch compatibility / autograd
+- Symptom: `w = torch.randn(4, 8, requires_grad=True)`; `with torch.no_grad():
+  w.copy_(x)` where `x` requires grad; a later backward through `w` leaves
+  `w.grad` None. With an `x` that does not require grad it works. PyTorch
+  keeps `w` a leaf that accumulates a gradient in both cases.
+- Workaround: `w = x.detach().clone().requires_grad_(True)`.
+
+## KI-COMPAT-008: `torch.optim.SGD` rejects `foreach=` and `fused=`
+
+- Severity: Low (an import-time `TypeError`, not a silent one).
+- Status: Open. Found 2026-09-25.
+- Owner: torch compatibility / optimizers
+- Symptom: `torch.optim.SGD(params, lr=..., foreach=False)` raises
+  `TypeError: initialize_sgd() got an unexpected keyword argument 'foreach'`,
+  and the same for `fused=`. Both are ordinary PyTorch arguments; the native
+  SGD already has a `fused` switch of its own that they could map onto.
+
+## KI-TEST-007: `test_fused_op_relay_matmul` fails after profiler or graph-replay tests in the same process
+
+- Severity: Low (a C++ unit test red depending on what ran before it; no wrong
+  result outside the test)
+- Status: Open. Found 2026-09-26; reproduced on `75aa9977` unchanged, so it
+  predates the capture memory work it was found during.
+- Owner: codegen / test infrastructure
+- Symptom: `codegen/test_jit_tests.py::TestJitTests::test_fused_op_relay_matmul`
+  passes alone and with its own file, and fails with
+  `[check failed: cm.size()>=2]` when `runtime/test_step_profile.py`,
+  `runtime/test_profiler.py` or `nn/test_graph_replay_multi_output.py` ran
+  earlier in the same pytest process. `backends/cuda/test_batch_releases_memory.py`
+  before it does not trigger it.
+- Suspected: process state one of those files leaves behind (a CUDA flag or a
+  JIT cache entry) that `src/tests/test_op_relay.cc` depends on without setting;
+  not isolated.
+- Workaround: run the file in its own process.
+
+## KI-TEST-008: `test_cudnn_op.py` finds no `cudnn_conv` JIT key in its captured log
+
+- Severity: Low (two assertions about a log line; the value checks next to
+  them pass)
+- Status: Open. Found 2026-09-28; fails the same way on `542d6e97`, with a
+  fresh `JITTOR_HOME` as with a warm one, so it predates the allocator and
+  layout work it was found during.
+- Owner: cuDNN backend / test infrastructure
+- Symptom: `backends/cuda/test_cudnn_op.py::TestCudnnConvOp::test` and
+  `::test_backward` fail on `assert len(logs)==1 and "oihw" in logs[0][0]`
+  with `logs == []`: under `log_capture_scope(enable_tuner=1,
+  log_vprefix="op.cc=100")` no `Jit op key (not )found: cudnn_conv` line is
+  captured, while the tuned result still matches the CPU reference.
+- Suspected: the tuner no longer rewrites the reindex convolution into
+  `cudnn_conv` on this path, or the log line moved; not isolated.
+- Workaround: none needed for results; the value assertions in the same tests
+  pass.
+
+## KI-TEST-009: two `test_torch_compat_optim.py` cases fail on device placement
+
+- Severity: Medium (a device-placement disagreement in the compat optimizer
+  path; the two cases fail, the other 21 in the file pass)
+- Status: Open. Found 2026-09-28; fails the same way on `542d6e97` and on
+  `14ac0397`, with one GPU visible or all, so it predates the optimizer host
+  work it was found during.
+- Owner: torch compatibility / optimizer
+- Symptom: `TestSGD::test_native_backward_does_not_double_advance_step` dies in
+  `method_api.py` `_binary_native` with `device_copy_op.cc:130: Expected all
+  tensor inputs on the same backend and device`;
+  `TestAdam::test_bound_initializers_inside_no_grad_keep_parameter_trainable`
+  fails `assert_stays_on_device` with `'cpu' != 'device'`.
+- Suspected: a tensor created on the host (an initializer or a split
+  optimizer's state) meeting a device-placed parameter; not isolated.
+- Workaround: none in the tests; real training steps run on one placement and
+  do not reach it.
+
+## KI-TEST-010: three `test_torch_compat_norm.py` LayerNorm fast-path cases fail
+
+- Severity: Low (the CUDA no-grad LayerNorm is not taking the fused path these
+  tests pin; values elsewhere in the file pass)
+- Status: Open. Found 2026-09-28; fails the same way on `542d6e97` and on
+  `76bbcb33`, so it predates the batch-norm work it was found during.
+- Owner: torch compatibility / normalization kernels
+- Symptom: `TestLayerNorm::test_ln_no_grad_cuda_fast_path_float32_and_float16`
+  (`CUDA no-grad LayerNorm missed its fused path`),
+  `test_ln_no_grad_cuda_dynamic_rows_share_source` (`0 != 2`) and
+  `test_ln_no_grad_cuda_bfloat16_private_opt_in` (`'NoneType' object has no
+  attribute 'float32'`).
+- Suspected: the fused LayerNorm kernel's selection changed under the torch
+  frontend without these tests following; not isolated.
+- Workaround: none needed for results.
+
+## KI-EXEC-008: the CUDA convolution test files intermittently abort on a forward liveness underflow
+
+- Severity: Medium (a whole pytest process aborts, taking its summary with it)
+- Status: Open. Found 2026-09-27; reproduced on `a57fb6af` unchanged, so it
+  predates the convolution filter cache it was found while testing.
+- Owner: core node liveness (the same counters as the board's
+  `backward liveness release without a matching owner` entries)
+- Symptom: `pytest nn/test_*conv*.py backends/cuda/test_cudnn_conv_a*.py
+  backends/cuda/test_cudnn_conv_p*.py` on CUDA aborts with `node.h:287: forward
+  liveness release without a matching owner [check failed: value_ > 0]` in
+  about half the runs: at interpreter exit after every test passed, or in the
+  middle of `test_cudnn_conv_backward_source.py`'s conv-transpose reference.
+  Any single file, any pair, and the five files before it together passed every
+  time; only the full selection trips it, so it depends on collection timing.
+- Workaround: run the files in separate processes.

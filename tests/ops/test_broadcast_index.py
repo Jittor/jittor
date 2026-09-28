@@ -5,11 +5,21 @@
 # ***************************************************************
 """An index Var that is a strided view must be read through its strides.
 
-``jt.zeros(shape, dtype)`` is ``unary(0, dtype).broadcast(shape)``, and a
-broadcast is a *storage descriptor*: ``BroadcastToOp::infer_shape`` gives the
-output zero strides and shares the producer's allocation, so a ``(4, 5)``
-int64 index Var of that shape is backed by **eight bytes**, not one hundred and
-sixty.
+A broadcast is a *storage descriptor*: ``BroadcastToOp::infer_shape`` gives the
+expanded axes a zero stride and shares the producer's allocation, so a
+``(4, 5)`` int64 index Var built by expanding a five-element row is backed by
+**forty bytes**, not one hundred and sixty.
+
+This file used to build that view as ``jt.zeros(shape, dtype)``, which was
+``array(0).broadcast(shape)`` and therefore backed by *eight* bytes. That is no
+longer so, and the reason is not a change of mind about expands: a one-element
+source now keeps the computed form, because describing it as a view made
+``jt.zeros`` a tensor whose buffer was not its shape, and anything writing
+through its pointer -- a cuSPARSE dense output, say -- silently lost the write
+(see ``tests/core/test_constant_tensor_storage.py``). So the premise moved to a
+multi-element source, which is an expand there is a reason to describe as a
+view: the overshoot of a dense walk is three quarters of the index rather than
+nineteen twentieths, and everything below still distinguishes the defect.
 
 The ``getitem``/``setitem`` kernels read index Vars as if they were dense --
 ``vp[i0*oshape1 + i1]``, with the strides derived from the *output* shape --
@@ -59,6 +69,15 @@ class TestBroadcastIndexCpu(unittest.TestCase):
         """``a[r, c] == 100*r + c``, so a value names the row it came from."""
         return (100 * np.arange(4)[:, None] + np.arange(width)[None, :]).astype("float32")
 
+    def _zero_index(self, width, dtype="int64"):
+        """A ``(4, width)`` all-zero index that really is a strided view.
+
+        Expanding a *row* of zeros, not a single zero: the one-element expand
+        keeps the computed form now, so building the index the way this file
+        used to would hand every case below a dense buffer and test nothing.
+        """
+        return jt.array(np.zeros(width, dtype=dtype)).broadcast((4, width))
+
     def test_a_pure_broadcast_is_a_strided_view(self):
         """The premise. If this stops holding, the rest of the file stops testing.
 
@@ -68,11 +87,21 @@ class TestBroadcastIndexCpu(unittest.TestCase):
         without exercising anything.
         """
         with jt.flag_scope(use_cuda=self.device_flag):
-            idx = jt.array(np.zeros(1, dtype="int64")).broadcast((4, 5))
+            idx = self._zero_index(5)
             self.assertFalse(idx._storage_is_contiguous(),
                              "broadcast no longer produces a strided view; "
                              "this file's premise is gone")
-            self.assertEqual(list(idx._storage_strides()), [0, 0])
+            # the expanded axis carries the zero stride; the kept axis is dense
+            self.assertEqual(list(idx._storage_strides()), [0, 1])
+
+    def test_a_one_element_expand_is_not_a_view(self):
+        """The other half of the premise, so the move above cannot be undone
+        silently: `jt.zeros` owns a buffer of its own shape, which is why this
+        file may no longer build its index out of one."""
+        with jt.flag_scope(use_cuda=self.device_flag):
+            dense = jt.zeros((4, 5), "int64")
+            self.assertTrue(dense._storage_is_contiguous())
+            self.assertEqual(list(dense._storage_strides() or [5, 1]), [5, 1])
 
     def test_gather_through_a_broadcast_index(self):
         for width in WIDTHS:
@@ -81,7 +110,7 @@ class TestBroadcastIndexCpu(unittest.TestCase):
                     with jt.flag_scope(use_cuda=self.device_flag):
                         a_np = self._source(width)
                         got = jt.gather(jt.array(a_np), 0,
-                                        jt.zeros((4, width), dtype=dtype)).numpy()
+                                        self._zero_index(width, dtype)).numpy()
                     np.testing.assert_array_equal(
                         got, np.broadcast_to(a_np[0], (4, width)),
                         "gather read a row other than 0 for an all-zero "
@@ -90,28 +119,30 @@ class TestBroadcastIndexCpu(unittest.TestCase):
     def test_a_broadcast_index_reads_its_own_element(self):
         """Heap-independent: the wrong answer is a *known* pattern, not garbage.
 
-        ``base[0:1]`` is a one-element view of a 20-element buffer holding
-        ``[0,1,2,3,0,...]``. Broadcasting it to ``(4, 5)`` leaves every logical
-        element equal to ``base[0] == 0``, so every gathered value must come
-        from row 0. A kernel walking the index densely instead reads
-        ``base[0..19]`` and returns rows ``0,1,2,3,0,...``.
+        ``base[0:5]`` is a five-element view of a 20-element buffer holding
+        ``[0,1,2,3,0,1,...]``. Expanding it to ``(4, 5)`` makes every row equal
+        to ``[0,1,2,3,0]``, so every row of the gather must be that. A kernel
+        walking the index densely instead reads ``base[r*5 + c]`` and returns a
+        *different* row pattern for each ``r`` -- no heap state can make the two
+        agree.
         """
         with jt.flag_scope(use_cuda=self.device_flag):
             a_np = self._source(5)
             base = jt.array((np.arange(20) % 4).astype("int64"))
-            idx = base[0:1].broadcast((4, 5))
+            idx = base[0:5].broadcast((4, 5))
+            self.assertFalse(idx._storage_is_contiguous())
             rows = (jt.gather(jt.array(a_np), 0, idx).numpy() // 100).astype(int)
         np.testing.assert_array_equal(
-            rows, np.zeros((4, 5), dtype=int),
+            rows, np.tile((np.arange(5) % 4).astype(int), (4, 1)),
             "the index kernel walked the index Var's neighbours in memory "
-            "instead of its own single element (KI-OPS-009)")
+            "instead of its own five elements (KI-OPS-009)")
 
     def test_setitem_through_a_broadcast_index(self):
         """The write side, which was an out-of-bounds *write* before the check."""
         with jt.flag_scope(use_cuda=self.device_flag):
             x = jt.zeros((4, 5), "float32")
             columns = jt.array(np.tile(np.arange(5), (4, 1)))
-            x[jt.zeros((4, 5), "int64"), columns] = jt.ones((4, 5), "float32")
+            x[self._zero_index(5), columns] = jt.ones((4, 5), "float32")
             got = x.numpy()
         expect = np.zeros((4, 5), "float32")
         expect[0, :] = 1.0
@@ -124,7 +155,7 @@ class TestBroadcastIndexCpu(unittest.TestCase):
         spelling real code reaches the defect through."""
         with jt.flag_scope(use_cuda=self.device_flag):
             got = jt.zeros((4, 5), "float32").scatter_add(
-                0, jt.zeros((4, 5), "int32"), jt.ones((4, 5), "float32")).numpy()
+                0, self._zero_index(5, "int32"), jt.ones((4, 5), "float32")).numpy()
         expect = np.zeros((4, 5), "float32")
         expect[0, :] = 4.0
         np.testing.assert_array_equal(

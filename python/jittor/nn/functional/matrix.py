@@ -6,6 +6,32 @@ from jittor._runtime.dispatch import register_kernel, select_kernel
 from jittor._runtime.backend_libraries import get_library_ops
 
 
+#: The AMP register the generic ``(a * b).sum(axis)`` contraction runs under.
+#:
+#: ``keep_reduce`` is what keeps the *output* at the operands' dtype: without it
+#: ``reduce_dtype_infer`` widens any float reduce to float32, and a float16
+#: matmul would hand back float32.
+#:
+#: ``reduce16_no_fp32_acc`` used to be set beside it, and that bit is a
+#: different question -- it switches off the float32 *intermediate* in
+#: ``ReduceOp``'s constructor (``src/ops/reduce_op.cc:256``), so the K-long
+#: contraction was summed in float16/bfloat16 with nothing to compensate it.
+#: cuBLAS never does that: ``cublas_compute_type.h`` asks for
+#: ``CUBLAS_COMPUTE_32F`` for both half types, and
+#: ``src/runtime/float32_precision.h`` writes the rule down as "float16 and
+#: bfloat16 always accumulate in float32". So the same product was computed two
+#: ways depending only on whether a cuBLAS relay happened to take it -- on CPU,
+#: where it never does, a 128x512x128 float16 product was 1.674e-1 from the
+#: exact value against real torch 2.13's 7.759e-3, and bfloat16 was 1.242
+#: against 6.175e-2. Both are ~21x, and it grows with K.
+#:
+#: Dropping the bit costs a float32 buffer for the contracted operand. That is
+#: the already-slow fallback path; the accelerated relays never reach here.
+def _contraction_scope():
+    """``flag_scope`` for the generic contraction. One spelling, three callers."""
+    return jt.flag_scope(amp_reg=jt.flags.amp_reg | jt.amp_flags.keep_reduce)
+
+
 def _broadcast_batch_dims(a, b):
     """Broadcast the leading batch dims of two tensors with equal ndim>=3 to a
     common shape (torch matmul/bmm semantics), leaving the trailing two (matrix)
@@ -38,11 +64,16 @@ def _broadcast_batch_dims(a, b):
 #: | ------------------------- | ------ | ---------------------------------- |
 #: | cublas_matmul (2-D)       | CUDA   | both operands the same float dtype |
 #: | cublas_batched_matmul     | CUDA   | both operands the same float dtype |
+#: | mkl_matmul (2-D)          | CPU    | both operands float32, both dense  |
 #: | mkl_batched_matmul        | CPU    | both operands float32              |
 #: | broadcast * mul + reduce  | any    | everything else, complex included  |
 #:
 #: Four call sites used to spell the cuBLAS row four different ways -- see
 #: ``_cublas_can_take``.
+#:
+#: "Same float dtype" is the *relay's* requirement, not the caller's: a pair
+#: that differs is resolved to one dtype before the relay is asked again, so it
+#: does not drop to the generic row. See ``_mixed_float_compute_dtype``.
 
 
 def _same_floating_dtype(a, b):
@@ -88,8 +119,82 @@ def _cublas_batched_matmul(a, b, trans_a=False, trans_b=False):
     return get_library_ops("cublas").cublas_batched_matmul(a, b, trans_a, trans_b)
 
 
+def _amp_retypes_output_to_half():
+    """True when the AMP policy in force will give this product a half output.
+
+    Read off ``amp_reg``, which is the register dtype inference actually
+    consults, and not off ``auto_mixed_precision_level``, which is only one of
+    the two ways that register gets written. ``torch.autocast`` sets ``amp_reg``
+    directly -- ``compat/torch/grad.py::_refresh_amp_register`` -- and never
+    touches the level, so a guard on the level was blind to every autocast
+    region: a ``torch.autocast("cpu")`` training step died in the *backward*
+    with ``mkl_matmul_op.cc:30: support float32 only now``, which is precisely
+    the failure the comment in ``_supports_mkl`` predicts.
+
+    ``prefer16``, not "any non-zero register". Level 3 sets
+    ``keep_reduce | keep_white``, which does not retype anything to a half, and
+    declining oneDNN there was a 99x slowdown bought for nothing.
+    """
+    return bool(int(jt.flags.amp_reg) & jt.amp_flags.prefer16)
+
+
+def _supports_mkl(a, b, trans_a=False, trans_b=False):
+    """oneDNN's 2-D relay: float32, and both operands actually dense.
+
+    The generic row this stands in front of is not a fallback in name only --
+    measured on this machine, a 1024-cube float32 product runs 3.52 s through
+    ``broadcast * mul + reduce`` against 0.036 s for the same product in NumPy,
+    99x. The CPU row used to be reached by ``MatmulTuner`` relaying the fused
+    ``broadcast * mul + reduce`` subgraph to ``mkl_matmul`` instead, which is
+    why no kernel was registered here; that relay has been dead since expand
+    became a storage descriptor (``BroadcastToOp`` is ``OpType::other`` now, so
+    the tuner's ``is_op(broadcast_to())`` pattern never matches inside a fused
+    op). Registering the row makes the CPU reach oneDNN the same way CUDA
+    reaches cuBLAS, without depending on a pattern match over the fused graph.
+
+    Rank and density are this predicate's own requirements, not the dtype
+    rule's. ``CublasMatmulOp`` takes a rank>2 operand and flattens it, so the
+    callers that hand one to ``_matmul_2d_cublas`` -- ``matmul``'s
+    ``len_b == 2 and len_a > 2`` branch and ``matmul_transpose``'s reshape
+    branch -- are written for that; ``MklMatmulOp::infer_shape`` asserts rank 2
+    instead, and the assert aborts rather than declining. Answering no here
+    sends those callers down their own reshape path, which arrives back as a
+    rank-2 product. Likewise ``MklMatmulOp::jit_run`` hands ``a->mem_ptr`` to
+    ``onednn_matmul_execute`` with the shape alone, so a strided view would be
+    read as though it were dense and silently give a wrong product.
+    """
+    if a.dtype != b.dtype or _jittor_dtype_name(a.dtype) != "float32":
+        return False
+    if len(a.shape) != 2 or len(b.shape) != 2:
+        return False
+    if not (a._storage_is_contiguous() and b._storage_is_contiguous()):
+        return False
+    if _amp_retypes_output_to_half():
+        # Same trap `MatmulTuner` declines for, and for the same reason: auto
+        # mixed precision retypes the *output* to float16 while the operands
+        # stay float32, so an op that is float32 through and through cannot
+        # stand in. Here it does not surface in the forward -- it surfaces one
+        # step later, when `MklMatmulOp::grad` builds its own op out of a
+        # cotangent that came back float16 and `mkl_matmul_op.cc` asserts
+        # "support float32 only now". The generic path already writes the
+        # requested output dtype, so leave it in place.
+        return False
+    ops = get_library_ops("mkl", load=True)
+    return ops is not None and hasattr(ops, "mkl_matmul")
+
+
+def _mkl_matmul(a, b, trans_a=False, trans_b=False):
+    return get_library_ops("mkl").mkl_matmul(a, b, trans_a, trans_b)
+
+
 def _supports_mkl_batched(a, b, trans_a=False, trans_b=False):
     if a.dtype != b.dtype or _jittor_dtype_name(a.dtype) != "float32":
+        return False
+    if _amp_retypes_output_to_half():
+        # `MklBatchedMatmulOp::grad` builds its own op out of the cotangent the
+        # same way the 2-D one does, so it walks into the same assert. The two
+        # rows of the table have to decline together or `bmm` and `matmul` on
+        # identical operands stop agreeing about which relay they can use.
         return False
     ops = get_library_ops("mkl", load=True)
     return ops is not None and hasattr(ops, "mkl_batched_matmul")
@@ -122,31 +227,39 @@ def _check_matmul_shapes(a, b, trans_a=False, trans_b=False, op="matmul"):
     loads the routing functions of this file by name through the AST, so a
     private function called from here would have to be named there too.
     """
-    def describe(name, var):
-        return "%s:%s%s" % (name, var.dtype, list(var.shape))
-
-    if a.ndim == 0 or b.ndim == 0:
+    # The message formatter used to be a nested `describe`, i.e. a closure built
+    # on every call -- including the successful ones, which are all of them in a
+    # model. It is now inlined into the two error paths; the text is unchanged.
+    a_ndim = a.ndim
+    b_ndim = b.ndim
+    if a_ndim == 0 or b_ndim == 0:
         raise RuntimeError(
-            "%s: both operands need at least 1 dim, but got %s (%d-D) and "
-            "%s (%d-D)" % (op, describe("a", a), a.ndim,
-                           describe("b", b), b.ndim))
-    a_axis = 0 if a.ndim == 1 else (-2 if trans_a else -1)
-    b_axis = 0 if b.ndim == 1 else (-1 if trans_b else -2)
+            "%s: both operands need at least 1 dim, but got a:%s%s (%d-D) and "
+            "b:%s%s (%d-D)" % (op, a.dtype, list(a.shape), a_ndim,
+                               b.dtype, list(b.shape), b_ndim))
+    a_axis = 0 if a_ndim == 1 else (-2 if trans_a else -1)
+    b_axis = 0 if b_ndim == 1 else (-1 if trans_b else -2)
     inner_a = a.shape[a_axis]
     inner_b = b.shape[b_axis]
     if inner_a != inner_b:
         raise RuntimeError(
-            "%s: shapes cannot be multiplied, %s and %s: dim %d of a is %d but "
-            "dim %d of b is %d, and the two contracted dims must be equal"
-            % (op, describe("a", a), describe("b", b),
+            "%s: shapes cannot be multiplied, a:%s%s and b:%s%s: dim %d of a is "
+            "%d but dim %d of b is %d, and the two contracted dims must be equal"
+            % (op, a.dtype, list(a.shape), b.dtype, list(b.shape),
                a_axis, inner_a, b_axis, inner_b))
+    # `shape[:-2]` is empty as soon as either operand has 2 dims or fewer, so
+    # the loop below cannot run then -- but it still built two slices, two
+    # reversed views, a zip and an enumerate to discover that, on every matrix
+    # product in every model. `nn.Linear` is exactly that shape.
+    if a_ndim <= 2 or b_ndim <= 2:
+        return
     for offset, (left, right) in enumerate(
             zip(reversed(a.shape[:-2]), reversed(b.shape[:-2]))):
         if left != right and left != 1 and right != 1:
             raise RuntimeError(
-                "%s: batch dims do not broadcast, %s and %s: dim %d is %d in a "
-                "and %d in b, which must be equal or 1 in one of them"
-                % (op, describe("a", a), describe("b", b),
+                "%s: batch dims do not broadcast, a:%s%s and b:%s%s: dim %d is "
+                "%d in a and %d in b, which must be equal or 1 in one of them"
+                % (op, a.dtype, list(a.shape), b.dtype, list(b.shape),
                    -3 - offset, left, right))
 
 
@@ -155,25 +268,50 @@ def matmul_transpose(a, b):
     returns a * b^T
     """
     _check_matmul_shapes(a, b, trans_b=True, op="matmul_transpose")
-    if len(a.shape) != 2:
-        aa = a.reshape((-1, a.shape[-1]))
-        cc = jt.nn.matmul_transpose(aa, b)
-        return cc.reshape(a.shape[:-1] + (-1,))
+    if b.ndim > 2:
+        # Preserve batch axes and let the shared matmul route broadcast them.
+        axes = list(range(b.ndim))
+        axes[-1], axes[-2] = axes[-2], axes[-1]
+        return jt.nn.matmul(a, b.transpose(axes))
     if len(b.shape) != 2:
         raise RuntimeError(
             "matmul_transpose: b must be 2-D once a is, but got "
             "a:%s%s and b:%s%s" % (a.dtype, list(a.shape),
                                    b.dtype, list(b.shape)))
+    # A batched `a` is flattened and the result un-flattened, but by falling
+    # through rather than recursing into this function. A recursive branch for
+    # exactly this case used to sit above the `b` rank check, and it undid the
+    # optimisation below: every `nn.Linear` on a batched input -- which is
+    # every transformer layer -- took it, paid `_check_matmul_shapes` twice and
+    # both reshapes, and measured ~12 us more host time per call than the
+    # fall-through. The two are equivalent; only this one is cheap.
+    restore = None
+    if len(a.shape) != 2:
+        # The 2-D kernel reads `a` as its flattened `(prod(leading), m)`, which
+        # for a dense row-major buffer is the same pointer and the same leading
+        # dimension -- so hand it the rank it already has instead of reshaping
+        # into rank 2 and back out. Those two reshapes are pure views that
+        # generate no code, but a graph node each, and measured 5.8 of the 7.9
+        # us this function costs per call. `> 2`, not `!= 2`: a rank-1 `a`
+        # reaches here too and its flattening is `(1, m)` -- a row the reshape
+        # has to add, not a rank the kernel can read off the buffer. A strided
+        # `a` is not described by the flattening and keeps the reshape.
+        if len(a.shape) > 2 and a._storage_is_contiguous():
+            fast = _matmul_2d_cublas(a, b, 0, 1)
+            if fast is not None:
+                return fast
+        restore = a.shape[:-1] + (-1,)
+        a = a.reshape((-1, a.shape[-1]))
     fast = _matmul_2d_cublas(a, b, 0, 1)
     if fast is not None:
-        return fast
+        return fast if restore is None else fast.reshape(restore)
 
     shape = list(a.shape)[:-1] + list(b.shape)
-    with jt.flag_scope(amp_reg=jt.flags.amp_reg | jt.amp_flags.keep_reduce
-                      | jt.amp_flags.reduce16_no_fp32_acc):
+    with _contraction_scope():
         a = a.broadcast(shape, [len(shape) - 2])
         b = b.broadcast(shape)
-        return (a * b).sum(len(shape) - 1)
+        out = (a * b).sum(len(shape) - 1)
+    return out if restore is None else out.reshape(restore)
 
 
 def bmm_transpose(a, b):
@@ -186,12 +324,11 @@ def bmm_transpose(a, b):
             "dim and a matrix), but got a:%s%s and b:%s%s"
             % (a.dtype, list(a.shape), b.dtype, list(b.shape)))
     _check_matmul_shapes(a, b, trans_b=True, op="bmm_transpose")
-    # The amp_reg scope is matmul's and matmul_transpose's too. It is what tells
-    # the reduce in the generic path below to keep its input dtype rather than
-    # accumulate in float32, so leaving it off here made the same product depend
-    # on which of the two names the caller reached for.
-    with jt.flag_scope(amp_reg=jt.flags.amp_reg | jt.amp_flags.keep_reduce
-                      | jt.amp_flags.reduce16_no_fp32_acc):
+    # The same scope as `matmul` and `matmul_transpose`. It is what tells the
+    # reduce in the generic path below to hand back the operands' dtype rather
+    # than the float32 it accumulates in, so leaving it off here made the same
+    # product depend on which of the three names the caller reached for.
+    with _contraction_scope():
         kernel = select_kernel("batched_matmul", a, b, 0, 1)
         if kernel is not None:
             return kernel(a, b, 0, 1)
@@ -234,11 +371,81 @@ def baddbmm(input, batch1, batch2, beta=1, alpha=1):
     return beta * input + res
 
 
+def _mixed_float_compute_dtype(a, b):
+    """Single dtype to compute a *mixed* floating pair in, or ``None``.
+
+    cuBLAS takes both operands in one dtype, and the registered rows are
+    selected on the operands' own dtypes (``_same_floating_dtype``), so a pair
+    with two different floating dtypes matched no kernel and fell through to a
+    caller's fallback. For the two matrix routes that fallback is the
+    outer-product form -- ``matmul_transpose`` builds ``a.shape[:-1] +
+    b.shape`` and reduces it, which is ``[B, out, in]`` *materialized*.
+
+    That is not a corner case. ``torch.autocast`` hands exactly this pair to
+    every ``nn.Linear`` whose weights were pre-cast to float16, which is what
+    vLLM-Omni's H3 video VAE does to its decoder blocks: float32 activations
+    against float16 weights. The measured cost at 512x2048x6144 was 53.6 ms
+    against cuBLAS's 0.5 ms (107x), and at the VAE's real 1797 rows the
+    temporary is 86 GiB -- the encode/decode died there with an accelerator
+    out-of-memory it could not recover from, and the run that did fit spent
+    671 s of its 710 s inside it.
+
+    Which dtype to resolve to:
+
+    * inside an autocast/AMP region, the precision that region asked for --
+      float16, or bfloat16 when an operand already is (that is what
+      ``amp_prefer16`` means in ``src/type/nano_string.h``). This reproduces
+      torch: autocast casts a float32 activation to the autocast dtype before
+      the product, so a float16 result is what the model expects to get back,
+      and the H3 VAE's bit-exact residual kernel requires it;
+    * outside one, the pair's promoted type, widest first. Real torch raises
+      for a mixed float product, so any single dtype is an improvement on an
+      86 GiB temporary.
+
+    Returns ``None`` when the two already share a dtype or either is not
+    floating, leaving every existing route exactly as it was.
+    """
+    if a.dtype == b.dtype:
+        return None
+    if not (a.dtype.is_float() and b.dtype.is_float()):
+        return None
+    names = (_jittor_dtype_name(a.dtype), _jittor_dtype_name(b.dtype))
+    amp_reg = int(jt.flags.amp_reg)
+    if amp_reg & jt.amp_flags.prefer16:
+        return "bfloat16" if "bfloat16" in names else "float16"
+    if amp_reg & jt.amp_flags.prefer32:
+        return "float32"
+    for wider in ("float64", "float32"):
+        if wider in names:
+            return wider
+    return "float32"  # float16 x bfloat16
+
+
 def _matmul_2d_cublas(a, b, trans_a=0, trans_b=0):
-    kernel = select_kernel("matmul", a, b, trans_a, trans_b)
+    return _matmul_kernel_dispatch("matmul", a, b, trans_a, trans_b)
+
+
+def _matmul_kernel_dispatch(op, a, b, trans_a, trans_b):
+    """Run a product on the accelerated relay registered for ``op``.
+
+    cuBLAS on CUDA, oneDNN's batched relay on CPU -- whichever `select_kernel`
+    would have chosen, plus a retry with a resolved dtype so that a mixed
+    floating pair never reaches a caller's outer-product fallback; see
+    :func:`_mixed_float_compute_dtype`. The cast is applied to both operands,
+    so the transpose flags, which describe the layout of the operands handed
+    in, stay valid for the cast copies.
+    """
+    kernel = select_kernel(op, a, b, trans_a, trans_b)
     if kernel is not None:
         return kernel(a, b, trans_a, trans_b)
-    return None
+    dtype = _mixed_float_compute_dtype(a, b)
+    if dtype is None:
+        return None
+    a, b = a.cast(dtype), b.cast(dtype)
+    kernel = select_kernel(op, a, b, trans_a, trans_b)
+    if kernel is None:
+        return None
+    return kernel(a, b, trans_a, trans_b)
 
 
 def _transpose_base_last2(x):
@@ -293,8 +500,7 @@ def matmul(a, b):
         assert c.shape == [8, 10, 3, 5]
     """
     _check_matmul_shapes(a, b)
-    with jt.flag_scope(amp_reg=jt.flags.amp_reg | jt.amp_flags.keep_reduce
-                      | jt.amp_flags.reduce16_no_fp32_acc):
+    with _contraction_scope():
         len_a = len(a.shape)
         len_b = len(b.shape)
         if len_b == 1:
@@ -325,9 +531,9 @@ def matmul(a, b):
             aa = a_base if a_base is not None else a
             bb = b_base if b_base is not None else b
             trans_a, trans_b = a_base is not None, b_base is not None
-            kernel = select_kernel("batched_matmul", aa, bb, trans_a, trans_b)
-            if kernel is not None:
-                return kernel(aa, bb, trans_a, trans_b)
+            fast = _matmul_kernel_dispatch("batched_matmul", aa, bb, trans_a, trans_b)
+            if fast is not None:
+                return fast
         shape = []
         len_c = max(len_a, len_b)
         (n, m), (m_, k) = a.shape[-2:], b.shape[-2:]
@@ -338,6 +544,20 @@ def matmul(a, b):
         #     -->
         #     012
         if len_b == 2 and len_a > 2:
+            # The 2-D kernel reads `a` as its flattened `(prod(leading), m)`,
+            # which for a dense row-major buffer is the same pointer and the
+            # same leading dimension -- so hand it the higher rank directly
+            # rather than reshaping into rank 2 and back out. Those two reshapes
+            # are pure views that generate no code, but a graph node each:
+            # measured at 64 of the 408 nodes a transformer decode step builds,
+            # and 34% of a stack of Linears. `a` must actually be dense for the
+            # flattening to describe it, so a strided view keeps the old route.
+            if a._storage_is_contiguous():
+                b_base = _transpose_base_last2(b)
+                bb = b_base if b_base is not None else b
+                fast = _matmul_2d_cublas(a, bb, 0, 1 if b_base is not None else 0)
+                if fast is not None:
+                    return fast
             # TODO:ugly implementation for tuner
             aa = a.reshape((-1, m))
             cc = jt.nn.matmul(aa, b)
@@ -384,6 +604,8 @@ for _backend in ("cuda", "rocm_legacy", "corex_legacy"):
                     dtypes=_FLOAT_DTYPES, supports=_supports_cublas)
     register_kernel("batched_matmul", _backend, _cublas_batched_matmul,
                     dtypes=_FLOAT_DTYPES, supports=_supports_cublas)
+register_kernel("matmul", "cpu", _mkl_matmul,
+                dtypes={"float32"}, supports=_supports_mkl)
 register_kernel("batched_matmul", "cpu", _mkl_batched_matmul,
                 dtypes={"float32"}, supports=_supports_mkl_batched)
 del _backend

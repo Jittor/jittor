@@ -25,6 +25,7 @@ def build_rows():
         rows.append({
             "name": op.full_name,
             "dtypes": len(op.dtypes),
+            "npu_dtypes": op.dtypesIfNPU,
             "ref": op.ref is not None,
             "fwd": True,
             "bwd": op.supports_autograd,
@@ -42,6 +43,7 @@ def main():
     fwd_only = [r["name"] for r in rows if not r["bwd"]]
     no_gg = [r["name"] for r in rows if r["bwd"] and not r["gradgrad"]]
     with_errors = [r["name"] for r in rows if r["errors"]]
+    audited_npu = [r for r in rows if r["npu_dtypes"] is not None]
 
     print("=" * 70)
     print("  Jittor torch-grade test coverage report")
@@ -50,19 +52,21 @@ def main():
           f"   (cuda={cu.HAS_CUDA}, acl/npu={cu.HAS_ACL})")
     print(f"  op_db modules  : {', '.join(sorted(_loaded_modules))}")
     print(f"  operators      : {n}")
+    print(f"  NPU dtype audit: {len(audited_npu)}/{n}; other entries are unverified candidates")
     print(f"  with fwd ref   : {n - len(no_ref)}/{n}")
     print(f"  with backward  : {n - len(fwd_only)}/{n}  (gradcheck)")
     print(f"  with gradgrad  : {n - len(fwd_only) - len(no_gg)}/{n}  (gradgradcheck)")
     print(f"  with errors    : {len(with_errors)}/{n}  ({len(with_errors) / n:.1%})")
     print("-" * 70)
-    print(f"  {'op':28s} {'dtypes':>6} {'ref':>4} {'bwd':>4} {'gg':>4} {'err':>4}")
+    print(f"  {'op':28s} {'dtypes':>6} {'ref':>4} {'bwd':>4} {'gg':>4} {'err':>4} NPU dtypes")
     print("-" * 70)
     for r in rows:
         print(f"  {r['name']:28s} {r['dtypes']:>6} "
               f"{'Y' if r['ref'] else '-':>4} "
               f"{'Y' if r['bwd'] else '-':>4} "
               f"{'Y' if r['gradgrad'] else '-':>4} "
-              f"{'Y' if r['errors'] else '-':>4}")
+              f"{'Y' if r['errors'] else '-':>4} "
+              f"{','.join(r['npu_dtypes']) if r['npu_dtypes'] is not None else 'UNVERIFIED'}")
     print("-" * 70)
     if no_ref:
         print(f"  forward-only (no numpy ref, fwd not value-checked): {', '.join(no_ref)}")

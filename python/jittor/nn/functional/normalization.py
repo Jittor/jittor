@@ -4,11 +4,14 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from functools import lru_cache, wraps
 
 import jittor as jt
+from jittor._runtime.core_api import _output_requires_grad
 
 from ... import _arg_policy
 from ..backends import hooks as _backend_hooks
+from jittor._runtime.dispatch import select_kernel as _select_kernel
 from jittor.backends.cuda.kernels.nn.batch_norm_training_cuda import (
     _batch_norm_cuda,
+    _batch_norm_cuda_statistics,
     _batch_norm_eval_cuda,
 )
 from jittor.backends.cuda.kernels.nn.group_norm_cuda import _group_norm_cuda
@@ -102,17 +105,28 @@ def _batch_norm_train(x, dims, weight, bias, eps, sync=False):
     with the statistics (the module updates its running buffers, the functional
     updates the buffers it was handed).
     """
-    xmean, xvar = _batch_statistics(x, dims, sync)
     if not sync:
         # Fused CUDA kernel for the local case. It computes its own statistics,
         # so it cannot serve the all-reduced ones; it is a backend accelerator
         # for this same function, pinned against it by
         # tests/nn/test_norm_unification.py. functional.batch_norm never
         # reached it before -- training=True went down the generic path only.
-        backend = _backend_hooks.batch_norm_cuda or _batch_norm_cuda
-        fast = backend(x, weight, bias, eps)
-        if fast is not None:
-            return fast, xmean, xvar
+        #
+        # It hands back the statistics it normalized with, for the running
+        # buffers. Computing them here as well ran two more reductions over
+        # the activation per layer, 6.7 ms of a ResNet-50 training step.
+        # A kernel registered over ours keeps the old contract: the output
+        # alone, with the statistics computed here.
+        selected = None
+        if _backend_hooks.batch_norm_cuda is not None:
+            selected = _select_kernel("nn.batch_norm.training", x, weight, bias, eps)
+        if selected is _batch_norm_cuda.__wrapped__:
+            fast = _batch_norm_cuda_statistics(x, weight, bias, eps)
+            if fast is not None:
+                return fast
+        elif selected is not None:
+            return (selected(x, weight, bias, eps),) + _batch_statistics(x, dims, sync)
+    xmean, xvar = _batch_statistics(x, dims, sync)
     xhat = _bn_normalize(x, xmean, xvar, dims, eps)
     return _affine(xhat, weight, bias, x.shape[1], x.ndim), xmean, xvar
 
@@ -124,9 +138,40 @@ def _batch_norm_eval(x, dims, running_mean, running_var, weight, bias, eps):
         x, weight, bias, running_mean, running_var, eps)
     if fast is not None:
         return fast
+    scale, shift = _batch_norm_eval_coefficients(running_mean, running_var, weight, bias, eps)
+    return x * scale.broadcast(x, dims) + shift.broadcast(x, dims)
+
+
+#: Where the tracked statistics keep the per-channel scale and shift an
+#: inference batch norm was last computed with, and what they were computed
+#: from.
+_EVAL_COEFFICIENTS = "_jittor_batch_norm_eval_coefficients"
+
+
+def _batch_norm_eval_coefficients(running_mean, running_var, weight, bias, eps):
+    """``(weight / sqrt(var + eps), bias - mean * scale)``, kept between calls.
+
+    They only change when a parameter or a statistic does, and every one of
+    those changes rebinds the holder to a new Var -- so the Vars' identities
+    are the key. Recomputing them was a kernel per batch norm per step: 53 of
+    a batch-1 ResNet-50's 212, and a tenth of its device time. Only when no
+    gradient flows through them: a kept Var must not carry one step's
+    graph into the next.
+    """
+    tracked = isinstance(running_var, jt.Var) and isinstance(running_mean, jt.Var)
+    inputs = (weight, bias, running_mean, running_var)
+    keep = tracked and (jt.flags.no_grad or all(
+        v.is_stop_grad() for v in inputs if isinstance(v, jt.Var)))
+    if keep:
+        key = tuple(v.var_ptr if isinstance(v, jt.Var) else v for v in inputs) + (float(eps),)
+        cached = getattr(running_var, _EVAL_COEFFICIENTS, None)
+        if cached is not None and cached[0] == key:
+            return cached[1], cached[2]
     scale = weight / jt.sqrt(running_var + eps)
     shift = bias - running_mean * scale
-    return x * scale.broadcast(x, dims) + shift.broadcast(x, dims)
+    if keep:
+        setattr(running_var, _EVAL_COEFFICIENTS, (key, scale, shift))
+    return scale, shift
 
 
 def _unbiased(var, x, dims, world_size=1):
@@ -210,6 +255,26 @@ def _ln_function_cls(dims, eps):
     # (overriding the composite path inside execute).
     class _LN(jt.Function):
         def execute(self, x):
+            # float16/bfloat16 are computed in float32 and handed back in
+            # float32; `_restore_half_dtype` at the caller narrows the result
+            # after the affine, which is where torch rounds too. `jt.mean`
+            # already accumulates a half reduction in float32
+            # (src/ops/reduce_op.cc), but it rounds the *result* back to the
+            # input's dtype, and everything between the two means ran at that
+            # width: the deviation, its square -- where a half has no exponent
+            # room to spare -- the variance, and the reciprocal square root.
+            # Measured against the closed form at float64 on the same rounded
+            # input, 16x1024 normal input: float16 3.02e-3 on CPU and 3.40e-3
+            # on CUDA where real torch 2.13 is 9.75e-4, bfloat16 4.02e-2 / 2.93e-2
+            # against torch's 3.87e-3. torch's fused kernel takes its statistics
+            # in `acc_type<T, true>`, which is float for both half types.
+            #
+            # float64 is NOT touched: upcasting is for a *narrow* input, and
+            # `x.float32()` on a wide one throws away what the caller asked for.
+            narrow = _jittor_dtype_name(x.dtype) in ("float16", "bfloat16")
+            self.narrow_dtype = x.dtype if narrow else None
+            if narrow:
+                x = x.float32()
             mean = jt.mean(x, dims=dims, keepdims=1)
             var = jt.mean((x - mean) * (x - mean), dims=dims, keepdims=1)
             rstd = jt.rsqrt(var + eps)
@@ -220,9 +285,21 @@ def _ln_function_cls(dims, eps):
         def grad(self, g):
             # dL/dx = rstd*(g - mean(g) - xhat*mean(g*xhat)) over the normalized dims
             xhat, rstd = self.xhat, self.rstd
+            # Same reason as the forward: the saved `xhat`/`rstd` are float32
+            # for a half input, so the seed joins them there rather than
+            # dragging the whole closed form down to the input's width.
+            if self.narrow_dtype is not None and \
+                    _jittor_dtype_name(g.dtype) != "float32":
+                g = g.float32()
             mg = jt.mean(g, dims=dims, keepdims=1)
             mgx = jt.mean(g * xhat, dims=dims, keepdims=1)
-            return rstd * (g - mg - xhat * mgx)
+            dx = rstd * (g - mg - xhat * mgx)
+            # The cotangent goes back to the Var the caller handed `apply()`,
+            # which is still the half one -- `x.float32()` above is inside the
+            # tape, not before it.
+            if self.narrow_dtype is not None:
+                dx = dx.cast(self.narrow_dtype)
+            return dx
     return _LN
 
 
@@ -309,25 +386,40 @@ def layer_norm(
     elementwise_affine: bool = True,
 ):
     normalized_shape = tuple(normalized_shape)
-    if not normalized_shape or len(normalized_shape) > x.ndim:
+    rank = len(normalized_shape)
+    if not rank or rank > x.ndim:
         raise ValueError("layer_norm normalized_shape must match trailing input dimensions")
-    if tuple(x.shape[-len(normalized_shape):]) != normalized_shape:
+    if tuple(x.shape[-rank:]) != normalized_shape:
         raise ValueError("layer_norm normalized_shape must match trailing input dimensions")
     for name, value in (("weight", weight), ("bias", bias)):
         if isinstance(value, jt.Var) and tuple(value.shape) != normalized_shape:
             raise ValueError("layer_norm {} must match normalized_shape".format(name))
-    dims = [-i for i in range(len(normalized_shape), 0, -1)]
     weight = 1.0 if weight is None else weight
     bias = 0.0 if bias is None else bias
-    fast = _restore_half_dtype(_layer_norm_cuda(
-        x, tuple(normalized_shape), weight, bias, eps
-    ), x)
+    # The two relays are mutually exclusive by construction: the training one
+    # requires `_output_requires_grad(x, weight, bias)` and the inference one
+    # requires its negation. Trying both meant every layer_norm paid two full
+    # dispatch rounds -- argument walk, placement, candidate list, dtype names,
+    # predicate -- to discover that one of them could never match. Ask the
+    # question once and try only the relay that can answer it. The half-dtype
+    # restore still wraps whichever relay ran: both return in the accumulation
+    # dtype and the caller expects the input's.
+    if _output_requires_grad(x, weight, bias):
+        fast = _layer_norm_cuda(x, normalized_shape, weight, bias, eps)
+    else:
+        fast = _layer_norm_no_grad_cuda(x, normalized_shape, weight, bias, eps)
     if fast is not None:
+        # The restore only ever changes a half-typed result, so ask that
+        # question first and keep `_restore_half_dtype` off every call that is
+        # not in half. It has to be asked on the normalised spelling: a torch
+        # frontend tensor reports `torch.bfloat16` where the native Var reports
+        # `bfloat16`, which is why `_restore_half_dtype` itself strips the
+        # prefix before comparing. Comparing the dtype objects directly -- by
+        # `!=` or by identity -- calls that pair different and sends a float32
+        # result into the restore, where it dies on `.dsize`.
+        if str(x.dtype).replace("torch.", "") in ("float16", "bfloat16"):
+            return _restore_half_dtype(fast, x)
         return fast
-    fast = _restore_half_dtype(_layer_norm_no_grad_cuda(
-        x, tuple(normalized_shape), weight, bias, eps
-    ), x)
-    if fast is not None:
-        return fast
+    dims = [-i for i in range(rank, 0, -1)]
     xhat = _ln_normalize(x, dims, eps)
     return _restore_half_dtype(xhat * weight + bias, x)

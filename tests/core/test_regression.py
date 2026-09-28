@@ -26,6 +26,8 @@ from jittor import nn
 from _helpers.common import (
     JittorTestCase, get_all_device_types, use_cuda_for, HAS_CUDA, HAS_ACL,
 )
+from _helpers.cupy_bridge import cuda_numpy_code_available
+import torch  # this file runs under the Torch shim; torch.Tensor is a Var subclass
 
 F = nn.functional
 
@@ -44,6 +46,8 @@ class TestSilentWrongRegressions(JittorTestCase):
     def _devices(self, body):
         for d in get_all_device_types():
             with self.subTest(device=d):
+                if use_cuda_for(d) and not cuda_numpy_code_available():
+                    self.skipTest("CUDA numpy-code operators need CuPy; it is not installed")
                 with jt.flag_scope(use_cuda=use_cuda_for(d)):
                     body(d)
 
@@ -75,20 +79,23 @@ class TestSilentWrongRegressions(JittorTestCase):
     # -- cbad57db: var/std default must be UNBIASED (torch correction=1) ---------
     def test_var_std_unbiased_default(self):
         x = np.random.RandomState(2).randn(50).astype("float32")
-        # torch's Var.var()/std() default to the Bessel-corrected (unbiased) estimate.
+        # torch's Tensor.var()/std() default to the Bessel-corrected (unbiased)
+        # estimate. That is the torch frontend's contract: a plain jt.Var keeps
+        # numpy's biased default, so build a torch tensor.
         # (tol is loose enough to clear float32 round-off but tight enough to separate
         # the unbiased ddof=1 value from the biased ddof=0 one, which differ by ~2%.)
-        self.assertEqual(_scalar(jt.array(x).var()), float(np.var(x, ddof=1)),
+        t = torch.from_numpy(x)
+        self.assertEqual(_scalar(t.var()), float(np.var(x, ddof=1)),
                          atol=1e-5, rtol=1e-4, msg="var default unbiased (not biased)")
-        self.assertEqual(_scalar(jt.array(x).std()), float(np.std(x, ddof=1)),
+        self.assertEqual(_scalar(t.std()), float(np.std(x, ddof=1)),
                          atol=1e-5, rtol=1e-4, msg="std default unbiased (not biased)")
 
     # -- 0b3e7e5f: nanmean must not count NaN -----------------------------------
     def test_nanmean_excludes_nan(self):
         x = np.array([1.0, np.nan, 3.0, np.nan, 5.0], dtype="float32")
         ref = float(np.nanmean(x))
-        got = _scalar(jt.array(x).nanmean()) if hasattr(jt.Var, "nanmean") \
-            else _scalar(jt.nanmean(jt.array(x)))
+        # nanmean is a torch-frontend method (0b3e7e5f added it to the shim).
+        got = _scalar(torch.from_numpy(x).nanmean())
         self.assertEqual(got, ref, atol=1e-6, rtol=1e-6, msg="nanmean skips NaN")
 
     # -- 3eb7bc78: index_select with dim>0 (newaxis routing bug) -----------------
@@ -151,10 +158,13 @@ class TestSilentWrongRegressions(JittorTestCase):
         rng = np.random.RandomState(4)
         A = (rng.randn(4, 4) + 4 * np.eye(4)).astype("float64")    # well-conditioned
         b = rng.randn(4, 1).astype("float64")
-        Av = jt.array(A, dtype="float64")
-        bv = jt.array(b, dtype="float64")
-        x = jt.linalg.solve(Av, bv)
-        gb = jt.grad(x.sum(), [bv])[0].numpy()
+        # The CUDA solve gradient is a numpy-code op that needs CuPy (covered
+        # under its own guard in tests/linalg); this locks the analytic value.
+        with jt.flag_scope(use_cuda=0):
+            Av = jt.array(A, dtype="float64")
+            bv = jt.array(b, dtype="float64")
+            x = jt.linalg.solve(Av, bv)
+            gb = jt.grad(x.sum(), [bv])[0].numpy()
         # analytic: d sum(solve(A,b))/db = A^{-T} @ 1
         ref = np.linalg.solve(A.T, np.ones((4, 1)))
         self.assertGreater(float(np.abs(gb).max()), 1e-8, "solve d/db must be nonzero")

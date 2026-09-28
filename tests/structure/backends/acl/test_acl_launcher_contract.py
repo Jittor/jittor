@@ -878,3 +878,105 @@ def test_scatter_uses_launcher_and_keeps_axis_reduction_query():
     assert "checkRet(ret);" not in scatter
     assert "mallocWorkSpace(workspaceSize)" not in scatter
     assert "syncRun();" not in scatter
+
+
+def test_batch_norm_descriptor_setup_compiles_and_preserves_runner_diagnostics(tmp_path):
+    """Compile the real helper and all four callers against a recording ACL API.
+
+    No CANN/Jittor import is needed. Besides catching an unbound diagnostic
+    name, execute the descriptors to check the forward/backward NCHW prefixes
+    and confirm an ACL failure identifies the runner that requested it.
+    """
+    import os
+    import re
+    import shlex
+    import subprocess
+
+    source = NORMS_SOURCE.read_text()
+    helper = source[source.index("    static void setupNormTensorDescs("):
+                    source.index("    BatchNormOpRunner::BatchNormOpRunner()")]
+    callers = []
+    for runner in ("BatchNormOpRunner", "BatchNormBackwardOpRunner"):
+        for method in ("setupInputDesc", "setupOutputDesc"):
+            match = re.search(r"void " + runner + "::" + method +
+                              r"\(\)\s*\{[^}]*\}", source)
+            assert match is not None, (runner, method)
+            callers.append(match.group())
+    preamble = r'''
+#include <cassert>
+#include <cstdint>
+#include <sstream>
+#include <string>
+#include <vector>
+using std::string;
+using std::vector;
+struct aclTensor {};
+constexpr int ACL_SUCCESS = 0;
+struct Var {
+    vector<int64_t> shape;
+    void* mem_ptr;
+    int64_t size;
+    int dtype() const { return 7; }
+};
+int get_dtype(int dtype) { return dtype; }
+vector<bool> layouts;
+int acl_result = ACL_SUCCESS;
+aclTensor descriptor;
+std::ostringstream diagnostic;
+#define LOGf diagnostic
+int CreateAclTensor(const vector<int64_t>& shape, void* data, int64_t size,
+                    int dtype, aclTensor** tensor, bool nchw) {
+    assert(shape == vector<int64_t>({2, 3}));
+    assert(data != nullptr && size == 24 && dtype == 7);
+    layouts.push_back(nchw);
+    *tensor = &descriptor;
+    return acl_result;
+}
+struct BatchNormOpRunner {
+    string name = "BatchNorm";
+    vector<Var*> in_, out_;
+    vector<vector<int64_t>> inputShapes, outputShapes;
+    vector<aclTensor*> inputTensors, outputTensors;
+    void setupInputDesc();
+    void setupOutputDesc();
+};
+struct BatchNormBackwardOpRunner : BatchNormOpRunner {
+    BatchNormBackwardOpRunner() { name = "BatchNormBackward"; }
+    void setupInputDesc();
+    void setupOutputDesc();
+};
+'''
+    checks = r'''
+int main() {
+    int storage = 0;
+    Var value{{2, 3}, &storage, 24};
+    BatchNormOpRunner forward;
+    forward.in_ = {&value, &value}; forward.out_ = {&value, &value};
+    forward.setupInputDesc(); forward.setupOutputDesc();
+    assert(layouts == vector<bool>({true, false, true, false}));
+    assert(forward.inputShapes == vector<vector<int64_t>>({{2, 3}, {2, 3}}));
+    assert(forward.outputTensors == vector<aclTensor*>({&descriptor, &descriptor}));
+    assert(diagnostic.str().empty());
+    layouts.clear();
+    BatchNormBackwardOpRunner backward;
+    backward.in_ = {&value, &value}; backward.out_ = {&value, &value};
+    backward.setupInputDesc(); backward.setupOutputDesc();
+    assert(layouts == vector<bool>({true, true, true, false}));
+    acl_result = 17;
+    BatchNormBackwardOpRunner failed;
+    failed.in_ = {&value}; failed.setupInputDesc();
+    assert(diagnostic.str().find("BatchNormBackward:") != string::npos);
+    assert(diagnostic.str().find("ERROR:17") != string::npos);
+}
+'''
+    translation_unit = tmp_path / "norm_descriptors.cc"
+    translation_unit.write_text(preamble + helper + "\n".join(callers) + checks)
+    executable = tmp_path / "norm_descriptors"
+    result = subprocess.run(
+        [*shlex.split(os.environ.get("CXX", "g++")), "-std=c++14",
+         str(translation_unit), "-o", str(executable)],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    result = subprocess.run([str(executable)], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr

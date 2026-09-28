@@ -12,6 +12,7 @@ import jittor as jt
 from jittor import nn
 from jittor import Function
 from jittor._runtime.dispatch import register_kernel, select_kernel
+from jittor.nn.functional._amp import bias_for_compute_dtype
 from jittor.backends.cuda.kernels.nn.depthwise import depthwise_forward, depthwise_backward
 
 class DepthwiseConv(Function):
@@ -69,7 +70,7 @@ def _depthwise_conv2d(x, weight, bias, stride, padding, dilation, groups,
                       *, _depthwise_fast_path=True):
     y = DepthwiseConv(stride, padding, dilation)(x, weight)
     if bias is not None:
-        y = y + bias.broadcast(y.shape, [0, 2, 3])
+        y = y + bias_for_compute_dtype(y, bias).broadcast(y.shape, [0, 2, 3])
     return y
 
 

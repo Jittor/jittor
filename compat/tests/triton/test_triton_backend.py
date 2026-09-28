@@ -19,14 +19,30 @@ Run:  python -m pytest compat/tests/triton/test_triton_backend.py
 """
 
 from _helpers import capability as _test_capability
+import ctypes
 import importlib.util
+import os
 import unittest
+from unittest import mock
 import numpy as np
 
 import jittor as jt
 
 
-_HAVE = bool(_test_capability.check_accelerator('cuda', backend=jt).enabled and importlib.util.find_spec("triton") is not None)
+#: A genuine upstream triton, not the shim this repo deploys under the name.
+#:
+#: ``find_spec("triton")`` answers yes for the shim as well, and ``setUpModule``
+#: then skips the *whole module* when ``import triton.language`` fails -- which
+#: took the launch-device tests at the bottom, the ones that need no triton at
+#: all, down with it. Written inline rather than as a helper call: collection
+#: may not run this file's own functions (tests/structure/test_pytest_contract).
+try:
+    _HAVE_REAL_TRITON = importlib.util.find_spec("triton.language") is not None
+except (ImportError, ValueError):
+    _HAVE_REAL_TRITON = False
+
+_HAVE_CUDA = bool(_test_capability.check_accelerator('cuda', backend=jt).enabled)
+_HAVE = bool(_HAVE_CUDA and _HAVE_REAL_TRITON)
 _shim = None
 triton = None
 tl = None
@@ -349,6 +365,395 @@ class TestTritonBackend(unittest.TestCase):
         BLOCK = triton.next_power_of_2(N)
         layernorm_kernel[(M,)](X, Y, W, B, N, N, eps, BLOCK=BLOCK)
         self.ac(Y.numpy(), ref, atol=1e-3, rtol=1e-3, msg="layernorm")
+
+
+@unittest.skipUnless(_HAVE, "real upstream triton + CUDA not available")
+class TestBridgeLaunchStream(unittest.TestCase):
+    """The bridge has to launch inside jittor's own stream order.
+
+    jittor runs its kernels, its copies and its library calls on
+    ``cudaStreamPerThread`` (``compute_stream`` in
+    ``backends/cuda/runtime/driver.cc``). The legacy default stream does not
+    order against it, so a bridge kernel left on the legacy stream is an
+    unordered race with jittor's scheduler *and* its allocator: jittor can hand
+    an operand or output block to something else while the kernel is still
+    reading it, which surfaces as a racy ``cudaErrorIllegalAddress``.
+
+    That is not hypothetical -- it is the hazard the ``jt.sync_all(True)`` after
+    every launch in ``run`` exists to paper over, and the fast-sync path (on by
+    default whenever ``JITTOR_TORCH_SHIM`` is set) skips it.
+    """
+
+    def _recorded_stream(self):
+        """The stream value handed to cuLaunchKernel, without launching."""
+        from jittor.compat.triton import backend as tb
+
+        driver = tb._Driver.get(0)
+        seen = []
+
+        class _Recorder:
+            def __call__(self, func, gx, gy, gz, bx, by, bz, shared,
+                         stream, params, extra):
+                seen.append(stream.value)
+                # Stop here: the point is the argument, not a real launch.
+                raise RuntimeError("recorded")
+
+        original = driver.lib.cuLaunchKernel
+        driver.lib.cuLaunchKernel = _Recorder()
+        try:
+            with self.assertRaises(RuntimeError):
+                driver.launch(ctypes.c_void_p(1), (1, 1, 1), (1, 1, 1), 0,
+                              ctypes.c_void_p(0))
+        finally:
+            driver.lib.cuLaunchKernel = original
+        return seen
+
+    def test_launch_targets_the_per_thread_stream(self):
+        # 0x2 is `cudaStreamPerThread`, what `compute_stream` returns, and the
+        # same value as the driver API's `CU_STREAM_PER_THREAD`.
+        self.assertEqual(self._recorded_stream(), [0x2])
+
+    def test_the_legacy_stream_is_still_reachable_by_env(self):
+        with mock.patch.dict(os.environ,
+                             {"JITTOR_TRITON_LEGACY_STREAM": "1"}):
+            self.assertEqual(self._recorded_stream(), [None])
+
+
+@unittest.skipUnless(_HAVE, "real upstream triton + CUDA not available")
+class TestDriverIsPerDevice(unittest.TestCase):
+    """The bridge's driver has to follow the operands' device.
+
+    A ``CUmodule``/``CUfunction`` belongs to the context it was loaded into and a
+    primary context is per device, so a rank whose operands live on CUDA device 1
+    cannot be served by device 0's handles. Pinning device 0 made the first
+    triton launch of a TP2 rank-1 request run on the wrong device against
+    device-1 pointers: a sticky ``cudaErrorIllegalAddress`` reported later, at
+    whatever CUDA call came next (measured on the H3 modulation kernel, whose
+    operands were all in bounds and identical to rank 0's).
+    """
+
+    def test_a_driver_is_cached_per_cuda_device(self):
+        from jittor.compat.triton import backend as tb
+
+        if int(jt.get_device_count()) < 2:
+            self.skipTest("needs at least two visible CUDA devices")
+        d0 = tb._Driver.get(0)
+        d1 = tb._Driver.get(1)
+        self.assertIs(d0, tb._Driver.get(0))
+        self.assertIsNot(d0, d1)
+        self.assertEqual((d0.ordinal, d1.ordinal), (0, 1))
+        self.assertNotEqual(d0.ctx.value, d1.ctx.value)
+
+
+@unittest.skipUnless(_HAVE_CUDA, "cuda is not available")
+class TestTheLaunchDeviceIsRestored(unittest.TestCase):
+    """A launch may move the calling thread's device; it may not leave it moved.
+
+    ``run`` makes the operands' device current because that is where the launch,
+    its module handles and its bounce buffers belong. But the CUDA device is
+    current per *host thread* until something sets it back, and jittor caches
+    which device each of its threads is bound to (``tls_bound_device`` in
+    ``backends/cuda/runtime/driver.cc``): it re-issues ``cudaSetDevice`` only
+    when its own bookkeeping moves, so a switch made behind its back is one it
+    never undoes. The next jittor op then launches device-A pointers in device
+    B's context -- measured here as ``cudaMemGetInfo -> cudaErrorIllegalAddress``
+    on the very next ``sync``, which is the context-sticky failure that jittor's
+    own comment above ``tls_bound_device`` describes.
+
+    Unlike the rest of this file these need no triton: the switch under test is
+    ``_Driver.ensure_ctx``, plain ctypes over libcuda/libcudart, and the restore
+    is ``run``'s. They do need a second device, since switching to the device
+    the thread is already on proves nothing.
+    """
+
+    def setUp(self):
+        from jittor.compat.triton import backend as tb
+
+        if int(jt.get_device_count()) < 2:
+            self.skipTest("needs at least two cuda devices")
+        self.tb = tb
+        self.rt = tb._Driver._load_cudart()
+        if self.rt is None:
+            self.skipTest("libcudart is not loadable")
+
+    def _current_device(self):
+        dev = ctypes.c_int(-1)
+        self.assertEqual(self.rt.cudaGetDevice(ctypes.byref(dev)), 0)
+        return dev.value
+
+    def _launch_on_another_device(self):
+        """What a launch does to the thread: the operands' device, made current."""
+        other = 1 if self._current_device() == 0 else 0
+        self.tb._Driver.get(other).ensure_ctx()
+        # a precondition of the test, not its subject: the switch did happen
+        self.assertEqual(self._current_device(), other)
+
+    def test_a_launch_restores_the_device_it_switched(self):
+        before = self._current_device()
+        with mock.patch.object(self.tb, "_run",
+                               side_effect=lambda *a, **k: self._launch_on_another_device()):
+            self.tb.run(None, (), {}, None)
+        self.assertEqual(self._current_device(), before)
+
+    def test_the_device_comes_back_when_the_launch_raises(self):
+        before = self._current_device()
+
+        def failing_launch(*args, **kwargs):
+            self._launch_on_another_device()
+            raise self.tb.JittorTritonError("cuLaunchKernel -> CUresult 700")
+
+        with mock.patch.object(self.tb, "_run", side_effect=failing_launch):
+            with self.assertRaises(self.tb.JittorTritonError):
+                self.tb.run(None, (), {}, None)
+        self.assertEqual(self._current_device(), before)
+
+@unittest.skipUnless(_HAVE, "real upstream triton + CUDA not available")
+class TestGuardedBounceRequiresContiguous(unittest.TestCase):
+    """A strided operand must not be bounced.
+
+    The over-read guard copies a small operand into a guarded buffer with one
+    flat ``copy_dtod`` of ``numel * elsize`` bytes from ``data_ptr()`` and hands
+    the kernel the bounce pointer -- while the caller's own stride arguments
+    still describe the original layout. A contiguous operand survives that; a
+    strided one does not: the copy takes the wrong elements and the kernel then
+    walks off the copied payload reading the zeroed guard, so the launch
+    succeeds and returns silently wrong numbers.
+
+    MiniMax-H3 hit this on its AdaLN modulation, whose ``chunk`` views have row
+    stride ``6 * hidden``: the fused kernel diverged from its own eager
+    reference by 40 (cos 0.985) on the real tensors while agreeing bitwise on
+    contiguous ones, and the DiT produced title cards instead of the prompted
+    scene. This drives the same shape through ``matmul_kernel``'s explicit
+    strides, with a contiguous control.
+    """
+
+    def _prepare(self):
+        # Done per test rather than in `setUp` so a by-path runner that calls the
+        # test method directly (no `setUpModule`/`setUpClass`/`setUp`) still
+        # exercises the kernels.
+        global triton, tl
+        if triton is None or tl is None:
+            setUpModule()
+        if not _shim.activate_bridge():
+            self.skipTest("jittor Triton bridge is unavailable")
+        # The model code passes the shim's torch-shaped tensors, which is the
+        # operand flavour this regression is about. `jittor.compat.torch`
+        # installs itself as `torch` for the process.
+        import jittor.compat.torch  # noqa: F401
+        import torch as _torch
+        if not callable(getattr(_torch, "tensor", None)) or not callable(getattr(_torch, "empty", None)):
+            self.skipTest("no torch-shaped tensor namespace for the strided operand")
+        return _torch
+
+    def _run_matmul(self, torch_ns, a, b, M, N, K, stride_am):
+        c = torch_ns.empty((M, N), dtype=torch_ns.float32, device="cuda:0")
+        BM = BN = BK = 32
+        grid = (triton.cdiv(M, BM), triton.cdiv(N, BN))
+        matmul_kernel[grid](a, b, c, M, N, K, stride_am, 1, N, 1, N, 1,
+                            BLOCK_M=BM, BLOCK_N=BN, BLOCK_K=BK)
+        jt.sync_all(True)
+        return np.asarray(c.float().cpu().numpy(), dtype=np.float64)
+
+    def test_strided_operand_survives_the_guard(self):
+        """The failing case: the operand is a row-strided view.
+
+        This is MiniMax-H3's AdaLN modulation shape -- a `chunk` of a
+        `[M, k*H]` projection, i.e. row stride `k*H` -- driven through
+        ``matmul_kernel``'s explicit strides. Before the fix the guard bounced
+        it and the result was silently wrong.
+        """
+        torch_ns = self._prepare()
+        M, N, K = 64, 64, 64
+        rs = np.random.RandomState(7)
+        wide = rs.randn(M, 2 * K).astype("float32")
+        bn = rs.randn(K, N).astype("float32")
+
+        a_view = torch_ns.tensor(wide, device="cuda:0")[:, :K]
+        b = torch_ns.tensor(bn, device="cuda:0")
+        jt.sync_all(True)
+        self.assertFalse(bool(a_view.is_contiguous()),
+                         "the view must be strided for this test to mean anything")
+
+        got = self._run_matmul(torch_ns, a_view, b, M, N, K, 2 * K)
+        np.testing.assert_allclose(got, wide[:, :K] @ bn, atol=1e-2, rtol=1e-3,
+                                   err_msg="matmul with a row-strided operand")
+
+    def test_contiguous_control_still_matches(self):
+        # The same values and kernel with a contiguous operand: the guard may
+        # bounce this one, and it must stay correct.
+        torch_ns = self._prepare()
+        M, N, K = 64, 64, 64
+        rs = np.random.RandomState(8)
+        an = rs.randn(M, K).astype("float32")
+        bn = rs.randn(K, N).astype("float32")
+        a = torch_ns.tensor(an, device="cuda:0")
+        b = torch_ns.tensor(bn, device="cuda:0")
+        jt.sync_all(True)
+        self.assertTrue(bool(a.is_contiguous()))
+        got = self._run_matmul(torch_ns, a, b, M, N, K, K)
+        np.testing.assert_allclose(got, an @ bn, atol=1e-2, rtol=1e-3,
+                                   err_msg="matmul with a contiguous operand")
+
+    def test_the_helper_reports_layout(self):
+        from jittor.compat.triton import backend as tb
+
+        torch_ns = self._prepare()
+        M, K = 8, 6
+        wide = torch_ns.tensor(np.arange(M * 2 * K, dtype="float32").reshape(M, 2 * K),
+                               device="cuda:0")
+        jt.sync_all(True)
+        self.assertTrue(tb._tensor_is_contiguous(wide))
+        self.assertFalse(tb._tensor_is_contiguous(wide[:, :K]))
+        self.assertTrue(tb._tensor_is_contiguous(wide[:, :K].contiguous()))
+
+        # jittor Vars reach the bridge too, where `_storage_is_contiguous` is the
+        # authority. Whether a slice is a view or a copy is jittor's business, so
+        # only assert agreement with that authority when it yields a bool.
+        def authority(value):
+            flag = getattr(value, "_storage_is_contiguous", None)
+            flag = flag() if callable(flag) else flag
+            return flag if isinstance(flag, bool) else None
+
+        var = jt.array(np.arange(M * 2 * K, dtype="float32").reshape(M, 2 * K))
+        for candidate in (var, var[:, :K]):
+            expected = authority(candidate)
+            if expected is not None:
+                self.assertEqual(tb._tensor_is_contiguous(candidate), expected)
+
+
+class TestLaunchFollowsItsProducers(unittest.TestCase):
+    """Operands produced immediately before a launch must be the ones it reads.
+
+    The barrier ``run`` puts before packing submits the operand graph without
+    waiting for it (`jt.sync_all(device_sync=False)`, which still plans,
+    allocates and enqueues). Correctness therefore rests on *stream order*:
+    jittor schedules its ops on ``cudaStreamPerThread`` and the bridge launches
+    on that same stream (``_launch_stream``), so the kernel cannot start before
+    the ops that write its operands have.
+
+    If that stops holding -- a launch sent to another stream, or a barrier that
+    stops submitting -- the kernel reads whatever the operand's buffer held
+    before, which here is the *previous* iteration's value, and the launch still
+    returns cleanly with a plausible-looking answer.
+    """
+
+    def _prepare(self):
+        global triton, tl
+        if not _HAVE:
+            # Every other class in this file carries `skipUnless(_HAVE, ...)`;
+            # this one asks `_shim.activate_bridge()` instead, and `_shim` is
+            # None until real triton imports -- so without a triton install the
+            # guard was an AttributeError rather than a skip.
+            self.skipTest("real upstream triton + CUDA not available")
+        if triton is None or tl is None:
+            setUpModule()
+        if _shim is None or not _shim.activate_bridge():
+            self.skipTest("jittor Triton bridge is unavailable")
+
+    def test_each_launch_reads_the_value_its_producer_just_wrote(self):
+        self._prepare()
+        n, BLOCK = 4096, 1024
+        rs = np.random.RandomState(7)
+        xn, yn = rs.randn(n).astype("float32"), rs.randn(n).astype("float32")
+        y = jt.array(yn)
+        grid = (triton.cdiv(n, BLOCK),)
+
+        # `x` is a fresh pending op every step, so nothing else materialises it;
+        # a kernel that ran before its producer would sum the *previous* step's
+        # `x`. The output is fresh per step too: this test is about operand
+        # freshness, and re-reading one output Var across launches mixes in a
+        # separate (pre-existing) staleness of jittor's view of a buffer a
+        # kernel wrote through its own pointer.
+        for step in range(1, 6):
+            x = jt.array(xn) * float(step)
+            out = jt.empty(n, dtype="float32")
+            add_kernel[grid](x, y, out, n, BLOCK=BLOCK)
+            jt.sync_all(True)
+            got = np.asarray(out.numpy(), dtype=np.float64)
+            np.testing.assert_allclose(
+                got, xn.astype(np.float64) * step + yn, atol=1e-5,
+                err_msg="step %d: the launch read a stale operand" % step)
+
+
+class TestTheLaunchBarrierNamesItsOperands(unittest.TestCase):
+    """The barrier before packing must name the operands, not the process.
+
+    ``jt.sync_all(False)`` collects *every* leaf var alive -- it walks
+    ``runtime_holder_state().holders()`` and keeps each one with no consumers --
+    so what it costs is the size of the live holder set rather than the work a
+    launch needs. Measured on an idle graph: 1.2 us with nothing alive, 138 us at
+    10,000 live holders, 752 us at 50,000, against a flat ~25 us for
+    ``jt.sync([o], False)`` at any of those sizes. One MiniMax-H3 autocast VAE
+    decode reaches this barrier 4,536 times.
+
+    A broad sweep is not *wrong*, which is why no correctness test catches it:
+    it materialises at least as much as the operands need. So pin the scope.
+    Only ``sync_all(False)`` -- the sweep that skips the device wait -- is
+    asserted against; ``sync_all(True)`` is the conservative mode's own
+    before/after barrier and is a different thing.
+    """
+
+    def _prepare(self):
+        global triton, tl
+        if not _HAVE:
+            # Same guard as `TestLaunchFollowsItsProducers` above, and for the
+            # same reason: `_shim` is None until real triton imports, so asking
+            # it to activate the bridge raised `AttributeError: 'NoneType'
+            # object has no attribute 'activate_bridge'` on a box without a
+            # triton install instead of skipping. b2ea67cc added the guard to
+            # that class and left this one -- added in the same series -- with
+            # the defect.
+            self.skipTest("real upstream triton + CUDA not available")
+        if triton is None or tl is None:
+            setUpModule()
+        if _shim is None or not _shim.activate_bridge():
+            self.skipTest("jittor Triton bridge is unavailable")
+
+    def test_the_barrier_takes_operands_rather_than_the_whole_process(self):
+        self._prepare()
+        n, BLOCK = 1024, 256
+        grid = (triton.cdiv(n, BLOCK),)
+        xn = np.arange(n, dtype="float32")
+
+        def launch():
+            # `x` has a pending producer, so a barrier that does not submit it
+            # would leave the kernel reading an unbacked buffer.
+            x = jt.array(xn) * 2.0 + 1.0
+            y = jt.array(xn)
+            out = jt.empty(n, dtype="float32")
+            add_kernel[grid](x, y, out, n, BLOCK=BLOCK)
+            return out
+
+        launch()                       # warm up: compile the cubin
+        jt.sync_all(True)
+
+        seen = []
+        real_sync, real_sync_all = jt.sync, jt.sync_all
+
+        def recording(name, real):
+            def call(*args, **kwargs):
+                seen.append((name, args))
+                return real(*args, **kwargs)
+            return call
+
+        jt.sync = recording("sync", real_sync)
+        jt.sync_all = recording("sync_all", real_sync_all)
+        try:
+            out = launch()
+        finally:
+            jt.sync, jt.sync_all = real_sync, real_sync_all
+
+        np.testing.assert_allclose(
+            np.asarray(out.numpy(), dtype=np.float64),
+            xn.astype(np.float64) * 3.0 + 1.0, atol=1e-5,
+            err_msg="the launch did not read the operand its producer just wrote")
+
+        named = [a for (name, a) in seen if name == "sync" and a and a[0]]
+        self.assertTrue(named, "the launch never named its operands to jt.sync")
+        self.assertNotIn(
+            ("sync_all", (False,)), seen,
+            "the launch swept the whole process with jt.sync_all(False); name the "
+            "operand Vars instead, or every launch pays for every live holder")
 
 
 if __name__ == "__main__":

@@ -882,7 +882,18 @@ int system_popen(const char* cmd, const char* cwd, string* captured) {
     // rather than by editing this process's environment -- the compile workers
     // call this concurrently, where setenv is not safe. Only when the variable
     // is set, so an ordinary run spawns exactly the command it always did.
-    if (getenv("LD_PRELOAD")) cmd2 = "env -u LD_PRELOAD ";
+    // The message locale is pinned to C for the child. Everything this
+    // function captures is read back by us -- `is_diagnostic_head` below looks
+    // for "error:" to find what a compile failure was about -- and gettext
+    // translates exactly those words: to a Chinese shell gcc says
+    // `错误：`, no marker matches, and the extractor cannot find the reason it
+    // exists to surface. This is the same rule `c_locale_environment` states
+    // on the Python side for probes whose output is parsed or hashed.
+    // LANGUAGE overrides LC_ALL for translation, and unsetting it is not the
+    // same as emptying it, so it is unset. A shell prologue rather than an
+    // `env` prefix, so it holds for every command in a pipeline.
+    cmd2 = "unset LANGUAGE LC_MESSAGES; LC_ALL=C LANG=C; export LC_ALL LANG; ";
+    if (getenv("LD_PRELOAD")) cmd2 += "env -u LD_PRELOAD ";
     cmd2 += cmd;
     cmd2 += " 2>&1 ";
     FILE *ptr = popen(cmd2.c_str(), "r");

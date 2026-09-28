@@ -8,6 +8,7 @@ Run:  python -m pytest compat/tests/torch/test_torch_compat_attention.py
 """
 
 from _helpers import capability as _test_capability
+import contextlib
 import unittest
 import os
 import pathlib
@@ -100,6 +101,20 @@ class Base(unittest.TestCase):
                                    err_msg=msg)
 
 
+#: The legacy name ``jt.nn._acl_scaled_dot_product_attention`` is gone: the
+#: shim reaches the fast path through ``nn/backends/hooks.py``, which
+#: dispatches ``nn.scaled_dot_product_attention`` on the runtime kernel table.
+#: Patching the old attribute (with ``create=True``) built one nothing reads,
+#: so the fast path was never taken and these tests measured the generic one.
+@contextlib.contextmanager
+def _acl_sdpa_kernel(implementation):
+    from jittor._runtime.dispatch import dispatch_context, override_kernel
+    backend = dispatch_context().backend
+    with override_kernel("nn.scaled_dot_product_attention", backend,
+                         implementation):
+        yield implementation
+
+
 class TestSDPA(Base):
     def test_flash_statistics_follow_the_producer_owner(self):
         from jittor._runtime.state import RuntimeContext, RuntimeState
@@ -169,9 +184,7 @@ class TestSDPA(Base):
             calls.append((query.shape, key.shape, value.shape, kwargs))
             return marker
 
-        with jt.no_grad(), mock.patch.object(
-                jt.nn, "_acl_scaled_dot_product_attention",
-                side_effect=fake_acl, create=True):
+        with jt.no_grad(), _acl_sdpa_kernel(fake_acl):
             actual = torch.nn.functional.scaled_dot_product_attention(
                 q, k, v, is_causal=True, enable_gqa=True)
 
@@ -195,9 +208,7 @@ class TestSDPA(Base):
             calls.append(kwargs)
             return marker
 
-        with jt.no_grad(), mock.patch.object(
-                jt.nn, "_acl_scaled_dot_product_attention",
-                side_effect=fake_acl, create=True):
+        with jt.no_grad(), _acl_sdpa_kernel(fake_acl):
             actual = torch.nn.functional.scaled_dot_product_attention(
                 q, k, v, attn_mask=mask)
 
@@ -568,6 +579,156 @@ class TestSDPA(Base):
                 os.environ.pop(name, None)
         self.assertEqual(after, before + 1)
 
+    def test_flash_backend_environment_key_is_reused_until_the_epoch_moves(self):
+        from jittor.compat.shim.backends import flash_attention as flashattn_jittor
+
+        if flashattn_jittor.backend_environment_epoch() is None:
+            self.skipTest("Python audit hooks are unavailable")
+        first = flashattn_jittor._backend_environment_key()
+        # Identity, not equality: a fresh read always builds a new tuple, so
+        # the same object is what says the snapshot was reused.
+        self.assertIs(flashattn_jittor._backend_environment_key(), first)
+        flashattn_jittor.invalidate_backend_environment()
+        second = flashattn_jittor._backend_environment_key()
+        self.assertIsNot(second, first)
+        self.assertEqual(second, first)
+
+    def test_flash_backend_environment_key_follows_watched_writes(self):
+        from jittor.compat.shim.backends import flash_attention as flashattn_jittor
+
+        if flashattn_jittor.backend_environment_epoch() is None:
+            self.skipTest("Python audit hooks are unavailable")
+        name = "JITTOR_FLASH_ATTN_JITTOR_SRC"
+        old_value = os.environ.get(name)
+        try:
+            os.environ[name] = "/snapshot-test-a"
+            before = flashattn_jittor._backend_environment_key()
+            os.environ[name] = "/snapshot-test-b"
+            after = flashattn_jittor._backend_environment_key()
+        finally:
+            if old_value is not None:
+                os.environ[name] = old_value
+            else:
+                os.environ.pop(name, None)
+        self.assertIn((name, "/snapshot-test-a"), before)
+        self.assertIn((name, "/snapshot-test-b"), after)
+        self.assertNotEqual(before, after)
+
+    def test_flash_backend_epoch_hook_does_not_rederive_watched_names(self):
+        from jittor.compat.shim.backends import flash_attention as flashattn_jittor
+
+        if flashattn_jittor._BACKEND_ENV_EPOCH_STATE is None:
+            self.skipTest("Python audit hooks are unavailable")
+        backend = flashattn_jittor._EXTERNAL_BACKEND
+        real = backend.environment_names
+        rebuilt = []
+
+        def counting():
+            rebuilt.append(1)
+            return real()
+
+        with mock.patch.object(backend, "environment_names", counting):
+            # The first call may rebuild; every later one must read the policy
+            # generation instead of re-deriving the name sets.
+            flashattn_jittor.backend_environment_epoch()
+            rebuilt.clear()
+            for _ in range(3):
+                flashattn_jittor.backend_environment_epoch()
+        self.assertEqual(rebuilt, [])
+
+    def test_flash_backend_epoch_hook_rebuilds_when_discovery_names_widen(self):
+        from jittor.compat.external_backend import ExternalBackend
+        from jittor.compat.shim.backends import flash_attention as flashattn_jittor
+
+        state = flashattn_jittor._BACKEND_ENV_EPOCH_STATE
+        if state is None:
+            self.skipTest("Python audit hooks are unavailable")
+        backend = flashattn_jittor._EXTERNAL_BACKEND
+        name = "JITTOR_FLASH_ATTN_WATCHED_NAME_WIDENING_TEST"
+        before = flashattn_jittor.backend_environment_epoch()
+        widened = list(backend._environment_name_hints) + [name]
+        with mock.patch.object(backend, "_environment_name_hints", widened), \
+                mock.patch.object(ExternalBackend, "discovery_generation",
+                                  new_callable=mock.PropertyMock(return_value=10 ** 6)):
+            self.assertGreater(
+                flashattn_jittor.backend_environment_epoch(), before)
+        # Leaving the patch has to restore the real watched set, not keep the
+        # widened one.
+        self.assertGreater(flashattn_jittor.backend_environment_epoch(), before)
+        self.assertNotIn(name, state["names"])
+
+    def test_external_backend_discovery_generation_tracks_policy_changes(self):
+        from jittor.compat.external_backend import ExternalBackend, ExternalBackendSpec
+
+        spec = ExternalBackendSpec(
+            name="discovery-generation-test", public_functions=("f",))
+        backend = ExternalBackend(spec)
+        self.assertEqual(backend.discovery_generation, 0)
+        backend.extend_discovery(
+            environment_names=("JITTOR_DISCOVERY_GENERATION_TEST",))
+        self.assertEqual(backend.discovery_generation, 1)
+        # Re-registering the same policy must not look like a change: the
+        # epoch hook rebuilds its watched set off this counter.
+        backend.extend_discovery(
+            environment_names=("JITTOR_DISCOVERY_GENERATION_TEST",))
+        self.assertEqual(backend.discovery_generation, 1)
+
+    def test_external_backend_discovery_memo_follows_the_filesystem(self):
+        from jittor.compat.external_backend import ExternalBackend, ExternalBackendSpec
+
+        def official(p):
+            return (p / "csrc" / "flash_attn" / "flash_api.cpp").is_file()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp).resolve()
+            env = "JITTOR_DISCOVERY_MEMO_ROOT_TEST"
+            spec = ExternalBackendSpec(
+                name="discovery-memo-test",
+                public_functions=("f",),
+                relative_source_dirs=("flash-attention", "third_party/flash-attention"),
+                module_names=("flashattn_jittor",),
+                source_root_names=("flash-attention",),
+                source_marker_dirs=("csrc/flash_attn",),
+                project_root_envs=(env,),
+                source_predicates=(official,),
+            )
+            backend = ExternalBackend(spec)
+            tree = root / "flash-attention"
+            found = [os.fspath(tree)]
+            with mock.patch.dict(os.environ, {env: os.fspath(root)}, clear=False):
+                self.assertEqual(backend.source_roots(), [])
+                # An unchanged tree must not walk at all. project_roots() only
+                # runs on a miss, so this is the memo short-circuiting.
+                with mock.patch.object(backend, "project_roots",
+                                       side_effect=AssertionError("re-walked")):
+                    self.assertEqual(backend.source_roots(), [])
+
+                # A directory that exists but is not yet a source root: the
+                # marker file lands one level deeper than the candidate, so only
+                # the candidate's own signature can notice it.
+                tree.mkdir()
+                self.assertEqual(backend.source_roots(), [])
+                (tree / "setup.py").write_text("", encoding="utf-8")
+                self.assertEqual(backend.source_roots(), found)
+
+                # Same again for a marker inside a declared marker directory.
+                (tree / "setup.py").unlink()
+                self.assertEqual(backend.source_roots(), [])
+                (tree / "csrc" / "flash_attn").mkdir(parents=True)
+                self.assertEqual(backend.source_roots(), [])
+                (tree / "csrc" / "flash_attn" / "flash_api.cpp").write_text(
+                    "", encoding="utf-8")
+                self.assertEqual(backend.source_roots(), found)
+
+            # The unwatched nested relative directory still invalidates: the
+            # leaf appears under an intermediate that did not exist before.
+            nested = root / "third_party" / "flash-attention"
+            nested.mkdir(parents=True)
+            (nested / "setup.py").write_text("", encoding="utf-8")
+            with mock.patch.dict(os.environ, {env: os.fspath(root)}, clear=False):
+                self.assertEqual(backend.source_roots(),
+                                 [found[0], os.fspath(nested)])
+
     def test_flash_backend_environment_epoch_survives_module_reload(self):
         from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 
@@ -581,6 +742,10 @@ path = pathlib.Path(sys.argv[1])
 code = compile(path.read_text(encoding="utf-8"), os.fspath(path), "exec")
 module = types.ModuleType("_flashattn_jittor_reload_test")
 module.__file__ = os.fspath(path)
+# The module body imports its siblings relatively, so the copy needs to know
+# which package it is a copy of; without that the exec dies on the first
+# `from .official_codegen import ...` instead of re-running the body.
+module.__package__ = "jittor.compat.shim.backends.flash_attention"
 exec(code, module.__dict__)
 state = module._BACKEND_ENV_EPOCH_STATE
 old_token = module.backend_cache_token()
@@ -1168,30 +1333,43 @@ assert after == before + 1, (before, after)
 
     @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_sdpa_cuda_routes_masked_rows_through_safe_softmax(self):
-        from jittor.backends.cuda.kernels.nn import softmax_cuda
+        # The fast softmax is reached through the runtime kernel table
+        # (``select_kernel("nn.softmax", ...)`` in nn/functional/attention.py),
+        # which holds the implementation it was registered with -- patching the
+        # module attribute it was defined in traces nothing.
+        from jittor._runtime.dispatch import (dispatch_context, override_kernel,
+                                              registered_kernel)
 
         calls = []
-        original = softmax_cuda.softmax_v1
-
-        def traced(value, log=False, zero_all_neg_inf=False):
-            calls.append(bool(zero_all_neg_inf))
-            return original(value, log, zero_all_neg_inf)
 
         q = jt.ones((1, 2, 4, 8), dtype="float32")
         keep = jt.ones((4, 4), dtype="bool")
         keep[2, :] = False
-        with jt.flag_scope(use_cuda=1), mock.patch.object(
-                softmax_cuda, "softmax_v1", side_effect=traced):
-            masked = torch.nn.functional.scaled_dot_product_attention(
-                q, q, q, attn_mask=keep)
-            masked.sync()
-            self.assertEqual(calls, [True])
+        with jt.flag_scope(use_cuda=1):
+            backend = dispatch_context().backend
+            original = registered_kernel("nn.softmax", backend)
+            self.assertIsNotNone(original, "no fast softmax kernel on " + backend)
 
-            calls.clear()
-            causal = torch.nn.functional.scaled_dot_product_attention(
-                q, q, q, is_causal=True)
-            causal.sync()
-            self.assertEqual(calls, [False])
+            def traced(value, *args, **kwargs):
+                calls.append(bool(kwargs.get("zero_all_neg_inf", False)))
+                return original(value, *args, **kwargs)
+
+            # The composite is what is traced here: without a backward to save
+            # for (with gradients required the memory-efficient Function builds
+            # its own softmax), and with the fused kernel, which has no
+            # softmax to route, switched off.
+            with override_kernel("nn.softmax", backend, traced), jt.no_grad(), \
+                    override_kernel("nn.fused_attention", backend, None):
+                masked = torch.nn.functional.scaled_dot_product_attention(
+                    q, q, q, attn_mask=keep)
+                masked.sync()
+                self.assertEqual(calls, [True])
+
+                calls.clear()
+                causal = torch.nn.functional.scaled_dot_product_attention(
+                    q, q, q, is_causal=True)
+                causal.sync()
+                self.assertEqual(calls, [False])
 
         self.assertTrue(np.isfinite(masked.numpy()).all())
         self.assertTrue(np.isfinite(causal.numpy()).all())
@@ -2192,8 +2370,10 @@ class TestMultiheadAttention(Base):
         E, H, L, B = 16, 4, 6, 2
         x = rng.randn(L, B, E).astype("float32")
         def body(dev):
-            mha = nn.MultiheadAttention(E, H)
-            q = jt.array(x)
+            # A module is built on torch's default device, the CPU; it runs
+            # on `dev` only once moved there, as in torch.
+            mha = nn.MultiheadAttention(E, H).to(dev)
+            q = jt.array(x).to(dev)
             out, w = mha(q, q, q)
             self.assertEqual(tuple(out.shape), (L, B, E), f"mha out shape {dev}")
             # attention weights rows sum to 1 (softmax)
@@ -2207,10 +2387,11 @@ class TestMultiheadAttention(Base):
 
     def test_mha_dropout_training_and_eval(self):
         rng = np.random.RandomState(41)
-        x = jt.array(rng.randn(5, 2, 8).astype("float32"))
+        data = rng.randn(5, 2, 8).astype("float32")
 
         def body(dev):
-            mha = nn.MultiheadAttention(8, 2, dropout=1.0, bias=False)
+            x = jt.array(data).to(dev)
+            mha = nn.MultiheadAttention(8, 2, dropout=1.0, bias=False).to(dev)
             mha.train()
             train_out, train_weights = mha(x, x, x, need_weights=True)
             train_no_weights, _ = mha(x, x, x, need_weights=False)

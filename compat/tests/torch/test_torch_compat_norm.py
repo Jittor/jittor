@@ -299,7 +299,7 @@ class TestLayerNorm(Base):
             out_np, ref_np = jt.fetch_sync([
                 out.float32(), ref.float32(),
             ])
-        self.assertEqual(str(out.dtype), "bfloat16")
+        self.assertEqual(str(out.dtype), "torch.bfloat16")
         np.testing.assert_allclose(
             out_np, ref_np, atol=0.016, rtol=0.008)
 
@@ -358,7 +358,7 @@ class TestLayerNorm(Base):
                 ln.weight = t(w)
                 ln.bias = t(b)
                 out = ln(t(x))
-                self.assertEqual(str(out.dtype), "float32")
+                self.assertEqual(str(out.dtype), "torch.float32")
                 self.ac(out.numpy(), ref, atol=1e-4,
                         msg="ln fused no_grad cuda float32")
 
@@ -384,7 +384,7 @@ class TestLayerNorm(Base):
                         out = ln(t(x).cast(dtype))
                         got = out.float32().numpy()
                         label = f"ln fused no_grad cuda fp16 h{hidden} lowvar={low_variance}"
-                        self.assertEqual(str(out.dtype), dtype)
+                        self.assertEqual(str(out.dtype), "torch." + dtype)
                         self.ac(got, ref, atol=2e-3, rtol=5e-4, msg=label)
                         rel_l2 = np.linalg.norm((got - ref).ravel()) / max(
                             np.linalg.norm(ref.ravel()), 1e-30)

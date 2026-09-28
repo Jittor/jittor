@@ -1,7 +1,17 @@
 """Torch numerical linalg operations."""
 
-def eye(n, m=None, dtype=None, **kwargs):
-    """Create a square or rectangular identity matrix."""
+def eye(n, m=None, dtype=None, device=None, requires_grad=False, **kwargs):
+    """Create a square or rectangular identity matrix, on ``device``.
+
+    ``device=`` used to be swallowed by ``**kwargs``: this function entered
+    ``tensor_frontend(target.Var)`` with no device at all, so
+    ``torch.eye(3, device="cuda:1")`` was built on the *ambient* device and
+    reported ``cuda:0``. It is the only factory `_wrap_constructors` does not
+    reach -- `_bind_missing` installs this one first, so the adapter that
+    carries ``device`` into the placement scope sees ``torch.eye`` already
+    present and leaves it alone -- which is why it was the last one still
+    dropping the argument.
+    """
     from . import (
         _dtype_to_str,
     )
@@ -9,12 +19,15 @@ def eye(n, m=None, dtype=None, **kwargs):
     import jittor as jt
     import jittor.init as _init
     from ...frontend import tensor_frontend
+    from ...nested import _torch_register_leaf
     from ...tensor_state import compatibility_owner
     target = compatibility_owner(jt)
-    with tensor_frontend(target.Var):
+    with tensor_frontend(target.Var, device=device):
         result = _init.eye(shape, _dtype_to_str(dtype) or "float32")
-        result.requires_grad = False
-        return result
+        result.requires_grad = bool(requires_grad)
+    if requires_grad:
+        _torch_register_leaf(result)
+    return result
 
 
 def pairwise_distance(x1, x2, p=2.0, eps=1e-6, keepdim=False):

@@ -368,10 +368,39 @@ jt.cudnn.set_benchmark(0)     # 强制走确定性的启发式
 「多测几次」，而是**跨越改变驻留的 flag 的对照必须先把调优器按住，相对误差要除以它相对
 的那个元素**。详见 `KI-EXEC-003` 与[数值契约](../notes/numerics-contract.md)。）
 
+## 三层：core / smoke / full
+
+一次全量跑完是十几分钟起步,拿它当「我刚才改的东西有没有坏」的答案太贵,于是有三层,
+回答的是三个不同的问题:
+
+| 层 | 问题 | 选择方式 | 实测 |
+| --- | --- | --- | --- |
+| `core` | 改完一处,有没有立刻坏掉 | `tiers.CORE_FILES` 的**白名单**,每个基本面一个文件 | 44 s(双进程模式,串行) |
+| `smoke` | 一个 PR 该等多久 | 整棵树**减去** `tiers.SLOW_FILES` | 约 390 s(4 worker) |
+| `full` | 这棵树到底是什么状态 | 整棵树 | 十几分钟起 |
+
+只有 `full` 是关于这棵树的陈述,另外两层是关于时间的陈述 —— 这也是为什么 `core`
+用白名单而 `smoke` 用黑名单:`smoke` 漏掉一个文件是**覆盖的洞**,所以默认必须是包含;
+`core` 漏掉一个文件只是**发现得晚一点**,后面两层照样会红,所以可以是选择。
+
+`core` 刻意串行:它小到 worker 买不到什么,而且这样在没装 pytest-xdist 的检出上照样能跑。
+它的预算由 `tests/structure/test_gate_tiers.py` **按算术**校验(把每个文件的实测秒数加起来
+和预算比),不是去断言墙上时钟 —— 后者在忙机器上失败的样子和真回归一模一样。
+
+```bash
+python tools/run_test_suite.py --tier core    # 改完就跑这个
+python tools/run_test_suite.py --tier smoke   # 提 PR 前
+python tools/run_test_suite.py                # 全量,按需
+```
+
+往 `core` 里加文件,就是在花所有人的每一次编辑的时间;条目里要写清**实测秒数**和
+**它守的是哪个基本面**,两样都由结构测试检查。
+
 ## 命令
 
 ```bash
-# 完整双进程套件、仅原生收集、或单个模块
+# 三层,以及仅原生收集、单个模块
+python tools/run_test_suite.py --tier core
 python tools/run_test_suite.py
 python -m pytest --collect-only -q tests
 python -m pytest -v tests/ops/test_ops.py
@@ -379,6 +408,10 @@ python -m pytest -v tests/ops/test_ops.py
 # 选择某个运算或后端 marker
 JITTOR_TEST_DEVICES=cpu python -m pytest tests/ops/test_ops.py -k exp
 python -m pytest -m structure tests/structure
+
+# 兼容层测试：走符号链接的那条路径，不要直接指 compat/
+JITTOR_TORCH_SHIM=1 PYTHONPATH=python \
+    python -m pytest python/jittor/compat/tests/torch
 
 # 可复现门禁
 python -m nox -s structure
@@ -393,6 +426,235 @@ python -m nox -s nccl
 
 nox 会话会建立隔离的状态与缓存。**直接并发运行时也必须使用不同的 `JITTOR_HOME` 或
 `cache_name`；新 JIT 运算或扩展的首次构建应当串行执行。**
+
+兼容层那条命令为什么要绕一下：`compat/` 自己带 `__init__.py`，直接
+`pytest compat/tests/torch` 会让 pytest 把它当**顶层**包 `compat` 导入，而
+`compat/_aliases.py` 的 `from .._runtime import ...` 要求自己是 `jittor.compat`，
+于是每一个用例都以
+`ImportError: attempted relative import beyond top-level package` 报错——收集阶段
+看起来是好的（1888 collected），错误全落在 setup，所以很容易误判成"收集不了"。
+`python/jittor/compat` 是指向 `compat/` 的符号链接，从它进去包名就解析成
+`jittor.compat.tests.torch`，相对导入成立。门禁里没有这个问题是因为
+`_run_pytest_once` 会先 `pip install -e compat/`，把 `jittor-torch` 装成真包。
+
+## JIT 缓存：冷启动的代价，和它什么时候白付了
+
+一次冷缓存的运行比热缓存慢一个数量级，差别**只在缓存**。在 8 卡机上用独占的
+`JITTOR_HOME` 与 `cache_name` 实测，同一条命令冷/热各一次：
+
+| | 用时 | 结果 |
+| --- | --- | --- |
+| `tests/nn` 冷 | **37:03** | 360 passed, 71 skipped, 948 subtests |
+| `tests/nn` 热 | **1:02** | 360 passed, 71 skipped, 948 subtests |
+
+### 冷缓存的耗时榜不是"重型文件"榜
+
+`--durations=40` 占冷跑总时长的 78.3%，前两项就占 34%。但把同样的用例在热缓存下
+再看一遍，这张榜就散了：
+
+| 用例 | 冷 | 热 |
+| --- | --- | --- |
+| `test_bmm.py::TestBMM::test_bmm_cuda` | 466.00s | **1.16s** |
+| `test_depthwise_conv.py::TestDepthwiseConv::test_data` | 291.08s | 10.46s |
+| `test_norm_unification.py::…::test_module_and_functional_agree` | 98.50s | 1.98s |
+| `test_pool3d.py::…::test_cuda_backward_matches_cpu_backward` | 59.88s | 1.51s |
+| `test_knn.py::TestKnnOp::test_knn` | 54.82s | 1.68s |
+
+**`tests/nn` 里没有重型文件。** 冷跑的耗时榜是一张"谁先跑到、谁替全场付编译费"
+的表，榜首取决于收集顺序而不是用例本身。拿冷缓存的 durations 去挑"要优化的测试"，
+挑到的是收集顺序。
+
+### 预热预热不掉什么：72% 的 kernel 的 key 是那张子图
+
+冷跑一次 `tests/nn` 落地 604 个 JIT kernel：
+
+| 类别 | 数量 | 占比 | 通用预热能否提前编出 |
+| --- | --- | --- | --- |
+| 融合 kernel（`__opkey…`） | 436 | 72% | **不能** |
+| 库自带的 `code` kernel | 111 | 18% | 能 |
+| 其它单算子 kernel | 57 | 9% | 能 |
+
+融合 kernel 的 key 由**被融合进去的那串算子**拼成——每个算子的 dtype、秩、是否
+跨步、广播形态，按融合顺序排列——而不是由算子名决定。所以"把常用算子组合编一遍
+再退出"这个方向按实测只够得着约 28%，**剩下 72% 不跑出同一张图就不会命中**。
+这是否定结论：能摊销冷代价的不是"预热更多算子"，而是**让本该命中的缓存真的命中**。
+
+### 真正让"热缓存看起来是冷的"的那件事：locale 进了缓存目录名
+
+缓存路径里有一段 `archXXXXXXXXXX`，它是 `cc -march=native -Q --help=target` 输出
+文本的哈希——用编译器实际展开的指令集做 key，本意是对的。但这份输出里每个特性的
+开关状态是**经 gettext 翻译**过的：
+
+```text
+LC_ALL=C           -m128bit-long-double  [enabled]   -> arch0fe147db07
+LC_ALL=zh_CN.UTF-8 -m128bit-long-double  [启用]      -> arch6fe5b27f7d
+```
+
+同一台机器、同一个编译器、同一颗 CPU、同一组 flag，**两棵完全不相干的缓存树**：
+
+```text
+…/Linux-5.4.241-x7a/arch0fe147db07/da0673f5cfe0/demo/cfgd436a523
+…/Linux-5.4.241-x7a/arch6fe5b27f7d/da0673f5cfe0/demo/cfgd436a523
+```
+
+这不是理论问题，本仓库正好两边都占：`noxfile.py` 的 `_session_env` 设了
+`LC_ALL=C`，而仓库里**再没有第二处**设它。于是 `nox` 门禁用一棵树，所有手跑的
+`pytest`（以及 `tools/run_test_suite.py`，它不设 locale）在非英文机器上用另一棵，
+在同一台机器上**各自付一遍对方已经付过的冷编译**。`_shared_jittor_cache()` 共享
+`JITTOR_HOME` 是生效的——它只是被同一个函数里 12 行之外的 `LC_ALL=C` 架空了。
+
+实测代价（空 `JITTOR_HOME`，`JT_PROBE_CACHE=0`，只跑 `import jittor`）：
+
+| | 第 1 次 `LC_ALL=C` | 第 2 次 `LC_ALL=zh_CN.UTF-8` | 第 3 次 同上 |
+| --- | --- | --- | --- |
+| 修之前 | 60s（冷） | **59s（又一次全冷）** | 3s |
+| 修之后 | 60s（冷） | **2s（命中）** | 2s |
+
+修之前落地两棵 `arch*` 树，修之后只有一棵。这只是 `import jittor` 的核心构建；
+一个套件还要在第二棵树里把全部 JIT kernel 再编一遍。
+
+这台机器上两棵树现在就并排躺着：
+
+```text
+arch0fe147db07   1.1G   7801 个 kernel
+arch6fe5b27f7d   113M    196 个 kernel
+```
+
+`probe.json` 让这件事时隐时现而不是稳定可见：它按编译器缓存这个探测结果、不按
+locale，所以**哪个 locale 先填上它，就由哪个决定全机器的缓存目录**，直到编译器的
+size/mtime 变了为止——那一刻整台机器会悄悄搬到另一棵树上，重编一切。
+
+修法两步。一是让探测本身在 C locale 下问（`jittor_utils.c_locale_environment()`），
+而不是要求每个调用者去 export；它收敛到的正是 nox 门禁已经在用的那棵树，所以门禁
+的热缓存不受影响，手跑的运行并进来。二是把 memo 的槽位名从 `target_arch:<cc>` 改成
+`target_arch:c-locale:<cc>`——**只改探测不改槽位是不够的**：已经存过翻译文本的
+`probe.json` 会继续作答，于是 `target_arch_key()` 和它自己的缓存对不上，那台机器
+永远停在第一个问它的 locale 选中的目录上。改了槽位名，每个 home 重新探测一次就
+全部落到同一个 key（本机实测：改之前进程解析到 `arch6fe5b27f7d`，改之后
+`arch0fe147db07`，也就是那棵 1.1G、7801 个 kernel 的热树）。门禁：
+[`tests/build/test_build_config_cache.py`](https://github.com/Jittor/jittor/blob/master/tests/build/test_build_config_cache.py)
+`::test_the_instruction_set_key_does_not_depend_on_the_message_locale`，
+先证明它会红（`{'C': 'arch0fe147db07', 'zh_CN.UTF-8': 'arch6fe5b27f7d'}`）再修。
+
+审计过其余进缓存 key 的探测（`version:`、`cuda_archs`、`nvcc_archs:`、
+python-config、mpicc）——它们都只取结构化的数字或 flag，**只有 `target_arch`
+把翻译过的自由文本喂进了哈希**。
+
+### 第二件：oneDNN 从源码编译，四路并行，而且没人认领
+
+`mkl`（oneDNN v3）是**懒加载**的：`import jittor` 不碰它，
+`tools/run_test_suite.py` 原来的预热探针（`(jt.array([1.,2.])*2).sum()`）也不碰它。
+冷缓存下它要从源码 cmake 构建 ~1200 个 TU，而 `--parallel` 曾被写死成
+`min(4, cpus)`。于是这段构建落在**收集顺序里第一个走到 CPU 卷积/matmul 的用例**
+头上，表现为一个没有任何输出的长停顿。
+
+隔离 A/B（同一份源码树，先后串行跑，机器空闲）：
+
+| `cmake --build --parallel` | 用时 |
+| --- | --- |
+| 4（原值） | **443s** / **448s** |
+| 32（现默认上限） | **87s** / **87s** |
+
+约 **5 倍**，一次冷缓存省掉约 6 分钟。现在的取值按核数与内存两头收敛
+（`JT_ONEDNN_BUILD_JOBS` 可直接覆盖），小 runner 上仍然退回到核数。
+
+端到端确认（预热探针逐库计时，同一台机器）：
+
+```text
+mkl       available  105.3s      <- oneDNN 源码构建，并行度已放开
+cutt      available   10.6s
+cub/cudnn/cublas/curand/cufft/cusparse   各 0.0s
+```
+
+原来那次冷跑里，同一个 oneDNN 构建在 `--parallel 4` 下花了约 480s，还被记在
+`test_bmm_cuda` 头上。
+
+同时预热探针改为显式把后端库建出来（`probe_library(..., load=True)`）：
+**这不减少总工作量**，它只是让这笔开销落在预热步骤里可归因、可加超时，
+而不是伪装成某个 bmm 用例慢了 466 秒。通信库（`mpi`/`nccl`/`hccl`）**不在**
+预热名单里——它们的 loader 会初始化通信子并等待其它 rank，这里没有其它 rank，
+一个可能永久阻塞的预热比它要替换掉的停顿更糟。
+
+### 缓存命中不进全局锁（它曾经要，那是并行的瓶颈）
+
+`Op::jit_run`（`src/core/op.cc`）先查**进程内**的 `jit_ops` map，命中就直接跑；
+没命中才走 `OpCompiler::do_compile`。`jit_ops` 只帮到"同一个进程里第二次用同一个
+key"——磁盘缓存全热时，每个进程对每个不同的 JIT key 都要走一次 `do_compile`。
+
+**过去 `do_compile` 第一行就是 `jittor::lock_guard lg`**，整段（包括纯命中）都在
+全局 `jittor.lock` 里。锁里干的事在两种情况下差别巨大——冷是一整次 nvcc/g++
+（数秒），热只是 key 比对加一次 `dlopen`（毫秒）——但命中路径照样要排队。
+
+现在 `do_compile` 不再拿锁；锁下沉到 `jit_compiler::compile()`，**只有真要编译时
+才拿**。命中走一条免锁快路径：算出这条编译命令现在会产生的 cache key，和产物旁边
+记录的 `<product>.key` 比对，一致就直接 `dlopen`。
+
+这条路安全的唯一依据是**发布顺序**：`cache_compile()` 先把成品 `rename()` 到位，
+**之后**才写 `.key`，两次都是同目录内的 `rename()`，是原子的。所以"看得见匹配的
+key"蕴含"它旁边的目录项已经指向那次构建的完整产物"——不存在 key 已发布而产物没
+发布的中间状态。生成的源码是唯一只在内存里的输入，快路径**不写它**（写是构建动作），
+而是直接哈希那个字符串，这与哈希"它将要写成的那个文件"完全等价。
+
+`tests/build/test_jit_cache_concurrency.py` 就是守这几条的：它从外部采样一次慢速
+重建，一旦出现"新 key 配旧产物/半个产物"就失败（把 `install_file` 改成就地拷贝可以
+复现这个失败）；它还让 8 个进程向同一份缓存并发冷编译重叠的 kernel 集合，跑 3 轮，
+要求每个进程的数值逐条一致。
+
+实测（8 卡机，独占 `JITTOR_HOME` 与 `cache_name`，每个数字跑两次）：
+
+| | 修之前 | 修之后 |
+| --- | --- | --- |
+| 同一批全热 kernel，无人持锁 | 0.226s / 0.225s | 0.239s / 0.223s |
+| 同一批全热 kernel，另一进程持锁 30s | **30.231s / 30.231s** | **0.225s / 0.225s** |
+| `tests/nn` 单进程热跑 | 59.7s / 61.1s / 61.2s | 60.9s / 59.9s |
+| `tests/nn` 按文件分 8 份、8 进程共享同一热缓存 | **76.9s / 85.9s** | **26.4s / 30.1s** |
+
+第二行是机制本身：修之前它整整等满 30 秒，修之后完全不受影响。第四行是结果：同样
+8 个进程共享同一份热缓存，过去比单进程**慢** 1.3–1.4 倍，现在比单进程**快** 2 倍
+以上。四组 `tests/nn` 运行都是 360 passed、0 failed，与串行完全一致。
+
+（注意第三行：单进程不与任何人争锁，所以本来就不该变快，实测也没变——这条是防回归
+用的，不是收益。）
+
+测这种事有两个必须先排掉的干扰，否则数字测的是别的东西：`import jittor` 自己整段
+跑在 `lock_scope()` 里，所以**在 import 之前**起的持锁进程会被 import 等掉；而第一次
+`transpose()` 会经 Python 的 `compile_custom_ops` 懒构建 `cutt` 后端库，那是另一条
+（仍然持锁的）每进程一次的路径，不是每个 JIT key 的开销。两者都要在开表之前做完。
+
+**还没做的：** Python 侧 `@lock.lock_scope()` 的 `compile_custom_ops` /
+`compile_module` / `download_url_to_local` 仍然是整段持锁，即使只是缓存命中。它是
+每进程一次而不是每 key 一次，在上表第四行里已经不是主项，但多进程冷启动时它仍然会
+串行化。
+
+以前这一节推荐的出路是"给每个 worker 自己的 `JITTOR_HOME`、用 `cp -al` 硬链接播种
+一份预热缓存"。**现在不需要了**，而且那条路本来就有代价：每个新 home 第一次
+`import jittor` 仍会重建 `jit_utils` 并以退出码 3 要求重跑，那次重建还会让已播种的
+kernel 失效一部分（实测每个 worker home 重编约 84/875 个）。共享一份热缓存现在既
+更省磁盘也更快。
+
+（同一份数据也说明一件事：这台 384 核机器在冷跑 `tests/nn` 时 `user/real` 只有
+**1.5**，热跑是 **4.9**——瓶颈从来不是算力。）
+
+### 读这些数字时要当心的两件事
+
+**"热缓存"是要被证明的，不是默认成立的。** 上面那张 37:03 / 1:02 的表里，两次跑
+的 passed/skipped/subtest 完全一致；一次运行慢了 35 分钟而报告长得一模一样。所以
+一个"慢"的观测在归因到别的原因之前，先确认缓存真的是热的——最省事的确认方式是
+**把同一条命令再跑一遍**，第二遍的时间才是这套用例本身的耗时。
+
+**跑大目录时用 `-v`，不要用 `-q`。** `-q` 的失败清单**只在最后汇总时打印**：
+一次跑了 4 小时、在 76% 处被 timeout 杀掉的 `pytest tests/ -q`，日志里一条失败也
+没留下。`-v` 每跑完一条就写一行 `…::test_x PASSED/FAILED`，所以被杀掉的运行仍然
+留着到那一刻为止的完整记录。实测同一个文件：`-v` 在汇总之前有 23 行结果，
+`-q` 是 0 行。这条和「中途死掉的会话产出一份"结束了"的日志」是同一个毛病的两面，
+配合 `tools/check_session_completed.py` 的哨兵一起用。
+
+**共享缓存并发跑，要区分冷和热。** **热**的那一份现在可以共享着并行跑：缓存命中
+不再进 `jittor.lock`（见上文"缓存命中不进全局锁"）。**冷**的那一份仍然串行：真正
+要编译的进程还是要拿同一把全局锁，所以想靠"多开几个进程"来并行完成首次编译依然
+无效——**新 JIT 运算或扩展的首次构建应当串行执行**，或者给它自己的 `JITTOR_HOME`
+/ `cache_name`。进程内的并行编译器（`use_parallel_op_compiler`）仍是冷编译唯一的
+并行路径。
 
 ## CI 支持矩阵
 

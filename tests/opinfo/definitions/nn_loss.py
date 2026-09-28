@@ -41,8 +41,8 @@ def _reduce_np(loss, reduction):
     if reduction == "none":
         return loss
     if reduction == "sum":
-        return np.atleast_1d(loss.sum())
-    return np.atleast_1d(loss.mean())   # "mean"
+        return loss.sum()
+    return loss.mean()   # "mean"
 
 
 def mse_loss_ref(input, target, reduction="mean"):
@@ -87,10 +87,10 @@ def cross_entropy_ref(input, target, reduction="mean", ignore_index=-100,
     keep = (tgt != ignore_index).astype(input.dtype)
     per = per * keep
     if reduction == "sum":
-        return np.atleast_1d(per.sum())
+        return per.sum()
     if reduction == "none":
         return per
-    return np.atleast_1d(per.sum() / max(keep.sum(), 1e-8))
+    return per.sum() / max(keep.sum(), 1e-8)
 
 
 def nll_loss_ref(input, target, ignore_index=-100, reduction="mean"):
@@ -101,10 +101,10 @@ def nll_loss_ref(input, target, ignore_index=-100, reduction="mean"):
     keep = (tgt != ignore_index).astype(input.dtype)
     per = per * keep
     if reduction == "sum":
-        return np.atleast_1d(per.sum())
+        return per.sum()
     if reduction == "none":
         return per
-    return np.atleast_1d(per.sum() / max(keep.sum(), 1e-8))
+    return per.sum() / max(keep.sum(), 1e-8)
 
 
 def bce_ref(input, target, reduction="mean"):
@@ -125,7 +125,7 @@ def kl_div_ref(input, target, reduction="mean", log_target=False):
     else:
         per = target * (np.log(target) - input)
     if reduction == "batchmean":
-        return np.atleast_1d(per.sum() / input.shape[0])
+        return per.sum() / input.shape[0]
     return _reduce_np(per, reduction)
 
 
@@ -327,10 +327,16 @@ op_db = [
     # ---- classification losses (int64 target held fixed; only logits differentiated) ----
     OpInfo("cross_entropy", op=F.cross_entropy, ref=cross_entropy_ref,
            sample_inputs_func=sample_cross_entropy),
-    # label_smoothing path goes through gather backward; gradgrad not guaranteed there.
-    OpInfo("cross_entropy", variant_test_name="label_smoothing",
-           op=F.cross_entropy, ref=cross_entropy_ref,
-           sample_inputs_func=sample_cross_entropy_smoothing, supports_gradgrad=False),
+    # `label_smoothing` is deliberately not a parameter of the native op: see
+    # the note under `cross_entropy_loss` in python/jittor/nn/functional/loss.py
+    # ("Torch mode may wrap this object for extra keyword features such as
+    # label smoothing"). This battery drives the native ops, so the entry asked
+    # `jt.nn.functional.cross_entropy` for a keyword it does not take and
+    # failed with `TypeError: got an unexpected keyword argument` on both
+    # devices and both dtypes -- a statement about the wrapper, made in the
+    # wrong session. The compat side owns and checks it:
+    # compat/tests/torch/_torch_compat_checks.py pins both the plain and the
+    # weighted result against torch.
     # nll consumes log-probs linearly (2nd deriv 0); fancy-index backward -> no gradgrad.
     OpInfo("nll_loss", op=F.nll_loss, ref=nll_loss_ref,
            sample_inputs_func=sample_nll_loss, supports_gradgrad=False),

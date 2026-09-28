@@ -1,11 +1,10 @@
 """Stable optimizer state and update adapters, sharing native mathematics."""
-from jittor._core.dtypes import dtype_name as _jittor_dtype_name
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name, var_dtype_name
 from collections.abc import Mapping
 import weakref as _weakref
 import jittor as jt
 import numpy as np
 from .context import get_install_context
-from .grad import autocast_is_enabled
 from .types import _dtype_to_str
 from ..diagnostics import EXPECTED, swallowed
 from typing import Any, Dict, List
@@ -312,14 +311,6 @@ def _load_state_dict_torch(self, state_dict):
             "loaded state dict has a different number of parameter groups")
     load_plan = []
     max_step = 0
-    g = _context.target_namespace
-    moment_names = {
-        "adam": ("exp_avg", "exp_avg_sq"),
-        "adamw": ("exp_avg", "exp_avg_sq"),
-        "sgd": ("momentum_buffer",),
-        "rmsprop": ("square_avg",),
-        "adan": ("exp_avg", "exp_avg_sq", "exp_avg_diff", "pre_grad"),
-    }.get(kind, ())
     for saved_pg, current_pg in zip(saved_groups, self.param_groups):
         if not isinstance(saved_pg, Mapping):
             raise TypeError("loaded optimizer parameter group must be a mapping")
@@ -331,7 +322,7 @@ def _load_state_dict_torch(self, state_dict):
                 "loaded state dict contains a parameter group that "
                 "doesn't match the size of optimizer's group")
         slots = []
-        for pid, parameter in zip(saved_params, current_pg["params"]):
+        for pid in saved_params:
             missing = object()
             try:
                 st = saved_state.get(pid, missing)
@@ -355,14 +346,6 @@ def _load_state_dict_torch(self, state_dict):
                     raise ValueError(
                         "loaded optimizer step must be a non-negative integer")
                 step = int(numeric)
-            for name in moment_names:
-                if name not in st:
-                    continue
-                value = st[name]
-                if not isinstance(value, (jt.Var, np.ndarray)):
-                    raise TypeError("loaded optimizer %s must be a Tensor or ndarray" % name)
-                st[name] = g.tensor(value, dtype=_jittor_dtype_name(value.dtype),
-                                    device=parameter.device).stop_grad()
             max_step = max(max_step, step)
             slots.append((st, step))
         load_plan.append((dict(saved_pg), slots))
@@ -378,10 +361,7 @@ def _load_state_dict_torch(self, state_dict):
                 continue
             for i, buffer in enumerate(buffers):
                 if isinstance(buffer, jt.Var):
-                    parameter = pg["params"][i]
-                    buffers[i] = g.zeros(tuple(parameter.shape),
-                                         dtype=_jittor_dtype_name(buffer.dtype),
-                                         device=parameter.device).stop_grad()
+                    buffers[i] = jt.zeros_like(buffer).stop_grad()
     for gi, (saved_pg, slots) in enumerate(load_plan):
         pg = self.param_groups[gi]
         steps = _torch_param_steps(pg)
@@ -460,15 +440,7 @@ def _zero_grad_compat(self, set_to_none=True):
         object.__setattr__(self, "_grad_map", {})
     except (AttributeError, TypeError) as exc:
         swallowed("torch/optimizers.py _zero_grad_compat: object.__setattr__(self, '_grad_map', {})", exc)
-    # The compatibility pass above has already materialized zero tensors for
-    # existing gradients and preserved None for untouched parameters. Jittor's
-    # native implementation assumes every entry in ``pg['grads']`` is a Var,
-    # so calling it for the mixed list used by set_to_none=False raises.
-    result = _orig_zero(self) if set_to_none else None
-    if not set_to_none:
-        # The zero tensors above are already installed in the optimizer. The
-        # native zero flag also tells FSDP to discard unsynced full gradients.
-        object.__setattr__(self, "_Optimizer__zero_grad", True)
+    result = _orig_zero(self)
     _fsdp2_zero = _fsdp_hooks.provider()
     if _fsdp2_zero is not None and _fsdp2_zero.optimizer_has_fsdp_params(self):
         _fsdp2_zero.refresh_visible_full_grads(self)
@@ -560,6 +532,8 @@ def _lbfgs_type(base):
 
 
 def _step_with_closure(self, loss, retain_graph, closure, kwargs, native_kind):
+    from jittor._runtime import step_capture   # only SGD hands its books to a capture
+    if native_kind != "sgd": step_capture.refuse(f"a captured step cannot replay {native_kind}")
     _orig_step = get_install_context(jt).state["optimizer_native_api"]["steps"][native_kind]
     called_closure = False
     native_fsdp_loss = None
@@ -616,6 +590,8 @@ def _step_with_closure(self, loss, retain_graph, closure, kwargs, native_kind):
     if not getattr(self, "_torch_backward_advanced_n_step", False):
         self.n_step = previous_step + 1
     _advance_ready_param_steps(self)
+    from .optimizers import replay_books_of_step
+    replay_books_of_step(self)
     self.post_step = _torch_post_step
     try:
         out = _orig_step(self, None, retain_graph=retain_graph)
@@ -629,16 +605,9 @@ def _step_with_closure(self, loss, retain_graph, closure, kwargs, native_kind):
 
 
 def _update_in_target_dtype(target, value):
-    if _dtype_to_str(value.dtype) != _dtype_to_str(target.dtype):
-        value = value.cast(_dtype_to_str(target.dtype))
+    if var_dtype_name(value) != var_dtype_name(target):  # native, not `.dtype`
+        value = value.cast(var_dtype_name(target))
     target.update(value)
-
-
-def _adam_update_in_input_dtype(*args, **kwargs):
-    if jt.core.dispatch_context([args[0]])[0] in ("cpu", "cuda"):
-        with jt.flag_scope(amp_reg=0):
-            return adam_update(*args, **kwargs)
-    return adam_update(*args, **kwargs)
 
 
 def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay):
@@ -680,11 +649,10 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
             object.__setattr__(
                 self, "_torch_backward_advanced_n_step", False)
         return native_fsdp_loss if native_fsdp_loss is not None else loss
+    from jittor._runtime import step_capture
     if not getattr(self, "_torch_backward_advanced_n_step", False):
         self.n_step = int(getattr(self, "n_step", 0)) + 1
-    math_update = adam_update
-    if autocast_is_enabled() and jt.flags.amp_reg:
-        math_update = _adam_update_in_input_dtype
+        step_capture.on_replay(lambda: setattr(self, "n_step", int(self.n_step) + 1))
     jt.flags.node_order = 1
     for pg in self.param_groups:
         lr = pg.get("lr", self.lr)
@@ -696,38 +664,67 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
         # unused parameters. loss.backward() then leaves the group
         # without gradients and step() must be a no-op, not KeyError.
         grads = pg.get("grads") or [None] * len(pg["params"])
-        fused_requested = pg.get("fused", getattr(self, "fused", None)) is True
-        fused = False
-        if decoupled_weight_decay and fused_requested and pg["params"]:
-            from jittor._runtime.dispatch import dispatch_context
-            fused = dispatch_context(pg["params"]).backend == "acl"
-        if fused:
-            active = []
+        # `use_acl` is an alias of `use_cuda` (see FLAG_ALIASES), so it is true
+        # on a CUDA build as well and cannot say which backend is actually in
+        # use. Asking the dispatcher does: `optim.adamw_fused` is registered
+        # for "acl" only, so it answers None everywhere else. Keying off the
+        # alias sent CUDA into the Ascend-only path, where the native
+        # `fused_adamw` operator aborts with "only available through a mapped
+        # backend" -- reachable from plain `torch.optim.AdamW(..., fused=True)`.
+        fused_impl = None
+        # torch's AdamW is a multi-tensor kernel unless told otherwise: its
+        # default (fused=None, foreach=None) takes the foreach path on CUDA.
+        # So the fused list update is taken unless the caller turned both
+        # off, or asked for a variant it does not compute.
+        fused = pg.get("fused", getattr(self, "fused", None))
+        want_fused = (decoupled_weight_decay and fused is not False
+                      and (fused is True or pg.get("foreach") is not False)
+                      and not pg.get("amsgrad") and not pg.get("maximize"))
+        active = []
+        if want_fused:
+            for i, (p, g, v, m) in enumerate(zip(
+                    pg["params"], grads, pg["values"], pg["m"])):
+                if not p.requires_grad or not isinstance(g, jt.Var) \
+                        or list(g.shape) != list(p.shape):
+                    continue
+                active.append((p, m, v, g, int(param_steps[i])))
+            if active:
+                from jittor._runtime.dispatch import select_kernel
+                fused_impl = select_kernel("optim.adamw_fused", active)
+        if fused_impl is not None:
+            stepped = []
             for i, (p, g, v, m) in enumerate(zip(
                     pg["params"], grads, pg["values"], pg["m"])):
                 if not p.requires_grad or not isinstance(g, jt.Var) \
                         or list(g.shape) != list(p.shape):
                     continue
                 param_steps[i] = int(param_steps[i]) + 1
-                active.append((p, m, v, g, param_steps[i] - 1))
-            from jittor.optim.algorithms.adam import _acl_fused_adamw_updates
-            updates = _acl_fused_adamw_updates(
-                active, lr, b0, b1, weight_decay, eps)
+                stepped.append(i)
+            lr_arg = lr
+            if step_capture.active():   # a replay advances these without step()
+                lr_arg = step_capture.live_fused_update(
+                    fused_impl, lr, param_steps, stepped, lambda g=pg: g.get("lr", self.lr),
+                    lambda g=pg: (tuple(g.get("betas", self.betas)),
+                                  g.get("weight_decay", self.weight_decay), g.get("eps", self.eps)),
+                    self.__dict__.get("_amp_found_inf"), self)
+            updates = fused_impl(
+                active, lr_arg, b0, b1, weight_decay, eps)
             for (p, m, v, _, _), (new_p, new_m, new_v) in zip(
-                    active, updates):
-                _update_in_target_dtype(p, new_p)
-                _update_in_target_dtype(m, new_m)
-                _update_in_target_dtype(v, new_v)
+                    active, updates):  # fused_adamw keeps each input's dtype
+                p.update(new_p)
+                m.update(new_m)
+                v.update(new_v)
                 if p.is_stop_grad():
                     p.start_grad()
             continue
+        step_capture.refuse("the per-parameter Adam update bakes its step count in")
         for i, (p, g, v, m) in enumerate(zip(
                 pg["params"], grads, pg["values"], pg["m"])):
             was_trainable = bool(p.requires_grad)
             if not was_trainable or not isinstance(g, jt.Var) or list(g.shape) != list(p.shape):
                 continue
             param_steps[i] = int(param_steps[i]) + 1
-            _update_in_target_dtype(p, math_update(
+            _update_in_target_dtype(p, adam_update(
                 p, g, v, m, lr=lr, eps=eps, weight_decay=weight_decay,
                 betas=(b0, b1), step=param_steps[i],
                 decoupled_weight_decay=decoupled_weight_decay,
@@ -784,10 +781,6 @@ def adam_init(self, params, lr=1e-3, *args, **kwargs):
 
 
 def adamw_init(self, params, lr=1e-3, *args, **kwargs):
-    # torch.optim.AdamW defaults to decoupled weight decay, while Jittor's
-    # native optimizer keeps its historical no-decay default.
-    if len(args) < 3 and "weight_decay" not in kwargs:
-        kwargs["weight_decay"] = 0.01
     return _initialize_default(self, params, lr, args, kwargs, 'AdamW')
 
 

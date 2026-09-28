@@ -38,6 +38,7 @@ Jittor vs 真 PyTorch 数据，而不是把 JIT、H2D 或 lazy graph 漏执行�
 
 ## 工具路由
 
+- 原生与独立 Torch frontend 的 NPU 矩阵乘：`benchmark_npu_frontends.py`（见下节）
 - 通用算子初始基线：`benchmark_transformer_bottlenecks.py`
 - forward/backward 算子与 Transformer block：`benchmark_training_hotspots.py`
 - 同版本 Tiny Llama/BERT/ViT：`benchmark_hf_tiny_models.py`
@@ -47,6 +48,47 @@ Jittor vs 真 PyTorch 数据，而不是把 JIT、H2D 或 lazy graph 漏执行�
 - 完整 SGD/AdamW step：`benchmark_optimizer_step.py`
 - SDPA layout/Flash 物化：`probe_sdpa_layout_materialization.py`
 - Ascend Qwen3 整模推理：`benchmark_qwen3_ascend.py`
+
+### 独立前端 NPU 最小基准
+
+`benchmark_transformer_bottlenecks.py` 仍使用历史 `import jittor as torch` 与命名空间
+替换，不能证明独立 Torch frontend。新的 `benchmark_npu_frontends.py` 每次只运行一个
+模式，compat 显式调用 `activate(independent_namespace=True)`，检查独立 Tensor 身份。
+它不通过旧 `run_perf_env.sh` 激活环境；先按昇腾指南加载 CANN，在相同已分配设备上
+用以下两个独立进程顺序执行（外部设置 `ASCEND_RT_VISIBLE_DEVICES`）：
+
+```bash
+export JITTOR_LAB_ROOT="${JITTOR_LAB_ROOT:-$(cd .. && pwd)/jittor-lab}"
+perf_run="$JITTOR_LAB_ROOT/_state/ascend-validation/matmul-$(date +%Y%m%d-%H%M%S)"
+perf_script=agent/skills/jittor-transformers-perf/scripts/benchmark_npu_frontends.py
+perf_python="${JITTOR_CI_PYTHON:-python3}"
+JITTOR_HOME="$perf_run/native-cache" cache_name=npu_matmul_native \
+  "$perf_python" "$perf_script" --mode native --output "$perf_run/native.json"
+JITTOR_HOME="$perf_run/compat-cache" cache_name=npu_matmul_compat \
+  "$perf_python" "$perf_script" --mode compat --output "$perf_run/compat.json"
+```
+
+解释器需已安装当前核心和独立 `jittor-torch` 兼容发行版；源码 `PYTHONPATH`
+本身不会安装独立包。`jittor.compat.shim` 是安装后的公开入口，不应改为 native alias。
+用与测试相同的已安装解释器设置 `JITTOR_CI_PYTHON`；例如 task venv 的 `bin/python`。
+先在对应的隔离缓存中只验证导入与身份，再启动计时：
+
+```bash
+JITTOR_TORCH_SHIM=0 JITTOR_HOME="$perf_run/compat-cache" \
+  "$perf_python" -c 'import jittor as jt; from jittor.compat.shim import activate; activate(independent_namespace=True); import torch; assert torch is not jt and torch.Tensor is not jt.Var; print(torch.__file__, torch.Tensor.__module__)'
+```
+
+模板默认 float32、256×256 矩阵、3 组输入、
+10 次预热和 50 次计时；用 `--m --k --n --slots --warmup --repeats --seed` 修改。
+每组输入先与 NumPy float64 累积的矩阵乘对拍，检查设备驻留，预热后逐次同步计时，
+最后再对拍。整个计算处于零回退守卫内；任何 ACL、数值或驻留失败都不输出成功报告。
+记录每次延迟、median、p95、回退计数、设备快照、Python/包来源、提交和 dirty 补丁
+摘要；原始 JSON 只允许写到 lab 下且在 checkout 外。保存运行前驱动/固件/CANN 版本
+快照，并按 [NPU 记录模板](../../../docs/development/npu-validation-templates.md) 填写报告。
+
+本入口测量单次前向的 Python 构图到同步完成延迟，不含 D2H、首次编译或训练。
+保持各组 shape、精度和设备负载一致，多轮交错重跑后再形成比较结论；微基准结果
+不能外推到整个模型。此入口的代码审查/语法检查不代表真实 NPU 性能已经验证。
 
 Ascend 整模对拍必须为 Jittor 和原生 `torch_npu` 使用独立 Python 进程、相同
 Transformers 版本和相同本地 checkpoint。运行 Jittor 一侧前设置

@@ -102,6 +102,18 @@ ArrayOp::ArrayOp(PyObject* obj) {
         scalar.i8 = obj == Py_True;
         args = {&scalar, {}, ns_bool};
     } else
+    // Not CheckExact: numpy's complex128 scalar is a subclass of python
+    // complex, and it is the one complex numpy scalar the type table cannot
+    // serve (NPY_CDOUBLE has no NanoString). numpy's complex64 is not a
+    // subclass and goes down the array branch below, which handles it.
+    // jittor's complex support is complex64 throughout -- dtype_infer returns
+    // ns_complex64 for every complex combination, before it looks at anything
+    // else -- so narrow here the same way a python float becomes float32.
+    if (PyComplex_Check(obj)) {
+        scalar.c64[0] = (float32)PyComplex_RealAsDouble(obj);
+        scalar.c64[1] = (float32)PyComplex_ImagAsDouble(obj);
+        args = {&scalar, {}, ns_complex64};
+    } else
     if (PyObject_TypeCheck(obj, &PyjtVarHolder.ht_type)) {
         auto ptr = GET_RAW_PTR(VarHolder, obj);
         args = move(fetch_sync({ptr}).at(0));

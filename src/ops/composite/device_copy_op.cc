@@ -21,6 +21,10 @@ static VarPtr make_device_copy(Var* x, int device) {
 }
 
 DeviceCopyOp::DeviceCopyOp(Var* x, int device) : x(x), device(device) {
+    if (device >= 0 && !x->is_contiguous()) {
+        forward(make_device_copy(contiguous_storage(x), device));
+        return;
+    }
     set_flag(OpFlags::_cpu);
     set_flag(OpFlags::_cuda);
     set_flag(OpFlags::_manual_set_vnbb);
@@ -32,6 +36,25 @@ DeviceCopyOp::DeviceCopyOp(Var* x, int device) : x(x), device(device) {
         << "Invalid CUDA device index" << device >> ", visible device count is" << count;
     y = create_output(nullptr, x->dtype());
     y->set_flag(VarFlags::_is_scalar, x->flag(VarFlags::_is_scalar));
+    // `_is_scalar` is carried for dtype promotion -- `x.cuda(1) * 2` must keep
+    // promoting like `x * 2`. It must NOT also make the result a *movable*
+    // pending scalar: `Op::propagate_device` retargets one of those, and the
+    // pending subgraph behind it, onto whatever device the other operand is
+    // on, which silently undoes the copy the caller just asked for. Measured
+    // before this line existed, with 8 visible devices:
+    //
+    //     a = jt.ones(3).cuda(1); b = jt.ones(3).cuda(2)   # neither synced
+    //     (a + b).sync()      -> ran on cuda:1, and b.device read "cuda:1"
+    //
+    // i.e. an explicit `.cuda(2)` became cuda:1 with no error, while the same
+    // expression with the operands synced raises. `.cpu()` lost the same way:
+    // `jt.ones(3).cpu() + jt.ones(3).cuda(2)` put everything on cuda:0.
+    // `_placement_published` is exactly "this Var's device is a published
+    // fact", and it is what `is_pending_scalar` already tests. The accepted
+    // edge of docs/notes/device-placement.md section 3 -- an unsynced
+    // `jt.ones(n)` following its operand -- is untouched: that Var has no
+    // device_copy behind it and so never reaches this constructor.
+    y->set_flag(VarFlags::_placement_published);
     // The host copy is placed in host memory directly. The executor used to
     // allocate every output on the op's device and this one then threw that
     // block away after the D2H transfer, so `x.cpu()` transiently held twice
@@ -66,15 +89,42 @@ void DeviceCopyOp::jit_prepare(JK& jk) {
     // No generated kernel: run() issues the copy itself.
 }
 
+// `x`'s elements in order into dense host memory at `out`. A strided `x`
+// -- a channels-last activation, a weight read through permuted strides -- is
+// brought over as the span of storage it covers and put in order here, so
+// reading it costs no dense copy on the device.
+static void copy_to_host(void* out, Var* x, Device source) {
+    if (x->is_contiguous()) {
+        backend_copy(out, {}, x->mem_ptr, source, x->size);
+        return;
+    }
+    Allocation span(cpu_allocator, x->storage_span_bytes());
+    backend_copy(span.ptr, {}, x->mem_ptr, source, x->storage_span_bytes());
+    const int n = x->shape.size();
+    const int64 dsize = x->dsize();
+    vector<int64> index(n, 0);
+    const char* from = (const char*)span.ptr;
+    char* to = (char*)out;
+    int64 offset = 0;
+    for (int64 i=0; i<x->num; ++i) {
+        std::memcpy(to + i*dsize, from + offset*dsize, dsize);
+        for (int d=n-1; d>=0; --d) {
+            if (++index[d] < x->shape[d]) { offset += x->storage_stride(d); break; }
+            offset -= (x->shape[d]-1) * x->storage_stride(d);
+            index[d] = 0;
+        }
+    }
+}
+
 void DeviceCopyOp::run() {
     auto source = allocation_device(x->allocator);
     if (device < 0) {
         if (!y->allocator->is_cuda()) {
-            backend_copy(y->mem_ptr, {}, x->mem_ptr, source, x->size);
+            copy_to_host(y->mem_ptr, x, source);
             return;
         }
         Allocation host(cpu_allocator, y->size);
-        backend_copy(host.ptr, {}, x->mem_ptr, source, x->size);
+        copy_to_host(host.ptr, x, source);
 
         // The executor allocates outputs on the op's device before run(). A
         // host copy is the exception: replace that temporary device block

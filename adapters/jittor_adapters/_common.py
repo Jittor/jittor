@@ -8,7 +8,15 @@ class UnsupportedAdapterVersion(ImportError):
 
 def require_version(package, supported):
     module = sys.modules.get(package)
-    version = vars(module).get("__version__") if module is not None else None
+    # `getattr`, not `vars(module).get(...)`. A lazily constructed module keeps
+    # its attributes behind a module-level `__getattr__` and never puts them in
+    # the namespace dict; reading only the dict reports "no version" for a
+    # package that has one. Transformers 5.x is exactly that shape -- the module
+    # is a `_LazyModule` whose `extra_objects` carry `__version__` -- so the
+    # dict lookup returned None and this raised
+    # "imported package reports None" for 5.5.3, a version this adapter lists as
+    # supported. A real (non-lazy) module answers the same either way.
+    version = getattr(module, "__version__", None) if module is not None else None
     # A source checkout's own version wins; never substitute unrelated installed
     # metadata and accidentally approve a different source tree.
     normalized = str(version).split("+", 1)[0]

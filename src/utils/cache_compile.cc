@@ -283,8 +283,15 @@ static vector<string> read_dependencies(const string& dependency_name) {
 #endif
 }
 
+// `in_memory_name` (when non-empty) is an input the caller has in a string
+// rather than on disk; it is hashed from `in_memory_content`. Hashing the
+// string and hashing the file that string is about to be written to give the
+// same key, which is what lets cache_compile_probe() answer "is a build
+// needed?" before performing the write that a build would start with.
 static string build_cache_key(const string& cmd, vector<string> input_names,
-                              const string& dependency_name) {
+                              const string& dependency_name,
+                              const string& in_memory_name = "",
+                              const string& in_memory_content = "") {
     auto dependencies = read_dependencies(dependency_name);
     input_names.insert(input_names.end(), dependencies.begin(), dependencies.end());
     unordered_set<string> processed;
@@ -298,6 +305,10 @@ static string build_cache_key(const string& cmd, vector<string> input_names,
         // hashed even when the compiler does not put them in a depfile.
         if (name.back() == 'b') continue;
         cache_key += "# " + name + ": ";
+        if (!in_memory_name.empty() && name == in_memory_name) {
+            cache_key += content_hash(in_memory_content) + "\n";
+            continue;
+        }
         if (!file_exist(name)) {
             cache_key += "missing\n";
             continue;
@@ -415,6 +426,31 @@ static void run_and_install(const string& cmd, const string& output_name,
         remove(dependency_name.c_str());
 #endif
     }
+}
+
+CacheProbe cache_compile_probe(string cmd,
+                               const string& in_memory_input_name,
+                               const string& in_memory_input_content) {
+    string in_memory_name = in_memory_input_name;
+    #ifdef _WIN32
+    cmd = _to_winstr(cmd);
+    if (in_memory_name.size()) in_memory_name = _to_winstr(in_memory_name);
+    #endif
+    CacheProbe probe;
+    vector<string> input_names;
+    map<string,vector<string>> extra;
+    find_names(cmd, input_names, probe.output_name, extra);
+    probe.key_name = probe.output_name + ".key";
+    // The product has to exist for its key to mean anything: cache_compile()
+    // reads the key only when it does, and a key left behind by a removed
+    // product must not be read as "nothing to build".
+    string recorded_key;
+    if (file_exist(probe.output_name))
+        recorded_key = read_all(probe.key_name);
+    probe.cache_key = build_cache_key(cmd, input_names, probe.output_name + ".d",
+                                      in_memory_name, in_memory_input_content);
+    probe.up_to_date = !recorded_key.empty() && recorded_key == probe.cache_key;
+    return probe;
 }
 
 bool cache_compile(string cmd, const string& cache_path_, const string& jittor_path_) {

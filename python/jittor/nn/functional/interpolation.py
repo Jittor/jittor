@@ -2,6 +2,7 @@
 
 import jittor as jt
 from jittor._runtime.dispatch import try_dispatch
+from ._layout import channels_last_source, channels_last_view, records_no_grad
 
 
 def _bicubic(x, a, func):
@@ -11,6 +12,31 @@ def _bicubic(x, a, func):
     if func == 2:
         return a * (jt.abs(x) ** 3) - 5 * a * (x**2) + 8 * a * jt.abs(x) - 4 * a
     return 0
+
+
+class _ChannelsLast:
+    """[N, H, W, C] storage, sampled through NCHW index lists.
+
+    `_interpolate` indexes an image as (n, c, x, y); this answers the same
+    samples from the NHWC tensor a channels-last activation is a view of, so
+    the result comes out NHWC too, laid out for the next convolution.
+    """
+
+    def __init__(self, source):
+        self.source = source
+        n, h, w, c = source.shape
+        self.shape = (n, c, h, w)
+
+    @staticmethod
+    def _nhwc(index):
+        n, c, x, y = index
+        return [n, x, y, c]
+
+    def reindex(self, index):
+        return self.source.reindex(self._nhwc(index))
+
+    def reindex_var(self, index):
+        return self.source.reindex_var(self._nhwc(index))
 
 
 def _interpolate(img, x, y, ids, mode):
@@ -88,16 +114,51 @@ def resize(img, size, mode="nearest", align_corners=False, tf_mode=False):
     fast = try_dispatch("nn.resize", img, (H, W), mode, align_corners, tf_mode)
     if fast is not None:
         return fast
-    nid, cid, hid, wid = jt.index((n, c, H, W))
+    # A channels-last input is sampled from its NHWC storage and answered in
+    # it; the indices are then laid out [N, H, W, C] for the same reason.
+    source = None
+    if mode in ("nearest", "bilinear", "bicubic") and records_no_grad(img):
+        source = channels_last_source(img)
+    if mode == "nearest" and not align_corners:
+        # Index expressions, not index tensors: `floor(i * h / H)` is the
+        # integer quotient. Tensors held here are what an auto-flush inside
+        # this call computes in full -- four int32/float maps of the output's
+        # size, 1 GB at an SD1.5 VAE's last upsample -- instead of fusing them.
+        if source is None:
+            return img.reindex([n, c, H, W], ["i0", "i1", f"i2*{h}/{H}", f"i3*{w}/{W}"])
+        return channels_last_view(source.reindex(
+            [n, H, W, c], ["i0", f"i1*{h}/{H}", f"i2*{w}/{W}", "i3"]))
+    if source is None:
+        nid, cid, hid, wid = jt.index((n, c, H, W))
+    else:
+        nid, hid, wid, cid = jt.index((n, H, W, c))
+    # The sampling coordinates come from an int32 `jt.index` scaled by a Python
+    # float, and int32 * float promotes to float32 whatever the image is. So a
+    # float64 image was resampled with float32 weights: the reference test
+    # `interpolate_bilinear [cpu/float64]` came back accurate to 1.7e-7 --
+    # single-precision epsilon -- where it is checked at 1e-7. Doing the
+    # coordinate arithmetic in the image's own floating type fixes that, and
+    # leaves every narrower dtype where it was: float16 and bfloat16 want
+    # float32 coordinates, which is what torch computes them in too.
+    if img.dtype == "float64":
+        hid, wid = hid.float64(), wid.float64()
+    # Scale by the integer ratio rather than by a precomputed Python float.
+    # `hid * (h / H)` rounds `h / H` first and then multiplies, so the error is
+    # whatever that one division lost, scaled up by the index -- and the Python
+    # float is materialised as a float32 constant, so for a float64 image the
+    # rounding is a float32 rounding: 2/3 reached the kernel as 0.66666669.
+    # `hid * h / H` multiplies exactly (h and H are small integers) and rounds
+    # once, at the end. Same expression, and it is the order the reference
+    # implementations use.
     if align_corners:
-        x = hid * ((h - 1) / max(1, H - 1))
-        y = wid * ((w - 1) / max(1, W - 1))
+        x = hid * (h - 1) / max(1, H - 1)
+        y = wid * (w - 1) / max(1, W - 1)
     elif mode == "bicubic":
-        x = (hid + 0.5) * (h / H) - 0.5
-        y = (wid + 0.5) * (w / W) - 0.5
+        x = (hid + 0.5) * h / H - 0.5
+        y = (wid + 0.5) * w / W - 0.5
     elif mode == "nearest":
-        x = hid * (h / H)
-        y = wid * (w / W)
+        x = hid * h / H
+        y = wid * w / W
     elif mode == "area":
         """
         Area interpolation uses AdaptivePool2D to resize origin images.
@@ -125,19 +186,24 @@ def resize(img, size, mode="nearest", align_corners=False, tf_mode=False):
         return adaptive_output.reduce("sum", [4, 5]) / pixel_count[None, None, ...]
     else:
         if tf_mode:
-            x = hid * (h / H)
+            x = hid * h / H
             if H > h:
                 x = x.clamp(0, h - 1)
-            y = wid * (w / W)
+            y = wid * w / W
             if W > w:
                 y = y.clamp(0, w - 1)
         else:
-            x = hid * (h / H) + (h / H * 0.5 - 0.5)
+            # `(hid + 0.5) * h / H - 0.5`, not `hid * (h/H) + (h/H*0.5 - 0.5)`:
+            # algebraically the same, one rounding instead of three, and the
+            # same order as the reference.
+            x = (hid + 0.5) * h / H - 0.5
             if H > h:
                 x = x.clamp(0, h - 1)
-            y = wid * (w / W) + (w / W * 0.5 - 0.5)
+            y = (wid + 0.5) * w / W - 0.5
             if W > w:
                 y = y.clamp(0, w - 1)
+    if source is not None:
+        return channels_last_view(_interpolate(_ChannelsLast(source), x, y, (nid, cid), mode))
     return _interpolate(img, x, y, (nid, cid), mode)
 
 

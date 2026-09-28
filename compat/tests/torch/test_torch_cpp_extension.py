@@ -197,6 +197,15 @@ class TestTorchCppExtension(unittest.TestCase):
     def _build_probe_extension(self):
         import torch
         from torch.utils.cpp_extension import load_inline
+        from jittor.compat.shim.cpp_extension import _find_pybind_include
+
+        # ``torch/extension.h`` includes <pybind11/pybind11.h>, so building any
+        # extension needs those headers. They are not part of jittor, and this
+        # machine has no pybind11 at all -- report that rather than reporting a
+        # compile failure whose cause is a missing build dependency.
+        if _find_pybind_include() is None:
+            self.skipTest("building a C++ extension needs the pybind11 headers; "
+                          "they are not installed here")
 
         src = r"""
 #include <torch/extension.h>
@@ -329,5 +338,153 @@ torch::Tensor zeros_like_with_options(torch::Tensor x) {
         self.assertEqual(float(z.sum().item()), 0.0)
 
 
+class TestShimHeadersInvalidateTheBuildCache(unittest.TestCase):
+    """A shim header edit has to recompile, not report "up-to-date".
+
+    The up-to-date checks compare an object's source mtime and its compile
+    command, so they never saw a header change. Editing ``torch/extension.h``
+    therefore reused objects compiled against the old text: the extension kept a
+    call to a symbol the new header no longer defined, every object was reported
+    "up-to-date", and the failure only appeared later as ``undefined symbol`` at
+    import. The shim's header content is carried in the command as
+    ``-DJTORCH_SHIM_ABI=<digest>`` so that cannot happen silently again.
+    """
+
+    # build() only needs these keys for a single C++ source; the compiler itself
+    # is faked below, so the paths do not have to exist.
+    _CFG = {
+        "cc_path": "/bin/true", "nvcc_path": "/bin/true", "ext_suffix": ".so",
+        "src_inc": "", "extern_inc": "", "extern_cuda_inc": "",
+        # Every other include is an empty placeholder because the compiler is
+        # faked and the values never reach one. `pybind_inc` is not: a build
+        # without pybind11 headers cannot succeed, so `_common_includes`
+        # refuses instead of emitting a command g++ would reject later.
+        "py_inc": "", "pybind_inc": "/stub/pybind11/include",
+        "cuda_includes": [],
+        "core_dirs": [], "arch_flags": [], "cores": {}, "cuda_libs": [],
+        # The real cfg() always carries these two (None when there is no CUDA
+        # runtime / no wheel stack); the build path reads them unconditionally.
+        "cudart_lib": None, "cuda_wheel_fingerprint": None,
+    }
+
+    @staticmethod
+    def _abi_digest_in(commands):
+        for cmd in commands:
+            for arg in cmd:
+                if arg.startswith("-DJTORCH_SHIM_ABI="):
+                    return arg.split("=", 1)[1]
+        return None
+
+    def test_editing_a_shim_header_recompiles(self):
+        from jittor.compat.shim import cpp_extension
+
+        with tempfile.TemporaryDirectory() as tmp:
+            include = os.path.join(tmp, "include")
+            os.makedirs(os.path.join(include, "torch"))
+            header = os.path.join(include, "torch", "extension.h")
+            build_dir = os.path.join(tmp, "build")
+            os.makedirs(build_dir)
+            src = os.path.join(tmp, "probe.cpp")
+            commands = []
+
+            def write(path, text):
+                with open(path, "w", encoding="utf-8") as handle:
+                    handle.write(text)
+
+            def fake_run(cmd, **kwargs):
+                commands.append(list(cmd))
+                # The compiler is faked, so create the object it was asked for --
+                # otherwise _object_matches_command sees a missing object and the
+                # "unchanged tree" case would compile for the wrong reason.
+                if "-o" in cmd:
+                    write(cmd[cmd.index("-o") + 1], "")
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+            write(header, "// v1\n")
+            write(src, "int probe() { return 0; }\n")
+
+            with mock.patch.object(cpp_extension, "SHIM_INCLUDE", include), \
+                    mock.patch.object(cpp_extension, "SHIM_SOURCES", []), \
+                    mock.patch.object(cpp_extension, "cfg",
+                                      return_value=dict(self._CFG)), \
+                    mock.patch.object(cpp_extension.subprocess, "run",
+                                      side_effect=fake_run):
+                cpp_extension.build("probe", [src], build_dir, verbose=False)
+                self.assertEqual(len(commands), 2,
+                                 "expected one compile and one link, got %r" % commands)
+                first = self._abi_digest_in(commands)
+                self.assertIsNotNone(
+                    first, "the shim header digest never reached the compiler")
+
+                commands.clear()
+                cpp_extension.build("probe", [src], build_dir, verbose=False)
+                self.assertEqual(commands, [],
+                                 "an unchanged tree recompiled: %r" % commands)
+
+                commands.clear()
+                write(header, "// v2: the ABI changed\n")
+                cpp_extension.build("probe", [src], build_dir, verbose=False)
+                self.assertNotEqual(commands, [],
+                                    "a shim header edit was ignored by the cache")
+                self.assertNotEqual(first, self._abi_digest_in(commands))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestMissingPybind11IsNamed(unittest.TestCase):
+    """A missing prerequisite has to name itself.
+
+    ``include/torch/extension.h`` includes <pybind11/pybind11.h> and
+    <pybind11/stl.h> unconditionally, so an extension cannot build without the
+    headers. Before this, ``_common_includes`` simply dropped the ``-I`` and
+    let g++ fail, and the flash-attention bridge reported the result as
+    ``import flash_attn_jittor_cuda failed: No module named
+    'flash_attn_jittor_cuda'`` -- a symptom that sends the reader looking for a
+    missing Python module rather than a missing header.
+    """
+
+    def _config(self, pybind_inc):
+        return {
+            "pybind_inc": pybind_inc,
+            "src_inc": "/src", "extern_inc": "/extern",
+            "extern_cuda_inc": "/extern/cuda", "py_inc": "/py",
+            "cuda_includes": (), "core_dirs": (),
+        }
+
+    def test_the_error_names_pybind11_and_how_to_supply_it(self):
+        from jittor.compat.shim.cpp_extension import _common_includes
+        with self.assertRaises(RuntimeError) as caught:
+            _common_includes(self._config(None), [])
+        message = str(caught.exception)
+        self.assertIn("pybind11", message)
+        self.assertIn("PYTHONPATH", message)
+
+    def test_a_found_include_still_reaches_the_command_line(self):
+        # The guard must not cost the ordinary path its include.
+        from jittor.compat.shim.cpp_extension import _common_includes
+        flags = _common_includes(self._config("/somewhere/pybind11/include"), [])
+        self.assertIn("-I/somewhere/pybind11/include", flags)
+
+
+class TestCoreHeadersAreOnTheIncludePath(unittest.TestCase):
+    """`src_inc` has to find `core/common.h` in a checkout, not just a wheel.
+
+    4.15 moved the C++ core out of the Python package to the repo top level.
+    The config used to join `jittor_path/src`, which is the installed-wheel
+    layout; from a checkout it named a directory that does not exist, so every
+    extension failed on `#include "core/common.h"`. The flash-attention bridge
+    reported that as `No module named 'flash_attn_jittor_cuda'`, so the cause
+    never reached the caller. `core_root()` exists for exactly this and names
+    `core/common.h` as its marker.
+    """
+
+    def test_src_inc_contains_the_marker_header(self):
+        import os
+        from jittor.compat.shim.cpp_extension import cfg
+        src_inc = cfg()["src_inc"]
+        self.assertTrue(
+            os.path.isfile(os.path.join(src_inc, "core", "common.h")),
+            "src_inc=%r has no core/common.h, so every extension built "
+            "through the shim will fail to compile" % (src_inc,))

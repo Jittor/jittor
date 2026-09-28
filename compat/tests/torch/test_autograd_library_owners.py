@@ -82,7 +82,10 @@ def test_library_real_cpu_dispatch_registered_backward_and_schema():
         return grad * 3 * x * x
 
     torch.library.register_autograd("owner_gradient::cube", backward, setup_context=setup)
-    x = torch.tensor([2., 3.], requires_grad=True)
+    # device="cpu": only a CPU (and Meta) kernel is registered above, and the
+    # default device here follows the runtime policy, so an accelerator-
+    # resident tensor would look for a kernel this test never registered.
+    x = torch.tensor([2., 3.], requires_grad=True, device="cpu")
     out = torch.ops.owner_gradient.cube(x)
     np.testing.assert_array_equal(out.numpy(), [8, 27])
     dx, = torch.autograd.grad(out.sum(), x)

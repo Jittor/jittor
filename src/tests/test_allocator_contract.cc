@@ -80,7 +80,7 @@ JIT_TEST(sfrl_allocator_rejects_bad_allocation) {
     expect_error([&]() { sfrl.free(nullptr, 16, CachingBlockPool::ID_LIMIT + 7); });
     // id 0 is never handed out, so it must not be accepted either
     expect_error([&]() { sfrl.free(nullptr, 16, 0); });
-    expect_error([&]() { sfrl.share_with(16, 0); });
+    expect_error([&]() { sfrl.share_with(16, 0, 0); });
 
     size_t allocation = 0;
     void* ptr = sfrl.alloc(1024, allocation);
@@ -130,7 +130,7 @@ JIT_TEST(sfrl_allocator_rejects_unissued_id) {
     size_t allocation = 0;
     void* ptr = sfrl.alloc(1024, allocation);
     expect_error([&]() { sfrl.free(nullptr, 16, allocation + 1000); });
-    expect_error([&]() { sfrl.share_with(16, allocation + 1000); });
+    expect_error([&]() { sfrl.share_with(16, allocation + 1000, 0); });
     sfrl.free(ptr, 1024, allocation);
 }
 

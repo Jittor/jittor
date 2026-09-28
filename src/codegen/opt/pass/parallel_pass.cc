@@ -187,6 +187,17 @@ int round_down_pow2(int v) {
     return 1 << (NanoVector::get_nbits(v) - 2);
 }
 
+// 256, not the 1024 this used to default to.  `cuda_thread_num` is written into
+// the kernel's `__launch_bounds__` as well as its launch shape, so a wide block
+// caps registers per thread on top of costing occupancy.  Measured on an H20
+// (sm_90) over the thirteen meta-operator shapes in the meta-operator benchmark,
+// 256 is the best or within noise of the best in every one of them, and no shape
+// regressed: elementwise and broadcast gain 1.5x-4x, the reductions 1.0x-1.2x.
+// 512 is a close second; 64 and 128 lose on the axis reductions.
+int cuda_block_width(FusedOp* op) {
+    return round_down_pow2(op->get_loop_option("cuda_thread_num", 256));
+}
+
 void ParallelPass::run() {
     auto parallel = op->get_loop_option("parallel");
     auto fix_thread_num = op->get_loop_option("fix_thread_num", 0);
@@ -198,7 +209,7 @@ void ParallelPass::run() {
         if (arch >= 80) default_block_num = 2048;
     }
     int block_num = round_down_pow2(op->get_loop_option("cuda_block_num", default_block_num));
-    int cuda_thread_num = round_down_pow2(op->get_loop_option("cuda_thread_num", 1024));
+    int cuda_thread_num = cuda_block_width(op);
     int cpu_thread_num = round_down_pow2(op->get_loop_option("cpu_thread_num", omp_get_max_threads()));
     int max_parallel_depth;
     if (!is_cuda) {

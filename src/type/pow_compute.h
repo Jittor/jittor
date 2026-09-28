@@ -16,6 +16,11 @@
 // network (gpt2 / phi). This helper never feeds a negative base to ::pow:
 // it computes pow(|x|, y) and re-applies the sign by exponent parity, leaving
 // a negative base with a non-integral exponent as NaN (matching std::pow).
+//
+// CUDA-only on purpose. `expand_op` chooses this table from the translation
+// unit's own `#define JIT_cuda`/`JIT_cpu`, so a host unit gets the CPU table's
+// `std::pow` and never sees this symbol; giving it a CPU spelling here would
+// hide a regression of that choice instead of failing to compile.
 
 namespace jittor {
 

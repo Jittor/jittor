@@ -106,6 +106,11 @@ namespace jittor
         }
     };
 
+    struct AdaptiveAvgPool2dAttr : AclOpAttr
+    {
+        vector<int64_t> outputSize;
+    };
+
     struct PoolAttr : AclOpAttr
     {
         vector<int64_t> kernel_size;

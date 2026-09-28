@@ -72,9 +72,21 @@ def _layer_norm_no_grad_cuda(
                 __shared__ double mean_double_shared;
                 __shared__ double inv_std_double_shared;
                 __shared__ int use_double;
+                // Row kept in registers; see the affine kernel below.
+                constexpr int kPer = ({hidden} + 127) / 128;
+                constexpr bool kCache = kPer <= 8;
+                float cache[kCache ? kPer : 1];
                 float sum = 0.0f;
-                for (int j = tid; j < hidden; j += blockDim.x)
-                    sum += static_cast<float>(x[row * hidden + j]);
+                if (kCache) {{
+                    int i = 0;
+                    for (int j = tid; j < hidden; j += blockDim.x, ++i) {{
+                        cache[i] = static_cast<float>(x[row * hidden + j]);
+                        sum += cache[i];
+                    }}
+                }} else {{
+                    for (int j = tid; j < hidden; j += blockDim.x)
+                        sum += static_cast<float>(x[row * hidden + j]);
+                }}
                 sum = warp_sum(sum);
                 if (lane == 0) warp_buf[warp] = sum;
                 __syncthreads();
@@ -90,10 +102,18 @@ def _layer_norm_no_grad_cuda(
                 if (!use_double) {{
                     float mean = mean_shared;
                     float var = 0.0f;
-                    for (int j = tid; j < hidden; j += blockDim.x) {{
-                        float d = static_cast<float>(
-                            x[row * hidden + j]) - mean;
-                        var += d * d;
+                    if (kCache) {{
+                        int i = 0;
+                        for (int j = tid; j < hidden; j += blockDim.x, ++i) {{
+                            float d = cache[i] - mean;
+                            var += d * d;
+                        }}
+                    }} else {{
+                        for (int j = tid; j < hidden; j += blockDim.x) {{
+                            float d = static_cast<float>(
+                                x[row * hidden + j]) - mean;
+                            var += d * d;
+                        }}
                     }}
                     var = warp_sum(var);
                     if (lane == 0) warp_buf[warp] = var;
@@ -153,10 +173,14 @@ def _layer_norm_no_grad_cuda(
                 }} else {{
                     float mean = mean_shared;
                     float inv_std = inv_std_shared;
-                    for (int j = tid; j < hidden; j += blockDim.x)
+                    int i = 0;
+                    for (int j = tid; j < hidden; j += blockDim.x, ++i) {{
+                        float xv = kCache ? cache[i]
+                                          : static_cast<float>(x[row * hidden + j]);
                         y[row * hidden + j] = out0_type(
-                            (static_cast<float>(x[row * hidden + j]) - mean)
-                            * inv_std * {scale_literal} + {offset_literal});
+                            (xv - mean) * inv_std * {scale_literal}
+                            + {offset_literal});
+                    }}
                 }}
             }}
             int rows = in0->num / {hidden};
@@ -193,9 +217,26 @@ def _layer_norm_no_grad_cuda(
             __shared__ double mean_double_shared;
             __shared__ double inv_std_double_shared;
             __shared__ int use_double;
+            // The row is read once and kept in registers: the mean pass, the
+            // variance pass and the write all want the same values, and
+            // re-reading them made this kernel move 4x the row where torch's
+            // Welford moves 2x -- measured 44.1 us against its 29.7 at
+            // b8 s256 d512, which is that ratio. Capped at 8 values per thread
+            // so a wide row falls back to re-reading rather than spilling.
+            constexpr int kPer = ({hidden} + 127) / 128;
+            constexpr bool kCache = kPer <= 8;
+            float cache[kCache ? kPer : 1];
             float sum = 0.0f;
-            for (int j = tid; j < hidden; j += blockDim.x)
-                sum += static_cast<float>(x[row * hidden + j]);
+            if (kCache) {{
+                int i = 0;
+                for (int j = tid; j < hidden; j += blockDim.x, ++i) {{
+                    cache[i] = static_cast<float>(x[row * hidden + j]);
+                    sum += cache[i];
+                }}
+            }} else {{
+                for (int j = tid; j < hidden; j += blockDim.x)
+                    sum += static_cast<float>(x[row * hidden + j]);
+            }}
             sum = warp_sum(sum);
             if (lane == 0) warp_buf[warp] = sum;
             __syncthreads();
@@ -211,10 +252,18 @@ def _layer_norm_no_grad_cuda(
             if (!use_double) {{
                 float mean = mean_shared;
                 float var = 0.0f;
-                for (int j = tid; j < hidden; j += blockDim.x) {{
-                    float d = static_cast<float>(
-                        x[row * hidden + j]) - mean;
-                    var += d * d;
+                if (kCache) {{
+                    int i = 0;
+                    for (int j = tid; j < hidden; j += blockDim.x, ++i) {{
+                        float d = cache[i] - mean;
+                        var += d * d;
+                    }}
+                }} else {{
+                    for (int j = tid; j < hidden; j += blockDim.x) {{
+                        float d = static_cast<float>(
+                            x[row * hidden + j]) - mean;
+                        var += d * d;
+                    }}
                 }}
                 var = warp_sum(var);
                 if (lane == 0) warp_buf[warp] = var;
@@ -276,12 +325,14 @@ def _layer_norm_no_grad_cuda(
             }} else {{
                 float mean = mean_shared;
                 float inv_std = inv_std_shared;
-                for (int j = tid; j < hidden; j += blockDim.x) {{
+                int i = 0;
+                for (int j = tid; j < hidden; j += blockDim.x, ++i) {{
                     float scale = static_cast<float>(weight[j]);
                     float offset = static_cast<float>(bias[j]);
+                    float xv = kCache ? cache[i]
+                                      : static_cast<float>(x[row * hidden + j]);
                     y[row * hidden + j] = out0_type(
-                        (static_cast<float>(x[row * hidden + j]) - mean)
-                        * inv_std * scale + offset);
+                        (xv - mean) * inv_std * scale + offset);
                 }}
             }}
         }}

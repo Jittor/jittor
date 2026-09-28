@@ -162,7 +162,19 @@ def unique(
     need_inverse = return_inverse or return_counts
 
     diff = jt.logical_not(jt.all(input_sorted[1:] == input_sorted[: -1], 1))
-    diff = jt.concat([Var([False]), diff], 0)
+    # The prepended element's *value* is never read -- both kernels below
+    # short-circuit on `i == 0` -- but its *device* is: `Var([False])` is built
+    # on the ambient device, so this concat raised
+    #   dispatch_context.cc:52: Expected all tensor inputs on the same backend
+    #   and device ... first input backend=1 index=0 but another input has
+    #   backend=1 index=1
+    # for any `input` that does not live on the ambient device, which is every
+    # worker whose device is not the process default. Build the element out of
+    # `input_sorted` instead, so it carries that tensor's device by
+    # construction. (The shape follows `diff` too: an empty input yields an
+    # empty `diff`, not a one-element one.)
+    head = jt.logical_not(jt.all(input_sorted[0:1] == input_sorted[0:1], 1))
+    diff = jt.concat([head, diff], 0)
     diff = jt.array(diff, dtype = jt.int32)
 
     # `output` holds *positions* in input_sorted, so it is an index var --
@@ -230,6 +242,7 @@ def unique_consecutive(input, return_inverse=False, return_counts=False, dim=Non
     Qwen2.5-VL window-attention index computation.
     '''
     import jittor as jt
+    from .._core.var import placement_scope_like
     if not isinstance(input, Var):
         input = jt.array(input)
     if dim is None:
@@ -240,11 +253,18 @@ def unique_consecutive(input, return_inverse=False, return_counts=False, dim=Non
             group = jt.zeros([0], dtype='int64')
         else:
             # boundary[i] == True where element i starts a new run.
+            #
+            # The leading True is derived from `flat` rather than written as
+            # `jt.ones([1], dtype='bool')`: `jt.ones` follows the *ambient*
+            # placement, so a run over a tensor that was placed explicitly
+            # (MiniMax-H3 builds its sigma schedule with `device="cpu"`) mixed
+            # two placements and `dispatch_context` rejected the concat.
+            leading = flat[:1] == flat[:1]
             if n == 1:
-                keep = jt.ones([1], dtype='bool')
+                keep = leading
             else:
                 diff = flat[1:] != flat[:-1]
-                keep = jt.concat([jt.ones([1], dtype='bool'), diff], dim=0)
+                keep = jt.concat([leading, diff], dim=0)
             # group id of each input element = cumulative count of run-starts - 1
             group = keep.int32().cumsum(0) - 1   # 0-based group index per element
             out = flat[keep]
@@ -258,8 +278,13 @@ def unique_consecutive(input, return_inverse=False, return_counts=False, dim=Non
                 num_groups = int(out.shape[0])
                 # scatter-add in int32 (int64 scatter-add fails to compile on this
                 # CUDA build, same atomic limitation as int64 reduce), then widen.
-                counts = jt.zeros([num_groups], dtype='int32')
-                jt.scatter_(counts, 0, group.int32(), jt.ones([n], dtype='int32'), reduce='add')
+                # Allocate where the input is: `jt.zeros`/`jt.ones` follow the
+                # *ambient* placement, so a run over an explicitly placed
+                # tensor (CPU inside a CUDA process) mixed placements here.
+                with placement_scope_like(flat):
+                    counts = jt.zeros([num_groups], dtype='int32')
+                    scatter_ones = jt.ones([n], dtype='int32')
+                jt.scatter_(counts, 0, group.int32(), scatter_ones, reduce='add')
                 counts = counts.int64()
             ret.append(counts)
         return ret[0] if len(ret) == 1 else tuple(ret)
@@ -284,8 +309,10 @@ def unique_consecutive(input, return_inverse=False, return_counts=False, dim=Non
         ret.append(group.int64())
     if return_counts:
         num_groups = int(keep.int32().sum().item())
-        counts = jt.zeros([num_groups], dtype='int32')
-        jt.scatter_(counts, 0, group.int32(), jt.ones([m], dtype='int32'), reduce='add')
+        with placement_scope_like(moved):
+            counts = jt.zeros([num_groups], dtype='int32')
+            scatter_ones = jt.ones([m], dtype='int32')
+        jt.scatter_(counts, 0, group.int32(), scatter_ones, reduce='add')
         ret.append(counts.int64())
     return tuple(ret)
 

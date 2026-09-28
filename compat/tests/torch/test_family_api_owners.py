@@ -20,7 +20,9 @@ def test_family_installers_only_bind_objects():
         "nn.functional": ("_install_functional",),
         "nn.attention": ("install_attention",),
         "nn_init": ("_install_init_aliases",),
-        "cuda": ("_install_cuda", "_install_accelerator"),
+        # The cuda family was folded into one package entry point; the two
+        # private halves it used to expose are gone.
+        "cuda": ("install",),
         "utilities": ("install", "install_parity", "install_runtime_knobs"),
         "compiler": ("install", "install_parity"),
         "numerical": ("install", "install_parity", "install_signal"),

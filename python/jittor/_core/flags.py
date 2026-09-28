@@ -1,6 +1,7 @@
 """Native flag scopes and their single shared runtime state."""
 
 import functools as _functools
+import sys as _sys
 
 import jittor_core as core
 from jittor_core import Var, sync_all
@@ -69,7 +70,7 @@ class flag_scope(_call_no_record_scope):
         for this, and such a scope is a device boundary anyway.
         """
         # Compare device mode without constructing scalar tensor operations.
-        if "use_cuda" not in self.jt_flags:
+        if not any(key in self.jt_flags for key in ("use_cuda", "use_acl")):
             return
         current = getattr(flags, "use_cuda")
         if (current != 0) == (wanted != 0):
@@ -80,12 +81,22 @@ class flag_scope(_call_no_record_scope):
         flags_bk = {}
         # push BEFORE setting anything, so the __exit__ in the except branch
         # below pops this entry and not an enclosing scope's
-        self._flags_bk_stack.append(flags_bk)
+        entry = [flags_bk, None]
+        self._flags_bk_stack.append(entry)
         try:
-            if "use_cuda" in self.jt_flags:
-                self._flush_if_device_changes(self.jt_flags["use_cuda"])
+            # Snapshot all values before the first write: use_acl/use_cuda
+            # share storage, so reading an alias after writing its sibling
+            # would save the scope's new value instead of the caller's value.
+            originals = {key: getattr(flags, key) for key in self.jt_flags}
+            if any(key in self.jt_flags for key in ("use_cuda", "use_acl")):
+                entry[1] = core._push_device_mode_scope()
+            for key, wanted in reversed(tuple(self.jt_flags.items())):
+                if key in ("use_cuda", "use_acl"):
+                    self._flush_if_device_changes(wanted)
+                    break
             for k,v in self.jt_flags.items():
-                origin = getattr(flags, k)
+                origin = originals[k]
+                # Include the attempted write: a setter can mutate then fail.
                 flags_bk[k] = origin
                 # merge dict attrs
                 if isinstance(origin, dict):
@@ -93,26 +104,45 @@ class flag_scope(_call_no_record_scope):
                         if ok not in v:
                             v[ok] = ov
                 setattr(flags, k, v)
-        except:
-            self.__exit__()
+        except BaseException:
+            # A failed entry is already unwinding. Do not flush pending work
+            # again and replace the original setter/flush error during rollback.
+            self.__exit__(*_sys.exc_info())
             raise
 
     def __exit__(self, *exc):
         if not self._flags_bk_stack:
             # __exit__ without a matching __enter__; nothing was saved
             return
-        flags_bk = self._flags_bk_stack.pop()
+        flags_bk, device_snapshot = self._flags_bk_stack.pop()
         # Not while an exception is unwinding: the pending work is likely what
         # raised, and a second error here would bury the first one.
         unwinding = len(exc) > 0 and exc[0] is not None
+        restore_error = None
         try:
-            if "use_cuda" in flags_bk and not unwinding:
-                self._flush_if_device_changes(flags_bk["use_cuda"])
+            if not unwinding:
+                for key in ("use_cuda", "use_acl"):
+                    if key in flags_bk:
+                        self._flush_if_device_changes(flags_bk[key])
+                        break
+        except BaseException:
+            restore_error = _sys.exc_info()
         finally:
             # Restoring the flags is not optional: leaving the scope's values in
             # place because the flush raised would corrupt everything after it.
             for k,v in flags_bk.items():
-                setattr(flags, k, v)
+                if k in ("use_cuda", "use_acl") and (unwinding or restore_error):
+                    continue
+                try:
+                    setattr(flags, k, v)
+                except BaseException:
+                    if restore_error is None:
+                        restore_error = _sys.exc_info()
+            if device_snapshot is not None:
+                core._pop_device_mode_scope(
+                    device_snapshot, unwinding or restore_error is not None)
+        if restore_error is not None and not unwinding:
+            raise restore_error[1].with_traceback(restore_error[2])
 
 class no_grad(flag_scope):
     ''' no_grad scope, all variable created inside this

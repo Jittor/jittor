@@ -6,7 +6,7 @@ from ..._runtime.dispatch import register_kernel, select_kernel
 
 from ..base import (
     Optimizer, _grad_matches_param, _param_requires_grad,
-    _update_preserve_dtype, _optimizer_arithmetic,
+    _state_buffer, _update_preserve_dtype, _optimizer_arithmetic,
 )
 
 
@@ -19,9 +19,15 @@ def _acl_fused_adamw_updates(entries, lr, beta1, beta2, weight_decay, eps):
         buckets.setdefault(int(entry[4]), []).append((index,) + entry[:4])
     for step_value, bucket in buckets.items():
         step = jt.array(float(step_value), dtype="float32").stop_grad()
+        # Newly initialized moments are broadcast-zero views. The in-place
+        # CANN update needs independent dense state; returned states are
+        # published back to the optimizer below. Gradients are read-only and
+        # may also arrive as broadcast/strided views.
         updated = fused_adamw_acl(
-            [item[1] for item in bucket], [item[2] for item in bucket],
-            [item[3] for item in bucket], [item[4] for item in bucket],
+            [item[1] for item in bucket],
+            [item[2].contiguous() for item in bucket],
+            [item[3].contiguous() for item in bucket],
+            [item[4].contiguous() for item in bucket],
             step, lr, beta1, beta2, weight_decay, eps)
         for output_index, item in enumerate(bucket):
             results[item[0]] = tuple(
@@ -30,6 +36,9 @@ def _acl_fused_adamw_updates(entries, lr, beta1, beta2, weight_decay, eps):
 
 
 register_kernel("optim.adamw_fused", "acl", _acl_fused_adamw_updates)
+# Publishes the CUDA `optim.adamw_fused` kernel by import, as sgd.py does for
+# fused SGD.
+from jittor.backends.cuda.kernels.optim import fused_adamw_cuda as _fused_adamw_cuda  # noqa: E402,F401
 
 
 def adam_update(param, grad, value, momentum, *, lr, eps, weight_decay,
@@ -48,9 +57,9 @@ def adam_update(param, grad, value, momentum, *, lr, eps, weight_decay,
     elif weight_decay != 0 or not torch_math and not decoupled_weight_decay:
         grad = add(grad, multiply(param, weight_decay))
     _update_preserve_dtype(momentum, add(
-        multiply(b0, momentum), multiply((1 - b0), grad)))
+        multiply(b0, momentum), multiply(1 - b0, grad)))
     _update_preserve_dtype(value, add(
-        multiply(b1, value), multiply(multiply((1 - b1), grad), grad)))
+        multiply(b1, value), multiply(multiply(1 - b1, grad), grad)))
     if torch_math or decoupled_weight_decay:
         correction = (1 - b1 ** float(step)) ** 0.5
         scalar = (jt.array(correction, dtype="float32" if dtype_name(value.dtype) == "bfloat16"
@@ -84,15 +93,15 @@ class Adam(Optimizer):
             values = pg["values"] = []
             m = pg["m"] = []
             for p in pg["params"]:
-                values.append(jt.zeros_like(p).stop_grad())
-                m.append(jt.zeros_like(p).stop_grad())
+                values.append(_state_buffer(p))
+                m.append(_state_buffer(p))
 
     def add_param_group(self, group):
         values = group["values"] = []
         m = group["m"] = []
         for p in group["params"]:
-            values.append(jt.zeros_like(p).stop_grad())
-            m.append(jt.zeros_like(p).stop_grad())
+            values.append(_state_buffer(p))
+            m.append(_state_buffer(p))
         self.param_groups.append(group)
 
     def step(self, loss=None, retain_graph=False):
@@ -136,15 +145,15 @@ class AdamW(Optimizer):
             values = pg["values"] = []
             m = pg["m"] = []
             for p in pg["params"]:
-                values.append(jt.zeros_like(p).stop_grad())
-                m.append(jt.zeros_like(p).stop_grad())
+                values.append(_state_buffer(p))
+                m.append(_state_buffer(p))
 
     def add_param_group(self, group):
         values = group["values"] = []
         m = group["m"] = []
         for p in group["params"]:
-            values.append(jt.zeros_like(p).stop_grad())
-            m.append(jt.zeros_like(p).stop_grad())
+            values.append(_state_buffer(p))
+            m.append(_state_buffer(p))
         self.param_groups.append(group)
 
     def step(self, loss=None, retain_graph=False):

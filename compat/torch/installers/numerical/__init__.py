@@ -17,7 +17,7 @@ from collections import namedtuple as _namedtuple
 
 from ...functional import _diff, _isin, _repeat_interleave, _trapz
 
-from ...grad import _AutocastContext
+from ...amp import autocast as _autocast
 
 from ...nested import _NestedTensor
 
@@ -36,20 +36,19 @@ register_fidelity(
     "and advanced batching arguments retain existing compatibility limitations",
 )
 
-autocast = _AutocastContext
-
-register_fidelity(
-    "torch.autocast",
-    autocast,
-    Fidelity.APPROXIMATE,
-    "matches Torch context/decorator enable semantics on supported CPU/CUDA "
-    "paths; cache, device-specific dtype, and unsupported dtype diagnostics "
-    "remain compatibility-layer limitations",
-)
+#: ``torch.autocast`` is owned by :mod:`jittor.compat.torch.grad`, which also
+#: registers its fidelity; this installer only binds the name. Registering it a
+#: second time here overwrote the owner's record with a vaguer one.
+autocast = _autocast
 
 _native_all = jt.all
 
 _native_any = jt.any
+
+#: Captured before ``install`` because the adapted ``div`` is published *over*
+#: the native name -- an adapted function that reached for ``jt.div`` after the
+#: install would call itself.
+_native_div = jt.div
 
 from .reductions import _reduce_alias
 
@@ -225,8 +224,8 @@ register_fidelity(
 )
 
 _RANDINT_LIKE_FIDELITY_DETAIL = (
-    "matches Torch integer bounds and shape, with optional dtype casting, for "
-    "supported tensors but omits device and requires_grad keyword semantics"
+    "matches Torch integer bounds, shape, dtype, device inheritance, the "
+    "device= override and requires_grad; the generator= keyword is ignored"
 )
 
 from .factories import randint_like
@@ -306,6 +305,30 @@ register_fidelity(
     reciprocal,
     Fidelity.APPROXIMATE,
     _RECIPROCAL_FIDELITY_DETAIL,
+)
+
+_DIV_FIDELITY_DETAIL = (
+    "matches Torch integer and float division values through Jittor's native "
+    "div/floor_divide, including rounding_mode='trunc' and 'floor', but omits "
+    "device, layout, and out= semantics"
+)
+
+from .elementwise import div, divide
+
+from .elementwise import _tensor_div
+
+register_fidelity(
+    "torch.div",
+    div,
+    Fidelity.APPROXIMATE,
+    _DIV_FIDELITY_DETAIL,
+)
+
+register_fidelity(
+    "torch.divide",
+    divide,
+    Fidelity.APPROXIMATE,
+    _DIV_FIDELITY_DETAIL,
 )
 
 _LERP_FIDELITY_DETAIL = (
@@ -862,14 +885,29 @@ register_fidelity(
     _MASKED_SELECT_FIDELITY_DETAIL,
 )
 
-from .indexing import masked_fill
+_MASKED_FILL_FIDELITY_DETAIL = (
+    "publishes Jittor's own masked_fill (`jt.ternary(mask, value, x)`) under "
+    "Torch's functional spelling; values, the broadcasting mask and the output "
+    "dtype match, device and layout semantics are omitted"
+)
+
+#: Torch publishes ``masked_fill`` as a top-level function as well as a Tensor
+#: method, and Jittor's function is already the same selection, so this installer
+#: only *publishes* the name -- the way ``autocast = _autocast`` above does.
+#:
+#: It cannot go through ``_bind_missing``: that helper skips any name the module
+#: already has, and ``jt.masked_fill`` exists, so the name was skipped and never
+#: reached the sealed ``torch`` facade -- ``jt.masked_fill(x, m, v)`` worked while
+#: ``torch.masked_fill(x, m, v)`` raised ``AttributeError``. Longformer's
+#: sliding-window attention calls the functional spelling with a
+#: ``[batch, 1, 1, 1]`` mask against ``[batch, heads, seq, seq]`` scores.
+masked_fill = jt.masked_fill
 
 register_fidelity(
     "torch.masked_fill",
     masked_fill,
     Fidelity.APPROXIMATE,
-    "delegates to the Torch-compatible Tensor method with broadcast mask "
-    "semantics on supported CPU and accelerator backends",
+    _MASKED_FILL_FIDELITY_DETAIL,
 )
 
 _NARROW_FIDELITY_DETAIL = (
@@ -1055,18 +1093,8 @@ register_fidelity(
     "torch.kaiser_window",
     kaiser_window,
     Fidelity.APPROXIMATE,
-    "matches Torch periodic, symmetric, and beta CPU window values; device, "
-    "layout, pin_memory, and requires_grad semantics are not implemented",
-)
-
-from .signal import sinc
-
-register_fidelity(
-    "torch.sinc",
-    sinc,
-    Fidelity.APPROXIMATE,
-    "matches Torch normalized sinc values for CPU tensors and scalar inputs; "
-    "device, dtype, and requires_grad semantics retain compatibility limits",
+    "matches Torch periodic and symmetric CPU window values; device, dtype, "
+    "layout, and requires_grad semantics are not implemented",
 )
 
 from .signal import stft
@@ -1148,6 +1176,22 @@ def install(ctx):
     _bind_missing(g, "log1p", log1p)
     _bind_missing(g, "reciprocal", reciprocal)
     _bind_missing(g, "lerp", lerp)
+    # torch.div/divide take a `rounding_mode`, which the native op does not, so
+    # these are force-set rather than `_bind_missing`-ed -- jittor's own `div`
+    # and `divide` are already on the module and would keep the name. Longformer
+    # is where this surfaced: `torch.div(seq_len, window_overlap,
+    # rounding_mode="trunc")` raised "Wrong inputs arguments" out of jt.div, so
+    # the model could not complete a forward pass at all.
+    _orig_div = getattr(g, "div", None)
+    _orig_divide = getattr(g, "divide", None)
+    if callable(_orig_div):
+        g.div = div
+    if callable(_orig_divide):
+        g.divide = divide
+    # The method spellings take the same `rounding_mode` in torch, and jittor's
+    # are auto-generated from the op name, so they need the adapter too.
+    Var.div = _tensor_div
+    Var.divide = _tensor_div
     _bind_missing(g, "isclose", isclose)
     _bind_missing(g, "allclose", allclose)
     _bind_missing(g, "cosine_similarity", cosine_similarity)
@@ -1188,8 +1232,8 @@ def install(ctx):
     _bind_missing(g, "eye", eye)
     register_fidelity(
         "torch.eye", eye, Fidelity.APPROXIMATE,
-        "Values and dtype are supported; layout, device, out, and pin_memory "
-        "arguments are not implemented.")
+        "Values, dtype, device and requires_grad are supported; layout, out "
+        "and pin_memory arguments are not implemented.")
     # torch.narrow(input, dim, start, length) / torch.tile(input, dims) --
     # function forms mirroring the Var methods (added in _install_tensor_methods).
     _bind_missing(g, "narrow", narrow)
@@ -1262,6 +1306,9 @@ def install(ctx):
     _bind_missing(g, "mm", mm)
     _bind_missing(g, "mv", mv)
     _bind_missing(g, "masked_select", masked_select)
+    # Force-override, not `_bind_missing`: `jt.masked_fill` already exists, so the
+    # helper skips the name and it never reaches the sealed facade -- which is
+    # how `torch.masked_fill` raised AttributeError while `jt.masked_fill` worked.
     g.masked_fill = masked_fill
     _bind_missing(g, "split_with_sizes", split_with_sizes)
     _bind_missing(g, "_shape_as_tensor", _shape_as_tensor)
@@ -1303,8 +1350,6 @@ def install_parity(ctx):
     import jittor.linalg as linalg
     from ...namespace import native_module_facade
     linalg = native_module_facade(linalg, "torch.linalg")
-    from .linalg import solve
-    linalg.solve = solve
     registry.publish("torch.linalg", linalg)
     g.linalg = linalg
 
@@ -1333,7 +1378,5 @@ def install_signal(ctx):
         g.hann_window = hann_window
     if not hasattr(g, "kaiser_window"):
         g.kaiser_window = kaiser_window
-    if not hasattr(g, "sinc"):
-        g.sinc = sinc
     if not hasattr(g, "stft"):
         g.stft = stft

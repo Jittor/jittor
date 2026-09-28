@@ -3,7 +3,9 @@
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[3] / "tests" / "compat" / "torch"
+#: The torch suite is this file's sibling; it moved with the rest of the
+#: compat distribution out of tests/compat/.
+ROOT = Path(__file__).resolve().parents[1] / "torch"
 
 
 def _source(name):

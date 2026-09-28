@@ -80,12 +80,19 @@ class TestWarpReduce(unittest.TestCase):
         np.testing.assert_allclose(grad, np.full_like(value, 2.0), rtol=1e-6)
 
     def test_repeated_runs_are_stable(self):
-        # The same reduction must not drift between launches.
+        # The same reduction must not drift between launches beyond what the
+        # summation order accounts for. The kernel combines per-warp partials
+        # with atomics, which have no defined order (warp_reduce_pass.cc says
+        # so), so the last bits may move between launches; a race or a read
+        # of stale memory moves whole digits. Same scale-normalised metric as
+        # ``_check``.
         value = np.random.RandomState(5).randn(8, 64, 16, 16).astype("float32")
         first = jt.array(value).sum([2, 3]).numpy()
+        scale = max(1.0, float(np.abs(first).max()))
         for _ in range(3):
             again = jt.array(value).sum([2, 3]).numpy()
-            np.testing.assert_allclose(again, first, rtol=0, atol=0)
+            drift = float(np.abs(again - first).max()) / scale
+            self.assertLess(drift, 1e-5, "drift between launches")
 
 
 if __name__ == "__main__":

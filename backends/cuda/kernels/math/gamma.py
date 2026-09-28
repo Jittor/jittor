@@ -5,16 +5,23 @@ from pathlib import Path
 from jittor._runtime.dispatch import register_kernel
 
 
+# Templated on the element type. Hard-coded `float*` meant a float64 Var could
+# not use this kernel at all: it was registered for float32 only and fell back
+# to the primitive-op Lanczos composite, whose series is accurate to about 1e-7
+# by construction -- so `lgamma` on CUDA was 5.95e-7 from scipy where the CPU
+# path, which calls `::lgamma` at the Var's own precision, is 1.1e-16. CUDA has
+# a double overload of `::lgamma`; there was nothing to approximate.
 LGAMMA_CUDA_HEADER = '''
-        __global__ void lgamma_cuda(float* __restrict__ x,
-                                float* out,
+        template <typename T>
+        __global__ void lgamma_cuda(T* __restrict__ x,
+                                T* out,
                                 int batch_shape)
         {
             int tidx = threadIdx.x;
             int start = batch_shape / blockDim.x * tidx;
             int end = threadIdx.x == blockDim.x - 1 ? batch_shape : start + batch_shape / blockDim.x;
-            float* bx = x+batch_shape*blockIdx.x;
-            float* bout = out + batch_shape * blockIdx.x;
+            T* bx = x+batch_shape*blockIdx.x;
+            T* bout = out + batch_shape * blockIdx.x;
             for(int i=start;i<end;i++) bout[i] = ::lgamma(bx[i]);
         }
         '''
@@ -25,7 +32,7 @@ LGAMMA_CUDA_SRC = '''
         @alias(lx ,out0)
         int batch_size = x_stride0 == 1 ? 1 : x_shape0;
         int batch_shape = x_shape0 * x_stride0 / batch_size;
-        lgamma_cuda<<<batch_size, 16>>>(x_p, lx_p, batch_shape);
+        lgamma_cuda<<<batch_size, 16>>>(x_p, lx_p, batch_shape);   // T deduced from x_p
         '''
 
 
@@ -60,36 +67,37 @@ DIGAMMA_CUDA_HEADER = '''
         return result;
         }
 
-        __device__ static inline float calc_digamma(float x) {
+        template <typename T>
+        __device__ static inline T calc_digamma(T x) {
         // See [C++ Standard Reference: Gamma Function]
-        static float PSI_10 = 2.25175258906672110764f;
+        const T PSI_10 = T(2.25175258906672110764);
         if (x == 0) {
             // As per C++ standard for gamma related functions and SciPy,
             // If the argument is ±0, ±∞ is returned
-            return std::copysign(INFINITY, -x);
+            return std::copysign(std::numeric_limits<T>::infinity(), -x);
         }
 
-        bool x_is_integer = x == truncf(x);
+        bool x_is_integer = x == ::trunc(x);
         if (x < 0) {
             if (x_is_integer) {
             // As per C++ standard for gamma related functions and SciPy,
             // If the argument is a negative integer, NaN is returned
-            return std::numeric_limits<float>::quiet_NaN();
+            return std::numeric_limits<T>::quiet_NaN();
             }
             // Extracts the fractional part of x as r, since tan(pi * r) is more numerically
             // accurate than tan(pi * x). While these operations are mathematically equivalent
             // since both x and r are in radians and tan() has a periodicity of pi, in practice
             // the computation of pi * x is a source of error (when |x| > 1).
-            double q, r;
-            r = std::modf(x, &q);
-            float pi_over_tan_pi_x = (float)(M_PI / tan(M_PI * r));
-            return calc_digamma(1 - x) - pi_over_tan_pi_x;
+            T q, r;
+            r = ::modf(x, &q);
+            T pi_over_tan_pi_x = T(M_PI) / ::tan(T(M_PI) * r);
+            return calc_digamma<T>(T(1) - x) - pi_over_tan_pi_x;
         }
 
         // Push x to be >= 10
-        float result = 0;
+        T result = 0;
         while (x < 10) {
-            result -= 1 / x;
+            result -= T(1) / x;
             x += 1;
         }
         if (x == 10) {
@@ -97,34 +105,35 @@ DIGAMMA_CUDA_HEADER = '''
         }
 
         // Compute asymptotic digamma
-        static const float A[] = {
-            8.33333333333333333333E-2f,
-            -2.10927960927960927961E-2f,
-            7.57575757575757575758E-3f,
-            -4.16666666666666666667E-3f,
-            3.96825396825396825397E-3f,
-            -8.33333333333333333333E-3f,
-            8.33333333333333333333E-2f,
+        static const T A[] = {
+            T(8.33333333333333333333E-2),
+            T(-2.10927960927960927961E-2),
+            T(7.57575757575757575758E-3),
+            T(-4.16666666666666666667E-3),
+            T(3.96825396825396825397E-3),
+            T(-8.33333333333333333333E-3),
+            T(8.33333333333333333333E-2),
         };
 
-        float y = 0;
-        if (x < 1.0e17f) {
-            float z = 1 / (x * x);
+        T y = 0;
+        if (x < T(1.0e17)) {
+            T z = T(1) / (x * x);
             y = z * polevl(z, A, 6);
         }
-        return result + logf(x) - (0.5f / x) - y;
+        return result + ::log(x) - (T(0.5) / x) - y;
         }
 
-        __global__ void digamma_cuda(float* __restrict__ x,
-                                float* out,
+        template <typename T>
+        __global__ void digamma_cuda(T* __restrict__ x,
+                                T* out,
                                 int batch_shape)
         {
             int tidx = threadIdx.x;
             int start = batch_shape / blockDim.x * tidx;
             int end = threadIdx.x == blockDim.x - 1 ? batch_shape : start + batch_shape / blockDim.x;
-            float* bx = x+batch_shape*blockIdx.x;
-            float* bout = out + batch_shape * blockIdx.x;
-            for(int i=start;i<end;i++) bout[i] = calc_digamma(bx[i]);
+            T* bx = x+batch_shape*blockIdx.x;
+            T* bout = out + batch_shape * blockIdx.x;
+            for(int i=start;i<end;i++) bout[i] = calc_digamma<T>(bx[i]);
         }
         '''
 
@@ -178,7 +187,10 @@ def gamma_grad(x, alpha):
 
 
 for _backend in ("cuda", "rocm_legacy", "corex_legacy"):
-    register_kernel("math.lgamma", _backend, _gamma_cuda, dtypes={"float32"})
-    register_kernel("math.digamma", _backend, _digamma_cuda, dtypes={"float32"})
+    # float64 as well, now that both kernels follow the Var's element type. It
+    # used to fall through to the primitive-op composite, which is a ~1e-7
+    # series; these call the device's own double-precision `::lgamma`/series.
+    register_kernel("math.lgamma", _backend, _gamma_cuda, dtypes={"float32", "float64"})
+    register_kernel("math.digamma", _backend, _digamma_cuda, dtypes={"float32", "float64"})
     register_kernel("math.polygamma", _backend, _polygamma_cuda, dtypes={"float32"})
 del _backend

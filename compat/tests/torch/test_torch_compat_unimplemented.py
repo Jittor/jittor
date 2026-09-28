@@ -22,6 +22,7 @@ from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
 
 from _helpers import capability as _test_capability
 import os
+import threading
 import unittest
 import warnings
 
@@ -141,7 +142,8 @@ class TestAutocast(StubPolicyBase):
         self.assertFalse(torch.is_autocast_enabled())
         with torch.autocast("cuda", dtype=torch.float16):
             self.assertTrue(torch.is_autocast_enabled())
-            self.assertEqual(str(torch.get_autocast_dtype("cuda")), "float16")
+            # A torch dtype prints as torch does: "torch.float16".
+            self.assertEqual(str(torch.get_autocast_dtype("cuda")), "torch.float16")
         self.assertFalse(torch.is_autocast_enabled())
 
     def test_autocast_restores_the_previous_register(self):
@@ -184,6 +186,40 @@ class TestAutocast(StubPolicyBase):
         with torch.autocast("cuda", dtype=torch.float16):
             out = torch.nn.functional.linear(x, weight, bias)
         self.assertEqual(str(out.dtype), "float16")
+
+    def test_autocast_conv3d_keeps_the_compute_dtype_through_a_float32_bias(self):
+        """A convolution adds its own bias; a float32 bias must not undo it.
+
+        The same rule as `linear` above and the same mechanism: the shim's
+        torch-parity promotion makes ``f16 + f32 -> f32``, so the float32 bias
+        a torch module keeps lifted the convolution's result -- and every layer
+        behind it -- back to float32.  torch's autocast casts the convolution's
+        bias along with its other operands.  Measured on the MiniMax-H3 video
+        VAE decode: all 63 ``Conv3d`` calls returned float32 this way, which was
+        the non-attention half of the decode's gap against torch.
+        """
+        x = jt.random((1, 4, 4, 8, 8), dtype="float32")
+        weight = jt.random((8, 4, 3, 3, 3), dtype="float32")
+        bias = jt.random((8,), dtype="float32")
+        with torch.autocast("cuda", dtype=torch.float16):
+            out = torch.nn.functional.conv3d(x, weight, bias, padding=1)
+        self.assertEqual(str(out.dtype), "float16")
+
+    def test_autocast_conv2d_module_keeps_the_compute_dtype_through_a_bias(self):
+        module = torch.nn.Conv2d(4, 8, 3, padding=1, bias=True)
+        x = jt.random((1, 4, 8, 8), dtype="float32")
+        with torch.autocast("cuda", dtype=torch.float16):
+            out = module(x)
+        # The module hands back a shim tensor, whose dtype prints torch-style.
+        self.assertEqual(str(out.dtype).replace("torch.", ""), "float16")
+
+    def test_autocast_conv_is_not_changed_without_amp(self):
+        """No register, no cast: the bias add stays float32."""
+        x = jt.random((1, 4, 4, 8, 8), dtype="float32")
+        weight = jt.random((8, 4, 3, 3, 3), dtype="float32")
+        bias = jt.random((8,), dtype="float32")
+        out = torch.nn.functional.conv3d(x, weight, bias, padding=1)
+        self.assertEqual(str(out.dtype), "float32")
 
     def test_autocast_rejects_a_dtype_it_cannot_express(self):
         self.assertRefuses(
@@ -384,7 +420,8 @@ class TestDataLoaderWorkers(StubPolicyBase):
             with self.subTest(dtype=dtype, source=type(batch[0]).__name__):
                 result = collate(batch)
                 self.assertIsInstance(result, owner.Tensor)
-                self.assertEqual(str(result.dtype), dtype)
+                # A Tensor's dtype is a torch dtype, and prints as one.
+                self.assertEqual(str(result.dtype), "torch." + dtype)
                 self.assertFalse(result.requires_grad)
                 np.testing.assert_array_equal(result.numpy(), np.stack(batch))
         result = collate([jt.array([1.0]).requires_grad_(False),
@@ -502,19 +539,24 @@ class TestDistributedDataParallel(StubPolicyBase):
 
 
 class TestBackwardGradient(StubPolicyBase):
-    """Tensor.backward(gradient=...) dropped its argument."""
+    """Tensor.backward(gradient=...) dropped its argument.
+
+    Built with torch factories: ``backward`` and ``grad`` are the torch
+    frontend's, and since the frontends were split a native ``jt.Var`` does
+    not carry them.
+    """
 
     def test_gradient_weights_the_backward_pass(self):
-        x = jt.array(np.arange(4, dtype="float32"))
+        x = torch.tensor(np.arange(4, dtype="float32"))
         x.requires_grad = True
         y = x * x                       # dy/dx = 2x
-        weights = jt.array(np.array([1.0, 2.0, 3.0, 4.0], dtype="float32"))
+        weights = torch.tensor(np.array([1.0, 2.0, 3.0, 4.0], dtype="float32"))
         y.backward(gradient=weights)
         expect = 2 * np.arange(4, dtype="float32") * np.array([1., 2., 3., 4.])
         np.testing.assert_allclose(x.grad.numpy(), expect, rtol=1e-5)
 
     def test_unweighted_backward_is_unchanged(self):
-        x = jt.array(np.arange(4, dtype="float32"))
+        x = torch.tensor(np.arange(4, dtype="float32"))
         x.requires_grad = True
         y = x * x
         y.backward()
@@ -522,11 +564,11 @@ class TestBackwardGradient(StubPolicyBase):
                                    2 * np.arange(4, dtype="float32"), rtol=1e-5)
 
     def test_gradient_of_the_wrong_shape_is_rejected(self):
-        x = jt.array(np.arange(4, dtype="float32"))
+        x = torch.tensor(np.arange(4, dtype="float32"))
         x.requires_grad = True
         y = x * x
         with self.assertRaises(RuntimeError):
-            y.backward(gradient=jt.ones((3, 5, 7)))
+            y.backward(gradient=torch.ones(3, 5, 7))
 
 
 class TestTreeMap(StubPolicyBase):
@@ -685,15 +727,72 @@ class TestOverridesAndDefaults(StubPolicyBase):
         torch.set_default_device("cuda")
         self.assertIn("cuda", str(torch.get_default_device()))
 
-    def test_set_default_device_non_zero_index_is_refused(self):
+    def test_set_default_device_honours_a_non_zero_index(self):
+        # Implemented now (it used to be refused): the index is kept, so a
+        # factory puts its result on that device rather than on cuda:0.
         if not _test_capability.check_accelerator('cuda', backend=jt).enabled:
             self.skipTest("no accelerator on this box")
-        self.assertRefuses(lambda: torch.set_default_device("cuda:1"),
-                           "set_default_device")
+        if jt.get_device_count() < 2:
+            self.skipTest("this machine has one CUDA device")
+        saved = torch.get_default_device()
+        try:
+            torch.set_default_device("cuda:1")
+            self.assertEqual(str(torch.get_default_device()), "cuda:1")
+            self.assertEqual(str(torch.zeros(2).device), "cuda:1")
+        finally:
+            torch.set_default_device(saved)
 
     def test_set_default_device_unknown_backend_is_refused(self):
         self.assertRefuses(lambda: torch.set_default_device("mps"),
                            "set_default_device")
+
+    def test_device_context_is_recorded_by_the_frontend(self):
+        """`with torch.device(d):` was a no-op, so it could not move anything.
+
+        vLLM-Omni builds the whole diffusion pipeline inside `with
+        target_device:` (``"cpu"`` under offload) and relies on that block to
+        route every parameter allocation. While the block did nothing, the
+        factory default overrode it and a 134 GiB checkpoint OOM'd a 96 GiB
+        device. ``active_device_context()`` is what the factory frontend reads.
+        """
+        from jittor.compat.torch.types import active_device_context
+
+        self.assertIsNone(active_device_context())
+        with torch.device("cpu"):
+            self.assertEqual(active_device_context(), torch.device("cpu"))
+            with torch.device("cpu"):
+                self.assertEqual(active_device_context(), torch.device("cpu"))
+            self.assertEqual(active_device_context(), torch.device("cpu"))
+        # Restoration has to survive both normal exit and an exception.
+        with self.assertRaises(RuntimeError):
+            with torch.device("cpu"):
+                raise RuntimeError("boom")
+        self.assertIsNone(active_device_context())
+
+    def test_device_context_moves_the_allocation_default(self):
+        if not _test_capability.check_accelerator('cuda', backend=jt).enabled:
+            self.skipTest("no accelerator on this box")
+        self.assertEqual(torch.ones(2).device.type, "cuda")
+        with torch.device("cpu"):
+            self.assertEqual(torch.ones(2).device.type, "cpu")
+            self.assertEqual(torch.empty(2).device.type, "cpu")
+            self.assertEqual(torch.tensor([1.0]).device.type, "cpu")
+            # `empty_like` follows its input, not the ambient context.
+            self.assertEqual(
+                torch.empty_like(torch.ones(2, device="cuda")).device.type,
+                "cuda")
+        self.assertEqual(torch.ones(2).device.type, "cuda")
+
+    def test_device_context_is_thread_local(self):
+        """One thread's `with torch.device(...)` must not move another's default."""
+        ambient = "cuda" if jt.flags.use_cuda else "cpu"
+        seen = {}
+        with torch.device("cpu"):
+            thread = threading.Thread(
+                target=lambda: seen.setdefault("device", torch.ones(2).device.type))
+            thread.start()
+            thread.join()
+        self.assertEqual(seen["device"], ambient)
 
 
 class TestCudaDeviceAndEvents(StubPolicyBase):
@@ -702,12 +801,33 @@ class TestCudaDeviceAndEvents(StubPolicyBase):
     def test_set_device_zero_is_accepted(self):
         self.assertIsNone(torch.cuda.set_device(0))
 
-    def test_set_device_non_zero_is_refused(self):
-        self.assertRefuses(lambda: torch.cuda.set_device(1),
-                           "torch.cuda.set_device", "device 0")
+    def test_set_device_non_zero_takes_effect(self):
+        """Moved from the "refused" shape to the "implemented" one.
 
-    def test_set_device_non_zero_stub_fallback(self):
-        self.assertStubFallback(lambda: torch.cuda.set_device(3))
+        `torch.cuda.set_device(1)` used to raise, because the runtime only
+        ever ran on device 0 and silently accepting the call would have put
+        the tensors somewhere the caller did not ask for. It now forwards to
+        `jt.set_device` (compat/torch/installers/cuda/api.py), so the thing to
+        pin is that the device actually moves -- and moves back.
+        """
+        if torch.cuda.device_count() < 2:
+            self.skipTest("a second CUDA device is required")
+        before = torch.cuda.current_device()
+        try:
+            self.assertIsNone(torch.cuda.set_device(1))
+            self.assertEqual(torch.cuda.current_device(), 1)
+        finally:
+            torch.cuda.set_device(before)
+        self.assertEqual(torch.cuda.current_device(), before)
+
+    def test_set_device_rejects_a_device_that_is_not_there(self):
+        """Implemented is not the same as unconditional."""
+        absent = torch.cuda.device_count() + 8
+        before = torch.cuda.current_device()
+        with self.assertRaises((RuntimeError, ValueError)):
+            torch.cuda.set_device(absent)
+        self.assertEqual(torch.cuda.current_device(), before,
+                         "a refused set_device must not move the device")
 
     def test_event_elapsed_time_measures_something(self):
         import time
@@ -815,46 +935,79 @@ class TestDistributedStubs(StubPolicyBase):
 
 
 class TestDeviceMeshAndDTensor(StubPolicyBase):
+    #: ``DeviceMesh(device_type, mesh)`` takes the *ranks* -- torch spells a
+    #: shape as ``init_device_mesh(device_type, mesh_shape)`` -- and this
+    #: implementation checks them against the world, so the meshes below name
+    #: the ranks their world actually has.
     def _mesh_mod(self):
         from jittor.compat.fsdp2 import dtensor
         return dtensor
 
     def test_one_dimensional_mesh_indexing_still_works(self):
         dtensor = self._mesh_mod()
-        mesh = dtensor.DeviceMesh("cpu", (1,))
-        self.assertIs(mesh["dp"], mesh)
+        mesh = dtensor.DeviceMesh("cpu", (0,), mesh_dim_names=("dp",))
+        # Selecting the only axis yields the sub-mesh over the ranks this rank
+        # belongs to, which for a one-axis mesh is the mesh itself by value.
+        selected = mesh["dp"]
+        self.assertIsInstance(selected, dtensor.DeviceMesh)
+        self.assertEqual(selected.mesh.tolist(), mesh.mesh.tolist())
+        self.assertEqual(selected.ndim, 1)
 
     def test_two_dimensional_mesh_on_one_rank_is_harmless(self):
         # Every collective on a one-rank world is a no-op, so a collapsed mesh
         # cannot send anything to the wrong ranks.
         dtensor = self._mesh_mod()
-        mesh = dtensor.DeviceMesh("cpu", (2, 2), mesh_dim_names=("dp", "tp"))
-        self.assertIs(mesh["dp"], mesh)
+        # A one-rank world has exactly one rank to put in the mesh, so the two
+        # axes are both length one; every collective over it is a no-op.
+        mesh = dtensor.DeviceMesh("cpu", ((0,),), mesh_dim_names=("dp", "tp"))
+        for name in ("dp", "tp"):
+            selected = mesh[name]
+            self.assertEqual(selected.mesh.tolist(), [0])
 
-    def test_two_dimensional_mesh_axis_selection_is_refused(self):
+    #: A 2x2 mesh over a faked four-rank world. ``_init_backend=False``
+    #: because the world is faked: there is no NCCL here to build the subgroup
+    #: communicators with, and what these two check is the mesh's own
+    #: bookkeeping.
+    def _faked_two_dimensional_mesh(self, dtensor):
+        return dtensor.DeviceMesh("cpu", ((0, 1), (2, 3)),
+                                  mesh_dim_names=("dp", "tp"),
+                                  _init_backend=False)
+
+    def test_two_dimensional_mesh_axis_selection_returns_this_ranks_row(self):
+        # Selecting an axis is implemented now (it used to be refused): it
+        # answers with the sub-mesh of the ranks this rank shares that axis
+        # with -- for rank 0 and ``dp``, the row (0, 1).
         dtensor = self._mesh_mod()
         saved = getattr(jt, "world_size", 1)
         jt.world_size = 4
         try:
-            mesh = dtensor.DeviceMesh("cpu", (2, 2), mesh_dim_names=("dp", "tp"))
-            self.assertRefuses(lambda: mesh["dp"], "DeviceMesh")
+            mesh = self._faked_two_dimensional_mesh(dtensor)
+            selected = mesh["dp"]
+            self.assertEqual(selected.ndim, 1)
+            self.assertIn(0, selected.mesh.tolist())
+            self.assertEqual(selected.mesh.size, 2)
         finally:
             jt.world_size = saved
 
-    def test_two_dimensional_mesh_get_group_is_refused(self):
+    def test_two_dimensional_mesh_get_group_needs_a_named_dimension(self):
+        # Also implemented now; what is refused is the ambiguous call, and the
+        # message says which argument resolves it.
         dtensor = self._mesh_mod()
         saved = getattr(jt, "world_size", 1)
         jt.world_size = 4
         try:
-            mesh = dtensor.DeviceMesh("cpu", (2, 2), mesh_dim_names=("dp", "tp"))
-            self.assertRefuses(lambda: mesh.get_group(), "DeviceMesh.get_group")
+            mesh = self._faked_two_dimensional_mesh(dtensor)
+            with self.assertRaises(RuntimeError) as caught:
+                mesh.get_group()
+            self.assertIn("mesh_dim", str(caught.exception))
+            self.assertIsNotNone(mesh.get_group("dp"))
         finally:
             jt.world_size = saved
 
     def test_full_tensor_on_one_rank_returns_the_tensor(self):
         dtensor = self._mesh_mod()
         local = jt.ones((2, 2))
-        dt = dtensor.DTensor(local, dtensor.DeviceMesh("cpu", (1,)),
+        dt = dtensor.DTensor(local, dtensor.DeviceMesh("cpu", (0,)),
                              (dtensor.Shard(0),))
         np.testing.assert_allclose(dt.full_tensor().numpy(), local.numpy())
 
@@ -864,7 +1017,7 @@ class TestDeviceMeshAndDTensor(StubPolicyBase):
         jt.world_size = 4
         try:
             dt = dtensor.DTensor(jt.ones((2, 2)),
-                                 dtensor.DeviceMesh("cpu", (4,)),
+                                 dtensor.DeviceMesh("cpu", (0, 1, 2, 3)),
                                  (dtensor.Shard(0),))
             self.assertRefuses(lambda: dt.full_tensor(),
                                "DTensor.full_tensor", "LOCAL SHARD")
@@ -877,7 +1030,7 @@ class TestDeviceMeshAndDTensor(StubPolicyBase):
         jt.world_size = 4
         try:
             local = jt.ones((2, 2))
-            dt = dtensor.DTensor(local, dtensor.DeviceMesh("cpu", (4,)),
+            dt = dtensor.DTensor(local, dtensor.DeviceMesh("cpu", (0, 1, 2, 3)),
                                  (dtensor.Replicate(),))
             np.testing.assert_allclose(dt.full_tensor().numpy(), local.numpy())
         finally:

@@ -12,8 +12,11 @@ same files as the gate.
 """
 
 import ast
+import os
 from pathlib import Path
 import sys
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TEST_ROOT = REPO_ROOT / "tests"
@@ -155,8 +158,31 @@ def test_local_runner_matches_gate_execution_contract():
         sys.path.remove(str(REPO_ROOT / "tools"))
     assert module._session_environment("native")[
         "JITTOR_TEST_REQUIRE_EXECUTION"] == "1"
-    assert module._parallel_arguments(2, distribution="loadgroup") == [
-        "-n", "2", "--dist", "loadgroup"]
+    # A CPU session must empty the canonical nvcc name too: it outranks the
+    # legacy one, so a shell exporting JT_BUILD_NVCC_PATH made the CPU gate
+    # build CUDA and fail its own readiness probe before running a test.
+    previous = os.environ.get("JT_BUILD_NVCC_PATH")
+    os.environ["JT_BUILD_NVCC_PATH"] = "/opt/cuda/bin/nvcc"
+    try:
+        cpu = module._session_environment("native", backend="cpu")
+    finally:
+        if previous is None:
+            os.environ.pop("JT_BUILD_NVCC_PATH", None)
+        else:
+            os.environ["JT_BUILD_NVCC_PATH"] = previous
+    assert cpu["JT_BUILD_NVCC_PATH"] == cpu["nvcc_path"] == ""
+    # Both halves the docstring claims, and which one this checkout can be
+    # asked depends on a declared dev tool. Without pytest-xdist the runner
+    # must refuse rather than run serially and report a wall clock for a gate
+    # nobody runs; with it, the arguments are nox's smoke policy.
+    try:
+        import xdist  # noqa: F401
+    except ImportError:
+        with pytest.raises(SystemExit, match="pytest-xdist"):
+            module._parallel_arguments(2, distribution="loadgroup")
+    else:
+        assert module._parallel_arguments(2, distribution="loadgroup") == [
+            "-n", "2", "--dist", "loadgroup"]
 
 
 def test_standalone_runner_uses_runtime_worker_policy_when_jobs_omitted(monkeypatch):
@@ -275,3 +301,9 @@ def test_skip_reason_summary_and_threshold_are_wired():
     assert "_report_skip_reason_buckets(terminalreporter)" in source
     assert "other skipped:" in source
     assert "_other_skip_count() > 0" in source
+    # A bare count reds the run and says nothing about what to do. Naming the
+    # reasons is what makes it actionable -- five of this machine's six turned
+    # out to be build facts (no jt_graph_build_profile, no cub, no MKL, no gdb)
+    # and the sixth a placeholder reason string.
+    assert "_OTHER_SKIP_REASONS[reason] += 1" in source
+    assert "_OTHER_SKIP_REASONS.most_common(10)" in source

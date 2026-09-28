@@ -29,6 +29,7 @@ KERNELS = (
     ("batched_matmul", neural.bmm_acl),
     ("nn.resize", neural.resize_acl),
     ("nn.pool2d", neural.pool_acl),
+    ("nn.adaptive_avg_pool2d", neural.adaptive_avg_pool2d_acl),
     ("nn.relu", neural.relu),
     ("nn.leaky_relu", neural.leaky_relu),
     ("nn.silu", neural._silu_acl),

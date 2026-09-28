@@ -5,9 +5,9 @@ import numpy as np
 
 _PROBE = r"""
 #pragma once
-#include "op.h"
-#include "var.h"
-#include "var_holder.h"
+#include "core/op.h"
+#include "core/var.h"
+#include "core/var_holder.h"
 #include "ops/op_register.h"
 #include <stdexcept>
 namespace jittor {

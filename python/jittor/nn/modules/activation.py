@@ -117,12 +117,21 @@ class _FunctionModule(jt.Module):
 class ReLU(_FunctionModule):
     _function_name = "relu"
 
+    def __init__(self, inplace=False):
+        super().__init__(inplace=inplace)
+        self.inplace = bool(inplace)
+
 
 Relu = ReLU
 
 
 class LeakyReLU(_FunctionModule):
     _function_name = "leaky_relu"
+
+    def __init__(self, scale=0.01, negative_slope=None, inplace=False):
+        super().__init__(scale=scale, negative_slope=negative_slope, inplace=inplace)
+        self.negative_slope = scale if negative_slope is None else negative_slope
+        self.inplace = bool(inplace)
 
 
 Leaky_relu = LeakyReLU

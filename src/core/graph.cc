@@ -78,14 +78,27 @@ int64 do_graph_check() {
         // if (f>0 && b>0 && !node->is_finished()) p++;
         node->liveness.assert_expected(f, b, p, node);
     }
-    int64 swept = 0;
+    int64 swept = 0, skipped = 0;
     for (auto& kv : lived_nodes) {
         if (!kv.second) continue;
         auto* node = (Node*) kv.first;
         swept++;
         if (!visited.count(node) && !node->flags.get(NodeFlags::_released)) {
-            if (node->is_var() && node->_inputs.size())
+            // A live, unreachable, unreleased Var that has inputs is a leak by
+            // the same definition as one without -- but upstream skips it, so
+            // the only dangling node this check can ever report is an edge-less
+            // one. Every Var a computation produces has inputs, which makes the
+            // class of leak most worth catching the class it is blind to. The
+            // skip stays the default (removing it outright would turn an
+            // unknown number of long-standing cases into LOGf aborts), but it
+            // is no longer silent, and `check_graph=2` escalates it.
+            if (node->is_var() && node->_inputs.size()) {
+                skipped++;
+                if (check_graph >= 2)
+                    LOGf << "ERROR dnode (with inputs)" << (void*)node
+                        << kv.second << node;
                 continue;
+            }
             LOGf << "ERROR dnode" << (void*)node << kv.second << node;
         }
     }
@@ -105,6 +118,13 @@ int64 do_graph_check() {
     } else
         LOGvv << "graph check: liveness over" << (int64)queue.size()
             << "nodes, dangling-node sweep over" << swept << "registered nodes";
+    // Not folded into the LOGvv above: a non-zero count here means the sweep
+    // found dangling Vars and declined to report them, which a reader of an
+    // "all clear" run needs to see at ordinary verbosity.
+    if (skipped)
+        LOGw << "graph check: dangling-node sweep skipped" << skipped
+            << "live unreachable Var(s) that have inputs; set check_graph=2 to"
+            << "report them";
     return swept;
 }
 

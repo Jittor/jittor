@@ -23,11 +23,20 @@ from .functional import (
     _torch_where_select,
     _trapz,
 )
-from .grad import (
-    _amp_passthrough_decorator,
+from .amp import (
+    autocast,
+    custom_bwd,
+    custom_fwd,
+    is_autocast_available,
     _AutocastContext,
+)
+from .grad import (
     _clip_grad_norm_device,
     _GradDecoratorCtx,
+)
+from .grad_scaler import (
+    GradScaler,
+    OptState,
     _GradScaler,
 )
 from .lr_scheduler import _install_lr_scheduler
@@ -80,7 +89,12 @@ _COMPAT_PUBLIC_SYMBOLS = (
     _torch_norm_impl,
     _torch_where_select,
     _trapz,
-    _amp_passthrough_decorator,
+    autocast,
+    custom_bwd,
+    custom_fwd,
+    is_autocast_available,
+    GradScaler,
+    OptState,
     _AutocastContext,
     _clip_grad_norm_device,
     _GradDecoratorCtx,

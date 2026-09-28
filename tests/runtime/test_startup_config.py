@@ -91,8 +91,10 @@ def test_the_frozen_paths_still_point_at_this_checkout():
     later test actually trips over: not "the attribute changed" but "the
     directory it names is gone".
     """
+    from jittor_utils.backend_resources import core_root
     assert os.path.isdir(jt.compiler.jittor_path)
-    assert os.path.isdir(os.path.join(jt.compiler.jittor_path, "src"))
+    # The core sits beside the package in a checkout (4.15), inside it in a wheel.
+    assert os.path.isdir(core_root(jt.compiler.jittor_path))
     assert os.path.isdir(jt.compiler.cache_path)
 
 
@@ -105,7 +107,11 @@ def test_the_core_source_walk_can_be_pointed_elsewhere_without_patching():
     attribute; if it is ever dropped, the next person to need it reaches for
     ``mock.patch.object`` and gets the rollback behaviour described above.
     """
-    signature = jt.compiler.core_source_signature(root=jt.compiler.jittor_path)
+    from jittor_utils.backend_resources import core_root
+    # An explicit root is a tree with ``src/`` and ``backends/`` under it: the
+    # checkout, which is the parent of the core, not the package.
+    checkout = os.path.dirname(core_root(jt.compiler.jittor_path))
+    signature = jt.compiler.core_source_signature(root=checkout)
     assert signature == jt.compiler.core_source_signature()
     assert jt.compiler.core_source_signature(root=os.devnull) == {}
 

@@ -119,6 +119,12 @@ BACKEND_GRAD_COVERAGE = (
     ("backends/cuda/kernels/nn/batch_norm_training_cuda.py", "BatchNormEvalCUDA",
      "tests/nn/test_norm.py::TestBatchNorm::test_cuda_eval_fast_path_forward_and_all_gradients",
      "cuda_cpu_jittor"),
+    ("backends/cuda/kernels/nn/cudnn_attention_cuda.py", "_CudnnAttention",
+     "tests/backends/cuda/test_cudnn_fused_attention.py::TestCudnnFusedAttention::test_float16_unequal_lengths",
+     "cuda_numpy"),
+    ("backends/cuda/kernels/nn/fused_attention_f32_cuda.py", "_FusedAttentionF32",
+     "tests/backends/cuda/test_fused_attention_f32.py::TestFusedAttentionF32::test_partial_tiles_and_unequal_lengths",
+     "cuda_numpy"),
     ("backends/cuda/kernels/nn/channel_bias_cuda.py", "ChannelBiasCUDA",
      "tests/nn/test_norm.py::TestChannelBias::test_cuda_forward_and_bias_gradient",
      "cuda_cpu_jittor"),
@@ -145,6 +151,24 @@ BACKEND_GRAD_COVERAGE = (
     ("backends/cpu/libraries/mkl/mkl_batched_matmul_op.cc",
      "MklBatchedMatmulOp",
      "tests/ops/test_mkl_batched_matmul.py::TestMklBatchedMatmul::test_three_dimensional_batch",
+     "cpu_jittor"),
+    # These three gradients were born when the CPU rows of `matmul`,
+    # `conv2d` and `conv_transpose2d` were registered (dc00e1d8, 06a38adc).
+    # Until then each op existed only as a relay inside a fused body, where
+    # autograd runs on the meta-op subgraph the relay stands in for, so none
+    # of them needed a `grad` at all -- and the first `MklMatmulOp::grad`
+    # shipped wrong (gx rel err 1.0 on a batched `Linear`), which is this
+    # file's whole thesis.
+    ("backends/cpu/libraries/mkl/mkl_matmul_op.cc", "MklMatmulOp",
+     "tests/ops/test_matmul_higher_rank.py::TestMatmulHigherRankCpu::test_both_gradients",
+     "cpu_formula"),
+    ("backends/cpu/libraries/mkl/mkl_conv_op.cc", "MklConvOp",
+     "tests/nn/test_onednn_conv_row.py::test_the_cpu_row_agrees_with_the_generic_path_gradients_included",
+     "cpu_jittor"),
+    # conv_transpose2d's forward is the conv-backward-x op, so its own
+    # gradient is what that row's comparison covers.
+    ("backends/cpu/libraries/mkl/mkl_conv_backward_x_op.cc", "MklConvBackwardXOp",
+     "tests/nn/test_onednn_conv_row.py::test_the_transpose_row_agrees_with_the_generic_path",
      "cpu_jittor"),
 
     # ---- ROCm. No AMD device on this machine. -----------------------------
@@ -197,6 +221,9 @@ BACKEND_GRAD_COVERAGE = (
      "npu_hardware_no_grad_test"),
     ("backends/acl/kernels/ops/norms_op.py", "RmsNormACL",
      "tests/backends/acl/test_acl.py::TestACL::test_training_rms_norm",
+     "npu_hardware"),
+    ("backends/acl/kernels/ops/pool_op.py", "AdaptiveAvgPool2dACL",
+     "tests/backends/acl/test_acl_adaptive_pool.py::TestACLAdaptiveAveragePool::test_windows_and_weighted_backward",
      "npu_hardware"),
     ("backends/acl/kernels/ops/pool_op.py", "PoolACL",
      "tests/backends/acl/test_aclop.py::TestACL::test_maxpool_grad",
@@ -279,6 +306,7 @@ BACKEND_GRAD_COVERAGE = (
 #: Kinds that name a reference which actually executes somewhere in CI.
 EXECUTABLE_KINDS = {
     "cpu_jittor",          # CPU backend against jittor's generic ops
+    "cpu_formula",         # CPU backend against the closed-form gradient
     "cuda_cpu_jittor",     # CUDA against the same graph run on CPU
     "cuda_cpu_formula",    # CUDA against the closed-form CPU gradient
     "cuda_numpy",          # CUDA against an independent NumPy reference
@@ -300,6 +328,9 @@ DEFERRED_KINDS = {
 #: the open gaps; the manual lists them one by one.
 NO_GRAD_TEST_KINDS = {"npu_hardware_no_grad_test", "rocm_hardware_no_grad_test",
                       "unsupported_hardware"}
+
+#: The executed kinds that are not claims about CUDA.
+CPU_KINDS = {"cpu_jittor", "cpu_formula"}
 
 REFERENCE_KINDS = EXECUTABLE_KINDS | DEFERRED_KINDS
 
@@ -500,7 +531,7 @@ def test_no_deferred_entry_claims_to_run_here():
     """
     for source, symbol, _, kind in BACKEND_GRAD_COVERAGE:
         on_cuda = source.startswith(("backends/cuda", "backends/comm/nccl"))
-        if kind in EXECUTABLE_KINDS and kind != "cpu_jittor":
+        if kind in EXECUTABLE_KINDS and kind not in CPU_KINDS:
             assert on_cuda, (
                 "%s is not a CUDA source but claims an executed CUDA "
                 "reference (%s)" % (symbol, kind))

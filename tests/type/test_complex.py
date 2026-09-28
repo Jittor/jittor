@@ -6,6 +6,7 @@ import unittest
 import numpy as np
 from functools import partial
 from _helpers.torch_runtime import import_torch_modules, modules_available
+from _helpers.cupy_bridge import cuda_numpy_code_available
 
 _skip_torch_test = not modules_available("torch")
 torch = None
@@ -167,6 +168,25 @@ class TestResultAndGrad:
         self.check_results(jittor_output, numpy_output)
 
 class TestComplexLinalg(unittest.TestCase, TestResultAndGrad):
+    def setUp(self):
+        """`eig`/`svd` reach their answer through `jt.numpy_code`.
+
+        On CUDA that callback is handed CuPy rather than numpy -- the arrays it
+        stages are device memory -- so without CuPy the operator cannot run.
+        This class takes its device from the ambient flag rather than setting
+        one, and Torch-compatibility mode turns CUDA on, so the same four cases
+        pass in a native session and failed in a Torch-mode one with a
+        `ModuleNotFoundError` raised out of execution. Asked here, at run time,
+        because the flag is not fixed at import.
+
+        `tests/linalg/test_complex64_linalg.py` gates its CUDA class the same
+        way; see `tests/_helpers/cupy_bridge.py` for why a bare import failure
+        is worth converting into a stated skip.
+        """
+        if jt.flags.use_cuda and not cuda_numpy_code_available():
+            raise unittest.SkipTest(
+                "CUDA numpy-code operators need CuPy; it is not installed")
+
     def random_complex_matrix(self, shape):
         r = np.random.randn(*shape)
         i = np.random.randn(*shape)

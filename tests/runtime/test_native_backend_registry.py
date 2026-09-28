@@ -54,8 +54,13 @@ def test_legacy_backend_aliases_warn_and_preserve_setter_semantics(name):
 def test_warning_as_error_does_not_change_backend_mode():
     import jittor as jt
 
-    with jt.runtime.scope(use_cuda=0), warnings.catch_warnings():
-        warnings.simplefilter("error", DeprecationWarning)
-        with pytest.raises(DeprecationWarning, match="deprecated accelerator-mode alias"):
-            jt.flags.use_device = True
-        assert jt.runtime.use_cuda == 0
+    before = jt.runtime.use_cuda
+    try:
+        with jt.runtime.scope(use_cuda=0), warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            with pytest.raises(DeprecationWarning, match="deprecated accelerator-mode alias"):
+                jt.flags.use_device = True
+            assert jt.runtime.use_cuda == 0
+    finally:
+        with pytest.warns(DeprecationWarning, match="deprecated accelerator-mode alias"):
+            jt.flags.use_device = before

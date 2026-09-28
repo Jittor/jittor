@@ -49,6 +49,7 @@ unordered_map<string,string> common_op_type_cuda_map = {
     {"tanh", "@if(@strcmp($1,float32)==0,(($1) ::tanhf(($2))),(($1) ::tanh(($2))))"},
     {"atanh", "@if(@strcmp($1,float32)==0,(($1) ::atanhf(($2))),(($1) ::atanh(($2))))"},
     {"sigmoid", "(($1) (1.0f/(1.0f+::expf((::min($1(-($2)), $1(@if(@strcmp($1,float32)==0,30,300))))))))"},
+    {"relu", "((($1)($2)>($1)(0.0f))?($1)($2):($1)(0.0f))"},
     {"erf", "@if(@strcmp($1,float32)==0,(($1) ::erff(($2))),(($1) ::erf(($2))))"},
     {"erfinv", "@if(@strcmp($1,float32)==0,(($1) ::erfinvf(($1)($2))),(($1) ::erfinv(($1)($2))))"},
     {"cast", "(($1)($2))"},
@@ -84,7 +85,7 @@ struct CommonOpType : OpByType {
         };
     }
 
-    string expand_op(const vector<string>& args) {
+    string expand_op(const vector<string>& args, bool is_cuda) {
         for (int i=1; i<args.size(); i+=2) {
             if (!types.count(args[i]))
                 return "";
@@ -123,6 +124,7 @@ struct CommonOpType : OpByType {
             {"tanh", "(($1) std::tanh(($2)))"},
             {"atanh", "(($1) std::atanh(($2)))"},
             {"sigmoid", "(($1) (1.0f/(1.0f+std::exp(std::min($1(-($2)), $1(@if(@strcmp($1,float32)==0,30,300)))))))"},
+            {"relu", "((($1)($2)>($1)(0.0f))?($1)($2):($1)(0.0f))"},
             {"erf", "(($1) std::erf(($2)))"},
             {"erfinv", "(jittor::_erfinv($2))"},
             {"cast", "(($1)($2))"},
@@ -135,8 +137,19 @@ struct CommonOpType : OpByType {
             // Casting the operands to the output type first discarded the
             // fraction of the *inputs*: KI-OPS-003.
             {"floor_divide", "@if(@strcmp($1,float32)==0,(($1)std::floor(($1($2))/($1($4)))),@if(@strcmp($1,float64)==0,(($1)std::floor(($1($2))/($1($4)))),jittor::_floor_divide($1($2), $1($4))))"},
-            {"init_maximum", "std::numeric_limits<$1>::lowest()"},
-            {"init_minimum", "std::numeric_limits<$1>::max()"},
+            // KI-OPS-008: the identity a float reduction folds *from* has to be
+            // an infinity, not the lowest finite value. `max(lowest(), -inf)`
+            // keeps `lowest()`, so a float32 tensor whose maximum really is
+            // -inf reported -3.4e38 here while CUDA reported -inf -- reachable
+            // without writing an infinity by hand, because a fully masked
+            // attention row is all -inf and `logits.max(-1)` is this reduction.
+            // Integers keep `lowest()`/`max()`: that *is* their identity and
+            // they have no infinity to lose, so this dispatches rather than
+            // replacing the row. `has_infinity` picks the branch per $1 and is
+            // a compile-time constant, so the unused arm is still well-formed
+            // for integers (their `infinity()` is valid and yields 0).
+            {"init_maximum", "(std::numeric_limits<$1>::has_infinity ? -std::numeric_limits<$1>::infinity() : std::numeric_limits<$1>::lowest())"},
+            {"init_minimum", "(std::numeric_limits<$1>::has_infinity ? std::numeric_limits<$1>::infinity() : std::numeric_limits<$1>::max())"},
         };
 
         static unordered_map<string,string> both_map {
@@ -180,7 +193,7 @@ struct CommonOpType : OpByType {
         string ret;
         if (both_map.count(args.at(0)))
             ret = both_map.at(args.at(0));
-        else if (execution_target_backend() != BackendId::Cpu)
+        else if (is_cuda)
             ret = lookup(cuda_map, args.at(0));
         else
             ret = lookup(cpu_map, args.at(0));

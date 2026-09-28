@@ -60,10 +60,12 @@ def _broadcast_two(a, b):
     return tuple(reversed(res))
 
 def _full_shape(sample_shape, batch_shape, event_shape=()):
-    ''' torch's sample_shape + batch_shape + event_shape. A scalar (empty
-    batch+event) collapses to (1,) because jittor has no 0-d Var. '''
-    out = _norm_sample_shape(sample_shape) + tuple(batch_shape) + tuple(event_shape)
-    return out if len(out) > 0 else (1,)
+    ''' torch's sample_shape + batch_shape + event_shape.
+
+    This used to collapse an empty result to ``(1,)`` because jittor had no
+    0-d Var. It has one now, so a scalar distribution's ``sample(())`` is the
+    0-d value torch returns rather than a one-element vector. '''
+    return _norm_sample_shape(sample_shape) + tuple(batch_shape) + tuple(event_shape)
 
 def _broadcast_var(value, shape):
     import jittor as jt

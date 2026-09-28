@@ -104,8 +104,16 @@ def test_invalid_public_arguments_are_catchable():
             (lambda: ops.mkl_conv(x.float64(),w.float64(),1,1,0,0), "float32"),
             (lambda: ops.mkl_conv(x.reshape(-1),w,1,1,0,0), "rank-4"),
                 (lambda: ops.mkl_conv_backward_x(w,jt.ones((1,4,2,2)),5,5,1,1,0,0,1,1), "gradient shape"),
-            (lambda: ops.mkl_matmul(jt.ones((2,3)),jt.ones((4,2))), "User check"),
-            (lambda: ops.mkl_batched_matmul(jt.ones((2,3,4)),jt.ones((3,4,2))), "User check"),
+            # Both take (a, b, trans_a, trans_b) -- no defaults, same as
+            # CublasMatmulOp. Called with two arguments these raised "Wrong
+            # inputs arguments" from the binding, before reaching the shape
+            # check this line is about, so the test passed its own filter for
+            # the wrong reason and then failed on the message. Pass the whole
+            # signature and the USER_CHECK fires: `check failed: m(3) == m_(4)`.
+            (lambda: ops.mkl_matmul(jt.ones((2,3)),jt.ones((4,2)),False,False),
+             "check failed"),
+            (lambda: ops.mkl_batched_matmul(jt.ones((2,3,4)),jt.ones((3,4,2)),False,False),
+             "check failed"),
         ]
         for call, message in invalid:
             with pytest.raises(RuntimeError, match=message):

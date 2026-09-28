@@ -26,6 +26,12 @@ struct Var : Node {
     int64 storage_stride(uint axis) const;
     int64 storage_span_bytes() const;
     bool is_contiguous() const;
+    // Bit `d` is set when axis `d` advances the physical index, i.e. its stride
+    // is not zero. A kernel that walks this var by unflattening a linear index
+    // needs neither the modulo nor the division belonging to a cleared bit, so
+    // this belongs in the JIT key: it is the shape of the index arithmetic, and
+    // unlike the stride values themselves it takes only a handful of values.
+    int stride_pattern() const;
     void set_storage_strides(NanoVector strides);
     void set_storage_strides(const vector<int64>& strides);
     cstr name;
@@ -224,5 +230,22 @@ template<class Operator>
 void adapt_storage_input(vector<Var*>& values, vector<VarPtr>& owners) {
     for (auto*& value : values) adapt_storage_input<Operator>(value, owners);
 }
+
+// While a batch is in flight, the vars whose storage `free_var_mem` released
+// while it ran; null the rest of the time, so the ordinary free path pays one
+// predictable branch and no allocation. Phase 7 of `run_exec_plan` reads it:
+// what it needs to know about a var with no memory is whether the release
+// happened *during this batch*, and that is a fact about an event rather than
+// about a counter (KI-EXEC-005). Written only under `graph_mutation_mutex()`,
+// which is the lock `Node::free()` -- the one caller of `free_var_mem` -- is
+// already holding.
+EXTERN_LIB vector<Var*>* batch_released_vars;
+
+// Release a var's storage: unlink it from any share ring, clear `mem_ptr`,
+// `allocator` and `allocation`, and only then hand the block back. Clearing
+// first is what makes a concurrent second release a no-op instead of a double
+// free (KI-EXEC-007), so every path that drops a var's storage goes through
+// here rather than calling `allocator->free` itself.
+void free_var_mem(Var* v);
 
 } // jittor

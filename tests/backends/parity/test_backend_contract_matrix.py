@@ -138,6 +138,9 @@ class Snapshot:
             return True, ""
         try:
             actual = _run_probe(contract.PROBES[op], use_cuda=1)
+        except ModuleNotFoundError as missing:
+            return (contract.MISSING_DEPENDENCY,
+                    "%s needs the optional package %s" % (row.name, missing.name))
         except BaseException as error:           # noqa: BLE001 - becomes a cell
             return False, "%s: %s" % (type(error).__name__, str(error)[:400])
         return _compare(actual, reference)

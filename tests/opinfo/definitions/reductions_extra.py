@@ -28,17 +28,22 @@ from ..core import OpInfo, UnaryUfuncInfo, BinaryUfuncInfo, ReductionOpInfo
 # ------------------------------------------------------------------- numpy refs
 
 def _atleast1d(a):
-    """jittor has no 0-d scalar: a full reduction yields a (1,)-shaped Var, so the
-    reference's python/0-d scalar must be lifted to 1-D to match shapes exactly."""
-    return np.atleast_1d(a)
+    """Identity. It used to be ``np.atleast_1d``, "because jittor has no 0-d
+    scalar" -- jittor has one, and a full reduce returns shape () exactly as
+    numpy and torch do, so the lift only invented a shape disagreement that
+    failed every full-reduce sample before a single value was compared. Kept as
+    a named pass-through so the call sites still read as "the reference's own
+    shape", rather than being deleted one by one."""
+    return a
 
 
 def amax_ref(x, dim=None, keepdim=False):
-    return _atleast1d(np.max(x, axis=dim, keepdims=keepdim))
+    # Full reductions preserve NumPy/Torch scalar rank; Jittor supports 0-D.
+    return np.max(x, axis=dim, keepdims=keepdim)
 
 
 def amin_ref(x, dim=None, keepdim=False):
-    return _atleast1d(np.min(x, axis=dim, keepdims=keepdim))
+    return np.min(x, axis=dim, keepdims=keepdim)
 
 
 def maxdim_ref(x, dim, keepdim=False):
@@ -52,8 +57,21 @@ def mindim_ref(x, dim, keepdim=False):
 
 
 def var_ref(x, dim=None, keepdim=False):
-    # jittor torch-compat var defaults to UNBIASED (Bessel correction) -> ddof=1.
-    return _atleast1d(np.var(x, axis=dim, ddof=1, keepdims=keepdim))
+    """``jt.var``: the population variance, ddof=0.
+
+    Not torch's default, and not this file's previous claim. ``jt.var``'s
+    signature is ``var(x, dim=None, dims=None, unbiased=False, ...)`` and its
+    docstring shows both answers for the same input; Bessel's correction is
+    what ``unbiased=True`` asks for. The reference used ddof=1, so the
+    comparison was off by exactly n/(n-1) -- 26.2448 against 27.3858 on 24
+    elements -- and read as a numerical defect. The torch-facing default
+    belongs at the compatibility boundary, which asserts it separately.
+
+    (``jt.std`` genuinely is unbiased -- it divides by ``dimsize - 1`` -- so
+    ``std_ref`` below keeps ddof=1. The two native ops disagree with each
+    other; each reference describes the op it checks.)
+    """
+    return _atleast1d(np.var(x, axis=dim, ddof=0, keepdims=keepdim))
 
 
 def std_ref(x, dim=None, keepdim=False):
@@ -77,11 +95,30 @@ def logsumexp_ref(x, dim, keepdim=False):
 
 
 def norm2_ref(x, p=2, dim=None, keepdim=False):
-    # torch/torch-compat norm: p=2 (Euclidean); dim=None reduces over the flattened
-    # tensor to a (1,)-shaped scalar, an int dim reduces that axis.
-    if dim is None:
-        return _atleast1d(np.sqrt(np.sum(np.square(x.reshape(-1)))))
-    return np.sqrt(np.sum(np.square(x), axis=dim, keepdims=keepdim))
+    """``jt.norm``: p=2 (Euclidean), reducing ``dim``, which defaults to -1.
+
+    Not torch's default. ``torch.norm(x)`` with no dim reduces the whole tensor
+    to a scalar; ``jt.norm``'s signature is ``norm(x, p=2, dim=-1, ...)`` and it
+    reduces the last axis (`python/jittor/_core/var.py`). This reference used to
+    describe torch's, so the op under test and the oracle were answering two
+    different questions and the comparison failed on shape -- (2, 3) against ()
+    -- rather than on a value. The torch-facing default is asserted at the
+    compatibility boundary, where it belongs.
+    """
+    axis = -1 if dim is None else dim
+    return np.sqrt(np.sum(np.square(x), axis=axis, keepdims=keepdim))
+
+
+# jittor's argmax/argmin return (indices, values) as a plain 2-tuple, which the
+# harness cannot unwrap (it only knows the namedtuple form), so the compare saw a
+# 2-tuple against one array. The reference computes the INDICES, so keep [0].
+
+def _argmax_indices(x, dim=None, keepdim=False):
+    return jt.argmax(x, dim, keepdim=keepdim)[0]
+
+
+def _argmin_indices(x, dim=None, keepdim=False):
+    return jt.argmin(x, dim, keepdim=keepdim)[0]
 
 
 def argmax_ref(x, dim=None, keepdim=False):
@@ -322,9 +359,9 @@ op_db = [
            variant_test_name="p2", supports_gradgrad=False),
 
     # ---- non-differentiable (integer / bool valued) ----------------------------
-    OpInfo("argmax", op=jt.argmax, ref=argmax_ref, sample_inputs_func=sample_argmax,
+    OpInfo("argmax", op=_argmax_indices, ref=argmax_ref, sample_inputs_func=sample_argmax,
            dtypes=cu.floating_types(), supports_autograd=False),
-    OpInfo("argmin", op=jt.argmin, ref=argmin_ref, sample_inputs_func=sample_argmin,
+    OpInfo("argmin", op=_argmin_indices, ref=argmin_ref, sample_inputs_func=sample_argmin,
            dtypes=cu.floating_types(), supports_autograd=False),
     OpInfo("all", op=jt.all, ref=all_ref, sample_inputs_func=sample_all,
            dtypes=cu.integral_types(), supports_autograd=False),

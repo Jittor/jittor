@@ -41,7 +41,7 @@ void make_foreign_allocation(Allocation& a, void* ptr, size_t size, std::functio
     a.size = size;
 }
 
-bool ForeignAllocator::share_with(size_t size, size_t allocation) {
+bool ForeignAllocator::share_with(size_t size, size_t allocation, size_t offset) {
     ((ForeignAllocation*)allocation)->cnt++;
     return true;
 }

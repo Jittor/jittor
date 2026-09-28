@@ -10,6 +10,25 @@ from .diagnostics import EXPECTED, swallowed
 _ACTIVE_TRANSACTIONS = threading.local()
 
 
+def _clear_resolution_caches():
+    """Drop the shim's memoized owner and install-context resolutions.
+
+    `tensor_state` and `torch/context.py` memoize what they resolve, because
+    both sit on the per-tensor-operation path. This ledger is the only thing
+    that rebinds an owner, and rolling back restores `_OWNERS` behind the memo's
+    back, so the memo is dropped at the ledger boundary rather than validated
+    afterwards.
+
+    `compat/transaction.py` is deliberately importable without Jittor, so the
+    import is local and its absence is not an error.
+    """
+    try:
+        from .torch.tensor_state import _clear_resolution_caches as clear
+    except ImportError:
+        return
+    clear()
+
+
 class InstallTransaction:
     """Record reversible mutations and publish them atomically under a process lock."""
     _lock = threading.RLock()
@@ -178,8 +197,10 @@ class InstallTransaction:
                 # *known* state, and saying so is what lets retry() build a
                 # fresh transaction and commit() refuse this one.
                 self.state = "failed"
+                _clear_resolution_caches()
                 raise TransactionConflict("; ".join(conflicts))
             self.state = "rolled_back"
+            _clear_resolution_caches()
 
     def _undo(self, entry):
         target, name, old, new, undo, owner = entry

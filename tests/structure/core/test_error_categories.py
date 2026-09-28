@@ -1,7 +1,21 @@
+import re
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[3]
+
+_LINE_COMMENT = re.compile(r"//.*")
+
+
+def _count_user_check_sites(source):
+    """``USER_CHECK``/``USER_CHECKop`` call sites in *source*, prose excluded.
+
+    A ledger counts boundaries, and a comment that quotes a check by name is
+    documentation of one, not another one: counting it would make every
+    ledger grow the moment someone explains why a check is there.
+    """
+    code = "\n".join(_LINE_COMMENT.sub("", line) for line in source.splitlines())
+    return code.count("USER_CHECK(") + code.count("USER_CHECKop(")
 # 2026-09-11, two changes landing together. `0f5eab25e` had reclassified
 # `ASSERT(ns.is_binary())` to `USER_CHECK` in both `ReduceOp` constructors;
 # that is right for the public `ReduceOp(x, op, dims, keepdims)`, where `op` is
@@ -130,8 +144,19 @@ MIGRATED_VAR_SLICES_USER_BOUNDARIES = {
     "src/core/var_slices.h": 1,
 }
 
+# 2026-09-17: 2 -> 4. `92e33ed2` added `VarHolder::write_inplace`, the
+# `_write_inplace` half of a re-runnable graph, and it refuses the caller's
+# array with the same two predicates `set_data` uses: the dtype/int-ness guard
+# (var_holder.cc:122) and the byte-size guard (var_holder.cc:128). Same kind
+# and same caller data -- a buffer handed to a public entry point to be written
+# over a Var -- so they join this ledger instead of escaping it. The two spell
+# the size predicate differently (`size == var->size` against `set_data`'s
+# `size==var->size`), so the test counts both spellings. The other
+# `USER_CHECK`s in the file are separate cohorts: `item()` below,
+# `check_inplace_target`'s allocated/dense pair, and `copy_into`'s
+# source-side checks.
 MIGRATED_SET_DATA_USER_BOUNDARIES = {
-    "src/core/var_holder.cc": 2,
+    "src/core/var_holder.cc": 4,
 }
 
 MIGRATED_PY_ARRAY_USER_BOUNDARIES = {
@@ -185,8 +210,20 @@ MIGRATED_CUTT_TRANSPOSE_RANK_USER_BOUNDARIES = {
     "backends/cuda/kernels/cutt/cutt_transpose_op.cc": 1,
 }
 
+# 2026-09-17: 4 -> 6. `fd887f54` let cublas matmul take a rank>2 operand
+# directly -- a dense row-major `(d0,..,dn-1,m)` *is* its own
+# `(d0*..*dn-1, m)` flattening, same pointer and same leading dimension -- so
+# the pair of reshapes around every batched `Linear` went away. Two
+# consequences in `CublasMatmulOp::infer_shape`, and both stay user
+# boundaries: the rank checks now read `>=,2` instead of `==,2`
+# (cublas_matmul_op.cc:82 and :84, the second pinned by its own ledger below),
+# and the flattening only describes the buffer while the buffer is dense, so
+# two new `USER_CHECK`s demand exactly that of a rank>2 operand
+# (cublas_matmul_op.cc:92 and :96 -- "call contiguous() first, or pass rank
+# 2"). 2 dtype + 2 contiguity + the a-rank check + the inner-dimension check
+# = 6. Behaviour gate: tests/ops/test_matmul_higher_rank.py.
 MIGRATED_CUBLAS_MATMUL_DTYPE_USER_BOUNDARIES = {
-    "backends/cuda/kernels/cublas/cublas_matmul_op.cc": 4,
+    "backends/cuda/kernels/cublas/cublas_matmul_op.cc": 6,
 }
 
 MIGRATED_CUBLAS_MATMUL_RANK_USER_BOUNDARIES = {
@@ -440,7 +477,15 @@ def test_public_view_shape_migration_is_explicit_and_bounded():
     _LEDGER = MIGRATED_VIEW_SHAPE_BOUNDARIES
     for relative in _LEDGER:
         source = (ROOT / relative).read_text()
-        actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+        # 2026-09-17: sites, not prose. `0b1079fb` gave `TransposeOp`'s rank-0
+        # fast path a comment that quotes the check it used to fall through to
+        # -- "reached `infer_shape`'s `USER_CHECK(xdim)`", transpose_op.cc:23 --
+        # and a raw `str.count` read that sentence as a fourth boundary. The
+        # file still has exactly the three recorded below, all in
+        # `infer_shape`: `USER_CHECK(xdim)` (:75),
+        # `USER_CHECKop(axes.size(),==,xdim)` (:80) and the axes-mask check
+        # (:83). The ledger stays 3 and the counting drops `//` comments.
+        actual = _count_user_check_sites(source)
         counts[relative] = actual
     # Report every disagreement, not just the first. Three entries went stale
     # behind one that failed earlier in iteration order and stayed invisible
@@ -545,10 +590,12 @@ def test_var_slices_user_boundary_migration_is_explicit_and_bounded():
 
 def test_set_data_user_boundary_migration_is_explicit_and_bounded():
     source = (ROOT / "src/core/var_holder.cc").read_text()
-    # ``item()`` has an independent user boundary in the same translation
-    # unit; count only the two set_data predicates here.
+    # ``item()`` and the inplace-target/``copy_into`` guards have independent
+    # user boundaries in the same translation unit; count only the dense-write
+    # dtype/size predicates -- ``set_data``'s two and ``write_inplace``'s two.
     actual = source.count("USER_CHECK(array.dtype.dsize()")
     actual += source.count("USER_CHECK(size==var->size)")
+    actual += source.count("USER_CHECK(size == var->size)")
     assert actual == MIGRATED_SET_DATA_USER_BOUNDARIES[
         "src/core/var_holder.cc"]
 
@@ -659,7 +706,7 @@ def test_cublas_matmul_dtype_user_boundary_migration_is_explicit_and_bounded():
     # Keep the new b-rank cohort independent from the existing dtype/rank/inner
     # ledger represented by this historical count.
     actual = source.count("USER_CHECK(")
-    actual += source.count("USER_CHECKop(a->shape.size(),==,2)")
+    actual += source.count("USER_CHECKop(a->shape.size(),>=,2)")
     actual += source.count("USER_CHECKop(m,==,m_)")
     assert actual == MIGRATED_CUBLAS_MATMUL_DTYPE_USER_BOUNDARIES[
         "backends/cuda/kernels/cublas/cublas_matmul_op.cc"]
@@ -670,10 +717,16 @@ def test_cublas_matmul_dtype_user_boundary_migration_is_explicit_and_bounded():
 
 def test_cublas_matmul_b_rank_is_a_catchable_user_error():
     source = (ROOT / "backends/cuda/kernels/cublas/cublas_matmul_op.cc").read_text()
-    marker = "USER_CHECKop(b->shape.size(),==,2)"
+    # 2026-09-17: `fd887f54` widened the accepted rank from exactly 2 to 2 or
+    # more, so the predicate moved from `==,2` to `>=,2`. What this test is
+    # here for is unchanged and still holds: a `b` whose rank the kernel
+    # cannot use is the caller's error, raised as a catchable `UserError`
+    # rather than an `ASSERT`, and the message now names the rank it got.
+    marker = "USER_CHECKop(b->shape.size(),>=,2)"
     assert marker in source
     assert "ASSERTop(b->shape.size(),==,2)" not in source
-    assert "rank-2 input b" in source
+    assert "ASSERTop(b->shape.size(),>=,2)" not in source
+    assert "rank-2 or higher input b" in source
     assert source.count(marker) == MIGRATED_CUBLAS_MATMUL_RANK_USER_BOUNDARIES[
         "backends/cuda/kernels/cublas/cublas_matmul_op.cc"]
 

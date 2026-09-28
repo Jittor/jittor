@@ -275,8 +275,14 @@ class TestDocsStructure(unittest.TestCase):
         merely because someone built the docs would report a clean repository as
         broken.
         """
+        # `docs/slides/` holds authored decks -- a .pptx and one standalone
+        # HTML presentation -- which are sources like any .md page. What this
+        # rule guards against is a build product committed beside its source.
+        authored = ("docs/slides/",)
         for pattern in ("*.rst", "*.pot", "*.mo", "*.html"):
-            self.assertEqual(self._tracked(pattern), [], pattern)
+            tracked = [path for path in self._tracked(pattern)
+                       if not path.startswith(authored)]
+            self.assertEqual(tracked, [], pattern)
         self.assertEqual(self._tracked("_build/**"), [])
         self.assertFalse(any(path.is_dir() for path in self.docs_root.glob("_build/*")))
         for path in self.docs_root.rglob("*.po"):

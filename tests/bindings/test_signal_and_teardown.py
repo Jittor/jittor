@@ -150,7 +150,7 @@ class TestSignalHandlerStaysAsyncSignalSafe(unittest.TestCase):
         path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.dirname(
                 os.path.abspath(__file__)))),
-            "python", "jittor", "src", "utils", "log.cc")
+            "src", "utils", "log.cc")
         with open(path, encoding="utf8") as handle:
             source = handle.read()
         start = source.index("void segfault_sigaction(")
@@ -185,7 +185,7 @@ class TestSignalHandlerStaysAsyncSignalSafe(unittest.TestCase):
         path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.dirname(
                 os.path.abspath(__file__)))),
-            "python", "jittor", "src", "utils", "log.cc")
+            "src", "utils", "log.cc")
         with open(path, encoding="utf8") as handle:
             source = handle.read()
         # Plain bool/int lets the compiler cache or tear a value the handler can

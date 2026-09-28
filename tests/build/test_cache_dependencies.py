@@ -26,6 +26,36 @@ def _keys():
     return glob.glob(os.path.join(compiler.cache_path, "obj_files", "*.key"))
 
 
+def _core_object_keys(keys):
+    """The subset of ``keys`` the core's own build wrote.
+
+    ``obj_files/`` is not one build's output. Every op library that is linked
+    on its own -- the extern ones (mkl, cudnn, cublas, cufft, nccl ...) and
+    every custom op a test compiles -- hands its translation units to the same
+    ``compile()`` with the same default ``obj_dirname``, so their objects land
+    here beside the core's. ``test_helper_cuda_is_a_dependency_again``
+    depends on that: the only keys naming ``helper_cuda.h`` are the extern CUDA
+    ops'.
+
+    Each of those libraries is built the first time something asks for it,
+    against whatever the tree held at that moment, and not again until
+    something asks for it once more. ``cache_compile``
+    (``src/utils/cache_compile.cc``) decides that by rebuilding the key and
+    comparing it to the recorded one, so a header edited after such a library
+    was built legitimately leaves its key holding the pre-edit digest until
+    then. That is the cache working -- one key per object, recording what that
+    object was compiled against -- not the cache giving two answers to one
+    question, and asserting over the whole directory read it as the latter.
+
+    The core's objects have no such freedom: ``build_core`` hands every core
+    source to a single ``run_cmds`` pass on every import, and this module
+    imports jittor, so by the time the keys are read they all describe the tree
+    as it is now -- and therefore each other.
+    """
+    names = {os.path.basename(source) + ".o.key" for source in compiler.files}
+    return [key for key in keys if os.path.basename(key) in names]
+
+
 def _entries(path):
     """{dependency path: recorded hash} out of one .key file."""
     found = {}
@@ -53,7 +83,10 @@ class TestCacheDependencies(unittest.TestCase):
         be reused.
         """
         checked = 0
-        for key in self.keys:
+        # Core objects only, for the reason in _core_object_keys: an op library
+        # built before a header was edited records the pre-edit digest, which
+        # is right for that object and would read here as a broken digest.
+        for key in _core_object_keys(self.keys):
             for path, digest in _entries(key).items():
                 if not os.path.isfile(path):
                     continue
@@ -87,8 +120,11 @@ class TestCacheDependencies(unittest.TestCase):
             "no CUDA object depfile records helper_cuda.h")
 
     def test_no_dependency_is_recorded_twice_with_different_hashes(self):
+        """One build must not record two contents for one header."""
+        keys = _core_object_keys(self.keys)
+        self.assertGreater(len(keys), 1, "no core object keys to compare")
         digests = {}
-        for key in self.keys:
+        for key in keys:
             for path, digest in _entries(key).items():
                 if path in digests:
                     self.assertEqual(digests[path], digest, path)

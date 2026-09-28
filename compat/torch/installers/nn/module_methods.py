@@ -9,12 +9,13 @@ from jittor import nn
 from jittor.nn.backends import hooks as _backend_hooks
 from jittor.backends.cuda.kernels.nn.rms_norm_training_cuda import _rms_norm_training_cuda
 from jittor.backends.cuda.kernels.nn.rms_norm_cuda import _rms_norm_cuda
-from ...context import get_install_context, registry_for
+from ...context import registry_for
 from ...fidelity import Fidelity, register_fidelity
 from ...nested import _torch_register_leaf
 from ...tensor_state import get_tensor_state
-from ...types import _device_is_cpu, _device_is_cuda, _device_is_meta, _make_cpu_resident, _make_cuda_resident, _set_meta_placeholder, device, dtype, _cuda_index_of
+from ...types import _device_is_cpu, _device_is_cuda, _is_index, _make_cpu_resident, _make_cuda_resident, current_accelerator_index, device, dtype, _cuda_index_of
 from ....diagnostics import EXPECTED, swallowed
+from ....stub_policy import unimplemented as _unimplemented
 from .... import fsdp_hooks as _fsdp_hooks
 
 def _pipelining_from_environment():
@@ -253,13 +254,7 @@ def _call(self, *args, **kwargs):
             swallowed("torch/installers/nn.py _call: _leaves_published.add(self)", exc)
         try:
             registry = get_tensor_state(jt).leaf_params
-            # Register a root module's complete parameter traversal at its
-            # first call.  Registering only direct children makes the global
-            # leaf order depend on the order nested modules execute; Jittor's
-            # multi-target gradient query is sensitive to that order even
-            # though Torch's autograd is not.  The recursive traversal is
-            # de-duplicated and nested calls keep their existing entries.
-            for _leaf in _ORIG_MODULE_NAMED_PARAMETERS(self, recurse=True):
+            for _leaf in _ORIG_MODULE_NAMED_PARAMETERS(self, recurse=False):
                 _leaf = _leaf[1] if isinstance(_leaf, tuple) else _leaf
                 if isinstance(_leaf, jt.Var) and _leaf.requires_grad:
                     registry[id(_leaf)] = _leaf
@@ -287,24 +282,7 @@ def _named_parameters(self, prefix="", recurse=True, remove_duplicate=True):
     """Torch's ``named_parameters``: an iterator, with prefix/dedup."""
     reg = get_tensor_state(jt).leaf_params
     seen = set()
-    if remove_duplicate:
-        parameters = _ORIG_MODULE_NAMED_PARAMETERS(self, recurse=recurse)
-    else:
-        # Jittor's recursive traversal always de-duplicates shared Vars. Walk
-        # each module's direct parameters so callers such as Accelerate can
-        # observe every public path and discover tied-parameter groups.
-        modules = _ORIG_MODULE_NAMED_MODULES(self) if recurse else (("", self),)
-        parameters = (
-            (
-                module_name + ("." if module_name else "") + parameter_name,
-                parameter,
-            )
-            for module_name, module in modules
-            for parameter_name, parameter in _ORIG_MODULE_NAMED_PARAMETERS(
-                module, recurse=False
-            )
-        )
-    for name, v in parameters:
+    for name, v in _ORIG_MODULE_NAMED_PARAMETERS(self, recurse=recurse):
         if remove_duplicate and id(v) in seen:
             continue
         seen.add(id(v))
@@ -365,31 +343,6 @@ def _find_state_target(root, key):
     return obj
 
 
-def _find_state_owner(root, key):
-    """Resolve a state key to its owning module, local name, and value."""
-    parts = str(key).split(".")
-    obj = root
-    for part in parts[:-1]:
-        if isinstance(obj, nn.Sequential):
-            if part in obj.layers:
-                obj = obj.layers[part]
-            elif part.isdigit() and int(part) in obj.layers:
-                obj = obj.layers[int(part)]
-            else:
-                return None, None, None
-        elif hasattr(obj, part):
-            obj = getattr(obj, part)
-        else:
-            return None, None, None
-    leaf = parts[-1]
-    if isinstance(obj, nn.ParameterList):
-        key = int(leaf) if leaf.isdigit() and int(leaf) in obj.params else leaf
-        return (obj, key, obj.params[key]) if key in obj.params else (None, None, None)
-    if not hasattr(obj, leaf):
-        return None, None, None
-    return obj, leaf, getattr(obj, leaf)
-
-
 def _state_source_to_var(value):
     """Coerce one state-dict value to a Jittor Var."""
     if isinstance(value, jt.Var):
@@ -402,7 +355,7 @@ def _state_source_to_var(value):
 
 
 def _preserve_target_dtypes_for_load(root, state_dict):
-    """Align source dtype and placement with the live destination."""
+    """Cast each source value to the dtype of the live destination."""
     # torch.load_state_dict(assign=False), the default used by TRELLIS.2,
     # copies checkpoint values into existing parameters/buffers and keeps
     # the destination dtype.  Jittor's native load replaces through update(),
@@ -421,60 +374,13 @@ def _preserve_target_dtypes_for_load(root, state_dict):
             continue
         if src.shape != target.shape:
             continue
-        replacement = src
         target_dtype = _jittor_dtype_name(target.dtype)
-        if _jittor_dtype_name(replacement.dtype) != target_dtype:
-            replacement = replacement.cast(target_dtype)
-        target_backend = getattr(target, "placement_backend", -1)
-        source_backend = getattr(replacement, "placement_backend", -1)
-        target_device = getattr(target, "device", None)
-        source_device = getattr(replacement, "device", None)
-        if target_backend == 0 and source_backend != 0:
-            replacement = _make_cpu_resident(replacement)
-        elif target_backend > 0 and (
-                source_backend != target_backend or source_device != target_device):
-            replacement = _make_cuda_resident(
-                replacement, force=True, device=target_device)
-        if replacement is value:
+        if _jittor_dtype_name(src.dtype) == target_dtype:
             continue
         if converted is None:
             converted = dict(state_dict)
-        converted[key] = replacement
+        converted[key] = src.cast(target_dtype)
     return state_dict if converted is None else converted
-
-
-def _assign_state_value(root, key, value):
-    """Replace one parameter/buffer for Torch ``assign=True`` semantics."""
-    owner, leaf, target = _find_state_owner(root, key)
-    if owner is None or not isinstance(target, jt.Var):
-        return False
-    source = _state_source_to_var(value)
-    if not isinstance(source, jt.Var) or source.shape != target.shape:
-        return False
-    role = next((item_role for item_name, item, item_role in owner._var_roles()
-                 if str(item_name) == str(leaf) and item is target), None)
-    if role == "parameter":
-        # ``target`` may be the plain Torch frontend Tensor produced by
-        # Transformers' meta/low-memory loader.  Calling ``type(target)``
-        # rejects ``requires_grad=``; parameter replacement must go through
-        # the installed Parameter factory so assign=True preserves the role.
-        parameter_type = get_install_context(jt).target_namespace.nn.Parameter
-        replacement = parameter_type(source, requires_grad=bool(target.requires_grad))
-    else:
-        replacement = source.clone().detach()
-        replacement.requires_grad = False
-        if role in ("buffer", "non_persistent_buffer"):
-            replacement.is_buffer = True
-            replacement.persistent = role == "buffer"
-    if getattr(source, "_jittor_torch_meta", False):
-        _set_meta_placeholder(replacement)
-    else:
-        _set_meta_placeholder(replacement, False)
-    if isinstance(owner, nn.ParameterList):
-        owner.params[leaf] = replacement
-    else:
-        setattr(owner, leaf, replacement)
-    return True
 
 
 def _state_dict_key_diff(root, state_dict):
@@ -553,16 +459,7 @@ def _load_state_dict(self, state_dict, strict=True, assign=False):
         # here so a strict=False load stays quiet, exactly like torch.
         load_state = {k: v for k, v in load_state.items()
                       if str(k) not in set(unexpected)}
-    if assign and isinstance(load_state, dict):
-        remaining = {
-            key: value for key, value in load_state.items()
-            if str(key) not in set(unexpected)
-            and not _assign_state_value(self, key, value)
-        }
-        if remaining:
-            _ORIG_MODULE_LOAD_STATE_DICT(self, remaining)
-    else:
-        _ORIG_MODULE_LOAD_STATE_DICT(self, load_state)
+    _ORIG_MODULE_LOAD_STATE_DICT(self, load_state)
     try:
         for n, p in self.named_parameters():
             if n in trainable and p.is_stop_grad():
@@ -570,16 +467,6 @@ def _load_state_dict(self, state_dict, strict=True, assign=False):
     except EXPECTED as exc:
         swallowed("torch/installers/nn.py _load_state_dict: for n, p in self.named_parameters():", exc)
     return _IncompatibleKeys(missing, unexpected)
-
-
-def _register_load_state_dict_pre_hook(self, hook, with_module=False):
-    """Accept Torch's private load hook used by legacy remote checkpoints.
-
-    Jittor's loader has no per-module pre-hook dispatch.  The hook is therefore
-    intentionally recorded as an import-compatible no-op; current callers use
-    it only to discard obsolete checkpoint keys before loading.
-    """
-    return None
 
 
 # torch's Module.parameters() returns an *iterator*; peft does
@@ -838,13 +725,15 @@ def _module_to_conversion(ds, dev, copy, v):
     if _device_is_cpu(dev):
         out = _make_cpu_resident(out, inplace=(out is v))
     elif _device_is_cuda(dev):
-        src_index = getattr(v, "device_id", -1)
         out = _make_cuda_resident(out, force=True, inplace=(out is v))
-        # A bare .to("cuda") must not drag a parameter off the device
-        # it is already on; see _move_to_cuda_index.
+        # A bare .to("cuda")/.cuda() is the *current* device, as in torch --
+        # `model_on_cuda1.cuda()` with current_device()==0 lands on cuda:0.
+        # This used to fall back to the parameter's own device, which kept the
+        # model on cuda:1 and disagreed with `Tensor.to("cuda")` in the same
+        # installation. See types.current_accelerator_index.
         idx = _cuda_index_of(dev)
-        if idx is None and src_index is not None and src_index >= 0:
-            idx = src_index
+        if idx is None:
+            idx = current_accelerator_index()
         if idx is not None and isinstance(out, jt.Var):
             cur = getattr(out, "device_id", -1)
             if cur >= 0 and cur != int(idx):
@@ -858,8 +747,6 @@ def _module_to_conversion(ds, dev, copy, v):
                     out = v
                 else:
                     out = moved
-    elif _device_is_meta(dev):
-        out = _set_meta_placeholder(out)
     return out
 
 
@@ -870,7 +757,10 @@ def _module_to(self, *args, **kwargs):
     ds = None
     dev = kwargs.get("device")
     copy = bool(kwargs.get("copy", False))
-    for a in list(args) + list(kwargs.values()):
+    scanned = list(args)
+    if kwargs.get("dtype") is not None:
+        scanned.append(kwargs["dtype"])
+    for a in scanned:
         if isinstance(a, dtype):
             ds = a.name
         elif isinstance(a, device):
@@ -878,12 +768,32 @@ def _module_to(self, *args, **kwargs):
         elif isinstance(a, jt.Var):
             ds = _jittor_dtype_name(a.dtype)
             dev = a.device
+        elif isinstance(a, bool):
+            # torch's Module.to(non_blocking) flag; not a device.
+            continue
+        elif _is_index(a):
+            # `model.to(1)` is `model.to("cuda:1")` in torch. A bare int used
+            # to match none of these branches and be dropped, so the module
+            # stayed where it was and the caller was told nothing -- the
+            # Module-level twin of the `Tensor.to(1)` hole closed in section 31
+            # of docs/results/2026-09-14-vllm-omni-h3-enablement.md.
+            dev = device("cuda", int(a))
         elif isinstance(a, str):
             bare = a.replace("torch.", "")
             if bare in dtype._registry:
                 ds = bare
-            elif bare.split(":")[0] in ("cpu", "cuda", "npu", "meta"):
+            elif bare.split(":")[0] in ("cpu", "cuda", "npu"):
                 dev = bare
+            else:
+                # Same policy as Tensor.to: refuse rather than silently leave
+                # every parameter where it was.
+                device(bare.split(":")[0])
+                _unimplemented(
+                    "torch.nn.Module.to(%r)" % (a,),
+                    "leave every parameter and buffer on its old device while "
+                    "reporting that the move to %r succeeded" % (a,),
+                    "This layer places tensors on cpu, cuda and npu only.",
+                    stub_result=None)
     if _device_is_cuda(dev):
         jt.flags.use_cuda = 1
     if dev is not None or ds is not None:
@@ -899,14 +809,42 @@ def _module_to_empty(self, *, device, recurse=True):
     return _module_to(self, device=device)
 
 
+def _module_accelerator_device(kind, dev):
+    """The device ``Module.cuda``/``Module.npu`` was asked for.
+
+    torch's signature is ``cuda(device: int | torch.device | None)``. Only the
+    ``int`` spelling used to be read: ``model.cuda(torch.device("cuda", 1))``
+    and ``model.cuda("cuda:1")`` both fell through to a bare ``"cuda"``, which
+    means "the current device", so the model landed on device 0 while the
+    caller had named device 1 -- and nothing said so.
+    """
+    if dev is None:
+        return kind
+    if isinstance(dev, bool):
+        raise TypeError("Module.%s(): a bool is not a device" % (kind,))
+    if _is_index(dev):
+        return device(kind, int(dev))
+    if isinstance(dev, device):
+        resolved = dev
+    elif not isinstance(dev, str) and getattr(dev, "type", None) is not None:
+        # A device object from another library (a real torch.device in a mixed
+        # process); read its fields rather than its repr.
+        resolved = device(dev.type, getattr(dev, "index", None))
+    else:
+        resolved = device(dev)
+    if resolved.type not in ("cuda", "npu"):
+        raise ValueError("Expected a %s device, but got: %s" % (kind, dev))
+    return resolved
+
+
 def _module_cuda(self, dev=None):
     """Torch's ``Module.cuda``, optionally pinned to one device index."""
-    return _module_to(self, device("cuda", dev) if isinstance(dev, int) else "cuda")
+    return _module_to(self, _module_accelerator_device("cuda", dev))
 
 
 def _module_npu(self, dev=None):
     """Torch's ``Module.npu``, optionally pinned to one device index."""
-    return _module_to(self, device("npu", dev) if isinstance(dev, int) else "npu")
+    return _module_to(self, _module_accelerator_device("npu", dev))
 
 
 def _module_cpu(self):
@@ -960,8 +898,16 @@ def _zero_grad(self, set_to_none=True):
                 if grad is not None:
                     object.__setattr__(p, "_torch_grad", None)
             elif grad is not None:
-                object.__setattr__(
-                    p, "_torch_grad", jt.zeros(grad.shape, dtype=grad.dtype))
+                # In place, so ``.grad`` stays the *same object* the way torch
+                # leaves it: torch's ``zero_grad(set_to_none=False)`` zeroes the
+                # existing tensor, and callers rely on that identity. Handing
+                # back a fresh ``zeros_like`` is numerically identical but makes
+                # ``[p.grad for p in model.parameters()]`` hold one gradient set
+                # per step instead of one in total. Zeroing in place also avoids
+                # the ``jt.zeros`` trap recorded here before: that built a native
+                # Var, whose dtype prints as "float32" where the parameter's
+                # prints as "torch.float32", and which loses every Tensor method.
+                grad.zero_()
     except EXPECTED as exc:
         swallowed("torch/installers/nn.py _zero_grad: for p in self.parameters():", exc)
     return None
@@ -992,14 +938,13 @@ def _get_parameter(self, target):
     if not hasattr(mod, leaf):
         raise AttributeError(f"`{target}` is not a parameter")
     v = getattr(mod, leaf)
-    # a parameter is a trainable Var directly attached to the module
-    if isinstance(v, jt.Var) and not v.is_stop_grad():
+    # `requires_grad` cannot classify it -- a buffer registered from a torch
+    # factory is not stop_grad either, so asking that question returned
+    # buffers from `get_parameter`, which torch answers with AttributeError.
+    # The module's own parameter listing is the authority; buffers are tracked
+    # separately, by name (see Module.register_buffer).
+    if isinstance(v, jt.Var) and target in {n for n, _ in self.named_parameters()}:
         return v
-    if isinstance(v, jt.Var):
-        # could still be a (frozen) parameter; distinguish from buffers
-        names = {n for n, _ in self.named_parameters()}
-        if target in names:
-            return v
     raise AttributeError(f"`{target}` is not a parameter")
 
 
@@ -1036,9 +981,6 @@ def _register_parameter(self, name, param):
     object.__setattr__(self, name, param)
 
 
-_register_parameter._jittor_torch_native_registration = True
-
-
 def _module_type(self, dst_type=None):
     """Torch's ``Module.type``, which Jittor has nothing to do for."""
     return self
@@ -1048,15 +990,17 @@ def _module_type(self, dst_type=None):
 # *immediate* (non-recursive) buffer attribute names that were registered
 # with persistent=False. transformers' from_pretrained reads it via
 # `named_non_persistent_buffers()` (parent._non_persistent_buffers_set).
-# Jittor records buffer roles by attribute name, which survives a dtype cast
-# replacing the Var. Keep this property aligned with that canonical registry.
+# jittor instead tags each buffer Var with `.persistent`; derive the set
+# from that. It's a property so it stays correct as buffers are (de)added.
 def _nonpersist_set(self):
-    """The immediate buffer names registered with ``persistent=False``."""
-    out = {name for name, _, role in self._var_roles()
-           if role == "non_persistent_buffer"}
-    out.update(name for name in self.__dict__.get("_non_persistent_buffer_names", ())
-               if self.__dict__.get(name, object()) is None)
-    return out
+    """The immediate buffer names registered with ``persistent=False``.
+
+    Read from the names the module tracks, not from per-Var tags: those tags
+    are lost the moment a buffer Var is replaced (a dtype cast, a weight
+    load), which is exactly why ``Module.register_buffer`` keeps
+    ``_non_persistent_buffer_names`` instead.
+    """
+    return set(self.__dict__.get("_non_persistent_buffer_names", ()))
 
 
 # Fidelity for the promoted Module methods. Every entry is APPROXIMATE: these
@@ -1158,7 +1102,6 @@ def _install_module_methods(nn, registry=None):
     M.named_buffers = _named_buffers
     M.named_modules = _named_modules
     M.load_state_dict = _load_state_dict
-    M._register_load_state_dict_pre_hook = _register_load_state_dict_pre_hook
     M.parameters = _parameters
     M.train = _train
     M.eval = _eval
@@ -1192,5 +1135,5 @@ def _install_module_methods(nn, registry=None):
         M._non_persistent_buffers_set = property(_nonpersist_set)
 
     register_api_bindings(M, 'torch.nn.Module',
-        ('__setattr__', '_register_load_state_dict_pre_hook', 'buffers', 'cpu', 'cuda', 'double', 'eval', 'execute', 'float', 'forward', 'get_buffer', 'get_execution_pipelining', 'get_parameter', 'get_submodule', 'half', 'load_state_dict', 'named_buffers', 'named_modules', 'named_parameters', 'npu', 'parameters', 'register_parameter', 'set_execution_pipelining', 'to', 'to_empty', 'train', 'type', 'zero_grad') + tuple(()),
+        ('__setattr__', 'buffers', 'cpu', 'cuda', 'double', 'eval', 'execute', 'float', 'forward', 'get_buffer', 'get_execution_pipelining', 'get_parameter', 'get_submodule', 'half', 'load_state_dict', 'named_buffers', 'named_modules', 'named_parameters', 'npu', 'parameters', 'register_parameter', 'set_execution_pipelining', 'to', 'to_empty', 'train', 'type', 'zero_grad') + tuple(()),
         Fidelity.APPROXIMATE, 'Module state and parameter management over native holders; Torch lazy iterator, meta, and layout semantics are approximate')

@@ -93,25 +93,30 @@ class SetItemACL(jt.Function):
             self.value_var = False
         if isinstance(slices, jt.Var):
             if _jittor_dtype_name(slices.dtype) == "bool":
+                scalar_value = isinstance(value, (int, float)) or (
+                    isinstance(value, jt.Var) and value.ndim == 0)
+                self.mask_scalar = scalar_value
                 if isinstance(value, int) or isinstance(value, float):
                     # ACL masked-scatter consumes only as many source elements
                     # as the mask selects. Avoid reducing the bool mask here:
                     # bool reductions are not reliable on ACL, and a wrong zero
                     # count would silently turn a real assignment into a no-op.
                     value = jt.full((x.numel(),), value, dtype=x.dtype)
+                elif scalar_value:
+                    value = value.broadcast((x.numel(),)).contiguous()
                 if slices.shape != x.shape:
                     raise ValueError("setitem mask shape must match input shape")
                 if len(value.shape) != 1:
                     raise ValueError("setitem mask value must be 1D")
-                if self.value_var:
+                if self.value_var and not scalar_value:
                     slices_len = slices.int32().sum().item()
                     if value.shape[0] != slices_len:
                         raise ValueError("setitem value length must equal selected elements")
                 self.type_ = "mask"
-                self.value_shape = value.shape
+                self.value_shape = () if scalar_value else value.shape
                 # base x is an explicit input so its data is materialized before
                 # the in-place masked-scatter (the runner copies base->out first).
-                inputs = [x, slices, value]
+                inputs = [x.contiguous(), slices, value]
                 outputs = [jt.empty(x.shape, x.dtype)]
                 attr_code = f"""
                 op.jt_name = "inplacemaskedscatter";
@@ -137,6 +142,8 @@ class SetItemACL(jt.Function):
             if not isinstance(s, jt.Var) and (isinstance(s, slice) or s == Ellipsis):
                 contains_slice = True
                 break
+        if all(isinstance(s, (int, slice)) or s is Ellipsis for s in slices):
+            contains_slice = True
         if not contains_slice:
             indices = []
             value_shape = []
@@ -211,17 +218,8 @@ class SetItemACL(jt.Function):
         if expand_dim:
             x_shape.append(1)
             x = x.unsqueeze(-1)
-            value = value.unsqueeze(-1)
 
-        squeeze_dims = []
-        if isinstance(value, jt.Var):
-            for dim, s in enumerate(slices):
-                if isinstance(s, int):
-                    s = slice(s, s + 1, 1)
-                    squeeze_dims.append(dim)
-
-            for dim in squeeze_dims:
-                value = value.unsqueeze(dim)
+        squeeze_dims = [dim for dim, s in enumerate(slices) if isinstance(s, int)]
 
         begins, ends, steps, dims = [], [], [], []
         if len(slices):
@@ -240,8 +238,14 @@ class SetItemACL(jt.Function):
         else:
             sizes = [1]
             steps = [1]
-        if isinstance(value, int) or isinstance(value, float):
-            value = jt.full(sizes, value)
+        if not isinstance(value, jt.Var):
+            value = jt.array(value, dtype=x.dtype)
+        self.value_shape = tuple(value.shape)
+        # Broadcast in the public (integer-index axes removed) slice shape,
+        # then restore singleton axes required by the CANN assignment ABI.
+        logical_shape = tuple(size for dim, size in enumerate(sizes)
+                              if dim not in squeeze_dims and not (expand_dim and dim == len(sizes) - 1))
+        value = value.broadcast(logical_shape).reshape(sizes).contiguous()
         self.type_ = "slicev2"
         attr_code = attribute_program(
             "StridedSliceAssignV2",
@@ -252,9 +256,10 @@ class SetItemACL(jt.Function):
                 "axes": dims,
             },
         )
-        self.value_shape = value.shape
-        inputs = [value]
-        outputs = [x.clone()]
+        # A partial writer must depend on the entire initialized base. A
+        # write-only clone output loses this dependency and may be zero-strided.
+        inputs = [value, x.contiguous()]
+        outputs = [jt.empty(x.shape, x.dtype)]
         result = setitem_forward(
             "StridedSliceAssignV2", inputs=inputs, outputs=outputs, attr_code=attr_code
         )[0]
@@ -264,8 +269,27 @@ class SetItemACL(jt.Function):
         return result
 
     def grad(self, grad_output):
+        if self.type_ == "mask":
+            mask = self.input_slice
+            value_grad = None
+            if self.value_var:
+                if self.mask_scalar:
+                    # A masked reduction also handles an empty selection
+                    # without launching a zero-length masked-select operation.
+                    value_grad = jt.where(mask, grad_output, 0).sum().reshape(())
+                else:
+                    value_grad = grad_output[mask]
+            return jt.where(mask, 0, grad_output), None, value_grad
         value_grad = None
         if self.value_var:
             value_grad = grad_output[self.input_slice]
-        grad_output[self.input_slice] = jt.zeros(self.value_shape)
-        return grad_output, None, value_grad
+            if self.type_ == "slicev2":
+                padded = (1,) * (value_grad.ndim - len(self.value_shape)) + self.value_shape
+                axes = tuple(i for i, (actual, target) in enumerate(zip(value_grad.shape, padded))
+                             if target == 1 and actual != 1)
+                if axes:
+                    value_grad = value_grad.sum(axes, keepdims=True)
+                value_grad = value_grad.reshape(self.value_shape)
+        base_grad = grad_output.clone()
+        base_grad[self.input_slice] = 0
+        return base_grad, None, value_grad

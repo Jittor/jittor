@@ -11,6 +11,10 @@
 #include "ops/composite/array_op.h"
 #include "mem/allocator.h"
 #include "mem/allocator/cuda_dual_allocator.h"
+// migration_device() calls current_device(); without this the declaration
+// only arrives through cuda_dual_allocator.h, whose whole body is inside
+// #ifdef HAS_ACCELERATOR, so a CPU-only core does not compile.
+#include "runtime/device.h"
 #include "runtime/holder_state.h"
 
 namespace jittor {
@@ -283,9 +287,33 @@ struct VarHolder {
         return (int64)var;
     }
 
+    // The address of this Var's bytes as it stands -- 0 if it has none --
+    // without materializing it the way `raw_ptr` does. For asking whether two
+    // executed Vars share storage.
+    // @pyjt(__get___mem_ptr_now)
+    inline int64 mem_ptr_now() {
+        return (int64)var->mem_ptr;
+    }
+
     // @pyjt(__get__flags)
     inline int32 flags() {
         return (int32)(var->flags.flags);
+    }
+
+    /**
+     * Whether the executor has finished this Var's node.
+     *
+     * A finished node has released its pending liveness and will not be
+     * executed again. That is the normal end of a graph's single use, but it
+     * is exactly what a `keep_graph` caller must not let happen behind its
+     * back: reading a value out of a kept graph finishes it, and so does any
+     * other work that finishes a node the kept graph shares. The graph then
+     * still answers -- with the values it last computed -- so a replay has to
+     * be able to ask.
+     */
+    // @pyjt(__get__is_finished)
+    inline bool is_finished() {
+        return var->is_finished();
     }
 
     /** 
@@ -468,12 +496,65 @@ struct VarHolder {
         return (uint64)var->mem_ptr;
     }
 
+    /**
+     * The device a host-resident Var should be migrated to.
+     *
+     * `get_allocator()` with no device picks the *ambient* one
+     * (`allocator.cc: get_allocator(bool) -> current_device()`), and `to_device`
+     * does not move the ambient -- it belongs to the caller, and `run_sync`
+     * restores it. So on a rank whose device is not the process default a
+     * migration target taken from the ambient puts the operand on one device and
+     * the caller then hands that pointer to a kernel launched on another: a
+     * cross-device access with nothing to reject it, i.e. an illegal address.
+     * The Var's own device is where its consumers run, so that is the target;
+     * a Var with no device of its own (still unplaced) falls back to the
+     * ambient one.
+     */
+    inline int migration_device() {
+        int device = (int)var->device_id;
+        return device < 0 ? current_device() : device;
+    }
+
     // @pyjt(__get__device_raw_ptr)
     inline uint64 device_raw_ptr() {
         sync(true, false);
         #ifdef HAS_ACCELERATOR
         if (!var->allocator->is_cuda())
-            migrate_to_gpu(var, get_allocator());
+            migrate_to_gpu(var, get_allocator(migration_device(), false));
+        #endif
+        return (uint64)var->mem_ptr;
+    }
+
+    /**
+     * Device pointer without the synchronisation ``device_raw_ptr`` performs.
+     *
+     * Only meaningful once the caller has materialised the graph (``sync`` /
+     * ``sync_all``) and this Var's memory is on the accelerator; the migration
+     * below still happens, because a host-resident Var must never be handed to
+     * a device kernel. Triton's bridge syncs once per launch and then reads one
+     * pointer per operand, so the syncing accessor repeated that sync for every
+     * argument of every launch.
+     *
+     * ``allocator`` is null until this Var is allocated (see ``var.h``), and the
+     * residency test below dereferences it. So a holder that has never been
+     * materialised -- freshly built, or waiting on a producer that has not run
+     * -- must materialise here: reading the pointer of such a holder is a null
+     * dereference, which is exactly how this accessor first failed when the
+     * bridge started preferring it.  ``device_raw_ptr`` never met that case
+     * because its own ``sync`` always allocates first.
+     *
+     * The test is ``mem_ptr`` rather than ``allocator``: allocation and pointer
+     * are set together, and a freed Var may keep the allocator while its
+     * pointer is gone.  Either way the answer is "materialise once" -- true for
+     * at most one read, because allocation is fixed once it has happened.  A
+     * zero-element Var, whose pointer stays null, simply answers 0.
+     */
+    // @pyjt(__get__device_ptr_ready)
+    inline uint64 device_ptr_ready() {
+        if (!var->mem_ptr) sync(true, false);
+        #ifdef HAS_ACCELERATOR
+        if (!var->allocator->is_cuda())
+            migrate_to_gpu(var, get_allocator(migration_device(), false));
         #endif
         return (uint64)var->mem_ptr;
     }
@@ -495,6 +576,61 @@ struct VarHolder {
 
     // @pyjt(__set__data)
     void set_data(ArrayArgs&& array);
+
+    /** Overwrite this Var's existing buffer, leaving it where it already is.
+
+        `set_data` migrates the Var to the host first, so feeding a
+        device-resident input costs a device-to-host move and then a move back
+        on the next kernel that reads it. That is the wrong shape for the one
+        case this exists for: re-running a kept graph (`keep_graph`) with new
+        input each step, where the buffer is already on the device and only its
+        contents change.
+
+        Requires an allocated, dense Var of matching dtype and size: this
+        writes bytes into a buffer a graph may already point at, so it refuses
+        anything it cannot describe rather than writing somewhere wrong.
+     */
+    // @pyjt(_write_inplace)
+    void write_inplace(ArrayArgs&& array);
+
+    /**
+        Overwrite this Var's buffer with another Var's contents, in place.
+
+        The device-resident twin of `_write_inplace`: the source stays where
+        it is and the bytes move straight across, so feeding a kept graph
+        from a Var that is already on the accelerator costs one ordered
+        device-to-device copy rather than a round trip through the host.
+
+        Same refusals as `_write_inplace`, on both Vars.
+     */
+    /**
+        `sync_src=false` copies the source's bytes WITHOUT resolving it first.
+
+        That is the difference between reading a kept graph's answer and
+        re-running the kept graph to produce it again. After the graph has
+        been replayed -- through the executor or as a recorded device graph --
+        its output buffer already holds the current bytes, and syncing it
+        would execute the whole thing a second time. The caller is then
+        promising that the bytes are current and that the copy is ordered
+        behind whatever produced them, which stream order gives.
+     */
+    // @pyjt(_copy_into)
+    void copy_into(VarHolder* src, bool sync_src=true);
+
+    /**
+        Give back a graph that was kept with `keep_graph`.
+
+        `keep_graph` marks every node it leaves unfinished, and a marked node
+        is never finished -- not by the batch that built it and not by any
+        later batch that collects it, which is what lets a kept graph survive
+        an ordinary `sync_all`. The mark therefore has to be taken off
+        deliberately: this walks back from the Var through everything that
+        produced it and clears it, after which a normal sync finishes them and
+        the memory is reclaimed. Without it a kept graph leaks for the life of
+        the process.
+     */
+    // @pyjt(_release_kept)
+    void release_kept();
 
     // @pyjt(share_with)
     // @attrs(return_self)
@@ -593,8 +729,41 @@ struct VarHolder {
     VarHolder* transpose_view_base();
 
     /**
+     * The axes of this view's last step when it is a transpose, else empty.
+     */
+    // @pyjt(_transpose_view_axes)
+    NanoVector transpose_view_axes();
+
+    /**
+     * What this transpose view was before its last transpose: a new holder,
+     * itself a view of the same root one step shorter, so that a write to it
+     * still reaches the root. A kernel that can read the untransposed layout
+     * takes this instead of materializing the transpose, and a transpose of
+     * this view composes with it rather than stacking a second one.
+     */
+    // @pyjt(_transpose_view_source)
+    VarHolder* transpose_view_source();
+
+    /**
+     * The axes of the transpose that will compute this Var, else empty: the
+     * graph's answer where the view record is gone -- `q = proj(x).view(...)
+     * .transpose(1, 2)` drops the projection's holder, and a view's record
+     * lives only as long as its root's holder. ``_input(0)`` is the source.
+     */
+    // @pyjt(_producer_transpose_axes)
+    NanoVector producer_transpose_axes();
+
+    /**
      * Whether an assignment to this holder writes through to some base.
      */
+    /**
+     * This tensor permuted by ``axes`` as a view of the same storage: no
+     * copy, and no Python ``transpose`` wrapper on the way. What the
+     * channels-last helpers move between NCHW and NHWC with.
+     */
+    // @pyjt(_storage_permute)
+    VarHolder* storage_permute(NanoVector axes);
+
     // @pyjt(_is_view)
     inline bool is_view() { return view && view->base; }
 
@@ -616,6 +785,37 @@ struct VarHolder {
     void attach_view(VarHolder* base, VarViewStep step);
     void refresh_transpose_views();
 };
+
+/**
+    How many times the host has read a Var's value so far (`numpy`, `item`,
+    `data`, a fetch). Compared across a traced call, it says whether the call
+    read one.
+ */
+// @pyjt(_host_readback_count)
+int64 host_readback_count();
+
+/**
+    Start recording which live holders get rebound to a different Var.
+
+    A step that updates state -- an optimizer writing parameters and moments,
+    a norm layer its running statistics -- does it by rebinding the holder the
+    caller keeps (`update`, `assign`, an in-place op) to the Var that computes
+    the new value. A capture of that step has to know every such holder: the
+    graph it keeps reads the state's *old* Var, so a replay must write each new
+    value back there. Asking the holders themselves is the only way that does
+    not depend on knowing which modules and optimizers the step touched.
+ */
+// @pyjt(_state_capture_begin)
+void state_capture_begin();
+
+/**
+    Stop recording and return `[(holder, old, new), ...]` for every holder
+    still alive that now holds a different Var than when it was first
+    rebound, and whose first Var was already executed then. `old` and `new`
+    are fresh holders of those two Vars; `holder` is the caller's own object.
+ */
+// @pyjt(_state_capture_end)
+PyObject* state_capture_end();
 
 // @pyjt(sync)
 void sync(const vector<VarHolder*>& vh=vector<VarHolder*>(), bool device_sync=false, bool weak_sync=true);

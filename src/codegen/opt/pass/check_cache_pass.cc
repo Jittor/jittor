@@ -87,7 +87,7 @@ void CheckCachePass::run() {
             L2_size = op->get_loop_option("L2_size"), L2_ways = op->get_loop_option("L2_ways"), L2_line_size = op->get_loop_option("L2_line_size"),
             L3_size = op->get_loop_option("L3_size"), L3_ways = op->get_loop_option("L3_ways"), L3_line_size = op->get_loop_option("L3_line_size");
 
-    ir->push_back("#include \"profiler/memory_checker.h\"", &ir->before);
+    ir->push_back("#include \"runtime/profiler/memory_checker.h\"", &ir->before);
     ir->push_back("using namespace jittor;", &ir->before);
     // declaration
     ir->push_back("EXTERN_LIB \"C\" std::unique_ptr<MemoryChecker> memory_checker;", &ir->before);

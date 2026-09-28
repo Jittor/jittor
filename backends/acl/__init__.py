@@ -164,6 +164,7 @@ void init_acl_ops();
         kernel_compiler=config.cc_path, kernel_language="cxx",
         kernel_compile_flags=final_flags, kernel_source_suffix=".cc",
         kernel_device_link=False,
+        kernel_source_roots=(), kernel_flag_filter=(),
         # No fake CUDA libraries: that path compiles backends/cuda/kernels/<lib>
         # sources, which are real CUDA/cuDNN translation units. They only ever
         # built under ACL because the 1.x provider rewrote every jittor source

@@ -2,7 +2,8 @@
 from importlib import import_module
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from ...context import get_install_context
-from ...grad import autocast_is_enabled
+from ...types import _make_cpu_resident, _make_cuda_resident, _var_is_cpu_resident
+from ....stub_policy import degraded as _degraded, unimplemented as _unimplemented
 from ..core import _promote_pair
 
 _owner = import_module(__package__)
@@ -39,12 +40,13 @@ _TYPENAME_TO_DTYPE.update({v.replace("torch.", "torch.cuda."): k
 
 
 def _dtype_get(self):
-    _context = get_install_context(_owner.jt)
-    _native = _context.state["tensor_native_api"]
-    _DTYPE_OBJS = _native['_DTYPE_OBJS']
-    _d = _native['_native_desc']
-    name = str(_d.__get__(self, type(self)))
-    return _DTYPE_OBJS.get(name, name)
+    # Every `.dtype` read on a frontend tensor lands here -- kernel selection,
+    # promotion and each `supports` check ask it, about 5000 times in one SD1.5
+    # UNet step -- so it reads what it needs from the tensor's own type, where
+    # the installer put it, instead of resolving the install context each time.
+    cls = type(self)
+    name = str(cls._frontend_native_dtype.__get__(self, cls))
+    return cls._frontend_dtype_objects.get(name, name)
 
 
 def _numpy_data_value(value):
@@ -68,8 +70,6 @@ def _write_data_owner_numpy(view, value, slices):
     target = _native_data_descriptor.__get__(owner, Var)
     for index in getattr(view, "_torch_data_path", ()):
         target = target[_numpy_data_value(index)]
-    if not getattr(getattr(target, "flags", None), "writeable", True):
-        return _assign_data_owner(view, value, (slices,))
     target[_numpy_data_value(slices)] = _numpy_data_value(value)
     return True
 
@@ -166,66 +166,20 @@ def _torch_setitem(self, slices, value):
     _context = get_install_context(_owner.jt)
     _native = _context.state["tensor_native_api"]
     _orig_setitem = _native['_orig_setitem']
-    slices = _align_advanced_index(self, slices)
-    # PyTorch promotes a no-grad destination to a differentiable non-leaf when
-    # an indexed assignment consumes a grad-enabled source.  Jittor otherwise
-    # leaves the destination stopped, so even a differentiable replacement
-    # expression cannot reach its source during ``backward()``.  Respect
-    # ``no_grad`` while enabling the normal training-time promotion.
-    if (isinstance(value, _NativeVar) and bool(value.requires_grad)
-            and not bool(getattr(_owner.jt.flags, "no_grad", 0))
-            and not bool(self.requires_grad)):
-        self.start_grad()
-    # Jittor's indexed-assignment backward exposes one gradient row per
-    # selected position when a rank-1 parameter is assigned through a lower
-    # rank boolean mask (for example Wav2Vec2 SpecAugment's
-    # ``hidden_states[mask] = masked_spec_embed``).  Torch reduces that RHS
-    # gradient to the parameter's shape.  Express the same update as a
-    # device-resident blend so the normal broadcast backward performs the
-    # reduction without changing the visible in-place holder.
-    if (isinstance(slices, _NativeVar)
-            and _jittor_dtype_name(slices.dtype) in ("bool", "uint8")
-            and isinstance(value, _NativeVar)
-            and len(slices.shape) + 1 == len(self.shape)
-            and tuple(value.shape) == (int(self.shape[-1]),)):
-        mask = slices.unsqueeze(-1).broadcast(self.shape)
-        rhs_shape = (1,) * len(slices.shape) + (int(self.shape[-1]),)
-        expanded = value.reshape(rhs_shape).broadcast(self.shape)
-        updated = self + mask * (expanded - self)
-        self.assign(updated)
+    if _set_data_owner(self, slices, value):
         return self
-    # A lower-rank boolean mask with a per-selected-row source (for example
-    # SmolVLM's ``image_embeds[image_mask] = image_hidden_states[...]``)
-    # must preserve the source graph.  Native setitem mutates the destination
-    # without an autograd edge, so the vision tower and connector receive no
-    # gradients.  The torch masked-scatter implementation expresses the same
-    # update as ``where`` and is differentiable with respect to ``value``.
-    if (isinstance(slices, _NativeVar)
-            and _jittor_dtype_name(slices.dtype) in ("bool", "uint8")
-            and isinstance(value, _NativeVar)
-            and len(slices.shape) < len(self.shape)
-            and len(value.shape) == len(self.shape) - len(slices.shape) + 1):
-        try:
-            trailing = 1
-            for dimension in self.shape[len(slices.shape):]:
-                trailing *= int(dimension)
-            selected = int(slices.sum().item())
-            if selected > 0 and int(value.numel()) == selected * trailing:
-                updated = _owner.masked_scatter(self, slices, value)
-                self.assign(updated)
-                return self
-        except _owner.EXPECTED as exc:
-            _owner.swallowed(
-                "torch/installers/tensor.py _torch_setitem: differentiable masked assignment",
-                exc,
-            )
     if isinstance(value, _NativeVar):
+        # torch copies a value into the destination's placement, so
+        # `cuda_t[...] = cpu_value` and `cpu_t[...] = cuda_value` both work.
+        # Jittor dispatches the assignment on placement and rejects the mix
+        # ("Expected all tensor inputs on the same backend and device"), which
+        # is what a layout block hits when it writes a host grid into a device
+        # position tensor. Move the value onto the destination's placement
+        # first; the same-placement path is untouched.
         if _var_is_cpu_resident(value) and not _var_is_cpu_resident(self):
             value = _make_cuda_resident(value)
         elif not _var_is_cpu_resident(value) and _var_is_cpu_resident(self):
             value = _make_cpu_resident(value)
-    if _set_data_owner(self, slices, value):
-        return self
     try:
         mask = slices
         if isinstance(mask, _NativeVar) and _jittor_dtype_name(mask.dtype) in ("bool", "uint8") \
@@ -255,18 +209,7 @@ def _ip(self, value):
     if _assign_data_owner(self, value):
         return self
     target = self
-    # The refactored core can expose a non-stopped factory result while its
-    # Torch-facing requires_grad bit is still false.  Use the public autograd
-    # contract here; is_stop_grad() would misclassify zeros_like destinations
-    # used by MoE index_add_ and assign away the expert graph.
-    was_trainable = bool(target.requires_grad)
-    value_is_trainable = isinstance(value, _NativeVar) and bool(value.requires_grad)
-    if not was_trainable and value_is_trainable:
-        # assign() deliberately copies the old holder's stop-grad state onto
-        # the new graph. Torch instead lets a constant destination become
-        # differentiable when an in-place result depends on a trainable source.
-        target._update(value)
-        return self
+    was_trainable = not target.is_stop_grad()
     target.assign(value)
     if was_trainable and target.is_stop_grad():
         target.start_grad()
@@ -277,7 +220,20 @@ def _ip(self, value):
 
 def _copy_(self, other, non_blocking=False):
     src = other if isinstance(other, _NativeVar) else _owner.jt.array(other)
-    return _ip(self, src.cast(_jittor_dtype_name(self.dtype)) if hasattr(self, "dtype") else src)
+    src = src.cast(_jittor_dtype_name(self.dtype)) if hasattr(self, "dtype") else src
+    # torch's `copy_` is in place: the destination keeps its own device, and a
+    # cross-device copy is a transfer. jittor's `assign` (what `_ip` uses for
+    # every `x.foo_()`) writes x's values into *y's* storage and then aliases
+    # the two, so `dst.copy_(host_src)` left `dst` reporting the host device.
+    # vLLM-Omni's PinnedModuleStager builds device storages and fills them from
+    # CPU masters that way; every parameter then came back as a host tensor and
+    # the encoder's `load_to_device()` guard fired. Materialize the source on
+    # the destination's device first.
+    destination = getattr(self, "device", None)
+    if destination is not None and str(destination).split(":")[0] in ("cpu", "cuda", "npu"):
+        if src.device != destination:
+            src = src.to(destination)
+    return _ip(self, src)
 
 
 def _norm_size(args):
@@ -306,8 +262,6 @@ def _new_finish(v, device=None, requires_grad=False):
         if v.placement_backend < 0:
             _owner._set_use_cuda()
         v = _owner._make_cuda_resident(v, force=True, device=device)
-    if _owner._device_is_meta(device):
-        _owner._set_meta_placeholder(v)
     if requires_grad:
         v.requires_grad_(True)
         _owner._torch_register_leaf(v)
@@ -415,99 +369,62 @@ def _element_size(self):
     return _DTYPE_BYTES.get(_jittor_dtype_name(self.dtype), 4)
 
 
+def _storage_dsize(var):
+    return _DTYPE_BYTES.get(_jittor_dtype_name(var.dtype), 4)
+
+
+def _storage_reach_elements(var):
+    """One past the last element this tensor addresses from its allocation origin.
+
+    jittor keeps the allocation itself -- `allocator` + `allocation`,
+    `storage_offset_bytes` and `storage_strides` (`core/var.h`) -- so a weight
+    sliced out of a fused one is a *shard* with a nonzero `_storage_offset()`
+    that addresses past its own first element. Both exports used here are real,
+    so the reach is exact.
+    """
+    if not int(var.numel()):
+        # torch reports 0 bytes for `torch.empty(0)`'s storage. There is no last
+        # element to reach, and "offset plus one" would hand a caller sizing a
+        # buffer from `nbytes()` one element that is not there.
+        return 0
+    hi = int(var._storage_offset())
+    for size, step in zip([int(s) for s in var.shape], list(var._storage_strides())):
+        if size <= 0:
+            continue
+        delta = (size - 1) * int(step)
+        if delta > 0:
+            hi += delta
+    return hi + 1
+
+
 class _Storage:
     def __init__(self, var):
         self._var = var
-
-    def _owner(self):
-        owner = getattr(self._var, "_torch_data_owner", None)
-        return owner if isinstance(owner, _NativeVar) else self._var
-
-    def _element_size(self):
-        return _DTYPE_BYTES.get(_jittor_dtype_name(self._owner().dtype), 4)
-
     def data_ptr(self):
-        first_element = int(self._var._storage_address)
-        return first_element - int(self._var._storage_offset()) * self._element_size()
+        return id(self._var)
     def size(self):
-        return int(self._owner().numel())
+        return int(self._var.numel())
     def nbytes(self):
-        return self.size() * self._element_size()
+        """Bytes from the allocation's origin to this tensor's last element.
 
-
-def _functional_preserves_input_dtype(input, other):
-    if not autocast_is_enabled():
-        return False
-    tensor = input if isinstance(input, _NativeVar) else other
-    return (isinstance(tensor, _NativeVar)
-            and _owner.jt.core.dispatch_context([tensor])[0] in ("cpu", "cuda"))
+        Not `numel * dsize`: a shard of a fused allocation addresses its own
+        elements from an offset, and callers (`PinnedModuleStager`) place it at
+        `storage_offset()` inside these bytes. Reporting only the shard's own
+        bytes put that placement past the end of the buffer it was given.
+        """
+        return _storage_reach_elements(self._var) * _storage_dsize(self._var)
 
 
 def _add(input, other, *, alpha=1, out=None):
     _context = get_install_context(_owner.jt)
-    g = _context.target_namespace
-    dtype = g.result_type(input, other)
-    tensor = input if isinstance(input, _NativeVar) else other
-    if (isinstance(alpha, (int, float))
-            and _jittor_dtype_name(dtype) in ("float16", "bfloat16", "float32", "float64")
-            and _owner.np.isfinite(alpha) and abs(alpha) > g.finfo(dtype).max
-            and _owner.jt.core.dispatch_context(
-                [tensor] if isinstance(tensor, _NativeVar) else [])[0] == "cpu"):
-        raise RuntimeError("value cannot be converted to type %s without overflow" % dtype)
     _native = _context.state["tensor_native_api"]
     _native_add = _native['_native_add']
-    if _functional_preserves_input_dtype(input, other):
-        with _owner.jt.flag_scope(amp_reg=0):
-            if alpha != 1:
-                other = other * alpha
-            result = _native_add(input, other)
-    else:
-        if alpha != 1:
-            other = other * alpha
-        result = _native_add(input, other)
+    if alpha != 1:
+        other = other * alpha
+    result = _native_add(input, other)
     if out is not None:
         return _owner._assign_out(out, result)
     return result
-
-
-def _mul(input, other, *, out=None):
-    native = get_install_context(_owner.jt).state["tensor_native_api"]["_native_mul"]
-    target_dtype = None
-    tensor, scalar = input, other
-    if isinstance(other, _NativeVar) and isinstance(input, (bool, int, float)):
-        tensor, scalar = other, input
-    if (isinstance(tensor, _NativeVar) and isinstance(scalar, (bool, int, float))
-            and _jittor_dtype_name(tensor.dtype) in ('float16', 'bfloat16')):
-        source, constant, target_dtype = _weak_scalar_operands(tensor, scalar, '__mul__')
-        input, other = ((source, constant) if tensor is input else (constant, source))
-    if _functional_preserves_input_dtype(input, other):
-        with _owner.jt.flag_scope(amp_reg=0):
-            result = native(input, other)
-    else:
-        result = native(input, other)
-    if target_dtype is not None and _jittor_dtype_name(result.dtype) != target_dtype:
-        result = result.cast(target_dtype)
-    if out is not None:
-        return _owner._assign_out(out, result)
-    return result
-
-
-def _method_mul(self, other):
-    return _mul(self, other)
-
-
-def _sqrt(input, *, out=None):
-    native = get_install_context(_owner.jt).state["tensor_native_api"]["_native_sqrt"]
-    if _functional_preserves_input_dtype(input, input):
-        with _owner.jt.flag_scope(amp_reg=0):
-            result = native(input)
-    else:
-        result = native(input)
-    return _owner._assign_out(out, result) if out is not None else result
-
-
-def _method_sqrt(self):
-    return _sqrt(self)
 
 
 def _invert(self):
@@ -517,13 +434,16 @@ def _invert(self):
 
 
 def _device(self):
-    if getattr(self, "_jittor_torch_meta", False):
-        return _owner.device("meta")
     if self.placement_backend >= 0:
         if self.placement_backend == 0:
             return _owner.device("cpu")
         name = "npu" if self.placement_backend == 2 else "cuda"
         return _owner.device(name, int(self.device_id))
+    # Inside a `with torch.device("meta")` block (transformers'
+    # from_pretrained), report "meta" so its meta-context detection
+    # fires and eager weight init is skipped. See device.__enter__.
+    if _owner._DEVICE_CTX_STACK:
+        return _owner._DEVICE_CTX_STACK[-1]
     # Report the Var's ACTUAL memory residency (matches jtorch's C++
     # is_cpu()/device()): a Var built/migrated to host -- e.g. via
     # torch.zeros(device='cpu') or .cpu() -- is "cpu" even while the
@@ -554,26 +474,10 @@ def _is_basic_index(index):
     return isinstance(index, _owner.numbers.Integral) and not isinstance(index, (bool, _owner.np.bool_))
 
 
-def _align_advanced_index(data, index):
-    """Move tensor indices beside the indexed tensor before native dispatch."""
-    if isinstance(index, _NativeVar):
-        data_cuda = bool(getattr(data, "is_cuda", False))
-        index_cuda = bool(getattr(index, "is_cuda", False))
-        if data_cuda != index_cuda:
-            return index.cuda() if data_cuda else index.cpu()
-        return index
-    if isinstance(index, tuple):
-        return tuple(_align_advanced_index(data, item) for item in index)
-    if isinstance(index, list):
-        return [_align_advanced_index(data, item) for item in index]
-    return index
-
-
 def _torch_getitem(self, slices):
     _context = get_install_context(_owner.jt)
     _native = _context.state["tensor_native_api"]
     _orig_getitem = _native['_orig_getitem']
-    slices = _align_advanced_index(self, slices)
     out = _orig_getitem(self, slices)
     if isinstance(out, _NativeVar) and _owner._var_has_cpu_residency_hint(self):
         out = _owner._mark_cpu_like(out, self)
@@ -581,11 +485,8 @@ def _torch_getitem(self, slices):
     # Complete that record for Torch-only slice spellings; advanced
     # indexing stays a copy. No Python parent chain is needed.
     if isinstance(out, _NativeVar) and _is_basic_index(slices):
-        # Re-register even when the native result already carries a view
-        # marker: set_view_of flattens a view-of-view to its live root, while
-        # retaining the intermediate marker can leave chained writes attached
-        # to a temporary holder.
-        out._set_view_of(self, slices)
+        if not out._is_view():
+            out._set_view_of(self, slices)
         try:
             data_owner = getattr(self, "_torch_data_owner", None)
             if isinstance(data_owner, _NativeVar):
@@ -631,7 +532,15 @@ def _data_get(self):
 def _data_set(self, value):
     src = value if isinstance(value, _NativeVar) else _owner.jt.array(value)
     was_trainable = not self.is_stop_grad()
-    self.assign(src)
+    # torch's `x.data = y` *replaces* x's data, shape and dtype; it does not
+    # copy elements into x's existing buffer. `assign` is the in-place
+    # primitive used by `x.foo_()`: it writes x's values into y's storage and
+    # only then aliases the two, so it demands equal element counts and would
+    # clobber y. `_update` is the pure rebind. vLLM-Omni's layerwise offload
+    # depends on the replace semantics -- it swaps a parameter for a
+    # zero-element placeholder -- and `assign` rejected that with
+    # "reshape shape is invalid for input of size [x_items(0) == y_items(1152)]".
+    self._update(src)
     if was_trainable:
         self.start_grad()
 
@@ -669,7 +578,20 @@ def _to(self, *args, **kwargs):
     # device passed as a keyword (torch's .to(device=..., dtype=...))
     if "device" in kwargs:
         dev = kwargs["device"]
-    for a in list(args) + list(kwargs.values()):
+    # Only the two keywords that can *carry* a device or a dtype join the
+    # positional scan. Sweeping every keyword value into it dragged
+    # `memory_format="contiguous_format"` through the string branch below,
+    # where an unrecognised string is now an error rather than a silent drop.
+    _KNOWN_TO_KEYWORDS = ("device", "dtype", "non_blocking", "copy",
+                          "memory_format")
+    unknown = [name for name in kwargs if name not in _KNOWN_TO_KEYWORDS]
+    if unknown:
+        raise TypeError("to() got an unexpected keyword argument %r"
+                        % (sorted(unknown)[0],))
+    scanned = list(args)
+    if kwargs.get("dtype") is not None:
+        scanned.append(kwargs["dtype"])
+    for a in scanned:
         if isinstance(a, _owner.dtype):
             ds = a.name
         elif isinstance(a, _owner.device):
@@ -678,12 +600,47 @@ def _to(self, *args, **kwargs):
             # .to(other) copies other's dtype AND device.
             ds = _jittor_dtype_name(a.dtype)
             dev = a.device
+        elif _owner._is_index(a):
+            # A bare int can only mean a device index, and it used to match none
+            # of these branches and be **dropped**: `.to(1)` returned the tensor
+            # unchanged, so a fresh tensor stayed wherever it was built -- the
+            # ambient device -- and a caller that asked for cuda:1 got cuda:0
+            # with no error. That is the same silent misplacement this shim has
+            # been fixing one entry point at a time (`*_like`, `new_*`,
+            # `torch.arange(..., device=...)`), and on a rank whose ambient
+            # device is not the tensor's it is an illegal address waiting for a
+            # consumer that indexes with it. torch raises on an int here; being
+            # more useful than the reference is fine, silently ignoring the
+            # argument is not.
+            # `numbers.Integral` rather than `int`, so a numpy integer -- what
+            # `np.arange(world_size)[rank]` or a parsed config gives you -- is
+            # read the same way instead of falling off the end of the chain.
+            dev = "cuda:%d" % int(a)
         elif isinstance(a, str):
             bare = a.replace("torch.", "")
             if bare in _owner.dtype._registry:
                 ds = bare
-            elif bare.split(":")[0] in ("cpu", "cuda", "npu", "meta"):
+            elif bare.split(":")[0] in ("cpu", "cuda", "npu"):
                 dev = bare
+            else:
+                # An unrecognised string used to fall off the end of this
+                # chain and be **dropped**: `x.to("cuda1")` -- any typo, or a
+                # device type this layer does not serve -- returned the tensor
+                # unchanged on the ambient device, with no error, while the
+                # caller believed it had moved. A string that is not a device
+                # type at all is refused by `device()` with torch's own
+                # message; one that is a real torch device this layer cannot
+                # place a tensor on goes through the stub policy, so it fails
+                # loudly by default and is still escapable with
+                # JITTOR_TORCH_ALLOW_STUB=1 for the meta-device flows that
+                # only ever read the result back.
+                _owner.device(bare.split(":")[0])
+                _unimplemented(
+                    "torch.Tensor.to(%r)" % (a,),
+                    "hand back a tensor that is still on its old device while "
+                    "reporting that the move to %r succeeded" % (a,),
+                    "This layer places tensors on cpu, cuda and npu only.",
+                    stub_result=None)
     if dev is None:
         dev = self.device
     out = self.clone() if copy else self
@@ -695,31 +652,19 @@ def _to(self, *args, **kwargs):
         out = _owner._make_cpu_resident(out)
     elif _owner._device_is_cuda(dev):
         if out.placement_backend >= 0:
-            out = _owner._make_cuda_resident(out, force=True, device=dev)
-        else:
-            src_index = getattr(self, "device_id", -1)
-            out = _owner._make_cuda_resident(out, force=True)
-            # .to("cuda:N") copies across devices when N is not where the Var
-            # already is; a bare .to("cuda") leaves the tensor on its own
-            # device, as in torch.
-            out = _owner._move_to_cuda_index(out, dev, src_index)
-    elif _owner._device_is_meta(dev):
-        if out is self and not getattr(self, "_jittor_torch_meta", False):
-            out = self.clone()
-        _owner._set_meta_placeholder(out)
+            return _owner._make_cuda_resident(out, force=True, device=dev)
+        out = _owner._make_cuda_resident(out, force=True)
+        # .to("cuda:N") copies across devices when N is not where the Var
+        # already is; a bare .to("cuda") names the *current* device, as in
+        # torch -- not "wherever it already is".
+        moved = _owner._move_to_cuda_index(
+            out, dev, _owner.current_accelerator_index())
+        if moved is not out and getattr(out, "_torch_0d", False):
+            moved._torch_0d = True
+        out = moved
     if getattr(self, "_torch_0d", False):
         out._torch_0d = True
     return out
-
-
-def _type_as(self, other):
-    """Match ``Tensor.type_as`` by inheriting dtype and device from ``other``."""
-    if not isinstance(other, _NativeVar):
-        raise TypeError("type_as expects a Tensor argument")
-    # Passing the tensor itself through ``_to`` applies both its dtype and
-    # device.  Jittor's native ``type_as`` only changes dtype, which leaves
-    # CUDA constants created by Transformers on the host.
-    return _to(self, other)
 
 
 def _var_detach(self):
@@ -742,8 +687,6 @@ def _var_detach(self):
         out = out.stop_grad()
     if getattr(self, "_torch_0d", False):
         out._torch_0d = True
-    if getattr(self, "_jittor_torch_meta", False):
-        _owner._set_meta_placeholder(out)
     return out
 
 
@@ -759,26 +702,33 @@ def _var_numpy(self, *args, **kwargs):
 
 def _var_cpu(self, *a, **k):
     out = _owner._make_cpu_resident(self)
-    if getattr(self, "_torch_0d", False):
-        out._torch_0d = True
     if out.placement_backend >= 0:
         return out
     try:
         out._jittor_torch_force_cpu = True
+        if getattr(self, "_torch_0d", False):
+            out._torch_0d = True
     except (AttributeError, TypeError) as exc:
         _owner.swallowed("torch/installers/tensor.py _var_cpu: out._jittor_torch_force_cpu = True", exc)
     return out
 
 
 def _var_cuda(self, device=None, *a, **k):
+    # `.cuda()` with no argument is `.to("cuda")`, and a bare "cuda" is the
+    # *current* device in torch. Passing `device=None` down instead made the
+    # placed branch below read the Var's own device and keep it there, so
+    # `x_on_cuda1.cuda()` with current_device()==0 stayed on cuda:1 while
+    # `x_on_cuda1.to("cuda")` -- the same request, one line apart -- moved to
+    # cuda:0. See types.current_accelerator_index.
+    if device is None:
+        device = "cuda"
     if self.placement_backend >= 0:
-        out = _owner._make_cuda_resident(self, force=True, device=device)
-    else:
-        _owner._set_use_cuda()
-        src_index = getattr(self, "device_id", -1)
-        out = _owner._make_cuda_resident(self, force=True)
-        # .cuda(N) is .to("cuda:N"); .cuda() keeps the tensor where it is.
-        out = _owner._move_to_cuda_index(out, device, src_index)
+        return _owner._make_cuda_resident(self, force=True, device=device)
+    _owner._set_use_cuda()
+    out = _owner._make_cuda_resident(self, force=True)
+    # .cuda(N) is .to("cuda:N"); a bare .cuda() is the current device.
+    out = _owner._move_to_cuda_index(
+        out, device, _owner.current_accelerator_index())
     if getattr(self, "_torch_0d", False):
         out._torch_0d = True
     return out
@@ -794,12 +744,6 @@ def _var_type(self, dst_type=None, non_blocking=False, **kw):
         return _DTYPE_TO_TYPENAME.get(_jittor_dtype_name(self.dtype), "torch.FloatTensor")
     if isinstance(dst_type, str) and dst_type in _jittor_dtype_name(_TYPENAME_TO_DTYPE):
         return _cast_if_needed(self, _TYPENAME_TO_DTYPE[dst_type])
-    # Typed tensor classes (torch.BoolTensor, torch.FloatTensor, ...) expose
-    # their native Jittor dtype through the adapter's `_jdtype` marker.  The
-    # class name itself is not a valid Jittor cast target.
-    typed_dtype = getattr(dst_type, "_jdtype", None)
-    if typed_dtype is not None:
-        return _cast_if_needed(self, typed_dtype)
     ds = _owner._dtype_to_str(dst_type)
     return _cast_if_needed(self, ds) if ds is not None else self
 
@@ -835,8 +779,6 @@ def _scalar_dtype_name(x):
 
 
 def _is_cuda(self):
-    if getattr(self, "_jittor_torch_meta", False):
-        return False
     if self.placement_backend >= 0:
         return self.placement_backend != 0
     if not (_owner.jt.flags.use_cuda or getattr(_owner.jt.compiler, "has_acl", 0)):
@@ -861,10 +803,308 @@ def _stride(self, dim=None):
     return st[dim]
 
 
+#: Set on the host tensor ``pin_memory()`` hands back, and read by
+#: ``is_pinned()``. A plain attribute, so a clone or a slice of a pinned
+#: tensor is not itself pinned -- which is also torch's answer.
+_PINNED_ATTRIBUTE = "_jittor_torch_pinned"
+
+
+def _is_pinned(self, device=None):
+    """torch.Tensor.is_pinned -- did ``pin_memory()`` produce this tensor?
+
+    It used to be ``return False`` unconditionally, next to a ``pin_memory()``
+    that returned ``self``. So the pair contradicted each other on the one
+    invariant every caller checks: ``x.pin_memory().is_pinned()`` was False,
+    and a staging loop that pins once and asserts it reported that pinning had
+    silently failed. The buffer is host memory but not page-locked (jittor has
+    no page-locked allocator), which is what the fidelity record says; the
+    predicate now at least agrees with the method next to it.
+    """
+    return bool(getattr(self, _PINNED_ATTRIBUTE, False))
+
+
+def _pin_memory(self, device=None):
+    """torch.Tensor.pin_memory -- a host copy, not a page-locked one.
+
+    Two things used to be wrong rather than merely approximate:
+
+    * it returned ``self``, so ``x.pin_memory()`` on a **CUDA** tensor handed
+      back the CUDA tensor and called it host memory. torch raises there
+      ("only dense CPU tensors can be pinned"), and code that pins a staging
+      buffer and then DMAs into it was quietly given device memory;
+    * the result was the same object as the source, so writing into the
+      "pinned" copy wrote into the tensor it was copied from.
+
+    Now it always returns an independent **host-resident** copy, and
+    ``is_pinned()`` agrees with it. That copy is not page-locked, so a
+    ``non_blocking`` host-to-device transfer out of it is still synchronous --
+    the semantics callers read (host residency, ``is_pinned()``, independence)
+    hold; the overlap does not. Registered APPROXIMATE with that wording.
+    """
+    if _is_cuda(self):
+        # torch refuses here ("only dense CPU tensors can be pinned"), but it
+        # can afford to: in torch the tensor a caller pins is already on the
+        # host, while under this facade a tensor built with no `device=` is on
+        # the accelerator, because that is what jittor's ambient placement
+        # means. Refusing would abort ordinary staging code that runs on
+        # torch. Copying it to the host is what the caller asked for and
+        # nothing about the result is misreported -- but it is a difference,
+        # so it goes on the record once.
+        _degraded(
+            "torch.Tensor.pin_memory",
+            "a tensor already on an accelerator is copied to the host rather "
+            "than refused, because this facade places a device-less tensor on "
+            "the accelerator where torch places it on the host")
+    if getattr(self, _PINNED_ATTRIBUTE, False):
+        return self
+    out = _var_cpu(self)
+    if out is self:
+        out = _var_cpu(self.clone())
+    try:
+        setattr(out, _PINNED_ATTRIBUTE, True)
+    except (AttributeError, TypeError) as exc:
+        _owner.swallowed("torch/installers/tensor/method_api.py _pin_memory: "
+                         "setattr(out, _PINNED_ATTRIBUTE, True)", exc,
+                         "is_pinned() will report False for a tensor pin_memory() produced")
+    return out
+
+
+def _as_byte_view(var):
+    """A contiguous uint8 view of a contiguous tensor's own bytes.
+
+    A strided tensor has no physical byte range: the bytes between its elements
+    belong to other elements of the allocation. Refusing is the honest answer --
+    packing it instead would place values at positions a later strided read does
+    not look at, which reads as silently wrong data rather than an error.
+    """
+    if not bool(var.is_contiguous()):
+        raise ValueError(
+            "set_: cannot materialize %s with strides %s as bytes; a storage "
+            "can only be read from a physically contiguous tensor"
+            % (tuple(var.shape), tuple(var.stride())))
+    nbytes = int(var.numel()) * _storage_dsize(var)
+    if _storage_dsize(var) == 1:
+        return var.reshape(-1)
+    return _owner.jt.reinterpret_view(var, (nbytes,), "uint8")
+
+
+def _strided_index(size, stride, base):
+    """The flat gather a strided view of `size`/`stride` performs, shifted by `base`."""
+    idx = None
+    for d in range(len(size)):
+        ar = _owner.jt.arange(size[d], dtype="int64") * stride[d]
+        shp = [1] * len(size)
+        shp[d] = size[d]
+        ar = ar.reshape(shp)
+        idx = ar if idx is None else idx + ar
+    if base:
+        idx = idx - base
+    return idx.reshape(-1)
+
+
+def _set_(self, source, storage_offset=0, size=None, stride=None):
+    """torch.Tensor.set_ -- re-point this tensor at `source`'s storage.
+
+    `source` is a tensor or an untyped-storage carrier. jittor has no
+    user-visible byte storage, so `set_` materializes the bytes it is asked for
+    and the two tensors do not share memory. Values are exact either way.
+
+    A *storage* is byte-addressed from the allocation's origin, exactly as in
+    torch: `storage_offset` and `stride` count elements of `self.dtype` and the
+    bytes of those elements are read. A whole-storage request (`size ==
+    (nbytes,)`, stride `(1,)`, offset 0) -- what vLLM-Omni's residency manager
+    takes to snapshot a group -- yields the owning tensor's bytes placed at its
+    own `storage_offset()`. Only that shard's bytes have a Python handle here;
+    the rest of a shared allocation does not, which is why each group is
+    materialized from the tensor that owns its storage.
+    """
+    base = getattr(source, "_var", source)
+    if not isinstance(base, _NativeVar):
+        raise TypeError("Tensor.set_ expects a Tensor or a storage, got %s"
+                        % type(source).__name__)
+    # A storage exposes `nbytes` as a method, a Tensor as a property: the
+    # native VarHolder binds it with @pyjt(__get__nbytes). Calling it
+    # unconditionally made `set_` raise "'int' object is not callable" for
+    # every Tensor source, which is half the sources the signature accepts.
+    raw_nbytes = getattr(source, "nbytes", None)
+    is_storage = callable(raw_nbytes)
+    if is_storage:
+        raw_nbytes = raw_nbytes()
+    nbytes = int(raw_nbytes) if raw_nbytes is not None else None
+    if size is None:
+        size = tuple(int(s) for s in base.shape)
+    else:
+        size = tuple(int(s) for s in size)
+    if stride is None:
+        stride = tuple(int(s) for s in base.stride())
+    else:
+        stride = tuple(int(s) for s in stride)
+    whole_storage = is_storage and size == (nbytes,) and stride == (1,) \
+        and not int(storage_offset)
+    if whole_storage:
+        start = int(base._storage_offset()) * _storage_dsize(base)
+        member = _as_byte_view(base)
+        if start + int(member.numel()) > int(nbytes):
+            raise ValueError(
+                "set_: %d byte(s) of storage are too few for the %d element(s) "
+                "starting at offset %d of %s"
+                % (int(nbytes), base.numel(), int(base._storage_offset()),
+                   tuple(base.shape)))
+        with _new_scope(base, base.device):
+            image = _owner.jt.zeros((int(nbytes),), "uint8")
+        if int(member.numel()):
+            image[start : start + int(member.numel())] = member
+        result = image
+    elif is_storage:
+        # Byte-addressed read: `storage_offset`/`stride` are in elements of this
+        # tensor's dtype, so the addressed range is [lo, hi] *elements* from the
+        # offset, i.e. [(offset+lo)*dsize, (offset+hi+1)*dsize) *bytes*, and the
+        # gather then walks that span with no further offset.
+        dsize = self.element_size()
+        lo = hi = 0
+        for s, st in zip(size, stride):
+            if s <= 0:
+                continue
+            span = (s - 1) * st
+            if span >= 0:
+                hi += span
+            else:
+                lo += span
+        start = (int(storage_offset) + lo) * dsize
+        n = (hi - lo + 1) * dsize
+        if start < 0 or start + n > int(nbytes):
+            raise ValueError(
+                "set_: sizes %s, strides %s, storage_offset %d are too large for "
+                "the %d byte(s) this storage holds (the view would span "
+                "[%d, %d] bytes)"
+                % (size, stride, int(storage_offset), int(nbytes), start, start + n - 1))
+        # These byte addresses count from the allocation's origin, and so does
+        # `nbytes`, but the bytes with a Python handle here are only the
+        # carrier's own: they *begin* at `base._storage_offset()`. Slicing them
+        # with an origin-relative address is off by exactly that offset, so a
+        # fused weight's tail re-read from its own storage sliced past the end
+        # and the gather below then indexed an empty tensor -- the out-of-bounds
+        # read `as_strided`'s check exists to refuse, arrived at the long way.
+        view = _as_byte_view(base)
+        origin = int(base._storage_offset()) * _storage_dsize(base)
+        avail = int(view.numel())
+        if start < origin or start + n > origin + avail:
+            raise ValueError(
+                "set_: bytes [%d, %d) of this storage are outside the tensor "
+                "that carries it (its own are [%d, %d)); the rest of a shared "
+                "allocation has no handle here and cannot be read from it"
+                % (start, start + n, origin, origin + avail))
+        seg = view[start - origin : start - origin + n]
+        flat = (seg.view(self.dtype) if dsize != 1 else seg).reshape(-1)
+        result = flat[_strided_index(size, stride, lo)].reshape(size)
+    else:
+        result = base.as_strided(size, stride, int(storage_offset))
+    self._update(result)
+    return self
+
+
+def _dense_strides(size):
+    """Row-major strides for `size`, innermost last."""
+    strides = [1] * len(size)
+    for d in range(len(size) - 2, -1, -1):
+        strides[d] = strides[d + 1] * size[d + 1]
+    return strides
+
+
+def _as_strided_as_view(flat, size, stride, storage_offset):
+    """`as_strided` as a real view, or None when it cannot be expressed as one.
+
+    The gather below this returns the right *numbers* and a tensor that shares
+    nothing: writing to it does not reach the base, which is the half of
+    `as_strided` that torch callers rely on -- an optimizer updating a slice,
+    tied weights that are meant to be one buffer, a shard written in place.
+
+    Nothing new is needed to fix that. Slicing, reshaping and transposing
+    already produce views that write through (`VarHolder::attach_view`), so a
+    request that *is* one of those compositions is served by composing them:
+
+      * strides equal to the dense strides of `size` -- a contiguous window --
+        is a flat slice reshaped;
+      * strides that are a permutation of the dense strides of the permuted
+        shape is that window reshaped and permuted back.
+
+    Anything else (overlapping windows, zero or negative strides, a stride that
+    no permutation makes dense) falls back to the gather, which is honest about
+    being a copy rather than pretending to alias.
+    """
+    rank = len(size)
+    if rank == 0 or any(st <= 0 for st in stride):
+        return None
+    numel = 1
+    for s in size:
+        numel *= s
+    order = sorted(range(rank), key=lambda d: -stride[d])
+    permuted = [size[d] for d in order]
+    if [stride[d] for d in order] != _dense_strides(permuted):
+        return None
+    window = flat[storage_offset:storage_offset + numel]
+    if int(window.shape[0]) != numel:
+        return None
+    view = window.reshape(permuted)
+    if order == list(range(rank)):
+        return view
+    inverse = [0] * rank
+    for position, axis in enumerate(order):
+        inverse[axis] = position
+    return view.permute(*inverse)
+
+
 def _as_strided(self, size, stride, storage_offset=0):
     size = [int(s) for s in size]
     stride = [int(s) for s in stride]
     flat = self.reshape(-1)
+    # The gather below can only reach `flat`'s own elements, so a view that
+    # reaches past them reads outside this tensor: on a device tensor that is an
+    # `cudaErrorIllegalAddress` at whatever CUDA call comes next, with nothing
+    # naming this one. torch validates the same thing and raises
+    # ("setStorage: sizes ..., strides ..., storage_offset ... are too large").
+    #
+    # Measured on the H3 TP2 request, whose failure was a `getitem` with a
+    # full-length int64 index: `388956160 // 64 * 65 + 1` was the top index
+    # against a 388956160-element buffer -- a view described one sixty-fourth
+    # too large. Nothing else in the failure pointed at `as_strided`.
+    #
+    # A caller whose view really does fit a *larger* allocation has to go
+    # through the storage (`Tensor.set_(storage, offset, size, stride)`), which
+    # is byte-addressed from the allocation origin and can serve a shard at a
+    # nonzero offset. Called on a *tensor*, `flat` below is that tensor's own
+    # elements and the request genuinely cannot be served from them: rejecting
+    # it is the honest answer, serving it by reading past them is not.
+    n = int(flat.shape[0]) if len(flat.shape) else 1
+    # A zero-length axis addresses nothing, so no tensor is too small for it.
+    # torch requires `storage_offset + sum((size - 1) * stride) + 1` elements
+    # only when the view *has* elements and otherwise checks nothing but the
+    # sign of the offset: `arange(10).as_strided((0,), (1,), 10)`, a `(3, 0, 2)`
+    # shape and every view of an empty tensor come back empty. The span below
+    # drops `s <= 0` axes but keeps `storage_offset`, so an empty view read as
+    # one starting past the end and was refused -- and with it `x.set_(y)` for
+    # an empty `y`, which is how layerwise offload swaps a parameter for a
+    # zero-element placeholder.
+    empty = any(s == 0 for s in size)
+    lo = hi = int(storage_offset)
+    for s, st in zip(size, stride):
+        if s <= 0:
+            continue
+        span = (s - 1) * st
+        if span >= 0:
+            hi += span
+        else:
+            lo += span
+    if int(storage_offset) < 0 or (not empty and (lo < 0 or hi >= n)):
+        raise ValueError(
+            "as_strided: sizes %s, strides %s, storage_offset %d are too large "
+            "for the %d element(s) this tensor can address (the view would span "
+            "[%d, %d])" % (tuple(size), tuple(stride), int(storage_offset), n, lo, hi))
+    if empty:
+        return flat[:0].reshape(size)
+    view = _as_strided_as_view(flat, size, stride, int(storage_offset))
+    if view is not None:
+        return view
     idx = None
     for d in range(len(size)):
         ar = _owner.jt.arange(size[d], dtype="int64") * stride[d]
@@ -975,83 +1215,49 @@ def _var_norm(self, p="fro", dim=None, keepdims=None, *rest,
 
 
 
-_AUTOCAST_INPUT_DTYPE_ARITHMETIC = {
-    '__add__', '__radd__', '__sub__', '__rsub__', '__mul__', '__rmul__',
-    '__truediv__', '__rtruediv__',
-}
-
-
-def _binary_native(opname, left, right):
-    native = get_install_context(_owner.jt).state["tensor_native_api"]["operators"][opname]
-    if (opname in _AUTOCAST_INPUT_DTYPE_ARITHMETIC and autocast_is_enabled()
-            and _owner.jt.core.dispatch_context([left])[0] in ("cpu", "cuda")):
-        with _owner.jt.flag_scope(amp_reg=0):
-            result = native(left, right)
-    else:
-        result = native(left, right)
+def _binary_native(opname, left, right, native_api=None):
+    if native_api is None:
+        native_api = get_install_context(_owner.jt).state["tensor_native_api"]
+    result = native_api["operators"][opname](left, right)
     return _owner._mark_cpu_like(result, left, right)
 
 
-def _zero_dimensional_arithmetic(tensor, scalar, opname):
-    g = get_install_context(_owner.jt).target_namespace
-    target = _owner._dtype_to_str(g.result_type(tensor, scalar))
-    if opname in ('__truediv__', '__rtruediv__') and not target.startswith(('float', 'bfloat', 'complex')):
-        target = 'float32'
-    backend, _ = _owner.jt.core.dispatch_context([tensor])
-    compute = 'float32' if backend == 'cpu' and target in ('float16', 'bfloat16') else target
-    a = tensor if _jittor_dtype_name(tensor.dtype) == compute else tensor.cast(compute)
-    b = scalar if _jittor_dtype_name(scalar.dtype) == compute else scalar.cast(compute)
-    result = _binary_native(opname, a, b)
-    return result if _jittor_dtype_name(result.dtype) == target else result.cast(target)
+#: A Python scalar of these kinds against a tensor of these dtypes leaves the
+#: tensor's dtype, in torch's promotion: a float against a floating tensor, an
+#: int against any non-bool tensor. Everything else asks `result_type`.
+_FLOATING_NAMES = frozenset(("float16", "bfloat16", "float32", "float64"))
+_SCALAR_KEEPS_DTYPE = {
+    float: _FLOATING_NAMES,
+    int: _FLOATING_NAMES | frozenset(("uint8", "int8", "int16", "int32", "int64")),
+}
 
 
-def _weak_scalar_operands(tensor, number, opname):
-    from ...frontend import tensor_frontend
-    context = get_install_context(_owner.jt)
-    dtype = _owner._dtype_to_str(context.target_namespace.result_type(tensor, number))
-    compute = ('float32' if dtype in ('float16', 'bfloat16')
-               and opname in _AUTOCAST_INPUT_DTYPE_ARITHMETIC else dtype)
-    with tensor_frontend(context.target_namespace.Var, like=tensor):
-        scalar = _owner.jt.array(number, dtype=compute).stop_grad()
-        source = tensor if _jittor_dtype_name(tensor.dtype) == compute else tensor.cast(compute)
-    return source, scalar, dtype
+def _own_dtype_name(value, native_api):
+    """A Var's native dtype name, without the torch dtype object round trip.
+
+    `.dtype` on a frontend tensor builds the torch dtype object from the native
+    name, and `_jittor_dtype_name` turns it back into that name; an elementwise
+    operator asked both questions for both operands, and a diffusers step makes
+    thousands of them.
+    """
+    descriptor = native_api['_native_desc']
+    if descriptor is None:
+        return _jittor_dtype_name(value.dtype)
+    return str(descriptor.__get__(value, type(value)))
 
 
 def _promoting_binary(self, other, opname, reflected):
-    g = get_install_context(_owner.jt).target_namespace
-    if isinstance(other, (str, bytes)):
-        if reflected and opname == '__rmul__':
-            if self.numel() != 1 or _jittor_dtype_name(self.dtype) not in (
-                    "bool", "uint8", "int8", "int16", "int32", "int64"):
-                raise TypeError("only integer tensors of a single element can be converted to an index")
-            return other * int(self.item())
-        return NotImplemented
+    context = get_install_context(_owner.jt)
+    native_api = context.state["tensor_native_api"]
+    g = context.target_namespace
     if isinstance(other, (complex, _owner.np.complexfloating)):
         other = _complex_scalar_var(other)
     if isinstance(other, _NativeVar):
-        # PyTorch permits a CPU zero-dimensional scalar to participate in a
-        # CUDA tensor operation (for example ``cuda.arange(3) + x.max()``),
-        # while still rejecting mixed-device non-scalar tensors.  Jittor's
-        # native binary operators require matching placements, so migrate
-        # only the scalar operand before dispatching.
-        self_scalar = getattr(self, "ndim", None) == 0
-        other_scalar = getattr(other, "ndim", None) == 0
-        self_cuda = bool(getattr(self, "is_cuda", False))
-        other_cuda = bool(getattr(other, "is_cuda", False))
-        if self_cuda != other_cuda and (self_scalar or other_scalar):
-            if self_scalar and not other_scalar:
-                self = self.cuda() if other_cuda else self.cpu()
-            elif other_scalar and not self_scalar:
-                other = other.cuda() if self_cuda else other.cpu()
-        da, db = _jittor_dtype_name(self.dtype), _jittor_dtype_name(other.dtype)
-        if self_scalar != other_scalar and opname in _AUTOCAST_INPUT_DTYPE_ARITHMETIC:
-            if self_scalar:
-                inverse = ('__' + opname[3:] if opname.startswith('__r')
-                           else '__r' + opname[2:])
-                return _zero_dimensional_arithmetic(other, self, inverse)
-            return _zero_dimensional_arithmetic(self, other, opname)
+        da, db = _own_dtype_name(self, native_api), _own_dtype_name(other, native_api)
         if da == db and not da.startswith("uint"):
-            return _binary_native(opname, self, other)
+            return _binary_native(opname, self, other, native_api)
+        # `result_type`, not `_promote_pair`: a 0-dim operand promotes only
+        # from a higher category, so half_tensor * tensor(2.0) stays half.
         res = _owner._dtype_to_str(g.result_type(self, other))
         a = self if da == res else self.cast(res)
         b = other if db == res else other.cast(res)
@@ -1068,26 +1274,14 @@ def _promoting_binary(self, other, opname, reflected):
     # `_extend_tokens` list concatenation). Match torch: defer to the sequence.
     if isinstance(other, (list, tuple)):
         return NotImplemented
-    if isinstance(other, (bool, int, float)) and (
-            reflected or bool(getattr(self, "is_cuda", False)) or
-            bool(getattr(self, "is_cpu", False))):
-        # Jittor may materialize a Python scalar on CPU even for a regular
-        # CUDA operation (``cuda_tensor + 1``), while PyTorch keeps scalar
-        # promotion on the tensor's backend.  Materialize it explicitly so
-        # native operators never receive a mixed-device graph.
-        source, scalar, scalar_dtype = _weak_scalar_operands(self, other, opname)
-        result = _promoting_binary(source, scalar, opname, reflected)
-        if _jittor_dtype_name(result.dtype) != scalar_dtype:
-            result = result.cast(scalar_dtype)
-        # CUDA native binary ops may mark an output trainable even when both
-        # inputs are stopped. The Python scalar contributes no autograd edge.
-        if not bool(self.requires_grad):
-            result.stop_grad()
-        return result
-    out = _binary_native(opname, self, other)
+    out = _binary_native(opname, self, other, native_api)
     if isinstance(other, (bool, int, float)) and isinstance(out, _NativeVar):
-        expected = _owner._dtype_to_str(g.result_type(self, other))
-        if expected is not None and _jittor_dtype_name(out.dtype) != expected:
+        own = _own_dtype_name(self, native_api)
+        if own in _SCALAR_KEEPS_DTYPE.get(type(other), ()):
+            expected = own
+        else:
+            expected = _owner._dtype_to_str(g.result_type(self, other))
+        if expected is not None and _own_dtype_name(out, native_api) != expected:
             out = out.cast(expected)
     return out
 
@@ -1097,14 +1291,14 @@ def _true_division(self, other, opname):
         other = _complex_scalar_var(other)
     if isinstance(other, _NativeVar):
         da, db = _jittor_dtype_name(self.dtype), _jittor_dtype_name(other.dtype)
-        if (self.ndim == 0) != (other.ndim == 0):
-            if self.ndim == 0:
-                inverse = '__truediv__' if opname == '__rtruediv__' else '__rtruediv__'
-                return _zero_dimensional_arithmetic(other, self, inverse)
-            return _zero_dimensional_arithmetic(self, other, opname)
         if da == db and da.startswith(("float", "bfloat", "complex")):
             return _binary_native(opname, self, other)
-        tgt = _truediv_target(da, db)
+        # The 0-dim tier, as in `_promoting_binary`. The quotient's dtype is
+        # the promoted type alone (or the default float for an integral one):
+        # promoting it with `self` again would let a 0-dim `self` back in.
+        rt = _owner._dtype_to_str(
+            get_install_context(_owner.jt).target_namespace.result_type(self, other))
+        tgt = _truediv_target(rt, rt)
         a = self if da == tgt else self.cast(tgt)
         b = other if db == tgt else other.cast(tgt)
         out = _binary_native(opname, a, b)
@@ -1117,27 +1311,30 @@ def _true_division(self, other, opname):
         return NotImplemented
     sd = _scalar_dtype_name(other)
     if sd is not None:
-        tgt = _truediv_target(_jittor_dtype_name(self.dtype), sd)
+        # A Python scalar joins type promotion only when it is of a higher
+        # category than the tensor (torch's `result_type`), so a float16 tensor
+        # divided by 1.0 stays float16. Promoting the pair as if the scalar were
+        # a float32 tensor turned it into float32: every diffusers ResnetBlock2D
+        # ends in `/ self.output_scale_factor`, so a float16 UNet silently ran
+        # in float32 from its first block and then refused SDPA for mixing a
+        # float32 query with float16 keys.
+        rt = _owner._dtype_to_str(
+            get_install_context(_owner.jt).target_namespace.result_type(self, other))
+        tgt = _truediv_target(rt, rt)
         src_dt = _jittor_dtype_name(self.dtype)
         # CPU/CUDA widen Python floats for PyTorch 1-ulp parity; torch_npu
         # stays in the tensor dtype because ACL has no float64 arithmetic.
         acl_active = bool(getattr(_owner.jt.compiler, "has_acl", 0)) and (
             bool(getattr(_owner.jt.flags, "use_acl", 0)) and bool(_owner.jt.flags.use_cuda))
+        # Half precision widens to float32 only: that is PyTorch's opmath for
+        # it, and a float64 division ran every diffusers attention block's
+        # `/ rescale_output_factor` in double -- 15 ms of a 20-step SD1.5
+        # sample on a part with 1/64-rate double -- to round to the same half.
+        wide = "float32" if src_dt in ("float16", "bfloat16") else "float64"
         use_wide = sd.startswith("float") and src_dt != "float64" and not acl_active
-        calc_dt = "float64" if use_wide else tgt
+        calc_dt = wide if use_wide else tgt
         a = self if src_dt == calc_dt else self.cast(calc_dt)
-        # Reflected scalar division (``1 / cuda_tensor``) otherwise hands a
-        # Python scalar to Jittor's native op, which may materialize it on the
-        # host even though the tensor operand is CUDA-resident.
-        reflected = opname.startswith("__r")
-        if reflected or use_wide:
-            b = _owner.jt.array(other, dtype=calc_dt)
-            if bool(getattr(self, "is_cuda", False)):
-                b = b.cuda()
-            elif bool(getattr(self, "is_cpu", False)):
-                b = b.cpu()
-        else:
-            b = other
+        b = _owner.jt.array(other, dtype=calc_dt) if use_wide else other
         out = _binary_native(opname, a, b)
         if isinstance(out, _NativeVar) and _jittor_dtype_name(out.dtype) != tgt:
             out = out.cast(tgt)
@@ -1146,47 +1343,7 @@ def _true_division(self, other, opname):
 
 
 def _tensor_add(self, other):
-    from ..numerical.sparse import _SparseCOO
-    if isinstance(other, _SparseCOO):
-        other = other.to_dense()
     return _promoting_binary(self, other, '__add__', False)
-
-
-def _inplace_dtype_category(name):
-    if name == "bool":
-        return 0
-    if name.startswith(("int", "uint")):
-        return 1
-    if name.startswith(("float", "bfloat")):
-        return 2
-    if name.startswith("complex"):
-        return 3
-    return 4
-
-
-def _tensor_iadd(self, other):
-    if (bool(self.requires_grad) and bool(self.is_leaf)
-            and not bool(getattr(_owner.jt.flags, "no_grad", 0))):
-        raise RuntimeError(
-            "a leaf Variable that requires grad is being used in an in-place operation."
-        )
-    value = _tensor_add(self, other)
-    if tuple(value.shape) != tuple(self.shape):
-        raise RuntimeError(
-            f"output with shape {list(self.shape)} doesn't match the broadcast shape "
-            f"{list(value.shape)}"
-        )
-    source_dtype = _jittor_dtype_name(value.dtype)
-    target_dtype = _jittor_dtype_name(self.dtype)
-
-    if _inplace_dtype_category(source_dtype) > _inplace_dtype_category(target_dtype):
-        raise RuntimeError(
-            f"result type {source_dtype} can't be cast to the desired output type "
-            f"{target_dtype}"
-        )
-    if source_dtype != target_dtype:
-        value = value.cast(target_dtype)
-    return _ip(self, value)
 
 
 def _tensor_radd(self, other):
@@ -1312,46 +1469,39 @@ def _api_nonzero(input, as_tuple=False, **kw):
 
 
 def _api_normal(self, mean=0.0, std=1.0, generator=None):
-    value = _owner.jt.normal(float(mean), float(std), self.shape).cast(
-        _jittor_dtype_name(self.dtype)
-    )
-    value.stop_grad()
-    return _ip(self, value)
+    return _ip(self, _owner.jt.normal(float(mean), float(std), self.shape).cast(_jittor_dtype_name(self.dtype)))
 
 
 def _api_uniform(self, a=0.0, b=1.0, generator=None):
-    if generator is not None:
-        if not hasattr(generator, "_uniform"):
-            raise NotImplementedError(
-                "generator does not provide a compatible uniform stream"
-            )
-        value = generator._uniform(
-            float(a), float(b), self.shape, _jittor_dtype_name(self.dtype)
-        )
-    else:
-        value = (_owner.jt.rand(self.shape) * (b - a) + a).cast(
-            _jittor_dtype_name(self.dtype)
-        )
-    value.stop_grad()
-    return _ip(self, value)
+    return _ip(self, (_owner.jt.rand(self.shape) * (b - a) + a).cast(_jittor_dtype_name(self.dtype)))
 
 
 def _api_tolist(self):
     return self.item() if getattr(self, '_torch_0d', False) else self.numpy().tolist()
 
 
-def _api_contiguous(self, memory_format=None):
+def _api_contiguous(self, memory_format="contiguous_format"):
+    """Torch's ``contiguous``: the same tensor when already contiguous, else a copy.
+
+    A Jittor Var can carry storage smaller than its logical shape -- ``broadcast``
+    and the strided slicing views do -- and torch code relies on ``contiguous()``
+    to materialize exactly that. Returning ``self`` unconditionally made it a
+    silent no-op: the following ``reshape``/``view`` failed with "call
+    contiguous() first" while the call meant to fix the layout did nothing.
+    A Var whose storage already matches its shape is still returned unchanged,
+    so the hot ``transpose(...).contiguous()`` path keeps its zero-copy behavior.
+
+    Only the default memory format is supported; ``channels_last`` is rejected
+    rather than silently ignored, which is what torch callers asking for a
+    layout change would otherwise get. The copy is made inside the tensor's own
+    placement scope so it lands on the device the tensor already lives on.
+    """
+    if memory_format not in (None, "contiguous_format"):
+        raise NotImplementedError("contiguous supports contiguous_format")
     if self._storage_is_contiguous():
         return self
-    from ...frontend import tensor_frontend
-    context = get_install_context(_owner.jt)
-    with tensor_frontend(context.state["Var"], like=self):
-        out = _owner.jt.ops.contiguous(self)
-    if getattr(self, "_torch_0d", False):
-        out._torch_0d = True
-    if getattr(self, "_jittor_torch_meta", False):
-        _owner._set_meta_placeholder(out)
-    return out
+    with _new_scope(self, None):
+        return _owner.jt.contiguous(self)
 
 
 def _api_argwhere(input):
@@ -1407,7 +1557,7 @@ def _api_retains_grad(self):
 
 
 def _api_is_cpu(self):
-    return not getattr(self, "_jittor_torch_meta", False) and not _is_cuda(self)
+    return not _is_cuda(self)
 
 
 def _api_is_mps(self):
@@ -1505,7 +1655,7 @@ def _api_reciprocal_(self):
 
 
 def _api_rsqrt_(self):
-    return _ip(self, 1.0 / _sqrt(self))
+    return _ip(self, 1.0 / _owner.jt.sqrt(self))
 
 
 _UNARY_INPLACE_APIS = {
@@ -1536,20 +1686,28 @@ def _api_exp_(self):
     return _ip(self, _owner.jt.exp(self))
 
 def _api_sqrt_(self):
-    return _ip(self, _sqrt(self))
+    return _ip(self, _owner.jt.sqrt(self))
 
 def _api_abs_(self):
     return _ip(self, _owner.jt.abs(self))
+
+def _api_round_(self):
+    return _ip(self, _owner.jt.round(self))
+
+
+def _api_floor_(self):
+    return _ip(self, _owner.jt.floor(self))
+
+
+def _api_ceil_(self):
+    return _ip(self, _owner.jt.ceil(self))
+
 
 def _api_sigmoid_(self):
     return _ip(self, _owner.jt.sigmoid(self))
 
 def _api_tanh_(self):
     return _ip(self, _owner.jt.tanh(self))
-
-
-def _api_floor_(self):
-    return _ip(self, _owner.jt.floor(self))
 
 _UNARY_INPLACE_APIS.update({
     'log_': _api_log_,
@@ -1558,5 +1716,7 @@ _UNARY_INPLACE_APIS.update({
     'abs_': _api_abs_,
     'sigmoid_': _api_sigmoid_,
     'tanh_': _api_tanh_,
+    'round_': _api_round_,
     'floor_': _api_floor_,
+    'ceil_': _api_ceil_,
 })

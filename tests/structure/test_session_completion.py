@@ -24,6 +24,7 @@ nobody has checked.
 
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -58,7 +59,9 @@ class TestTheCheckerFires(unittest.TestCase):
     """Both directions, because only one of them is the interesting one."""
 
     def setUp(self):
-        self.tmp = Path(self.enterContext(__import__("tempfile").TemporaryDirectory()))
+        self._temporary_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temporary_directory.cleanup)
+        self.tmp = Path(self._temporary_directory.name)
 
     def test_a_truncated_log_fails(self):
         log = self.tmp / "truncated.log"
@@ -142,7 +145,9 @@ class TestThePluginRecordsCompletion(unittest.TestCase):
         self.assertIn("collected=7", line)
 
     def test_the_sentinel_round_trips(self):
-        tmp = Path(self.enterContext(__import__("tempfile").TemporaryDirectory()))
+        temporary_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary_directory.cleanup)
+        tmp = Path(temporary_directory.name)
         session_completion.record_collected(3)
         path = session_completion.write_sentinel(tmp / "s.json", {"exitstatus": 0})
         data = json.loads(path.read_text(encoding="utf-8"))

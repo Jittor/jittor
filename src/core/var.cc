@@ -7,6 +7,7 @@
 #include <type_traits>
 
 #include "core/var.h"
+#include "runtime/profiler/step_trace.h"
 #include "core/op.h"
 #include "core/grad.h"
 #include "mem/allocator.h"
@@ -93,7 +94,13 @@ void free_var(Var* v) {
     }
 }
 
+vector<Var*>* batch_released_vars = nullptr;
+
 void free_var_mem(Var* v) {
+    // See var.h. The executor asks "did this var's storage go while my batch
+    // was running", and the only place that can answer is here.
+    if (PREDICT_BRANCH_NOT_TAKEN(batch_released_vars != nullptr))
+        batch_released_vars->push_back(v);
     if (PREDICT_BRANCH_NOT_TAKEN(v->share_next != nullptr))
         share_group_unlink(v);
     if (save_mem)
@@ -105,7 +112,7 @@ void free_var_mem(Var* v) {
         v->mem_ptr = nullptr;
         v->allocator = nullptr;
         v->allocation = 0;
-        allocator->free(mem_ptr, v->size, allocation);
+        allocator->free(mem_ptr, v->storage_span_bytes(), allocation);
     }
 }
 
@@ -189,6 +196,13 @@ bool Var::is_contiguous() const {
     return true;
 }
 
+int Var::stride_pattern() const {
+    int mask = 0;
+    for (uint i=0; i<shape.size(); ++i)
+        if (storage_stride(i) != 0) mask |= 1 << i;
+    return mask;
+}
+
 // A view whose strides are exactly the contiguous ones needs no vector:
 // `storage_stride` derives those from the shape, and the empty vector is
 // already the "contiguous" sentinel every reader tests for. Storing them anyway
@@ -238,7 +252,7 @@ bool Var::alloc(Allocator* allocator) {
         // allocated first) called a virtual function through a null pointer.
         // With the request in its own field the source's state can be asked
         // about, and an unusable source simply falls through to a real alloc.
-        if (x->allocator && x->allocator->share_with(storage_span_bytes(), x->allocation)) {
+        if (x->allocator && x->allocator->share_with(storage_span_bytes(), x->allocation, share_offset)) {
             mem_ptr = ((char*) x->mem_ptr) + share_offset;
             storage_offset_bytes = x->storage_offset_bytes + share_offset;
             allocation = x->allocation;
@@ -261,7 +275,10 @@ bool Var::alloc(Allocator* allocator) {
         USER_CHECK(size == 0 || (is_contiguous() && (!input() || !input()->is_storage_view())))
             << "Allocator cannot represent shared strided storage";
     }
-    mem_ptr = allocator->alloc(storage_span_bytes(), allocation);
+    {
+        StepTraceVarScope trace_var(this);
+        mem_ptr = allocator->alloc(storage_span_bytes(), allocation);
+    }
     storage_offset_bytes = 0;
     this->allocator = allocator;
     // A failed allocation throws (see AlignedAllocator::alloc and

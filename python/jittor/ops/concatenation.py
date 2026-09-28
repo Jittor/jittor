@@ -2,15 +2,81 @@
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 from collections.abc import Sequence
+from contextlib import contextmanager
 
 from .._runtime.dispatch import select_kernel
 
 
 _MAX_DIRECT_INPUTS = 64
 
+#: `jittor` and `placement_scope_like` are imported lazily inside these helpers so
+#: the module stays importable during jittor's own bootstrap, but concatenation
+#: is one of the most-called ops in the tree and a function-local import pays the
+#: import machinery on every call (nine per `torch.cat`, measured: ~10 us of pure
+#: host overhead that no amount of GPU work can hide). Resolve each once instead.
+_jittor = None
+_placement_scope_like = None
+
+
+def _jt():
+    """`import jittor`, resolved on first use and then reused."""
+    global _jittor
+    module = _jittor
+    if module is None:
+        import jittor as module
+        _jittor = module
+    return module
+
+
+def _placement_scope(x):
+    """`placement_scope_like`, resolved on first use and then reused."""
+    global _placement_scope_like
+    fn = _placement_scope_like
+    if fn is None:
+        from .._core.var import placement_scope_like as fn
+        _placement_scope_like = fn
+    return fn(x)
+
+
+@contextmanager
+def _allocate_where_the_inputs_are(x):
+    """Run a block where ``jt.empty`` allocates on ``x``'s device.
+
+    Two scopes are needed, because a Var can be off the ambient device without
+    any record of it:
+
+    * :func:`placement_scope_like` covers an *explicit* placement -- a tensor
+      built with ``device="cpu"`` inside a CUDA process.
+    * It does not cover a tensor moved with ``.to_device(1)``, whose
+      ``placement_backend`` stays -1. Concatenating device-1 tensors in a
+      process whose current device is 0 then built the destination on device 0,
+      and the ``setitem`` filling it was rejected by ``dispatch_context`` for
+      mixing two devices (or, where the check does not reach, copied across
+      devices).
+
+    ``jt.flag_scope(device_id=...)`` is not enough for the second one:
+    ``device_id`` starts at -1 and its setter ignores negative values, so the
+    scope restores the flag to -1 and leaves the backend device where it left
+    it. Restore it by hand instead.
+    """
+    jt = _jt()
+
+    device_id = int(getattr(x, "device_id", -1))
+    previous = int(jt.current_device())
+    with _placement_scope(x):
+        if device_id < 0 or device_id == previous:
+            yield
+            return
+        jt.flags.device_id = device_id
+        try:
+            yield
+        finally:
+            if previous >= 0:
+                jt.flags.device_id = previous
+
 
 def _merge_dtypes(dtypes):
-    import jittor as jt
+    jt = _jt()
     dtype = dtypes[0]
     for item in dtypes[1:]:
         dtype = jt.binary_dtype_infer("add", dtype, item)
@@ -18,11 +84,14 @@ def _merge_dtypes(dtypes):
 
 
 def _concat_direct(arr, dim, dtype):
-    import jittor as jt
-    from jittor._core.var import _factory_scope_like
+    jt = _jt()
     output_shape = list(arr[0].shape)
     output_shape[dim] = sum(value.shape[dim] for value in arr)
-    with _factory_scope_like(arr[0]):
+    # Allocate where the inputs are: `jt.empty` follows the ambient placement
+    # and device, so concatenating tensors that are on neither puts the
+    # destination on the ambient device and dispatch_context rejects every
+    # setitem below.
+    with _allocate_where_the_inputs_are(arr[0]):
         output = jt.empty(output_shape, dtype=dtype)
     slices = [slice(None)] * len(output_shape)
     offset = 0
@@ -50,7 +119,7 @@ def _concat_bounded(arr, dim, dtype):
 
 def concat(arr, dim=0):
     """Concatenate a sequence of Vars along ``dim``."""
-    import jittor as jt
+    jt = _jt()
 
     # `amp_reg=4` here was an ASSIGNMENT, not a bit set: for the whole body it
     # replaced whatever AMP policy the caller had configured with "keep_reduce

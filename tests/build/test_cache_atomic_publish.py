@@ -10,6 +10,8 @@ from _helpers.child_process import run_python_child
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 JITTOR = REPO_ROOT / "python" / "jittor"
+# The C++ core moved out of the package to the repository root (4.15).
+SRC = REPO_ROOT / "src"
 
 
 @pytest.fixture(scope="module")
@@ -34,12 +36,12 @@ int main(int argc, char** argv) {
         [
             os.environ.get("CXX", "g++"),
             "-std=c++14",
-            "-I" + str(JITTOR / "src"),
+            "-I" + str(SRC),
             str(source),
-            str(JITTOR / "src" / "utils" / "log.cc"),
-            str(JITTOR / "src" / "utils" / "tracer.cc"),
-            str(JITTOR / "src" / "utils" / "str_utils.cc"),
-            str(JITTOR / "src" / "utils" / "cache_compile.cc"),
+            str(SRC / "utils" / "log.cc"),
+            str(SRC / "utils" / "tracer.cc"),
+            str(SRC / "utils" / "str_utils.cc"),
+            str(SRC / "utils" / "cache_compile.cc"),
             "-lpthread",
             "-ldl",
             "-o",

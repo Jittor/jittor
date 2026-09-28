@@ -5,6 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include "codegen/opt/pass/shared_reduce_pass.h"
+#include "codegen/opt/pass/parallel_pass.h"
 #include "ops/op_register.h"
 #include <set>
 #include <fstream>
@@ -176,7 +177,7 @@ std::tuple<int, vector<int>, tn_range_map> plan_reduce_thread_order(unique_ptr<K
 // width at one CUDA block. ParallelPass may insert balancing branches between
 // its tn definitions, so this pass must update named definitions rather than
 // assuming those nodes are contiguous.
-void apply_reduce_thread_order(unique_ptr<KernelIR>& call, unique_ptr<KernelIR>& kernel, ReduceOp* rop) {
+void apply_reduce_thread_order(unique_ptr<KernelIR>& call, unique_ptr<KernelIR>& kernel, ReduceOp* rop, int block_width) {
     auto plan = plan_reduce_thread_order(call, rop);
     int last_reduce = std::get<0>(plan);
     auto order = std::get<1>(plan);
@@ -194,14 +195,18 @@ void apply_reduce_thread_order(unique_ptr<KernelIR>& call, unique_ptr<KernelIR>&
     }
     ASSERT(thread_num_pos < call->children.size());
 
-    // Snapshot ParallelPass's cumulative tn boundaries, then retain at most ten
-    // reduced bits (1024 threads). Removed bits become serial loop iterations.
+    // Snapshot ParallelPass's cumulative tn boundaries, then retain at most as
+    // many reduced bits as the block is wide. Removed bits become serial loop
+    // iterations. The width has to be the one ParallelPass put in the kernel's
+    // `__launch_bounds__`: a block wider than that does not launch, and the cap
+    // used to be the literal 1024 that was the old default width.
+    const int block_width_bits = NanoVector::get_nbits(block_width) - 2;
     for (int d = 0; d < ndim; ++d) {
         string next = d + 1 < ndim ? "tn" + std::to_string(d + 1) : "0";
         call->insert(thread_num_pos++, "int _srw" + std::to_string(d) +
             "=tn" + std::to_string(d) + "-" + next + ";");
     }
-    call->insert(thread_num_pos++, "int _sr_left=10;");
+    call->insert(thread_num_pos++, "int _sr_left=" + S(block_width_bits) + ";");
     for (int i = 0; i <= last_reduce; ++i) {
         string width = "_srw" + std::to_string(order[i]);
         call->insert(thread_num_pos++, width + "=std::min(" + width + ",_sr_left);");
@@ -234,9 +239,9 @@ void apply_reduce_thread_order(unique_ptr<KernelIR>& call, unique_ptr<KernelIR>&
     // Low bits now cover all parallel reduction lanes, so each block owns an
     // output and the shared helper emits one global atomic for it.
     call->find_define("p1")->attrs[kir::rvalue] =
-        "std::max(thread_num / std::min(1 << (" + reduce_bits + "), 1024), 1)";
+        "std::max(thread_num / std::min(1 << (" + reduce_bits + "), " + S(block_width) + "), 1)";
     call->find_define("p2")->attrs[kir::rvalue] =
-        "std::min(1 << (" + reduce_bits + "), 1024)";
+        "std::min(1 << (" + reduce_bits + "), " + S(block_width) + ")";
 }
 
 extern int para_opt_level;
@@ -272,7 +277,8 @@ void SharedReducePass::run() {
         auto& kernel = ir->before[found.second];
         int reduce_op_id = find_reduce_op_id(kernel, op);
         if (reduce_op_id < 0) continue;
-        apply_reduce_thread_order(call, kernel, dynamic_cast<ReduceOp*>(op->ops[reduce_op_id]));
+        apply_reduce_thread_order(call, kernel, dynamic_cast<ReduceOp*>(op->ops[reduce_op_id]),
+                                  cuda_block_width(op));
         rewrite_atomics_to_shared_reduce(kernel);
     }
 }

@@ -13,7 +13,6 @@ import jittor as jt
 from jittor import nn
 
 import numbers
-import struct
 
 import numpy as np
 
@@ -29,7 +28,7 @@ from ..factories import _install_random_and_linspace, _set_use_cuda, _wrap_const
 
 from ..numerical import log_softmax as _numerical_log_softmax, masked_select as _numerical_masked_select, softmax as _numerical_softmax
 
-from ...types import _DEVICE_CTX_STACK, _device_is_cpu, _device_is_cuda, _device_is_meta, _dtype_to_str, _make_cpu_resident, _make_cuda_resident, _mark_cpu_like, _set_meta_placeholder, _var_has_cpu_residency_hint, _var_is_cpu_resident, device, dtype, _cuda_index_of, _move_to_cuda_index
+from ...types import _DEVICE_CTX_STACK, _device_is_cpu, _device_is_cuda, _dtype_to_str, _make_cpu_resident, _make_cuda_resident, _mark_cpu_like, _var_has_cpu_residency_hint, _var_is_cpu_resident, current_accelerator_index, device, dtype, _cuda_index_of, _is_index, _move_to_cuda_index
 
 from ...fidelity import Fidelity, register_fidelity
 
@@ -500,13 +499,7 @@ def _array_keep_dtype(data):
 def tensor(data, dtype=None, device=None, requires_grad=False, **kw):
     g = compatibility_owner(jt)
     Var = g.Var
-    source_is_var = isinstance(data, jt.Var)
-    want_meta = (_device_is_meta(device)
-                 or (device is None and not source_is_var and bool(_DEVICE_CTX_STACK)))
-    placement = device
-    if placement is None and not source_is_var:
-        placement = None if want_meta else "cpu"
-    with tensor_frontend(Var, device=placement, like=data):
+    with tensor_frontend(Var, device=device, like=data):
         import numpy as _np
         ds = _dtype_to_str(dtype)
         numpy_dtypes = {"bool", "uint8", "int8", "int16", "int32", "int64",
@@ -553,8 +546,6 @@ def tensor(data, dtype=None, device=None, requires_grad=False, **kw):
         elif _device_is_cuda(device):
             v = _make_cuda_resident(v, force=True, device=device)
             v = _move_to_cuda_index(v, g.device(device))
-        if want_meta:
-            _set_meta_placeholder(v)
         v.requires_grad_(bool(requires_grad))
         if requires_grad:
             v.requires_grad_(True)
@@ -567,7 +558,6 @@ def as_tensor(data, dtype=None, device=None):
     Var = g.Var
     with tensor_frontend(Var, device=device, like=data):
         if isinstance(data, jt.Var):
-            source_is_meta = bool(getattr(data, "_jittor_torch_meta", False))
             r = data if isinstance(data, Var) else g.Tensor(data)
             if dtype is not None and _jittor_dtype_name(r.dtype) != _dtype_to_str(dtype):
                 r = r.cast(_dtype_to_str(dtype))
@@ -575,12 +565,6 @@ def as_tensor(data, dtype=None, device=None):
                 return _make_cpu_resident(r)
             if _device_is_cuda(device):
                 return _move_to_cuda_index(_make_cuda_resident(r, force=True, device=device), g.device(device))
-            if _device_is_meta(device):
-                if r is data and not source_is_meta:
-                    r = jt.Var.copy(data).detach()
-                return _set_meta_placeholder(r)
-            if source_is_meta:
-                return _set_meta_placeholder(r)
             return r
         return tensor(data, dtype=dtype, device=device)
 
@@ -627,52 +611,80 @@ def frombuffer(buffer, *, dtype, count=-1, offset=0, requires_grad=False):
         return v
 
 
+def _numpy_stream(seed):
+    """One independent numpy stream per generator, seeded deterministically."""
+    import numpy as _np
+    return _np.random.default_rng(int(seed))
+
+
 class Generator:
+    """A torch.Generator with its OWN stream.
+
+    A generator's draws must depend only on its seed and its own history -- in
+    torch, two `manual_seed(1234)` generators yield the same numbers, and a draw
+    does not care how much work the process has already queued. This used to keep
+    only a seed and leave drawing to jittor's *global* generator, so the value a
+    caller got depended on the process's prior ops. That is fatal for TP: the H3
+    pipeline makes the initial latents with a seeded CPU generator, the DiT shards
+    *weights* (so every rank must denoise the same latent), and two ranks whose
+    global streams have advanced differently drew different latents -- each
+    RowParallelLinear then added halves computed from different inputs, and the
+    TP2 picture came out as noise while TP1 (one rank) was fine.
+    """
+
     def __init__(self, device=None):
         self.device = globals()["device"](device or "cpu")
         self._seed = 0
-        self._offset = 0
+        self._rng = None
     def manual_seed(self, s):
         self._seed = int(s)
-        self._offset = 0
+        # one stream per generator: deterministic, and independent of whatever
+        # the process's global generator has already produced.
+        self._rng = _numpy_stream(self._seed)
         return self
-    def _reserve(self, count):
-        offset = self._offset
-        self._offset += int(count)
-        return offset
-    def _uniform(self, low, high, shape, dtype="float32"):
-        if self.device.type != "cpu":
-            raise RuntimeError("explicit Generator uniform currently supports CPU only")
-        dtype_name = _dtype_to_str(dtype)
-        precision_bits = {"float16": 11, "bfloat16": 8, "float32": 24, "float64": 53}.get(dtype_name)
-        if precision_bits is None:
-            raise NotImplementedError("explicit Generator uniform requires a floating dtype")
-        count = int(np.prod(tuple(shape)))
-        offset = self._reserve(count * (2 if precision_bits > 32 else 1))
-        if dtype_name == "float16":
-            quantize = lambda value: float(np.float16(value))
-        elif dtype_name == "bfloat16":
-            def quantize(value):
-                bits = struct.unpack("I", struct.pack("f", float(value)))[0]
-                bits += 0x7fff + ((bits >> 16) & 1)
-                return float(struct.unpack("f", struct.pack("I", bits & 0xffff0000))[0])
-        else:
-            quantize = float
-        quantized_low = quantize(low)
-        quantized_high = quantize(high)
-        quantized_span = quantize(quantized_high - quantized_low)
-        compute_dtype = "float64" if dtype_name == "float64" else "float32"
-        values = jt.ops.generator_uniform(shape, compute_dtype, quantized_low,
-                                          quantized_low + quantized_span,
-                                          self._seed, offset, precision_bits)
-        return values if dtype_name == compute_dtype else values.cast(dtype_name)
+    def _stream(self):
+        """The generator's stream, built on first use so an unseeded one has one too."""
+        if self._rng is None:
+            self._rng = _numpy_stream(self._seed)
+        return self._rng
     def get_state(self):
-        return jt.array([self._seed, self._offset], dtype="int64")
+        """The stream's position, not just its seed.
+
+        `set_state(get_state())` has to replay the *next* draws, which a seed
+        alone cannot do once the generator has been used -- and this used to
+        return `[seed]` against a `set_state` that did nothing at all, so a
+        caller checkpointing a generator got a value that looked like state and
+        restored nothing. Accelerate's `save_state`/`load_state` and
+        `RandomSampler`'s replay both rest on this round-tripping.
+
+        The bytes are the numpy bit generator's own state, pickled. They are
+        this shim's format, not torch's CUDA/CPU state bytes, and are not
+        interchangeable with them -- the same rule torch states for its own
+        opaque state: save it, hand it back, do not parse it.
+        """
+        import numpy as _np
+        import pickle as _pickle
+        blob = _pickle.dumps(self._stream().bit_generator.state, protocol=4)
+        return jt.array(_np.frombuffer(blob, dtype=_np.uint8).copy())
     def set_state(self, s):
-        values = s.tolist()
-        if len(values) != 2:
-            raise RuntimeError("invalid Generator state")
-        self._seed, self._offset = int(values[0]), int(values[1])
+        import numpy as _np
+        import pickle as _pickle
+        raw = s
+        if hasattr(raw, "numpy"):
+            raw = raw.numpy()
+        raw = _np.asarray(raw)
+        # The old format was a single int64 seed. Restoring one of those can
+        # only reseed, which is what it always meant.
+        if raw.dtype != _np.uint8:
+            self.manual_seed(int(raw.reshape(-1)[0]))
+            return self
+        try:
+            state = _pickle.loads(raw.tobytes())
+        except EXPECTED as exc:
+            swallowed("torch/installers/tensor Generator.set_state", exc)
+            raise ValueError("generator state is not one this generator produced")
+        stream = self._stream()
+        stream.bit_generator.state = state
         return self
     def seed(self):
         return self._seed
@@ -924,9 +936,6 @@ def install(ctx):
     g.broadcast_shapes = broadcast_shapes
 
     g.corrcoef = corrcoef
-    g.remainder = _shape_remainder
-    from ..factories import triu_indices
-    g.triu_indices = triu_indices
 
     # torch.Generator (RNG handle) -- jittor uses a global seed; provide a
     # lightweight stand-in that supports manual_seed and is accepted where a
@@ -997,7 +1006,7 @@ def install(ctx):
     _install_reductions(g)
 
     register_api_bindings(g, 'torch',
-        ('Generator', 'Size', 'Tensor', 'as_tensor', 'broadcast_shapes', 'cat', 'channels_last', 'concat', 'concatenate', 'contiguous_format', 'corrcoef', 'e', 'enable_grad', 'from_numpy', 'frombuffer', 'grad', 'index_select', 'inf', 'inference_mode', 'jagged', 'layout', 'memory_format', 'nan', 'nested', 'no_grad', 'pi', 'preserve_format', 'remainder', 'stack', 'strided', 'tensor', 'triu_indices') + tuple(_TYPED_TENSOR_CLASSES.keys()),
+        ('Generator', 'Size', 'Tensor', 'as_tensor', 'broadcast_shapes', 'cat', 'channels_last', 'concat', 'concatenate', 'contiguous_format', 'corrcoef', 'e', 'enable_grad', 'from_numpy', 'frombuffer', 'grad', 'index_select', 'inf', 'inference_mode', 'jagged', 'layout', 'memory_format', 'nan', 'nested', 'no_grad', 'pi', 'preserve_format', 'stack', 'strided', 'tensor') + tuple(_TYPED_TENSOR_CLASSES.keys()),
         Fidelity.APPROXIMATE, 'Native tensor allocation and conversion with Torch dtype, device, and frontend policies; supported argument and backend subsets apply')
 
 from .shape_api import (

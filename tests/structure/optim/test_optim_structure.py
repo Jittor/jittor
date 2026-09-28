@@ -49,9 +49,7 @@ class TestOptimStructure(unittest.TestCase):
             "jt", "np", "deepcopy", "Optimizer", "opt_grad", "SGD",
             "RMSprop", "Adam", "AdamW", "Adan", "LRScheduler", "LambdaLR",
         }
-        runtime = native | {
-            "lr_scheduler",
-        }
+        runtime = native | {"lr_scheduler"}
         self.assertEqual(set(optim._NATIVE_EXPORTS), native)
         self.assertEqual(set(optim.__all__), runtime)
         self.assertFalse({"base", "algorithms", "schedulers"} & set(optim.__all__))

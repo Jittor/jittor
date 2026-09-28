@@ -362,12 +362,33 @@ def try_import_jit_utils_core(silent=None):
         else:
             os.environ[silent_var] = prev
 
-def run_cmd(cmd, cwd=None, err_msg=None, print_error=True):
+def c_locale_environment():
+    """``os.environ`` with the *message* locale pinned to C.
+
+    Only for commands whose output text is parsed or hashed. A compiler's
+    diagnostics are translated, so the same probe on the same machine returns
+    different bytes to a Chinese shell than to an English one -- and
+    ``target_arch_key`` hashes exactly those bytes into the cache directory
+    name. Pinning the locale for the probe (rather than asking every caller to
+    export LC_ALL) keeps the answer a property of the toolchain.
+    """
+    env = dict(os.environ)
+    env["LC_ALL"] = "C"
+    env["LANG"] = "C"
+    # LANGUAGE overrides both above for message translation, and an empty
+    # value is not the same as an absent one to gettext.
+    env.pop("LANGUAGE", None)
+    env.pop("LC_MESSAGES", None)
+    return env
+
+
+def run_cmd(cmd, cwd=None, err_msg=None, print_error=True, env=None):
     LOG.v(f"Run cmd: {cmd}")
     if cwd:
-        r = sp.run(cmd, cwd=cwd, shell=True, stdout=sp.PIPE, stderr=sp.STDOUT)
+        r = sp.run(cmd, cwd=cwd, shell=True, stdout=sp.PIPE, stderr=sp.STDOUT,
+                   env=env)
     else:
-        r = sp.run(cmd, shell=True, stdout=sp.PIPE, stderr=sp.STDOUT)
+        r = sp.run(cmd, shell=True, stdout=sp.PIPE, stderr=sp.STDOUT, env=env)
     try:
         s = r.stdout.decode('utf8')
     except:
@@ -412,6 +433,73 @@ def pool_initializer():
     if cc:
         cc.init_subprocess()
 
+@contextlib.contextmanager
+def _main_module_not_reexecuted():
+    """Stop multiprocessing children from re-running ``__main__``.
+
+    Every start method except ``fork`` rebuilds ``__main__`` in the child so
+    that objects pickled out of it can be unpickled back. When ``__main__``
+    is a plain script (``python3 train.py``) it has no ``__spec__``, so
+    ``spawn.get_preparation_data`` falls back to ``init_main_from_path`` and
+    the child *executes the script again* under the name ``__mp_main__``.
+    ``forkserver`` does it twice over: once in the fork server itself, during
+    the ``['__main__']`` preload, and once per worker in ``spawn.prepare``.
+
+    That is fatal here and not merely wasteful. ``run_cmds`` is reached from
+    ``import jittor``, which runs inside ``lock_scope()`` -- this process is
+    holding ``jittor.lock``. The re-executed script reaches its own
+    ``import jittor``, blocks in ``lock.py:_acquire`` waiting for that same
+    lock, and therefore never gets as far as serving the fork request the
+    parent is blocked waiting for:
+
+        parent    holds jittor.lock -> blocked in connect_to_new_process()
+                  reading the fork server's AF_UNIX socket
+        server    blocked in _acquire() polling for jittor.lock
+
+    Neither side can move, and no compiler is ever launched.
+
+    Handing ``__main__`` a stand-in ``__spec__`` with a ``name`` sends
+    ``get_preparation_data`` down the ``init_main_from_name`` branch instead.
+    The fork server then gets no ``main_path`` to preload, and each worker's
+    ``_fixup_main_from_name('__main__')`` returns immediately. Nothing the
+    compile pool sends to a worker lives in ``__main__`` -- ``do_compile``
+    and ``pool_initializer`` are attributes of this module -- so there is
+    nothing for the children to lose.
+
+    This was a Windows-only workaround ("a hack way to by pass windows
+    multiprocess spawn init_main_from_path"). Python 3.14 made ``forkserver``
+    the default start method on Linux too, which is what turned a Windows
+    quirk into a deadlock everywhere. Hence: no platform test, and the scope
+    covers the whole pool -- creating it *and* using it -- so that a worker
+    replaced mid-run by ``_maintain_pool`` is prepared the same way as the
+    ones created up front.
+    """
+    main = sys.modules.get('__main__')
+    spec = getattr(main, '__spec__', None)
+    if main is None or getattr(spec, 'name', None) is not None:
+        # -m pytest, -c, an interactive session: `__spec__.name` is already
+        # set (or there is no __main__ at all) and the path branch is not
+        # taken. This is why the same compile succeeds under pytest and
+        # deadlocks under a bare script.
+        yield
+        return
+    # A stand-in __spec__ that only has to answer .name; the object is
+    # intentionally not a ModuleSpec, hence Any.
+    tmp: Any = lambda x: x
+    tmp.name = '__main__'
+    try:
+        main.__spec__ = tmp
+    except Exception:
+        # An embedded or otherwise unusual __main__ that refuses the
+        # attribute is not a reason to fail the build.
+        yield
+        return
+    try:
+        yield
+    finally:
+        main.__spec__ = spec
+
+
 def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
     global pool_size, p
     # Under MPI (mpirun), the OpenMPI runtime installs atfork handlers and a
@@ -428,41 +516,30 @@ def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
         return
     bk = mp.current_process()._config.get('daemon')
     mp.current_process()._config['daemon'] = False
-    if pool_size == 0:
+    with _main_module_not_reexecuted():
+        if pool_size == 0:
+            try:
+                mem_bytes = get_total_mem()
+                mem_gib = mem_bytes/(1024.**3)
+                pool_size = min(16,max(int(mem_gib // 3), 1))
+                LOG.i(f"Total mem: {mem_gib:.2f}GB, using {pool_size} procs for compiling.")
+            except ValueError:
+                # On macOS, python with version lower than 3.9 do not support SC_PHYS_PAGES.
+                # Use hard coded pool size instead.
+                pool_size = 4
+                LOG.i(f"using {pool_size} procs for compiling.")
+            p = Pool(pool_size, initializer=pool_initializer)
+            p.__enter__()
+            import atexit
+            atexit.register(pool_cleanup)
+        cmds = [ [cmd, cache_path, jittor_path] for cmd in cmds ]
         try:
-            mem_bytes = get_total_mem()
-            mem_gib = mem_bytes/(1024.**3)
-            pool_size = min(16,max(int(mem_gib // 3), 1))
-            LOG.i(f"Total mem: {mem_gib:.2f}GB, using {pool_size} procs for compiling.")
-        except ValueError:
-            # On macOS, python with version lower than 3.9 do not support SC_PHYS_PAGES.
-            # Use hard coded pool size instead.
-            pool_size = 4
-            LOG.i(f"using {pool_size} procs for compiling.")
-        if os.name == 'nt':
-            # a hack way to by pass windows
-            # multiprocess spawn init_main_from_path.
-            # check spawn.py:get_preparation_data
-            spec_bk = sys.modules['__main__'].__spec__
-            # A stand-in __spec__ that only has to answer .name; the object is
-            # intentionally not a ModuleSpec, hence Any.
-            tmp: Any = lambda x:x
-            tmp.name = '__main__'
-            sys.modules['__main__'].__spec__ = tmp
-        p = Pool(pool_size, initializer=pool_initializer)
-        p.__enter__()
-        if os.name == 'nt':
-            sys.modules['__main__'].__spec__ = spec_bk
-        import atexit
-        atexit.register(pool_cleanup)
-    cmds = [ [cmd, cache_path, jittor_path] for cmd in cmds ]
-    try:
-        n = len(cmds)
-        dp = DelayProgress(msg, n)
-        for i,_ in enumerate(p.imap_unordered(do_compile, cmds)):
-            dp.update(i)
-    finally:
-        mp.current_process()._config['daemon'] = bk
+            n = len(cmds)
+            dp = DelayProgress(msg, n)
+            for i,_ in enumerate(p.imap_unordered(do_compile, cmds)):
+                dp.update(i)
+        finally:
+            mp.current_process()._config['daemon'] = bk
 
 if os.name=='nt' and getattr(mp.current_process(), '_inheriting', False):
     # when windows spawn multiprocess, disable sub-subprocess
@@ -844,13 +921,19 @@ def _read_target_arch(cc):
     Asking the compiler removes the guesswork: this is the concrete
     ``-march=``/``-mtune=`` and the state of every target feature.
     """
-    out = run_cmd(f'"{cc}" -march=native -Q --help=target')
+    # In the C locale, always. The per-feature state is printed through
+    # gettext ("[enabled]" / "[\u542f\u7528]"), this text is hashed into the
+    # cache directory name, and hashing a translation made the same compiler
+    # on the same CPU own two caches. See
+    # tests/build/test_build_config_cache.py.
+    locale = c_locale_environment()
+    out = run_cmd(f'"{cc}" -march=native -Q --help=target', env=locale)
     lines = [line.strip() for line in out.splitlines()
              if line.strip().startswith("-m")]
     if lines:
         return "\n".join(lines)
     # clang has no -Q --help=target; its cc1 line carries the same facts.
-    out = run_cmd(f'"{cc}" -march=native -E -v - < /dev/null')
+    out = run_cmd(f'"{cc}" -march=native -E -v - < /dev/null', env=locale)
     for line in out.splitlines():
         if "-target-cpu" in line or "cc1" in line:
             return line.strip()
@@ -867,7 +950,15 @@ def target_arch_key(cc=None):
     if not cc or cc_type == "cl" or platform.machine() not in ("x86_64", "AMD64"):
         return short(get_cpu_version())
     try:
-        expansion = probe.cached("target_arch:" + resolve_exe(cc), [resolve_exe(cc)],
+        # The slot is named for *how* the answer is obtained, not just for the
+        # compiler. probe.json is keyed on the compiler alone, so a home that
+        # memoised a translated expansion would keep answering out of it --
+        # target_arch_key() and its own cache would disagree, and the machine
+        # would stay on whichever directory the first locale to ask picked.
+        # Renaming the slot re-probes once per home and lands every one of them
+        # on the same key.
+        expansion = probe.cached("target_arch:c-locale:" + resolve_exe(cc),
+                                 [resolve_exe(cc)],
                                  lambda: _read_target_arch(cc))
     except Exception as error:
         LOG.v(f"could not read the -march=native expansion: {error}")
@@ -958,8 +1049,23 @@ def get_version(output):
     Six of these were ``nvcc --version``, one per CUDA library, every import.
     """
     tool = resolve_exe(output)
-    return probe.cached("version:" + tool, [tool],
-                        lambda: _read_version(output))
+    answer = probe.cached("version:" + tool, [tool],
+                          lambda: _read_version_record(output))
+    if isinstance(answer, dict):
+        raise RuntimeError(answer["error"])
+    return answer
+
+
+def _read_version_record(output):
+    """The version, or the failure to read one -- both are states of the tool's
+    file and both are remembered under its stamp. Otherwise every import
+    re-spawns a subprocess that failed last time and will fail the same way
+    until the file changes (a broken ``mpicc`` wrapper on PATH did exactly
+    that)."""
+    try:
+        return _read_version(output)
+    except Exception as error:
+        return {"error": "%s: %s" % (type(error).__name__, error)}
 
 
 def _read_version(output):
@@ -1079,10 +1185,25 @@ def get_py3_config_path():
         py3_config_paths = [
             os.path.dirname(sys.executable) + f"/python3.{sys.version_info.minor}-config",
             sys.executable + "-config",
-            f"/usr/bin/python3.{sys.version_info.minor}-config",
-            f"/usr/local/bin/python3.{sys.version_info.minor}-config",
             os.path.dirname(sys.executable) + "/python3-config",
         ]
+        # A venv may use a base interpreter whose config helper is outside the
+        # venv, as with uv-managed CPython installations. Ask Python where its
+        # matching installation keeps the helper before trying system paths.
+        try:
+            import sysconfig
+            config_bindir = sysconfig.get_config_var("BINDIR")
+        except (ImportError, TypeError):
+            config_bindir = None
+        if config_bindir:
+            py3_config_paths.extend([
+                os.path.join(config_bindir, f"python3.{sys.version_info.minor}-config"),
+                os.path.join(config_bindir, "python3-config"),
+            ])
+        py3_config_paths.extend([
+            f"/usr/bin/python3.{sys.version_info.minor}-config",
+            f"/usr/local/bin/python3.{sys.version_info.minor}-config",
+        ])
         if platform.system() == "Darwin":
             if "homebrew" in sys.executable:
                 py3_config_paths.append(f'/opt/homebrew/bin/python3.{sys.version_info.minor}-config')

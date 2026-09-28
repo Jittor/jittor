@@ -1,5 +1,6 @@
 
 from _helpers import capability as _test_capability
+from _helpers.cupy_bridge import cuda_numpy_code_available
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: 
@@ -68,7 +69,8 @@ class TestCodeOp(unittest.TestCase):
             one=numpy.ones(a.shape)
             assert numpy.allclose(da.data,one*2.0)
 
-        if _test_capability.check_accelerator('cuda', backend=jt).enabled:
+        if (_test_capability.check_accelerator('cuda', backend=jt).enabled
+                and cuda_numpy_code_available()):
             with jt.flag_scope(use_cuda=1):
                 check()
         check()
@@ -102,7 +104,8 @@ class TestCodeOp(unittest.TestCase):
             one=numpy.ones(a.shape)
             assert numpy.allclose(da.data,one*2.0)
 
-        if _test_capability.check_accelerator('cuda', backend=jt).enabled:
+        if (_test_capability.check_accelerator('cuda', backend=jt).enabled
+                and cuda_numpy_code_available()):
             with jt.flag_scope(use_cuda=1):
                 check()
         check()
@@ -149,7 +152,8 @@ class TestCodeOp(unittest.TestCase):
             assert numpy.allclose(dda.data,one)
             assert numpy.allclose(ddb.data,mone)
         
-        if _test_capability.check_accelerator('cuda', backend=jt).enabled:
+        if (_test_capability.check_accelerator('cuda', backend=jt).enabled
+                and cuda_numpy_code_available()):
             with jt.flag_scope(use_cuda=1):
                 check()
         check()
@@ -189,7 +193,8 @@ class TestCodeOp(unittest.TestCase):
                 assert kind != 0, \
                     "numpy_code backward received a host pointer for dout"
 
-        if _test_capability.check_accelerator('cuda', backend=jt).enabled:
+        if (_test_capability.check_accelerator('cuda', backend=jt).enabled
+                and cuda_numpy_code_available()):
             with jt.flag_scope(use_cuda=1):
                 check(True)
         check(False)

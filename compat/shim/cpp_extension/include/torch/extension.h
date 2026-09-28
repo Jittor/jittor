@@ -183,8 +183,15 @@ namespace detail {
     const char* vh_dtype_name(jittor::VarHolder*);     // "float32" etc.
     bool     vh_is_cuda(jittor::VarHolder*);
     int      vh_device_type(jittor::VarHolder*);        // 0=CPU, 1=CUDA (no migrate)
+    int      vh_device_index(jittor::VarHolder*);       // CUDA index, -1 on CPU
     double   vh_item_double(jittor::VarHolder*);
     int64_t  vh_item_int(jittor::VarHolder*);
+
+    // jittor's own current accelerator device -- the one the shim's tensor
+    // factories build their Var from, which cudaSetDevice does not move. -1 when
+    // there is no accelerator. Extensions reach these through c10/cuda/CUDAGuard.h.
+    int      accelerator_current_device();
+    void     accelerator_set_current_device(int device);
 
     Tensor   adopt(jittor::VarHolder* vh, bool owns);  // wrap (owns => deleting)
     jittor::VarHolder* clone_holder(jittor::VarHolder* vh);  // fresh holder, same Var
@@ -226,9 +233,13 @@ public:
     ScalarType scalar_type() const { return detail::name_to_scalar(detail::vh_dtype_name(vh_.get())); }
     Dtype dtype() const { return Dtype(scalar_type()); }
     Device device() const {
-        return Device(detail::vh_device_type(vh_.get()) ? DeviceType::CUDA : DeviceType::CPU);
+        return detail::vh_device_type(vh_.get())
+            ? Device(DeviceType::CUDA, detail::vh_device_index(vh_.get()))
+            : Device(DeviceType::CPU, -1);
     }
-    int64_t get_device() const { return detail::vh_device_type(vh_.get()) ? 0 : -1; }
+    int64_t get_device() const {
+        return detail::vh_device_type(vh_.get()) ? detail::vh_device_index(vh_.get()) : -1;
+    }
     bool is_cuda() const { return detail::vh_device_type(vh_.get()) != 0; }
     // torch's Tensor::is_cpu() — native exts (nvdiffrast NVDR_CHECK_CPU, cumesh
     // xatlas) check host-residency this way. Mirrors device().is_cpu(): reads the

@@ -11,6 +11,7 @@
 
 #include "core/var.h"
 #include "mkl_conv_op.h"
+#include "ops/op_register.h"
 
 using namespace std;
 
@@ -50,6 +51,11 @@ MklConvOp::MklConvOp(Var* x, Var* w, int strideh, int stridew, int paddingh, int
         this->yformat = this->xformat;
     check_onednn_conv_args(x, w, strideh, stridew, paddingh, paddingw,
                           dilationh, dilationw, groups, this->xformat, this->wformat, this->yformat);
+    // A forward-graph op must keep its operands alive for its own backward;
+    // as a relay it never had to.
+    set_flag(OpFlags::_manual_set_vnbb);
+    x->set_flag(VarFlags::_needed_by_backward);
+    w->set_flag(VarFlags::_needed_by_backward);
 }
 
 void MklConvOp::infer_shape() {
@@ -66,6 +72,28 @@ void MklConvOp::infer_shape() {
     USER_CHECK(xh+paddingh*2 >= (wh-1)*dilationh+1 && xw+paddingw*2 >= (ww-1)*dilationw+1)
         << "oneDNN convolution kernel exceeds padded input";
     set_shape(y, "abcd", yformat, yn, yc, yh, yw);
+}
+
+static auto make_backwardx = op_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, int, int, string, string, string>("mkl_conv_backward_x");
+static auto make_backwardw = op_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, int, int, string, string, string>("mkl_conv_backward_w");
+
+VarPtr MklConvOp::grad(Var* out, Var* dout, Var* v, int v_index) {
+    // Same shape as CudnnConvOp::grad, down to reading the spatial sizes
+    // through the layout strings rather than assuming NCHW positions -- the
+    // backward ops need the *input's* h/w, which only the format tells you.
+    // This op carried no gradient at all while it was reachable solely as a
+    // relay inside a fused op, where autograd runs on the meta-op subgraph the
+    // relay stands in for.
+    int xn, xc, xh, xw, wh, ww, wci, wco;
+    get_shape(x, "abcd", xformat, xn, xc, xh, xw);
+    get_shape(w, "oihw", wformat, wco, wci, wh, ww);
+    if (v_index == 0)
+        return make_backwardx(w, dout, xh, xw, strideh, stridew, paddingh,
+                              paddingw, dilationh, dilationw, groups,
+                              xformat, wformat, yformat);
+    return make_backwardw(x, dout, wh, ww, strideh, stridew, paddingh,
+                          paddingw, dilationh, dilationw, groups,
+                          xformat, wformat, yformat);
 }
 
 static const char* short_type(Var* x) {

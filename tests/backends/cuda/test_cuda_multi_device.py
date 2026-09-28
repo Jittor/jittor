@@ -280,6 +280,201 @@ class TestSecondDevice(_DeviceCase):
         self.assertTrue(0.0 <= v.min() and v.max() <= 1.0)
         self.assertTrue(0.4 < v.mean() < 0.6, v.mean())
 
+    def test_an_explicit_copy_is_never_retargeted(self):
+        """`.cuda(N)` names a device; a pending scalar exemption may not undo it.
+
+        `jt.ones(n)` is `unary(1).broadcast(n)` and carries `_is_scalar`
+        through the broadcast, and `device_copy` used to carry that flag onto
+        its *output* too. So the result of an explicit `.cuda(2)` was still a
+        movable pending scalar, and `Op::propagate_device` retargeted it --
+        and the whole pending chain behind it -- onto the other operand's
+        device. Measured before the fix:
+
+            a = jt.ones(3).cuda(1); b = jt.ones(3).cuda(2)   # neither synced
+            (a + b).sync()      -> ran on cuda:1, and b.device read "cuda:1"
+
+        The same expression with both operands synced raised, so whether the
+        device you asked for was honoured depended on whether you happened to
+        sync. `.cpu()` lost the same way:
+        `jt.ones(3).cpu() + jt.ones(3).cuda(2)` put everything on cuda:0.
+        """
+        a = jt.ones((3,), "float32").cuda(1)
+        b = jt.ones((3,), "float32").cuda(0)
+        self.assertEqual(a.device_id, 1)
+        self.assertEqual(b.device_id, 0)
+        with self.assertRaises(Exception) as caught:
+            (a + b).sync()
+        self.assertIn("same CUDA device", str(caught.exception))
+        # ...and neither operand was moved by the attempt.
+        self.assertEqual(a.device_id, 1)
+        self.assertEqual(b.device_id, 0)
+        a.sync()
+        self.assertEqual(_pointer_device(a.device_raw_ptr), 1)
+
+    def test_a_pending_host_copy_is_not_retargeted_either(self):
+        host = jt.ones((3,), "float32").cpu()
+        other = jt.ones((3,), "float32").cuda(1)
+        with self.assertRaises(Exception):
+            (host + other).sync()
+
+    def test_dtype_promotion_still_crosses_an_explicit_copy(self):
+        # `_is_scalar` is kept on the copy's output for promotion; only its
+        # use as a *movable* pending scalar was removed. `x.cuda(1) * 2` must
+        # still promote exactly as `x * 2` does.
+        half = jt.ones((3,), "float16").cuda(1)
+        self.assertEqual(str((half * 2).dtype), "float16")
+        self.assertEqual(str((jt.ones((3,), "float16") * 2).dtype), "float16")
+
+    def test_a_pending_copy_to_the_host_reports_the_host(self):
+        """`x.cpu()` says "cpu" before it is materialized, not its old device.
+
+        A Var with no allocation yet has no residency to report, so `device`
+        answers with where it will land. For a host copy that destination is
+        already decided, but `device_id` cannot say so -- it deliberately
+        keeps the source device so the Var can go back there. Reading
+        `device_id` alone made a fresh `x.cuda(3).cpu()` report `cuda:3` right
+        up to the sync that put it in host memory.
+        """
+        source = jt.ones((4,), "float32").cuda(3)
+        source.sync()
+        host = source.cpu()
+        self.assertEqual(host.location(), "none")
+        self.assertEqual(host.device, "cpu")
+        # device_id still names the device it came from, as documented.
+        self.assertEqual(host.device_id, 3)
+        host.sync()
+        self.assertEqual(host.location(), "cpu")
+        self.assertEqual(host.device, "cpu")
+        np.testing.assert_array_equal(host.numpy(), np.ones(4, "float32"))
+
+    def test_to_another_var_takes_its_device_before_it_is_materialized(self):
+        """`x.to(other)` copies `other`'s device even when `other` is pending.
+
+        The device was read from `other.location()` alone, which is `"none"`
+        until the Var is executed -- so `jt.ones(2).to(jt.ones(2).cuda(7))`
+        dropped the device entirely and the result stayed on the ambient one.
+        """
+        second = _device_count() - 1
+        reference = jt.ones((2,), "float32").cuda(second)
+        self.assertEqual(reference.location(), "none")
+        moved = jt.ones((2,), "float32").to(reference)
+        self.assertEqual(moved.device_id, second)
+        moved.sync()
+        self.assertEqual(_pointer_device(moved.device_raw_ptr), second)
+        # and the host direction, which was dropped the same way
+        host_reference = jt.ones((2,), "float32").cpu()
+        self.assertEqual(host_reference.location(), "none")
+        self.assertEqual(jt.ones((2,), "float32").to(host_reference).device, "cpu")
+
+    def test_memory_is_accounted_per_device(self):
+        """`device_memory_used(N)` is device N's, not the process total.
+
+        `MemInfo.total_cuda_used` sums every device's pool, so it cannot
+        answer "how much is on device N" -- the torch facade's
+        `memory_allocated(0)` reported the 256 MiB that was on cuda:1.
+        """
+        megabyte = 1024 * 1024
+        before_zero = jt.core.device_memory_used(0)
+        before_one = jt.core.device_memory_used(1)
+        block = jt.ones((64, 1024, 1024), "float32").cuda(1)   # 256 MiB
+        block.sync()
+        grew_one = jt.core.device_memory_used(1) - before_one
+        grew_zero = jt.core.device_memory_used(0) - before_zero
+        self.assertGreater(grew_one, 200 * megabyte)
+        self.assertLess(grew_zero, 200 * megabyte)
+        self.assertGreaterEqual(jt.core.device_memory_reserved(1),
+                                jt.core.device_memory_used(1))
+        del block
+        jt.sync_all(True)
+
+    def test_optimizer_state_follows_its_parameter_s_device(self):
+        """State buffers are allocated on the parameter, and realigned on a move.
+
+        `jt.zeros(p.shape, p.dtype)` allocates on the *ambient* device, so an
+        optimizer built for a model that is not on it put its momentum buffer
+        on the wrong card and died in the fused kernel on the first step with
+        "Expected all tensor inputs on the same backend and device". The same
+        thing happened to an optimizer that was built first and whose model
+        then moved -- which is the ordinary `opt = SGD(...); model.cuda(1)`
+        order. torch avoids it by creating state lazily at the first step.
+        """
+        with jt.flag_scope(device_id=1):
+            layer = jt.nn.Linear(4, 2)
+            layer.weight.sync()
+        self.assertEqual(layer.weight.device_id, 1)
+        # built while device 0 is current, for parameters on device 1
+        optimizer = jt.optim.SGD(layer.parameters(), lr=0.1, momentum=0.9)
+        for group in optimizer.param_groups:
+            for buffer in group["values"]:
+                self.assertEqual(buffer.device_id, 1)
+        with jt.flag_scope(device_id=1):
+            x = jt.array(np.ones((3, 4), "float32"))
+            optimizer.step((layer(x) ** 2).sum())
+        self.assertEqual(layer.weight.device_id, 1)
+
+        # ...and the other order: state built on device 0, parameters moved
+        # to device 1 afterwards.
+        moved = jt.nn.Linear(4, 2)
+        moved.weight.sync()
+        self.assertEqual(moved.weight.device_id, 0)
+        later = jt.optim.SGD(moved.parameters(), lr=0.1, momentum=0.9)
+        held = later.param_groups[0]["values"][0]
+        moved.cuda(1)
+        self.assertEqual(moved.weight.device_id, 1)
+        with jt.flag_scope(device_id=1):
+            x = jt.array(np.ones((3, 4), "float32"))
+            later.step((moved(x) ** 2).sum())
+        self.assertEqual(moved.weight.device_id, 1)
+        for group in later.param_groups:
+            for buffer in group["values"]:
+                self.assertEqual(buffer.device_id, 1)
+        # the realignment keeps the buffer object, which the algorithms' own
+        # in-place kernels and `optimizer.state[p]` both rely on
+        self.assertIs(later.param_groups[0]["values"][0], held)
+        self.assertTrue(bool(np.isfinite(moved.weight.numpy()).all()))
+
+    def test_every_native_device_spelling_this_layer_accepts(self):
+        """What `.cuda`/`.to` take natively, and what they refuse.
+
+        Native jittor does not have to copy torch's spelling, but it does have
+        to be one coherent set. These are the accepted forms and the refusals;
+        `docs/notes/device-placement.md` states the same table.
+        """
+        x = jt.ones((3,), "float32")
+        x.sync()
+        self.assertEqual(x.cuda(1).device, "cuda:1")
+        self.assertEqual(x.cuda("cuda:2").device, "cuda:2")
+        self.assertEqual(x.to("cuda:1").device, "cuda:1")
+        self.assertEqual(x.to(device="cuda:1").device, "cuda:1")
+        self.assertEqual(x.to("cuda:1", "float16").dtype, "float16")
+        self.assertEqual(x.to("cuda:1", "float16").device, "cuda:1")
+        self.assertEqual(x.cuda(1).cpu().device, "cpu")
+        # A bare "cuda" is *this Var's own* device natively -- "make sure it
+        # is on its accelerator" -- not the current one. The torch facade
+        # resolves the same spelling to the current device, which is what
+        # torch does; the two rules live side by side in one process because
+        # a native Var and a torch.Tensor are different types. Both are in
+        # docs/notes/device-placement.md.
+        on_two = x.cuda(2)
+        on_two.sync()
+        jt.set_device(1)
+        try:
+            self.assertEqual(on_two.to("cuda").device, "cuda:2")
+            self.assertEqual(on_two.cuda().device, "cuda:2")
+            self.assertIs(on_two.cuda(), on_two)
+        finally:
+            jt.set_device(0)
+        # ...and the refusals, each of which used to be, or could be, a silent
+        # misplacement instead.
+        with self.assertRaises(TypeError):
+            x.to(1)                       # torch raises on a bare int here too
+        with self.assertRaises(TypeError):
+            x.to("cuda1")                 # a typo is not a dtype
+        with self.assertRaises(RuntimeError):
+            x.cuda(-1)
+        with self.assertRaises(RuntimeError):
+            x.cuda(_device_count() + 5)
+
     def test_both_devices_in_one_run(self):
         # Two independent graphs in one sync: the executor has to switch per
         # op and wait on both devices at the end, not only on the current one.

@@ -12,7 +12,9 @@
 
 - [2026-09-17 Accelerate 训练能力整改与显式支持边界](2026-09-17-accelerate-maturity-repair.md)
 - [2026-09-16 Accelerate 优化器与数据批处理性能修复](2026-09-16-accelerate-wrapper-performance-repair.md)
+- [2026-09-13 远端合并后的 Ascend 增量修复与原生/独立 compat 复验](2026-09-13-ascend-merge-validation.md)
 - [2026-09-10 CPU float32 归约改为分块 + 成对折叠](2026-09-10-cpu-reduction-blocked-pairwise.md)
+- [2026-09-10 重构分支原生与独立 Torch compat 的 Ascend 复验（选择集通过，结构回归通过）](2026-09-10-ascend-refactor-validation.md)
 - [2026-09-09 Torch tf32 控制项的归属与执行接线](2026-09-09-torch-tf32-wiring.md)
 - [2026-09-09 device→host 拷贝在设备侧分配目标缓冲](2026-09-09-device-copy-host-destination.md)
 - [2026-09-04 整改分区的 CUDA 可用性实机核实](2026-09-04-cuda-availability-verification.md)

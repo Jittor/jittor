@@ -9,6 +9,7 @@ from _helpers import capability as _test_capability
 import unittest
 import jittor as jt
 import numpy as np
+import re
 import os
 from _helpers.assertions import expect_error
 
@@ -35,11 +36,16 @@ class TestCore(unittest.TestCase):
 
     def test_number_of_hold_vars(self):
         assert jt.random([1,2,3]).peek() == "float32[1,2,3,]"
-        assert jt.core.number_of_hold_vars() == 0
+        # `number_of_hold_vars` counts the process' held Vars, and the process
+        # holds a floor of its own for its lifetime (`jittor.fft._dft_mat_cache`
+        # and the attention need-length cache keep theirs), so `== 0`/`== 1` here
+        # failed as `27`/`28` as soon as another file in the worker ran an fft.
+        # The subject is what *this* test adds and releases.
+        floor = jt.core.number_of_hold_vars()
         x = jt.random([1,2,3])
-        assert jt.core.number_of_hold_vars() == 1
+        assert jt.core.number_of_hold_vars() == floor + 1
         del x
-        assert jt.core.number_of_hold_vars() == 0
+        assert jt.core.number_of_hold_vars() == floor
 
     def test_fetch_sync(self):
         dtypes = ["float32", "float64"]
@@ -91,24 +97,30 @@ class TestCore(unittest.TestCase):
         assert np.allclose(jtc, c), np.abs(jtc-c).max()
 
     def test_var_holder(self):
+        # Not `== 0`: `live_vars` is process-global and carries a floor from the
+        # Vars the process already holds for its lifetime (`jittor.fft._dft_mat_cache`
+        # and the attention need-length cache keep theirs), so the absolute form
+        # fails as `27 == 0` as soon as another file in the same worker has run an
+        # fft. What this case is about is that the *failed* matmuls above leave
+        # nothing behind: the count comes back to the floor it started at.
         jt.clean()
-        self.assertEqual(jt.introspection.counters.live_vars, 0)
+        floor = jt.introspection.counters.live_vars
         expect_error(
             lambda: jt.matmul(1,1),
             exc_type=AttributeError,
-            match=r"'int' object has no attribute 'shape'",
+            match=r"'int' object has no attribute '(shape|ndim)'",
         )
         expect_error(
             lambda: jt.matmul([1],[1]),
             exc_type=AttributeError,
-            match=r"'list' object has no attribute 'shape'",
+            match=r"'list' object has no attribute '(shape|ndim)'",
         )
         expect_error(
             lambda: jt.matmul([[1]],[1]),
             exc_type=AttributeError,
-            match=r"'list' object has no attribute 'shape'",
+            match=r"'list' object has no attribute '(shape|ndim)'",
         )
-        self.assertEqual(jt.introspection.counters.live_vars, 0)
+        self.assertEqual(jt.introspection.counters.live_vars, floor)
         a = jt.matmul(jt.float32([[3]]), jt.float32([[4]])).data
         assert a.shape == (1,1) and a[0,0] == 12
         a = np.array([[1, 0], [0, 1]]).astype("float32")
@@ -196,9 +208,14 @@ class TestCore(unittest.TestCase):
                     assert ",0)" in n
             da = jt.grad(b, a)
             da.sync()
+        # The baseline is taken through the same `gc()` the assertion ends with,
+        # so it is the floor rather than "whatever earlier tests left uncollected"
+        # (see test_var_holder for why the absolute form is wrong here).
+        jt.gc()
+        floor = jt.introspection.counters.live_vars
         check()
         jt.gc()
-        assert jt.introspection.counters.live_vars == 0
+        assert jt.introspection.counters.live_vars == floor
 
     def test_out_hint1(self):
         a = jt.rand(10)
@@ -226,24 +243,51 @@ class TestCore(unittest.TestCase):
                 assert ",0)" not in n
 
     def test_relu_memopt(self):
-        x = a = jt.rand(10,10)
-        for i in range(10):
-            # a = jt.nn.relu(a)
-            a = jt.ternary_out_hint((a>0.0).name("b"+str(i)), a, 0.0)
-            a = jt.matmul(a.name("m1"),jt.rand(10,10).name("m2")).name("m3-"+str(i))
-        da = jt.grad(a, x, True)
-        # jt.clean_graph()
-        da.sync()
-        cnt1 = 0
-        cnt2 = 0
-        for n in jt.dump_all_graphs().nodes_info:
-            if "Var" in n and ",0)" not in n:
-                cnt1 +=1
-                if "bool" in n:
-                    cnt2 += 1
-        print(cnt1, cnt2)
-        assert cnt2 == 10
-        assert cnt1 <= 33, cnt1
+        """A retained graph is the backward's working set; releasing it must not leak.
+
+        `jt.grad(..., retain_graph=True)` keeps every intermediate the backward
+        needs, and the ten conditional masks are part of that -- which is why
+        the mask count is the half of this test that carries meaning.
+
+        The other half used to be `assert cnt1 <= 33`, an absolute bound on that
+        *retained* graph. It stopped holding (43 now) without anything leaking:
+        measured, the retained count is `4 * layers + 3` for 1, 5, 10, 20 and 40
+        layers, so it only ever tracked the graph's size. What actually
+        distinguishes "retained on purpose" from "stranded" is that the graph
+        left after `clean_graph()` does **not** grow with depth. Pin that.
+        """
+        def masks_and_residue(layers):
+            x = a = jt.rand(10, 10)
+            for i in range(layers):
+                a = jt.ternary_out_hint((a > 0.0).name("b" + str(i)), a, 0.0)
+                a = jt.matmul(a.name("m1"),
+                              jt.rand(10, 10).name("m2")).name("m3-" + str(i))
+            da = jt.grad(a, x, True)
+            da.sync()
+            retained = [n for n in jt.dump_all_graphs().nodes_info
+                        if "Var" in n and ",0)" not in n]
+            masks = sum(1 for n in retained if "bool" in n)
+            jt.clean_graph()
+            left = sum(1 for n in jt.dump_all_graphs().nodes_info
+                       if "Var" in n and ",0)" not in n)
+            return masks, left
+
+        def _residue():
+            return sum(1 for n in jt.dump_all_graphs().nodes_info
+                       if "Var" in n and ",0)" not in n)
+
+        # The floor, measured with the same instrument: what the process holds
+        # for its lifetime (`clean_graph()` releases the graph, not the caches).
+        # `left <= 4` was absolute, so it read 29 with an fft having run first.
+        jt.clean_graph()
+        floor = _residue()
+        masks, left = masks_and_residue(10)
+        # The backward of each ternary needs the condition it was given.
+        assert masks == 10, masks
+        # Releasing the graph must leave a constant, not a function of depth.
+        _, left_deeper = masks_and_residue(20)
+        assert left == left_deeper, (left, left_deeper)
+        assert left - floor <= 4, (left, floor)
 
     def test_node_order(self):
         a = jt.nn.Sequential()
@@ -257,23 +301,61 @@ class TestCore(unittest.TestCase):
             y = a(x)
             sgd.step(y*y)
             jt.sync_all()
-        orders = []
+        # Find each layer's update by the *identity* of the Var it produced.
+        #
+        # This used to select the log lines containing "weight" and parse
+        # `fused N/M` out of them. Both anchors are gone: Var names are no
+        # longer written back by `parameters()` (830272fc removed that -- a
+        # query used to mutate the model, and the checkpoint keys then depended
+        # on which level of the tree called `parameters()` first), and the
+        # executor prints `Op(<name> N/M)`, which is only ever "fused ..." when
+        # the op actually fused. The filter therefore matched nothing and the
+        # test asserted on an empty list -- and, failing, kept its frame and so
+        # its ten Linears alive, which is what made `test_number_of_hold_vars`
+        # see 42 held vars afterwards.
+        #
+        # After `step`, each `weight` holder points at a new Var, and exactly
+        # one finished op produced it. That identity is what this test is
+        # about, and it cannot go stale the way a name can.
+        updated = [int(re.search(r"Var\((\d+):", m.weight.debug_msg()).group(1))
+                   for m in a]
+        order_of = {}
+        total_ops = 0
         for l in logs:
             msg = l["msg"]
-            if "Finished" in msg:
-                # print(msg)
-                if "weight" in msg:
-                    # One output is the parameter itself. Plain SGD writes only
-                    # that -- it keeps no velocity buffer when momentum is 0 --
-                    # so this counts the op, and the order checks below are what
-                    # the test is actually about.
-                    assert msg.count("Var") >= 1
-                    order = int(msg.split('fused ')[1].split("/")[0])
-                    # print(order)
-                    orders.append(order)
-        assert len(orders) == 10, orders
-        for i in range(10):
-            assert orders[i] <= 14+i*3
+            if "Finished" not in msg:
+                continue
+            match = re.search(r"Op\([^)]*?(\d+)/(\d+)\)", msg)
+            produced = {int(v) for v in re.findall(r"Var\((\d+):", msg)}
+            if match:
+                total_ops = max(total_ops, int(match.group(2)))
+            for layer, var_id in enumerate(updated):
+                if var_id in produced:
+                    order_of[layer] = int(match.group(1))
+        assert len(order_of) == 10, sorted(order_of.items())
+        # Backward order: the last layer's parameter is ready first. What is
+        # pinned is that the executor does not defer an update behind unrelated
+        # work -- layer 9 lands early and each earlier layer follows within a
+        # few ops of it.
+        #
+        # These three checks used to be a single absolute bound,
+        # `orders[i] <= 14 + i * 3`, which cannot hold at all: the forward pass
+        # alone is 31 of the 81 ops (ten layers, three ops each), so an update
+        # derived from the backward cannot possibly land by op 14. The bound was
+        # carried over unchanged when the anchors above were rewritten in
+        # e81404c0, and it left this test red -- and, by keeping its frame, it
+        # also poisoned `test_number_of_hold_vars`. State the invariant in
+        # terms of the op count so a bigger graph cannot make it impossible:
+        orders = [order_of[9 - i] for i in range(10)]
+        # 1. layer 9 first, layer 0 last, never the other way round.
+        assert orders == sorted(orders), orders
+        # 2. the updates are interleaved with the backward, not bunched after
+        #    it: a serialized executor would put all ten within the last ten ops.
+        assert orders[0] <= total_ops - 11, (orders, total_ops)
+        # 3. each earlier layer follows within a few ops -- not behind
+        #    unrelated work.
+        gaps = [orders[i + 1] - orders[i] for i in range(9)]
+        assert max(gaps) <= 8, (orders, gaps)
 
     def test_bc_bug(self):
         a = jt.zeros((1,1))

@@ -1,12 +1,35 @@
 """Torch-compatible dtype, device, and residency primitives."""
 
 import os
+import threading
 import types as _python_types
 import typing
 from typing import cast
 
 import jittor as jt
 from ..diagnostics import EXPECTED, swallowed
+
+class _CallableBool(int):
+    """A bool that also answers a call, for the two APIs that read it.
+
+    torch's ``dtype.is_complex`` / ``dtype.is_floating_point`` are *attributes*;
+    jittor's dtype predicates are *methods*, and jittor core code calls them on
+    whatever dtype a tensor carries -- under the shim that is this object. Both
+    readings therefore have to work: ``if x.dtype.is_complex:`` and
+    ``if x.dtype.is_complex():``. (``is_float``/``is_int``/``is_bool`` do not
+    need it: torch has no such attribute, so those stay plain methods.)
+    """
+
+    __slots__ = ()
+
+    def __call__(self):
+        return bool(self)
+
+    def __repr__(self):
+        return repr(bool(self))
+
+    __str__ = __repr__
+
 
 class dtype:
     """Immutable Torch dtype identity, independent of Python strings."""
@@ -39,11 +62,11 @@ class dtype:
 
     @property
     def is_floating_point(self):
-        return self._is_fp
+        return _CallableBool(self._is_fp)
 
     @property
     def is_complex(self):
-        return self.name.startswith("complex")
+        return _CallableBool(self.name.startswith("complex"))
 
     @property
     def itemsize(self):
@@ -148,18 +171,89 @@ def _make_dtypes(ns):
     return objs
 
 
-def _dtype_to_str(d):
+def _dtype_to_str(d, *, require_compute=True):
+    """The dtype's canonical Jittor name.
+
+    ``require_compute`` is what ``finfo``/``iinfo`` need to turn off. A cast or
+    a kernel must refuse a dtype this backend has no kernels for, so the
+    default keeps that check; but a range query computes nothing, and the float8
+    and float4 entries the core installer keeps for exactly those queries are
+    otherwise unreachable. With the check on, ``torch.finfo(torch.float8_e4m3fn)``
+    raised, which stopped vLLM at import on ``torch.finfo(...).max``.
+    """
     if d is None:
         return None
     if isinstance(d, dtype):
-        return d._jittor_compute_name
+        return d._jittor_compute_name if require_compute else d.name
     if isinstance(d, str):
         name = d.replace("torch.", "")
         registered = dtype._registry.get(name)
-        return registered._jittor_compute_name if registered is not None else name
+        if registered is None:
+            return name
+        return registered._jittor_compute_name if require_compute else registered.name
     if callable(d) and hasattr(d, "__name__"):
         return d.__name__
     return str(d)
+
+
+def kind_of(value):
+    return type(value).__name__
+
+
+def _check_type(name):
+    """The device type ``name`` designates, or a torch-shaped refusal."""
+    if name not in _DEVICE_TYPES:
+        raise RuntimeError(
+            "Expected one of %s device type at start of device string: %s"
+            % (", ".join(sorted(_DEVICE_TYPES)), name))
+    return name
+
+
+def _is_index(value):
+    """An integer that is an index, not a bool.
+
+    ``numbers.Integral`` rather than ``int``: a numpy integer is not an
+    ``int``, and ``torch.device(np.int64(1))`` works in torch.
+    """
+    import numbers
+    return isinstance(value, numbers.Integral) and not isinstance(value, bool)
+
+
+def _check_index(index):
+    """torch rejects a negative device index rather than storing it."""
+    if index is None:
+        return None
+    if not _is_index(index):
+        raise TypeError("torch.device(): device index must be an int, not %s"
+                        % (kind_of(index),))
+    if index < 0:
+        raise RuntimeError("Device index must not be negative")
+    return int(index)
+
+
+#: The device types ``torch.device`` accepts, plus jittor's own ``npu``
+#: spelling for Ascend. torch rejects anything else with "Expected one of
+#: cpu, cuda, ..."; accepting an unknown name is not harmless here, because
+#: ``_device_is_cuda``/``_device_is_cpu`` both answer False for it and the
+#: tensor then silently stays on the ambient device -- a typo like
+#: ``.to("cuda1")`` became "leave it where it is" with no error.
+_DEVICE_TYPES = frozenset((
+    "cpu", "cuda", "npu", "ipu", "xpu", "mkldnn", "opengl", "opencl", "ideep",
+    "hip", "ve", "fpga", "maia", "xla", "lazy", "vulkan", "mps", "meta", "hpu",
+    "mtia", "privateuseone",
+))
+
+#: The accelerator a bare index names. torch reads ``torch.device(1)`` as
+#: "index 1 of the current accelerator"; here that is CUDA, or Ascend on a
+#: build that has it.
+def _accelerator_type():
+    try:
+        if getattr(jt.compiler, "has_acl", 0):
+            return "npu"
+    except EXPECTED as exc:
+        swallowed("types.py _accelerator_type: jt.compiler.has_acl", exc,
+                  "a bare device index is read as CUDA")
+    return "cuda"
 
 
 class device:
@@ -169,16 +263,40 @@ class device:
 
     def __init__(self, type="cpu", index=None):
         if isinstance(type, device):
+            if index is not None:
+                raise RuntimeError(
+                    "torch.device(): a torch.device argument already carries "
+                    "its index; do not pass a second one")
             self.type, self.index = type.type, type.index
             return
+        # A bare int is an *index*, as in torch: `torch.device(1)` is
+        # `cuda:1`. It used to fall into the else-branch below and become
+        # `device(type='cpu')`, so `x.to(torch.device(1))` moved the tensor to
+        # the host while the caller had asked for a second accelerator -- the
+        # torch.device spelling of the `Tensor.to(1)` hole closed in section 31
+        # of docs/results/2026-09-14-vllm-omni-h3-enablement.md.
+        if isinstance(type, bool):
+            raise TypeError("torch.device(): a bool is not a device")
+        if _is_index(type):
+            self.type, self.index = _accelerator_type(), _check_index(type)
+            return
         if isinstance(type, str):
+            name = type
             if ":" in type:
-                t, i = type.split(":")
-                self.type, self.index = t, int(i)
-            else:
-                self.type, self.index = type, index
-        else:
-            self.type, self.index = "cpu", None
+                if index is not None:
+                    raise RuntimeError(
+                        "torch.device(): type (string) must not include an "
+                        "index because index was passed explicitly: " + type)
+                name, _, raw = type.partition(":")
+                try:
+                    index = int(raw)
+                except ValueError:
+                    raise RuntimeError("Invalid device string: '%s'" % (type,))
+            self.type, self.index = _check_type(name), _check_index(index)
+            return
+        raise TypeError(
+            "torch.device(): expected a string, an int or a torch.device, "
+            "not %s" % (kind_of(type),))
 
     def __str__(self):
         return self.type if self.index is None else f"{self.type}:{self.index}"
@@ -196,8 +314,9 @@ class device:
     def __hash__(self):
         return hash((self.type, self.index))
 
-    # torch allows `with torch.device(...):` as a device context manager.
-    # jittor has a single global backend, so for real devices this is a no-op.
+    # torch allows `with torch.device(...):` as a device context manager: new
+    # tensors built inside the block default to that device. The factory
+    # frontend reads `active_device_context()` to honor it.
     #
     # transformers' from_pretrained builds the model under `with
     # torch.device("meta")` and uses that context to SKIP weight inits (and the
@@ -206,9 +325,12 @@ class device:
     # inits run anyway, modules end up flagged initialized, and the later
     # `_initialize_missing_keys()` step never recomputes non-persistent buffers
     # (e.g. RoPE inv_freq), leaving them as the `torch.empty_like` garbage that
-    # `_move_missing_keys_from_meta_to_device` wrote. We cannot allocate real
-    # meta storage in Jittor, but factories and parameter registration retain a
-    # placeholder marker until checkpoint assignment or explicit migration.
+    # `_move_missing_keys_from_meta_to_device` wrote. We can't allocate real
+    # meta tensors in jittor, but we can make the *meta* context observable: push
+    # it on a thread-local stack so Var.device reports "meta" inside it. Tensors
+    # are still really allocated (harmless -- real weights get loaded over them),
+    # but transformers correctly skips the eager init. A meta block therefore
+    # does not join the default-device stack.
     # An *indexed* CUDA device context is not a no-op any more: torch's
     # `with torch.device("cuda:1"):` makes device 1 the default new tensors
     # are built on, and jittor now has a current device that means exactly
@@ -216,7 +338,9 @@ class device:
     def __enter__(self):
         if self.type == "meta":
             _DEVICE_CTX_STACK.append(self)
-        elif self.type in ("cuda", "npu") and self.index is not None:
+            return self
+        _default_device_stack().append(self)
+        if self.type in ("cuda", "npu") and self.index is not None:
             try:
                 self._prev_index = int(jt.current_device())
                 if self._prev_index != int(self.index):
@@ -228,8 +352,13 @@ class device:
         return self
 
     def __exit__(self, *exc):
-        if self.type == "meta" and _DEVICE_CTX_STACK and _DEVICE_CTX_STACK[-1] is self:
-            _DEVICE_CTX_STACK.pop()
+        if self.type == "meta":
+            if _DEVICE_CTX_STACK and _DEVICE_CTX_STACK[-1] is self:
+                _DEVICE_CTX_STACK.pop()
+        else:
+            stack = _default_device_stack()
+            if stack and stack[-1] is self:
+                stack.pop()
         prev = getattr(self, "_prev_index", None)
         if prev is not None and prev >= 0:
             try:
@@ -247,6 +376,40 @@ class device:
 # Model construction in from_pretrained is single-threaded, so a plain list
 # is sufficient.
 _DEVICE_CTX_STACK: typing.List[device] = []
+
+# Per-thread stack of `with torch.device(...):` blocks that change where new
+# tensors are allocated. torch keeps this in a thread-local DeviceContext
+# (`torch.utils._device`), and so must we: a factory must not pick up a device
+# another thread's block is holding.
+_DEFAULT_DEVICE_CONTEXT = threading.local()
+
+
+def _default_device_stack() -> typing.List[device]:
+    stack = getattr(_DEFAULT_DEVICE_CONTEXT, "stack", None)
+    if stack is None:
+        stack = []
+        _DEFAULT_DEVICE_CONTEXT.stack = stack
+    return stack
+
+
+def active_device_context() -> typing.Optional[device]:
+    """The device an enclosing ``with torch.device(...):`` routes new tensors to.
+
+    ``None`` outside such a block, matching torch's "no context overrides the
+    default device" state.
+    """
+    stack = getattr(_DEFAULT_DEVICE_CONTEXT, "stack", None)
+    return stack[-1] if stack else None
+
+
+def _set_meta_placeholder(v, enabled=True):
+    """Track a real Jittor Var that stands in for a torch meta tensor."""
+    if isinstance(v, jt.Var):
+        try:
+            v._jittor_torch_meta = bool(enabled)
+        except EXPECTED as exc:
+            swallowed("torch/types.py _set_meta_placeholder: set marker", exc)
+    return v
 
 
 Number = typing.Union[int, float, bool]
@@ -357,16 +520,64 @@ def _cuda_index_of(dev):
     return None
 
 
+def _var_is_host_parked(v):
+    """True for a Var that belongs on an accelerator device but currently sits
+    in host memory.
+
+    ``device_id`` names the device a Var *belongs* to; ``location()`` says where
+    its bytes *are*. jittor parks a device Var on the host whenever a CPU op
+    consumes it (``exec_runner.cc`` migrates a CPU op's inputs to the host and
+    keeps ``device_id``), and the executor moves it back when a device op
+    consumes it again. A tensor handed straight to an extension never passes
+    through that per-op migration, so the shim must not report a parked Var as
+    already being on its device: the extension reads a raw device pointer and
+    sees ``is_cuda() == False``.
+    """
+    try:
+        return v.location() == "cpu"
+    except EXPECTED as exc:
+        swallowed("torch/types.py _var_is_host_parked: return v.location() == 'cpu'", exc)
+        return False
+
+
+def current_accelerator_index():
+    """The device a bare ``"cuda"`` / ``.cuda()`` / ``device=None`` names.
+
+    torch resolves all three to ``torch.cuda.current_device()``, measured
+    against real torch 2.13 with 8 devices::
+
+        torch.cuda.set_device(0); x = torch.ones(2, device="cuda:1")
+        x.cuda()        -> cuda:0
+        x.to("cuda")    -> cuda:0
+        torch.cuda.set_device(2)
+        x.cuda()        -> cuda:2
+
+    This layer used to answer it three different ways in three places:
+    ``Tensor.to("cuda")`` on a placed tensor went to the current device (via
+    ``_placement_request``), while ``Tensor.cuda()`` and
+    ``Module.cuda()``/``Module.to("cuda")`` kept the tensor on the device it
+    was already on. So the same question had two answers inside one
+    installation and neither path agreed with torch on all of them.
+    """
+    try:
+        index = int(jt.current_device())
+    except EXPECTED as exc:
+        swallowed("types.py current_accelerator_index: jt.current_device()", exc,
+                  "a bare 'cuda' is read as device 0")
+        return 0
+    return index if index >= 0 else 0
+
+
 def _move_to_cuda_index(v, dev, default_index=None):
     """Return ``v`` on the CUDA device ``dev`` names, copying when it is
     somewhere else.
 
-    ``dev`` without an index -- a bare "cuda" -- means "wherever it already
-    is", which is what torch's ``.to("cuda")`` does for an already-CUDA
-    tensor. Pass the *original* Var's device as ``default_index`` for that
-    case: the residency helpers rebuild a host-resident Var from scratch, and
-    a rebuilt Var takes the current device, so without this a ``cuda:1``
-    tensor comes back on ``cuda:0``."""
+    ``dev`` without an index -- a bare "cuda" -- names the *current* device, as
+    in torch; pass ``current_accelerator_index()`` as ``default_index`` for
+    that case. ``default_index`` exists at all because the residency helpers
+    rebuild a host-resident Var from scratch and a rebuilt Var takes the
+    current device, so a caller that does mean "put it back where it was" has
+    to say which device that is."""
     idx = _cuda_index_of(dev)
     if idx is None:
         idx = default_index
@@ -378,31 +589,13 @@ def _move_to_cuda_index(v, dev, default_index=None):
         swallowed("types.py _move_to_cuda_index: current = int(v.device_id)", exc,
                   "the Var is left where it is instead of being moved")
         return v
-    if current < 0 or current == idx:
+    # Matching ``device_id`` alone would accept a Var the executor has parked on
+    # the host, leaving ``x.cpu()``-style storage in place while the caller
+    # asked for the device. Native ``Var.to_device`` already tests residency
+    # (`location() == "device"`) for exactly this reason.
+    if current < 0 or (current == idx and not _var_is_host_parked(v)):
         return v
     return v.to_device(idx)
-
-
-def _device_is_meta(dev):
-    """True if a torch device= argument explicitly designates meta."""
-    if dev is None:
-        return False
-    t = getattr(dev, "type", None)
-    if t is not None:
-        return t == "meta"
-    if isinstance(dev, str):
-        return dev.split(":")[0] == "meta"
-    return False
-
-
-def _set_meta_placeholder(v, enabled=True):
-    """Track a real Jittor Var that stands in for a torch meta tensor."""
-    if isinstance(v, jt.Var):
-        try:
-            v._jittor_torch_meta = bool(enabled)
-        except EXPECTED as exc:
-            swallowed("torch/types.py _set_meta_placeholder: set marker", exc)
-    return v
 
 
 def _var_is_cpu_resident(v):
@@ -453,7 +646,6 @@ def _make_cpu_resident(v, inplace=False):
     """
     if not isinstance(v, jt.Var):
         return v
-    _set_meta_placeholder(v, False)
     if v.placement_backend >= 0:
         if v.placement_backend == 0:
             return v
@@ -509,14 +701,17 @@ def _make_cuda_resident(v, force=False, inplace=False, device=None):
     """
     if not isinstance(v, jt.Var):
         return v
-    _set_meta_placeholder(v, False)
     if v.placement_backend >= 0:
         from .frontend import _placement_request
         request = device
         if request is None:
             request = "cuda:%d" % v.device_id if v.placement_backend else "cuda"
         backend, index = _placement_request(jt, request)
-        if v.placement_backend == backend and v.device_id == index:
+        # The placement and the device index agreeing means the Var *belongs*
+        # there, not that its bytes are there: the executor parks a device Var
+        # in host memory when a CPU op consumes it and keeps both fields. Asking
+        # for the device must still move such a Var (see _var_is_host_parked).
+        if v.placement_backend == backend and v.device_id == index and not _var_is_host_parked(v):
             return v
         moved = v.to_device(index)
         if inplace:
@@ -534,15 +729,6 @@ def _make_cuda_resident(v, force=False, inplace=False, device=None):
         swallowed("torch/types.py _make_cuda_resident: loc = v.location()", exc)
         loc = None
     if loc == "device":
-        try:
-            v._jittor_torch_force_cpu = False
-            v._jittor_torch_force_cuda = True
-        except EXPECTED as exc:
-            swallowed(
-                "torch/types.py _make_cuda_resident: set CUDA residency hints",
-                exc,
-                "the Var will report residency from its native placement",
-            )
         return v
     if v.numel() == 0:
         out = v if inplace or loc != "cpu" else v.clone()

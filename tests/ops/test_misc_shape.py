@@ -57,7 +57,10 @@ class TestMiscShape(unittest.TestCase):
         grad_a, grad_b = jt.grad((product * weights).sum(), [a, b])
         self.assert_close(grad_a, [9.0, 27.0])
         self.assert_close(grad_b, [10.0, 14.0, 18.0])
-        with self.assertRaisesRegex(AssertionError, "only accepts 1-D Vars"):
+        # ValueError, not a bare assert: an assert carries no diagnostic and
+        # is removed entirely under `python -O`, so input validation must not
+        # rely on it. torch rejects a non-1-D operand here too.
+        with self.assertRaisesRegex(ValueError, "only accepts 1-D Vars"):
             misc.cartesian_prod(jt.ones((1, 1)), b)
 
     def test_block_diag_values_empty_errors_and_gradients(self):

@@ -11,7 +11,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "adapters"))
 from jittor_adapters import transformers, torchmetrics
-from jittor_adapters._common import UnsupportedAdapterVersion
+from jittor_adapters._common import UnsupportedAdapterVersion, require_version
 
 # Load the actual registration mechanism without importing the native runtime.
 native = types.ModuleType("jittor")
@@ -29,6 +29,20 @@ class AdapterContracts(unittest.TestCase):
             "jittor.compat.module_patcher": patcher,
         })
         self.modules.start()
+        # These cases build *fake* `transformers`/`torchmetrics` packages, and a
+        # real one already in `sys.modules` wins over the fake however the temp
+        # directory is put on `sys.path`: `importlib.import_module` returns the
+        # cached module. Whether one is there depends on which other file the
+        # session collected first -- measured, a module that imports the real
+        # package at collection time made `..._npu_probe_rejects_real_pytorch_extension`
+        # fail with `module transformers has no attribute probe_result` and
+        # `..._unsupported_transformers_version_fails_real_import` fail with
+        # `UnsupportedAdapterVersion not raised`, while the same file ran green on
+        # its own. Evicted for the duration; `self.modules.stop()` restores them.
+        for name in tuple(sys.modules):
+            if name in ("transformers", "torchmetrics") or name.startswith(
+                    ("transformers.", "torchmetrics.")):
+                sys.modules.pop(name)
         self.import_function = builtins.__import__
         self.saved_registry = dict(patcher._REGISTRY)
         patcher._REGISTRY.clear()
@@ -59,6 +73,65 @@ class AdapterContracts(unittest.TestCase):
             "def is_torchvision_v2_available():\n"
             "    raise RuntimeError('unavailable torchvision version must not be parsed')\n"
             "BACKENDS_MAPPING = {'torchvision': (is_torchvision_available, 'torchvision unavailable')}\n")
+
+    #: The shape transformers 5.x ships: the version is assigned while the
+    #: package executes, then the module is handed to a ``_LazyModule`` and the
+    #: namespace entry is dropped. Once the import is over the value is only
+    #: reachable through ``__getattr__`` -- which is the state that was read.
+    _LAZY_INIT = '''
+import sys
+
+__version__ = %r
+
+from .utils.import_utils import is_torch_npu_available
+
+
+class _LazyModule(type(sys)):
+    _version = %r
+
+    def __getattr__(self, name):
+        if name == "__version__":
+            return type(self)._version
+        raise AttributeError(name)
+
+
+sys.modules[__name__].__class__ = _LazyModule
+del __version__
+'''
+
+    def fake_lazy_transformers(self, root, version):
+        self.fake_transformers(root, version)
+        (Path(root) / "transformers" / "__init__.py").write_text(
+            self._LAZY_INIT % (version, version))
+
+    def test_a_version_reachable_only_through_getattr_is_accepted(self):
+        """The version lookup used to read the namespace dict, not the module.
+
+        ``require_version`` did ``vars(module).get("__version__")``. Transformers
+        5.x ships the package as a ``_LazyModule`` that carries the version in
+        ``extra_objects`` and drops the namespace entry, so once the package has
+        been imported that lookup reports ``None`` and the adapter rejects
+        5.5.3 -- a version ``SUPPORTED_VERSIONS`` lists. The rejection is a
+        ``@required_patch``, so it escapes ``install_module_patches`` and took
+        five tests in ``compat/tests/torch/test_compat_mechanisms.py`` with it.
+
+        The precondition asserted below is what gives this case teeth: if the
+        fake ever keeps ``__version__`` in the dict, the case stops modelling
+        the shape that was broken and the check below passes for the wrong
+        reason.
+        """
+        with tempfile.TemporaryDirectory() as root:
+            self.fake_lazy_transformers(root, "5.5.3")
+            sys.path.insert(0, root)
+            try:
+                module = importlib.import_module("transformers")
+                self.assertNotIn("__version__", vars(module))
+                self.assertEqual(module.__version__, "5.5.3")
+                self.assertEqual(
+                    require_version("transformers", transformers.SUPPORTED_VERSIONS),
+                    "5.5.3")
+            finally:
+                sys.path.remove(root)
 
     def test_transformers_npu_probe_rejects_real_pytorch_extension(self):
         transformers.register(patcher.register_module_patch)

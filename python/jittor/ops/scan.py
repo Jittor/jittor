@@ -100,16 +100,34 @@ def _scan_2d(x, reverse):
 
 def _scan_2d_cpu(x, reverse):
     import jittor as jt
+    from jittor._core.dtypes import dtype_name as _dtype_name
     index = "n - 1 - k" if reverse else "k"
+    # The running sum is carried in float32 for a half input, not in the
+    # element type. Two reasons, and the first one is that `y_type acc = 0;
+    # acc += ...` did not compile at all for float16/bfloat16: the host structs
+    # in `src/type/fp16_compute.h` carry comparisons and an implicit conversion
+    # to float, and no compound assignment, so `jt.cumsum` on a half Var died
+    # in the C++ compiler with "no match for 'operator+=' (operand types are
+    # 'jittor::float16' and 'jittor::float16')" -- an op that simply did not
+    # exist on CPU for these two dtypes.
+    #
+    # The second is that accumulating in the element type would be the wrong
+    # answer even where it compiles. A scan is a reduction that keeps every
+    # partial, so the error grows with the position: torch runs the scan in
+    # `acc_type<T>` (float for both half types) and rounds once per output, and
+    # over 4096 columns that is 4.55e-4 from the exact value for float16 where
+    # a float16 accumulator is off by ~1e-2. The output stays at the input's
+    # dtype either way, which is what torch returns.
+    acc_type = "float32" if _dtype_name(x.dtype) in ("float16", "bfloat16") else "y_type"
     return jt.code(x.shape, x.dtype, [x], cpu_src=f'''
         @alias(x, in0)
         @alias(y, out0)
         int64 rows = y_shape0, n = y_shape1;
         for (int64 r = 0; r < rows; ++r) {{
-            y_type acc = 0;
+            {acc_type} acc = 0;
             for (int64 k = 0; k < n; ++k) {{
                 int64 i = {index};
-                acc += @x(r, i);
+                acc += ({acc_type})@x(r, i);
                 @y(r, i) = acc;
             }}
         }}
@@ -195,7 +213,19 @@ def cumprod(x,dim=None):
     sign = (
         1 - 2 * (jt.misc.cumsum((x < 0).int32(), dim=dim) % 2)
     ).float32()
-    return sign * mag_cp
+    out = sign * mag_cp
+    # Back to the input's dtype for the two half types. `jt.exp` is on the
+    # white list (`src/type/nano_string.cc`) so it answers in float32 whatever
+    # it was given, and `sign` is float32 outright, so a float16 input came out
+    # of here as a float32 -- a silent widening in the middle of a half model,
+    # where torch 2.13 returns float16 for a float16 input on both devices.
+    # The narrowing also restores torch's overflow: the magnitudes are carried
+    # through exp/log in float32, so a product that leaves float16's range came
+    # back finite here where torch gives `inf`.
+    from jittor._core.dtypes import dtype_name as _dtype_name
+    if _dtype_name(x.dtype) in ("float16", "bfloat16"):
+        return out.cast(x.dtype)
+    return out
 
 
 _CumMax = _collections.namedtuple("cummax", ["values", "indices"])

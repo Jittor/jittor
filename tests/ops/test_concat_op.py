@@ -183,5 +183,61 @@ class TestConcatOp(unittest.TestCase):
         '''
 
 
+class TestConcatOffTheAmbientDevice(unittest.TestCase):
+    """The destination must be allocated where the inputs are, not where we are.
+
+    `jt.empty` follows jittor's *ambient* device, and a tensor moved with
+    `.to_device(1)` carries no explicit placement (`placement_backend` stays -1),
+    so the `placement_scope_like` guard in `_concat_direct` did nothing for it:
+    concatenating device-1 tensors inside a process whose current device is 0
+    built the destination on device 0, and the `setitem` filling it was rejected
+    by `dispatch_context` ("Expected all inputs to be on the same device, but
+    found 0 and 1"). MiniMax-H3's text encoder hits this on rank 1 -- its rotary
+    does `torch.cat` on device-1 tensors -- which is where the TP2 request died.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        if not _test_capability.check_accelerator('cuda', backend=jt).enabled:
+            raise unittest.SkipTest("No CUDA found")
+        if int(jt.get_device_count()) < 2:
+            raise unittest.SkipTest("needs two visible CUDA devices")
+
+    @jt.flag_scope(use_cuda=1)
+    def test_concat_lands_on_the_inputs_device(self):
+        jt.flags.device_id = 0
+        try:
+            for dim in (0, 1):
+                a = jt.randn((2, 3)).astype("float16").to_device(1)
+                b = jt.randn((2, 3)).astype("float16").to_device(1)
+                before = int(jt.current_device())
+                out = jt.concat([a, b], dim=dim)
+                out.sync()
+                self.assertEqual(int(out.device_id), 1)
+                self.assertEqual(
+                    before, int(jt.current_device()),
+                    "concat leaked a device change into the caller")
+            # three inputs, and a device-0 case to show nothing else moved
+            c = jt.randn((2, 3)).astype("float16").to_device(1)
+            self.assertEqual(int(jt.concat([a, b, c], dim=1).sync().device_id), 1)
+            self.assertEqual(
+                int(jt.concat([a.to_device(0), b.to_device(0)], dim=1).sync().device_id),
+                0)
+        finally:
+            jt.flags.device_id = 0
+
+    @jt.flag_scope(use_cuda=1)
+    def test_concat_values_are_correct_off_the_ambient_device(self):
+        jt.flags.device_id = 0
+        try:
+            a = jt.array(np.arange(6, dtype=np.float32).reshape(2, 3)).to_device(1)
+            b = jt.array(np.arange(6, 12, dtype=np.float32).reshape(2, 3)).to_device(1)
+            got = jt.concat([a, b], dim=1).numpy()
+            np.testing.assert_allclose(
+                got, np.concatenate([a.numpy(), b.numpy()], axis=1))
+        finally:
+            jt.flags.device_id = 0
+
+
 if __name__ == "__main__":
     unittest.main()

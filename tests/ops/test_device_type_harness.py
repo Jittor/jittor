@@ -191,27 +191,70 @@ def test_rocm_needs_more_than_use_cuda():
     assert cu.device_flags_for("cpu") == {"use_cuda": 0}
 
 
+#: The variable through which a gate hands its device selection to the harness.
+_SELECTION = "JITTOR_TEST_DEVICES"
+
+
 def _noxfile_device_selections():
+    """Every device selection noxfile.py writes, as ``(lineno, value)`` pairs.
+
+    A gate spells the selection three ways -- a subscript assignment, a key in
+    an ``env.update`` dict, and a ``setdefault`` default -- and reading only the
+    first would let the other two name a device nobody knows while this guard
+    reported green. ``None`` is the noxfile's own "leave it unset" spelling, the
+    same convention ``_isolated_outer_environment`` uses to drop a variable, and
+    hands the choice to the build rather than the gate.
+    """
     tree = ast.parse((REPO_ROOT / "noxfile.py").read_text(encoding="utf-8"))
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Constant):
-            continue
-        for target in node.targets:
-            if (
-                isinstance(target, ast.Subscript)
-                and isinstance(target.slice, ast.Constant)
-                and target.slice.value == "JITTOR_TEST_DEVICES"
-            ):
-                yield node.lineno, node.value.value
+        # env["JITTOR_TEST_DEVICES"] = "cpu"
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
+            for target in node.targets:
+                if (
+                    isinstance(target, ast.Subscript)
+                    and isinstance(target.slice, ast.Constant)
+                    and target.slice.value == _SELECTION
+                ):
+                    yield node.lineno, node.value.value
+        # env.update({..., "JITTOR_TEST_DEVICES": "cpu", ...})
+        elif isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values):
+                if (
+                    isinstance(key, ast.Constant)
+                    and key.value == _SELECTION
+                    and isinstance(value, ast.Constant)
+                ):
+                    yield value.lineno, value.value
+        # env.setdefault("JITTOR_TEST_DEVICES", os.environ.get(..., "cpu"))
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "setdefault"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and node.args[0].value == _SELECTION
+        ):
+            for default in node.args[1:]:
+                for inner in ast.walk(default):
+                    # The variable's own name appears again inside the lookup
+                    # that supplies the default; it is not a device name.
+                    if (
+                        isinstance(inner, ast.Constant)
+                        and isinstance(inner.value, str)
+                        and inner.value != _SELECTION
+                    ):
+                        yield inner.lineno, inner.value
 
 
 def test_the_gate_and_the_harness_share_one_device_enumeration():
     """The gate's device names and the harness's are the same list, or a gate runs nothing."""
     selections = list(_noxfile_device_selections())
     assert selections, "noxfile.py sets JITTOR_TEST_DEVICES nowhere"
+    named = [(line, value) for line, value in selections if value is not None]
+    assert named, "every gate leaves JITTOR_TEST_DEVICES unset"
     unknown = [
         (line, value)
-        for line, value in selections
+        for line, value in named
         for name in value.split(",")
         if name.strip() and name.strip() not in cu.KNOWN_DEVICE_TYPES
     ]

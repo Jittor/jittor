@@ -15,8 +15,6 @@
 #include "curand_wrapper.h"
 #include "core/executor.h"
 #include "runtime/device.h"
-#include "runtime/cuda_streams.h"
-#include "stream_compat.h"
 
 namespace jittor {
 
@@ -52,8 +50,6 @@ void CurandRandomOp::jit_run() {
     auto generator = curand_bind_stream();
     index_t num = output->num;
     if (num == 0) return;
-    bool snapshot_safe = @if(@strcmp(@R,uniform)==0,sizeof(T) == sizeof(float),false);
-    curand_check_offset_advance(snapshot_safe ? uint64(num) : 0);
     // curandGenerateUniform has no parity requirement; curandGenerateNormal
     // wants an even count for pseudorandom generators. The old code rounded
     // the count up for both and wrote one element past the end of the output
@@ -66,9 +62,18 @@ void CurandRandomOp::jit_run() {
     // and takes the last element from a two-element scratch buffer, so nothing
     // is written outside the output. An odd-length normal draw still consumes
     // num+1 values; that is inherent to the even-count requirement.
+    // Count what this draw costs the generator, so a checkpoint has a position
+    // to save. Measured against CURAND_RNG_PSEUDO_DEFAULT: a uniform draw of n
+    // costs n and a normal draw of n costs n/2, whatever the precision, and a
+    // mixed history costs the sum. The odd-length normal below draws num-1 and
+    // then 2, so it costs (num-1)/2 + 1.
     @if(@strcmp(@R,uniform)==0,
+        curand_advance(current_device(), num);
         checkCudaErrors(curandGenerateUniform@TT (generator, x, num));
     ,
+        index_t normal_cost = num/2;
+        if (num & 1) normal_cost = (num-1)/2 + 1;
+        curand_advance(current_device(), normal_cost);
         if (num & 1) {
             if (num > 1)
                 checkCudaErrors(curandGenerateNormal@TT (generator, x, num-1, 0, 1));
@@ -76,13 +81,12 @@ void CurandRandomOp::jit_run() {
             T* tail = (T*)runtime_executor().temp_allocator->alloc(2*sizeof(T), tail_allocation);
             checkCudaErrors(curandGenerateNormal@TT (generator, tail, 2, 0, 1));
             checkCudaErrors(cudaMemcpyAsync(x+num-1, tail, sizeof(T),
-                cudaMemcpyDeviceToDevice, cuda_compute_stream(current_device())));
+                cudaMemcpyDeviceToDevice, cudaStreamPerThread));
             runtime_executor().temp_allocator->free(tail, 2*sizeof(T), tail_allocation);
         } else {
             checkCudaErrors(curandGenerateNormal@TT (generator, x, num, 0, 1));
         }
     )
-    curand_advance_offset(uint64(num), snapshot_safe);
 }
 #endif // JIT_cpu
 #endif // JIT

@@ -79,18 +79,45 @@ def conv_transpose_naive(x, w):
 
 def is_fused(x):
     return 's0' in x.debug_msg()
-    
+
+
+def _node_rank(node):
+    """Rank of the var a graph-dump line describes; 0 for anything else."""
+    return len(node.split('[')[-1].split(',')) - 1
+
+
+def _node_buffer(node):
+    """The buffer address a graph-dump line ends its head with, as written."""
+    return node.split('[')[0].rsplit(',', 1)[-1].rstrip(')')
+
+
 def check_fused(dim):
+    """No intermediate wider than ``dim`` was materialized.
+
+    "Materialized" used to mean "finished" and nothing else. That stopped being
+    the same question when ``expand`` became a storage descriptor: a broadcast
+    operand now shares its base's buffer with stride 0 on the broadcast axes,
+    so it is finished the moment the base is, while occupying no memory of its
+    own. Measured on this file's own ``conv``: ``w.broadcast_var(xx)`` reports
+    rank 7 over ``[3,12,12,3,3,3,4]`` and carries the *same* pointer as the
+    ``[3,3,3,4]`` weight, strides ``[0,0,0,36,12,4,1]`` -- 108 floats, not
+    46656. Reading finishedness alone called that an unfused intermediate.
+
+    So a wide var counts against the fusion only when it owns its buffer.
+    """
     jt.clean()
     graph = jt.dump_all_graphs()
+    narrow_buffers = set()
+    for node in graph.nodes_info:
+        buffer = _node_buffer(node)
+        if _node_rank(node) <= dim and buffer != '0':
+            narrow_buffers.add(buffer)
     fused = True
     has_v = False
     for node in graph.nodes_info:
-        shape = node.split('[')[-1].split(',')
-        ndim = len(shape)-1
-        if ndim>dim:
+        if _node_rank(node) > dim:
             has_v = True
-            if 's0' not in node:
+            if 's0' not in node and _node_buffer(node) not in narrow_buffers:
                 fused = False
     assert fused and has_v, graph.nodes_info
 

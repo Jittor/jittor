@@ -47,12 +47,17 @@ def test_batched_matmul_calls_selected_library_and_filters_dtype(monkeypatch, us
 def test_conv2d_priority_and_explicit_depthwise_disable(monkeypatch, use_cuda):
     import jittor as jt
     from jittor._runtime.dispatch import select_kernel
-    from jittor.nn.backends import cudnn
+    from jittor.nn.backends import cudnn, onednn
     from jittor.nn.modules import depthwise
 
     if use_cuda and not _test_capability.check_accelerator('cuda', backend=jt).enabled:
         pytest.skip("CUDA runtime required")
     monkeypatch.setattr(cudnn, "get_library_ops", lambda name: object())
+    # Both rows are answered from a stub, so which kernel this picks does not
+    # depend on whether some earlier file in the process happened to load
+    # oneDNN -- the CPU row asks for the library, and its loader is lazy.
+    monkeypatch.setattr(onednn, "get_library_ops",
+                        lambda name, load=False: SimpleNamespace(mkl_conv=object()))
     with jt.flag_scope(use_cuda=use_cuda):
         x = jt.array(np.zeros((1, 2, 5, 5), dtype=np.float32))
         weight = jt.array(np.zeros((2, 1, 3, 3), dtype=np.float32))
@@ -63,7 +68,12 @@ def test_conv2d_priority_and_explicit_depthwise_disable(monkeypatch, use_cuda):
             assert selected is depthwise._depthwise_conv2d
             assert disabled is cudnn._try_cudnn_conv2d.__wrapped__
         else:
-            assert selected is None and disabled is None
+            # The CPU row is oneDNN's, and the depthwise switch is a CUDA-only
+            # row, so it does not change the answer here. This used to assert
+            # None on both: there was no CPU row at all, and a CPU convolution
+            # reached oneDNN only through a tuner relay that no longer fires.
+            assert selected is onednn._try_onednn_conv2d.__wrapped__
+            assert disabled is onednn._try_onednn_conv2d.__wrapped__
 
 
 def test_projected_rnn_declines_library_without_loading_it(monkeypatch):

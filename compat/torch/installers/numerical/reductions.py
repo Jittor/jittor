@@ -205,6 +205,19 @@ def logsumexp(input, dim, keepdim=False):
     )
     m = input.max(dim, keepdims=True)
     out = m + jt.log(jt.exp(input - m).sum(dim, keepdims=True))
+    # Back to the input's dtype for the two half types. The shift-exp-sum-log
+    # chain is computed in float32 whatever it is handed -- `exp` is on jittor's
+    # white list (`src/type/nano_string.cc`), so it widens -- and that is the
+    # right width to compute it at. But torch 2.13 returns float16 for a
+    # float16 input and bfloat16 for a bfloat16 one, on CPU and on CUDA, and
+    # this handed back a float32: a silent widening in the middle of a half
+    # model, at the op transformers reach for in every attention and every
+    # cross-entropy. `jittor.nn.functional.softmax.logsumexp` carries the same
+    # narrowing for the native spelling.
+    name = str(input.dtype).replace("torch.", "")
+    if name in ("float16", "bfloat16") and \
+            str(out.dtype).replace("torch.", "") != name:
+        out = out.cast(name)
     if keepdim:
         return out
     dims = [dim] if isinstance(dim, int) else list(dim)

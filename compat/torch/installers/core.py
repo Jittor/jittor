@@ -13,10 +13,19 @@ from ..functional import (
     _torch_norm_impl,
     _torch_where_select,
 )
-from ..grad import (
-    _GradScaler,
+from ..grad_scaler import _GradScaler
+from ..amp import (
+    autocast_cache_enabled as _autocast_cache_enabled,
+    autocast_configured_dtype as _autocast_configured_dtype,
+    autocast_decrement_nesting,
+    autocast_increment_nesting,
     autocast_is_enabled as _autocast_is_enabled,
     autocast_dtype as _autocast_dtype,
+    clear_autocast_cache,
+    is_autocast_available,
+    set_autocast_cache_enabled_state as _set_autocast_cache_enabled,
+    set_autocast_dtype_state as _set_autocast_dtype,
+    set_autocast_enabled_state as _set_autocast_enabled,
 )
 from ..types import (
     _dtype_to_str,
@@ -387,17 +396,9 @@ def _manual_seed(s):
     ctx = _misc_context()
     g = ctx.jittor_module
     s = int(s)
-    if s < -(1 << 63) or s >= 1 << 64:
-        raise RuntimeError("manual_seed expects a seed in the supported 64-bit range")
-    s %= 1 << 64
-    # Torch random factories consume their old stream before manual_seed
-    # returns. Jittor evaluates lazily, so materialize the currently live graph
-    # before resetting its stream; otherwise pending model initialization runs
-    # under the new sampling seed and shifts every later random draw.
-    jt.set_cpu_seed(s)
-    if g.cuda.is_available():
-        g.cuda.manual_seed_all(s)
     ctx.state["core_misc"]["seed"] = s
+    if hasattr(jt, "set_global_seed"):
+        jt.set_global_seed(s)
     return g
 
 
@@ -422,29 +423,23 @@ def _seed(value=_seed_sentinel):
 
 
 def _get_rng_state():
-    return _encode_rng_state(jt.get_cpu_rng_state())
-
-
-def _encode_rng_state(state):
-    g = _misc_context().jittor_module
-    data = _np.frombuffer(state.encode("ascii"), dtype=_np.uint8).copy()
-    return g.tensor(data, dtype=g.uint8, device="cpu")
-
-
-def _decode_rng_state(state):
-    ctx = _misc_context()
-    if not isinstance(state, ctx.state["Var"]):
-        raise TypeError("RNG state must be a CPU uint8 tensor")
-    if _jittor_dtype_name(state.dtype) != "uint8" or state.ndim != 1 \
-            or str(state.device).split(":", 1)[0] != "cpu":
-        raise TypeError("RNG state must be a one-dimensional CPU uint8 tensor")
-    return state.numpy().tobytes().decode("ascii")
+    return jt.array([initial_seed()], dtype="int64")
 
 
 def _set_rng_state(state):
     ctx = _misc_context()
-    jt.set_cpu_rng_state(_decode_rng_state(state))
-    ctx.state["core_misc"]["seed"] = int(jt.get_cpu_initial_seed())
+    Var = ctx.state["Var"]
+    try:
+        if isinstance(state, Var):
+            state = int(state.reshape(-1)[0].item())
+        elif hasattr(state, "__len__"):
+            state = int(list(state)[0])
+        else:
+            state = int(state)
+    except EXPECTED as exc:
+        swallowed("torch/installers/core.py _set_rng_state: if isinstance(state, Var):", exc)
+        state = initial_seed()
+    _manual_seed(state)
 
 
 class PyTorchFileReader:
@@ -462,13 +457,61 @@ def _is_autocast_enabled(device_type=None, *a, **k):
     return _autocast_is_enabled(device_type)
 
 
-def _get_autocast_dtype(device_type=None, *a, **k):
-    ctx = _misc_context()
-    g = ctx.jittor_module
-    name = _autocast_dtype(device_type)
-    if name is None:
-        return getattr(g, "float32", "float32")
-    return getattr(g, name, name)
+def _torch_dtype_object(name):
+    """The torch dtype object for a jittor dtype name, e.g. "float16"."""
+    return getattr(_misc_context().jittor_module, name, name)
+
+
+def _get_autocast_dtype(device_type, *a, **k):
+    """torch.get_autocast_dtype: the *configured* fast dtype for that device.
+
+    It used to return the dtype only while a region was open and float32
+    otherwise, which is not what torch answers -- torch keeps a per-device
+    setting that defaults to float16 (bfloat16 on the CPU) and that
+    ``set_autocast_dtype`` mutates, and transformers reads it *before*
+    entering a region to decide what to cast weights to.
+    """
+    return _torch_dtype_object(_autocast_configured_dtype(device_type))
+
+
+def set_autocast_dtype(device_type, dtype=None, *a, **k):
+    """torch.set_autocast_dtype: set the fast dtype for one device type."""
+    return _set_autocast_dtype(device_type, dtype)
+
+
+def get_autocast_cpu_dtype(*a, **k):
+    """Deprecated torch spelling of get_autocast_dtype("cpu")."""
+    return _torch_dtype_object(_autocast_configured_dtype("cpu"))
+
+
+def set_autocast_cpu_dtype(dtype, *a, **k):
+    """Deprecated torch spelling of set_autocast_dtype("cpu", dtype)."""
+    return _set_autocast_dtype("cpu", dtype)
+
+
+def set_autocast_gpu_dtype(dtype, *a, **k):
+    """Deprecated torch spelling of set_autocast_dtype("cuda", dtype)."""
+    return _set_autocast_dtype("cuda", dtype)
+
+
+def is_autocast_cpu_enabled(*a, **k):
+    """Deprecated torch spelling of is_autocast_enabled("cpu")."""
+    return _autocast_is_enabled("cpu")
+
+
+def set_autocast_cpu_enabled(enabled, *a, **k):
+    """Deprecated torch spelling of set_autocast_enabled("cpu", enabled)."""
+    return _set_autocast_enabled("cpu", enabled)
+
+
+def is_autocast_cache_enabled(*a, **k):
+    """torch.is_autocast_cache_enabled."""
+    return _autocast_cache_enabled()
+
+
+def set_autocast_cache_enabled(enabled, *a, **k):
+    """torch.set_autocast_cache_enabled."""
+    return _set_autocast_cache_enabled(enabled)
 
 
 def where(condition, input=None, other=None, *, out=None):
@@ -535,7 +578,10 @@ def segment_reduce(data, reduce="sum", *, lengths=None, **kw):
 
 class finfo:
     def __init__(self, dt):
-        ds = _dtype_to_str(dt) or "float32"
+        # A range query computes nothing: resolve the name without demanding
+        # compute support, or the float8/float4 entries in _FINFO_SPECIAL are
+        # unreachable and `torch.finfo(torch.float8_e4m3fn)` raises.
+        ds = _dtype_to_str(dt, require_compute=False) or "float32"
         if ds in _FINFO_SPECIAL:
             mn, mx, eps, tiny, bits = _FINFO_SPECIAL[ds]
             self.min, self.max, self.eps, self.tiny, self.smallest_normal = (
@@ -561,7 +607,8 @@ class finfo:
 
 class iinfo:
     def __init__(self, dt):
-        ds = _dtype_to_str(dt) or "int64"
+        # Same as finfo: an integer range query computes nothing.
+        ds = _dtype_to_str(dt, require_compute=False) or "int64"
         info = _np.iinfo(_np.dtype(ds))
         self.min = int(info.min)
         self.max = int(info.max)
@@ -600,21 +647,45 @@ def _category(name):
 
 
 def result_type(a, b):
+    """torch's ``result_type`` for two operands.
+
+    torch ranks operands in three tiers -- tensors with dimensions, 0-dim
+    tensors, Python scalars (c10 ``ResultTypeState``: dimResult, zeroResult,
+    wrappedResult). A weaker operand joins promotion only when its category
+    is higher than the stronger one's; within a tier the pair promotes as
+    usual. So ``half_tensor * torch.tensor(2.0)`` is half, like
+    ``half_tensor * 2.0``. The 0-dim tier used to count as a full tensor:
+    diffusers' schedulers multiply float16 latents by 0-dim float32 entries of
+    ``alphas_cumprod``, which turned every sampling step's latents float32.
+    """
     ctx = _misc_context()
     _DTYPE_OBJS = ctx.state["dtypes"]
-    (na, pa), (nb, pb) = (_result_type_info(a), _result_type_info(b))
-    if pa == pb:
-        res = _promote_pair(na, nb)
-    elif pa > pb:
+    (na, la), (nb, lb) = (_result_type_info(a), _result_type_info(b))
+    if la > lb:
+        res = _promote_pair(na, nb) if _category(na) > _category(nb) else nb
+    elif lb > la:
         res = _promote_pair(na, nb) if _category(nb) > _category(na) else na
     else:
-        res = _promote_pair(na, nb) if _category(na) > _category(nb) else nb
+        res = _promote_pair(na, nb)
     return _DTYPE_OBJS.get(res, res)
 
 
 def can_cast(from_dtype, to_dtype):
+    """torch's ``canCast``: three refusals by category, not by width.
+
+    This is not numpy's "safe cast" rule. ``c10/core/ScalarType.h`` refuses
+    exactly complex -> non-complex, floating -> integral, and non-bool -> bool;
+    everything else is allowed, so ``can_cast(int64, int32)`` is True in torch
+    and was False here, and so was every other narrowing pair. Verified
+    against torch 2.13 over the whole 10x10 table.
+    """
     f, t = (_dtype_to_str(from_dtype), _dtype_to_str(to_dtype))
-    return _promote_pair(f, t) == t
+    source, target = _category(f), _category(t)
+    if source == 3 and target != 3:
+        return False
+    if source == 2 and target == 1:
+        return False
+    return not (source != 0 and target == 0)
 
 
 def set_default_dtype(d):
@@ -631,8 +702,19 @@ def set_default_dtype(d):
 
 
 def get_default_device():
+    """torch.get_default_device: CPU until `set_default_device` says otherwise.
+
+    Used to report cuda whenever `jt.flags.use_cuda` was on, which conflates
+    "the accelerator is enabled" with "the accelerator is the default device".
+    torch keeps those apart: CUDA being available never moves the default off
+    the CPU. See `compat/torch/frontend.py::default_device`.
+    """
     ctx = _misc_context()
     g = ctx.jittor_module
+    from ..frontend import default_device as _recorded_default
+    spelling = _recorded_default()
+    if str(spelling).split(":")[0] == "cpu":
+        return g.device("cpu")
     if not jt.flags.use_cuda:
         return g.device("cpu")
     try:
@@ -647,6 +729,85 @@ def get_default_device():
     return g.device("cuda", index if index >= 0 else 0)
 
 
+def get_device_module(device=None):
+    """torch.get_device_module: the module that implements a device's runtime.
+
+    No argument means "the current accelerator", as in torch; under the facade
+    that is CUDA whenever jittor's ``use_cuda`` flag is on. MiniMax-H3's video
+    VAE stores the result and drives its ``device()`` scope and ``manual_seed``
+    through it, so a missing name aborted engine construction.
+    """
+    ctx = _misc_context()
+    g = ctx.jittor_module
+    resolved = get_default_device() if device is None else device
+    name = getattr(resolved, "type", None) or str(resolved).split(":")[0]
+    if name in ("cuda", "gpu"):
+        return g.cuda
+    if name == "npu" and hasattr(g, "npu"):
+        return g.npu
+    if name == "cpu":
+        return g.cpu
+    raise NotImplementedError(
+        "torch.get_device_module(%r): unsupported device type %r" % (device, name))
+
+
+def as_strided(input, size, stride, storage_offset=None):
+    """torch.as_strided -- a tensor with the requested size and strides.
+
+    vLLM-Omni's CPU offload rebuilds a possibly strided parameter from its
+    packed host buffer through this entry point. ``Tensor.as_strided``
+    materializes the window with a gather, so reads are exact; the result does
+    not alias ``input`` the way a real strided view does.
+
+    The default offset is 0, not ``input.storage_offset()`` as in torch: jittor
+    materializes slices, so ``input``'s own data already starts at its first
+    element. Torch's default would apply the parent-relative storage offset a
+    second time -- the offload passes ``gpu_weight[offset:offset+numel]`` and
+    then indexed past the end of it ("index 10751 is out of bounds for
+    dimension 0 with size 5376").
+    """
+    return input.as_strided(size, stride, 0 if storage_offset is None else storage_offset)
+
+
+def empty_strided(size, stride, *, dtype=None, layout=None, device=None,
+                  requires_grad=False, pin_memory=False):
+    """torch.empty_strided -- a tensor with the requested size and strides.
+
+    jittor tensors are contiguous, so `stride` cannot be honored: the result
+    has `size` with contiguous strides. vLLM-Omni's offload calls this only to
+    get an independent buffer and then `copy_`s into it, so the values are
+    exact. A non-strided `layout` is refused rather than silently ignored.
+    """
+    if layout is not None and "strided" not in str(layout):
+        raise NotImplementedError(
+            "torch.empty_strided(layout=%r): only the strided layout exists"
+            % (layout,))
+    g = _misc_context().target_namespace
+    return g.empty(tuple(size), dtype=dtype, device=device,
+                   requires_grad=requires_grad, pin_memory=pin_memory)
+
+
+def _restore_default_device_index(ctx):
+    """Put back the current device an indexed default device took over."""
+    state = ctx.state["core_misc"]
+    saved = state.pop("default_device_saved_index", None)
+    if saved is None or saved < 0:
+        return
+    try:
+        if int(jt.current_device()) != saved:
+            jt.set_device(saved)
+    except EXPECTED as exc:
+        swallowed("torch/installers/core.py _restore_default_device_index: "
+                  "jt.set_device(%r)" % (saved,), exc,
+                  "the default device's index stays current after it is cleared")
+
+
+def _record_default_device(spelling):
+    """Tell the tensor factories where a `device=`-less tensor belongs."""
+    from ..frontend import set_default_device_spelling
+    set_default_device_spelling(spelling)
+
+
 def set_default_device(device=None):
     """torch.set_default_device -- now actually moves the default.
 
@@ -658,6 +819,8 @@ def set_default_device(device=None):
     ctx = _misc_context()
     if device is None:
         _set_install_flag(ctx, "use_cuda", 0)
+        _restore_default_device_index(ctx)
+        _record_default_device(None)
         return None
     if isinstance(device, str):
         name, _, raw_index = device.partition(":")
@@ -673,6 +836,8 @@ def set_default_device(device=None):
     name = str(name).split(":")[0]
     if name == "cpu":
         _set_install_flag(ctx, "use_cuda", 0)
+        _restore_default_device_index(ctx)
+        _record_default_device('cpu')
         return None
     if name in ("cuda", "gpu", "npu"):
         if not jt.has_cuda:
@@ -682,10 +847,28 @@ def set_default_device(device=None):
             )
         _set_install_flag(ctx, "use_cuda", 1)
         if index is not None:
+            # Remember what was current *before* the first indexed default, so
+            # clearing the default puts it back. Without this, the index
+            # leaked: `set_default_device("cuda:4")` followed by
+            # `set_default_device(None)` left jittor's current device at 4, so
+            # the next tensor built after CUDA came back on -- through
+            # `.cuda()`, say -- landed on cuda:4 while `get_default_device()`
+            # had already said "cpu". torch's default device is a separate
+            # thing from `torch.cuda.current_device()` and clearing one never
+            # strands the other.
+            state = ctx.state["core_misc"]
+            if state.get("default_device_saved_index") is None:
+                try:
+                    state["default_device_saved_index"] = int(jt.current_device())
+                except EXPECTED as exc:
+                    swallowed("torch/installers/core.py set_default_device: "
+                              "state['default_device_saved_index']", exc,
+                              "clearing the default will not restore the current device")
             try:
                 jt.set_device(int(index))
             except (AttributeError, RuntimeError, TypeError, ValueError) as error:
                 raise RuntimeError("torch.set_default_device(%r): %s" % (device, error))
+        _record_default_device(name if index is None else "%s:%d" % (name, index))
         return None
     from ...stub_policy import unimplemented
 
@@ -699,28 +882,32 @@ def set_default_device(device=None):
 def _result_type_info(x):
     ctx = _misc_context()
     g = ctx.jittor_module
+    Var = ctx.state["Var"]
     _DTYPE_OBJS = ctx.state["dtypes"]
-    # Dimensional tensors outrank zero-dimensional tensors, which outrank
-    # wrapped Python numbers within the same numeric category.
-    if isinstance(x, ctx.native_backend.Var):
-        return (_dtype_to_str(x.dtype), 1 if x.ndim == 0 else 2)
+    # (dtype name, tier): 0 a tensor with dimensions (or a bare dtype),
+    # 1 a 0-dim tensor, 2 a Python scalar. See `result_type`.
+    # Any Var, not only the frontend's Tensor type: the binary operators pass
+    # native Vars through here too, and one that fell to the fallback below
+    # lost its dtype.
+    if isinstance(x, (Var, jt.Var)):
+        return (_dtype_to_str(x.dtype), 1 if len(x.shape) == 0 else 0)
     if isinstance(x, dtype) or (
         isinstance(x, str) and _dtype_to_str(x) in _jittor_dtype_name(_DTYPE_OBJS)
     ):
-        return (_dtype_to_str(x), 2)
+        return (_dtype_to_str(x), 0)
     if isinstance(x, bool):
-        return ("bool", 0)
+        return ("bool", 2)
     if isinstance(x, int):
-        return ("int64", 0)
+        return ("int64", 2)
     if isinstance(x, float):
-        return (_dtype_to_str(g.get_default_dtype()) or "float32", 0)
+        return (_dtype_to_str(g.get_default_dtype()) or "float32", 2)
     if isinstance(x, complex):
-        return ("complex64", 0)
-    return (_dtype_to_str(x) or "float32", 2)
+        return ("complex64", 2)
+    return (_dtype_to_str(x) or "float32", 0)
 
 
 def initial_seed():
-    return int(jt.get_cpu_initial_seed())
+    return int(_misc_context().state["core_misc"].get("seed", 0))
 
 
 def is_tensor(value):
@@ -731,8 +918,18 @@ def numel(value):
     return value.numel()
 
 
-def set_autocast_enabled(*args, **kwargs):
-    return None
+def set_autocast_enabled(device_type, enabled=None, *a, **k):
+    """torch.set_autocast_enabled: turn autocast on or off for one device.
+
+    This was a registered no-op, so a script that opened its mixed-precision
+    region with the setter instead of the context manager trained in float32
+    while ``is_autocast_enabled()`` agreed with it. It now moves the same
+    per-device state ``torch.autocast`` moves. The pre-2.4 one-argument form
+    (``set_autocast_enabled(True)``) still means "cuda", as it does in torch.
+    """
+    if enabled is None and not isinstance(device_type, str):
+        device_type, enabled = "cuda", device_type
+    return _set_autocast_enabled(device_type, enabled)
 
 
 def is_grad_enabled():
@@ -745,16 +942,8 @@ def set_grad_enabled(mode):
 
 
 def get_autocast_gpu_dtype(*args, **kwargs):
-    owner = _misc_context().jittor_module
-    return (
-        _get_autocast_dtype("cuda")
-        if _autocast_is_enabled("cuda")
-        else getattr(owner, "float16", "float16")
-    )
-
-
-def is_autocast_available(*args, **kwargs):
-    return True
+    """Deprecated torch spelling of get_autocast_dtype("cuda")."""
+    return _torch_dtype_object(_autocast_configured_dtype("cuda"))
 
 
 def are_deterministic_algorithms_enabled():
@@ -835,12 +1024,140 @@ _STORAGE_TYPES = (
     ByteStorage,
     BoolStorage,
 )
+class _DefaultGenerator:
+    """`torch.default_generator`: a handle on the *global* CPU generator.
+
+    Deliberately not a `Generator` instance. That class owns a private stream
+    so that two generators seeded alike agree whatever the process has already
+    done -- which is exactly what the default generator must *not* do, because
+    `torch.manual_seed(n)` seeds this one and `torch.get_rng_state()` is its
+    state. So this delegates and holds nothing; anything else would let the two
+    drift apart.
+
+    Missing entirely before, and the shim's namespace reports a missing name by
+    raising `AttributeError(name)`, so MiniMax-H3's reference path failed with
+    a bare `default_generator` and nothing to say where it came from.
+    """
+
+    @property
+    def device(self):
+        return _torch_device_misc("cpu")
+
+    def manual_seed(self, value):
+        manual_seed(value)
+        return self
+
+    def initial_seed(self):
+        return initial_seed()
+
+    def seed(self):
+        return seed()
+
+    def get_state(self):
+        return get_rng_state()
+
+    def set_state(self, state):
+        set_rng_state(state)
+        return self
+
+    def __repr__(self):
+        return "<torch.Generator object (default, device=cpu)>"
+
+
+def _torch_device_misc(spelling):
+    """A device object, taken from the install context, not the module registry.
+
+    `installers/` must not reach into the interpreter's module table -- that is
+    the boundary `test_torch_compat_structure` defends, and spelling the lookup
+    through an alias to slip past its substring check would be gaming it rather
+    than honouring it.
+    """
+    return _misc_context().jittor_module.device(spelling)
+
+
+def fork_rng(devices=None, enabled=True, _caller="fork_rng",
+             _devices_kw="devices", device_type="cuda"):
+    """torch.random.fork_rng: run a block, then put the RNG back.
+
+    A context manager, not a function -- callers write
+    `with torch.random.fork_rng(devices=[0]):`. MiniMax-H3's reference-to-video
+    path uses it around its sampling, and without it the request died with
+    `module 'torch.random' has no attribute 'fork_rng'`.
+
+    `devices=None` means every visible device of `device_type`, which is what
+    torch does; passing an explicit list is cheaper and is what callers that
+    care do. `enabled=False` makes the whole thing a no-op, again as torch
+    does, so a caller can keep one code path for both.
+    """
+    return _ForkRng(devices, enabled, device_type)
+
+
+class _ForkRng:
+    """The context manager behind :func:`fork_rng`.
+
+    Written as a class rather than `@contextlib.contextmanager` so that the
+    state is captured on `__enter__`, not when the generator object is made.
+    `with fork_rng():` and `cm = fork_rng(); with cm:` then behave the same,
+    which a generator-based one would not.
+    """
+
+    def __init__(self, devices, enabled, device_type):
+        self._devices = devices
+        self._enabled = bool(enabled)
+        self._device_type = device_type
+        self._cpu_state = None
+        self._device_states = ()
+        self._targets = ()
+
+    def _accelerator(self):
+        if self._device_type != "cuda":
+            return None
+        cuda = getattr(_misc_context().jittor_module, "cuda", None)
+        if cuda is None or not getattr(cuda, "is_available", lambda: False)():
+            return None
+        return cuda
+
+    def __enter__(self):
+        if not self._enabled:
+            return self
+        self._cpu_state = get_rng_state()
+        cuda = self._accelerator()
+        if cuda is not None:
+            devices = self._devices
+            if devices is None:
+                devices = range(int(cuda.device_count()))
+            # Passed through as given, not coerced with `int()`. Callers hand
+            # this whatever torch accepts -- MiniMax-H3's VAE passes
+            # `[torch.device('cuda:0')]` -- and `int()` on a device object
+            # raises "int() argument must be ... not 'device'". The accessors
+            # below already take an index, a device or a string.
+            self._targets = tuple(devices)
+            self._device_states = tuple(
+                cuda.get_rng_state(device) for device in self._targets)
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        if not self._enabled:
+            return False
+        # Restore on the way out of a failure too: a block that raised has
+        # still consumed randomness, and leaving the stream advanced would make
+        # the next draw depend on whether an unrelated error happened.
+        set_rng_state(self._cpu_state)
+        cuda = self._accelerator()
+        if cuda is not None:
+            for device, state in zip(self._targets, self._device_states):
+                cuda.set_rng_state(state, device)
+        return False
+
+
 _MISC_BINDINGS = {
     "manual_seed": manual_seed,
     "initial_seed": initial_seed,
     "seed": seed,
     "get_rng_state": get_rng_state,
     "set_rng_state": set_rng_state,
+    "fork_rng": fork_rng,
+    "default_generator": _DefaultGenerator(),
     "is_tensor": is_tensor,
     "numel": numel,
     "PyTorchFileReader": PyTorchFileReader,
@@ -853,7 +1170,18 @@ _MISC_BINDINGS = {
     "is_grad_enabled": is_grad_enabled,
     "set_grad_enabled": set_grad_enabled,
     "get_autocast_dtype": get_autocast_dtype,
+    "set_autocast_dtype": set_autocast_dtype,
     "get_autocast_gpu_dtype": get_autocast_gpu_dtype,
+    "set_autocast_gpu_dtype": set_autocast_gpu_dtype,
+    "get_autocast_cpu_dtype": get_autocast_cpu_dtype,
+    "set_autocast_cpu_dtype": set_autocast_cpu_dtype,
+    "is_autocast_cpu_enabled": is_autocast_cpu_enabled,
+    "set_autocast_cpu_enabled": set_autocast_cpu_enabled,
+    "is_autocast_cache_enabled": is_autocast_cache_enabled,
+    "set_autocast_cache_enabled": set_autocast_cache_enabled,
+    "clear_autocast_cache": clear_autocast_cache,
+    "autocast_increment_nesting": autocast_increment_nesting,
+    "autocast_decrement_nesting": autocast_decrement_nesting,
     "is_autocast_available": is_autocast_available,
     "are_deterministic_algorithms_enabled": are_deterministic_algorithms_enabled,
     "use_deterministic_algorithms": use_deterministic_algorithms,
@@ -867,26 +1195,45 @@ _MISC_BINDINGS = {
     "set_default_dtype": set_default_dtype,
     "get_default_device": get_default_device,
     "set_default_device": set_default_device,
+    "get_device_module": get_device_module,
+    "as_strided": as_strided,
+    "empty_strided": empty_strided,
 }
 _MISC_DETAILS = {
     "PyTorchFileReader": "raises NotImplementedError; use torch.load instead",
-    "set_autocast_enabled": "no-op setter; use the supported autocast scope",
+    "is_autocast_enabled": "per-device-type autocast flag; the no-argument form answers for cuda as torch's does",
+    "set_autocast_enabled": "moves the same per-device autocast state torch.autocast moves; one amp register serves every device type",
+    "get_autocast_dtype": "the configured per-device fast dtype, answered whether or not a region is open",
+    "set_autocast_dtype": "records the per-device fast dtype; a dtype jittor cannot express is refused rather than ignored",
+    "get_autocast_gpu_dtype": "deprecated spelling of get_autocast_dtype('cuda')",
+    "set_autocast_gpu_dtype": "deprecated spelling of set_autocast_dtype('cuda', dtype)",
+    "get_autocast_cpu_dtype": "deprecated spelling of get_autocast_dtype('cpu')",
+    "set_autocast_cpu_dtype": "deprecated spelling of set_autocast_dtype('cpu', dtype)",
+    "is_autocast_cpu_enabled": "deprecated spelling of is_autocast_enabled('cpu')",
+    "set_autocast_cpu_enabled": "deprecated spelling of set_autocast_enabled('cpu', enabled)",
+    "is_autocast_cache_enabled": "the recorded preference; jittor casts an operand per operator and has no weight cast cache",
+    "set_autocast_cache_enabled": "records the preference; there is no weight cast cache to enable, so disabling it is exact and enabling it asks for an absent optimisation",
+    "clear_autocast_cache": "jittor keeps no cached weight casts, so the postcondition already holds",
+    "autocast_increment_nesting": "real thread-local nesting depth, as torch's counter",
+    "autocast_decrement_nesting": "real thread-local nesting depth, as torch's counter",
     "use_deterministic_algorithms": "no-op setter; deterministic algorithm policy is not implemented",
-    "get_rng_state": "versioned CPU engine snapshot after pending random graphs complete; Jittor algorithm, not Torch state bytes",
-    "set_rng_state": "restores the CPU engine and seed without reseeding accelerator, Python or NumPy streams",
+    "get_rng_state": "seed-only state, not a full generator snapshot or exact stream restoration",
+    "set_rng_state": "restores the recorded seed, not an exact generator stream snapshot",
     "norm": "existing Torch norm adapter; out and extra keyword semantics are not implemented",
     "where": "existing one- or three-argument selection; out is not implemented",
     "bincount": "native scatter-add implementation; existing flatten/minlength behavior retained",
     "segment_reduce": "lengths-based dim-0 reduction only; additional keyword semantics are not implemented",
     "finfo": "NumPy limits plus declared metadata-only low-precision specs; this does not enable their computation",
     "iinfo": "NumPy integer-limit metadata for supported dtype names",
-    "is_autocast_available": "legacy True capability answer; does not verify a requested device",
+    "is_autocast_available": "answers for the backends this build can run -- cpu and cuda always, npu when ACL is built -- so it is False for the xpu/mps/xla/ipu/mtia device types torch answers True for",
     "are_deterministic_algorithms_enabled": "legacy False answer; deterministic algorithms are not configurable",
+    "as_strided": "gather-based view; reads are exact but the result does not alias the input storage",
+    "empty_strided": "contiguous allocation; the requested strides are not honored",
 }
 for _name, _implementation in _MISC_BINDINGS.items():
     _level = (
         Fidelity.UNIMPLEMENTED
-        if _name in ("PyTorchFileReader", "set_autocast_enabled", "use_deterministic_algorithms")
+        if _name in ("PyTorchFileReader", "use_deterministic_algorithms")
         else Fidelity.APPROXIMATE
     )
     register_fidelity(
@@ -916,6 +1263,7 @@ for _name, _implementation in (
     ("seed", _torch_seed),
     ("get_rng_state", get_rng_state),
     ("set_rng_state", set_rng_state),
+    ("fork_rng", fork_rng),
 ):
     register_fidelity(
         "torch.random." + _name,
@@ -948,7 +1296,8 @@ def install_misc(ctx):
     random = modules.get("torch.random")
     if not isinstance(random, _RandomModule):
         random = modules["torch.random"] = _RandomModule("torch.random")
-    for name in ("manual_seed", "initial_seed", "get_rng_state", "set_rng_state"):
+    for name in ("manual_seed", "initial_seed", "get_rng_state",
+                 "set_rng_state", "fork_rng"):
         setattr(random, name, _MISC_BINDINGS[name])
     random.seed = _torch_seed
     owner.random = random

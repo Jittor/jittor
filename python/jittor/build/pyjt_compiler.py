@@ -712,7 +712,10 @@ def compile_src(src, h, basename):
                 CHECK(kw==0);
             """
             if has_attr_dict:
-                func_fill += f"((PyObject**)(((char*)self) + sizeof(PyObject) + sizeof({class_name})))[0] = PyDict_New(); "
+                # Left NULL and created on demand; see the note in
+                # py_converter.h's to_py_object. PyType_GenericNew has already
+                # zeroed the slot, so there is nothing to do here.
+                pass
             if has_dealloc:
                 init_success_mark = f"{inited_flag} = 1, "
 

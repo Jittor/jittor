@@ -212,6 +212,26 @@ def _scan_2d_cuda(x, reverse):
     operations = get_library_ops("cub", load=True)
     if operations is None:
         raise RuntimeError("CUB is unavailable for CUDA cumsum")
+    # float16/bfloat16 scan through a float32 buffer and come back narrow.
+    # `cub_cumsum_op.cc` instantiates `cub::BlockScan<Tx, BLOCK_THREADS>` and
+    # `DeviceScan::InclusiveSum` at the *element* type, so a half input is
+    # accumulated in half: every partial is rounded, and a scan keeps every
+    # partial, so the error grows along the axis. `jt.cumsum` over 4096 ones
+    # answered 4092 in float16 and 3968 in bfloat16 -- the running sum stops
+    # moving once it passes 2048 (resp. 256), which is where adding one no
+    # longer changes the value. torch runs the scan in `acc_type<T>`, which is
+    # float for both half types, and answers 4096; on a random input it
+    # measured 1.78e-3 from the float64 reference where this was 3.34e-2.
+    #
+    # Done here rather than in the kernel because the CUB block scan's
+    # accumulator type is the same template parameter as its storage type;
+    # separating them is a rewrite of the kernel, and the extra float32 buffer
+    # buys the same answer. The CPU kernel (`jittor/ops/scan.py::_scan_2d_cpu`)
+    # does carry a separate accumulator and needs no buffer.
+    from jittor._core.dtypes import dtype_name as _dtype_name
+    dtype = x.dtype
+    if _dtype_name(dtype) in ("float16", "bfloat16"):
+        return operations.cub_cumsum(x.float32(), reverse).cast(dtype)
     return operations.cub_cumsum(x, reverse)
 
 

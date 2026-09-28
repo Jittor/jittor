@@ -8,7 +8,10 @@
 The file remains beside the low-level type tests because it also checks
 ``NanoString`` round trips, but pytest schedules it in the repository's dedicated
 Torch-mode process. The promotion APIs and cast aliases asserted here are owned by
-the compatibility installer, not by a plain native ``import jittor`` process.
+the compatibility installer, not by a plain native ``import jittor`` process: the
+installer publishes an INDEPENDENT ``torch`` namespace with its own Tensor type and
+keeps those names there, so they are addressed through ``torch`` below. ``jt`` is
+used only where the subject really is native jittor (the NanoString section).
 
 Why a dedicated module and not just a slice of ``test_ops.py``: op_db gradcheck
 runs each op at a single declared dtype and never *mixes* dtypes, so it cannot see
@@ -18,8 +21,8 @@ rule (c10/core/ScalarType.cpp), hard-coded below -- never jittor-vs-jittor.
 
 What is asserted (all on CPU; promotion is device-independent -- it is decided in
 Python from the operand dtype names before any kernel runs):
-  1. ``jt.result_type`` / ``jt.promote_types`` / ``jt.can_cast`` and the actual
-     binary-op output dtype, for every meaningful pair drawn from
+  1. ``torch.result_type`` / ``torch.promote_types`` / ``torch.can_cast`` and the
+     actual binary-op output dtype, for every meaningful pair drawn from
      ``{bool, uint8, int8, int16, int32, int64, float16, float32, float64}``;
   2. true-division's special rule (``/`` is ALWAYS float: an integral result_type
      lands on the default float32, a floating one is kept);
@@ -31,12 +34,18 @@ Python from the operand dtype names before any kernel runs):
   5. a few NanoString edge checks (``str(dtype)`` round-trips back into jittor's
      own dispatch, str-subclass accepted).
 
-Pinning dtypes: ``jt.array(x)`` silently narrows int64->int32 and float64->float32,
-so every fixed-width tensor is built with ``jt.array(a, dtype=...)`` (which jittor
-honours via ``auto_convert_64_to_32=0``). Values are read via ``.numpy()`` because
-jittor scalar tensors are zero-dimensional (a reduced value has shape ``()``).
+Pinning dtypes: a bare ``torch.tensor(v)`` infers the width from the Python values
+(ints land on int64, floats on the default float32), so every fixed-width tensor is
+built with the frontend's own dtype spelling -- ``torch.tensor(v, dtype=torch.float16)``
+-- which is what pins uint8 / int16 / float16 / float64 here. The NanoString section
+still builds NATIVE Vars, where the narrowing to guard against is jittor's own
+(``jt.array`` drops int64->int32 / float64->float32 unless handed ``dtype=``).
+Dtypes are compared by their bare name (``_dts`` / ``_name``) because a frontend
+dtype stringifies as ``torch.int64`` while a NanoString stringifies as ``int64``.
+Values are read via ``.numpy()`` because jittor scalar tensors are zero-dimensional
+(a reduced value has shape ``()``).
 
-Run::  python -m pytest tests/type/test_type_system.py
+Run::  JITTOR_TORCH_SHIM=1 python -m pytest tests/type/test_type_system.py
        python tools/run_test_suite.py --session torch -- -k type_system
 """
 
@@ -45,11 +54,16 @@ import unittest
 
 import numpy as np
 import jittor as jt
+# The promotion API (promote_types / result_type / can_cast) and the cast aliases
+# (.long(), .type(), .to(...)) are reached through ``torch``: the compatibility
+# installer publishes an independent ``torch`` namespace that owns those names and
+# their Tensor type, and a native ``jt.Var`` does not carry them.
+import torch
 
 from _helpers.common import JittorTestCase
 
 
-# numpy dtype for each bare jittor name we build pinned tensors from.
+# numpy dtype for each bare name the NATIVE pinned Vars are built from.
 _NPDT = {
     "bool": np.bool_, "uint8": np.uint8, "int8": np.int8, "int16": np.int16,
     "int32": np.int32, "int64": np.int64, "float16": np.float16,
@@ -57,13 +71,33 @@ _NPDT = {
 }
 
 
+def _name(dt):
+    """Bare name of a dtype object ('torch.int64' -> 'int64', 'int64' -> 'int64').
+
+    The frontend's dtype prints itself the way torch does; the lattice below is
+    keyed by the bare name, which is also what a NanoString prints.
+    """
+    return str(dt).rsplit(".", 1)[-1]
+
+
 def _dts(v):
-    """Bare jittor dtype string for a Var ('float32', 'int64', ...)."""
-    return str(v.dtype)
+    """Bare dtype name of a tensor ('float32', 'int64', ...)."""
+    return _name(v.dtype)
 
 
 def _pin(name, val=(1, 2, 3)):
-    """A 1-D jittor Var of the given bare dtype, built so the dtype SURVIVES.
+    """A 1-D torch Tensor of the given bare dtype, built so the dtype SURVIVES.
+
+    ``torch.tensor(v)`` infers the width from the Python values (ints -> int64,
+    floats -> the default float32), so the frontend dtype object is always passed:
+    it is what pins uint8 / int16 / float16 / float64. The torch frontend owns the
+    cast aliases and the promotion API under test, so its Tensor is the subject.
+    """
+    return torch.tensor(list(val), dtype=getattr(torch, name))
+
+
+def _pin_native(name, val=(1, 2, 3)):
+    """A 1-D NATIVE jittor Var of the given bare dtype -- for the NanoString checks.
 
     ``jt.array`` narrows int64->int32 / float64->float32 unless an explicit dtype
     is given; pass it so the wide dtypes (and the exact narrow ones) are preserved.
@@ -175,30 +209,30 @@ class _CPUOnly(JittorTestCase):
 
 class TestPromotionAPI(_CPUOnly):
     def test_promote_types_matches_lattice(self):
-        # jt.promote_types(dtype1, dtype2) -> dtype object; must equal the documented
-        # torch result and be commutative.
+        # torch.promote_types(dtype1, dtype2) -> dtype object; must equal the
+        # documented torch result and be commutative.
         for (a, b), want in _PROMO.items():
-            r1 = jt.promote_types(getattr(jt, a), getattr(jt, b))
-            r2 = jt.promote_types(getattr(jt, b), getattr(jt, a))
-            self.assertEqual(str(r1), want, msg=f"promote_types({a},{b})")
-            self.assertEqual(str(r2), want, msg=f"promote_types({b},{a}) [commutative]")
+            r1 = torch.promote_types(getattr(torch, a), getattr(torch, b))
+            r2 = torch.promote_types(getattr(torch, b), getattr(torch, a))
+            self.assertEqual(_name(r1), want, msg=f"promote_types({a},{b})")
+            self.assertEqual(_name(r2), want, msg=f"promote_types({b},{a}) [commutative]")
 
     def test_promote_types_doc_examples(self):
         # the two examples from torch.promote_types' own docstring.
-        self.assertEqual(str(jt.promote_types(jt.int32, jt.float32)), "float32")
-        self.assertEqual(str(jt.promote_types(jt.uint8, jt.long)), "int64")
+        self.assertEqual(_name(torch.promote_types(torch.int32, torch.float32)), "float32")
+        self.assertEqual(_name(torch.promote_types(torch.uint8, torch.long)), "int64")
 
     def test_result_type_two_tensors(self):
         for (a, b), want in _PROMO.items():
-            self.assertEqual(str(jt.result_type(_pin(a), _pin(b))), want,
+            self.assertEqual(_name(torch.result_type(_pin(a), _pin(b))), want,
                              msg=f"result_type({a},{b})")
-            self.assertEqual(str(jt.result_type(_pin(b), _pin(a))), want,
+            self.assertEqual(_name(torch.result_type(_pin(b), _pin(a))), want,
                              msg=f"result_type({b},{a}) [commutative]")
 
     def test_result_type_tensor_and_dtype(self):
         # result_type also accepts a dtype object as either argument.
-        self.assertEqual(str(jt.result_type(_pin("int32"), jt.float32)), "float32")
-        self.assertEqual(str(jt.result_type(jt.int64, _pin("int32"))), "int64")
+        self.assertEqual(_name(torch.result_type(_pin("int32"), torch.float32)), "float32")
+        self.assertEqual(_name(torch.result_type(torch.int64, _pin("int32"))), "int64")
 
     def test_result_type_python_scalar_wrapped_number_rule(self):
         # torch "wrapped number" rule: a Python scalar bumps the result only if it
@@ -206,20 +240,39 @@ class TestPromotionAPI(_CPUOnly):
         # tensor's int dtype; float scalar lifts an int tensor to default float32.
         xi = _pin("int32")
         xf = _pin("float32")
-        self.assertEqual(str(jt.result_type(xi, 2)), "int32")      # int scalar: no widen
-        self.assertEqual(str(jt.result_type(xi, 1.5)), "float32")  # float scalar lifts int->f32
-        self.assertEqual(str(jt.result_type(xf, 2)), "float32")    # int scalar keeps float
-        self.assertEqual(str(jt.result_type(xf, 1.5)), "float32")
-        self.assertEqual(str(jt.result_type(_pin("int64"), 7)), "int64")  # no widen to default
+        self.assertEqual(_name(torch.result_type(xi, 2)), "int32")     # int scalar: no widen
+        self.assertEqual(_name(torch.result_type(xi, 1.5)), "float32")  # float lifts int->f32
+        self.assertEqual(_name(torch.result_type(xf, 2)), "float32")   # int scalar keeps float
+        self.assertEqual(_name(torch.result_type(xf, 1.5)), "float32")
+        # an int64 tensor is NOT widened to the default float by an int scalar
+        self.assertEqual(_name(torch.result_type(_pin("int64"), 7)), "int64")
 
     def test_can_cast(self):
-        # jt.can_cast(from, to): True iff promote(from, to) == to.
-        self.assertTrue(jt.can_cast(jt.int32, jt.int64))
-        self.assertTrue(jt.can_cast(jt.float32, jt.float64))
-        self.assertTrue(jt.can_cast(jt.bool, jt.int32))
-        self.assertTrue(jt.can_cast(jt.int32, jt.float32))
-        self.assertFalse(jt.can_cast(jt.float32, jt.int32))   # float -> int loses category
-        self.assertFalse(jt.can_cast(jt.int64, jt.int32))     # wider -> narrower
+        """``can_cast`` is categorical in torch, not numpy's width rule.
+
+        ``c10/core/ScalarType.h::canCast`` refuses exactly three things --
+        complex to non-complex, floating to integral, and non-bool to bool --
+        and allows everything else, narrowing included. Checked against torch
+        2.13 over the whole table; ``can_cast(int64, int32)`` is True there,
+        and this file used to assert the opposite while the implementation
+        answered with numpy's ``promote(from, to) == to``.
+        """
+        self.assertTrue(torch.can_cast(torch.int32, torch.int64))
+        self.assertTrue(torch.can_cast(torch.float32, torch.float64))
+        self.assertTrue(torch.can_cast(torch.bool, torch.int32))
+        self.assertTrue(torch.can_cast(torch.int32, torch.float32))
+        # Narrowing is allowed, in both categories.
+        self.assertTrue(torch.can_cast(torch.int64, torch.int32))
+        self.assertTrue(torch.can_cast(torch.int32, torch.uint8))
+        self.assertTrue(torch.can_cast(torch.float64, torch.float16))
+        # The three refusals.
+        self.assertFalse(torch.can_cast(torch.float32, torch.int32))
+        self.assertFalse(torch.can_cast(torch.int32, torch.bool))
+        self.assertFalse(torch.can_cast(torch.float32, torch.bool))
+        self.assertTrue(torch.can_cast(torch.bool, torch.bool))
+        if hasattr(torch, "complex64"):
+            self.assertFalse(torch.can_cast(torch.complex64, torch.float32))
+            self.assertTrue(torch.can_cast(torch.float32, torch.complex64))
 
 
 # ----------------------------------------------------------- binary-op promotion (dtypes)
@@ -257,7 +310,8 @@ class TestBinaryOpPromotion(_CPUOnly):
         # integral result_type it lands on the DEFAULT float (float32) regardless of
         # the integer width; for a floating result_type it KEEPS that float.
         # (jittor natively follows numpy -- int64/int32 -> float64, int8/int8 ->
-        # float16, float16/int64 -> float64 -- all wrong vs torch; the shim fixes it.)
+        # float16, float16/int64 -> float64 -- all wrong vs torch; the torch
+        # frontend's Tensor operators are what fix it, hence the subject here.)
         for da, db in [("int32", "int32"), ("int64", "int32"), ("int64", "int64"),
                        ("int8", "int8"), ("int32", "int64"), ("uint8", "int32"),
                        ("int16", "int16"), ("bool", "int32"), ("uint8", "uint8")]:
@@ -347,8 +401,9 @@ class TestCastMethods(_CPUOnly):
     }
 
     def test_cast_methods_exact_dtype_from_float(self):
-        # the classic bug guarded here: .long() must be int64 (native jittor aliased
-        # Var.long -> Var.int32; the torch_compat install re-points it to int64).
+        # the classic bug guarded here: .long() must be int64. A native ``jt.Var``
+        # aliases ``.long()`` to int32 to this day; the frontend's Tensor (a Var
+        # subclass) is where the torch spelling is defined, and it must be int64.
         x = _pin("float32", (1.5, 2.5, 3.5))
         for m, want in self._METHOD.items():
             self.assertEqual(_dts(getattr(x, m)()), want, msg=f".{m}() from float32")
@@ -404,12 +459,12 @@ class TestCastMethods(_CPUOnly):
 
     def test_dtype_constant_objects(self):
         # the dtype OBJECTS torch.long / int / short / half / double / float.
-        self.assertEqual(jt.long.name, "int64")
-        self.assertEqual(jt.int.name, "int32")
-        self.assertEqual(jt.short.name, "int16")
-        self.assertEqual(jt.half.name, "float16")
-        self.assertEqual(jt.double.name, "float64")
-        self.assertEqual(jt.float.name, "float32")
+        self.assertEqual(torch.long.name, "int64")
+        self.assertEqual(torch.int.name, "int32")
+        self.assertEqual(torch.short.name, "int16")
+        self.assertEqual(torch.half.name, "float16")
+        self.assertEqual(torch.double.name, "float64")
+        self.assertEqual(torch.float.name, "float32")
 
 
 # --------------------------------------------------------------- .to / .type type-strings
@@ -417,19 +472,19 @@ class TestCastMethods(_CPUOnly):
 class TestToAndType(_CPUOnly):
     def test_to_dtype_object_and_string(self):
         x = _pin("float32", (1.5, 2.5, 3.5))
-        self.assertEqual(_dts(x.to(jt.float64)), "float64")
-        self.assertEqual(_dts(x.to(jt.int64)), "int64")
-        self.assertEqual(_dts(x.to(jt.int32)), "int32")
+        self.assertEqual(_dts(x.to(torch.float64)), "float64")
+        self.assertEqual(_dts(x.to(torch.int64)), "int64")
+        self.assertEqual(_dts(x.to(torch.int32)), "int32")
         self.assertEqual(_dts(x.to("float64")), "float64")
         self.assertEqual(_dts(x.to("torch.int64")), "int64")   # torch-prefixed string
         # value: float->int truncates toward zero
-        self.assertEqual(x.to(jt.int32), np.array([1.5, 2.5, 3.5], "float32").astype("int32"),
+        self.assertEqual(x.to(torch.int32), np.array([1.5, 2.5, 3.5], "float32").astype("int32"),
                          msg=".to(int32) value")
 
     def test_type_with_dtype_casts(self):
         x = _pin("float32", (1, 2, 3))
-        self.assertEqual(_dts(x.type(jt.int64)), "int64")
-        self.assertEqual(_dts(x.type(jt.float64)), "float64")
+        self.assertEqual(_dts(x.type(torch.int64)), "int64")
+        self.assertEqual(_dts(x.type(torch.float64)), "float64")
         # torch also accepts the typed-tensor NAME string.
         self.assertEqual(_dts(x.type("torch.LongTensor")), "int64")
         self.assertEqual(_dts(x.type("torch.DoubleTensor")), "float64")
@@ -489,12 +544,12 @@ class TestNanoString(_CPUOnly):
     def test_var_dtype_str_feeds_back_into_dispatch(self):
         # the load-bearing invariant: str(var.dtype) must be a token jittor accepts
         # for a cast (contrib.concat / linalg do this), and the dtype must survive.
-        v = _pin("float64", (1.0, 2.0))
+        v = _pin_native("float64", (1.0, 2.0))
         s = str(v.dtype)
         self.assertEqual(s, "float64")
         self.assertEqual(_dts(v.cast(s)), "float64")
         # narrowing-pinned int64 round-trips through its own dtype string too.
-        w = _pin("int64", (1, 2, 3))
+        w = _pin_native("int64", (1, 2, 3))
         self.assertEqual(_dts(w.cast(str(w.dtype))), "int64")
 
 

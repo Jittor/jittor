@@ -4,6 +4,8 @@ import math
 
 import jittor as jt
 
+from ..functional._amp import bias_for_compute_dtype
+
 
 class ConvTranspose(jt.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, \
@@ -65,7 +67,7 @@ class ConvTranspose(jt.Module):
                 f'i4*{stride_w}-{padding_w}+i6*{dilation_w}', # Wid+KWid
             ])
             if self.bias is not None:
-                b = self.bias.broadcast(y.shape, [0,2,3])
+                b = bias_for_compute_dtype(y, self.bias).broadcast(y.shape, [0,2,3])
                 y = y + b
             return y
         else:
@@ -104,7 +106,7 @@ class ConvTranspose(jt.Module):
                 f'i5*{self.stride[1]}-{self.padding[1]}+i7*{self.dilation[1]}', # Wid+KWid
             ])
             if self.bias is not None:
-                b = self.bias.broadcast(y.shape, [0,2,3])
+                b = bias_for_compute_dtype(y, self.bias).broadcast(y.shape, [0,2,3])
                 y = y + b
             return y
 

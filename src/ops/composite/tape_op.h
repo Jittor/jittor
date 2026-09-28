@@ -41,6 +41,7 @@ struct TapeOp final : Op {
     const char* name() const override { return "tape"; }
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;
     void infer_shape() override;
+    void run() override;
 };
 
 

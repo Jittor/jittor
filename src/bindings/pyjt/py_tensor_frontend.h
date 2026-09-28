@@ -23,6 +23,18 @@ PyObject* set_tensor_placement_context(int backend, int device=0);
 PyObject* get_tensor_placement_context();
 // @pyjt(_reset_tensor_placement)
 void reset_tensor_placement_context(PyObject* token);
+// The placement the caller asked for, as (backend, index), or None when the
+// caller asked for nothing. A `*_like` default reads it so that an explicit
+// request outranks the reference tensor's own device.
+// @pyjt(_current_tensor_placement)
+PyObject* current_tensor_placement_request();
+
+// A frontend type's policies -- its autograd bits and its float32 precision
+// tiers -- are read from Python once and kept until this is called. The
+// Python side calls it whenever one of them changes (the CUDA runtime state's
+// precision fields); see apply_policy.
+// @pyjt(_invalidate_frontend_policies)
+void invalidate_frontend_policies();
 
 // @pyjt(_set_float32_precision)
 PyObject* set_float32_precision_context(int matmul, int cudnn);

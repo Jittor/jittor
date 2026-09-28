@@ -11,7 +11,7 @@ def test_compile_module_rebuilds_after_only_an_included_header_changes(tmp_path)
     header.write_text("#pragma once\n#define MODULE_DEPENDENCY_VALUE 17\n", encoding="utf8")
     initial_stat = header.stat()
     source = """
-    #include "common.h"
+    #include "core/common.h"
     #include HEADER_PATH
     namespace jittor {
     // @pyjt(module_dependency_value)

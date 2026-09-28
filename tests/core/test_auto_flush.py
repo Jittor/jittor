@@ -14,6 +14,7 @@ values nobody kept, and errors that still reach the caller.
 
 from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
 from _helpers import capability as _test_capability
+from _helpers.cupy_bridge import cuda_numpy_code_available
 import unittest
 
 import numpy as np
@@ -29,6 +30,12 @@ def _chain(x, n):
 
 @_test_preserve_policy(jt, 'auto_flush_ops', 'use_cuda')
 @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No cuda found")
+# Its CUDA half runs a numpy-code operator, and py_converter hands that
+# callback `cupy` instead of `numpy` when use_cuda is on. Without CuPy the
+# operator raises from inside execution and leaves the CUDA work pending
+# for an unrelated later test to trip over.
+@unittest.skipIf(not cuda_numpy_code_available(),
+                 "CUDA numpy-code operators need CuPy; it is not installed")
 class TestAutoFlush(unittest.TestCase):
     """The pipeline only acts on CUDA: CPU kernels run synchronously on the
     calling thread, so launching early there could only cost fusion."""
@@ -67,7 +74,13 @@ class TestAutoFlush(unittest.TestCase):
             _test_policy_stack.enter_context(jt.runtime.scope(auto_flush_ops=0))
             lazy = [jt.numpy_code([4], "float32", [x], forward) for _ in range(20)]
             self.assertEqual(seen, [])
-            _test_policy_stack.enter_context(jt.runtime.scope(auto_flush_ops=8))
+            # `auto_flush_bytes` is the second condition and it defaults to
+            # 8 MiB: both it and `auto_flush_ops` have to be satisfied before
+            # anything is launched early. These vars are four elements, so the
+            # size criterion alone would hold the graph back forever and this
+            # test would be asserting that pipelining never happens. Set both.
+            _test_policy_stack.enter_context(
+                jt.runtime.scope(auto_flush_ops=8, auto_flush_bytes=0))
             pipelined = [jt.numpy_code([4], "float32", [x], forward) for _ in range(20)]
             # Some of the graph ran before anyone asked for a value.
             self.assertGreater(len(seen), 0)

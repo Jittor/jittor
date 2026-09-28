@@ -118,10 +118,13 @@ can also be None)::
         written after the call never reaches the backward at all, because the
         context was copied from the instance when the call started.
         """
-        self._reject_var_keywords(type(self).__name__, kw)
+        # Only a keyword argument can be un-taped, so the check is entered
+        # only when there are keyword arguments. Every Function in a model --
+        # every fused layer_norm, softmax and attention -- runs this line.
+        if kw:
+            self._reject_var_keywords(type(self).__name__, kw)
         if flags.no_grad:
             return self.execute(*args, **kw)
-        backup = args
         args = list(args)
         taped_inputs = []
         taped_outputs = []
@@ -137,10 +140,18 @@ can also be None)::
                 args[i] = v
                 taped_inputs.append(v)
         ori_res = self.execute(*args, **kw)
-        if not isinstance(ori_res, Sequence):
-            res = [ori_res]
-        else:
+        # `Sequence` is an ABC, so a bare isinstance against it reaches
+        # `ABCMeta.__instancecheck__`. A Function returns one Var, a tuple or a
+        # list; the exact types settle it without that, and anything else still
+        # asks the ABC.
+        res_type = type(ori_res)
+        many = (res_type is tuple or res_type is list
+                or (not isinstance(ori_res, Var)
+                    and isinstance(ori_res, Sequence)))
+        if many:
             res = list(ori_res)
+        else:
+            res = [ori_res]
         output_mask = [-1] * len(res)
         for i,v in enumerate(res):
             if isinstance(v, Var):
@@ -153,10 +164,7 @@ can also be None)::
         # tape output and input together so
         # backward treat them as one operator
         tape_together(taped_inputs, taped_outputs, self._grad)
-        if isinstance(ori_res, Sequence):
-            return res
-        else:
-            return res[0]
+        return res if many else res[0]
 
     def _grad(self, *args):
         new_args = ( (args[i] if i>=0 else None) for i in self.output_mask )
@@ -176,6 +184,20 @@ can also be None)::
 
     def dfs(self, parents, k, callback, callback_leave=None, recurse=True):
         pass
+
+    def __setattr__(self, key, value):
+        """Plain attribute assignment; a Function holds no parameters.
+
+        ``Module.__setattr__`` classifies every non-underscore Var attribute
+        into ``_parameter_names``/``_non_parameter_names`` so that
+        ``parameters()`` and ``state_dict()`` can find it. Nothing ever reads
+        that here: ``dfs`` above is a no-op, which is what every one of those
+        views walks. Meanwhile ``self.saved = x, mean, rstd`` -- how a fused
+        layer_norm, softmax or attention keeps its backward inputs -- ran the
+        classification on every call, three dict lookups, two ``setdefault``s,
+        a generator and two set mutations deep.
+        """
+        object.__setattr__(self, key, value)
 
     @classmethod
     def apply(cls, *args, **kw):

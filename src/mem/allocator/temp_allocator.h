@@ -67,7 +67,7 @@ struct TempAllocator : Allocator {
     void* alloc(size_t size, size_t& allocation) override;
     void free(void* mem_ptr, size_t size, const size_t& allocation) override;
     void gc() override;
-    virtual bool share_with(size_t size, size_t allocation) override;
+    virtual bool share_with(size_t size, size_t allocation, size_t offset) override;
 };
 
 DECLARE_FLAG(int, use_temp_allocator);

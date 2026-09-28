@@ -225,7 +225,13 @@ jt_fwd(py::handle q_obj,
     auto q = jt_readonly_tensor(q_obj, "q");
     auto k = jt_readonly_tensor(k_obj, "k");
     auto v = jt_readonly_tensor(v_obj, "v");
-    at::cuda::CUDAGuard device_guard{0};
+    // Bind the *input's* device, not 0. `at::cuda::CUDAGuard` is how the kernel
+    // launch picks its device, so a hardcoded 0 ran the kernel on device 0 while
+    // the pointers belonged to another device: index 0 was fine and every
+    // non-zero index died with cudaErrorIllegalAddress. The dense entry
+    // (csrc/flash_attn/flash_api.cpp) has always guarded with `q.device()`; these
+    // packed/direct entries did not. This mirrors it.
+    at::cuda::CUDAGuard device_guard{q.device()};
     TORCH_CHECK(q.dim() == 4, "q must be [batch, seqlen_q, heads, dim]");
     TORCH_CHECK(k.dim() == 4 && v.dim() == 4, "k/v must be [batch, seqlen_k, heads, dim]");
     TORCH_CHECK(q.dtype() == torch::kFloat16 || q.dtype() == torch::kBFloat16,
@@ -282,7 +288,13 @@ jt_varlen_fwd(py::handle q_obj,
     auto v = jt_readonly_tensor(v_obj, "v");
     auto cu_seqlens_q = jt_readonly_tensor(cu_seqlens_q_obj, "cu_seqlens_q");
     auto cu_seqlens_k = jt_readonly_tensor(cu_seqlens_k_obj, "cu_seqlens_k");
-    at::cuda::CUDAGuard device_guard{0};
+    // Bind the *input's* device, not 0. `at::cuda::CUDAGuard` is how the kernel
+    // launch picks its device, so a hardcoded 0 ran the kernel on device 0 while
+    // the pointers belonged to another device: index 0 was fine and every
+    // non-zero index died with cudaErrorIllegalAddress. The dense entry
+    // (csrc/flash_attn/flash_api.cpp) has always guarded with `q.device()`; these
+    // packed/direct entries did not. This mirrors it.
+    at::cuda::CUDAGuard device_guard{q.device()};
     TORCH_CHECK(q.dim() == 3, "q must be [total_q, heads, dim]");
     TORCH_CHECK(k.dim() == 3 && v.dim() == 3, "k/v must be [total_k, heads, dim]");
     TORCH_CHECK(q.dtype() == torch::kFloat16 || q.dtype() == torch::kBFloat16,
@@ -339,7 +351,13 @@ jt_varlen_qkvpacked_fwd(py::handle qkv_obj,
                         int window_size_right) {
     auto qkv = jt_readonly_tensor(qkv_obj, "qkv");
     auto cu_seqlens = jt_readonly_tensor(cu_seqlens_obj, "cu_seqlens");
-    at::cuda::CUDAGuard device_guard{0};
+    // Bind the *input's* device, not 0. `at::cuda::CUDAGuard` is how the kernel
+    // launch picks its device, so a hardcoded 0 ran the kernel on device 0 while
+    // the pointers belonged to another device: index 0 was fine and every
+    // non-zero index died with cudaErrorIllegalAddress. The dense entry
+    // (csrc/flash_attn/flash_api.cpp) has always guarded with `q.device()`; these
+    // packed/direct entries did not. This mirrors it.
+    at::cuda::CUDAGuard device_guard{qkv.device()};
     TORCH_CHECK(qkv.dim() == 4, "qkv must be [total, 3, heads, dim]");
     TORCH_CHECK(qkv.size(1) == 3, "qkv packed dimension must be 3");
     TORCH_CHECK(cu_seqlens.dtype() == torch::kInt32, "cu_seqlens must be int32");
@@ -395,7 +413,13 @@ jt_varlen_kvpacked_fwd(py::handle q_obj,
     auto kv = jt_readonly_tensor(kv_obj, "kv");
     auto cu_seqlens_q = jt_readonly_tensor(cu_seqlens_q_obj, "cu_seqlens_q");
     auto cu_seqlens_k = jt_readonly_tensor(cu_seqlens_k_obj, "cu_seqlens_k");
-    at::cuda::CUDAGuard device_guard{0};
+    // Bind the *input's* device, not 0. `at::cuda::CUDAGuard` is how the kernel
+    // launch picks its device, so a hardcoded 0 ran the kernel on device 0 while
+    // the pointers belonged to another device: index 0 was fine and every
+    // non-zero index died with cudaErrorIllegalAddress. The dense entry
+    // (csrc/flash_attn/flash_api.cpp) has always guarded with `q.device()`; these
+    // packed/direct entries did not. This mirrors it.
+    at::cuda::CUDAGuard device_guard{q.device()};
     TORCH_CHECK(q.dim() == 3, "q must be [total_q, heads, dim]");
     TORCH_CHECK(kv.dim() == 4 && kv.size(1) == 2, "kv must be [total_k, 2, heads, dim]");
     TORCH_CHECK(q.dtype() == torch::kFloat16 || q.dtype() == torch::kBFloat16,
@@ -449,7 +473,13 @@ jt_qkvpacked_fwd(py::handle qkv_obj,
                  int window_size_left,
     int window_size_right) {
     auto qkv = jt_readonly_tensor(qkv_obj, "qkv");
-    at::cuda::CUDAGuard device_guard{0};
+    // Bind the *input's* device, not 0. `at::cuda::CUDAGuard` is how the kernel
+    // launch picks its device, so a hardcoded 0 ran the kernel on device 0 while
+    // the pointers belonged to another device: index 0 was fine and every
+    // non-zero index died with cudaErrorIllegalAddress. The dense entry
+    // (csrc/flash_attn/flash_api.cpp) has always guarded with `q.device()`; these
+    // packed/direct entries did not. This mirrors it.
+    at::cuda::CUDAGuard device_guard{qkv.device()};
     TORCH_CHECK(qkv.dim() == 5 && qkv.size(2) == 3, "qkv must be [batch, seqlen, 3, heads, dim]");
     TORCH_CHECK(qkv.dtype() == torch::kFloat16 || qkv.dtype() == torch::kBFloat16,
                 "qkv must be fp16 or bf16");
@@ -491,7 +521,13 @@ jt_kvpacked_fwd(py::handle q_obj,
     int window_size_right) {
     auto q = jt_readonly_tensor(q_obj, "q");
     auto kv = jt_readonly_tensor(kv_obj, "kv");
-    at::cuda::CUDAGuard device_guard{0};
+    // Bind the *input's* device, not 0. `at::cuda::CUDAGuard` is how the kernel
+    // launch picks its device, so a hardcoded 0 ran the kernel on device 0 while
+    // the pointers belonged to another device: index 0 was fine and every
+    // non-zero index died with cudaErrorIllegalAddress. The dense entry
+    // (csrc/flash_attn/flash_api.cpp) has always guarded with `q.device()`; these
+    // packed/direct entries did not. This mirrors it.
+    at::cuda::CUDAGuard device_guard{q.device()};
     TORCH_CHECK(q.dim() == 4, "q must be [batch, seqlen_q, heads, dim]");
     TORCH_CHECK(kv.dim() == 5 && kv.size(2) == 2, "kv must be [batch, seqlen_k, 2, heads, dim]");
     TORCH_CHECK(q.dtype() == torch::kFloat16 || q.dtype() == torch::kBFloat16,

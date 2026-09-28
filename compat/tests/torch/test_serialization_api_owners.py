@@ -119,7 +119,10 @@ def test_portable_roundtrip_dtype_parameter_view_and_map_location(tmp_path, dest
         assert restored[name].dtype is values[name].dtype
         np.testing.assert_array_equal(restored[name].numpy(), values[name].numpy())
     assert tuple(restored["bf16"].shape) == ()
-    assert seen == ["cpu"] * 4
+    # The callback is handed where each tensor was *saved* from, which is
+    # wherever the factories put them -- the default device follows the
+    # runtime policy, so it is not always "cpu".
+    assert seen == [str(values["view"].device)] * 4
     parameter.requires_grad_(False)
     restored["parameter"].requires_grad_(False)
     from jittor.compat.torch.nested import _torch_prune_leaf_registry

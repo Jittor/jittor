@@ -46,7 +46,11 @@ class TestModuleRegistrationHooks(unittest.TestCase):
         finally:
             torch.Var.__bool__ = original_bool
         self.assertIs(parent.scale, value)
-        self.assertIs(value.__dict__["is_buffer"], True)
+        # Registration is tracked on the module by name, not tagged on the Var:
+        # a per-Var tag does not survive the Var being replaced (a dtype cast,
+        # a weight load), which is why Module.register_buffer keeps
+        # ``_buffer_names``.
+        self.assertIn("scale", dict(parent.named_buffers()))
         self.assertNotIn("scale", dict(parent.named_parameters()))
 
     def test_context_collects_and_can_replace_child(self):

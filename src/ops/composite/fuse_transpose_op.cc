@@ -51,15 +51,25 @@ FuseTransposeOp::FuseTransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
             axes.push_back(xdim-1-i);
     }
     y = create_output(nullptr, x->dtype());
-    // Parallelise every axis, not just the default four. ParallelPass splits
-    // the thread budget over the *outermost* `max_parallel_depth` loops, so a
-    // rank-8 permute whose outer axes are all small -- MiniMax-H3's decoder
-    // folds its (1, T, H, W, C, pt, ph, pw) patch grid back to
-    // (1, C, T*pt, H*ph, W*pw) and permutes the 8-D view first -- spends the
-    // whole budget on 1, 3, 7 and 4 and leaves a single block of 32 threads to
-    // move five million elements. The transpose writes each element exactly
-    // once, so parallelising the inner axes too is safe.
-    if (axes.size() > 4) {
+    // ParallelPass hands threads to the outermost `max_parallel_depth` loops,
+    // 4 by default on CUDA. A permute of rank 5 or more therefore leaves its
+    // innermost loop -- the contiguous one -- running serially inside each
+    // thread, so neighbouring threads land a whole inner row apart and not one
+    // access in a warp coalesces. The qkv permute of an attention block is
+    // exactly that shape, and it measured 152 GB/s against 404 GB/s once the
+    // inner loop is parallelized too (166 us -> 62 us at b8s256 d512).
+    // MiniMax-H3's decoder hits the same wall from the other side: it folds
+    // its (1, T, H, W, C, pt, ph, pw) patch grid back to
+    // (1, C, T*pt, H*ph, W*pw) and permutes the 8-D view first, where the
+    // outer axes are 1, 3, 7 and 4 -- the whole budget goes to those and a
+    // single block of 32 threads moves five million elements.
+    //
+    // Only for the broadcast form: that one is a pure permute, so every loop
+    // is independent and giving them all threads costs nothing. The reduce
+    // form fuses into a kernel that may carry a reduction, where parallelizing
+    // the reduced axis would mean atomics and a float summation order that
+    // changes run to run.
+    if (tp == OpType::broadcast && axes.size() > 4) {
         loop_options_t options = y->loop_options;
         options["max_parallel_depth"] = (int)axes.size();
         y->loop_options = move(options);

@@ -84,6 +84,16 @@ def _install_nn_extras(nn, registry=None):
     _install_init_aliases(registry)
     import types as _types_nn_private
 
+    # `torch.nn.parameter` must carry these three scaffolding classes whichever
+    # module ends up owning that name. They used to be created only inside the
+    # branch below, so when that branch was skipped -- another installer had
+    # already marked `Parameter` -- the adopted source module had none of them,
+    # and `from torch.nn.parameter import UninitializedParameter`, which vLLM's
+    # layerwise loader does at import, raised ImportError.
+    UninitializedTensorMixin = _adapt_extra(_extra_api.UninitializedTensorMixin, active_registry)
+    UninitializedParameter = _adapt_extra(_extra_api.UninitializedParameter, active_registry)
+    UninitializedBuffer = _adapt_extra(_extra_api.UninitializedBuffer, active_registry)
+
     if not getattr(getattr(nn, "Parameter", None), "_torch_compat_type", False):
         # One implementation, not two: jittor.nn's Parameter already runs torch's
         # construction protocol, so a subclass gets its own __new__/__init__, its
@@ -91,20 +101,18 @@ def _install_nn_extras(nn, registry=None):
         # subclass alone. A second copy here would drift from it.
         from jittor.nn.modules.parameter import Parameter
         Parameter._torch_compat_type = True
-        UninitializedTensorMixin = _adapt_extra(_extra_api.UninitializedTensorMixin, active_registry)
-        UninitializedParameter = _adapt_extra(_extra_api.UninitializedParameter, active_registry)
-        UninitializedBuffer = _adapt_extra(_extra_api.UninitializedBuffer, active_registry)
         nn.Parameter = Parameter
         param_mod = _types_nn_private.ModuleType("torch.nn.parameter")
         param_mod.Parameter = Parameter
-        param_mod.UninitializedTensorMixin = UninitializedTensorMixin
-        param_mod.UninitializedParameter = UninitializedParameter
-        param_mod.UninitializedBuffer = UninitializedBuffer
-        _modules["torch.nn.parameter"] = param_mod
         nn.parameter = param_mod
 
     param_mod = getattr(nn, "parameter", None)
     if param_mod is not None:
+        for _name, _value in (("UninitializedTensorMixin", UninitializedTensorMixin),
+                              ("UninitializedParameter", UninitializedParameter),
+                              ("UninitializedBuffer", UninitializedBuffer)):
+            if not hasattr(param_mod, _name):
+                setattr(param_mod, _name, _value)
         _modules["torch.nn.parameter"] = param_mod
 
     modules_pkg = install_module_namespace(nn, registry)

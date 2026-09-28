@@ -34,6 +34,9 @@ public:
     LaunchHistory(const LaunchHistory&) = delete;
     LaunchHistory& operator=(const LaunchHistory&) = delete;
     uint64 intern_origin(const char* file, int line);
+    // The location an `intern_origin` id stands for; false for 0 or an
+    // unknown id. Used by the step tracer to name call sites.
+    bool origin(uint64 id, LaunchOrigin& out);
     void record(LaunchRecord record);
     string report(Device device, bool exact_stream=false, uintptr_t stream=0);
 };

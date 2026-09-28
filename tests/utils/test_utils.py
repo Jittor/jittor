@@ -32,38 +32,47 @@ def find_cache_path():
 
 cache_path = None
 jittor_path = None
+core_path = None
 cc_flags = None
 
 
 def setUpModule():
-    global cache_path, jittor_path, cc_flags
+    global cache_path, jittor_path, core_path, cc_flags
     cache_path = find_cache_path()
     jittor_path = find_jittor_path()
+    # `{core_path}` stopped existing when 4.15 moved the C++ core out of
+    # the Python package to the top level; in a checkout it now sits beside
+    # `backends/`, while a wheel still ships it inside `jittor/`. `core_root`
+    # is the one place that knows both shapes -- open-coding the join here is
+    # what left these compiles pointing at a directory that is not there, and
+    # g++ then failed with exit 256 on a path nobody could see in the message.
+    from jittor_utils.backend_resources import core_root
+    core_path = core_root(jittor_path)
     cc_flags = (
         f" -g -O0 -DTEST --std=c++14"
-        f" -I{jittor_path}/src/utils -I{jittor_path}/src "
+        f" -I{core_path}/utils -I{core_path} "
     )
 
 class TestUtils(unittest.TestCase):
     def test_cache_compile(self):
-        cmd = f"cd {cache_path} && g++ {jittor_path}/src/utils/log.cc {jittor_path}/src/utils/tracer.cc {jittor_path}/src/utils/str_utils.cc {jittor_path}/src/utils/cache_compile.cc -lpthread {cc_flags} -o cache_compile && cache_path={cache_path} jittor_path={jittor_path} ./cache_compile"
+        cmd = f"cd {cache_path} && g++ {core_path}/utils/log.cc {core_path}/utils/tracer.cc {core_path}/utils/str_utils.cc {core_path}/utils/cache_compile.cc -lpthread {cc_flags} -o cache_compile && cache_path={cache_path} jittor_path={jittor_path} ./cache_compile"
         self.assertEqual(os.system(cmd), 0)
         
     def test_log(self):
         cc_flags = (
             f" -g -O3 -DTEST_LOG -DLOG_ASYNC --std=c++14"
-            f" -I{jittor_path}/src/utils -I{jittor_path}/src -lpthread "
+            f" -I{core_path}/utils -I{core_path} -lpthread "
         )
-        cmd = f"cd {cache_path} && g++ {jittor_path}/src/utils/log.cc {jittor_path}/src/utils/tracer.cc {cc_flags} -o log && log_v=1000 log_sync=0 ./log"
+        cmd = f"cd {cache_path} && g++ {core_path}/utils/log.cc {core_path}/utils/tracer.cc {cc_flags} -o log && log_v=1000 log_sync=0 ./log"
         LOG.v(cmd)
         assert os.system(cmd) == 0
         
     def test_mwsr_list(self):
         cc_flags = (
             f" -g -O3 -DTEST -DLOG_ASYNC --std=c++14"
-            f" -I{jittor_path}/src/utils -I{jittor_path}/src -lpthread "
+            f" -I{core_path}/utils -I{core_path} -lpthread "
         )
-        cmd = f"cd {cache_path} && g++ {jittor_path}/src/utils/mwsr_list.cc {cc_flags} -o mwsr_list && ./mwsr_list"
+        cmd = f"cd {cache_path} && g++ {core_path}/utils/mwsr_list.cc {cc_flags} -o mwsr_list && ./mwsr_list"
         LOG.v(cmd)
         assert os.system(cmd) == 0
         

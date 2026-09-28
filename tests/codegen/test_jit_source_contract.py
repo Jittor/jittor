@@ -13,7 +13,7 @@ import jittor as jt
 
 HEADER = r"""
 #pragma once
-#include "op.h"
+#include "core/op.h"
 namespace jittor {
 struct JitsourceOp : Op {
     Var* x, * y;
@@ -25,7 +25,7 @@ struct JitsourceOp : Op {
 """
 
 SOURCE = r"""
-#include "var.h"
+#include "core/var.h"
 #include "jitsource_op.h"
 namespace jittor {
 #ifndef JIT

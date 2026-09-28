@@ -37,7 +37,6 @@
     "cosine_similarity",
     "cross",
     "cross_entropy",
-    "cross_entropy_label_smoothing",
     "cummax",
     "cummin",
     "cumprod",

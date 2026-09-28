@@ -121,7 +121,7 @@ def providers(monkeypatch):
         module = load("jittor.backends.acl.kernels." + name, KERNELS / (name + ".py"))
         setattr(sys.modules["jittor.backends.acl.kernels"], name, module)
         modules[name] = module
-    return SimpleNamespace(native=native, dispatch=dispatch, calls=calls, **modules)
+    return SimpleNamespace(native=native, dispatch=dispatch, calls=calls, load=load, **modules)
 
 
 def test_acl_install_publishes_real_owners_idempotently_without_facade_writes(providers):
@@ -132,7 +132,13 @@ def test_acl_install_publishes_real_owners_idempotently_without_facade_writes(pr
     assert providers.dispatch._kernels == first
     assert vars(providers.native) == before
     assert providers.calls == []
-    assert len(providers.install.KERNELS) == 44
+    operations = [operation for operation, _ in providers.install.KERNELS]
+    assert len(operations) == len(set(operations)), "duplicate ACL registrations"
+    # A literal count is the canary that a new registration was deliberate.
+    # The duplicate check above catches a name registered twice, but not a
+    # kernel that appears because an import side effect grew the table.
+    assert len(operations) == 45, "ACL kernel count changed; update deliberately"
+    assert len(first) == len(operations)
     for operation, implementation in providers.install.KERNELS:
         assert providers.dispatch.registered_kernel(operation, "acl") is implementation
         assert implementation.__module__.startswith("jittor.backends.acl.kernels.") or (
@@ -237,11 +243,12 @@ def test_acl_pool_uses_canonical_output_geometry(
         geometry_calls.append(args)
         return actual_geometry(*args)
 
-    for name in ("jittor.nn", "jittor.nn.functional", "jittor.nn.functional.pooling"):
+    for name in ("jittor.nn", "jittor.nn.functional", "jittor.nn.functional.pooling",
+                 "jittor.nn.functional.pooling.average"):
         package = ModuleType(name)
         package.__path__ = []
         monkeypatch.setitem(sys.modules, name, package)
-    sys.modules["jittor.nn.functional.pooling"]._pool_output_size = record_geometry
+    sys.modules["jittor.nn.functional.pooling.average"]._pool_output_size = record_geometry
 
     class Function:
         def __call__(self, *args):
@@ -250,42 +257,25 @@ def test_acl_pool_uses_canonical_output_geometry(
     providers.native.Function = Function
     launches = []
 
-    def record_pool(name, inputs, output_dtypes, output_shapes, attributes=None, **kwargs):
+    def record_pool(name, inputs, output_dtypes, output_shapes, attributes):
         launches.append((name, output_shapes, attributes))
         return [_Tensor(shape, dtype) for shape, dtype in zip(output_shapes, output_dtypes)]
 
-    def _output_size_fn():
-        return record_geometry
-
-    def _pool_program(name, input_count, output_count, kernel, stride, padding,
-                      dilation, ceil_mode, count_include_pad):
-        return SimpleNamespace(
-            name=name,
-            attributes={"countIncludePad": count_include_pad},
-        )
-
-    def acl_emit(program, inputs, output_dtypes, output_shapes):
-        return record_pool(
-            program.name, inputs, output_dtypes, output_shapes, program.attributes
-        )
-
     pool_source = (KERNELS / "ops/pool_op.py").read_text(encoding="utf-8")
-    pool_class = next(
-        node
-        for node in ast.parse(pool_source).body
-        if isinstance(node, ast.ClassDef) and node.name == "PoolACL"
-    )
-    namespace = {
-        "jt": providers.native,
-        "pool_cmd": record_pool,
-        "_output_size_fn": _output_size_fn,
-        "_pool_program": _pool_program,
-        "acl_emit": acl_emit,
-    }
-    exec(
-        compile(ast.get_source_segment(pool_source, pool_class), "<actual_pool_acl>", "exec"),
-        namespace,
-    )
+    pool_tree = ast.parse(pool_source)
+    pool_tree.body = [node for node in pool_tree.body
+                      if isinstance(node, (ast.FunctionDef, ast.ClassDef))
+                      and node.name in {"PoolACL", "_output_size_fn", "_pool_program"}]
+
+    def record_program(name, input_count, output_count, attributes):
+        return name, attributes
+
+    def record_emit(program, inputs, output_dtypes, output_shapes):
+        return record_pool(program[0], inputs, output_dtypes, output_shapes, program[1])
+
+    namespace = {"jt": providers.native, "acl_program": record_program,
+                 "acl_emit": record_emit, "_POOL_PROGRAMS": {}, "_pool_output_size": None}
+    exec(compile(pool_tree, "<actual_pool_acl>", "exec"), namespace)
     monkeypatch.setattr(providers.neural, "PoolACL", namespace["PoolACL"])
     value = _Tensor((1, 2, size, size))
     result = providers.neural.pool_acl(
@@ -346,6 +336,9 @@ def test_acl_transpose_argument_forms_reach_the_core_op_normalised(
         "Var": _Tensor,
         "numbers": numbers,
         "ori_int": int,
+        # ``_core/var.py`` reads this module-level constant (``(0).__class__``)
+        # inside the functions below; only the FunctionDefs are exec'd here.
+        "_pyint": int,
         "_try_dispatch": providers.dispatch.try_dispatch,
         "origin_transpose": record_transpose,
     }

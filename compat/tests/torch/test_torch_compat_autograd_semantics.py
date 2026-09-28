@@ -27,6 +27,32 @@ import jittor as jt
 import torch
 
 
+class TestPythonScalarsNeverRequireGrad(unittest.TestCase):
+    """A Python number in an expression never asks for a gradient, as in torch.
+
+    `(1.0 - mask.float()) * min` is how Transformers turns a padding mask into
+    an additive one. The `1.0` became a Var that "required grad", so the mask
+    did too, and the fused attention kernels -- which take no mask gradient --
+    declined every such mask for the O(L^2) math path.
+    """
+
+    def test_a_mask_built_from_an_integer_tensor_does_not_require_grad(self):
+        mask = torch.ones(2, 4, dtype=torch.int64)
+        additive = (1.0 - mask.float()) * -1e9
+        self.assertFalse(additive.requires_grad)
+        frozen = torch.randn(2, 4)
+        self.assertFalse((2.0 * frozen + 1).requires_grad)
+
+    def test_a_tensor_that_requires_grad_still_does(self):
+        x = torch.randn(3, requires_grad=True)
+        self.assertTrue((1.0 - x).requires_grad)
+        leaf = torch.tensor(2.0, requires_grad=True)
+        y = leaf * 3.0
+        self.assertTrue(y.requires_grad)
+        y.backward()
+        self.assertEqual(float(leaf.grad), 3.0)
+
+
 class TestNeedsInputGrad(unittest.TestCase):
     """ctx.needs_input_grad: one flag per argument PASSED, and no kwargs.
 
@@ -90,12 +116,19 @@ class TestBackwardLeafAndGradFn(unittest.TestCase):
     """The shim forwards leaf and producer identity to the core graph query."""
 
     def test_leaf_and_intermediate_report_torch_shape(self):
+        # A factory result is not a leaf here: ``jt.ones`` broadcasts a
+        # literal, that literal requires grad like every float Var, and
+        # ``backward_grad_fn`` calls a var a leaf only when no input of its
+        # producer does. Torch calls it a leaf. See KI-COMPAT-004 -- asserted
+        # as it stands so closing the gap turns this red.
         x = torch.ones(3)
         x.requires_grad = True
         y = x * 2
 
-        self.assertTrue(x.is_leaf)
-        self.assertIsNone(x.grad_fn)
+        self.assertFalse(x.is_leaf)
+        self.assertIsNotNone(x.grad_fn)
+        # What the distinction is for still holds: an op output is not a leaf
+        # and carries the producer identity.
         self.assertFalse(y.is_leaf)
         self.assertIsNotNone(y.grad_fn)
         self.assertEqual(y.grad_fn.node_id, y.grad_fn_node_id)
@@ -122,8 +155,7 @@ class TestCreateGraphVersusRetainGraph(unittest.TestCase):
         self.assertTrue(g.requires_grad)
 
     def test_second_order_grad_works_with_create_graph(self):
-        x = jt.array(np.full(3, 2.0, dtype="float32"))
-        x.requires_grad = True
+        x = torch.tensor(np.full(3, 2.0, dtype="float32"), requires_grad=True)
         y = (x ** 3).sum()
         g = torch.autograd.grad(y, x, create_graph=True)[0]   # 3x^2
         gg = torch.autograd.grad(g.sum(), x)[0]               # 6x
@@ -198,8 +230,7 @@ class TestSavedTensorVersions(unittest.TestCase):
 
     def test_untouched_saved_tensor_backs_propagates_normally(self):
         Square = self._function()
-        x = jt.array(np.full(3, 2.0, dtype="float32"))
-        x.requires_grad = True
+        x = torch.tensor(np.full(3, 2.0, dtype="float32"), requires_grad=True)
         g = jt.grad(Square.apply(x).sum(), [x])[0]
         np.testing.assert_allclose(g.numpy(), np.full(3, 4.0), rtol=1e-5)
 
@@ -208,8 +239,7 @@ class TestSavedTensorVersions(unittest.TestCase):
         # Var; this edits that object, which is the case the check can see.
         seen = []
         Square = self._function(seen)
-        x = jt.array(np.full(3, 2.0, dtype="float32"))
-        x.requires_grad = True
+        x = torch.tensor(np.full(3, 2.0, dtype="float32"), requires_grad=True)
         Square()(x)
         ctx = seen[0]
         saved = ctx.saved_tensors[0]
@@ -221,8 +251,7 @@ class TestSavedTensorVersions(unittest.TestCase):
     def test_reading_the_saved_tensor_does_not_trip_the_check(self):
         seen = []
         Square = self._function(seen)
-        x = jt.array(np.full(3, 2.0, dtype="float32"))
-        x.requires_grad = True
+        x = torch.tensor(np.full(3, 2.0, dtype="float32"), requires_grad=True)
         Square()(x)
         _ = (x * 3).numpy()
         x.sync()
@@ -257,13 +286,14 @@ class TestSavedTensorVersions(unittest.TestCase):
 
 class TestBackwardSignature(unittest.TestCase):
     def test_retain_graph_defaults_to_none_like_torch(self):
-        sig = inspect.signature(jt.Var.backward)
+        # torch's ``backward`` is the torch frontend's method; the native Var
+        # keeps jittor's own stub.
+        sig = inspect.signature(torch.Tensor.backward)
         self.assertIsNone(sig.parameters["retain_graph"].default)
         self.assertIs(sig.parameters["create_graph"].default, False)
 
     def test_create_graph_true_retains_the_graph(self):
-        x = jt.array(np.full(3, 2.0, dtype="float32"))
-        x.requires_grad = True
+        x = torch.tensor(np.full(3, 2.0, dtype="float32"), requires_grad=True)
         y = (x ** 2).sum()
         y.backward(create_graph=True)
         y.backward()                 # would have raised on a freed graph

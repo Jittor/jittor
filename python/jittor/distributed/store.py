@@ -49,6 +49,21 @@ def _value_bytes(value):
     return str(value).encode("ascii")
 
 
+def _client_dial_addresses(host, port):
+    """The sockaddrs ``socket.create_connection`` will try, in order.
+
+    The listening socket has to be bound to one of *these*, not to whatever
+    ``socket.bind`` resolves the host to on its own. The two disagree: ``bind``
+    looks the name up as ``AF_INET`` and takes the first answer, while
+    ``create_connection`` walks an ``AF_UNSPEC`` list. On a host whose
+    ``/etc/hosts`` maps a name such as ``localhost`` to several addresses,
+    ``bind`` picks ``127.0.0.1`` while the client only ever dials ``::1`` and
+    the machine's own address, so every attempt is refused until the store
+    times out.
+    """
+    return socket.getaddrinfo(host, int(port), 0, socket.SOCK_STREAM)
+
+
 class Store:
     """Thread-safe single-process Store base implementation."""
 
@@ -102,6 +117,15 @@ class Store:
         with self._condition:
             return all(name in self._data for name in names)
 
+    def arrive(self, key):
+        """Announce arrival: "I am here and I will ask you for nothing else."
+
+        Plain :meth:`set` for a store with no server. :class:`TCPStore`
+        overrides it, because there the order of the reply and the key matters
+        -- see :meth:`TCPStore.arrive`.
+        """
+        return self.set(key, b"1")
+
     def delete_key(self, key):
         with self._condition:
             return self._data.pop(_key_text(key), None) is not None
@@ -115,16 +139,38 @@ class _TCPStoreServer:
     def __init__(self, host, port, timeout):
         self.store = Store(timeout)
         self.timeout = _timeout_seconds(timeout)
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.socket.bind((host, int(port)))
-        self.socket.listen()
+        self.socket = self._listen(host, port)
         self._workers = 0
         self._workers_condition = threading.Condition()
         self._closed = False
         self._accept_thread = threading.Thread(target=self._accept_loop)
         self._accept_thread.daemon = True
         self._accept_thread.start()
+
+    @staticmethod
+    def _listen(host, port):
+        """Bind the first address a client would dial, skipping unusable ones."""
+        try:
+            addresses = _client_dial_addresses(host, port)
+        except socket.gaierror as error:
+            raise OSError(
+                "cannot resolve TCPStore host {}:{}: {}".format(host, port, error)
+            ) from error
+        last_error = None
+        for family, socktype, proto, _canonname, sockaddr in addresses:
+            listener = socket.socket(family, socktype, proto)
+            try:
+                listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                listener.bind(sockaddr)
+                listener.listen()
+                return listener
+            except OSError as error:
+                last_error = error
+                listener.close()
+        raise OSError(
+            "cannot bind TCPStore server to {}:{}: {}".format(
+                host, port, last_error)
+        )
 
     def _accept_loop(self):
         while not self._closed:
@@ -146,6 +192,32 @@ class _TCPStoreServer:
                 if not line:
                     return
                 request = json.loads(line.decode("utf8"))
+                if request.get("op") == "arrive":
+                    # Reply *first*, make the key visible *second*.
+                    #
+                    # The rank that hosts this server is also a rank: it enters
+                    # the NCCL collective as soon as it sees every peer's
+                    # marker, and the collective holds the GIL for its whole
+                    # duration, so from then on no thread in this process can
+                    # read a request or write a reply. If the key appeared
+                    # before this reply was flushed -- which is what `set`
+                    # does -- the peer could be left blocked in `readline` on a
+                    # reply nobody can ever write, while the collective waits
+                    # for that same peer. Flushing first means a marker the host
+                    # can see is a peer that has already been answered.
+                    #
+                    # Ordering for the caller is unchanged: this connection's
+                    # next request is only read after the key is stored, so
+                    # `arrive` followed by `wait` on the same client still sees
+                    # its own marker.
+                    key = request.get("key")
+                    reply = ({"ok": True, "result": None} if key is not None
+                             else {"ok": False, "error": "arrive needs a key"})
+                    stream.write((json.dumps(reply) + "\n").encode("utf8"))
+                    stream.flush()
+                    if key is not None:
+                        self.store.set(key, b"1")
+                    continue
                 try:
                     result = self._dispatch(request)
                     response = {"ok": True, "result": result}
@@ -329,6 +401,20 @@ class TCPStore(Store):
             "op": "check", "keys": [_key_text(key) for key in keys],
         }))
 
+    def arrive(self, key):
+        """Set ``key`` to ``b"1"``, with the reply flushed before it is set.
+
+        The difference from :meth:`set` is invisible to the caller and decisive
+        for the process hosting the server: see ``_serve_connection``. A rank
+        uses this for the marker another rank waits on before entering a
+        collective that holds the GIL.
+        """
+        if self._local():
+            return Store.arrive(self, key)
+        return self._client.request({
+            "op": "arrive", "key": _key_text(key),
+        })
+
     def delete_key(self, key):
         if self._local():
             return Store.delete_key(self, key)
@@ -483,6 +569,9 @@ class PrefixStore(Store):
 
     def check(self, keys):
         return self.store.check([self._key(key) for key in keys])
+
+    def arrive(self, key):
+        return self.store.arrive(self._key(key))
 
     def delete_key(self, key):
         return self.store.delete_key(self._key(key))

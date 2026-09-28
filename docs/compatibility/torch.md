@@ -81,6 +81,24 @@ scaler.scale(loss).backward(); scaler.step(opt); scaler.update()
   loss 曲线与 fp32 一致；
 - fp16 配合 GradScaler 可用（loss 缩放 + inf/nan 跳步）。
 
+`torch.amp` 的整个表面都在：`autocast`、`GradScaler`、`custom_fwd`/`custom_bwd`、
+`is_autocast_available`，以及 `autocast_mode`/`grad_scaler` 两个子模块；
+`torch.cuda.amp` 与 `torch.cpu.amp` 是把设备写死的子类（`issubclass` 成立）。
+per-device 的状态函数（`is_autocast_enabled`/`set_autocast_enabled`/
+`get_autocast_dtype`/`set_autocast_dtype`/`clear_autocast_cache`/
+`autocast_increment_nesting` 及其旧拼写）都是真实读写，不是空实现。
+
+已知差异（`fidelity_of("torch.autocast").detail` 里逐条写着）：
+
+- autocast 落到 jittor 的全局 amp 寄存器，而不是 torch 的逐算子白名单。matmul /
+  linear / 卷积会降精度、归约保持 float32（与 torch 一致），但 torch 不动的
+  fall-through 类（float32 `add`）在这里也会降精度；
+- 一个寄存器服务所有 device type，CPU 区域与 CUDA 区域不像 torch 的 dispatch key
+  那样互相独立；
+- `is_autocast_available` 只对本次构建能跑的后端（cpu/cuda，装了 ACL 时还有 npu）
+  回答真，torch 会对 xpu/mps/xla/ipu/mtia 也回答真——在这里那等于允许
+  `torch.autocast("xla")` 悄悄改掉当前后端的精度，所以直接拒绝。
+
 ## 多卡 DDP —— 不需要 mpirun
 
 一个 torchrun 风格的启动器在两种后端上都能用（NVIDIA 走 NCCL，昇腾走 HCCL），

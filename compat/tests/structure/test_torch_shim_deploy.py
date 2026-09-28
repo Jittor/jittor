@@ -32,6 +32,20 @@ def setUpModule():
 
 
 class TestTorchShimDeploy(unittest.TestCase):
+    def _write_torch_metadata(self, source):
+        """Both files the torch dist-info needs: a version and an import name.
+
+        `top_level.txt` is what maps the `torch` import back to the deployed
+        distribution; without it the mapping falls to jittor-torch and
+        Transformers reads torch's version as Jittor's.
+        """
+        metadata_root = source / "torch_dist_info"
+        metadata_root.mkdir(exist_ok=True)
+        (metadata_root / "METADATA").write_text(
+            "Name: torch\nVersion: 9.9.0\n", encoding="utf-8"
+        )
+        (metadata_root / "top_level.txt").write_text("torch\n", encoding="utf-8")
+
     def _write_flash_attn_metadata(self, source):
         metadata_root = source / "flash_attn_dist_info"
         metadata_root.mkdir()
@@ -99,12 +113,9 @@ class TestTorchShimDeploy(unittest.TestCase):
         source = base / "source"
         target = base / "target"
         (source / "stubs" / "example" / "nested").mkdir(parents=True)
-        (source / "torch_dist_info").mkdir()
         (source / "torch").mkdir(exist_ok=True)
         (source / "torch" / "__init__.py").write_text("shim = True\n", encoding="utf-8")
-        (source / "torch_dist_info" / "METADATA").write_text(
-            "Name: torch\nVersion: 9.9.0\n", encoding="utf-8"
-        )
+        self._write_torch_metadata(source)
         self._write_flash_attn_metadata(source)
         for relative in (
             "example/__init__.py",
@@ -229,6 +240,12 @@ class TestTorchShimDeploy(unittest.TestCase):
         (source / "torch_dist_info" / "METADATA").write_text(
             "Name: torch\nVersion: 9.9.0\n", encoding="utf-8"
         )
+        with self.assertRaisesRegex(RuntimeError, "torch top-level metadata"):
+            deploy_module._plan(source / "target", resource_root=source)
+
+        (source / "torch_dist_info" / "top_level.txt").write_text(
+            "torch\n", encoding="utf-8"
+        )
         with self.assertRaisesRegex(RuntimeError, "flash-attn metadata"):
             deploy_module._plan(source / "target", resource_root=source)
 
@@ -238,15 +255,13 @@ class TestTorchShimDeploy(unittest.TestCase):
         source = Path(temporary_directory.name) / "source"
         complete = source / "stubs" / "complete"
         incomplete = source / "stubs" / "incomplete"
-        metadata = source / "torch_dist_info" / "METADATA"
         complete.mkdir(parents=True)
         incomplete.mkdir()
-        metadata.parent.mkdir()
         (source / "torch").mkdir(exist_ok=True)
         (source / "torch" / "__init__.py").write_text("shim = True\n", encoding="utf-8")
         (complete / "__init__.py").write_text("stub = True\n", encoding="utf-8")
         (incomplete / "api.py").write_text("stub = False\n", encoding="utf-8")
-        metadata.write_text("Name: torch\nVersion: 9.9.0\n", encoding="utf-8")
+        self._write_torch_metadata(source)
 
         with self.assertRaisesRegex(RuntimeError, r"missing __init__\.py"):
             deploy_module._plan(source / "target", resource_root=source)
@@ -257,15 +272,13 @@ class TestTorchShimDeploy(unittest.TestCase):
         source = Path(temporary_directory.name) / "source"
         package = source / "stubs" / "example"
         bytecode_cache = source / "stubs" / "__pycache__"
-        metadata = source / "torch_dist_info" / "METADATA"
         package.mkdir(parents=True)
         bytecode_cache.mkdir()
-        metadata.parent.mkdir()
         (source / "torch").mkdir(exist_ok=True)
         (source / "torch" / "__init__.py").write_text("shim = True\n", encoding="utf-8")
         (package / "__init__.py").write_text("stub = True\n", encoding="utf-8")
         (bytecode_cache / "__init__.cpython-311.pyc").write_bytes(b"bytecode")
-        metadata.write_text("Name: torch\nVersion: 9.9.0\n", encoding="utf-8")
+        self._write_torch_metadata(source)
         self._write_flash_attn_metadata(source)
 
         planned = deploy_module._plan(source / "target", resource_root=source)
@@ -279,14 +292,12 @@ class TestTorchShimDeploy(unittest.TestCase):
         self.addCleanup(temporary_directory.cleanup)
         source = Path(temporary_directory.name) / "source"
         package = source / "stubs" / "example"
-        metadata = source / "torch_dist_info" / "METADATA"
         package.mkdir(parents=True)
-        metadata.parent.mkdir()
         (source / "torch").mkdir(exist_ok=True)
         (source / "torch" / "__init__.py").write_text("shim = True\n", encoding="utf-8")
         package_init = package / "__init__.py"
         package_init.write_text("stub = True\n", encoding="utf-8")
-        metadata.write_text("Name: torch\nVersion: 9.9.0\n", encoding="utf-8")
+        self._write_torch_metadata(source)
         self._write_flash_attn_metadata(source)
 
         _checked_target, problems = deploy_module.check_details(

@@ -41,9 +41,25 @@ def _layer_norm_cuda_cls(hidden, eps):
                     int row = blockIdx.x;
                     if (row >= rows) return;
                     int base = row * {hidden};
+                    // The row is read once and kept in registers: the mean
+                    // pass, the variance pass and the write all want the same
+                    // values. Re-reading made this move 4x the row where
+                    // torch's Welford moves 2x. Capped so a wide row falls
+                    // back to re-reading rather than spilling.
+                    constexpr int kPer = ({hidden} + {threads} - 1) / {threads};
+                    constexpr bool kCache = kPer <= 8;
+                    float cache[kCache ? kPer : 1];
                     float local = 0.0f;
-                    for (int j = threadIdx.x; j < {hidden}; j += blockDim.x)
-                        local += static_cast<float>(x[base + j]);
+                    if (kCache) {{
+                        int i = 0;
+                        for (int j = threadIdx.x; j < {hidden}; j += blockDim.x, ++i) {{
+                            cache[i] = static_cast<float>(x[base + j]);
+                            local += cache[i];
+                        }}
+                    }} else {{
+                        for (int j = threadIdx.x; j < {hidden}; j += blockDim.x)
+                            local += static_cast<float>(x[base + j]);
+                    }}
                     float reduced = BlockReduce(storage).Sum(local);
                     if (threadIdx.x == 0) {{
                         mean_shared = reduced / {hidden}.0f;
@@ -53,9 +69,17 @@ def _layer_norm_cuda_cls(hidden, eps):
 
                     float row_mean = mean_shared;
                     local = 0.0f;
-                    for (int j = threadIdx.x; j < {hidden}; j += blockDim.x) {{
-                        float delta = static_cast<float>(x[base + j]) - row_mean;
-                        local += delta * delta;
+                    if (kCache) {{
+                        int i = 0;
+                        for (int j = threadIdx.x; j < {hidden}; j += blockDim.x, ++i) {{
+                            float delta = cache[i] - row_mean;
+                            local += delta * delta;
+                        }}
+                    }} else {{
+                        for (int j = threadIdx.x; j < {hidden}; j += blockDim.x) {{
+                            float delta = static_cast<float>(x[base + j]) - row_mean;
+                            local += delta * delta;
+                        }}
                     }}
                     __syncthreads();
                     reduced = BlockReduce(storage).Sum(local);
@@ -67,10 +91,11 @@ def _layer_norm_cuda_cls(hidden, eps):
                     __syncthreads();
 
                     float row_rstd = rstd_shared;
-                    for (int j = threadIdx.x; j < {hidden}; j += blockDim.x) {{
-                        float normalized =
-                            (static_cast<float>(x[base + j]) - row_mean)
-                            * row_rstd;
+                    int wi = 0;
+                    for (int j = threadIdx.x; j < {hidden}; j += blockDim.x, ++wi) {{
+                        float xv = kCache ? cache[wi]
+                                          : static_cast<float>(x[base + j]);
+                        float normalized = (xv - row_mean) * row_rstd;
                         y[base + j] = out0_type(
                             normalized * static_cast<float>(weight[j])
                             + static_cast<float>(bias[j]));
@@ -216,20 +241,27 @@ def _supports_layer_norm_training(x, normalized_shape, weight, bias, eps):
         and isinstance(bias, jt.Var)
     ):
         return False
-    shape = tuple(int(size) for size in x.shape)
-    normalized_shape = tuple(int(size) for size in normalized_shape)
-    if (
-        not shape
-        or any(size <= 0 for size in shape)
-        or len(normalized_shape) != 1
-        or normalized_shape[0] != shape[-1]
-        or int(weight.numel()) != shape[-1]
-        or int(bias.numel()) != shape[-1]
-        or not math.isfinite(float(eps))
-        or float(eps) <= 0.0
-    ):
+    # This runs on every layer_norm of every step, so the cheap disqualifiers
+    # go first and nothing is converted before it is needed: the two
+    # `tuple(int(size) for size in ...)` builds and the `any(...)` genexpr used
+    # to run even when the rank was already wrong. `x.shape` entries and
+    # `numel()` are native ints already, and the last axis is the only one the
+    # kernel reads, so only it is compared.
+    if len(normalized_shape) != 1:
         return False
-    return True
+    shape = x.shape
+    if not len(shape):
+        return False
+    hidden = shape[-1]
+    if (normalized_shape[0] != hidden
+            or weight.numel() != hidden
+            or bias.numel() != hidden):
+        return False
+    for size in shape:
+        if size <= 0:
+            return False
+    eps = float(eps)
+    return eps > 0.0 and math.isfinite(eps)
 
 
 @optional_kernel("nn.layer_norm.training", ("cuda", "rocm_legacy", "corex_legacy"),

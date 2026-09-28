@@ -139,5 +139,61 @@ class TestRandomOp(unittest.TestCase):
         self._check_seed_is_reproducible()
 
 
+    def _check_linspace_endpoint(self):
+        """The last value is ``end`` exactly, at every length and placement.
+
+        numpy and torch both promise this, and callers compare against it. The
+        arithmetic series alone leaves the final point one rounding step off.
+        """
+        for start in (0.0, 1.0, -1.0, 2.5):
+            for end in (0.0, 1.0, -1.0, 2.5):
+                for steps in (2, 3, 4, 5, 6, 8, 17, 50):
+                    with self.subTest(start=start, end=end, steps=steps):
+                        got = jt.linspace(start, end, steps).numpy()
+                        self.assertEqual(tuple(got.shape), (steps,))
+                        # exact in the result's own dtype, not allclose
+                        self.assertEqual(got[-1], got.dtype.type(end))
+                        self.assertEqual(got[0], got.dtype.type(start))
+                        # The interior is float32 arithmetic accumulated over
+                        # ``steps`` terms, against a schedule numpy evaluates in
+                        # float64: a point that lands mathematically on zero can
+                        # miss it by ~1e-7 (seen at index 35 of
+                        # linspace(2.5, -1.0, 50)). Only the endpoint is a
+                        # contract; the rest is tolerance.
+                        np.testing.assert_allclose(
+                            got, np.linspace(start, end, steps),
+                            rtol=1e-5, atol=1e-5)
+
+    def test_linspace_endpoint_is_exact(self):
+        self._check_linspace_endpoint()
+
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
+    @jt.flag_scope(use_cuda=1)
+    def test_linspace_endpoint_is_exact_cuda(self):
+        self._check_linspace_endpoint()
+
+    def test_a_descending_linspace_does_not_undershoot_its_end(self):
+        """A schedule that ends below zero breaks its consumers.
+
+        MiniMax-H3 builds its sigma schedule from ``linspace(1.0, 0.0, n)`` and
+        rejects a negative ``sigma_next``, so a last point of ``-2.98e-08``
+        (which is what the CPU placement produced for n=4) failed every request
+        with 4 or more denoise steps. The CUDA placement rounded that point to
+        exactly 0, which is why the bug only showed on the CPU one.
+        """
+        for steps in (4, 5, 6, 8, 17, 50):
+            with self.subTest(steps=steps):
+                last = float(jt.linspace(1.0, 0.0, steps).numpy()[-1])
+                self.assertGreaterEqual(last, 0.0)
+                self.assertEqual(last, 0.0)
+
+    def test_linspace_single_step_is_the_start(self):
+        for start in (0.0, 3.5):
+            with self.subTest(start=start):
+                got = jt.linspace(start, 9.0, 1).numpy()
+                self.assertEqual(tuple(got.shape), (1,))
+                self.assertEqual(got[0], got.dtype.type(start))
+
+
 if __name__ == "__main__":
     unittest.main()

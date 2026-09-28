@@ -225,3 +225,35 @@ def test_a_shrunken_graph_is_reported():
     report["import_edges"] = 5
     problems = module.check_coverage(report)
     assert len(problems) >= 2, problems
+
+
+def test_build_output_inside_a_package_root_is_not_source(tmp_path):
+    """``build/lib/...`` is a copy of the tree, not the tree.
+
+    Measured for real: a ``setup.py build`` in ``compat/`` left
+    ``compat/build/lib/jittor/compat/...`` behind, and the scan read it as a
+    second copy of every module. The copy's own ``__init__`` pairs formed a
+    cycle the source does not have, so the gate went red -- four import-time
+    cycles against a ceiling of three -- with nothing in the diff to explain
+    it. A stale artifact is not a reason to fail a layout contract, and
+    deleting it by hand is not a fix: the next build puts it back.
+
+    The counterpart matters as much: ``jittor.build`` is a real package and
+    must survive, which is why the directory's *name* cannot be the test.
+    """
+    module = _checker()
+
+    artifact = tmp_path / "out"
+    (artifact / "build" / "lib" / "pkg").mkdir(parents=True)
+    (artifact / "build" / "lib" / "pkg" / "__init__.py").write_text("")
+    (artifact / "build" / "lib" / "pkg" / "thing.py").write_text("")
+
+    package_named_build = tmp_path / "src"
+    (package_named_build / "build").mkdir(parents=True)
+    (package_named_build / "build" / "__init__.py").write_text("")
+    (package_named_build / "build" / "codegen.py").write_text("")
+
+    found = module.discover_modules([(artifact, "pkg"), (package_named_build, "jittor")])
+
+    assert "jittor.build.codegen" in found, sorted(found)
+    assert [name for name in found if "build.lib" in name] == [], sorted(found)

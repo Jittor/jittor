@@ -503,8 +503,8 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             tensor = torch.tensor(values)
             functional = torch.sign(tensor)
             method = tensor.sign()
-        self.assertEqual(str(functional.dtype), "int32")
-        self.assertEqual(str(method.dtype), "int32")
+        self.assertEqual(str(functional.dtype), "torch.int32")
+        self.assertEqual(str(method.dtype), "torch.int32")
         np.testing.assert_array_equal(functional.numpy(), np.sign(values))
         np.testing.assert_array_equal(method.numpy(), np.sign(values))
 
@@ -551,10 +551,25 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
 
     def test_autocast_cpu_context_restores_state(self):
+        """A cpu region turns cpu autocast on, and nothing else.
+
+        ``is_autocast_enabled()`` with no argument is the *cuda* question --
+        that is what torch answers, and it was verified against torch 2.13:
+        inside ``with torch.autocast("cpu")`` the bare call returns False while
+        ``is_autocast_enabled("cpu")`` returns True. This used to assert the
+        bare call was True, which passed only while the shim ignored the device
+        argument and answered one global flag for every backend.
+        """
         self.assertFalse(torch.is_autocast_enabled())
+        self.assertFalse(torch.is_autocast_enabled("cpu"))
         with torch.autocast("cpu", dtype=torch.bfloat16):
-            self.assertTrue(torch.is_autocast_enabled())
+            self.assertTrue(torch.is_autocast_enabled("cpu"))
+            self.assertTrue(torch.is_autocast_cpu_enabled())
+            self.assertIs(torch.get_autocast_dtype("cpu"), torch.bfloat16)
+            # cuda is untouched: asking for one device must not enable another.
+            self.assertFalse(torch.is_autocast_enabled())
         self.assertFalse(torch.is_autocast_enabled())
+        self.assertFalse(torch.is_autocast_enabled("cpu"))
 
     def test_eye_is_a_stable_module_level_object(self):
         numerical = importlib.import_module(
@@ -607,8 +622,12 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             np_b = np.array([4.0, 5.0, 6.0])
             np.testing.assert_array_equal(
                 torch.vstack([a, b]).numpy(), np.vstack([np_a, np_b]))
+            # `row_stack` is the name under test, not the reference: numpy's own
+            # alias is deprecated (2.2: "Use np.vstack directly") and already
+            # gone by 2.5, while pyproject only bounds `numpy<3.0`. Referring to
+            # np.row_stack made this case red for a numpy version choice.
             np.testing.assert_array_equal(
-                torch.row_stack([a, b]).numpy(), np.row_stack([np_a, np_b]))
+                torch.row_stack([a, b]).numpy(), np.vstack([np_a, np_b]))
             np.testing.assert_array_equal(
                 torch.hstack([a, b]).numpy(), np.hstack([np_a, np_b]))
             np.testing.assert_array_equal(
@@ -864,8 +883,8 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             actual_tensor.numpy(), np.float_power(base, exponent), rtol=1e-6)
         np.testing.assert_allclose(
             actual_method.numpy(), np.float_power(base, 2.0), rtol=1e-6)
-        self.assertEqual(str(actual_scalar.dtype), "float64")
-        self.assertEqual(str(actual_tensor.dtype), "float64")
+        self.assertEqual(str(actual_scalar.dtype), "torch.float64")
+        self.assertEqual(str(actual_tensor.dtype), "torch.float64")
 
     def test_close_family_is_stable_module_level_objects(self):
         numerical = importlib.import_module(
@@ -956,8 +975,8 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             actual_left.numpy(), np.searchsorted(boundaries, values, side="left"))
         np.testing.assert_array_equal(
             actual_right.numpy(), np.searchsorted(boundaries, values, side="right"))
-        self.assertEqual(str(actual_left.dtype), "int64")
-        self.assertEqual(str(actual_right.dtype), "int32")
+        self.assertEqual(str(actual_left.dtype), "torch.int64")
+        self.assertEqual(str(actual_right.dtype), "torch.int32")
 
     def test_nan_reduction_family_is_stable_module_level_objects(self):
         numerical = importlib.import_module(
@@ -1391,8 +1410,8 @@ class TestTorchNumericalFidelity(unittest.TestCase):
     def test_trapz_cpu_dx_coordinate_and_var_delegate_match_numpy(self):
         values = np.array([[0.0, 1.0, 4.0], [2.0, 3.0, 8.0]], dtype="float32")
         coord = np.array([0.0, 0.5, 2.0], dtype="float32")
-        expected_dx = np.trapz(values, dx=2.0, axis=1)
-        expected_x = np.trapz(values, coord, axis=1)
+        expected_dx = np.trapezoid(values, dx=2.0, axis=1)
+        expected_x = np.trapezoid(values, coord, axis=1)
         with _native_jittor.flag_scope(use_cuda=0):
             values_tensor = torch.tensor(values)
             coord_tensor = torch.tensor(coord)
@@ -1405,7 +1424,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
 
     def test_trapz_cpu_out_identity(self):
         values = np.array([1.0, 2.0, 5.0], dtype="float32")
-        expected = np.trapz(values, dx=0.5)
+        expected = np.trapezoid(values, dx=0.5)
         with _native_jittor.flag_scope(use_cuda=0):
             values_tensor = torch.tensor(values)
             out = torch.zeros(1)

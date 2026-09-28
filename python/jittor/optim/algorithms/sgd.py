@@ -6,7 +6,7 @@ from ..._runtime.dispatch import register_kernel, select_kernel
 
 from ..base import (
     Optimizer, _grad_matches_param, _param_requires_grad,
-    _update_preserve_dtype, _optimizer_arithmetic,
+    _state_buffer, _update_preserve_dtype, _optimizer_arithmetic,
 )
 
 def sgd_update(param, grad, velocity, *, lr, momentum=0, weight_decay=0,
@@ -32,8 +32,13 @@ def _momentum_buffer(param):
     which the fused optimizer kernels reject: they write their inputs in place
     and so require contiguous storage. Paying one materialisation at
     construction keeps the hot path free of the copy.
+
+    It is also built on the *parameter's* device rather than the ambient one
+    (`_state_buffer` -> `zeros_like`): an optimizer created for a model that
+    is already on cuda:1 used to put its velocity on cuda:0 and fail in the
+    fused kernel on the first step.
     """
-    return jt.zeros(param.shape, param.dtype).contiguous().stop_grad()
+    return _state_buffer(param).contiguous().stop_grad()
 
 
 def _acl_fused_sgd_updates(entries, lr, momentum, weight_decay, dampening, nesterov):
@@ -62,6 +67,10 @@ def _acl_fused_sgd_updates(entries, lr, momentum, weight_decay, dampening, neste
 # portable update is measured rather than assumed.
 register_kernel("optim.sgd_fused", "acl", _acl_fused_sgd_updates,
                 dtypes=("float32",))
+
+# Registers the CUDA entry for the same operator. Imported for its side effect
+# and last, so that a build without the CUDA kernels still gets the ACL one.
+from jittor.backends.cuda.kernels.optim import fused_sgd_cuda as _fused_sgd_cuda  # noqa: E402,F401
 
 
 class SGD(Optimizer):
@@ -97,6 +106,7 @@ class SGD(Optimizer):
         self.param_groups.append(group)
 
     def step(self, loss=None, retain_graph=False):
+        from jittor._runtime import step_capture
         self.pre_step(loss, retain_graph=retain_graph)
         jt.flags.node_order = 1
         for pg in self.param_groups:
@@ -119,21 +129,62 @@ class SGD(Optimizer):
             # than quietly changing that. `v` is then left at whatever it held;
             # turning momentum on later resumes from zeros, which is what this
             # optimizer has always started from.
-            active = [(p, g, v) for p, g, v in zip(pg["params"], pg.get("grads", ()), pg["values"])
+            active = [(p, g, v) for p, g, v in zip(pg["params"], pg["grads"], pg["values"])
                       if _param_requires_grad(p) and _grad_matches_param(p, g)]
             if not active:
                 continue
             fused = None
-            if momentum != 0 and pg.get("fused", getattr(self, "fused", None)) is not False:
-                # The fused kernel keeps a velocity buffer; the momentum-free
-                # shortcut below is already a single pass and stays generic.
-                fused = select_kernel("optim.sgd_fused", [item[0] for item in active])
+            if pg.get("fused", getattr(self, "fused", None)) is not False:
+                # Momentum-free is considered too. That shortcut is a single
+                # pass, but it is a single pass *per parameter*: two elementwise
+                # ops and a holder rebind, 96 times for an 8-layer transformer,
+                # which measured 1.11 ms of a 7.41 ms training step. A fused
+                # kernel does the whole list in one launch, which is what
+                # PyTorch's `foreach` SGD does.
+                # Every Var the kernel will dereference, not just the
+                # parameters. `_fused_sgd_cuda` declares `float* param[]`,
+                # `float* grad[]` and `float* vel[]` and is registered
+                # `dtypes=("float32",)`, and the dispatcher filters on the
+                # dtypes of the Vars it is *shown*. Shown the parameters alone,
+                # it selected the float32 kernel under
+                # `auto_mixed_precision_level` 4, 5 and 6 -- where the
+                # parameters stay float32 and dtype inference lowers the
+                # *gradients* to float16, which is the entire point of those
+                # levels -- and handed it a `__half*`. nvcc refused at the first
+                # optimizer step with "a value of type \"jittor::float16 *\"
+                # cannot be assigned to an entity of type \"float *\"" pointed
+                # at `src/ops/composite/code_op.cc`, so native mixed-precision
+                # training on CUDA did not run at all. On CPU there is no fused
+                # kernel to select and the same script trained.
+                fused = select_kernel(
+                    "optim.sgd_fused",
+                    [var for item in active for var in item
+                     if isinstance(var, jt.Var)])
             if fused is not None:
-                updates = fused(active, lr, momentum, weight_decay, dampening, nesterov)
+                rate = lr
+                if step_capture.active():
+                    rate = step_capture.live_rate(
+                        fused, lambda pg=pg: pg.get("lr", self.lr),
+                        lambda pg=pg: (pg.get("momentum", self.momentum),
+                                       pg.get("weight_decay", self.weight_decay),
+                                       pg.get("dampening", self.dampening),
+                                       pg.get("nesterov", self.nesterov)))
+                updates = fused(active, rate, momentum, weight_decay, dampening, nesterov)
                 for (p, _, v), (new_p, new_v) in zip(active, updates):
-                    _update_preserve_dtype(v, new_v)
+                    # Without momentum the velocity buffer holds nothing the
+                    # step needs, and a kernel that keeps it updates it in
+                    # place, so it is handed back as the same Var: rebinding it
+                    # would be a holder write per parameter for no reason.
+                    if new_v is not v:
+                        _update_preserve_dtype(v, new_v)
                     _update_preserve_dtype(p, new_p)
                 continue
+            # Baked into the graph as numbers; a captured step re-captures
+            # when they change.
+            step_capture.guard(lambda pg=pg: (pg.get("lr", self.lr), pg.get("momentum", self.momentum),
+                                              pg.get("weight_decay", self.weight_decay),
+                                              pg.get("dampening", self.dampening),
+                                              pg.get("nesterov", self.nesterov)))
             for p, g, v in active:
                 # `p * 0 + g` is a whole extra pass over the parameter.
                 _update_preserve_dtype(p, sgd_update(

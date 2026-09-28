@@ -340,5 +340,76 @@ class TestBudget(unittest.TestCase):
         self.assertEqual(int(default), tiers.SMOKE_WORKERS)
 
 
+class TestCoreTier(unittest.TestCase):
+    """The core tier is an include list, so its failure modes are the mirror.
+
+    The fast tier's risk is dilution: it grows until it is not fast. This one's
+    is the opposite -- it is a selection, so a stale entry silently *removes* a
+    fundamental from the only check anyone runs between edits, and nothing goes
+    red. Both directions are asserted here.
+    """
+
+    def test_every_entry_names_a_file_the_gate_actually_runs(self):
+        gated = _gate_files()
+        for path, _seconds, _why in tiers.CORE_FILES:
+            with self.subTest(path=path):
+                self.assertTrue((REPO_ROOT / path).is_file(), "%s does not exist" % path)
+                self.assertIn(path, gated,
+                              "%s is not reached by any gate, so the core tier "
+                              "would be the only thing running it" % path)
+
+    def test_no_path_is_listed_twice(self):
+        paths = tiers.core_paths(runnable=False)
+        self.assertEqual(len(paths), len(set(paths)))
+
+    def test_every_entry_states_a_measured_cost_and_a_reason(self):
+        for path, seconds, why in tiers.CORE_FILES:
+            with self.subTest(path=path):
+                self.assertGreater(seconds, 0, path)
+                self.assertGreaterEqual(len(why.strip()), 8,
+                                        "%s: say what it is for" % path)
+
+    def test_no_single_entry_dominates_the_budget(self):
+        """One file may not become the tier.
+
+        Deliberately not "no entry is in SLOW_FILES": the two lists measure
+        different things. ``SLOW_FILES`` records what a file costs *inside the
+        four-worker fast tier*, where it shares cores with three other workers,
+        and defers it to protect that tier's makespan. This one records what it
+        costs run serially, which is how the core tier runs, and three compat
+        files are in both lists for exactly that reason -- 29-37 s there, 4-12 s
+        here. What would actually hurt is one entry growing until the tier is
+        that entry, so that is what is asserted.
+        """
+        cap = tiers.CORE_BUDGET_SECONDS / 4
+        for path, seconds, _why in tiers.CORE_FILES:
+            with self.subTest(path=path):
+                self.assertLess(seconds, cap,
+                                "%s is %.0f s of a %.0f s budget" %
+                                (path, seconds, tiers.CORE_BUDGET_SECONDS))
+
+    def test_both_process_modes_are_covered(self):
+        """One mode's fundamentals say nothing about the other's: Torch mode
+        changes lazy execution, reduction defaults and what a gradient is."""
+        sessions = {tiers.session_of(path)
+                    for path in tiers.core_paths(runnable=False)}
+        self.assertEqual(sessions, {"native", "torch"})
+
+    def test_the_prediction_fits_the_budget(self):
+        """Arithmetic, not wall clock -- for the reason in this module's
+        docstring."""
+        predicted = tiers.predicted_core_seconds()
+        self.assertLessEqual(
+            predicted, tiers.CORE_BUDGET_SECONDS,
+            "the core tier predicts %.0f s against a %.0f s budget; either "
+            "drop an entry or move the budget on purpose"
+            % (predicted, tiers.CORE_BUDGET_SECONDS))
+
+    def test_the_budget_is_small_enough_to_run_between_edits(self):
+        """The promise is a number. If it drifts up to the fast tier's, the
+        tier has stopped being a different thing."""
+        self.assertLess(tiers.CORE_BUDGET_SECONDS, tiers.SMOKE_BUDGET_SECONDS / 2)
+
+
 if __name__ == "__main__":
     unittest.main()

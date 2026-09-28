@@ -132,14 +132,19 @@ def median_ref(x, dim=None, keepdim=False):
         xf = x.reshape(-1)
         s = np.sort(xf)
         kpos = (xf.shape[0] - 1) // 2
-        return np.ascontiguousarray(np.atleast_1d(s[kpos]))
+        # `asarray`, not `ascontiguousarray`: the latter promotes a numpy scalar
+        # to shape (1,), which is what the comment here used to claim was ().
+        # `jt.median(x)` is 0-d, as torch's is, so the reference has to be too.
+        return np.asarray(s[kpos])
     s = np.sort(x, axis=dim)
     nd = x.ndim
     dd = dim if dim >= 0 else dim + nd
     kpos = (x.shape[dd] - 1) // 2
     sl = [slice(None)] * nd
     sl[dd] = slice(kpos, kpos + 1) if keepdim else kpos
-    return np.ascontiguousarray(s[tuple(sl)])
+    # `asarray` here too: reducing the only axis of a 1-D input without keepdim
+    # leaves a numpy scalar, and `ascontiguousarray` would make it (1,).
+    return np.asarray(s[tuple(sl)])
 
 
 # ---------------------------------------------------------------- op wrappers
@@ -150,6 +155,25 @@ def median_ref(x, dim=None, keepdim=False):
 
 def _kthvalue_values(x, k, dim=None, keepdim=False):
     return jt.kthvalue(x, k, dim=dim, keepdim=keepdim)[0]
+
+
+# Same reason for the rest of this file's multi-output reductions: jittor returns
+# a plain 2-tuple, not the namedtuple the harness knows how to unwrap, so the
+# compare saw a 2-tuple against one array and failed on shape before any value
+# was looked at. Which half to keep is per operator and belongs here, not in the
+# harness: a blanket "take [0]" also catches `split`, `chunk` and `slogdet`,
+# whose tuples ARE the answer.
+
+def _sort_values(x, dim=-1, descending=False):
+    return jt.sort(x, dim, descending=descending)[0]
+
+
+def _topk_values(x, k, dim=-1, largest=True, sorted=True):
+    return jt.topk(x, k, dim, largest, sorted)[0]
+
+
+def _argsort_indices(x, dim=-1, descending=False):
+    return jt.argsort(x, dim, descending=descending)[0]
 
 
 # --------------------------------------------------------------- sample builders
@@ -284,19 +308,19 @@ op_db = [
     # supports_gradgrad=False: the values backward is a permutation/selection (scatter
     # via getitem/reindex) whose 2nd derivative is not reliably available in jittor
     # (mirrors the core registry's max/amax/min stance).
-    OpInfo("sort", op=jt.sort, ref=sort_ref, sample_inputs_func=sample_sort,
+    OpInfo("sort", op=_sort_values, ref=sort_ref, sample_inputs_func=sample_sort,
            supports_gradgrad=False),
 
     # ---- topk -> (values, indices); differentiate .values ---------------------
     # Backward gathers k positions then scatters back; the DROPPED positions must
     # receive a zero gradient. gradcheck verifies both the routing and the zeros.
-    OpInfo("topk", op=jt.topk, ref=topk_ref, sample_inputs_func=sample_topk,
+    OpInfo("topk", op=_topk_values, ref=topk_ref, sample_inputs_func=sample_topk,
            supports_gradgrad=False),
 
     # ---- argsort -> integer permutation (NON-differentiable) ------------------
     # int64 output; supports_autograd=False -> forward-only vs np.argsort. Distinct
     # inputs make the permutation unique so jittor == numpy exactly.
-    OpInfo("argsort", op=jt.argsort, ref=argsort_ref,
+    OpInfo("argsort", op=_argsort_indices, ref=argsort_ref,
            sample_inputs_func=sample_argsort,
            dtypes=cu.floating_types(), supports_autograd=False),
 

@@ -152,5 +152,41 @@ class TestUniqueHasOneImplementation(unittest.TestCase):
                          "unique switches devices behind the caller again")
 
 
+@unittest.skipUnless(jt.has_cuda, "CUDA runtime required")
+class TestUniqueOffTheAmbientDevice(unittest.TestCase):
+    """`unique` must not build its prepended element on the ambient device.
+
+    The prepend is ``jt.concat([Var([False]), diff], 0)``, and ``Var([False])``
+    is created on the *ambient* device. So whenever the input lives anywhere
+    else, the concat raised
+
+        dispatch_context.cc:52: Expected all tensor inputs on the same backend
+        and device ..., first input backend=1 index=0 but another input has
+        backend=1 index=1
+
+    which is every worker whose device is not the process default -- i.e. every
+    rank but the first of a multi-process run. MiniMax-H3's denoise loop reaches
+    it through ``torch.unique(timesteps, sorted=True, return_inverse=True)`` to
+    build the AdaLN row index of the first denoise step. The element is built
+    from the input now, so it carries the input's device.
+    """
+
+    def test_inverse_on_a_device_that_is_not_the_ambient_one(self):
+        if jt.get_device_count() < 2:
+            self.skipTest("needs a second device to differ from the ambient one")
+        raw = np.array([0.75, 0.40, 0.75, 1.0, 0.40, 0.75], dtype="float32")
+        expected, expected_inverse = np.unique(raw, return_inverse=True)
+        saved = jt.flags.device_id
+        try:
+            jt.flags.device_id = 0
+            x = jt.array(raw).to_device(1)
+            assert x.device_id == 1
+            unique, inverse = jt.unique(x, sorted=True, return_inverse=True)
+            np.testing.assert_array_equal(unique.numpy(), expected)
+            np.testing.assert_array_equal(inverse.numpy(), expected_inverse)
+        finally:
+            jt.flags.device_id = saved
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -2,6 +2,7 @@
 from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
 
 from _helpers import capability as _test_capability
+from _helpers.cupy_bridge import cuda_numpy_code_available
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved.
 # Maintainers: Jittor Group
@@ -271,7 +272,14 @@ class _Mixin:
         np.testing.assert_allclose(np.sort(w.numpy()), ref, atol=1e-3, rtol=1e-3)
 
 
+# complex64 linalg runs through jt.numpy_code, and py_converter hands that
+# callback `cupy` instead of `numpy` when use_cuda is on. Without CuPy the
+# operator raises from inside execution -- and leaves the CUDA work pending for
+# an unrelated later test to trip over, which is how one missing optional
+# dependency turns into failures nowhere near it.
 @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "no cuda found")
+@unittest.skipIf(not cuda_numpy_code_available(),
+                 "CUDA numpy-code operators need CuPy; it is not installed")
 class TestComplex64LinalgCUDA(_Mixin, unittest.TestCase):
     use_cuda = 1
 

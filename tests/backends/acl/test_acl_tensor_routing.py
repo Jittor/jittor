@@ -1,6 +1,7 @@
 """Host-only contracts for optional ACL routing and native indexing ownership."""
 
 import ast
+import numbers
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,12 +14,49 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 def definitions(relative, names=None, **namespace):
+    from jittor._core.dtypes import dtype_name
+    namespace.setdefault("_jittor_dtype_name", dtype_name)
+    namespace.setdefault("_numbers", numbers)
     path = ROOT / "python" / "jittor" / relative
     tree = ast.parse(path.read_text(encoding="utf8"))
-    tree.body = [node for node in tree.body if isinstance(node, ast.FunctionDef)
-                 and (names is None or node.name in names)]
+    # Keep the module-level constants the surviving functions read.
+    #
+    # Only FunctionDef nodes used to survive the filter below, so every
+    # module-level assignment in the source file was dropped -- and
+    # `ops/indexing.py` has two its functions depend on: `_jt = None` (the
+    # cached module, read before falling back to `_jittor()`) and
+    # `_PYINT = (0).__class__`. Each one raised `NameError` from inside a
+    # function that otherwise worked, and naming them here one at a time would
+    # break again the next time the source file gained a constant.
+    #
+    # Only assignments whose value is self-contained are carried over: a
+    # literal, or a constant expression over names this namespace already
+    # provides. Anything reaching for a name the host did not inject is left
+    # out, which is what keeps the stand-ins the caller passed in charge.
+    def _is_self_contained(node):
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Name) and sub.id not in namespace:
+                return False
+            if isinstance(sub, (ast.Call, ast.Await)):
+                return False
+        return True
+
+    carried = []
+    for node in tree.body:
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not isinstance(target, ast.Name) or target.id.startswith("__"):
+            continue
+        if target.id in namespace or not _is_self_contained(node.value):
+            continue
+        carried.append(node)
+    tree.body = carried + [node for node in tree.body
+                           if isinstance(node, ast.FunctionDef)
+                           and (names is None or node.name in names)]
     if names is not None:
-        assert {node.name for node in tree.body} == names, (path, names)
+        assert {node.name for node in tree.body
+                if isinstance(node, ast.FunctionDef)} == names, (path, names)
     # Local imports must use the same injected host stand-ins as former globals.
     class InjectedImports(ast.NodeTransformer):
         def visit_Import(self, node):
@@ -97,7 +135,11 @@ class IndexingRouting(unittest.TestCase):
             self.calls.append((operation, args))
             return self.provider_result
 
-        self.owner = definitions("ops/indexing.py", jt=self.jt, np=np,
+        # 6ae82f2b: the module reads the cached ``_jt`` (falling back to a real
+        # ``import jittor``) instead of a ``jt`` global, so the stand-in has
+        # to be injected under that name for the stub Var to be the one
+        # patched.
+        self.owner = definitions("ops/indexing.py", jt=self.jt, _jt=self.jt, np=np,
                                  try_dispatch=dispatch,
                                  dispatch_context=lambda *args: SimpleNamespace(backend="cpu"),
                                  _native_var_getitem=Var.getitem,
@@ -132,16 +174,18 @@ class IndexingRouting(unittest.TestCase):
             view = getter()
             self.assertEqual(view.source, "native_getitem")
             view[:, :] = 3
-        # No getter may let the optional provider produce the result a writeback
-        # consumes; that guard is still `_needs_cascade_setitem` alone, so which
-        # results a backend is allowed to produce did not change with 5.02.
-        self.assertEqual(self.calls, [])
-        # The first two are the raw op, which deliberately does not create a
-        # view -- a gather is a computation, not a claim about two names -- so
-        # they still go through the ancestry walk. `x[0]` is the tensor-level
-        # index, which records the view, and a recorded view writes back through
-        # `assign` instead.
-        self.assertEqual(len(self.cascades), 2)
+        # Integer getters keep the native producer. Writes are now provider
+        # results published through assign; native holder/view ownership handles
+        # propagation, rather than this Python layer walking ancestors.
+        self.assertEqual([name for name, _ in self.calls], ["tensor.setitem"] * 3)
+        for _, args in self.calls:
+            target, slices, value, reduce = args
+            self.assertEqual(target.source, "native_getitem")
+            self.assertEqual(target.assignments, [self.provider_result])
+            self.assertEqual(slices, (slice(None), slice(None)))
+            self.assertEqual(value, 3)
+            self.assertIsNone(reduce)
+        self.assertEqual(self.cascades, [])
         self.assertIsNone(self.jt.getitem(x, 0).view)
         self.assertEqual(x[0].view, (x, 0))
 
@@ -213,13 +257,16 @@ class DomainRouting(unittest.TestCase):
 
         class Var:
             ndim = 2
+            shape = [2, 2]
+            dtype = SimpleNamespace(is_float=lambda: False, is_complex=lambda: False)
 
         jt = SimpleNamespace(Var=Var, misc=SimpleNamespace(_cumsum_dim=lambda dim, ndim: dim % ndim))
         owners = {
             "numerical": {"all", "any"},
             "shape_ops": {"flip", "split", "roll", "triu"},
             "scan": {"cumsum", "cub_cumsum"},
-            "advanced_indexing": {"nonzero", "gather", "_scatter_into"},
+            "advanced_indexing": {"nonzero", "gather", "_scatter_into",
+                                  "_indexing_dim", "_indexing_index"},
         }
         owner = SimpleNamespace()
         for module, names in owners.items():
@@ -296,8 +343,17 @@ class DomainRouting(unittest.TestCase):
                              flags=SimpleNamespace(amp_reg=0),
                              amp_flags=SimpleNamespace(keep_reduce=4),
                              binary_dtype_infer=lambda *args: "float32")
+        # `concat` resolves the module through `_jt()` -- `34976898` replaced the
+        # function-local `import jittor` with a cached accessor -- and the loader
+        # keeps only the FunctionDefs named here, so the accessor has to be
+        # injected the way `jt` itself is. Without it the first line of `concat`
+        # raised `NameError: name '_jt' is not defined`, which is the same
+        # defect class as the module-level *constants* `a1977f68` taught the
+        # loader to carry: a name the surviving function reads and the sandbox
+        # never provided.
         owner = definitions("ops/concatenation.py", {"concat", "_merge_dtypes"},
-                            jt=jt, Sequence=(list, tuple), select_kernel=select)
+                            jt=jt, _jt=lambda: jt, Sequence=(list, tuple),
+                            select_kernel=select)
         inputs = (Var("int32"), Var("float32"))
         self.assertIs(owner.concat(inputs, -1), result)
         self.assertEqual([value.dtype for value in calls[0][0]], ["float32", "float32"])

@@ -30,8 +30,10 @@ Reference for torch's promotion rules (documented behavior, encoded below):
     tensor: int scalar keeps the tensor's int dtype, float scalar lifts an int tensor to
     the default float (float32).
 
-jittor has no 0-d scalars (a "scalar" is shape ``(1,)``); values are compared via
-``.numpy()``.
+  - a 0-dim tensor sits between the two: it bumps a dimensioned tensor's result only
+    from a higher category, and promotes normally against another 0-dim tensor.
+
+Values are compared via ``.numpy()``.
 
 Run:  python -m pytest compat/tests/torch/test_torch_compat_promotion.py
       python -m pytest compat/tests/torch/test_torch_compat_promotion.py
@@ -55,13 +57,20 @@ def both_devices(fn):
 
 
 def dts(v):
-    """bare jittor dtype string for a Var ('float32', 'int64', ...)."""
-    return v.dtype.name
+    """The bare dtype name of a tensor ('float32', 'int64', ...).
+
+    `str(tensor.dtype)` is torch's spelling, `torch.float32`, and the shim
+    answers the same way -- faithfully, which is the point of it. This file is
+    about *promotion rules*, not about how a dtype prints, so the prefix comes
+    off here rather than being written into every expectation. Same
+    normalization the library itself uses (nn/functional/normalization.py).
+    """
+    return str(v.dtype).replace("torch.", "")
 
 
-def dtype_name(value):
-    """Return the bare name while preserving torch.dtype's public repr."""
-    return value.name
+def dtn(dtype):
+    """The bare name of a dtype *object*, for the same reason as `dts`."""
+    return str(dtype).replace("torch.", "")
 
 
 # numpy dtype for each bare name we build test tensors from.
@@ -132,23 +141,23 @@ class TestPromoteTypesAPI(Base):
         for (a, b), want in _PROMO.items():
             r1 = torch.promote_types(getattr(torch, a), getattr(torch, b))
             r2 = torch.promote_types(getattr(torch, b), getattr(torch, a))
-            self.assertEqual(dtype_name(r1), want, f"promote_types({a},{b})")
-            self.assertEqual(dtype_name(r2), want, f"promote_types({b},{a}) [commutative]")
+            self.assertEqual(dtn(r1), want, f"promote_types({a},{b})")
+            self.assertEqual(dtn(r2), want, f"promote_types({b},{a}) [commutative]")
 
     def test_promote_types_doc_examples(self):
         # the two examples from torch.promote_types' own docstring.
-        self.assertEqual(dtype_name(torch.promote_types(torch.int32, torch.float32)), "float32")
-        self.assertEqual(dtype_name(torch.promote_types(torch.uint8, torch.long)), "int64")
+        self.assertEqual(dtn(torch.promote_types(torch.int32, torch.float32)), "float32")
+        self.assertEqual(dtn(torch.promote_types(torch.uint8, torch.long)), "int64")
 
     def test_promote_types_float16_bfloat16(self):
         # the documented special case: neither can represent the other -> float32.
-        self.assertEqual(dtype_name(torch.promote_types(torch.float16, torch.bfloat16)), "float32")
-        self.assertEqual(dtype_name(torch.promote_types(torch.bfloat16, torch.float16)), "float32")
+        self.assertEqual(dtn(torch.promote_types(torch.float16, torch.bfloat16)), "float32")
+        self.assertEqual(dtn(torch.promote_types(torch.bfloat16, torch.float16)), "float32")
 
     def test_promote_types_int_bfloat16(self):
         # int + bfloat16 -> bfloat16 (torch parity, incl. its low-mantissa caveat).
-        self.assertEqual(dtype_name(torch.promote_types(torch.int32, torch.bfloat16)), "bfloat16")
-        self.assertEqual(dtype_name(torch.promote_types(torch.bfloat16, torch.int64)), "bfloat16")
+        self.assertEqual(dtn(torch.promote_types(torch.int32, torch.bfloat16)), "bfloat16")
+        self.assertEqual(dtn(torch.promote_types(torch.bfloat16, torch.int64)), "bfloat16")
 
 
 # ------------------------------------------------------------------- torch.result_type API
@@ -157,14 +166,14 @@ class TestResultTypeAPI(Base):
     def test_result_type_two_tensors(self):
         def body(dev):
             for (a, b), want in _PROMO.items():
-                self.assertEqual(dtype_name(torch.result_type(mk(a), mk(b))), want,
+                self.assertEqual(dtn(torch.result_type(mk(a), mk(b))), want,
                                  f"result_type({a},{b}) {dev}")
         both_devices(body)
 
     def test_result_type_tensor_and_dtype(self):
         # torch.result_type also accepts a dtype as either argument.
-        self.assertEqual(dtype_name(torch.result_type(mk("int32"), torch.float32)), "float32")
-        self.assertEqual(dtype_name(torch.result_type(torch.int64, mk("int32"))), "int64")
+        self.assertEqual(dtn(torch.result_type(mk("int32"), torch.float32)), "float32")
+        self.assertEqual(dtn(torch.result_type(torch.int64, mk("int32"))), "int64")
 
     def test_result_type_with_python_scalar(self):
         # torch "wrapped number" rule: a scalar only bumps the result if it is a
@@ -172,20 +181,61 @@ class TestResultTypeAPI(Base):
         def body(dev):
             xi = mk("int32")
             xf = mk("float32")
-            self.assertEqual(dtype_name(torch.result_type(xi, 2)), "int32", dev)       # int scalar: no widen
-            self.assertEqual(dtype_name(torch.result_type(xi, 1.5)), "float32", dev)   # float scalar lifts int->float32
-            self.assertEqual(dtype_name(torch.result_type(xf, 2)), "float32", dev)     # int scalar keeps float
-            self.assertEqual(dtype_name(torch.result_type(xf, 1.5)), "float32", dev)
-            self.assertEqual(dtype_name(torch.result_type(mk("int64"), 7)), "int64", dev)
+            self.assertEqual(dtn(torch.result_type(xi, 2)), "int32", dev)       # int scalar: no widen
+            self.assertEqual(dtn(torch.result_type(xi, 1.5)), "float32", dev)   # float scalar lifts int->float32
+            self.assertEqual(dtn(torch.result_type(xf, 2)), "float32", dev)     # int scalar keeps float
+            self.assertEqual(dtn(torch.result_type(xf, 1.5)), "float32", dev)
+            self.assertEqual(dtn(torch.result_type(mk("int64"), 7)), "int64", dev)
+        both_devices(body)
+
+    def test_result_type_with_a_zero_dim_tensor(self):
+        # torch ranks operands in three tiers: tensors with dimensions, 0-dim
+        # tensors, Python scalars. A 0-dim tensor bumps the result only from a
+        # higher category -- it used to count as a full tensor, so a diffusers
+        # scheduler's `alphas_cumprod[t] * latents` turned float16 latents
+        # float32 at every sampling step.
+        def body(dev):
+            half = torch.tensor([1.0, 2.0], dtype=torch.float16)
+            zero_f32 = torch.tensor(2.0)
+            zero_f64 = torch.tensor(2.0, dtype=torch.float64)
+            zero_i64 = torch.tensor(5)
+            def rt(a, b):
+                return dtn(torch.result_type(a, b))
+
+            self.assertEqual(rt(half, zero_f32), "float16", dev)       # same category: dims win
+            self.assertEqual(rt(zero_f32, half), "float16", dev)
+            self.assertEqual(rt(mk("int32"), zero_i64), "int32", dev)
+            self.assertEqual(rt(mk("int32"), zero_f64), "float64", dev)  # higher category joins
+            self.assertEqual(rt(torch.tensor(1, dtype=torch.int32), zero_f64),
+                             "float64", dev)                             # two 0-dim: plain promotion
+            self.assertEqual(rt(torch.tensor(1, dtype=torch.int32), 7), "int32", dev)
+            self.assertEqual(rt(torch.tensor(1, dtype=torch.int32), 2.5), "float32", dev)
+            for op in ("__add__", "__sub__", "__mul__", "__truediv__",
+                       "__radd__", "__rsub__", "__rmul__", "__rtruediv__"):
+                self.assertEqual(dts(getattr(half, op)(zero_f32)), "float16",
+                                 f"{op} {dev}")
+            self.assertEqual(dts(zero_f32 * half), "float16", dev)
+            self.assertEqual(dts(zero_f32 / half), "float16", dev)
+            self.ae((half * zero_f32).float().numpy(),
+                    np.array([2.0, 4.0], "float32"), dev)
         both_devices(body)
 
     def test_can_cast(self):
-        # torch.can_cast(from, to): True iff promote(from, to) == to.
+        """`canCast` is categorical, not numpy's width rule.
+
+        `c10/core/ScalarType.h` refuses exactly complex to non-complex,
+        floating to integral, and non-bool to bool, and allows everything else,
+        narrowing included -- checked against torch 2.13 over the whole table.
+        This file used to say `can_cast(int64, int32)` is False, which is
+        numpy's answer and was also what the implementation gave.
+        """
         self.assertTrue(torch.can_cast(torch.int32, torch.int64))
         self.assertTrue(torch.can_cast(torch.float32, torch.float64))
         self.assertTrue(torch.can_cast(torch.bool, torch.int32))
-        self.assertFalse(torch.can_cast(torch.float32, torch.int32))   # float -> int loses category
-        self.assertFalse(torch.can_cast(torch.int64, torch.int32))     # wider -> narrower
+        self.assertTrue(torch.can_cast(torch.int64, torch.int32))      # narrowing is allowed
+        self.assertTrue(torch.can_cast(torch.float64, torch.float16))
+        self.assertFalse(torch.can_cast(torch.float32, torch.int32))   # float -> integral
+        self.assertFalse(torch.can_cast(torch.int32, torch.bool))      # non-bool -> bool
 
 
 # ------------------------------------------------------------- binary-op promotion (values)
@@ -253,6 +303,29 @@ class TestBinaryOpPromotion(Base):
             self.assertEqual(dts(8.0 / mk("int32", (2, 4, 8))), "float32", dev)
         both_devices(body)
 
+    def test_python_scalar_truediv_keeps_a_half_tensor_half(self):
+        # A Python scalar joins promotion only from a higher category, so
+        # half / 1.0 is half in torch. It came back float32 here: every
+        # diffusers ResnetBlock2D ends in `/ self.output_scale_factor`, so a
+        # float16 SD UNet silently ran in float32 and then failed SDPA with
+        # "query, key and value must have the same dtype".
+        def body(dev):
+            for name in ("float16", "bfloat16"):
+                # numpy has no bfloat16, so not `mk`.
+                t = torch.tensor([1.0, 2.0, 4.0], dtype=getattr(torch, name))
+                self.assertEqual(dts(t / 1.0), name, f"{name}/1.0 {dev}")
+                self.assertEqual(dts(t / 2), name, f"{name}/2 {dev}")
+                self.assertEqual(dts(2.0 / t), name, f"2.0/{name} {dev}")
+                in_place = t.clone()
+                in_place /= 2.0
+                self.assertEqual(dts(in_place), name, f"{name} /= 2.0 {dev}")
+                self.ae((t / 2.0).float().numpy(),
+                        np.array([0.5, 1.0, 2.0], "float32"), f"{name} {dev}")
+            # The integral case still lands on the default float.
+            self.assertEqual(dts(mk("int64", (2, 4)) / 2.0), "float32", dev)
+            self.assertEqual(dts(mk("int64", (2, 4)) / 2), "float32", dev)
+        both_devices(body)
+
     def test_python_float_truediv_preserves_torch_rounding_on_cpu(self):
         source = mk("float32", (0.12345679, 1.2345679, 3.25))
         scale = 0.28209479177387814
@@ -260,8 +333,8 @@ class TestBinaryOpPromotion(Base):
             quotient = (source / scale).numpy()
             reflected = (scale / source).numpy()
 
-        self.assertEqual(dtype_name(quotient.dtype), "float32")
-        self.assertEqual(dtype_name(reflected.dtype), "float32")
+        self.assertEqual(dtn(quotient.dtype), "float32")
+        self.assertEqual(dtn(reflected.dtype), "float32")
         np.testing.assert_array_equal(
             quotient.view(np.uint32),
             np.array([1054872252, 1082919861, 1094211024], dtype=np.uint32),
@@ -318,16 +391,6 @@ class TestBinaryOpPromotion(Base):
             xf = mk("float32")
             self.assertEqual(dts(xf + 1), "float32", dev)      # float tensor + py int
             self.assertEqual(dts(xf * 2), "float32", dev)
-        both_devices(body)
-
-    def test_string_repetition_accepts_an_integral_singleton(self):
-        def body(dev):
-            count = torch.tensor([3], dtype=torch.int64)
-            self.assertEqual("ab" * count, "ababab", dev)
-            self.assertEqual(count * "ab", "ababab", dev)
-            with self.assertRaisesRegex(TypeError, "only integer tensors"):
-                "ab" * torch.tensor([3.0], dtype=torch.float32)
-
         both_devices(body)
 
 

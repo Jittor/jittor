@@ -99,6 +99,9 @@ class TestJittorHome(unittest.TestCase):
             self.assertEqual(home, os.path.abspath(fake_home))
 
     def test_read_only_home_uses_temporary_cache(self):
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            self.skipTest("root writes a 0o555 directory regardless, so a "
+                          "read-only home cannot be simulated")
         with tempfile.TemporaryDirectory() as directory:
             fake_home = os.path.join(directory, "home")
             os.makedirs(fake_home)

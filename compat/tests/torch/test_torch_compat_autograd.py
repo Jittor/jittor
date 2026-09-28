@@ -293,7 +293,8 @@ class TestAutogradGradAPI(Base):
         # torch-style: loss.backward() then read leaf .grad (no optimizer leaf path).
         x0 = np.random.RandomState(13).randn(4).astype("float32")
         def body(dev):
-            x = jt.array(x0); x.requires_grad = True
+            # torch's backward/grad live on Tensor since the frontends split.
+            x = torch.tensor(x0, requires_grad=True)
             (x * x).sum().backward()
             self.assertIsNotNone(getattr(x, "grad", None), f"x.grad set {dev}")
             self.ac(x.grad.numpy(), 2 * x0, atol=1e-5, msg=f"backward grad {dev}")
@@ -328,8 +329,7 @@ class TestStopNoGrad(Base):
         x0 = np.random.RandomState(150).randn(3).astype("float32")
         def body(dev):
             with policy_scope(EXPLICIT_REQUIRES_GRAD):
-                x = jt.array(x0)
-                x.requires_grad = True
+                x = torch.tensor(x0, requires_grad=True)
                 detached = (x * 2).detach()
                 self.assertFalse(bool(detached.requires_grad),
                                  f"detach requires_grad {dev}")
@@ -378,7 +378,8 @@ class TestAccumAndNN(Base):
         # two backward() calls accumulate into the same leaf .grad (torch semantics).
         x0 = np.random.RandomState(170).randn(4).astype("float32")
         def body(dev):
-            x = jt.array(x0); x.requires_grad = True
+            # torch's backward/grad live on Tensor since the frontends split.
+            x = torch.tensor(x0, requires_grad=True)
             (x * 2).sum().backward()
             (x * 3).sum().backward()
             self.ac(x.grad.numpy(), np.full(4, 5.0, "float32"), atol=1e-5,

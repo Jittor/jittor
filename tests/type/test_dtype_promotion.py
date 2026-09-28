@@ -146,6 +146,46 @@ class TestScalarPromotion(unittest.TestCase):
             x = _var(name, [1.5])
             self.assertEqual(str((x * 2.0).dtype), name, msg=name)
 
+    def test_float64_tensor_with_an_exact_python_float_is_exact(self):
+        """The control for the two tests below: exact scalars are already exact.
+
+        Whatever a fix for KI-DTYPE-003 does, scales that float32 represents
+        exactly must keep answering exactly -- 2.0 and 3.0 both are, so `v / 3.0`
+        is correctly rounded in either precision. This is the half that passes
+        today and must not regress.
+        """
+        v = _var("float64", [1.0])
+        self.assertEqual((v * 2.0).numpy()[0], 2.0)
+        self.assertEqual((v / 3.0).numpy()[0], 1.0 / 3.0)
+
+    @unittest.expectedFailure
+    def test_float64_tensor_with_an_inexact_python_float_keeps_its_value(self):
+        """KI-DTYPE-003: the scalar is narrowed to float32 even against float64.
+
+        `test_float_tensor_keeps_its_own_width` above pins the *dtype* using
+        2.0, which float32 represents exactly -- so it cannot see this defect at
+        all. Every python float reaches a kernel through
+        `scalar.f32 = PyFloat_AS_DOUBLE(obj)` in `ArrayOp::ArrayOp(PyObject*)`,
+        and `_is_scalar` then correctly keeps it out of dtype promotion, which is
+        what hides it: the result dtype is right and only the value is wrong.
+        Real torch treats a python float as a weak double against a float64
+        tensor and answers all four of these exactly.
+
+        Expected failure until a python float keeps its value against a float64
+        operand (KI-DTYPE-003). It is `expectedFailure` rather than a skip
+        because this suite runs with `xfail_strict`, so the day it starts passing
+        the run turns red and says so.
+        """
+        v = _var("float64", [1.0])
+        cases = {
+            "v * 0.1": ((v * 0.1).numpy()[0], 0.1),
+            "v + 0.1": ((v + 0.1).numpy()[0], 1.0 + 0.1),
+            "v * (2/3)": ((v * (2 / 3)).numpy()[0], 2 / 3),
+            "v * 2 ** 0.5": ((v * 2 ** 0.5).numpy()[0], 2 ** 0.5),
+        }
+        for name, (got, want) in cases.items():
+            self.assertEqual(got, want, msg=name)
+
     def test_int_scalar_keeps_the_tensor_dtype(self):
         for name in ("int8", "uint8", "int64", "uint32"):
             x = _var(name, [3])

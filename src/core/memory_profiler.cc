@@ -43,7 +43,16 @@ inline std::ostream& operator<<(std::ostream& os, const FloatOutput_& o) {
 }
 
 MemoryProfiler memory_profiler;
-DEFINE_FLAG(int, profile_memory_enable, 0, "Enable memory profiler.");
+DEFINE_FLAG_WITH_SETTER(int, profile_memory_enable, 0, "Enable memory profiler.");
+
+// Turning the profiler on starts a new record. It used to keep the previous
+// session's high-water mark and live-var list, so a second session -- say one
+// with `trace_py_var` on, to get call sites -- reported the first session's
+// peak with the first session's (stack-less) vars, and never replaced them
+// unless it exceeded that peak.
+void setter_profile_memory_enable(const int& old_value, const int& value) {
+    if (value && !old_value) memory_profiler.clear();
+}
 
 MemoryProfiler::MemoryProfiler() { 
     clear(); 
@@ -53,6 +62,7 @@ void MemoryProfiler::clear() {
     allocations.clear();
     max_memory_size = 0;
     max_used_memory_size = 0;
+    max_device_used_memory.clear();
 }
 
 std::pair<size_t, size_t> MemoryProfiler::get_memory_info() {
@@ -70,6 +80,20 @@ std::pair<size_t, size_t> MemoryProfiler::get_memory_info() {
 void MemoryProfiler::check() {
     ASSERT(profile_memory_enable);
     std::pair<size_t, size_t> mem_info = get_memory_info();
+    // Device-only high-water, on every check rather than only when the
+    // host+device maximum moves: the two maxima are reached at different
+    // moments, so gating this on the other one would miss it. Summed per
+    // device because a device has several pools and `device_memory_used`
+    // measures their sum.
+    {
+        std::map<int, int64> device_used;
+        for (auto& a : SFRLAllocator::sfrl_allocators)
+            if (a->is_cuda()) device_used[a->device()] += a->used_memory;
+        for (auto& entry : device_used) {
+            int64& seen = max_device_used_memory[entry.first];
+            if (entry.second > seen) seen = entry.second;
+        }
+    }
     if (mem_info.first > max_used_memory_size) {
         max_used_memory_size = mem_info.first;
 
@@ -175,6 +199,12 @@ string MemoryProfiler::get_max_memory_info() {
 int64 get_peak_allocator_used_memory() {
     USER_CHECK(profile_memory_enable) << "memory profiling must be enabled before querying its results";
     return static_cast<int64>(memory_profiler.max_used_memory_size);
+}
+
+int64 get_peak_device_used_memory(int device) {
+    USER_CHECK(profile_memory_enable) << "memory profiling must be enabled before querying its results";
+    auto it = memory_profiler.max_device_used_memory.find(device);
+    return it == memory_profiler.max_device_used_memory.end() ? 0 : it->second;
 }
 
 string get_max_memory_info() {

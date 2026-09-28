@@ -189,7 +189,9 @@ class Poisson(Distribution):
         import jittor as jt
         shape = _full_shape(sample_shape, self.batch_shape)
         lam = np.broadcast_to(self.rate.numpy(), shape)
-        return jt.array(np.random.poisson(lam).astype("float32"))
+        # ``np.random.poisson`` answers a 0-d draw with a plain int, which
+        # has no ``astype``; ``asarray`` keeps every shape an array.
+        return jt.array(np.asarray(np.random.poisson(lam)).astype("float32"))
 
     def log_prob(self, value):
         import jittor as jt

@@ -7,10 +7,25 @@ import json
 import os
 import pickle
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 
 from _helpers.child_process import run_python_child
+
+
+#: Modules preflight and the lazy shim may import: the standard library, and
+#: nothing else. This was a hand-written list until the first legitimate new
+#: stdlib import -- ``tempfile``, needed once the shim had to pick a TMPDIR
+#: short enough for a unix socket path -- red the gate for no reason at all.
+#: The interpreter knows the answer (``sys.stdlib_module_names``, 3.10+); the
+#: list stays as the floor for the Pythons that cannot answer, which is what it
+#: always was.
+_STDLIB_FLOOR = frozenset({
+    "__future__", "collections", "dataclasses", "glob", "hashlib", "importlib",
+    "os", "pathlib", "sys", "tempfile", "traceback", "warnings",
+})
+_STDLIB = frozenset(getattr(sys, "stdlib_module_names", ())) or _STDLIB_FLOOR
 
 
 class TestRuntimeCompositionStructure(unittest.TestCase):
@@ -159,7 +174,9 @@ with jt.profile_scope() as report:
     assert b.data[1] == 0
 print("RESULT=" + json.dumps({
     "data_is_numpy": isinstance(x.data, np.ndarray),
-    "profile_entries": len(report),
+    "native_profile": (isinstance(report, list) and len(report) > 1
+                       and report[0][0] == "Name"
+                       and all(len(row) == len(report[0]) for row in report[1:])),
     "shared_write": x.numpy().tolist(),
     "torch_registered": "torch" in sys.modules,
     "torch_installed": bool(getattr(jt, "_torch_compat_install_complete", False)),
@@ -169,7 +186,7 @@ print("RESULT=" + json.dumps({
             result,
             {
                 "data_is_numpy": True,
-                "profile_entries": 3,
+                "native_profile": True,
                 "shared_write": [1, 7, 3],
                 "torch_registered": False,
                 "torch_installed": False,
@@ -408,36 +425,20 @@ print("RESULT=" + json.dumps({
         normalized = " ".join(source.split())
         self.assertIn("`jittor._core.api`", normalized)
         self.assertIn("`jittor._core.module`", normalized)
-        self.assertTrue(
-            "Public root exports retain object identity" in normalized
-            or "公开的根导出保持对象标识" in normalized
-        )
+        self.assertIn("公开的根导出保持对象标识", normalized)
 
     def test_preflight_and_lazy_shim_are_stdlib_only(self):
-        stdlib = {
-            "__future__",
-            "collections",
-            "dataclasses",
-            "glob",
-            "hashlib",
-            "importlib",
-            "os",
-            "pathlib",
-            "sys",
-            "traceback",
-            "warnings",
-        }
         # `diagnostics` is this layer's own recorder, and it is on this list
         # only because it is itself stdlib-only -- which the loop below checks
         # rather than assumes. Preflight runs before the compiler and the
         # native core exist, and that is what must not change; being unable to
         # record what preflight swallowed would be the wrong way to keep it.
-        allowed = stdlib | {"diagnostics"}
+        allowed = _STDLIB | {"diagnostics"}
         self.assertTrue(
             {node.module.split(".", 1)[0] if isinstance(node, ast.ImportFrom)
              else "" for node in ast.walk(
                  ast.parse((self.compat / "diagnostics.py").read_text(encoding="utf-8")))
-             if isinstance(node, (ast.Import, ast.ImportFrom))} <= stdlib | {""},
+             if isinstance(node, (ast.Import, ast.ImportFrom))} <= _STDLIB | {""},
             "diagnostics.py must stay stdlib-only to be importable this early")
         for relative in ("shim/preflight.py", "shim/__init__.py"):
             path = self.compat / relative

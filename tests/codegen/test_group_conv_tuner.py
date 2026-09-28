@@ -127,6 +127,13 @@ class TestGroupConvTuner(unittest.TestCase):
             check_forward([10,8,40,50], [16,8//groups,4,4], 3, 1, 3, groups, 1, False)
 
     def test_forward(self):
+        # The CPU relay target for a conv comes from the same library the CUDA
+        # cases get from cuDNN, and this backend registers it only with
+        # `use_mkl=1` (`backends/cpu/libraries/mkl/mkl_capabilities.cc`). A build
+        # without it has no `conv2d` capability at all, so the tuner declining is
+        # the correct answer and this case would be asserting the build has a
+        # library it does not have. KI-TUNER-001 remains for builds that do.
+        _test_capability.require_library("mkl")
         for groups in [2, 4, 8]:
             check_forward([10,8,100,100], [8,8//groups,3,3], 1, 0, 1, groups, 0, False)
             check_forward([10,8,40,50], [16,8//groups,5,5], 1, 1, 2, groups, 0, False)
@@ -140,6 +147,9 @@ class TestGroupConvTuner(unittest.TestCase):
             check_backward([10,8,40,50], [16,8//groups,4,4], 3, 1, 3, groups, 1, False)
 
     def test_backward(self):
+        # Same prerequisite as `test_forward`: the backward relays are
+        # `mkl_conv_backward_x` / `_w`, registered only with `use_mkl=1`.
+        _test_capability.require_library("mkl")
         for groups in [2, 4, 8]:
             check_backward([10,8,100,100], [8,8//groups,3,3], 1, 0, 1, groups, 0, False)
             check_backward([10,8,40,50], [16,8//groups,5,5], 1, 1, 2, groups, 0, False)

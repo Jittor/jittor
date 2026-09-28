@@ -18,6 +18,7 @@
 #include "ops/op_register.h"
 #include "ops/composite/array_op.h"
 #include "runtime/lock.h"
+#include "runtime/device_state.h"
 #include "codegen/opt/expr.h"
 #include "bindings/pyjt/py_caller.h"
 
@@ -299,9 +300,23 @@ void load_macros(const string& src, unordered_map<string,string>& macros) {
     }
 }
 
-string expand_op_search(const vector<string>& args) {
+// Which op-type table this expansion should use.
+//
+// The translation unit's own `#define JIT_cuda`/`JIT_cpu` decides it -- *not*
+// the process-wide `use_cuda` flag, which stays 1 for the host kernels a
+// CUDA-enabled process compiles for CPU-resident Vars. Choosing by the runtime
+// flag hands a host unit CUDA-only entries (::__habs, jittor::_signed_pow) and
+// it fails to compile. A caller of precompile() that declares no backend has
+// only the runtime flag to go on, which is what it used before.
+static bool expand_op_target_is_cuda(const unordered_map<string,string>& defs) {
+    if (defs.count("JIT_cuda")) return true;
+    if (defs.count("JIT_cpu")) return false;
+    return runtime_flag_use_cuda();
+}
+
+string expand_op_search(const vector<string>& args, bool is_cuda) {
     for (auto op_type : get_op_types()) {
-        string ret = op_type->expand_op(args);
+        string ret = op_type->expand_op(args, is_cuda);
         if (ret.size())
             return ret;
     }
@@ -541,7 +556,10 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                 expr == "expand_op" ||
                     expr == "is_def" || expr == "python" ||
                     (k<src.size() && src[k]=='(')) {
-                    ASSERT(src[k] == '(');
+                    // A directive without its argument list is the user's
+                    // template being malformed, not an invariant of ours.
+                    USER_CHECK(k < src.size() && src[k] == '(')
+                        << "jit template directive @" + expr + " must be followed by '('";
                     comma.push_back(k);
                     while (l<src.size() && presum) {
                         if (src[l] == ')')
@@ -674,7 +692,7 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                         while (p<arg.size() && arg[p] == ' ') p++;
                         arg = precompile(defs, arg.substr(p), macros);
                     }
-                    string ns = expand_op_search(args);
+                    string ns = expand_op_search(args, expand_op_target_is_cuda(defs));
                     new_src += precompile(defs, ns, macros);
                     i = l-1;
                     continue;
@@ -930,7 +948,17 @@ static void fix_op_member(
         if (!member.size()) {
             continue;
         }
-        ASSERT(member.size() <= var_num);
+        // A fused op whose member list is longer than its edges is not a
+        // code-generation problem, it is a graph problem: the op was kept
+        // while some of its outputs were freed, so its jit source names vars
+        // that are no longer attached to it. Say which op and by how much,
+        // instead of asserting a number.
+        if (member.size() > var_num)
+            LOGf << "op" << i << op->name() << "names" << member.size()
+                << "vars in its jit source but has" << op->inputs().size()
+                << "inputs and" << op->outputs().size() << "outputs."
+                << "An op cannot be kept with only some of its outputs;"
+                << "see KI-EXEC-006. members:" << member;
         while (member.size() < var_num) {
             member.insert(member.end() - op->outputs().size(), "__fill__");
         }
@@ -1343,10 +1371,19 @@ jit_op_entry_t do_compile_inner(Op* op) {
 jit_op_entry_t compile_registered_source(Op* op) { return do_compile_inner(op); }
 
 jit_op_entry_t OpCompiler::do_compile(Op* op) {
-    jittor::lock_guard lg;
     auto compile = op->implementation().kernel.compile;
-    if (compile) return compile(op);
-    return do_compile_inner(op);
+    // The build lock used to be taken here, around everything, so a cache hit
+    // waited for it exactly as long as a compile would have. Code generation
+    // and tuning touch no shared file at all, and the cache decision itself is
+    // a read; jit_compiler::compile() now takes the lock only when it actually
+    // has to build. See the fast path there for why an unlocked read is safe.
+    if (!compile || compile == compile_registered_source)
+        return do_compile_inner(op);
+    // A backend-supplied compiler (ACL today) writes into the cache by its own
+    // rules, with no published-key protocol to lean on, so it keeps the old
+    // whole-call lock.
+    jittor::lock_guard lg;
+    return compile(op);
 }
 
 }

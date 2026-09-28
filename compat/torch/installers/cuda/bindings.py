@@ -16,7 +16,6 @@ from .api import (
     _PrecisionBackend,
     _Stream,
     _StreamContext,
-    _amp,
     _api_accelerator_current_accelerator,
     _api_accelerator_current_device_index,
     _api_accelerator_is_available,
@@ -31,10 +30,15 @@ from .api import (
     _api_cpu_get_cpu_capability,
     _api_cuda__is_in_bad_fork,
     _api_cuda_backend_enable_cudnn_sdp,
+    _api_cuda_backend_flash_sdp_enabled,
+    _api_cuda_backend_mem_efficient_sdp_enabled,
+    _api_cuda_backend_math_sdp_enabled,
+    _api_cuda_backend_cudnn_sdp_enabled,
     _api_cuda_backend_enable_flash_sdp,
     _api_cuda_backend_enable_math_sdp,
     _api_cuda_backend_enable_mem_efficient_sdp,
     _api_cuda_backend_sdp_kernel,
+    _api_cuda_can_device_access_peer,
     _api_cuda_default_stream,
     _api_cuda_get_device_capability,
     _api_cuda_get_device_properties,
@@ -53,6 +57,7 @@ from .api import (
     _api_cuda_set_rng_state,
     _api_cuda_set_rng_state_all,
     _api_cuda_synchronize,
+    _api_cudnn_flags,
     _api_cudnn_version,
     _api_functorch_c__add_batch_dim,
     _api_functorch_c__remove_batch_dim,
@@ -89,6 +94,9 @@ from .api import (
     _has_torch_function,
     _mem_get_info,
     _mem_max,
+    _mem_max_reserved,
+    _mem_reserved,
+    _mem_summary,
     _mem_used,
     _nvtx_mark,
     _nvtx_range,
@@ -157,9 +165,11 @@ def _install_cuda(g, registry=None):
     cuda.manual_seed_all = _api_cuda_manual_seed_all
     cuda.is_bf16_supported = _api_cuda_is_bf16_supported
     cuda.get_device_capability = _api_cuda_get_device_capability
+    cuda.can_device_access_peer = _api_cuda_can_device_access_peer
     cuda.get_device_name = _device_name
     cuda.get_device_properties = _api_cuda_get_device_properties
-    cuda.amp = _amp
+    # torch.cuda.amp is built as a real module (with autocast_mode/grad_scaler/
+    # common submodules) by the utilities installer, which runs after this one.
     # OpenMMLab imports these legacy CUDA tensor classes in type annotations.
     # Keep them distinct from the top-level CPU classes: a direct alias would
     # make a host tensor pass ``isinstance(x, torch.cuda.LongTensor)``.
@@ -201,12 +211,18 @@ def _install_cuda(g, registry=None):
     # memory logging printed 0). total_cuda_used on an accelerator, else total_cpu_used.
     # jittor doesn't expose a per-reset peak, so max_* track a process-lifetime high-water
     # mark we maintain here (still real, monotone -- better than a flat 0).
+    # Per device, not process-wide: MemInfo.total_cuda_used sums every card's
+    # pool, so this family used to give the same number for every ordinal.
+    # `allocated` is live bytes and `reserved`/`cached` is what the pools hold,
+    # which is the distinction torch draws and which these aliases used to
+    # flatten onto one reading.
     cuda.memory_allocated = _mem_used
     cuda.max_memory_allocated = _mem_max
-    cuda.memory_reserved = _mem_used
-    cuda.max_memory_reserved = _mem_max
-    cuda.memory_cached = _mem_used
-    cuda.max_memory_cached = _mem_max
+    cuda.memory_reserved = _mem_reserved
+    cuda.max_memory_reserved = _mem_max_reserved
+    cuda.memory_cached = _mem_reserved
+    cuda.max_memory_cached = _mem_max_reserved
+    cuda.memory_summary = _mem_summary
     cuda.reset_peak_memory_stats = _reset_peak
     cuda.reset_max_memory_allocated = _reset_peak
     cuda.memory_stats = _api_cuda_memory_stats
@@ -226,6 +242,8 @@ def _install_cuda(g, registry=None):
     cuda.memory.max_memory_allocated = cuda.max_memory_allocated
     cuda.memory.memory_reserved = cuda.memory_reserved
     cuda.memory.max_memory_reserved = cuda.max_memory_reserved
+    cuda.memory.memory_stats = cuda.memory_stats
+    cuda.memory.memory_summary = cuda.memory_summary
     cuda.memory.CUDAPluggableAllocator = CUDAPluggableAllocator
     cuda.CUDAPluggableAllocator = CUDAPluggableAllocator
     # rng state (trainer checkpoints save/restore it). jittor has no portable
@@ -251,9 +269,6 @@ def _install_cuda(g, registry=None):
     g.cuda = cuda
     _modules["torch.cuda"] = cuda
     _modules["torch.cuda.memory"] = cuda.memory
-    if hasattr(cuda, "amp"):
-        _modules["torch.cuda.amp"] = cuda.amp
-
     for _dev_ns in ("mps", "cpu", "npu", "xpu", "mtia"):
         _mod = _modules.get("torch." + _dev_ns)
         if _mod is None:
@@ -353,6 +368,11 @@ def _install_cuda(g, registry=None):
     cudnn.benchmark = getattr(cudnn, "benchmark", False)
     cudnn.deterministic = getattr(cudnn, "deterministic", False)
     cudnn.version = getattr(cudnn, "version", _api_cudnn_version)
+    if not hasattr(cudnn, "flags"):
+        # Bound to this module, so the implementation never has to look
+        # itself up in the interpreter's module registry.
+        from functools import partial as _partial
+        cudnn.flags = _partial(_api_cudnn_flags, cudnn)
     if not isinstance(getattr(cudnn, "conv", None), _PrecisionBackend):
         cudnn.conv = _PrecisionBackend("cudnn", "torch.backends.cudnn.conv")
     if not isinstance(getattr(cudnn, "rnn", None), _PrecisionBackend):
@@ -371,6 +391,10 @@ def _install_cuda(g, registry=None):
     # stack turns cuDNN's off during platform detection, and an AttributeError
     # there is swallowed into "no platform detected" rather than reported.
     cuda_backend.enable_cudnn_sdp = getattr(cuda_backend, "enable_cudnn_sdp", _api_cuda_backend_enable_cudnn_sdp)
+    cuda_backend.flash_sdp_enabled = getattr(cuda_backend, "flash_sdp_enabled", _api_cuda_backend_flash_sdp_enabled)
+    cuda_backend.mem_efficient_sdp_enabled = getattr(cuda_backend, "mem_efficient_sdp_enabled", _api_cuda_backend_mem_efficient_sdp_enabled)
+    cuda_backend.math_sdp_enabled = getattr(cuda_backend, "math_sdp_enabled", _api_cuda_backend_math_sdp_enabled)
+    cuda_backend.cudnn_sdp_enabled = getattr(cuda_backend, "cudnn_sdp_enabled", _api_cuda_backend_cudnn_sdp_enabled)
     if not hasattr(cuda_backend, "matmul") or not isinstance(cuda_backend.matmul, _MatmulBackend):
         cuda_backend.matmul = _MatmulBackend()
     cuda_backend._preferred_blas_library = getattr(

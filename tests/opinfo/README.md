@@ -75,3 +75,19 @@ PYTHONPATH=tests $JT -m opinfo.report            # coverage matrix
 JITTOR_TEST_DEVICES=cpu ...                     # restrict device matrix
 cache_name=cardN CUDA_VISIBLE_DEVICES=N ...     # isolate parallel runs (no cache contention)
 ```
+
+
+### NPU dtype declarations
+
+`dtypesIfNPU` is independent of `dtypesIfCUDA`. A per-op declaration lists
+the NPU dtypes covered by its hardware validation; CPU/CUDA declarations remain
+unchanged. For example, ACL `abs` declares float16/float32, and
+`tests/ops/test_opinfo_npu_dtypes.py` checks both real execution and explicit
+float64 rejection without conversion or CPU fallback.
+
+An entry with `dtypesIfNPU is None` has `npu_dtypes_are_explicit=False`: its
+generic `dtypes` are **unaudited NPU test candidates**, not a verified NPU
+support claim. Those candidates remain executable in the generic suite, so
+missing coverage or implementations fail visibly rather than disappearing via
+skips. CUDA-specific overrides never supply NPU candidates. Pure metadata/view
+operations are not blanket-excluded from float64; audit them individually.

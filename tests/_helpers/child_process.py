@@ -165,10 +165,24 @@ def child_env(extra=None, inherit=True, without_torch_mode=False,
         env.pop("PYTHONPATH", None)
         return env
     pinned = source_python_dir()
+    # The test-support root as well: a child script that lives under a test
+    # tree and imports ``_helpers`` (the aggregate check scripts do) can only
+    # find it if the directory holding it is on the child's path. The parent
+    # has it on ``sys.path``; sys.path does not travel to a child.
+    support = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # And the adapters distribution, for the same reason as `support`: its
+    # tests import `jittor_adapters`, which lives in `adapters/` and is a
+    # separate distribution -- present in the tree, not installed in a source
+    # checkout. Without it every file under `adapters/tests` errors at
+    # collection with `No module named 'jittor_adapters'`, which is how the
+    # torch session reported six files it could have run.
+    adapters = os.path.join(os.path.dirname(support), "adapters")
+    roots = [pinned, support] + ([adapters] if os.path.isdir(adapters) else [])
     if pinned is not None:
         existing = env.get("PYTHONPATH", "")
-        parts = [pinned] + [
-            part for part in existing.split(os.pathsep) if part and part != pinned
+        parts = roots + [
+            part for part in existing.split(os.pathsep)
+            if part and part not in roots
         ]
         env["PYTHONPATH"] = os.pathsep.join(parts)
     return env
@@ -205,19 +219,23 @@ def _crash_isolated(command, env):
     """Put a shell between pytest and a child that is expected to crash.
 
     Jittor installs a *process-level* ``SIGCHLD`` handler (see
-    ``src/utils/log.cc``): when a direct child dies from a signal rather than
-    exiting, the handler quick-exits the parent. That makes the standard
+    ``src/utils/log.cc``). It **used to** quick-exit the parent whenever a
+    direct child died from a signal rather than exiting, which made the standard
     technique -- "run the case that segfaults in a child so it cannot take the
     session down" -- do exactly what it was meant to prevent: the child aborts,
     the handler fires inside pytest, and pytest vanishes mid-run with no output
-    at all (``-q`` buffers it, so it is lost). It reads as "the runner broke",
-    not "a test failed", and it has already cost two partitions an afternoon
-    each (6.C31).
+    at all (``-q`` buffers it, so it is lost). It read as "the runner broke", not
+    "a test failed", and it cost two partitions an afternoon each (6.C31).
 
-    ``sh`` between the two absorbs the signal death: pytest's direct child
-    always exits normally, with ``128 + signo``, which is ``CLD_EXITED`` and
-    leaves the handler alone. ``returncode`` is still 134 or 139, so the crash
-    remains assertable.
+    ``64350894`` (2026-09-03) made that branch report the child and return
+    instead, so the bare launch works now: with a parent that has imported
+    jittor, a child killed by ``SIGSEGV`` leaves the parent alive and reports
+    ``returncode == -11``. The shell is still worth keeping, for one reason: it
+    turns a signal death into ``128 + signo`` (134 / 139), the shape the call
+    sites here name in their failure messages. Note the converse -- a bare
+    launch is the only way to see a negative ``returncode``, which is how
+    ``tests/core/test_executor_python_threads.py`` recognises the signal it
+    documents. That case must therefore not pass this option.
 
     ``gdb_path`` is cleared for the same reason ``tools/run_test_suite.py``
     clears it: Jittor's crash handler forks gdb for a backtrace, and gdb
@@ -397,6 +415,32 @@ def mpirun_path():
     return jt.compile_extern.mpicc_path.replace("mpicc", "mpirun")
 
 
+#: OpenMPI refuses to start as root unless it is told twice that this is
+#: intended: ``mpirun has detected an attempt to run as root ... You can
+#: override this protection by ... the variable OMPI_ALLOW_RUN_AS_ROOT=1 ... and
+#: OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1``. A container usually *is* root, so every
+#: MPI case in this repository failed there for a reason that has nothing to do
+#: with jittor -- measured 11 of them in one smoke run, each with that paragraph
+#: as its assertion message. Both names are read only by OpenMPI's launcher, so
+#: exporting them is inert for MPICH/Hydra/Fujitsu and needs no launcher probe.
+_ROOT_RUN_AS_ROOT_VARIABLES = ("OMPI_ALLOW_RUN_AS_ROOT",
+                               "OMPI_ALLOW_RUN_AS_ROOT_CONFIRM")
+
+
+def _mpi_environment(env):
+    """The environment a rank-launcher child gets, including the root override.
+
+    ``setdefault``, so a caller that wants the protection (or a future launcher
+    with its own spelling) still wins.
+    """
+    if os.name != "posix" or os.geteuid() != 0:
+        return env
+    env = dict(env or {})
+    for name in _ROOT_RUN_AS_ROOT_VARIABLES:
+        env.setdefault(name, "1")
+    return env
+
+
 def run_mpi_python(num_procs, args, *, env=None, timeout=None, cwd=None,
                    text=True, check=False, merge_stderr=False, launcher=None,
                    inherit=True, without_torch_mode=False):
@@ -408,8 +452,9 @@ def run_mpi_python(num_procs, args, *, env=None, timeout=None, cwd=None,
     """
     command = [launcher or mpirun_path(), "-np", str(num_procs), PYTHON]
     command += [str(arg) for arg in args]
-    return _run(command, env, timeout, cwd, text, check, None, merge_stderr,
-                inherit=inherit, without_torch_mode=without_torch_mode)
+    return _run(command, _mpi_environment(env), timeout, cwd, text, check, None,
+                merge_stderr, inherit=inherit,
+                without_torch_mode=without_torch_mode)
 
 
 def shell(command, *, env=None, timeout=None, cwd=None, text=True,

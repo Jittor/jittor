@@ -3,7 +3,7 @@
 - [协作手册](collaboration.md)：工作流程、文档纪律、验证原则和并行编译规则。
 - [项目上下文](project-context.md)：目标、进度、环境、问题总账和后续任务。
 - [复数 dtype 设计](../../docs/notes/complex-dtype.md)
-- [并行编译段错误分析](../../docs/development/known-issues/parallel-compiler-segfault.md)
+- [并行编译器：文件级死锁与算子级段错误](../../docs/development/known-issues/parallel-compiler-segfault.md)
 - [测试系统设计](../../docs/development/test-system.md)
 - [源码架构与渐进式拆分规范](../../docs/development/source-architecture.md)
 

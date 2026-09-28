@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import numpy as np
 
 import jittor as jt
+import torch
 
 
 class TestInstallerSplitRegressions(unittest.TestCase):
@@ -61,8 +62,10 @@ class TestInstallerSplitRegressions(unittest.TestCase):
         )
 
     def test_svd_returns_the_three_torch_values(self):
-        u, singular_values, v = jt.svd(
-            jt.array([[3.0, 0.0], [0.0, 2.0]])
+        # ``svd`` and ``vmap`` are torch APIs; the jittor namespace spells the
+        # first ``jt.linalg.svd`` and does not have the second.
+        u, singular_values, v = torch.svd(
+            torch.tensor([[3.0, 0.0], [0.0, 2.0]])
         )
         self.assertEqual(tuple(u.shape), (2, 2))
         self.assertEqual(tuple(singular_values.shape), (2,))
@@ -70,10 +73,10 @@ class TestInstallerSplitRegressions(unittest.TestCase):
 
     @staticmethod
     def _nested_mask_vmap(mask_fn):
-        mapped = jt.vmap(mask_fn, in_dims=(None, None, None, 0))
-        mapped = jt.vmap(mapped, in_dims=(None, None, 0, None))
-        mapped = jt.vmap(mapped, in_dims=(None, 0, None, None))
-        return jt.vmap(mapped, in_dims=(0, None, None, None))
+        mapped = torch.vmap(mask_fn, in_dims=(None, None, None, 0))
+        mapped = torch.vmap(mapped, in_dims=(None, None, 0, None))
+        mapped = torch.vmap(mapped, in_dims=(None, 0, None, None))
+        return torch.vmap(mapped, in_dims=(0, None, None, None))
 
     def test_nested_mask_vmap_matches_loop_and_broadcasts_batch_heads(self):
         from torch._dynamo._trace_wrapped_higher_order_op import (

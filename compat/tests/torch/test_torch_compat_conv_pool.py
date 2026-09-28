@@ -466,6 +466,37 @@ class TestModuleForward(Base):
             self.ac(g, pool2d_ref(x, 2, mode="avg"), msg=f"AvgPool2d module {dev}")
         both_devices(body)
 
+    def test_conv3d_module_torch_padding_mode(self):
+        """torch's conv layers take `padding_mode`, the native ones do not.
+
+        MiniMax-H3's video VAE subclasses `nn.Conv3d` and forwards the torch
+        default, so construction failed with "Conv3d.__init__() got an
+        unexpected keyword argument 'padding_mode'". `"zeros"` must keep the
+        existing result; the other modes are emulated by padding first, and an
+        unknown mode must be refused rather than silently ignored.
+        """
+        rs = np.random.RandomState(24)
+        x = rs.randn(1, 3, 4, 4, 4).astype("float32")
+        def body(dev):
+            m = torch.nn.Conv3d(3, 5, 3, padding=1, padding_mode="zeros")
+            native = nn.Conv3d(3, 5, 3, padding=1)
+            native.weight, native.bias = m.weight, m.bias
+            self.assertEqual(m.padding_mode, "zeros")
+            self.assertEqual(tuple(m.padding), (1, 1, 1))
+            self.ac(m(torch.tensor(x)).numpy(), native(torch.tensor(x)).numpy(),
+                    msg=f"Conv3d padding_mode='zeros' {dev}")
+        both_devices(body)
+        # torch defines `padding_mode` as "pad the input, then convolve with no
+        # padding", so the mode only changes the border the convolution sees.
+        m = torch.nn.Conv3d(3, 5, 3, padding=1, padding_mode="reflect")
+        self.assertEqual(m.padding_mode, "reflect")
+        padded = F.pad(torch.tensor(x), (1, 1, 1, 1, 1, 1), mode="reflect")
+        expected = F.conv3d(padded, m.weight, m.bias, m.stride, 0, m.dilation, m.groups)
+        self.ac(m(torch.tensor(x)).numpy(), expected.numpy(),
+                msg="Conv3d padding_mode='reflect'")
+        with self.assertRaises(NotImplementedError):
+            torch.nn.Conv3d(3, 5, 3, padding_mode="bogus")
+
 
 # ---------------------------------------------------------------------------
 # Normalization modules

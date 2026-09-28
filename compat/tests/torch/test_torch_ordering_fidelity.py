@@ -74,7 +74,7 @@ class TestTorchOrdering(cu.JittorTestCase):
             result.values.numpy(), np.sort(DISTINCT, axis=1))
         np.testing.assert_array_equal(
             result.indices.numpy(), np.argsort(DISTINCT, axis=1))
-        self.assertEqual(str(result.indices.dtype), "int64")
+        self.assertEqual(str(result.indices.dtype), "torch.int64")
 
     def test_sort_descending_reverses_the_order(self, device):
         actual = torch.sort(torch.tensor(DISTINCT), dim=1, descending=True)
@@ -83,7 +83,7 @@ class TestTorchOrdering(cu.JittorTestCase):
 
     def test_argsort_returns_only_int64_indices(self, device):
         actual = torch.argsort(torch.tensor(DISTINCT), dim=1)
-        self.assertEqual(str(actual.dtype), "int64")
+        self.assertEqual(str(actual.dtype), "torch.int64")
         np.testing.assert_array_equal(
             actual.numpy(), np.argsort(DISTINCT, axis=1))
 
@@ -94,7 +94,7 @@ class TestTorchOrdering(cu.JittorTestCase):
             largest.values.numpy(), np.sort(DISTINCT, axis=1)[:, ::-1][:, :2])
         np.testing.assert_array_equal(
             smallest.values.numpy(), np.sort(DISTINCT, axis=1)[:, :2])
-        self.assertEqual(str(largest.indices.dtype), "int64")
+        self.assertEqual(str(largest.indices.dtype), "torch.int64")
 
     def test_topk_indices_address_the_values_they_returned(self, device):
         result = torch.topk(torch.tensor(DISTINCT), 3, dim=1)
@@ -107,7 +107,7 @@ class TestTorchOrdering(cu.JittorTestCase):
         result = torch.median(torch.tensor(values), dim=1)
         np.testing.assert_array_equal(result.values.numpy(), np.array([2.0]))
         np.testing.assert_array_equal(result.indices.numpy(), np.array([3]))
-        self.assertEqual(str(result.indices.dtype), "int64")
+        self.assertEqual(str(result.indices.dtype), "torch.int64")
 
     def test_median_keepdim_and_full_reduction(self, device):
         tensor = torch.tensor(DISTINCT)

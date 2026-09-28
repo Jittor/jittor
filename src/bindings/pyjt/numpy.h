@@ -132,6 +132,8 @@ union tmp_data_t {
     int32 i32;
     float32 f32;
     int8 i8;
+    // complex64 is a (real, imag) float32 pair; see type/complex_compute.h.
+    float32 c64[2];
 };
 
 void numpy_init();

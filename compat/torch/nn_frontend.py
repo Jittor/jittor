@@ -23,13 +23,84 @@ def module_setattr(module, name, value):
         elif name not in attributes.get("_buffer_names", ()):
             if name not in parameters:
                 non_parameters.add(name)
+    # torch registers a submodule or parameter when one is first assigned. A
+    # name that held something else until then -- diffusers writes
+    # `self.mid_block = None` and builds the block later -- is registered at
+    # that point, after everything registered in between. Attributes keep the
+    # position of their first assignment, so move the name to the end: without
+    # it `named_parameters()` listed an SD UNet's mid block before its up
+    # blocks, where torch lists it after, and anything pairing parameters by
+    # position paired the wrong ones.
+    if name in attributes and isinstance(value, (owner.native_module, owner.Parameter)) \
+            and not isinstance(attributes[name], (owner.native_module, owner.backend.Var)):
+        del attributes[name]
     object.__setattr__(module, name, value)
 
 
 def module_call(module, *args, **kwargs):
     owner = type(module)._nn_frontend_owner
-    with tensor_frontend(owner.tensor_type):
+    # A forward follows its inputs' device; only constructors use the default.
+    # The first tensor argument is the reference, as `*_like` uses its source:
+    # with none (or one without an explicit placement) allocation is left to
+    # the ambient device, and never forced onto the default one.
+    with tensor_frontend(owner.tensor_type, like=_first_tensor(owner, args, kwargs),
+                         default_placement=False):
         return owner.native_module.__call__(module, *args, **kwargs)
+
+
+def _first_tensor(owner, args, kwargs):
+    # No backend, no placement to follow -- `tensor_frontend` passes those
+    # straight through too.
+    backend = getattr(owner.tensor_type, "_frontend_backend", None)
+    if backend is None:
+        return None
+    var_type = backend.Var
+    for value in args:
+        if isinstance(value, var_type):
+            return value
+    for value in kwargs.values():
+        if isinstance(value, var_type):
+            return value
+    return None
+
+
+#: Padding modes torch's convolution layers accept. jittor's convolutions only
+#: zero-pad, so every other mode is emulated by padding first and convolving
+#: with no padding.
+_TORCH_CONV_PADDING_MODES = ("zeros", "reflect", "replicate", "circular")
+
+
+def _conv_spatial_rank(native):
+    """1/2/3 for ``Conv1d``/``Conv2d``/``Conv3d``; ``None`` for anything else."""
+    name = native.__name__
+    if name in ("Conv1d", "Conv2d", "Conv3d"):
+        return int(name[-2])
+    return None
+
+
+def conv_padding_execute(module, x):
+    """``execute`` honoring torch's ``padding_mode``.
+
+    Torch's ``padding_mode`` pads the input *before* the convolution and then
+    convolves with no padding. jittor's only zero-pads, so the other modes are
+    emulated the same way here. Installed by
+    :meth:`NNFrontendOwner._conv_padding_members`, which is also what puts the
+    native ``execute`` and the spatial rank on the class.
+    """
+    native_execute = module._torch_conv_execute
+    mode = getattr(module, "padding_mode", "zeros")
+    pads = tuple(getattr(module, "padding", ()))
+    if mode in (None, "zeros") or not any(pads):
+        return native_execute(module, x)
+    # pad() takes the widths in reverse dimension order.
+    pad = []
+    for value in reversed(pads):
+        pad.extend((value, value))
+    backend = module._nn_frontend_owner.backend
+    x = backend.nn.pad(x, tuple(pad), mode=mode)
+    conv = getattr(backend.nn, "conv%dd" % module._torch_conv_rank)
+    return conv(x, module.weight, module.bias, module.stride, 0,
+                module.dilation, module.groups)
 
 
 class LayerInitializer:
@@ -40,14 +111,13 @@ class LayerInitializer:
         self.original = native.__init__
         self.__wrapped__ = self.original
         self.__name__ = "__init__"
-        self.__code__ = self.original.__code__
-        self.__defaults__ = self.original.__defaults__
 
     def __get__(self, instance, owner=None):
         return self if instance is None else types.MethodType(self, instance)
 
     def __call__(self, module, *args, **kwargs):
         owner = self.owner
+        padding_mode = self._take_torch_only_kwargs(kwargs)
         external = owner.external_objects(args, kwargs)
         frozen = False
         if self.native.__name__ == "Embedding":
@@ -58,12 +128,37 @@ class LayerInitializer:
             object.__setattr__(module, "_native_parameter_construction", True)
             try:
                 self.original(module, *args, **kwargs)
+                if padding_mode is not None:
+                    # torch layers expose what they were built with; the
+                    # execute wrapper below reads it back.
+                    object.__setattr__(module, "padding_mode", padding_mode)
                 adopt_owned_children(owner, module, external, frozen)
             finally:
                 if previous is None:
                     vars(module).pop("_native_parameter_construction", None)
                 else:
                     object.__setattr__(module, "_native_parameter_construction", previous)
+
+    def _take_torch_only_kwargs(self, kwargs):
+        """Remove torch-only keyword arguments the native ``__init__`` lacks.
+
+        Torch's convolution layers take ``padding_mode``; the native
+        signatures do not. It cannot simply be dropped: the value decides how
+        the input is padded, so it is captured and handed to the execute
+        wrapper installed by :meth:`NNFrontendOwner._conv_padding_members`.
+        Found with MiniMax-H3's video VAE, whose ``BaseConv3d(nn.Conv3d)``
+        forwards the torch default and would not construct without it.
+        """
+        if "padding_mode" not in kwargs:
+            return None
+        if "padding_mode" in inspect.signature(self.original).parameters:
+            return None
+        mode = kwargs.pop("padding_mode")
+        if mode not in _TORCH_CONV_PADDING_MODES:
+            raise NotImplementedError(
+                "torch.nn.%s(padding_mode=%r): choose one of %s"
+                % (self.native.__name__, mode, ", ".join(_TORCH_CONV_PADDING_MODES)))
+        return mode
 
 
 class NNFrontendOwner:
@@ -76,7 +171,6 @@ class NNFrontendOwner:
         self.Module = type("Module", (self.native_module,), {
             "__module__": "torch.nn", "__slots__": (),
             "_frontend_tensor_type": tensor_type, "_nn_frontend_owner": self,
-            "__init__": self.native_module.__init__,
             "__setattr__": module_setattr, "__call__": module_call,
         })
         self.adapters = {self.native_module: self.Module}
@@ -98,19 +192,36 @@ class NNFrontendOwner:
                 pending.extend(value)
         return seen
 
+    def _conv_padding_members(self, native):
+        """What :func:`conv_padding_execute` needs on the adapted class, or ``{}``.
+
+        The layer's own ``execute`` and its spatial rank travel as class
+        members rather than in a closure, so torch's ``padding_mode`` has one
+        definition for every adapted convolution instead of one per layer.
+        """
+        rank = _conv_spatial_rank(native)
+        native_execute = native.__dict__.get("execute")
+        if rank is None or native_execute is None:
+            return {}
+        return {
+            "execute": conv_padding_execute,
+            # A plain function here would bind as a method and take `module`
+            # twice; `conv_padding_execute` passes it explicitly.
+            "_torch_conv_execute": staticmethod(native_execute),
+            "_torch_conv_rank": rank,
+        }
+
     def adapt_class(self, native):
         known = self.adapters.get(native)
         if known is not None:
             return known
-        is_linear = native is getattr(self.backend.nn, "Linear", None)
-        bases = (self.Module, native) if is_linear else (native, self.Module)
         namespace = {
             "__module__": "torch.nn", "__slots__": (),
-            "__init__": LayerInitializer(self, native), "_torch_native_layer": native,
+            "__init__": LayerInitializer(self, native),
+            "_torch_native_layer": native,
         }
-        if is_linear:
-            namespace["execute"] = native.execute
-        adapted = type(native.__name__, bases, namespace)
+        namespace.update(self._conv_padding_members(native))
+        adapted = type(native.__name__, (native, self.Module), namespace)
         self.adapters[native] = adapted
         return adapted
 

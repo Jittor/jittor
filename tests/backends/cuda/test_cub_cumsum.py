@@ -1,5 +1,6 @@
 
 from _helpers import capability as _test_capability
+from _helpers.cupy_bridge import cuda_numpy_code_available
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers: 
@@ -39,6 +40,12 @@ def check_backward(shape, dim=None):
     grad_ = jt.grad(loss_, x)
     assert(np.allclose(grad.data, grad_.data))
 
+# The reference these cases compare against is computed through a numpy-code
+# operator, and py_converter hands that callback `cupy` instead of `numpy`
+# when use_cuda is on. Without CuPy every case here raises from inside
+# execution -- and leaves the CUDA work pending for an unrelated later test.
+@unittest.skipIf(not cuda_numpy_code_available(),
+                 "CUDA numpy-code operators need CuPy; it is not installed")
 class TestCubCumsumOp(unittest.TestCase):
     def setUp(self):
         self.is_reversed = False

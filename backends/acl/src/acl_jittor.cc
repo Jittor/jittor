@@ -6,6 +6,8 @@
 // ACL operator registry has one owner; query adapters erase only the four
 // live grouped query signatures. Direct runners retain their own SDK queries.
 #include "acl_op_registry.h"
+#include <aclnnop/aclnn_adaptive_avg_pool2d.h>
+#include <aclnnop/aclnn_adaptive_avg_pool2d_backward.h>
 
 namespace jittor {
 const AclOpRegistry& acl_op_registry() {
@@ -73,6 +75,8 @@ const AclOpRegistry& acl_op_registry() {
         {"Transpose", AclOpFunctions::direct(aclnnPermute)},
         {"Maxpool", AclOpFunctions::direct(aclnnMaxPool2dWithIndices)},
         {"MaxpoolBackward", AclOpFunctions::direct(aclnnMaxPool2dWithIndicesBackward)},
+        {"AdaptiveAvgPool2d", AclOpFunctions::direct(aclnnAdaptiveAvgPool2d)},
+        {"AdaptiveAvgPool2dBackward", AclOpFunctions::direct(aclnnAdaptiveAvgPool2dBackward)},
         {"Avgpool", AclOpFunctions::direct(aclnnAvgPool2d)},
         {"AvgpoolBackward", AclOpFunctions::direct(aclnnAvgPool2dBackward)},
         {"Flip", AclOpFunctions::direct(aclnnFlip)},

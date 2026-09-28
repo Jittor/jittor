@@ -147,6 +147,20 @@ class TestGrad(unittest.TestCase):
         self.assertEqual(dddx.data, 4*3*2*2**1)
 
     def test_no_grad(self):
+        # `live_vars` is process-global and carries a floor from whatever cached
+        # Vars the process already holds: `jittor.fft._dft_mat_cache` and the
+        # attention need-length cache keep theirs for the life of the
+        # interpreter, so *whichever file ran first* decides the number --
+        # measured 28 with `tests/ops/test_fft_op.py` collected first, 9 in the
+        # native half of the gate, and 2 when this file runs alone. The absolute
+        # `== 2` was therefore an assertion about the session, not about this
+        # test; `tests/_helpers/state_leaks.py` states the rule for this counter
+        # class. The clean before the snapshot makes the baseline the floor: vars
+        # left over by earlier tests are released by this test's own `jt.clean()`,
+        # so a baseline taken without one is higher than the count returns to
+        # (same idiom as tests/ops/test_merge_single_array_op.py::test6).
+        jt.clean()
+        floor = jt.introspection.counters.live_vars
         a = jt.array(1.0)
         with jt.no_grad():
             b = a
@@ -154,7 +168,8 @@ class TestGrad(unittest.TestCase):
                 b = b.clone() + 1
         assert b.data == 11
         jt.clean()
-        assert jt.introspection.counters.live_vars == 2
+        # The ten no_grad clones are gone; this test's own two Vars survive.
+        assert jt.introspection.counters.live_vars == floor + 2
 
     def test_requires_grad(self):
         a = jt.array(2.0)

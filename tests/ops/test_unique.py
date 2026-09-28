@@ -12,7 +12,6 @@ from _helpers import capability as _test_capability
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-from cgi import test
 import unittest
 import jittor as jt
 import numpy as np

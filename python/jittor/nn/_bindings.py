@@ -19,43 +19,13 @@ def _requires_grad_(value, requires_grad=True):
     return value
 
 
-#: A python ``complex`` and a numpy complex scalar are the only operands the
-#: wrapper below has to convert. Naming the pair once keeps a global lookup, an
-#: attribute lookup and a tuple build out of every ``+``, ``-``, ``*`` and
-#: ``/`` whose right operand is not a Var -- a float or an int scalar reaches
-#: the check too, and there is no cheaper way to keep the conversion: a python
-#: complex may meet a *float32* Var (``1j * x``), so nothing about the Vars in
-#: play says in advance that the wrapper is unnecessary.
-_COMPLEX_SCALAR_TYPES = (complex, np.complexfloating)
-
-
-def _install_complex_scalar_binary_bindings():
-    if getattr(jt.Var, "_native_complex_scalar_binary", False):
-        return
-
-    var_type = jt.Var
-
-    def wrap(name):
-        native = getattr(jt.Var, name)
-
-        def binary(self, other):
-            # Var-with-Var is the overwhelmingly common case and it sits on the
-            # hot path of every model: this wrapper runs for each +, -, * and /
-            # in the graph, so settle it before the complex-scalar check.
-            if other.__class__ is not var_type and isinstance(
-                    other, _COMPLEX_SCALAR_TYPES):
-                other = jt.array(np.asarray([other], dtype=np.complex64))
-            return native(self, other)
-
-        binary.__name__ = name
-        setattr(jt.Var, name, binary)
-
-    for name in (
-        "__add__", "__radd__", "__sub__", "__rsub__",
-        "__mul__", "__rmul__", "__truediv__", "__rtruediv__",
-    ):
-        wrap(name)
-    jt.Var._native_complex_scalar_binary = True
+#: Complex scalar operands are converted by the native argument converter
+#: (``ArrayArgs::from_py_object`` in ``src/bindings/pyjt/py_converter.h``),
+#: not here. They used to go through a python wrapper installed over the
+#: eight arithmetic operators, which meant a python frame on every ``+``,
+#: ``-``, ``*`` and ``/`` in every model -- 88 of them per decode step of an
+#: 8-layer transformer, 0.160 ms, 5.9% of the step -- to serve an operand
+#: shape almost no model ever passes.
 
 
 _REAL_PROPERTY = property(_var_real)
@@ -80,4 +50,3 @@ def install_var_bindings():
     jt.Var.real = _REAL_PROPERTY
     jt.Var.imag = _IMAG_PROPERTY
     jt.Var.angle = _var_angle
-    _install_complex_scalar_binary_bindings()

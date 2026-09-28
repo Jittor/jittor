@@ -11,12 +11,15 @@
 
 #include "core/var.h"
 #include "mkl_matmul_op.h"
+#include "ops/op_register.h"
 
 using namespace std;
 
 namespace jittor {
 
 #ifndef JIT
+
+static auto make_mkl_matmul = op_constructor<VarPtr, Var*, Var*, bool, bool>("mkl_matmul");
 
 MklMatmulOp::MklMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b)
     : a(a), b(b), trans_a(trans_a), trans_b(trans_b) {
@@ -26,11 +29,48 @@ MklMatmulOp::MklMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b)
     // TODO: support diffrent input type
     USER_CHECK(a->dtype().dsize() == 4 && b->dtype().dsize() == 4) << "support float32 only now.";
     c = create_output(nullptr, a->dtype());
+    // Both flags used to be someone else's business: this op only ever entered
+    // a graph as a relay inside a fused op, where autograd runs on the
+    // meta-op subgraph the relay stands in for, so it needed neither a
+    // gradient nor its operands kept alive for one. It is a forward-graph op
+    // now (the CPU row of the matmul kernel table), and a forward-graph op
+    // without these silently produces a wrong gradient rather than an error.
+    set_flag(OpFlags::_manual_set_vnbb);
+    a->set_flag(VarFlags::_needed_by_backward);
+    b->set_flag(VarFlags::_needed_by_backward);
+}
+
+VarPtr MklMatmulOp::grad(Var* out, Var* dout, Var* v, int v_index) {
+    // a [n,m], b [m,k], c [n,k], c = op(a) * op(b). The gradients come back in
+    // the operands' own pre-transpose layouts. Mirrors MklBatchedMatmulOp.
+    if (v_index == 0) {
+        if (trans_a)
+            return make_mkl_matmul(b, dout, trans_b, 1);
+        // da = dc * b^T
+        return make_mkl_matmul(dout, b, 0, trans_b^1);
+    }
+    if (trans_b)
+        return make_mkl_matmul(dout, a, 1, trans_a);
+    // db = a^T * dc
+    return make_mkl_matmul(a, dout, trans_a^1, 0);
 }
 
 void MklMatmulOp::infer_shape() {
     USER_CHECKop(a->shape.size(),==,2);
     USER_CHECKop(b->shape.size(),==,2);
+    // jit_run hands mem_ptr to oneDNN with the shape alone, so a strided
+    // operand would be read as though it were dense. The kernel table's
+    // predicate keeps views off the forward path, but grad() builds operands
+    // of its own out of a cotangent, and a cotangent can arrive as a view --
+    // so the contract is enforced here, where every route passes.
+    USER_CHECK(a->is_contiguous())
+        << "mkl matmul needs a dense input a; got strides"
+        << a->storage_strides << "for shape" << a->shape
+        << "(call contiguous() first)";
+    USER_CHECK(b->is_contiguous())
+        << "mkl matmul needs a dense input b; got strides"
+        << b->storage_strides << "for shape" << b->shape
+        << "(call contiguous() first)";
     int n = a->shape[0], m = a->shape[1];
     int m_ = b->shape[0], k = b->shape[1];
     if (trans_a) {

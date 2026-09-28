@@ -12,6 +12,7 @@
 
 #include "core/var.h"
 #include "mkl_conv_backward_x_op.h"
+#include "ops/op_register.h"
 
 #include "onednn_runtime.h"
 
@@ -50,6 +51,28 @@ MklConvBackwardXOp::MklConvBackwardXOp(Var* w, Var* dy, int height, int width, i
                           dilationh, dilationw, groups, this->xformat, this->wformat, this->yformat);
     USER_CHECK(height > 0 && width > 0) << "oneDNN backward input requires positive height/width";
     dx = create_output(nullptr, dtype_infer(dy->ns, w->ns));
+    // A forward-graph op -- conv_transpose's forward is this op -- must keep
+    // its operands alive for its own backward.
+    set_flag(OpFlags::_manual_set_vnbb);
+    w->set_flag(VarFlags::_needed_by_backward);
+    dy->set_flag(VarFlags::_needed_by_backward);
+}
+
+static auto make_conv = op_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, string, string, string>("mkl_conv");
+static auto make_backwardw = op_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, int, int, string, string, string>("mkl_conv_backward_w");
+
+VarPtr MklConvBackwardXOp::grad(Var* out, Var* dout, Var* v, int v_index) {
+    // This op is conv_transpose's *forward*, so it needs a backward of its
+    // own -- the same two it already has siblings for. Mirrors
+    // CudnnConvBackwardXOp::grad.
+    int wco, wci, wh, ww;
+    w->shape.unpack(wco, wci, wh, ww);
+    if (v_index == 0)
+        return make_backwardw(dout, dy, wh, ww, strideh, stridew, paddingh,
+                              paddingw, dilationh, dilationw, groups,
+                              xformat, wformat, yformat);
+    return make_conv(dout, w, strideh, stridew, paddingh, paddingw,
+                     dilationh, dilationw, groups, xformat, wformat, yformat);
 }
 
 void MklConvBackwardXOp::infer_shape() {

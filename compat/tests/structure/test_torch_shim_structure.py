@@ -23,7 +23,10 @@ class TestTorchShimStructure(unittest.TestCase):
     def setUpClass(cls):
         cls.repo_root = Path(__file__).resolve().parents[3]
         cls.shim_root = cls.repo_root / "compat" / "shim"
-        cls.manifest = cls.repo_root / "docs" / "results" / "baselines" / "torch-shim-resources-stage7.txt"
+        # The refactor moved its process documents out of docs/; the packaging
+        # inventory went with them.
+        cls.manifest = (cls.repo_root / "refactor-wip" / "results" / "baselines"
+                        / "torch-shim-resources-stage7.txt")
 
     def test_legacy_physical_package_is_absent(self):
         self.assertFalse((self.repo_root / "python" / "jittor" / "torch_shim").exists())
@@ -122,7 +125,10 @@ class TestTorchShimStructure(unittest.TestCase):
                   if isinstance(node, (ast.Expr, ast.Assign))
                   and isinstance(node.value, ast.Call)]
         self.assertTrue(called, "the template never activates the shim")
-        self.assertEqual(sorted(set(called) - from_compat), [])
+        # Reading the environment is a guard, not behaviour of its own: the
+        # template rejects a `JITTOR_TORCH_INDEPENDENT` that names the removed
+        # legacy frontend, and has to do it before `import jittor`.
+        self.assertEqual(sorted(set(called) - from_compat - {"_os.environ.get"}), [])
 
     def test_bootstrap_is_a_runtime_facade(self):
         """It re-exports and defines nothing.

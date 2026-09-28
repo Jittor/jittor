@@ -4,7 +4,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-import os, sys, shutil, re
+import os, sys, shutil, re, subprocess
 import platform
 from .compiler import *
 from jittor_utils import run_cmd, get_version, get_int_version
@@ -308,6 +308,28 @@ def _cuda_library_sources(lib_name):
     return sorted(sources)
 
 
+def cuda_include_search_dirs(component_dirs, cuda_include, extra_include_path):
+    """Where a CUDA component's header may live, most specific first."""
+    return list(component_dirs) + [cuda_include, extra_include_path, "/usr/include"]
+
+
+def cuda_library_search_dirs(component_dirs, cuda_bin, cuda_lib,
+                             extra_lib_path, arch_key):
+    """Where a CUDA component's shared library may live, most specific first.
+
+    `/usr/lib64` is the one that is easy to forget: it is where RHEL-family
+    distros (and the tlinux kernels this project runs on) put 64-bit system
+    libraries. Without it a cudnn installed as a distro package is invisible,
+    and `setup_cuda_extern` aborts the whole import claiming cudnn is not
+    installed -- on a machine where `/usr/lib64/libcudnn.so` is sitting right
+    there. The NCCL lookup in this module has always searched it.
+    """
+    return list(component_dirs) + [
+        cuda_bin, cuda_lib, extra_lib_path,
+        f"/usr/lib/{arch_key}-linux-gnu", "/usr/lib", "/usr/lib64",
+    ]
+
+
 def setup_cuda_lib(lib_name, link=True, extra_flags=""):
     arch_key = "x86_64"
     if platform.machine() not in ["x86_64", "AMD64"]:
@@ -330,11 +352,10 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
         if cuda_wheel_stack:
             component_include_dirs = cuda_wheel_stack.include_dirs(lib_name)
             component_lib_dirs = cuda_wheel_stack.lib_dirs(lib_name)
-        include_search_dirs = component_include_dirs + [cuda_include, extra_include_path, "/usr/include"]
-        library_search_dirs = component_lib_dirs + [
-            cuda_bin, cuda_lib, extra_lib_path,
-            f"/usr/lib/{arch_key}-linux-gnu", "/usr/lib",
-        ]
+        include_search_dirs = cuda_include_search_dirs(
+            component_include_dirs, cuda_include, extra_include_path)
+        library_search_dirs = cuda_library_search_dirs(
+            component_lib_dirs, cuda_bin, cuda_lib, extra_lib_path, arch_key)
         cuda_include_name = search_file(include_search_dirs, lib_name+".h")
         extra_flags = f' -I"{os.path.dirname(cuda_include_name)}" ' + extra_flags
         # cuda11 prefer cudnn 8
@@ -543,7 +564,7 @@ def install_nccl(root_folder):
     asset = manifest.NCCL
     url, filename = asset.url, asset.filename
     fullname = os.path.join(root_folder, filename)
-    dirname = os.path.join(root_folder, "nccl-2.8.4-1")
+    dirname = os.path.join(root_folder, "nccl-" + manifest.NCCL_VERSION)
     true_md5 = manifest.digest_of(asset)[1]
 
     if os.path.exists(fullname):
@@ -561,7 +582,10 @@ def install_nccl(root_folder):
         # archive it then threw away.
         if core.get_device_count() == 0:
             return
-        if not inside_mpi():
+        # ... or under the MPI-free rendezvous: ``setup_nccl`` builds NCCL for
+        # ``JT_NCCL_WORLD_SIZE`` precisely so multi-card runs need no mpirun,
+        # and that path has to be able to fetch NCCL too.
+        if not inside_mpi() and os.environ.get("JT_NCCL_WORLD_SIZE") is None:
             return
         if not os.path.isfile(os.path.join(root_folder, filename)):
             LOG.i("Downloading nccl...")
@@ -572,10 +596,17 @@ def install_nccl(root_folder):
             safe_tar_extractall(tar, root_folder)
 
         LOG.i("installing nccl...")
-        arch_flag = ""
+        # NVCC_GENCODE replaces NCCL's own default list, so handing it one
+        # without a single `-gencode` builds the device code for the compiler's
+        # default architecture while the host objects expect the real one, and
+        # the device link then fails with hundreds of "nvlink error: Undefined
+        # reference to ncclFunction_...". Only override it when the
+        # architectures are actually known (they are not, for instance, in a
+        # cache home whose `cuda_archs` was never filled in).
+        gencode = ""
         if len(flags.cuda_archs):
-            arch_flag = cuda_arch_flags(flags.cuda_archs)
-        run_cmd(f"CC=\"{cc_path}\" CXX=\"{cc_path}\" make -j8 src.build CUDA_HOME='{cuda_home}' NVCC_GENCODE='{arch_flag} --cudart=shared ' ", cwd=dirname)
+            gencode = f" NVCC_GENCODE='{cuda_arch_flags(flags.cuda_archs)} --cudart=shared '"
+        run_cmd(f"CC=\"{cc_path}\" CXX=\"{cc_path}\" make -j8 src.build CUDA_HOME='{cuda_home}'{gencode} ", cwd=dirname)
     return dirname
 
 def _skip_nccl_p2p_without_peer_access():
@@ -681,6 +712,39 @@ def _init_nccl_from_store(nccl_module, store=None):
         if world_rank == 0:
             store.set(unique_id_key, bytes(nccl_module.nccl_get_unique_id()))
         unique_id = store.get(unique_id_key)
+
+        # Rendezvous *before* the collective as well as after it, and only on
+        # the rank that hosts the store.
+        #
+        # `nccl_init_with_unique_id` is a collective that parks until every rank
+        # arrives, and the pyjt wrapper holds the GIL while it does. Rank 0 runs
+        # the store's server threads in that same process, so while it is parked
+        # there no peer can be read from or replied to, and a peer still in the
+        # store waits out its timeout -- while the collective waits for that
+        # peer. Observed on TP2 (2 ranks, TCPStore) as "NCCL store rendezvous
+        # timeout: rank 1 waited 120 s", roughly one start in three.
+        #
+        # So rank 0 must not enter the collective until every peer has finished
+        # with the store. A barrier of `set` + `wait` on both sides cannot say
+        # that, however many phases it is given: a peer's own `wait` is a
+        # request that rank 0's server still owes a reply to, so each phase
+        # closes the previous window and opens an identical one. What closes it
+        # is `Store.arrive`, whose reply is flushed *before* the marker becomes
+        # visible: when rank 0 sees the last marker, every peer has already been
+        # answered and has nothing further to ask. The peers do not wait at all
+        # -- the collective is their barrier -- which is what leaves them with
+        # nothing outstanding.
+        arrived = "jittor/nccl/world/arrived/{}"
+        announce = getattr(store, "arrive", None)
+        if callable(announce):
+            announce(arrived.format(world_rank))
+        else:
+            store.set(arrived.format(world_rank), b"1")
+        if world_rank == 0:
+            store.wait([
+                arrived.format(rank) for rank in range(world_size)
+            ])
+
         nccl_module.nccl_init_with_unique_id(list(unique_id))
 
         arrived = "jittor/nccl/world/initialized/{}".format(world_rank)
@@ -707,6 +771,74 @@ def _init_nccl_from_store(nccl_module, store=None):
                 close()
 
 
+# A NCCL that is already installed is worth finding before building one.
+#
+# The search used to be: the two build env vars, then the pip CUDA wheels, then
+# *download and compile NCCL from source* into ~/.cache/jittor. A machine with
+# a distribution NCCL in /usr/include and /lib64 -- which is every machine with
+# the CUDA packages installed -- fell all the way through to the download,
+# which is slow, needs network, and is why deployments carry
+# `JT_BUILD_NCCL_INCLUDE_PATH` / `JT_BUILD_NCCL_LIB_PATH` in their launch
+# scripts. Neither variable should be something a user has to know about.
+#
+# Looked for in this order, and only reached when the env vars and the wheels
+# have not already answered, so it cannot override an explicit choice.
+def find_system_nccl():
+    """Locate an installed NCCL, or None. Returns (include_dir, lib_dir, lib)."""
+    cuda_home = os.environ.get("CUDA_HOME") or os.environ.get("CUDA_PATH") or ""
+    include_dirs = [
+        os.path.join(cuda_home, "include") if cuda_home else None,
+        "/usr/local/cuda/include",
+        "/usr/include",
+        "/usr/local/include",
+    ]
+    header = None
+    for directory in include_dirs:
+        if directory and os.path.isfile(os.path.join(directory, "nccl.h")):
+            header = directory
+            break
+    if header is None:
+        return None
+
+    # ldconfig knows where the loader will actually find it, which beats
+    # guessing a directory and beats a bare `libnccl.so` symlink that points at
+    # a version the loader would not pick.
+    library = None
+    try:
+        listing = subprocess.run(["ldconfig", "-p"], capture_output=True,
+                                 text=True, timeout=10)
+        for line in listing.stdout.splitlines():
+            if "libnccl.so" not in line or "=>" not in line:
+                continue
+            candidate = line.split("=>")[-1].strip()
+            if os.path.isfile(candidate):
+                library = candidate
+                break
+    except (OSError, subprocess.SubprocessError):
+        pass
+    if library is None:
+        for directory in ("/usr/lib64", "/lib64", "/usr/lib/x86_64-linux-gnu",
+                          os.path.join(cuda_home, "lib64") if cuda_home else None):
+            if not directory:
+                continue
+            candidate = os.path.join(directory, "libnccl.so")
+            if os.path.isfile(candidate):
+                library = candidate
+                break
+    if library is None:
+        return None
+
+    # A header without a readable version is not one this can vouch for.
+    try:
+        text = open(os.path.join(header, "nccl.h"), "r", errors="replace").read()
+        major = re.search(r"define\s+NCCL_MAJOR\s+(\d+)", text)
+        if not major or int(major.group(1)) < 2:
+            return None
+    except OSError:
+        return None
+    return header, os.path.dirname(library), library
+
+
 def setup_nccl(store=None):
     global use_nccl
     use_nccl = build_flag("use_nccl", True, os.environ)
@@ -729,6 +861,12 @@ def setup_nccl(store=None):
             nccl_lib_path = cuda_wheel_stack.lib_dirs("nccl")[0]
             nccl_lib_name = cuda_wheel_stack.find_library("nccl")
         else:
+            found = find_system_nccl()
+            if found:
+                nccl_include_path, nccl_lib_path, nccl_lib_name = found
+                LOG.v(f"using the system NCCL at {nccl_lib_name}")
+    if nccl_lib_path is None or nccl_include_path is None:
+        if not cuda_wheel_stack:
             LOG.v("setup nccl...")
             # nccl_path decouple with cc_path
             nccl_path = os.path.join(jit_utils.home(), ".cache", "jittor", "nccl")

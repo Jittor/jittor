@@ -50,9 +50,21 @@ def routing(monkeypatch):
         core=SimpleNamespace(Var=Tensor, dispatch_context=lambda tensors: ("acl", 0)),
         flag_scope=lambda **kwargs: nullcontext(),
         flags=SimpleNamespace(amp_reg=0),
-        amp_flags=SimpleNamespace(keep_reduce=1, reduce16_no_fp32_acc=2),
+        amp_flags=SimpleNamespace(keep_reduce=1, reduce16_no_fp32_acc=2,
+                                  prefer16=4, prefer32=8),
     )
+    # `dispatch.py` imports `jittor._core.dtypes` at module scope. A
+    # SimpleNamespace is not a package, so once "jittor" is replaced below the
+    # submodule import fails with "'jittor' is not a package". Resolve the real
+    # module FIRST, while the genuine package is still importable, then publish
+    # it alongside the stub. Both names only canonicalise dtype spellings, so
+    # the real implementations are reused rather than faked.
+    import importlib
+    real_dtypes = importlib.import_module("jittor._core.dtypes")
     monkeypatch.setitem(sys.modules, "jittor", native)
+    monkeypatch.setitem(sys.modules, "jittor._core",
+                        SimpleNamespace(dtypes=real_dtypes))
+    monkeypatch.setitem(sys.modules, "jittor._core.dtypes", real_dtypes)
     path = ROOT / "python/jittor/_runtime/dispatch.py"
     spec = importlib.util.spec_from_file_location("_acl_native_routing_table", path)
     dispatch = importlib.util.module_from_spec(spec)
@@ -73,6 +85,9 @@ def routing(monkeypatch):
     namespace = {
         "jt": native, "Module": Module,
         "try_dispatch": dispatch.try_dispatch, "select_kernel": dispatch.select_kernel,
+        # matrix.py's own import; the extracted routing functions only reach it
+        # for a pair whose two dtypes differ, which these Tensors never are.
+        "_jittor_dtype_name": lambda dtype: str(dtype).split(".")[-1],
         "_pair": lambda value: tuple(value) if isinstance(value, (tuple, list)) else (value, value),
         "_arg_policy": SimpleNamespace(ignored=ignored),
         "_INPLACE_CONSEQUENCE": "not performed in place",
@@ -180,7 +195,14 @@ def test_layer_norm_keeps_affine_parameters_and_validates_before_dispatch(routin
     ns = routing.namespace
     ns["_layer_norm_cuda"] = lambda *args: routing.dispatch.try_dispatch("nn.layer_norm.training", *args)
     ns["_layer_norm_no_grad_cuda"] = lambda *args: None
-    _definitions("nn/functional/normalization.py", ["layer_norm"], ns)
+    # `layer_norm` asks this once and then tries only the relay that can
+    # answer: the training relay requires a gradient, the inference one
+    # requires its absence, so trying both cost every call a second full
+    # dispatch to learn that one of them could never match.
+    requires_grad = {"value": True}
+    ns["_output_requires_grad"] = lambda *args: requires_grad["value"]
+    _definitions("nn/functional/normalization.py",
+                 ["_restore_half_dtype", "layer_norm"], ns)
     routing.jt.nn.layer_norm = ns["layer_norm"]
     _definitions("nn/modules/normalization.py", ["LayerNorm"], ns)
     cls = ns["LayerNorm"]
@@ -196,9 +218,27 @@ def test_layer_norm_keeps_affine_parameters_and_validates_before_dispatch(routin
         ns["layer_norm"](x, (3,), *parameters)
     assert len(routing.seen) == 1
 
+    # Without a gradient the training relay must not be consulted at all: the
+    # inference relay is the only one that could match, and reaching for both
+    # is what this routing is meant to avoid. The inference stub answers here
+    # so the call stops at the relay instead of falling through to the generic
+    # path, which this namespace does not carry.
+    requires_grad["value"] = False
+    ns["_layer_norm_no_grad_cuda"] = lambda *args: routing.marker
+    seen_before = len(routing.seen)
+    assert ns["layer_norm"](x, (4,), *parameters) is routing.marker
+    assert len(routing.seen) == seen_before, (
+        "the training relay was dispatched for a call that cannot use it")
+
 
 def test_matmul_bmm_and_transpose_reuse_existing_keys(routing):
     names = ["_check_matmul_shapes", "_transpose_base_last2", "_matmul_2d_cublas",
+             "_mixed_float_compute_dtype", "_matmul_kernel_dispatch",
+             # The AMP scope the three generic contractions share. It is a
+             # module-level helper rather than three copies of the same
+             # `flag_scope` call, so it has to be extracted alongside them or
+             # every routing call below dies in `NameError`.
+             "_contraction_scope",
              "matmul", "matmul_transpose", "bmm", "bmm_transpose"]
     ns = _definitions("nn/functional/matrix.py", names, routing.namespace)
     routing.jt.nn.matmul = ns["matmul"]

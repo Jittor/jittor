@@ -17,6 +17,8 @@ comparing raw `nvidia-smi` numbers would only re-measure the caching allocator.
 import functools
 import unittest
 
+from _helpers.capability import require_accelerator
+
 import numpy as np
 import torch
 
@@ -113,13 +115,15 @@ def _operations(a, b):
     yield a.to(torch.float16).to(torch.float32)
 
 
-@requires_cuda
 class TestApiSurfaceMemoryResidue(unittest.TestCase):
     """A broad pass over the API returns to its own starting point."""
 
     #: Bytes tolerated between two collected baselines. Not zero: the allocator
     #: keeps small bookkeeping blocks whose count depends on which kernels ran.
     residue_tolerance = 8 * 1024 * 1024
+
+    def setUp(self):
+        require_accelerator("cuda")
 
     def _tensors(self):
         rng = np.random.RandomState(20260909)

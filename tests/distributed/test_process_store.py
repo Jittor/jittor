@@ -1,5 +1,6 @@
 """Cross-process rendezvous stores used by torch.distributed compatibility."""
 
+import importlib.util
 import os
 from pathlib import Path
 import signal
@@ -11,11 +12,20 @@ import unittest
 from _helpers.child_process import (
     PYTHON,
     child_env,
+    default_timeout,
     run_python_child,
+    source_python_dir,
 )
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+# ``jittor/distributed/store.py`` imports only the standard library, so the
+# rendezvous tests can load it straight off disk. That keeps them free of a
+# JIT core build, which would otherwise dominate their runtime.
+STORE_SOURCE = (
+    Path(source_python_dir() or str(REPO_ROOT / "python"))
+    / "jittor" / "distributed" / "store.py"
+)
 _BASE_ENV = {
     "JITTOR_TORCH_SHIM": "1",
     "JITTOR_TEST_DEVICES": "cpu",
@@ -26,6 +36,20 @@ _BASE_ENV = {
 }
 
 
+#: How long a child waits inside the store for its peer.
+#:
+#: Every child imports jittor *before* it touches the store, and on a shared box
+#: that import takes seconds to tens of seconds. A fixed 10 s here therefore
+#: measured the machine's load, not the code: the file failed intermittently
+#: with `timed out waiting for 2 TCPStore workers; got 1` while the store was
+#: working (measured 2026-09-22 on a box at load 15: one failure in two runs of
+#: `test_tcp_store_crosses_process_boundary`, and a `SUBFAILED` on the same
+#: rendezvous inside the smoke tier). Generous, but well under `default_timeout()`
+#: below, so a rendezvous that never completes is still reported by the child
+#: that waited rather than by the parent's kill.
+_STORE_TIMEOUT_SECONDS = 120
+
+
 _DIRECT_STORE = r"""
 import datetime
 import os
@@ -34,7 +58,7 @@ import torch.distributed as dist
 
 rank = int(os.environ["STORE_RANK"])
 kind = os.environ["STORE_KIND"]
-timeout = datetime.timedelta(seconds=10)
+timeout = datetime.timedelta(seconds=float(os.environ["STORE_TIMEOUT"]))
 if kind == "tcp":
     store = dist.TCPStore(
         "127.0.0.1", int(os.environ["STORE_PORT"]), 2, rank == 0,
@@ -73,7 +97,7 @@ implementation.get_world_size = lambda: 2
 dist.init_process_group(
     backend="mpi",
     init_method=os.environ["STORE_INIT_METHOD"],
-    timeout=datetime.timedelta(seconds=10),
+    timeout=datetime.timedelta(seconds=float(os.environ["STORE_TIMEOUT"])),
 )
 store = c10d._get_default_store()
 assert store is not None
@@ -90,6 +114,9 @@ print("DONE", rank, os.environ["STORE_INIT_METHOD"], flush=True)
 
 class TestProcessGroupOwnership(unittest.TestCase):
     def test_native_and_torch_share_classes_and_legacy_pickle(self):
+        import importlib.util
+        if importlib.util.find_spec("torch") is None:
+            self.skipTest("the child imports the real torch.distributed")
         source = r'''
 import importlib
 import pickle
@@ -139,13 +166,34 @@ class TestCrossProcessStores(unittest.TestCase):
             raise AssertionError("child imported another checkout:\n" + completed.stdout)
 
     def _run_pair(self, source, rank_envs):
+        # The two ranks have to be alive at the same time, so they are launched
+        # by hand rather than through run_python_child() -- but the budget is
+        # still that helper's, for its reasons: a child that has to compile the
+        # core does not fit in a timeout tuned for a warm cache, and setUpClass'
+        # warm-up does not help when something invalidates the cache mid-run.
+        # A fixed 30 s turned that into ``-9 != 0`` with an empty output, which
+        # names neither the compile nor the rank that was still building.
+        #
+        # Wall clock is not what this test asserts: the stores above carry
+        # `_STORE_TIMEOUT_SECONDS` of their own -- generous, because a child
+        # imports jittor before it reaches the store -- so a rendezvous that
+        # never completes still fails inside the child, which names the peer it
+        # was waiting for. This budget is larger than that one on purpose: it
+        # only turns a true hang (both children stuck) into a failure instead of
+        # a hung session.
+        budget = default_timeout()
         processes = []
         outputs = []
+        killed = set()
         try:
             for rank, extra in enumerate(rank_envs):
                 env = dict(_BASE_ENV)
                 env.update(extra)
                 env["STORE_RANK"] = str(rank)
+                # Both embedded stores read this: it must outlast the import
+                # each child does before it reaches the store, and stay under
+                # the parent's budget so the child's own error wins.
+                env["STORE_TIMEOUT"] = str(_STORE_TIMEOUT_SECONDS)
                 processes.append(subprocess.Popen(
                     [PYTHON, "-c", source],
                     cwd=REPO_ROOT,
@@ -155,10 +203,11 @@ class TestCrossProcessStores(unittest.TestCase):
                     text=True,
                     start_new_session=True,
                 ))
-            for process in processes:
+            for rank, process in enumerate(processes):
                 try:
-                    output, _ = process.communicate(timeout=30)
+                    output, _ = process.communicate(timeout=budget)
                 except subprocess.TimeoutExpired:
+                    killed.add(rank)
                     os.killpg(os.getpgid(process.pid), signal.SIGKILL)
                     output, _ = process.communicate(timeout=5)
                 outputs.append(output)
@@ -168,6 +217,11 @@ class TestCrossProcessStores(unittest.TestCase):
                     os.killpg(os.getpgid(process.pid), signal.SIGKILL)
                     process.wait(timeout=5)
         for rank, (process, output) in enumerate(zip(processes, outputs)):
+            self.assertNotIn(
+                rank, killed,
+                "rank {} was still running after {} s and was killed; its "
+                "return code below is that kill, not its own exit:\n{}".format(
+                    rank, budget, output))
             self.assertEqual(process.returncode, 0, "rank {}:\n{}".format(rank, output))
             self.assertIn("DONE", output)
 
@@ -211,6 +265,53 @@ class TestCrossProcessStores(unittest.TestCase):
                     )
                     rank_envs.append(env)
                 self._run_pair(_INIT_METHOD_STORE, rank_envs)
+
+
+class TestHostnameRendezvous(unittest.TestCase):
+    """A store must be reachable at the hostname the caller passes.
+
+    ``localhost`` is not always one address. On the host this was found,
+    ``/etc/hosts`` maps it to ``::1`` and to the machine's own IPv4 address,
+    and to no loopback IPv4 at all. The server used to bind whatever
+    ``socket.bind`` resolved first (``127.0.0.1``) while every client dialled
+    ``::1`` first, so the rendezvous could never complete: it surfaced as a
+    multi-minute connect timeout in a traceback that named neither address.
+    """
+
+    @staticmethod
+    def _store_module():
+        spec = importlib.util.spec_from_file_location(
+            "jittor_store_under_test", STORE_SOURCE)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    @staticmethod
+    def _free_port():
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            return sock.getsockname()[1]
+
+    def test_server_binds_an_address_the_client_dials(self):
+        module = self._store_module()
+        port = self._free_port()
+        store = module.TCPStore("localhost", port, 1, True, timeout=10)
+        try:
+            bound = store._server.socket.getsockname()
+            # Exactly the list ``socket.create_connection`` walks, in order.
+            dialled = [
+                sockaddr for _family, _socktype, _proto, _canonname, sockaddr
+                in socket.getaddrinfo("localhost", port, 0, socket.SOCK_STREAM)
+            ]
+            self.assertIn(
+                bound, dialled,
+                "TCPStore bound {} but a client only dials {}".format(
+                    bound, dialled),
+            )
+            store.set("payload", b"reachable")
+            self.assertEqual(store.get("payload"), b"reachable")
+        finally:
+            store.close()
 
 
 if __name__ == "__main__":

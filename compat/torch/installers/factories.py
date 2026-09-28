@@ -17,12 +17,7 @@ from ..api_delegates import bind_delegates
 import jittor as jt
 import numpy as np
 
-from ..types import (
-    _DEVICE_CTX_STACK,
-    _device_is_meta,
-    _dtype_to_str,
-    _set_meta_placeholder,
-)
+from ..types import _dtype_to_str
 from ..nested import _torch_register_leaf
 from ..fidelity import Fidelity, register_fidelity
 from ...diagnostics import EXPECTED, swallowed
@@ -34,6 +29,19 @@ def _set_use_cuda():
     set_flag(jt.flags, "use_cuda", 1)
 
 
+#: Every factory published through `_invoke_factory`, which is what carries a
+#: `device=` into the native placement scope. A name that `_wrap_constructors`
+#: adapts but that is missing here reaches `_constructor_adapter` directly,
+#: and that function *drops* `device` (it is in `_DROP`) on the assumption
+#: that the placement is already established -- so the tensor would be built
+#: on the ambient device with no error.
+#:
+#: `eye` is deliberately **not** here: its owner is
+#: `installers.numerical.eye`, which `_bind_missing` publishes as the module
+#: level `torch.eye` and which `test_torch_numerical_fidelity` pins by
+#: identity. Routing it through this module would rebind `torch.eye` to a
+#: wrapper and break that ownership, so `device=` is honoured in the owner
+#: instead -- it enters its own `tensor_frontend(..., device=device)`.
 _FACTORY_NAMES = (
     "arange", "bernoulli", "empty", "empty_like", "full", "full_like",
     "linspace", "multinomial", "normal", "ones", "ones_like", "rand",
@@ -56,30 +64,8 @@ def _invoke_factory(name, args, kwargs):
     if implementation is None:
         raise RuntimeError("torch.%s is not installed" % name)
     from ..frontend import tensor_frontend
-    like = args[0] if args and (
-        name.endswith("_like") or name in _TENSOR_ARGUMENT
-        or name in _INPUT_TENSOR_FACTORIES) else None
-    # Torch treats an omitted (or explicit ``None``) device as CPU for data
-    # constructors.  Jittor otherwise follows its process-wide ``use_cuda``
-    # flag, which would incorrectly build CPU-only initialization constants on
-    # CUDA.  Like/tensor-transform factories still inherit their input, and a
-    # meta device context remains authoritative.
-    placement = kwargs.get("device")
-    # ``torch.arange(tensor_bound)`` inherits the bound tensor's device when
-    # no explicit device is supplied.  This matters for CUDA scalar bounds
-    # used by multimodal position-grid construction.  Keep the general
-    # factory default (CPU) unchanged for ordinary Python bounds.
-    if placement is None and name == "arange":
-        # A tensor start/end selects the output placement.  A tensor `step`
-        # is only a scalar value; treating it as a device anchor breaks
-        # position-grid code that intentionally builds CPU indices first.
-        for value in args[:2]:
-            if isinstance(value, jt.Var):
-                placement = "cuda" if value.is_cuda else "cpu"
-                break
-    if placement is None and like is None and not _DEVICE_CTX_STACK:
-        placement = "cpu"
-    with tensor_frontend(context.target_namespace.Var, device=placement, like=like):
+    like = args[0] if args and (name.endswith("_like") or name in _TENSOR_FIRST_ARGUMENT) else None
+    with tensor_frontend(context.target_namespace.Var, device=kwargs.get("device"), like=like):
         return implementation(*args, **kwargs)
 
 
@@ -159,26 +145,6 @@ def triu(*args, **kwargs):
     return _invoke_factory("triu", args, kwargs)
 
 
-def triu_indices(row, col, offset=0, *, dtype=None, device=None,
-                 layout=None, pin_memory=False):
-    context = get_install_context(jt)
-    g = context.target_namespace
-    if layout not in (None, getattr(g, "strided", None)):
-        raise RuntimeError("torch.triu_indices only supports strided layout")
-    if pin_memory:
-        raise RuntimeError("torch.triu_indices does not support pin_memory=True")
-    row = int(row)
-    col = int(col)
-    if row < 0 or col < 0:
-        raise RuntimeError("row and col must be non-negative")
-    rows = g.arange(row, dtype=g.long, device=device).reshape(row, 1)
-    cols = g.arange(col, dtype=g.long, device=device).reshape(1, col)
-    row_grid = rows.broadcast_to((row, col))
-    col_grid = cols.broadcast_to((row, col))
-    selected = (col_grid - row_grid >= int(offset)).nonzero(as_tuple=False)
-    return selected.transpose(0, 1).to(dtype=dtype or g.long, device=device)
-
-
 def zeros(*args, **kwargs):
     return _invoke_factory("zeros", args, kwargs)
 
@@ -229,9 +195,13 @@ def _install_empty_like(root):
 _DROP = ("device", "requires_grad", "layout", "pin_memory", "memory_format", "out", "non_blocking")
 _DEFAULT_FLOAT_FACTORIES = {"zeros", "ones", "empty", "rand", "randn", "eye", "linspace"}
 _TENSOR_ARGUMENT = ("tril", "triu")
-# These APIs are not named ``*_like`` but take a tensor as their first
-# argument and must create their random/intermediate values beside it.
-_INPUT_TENSOR_FACTORIES = ("bernoulli", "multinomial", "normal")
+#: Factories whose first positional argument is the tensor the result should
+#: follow, so it is the placement reference when no `device=` is given. The
+#: samplers belong here as much as `tril`/`triu` do: `torch.multinomial` builds
+#: its own working buffers, and with no reference they landed on the ambient
+#: device -- `torch.multinomial(weights_on_cuda1, 2)` died with "Expected all
+#: tensor inputs on the same backend and device" instead of sampling.
+_TENSOR_FIRST_ARGUMENT = _TENSOR_ARGUMENT + ("multinomial", "bernoulli")
 
 
 def _shape_dim(v):
@@ -256,19 +226,8 @@ def _shape_arg(v):
 
 def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
     g = get_install_context(jt).target_namespace
-    requested_device = kwargs.get("device")
-    inherits_device = (name.endswith("_like") or name in _TENSOR_ARGUMENT
-                       or name in _INPUT_TENSOR_FACTORIES)
-    device_input = args[0] if inherits_device and args and isinstance(args[0], jt.Var) else None
-    want_meta = (
-        _device_is_meta(requested_device)
-        or (requested_device is None and device_input is not None
-            and getattr(device_input, "_jittor_torch_meta", False))
-        or (requested_device is None and device_input is None
-            and bool(_DEVICE_CTX_STACK))
-    )
     # ACL adapters call jt.empty thousands of times; keep the FP32 fast path.
-    if (name == "empty" and not want_meta and not kwargs and args and
+    if (name == "empty" and not kwargs and args and
             g.get_default_dtype() == g.float32 and
             (len(args) == 1 or all(type(dim) is int for dim in args))):
         shape = args[0]
@@ -281,21 +240,6 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
             return out
     # _invoke_factory already established native construction placement.
     _requires_grad = bool(kwargs.get("requires_grad", False))
-    # Capture tensor scalar bounds before `_shape_arg` turns one-element Vars
-    # into Python integers; their dtype still determines arange's default.
-    arange_float_bound = (
-        name == "arange"
-        and any(
-            isinstance(value, (float, np.floating))
-            or (
-                isinstance(value, jt.Var)
-                and _jittor_dtype_name(value.dtype).startswith(
-                    ("float", "bfloat", "complex")
-                )
-            )
-            for value in args[:3]
-        )
-    )
     for k in _DROP:
         kwargs.pop(k, None)
     # Jittor shape conversion rejects numpy scalars; normalize them.
@@ -303,28 +247,16 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
     # the matrix to transform, and a 1x1 matrix holds a single element,
     # so shape conversion would collapse it into an integer dimension.
     _takes_shape = not (name.endswith("_like") or name in _TENSOR_ARGUMENT)
-    # arange arguments are scalar bounds/steps, not shape dimensions.  In
-    # particular, a 0-D floating tensor step must remain fractional; routing
-    # it through `_shape_arg` would coerce `0.03125` to integer zero.
-    if args and _takes_shape and name != "arange":
+    if args and _takes_shape:
         args = tuple(_shape_arg(a) for a in args)
     # Jittor factories reject Size/NanoVector tuple subclasses.
     if _takes_shape and args and (isinstance(args[0], jt.NanoVector) or
                  (isinstance(args[0], tuple) and type(args[0]) is not tuple)):
         args = (tuple(int(x) for x in args[0]),) + tuple(args[1:])
     # Torch also allows shape via size=.
-    if name == "normal" and "size" in kwargs and not args:
-        size = _shape_arg(kwargs.pop("size"))
-        mean = kwargs.pop("mean", 0.0)
-        std = kwargs.pop("std", 1.0)
-        args = (mean, std, size)
-    elif "size" in kwargs and not args:
+    if "size" in kwargs and not args:
         sz = kwargs.pop("size")
-        # Route the keyword spelling through the same scalar-dimension
-        # normalization as the positional spelling. Multimodal audio
-        # encoders commonly compute a padded length as a CUDA 0-D tensor and
-        # pass it through ``torch.full(size=(..., length))``.
-        args = (_shape_arg(sz),)
+        args = (tuple(sz),) if hasattr(sz, "__len__") else (sz,)
     # torch.full(size, fill_value=...) / full_like(input, fill_value=...):
     # jittor's full(shape, val) / full_like(x, val) take the value as the 2nd
     # positional. transformers' beam scorer passes fill_value= as a keyword, so
@@ -332,29 +264,6 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
     if "fill_value" in kwargs:
         args = tuple(args) + (kwargs.pop("fill_value"),)
     _cast_to = None  # cast after construction when needed for torch dtype semantics
-    if ("dtype" not in kwargs or kwargs["dtype"] is None) and name == "arange":
-        # PyTorch chooses the integral default (int64) from integral bounds,
-        # while Jittor's native arange defaults to int32.  Float bounds keep
-        # the regular torch default floating dtype below.
-        has_float_bound = any(
-            isinstance(value, (float, np.floating))
-            or (
-                isinstance(value, jt.Var)
-                and _jittor_dtype_name(value.dtype).startswith(
-                    ("float", "bfloat", "complex")
-                )
-            )
-            for value in args[:3]
-        ) or arange_float_bound
-        if not has_float_bound:
-            if _accepts_dtype:
-                kwargs["dtype"] = "int64"
-            else:
-                _cast_to = "int64"
-        elif _accepts_dtype:
-            kwargs["dtype"] = _dtype_to_str(g.get_default_dtype())
-        else:
-            _cast_to = _dtype_to_str(g.get_default_dtype())
     if "dtype" not in kwargs and name in _DEFAULT_FLOAT_FACTORIES:
         default_dtype = _dtype_to_str(g.get_default_dtype())
         if _jittor_dtype_name(default_dtype) != "float32":
@@ -385,8 +294,6 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
     if _cast_to is not None:
         out = out.cast(_cast_to)
     out._jittor_torch_ext_mutable = True
-    if want_meta:
-        _set_meta_placeholder(out)
     out.requires_grad_(_requires_grad)
     if _requires_grad:
         _torch_register_leaf(out)
@@ -394,10 +301,16 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
 
 
 def _wrap_constructors(g):
+    # Keep this a subset of _FACTORY_NAMES, minus `eye` (see the note there):
+    # a name here but not there is published without the placement wrapper,
+    # and a name there but not here hands torch's `device=`/`requires_grad=`
+    # straight to a jittor factory that has no such parameter
+    # (`torch.randperm(4, device="cuda:1")` raised "randperm() got an
+    # unexpected keyword argument 'device'").
     for name in ("zeros", "ones", "empty", "full", "arange", "rand", "randn",
-                 "randint", "eye", "linspace", "zeros_like", "ones_like",
-                 "empty_like", "full_like", "randn_like", "rand_like", "tril",
-                 "triu", "normal"):
+                 "randint", "randperm", "linspace", "zeros_like",
+                 "ones_like", "empty_like", "full_like", "randn_like",
+                 "rand_like", "tril", "triu", "normal"):
         original = getattr(g, name, None)
         if original is None or original is FACTORY_APIS.get(name):
             continue
@@ -446,24 +359,147 @@ def _seed_from(gen):
         jt.set_global_seed(int(s))
 
 
-def _random_adapter(name, original, *args, generator=None, **kwargs):
-    if generator is not None:
-        if name != "randperm":
-            raise NotImplementedError("explicit Generator is not implemented for torch.{}".format(name))
-        if generator.device.type != "cpu":
-            raise RuntimeError("torch.randperm with an explicit Generator currently supports CPU only")
-        n = int(args[0] if args else kwargs.pop("n"))
-        dtype = kwargs.pop("dtype", None) or jt.int64
-        device = kwargs.pop("device", None)
-        device_type = getattr(device, "type", str(device).split(":", 1)[0]) if device is not None else "cpu"
-        if device_type != "cpu":
-            raise RuntimeError("Expected a CPU generator for a CPU randperm result")
-        kwargs.pop("layout", None)
-        kwargs.pop("pin_memory", None)
-        if kwargs:
-            raise TypeError("unsupported randperm arguments: {}".format(sorted(kwargs)))
-        offset = generator._reserve(max(0, n - 1))
-        return jt.ops.generator_randperm(n, generator._seed, offset, _dtype_to_str(dtype))
+#: What a seeded draw of an integer factory must come back as. torch's own
+#: default is int64, but these have to match what the *same call without a
+#: generator* returns -- jittor's randint is int32 -- because a generator picks
+#: the stream a draw comes from and nothing else.
+_INTEGER_DRAWS = {"randperm": "int64", "randint": "int32"}
+
+
+def _is_dim(value):
+    """True for something torch accepts as one dimension of a shape."""
+    return isinstance(value, (int, np.integer)) and not isinstance(value, bool)
+
+
+def _is_number(value):
+    """True for a python/numpy scalar -- not a tensor, which draws elementwise."""
+    return (isinstance(value, (int, float, np.integer, np.floating))
+            and not isinstance(value, bool))
+
+
+def _shape_tuple(value):
+    """``value`` read as a shape, or None when it is not one.
+
+    torch spells one shape four ways -- ``randn(2, 3)``, ``randn((2, 3))``,
+    ``randn(t.shape)`` and ``randn(size=(2, 3))`` -- and under this shim a
+    ``torch.Size`` is a jittor ``NanoVector``, which is neither tuple nor list.
+    A spelling missed here is not a small loss: the call falls back to the
+    *global* stream, which is exactly the rank-dependent draw a passed
+    generator says it must not use.
+    """
+    if isinstance(value, jt.NanoVector):
+        return tuple(int(s) for s in value)
+    if isinstance(value, (tuple, list)) and all(_is_dim(s) for s in value):
+        return tuple(int(s) for s in value)
+    return None
+
+
+def _draw_from_generator(name, generator, args, kwargs):
+    """Draw from the generator's own stream, or None if this call is not covered.
+
+    `Generator.manual_seed` builds this stream, so a request's latents are
+    reproducible and -- the part that matters for TP -- identical in every rank
+    that seeds the same generator, no matter what that rank did before.
+
+    Covering a call is all-or-nothing: what comes back has to be the tensor the
+    same call returns *without* a generator -- same shape, same dtype, same
+    requires_grad -- because a generator chooses which stream a draw comes from
+    and nothing else. Arguments this cannot read that way return None, and the
+    original factory runs.
+    """
+    import numpy as _np
+    rng = getattr(generator, "_rng", None)
+    if rng is None:
+        return None
+    src = None
+    values_args = ()
+    if name.endswith("_like"):
+        src = args[0] if args else kwargs.get("input")
+        if src is None or not hasattr(src, "shape"):
+            return None
+        shape = tuple(int(s) for s in src.shape)
+    elif name == "randperm":
+        n = args[0] if args else kwargs.get("n")
+        if not _is_dim(n):
+            return None
+        shape = (int(n),)
+    elif name in ("normal", "randint"):
+        # the value arguments come first -- normal(mean, std, size) and
+        # randint([low, ] high, size) -- and both also take size= by keyword.
+        values_args = list(args)
+        size = kwargs.get("size")
+        if size is None and values_args:
+            size = values_args.pop()
+        shape = _shape_tuple(size)
+    else:
+        shape = None
+        if len(args) == 1:
+            shape = _shape_tuple(args[0])
+        if shape is None and args and all(_is_dim(a) for a in args):
+            shape = tuple(int(a) for a in args)
+        if shape is None and not args:
+            shape = _shape_tuple(kwargs.get("size"))
+    if shape is None:
+        return None
+    if name in ("randn", "randn_like"):
+        values = rng.standard_normal(shape)
+    elif name in ("rand", "rand_like"):
+        values = rng.random(shape)
+    elif name == "normal":
+        mean = kwargs.get("mean", values_args[0] if len(values_args) > 0 else 0.0)
+        std = kwargs.get("std", values_args[1] if len(values_args) > 1 else 1.0)
+        if not (_is_number(mean) and _is_number(std)):
+            return None     # normal(mean_tensor, std_tensor) draws elementwise
+        values = rng.normal(float(mean), float(std), size=shape)
+    elif name == "randint":
+        if "high" in kwargs:
+            low = kwargs.get("low", values_args[0] if values_args else 0)
+            high = kwargs["high"]
+        elif len(values_args) >= 2:
+            low, high = values_args[0], values_args[1]
+        elif len(values_args) == 1:
+            low, high = kwargs.get("low", 0), values_args[0]
+        else:
+            return None
+        if not (_is_dim(low) and _is_dim(high)):
+            return None
+        values = rng.integers(int(low), int(high), size=shape)
+    elif name == "randperm":
+        values = rng.permutation(int(shape[0]))
+    else:
+        return None
+    # dtype: the caller's, else the one the plain call would have produced --
+    # the source's for *_like (jittor promotes a non-float source to float32),
+    # the integer width for randperm/randint, the default dtype otherwise.
+    dtype = kwargs.get("dtype")
+    if dtype is not None:
+        cast_to = _dtype_to_str(dtype)
+    elif name.endswith("_like"):
+        like = _dtype_to_str(src.dtype)
+        cast_to = like if "float" in str(like) else "float32"
+    elif name in _INTEGER_DRAWS:
+        cast_to = _INTEGER_DRAWS[name]
+    else:
+        cast_to = _dtype_to_str(get_install_context(jt).target_namespace.get_default_dtype())
+    integral = name in _INTEGER_DRAWS
+    t = jt.array(_np.ascontiguousarray(
+        values, dtype=_np.int64 if integral else _np.float32))
+    if tuple(t.shape) != tuple(shape):
+        t = t.reshape(shape)
+    t = t.cast(cast_to)
+    t._jittor_torch_ext_mutable = True
+    requires_grad = bool(kwargs.get("requires_grad", False))
+    t.requires_grad_(requires_grad)
+    if requires_grad:
+        _torch_register_leaf(t)
+    return t
+
+
+def _random_adapter(original, *args, generator=None, _name=None, **kwargs):
+    drawn = _draw_from_generator(_name, generator, args, kwargs) if _name else None
+    if drawn is not None:
+        return drawn
+    _seed_from(generator)
     return original(*args, **kwargs)
 
 
@@ -475,4 +511,5 @@ def _install_random_and_linspace(g):
                  "randn_like", "rand_like", "multinomial", "bernoulli"):
         original = _factory_implementation(getattr(g, name, None))
         if original is not None:
-            _publish_factory(g, name, functools.partial(_random_adapter, name, original))
+            _publish_factory(g, name,
+                             functools.partial(_random_adapter, original, _name=name))

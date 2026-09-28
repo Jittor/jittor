@@ -18,6 +18,7 @@ struct MklMatmulOp : Op {
     MklMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b);
     
     const char* name() const override { return "mkl_matmul"; }
+    VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;
     void infer_shape() override;
     DECLARE_jit_run;
 };

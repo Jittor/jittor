@@ -1,0 +1,685 @@
+<title>计图与 Torch 兼容层</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap">
+<style>
+  :root{
+    --ground:#F4F6FA;
+    --surface:#FFFFFF;
+    --ink:#0E1420;
+    --ink-2:#3C4655;
+    --muted:#6B7688;
+    --line:#D8DEE9;
+    --line-soft:#E8ECF3;
+    --accent:#1B5CE8;
+    --accent-soft:#E7EDFD;
+    --teal:#0E8F8F;
+    --teal-soft:#E0F1F1;
+    --amber:#B45A1E;
+    --amber-soft:#F7EBE1;
+    --good:#1B7A50;
+    --good-soft:#E3F1EA;
+    --shadow:0 1px 2px rgba(14,20,32,.05), 0 12px 32px -18px rgba(14,20,32,.28);
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --ground:#080B11;
+      --surface:#10151F;
+      --ink:#E8EDF5;
+      --ink-2:#AEB9CA;
+      --muted:#7C8799;
+      --line:#242C3A;
+      --line-soft:#1A212C;
+      --accent:#6F9BFF;
+      --accent-soft:#16203A;
+      --teal:#3FBDB6;
+      --teal-soft:#0E2422;
+      --amber:#D98A4E;
+      --amber-soft:#2A1E14;
+      --good:#48B183;
+      --good-soft:#0F2419;
+      --shadow:0 1px 2px rgba(0,0,0,.4), 0 16px 40px -20px rgba(0,0,0,.7);
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#080B11;
+    --surface:#10151F;
+    --ink:#E8EDF5;
+    --ink-2:#AEB9CA;
+    --muted:#7C8799;
+    --line:#242C3A;
+    --line-soft:#1A212C;
+    --accent:#6F9BFF;
+    --accent-soft:#16203A;
+    --teal:#3FBDB6;
+    --teal-soft:#0E2422;
+    --amber:#D98A4E;
+    --amber-soft:#2A1E14;
+    --good:#48B183;
+    --good-soft:#0F2419;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 16px 40px -20px rgba(0,0,0,.7);
+  }
+
+  *{box-sizing:border-box}
+  body{
+    background:var(--ground);
+    color:var(--ink);
+    font-family:"IBM Plex Sans","Noto Sans SC",system-ui,sans-serif;
+    margin:0;
+    -webkit-font-smoothing:antialiased;
+  }
+  .deck{
+    max-width:1180px;
+    margin:0 auto;
+    padding:28px 20px 72px;
+    display:flex;
+    flex-direction:column;
+    gap:26px;
+  }
+
+  /* Each slide is a 16:9 artboard; type scales with the board via cqw. */
+  .slide{
+    container-type:inline-size;
+    aspect-ratio:16/9;
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-radius:6px;
+    box-shadow:var(--shadow);
+    padding:4.4cqw 5cqw;
+    display:flex;
+    flex-direction:column;
+    position:relative;
+    overflow:hidden;
+    scroll-margin-top:20px;
+  }
+  .slide:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+
+  .eyebrow{
+    font-family:"IBM Plex Mono",ui-monospace,monospace;
+    font-size:1.08cqw;
+    letter-spacing:.16em;
+    text-transform:uppercase;
+    color:var(--muted);
+    display:flex;
+    gap:.9cqw;
+    align-items:baseline;
+  }
+  .eyebrow b{color:var(--accent);font-weight:600}
+
+  h2{
+    font-size:3.1cqw;
+    line-height:1.14;
+    margin:1.5cqw 0 0;
+    font-weight:700;
+    letter-spacing:-.015em;
+    text-wrap:balance;
+  }
+  .lede{
+    font-size:1.55cqw;
+    line-height:1.55;
+    color:var(--ink-2);
+    margin:1.3cqw 0 0;
+    max-width:56ch;
+  }
+  .body{flex:1;display:flex;flex-direction:column;justify-content:center;gap:2cqw;min-height:0}
+  .slide > .body{margin-top:2.4cqw}
+
+  /* ---- cover ---- */
+  .cover{justify-content:center;gap:0}
+  .cover .mark{
+    font-family:"IBM Plex Mono",monospace;
+    font-size:1.25cqw;
+    letter-spacing:.2em;
+    text-transform:uppercase;
+    color:var(--teal);
+  }
+  .cover h1{
+    font-size:7.6cqw;
+    line-height:1;
+    margin:2.2cqw 0 0;
+    font-weight:700;
+    letter-spacing:-.03em;
+  }
+  .cover h1 span{color:var(--muted);font-weight:400}
+  .cover .sub{
+    font-size:1.9cqw;
+    color:var(--ink-2);
+    margin-top:2.2cqw;
+    line-height:1.5;
+  }
+  .cover .rule{height:2px;background:var(--accent);width:11cqw;margin-top:3cqw}
+  .cover .toc{
+    display:flex;gap:3.4cqw;margin-top:3cqw;
+    font-family:"IBM Plex Mono",monospace;font-size:1.22cqw;color:var(--muted);
+  }
+  .cover .toc b{color:var(--ink);font-weight:500;display:block;font-family:"IBM Plex Sans","Noto Sans SC",sans-serif;font-size:1.4cqw}
+
+  /* ---- meta-operator grid ---- */
+  .ops{display:grid;grid-template-columns:repeat(4,1fr);gap:1.1cqw}
+  .op{
+    border:1px solid var(--line);
+    border-radius:4px;
+    padding:1.4cqw 1.3cqw;
+    display:flex;flex-direction:column;gap:.55cqw;
+    background:var(--ground);
+  }
+  .op.k{border-color:var(--teal);background:var(--teal-soft)}
+  .op code{
+    font-family:"IBM Plex Mono",monospace;
+    font-size:1.32cqw;font-weight:600;color:var(--ink);
+  }
+  .op.k code{color:var(--teal)}
+  .op span{font-size:1.06cqw;color:var(--muted);line-height:1.4}
+
+  /* ---- pipeline ---- */
+  .pipe{display:flex;flex-direction:column;align-items:stretch;gap:0}
+  .layer{
+    border:1px solid var(--line);
+    border-left:3px solid var(--accent);
+    background:var(--ground);
+    padding:1.45cqw 1.8cqw;
+    display:flex;align-items:baseline;gap:1.4cqw;
+  }
+  .layer.graph{border-left-color:var(--teal);background:var(--teal-soft)}
+  .layer .lt{font-size:1.5cqw;font-weight:600;min-width:15cqw}
+  .layer .ld{font-size:1.2cqw;color:var(--ink-2);line-height:1.45;font-family:"IBM Plex Mono",monospace}
+  .arrow{
+    align-self:center;font-size:1.3cqw;color:var(--muted);
+    padding:.5cqw 0;font-family:"IBM Plex Mono",monospace;
+  }
+
+  /* ---- two-column ---- */
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:2.6cqw;align-items:start}
+  .cols.narrow{grid-template-columns:1.15fr 1fr}
+  .col h3{
+    font-size:1.12cqw;letter-spacing:.14em;text-transform:uppercase;
+    font-family:"IBM Plex Mono",monospace;color:var(--muted);
+    margin:0 0 1.1cqw;font-weight:500;
+  }
+  ul.pts{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:1.05cqw}
+  ul.pts li{
+    font-size:1.4cqw;line-height:1.5;color:var(--ink-2);
+    padding-left:1.7cqw;position:relative;
+  }
+  ul.pts li::before{
+    content:"";position:absolute;left:0;top:.62cqw;
+    width:.55cqw;height:.55cqw;border-radius:50%;background:var(--accent);
+  }
+  ul.pts li b{color:var(--ink);font-weight:600}
+  ul.pts li code{
+    font-family:"IBM Plex Mono",monospace;font-size:.93em;
+    background:var(--line-soft);padding:.1em .35em;border-radius:3px;
+  }
+
+  /* ---- scoreboard ---- */
+  .board{width:100%;border-collapse:collapse;font-size:1.16cqw}
+  .board th{
+    font-family:"IBM Plex Mono",monospace;font-size:.95cqw;
+    letter-spacing:.1em;text-transform:uppercase;color:var(--muted);
+    text-align:left;font-weight:500;padding:0 0 .85cqw;
+    border-bottom:1px solid var(--line);
+  }
+  .board th.n{text-align:right}
+  .board td{padding:.52cqw 0;border-bottom:1px solid var(--line-soft);vertical-align:middle}
+  .board td.case{color:var(--ink-2);white-space:nowrap;padding-right:1.2cqw}
+  .board td.n{
+    text-align:right;font-family:"IBM Plex Mono",monospace;
+    font-variant-numeric:tabular-nums;width:6cqw;padding-right:1.2cqw;color:var(--muted);
+  }
+  .board td.r{
+    text-align:right;font-family:"IBM Plex Mono",monospace;font-weight:600;
+    font-variant-numeric:tabular-nums;width:5cqw;padding-left:1cqw;
+  }
+  /* bar track: 0 -> 1.5x ratio, 1.0 marked by the reference line */
+  .track{position:relative;height:1.35cqw;background:var(--line-soft);border-radius:2px;width:100%}
+  .track i{position:absolute;left:0;top:0;bottom:0;border-radius:2px;display:block}
+  .track .ref{
+    position:absolute;top:-.25cqw;bottom:-.25cqw;left:66.67%;width:1px;
+    background:var(--muted);opacity:.75;
+  }
+  .win i{background:var(--good)} .win .r{color:var(--good)}
+  .tie i{background:var(--muted);opacity:.55} .tie .r{color:var(--muted)}
+  .loss i{background:var(--amber)} .loss .r{color:var(--amber)}
+
+  .tally{display:flex;gap:1.6cqw;margin-top:1.6cqw;align-items:baseline;flex-wrap:wrap}
+  .chip{
+    font-family:"IBM Plex Mono",monospace;font-size:1.15cqw;
+    padding:.45cqw .95cqw;border-radius:3px;font-weight:600;
+  }
+  .chip.w{background:var(--good-soft);color:var(--good)}
+  .chip.t{background:var(--line-soft);color:var(--ink-2)}
+  .chip.l{background:var(--amber-soft);color:var(--amber)}
+  .tally .from{font-size:1.15cqw;color:var(--muted)}
+
+  /* ---- stat row ---- */
+  .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:2.2cqw}
+  .stat{display:flex;flex-direction:column;gap:.5cqw;border-top:2px solid var(--accent);padding-top:1.2cqw}
+  .stat.teal{border-top-color:var(--teal)}
+  .stat.amber{border-top-color:var(--amber)}
+  .stat .v{
+    font-size:3.5cqw;font-weight:700;line-height:1;
+    font-family:"IBM Plex Mono",monospace;font-variant-numeric:tabular-nums;
+    letter-spacing:-.02em;
+  }
+  .stat .v small{font-size:.42em;font-weight:500;color:var(--muted);letter-spacing:0}
+  .stat .k{font-size:1.18cqw;color:var(--ink-2);line-height:1.4}
+
+  /* ---- before/after ---- */
+  .ba{display:flex;align-items:center;gap:2cqw;justify-content:center;padding:1cqw 0}
+  .ba .v{
+    font-family:"IBM Plex Mono",monospace;font-weight:600;
+    font-variant-numeric:tabular-nums;line-height:1;text-align:center;
+  }
+  .ba .before .v{font-size:4.4cqw;color:var(--amber)}
+  .ba .after .v{font-size:6.4cqw;color:var(--good)}
+  .ba .lbl{font-size:1.1cqw;color:var(--muted);margin-top:.7cqw;text-align:center;
+    font-family:"IBM Plex Mono",monospace;letter-spacing:.1em;text-transform:uppercase}
+  .ba .to{font-size:2.6cqw;color:var(--muted);font-family:"IBM Plex Mono",monospace}
+
+  .note{
+    font-size:1.12cqw;color:var(--muted);line-height:1.5;
+    border-left:2px solid var(--line);padding-left:1.3cqw;max-width:62ch;
+  }
+  .note b{color:var(--ink-2);font-weight:600}
+
+  .num{
+    position:absolute;right:2.4cqw;bottom:1.9cqw;
+    font-family:"IBM Plex Mono",monospace;font-size:1.02cqw;color:var(--muted);
+    font-variant-numeric:tabular-nums;
+  }
+
+  .foot{
+    display:flex;justify-content:space-between;align-items:baseline;
+    font-family:"IBM Plex Mono",monospace;font-size:1.02cqw;color:var(--muted);
+    border-top:1px solid var(--line-soft);padding-top:1.1cqw;margin-top:1.8cqw;
+  }
+
+  .hint{
+    text-align:center;font-family:"IBM Plex Mono",monospace;
+    font-size:12px;color:var(--muted);letter-spacing:.08em;
+  }
+  @media (max-width:640px){
+    .slide{aspect-ratio:auto;min-height:auto;padding:26px 20px}
+    .ops{grid-template-columns:repeat(2,1fr)}
+    .cols,.cols.narrow,.stats{grid-template-columns:1fr}
+  }
+  @media (prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
+</style>
+
+<div class="deck">
+
+  <!-- 1 ───────────────────────────────── cover -->
+  <section class="slide cover" tabindex="0">
+    <div class="mark">JIT · Meta-operators · Unified graph</div>
+    <h1>计图 <span>Jittor</span></h1>
+    <div class="rule"></div>
+    <p class="sub">基于即时编译与元算子的深度学习框架<br>——框架概览、近期更新、与 Torch 兼容层</p>
+    <div class="toc">
+      <div><b>01</b> 框架是什么</div>
+      <div><b>02</b> 近期更新</div>
+      <div><b>03</b> Torch 兼容层</div>
+      <div><b>04</b> 实战与纪律</div>
+    </div>
+    <div class="num">1 / 11</div>
+  </section>
+
+  <!-- 2 ───────────────────────────────── meta-operators -->
+  <section class="slide" tabindex="0">
+    <div class="eyebrow"><b>01</b> 框架是什么</div>
+    <h2>七个元算子，组合出整个算子库</h2>
+    <p class="lede">别的框架为每个算子写一个 kernel；计图只定义七个<strong>元算子</strong>，其余算子由它们复合而成，再由编译器针对实际形状融合、生成代码。</p>
+    <div class="body">
+      <div class="ops">
+        <div class="op k"><code>reindex</code><span>按索引表达式重排 / 取值，卷积、池化、切片的底座</span></div>
+        <div class="op k"><code>reindex_reduce</code><span>重排的同时归约，反向传播的对偶形式</span></div>
+        <div class="op k"><code>broadcast_to</code><span>把低维张量展开到目标形状，零拷贝的存储视图</span></div>
+        <div class="op"><code>unary</code><span>一元逐元素</span></div>
+        <div class="op"><code>binary</code><span>二元逐元素</span></div>
+        <div class="op"><code>ternary</code><span>三元选择</span></div>
+        <div class="op"><code>reduce</code><span>沿轴归约</span></div>
+        <div class="op" style="border-style:dashed"><code>= 全部算子</code><span>卷积、注意力、归一化…… 都是这七个的复合</span></div>
+      </div>
+      <p class="note"><b>为什么这样设计：</b>算子数量固定，融合规则就只需要面对七种节点，编译器能把一整段复合表达式合成一个 kernel，而不是逐个调用预编译好的库函数。<code>src/ops/</code> 下确实只有这七个算子文件。</p>
+    </div>
+    <div class="num">2 / 11</div>
+  </section>
+
+  <!-- 3 ───────────────────────────────── unified graph -->
+  <section class="slide" tabindex="0">
+    <div class="eyebrow"><b>01</b> 框架是什么</div>
+    <h2>一条单向流水线：从调用到 kernel</h2>
+    <div class="body">
+      <div class="pipe">
+        <div class="layer">
+          <div class="lt">框架 API</div>
+          <div class="ld">jittor.* · torch.* · nn / autograd / optim / cuda</div>
+        </div>
+        <div class="arrow">↓ 下沉：拼写与语义适配</div>
+        <div class="layer graph">
+          <div class="lt">统一计算图</div>
+          <div class="ld">原生 Var / Op 图 — 唯一 IR，惰性执行</div>
+        </div>
+        <div class="arrow">↓ 图融合 + JIT 代码生成</div>
+        <div class="layer">
+          <div class="lt">后端 kernel</div>
+          <div class="ld">CPU · CUDA · ACL（昇腾）· ROCm · Corex（天数）</div>
+        </div>
+      </div>
+      <div class="cols" style="margin-top:.4cqw">
+        <div class="col">
+          <h3>惰性执行</h3>
+          <ul class="pts">
+            <li>Python 侧只<b>构图</b>，读取 / 同步 / 显式提交时才调度</li>
+            <li>因此融合器看得到整段表达式，而不是一次一个算子</li>
+          </ul>
+        </div>
+        <div class="col">
+          <h3>按负载编译</h3>
+          <ul class="pts">
+            <li>kernel 针对<b>实际形状</b>生成并缓存，不走通用模板</li>
+            <li>算子注册表按后端一行 kernel，新后端只补这一列</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    <div class="num">3 / 11</div>
+  </section>
+
+  <!-- 4 ───────────────────────────────── updates overview -->
+  <section class="slide" tabindex="0">
+    <div class="eyebrow"><b>02</b> 近期更新</div>
+    <h2>三条线同时推进</h2>
+    <div class="body">
+      <div class="stats">
+        <div class="stat">
+          <div class="v">6<small> 赢 / 12</small></div>
+          <div class="k"><b>性能</b>　对 PyTorch eager 的十二项对比，从赢 2 平 1 输 9 走到赢 6 平 5 输 1</div>
+        </div>
+        <div class="stat teal">
+          <div class="v">26.4<small>k 行</small></div>
+          <div class="k"><b>兼容层</b>　<code>compat/torch</code> 共 85 个文件，把 torch 语义下沉到同一张图</div>
+        </div>
+        <div class="stat amber">
+          <div class="v">695<small> 文件</small></div>
+          <div class="k"><b>正确性</b>　测试树 563 + 兼容层 132，配合逐文件基线对照定位回归</div>
+        </div>
+      </div>
+      <div class="cols narrow">
+        <div class="col">
+          <h3>这一轮改了什么</h3>
+          <ul class="pts">
+            <li><b>宿主路径</b>：per-thread stream、图回放、优化器批处理</li>
+            <li><b>kernel 质量</b>：cuBLASLt epilogue、高维 permute 并行</li>
+            <li><b>语义修复</b>：视图写回、分配器尺寸、混合 dtype 矩阵乘</li>
+          </ul>
+        </div>
+        <div class="col">
+          <h3>约束</h3>
+          <ul class="pts">
+            <li>都是<b>通用改动</b>，不需要用户改一行模型代码</li>
+            <li>每一项都有可复现的测量，测不出收益的一律回退</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    <div class="num">4 / 11</div>
+  </section>
+
+  <!-- 5 ───────────────────────────────── scoreboard -->
+  <section class="slide" tabindex="0">
+    <div class="eyebrow"><b>02</b> 近期更新 — 性能</div>
+    <h2>十二项对比，比值越小越快</h2>
+    <div class="body" style="justify-content:flex-start;gap:0">
+      <table class="board">
+        <thead>
+          <tr>
+            <th>模型 / 形状</th><th class="n">计图 ms</th><th class="n">torch ms</th>
+            <th style="width:38%">jt ÷ pt（竖线 = 持平）</th><th class="r" style="text-align:right">比值</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="win"><td class="case">tf b8s256 训练</td><td class="n">19.57</td><td class="n">40.14</td><td><div class="track"><i style="width:32.7%"></i><span class="ref"></span></div></td><td class="r">0.49</td></tr>
+          <tr class="win"><td class="case">cnn-6conv 推理</td><td class="n">8.93</td><td class="n">14.12</td><td><div class="track"><i style="width:42.0%"></i><span class="ref"></span></div></td><td class="r">0.63</td></tr>
+          <tr class="win"><td class="case">tf d1024 decode 推理</td><td class="n">0.44</td><td class="n">0.68</td><td><div class="track"><i style="width:43.3%"></i><span class="ref"></span></div></td><td class="r">0.65</td></tr>
+          <tr class="win"><td class="case">tf decode b1s1 推理</td><td class="n">1.19</td><td class="n">1.43</td><td><div class="track"><i style="width:55.3%"></i><span class="ref"></span></div></td><td class="r">0.83</td></tr>
+          <tr class="win"><td class="case">cnn-6conv 训练</td><td class="n">23.99</td><td class="n">28.23</td><td><div class="track"><i style="width:56.7%"></i><span class="ref"></span></div></td><td class="r">0.85</td></tr>
+          <tr class="win"><td class="case">mlp-1024x4 推理</td><td class="n">0.37</td><td class="n">0.40</td><td><div class="track"><i style="width:62.0%"></i><span class="ref"></span></div></td><td class="r">0.93</td></tr>
+          <tr class="tie"><td class="case">mlp-1024x4 训练</td><td class="n">1.17</td><td class="n">1.20</td><td><div class="track"><i style="width:64.7%"></i><span class="ref"></span></div></td><td class="r">0.97</td></tr>
+          <tr class="tie"><td class="case">tf b8s256 推理</td><td class="n">13.17</td><td class="n">13.41</td><td><div class="track"><i style="width:65.3%"></i><span class="ref"></span></div></td><td class="r">0.98</td></tr>
+          <tr class="tie"><td class="case">tf decode b1s1 训练</td><td class="n">6.64</td><td class="n">6.59</td><td><div class="track"><i style="width:67.3%"></i><span class="ref"></span></div></td><td class="r">1.01</td></tr>
+          <tr class="tie"><td class="case">tf d1024 decode 训练</td><td class="n">3.53</td><td class="n">3.49</td><td><div class="track"><i style="width:67.3%"></i><span class="ref"></span></div></td><td class="r">1.01</td></tr>
+          <tr class="tie"><td class="case">tf prefill b1s128 推理</td><td class="n">2.86</td><td class="n">2.82</td><td><div class="track"><i style="width:68.0%"></i><span class="ref"></span></div></td><td class="r">1.02</td></tr>
+          <tr class="loss"><td class="case">tf prefill b1s128 训练</td><td class="n">8.02</td><td class="n">7.58</td><td><div class="track"><i style="width:70.7%"></i><span class="ref"></span></div></td><td class="r">1.06</td></tr>
+        </tbody>
+      </table>
+      <div class="tally">
+        <span class="chip w">赢 6</span><span class="chip t">平 5</span><span class="chip l">输 1</span>
+        <span class="from">本轮起点：赢 2 · 平 1 · 输 9</span>
+      </div>
+      <p class="note" style="margin-top:1.2cqw">每个 case 独立进程、两边交替跑同一张卡、按整段预热。<b>唯一输的那条给不出判定</b>——计图侧稳定在 8.013–8.021，torch 侧在 7.26 和 8.64 之间摆（19% 幅度）。</p>
+    </div>
+    <div class="num">5 / 11</div>
+  </section>
+
+  <!-- 6 ───────────────────────────────── what moved the needle -->
+  <section class="slide" tabindex="0">
+    <div class="eyebrow"><b>02</b> 近期更新 — 性能</div>
+    <h2>收益来自哪里</h2>
+    <p class="lede">小模型、小 batch 的瓶颈不在算力，而在<strong>宿主提交路径</strong>：设备早就算完了，在等 Python 把下一个算子递过来。</p>
+    <div class="body">
+      <div class="cols">
+        <div class="col">
+          <h3>宿主侧</h3>
+          <ul class="pts">
+            <li><b>per-thread stream</b>　每算子宿主地板 <code>7.89 → 4.31 µs</code></li>
+            <li><b>CUDA Graph 回放</b>　整步宿主成本收成一次 <code>2.24 µs</code> 的 launch</li>
+            <li><b>自动 flush 按工作量</b>　不再按算子个数切分批次</li>
+            <li><b>优化器批处理</b>　不再按参数一个一个来</li>
+          </ul>
+        </div>
+        <div class="col">
+          <h3>kernel 侧</h3>
+          <ul class="pts">
+            <li><b>rank≥5 的 permute</b>　内层（连续那层）原本串行，warp 内一次都不合并：<code>152 → 404 GB/s</code></li>
+            <li><b>cuBLASLt 走 Linear</b>　bias 融进 GEMM epilogue，少一个 kernel、少一个算子</li>
+            <li><b>混合 dtype 矩阵乘</b>　按 autocast 精度解析，不再物化 <code>[B,out,in]</code> 临时量</li>
+          </ul>
+        </div>
+      </div>
+      <p class="note"><b>也有测出来没用的：</b>四项 per-op 记账优化（记录瘦身、去锁、标记存储视图、缓存调用点）预估 0.2–0.4 ms，同进程 A/B/A 实测 <code>0.000–0.002 ms</code>，全部回退。</p>
+    </div>
+    <div class="num">6 / 11</div>
+  </section>
+
+  <!-- 7 ───────────────────────────────── compat: one graph -->
+  <section class="slide" tabindex="0">
+    <div class="eyebrow"><b>03</b> Torch 兼容层</div>
+    <h2>一套计算图，多个前端</h2>
+    <p class="lede">把 <code style="font-family:'IBM Plex Mono',monospace">import torch</code> 指向计图，让按 PyTorch 写的代码不改一行跑起来。支撑它的<strong>不是第二套张量库</strong>。</p>
+    <div class="body">
+      <div class="cols narrow">
+        <div class="col">
+          <h3>兼容层做什么</h3>
+          <ul class="pts">
+            <li>把 <code>torch.*</code> 的拼写与签名<b>翻译</b>成图上的节点</li>
+            <li>补齐 torch 的语义约定：dtype 提升、autocast、视图与就地写、设备归属</li>
+            <li>覆盖 <code>nn</code> / <code>autograd</code> / <code>optim</code> / <code>cuda</code> / <code>library</code> / <code>distributed</code> / FSDP2</li>
+          </ul>
+        </div>
+        <div class="col">
+          <h3>兼容层不做什么</h3>
+          <ul class="pts">
+            <li>不建立<b>第二张图</b>——IR 只有原生 Var/Op 一份</li>
+            <li>不复制数学实现——kernel 仍由框架统一生成</li>
+            <li>能力缺失时<b>明确报错</b>，而不是静默给出可疑结果</li>
+          </ul>
+        </div>
+      </div>
+      <p class="note">好处是直接的：所有图融合、JIT、多后端的收益，torch 前端<b>自动继承</b>；反过来，兼容层发现的语义缺陷修在框架里，原生前端同样受益。</p>
+    </div>
+    <div class="num">7 / 11</div>
+  </section>
+
+  <!-- 8 ───────────────────────────────── compat: real model -->
+  <section class="slide" tabindex="0">
+    <div class="eyebrow"><b>03</b> Torch 兼容层 — 实战</div>
+    <h2>MiniMax-H3 经 vLLM-Omni 跑通</h2>
+    <p class="lede">单卡 H20（96 GiB）、逐层 offload。问题不是"能不能跑"，而是<strong>不改 vLLM-Omni 一行</strong>能不能跑。</p>
+    <div class="body">
+      <div class="ba">
+        <div class="before"><div class="v">710.7<small>s</small></div><div class="lbl">修复前</div></div>
+        <div class="to">→</div>
+        <div class="after"><div class="v">39.6<small>s</small></div><div class="lbl">修复后</div></div>
+      </div>
+      <p class="note" style="max-width:none;text-align:center;border:0;padding:0;font-size:1.22cqw">
+        一次完整 <code>fl2va</code> 请求端到端；帧、音频、峰值显存与此前"正确但慢"的那次一致
+      </p>
+      <div class="cols" style="margin-top:.6cqw">
+        <div class="col">
+          <h3>暴露出的缺陷类型</h3>
+          <ul class="pts">
+            <li><code>TCPStore</code> 在多地址 <code>localhost</code> 上无法 rendezvous</li>
+            <li><code>torch.device</code> 上下文没有真正改变默认分配设备</li>
+            <li>autocast 请求了混合 dtype 卷积——没有 cuDNN 算法能服务</li>
+          </ul>
+        </div>
+        <div class="col">
+          <h3>为什么值得记录</h3>
+          <ul class="pts">
+            <li>这些都是<b>真实模型才踩得到</b>的路径，单测覆盖不到</li>
+            <li>每一条都写进结果文档，下一个人不必从堆栈重新推导</li>
+            <li>修复落在框架侧，不是给这个模型打补丁</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    <div class="num">8 / 11</div>
+  </section>
+
+  <!-- 9 ───────────────────────────────── correctness -->
+  <section class="slide" tabindex="0">
+    <div class="eyebrow"><b>04</b> 正确性</div>
+    <h2>这一轮修掉的语义缺陷</h2>
+    <div class="body">
+      <div class="cols">
+        <div class="col">
+          <h3>会静默出错的</h3>
+          <ul class="pts">
+            <li><b>视图静默冻结</b>　<code>x.view(-1)</code>、<code>flatten()</code>、widening expand 的视图停在旧数据上，并永久失去写回——无报错无告警</li>
+            <li><b>split 读错元素</b>　非连续输入上按存储线性读，<code>jt.split(x[:,1:], 2)</code> 取到错误的行</li>
+            <li><b>广播梯度形状错</b>　<code>+= -= *= /=</code> 与 <code>scatter(reduce=)</code> 的值侧返回切片形状</li>
+          </ul>
+        </div>
+        <div class="col">
+          <h3>会直接崩的</h3>
+          <ul class="pts">
+            <li><b>AdamW(fused=True) 在 CUDA 上崩溃</b>　判据用了 <code>use_acl</code>，而它是 <code>use_cuda</code> 的别名，把 CUDA 送进只有 NPU 实现的算子</li>
+            <li><b>分配器尺寸不匹配</b>　申请按存储跨度、归还按元素数，exact-fit 分配器上会发出偏小的块</li>
+            <li><b>Tensor.set_ 必抛异常</b>　<code>nbytes</code> 是属性却被当方法调用</li>
+          </ul>
+        </div>
+      </div>
+      <p class="note"><b>共同点：</b>这些都不是"跑不起来"，而是"跑起来了但结果不对"或"只在特定配置下炸"。<code>tests/mem</code> 的分配器契约测试从 12 失败变为全绿，正是靠把这类问题当成缺陷而不是既存现象。</p>
+    </div>
+    <div class="num">9 / 11</div>
+  </section>
+
+  <!-- 10 ───────────────────────────────── measurement discipline -->
+  <section class="slide" tabindex="0">
+    <div class="eyebrow"><b>04</b> 测量纪律</div>
+    <h2>三条靠踩坑换来的规矩</h2>
+    <div class="body">
+      <div class="cols narrow">
+        <div class="col">
+          <h3>1 · profiler 的百分比不可兑现</h3>
+          <ul class="pts">
+            <li>py-spy 报某项占 <code>8.24%</code>，真 A/B 只有 <code>0.9%</code></li>
+            <li>另一项报 7.3%，实测是两倍</li>
+            <li><b>只用它提候选，动手前必须 A/B 验证</b></li>
+          </ul>
+          <h3 style="margin-top:1.8cqw">2 · 孤立微基准同样不可兑现</h3>
+          <ul class="pts">
+            <li>循环里测 <code>v.tape()</code> 是 1.1 µs</li>
+            <li>往真实步骤插 228 个，只值 <code>0.006 ms</code></li>
+          </ul>
+        </div>
+        <div class="col">
+          <h3>3 · 跨构建比较在共享机器上不成立</h3>
+          <ul class="pts">
+            <li>同一个 torch 二进制、同一脚本，相隔 20 分钟中位数差 <b>9%</b></li>
+            <li>某个 case 的比值 spread 达 <code>0.488–2.268</code>（4.6 倍）</li>
+            <li><b>只认同进程 A/B/A 与交替配对的中位数</b></li>
+          </ul>
+          <h3 style="margin-top:1.8cqw">代价</h3>
+          <ul class="pts">
+            <li>并行跑测试会改变文件间顺序，已实测让失败数从 2 变 1</li>
+            <li>把"稳定的失败"变成"时有时无"，比慢更难查</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    <div class="num">10 / 11</div>
+  </section>
+
+  <!-- 11 ───────────────────────────────── where we are -->
+  <section class="slide" tabindex="0">
+    <div class="eyebrow"><b>04</b> 现状</div>
+    <h2>已经到哪，还差什么</h2>
+    <div class="body">
+      <div class="cols">
+        <div class="col">
+          <h3>已经成立</h3>
+          <ul class="pts">
+            <li>十二项对比<b>赢 6 平 5 输 1</b>，对最好的 <code>torch.compile</code> 模式赢 5 平 3 输 4</li>
+            <li>真实多模态模型经 vLLM-Omni <b>端到端跑通</b>且速度正常</li>
+            <li>性能改动全部为通用路径，模型代码零修改</li>
+          </ul>
+        </div>
+        <div class="col">
+          <h3>还没收口</h3>
+          <ul class="pts">
+            <li><b>卷积算法选择不稳定</b>　同一份代码跨进程有 2.1 倍波动，cuDNN 在被占满的卡上实测一次就定终身</li>
+            <li><b>兼容层测试跑不起来</b>　108 个文件因包导入路径被 pytest 收集失败，日常流程里基本是死的</li>
+            <li><b>单测启动开销</b>　每进程 6.9 s 的 <code>import</code>，695 个文件串行约 80 分钟</li>
+          </ul>
+        </div>
+      </div>
+      <div class="foot">
+        <span>计图 Jittor · 元算子与统一计算图</span>
+        <span>分支 2.0-refactor</span>
+      </div>
+    </div>
+    <div class="num">11 / 11</div>
+  </section>
+
+  <p class="hint">← → 翻页</p>
+</div>
+
+<script>
+  (function () {
+    var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+    function current() {
+      var best = 0, bestD = Infinity;
+      slides.forEach(function (s, i) {
+        var d = Math.abs(s.getBoundingClientRect().top - 24);
+        if (d < bestD) { bestD = d; best = i; }
+      });
+      return best;
+    }
+    function go(i) {
+      if (i < 0 || i >= slides.length) return;
+      slides[i].scrollIntoView({
+        behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+        block: 'start'
+      });
+      slides[i].focus({ preventScroll: true });
+    }
+    document.addEventListener('keydown', function (e) {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === 'ArrowRight' || e.key === 'PageDown') { e.preventDefault(); go(current() + 1); }
+      else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); go(current() - 1); }
+      else if (e.key === 'Home') { e.preventDefault(); go(0); }
+      else if (e.key === 'End') { e.preventDefault(); go(slides.length - 1); }
+    });
+  })();
+</script>

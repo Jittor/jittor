@@ -1,4 +1,5 @@
 """Native tensor factories, operations and Var protocol bindings."""
+from contextlib import contextmanager
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from jittor._core.dtypes import dtype_for_compute as _dtype_for_compute
 from jittor._core.dtypes import is_dtype as _is_dtype
@@ -12,7 +13,7 @@ from builtins import bool as ori_bool, float as ori_float, int as ori_int
 import numpy as np
 import jittor_core as core
 from jittor_core import NanoString, NanoVector, Var, ops
-from .flags import flag_scope
+from .flags import flag_scope, flags as _runtime_flags
 from .._runtime.acl_clamp import dispatch_acl_clamp
 from .._runtime.backend_libraries import get_library as _get_library
 from .._runtime.dispatch import register_kernel as _register_kernel, try_dispatch as _try_dispatch
@@ -166,13 +167,31 @@ def random(shape, dtype="float32", type="uniform"):
         if dim < 0:
             raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
     dtype = _dtype_for_compute(dtype)
-    if _jittor_dtype_name(dtype) in ("float16", "bfloat16"):
+    name = _jittor_dtype_name(dtype)
+    draw = "float32" if name in ("float16", "bfloat16") else name
+    ret = _captured_draw(shape, draw, type)
+    if ret is None:
+        ret = ops.random(shape, draw, type)
+    if draw != name:
         # The CPU and accelerator random engines generate standard floating
         # types; low-precision outputs use their regular cast kernels.
-        ret = ops.random(shape, "float32", type).cast(dtype)
-    else:
-        ret = ops.random(shape, dtype, type)
+        ret = ret.cast(dtype)
     return _amp_array_preference(ret)
+
+
+def _captured_draw(shape, dtype, type):
+    """A draw a captured step can replay (see step_capture.random_draw), or None."""
+    from jittor._runtime import step_capture
+    if not step_capture.active() or not _draws_on_device():
+        return None
+    return step_capture.random_draw(tuple(ori_int(s) for s in shape), dtype, type)
+
+
+def _draws_on_device():
+    placement = core._current_tensor_placement()
+    if placement is not None:
+        return placement[0] != 0
+    return ori_bool(_runtime_flags.use_cuda)
 
 _core_to_device = Var.to_device
 
@@ -205,7 +224,20 @@ Var.to_device = to_device
 
 def _copy_to_cpu(self):
     '''Return a differentiable, independently allocated host copy.'''
-    return _core_to_device(self, -1)
+    out = _core_to_device(self, -1)
+    # Until it is materialized there is no allocation for :meth:`location` to
+    # ask about, so :attr:`device` falls back to "where will this land" -- and
+    # ``device_id`` cannot answer for this one, because a host copy
+    # deliberately *keeps* the device it came from so it can go back there.
+    # Without this mark a fresh ``x.cuda(3).cpu()`` reported ``cuda:3`` right
+    # up to the sync that put it in host memory, which is the one reading a
+    # caller uses it for. It is only consulted while ``location()`` is
+    # ``"none"``; once the copy runs, the allocator is the authority.
+    try:
+        out._pending_host_copy = True
+    except (AttributeError, TypeError):
+        pass
+    return out
 
 Var._copy_to_cpu = _copy_to_cpu
 
@@ -230,6 +262,10 @@ def _device(self):
         return "cuda:%d" % ori_int(self.device_id)
     # Not materialized: no allocation exists to ask, so report the placement it
     # will get. A test that wants the settled answer syncs first.
+    if getattr(self, "_pending_host_copy", False):
+        # ...except for a pending `.cpu()`, whose destination is already
+        # decided. See _copy_to_cpu.
+        return "cpu"
     import jittor as _jt
     if not _jt.flags.use_cuda:
         return "cpu"
@@ -340,24 +376,99 @@ def ones(*shape, dtype="float32"):
             raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
     return _constant_scalar(1, dtype).broadcast(shape)
 
-@_contextmanager
-def _factory_scope_like(x):
-    """Let no-input factories inherit an explicit reference unless overridden."""
-    frontend_token = None
-    token = None
-    backend = getattr(x, "placement_backend", -1)
+@contextmanager
+def placement_scope_like(x):
+    """Run a block under `x`'s explicit tensor placement, if it has one.
+
+    Allocation helpers (`jt.empty`, `jt.ones`, ...) follow the *ambient*
+    placement rather than the inputs' device. When one input was placed
+    explicitly while the ambient is something else -- MiniMax-H3 builds its
+    sigma schedule with `device="cpu"` inside a CUDA process -- a helper that
+    allocates for that input then produces a tensor on the ambient device and
+    `dispatch_context` rejects the op for mixing two placements. Allocating
+    inside this scope keeps the result on `x`'s device.
+
+    The reference tensor is a *default*, so a placement the caller asked for
+    outranks it: `torch.zeros_like(gpu, device="cpu")` has already placed the
+    construction on the host, and re-scoping to the source's device would hand
+    back a CUDA tensor.
+    """
+    import jittor as jt
+    # `int` is shadowed in this module by jittor's integer dtype constructor.
+    backend = ori_int(x.placement_backend)
+    if backend < 0 or jt.core._current_tensor_placement() is not None:
+        yield
+        return
+    token = jt.core._set_tensor_placement(backend, max(ori_int(x.device_id), 0))
     try:
-        if backend >= 0 and core._get_tensor_placement() is None:
-            frontend_type = getattr(type(x), "_frontend_result_type", type(x))
-            frontend_token = core._set_tensor_frontend_type(frontend_type)
-            device = max(ori_int(getattr(x, "device_id", 0)), 0)
-            token = core._set_tensor_placement(ori_int(backend), device)
         yield
     finally:
-        if token is not None:
-            core._reset_tensor_placement(token)
+        jt.core._reset_tensor_placement(token)
+
+
+@contextmanager
+def device_scope_like(x):
+    """Run a block so that constructors allocate on `x`'s device.
+
+    `torch.ones_like` and the rest of the `*_like` family preserve the reference
+    tensor's *device*, not only its shape and dtype, and so do the `x.new_*`
+    methods. jittor's constructors take their device from the ambient one, and
+    `to_device` does not move the ambient -- it is the caller's, and `run_sync`
+    restores it -- so on a rank whose device is not the process default
+    `ones_like(x)` came back on the wrong device. jittor's own ops reject the
+    mixture in `dispatch_context`; the flash-attn extension does not check (it
+    forms its launch guard from one input's device), and there the mixture is a
+    kernel on one device reading another device's pointers, i.e. an illegal
+    address.
+
+    An explicit request still wins over both: `device=` names the device the
+    caller wants, and the reference tensor only fills in for a caller who named
+    none.
+
+    Two scopes, because a Var can be off the ambient device with nothing
+    recording it: `placement_scope_like` covers an *explicit* placement, while a
+    tensor moved with `.to_device(1)` keeps `placement_backend == -1` and needs
+    the runtime flag. `device_id` starts at -1 and its setter ignores negative
+    values, so the flag is restored by hand.
+    """
+    import jittor as jt
+    device_id = ori_int(getattr(x, "device_id", -1))
+    previous = ori_int(jt.current_device())
+    requested = jt.core._current_tensor_placement()
+    with placement_scope_like(x):
+        if requested is not None or device_id < 0 or device_id == previous:
+            yield
+            return
+        jt.flags.device_id = device_id
+        try:
+            yield
+        finally:
+            if previous >= 0:
+                jt.flags.device_id = previous
+
+
+@_contextmanager
+def _factory_scope_like(x):
+    """Preserve both the reference device and its frontend result type.
+
+    ``device_scope_like`` handles explicit placement and tensors moved to a
+    non-current device.  Independent Torch frontends additionally need their
+    result type carried through a no-input factory; that token is orthogonal to
+    device selection and is restored even when the factory raises.
+    """
+    frontend_token = None
+    if core._current_tensor_placement() is None:
+        backend = getattr(x, "placement_backend", -1)
+        if backend >= 0:
+            frontend_type = getattr(type(x), "_frontend_result_type", type(x))
+            frontend_token = core._set_tensor_frontend_type(frontend_type)
+    try:
+        with device_scope_like(x):
+            yield
+    finally:
         if frontend_token is not None:
             core._reset_tensor_frontend_type(frontend_token)
+
 
 def new_ones(x, size):
     with _factory_scope_like(x):
@@ -478,7 +589,7 @@ def zeros_like(x, dtype=None) -> Var:
     with _factory_scope_like(x):
         return zeros(x.shape, dtype)
 
-def var(x, dim=None, dims=None, unbiased=False, keepdims=False):
+def var(x, dim=None, dims=None, unbiased=False, keepdims=False, keepdim=None):
     """ return the sample variance. If unbiased is True, Bessel's correction will be used.
 
     :param x: the input jittor Var.
@@ -506,6 +617,9 @@ def var(x, dim=None, dims=None, unbiased=False, keepdims=False):
     shape = x.shape
     new_shape = list(x.shape)
 
+    # `keepdim` is torch's spelling of `keepdims`; see jittor/ops/numerical.py:all.
+    if keepdim is not None:
+        keepdims = keepdim
     if dim is not None and dims is not None:
         raise ValueError("dim and dims can not be both set")
     if dim is None and dims is None:
@@ -533,8 +647,12 @@ def var(x, dim=None, dims=None, unbiased=False, keepdims=False):
 
 Var.var = var
 
-def std(x, dim=None, keepdim=False):
+def std(x, dim=None, keepdim=False, keepdims=None):
     import jittor as jt
+    # This one took `keepdim` and rejected `keepdims` -- the opposite of `var`
+    # right above it. See jittor/ops/numerical.py:all.
+    if keepdims is not None:
+        keepdim = keepdims
     if dim is None:
         matsize=1
         for i in x.shape:
@@ -566,23 +684,36 @@ Var.norm = norm
 
 origin_reshape = reshape
 
+#: The genuine builtin `int`, and the two concrete sequence types a shape
+#: arrives as. In this namespace `int`/`all`/`any` are shadowed by jittor's
+#: dtype and reductions, so the builtin has to be reached through an instance;
+#: hoisting it out of `view` keeps that lookup off a path every reshape takes.
+_pyint = (0).__class__
+
+
 def view(x, *shape):
-    if len(shape) == 1 and isinstance(shape[0], (Sequence, NanoVector)):
-        shape = shape[0]
+    # `type(...) is tuple or list` before the abstract check: `Sequence` is an
+    # ABC, and an `isinstance` against an ABC goes through `_abc_instancecheck`
+    # -- an order of magnitude dearer than an identity test, on a path every
+    # `reshape`, `view` and internal flatten takes. Measured at ~5 us per pure
+    # view, which a `matmul_transpose` pays twice. The ABC branch is kept for
+    # the shapes that really are some other sequence.
+    if len(shape) == 1:
+        first = shape[0]
+        tf = type(first)
+        if tf is tuple or tf is list or isinstance(first, (Sequence, NanoVector)):
+            shape = first
     # torch accepts 0-d int tensors / numpy ints as shape elements (e.g. longformer's
     # `_chunk` passes torch.div(size, n) into .view); jittor's core reshape needs plain
     # int64. Coerce only when a non-int element is present — plain-int shapes (the hot
     # path) are untouched, so this can't change existing behavior, only un-break it.
-    # (NB: in this namespace `int`/`all`/`any` are shadowed by jittor's dtype/reductions,
-    # so use an explicit loop and grab the genuine builtin int via `(0).__class__`.)
-    pyint = (0).__class__
     coerce = False
     for s in shape:
-        if type(s) is not pyint:
+        if type(s) is not _pyint:
             coerce = True
             break
     if coerce:
-        shape = tuple(pyint(s.item()) if isinstance(s, Var) else pyint(s) for s in shape)
+        shape = tuple(_pyint(s.item()) if isinstance(s, Var) else _pyint(s) for s in shape)
     result = origin_reshape(x, shape)
     result._set_storage_view_of(x, False)
     return result
@@ -612,11 +743,14 @@ def _load_accelerator_transpose():
     Failing to build cuTT is not fatal -- TransposeOp has its own kernel -- so
     it is reported once and not retried.
     """
-    from jittor.compiler import LOG
     global _accelerator_transpose_tried
     if _accelerator_transpose_tried:
         return
     _accelerator_transpose_tried = True
+    # The import is inside the guard: it walks `sys.modules` and does an
+    # attribute lookup, and it used to run on every transpose in every model
+    # rather than on the one call that actually builds cuTT.
+    from jittor.compiler import LOG
     try:
         _get_library("cutt", load=True)
     except Exception as e:
@@ -685,6 +819,27 @@ def _transpose_permutation(dim, ndim, shape):
     caller mistakes, so they are reported here, where the argument still has a
     name and the var still has a shape to print.
     """
+    # A permutation of exact, in-range, distinct python ints -- which is what
+    # `x.transpose(0, 2, 1, 3)` and every framework-generated permutation is --
+    # is accepted here. `numbers.Integral` is an ABC, so the isinstance below
+    # reaches `ABCMeta.__instancecheck__` for every axis of every transpose;
+    # the loop after it then builds a dict to find repeats. Anything this does
+    # not accept (a negative axis, a numpy integer, a Var, a wrong count, a
+    # repeat) falls through to the checks below, which own every diagnostic.
+    if len(dim) == ndim:
+        fast = []
+        seen_mask = 0
+        for value in dim:
+            if type(value) is not _pyint or not 0 <= value < ndim:
+                break
+            bit = 1 << value
+            if seen_mask & bit:
+                break
+            seen_mask |= bit
+            fast.append(value)
+        else:
+            return tuple(fast)
+
     axes = []
     for position, value in enumerate(dim):
         if isinstance(value, Var):
@@ -739,14 +894,34 @@ def transpose(x, *dim):
     # NumPy helpers such as np.argsort return numpy.integer axis values.  The
     # C++ transpose binding requires exact Python ints, while torch accepts any
     # integral sequence in Tensor.permute().
-    pyint = (0).__class__
     coerce = False
     for d in dim:
-        if type(d) is not pyint:
+        if type(d) is not _pyint:
             coerce = True
             break
     if coerce:
-        dim = tuple(pyint(d.item()) if isinstance(d, Var) else pyint(d) for d in dim)
+        dim = tuple(_pyint(d.item()) if isinstance(d, Var) else _pyint(d) for d in dim)
+    # A transpose of a transpose is one transpose of the source, and none at
+    # all when the two cancel: `attn(q.transpose(1, 2), ...).transpose(1, 2)`
+    # otherwise ran two copies to put the heads back where they started.
+    # The view record keeps writes reaching the root; where it is gone with
+    # the root's holder, the graph still says what the Var is a transpose of.
+    source = None
+    view_axes = getattr(x, "_transpose_view_axes", None)
+    if view_axes is not None:
+        prior = view_axes()
+        if prior:
+            source = x._transpose_view_source
+        else:
+            prior = x._producer_transpose_axes()
+            if prior:
+                source = lambda: x._input(0)
+    if source is not None and len(prior) == len(dim):
+        composed = tuple(prior[d] for d in dim)
+        source = source()
+        if composed == tuple(range(len(dim))):
+            return source
+        x, dim = source, composed
     out = _try_dispatch("tensor.transpose", x, dim)
     if out is None:
         out = origin_transpose(x, dim)
@@ -800,11 +975,11 @@ Var.unsqueeze = unsqueeze
 def squeeze(x, dim=None):
     shape = list(x.shape)
     if dim is None:
-        # squeeze removes ONLY size-1 dims (size-0 dims must be kept, else an empty
-        # tensor like [0,1] reshapes to the wrong size). jittor has no 0-dim tensors,
-        # so an all-ones shape collapses to [1] (mmdet: nonzero(...).squeeze()).
-        new_shape = [s for s in shape if s != 1]
-        return x.reshape(new_shape if new_shape else [1])
+        # squeeze removes ONLY size-1 dims (size-0 dims must be kept, else an
+        # empty tensor like [0,1] reshapes to the wrong size). An all-ones
+        # shape leaves nothing, which is the 0-d value torch returns -- this
+        # used to collapse to [1] because jittor had no 0-d Var.
+        return x.reshape([s for s in shape if s != 1])
     else:
         if dim < 0: dim += len(shape)
         if dim < 0 or dim >= len(shape):
@@ -813,8 +988,7 @@ def squeeze(x, dim=None):
         # not an error (canine's _downsample_attention_mask relies on this).
         if shape[dim] != 1:
             return x
-        new_shape = shape[:dim] + shape[dim+1:]
-        return x.reshape(new_shape if new_shape else [1])
+        return x.reshape(shape[:dim] + shape[dim+1:])
 
 Var.squeeze = squeeze
 
@@ -1116,7 +1290,7 @@ def _check_arg_reduce_is_answerable(op, x, dim):
             % (op, dim, list(shape), op))
 
 
-def argmax(x: Var, dim: int, keepdims:bool=False):
+def argmax(x: Var, dim: int, keepdims:bool=False, keepdim=None):
     ''' Returns the indices and values of the maximum elements along the specified dimension.
 
     :param x: the input Var.
@@ -1152,11 +1326,15 @@ def argmax(x: Var, dim: int, keepdims:bool=False):
         if dim < 0:
             dim += nd
         _check_arg_reduce_is_answerable("argmax", x, dim)
+    # `keepdim` is torch's spelling of `keepdims`; the native ops take either,
+    # so the python wrappers must too. See jittor/ops/numerical.py:all.
+    if keepdim is not None:
+        keepdims = keepdim
     return jt.arg_reduce(x, "max", dim, keepdims)
 
 Var.argmax = argmax
 
-def argmin(x, dim: int, keepdims:bool=False):
+def argmin(x, dim: int, keepdims:bool=False, keepdim=None):
     ''' Returns the indices and values of the minimum elements along the specified dimension.
 
     :param x: the input Var.
@@ -1186,6 +1364,10 @@ def argmin(x, dim: int, keepdims:bool=False):
         if dim < 0:
             dim += nd
         _check_arg_reduce_is_answerable("argmin", x, dim)
+    # `keepdim` is torch's spelling of `keepdims`; the native ops take either,
+    # so the python wrappers must too. See jittor/ops/numerical.py:all.
+    if keepdim is not None:
+        keepdims = keepdim
     return jt.arg_reduce(x, "min", dim, keepdims)
 
 Var.argmin = argmin
@@ -1264,7 +1446,8 @@ def rand_like(x, dtype=None) -> Var:
     '''
     import jittor as jt
     if dtype is None: dtype = x.dtype
-    return jt.random(x.shape, dtype)
+    with device_scope_like(x):
+        return jt.random(x.shape, dtype)
 
 def randn_like(x, dtype=None) -> Var:
     ''' samples random values from standard normal distribution with the same shape as x.
@@ -1285,7 +1468,8 @@ def randn_like(x, dtype=None) -> Var:
     '''
     import jittor as jt
     if dtype is None: dtype = x.dtype
-    return jt.random(x.shape, dtype, "normal")
+    with device_scope_like(x):
+        return jt.random(x.shape, dtype, "normal")
 
 def randint(low, high=None, shape=(1,), dtype="int32") -> Var:
     ''' samples random integers from a uniform distribution on the interval [low, high).
@@ -1345,7 +1529,8 @@ def randint_like(x, low, high=None) -> Var:
                 [14. 17. 15.]], dtype=float32)
      '''
 
-    return randint(low, high, x.shape, x.dtype)
+    with device_scope_like(x):
+        return randint(low, high, x.shape, x.dtype)
 
 def normal(mean, std, size=None, dtype="float32") -> Var:
     ''' samples random values from a normal distribution.

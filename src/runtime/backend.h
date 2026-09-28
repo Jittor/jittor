@@ -75,6 +75,18 @@ struct BackendOps {
     vector<int> (*architectures)() = nullptr;
     void (*check_nan)(Var*, Op*) = nullptr;
     void (*register_operators)() = nullptr;
+    // Record the compute stream's launches into a replayable graph instead of
+    // issuing them. `capture_begin` starts recording; `capture_end` stops and
+    // hands back an opaque executable graph, or nullptr if the capture could
+    // not be turned into one. `graph_launch` re-issues the whole recording
+    // with a single call -- which is the point: a launch costs microseconds of
+    // host time each, and a graph of two hundred of them launches in one.
+    // A backend that leaves these null simply cannot capture, and the caller
+    // falls back to launching normally.
+    bool (*graph_capture_begin)(int) = nullptr;
+    void* (*graph_capture_end)(int) = nullptr;
+    void (*graph_launch)(void*, int) = nullptr;
+    void (*graph_release)(void*, int) = nullptr;
     BackendExecutionPolicy execution;
 };
 
@@ -109,6 +121,14 @@ EXTERN_LIB void backend_copy_async(void* dst, Device dst_device, const void* src
 EXTERN_LIB void backend_synchronize(Device device);
 EXTERN_LIB BackendStream backend_stream(Device device, BackendStreamKind kind);
 EXTERN_LIB BackendEvent backend_event(Device device, bool timing = false);
+// Graph capture on the accelerator's compute stream. `backend_graph_supported`
+// answers before anything is recorded; the rest return false/nullptr when the
+// backend cannot capture, so the caller never has to know which one it is.
+EXTERN_LIB bool backend_graph_supported();
+EXTERN_LIB bool backend_graph_capture_begin();
+EXTERN_LIB void* backend_graph_capture_end();
+EXTERN_LIB void backend_graph_launch(void* graph);
+EXTERN_LIB void backend_graph_release(void* graph);
 
 // Canonical spelling of a backend id, independent of registration.
 // This is the enum's own name, not a registry lookup.

@@ -26,7 +26,23 @@ except ImportError:
                 "Please install it with `pip install pillow`.")
     Image = _MissingPIL()
     _has_pil = False
-import multiprocessing as mp
+import multiprocessing as _multiprocessing
+
+# The worker pool hands its children a `jt.RingBuffer`, shared `mp.Array`s and
+# a `Condition` as plain constructor arguments -- they work because a forked
+# child *inherits* them, not because they travel. Python 3.14 changed the
+# default start method on Linux from `fork` to `forkserver`, which pickles the
+# Process and its arguments instead, and `jittor_core.RingBuffer` is not
+# picklable: every worker died with
+# `TypeError: cannot pickle 'jittor_core.RingBuffer' object`, i.e. `num_workers
+# > 0` stopped working outright on 3.14.
+#
+# So name the method rather than inherit whatever the interpreter defaults to.
+# Every primitive below comes from the same context, because mixing contexts is
+# its own class of bug.
+mp = _multiprocessing.get_context("fork") \
+    if "fork" in _multiprocessing.get_all_start_methods() \
+    else _multiprocessing
 import sys
 from jittor_utils import LOG
 import jittor as jt
@@ -995,7 +1011,15 @@ class VarDataset(Dataset):
         b = collate_batch(batch)
         for i in range(len(self.args)):
             x = b[i]
-            if jt.is_var(self.args[i]) and self.args[i].ndim == 1:
+            # A 1-D source must not give the batch a trailing axis. Indexing
+            # one answers with a 0-d element now, so collation already yields
+            # `[batch]` and there is nothing to remove -- squeezing anyway ate
+            # the *batch* axis at batch_size=1 (`squeeze` reaches rank 0 now;
+            # it used to stop at `[1]` and hide this). Kept as a guard rather
+            # than deleted: if an element ever regains its trailing axis, the
+            # batch must still not.
+            if (jt.is_var(self.args[i]) and self.args[i].ndim == 1
+                    and x.ndim > 1 and x.shape[-1] == 1):
                 x.assign(x.squeeze(-1))
         return b
 

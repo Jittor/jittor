@@ -60,12 +60,26 @@ _SPELLINGS = (
 )
 
 
+#: The four native policy flags the frontend's two TF32 domains derive from.
+#:
+#: A CPU-only core exposes neither ``cuda_allow_tf32`` nor
+#: ``cuda_allow_cudnn_tf32``: flag binding generation drops every ``cuda*``
+#: name when the core is built without CUDA, which is what
+#: ``tests/structure/runtime/test_runtime_sync_state.py`` states as the
+#: contract. The frontend keeps both domains in its own context state there
+#: (``_TF32_FALLBACK`` in ``installers/cuda/api.py``), so the six spellings
+#: still agree -- which is the whole point of this file. Only the ones this
+#: core actually has can be read.
+_POLICY_FLAGS = ("float32_matmul_precision", "use_tensorcore",
+                 "cuda_allow_tf32", "cuda_allow_cudnn_tf32")
+
+
 class Base(unittest.TestCase):
     def setUp(self):
         self._saved = (torch.get_float32_matmul_precision(), torch.backends.cudnn.allow_tf32,
                        _cuda_runtime().matmul_refinement)
-        self._native = {flag: getattr(jt.introspection.policy.runtime, flag) for flag in
-                        ("float32_matmul_precision", "use_tensorcore", "cuda_allow_tf32", "cuda_allow_cudnn_tf32")}
+        self._native = {flag: getattr(jt.introspection.policy.runtime, flag)
+                        for flag in _POLICY_FLAGS if hasattr(jt.flags, flag)}
 
     def tearDown(self):
         torch.set_float32_matmul_precision(self._saved[0])
@@ -104,6 +118,10 @@ class TestEverySpellingIsAViewOfTheSameFlag(Base):
                     with self.subTest(writer=writer, enabled=enabled,
                                       reader="the domain's own state"):
                         self.assertEqual(_tf32_get(domain), enabled)
+                    # The native flags are not where the frontend keeps this
+                    # state, so none of them may move. On a CPU-only core the
+                    # two `cuda_allow_*` entries are absent from `_native` --
+                    # there is then no native flag for a spelling to disturb.
                     self.assertEqual({name: getattr(jt.introspection.policy.runtime, name) for name in self._native}, self._native)
                     for reader, read, _w in spellings:
                         with self.subTest(writer=writer, reader=reader,

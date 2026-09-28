@@ -8,12 +8,19 @@ Run:  python -m pytest compat/tests/torch/test_torch_compat_linalg.py
 """
 
 from _helpers import capability as _test_capability
+from _helpers.cupy_bridge import cuda_numpy_code_available
 import unittest
 import numpy as np
 import torch
 import jittor as jt
 
-_DEVICES = [("cpu", 0)] + ([("cuda", 1)] if _test_capability.any_accelerator_enabled(backend=jt) else [])
+# These reach jt.numpy_code, whose CUDA half goes through the CuPy bridge
+# (py_converter hands the callback `cupy` when use_cuda is on). Without
+# CuPy the operator raises from inside execution and leaves the CUDA work
+# pending for an unrelated later test to trip over.
+_DEVICES = [("cpu", 0)] + ([("cuda", 1)]
+                           if _test_capability.any_accelerator_enabled(backend=jt)
+                           and cuda_numpy_code_available() else [])
 
 
 def both_devices(fn):
@@ -104,9 +111,11 @@ class TestLinalg(Base):
     def test_svd_values_and_recon(self):
         A = np.random.RandomState(5).randn(5, 3).astype("float32")
         def body(dev):
-            # Jittor's canonical torch.linalg path returns the reduced (U, S, Vh)
-            # decomposition, equivalent to torch full_matrices=False.
-            U, S, Vh = torch.linalg.svd(jt.array(A))
+            # torch.linalg.svd defaults to full_matrices=True, so U is (5, 5)
+            # for this 5x3 input and only its first k columns take part in the
+            # reconstruction. Ask for the reduced form, which is what this
+            # check is about.
+            U, S, Vh = torch.linalg.svd(jt.array(A), full_matrices=False)
             self.ac(np.sort(S.numpy())[::-1], np.linalg.svd(A, compute_uv=False),
                     rtol=1e-3, msg=f"singular values {dev}")
             recon = U.numpy() @ np.diag(S.numpy()) @ Vh.numpy()

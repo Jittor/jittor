@@ -9,6 +9,8 @@
 // ***************************************************************
 #pragma once
 #include <mutex>
+#include <thread>
+#include <unordered_map>
 #include "mem/allocator.h"
 
 namespace jittor {
@@ -61,6 +63,10 @@ struct BlockIdSpace {
     // an id that was never handed out reads as "not found" instead of as
     // whatever the heap happened to hold.
     std::vector<CachingBlock*> occupied_id_mapper;
+    // TEMP DIAGNOSTIC (KI-EXEC-007): id -> the last few things that happened to
+    // it, newest last. Only written when KI007_TRACE is set.
+    std::unordered_map<size_t, std::vector<string>> id_events;
+    void note(size_t id, const char* what, size_t size);
 
     size_t new_block_id();
     void recycle_block_id(size_t id);
@@ -128,6 +134,11 @@ struct SFRLAllocator : Allocator {
     size_t allocation_size(size_t size);
     bool should_split(CachingBlock* block, size_t size);
     void try_merge_two_blocks(CachingBlock* b1, CachingBlock* b2);
+    // Hand cached blocks of `pool` back to the underlying allocator, keeping
+    // `unused_memory` and the per-device reserved counters in step. Every
+    // release of cached memory goes through here, so the reserved high-water
+    // below cannot drift from what the pools actually hold.
+    size_t release_cached(CachingBlockPool& pool, long long free_size = -1);
 
     inline SFRLAllocator(float free_ratio = 1, float min_free_size=0) : free_ratio(free_ratio), min_free_size(min_free_size) {
         small_blocks.ids = &id_space;
@@ -139,6 +150,15 @@ struct SFRLAllocator : Allocator {
     }
     ~SFRLAllocator();
     // apply the reclaim policy above to this allocator; caller holds the lock.
+    // Every block a device recording in progress allocated or freed. Its
+    // frees go back to the pools as usual, so the recording reuses its own
+    // memory the way a run outside one does -- split, merged -- and at its end
+    // `fence_capture` takes whatever of those ranges is free out of the pools
+    // for the graph to hold: a recorded kernel keeps its addresses.
+    vector<pair<char*, char*>> capture_touched;
+    void note_capture_touch(CachingBlock* block);
+    CachingBlock* carve_free(CachingBlock* block, char* begin, char* end);
+    void fence_capture(vector<Allocation>& held);
     void try_free_this_allocator();
     void setup(Allocator* underlying);
     uint64 flags() const override { return underlying->flags(); }
@@ -147,10 +167,30 @@ struct SFRLAllocator : Allocator {
     void* alloc(size_t size, size_t& allocation) override;
     void free(void* mem_ptr, size_t size, const size_t& allocation) override;
     void gc() override;
-    virtual bool share_with(size_t size, size_t allocation) override;
+    virtual bool share_with(size_t size, size_t allocation, size_t offset) override;
     bool can_share() const override { return true; }
 };
 
 DECLARE_FLAG(int, use_sfrl_allocator);
+// Hand every range the recording ending now touched, free in a pool, to `held`.
+void sfrl_fence_capture(vector<Allocation>& held);
+
+// Live bytes and their high-water mark per accelerator device, summed over
+// every SFRL pool on that device and updated on each alloc/free. A device
+// runs several pools, and the sum of their separate peaks is not the peak of
+// the sum, so the counters are per device rather than per allocator.
+// torch.cuda.max_memory_allocated used to be sampled from Python only when it
+// was called, and read 0.1-1.3 GB for training steps that filled 22 GB.
+int64 sfrl_device_live_bytes(int device);
+int64 sfrl_device_peak_bytes(int device);
+// Restart the high-water mark at the current live bytes.
+void sfrl_reset_device_peak(int device);
+// Every byte handed out so far; it never decreases. Device -1 is the host.
+int64 sfrl_device_allocated_bytes(int device);
+// Bytes the pools of one device hold from the underlying allocator (live plus
+// cached), and their high-water mark -- torch's `max_memory_reserved`. The
+// peak restarts with `sfrl_reset_device_peak`, like the allocated one.
+int64 sfrl_device_reserved_bytes(int device);
+int64 sfrl_device_reserved_peak_bytes(int device);
 
 }//jittor

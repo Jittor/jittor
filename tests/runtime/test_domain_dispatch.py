@@ -16,16 +16,27 @@ from jittor._runtime.dispatch import dispatch_context, select_kernel
 def test_gamma_legacy_accelerators_keep_typed_kernel_registration(monkeypatch):
     gamma = importlib.import_module("jittor.math_util.gamma")
     dispatch = importlib.import_module("jittor._runtime.dispatch")
+    # The accelerators keep the device kernels for the widths those kernels
+    # were written for; every other width falls through to the primitive-op
+    # composite. `lgamma`/`digamma` became type-generic in 37256905 -- their
+    # kernels are templated on the element type and `::lgamma` has a double
+    # overload, so a float64 Var calls the device's own double-precision
+    # routine instead of the ~1e-7 Lanczos series -- while `polygamma`'s CUDA
+    # kernel is still hard-coded to `float`, which is what leaves one
+    # composite in the float64 row. A half Var has no device kernel on any
+    # width's registration, so all three composite.
+    rows = {
+        "float32": (gamma._gamma_cuda, gamma._digamma_cuda, gamma._polygamma_cuda),
+        "float64": (gamma._gamma_cuda, gamma._digamma_cuda, gamma._polygamma_composite),
+        "float16": (gamma._lgamma_composite, gamma._digamma_composite,
+                    gamma._polygamma_composite),
+    }
     for backend in ("cuda", "rocm_legacy", "corex_legacy"):
-        for dtype in ("float32", "float64"):
+        for dtype, expected in rows.items():
             context = dispatch.DispatchContext(backend, 0, (dtype,))
             monkeypatch.setattr(dispatch, "dispatch_context", lambda *args, **kwargs: context)
-            expected = (gamma._gamma_cuda, gamma._digamma_cuda, gamma._polygamma_cuda)
-            if dtype != "float32":
-                expected = (gamma._lgamma_composite, gamma._digamma_composite,
-                            gamma._polygamma_composite)
             for operation, kernel in zip(("lgamma", "digamma", "polygamma"), expected):
-                assert dispatch.select_kernel("math." + operation) is kernel
+                assert dispatch.select_kernel("math." + operation) is kernel, (backend, dtype, operation)
 
 
 def test_legacy_accelerators_share_misc_raw_kernels_and_fft_mode_guard(monkeypatch):
@@ -102,14 +113,17 @@ def test_cpu_tensor_can_feed_the_cuda_runtime_target():
 
 
 @pytest.mark.skipif(not _test_capability.check_accelerator('cuda', backend=jt).enabled or not jt.compiler.is_cuda, reason="requires CUDA")
-def test_cuda_gamma_float_pointer_kernels_require_float32():
+def test_cuda_gamma_kernels_follow_the_element_type():
     gamma = importlib.import_module("jittor.math_util.gamma")
     with jt.flag_scope(use_cuda=1):
         single = jt.array([0.5, 1.5, 3.0], dtype="float32")
         double = single.float64()
         assert dispatch_context(single).backend == "cuda"
         assert select_kernel("math.lgamma", single) is gamma._gamma_cuda
-        assert select_kernel("math.digamma", double) is gamma._digamma_composite
+        # lgamma/digamma follow the Var's width (37256905); polygamma's CUDA
+        # kernel is still a `float*` one, so a double Var keeps the composite.
+        assert select_kernel("math.lgamma", double) is gamma._gamma_cuda
+        assert select_kernel("math.digamma", double) is gamma._digamma_cuda
         assert select_kernel("math.polygamma", double) is gamma._polygamma_composite
         np.testing.assert_allclose(
             gamma.lgamma.apply(single).numpy(), [math.lgamma(v) for v in (0.5, 1.5, 3.0)],

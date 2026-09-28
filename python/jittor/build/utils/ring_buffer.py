@@ -163,7 +163,7 @@ class RingBuffer:
     def recv_str(self):
         nbytes = self.recv_int()
         data = self.recv_raw(nbytes, nbytes, 'c')
-        return str(data.tostring(), 'ascii')
+        return str(data.tobytes(), 'ascii')
 
     def send_ndarray(self, data):
         # str: int64[1]  char[8]  int64[1]  int64[slen] char[nbytes]
@@ -218,7 +218,7 @@ class RingBuffer:
     def recv_pickle(self):
         nbytes = self.recv_int()
         data = self.recv_raw(nbytes, nbytes, 'c')
-        return pickle.loads(data.tostring())
+        return pickle.loads(data.tobytes())
 
     def __repr__(self):
         return f"{self.allocator}@0x{hex(ctypes.addressof(self.buffer))}"

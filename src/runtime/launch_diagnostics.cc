@@ -80,6 +80,14 @@ uint64 LaunchHistory::intern_origin(const char* file, int line) {
     return id;
 }
 
+bool LaunchHistory::origin(uint64 id, LaunchOrigin& out) {
+    if (!id) return false;
+    std::lock_guard<std::mutex> guard(impl->mutex);
+    if (id >= impl->origins.size()) return false;
+    out = impl->origins[id];
+    return true;
+}
+
 void LaunchHistory::record(LaunchRecord record) {
     auto& lease = Impl::lease;
     if (lease.owner.get() != impl.get()) {

@@ -14,7 +14,7 @@ struct ForeignAllocator : Allocator {
     const char* name() const override;
     void* alloc(size_t size, size_t& allocation) override;
     void free(void* mem_ptr, size_t size, const size_t& allocation) override;
-    bool share_with(size_t size, size_t allocation) override;
+    bool share_with(size_t size, size_t allocation, size_t offset) override;
     bool can_share() const override { return true; }
 };
 

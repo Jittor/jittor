@@ -269,6 +269,45 @@ def test_zero_grad_set_to_none_false_leaves_zero_tensors(grad_enabled):
     assert str(m.weight.grad.dtype) == str(m.weight.dtype)
 
 
+def test_zero_grad_set_to_none_false_keeps_the_grad_object(grad_enabled):
+    """``set_to_none=False`` must zero ``.grad``, not rebuild it.
+
+    torch zeroes the tensor that is already there and its ``AccumulateGrad``
+    adds the next backward into that same tensor, so one ``p.grad`` object
+    serves a whole training loop. Handing back a fresh tensor each step is
+    numerically identical, which is why nothing caught it -- but a caller that
+    holds ``[p.grad for p in model.parameters()]`` across steps (gradient
+    clipping, the four-axis memory pass) then keeps every step's full gradient
+    set alive. On ``large_transformers_bert`` that was ~198 Vars and ~415 MiB
+    per step, one set per parameter.
+    """
+    m = nn.Linear(3, 2)
+    x = torch.randn(4, 3)
+
+    m(x).sum().backward()
+    first = m.weight.grad
+    assert first is not None
+    reference = first.numpy().copy()
+
+    m.zero_grad(set_to_none=False)
+    assert m.weight.grad is first, (
+        "zero_grad(set_to_none=False) must zero .grad in place, not rebuild it")
+    np.testing.assert_array_equal(
+        m.weight.grad.numpy(), np.zeros((2, 3), dtype="float32"))
+
+    m(x).sum().backward()
+    assert m.weight.grad is first, (
+        "backward must accumulate into the existing .grad, as torch's "
+        "AccumulateGrad does")
+    np.testing.assert_allclose(m.weight.grad.numpy(), reference, rtol=1e-6)
+
+    # Accumulation without zero_grad still adds: the in-place path must not
+    # turn ``grad += new`` into ``grad = new``.
+    m(x).sum().backward()
+    assert m.weight.grad is first
+    np.testing.assert_allclose(m.weight.grad.numpy(), 2.0 * reference, rtol=1e-6)
+
+
 def test_zero_grad_set_to_none_true_drops_grads(grad_enabled):
     """The default (and explicit True) still clears to None, as torch does."""
     m = nn.Linear(3, 2)
@@ -384,8 +423,8 @@ def test_to_dtype_casts_float_params_only():
     net = _Net()
     net.register_buffer("ids", torch.tensor([1, 2, 3]))
     net.to(torch.float64)
-    assert str(net.lin.weight.dtype) == "float64"
-    assert str(net.ids.dtype) in ("int32", "int64"), \
+    assert str(net.lin.weight.dtype) == "torch.float64"
+    assert str(net.ids.dtype) in ("torch.int32", "torch.int64"), \
         "integer buffers must survive to(float64)"
 
 
@@ -407,9 +446,9 @@ def test_to_is_a_noop_without_device_or_dtype():
 def test_float_double_half_roundtrip():
     net = _Net()
     net.double()
-    assert str(net.lin.weight.dtype) == "float64"
+    assert str(net.lin.weight.dtype) == "torch.float64"
     net.float()
-    assert str(net.lin.weight.dtype) == "float32"
+    assert str(net.lin.weight.dtype) == "torch.float32"
 
 
 def test_get_parameter_rejects_a_buffer():
@@ -532,8 +571,8 @@ class TestModuleMethodsAcrossDevices:
         net = _Net()
         net.register_buffer("ids", torch.tensor([1, 2, 3]))
         net.to(torch.float64)
-        assert str(net.lin.weight.dtype) == "float64"
-        assert str(net.ids.dtype) in ("int32", "int64")
+        assert str(net.lin.weight.dtype) == "torch.float64"
+        assert str(net.ids.dtype) in ("torch.int32", "torch.int64")
 
     def test_round_trip_migration_preserves_values(self, device):
         """to(device) then to('cpu') is value-preserving, bit for bit."""
