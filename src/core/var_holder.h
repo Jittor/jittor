@@ -756,6 +756,14 @@ struct VarHolder {
     /**
      * Whether an assignment to this holder writes through to some base.
      */
+    /**
+     * This tensor permuted by ``axes`` as a view of the same storage: no
+     * copy, and no Python ``transpose`` wrapper on the way. What the
+     * channels-last helpers move between NCHW and NHWC with.
+     */
+    // @pyjt(_storage_permute)
+    VarHolder* storage_permute(NanoVector axes);
+
     // @pyjt(_is_view)
     inline bool is_view() { return view && view->base; }
 

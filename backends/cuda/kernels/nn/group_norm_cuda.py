@@ -21,6 +21,7 @@ import jittor as jt
 from jittor._core.dtypes import dtype_name as _dtype_name
 from jittor._runtime.backend_libraries import library_resource
 from jittor._runtime.dispatch import optional_kernel
+from jittor.nn.functional._layout import channels_last_source, channels_last_view, records_no_grad
 
 from .batch_norm_training_cuda import (
     _PAIR, _THREADS, _WELFORD, _elementwise, _launch, _per_channel, _segments,
@@ -265,6 +266,108 @@ def _group_norm_cuda_cls(shape, num_groups, eps, vector=1):
     return GroupNormCUDA
 
 
+@lru_cache(maxsize=128)
+def _group_norm_nhwc_source(shape, num_groups, eps):
+    """Forward-only group norm over dense NHWC memory.
+
+    What a channels-last activation -- an NCHW view of NHWC storage, which a
+    half-precision convolution hands out when nothing records a gradient --
+    is normalized with, in place: a group is ``C / G`` consecutive channels at
+    every spatial position rather than one contiguous run, and the output is
+    written in the same order so the layout carries on to the next
+    convolution.
+    """
+    batch, height, width, channels = shape
+    spatial = height * width
+    channels_per_group = channels // num_groups
+    group_size = channels_per_group * spatial
+    rows = batch * num_groups
+    total = rows * group_size
+    row_segments, per_row_segment = _segments(rows, group_size)
+    row_parts = row_segments * rows
+    header = _header()
+    source = f"""
+    __global__ static void group_norm_nhwc_statistics(const in0_type* x, float* partial) {{
+        typedef cub::BlockReduce<JtBnWelford, {_THREADS}> BlockReduce;
+        __shared__ typename BlockReduce::TempStorage storage;
+        int row = blockIdx.x;
+        int sample = row / {num_groups}, group = row % {num_groups};
+        long long begin = (long long)blockIdx.y * {per_row_segment};
+        long long end = begin + {per_row_segment};
+        if (end > {group_size}) end = {group_size};
+        const long long base = (long long)sample * {spatial} * {channels}
+            + group * {channels_per_group};
+        JtBnWelford local{{0.0f, 0.0f, 0.0f}};
+        for (long long j = begin + threadIdx.x; j < end; j += {_THREADS}) {{
+            long long position = j / {channels_per_group};
+            int inner = (int)(j - position * {channels_per_group});
+            float value = static_cast<float>(x[base + position * {channels} + inner]);
+            local.n += 1.0f;
+            float delta = value - local.mean;
+            local.mean += delta * __frcp_rn(local.n);
+            local.m2 += delta * (value - local.mean);
+        }}
+        JtBnWelford sum = BlockReduce(storage).Reduce(local, JtBnWelfordSum());
+        if (threadIdx.x == 0) {{
+            int slot = blockIdx.y * {rows} + row;
+            partial[slot] = sum.n;
+            partial[{row_parts} + slot] = sum.mean;
+            partial[{2 * row_parts} + slot] = sum.m2;
+        }}
+    }}
+    __global__ static void group_norm_nhwc_finish(
+            const float* partial, float* mean, float* rstd) {{
+        int row = blockIdx.x * blockDim.x + threadIdx.x;
+        if (row >= {rows}) return;
+        JtBnWelford sum{{0.0f, 0.0f, 0.0f}};
+        for (int s = 0; s < {row_segments}; s++) {{
+            int slot = s * {rows} + row;
+            JtBnWelford part{{partial[slot], partial[{row_parts} + slot],
+                              partial[{2 * row_parts} + slot]}};
+            sum = JtBnWelfordSum()(sum, part);
+        }}
+        mean[row] = sum.mean;
+        rstd[row] = rsqrtf(sum.m2 / sum.n + {eps:.9g}f);
+    }}
+    __global__ static void group_norm_nhwc_apply(
+            const in0_type* x, const in1_type* weight, const in2_type* bias,
+            const float* mean, const float* rstd, out0_type* y) {{
+        long long stride = (long long)gridDim.x * blockDim.x;
+        for (long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+                i < {total}LL; i += stride) {{
+            int channel = (int)(i % {channels});
+            long long row = (i / ((long long){spatial} * {channels})) * {num_groups}
+                + channel / {channels_per_group};
+            float k = rstd[row] * static_cast<float>(weight[channel]);
+            float b = static_cast<float>(bias[channel]) - mean[row] * k;
+            y[i] = out0_type(static_cast<float>(x[i]) * k + b);
+        }}
+    }}
+    group_norm_nhwc_statistics<<<dim3({rows}, {row_segments}), {_THREADS}>>>(in0_p, out3_p);
+    group_norm_nhwc_finish<<<{_per_channel(rows)}>>>(out3_p, out1_p, out2_p);
+    group_norm_nhwc_apply<<<{max(1, min(-(-total // _THREADS), 65535 * 8))}, {_THREADS}>>>(
+        in0_p, in1_p, in2_p, out1_p, out2_p, out0_p);
+    CHECK(0 == cudaGetLastError());
+    """
+    return header, source, rows, 3 * row_parts
+
+
+def _group_norm_nhwc(x, num_groups, weight, bias, eps):
+    """Group norm of a channels-last view that records no gradient, or None."""
+    if not records_no_grad(x, weight, bias):
+        return None
+    source = channels_last_source(x)
+    if source is None:
+        return None
+    shape = tuple(int(size) for size in source.shape)
+    header, cuda_src, rows, parts = _group_norm_nhwc_source(shape, int(num_groups), float(eps))
+    y, _, _, _ = jt.code(
+        [source.shape, (rows,), (rows,), (parts,)],
+        [source.dtype, "float32", "float32", "float32"],
+        [source, weight, bias], cuda_header=header, cuda_src=cuda_src)
+    return channels_last_view(y)
+
+
 def _supports_group_norm(x, num_groups, weight, bias, eps):
     if not (
         isinstance(weight, jt.Var)
@@ -292,6 +395,13 @@ def _supports_group_norm(x, num_groups, weight, bias, eps):
                  dtypes=("float32", "float16", "bfloat16"),
                  supports=_supports_group_norm)
 def _group_norm_cuda(x, num_groups, weight, bias, eps):
+    if not x._storage_is_contiguous():
+        # A channels-last activation stays channels-last; the kernels below
+        # would have it copied dense first, undoing the layout for the next
+        # convolution as well.
+        nhwc = _group_norm_nhwc(x, num_groups, weight, bias, eps)
+        if nhwc is not None:
+            return nhwc
     shape = tuple(int(size) for size in x.shape)
     num_groups = int(num_groups)
     spatial = shape[2] * shape[3]

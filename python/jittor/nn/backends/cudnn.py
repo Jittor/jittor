@@ -8,6 +8,7 @@ from jittor._runtime.dispatch import optional_kernel, register_kernel
 from jittor._runtime.backend_libraries import get_library_ops
 from jittor._runtime.core_api import _output_requires_grad
 from jittor.nn.functional._amp import bias_for_compute_dtype
+from jittor.nn.functional._layout import channels_last_source, channels_last_view
 
 from jittor.backends.cuda.kernels.nn.channel_bias_cuda import _channel_bias_add_cuda
 
@@ -92,6 +93,19 @@ def _inference_filter(x, weight, groups):
     return dense, "ohwi"
 
 
+#: Whether a half-precision convolution that records no gradient hands out its
+#: result in channels-last storage, as an NCHW view of NHWC memory. Tensor-core
+#: kernels compute in NHWC, so with NCHW activations cuDNN converts every input
+#: on the way in and every output on the way out, through a workspace -- 147 MB
+#: for one ResNet-50 layer at batch 64. The elementwise ops in between keep a
+#: view's layout (`propagate_storage_layout`), so the next convolution receives
+#: NHWC memory again and reads it as it is. Anything that needs dense NCHW gets
+#: it by the ordinary contiguous copy, so values never depend on this.
+channels_last_activations = True
+
+_HALF = ("float16", "bfloat16")
+
+
 def _supports_conv2d(x, weight, bias, stride, padding, dilation, groups,
                      *, _depthwise_fast_path=True):
     return x.dtype == weight.dtype and get_library_ops("cudnn") is not None
@@ -107,6 +121,15 @@ def _try_cudnn_conv2d(x, weight, bias, stride, padding, dilation, groups,
     ph, pw = padding  if isinstance(padding, tuple)  else (padding, padding)
     dh, dw = dilation if isinstance(dilation, tuple) else (dilation, dilation)
     filter_, layout = _inference_filter(x, weight, groups)
+    if (channels_last_activations and _jittor_dtype_name(x.dtype) in _HALF
+            and (jt.flags.no_grad or not _output_requires_grad(x, weight, bias))):
+        source = channels_last_source(x)
+        y = get_library_ops("cudnn").cudnn_conv(
+            x if source is None else source, filter_, sh, sw, ph, pw, dh, dw, groups,
+            "abcd" if source is None else "acdb", layout, "acdb")
+        if bias is not None:
+            y = y + bias_for_compute_dtype(y, bias)
+        return channels_last_view(y)
     y = get_library_ops("cudnn").cudnn_conv(x, filter_, sh, sw, ph, pw, dh, dw, groups,
                                             "abcd", layout)
     if bias is not None:

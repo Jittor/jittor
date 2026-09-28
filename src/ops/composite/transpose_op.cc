@@ -89,6 +89,15 @@ TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
     }
     // A view is asked for: nothing below may turn it into a copy.
     const bool as_view = transpose_storage_view != 0;
+    // The copying kernels below read a dense input. Before strided inputs
+    // were accepted this copy was made for every transpose by the op
+    // constructor -- including a view's, which then permuted a fresh dense
+    // copy instead of the storage it was asked to view.
+    if (!as_view && !x->is_contiguous()) {
+        auto dense = contiguous_storage(x);
+        forward(make_transpose(dense, axes));
+        return;
+    }
     if (!as_view && (axes.size() < xdim || (axes.size() == xdim && axes[xdim-1]==xdim-1))) {
         static VarPtr(*fuse_transpose)(Var*, NanoVector) = get_op_info("fuse_transpose").get_constructor<VarPtr, Var*, NanoVector>();
         auto var = fuse_transpose(x, axes);

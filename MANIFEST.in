@@ -644,6 +644,8 @@ include src/ops/composite/transpose_op.cc
 include src/ops/composite/transpose_op.h
 include src/ops/composite/where_op.cc
 include src/ops/composite/where_op.h
+include src/ops/layout_propagation.cc
+include src/ops/layout_propagation.h
 include src/ops/op_register.cc
 include src/ops/op_register.h
 include src/ops/op_utils.cc

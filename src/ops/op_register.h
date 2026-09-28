@@ -647,6 +647,7 @@ OpId reindex();
 OpId reindex_reduce();
 OpId safe_clip();
 OpId setitem();
+OpId transpose();
 }
 
 /** An op constructor resolved on first call instead of at load time.

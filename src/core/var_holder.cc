@@ -8,6 +8,7 @@
 #include <unordered_map>
 #include <sstream>
 #include "core/var_holder.h"
+#include "ops/layout_propagation.h"
 #include "core/var.h"
 #include "core/executor.h"
 #include "runtime/device.h"
@@ -239,6 +240,14 @@ void VarHolder::copy_into(VarHolder* src, bool sync_src) {
         << "_copy_into(sync_src=False) needs a source that already holds its "
            "bytes; this one has never been executed";
     check_inplace_target(var, "_copy_into");
+    // A strided source -- a channels-last activation read as NCHW, a
+    // transposed view -- is made dense first; the copy below moves raw bytes.
+    unique_ptr<VarHolder> dense;
+    if (!src->var->is_contiguous()) {
+        dense.reset(new VarHolder(contiguous_storage(src->var)));
+        dense->sync(false, false);
+        src = dense.get();
+    }
     check_inplace_target(src->var, "_copy_into source");
     USER_CHECK(src->var->dtype() == var->dtype())
         << "_copy_into dtype mismatch:" << src->var->dtype() << "into" << var->dtype();
@@ -466,6 +475,10 @@ VarHolder* VarHolder::set_storage_view_of(VarHolder* base, bool expand) {
     attach_view(base, VarViewStep(expand ? VarViewStep::Expand : VarViewStep::Reshape,
                                   NanoVector(var->shape)));
     return this;
+}
+
+VarHolder* VarHolder::storage_permute(NanoVector axes) {
+    return new VarHolder(storage_view_transpose(var, axes));
 }
 
 VarHolder* VarHolder::transpose_view_base() {

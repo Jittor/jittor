@@ -6,6 +6,33 @@ from jittor._runtime.dispatch import try_dispatch
 from jittor.backends.cuda.kernels.pooling.pool2d import pool2d_cuda_options
 from .average import avg_pool2d
 from . import _state
+from .._layout import channels_last_source, channels_last_view, records_no_grad
+
+
+def _max_pool2d_nhwc(source, op, kernel_size, stride, padding, h, w):
+    """Max/min pooling of dense NHWC storage, answered in NHWC.
+
+    Channels are the fastest axis of both tensors, so a warp reads and
+    writes consecutive channels of one window position.
+    """
+    N, H, W, C = source.shape
+    body = f'''
+        int k1 = i1*{stride[0]}-{padding[0]};
+        int k2 = i2*{stride[1]}-{padding[1]};
+        int k1_ = min(k1 + {kernel_size[0]}, in0_shape1);
+        int k2_ = min(k2 + {kernel_size[1]}, in0_shape2);
+        k1 = max(0, k1);
+        k2 = max(0, k2);
+        @out(i0, i1, i2, i3) = @expand_op(init_{op}, @out_type);
+        for (int p = k1; p < k1_; ++p)
+            for (int q = k2; q < k2_; ++q)
+                @out(i0, i1, i2, i3) = @expand_op({op}, @out_type, @out(i0, i1, i2, i3), @out_type, @in0(i0, p, q, i3), @in0_type);
+    '''
+    options = pool2d_cuda_options(body, "")
+    options.pop("cuda_grad_src", None)  # nothing records a gradient here
+    out = jt.code([N, h, w, C], source.dtype, [source],
+                  cuda_header=options["cuda_header"], cuda_src=options["cuda_src"])
+    return channels_last_view(out)
 
 
 def _pool2d_parameters(kernel_size, stride=None, padding=0, dilation=None, return_indices=None, ceil_mode=False, count_include_pad=True, op='maximum'):
@@ -78,6 +105,11 @@ def _pool2d(x, *, ceil_mode, count_include_pad, kernel_size, op, padding, return
         None, return_indices, ceil_mode, count_include_pad, op)
     if fast is not None:
         return fast
+    if use_code_op and _state.pool_use_code_op and not return_indices \
+            and records_no_grad(x):
+        source = channels_last_source(x)
+        if source is not None:
+            return _max_pool2d_nhwc(source, op, kernel_size, stride, padding, h, w)
     if use_code_op and _state.pool_use_code_op:
         forward_body = f'''
                 int k3 = i3*{stride[1]}-{padding[1]};

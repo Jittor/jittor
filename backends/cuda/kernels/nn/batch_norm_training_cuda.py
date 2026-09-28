@@ -494,6 +494,11 @@ def _supports_batch_norm_eval(x, weight, bias, running_mean, running_var, eps):
                  dtypes=("float32",),
                  supports=_supports_batch_norm_eval)
 def _batch_norm_eval_cuda(x, weight, bias, running_mean, running_var, eps):
+    # The kernel indexes channels as NCHW. A channels-last view is left to the
+    # elementwise form, which keeps its layout; copying it dense here would
+    # undo it for the next convolution too.
+    if not x._storage_is_contiguous():
+        return None
     shape = tuple(int(size) for size in x.shape)
     spatial = shape[2] * shape[3]
     cls = _batch_norm_eval_cuda_cls(shape[0], shape[1], spatial, float(eps),

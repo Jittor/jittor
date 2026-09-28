@@ -8,6 +8,7 @@
 #include "type/cpu_math.h"
 #include "core/var.h"
 #include "ops/unary_op.h"
+#include "ops/layout_propagation.h"
 #include "ops/op_register.h"
 
 namespace jittor {
@@ -896,6 +897,15 @@ UnaryOp::UnaryOp(Var* x, NanoString op) : x(x) {
         ns = ns_cast;
     } else 
         dtype = unary_dtype_infer(ns, x->ns);
+    {
+        NanoVector axes;
+        vector<VarPtr> sources;
+        if (storage_layout_operands({x}, axes, sources)) {
+            auto result = make_unary(sources[0], ns == ns_cast ? dtype : ns);
+            forward(storage_view_transpose(result, axes));
+            return;
+        }
+    }
     y = create_output(nullptr, dtype);
     y->set_flag(VarFlags::_is_scalar, x->flag(VarFlags::_is_scalar));
     bool bin = ns.get(NanoString::_no_need_back_in);

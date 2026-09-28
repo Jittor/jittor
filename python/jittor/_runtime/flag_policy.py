@@ -15,7 +15,7 @@ RUNTIME_FLAGS = frozenset((
     "node_order", "amp_reg", "auto_mixed_precision_level", "auto_convert_64_to_32",
     "reuse_array", "missing_grad_error", "try_use_32bit_index", "check_graph",
     "lazy_execution", "auto_flush_ops", "auto_flush_bytes", "fuse_op_limit", "keep_graph",
-    "transpose_storage_view",
+    "transpose_storage_view", "propagate_storage_layout",
     "auto_graph_replay", "auto_graph_replay_bytes", "auto_graph_replay_retain_bytes",
     "gopt_disable", "use_threading",
     "use_parallel_op_compiler", "float32_matmul_precision", "use_tensorcore",
