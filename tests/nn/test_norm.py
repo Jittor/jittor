@@ -437,6 +437,47 @@ class TestGroupNormActivation(unittest.TestCase):
                 self.assertLess(kernels(True), kernels(False))
 
 
+class TestActivationAfterInPlaceResidual(unittest.TestCase):
+    """``out = norm(x); out += r; act(out)`` -- the torchvision bottleneck.
+
+    The in-place add rebinds the norm's output object to the sum, so the norm's
+    offer to apply the activation in its own pass no longer describes it. Taking
+    the offer anyway applied the activation to the normalization and dropped
+    the residual.
+    """
+
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled,
+                         "the fused normalizations are CUDA kernels")
+    def test_the_residual_is_kept(self):
+        rng = np.random.RandomState(13)
+        x_np = rng.randn(4, 8, 6, 6).astype("float32")
+        r_np = 3 * rng.randn(4, 8, 6, 6).astype("float32")
+
+        def batch_norm(x):
+            bn = nn.BatchNorm2d(8)
+            bn.train()
+            return bn(x)
+
+        cases = (
+            ("batch_norm+relu", batch_norm, nn.relu),
+            ("group_norm+silu", lambda x: F.group_norm(x, 2, jt.ones(8), jt.zeros(8), 1e-5),
+             F.silu),
+        )
+        for name, norm, act in cases:
+            def run(use_cuda, in_place):
+                with jt.flag_scope(use_cuda=use_cuda):
+                    out = norm(jt.array(x_np))
+                    if in_place:
+                        out += jt.array(r_np)
+                    else:
+                        out = out + jt.array(r_np)
+                    return act(out)
+            with self.subTest(name):
+                expected = run(0, False).numpy()
+                np.testing.assert_allclose(run(1, True).numpy(), expected,
+                                           rtol=1e-4, atol=1e-4)
+
+
 class TestBatchNormActivation(unittest.TestCase):
     """`relu(batch_norm(x))` in training runs the activation in the norm's pass.
 

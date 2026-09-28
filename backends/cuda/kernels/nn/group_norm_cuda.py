@@ -22,6 +22,7 @@ from jittor._core.dtypes import dtype_name as _dtype_name
 from jittor._runtime.backend_libraries import library_resource
 from jittor._runtime.dispatch import optional_kernel
 from jittor.nn.functional._layout import channels_last_source, channels_last_view, records_no_grad
+from jittor.nn.functional.activation import offer_activation
 
 from .batch_norm_training_cuda import (
     _PAIR, _THREADS, _WELFORD, _elementwise, _launch, _per_channel, _segments,
@@ -400,7 +401,7 @@ def _group_norm_nhwc(x, num_groups, weight, bias, eps):
         return channels_last_view(y)
     y = build("")
     # As in `_group_norm_cuda`: `silu(y)` takes the activation into the pass.
-    y.__dict__["_fuse_activation"] = lambda act: build(act) if act in _ACTIVATIONS else None
+    offer_activation(y, lambda act: build(act) if act in _ACTIVATIONS else None)
     return y
 
 
@@ -454,7 +455,7 @@ def _group_norm_cuda(x, num_groups, weight, bias, eps):
             return None
         fused = _group_norm_cuda_cls(shape, num_groups, float(eps), vector, act)
         return fused.apply(x, weight, bias)
-    y.__dict__["_fuse_activation"] = fuse_activation
+    offer_activation(y, fuse_activation)
     return y
 
 

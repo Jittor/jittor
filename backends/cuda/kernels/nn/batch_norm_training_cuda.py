@@ -21,6 +21,7 @@ from jittor._core.dtypes import dtype_name as _dtype_name
 from jittor._runtime.core_api import _output_requires_grad
 from jittor._runtime.backend_libraries import library_resource
 from jittor._runtime.dispatch import optional_kernel
+from jittor.nn.functional.activation import offer_activation
 
 #: Blocks a reduction aims for: a few per SM on current parts. More segments
 #: add partial results to combine; fewer leave SMs idle on narrow layers.
@@ -394,7 +395,7 @@ def _batch_norm_cuda_statistics(x, weight, bias, eps):
             return None
         fused = _batch_norm_cuda_cls(*key, act)()._new_call_context()
         return fused._run_call(x, weight, bias, *call.all_statistics)
-    y.__dict__["_fuse_activation"] = fuse_activation
+    offer_activation(y, fuse_activation)
     return y, mean, var
 
 
