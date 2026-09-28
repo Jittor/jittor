@@ -44,6 +44,9 @@ batch 128 的稳定吞吐实测约 **6.5k--8.7k samples/s**（卡上已有负载
 单卡 batch 32 同模型约 `5275.4 samples/s`；该数字只用于同机参考，不能与 global batch 128
 直接解释为线性加速。
 
+仓库结构与打包门禁最终为 **1385 passed, 8 skipped**（收集 1393、实际执行 1391），
+`tools/check_repo_layout.sh` 和 `tools/build/generate_manifest.py --check` 均通过。
+
 ## 尚未宣称完成的事项
 
 `Work(async_op=True)` 当前仍是同步完成句柄，NCCL/HCCL communicator 没有可调用 teardown，
