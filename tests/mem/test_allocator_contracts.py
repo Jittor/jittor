@@ -11,6 +11,7 @@ combination below is needed and how to add a new one.
 """
 
 from _helpers import capability as _test_capability
+from _helpers.child_process import run_child_script
 import gc
 import unittest
 from pathlib import Path
@@ -188,6 +189,42 @@ class TestHostCopyDestination(unittest.TestCase):
         g = jt.grad((x.cpu() * x.cpu()).sum(), x)
         np.testing.assert_allclose(
             g.numpy(), 2 * np.arange(6, dtype="float32"), rtol=1e-6)
+
+
+_SEGMENT_PROBE = """
+import jittor as jt
+jt.flags.use_cuda = 1
+for megabytes in (6, 12, 12.5, 30):
+    jt.sync_all(True)
+    jt.gc()
+    with jt.profile(memory=True, device=False) as p:
+        x = jt.zeros((int(megabytes * 2**20) // 4,), "float32")
+        x.sync()
+    del x
+    print("SEGMENT", megabytes, p.memory.pool_peak_reserved // 2**20)
+"""
+
+
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
+class TestDeviceSegmentSizes(unittest.TestCase):
+    """What the device pool reserves for one request, from an empty pool.
+
+    Up to half a segment (`sfrl_large_block_size_device`, 20 MB) requests share
+    one; above that each gets a segment of its own, rounded to 2 MB, as in
+    PyTorch. A 12 MB activation in a shared segment left 8 MB only something
+    smaller could use, and BERT-base training reserved 0.7 GB more for it.
+    Measured in a child: this process' pool holds whatever earlier tests left.
+    """
+
+    def test_a_request_past_half_a_segment_gets_its_own(self):
+        result = run_child_script(_SEGMENT_PROBE, text=True, name="segments")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        reserved = {}
+        for line in result.stdout.splitlines():
+            if line.startswith("SEGMENT "):
+                _, megabytes, size = line.split()
+                reserved[float(megabytes)] = int(size)
+        self.assertEqual(reserved, {6.0: 20, 12.0: 12, 12.5: 14, 30.0: 30})
 
 
 if __name__ == "__main__":
