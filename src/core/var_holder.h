@@ -764,6 +764,21 @@ struct VarHolder {
     // @pyjt(_storage_permute)
     VarHolder* storage_permute(NanoVector axes);
 
+    /**
+     * Whether this tensor costs nothing to read where it is: already in
+     * memory, or a view of storage that is. For `concat`, which folds such
+     * inputs into the kernel that consumes its result.
+     */
+    // @pyjt(_producer_is_view)
+    bool producer_is_view();
+
+    /**
+     * The elementwise unary op that is still to compute this tensor from one
+     * of the same shape -- its name, or the dtype for a cast -- or "".
+     */
+    // @pyjt(_producer_unary)
+    string producer_unary();
+
     // @pyjt(_is_view)
     inline bool is_view() { return view && view->base; }
 

@@ -1,4 +1,5 @@
 """Tensor concatenation operations."""
+import numpy as np
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 from collections.abc import Sequence
@@ -104,6 +105,72 @@ def _concat_direct(arr, dim, dtype):
     return output
 
 
+#: Inputs `_concat_fused` takes on: one nested select per input boundary.
+_MAX_FUSED_INPUTS = 4
+
+
+def _concat_fused(arr, dim, dtype):
+    """The concatenation as an elementwise select, or None.
+
+    Used while a graph is captured for replay (see `concat`).
+
+    For inputs that cost nothing to read -- tensors in memory, views of them,
+    and elementwise unary ops of either (`-x2` in RoPE's
+    `cat((-x2, x1), -1)`): each becomes a reindex of the output's index space
+    and the pieces are chosen by position, all of it fusable, so the result
+    is computed inside the kernel that reads it instead of written out by one
+    kernel per input first. A unary op is applied after its input's reindex;
+    the select never picks what a reindex reads out of range, so the op's value
+    there is never used. Anything heavier stays with `_concat_bounded`, where
+    each input is computed straight into its slice.
+    """
+    jt = _jt()
+    if not 2 <= len(arr) <= _MAX_FUSED_INPUTS:
+        return None
+    sources = []
+    for value in arr:
+        if not isinstance(value, jt.Var) or value.shape[dim] == 0:
+            return None
+        ops = []
+        base = value
+        while True:
+            name = base._producer_unary()
+            if not name:
+                break
+            ops.append(name)
+            base = base._input(0)
+        if not base._producer_is_view():
+            return None
+        sources.append((base, ops[::-1], int(value.shape[dim])))
+    out_shape = list(arr[0].shape)
+    out_shape[dim] = sum(size for _, _, size in sources)
+    rank = len(out_shape)
+    pieces, starts = [], []
+    offset = 0
+    for base, ops, size in sources:
+        # The bounds are read from a small array rather than spelled into
+        # the index expressions: those are part of the kernel's key, and a
+        # concatenation whose sizes move every call -- `generate` appending a
+        # token to `input_ids` -- compiled a new kernel for every token.
+        bounds = jt.array(np.array([offset, offset + size], dtype="int32"))
+        index = ["i%d" % d for d in range(rank)]
+        index[dim] = "i%d-@e0(0)" % dim
+        piece = base.reindex(out_shape, index, overflow_conditions=[
+            "i%d<@e0(0)" % dim, "i%d>=@e0(1)" % dim], extras=[bounds])
+        for name in ops:
+            piece = jt.unary(piece, name)
+        if _jittor_dtype_name(piece.dtype) != _jittor_dtype_name(dtype):
+            piece = piece.cast(dtype)
+        pieces.append(piece)
+        starts.append(offset)
+        offset += size
+    position = jt.index(out_shape, dim)
+    result = pieces[-1]
+    for k in range(len(pieces) - 2, -1, -1):
+        result = jt.ternary(position < starts[k + 1], pieces[k], result)
+    return result
+
+
 def _concat_bounded(arr, dim, dtype):
     level = list(arr)
     while len(level) > _MAX_DIRECT_INPUTS:
@@ -179,6 +246,15 @@ def concat(arr, dim=0):
             result = kernel(inputs, dim)
             if result is not None:
                 return result
+        # Only for a graph being captured to replay: the select costs more
+        # to build than the slice copies it replaces, which an eager call pays
+        # every time -- Qwen3 greedy decoding, host-bound, went 3.80 -> 4.22 s
+        # -- and a replay never pays again.
+        from .._runtime.step_capture import tracing
+        if tracing():
+            fused = _concat_fused(arr, dim, dtype)
+            if fused is not None:
+                return fused
         return _concat_bounded(arr, dim, dtype)
 
 
