@@ -59,6 +59,72 @@ class TestTorchFactoryFidelity(unittest.TestCase):
         np.testing.assert_array_equal(actual_second.numpy(), expected_second)
         np.testing.assert_array_equal(actual_first.numpy(), expected_first)
 
+    def test_cpu_generator_randint_restores_and_accepts_torch_overloads(self):
+        generator = torch.Generator(device="cpu").manual_seed(777)
+        state = generator.get_state()
+        first = torch.randint(11, (19,), generator=generator)
+        second = torch.randint(-5, 8, (7,), dtype=torch.int32,
+                               generator=generator, device="cpu")
+        generator.set_state(state)
+        np.testing.assert_array_equal(
+            torch.randint(high=11, size=(19,), generator=generator).numpy(),
+            first.numpy())
+        np.testing.assert_array_equal(
+            torch.randint(-5, 8, size=(7,), dtype=torch.int32,
+                          generator=generator, device="cpu").numpy(),
+            second.numpy())
+        mixed_state = generator.get_state()
+        mixed = torch.randint(0, high=10, size=(3,), generator=generator)
+        generator.set_state(mixed_state)
+        np.testing.assert_array_equal(
+            torch.randint(low=0, high=10, size=(3,),
+                          generator=generator).numpy(),
+            mixed.numpy())
+        unchanged = generator.get_state()
+        with self.assertRaises(TypeError):
+            torch.randint(0.5, 8, (2,), generator=generator)
+        np.testing.assert_array_equal(generator.get_state().numpy(),
+                                      unchanged.numpy())
+        for options in ({"pin_memory": True}, {"layout": object()}):
+            with self.assertRaises(RuntimeError):
+                torch.randint(0, 8, (2,), generator=generator, **options)
+            np.testing.assert_array_equal(generator.get_state().numpy(),
+                                          unchanged.numpy())
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA is unavailable")
+    def test_cuda_generator_randint_is_device_native_and_restorable(self):
+        generator = torch.Generator(device="cuda:0").manual_seed(777)
+        with self.assertRaisesRegex(RuntimeError, "device must match"):
+            torch.randint(0, 10, (4,), generator=generator)
+        state = generator.get_state()
+        first = torch.randint(0, 10, (65,), device="cuda:0",
+                              generator=generator)
+        first.sync()
+        self.assertEqual(first.location(), "device")
+        self.assertEqual(first.device.index, 0)
+        generator.set_state(state)
+        replay = torch.randint(0, 10, (65,), device="cuda:0",
+                               generator=generator)
+        np.testing.assert_array_equal(replay.cpu().numpy(), first.cpu().numpy())
+        with self.assertRaisesRegex(RuntimeError, "device must match"):
+            torch.randint(0, 10, (4,), device="cuda:0",
+                          generator=torch.Generator(device="cpu"))
+        cpu_generator = torch.Generator(device="cpu").manual_seed(19)
+        native_cpu_generator = jt.Generator("cpu").manual_seed(19)
+        with torch.device("cuda:0"):
+            compat_cpu = torch.randint(0, 10, (4,), device="cpu",
+                                       generator=cpu_generator)
+            native_cpu = jt.randint(0, 10, (4,),
+                                    generator=native_cpu_generator)
+        compat_cpu.sync()
+        native_cpu.sync()
+        self.assertEqual(compat_cpu.location(), "cpu")
+        self.assertEqual(native_cpu.location(), "cpu")
+        if torch.cuda.device_count() > 1:
+            with self.assertRaisesRegex(RuntimeError, "device must match"):
+                torch.randint(0, 10, (4,), device="cuda:1",
+                              generator=generator)
+
     def test_unimplemented_generator_distribution_fails_closed(self):
         with self.assertRaisesRegex(NotImplementedError, "Generator"):
             torch.normal(0.0, 1.0, size=(2,), generator=torch.Generator())

@@ -1,18 +1,9 @@
 """Saving and restoring the CUDA RNG state, for real.
 
-`get_rng_state` returned the constant `[0]` and `set_rng_state` did nothing, so
-`accelerator.save_state()` wrote a byte that meant nothing, `load_state()`
-restored nothing, and the resumed run drew a different sequence than the one it
-was continuing -- silently, which is the shape every bug in this file's
-neighbourhood takes.
-
-The state is a seed and a position. cuRAND will set an offset but not report
-one, so jittor counts: measured against CURAND_RNG_PSEUDO_DEFAULT, a uniform
-draw of n advances the generator by n and a normal draw of n advances it by
-n/2, whatever the precision; a mixed history advances by the sum; and after a
-restore every one of the four kinds continues exactly. The C5 issue doc's
-"问题一" says a single offset cannot describe a mixed history -- on this cuRAND
-it can; the measurement is described in the commit that added this.
+The native CUDA backend owns a versioned Philox seed/counter state. Torch
+compatibility only encodes that state as the CPU ``uint8`` value expected by
+``torch.cuda.get_rng_state``; generated values and state bytes are intentionally
+Jittor-specific.
 """
 from functools import wraps
 
@@ -23,7 +14,7 @@ import torch
 
 
 def _cuda_rng(func):
-    """Run on a CUDA build with cuRAND offset accounting, `use_cuda` scoped.
+    """Run on a CUDA build with native RNG state support, `use_cuda` scoped.
 
     The flag is set through `jt.flag_scope` rather than by assigning
     `jt.flags.use_cuda`: it is process-global, and a test that leaves it on makes
@@ -35,12 +26,8 @@ def _cuda_rng(func):
     def inner(*args, **kwargs):
         if not jt.has_cuda:
             pytest.skip("no CUDA device")
-        backend = getattr(jt.compile_extern, "curand", None)
-        if backend is None or not hasattr(backend, "curand_restore_state"):
-            # The counting lives in the native cuRAND wrapper. Without it there
-            # is no position to save, and everything below asserts that the
-            # position round-trips.
-            pytest.skip("this build has no native cuRAND offset accounting")
+        if not hasattr(jt, "get_cuda_rng_state") or not hasattr(jt, "set_cuda_rng_state"):
+            pytest.skip("this build has no native CUDA RNG state API")
         with jt.flag_scope(use_cuda=1):
             return func(*args, **kwargs)
     return inner

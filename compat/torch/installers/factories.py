@@ -11,11 +11,13 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import functools
 import inspect
+import operator
 from ..context import get_install_context
 from ..api_delegates import bind_delegates
 
 import jittor as jt
 import numpy as np
+from jittor._core.var import randint as _native_randint
 
 from ..types import _dtype_to_str
 from ..nested import _torch_register_leaf
@@ -496,7 +498,93 @@ def _draw_from_generator(name, generator, args, kwargs):
 
 
 def _random_adapter(original, *args, generator=None, _name=None, **kwargs):
-    drawn = _draw_from_generator(_name, generator, args, kwargs) if _name else None
+    name = _name
+    if generator is not None and name == "randint":
+        if generator.device.type not in ("cpu", "cuda"):
+            raise RuntimeError("explicit Generator requires a CPU or CUDA device")
+        args = list(args)
+        if len(args) == 3:
+            low, high, size = args
+        elif len(args) == 2 and "size" not in kwargs:
+            low, high, size = 0, args[0], args[1]
+        elif len(args) == 2:
+            low, high = args
+            size = kwargs.pop("size")
+        elif len(args) == 1 and "high" in kwargs:
+            low, high = args[0], kwargs.pop("high")
+            size = kwargs.pop("size", None)
+        elif len(args) == 1:
+            low, high = 0, args[0]
+            size = kwargs.pop("size", None)
+        elif not args:
+            high = kwargs.pop("high", None)
+            low = kwargs.pop("low", 0)
+            size = kwargs.pop("size", None)
+        else:
+            raise TypeError("invalid torch.randint arguments")
+        if high is None or size is None:
+            raise TypeError("torch.randint requires high and size")
+        if isinstance(size, int):
+            size = (size,)
+        else:
+            try:
+                size = tuple(operator.index(dim) for dim in size)
+            except TypeError:
+                raise TypeError("torch.randint size dimensions must be integers") from None
+        # Match the dtype of the shim's plain randint call when Torch omits
+        # dtype; the generator selects a stream and does not change that
+        # frontend default.
+        dtype = _dtype_to_str(kwargs.pop("dtype", None) or jt.int32)
+        requested_device = kwargs.pop("device", None)
+        if requested_device is None:
+            requested_type, requested_index = "cpu", None
+        elif isinstance(requested_device, str):
+            parts = requested_device.split(":", 1)
+            requested_type = parts[0]
+            requested_index = int(parts[1]) if len(parts) == 2 else None
+        else:
+            requested_type = requested_device.type
+            requested_index = requested_device.index
+        if requested_type == "cuda" and requested_index is None:
+            requested_index = max(int(jt.current_device()), 0)
+        if (requested_type != generator.device.type
+                or (requested_type == "cuda"
+                    and requested_index != generator.device.index)):
+            raise RuntimeError("Generator device must match the randint output device")
+        layout = kwargs.pop("layout", None)
+        if layout not in (None, "strided"):
+            raise RuntimeError("torch.randint only supports strided layout")
+        if kwargs.pop("pin_memory", False):
+            raise RuntimeError("torch.randint pin_memory=True is unsupported")
+        if kwargs.pop("requires_grad", False):
+            raise RuntimeError("Only Tensors of floating point and complex dtype can require gradients")
+        if kwargs:
+            raise TypeError("unsupported randint arguments: {}".format(sorted(kwargs)))
+        try:
+            low, high = operator.index(low), operator.index(high)
+        except TypeError:
+            raise TypeError("torch.randint bounds must be integers") from None
+        if high <= low:
+            raise ValueError("from must be less than to")
+        return _native_randint(low, high, size, dtype, generator=generator)
+    if generator is not None and name == "randperm":
+        if generator.device.type != "cpu":
+            raise RuntimeError("torch.randperm with an explicit Generator currently supports CPU only")
+        n = int(args[0] if args else kwargs.pop("n"))
+        dtype = kwargs.pop("dtype", None) or jt.int64
+        requested_device = kwargs.pop("device", None)
+        requested_type = (getattr(requested_device, "type", str(requested_device).split(":", 1)[0])
+                          if requested_device is not None else "cpu")
+        if requested_type != "cpu":
+            raise RuntimeError("Expected a CPU generator for a CPU randperm result")
+        kwargs.pop("layout", None)
+        kwargs.pop("pin_memory", None)
+        if kwargs:
+            raise TypeError("unsupported randperm arguments: {}".format(sorted(kwargs)))
+        offset = generator._reserve(max(0, n - 1))
+        return jt.ops.generator_randperm(n, generator._seed_argument(), offset,
+                                         _dtype_to_str(dtype))
+    drawn = _draw_from_generator(name, generator, args, kwargs) if generator is not None else None
     if drawn is not None:
         return drawn
     _seed_from(generator)

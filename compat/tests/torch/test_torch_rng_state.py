@@ -1,4 +1,4 @@
-"""CPU RNG checkpoints and the strictly representable CUDA checkpoint subset."""
+"""CPU and Jittor-owned CUDA RNG checkpoint contracts."""
 
 import os
 import json
@@ -284,28 +284,30 @@ class TestCUDARNGState(RNGStateContract, unittest.TestCase):
             torch.cuda.set_device(previous)
 
     @unittest.skipUnless(hasattr(torch, "_torch_compat_install_context"),
-                         "Jittor's opaque Host cuRAND checkpoint limitation")
-    def test_unrepresentable_history_fails_and_prior_safe_state_restores(self):
+                         "Jittor's native CUDA RNG state format")
+    def test_mixed_history_restores_and_legacy_state_is_atomic(self):
         for factory, dtype in ((torch.randn, torch.float32), (torch.rand, torch.float64),
                                (torch.randn, torch.float64)):
             torch.cuda.manual_seed(1729)
             self.checkpoint_draws((4097, 65537))
             state = torch.cuda.get_rng_state()
-            expected = draws("cuda", (4097, 65537, 4097, 65537))
-            torch.cuda.set_rng_state(state)
             generated = factory(4097, dtype=dtype, device="cuda")
             assert_random_device(generated, "cuda")
-            with self.assertRaisesRegex(RuntimeError, "complete CUDA RNG state is unsupported"):
-                torch.cuda.get_rng_state()
+            generated.sum().item()
+            mixed_state = torch.cuda.get_rng_state()
+            expected = draws("cuda", (4097, 65537, 4097, 65537))
+            torch.cuda.set_rng_state(mixed_state)
+            self.assert_draws_equal(expected, draws("cuda", (4097, 65537, 4097, 65537)))
             self.assertEqual(values(generated).shape, (4097,))
             torch.cuda.set_rng_state(state)
-            self.assert_draws_equal(expected, draws("cuda", (4097, 65537, 4097, 65537)))
-            torch.cuda.set_rng_state(state)
-            legacy = values(state).tobytes().replace(b"XORWOW_U32_V1", b"XORWOW_V1")
+            original = torch.cuda.get_rng_state()
+            legacy = values(state).tobytes().replace(
+                b"JITTOR_CUDA_PHILOX4X32_10_V1", b"JITTOR_CURAND_XORWOW_U32_V1"
+            )
             invalid = torch.tensor(np.frombuffer(legacy, dtype=np.uint8).copy(), dtype=torch.uint8)
             with self.assertRaises(RuntimeError):
                 torch.cuda.set_rng_state(invalid)
-            np.testing.assert_array_equal(values(torch.cuda.get_rng_state()), values(state))
+            np.testing.assert_array_equal(values(torch.cuda.get_rng_state()), values(original))
 
 
 def resume_worker(target_device, mode, checkpoint, output_file):

@@ -114,6 +114,8 @@ from .function import (
     GradHooker,
 )
 
+from .generator import Generator
+
 from .diagnostics import (
     ExitHooks,
     clean,
@@ -153,6 +155,7 @@ def __getattr__(name):
 
 __all__ = (
     "ExitHooks",
+    "Generator",
     "Function",
     "submit_pending",
     "GradHooker",

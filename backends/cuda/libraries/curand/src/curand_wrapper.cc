@@ -7,118 +7,149 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#include "stream_compat.h"
 #include "curand_wrapper.h"
+#include "core/var_holder.h"
 #include "runtime/init.h"
 #include "runtime/device.h"
-#include "runtime/cuda_streams.h"
+#include <limits>
+#include <mutex>
+#include <sstream>
 
 namespace jittor {
 
-curandGenerator_t gen;
-// One generator per device; the global is the current device's. A generator
-// draws from the device it was created on, so a single global one would make
-// jt.rand() on device 1 either fail or fill device-0 memory.
-static vector<curandGenerator_t> gens;
 static vector<uint64> curand_stream_binds;
+static vector<uint64> curand_seeds;
+static vector<uint64> curand_offsets;
+static std::mutex curand_state_mutex;
 // The last seed, replayed onto a generator created after set_seed so every
 // device answers the same seed the same way.
-static int curand_last_seed = -1;
-// How far each device's generator has advanced since it was last seeded or
-// restored, in `curandSetGeneratorOffset` units.
-//
-// The offset is what makes a CUDA RNG checkpoint possible: cuRAND can set a
-// seed and an offset but will not tell you the offset it is at, so unless
-// somebody counts, a resumed run restarts the sequence instead of continuing
-// it -- silently. Measured on this box against CURAND_RNG_PSEUDO_DEFAULT:
-//
-//   uniform float32/float64   n elements cost n
-//   normal  float32/float64   n elements cost n/2
-//
-// and a mixed history costs the sum of its parts. Verified by drawing a
-// history, drawing a continuation, then reseeding, setting the summed offset
-// and drawing again: the values match exactly, for a continuation of every
-// one of the four kinds.
-static vector<int64> curand_offsets;
-
-void curand_advance(int device, int64 cost) {
-    if (device < 0) return;
-    if ((int)curand_offsets.size() <= device) curand_offsets.resize(device + 1, 0);
-    curand_offsets[device] += cost;
-}
-
-int64 curand_generator_offset(int device) {
-    return device >= 0 && device < (int)curand_offsets.size()
-        ? curand_offsets[device] : 0;
-}
-
-int curand_generator_seed() { return curand_last_seed; }
-
-static void curand_seed_generator(curandGenerator_t g, int seed) {
-    checkCudaErrors( curandSetPseudoRandomGeneratorSeed(g, seed) );
-    // The seed alone does not rewind the generator: it keeps its position
-    // in the sequence, so re-seeding with the same value after drawing
-    // continues from where it left off and jt.set_seed() does not
-    // reproduce. set_seed() resets the CPU side's offset for the same
-    // reason; this is the CUDA half of it.
-    checkCudaErrors( curandSetGeneratorOffset(g, 0) );
-}
-
-curandGenerator_t curand_bind_stream() {
-    int device = current_device();
-    checkCudaErrors(curandSetStream(gen, cuda_compute_stream(device)));
-    if ((int)curand_stream_binds.size() <= device)
-        curand_stream_binds.resize(device + 1);
-    curand_stream_binds[device]++;
-    return gen;
-}
+static uint64 curand_last_seed = 0;
+static bool curand_has_seed = false;
 
 uint64 curand_stream_bind_count(int device) {
+    std::lock_guard<std::mutex> lock(curand_state_mutex);
     return device >= 0 && device < (int)curand_stream_binds.size()
         ? curand_stream_binds[device] : 0;
 }
 
 static void curand_switch_device(int device) {
-    if ((int)gens.size() <= device) gens.resize(device+1, nullptr);
-    if (!gens[device]) {
-        checkCudaErrors( curandCreateGenerator(&gens[device], CURAND_RNG_PSEUDO_DEFAULT) );
-        // Every library handle must agree with jittor's own launches on the
-        // stream; see `compute_stream` in backends/cuda/runtime/driver.cc.
-        // `cudaStreamPerThread` does not synchronise with the legacy stream,
-        // so a handle left on the default would race with no error.
-        checkCudaErrors(curandSetStream(gens[device], cudaStreamPerThread));
-        if (curand_last_seed >= 0) curand_seed_generator(gens[device], curand_last_seed);
+    std::lock_guard<std::mutex> lock(curand_state_mutex);
+    if ((int)curand_seeds.size() <= device) {
+        size_t old_size = curand_seeds.size();
+        curand_seeds.resize(device+1);
+        curand_offsets.resize(device+1);
+        curand_stream_binds.resize(device+1);
+        for (size_t index = old_size; index < curand_seeds.size(); ++index)
+            curand_seeds[index] = curand_has_seed ? curand_last_seed : 0;
     }
-    gen = gens[device];
 }
 
-// Put a device's generator back where a checkpoint left it.
-//
-// Seeding alone is not a restore: it rewinds to the start of the sequence, so
-// the resumed run draws what the *original* run drew first rather than what it
-// was about to draw. Seed, then set the offset the checkpoint recorded.
-void curand_restore_state(int device, int seed, int64 offset) {
-    CHECK(device >= 0) << "curand restore needs a device";
-    int previous = current_device();
-    if (device != previous) set_current_device(device);
-    curand_switch_device(device);
-    checkCudaErrors( curandSetPseudoRandomGeneratorSeed(gens[device], seed) );
-    checkCudaErrors( curandSetGeneratorOffset(gens[device], (unsigned long long)offset) );
-    if ((int)curand_offsets.size() <= device) curand_offsets.resize(device + 1, 0);
-    curand_offsets[device] = offset;
-    curand_last_seed = seed;
-    if (device != previous) set_current_device(previous);
+void curand_reserve_philox_words(
+        uint64 words, uint64 alignment, uint64& seed, uint64& offset) {
+    int device = current_device();
+    std::lock_guard<std::mutex> lock(curand_state_mutex);
+    USER_CHECK(device >= 0 && device < (int)curand_offsets.size())
+        << "CUDA RNG device is not initialized";
+    USER_CHECK(alignment && !(alignment & (alignment - 1)))
+        << "CUDA RNG alignment must be a nonzero power of two";
+    uint64 padding = (-curand_offsets[device]) & (alignment - 1);
+    USER_CHECK(curand_offsets[device] <= std::numeric_limits<uint64>::max() - padding)
+        << "CUDA RNG Philox counter exceeds uint64 range";
+    uint64 aligned_offset = curand_offsets[device] + padding;
+    USER_CHECK(aligned_offset <= std::numeric_limits<uint64>::max() - words)
+        << "CUDA RNG Philox counter exceeds uint64 range";
+    seed = curand_seeds[device];
+    offset = aligned_offset;
+    curand_offsets[device] = aligned_offset + words;
+    curand_stream_binds[device]++;
+}
+
+struct CurandSnapshot {
+    uint64 seed;
+    uint64 offset;
+};
+
+static uint64 parse_uint64(const string& token) {
+    USER_CHECK(!token.empty()) << "invalid cuRAND RNG state integer";
+    uint64 value = 0;
+    for (char c : token) {
+        USER_CHECK(c >= '0' && c <= '9') << "invalid cuRAND RNG state integer";
+        uint64 digit = c - '0';
+        USER_CHECK(value <= (std::numeric_limits<uint64>::max() - digit) / 10)
+            << "cuRAND RNG state integer exceeds uint64 range";
+        value = value * 10 + digit;
+    }
+    return value;
+}
+
+static CurandSnapshot parse_curand_state(const string& state) {
+    USER_CHECK(!state.empty() && state.size() <= 256) << "invalid CUDA RNG state size";
+    std::istringstream input(state);
+    string version, seed, offset;
+    USER_CHECK(bool(input >> version >> seed >> offset)
+        && version == "JITTOR_CUDA_PHILOX4X32_10_V1")
+        << "invalid or incompatible CUDA RNG state";
+    input >> std::ws;
+    USER_CHECK(input.eof()) << "trailing data in cuRAND RNG state";
+    return {parse_uint64(seed), parse_uint64(offset)};
+}
+
+struct CurandDeviceScope {
+    int previous;
+    explicit CurandDeviceScope(int device) : previous(current_device()) {
+        USER_CHECK(device >= 0 && device < get_device_count()) << "invalid cuRAND RNG device";
+        set_current_device(device);
+    }
+    ~CurandDeviceScope() { set_current_device(previous); }
+};
+
+void curand_validate_rng_state(const string& state) {
+    parse_curand_state(state);
+}
+
+string curand_get_rng_state(int device) {
+    sync_all(true);
+    CurandDeviceScope scope(device);
+    sync_devices(0);
+    std::lock_guard<std::mutex> lock(curand_state_mutex);
+    std::ostringstream output;
+    output << "JITTOR_CUDA_PHILOX4X32_10_V1 "
+           << curand_seeds[device] << ' ' << curand_offsets[device] << '\n';
+    return output.str();
+}
+
+void curand_set_rng_state(int device, const string& state) {
+    auto snapshot = parse_curand_state(state);
+    USER_CHECK(device >= 0 && device < get_device_count()) << "invalid cuRAND RNG device";
+    sync_all(true);
+    CurandDeviceScope scope(device);
+    sync_devices(0);
+    std::lock_guard<std::mutex> lock(curand_state_mutex);
+    curand_seeds[device] = snapshot.seed;
+    curand_offsets[device] = snapshot.offset;
+}
+
+void curand_manual_seed(int device, uint64 seed) {
+    sync_all(true);
+    CurandDeviceScope scope(device);
+    sync_devices(0);
+    std::lock_guard<std::mutex> lock(curand_state_mutex);
+    curand_seeds[device] = seed;
+    curand_offsets[device] = 0;
+}
+
+uint64 curand_initial_seed(int device) {
+    CurandDeviceScope scope(device);
+    std::lock_guard<std::mutex> lock(curand_state_mutex);
+    return curand_seeds[device];
 }
 
 // See cublas_shutdown: report, never raise, and idempotent.
 void curand_shutdown() {
-    if (gens.empty()) return;
-    for (auto g : gens)
-        if (g) peekCudaErrorsAlways( curandDestroyGenerator(g) );
-    gens.clear();
+    std::lock_guard<std::mutex> lock(curand_state_mutex);
     curand_stream_binds.clear();
-    gen = nullptr;
-    LOGv << "curandDestroy finished";
+    curand_seeds.clear();
+    curand_offsets.clear();
 }
 
 struct curand_initer {
@@ -127,16 +158,14 @@ inline curand_initer() {
     if (!get_device_count()) return;
     add_device_switch_hook(curand_switch_device);
     add_set_seed_callback([](int seed) {
+        std::lock_guard<std::mutex> lock(curand_state_mutex);
         curand_last_seed = seed;
-        // Seeding rewinds every generator to offset 0 (see
-        // curand_seed_generator), so the count has to rewind with it.
-        for (auto& offset : curand_offsets) offset = 0;
-        // The callback list is a separate global: nothing orders it against
-        // these generators at exit, so a set_seed after shutdown must not run.
-        for (auto g : gens)
-            if (g) curand_seed_generator(g, seed);
+        curand_has_seed = true;
+        for (size_t device = 0; device < curand_seeds.size(); ++device) {
+            curand_seeds[device] = uint64(seed);
+            curand_offsets[device] = 0;
+        }
     });
-    LOGv << "curandCreate finished";
 }
 
 inline ~curand_initer() {

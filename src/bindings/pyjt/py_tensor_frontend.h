@@ -36,6 +36,12 @@ PyObject* current_tensor_placement_request();
 // @pyjt(_invalidate_frontend_policies)
 void invalidate_frontend_policies();
 
+// Direct native construction scope for Jittor-owned no-input factories.
+// @pyjt(_push_native_tensor_placement)
+PyObject* push_native_tensor_placement(int backend, int device=0);
+// @pyjt(_pop_native_tensor_placement)
+void pop_native_tensor_placement(PyObject* token);
+
 // @pyjt(_set_float32_precision)
 PyObject* set_float32_precision_context(int matmul, int cudnn);
 // @pyjt(_reset_float32_precision)

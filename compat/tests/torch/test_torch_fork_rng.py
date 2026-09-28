@@ -81,21 +81,8 @@ class TestForkRng(unittest.TestCase):
                 with torch.random.fork_rng(devices=devices):
                     jt.random((2,)).sync()
 
-    @unittest.expectedFailure
     def test_forking_away_from_a_fresh_seed(self):
-        """Known gap: the CPU RNG state is the seed, not the position.
-
-        `core.py::_get_rng_state` returns `[initial_seed()]` and
-        `_set_rng_state` just re-seeds, so a restore **rewinds** to the start of
-        the sequence instead of continuing from the fork point. When the fork
-        happens right after `manual_seed`, rewinding and continuing coincide --
-        which is why every other test in this file passes, and why this gap
-        survived: they all capture state immediately after seeding.
-
-        The CUDA side was given real position accounting (cuRAND offsets); the
-        CPU side never was. Expected-failure rather than deleted so the
-        limitation is visible and this flips the moment someone fixes it.
-        """
+        """A CPU state snapshot restores both the seed and stream position."""
         torch.manual_seed(7)
         jt.random((5,)).sync()          # advance away from the seed point
         expected = _draw()

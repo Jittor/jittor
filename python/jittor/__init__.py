@@ -159,6 +159,11 @@ from .tools.benchmarking import BenchmarkResult, benchmark
 # jittor/_runtime/install_order.py declares that order and checks it.
 from ._runtime import install_order as _install_order
 from ._runtime.install_order import record as _record_install
+from ._runtime.cuda_rng import (
+    get_cuda_initial_seed, get_cuda_rng_state, get_cuda_rng_state_all,
+    set_cuda_rng_state, set_cuda_rng_state_all, set_cuda_seed,
+    set_cuda_seed_all,
+)
 
 from . import nn
 from . import fft
@@ -371,6 +376,9 @@ _ROOT_EXPORTS = (
     "amp",
     "world_size", "config", "capability", "introspection", "graph_replay", "capture_step",
     "profile", "profiling",
+    "get_cuda_rng_state", "get_cuda_rng_state_all", "get_cuda_initial_seed",
+    "set_cuda_rng_state", "set_cuda_rng_state_all", "set_cuda_seed",
+    "set_cuda_seed_all",
 )
 
 __all__ = tuple(sorted(set(

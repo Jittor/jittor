@@ -5,6 +5,7 @@ from jittor._core.dtypes import dtype_for_compute as _dtype_for_compute
 from jittor._core.dtypes import is_dtype as _is_dtype
 
 import functools as _functools
+import operator as _operator
 import numbers
 from contextlib import contextmanager as _contextmanager
 from collections.abc import Sequence
@@ -1471,7 +1472,7 @@ def randn_like(x, dtype=None) -> Var:
     with device_scope_like(x):
         return jt.random(x.shape, dtype, "normal")
 
-def randint(low, high=None, shape=(1,), dtype="int32") -> Var:
+def randint(low, high=None, shape=(1,), dtype="int32", generator=None) -> Var:
     ''' samples random integers from a uniform distribution on the interval [low, high).
 
     :param low: lowest intergers to be drawn from the distribution, defaults to 0.
@@ -1499,6 +1500,40 @@ def randint(low, high=None, shape=(1,), dtype="int32") -> Var:
     '''
     import jittor as jt
     if high is None: low, high = 0, low
+    if generator is not None:
+        from .generator import Generator
+        if not isinstance(generator, Generator):
+            raise TypeError("generator must be a jittor.Generator")
+        try:
+            low, high = _operator.index(low), _operator.index(high)
+        except TypeError:
+            raise TypeError("randint bounds must be integers") from None
+        if high <= low:
+            raise ValueError("randint requires high > low")
+        raw_shape = (shape,) if isinstance(shape, ori_int) else tuple(shape)
+        try:
+            shape = tuple(_operator.index(dim) for dim in raw_shape)
+        except TypeError:
+            raise TypeError("randint shape dimensions must be integers") from None
+        if any(dim < 0 for dim in shape):
+            raise ValueError("randint shape dimensions must be non-negative")
+        dtype_name = _jittor_dtype_name(dtype)
+        limits = {"int32": (-(1 << 31), 1 << 31),
+                  "int64": (-(1 << 63), (1 << 63) - 1)}
+        if dtype_name not in limits:
+            raise TypeError("generator-aware randint supports int32 and int64")
+        minimum, maximum_exclusive = limits[dtype_name]
+        # The native constructor takes signed int64 bounds; keep the exclusive
+        # high bound representable as well as every possible output value.
+        if low < minimum or high > maximum_exclusive:
+            raise ValueError("randint bounds do not fit dtype %s" % dtype_name)
+        count = 1
+        for dim in shape:
+            count *= dim
+        offset = generator._reserve(count)
+        with generator._placement_scope():
+            return ops.generator_randint(shape, dtype_name, low, high,
+                                         generator._seed_argument(), offset)
     for dim in shape:
         if dim < 0:
             raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")

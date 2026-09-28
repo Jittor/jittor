@@ -1169,11 +1169,15 @@ def _api_cuda_synchronize(device=None, *a, **k):
 
 
 def _api_cuda_manual_seed(s):
-    return jt.set_global_seed(int(s))
+    if device_count() == 0:
+        return
+    jt.set_cuda_seed(current_device(), _cuda_rng_seed(s))
 
 
 def _api_cuda_manual_seed_all(s):
-    return jt.set_global_seed(int(s))
+    if device_count() == 0:
+        return
+    jt.set_cuda_seed_all(_cuda_rng_seed(s))
 
 
 def _api_cuda_is_bf16_supported():
@@ -1212,173 +1216,65 @@ def _api_cuda_memory__set_allocator_settings(*a, **k):
     return None
 
 
-#: The CUDA RNG state, as a seed and a position.
-#:
-#: `get_rng_state` used to return the constant `[0]` and `set_rng_state` used
-#: to do nothing, so `accelerator.save_state()` wrote a byte that meant
-#: nothing, `load_state()` restored nothing, and the resumed run drew a
-#: different sequence than the one it was continuing -- with no error anywhere.
-#:
-#: What makes a real state possible is that cuRAND's offset turns out to
-#: describe the position completely. Measured against
-#: CURAND_RNG_PSEUDO_DEFAULT on this box, by drawing a history, drawing a
-#: continuation, then reseeding, setting the summed offset and drawing again:
-#:
-#:   uniform float32/float64   n elements advance the generator by n
-#:   normal  float32/float64   n elements advance it by n/2
-#:
-#: a mixed history advances by the sum of its parts, and after a restore every
-#: one of the four kinds continues exactly. So a seed plus one integer is the
-#: whole state -- `backends/cuda/libraries/curand/` counts it, this packs it.
-#:
-#: The bytes are jittor's own format, not torch's CUDA state bytes: save them,
-#: hand them back, do not parse them, and do not feed torch's to this.
-_RNG_STATE_MAGIC = b"JTCURAND"
-_RNG_STATE_VERSION = 1
-
-
-def _rng_state_pack(seed, offset):
-    import struct
-    import numpy as _np
-    blob = _RNG_STATE_MAGIC + struct.pack("<Iqq", _RNG_STATE_VERSION,
-                                          int(seed), int(offset))
-    return jt.array(_np.frombuffer(blob, dtype=_np.uint8).copy())
-
-
-def _rng_state_unpack(state):
-    import struct
-    import numpy as _np
-    raw = state
-    if hasattr(raw, "numpy"):
-        raw = raw.numpy()
-    raw = _np.asarray(raw, dtype=_np.uint8).reshape(-1).tobytes()
-    if not raw.startswith(_RNG_STATE_MAGIC):
-        raise ValueError(
-            "not a jittor CUDA RNG state. torch's own state bytes are a "
-            "different format and a different algorithm; they cannot be "
-            "restored into jittor's cuRAND generator.")
-    version, seed, offset = struct.unpack("<Iqq", raw[len(_RNG_STATE_MAGIC):])
-    if version != _RNG_STATE_VERSION:
-        raise ValueError("unsupported jittor CUDA RNG state version %d" % version)
-    return int(seed), int(offset)
-
-
-#: What to say when the native half is not there.
-#:
-#: The seed/offset counting lives in `backends/cuda/libraries/curand/`. When
-#: that is absent -- an older build, a backend compiled without it, or the
-#: native change not present -- there is no position to save, and the honest
-#: answer is to say so rather than to call a function that is not there or,
-#: worse, to go back to answering with a constant.
-_NO_NATIVE_RNG_STATE = (
-    "this jittor build cannot express the CUDA RNG state: its cuRAND wrapper "
-    "does not count how far the generator has advanced, so there is no "
-    "position to save and a restore could only reseed. "
-    "torch.cuda.manual_seed(seed) starts a reproducible sequence; resuming one "
-    "from a checkpoint needs curand_generator_offset/curand_restore_state in "
-    "the native cuRAND backend."
-)
-
-
-def _curand(required=True):
-    backend = getattr(jt.compile_extern, "curand", None)
-    if backend is None or not hasattr(backend, "curand_generator_offset") \
-            or not hasattr(backend, "curand_restore_state"):
-        if required:
-            raise NotImplementedError(_NO_NATIVE_RNG_STATE)
-        return None
-    return backend
-
-
-def cuda_rng_state_is_supported():
-    """Whether this build can save and restore the CUDA RNG position."""
-    return _curand(required=False) is not None
-
-
-def _rng_device_index(device):
-    """Which device's generator, as a real index.
-
-    `jt.flags.device_id` is -1 until something sets it, meaning "whichever is
-    current" rather than device -1, and passing that through reached the
-    native restore as `device >= 0` failing. `jt.current_device()` is the one
-    the cuRAND wrapper itself indexes by.
-    """
-    if device is None:
-        index = -1
-    elif isinstance(device, bool):
-        raise TypeError("device index must not be a bool")
-    elif isinstance(device, int):
-        index = int(device)
-    elif isinstance(device, str):
-        # Before the `.index` probe below, because `str` *has* an `.index`
-        # method: `getattr("cuda:0", "index", None)` hands back a bound method,
-        # which is not None, and `int()` on it raised "int() argument must be
-        # ... not 'builtin_function_or_method'". torch accepts this spelling.
-        index = int(device.split(":")[1]) if ":" in device else -1
-    else:
-        attr = getattr(device, "index", None)
-        # An int, not merely present: the same trap one line up, for any object
-        # that happens to carry a callable `.index`.
-        index = int(attr) if isinstance(attr, int) else -1
-    if index < 0:
-        index = int(jt.current_device())
-    return max(index, 0)
+def _cuda_rng_seed(seed):
+    seed = int(seed)
+    if seed < -(1 << 63) or seed >= 1 << 64:
+        raise RuntimeError("CUDA RNG seed is outside the supported 64-bit range")
+    return seed % (1 << 64)
 
 
 def _api_cuda_get_rng_state(device=None, *a, **k):
-    # Everything queued has to have happened, or the offset describes a
-    # position the device has not reached: the saved state would then be ahead
-    # of the data the checkpoint was taken with.
-    jt.sync_all(True)
-    backend = _curand()
-    index = _rng_device_index(device)
-    return _rng_state_pack(backend.curand_generator_seed(),
-                           backend.curand_generator_offset(index))
+    from ..core import _encode_rng_state
+    return _encode_rng_state(jt.get_cuda_rng_state(_cuda_device_index(device)))
 
 
 def _api_cuda_get_rng_state_all(*a, **k):
-    jt.sync_all(True)
-    backend = _curand()
-    seed = backend.curand_generator_seed()
-    return [_rng_state_pack(seed, backend.curand_generator_offset(i))
-            for i in range(int(jt.get_device_count()))]
+    from ..core import _encode_rng_state
+    return [_encode_rng_state(state) for state in jt.get_cuda_rng_state_all()]
 
 
 def _api_cuda_set_rng_state(state, device=None, *a, **k):
-    seed, offset = _rng_state_unpack(state)
-    # Parsed before anything is touched, so a malformed state leaves the
-    # generator where it was rather than half-restored.
-    jt.sync_all(True)
-    _curand().curand_restore_state(_rng_device_index(device), seed, offset)
+    from ..core import _decode_rng_state
+    text = _decode_rng_state(state)
+    try:
+        jt.set_cuda_rng_state(_cuda_device_index(device), text)
+    except RuntimeError as exc:
+        if "state" in str(exc).lower():
+            raise ValueError("invalid jittor CUDA RNG state format") from exc
+        raise
 
 
 def _api_cuda_set_rng_state_all(states, *a, **k):
-    parsed = [_rng_state_unpack(state) for state in states]
-    jt.sync_all(True)
-    backend = _curand()
-    for index, (seed, offset) in enumerate(parsed):
-        backend.curand_restore_state(index, seed, offset)
+    from ..core import _decode_rng_state
+    states = list(states)
+    if len(states) != device_count():
+        raise ValueError("CUDA RNG states must match the visible device count")
+    texts = [_decode_rng_state(state) for state in states]
+    try:
+        jt.set_cuda_rng_state_all(texts)
+    except RuntimeError as exc:
+        if "state" in str(exc).lower():
+            raise ValueError("invalid jittor CUDA RNG state list format") from exc
+        raise
+
+
+def cuda_rng_state_is_supported():
+    return bool(hasattr(jt, "get_cuda_rng_state")
+                and hasattr(jt, "set_cuda_rng_state"))
 
 
 def _api_cuda_initial_seed(*a, **k):
-    # The seed jittor is actually running on, not 0. `set_seed` records it and
-    # the cuRAND wrapper replays it onto every device generator, so this is the
-    # one part of the state that *is* expressible.
-    return int(jt.get_seed())
+    return jt.get_cuda_initial_seed(current_device())
 
 
 def _api_cuda_seed(*a, **k):
-    # torch reseeds from a fresh nondeterministic value and returns None; doing
-    # nothing instead left the caller on the old sequence while looking
-    # reseeded.
     import random as _random
-    jt.set_seed(_random.SystemRandom().randrange(1 << 31))
+    jt.set_cuda_seed(current_device(), _random.SystemRandom().randrange(1 << 64))
 
 
 def _api_cuda_seed_all(*a, **k):
-    # One generator per device, all replayed from the same seed by the cuRAND
-    # wrapper's set_seed callback, so seeding "all" is seeding.
-    _api_cuda_seed()
+    import random as _random
+    jt.set_cuda_seed_all(_random.SystemRandom().randrange(1 << 64))
 
 
 def _api_mp_reductions_reduce_tensor(tensor):
@@ -1652,6 +1548,10 @@ def _api_accelerator_current_accelerator(*a, **k):
 
 
 _CUDA_FIDELITY_DETAILS = {
+    _api_cuda_get_rng_state: "Opaque encoding of Jittor's native per-device Philox seed/counter state; state bytes and generated values intentionally differ from Torch.",
+    _api_cuda_get_rng_state_all: "One Jittor-owned Philox state per visible CUDA device; mixed histories are restorable.",
+    _api_cuda_set_rng_state: "Restores one Jittor CUDA RNG stream through the native state owner.",
+    _api_cuda_set_rng_state_all: "Validates and restores all Jittor CUDA RNG states through the native owner.",
     _Stream: "Logical streams share native execution; no independent CUDA stream handle.",
     _StreamContext: "Thread-local logical stream selection; native execution remains serialized.",
     _current_stream: "Thread-local logical stream identity, one logical stream per device; native execution remains serialized.",

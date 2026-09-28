@@ -147,9 +147,18 @@ class _RandomSampler(_Sampler):
             _random.shuffle(indices)
             return iter(indices[:self.num_samples])
         if self.replacement:
-            draws = _torch_ns().randint(0, n, (int(self.num_samples),),
-                                        generator=self.generator)
-            return iter(int(i) for i in draws.tolist())
+            if self.generator.device.type != "cpu":
+                raise RuntimeError("RandomSampler replacement requires a CPU Generator")
+            blocks = []
+            for _ in range(int(self.num_samples) // 32):
+                blocks.extend(_torch_ns().randint(
+                    0, n, (32,), device="cpu", generator=self.generator).tolist())
+            remainder = int(self.num_samples) % 32
+            if remainder:
+                blocks.extend(_torch_ns().randint(
+                    0, n, (remainder,), device="cpu",
+                    generator=self.generator).tolist())
+            return iter(int(i) for i in blocks)
         order = _torch_ns().randperm(n, generator=self.generator).tolist()
         return iter(int(i) for i in order[:self.num_samples])
     def __len__(self):

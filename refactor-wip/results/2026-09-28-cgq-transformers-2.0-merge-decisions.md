@@ -32,7 +32,7 @@
 
 ## 冲突取舍
 
-### 1. cuRAND 状态模型
+### 1. cuRAND 状态模型（合并后复核已调整）
 
 冲突文件：
 
@@ -40,11 +40,15 @@
 - `backends/cuda/libraries/curand/include/curand_wrapper.h`
 - `backends/cuda/libraries/curand/src/curand_wrapper.cc`
 
-目标分支增加了内部 CUDA RNG 状态格式；2.0 基线增加了与独立 Torch compat 配套的
-`curand_generator_seed/offset/restore_state` API 和 mixed-history 回归。为避免
-`compat/torch/installers/cuda/api.py` 调用一套、底层 wrapper 实现另一套，本次整体采用
-2.0 的 seed + offset 实现。目标分支的私有 `JITTOR_CURAND_XORWOW_U32_V1` 字符串格式
-不进入合并结果；后续如要继续支持该格式，应另开兼容迁移并补跨格式测试。
+初始合并曾整体采用 2.0 的 `curand_generator_seed/offset/restore_state` 实现，目标分支的
+`JITTOR_CURAND_XORWOW_U32_V1` 格式因此没有进入合并树。合并后对 Accelerate 的随机状态
+和显式生成器路径复核发现，这个取舍只有 compat 层的 seed+offset 计数，没有统一的 Jittor
+native state owner，也没有 native generator-aware CPU/CUDA `randint`，无法满足“Jittor 自己
+的状态可以保存恢复”的要求。因此在当前分支中已将随机数部分调整为 Jittor 原生 Philox
+方案：`curand` wrapper 维护版本化的 seed/counter 字符串，发布
+`jt.get_cuda_rng_state`、`jt.set_cuda_rng_state` 等 API；`jt.Generator` 和
+`generator_randint` 在 CPU/CUDA 下直接使用同一套 Jittor-owned stream，Torch compat 只做
+状态字节编码、参数检查和 sampler 调用转发。该方案不承诺与 Torch 的随机值逐位一致。
 
 ### 2. Var 的隐式设备与显式放置
 
@@ -83,8 +87,11 @@
 
 截至当前阶段，以下部分已在合并树中完成并暂存：
 
-- 文档规则、公共导出、验证结果索引和生成的 `MANIFEST.in`；manifest 已重新运行
-  `python tools/build/generate_manifest.py --check` 验证。
+- 文档规则、公共导出、验证结果索引和 `MANIFEST.in`；随机数新增的三个 native 源文件
+  已登记到 manifest。当前工作区的 `python tools/build/generate_manifest.py --check`
+  仍会看到一条由合并前已存在的未跟踪文档
+  `docs/development/2.0-refactor-onboarding.md` 引起的生成差异；本次没有把该无关文档
+  纳入提交。
 - 算子类型和日志头文件，采用 2.0 的 `expand_op(..., bool is_cuda)` 接口、数值身份和
   并发编译安全实现。
 - `python/jittor/_core/var.py`：组合了 2.0 的显式/隐式 device scope、`keepdim` 和
@@ -127,8 +134,24 @@
   为适配 2.0 新增的两个 Accelerate 测试 fixture，结构门禁登记了重复的
   `_isolated_state` 测试脚手架名称；其余重复实现检查保持原规则。
 
+合并后随机数专项复核（当前工作树）使用独立 `JITTOR_HOME` 和 `cache_name=rng_native_merge`：
+
+- `tests/runtime/test_philox_rng.py` 与 `tests/runtime/test_generator_randint.py` 的 CPU
+  用例 7/7 通过；包含 CPU 状态恢复、惰性反向求值、宽范围 int64 和全局 RNG 隔离。
+- `tests/runtime/test_generator_randint.py` 在真实单卡 CUDA 上 7/7 通过；
+  `tests/backends/cuda/test_cuda_rng_state.py` 5/5 通过，双卡用例因只有一张可见卡跳过。
+- `compat/tests/torch/test_torch_sampler_rng.py`、`test_generator_streams.py` 的专项用例
+  11/11 通过；`compat/tests/torch/test_torch_cuda_rng_state.py` 8/8 通过；显式 CPU/CUDA
+  generator `randint` 的 11 个兼容用例通过。
+- CPU `torch.random.fork_rng` 的原 expected-failure 已转为普通测试并通过，证明 CPU state
+  现在保存了随机位置而不只是 seed。
+- Accelerate CUDA fresh-process resume 仍有一个独立的设备放置失败：输入已经在 CUDA，
+  但 `accelerator.prepare` 后的线性层权重仍在 CPU；该失败发生在矩阵乘法 dispatch，
+  不是 RNG state 保存/恢复路径，本轮没有把它伪装成随机数回归。
+
 ## 当前状态
 
-本地已创建消息为 `合并 2.0-refactor 完整基线` 的双父合并提交，尚未推送；主工作区和
-远端 `cgq_transformers` 仍保持 `a2850846a`。后续若要更新远端，应以当前分支 HEAD 为
-起点执行独立的远端兼容复核和推送流程。
+本地已创建消息为 `合并 2.0-refactor 完整基线` 的双父合并提交
+`085e5d51b`，尚未推送；本次随机数复核和 native 修复作为该合并提交之后的当前工作树
+变更维护。主工作区和远端 `cgq_transformers` 仍保持 `a2850846a`。后续若要更新远端，
+应以随机数修复提交后的 HEAD 为起点执行独立的远端兼容复核和推送流程。

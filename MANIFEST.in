@@ -177,6 +177,7 @@ include backends/cuda/include/jittor_accelerator.h
 include backends/cuda/include/stream_compat.h
 include backends/cuda/kernels/core/candidate_op.cc
 include backends/cuda/kernels/core/cuda_atomic.h
+include backends/cuda/kernels/core/generator_randint_op.cc
 include backends/cuda/kernels/core/getitem_prefix.cc
 include backends/cuda/kernels/core/indexing_codegen.cc
 include backends/cuda/kernels/core/indexing_codegen.h
@@ -617,6 +618,8 @@ include src/ops/composite/fused_adamw_op.cc
 include src/ops/composite/fused_adamw_op.h
 include src/ops/composite/fused_sgd_op.cc
 include src/ops/composite/fused_sgd_op.h
+include src/ops/composite/generator_randint_op.cc
+include src/ops/composite/generator_randint_op.h
 include src/ops/composite/generator_randperm_op.cc
 include src/ops/composite/generator_randperm_op.h
 include src/ops/composite/generator_uniform_op.cc
@@ -790,6 +793,7 @@ include src/utils/log.cc
 include src/utils/log.h
 include src/utils/mwsr_list.cc
 include src/utils/mwsr_list.h
+include src/utils/philox.h
 include src/utils/seh.h
 include src/utils/stack_vector.h
 include src/utils/str_utils.cc
