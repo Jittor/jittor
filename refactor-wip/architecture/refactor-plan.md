@@ -427,6 +427,12 @@
 | 8.20 | **手写 GroupNorm CUDA 多搬一份全尺寸中间量**（3.22 口径对齐后派生）。forward 额外物化一份全尺寸 `xhat` 交给反向，PyTorch 从 `X/mean/rstd` 重算；`backends/cuda/kernels/nn/group_norm_cuda.py`。实测它占 Jittor 归约类与 PyTorch 差距的 **75%**（两种量法算出的占比一致），绝对量 1.5–1.8 ms。**2026-09-07 实测更正，这条派生归因不成立且量级错了一个数量级**：同场次 PyTorch 的 GroupNorm 同口径合计是 1288.1 us，Jittor 改前 1456.2 us，**差距只有 +168.1 us**——原描述的「绝对量 1.5–1.8 ms」是 GroupNorm 的**总耗时**，不是**差距**。不物化 `xhat` 值 **87.7 us**，即那个差距的 **52%**；改后 1368.5 对 1288.1，**仍慢 80.4 us，本条验收未达成**，其余全在 backward（见 8.21） | — | 2026-09-06 由 3.22 的执行者在口径对齐后归因 | UNet 一步的 GroupNorm 合计不慢于 PyTorch 的同口径值（当前 1533–1544 us 对 1276–1316 us）；数值与 float64 参考的相对误差不退化 |
 | 8.21 | **手写 GroupNorm backward 走三遍 `grad_y`、两遍 `x`**（8.20 实测后派生）。`group_norm_backward_x` 的三个循环里，求 `mean_g` 与求 `mean_gx` 读的是同一份 `grad_y`，可以合成一趟同时累两个部分和；torch 的 `ComputeInternalGradientsCUDAKernel`（410.8 us）一趟出两个统计量。8.20 之后 forward 已贴屋顶线（ratio 1.00，445.9 对下界 445.1），GroupNorm 剩下的时间全在 backward：922.6 us 对 667.6 us 的下界，**ratio 1.38**；8.20 让 backward 多了 14.7 us 的 `xhat` 重算，合一趟时可顺带只算一次 | 8.20 | 2026-09-07 由 8.20 的执行者在实测后归因 | UNet 一步 `--match group_norm` 的合计低于 PyTorch 同口径的 1288.1 us 且 calls 仍为 70；对 float64 参考的相对误差不退化 |
 
+| 8.22 | 原生单机多卡 `jtrun` 启动器：单机每卡一个进程、设备映射、rendezvous、失败传播、日志和清理；冻结本机 NCCL P2P 条件 | — | [后端](codebase-audit/06-backends.md)§分布式 | 物理多卡 launcher 冒烟与失败传播通过 |
+| 8.23 | 原生 `jittor.distributed` ProcessGroup 与 NCCL collectives：WORLD/subgroup、rank/world-size、collectives 和 barrier | 8.22 | [后端](codebase-audit/06-backends.md)§分布式 | CPU 定向回归与多卡 NCCL all-reduce 对拍通过 |
+| 8.24 | 原生 `DistributedDataParallel`：参数/缓冲广播、结构签名、梯度 mean-reduce、`no_sync` 和 NCCL bucket | 8.23 | [后端](codebase-audit/06-backends.md)§分布式 | 多卡梯度/副本对拍，常见训练步和 optimizer state 续训通过 |
+| 8.25 | Dataset 分片、epoch/worker seed 与 SyncBN 改用 native rank/world-size；非整除 batch 统一补齐尾样本 | 8.24 | [后端](codebase-audit/06-backends.md)§分布式 | CPU Dataset 回归与多卡分片、BN 冒烟通过 |
+| 8.26 | 原生单机多卡验收：限定单机、NCCL、`NCCL_P2P_DISABLE=1`，不扩展到多机、FSDP 或 Tensor Parallel | 8.22–8.25 | [后端](codebase-audit/06-backends.md)§分布式 | 物理卡 5、7、8、9 的 NCCL smoke、训练 loss、模型与 optimizer state continuation 通过 |
+
 ## 12. 阶段 9 · 构建、缓存与打包
 
 | 编号 | 任务 | 前置 | 出处 | 验收 |

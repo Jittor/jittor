@@ -20,6 +20,9 @@ jit-operator-source
 error-categories
 async-error-diagnostics
 test-system
+static-graph-replay
+npu-validation-templates
+2.0-refactor-onboarding
 known-issues/parallel-compiler-segfault
 ```
 

@@ -310,6 +310,7 @@ include docs/compatibility/torch.md
 include docs/conf.py
 include docs/content-manifest.json
 include docs/contributing.md
+include docs/development/2.0-refactor-onboarding.md
 include docs/development/async-error-diagnostics.md
 include docs/development/error-categories.md
 include docs/development/index.md
@@ -324,6 +325,7 @@ include docs/guides/corex.md
 include docs/guides/cpp-console.md
 include docs/guides/debugging.md
 include docs/guides/distributed-mpi.md
+include docs/guides/distributed-training.md
 include docs/guides/index.md
 include docs/guides/memory-optimization.md
 include docs/guides/performance-comparison.md
@@ -344,6 +346,7 @@ include docs/results/2026-09-14-autocast-conv-mixed-dtype.md
 include docs/results/2026-09-14-exit-heap-corruption.md
 include docs/tutorials/index.md
 include examples/README.md
+include examples/distributed/native_ddp.py
 include examples/gan/README.md
 include examples/gan/simple_cgan.py
 include examples/notebooks/60分钟快速入门Jittor/README.md
