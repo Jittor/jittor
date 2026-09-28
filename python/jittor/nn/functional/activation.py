@@ -231,6 +231,13 @@ def silu(x, inplace=False):     # inplace: accepted for torch/mmcv compat, ignor
     if inplace:
         _arg_policy.ignored("jittor.nn.silu", "inplace", inplace,
                             _INPLACE_CONSEQUENCE)
+    # A normalization that can apply the activation in its own last pass
+    # (group norm, see `group_norm_cuda.py`) says so on its unexecuted output.
+    fuse = getattr(x, "__dict__", {}).get("_fuse_activation")
+    if fuse is not None and not x.is_finished:
+        fused = fuse("silu")
+        if fused is not None:
+            return fused
     fast = try_dispatch("nn.silu", x, inplace=inplace)
     if fast is not None:
         return fast

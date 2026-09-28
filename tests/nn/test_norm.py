@@ -397,6 +397,46 @@ class TestGroupNorm(_NormBase):
                 jt.array(x_np), 4, jt.array(weight_np), jt.array(bias_np), 1e-5))
 
 
+class TestGroupNormActivation(unittest.TestCase):
+    """`silu(group_norm(x))` runs the activation inside the group norm's pass.
+
+    The group norm's unexecuted output offers the activation; forward and
+    backward then run as the normalization's own kernels, which recompute the
+    pre-activation value instead of storing it.
+    """
+
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled,
+                         "CUDA GroupNorm fast path needs CUDA")
+    def test_silu_matches_and_takes_no_kernel_of_its_own(self):
+        rng = np.random.RandomState(7)
+        for shape in ((2, 8, 4, 4), (3, 6, 5, 7)):    # float4 path, scalar path
+            x_np = rng.randn(*shape).astype("float32")
+            w_np = rng.randn(shape[1]).astype("float32")
+            b_np = rng.randn(shape[1]).astype("float32")
+            cot_np = rng.randn(*shape).astype("float32")
+
+            def run(use_cuda, fused=True):
+                with jt.flag_scope(use_cuda=use_cuda):
+                    x, w, b = jt.array(x_np), jt.array(w_np), jt.array(b_np)
+                    y = F.group_norm(x, 2, w, b, 1e-5)
+                    out = F.silu(y if fused else y + 0.0)
+                    grads = jt.grad((out * jt.array(cot_np)).sum(), [x, w, b])
+                    return [out] + grads
+
+            with self.subTest(shape=shape):
+                for got, expected in zip(jt.fetch_sync(run(1)), jt.fetch_sync(run(0))):
+                    np.testing.assert_allclose(got, expected, rtol=2e-3, atol=2e-3)
+
+                def kernels(fused):
+                    jt.sync(run(1, fused))
+                    jt.sync_all(True)
+                    with jt.flag_scope(use_cuda=1), jt.profile() as p:
+                        jt.sync(run(1, fused))
+                        jt.sync_all(True)
+                    return len(p.result.kernel_records)
+                self.assertLess(kernels(True), kernels(False))
+
+
 class TestInstanceNorm(_NormBase):
     def test_backward_small_variance(self):
         N, C, L = 2, 6, 8
