@@ -471,19 +471,97 @@ def _load_state_dict(self, state_dict, strict=True, assign=False):
 
 # torch's Module.parameters() returns an *iterator*; peft does
 # `next(model.parameters())`. jittor returns a list (needed for len()/
-# indexing by optimizers). Return a list subclass that is also an iterator
-# so both `next(...)` and `len(...)`/indexing work.
-class _ParamList(list):
-    """A list that is also its own iterator, for ``next(model.parameters())``."""
+# indexing by optimizers). Return an object that is both.
+class _ParamList:
+    """``parameters()``: produced as it is iterated, indexable once asked to be.
+
+    Transformers reads ``model.dtype`` as the first floating parameter of
+    ``parameters()`` -- once per generated token -- and ``model.device`` as
+    ``next(model.parameters())``. Built as a list, every read walked all of
+    Qwen3-0.6B's 427 modules first: 5.3 ms against torch's 3 us. Iteration now
+    walks only as far as it is taken; ``len``, indexing and the rest walk the
+    remainder once and keep it. A parameter is published as a backward leaf
+    when it is produced, which for a full enumeration is all of them, as
+    before.
+    """
+
+    __slots__ = ("_source", "_items", "_cursor")
+
+    def __init__(self, source):
+        self._source = source
+        self._items = []
+        self._cursor = 0
+
+    def _produce(self):
+        """The next parameter from the walk, or raise StopIteration."""
+        try:
+            value = next(self._source)
+        except StopIteration:
+            self._source = None
+            raise
+        _register_leaf_params((value,))
+        self._items.append(value)
+        return value
+
+    def _all(self):
+        while self._source is not None:
+            try:
+                self._produce()
+            except StopIteration:
+                pass
+        return self._items
 
     def __iter__(self):
-        return list.__iter__(self)
+        index = 0
+        items = self._items
+        while True:
+            if index < len(items):
+                yield items[index]
+            elif self._source is None:
+                return
+            else:
+                try:
+                    yield self._produce()
+                except StopIteration:
+                    return
+            index += 1
 
     def __next__(self):
-        it = getattr(self, "_it", None)
-        if it is None:
-            it = self._it = list.__iter__(self)
-        return next(it)
+        if self._cursor >= len(self._items):
+            if self._source is None:
+                raise StopIteration
+            self._produce()
+        value = self._items[self._cursor]
+        self._cursor += 1
+        return value
+
+    def __len__(self):
+        return len(self._all())
+
+    def __getitem__(self, index):
+        return self._all()[index]
+
+    def __contains__(self, value):
+        return any(value is item for item in self)
+
+    def __add__(self, other):
+        return self._all() + list(other)
+
+    def __radd__(self, other):
+        return list(other) + self._all()
+
+    def __eq__(self, other):
+        if isinstance(other, _ParamList):
+            other = other._all()
+        return self._all() == other
+
+    __hash__ = None
+
+    def __reduce__(self):
+        return list, (list(self._all()),)
+
+    def __repr__(self):
+        return repr(self._all())
 
 
 # Register every trainable parameter as an autograd "leaf" the first time a
@@ -512,10 +590,8 @@ def _register_leaf_params(params):
 
 
 def _parameters(self, recurse=True):
-    """Torch's ``parameters()``: iterable *and* indexable."""
-    pl = _ORIG_MODULE_PARAMETERS(self, recurse=recurse)
-    _register_leaf_params(pl)
-    return _ParamList(pl)
+    """Torch's ``parameters()``: iterable *and* indexable. See `_ParamList`."""
+    return _ParamList(var for _, var in self._iter_named_vars("parameters", recurse))
 
 
 # torch's Module.train(mode=True)/eval() take a mode arg; jittor's train()
