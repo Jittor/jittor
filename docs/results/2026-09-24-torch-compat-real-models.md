@@ -273,6 +273,76 @@ PyTorch 自身编译前后也差 1.4e-1）。设备受限的训练任务上 Jitt
   `numpy()` 也是。diffusers 调度器的 `prev_timestep >= 0` 因此每步等完一次 UNet（22 ms）。
   现在只在 CPU 算子读设备内存或托管内存时才等；设备内存的读回本来就等它的生产流。
 
+### 设备侧 kernel（2026-09-27）
+
+整步重放把主机开销压下去之后，编译行的差距主要在设备时间。用 CUPTI 按 kernel 逐项对照
+PyTorch（`torch.profiler`，同一 workload、同一编译模式），按差距大小修了下面几处，都是
+通用 kernel，不针对某个模型。基于 `97b9aab4` 加本节修改（结果标 dirty），与提交一致。
+
+| 修改 | 原因（对照发现） | 效果 |
+| --- | --- | --- |
+| BatchNorm 训练/推理 kernel 改为（通道 × 分段）归约 + 整张量逐元素，统计量逐元素 Welford | 每通道一个 block，ResNet-50 前几层只有 64 个 block；running stats 另用通用归约再算一遍 | ResNet-50 训练一步 BN 相关 34 → 23 ms；方差精度比原两遍法更高 |
+| fused AdamW：偏差修正每 block 算一次，fp32 走 float4 | 每个线程用 double 算两次 `pow`，GeForce 上 double 为 1/64 速率 | Qwen3-0.6B 一步 46.3 → 21.6 ms（约 720 GB/s） |
+| RMSNorm gamma 梯度改为 32 通道 × 8 行分块、分段求和 | 一 block 一通道沿行走，warp 访存不合并 | 每次 62 µs → 退出前列 |
+| float32 融合注意力支持 bool / 加性 `attn_mask`，按块跳过全隐藏、全可见块不读掩码；小网格用窄查询块；无反向且分数矩阵 < 8 MiB 时交给 matmul | Transformers 在 `is_compiling()` 下传显式因果掩码，原 kernel 见掩码即放弃，编译后的 Qwen3 每层写出 [L, L] 分数 | 显式因果掩码下反向 65 → 39 ms（`is_causal` 为 36 ms），不再写分数矩阵 |
+| GroupNorm 按 BN 的方式重写，并接受 float16 / bfloat16 | 每 (样本, 组) 一个 block，SD 在 batch 2 下仅 64 个 block；半精度根本不走快路径 | SD1.5 采样 20 步 GroupNorm 约 31 → 15 ms |
+| 半精度张量除以 Python 浮点数改在 float32（PyTorch 的 opmath）里算 | 为 float32 的逐位一致而设的 float64 路径也用在了 float16 上 | SD1.5 采样去掉 15 ms 的 double kernel |
+
+全尺寸套件（Jittor 侧，ms；PyTorch 列取同一轮）：
+
+| 任务 | 编译 | 修前 | 修后 | PyTorch |
+| --- | --- | --- | --- | --- |
+| `qwen3_train` | reduce-overhead | 246.0 | 214.7 | 186.8 |
+| `qwen3_train` | none | 242.7 | 210.8 | 271.2 |
+| `sd15_sample` | reduce-overhead | 473.8 | 426.1 | 375.0 |
+| `sd15_sample` | none | 993.9 | 830.9 | 448.3 |
+| `sd15_unet_train` | reduce-overhead | 253.4 | 212.6 | 208.2 |
+| `resnet50_train` | reduce-overhead | 99.0 | 88.8 | 75.4 |
+| `ddpm_unet_train` | reduce-overhead | 64.7 | 58.0 | 52.2 |
+| `sd15_vae_decode` | reduce-overhead | 36.7 | 28.8 | 24.6 |
+
+`resnet50_train` 与 PyTorch 的数值差由 6e-4 变为 3e-3：第一步（纯前向）更接近（7.27325 对
+7.27373，修前 7.27492），差异出在第二步；该任务 loss 逐步上升，TF32 卷积本身有 1e-3 量级的
+误差，两条轨迹在第二步分开。对 float64 参考，新 BN 的前向与反向误差都小于旧 kernel。
+
+后续（2026-09-27，`e8a4c49b`、`1957f9b6`）：
+
+- cuDNN 注意力按 q/k/v 各自的布局读写（BSHD 或 BHSD），`x.view(b, s, h, d).transpose(1, 2)`
+  直接交给 cuDNN；`transpose` 遇到转置视图时合成一次、互逆时直接返回源张量，视图记录随
+  底座 holder 失效时按计算图判断。SD1.5 采样 20 步去掉约 10 ms 转置。
+- float32 融合注意力前向、反向改为寄存器分块（转置存放的共享内存 + 向量读取）。Qwen3 训练
+  一步：前向 16.2 → 9.6 ms、反向 38.8 → 25.6 ms，PyTorch mem-efficient 为 10.3 / 32.3 ms。
+  `qwen3_train` 编译 214.7 → 194.0 ms（PyTorch 186.8），eager 210.3 → 187.9 ms；
+  `vit_b16_train` 编译 176.0 → 161.6 ms。
+
+BN / GroupNorm 与后续逐元素运算的融合试了三种写法，都没有收益，未采用：
+
+| 写法 | 结果 |
+| --- | --- |
+| BN 全部用普通算子（归约 + 逐元素，自动微分） | BN + 残差加 + ReLU 前向加反向慢 20～30% |
+| 统计量用 Welford kernel，归一化用普通算子，统计量的梯度由小 `Function` 给出 | 同上，慢约 30%；反向多出的归约与重算抵消了融合 |
+| GroupNorm 推理：kernel 给出逐 (样本, 通道) 的 scale / shift，归一化用广播算子 | 与 SiLU 融成一个 kernel，但只省 0.5 ms / 20 步；半精度逐元素本身很便宜，`transformer_2d` 的 permute 是非融合的 `transpose` 算子，没有并入 |
+
+`jt.Function` 的输出经过 tape 算子（与输入共享存储），融合器在此断开；视图 reshape 也会截断
+融合链。要得到 inductor 那样的收益，需要融合器能穿过这两种边界，是融合器本身的改造。
+
+卷积滤波器（2026-09-27）：cuDNN 对半精度选 NHWC kernel，给它 OIHW 滤波器时每次调用都转换一遍，
+SD1.5 采样 20 步的 54 ms 转换里 51 ms 是权重。无反向时（输入和权重都不需要梯度）改为给 OHWI
+滤波器：副本按权重版本（参数持有的 Var）做一次，挂在权重上，随参数释放；1×1 滤波器两种布局
+字节相同，不复制；训练照旧。`sd15_sample` 编译 426.1 → 368.7 ms（PyTorch 375.0）。随后改为不留
+副本：权重本身搬进 OHWI 存储，以 OIHW 步长读出（`transpose_storage_view` 视图，数值与形状不变），
+cuDNN 拿同一份字节当 OHWI 用；SD 一步进程显存 3622 → 2666 MB，速度不变。
+`jittor.nn.backends.cudnn.channels_last_filters = False` 可关。ResNet-50 推理、VAE 解码不受影响（它们选中
+的 kernel 本来不转换权重）。
+
+仍然开着的差距与原因：
+
+- 卷积激活的 NCHW → NHWC 转换（权重转换已去掉后，SD 采样剩约 5.5 ms / 20 步）与滤波器副本的
+  显存：参数以 channels_last 存储需要布局传播。
+- `transformer_2d` 进入注意力前的 NCHW → NHWC `permute`（SD 采样约 12 ms / 20 步）：
+  PyTorch 把它与 GroupNorm 的输出融在一起。
+- BN / GroupNorm 与相邻逐元素运算的融合：见上表，需要融合器改造。
+
 ## 边界
 
 - 每个配置只测一轮；修后数字在空闲机器上测得。同一代码的 `sd15_sample` 在不同进程间测到

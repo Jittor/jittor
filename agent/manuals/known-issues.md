@@ -3089,3 +3089,93 @@ about whether to take it.
   JIT cache entry) that `src/tests/test_op_relay.cc` depends on without setting;
   not isolated.
 - Workaround: run the file in its own process.
+
+## KI-TEST-008: `test_cudnn_op.py` finds no `cudnn_conv` JIT key in its captured log
+
+- Severity: Low (two assertions about a log line; the value checks next to
+  them pass)
+- Status: Open. Found 2026-09-28; fails the same way on `542d6e97`, with a
+  fresh `JITTOR_HOME` as with a warm one, so it predates the allocator and
+  layout work it was found during.
+- Owner: cuDNN backend / test infrastructure
+- Symptom: `backends/cuda/test_cudnn_op.py::TestCudnnConvOp::test` and
+  `::test_backward` fail on `assert len(logs)==1 and "oihw" in logs[0][0]`
+  with `logs == []`: under `log_capture_scope(enable_tuner=1,
+  log_vprefix="op.cc=100")` no `Jit op key (not )found: cudnn_conv` line is
+  captured, while the tuned result still matches the CPU reference.
+- Suspected: the tuner no longer rewrites the reindex convolution into
+  `cudnn_conv` on this path, or the log line moved; not isolated.
+- Workaround: none needed for results; the value assertions in the same tests
+  pass.
+
+## KI-TEST-009: two `test_torch_compat_optim.py` cases fail on device placement
+
+- Severity: Medium (a device-placement disagreement in the compat optimizer
+  path; the two cases fail, the other 21 in the file pass)
+- Status: Open. Found 2026-09-28; fails the same way on `542d6e97` and on
+  `14ac0397`, with one GPU visible or all, so it predates the optimizer host
+  work it was found during.
+- Owner: torch compatibility / optimizer
+- Symptom: `TestSGD::test_native_backward_does_not_double_advance_step` dies in
+  `method_api.py` `_binary_native` with `device_copy_op.cc:130: Expected all
+  tensor inputs on the same backend and device`;
+  `TestAdam::test_bound_initializers_inside_no_grad_keep_parameter_trainable`
+  fails `assert_stays_on_device` with `'cpu' != 'device'`.
+- Suspected: a tensor created on the host (an initializer or a split
+  optimizer's state) meeting a device-placed parameter; not isolated.
+- Workaround: none in the tests; real training steps run on one placement and
+  do not reach it.
+
+## KI-TEST-010: three `test_torch_compat_norm.py` LayerNorm fast-path cases fail
+
+- Severity: Low (the CUDA no-grad LayerNorm is not taking the fused path these
+  tests pin; values elsewhere in the file pass)
+- Status: Open. Found 2026-09-28; fails the same way on `542d6e97` and on
+  `76bbcb33`, so it predates the batch-norm work it was found during.
+- Owner: torch compatibility / normalization kernels
+- Symptom: `TestLayerNorm::test_ln_no_grad_cuda_fast_path_float32_and_float16`
+  (`CUDA no-grad LayerNorm missed its fused path`),
+  `test_ln_no_grad_cuda_dynamic_rows_share_source` (`0 != 2`) and
+  `test_ln_no_grad_cuda_bfloat16_private_opt_in` (`'NoneType' object has no
+  attribute 'float32'`).
+- Suspected: the fused LayerNorm kernel's selection changed under the torch
+  frontend without these tests following; not isolated.
+- Workaround: none needed for results.
+
+## KI-EXEC-008: the CUDA convolution test files intermittently abort on a forward liveness underflow
+
+- Severity: Medium (a whole pytest process aborts, taking its summary with it)
+- Status: Open. Found 2026-09-27; reproduced on `a57fb6af` unchanged, so it
+  predates the convolution filter cache it was found while testing.
+- Owner: core node liveness (the same counters as the board's
+  `backward liveness release without a matching owner` entries)
+- Symptom: `pytest nn/test_*conv*.py backends/cuda/test_cudnn_conv_a*.py
+  backends/cuda/test_cudnn_conv_p*.py` on CUDA aborts with `node.h:287: forward
+  liveness release without a matching owner [check failed: value_ > 0]` in
+  about half the runs: at interpreter exit after every test passed, or in the
+  middle of `test_cudnn_conv_backward_source.py`'s conv-transpose reference.
+  Any single file, any pair, and the five files before it together passed every
+  time; only the full selection trips it, so it depends on collection timing.
+- Workaround: run the files in separate processes.
+
+## KI-MS-SWIFT-001: BF16 short decoder SDPA differs from ATen after fused flash
+
+- Severity: Medium (TinyLlama BF16 logits fail the fixed L2 scaled threshold).
+- Status: Open. Reproduced on job 1700 / RTX 4090; first divergent tensor is the
+  first layer attention output, while input RMSNorm and q/k/v projections are exact.
+- Symptom: default fused flash/SDPA gives logits relative L2 about `7.12e-3` after
+  the retained normalized-BF16 change; forcing Transformers eager attention makes
+  attention output and later norm exact.
+- Suspected: fused flash GQA/mask reduction and rounding order, not RMSNorm's first
+  reduction. Short-sequence math workarounds were tested and reverted after either
+  no improvement or a mask/GQA semantic mismatch.
+- Workaround: none retained; do not globally disable fused attention. Continue with
+  a fused-kernel reduction fix and native/shim CUDA regression.
+
+## KI-BUILD-001: preflight ignored configured Python headers
+
+- Severity: Low. Fixed in `python/jittor/build/utils/preflight.py` on 2026-09-28.
+- Symptom: a valid `JT_BUILD_PYTHON_CONFIG_PATH` for the Python 3.9 venv was ignored,
+  blocking Jittor core compilation with a false `/usr/include/python3.9/Python.h` error.
+- Fix: preflight now parses the configured helper's `--includes` before sysconfig;
+  verified on job 1700 with the isolated venv and CUDA core build.
