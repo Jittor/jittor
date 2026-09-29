@@ -723,6 +723,12 @@ string VarHolder::producer_unary() {
     return op->ns.to_cstring();
 }
 
+string VarHolder::producer_name() {
+    if (var->is_finished()) return "";
+    Op* op = var->input();
+    return op ? string(op->name()) : "";
+}
+
 bool VarHolder::is_pending_contiguous() {
     if (var->is_finished()) return false;
     Op* op = var->input();

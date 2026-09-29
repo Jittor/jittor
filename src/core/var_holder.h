@@ -787,6 +787,16 @@ struct VarHolder {
     // @pyjt(_is_pending_contiguous)
     bool is_pending_contiguous();
 
+    /**
+     * The name of the op still to compute this tensor ("reshape",
+     * "broadcast_to", "getitem", ...), or "" once it is computed. For a
+     * consumer that can read what a pending chain of views and copies would
+     * produce from its source, without the chain ever running; `_input(i)`
+     * walks it.
+     */
+    // @pyjt(_producer_name)
+    string producer_name();
+
     // @pyjt(_is_view)
     inline bool is_view() { return view && view->base; }
 
