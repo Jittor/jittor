@@ -37,6 +37,9 @@ def initialize_adam(self, *args, **kwargs):
 
 
 def initialize_adamw(self, *args, **kwargs):
+    # The public Torch signature's fifth positional argument is weight_decay.
+    if len(args) < 5 and "weight_decay" not in kwargs:
+        kwargs["weight_decay"] = 0.01
     return _initialize_algorithm("AdamW", self, args, kwargs)
 
 

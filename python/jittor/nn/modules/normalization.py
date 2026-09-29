@@ -77,9 +77,9 @@ class BatchNorm(Module):
         # Parameters and buffers live here; the arithmetic lives in
         # nn.functional.normalization, which nn.functional.batch_norm also
         # calls. This used to be a second transcription, and its two training
-        # branches did not even agree with each other: with MPI the statistics
+        # branches did not even agree with each other: with distributed sync the statistics
         # came from E[x^2]-E[x]^2 and the output was a scale-shift of raw x
-        # differentiated by composite autodiff, without MPI they came from the
+        # differentiated by composite autodiff, without sync they came from the
         # two-pass formula and went through the stable closed-form backward.
         # Whether the job was distributed decided the numbers and the gradient.
         dims = [0] + list(range(2, x.ndim))
@@ -87,12 +87,13 @@ class BatchNorm(Module):
             return _batch_norm_eval(
                 x, dims, self.running_mean, self.running_var,
                 self.weight, self.bias, self.eps)
-        sync = self.sync and jt.in_mpi
+        from jittor import distributed as dist
+        sync = self.sync and dist.is_initialized()
         norm_x, xmean, xvar = _batch_norm_train(
             x, dims, self.weight, self.bias, self.eps, sync=sync)
         if self.track_running_stats:
             self.num_batches_tracked.update(self.num_batches_tracked + 1)
-        world_size = jt.world_size if sync else 1
+        world_size = dist.get_world_size() if sync else 1
         self.running_mean.update(
             self.running_mean
             + (xmean.reshape((-1,)) - self.running_mean) * self.momentum)

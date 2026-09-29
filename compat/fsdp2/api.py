@@ -35,9 +35,19 @@ class FSDPModule(metaclass=_FSDPModuleMeta):
         return shard._apply_fsdp_attr(self, "reshard_after_forward", value, recurse)
 
     def set_requires_gradient_sync(self, value, recurse=True):
+        shard._apply_fsdp_attr(self, "requires_all_reduce", bool(value), recurse)
         return shard._apply_fsdp_attr(self, "requires_gradient_sync", bool(value), recurse)
 
     def set_requires_all_reduce(self, value, recurse=True):
+        if not value:
+            for module in shard._iter_fsdp_modules(self, recurse):
+                state = getattr(module, "_fsdp_state", None)
+                replicate = getattr(state, "replicate_group", None)
+                if replicate is not None and replicate.size() > 1:
+                    raise NotImplementedError(
+                        "FSDP2 set_requires_all_reduce(False) with a replicate "
+                        "mesh requires partial-gradient accumulation; silently "
+                        "omitting all-reduce would update replica weights differently")
         return shard._apply_fsdp_attr(self, "requires_all_reduce", bool(value), recurse)
 
     def set_all_reduce_hook(self, hook, *, stream=None):
@@ -233,6 +243,48 @@ def fully_shard(module, *, mesh=None, reshard_after_forward=True,
     st.ignored_params = tuple(ignored_params or ())
     st.dp_mesh_dims = dp_mesh_dims
     st.kwargs = dict(kwargs)
+    if common._in_true_distributed() and not getattr(st, "true_fsdp_initialized", False):
+        target_type = st.mesh.device_type
+        cuda_index = int(jt.current_device()) if target_type == "cuda" else None
+        target_device = ("cuda:%d" % cuda_index
+                         if target_type == "cuda" else target_type)
+        ignored_ids = {id(param) for param in st.ignored_params}
+        visited_modules = set()
+        visited_vars = set()
+        pending = [module]
+
+        def move_managed(var):
+            if str(var.device) == target_device:
+                return
+            if target_type == "cuda":
+                moved = var.cuda(cuda_index)
+            elif target_type == "cpu":
+                moved = var.cpu()
+            else:
+                moved = var.to(target_type)
+            optimizer._assign_preserve_trainability(var, moved)
+
+        while pending:
+            current = pending.pop()
+            if id(current) in visited_modules:
+                continue
+            visited_modules.add(id(current))
+            if current is not module and getattr(current, "_is_fsdp_module", False):
+                continue
+            for _, param in current.named_parameters(recurse=False):
+                identity = id(param)
+                if (identity in visited_vars or identity in ignored_ids or
+                        shard.is_fsdp_managed_param(param)):
+                    continue
+                visited_vars.add(identity)
+                move_managed(param)
+            for _, buffer in current.named_buffers(recurse=False):
+                identity = id(buffer)
+                if identity in visited_vars:
+                    continue
+                visited_vars.add(identity)
+                move_managed(buffer)
+            pending.extend(child for _, child in current.named_children())
     object.__setattr__(module, "_is_fsdp_module", True)
     object.__setattr__(module, "_is_fsdp_managed_module", True)
     object.__setattr__(module, "_fsdp_use_orig_params", True)

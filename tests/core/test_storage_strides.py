@@ -99,3 +99,77 @@ def test_positive_step_slice_has_storage_offset_and_strides():
     assert v._storage_address == a._storage_address + 4
     np.testing.assert_array_equal(v.numpy(), [1, 3, 5, 7])
     np.testing.assert_array_equal((v*2).numpy(), [2, 6, 10, 14])
+
+
+def test_strided_integer_indices_are_dense_at_native_indexing_boundary():
+    index_base = np.array([[1, 5, 6, 7, 8], [1, 9, 10, 11, 12]], dtype=np.int64)
+    indices = jt.array(index_base)[:, 4:]
+    assert not indices._storage_is_contiguous()
+
+    weight_data = np.arange(128 * 3, dtype=np.float32).reshape(128, 3)
+    gathered = jt.array(weight_data)[indices]
+    expected = weight_data[index_base[:, 4:]]
+    np.testing.assert_array_equal(gathered.numpy(), expected)
+
+    target = jt.zeros((16,), dtype="float32")
+    target[indices] = jt.array([[2.0], [3.0]], dtype="float32")
+    expected_target = np.zeros((16,), dtype=np.float32)
+    expected_target[index_base[:, 4:]] = [[2.0], [3.0]]
+    np.testing.assert_array_equal(target.numpy(), expected_target)
+
+    source_data = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
+    source = jt.array(source_data)[:, :, ::2]
+    source_index = jt.array([1], dtype="int64")
+    assert not source._storage_is_contiguous()
+    np.testing.assert_array_equal(
+        source[source_index].numpy(),
+        source_data[:, :, ::2][[1]],
+    )
+
+
+def test_single_integer_array_index_on_inner_axis():
+    source_data = np.arange(2 * 3 * 4 * 5, dtype=np.float32).reshape(2, 3, 4, 5)
+    expected = source_data[..., [-2], :]
+
+    for index in ([-2], jt.array([-2], dtype="int64")):
+        source = jt.array(source_data)
+        first = source[..., index, :].numpy()
+        second = source[..., index, :].numpy()
+        np.testing.assert_array_equal(first, expected)
+        np.testing.assert_array_equal(second, expected)
+
+
+def test_split_along_inner_dimension_preserves_outer_rows():
+    source_data = np.arange(2 * 8 * 48, dtype=np.float32).reshape(2, 8, 48)
+    chunks = jt.array(source_data).split(16, dim=2)
+
+    assert len(chunks) == 3
+    for index, chunk in enumerate(chunks):
+        np.testing.assert_array_equal(
+            chunk.numpy(), source_data[:, :, index * 16:(index + 1) * 16]
+        )
+
+
+def test_split_transpose_views_are_dense_at_batched_matmul_boundary():
+    rng = np.random.default_rng(20260908)
+    x_data = rng.standard_normal((2, 8, 16), dtype=np.float32)
+    weight_data = rng.standard_normal((16, 48), dtype=np.float32)
+
+    projected = np.matmul(x_data, weight_data)
+    query_data, key_data, _ = np.split(projected, 3, axis=2)
+    query_data = query_data.reshape(2, 8, 2, 8).transpose(0, 2, 1, 3)
+    key_data = key_data.reshape(2, 8, 2, 8).transpose(0, 2, 1, 3)
+    expected = np.matmul(query_data, key_data.swapaxes(-1, -2))
+
+    def run_once():
+        projected = jt.matmul(jt.array(x_data), jt.array(weight_data))
+        query, key, _ = projected.split(16, dim=2)
+        query = query.view(2, 8, 2, 8).transpose(1, 2)
+        key = key.view(2, 8, 2, 8).transpose(1, 2)
+        return jt.matmul(query, key.transpose(-1, -2)).numpy()
+
+    first = run_once()
+    second = run_once()
+    np.testing.assert_allclose(first, expected, rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(second, expected, rtol=1e-5, atol=1e-5)
+    np.testing.assert_array_equal(first, second)

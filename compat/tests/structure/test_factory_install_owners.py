@@ -50,8 +50,8 @@ class TestInstallationOwners(unittest.TestCase):
         with self.assertRaises(TypeError):
             snapshot["zeros"] = second
 
-    def test_linspace_scalar_conversion_and_generator_delegate(self):
-        calls, seeds = [], []
+    def test_linspace_scalar_conversion_and_generator_fail_closed(self):
+        calls = []
         class Result:
             def cast(self, dtype):
                 calls.append(("cast", dtype))
@@ -63,14 +63,17 @@ class TestInstallationOwners(unittest.TestCase):
             def item(self): return 2
             def __int__(self): return 2
             def __float__(self): return 2.0
-        ns = {"jt": SimpleNamespace(set_global_seed=seeds.append), "EXPECTED": (ValueError,),
+        ns = {"jt": SimpleNamespace(), "EXPECTED": (ValueError,),
               "swallowed": lambda *args: None, "_dtype_to_str": str}
         definitions("installers/factories.py", ["_linspace_adapter", "_seed_from", "_random_adapter"], ns)
         ns["_linspace_adapter"](native, Scalar(), Scalar(), Scalar(), dtype="float64")
         self.assertEqual(calls, [((2.0, 2.0, 2), {}), ("cast", "float64")])
-        ns["_random_adapter"](native, 3, generator=SimpleNamespace(initial_seed=lambda: 17))
-        self.assertEqual(seeds, [17])
-        self.assertEqual(calls[-1], ((3,), {}))
+        with self.assertRaisesRegex(NotImplementedError, "explicit Generator"):
+            ns["_random_adapter"](
+                "rand", native, 3,
+                generator=SimpleNamespace(initial_seed=lambda: 17),
+            )
+        self.assertEqual(calls, [((2.0, 2.0, 2), {}), ("cast", "float64")])
 
     def test_removed_handle_cannot_remove_a_later_hook(self):
         ns = {"namedtuple": namedtuple}

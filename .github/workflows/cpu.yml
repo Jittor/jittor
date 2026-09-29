@@ -109,6 +109,11 @@ jobs:
         env:
           JITTOR_REQUIRE_REAL_TORCH: "1"
         run: python -m nox -s full
+      - name: Run required Accelerate CPU integration gate
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        # A separate nox venv installs pinned Accelerate without its real-Torch
+        # dependency, so the oracle interpreter above cannot replace the shim.
+        run: python -m nox -s accelerate_cpu
       - name: Save the Jittor build cache
         if: always()
         uses: actions/cache/save@v4

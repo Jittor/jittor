@@ -3,6 +3,7 @@
 import jittor as jt
 from jittor.optim.algorithms.adam import adam_update
 from jittor.optim.algorithms.sgd import sgd_update
+from jittor.optim.base import _realign_state_buffers
 
 from . import common, grad_sync, shard
 from .. import optimizer_kinds
@@ -185,6 +186,11 @@ def optimizer_step(opt, loss=None, retain_graph=False, *, native_kind=None):
         raise ValueError("FSDP native optimizer adapter does not match its base algorithm")
     if kind not in _SHARDED_KINDS:
         raise NotImplementedError(_unsupported_optimizer_message(opt, kind))
+    # FSDP takes the native optimizer step path directly, so it bypasses the
+    # regular Optimizer.pre_step() hook that realigns lazily-created state
+    # buffers after a parameter moves between CPU and CUDA. Keep moment and
+    # variance buffers on the current local shard before mixed-precision math.
+    _realign_state_buffers(getattr(opt, "param_groups", ()))
     has_fsdp_grad = False
     for pg in getattr(opt, "param_groups", []):
         grads = pg.get("grads") or []

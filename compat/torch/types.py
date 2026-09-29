@@ -402,6 +402,16 @@ def active_device_context() -> typing.Optional[device]:
     return stack[-1] if stack else None
 
 
+def _set_meta_placeholder(v, enabled=True):
+    """Track a real Jittor Var that stands in for a torch meta tensor."""
+    if isinstance(v, jt.Var):
+        try:
+            v._jittor_torch_meta = bool(enabled)
+        except EXPECTED as exc:
+            swallowed("torch/types.py _set_meta_placeholder: set marker", exc)
+    return v
+
+
 Number = typing.Union[int, float, bool]
 Device = typing.Optional[typing.Union[device, str, int]]
 FileLike = typing.Union[str, os.PathLike, typing.IO[bytes]]

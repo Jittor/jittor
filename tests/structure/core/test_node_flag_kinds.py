@@ -174,7 +174,7 @@ def test_the_layout_invariants_are_static_asserts():
         "a shared flag bit aliases a Var-only bit",
         "a shared flag bit aliases an Op-only bit",
         "the private layouts must both start where the shared range ends",
-        "the six amp bits op.cc and grad.cc move as one field are no longer contiguous",
+        "the AMP bits op.cc and grad.cc move as one field are no longer contiguous",
         "OpType is read as two bits and they are no longer adjacent",
         "node_order is read as two bits and they are no longer adjacent",
     ]

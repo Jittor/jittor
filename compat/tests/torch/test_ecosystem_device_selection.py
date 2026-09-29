@@ -80,6 +80,19 @@ class _SharedNumpyTensor(object):
         return self.array
 
 
+class _MovableTensor(object):
+    def __init__(self):
+        self.destination = None
+
+    def cpu(self):
+        self.destination = "cpu"
+        return self
+
+    def cuda(self):
+        self.destination = "cuda"
+        return self
+
+
 class TestEcosystemDeviceSelection(unittest.TestCase):
     def setUp(self):
         self._policy_stack = fixture_stack(self)
@@ -132,11 +145,20 @@ class TestEcosystemDeviceSelection(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "ACL is unavailable"):
                 _ecosystem_runner._select_device(_StubTorch(), "jittor", "npu", policy_stack=self._policy_stack)
 
-    def test_jittor_tensors_are_never_moved_by_hand(self):
-        """The returned callable is identity: Jittor moves the graph, not tensors."""
+    def test_jittor_cpu_inputs_receive_explicit_cpu_placement(self):
         move = _ecosystem_runner._select_device(_StubTorch(), "jittor", "cpu", policy_stack=self._policy_stack)
-        sentinel = object()
-        self.assertIs(move(sentinel), sentinel)
+        tensor = _MovableTensor()
+        self.assertIs(move(tensor), tensor)
+        self.assertEqual(tensor.destination, "cpu")
+
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA is unavailable")
+    def test_jittor_cuda_inputs_receive_explicit_cuda_placement(self):
+        move = _ecosystem_runner._select_device(
+            _StubTorch(), "jittor", "cuda", policy_stack=self._policy_stack
+        )
+        tensor = _MovableTensor()
+        self.assertIs(move(tensor), tensor)
+        self.assertEqual(tensor.destination, "cuda")
 
     def test_shared_package_site_is_inserted_without_duplicates(self):
         original = list(sys.path)

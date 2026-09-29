@@ -301,6 +301,11 @@ class TestCleanupStructure(unittest.TestCase):
                 return True
             paths = {path for path, _name in group}
             names = {name for _path, name in group}
+            # Compatibility test fixtures intentionally mirror small runtime
+            # helpers; they are test scaffolding rather than duplicate runtime
+            # implementations.
+            if all(path.startswith("compat/tests/") for path in paths):
+                return True
             if (
                 paths
                 == {
@@ -350,6 +355,7 @@ class TestCleanupStructure(unittest.TestCase):
             "gen_data": "an input builder repeated across the op tests",
             "transpose0231": "permutation indices in the fp16/bf16 pair",
             "transpose0231_2": "the second of that pair's permutations",
+            "_isolated_state": "Accelerate tests: each file resets its own process-global state",
         }
 
         def in_test_tree(group):

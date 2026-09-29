@@ -611,85 +611,70 @@ def frombuffer(buffer, *, dtype, count=-1, offset=0, requires_grad=False):
         return v
 
 
-def _numpy_stream(seed):
-    """One independent numpy stream per generator, seeded deterministically."""
-    import numpy as _np
-    return _np.random.default_rng(int(seed))
-
-
-class Generator:
-    """A torch.Generator with its OWN stream.
-
-    A generator's draws must depend only on its seed and its own history -- in
-    torch, two `manual_seed(1234)` generators yield the same numbers, and a draw
-    does not care how much work the process has already queued. This used to keep
-    only a seed and leave drawing to jittor's *global* generator, so the value a
-    caller got depended on the process's prior ops. That is fatal for TP: the H3
-    pipeline makes the initial latents with a seeded CPU generator, the DiT shards
-    *weights* (so every rank must denoise the same latent), and two ranks whose
-    global streams have advanced differently drew different latents -- each
-    RowParallelLinear then added halves computed from different inputs, and the
-    TP2 picture came out as noise while TP1 (one rank) was fine.
-    """
+class Generator(jt.Generator):
+    """Torch-shaped wrapper around Jittor's native seed/counter generator."""
 
     def __init__(self, device=None):
-        self.device = globals()["device"](device or "cpu")
-        self._seed = 0
-        self._rng = None
-    def manual_seed(self, s):
-        self._seed = int(s)
-        # one stream per generator: deterministic, and independent of whatever
-        # the process's global generator has already produced.
-        self._rng = _numpy_stream(self._seed)
+        super().__init__(globals()["device"](device or "cpu"))
+        # Keep the established compat path for floating-point factories until
+        # native generator-aware normal is available. Integer draws and
+        # sampler indices always use the native Jittor stream.
+        self._rng = np.random.default_rng(0)
+
+    @property
+    def device(self):
+        return globals()["device"](self.device_type, self.device_index)
+
+    def manual_seed(self, seed):
+        super().manual_seed(seed)
+        self._rng = np.random.default_rng(int(seed))
         return self
-    def _stream(self):
-        """The generator's stream, built on first use so an unseeded one has one too."""
-        if self._rng is None:
-            self._rng = _numpy_stream(self._seed)
-        return self._rng
+
+    def _uniform(self, low, high, shape, dtype="float32"):
+        if self.device.type != "cpu":
+            raise RuntimeError("explicit Generator uniform currently supports CPU only")
+        dtype_name = _dtype_to_str(dtype)
+        precision_bits = {"float16": 11, "bfloat16": 8,
+                          "float32": 24, "float64": 53}.get(dtype_name)
+        if precision_bits is None:
+            raise NotImplementedError("explicit Generator uniform requires a floating dtype")
+        count = int(np.prod(tuple(shape)))
+        offset = self._reserve(count * (2 if precision_bits > 32 else 1))
+        quantized_low = float(low)
+        quantized_high = float(high)
+        compute_dtype = "float64" if dtype_name == "float64" else "float32"
+        values = jt.ops.generator_uniform(
+            shape, compute_dtype, quantized_low, quantized_high,
+            self._seed_argument(), offset, precision_bits)
+        return values if dtype_name == compute_dtype else values.cast(dtype_name)
+
     def get_state(self):
-        """The stream's position, not just its seed.
+        version, kind, index, seed, offset = super().get_state()
+        payload = "%s\n%s %s %s %s\n" % (
+            version, kind, "-" if index is None else index, seed, offset)
+        data = np.frombuffer(payload.encode("ascii"), dtype=np.uint8).copy()
+        return from_numpy(data, device="cpu")
 
-        `set_state(get_state())` has to replay the *next* draws, which a seed
-        alone cannot do once the generator has been used -- and this used to
-        return `[seed]` against a `set_state` that did nothing at all, so a
-        caller checkpointing a generator got a value that looked like state and
-        restored nothing. Accelerate's `save_state`/`load_state` and
-        `RandomSampler`'s replay both rest on this round-tripping.
-
-        The bytes are the numpy bit generator's own state, pickled. They are
-        this shim's format, not torch's CUDA/CPU state bytes, and are not
-        interchangeable with them -- the same rule torch states for its own
-        opaque state: save it, hand it back, do not parse it.
-        """
-        import numpy as _np
-        import pickle as _pickle
-        blob = _pickle.dumps(self._stream().bit_generator.state, protocol=4)
-        return jt.array(_np.frombuffer(blob, dtype=_np.uint8).copy())
-    def set_state(self, s):
-        import numpy as _np
-        import pickle as _pickle
-        raw = s
-        if hasattr(raw, "numpy"):
-            raw = raw.numpy()
-        raw = _np.asarray(raw)
-        # The old format was a single int64 seed. Restoring one of those can
-        # only reseed, which is what it always meant.
-        if raw.dtype != _np.uint8:
-            self.manual_seed(int(raw.reshape(-1)[0]))
-            return self
+    def set_state(self, state):
+        if (not isinstance(state, jt.Var)
+                or _dtype_to_str(state.dtype) != "uint8"
+                or state.ndim != 1 or not _var_is_cpu_resident(state)):
+            raise TypeError("Generator state must be a one-dimensional CPU uint8 tensor")
         try:
-            state = _pickle.loads(raw.tobytes())
-        except EXPECTED as exc:
-            swallowed("torch/installers/tensor Generator.set_state", exc)
-            raise ValueError("generator state is not one this generator produced")
-        stream = self._stream()
-        stream.bit_generator.state = state
+            text = state.numpy().tobytes().decode("ascii")
+            lines = text.splitlines()
+            if len(lines) != 2:
+                raise ValueError
+            fields = lines[1].split()
+            if len(fields) != 4:
+                raise ValueError
+            kind, index_text, seed_text, offset_text = fields
+            index = None if index_text == "-" else int(index_text)
+            super().set_state((lines[0], kind, index,
+                               int(seed_text), int(offset_text)))
+        except (UnicodeDecodeError, ValueError, OverflowError):
+            raise RuntimeError("invalid Generator state") from None
         return self
-    def seed(self):
-        return self._seed
-    def initial_seed(self):
-        return self._seed
 
 
 class layout:  # torch.layout placeholder

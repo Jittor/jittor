@@ -8,6 +8,7 @@ import jittor as jt
 from jittor import nn
 
 from . import common, dtensor
+from ..torch.parameter_containers import ParameterDictAdapter, ParameterListAdapter
 from ..diagnostics import EXPECTED, swallowed
 
 
@@ -234,24 +235,12 @@ def _named_parameters_with_owner(module, recurse=True):
         return []
 
     def visit(mod, prefix=""):
-        dc = getattr(mod, "__dict__", {})
-        try:
-            if isinstance(mod, nn.ParameterList):
-                dc = mod.params
-        except EXPECTED as exc:
-            swallowed("fsdp2/shard.py visit: if isinstance(mod, nn.ParameterList):", exc)
-        bufnames = getattr(mod, "__dict__", {}).get("_buffer_names", ())
-        for name, value in list(dc.items()):
-            if isinstance(name, str) and name.startswith("_"):
+        for name, value, role in mod._var_roles():
+            if role != "parameter" or id(value) in seen:
                 continue
-            if isinstance(value, jt.Var):
-                if id(value) in seen:
-                    continue
-                if getattr(value, "is_buffer", False) or not getattr(value, "persistent", True) or name in bufnames:
-                    continue
-                seen.add(id(value))
-                pname = f"{prefix}.{name}" if prefix else str(name)
-                out.append((pname, mod, name, value))
+            seen.add(id(value))
+            pname = f"{prefix}.{name}" if prefix else str(name)
+            out.append((pname, mod, name, value))
         if recurse:
             for name, value in child_items(mod):
                 if isinstance(value, nn.Module):
@@ -309,10 +298,18 @@ def _init_true_fsdp_state_impl(module, state):
     ws = common._world_size() if group is None else group.size()
     rank = common._rank() if group is None else group.rank()
     entries = []
+    ignored_ids = {
+        id(param) for param in getattr(state, "ignored_params", ())
+    }
     params = [
         item for item in _named_parameters_with_owner(module, recurse=True)
-        if not is_fsdp_managed_param(item[3])
+        if not is_fsdp_managed_param(item[3]) and id(item[3]) not in ignored_ids
     ]
+    for _, owner, _, _ in params:
+        if isinstance(owner, (nn.ParameterList, ParameterListAdapter, ParameterDictAdapter)):
+            raise NotImplementedError(
+                "FSDP2 cannot shard ParameterList/ParameterDict: its parameter "
+                "storage needs container-aware replacement at every shard transition")
     total_numel = sum(common._param_numel(param) for _, _, _, param in params)
     if common._fsdp2_flat_enabled(ws, total_numel) and params and len({_jittor_dtype_name(param.dtype) for _, _, _, param in params}) == 1:
         flat_shard_numel = common._ceil_div(total_numel, ws)
@@ -404,6 +401,37 @@ def _unshard_module_params(module):
         return _unshard_module_params_impl(module)
 
 
+def _compute_shard(state, master_shard):
+    """Cast a temporary collective input, preserving the optimizer's shard."""
+    policy = getattr(state, "mp_policy", None)
+    target = getattr(policy, "param_dtype", None)
+    if target is None:
+        return master_shard
+    name = _jittor_dtype_name(target)
+    return (master_shard if _jittor_dtype_name(master_shard.dtype) == name
+            else master_shard.cast(name))
+
+
+def _cast_floating_tree(value, target):
+    """Convert floating tensors inside forward inputs/outputs without detaching."""
+    if isinstance(value, jt.Var):
+        source = _jittor_dtype_name(value.dtype)
+        return value.cast(target) if "float" in source and source != target else value
+    if isinstance(value, tuple):
+        values = tuple(_cast_floating_tree(item, target) for item in value)
+        if hasattr(value, "_fields"):
+            return type(value)(*values)
+        return values if type(value) is tuple else type(value)(values)
+    if isinstance(value, list):
+        values = [_cast_floating_tree(item, target) for item in value]
+        return values if type(value) is list else type(value)(values)
+    if isinstance(value, dict):
+        values = {key: _cast_floating_tree(item, target)
+                  for key, item in value.items()}
+        return values if type(value) is dict else type(value)(values)
+    return value
+
+
 def _unshard_module_params_impl(module):
     state = getattr(module, "_fsdp_state", None)
     if state is None or not getattr(state, "true_fsdp_initialized", False):
@@ -411,7 +439,9 @@ def _unshard_module_params_impl(module):
     if getattr(state, "true_fsdp_unsharded", False):
         return module
     if getattr(state, "true_fsdp_flat", False):
-        full_flat = common._all_gather_shards(state.true_fsdp_flat_shard, getattr(state, "shard_group", None))
+        full_flat = common._all_gather_shards(
+            _compute_shard(state, state.true_fsdp_flat_shard),
+            getattr(state, "shard_group", None))
         state.true_fsdp_flat_full_param = full_flat
         for entry in state.true_fsdp_params:
             full = common._slice_flat(full_flat, entry.flat_offset, entry.numel).reshape(entry.shape)
@@ -425,7 +455,9 @@ def _unshard_module_params_impl(module):
             object.__setattr__(entry.owner, entry.attr, full)
     else:
         for entry in state.true_fsdp_params:
-            gathered = common._all_gather_shards(entry.shard, getattr(state, "shard_group", None))
+            gathered = common._all_gather_shards(
+                _compute_shard(state, entry.shard),
+                getattr(state, "shard_group", None))
             full_flat = gathered if entry.padded_numel == entry.numel else common._slice_flat(gathered, 0, entry.numel)
             full = full_flat.reshape(entry.shape)
             entry.full_param = full
@@ -542,13 +574,27 @@ def _execute_with_true_fsdp(module, orig_execute, *args, **kwargs):
     setattr(state, _EXECUTE_DEPTH_ATTR, depth + 1)
     frozen_forward_synced = False
     try:
+        policy = getattr(state, "mp_policy", None)
+        param_dtype = getattr(policy, "param_dtype", None)
+        if param_dtype is not None and getattr(policy, "cast_forward_inputs", True):
+            target = _jittor_dtype_name(param_dtype)
+            args = _cast_floating_tree(args, target)
+            kwargs = _cast_floating_tree(kwargs, target)
         _unshard_module_params(module)
         try:
             out = orig_execute(*args, **kwargs)
             entries = getattr(state, "true_fsdp_params", ())
+            output_dtype = getattr(policy, "output_dtype", None)
+            if output_dtype is not None:
+                out = _cast_floating_tree(out, _jittor_dtype_name(output_dtype))
+            module_parameters = getattr(module, "parameters", None)
+            has_trainable_module_param = bool(
+                module_parameters is not None
+                and any(param.requires_grad for param in module_parameters()))
             if (entries
                     and not any(getattr(entry, "requires_grad", True)
                                 for entry in entries)
+                    and not has_trainable_module_param
                     and getattr(state, "reshard_after_forward", True)):
                 if not common._primary_input_requires_grad(args, kwargs):
                     out = common._materialize_frozen_output(out)

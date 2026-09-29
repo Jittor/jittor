@@ -6,6 +6,9 @@ different implementation status. The board's earlier claim that only type
 erasure remained was too narrow; host schema/cache shells do not establish
 that the production attribute or descriptor paths use them.
 
+The `BaseOpRunner` helper is the single failure and synchronization owner for
+standard workspace-backed launches; per-family code must not recreate it.
+
 - `AclOpFunctions` type erasure is implemented: one uniform query callback and
   one checked execute pointer replace the signature-specific slots. Four live
   query families retain their argument adaptation; other runners keep their
@@ -16,6 +19,12 @@ that the production attribute or descriptor paths use them.
   Flip, Cumsum, Gather and Scatter. Their Python callers use `_code.py` and
   `acl_code_attributes.h` constructs the original C++ attribute types from
   decoded CodeOp data. The remaining owners still need migration.
+
+The current attribute cohort is tracked by the public operation forms
+`softmax.dim`, `triu.diagonal`, and `flip.axes`; these names identify the
+caller-facing contracts, not separate decoder implementations. The shared
+boundary remains a host-only C++ decoder boundary and keeps malformed records
+rejected before an ACL call.
 - Descriptor caching remains: establish ownership and invalidation rules before adding
   shape-keyed caches; do not cache descriptors by shape while addresses remain
   mutable.

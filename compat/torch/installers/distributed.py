@@ -519,8 +519,8 @@ def _barrier(group=None, async_op=False, device_ids=None):
     if size > 1:
         marker = jt.array(np.asarray([_distributed_rank()], dtype=np.int32))
         marker = marker.mpi_all_reduce("sum")
-        marker.sync()
-    return _collective_result(marker, async_op, issued=False)
+        marker.sync(device_sync=True)
+    return _collective_result(marker, async_op)
 
 
 def _broadcast_object_list(object_list, src=0, group=None, device=None):

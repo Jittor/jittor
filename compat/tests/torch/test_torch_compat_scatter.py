@@ -42,7 +42,8 @@ def both_devices(fn):
 
 def t(a):
     """np array -> jittor Var (keep dtype, including int32/int64/bool index tensors)."""
-    return torch.tensor(a)
+    device = "cuda" if jt.flags.use_cuda else "cpu"
+    return torch.tensor(a, device=device)
 
 
 # ---------------------------------------------------------------------------
@@ -373,6 +374,28 @@ class TestIndexAdd(Base):
             self.ac(x.numpy(), ref, msg=f"index_add_ in-place dup {dev}")
         both_devices(body)
 
+    def test_index_add__in_place_preserves_source_gradient(self):
+        def body(dev):
+            first_parameter = torch.nn.Parameter(torch.ones((3, 2), device=dev))
+            second_parameter = torch.nn.Parameter(torch.full((3, 2), 2.0, device=dev))
+            first_source = torch.ones((2, 3), device=dev) @ first_parameter
+            second_source = torch.ones((2, 3), device=dev) @ second_parameter
+            output = torch.zeros((3, 2), device=dev)
+            index = torch.tensor([0, 2], device=dev)
+
+            output.index_add_(0, index, first_source)
+            output.index_add_(0, index, second_source)
+            self.assertTrue(output.requires_grad, f"index_add_ graph missing {dev}")
+            output.sum().backward()
+
+            for name, parameter in (
+                    ("first", first_parameter), ("second", second_parameter)):
+                self.assertIsNotNone(parameter.grad, f"index_add_ {name} grad missing {dev}")
+                self.ac(parameter.grad.numpy(), np.full((3, 2), 2.0),
+                        msg=f"index_add_ {name} source grad {dev}")
+
+        both_devices(body)
+
     def test_index_add_alpha(self):
         base = np.ones((3, 2), dtype="float32")
         index = np.array([0, 0], dtype="int64")
@@ -444,7 +467,13 @@ class TestMasked(Base):
         m = (x % 2 == 0)
         ref = np.where(m, -1.0, x)
         def body(dev):
-            self.ac(t(x).masked_fill(t(m), -1.0).numpy(), ref, msg=f"masked_fill {dev}")
+            source = t(x)
+            mask = t(m)
+            self.ac(source.masked_fill(mask, -1.0).numpy(), ref,
+                    msg=f"masked_fill method {dev}")
+            self.ac(torch.masked_fill(source, mask, -1.0).numpy(), ref,
+                    msg=f"masked_fill function {dev}")
+            self.ac(source.numpy(), x, msg=f"masked_fill input unchanged {dev}")
         both_devices(body)
 
     def test_masked_fill_broadcast_mask(self):

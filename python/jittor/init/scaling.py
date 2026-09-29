@@ -7,6 +7,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
+import inspect
 import math
 from jittor import _arg_policy
 from .basic import uniform, uniform_, gauss, gauss_
@@ -141,27 +142,15 @@ def kaiming_uniform_(var, a=0, mode='fan_in', nonlinearity='leaky_relu', generat
 def _kaiming_uniform_(var, uniform_impl, a=0, mode='fan_in',
                       nonlinearity='leaky_relu', generator=None):
     """Shared Kaiming math with an explicitly selected random/writeback owner."""
-    if generator is not None:
-        # `unsupported`, not `ignored`: a seeded generator asks for one specific
-        # tensor, and jittor draws a different one from its global RNG. That is
-        # a changed observable value, not a missed optimisation.
-        #
-        # Not implemented by reseeding the global RNG from the generator (the
-        # shortcut jittor.compat.torch.installers.factories uses for randn):
-        # torch ADVANCES a generator per draw, so reseeding on every call would
-        # make N layers initialised from the same generator come out with
-        # IDENTICAL weights wherever their shapes match -- trading a visible
-        # error for a much worse silent one. Real support needs a per-generator
-        # RNG stream in the core, which jittor does not have (only the process-
-        # wide jt.set_global_seed).
-        _arg_policy.unsupported(
-            "jittor.init.kaiming_uniform_", "generator", generator,
-            "jittor has only a process-wide RNG, so the draw cannot come from "
-            "the supplied generator's stream: the values differ from torch's "
-            "and the generator is neither read nor advanced")
     std = calculate_std(var,mode,nonlinearity,a)
     bound = math.sqrt(3.0) * std
-    return uniform_impl(var,-bound, bound)
+    if generator is None:
+        return uniform_impl(var, -bound, bound)
+    if "generator" not in inspect.signature(uniform_impl).parameters:
+        _arg_policy.unsupported(
+            "jittor.init.kaiming_uniform_", "generator", generator,
+            "the selected uniform implementation has no independent generator stream")
+    return uniform_impl(var, -bound, bound, generator=generator)
 
 
 def kaiming_normal_(var, a=0, mode='fan_in', nonlinearity='leaky_relu', generator=None):

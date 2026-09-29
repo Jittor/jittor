@@ -19,6 +19,8 @@ void reset_tensor_frontend_type(PyObject* token);
 // Construction-only placement override; independent of Runtime execution flags.
 // @pyjt(_set_tensor_placement)
 PyObject* set_tensor_placement_context(int backend, int device=0);
+// @pyjt(_get_tensor_placement)
+PyObject* get_tensor_placement_context();
 // @pyjt(_reset_tensor_placement)
 void reset_tensor_placement_context(PyObject* token);
 // The placement the caller asked for, as (backend, index), or None when the
@@ -33,6 +35,12 @@ PyObject* current_tensor_placement_request();
 // precision fields); see apply_policy.
 // @pyjt(_invalidate_frontend_policies)
 void invalidate_frontend_policies();
+
+// Direct native construction scope for Jittor-owned no-input factories.
+// @pyjt(_push_native_tensor_placement)
+PyObject* push_native_tensor_placement(int backend, int device=0);
+// @pyjt(_pop_native_tensor_placement)
+void pop_native_tensor_placement(PyObject* token);
 
 // @pyjt(_set_float32_precision)
 PyObject* set_float32_precision_context(int matmul, int cudnn);

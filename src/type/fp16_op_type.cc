@@ -5,6 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include "core/common.h"
+#include "core/op.h"
 #include "runtime/device_state.h"
 #include "utils/str_utils.h"
 #include "ops/op_register.h"
@@ -180,9 +181,6 @@ struct FP16OpType : OpByType {
             {"init_mean", "$1(0)"},
         };
 
-        // `at`/`find`, never `operator[]` -- see the note in common_op_type.cc.
-        // These tables are shared by every compile worker, and `operator[]`
-        // writes to them on a miss.
         auto lookup = [](const unordered_map<string, string>& table,
                          const string& key) -> string {
             auto iter = table.find(key);
@@ -197,7 +195,7 @@ struct FP16OpType : OpByType {
             ret = lookup(cpu_map, args.at(0));
         if (is_cuda) {
             if (args[1] == "float32" && !both_map.count(args.at(0))) {
-                ret = lookup(common_op_type_cuda_map, args.at(0));
+                ret = common_op_type_cuda_map[args.at(0)];
             }
             if (args[1] == "float16" || 
                 args[1] == "bfloat16" || 

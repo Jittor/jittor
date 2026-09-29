@@ -17,7 +17,7 @@ Transformers and TorchMetrics versions are explicit:
 
 | Adapter | Versions | Behavior |
 | --- | --- | --- |
-| Transformers | 4.56.2, 5.5.3 | Its native `torch_npu` availability probe returns false in the Jittor frontend. |
+| Transformers | 4.56.2, 5.5.3 | Its native `torch_npu` availability probe returns false in the Jittor frontend; an installed Jittor `torchvision` facade is reported as available so public image/video `AutoProcessor` paths can initialize. |
 | TorchMetrics | 1.7.4 | Private bounded bincount, concatenation and safe-divide helpers retain the established Jittor behavior. |
 
 These versions come from the maintained integration evidence and local
@@ -40,9 +40,9 @@ python adapters/tests/test_adapters.py -q
 ```
 
 They import controlled fake packages through the real finder, execute the NPU
-guard, reject an unsupported version, check missing-adapter reports and retain
-TorchMetrics' original fallback. They do not establish new hardware or
-performance claims.
+guard, recognize a deployed torchvision facade, reject an unsupported version,
+check missing-adapter reports and retain TorchMetrics' original fallback. They
+do not establish new hardware or performance claims.
 
 ## vLLM
 

@@ -61,6 +61,10 @@ extern/mkl/mkldnn_lnx*/*
 /agent/skills/**/__pycache__/
 /agent/worklogs/
 
+# Local downstream compatibility handoff; keep this developer-only document
+# out of commits while retaining the tracked handoff in jittor-lab.
+/TRANSFORMERS_COMPAT_DEVELOPMENT.md
+
 # Large experiments and runtime state belong in ../jittor-lab. Do not ignore
 # repository-root copies by project name: layout checks should expose them.
 /core

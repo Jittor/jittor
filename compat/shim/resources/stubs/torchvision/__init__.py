@@ -71,7 +71,22 @@ def _to_tensor(pic):
     return _jt.array(arr.copy())
 
 def _resize(img, size, interpolation="bilinear", antialias=True, **k):
-    # img: CHW (or NCHW) Var. size: int or (h,w). Route through jittor interpolate.
+    # PIL images stay PIL images through torchvision's functional API.  This is
+    # required by remote multimodal processors that perform dynamic tiling
+    # before converting each tile to a tensor.
+    from PIL import Image as _Im
+    if isinstance(img, _Im.Image):
+        if isinstance(size, int):
+            width, height = img.size
+            if height <= width:
+                nh, nw = size, int(round(size * width / height))
+            else:
+                nh, nw = int(round(size * height / width)), size
+        else:
+            nh, nw = int(size[0]), int(size[1])
+        return img.resize((nw, nh), _pil_resample(interpolation))
+    # Tensor path: (..., C, H, W) Var. Route the flattened leading dimensions
+    # through Jittor's NCHW interpolate and restore the original batch shape.
     interp = getattr(interpolation, "value", interpolation)
     interp = str(interp).lower()
     mode = {"bilinear": "bilinear", "bicubic": "bicubic", "nearest": "nearest",
@@ -83,7 +98,11 @@ def _resize(img, size, interpolation="bilinear", antialias=True, **k):
         else:      nh, nw = int(round(size * h / w)), size
     else:
         nh, nw = int(size[0]), int(size[1])
-    x = img if img.ndim == 4 else img.unsqueeze(0)
+    original_shape = tuple(img.shape)
+    if img.ndim == 3:
+        x = img.unsqueeze(0)
+    else:
+        x = img.reshape((-1, original_shape[-3], original_shape[-2], original_shape[-1]))
     was_uint8 = "uint8" in _jittor_dtype_name(x.dtype)
     xf = x.float32()
     align = False if mode in ("bilinear", "bicubic") else None
@@ -95,25 +114,74 @@ def _resize(img, size, interpolation="bilinear", antialias=True, **k):
         y = _nn.interpolate(xf, size=(nh, nw), mode="bilinear", align_corners=False)
     if was_uint8:
         y = y.round().clamp(0, 255).uint8()
-    return y if img.ndim == 4 else y.squeeze(0)
+    if img.ndim == 3:
+        return y.squeeze(0)
+    return y.reshape(original_shape[:-2] + (nh, nw))
 
 def _normalize(img, mean, std, inplace=False, **k):
     m = _jt.array(mean).reshape((-1, 1, 1)).float32()
     s = _jt.array(std).reshape((-1, 1, 1)).float32()
     return (img.float32() - m) / s
 
+def _rgb_to_grayscale(img, num_output_channels=1):
+    from PIL import Image as _Im
+    if num_output_channels not in (1, 3):
+        raise ValueError("num_output_channels must be 1 or 3")
+    if isinstance(img, _Im.Image):
+        return img.convert("L" if num_output_channels == 1 else "RGB")
+    if img.ndim < 3:
+        raise TypeError("image tensor must have at least 3 dimensions")
+    channels = img.shape[-3]
+    if channels == 1:
+        gray = img.clone()
+    elif channels >= 3:
+        gray = (img[..., 0:1, :, :].float32() * 0.2989
+                + img[..., 1:2, :, :].float32() * 0.587
+                + img[..., 2:3, :, :].float32() * 0.114).cast(img.dtype)
+    else:
+        raise ValueError("image tensor must have 1, 3, or 4 channels")
+    return _jt.concat([gray, gray, gray], dim=-3) if num_output_channels == 3 else gray
+
+def _grayscale_to_rgb(img):
+    from PIL import Image as _Im
+    if isinstance(img, _Im.Image):
+        return img.convert("RGB")
+    if img.ndim < 3:
+        raise TypeError("image tensor must have at least 3 dimensions")
+    if img.shape[-3] >= 3:
+        return img
+    return _rgb_to_grayscale(img, num_output_channels=3)
+
 def _pad(img, padding, fill=0, padding_mode="constant", **k):
-    # padding: int or [l,t,r,b] (torchvision) ; jittor F.pad wants (l,r,t,b)
+    from PIL import Image as _Im, ImageOps as _ImageOps
+    if isinstance(img, _Im.Image):
+        if isinstance(padding, int):
+            l = r = t = b = padding
+        elif len(padding) == 2:
+            l = r = int(padding[0]); t = b = int(padding[1])
+        else:
+            l, t, r, b = (int(value) for value in padding)
+        if isinstance(fill, list):
+            fill = tuple(fill)
+        return _ImageOps.expand(img, border=(l, t, r, b), fill=fill)
+    # Tensor path: padding is [l,t,r,b] (torchvision); jittor F.pad wants [l,r,t,b].
     if isinstance(padding, int):
         l = r = t = b = padding
     elif len(padding) == 2:
         l = r = padding[0]; t = b = padding[1]
-    else:
+    elif len(padding) == 4:
         l, t, r, b = padding
+    else:
+        return _nn.pad(img, list(padding), mode="constant", value=fill)
     return _nn.pad(img, [l, r, t, b], mode="constant", value=fill)
 
 def _crop(img, top, left, height, width, **k):
     return img[..., top:top + height, left:left + width]
+
+def _center_crop(img, output_size, **k):
+    th, tw = (output_size, output_size) if isinstance(output_size, int) else output_size
+    h, w = img.shape[-2:]
+    return _crop(img, int(round((h - th) / 2.0)), int(round((w - tw) / 2.0)), th, tw)
 
 import jittor.nn as _nn
 
@@ -351,6 +419,8 @@ _CONCRETE = {"InterpolationMode": InterpolationMode, "ImageReadMode": ImageReadM
              "vflip": _vflip, "hflip": _hflip, "rot90": _rot90, "rotate": _rotate,
              "pil_to_tensor": _pil_to_tensor, "to_tensor": _to_tensor,
              "resize": _resize, "normalize": _normalize, "pad": _pad, "crop": _crop,
+             "center_crop": _center_crop, "rgb_to_grayscale": _rgb_to_grayscale,
+             "grayscale_to_rgb": _grayscale_to_rgb,
              "make_grid": _make_grid, "save_image": _save_image,
              # real class-based transforms (torchvision.transforms.*)
              "Compose": Compose, "Normalize": Normalize, "ToTensor": ToTensor,

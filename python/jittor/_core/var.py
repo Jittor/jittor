@@ -5,7 +5,9 @@ from jittor._core.dtypes import dtype_for_compute as _dtype_for_compute
 from jittor._core.dtypes import is_dtype as _is_dtype
 
 import functools as _functools
+import operator as _operator
 import numbers
+from contextlib import contextmanager as _contextmanager
 from collections.abc import Sequence
 from builtins import bool as ori_bool, float as ori_float, int as ori_int
 
@@ -110,6 +112,8 @@ class amp_flags:
     #: a float16 sum/mean does NOT use a float32 intermediate accumulator
     #: (read directly as ``amp_reg & 32`` in src/ops/reduce_op.cc)
     reduce16_no_fp32_acc = 32
+    #: prefer bfloat16 explicitly, retaining float64 and prefer32 precedence
+    prefer_bfloat16 = 64
 
 def _amp_array_preference(ret):
     """Apply the array-like AMP preference to a freshly produced Var.
@@ -134,6 +138,10 @@ def _amp_array_preference(ret):
         return ret
     if amp_reg & amp_flags.prefer32:
         return ret if _jittor_dtype_name(ret.dtype) == "float32" else ret.float32()
+    if amp_reg & amp_flags.prefer_bfloat16:
+        if _jittor_dtype_name(ret.dtype) == "float64":
+            return ret
+        return ret if _jittor_dtype_name(ret.dtype) == "bfloat16" else ret.bfloat16()
     if amp_reg & amp_flags.prefer16:
         return ret if _jittor_dtype_name(ret.dtype) == "float16" else ret.float16()
     return ret
@@ -277,6 +285,10 @@ Var.device = property(_device)
 
 def float_auto(x):
     import jittor as jt
+    if jt.flags.amp_reg & amp_flags.prefer_bfloat16:
+        if jt.flags.amp_reg & amp_flags.prefer32:
+            return x.float32()
+        return x if _jittor_dtype_name(x.dtype) == "float64" else x.bfloat16()
     if jt.flags.amp_reg & amp_flags.prefer16:
         return x.float16()
     return x.float32()
@@ -444,8 +456,31 @@ def device_scope_like(x):
                 jt.flags.device_id = previous
 
 
+@_contextmanager
+def _factory_scope_like(x):
+    """Preserve both the reference device and its frontend result type.
+
+    ``device_scope_like`` handles explicit placement and tensors moved to a
+    non-current device.  Independent Torch frontends additionally need their
+    result type carried through a no-input factory; that token is orthogonal to
+    device selection and is restored even when the factory raises.
+    """
+    frontend_token = None
+    if core._current_tensor_placement() is None:
+        backend = getattr(x, "placement_backend", -1)
+        if backend >= 0:
+            frontend_type = getattr(type(x), "_frontend_result_type", type(x))
+            frontend_token = core._set_tensor_frontend_type(frontend_type)
+    try:
+        with device_scope_like(x):
+            yield
+    finally:
+        if frontend_token is not None:
+            core._reset_tensor_frontend_type(frontend_token)
+
+
 def new_ones(x, size):
-    with device_scope_like(x):
+    with _factory_scope_like(x):
         return ones(size, x.dtype)
 
 Var.new_ones = new_ones
@@ -458,7 +493,7 @@ def ones_like(x):
     :return: The output Var.
     :rtype: jittor.Var
     '''
-    with device_scope_like(x):
+    with _factory_scope_like(x):
         return ones(x.shape,x.dtype)
 
 def zeros(*shape, dtype="float32"):
@@ -482,7 +517,7 @@ def zeros(*shape, dtype="float32"):
     return _constant_scalar(0, dtype).broadcast(shape)
 
 def new_zeros(x, size):
-    with device_scope_like(x):
+    with _factory_scope_like(x):
         return zeros(size, x.dtype)
 
 Var.new_zeros = new_zeros
@@ -496,7 +531,7 @@ def empty(*shape, dtype="float32"):
     return ops.empty(shape, dtype)
 
 def new_empty(x, size):
-    with device_scope_like(x):
+    with _factory_scope_like(x):
         return empty(size, x.dtype)
 
 Var.new_empty = new_empty
@@ -521,7 +556,7 @@ def full(shape,val,dtype="float32"):
     return _constant_scalar(val, dtype).broadcast(shape)
 
 def new_full(x, size, val):
-    with device_scope_like(x):
+    with _factory_scope_like(x):
         return full(size, val, x.dtype)
 
 Var.new_full = new_full
@@ -545,7 +580,7 @@ def full_like(x, val, dtype=None) -> Var:
     :rtype: jittor.Var
     '''
     if dtype is None: dtype = x.dtype
-    with device_scope_like(x):
+    with _factory_scope_like(x):
         return full(x.shape, val, dtype)
 
 def zeros_like(x, dtype=None) -> Var:
@@ -560,7 +595,7 @@ def zeros_like(x, dtype=None) -> Var:
     :rtype: jittor.Var
     '''
     if dtype is None: dtype = x.dtype
-    with device_scope_like(x):
+    with _factory_scope_like(x):
         return zeros(x.shape, dtype)
 
 def var(x, dim=None, dims=None, unbiased=False, keepdims=False, keepdim=None):
@@ -1445,7 +1480,7 @@ def randn_like(x, dtype=None) -> Var:
     with device_scope_like(x):
         return jt.random(x.shape, dtype, "normal")
 
-def randint(low, high=None, shape=(1,), dtype="int32") -> Var:
+def randint(low, high=None, shape=(1,), dtype="int32", generator=None) -> Var:
     ''' samples random integers from a uniform distribution on the interval [low, high).
 
     :param low: lowest intergers to be drawn from the distribution, defaults to 0.
@@ -1473,6 +1508,40 @@ def randint(low, high=None, shape=(1,), dtype="int32") -> Var:
     '''
     import jittor as jt
     if high is None: low, high = 0, low
+    if generator is not None:
+        from .generator import Generator
+        if not isinstance(generator, Generator):
+            raise TypeError("generator must be a jittor.Generator")
+        try:
+            low, high = _operator.index(low), _operator.index(high)
+        except TypeError:
+            raise TypeError("randint bounds must be integers") from None
+        if high <= low:
+            raise ValueError("randint requires high > low")
+        raw_shape = (shape,) if isinstance(shape, ori_int) else tuple(shape)
+        try:
+            shape = tuple(_operator.index(dim) for dim in raw_shape)
+        except TypeError:
+            raise TypeError("randint shape dimensions must be integers") from None
+        if any(dim < 0 for dim in shape):
+            raise ValueError("randint shape dimensions must be non-negative")
+        dtype_name = _jittor_dtype_name(dtype)
+        limits = {"int32": (-(1 << 31), 1 << 31),
+                  "int64": (-(1 << 63), (1 << 63) - 1)}
+        if dtype_name not in limits:
+            raise TypeError("generator-aware randint supports int32 and int64")
+        minimum, maximum_exclusive = limits[dtype_name]
+        # The native constructor takes signed int64 bounds; keep the exclusive
+        # high bound representable as well as every possible output value.
+        if low < minimum or high > maximum_exclusive:
+            raise ValueError("randint bounds do not fit dtype %s" % dtype_name)
+        count = 1
+        for dim in shape:
+            count *= dim
+        offset = generator._reserve(count)
+        with generator._placement_scope():
+            return ops.generator_randint(shape, dtype_name, low, high,
+                                         generator._seed_argument(), offset)
     for dim in shape:
         if dim < 0:
             raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")

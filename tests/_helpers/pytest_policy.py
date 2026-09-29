@@ -873,23 +873,37 @@ def _snapshot_selected_files(config):
         arguments = [_absolute_selection(argument, invocation) for argument in config.args]
         if not arguments:
             return
+        selected = selected_files(
+            TEST_ROOT.parent,
+            arguments
+            + [
+                "--ignore=" + _relative_to_repo(_absolute_selection(item, invocation))
+                for item in getattr(config.option, "ignore", []) or []
+            ],
         # A `test_*.py` that is a script is not part of the selection as a test
         # file -- the refusal above is what keeps it out of collection -- so it
         # must not be reported as a file the session proved nothing about
         # either. Otherwise closing KI-TEST-006 would only move its red from
         # "collection error" to "collected 0 tests".
-        _SELECTED_FILES.update(
-            path
-            for path in selected_files(
-                TEST_ROOT.parent,
-                arguments
-                + [
-                    "--ignore=" + _relative_to_repo(_absolute_selection(item, invocation))
-                    for item in getattr(config.option, "ignore", []) or []
-                ],
-            )
-            if not _refuses_collection(REPO_ROOT / path)
         )
+        selected = {
+            path for path in selected
+            if not _refuses_collection(REPO_ROOT / path)
+        }
+        # A structure invocation is owned by the Torch-mode process, while a
+        # small native-only path under that tree is run separately by nox. The
+        # static selector sees both paths, but pytest intentionally ignores the
+        # native one in this process; do not turn that deliberate split into a
+        # false "collected 0 tests" failure.
+        if _torch_mode_is_active():
+            selected = {
+                path for path in selected
+                if not any(
+                    path == native or path.startswith(native.rstrip("/") + "/")
+                    for native in NATIVE_MODE_PATHS
+                )
+            }
+        _SELECTED_FILES.update(selected)
     except Exception:
         pass
 

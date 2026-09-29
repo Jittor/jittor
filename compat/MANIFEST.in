@@ -24,6 +24,7 @@ include shim/resources/flash_attn_dist_info/METADATA
 include shim/resources/flash_attn_dist_info/top_level.txt
 include shim/resources/stubs/__init__.py
 include shim/resources/stubs/flash_attn/__init__.py
+include shim/resources/stubs/flash_attn/bert_padding.py
 include shim/resources/stubs/flash_attn/flash_attn_interface.py
 include shim/resources/stubs/flash_attn/ops/__init__.py
 include shim/resources/stubs/flash_attn/ops/triton/__init__.py

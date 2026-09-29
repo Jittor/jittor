@@ -48,6 +48,50 @@ def test_write_through_survives_two_view_levels():
     np.testing.assert_array_equal(y.numpy(), expected)
 
 
+def test_update_writes_direct_and_chained_views_through_to_root():
+    y = jt.zeros((2, 3, 4))
+    direct = y[0]
+    sibling = y[1]
+    chained = y[1][2]
+
+    direct._update(jt.ones(direct.shape) * 3)
+    chained._update(jt.ones(chained.shape) * 7)
+
+    expected = np.zeros((2, 3, 4), dtype="float32")
+    expected[0] = 3
+    expected[1, 2] = 7
+    np.testing.assert_array_equal(y.numpy(), expected)
+    np.testing.assert_array_equal(sibling.numpy(), expected[1])
+
+
+def test_view_update_preserves_rhs_gradient_and_nonview_update_contract():
+    root = jt.zeros((2, 3))
+    rhs = jt.array(np.array([2.0, 3.0, 4.0], dtype="float32"))
+    rhs.start_grad()
+    root[1]._update(rhs * 2)
+    np.testing.assert_array_equal(jt.grad(root.sum(), rhs).numpy(), [2, 2, 2])
+
+    ordinary = jt.zeros((3,))
+    identity = id(ordinary)
+    ordinary._update(rhs + 5)
+    assert id(ordinary) == identity
+    np.testing.assert_array_equal(ordinary.numpy(), [7, 8, 9])
+
+    same = jt.array(np.array([4.0, 5.0, 6.0], dtype="float32"))
+    same_identity = id(same)
+    same._update(same)
+    assert id(same) == same_identity
+    np.testing.assert_array_equal(same.numpy(), [4, 5, 6])
+
+    # A value that previously served as an ordinary update destination must
+    # remain usable as the RHS of a later view update.
+    staged = jt.zeros((3,))
+    staged._update(rhs + 1)
+    target = jt.zeros((2, 3))
+    target[0]._update(staged)
+    np.testing.assert_array_equal(target.numpy()[0], [3, 4, 5])
+
+
 def test_write_through_is_not_limited_to_integer_indices():
     # The op-graph walk `check_cascade_setitem` replaced only chains whose every
     # step was a single integer, so a slice anywhere in the chain silently

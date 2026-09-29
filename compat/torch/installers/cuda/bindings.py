@@ -246,8 +246,8 @@ def _install_cuda(g, registry=None):
     cuda.memory.memory_summary = cuda.memory_summary
     cuda.memory.CUDAPluggableAllocator = CUDAPluggableAllocator
     cuda.CUDAPluggableAllocator = CUDAPluggableAllocator
-    # rng state (trainer checkpoints save/restore it). jittor has no portable
-    # CUDA rng-state handle, so use a small placeholder Var round-trip.
+    # Torch exposes opaque CPU byte tensors. Jittor owns and validates the
+    # versioned native state; this layer only encodes/decodes that state.
     cuda.get_rng_state = _api_cuda_get_rng_state
     cuda.get_rng_state_all = _api_cuda_get_rng_state_all
     cuda.set_rng_state = _api_cuda_set_rng_state

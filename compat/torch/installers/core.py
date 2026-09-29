@@ -396,9 +396,15 @@ def _manual_seed(s):
     ctx = _misc_context()
     g = ctx.jittor_module
     s = int(s)
+    if s < -(1 << 63) or s >= 1 << 64:
+        raise RuntimeError("manual_seed expects a seed in the supported 64-bit range")
+    s %= 1 << 64
+    # Flush pending random work before changing the process-owned streams.
+    # This keeps lazy graph construction from running under the new seed.
+    jt.set_cpu_seed(s)
+    if g.cuda.is_available():
+        g.cuda.manual_seed_all(s)
     ctx.state["core_misc"]["seed"] = s
-    if hasattr(jt, "set_global_seed"):
-        jt.set_global_seed(s)
     return g
 
 
@@ -423,23 +429,29 @@ def _seed(value=_seed_sentinel):
 
 
 def _get_rng_state():
-    return jt.array([initial_seed()], dtype="int64")
+    return _encode_rng_state(jt.get_cpu_rng_state())
+
+
+def _encode_rng_state(state):
+    g = _misc_context().jittor_module
+    data = _np.frombuffer(state.encode("ascii"), dtype=_np.uint8).copy()
+    return g.tensor(data, dtype=g.uint8, device="cpu")
+
+
+def _decode_rng_state(state):
+    ctx = _misc_context()
+    if not isinstance(state, ctx.state["Var"]):
+        raise TypeError("RNG state must be a CPU uint8 tensor")
+    if (_jittor_dtype_name(state.dtype) != "uint8" or state.ndim != 1
+            or str(state.device).split(":", 1)[0] != "cpu"):
+        raise TypeError("RNG state must be a one-dimensional CPU uint8 tensor")
+    return state.numpy().tobytes().decode("ascii")
 
 
 def _set_rng_state(state):
     ctx = _misc_context()
-    Var = ctx.state["Var"]
-    try:
-        if isinstance(state, Var):
-            state = int(state.reshape(-1)[0].item())
-        elif hasattr(state, "__len__"):
-            state = int(list(state)[0])
-        else:
-            state = int(state)
-    except EXPECTED as exc:
-        swallowed("torch/installers/core.py _set_rng_state: if isinstance(state, Var):", exc)
-        state = initial_seed()
-    _manual_seed(state)
+    jt.set_cpu_rng_state(_decode_rng_state(state))
+    ctx.state["core_misc"]["seed"] = int(jt.get_cpu_initial_seed())
 
 
 class PyTorchFileReader:

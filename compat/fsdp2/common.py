@@ -40,7 +40,10 @@ def _frontend_scope(state):
     if tensor_type is None:
         return nullcontext()
     from ..torch.frontend import tensor_frontend
-    return tensor_frontend(tensor_type)
+    # FSDP lifecycle code manipulates already-placed parameters and collective
+    # buffers. It must let native operations follow their inputs; applying the
+    # Torch factory default (CPU) here makes a CUDA concat/setitem mix devices.
+    return tensor_frontend(tensor_type, default_placement=False)
 
 
 def _state_frontend(function):

@@ -361,6 +361,25 @@ def test_non_persistent_buffer_is_excluded_from_state_dict():
     assert "drop" not in keys
 
 
+def test_non_persistent_buffer_role_survives_dtype_replacement():
+    net = _Net()
+    net.register_buffer("empty", None, persistent=False)
+    old = net.drop
+    net.drop = net.drop.to(torch.bfloat16)
+
+    assert net.drop is not old
+    assert net._non_persistent_buffers_set == {"drop", "empty"}
+    assert {name: role for name, _, role in net._var_roles()}["drop"] == "non_persistent_buffer"
+    assert "drop" in dict(net.named_buffers())
+    assert "drop" not in net.state_dict()
+    assert "empty" not in net.state_dict()
+    assert "keep" in net.state_dict()
+
+    net.register_buffer("drop", torch.ones(2), persistent=True)
+    assert net._non_persistent_buffers_set == {"empty"}
+    assert "drop" in net.state_dict()
+
+
 def test_load_state_dict_roundtrip_is_exact():
     src, dst = _Net(), _Net()
     result = dst.load_state_dict(src.state_dict())
@@ -577,6 +596,24 @@ class TestModuleMethodsAcrossDevices:
         assert list(result.missing_keys) == []
         np.testing.assert_allclose(
             dst.lin.weight.numpy(), src.lin.weight.numpy(), rtol=0, atol=0)
+
+    def test_load_state_dict_keeps_explicit_cpu_target_placement(self, device):
+        if str(device).split(":")[0] == "cpu":
+            pytest.skip("requires an accelerator-backed source state dict")
+        src = _Net().to(device)
+        dst = _Net().to("cpu")
+        weight = dst.lin.weight
+        target_dtype = str(weight.dtype)
+        result = dst.load_state_dict(src.state_dict())
+        assert list(result.missing_keys) == []
+        assert list(result.unexpected_keys) == []
+        assert dst.lin.weight is weight
+        assert str(weight.dtype) == target_dtype
+        assert weight.placement_backend == 0
+        assert weight.is_cpu
+        output = dst(torch.ones(2, 4, device="cpu"))
+        assert output.placement_backend == 0
+        assert output.is_cpu
 
     def test_zero_grad_set_to_none_false_zeroes_on_this_device(self, device):
         """The silent-wrong fix must hold on the accelerator too, not just CPU."""

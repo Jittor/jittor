@@ -1,6 +1,8 @@
 """Stable Torch shape and reduction adapters using native Tensor operations."""
 from ...context import get_install_context
+from ...grad import autocast_is_enabled
 from . import jt, np, dtype, _jittor_dtype_name, _dtype_to_str, _diff, _trapz, nn
+from .method_api import _ip
 
 def _torch_size(self, dim=None):
     _context = get_install_context(jt)
@@ -151,13 +153,9 @@ def _torch_sum(input, *a, **k):
 
 
 def _index_add_inplace(self, dim, index, source, *, alpha=1):
-    _context = get_install_context(jt)
-    _native = _context.state["tensor_shape_api"]
-    _orig_index_add_inplace = _native['_orig_index_add_inplace']
     if alpha != 1:
         source = source * alpha
-    _orig_index_add_inplace(self, dim, index, source)
-    return self
+    return _ip(self, self.index_add(dim, index, source))
 
 
 
@@ -201,6 +199,10 @@ def _axis_reduce(name, self, *a, **k):
 
 
 def _method_mean(self, *a, **k):
+    if (autocast_is_enabled()
+            and jt.core.dispatch_context([self])[0] in ("cpu", "cuda")):
+        with jt.flag_scope(amp_reg=0):
+            return _plain_reduce('mean', self, *a, **k)
     return _plain_reduce('mean', self, *a, **k)
 
 

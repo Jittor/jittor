@@ -106,6 +106,14 @@ PyObject* set_tensor_placement_context(int backend, int device) {
     return token;
 }
 
+PyObject* get_tensor_placement_context() {
+    PyObject* value = nullptr;
+    if (PyContextVar_Get(placement_variable(), nullptr, &value) < 0)
+        throw std::runtime_error("cannot read tensor placement context");
+    if (value) return value;
+    Py_RETURN_NONE;
+}
+
 void reset_tensor_placement_context(PyObject* token) {
     if (PyContextVar_Reset(placement_variable(), token) < 0)
         throw std::runtime_error("cannot reset tensor placement context");
@@ -115,6 +123,30 @@ PyObject* current_tensor_placement_request() {
     TensorPlacement placement = selected_placement();
     if (!placement.explicit_backend) Py_RETURN_NONE;
     return Py_BuildValue("(ii)", int(placement.device.backend), placement.device.index);
+}
+
+PyObject* push_native_tensor_placement(int backend, int device) {
+    USER_CHECK(backend >= 0 && backend <= int(BackendId::Corex) && device >= 0)
+        << "native tensor placement requires a registered backend id and a non-negative device index";
+    auto previous = current_tensor_placement();
+    PyObject* token = Py_BuildValue("(iii)", int(previous.explicit_backend),
+        previous.explicit_backend ? int(previous.device.backend) : 0,
+        previous.explicit_backend ? previous.device.index : 0);
+    if (!token) throw std::runtime_error("cannot create native tensor placement token");
+    set_tensor_placement(TensorPlacement({static_cast<BackendId>(backend),
+        backend == 0 ? 0 : device}));
+    return token;
+}
+
+void pop_native_tensor_placement(PyObject* token) {
+    int explicit_backend, backend, device;
+    if (!PyArg_ParseTuple(token, "iii", &explicit_backend, &backend, &device))
+        throw std::runtime_error("invalid native tensor placement token");
+    USER_CHECK(explicit_backend >= 0 && explicit_backend <= int(BackendId::Corex))
+        << "invalid native tensor placement token";
+    set_tensor_placement(explicit_backend
+        ? TensorPlacement({static_cast<BackendId>(backend), device})
+        : TensorPlacement());
 }
 
 PyObject* set_float32_precision_context(int matmul, int cudnn) {

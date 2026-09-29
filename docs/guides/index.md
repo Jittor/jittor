@@ -8,6 +8,7 @@
 debugging
 memory-optimization
 performance-comparison
+distributed-training
 distributed-mpi
 ascend-910b
 corex
@@ -19,6 +20,7 @@ cpp-console
 | [调试](debugging.md) | 报错定位、梯度异常、编译失败 |
 | [显存优化](memory-optimization.md) | 显存不足、想跑更大的批次 |
 | [性能对比](performance-comparison.md) | 与其他框架做可复现的速度对比 |
+| [原生单机多卡](distributed-training.md) | 使用 `jtrun` 与原生 NCCL/DDP 进行单机多卡训练 |
 | [MPI 分布式](distributed-mpi.md) | 多进程、多卡训练 |
 | [昇腾 910B](ascend-910b.md) | 在华为昇腾 NPU 上运行 |
 | [天数 Corex](corex.md) | 在天数智芯 GPU 上运行 |

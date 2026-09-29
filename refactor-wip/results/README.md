@@ -10,12 +10,21 @@
 
 ## 兼容性与功能验证
 
+- [2026-09-17 Accelerate 训练能力整改与显式支持边界](2026-09-17-accelerate-maturity-repair.md)
+- [2026-09-16 Accelerate 优化器与数据批处理性能修复](2026-09-16-accelerate-wrapper-performance-repair.md)
 - [2026-09-13 远端合并后的 Ascend 增量修复与原生/独立 compat 复验](2026-09-13-ascend-merge-validation.md)
 - [2026-09-10 CPU float32 归约改为分块 + 成对折叠](2026-09-10-cpu-reduction-blocked-pairwise.md)
 - [2026-09-10 重构分支原生与独立 Torch compat 的 Ascend 复验（选择集通过，结构回归通过）](2026-09-10-ascend-refactor-validation.md)
 - [2026-09-09 Torch tf32 控制项的归属与执行接线](2026-09-09-torch-tf32-wiring.md)
 - [2026-09-09 device→host 拷贝在设备侧分配目标缓冲](2026-09-09-device-copy-host-destination.md)
 - [2026-09-04 整改分区的 CUDA 可用性实机核实](2026-09-04-cuda-availability-verification.md)
+- [2026-09-07 Llama 3.1 70B No Robots 正式 60-step SFT 曲线与资源](transformers/2026-09-07-transformers-llama31-no-robots-sft-cuda.md)
+- [2026-09-11 refactor 分支 Transformers 4.56.2 17 模型严格 L4 复验](transformers/2026-09-11-transformers-refactor-17-model-l4-cuda.md)
+- [2026-09-07 FSDP2 Var 元数据显存生命周期修复](transformers/2026-09-07-fsdp2-memory-lifetime-fix-cuda.md)
+- [2026-09-07 Llama 3.1 70B 真实 BF16 六卡短 SFT 对拍](transformers/2026-09-07-transformers-llama31-70b-sft-cuda.md)
+- [2026-09-06 Transformers 4.56.2 文本核心 17 模型严格累计 L4 验证](transformers/2026-09-06-transformers-text-core-l4-cuda.md)
+- [2026-09-03 Transformers 4.56.2 文本核心 17 模型 CUDA 扩展验证](transformers/2026-09-03-transformers-text-core-matrix-cuda.md)
+- [2026-09-03 Transformers 4.56.2 三类文本架构 CUDA 兼容验证](transformers/2026-09-03-transformers-text-architectures-cuda.md)
 - [2026-09-02 verl 核心算法 Ascend 数值、梯度与性能复验](2026-09-02-verl-ascend-core-algorithms.md)
 - [2026-09-01 当前 AArch64 CPU native/Torch 全量门禁](2026-09-01-current-cpu-suite.md)
 - [2026-08-30 MMCV/MMEngine Ascend 数值与梯度对拍](2026-08-30-mmcv-mmengine-ascend-parity.md)

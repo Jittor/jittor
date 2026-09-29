@@ -64,6 +64,10 @@ REQUIRED = (
     "_execute_with_true_fsdp",
     # installers/distributed.py, from the distributed-checkpoint state dict.
     "_load_full_state_dict",
+    "_get_full_state_dict",
+    "_gather_optimizer_state_dict",
+    "_shard_optimizer_state_dict",
+    "refresh_optimizer_fsdp_params",
 )
 
 _provider = None

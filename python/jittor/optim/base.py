@@ -15,7 +15,51 @@ from jittor._runtime.dispatch import dispatch_context
 # ***************************************************************
 import jittor as jt
 import numpy as np
+import operator
 from copy import deepcopy
+from functools import partial
+
+
+_STANDARD_OPTIMIZER_ARITHMETIC = (
+    operator.add, operator.mul, operator.truediv, operator.sub)
+
+
+def _fp32_optimizer_binary(operation, left, right):
+    if not isinstance(left, jt.Var):
+        left = jt.array(left, dtype="float32").stop_grad()
+    if not isinstance(right, jt.Var):
+        right = jt.array(right, dtype="float32").stop_grad()
+    return operation(left, right)
+
+
+def _concrete_frontend_tensor(tensor):
+    tensor_type = type(tensor)
+    metadata = vars(tensor_type)
+    return (metadata.get("_frontend_backend") is jt or (
+        metadata.get("_parameter_backend") is jt
+        and len(tensor_type.__bases__) == 1
+        and vars(tensor_type.__bases__[0]).get("_frontend_backend") is jt))
+
+
+def _optimizer_arithmetic(tensors, coefficients, *, enabled=True):
+    """Use native FP32 arithmetic only for resolved frontend tensors."""
+    if not enabled or not all(_concrete_frontend_tensor(t) for t in tensors):
+        return _STANDARD_OPTIMIZER_ARITHMETIC
+    if jt.flags.amp_reg != 0:
+        return _STANDARD_OPTIMIZER_ARITHMETIC
+    if not all(isinstance(c, (int, float)) for c in coefficients) or not all(
+            _jittor_dtype_name(t.dtype) == "float32" for t in tensors):
+        return _STANDARD_OPTIMIZER_ARITHMETIC
+    param = tensors[0]
+    placement = (param.placement_backend, param.device_id)
+    if not all((t.placement_backend, t.device_id) == placement
+               for t in tensors[1:]):
+        return _STANDARD_OPTIMIZER_ARITHMETIC
+    context = jt.core.dispatch_context([param])
+    if context[0] not in ("cpu", "cuda") or context != jt.core.dispatch_context([]):
+        return _STANDARD_OPTIMIZER_ARITHMETIC
+    return tuple(partial(_fp32_optimizer_binary, operation) for operation in (
+        jt.add, jt.multiply, jt.divide, jt.subtract))
 
 def _grad_matches_param(p, g):
     return isinstance(g, jt.Var) and list(g.shape) == list(p.shape)
@@ -299,6 +343,13 @@ class Optimizer(object):
                     if zero is None or zero.shape != g.shape or zero.dtype != g.dtype:
                         zero = cache[key] = jt.zeros_like(g).stop_grad()
                     g.update(zero)
+        seen_ddp_states = set()
+        for pg in self.param_groups:
+            for p in pg["params"]:
+                state = getattr(p, "_jittor_ddp_state", None)
+                if state is not None and id(state) not in seen_ddp_states:
+                    state.has_unsynced_grads = False
+                    seen_ddp_states.add(id(state))
         self.__zero_grad = True
 
     def backward(self, loss, retain_graph=False):
@@ -352,25 +403,9 @@ class Optimizer(object):
         # get gradient
         grads = jt.grad(loss, params_has_grad, retain_graph)
 
-        # sync grads and model if in mpi
-        if jt.in_mpi:
-            dep = []
-            def add_dep(v):
-                nonlocal dep
-                v._add_dependency(dep)
-                dep = [v]
-
-            for g in grads:
-                g.assign(g.mpi_all_reduce("mean"))
-                add_dep(g._input(0))
-            if self.n_step % self.param_sync_iter == 0:
-                for p in params:
-                    p.assign(p.mpi_broadcast())
-                    add_dep(p)
-        self.n_step += 1
-
         # set up grads in param_groups
         pid = 0
+        entries = []
         for pg in self.param_groups:
             if "grads" not in pg:
                 pg["grads"] = [ jt.zeros_like(p).stop_grad().stop_fuse() for p in pg['params'] ]
@@ -379,11 +414,44 @@ class Optimizer(object):
                 if _param_requires_grad(p):
                     # accumulate grad and stop grad of grad
                     g = grads[pid].stop_grad()
+                    pid += 1
+                    if (getattr(p, "_jittor_ddp_state", None) is not None
+                            and not _grad_matches_param(p, g)):
+                        g = jt.zeros_like(p).stop_grad()
                     if not self.__zero_grad:
                         g = g + pg_grads[i]
                     pg_grads[i].update(g)
-                    pid += 1
+                    entries.append((p, pg_grads[i]))
         self.__zero_grad = False
+        self.n_step += 1
+
+        from jittor.nn.parallel.distributed_data_parallel import (
+            _sync_optimizer_gradients,
+        )
+        ddp_parameter_ids, dep = _sync_optimizer_gradients(entries)
+
+        # Legacy MPI synchronization remains available for optimizer
+        # parameters outside a DDP wrapper.
+        if jt.in_mpi:
+            def add_dep(value):
+                nonlocal dep
+                value._add_dependency(dep)
+                dep = [value]
+
+            for parameter, gradient in entries:
+                if id(parameter) in ddp_parameter_ids:
+                    continue
+                gradient.assign(gradient.mpi_all_reduce("mean"))
+                add_dep(gradient._input(0))
+            for gradient in grads[pid:]:
+                gradient.assign(gradient.mpi_all_reduce("mean"))
+                add_dep(gradient._input(0))
+            if self.n_step % self.param_sync_iter == 0:
+                for parameter in params:
+                    if id(parameter) in ddp_parameter_ids:
+                        continue
+                    parameter.assign(parameter.mpi_broadcast())
+                    add_dep(parameter)
 
     def pre_step(self, loss, retain_graph=False):
         """ something should be done before step, such as calc gradients, mpi sync, and so on.
@@ -399,6 +467,10 @@ class Optimizer(object):
         if loss is not None:
             self.backward(loss, retain_graph)
         _realign_state_buffers(self.param_groups)
+        from jittor.nn.parallel.distributed_data_parallel import (
+            _assert_ddp_step_ready,
+        )
+        _assert_ddp_step_ready(self)
         jt.flags.node_order = 1
 
     def post_step(self):

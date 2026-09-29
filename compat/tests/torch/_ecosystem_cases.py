@@ -138,6 +138,36 @@ def _peft_lora_llama(torch):
     return model, inputs
 
 
+def _peft_lora_qwen2(torch):
+    from peft import LoraConfig, get_peft_model
+    from transformers import Qwen2Config, Qwen2ForCausalLM
+
+    base = Qwen2ForCausalLM(
+        Qwen2Config(
+            vocab_size=41,
+            hidden_size=16,
+            intermediate_size=32,
+            num_hidden_layers=1,
+            num_attention_heads=4,
+            num_key_value_heads=2,
+            max_position_embeddings=32,
+            tie_word_embeddings=False,
+        )
+    )
+    model = get_peft_model(
+        base,
+        LoraConfig(
+            r=2,
+            lora_alpha=4,
+            lora_dropout=0.0,
+            target_modules=["q_proj", "v_proj"],
+            task_type="CAUSAL_LM",
+        ),
+    )
+    inputs = {"input_ids": ("int64", (2, 4), 41)}
+    return model, inputs
+
+
 def _mmcv_conv_module(torch):
     """OpenMMLab's basic conv/norm/activation block.
 
@@ -305,9 +335,17 @@ CASES = {
     "diffusers_unet2d": (_diffusers_unet, ("diffusers",)),
     "diffusers_dit": (_diffusers_transformer, ("diffusers",)),
     "peft_lora_llama": (_peft_lora_llama, ("transformers", "peft")),
+    "peft_lora_qwen2": (_peft_lora_qwen2, ("transformers", "peft")),
     "mmcv_conv_module": (_mmcv_conv_module, ("mmcv", "mmengine")),
     "mmengine_base_module": (_mmengine_base_model, ("mmengine",)),
     "ms_swift_lora_llama": (_ms_swift_lora_llama, ("transformers", "peft", "swift")),
+}
+
+# Exact trainable parameters that the upstream model deliberately leaves out of
+# this case's loss graph. Cases absent from this mapping retain the historical
+# comparison-only behavior until their upstream contract is audited.
+EXPECTED_MISSING_TRAINABLE_GRADS = {
+    "peft_lora_qwen2": (),
 }
 
 

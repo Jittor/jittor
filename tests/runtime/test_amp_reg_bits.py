@@ -69,6 +69,7 @@ class TestAmpBitNames(unittest.TestCase):
             "amp_keep_reduce": jt.amp_flags.keep_reduce,
             "amp_keep_white": jt.amp_flags.keep_white,
             "amp_array_prefer": jt.amp_flags.array_prefer,
+            "amp_prefer_bfloat16": jt.amp_flags.prefer_bfloat16,
         }
         for name, value in expected.items():
             self.assertIn(name, found, f"{name} vanished from nano_string.h")
@@ -252,6 +253,39 @@ class TestArrayAndRandomAgree(unittest.TestCase):
         for level in (5, 6):
             with amp_level(level):
                 self.assertEqual(str(jt.array(np.ones(4, "int32")).dtype), "int32")
+
+    def test_explicit_bfloat16_preference_and_existing_bit_combinations(self):
+        f = jt.amp_flags
+        for extra in (0, f.prefer16, f.keep_reduce, f.keep_white):
+            with jt.flag_scope(amp_reg=f.prefer_bfloat16 | extra):
+                a, b = jt.array(np.ones((2, 2), "float32")), jt.array(np.ones((2, 2), "float32"))
+                self.assertEqual(str((a * b).dtype), "bfloat16")
+                if not extra & f.keep_white:
+                    self.assertEqual(str(a.exp().dtype), "float32")
+        with jt.flag_scope(amp_reg=f.prefer_bfloat16 | f.prefer16 | f.array_prefer):
+            self.assertEqual(str(jt.array(np.ones(4, "float32")).dtype), "bfloat16")
+            self.assertEqual(str(jt.random((4,)).dtype), "bfloat16")
+            self.assertEqual(str(jt.array(np.ones(1, "float32")).dtype), "float32")
+        with jt.flag_scope(amp_reg=f.prefer_bfloat16 | f.prefer16 | f.prefer32):
+            self.assertEqual(str((jt.ones(4) * jt.ones(4)).dtype), "float32")
+        with jt.flag_scope(amp_reg=f.prefer_bfloat16, auto_convert_64_to_32=0):
+            x = jt.array(np.ones(4, "float64"))
+            self.assertEqual(str((x * x).dtype), "float64")
+            self.assertEqual(str(x.float_auto().dtype), "float64")
+
+    def test_backward_retains_explicit_bfloat16_and_legacy_preference(self):
+        f = jt.amp_flags
+        for reg, value, expected_dtype, expected_value in (
+                (f.prefer_bfloat16 | f.prefer16, 100000., "bfloat16", 199680.),
+                (f.prefer16, 8., "float16", 16.)):
+            weight = jt.array(np.ones((2, 2), "float32"))
+            x = jt.array(np.full((2, 2), value, "float32"))
+            with jt.flag_scope(amp_reg=reg):
+                loss = jt.matmul(x, weight).sum()
+            gradient = jt.grad(loss, weight)
+            self.assertIn(str(gradient.dtype), (expected_dtype, str(weight.dtype)))
+            np.testing.assert_array_equal(gradient.float32().numpy(),
+                                          np.full((2, 2), expected_value))
 
 
 if __name__ == "__main__":

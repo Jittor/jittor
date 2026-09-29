@@ -177,6 +177,7 @@ include backends/cuda/include/jittor_accelerator.h
 include backends/cuda/include/stream_compat.h
 include backends/cuda/kernels/core/candidate_op.cc
 include backends/cuda/kernels/core/cuda_atomic.h
+include backends/cuda/kernels/core/generator_randint_op.cc
 include backends/cuda/kernels/core/getitem_prefix.cc
 include backends/cuda/kernels/core/indexing_codegen.cc
 include backends/cuda/kernels/core/indexing_codegen.h
@@ -327,6 +328,7 @@ include docs/guides/corex.md
 include docs/guides/cpp-console.md
 include docs/guides/debugging.md
 include docs/guides/distributed-mpi.md
+include docs/guides/distributed-training.md
 include docs/guides/index.md
 include docs/guides/memory-optimization.md
 include docs/guides/performance-comparison.md
@@ -360,6 +362,7 @@ include docs/slides/jittor-overview.html
 include docs/slides/计图介绍.pptx
 include docs/tutorials/index.md
 include examples/README.md
+include examples/distributed/native_ddp.py
 include examples/flash-attention/README.md
 include examples/gan/README.md
 include examples/gan/simple_cgan.py
@@ -615,6 +618,12 @@ include src/ops/composite/fused_adamw_op.cc
 include src/ops/composite/fused_adamw_op.h
 include src/ops/composite/fused_sgd_op.cc
 include src/ops/composite/fused_sgd_op.h
+include src/ops/composite/generator_randint_op.cc
+include src/ops/composite/generator_randint_op.h
+include src/ops/composite/generator_randperm_op.cc
+include src/ops/composite/generator_randperm_op.h
+include src/ops/composite/generator_uniform_op.cc
+include src/ops/composite/generator_uniform_op.h
 include src/ops/composite/getitem_op.cc
 include src/ops/composite/getitem_op.h
 include src/ops/composite/index_bounds.h
@@ -784,6 +793,7 @@ include src/utils/log.cc
 include src/utils/log.h
 include src/utils/mwsr_list.cc
 include src/utils/mwsr_list.h
+include src/utils/philox.h
 include src/utils/seh.h
 include src/utils/stack_vector.h
 include src/utils/str_utils.cc
@@ -837,6 +847,7 @@ include tools/release/pack_offline.py
 include tools/release/test_check_sdist_contents.py
 include tools/release/test_check_wheel_contents.py
 include tools/roundtrip_consistency_sweep.py
+include tools/run_accelerate_gate.py
 include tools/run_test_suite.py
 include tools/semantic_divergence_probe.py
 include tools/side_effect_probe.py

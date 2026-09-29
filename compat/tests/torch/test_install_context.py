@@ -17,7 +17,6 @@ from jittor.compat.torch.context import (
 )
 from jittor.compat.torch.namespace import TorchNamespace
 from jittor.compat.transaction import TransactionConflict
-from jittor.compat.torch.installers import utilities
 
 from _helpers.child_process import run_python_child
 from _helpers.install_lock import install_lock_is_free

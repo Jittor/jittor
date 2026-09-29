@@ -54,6 +54,9 @@ class EcosystemParity(EcosystemComparison):
     def test_peft_lora_llama(self):
         self._compare("peft_lora_llama")
 
+    def test_peft_lora_qwen2(self):
+        self._compare("peft_lora_qwen2")
+
     def test_mmcv_conv_module(self):
         self._compare("mmcv_conv_module")
 

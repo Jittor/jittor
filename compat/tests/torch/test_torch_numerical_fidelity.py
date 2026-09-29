@@ -92,7 +92,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         numerical = importlib.import_module(
             "jittor.compat.torch.installers.numerical")
         fidelity = importlib.import_module("jittor.compat.torch.fidelity")
-        for name in ("hann_window", "stft"):
+        for name in ("hann_window", "kaiser_window", "sinc", "stft"):
             with self.subTest(name=name):
                 implementation = getattr(numerical, name)
                 self.assertIs(getattr(torch, name), implementation)
@@ -106,6 +106,25 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             actual = torch.hann_window(5, periodic=False).numpy()
             expected = np.hanning(5).astype(np.float32)
             np.testing.assert_allclose(actual, expected, rtol=0, atol=1e-7)
+
+    def test_kaiser_window_cpu_values_match_numpy(self):
+        with _native_jittor.flag_scope(use_cuda=0):
+            beta = 8.0
+            actual = torch.kaiser_window(5, periodic=False, beta=beta).numpy()
+            index = np.arange(5, dtype=np.float64)
+            distance = (index - 2.0) / 2.0
+            expected = (
+                np.i0(beta * np.sqrt(np.maximum(0.0, 1.0 - distance * distance)))
+                / np.i0(beta)
+            ).astype(np.float32)
+            np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-7)
+
+    def test_sinc_cpu_values_match_numpy(self):
+        with _native_jittor.flag_scope(use_cuda=0):
+            values = torch.tensor([-1.0, 0.0, 0.5, 2.0])
+            np.testing.assert_allclose(
+                torch.sinc(values).numpy(), np.sinc(values.numpy()),
+                rtol=1e-6, atol=1e-7)
 
     def test_stft_cpu_shape_and_values(self):
         with _native_jittor.flag_scope(use_cuda=0):
@@ -390,6 +409,19 @@ class TestTorchNumericalFidelity(unittest.TestCase):
                 self.assertIn("out", record.detail)
         self.assertIn(
             "clamp", fidelity.fidelity_of("torch.nan_to_num").detail)
+
+    def test_arange_preserves_fractional_tensor_step(self):
+        with _native_jittor.flag_scope(use_cuda=0):
+            count = torch.tensor(32.0)
+            values = torch.arange(0, 1 - 1e-6, 1 / count)
+            self.assertEqual(tuple(values.shape), (32,))
+            np.testing.assert_allclose(values.numpy()[-1], 31 / 32, rtol=0, atol=1e-6)
+
+    def test_type_accepts_typed_tensor_class(self):
+        with _native_jittor.flag_scope(use_cuda=0):
+            value = torch.tensor([1.0]).type(torch.BoolTensor)
+            self.assertEqual(str(value.dtype), "torch.bool")
+            self.assertTrue(bool(value.item()))
 
     def test_nan_to_num_default_bounds_match_numpy(self):
         values = np.array(

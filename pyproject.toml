@@ -30,6 +30,9 @@ dependencies = [
     "pywin32>=1.0; platform_system == 'Windows'",
 ]
 
+[project.scripts]
+jtrun = "jittor.distributed.launch:main"
+
 [project.optional-dependencies]
 cuda12 = [
     "cuda-toolkit[cublas,cudart,cufft,curand,cusparse,nvjitlink,nvrtc,nvtx]==12.2.2; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",

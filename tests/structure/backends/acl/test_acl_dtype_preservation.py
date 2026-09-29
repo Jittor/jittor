@@ -40,8 +40,13 @@ class _Recorder:
         self.seen_dtype = None
         self.seen_output_dtypes = None
 
-    def __call__(self, name, inputs, output_dtypes=None, output_shapes=None,
-                 attr_code="", attr_header="", outputs=None, **kwargs):
+    def __call__(self, name_or_program, inputs=None, output_dtypes=None,
+                 output_shapes=None, attr_code="", attr_header="", outputs=None,
+                 **kwargs):
+        # `acl_code` receives a string name and keyword arguments, while the
+        # refactor's `acl_emit` receives an assembled program object and lists.
+        # Record both through one provider-shaped test double.
+        name = getattr(name_or_program, "name", name_or_program)
         self.seen_dtype = str(inputs[0].dtype)
         if outputs is not None:
             self.seen_output_dtypes = [str(o.dtype) for o in outputs]
