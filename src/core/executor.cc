@@ -91,6 +91,16 @@ void Executor::submit_pending(Var* target, bool force) {
             if (var->flag(VarFlags::_kept)) continue;
             auto op = var->input();
             if (op && op->flag(OpFlags::_must_stay_pending)) continue;
+            // Nor a var an elementwise op is still to compute. Launched now it
+            // is written out, and a training forward keeps it for the backward,
+            // where it would otherwise have fused into its readers and never
+            // existed: where the cut fell decided how many of them a ViT-B/16
+            // step kept, and its peak moved by 0.33 GB between
+            // `auto_flush_ops` 120 and 136. What such a var reads is launched
+            // when something that must be written out -- a matmul, a
+            // convolution, a reduction -- needs it.
+            if (op && (op->type() == OpType::element || op->type() == OpType::broadcast))
+                continue;
             vars.push_back(var);
             pending_bytes += var->size;
         }
