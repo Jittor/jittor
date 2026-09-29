@@ -278,7 +278,7 @@ def refuse(reason):
 
 class _Capture:
     __slots__ = ("inputs", "host_inputs", "outputs", "template", "roots", "state",
-                 "prologue", "guards", "signature", "refused", "random",
+                 "state_lists", "prologue", "guards", "signature", "refused", "random",
                  "frozen_random")
 
     def __init__(self):
@@ -460,6 +460,8 @@ class StepCapture:
         cap.template = template
         cap.roots = roots
         cap.state = state
+        cap.state_lists = ([holder for holder, _, _, _ in state],
+                           [old for _, old, _, _ in state])
         cap.signature = _signature(args, kwargs)
         return cap, self._results(cap, outputs)
 
@@ -471,14 +473,21 @@ class StepCapture:
 
     # -- guards --------------------------------------------------------
     def _stale(self, cap, args, kwargs):
-        for root in cap.roots:
-            if root.is_finished:
-                return "the captured graph was finished, most likely by a read"
+        if _core._first_finished(cap.roots) >= 0:
+            return "the captured graph was finished, most likely by a read"
         if _signature(args, kwargs) != cap.signature:
             return "the inputs changed shape or dtype"
-        for holder, old, _, _ in cap.state:
-            if holder.var_ptr != old.var_ptr and not _adopt(holder, old):
+        # One native pass over the holders; `_adopt` only for those rebound.
+        holders, olds = cap.state_lists
+        start = 0
+        while True:
+            rebound = _core._first_rebound(holders[start:], olds[start:])
+            if rebound < 0:
+                break
+            index = start + rebound
+            if not _adopt(holders[index], olds[index]):
                 return "state the step updates was replaced from outside it"
+            start = index + 1
         for read, value in cap.guards:
             if read() != value:
                 return "a value the step baked in has changed"

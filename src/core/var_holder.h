@@ -858,6 +858,21 @@ vector<ArrayArgs> fetch_sync(const vector<VarHolder*>& vh);
 // @pyjt(sync_all)
 void sync_all(bool device_sync=false);
 
+/**
+ * Index of the first of `vars` already computed, or -1. A captured step checks
+ * its roots with this before every replay: 1,400 of them for a UNet training
+ * step, a Python attribute read each, 0.15 ms a replay.
+ */
+// @pyjt(_first_finished)
+int first_finished(const vector<VarHolder*>& vars);
+
+/**
+ * Index of the first holder no longer holding the Var `olds` holds at the
+ * same position, or -1. See `_first_finished`.
+ */
+// @pyjt(_first_rebound)
+int first_rebound(const vector<VarHolder*>& holders, const vector<VarHolder*>& olds);
+
 // Called after a complete VarHolder has crossed into a Python object.
 void schedule_pending_from_python(VarHolder* holder);
 
