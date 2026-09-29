@@ -84,6 +84,24 @@ def _merge_dtypes(dtypes):
     return dtype
 
 
+def _empty_where_the_inputs_are(x, shape, dtype):
+    """``jt.empty(shape, dtype)`` on ``x``'s device and placement.
+
+    `_allocate_where_the_inputs_are` without entering it when it would do
+    nothing -- the input already where the ambient placement and device are,
+    which is every call inside a module's forward: its two generator scopes
+    were a tenth of a decode step's `torch.cat`.
+    """
+    jt = _jt()
+    core = jt.core
+    device_id = int(x.device_id)
+    if ((int(x.placement_backend) < 0 or core._current_tensor_placement() is not None)
+            and (device_id < 0 or device_id == int(jt.current_device()))):
+        return jt.empty(shape, dtype=dtype)
+    with _allocate_where_the_inputs_are(x):
+        return jt.empty(shape, dtype=dtype)
+
+
 def _concat_direct(arr, dim, dtype):
     jt = _jt()
     output_shape = list(arr[0].shape)
@@ -92,8 +110,7 @@ def _concat_direct(arr, dim, dtype):
     # and device, so concatenating tensors that are on neither puts the
     # destination on the ambient device and dispatch_context rejects every
     # setitem below.
-    with _allocate_where_the_inputs_are(arr[0]):
-        output = jt.empty(output_shape, dtype=dtype)
+    output = _empty_where_the_inputs_are(arr[0], output_shape, dtype)
     slices = [slice(None)] * len(output_shape)
     offset = 0
     for value in arr:
@@ -199,63 +216,78 @@ def concat(arr, dim=0):
     # The bit itself is vestigial: `keep_reduce` only reaches
     # `reduce_dtype_infer`, and this function creates no reduce -- it is an
     # `empty` plus a chain of `setitem`. It is OR-ed in rather than dropped so
-    # that this commit changes exactly one thing, the clobbering.
-    with jt.flag_scope(amp_reg=jt.flags.amp_reg | jt.amp_flags.keep_reduce):
-        if not isinstance(arr, Sequence):
-            raise TypeError("concat arr needs to be a tuple or list")
-        if len(arr) == 0:
-            raise ValueError("need at least one array to concat")
+    # that this commit changes exactly one thing, the clobbering; and the scope
+    # is entered only when the bit is not already set.
+    amp_reg = jt.flags.amp_reg
+    keep_reduce = jt.amp_flags.keep_reduce
+    if amp_reg & keep_reduce:
+        return _concat(jt, arr, dim)
+    with jt.flag_scope(amp_reg=amp_reg | keep_reduce):
+        return _concat(jt, arr, dim)
 
-        base_shape = list(arr[0].shape)
-        base_dim = len(base_shape)
-        if dim < 0:
-            dim += base_dim
-        if dim < 0 or dim >= base_dim:
-            raise IndexError(
-                "Dimension out of range (expected to be in range of "
-                "[{}, {}], but got {})".format(-base_dim, base_dim - 1, dim)
+
+_tracing = None
+
+
+def _concat(jt, arr, dim):
+    global _tracing
+    if not isinstance(arr, Sequence):
+        raise TypeError("concat arr needs to be a tuple or list")
+    if len(arr) == 0:
+        raise ValueError("need at least one array to concat")
+
+    base_shape = list(arr[0].shape)
+    base_dim = len(base_shape)
+    if dim < 0:
+        dim += base_dim
+    if dim < 0 or dim >= base_dim:
+        raise IndexError(
+            "Dimension out of range (expected to be in range of "
+            "[{}, {}], but got {})".format(-base_dim, base_dim - 1, dim)
+        )
+
+    dtypes = []
+    for value in arr:
+        shape = value.shape
+        if len(shape) != base_dim:
+            raise RuntimeError(
+                "get different number of dimensions of {} and {}".format(
+                    base_dim, len(shape)
+                )
             )
-
-        dtypes = []
-        for value in arr:
-            if len(value.shape) != base_dim:
+        for axis in range(base_dim):
+            if axis != dim and shape[axis] != base_shape[axis]:
                 raise RuntimeError(
-                    "get different number of dimensions of {} and {}".format(
-                        base_dim, len(value.shape)
+                    "Sizes of vars must match except in dimension {}. "
+                    "Expected size {} but got size {} for dimension number "
+                    "{} in the list.".format(
+                        dim,
+                        base_shape[axis],
+                        shape[axis],
+                        axis,
                     )
                 )
-            for axis in range(base_dim):
-                if axis != dim and value.shape[axis] != base_shape[axis]:
-                    raise RuntimeError(
-                        "Sizes of vars must match except in dimension {}. "
-                        "Expected size {} but got size {} for dimension number "
-                        "{} in the list.".format(
-                            dim,
-                            base_shape[axis],
-                            value.shape[axis],
-                            axis,
-                        )
-                    )
-            dtypes.append(_jittor_dtype_name(value.dtype))
+        dtypes.append(_jittor_dtype_name(value.dtype))
 
-        dtype = _merge_dtypes(dtypes)
-        kernel = select_kernel("tensor.concat", arr, dim)
-        if kernel is not None:
-            inputs = tuple(value if _jittor_dtype_name(value.dtype) == _jittor_dtype_name(dtype) else value.cast(dtype)
-                           for value in arr)
-            result = kernel(inputs, dim)
-            if result is not None:
-                return result
-        # Only for a graph being captured to replay: the select costs more
-        # to build than the slice copies it replaces, which an eager call pays
-        # every time -- Qwen3 greedy decoding, host-bound, went 3.80 -> 4.22 s
-        # -- and a replay never pays again.
-        from .._runtime.step_capture import tracing
-        if tracing():
-            fused = _concat_fused(arr, dim, dtype)
-            if fused is not None:
-                return fused
-        return _concat_bounded(arr, dim, dtype)
+    dtype = _merge_dtypes(dtypes)
+    kernel = select_kernel("tensor.concat", arr, dim)
+    if kernel is not None:
+        inputs = tuple(value if _jittor_dtype_name(value.dtype) == _jittor_dtype_name(dtype) else value.cast(dtype)
+                       for value in arr)
+        result = kernel(inputs, dim)
+        if result is not None:
+            return result
+    # Only for a graph being captured to replay: the select costs more
+    # to build than the slice copies it replaces, which an eager call pays
+    # every time -- Qwen3 greedy decoding, host-bound, went 3.80 -> 4.22 s
+    # -- and a replay never pays again.
+    if _tracing is None:
+        from .._runtime.step_capture import tracing as _tracing
+    if _tracing():
+        fused = _concat_fused(arr, dim, dtype)
+        if fused is not None:
+            return fused
+    return _concat_bounded(arr, dim, dtype)
 
 
 cat = concat
