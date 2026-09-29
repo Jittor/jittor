@@ -31,6 +31,7 @@ import json
 import os
 import platform
 import shutil
+import subprocess
 import sys
 
 #: One finding. ``status`` is "ok", "warn" or "fail"; only "fail" stops a
@@ -89,13 +90,26 @@ def check_compiler(cc_path=None):
 
 def check_python_headers():
     """``Python.h``, which every compiled Jittor object includes."""
-    include = None
+    includes = []
+    configured = build_env("python_config_path")
+    if configured and os.path.isfile(configured):
+        try:
+            output = subprocess.check_output(
+                [configured, "--includes"], stderr=subprocess.STDOUT,
+                universal_newlines=True)
+            includes.extend(
+                token[2:] for token in output.split()
+                if token.startswith("-I") and len(token) > 2)
+        except (OSError, subprocess.CalledProcessError):
+            pass
     try:
         import sysconfig
         include = sysconfig.get_paths().get("include")
+        if include:
+            includes.append(include)
     except Exception:
         pass
-    candidates = [path for path in (include,) if path]
+    candidates = list(dict.fromkeys(path for path in includes if path))
     for path in candidates:
         if os.path.isfile(os.path.join(path, "Python.h")):
             return _ok("python headers", os.path.join(path, "Python.h"))

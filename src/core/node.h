@@ -104,6 +104,10 @@ struct VarFlags {
         // and an ordinary `jt.sync_all()` is such a batch. Cleared by
         // `Var::release_kept`, which is what gives the graph back.
         _kept,
+        // Made from a Python number an operator was handed (`x - 1.0`), not
+        // from a tensor anyone holds. Under torch's rule it never asks for a
+        // gradient; see `is_constant_scalar` in op.cc.
+        _python_number,
         _end,
     };
 };

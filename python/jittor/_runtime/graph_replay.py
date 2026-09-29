@@ -293,6 +293,17 @@ def _native_dtype(var):
     return var.dtype
 
 
+def _dense(var):
+    """`var`, or a dense copy of it made inside the graph being captured.
+
+    Every replay copies a capture's results out as raw bytes. A strided one
+    -- a channels-last activation read as NCHW -- would have that copy build a
+    densifying op on top of the kept graph first, and syncing it re-ran the
+    whole graph: an SD1.5 VAE decode executed every kernel twice.
+    """
+    return var if var._storage_is_contiguous() else jt.contiguous(var)
+
+
 def _empty_like(var):
     """A materialized, uninitialized Var shaped, typed and placed like `var`.
 
@@ -316,6 +327,12 @@ def _empty_like(var):
                 _core._reset_tensor_placement(placement)
     finally:
         _core._reset_tensor_frontend_type(token)
+    # A capture computes on these copies, so what the graph decides from an
+    # input's requires_grad it must decide the same way from its copy: a float
+    # mask built from a copy that asked for a gradient kept the fused attention
+    # kernels out of every captured Transformers step.
+    if not var.requires_grad and result.requires_grad:
+        result.requires_grad = False
     result.sync(False, False)
     return result
 
@@ -489,6 +506,13 @@ class GraphReplay:
         # what a normal call peaks at rather than the sum of everything it
         # allocates.
         jt.flags.keep_graph = 2
+        # Built whole, as a replay runs it. CUDA's auto-flush otherwise
+        # launches the traced call in pieces, and every piece's results stay
+        # held for the rest of the kept graph: an SD1.5 VAE decode, cut five
+        # times by the view ops of channels-last activations, captured 0.5 GB
+        # above its eager peak.
+        flush_before = jt.flags.auto_flush_ops
+        jt.flags.auto_flush_ops = 0
         readbacks = _core._host_readback_count()
         _TRACING[0] += 1
         try:
@@ -508,6 +532,7 @@ class GraphReplay:
                 if not outputs:
                     self._refused = "the module returned no Var"
                     return None
+                outputs[:] = [_dense(o) for o in outputs]
                 # These vars' own graph and nothing else. A plain `sync()` is a
                 # weak sync: it also sweeps in whatever other holder vars happen
                 # to be pending, and with `keep_graph` on those become part of
@@ -529,6 +554,7 @@ class GraphReplay:
                 return None
         finally:
             _TRACING[0] -= 1
+            jt.flags.auto_flush_ops = flush_before
             jt.flags.keep_graph = before
 
         cap = _Capture()
@@ -990,23 +1016,42 @@ def _element_size(dtype):
     return 1
 
 
-def _input_bytes(args):
+#: What an automatic replay accepts as an argument besides a Var: values that
+#: `_spec` compares by value. Anything else is matched by identity -- right for
+#: an explicit `graph_replay`, whose caller vouches for it, and wrong for a
+#: policy nobody asked for: a KV cache object is the same object every decode
+#: step while what it holds grows, and the capture would keep answering for the
+#: first step.
+_AUTO_SCALARS = (int, float, bool, str)
+
+
+def _auto_arguments(args, kw):
+    """Total bytes of the Vars among the arguments, or None if not eligible.
+
+    Keyword arguments count like positional ones. Transformers calls every
+    model by keyword -- ``model(input_ids=..., attention_mask=...)`` -- and
+    leaving those out meant no Hugging Face model was ever replayed.
+    """
     total = 0
-    for a in args:
-        total += a.numel() * _element_size(a.dtype)
-    return total
+    found = False
+    for values in (args, kw.values()):
+        for a in values:
+            if isinstance(a, jt.Var):
+                total += a.numel() * _element_size(a.dtype)
+                found = True
+            elif a is not None and type(a) not in _AUTO_SCALARS:
+                return None
+    return total if found else None
 
 
 def auto_replay_for(module, args, kw):
     """The GraphReplay to use for this call, or None to run normally."""
-    if kw or not args:
-        return None
     flags = jt.flags
     if not flags.auto_graph_replay or not flags.no_grad:
         return None
-    for a in args:
-        if not isinstance(a, jt.Var):
-            return None
+    nbytes = _auto_arguments(args, kw)
+    if nbytes is None:
+        return None
     state = module.__dict__.get("_auto_graph_replay")
     if state is None:
         # Written through __dict__: Module.__setattr__ classifies assignments
@@ -1014,9 +1059,9 @@ def auto_replay_for(module, args, kw):
         state = module.__dict__["_auto_graph_replay"] = _AutoState()
     if state.give_up:
         return None
-    if _input_bytes(args) > flags.auto_graph_replay_bytes:
+    if nbytes > flags.auto_graph_replay_bytes:
         return None
-    signature = _signature(args)
+    signature = _signature(args, kw)
     if signature != state.signature:
         state.signature = signature
         state.seen = 1

@@ -27,6 +27,32 @@ import jittor as jt
 import torch
 
 
+class TestPythonScalarsNeverRequireGrad(unittest.TestCase):
+    """A Python number in an expression never asks for a gradient, as in torch.
+
+    `(1.0 - mask.float()) * min` is how Transformers turns a padding mask into
+    an additive one. The `1.0` became a Var that "required grad", so the mask
+    did too, and the fused attention kernels -- which take no mask gradient --
+    declined every such mask for the O(L^2) math path.
+    """
+
+    def test_a_mask_built_from_an_integer_tensor_does_not_require_grad(self):
+        mask = torch.ones(2, 4, dtype=torch.int64)
+        additive = (1.0 - mask.float()) * -1e9
+        self.assertFalse(additive.requires_grad)
+        frozen = torch.randn(2, 4)
+        self.assertFalse((2.0 * frozen + 1).requires_grad)
+
+    def test_a_tensor_that_requires_grad_still_does(self):
+        x = torch.randn(3, requires_grad=True)
+        self.assertTrue((1.0 - x).requires_grad)
+        leaf = torch.tensor(2.0, requires_grad=True)
+        y = leaf * 3.0
+        self.assertTrue(y.requires_grad)
+        y.backward()
+        self.assertEqual(float(leaf.grad), 3.0)
+
+
 class TestNeedsInputGrad(unittest.TestCase):
     """ctx.needs_input_grad: one flag per argument PASSED, and no kwargs.
 

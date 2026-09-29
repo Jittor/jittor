@@ -93,7 +93,7 @@ int64 sfrl_device_allocated_bytes(int device) {
     int s = slot(device);
     return s >= 0 ? device_allocated[s].load() : 0;
 }
-DEFINE_FLAG(int64, sfrl_large_block_size_device, 5242880, "sfrl_large_block_size, larger will reduce memory shard, only affect device");
+DEFINE_FLAG(int64, sfrl_large_block_size_device, 20971520, "The segment a device request up to half this size is carved from; larger requests get a segment of their own, rounded to 2 MB. PyTorch packs 1-10 MB requests into 20 MB segments; at 5 MB each mid-sized tensor took a segment of its own and left a tail only something smaller could use: the SD1.5 UNet's 686 half-precision weights reserved 1818 MB for 1640 MB of data (PyTorch 1702), and its sampling process peaked 2.76 GB against 2.52 at 20 MB. Only affects devices.");
 constexpr int64 sfrl_large_block_size_cpu=5242880;
 
 //CachingBlock
@@ -266,7 +266,12 @@ size_t SFRLAllocator::allocation_size(size_t size) {
         return SMALL_BLOCK_SIZE;
     int64 large_block_size = is_cuda() ? sfrl_large_block_size_device : sfrl_large_block_size_cpu;
     int64 align_size = (size + LARGE_ALIGN_SIZE - 1) / LARGE_ALIGN_SIZE * LARGE_ALIGN_SIZE;
-    if (size <= large_block_size) {
+    // Only requests up to half a segment share one, as in PyTorch (1-10 MB
+    // into 20 MB). Above that a shared segment holds one request and a tail
+    // under half its size: BERT-base training, whose activations are 12.6 MB,
+    // reserved 4.58 GB for a 3.92 GB peak, against PyTorch's 4.09 for 3.80;
+    // 4.13 this way. A DDPM UNet step goes the other way, 4.08 -> 4.31 GB.
+    if (size <= (is_cuda() ? large_block_size / 2 : large_block_size)) {
         #ifdef HAS_ACCELERATOR
         if (is_cuda()) {
             // just take all free mem

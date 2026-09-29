@@ -65,6 +65,30 @@ def dtype_name(value):
     return canonical
 
 
+#: The native `Var.dtype` getter, resolved on first use. A frontend may wrap
+#: `dtype` in a property of its own (the torch frontend does, to hand out
+#: `torch.float32`), so the descriptor is taken from where that frontend keeps
+#: the original when it has replaced it.
+_VAR_DTYPE = None
+
+
+def var_dtype_name(var):
+    """The canonical dtype name of a Var, read natively.
+
+    For code that only compares or passes on the name. Going through
+    ``var.dtype`` under the torch frontend runs its Python property and builds
+    a ``torch.dtype`` just to turn it back into this string: an optimizer step
+    did that about twelve times per parameter.
+    """
+    getter = _VAR_DTYPE
+    if getter is None:
+        import jittor_core
+        cls = jittor_core.Var
+        getter = getattr(cls, "_frontend_native_dtype", None) or cls.__dict__["dtype"]
+        globals()["_VAR_DTYPE"] = getter
+    return str(getter.__get__(var))
+
+
 def dtype_for_compute(value):
     """Validate through the same converter used by native op arguments."""
     if value is None:

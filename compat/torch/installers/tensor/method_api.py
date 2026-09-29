@@ -1326,8 +1326,13 @@ def _true_division(self, other, opname):
         # stays in the tensor dtype because ACL has no float64 arithmetic.
         acl_active = bool(getattr(_owner.jt.compiler, "has_acl", 0)) and (
             bool(getattr(_owner.jt.flags, "use_acl", 0)) and bool(_owner.jt.flags.use_cuda))
+        # Half precision widens to float32 only: that is PyTorch's opmath for
+        # it, and a float64 division ran every diffusers attention block's
+        # `/ rescale_output_factor` in double -- 15 ms of a 20-step SD1.5
+        # sample on a part with 1/64-rate double -- to round to the same half.
+        wide = "float32" if src_dt in ("float16", "bfloat16") else "float64"
         use_wide = sd.startswith("float") and src_dt != "float64" and not acl_active
-        calc_dt = "float64" if use_wide else tgt
+        calc_dt = wide if use_wide else tgt
         a = self if src_dt == calc_dt else self.cast(calc_dt)
         b = _owner.jt.array(other, dtype=calc_dt) if use_wide else other
         out = _binary_native(opname, a, b)

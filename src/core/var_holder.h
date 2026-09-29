@@ -729,8 +729,64 @@ struct VarHolder {
     VarHolder* transpose_view_base();
 
     /**
+     * The axes of this view's last step when it is a transpose, else empty.
+     */
+    // @pyjt(_transpose_view_axes)
+    NanoVector transpose_view_axes();
+
+    /**
+     * What this transpose view was before its last transpose: a new holder,
+     * itself a view of the same root one step shorter, so that a write to it
+     * still reaches the root. A kernel that can read the untransposed layout
+     * takes this instead of materializing the transpose, and a transpose of
+     * this view composes with it rather than stacking a second one.
+     */
+    // @pyjt(_transpose_view_source)
+    VarHolder* transpose_view_source();
+
+    /**
+     * The axes of the transpose that will compute this Var, else empty: the
+     * graph's answer where the view record is gone -- `q = proj(x).view(...)
+     * .transpose(1, 2)` drops the projection's holder, and a view's record
+     * lives only as long as its root's holder. ``_input(0)`` is the source.
+     */
+    // @pyjt(_producer_transpose_axes)
+    NanoVector producer_transpose_axes();
+
+    /**
      * Whether an assignment to this holder writes through to some base.
      */
+    /**
+     * This tensor permuted by ``axes`` as a view of the same storage: no
+     * copy, and no Python ``transpose`` wrapper on the way. What the
+     * channels-last helpers move between NCHW and NHWC with.
+     */
+    // @pyjt(_storage_permute)
+    VarHolder* storage_permute(NanoVector axes);
+
+    /**
+     * Whether this tensor costs nothing to read where it is: already in
+     * memory, or a view of storage that is. For `concat`, which folds such
+     * inputs into the kernel that consumes its result.
+     */
+    // @pyjt(_producer_is_view)
+    bool producer_is_view();
+
+    /**
+     * The elementwise unary op that is still to compute this tensor from one
+     * of the same shape -- its name, or the dtype for a cast -- or "".
+     */
+    // @pyjt(_producer_unary)
+    string producer_unary();
+
+    /**
+     * Whether this tensor is a dense copy still to be made (a pending
+     * `contiguous`); `_input(0)` is then what it copies. A consumer that reads
+     * strided input can read that instead, and the copy is never made.
+     */
+    // @pyjt(_is_pending_contiguous)
+    bool is_pending_contiguous();
+
     // @pyjt(_is_view)
     inline bool is_view() { return view && view->base; }
 

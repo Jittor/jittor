@@ -314,6 +314,36 @@ def _grad_get(self):
     return None
 
 
+def _param_slots(opt, param):
+    """Every (group, index) at which ``opt`` holds ``param``.
+
+    Answered from an index kept on the optimizer. Scanning every parameter of
+    every group on each assignment made ``zero_grad(set_to_none=True)``, which
+    assigns ``p.grad = None`` for each parameter, quadratic in the parameter
+    count: 21 ms of a 90 ms DDPM training step at 450 parameters. A hit is
+    checked against the group it names before it is used and a miss rescans,
+    so an index made stale by a parameter replaced in place (3DGS
+    densification does ``group["params"][0] = new``) or a group added later
+    is rebuilt, never trusted.
+    """
+    index = opt.__dict__.get("_torch_param_slots")
+    if index is not None:
+        slots = index.get(id(param))
+        if slots is not None:
+            for pg, i in slots:
+                params = pg.get("params", ())
+                if i >= len(params) or params[i] is not param:
+                    break
+            else:
+                return slots
+    index = {}
+    for pg in getattr(opt, "param_groups", []):
+        for i, p in enumerate(pg.get("params", [])):
+            index.setdefault(id(p), []).append((pg, i))
+    object.__setattr__(opt, "_torch_param_slots", index)
+    return index.get(id(param), ())
+
+
 def _grad_set(self, value):
     object.__setattr__(self, "_torch_grad", value)
     fsdp_entry = getattr(self, "_jittor_fsdp2_entry", None)
@@ -341,27 +371,34 @@ def _grad_set(self, value):
         if o is None:
             continue
         changed = False
-        for pg in getattr(o, "param_groups", []):
-            params = list(pg.get("params", []))
-            for i, p in enumerate(params):
-                same_fsdp_entry = fsdp_entry is not None and getattr(
-                    p, "_jittor_fsdp2_entry", None) is fsdp_entry
-                if p is not self and not same_fsdp_entry:
-                    continue
-                if fsdp_role == "full" and value is not None and p is not self:
-                    continue
-                if value is None:
-                    grads = pg.get("grads")
-                    if grads is not None and i < len(grads):
-                        grads[i] = None
-                else:
-                    grads = pg.get("grads")
-                    if grads is None:
-                        grads = pg["grads"] = [None] * len(params)
-                    while len(grads) < len(params):
-                        grads.append(None)
-                    grads[i] = value
-                changed = True
+        if fsdp_entry is None:
+            slots = _param_slots(o, self)
+        else:
+            # An FSDP shard answers for its full parameter too, which only a
+            # scan comparing entries finds.
+            slots = []
+            for pg in getattr(o, "param_groups", []):
+                for i, p in enumerate(pg.get("params", [])):
+                    same_fsdp_entry = getattr(p, "_jittor_fsdp2_entry", None) is fsdp_entry
+                    if p is not self and not same_fsdp_entry:
+                        continue
+                    if fsdp_role == "full" and value is not None and p is not self:
+                        continue
+                    slots.append((pg, i))
+        for pg, i in slots:
+            count = len(pg.get("params", []))
+            if value is None:
+                grads = pg.get("grads")
+                if grads is not None and i < len(grads):
+                    grads[i] = None
+            else:
+                grads = pg.get("grads")
+                if grads is None:
+                    grads = pg["grads"] = [None] * count
+                while len(grads) < count:
+                    grads.append(None)
+                grads[i] = value
+            changed = True
         if changed:
             try:
                 object.__setattr__(o, "_grad_map", {})

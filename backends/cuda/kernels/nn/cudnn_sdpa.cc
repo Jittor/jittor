@@ -12,7 +12,13 @@
 // below. cuDNN itself is not linked here: Jittor has already loaded it
 // globally, and the undefined symbols resolve against that copy.
 //
-// Layout is [batch, heads, seq, head_dim], dense. Key/value may have fewer
+// Shapes are [batch, heads, seq, head_dim]. In memory each of q, k and v is
+// either that, dense, or [batch, seq, heads, head_dim] -- what a projection
+// reshaped into heads and transposed is before the transpose runs; `layout`
+// has a bit for each (LAYOUT_Q, _K, _V), and the output, its gradient and the
+// query gradient follow q, the key and value gradients k and v. Passing the
+// untransposed tensors is what lets a caller skip materializing three
+// transposes on the way in and one on the way out. Key/value may have fewer
 // heads than the query (grouped-query attention). An additive bias of shape
 // [bias_b, bias_h, seq_q, seq_kv] -- bias_b 1 or batch, bias_h 1 or heads, 0
 // for none -- carries an attention mask; the forward takes one, the backward
@@ -34,6 +40,7 @@ namespace fe = cudnn_frontend;
 namespace {
 
 enum { DTYPE_HALF = 0, DTYPE_BF16 = 1 };
+enum { LAYOUT_Q = 1, LAYOUT_K = 2, LAYOUT_V = 4 };
 
 using Key = std::tuple<int, int, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t,
                        int, uint32_t, int64_t, int64_t, cudnnHandle_t>;
@@ -60,6 +67,11 @@ fe::DataType_t io_type(int dtype) {
 
 std::vector<int64_t> dims(int64_t b, int64_t h, int64_t s, int64_t d) { return {b, h, s, d}; }
 std::vector<int64_t> dense(int64_t h, int64_t s, int64_t d) { return {h * s * d, s * d, d, 1}; }
+// Strides of a [b, h, s, d] tensor stored as [b, s, h, d] when `seq_major`.
+std::vector<int64_t> strides(bool seq_major, int64_t h, int64_t s, int64_t d) {
+    if (seq_major) return {s * h * d, d, h * d, 1};
+    return dense(h, s, d);
+}
 
 uint32_t bits(float value) {
     uint32_t out;
@@ -68,9 +80,9 @@ uint32_t bits(float value) {
 }
 
 std::shared_ptr<fe::graph::Tensor_attributes> input(fe::graph::Graph& graph, const char* name,
-        int64_t b, int64_t h, int64_t s, int64_t d) {
+        int64_t b, int64_t h, int64_t s, int64_t d, bool seq_major) {
     return graph.tensor(fe::graph::Tensor_attributes()
-        .set_name(name).set_dim(dims(b, h, s, d)).set_stride(dense(h, s, d)));
+        .set_name(name).set_dim(dims(b, h, s, d)).set_stride(strides(seq_major, h, s, d)));
 }
 
 std::shared_ptr<fe::graph::Tensor_attributes> stats_input(fe::graph::Graph& graph,
@@ -91,8 +103,8 @@ bool build(fe::graph::Graph& graph, cudnnHandle_t handle) {
 
 std::shared_ptr<Forward> forward_graph(cudnnHandle_t handle, int dtype, int64_t b, int64_t h,
         int64_t hk, int64_t sq, int64_t skv, int64_t d, float scale, int causal, int training,
-        int64_t bias_b, int64_t bias_h) {
-    Key key{0, dtype, b, h, hk, sq, skv, d, causal * 2 + training, bits(scale),
+        int layout, int64_t bias_b, int64_t bias_h) {
+    Key key{0, dtype, b, h, hk, sq, skv, d, (layout * 2 + causal) * 2 + training, bits(scale),
             bias_b, bias_h, handle};
     std::lock_guard<std::mutex> lock(cache_mutex);
     auto found = forward_cache.find(key);
@@ -104,9 +116,9 @@ std::shared_ptr<Forward> forward_graph(cudnnHandle_t handle, int dtype, int64_t 
     graph.set_io_data_type(io_type(dtype))
         .set_intermediate_data_type(fe::DataType_t::FLOAT)
         .set_compute_data_type(fe::DataType_t::FLOAT);
-    entry->q = input(graph, "q", b, h, sq, d);
-    entry->k = input(graph, "k", b, hk, skv, d);
-    entry->v = input(graph, "v", b, hk, skv, d);
+    entry->q = input(graph, "q", b, h, sq, d, layout & LAYOUT_Q);
+    entry->k = input(graph, "k", b, hk, skv, d, layout & LAYOUT_K);
+    entry->v = input(graph, "v", b, hk, skv, d, layout & LAYOUT_V);
     auto options = fe::graph::SDPA_attributes().set_name("sdpa")
         .set_generate_stats(training != 0).set_attn_scale(scale);
     if (causal) options.set_causal_mask(true);
@@ -118,7 +130,8 @@ std::shared_ptr<Forward> forward_graph(cudnnHandle_t handle, int dtype, int64_t 
     }
     auto outputs = graph.sdpa(entry->q, entry->k, entry->v, options);
     entry->o = outputs[0];
-    entry->o->set_output(true).set_dim(dims(b, h, sq, d)).set_stride(dense(h, sq, d));
+    entry->o->set_output(true).set_dim(dims(b, h, sq, d))
+        .set_stride(strides(layout & LAYOUT_Q, h, sq, d));
     if (training) {
         entry->stats = outputs[1];
         entry->stats->set_output(true).set_data_type(fe::DataType_t::FLOAT)
@@ -133,8 +146,8 @@ std::shared_ptr<Forward> forward_graph(cudnnHandle_t handle, int dtype, int64_t 
 }
 
 std::shared_ptr<Backward> backward_graph(cudnnHandle_t handle, int dtype, int64_t b, int64_t h,
-        int64_t hk, int64_t sq, int64_t skv, int64_t d, float scale, int causal) {
-    Key key{1, dtype, b, h, hk, sq, skv, d, causal, bits(scale), 0, 0, handle};
+        int64_t hk, int64_t sq, int64_t skv, int64_t d, float scale, int causal, int layout) {
+    Key key{1, dtype, b, h, hk, sq, skv, d, layout * 2 + causal, bits(scale), 0, 0, handle};
     std::lock_guard<std::mutex> lock(cache_mutex);
     auto found = backward_cache.find(key);
     if (found != backward_cache.end()) return found->second;
@@ -145,11 +158,13 @@ std::shared_ptr<Backward> backward_graph(cudnnHandle_t handle, int dtype, int64_
     graph.set_io_data_type(io_type(dtype))
         .set_intermediate_data_type(fe::DataType_t::FLOAT)
         .set_compute_data_type(fe::DataType_t::FLOAT);
-    entry->q = input(graph, "q", b, h, sq, d);
-    entry->k = input(graph, "k", b, hk, skv, d);
-    entry->v = input(graph, "v", b, hk, skv, d);
-    entry->o = input(graph, "o", b, h, sq, d);
-    entry->dout = input(graph, "dout", b, h, sq, d);
+    const bool q_major = layout & LAYOUT_Q, k_major = layout & LAYOUT_K,
+               v_major = layout & LAYOUT_V;
+    entry->q = input(graph, "q", b, h, sq, d, q_major);
+    entry->k = input(graph, "k", b, hk, skv, d, k_major);
+    entry->v = input(graph, "v", b, hk, skv, d, v_major);
+    entry->o = input(graph, "o", b, h, sq, d, q_major);
+    entry->dout = input(graph, "dout", b, h, sq, d, q_major);
     entry->stats = stats_input(graph, b, h, sq);
     auto options = fe::graph::SDPA_backward_attributes().set_name("sdpa_backward")
         .set_attn_scale(scale);
@@ -159,9 +174,12 @@ std::shared_ptr<Backward> backward_graph(cudnnHandle_t handle, int dtype, int64_
     entry->dq = grads[0];
     entry->dk = grads[1];
     entry->dv = grads[2];
-    entry->dq->set_output(true).set_dim(dims(b, h, sq, d)).set_stride(dense(h, sq, d));
-    entry->dk->set_output(true).set_dim(dims(b, hk, skv, d)).set_stride(dense(hk, skv, d));
-    entry->dv->set_output(true).set_dim(dims(b, hk, skv, d)).set_stride(dense(hk, skv, d));
+    entry->dq->set_output(true).set_dim(dims(b, h, sq, d))
+        .set_stride(strides(q_major, h, sq, d));
+    entry->dk->set_output(true).set_dim(dims(b, hk, skv, d))
+        .set_stride(strides(k_major, hk, skv, d));
+    entry->dv->set_output(true).set_dim(dims(b, hk, skv, d))
+        .set_stride(strides(v_major, hk, skv, d));
     if (!build(graph, handle)) {
         unsupported[key] = true;
         return nullptr;
@@ -190,15 +208,16 @@ const char* jt_cudnn_sdpa_last_error() { return last_error.c_str(); }
 // Builds (and caches) the graphs a call would use; 0 if cuDNN cannot run it.
 // `workspace` receives the larger of the two workspace sizes.
 int jt_cudnn_sdpa_supported(cudnnHandle_t handle, int dtype, int64_t b, int64_t h, int64_t hk,
-        int64_t sq, int64_t skv, int64_t d, float scale, int causal, int training,
+        int64_t sq, int64_t skv, int64_t d, float scale, int causal, int training, int layout,
         int64_t bias_b, int64_t bias_h, int64_t* workspace) {
     try {
         auto forward = forward_graph(handle, dtype, b, h, hk, sq, skv, d, scale, causal, training,
-                                     bias_b, bias_h);
+                                     layout, bias_b, bias_h);
         if (!forward) return 0;
         int64_t size = forward->graph->get_workspace_size();
         if (training) {
-            auto backward = backward_graph(handle, dtype, b, h, hk, sq, skv, d, scale, causal);
+            auto backward = backward_graph(handle, dtype, b, h, hk, sq, skv, d, scale, causal,
+                                           layout);
             if (!backward) return 0;
             size = std::max(size, backward->graph->get_workspace_size());
         }
@@ -212,19 +231,19 @@ int jt_cudnn_sdpa_supported(cudnnHandle_t handle, int dtype, int64_t b, int64_t 
 
 int64_t jt_cudnn_sdpa_forward_workspace(cudnnHandle_t handle, int dtype, int64_t b, int64_t h,
         int64_t hk, int64_t sq, int64_t skv, int64_t d, float scale, int causal, int training,
-        int64_t bias_b, int64_t bias_h) {
+        int layout, int64_t bias_b, int64_t bias_h) {
     auto forward = forward_graph(handle, dtype, b, h, hk, sq, skv, d, scale, causal, training,
-                                 bias_b, bias_h);
+                                 layout, bias_b, bias_h);
     return forward ? forward->graph->get_workspace_size() : -1;
 }
 
 int jt_cudnn_sdpa_forward(cudnnHandle_t handle, int dtype, int64_t b, int64_t h, int64_t hk,
-        int64_t sq, int64_t skv, int64_t d, float scale, int causal, int training,
+        int64_t sq, int64_t skv, int64_t d, float scale, int causal, int training, int layout,
         int64_t bias_b, int64_t bias_h,
         void* q, void* k, void* v, void* bias, void* o, void* stats, void* workspace) {
     try {
         auto forward = forward_graph(handle, dtype, b, h, hk, sq, skv, d, scale, causal, training,
-                                     bias_b, bias_h);
+                                     layout, bias_b, bias_h);
         if (!forward) return 1;
         std::unordered_map<std::shared_ptr<fe::graph::Tensor_attributes>, void*> pack = {
             {forward->q, q}, {forward->k, k}, {forward->v, v}, {forward->o, o}};
@@ -238,17 +257,17 @@ int jt_cudnn_sdpa_forward(cudnnHandle_t handle, int dtype, int64_t b, int64_t h,
 }
 
 int64_t jt_cudnn_sdpa_backward_workspace(cudnnHandle_t handle, int dtype, int64_t b, int64_t h,
-        int64_t hk, int64_t sq, int64_t skv, int64_t d, float scale, int causal) {
-    auto backward = backward_graph(handle, dtype, b, h, hk, sq, skv, d, scale, causal);
+        int64_t hk, int64_t sq, int64_t skv, int64_t d, float scale, int causal, int layout) {
+    auto backward = backward_graph(handle, dtype, b, h, hk, sq, skv, d, scale, causal, layout);
     return backward ? backward->graph->get_workspace_size() : -1;
 }
 
 int jt_cudnn_sdpa_backward(cudnnHandle_t handle, int dtype, int64_t b, int64_t h, int64_t hk,
-        int64_t sq, int64_t skv, int64_t d, float scale, int causal,
+        int64_t sq, int64_t skv, int64_t d, float scale, int causal, int layout,
         void* q, void* k, void* v, void* o, void* dout, void* stats,
         void* dq, void* dk, void* dv, void* workspace) {
     try {
-        auto backward = backward_graph(handle, dtype, b, h, hk, sq, skv, d, scale, causal);
+        auto backward = backward_graph(handle, dtype, b, h, hk, sq, skv, d, scale, causal, layout);
         if (!backward) return 1;
         std::unordered_map<std::shared_ptr<fe::graph::Tensor_attributes>, void*> pack = {
             {backward->q, q}, {backward->k, k}, {backward->v, v}, {backward->o, o},

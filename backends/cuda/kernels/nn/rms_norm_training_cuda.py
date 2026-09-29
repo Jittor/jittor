@@ -11,6 +11,13 @@ from jittor._runtime.dispatch import optional_kernel
 from .rms_norm_cuda import _autocast_enabled
 
 
+def _gamma_segments(hidden_size, rows):
+    """Row segments of the gamma gradient: about a thousand blocks, none with
+    fewer than eight rows a thread."""
+    columns = -(-hidden_size // 32)
+    return max(1, min(-(-1024 // columns), rows // 64))
+
+
 @lru_cache(maxsize=128)
 def _rms_norm_training_cuda_cls(hidden_size, epsilon):
     threads = 32
@@ -67,9 +74,18 @@ def _rms_norm_training_cuda_cls(hidden_size, epsilon):
 
         def grad(self, grad_y):
             x, rstd, gamma = self.saved
-            grad_x, grad_gamma = jt.code(
-                [grad_y.shape, gamma.shape],
-                [grad_y.dtype, gamma.dtype],
+            rows = int(grad_y.numel()) // hidden_size
+            # The gamma gradient is a column sum. A block is 32 channels by 8
+            # rows, so a warp reads 32 consecutive channels of one row, and the
+            # rows are cut into segments whose partial sums a second kernel
+            # adds in a fixed order. It was one block per channel walking the
+            # rows, a warp touching 32 cache lines for 32 floats: 62 us a
+            # call on Qwen3, a quarter of the bandwidth.
+            segments = _gamma_segments(hidden_size, rows)
+            per_segment = -(-rows // segments)
+            grad_x, grad_gamma, partial = jt.code(
+                [grad_y.shape, gamma.shape, (segments * hidden_size,)],
+                [grad_y.dtype, gamma.dtype, "float32"],
                 [grad_y, x, rstd, gamma],
                 cuda_header=header,
                 cuda_src=f"""
@@ -106,30 +122,48 @@ def _rms_norm_training_cuda_cls(hidden_size, epsilon):
                     }}
                 }}
 
-                __global__ static void rms_norm_backward_gamma(
+                __global__ static void rms_norm_backward_gamma_partial(
                         const in0_type* grad_y, const in1_type* x,
-                        const in2_type* rstd, out1_type* grad_gamma,
-                        int rows) {{
-                    typedef cub::BlockReduce<float, {threads}> BlockReduce;
-                    __shared__ typename BlockReduce::TempStorage storage;
-                    int channel = blockIdx.x;
+                        const in2_type* rstd, float* partial) {{
+                    __shared__ float sums[8][33];
+                    int channel = blockIdx.x * 32 + threadIdx.x;
+                    int begin = blockIdx.y * {per_segment};
+                    int end = min(begin + {per_segment}, {rows});
                     float local = 0.0f;
-                    for (int row = threadIdx.x; row < rows; row += blockDim.x) {{
-                        int index = row * {hidden_size} + channel;
-                        local += static_cast<float>(grad_y[index])
-                            * static_cast<float>(x[index])
-                            * static_cast<float>(rstd[row]);
+                    if (channel < {hidden_size})
+                        for (int row = begin + threadIdx.y; row < end; row += 8) {{
+                            long long index = (long long)row * {hidden_size} + channel;
+                            local += static_cast<float>(grad_y[index])
+                                * static_cast<float>(x[index])
+                                * static_cast<float>(rstd[row]);
+                        }}
+                    sums[threadIdx.y][threadIdx.x] = local;
+                    __syncthreads();
+                    if (threadIdx.y == 0 && channel < {hidden_size}) {{
+                        float total = 0.0f;
+                        for (int k = 0; k < 8; k++) total += sums[k][threadIdx.x];
+                        partial[blockIdx.y * {hidden_size} + channel] = total;
                     }}
-                    float reduced = BlockReduce(storage).Sum(local);
-                    if (threadIdx.x == 0)
-                        grad_gamma[channel] = out1_type(reduced);
+                }}
+
+                __global__ static void rms_norm_backward_gamma_finish(
+                        const float* partial, out1_type* grad_gamma) {{
+                    int channel = blockIdx.x * blockDim.x + threadIdx.x;
+                    if (channel >= {hidden_size}) return;
+                    float total = 0.0f;
+                    for (int s = 0; s < {segments}; s++)
+                        total += partial[s * {hidden_size} + channel];
+                    grad_gamma[channel] = out1_type(total);
                 }}
 
                 int rows = in0->num / {hidden_size};
                 rms_norm_backward_x<<<rows, {threads}>>>(
                     in0_p, in1_p, in2_p, in3_p, out0_p, rows);
-                rms_norm_backward_gamma<<<{hidden_size}, {threads}>>>(
-                    in0_p, in1_p, in2_p, out1_p, rows);
+                rms_norm_backward_gamma_partial<<<dim3({-(-hidden_size // 32)}, {segments}),
+                                                  dim3(32, 8)>>>(
+                    in0_p, in1_p, in2_p, out2_p);
+                rms_norm_backward_gamma_finish<<<{-(-hidden_size // 256)}, 256>>>(
+                    out2_p, out1_p);
                 CHECK(0 == cudaGetLastError());
                 """,
             )

@@ -1,5 +1,6 @@
 #include "ops/composite/fused_adamw_op.h"
 #include "core/var.h"
+#include <algorithm>
 
 namespace jittor {
 
@@ -83,44 +84,95 @@ struct AdamwLaunch {
     const T* g[kTensors];
     int64 numel[kTensors];
     int first_block[kTensors + 1];
+    // float tensors whose four pointers are 16-byte aligned and whose size is
+    // a multiple of four: a thread moves a float4 of each at once.
+    bool vector[kTensors];
     int count;
 };
+
+struct AdamwStep {
+    float step_size, correction, decay, beta1, beta2, eps;
+};
+
+// One element. The casts round through the parameter's type exactly where the
+// per-parameter path stores and reloads, so the two agree bit for bit.
+__device__ __forceinline__ void adamw_element(const AdamwStep& s, float grad, float& p,
+                                              float& m, float& v) {
+    const float param = float(T(p * s.decay));
+    const float moment = s.beta1 * m + (1.f - s.beta1) * grad;
+    const float variance = s.beta2 * v + (1.f - s.beta2) * grad * grad;
+    m = float(T(moment));
+    v = float(T(variance));
+    p = param - m * s.step_size / (sqrtf(v) / s.correction + s.eps);
+}
 
 __global__ void fused_adamw_kernel(AdamwLaunch launch, const float* step, float lr,
                                    bool lr_in_step, bool skip_in_step, float beta1,
                                    float beta2, float weight_decay, float eps) {
+    // The step's scalars, once per block. Every thread used to compute them,
+    // and in double: two `pow`s per thread, 1.5e8 of them for a 0.6B-parameter
+    // model, on parts where double runs at 1/64 the float rate -- the update
+    // took 46 ms where its memory traffic needs 18.
+    __shared__ float shared_step_size, shared_correction, shared_decay;
+    __shared__ bool shared_skip;
+    if (threadIdx.x == 0) {
+        // A two-element step carries the learning rate as well: a captured
+        // step is replayed without the optimizer running, so whatever changes
+        // between steps has to be read on the device rather than baked into
+        // the launch.
+        const float rate = lr_in_step ? step[1] : lr;
+        // A third element is a gradient scaler's found-inf: the step is
+        // skipped on the device, parameters and moments untouched, as the
+        // scaler would skip it on the host.
+        shared_skip = skip_in_step && step[2] != 0.f;
+        // In double, as the per-parameter path computes them on the host:
+        // 1 - 0.999^t in float keeps about three digits for small t.
+        const double n = *step;
+        shared_step_size = (float)(rate / (1.0 - pow((double)beta1, n)));
+        shared_correction = (float)sqrt(1.0 - pow((double)beta2, n));
+        shared_decay = 1.f - rate * weight_decay;
+    }
+    __syncthreads();
+    if (shared_skip) return;
+    const AdamwStep scalars{shared_step_size, shared_correction, shared_decay,
+                            beta1, beta2, eps};
+    // A grid of a few blocks per SM walks the launch's blocks; each block of
+    // the launch is kPerBlock consecutive elements of one tensor.
+    const int total = launch.first_block[launch.count];
     int t = 0;
-    while (t + 1 < launch.count && launch.first_block[t + 1] <= (int)blockIdx.x) t++;
-    // A two-element step carries the learning rate as well: a captured step
-    // is replayed without the optimizer running, so whatever changes between
-    // steps has to be read on the device rather than baked into the launch.
-    if (lr_in_step) lr = step[1];
-    // A third element is a gradient scaler's found-inf: the step is skipped on
-    // the device, parameters and moments untouched, as the scaler would skip
-    // it on the host.
-    if (skip_in_step && step[2] != 0.f) return;
-    // In double, as the per-parameter path computes them on the host:
-    // 1 - 0.999^t in float keeps about three digits for small t.
-    const double n = *step;
-    const float step_size = (float)(lr / (1.0 - pow((double)beta1, n)));
-    const float correction = (float)sqrt(1.0 - pow((double)beta2, n));
-    const float decay = 1.f - lr * weight_decay;
-    const int64 base = (int64)(blockIdx.x - launch.first_block[t]) * kPerBlock;
-    T* p = launch.p[t];
-    T* m = launch.m[t];
-    T* v = launch.v[t];
-    const T* g = launch.g[t];
-    for (int k = 0; k < kPerThread; k++) {
-        const int64 i = base + (int64)k * kThreads + threadIdx.x;
-        if (i >= launch.numel[t]) return;
-        const float grad = float(g[i]);
-        const float param = float(T(float(p[i]) * decay));
-        const float moment = beta1 * float(m[i]) + (1.f - beta1) * grad;
-        const float variance = beta2 * float(v[i]) + (1.f - beta2) * grad * grad;
-        m[i] = T(moment);
-        v[i] = T(variance);
-        p[i] = T(param - float(T(moment)) * step_size
-                         / (sqrtf(float(T(variance))) / correction + eps));
+    for (int block = blockIdx.x; block < total; block += gridDim.x) {
+        while (t + 1 < launch.count && launch.first_block[t + 1] <= block) t++;
+        const int64 base = (int64)(block - launch.first_block[t]) * kPerBlock;
+        T* p = launch.p[t];
+        T* m = launch.m[t];
+        T* v = launch.v[t];
+        const T* g = launch.g[t];
+        if (sizeof(T) == 4 && launch.vector[t]) {
+            // kPerThread is four: the block's elements as one float4 a thread.
+            const int64 i = base / 4 + threadIdx.x;
+            if (i * 4 >= launch.numel[t]) continue;
+            float4 gv = reinterpret_cast<const float4*>(g)[i];
+            float4 pv = reinterpret_cast<float4*>(p)[i];
+            float4 mv = reinterpret_cast<float4*>(m)[i];
+            float4 vv = reinterpret_cast<float4*>(v)[i];
+            adamw_element(scalars, gv.x, pv.x, mv.x, vv.x);
+            adamw_element(scalars, gv.y, pv.y, mv.y, vv.y);
+            adamw_element(scalars, gv.z, pv.z, mv.z, vv.z);
+            adamw_element(scalars, gv.w, pv.w, mv.w, vv.w);
+            reinterpret_cast<float4*>(p)[i] = pv;
+            reinterpret_cast<float4*>(m)[i] = mv;
+            reinterpret_cast<float4*>(v)[i] = vv;
+            continue;
+        }
+        for (int k = 0; k < kPerThread; k++) {
+            const int64 i = base + (int64)k * kThreads + threadIdx.x;
+            if (i >= launch.numel[t]) break;
+            float param = float(p[i]), moment = float(m[i]), variance = float(v[i]);
+            adamw_element(scalars, float(g[i]), param, moment, variance);
+            m[i] = T(moment);
+            v[i] = T(variance);
+            p[i] = T(param);
+        }
     }
 }
 } // namespace
@@ -132,10 +184,14 @@ void FusedAdamwOp::jit_run() {
     AdamwLaunch launch;
     launch.count = 0;
     int blocks = 0;
+    int device = 0, sms = 0;
+    cudaGetDevice(&device);
+    cudaDeviceGetAttribute(&sms, cudaDevAttrMultiProcessorCount, device);
+    const int grid = std::max(sms, 1) * 8;
     auto flush = [&]() {
         if (!launch.count) return;
         launch.first_block[launch.count] = blocks;
-        fused_adamw_kernel<<<blocks, kThreads>>>(launch, step_ptr, (float)lr, lr_in_step,
+        fused_adamw_kernel<<<std::min(blocks, grid), kThreads>>>(launch, step_ptr, (float)lr, lr_in_step,
                                                  skip_in_step, (float)beta1, (float)beta2,
                                                  (float)weight_decay, (float)eps);
         launch.count = 0;
@@ -153,6 +209,9 @@ void FusedAdamwOp::jit_run() {
         launch.v[c] = new_variances[i]->ptr<T>();
         launch.g[c] = gradients[i]->ptr<T>();
         launch.numel[c] = numel;
+        launch.vector[c] = sizeof(T) == 4 && numel % 4 == 0
+            && (((size_t)launch.p[c] | (size_t)launch.m[c] | (size_t)launch.v[c]
+                 | (size_t)launch.g[c]) & 15) == 0;
         launch.first_block[c] = blocks;
         blocks += (int)need;
     }

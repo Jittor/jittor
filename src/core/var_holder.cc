@@ -8,6 +8,7 @@
 #include <unordered_map>
 #include <sstream>
 #include "core/var_holder.h"
+#include "ops/layout_propagation.h"
 #include "core/var.h"
 #include "core/executor.h"
 #include "runtime/device.h"
@@ -16,6 +17,8 @@
 #include "core/grad.h"
 #include "mem/allocator/cuda_dual_allocator.h"
 #include "ops/op_register.h"
+#include "ops/composite/transpose_op.h"
+#include "ops/composite/fuse_transpose_op.h"
 #include "type/fp16_compute.h"
 #include "mem/swap.h"
 #include "runtime/executor_entry.h"
@@ -237,6 +240,14 @@ void VarHolder::copy_into(VarHolder* src, bool sync_src) {
         << "_copy_into(sync_src=False) needs a source that already holds its "
            "bytes; this one has never been executed";
     check_inplace_target(var, "_copy_into");
+    // A strided source -- a channels-last activation read as NCHW, a
+    // transposed view -- is made dense first; the copy below moves raw bytes.
+    unique_ptr<VarHolder> dense;
+    if (!src->var->is_contiguous()) {
+        dense.reset(new VarHolder(contiguous_storage(src->var)));
+        dense->sync(false, false);
+        src = dense.get();
+    }
     check_inplace_target(src->var, "_copy_into source");
     USER_CHECK(src->var->dtype() == var->dtype())
         << "_copy_into dtype mismatch:" << src->var->dtype() << "into" << var->dtype();
@@ -466,6 +477,10 @@ VarHolder* VarHolder::set_storage_view_of(VarHolder* base, bool expand) {
     return this;
 }
 
+VarHolder* VarHolder::storage_permute(NanoVector axes) {
+    return new VarHolder(storage_view_transpose(var, axes));
+}
+
 VarHolder* VarHolder::transpose_view_base() {
     USER_CHECK(is_last2_transpose_view()) << "tensor is not a live last-two-axis transpose view";
     VarPtr value(view->base->var);
@@ -476,6 +491,42 @@ VarHolder* VarHolder::transpose_view_base() {
     for (size_t i=0; i+1<view->steps.size(); ++i)
         value = apply_view_step(value.ptr, view->steps[i]);
     return new VarHolder(move(value));
+}
+
+NanoVector VarHolder::transpose_view_axes() {
+    if (!is_view() || view->steps.empty()) return NanoVector();
+    const auto& step = view->steps.back();
+    if (step.kind != VarViewStep::Transpose) return NanoVector();
+    return step.axes;
+}
+
+NanoVector VarHolder::producer_transpose_axes() {
+    if (var->is_finished()) return NanoVector();
+    Op* op = var->input();
+    if (!op) return NanoVector();
+    if (auto* transpose = dynamic_cast<TransposeOp*>(op)) return transpose->axes;
+    if (auto* transpose = dynamic_cast<FuseTransposeOp*>(op)) return transpose->axes;
+    return NanoVector();
+}
+
+VarHolder* VarHolder::transpose_view_source() {
+    USER_CHECK(transpose_view_axes().size()) << "tensor is not a live transpose view";
+    VarHolder* root = view->base;
+    VarPtr value(root->var);
+    if (view->steps.size() == 1)
+        value = make_getitem(value.ptr, VarSlices(0));
+    for (size_t i=0; i+1<view->steps.size(); ++i)
+        value = apply_view_step(value.ptr, view->steps[i]);
+    auto* result = new VarHolder(move(value));
+    vector<VarViewStep> steps(view->steps.begin(), view->steps.end() - 1);
+    // A view needs a step to write back through; the root itself is one
+    // whole-shape reshape away.
+    if (steps.empty())
+        steps.emplace_back(VarViewStep::Reshape, NanoVector(root->var->shape));
+    result->view = new VarView{root, result, move(steps), nullptr, root->views};
+    if (root->views) root->views->prev = result->view;
+    root->views = result->view;
+    return result;
 }
 
 // Whether one recorded view step still applies to `value`.
@@ -655,6 +706,31 @@ void VarHolder::set_requires_grad(bool flag) {
         // stay alive, while newly initialized Ops snapshot disabled input edges.
         var->set_flag(VarFlags::_requires_grad_disabled);
     }
+}
+
+bool VarHolder::producer_is_view() {
+    if (var->is_finished()) return true;
+    Op* op = var->input();
+    return op && op->is_storage_view();
+}
+
+string VarHolder::producer_unary() {
+    if (var->is_finished()) return "";
+    Op* op = var->input();
+    if (!op || !op->is_op(op_ids::unary()) || op->inputs().size() != 1) return "";
+    if (op->inputs().front()->shape != var->shape) return "";
+    if (op->ns == ns_cast) return var->dtype().to_cstring();
+    return op->ns.to_cstring();
+}
+
+bool VarHolder::is_pending_contiguous() {
+    if (var->is_finished()) return false;
+    Op* op = var->input();
+    return op && op->is_op(op_ids::contiguous()) && op->inputs().size() == 1;
+}
+
+void mark_python_number(VarHolder* holder) {
+    holder->var->set_flag(VarFlags::_python_number);
 }
 
 VarHolder* VarHolder::start_grad() {

@@ -645,8 +645,26 @@ def _ensure_capability_compile_env(head_dim: int, dtype: str) -> None:
         "JITTOR_FLASH_ATTN_DTYPES", "FLASH_ATTN_DTYPES", compile_dtype)
 
 
+#: `load_backend_for` answers by (head_dim, dtype), with the
+#: `backend_cache_token` they were answered under.
+_LOOKUPS = {}
+
+
 def load_backend_for(head_dim: int, dtype: str) -> Tuple[Optional[ModuleType], Optional[str]]:
-    """Load a backend containing the requested official kernel capability."""
+    """Load a backend containing the requested official kernel capability.
+
+    An answer holds for as long as `backend_cache_token` does: the token moves
+    with the loaded module and with every write to the environment the loader
+    reads. Re-deriving it re-reads that environment and re-stats the source
+    tree -- about 90 us, which every attention call paid twice, the native
+    flash kernel and the frontend each asking, whether or not a backend
+    exists: a sixth of a Qwen3 decode step's host time.
+    """
+    token = backend_cache_token()
+    if token is not None:
+        known = _LOOKUPS.get((head_dim, dtype))
+        if known is not None and known[0] == token:
+            return known[1]
     # Capability env, build digest, source selection, module metadata and cache
     # key all consume the same process-global environment. Keep the entire
     # transaction under the loader lock so concurrent first-use requests cannot
@@ -660,6 +678,14 @@ def load_backend_for(head_dim: int, dtype: str) -> Tuple[Optional[ModuleType], O
             # so a forced reload incrementally builds the expanded module.
             backend = load_backend(force=True)
             miss = backend_capability_miss(backend, head_dim, dtype)
+        # The token as it stands after the load, which may have written the
+        # capability environment; and only an answer the loader published
+        # under it -- one it did not (an error, a race) is asked again.
+        token = backend_cache_token()
+        published = (backend is None and _BACKEND is None) or (
+            backend is not None and backend_publication_token(backend) == token)
+        if token is not None and published:
+            _LOOKUPS[(head_dim, dtype)] = (token, (backend, miss))
         return backend, miss
 
 

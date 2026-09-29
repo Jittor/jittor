@@ -154,8 +154,16 @@ class TestLayerNorm(_NormBase):
 class TestRMSNorm(_NormBase):
     @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA RMSNorm fast path needs CUDA")
     def test_cuda_training_forward_and_all_gradients(self):
+        self._check_cuda_training((3, 5, 1024))
+
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA RMSNorm fast path needs CUDA")
+    def test_cuda_gamma_gradient_over_many_row_segments(self):
+        # 4096 rows cut into segments, a width that is not a multiple of the
+        # 32-channel blocks the gamma gradient is summed in.
+        self._check_cuda_training((8, 512, 100))
+
+    def _check_cuda_training(self, shape):
         rng = np.random.RandomState(20260827)
-        shape = (3, 5, 1024)
         x_np = rng.randn(*shape).astype("float32")
         gamma_np = rng.randn(shape[-1]).astype("float32")
         cot_np = rng.randn(*shape).astype("float32")
@@ -189,6 +197,48 @@ class TestRMSNorm(_NormBase):
 
 
 class TestGroupNorm(_NormBase):
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA GroupNorm fast path needs CUDA")
+    def test_cuda_half_precision_and_many_segments(self):
+        # Half precision is how diffusion UNets run their GroupNorms; it used
+        # to fall through to the generic path. The shapes cut each group into
+        # several segments and take the float4 and the scalar kernels.
+        cases = (((2, 64, 32, 32), 32, "float32"), ((3, 40, 7, 9), 8, "float32"),
+                 ((2, 64, 32, 32), 32, "float16"), ((2, 96, 16, 16), 32, "bfloat16"))
+        for shape, groups, dtype in cases:
+            with self.subTest(shape=shape, dtype=dtype):
+                rng = np.random.RandomState(sum(shape))
+                x_np = (rng.randn(*shape) * 2 + 3).astype("float32")
+                weight_np = rng.randn(shape[1]).astype("float32")
+                bias_np = rng.randn(shape[1]).astype("float32")
+                cot_np = rng.randn(*shape).astype("float32")
+                with jt.flag_scope(use_cuda=1):
+                    x, weight, bias, cot = (jt.array(a).cast(dtype)
+                                            for a in (x_np, weight_np, bias_np, cot_np))
+                    output = _group_norm_cuda(x, groups, weight, bias, 1e-5)
+                    self.assertIsNotNone(output)
+                    grads = jt.grad((output.float32() * cot.float32()).sum(), [x, weight, bias])
+                    got = [a.float32().numpy() for a in [output] + list(grads)]
+                # float64 reference from the values the kernel actually saw
+                xr, wr, br, cr = (jt.array(a).cast(dtype).float32().numpy().astype(np.float64)
+                                  for a in (x_np, weight_np, bias_np, cot_np))
+                n = shape[0]
+                xg = xr.reshape(n, groups, -1)
+                mean = xg.mean(-1, keepdims=True)
+                rstd = 1 / np.sqrt(xg.var(-1, keepdims=True) + 1e-5)
+                xhat = ((xg - mean) * rstd).reshape(shape)
+                y = xhat * wr[None, :, None, None] + br[None, :, None, None]
+                g = (cr * wr[None, :, None, None]).reshape(n, groups, -1)
+                xh = xhat.reshape(n, groups, -1)
+                gx = (rstd * (g - g.mean(-1, keepdims=True)
+                              - xh * (g * xh).mean(-1, keepdims=True))).reshape(shape)
+                gw = (cr * xhat).sum((0, 2, 3))
+                gb = cr.sum((0, 2, 3))
+                tol = 2e-3 if dtype == "float32" else 3e-2
+                for name, value, ref in zip(("y", "grad_x", "grad_weight", "grad_bias"),
+                                            got, (y, gx, gw, gb)):
+                    np.testing.assert_allclose(value, ref, rtol=tol,
+                                               atol=tol * np.abs(ref).max(), err_msg=name)
+
     @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA GroupNorm fast path needs CUDA")
     def test_cuda_fast_path_forward_and_all_gradients(self):
         rng = np.random.RandomState(20260823)
@@ -347,6 +397,137 @@ class TestGroupNorm(_NormBase):
                 jt.array(x_np), 4, jt.array(weight_np), jt.array(bias_np), 1e-5))
 
 
+class TestGroupNormActivation(unittest.TestCase):
+    """`silu(group_norm(x))` runs the activation inside the group norm's pass.
+
+    The group norm's unexecuted output offers the activation; forward and
+    backward then run as the normalization's own kernels, which recompute the
+    pre-activation value instead of storing it.
+    """
+
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled,
+                         "CUDA GroupNorm fast path needs CUDA")
+    def test_silu_matches_and_takes_no_kernel_of_its_own(self):
+        rng = np.random.RandomState(7)
+        for shape in ((2, 8, 4, 4), (3, 6, 5, 7)):    # float4 path, scalar path
+            x_np = rng.randn(*shape).astype("float32")
+            w_np = rng.randn(shape[1]).astype("float32")
+            b_np = rng.randn(shape[1]).astype("float32")
+            cot_np = rng.randn(*shape).astype("float32")
+
+            def run(use_cuda, fused=True):
+                with jt.flag_scope(use_cuda=use_cuda):
+                    x, w, b = jt.array(x_np), jt.array(w_np), jt.array(b_np)
+                    y = F.group_norm(x, 2, w, b, 1e-5)
+                    out = F.silu(y if fused else y + 0.0)
+                    grads = jt.grad((out * jt.array(cot_np)).sum(), [x, w, b])
+                    return [out] + grads
+
+            with self.subTest(shape=shape):
+                for got, expected in zip(jt.fetch_sync(run(1)), jt.fetch_sync(run(0))):
+                    np.testing.assert_allclose(got, expected, rtol=2e-3, atol=2e-3)
+
+                def kernels(fused):
+                    jt.sync(run(1, fused))
+                    jt.sync_all(True)
+                    with jt.flag_scope(use_cuda=1), jt.profile() as p:
+                        jt.sync(run(1, fused))
+                        jt.sync_all(True)
+                    return len(p.result.kernel_records)
+                self.assertLess(kernels(True), kernels(False))
+
+
+class TestActivationAfterInPlaceResidual(unittest.TestCase):
+    """``out = norm(x); out += r; act(out)`` -- the torchvision bottleneck.
+
+    The in-place add rebinds the norm's output object to the sum, so the norm's
+    offer to apply the activation in its own pass no longer describes it. Taking
+    the offer anyway applied the activation to the normalization and dropped
+    the residual.
+    """
+
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled,
+                         "the fused normalizations are CUDA kernels")
+    def test_the_residual_is_kept(self):
+        rng = np.random.RandomState(13)
+        x_np = rng.randn(4, 8, 6, 6).astype("float32")
+        r_np = 3 * rng.randn(4, 8, 6, 6).astype("float32")
+
+        def batch_norm(x):
+            bn = nn.BatchNorm2d(8)
+            bn.train()
+            return bn(x)
+
+        cases = (
+            ("batch_norm+relu", batch_norm, nn.relu),
+            ("group_norm+silu", lambda x: F.group_norm(x, 2, jt.ones(8), jt.zeros(8), 1e-5),
+             F.silu),
+        )
+        for name, norm, act in cases:
+            def run(use_cuda, in_place):
+                with jt.flag_scope(use_cuda=use_cuda):
+                    out = norm(jt.array(x_np))
+                    if in_place:
+                        out += jt.array(r_np)
+                    else:
+                        out = out + jt.array(r_np)
+                    return act(out)
+            with self.subTest(name):
+                expected = run(0, False).numpy()
+                np.testing.assert_allclose(run(1, True).numpy(), expected,
+                                           rtol=1e-4, atol=1e-4)
+
+
+class TestBatchNormActivation(unittest.TestCase):
+    """`relu(batch_norm(x))` in training runs the activation in the norm's pass.
+
+    The statistics and the output are separate operators: the fused output
+    reuses the call's statistics, which the running buffers read, so they are
+    computed once and the buffers move once.
+    """
+
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled,
+                         "CUDA batch norm fast path needs CUDA")
+    def test_relu_matches_and_takes_no_kernel_of_its_own(self):
+        rng = np.random.RandomState(11)
+        for shape in ((4, 8, 6, 6), (3, 5, 7, 7)):    # float4 path, scalar path
+            x_np = rng.randn(*shape).astype("float32")
+            cot_np = rng.randn(*shape).astype("float32")
+
+            def run(use_cuda, fused=True):
+                with jt.flag_scope(use_cuda=use_cuda):
+                    bn = nn.BatchNorm2d(shape[1])
+                    bn.train()
+                    x = jt.array(x_np)
+                    y = bn(x)
+                    out = nn.relu(y if fused else y + 0.0)
+                    grads = jt.grad((out * jt.array(cot_np)).sum(), [x, bn.weight, bn.bias])
+                    return [out] + grads + [bn.running_mean, bn.running_var]
+
+            with self.subTest(shape=shape):
+                for got, expected in zip(jt.fetch_sync(run(1)), jt.fetch_sync(run(0))):
+                    np.testing.assert_allclose(got, expected, rtol=2e-3, atol=2e-3)
+                for got, expected in zip(jt.fetch_sync(run(1)), jt.fetch_sync(run(1, False))):
+                    np.testing.assert_allclose(got, expected, rtol=1e-5, atol=1e-5)
+
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled,
+                         "CUDA batch norm fast path needs CUDA")
+    def test_the_relu_forward_is_not_a_kernel(self):
+        x = jt.array(np.random.RandomState(12).randn(4, 8, 6, 6).astype("float32"))
+
+        def kernels(fused):
+            with jt.flag_scope(use_cuda=1):
+                bn = nn.BatchNorm2d(8)
+                bn.train()
+                jt.sync([nn.relu(bn(x) if fused else bn(x) + 0.0)])
+                jt.sync_all(True)
+                with jt.profile() as p:
+                    jt.sync([nn.relu(bn(x) if fused else bn(x) + 0.0)])
+                    jt.sync_all(True)
+            return len(p.result.kernel_records)
+        self.assertLess(kernels(True), kernels(False))
+
+
 class TestInstanceNorm(_NormBase):
     def test_backward_small_variance(self):
         N, C, L = 2, 6, 8
@@ -360,6 +541,42 @@ class TestInstanceNorm(_NormBase):
 
 
 class TestBatchNorm(_NormBase):
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA BatchNorm fast path needs CUDA")
+    def test_cuda_statistics_over_many_segments_and_odd_planes(self):
+        # The reduction is cut into segments per channel and combined; the
+        # elementwise part takes float4 only where the plane allows it. A
+        # large mean next to a small spread checks the variance's accuracy.
+        from jittor.backends.cuda.kernels.nn.batch_norm_training_cuda import (
+            _batch_norm_cuda_statistics,
+        )
+        for shape in ((16, 8, 28, 28), (32, 12, 7, 7), (4, 3, 9, 13)):
+            rng = np.random.RandomState(sum(shape))
+            x_np = (rng.randn(*shape) * 0.5 + 40.0).astype("float32")
+            weight_np = rng.randn(shape[1]).astype("float32")
+            bias_np = rng.randn(shape[1]).astype("float32")
+            cot_np = rng.randn(*shape).astype("float32")
+            with jt.flag_scope(use_cuda=1):
+                x, weight, bias = (jt.array(a) for a in (x_np, weight_np, bias_np))
+                y, mean, var = _batch_norm_cuda_statistics(x, weight, bias, 1e-5)
+                grads = jt.grad((y * jt.array(cot_np)).sum(), [x, weight, bias])
+                got = jt.fetch_sync([y, mean, var] + grads)
+            x64 = x_np.astype(np.float64)
+            mean_ref = x64.mean((0, 2, 3))
+            var_ref = x64.var((0, 2, 3))
+            rstd = 1 / np.sqrt(var_ref + 1e-5)
+            xhat = (x64 - mean_ref[None, :, None, None]) * rstd[None, :, None, None]
+            y_ref = xhat * weight_np[None, :, None, None] + bias_np[None, :, None, None]
+            g = cot_np.astype(np.float64)
+            gw = (g * xhat).sum((0, 2, 3))
+            gb = g.sum((0, 2, 3))
+            n = shape[0] * shape[2] * shape[3]
+            gx = (weight_np * rstd)[None, :, None, None] * (
+                g - (gb / n)[None, :, None, None] - xhat * (gw / n)[None, :, None, None])
+            for name, value, ref in zip(("y", "mean", "var", "grad_x", "grad_weight", "grad_bias"),
+                                        got, (y_ref, mean_ref, var_ref, gx, gw, gb)):
+                np.testing.assert_allclose(value, ref, rtol=2e-3, atol=2e-3 * np.abs(ref).max(),
+                                           err_msg="%s %s" % (shape, name))
+
     @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA BatchNorm eval fast path needs CUDA")
     def test_cuda_eval_fast_path_forward_and_all_gradients(self):
         rng = np.random.RandomState(20260829)
@@ -602,3 +819,47 @@ class TestNormalizeIsOneImplementation(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestBatchNormEvalCoefficients(unittest.TestCase):
+    """Inference batch norm keeps its per-channel scale and shift between calls."""
+
+    def _check(self):
+        from jittor.nn.functional.normalization import _EVAL_COEFFICIENTS, batch_norm
+        rng = np.random.RandomState(0)
+        x = jt.array(rng.randn(4, 3, 5, 5).astype("float32"))
+        mean = jt.array(rng.randn(3).astype("float32")).stop_grad()
+        var = jt.array(rng.rand(3).astype("float32") + 0.5).stop_grad()
+        weight = jt.array(rng.randn(3).astype("float32")).stop_grad()
+        bias = jt.array(rng.randn(3).astype("float32")).stop_grad()
+
+        def want():
+            m, v, w, b = (t.numpy().reshape(1, 3, 1, 1) for t in (mean, var, weight, bias))
+            return (x.numpy() - m) / np.sqrt(v + 1e-5) * w + b
+
+        with jt.no_grad():
+            first = batch_norm(x, mean, var, weight, bias, training=False).numpy()
+            kept = getattr(var, _EVAL_COEFFICIENTS, None)
+            np.testing.assert_allclose(first, want(), rtol=1e-5, atol=1e-5)
+            second = batch_norm(x, mean, var, weight, bias, training=False).numpy()
+            np.testing.assert_allclose(second, first, rtol=0, atol=0)
+            # A new statistic is a new Var: the kept coefficients are not reused.
+            var.update(var * 2)
+            third = batch_norm(x, mean, var, weight, bias, training=False).numpy()
+            np.testing.assert_allclose(third, want(), rtol=1e-5, atol=1e-5)
+        # A graph that differentiates through the parameters keeps nothing.
+        grad_weight = jt.array(np.ones(3, "float32"))
+        other = jt.array(np.ones(3, "float32")).stop_grad()
+        batch_norm(x, mean, other, grad_weight, bias, training=False)
+        self.assertIsNone(getattr(other, _EVAL_COEFFICIENTS, None))
+        return kept
+
+    def test_cpu(self):
+        with jt.flag_scope(use_cuda=0):
+            self.assertIsNotNone(self._check())
+
+    @unittest.skipIf(not _test_capability.check_accelerator("cuda", backend=jt).enabled,
+                     "no usable CUDA in this build")
+    def test_cuda(self):
+        with jt.flag_scope(use_cuda=1):
+            self._check()

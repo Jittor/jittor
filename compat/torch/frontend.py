@@ -106,6 +106,11 @@ def _placement_request(backend, device, like=None, default_placement=True):
             device = default_device()
     numeric_index = isinstance(device, int) and not isinstance(device, bool)
     name = "cuda" if numeric_index else (getattr(device, "type", None) or str(device).split(":", 1)[0])
+    # Jittor has no meta storage backend. Transformers uses ``device='meta'``
+    # while inspecting checkpoint shapes; materialize those temporary tensors
+    # on host so the subsequent real-weight load can proceed.
+    if name == "meta":
+        return 0, 0
     if name == "cpu":
         return 0, 0
     if name not in ("cuda", "npu"):
@@ -314,12 +319,25 @@ def make_parameter_type(backend, tensor_type):
     })
 
 
+#: Attributes a runtime notes on a tensor -- the weight version a convolution
+#: has seen, see `jittor/nn/backends/cudnn.py` -- which a pickle or a copy of
+#: the tensor must not carry.
+_RUNTIME_CACHES = ("_jittor_conv_filter",)
+
+
+def _python_state(value):
+    state = value.__dict__.copy()
+    for name in _RUNTIME_CACHES:
+        state.pop(name, None)
+    return state
+
+
 def reduce_tensor(value):
     return (
         rebuild_tensor,
         (type(value), value.numpy(), _jittor_dtype_name(value.dtype), value.requires_grad,
          str(value.device)),
-        value.__dict__.copy(),
+        _python_state(value),
     )
 
 
@@ -338,5 +356,5 @@ def deepcopy_tensor(value, memo):
     result = rebuild_tensor(type(value), value.numpy(), _jittor_dtype_name(value.dtype),
                             value.requires_grad, str(value.device))
     memo[id(value)] = result
-    result.__dict__.update(deepcopy(value.__dict__, memo))
+    result.__dict__.update(deepcopy(_python_state(value), memo))
     return result

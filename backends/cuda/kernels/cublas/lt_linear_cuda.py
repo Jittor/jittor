@@ -59,8 +59,10 @@ from jittor._runtime.core_api import _output_requires_grad
 _CANDIDATES = 8
 
 #: Per-problem workspace. cuBLASLt reports what each candidate wants; the
-#: fast ones for these shapes asked for 8 MB.
-_WORKSPACE = 32 << 20
+#: fast ones for these shapes asked for 8 MB. It is borrowed from the tensor
+#: pool on every call, so asking for more than the winners use only leaves a
+#: larger hole in that pool between calls.
+_WORKSPACE = 8 << 20
 
 #: `dsize_` as `src/type/nano_string.h` defines it: 2**code is the byte width.
 _DSIZE = {"float16": 1, "bfloat16": 1, "float32": 2, "float64": 3}
@@ -70,6 +72,9 @@ _HEADER = r"""
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
+#include "core/executor.h"
+#include "mem/allocator.h"
+#include "runtime/float32_precision.h"
 
 static cublasLtHandle_t jt_lt_handle() {
     static cublasLtHandle_t handle = nullptr;
@@ -83,16 +88,23 @@ static cublasHandle_t jt_blas_handle() {
     return handle;
 }
 
-static void* jt_lt_workspace(size_t bytes) {
-    static void* ws = nullptr;
-    static size_t have = 0;
-    if (have < bytes) {
-        if (ws) cudaFree(ws);
-        if (cudaMalloc(&ws, bytes) != cudaSuccess) { ws = nullptr; have = 0; }
-        else have = bytes;
+// The workspace of one call, from the executor's temporary pool, as cuDNN's
+// are (see `CudnnWorkspace`). It was a function-local static -- and every
+// problem shape compiles its own kernel, so that was one 32 MB cudaMalloc per
+// shape, held for the life of the process and outside every pool: 512 MB of
+// an SD1.5 UNet's device memory, for sixteen shapes.
+struct JtLtWorkspace {
+    void* ptr = nullptr;
+    size_t size = 0, allocation = 0;
+    jittor::Allocator* allocator = nullptr;
+    explicit JtLtWorkspace(size_t bytes) : size(bytes) {
+        allocator = jittor::runtime_executor().temp_allocator;
+        ptr = allocator->alloc(size, allocation);
     }
-    return ws;
-}
+    ~JtLtWorkspace() { if (ptr) allocator->free(ptr, size, allocation); }
+    JtLtWorkspace(const JtLtWorkspace&) = delete;
+    JtLtWorkspace& operator=(const JtLtWorkspace&) = delete;
+};
 
 // Chosen once per problem shape. Each shape compiles its own kernel, so a
 // function-local static here IS per shape.
@@ -194,6 +206,16 @@ def _source(rows, cin, cout, dtype):
     const float alpha = 1.0f, beta = 0.0f;
     cublasLtHandle_t lt = jt_lt_handle();
 
+    // float32 follows the float32 matmul policy (`allow_tf32`,
+    // `set_float32_matmul_precision`), as `cublas_gemm_mode` does for the
+    // portable path: this route used to compute every float32 linear layer in
+    // full float32 on the SIMT kernels while the policy asked for TF32 -- BERT
+    // inference ran its GEMMs 24% slower than PyTorch's for no difference the
+    // caller asked for. The tier is read when the op runs, so each tier keeps
+    // its own measured algorithm.
+    int tier = {"jittor::float32_matmul_tier()" if dtype == "float32" else "0"};
+    cublasComputeType_t compute = tier == jittor::F32_HIGH ? CUBLAS_COMPUTE_32F_FAST_TF32
+        : tier == jittor::F32_MEDIUM ? CUBLAS_COMPUTE_32F_FAST_16BF : CUBLAS_COMPUTE_32F;
     cublasLtMatmulDesc_t op = nullptr;
     // The scale type follows the *compute* type and the float alpha/beta, not
     // the operand type. Handing it the operand type is rejected outright --
@@ -202,7 +224,7 @@ def _source(rows, cin, cout, dtype):
     // of it is the fallback running underneath (which is how the whole fused
     // route came to be 2.4x slower than not using it at all while still
     // producing correct numbers).
-    cublasLtMatmulDescCreate(&op, CUBLAS_COMPUTE_32F, CUDA_R_32F);
+    cublasLtMatmulDescCreate(&op, compute, CUDA_R_32F);
     cublasOperation_t ta = CUBLAS_OP_T, tb = CUBLAS_OP_N;
     cublasLtMatmulDescSetAttribute(op, CUBLASLT_MATMUL_DESC_TRANSA, &ta, sizeof(ta));
     cublasLtMatmulDescSetAttribute(op, CUBLASLT_MATMUL_DESC_TRANSB, &tb, sizeof(tb));
@@ -219,10 +241,12 @@ def _source(rows, cin, cout, dtype):
     cublasLtMatrixLayoutCreate(&lb, {ct}, cin, rows, cin);
     cublasLtMatrixLayoutCreate(&lc, {ct}, cout, rows, cout);
 
-    void* ws = jt_lt_workspace({_WORKSPACE});
+    JtLtWorkspace workspace({_WORKSPACE});
+    void* ws = workspace.ptr;
     size_t wsize = ws ? (size_t){_WORKSPACE} : 0;
 
-    static JtLtChoice choice;
+    static JtLtChoice choices[3];
+    JtLtChoice& choice = choices[tier < 0 || tier > 2 ? 0 : tier];
     if (!choice.ready) {{
         choice.ready = true;
         cublasLtMatmulPreference_t pref = nullptr;
@@ -276,7 +300,7 @@ def _source(rows, cin, cout, dtype):
         cublasGemmEx(h, CUBLAS_OP_T, CUBLAS_OP_N, cout, rows, cin, &alpha,
                      in1_p, {ct}, cin, in0_p, {ct}, cin, &beta,
                      out0_p, {ct}, cout,
-                     CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT);
+                     compute, CUBLAS_GEMM_DEFAULT);
         int total = rows * cout;
         jt_lt_add_bias<{kt}><<<(total + 255) / 256, 256>>>(out0_p, in2_p, total, cout);
     }}

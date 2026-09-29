@@ -15,6 +15,30 @@ _INPLACE_CONSEQUENCE = (
 )
 
 
+
+def offer_activation(y, build):
+    """Say that ``build(act)`` computes ``act(y)`` in the pass that makes ``y``.
+
+    The offer describes the Var ``y`` holds now. An in-place op rebinds the
+    same Python object to a new Var -- ``out = bn(out); out += identity;
+    relu(out)``, every torchvision bottleneck -- and an offer read through the
+    object afterwards applied the activation to the normalization alone,
+    dropping the residual.
+    """
+    y.__dict__["_fuse_activation"] = (y.id, build)
+
+
+def _fused_activation(x, act):
+    """``act(x)`` from the pass that makes ``x``, if that pass offered it."""
+    entry = getattr(x, "__dict__", {}).get("_fuse_activation")
+    if entry is None or x.is_finished:
+        return None
+    var_id, build = entry
+    if var_id != x.id:
+        return None
+    return build(act)
+
+
 def relu(x, inplace=False):
     r''' Applies the element-wise function:
 
@@ -38,11 +62,18 @@ def relu(x, inplace=False):
     if inplace:
         _arg_policy.ignored("jittor.nn.relu", "inplace", inplace,
                             _INPLACE_CONSEQUENCE)
+    # A normalization that can apply the activation in its own last pass
+    # (the training batch norm) says so on its unexecuted output.
+    fused = _fused_activation(x, "relu")
+    if fused is not None:
+        return fused
     fast = try_dispatch("nn.relu", x, inplace=inplace)
     if fast is not None:
         return fast
-    cond = x>0.0
-    return jt.ternary_out_hint(cond, x, 0.0)
+    # One elementwise operator: it fuses into whatever produced `x` (a batch
+    # norm, a residual add) and differentiates from its own output, so neither
+    # the input nor a sign mask is kept for the backward. See `UnaryOp::grad`.
+    return jt.unary(x, "relu")
 
 
 def leaky_relu(x, scale=0.01, negative_slope=None, inplace=False):
@@ -229,6 +260,11 @@ def silu(x, inplace=False):     # inplace: accepted for torch/mmcv compat, ignor
     if inplace:
         _arg_policy.ignored("jittor.nn.silu", "inplace", inplace,
                             _INPLACE_CONSEQUENCE)
+    # A normalization that can apply the activation in its own last pass
+    # (group norm, see `group_norm_cuda.py`) says so on its unexecuted output.
+    fused = _fused_activation(x, "silu")
+    if fused is not None:
+        return fused
     fast = try_dispatch("nn.silu", x, inplace=inplace)
     if fast is not None:
         return fast

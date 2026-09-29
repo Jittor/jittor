@@ -102,23 +102,52 @@ _HEADER = """
 extern "C" {{
 const char* jt_cudnn_sdpa_last_error();
 int jt_cudnn_sdpa_supported(cudnnHandle_t, int, int64_t, int64_t, int64_t, int64_t,
-    int64_t, int64_t, float, int, int, int64_t, int64_t, int64_t*);
+    int64_t, int64_t, float, int, int, int, int64_t, int64_t, int64_t*);
 int64_t jt_cudnn_sdpa_forward_workspace(cudnnHandle_t, int, int64_t, int64_t, int64_t,
-    int64_t, int64_t, int64_t, float, int, int, int64_t, int64_t);
+    int64_t, int64_t, int64_t, float, int, int, int, int64_t, int64_t);
 int jt_cudnn_sdpa_forward(cudnnHandle_t, int, int64_t, int64_t, int64_t, int64_t, int64_t,
-    int64_t, float, int, int, int64_t, int64_t,
+    int64_t, float, int, int, int, int64_t, int64_t,
     void*, void*, void*, void*, void*, void*, void*);
 int64_t jt_cudnn_sdpa_backward_workspace(cudnnHandle_t, int, int64_t, int64_t, int64_t,
-    int64_t, int64_t, int64_t, float, int);
+    int64_t, int64_t, int64_t, float, int, int);
 int jt_cudnn_sdpa_backward(cudnnHandle_t, int, int64_t, int64_t, int64_t, int64_t, int64_t,
-    int64_t, float, int, void*, void*, void*, void*, void*, void*, void*, void*, void*, void*);
+    int64_t, float, int, int, void*, void*, void*, void*, void*, void*, void*, void*, void*,
+    void*);
 }}
 """
 
 # Shapes are read from the inputs at run time, so one compiled operator serves
-# every shape; only the dtype, the scale and the two switches are baked in.
-_DIMS = ("in0->shape[0], in0->shape[1], in1->shape[1], in0->shape[2], "
-         "in1->shape[2], in0->shape[3]")
+# every shape; only the dtype, the scale, the switches and the layout are baked
+# in. `layout` has a bit per tensor (q 1, k 2, v 4) for one given to the kernel
+# as [batch, seq, heads, head_dim] -- the tensor a transpose view was taken of
+# -- rather than [batch, heads, seq, head_dim]; see cudnn_sdpa.cc.
+_Q, _K, _V = 1, 2, 4
+
+
+def _dims(layout):
+    q_seq, k_seq = layout & _Q, layout & _K
+    return ("in0->shape[0], in0->shape[%d], in1->shape[%d], in0->shape[%d], "
+            "in1->shape[%d], in0->shape[3]" % (2 if q_seq else 1, 2 if k_seq else 1,
+                                               1 if q_seq else 2, 1 if k_seq else 2))
+
+
+def _logical(t, seq_major):
+    b, x, y, d = (int(size) for size in t.shape)
+    return (b, y, x, d) if seq_major else (b, x, y, d)
+
+
+def _physical(t):
+    """(tensor, seq_major): the [b, s, h, d] source of a [b, h, s, d] transpose
+    view, which the kernel reads in place, or `t` itself."""
+    if not isinstance(t, jt.Var):
+        return t, False
+    if tuple(t._transpose_view_axes()) == (0, 2, 1, 3):
+        return t._transpose_view_source(), True
+    # Whose view record went with its root's holder (see
+    # `_producer_transpose_axes`): the graph still knows.
+    if tuple(t._producer_transpose_axes()) == (0, 2, 1, 3):
+        return t._input(0), True
+    return t, False
 
 
 def _header():
@@ -129,10 +158,11 @@ def _bias_dims(bias):
     return (0, 0) if bias is None else (int(bias.shape[0]), int(bias.shape[1]))
 
 
-def _supported(query, key, scale, causal, training, bias=None):
+def _supported(query, key, scale, causal, training, bias=None, layout=0):
     bias_b, bias_h = _bias_dims(bias)
     shape = (tuple(query.shape), tuple(key.shape), _jittor_dtype_name(query.dtype),
-             float(scale), bool(causal), bool(training), bias_b, bias_h, jt.flags.device_id)
+             float(scale), bool(causal), bool(training), bias_b, bias_h, jt.flags.device_id,
+             layout)
     answer = _supported_shapes.get(shape)
     if answer is None:
         # Asked through the executor, with the handle and device the real call
@@ -144,8 +174,8 @@ def _supported(query, key, scale, causal, training, bias=None):
             cuda_src=f"""
             cudnnHandle_t handle = jittor::cudnn_bind_stream();
             int64_t workspace = 0;
-            int ok = jt_cudnn_sdpa_supported(handle, {dtype}, {_DIMS}, {float(scale)!r}f,
-                                             {int(causal)}, {int(training)},
+            int ok = jt_cudnn_sdpa_supported(handle, {dtype}, {_dims(layout)}, {float(scale)!r}f,
+                                             {int(causal)}, {int(training)}, {layout},
                                              {bias_b}, {bias_h}, &workspace);
             cudaMemcpy(out0_p, &ok, sizeof(int), cudaMemcpyHostToDevice);
             """)
@@ -154,10 +184,12 @@ def _supported(query, key, scale, causal, training, bias=None):
     return answer
 
 
-def _forward(query, key, value, scale, causal, training, bias=None):
+def _forward(query, key, value, scale, causal, training, bias=None, layout=0):
     dtype = _DTYPES[_jittor_dtype_name(query.dtype)]
     bias_b, bias_h = _bias_dims(bias)
-    stats_shape = tuple(query.shape[:3]) + (1,)
+    b, h, sq, _ = _logical(query, layout & _Q)
+    stats_shape = (b, h, sq, 1)
+    dims = _dims(layout)
     outputs = jt.code(
         [query.shape, stats_shape] if training else [query.shape],
         [query.dtype, "float32"] if training else [query.dtype],
@@ -165,12 +197,12 @@ def _forward(query, key, value, scale, causal, training, bias=None):
         cuda_header=_header(),
         cuda_src=f"""
         cudnnHandle_t handle = jittor::cudnn_bind_stream();
-        int64_t size = jt_cudnn_sdpa_forward_workspace(handle, {dtype}, {_DIMS},
-            {float(scale)!r}f, {int(causal)}, {int(training)}, {bias_b}, {bias_h});
+        int64_t size = jt_cudnn_sdpa_forward_workspace(handle, {dtype}, {dims},
+            {float(scale)!r}f, {int(causal)}, {int(training)}, {layout}, {bias_b}, {bias_h});
         if (size < 0) LOGf << "cuDNN attention forward:" << jt_cudnn_sdpa_last_error();
         jittor::CudnnWorkspace workspace(size);
-        if (jt_cudnn_sdpa_forward(handle, {dtype}, {_DIMS}, {float(scale)!r}f,
-                {int(causal)}, {int(training)}, {bias_b}, {bias_h},
+        if (jt_cudnn_sdpa_forward(handle, {dtype}, {dims}, {float(scale)!r}f,
+                {int(causal)}, {int(training)}, {layout}, {bias_b}, {bias_h},
                 in0_p, in1_p, in2_p, {"nullptr" if bias is None else "in3_p"}, out0_p,
                 {"out1_p" if training else "nullptr"}, workspace.ptr))
             LOGf << "cuDNN attention forward:" << jt_cudnn_sdpa_last_error();
@@ -178,8 +210,9 @@ def _forward(query, key, value, scale, causal, training, bias=None):
     return outputs[0], (outputs[1] if training else None)
 
 
-def _backward(query, key, value, out, grad_out, stats, scale, causal):
+def _backward(query, key, value, out, grad_out, stats, scale, causal, layout=0):
     dtype = _DTYPES[_jittor_dtype_name(query.dtype)]
+    dims = _dims(layout)
     return jt.code(
         [query.shape, key.shape, value.shape],
         [query.dtype, key.dtype, value.dtype],
@@ -187,11 +220,12 @@ def _backward(query, key, value, out, grad_out, stats, scale, causal):
         cuda_header=_header(),
         cuda_src=f"""
         cudnnHandle_t handle = jittor::cudnn_bind_stream();
-        int64_t size = jt_cudnn_sdpa_backward_workspace(handle, {dtype}, {_DIMS},
-            {float(scale)!r}f, {int(causal)});
+        int64_t size = jt_cudnn_sdpa_backward_workspace(handle, {dtype}, {dims},
+            {float(scale)!r}f, {int(causal)}, {layout});
         if (size < 0) LOGf << "cuDNN attention backward:" << jt_cudnn_sdpa_last_error();
         jittor::CudnnWorkspace workspace(size);
-        if (jt_cudnn_sdpa_backward(handle, {dtype}, {_DIMS}, {float(scale)!r}f, {int(causal)},
+        if (jt_cudnn_sdpa_backward(handle, {dtype}, {dims}, {float(scale)!r}f, {int(causal)},
+                {layout},
                 in0_p, in1_p, in2_p, in3_p, in4_p, in5_p, out0_p, out1_p, out2_p,
                 workspace.ptr))
             LOGf << "cuDNN attention backward:" << jt_cudnn_sdpa_last_error();
@@ -201,9 +235,11 @@ def _backward(query, key, value, out, grad_out, stats, scale, causal):
 class _CudnnAttention(jt.Function):
     """Fused attention that saves one float per query row for its backward."""
 
-    def execute(self, query, key, value, scale, causal):
-        self.scale, self.causal = scale, causal
-        out, stats = _forward(query, key, value, scale, causal, True)
+    # The tensors are the physical ones (see `_physical`); every gradient
+    # comes back in its tensor's own layout, and the output in the query's.
+    def execute(self, query, key, value, scale, causal, layout):
+        self.scale, self.causal, self.layout = scale, causal, layout
+        out, stats = _forward(query, key, value, scale, causal, True, layout=layout)
         self.saved = (query, key, value, out, stats)
         return out
 
@@ -211,27 +247,30 @@ class _CudnnAttention(jt.Function):
         query, key, value, out, stats = self.saved
         grad_out = grad_out.cast(query.dtype)
         grad_query, grad_key, grad_value = _backward(
-            query, key, value, out, grad_out, stats, self.scale, self.causal)
-        return grad_query, grad_key, grad_value, None, None
+            query, key, value, out, grad_out, stats, self.scale, self.causal, self.layout)
+        return grad_query, grad_key, grad_value, None, None, None
 
 
-def _mask_bias(attn_mask, query, key):
-    """The mask as an additive [b or 1, h or 1, Lq, Lk] bias, or None if it is not one."""
+def _mask_bias(attn_mask, query_dims, key_dims, dtype):
+    """The mask as an additive [b or 1, h or 1, Lq, Lk] bias, or None if it is not one.
+
+    `query_dims` and `key_dims` are the logical [b, h, s, d] shapes.
+    """
     shape = tuple(int(size) for size in attn_mask.shape)
     if len(shape) < 2 or len(shape) > 4:
         return None
     shape = (1,) * (4 - len(shape)) + shape
-    batch, heads, query_length = (int(query.shape[i]) for i in range(3))
-    if shape[2:] != (query_length, int(key.shape[2])) \
+    batch, heads, query_length = query_dims[:3]
+    if shape[2:] != (query_length, key_dims[2]) \
             or shape[0] not in (1, batch) or shape[1] not in (1, heads):
         return None
     mask = attn_mask.reshape(shape)
     if _jittor_dtype_name(mask.dtype) == "bool":
-        negative = jt.array(float("-inf")).cast(query.dtype).broadcast(shape)
-        return jt.ternary(mask, jt.zeros(shape, query.dtype), negative)
+        negative = jt.array(float("-inf")).cast(dtype).broadcast(shape)
+        return jt.ternary(mask, jt.zeros(shape, dtype), negative)
     if "float" not in _jittor_dtype_name(mask.dtype):
         return None
-    return mask.cast(query.dtype)
+    return mask.cast(dtype)
 
 
 def _cudnn_fused_attention(query, key, value, attn_mask=None, dropout_p=0.0,
@@ -255,25 +294,69 @@ def _cudnn_fused_attention(query, key, value, attn_mask=None, dropout_p=0.0,
         return None
     scale = float(scale) if scale is not None else float(query.shape[3]) ** -0.5
     training = _output_requires_grad(query, key, value)
+    (query, q_seq), (key, k_seq), (value, v_seq) = (_physical(t) for t in (query, key, value))
+    layout = (_Q if q_seq else 0) | (_K if k_seq else 0) | (_V if v_seq else 0)
+
+    def logical(out):
+        # The output is laid out as the query is; hand it back as the
+        # [b, h, s, d] view the caller asked for.
+        return out.transpose(0, 2, 1, 3) if q_seq else out
+
     if attn_mask is None:
-        if not _supported(query, key, scale, is_causal, training):
+        if not _supported(query, key, scale, is_causal, training, layout=layout):
             return None
         if training:
-            return _CudnnAttention.apply(query, key, value, scale, bool(is_causal))
-        return _forward(query, key, value, scale, bool(is_causal), False)[0]
+            return logical(_CudnnAttention.apply(query, key, value, scale, bool(is_causal),
+                                                 layout))
+        return logical(_forward(query, key, value, scale, bool(is_causal), False,
+                                layout=layout)[0])
     # A mask only without a backward: a row every key is masked out of has no
     # softmax, which the composite answers with 0 and zero gradient; cuDNN's
     # backward would carry the NaN instead.
     if training:
         return None
-    bias = _mask_bias(attn_mask, query, key)
-    if bias is None or not _supported(query, key, scale, is_causal, False, bias):
+    bias, live = _mask_terms(attn_mask, _logical(query, q_seq), _logical(key, k_seq),
+                             query.dtype)
+    if bias is None or not _supported(query, key, scale, is_causal, False, bias, layout):
         return None
-    out = _forward(query, key, value, scale, bool(is_causal), False, bias)[0]
+    out = logical(_forward(query, key, value, scale, bool(is_causal), False, bias, layout)[0])
     # The same 0 for a fully masked row as the composite gives.
+    return jt.ternary(live.broadcast(out.shape), out, jt.zeros_like(out))
+
+
+#: What the last mask was turned into: (key, mask, bias, live rows). One
+#: entry, dropped before the next mask's bias is built, so two are never
+#: alive at once: a step builds one mask and the next step a new one.
+_MASK_TERMS = []
+
+
+def _mask_terms(attn_mask, query_dims, key_dims, dtype):
+    """The additive bias for `attn_mask` and which query rows keep a key.
+
+    Built once per mask, not once per layer. A decoder hands every layer the
+    same mask, and Transformers' SDPA wrapper slices it for each one
+    (``attention_mask[:, :, :, :kv_len]``) -- a new view of the same data
+    every time. Turning it into a bias and scanning it for fully masked rows
+    in each of Qwen3-0.6B's 28 layers was 2.1 ms of a 27 ms prefill, the
+    whole difference to PyTorch, and eight more graph nodes per layer per
+    decoded token. A view is recognised by the Var it views and where in it
+    it looks; anything else only by being the same object.
+    """
+    base = attn_mask._view_base_id() if attn_mask._is_view() else -1
+    key = (base, tuple(attn_mask.shape), attn_mask._storage_offset(),
+           tuple(attn_mask._storage_strides()), _jittor_dtype_name(attn_mask.dtype),
+           _jittor_dtype_name(dtype), tuple(query_dims), tuple(key_dims))
+    for entry in _MASK_TERMS:
+        if entry[0] == key and (base >= 0 or entry[1] is attn_mask):
+            return entry[2], entry[3]
+    _MASK_TERMS.clear()
+    bias = _mask_bias(attn_mask, query_dims, key_dims, dtype)
+    if bias is None:
+        return None, None
     top = bias.max([-1], keepdims=True)
-    live = jt.logical_not(jt.isinf(top) & (top < 0)).broadcast(out.shape)
-    return jt.ternary(live, out, jt.zeros_like(out))
+    live = jt.logical_not(jt.isinf(top) & (top < 0))
+    _MASK_TERMS.append((key, attn_mask if base < 0 else None, bias, live))
+    return bias, live
 
 
 def _supports(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None):

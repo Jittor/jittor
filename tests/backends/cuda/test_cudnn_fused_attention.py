@@ -58,6 +58,8 @@ class TestCudnnFusedAttention(unittest.TestCase):
         from jittor.backends.cuda.kernels.nn import cudnn_attention_cuda
         self.kernel = cudnn_attention_cuda
         self.kernel._supported_shapes.clear()
+        # A masked call leaves its mask's bias cached for the next layer.
+        self.addCleanup(self.kernel._MASK_TERMS.clear)
         self.scope = jt.flag_scope(use_cuda=1)
         self.scope.__enter__()
         self.addCleanup(self.scope.__exit__, None, None, None)
@@ -79,6 +81,48 @@ class TestCudnnFusedAttention(unittest.TestCase):
         for name, got, expected in zip(("out", "dq", "dk", "dv"), [out] + list(grads), want):
             error = np.abs(got.float32().numpy() - expected).max() / np.abs(expected).max()
             self.assertLess(error, tolerance, name)
+
+    def _check_seq_major(self, which, mask=None):
+        # q/k/v as `x.view(b, s, h, d).transpose(1, 2)`, the way attention
+        # blocks build them. The kernel reads the [b, s, h, d] tensors in
+        # place and hands the output back as a transpose view, which the
+        # caller's `transpose(1, 2)` then undoes without a copy.
+        b, h, s, d = 2, 4, 70, 64
+        rng = np.random.RandomState(1)
+        q, k, v, dout = (rng.randn(b, h, s, d).astype("float32") for _ in range(4))
+        want = _reference(q, k, v, mask, False, dout)
+        sources = [jt.array(np.ascontiguousarray(t.transpose(0, 2, 1, 3))).float16()
+                   if name in which else jt.array(t).float16()
+                   for name, t in zip("qkv", (q, k, v))]
+        heads = [t.transpose(1, 2) if name in which else t
+                 for name, t in zip("qkv", sources)]
+        attn_mask = None if mask is None else jt.array(mask)
+        # A mask is served without a backward only.
+        with jt.flag_scope(no_grad=mask is not None):
+            out = scaled_dot_product_attention(*heads, attn_mask=attn_mask)
+        seq_out = out.transpose(1, 2)
+        self.assertTrue(any(key[-1] for key, ok in self.kernel._supported_shapes.items() if ok))
+        np.testing.assert_allclose(seq_out.float32().numpy(), want[0].transpose(0, 2, 1, 3),
+                                   atol=2e-3, rtol=2e-3)
+        if mask is not None:
+            return
+        grads = jt.grad((out.float32() * jt.array(dout)).sum(), sources)
+        for name, got, expected in zip("qkv", grads, want[1:]):
+            if name in which:
+                expected = expected.transpose(0, 2, 1, 3)
+            error = np.abs(got.float32().numpy() - expected).max() / np.abs(expected).max()
+            self.assertLess(error, 5e-3, "d" + name)
+
+    def test_seq_major_inputs_are_read_in_place(self):
+        self._check_seq_major("qkv")
+
+    def test_a_seq_major_query_with_dense_keys(self):
+        self._check_seq_major("q")
+
+    def test_seq_major_inputs_with_a_mask(self):
+        mask = np.ones((2, 1, 70, 70), bool)
+        mask[1, ..., 50:] = False
+        self._check_seq_major("qkv", mask)
 
     def test_float16_unequal_lengths(self):
         self._check_training("float16", 2, 4, 4, 33, 47, 64, False, 3e-3)
@@ -114,6 +158,34 @@ class TestCudnnFusedAttention(unittest.TestCase):
         mask[1, 0, 5, :] = False
         got = self._check_mask(mask)
         self.assertEqual(np.abs(got[1, :, 5]).max(), 0)
+
+    def test_one_mask_is_turned_into_a_bias_once(self):
+        # A decoder gives every layer the same mask, which Transformers slices
+        # afresh per layer: a new view of the same data. The bias is built for
+        # the first and reused by the rest; a different mask is not confused
+        # with it.
+        rng = np.random.RandomState(3)
+        q = rng.randn(1, 4, 48, 64).astype("float32")
+        k, v = (rng.randn(1, 4, 64, 64).astype("float32") for _ in range(2))
+        full = rng.rand(1, 1, 48, 80) > 0.3
+        other = rng.rand(1, 1, 48, 64) > 0.5
+        base = jt.array(full)
+        self.kernel._MASK_TERMS.clear()
+        with jt.no_grad():
+            qkv = [jt.array(t).float16() for t in (q, k, v)]
+            first = scaled_dot_product_attention(*qkv, attn_mask=base[:, :, :, :64])
+            again = scaled_dot_product_attention(*qkv, attn_mask=base[:, :, :, :64])
+            self.assertEqual(len(self.kernel._MASK_TERMS), 1)
+            self.assertIs(self.kernel._MASK_TERMS[0][2],
+                          self.kernel._mask_terms(base[:, :, :, :64], (1, 4, 48, 64),
+                                                  (1, 4, 64, 64), qkv[0].dtype)[0])
+            third = scaled_dot_product_attention(*qkv, attn_mask=jt.array(other))
+            self.assertEqual(len(self.kernel._MASK_TERMS), 1)
+        want = _reference(q, k, v, full[..., :64], False, np.zeros_like(q))[0]
+        for got in (first, again):
+            np.testing.assert_allclose(got.float32().numpy(), want, atol=3e-3 * np.abs(want).max())
+        want = _reference(q, k, v, other, False, np.zeros_like(q))[0]
+        np.testing.assert_allclose(third.float32().numpy(), want, atol=3e-3 * np.abs(want).max())
 
     def test_a_float_mask_per_head(self):
         self._check_mask((np.random.RandomState(3).randn(2, 4, 48, 64) * 0.5).astype("float32"))

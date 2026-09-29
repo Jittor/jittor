@@ -62,7 +62,43 @@ TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
         for (int i=0; i<(int)xdim; i++)
             axes.push_back(xdim-1-i);
     }
-    if (axes.size() < xdim || (axes.size() == xdim && axes[xdim-1]==xdim-1)) {
+    // Moving only unit axes moves no element: every non-unit axis keeps its
+    // place relative to the others, so the dense result is the input's own
+    // bytes under another shape. Decoding one token transposes [b, 1, h, d]
+    // into [b, h, 1, d] three times a layer; each was a copy kernel -- 10 ms of
+    // device time and 10k launches over a 128-token Qwen3 decode.
+    if (x->num >= 0 && axes.size() == xdim && x->is_contiguous()) {
+        int64 seen = 0;
+        int last = -1;
+        bool kept = true;
+        for (uint i=0; i<xdim; i++) {
+            int a = axes[i];
+            if (a < 0 || a >= (int)xdim || (seen >> a & 1)) { kept = false; break; }
+            seen |= 1ll << a;
+            if (x->shape[a] == 1) continue;
+            if (a < last) { kept = false; break; }
+            last = a;
+        }
+        if (kept) {
+            static auto make_reshape = op_constructor<VarPtr, Var*, NanoVector>("reshape");
+            NanoVector shape;
+            for (uint i=0; i<xdim; i++) shape.push_back(x->shape[axes[i]]);
+            forward(make_reshape(x, shape));
+            return;
+        }
+    }
+    // A view is asked for: nothing below may turn it into a copy.
+    const bool as_view = transpose_storage_view != 0;
+    // The copying kernels below read a dense input. Before strided inputs
+    // were accepted this copy was made for every transpose by the op
+    // constructor -- including a view's, which then permuted a fresh dense
+    // copy instead of the storage it was asked to view.
+    if (!as_view && !x->is_contiguous()) {
+        auto dense = contiguous_storage(x);
+        forward(make_transpose(dense, axes));
+        return;
+    }
+    if (!as_view && (axes.size() < xdim || (axes.size() == xdim && axes[xdim-1]==xdim-1))) {
         static VarPtr(*fuse_transpose)(Var*, NanoVector) = get_op_info("fuse_transpose").get_constructor<VarPtr, Var*, NanoVector>();
         auto var = fuse_transpose(x, axes);
         forward(var);
@@ -70,7 +106,7 @@ TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
     }
     #ifdef HAS_ACCELERATOR
     const auto backend = construction_target_backend(x);
-    if (backend != BackendId::Cpu) {
+    if (backend != BackendId::Cpu && !as_view) {
         auto accelerated_transpose = find_op_capability<VarPtr, Var*, NanoVector>(
             backend, OpCapability::Transpose, x, axes);
         if (accelerated_transpose) {

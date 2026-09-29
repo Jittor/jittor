@@ -867,6 +867,27 @@ def transpose(x, *dim):
             break
     if coerce:
         dim = tuple(_pyint(d.item()) if isinstance(d, Var) else _pyint(d) for d in dim)
+    # A transpose of a transpose is one transpose of the source, and none at
+    # all when the two cancel: `attn(q.transpose(1, 2), ...).transpose(1, 2)`
+    # otherwise ran two copies to put the heads back where they started.
+    # The view record keeps writes reaching the root; where it is gone with
+    # the root's holder, the graph still says what the Var is a transpose of.
+    source = None
+    view_axes = getattr(x, "_transpose_view_axes", None)
+    if view_axes is not None:
+        prior = view_axes()
+        if prior:
+            source = x._transpose_view_source
+        else:
+            prior = x._producer_transpose_axes()
+            if prior:
+                source = lambda: x._input(0)
+    if source is not None and len(prior) == len(dim):
+        composed = tuple(prior[d] for d in dim)
+        source = source()
+        if composed == tuple(range(len(dim))):
+            return source
+        x, dim = source, composed
     out = _try_dispatch("tensor.transpose", x, dim)
     if out is None:
         out = origin_transpose(x, dim)

@@ -24,7 +24,7 @@ import numpy as np
 
 import jittor as jt
 from jittor import nn
-from jittor._runtime.graph_replay import graph_replay
+from jittor._runtime.graph_replay import GraphReplay, graph_replay
 
 
 class _Net(nn.Module):
@@ -78,6 +78,40 @@ class _Structured(nn.Module):
         z = jt.concat([h, y], 1)
         return {"y": y, "pair": (h, z), "same": [y, y],
                 "result": _Result(sample=y * extra["k"], scale=2.0), "none": None}
+
+
+class _Keywords(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.l1 = nn.Linear(8, 8)
+
+    def execute(self, x=None, bias=None, scale=1.0):
+        return self.l1(x) * scale + bias
+
+
+class _FlushObserver(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.seen = []
+
+    def execute(self, x):
+        self.seen.append(jt.flags.auto_flush_ops)
+        return (x * 2 + 1).tanh()
+
+
+class _Strided(nn.Module):
+    """A result that is a strided view of storage the call computed."""
+
+    def __init__(self, strided):
+        super().__init__()
+        self.strided = strided
+
+    def execute(self, x):
+        h = (x * 2 + 1).tanh() * 3
+        if not self.strided:
+            return h
+        with jt.flag_scope(transpose_storage_view=1):
+            return h.transpose(1, 0)
 
 
 @_test_preserve_policy(jt, 'keep_graph', 'auto_graph_replay')
@@ -262,6 +296,92 @@ class TestGraphReplay(unittest.TestCase):
         if replay.refused is not None:
             self.assertIn("slower", replay.refused)
             self.assertEqual(replay.stats["replayed"], 0)
+
+    def test_the_automatic_policy_replays_a_keyword_call(self):
+        # Transformers calls every model by keyword. The policy used to give up
+        # on any keyword argument, so no Hugging Face model was ever replayed.
+        model = _Keywords()
+        rs = np.random.RandomState(5)
+        calls = [(jt.array(rs.randn(2, 8).astype("float32")),
+                  jt.array(rs.randn(8).astype("float32"))) for _ in range(3)]
+        jt.flags.auto_graph_replay = 0
+        with jt.no_grad():
+            want = [model(x=x, bias=b, scale=2.0).numpy().copy() for x, b in calls]
+        jt.flags.auto_graph_replay = 1
+        with jt.no_grad():
+            for _ in range(2):
+                for (x, b), expected in zip(calls, want):
+                    np.testing.assert_allclose(model(x=x, bias=b, scale=2.0).numpy(),
+                                               expected, rtol=1e-5, atol=1e-5)
+        replay = model.__dict__["_auto_graph_replay"].replay
+        self.assertIsNotNone(replay)
+        self.assertGreaterEqual(replay.stats["replayed"], 3)
+
+    def test_the_automatic_policy_leaves_an_object_argument_alone(self):
+        # A KV cache is the same object on every decode step while what it
+        # holds changes; matched by identity, a capture would keep answering
+        # for the first step. An explicit graph_replay may take that risk on
+        # its caller's word, the automatic policy may not.
+        class _Cache:
+            def __init__(self):
+                self.value = jt.zeros(8)
+
+        class _Cached(nn.Module):
+            def execute(self, x, cache=None):
+                return x + cache.value
+
+        model, cache = _Cached(), _Cache()
+        x = self.feed[0]
+        jt.flags.auto_graph_replay = 1
+        with jt.no_grad():
+            for step in range(4):
+                cache.value = jt.full((8,), float(step))
+                np.testing.assert_allclose(model(x, cache=cache).numpy(),
+                                           x.numpy() + step, rtol=1e-6)
+        self.assertNotIn("_auto_graph_replay", model.__dict__)
+
+    def test_the_call_is_captured_as_one_graph(self):
+        # Auto-flush would launch the traced call in pieces, and each piece's
+        # results would stay held for as long as the capture lives.
+        model = _FlushObserver()
+        before = jt.flags.auto_flush_ops
+        replay = graph_replay(model, self.feed[0])
+        replay(self.feed[1])
+        self.assertEqual(model.seen[-1], 0)
+        self.assertEqual(jt.flags.auto_flush_ops, before)
+
+    def test_a_strided_result_is_replayed_once(self):
+        x = self.feed[1]
+        with jt.no_grad(), jt.flag_scope(auto_graph_replay=0):
+            want = (x * 2 + 1).tanh().numpy().T * 3
+        counts = []
+        for strided in (False, True):
+            # Through the executor, never recorded: that is the path where a
+            # copy that densified built on the kept graph and re-ran it.
+            replay = GraphReplay(_Strided(strided), max_retained_bytes=1)
+            for f in self.feed[2:]:
+                replay(f).sync()
+            jt.sync_all(True)
+            with jt.profile() as p:
+                got = replay(x)
+                got.sync()
+                jt.sync_all(True)
+            np.testing.assert_allclose(got.numpy(), want.T if not strided else want,
+                                       rtol=1e-5, atol=1e-5)
+            counts.append(len(p.result.kernel_records))
+        if jt.flags.use_cuda:
+            # Densified inside the graph: one copy more, not the graph again.
+            self.assertEqual(counts[1], counts[0] + 1, counts)
+
+    def test_a_private_input_copy_keeps_requires_grad(self):
+        # The capture computes on copies of the inputs; a copy that asked for a
+        # gradient its input did not made everything built from it ask too.
+        from jittor._runtime.graph_replay import _empty_like
+        frozen = jt.array(np.ones((2, 3), "float32"))
+        frozen.requires_grad = False
+        self.assertFalse(_empty_like(frozen).requires_grad)
+        live = jt.array(np.ones((2, 3), "float32"))
+        self.assertTrue(_empty_like(live).requires_grad)
 
     def test_the_flag_is_left_as_it_was_found(self):
         self.assertEqual(jt.flags.keep_graph, 0)
