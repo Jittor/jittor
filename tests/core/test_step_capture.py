@@ -235,6 +235,56 @@ class TestStepCaptureCuda(TestStepCapture):
         self.assertLess(abs(allofit.mean()), 0.15)
         self.assertLess(abs(allofit.std() - 1), 0.15)
 
+    def test_captured_uniform_draws_are_uniform(self):
+        def step(x):
+            return [x + jt.random(x.shape)]
+        captured = jt.capture_step(step)
+        x = jt.zeros((100003,))       # not a multiple of the four a thread fills
+        draws = [captured(x)[0].numpy() for _ in range(4)]
+        self.assertGreater(captured.stats["replayed"], 0)
+        d = draws[-1]
+        self.assertTrue(((d >= 0) & (d < 1)).all())
+        self.assertLess(abs(d.mean() - 0.5), 0.01)
+        self.assertLess(abs(d.var() - 1 / 12), 0.005)
+        self.assertFalse(np.allclose(draws[-1], draws[-2]))
+
+    def test_a_dropout_keep_mask_is_the_draw_compared(self):
+        # Drawn and compared in one kernel, and the same bits as the uniform
+        # draw of the same slot compared afterwards.
+        def step(x):
+            keep = step_capture.random_keep(tuple(x.shape), 0.3)
+            if keep is None:        # the first call runs as written
+                keep = jt.random(x.shape) > 0.3
+                return [keep, keep]
+            step_capture._ACTIVE.random.draws -= 1      # the same slot again
+            return [keep, jt.random(x.shape) > 0.3]
+        captured = jt.capture_step(step)
+        x = jt.zeros((1000,))
+        masks = []
+        for _ in range(5):
+            keep, draw = (t.numpy() for t in captured(x))
+            np.testing.assert_array_equal(keep, draw)
+            masks.append(keep)
+        self.assertGreater(captured.stats["replayed"], 0)
+        self.assertFalse((masks[-1] == masks[-2]).all())
+        self.assertTrue(0.6 < masks[-1].mean() < 0.8)
+
+    def test_dropout_differentiates_through_its_captured_mask(self):
+        w = jt.ones((4096,))
+        w.sync()
+
+        def step(x):
+            y = jt.nn.dropout(x * w, 0.25, is_train=True)
+            return [y, jt.grad(y.sum(), w)]
+        captured = jt.capture_step(step)
+        x = jt.ones((4096,))
+        outs = [[t.numpy() for t in captured(x)] for _ in range(5)]
+        self.assertGreater(captured.stats["replayed"], 0)
+        for y, g in outs:
+            np.testing.assert_allclose(y, g, rtol=1e-6)
+            self.assertTrue(set(np.unique(y)) <= {0.0, np.float32(1 / 0.75)})
+        self.assertFalse((outs[-1][0] == outs[-2][0]).all())
+
     def test_the_step_is_recorded(self):
         eager, captured = self._twins()
         cap = self._check(eager, captured, _feeds(10))

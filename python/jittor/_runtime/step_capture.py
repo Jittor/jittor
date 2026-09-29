@@ -177,23 +177,61 @@ def _materialize(var):
         jt.flags.keep_graph = before
 
 
-#: Philox draws for a step being captured, one kernel per draw. Each thread
-#: owns one element: subsequence = element index, offset = the draw's slot in
-#: this step's stretch of the stream, so no two draws -- in one step or across
-#: steps -- read the same counter.
+#: Philox draws for a step being captured, one kernel per draw. A thread
+#: makes one Philox4x32-10 call -- counter (block of four elements, the draw's
+#: slot in this step's stretch of the stream), key the seed -- and fills four
+#: elements from it, so no two draws, in one step or across steps, read the
+#: same counter. It used to set up a cuRAND state per element, a skip-ahead to
+#: the element's subsequence, and draw in double precision: a BERT-base
+#: dropout's mask took 26 us for 3 M elements, compute-bound.
 _PHILOX = r"""
 #include <curand_kernel.h>
+__device__ __forceinline__ uint4 jt_capture_bits(const long long* state, long long draw,
+                                                 unsigned long long block) {
+    unsigned long long slot = (unsigned long long)(state[1] + draw);
+    unsigned long long seed = (unsigned long long)state[0];
+    return curand_Philox4x32_10(
+        make_uint4((unsigned)block, (unsigned)(block >> 32), (unsigned)slot, (unsigned)(slot >> 32)),
+        make_uint2((unsigned)seed, (unsigned)(seed >> 32)));
+}
+// [0, 1) from the top 24 bits, as jt.random draws.
+__device__ __forceinline__ float jt_capture_u01(unsigned bits) {
+    return (bits >> 8) * (1.0f / 16777216.0f);
+}
 template <typename T, bool NORMAL>
 __global__ void jt_step_capture_philox(T* out, long long n, const long long* state,
                                        long long draw) {
-    long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned long long block = (unsigned long long)blockIdx.x * blockDim.x + threadIdx.x;
+    long long i = (long long)block * 4;
     if (i >= n) return;
-    curandStatePhilox4_32_10_t s;
-    // state = [seed, first slot of this step]; four 32-bit values per slot.
-    curand_init((unsigned long long)state[0], (unsigned long long)i,
-                (unsigned long long)(state[1] + draw) * 4, &s);
-    if (NORMAL) out[i] = (T)curand_normal_double(&s);
-    else out[i] = (T)(1.0 - curand_uniform_double(&s));   // [0, 1), as jt.random
+    uint4 r = jt_capture_bits(state, draw, block);
+    unsigned bits[4] = {r.x, r.y, r.z, r.w};
+    float v[4];
+    if (NORMAL) {
+        // Box-Muller on two pairs; the first of each pair in (0, 1].
+        for (int k = 0; k < 4; k += 2) {
+            float u = 1.0f - jt_capture_u01(bits[k]);
+            float radius = sqrtf(-2.0f * logf(u));
+            float s, c;
+            sincospif(2.0f * jt_capture_u01(bits[k + 1]), &s, &c);
+            v[k] = radius * c;
+            v[k + 1] = radius * s;
+        }
+    } else {
+        for (int k = 0; k < 4; k++) v[k] = jt_capture_u01(bits[k]);
+    }
+    for (int k = 0; k < 4 && i + k < n; k++) out[i + k] = (T)v[k];
+}
+// `jt_step_capture_philox<float, false>` compared with `p` in the same pass:
+// the dropout keep mask, without the float32 draw written out and read back.
+__global__ void jt_step_capture_keep(bool* out, long long n, const long long* state,
+                                     long long draw, float p) {
+    unsigned long long block = (unsigned long long)blockIdx.x * blockDim.x + threadIdx.x;
+    long long i = (long long)block * 4;
+    if (i >= n) return;
+    uint4 r = jt_capture_bits(state, draw, block);
+    unsigned bits[4] = {r.x, r.y, r.z, r.w};
+    for (int k = 0; k < 4 && i + k < n; k++) out[i + k] = jt_capture_u01(bits[k]) > p;
 }
 """
 
@@ -250,8 +288,36 @@ def random_draw(shape, dtype, type):
         cuda_header=_PHILOX,
         cuda_src=f"""
         long long n = {numel};
-        if (n) jt_step_capture_philox<{ctype}, {normal}><<<(n + 255) / 256, 256>>>(
+        if (n) jt_step_capture_philox<{ctype}, {normal}><<<((n + 3) / 4 + 255) / 256, 256>>>(
             out0_p, n, (const long long*)in0_p, {draw}LL);
+        """).stop_grad()
+
+
+def random_keep(shape, p):
+    """``jt.random(shape) > p`` for a step being captured on the device, or None.
+
+    A dropout keep mask, drawn and compared in one kernel: the bits of
+    `random_draw`'s uniform draw, without its float32 tensor written out and
+    read back -- 8 bytes an element and a launch per dropout, 25 of them in a
+    BERT-base training step.
+    """
+    cap = _ACTIVE
+    if cap is None:
+        return None
+    if cap.random is None:
+        seed = int(jt.get_seed()) * 1000003 + id(cap) % 1000003
+        cap.random = _StepRandom(seed)
+    draw = cap.random.slot()
+    numel = 1
+    for size in shape:
+        numel *= int(size)
+    return jt.code(
+        list(shape), "bool", [cap.random.state],
+        cuda_header=_PHILOX,
+        cuda_src=f"""
+        long long n = {numel};
+        if (n) jt_step_capture_keep<<<((n + 3) / 4 + 255) / 256, 256>>>(
+            out0_p, n, (const long long*)in0_p, {draw}LL, {float(p)!r}f);
         """).stop_grad()
 
 

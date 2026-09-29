@@ -180,6 +180,14 @@ def _captured_draw(shape, dtype, type):
     return step_capture.random_draw(tuple(ori_int(s) for s in shape), dtype, type)
 
 
+def _captured_keep(shape, p):
+    """``random(shape) > p`` a captured step can replay (see step_capture.random_keep), or None."""
+    from jittor._runtime import step_capture
+    if not step_capture.active() or not _draws_on_device():
+        return None
+    return step_capture.random_keep(tuple(ori_int(s) for s in shape), ori_float(p))
+
+
 def _draws_on_device():
     placement = core._current_tensor_placement()
     if placement is not None:
