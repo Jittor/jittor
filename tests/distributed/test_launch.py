@@ -4,7 +4,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-"""jittor.distributed.launch: failure propagation and one shared JIT cache (8.10).
+"""jittor.distributed.launch: failure propagation and isolated per-rank JIT state.
 
 No GPU and no jittor import in the ranks -- the launcher's own behaviour is
 what is under test, so the ranks here are three-line python programs. That is
@@ -20,6 +20,7 @@ reported anything, and the launcher printed nothing until someone killed it by
 hand. Every extra rank makes this more likely, which is the wrong direction.
 """
 import os
+import runpy
 from pathlib import Path
 import tempfile
 import time
@@ -43,16 +44,14 @@ time.sleep(600)
 
 _PRINT_CACHE_NAME = """
 import os
-print("cache_name=%r" % os.environ.get("cache_name"), flush=True)
+print("cache_name=%r" % os.environ.get("JITTOR_HOME"), flush=True)
 """
 
 
 def _launch(nproc, code, logdir, timeout):
-    # Through _helpers.child_process: the launcher itself imports jittor (for
-    # the peer-access probe) and passes its environment down to every rank, so
-    # an unpinned PYTHONPATH here would put another checkout in all of them.
-    # The ranks need no GPU, and --backend nccl keeps _detect_backend (which
-    # also imports jittor) out of the picture.
+    # Pin the repository path for every child. An explicit backend keeps the
+    # launcher and metadata-only workers independent of the Jittor runtime;
+    # no GPU, model, communicator or simulated remote host is involved.
     start = time.time()
     done = run_python_child(
         [os.fspath(_LAUNCH), "-n", str(nproc), "--backend", "nccl",
@@ -66,6 +65,48 @@ class TestLaunchFailurePropagation(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
+
+    def test_static_topology_environment_is_pure_metadata(self):
+        worker_environment = runpy.run_path(str(_LAUNCH))["worker_environment"]
+        kwargs = dict(nproc=2, nnodes=3, node_rank=2, backend="hccl",
+                      master_addr="actual-master", master_port=29500,
+                      rootinfo="/shared/fresh-run/rootinfo.bin",
+                      state_root=self.tmp.name, run_id="metadata-contract")
+        first = worker_environment({}, local_rank=0, **kwargs)
+        second = worker_environment({}, local_rank=1, **kwargs)
+        self.assertEqual((first["RANK"], second["RANK"], first["WORLD_SIZE"]), ("4", "5", "6"))
+        self.assertEqual(first["LOCAL_WORLD_SIZE"], "2")
+        self.assertEqual(second["JT_HCCL_LOCAL_RANK"], "1")
+        self.assertEqual(first["JT_HCCL_ROOTINFO_FILE"], second["JT_HCCL_ROOTINFO_FILE"])
+        for name in ("JITTOR_HOME", "TMPDIR", "XDG_CACHE_HOME", "CCACHE_DIR"):
+            self.assertNotEqual(first[name], second[name])
+
+    def test_fixed_private_cache_does_not_reuse_execution_identity(self):
+        worker_environment = runpy.run_path(str(_LAUNCH))["worker_environment"]
+        pool = str(Path(self.tmp.name) / "private-pool")
+        kwargs = dict(nproc=2, nnodes=1, node_rank=0, local_rank=0,
+                      backend="hccl", master_addr="localhost", master_port=29500,
+                      state_root=self.tmp.name, cache_root=pool)
+        first = worker_environment({}, run_id="fresh-first",
+                                   rootinfo="/shared/fresh-first.bin", **kwargs)
+        second = worker_environment({}, run_id="fresh-second",
+                                    rootinfo="/shared/fresh-second.bin", **kwargs)
+        for name in ("JITTOR_HOME", "CCACHE_DIR", "CCACHE_BASEDIR", "CCACHE_CONFIGPATH"):
+            self.assertEqual(first[name], second[name])
+        for name in ("TORCHELASTIC_RUN_ID", "JT_HCCL_ROOTINFO_FILE", "TMPDIR", "XDG_CACHE_HOME"):
+            self.assertNotEqual(first[name], second[name])
+        kwargs["local_rank"] = 1
+        other = worker_environment({}, run_id="fresh-second",
+                                   rootinfo="/shared/fresh-second.bin", **kwargs)
+        self.assertNotEqual(second["JITTOR_HOME"], other["JITTOR_HOME"])
+        self.assertNotEqual(second["CCACHE_DIR"], other["CCACHE_DIR"])
+        self.assertEqual(other["RANK"], "1")
+        # Expanding a later actual world reuses only its matching global rank.
+        kwargs.update(nproc=4, local_rank=0)
+        expanded = worker_environment({}, run_id="fresh-four",
+                                      rootinfo="/shared/fresh-four.bin", **kwargs)
+        self.assertEqual(second["JITTOR_HOME"], expanded["JITTOR_HOME"])
+        self.assertEqual(expanded["WORLD_SIZE"], "4")
 
     def test_one_failing_rank_ends_the_job(self):
         """Rank 1 exits 7 while rank 0 sleeps for ten minutes.
@@ -100,13 +141,11 @@ class TestLaunchFailurePropagation(unittest.TestCase):
                       if "rootinfo" in p or ".hb" in p)
         self.assertEqual(left, [], "left behind: %s" % left)
 
-    def test_all_ranks_share_one_jit_cache(self):
-        """The launcher must not give each rank a cache of its own.
+    def test_all_ranks_have_distinct_jit_homes(self):
+        """Concurrent workers must not write one compilation cache.
 
-        It used to set ``cache_name=<backend><rank>``, so an N-card job
-        compiled the same kernels N times into N directories: minutes and
-        gigabytes per extra card, for nothing. One cache is what the mpirun
-        path has always used; jittor.lock serializes the builds.
+        External protocols prewarm each deterministic run/rank directory
+        serially before launching model workers.
         """
         done, _ = _launch(3, _PRINT_CACHE_NAME, self.tmp.name, timeout=120)
         self.assertEqual(done.returncode, 0, done.stdout[-3000:])
@@ -115,8 +154,8 @@ class TestLaunchFailurePropagation(unittest.TestCase):
             text = Path(self.tmp.name, "rank%d.log" % rank).read_text()
             self.assertIn("cache_name=", text, text)
             names.add(text.strip().split("cache_name=", 1)[1])
-        self.assertEqual(len(names), 1,
-                         "ranks got different JIT caches: %s" % sorted(names))
+        self.assertEqual(len(names), 3,
+                         "ranks shared JIT homes: %s" % sorted(names))
 
 
 if __name__ == "__main__":

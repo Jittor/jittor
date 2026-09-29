@@ -247,7 +247,7 @@ void VarHolder::set_data(ArrayArgs&& array) {
     }
 }
 
-VarHolder::VarHolder(Var* v) : var(v) {
+VarHolder::VarHolder(Var* v) : var(v), leaf_grad_callback(v->leaf_grad_callback) {
     // Var holder has both forward and backward liveness
     own_holder();
     var->own_both_liveness();
@@ -256,12 +256,14 @@ VarHolder::VarHolder(Var* v) : var(v) {
 
 VarHolder::VarHolder(VarPtr&& v) {
     var = v.ptr;
+    leaf_grad_callback = var->leaf_grad_callback;
     v.ptr = nullptr;
     own_holder();
     add_hold_vars(this);
 }
 
-VarHolder::VarHolder(VarHolder* v) : var(v->var) {
+VarHolder::VarHolder(VarHolder* v) : var(v->var),
+    leaf_grad_callback(std::move(v->leaf_grad_callback)) {
     own_holder();
     iter = v->iter;
     *iter = this;
@@ -606,6 +608,11 @@ VarHolder* VarHolder::start_grad() {
     AutogradPolicyOverride policy_guard({});
     no_grad = 0;
     auto dvar = jittor::detach(var);
+    // Real detach produces a differentiable leaf behind a stopped input op.
+    // Metadata has no producer/input edge: its leaf flag is stopped directly,
+    // so enabling gradients must clear that flag on the newly owned metadata.
+    if (dvar->is_metadata())
+        dvar->flags.set(NodeFlags::_stop_grad, false);
     std::swap(dvar.ptr, var);
     no_grad = no_grad_bk;
     var->set_flag(VarFlags::_explicit_requires_grad);

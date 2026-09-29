@@ -155,8 +155,24 @@ def _resnet_like(torch):
     return Stack(), {"sample": ("float32", (8, 3, 128, 128), None)}
 
 
+def _ms_swift_lora_1b_train(torch):
+    from swift import Swift
+    from swift.tuners import LoRAConfig
+    from transformers import AutoConfig, AutoModelForCausalLM
+    config = AutoConfig.for_model(
+        "llama", hidden_size=2048, intermediate_size=5632, num_hidden_layers=22,
+        num_attention_heads=32, num_key_value_heads=4, vocab_size=32000,
+        max_position_embeddings=2048, attention_dropout=0.0,
+        tie_word_embeddings=False, use_cache=False)
+    base = AutoModelForCausalLM.from_config(config, attn_implementation="eager", torch_dtype=torch.float32)
+    model = Swift.prepare_model(base, LoRAConfig(
+        r=4, lora_alpha=8, lora_dropout=0.0, target_modules=["q_proj", "v_proj"]))
+    return model, {"input_ids": ("int64", (1, 512), 32000)}
+
+
 #: name -> (builder, required top-level distributions)
 CASES = {
+    "large_ms_swift_lora_llama_1b_train": (_ms_swift_lora_1b_train, ("transformers", "peft", "swift")),
     "large_transformers_llama": (_llama, ("transformers",)),
     "large_transformers_gpt2": (_gpt2, ("transformers",)),
     "large_transformers_qwen3": (_qwen3, ("transformers",)),

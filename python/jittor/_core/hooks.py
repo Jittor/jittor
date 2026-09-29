@@ -1,5 +1,5 @@
 """Removable hooks and explicit taped-gradient attachment."""
-from jittor_core import Var
+from jittor_core import Var, _set_leaf_grad_callback
 
 
 class _RemovableHandle:
@@ -45,11 +45,31 @@ the gradient of this variable will be alter,
     remove the hook at all -- while this same file already had
     ``_RemovableHandle`` for exactly this, used by every Module hook.
 
-    The in-place ``swap`` stays: the hook has to BE a node in the graph, and
+    Differentiable leaves use a native callback without changing their graph.
+    For nonleaves the historical in-place ``swap`` stays: the hook is a node, and
     the Var the caller is holding has to be the hooked one. So what
     ``remove()`` undoes is the hook *running*; the (now identity) node stays
     where it is, which is what keeps a graph already built on it intact.
     """
+    if v.requires_grad and v.is_backward_leaf:
+        if not callable(hook):
+            raise TypeError("gradient hook must be callable")
+        state = getattr(v, "_native_leaf_gradient_hooks", None)
+        if state is None:
+            state = [{}, 0]
+            v._native_leaf_gradient_hooks = state
+            def dispatch(gradient):
+                # Snapshot iteration permits a callback to remove itself.
+                for callback in tuple(state[0].values()):
+                    result = callback(gradient)
+                    if result is not None:
+                        gradient = result
+                return gradient
+            _set_leaf_grad_callback(v, dispatch)
+        token = state[1]
+        state[1] += 1
+        state[0][token] = hook
+        return _RemovableHandle(lambda: state[0].pop(token, None))
     from .function import GradHooker
     live = [True]
     def _hook(grads):

@@ -360,7 +360,8 @@ class Hook:
                     if hasattr(p, "is_stop_grad"):
                         if p.is_stop_grad():
                             continue
-                        grad = pg["grads"][i]
+                        from jittor.optim.base import _group_state
+                        grad = _group_state(pg)["grads"][i]
                     else:
                         grad = p.grad
                     pname = self.get_param_name(p)

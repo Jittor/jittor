@@ -10,6 +10,8 @@
 #include "runtime/backend.h"
 #include "runtime/backend_fallback.h"
 #include "runtime/launch_diagnostics.h"
+#include "runtime/rng_state.h"
+#include "runtime/memory_state.h"
 
 namespace jittor {
 
@@ -32,6 +34,8 @@ public:
     BackendRegistry& backends() { return backends_; }
     BackendFallbackState& fallbacks() { return fallbacks_; }
     LaunchHistory& launches() { return launches_; }
+    RuntimeRngState& rng() { return rng_; }
+    RuntimeMemoryState& memory() { return memory_; }
 
 private:
     Executor executor_;
@@ -45,6 +49,8 @@ private:
     BackendRegistry backends_;
     BackendFallbackState fallbacks_;
     LaunchHistory launches_;
+    RuntimeRngState rng_;
+    RuntimeMemoryState memory_;
 };
 
 EXTERN_LIB NativeRuntime& native_runtime();

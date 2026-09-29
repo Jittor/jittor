@@ -119,12 +119,12 @@ def embedding_acl(
     return EmbeddingACL(padding_idx, scale_grad_by_freq)(input, weight)
 
 
-def any_acl(input, dim=None):
-    return truth_reduce(input, dim, reduce_all=False)
+def any_acl(input, dim=None, keepdims=False):
+    return truth_reduce(input, dim, reduce_all=False, keepdims=keepdims)
 
 
-def all_acl(input, dim=()):
-    return truth_reduce(input, dim, reduce_all=True)
+def all_acl(input, dim=(), keepdims=False):
+    return truth_reduce(input, dim, reduce_all=True, keepdims=keepdims)
 
 
 def cumsum_acl(input, dim=-1):
@@ -177,7 +177,7 @@ def getitem_acl(x, slices, return_x=None):
 
     if slices is not None and (not isinstance(slices, Iterable) or isinstance(slices, str)):
         return _getitem_without_none(x, slices)
-    if isinstance(slices, int) or isinstance(slices, slice):
+    if slices is None or isinstance(slices, (int, slice)):
         slices = (slices,)
     if not isinstance(slices, tuple):
         raise TypeError("ACL getitem slices must be a tuple, integer, slice, or tensor")

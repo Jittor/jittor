@@ -1,4 +1,6 @@
 """Stable Tensor gradient APIs using the shared native Var/Op graph."""
+
+from jittor.optim.base import _group_state
 from importlib import import_module
 from ...context import get_install_context
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
@@ -67,9 +69,9 @@ def _fill_opt_grads(opt, grad_by_id, filled_param_ids=None):
     if filled_param_ids is None:
         filled_param_ids = set()
     for pg in opt.param_groups:
-        grads_list = pg.get("grads")
+        grads_list = _group_state(pg).get("grads")
         if grads_list is None:
-            grads_list = pg["grads"] = [None] * len(pg["params"])
+            grads_list = _group_state(pg)["grads"] = [None] * len(pg["params"])
         for i, p in enumerate(pg["params"]):
             if not isinstance(p, _NativeVar) or not p.requires_grad:
                 continue
@@ -336,13 +338,13 @@ def _grad_set(self, value):
                 if fsdp_role == "full" and value is not None and p is not self:
                     continue
                 if value is None:
-                    grads = pg.get("grads")
+                    grads = _group_state(pg).get("grads")
                     if grads is not None and i < len(grads):
                         grads[i] = None
                 else:
-                    grads = pg.get("grads")
+                    grads = _group_state(pg).get("grads")
                     if grads is None:
-                        grads = pg["grads"] = [None] * len(params)
+                        grads = _group_state(pg)["grads"] = [None] * len(params)
                     while len(grads) < len(params):
                         grads.append(None)
                     grads[i] = value

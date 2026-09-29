@@ -123,6 +123,8 @@ typedef struct _object PyObject;
 // @attrs(heaptype)
 struct VarHolder {
     Var* var;
+    // Follows this tensor identity through assign/optimizer updates.
+    std::shared_ptr<GradCallback> leaf_grad_callback;
     list<VarHolder*>::iterator iter;
     // Set when this holder is a view of another one; see VarView.
     VarView* view = nullptr;
@@ -149,7 +151,10 @@ struct VarHolder {
     ArrayArgs fetch_sync();
 
     inline void release_holder() {var->holder = nullptr;}
-    inline void own_holder() {var->holder = this;}
+    inline void own_holder() {
+        var->holder = this;
+        if (leaf_grad_callback) var->leaf_grad_callback = leaf_grad_callback;
+    }
 
     /**
      * assign the data from another Var.

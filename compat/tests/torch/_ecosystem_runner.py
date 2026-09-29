@@ -139,9 +139,9 @@ def _select_device(torch, runtime, device, *, policy_stack=None):
             if not _test_capability.check_accelerator("acl", backend=jt).enabled:
                 raise SystemExit("ACL is unavailable in this Jittor build")
             policy_stack.enter_context(jt.runtime.scope(use_cuda=1, use_acl=1))
-            # Same residency issue as CUDA, but the ACL path is verified on the
-            # NPU gate rather than here; leave it identity until it can be run.
-            return lambda tensor: tensor
+            # from_numpy has explicit host placement even with ACL selected.
+            # Move inputs and loaded state just as the native NPU runner does.
+            return lambda tensor: tensor.to("npu")
         else:
             policy_stack.enter_context(jt.runtime.scope(use_cuda=0))
         return lambda tensor: tensor
@@ -285,8 +285,447 @@ def _primary_output(result):
     return result
 
 
+def _validate_transfer_state(available, loaded):
+    """Reject incomplete or coercible state before changing any model tensor."""
+    saved_keys = set(loaded.files)
+    if set(available) != saved_keys:
+        raise AssertionError("transfer state keys differ: missing={}, extra={}".format(
+            sorted(set(available) - saved_keys), sorted(saved_keys - set(available))))
+    for name, value in available.items():
+        source = loaded[name]
+        if tuple(value.shape) != tuple(source.shape):
+            raise AssertionError("transfer shape mismatch: {}".format(name))
+        target_dtype = str(value.dtype).split(".")[-1]
+        source_dtype = str(source.dtype).split(".")[-1]
+        if target_dtype != source_dtype:
+            raise AssertionError("transfer dtype mismatch: {} ({} != {})".format(
+                name, source_dtype, target_dtype))
+
+
+def _parameter_grad_policy(model):
+    """Capture the tuner's declared trainable set before mode/state transitions."""
+    return {name: bool(value.requires_grad)
+            for name, value in model.named_parameters()}
+
+
+def _assert_parameter_grad_policy(model, policy):
+    """Reject trainability drift; evidence collection must never repair it."""
+    parameters = dict(model.named_parameters())
+    if set(parameters) != set(policy):
+        raise AssertionError("parameter set changed after mode/state transition")
+    changed = sorted(name for name, value in parameters.items()
+                     if bool(value.requires_grad) != policy[name])
+    if changed:
+        raise AssertionError("parameter requires_grad changed: {}".format(changed))
+
+
+def _required_gradients(model, inputs, policy):
+    """Reject missing trainable and differentiable-input gradients."""
+    parameters = dict(model.named_parameters())
+    if set(parameters) != set(policy):
+        raise AssertionError("parameter set changed during forward")
+    gradients = {}
+    for name, value in parameters.items():
+        grad = getattr(value, "grad", None)
+        if policy[name]:
+            if grad is None:
+                raise AssertionError("missing parameter gradient: {}".format(name))
+            gradients["grad::" + name] = grad
+        elif grad is not None:
+            raise AssertionError("frozen parameter has gradient: {}".format(name))
+    not_applicable = []
+    for name, value in inputs.items():
+        grad = getattr(value, "grad", None)
+        if bool(value.requires_grad):
+            if grad is None:
+                raise AssertionError("missing input gradient: {}".format(name))
+            gradients["ingrad::" + name] = grad
+        else:
+            if grad is not None:
+                raise AssertionError("non-differentiable input has gradient: {}".format(name))
+            not_applicable.append(name)
+    return gradients, sorted(not_applicable)
+
+
+def _output_structure(result, primary):
+    report = {"type": type(result).__name__, "primary_shape": list(primary.shape)}
+    if isinstance(result, dict):
+        report["keys"] = list(result.keys())
+    elif isinstance(result, (tuple, list)):
+        report["length"] = len(result)
+    return report
+
+
+def _npu_tensor_evidence(value, runtime, label, expected_device=0):
+    """Observe only; callers synchronize before this and before any D2H copy."""
+    shape = tuple(int(size) for size in value.shape)
+    record = {"shape": list(shape), "dtype": str(value.dtype).split(".")[-1]}
+    empty = any(size == 0 for size in shape)
+    if runtime == "jittor":
+        # FollowRuntime (-1) is valid under the asserted ACL runtime; physical
+        # residency and device identity below must still independently agree.
+        placement = int(value.placement_backend)
+        device_id = int(value.device_id)
+        location = value.location()
+        record.update(placement_backend=placement, device_id=device_id, location=location)
+        if placement not in (-1, 2) or device_id != expected_device:
+            raise AssertionError("{}: expected ACL-compatible placement on device {}".format(label, expected_device))
+        if location != "device":
+            if empty and location == "none":
+                record["residency_exception"] = "zero-sized tensor has no allocation"
+            else:
+                raise AssertionError("{}: non-device residency {}".format(label, location))
+    else:
+        device_type, device_id = value.device.type, value.device.index
+        record.update(device_type=device_type, device_id=device_id)
+        if device_type != "npu" or device_id != expected_device:
+            raise AssertionError("{}: expected native NPU tensor on device {}".format(label, expected_device))
+    return record
+
+
+def _npu_evidence(torch, runtime, model, inputs, output, gradients):
+    """Require independent runtime identity and every observed tensor on NPU."""
+    if runtime == "jittor":
+        import jittor as jt
+        if not hasattr(torch, "_torch_compat_install_context"):
+            raise AssertionError("candidate torch is not Jittor shim")
+        registered = list(jt.core.registered_backends())
+        config = jt.compiler.build_config
+        count = jt.core.backend_device_count("acl")
+        if "acl" not in registered or config.backend != "acl" or not config.has_acl or count != 1:
+            raise AssertionError("candidate is not a single-device ACL build")
+        backend = {"runtime": "jittor", "module": jt.__file__, "build_backend": config.backend,
+                   "registered_backends": registered, "device_count": count}
+    else:
+        torch_npu = importlib.import_module("torch_npu")
+        if hasattr(torch, "_torch_compat_install_context") or not hasattr(torch, "_C"):
+            raise AssertionError("oracle torch is not independent native PyTorch")
+        count = torch.npu.device_count()
+        if not torch.npu.is_available() or count != 1:
+            raise AssertionError("oracle requires exactly one native NPU")
+        backend = {"runtime": "torch_npu", "module": torch_npu.__file__,
+                   "torch_module": torch.__file__, "device_count": count}
+    entries = [("parameter::" + name, value) for name, value in model.named_parameters()]
+    entries += [("buffer::" + name, value) for name, value in model.named_buffers()]
+    entries += [("input::" + name, value) for name, value in inputs.items()]
+    entries += [("primary_output", output)]
+    entries += [(name, value) for name, value in gradients.items()]
+    records = {}
+    for name, value in entries:
+        if name in records:
+            raise AssertionError("duplicate NPU evidence key: " + name)
+        records[name] = _npu_tensor_evidence(value, runtime, name)
+    return {"backend_identity": backend, "tensors": records,
+            "primary_dtype": records["primary_output"]["dtype"],
+            "input_dtypes": {name: records["input::" + name]["dtype"] for name in inputs}}
+
+
 def _numpy_snapshot(value):
     return np.array(value.detach().cpu().numpy(), dtype="float32", copy=True)
+
+
+def _training_trajectory_keys(names, steps=3):
+    keys = {"initial::" + name for name in names}
+    for step in range(steps):
+        prefix = "step::{}::".format(step)
+        keys.update(prefix + "grad::" + name for name in names)
+        keys.update(prefix + "param::" + name for name in names)
+        keys.update(prefix + "delta::" + name for name in names)
+        keys.add(prefix + "loss")
+    return keys
+
+
+def _run_adamw3(torch, model, inputs, policy, options, dependencies,
+                tf32, runtime_conditions, fallback_before):
+    """Three real updates; snapshots are correctness evidence, never timing."""
+    if options.device != "npu":
+        raise AssertionError("ms-swift AdamW3 is an Ascend-only protocol")
+    if options.runtime == "jittor" and not options.weights:
+        raise AssertionError("candidate AdamW3 requires oracle initial weights")
+    names = sorted(name for name, enabled in policy.items() if enabled)
+    if len(names) != 8 or any("lora_" not in name for name in names):
+        raise AssertionError("expected exactly eight ms-swift LoRA parameters")
+    model.train()
+    _assert_parameter_grad_policy(model, policy)
+    parameters = dict(model.named_parameters())
+    buffers = dict(model.named_buffers())
+    frozen = {name: _numpy_snapshot(value) for name, value in parameters.items()
+              if not policy[name]}
+    initial_buffers = {name: _numpy_snapshot(value) for name, value in buffers.items()}
+    arrays = {"initial::" + name: _numpy_snapshot(parameters[name]) for name in names}
+    optimizer_config = dict(lr=1e-3, betas=(0.9, 0.999), eps=1e-8,
+                            weight_decay=0.01, fused=False)
+    optimizer = torch.optim.AdamW([parameters[name] for name in names], **optimizer_config)
+    observations = []
+    output_structure = None
+    input_grad_na = None
+    for step in range(3):
+        if _parameter_grad_policy(model) != policy:
+            raise AssertionError("trainable parameter policy changed during training")
+        optimizer.zero_grad(set_to_none=True)
+        result = model(**inputs, labels=inputs["input_ids"], use_cache=False)
+        output = _primary_output(result)
+        structure = _output_structure(result, output)
+        if output_structure is not None and structure != output_structure:
+            raise AssertionError("output structure changed during training")
+        output_structure = structure
+        loss = result.loss
+        loss.backward()
+        _synchronize(torch, options.runtime, options.device)
+        gradients, input_grad_na = _required_gradients(model, inputs, policy)
+        if set(gradients) != {"grad::" + name for name in names}:
+            raise AssertionError("training gradient set differs from all eight LoRA parameters")
+        backward_evidence = _npu_evidence(torch, options.runtime, model, inputs, output, gradients)
+        loss_evidence = _npu_tensor_evidence(loss, options.runtime, "loss")
+        prefix = "step::{}::".format(step)
+        arrays[prefix + "loss"] = _numpy_snapshot(loss)
+        arrays.update({prefix + name: _numpy_snapshot(grad)
+                       for name, grad in gradients.items()})
+        for key, value in arrays.items():
+            if not np.isfinite(value).all():
+                raise AssertionError("non-finite training snapshot: " + key)
+        optimizer.step()
+        # Force the updated values on lazy runtimes before taking snapshots.
+        if options.runtime == "jittor":
+            import jittor as jt
+            jt.sync([parameters[name] for name in names], device_sync=True)
+        _synchronize(torch, options.runtime, options.device)
+        update_evidence = _npu_evidence(torch, options.runtime, model, inputs, output, gradients)
+        arrays.update({prefix + "param::" + name: _numpy_snapshot(parameters[name])
+                       for name in names})
+        previous_prefix = "initial::" if step == 0 else "step::{}::param::".format(step - 1)
+        for name in names:
+            arrays[prefix + "delta::" + name] = (
+                arrays[prefix + "param::" + name].astype("float64")
+                - arrays[previous_prefix + name].astype("float64"))
+        if _parameter_grad_policy(model) != policy:
+            raise AssertionError("optimizer changed trainable parameter policy")
+        for name in names:
+            if not np.isfinite(arrays[prefix + "param::" + name]).all():
+                raise AssertionError("non-finite updated parameter: " + name)
+        for name, expected in frozen.items():
+            if not np.array_equal(_numpy_snapshot(parameters[name]), expected):
+                raise AssertionError("frozen parameter changed: " + name)
+        if set(dict(model.named_buffers())) != set(initial_buffers):
+            raise AssertionError("buffer set changed during training")
+        for name, expected in initial_buffers.items():
+            if not np.array_equal(_numpy_snapshot(dict(model.named_buffers())[name]), expected):
+                raise AssertionError("buffer changed: " + name)
+        count = None
+        if options.runtime == "jittor":
+            count = jt.core.backend_fallback_count() - fallback_before
+        actual_device = _device_in_use(torch, options.runtime, options.device)
+        if actual_device != "npu" or (options.runtime == "jittor" and count != 0):
+            raise AssertionError("training left NPU or used backend fallback")
+        observations.append({"step": step, "device": actual_device,
+                             "backend": _backend_report(options.runtime),
+                             "trainable_parameters": names,
+                             "backward_npu_evidence": backward_evidence,
+                             "update_npu_evidence": update_evidence,
+                             "loss_dtype": loss_evidence["dtype"],
+                             "fallback_count": count})
+    if set(arrays) != _training_trajectory_keys(names):
+        raise AssertionError("incomplete three-step training trajectory")
+    for key, value in arrays.items():
+        if not np.isfinite(value).all():
+            raise AssertionError("non-finite training snapshot: " + key)
+    # LoRA A can legitimately have zero gradient on the first update while B
+    # starts at zero. Require a genuine update, not every parameter every step.
+    if not any(not np.array_equal(arrays["initial::" + name],
+                                  arrays["step::2::param::" + name]) for name in names):
+        raise AssertionError("AdamW completed without updating any parameter")
+    np.savez(options.output, **arrays)
+    print("ECOSYSTEM_RESULT " + json.dumps({
+        "case": options.case, "protocol": "adamw3", "steps": 3,
+        "optimizer": optimizer_config, "step_observations": observations,
+        "trajectory_dtypes": {key: str(value.dtype) for key, value in arrays.items()},
+        "npu_evidence": observations[-1]["update_npu_evidence"],
+        "trainable_parameters": names,
+        "frozen_parameters": sorted(frozen), "input_grad_not_applicable": input_grad_na,
+        "output_structure": output_structure, "tensors": len(arrays),
+        "device": observations[-1]["device"], "backend": observations[-1]["backend"],
+        "fallback_count": observations[-1]["fallback_count"],
+        "fallback_policy": "error" if options.runtime == "jittor" else None,
+        "package_site": os.environ.get("JITTOR_ECOSYSTEM_PACKAGE_SITE", ""),
+        "dependencies": dependencies, "tf32": tf32, "runtime_conditions": runtime_conditions,
+    }))
+
+
+def _performance_statistics(durations, tokens=512):
+    import math
+    import statistics
+    if len(durations) < 10 or any(not math.isfinite(x) or x <= 0 for x in durations):
+        raise AssertionError("performance requires at least ten finite positive durations")
+    ordered = sorted(durations)
+    def quantile(q):
+        index = (len(ordered) - 1) * q
+        lower = int(index)
+        upper = min(lower + 1, len(ordered) - 1)
+        return ordered[lower] + (ordered[upper] - ordered[lower]) * (index - lower)
+    median = statistics.median(ordered)
+    return {"durations_seconds": list(durations), "samples": len(durations),
+            "median_seconds": median, "min_seconds": ordered[0],
+            "p10_seconds": quantile(0.1), "p90_seconds": quantile(0.9),
+            "quantile_method": "linear", "input_tokens_per_second": tokens / median,
+            "loss_tokens_per_second": (tokens - 1) / median}
+
+
+def _performance_precision(torch, runtime):
+    if runtime == "torch":
+        torch.npu.matmul.allow_hf32 = False
+        torch.npu.conv.allow_hf32 = False
+        torch.npu.matmul.cube_math_type = torch.npu.CubeMathType.KEEP_DTYPE
+        if torch.npu.matmul.allow_hf32 or torch.npu.conv.allow_hf32:
+            raise AssertionError("native HF32 disable did not take effect")
+        cube = torch.npu.matmul.cube_math_type
+        if cube != torch.npu.CubeMathType.KEEP_DTYPE:
+            raise AssertionError("native cube math is not KEEP_DTYPE")
+        return {"dtype": "float32", "allow_hf32": False,
+                "cube_math_type": int(cube), "readback": "torch_npu native options"}
+    import jittor as jt
+    jt.acl_allow_hf32 = False
+    if jt.acl_allow_hf32:
+        raise AssertionError("candidate HF32 disable did not take effect")
+    return {"dtype": "float32", "allow_hf32": False, "cube_math_type": 0,
+            "readback": "jt.acl_allow_hf32; mapped_matmul passes cubeMathType=0"}
+
+
+def _performance_memory(torch, runtime):
+    if runtime == "torch":
+        return {"source": "torch.npu allocator", "units": "bytes",
+                "allocated": int(torch.npu.memory_allocated(0)),
+                "reserved": int(torch.npu.memory_reserved(0)),
+                "peak_allocated": int(torch.npu.max_memory_allocated(0)),
+                "peak_reserved": int(torch.npu.max_memory_reserved(0)),
+                "peak_kind": "allocator peak since post-warmup reset"}
+    import jittor as jt
+    return {"source": "jt.core.device_memory_used/reserved(0)", "units": "bytes",
+            "allocated": int(jt.core.device_memory_used(0)),
+            "reserved": int(jt.core.device_memory_reserved(0)),
+            "peak_allocated": None, "peak_reserved": None,
+            "peak_kind": "unavailable; synchronized boundary samples only"}
+
+
+def _run_lora_performance(torch, model, inputs, policy, options, dependencies,
+                          tf32, runtime_conditions, fallback_before):
+    """Explicit realistic-size NPU workload; no host snapshots in timed steps."""
+    if options.device != "npu" or options.repeats < 10:
+        raise AssertionError("large LoRA performance requires NPU and repeats>=10")
+    if options.runtime == "jittor" and not options.weights:
+        raise AssertionError("candidate requires complete oracle initial state")
+    precision = _performance_precision(torch, options.runtime)
+    if model.config._attn_implementation != "eager":
+        raise AssertionError("both performance runtimes must use eager attention")
+    model.train()
+    _assert_parameter_grad_policy(model, policy)
+    parameters = dict(model.named_parameters())
+    names = sorted(name for name, enabled in policy.items() if enabled)
+    if len(names) != 88 or any("lora_" not in name for name in names):
+        raise AssertionError("expected 88 LoRA matrices across 22 layers")
+    total_parameters = sum(int(value.numel()) for value in parameters.values())
+    trainable_parameters = sum(int(parameters[name].numel()) for name in names)
+    if not 1000000000 <= total_parameters <= 1200000000 or trainable_parameters != 563200:
+        raise AssertionError("unexpected model/trainable parameter count")
+    optimizer_config = dict(lr=1e-3, betas=(0.9, 0.999), eps=1e-8,
+                            weight_decay=0.01, fused=False)
+    optimizer = torch.optim.AdamW([parameters[name] for name in names], **optimizer_config)
+
+    def step():
+        optimizer.zero_grad(set_to_none=True)
+        result = model(**inputs, labels=inputs["input_ids"], use_cache=False)
+        loss = result.loss
+        loss.backward()
+        gradients, _ = _required_gradients(model, inputs, policy)
+        optimizer.step()
+        # A detached loss is a new lazy node on Jittor. Materialize the same
+        # scalar we retain before ending the synchronized measurement.
+        detached_loss = loss.detach()
+        if options.runtime == "jittor":
+            import jittor as jt
+            jt.sync([parameters[name] for name in names] + [detached_loss], device_sync=True)
+        _synchronize(torch, options.runtime, "npu")
+        return detached_loss, result, gradients
+
+    initial = {name: _numpy_snapshot(parameters[name]) for name in names}
+    losses, warmup_durations, durations, fallback_counts = [], [], [], []
+    loss_evidence = []
+    output_structure = None
+    for _ in range(3):
+        started = time.perf_counter()
+        loss, result, gradients = step()
+        warmup_durations.append(time.perf_counter() - started)
+        losses.append(loss)
+        output = _primary_output(result)
+        observed_structure = _output_structure(result, output)
+        if output_structure is not None and observed_structure != output_structure:
+            raise AssertionError("performance output structure changed")
+        output_structure = observed_structure
+        loss_evidence.append(_npu_tensor_evidence(loss, options.runtime, "loss"))
+        if loss_evidence[-1]["dtype"] != "float32" or loss_evidence[-1]["shape"] != []:
+            raise AssertionError("performance loss must be scalar FP32 on NPU")
+    warm_evidence = _npu_evidence(torch, options.runtime, model, inputs, output, gradients)
+    _assert_parameter_grad_policy(model, policy)
+    if options.runtime == "torch":
+        torch.npu.reset_peak_memory_stats(0)
+    memory_start = _performance_memory(torch, options.runtime)
+    _synchronize(torch, options.runtime, "npu")
+    for _ in range(options.repeats):
+        started = time.perf_counter()
+        loss, result, gradients = step()
+        durations.append(time.perf_counter() - started)
+        losses.append(loss)
+        output = _primary_output(result)
+        observed_structure = _output_structure(result, output)
+        if output_structure is not None and observed_structure != output_structure:
+            raise AssertionError("performance output structure changed")
+        output_structure = observed_structure
+        loss_evidence.append(_npu_tensor_evidence(loss, options.runtime, "loss"))
+        if loss_evidence[-1]["dtype"] != "float32" or loss_evidence[-1]["shape"] != []:
+            raise AssertionError("performance loss must be scalar FP32 on NPU")
+        _assert_parameter_grad_policy(model, policy)
+        count = None
+        if options.runtime == "jittor":
+            import jittor as jt
+            count = jt.core.backend_fallback_count() - fallback_before
+        if options.runtime == "jittor" and (type(count) is not int or count != 0):
+            raise AssertionError("performance workload used backend fallback")
+        fallback_counts.append(count)
+    final_evidence = _npu_evidence(torch, options.runtime, model, inputs, output, gradients)
+    memory_end = _performance_memory(torch, options.runtime)
+    arrays = {"losses": np.asarray([float(_numpy_snapshot(loss).reshape(-1)[0])
+                                   for loss in losses], dtype="float32")}
+    arrays.update({"final::" + name: _numpy_snapshot(parameters[name]) for name in names})
+    arrays.update({name: _numpy_snapshot(value) for name, value in gradients.items()})
+    if any(not np.isfinite(value).all() for value in arrays.values()):
+        raise AssertionError("non-finite performance artifact")
+    if not any(not np.array_equal(initial[name], arrays["final::" + name]) for name in names):
+        raise AssertionError("performance optimizer never updated parameters")
+    if final_evidence["primary_dtype"] != "float32" or final_evidence["input_dtypes"] != {"input_ids": "int64"}:
+        raise AssertionError("unexpected workload precision")
+    statistics = _performance_statistics(durations)
+    np.savez(options.output, **arrays)
+    print("ECOSYSTEM_RESULT " + json.dumps({
+        "case": options.case, "protocol": "lora_1b_train_performance_v1",
+        "warmup_steps": 3, "timed_steps": options.repeats,
+        "warmup_durations_seconds": warmup_durations, "statistics": statistics,
+        "seconds": statistics["median_seconds"], "memory_start": memory_start,
+        "memory_end": memory_end, "precision": precision, "optimizer": optimizer_config,
+        "config": model.config.to_dict(), "attention": "eager",
+        "tuner": {"owner": "swift.tuners.LoRAConfig", "r": 4, "lora_alpha": 8,
+                  "lora_dropout": 0.0, "target_modules": ["q_proj", "v_proj"]},
+        "parameter_count": total_parameters, "trainable_parameter_count": trainable_parameters,
+        "trainable_parameters": names, "frozen_parameters": sorted(set(parameters) - set(names)),
+        "input_grad_not_applicable": ["input_ids"], "output_structure": output_structure,
+        "device": "npu", "backend": _backend_report(options.runtime),
+        "loss_npu_evidence": loss_evidence,
+        "artifact_dtypes": {key: str(value.dtype) for key, value in arrays.items()},
+        "npu_evidence": final_evidence, "warmup_npu_evidence": warm_evidence,
+        "fallback_policy": "error" if options.runtime == "jittor" else None,
+        "fallback_count": fallback_counts[-1], "step_fallback_counts": fallback_counts,
+        "native_fallback_observation": "separate full-process log guard; no validated universal counter",
+        "dependencies": dependencies, "tf32": tf32, "runtime_conditions": runtime_conditions,
+        "package_site": os.environ.get("JITTOR_ECOSYSTEM_PACKAGE_SITE", ""),
+    }))
 
 
 def main():
@@ -325,7 +764,9 @@ def _run(policy_stack):
         builder, requirements = _ecosystem_cases.CASES[options.case]
         model, input_spec = builder(torch)
         dependencies = _dependency_report(requirements)
+        grad_policy = _parameter_grad_policy(model)
         model.eval()
+        _assert_parameter_grad_policy(model, grad_policy)
         if options.runtime == "torch" and options.device != "cpu":
             model.to(options.device)
 
@@ -343,12 +784,7 @@ def _run(policy_stack):
         if options.weights:
             loaded = np.load(options.weights)
             available = dict(transferable())
-            missing = sorted(key for key in loaded.files if key not in available)
-            if missing:
-                raise SystemExit("no counterpart for saved weights: %s" % missing[:5])
-            unset = sorted(key for key in available if key not in loaded.files)
-            if unset:
-                raise SystemExit("no saved weight for: %s" % unset[:5])
+            _validate_transfer_state(available, loaded)
             for name, value in available.items():
                 source = to_device(torch.from_numpy(loaded[name]))
                 with_no_grad = getattr(torch, "no_grad", None)
@@ -367,17 +803,18 @@ def _run(policy_stack):
                 },
             )
 
-        # ``eval()`` in Jittor also stops gradients on every parameter; PyTorch's
-        # does not.  Re-enable them so both runtimes differentiate the same graph.
-        for parameter in model.parameters():
-            start_grad = getattr(parameter, "start_grad", None)
-            if callable(start_grad):
-                start_grad()
-            else:
-                parameter.requires_grad_(True)
+        _assert_parameter_grad_policy(model, grad_policy)
 
         inputs = _make_inputs(torch, input_spec, options.seed + 1, to_device)
-        output = _primary_output(model(**inputs))
+        if options.case == "large_ms_swift_lora_llama_1b_train":
+            return _run_lora_performance(torch, model, inputs, grad_policy, options,
+                                         dependencies, tf32, runtime_conditions, fallback_before)
+        if options.case == "ms_swift_lora_llama_adamw3":
+            return _run_adamw3(torch, model, inputs, grad_policy, options,
+                               dependencies, tf32, runtime_conditions, fallback_before)
+        result = model(**inputs)
+        output = _primary_output(result)
+        output_structure = _output_structure(result, output)
 
         weights = np.random.RandomState(options.seed + 2)
         loss_weights = weights.randn(*tuple(output.shape)).astype("float32")
@@ -385,16 +822,14 @@ def _run(policy_stack):
         loss.backward()
 
         _synchronize(torch, options.runtime, options.device)
+        gradients, input_grad_na = _required_gradients(model, inputs, grad_policy)
+        npu_evidence = None
+        if options.device == "npu":
+            npu_evidence = _npu_evidence(
+                torch, options.runtime, model, inputs, output, gradients)
         arrays = {"__output__": _numpy_snapshot(output)}
-        for name, parameter in model.named_parameters():
-            grad = getattr(parameter, "grad", None)
-            if grad is None:
-                continue
-            arrays["grad::" + name] = _numpy_snapshot(grad)
-        for name, tensor in inputs.items():
-            grad = getattr(tensor, "grad", None)
-            if grad is not None:
-                arrays["ingrad::" + name] = _numpy_snapshot(grad)
+        arrays.update({name: _numpy_snapshot(grad)
+                       for name, grad in gradients.items()})
 
         # Timing runs after correctness capture. Inputs and loss weights are already
         # resident on the requested device, so the number excludes allocation/H2D.
@@ -458,7 +893,7 @@ def _run(policy_stack):
         del warm_values, values
 
     fallback_count = (jt.core.backend_fallback_count() - fallback_before
-                      if fallback_before is not None else 0)
+                      if fallback_before is not None else None)
 
     np.savez(options.output, **arrays)
     print(
@@ -466,6 +901,11 @@ def _run(policy_stack):
         + json.dumps(
             {
                 "case": options.case,
+                **({"npu_evidence": npu_evidence} if npu_evidence is not None else {}),
+                "trainable_parameters": sorted(name for name, enabled in grad_policy.items() if enabled),
+                "frozen_parameters": sorted(name for name, enabled in grad_policy.items() if not enabled),
+                "input_grad_not_applicable": input_grad_na,
+                "output_structure": output_structure,
                 "tensors": len(arrays),
                 "seconds": min(durations),
                 "loss": float(loss.detach().cpu().numpy().reshape(-1)[0]),

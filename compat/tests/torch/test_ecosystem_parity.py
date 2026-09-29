@@ -84,6 +84,9 @@ class EcosystemParityNPU(EcosystemComparison):
     """Downstream model parity on Jittor ACL and torch_npu."""
 
     device = "npu"
+
+    def test_ms_swift_lora_llama_adamw3(self):
+        self._compare("ms_swift_lora_llama_adamw3")
     forward_tolerance = 5e-3
     backward_tolerance = 2e-2
 

@@ -215,6 +215,7 @@ def can_broadcast_and_shape(shape1, shape2):
 class GetItemACL(jt.Function):
     def __init__(self):
         self.type_ = "notype"
+        self.empty_index_shape = None
 
     def stride(self, x, dim):
         stride = 1
@@ -232,6 +233,7 @@ class GetItemACL(jt.Function):
         if tensor_index.ndim != 1 or _jittor_dtype_name(tensor_index.dtype) not in (
             "int32",
             "int64",
+            "bool",
         ):
             return None
 
@@ -263,8 +265,18 @@ class GetItemACL(jt.Function):
             ):
                 return None
 
+        if _jittor_dtype_name(tensor_index.dtype) == "bool":
+            if tensor_index.shape[0] != x.shape[tensor_dim]:
+                raise IndexError("boolean index length does not match indexed dimension")
+            # ACL Nonzero produces coordinates on device. Only its count is
+            # synchronized for dynamic output shape; no host index fallback.
+            tensor_index = tensor_index.nonzero().reshape((-1,))
+
         output_shape = list(x.shape)
         output_shape[tensor_dim] = int(tensor_index.shape[0])
+        if output_shape[tensor_dim] == 0:
+            self.empty_index_shape = tuple(output_shape)
+            return ()
         indices = []
         for dim, size in enumerate(output_shape):
             index = tensor_index if dim == tensor_dim else jt.arange(int(x.shape[dim]))
@@ -315,6 +327,9 @@ class GetItemACL(jt.Function):
                 slices[i] = s + x.shape[i]
         slices = tuple(slices)
         expanded_indices = self.expand_single_tensor_index(x, slices)
+        if self.empty_index_shape is not None:
+            self.type_ = "empty_index"
+            return jt.empty(self.empty_index_shape, dtype=x.dtype)
         if expanded_indices is not None:
             slices = expanded_indices
         slices_list = list(slices)
@@ -437,6 +452,8 @@ class GetItemACL(jt.Function):
         return result
 
     def grad(self, grad_output):
+        if self.type_ == "empty_index":
+            return jt.zeros(self.x_shape, dtype=grad_output.dtype), None
         if self.type_ == "index":
             indices = self.indices
             # The C++ runner zeroes the output itself (aclrtMemsetAsync) then

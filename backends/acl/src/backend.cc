@@ -541,6 +541,25 @@ void memory_info(int device, size_t& free, size_t& total) {
     on_device(device, [&] { check_acl(aclrtGetMemInfo(ACL_DDR_MEM, &free, &total), "aclrtGetMemInfo"); });
 }
 
+// ACL documents these options as process-wide. No Python or C++ shadow flag:
+// every query reads the effective native runtime option and every error escapes.
+bool get_deterministic_algorithms() {
+    initialize();
+    std::lock_guard<std::recursive_mutex> guard(state().mutex);
+    int64_t value = -1;
+    check_acl(aclrtGetSysParamOpt(ACL_OPT_DETERMINISTIC, &value), "aclrtGetSysParamOpt(DETERMINISTIC)");
+    if (value != 0 && value != 1)
+        throw std::runtime_error("ACL returned an unknown deterministic algorithm policy value");
+    return value == 1;
+}
+
+void set_deterministic_algorithms(bool enabled) {
+    initialize();
+    std::lock_guard<std::recursive_mutex> guard(state().mutex);
+    check_acl(aclrtSetSysParamOpt(ACL_OPT_DETERMINISTIC, enabled ? 1 : 0),
+              "aclrtSetSysParamOpt(DETERMINISTIC)");
+}
+
 struct Callback { void (*function)(void*); void* argument; };
 
 void run_callback(void* pointer) noexcept {
@@ -732,6 +751,8 @@ BackendOps make_acl_backend() {
     ops.memory_allocate = allocate_memory;
     ops.memory_free = free_memory;
     ops.memory_info = memory_info;
+    ops.set_deterministic_algorithms = set_deterministic_algorithms;
+    ops.get_deterministic_algorithms = get_deterministic_algorithms;
     ops.check_error = check_callback_failure;
     ops.compute_stream = compute_stream;
     ops.stream_create = create_stream;

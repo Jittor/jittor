@@ -612,7 +612,7 @@ class Module:
             # When the hook was registered with_kwargs it must ALWAYS get the kwargs
             # arg (even if empty) -- ms-swift's VL pre_forward_hook has a 3-arg
             # signature and injects inputs_embeds via the kwargs dict.
-            if info.get("with_kwargs") or len(kw):
+            if info.get("with_kwargs"):
                 args_kw_result = func(self, args, kw)
             else:
                 args_kw_result = func(self, args)

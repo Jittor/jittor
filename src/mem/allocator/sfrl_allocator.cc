@@ -15,6 +15,7 @@
 #include "mem/allocator/sfrl_allocator.h"
 #include "runtime/device.h"
 #include "runtime/backend.h"
+#include "mem/mem_info.h"
 
 namespace jittor {
 
@@ -171,6 +172,7 @@ CachingBlock* CachingBlockPool::pop_block(size_t size) {
 list<SFRLAllocator*> SFRLAllocator::sfrl_allocators;
 //SFRLAllocator
 SFRLAllocator::~SFRLAllocator() {
+    unregister_device_pool(this);
     sfrl_allocators.erase(iter);
     for (auto it = occupied_blocks.begin(); it != occupied_blocks.end(); ++it) {
         delete it->second;
@@ -185,6 +187,7 @@ size_t SFRLAllocator::align_size(size_t size) {
 
 void SFRLAllocator::setup(Allocator* underlying) {
     this->underlying = underlying;
+    register_device_pool(this, underlying);
 }
 
 size_t SFRLAllocator::allocation_size(size_t size) {
@@ -222,7 +225,7 @@ bool SFRLAllocator::should_split(CachingBlock* block, size_t size) {
     return block->size - size >= ALIGN_SIZE;
 }
 
-size_t CachingBlockPool::free_all_cached_blocks(Allocator* underlying, long long free_size) {
+size_t CachingBlockPool::free_all_cached_blocks(Allocator* underlying, const Allocator* owner, long long free_size) {
     auto it = blocks.begin();
     size_t freed_memory = 0;
     while (it != blocks.end()) {
@@ -234,6 +237,7 @@ size_t CachingBlockPool::free_all_cached_blocks(Allocator* underlying, long long
             // a nested caching allocator below would otherwise be asked to
             // release block id 0, which is never a live allocation.
             underlying->free((void*)block->memory_ptr, block->size, block->allocation);
+            update_device_pool(owner, 0, -static_cast<int64>(block->size));
             freed_memory += block->size;
             auto cur = it;
             ++it;
@@ -284,8 +288,8 @@ void SFRLAllocator::try_free_this_allocator() {
     if (free_ratio >= 1) return;    // policy disabled, see the header
     if (float(unused_memory) > free_ratio * float(unused_memory + used_memory)
         && unused_memory > min_free_size) {
-        unused_memory -= large_blocks.free_all_cached_blocks(underlying, unused_memory - (long long)min_free_size);
-        unused_memory -= small_blocks.free_all_cached_blocks(underlying, unused_memory - (long long)min_free_size);
+        unused_memory -= large_blocks.free_all_cached_blocks(underlying, this, unused_memory - (long long)min_free_size);
+        unused_memory -= small_blocks.free_all_cached_blocks(underlying, this, unused_memory - (long long)min_free_size);
     }
 }
 
@@ -308,11 +312,12 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
         try {
             ptr = underlying->alloc(alloc_size, under_allocation);
         } catch (...) {
-            unused_memory -= large_blocks.free_all_cached_blocks(underlying);
-            unused_memory -= small_blocks.free_all_cached_blocks(underlying);
+            unused_memory -= large_blocks.free_all_cached_blocks(underlying, this);
+            unused_memory -= small_blocks.free_all_cached_blocks(underlying, this);
             gc_all();
             ptr = underlying->alloc(alloc_size, under_allocation);
         }
+        update_device_pool(this, 0, static_cast<int64>(alloc_size));
         block = new CachingBlock(alloc_size, alloc_size, blocks, ptr);
         block->allocation = under_allocation;
     } else {
@@ -335,6 +340,7 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
     block->occupied = true;
     allocation = blocks->insert_occupied(block);
     used_memory += block->size;
+    update_device_pool(this, static_cast<int64>(block->size), 0);
     return block->memory_ptr;
 }
 
@@ -354,6 +360,7 @@ void SFRLAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
     if (block->share_times == 0) {
         id_space.erase_occupied(allocation);
         used_memory -= block->size;
+        update_device_pool(this, -static_cast<int64>(block->size), 0);
         unused_memory += block->size;
         block->occupied = false;
         try_merge_two_blocks(block, block->prev);
@@ -372,8 +379,8 @@ void SFRLAllocator::gc() {
     // mutex makes the same-thread reentry from our own retry path succeed.
     std::unique_lock<std::recursive_mutex> lock(mutex, std::try_to_lock);
     if (!lock.owns_lock()) return;
-    unused_memory -= small_blocks.free_all_cached_blocks(underlying);
-    unused_memory -= large_blocks.free_all_cached_blocks(underlying);
+    unused_memory -= small_blocks.free_all_cached_blocks(underlying, this);
+    unused_memory -= large_blocks.free_all_cached_blocks(underlying, this);
 }
 
 bool SFRLAllocator::share_with(size_t size, size_t allocation, size_t offset) {

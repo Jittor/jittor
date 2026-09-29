@@ -29,6 +29,7 @@ from _ecosystem_harness import (
     REAL_TORCH_PYTHON,
     EcosystemComparison,
     _cuda_is_available,
+    _npu_is_available,
     _torch_shim_is_active,
 )
 
@@ -116,6 +117,23 @@ class EcosystemSpeedCPU(_Speed, EcosystemComparison):
 )
 class EcosystemSpeedCUDA(_Speed, EcosystemComparison):
     device = "cuda"
+
+
+
+@unittest.skipUnless(REAL_TORCH_PYTHON, "REAL_TORCH_PYTHON is not configured")
+@unittest.skipUnless(_torch_shim_is_active(), "this interpreter does not run torch as Jittor")
+@unittest.skipUnless(_npu_is_available(), "ACL is unavailable")
+@unittest.skipUnless(os.environ.get("JITTOR_ECOSYSTEM_LARGE", "").strip() not in ("", "0"),
+                     "set JITTOR_ECOSYSTEM_LARGE=1 for the realistic workload")
+class EcosystemSpeedNPU(EcosystemComparison):
+    device = "npu"
+
+    @property
+    def repeats(self):
+        return _speed_repeats()
+
+    def test_large_ms_swift_lora_llama_1b_train(self):
+        self._compare("large_ms_swift_lora_llama_1b_train")
 
 
 if __name__ == "__main__":

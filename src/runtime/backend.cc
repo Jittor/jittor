@@ -104,6 +104,22 @@ BackendEvent backend_event(Device device, bool timing) {
 // total: a backend with no capture support, or no accelerator at all, gets a
 // false/nullptr rather than an error, because the caller's fallback (launch
 // the kernels one by one, as always) is always available and always correct.
+void backend_set_deterministic_algorithms(bool enabled) {
+    const auto& backend = backend_ops(accelerator_backend_id());
+    if (!backend.set_deterministic_algorithms || !backend.get_deterministic_algorithms)
+        throw std::runtime_error("Backend does not support deterministic algorithm policy");
+    backend.set_deterministic_algorithms(enabled);
+    if (backend.get_deterministic_algorithms() != enabled)
+        throw std::runtime_error("Backend deterministic algorithm policy readback mismatch");
+}
+
+bool backend_get_deterministic_algorithms() {
+    const auto& backend = backend_ops(accelerator_backend_id());
+    if (!backend.get_deterministic_algorithms)
+        throw std::runtime_error("Backend does not support deterministic algorithm policy");
+    return backend.get_deterministic_algorithms();
+}
+
 static const BackendOps* graph_backend() {
     const auto id = accelerator_backend_id();
     if (id == BackendId::Cpu) return nullptr;
@@ -162,6 +178,15 @@ vector<string> known_backends() {
     result.reserve(sizeof(ids) / sizeof(ids[0]));
     for (auto id : ids) result.emplace_back(backend_name(id));
     return result;
+}
+
+vector<int64> backend_memory_info(const string& name, int device) {
+    const auto& backend = backend_registry().get(name);
+    if (device < 0 || device >= backend.device_count())
+        throw std::out_of_range("Backend memory device index out of range");
+    size_t free = 0, total = 0;
+    backend.memory_info(device, free, total);
+    return {static_cast<int64>(free), static_cast<int64>(total)};
 }
 
 int backend_device_count(const string& name) {

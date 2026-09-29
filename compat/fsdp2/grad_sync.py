@@ -1,5 +1,7 @@
 """FSDP2 gradient synchronization and optimizer gradient publication."""
 
+from jittor.optim.base import _group_state
+
 import numpy as np
 
 import jittor as jt
@@ -173,7 +175,7 @@ def _local_grad_from_visible_full(state, entry, full_grad):
 def _sync_visible_full_grads_to_optimizer(opt):
     for pg in getattr(opt, "param_groups", []):
         params = list(pg.get("params", []))
-        grads = pg.get("grads")
+        grads = _group_state(pg).get("grads")
         for i, param in enumerate(params):
             state, entry = shard._fsdp_param_entry(param)
             if state is None:
@@ -185,7 +187,7 @@ def _sync_visible_full_grads_to_optimizer(opt):
             if not isinstance(full_grad, jt.Var):
                 continue
             if grads is None:
-                grads = pg["grads"] = [None] * len(params)
+                grads = _group_state(pg)["grads"] = [None] * len(params)
             while len(grads) < len(params):
                 grads.append(None)
             local = _local_grad_from_visible_full(
@@ -326,9 +328,9 @@ def fill_fsdp_optimizer_grads_from_grad_map(optimizers, grad_by_id, *,
     for opt in optimizers or ():
         zero = getattr(opt, "_Optimizer__zero_grad", True)
         for pg in getattr(opt, "param_groups", []):
-            grads_list = pg.get("grads")
+            grads_list = _group_state(pg).get("grads")
             if grads_list is None:
-                grads_list = pg["grads"] = [None] * len(pg.get("params", []))
+                grads_list = _group_state(pg)["grads"] = [None] * len(pg.get("params", []))
             while len(grads_list) < len(pg.get("params", [])):
                 grads_list.append(None)
             for i, param in enumerate(pg.get("params", [])):

@@ -208,7 +208,10 @@ def _ip(self, value):
     if _assign_data_owner(self, value):
         return self
     target = self
-    was_trainable = not target.is_stop_grad()
+    # Reversible requires_grad_(False) need not set the native stop-grad bit.
+    # A host-to-device copy inside no_grad can stop the assigned value; using
+    # only that bit here would start_grad() and unfreeze the destination.
+    was_trainable = bool(target.requires_grad)
     target.assign(value)
     if was_trainable and target.is_stop_grad():
         target.start_grad()
@@ -433,16 +436,13 @@ def _invert(self):
 
 
 def _device(self):
+    if self.is_metadata:
+        return _owner.device("meta")
     if self.placement_backend >= 0:
         if self.placement_backend == 0:
             return _owner.device("cpu")
         name = "npu" if self.placement_backend == 2 else "cuda"
         return _owner.device(name, int(self.device_id))
-    # Inside a `with torch.device("meta")` block (transformers'
-    # from_pretrained), report "meta" so its meta-context detection
-    # fires and eager weight init is skipped. See device.__enter__.
-    if _owner._DEVICE_CTX_STACK:
-        return _owner._DEVICE_CTX_STACK[-1]
     # Report the Var's ACTUAL memory residency (matches jtorch's C++
     # is_cpu()/device()): a Var built/migrated to host -- e.g. via
     # torch.zeros(device='cpu') or .cpu() -- is "cpu" even while the
@@ -619,7 +619,7 @@ def _to(self, *args, **kwargs):
             bare = a.replace("torch.", "")
             if bare in _owner.dtype._registry:
                 ds = bare
-            elif bare.split(":")[0] in ("cpu", "cuda", "npu"):
+            elif bare.split(":")[0] in ("cpu", "cuda", "npu", "meta"):
                 dev = bare
             else:
                 # An unrecognised string used to fall off the end of this
@@ -642,6 +642,13 @@ def _to(self, *args, **kwargs):
                     stub_result=None)
     if dev is None:
         dev = self.device
+    target_name = getattr(dev, "type", None) or str(dev).split(":", 1)[0]
+    if target_name == "meta":
+        if self.is_metadata and not copy and (ds is None or ds == _jittor_dtype_name(self.dtype)):
+            return self
+        return self.metadata_copy(ds or _jittor_dtype_name(self.dtype))
+    if self.is_metadata:
+        raise NotImplementedError("Cannot copy out of meta tensor; no data. Use to_empty or assign real values.")
     out = self.clone() if copy else self
     if ds is not None:
         out = _cast_if_needed(out, ds)
@@ -1309,11 +1316,15 @@ _BINARY_APIS = {
 
 
 def _api_fill(self, val):
-    return _ip(self, _owner.jt.ones(self.shape, self.dtype) * val)
+    # A scalar factory has no tensor operand from which to inherit placement.
+    # Construct the replacement on the destination before assign aliases it.
+    with _new_scope(self, self.device):
+        return _ip(self, _owner.jt.ones(self.shape, self.dtype) * val)
 
 
 def _api_zero(self):
-    return _ip(self, _owner.jt.zeros(self.shape, self.dtype))
+    with _new_scope(self, self.device):
+        return _ip(self, _owner.jt.zeros(self.shape, self.dtype))
 
 
 def _api_add(self, o, alpha=1):
