@@ -18,6 +18,7 @@
 2026-09-14-jittor-vs-pytorch
 2026-09-14-vllm-omni-h3-enablement
 2026-09-19-torch-compat-runbook-verification
+2026-09-22-ms-swift-ascend-lora
 ```
 
 ## 按主题索引
@@ -31,3 +32,4 @@
 | [CUDA 元算子：发射配置、strided 下标与标量常量融合](2026-09-12-cuda-metaop-launch-index-scalar.md) | 部分完成，H20 上实测 | 2026-09-12 |
 | [主机受限步长：把每算子的 Python 开销从图构建里拿掉](2026-09-13-host-path-per-node-cost.md) | Python 路径已完成 | 2026-09-13 |
 | [Jittor vs 真 PyTorch 2.9.1：现在差在哪](2026-09-14-jittor-vs-pytorch.md) | 进行中，赢 6 平 5 输 1 | 2026-09-14 |
+| [ms-swift LoRA 的 Ascend torch shim 验证](2026-09-22-ms-swift-ascend-lora.md) | 四轨验收进行中；已有单卡前向与多步证据，完整 checkpoint、公开入口及推理待验；真实多机资源阻塞 | 2026-09-22 |
