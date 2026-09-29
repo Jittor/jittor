@@ -142,6 +142,90 @@ class TestFusedAttentionF32(unittest.TestCase):
             np.testing.assert_allclose(got.numpy(), expected.transpose(0, 2, 1, 3), rtol=1e-4,
                                        atol=1e-5 * np.abs(expected).max(), err_msg="d" + name)
 
+    def _check_grouped(self, b, hq, hk, s, d, causal, mask=None, seq_major=False):
+        """Grouped-query attention against the closed form on repeated heads."""
+        group = hq // hk
+        rng = np.random.RandomState(hq * 10 + hk)
+        q, dout = (rng.randn(b, hq, s, d).astype("float32") for _ in range(2))
+        k, v = (rng.randn(b, hk, s, d).astype("float32") for _ in range(2))
+        out_ref, dq_ref, dk_rep, dv_rep = _reference(
+            q, np.repeat(k, group, 1), np.repeat(v, group, 1), causal, dout, mask)
+        dk_ref = dk_rep.reshape(b, hk, group, s, d).sum(2)
+        dv_ref = dv_rep.reshape(b, hk, group, s, d).sum(2)
+        seen = []
+        original = self.kernel._forward
+
+        def counted(query, key, value, call):
+            seen.append((tuple(key.shape), call.group))
+            return original(query, key, value, call)
+        self.kernel._forward = counted
+        self.addCleanup(setattr, self.kernel, "_forward", original)
+        if seq_major:
+            sources = [jt.array(np.ascontiguousarray(t.transpose(0, 2, 1, 3))) for t in (q, k, v)]
+            jq, jk, jv = (t.transpose(1, 2) for t in sources)
+        else:
+            sources = [jt.array(t) for t in (q, k, v)]
+            jq, jk, jv = sources
+        out = scaled_dot_product_attention(
+            jq, jk, jv, attn_mask=None if mask is None else jt.array(mask).stop_grad(),
+            is_causal=causal, enable_gqa=True)
+        grads = jt.grad((out * jt.array(dout)).sum(), sources)
+        # The key and value heads were read in place, never repeated.
+        self.assertEqual([g for _, g in seen], [group])
+        self.assertEqual(seen[0][0][2 if seq_major else 1], hk)
+        want = (dq_ref, dk_ref, dv_ref)
+        np.testing.assert_allclose(out.numpy(), out_ref, rtol=1e-4, atol=1e-5)
+        for name, got, expected in zip("qkv", grads, want):
+            if seq_major:
+                expected = expected.transpose(0, 2, 1, 3)
+            np.testing.assert_allclose(got.numpy(), expected, rtol=1e-4,
+                                       atol=1e-5 * np.abs(expected).max(), err_msg="d" + name)
+
+    def test_grouped_query_heads_are_read_in_place(self):
+        self._check_grouped(2, 4, 2, 37, 32, False)
+        self._check_grouped(1, 8, 2, 70, 64, True)
+
+    def test_grouped_query_heads_with_a_mask(self):
+        rng = np.random.RandomState(3)
+        mask = rng.rand(2, 1, 33, 33) > 0.3
+        mask[..., 0] = True
+        self._check_grouped(2, 6, 3, 33, 40, False, mask=mask)
+
+    def test_grouped_query_heads_seq_major(self):
+        self._check_grouped(2, 4, 1, 40, 32, True, seq_major=True)
+
+    def test_a_pending_repeat_of_the_heads_is_read_from_its_source(self):
+        # Transformers' `repeat_kv`, as it runs whenever it builds a mask: the
+        # repeated copy is never made, and the gradients reach the source.
+        b, hq, hk, s, d = 2, 6, 2, 29, 32
+        group = hq // hk
+        rng = np.random.RandomState(21)
+        q, dout = (rng.randn(b, hq, s, d).astype("float32") for _ in range(2))
+        k, v = (rng.randn(b, hk, s, d).astype("float32") for _ in range(2))
+        out_ref, dq_ref, dk_rep, dv_rep = _reference(
+            q, np.repeat(k, group, 1), np.repeat(v, group, 1), True, dout)
+        seen = []
+        original = self.kernel._forward
+
+        def counted(query, key, value, call):
+            seen.append((tuple(key.shape), call.group))
+            return original(query, key, value, call)
+        self.kernel._forward = counted
+        self.addCleanup(setattr, self.kernel, "_forward", original)
+
+        def repeat(t):
+            return t[:, :, None, :, :].broadcast((b, hk, group, s, d)).reshape((b, hq, s, d))
+        jq, jk, jv = (jt.array(t) for t in (q, k, v))
+        out = scaled_dot_product_attention(jq, repeat(jk * 1), repeat(jv * 1), is_causal=True)
+        grads = jt.grad((out * jt.array(dout)).sum(), [jq, jk, jv])
+        self.assertEqual(seen, [((b, hk, s, d), group)])
+        np.testing.assert_allclose(out.numpy(), out_ref, rtol=1e-4, atol=1e-5)
+        want = (dq_ref, dk_rep.reshape(b, hk, group, s, d).sum(2),
+                dv_rep.reshape(b, hk, group, s, d).sum(2))
+        for name, got, expected in zip("qkv", grads, want):
+            np.testing.assert_allclose(got.numpy(), expected, rtol=1e-4,
+                                       atol=1e-5 * np.abs(expected).max(), err_msg="d" + name)
+
     def _fixed_seed(self):
         original = self.kernel._Call.__init__
 

@@ -397,6 +397,137 @@ class TestGroupNorm(_NormBase):
                 jt.array(x_np), 4, jt.array(weight_np), jt.array(bias_np), 1e-5))
 
 
+class TestGroupNormActivation(unittest.TestCase):
+    """`silu(group_norm(x))` runs the activation inside the group norm's pass.
+
+    The group norm's unexecuted output offers the activation; forward and
+    backward then run as the normalization's own kernels, which recompute the
+    pre-activation value instead of storing it.
+    """
+
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled,
+                         "CUDA GroupNorm fast path needs CUDA")
+    def test_silu_matches_and_takes_no_kernel_of_its_own(self):
+        rng = np.random.RandomState(7)
+        for shape in ((2, 8, 4, 4), (3, 6, 5, 7)):    # float4 path, scalar path
+            x_np = rng.randn(*shape).astype("float32")
+            w_np = rng.randn(shape[1]).astype("float32")
+            b_np = rng.randn(shape[1]).astype("float32")
+            cot_np = rng.randn(*shape).astype("float32")
+
+            def run(use_cuda, fused=True):
+                with jt.flag_scope(use_cuda=use_cuda):
+                    x, w, b = jt.array(x_np), jt.array(w_np), jt.array(b_np)
+                    y = F.group_norm(x, 2, w, b, 1e-5)
+                    out = F.silu(y if fused else y + 0.0)
+                    grads = jt.grad((out * jt.array(cot_np)).sum(), [x, w, b])
+                    return [out] + grads
+
+            with self.subTest(shape=shape):
+                for got, expected in zip(jt.fetch_sync(run(1)), jt.fetch_sync(run(0))):
+                    np.testing.assert_allclose(got, expected, rtol=2e-3, atol=2e-3)
+
+                def kernels(fused):
+                    jt.sync(run(1, fused))
+                    jt.sync_all(True)
+                    with jt.flag_scope(use_cuda=1), jt.profile() as p:
+                        jt.sync(run(1, fused))
+                        jt.sync_all(True)
+                    return len(p.result.kernel_records)
+                self.assertLess(kernels(True), kernels(False))
+
+
+class TestActivationAfterInPlaceResidual(unittest.TestCase):
+    """``out = norm(x); out += r; act(out)`` -- the torchvision bottleneck.
+
+    The in-place add rebinds the norm's output object to the sum, so the norm's
+    offer to apply the activation in its own pass no longer describes it. Taking
+    the offer anyway applied the activation to the normalization and dropped
+    the residual.
+    """
+
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled,
+                         "the fused normalizations are CUDA kernels")
+    def test_the_residual_is_kept(self):
+        rng = np.random.RandomState(13)
+        x_np = rng.randn(4, 8, 6, 6).astype("float32")
+        r_np = 3 * rng.randn(4, 8, 6, 6).astype("float32")
+
+        def batch_norm(x):
+            bn = nn.BatchNorm2d(8)
+            bn.train()
+            return bn(x)
+
+        cases = (
+            ("batch_norm+relu", batch_norm, nn.relu),
+            ("group_norm+silu", lambda x: F.group_norm(x, 2, jt.ones(8), jt.zeros(8), 1e-5),
+             F.silu),
+        )
+        for name, norm, act in cases:
+            def run(use_cuda, in_place):
+                with jt.flag_scope(use_cuda=use_cuda):
+                    out = norm(jt.array(x_np))
+                    if in_place:
+                        out += jt.array(r_np)
+                    else:
+                        out = out + jt.array(r_np)
+                    return act(out)
+            with self.subTest(name):
+                expected = run(0, False).numpy()
+                np.testing.assert_allclose(run(1, True).numpy(), expected,
+                                           rtol=1e-4, atol=1e-4)
+
+
+class TestBatchNormActivation(unittest.TestCase):
+    """`relu(batch_norm(x))` in training runs the activation in the norm's pass.
+
+    The statistics and the output are separate operators: the fused output
+    reuses the call's statistics, which the running buffers read, so they are
+    computed once and the buffers move once.
+    """
+
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled,
+                         "CUDA batch norm fast path needs CUDA")
+    def test_relu_matches_and_takes_no_kernel_of_its_own(self):
+        rng = np.random.RandomState(11)
+        for shape in ((4, 8, 6, 6), (3, 5, 7, 7)):    # float4 path, scalar path
+            x_np = rng.randn(*shape).astype("float32")
+            cot_np = rng.randn(*shape).astype("float32")
+
+            def run(use_cuda, fused=True):
+                with jt.flag_scope(use_cuda=use_cuda):
+                    bn = nn.BatchNorm2d(shape[1])
+                    bn.train()
+                    x = jt.array(x_np)
+                    y = bn(x)
+                    out = nn.relu(y if fused else y + 0.0)
+                    grads = jt.grad((out * jt.array(cot_np)).sum(), [x, bn.weight, bn.bias])
+                    return [out] + grads + [bn.running_mean, bn.running_var]
+
+            with self.subTest(shape=shape):
+                for got, expected in zip(jt.fetch_sync(run(1)), jt.fetch_sync(run(0))):
+                    np.testing.assert_allclose(got, expected, rtol=2e-3, atol=2e-3)
+                for got, expected in zip(jt.fetch_sync(run(1)), jt.fetch_sync(run(1, False))):
+                    np.testing.assert_allclose(got, expected, rtol=1e-5, atol=1e-5)
+
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled,
+                         "CUDA batch norm fast path needs CUDA")
+    def test_the_relu_forward_is_not_a_kernel(self):
+        x = jt.array(np.random.RandomState(12).randn(4, 8, 6, 6).astype("float32"))
+
+        def kernels(fused):
+            with jt.flag_scope(use_cuda=1):
+                bn = nn.BatchNorm2d(8)
+                bn.train()
+                jt.sync([nn.relu(bn(x) if fused else bn(x) + 0.0)])
+                jt.sync_all(True)
+                with jt.profile() as p:
+                    jt.sync([nn.relu(bn(x) if fused else bn(x) + 0.0)])
+                    jt.sync_all(True)
+            return len(p.result.kernel_records)
+        self.assertLess(kernels(True), kernels(False))
+
+
 class TestInstanceNorm(_NormBase):
     def test_backward_small_variance(self):
         N, C, L = 2, 6, 8
@@ -613,6 +744,40 @@ class TestChannelBias(_NormBase):
                 got, ref, atol=2e-3, rtol=2e-3,
                 err_msg="CUDA channel bias %s" % name,
             )
+
+
+class TestConvBiasFuses(unittest.TestCase):
+    """A training convolution adds its bias as an ordinary broadcast add.
+
+    The add then fuses with what follows it -- a UNet's time-embedding add,
+    a residual add -- and its gradient is an ordinary reduction, where a
+    dedicated kernel pair wrote the biased output out and read it back:
+    0.66 ms of a DDPM UNet training step.
+    """
+
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled,
+                         "cuDNN convolution needs CUDA")
+    def test_the_bias_add_takes_no_kernel_of_its_own(self):
+        rng = np.random.RandomState(7)
+        x_np = rng.randn(2, 8, 10, 10).astype("float32")
+        w_np = rng.randn(16, 8, 3, 3).astype("float32")
+        b_np = rng.randn(16).astype("float32")
+        e_np = rng.randn(2, 16, 1, 1).astype("float32")
+
+        def run(use_cuda):
+            with jt.flag_scope(use_cuda=use_cuda):
+                x, w, b, e = (jt.array(t) for t in (x_np, w_np, b_np, e_np))
+                y = jt.nn.conv2d(x, w, b, padding=1) + e
+                grads = jt.grad((y * y).sum(), [x, w, b])
+                return [y] + grads
+
+        for got, expected in zip(jt.fetch_sync(run(1)), jt.fetch_sync(run(0))):
+            np.testing.assert_allclose(got, expected, rtol=2e-3, atol=2e-3)
+        with jt.flag_scope(use_cuda=1), jt.profile() as p:
+            jt.sync(run(1))
+            jt.sync_all(True)
+        names = [k["name"] for k in p.result.kernel_records]
+        self.assertFalse([n for n in names if "channel_bias" in n], names)
 
 
 class TestNormalizeIsOneImplementation(unittest.TestCase):

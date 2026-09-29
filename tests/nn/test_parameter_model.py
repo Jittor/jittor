@@ -241,5 +241,73 @@ class TestViewsAgree(unittest.TestCase):
                          m.parameters())
 
 
+class _Scale(jt.Function):
+    """A Function holds no parameters; its ``dfs`` does not visit it at all."""
+
+    def execute(self, x):
+        return x * 2
+
+    def grad(self, g):
+        return g * 2
+
+
+class _Tree(jt.Module):
+    def __init__(self):
+        self.stem = jt.nn.Linear(2, 3)
+        self.body = jt.nn.Sequential(jt.nn.Linear(3, 3), jt.nn.ReLU(),
+                                     jt.nn.Sequential(jt.nn.Linear(3, 4)))
+        self.scale = _Scale()
+        self.head = jt.nn.Linear(4, 1)
+
+
+def _dfs_views(module):
+    """named_modules / named_parameters as `dfs` itself visits them."""
+    modules, params, names = [], [], []
+    def callback(parents, k, v, n):
+        names.append(str(k))
+        prefix = ".".join(names[1:])
+        modules.append((prefix, v))
+        for key, var, role in v._var_roles():
+            if role == "parameter":
+                params.append((prefix + "." + key if prefix else key, var))
+    def callback_leave(parents, k, v, n):
+        names.pop()
+    module.dfs([], "", callback, callback_leave)
+    return modules, params
+
+
+class TestLazyTraversal(unittest.TestCase):
+    """The views walk the tree as they are consumed, in `dfs`'s order.
+
+    ``next(model.parameters())`` is how Hugging Face and diffusers read a
+    model's dtype and device, several times per forward; building every name
+    of every Var first cost a millisecond per read on a diffusion UNet.
+    """
+
+    def test_the_lazy_views_visit_what_dfs_visits(self):
+        m = _Tree()
+        modules, params = _dfs_views(m)
+        self.assertEqual([(n, id(v)) for n, v in m.named_modules()],
+                         [(n, id(v)) for n, v in modules])
+        self.assertEqual([(n, id(v)) for n, v in m.named_parameters()],
+                         [(n, id(v)) for n, v in params])
+        self.assertNotIn("scale", [n for n, _ in m.named_modules()])
+
+    def test_the_first_parameter_does_not_walk_the_rest(self):
+        m = _Tree()
+        seen = []
+        original = jt.Module._var_roles
+        def counting(module):
+            seen.append(module)
+            return original(module)
+        jt.Module._var_roles = counting
+        try:
+            name, _ = next(m._iter_named_vars("parameters"))
+        finally:
+            jt.Module._var_roles = original
+        self.assertEqual(name, "stem.weight")
+        self.assertEqual(seen, [m, m.stem])
+
+
 if __name__ == "__main__":
     unittest.main()

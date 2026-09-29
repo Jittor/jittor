@@ -18,7 +18,9 @@ class _Dropout(jt.Function):
     """
 
     def execute(self, x, p):
-        self.mask = (jt.random(x.shape) > p).stop_fuse()
+        from jittor._core.var import _captured_keep
+        mask = _captured_keep(x.shape, p)
+        self.mask = mask if mask is not None else (jt.random(x.shape) > p).stop_fuse()
         self.scale = 1.0 / (1.0 - p)
         return (x * self.mask * self.scale).to(x.dtype)
 

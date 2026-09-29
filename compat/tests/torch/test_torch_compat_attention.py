@@ -440,6 +440,34 @@ class TestSDPA(Base):
             cache.clear()
 
     @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
+    def test_a_backend_lookup_is_derived_once_per_token(self):
+        """`load_backend_for` answers from memory while its token holds.
+
+        Deriving the answer re-reads the environment and re-stats the source
+        tree; asked twice per attention call -- the native flash kernel and
+        the frontend each ask -- it was a sixth of a Qwen3 decode step's host
+        time, whether or not a backend exists. A write to the environment the
+        loader reads moves the token, and the next call derives it again.
+        """
+        from jittor.compat.shim.backends import flash_attention as flashattn_jittor
+
+        flashattn_jittor._LOOKUPS.clear()
+        torch._torch_sdpa_flash_backend_cache.clear()
+        q = jt.ones((1, 2, 1, 32), dtype="float16")
+        with jt.flag_scope(use_cuda=1), jt.no_grad(), \
+                mock.patch.dict(os.environ, {}, clear=False), \
+                mock.patch.object(flashattn_jittor, "_ensure_capability_compile_env",
+                                  wraps=flashattn_jittor._ensure_capability_compile_env) as derive:
+            torch.nn.functional.scaled_dot_product_attention(q, q, q)
+            first = derive.call_count
+            self.assertGreaterEqual(first, 1)
+            torch.nn.functional.scaled_dot_product_attention(q, q, q)
+            self.assertEqual(derive.call_count, first)
+            os.environ["JITTOR_FLASH_ATTN_JITTOR_SRC"] = "/somewhere-new"
+            torch.nn.functional.scaled_dot_product_attention(q, q, q)
+            self.assertGreater(derive.call_count, first)
+
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_training_reuses_capability_checked_backend(self):
         from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 
