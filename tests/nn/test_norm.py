@@ -746,6 +746,40 @@ class TestChannelBias(_NormBase):
             )
 
 
+class TestConvBiasFuses(unittest.TestCase):
+    """A training convolution adds its bias as an ordinary broadcast add.
+
+    The add then fuses with what follows it -- a UNet's time-embedding add,
+    a residual add -- and its gradient is an ordinary reduction, where a
+    dedicated kernel pair wrote the biased output out and read it back:
+    0.66 ms of a DDPM UNet training step.
+    """
+
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled,
+                         "cuDNN convolution needs CUDA")
+    def test_the_bias_add_takes_no_kernel_of_its_own(self):
+        rng = np.random.RandomState(7)
+        x_np = rng.randn(2, 8, 10, 10).astype("float32")
+        w_np = rng.randn(16, 8, 3, 3).astype("float32")
+        b_np = rng.randn(16).astype("float32")
+        e_np = rng.randn(2, 16, 1, 1).astype("float32")
+
+        def run(use_cuda):
+            with jt.flag_scope(use_cuda=use_cuda):
+                x, w, b, e = (jt.array(t) for t in (x_np, w_np, b_np, e_np))
+                y = jt.nn.conv2d(x, w, b, padding=1) + e
+                grads = jt.grad((y * y).sum(), [x, w, b])
+                return [y] + grads
+
+        for got, expected in zip(jt.fetch_sync(run(1)), jt.fetch_sync(run(0))):
+            np.testing.assert_allclose(got, expected, rtol=2e-3, atol=2e-3)
+        with jt.flag_scope(use_cuda=1), jt.profile() as p:
+            jt.sync(run(1))
+            jt.sync_all(True)
+        names = [k["name"] for k in p.result.kernel_records]
+        self.assertFalse([n for n in names if "channel_bias" in n], names)
+
+
 class TestNormalizeIsOneImplementation(unittest.TestCase):
     """``jt.normalize`` and ``jt.nn.normalize`` were two same-named functions
     with DIFFERENT semantics. They are now one, on torch's rule.

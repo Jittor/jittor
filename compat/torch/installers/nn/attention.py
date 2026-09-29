@@ -287,20 +287,6 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None,
         scale_factor, enable_gqa=enable_gqa)
     if flash is not None:
         return flash
-    if enable_gqa:
-        query_heads = int(query.shape[-3])
-        key_heads = int(key.shape[-3])
-        value_heads = int(value.shape[-3])
-        if key_heads != query_heads:
-            if key_heads <= 0 or query_heads % key_heads != 0:
-                raise RuntimeError("key heads must divide query heads for GQA")
-            key = key.repeat_interleave(query_heads // key_heads, dim=-3)
-        if value_heads != query_heads:
-            if value_heads <= 0 or query_heads % value_heads != 0:
-                raise RuntimeError("value heads must divide query heads for GQA")
-            value = value.repeat_interleave(
-                query_heads // value_heads, dim=-3
-            )
     return _native_scaled_dot_product_attention(
         query,
         key,
@@ -309,6 +295,7 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None,
         dropout_p=dropout_p,
         is_causal=is_causal,
         scale=scale,
+        enable_gqa=enable_gqa,
     )
 
 
