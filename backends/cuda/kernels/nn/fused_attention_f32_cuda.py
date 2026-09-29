@@ -208,8 +208,8 @@ __global__ void __launch_bounds__(THREADS) forward(
     }
     const int kend = CAUSAL ? min(lk, q0 + BQ) : lk;
     for (int k0 = 0; k0 < kend; k0 += BK) {
-        const int shown = MASK ? tile_visibility<MASK, CAUSAL, BQ, BK>(
-            mask, mask_base, q0, k0, lq, lk) : 2;
+        const int shown = MASK == 1 ? tile_visibility<MASK, CAUSAL, BQ, BK>(
+            mask, mask_base, q0, k0, lq, lk) : (MASK ? 1 : 2);
         if (!shown) continue;
         __syncthreads();
         for (int i = threadIdx.x; i < BK * D; i += THREADS) {
