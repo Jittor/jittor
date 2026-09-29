@@ -6,6 +6,8 @@
 // ***************************************************************
 #include <sstream>
 #include <functional>
+#include <algorithm>
+#include <cstring>
 #include <omp.h>
 #include "core/var.h"
 #include "codegen/opt/expr.h"
@@ -37,6 +39,198 @@ const char* get_thread_range_log_src =
     "return nbits;}";
 
 extern int para_opt_level;
+
+// ---------------------------------------------------------------------------
+// A flat elementwise CUDA kernel reads and writes its tensors one element a
+// thread. For a tensor that is still in L2 -- the output of the kernel that
+// ran before, a 25 MB half-precision activation -- the loads, not the memory,
+// are then the limit: a batch-norm + relu over one took 41.6 us where PyTorch's
+// takes 14.7 with 16-byte loads (33 us scalar, 15 us vectorised measured in
+// isolation). So such a kernel gets a second version in which a thread takes
+// `V` consecutive elements: every tensor it reads or writes at the loop index
+// moves as one 16-byte load or store, and everything else -- a per-channel
+// scale read through a broadcast, a scalar -- is read per element as before.
+// The host launches it when every such pointer is aligned for it, and the
+// original otherwise. What a thread does per element is the original body,
+// unchanged, in an unrolled loop over the `V` lanes.
+
+static bool vec_ident_char(char c) { return isalnum((unsigned char)c) || c == '_'; }
+
+// `s` with every identifier `defs` knows replaced by its definition, in turn.
+static string vec_substitute(const string& s, const unordered_map<string, string>& defs, int depth=0) {
+    if (depth > 16) return s;
+    string out;
+    for (size_t i = 0; i < s.size();) {
+        if (vec_ident_char(s[i]) && !isdigit((unsigned char)s[i])) {
+            size_t j = i;
+            while (j < s.size() && vec_ident_char(s[j])) j++;
+            string id = s.substr(i, j - i);
+            auto it = defs.find(id);
+            out += it == defs.end() ? id : "(" + vec_substitute(it->second, defs, depth + 1) + ")";
+            i = j;
+        } else {
+            out += s[i++];
+        }
+    }
+    return out;
+}
+
+// Every `name[index]` in `code` whose `name` is in `pointers`, as the offset
+// of `name`, the offset of `]`, and the name.
+struct VecAccess { size_t begin, close; string name; };
+static vector<VecAccess> vec_accesses(const string& code, const unordered_map<string, string>& pointers) {
+    vector<VecAccess> found;
+    for (size_t i = 0; i < code.size(); i++) {
+        if (!vec_ident_char(code[i]) || (i && vec_ident_char(code[i-1]))) continue;
+        size_t j = i;
+        while (j < code.size() && vec_ident_char(code[j])) j++;
+        if (j < code.size() && code[j] == '[' && pointers.count(code.substr(i, j - i))) {
+            int depth = 0;
+            size_t k = j;
+            for (; k < code.size(); k++) {
+                if (code[k] == '[') depth++;
+                if (code[k] == ']' && --depth == 0) break;
+            }
+            if (k >= code.size()) return {};
+            found.push_back({i, k, code.substr(i, j - i)});
+        }
+        i = j - 1;
+    }
+    return found;
+}
+
+DEFINE_FLAG(int, vectorize_flat_loops, 1, "Give a flat elementwise CUDA kernel a second version that moves every tensor it reads or writes at the loop index in 16-byte vectors, launched when the pointers are aligned for it.");
+
+static void vectorize_flat_loop(KernelIR* ir, KernelIR* func, KernelIR* call, const string& range,
+                                PassManager* pm) {
+    if (!func->children.size()) return;
+    KernelIR* loop = func->children.back().get();
+    if (loop->type != KernelIRType::loop || !loop->has_attr(kir::lvalue)) return;
+    const string lv = loop->attrs[kir::lvalue];
+    // The kernel's pointer arguments, by name, and their element types.
+    unordered_map<string, string> pointers;
+    for (auto& a : func->inner) {
+        if (a->type != KernelIRType::define) continue;
+        string dtype = a->get_attr(kir::dtype), name = a->get_attr(kir::lvalue);
+        if (name.size() < 2 || name.back() != 'p' || dtype.find('*') == string::npos) continue;
+        dtype = dtype.substr(0, dtype.find('*'));
+        while (dtype.size() && dtype.back() == ' ') dtype.pop_back();
+        pointers[name] = dtype;
+    }
+    // What the index expressions are made of: the function's constants
+    // before the loop, and the body's own definitions.
+    unordered_map<string, string> defs;
+    for (auto& c : func->children)
+        if (c.get() != loop && c->type == KernelIRType::define && c->has_attr(kir::rvalue))
+            defs[c->attrs[kir::lvalue]] = c->attrs[kir::rvalue];
+    for (auto& c : loop->children) {
+        if (c->type == KernelIRType::loop || c->type == KernelIRType::func) return;
+        if (c->type == KernelIRType::define && c->has_attr(kir::rvalue))
+            defs[c->attrs[kir::lvalue]] = c->attrs[kir::rvalue];
+    }
+    // A variable a statement assigns to is not a constant expression.
+    for (auto& c : loop->children) {
+        if (c->type != KernelIRType::none) continue;
+        auto& code = c->get_attr(kir::code);
+        size_t j = 0;
+        while (j < code.size() && vec_ident_char(code[j])) j++;
+        size_t k = j;
+        while (k < code.size() && code[k] == ' ') k++;
+        if (j && k + 1 < code.size() && code[k+1] == '=' && strchr("+-*/%&|^", code[k]))
+            defs.erase(code.substr(0, j));
+    }
+    // Classify the accesses: at the loop index, or anywhere else.
+    unordered_map<string, int> direct, other, stored;
+    for (auto& c : loop->children) {
+        for (const char* attr : {kir::code, kir::rvalue}) {
+            if (!c->has_attr(attr)) continue;
+            auto& code = c->attrs[attr];
+            for (auto& a : vec_accesses(code, pointers)) {
+                string index = code.substr(a.begin + a.name.size() + 1, a.close - a.begin - a.name.size() - 1);
+                string resolved = vec_substitute(index, defs);
+                bool at_index = false;
+                if (resolved.find_first_not_of(" +*()_0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ") == string::npos) {
+                    auto e = expr::make(resolved);
+                    at_index = e->simplify()->to_string() == lv;
+                }
+                (at_index ? direct : other)[a.name]++;
+                if (attr == kir::code && a.begin == 0) stored[a.name]++;
+            }
+        }
+    }
+    // Vector lanes come from the widest element among the vectorised tensors.
+    int widest = 0;
+    vector<string> vec_ptrs;
+    for (auto& kv : direct) {
+        if (other.count(kv.first)) continue;
+        // read back after its own store: leave the kernel alone
+        if (stored.count(kv.first) && stored[kv.first] != kv.second) return;
+        uint op_id, opvar_id; Op* op; Var* var;
+        string name = kv.first.substr(0, kv.first.size() - 1);
+        if (!pm->oc->try_get_op_var_by_name(name, op_id, opvar_id, op, var)) return;
+        widest = std::max(widest, (int)var->dsize());
+        vec_ptrs.push_back(kv.first);
+    }
+    if (vec_ptrs.empty() || widest == 0 || widest > 8) return;
+    int lanes = 16 / widest;
+    if (lanes < 2) return;
+    std::sort(vec_ptrs.begin(), vec_ptrs.end());
+    string V = S(lanes);
+    string index_t = loop->inner.size() && loop->inner[0]->type == KernelIRType::define
+        ? loop->inner[0]->get_attr(kir::dtype) : "int";
+
+    // The kernel is rewritten in place: a thread takes `V` consecutive
+    // elements while whole vectors last, and the scalar loop does the rest.
+    // Where a pointer is not aligned for its vector, the vector part does
+    // nothing and the scalar loop does everything -- with a grid sized for
+    // vectors, so slower, but the host needs no second kernel.
+    string body;
+    for (auto& c : loop->children) {
+        string text = c->to_string();
+        auto acc = vec_accesses(text, pointers);
+        for (int i = (int)acc.size() - 1; i >= 0; i--) {
+            auto& a = acc[i];
+            if (std::find(vec_ptrs.begin(), vec_ptrs.end(), a.name) == vec_ptrs.end()) continue;
+            text = text.substr(0, a.begin) + "reinterpret_cast<" + pointers[a.name] + "*>(&jt_raw_"
+                + a.name + ")[jt_k]" + text.substr(a.close + 1);
+        }
+        body += text + "\n";
+    }
+    // Each tensor's lanes travel as one CUDA vector type of their size; the
+    // body reads and writes them as an array of its element type.
+    string aligned = "true", loads, stores;
+    for (auto& p : vec_ptrs) {
+        uint op_id, opvar_id; Op* op; Var* var;
+        pm->oc->try_get_op_var_by_name(p.substr(0, p.size() - 1), op_id, opvar_id, op, var);
+        int bytes = lanes * (int)var->dsize();
+        string vtype = bytes == 16 ? "uint4" : bytes == 8 ? "uint2" : bytes == 4 ? "unsigned int" : "unsigned short";
+        aligned += " && (size_t)" + p + " % " + S(bytes) + " == 0";
+        loads += vtype + " jt_raw_" + p;
+        if (!stored.count(p))
+            loads += " = *reinterpret_cast<const " + vtype + "*>(" + p + " + jt_iv * " + V + ")";
+        loads += ";\n";
+        if (stored.count(p))
+            stores += "*reinterpret_cast<" + vtype + "*>(" + p + " + jt_iv * " + V + ") = jt_raw_" + p + ";\n";
+    }
+    string vec_code = index_t + " jt_vecs = (" + aligned + ") ? (" + loop->attrs[kir::rvalue] + ") / " + V + " : 0;\n"
+        "for (" + index_t + " jt_iv = tid0; jt_iv < jt_vecs; jt_iv += tnum0) {\n" + loads +
+        "#pragma unroll\nfor (int jt_k = 0; jt_k < " + V + "; jt_k++) {\n" +
+        index_t + " " + lv + " = jt_iv * " + V + " + jt_k;\n" + body + "}\n" + stores + "}\n";
+    // The scalar loop strides by the threads actually launched: fewer than
+    // its range when it does everything, the grid being sized for vectors.
+    loop->inner[0]->attrs[kir::rvalue] = "jt_vecs * " + V + " + tid0";
+    loop->inner[2]->attrs[kir::code] = lv + "+=(" + index_t + ")gridDim.x*blockDim.x;";
+    func->insert(func->children.size() - 1, vec_code, true);
+
+    // A grid for the vectors.
+    string r = "((int64)(" + range + ") / " + V + ")";
+    auto tn0 = call->find_define("tn0");
+    auto p1 = call->find_define("p1");
+    if (!tn0 || !p1) return;
+    tn0->attrs[kir::rvalue] = "std::min(NanoVector::get_nbits(" + r + "-1)-1, 30)";
+    p1->attrs[kir::rvalue] = "(int)std::max(std::min((" + r + "+255)/256, (int64)std::max(thread_num/256, 1)), (int64)1)";
+}
+
 
 // Rewrite `e` -- an index expression of a store -- in terms of the enclosing
 // loop variables, replacing every symbol by its definition. A loop induction
@@ -363,6 +557,7 @@ void ParallelPass::run() {
         // Decode this thread's coordinate per dimension and re-stride the
         // loops so that each thread walks its own slice.
         tid_def.push_back("int tn" + S(new_loops.size()) + "=0;");
+        bool unit_step = true;
         for (uint d = 0; d < new_loops.size(); d++) {
             tid_def.push_back("int tnum" + S(d) + " = 1<<(tn" + S(d) + "-tn" + S(d + 1) + ");");
             tid_def.push_back("int tid" + S(d) + " = (thread_id>>tn" + S(d + 1) + ") & (tnum" + S(d) + "-1);");
@@ -374,6 +569,7 @@ void ParallelPass::run() {
                 new_step = lvalue + "+=tnum" + S(d) + ";";
                 new_init = lvalue + "=tid" + S(d) + ";";
             } else {
+                unit_step = false;
                 if (!nl->has_attr(kir::rvalue2)) continue;
                 auto& stride = nl->attrs[kir::rvalue2];
                 if (step_code != lvalue + "+=" + stride + ";") continue;
@@ -413,14 +609,26 @@ void ParallelPass::run() {
                         n_thread = std::max(n_thread / 4, 32);
                     else if ((int)op->ops.size() <= n_reduce * 3)
                         n_thread = std::max(n_thread / 2, 32);
-                } else if (is_cuda && new_loops.size() == 1) {
-                    // One flat loop over the elements: give it about a thread
-                    // per element rather than `block_num` blocks walking the
-                    // range. Measured on a 4090 over a 38.7 M-element GELU,
-                    // 2^19 threads (74 elements each) ran at 715 GB/s and
-                    // 2^25 at 813 GB/s; ViT-B/16 training lost 1.7 ms of
-                    // 148 in these kernels, Qwen3-0.6B training 0.6 of 186.
-                    n_thread = std::max(n_thread, 1 << 25);
+                } else if (is_cuda && new_loops.size() == 1 && unit_step) {
+                    // One flat loop over the elements: launch a thread per
+                    // element, in order, and no more -- the grid is sized to
+                    // the range, the stride is the next power of two above it.
+                    // A grid-stride walk handing some threads two elements far
+                    // apart, or a power-of-two grid of mostly idle blocks,
+                    // both cost 8-20% on a 4090: over a 12.6 M-element GELU
+                    // backward whose gradient the previous kernel just wrote,
+                    // 2^23 threads took 168 us, 2^25 took 189, a thread per
+                    // element 153 -- torch's time for the same kernel.
+                    string range = "((int64)(" + total_range + "))";
+                    string block = S(cuda_thread_num);
+                    auto tn0 = call->find_define("tn0");
+                    auto p1 = call->find_define("p1");
+                    ASSERT(tn0 && p1);
+                    tn0->attrs[kir::rvalue] = "std::min(NanoVector::get_nbits(" + range + "-1)-1, 30)";
+                    p1->attrs[kir::rvalue] = "(int)std::max(std::min((" + range + "+" + block + "-1)/" + block
+                        + ", (int64)std::max(thread_num/" + block + ", 1)), (int64)1)";
+                    if (vectorize_flat_loops)
+                        vectorize_flat_loop(ir, func.get(), call.get(), total_range, pm);
                 }
                 call->find_define("thread_num")->attrs[kir::rvalue] = S(n_thread);
             } else {

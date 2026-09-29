@@ -180,6 +180,35 @@ class TestFuseIntoReduce(JittorTestCase):
         if jt.flags.use_cuda:
             self.assertEqual(_fused_kernels(build, 1), _fused_kernels(build, 0) - 1)
 
+    def test_the_reduction_reads_what_it_stores_from_a_register(self, device):
+        # The kernel writes `y` out for the matmul and sums it; the sum reads
+        # the value it just computed rather than loading it back, which every
+        # iteration used to wait on behind its own store.
+        import re
+        rng = np.random.RandomState(2)
+        x = jt.array(rng.randn(256, 96).astype("float32"))
+        g = jt.array(rng.randn(256, 96).astype("float32"))
+        w = jt.array(rng.randn(96, 32).astype("float32"))
+        jt.sync([x, g, w])
+        with jt.flag_scope(fuse_into_reduce=1), jt.profile_scope() as rep:
+            y = (x * 0.5 + 1.0) * g
+            s = y.sum(0)
+            jt.sync([s, jt.matmul(y, w)])
+        sources = []
+        for record in rep[1:]:
+            try:
+                with open(record[1]) as f:
+                    sources.append(f.read())
+            except (OSError, TypeError, IndexError):
+                continue
+        fused = [src for src in sources if re.search(r"(op\d+_z)p\[\w+\] = \1d;", src)]
+        self.assertEqual(len(fused), 1, "no kernel stores a forwarded value")
+        stored = re.search(r"(op\d+_z)p\[\w+\] = \1d;", fused[0]).group(1)
+        body = fused[0].split("__global__", 1)[-1]
+        self.assertNotRegex(body, r"=[^;]*\b" + stored + r"p\[")
+        ref = ((x.numpy() * 0.5 + 1.0) * g.numpy()).sum(0)
+        np.testing.assert_allclose(s.numpy(), ref, rtol=1e-4, atol=1e-3)
+
     def test_a_reduction_whose_input_needs_the_matmul_stays_ordered(self, device):
         # The reduction reads the matmul's result too: merging it with the
         # elementwise group that feeds the matmul would be a cycle.

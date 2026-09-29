@@ -528,6 +528,71 @@ class TestBatchNormActivation(unittest.TestCase):
         self.assertLess(kernels(True), kernels(False))
 
 
+class TestBatchNormResidualActivation(unittest.TestCase):
+    """`relu(batch_norm(x) + r)` in training: the add goes into the norm's pass.
+
+    However the add is spelled -- a new Var, or `+=` rebinding the norm's own
+    output -- and with the residual on either side of it.
+    """
+
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled,
+                         "CUDA batch norm fast path needs CUDA")
+    def test_values_and_gradients(self):
+        rng = np.random.RandomState(21)
+        for shape in ((4, 8, 6, 6), (3, 5, 7, 7)):    # float4 path, scalar path
+            x_np = rng.randn(*shape).astype("float32")
+            r_np = rng.randn(*shape).astype("float32")
+            cot_np = rng.randn(*shape).astype("float32")
+
+            def run(use_cuda, spelling):
+                with jt.flag_scope(use_cuda=use_cuda):
+                    bn = nn.BatchNorm2d(shape[1])
+                    bn.train()
+                    x, r = jt.array(x_np), jt.array(r_np)
+                    y = bn(x)
+                    if spelling == "in place":
+                        y += r
+                    elif spelling == "residual first":
+                        y = r + y
+                    elif spelling == "unfused":
+                        y = y + r + 0.0
+                    else:
+                        y = y + r
+                    out = nn.relu(y)
+                    grads = jt.grad((out * jt.array(cot_np)).sum(),
+                                    [x, r, bn.weight, bn.bias])
+                    return [out] + grads + [bn.running_mean, bn.running_var]
+
+            expected = jt.fetch_sync(run(0, "unfused"))
+            for spelling in ("new var", "in place", "residual first"):
+                with self.subTest(shape=shape, spelling=spelling):
+                    for got, want in zip(jt.fetch_sync(run(1, spelling)), expected):
+                        np.testing.assert_allclose(got, want, rtol=2e-3, atol=2e-3)
+
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled,
+                         "CUDA batch norm fast path needs CUDA")
+    def test_the_add_and_relu_are_not_kernels(self):
+        rng = np.random.RandomState(22)
+        x = jt.array(rng.randn(4, 8, 6, 6).astype("float32"))
+        r = jt.array(rng.randn(4, 8, 6, 6).astype("float32"))
+
+        def kernels(fused):
+            with jt.flag_scope(use_cuda=1):
+                bn = nn.BatchNorm2d(8)
+                bn.train()
+                def build():
+                    # the offer lives as long as the object it was made on
+                    y = bn(x)
+                    return [nn.relu(y + r if fused else y + r + 0.0)]
+                jt.sync(build())
+                jt.sync_all(True)
+                with jt.profile() as p:
+                    jt.sync(build())
+                    jt.sync_all(True)
+            return len(p.result.kernel_records)
+        self.assertLess(kernels(True), kernels(False))
+
+
 class TestInstanceNorm(_NormBase):
     def test_backward_small_variance(self):
         N, C, L = 2, 6, 8

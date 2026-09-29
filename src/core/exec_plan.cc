@@ -232,24 +232,66 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
                 p_queue.emplace(-ops[root]->order(), root);
             #endif
         }
+        #ifndef JT_bfs_executor
+        // Which segments still read each var of the batch. When a segment has
+        // run and one of its outputs is left with a single reader that is
+        // ready, that reader goes next, ahead of the creation order: the value
+        // it reads is still in the cache, and its last read frees it. A layer
+        // backward otherwise ran its weight-gradient GEMM between the GEMM
+        // that produces the input gradient and the activation backward that
+        // reads it, streaming 50 MB through L2 in between: a BERT-base
+        // training step's GELU backward took 147 us where it takes 115 read
+        // straight after. Only a last reader is pulled forward, so a
+        // consumer chain is never followed past a value somebody else still
+        // needs -- the weight gradients are not all deferred to the end, with
+        // every output gradient held until then -- and only a fused
+        // elementwise one: a GEMM pulled forward would take the chain on to
+        // its own readers, ahead of work that was ready before it.
+        vector<int> readers(all_vars.size(), 0), read_by(all_vars.size(), -1);
+        auto for_each_read = [&](int root, auto&& func) {
+            for (int i=root; i>=0; i=next[i])
+                for (Var* v : ops[i]->inputs()) {
+                    if (v->tflag != tt) continue;
+                    int vi = v->batch_index_at(tt);
+                    if (read_by[vi] == root) continue;
+                    read_by[vi] = root;
+                    func(vi);
+                }
+        };
+        for (int root : roots) for_each_read(root, [&](int vi) { readers[vi]++; });
+        std::fill(read_by.begin(), read_by.end(), -1);
+        vector<char> done(op_num, 0), fusible(op_num, 1);
+        for (int root : roots)
+            for (int i=root; i>=0; i=next[i])
+                if (ops[i]->type() == OpType::other) fusible[root] = 0;
+        int preferred = -1;
+        #endif
         #ifdef JT_bfs_executor
         for (uint s=0; s<queue.size(); s++)
         #else
-        while (p_queue.size())
+        while (p_queue.size() || preferred >= 0)
         #endif
         {
             #ifdef JT_bfs_executor
             int op_id = queue[s];
             #else
-            int op_id = p_queue.top().second;
-            p_queue.pop();
+            int op_id = preferred;
+            preferred = -1;
+            if (op_id < 0) {
+                op_id = p_queue.top().second;
+                p_queue.pop();
+                if (done[op_id]) continue;
+            }
+            done[op_id] = 1;
             queue.push_back(op_id);
+            for_each_read(op_id, [&](int vi) { readers[vi]--; });
+            int64 preferred_size = -1;
             #endif
             for (int i=op_id; i>=0; i=next[i]) {
                 Op* op = ops[i];
                 for (Var* v : op->outputs())
                 {
-                    if (v->tflag == tt)
+                    if (v->tflag == tt) {
                         for (Op* op2 : v->outputs())
                         {
                             if (op2->tflag != tt) continue;
@@ -265,6 +307,18 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
                                 p_queue.emplace(-op2->order(), op2_id);
                             #endif
                         }
+                        #ifndef JT_bfs_executor
+                        if (readers[v->batch_index_at(tt)] == 1 && v->size > preferred_size)
+                            for (Op* op2 : v->outputs()) {
+                                if (op2->tflag != tt) continue;
+                                int op2_id = father[op2->batch_index_at(tt)];
+                                if (op2_id == op_id || done[op2_id] || deps[op2_id] || !fusible[op2_id]) continue;
+                                preferred = op2_id;
+                                preferred_size = v->size;
+                                break;
+                            }
+                        #endif
+                    }
                 }
             }
         }

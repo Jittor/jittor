@@ -797,6 +797,13 @@ struct VarHolder {
     // @pyjt(_producer_name)
     string producer_name();
 
+    /**
+     * The same, with the operation spelled out ("binary.add", "unary.relu"),
+     * or "" once the tensor is computed.
+     */
+    // @pyjt(_producer_op)
+    string producer_op();
+
     // @pyjt(_is_view)
     inline bool is_view() { return view && view->base; }
 

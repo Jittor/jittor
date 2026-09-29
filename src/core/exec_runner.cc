@@ -384,6 +384,150 @@ struct ComputeHandoffScope {
 }
 #endif
 
+DEFINE_FLAG(int, reuse_dying_inputs, 1, "Let an elementwise kernel write an output into the memory of an input it reads for the last time, as PyTorch's inductor does with its in/out buffers. The output takes over a block the allocator was about to free, so the peak does not carry both, and the kernel writes cache lines it has just read instead of evicting others for new ones: a 12.6 M-element GELU backward reading a gradient the previous GEMM just wrote runs in 118 us in place against 153 us into a fresh buffer on a 4090. 2 also checks, after every segment that reused one, that the input's memory did go. 0 always allocates.");
+
+// Whether an op of the segment stops keeping its inputs pending once the
+// segment has run. The segment finishes its outputs that stay in memory; one
+// it computes in registers stays pending while anything but the segment and
+// the batch's hold on its last use wants it -- a holder, a consumer elsewhere
+// -- and then so does its producer, which will run again to recompute it,
+// reading the same inputs.
+static bool releases_pending(Op* op, FusedOp& fused, const vector<Var*>& last_used,
+                             unordered_map<Op*, int>& memo) {
+    auto found = memo.find(op);
+    if (found != memo.end()) return found->second;
+    memo[op] = 0;
+    bool releases = true;
+    for (Var* out : op->outputs()) {
+        auto index = fused.var_index.find(out);
+        if (index == fused.var_index.end()) { releases = false; break; }
+        int type = fused.vars[index->second].type;
+        if (type == 2) continue;
+        if (type != 1 || out->holder) { releases = false; break; }
+        int edges = 0;
+        for (Op* consumer : out->outputs()) {
+            if (!fused.op_index.count(consumer) || !releases_pending(consumer, fused, last_used, memo)) {
+                releases = false;
+                break;
+            }
+            for (Var* in : consumer->inputs()) edges += in == out;
+        }
+        int hold = std::find(last_used.begin(), last_used.end(), out) != last_used.end();
+        if (!releases || out->liveness.pending.count() != edges + hold) { releases = false; break; }
+    }
+    memo[op] = releases;
+    return releases;
+}
+
+// Whether `v`'s memory goes as soon as the segment has run, so that an output
+// may take it over now. `last_used`: what the segment is the last in the batch
+// to read. In a kept graph (keep_graph=2) that is the whole question, asked as
+// release_kept_storage asks it. Otherwise nothing may keep it pending -- a
+// holder, a consumer outside the segment, a reader in it that will run again:
+// its pending count is one per edge from the segment, plus the batch's own
+// hold if this is its last use -- and then one of:
+//  - backward does not need it: the pending release frees the memory;
+//  - it cannot be recomputed (forward-dead): the node itself is freed.
+// Anything the backward keeps alive stays out, even where its backward
+// liveness looks spent: the output of a `jt.Function` -- a loss through the
+// full-reduce fast path -- reads that way and is not.
+static bool dies_after(Var* v, FusedOp& fused, const vector<Var*>& last_used,
+                       const std::unordered_set<Var*>& kept_pinned,
+                       unordered_map<Op*, int>& memo) {
+    bool last_use = std::find(last_used.begin(), last_used.end(), v) != last_used.end();
+    if (keep_graph == 2) return last_use && may_release_kept(v, kept_pinned);
+    if (v->holder) return false;
+    int edges = 0;
+    for (Op* op : fused.ops) {
+        int reads = 0;
+        for (Var* in : op->inputs()) reads += in == v;
+        if (reads && !releases_pending(op, fused, last_used, memo)) return false;
+        edges += reads;
+    }
+    int hold = last_use;
+    if (v->liveness.pending.count() != edges + hold) return false;
+    return !v->flag(VarFlags::_needed_by_backward) || !v->liveness.forward.active();
+}
+
+// Whether the kernel reads every element of `v` only in the iteration that
+// writes the same element of `out`, and before that write: each op reading
+// `v` is elementwise over `v`'s own shape and feeds `out`. A read after the
+// store would see the new value, a read at another index another thread's.
+static bool reads_before_writing(Var* v, Var* out, FusedOp& fused) {
+    Op* producer = out->input();
+    if (!producer || producer->type() != OpType::element || fused.op_index.count(producer) == 0)
+        return false;
+    unordered_set<Op*> feeds;
+    vector<Op*> stack = {producer};
+    while (stack.size()) {
+        Op* op = stack.back();
+        stack.pop_back();
+        if (!feeds.insert(op).second) continue;
+        for (Var* in : op->inputs()) {
+            Op* p = in->input();
+            if (p && fused.op_index.count(p)) stack.push_back(p);
+        }
+    }
+    for (Op* op : fused.ops) {
+        bool reads = false;
+        for (Var* in : op->inputs()) reads |= in == v;
+        if (!reads) continue;
+        if (op->type() != OpType::element || !feeds.count(op)) return false;
+        for (Var* o : op->outputs())
+            if (o->shape != v->shape) return false;
+    }
+    return true;
+}
+
+// Give each output of an elementwise segment the block of an input the
+// segment reads for the last time, where that is safe; see reuse_dying_inputs.
+// The output holds the block by the allocator's share count, not as an alias
+// of the input: the input is released right after, as it would have been, and
+// the block stays with the output.
+// Below this an output is not worth it -- its bytes are neither the peak nor
+// the traffic -- and small values are where the special cases live: scalars
+// with host mirrors, fetched losses.
+static const int64 reuse_min_bytes = 256 << 10;
+
+static void reuse_dying_inputs_of(FusedOp& fused, const vector<Var*>& last_used,
+                                  const std::unordered_set<Var*>& kept_pinned,
+                                  Allocator* allocator, vector<Var*>& taken) {
+    unordered_map<Op*, int> memo;
+    for (auto& out_info : fused.vars) {
+        Var* out = out_info.var;
+        // Dense, in any layout: a channels-last activation takes over a
+        // channels-last input laid out the same way.
+        if (getenv("DBG_REUSE") && out_info.type == 2) LOGi << "out" << out << out->storage_strides << "mem" << (out->mem_ptr!=nullptr) << "sharing" << out->is_sharing() << "span" << out->storage_span_bytes() << out->size;
+        if (out_info.type != 2 || out->mem_ptr || out->is_sharing()
+                || out->storage_span_bytes() != out->size
+                || out->flag(VarFlags::_host_resident) || out->size < reuse_min_bytes)
+            continue;
+        // Of several, the newest: most likely the one the previous kernel
+        // wrote, whose lines are still in the cache, dirty -- overwritten
+        // there, they never go back to memory at all.
+        Var* best = nullptr;
+        for (auto& in_info : fused.vars) {
+            Var* v = in_info.var;
+            if (in_info.type != 0 || !v->mem_ptr || v->allocator != allocator
+                    || v->size != out->size || v->dsize() != out->dsize() || v->shape != out->shape
+                    || v->storage_strides != out->storage_strides || v->storage_span_bytes() != v->size
+                    || v->storage_offset_bytes || v->share_next || v->is_sharing()
+                    || (best && v->id < best->id)
+                    || std::find(taken.begin(), taken.end(), v) != taken.end())
+                continue;
+            if (getenv("DBG_REUSE")) LOGi << "cand" << out << out->storage_strides << "<-" << v << v->storage_strides << "kg" << keep_graph << "dies" << dies_after(v, fused, last_used, kept_pinned, memo) << "rbw" << reads_before_writing(v, out, fused) << "kept" << (int)v->flag(VarFlags::_kept) << "lastuse" << (std::find(last_used.begin(), last_used.end(), v) != last_used.end());
+            if (dies_after(v, fused, last_used, kept_pinned, memo) && reads_before_writing(v, out, fused))
+                best = v;
+        }
+        if (!best || !allocator->share_with(out->storage_span_bytes(), best->allocation, 0)) continue;
+        out->mem_ptr = best->mem_ptr;
+        out->allocation = best->allocation;
+        out->allocator = allocator;
+        out->storage_offset_bytes = 0;
+        taken.push_back(best);
+    }
+}
+
 void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
                    vector<Var*>& vars, bool device_sync, int entry_device) {
     ExecutionBackendScope backend_scope(plan.backend);
@@ -435,6 +579,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
             }
         }
     }
+    vector<Var*> reused_inputs;
     for (uint rid=0; rid<queue.size(); rid++) {
         // Segment rid-1 has run, whichever `continue` it left by: nothing later
         // in the batch uses the vars scheduled after it, so their memory goes
@@ -445,6 +590,11 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
                 if (keep_graph == 2) release_kept_storage(plan.all_vars[index], kept_released, kept_pinned, kept_waiting);
                 (*plan.batch_hold)[index].free_liveness();
             }
+        // Every input a segment took over has been released by now.
+        if (PREDICT_BRANCH_NOT_TAKEN(reuse_dying_inputs == 2))
+            for (Var* v : reused_inputs)
+                ASSERT(!v->mem_ptr) << "an output took over" << v << "whose memory stayed";
+        reused_inputs.clear();
         // One trace record per launched operator; see step_trace.h.
         StepTraceOpScope trace_op;
         int root = queue[rid];
@@ -523,6 +673,14 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
                 swap_epoch.mark(var);
             }
         } else {
+            if (reuse_dying_inputs && is_fused_op && keep_graph != 1 && plan.batch_hold) {
+                vector<Var*> last_used;
+                for (int index : plan.release_after[rid]) last_used.push_back(plan.all_vars[index]);
+                // What running the segment would flag anyway (see below), so
+                // that `_needed_by_backward` is final when it is read.
+                propergate_needed_flags(fused_op);
+                reuse_dying_inputs_of(fused_op, last_used, kept_pinned, allocator, reused_inputs);
+            }
             for (auto* var : op->outputs()) {
                 // the return value used to be discarded: a CPU OOM reached the
                 // generated kernel as a null pointer and crashed there

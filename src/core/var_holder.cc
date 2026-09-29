@@ -742,6 +742,12 @@ string VarHolder::producer_name() {
     return op ? string(op->name()) : "";
 }
 
+string VarHolder::producer_op() {
+    if (var->is_finished()) return "";
+    Op* op = var->input();
+    return op ? op->name_ex() : "";
+}
+
 bool VarHolder::is_pending_contiguous() {
     if (var->is_finished()) return false;
     Op* op = var->input();

@@ -102,6 +102,7 @@ def routing(monkeypatch):
     ("silu", "nn.silu", {}),
 ])
 def test_activation_function_and_existing_class_share_registration(routing, name, key, kwargs):
+    routing.namespace["_RESIDUAL_OFFERS"] = {}
     ns = _definitions("nn/functional/activation.py", [name, "_fused_activation"], routing.namespace)
     routing.register(key)
     function = ns[name]
@@ -258,7 +259,8 @@ def test_matmul_bmm_and_transpose_reuse_existing_keys(routing):
 
 
 def test_dropout_keeps_the_native_probability_and_training_owner(routing):
-    ns = _definitions("nn/functional/dropout.py", ["_check_probability", "dropout"], routing.namespace)
+    ns = _definitions("nn/functional/dropout.py", ["_check_probability", "_keep_scale", "dropout"],
+                      routing.namespace)
     routing.jt.nn.dropout = ns["dropout"]
     _definitions("nn/modules/dropout.py", ["Dropout"], ns)
     cls = ns["Dropout"]

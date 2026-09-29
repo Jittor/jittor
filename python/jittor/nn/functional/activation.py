@@ -16,7 +16,25 @@ _INPLACE_CONSEQUENCE = (
 
 
 
-def offer_activation(y, build):
+#: Offers to take a residual add into the pass as well: var id -> build. The
+#: add is a new Var whose operands come back as new Python objects, so the
+#: offer cannot live on the offering object alone; an entry lives exactly as
+#: long as that object does (`_OfferLease`), since it holds what its pass reads.
+_RESIDUAL_OFFERS = {}
+
+
+class _OfferLease:
+    """Removes a residual offer when the object it was made on goes."""
+    __slots__ = ("key",)
+
+    def __init__(self, key):
+        self.key = key
+
+    def __del__(self):
+        _RESIDUAL_OFFERS.pop(self.key, None)
+
+
+def offer_activation(y, build, residual=None):
     """Say that ``build(act)`` computes ``act(y)`` in the pass that makes ``y``.
 
     The offer describes the Var ``y`` holds now. An in-place op rebinds the
@@ -24,19 +42,32 @@ def offer_activation(y, build):
     relu(out)``, every torchvision bottleneck -- and an offer read through the
     object afterwards applied the activation to the normalization alone,
     dropping the residual.
+
+    ``residual(act, r)``, when given, computes ``act(y + r)`` in that pass: an
+    activation of ``y`` plus a residual found through the add's operands,
+    however the add was spelled.
     """
     y.__dict__["_fuse_activation"] = (y.id, build)
+    if residual is not None:
+        _RESIDUAL_OFFERS[y.id] = residual
+        y.__dict__["_residual_offer"] = _OfferLease(y.id)
 
 
 def _fused_activation(x, act):
     """``act(x)`` from the pass that makes ``x``, if that pass offered it."""
     entry = getattr(x, "__dict__", {}).get("_fuse_activation")
-    if entry is None or x.is_finished:
-        return None
-    var_id, build = entry
-    if var_id != x.id:
-        return None
-    return build(act)
+    if entry is not None and entry[0] == x.id and not x.is_finished:
+        _RESIDUAL_OFFERS.pop(entry[0], None)
+        return entry[1](act)
+    if _RESIDUAL_OFFERS and not x.is_finished and x._producer_op() == "binary.add":
+        a, b = x._input(0), x._input(1)
+        for y, r in ((a, b), (b, a)):
+            residual = _RESIDUAL_OFFERS.pop(y.id, None)
+            if residual is not None:
+                fused = residual(act, r)
+                if fused is not None:
+                    return fused
+    return None
 
 
 def relu(x, inplace=False):
