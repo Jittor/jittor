@@ -95,9 +95,17 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
     //                so the question is whether the two ops may merge).
     // relation == 0: `op` and `other` both read `var` (siblings, so the
     //                question is only whether they may share one kernel).
+    // `requested_backend()` walks an op's outputs for a placement, and the
+    // passes below ask it of both ends of every edge they look at, several
+    // times over. Asked once per op instead.
+    vector<BackendId> op_backend(ops.size());
+    for (uint i = 0; i < ops.size(); i++) {
+        if (i + 8 < ops.size()) __builtin_prefetch(ops[i + 8]);
+        op_backend[i] = ops[i]->requested_backend();
+    }
     auto edge_fusable = [&](Var* var, Op* op, Op* other, int relation) -> bool {
         if (op->float32_precision != other->float32_precision) return false;
-        if (op->requested_backend() != other->requested_backend()) return false;
+        if (op_backend[op->batch_index_at(tt)] != op_backend[other->batch_index_at(tt)]) return false;
         if (var->flag(VarFlags::_stop_fuse)) return false;
         if (relation == 1) {
             // vars before start_var_num are the batch's inputs: they already
@@ -435,7 +443,25 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
     // ViT-B/16 training step. Levels are what made pass 3 acyclic, so a merge
     // across them checks it: no path may leave one of the two groups and
     // reach the other through a third.
-    if (fuse_into_reduce) {
+    // Only a reduction whose input comes from another fusable group can take
+    // anything in; most batches have none, and the member lists below cost an
+    // allocation per group to build.
+    bool reduce_candidate = false;
+    if (fuse_into_reduce)
+        for (uint i = 0; i < ops.size() && !reduce_candidate; i++) {
+            Op* reduce = ops[i];
+            if (reduce->type() != OpType::reduce) continue;
+            for (Var* var : reduce->inputs()) {
+                if (var->tflag != tt || var->batch_index_at(tt) < start_var_num) continue;
+                Op* producer = var->input();
+                if (!producer || producer->tflag != tt) continue;
+                if (find_father(producer->batch_index_at(tt)) == find_father(i)) continue;
+                if (!edge_fusable(var, reduce, producer, 1)) continue;
+                reduce_candidate = true;
+                break;
+            }
+        }
+    if (reduce_candidate) {
         vector<vector<int>> gm(ops.size());
         for (uint i = 0; i < ops.size(); i++) gm[find_father(i)].push_back(i);
         auto consumers_of = [&](int op_index, auto&& func) {
@@ -541,10 +567,19 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
             continue;
         }
         int root = find_father(producer->batch_index_at(tt));
+        // Whether an op of this batch waits on the var through a control
+        // edge (`order_after_readers`), whether one reads its data, and
+        // whether anything outside the batch still will.
+        bool ordered_before = false, read_here = false, read_later = var->holder;
         for (auto o : var->_outputs) {
-            if (o.index < 0) continue;  // control edge, carries no data
+            if (o.index < 0) {
+                if (o.node->op()->tflag == tt) ordered_before = true;
+                continue;
+            }
             auto consumer = o.node->op();
+            if (consumer->tflag != tt) read_later = true;
             if (consumer->tflag == tt) {
+                read_here = true;
                 if (all_consumers_fusable && !edge_fusable(var, consumer, producer, 1))
                     all_consumers_fusable = 0;
                 if (consumer->type() != OpType::reduce) all_consumers_reduce = 0;
@@ -554,7 +589,11 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
                     var_fused[i] = 1;
             }
         }
-        if (all_consumers_fusable == 0 || var->flag(VarFlags::_out_hint)) {
+        // A var the in-place op waits on is materialized unless it is a mere
+        // intermediate of this batch: fused away, it would be recomputed
+        // when read later -- from the inputs the op is about to overwrite.
+        if (all_consumers_fusable == 0 || var->flag(VarFlags::_out_hint)
+                || (ordered_before && (!read_here || read_later))) {
             var_fused[i] = 1;
         } else if (var_fused[i]) {
             // The var crosses a kernel boundary but every individual edge is

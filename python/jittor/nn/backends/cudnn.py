@@ -10,7 +10,6 @@ from jittor._runtime.core_api import _output_requires_grad
 from jittor.nn.functional._amp import bias_for_compute_dtype
 from jittor.nn.functional._layout import channels_last_source, channels_last_view
 
-from jittor.backends.cuda.kernels.nn.channel_bias_cuda import _channel_bias_add_cuda
 
 
 # Why cuDNN at all: jittor's default conv (reindex + broadcast + reduce) fuses
@@ -140,9 +139,7 @@ def _try_cudnn_conv2d(x, weight, bias, stride, padding, dilation, groups,
     y = get_library_ops("cudnn").cudnn_conv(x, filter_, sh, sw, ph, pw, dh, dw, groups,
                                             "abcd", layout)
     if bias is not None:
-        fast = _channel_bias_add_cuda(y, bias)
-        y = fast if fast is not None else y + bias_for_compute_dtype(
-            y, bias).broadcast(y.shape, [0, 2, 3])
+        y = y + bias_for_compute_dtype(y, bias).broadcast(y.shape, [0, 2, 3])
     return y
 
 # Same story for the transpose: the forward *is* the conv-backward-x op, and

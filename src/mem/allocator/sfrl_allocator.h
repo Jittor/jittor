@@ -31,6 +31,9 @@ struct CachingBlock {
     CachingBlock* prev;
     CachingBlock* next;
     bool occupied;
+    // The owning allocator's allocation count when this block last became
+    // free: how long a free segment has sat unused (see trim_before_growing).
+    uint64 freed_at = 0;
     
     CachingBlock(size_t size, size_t origin_size);
     CachingBlock(size_t size, size_t origin_size, CachingBlockPool* blocks, void* memory_ptr);
@@ -139,6 +142,12 @@ struct SFRLAllocator : Allocator {
     // release of cached memory goes through here, so the reserved high-water
     // below cannot drift from what the pools actually hold.
     size_t release_cached(CachingBlockPool& pool, long long free_size = -1);
+    // The most this allocator has held from the underlying one, and the trim
+    // that keeps a new segment from raising it (see `sfrl_trim_before_grow`).
+    int64 held_high = 0;
+    // Allocations served so far, the clock `CachingBlock::freed_at` reads.
+    uint64 alloc_count = 0;
+    void trim_before_growing(size_t need);
 
     inline SFRLAllocator(float free_ratio = 1, float min_free_size=0) : free_ratio(free_ratio), min_free_size(min_free_size) {
         small_blocks.ids = &id_space;
@@ -172,6 +181,7 @@ struct SFRLAllocator : Allocator {
 };
 
 DECLARE_FLAG(int, use_sfrl_allocator);
+DECLARE_FLAG(int, sfrl_trim_before_grow);
 // Hand every range the recording ending now touched, free in a pool, to `held`.
 void sfrl_fence_capture(vector<Allocation>& held);
 

@@ -134,6 +134,19 @@ VarHolder* VarHolder::migrate_to_cpu_() {
 static int64 host_readbacks = 0;
 int64 host_readback_count() { return host_readbacks; }
 
+int first_finished(const vector<VarHolder*>& vars) {
+    for (int i = 0; i < (int)vars.size(); i++)
+        if (vars[i]->var->is_finished()) return i;
+    return -1;
+}
+
+int first_rebound(const vector<VarHolder*>& holders, const vector<VarHolder*>& olds) {
+    CHECK(holders.size() == olds.size());
+    for (int i = 0; i < (int)holders.size(); i++)
+        if (holders[i]->var != olds[i]->var) return i;
+    return -1;
+}
+
 DECLARE_FLAG(int, keep_graph);
 #ifdef HAS_ACCELERATOR
 DECLARE_FLAG(int, use_cuda_managed_allocator);
@@ -721,6 +734,18 @@ string VarHolder::producer_unary() {
     if (op->inputs().front()->shape != var->shape) return "";
     if (op->ns == ns_cast) return var->dtype().to_cstring();
     return op->ns.to_cstring();
+}
+
+string VarHolder::producer_name() {
+    if (var->is_finished()) return "";
+    Op* op = var->input();
+    return op ? string(op->name()) : "";
+}
+
+string VarHolder::producer_op() {
+    if (var->is_finished()) return "";
+    Op* op = var->input();
+    return op ? op->name_ex() : "";
 }
 
 bool VarHolder::is_pending_contiguous() {

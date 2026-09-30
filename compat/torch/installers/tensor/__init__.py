@@ -734,7 +734,25 @@ def _check_to_pybool(cond):
     return bool(cond)
 
 
+#: The native `cat` fast path (`src/bindings/pyjt/py_compat_fast.h`), bound
+#: on first use: a KV-cache update or a RoPE half swap, a hundred a decode
+#: token, built without the eight Python frames between here and the ops.
+_FAST_CAT = None
+
+
+def _bind_fast_cat():
+    global _FAST_CAT
+    from .methods import _bind_native_fast_paths
+    _bind_native_fast_paths(jt)
+    _FAST_CAT = jt.core._fast_cat
+    return _FAST_CAT
+
+
 def cat(tensors, dim=0, out=None, axis=None):
+    if out is None and axis is None and type(dim) is int:
+        fast = (_FAST_CAT or _bind_fast_cat())(tensors, dim)
+        if fast is not NotImplemented:
+            return fast
     g = compatibility_owner(jt)
     if axis is not None: dim = axis      # torch accepts axis= (mmrotate PSC head)
     # Honor the __torch_function__ protocol: tensordict (and other tensor-likes)
@@ -1097,6 +1115,12 @@ def install_methods(ctx):
     _np_view_of = None
     Var.reshape = _torch_reshape
     Var.view = _torch_reshape
+    # The native view builds what jittor's own reshape does, so only while
+    # that is what `_torch_reshape` would delegate to.
+    from . import shape_api as _shape_api
+    from jittor._core import var as _native_var
+    _shape_api._FAST_VIEW = (getattr(jt.core, "_fast_view", None)
+                             if _orig_reshape is _native_var.reshape else None)
 
     # Keep the existing Torch-facing promotion for narrow integer sums
     # (yolox/rtmdet SimOTA assigners do mask.sum() on a uint8 match matrix).

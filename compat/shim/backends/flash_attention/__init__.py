@@ -212,6 +212,9 @@ from .packed import (
     _direct_packed_enabled,
 )
 
+from jittor._runtime.environment import getenv as _getenv
+
+
 def _truthy(value: Optional[str]) -> bool:
     return str(value or "").strip().lower() in _TRUTHY
 
@@ -221,16 +224,16 @@ def _falsey(value: Optional[str]) -> bool:
 
 
 def enabled() -> bool:
-    value = os.environ.get("JITTOR_FLASH_ATTN_JITTOR")
+    value = _getenv("JITTOR_FLASH_ATTN_JITTOR")
     if value is None:
-        value = os.environ.get("JITTOR_FLASHATTN_JITTOR")
+        value = _getenv("JITTOR_FLASHATTN_JITTOR")
     return not _falsey(value)
 
 
 def required() -> bool:
     return (
-        _truthy(os.environ.get("JITTOR_FLASH_ATTN_JITTOR_REQUIRED"))
-        or _truthy(os.environ.get("JITTOR_FLASHATTN_JITTOR_REQUIRED"))
+        _truthy(_getenv("JITTOR_FLASH_ATTN_JITTOR_REQUIRED"))
+        or _truthy(_getenv("JITTOR_FLASHATTN_JITTOR_REQUIRED"))
     )
 
 
@@ -241,7 +244,7 @@ def training_min_scores() -> int:
     flash. ``JITTOR_FLASH_ATTN_TRAINING_MIN_SCORES`` sets the threshold
     (default ``2**24``; 0 sends every training call to flash).
     """
-    raw = os.environ.get("JITTOR_FLASH_ATTN_TRAINING_MIN_SCORES", str(1 << 24))
+    raw = _getenv("JITTOR_FLASH_ATTN_TRAINING_MIN_SCORES", str(1 << 24))
     try:
         return max(0, int(raw))
     except ValueError:
@@ -249,7 +252,7 @@ def training_min_scores() -> int:
 
 
 def _verbose() -> bool:
-    return _truthy(os.environ.get("JITTOR_FLASH_ATTN_JITTOR_VERBOSE"))
+    return _truthy(_getenv("JITTOR_FLASH_ATTN_JITTOR_VERBOSE"))
 
 
 def _log(message: str) -> None:

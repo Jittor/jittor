@@ -91,6 +91,16 @@ void Executor::submit_pending(Var* target, bool force) {
             if (var->flag(VarFlags::_kept)) continue;
             auto op = var->input();
             if (op && op->flag(OpFlags::_must_stay_pending)) continue;
+            // Nor a var an elementwise op is still to compute. Launched now it
+            // is written out, and a training forward keeps it for the backward,
+            // where it would otherwise have fused into its readers and never
+            // existed: where the cut fell decided how many of them a ViT-B/16
+            // step kept, and its peak moved by 0.33 GB between
+            // `auto_flush_ops` 120 and 136. What such a var reads is launched
+            // when something that must be written out -- a matmul, a
+            // convolution, a reduction -- needs it.
+            if (op && (op->type() == OpType::element || op->type() == OpType::broadcast))
+                continue;
             vars.push_back(var);
             pending_bytes += var->size;
         }
@@ -294,18 +304,21 @@ static void resolve_dynamic_inputs(Executor& executor, const vector<Var*>& roots
 static void schedule_hold_release(ExecPlan& plan) {
     const int n = plan.queue.size();
     vector<int> last_use(plan.all_vars.size(), -1);
-    unordered_map<Var*, int> index;
-    index.reserve(plan.all_vars.size());
-    for (int i = plan.start_var_num; i < (int)plan.all_vars.size(); i++)
-        index[plan.all_vars[i]] = i;
+    // A var's batch index is its position in `all_vars`; one that is not of
+    // this batch, or among the vars the caller asked for, is not scheduled.
+    auto index_of = [&](Var* v) {
+        int i = v->batch_index_in(plan.stamp);
+        return i >= plan.start_var_num && i < (int)plan.all_vars.size()
+            && plan.all_vars[i] == v ? i : -1;
+    };
     auto touch = [&](int op_index, int rid) {
-        for (auto& in : plan.op_inputs[op_index]) {
-            auto it = index.find(in.first);
-            if (it != index.end()) last_use[it->second] = rid;
+        for (int k = plan.op_inputs_begin[op_index]; k < plan.op_inputs_begin[op_index + 1]; k++) {
+            int i = index_of(plan.op_inputs[k].first);
+            if (i >= 0) last_use[i] = rid;
         }
-        for (Var* out : plan.op_outputs[op_index]) {
-            auto it = index.find(out);
-            if (it != index.end()) last_use[it->second] = rid;
+        for (int k = plan.op_outputs_begin[op_index]; k < plan.op_outputs_begin[op_index + 1]; k++) {
+            int i = index_of(plan.op_outputs[k]);
+            if (i >= 0) last_use[i] = rid;
         }
     };
     for (int rid = 0; rid < n; rid++) {
@@ -386,9 +399,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     fused_op.batch_stamp_wanted = plan.stamp;
     // The batch's own record of the edges it was collected from; see
     // `ExecPlan::op_outputs`.
-    fused_op.batch_op_outputs = &plan.op_outputs;
-    fused_op.batch_op_inputs = &plan.op_inputs;
-    fused_op.batch_var_producer = &plan.var_producer;
+    fused_op.batch_plan = &plan;
 
     // compile all ops, prevent compiling during running
     parallel_compile_all_ops(plan.queue, plan.range, fused_op,

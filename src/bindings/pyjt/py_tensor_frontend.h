@@ -34,6 +34,10 @@ PyObject* current_tensor_placement_request();
 // @pyjt(_invalidate_frontend_policies)
 void invalidate_frontend_policies();
 
+// The float32 precision tiers of a frontend type, from the same cache the
+// scopes below read; false when the type publishes none.
+bool frontend_precision_tiers(PyObject* type, int& matmul, int& cudnn);
+
 // @pyjt(_set_float32_precision)
 PyObject* set_float32_precision_context(int matmul, int cudnn);
 // @pyjt(_reset_float32_precision)

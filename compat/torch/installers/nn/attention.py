@@ -7,11 +7,11 @@ from ....diagnostics import EXPECTED, swallowed, sdpa_flash_stats
 from ...context import get_install_context
 from ...fidelity import Fidelity, register_fidelity
 
-import os as _os
+from jittor._runtime.environment import getenv as _getenv
 
 
 def _sdpa_static_backend_cache_enabled():
-    return (_os.environ.get("JITTOR_TORCH_INFERENCE") or "").strip().lower() \
+    return (_getenv("JITTOR_TORCH_INFERENCE") or "").strip().lower() \
         in ("1", "true", "yes", "on")
 
 
@@ -53,7 +53,7 @@ def _sdpa_flash_template_dim(dim):
 
 
 def _sdpa_flash_float32_cast_target():
-    raw = (_os.environ.get("JITTOR_FLASH_ATTN_CAST_FLOAT32") or "").strip().lower()
+    raw = (_getenv("JITTOR_FLASH_ATTN_CAST_FLOAT32") or "").strip().lower()
     if raw in ("1", "true", "yes", "on", "fp16", "float16", "half"):
         return "float16"
     if raw in ("bf16", "bfloat16"):
@@ -287,20 +287,6 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None,
         scale_factor, enable_gqa=enable_gqa)
     if flash is not None:
         return flash
-    if enable_gqa:
-        query_heads = int(query.shape[-3])
-        key_heads = int(key.shape[-3])
-        value_heads = int(value.shape[-3])
-        if key_heads != query_heads:
-            if key_heads <= 0 or query_heads % key_heads != 0:
-                raise RuntimeError("key heads must divide query heads for GQA")
-            key = key.repeat_interleave(query_heads // key_heads, dim=-3)
-        if value_heads != query_heads:
-            if value_heads <= 0 or query_heads % value_heads != 0:
-                raise RuntimeError("value heads must divide query heads for GQA")
-            value = value.repeat_interleave(
-                query_heads // value_heads, dim=-3
-            )
     return _native_scaled_dot_product_attention(
         query,
         key,
@@ -309,6 +295,7 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None,
         dropout_p=dropout_p,
         is_causal=is_causal,
         scale=scale,
+        enable_gqa=enable_gqa,
     )
 
 

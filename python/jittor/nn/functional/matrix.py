@@ -2,7 +2,7 @@
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
-from jittor._runtime.dispatch import register_kernel, select_kernel
+from jittor._runtime.dispatch import native_rule, register_kernel, select_kernel
 from jittor._runtime.backend_libraries import get_library_ops
 
 
@@ -106,6 +106,7 @@ def _cublas_can_take(a, b):
     return select_kernel("matmul", a, b, False, False) is _cublas_matmul
 
 
+@native_rule("same_float:cublas_matmul")
 def _supports_cublas(a, b, trans_a=False, trans_b=False):
     return _same_floating_dtype(a, b) and get_library_ops("cublas") is not None
 

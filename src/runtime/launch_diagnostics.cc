@@ -88,7 +88,7 @@ bool LaunchHistory::origin(uint64 id, LaunchOrigin& out) {
     return true;
 }
 
-void LaunchHistory::record(LaunchRecord record) {
+void LaunchHistory::record(const LaunchRecord& record) {
     auto& lease = Impl::lease;
     if (lease.owner.get() != impl.get()) {
         lease.release();
@@ -104,15 +104,11 @@ void LaunchHistory::record(LaunchRecord record) {
         if (!lease.slot) ++impl->unavailable_threads;
     }
     if (!lease.slot) return;
-    {
-        std::lock_guard<std::mutex> guard(impl->mutex);
-        if (record.origin < impl->origins.size())
-            record.location = impl->origins[record.origin];
-    }
-    record.sequence = ++impl->sequence;
     auto& ring = *lease.slot;
     std::lock_guard<std::mutex> guard(ring.mutex);
-    ring.records[ring.written++ % capacity] = record;
+    auto& slot = ring.records[ring.written++ % capacity];
+    slot = record;
+    slot.sequence = ++impl->sequence;
 }
 
 string LaunchHistory::report(Device device, bool exact_stream, uintptr_t stream) {
@@ -154,9 +150,11 @@ string LaunchHistory::report(Device device, bool exact_stream, uintptr_t stream)
             out << ']';
         }
         out << " python=";
-        if (record.location.line)
-            out << record.location.file << ':' << record.location.line
-                << (record.location.truncated ? " (path truncated)" : "");
+        const LaunchOrigin* location = record.origin && record.origin < impl->origins.size()
+            ? &impl->origins[record.origin] : nullptr;
+        if (location && location->line)
+            out << location->file << ':' << location->line
+                << (location->truncated ? " (path truncated)" : "");
         else out << "not-found";
     }
     if (matching.size() > 16) out << "\n  older matching candidates omitted=" << matching.size()-16;

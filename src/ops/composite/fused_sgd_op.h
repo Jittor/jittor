@@ -7,12 +7,17 @@ struct FusedSgdOp : Op {
     static constexpr bool mutates_storage_inputs = true;
     static constexpr uint32 backend_mask = OpBackendAccelerator;
     vector<Var*> parameters, velocities, gradients;
+    // Empty, or one float32 Var holding the learning rate, read on the device:
+    // what a captured step passes, so a replay follows a scheduler.
+    vector<Var*> rate;
     vector<Var*> new_parameters, new_velocities;
     float64 lr, momentum, weight_decay, dampening;
     bool nesterov, maximize;
+    // Whether `order_after_readers` has run: once, at construction.
+    bool ordered = false;
 
     // @attrs(multiple_outputs)
-    FusedSgdOp(vector<Var*>&& parameters, vector<Var*>&& velocities, vector<Var*>&& gradients, float64 lr, float64 momentum, float64 weight_decay, float64 dampening, bool nesterov, bool maximize);
+    FusedSgdOp(vector<Var*>&& parameters, vector<Var*>&& velocities, vector<Var*>&& gradients, float64 lr, float64 momentum, float64 weight_decay, float64 dampening, bool nesterov, bool maximize, vector<Var*>&& rate={});
 
     const char* name() const override { return "fused_sgd"; }
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;

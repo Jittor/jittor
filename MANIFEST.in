@@ -421,10 +421,16 @@ include src/bindings/pyjt/py_arg_printer.h
 include src/bindings/pyjt/py_array_op.cc
 include src/bindings/pyjt/py_caller.cc
 include src/bindings/pyjt/py_caller.h
+include src/bindings/pyjt/py_compat_fast.cc
+include src/bindings/pyjt/py_compat_fast.h
 include src/bindings/pyjt/py_converter.h
 include src/bindings/pyjt/py_dispatch_context.h
 include src/bindings/pyjt/py_dtype.cc
 include src/bindings/pyjt/py_dtype.h
+include src/bindings/pyjt/py_kernel_select.cc
+include src/bindings/pyjt/py_kernel_select.h
+include src/bindings/pyjt/py_module_call.cc
+include src/bindings/pyjt/py_module_call.h
 include src/bindings/pyjt/py_obj_holder.h
 include src/bindings/pyjt/py_ring_buffer.cc
 include src/bindings/pyjt/py_ring_buffer.h
