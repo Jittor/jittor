@@ -1106,6 +1106,12 @@ def structure(session):
     _install_compat_source(session, env)
     test_paths = tuple(session.posargs) or STRUCTURE_TESTS
     if not session.posargs:
+        # Portable adapter fixtures install fake modules: execute them outside
+        # the Torch-mode structure process. Independent adapter distributions
+        # may be absent from a core-only checkout.
+        offline = REPO_ROOT / "adapters/tests/test_deepspeed_offline.py"
+        if offline.is_file():
+            session.run("python", str(offline), "-v", env=env)
         native_env = env.copy()
         native_env["JITTOR_TORCH_SHIM"] = "0"
         session.run("python", "-m", "pytest", "-v", "--timeout=600",
@@ -1793,6 +1799,8 @@ def full(session):
 ECOSYSTEM_TESTS = (
     "compat/tests/torch/test_ecosystem_parity.py",
     "compat/tests/torch/test_ecosystem_speed.py",
+    # DeepSpeed is gated at L0; it does not claim the numerical/performance tier.
+    "compat/tests/torch/test_deepspeed_l0.py",
 )
 
 #: Speed ceiling for the nightly ecosystem gate: Jittor may take at most this
@@ -1880,6 +1888,36 @@ def ecosystem(session):
         external=True, env=env,
     )
     _run_pytest_once(session, ECOSYSTEM_TESTS, env, timeout=3600)
+
+
+@nox.session(python="3.11", venv_backend="venv")
+def deepspeed_l0(session):
+    """Required CPU DeepSpeed L0 gate, with one prebuilt wheel on both sides."""
+    _root, env = _session_env(session, "deepspeed-l0")
+    if os.environ.get("JITTOR_TEST_DEVICES", "cpu").strip().lower() != "cpu":
+        session.error("This nightly session is CPU-only; use the documented NPU pytest gate in an allocation")
+    oracle = os.environ.get("REAL_TORCH_PYTHON", "").strip()
+    wheel = os.environ.get("JITTOR_DEEPSPEED_WHEEL", "").strip()
+    if not oracle or not Path(oracle).is_file():
+        session.error("REAL_TORCH_PYTHON must be an independent binary PyTorch interpreter")
+    if not wheel or not Path(wheel).is_file():
+        session.error("JITTOR_DEEPSPEED_WHEEL must name the validated 0.17.6 wheel")
+    session.install(PYTEST, PYTEST_TIMEOUT, SETUPTOOLS, WHEEL, SCIPY, "pillow==11.0.0",
+                    "-r", str(REPO_ROOT / "requirements/deepspeed-l0.txt"))
+    session.install("--no-deps", "--no-build-isolation", str(REPO_ROOT / "adapters"))
+    # Build once in the oracle; never build an extension against the shim.
+    session.install("--no-deps", wheel)
+    env.update(REAL_TORCH_PYTHON=oracle, JITTOR_REQUIRE_REAL_TORCH="1",
+               JITTOR_REQUIRE_DEEPSPEED="1", JITTOR_TEST_REQUIRE_EXECUTION="1",
+               TORCH_DEVICE_BACKEND_AUTOLOAD="0",
+               JITTOR_TORCH_SHIM="1", HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1",
+               JT_BACKEND="cpu", JITTOR_TEST_DEVICES="cpu")
+    session.run(oracle, "-c",
+                "import torch; assert not hasattr(torch, '_torch_compat_install_context'); "
+                "print('oracle', torch.__version__, torch.__file__)",
+                external=True, env=dict(env, JITTOR_TORCH_SHIM="0"))
+    _run_pytest_once(session, ("compat/tests/torch/test_deepspeed_l0.py",),
+                     env, timeout=3600)
 
 
 @nox.session(python=False)

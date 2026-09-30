@@ -1,0 +1,11 @@
+# Both interpreters use these pinned DeepSpeed dependencies; torch is separate.
+einops==0.8.2
+hjson==3.1.0
+msgpack==1.2.2
+ninja==1.13.2
+numpy==1.26.4
+packaging==26.3
+psutil==7.2.2
+py-cpuinfo==9.0.0
+pydantic==2.13.5
+tqdm==4.70.1
