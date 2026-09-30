@@ -39,6 +39,56 @@ def _bfloat16_round(values):
     return (bits & np.uint32(0xffff0000)).view(np.float32)
 
 
+def _sort_projection_records(torch_owner, device, check_device=None):
+    """FP32 sort values and input gradients for distinct and stable tied keys."""
+    shape = (3, 4)
+    grid = np.arange(np.prod(shape), dtype=np.float32).reshape(shape)
+    unique = ((grid * 7) % 13 - 6) / 8
+    tied = grid % 2
+    projection = ((grid * 5) % 17 - 8) / 16
+    records = []
+    for tied_keys, data in ((False, unique), (True, tied)):
+        for axis in (0, -1):
+            for descending in (False, True):
+                for stable in ((True,) if tied_keys else (False, True)):
+                    source = torch_owner.tensor(
+                        data, dtype=torch_owner.float32, device=device,
+                        requires_grad=True)
+                    weight = torch_owner.tensor(
+                        projection, dtype=torch_owner.float32, device=device)
+                    ordered = torch_owner.sort(
+                        source, dim=axis, descending=descending, stable=stable)
+                    loss = (ordered.values * weight).sum()
+                    loss.backward()
+                    for value in (source, ordered.values, source.grad):
+                        assert value.dtype == torch_owner.float32
+                        assert tuple(value.shape) == shape
+                    assert ordered.indices.dtype == torch_owner.int64
+                    assert tuple(ordered.indices.shape) == shape
+                    assert loss.dtype == torch_owner.float32
+                    assert loss.numel() == 1
+                    for value in (source, weight, ordered.values,
+                                  ordered.indices, loss, source.grad):
+                        assert value.device.type == "npu"
+                    if check_device is not None:
+                        for value in (source, weight, ordered.values,
+                                      ordered.indices, loss, source.grad):
+                            check_device(value)
+                    values = ordered.values.detach().cpu().numpy()
+                    indices = ordered.indices.detach().cpu().numpy()
+                    gradient = source.grad.detach().cpu().numpy()
+                    assert np.isfinite(values).all()
+                    assert np.isfinite(gradient).all()
+                    assert np.isfinite(loss.detach().cpu().item())
+                    records.append({
+                        "tied": tied_keys, "axis": axis,
+                        "descending": descending, "stable": stable,
+                        "values": values.tolist(), "indices": indices.tolist(),
+                        "gradient": gradient.tolist(),
+                    })
+    return records
+
+
 @unittest.skipIf(not _test_capability.check_accelerator('acl', backend=jt).enabled, "No ACL found")
 class TestACLTorchCompat(unittest.TestCase):
     def setUp(self):
@@ -46,6 +96,43 @@ class TestACLTorchCompat(unittest.TestCase):
         self.assertIsNot(torch, jt)
         self.assertIsNot(torch.Tensor, jt.Var)
         self.assertIs(torch.Tensor._frontend_backend, jt)
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_sort_axes_options_and_projection_backward_matches_torch_npu(self):
+        import inspect
+        import json
+        import os
+        import subprocess
+        import tempfile
+        from _helpers.child_process import child_env, default_timeout
+
+        oracle = os.environ.get("REAL_TORCH_PYTHON", "")
+        if not oracle:
+            if os.environ.get("JITTOR_REQUIRE_REAL_TORCH") == "1":
+                self.fail("REAL_TORCH_PYTHON is required for sort gradients")
+            self.skipTest("independent PyTorch is not configured")
+        source = (
+            "import torch\n"
+            "assert not hasattr(torch, '_torch_compat_install_context')\n"
+            "import torch_npu, numpy as np, json\n"
+            "assert torch.npu.is_available()\n"
+            "torch.npu.set_device(0)\n"
+        )
+        source += inspect.getsource(_sort_projection_records)
+        source += "\nprint(json.dumps(_sort_projection_records(torch, 'npu:0')))\n"
+        env = child_env(without_torch_mode=True, repo_paths=False)
+        with tempfile.TemporaryDirectory() as cwd:
+            result = subprocess.run(
+                [oracle, "-c", source], env=env, cwd=cwd,
+                capture_output=True, text=True, timeout=default_timeout())
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        expected = json.loads(result.stdout.strip().splitlines()[-1])
+        before = jt.core.backend_fallback_count()
+        actual = _sort_projection_records(
+            torch, "npu:0", lambda value: _assert_acl_device(self, value))
+        self.assertEqual(len(actual), 12)
+        self.assertEqual(actual, expected)
+        self.assertEqual(jt.core.backend_fallback_count(), before)
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_independent_frontend_tensor_executes_on_acl(self):

@@ -126,6 +126,12 @@ class SetItemACL(jt.Function):
                 )[0]
                 return result
 
+        if _jittor_dtype_name(x.dtype) == "bool":
+            # CANN StridedSliceAssignV2 has no bool signature. Use its int32
+            # signature, then restore the public bool result on the device.
+            cast_value = value.int32() if isinstance(value, jt.Var) else value
+            return SetItemACL()(x.int32(), slices, cast_value).cast("bool")
+
         # assert isinstance(value,jt.Var), "value must be jt.Var"
         # self.value_shape = value.shape
         if not isinstance(slices, tuple):
