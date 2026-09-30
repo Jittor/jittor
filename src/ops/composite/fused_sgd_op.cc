@@ -44,6 +44,12 @@ void FusedSgdOp::infer_shape() {
         new_parameters[i]->share_with(parameters[i]);
         new_velocities[i]->share_with(velocities[i]);
     }
+    if (!ordered) {
+        ordered = true;
+        vector<Var*> written(parameters);
+        written.insert(written.end(), velocities.begin(), velocities.end());
+        order_after_readers(this, written);
+    }
 }
 
 void FusedSgdOp::jit_prepare(JK& jk) {

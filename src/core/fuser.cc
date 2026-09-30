@@ -567,10 +567,19 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
             continue;
         }
         int root = find_father(producer->batch_index_at(tt));
+        // Whether an op of this batch waits on the var through a control
+        // edge (`order_after_readers`), whether one reads its data, and
+        // whether anything outside the batch still will.
+        bool ordered_before = false, read_here = false, read_later = var->holder;
         for (auto o : var->_outputs) {
-            if (o.index < 0) continue;  // control edge, carries no data
+            if (o.index < 0) {
+                if (o.node->op()->tflag == tt) ordered_before = true;
+                continue;
+            }
             auto consumer = o.node->op();
+            if (consumer->tflag != tt) read_later = true;
             if (consumer->tflag == tt) {
+                read_here = true;
                 if (all_consumers_fusable && !edge_fusable(var, consumer, producer, 1))
                     all_consumers_fusable = 0;
                 if (consumer->type() != OpType::reduce) all_consumers_reduce = 0;
@@ -580,7 +589,11 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
                     var_fused[i] = 1;
             }
         }
-        if (all_consumers_fusable == 0 || var->flag(VarFlags::_out_hint)) {
+        // A var the in-place op waits on is materialized unless it is a mere
+        // intermediate of this batch: fused away, it would be recomputed
+        // when read later -- from the inputs the op is about to overwrite.
+        if (all_consumers_fusable == 0 || var->flag(VarFlags::_out_hint)
+                || (ordered_before && (!read_here || read_later))) {
             var_fused[i] = 1;
         } else if (var_fused[i]) {
             // The var crosses a kernel boundary but every individual edge is

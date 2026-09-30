@@ -730,7 +730,11 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
                 }
                 sync_times++;
             }
-            for (Var* v : op->inputs()) {
+            for (auto& edge : op->_inputs) {
+                // A control edge orders two ops and carries no data: what it
+                // comes from may have no memory of its own (fused away).
+                if (edge.reverse().index < 0) continue;
+                Var* v = edge.node->var();
                 // An input with no allocator has no memory to read, and the
                 // launch below would dereference the null one -- a segfault
                 // inside the kernel, with nothing naming the var. It happens:
@@ -750,8 +754,10 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
                         migrate_to_cpu(var, allocator);
             }
         } else {
-            for (Var* v : op->inputs()) {
+            for (auto& edge : op->_inputs) {
                 if (op->flag(OpFlags::_no_input_storage)) break;
+                if (edge.reverse().index < 0) continue;  // a control edge
+                Var* v = edge.node->var();
                 check_input_is_backed(v, op);
                 // device_copy deliberately accepts a host-resident input and
                 // owns its H2D transfer. Migrating it here first would mutate
@@ -774,8 +780,10 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
                 if (vi.type == 0)
                     ASSERT(vi.var->mem_ptr || vi.var->size == 0) << vi.var;
         } else if (!op->flag(OpFlags::_no_input_storage)) {
-            for (auto* v : op->inputs())
-                ASSERT(v->mem_ptr || v->size == 0) << v;
+            for (auto& edge : op->_inputs)
+                if (edge.reverse().index >= 0)
+                    ASSERT(edge.node->var()->mem_ptr || edge.node->var()->size == 0)
+                        << edge.node->var();
         }
         #endif
         exe.last_is_cuda = is_cuda;

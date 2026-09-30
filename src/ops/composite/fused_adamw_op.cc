@@ -48,6 +48,13 @@ void FusedAdamwOp::infer_shape() {
         new_moments[i]->share_with(moments[i]);
         new_variances[i]->share_with(variances[i]);
     }
+    if (!ordered) {
+        ordered = true;
+        vector<Var*> written(parameters);
+        written.insert(written.end(), moments.begin(), moments.end());
+        written.insert(written.end(), variances.begin(), variances.end());
+        order_after_readers(this, written);
+    }
 }
 
 void FusedAdamwOp::jit_prepare(JK& jk) {

@@ -13,6 +13,8 @@ struct FusedSgdOp : Op {
     vector<Var*> new_parameters, new_velocities;
     float64 lr, momentum, weight_decay, dampening;
     bool nesterov, maximize;
+    // Whether `order_after_readers` has run: once, at construction.
+    bool ordered = false;
 
     // @attrs(multiple_outputs)
     FusedSgdOp(vector<Var*>&& parameters, vector<Var*>&& velocities, vector<Var*>&& gradients, float64 lr, float64 momentum, float64 weight_decay, float64 dampening, bool nesterov, bool maximize, vector<Var*>&& rate={});
