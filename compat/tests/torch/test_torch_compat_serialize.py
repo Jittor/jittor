@@ -230,6 +230,33 @@ class TestStateDict(Base):
 
         both_devices(body)
 
+    def test_load_state_dict_preserves_target_device(self):
+        def body(dev):
+            dst = torch.nn.Linear(4, 3)
+            before = {
+                name: (int(value.placement_backend), int(value.device_id))
+                for name, value in dst.named_parameters()
+            }
+            source = {
+                name: value.detach().cpu()
+                for name, value in torch.nn.Linear(4, 3).state_dict().items()
+            }
+            dst.load_state_dict(source)
+            after = {
+                name: (int(value.placement_backend), int(value.device_id))
+                for name, value in dst.named_parameters()
+            }
+            self.assertEqual(after, before, f"target placement {dev}")
+            output = dst(torch.ones((2, 4)))
+            output.sync()
+            self.assertEqual(
+                int(output.placement_backend),
+                next(iter(before.values()))[0],
+                f"forward placement {dev}",
+            )
+
+        both_devices(body)
+
     def test_state_dict_load_state_dict_multilayer(self):
         # A small Sequential-like stack: keys are dotted submodule paths.
         rs = np.random.RandomState(11)

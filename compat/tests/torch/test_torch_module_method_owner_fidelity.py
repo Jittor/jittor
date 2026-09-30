@@ -447,6 +447,28 @@ def test_get_buffer_rejects_a_parameter():
         net.get_buffer("lin.weight")
 
 
+def test_get_parameter_and_buffer_resolve_tied_aliases():
+    net = torch.nn.Module()
+    net.left = torch.nn.Linear(2, 2, bias=False)
+    net.right = torch.nn.Linear(2, 2, bias=False)
+    net.right.weight = net.left.weight
+    net.register_buffer("first", torch.ones(1))
+    net.register_buffer("second", net.first)
+
+    assert [name for name, _ in net.named_parameters()] == ["left.weight"]
+    assert [name for name, _ in net.named_parameters(remove_duplicate=False)] == [
+        "left.weight", "right.weight"
+    ]
+    assert net.get_parameter("left.weight") is net.left.weight
+    assert net.get_parameter("right.weight") is net.right.weight
+    assert [name for name, _ in net.named_buffers()] == ["first"]
+    assert [name for name, _ in net.named_buffers(remove_duplicate=False)] == [
+        "first", "second"
+    ]
+    assert net.get_buffer("first") is net.first
+    assert net.get_buffer("second") is net.second
+
+
 def test_get_submodule_resolves_dotted_path():
     net = _Net()
     assert net.get_submodule("lin") is net.lin

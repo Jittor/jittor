@@ -25,6 +25,10 @@ _SAFE_GLOBALS = frozenset((
     ("_codecs", "encode"),
     ("jittor.compat.torch.nested", "_rebuild_var_from_numpy"),
     ("jittor.compat.torch.nested", "_rebuild_nested_tensor"),
+    # ``torch.Size`` is implemented by the immutable tuple subclass
+    # ``_TorchSize``. Portable checkpoints pickle the concrete class name,
+    # so permit that exact value type as well as its public alias below.
+    ("jittor.compat.torch.nested", "_TorchSize"),
     # torch.dtype/torch.device are plain value objects here (an immutable dtype
     # and a name/index pair); older checkpoints reference them by name.
     ("jittor.compat.torch.types", "dtype"),

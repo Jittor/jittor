@@ -111,6 +111,8 @@ class LayerInitializer:
         self.original = native.__init__
         self.__wrapped__ = self.original
         self.__name__ = "__init__"
+        self.__code__ = self.original.__code__
+        self.__defaults__ = self.original.__defaults__
 
     def __get__(self, instance, owner=None):
         return self if instance is None else types.MethodType(self, instance)

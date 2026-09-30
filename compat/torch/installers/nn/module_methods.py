@@ -293,7 +293,8 @@ def _named_parameters(self, prefix="", recurse=True, remove_duplicate=True):
     """Torch's ``named_parameters``: an iterator, with prefix/dedup."""
     reg = get_tensor_state(jt).leaf_params
     seen = set()
-    for name, v in self._iter_named_vars("parameters", recurse):
+    for name, v in self._iter_named_vars(
+            "parameters", recurse, remove_duplicate=False):
         if remove_duplicate and id(v) in seen:
             continue
         seen.add(id(v))
@@ -1137,8 +1138,8 @@ register_fidelity(
 register_fidelity(
     "torch.nn.Module.named_parameters", _named_parameters, Fidelity.APPROXIMATE,
     "Yields (name, Var) for trainable Vars reachable by attribute walk. "
-    "recurse= and prefix= honored; remove_duplicate= is accepted and always "
-    "de-duplicates. Order follows attribute definition order, which matches "
+    "recurse=, prefix= and remove_duplicate= honored. Order follows attribute "
+    "definition order, which matches "
     "torch for modules built in __init__ but is not guaranteed for modules "
     "assembled dynamically.")
 register_fidelity(
