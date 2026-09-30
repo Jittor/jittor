@@ -68,7 +68,12 @@ def _adamw_skips_step_on_device(self):
     update leaves the decision to the scaler, on the host.
     """
     from jittor._runtime.dispatch import select_kernel
-    from .optimizer_api import _torch_param_steps
+    from .optimizer_api import (
+        _ensure_adam_group_state, _sync_published_parameter_grads,
+        _torch_param_steps,
+    )
+    if not getattr(self, "_torch_backward_advanced_n_step", False):
+        _sync_published_parameter_grads(self)
     for pg in self.param_groups:
         fused = pg.get("fused", getattr(self, "fused", None))
         if fused is False or (fused is not True and pg.get("foreach") is False):
@@ -76,6 +81,15 @@ def _adamw_skips_step_on_device(self):
         if pg.get("amsgrad") or pg.get("maximize"):
             return False
         grads = pg.get("grads") or [None] * len(pg["params"])
+        if not any(
+                isinstance(p, jt.Var) and p.requires_grad
+                and isinstance(g, jt.Var) and list(g.shape) == list(p.shape)
+                for p, g in zip(pg["params"], grads)):
+            continue
+        # This query runs before step(): DeepSpeed may have replaced the
+        # group's parameters, and Adam moments stay lazy until an update.
+        # The kernel's capability check requires real, shape-matching buffers.
+        _ensure_adam_group_state(pg)
         steps = _torch_param_steps(pg)
         active = [(p, m, v, g, int(steps[i])) for i, (p, g, v, m) in enumerate(zip(
             pg["params"], grads, pg["values"], pg["m"]))
@@ -169,7 +183,7 @@ def _install_optimizers(g, registry=None):
         AdamW.step = adamw_step
         AdamW._torch_adamw_step = True
         AdamW._skips_step_on_device = _adamw_skips_step_on_device
-    for _cls_name, _native_kind in (("SGD", "sgd"), ("RMSprop", "rmsprop"), ("Adan", "adan")):
+    for _cls_name, _native_kind in (("SGD", "sgd"), ("RMSprop", "rmsprop"), ("Adan", "adan"), ("Adagrad", "adagrad")):
         _cls = getattr(_optim, _cls_name, None)
         if _cls is not None and not getattr(_cls, "_torch_closure_step", False):
             _native_steps[_native_kind] = _cls.step
@@ -220,12 +234,17 @@ def _install_optimizers(g, registry=None):
         Fidelity.APPROXIMATE,
         "Installation-owned types reuse native optimizer mathematics; supported "
         "group options, closure behavior and device capabilities are restricted")
+    register_api_bindings(_optim, "torch.optim", ("Adagrad",),
+        Fidelity.APPROXIMATE,
+        "Native dense FP32 Adagrad; eager sum/CPU step state and scalar group "
+        "options; sparse, complex, foreach, fused, differentiable and FSDP "
+        "updates explicitly unsupported")
     register_api_bindings(Base, "torch.optim.Optimizer",
         ("__init__", "state", "state_dict", "load_state_dict", "zero_grad", "backward"),
         Fidelity.APPROXIMATE,
         "State and gradient adapters over native parameter groups; only known "
         "optimizer state layouts and supported restore formats are handled")
-    for name in ("SGD", "Adam", "AdamW", "RMSprop", "Adan"):
+    for name in ("SGD", "Adam", "AdamW", "RMSprop", "Adan", "Adagrad"):
         algorithm = getattr(_optim, name, None)
         if algorithm is not None:
             register_api_bindings(algorithm, "torch.optim." + name,
@@ -245,6 +264,7 @@ def install_module_keys(ctx):
         ("adam", "Adam", None),
         ("adamw", "AdamW", "Adam"),
         ("rmsprop", "RMSprop", None),
+        ("adagrad", "Adagrad", None),
     ):
         optim_module = registry.ensure("torch.optim." + suffix)
         value = getattr(optim, class_name, None)

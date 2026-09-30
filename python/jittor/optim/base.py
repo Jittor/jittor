@@ -24,7 +24,7 @@ def _param_requires_grad(p):
     return bool(p.requires_grad)
 
 #: Group-dict keys that are not per-parameter state buffers.
-_NON_STATE_KEYS = frozenset(("params", "grads"))
+_NON_STATE_KEYS = frozenset(("params", "grads", "_adagrad_steps"))
 
 
 def _state_buffer(param):
@@ -62,9 +62,23 @@ def _realign_state_buffers(param_groups):
             if key in _NON_STATE_KEYS or type(buffers) is not list:
                 continue
             if len(buffers) != len(params):
+                if all(isinstance(param, jt.Var) for param in params) and all(
+                        isinstance(buffer, jt.Var) for buffer in buffers):
+                    group[key] = [_state_buffer(param) for param in params]
+                    if isinstance(group.get("_torch_steps"), list):
+                        group["_torch_steps"] = [0] * len(params)
                 continue
-            for param, buffer in zip(params, buffers):
+            for i, (param, buffer) in enumerate(zip(params, buffers)):
                 if not isinstance(buffer, jt.Var) or not isinstance(param, jt.Var):
+                    continue
+                if list(buffer.shape) != list(param.shape):
+                    # torch creates optimizer state lazily. If a framework such
+                    # as DeepSpeed replaces a group parameter before first step,
+                    # its state therefore follows the replacement's shape.
+                    buffers[i] = _state_buffer(param)
+                    steps = group.get("_torch_steps")
+                    if isinstance(steps, list) and i < len(steps):
+                        steps[i] = 0
                     continue
                 # The same raw placement is the same device, whatever the
                 # ambient flag says -- and it is what every step of an
