@@ -236,6 +236,28 @@ class TestParallelPass3(unittest.TestCase):
                     np.testing.assert_allclose(got, flat[start:start + n].astype("float32") * 2 + 1,
                                                rtol=1e-2, atol=1e-2)
 
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled,
+                         "the vector loads are a CUDA kernel's")
+    def test_a_reduction_target_is_initialised_as_its_atomics_expect(self):
+        """The kernel filling a reduction's target is not vectorised.
+
+        A float max or min is reduced by integer atomics over an ordered
+        encoding of its target, and FloatAtomicFixPass rewrites the stores
+        that fill it into that encoding by their spelling. Vector stores do
+        not have it: vectorised, the fill left plain floats under the integer
+        atomics, and a pooling written as a reduction came out wrong.
+        """
+        rng = np.random.RandomState(4)
+        x_np = rng.randn(10, 6, 28, 28).astype("float32")
+        folded = x_np.reshape(10, 6, 14, 2, 14, 2)
+        with jt.flag_scope(use_cuda=1, vectorize_flat_loops=1):
+            x = jt.array(x_np)
+            viewed = x.reshape(10, 6, 14, 2, 14, 2)
+            np.testing.assert_array_equal(viewed.max(dims=(3, 5)).numpy(), folded.max(axis=(3, 5)))
+            np.testing.assert_array_equal(viewed.min(dims=(3, 5)).numpy(), folded.min(axis=(3, 5)))
+            np.testing.assert_allclose(viewed.sum(dims=(3, 5)).numpy(), folded.sum(axis=(3, 5)),
+                                       rtol=1e-5, atol=1e-5)
+
     def reduce_check(self, ndim, depth, tdim, rdim, has_atomic, order=[], split=[], **args):
         shape = [8]*ndim
         a = jt.random(shape)

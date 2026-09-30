@@ -352,15 +352,15 @@ namespace {
 struct BatchReleaseRecord {
     vector<Var*> released;
     BatchReleaseRecord() {
-        std::lock_guard<std::recursive_mutex> guard(graph_mutation_mutex());
+        std::lock_guard<GraphMutationMutex> guard(graph_mutation_mutex());
         batch_released_vars = &released;
     }
     ~BatchReleaseRecord() {
-        std::lock_guard<std::recursive_mutex> guard(graph_mutation_mutex());
+        std::lock_guard<GraphMutationMutex> guard(graph_mutation_mutex());
         batch_released_vars = nullptr;
     }
     bool holds(Var* v) {
-        std::lock_guard<std::recursive_mutex> guard(graph_mutation_mutex());
+        std::lock_guard<GraphMutationMutex> guard(graph_mutation_mutex());
         return std::find(released.begin(), released.end(), v) != released.end();
     }
 };
@@ -489,6 +489,15 @@ static bool reads_before_writing(Var* v, Var* out, FusedOp& fused) {
 // with host mirrors, fetched losses.
 static const int64 reuse_min_bytes = 256 << 10;
 
+// Whether any output of the segment is large enough and unallocated, the
+// first thing `reuse_dying_inputs_of` asks: most segments have none.
+static bool has_reuse_candidate(FusedOp& fused) {
+    for (auto& info : fused.vars)
+        if (info.type == 2 && info.var->size >= reuse_min_bytes && !info.var->mem_ptr)
+            return true;
+    return false;
+}
+
 static void reuse_dying_inputs_of(FusedOp& fused, const vector<Var*>& last_used,
                                   const std::unordered_set<Var*>& kept_pinned,
                                   Allocator* allocator, vector<Var*>& taken) {
@@ -497,7 +506,6 @@ static void reuse_dying_inputs_of(FusedOp& fused, const vector<Var*>& last_used,
         Var* out = out_info.var;
         // Dense, in any layout: a channels-last activation takes over a
         // channels-last input laid out the same way.
-        if (getenv("DBG_REUSE") && out_info.type == 2) LOGi << "out" << out << out->storage_strides << "mem" << (out->mem_ptr!=nullptr) << "sharing" << out->is_sharing() << "span" << out->storage_span_bytes() << out->size;
         if (out_info.type != 2 || out->mem_ptr || out->is_sharing()
                 || out->storage_span_bytes() != out->size
                 || out->flag(VarFlags::_host_resident) || out->size < reuse_min_bytes)
@@ -515,7 +523,6 @@ static void reuse_dying_inputs_of(FusedOp& fused, const vector<Var*>& last_used,
                     || (best && v->id < best->id)
                     || std::find(taken.begin(), taken.end(), v) != taken.end())
                 continue;
-            if (getenv("DBG_REUSE")) LOGi << "cand" << out << out->storage_strides << "<-" << v << v->storage_strides << "kg" << keep_graph << "dies" << dies_after(v, fused, last_used, kept_pinned, memo) << "rbw" << reads_before_writing(v, out, fused) << "kept" << (int)v->flag(VarFlags::_kept) << "lastuse" << (std::find(last_used.begin(), last_used.end(), v) != last_used.end());
             if (dies_after(v, fused, last_used, kept_pinned, memo) && reads_before_writing(v, out, fused))
                 best = v;
         }
@@ -580,6 +587,10 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         }
     }
     vector<Var*> reused_inputs;
+    // The key each operator was prepared with, for the failure report below:
+    // copied because running the operator may reuse the shared key buffer.
+    // One buffer for the batch, so the copy is not an allocation per op.
+    string prepared_jit_key;
     for (uint rid=0; rid<queue.size(); rid++) {
         // Segment rid-1 has run, whichever `continue` it left by: nothing later
         // in the batch uses the vars scheduled after it, so their memory goes
@@ -600,7 +611,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         int root = queue[rid];
         Op* op = ops[root];
         bool is_fused_op = false;
-        string prepared_jit_key;
+        prepared_jit_key.clear();
         try {
         if (op->type() != OpType::other) {
             op = &fused_op;
@@ -673,7 +684,8 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
                 swap_epoch.mark(var);
             }
         } else {
-            if (reuse_dying_inputs && is_fused_op && keep_graph != 1 && plan.batch_hold) {
+            if (reuse_dying_inputs && is_fused_op && keep_graph != 1 && plan.batch_hold
+                    && has_reuse_candidate(fused_op)) {
                 vector<Var*> last_used;
                 for (int index : plan.release_after[rid]) last_used.push_back(plan.all_vars[index]);
                 // What running the segment would flag anyway (see below), so
@@ -693,7 +705,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         trace_op.allocated();
         LOGvvv << "Run" << op << "inputs:" << op->inputs() << "outputs:" << op->outputs();
         op->prepare_execution(jkl);
-        prepared_jit_key = jkl.to_string();
+        prepared_jit_key.assign(jkl.to_cstring(), jkl.size);
         bool is_cuda = op->executes_on_accelerator();
         if (PREDICT_BRANCH_NOT_TAKEN(graph_capture_recording) && !is_cuda
                 && !graph_capture_launches_nothing(op))

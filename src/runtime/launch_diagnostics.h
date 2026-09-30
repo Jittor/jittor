@@ -19,7 +19,9 @@ struct LaunchRecord {
     char name[96] = {};
     uint32 fused_ids[8] = {};
     uint32 fused_count = 0;
-    LaunchOrigin location;
+    // The Python call site is `origin`, an interned id; the report resolves
+    // it. Copying the resolved path into every record -- 392 bytes, under
+    // the history's lock -- was most of what recording a launch cost.
 };
 
 class LaunchHistory {
@@ -37,7 +39,7 @@ public:
     // The location an `intern_origin` id stands for; false for 0 or an
     // unknown id. Used by the step tracer to name call sites.
     bool origin(uint64 id, LaunchOrigin& out);
-    void record(LaunchRecord record);
+    void record(const LaunchRecord& record);
     string report(Device device, bool exact_stream=false, uintptr_t stream=0);
 };
 

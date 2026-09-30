@@ -206,6 +206,10 @@ class TestFuseIntoReduce(JittorTestCase):
         stored = re.search(r"(op\d+_z)p\[\w+\] = \1d;", fused[0]).group(1)
         body = fused[0].split("__global__", 1)[-1]
         self.assertNotRegex(body, r"=[^;]*\b" + stored + r"p\[")
+        # The register is declared at the var's own type, spelled as a type:
+        # an op's type macros are named after its template parameters, and
+        # `broadcast_to` stores its `z` as `Tx`, so `opN_Tz` did not compile.
+        self.assertRegex(body, r"\bfloat32 " + stored + r"d = ")
         ref = ((x.numpy() * 0.5 + 1.0) * g.numpy()).sum(0)
         np.testing.assert_allclose(s.numpy(), ref, rtol=1e-4, atol=1e-3)
 

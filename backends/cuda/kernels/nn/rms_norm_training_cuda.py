@@ -6,7 +6,7 @@ import math
 import jittor as jt
 from jittor._runtime.core_api import _output_requires_grad
 from jittor._runtime.backend_libraries import library_resource
-from jittor._runtime.dispatch import optional_kernel
+from jittor._runtime.dispatch import native_rule, optional_kernel
 
 from .rms_norm_cuda import _autocast_enabled
 
@@ -172,6 +172,7 @@ def _rms_norm_training_cuda_cls(hidden_size, epsilon):
     return RMSNormTrainingCUDA
 
 
+@native_rule("rms_norm_training")
 def _supports_rms_norm_training(x, gamma, epsilon=1e-6):
     if not (
         isinstance(x, jt.Var)

@@ -95,9 +95,17 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
     //                so the question is whether the two ops may merge).
     // relation == 0: `op` and `other` both read `var` (siblings, so the
     //                question is only whether they may share one kernel).
+    // `requested_backend()` walks an op's outputs for a placement, and the
+    // passes below ask it of both ends of every edge they look at, several
+    // times over. Asked once per op instead.
+    vector<BackendId> op_backend(ops.size());
+    for (uint i = 0; i < ops.size(); i++) {
+        if (i + 8 < ops.size()) __builtin_prefetch(ops[i + 8]);
+        op_backend[i] = ops[i]->requested_backend();
+    }
     auto edge_fusable = [&](Var* var, Op* op, Op* other, int relation) -> bool {
         if (op->float32_precision != other->float32_precision) return false;
-        if (op->requested_backend() != other->requested_backend()) return false;
+        if (op_backend[op->batch_index_at(tt)] != op_backend[other->batch_index_at(tt)]) return false;
         if (var->flag(VarFlags::_stop_fuse)) return false;
         if (relation == 1) {
             // vars before start_var_num are the batch's inputs: they already
@@ -435,7 +443,25 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
     // ViT-B/16 training step. Levels are what made pass 3 acyclic, so a merge
     // across them checks it: no path may leave one of the two groups and
     // reach the other through a third.
-    if (fuse_into_reduce) {
+    // Only a reduction whose input comes from another fusable group can take
+    // anything in; most batches have none, and the member lists below cost an
+    // allocation per group to build.
+    bool reduce_candidate = false;
+    if (fuse_into_reduce)
+        for (uint i = 0; i < ops.size() && !reduce_candidate; i++) {
+            Op* reduce = ops[i];
+            if (reduce->type() != OpType::reduce) continue;
+            for (Var* var : reduce->inputs()) {
+                if (var->tflag != tt || var->batch_index_at(tt) < start_var_num) continue;
+                Op* producer = var->input();
+                if (!producer || producer->tflag != tt) continue;
+                if (find_father(producer->batch_index_at(tt)) == find_father(i)) continue;
+                if (!edge_fusable(var, reduce, producer, 1)) continue;
+                reduce_candidate = true;
+                break;
+            }
+        }
+    if (reduce_candidate) {
         vector<vector<int>> gm(ops.size());
         for (uint i = 0; i < ops.size(); i++) gm[find_father(i)].push_back(i);
         auto consumers_of = [&](int op_index, auto&& func) {

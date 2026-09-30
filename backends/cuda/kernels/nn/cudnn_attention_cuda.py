@@ -274,17 +274,23 @@ def _mask_bias(attn_mask, query_dims, key_dims, dtype):
 
 
 def _cudnn_fused_attention(query, key, value, attn_mask=None, dropout_p=0.0,
-                           is_causal=False, scale=None):
-    """Run attention through cuDNN, or return None to decline."""
+                           is_causal=False, scale=None, *, grouped=False):
+    """Run attention through cuDNN, or return None to decline.
+
+    ``grouped``: `key` and `value` may have fewer heads than `query`, each
+    shared by a group of query heads, which cuDNN reads in place.
+    """
     if float(dropout_p or 0.0) != 0.0:
         return None
     if len(query.shape) != 4 or len(key.shape) != 4 or len(value.shape) != 4:
         return None
-    # Equal head counts: `nn.scaled_dot_product_attention` has no enable_gqa,
-    # so a mismatch is the caller's error to raise on the path below (the Torch
-    # frontend expands grouped heads before it gets here).
     if tuple(key.shape) != tuple(value.shape) or query.shape[0] != key.shape[0] \
-            or query.shape[1] != key.shape[1] or query.shape[3] != key.shape[3]:
+            or query.shape[3] != key.shape[3]:
+        return None
+    # Equal head counts through `nn.fused_attention`: it has no enable_gqa, so
+    # a mismatch there is the caller's error to raise on the path below.
+    heads, key_heads = int(query.shape[1]), int(key.shape[1])
+    if key_heads != heads and not (grouped and key_heads > 0 and heads % key_heads == 0):
         return None
     dtype = _jittor_dtype_name(query.dtype)
     if dtype not in _DTYPES or _jittor_dtype_name(key.dtype) != dtype \
@@ -367,3 +373,14 @@ def _supports(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False,
 # would take a float16 call off this kernel. `supports` looks at the query
 # only, which also keeps float32 for `fused_attention_f32_cuda.py`.
 register_kernel("nn.fused_attention", "cuda", _cudnn_fused_attention, supports=_supports)
+
+
+def _cudnn_fused_attention_gqa(query, key, value, **kwargs):
+    return _cudnn_fused_attention(query, key, value, grouped=True, **kwargs)
+
+
+# Grouped-query attention without repeating the key and value heads first: a
+# copy of every key and value head per query head, two operators and two
+# kernels per layer of every decoded token.
+register_kernel("nn.fused_attention_gqa", "cuda", _cudnn_fused_attention_gqa,
+                supports=_supports)

@@ -172,6 +172,20 @@ static void vectorize_flat_loop(KernelIR* ir, KernelIR* func, KernelIR* call, co
         vec_ptrs.push_back(kv.first);
     }
     if (vec_ptrs.empty() || widest == 0 || widest > 8) return;
+    // Not a reduction's target: the kernel that initialises one is left as
+    // it is. A float min/max reduction keeps its target as ordered ints for
+    // its atomics, and FloatAtomicFixPass -- after this one -- rewrites the
+    // initialising stores into that encoding by their `name[index] = ...`
+    // spelling, which a vector store does not have. Vectorised, the init
+    // kernel wrote plain floats under an integer atomicMax: a max-pooling
+    // written `x.reshape(...).max(dims)` came out wrong by whole units.
+    for (auto& p : vec_ptrs) {
+        if (!stored.count(p)) continue;
+        uint op_id, opvar_id; Op* op; Var* var;
+        if (pm->oc->try_get_op_var_by_name(p.substr(0, p.size() - 1), op_id, opvar_id, op, var)
+                && op->type() == OpType::reduce)
+            return;
+    }
     int lanes = 16 / widest;
     if (lanes < 2) return;
     std::sort(vec_ptrs.begin(), vec_ptrs.end());

@@ -7,11 +7,11 @@ from ....diagnostics import EXPECTED, swallowed, sdpa_flash_stats
 from ...context import get_install_context
 from ...fidelity import Fidelity, register_fidelity
 
-import os as _os
+from jittor._runtime.environment import getenv as _getenv
 
 
 def _sdpa_static_backend_cache_enabled():
-    return (_os.environ.get("JITTOR_TORCH_INFERENCE") or "").strip().lower() \
+    return (_getenv("JITTOR_TORCH_INFERENCE") or "").strip().lower() \
         in ("1", "true", "yes", "on")
 
 
@@ -53,7 +53,7 @@ def _sdpa_flash_template_dim(dim):
 
 
 def _sdpa_flash_float32_cast_target():
-    raw = (_os.environ.get("JITTOR_FLASH_ATTN_CAST_FLOAT32") or "").strip().lower()
+    raw = (_getenv("JITTOR_FLASH_ATTN_CAST_FLOAT32") or "").strip().lower()
     if raw in ("1", "true", "yes", "on", "fp16", "float16", "half"):
         return "float16"
     if raw in ("bf16", "bfloat16"):

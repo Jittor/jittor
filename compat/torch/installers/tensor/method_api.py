@@ -475,6 +475,10 @@ def _is_basic_index(index):
 
 
 def _torch_getitem(self, slices):
+    # A basic index, natively (`src/bindings/pyjt/py_compat_fast.h`).
+    fast = _owner.jt.core._fast_getitem(self, slices)
+    if fast is not NotImplemented:
+        return fast
     _context = get_install_context(_owner.jt)
     _native = _context.state["tensor_native_api"]
     _orig_getitem = _native['_orig_getitem']
@@ -1342,27 +1346,66 @@ def _true_division(self, other, opname):
     return _binary_native(opname, self, other)
 
 
+#: `src/bindings/pyjt/py_compat_fast.h`'s `_fast_binary`, once the tensor
+#: installer has bound it: the common operand pairs below, built without the
+#: frames. It answers None for everything else, which takes the Python path.
+#: The order of `_FAST_BINARY_OPERATORS` is the code each operator passes.
+_FAST_BINARY = None
+_FAST_BINARY_OPERATORS = ('__add__', '__radd__', '__sub__', '__rsub__',
+                          '__mul__', '__rmul__', '__truediv__', '__rtruediv__')
+
+
 def _tensor_add(self, other):
+    fast = _FAST_BINARY
+    if fast is not None:
+        out = fast(self, other, 0)
+        if out is not None:
+            return out
     return _promoting_binary(self, other, '__add__', False)
 
 
 def _tensor_radd(self, other):
+    fast = _FAST_BINARY
+    if fast is not None:
+        out = fast(self, other, 1)
+        if out is not None:
+            return out
     return _promoting_binary(self, other, '__radd__', True)
 
 
 def _tensor_sub(self, other):
+    fast = _FAST_BINARY
+    if fast is not None:
+        out = fast(self, other, 2)
+        if out is not None:
+            return out
     return _promoting_binary(self, other, '__sub__', False)
 
 
 def _tensor_rsub(self, other):
+    fast = _FAST_BINARY
+    if fast is not None:
+        out = fast(self, other, 3)
+        if out is not None:
+            return out
     return _promoting_binary(self, other, '__rsub__', True)
 
 
 def _tensor_mul(self, other):
+    fast = _FAST_BINARY
+    if fast is not None:
+        out = fast(self, other, 4)
+        if out is not None:
+            return out
     return _promoting_binary(self, other, '__mul__', False)
 
 
 def _tensor_rmul(self, other):
+    fast = _FAST_BINARY
+    if fast is not None:
+        out = fast(self, other, 5)
+        if out is not None:
+            return out
     return _promoting_binary(self, other, '__rmul__', True)
 
 
@@ -1391,10 +1434,20 @@ def _tensor_rpow(self, other):
 
 
 def _tensor_truediv(self, other):
+    fast = _FAST_BINARY
+    if fast is not None:
+        out = fast(self, other, 6)
+        if out is not None:
+            return out
     return _true_division(self, other, '__truediv__')
 
 
 def _tensor_rtruediv(self, other):
+    fast = _FAST_BINARY
+    if fast is not None:
+        out = fast(self, other, 7)
+        if out is not None:
+            return out
     return _true_division(self, other, '__rtruediv__')
 
 

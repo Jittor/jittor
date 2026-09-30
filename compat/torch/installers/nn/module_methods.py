@@ -8,7 +8,7 @@ import jittor as jt
 from jittor import nn
 from jittor.nn.backends import hooks as _backend_hooks
 from jittor.backends.cuda.kernels.nn.rms_norm_training_cuda import _rms_norm_training_cuda
-from jittor.backends.cuda.kernels.nn.rms_norm_cuda import _rms_norm_cuda
+from jittor.backends.cuda.kernels.nn.rms_norm_cuda import _rms_norm_cuda, _rms_norm_source
 from ...context import registry_for
 from ...fidelity import Fidelity, register_fidelity
 from ...nested import _torch_register_leaf
@@ -211,6 +211,9 @@ def _maybe_pipeline(result):
 #: outside the instance so it cannot show up in ``__dict__`` -- a module's
 #: field set is part of its published shape, and tests pin it exactly.
 _leaves_published = weakref.WeakSet()
+#: The same modules by id, for the native module call's shortcut to ask
+#: without a weak reference per call; an entry goes with its module.
+_published_ids = set()
 
 
 def _dispatch_module_call(self, *args, **kwargs):
@@ -250,6 +253,8 @@ def _call(self, *args, **kwargs):
     if self not in _leaves_published:
         try:
             _leaves_published.add(self)
+            _published_ids.add(id(self))
+            weakref.finalize(self, _published_ids.discard, id(self))
         except TypeError as exc:
             swallowed("torch/installers/nn.py _call: _leaves_published.add(self)", exc)
         try:
@@ -1172,6 +1177,25 @@ def _install_module_methods(nn, registry=None):
     if not hasattr(M, "forward"):
         M.forward = _forward_alias
     M._dispatch_call = _call
+    from ... import nn_frontend as _nn_frontend
+    from ...types import active_device_context as _active_device_context
+    from jittor.nn.functional import matrix as _matrix
+    from jittor.nn.modules.linear import Linear as _NativeLinear
+    # What `_dispatch_module_call` consults, so the native call can run it:
+    # see `module_call_bind` in src/bindings/pyjt/py_module_call.h.
+    _dispatch_parts = {
+        "prefer_forward": _prefer_forward,
+        "standard_rms_norm": _standard_rms_norm,
+        "linear_execute": _NativeLinear.execute,
+        "matmul_kernel": _matrix._cublas_matmul,
+        "rms_norm_inference": _rms_norm_cuda.__wrapped__,
+        "rms_norm_source": _rms_norm_source,
+        "acl_possible": bool(getattr(jt.compiler, "has_acl", 0)),
+    }
+    jt.core._module_call_bind(M, _call, _dispatch_module_call, _published_ids,
+                              _pipeline_state, _active_device_context,
+                              _nn_frontend.python_module_call, _dispatch_parts)
+    _nn_frontend._NATIVE_CALL = jt.core._module_call
     M.set_execution_pipelining = staticmethod(set_execution_pipelining)
     M.get_execution_pipelining = staticmethod(get_execution_pipelining)
     M.named_parameters = _named_parameters

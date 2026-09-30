@@ -119,9 +119,11 @@ static bool forward_stored_outputs(FusedOp* fused, PassManager* pm, KernelIR* ir
         code = code.substr(0, close) + " = " + name + "d;";
         // Kept at the stored type: a reader of the tensor sees the rounded
         // value, and a bfloat16 bias gradient summed from the float it was
-        // rounded from is not the gradient torch computes.
-        auto under = name.rfind('_');
-        string type = name.substr(0, under + 1) + "T" + name.substr(under + 1);
+        // rounded from is not the gradient torch computes. Spelled from the
+        // var's dtype, not from the op's type macros: those are named after
+        // the op's own template parameters, and `broadcast_to` stores its `z`
+        // as `Tx` -- there is no `opN_Tz` to name.
+        string type = vi.var->dtype().to_cstring();
         store->father->insert(pos, type + " " + name + "d = " + value + ";");
         unordered_set<string> names = {name};
         for (uint k = pos + 2; k < siblings.size(); k++)

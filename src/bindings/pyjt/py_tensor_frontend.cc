@@ -264,6 +264,14 @@ const FrontendPolicy& frontend_policy(PyObject* type) {
 
 void invalidate_frontend_policies() { frontend_policy_epoch++; }
 
+bool frontend_precision_tiers(PyObject* type, int& matmul, int& cudnn) {
+    const FrontendPolicy& policy = frontend_policy(type);
+    if (!policy.has_precision) return false;
+    matmul = int(policy.matmul);
+    cudnn = int(policy.cudnn);
+    return true;
+}
+
 void PyTensorFrontendScope::apply_policy(PyObject* type, PyObject* candidate) {
     const FrontendPolicy policy = frontend_policy(type);
     if (!policy.has_autograd) return;

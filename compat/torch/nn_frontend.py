@@ -37,7 +37,19 @@ def module_setattr(module, name, value):
     object.__setattr__(module, name, value)
 
 
+#: The native module call (`src/bindings/pyjt/py_module_call.h`), once the
+#: nn installer has bound it: the same scope and dispatch, without the frames.
+_NATIVE_CALL = None
+
+
 def module_call(module, *args, **kwargs):
+    native = _NATIVE_CALL
+    if native is not None:
+        return native(module, args, kwargs)
+    return python_module_call(module, *args, **kwargs)
+
+
+def python_module_call(module, *args, **kwargs):
     owner = type(module)._nn_frontend_owner
     # A forward follows its inputs' device; only constructors use the default.
     # The first tensor argument is the reference, as `*_like` uses its source:
