@@ -36,6 +36,38 @@ from jittor.distributed.process_group import (
 )
 
 
+class GradBucket:
+    """Opaque reducer-owned type for imports and annotations only.
+
+    Like PyTorch's bound type this has no public constructor. Native DDP
+    does not yet produce communication buckets; importing the name must not
+    imply that gradient bucket hooks are implemented.
+    """
+
+    def __new__(cls, *args, **kwargs):
+        raise TypeError(
+            "torch.distributed.GradBucket has no public constructor; "
+            "Jittor DDP gradient bucket hooks are not implemented")
+
+    def index(self):
+        raise NotImplementedError("DDP gradient buckets are not implemented")
+
+    def buffer(self):
+        raise NotImplementedError("DDP gradient buckets are not implemented")
+
+    def gradients(self):
+        raise NotImplementedError("DDP gradient buckets are not implemented")
+
+    def parameters(self):
+        raise NotImplementedError("DDP gradient buckets are not implemented")
+
+    def is_last(self):
+        raise NotImplementedError("DDP gradient buckets are not implemented")
+
+    def set_buffer(self, buffer):
+        raise NotImplementedError("DDP gradient buckets are not implemented")
+
+
 def _native_distributed_active():
     return _process_group.is_initialized()
 
@@ -503,6 +535,83 @@ def _all_gather_into_tensor(output_tensor, input_tensor, group=None,
     )
     _copy_tensor(output_tensor, gathered.reshape(output_tensor.shape))
     return _collective_result(output_tensor, async_op, issued=size > 1)
+
+
+def _tensor_numel(tensor):
+    return int(np.prod(tuple(int(dim) for dim in tensor.shape)))
+
+
+def _reduce_scatter_tensor(output, input, op=None, group=None,
+                           async_op=False):
+    """Reduce a flat rank-ordered input and copy this rank's shard to output.
+
+    HCCL currently exposes all-reduce but no native reduce-scatter through
+    Jittor. An all-reduce followed by a local slice has the same numerical
+    semantics and keeps the operation on the active device; it only transfers
+    more data than a native reduce-scatter.
+    """
+    size = _require_supported_group(group, allow_subgroup=True)
+    if group is not None and _get_rank(group) < 0:
+        return _collective_result(output, async_op, issued=False)
+
+    output_numel = _tensor_numel(output)
+    input_numel = _tensor_numel(input)
+    if input_numel != output_numel * size:
+        raise ValueError(
+            "reduce_scatter_tensor input must contain exactly world_size "
+            "output tensors (got {} values for {} ranks and {} output "
+            "values)".format(input_numel, size, output_numel)
+        )
+
+    reduce_name = _reduce_name(op, _ReduceOp)
+    flat_input = input.reshape((-1,))
+    if size == 1:
+        reduced = flat_input
+    elif group is not None and hasattr(group, "_all_reduce"):
+        reduced = group._all_reduce(flat_input, reduce_name)
+    elif reduce_name in ("sum", "mean"):
+        reduced = flat_input.mpi_all_reduce(reduce_name)
+    else:
+        gathered = _native_all_gather_flat(flat_input).reshape(
+            (size,) + tuple(flat_input.shape))
+        reduced = gathered[0]
+        for source_rank in range(1, size):
+            if reduce_name == "max":
+                reduced = jt.maximum(reduced, gathered[source_rank])
+            elif reduce_name == "min":
+                reduced = jt.minimum(reduced, gathered[source_rank])
+            else:
+                reduced = reduced * gathered[source_rank]
+
+    rank = _get_rank(group)
+    start = rank * output_numel
+    shard = reduced[start:start + output_numel].reshape(output.shape)
+    _copy_tensor(output, shard)
+    return _collective_result(output, async_op, issued=size > 1)
+
+
+def _reduce_scatter(output, input_list, op=None, group=None, async_op=False):
+    size = _require_supported_group(group, allow_subgroup=True)
+    if group is not None and _get_rank(group) < 0:
+        return _collective_result(output, async_op, issued=False)
+    if len(input_list) != size:
+        raise ValueError(
+            "reduce_scatter input list length must equal world size "
+            "(got {} for {})".format(len(input_list), size)
+        )
+    output_shape = tuple(int(dim) for dim in output.shape)
+    for index, tensor in enumerate(input_list):
+        if tuple(int(dim) for dim in tensor.shape) != output_shape:
+            raise ValueError(
+                "reduce_scatter input {} shape {} does not match output "
+                "shape {}".format(index, tuple(tensor.shape), output_shape)
+            )
+    combined = jt.concat(
+        [tensor.reshape((-1,)) for tensor in input_list], dim=0
+    )
+    return _reduce_scatter_tensor(
+        output, combined, op=op, group=group, async_op=async_op
+    )
 
 
 def _broadcast(tensor, src=0, group=None, async_op=False, group_src=None):
@@ -1019,6 +1128,9 @@ def _install_distributed(g, registry=None):
     dist.all_reduce = _all_reduce
     dist.all_gather = _all_gather
     dist.all_gather_into_tensor = _all_gather_into_tensor
+    dist.reduce_scatter = _reduce_scatter
+    dist.reduce_scatter_tensor = _reduce_scatter_tensor
+    dist._reduce_scatter_base = _reduce_scatter_tensor
     dist.broadcast = _broadcast
     dist.all_gather_object = _native_all_gather_object
     dist.broadcast_object_list = _broadcast_object_list
@@ -1230,12 +1342,20 @@ def _install_distributed(g, registry=None):
         g._C = _CNS()
     _install_fsdp2_distributed(dist, g, registry=registry)
     g.distributed = dist
+    dist.GradBucket = GradBucket
+    g._C._distributed_c10d.GradBucket = GradBucket
+    register_api_bindings(dist, "torch.distributed", ("GradBucket",),
+        Fidelity.UNIMPLEMENTED,
+        "Opaque import/annotation type only; no public constructor. "
+        "Native DDP reducer-owned buckets and communication hooks are unavailable")
     register_api_bindings(dist, "torch.distributed",
         ("is_available", "is_backend_available", "is_nccl_available", "is_gloo_available",
          "is_mpi_available", "is_ucc_available", "is_initialized", "get_rank",
          "get_world_size", "init_process_group", "destroy_process_group", "get_backend",
          "Backend", "P2POp", "ReduceOp", "ProcessGroup", "barrier", "all_reduce",
-         "all_gather", "all_gather_into_tensor", "broadcast", "all_gather_object",
+         "all_gather", "all_gather_into_tensor", "reduce_scatter",
+         "reduce_scatter_tensor", "_reduce_scatter_base", "broadcast",
+         "all_gather_object",
          "broadcast_object_list", "gather_object", "new_group",
          "new_subgroups_by_enumeration", "get_global_rank", "get_process_group_ranks",
          "Store", "TCPStore", "FileStore", "PrefixStore"),

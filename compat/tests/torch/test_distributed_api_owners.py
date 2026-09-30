@@ -83,6 +83,8 @@ def test_installer_and_bootstrap_bind_stable_implementations():
     dist = compatibility_owner(jt).distributed
     for name, implementation in (
         ("all_reduce", owner._all_reduce), ("all_gather", owner._all_gather),
+        ("reduce_scatter", owner._reduce_scatter),
+        ("reduce_scatter_tensor", owner._reduce_scatter_tensor),
         ("broadcast", owner._broadcast), ("get_rank", owner._get_rank),
         ("new_group", owner._new_group), ("init_process_group", owner._init_process_group),
         ("P2POp", owner.P2POp), ("Backend", owner.Backend),
@@ -146,6 +148,53 @@ def test_gather_and_broadcast_argument_routes(distributed_state, monkeypatch):
         owner._all_gather([], source, group)
 
 
+def test_reduce_scatter_tensor_and_list_routes(distributed_state, monkeypatch):
+    _, group, _ = distributed_state
+    tensor_output = Tensor(np.zeros(2, dtype=np.int64))
+    tensor_input = Tensor(np.arange(8))
+    work = owner._reduce_scatter_tensor(
+        tensor_output, tensor_input, group=group, async_op=True
+    )
+    assert isinstance(work, owner._JittorWork)
+    assert work.wait() is tensor_output
+    np.testing.assert_array_equal(tensor_output.values, [104, 105])
+    assert group.reductions[-1][1] == "sum"
+
+    monkeypatch.setattr(
+        owner.jt, "concat",
+        lambda tensors, dim=0: Tensor(np.concatenate(
+            [tensor.values for tensor in tensors], axis=dim
+        )),
+    )
+    list_output = Tensor(np.zeros(2, dtype=np.int64))
+    inputs = [Tensor([2 * rank, 2 * rank + 1]) for rank in range(4)]
+    assert owner._reduce_scatter(list_output, inputs, group=group) is None
+    np.testing.assert_array_equal(list_output.values, [104, 105])
+
+    with pytest.raises(ValueError, match="length must equal world size"):
+        owner._reduce_scatter(list_output, inputs[:-1], group=group)
+    with pytest.raises(ValueError, match="exactly world_size"):
+        owner._reduce_scatter_tensor(
+            list_output, Tensor(np.arange(7)), group=group
+        )
+
+
+def test_public_reduce_scatter_single_rank_uses_real_tensors():
+    dist = compatibility_owner(jt).distributed
+    source = jt.array(np.asarray([1.0, 2.0], dtype=np.float32))
+    output = jt.zeros_like(source)
+    assert dist.reduce_scatter(output, [source]) is None
+    np.testing.assert_array_equal(output.numpy(), source.numpy())
+
+    tensor_output = jt.zeros_like(source)
+    work = dist.reduce_scatter_tensor(
+        tensor_output, source, async_op=True
+    )
+    assert isinstance(work, owner._JittorWork)
+    assert work.wait() is tensor_output
+    np.testing.assert_array_equal(tensor_output.numpy(), source.numpy())
+
+
 def test_init_destroy_store_and_backend_validation(distributed_state, monkeypatch):
     state, _, _ = distributed_state
     class Store:
@@ -176,3 +225,21 @@ def test_checkpoint_stubs_keep_policy_and_importable_owner(monkeypatch):
         assert function._jittor_unimplemented.endswith("." + name)
         with pytest.raises(NotImplementedError, match="checkpoint"):
             function({})
+
+
+@pytest.mark.parametrize("async_op", [False, True])
+@pytest.mark.parametrize("ranks, rank, issued", [((0, 1), 0, True), ((0,), 0, False), ((0,), 1, False)])
+def test_reduce_scatter_flushes_only_participating_sync_groups(
+    distributed_state, monkeypatch, async_op, ranks, rank, issued
+):
+    group = Group(ranks, rank=rank)
+    output = Tensor(np.zeros(2, dtype=np.int64))
+    source = Tensor(np.arange(2 * len(ranks)))
+    calls = []
+    monkeypatch.setattr(owner, "_sync_collective", lambda value: calls.append(value))
+    work = owner._reduce_scatter_tensor(output, source, group=group, async_op=async_op)
+    assert calls == ([output] if issued and not async_op else [])
+    assert (work is not None) == async_op
+    if rank not in ranks:
+        assert group.reductions == []
+        np.testing.assert_array_equal(output.values, [0, 0])
