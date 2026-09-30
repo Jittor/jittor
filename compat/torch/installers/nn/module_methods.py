@@ -1,6 +1,7 @@
 from ...fidelity import Fidelity, register_api_bindings
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import collections as _collections
+from collections.abc import MutableMapping as _MutableMapping
 import functools as _functools
 import weakref
 import os
@@ -45,6 +46,7 @@ _ORIG_MODULE_NAMED_BUFFERS = nn.Module.named_buffers
 _ORIG_MODULE_NAMED_MODULES = nn.Module.named_modules
 _ORIG_MODULE_LOAD_STATE_DICT = nn.Module.load_state_dict
 _ORIG_MODULE_PARAMETERS = nn.Module.parameters
+_ORIG_MODULE_PARAMETER_MAP = nn.Module.__dict__["_parameters"].fget
 
 
 # torch models define forward(); jittor calls execute(). Make the base
@@ -308,7 +310,12 @@ def _named_parameters(self, prefix="", recurse=True, remove_duplicate=True):
 def _named_buffers(self, prefix="", recurse=True, remove_duplicate=True):
     """Torch's ``named_buffers``, which defaults ``recurse=True``."""
     seen = set()
-    for name, v in _ORIG_MODULE_NAMED_BUFFERS(self, recurse=recurse):
+    native_named_vars = getattr(self, "_named_vars", None)
+    if callable(native_named_vars):
+        items = native_named_vars("buffers", recurse=recurse, remove_duplicate=False)
+    else:
+        items = _ORIG_MODULE_NAMED_BUFFERS(self, recurse=recurse)
+    for name, v in items:
         if remove_duplicate and id(v) in seen:
             continue
         seen.add(id(v))
@@ -364,13 +371,11 @@ def _state_source_to_var(value):
 
 
 def _preserve_target_dtypes_for_load(root, state_dict):
-    """Cast each source value to the dtype of the live destination."""
-    # torch.load_state_dict(assign=False), the default used by TRELLIS.2,
-    # copies checkpoint values into existing parameters/buffers and keeps
-    # the destination dtype.  Jittor's native load replaces through update(),
-    # so a bf16 target can be widened to fp32 when the loader had to widen a
-    # BF16 safetensor through numpy. Cast the source to the live target dtype
-    # before delegating to native load_state_dict.
+    """Match source dtype and placement to the live destination."""
+    # torch.load_state_dict(assign=False) copies checkpoint values into
+    # existing parameters/buffers, preserving both destination dtype and
+    # device. Jittor's native load replaces through update(), so normalize
+    # both before delegating.
     if not isinstance(state_dict, dict):
         return state_dict
     converted = None
@@ -384,11 +389,25 @@ def _preserve_target_dtypes_for_load(root, state_dict):
         if src.shape != target.shape:
             continue
         target_dtype = _jittor_dtype_name(target.dtype)
-        if _jittor_dtype_name(src.dtype) == target_dtype:
+        if _jittor_dtype_name(src.dtype) != target_dtype:
+            src = src.cast(target_dtype)
+        target_backend = int(target.placement_backend)
+        target_index = int(target.device_id)
+        source_backend = int(src.placement_backend)
+        source_index = int(src.device_id)
+        if target_backend >= 0 and (
+                source_backend != target_backend
+                or (target_backend > 0 and source_index != target_index)):
+            if target_backend == 0:
+                src = _make_cpu_resident(src)
+            else:
+                src = _make_cuda_resident(
+                    src, force=True, device=target.device)
+        if src is value:
             continue
         if converted is None:
             converted = dict(state_dict)
-        converted[key] = src.cast(target_dtype)
+        converted[key] = src
     return state_dict if converted is None else converted
 
 
@@ -597,6 +616,18 @@ def _register_leaf_params(params):
                   "these parameters will not receive .grad from a "
                   "loss.backward() that runs without an optimizer")
 
+
+def _parameter_map_get(self):
+    override = vars(self).get("_torch_parameter_mapping_override")
+    if override is not None:
+        return override
+    return _ORIG_MODULE_PARAMETER_MAP(self)
+
+
+def _parameter_map_set(self, value):
+    if not isinstance(value, _MutableMapping):
+        raise TypeError("Module._parameters must be assigned a mutable mapping")
+    object.__setattr__(self, "_torch_parameter_mapping_override", value)
 
 def _parameters(self, recurse=True):
     """Torch's ``parameters()``: iterable *and* indexable. See `_ParamList`."""
@@ -1026,9 +1057,12 @@ def _get_parameter(self, target):
     # `requires_grad` cannot classify it -- a buffer registered from a torch
     # factory is not stop_grad either, so asking that question returned
     # buffers from `get_parameter`, which torch answers with AttributeError.
-    # The module's own parameter listing is the authority; buffers are tracked
-    # separately, by name (see Module.register_buffer).
-    if isinstance(v, jt.Var) and target in {n for n, _ in self.named_parameters()}:
+    # The leaf module's own registry is authoritative. A global
+    # named_parameters() lookup deduplicates tied weights, so a valid alias
+    # such as lm_head.weight disappears behind embed_tokens.weight.
+    parameters = getattr(mod, "_parameters", {})
+    if (isinstance(v, jt.Var) and leaf in parameters
+            and parameters[leaf] is v):
         return v
     raise AttributeError(f"`{target}` is not a parameter")
 
@@ -1044,8 +1078,9 @@ def _get_buffer(self, target):
     if not hasattr(mod, leaf):
         raise AttributeError(f"`{target}` is not a buffer")
     v = getattr(mod, leaf)
-    names = {n for n, _ in self.named_buffers()}
-    if isinstance(v, jt.Var) and target in names:
+    buffers = getattr(mod, "_buffers", {})
+    if (isinstance(v, jt.Var) and leaf in buffers
+            and buffers[leaf] is v):
         return v
     raise AttributeError(f"`{target}` is not a buffer")
 
@@ -1187,6 +1222,7 @@ def _install_module_methods(nn, registry=None):
     M.named_buffers = _named_buffers
     M.named_modules = _named_modules
     M.load_state_dict = _load_state_dict
+    M._parameters = property(_parameter_map_get, _parameter_map_set)
     M.parameters = _parameters
     M.train = _train
     M.eval = _eval
