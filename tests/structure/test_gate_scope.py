@@ -278,6 +278,17 @@ def test_skip_reason_buckets_are_stable_and_other_is_counted(monkeypatch):
         assert buckets["other"] == 1
         assert policy.classify_skip_reason_bucket("torch download") == "torch"
         assert policy.classify_skip_reason_bucket("manual backend") == "backend"
+        semantic_diff = (
+            "SEMANTIC-DIFF: jittor .long() returns int32 whereas torch returns int64"
+        )
+        suspected_bug = (
+            "SUSPECTED-BUG: promotion differs from the torch result_type lattice"
+        )
+        assert policy.classify_skip_reason_bucket(semantic_diff) == "declared"
+        assert policy.classify_skip_reason_bucket(suspected_bug) == "declared"
+        assert not policy._blames_missing_torch(semantic_diff)
+        assert not policy._blames_missing_torch(suspected_bug)
+        assert policy._blames_missing_torch("independent torch is unavailable")
         # "wants more devices than this box has" is not "this box has no
         # accelerator": the reason names CUDA either way, so without its own
         # bucket the first reads as an environment fact and the lost coverage

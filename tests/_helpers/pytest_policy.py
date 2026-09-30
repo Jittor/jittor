@@ -644,7 +644,7 @@ _ACCELERATOR_EXECUTED = 0
 #: appears in the reason wins. "insufficient-devices" therefore has to precede
 #: "accelerator", because its reasons name the accelerator too.
 _SKIP_BUCKET_ORDER = ("insufficient-devices", "accelerator", "backend", "mpi",
-                      "torch", "network", "manual", "opt-in", "declared",
+                      "declared", "torch", "network", "manual", "opt-in",
                       "environment", "other")
 _SKIP_BUCKET_PATTERNS = {
     # Not the same fact as "this box has no accelerator", and the difference is
@@ -710,7 +710,8 @@ _SKIP_BUCKET_PATTERNS = {
     # `tests/structure/build/test_env_var_manifest.py` is parametrized over the
     # modules that read a setting under its unprefixed name and skips the
     # resolver files, which are exactly where those names are resolved.
-    "declared": ("supports_gradgrad=false", "supports_autograd=false",
+    "declared": ("semantic-diff", "suspected-bug",
+                 "supports_gradgrad=false", "supports_autograd=false",
                  "no numpy reference", "no differentiable samples",
                  "the resolver is where these names are allowed"),
 }
@@ -767,11 +768,12 @@ def pytest_runtest_logreport(report):
 
 
 def _blames_missing_torch(reason):
-    try:
-        from _helpers.gate_scope import REAL_TORCH_PATTERNS
-    except Exception:
-        return False
-    return any(pattern in reason for pattern in REAL_TORCH_PATTERNS)
+    # A reason can compare behavior with Torch without claiming that the
+    # independent oracle is absent. In particular, known semantic differences
+    # use unittest.skip and describe both sides in the reason. Classify the
+    # reason first so those declared limitations do not become a false
+    # "missing real Torch" configuration error.
+    return classify_skip_reason_bucket(reason) == "torch"
 
 
 def _skip_reason(report):
@@ -878,6 +880,8 @@ def _snapshot_selected_files(config):
         # must not be reported as a file the session proved nothing about
         # either. Otherwise closing KI-TEST-006 would only move its red from
         # "collection error" to "collected 0 tests".
+        # The native-only ownership split is also a collection refusal, not
+        # an unexplained empty file in this Torch-mode session.
         _SELECTED_FILES.update(
             path
             for path in selected_files(
@@ -889,6 +893,7 @@ def _snapshot_selected_files(config):
                 ],
             )
             if not _refuses_collection(REPO_ROOT / path)
+            and not (_torch_mode_is_active() and path in NATIVE_MODE_PATHS)
         )
     except Exception:
         pass
