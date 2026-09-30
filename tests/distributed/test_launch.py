@@ -20,15 +20,24 @@ reported anything, and the launcher printed nothing until someone killed it by
 hand. Every extra rank makes this more likely, which is the wrong direction.
 """
 import os
+import importlib.util
 from pathlib import Path
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 from _helpers.child_process import PYTHON, run_python_child
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _LAUNCH = _REPO_ROOT / "python" / "jittor" / "distributed" / "launch.py"
+
+
+def _load_launcher():
+    spec = importlib.util.spec_from_file_location("jittor_distributed_launch_test", _LAUNCH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 # Rank 1 fails immediately; every other rank would otherwise outlive the test.
 # `flush` before sleeping so the "started" marker is on disk when we look.
@@ -117,6 +126,25 @@ class TestLaunchFailurePropagation(unittest.TestCase):
             names.add(text.strip().split("cache_name=", 1)[1])
         self.assertEqual(len(names), 1,
                          "ranks got different JIT caches: %s" % sorted(names))
+
+
+class TestLaunchDeviceIsolation(unittest.TestCase):
+
+    def test_hccl_rank_selects_one_ascend_device(self):
+        launcher = _load_launcher()
+        with mock.patch.dict(os.environ,
+                             {"ASCEND_RT_VISIBLE_DEVICES": "4, 7"}, clear=True):
+            self.assertEqual(
+                launcher._visible_devices_for_rank(1, "hccl"),
+                ("ASCEND_RT_VISIBLE_DEVICES", "7"))
+
+    def test_nccl_rank_selects_one_cuda_device(self):
+        launcher = _load_launcher()
+        with mock.patch.dict(os.environ,
+                             {"CUDA_VISIBLE_DEVICES": "2,5"}, clear=True):
+            self.assertEqual(
+                launcher._visible_devices_for_rank(0, "nccl"),
+                ("CUDA_VISIBLE_DEVICES", "2"))
 
 
 if __name__ == "__main__":

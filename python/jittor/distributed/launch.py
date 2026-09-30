@@ -27,14 +27,16 @@ import sys
 import time
 
 
-def _visible_devices_for_rank(rank):
-    visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+def _visible_devices_for_rank(rank, backend):
+    variable = ("ASCEND_RT_VISIBLE_DEVICES" if backend == "hccl"
+                else "CUDA_VISIBLE_DEVICES")
+    visible = os.environ.get(variable)
     if not visible:
-        return None
+        return variable, None
     devices = [x.strip() for x in visible.split(",") if x.strip()]
     if rank < len(devices):
-        return devices[rank]
-    return None
+        return variable, devices[rank]
+    return variable, None
 
 
 def _detect_backend():
@@ -122,9 +124,9 @@ def main():
         env = dict(os.environ)
         env[f"{prefix}_WORLD_SIZE"] = str(a.nproc)
         env[f"{prefix}_RANK"] = str(rank)
-        visible_device = _visible_devices_for_rank(rank) if backend == "nccl" else None
+        visible_variable, visible_device = _visible_devices_for_rank(rank, backend)
         if visible_device is not None:
-            env["CUDA_VISIBLE_DEVICES"] = visible_device
+            env[visible_variable] = visible_device
             env[f"{prefix}_LOCAL_RANK"] = "0"
         else:
             env[f"{prefix}_LOCAL_RANK"] = str(rank)   # single node: local == global

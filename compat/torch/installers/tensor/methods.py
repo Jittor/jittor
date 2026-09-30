@@ -33,6 +33,7 @@ from .method_api import (
     _api_data_ptr,
     _api_is_contiguous,
     _api_is_leaf,
+    _api_is_sparse,
     _api_retains_grad,
     _api_is_cpu,
     _api_is_mps,
@@ -365,6 +366,11 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # Keep the compatibility spelling on Var so it follows the graph instead
     # of silently calling every intermediate a leaf.
     Var.is_leaf = property(_api_is_leaf)
+    Var.is_sparse = property(_api_is_sparse)
+    register_api_bindings(
+        Var, "torch.Tensor", ("is_sparse",), Fidelity.EXACT,
+        "False for dense native Var-backed frontend tensors, including views and "
+        "dense gradients; no sparse COO creation or sparse operations are supported")
     # torch's nested-tensor flag; jittor has no nested tensors -> always False.
     if not hasattr(Var, "is_nested"):
         Var.is_nested = property(_api_is_nested)

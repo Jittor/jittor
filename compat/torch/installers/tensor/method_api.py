@@ -1552,6 +1552,11 @@ def _api_is_leaf(self):
     return bool(self.is_backward_leaf)
 
 
+def _api_is_sparse(self):
+    """Native Var storage is dense; this property does not enable COO tensors."""
+    return False
+
+
 def _api_retains_grad(self):
     return bool(getattr(self, '_torch_retains_grad', False))
 
