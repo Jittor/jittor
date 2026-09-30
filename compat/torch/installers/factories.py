@@ -64,8 +64,23 @@ def _invoke_factory(name, args, kwargs):
     if implementation is None:
         raise RuntimeError("torch.%s is not installed" % name)
     from ..frontend import tensor_frontend
+    requested_device = kwargs.get("device")
+    if (requested_device is not None
+            and str(requested_device).split(":", 1)[0] == "meta"):
+        # Jittor has no storage-free meta allocation. Match the established
+        # torch.device("meta") approximation: allocate an unmaterialized native
+        # placeholder, retain its shape/dtype, and expose persistent meta
+        # device metadata. Transformers uses these values to inspect
+        # safetensors headers before loading the real weights.
+        meta_kwargs = dict(kwargs)
+        meta_kwargs.pop("device", None)
+        with context.target_namespace.device("meta"):
+            with tensor_frontend(context.target_namespace.Var):
+                result = implementation(*args, **meta_kwargs)
+        object.__setattr__(result, "_torch_meta_placeholder", True)
+        return result
     like = args[0] if args and (name.endswith("_like") or name in _TENSOR_FIRST_ARGUMENT) else None
-    with tensor_frontend(context.target_namespace.Var, device=kwargs.get("device"), like=like):
+    with tensor_frontend(context.target_namespace.Var, device=requested_device, like=like):
         return implementation(*args, **kwargs)
 
 
