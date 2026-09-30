@@ -354,7 +354,24 @@ class Function(jt.Function):
     """Torch-style callbacks with native per-call tape and context ownership."""
 
     def execute(self, *args, **kwargs):
-        return type(self).forward(self, *args, **kwargs)
+        outputs = type(self).forward(self, *args, **kwargs)
+        # PyTorch executes custom Function.forward without recording its
+        # internal operations. If any input needs grad, floating outputs are
+        # attached to the custom backward node even when forward deliberately
+        # returned input.detach(). DeepSpeed ZeRO-3 relies on this pattern for
+        # its pre/post-backward parameter hooks. Jittor preserves the detached
+        # flag on that output, so tape_together cannot propagate through the
+        # custom node unless the output is made differentiable first.
+        if any(getattr(self, "needs_input_grad", ())):
+            flat_outputs = outputs if isinstance(outputs, (tuple, list)) else (outputs,)
+            for output in flat_outputs:
+                if not isinstance(output, jt.Var) or not output.is_stop_grad():
+                    continue
+                dtype = _jittor_dtype_name(output.dtype)
+                if any(token in dtype for token in ("int", "uint", "bool")):
+                    continue
+                output.start_grad()
+        return outputs
 
     __call__ = _call_record_inputs
     save_for_backward = save_for_backward

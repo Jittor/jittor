@@ -434,6 +434,8 @@ def _invert(self):
 
 
 def _device(self):
+    if getattr(self, "_torch_meta_placeholder", False):
+        return _owner.device("meta")
     if self.placement_backend >= 0:
         if self.placement_backend == 0:
             return _owner.device("cpu")
@@ -461,7 +463,7 @@ def _device(self):
 
 def _var_get_device(self):
     d = _device(self)
-    if getattr(d, "type", "cpu") == "cpu":
+    if getattr(d, "type", "cpu") in ("cpu", "meta"):
         return -1
     return int(getattr(d, "index", 0) or 0)
 
@@ -540,6 +542,23 @@ def _data_set(self, value):
     # depends on the replace semantics -- it swaps a parameter for a
     # zero-element placeholder -- and `assign` rejected that with
     # "reshape shape is invalid for input of size [x_items(0) == y_items(1152)]".
+    # DeepSpeed ZeRO-3 gathers a parameter for forward, then rebinds
+    # parameter.data to an empty partition placeholder. Jittor's
+    # _update correctly implements that storage replacement, but it also
+    # moves this Python holder away from the leaf that the just-built forward
+    # graph references. Keep a holder for that historical leaf when a
+    # post-accumulate hook is registered: ZeRO-3 uses exactly that hook to
+    # partition/reduce the resulting gradient. Tensor.backward consumes and
+    # clears these holders after mapping their gradients back to self.
+    # Restricting this to hooked trainable leaves avoids retaining graphs for
+    # ordinary inference-time .data swaps.
+    post_hooks = getattr(self, "_torch_post_accumulate_grad_hooks", None)
+    if was_trainable and self.is_backward_leaf and post_hooks:
+        histories = getattr(self, "_torch_data_rebind_leaves", None)
+        if histories is None:
+            histories = []
+            object.__setattr__(self, "_torch_data_rebind_leaves", histories)
+        histories.append(_owner.jt.wrap_var_addr(self.var_ptr))
     self._update(src)
     if was_trainable:
         self.start_grad()
@@ -779,6 +798,8 @@ def _scalar_dtype_name(x):
 
 
 def _is_cuda(self):
+    if getattr(self, "_torch_meta_placeholder", False):
+        return False
     if self.placement_backend >= 0:
         return self.placement_backend != 0
     if not (_owner.jt.flags.use_cuda or getattr(_owner.jt.compiler, "has_acl", 0)):
@@ -1375,6 +1396,14 @@ def _tensor_rfloordiv(self, other):
 
 
 def _tensor_mod(self, other):
+    from jittor._runtime.dispatch import dispatch_context
+    if (dispatch_context(self).backend == "acl"
+            and _jittor_dtype_name(self.dtype) in ("int32", "int64")
+            and type(other) is int and other != 0):
+        # ACL has no launcher for the fused Mod variant used by integer Vars.
+        # Floor division already runs on device and matches Torch for signed
+        # integers, so keep the remainder exact without a host fallback.
+        return self - (self // other) * other
     return _promoting_binary(self, other, '__mod__', False)
 
 
@@ -1562,6 +1591,8 @@ def _api_retains_grad(self):
 
 
 def _api_is_cpu(self):
+    if getattr(self, "_torch_meta_placeholder", False):
+        return False
     return not _is_cuda(self)
 
 
@@ -1678,6 +1709,7 @@ from .autograd_api import (
     _grad_set,
     _optimizer_maybe_has_fsdp_params,
     _register_leaf,
+    _register_post_accumulate_grad_hook,
     _retain_grad,
     _rg_get,
     _rg_set,

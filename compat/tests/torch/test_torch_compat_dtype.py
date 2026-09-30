@@ -1,35 +1,14 @@
-"""Torch-grade dtype-semantics regression tests for ``import torch``.
+"""Torch-grade dtype-semantics regression tests for the independent Torch frontend.
 
-Part of the torch-grade test-suite rewrite (round 3). Like ``test_torch_compat_ops.py``
-this is a structured ``unittest`` module: every check compares jittor-as-torch against an
-INDEPENDENT reference (numpy / explicit torch dtype rules) and runs on BOTH CPU and CUDA
-(when the build has it), so it locks torch *dtype semantics* rather than jittor
-self-consistency.
+Every check compares the frontend against an independent reference (NumPy /
+explicit Torch dtype rules) and runs on CPU and available accelerator backends.
 
-Covered: dtype objects + repr (``torch.float32`` / ``torch.long`` ...), ``.to(dtype)`` /
-``.astype`` / ``.float()`` / ``.long()`` / ``.int()`` / ``.bool()`` / ``.half()`` /
-``.double()``, ``zeros`` / ``ones`` / ``empty`` / ``full`` / ``arange`` + ``*_like`` with
-``dtype=``, ``from_numpy`` dtype preservation, integer/float *type promotion* vs torch's
-rules, and ``iinfo`` / ``finfo``.
+Covered: dtype objects and repr, tensor casts including .long(), typed factories,
+from_numpy dtype preservation, the documented binary type-promotion combinations
+in _TORCH_PROMO, and iinfo/finfo. The cast and promotion checks run directly;
+scalar values use .item() where a Python scalar is expected.
 
-Two genuine semantic divergences from torch are isolated with ``@unittest.skip`` (NOT
-asserted to a wrong value), documented in the module-level "SUSPECTED-BUG / SEMANTIC-DIFF"
-notes below and in each skip reason:
-
-  1. jittor binary-op type promotion differs from torch's ``result_type`` lattice for
-     most MIXED dtypes (e.g. ``int32+int64 -> int32`` where torch gives ``int64``;
-     ``float32+float64 -> float32`` where torch gives ``float64``). jittor appears to keep
-     the narrower/left operand's type rather than promoting upward. The torch-agreeing
-     subset (``int32+float32 -> float32`` etc.) IS asserted positively.
-  2. ``Var.long()`` returns ``int32`` (jittor aliases ``Var.long = Var.int32``), whereas
-     torch's ``.long()`` is ``int64``. The dtype OBJECT ``torch.long`` IS ``int64``
-     (correct); only the cast METHOD diverges.
-
-jittor has no 0-d scalars (a "scalar" is shape ``(1,)``); values are compared via
-``.item()`` where a Python scalar is expected.
-
-Run:  python -m pytest compat/tests/torch/test_torch_compat_dtype.py
-      python -m pytest compat/tests/torch/test_torch_compat_dtype.py
+Run: python -m pytest compat/tests/torch/test_torch_compat_dtype.py
 """
 
 from _helpers import capability as _test_capability
@@ -71,6 +50,25 @@ class Base(unittest.TestCase):
         g = np.asarray(got); r = np.asarray(ref)
         self.assertEqual(tuple(g.shape), tuple(r.shape), f"shape {g.shape}!={r.shape}; {msg}")
         np.testing.assert_array_equal(g, r, err_msg=msg)
+
+
+# ----------------------------------------------------------------- typed constructors
+
+class TestTypedTensorConstructors(Base):
+    def test_byte_tensor_accepts_nested_bytes_and_bytearray(self):
+        nested = torch.ByteTensor([b"Az\x00"])
+        self.assertEqual(tuple(nested.shape), (1, 3))
+        self.assertEqual(dts(nested), "uint8")
+        self.ae(nested.numpy(), np.array([[65, 122, 0]], dtype=np.uint8))
+
+        flat = torch.ByteTensor(bytearray(b"Az\x00"))
+        self.assertEqual(tuple(flat.shape), (3,))
+        self.assertEqual(dts(flat), "uint8")
+        self.ae(flat.numpy(), np.array([65, 122, 0], dtype=np.uint8))
+
+    def test_byte_tensor_rejects_bare_bytes_like_torch(self):
+        with self.assertRaisesRegex(TypeError, "invalid data type 'bytes'"):
+            torch.ByteTensor(b"Az\x00")
 
 
 # ----------------------------------------------------------------- dtype objects + repr
@@ -277,10 +275,6 @@ class TestCastMethods(Base):
             self.assertEqual(dts(x.int().float()), "float32", dev)
         both_devices(body)
 
-    @unittest.skip("SEMANTIC-DIFF: jittor aliases Var.long = Var.int32, so .long() returns "
-                   "int32, whereas torch's .long() is int64. The dtype OBJECT torch.long IS "
-                   "int64 (correct, see TestDtypeObjects); only the cast METHOD diverges. "
-                   "verify-then-fix: point Var.long at int64 to match torch.")
     def test_long_returns_int64_like_torch(self):
         def body(dev):
             x = torch.tensor(self.x)
@@ -312,8 +306,7 @@ class TestFromNumpyDtype(Base):
 
 # ---------------------------------------------------------------------- type promotion
 
-# torch's result_type lattice (the documented torch behavior we compare against).
-# Split into the subset jittor AGREES with, and the subset it DIVERGES on.
+# Documented Torch result types for the tensor pairs checked below.
 _TORCH_PROMO = {
     ("int32", "float32"): "float32",
     ("int32", "int32"): "int32",
@@ -321,7 +314,6 @@ _TORCH_PROMO = {
     ("float64", "float64"): "float64",
     ("int64", "int64"): "int64",
     ("int8", "int8"): "int8",
-    # --- below here jittor diverges from torch (kept for the documented skip) ---
     ("int64", "float32"): "float32",
     ("int32", "int64"): "int64",
     ("float32", "float64"): "float64",
@@ -334,7 +326,7 @@ _TORCH_PROMO = {
     ("uint8", "int32"): "int32",
 }
 
-# The subset where jittor's binary-op dtype matches torch (verified at write time).
+# A compact subset also checked in both operand orders.
 _AGREE = {
     ("int32", "float32"), ("int32", "int32"), ("float32", "float32"),
     ("float64", "float64"), ("int64", "int64"), ("int8", "int8"),
@@ -348,7 +340,7 @@ class TestTypePromotion(Base):
         return dts(a + b)
 
     def test_promotion_agreeing_subset(self):
-        # These cases jittor promotes exactly like torch -- assert them positively.
+        # Check this subset with both operand orders.
         def body(dev):
             for (da, db) in sorted(_AGREE):
                 self.assertEqual(self._binop_dtype(da, db), _TORCH_PROMO[(da, db)],
@@ -405,14 +397,6 @@ class TestTypePromotion(Base):
             self.assertEqual(dts(xf / 255.0), "float32", dev)
         both_devices(body)
 
-    @unittest.skip("SUSPECTED-BUG / SEMANTIC-DIFF: jittor binary-op type promotion does NOT "
-                   "follow torch's result_type lattice for MIXED dtypes. jittor keeps the "
-                   "narrower/left operand's type instead of promoting upward, e.g. "
-                   "int32+int64 -> int32 (torch: int64), float32+float64 -> float32 "
-                   "(torch: float64), float16+float32 -> float16 (torch: float32), "
-                   "int8+int32 -> int8 (torch: int32), bool+int32 -> int8 (torch: int32). "
-                   "This silently loses precision/range in mixed-dtype arithmetic. "
-                   "verify-then-fix: make the binary-op output dtype follow torch promotion.")
     def test_promotion_full_torch_lattice(self):
         def body(dev):
             for (da, db), ref in _TORCH_PROMO.items():
