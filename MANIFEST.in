@@ -650,6 +650,8 @@ include src/ops/composite/transpose_op.cc
 include src/ops/composite/transpose_op.h
 include src/ops/composite/where_op.cc
 include src/ops/composite/where_op.h
+include src/ops/composite/write_back_op.cc
+include src/ops/composite/write_back_op.h
 include src/ops/layout_propagation.cc
 include src/ops/layout_propagation.h
 include src/ops/op_register.cc

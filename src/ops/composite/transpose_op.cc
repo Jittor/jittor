@@ -5,6 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include "ops/composite/transpose_op.h"
+#include "ops/layout_propagation.h"
 #include "core/var.h"
 #include "ops/op_register.h"
 #include "ops/composite/op_capability.h"
@@ -162,6 +163,11 @@ VarPtr TransposeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     reverse.reserve(axes.size(), axes.size());
     for (uint i=0; i<axes.size(); i++)
         reverse.set_data(axes[i], i);
+    // A view's gradient is a view too. The storage view a channels-last
+    // activation is read through (NCHW over NHWC memory) used to hand back a
+    // materialised NCHW copy of every gradient reaching it, which the next
+    // convolution's backward then converted back to NHWC.
+    if (storage_view) return storage_view_transpose(dout, reverse);
     return make_transpose(dout, reverse);
 }
 

@@ -312,6 +312,46 @@ class TestCompileTrainingCuda(_Training, unittest.TestCase):
         self.assertIsNone(run._graph_refused)
         self.assertGreater(run.stats["graph"], 0)
 
+    def test_batch_norm_statistics_are_written_back_in_the_graph(self):
+        # The running statistics are rebound every step, out of place; the
+        # replay writes all of them back with one `write_back` op in its
+        # graph rather than one copy each.
+        def run(compiled):
+            torch.manual_seed(0)
+            model = nn.Sequential(nn.Conv2d(3, 8, 3, padding=1), nn.BatchNorm2d(8), nn.ReLU(),
+                                  nn.Conv2d(8, 8, 3, padding=1), nn.BatchNorm2d(8), nn.ReLU(),
+                                  nn.AdaptiveAvgPool2d(1), nn.Flatten(), nn.Linear(8, 4)).cuda()
+            opt = torch.optim.SGD(model.parameters(), lr=1e-2, momentum=0.9)
+            rng = np.random.RandomState(0)
+
+            def step(x):
+                opt.zero_grad(set_to_none=True)
+                loss = model(x).square().mean()
+                loss.backward()
+                opt.step()
+                return loss
+
+            fn = torch.compile(step, mode="reduce-overhead") if compiled else step
+            losses = []
+            for _ in range(8):
+                losses.append(float(fn(torch.tensor(rng.randn(4, 3, 8, 8).astype("float32")).cuda())))
+                # A device-wide sync between steps must not run -- and so
+                # finish -- the write-back the capture added to its graph.
+                torch.cuda.synchronize()
+            state = [t.detach().cpu().numpy() for t in model.state_dict().values()
+                     if t.dtype == torch.float32]
+            return losses, state, fn
+        want = run(False)
+        got = run(True)
+        np.testing.assert_allclose(got[0], want[0], rtol=1e-4, atol=1e-6)
+        for g, w in zip(got[1], want[1]):
+            np.testing.assert_allclose(g, w, rtol=1e-4, atol=1e-5)
+        fn = got[2]
+        self.assertIsNone(fn._graph_refused)
+        self.assertEqual(fn.stats["captured"], 1)
+        self.assertGreater(fn.stats["graph"], 0)
+        self.assertTrue(all(inplace for *_, inplace in fn._capture.state))
+
     def test_an_sgd_step_updates_its_parameters_in_place(self):
         # The fused SGD writes the parameters where they are, as the fused
         # AdamW does, so a replay has nothing to copy back into them: a

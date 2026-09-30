@@ -16,11 +16,11 @@ DEFINE_FLAG(int, propagate_storage_layout, 1,
     "Let an elementwise op whose operands are one permutation of dense storage "
     "(a channels-last activation read as NCHW) keep that layout: it runs on the "
     "dense source and returns the same permutation as a view, instead of "
-    "writing a dense result the next convolution has to convert back. Applies "
-    "to calls that record no gradient. 0 disables it.");
+    "writing a dense result the next convolution has to convert back. A "
+    "gradient takes the same way back: a storage view's transpose hands its "
+    "gradient on as a view (TransposeOp::grad). 0 disables it.");
 
 DECLARE_FLAG(int, transpose_storage_view);
-DECLARE_FLAG(bool, no_grad);
 
 static auto make_transpose = op_constructor<VarPtr, Var*, NanoVector>("transpose");
 static auto make_broadcast_to_shape =
@@ -99,9 +99,6 @@ static bool permuted_source(Var* v, NanoVector& axes, VarPtr& source) {
 bool storage_layout_operands(const vector<Var*>& inputs, NanoVector& axes,
                              vector<VarPtr>& sources) {
     if (!propagate_storage_layout) return false;
-    bool grad = false;
-    for (Var* v : inputs) grad |= !v->is_stop_grad();
-    if (grad && !no_grad) return false;
     vector<VarPtr> found(inputs.size());
     NanoVector shape;
     bool any = false;

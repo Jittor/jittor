@@ -2,7 +2,9 @@
 
 A half-precision convolution that records no gradient answers with an NCHW
 view of NHWC storage; elementwise operators, group norm and max pooling keep
-that layout, so the next convolution reads NHWC memory as it is. Values never
+that layout, so the next convolution reads NHWC memory as it is. In training a
+convolution offers the channels-last result and a batch norm takes it
+(`channels_last_training`); gradients come back the same way. Values never
 depend on it: every check here compares against the dense NCHW computation.
 
 Run::  python -m pytest tests/nn/test_channels_last.py
@@ -30,6 +32,24 @@ def _nhwc_view(a):
 def _is_channels_last(v):
     n, c, h, w = v.shape
     return tuple(v._storage_strides()) == (h * w * c, 1, w * c, c)
+
+
+class _ResidualNet(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv1 = nn.Conv2d(3, 16, 3, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(16)
+        self.conv2 = nn.Conv2d(16, 16, 3, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(16)
+        self.conv3 = nn.Conv2d(16, 32, 3, stride=2, padding=1)
+        self.bn3 = nn.BatchNorm2d(32)
+
+    def execute(self, x):
+        x = nn.relu(self.bn1(self.conv1(x)))
+        x = nn.max_pool2d(x, 3, 2, 1)
+        x = nn.relu(self.bn2(self.conv2(x)) + x)
+        x = nn.relu(self.bn3(self.conv3(x)))
+        return x.mean(dims=(2, 3))
 
 
 @unittest.skipIf(not HAS_CUDA, "needs CUDA")
@@ -61,14 +81,69 @@ class TestChannelsLast(unittest.TestCase):
             both = x + dense
             np.testing.assert_allclose(both.float32().numpy(), 2 * a, rtol=1e-2, atol=1e-2)
 
-    def test_a_gradient_graph_is_left_dense(self):
+    def test_a_gradient_graph_keeps_the_layout(self):
+        # Forward and back: the gradient reaching a channels-last view is a
+        # view of the same layout, not a dense copy.
         a = self.rng.randn(2, 8, 5, 6).astype("float32")
         x = _nhwc_view(a).float32()
         x.start_grad()
         y = x * 2.0
-        self.assertTrue(y._storage_is_contiguous())
-        g = jt.grad(y.sum(), x)
-        np.testing.assert_allclose(g.numpy(), np.full_like(a, 2.0))
+        self.assertTrue(_is_channels_last(y))
+        g = jt.grad((y * y).sum(), x)
+        np.testing.assert_allclose(g.numpy(), 8.0 * a, rtol=1e-2, atol=1e-2)
+
+    def _training_net(self):
+        # Parameters from NumPy: the device generators differ, so the CPU run
+        # would not otherwise start from the same weights.
+        net = _ResidualNet()
+        rng = np.random.RandomState(1)
+        for p in net.parameters():
+            if not p.is_stop_grad():
+                p.assign(jt.array((rng.randn(*p.shape) * 0.2).astype("float32")))
+        return net, [p for p in net.parameters() if not p.is_stop_grad()]
+
+    def _train_step(self, channels_last):
+        before = cudnn_backend.channels_last_training
+        cudnn_backend.channels_last_training = channels_last
+        try:
+            net, params = self._training_net()
+            x = jt.array(self.rng_train)
+            loss = (net(x) ** 2).mean()
+            grads = jt.grad(loss, params)
+            stats = [net.bn1.running_mean, net.bn1.running_var, net.bn3.running_mean]
+            return (loss.numpy(), [g.numpy() for g in grads], [s.numpy() for s in stats])
+        finally:
+            cudnn_backend.channels_last_training = before
+
+    def test_a_training_step_matches_nchw(self):
+        # Convolution, batch norm with relu and with a residual add, max
+        # pooling, a strided convolution and average pooling, in float32:
+        # channels-last on CUDA against the NCHW kernels on CUDA and against
+        # the same graph on the CPU.
+        self.rng_train = self.rng.randn(4, 3, 20, 20).astype("float32")
+        with jt.flag_scope(auto_graph_replay=0, use_tensorcore=0):
+            got = self._train_step(True)
+            nchw = self._train_step(False)
+            with jt.flag_scope(use_cuda=0):
+                cpu = self._train_step(False)
+        for want, rtol in ((nchw, 1e-4), (cpu, 1e-3)):
+            np.testing.assert_allclose(got[0], want[0], rtol=rtol)
+            # The scale of all the gradients: the convolution bias ahead of a
+            # batch norm has a gradient of zero up to rounding.
+            scale = max(np.abs(w).max() for w in want[1])
+            for g, w in zip(got[1], want[1]):
+                np.testing.assert_allclose(g, w, rtol=rtol, atol=10 * rtol * 1e-2 * scale)
+            for g, w in zip(got[2], want[2]):
+                np.testing.assert_allclose(g, w, rtol=rtol, atol=1e-5)
+
+    def test_a_training_convolution_goes_channels_last_only_into_a_batch_norm(self):
+        conv = nn.Conv2d(3, 8, 3, padding=1)
+        bn = nn.BatchNorm2d(8)
+        gn = nn.GroupNorm(2, 8)
+        x = jt.array(self.rng.randn(2, 3, 6, 6).astype("float32"))
+        self.assertTrue(conv(x)._storage_is_contiguous())
+        self.assertTrue(_is_channels_last(bn(conv(x))))
+        self.assertTrue(gn(conv(x))._storage_is_contiguous())
 
     def test_convolution_group_norm_and_pooling_match_nchw(self):
         conv1 = nn.Conv2d(16, 32, 3, padding=1)
