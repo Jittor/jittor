@@ -81,6 +81,13 @@ class TestTorchOrdering(cu.JittorTestCase):
         np.testing.assert_array_equal(
             actual.values.numpy(), np.sort(DISTINCT, axis=1)[:, ::-1])
 
+    def test_sort_value_gradient_returns_to_original_positions(self, device):
+        source = torch.tensor([3.0, 1.0, 2.0], requires_grad=True)
+        ordered = torch.sort(source)
+        (ordered.values * torch.tensor([2.0, 3.0, 5.0])).sum().backward()
+        np.testing.assert_array_equal(
+            source.grad.numpy(), np.array([5.0, 2.0, 3.0], dtype="float32"))
+
     def test_argsort_returns_only_int64_indices(self, device):
         actual = torch.argsort(torch.tensor(DISTINCT), dim=1)
         self.assertEqual(str(actual.dtype), "torch.int64")
@@ -101,6 +108,21 @@ class TestTorchOrdering(cu.JittorTestCase):
         gathered = np.take_along_axis(
             DISTINCT, result.indices.numpy().astype("int64"), axis=1)
         np.testing.assert_array_equal(gathered, result.values.numpy())
+
+    def test_topk_ties_and_negative_infinity_keep_distinct_indices(self, device):
+        scores = np.array([[3.0, 3.0, 2.0, -np.inf],
+                           [-np.inf, -np.inf, -np.inf, -np.inf]],
+                          dtype="float32")
+        result = torch.topk(torch.tensor(scores), 3, dim=1)
+        values = result.values.numpy()
+        indices = result.indices.numpy().astype("int64")
+        np.testing.assert_array_equal(
+            values, np.array([[3.0, 3.0, 2.0],
+                              [-np.inf, -np.inf, -np.inf]], dtype="float32"))
+        np.testing.assert_array_equal(
+            np.take_along_axis(scores, indices, axis=1), values)
+        for row in indices:
+            self.assertEqual(len(set(row.tolist())), 3)
 
     def test_median_takes_the_lower_of_two_middles(self, device):
         values = np.array([[4.0, 1.0, 3.0, 2.0]], dtype="float32")

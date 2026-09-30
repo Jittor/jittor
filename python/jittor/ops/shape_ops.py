@@ -3,7 +3,7 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 from collections.abc import Sequence, Iterable
 from jittor_core import Var
-from .._runtime.dispatch import select_kernel, try_dispatch
+from .._runtime.dispatch import dispatch_context, select_kernel, try_dispatch
 
 def _repeat_interleave_cpu_source():
     return ('''
@@ -73,6 +73,12 @@ def repeat_interleave(x,repeats,dim=None,output_size=None):
     if isinstance(repeats, int):
         tar_shape = list(x.shape)
         tar_shape[dim] = tar_shape[dim]*repeats
+        if repeats > 0 and dispatch_context(x).backend == "acl":
+            # ACL has no native reindex kernel. Broadcast a singleton repeat
+            # axis, then fold it into the requested dimension on the device.
+            expanded_shape = list(x.shape)
+            expanded_shape.insert(dim + 1, repeats)
+            return x.unsqueeze(dim + 1).broadcast(expanded_shape).reshape(tar_shape)
         dims = []
         for i in range(len(tar_shape)):
             if dim==i:

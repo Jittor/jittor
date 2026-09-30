@@ -408,6 +408,68 @@ class TestAdam(Base):
 
         both_devices(body)
 
+    def test_adamw_dynamic_param_group_uses_current_parameter_grad(self):
+        def body(dev):
+            placeholder = torch.tensor(
+                np.array([3.0], "float32"), requires_grad=True
+            )
+            optimizer = torch.optim.AdamW(
+                [placeholder], lr=0.1, weight_decay=0.0
+            )
+            group = optimizer.param_groups[0]
+            group["params"] = []
+
+            value = torch.tensor(
+                np.array([1.0, 2.0], "float32"), requires_grad=True
+            )
+            manual = torch.ones_like(value).stop_grad()
+            value.grad = manual
+            group["params"] = [value]
+
+            optimizer.step()
+            self.assertIs(
+                group["grads"][0], manual,
+                f"dynamic group consumes current public grad {dev}",
+            )
+            self.ac(
+                value.numpy(), np.array([0.9, 1.9], "float32"),
+                atol=1e-6, rtol=1e-6,
+                msg=f"dynamic AdamW parameter updates {dev}",
+            )
+
+        both_devices(body)
+
+    def test_adamw_state_is_lazy_and_follows_first_step_parameter_group(self):
+        def body(dev):
+            placeholder = torch.tensor(
+                np.zeros(32, dtype="float32"), requires_grad=True
+            )
+            optimizer = torch.optim.AdamW(
+                [placeholder], lr=0.1, weight_decay=0.0
+            )
+            group = optimizer.param_groups[0]
+            self.assertEqual(group["m"], [None],
+                             f"AdamW first moment is lazy {dev}")
+            self.assertEqual(group["values"], [None],
+                             f"AdamW second moment is lazy {dev}")
+            self.assertEqual(len(optimizer.state), 0,
+                             f"AdamW public state starts empty {dev}")
+            partition = torch.tensor(
+                np.array([1.0, 2.0], "float32"), requires_grad=True
+            )
+            partition.grad = torch.ones_like(partition).stop_grad()
+            group["params"] = [partition]
+            optimizer.step()
+            self.assertEqual(list(group["m"][0].shape), [2])
+            self.assertEqual(list(group["values"][0].shape), [2])
+            self.assertIn(partition, optimizer.state)
+            self.assertNotIn(placeholder, optimizer.state)
+            self.ac(partition.numpy(), np.array([0.9, 1.9], "float32"),
+                    atol=1e-6, rtol=1e-6,
+                    msg=f"lazy AdamW state updates replacement {dev}")
+
+        both_devices(body)
+
     def test_shared_parameter_uses_one_published_grad_slot(self):
         def body(dev):
             value = torch.tensor(np.array([1.0, 2.0], "float32"), requires_grad=True)
