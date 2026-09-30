@@ -7,6 +7,7 @@ import os
 import jittor as jt
 from jittor import nn
 from jittor.nn.backends import hooks as _backend_hooks
+from jittor._runtime.dispatch import dispatch_context as _dispatch_context
 from jittor.backends.cuda.kernels.nn.rms_norm_training_cuda import _rms_norm_training_cuda
 from jittor.backends.cuda.kernels.nn.rms_norm_cuda import _rms_norm_cuda
 from ...context import registry_for
@@ -139,6 +140,14 @@ def _standard_rms_norm(self, args, kwargs):
     value = args[0]
     weight = getattr(self, "weight", None)
     if not isinstance(value, jt.Var) or not isinstance(weight, jt.Var):
+        return None
+    # Preserve the third-party module's FP32 ACL autograd graph.
+    if (
+        not bool(getattr(jt.flags, "no_grad", 0))
+        and _jittor_dtype_name(value.dtype) == "float32"
+        and _jittor_dtype_name(weight.dtype) == "float32"
+        and _dispatch_context(value, weight).backend == "acl"
+    ):
         return None
     epsilon = self.__dict__["variance_epsilon"]
     pytorch_order = _acl_bfloat16_rms_norm(value, weight, epsilon)
