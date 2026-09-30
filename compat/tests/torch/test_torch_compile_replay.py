@@ -312,6 +312,14 @@ class TestCompileTrainingCuda(_Training, unittest.TestCase):
         self.assertIsNone(run._graph_refused)
         self.assertGreater(run.stats["graph"], 0)
 
+    def test_an_sgd_step_updates_its_parameters_in_place(self):
+        # The fused SGD writes the parameters where they are, as the fused
+        # AdamW does, so a replay has nothing to copy back into them: a
+        # ResNet-50 step used to end in 320 copies.
+        _, _, run = self._compare(optimizer="sgd")
+        self.assertTrue(run._capture.state)
+        self.assertTrue(all(inplace for *_, inplace in run._capture.state))
+
 
 
 

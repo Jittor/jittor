@@ -23,6 +23,7 @@ RUNTIME_FLAGS = frozenset((
     "cpu_mem_limit", "device_mem_limit", "use_cuda_host_allocator",
     "use_cuda_managed_allocator", "use_nfef_allocator", "use_stat_allocator",
     "use_temp_allocator", "use_sfrl_allocator", "sfrl_large_block_size_device",
+    "sfrl_trim_before_grow",
     "cuda_device_allocator_managed_fallback", "profile_memory_enable",
     "profiler_enable", "profiler_warmup", "profiler_rerun", "profiler_record_peek",
     "profiler_record_shape", "profiler_hide_relay", "enable_tuner", "exclude_pass",

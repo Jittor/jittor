@@ -95,6 +95,7 @@ int64 sfrl_device_allocated_bytes(int device) {
 }
 DEFINE_FLAG(int64, sfrl_large_block_size_device, 20971520, "The segment a device request up to half this size is carved from; larger requests get a segment of their own, rounded to 2 MB. PyTorch packs 1-10 MB requests into 20 MB segments; at 5 MB each mid-sized tensor took a segment of its own and left a tail only something smaller could use: the SD1.5 UNet's 686 half-precision weights reserved 1818 MB for 1640 MB of data (PyTorch 1702), and its sampling process peaked 2.76 GB against 2.52 at 20 MB. Only affects devices.");
 constexpr int64 sfrl_large_block_size_cpu=5242880;
+DEFINE_FLAG(int, sfrl_trim_before_grow, 1, "Before a device pool takes a new segment that would make it hold more than it ever has, hand back segments it holds entirely free and has not used for a while (see SFRLAllocator::trim_before_growing). A ResNet-50 training step reserved 6.40 GB for a 5.51 GB peak without it; no segment moves once the pool has settled.");
 
 //CachingBlock
 CachingBlock::CachingBlock(size_t size, size_t origin_size) : 
@@ -368,6 +369,52 @@ void SFRLAllocator::try_free_this_allocator() {
     }
 }
 
+void SFRLAllocator::trim_before_growing(size_t need) {
+    // A cache miss gives the pool a new segment while it may hold others that
+    // are entirely free, only not in the size asked for: a step's
+    // activations come in a few sizes, and the first steps leave a segment
+    // cut for one phase of the step where another is needed in the next.
+    // Kept, they are the pool's whole excess over its peak. Handed back
+    // first, the new segment takes their place -- only when the pool would
+    // otherwise grow past the most it has held, so a pool that has settled
+    // never returns or takes a segment again. What is handed back is only
+    // ever a whole free segment: nothing live moves.
+    //
+    // Two kinds of free segment are kept, because handing them back costs
+    // more than it saves. One freed within the last `kTrimIdle` allocations
+    // is likely the next layer's, of the same size: a ViT forward frees a
+    // 38 MB activation and asks for another a few operators later. One under
+    // an eighth of the request would be one of many shredded to fund it: a
+    // Qwen3 step's 594 MB logits would take dozens of 24 MB activation
+    // segments the backward then asks for again. Replayed against the
+    // allocation logs of eight benchmark workloads, these rules held 0.6 GB
+    // less for ResNet-50 training and 0.1 GB less for a DDPM UNet and an
+    // SD1.5 VAE decode; the one that held more was BERT-base training, by
+    // 42 MB of 3.9 GB.
+    constexpr uint64 kTrimIdle = 16;
+    constexpr size_t kTrimFraction = 8;
+    if (!sfrl_trim_before_grow || !is_cuda() || capture_held_frees != nullptr) return;
+    if (used_memory + unused_memory + (int64)need <= held_high) return;
+    size_t freed = 0;
+    auto& cached = large_blocks.blocks;
+    auto it = cached.end();
+    while (it != cached.begin() && freed < need) {
+        --it;
+        CachingBlock* block = it->second;
+        if (block->prev || block->next) continue;
+        if (alloc_count - block->freed_at < kTrimIdle || block->size * kTrimFraction < need) continue;
+        underlying->free((void*)block->memory_ptr, block->size, block->allocation);
+        freed += block->size;
+        large_blocks.ids->recycle_block_id(block->id);
+        it = cached.erase(it);
+        delete block;
+    }
+    if (!freed) return;
+    unused_memory -= freed;
+    note_device_reserve(device(), -(int64)freed);
+    step_trace_mem(stm_reserve, device(), -(int64)freed, this, 0);
+}
+
 size_t SFRLAllocator::release_cached(CachingBlockPool& pool, long long free_size) {
     // A segment a recording touched may be free in the pool by now, and the
     // recording still holds its addresses; see `fence_capture`.
@@ -388,6 +435,7 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
     padding = backend_ops(accelerator_backend_id()).execution.allocation_padding;
     #endif
     size = align_size(size + padding);
+    ++alloc_count;
     CachingBlockPool* blocks = get_blocks(size);
     //search cached block
     CachingBlock* block = blocks->pop_block(size);
@@ -395,6 +443,7 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
     if (block == nullptr) {
         try_free_this_allocator();
         size_t alloc_size = allocation_size(size);
+        if (blocks == &large_blocks) trim_before_growing(alloc_size);
         void* ptr = nullptr;
         size_t under_allocation = 0;
         try {
@@ -407,6 +456,7 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
         }
         note_device_reserve(device(), alloc_size);
         step_trace_mem(stm_reserve, device(), alloc_size, this, 0);
+        held_high = std::max(held_high, used_memory + unused_memory + (int64)alloc_size);
         block = new CachingBlock(alloc_size, alloc_size, blocks, ptr);
         block->allocation = under_allocation;
     } else {
@@ -416,6 +466,7 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
         CachingBlock* rest = new CachingBlock(block->size - size, block->origin_size,
             get_blocks(block->size - size), static_cast<char*>(block->memory_ptr) + size);
         rest->allocation = block->allocation;   // same underlying segment
+        rest->freed_at = alloc_count;
         block->size = size;
         if (block->next) {
             block->next->prev = rest;
@@ -460,6 +511,7 @@ void SFRLAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
         block->occupied = false;
         try_merge_two_blocks(block, block->prev);
         try_merge_two_blocks(block, block->next);
+        block->freed_at = alloc_count;
         block->blocks = get_blocks(block->size);
         block->blocks->insert(block);
     } else {
