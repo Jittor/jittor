@@ -14,7 +14,6 @@ build anything.
 
 import json
 import os
-import tempfile
 import unittest
 
 import jittor_utils as jit_utils
@@ -22,12 +21,20 @@ import jittor_utils as jit_utils
 from _helpers.child_process import run_python_child
 
 
+def _cache_environment(overrides=None):
+    # Nox sets this for its own JIT isolation; these probes test the unset default.
+    environment = dict(os.environ)
+    environment.pop("cache_name", None)
+    environment.update(overrides or {})
+    return environment
+
+
 def _cache_path_for(env_overrides):
     """cache_path as computed by a fresh interpreter with these variables set."""
     script = ("import jittor_utils, json, sys;"
               "sys.stdout.write(json.dumps(["
               "jittor_utils.cache_path, jittor_utils.lock_path]))")
-    out = run_python_child(["-c", script], env=env_overrides, text=False)
+    out = run_python_child(["-c", script], env=_cache_environment(env_overrides), inherit=False, text=False)
     assert out.returncode == 0, out.stderr.decode()
     return json.loads(out.stdout.decode())
 
@@ -172,7 +179,7 @@ class TestCachePathComponents(unittest.TestCase):
         script = ("import os, jittor_utils, sys;"
                   "jittor_utils.find_cache_path();"
                   "sys.stdout.write(repr(os.environ.get('cache_name')))")
-        out = run_python_child(["-c", script], env={}, text=False)
+        out = run_python_child(["-c", script], env=_cache_environment(), inherit=False, text=False)
         self.assertEqual(out.returncode, 0, out.stderr.decode())
         # An import that mutates the environment changes every child process
         # the user starts afterwards.
