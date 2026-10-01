@@ -14,7 +14,7 @@ RUNTIME_FLAGS = frozenset((
     "use_cuda", "device_id", "sync_run", "compile_options", "no_grad", "no_fuse",
     "node_order", "amp_reg", "auto_mixed_precision_level", "auto_convert_64_to_32",
     "reuse_array", "missing_grad_error", "try_use_32bit_index", "check_graph",
-    "lazy_execution", "auto_flush_ops", "auto_flush_bytes", "fuse_op_limit", "fuse_into_reduce", "reuse_dying_inputs", "vectorize_flat_loops", "keep_graph",
+    "lazy_execution", "auto_flush_ops", "auto_flush_bytes", "fuse_op_limit", "fuse_into_reduce", "reuse_dying_inputs", "stream_dying_inputs", "vectorize_flat_loops", "keep_graph",
     "transpose_storage_view", "propagate_storage_layout",
     "auto_graph_replay", "auto_graph_replay_bytes", "auto_graph_replay_retain_bytes",
     "gopt_disable", "use_threading",

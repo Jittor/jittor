@@ -501,6 +501,8 @@ include src/codegen/opt/pass/solve_conflict_define_pass.cc
 include src/codegen/opt/pass/solve_conflict_define_pass.h
 include src/codegen/opt/pass/split_loop_pass.cc
 include src/codegen/opt/pass/split_loop_pass.h
+include src/codegen/opt/pass/stream_load_pass.cc
+include src/codegen/opt/pass/stream_load_pass.h
 include src/codegen/opt/pass/unroll_pass.cc
 include src/codegen/opt/pass/unroll_pass.h
 include src/codegen/opt/pass/vectorize_pass.cc
@@ -776,6 +778,7 @@ include src/type/nano_string.cc
 include src/type/nano_string.h
 include src/type/nano_vector.h
 include src/type/pow_compute.h
+include src/type/stream_load.h
 include src/utils/cache_compile.cc
 include src/utils/cache_compile.h
 include src/utils/cross_platform.h

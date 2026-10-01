@@ -746,6 +746,26 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
 - Review/expiry condition: none -- withdrawn. Re-open only with a resident-set
   measurement showing the graph holding the memory.
 
+## KI-OPS-014: a query row whose every key carries `finfo.min` gets float32 attention gradients as if each probability were 1
+
+- Severity: Low (the forward is right; no workload in the benchmark reaches it)
+- Status: Open, found 2026-10-01 while adding the dense additive-mask test.
+- Owner: CUDA fused attention maintainers
+- What happens: `backends/cuda/kernels/nn/fused_attention_f32_cuda.py` stores the
+  forward's log-sum-exp and the backward recomputes each probability as
+  `exp(score - lse)`. With `finfo(float32).min` added to every key of a row, each
+  score *is* `finfo.min` in float32, and so is `lse = max + log(l)` -- the `log(l)`
+  is absorbed -- so every probability comes back as 1 instead of `1/l`. The output
+  is the uniform average it should be; `dq`, `dk`, `dv` are off by the row length
+  (2 x 3 x 64 x 64 case: relative error 16, 6.6, 1.8 against float64).
+- PyTorch's efficient-attention kernel does not get this case right either: on
+  the same inputs its float32 CUDA output is off by 26% and `dq` by 26%.
+- Transformers does not produce such rows for its SDPA path (it unmasks a fully
+  masked row, `_unmask_unattended`); a mask built by hand can.
+- Fix direction: store the row maximum and `1/l` separately (or `lse` relative to
+  the maximum), so the backward's `exp` never subtracts two equal huge numbers.
+- Reproduce: `test_a_dense_additive_mask` with `mask[1, :, 7] = finfo.min`.
+
 ## KI-SEMANTICS-003: floating-comparison backend verification incomplete
 
 - Severity: Critical

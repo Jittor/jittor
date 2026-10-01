@@ -61,6 +61,11 @@ struct FusedOp final : Op {
     // src/tests/test_op_relay.cc puts one on the stack.
     FusedOpContext* context;
     shared_ptr<FusedOpContext> context_owner;
+    // Bit k: this run reads `vars[k]` for the last time, so its CUDA kernel
+    // loads it evict-first (StreamLoadPass) and it does not push out of the
+    // cache the lines that are about to be read. An argument of the kernel,
+    // not part of the jit key: one compiled kernel serves every run.
+    uint64 streamed_inputs = 0;
 
     // The batch's fusion verdict, borrowed from the run_sync frame that built
     // this group: 1 the var has to stay in memory, 0 it may be fused away,
