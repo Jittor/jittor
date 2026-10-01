@@ -78,6 +78,58 @@ def patch_sampling_states(module):
     return True
 
 
+_GREEDY_ARGMAX = '_jittor_greedy_argmax'
+
+
+def patch_sampler(module):
+    """Avoid vLLM's multi-kernel Gumbel path for an all-greedy batch.
+
+    With temperature zero, ``gumbel_sample`` adds no noise: its two temporary
+    tensors, blockwise Triton reduction, argmax and gather are exactly a rowwise
+    argmax.  Keep every logits processor and the mixed/random paths unchanged;
+    only the common all-greedy, no-top-k/no-top-p case takes the equivalent
+    single reduction.
+    """
+    cls = module.Sampler
+    if getattr(cls, _GREEDY_ARGMAX, False):
+        return False
+    original = cls.sample
+
+    @wraps(original)
+    def sample(self, logits, expanded_idx_mapping, idx_mapping_np, pos,
+               input_ids, expanded_local_pos, return_logprobs=False):
+        import numpy as np
+        import torch
+
+        states = self.sampling_states
+        request_indices = idx_mapping_np
+        all_greedy = np.all(states.temperature.np[request_indices] == 0.0)
+        no_top_k = np.all(
+            states.top_k.np[request_indices] == states.vocab_size)
+        no_top_p = np.all(states.top_p.np[request_indices] == 1.0)
+        if not (all_greedy and no_top_k and no_top_p):
+            return original(
+                self, logits, expanded_idx_mapping, idx_mapping_np, pos,
+                input_ids, expanded_local_pos,
+                return_logprobs=return_logprobs)
+
+        processed_logits = self.apply_sampling_params(
+            logits,
+            expanded_idx_mapping,
+            idx_mapping_np,
+            pos,
+            input_ids,
+            expanded_local_pos,
+            skip_top_k_top_p=True,
+        )
+        sampled = torch.argmax(processed_logits, dim=-1).int64()
+        return sampled, processed_logits
+
+    set_attr(cls, 'sample', sample)
+    set_attr(cls, _GREEDY_ARGMAX, True)
+    return True
+
+
 def patch_model_runner_host_lengths(module):
     """Keep the legacy runner's CPU arithmetic independent of factory defaults.
 
@@ -189,6 +241,7 @@ def patch_input_batch_host_arrays(module):
 PATCHES = {
     'vllm.v1.worker.gpu.buffer_utils': patch_buffer_pool,
     'vllm.v1.worker.gpu.sample.states': patch_sampling_states,
+    'vllm.v1.worker.gpu.sample.sampler': patch_sampler,
     'vllm.v1.worker.gpu_model_runner': patch_model_runner_host_lengths,
     'vllm.v1.utils': patch_cpu_gpu_buffer,
     'vllm.v1.worker.gpu_input_batch': patch_input_batch_host_arrays,

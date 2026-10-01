@@ -125,10 +125,12 @@ def _paged_attention_decode_cuda(
     if not (scale > 0 and scale < float("inf")):
         return None
 
-    threads = 32
-    while threads < head_dim:
-        threads *= 2
-    warps = threads // 32
+    # Give independent warps different key positions.  The previous kernel
+    # made the whole block walk the sequence serially and paid four block-wide
+    # barriers per token.  Decode has only one query token, so position-level
+    # parallelism is the dimension that keeps the SM busy as the cache grows.
+    warps = 8
+    threads = warps * 32
     cuda_src = cached_source(r"""
     __device__ __forceinline__ float warp_sum(float value) {
         for (int offset = 16; offset > 0; offset >>= 1)
@@ -145,23 +147,21 @@ def _paged_attention_decode_cuda(
         int tid = threadIdx.x;
         int lane = tid & 31;
         int warp = tid >> 5;
-        __shared__ float warp_buf[%(warps)d];
-        __shared__ float score;
-        __shared__ float running_max;
-        __shared__ float denominator;
-        __shared__ float alpha;
-        __shared__ float beta;
-        if (tid == 0) {
-            running_max = -1.0e30f;
-            denominator = 0.0f;
-        }
-        __syncthreads();
+        __shared__ float warp_max[%(warps)d];
+        __shared__ float warp_denominator[%(warps)d];
+        __shared__ float warp_output[%(warps)d][%(head_dim)d];
 
-        float accumulator = 0.0f;
         int seq_len = (int)seq_lens[request];
         int64_t query_base =
             ((int64_t)request * %(query_heads)d + query_head) * %(head_dim)d;
-        for (int position = 0; position < seq_len; ++position) {
+        float local_max = -1.0e30f;
+        float local_denominator = 0.0f;
+        float accumulator[%(values_per_lane)d];
+        #pragma unroll
+        for (int item = 0; item < %(values_per_lane)d; ++item)
+            accumulator[item] = 0.0f;
+
+        for (int position = warp; position < seq_len; position += %(warps)d) {
             int logical_block = position / %(block_size)d;
             int offset = position %% %(block_size)d;
             int physical_block = (int)block_table[
@@ -170,35 +170,61 @@ def _paged_attention_decode_cuda(
                 ((((int64_t)physical_block * 2) * %(block_size)d + offset)
                  * %(kv_heads)d + kv_head) * %(head_dim)d;
             float partial = 0.0f;
-            for (int dim = tid; dim < %(head_dim)d; dim += blockDim.x)
+            // Every warp needs the complete dot product.  Use lane-strided
+            // dimensions rather than block-strided ones because warps now own
+            // independent cache positions.
+            for (int dim = lane; dim < %(head_dim)d; dim += 32)
                 partial += static_cast<float>(query[query_base + dim])
                          * static_cast<float>(cache[key_base + dim]);
             partial = warp_sum(partial);
-            if (lane == 0) warp_buf[warp] = partial;
-            __syncthreads();
-            if (warp == 0) {
-                float total = lane < %(warps)d ? warp_buf[lane] : 0.0f;
-                total = warp_sum(total);
-                if (lane == 0) score = total * %(scale).9gf;
-            }
-            __syncthreads();
-            if (tid == 0) {
-                float next_max = fmaxf(running_max, score);
-                alpha = expf(running_max - next_max);
-                beta = expf(score - next_max);
-                denominator = denominator * alpha + beta;
-                running_max = next_max;
-            }
-            __syncthreads();
+            float score = __shfl_sync(0xffffffff, partial, 0) * %(scale).9gf;
+            float next_max = fmaxf(local_max, score);
+            float alpha = expf(local_max - next_max);
+            float beta = expf(score - next_max);
+            local_denominator = local_denominator * alpha + beta;
             int64_t value_base = key_base +
                 (int64_t)%(block_size)d * %(kv_heads)d * %(head_dim)d;
-            if (tid < %(head_dim)d)
-                accumulator = accumulator * alpha
-                    + beta * static_cast<float>(cache[value_base + tid]);
-            __syncthreads();
+            #pragma unroll
+            for (int item = 0; item < %(values_per_lane)d; ++item) {
+                int dim = lane + item * 32;
+                if (dim < %(head_dim)d)
+                    accumulator[item] = accumulator[item] * alpha
+                        + beta * static_cast<float>(cache[value_base + dim]);
+            }
+            local_max = next_max;
         }
-        if (tid < %(head_dim)d)
-            output[query_base + tid] = out0_type(accumulator / denominator);
+
+        if (lane == 0) {
+            warp_max[warp] = local_max;
+            warp_denominator[warp] = local_denominator;
+        }
+        #pragma unroll
+        for (int item = 0; item < %(values_per_lane)d; ++item) {
+            int dim = lane + item * 32;
+            if (dim < %(head_dim)d)
+                warp_output[warp][dim] = accumulator[item];
+        }
+        __syncthreads();
+
+        if (tid < %(head_dim)d) {
+            if (seq_len <= 0) {
+                output[query_base + tid] = out0_type(0.0f);
+                return;
+            }
+            float global_max = warp_max[0];
+            #pragma unroll
+            for (int owner = 1; owner < %(warps)d; ++owner)
+                global_max = fmaxf(global_max, warp_max[owner]);
+            float denominator = 0.0f;
+            float result = 0.0f;
+            #pragma unroll
+            for (int owner = 0; owner < %(warps)d; ++owner) {
+                float weight = expf(warp_max[owner] - global_max);
+                denominator += warp_denominator[owner] * weight;
+                result += warp_output[owner][tid] * weight;
+            }
+            output[query_base + tid] = out0_type(result / denominator);
+        }
     }
     paged_attention_decode<<<%(blocks)d, %(threads)d>>>(
         in0_p, in1_p, in2_p, in3_p, out0_p);
@@ -213,6 +239,7 @@ def _paged_attention_decode_cuda(
         "query_heads": query_heads,
         "scale": scale,
         "threads": threads,
+        "values_per_lane": (head_dim + 31) // 32,
         "warps": warps,
     })
     return _stop_grad_outputs(
