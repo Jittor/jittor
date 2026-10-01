@@ -23,6 +23,16 @@ except ImportError:
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TEST_ROOT = REPO_ROOT / "tests"
 
+
+def _unparse(node):
+    stdlib_unparse = getattr(ast, "unparse", None)
+    if stdlib_unparse is not None:
+        return stdlib_unparse(node)
+    import astunparse
+
+    return astunparse.unparse(node).strip()
+
+
 _ALLOWED_COLLECTION_GENERATORS = {
     ("backends/parity/test_device_parity.py", "_install"),
     ("codegen/test_jit_tests.py", "_install_jit_tests"),
@@ -78,8 +88,7 @@ def _test_files():
     ``test_test_named_scripts_are_refused_rather_than_collected`` so a second
     one cannot appear quietly.
     """
-    return [path for path in all_test_files()
-            if not pytest_policy._refuses_collection(path)]
+    return [path for path in all_test_files() if not pytest_policy._refuses_collection(path)]
 
 
 def _dotted_name(node):
@@ -184,6 +193,7 @@ def _pytest_config():
 def _load_test_conftest():
     path = TEST_ROOT / "_helpers/pytest_policy.py"
     spec = importlib.util.spec_from_file_location("jittor_test_conftest_contract", str(path))
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -192,6 +202,7 @@ def _load_test_conftest():
 def _load_test_suite_runner():
     path = REPO_ROOT / "tools" / "run_test_suite.py"
     spec = importlib.util.spec_from_file_location("jittor_test_suite_runner_contract", str(path))
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -200,48 +211,58 @@ def _load_test_suite_runner():
 def test_opinfo_forward_battery_runs_every_declared_dtype():
     source = (TEST_ROOT / "ops" / "test_ops.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
-    common = next(node for node in tree.body
-                  if isinstance(node, ast.ClassDef) and node.name == "TestCommon")
-    reference = next(node for node in common.body
-                     if isinstance(node, ast.FunctionDef)
-                     and node.name == "test_reference")
-    decorators = [ast.unparse(node) for node in reference.decorator_list]
+    common = next(
+        node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "TestCommon"
+    )
+    reference = next(
+        node
+        for node in common.body
+        if isinstance(node, ast.FunctionDef) and node.name == "test_reference"
+    )
+    decorators = [_unparse(node) for node in reference.decorator_list]
     assert "ops(op_db, dtypes=OpDTypes.supported)" in decorators
 
 
 def test_opinfo_error_battery_is_generated_only_for_declared_error_inputs():
     source = (TEST_ROOT / "ops" / "test_ops.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
-    error_class = next(node for node in tree.body
-                       if isinstance(node, ast.ClassDef)
-                       and node.name == "TestErrorInputs")
-    errors = next(node for node in error_class.body
-                  if isinstance(node, ast.FunctionDef)
-                  and node.name == "test_errors")
-    decorators = [ast.unparse(node) for node in errors.decorator_list]
+    error_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "TestErrorInputs"
+    )
+    errors = next(
+        node
+        for node in error_class.body
+        if isinstance(node, ast.FunctionDef) and node.name == "test_errors"
+    )
+    decorators = [_unparse(node) for node in errors.decorator_list]
     assert "ops(error_op_db, dtypes=OpDTypes.any_one)" in decorators
-    assert "assertRaisesRegex" in ast.unparse(errors)
+    assert "assertRaisesRegex" in _unparse(errors)
 
-    coverage = next(node for node in tree.body
-                    if isinstance(node, ast.FunctionDef)
-                    and node.name ==
-                    "test_opinfo_error_input_coverage_exceeds_fifteen_percent")
-    assert "coverage > 0.15" in ast.unparse(coverage)
+    coverage = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "test_opinfo_error_input_coverage_exceeds_fifteen_percent"
+    )
+    assert "coverage > 0.15" in _unparse(coverage)
 
 
 def test_opinfo_known_defects_use_strict_xfail_and_fft_gradients_stay_visible():
     core_source = (TEST_ROOT / "opinfo" / "core.py").read_text(encoding="utf-8")
     core_tree = ast.parse(core_source)
-    helper = next(node for node in core_tree.body
-                  if isinstance(node, ast.FunctionDef) and node.name == "xfail")
-    helper_source = ast.unparse(helper)
+    helper = next(
+        node
+        for node in core_tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "xfail"
+    )
+    helper_source = _unparse(helper)
     assert "pytest.mark.xfail(reason=reason, raises=raises, strict=True)" in helper_source
     assert "reason, raises" in helper_source
 
-    fft_source = (TEST_ROOT / "opinfo" / "definitions" / "fft.py").read_text(
-        encoding="utf-8")
-    fft_entries = fft_source.split("op_db =", 1)[1].split(
-        'OpInfo(\n        "irfft"', 1)[0]
+    fft_source = (TEST_ROOT / "opinfo" / "definitions" / "fft.py").read_text(encoding="utf-8")
+    fft_entries = fft_source.split("op_db =", 1)[1].split('OpInfo(\n        "irfft"', 1)[0]
     assert "supports_autograd=False" not in fft_entries
     assert 'xfail(\n            "test_gradcheck"' in fft_source
     assert 'xfail(\n            "test_gradgradcheck"' in fft_source
@@ -251,8 +272,9 @@ def test_opinfo_known_defects_use_strict_xfail_and_fft_gradients_stay_visible():
 
 
 def test_device_parity_has_a_narrow_integer_dtype_axis_and_fails_closed():
-    source = (TEST_ROOT / "backends" / "parity" /
-              "test_device_parity.py").read_text(encoding="utf-8")
+    source = (TEST_ROOT / "backends" / "parity" / "test_device_parity.py").read_text(
+        encoding="utf-8"
+    )
     assert '_PARITY_DTYPES = ("float32", "int8", "int16")' in source
     assert "np.array_equal(fa, fc)" in source
     assert "np.sqrt(reduce_size) * np.finfo(fc.dtype).eps" in source
@@ -348,7 +370,7 @@ def test_the_tier_marker_is_attached_from_the_recorded_list():
     that subtraction were silently hiding a marker nobody attaches any more,
     the tier would have stopped working with nothing to show for it.
     """
-    listed = "ops/test_ops.py"          # in tiers.SLOW_FILES
+    listed = "ops/test_ops.py"  # in tiers.SLOW_FILES
     unlisted = "ops/test_broadcast_to_op.py"
     assert "slow" in _automatic_markers(listed, "cpu", "cpu")
     assert "slow" not in _automatic_markers(unlisted, "cpu", "cpu")
@@ -430,8 +452,7 @@ def test_complete_suite_runner_retries_a_zero_exit_cold_cache_refresh():
     # The runner starts its children through _helpers.child_process now, so
     # that is what a warm-up retry has to be observed through (0.21: the
     # warm-up used to compile whatever the editable install pointed at).
-    with mock.patch.object(module, "run_python_child",
-                           side_effect=(refreshed, ready)) as run:
+    with mock.patch.object(module, "run_python_child", side_effect=(refreshed, ready)) as run:
         code, output = module._warmup({})
 
     assert code == 0
@@ -451,10 +472,10 @@ def test_complete_suite_runner_warms_up_per_backend():
     assert set(module._WARMUP_MARKERS) == set(module.BACKENDS)
     assert len(set(module._WARMUP_MARKERS.values())) == len(module.BACKENDS)
 
-    cpu_ready = SimpleNamespace(
-        returncode=0, stdout=module._WARMUP_MARKERS["cpu"] + "\n")
-    with mock.patch.object(module, "run_python_child",
-                           side_effect=(cpu_ready,) * module._WARMUP_ATTEMPTS):
+    cpu_ready = SimpleNamespace(returncode=0, stdout=module._WARMUP_MARKERS["cpu"] + "\n")
+    with mock.patch.object(
+        module, "run_python_child", side_effect=(cpu_ready,) * module._WARMUP_ATTEMPTS
+    ):
         code, output = module._warmup({"JITTOR_TEST_DEVICES": "cuda"})
     assert code != 0
     assert "cuda probe" in output
@@ -700,7 +721,8 @@ def _fixtures_from_conftests(path):
         if conftest.is_file():
             try:
                 names |= _fixtures_declared_in(
-                    ast.parse(conftest.read_text(encoding="utf-8"), filename=str(conftest)))
+                    ast.parse(conftest.read_text(encoding="utf-8"), filename=str(conftest))
+                )
             except SyntaxError:
                 pass
         if directory == REPO_ROOT:
@@ -746,8 +768,7 @@ def test_module_level_helpers_are_not_named_like_tests():
     offenders = []
     for path in all_test_files():
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        available = (_BUILTIN_FIXTURES | _fixtures_declared_in(tree)
-                     | _fixtures_from_conftests(path))
+        available = _BUILTIN_FIXTURES | _fixtures_declared_in(tree) | _fixtures_from_conftests(path)
         for node in tree.body:
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
@@ -756,9 +777,7 @@ def test_module_level_helpers_are_not_named_like_tests():
             arguments = node.args
             required = arguments.args[: len(arguments.args) - len(arguments.defaults)]
             supplied = available | _parametrized_arguments(node)
-            unsatisfied = [
-                argument.arg for argument in required if argument.arg not in supplied
-            ]
+            unsatisfied = [argument.arg for argument in required if argument.arg not in supplied]
             if unsatisfied:
                 offenders.append(
                     "{}::{} requires {}".format(
@@ -770,16 +789,20 @@ def test_module_level_helpers_are_not_named_like_tests():
 
 def _test_functions(tree):
     return (
-        node for node in ast.walk(tree)
+        node
+        for node in ast.walk(tree)
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         and node.name.startswith("test")
     )
 
 
 def _without_docstring(body):
-    if (body and isinstance(body[0], ast.Expr)
-            and isinstance(body[0].value, ast.Constant)
-            and isinstance(getattr(body[0].value, "value", None), str)):
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and isinstance(getattr(body[0].value, "value", None), str)
+    ):
         return body[1:]
     return body
 
@@ -791,8 +814,9 @@ def test_test_bodies_do_not_start_with_an_unconditional_return():
         for node in _test_functions(tree):
             body = _without_docstring(node.body)
             if body and isinstance(body[0], ast.Return):
-                offenders.append("{}:{} {}".format(
-                    path.relative_to(REPO_ROOT), body[0].lineno, node.name))
+                offenders.append(
+                    "{}:{} {}".format(path.relative_to(REPO_ROOT), body[0].lineno, node.name)
+                )
     assert offenders == [], "test bodies cannot silently pass via an initial return:\n" + "\n".join(
         offenders
     )
@@ -816,8 +840,9 @@ def test_tests_do_not_use_constant_true_skip_decorators():
                 except (ValueError, TypeError):
                     continue
                 if bool(condition):
-                    offenders.append("{}:{} {}".format(
-                        path.relative_to(REPO_ROOT), decorator.lineno, node.name))
+                    offenders.append(
+                        "{}:{} {}".format(path.relative_to(REPO_ROOT), decorator.lineno, node.name)
+                    )
     assert offenders == [], "constant-true skips hide disabled tests:\n" + "\n".join(offenders)
 
 
@@ -831,9 +856,12 @@ def test_legacy_numeric_selection_fails_loudly():
     env = os.environ.copy()
     env["test_skip_l"] = "10"
     result = run_python_child(
-        ["-m", "pytest", "--collect-only", "-q",
-         "tests/structure/test_pytest_contract.py"],
-        cwd=REPO_ROOT, env=env, inherit=False, merge_stderr=True)
+        ["-m", "pytest", "--collect-only", "-q", "tests/structure/test_pytest_contract.py"],
+        cwd=REPO_ROOT,
+        env=env,
+        inherit=False,
+        merge_stderr=True,
+    )
     assert result.returncode != 0
     assert "legacy jittor.test selection variables are unsupported" in result.stdout
 
@@ -867,9 +895,7 @@ def _collection_side_effects(relative_text, tree):
     """Backend side effects a bare ``import`` of this module would perform."""
     violations = []
     local_functions = {
-        node.name
-        for node in tree.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
     for statement in tree.body:
         for node in _runtime_nodes(statement):
@@ -889,9 +915,7 @@ def _collection_side_effects(relative_text, tree):
                 name = _dotted_name(target)
                 if name.startswith(("jt.flags.", "jittor.flags.")):
                     violations.append(
-                        "{}:{} writes {} during collection".format(
-                            relative_text, node.lineno, name
-                        )
+                        "{}:{} writes {} during collection".format(relative_text, node.lineno, name)
                     )
             value = _assignment_value(node)
             if value is not None:
@@ -922,9 +946,7 @@ def _collection_side_effects(relative_text, tree):
                 )
                 if prohibited:
                     violations.append(
-                        "{}:{} calls {} during collection".format(
-                            relative_text, node.lineno, name
-                        )
+                        "{}:{} calls {} during collection".format(relative_text, node.lineno, name)
                     )
             if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
                 name = _dotted_name(node.value.func)
@@ -979,10 +1001,11 @@ def test_test_named_scripts_are_refused_rather_than_collected():
 #: base, and the last two have nothing collection could reach.
 _REFUSAL_SHAPES = {
     "module-level test function": ("def test_x():\n    pass\n", False),
-    "Test-prefixed class": ("class TestX:\n    def test_y(self):\n        pass\n",
-                            False),
-    "class with a base": ("import unittest\n\n\n"
-                          "class Helper(unittest.TestCase):\n    pass\n", False),
+    "Test-prefixed class": ("class TestX:\n    def test_y(self):\n        pass\n", False),
+    "class with a base": (
+        "import unittest\n\n\nclass Helper(unittest.TestCase):\n    pass\n",
+        False,
+    ),
     "helper function only": ("def decode():\n    return 1\n", True),
     "no definitions at all": ("import sys\nROUNDS = int(sys.argv[1])\n", True),
 }

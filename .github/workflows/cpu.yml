@@ -147,7 +147,7 @@ jobs:
           persist-credentials: false
       - name: Install native CPU toolchain
         run: |
-          apt-get install --yes --no-install-recommends build-essential libomp-dev
+          apt-get install --yes --no-install-recommends build-essential cmake libomp-dev
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git -C "$GITHUB_WORKSPACE" rev-parse HEAD
       - name: Prepare ASV paths

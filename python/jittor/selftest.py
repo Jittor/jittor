@@ -75,11 +75,9 @@ def _check_imports():
         try:
             importlib.import_module(name)
         except Exception as error:  # noqa: BLE001 - the point is to report it
-            failures.append("{} ({}: {})".format(
-                name, type(error).__name__, error))
+            failures.append("{} ({}: {})".format(name, type(error).__name__, error))
     if failures:
-        raise RuntimeError(
-            "Jittor self-test could not import: " + "; ".join(failures))
+        raise RuntimeError("Jittor self-test could not import: " + "; ".join(failures))
     return len(KEY_MODULES)
 
 
@@ -106,12 +104,9 @@ def _train_three_steps():
     model.train()
 
     count = 2 * 3 * 8 * 8
-    inputs = jt.array(
-        (np.arange(count, dtype="float32") / count - 0.5).reshape(2, 3, 8, 8))
+    inputs = jt.array((np.arange(count, dtype="float32") / count - 0.5).reshape(2, 3, 8, 8))
     target_count = 2 * 2 * 8 * 8
-    target = jt.array(
-        (np.arange(target_count, dtype="float32") / target_count).reshape(
-            2, 2, 8, 8))
+    target = jt.array((np.arange(target_count, dtype="float32") / target_count).reshape(2, 2, 8, 8))
 
     parameters = [p for p in model.parameters() if p.requires_grad]
     if not parameters:
@@ -124,19 +119,18 @@ def _train_three_steps():
         loss = ((model(inputs) - target) ** 2).mean()
         value = float(loss.item())
         if not np.isfinite(value):
-            raise RuntimeError(
-                "Jittor self-test loss is {} at step {}".format(value, step))
+            raise RuntimeError("Jittor self-test loss is {} at step {}".format(value, step))
         optimizer.step(loss)
         losses.append(value)
 
     moved = max(
-        float(np.max(np.abs(np.asarray(p.numpy()) - b)))
-        for p, b in zip(parameters, before)
+        float(np.max(np.abs(np.asarray(p.numpy()) - b))) for p, b in zip(parameters, before)
     )
     if not (moved > 0.0):
         raise RuntimeError(
             "Jittor self-test ran three optimiser steps and no parameter "
-            "changed; the update is not reaching the weights")
+            "changed; the update is not reaching the weights"
+        )
     return tuple(losses), moved
 
 
@@ -166,9 +160,7 @@ def main():
     print(
         "Jittor self-test passed ({backend}): forward={forward}, "
         "gradient={gradient}, {modules} subpackages imported, "
-        "3 training steps losses={losses} (max weight change {moved:.3g})".format(
-            **result
-        )
+        "3 training steps losses={losses} (max weight change {moved:.3g})".format(**result)
     )
     return 0
 

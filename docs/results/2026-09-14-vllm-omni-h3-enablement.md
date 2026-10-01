@@ -3000,7 +3000,7 @@ allocator's slack, whereas bouncing something strided corrupts results. The guar
 itself is unchanged for the operands it was written for (weights, index and
 segment tables, all contiguous).
 
-### Verification
+### Verification of modulation strides
 
 * `probe_modulation_strides2.py`: all four layouts now cos 0.99999863,
   max\|d\| 0.124 -- identical to the contiguous case.
@@ -3260,7 +3260,7 @@ fp32 is untouched throughout, as it must be -- it never enters the bridge. The
 bridge's own totals fall from 131.3 s to 59.4 s (`sync=41.9s pack=1.5s
 final=15.8s`), which is the same 2x.
 
-### Verification
+### Verification of the bridge barrier
 
 * **Values.** The decode is not bit-reproducible, so the check is tolerance-based
   and controlled: two runs of one build already differ (fp32, which never enters
@@ -6589,7 +6589,7 @@ against the first thread's buffers, which is what the unsynced arm does and
 what that arm does not. The conclusion was drawn from an arm that could not
 have failed either way.
 
-### The fix
+### The compute-stream handoff fix
 
 `backend_compute_stream_acquire` / `backend_compute_stream_release`, in
 `src/runtime/backend_streams.cc`, called at the two ends of `run_exec_plan`.

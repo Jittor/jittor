@@ -75,8 +75,7 @@ def _spec_is_deployed_torch_shim(spec):
             continue
         targets = node.targets if isinstance(node, ast.Assign) else (node.target,)
         if any(
-            isinstance(target, ast.Attribute)
-            and target.attr == "_jittor_torch_shim_placeholder"
+            isinstance(target, ast.Attribute) and target.attr == "_jittor_torch_shim_placeholder"
             for target in targets
         ):
             return True

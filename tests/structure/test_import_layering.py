@@ -33,6 +33,7 @@ CHECKER = REPO_ROOT / "tools" / "lint" / "check_import_layering.py"
 @functools.lru_cache(maxsize=None)
 def _checker():
     spec = importlib.util.spec_from_file_location("jittor_check_import_layering", CHECKER)
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.path.insert(0, str(REPO_ROOT / "tools"))
     try:

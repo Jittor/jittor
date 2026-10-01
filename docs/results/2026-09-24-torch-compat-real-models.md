@@ -1,7 +1,7 @@
 # Torch 兼容层在真实模型上对 PyTorch：差距表、显存与性能修复
 
 - 状态：第三版（显存、融合注意力、fused AdamW 与主机开销修复后）。套件
-  （[`bench/torch_compat/`](../../bench/torch_compat/README.md)）可复用。修复与本报告一同
+  （[`bench/torch_compat/`](https://github.com/Jittor/jittor/blob/2.0-refactor/bench/torch_compat/README.md)）可复用。修复与本报告一同
   提交；表中「修后」来自提交前 `f1e3dfa9` 加这些修改的工作区（结果文件标 dirty），与提交
   内容一致。
 - 日期：2026-09-24

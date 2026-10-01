@@ -15,8 +15,8 @@
 
 复制下面的模板到该主题既有的维护者结果报告；新主题按当前仓库约定放入
 `refactor-wip/results/YYYY-MM-DD-topic.md`。活跃缺陷只在
-[已知问题总账](../../agent/manuals/known-issues.md) 维护 owner、证据链接、workaround
-和退出条件；任务状态只更新 [唯一看板](../../refactor-wip/architecture/refactor-board.md)。
+[已知问题总账](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/known-issues.md) 维护 owner、证据链接、workaround
+和退出条件；任务状态只更新 [唯一看板](https://github.com/Jittor/jittor/blob/2.0-refactor/refactor-wip/architecture/refactor-board.md)。
 修复后在报告保留前后证据，按总账规则移除已解决条目。
 
 原始 stdout/stderr、pytest XML、设备快照、profile、计时 JSON/CSV、缓存和二进制

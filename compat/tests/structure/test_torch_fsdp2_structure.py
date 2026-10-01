@@ -349,7 +349,7 @@ assert second is jittor.torch_fsdp2_compat
         reexports = {
             optimizer: {
                 "_optimizer_param_steps": (
-                    "jittor.compat.torch.optimizer_api", "_torch_param_steps"),
+                    "jittor.compat.torch.optimizer_state", "_torch_param_steps"),
             },
         }
         names = set()

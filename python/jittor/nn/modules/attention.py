@@ -1,4 +1,5 @@
 """Stateful multi-head attention module."""
+
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
@@ -8,6 +9,7 @@ def _dtype_name(dtype):
     if dtype is None:
         return "float32"
     from jittor._core.dtypes import dtype_for_compute
+
     return dtype_for_compute(dtype)
 
 

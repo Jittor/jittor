@@ -1,6 +1,7 @@
 """Installation-owned NN types; implementation lives outside type factories."""
 import types
 import inspect
+from typing import List
 
 from .frontend import make_parameter_type, tensor_frontend
 from .parameter_containers import make_parameter_containers
@@ -105,7 +106,7 @@ def conv_padding_execute(module, x):
     if mode in (None, "zeros") or not any(pads):
         return native_execute(module, x)
     # pad() takes the widths in reverse dimension order.
-    pad = []
+    pad: List[int] = []
     for value in reversed(pads):
         pad.extend((value, value))
     backend = module._nn_frontend_owner.backend

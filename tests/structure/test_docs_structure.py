@@ -116,11 +116,15 @@ class TestDocsStructure(unittest.TestCase):
         config_path = self.repo_root / "benchmarks" / "asv.conf.json"
         config = json.loads(config_path.read_text(encoding="utf-8"))
         self.assertEqual((config_path.parent / config["repo"]).resolve(), self.repo_root)
-        self.assertEqual((self.repo_root / config["benchmark_dir"]).resolve(),
-                         self.repo_root / "benchmarks")
+        self.assertEqual(
+            (self.repo_root / config["benchmark_dir"]).resolve(), self.repo_root / "benchmarks"
+        )
         tree = ast.parse((self.repo_root / "noxfile.py").read_text())
-        writer = next(node for node in tree.body
-                      if isinstance(node, ast.FunctionDef) and node.name == "_write_asv_config")
+        writer = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "_write_asv_config"
+        )
         namespace = {"json": json, "REPO_ROOT": self.repo_root}
         exec(compile(ast.Module(body=[writer], type_ignores=[]), "noxfile.py", "exec"), namespace)
         with TemporaryDirectory() as directory:
@@ -280,8 +284,7 @@ class TestDocsStructure(unittest.TestCase):
         # rule guards against is a build product committed beside its source.
         authored = ("docs/slides/",)
         for pattern in ("*.rst", "*.pot", "*.mo", "*.html"):
-            tracked = [path for path in self._tracked(pattern)
-                       if not path.startswith(authored)]
+            tracked = [path for path in self._tracked(pattern) if not path.startswith(authored)]
             self.assertEqual(tracked, [], pattern)
         self.assertEqual(self._tracked("_build/**"), [])
         self.assertFalse(any(path.is_dir() for path in self.docs_root.glob("_build/*")))
@@ -324,15 +327,15 @@ class TestDocsStructure(unittest.TestCase):
         """
         readme = (self.repo_root / "README.md").read_text(encoding="utf-8")
         for marker in (
-                "What the first run does",
-                "Offline install",
-                # The escape hatches a stuck user needs, by name.
-                "python -m jittor_utils.preflight",
-                "python -m jittor_utils.clean_cache",
-                "JITTOR_OFFLINE_PATH",
-                "JITTOR_HOME",
-                "nvcc_path",
-                "cache_name",
+            "What the first run does",
+            "Offline install",
+            # The escape hatches a stuck user needs, by name.
+            "python -m jittor_utils.preflight",
+            "python -m jittor_utils.clean_cache",
+            "JITTOR_OFFLINE_PATH",
+            "JITTOR_HOME",
+            "nvcc_path",
+            "cache_name",
         ):
             self.assertIn(marker, readme, marker)
 
@@ -350,8 +353,8 @@ class TestDocsStructure(unittest.TestCase):
 
     def test_internal_markdown_links_pass(self):
         result = run_python_child(
-            ["tools/docs/check_links.py"], cwd=self.repo_root,
-            merge_stderr=True)
+            ["tools/docs/check_links.py"], cwd=self.repo_root, merge_stderr=True
+        )
         self.assertEqual(result.returncode, 0, result.stdout)
 
     def test_every_page_is_reachable_and_every_toctree_entry_exists(self):
@@ -372,8 +375,9 @@ class TestDocsStructure(unittest.TestCase):
         referenced = set()
         for page in docs.rglob("*.md"):
             text = page.read_text(encoding="utf-8")
-            blocks = (re.findall(r"```\{toctree\}(.*?)```", text, re.S)
-                      + re.findall(r":::\{toctree\}(.*?):::", text, re.S))
+            blocks = re.findall(r"```\{toctree\}(.*?)```", text, re.S) + re.findall(
+                r":::\{toctree\}(.*?):::", text, re.S
+            )
             for block in blocks:
                 for line in block.splitlines():
                     entry = line.strip()
@@ -388,17 +392,19 @@ class TestDocsStructure(unittest.TestCase):
         pages = {page.resolve() for page in docs.rglob("*.md")}
         orphans = sorted(
             page.relative_to(self.repo_root).as_posix()
-            for page in pages - referenced - {(docs / "index.md").resolve()})
+            for page in pages - referenced - {(docs / "index.md").resolve()}
+        )
         self.assertEqual(
-            orphans, [],
+            orphans,
+            [],
             "these pages are in no toctree, so the built site has no way to "
-            "reach them; add them to their section index: %s" % orphans)
+            "reach them; add them to their section index: %s" % orphans,
+        )
 
-        dangling = sorted(
-            target.name for target in referenced if not target.exists())
+        dangling = sorted(target.name for target in referenced if not target.exists())
         self.assertEqual(
-            dangling, [],
-            "these toctree entries name pages that do not exist: %s" % dangling)
+            dangling, [], "these toctree entries name pages that do not exist: %s" % dangling
+        )
 
     def test_repository_urls_are_checked_like_relative_links(self):
         """A github.com blob URL naming a local path must be resolved too.
@@ -411,6 +417,7 @@ class TestDocsStructure(unittest.TestCase):
         directions are exercised here.
         """
         import sys
+
         sys.path.insert(0, str(self.repo_root / "tools" / "docs"))
         import check_links
 
@@ -418,22 +425,28 @@ class TestDocsStructure(unittest.TestCase):
         source = self.repo_root / "docs" / "index.md"
 
         missing = check_links._resolve(
-            self.repo_root, source, base + "tests/core/test_complex.py", "markdown")
+            self.repo_root, source, base + "tests/core/test_complex.py", "markdown"
+        )
         self.assertIsNotNone(missing, "a rotted repository URL must be reported")
         self.assertIn("missing repository URL target", missing)
 
         present = check_links._resolve(
-            self.repo_root, source, base + "tests/type/test_complex.py", "markdown")
+            self.repo_root, source, base + "tests/type/test_complex.py", "markdown"
+        )
         self.assertIsNone(present, present)
 
         # An external reference is not this checker's to verify, and claiming
         # otherwise would make every third-party link a false failure.
         external = check_links._resolve(
-            self.repo_root, source,
-            "https://github.com/pytorch/pytorch/blob/main/README.md", "markdown")
+            self.repo_root,
+            source,
+            "https://github.com/pytorch/pytorch/blob/main/README.md",
+            "markdown",
+        )
         self.assertIsNone(external, external)
         website = check_links._resolve(
-            self.repo_root, source, "https://cg.cs.tsinghua.edu.cn/jittor/", "markdown")
+            self.repo_root, source, "https://cg.cs.tsinghua.edu.cn/jittor/", "markdown"
+        )
         self.assertIsNone(website, website)
 
 

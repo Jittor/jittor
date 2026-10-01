@@ -48,6 +48,8 @@ intersphinx_timeout = 15
 nitpicky = True
 nitpick_ignore = [
     ("py:class", "None."),
+    ("py:class", "Jittor Var"),
+    ("py:class", "dictionary"),
     ("py:class", "callable"),
     ("py:class", "compute_uv"),
     ("py:class", "dim"),

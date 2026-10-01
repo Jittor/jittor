@@ -57,6 +57,7 @@ class TestSourceDistributionContents(unittest.TestCase):
         tracked.update(
             (
                 "python/jittor/deleted_from_worktree.py",
+                "python/jittor/compat",
                 "python/jittor/runtime_source.py",
                 "python/jittor/__pycache__/runtime_source.cpython-311.pyc",
                 "python/jittor.egg-info/PKG-INFO",
@@ -78,6 +79,7 @@ class TestSourceDistributionContents(unittest.TestCase):
         self.assertIn("python", command)
         self.assertIn("python/jittor/runtime_source.py", paths)
         self.assertNotIn("python/jittor/deleted_from_worktree.py", paths)
+        self.assertNotIn("python/jittor/compat", paths)
         self.assertNotIn("python/jittor/__pycache__/runtime_source.cpython-311.pyc", paths)
         self.assertNotIn("python/jittor.egg-info/PKG-INFO", paths)
 

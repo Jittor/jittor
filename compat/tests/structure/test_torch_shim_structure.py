@@ -14,7 +14,7 @@ class TestTorchShimStructure(unittest.TestCase):
         # Historical approvals retain original names/hashes. Only the lookup
         # maps the completed distribution move to its current physical owner.
         prefix = "python/jittor/compat/"
-        path = "compat/" + path[len(prefix):] if path.startswith(prefix) else path
+        path = "compat/" + path[len(prefix) :] if path.startswith(prefix) else path
         if path == "compat/shim/resources/torch_init.py":
             return "compat/shim/resources/torch/__init__.py"
         return path
@@ -25,8 +25,13 @@ class TestTorchShimStructure(unittest.TestCase):
         cls.shim_root = cls.repo_root / "compat" / "shim"
         # The refactor moved its process documents out of docs/; the packaging
         # inventory went with them.
-        cls.manifest = (cls.repo_root / "refactor-wip" / "results" / "baselines"
-                        / "torch-shim-resources-stage7.txt")
+        cls.manifest = (
+            cls.repo_root
+            / "refactor-wip"
+            / "results"
+            / "baselines"
+            / "torch-shim-resources-stage7.txt"
+        )
 
     def test_legacy_physical_package_is_absent(self):
         self.assertFalse((self.repo_root / "python" / "jittor" / "torch_shim").exists())
@@ -55,8 +60,7 @@ class TestTorchShimStructure(unittest.TestCase):
             entries.append(self._current_source_path(match.group(2)))
 
         self.assertEqual(len(entries), len(set(entries)), "duplicate entries")
-        missing = [path for path in entries
-                   if not (self.repo_root / path).is_file()]
+        missing = [path for path in entries if not (self.repo_root / path).is_file()]
         self.assertEqual(missing, [])
 
     def test_manifest_covers_deep_and_generated_resources(self):
@@ -79,23 +83,25 @@ class TestTorchShimStructure(unittest.TestCase):
         flash_root = self.shim_root / "backends" / "flash_attention"
         flash_sources = set(flash_root.glob("*.py"))
         self.assertTrue(flash_sources)
-        required.update(path.relative_to(self.repo_root).as_posix()
-                        for path in flash_sources)
+        required.update(path.relative_to(self.repo_root).as_posix() for path in flash_sources)
         self.assertTrue(required.issubset(paths))
         # Runtime data now has one declarative source and a generated sdist
         # manifest. Ordinary .py modules are handled by package discovery.
         from importlib.util import module_from_spec, spec_from_file_location
+
         spec = spec_from_file_location(
-            "shim_resource_declarations", self.repo_root / "tools/build/generate_manifest.py")
+            "shim_resource_declarations", self.repo_root / "tools/build/generate_manifest.py"
+        )
         generator = module_from_spec(spec)
         spec.loader.exec_module(generator)
         project = self.repo_root / "compat"
         declared = generator.runtime_resources(project)
         for path in required:
             if path.startswith(("compat/shim/resources/", "compat/shim/cpp_extension/include/")):
-                self.assertIn(path[len("compat/"):], declared)
-        self.assertEqual((project / "MANIFEST.in").read_text(encoding="utf-8"),
-                         generator.manifest_text(project))
+                self.assertIn(path[len("compat/") :], declared)
+        self.assertEqual(
+            (project / "MANIFEST.in").read_text(encoding="utf-8"), generator.manifest_text(project)
+        )
 
     def test_deployed_torch_template_is_an_identity_only_entrypoint(self):
         """Activate the shim and publish its returned independent namespace.
@@ -110,20 +116,19 @@ class TestTorchShimStructure(unittest.TestCase):
         """
         template = self.shim_root / "resources" / "torch" / "__init__.py"
         body = ast.parse(template.read_text(encoding="utf-8")).body
-        self.assertFalse(
-            any(isinstance(node, (ast.FunctionDef, ast.ClassDef)) for node in body)
-        )
+        self.assertFalse(any(isinstance(node, (ast.FunctionDef, ast.ClassDef)) for node in body))
         self.assertEqual(ast.unparse(body[-1]), "_sys.modules[__name__] = _activation['torch']")
         from_compat = {
             alias.asname or alias.name
             for node in body
-            if isinstance(node, ast.ImportFrom)
-            and (node.module or "").startswith("jittor.compat")
+            if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("jittor.compat")
             for alias in node.names
         }
-        called = [ast.unparse(node.value.func) for node in body
-                  if isinstance(node, (ast.Expr, ast.Assign))
-                  and isinstance(node.value, ast.Call)]
+        called = [
+            ast.unparse(node.value.func)
+            for node in body
+            if isinstance(node, (ast.Expr, ast.Assign)) and isinstance(node.value, ast.Call)
+        ]
         self.assertTrue(called, "the template never activates the shim")
         # Reading the environment is a guard, not behaviour of its own: the
         # template rejects a `JITTOR_TORCH_INDEPENDENT` that names the removed
@@ -141,26 +146,27 @@ class TestTorchShimStructure(unittest.TestCase):
         """
         bootstrap = self.shim_root / "bootstrap.py"
         body = ast.parse(bootstrap.read_text(encoding="utf-8")).body
-        self.assertFalse(
-            any(isinstance(node, (ast.FunctionDef, ast.ClassDef)) for node in body)
-        )
+        self.assertFalse(any(isinstance(node, (ast.FunctionDef, ast.ClassDef)) for node in body))
         reexported = {
             alias.asname or alias.name
-            for node in body if isinstance(node, ast.ImportFrom)
+            for node in body
+            if isinstance(node, ast.ImportFrom)
             for alias in node.names
         }
         # ``enable = activate`` keeps the 1.x name working; an alias of a
         # re-export is still a re-export.
         for node in body:
-            if (isinstance(node, ast.Assign) and isinstance(node.value, ast.Name)
-                    and node.value.id in reexported):
-                reexported |= {target.id for target in node.targets
-                               if isinstance(target, ast.Name)}
+            if (
+                isinstance(node, ast.Assign)
+                and isinstance(node.value, ast.Name)
+                and node.value.id in reexported
+            ):
+                reexported |= {target.id for target in node.targets if isinstance(target, ast.Name)}
         advertised = set()
         for node in body:
-            if (isinstance(node, ast.Assign)
-                    and any(getattr(target, "id", None) == "__all__"
-                            for target in node.targets)):
+            if isinstance(node, ast.Assign) and any(
+                getattr(target, "id", None) == "__all__" for target in node.targets
+            ):
                 advertised = {element.value for element in node.value.elts}
         self.assertTrue(advertised, "the facade advertises nothing")
         self.assertEqual(sorted(advertised - reexported), [])

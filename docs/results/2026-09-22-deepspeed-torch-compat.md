@@ -19,7 +19,7 @@
 
 ## 2. 支持了什么
 
-本节集中维护当前结论，第4节保留逐字历史。真实Qwen3-0.6B源权重SHA256为`f47f71177f32bcd101b7573ec9171e6a57f4f4d31148d38e382306f42996874b`，310参数张量、596,049,920元素。每Stage独立连接自己的训练、权重任务及恢复产物；训练adapter允许单节点WORLD 1/2，本文真实Qwen证据限定WORLD 2。历史7d20/75aa累计证据使用FP32/AdamW eps=1e-6，当前97b9按Stage独立复验eps=1e-8，其他lr/betas/batch/sequence/GAS及无offload/裁剪配置相同。生成采样来自重载训练后权重的普通模型，不外推为DeepSpeed推理引擎或分片Engine内generate。复现入口为[runbook](../../agent/skills/deepspeed-torch-compat/SKILL.md)。
+本节集中维护当前结论，第4节保留逐字历史。真实Qwen3-0.6B源权重SHA256为`f47f71177f32bcd101b7573ec9171e6a57f4f4d31148d38e382306f42996874b`，310参数张量、596,049,920元素。每Stage独立连接自己的训练、权重任务及恢复产物；训练adapter允许单节点WORLD 1/2，本文真实Qwen证据限定WORLD 2。历史7d20/75aa累计证据使用FP32/AdamW eps=1e-6，当前97b9按Stage独立复验eps=1e-8，其他lr/betas/batch/sequence/GAS及无offload/裁剪配置相同。生成采样来自重载训练后权重的普通模型，不外推为DeepSpeed推理引擎或分片Engine内generate。复现入口为[runbook](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/deepspeed-torch-compat/SKILL.md)。
 
 ### 2.1 历史7d20基线真实Qwen累计证据
 

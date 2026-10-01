@@ -28,7 +28,6 @@ def _constant_parameter(shape, dtype, value):
     return init.constant(shape, dtype, value).contiguous()
 
 
-
 class BatchNorm(Module):
     def __init__(
         self,
@@ -61,17 +60,19 @@ class BatchNorm(Module):
         # records the NAME on the module, which no reassignment can lose. That name
         # set is exactly the mechanism this bypassed.
         self.register_buffer(
-            "running_mean",
-            _constant_parameter((num_features,), "float32", 0.0).stop_grad())
+            "running_mean", _constant_parameter((num_features,), "float32", 0.0).stop_grad()
+        )
         self.register_buffer(
-            "running_var",
-            _constant_parameter((num_features,), "float32", 1.0).stop_grad())
+            "running_var", _constant_parameter((num_features,), "float32", 1.0).stop_grad()
+        )
         # Kept non-persistent, as it has always been here: jittor's checkpoints do
         # not carry num_batches_tracked, and load_parameters/load_state_dict both
         # special-case the key rather than report it missing.
         self.register_buffer(
             "num_batches_tracked",
-            _constant_parameter((1,), "int32", 0.0).stop_grad(), persistent=False)
+            _constant_parameter((1,), "int32", 0.0).stop_grad(),
+            persistent=False,
+        )
 
     def execute(self, x):
         # Parameters and buffers live here; the arithmetic lives in
@@ -85,21 +86,23 @@ class BatchNorm(Module):
         dims = [0] + list(range(2, x.ndim))
         if not self.is_train:
             return _batch_norm_eval(
-                x, dims, self.running_mean, self.running_var,
-                self.weight, self.bias, self.eps)
+                x, dims, self.running_mean, self.running_var, self.weight, self.bias, self.eps
+            )
         sync = self.sync and jt.in_mpi
         norm_x, xmean, xvar = _batch_norm_train(
-            x, dims, self.weight, self.bias, self.eps, sync=sync)
+            x, dims, self.weight, self.bias, self.eps, sync=sync
+        )
         if self.track_running_stats:
             self.num_batches_tracked.update(self.num_batches_tracked + 1)
         world_size = jt.world_size if sync else 1
         self.running_mean.update(
-            self.running_mean
-            + (xmean.reshape((-1,)) - self.running_mean) * self.momentum)
+            self.running_mean + (xmean.reshape((-1,)) - self.running_mean) * self.momentum
+        )
         self.running_var.update(
             self.running_var
-            + (_unbiased(xvar, x, dims, world_size).reshape((-1,))
-               - self.running_var) * self.momentum)
+            + (_unbiased(xvar, x, dims, world_size).reshape((-1,)) - self.running_var)
+            * self.momentum
+        )
         return norm_x
 
 
@@ -123,19 +126,28 @@ class InstanceNorm(Module):
         # three of its parameters inert rather than merely unused.
         if momentum != 0.1:
             _arg_policy.ignored(
-                "jittor.nn.InstanceNorm", "momentum", momentum,
+                "jittor.nn.InstanceNorm",
+                "momentum",
+                momentum,
                 "momentum only ever weights a running-statistics update, and "
-                "this module tracks no running statistics")
+                "this module tracks no running statistics",
+            )
         if not is_train:
             _arg_policy.ignored(
-                "jittor.nn.InstanceNorm", "is_train", is_train,
+                "jittor.nn.InstanceNorm",
+                "is_train",
+                is_train,
                 "with no running statistics there is no eval-mode behaviour to "
-                "switch to, so both modes normalise with per-sample statistics")
+                "switch to, so both modes normalise with per-sample statistics",
+            )
         if not sync:
             _arg_policy.ignored(
-                "jittor.nn.InstanceNorm", "sync", sync,
+                "jittor.nn.InstanceNorm",
+                "sync",
+                sync,
                 "the statistics are per sample and never cross rank "
-                "boundaries, so there is nothing for this flag to turn off")
+                "boundaries, so there is nothing for this flag to turn off",
+            )
         self.sync = sync
         self.num_features = num_features
         self.is_train = is_train
@@ -146,8 +158,7 @@ class InstanceNorm(Module):
         self.bias = _constant_parameter((num_features,), "float32", 0.0) if affine else 0.0
 
     def execute(self, x):
-        return jt.nn.instance_norm(x, weight=self.weight, bias=self.bias,
-                                   eps=self.eps)
+        return jt.nn.instance_norm(x, weight=self.weight, bias=self.bias, eps=self.eps)
 
 
 InstanceNorm1d = InstanceNorm
@@ -170,17 +181,21 @@ class LayerNorm(Module):
         self.normalized_shape = tuple(normalized_shape)
         self.eps = eps
         self.elementwise_affine = elementwise_affine
-        self.weight = _constant_parameter(normalized_shape, "float32", 1.0) if elementwise_affine else 1.0
+        self.weight = (
+            _constant_parameter(normalized_shape, "float32", 1.0) if elementwise_affine else 1.0
+        )
         self.bias = (
-            _constant_parameter(normalized_shape, "float32", 0.0) if elementwise_affine and bias else 0.0
+            _constant_parameter(normalized_shape, "float32", 0.0)
+            if elementwise_affine and bias
+            else 0.0
         )
 
     def execute(self, x):
         # fp32_guard lives on the functional; applying it here too would cast
         # twice.
-        return jt.nn.layer_norm(x, self.normalized_shape, self.weight,
-                                self.bias, self.eps,
-                                self.elementwise_affine)
+        return jt.nn.layer_norm(
+            x, self.normalized_shape, self.weight, self.bias, self.eps, self.elementwise_affine
+        )
 
     def reset_parameters(self):
         if isinstance(self.weight, jt.Var):
@@ -207,7 +222,6 @@ class GroupNorm(Module):
         if x.shape[1] != self.num_channels:
             raise ValueError(
                 "GroupNorm: expected %s channels (num_channels), but got %s; "
-                "input shape %s"
-                % (self.num_channels, x.shape[1], tuple(x.shape)))
-        return jt.nn.group_norm(x, self.num_groups, self.weight, self.bias,
-                                self.eps)
+                "input shape %s" % (self.num_channels, x.shape[1], tuple(x.shape))
+            )
+        return jt.nn.group_norm(x, self.num_groups, self.weight, self.bias, self.eps)
