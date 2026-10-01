@@ -54,6 +54,8 @@ built state, such as optimizer moments); the second is captured; later calls
 replay. `stats` says what happened.
 """
 
+import numpy as np
+
 import jittor as jt
 import jittor_core as _core
 
@@ -106,7 +108,19 @@ def live_array(value, refresh, dtype="float32"):
         var.sync(False, False)
     finally:
         jt.flags.keep_graph = before
-    cap.prologue.append(lambda: var._copy_into(jt.array(refresh(), dtype)))
+    # Written only when it changed, and straight into the Var's memory: a
+    # learning rate is the same from one step to the next, and building an
+    # array and copying it in was most of a ResNet-50 replay's host time
+    # before its graph could launch.
+    last = [value]
+
+    def refill():
+        now = refresh()
+        if now == last[0]:
+            return
+        last[0] = now
+        var._write_inplace(np.asarray(now, dtype=dtype))
+    cap.prologue.append(refill)
     return var
 
 
@@ -396,6 +410,41 @@ def _unique(vars_):
     return result
 
 
+def _write_back_in_graph(state, roots):
+    """Take a captured step's write-backs into its graph, as one op.
+
+    A replay copied every piece of state the step updates out of place into
+    the buffer it lives in, one copy each: 159 for a ResNet-50 step's batch
+    norm statistics and counters, each its own node of the device recording.
+    `write_back` writes them all in one launch, as part of the graph, which
+    then leaves nothing to copy after it. Entries it takes are marked as
+    written in place.
+    """
+    pending = [i for i, (_, _, _, inplace) in enumerate(state) if not inplace]
+    if len(pending) < 2 or not hasattr(jt, "write_back"):
+        return state
+    targets = [state[i][1] for i in pending]
+    values = [state[i][2] for i in pending]
+    if any(int(v.device_id) < 0 or not v._storage_is_contiguous() for v in targets + values):
+        return state
+    before = jt.flags.keep_graph
+    jt.flags.keep_graph = 2
+    try:
+        written = jt.write_back(targets, values)
+    finally:
+        jt.flags.keep_graph = before
+    written = list(written) if isinstance(written, (list, tuple)) else [written]
+    for var in written:
+        # Added after the capture's run, so that run did not mark it kept.
+        var._mark_kept()
+    roots.extend(written)
+    state = list(state)
+    for i in pending:
+        holder, old, new, _ = state[i]
+        state[i] = (holder, old, new, True)
+    return state
+
+
 class StepCapture:
     """A callable that replays `fn`'s captured step. See the module docstring."""
 
@@ -519,6 +568,7 @@ class StepCapture:
                 old._copy_into(new, False)
             holder._update(old)
             state.append((holder, old, new, inplace))
+        state = _write_back_in_graph(state, roots)
 
         cap.inputs = _input_vars((private_args, private_kwargs), [])
         cap.host_inputs = any(int(v.device_id) < 0 for v in cap.inputs)

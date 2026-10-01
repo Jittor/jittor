@@ -52,9 +52,15 @@ def _group_norm_cuda_cls(shape, num_groups, eps, vector=1, act=""):
     total = rows * group_size
     row_segments, per_row_segment = _segments(rows, group_size)
     row_parts = row_segments * rows
-    per_sample = batch * spatial
-    channel_segments, per_channel_segment = _segments(channels, per_sample)
-    channel_parts = channel_segments * channels
+    # The backward reads x and the gradient once for its sums, a plane -- one
+    # channel of one sample -- or a chunk of one a block: every sum it needs
+    # is a per-plane sum of dy' and dy' * xhat (dy' the gradient through the
+    # activation), weighted by the channel's weight for the per-group ones.
+    planes = batch * channels
+    per_chunk = 4096
+    chunks = max(1, -(-spatial // per_chunk))
+    plane_parts = chunks * planes
+    plane_vector = 4 if spatial % 4 == 0 and vector == 4 else 1
     forward_act, grad_act = _ACTIVATIONS[act]
     # The activation, and its gradient from the normalized value, which the
     # backward recomputes from x rather than store: xhat * w + b.
@@ -185,89 +191,98 @@ def _group_norm_cuda_cls(shape, num_groups, eps, vector=1, act=""):
             return y
 
         def grad(self, grad_y):
+            # One pass for the sums, `group_norm_backward_plane_sums`; then
+            # per channel its weight and bias gradients, over samples and
+            # chunks, and per (sample, group) row the two means the input
+            # gradient needs -- its channels' plane sums weighted by the
+            # channel's weight (`group_norm_backward_finish`).
             x, mean, rstd, weight, bias = self.saved
-            grad_x, grad_weight, grad_bias, row_partial, channel_partial, coef = jt.code(
-                [grad_y.shape, weight.shape, weight.shape,
-                 (2 * row_parts,), (2 * channel_parts,), (2 * rows,)],
-                [grad_y.dtype, weight.dtype, weight.dtype, "float32", "float32", "float32"],
+            grad_x, grad_weight, grad_bias, partial, coef = jt.code(
+                [grad_y.shape, weight.shape, weight.shape, (2 * plane_parts,), (2 * rows,)],
+                [grad_y.dtype, weight.dtype, weight.dtype, "float32", "float32"],
                 [grad_y, x, mean, rstd, weight, bias],
                 cuda_header=header,
                 cuda_src=f"""
-                __global__ static void group_norm_backward_row_sums(
+                __global__ static void group_norm_backward_plane_sums(
                         const in0_type* grad_y, const in1_type* x, const float* mean,
                         const float* rstd, const in4_type* weight, const in5_type* bias,
                         float* partial) {{
-                    typedef cub::BlockReduce<JtBnPair, {_THREADS}> BlockReduce;
-                    __shared__ typename BlockReduce::TempStorage storage;
-                    float center = mean[blockIdx.x], r = rstd[blockIdx.x];
-                    JtBnPair local{{0.0f, 0.0f}};
-                    {row_loop('''
-                        float w = static_cast<float>(weight[channel]);
-                        float xhat = (static_cast<float>(x[base + j]) - center) * r;
-                        float g = jt_gn_act_grad(static_cast<float>(grad_y[base + j]),
-                            xhat * w + static_cast<float>(bias[channel])) * w;
-                        local.a += g;
-                        local.b += g * xhat;
-                    ''')}
-                    JtBnPair total = BlockReduce(storage).Reduce(local, JtBnPairSum());
-                    if (threadIdx.x == 0) {{
-                        int slot = blockIdx.y * {rows} + row;
-                        partial[slot] = total.a;
-                        partial[{row_parts} + slot] = total.b;
+                    // A warp per (plane, chunk): a deep layer's plane is 64
+                    // elements, which left a block of 256 threads idle but 16.
+                    int item = blockIdx.x * {_THREADS // 32} + threadIdx.x / 32;
+                    if (item >= {plane_parts}) return;
+                    int lane = threadIdx.x % 32;
+                    int plane = item % {planes}, chunk = item / {planes};
+                    int channel = plane % {channels};
+                    int row = (plane / {channels}) * {num_groups} + channel / {channels_per_group};
+                    float center = mean[row], r = rstd[row];
+                    float w = static_cast<float>(weight[channel]);
+                    float shift = static_cast<float>(bias[channel]);
+                    long long base = (long long)plane * {spatial};
+                    int begin = chunk * {per_chunk};
+                    int end = begin + {per_chunk};
+                    if (end > {spatial}) end = {spatial};
+                    float a = 0.0f, b = 0.0f;
+                    if ({plane_vector} == 4 && (((size_t)(grad_y + base) | (size_t)(x + base)) & 15) == 0) {{
+                        const float4* g4 = reinterpret_cast<const float4*>(grad_y + base);
+                        const float4* x4 = reinterpret_cast<const float4*>(x + base);
+                        for (int j = begin / 4 + lane; j < end / 4; j += 32) {{
+                            float4 gv = g4[j], xv = x4[j];
+                            float h0 = (xv.x - center) * r, h1 = (xv.y - center) * r;
+                            float h2 = (xv.z - center) * r, h3 = (xv.w - center) * r;
+                            float d0 = jt_gn_act_grad(gv.x, h0 * w + shift);
+                            float d1 = jt_gn_act_grad(gv.y, h1 * w + shift);
+                            float d2 = jt_gn_act_grad(gv.z, h2 * w + shift);
+                            float d3 = jt_gn_act_grad(gv.w, h3 * w + shift);
+                            a += (d0 + d1) + (d2 + d3);
+                            b += (d0 * h0 + d1 * h1) + (d2 * h2 + d3 * h3);
+                        }}
+                    }} else {{
+                        for (int j = begin + lane; j < end; j += 32) {{
+                            float xhat = (static_cast<float>(x[base + j]) - center) * r;
+                            float dy = jt_gn_act_grad(static_cast<float>(grad_y[base + j]),
+                                                      xhat * w + shift);
+                            a += dy;
+                            b += dy * xhat;
+                        }}
                     }}
-                }}
-                __global__ static void group_norm_backward_channel_sums(
-                        const in0_type* grad_y, const in1_type* x, const float* mean,
-                        const float* rstd, const in4_type* weight, const in5_type* bias,
-                        float* partial) {{
-                    typedef cub::BlockReduce<JtBnPair, {_THREADS}> BlockReduce;
-                    __shared__ typename BlockReduce::TempStorage storage;
-                    int channel = blockIdx.x;
-                    int group = channel / {channels_per_group};
-                    long long begin = (long long)blockIdx.y * {per_channel_segment};
-                    long long end = begin + {per_channel_segment};
-                    if (end > {per_sample}) end = {per_sample};
-                    JtBnPair local{{0.0f, 0.0f}};
-                    for (long long item = begin + threadIdx.x; item < end; item += {_THREADS}) {{
-                        long long sample = item / {spatial};
-                        long long offset = item - sample * {spatial};
-                        long long index = (sample * {channels} + channel) * {spatial} + offset;
-                        long long row = sample * {num_groups} + group;
-                        float xhat = (static_cast<float>(x[index]) - mean[row]) * rstd[row];
-                        float dy = jt_gn_act_grad(static_cast<float>(grad_y[index]),
-                            xhat * static_cast<float>(weight[channel])
-                            + static_cast<float>(bias[channel]));
-                        local.a += dy * xhat;
-                        local.b += dy;
+                    for (int offset = 16; offset > 0; offset >>= 1) {{
+                        a += __shfl_down_sync(0xffffffffu, a, offset);
+                        b += __shfl_down_sync(0xffffffffu, b, offset);
                     }}
-                    JtBnPair total = BlockReduce(storage).Reduce(local, JtBnPairSum());
-                    if (threadIdx.x == 0) {{
-                        int slot = blockIdx.y * {channels} + channel;
-                        partial[slot] = total.a;
-                        partial[{channel_parts} + slot] = total.b;
+                    if (lane == 0) {{
+                        partial[item] = a;
+                        partial[{plane_parts} + item] = b;
                     }}
                 }}
                 __global__ static void group_norm_backward_finish(
-                        const float* row_partial, const float* channel_partial,
+                        const float* partial, const in4_type* weight,
                         out1_type* grad_weight, out2_type* grad_bias, float* coef) {{
                     int i = blockIdx.x * blockDim.x + threadIdx.x;
+                    if (i < {channels}) {{
+                        float gw = 0.0f, gb = 0.0f;
+                        for (int n = 0; n < {batch}; n++)
+                            for (int k = 0; k < {chunks}; k++) {{
+                                int slot = k * {planes} + n * {channels} + i;
+                                gb += partial[slot];
+                                gw += partial[{plane_parts} + slot];
+                            }}
+                        grad_weight[i] = out1_type(gw);
+                        grad_bias[i] = out2_type(gb);
+                    }}
                     if (i < {rows}) {{
+                        int n = i / {num_groups}, first = (i % {num_groups}) * {channels_per_group};
                         float g = 0.0f, gx = 0.0f;
-                        for (int s = 0; s < {row_segments}; s++) {{
-                            g += row_partial[s * {rows} + i];
-                            gx += row_partial[{row_parts} + s * {rows} + i];
+                        for (int c = first; c < first + {channels_per_group}; c++) {{
+                            float w = static_cast<float>(weight[c]);
+                            for (int k = 0; k < {chunks}; k++) {{
+                                int slot = k * {planes} + n * {channels} + c;
+                                g += w * partial[slot];
+                                gx += w * partial[{plane_parts} + slot];
+                            }}
                         }}
                         coef[i] = g / {group_size}.0f;
                         coef[{rows} + i] = gx / {group_size}.0f;
-                    }}
-                    if (i < {channels}) {{
-                        float gw = 0.0f, gb = 0.0f;
-                        for (int s = 0; s < {channel_segments}; s++) {{
-                            gw += channel_partial[s * {channels} + i];
-                            gb += channel_partial[{channel_parts} + s * {channels} + i];
-                        }}
-                        grad_weight[i] = out1_type(gw);
-                        grad_bias[i] = out2_type(gb);
                     }}
                 }}
                 {_elementwise("group_norm_backward_apply",
@@ -276,15 +291,12 @@ def _group_norm_cuda_cls(shape, num_groups, eps, vector=1, act=""):
                               "const in4_type* weight, const in5_type* bias, "
                               "const float* coef, out0_type* grad_x",
                               grad_scalar, grad_v4, total, spatial, channels, vector)}
-                group_norm_backward_row_sums<<<dim3({rows}, {row_segments}), {_THREADS}>>>(
+                group_norm_backward_plane_sums<<<{-(-plane_parts // (_THREADS // 32))}, {_THREADS}>>>(
                     in0_p, in1_p, in2_p, in3_p, in4_p, in5_p, out3_p);
-                group_norm_backward_channel_sums<<<dim3({channels}, {channel_segments}),
-                                                   {_THREADS}>>>(
-                    in0_p, in1_p, in2_p, in3_p, in4_p, in5_p, out4_p);
                 group_norm_backward_finish<<<{_per_channel(max(rows, channels))}>>>(
-                    out3_p, out4_p, out1_p, out2_p, out5_p);
+                    out3_p, in4_p, out1_p, out2_p, out4_p);
                 {_launch("group_norm_backward_apply",
-                         "in0_p, in1_p, in2_p, in3_p, in4_p, in5_p, out5_p, out0_p",
+                         "in0_p, in1_p, in2_p, in3_p, in4_p, in5_p, out4_p, out0_p",
                          ("in0_p", "in1_p", "out0_p"), total, vector)}
                 CHECK(0 == cudaGetLastError());
                 """,

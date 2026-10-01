@@ -5,6 +5,7 @@ import numpy as np
 
 import jittor as jt
 from jittor._runtime.dispatch import try_dispatch
+from jittor.nn.functional._layout import channels_last_source
 
 from ... import _arg_policy
 
@@ -16,25 +17,27 @@ _INPLACE_CONSEQUENCE = (
 
 
 
-#: Offers to take a residual add into the pass as well: var id -> build. The
-#: add is a new Var whose operands come back as new Python objects, so the
-#: offer cannot live on the offering object alone; an entry lives exactly as
-#: long as that object does (`_OfferLease`), since it holds what its pass reads.
+#: Offers to take a residual add into the pass as well: var id -> (build,
+#: whether the add's operands are in storage order). The add is a new Var
+#: whose operands come back as new Python objects, so the offer cannot live on
+#: the offering object alone; an entry lives exactly as long as that object
+#: does (`_OfferLease`), since it holds what its pass reads.
 _RESIDUAL_OFFERS = {}
 
 
 class _OfferLease:
-    """Removes a residual offer when the object it was made on goes."""
-    __slots__ = ("key",)
+    """Removes residual offers when the object they were made on goes."""
+    __slots__ = ("keys",)
 
-    def __init__(self, key):
-        self.key = key
+    def __init__(self, keys):
+        self.keys = keys
 
     def __del__(self):
-        _RESIDUAL_OFFERS.pop(self.key, None)
+        for key in self.keys:
+            _RESIDUAL_OFFERS.pop(key, None)
 
 
-def offer_activation(y, build, residual=None):
+def offer_activation(y, build, residual=None, storage=None):
     """Say that ``build(act)`` computes ``act(y)`` in the pass that makes ``y``.
 
     The offer describes the Var ``y`` holds now. An in-place op rebinds the
@@ -45,12 +48,20 @@ def offer_activation(y, build, residual=None):
 
     ``residual(act, r)``, when given, computes ``act(y + r)`` in that pass: an
     activation of ``y`` plus a residual found through the add's operands,
-    however the add was spelled.
+    however the add was spelled. With ``storage`` -- the dense tensor ``y``
+    is a channels-last view of -- the offer is found through it as well: an
+    add of channels-last operands runs on their storage
+    (`propagate_storage_layout`), and ``residual(act, r, True)`` then gets
+    ``r`` in that storage order too.
     """
     y.__dict__["_fuse_activation"] = (y.id, build)
     if residual is not None:
-        _RESIDUAL_OFFERS[y.id] = residual
-        y.__dict__["_residual_offer"] = _OfferLease(y.id)
+        keys = [y.id]
+        _RESIDUAL_OFFERS[y.id] = (residual, False)
+        if storage is not None:
+            _RESIDUAL_OFFERS[storage.id] = (residual, True)
+            keys.append(storage.id)
+        y.__dict__["_residual_offer"] = _OfferLease(keys)
 
 
 def _fused_activation(x, act):
@@ -59,14 +70,24 @@ def _fused_activation(x, act):
     if entry is not None and entry[0] == x.id and not x.is_finished:
         _RESIDUAL_OFFERS.pop(entry[0], None)
         return entry[1](act)
-    if _RESIDUAL_OFFERS and not x.is_finished and x._producer_op() == "binary.add":
-        a, b = x._input(0), x._input(1)
-        for y, r in ((a, b), (b, a)):
-            residual = _RESIDUAL_OFFERS.pop(y.id, None)
-            if residual is not None:
-                fused = residual(act, r)
-                if fused is not None:
-                    return fused
+    if not _RESIDUAL_OFFERS or x.is_finished:
+        return None
+    add, storage = x, False
+    if x._producer_op() == "transpose" and channels_last_source(x) is not None:
+        # An add kept channels-last hands out the NCHW view of a result it
+        # computed on its operands' storage.
+        add, storage = x._input(0), True
+    if add._producer_op() != "binary.add":
+        return None
+    a, b = add._input(0), add._input(1)
+    for y, r in ((a, b), (b, a)):
+        offer = _RESIDUAL_OFFERS.get(y.id)
+        if offer is None or offer[1] != storage:
+            continue
+        del _RESIDUAL_OFFERS[y.id]
+        fused = offer[0](act, r, True) if storage else offer[0](act, r)
+        if fused is not None:
+            return fused
     return None
 
 

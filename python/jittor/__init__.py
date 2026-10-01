@@ -75,7 +75,7 @@ _NATIVE_OP_EXPORTS = (
     "reindex_var", "reinterpret_view", "reshape", "right_shift", "round",
     "round_int", "safe_clip", "setitem", "sigmoid", "sin", "sinh", "sqrt",
     "sub", "subtract", "sum", "tan", "tanh", "tape", "ternary",
-    "transpose", "uint16", "uint32", "uint64", "uint8", "unary", "where",
+    "transpose", "uint16", "uint32", "uint64", "uint8", "unary", "where", "write_back",
 )
 
 

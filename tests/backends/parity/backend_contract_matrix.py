@@ -519,6 +519,8 @@ UNPROBED_REASONS = {
     # cross-backend cell cannot be formed. Its own coverage is tests/ops/test_fft_op.py.
     "cufft_fft": "no declared CPU FFT to compare against; covered by tests/ops/test_fft_op.py",
     "fused_adamw": "fused optimizer step is compared by tests/optim, not by an op cell",
+    "write_back": "an in-place write into existing storage, stateful like fused_sgd; "
+                  "covered by compat/tests/torch/test_torch_compile_replay.py",
     # Graph plumbing with no standalone value: `tapes` is only reachable from a
     # multi-output custom gradient, which `tape` already exercises.
     "tapes": "only reachable through a multi-output custom gradient; `tape` covers the mechanism",

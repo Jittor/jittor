@@ -632,6 +632,15 @@ struct VarHolder {
     // @pyjt(_release_kept)
     void release_kept();
 
+    /**
+     * Mark this pending Var as part of a kept graph, which only its owner
+     * runs (see `keep_graph`): a node added to a graph that has already run
+     * kept, and so was not marked by that run. Unmarked, a bystander's sync
+     * -- `sync_all` -- ran it on its own and finished it.
+     */
+    // @pyjt(_mark_kept)
+    inline void mark_kept() { var->set_flag(VarFlags::_kept); }
+
     // @pyjt(share_with)
     // @attrs(return_self)
     inline VarHolder* share_with(VarHolder* other) {
