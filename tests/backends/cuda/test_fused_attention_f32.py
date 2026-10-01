@@ -99,6 +99,22 @@ class TestFusedAttentionF32(unittest.TestCase):
         mask[1, ..., :5] = False
         self._check(2, 3, 33, 47, 40, False, mask)
 
+    def test_an_additive_key_padding_mask(self):
+        # What Transformers expands an attention mask into: one row per batch,
+        # the dtype's minimum where padded. 47 keys: rows off the 16-byte
+        # alignment the vector loads need, and a partial last group of four.
+        mask = (np.random.RandomState(3).randn(2, 1, 1, 47) * 0.5).astype("float32")
+        mask[0, ..., 30:] = np.finfo(np.float32).min
+        self._check(2, 3, 33, 47, 40, False, mask)
+
+    def test_a_dense_additive_mask(self):
+        # The same mask as Transformers passes it under compilation, one row
+        # per query, on lengths that keep every row aligned for vector loads.
+        mask = (np.random.RandomState(4).randn(2, 1, 64, 64) * 0.5).astype("float32")
+        mask[0, ..., 40:] = np.finfo(np.float32).min
+        mask[1, ..., :9] = np.finfo(np.float32).min
+        self._check(2, 3, 64, 64, 64, False, mask)
+
     def test_an_additive_mask_per_head(self):
         rng = np.random.RandomState(7)
         self._check(2, 2, 70, 45, 64, False,

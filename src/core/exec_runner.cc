@@ -535,6 +535,36 @@ static void reuse_dying_inputs_of(FusedOp& fused, const vector<Var*>& last_used,
     }
 }
 
+DEFINE_FLAG(int, stream_dying_inputs, 1 << 20, "Bytes from which a CUDA kernel loads an input it reads for the last time evict-first, the way inductor's reductions load theirs. Streamed through the cache like any other, such an input evicts the lines the kernel is about to read -- a gradient the previous GEMM has just written -- though nothing reads it again: BERT-base's GELU backward with its bias gradient, over 12.6 M elements, took 155 us a call without and 123 with on a 4090 (PyTorch 117). 0 never streams.");
+
+// The inputs of a segment its CUDA kernel may load evict-first: large, read
+// once per element -- a broadcast operand is read by every row -- and read
+// here for the last time in the batch, by nothing Python holds. What a later
+// batch reads -- the backward, a saved activation -- is too far away to find
+// its lines still cached. As a mask over `fused.vars`; see
+// FusedOp::streamed_inputs.
+static uint64 dying_stream_mask(FusedOp& fused, const vector<Var*>& last_used,
+                                const std::unordered_set<Var*>& kept_pinned) {
+    int64 widest = 0;
+    for (auto& info : fused.vars) widest = std::max(widest, info.var->num);
+    uint64 mask = 0;
+    for (uint k = 0; k < fused.vars.size() && k < 64; k++) {
+        auto& info = fused.vars[k];
+        Var* v = info.var;
+        if (info.type != 0 || v->size < stream_dying_inputs || v->num != widest || !v->mem_ptr)
+            continue;
+        if (std::find(last_used.begin(), last_used.end(), v) == last_used.end()) continue;
+        if (keep_graph == 2 ? may_release_kept(v, kept_pinned) : !v->holder) mask |= uint64(1) << k;
+    }
+    return mask;
+}
+
+static bool has_stream_candidate(FusedOp& fused) {
+    for (auto& info : fused.vars)
+        if (info.type == 0 && info.var->size >= stream_dying_inputs) return true;
+    return false;
+}
+
 void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
                    vector<Var*>& vars, bool device_sync, int entry_device) {
     ExecutionBackendScope backend_scope(plan.backend);
@@ -684,14 +714,18 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
                 swap_epoch.mark(var);
             }
         } else {
-            if (reuse_dying_inputs && is_fused_op && keep_graph != 1 && plan.batch_hold
-                    && has_reuse_candidate(fused_op)) {
+            bool reuse = reuse_dying_inputs && is_fused_op && keep_graph != 1 && plan.batch_hold
+                && has_reuse_candidate(fused_op);
+            bool stream = stream_dying_inputs && is_fused_op && keep_graph != 1 && plan.batch_hold
+                && requested_backend == BackendId::Cuda && has_stream_candidate(fused_op);
+            if (reuse || stream) {
                 vector<Var*> last_used;
                 for (int index : plan.release_after[rid]) last_used.push_back(plan.all_vars[index]);
                 // What running the segment would flag anyway (see below), so
                 // that `_needed_by_backward` is final when it is read.
                 propergate_needed_flags(fused_op);
-                reuse_dying_inputs_of(fused_op, last_used, kept_pinned, allocator, reused_inputs);
+                if (stream) fused_op.streamed_inputs = dying_stream_mask(fused_op, last_used, kept_pinned);
+                if (reuse) reuse_dying_inputs_of(fused_op, last_used, kept_pinned, allocator, reused_inputs);
             }
             for (auto* var : op->outputs()) {
                 // the return value used to be discarded: a CPU OOM reached the

@@ -95,6 +95,7 @@ void FusedOp::update_ops() {
     loop_options_merged.clear();
     loop_options_tuned.clear();
     loop_options = loop_options_origin = nullptr;
+    streamed_inputs = 0;
 
     _inputs.clear();
     _outputs.clear();
