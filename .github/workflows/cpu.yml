@@ -36,13 +36,16 @@ jobs:
     # a cache miss, not just the tests.
     timeout-minutes: 45
     steps:
+      - name: Install Git for checkout
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends git
       - name: Check out source
         uses: actions/checkout@v6
         with:
           persist-credentials: false
       - name: Install native CPU toolchain
         run: |
-          apt-get update
           apt-get install --yes --no-install-recommends build-essential libomp-dev
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -72,13 +75,16 @@ jobs:
     # the manual probes and the independent-PyTorch oracle.
     timeout-minutes: 240
     steps:
+      - name: Install Git for checkout
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends git
       - name: Check out source
         uses: actions/checkout@v6
         with:
           persist-credentials: false
       - name: Install native CPU toolchain
         run: |
-          apt-get update
           apt-get install --yes --no-install-recommends build-essential libomp-dev
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -127,6 +133,10 @@ jobs:
       ASV_MACHINE: github-ubuntu-cpu
       ASV_COMPARE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
     steps:
+      - name: Install Git for checkout
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends git
       - name: Check out source
         uses: actions/checkout@v6
         with:
@@ -134,8 +144,7 @@ jobs:
           persist-credentials: false
       - name: Install native CPU toolchain
         run: |
-          apt-get update
-          apt-get install --yes --no-install-recommends build-essential libomp-dev git
+          apt-get install --yes --no-install-recommends build-essential libomp-dev
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git -C "$GITHUB_WORKSPACE" rev-parse HEAD
       - name: Prepare ASV paths

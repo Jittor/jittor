@@ -51,14 +51,17 @@ jobs:
       image: ${{ needs.baseline.outputs.cpu_ci_image }}
     timeout-minutes: 30
     steps:
+      - name: Install Git for checkout
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends git
       - name: Check out source
         uses: actions/checkout@v6
         with:
           persist-credentials: false
       - name: Install native packaging toolchain
         run: |
-          apt-get update
-          apt-get install --yes --no-install-recommends build-essential libomp-dev git
+          apt-get install --yes --no-install-recommends build-essential libomp-dev
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git -C "$GITHUB_WORKSPACE" rev-parse HEAD
       - name: Set up Python
