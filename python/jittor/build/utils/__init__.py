@@ -422,7 +422,7 @@ def do_compile(args):
 pool_size = 0
 #: The compile process pool, created on the first run_cmds() that needs one
 #: and torn down by the atexit hook registered alongside it.
-p: Any = None
+p = None  # type: Any
 
 def pool_cleanup():
     global p
@@ -800,7 +800,7 @@ def check_cache_disk_space(path, minimum_mb=None):
 # Set by find_cache_path(). Deliberately *above* the build-configuration
 # directory: the lock also guards the third-party downloads (mkl, cutt, cub)
 # that every configuration on this toolchain shares.
-lock_path: Optional[str] = None
+lock_path = None  # type: Optional[str]
 
 
 def _git_head_file(path):
@@ -1354,9 +1354,9 @@ else:
 cc_type = get_cc_type(cc_path)
 cache_path = find_cache_path()
 
-_py3_config_path: Optional[str] = None
-_py3_include_path: Optional[str] = None
-_py3_extension_suffix: Optional[str] = None
+_py3_config_path = None  # type: Optional[str]
+_py3_include_path = None  # type: Optional[str]
+_py3_extension_suffix = None  # type: Optional[str]
 # NOTE: this used to be
 #     ssl._create_default_https_context = ssl._create_unverified_context
 # with no condition and no way to turn it off. That statement does not affect
