@@ -59,6 +59,8 @@ jobs:
         run: |
           apt-get update
           apt-get install --yes --no-install-recommends build-essential libomp-dev git
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" rev-parse HEAD
       - name: Set up Python
         uses: actions/setup-python@v6
         with:

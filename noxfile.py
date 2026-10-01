@@ -1186,7 +1186,7 @@ def packaging(session):
         session.error("expected exactly one sdist, found %d" % len(sdists))
     session.run(
         "python",
-        "tools/release/check_sdist_contents.py",
+        str(REPO_ROOT / "tools/release/check_sdist_contents.py"),
         str(sdists[0]),
         env=env,
     )
