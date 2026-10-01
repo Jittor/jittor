@@ -511,6 +511,13 @@ def _session_env(session, backend):
     thread_count = str(_physical_cores_in_affinity(cpu_ids))
     env = _isolated_outer_environment()
     env.update({name: str(path) for name, path in paths.items()})
+    # A session has its own HOME, so Git cannot see checkout's global
+    # safe.directory entry. Scope the exception to this exact source tree.
+    env.update({
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "safe.directory",
+        "GIT_CONFIG_VALUE_0": str(REPO_ROOT),
+    })
     env.update(
         {
             "BLIS_NUM_THREADS": thread_count,
