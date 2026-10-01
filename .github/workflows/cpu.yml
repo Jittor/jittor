@@ -45,6 +45,8 @@ jobs:
         uses: actions/checkout@v6
         with:
           persist-credentials: false
+      - name: Prepare Jittor cache path
+        run: echo "JITTOR_LAB_ROOT=$RUNNER_TEMP/jittor-lab" >> "$GITHUB_ENV"
       - name: Install native CPU toolchain
         run: |
           apt-get install --yes --no-install-recommends build-essential cmake libomp-dev
@@ -59,7 +61,7 @@ jobs:
       - name: Restore the Jittor build cache
         uses: actions/cache/restore@v4
         with:
-          path: ${{ github.workspace }}/../jittor-lab/_state/nox/cache
+          path: ${{ env.JITTOR_LAB_ROOT }}/_state/nox/cache
           key: jittor-build-${{ runner.os }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}
           restore-keys: |
             jittor-build-${{ runner.os }}-
@@ -85,6 +87,8 @@ jobs:
         uses: actions/checkout@v6
         with:
           persist-credentials: false
+      - name: Prepare Jittor cache path
+        run: echo "JITTOR_LAB_ROOT=$RUNNER_TEMP/jittor-lab" >> "$GITHUB_ENV"
       - name: Install native CPU toolchain
         run: |
           apt-get install --yes --no-install-recommends build-essential cmake libomp-dev
@@ -105,7 +109,7 @@ jobs:
       - name: Restore the Jittor build cache
         uses: actions/cache/restore@v4
         with:
-          path: ${{ github.workspace }}/../jittor-lab/_state/nox/cache
+          path: ${{ env.JITTOR_LAB_ROOT }}/_state/nox/cache
           key: jittor-build-${{ runner.os }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}
           restore-keys: |
             jittor-build-${{ runner.os }}-
@@ -121,7 +125,7 @@ jobs:
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: ${{ github.workspace }}/../jittor-lab/_state/nox/cache
+          path: ${{ env.JITTOR_LAB_ROOT }}/_state/nox/cache
           key: jittor-build-${{ runner.os }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}
 
   benchmark:
