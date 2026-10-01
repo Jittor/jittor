@@ -1419,6 +1419,18 @@ def _record_asv(session, root, env, asv_command, default_machine, external=False
             env=env,
             external=external,
         )
+        if not external and default_machine == "jittor-ci-cpu":
+            # The first timed ASV case otherwise waits for a cold Jittor and
+            # oneDNN build, which can exceed the per-case timeout on CI. Use
+            # the same cache and interpreter before measurements begin.
+            warm_env = dict(env)
+            warm_env["PYTHONPATH"] = str(REPO_ROOT / "python")
+            session.run(
+                "python",
+                "-c",
+                "import jittor as jt; jt.array([0.0]).sync()",
+                env=warm_env,
+            )
         session.run(
             *(
                 tuple(asv_command)
