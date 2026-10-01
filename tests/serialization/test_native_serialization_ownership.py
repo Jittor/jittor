@@ -2,6 +2,7 @@
 
 import importlib
 import pickle
+import sys
 
 import jittor as jt
 import numpy as np
@@ -25,7 +26,11 @@ def test_native_save_load_roundtrip(tmp_path):
 
 
 def test_torch_archive_save_load_roundtrip(tmp_path):
-    if not modules_available("torch"):
+    torch = sys.modules.get("torch")
+    binary = getattr(torch, "_C", None)
+    if (not modules_available("torch") or
+            not callable(getattr(torch, "from_numpy", None)) or
+            not getattr(binary, "__file__", None)):
         pytest.skip("torch archive round-trip requires independent binary PyTorch")
     path = str(tmp_path / "weights.pth")
     source = {"weight": jt.array([[1.25, -2.0], [3.5, 4.0]]),
