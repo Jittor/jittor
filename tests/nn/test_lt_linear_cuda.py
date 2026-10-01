@@ -26,6 +26,7 @@ import numpy as np
 
 import jittor as jt
 from jittor import nn
+from jittor.backends.cuda.kernels.cublas import lt_linear_cuda as _lt
 from jittor.backends.cuda.kernels.cublas.lt_linear_cuda import lt_linear_cuda
 
 
@@ -187,6 +188,97 @@ class TestLtLinearCuda(unittest.TestCase):
         w, b = model.weight.numpy(), model.bias.numpy()
         np.testing.assert_allclose(fast, x.numpy() @ w.T + b, rtol=2e-5, atol=2e-5)
 
+
+@unittest.skipIf(not _test_capability.check_accelerator("cuda", backend=jt).enabled,
+                 "no usable CUDA in this build")
+class TestLtLinearTraining(unittest.TestCase):
+    """The training route: the portable forward, and a backward whose bias
+    gradient comes out of the weight gradient's GEMM (cuBLASLt's BGRADB).
+    Checked against the same step on the CPU in float64."""
+
+    def setUp(self):
+        self.rs = np.random.RandomState(1)
+        self.calls = []
+        original = _lt._LtLinearProduct.grad
+
+        def counted(ctx, grad):
+            self.calls.append(1)
+            return original(ctx, grad)
+
+        _lt._LtLinearProduct.grad = counted
+        self.addCleanup(setattr, _lt._LtLinearProduct, "grad", original)
+
+    def _arrays(self, shape, cin, cout):
+        x = (self.rs.randn(*shape, cin) * 0.5).astype("float32")
+        w = (self.rs.randn(cout, cin) * 0.5).astype("float32")
+        b = (self.rs.randn(cout) * 0.5).astype("float32")
+        return x, w, b
+
+    def _step(self, use_cuda, x, w, b, dout, dtype, x_grad=True, bias_grad=True,
+              transposed=False):
+        with jt.flag_scope(use_cuda=use_cuda, cuda_allow_tf32=0):
+            jx, jw, jb = (jt.array(t).cast(dtype) for t in (x, w, b))
+            if not x_grad:
+                jx = jx.stop_grad()
+            if not bias_grad:
+                jb = jb.stop_grad()
+            out = nn.linear(jx, jw, jb)
+            jd = jt.array(dout).cast(dtype)
+            # A transposed product hands the backward a strided gradient.
+            loss = (out.transpose() * jd.transpose()).sum() if transposed else (out * jd).sum()
+            wants = [v for v, keep in ((jx, x_grad), (jw, True), (jb, bias_grad)) if keep]
+            grads = jt.grad(loss, wants)
+            return [out.float64().numpy()] + [g.float64().numpy() for g in grads]
+
+    def _check(self, shape, cin, cout, dtype, tol, **kw):
+        x, w, b = self._arrays(shape, cin, cout)
+        dout = self.rs.randn(*shape, cout).astype("float32")
+        want = self._step(0, x, w, b, dout, "float64", **kw)
+        self.calls.clear()
+        got = self._step(1, x, w, b, dout, dtype, **kw)
+        self.assertEqual(self.calls, [1], "the training route should have served it")
+        self.assertEqual(len(got), len(want))
+        for i, (g, r) in enumerate(zip(got, want)):
+            np.testing.assert_allclose(g, r, rtol=tol, atol=tol * np.abs(r).max(),
+                                       err_msg=f"{dtype} {shape}: output, then gradients; #{i}")
+
+    def test_gradients_match_the_cpu_in_every_dtype(self):
+        for dtype, tol in (("float32", 1e-4), ("float16", 2e-2), ("bfloat16", 6e-2)):
+            for shape, cin, cout in (((96,), 64, 160), ((3, 40), 72, 48)):
+                with self.subTest(dtype=dtype, shape=shape):
+                    self._check(shape, cin, cout, dtype, tol)
+
+    def test_without_an_input_or_a_bias_gradient(self):
+        self._check((3, 40), 72, 48, "float32", 1e-4, x_grad=False)
+        self._check((3, 40), 72, 48, "float32", 1e-4, bias_grad=False)
+
+    def test_a_gradient_too_large_to_fold_sums_the_bias_gradient(self):
+        # The fold is taken for a gradient the L2 cache holds; with none to
+        # hold it, dW still comes from cuBLASLt and db from a plain sum.
+        saved = dict(_lt._L2_BYTES)
+        self.addCleanup(lambda: (_lt._L2_BYTES.clear(), _lt._L2_BYTES.update(saved)))
+        with jt.flag_scope(use_cuda=1):
+            _lt._L2_BYTES[int(jt.core.current_device())] = 0
+        self._check((3, 40), 72, 48, "float32", 1e-4)
+        self._check((96,), 64, 160, "float16", 2e-2)
+
+    def test_a_strided_output_gradient_takes_the_portable_products(self):
+        self._check((96,), 64, 160, "float32", 1e-4, transposed=True)
+
+    def test_what_it_leaves_to_the_portable_route(self):
+        with jt.flag_scope(use_cuda=1):
+            x, w, b = (jt.array(t) for t in self._arrays((64,), 96, 80))
+            self.assertIsNone(_lt.lt_linear_train_cuda(x, w.stop_grad(), b))
+            with jt.no_grad():
+                self.assertIsNone(_lt.lt_linear_train_cuda(x, w, b))
+            self.assertIsNone(_lt.lt_linear_train_cuda(x.float64(), w.float64(), b.float64()))
+            self.assertIsNone(_lt.lt_linear_train_cuda(x[:, ::2], w[:, ::2], b))
+            small = jt.array(self.rs.randn(2, 4).astype("float32"))
+            self.assertIsNone(_lt.lt_linear_train_cuda(
+                small, jt.array(self.rs.randn(3, 4).astype("float32")),
+                jt.array(self.rs.randn(3).astype("float32"))))
+        with jt.flag_scope(use_cuda=0):
+            self.assertIsNone(_lt.lt_linear_train_cuda(x, w, b))
 
 if __name__ == "__main__":
     unittest.main()

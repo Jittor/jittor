@@ -18,6 +18,7 @@
 #include "runtime/launch_diagnostics.h"
 #include "ops/op_register.h"
 #include "ops/composite/array_op.h"
+#include "ops/composite/tape_op.h"
 #include "core/exec_runner.h"
 #include "core/executor.h"
 #include "core/var.h"
@@ -498,6 +499,24 @@ static bool has_reuse_candidate(FusedOp& fused) {
     return false;
 }
 
+// Whether `v` shares its storage with nothing but the value its tape wraps.
+// A `jt.Function`'s output is a tape: no kernel, the storage of what the
+// Function computed, which only the tape reads -- and the tape's backward does
+// not read it either. So when the tape dies the buffer has no reader left,
+// although the wrapped value stays pending as long as the tape's graph does,
+// and the ring the two form used to keep every Function output -- a linear
+// layer's product, a batch norm's -- from being taken over by the elementwise
+// kernel reading it.
+static bool shares_only_with_its_tape_source(Var* v) {
+    if (!v->share_next || v->share_next->share_next != v) return false;
+    Op* op = v->input();
+    if (!op || !dynamic_cast<TapeOp*>(op)) return false;
+    Var* source = v->share_next;
+    return op->inputs().front() == source && !source->holder && source->outputs().size() == 1
+        && source->mem_ptr == v->mem_ptr && source->size == v->size
+        && !source->flag(VarFlags::_host_resident);
+}
+
 static void reuse_dying_inputs_of(FusedOp& fused, const vector<Var*>& last_used,
                                   const std::unordered_set<Var*>& kept_pinned,
                                   Allocator* allocator, vector<Var*>& taken) {
@@ -519,7 +538,8 @@ static void reuse_dying_inputs_of(FusedOp& fused, const vector<Var*>& last_used,
             if (in_info.type != 0 || !v->mem_ptr || v->allocator != allocator
                     || v->size != out->size || v->dsize() != out->dsize() || v->shape != out->shape
                     || v->storage_strides != out->storage_strides || v->storage_span_bytes() != v->size
-                    || v->storage_offset_bytes || v->share_next || v->is_sharing()
+                    || v->storage_offset_bytes || v->is_sharing()
+                    || (v->share_next && !shares_only_with_its_tape_source(v))
                     || (best && v->id < best->id)
                     || std::find(taken.begin(), taken.end(), v) != taken.end())
                 continue;

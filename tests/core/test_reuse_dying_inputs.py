@@ -26,6 +26,18 @@ def _data(seed, *shape):
     return np.random.RandomState(seed).randn(*shape).astype("float32")
 
 
+class _Product(jt.Function):
+    """A product whose output is a tape over the matmul it computed, as every
+    `jt.Function`'s is."""
+
+    def execute(self, x, w):
+        self.x, self.w = x, w
+        return jt.matmul(x, w)
+
+    def grad(self, g):
+        return jt.matmul(g, self.w.transpose()), jt.matmul(self.x.transpose(), g)
+
+
 class TestReuseDyingInputs(JittorTestCase):
 
     def test_values_with_and_without_reuse(self, device):
@@ -72,6 +84,40 @@ class TestReuseDyingInputs(JittorTestCase):
         def step(x, w):
             m = jt.matmul(x, w)
             return [(m * 0.5 - 1.0).sigmoid()]
+        with jt.flag_scope(reuse_dying_inputs=2):
+            capture = jt.capture_step(step)
+            w = jt.array(b)
+            for i in range(4):
+                x = jt.array(a + i)
+                got = capture(x, w)[0].numpy()
+                ref = 1 / (1 + np.exp(-((a + i) @ b * 0.5 - 1.0)))
+                np.testing.assert_allclose(got, ref, rtol=1e-4, atol=1e-5)
+
+    def test_a_function_output_read_for_the_last_time(self, device):
+        # The tape and the product it wraps share one buffer that nothing else
+        # reads; the elementwise kernel may take it over, and the gradients
+        # flowing back through the Function are unchanged.
+        a, b = _data(9, 512, 32), _data(10, 32, 256)
+        r = _data(11, 512, 256)
+
+        def run(flag):
+            with jt.flag_scope(reuse_dying_inputs=flag):
+                x, w = jt.array(a), jt.array(b)
+                y = (_Product.apply(x, w) * 0.5 - 1.0).sigmoid()
+                gx, gw = jt.grad((y * jt.array(r)).sum(), [x, w])
+                return [y.numpy(), gx.numpy(), gw.numpy()]
+        ref = run(0)
+        for got, want in zip(run(2), ref):
+            np.testing.assert_allclose(got, want, rtol=1e-5, atol=1e-6)
+
+    def test_a_function_output_in_a_kept_graph_replayed(self, device):
+        # Where the takeover happens: in a captured step the wrapped product
+        # stays pending with the graph, and the ring it forms with its tape
+        # used to rule the tape out.
+        a, b = _data(12, 512, 16), _data(13, 16, 512)
+
+        def step(x, w):
+            return [(_Product.apply(x, w) * 0.5 - 1.0).sigmoid()]
         with jt.flag_scope(reuse_dying_inputs=2):
             capture = jt.capture_step(step)
             w = jt.array(b)

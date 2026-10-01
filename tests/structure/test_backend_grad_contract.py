@@ -113,6 +113,9 @@ BACKEND_GRAD_COVERAGE = (
      "cuda_numpy"),
 
     # ---- CUDA, hand-written kernels as jt.Function. Real hardware here. ---
+    ("backends/cuda/kernels/cublas/lt_linear_cuda.py", "_LtLinearProduct",
+     "tests/nn/test_lt_linear_cuda.py::TestLtLinearTraining::test_gradients_match_the_cpu_in_every_dtype",
+     "cuda_cpu_jittor"),
     ("backends/cuda/kernels/nn/batch_norm_training_cuda.py", "BatchNormCUDA",
      "tests/nn/test_norm.py::TestBatchNorm::test_cuda_fast_path_forward_and_all_gradients",
      "cuda_cpu_jittor"),
