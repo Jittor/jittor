@@ -36,10 +36,11 @@ jobs:
     # a cache miss, not just the tests.
     timeout-minutes: 45
     steps:
-      - name: Install Git for checkout
+      - name: Install Git and CA certificates for checkout
         run: |
           apt-get update
-          apt-get install --yes --no-install-recommends git
+          apt-get install --yes --no-install-recommends git ca-certificates
+          update-ca-certificates
       - name: Check out source
         uses: actions/checkout@v6
         with:
@@ -75,10 +76,11 @@ jobs:
     # the manual probes and the independent-PyTorch oracle.
     timeout-minutes: 240
     steps:
-      - name: Install Git for checkout
+      - name: Install Git and CA certificates for checkout
         run: |
           apt-get update
-          apt-get install --yes --no-install-recommends git
+          apt-get install --yes --no-install-recommends git ca-certificates
+          update-ca-certificates
       - name: Check out source
         uses: actions/checkout@v6
         with:
@@ -133,10 +135,11 @@ jobs:
       ASV_MACHINE: github-ubuntu-cpu
       ASV_COMPARE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
     steps:
-      - name: Install Git for checkout
+      - name: Install Git and CA certificates for checkout
         run: |
           apt-get update
-          apt-get install --yes --no-install-recommends git
+          apt-get install --yes --no-install-recommends git ca-certificates
+          update-ca-certificates
       - name: Check out source
         uses: actions/checkout@v6
         with:
