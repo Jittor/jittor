@@ -897,6 +897,9 @@ def _write_asv_config(root, results_dir, html_dir):
             "html_dir": str(html_dir),
         }
     )
+    # A fork checkout can be detached and lack upstream's named branches.
+    # HEAD is the exact checked-out revision that this invocation measures.
+    config["branches"] = ["HEAD"]
     config_path = root / "asv-ci.conf.json"
     config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return config_path
@@ -1106,11 +1109,13 @@ def structure(session):
         JUPYTEXT,
         NBFORMAT,
         "numpy==1.26.4",
+        SCIPY,
         "pillow==11.0.0",
         "tqdm==4.67.1",
     )
     session.run("bash", "tools/check_repo_layout.sh", external=True, env=env)
     _install_compat_source(session, env)
+    session.install("--no-deps", "--no-build-isolation", "-e", str(REPO_ROOT / "adapters"))
     test_paths = tuple(session.posargs) or STRUCTURE_TESTS
     if not session.posargs:
         # Portable adapter fixtures install fake modules: execute them outside
@@ -1791,6 +1796,7 @@ def cpu(session):
     oracle_env = env.copy()
     if real_torch_site:
         oracle_env["REAL_TORCH_SITE"] = real_torch_site
+        oracle_env["JITTOR_REQUIRE_REAL_TORCH"] = "1"
     elif require_real_torch:
         session.error("independent PyTorch oracle is required but unavailable")
     _run_pytest(session, CPU_TORCH_ORACLE_TESTS, oracle_env)

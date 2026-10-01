@@ -77,7 +77,8 @@ jobs:
   python37:
     needs: baseline
     name: nox / py37
-    runs-on: ${{ needs.baseline.outputs.host_runner }}
+    # setup-python has no Python 3.7 build for Ubuntu 24.04.
+    runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
       - name: Check out source

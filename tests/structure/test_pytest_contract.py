@@ -534,6 +534,15 @@ def test_optional_dependency_probe_accepts_preloaded_independent_torch(monkeypat
         assert torch_runtime.modules_available("torch.nn")
 
 
+def test_optional_dependency_probe_requires_preloaded_torch(monkeypatch):
+    from _helpers import torch_runtime
+
+    monkeypatch.delenv("REAL_TORCH_SITE", raising=False)
+    monkeypatch.delitem(torch_runtime.sys.modules, "torch", raising=False)
+    with mock.patch.object(torch_runtime.importlib.util, "find_spec", return_value=object()):
+        assert not torch_runtime.modules_available("torch.nn")
+
+
 def test_optional_dependency_probe_rejects_loaded_jittor_torch_alias(monkeypatch):
     from _helpers import torch_runtime
 

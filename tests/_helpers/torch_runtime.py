@@ -84,7 +84,12 @@ def _spec_is_deployed_torch_shim(spec):
 
 
 def modules_available(*module_names):
-    """Return whether top-level optional dependencies are discoverable without importing."""
+    """Return whether optional dependencies are usable in this test process.
+
+    The independent Torch oracle must already own ``sys.modules['torch']``.
+    Merely finding a ``torch`` spec is insufficient because Jittor's deployed
+    compatibility stub also has that name and importing it changes process mode.
+    """
     top_level_names = {module_name.partition(".")[0] for module_name in module_names}
     for module_name in top_level_names:
         try:
@@ -109,9 +114,7 @@ def modules_available(*module_names):
                 if _site_spec(module_name, site) is None:
                     return False
             elif module_name == "torch":
-                spec = importlib.util.find_spec(module_name)
-                if spec is None or _spec_is_deployed_torch_shim(spec):
-                    return False
+                return False
             elif module_name == "torchvision":
                 module = sys.modules.get(module_name)
                 if module is not None and "jittor" in str(getattr(module, "__file__", "")):

@@ -38,6 +38,8 @@ class TestPackagingStructure(unittest.TestCase):
         backend_discovered = {"jittor.backends." + name
                               for name in find_packages(where=str(backend_root))}
         self.assertEqual(backend_discovered, backend_expected)
+        self.assertIn("jittor.backends.cuda.kernels.cublas", backend_discovered)
+        self.assertTrue((backend_root / "cuda/kernels/cublas/lt_linear_cuda.py").is_file())
 
     def test_pyproject_uses_regular_package_discovery(self):
         try:

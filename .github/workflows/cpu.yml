@@ -47,7 +47,7 @@ jobs:
           persist-credentials: false
       - name: Install native CPU toolchain
         run: |
-          apt-get install --yes --no-install-recommends build-essential libomp-dev
+          apt-get install --yes --no-install-recommends build-essential cmake libomp-dev
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -87,7 +87,7 @@ jobs:
           persist-credentials: false
       - name: Install native CPU toolchain
         run: |
-          apt-get install --yes --no-install-recommends build-essential libomp-dev
+          apt-get install --yes --no-install-recommends build-essential cmake libomp-dev
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
