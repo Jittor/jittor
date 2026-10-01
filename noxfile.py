@@ -217,8 +217,7 @@ CPU_TORCH_ORACLE_TESTS = (
     "tests/nn/test_relu.py",
     "tests/nn/test_state_dict_dtypes.py::TestStateDictDtypes::"
     "test_torch_conversion_keeps_every_dtype",
-    "tests/nn/test_state_dict_dtypes.py::TestStateDictDtypes::"
-    "test_values_survive_the_conversion",
+    "tests/nn/test_state_dict_dtypes.py::TestStateDictDtypes::test_values_survive_the_conversion",
     "tests/nn/test_state_dict_dtypes.py::TestStateDictDtypes::"
     "test_a_value_that_float32_cannot_hold",
     "tests/serialization/test_native_serialization_ownership.py::"
