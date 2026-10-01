@@ -199,6 +199,11 @@ class TestLtLinearTraining(unittest.TestCase):
     def setUp(self):
         self.rs = np.random.RandomState(1)
         self.calls = []
+        # Small problems keep the float64 CPU reference cheap; the size floor
+        # the route applies is its own case below.
+        for name, value in (("_MIN_ROWS", 1), ("_MIN_PRODUCT", 1)):
+            self.addCleanup(setattr, _lt, name, getattr(_lt, name))
+            setattr(_lt, name, value)
         original = _lt._LtLinearProduct.grad
 
         def counted(ctx, grad):
@@ -273,10 +278,17 @@ class TestLtLinearTraining(unittest.TestCase):
                 self.assertIsNone(_lt.lt_linear_train_cuda(x, w, b))
             self.assertIsNone(_lt.lt_linear_train_cuda(x.float64(), w.float64(), b.float64()))
             self.assertIsNone(_lt.lt_linear_train_cuda(x[:, ::2], w[:, ::2], b))
-            small = jt.array(self.rs.randn(2, 4).astype("float32"))
+            # Too small for a better GEMM to repay the Function's host time:
+            # a diffusion UNet's 16-row time-embedding projection.
+            _lt._MIN_ROWS, _lt._MIN_PRODUCT = 1024, 1 << 28
             self.assertIsNone(_lt.lt_linear_train_cuda(
-                small, jt.array(self.rs.randn(3, 4).astype("float32")),
-                jt.array(self.rs.randn(3).astype("float32"))))
+                jt.array(self.rs.randn(16, 512).astype("float32")),
+                jt.array(self.rs.randn(512, 512).astype("float32")),
+                jt.array(self.rs.randn(512).astype("float32"))))
+            self.assertIsNotNone(_lt.lt_linear_train_cuda(
+                jt.array(self.rs.randn(4096, 768).astype("float32")),
+                jt.array(self.rs.randn(768, 768).astype("float32")),
+                jt.array(self.rs.randn(768).astype("float32"))))
         with jt.flag_scope(use_cuda=0):
             self.assertIsNone(_lt.lt_linear_train_cuda(x, w, b))
 

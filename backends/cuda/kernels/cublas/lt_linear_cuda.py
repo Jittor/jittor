@@ -64,6 +64,7 @@ Kept out on purpose:
     the portable path.
 """
 
+import functools
 import os
 
 import jittor as jt
@@ -377,6 +378,7 @@ def _l2_bytes():
     return size
 
 
+@functools.lru_cache(maxsize=256)
 def _wgrad_source(rows, cin, cout, dtype, fold_bias):
     ct, kt = _LT_TYPES[dtype]
     epilogue = "CUBLASLT_EPILOGUE_BGRADB" if fold_bias else "CUBLASLT_EPILOGUE_DEFAULT"
@@ -546,7 +548,18 @@ def _supports_training(x, weight, bias):
     rows = 1
     for d in x.shape[:-1]:
         rows *= int(d)
-    return rows * cin * cout >= (1 << 18)
+    # The route costs a Function call -- tapes, a context, a second operator
+    # in the backward -- about 70 us of host time a layer, forward and
+    # backward together. A product too small for a better GEMM or for its
+    # bias sum to matter pays that for nothing: a DDPM UNet's forty-odd
+    # 16-row time-embedding projections made its eager step 64.0 -> 68.3 ms
+    # at an unchanged device time.
+    return rows >= _MIN_ROWS and rows * cin * cout >= _MIN_PRODUCT
+
+
+#: The smallest problem the training route takes: rows, and rows x cin x cout.
+_MIN_ROWS = 1024
+_MIN_PRODUCT = 1 << 28
 
 
 def lt_linear_train_cuda(x, weight, bias):
