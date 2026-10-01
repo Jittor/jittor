@@ -58,7 +58,7 @@ jobs:
       - name: Install native packaging toolchain
         run: |
           apt-get update
-          apt-get install --yes --no-install-recommends build-essential libomp-dev
+          apt-get install --yes --no-install-recommends build-essential libomp-dev git
       - name: Set up Python
         uses: actions/setup-python@v6
         with:

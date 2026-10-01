@@ -124,8 +124,6 @@ jobs:
       image: ${{ needs.baseline.outputs.cpu_ci_image }}
     timeout-minutes: 90
     env:
-      ASV_RESULTS_DIR: ${{ github.workspace }}/../jittor-lab/_state/asv-cpu/results
-      ASV_HTML_DIR: ${{ github.workspace }}/../jittor-lab/_state/asv-cpu/html
       ASV_MACHINE: github-ubuntu-cpu
       ASV_COMPARE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
     steps:
@@ -137,7 +135,11 @@ jobs:
       - name: Install native CPU toolchain
         run: |
           apt-get update
-          apt-get install --yes --no-install-recommends build-essential libomp-dev
+          apt-get install --yes --no-install-recommends build-essential libomp-dev git
+      - name: Prepare ASV paths
+        run: |
+          echo "ASV_RESULTS_DIR=$RUNNER_TEMP/jittor-asv/results" >> "$GITHUB_ENV"
+          echo "ASV_HTML_DIR=$RUNNER_TEMP/jittor-asv/html" >> "$GITHUB_ENV"
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
