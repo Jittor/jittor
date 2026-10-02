@@ -137,6 +137,8 @@ class TestChannelsLast(unittest.TestCase):
                 np.testing.assert_allclose(g, w, rtol=rtol, atol=1e-5)
 
     def test_a_training_convolution_goes_channels_last_only_into_a_batch_norm(self):
+        # A group norm's convolution output is read by the residual add as
+        # well, which would compute it twice; it stays NCHW.
         conv = nn.Conv2d(3, 8, 3, padding=1)
         bn = nn.BatchNorm2d(8)
         gn = nn.GroupNorm(2, 8)
@@ -144,6 +146,39 @@ class TestChannelsLast(unittest.TestCase):
         self.assertTrue(conv(x)._storage_is_contiguous())
         self.assertTrue(_is_channels_last(bn(conv(x))))
         self.assertTrue(gn(conv(x))._storage_is_contiguous())
+
+    def test_a_training_group_norm_over_channels_last_storage(self):
+        # Ten channels a group, so a float4 of channels straddles two groups;
+        # with silu taken into the pass, and its gradient into the backward's.
+        for shape, groups, act in (((2, 320, 6, 5), 32, True), ((3, 8, 7, 4), 2, False)):
+            a = (self.rng.randn(*shape) * 2 + 0.5).astype("float32")
+            w = (self.rng.randn(shape[1]) * 0.5 + 1).astype("float32")
+            b = self.rng.randn(shape[1]).astype("float32")
+            cot = self.rng.randn(*shape).astype("float32")
+
+            def run(channels_last, use_cuda):
+                with jt.flag_scope(use_cuda=use_cuda):
+                    if channels_last:
+                        source = jt.array(np.ascontiguousarray(a.transpose(0, 2, 3, 1)))
+                        x = source._storage_permute((0, 3, 1, 2))
+                    else:
+                        source = x = jt.array(a)
+                    jw, jb = jt.array(w), jt.array(b)
+                    y = nn.group_norm(x, groups, jw, jb, 1e-5)
+                    if act:
+                        y = nn.silu(y)
+                    if channels_last:
+                        self.assertIsNotNone(channels_last_source(y))
+                    gs, gw, gb = jt.grad((y * jt.array(cot)).sum(), [source, jw, jb])
+                    gs = gs.numpy()
+                    if channels_last:
+                        gs = gs.transpose(0, 3, 1, 2)
+                    return [y.numpy(), gs, gw.numpy(), gb.numpy()]
+            got = run(True, 1)
+            want = run(False, 0)
+            for name, g, r in zip(("y", "dx", "dw", "db"), got, want):
+                np.testing.assert_allclose(g, r, rtol=1e-4, atol=1e-4 * np.abs(r).max(),
+                                           err_msg=f"{shape} {name}")
 
     def test_convolution_group_norm_and_pooling_match_nchw(self):
         conv1 = nn.Conv2d(16, 32, 3, padding=1)

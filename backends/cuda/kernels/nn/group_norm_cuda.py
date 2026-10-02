@@ -25,7 +25,7 @@ from jittor.nn.functional._layout import channels_last_source, channels_last_vie
 from jittor.nn.functional.activation import offer_activation
 
 from .batch_norm_training_cuda import (
-    _PAIR, _THREADS, _WELFORD, _elementwise, _launch, _per_channel, _segments,
+    _PAIR, _THREADS, _WELFORD, _elementwise, _launch, _nhwc_reduction, _per_channel, _segments,
 )
 
 
@@ -436,6 +436,205 @@ def _group_norm_nhwc(x, num_groups, weight, bias, eps):
     return y
 
 
+def _nhwc_sample_blocks(batch, spatial, channels):
+    """Launch shape of a per-sample NHWC reduction: lanes over float4s of
+    channels, threads over positions, (segments of positions, samples) on the
+    grid's y and z."""
+    lanes = channels // 4
+    tx = min(lanes, 32)
+    ty = _THREADS // tx
+    tiles = -(-lanes // tx)
+    segments = max(1, min(-(-1024 // (tiles * batch)), spatial // (ty * 8)))
+    per_segment = -(-spatial // segments)
+    return tx, ty, tiles, segments, per_segment
+
+
+@lru_cache(maxsize=128)
+def _group_norm_nhwc_backward_source(shape, num_groups, act=""):
+    """The backward of `_group_norm_nhwc_source`'s normalization, over the
+    same dense NHWC storage: per (sample, channel) the sums of dz and
+    dz * xhat over the positions, dz the gradient through the activation;
+    from them per channel the weight and bias gradients and per (sample,
+    group) the two means the input gradient needs; then that gradient,
+    elementwise. The NCHW backward's arithmetic, walked the NHWC way: a
+    warp reads 512 contiguous bytes of one position's channels."""
+    batch, height, width, channels = shape
+    spatial = height * width
+    cpg = channels // num_groups
+    rows = batch * num_groups
+    group_size = cpg * spatial
+    total = batch * spatial * channels
+    tx, ty, tiles, segments, per_segment = _nhwc_sample_blocks(batch, spatial, channels)
+    parts = segments * batch * channels
+    grad_act = _ACTIVATIONS[act][1]
+    header = _header() + f"""
+    #define CHANNELS {channels}
+    __device__ __forceinline__ float jt_gn_act_grad(float gs, float z) {{ {grad_act} }}
+    """
+    sums = _nhwc_reduction(
+        "group_norm_nhwc_backward_sums",
+        "const in0_type* grad_y_, const in1_type* x_, const float* mean, const float* rstd, "
+        "const in4_type* weight, const in5_type* bias, float* partial",
+        ("a", "b"), f"""
+            const long long sample_base = (long long)blockIdx.z * {spatial} * (CHANNELS / 4);
+            const float4* grad_y = (const float4*)grad_y_ + sample_base;
+            const float4* x = (const float4*)x_ + sample_base;
+            float center[4], rs[4], w[4], shift[4];
+            #pragma unroll
+            for (int k = 0; k < 4; k++) {{
+                int c = lane * 4 + k;
+                int row = blockIdx.z * {num_groups} + c / {cpg};
+                center[k] = mean[row];
+                rs[k] = rstd[row];
+                w[k] = static_cast<float>(weight[c]);
+                shift[k] = static_cast<float>(bias[c]);
+            }}
+        """, """
+            float4 g4 = grad_y[item], v4 = x[item];
+            float g[4] = {g4.x, g4.y, g4.z, g4.w}, v[4] = {v4.x, v4.y, v4.z, v4.w};
+            #pragma unroll
+            for (int k = 0; k < 4; k++) {
+                float xhat = (v[k] - center[k]) * rs[k];
+                float d = jt_gn_act_grad(g[k], xhat * w[k] + shift[k]);
+                a[k] += d;
+                b[k] += d * xhat;
+            }
+        """, f"""
+            for (int k = 0; k < 4; k++) {{
+                int slot = (blockIdx.y * {batch} + blockIdx.z) * CHANNELS + lane * 4 + k;
+                partial[slot] = a[k];
+                partial[{parts} + slot] = b[k];
+            }}
+        """, tx, ty, tiles, per_segment, spatial)
+    assert "a[k] = shared[0 + k][ty + span][tx]" in sums
+    sums = sums.replace(
+        """for (int k = 0; k < 4; k++) a[k] = shared[0 + k][ty + span][tx];
+for (int k = 0; k < 4; k++) b[k] = shared[4 + k][ty + span][tx];""",
+        """for (int k = 0; k < 4; k++) {
+                    shared[0 + k][ty][tx] += shared[0 + k][ty + span][tx];
+                    shared[4 + k][ty][tx] += shared[4 + k][ty + span][tx];
+                }""")
+    return header, sums, (tx, ty, tiles, segments, parts, rows, group_size, total, spatial, cpg)
+
+
+@lru_cache(maxsize=128)
+def _group_norm_nhwc_training_cls(shape, num_groups, eps, act=""):
+    """Training group norm over dense NHWC storage `x` [N, H, W, C]: what a
+    channels-last convolution hands out in training, normalized and handed
+    on in the same layout. See `_group_norm_nhwc_backward_source`."""
+    batch, height, width, channels = shape
+    assert channels % 4 == 0, channels
+    fwd_header, fwd_src, rows, fwd_parts = _group_norm_nhwc_source(shape, num_groups, eps, act)
+    header, sums, dims = _group_norm_nhwc_backward_source(shape, num_groups, act)
+    tx, ty, tiles, segments, parts, rows, group_size, total, spatial, cpg = dims
+    elementwise_blocks = max(1, min(-(-(total // 4) // _THREADS), 65535 * 8))
+
+    class GroupNormNHWC(jt.Function):
+        def execute(self, x, weight, bias):
+            y, mean, rstd, _ = jt.code(
+                [x.shape, (rows,), (rows,), (fwd_parts,)],
+                [x.dtype, "float32", "float32", "float32"],
+                [x, weight, bias], cuda_header=fwd_header, cuda_src=fwd_src)
+            self.saved = x, mean, rstd, weight, bias
+            return y
+
+        def grad(self, grad_y):
+            x, mean, rstd, weight, bias = self.saved
+            if not grad_y._storage_is_contiguous() or grad_y._storage_offset():
+                grad_y = grad_y.clone()
+            grad_x, grad_weight, grad_bias, _, _ = jt.code(
+                [grad_y.shape, weight.shape, weight.shape, (2 * parts,), (2 * rows,)],
+                [grad_y.dtype, weight.dtype, weight.dtype, "float32", "float32"],
+                [grad_y, x, mean, rstd, weight, bias],
+                cuda_header=header,
+                cuda_src=f"""
+                {sums}
+                __global__ static void group_norm_nhwc_backward_finish(
+                        const float* partial, const in4_type* weight,
+                        out1_type* grad_weight, out2_type* grad_bias, float* coef) {{
+                    int i = blockIdx.x * blockDim.x + threadIdx.x;
+                    if (i < CHANNELS) {{
+                        float gw = 0.0f, gb = 0.0f;
+                        for (int s = 0; s < {segments * batch}; s++) {{
+                            gb += partial[s * CHANNELS + i];
+                            gw += partial[{parts} + s * CHANNELS + i];
+                        }}
+                        grad_weight[i] = out1_type(gw);
+                        grad_bias[i] = out2_type(gb);
+                    }}
+                    if (i < {rows}) {{
+                        int n = i / {num_groups}, first = (i % {num_groups}) * {cpg};
+                        float g = 0.0f, gx = 0.0f;
+                        for (int c = first; c < first + {cpg}; c++) {{
+                            float w = static_cast<float>(weight[c]);
+                            for (int s = 0; s < {segments}; s++) {{
+                                int slot = (s * {batch} + n) * CHANNELS + c;
+                                g += w * partial[slot];
+                                gx += w * partial[{parts} + slot];
+                            }}
+                        }}
+                        coef[i] = g / {group_size}.0f;
+                        coef[{rows} + i] = gx / {group_size}.0f;
+                    }}
+                }}
+                __global__ static void group_norm_nhwc_backward_apply(
+                        const in0_type* grad_y, const in1_type* x, const float* mean,
+                        const float* rstd, const in4_type* weight, const in5_type* bias,
+                        const float* coef, out0_type* grad_x) {{
+                    long long stride = (long long)gridDim.x * blockDim.x;
+                    for (long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+                            i < {total // 4}LL; i += stride) {{
+                        int lane = (int)(i % (CHANNELS / 4));
+                        int n = (int)(i / ({spatial}LL * (CHANNELS / 4)));
+                        float4 dy = reinterpret_cast<const float4*>(grad_y)[i];
+                        float4 v = reinterpret_cast<const float4*>(x)[i];
+                        float g[4] = {{dy.x, dy.y, dy.z, dy.w}}, xv[4] = {{v.x, v.y, v.z, v.w}};
+                        float out[4];
+                        #pragma unroll
+                        for (int k = 0; k < 4; k++) {{
+                            int c = lane * 4 + k;
+                            int row = n * {num_groups} + c / {cpg};
+                            float r = rstd[row], w = static_cast<float>(weight[c]);
+                            float xhat = (xv[k] - mean[row]) * r;
+                            float d = jt_gn_act_grad(g[k], xhat * w + static_cast<float>(bias[c])) * w;
+                            out[k] = r * (d - coef[row] - xhat * coef[{rows} + row]);
+                        }}
+                        reinterpret_cast<float4*>(grad_x)[i] = make_float4(out[0], out[1], out[2], out[3]);
+                    }}
+                }}
+                group_norm_nhwc_backward_sums<<<dim3({tiles}, {segments}, {batch}), {tx * ty}>>>(
+                    in0_p, in1_p, in2_p, in3_p, in4_p, in5_p, out3_p);
+                group_norm_nhwc_backward_finish<<<{_per_channel(max(rows, channels))}>>>(
+                    out3_p, in4_p, out1_p, out2_p, out4_p);
+                group_norm_nhwc_backward_apply<<<{elementwise_blocks}, {_THREADS}>>>(
+                    in0_p, in1_p, in2_p, in3_p, in4_p, in5_p, out4_p, out0_p);
+                CHECK(0 == cudaGetLastError());
+                """,
+            )
+            return grad_x, grad_weight, grad_bias
+
+    return GroupNormNHWC
+
+
+def _group_norm_nhwc_training(source, num_groups, weight, bias, eps):
+    """`_group_norm_cuda` for an NCHW view of dense NHWC storage that records
+    a gradient: normalized as it lies and handed on the same way, so a
+    channels-last convolution chain stays channels-last."""
+    shape = tuple(int(size) for size in source.shape)
+    if shape[3] % 4 or _dtype_name(source.dtype) != "float32":
+        return None
+    key = (shape, int(num_groups), float(eps))
+    y = channels_last_view(_group_norm_nhwc_training_cls(*key).apply(source, weight, bias))
+
+    def fuse_activation(act):
+        if act not in _ACTIVATIONS:
+            return None
+        return channels_last_view(
+            _group_norm_nhwc_training_cls(*key, act).apply(source, weight, bias))
+    offer_activation(y, fuse_activation)
+    return y
+
+
 def _supports_group_norm(x, num_groups, weight, bias, eps):
     if not (
         isinstance(weight, jt.Var)
@@ -470,6 +669,11 @@ def _group_norm_cuda(x, num_groups, weight, bias, eps):
         nhwc = _group_norm_nhwc(x, num_groups, weight, bias, eps)
         if nhwc is not None:
             return nhwc
+        source = channels_last_source(x)
+        if source is not None:
+            nhwc = _group_norm_nhwc_training(source, num_groups, weight, bias, eps)
+            if nhwc is not None:
+                return nhwc
     shape = tuple(int(size) for size in x.shape)
     num_groups = int(num_groups)
     spatial = shape[2] * shape[3]
