@@ -911,10 +911,9 @@ def _asv_state_path(variable, fallback):
 
 def _write_asv_config(root, results_dir, html_dir):
     config = json.loads((REPO_ROOT / "benchmarks" / "asv.conf.json").read_text(encoding="utf-8"))
-    checkout_branch = _git_output("symbolic-ref", "--quiet", "--short", "HEAD")
     # ASV resolves every configured branch even when recording only one commit.
     # A fork checkout need not contain the upstream names in asv.conf.json.
-    config["branches"] = [checkout_branch or "HEAD"]
+    config["branches"] = ["HEAD"]
     config.update(
         {
             "repo": str(REPO_ROOT),
