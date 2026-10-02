@@ -8,7 +8,7 @@ import jittor as jt
 from jittor import nn
 from jittor.nn.backends import hooks as _backend_hooks
 from jittor.backends.cuda.kernels.nn.rms_norm_training_cuda import _rms_norm_training_cuda
-from jittor.backends.cuda.kernels.nn.rms_norm_cuda import _rms_norm_cuda
+from jittor.backends.cuda.kernels.nn.rms_norm_cuda import _rms_norm_cuda, _rms_norm_source
 from ...context import registry_for
 from ...nested import _torch_register_leaf
 from ...tensor_state import get_tensor_state
@@ -210,6 +210,9 @@ def _maybe_pipeline(result):
 #: outside the instance so it cannot show up in ``__dict__`` -- a module's
 #: field set is part of its published shape, and tests pin it exactly.
 _leaves_published = weakref.WeakSet()
+#: The same modules by id, for the native module call's shortcut to ask
+#: without a weak reference per call; an entry goes with its module.
+_published_ids = set()
 
 
 def _dispatch_module_call(self, *args, **kwargs):
@@ -249,6 +252,8 @@ def _call(self, *args, **kwargs):
     if self not in _leaves_published:
         try:
             _leaves_published.add(self)
+            _published_ids.add(id(self))
+            weakref.finalize(self, _published_ids.discard, id(self))
         except TypeError as exc:
             swallowed("torch/installers/nn.py _call: _leaves_published.add(self)", exc)
         try:
@@ -281,7 +286,7 @@ def _named_parameters(self, prefix="", recurse=True, remove_duplicate=True):
     """Torch's ``named_parameters``: an iterator, with prefix/dedup."""
     reg = get_tensor_state(jt).leaf_params
     seen = set()
-    for name, v in _ORIG_MODULE_NAMED_PARAMETERS(self, recurse=recurse):
+    for name, v in self._iter_named_vars("parameters", recurse):
         if remove_duplicate and id(v) in seen:
             continue
         seen.add(id(v))
@@ -307,7 +312,7 @@ def _named_buffers(self, prefix="", recurse=True, remove_duplicate=True):
 
 def _named_modules(self, memo=None, prefix="", remove_duplicate=True):
     """Torch's ``named_modules``, accepting memo/prefix/remove_duplicate."""
-    for item in _ORIG_MODULE_NAMED_MODULES(self):
+    for item in self._iter_named_modules():
         # jittor yields (name, module) pairs
         if isinstance(item, tuple) and len(item) == 2:
             name, mod = item
@@ -470,19 +475,97 @@ def _load_state_dict(self, state_dict, strict=True, assign=False):
 
 # torch's Module.parameters() returns an *iterator*; peft does
 # `next(model.parameters())`. jittor returns a list (needed for len()/
-# indexing by optimizers). Return a list subclass that is also an iterator
-# so both `next(...)` and `len(...)`/indexing work.
-class _ParamList(list):
-    """A list that is also its own iterator, for ``next(model.parameters())``."""
+# indexing by optimizers). Return an object that is both.
+class _ParamList:
+    """``parameters()``: produced as it is iterated, indexable once asked to be.
+
+    Transformers reads ``model.dtype`` as the first floating parameter of
+    ``parameters()`` -- once per generated token -- and ``model.device`` as
+    ``next(model.parameters())``. Built as a list, every read walked all of
+    Qwen3-0.6B's 427 modules first: 5.3 ms against torch's 3 us. Iteration now
+    walks only as far as it is taken; ``len``, indexing and the rest walk the
+    remainder once and keep it. A parameter is published as a backward leaf
+    when it is produced, which for a full enumeration is all of them, as
+    before.
+    """
+
+    __slots__ = ("_source", "_items", "_cursor")
+
+    def __init__(self, source):
+        self._source = source
+        self._items = []
+        self._cursor = 0
+
+    def _produce(self):
+        """The next parameter from the walk, or raise StopIteration."""
+        try:
+            value = next(self._source)
+        except StopIteration:
+            self._source = None
+            raise
+        _register_leaf_params((value,))
+        self._items.append(value)
+        return value
+
+    def _all(self):
+        while self._source is not None:
+            try:
+                self._produce()
+            except StopIteration:
+                pass
+        return self._items
 
     def __iter__(self):
-        return list.__iter__(self)
+        index = 0
+        items = self._items
+        while True:
+            if index < len(items):
+                yield items[index]
+            elif self._source is None:
+                return
+            else:
+                try:
+                    yield self._produce()
+                except StopIteration:
+                    return
+            index += 1
 
     def __next__(self):
-        it = getattr(self, "_it", None)
-        if it is None:
-            it = self._it = list.__iter__(self)
-        return next(it)
+        if self._cursor >= len(self._items):
+            if self._source is None:
+                raise StopIteration
+            self._produce()
+        value = self._items[self._cursor]
+        self._cursor += 1
+        return value
+
+    def __len__(self):
+        return len(self._all())
+
+    def __getitem__(self, index):
+        return self._all()[index]
+
+    def __contains__(self, value):
+        return any(value is item for item in self)
+
+    def __add__(self, other):
+        return self._all() + list(other)
+
+    def __radd__(self, other):
+        return list(other) + self._all()
+
+    def __eq__(self, other):
+        if isinstance(other, _ParamList):
+            other = other._all()
+        return self._all() == other
+
+    __hash__ = None
+
+    def __reduce__(self):
+        return list, (list(self._all()),)
+
+    def __repr__(self):
+        return repr(self._all())
 
 
 # Register every trainable parameter as an autograd "leaf" the first time a
@@ -511,10 +594,8 @@ def _register_leaf_params(params):
 
 
 def _parameters(self, recurse=True):
-    """Torch's ``parameters()``: iterable *and* indexable."""
-    pl = _ORIG_MODULE_PARAMETERS(self, recurse=recurse)
-    _register_leaf_params(pl)
-    return _ParamList(pl)
+    """Torch's ``parameters()``: iterable *and* indexable. See `_ParamList`."""
+    return _ParamList(var for _, var in self._iter_named_vars("parameters", recurse))
 
 
 # torch's Module.train(mode=True)/eval() take a mode arg; jittor's train()
@@ -1100,6 +1181,25 @@ def _install_module_methods(nn, registry=None):
     if not hasattr(M, "forward"):
         M.forward = _forward_alias
     M._dispatch_call = _call
+    from ... import nn_frontend as _nn_frontend
+    from ...types import active_device_context as _active_device_context
+    from jittor.nn.functional import matrix as _matrix
+    from jittor.nn.modules.linear import Linear as _NativeLinear
+    # What `_dispatch_module_call` consults, so the native call can run it:
+    # see `module_call_bind` in src/bindings/pyjt/py_module_call.h.
+    _dispatch_parts = {
+        "prefer_forward": _prefer_forward,
+        "standard_rms_norm": _standard_rms_norm,
+        "linear_execute": _NativeLinear.execute,
+        "matmul_kernel": _matrix._cublas_matmul,
+        "rms_norm_inference": _rms_norm_cuda.__wrapped__,
+        "rms_norm_source": _rms_norm_source,
+        "acl_possible": bool(getattr(jt.compiler, "has_acl", 0)),
+    }
+    jt.core._module_call_bind(M, _call, _dispatch_module_call, _published_ids,
+                              _pipeline_state, _active_device_context,
+                              _nn_frontend.python_module_call, _dispatch_parts)
+    _nn_frontend._NATIVE_CALL = jt.core._module_call
     M.set_execution_pipelining = staticmethod(set_execution_pipelining)
     M.get_execution_pipelining = staticmethod(get_execution_pipelining)
     M.named_parameters = _named_parameters

@@ -45,7 +45,17 @@ def _bitcast(self, dt):
     return jt.array(_np.ascontiguousarray(self.numpy()).view(npd))
 
 
+#: `src/bindings/pyjt/py_compat_fast.h`'s `_fast_view`, once the tensor
+#: installer has bound it: a dense tensor reshaped by integer sizes, without
+#: the frames. None answers for everything else.
+_FAST_VIEW = None
+
+
 def _torch_reshape(self, *shape, **_kw):
+    if not _kw and _FAST_VIEW is not None:
+        out = _FAST_VIEW(self, shape)
+        if out is not None:
+            return out
     # torch's `.view(dtype)` / `.view(dtype=...)` REINTERPRETS the bytes as
     # another dtype (bitcast), e.g. weight.view(torch.uint8) for byte-packing
     # in vLLM weight transfer. jittor has no dtype-view; bitcast via numpy.

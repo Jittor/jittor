@@ -13,6 +13,7 @@
 #include "runtime/node_index.h"
 #include "ops/op_register.h"
 #include "core/var_holder.h"
+#include "runtime/submission_pipeline.h"
 
 namespace jittor {
 
@@ -155,6 +156,9 @@ vector<VarPtr> grad(
     bool retain_graph,
     bool materialize_grads
 ) {
+    // No auto-flush while the backward graph is half built; see
+    // `SubmissionPipeline::grad_construction_depth`.
+    GradConstructionScope construction(runtime_submission_pipeline());
     LOGvv << "loss:" >> loss << "targets:" >> targets;
     USER_CHECK(loss->is_float()) << "Loss should be float";
     USER_CHECK(!loss->flag(VarFlags::_first_order_only))

@@ -64,6 +64,21 @@ inline __device__ float16 min(float16 a, float16 b) {
     return float16(_min(float32(a), float32(b)));
 }
 
+// The half overloads above hide the global integer `::min`/`::max` from every
+// kernel in `namespace jittor`, so an index clamp like `min(k + 3, shape)` --
+// which the float32 kernel resolves to `::min(int, int)` -- became ambiguous
+// between the float16 and bfloat16 overloads the moment the kernel touched a
+// half dtype: `MaxPool2d` on a float16 or bfloat16 input did not compile.
+// A same-typed integer template restores the float32 resolution without making
+// any floating-point call resolve differently. It is a template on purpose:
+// the `using jittor::max` below exports these names to the global namespace,
+// where a non-template `int max(int, int)` would collide with CUDA's own; a
+// template coexists with it, and the non-template still wins every tie there.
+template <class T, class = typename std::enable_if<std::is_integral<T>::value>::type>
+inline __host__ __device__ T min(T a, T b) { return b < a ? b : a; }
+template <class T, class = typename std::enable_if<std::is_integral<T>::value>::type>
+inline __host__ __device__ T max(T a, T b) { return a < b ? b : a; }
+
 // sign-aware pow: CUDA ::pow returns NaN for a negative base even when the
 // exponent is integer-valued (and fast-math makes it worse). Match std::pow.
 inline __device__ float32 _signed_powf(float32 x, float32 y) {

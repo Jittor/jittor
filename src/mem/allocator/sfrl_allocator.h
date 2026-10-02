@@ -31,6 +31,9 @@ struct CachingBlock {
     CachingBlock* prev;
     CachingBlock* next;
     bool occupied;
+    // The owning allocator's allocation count when this block last became
+    // free: how long a free segment has sat unused (see trim_before_growing).
+    uint64 freed_at = 0;
     
     CachingBlock(size_t size, size_t origin_size);
     CachingBlock(size_t size, size_t origin_size, CachingBlockPool* blocks, void* memory_ptr);
@@ -134,6 +137,17 @@ struct SFRLAllocator : Allocator {
     size_t allocation_size(size_t size);
     bool should_split(CachingBlock* block, size_t size);
     void try_merge_two_blocks(CachingBlock* b1, CachingBlock* b2);
+    // Hand cached blocks of `pool` back to the underlying allocator, keeping
+    // `unused_memory` and the per-device reserved counters in step. Every
+    // release of cached memory goes through here, so the reserved high-water
+    // below cannot drift from what the pools actually hold.
+    size_t release_cached(CachingBlockPool& pool, long long free_size = -1);
+    // The most this allocator has held from the underlying one, and the trim
+    // that keeps a new segment from raising it (see `sfrl_trim_before_grow`).
+    int64 held_high = 0;
+    // Allocations served so far, the clock `CachingBlock::freed_at` reads.
+    uint64 alloc_count = 0;
+    void trim_before_growing(size_t need);
 
     inline SFRLAllocator(float free_ratio = 1, float min_free_size=0) : free_ratio(free_ratio), min_free_size(min_free_size) {
         small_blocks.ids = &id_space;
@@ -145,6 +159,15 @@ struct SFRLAllocator : Allocator {
     }
     ~SFRLAllocator();
     // apply the reclaim policy above to this allocator; caller holds the lock.
+    // Every block a device recording in progress allocated or freed. Its
+    // frees go back to the pools as usual, so the recording reuses its own
+    // memory the way a run outside one does -- split, merged -- and at its end
+    // `fence_capture` takes whatever of those ranges is free out of the pools
+    // for the graph to hold: a recorded kernel keeps its addresses.
+    vector<pair<char*, char*>> capture_touched;
+    void note_capture_touch(CachingBlock* block);
+    CachingBlock* carve_free(CachingBlock* block, char* begin, char* end);
+    void fence_capture(vector<Allocation>& held);
     void try_free_this_allocator();
     void setup(Allocator* underlying);
     uint64 flags() const override { return underlying->flags(); }
@@ -158,5 +181,26 @@ struct SFRLAllocator : Allocator {
 };
 
 DECLARE_FLAG(int, use_sfrl_allocator);
+DECLARE_FLAG(int, sfrl_trim_before_grow);
+// Hand every range the recording ending now touched, free in a pool, to `held`.
+void sfrl_fence_capture(vector<Allocation>& held);
+
+// Live bytes and their high-water mark per accelerator device, summed over
+// every SFRL pool on that device and updated on each alloc/free. A device
+// runs several pools, and the sum of their separate peaks is not the peak of
+// the sum, so the counters are per device rather than per allocator.
+// torch.cuda.max_memory_allocated used to be sampled from Python only when it
+// was called, and read 0.1-1.3 GB for training steps that filled 22 GB.
+int64 sfrl_device_live_bytes(int device);
+int64 sfrl_device_peak_bytes(int device);
+// Restart the high-water mark at the current live bytes.
+void sfrl_reset_device_peak(int device);
+// Every byte handed out so far; it never decreases. Device -1 is the host.
+int64 sfrl_device_allocated_bytes(int device);
+// Bytes the pools of one device hold from the underlying allocator (live plus
+// cached), and their high-water mark -- torch's `max_memory_reserved`. The
+// peak restarts with `sfrl_reset_device_peak`, like the allocated one.
+int64 sfrl_device_reserved_bytes(int device);
+int64 sfrl_device_reserved_peak_bytes(int device);
 
 }//jittor

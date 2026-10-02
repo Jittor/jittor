@@ -32,8 +32,8 @@ Two things make a graph unreplayable rather than merely stale, and capture
 refuses both rather than answering wrongly: a graph that draws random numbers
 (a replay would repeat the same draw), and a traced call that reads a value
 back to the host, because then the python path taken depends on tensor values
-and the next call's path may differ. A readback is detected by its effect --
-it finishes the graph being captured.
+and the next call's path may differ. The runtime counts the host's reads
+(`_host_readback_count`), and a traced call that moved the count is refused.
 
 This is inference, and only inference. The call runs under `no_grad` and the
 result carries no gradient -- wrapping a module you are training does not
@@ -48,6 +48,14 @@ Typical use::
     replay = jt.graph_replay(model, example_input)
     for batch in stream:
         out = replay(batch)
+
+Arguments may be positional or keyword, and plain tuples, lists and dicts of
+Vars; anything else is matched by identity and treated as a constant of the
+capture. The result may be a Var or any nesting of tuples, lists, named
+tuples, dicts and dataclasses of them -- `ModelOutput` and diffusers' output
+classes included -- and comes back as that same structure around fresh Vars
+of the module's own tensor type. Under the torch frontend,
+`torch.compile(model, mode="reduce-overhead")` wraps a module in this.
 
 What it is worth, on the one shape that measured reproducibly here -- a
 decode step, eager and replayed in separate processes, a different input every
@@ -93,6 +101,8 @@ speedup is worse than none.
 """
 
 from contextlib import nullcontext as _nullcontext
+import copy as _copy
+import dataclasses as _dataclasses
 import time
 import weakref
 
@@ -101,6 +111,12 @@ import jittor_core as _core
 
 from .. import flags
 
+
+#: Module calls being traced for a capture right now; see `tracing()`.
+_TRACING = [0]
+
+#: Recordings dropped because a leaf moved before recording is given up.
+_RERECORD_LIMIT = 8
 
 #: Ops whose output depends on more than their inputs. A captured graph
 #: replays the values it recorded, so a graph containing one of these is not
@@ -133,20 +149,192 @@ class _no_auto:
 
 
 class _Capture:
-    __slots__ = ("inputs", "output", "params", "training", "signature")
+    __slots__ = ("inputs", "host_inputs", "outputs", "template", "params", "training",
+                 "signature")
+
+
+class _Unreplayable(Exception):
+    """A module result the capture cannot hand back; the message says why."""
 
 
 def _spec(value):
     """What has to match for a captured graph to still answer for `value`."""
     if isinstance(value, jt.Var):
-        return ("var", tuple(value.shape), str(value.dtype))
-    if isinstance(value, (int, float, bool)):
+        return ("var", type(value), tuple(value.shape), str(value.dtype))
+    if value is None or isinstance(value, (int, float, bool, str)):
         return ("scalar", type(value).__name__, value)
+    if type(value) in (tuple, list):
+        return (type(value).__name__,) + tuple(_spec(v) for v in value)
+    if type(value) is dict:
+        return ("dict",) + tuple((k, _spec(v)) for k, v in value.items())
     return ("other", type(value).__name__, id(value))
 
 
-def _signature(args):
-    return tuple(_spec(a) for a in args)
+def _signature(args, kwargs=None):
+    if not kwargs:
+        return tuple(_spec(a) for a in args)
+    return (tuple(_spec(a) for a in args),
+            tuple((k, _spec(v)) for k, v in kwargs.items()))
+
+
+def _input_vars(value, out):
+    """Every Var in `value`, in the order `_map_inputs` visits them."""
+    if isinstance(value, jt.Var):
+        out.append(value)
+    elif type(value) in (tuple, list):
+        for v in value:
+            _input_vars(v, out)
+    elif type(value) is dict:
+        for v in value.values():
+            _input_vars(v, out)
+    return out
+
+
+def _map_inputs(value, fn):
+    """`value` with each Var replaced by `fn(var)`.
+
+    Only the plain containers are walked, the same ones `_spec` describes:
+    anything else is matched by identity, so a Var hidden inside it is a
+    constant of the capture, exactly as a closure variable would be.
+    """
+    if isinstance(value, jt.Var):
+        return fn(value)
+    if type(value) in (tuple, list):
+        return type(value)(_map_inputs(v, fn) for v in value)
+    if type(value) is dict:
+        return {k: _map_inputs(v, fn) for k, v in value.items()}
+    return value
+
+
+def _output_template(value, leaves, index, passthrough=()):
+    """Describe `value` as a tree over `leaves`, the distinct Vars it holds.
+
+    What a module returns is rarely a lone Var: `nn.LSTM` returns a tuple, a
+    diffusers UNet an output dataclass, a transformers model a `ModelOutput`
+    (a dict subclass that is also a dataclass). The graph only needs the Vars;
+    the rest is rebuilt around fresh ones on every call.
+
+    An object that is none of these may still come back if it is one the
+    caller passed in (`passthrough`, ids): Transformers' decode step returns
+    the very `StaticCache` it was handed, whose tensors it updated in place.
+    It is returned as it is -- a step capture tracks those updates as state.
+    """
+    if isinstance(value, jt.Var):
+        i = index.get(id(value))
+        if i is None:
+            i = index[id(value)] = len(leaves)
+            leaves.append(value)
+        return ("var", i)
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return ("const", value)
+    if type(value) in (tuple, list):
+        return ("seq", type(value), [_output_template(v, leaves, index, passthrough) for v in value])
+    if isinstance(value, tuple) and hasattr(type(value), "_fields"):
+        return ("namedtuple", type(value),
+                [_output_template(v, leaves, index, passthrough) for v in value])
+    if isinstance(value, dict):
+        return ("dict", value,
+                [(k, _output_template(v, leaves, index, passthrough)) for k, v in value.items()])
+    if _dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return ("dataclass", value,
+                [(f.name, _output_template(getattr(value, f.name), leaves, index, passthrough))
+                 for f in _dataclasses.fields(value)])
+    if id(value) in passthrough:
+        return ("const", value)
+    raise _Unreplayable(f"the module returned a {type(value).__name__}, which "
+                        "replay cannot rebuild")
+
+
+def _object_ids(value, seen=None):
+    """The ids of `value` and of everything inside its plain containers."""
+    seen = set() if seen is None else seen
+    seen.add(id(value))
+    if type(value) in (tuple, list):
+        for v in value:
+            _object_ids(v, seen)
+    elif type(value) is dict:
+        for v in value.values():
+            _object_ids(v, seen)
+    return seen
+
+
+def _rebuild(template, values):
+    kind = template[0]
+    if kind == "var":
+        return values[template[1]]
+    if kind == "const":
+        return template[1]
+    if kind == "seq":
+        return template[1](_rebuild(t, values) for t in template[2])
+    if kind == "namedtuple":
+        return template[1](*[_rebuild(t, values) for t in template[2]])
+    if kind == "dict":
+        if type(template[1]) is dict:
+            return {k: _rebuild(t, values) for k, t in template[2]}
+        # A dict subclass -- `ModelOutput`, diffusers' `BaseOutput` -- keeps
+        # its fields both as items and as attributes, and assigning an item
+        # updates both; a copy of the captured object keeps whatever else it
+        # carries.
+        result = _copy.copy(template[1])
+        for k, t in template[2]:
+            result[k] = _rebuild(t, values)
+        return result
+    result = _copy.copy(template[1])
+    for name, t in template[2]:
+        object.__setattr__(result, name, _rebuild(t, values))
+    return result
+
+
+def _native_dtype(var):
+    """The native dtype, also for a frontend tensor that reports its own."""
+    native = getattr(type(var), "_frontend_native_dtype", None)
+    if native is not None:
+        return str(native.__get__(var, type(var)))
+    return var.dtype
+
+
+def _dense(var):
+    """`var`, or a dense copy of it made inside the graph being captured.
+
+    Every replay copies a capture's results out as raw bytes. A strided one
+    -- a channels-last activation read as NCHW -- would have that copy build a
+    densifying op on top of the kept graph first, and syncing it re-ran the
+    whole graph: an SD1.5 VAE decode executed every kernel twice.
+    """
+    return var if var._storage_is_contiguous() else jt.contiguous(var)
+
+
+def _empty_like(var):
+    """A materialized, uninitialized Var shaped, typed and placed like `var`.
+
+    Of `var`'s own Python type, not a plain Var: under the torch frontend the
+    module's code calls tensor methods that only the frontend type has, and a
+    caller expects the result type it would have got from the module. And on
+    `var`'s placement: an explicitly placed tensor next to one the runtime
+    placed is refused by the first op that sees both.
+    """
+    token = _core._set_tensor_frontend_type(type(var))
+    placement = None
+    try:
+        backend = var.placement_backend
+        if backend >= 0:
+            placement = _core._set_tensor_placement(backend, max(int(var.device_id), 0))
+        try:
+            with _device_scope_like(var):
+                result = jt.empty(var.shape, _native_dtype(var))
+        finally:
+            if placement is not None:
+                _core._reset_tensor_placement(placement)
+    finally:
+        _core._reset_tensor_frontend_type(token)
+    # A capture computes on these copies, so what the graph decides from an
+    # input's requires_grad it must decide the same way from its copy: a float
+    # mask built from a copy that asked for a gradient kept the fused attention
+    # kernels out of every captured Transformers step.
+    if not var.requires_grad and result.requires_grad:
+        result.requires_grad = False
+    result.sync(False, False)
+    return result
 
 
 def _device_scope_like(var):
@@ -157,26 +345,36 @@ def _device_scope_like(var):
     return jt.flag_scope(device_id=device)
 
 
-def _sync_result(output):
-    """Finish whatever a module returned, whether or not it is a single Var.
+def _training(module):
+    is_training = getattr(module, "is_training", None)
+    if callable(is_training):
+        return bool(is_training())
+    return bool(getattr(module, "training", False))
 
-    ``_capture_now`` is where a module that does not return exactly one Var is
-    refused and sent down the eager path -- that decision already exists. This
-    warm-up call runs before it and only has to survive until then. Calling
-    ``.sync()`` on the return value directly assumed the decision had already
-    gone the other way, so every multi-output module raised
-    ``AttributeError: 'tuple' object has no attribute 'sync'`` from inside
-    auto-replay instead: ``nn.RNN``, ``nn.LSTM`` and ``nn.GRU`` all return
-    ``(output, hidden)``.
+
+def _sync_result(output):
+    """Finish whatever a module returned, whatever its structure.
+
+    Calling ``.sync()`` on the return value directly assumed a single Var, and
+    every multi-output module raised ``AttributeError: 'tuple' object has no
+    attribute 'sync'`` from inside auto-replay instead: ``nn.RNN``,
+    ``nn.LSTM`` and ``nn.GRU`` all return ``(output, hidden)``.
     """
-    if isinstance(output, jt.Var):
-        output.sync()
-        return
-    if isinstance(output, dict):
-        output = tuple(output.values())
-    if isinstance(output, (list, tuple)):
-        for value in output:
-            _sync_result(value)
+    leaves = []
+    try:
+        _output_template(output, leaves, {})
+    except _Unreplayable:
+        pass
+    if leaves:
+        jt.sync(leaves)
+
+
+def _allocated_bytes():
+    """Every byte the pools have handed out so far, host and devices together."""
+    total = _core.device_memory_allocated_total(-1)
+    for device in range(_core.get_device_count()):
+        total += _core.device_memory_allocated_total(device)
+    return total
 
 
 def _graph_has_nondeterministic_op():
@@ -198,7 +396,8 @@ def _graph_has_nondeterministic_op():
 class GraphReplay:
     """A callable that re-runs `module`'s captured graph. See the module docstring."""
 
-    def __init__(self, module, *example_inputs, measure=False, weak=False):
+    def __init__(self, module, *example_inputs, measure=False, weak=False,
+                 max_retained_bytes=None):
         """`measure=True` times replay against eager once and refuses if it loses.
 
         Off by default, because the measurement does not leave the process as
@@ -226,6 +425,11 @@ class GraphReplay:
         self._capture = None
         self._refused = None
         self._worth_it = None if measure else True
+        # What a device recording may keep allocated; None for no bound. The
+        # automatic policy sets one (`auto_graph_replay_retain_bytes`): it
+        # engages on its own, and a recording holds every intermediate.
+        self._max_retained_bytes = max_retained_bytes
+        self._graph_bytes = 0
         # The device-side recording of a replay, once there is one. Replaying
         # through the executor still costs about 4 us of host time per
         # operator -- the plan walk, the per-operator scopes, the allocation
@@ -235,7 +439,14 @@ class GraphReplay:
         self._cuda_graph = 0
         self._graph_out = None
         self._graph_refused = None
+        # When to record next (a replay count), and how often a recording has
+        # been dropped because a leaf it read moved.
+        self._record_at = 3
+        self._rerecords = 0
         self.stats = {"captured": 0, "replayed": 0, "rebuilt": 0, "graph": 0}
+        # `jt.profile` reports these counters and any refusal for the region.
+        from jittor.profiling import register_replay_source
+        register_replay_source(self)
         if example_inputs:
             self(*example_inputs)
 
@@ -259,12 +470,14 @@ class GraphReplay:
         params = getattr(self._module, "parameters", None)
         return list(params()) if callable(params) else []
 
-    def _capture_now(self, args):
+    def _capture_now(self, args, kwargs=None):
+        kwargs = kwargs or {}
         params = self._params()
+        given = _input_vars((args, kwargs), [])
         # Every leaf the graph reads must already be materialized: a re-run
         # re-executes whatever is still pending, including a leaf's own
         # producer, whose host staging is gone by then.
-        for leaf in list(args) + params:
+        for leaf in given + params:
             if isinstance(leaf, jt.Var):
                 leaf.sync(True, False)
 
@@ -274,77 +487,104 @@ class GraphReplay:
         # graph does not re-execute, so the call hands back whatever the
         # previous input produced. Correct-looking, silently wrong, and it
         # only shows when the same Var comes round again.
-        private = []
-        for value in args:
-            if not isinstance(value, jt.Var):
-                private.append(value)
-                continue
-            # On the argument's device, not the ambient one. `jt.empty`
-            # follows the ambient `device_id`, so a module whose tensors live
-            # anywhere else -- which is how a multi-device server drives one --
-            # got a device-0 copy of a device-1 input, and the very first op
-            # inside the module was handed a mix that `dispatch_context`
-            # refuses: "Expected all inputs to be on the same device, but
-            # found 0 and 1".
-            with _device_scope_like(value):
-                copy = jt.empty(value.shape, value.dtype)
-            copy.sync(False, False)
+        #
+        # On the argument's device, not the ambient one. `jt.empty` follows
+        # the ambient `device_id`, so a module whose tensors live anywhere else
+        # -- which is how a multi-device server drives one -- got a device-0
+        # copy of a device-1 input, and the very first op inside the module
+        # was handed a mix that `dispatch_context` refuses: "Expected all
+        # inputs to be on the same device, but found 0 and 1".
+        def private_copy(value):
+            copy = _empty_like(value)
             copy._copy_into(value)
-            private.append(copy)
+            return copy
+        private_args, private_kwargs = _map_inputs((args, kwargs), private_copy)
 
         before = jt.flags.keep_graph
-        jt.flags.keep_graph = 1
+        # 2, not 1: the graph stays re-runnable, but an intermediate's memory
+        # goes back once the run has no further use for it, so a capture holds
+        # what a normal call peaks at rather than the sum of everything it
+        # allocates.
+        jt.flags.keep_graph = 2
+        # Built whole, as a replay runs it. CUDA's auto-flush otherwise
+        # launches the traced call in pieces, and every piece's results stay
+        # held for the rest of the kept graph: an SD1.5 VAE decode, cut five
+        # times by the view ops of channels-last activations, captured 0.5 GB
+        # above its eager peak.
+        flush_before = jt.flags.auto_flush_ops
+        jt.flags.auto_flush_ops = 0
+        readbacks = _core._host_readback_count()
+        _TRACING[0] += 1
         try:
             with _no_auto(), jt.no_grad():
-                output = self._module(*private)
-                if not isinstance(output, jt.Var):
-                    self._refused = ("the module returned "
-                                     f"{type(output).__name__}, not a single Var")
+                output = self._module(*private_args, **private_kwargs)
+                if _core._host_readback_count() != readbacks:
+                    self._refused = ("the traced call read a value back to the host, so its "
+                                     "path depends on tensor values and cannot be replayed")
                     return None
-                # This var's own graph and nothing else. A plain `sync()` is a
+                outputs = []
+                try:
+                    template = _output_template(output, outputs, {},
+                                                _object_ids((args, kwargs)))
+                except _Unreplayable as exc:
+                    self._refused = str(exc)
+                    return None
+                if not outputs:
+                    self._refused = "the module returned no Var"
+                    return None
+                outputs[:] = [_dense(o) for o in outputs]
+                # These vars' own graph and nothing else. A plain `sync()` is a
                 # weak sync: it also sweeps in whatever other holder vars happen
                 # to be pending, and with `keep_graph` on those become part of
                 # what the capture keeps alive and re-runs on every single
                 # replay. Measured through nsys, a capture taken with unrelated
                 # work pending executed 219 kernels a call instead of 132.
-                output.sync(False, False)
+                jt.sync(outputs, False, False)
             if _graph_has_nondeterministic_op():
                 self._refused = "the graph draws random numbers, so a replay would repeat them"
                 return None
-            if output.is_finished:
+            if any(o.is_finished for o in outputs):
                 # Nothing outside this method has touched the graph yet, so
-                # the only thing that can have finished it is the traced call
-                # reading a value back -- which means its python path depends
-                # on tensor values and the next call's path may differ.
-                self._refused = ("the traced call read a value back to the host, so its "
-                                 "path depends on tensor values and cannot be replayed")
+                # what can have finished it is the traced call reading a value
+                # back -- its python path then depends on tensor values and the
+                # next call's path may differ -- or an output that was never
+                # computed here at all (an input or a parameter handed back).
+                self._refused = ("the traced call read a value back to the host, or "
+                                 "returned a Var it did not compute, so it cannot be replayed")
                 return None
         finally:
+            _TRACING[0] -= 1
+            jt.flags.auto_flush_ops = flush_before
             jt.flags.keep_graph = before
 
         cap = _Capture()
-        cap.inputs = [v for v in private if isinstance(v, jt.Var)]
-        cap.output = output
+        cap.inputs = _input_vars((private_args, private_kwargs), [])
+        # A host input the graph copies to the device -- a diffusion
+        # timestep, typically -- is read by a recorded graph when it *runs*.
+        cap.host_inputs = any(int(v.device_id) < 0 for v in cap.inputs)
+        cap.outputs = outputs
+        cap.template = template
         # Identity, not value: an optimizer step or a load rebinds the holder
         # to a new Var, and the captured graph would keep reading the old one.
         cap.params = [(p, p.var_ptr) for p in params]
-        cap.training = bool(getattr(self._module, "is_training", lambda: False)())
-        cap.signature = _signature(args)
+        cap.training = _training(self._module)
+        cap.signature = _signature(args, kwargs)
         return cap
 
     # -- guards --------------------------------------------------------
-    def _stale(self, cap, args):
+    def _stale(self, cap, args, kwargs=None):
         # The decisive one, and the only one that would otherwise be silent:
         # a finished graph still *answers*, with whatever it last computed.
         # Reading a value out of the captured output finishes it (the fetch
         # runs a batch, and a batch outside `keep_graph` finishes what it
         # collects), so anyone who reaches past this wrapper and reads the
         # captured Var lands here rather than on a stale number.
-        if cap.output.is_finished:
-            return "the captured graph was finished, most likely by a read"
-        if _signature(args) != cap.signature:
+        for output in cap.outputs:
+            if output.is_finished:
+                return "the captured graph was finished, most likely by a read"
+        if _signature(args, kwargs) != cap.signature:
             return "the inputs changed shape or dtype"
-        if bool(getattr(self._module, "is_training", lambda: False)()) != cap.training:
+        if _training(self._module) != cap.training:
             return "the module changed training mode"
         for holder, ptr in cap.params:
             if holder.var_ptr != ptr:
@@ -365,7 +605,7 @@ class GraphReplay:
         """
         best = float("inf")
         before = jt.flags.keep_graph
-        jt.flags.keep_graph = 1 if keep else 0
+        jt.flags.keep_graph = 2 if keep else 0
         try:
             for _ in range(per):
                 run()
@@ -380,7 +620,7 @@ class GraphReplay:
             jt.flags.keep_graph = before
         return best
 
-    def _measure(self, args):
+    def _measure(self, args, kwargs):
         """Time replay against eager once, and refuse if replay does not win.
 
         Both arms have to do the same work. That used to need a stand-in Var,
@@ -393,7 +633,7 @@ class GraphReplay:
         """
         def eager():
             with _no_auto(), jt.no_grad():
-                self._module(*args).sync(False)
+                _sync_result(self._module(*args, **kwargs))
         try:
             # No stand-in is needed: the capture reads private buffers, so
             # `_replay_once` copies the input on every call and the graph
@@ -403,14 +643,14 @@ class GraphReplay:
             # than the difference being measured. With prefill refused -- both
             # arms running the very same eager code -- the second measured
             # 1.57 ms against the first's 2.74.
-            replay_once = lambda: self._replay_once(self._capture, args)
+            replay_once = lambda: self._replay_once(self._capture, args, kwargs)
             replayed = rebuilt = float("inf")
             for _ in range(2):
                 # The eager arm runs with keep_graph off, which means its final
                 # sync_all finishes the capture too -- so take a fresh one
                 # before each replay round rather than timing a dead graph.
-                if self._capture is None or self._capture.output.is_finished:
-                    self._capture = self._capture_now(args)
+                if self._capture is None or self._stale(self._capture, args, kwargs):
+                    self._capture = self._capture_now(args, kwargs)
                     if self._capture is None:
                         self._worth_it = True
                         return
@@ -460,10 +700,10 @@ class GraphReplay:
         those. By the time this runs the same graph has already executed at
         least twice, so every buffer is in place and every kernel is built.
 
-        The result lands in a buffer of this wrapper's own (`_graph_out`),
+        The results land in buffers of this wrapper's own (`_graph_out`),
         outside the captured graph, because a recording re-issues fixed
-        pointers: the call still hands the caller a fresh Var, copied from
-        that buffer without re-running anything.
+        pointers: the call still hands the caller fresh Vars, copied from
+        those buffers without re-running anything.
 
         Refusal is not an error. Anything the recording cannot contain leaves
         `_graph_refused` set and every later call replays through the executor,
@@ -472,22 +712,33 @@ class GraphReplay:
         if not _core.graph_capture_supported():
             self._graph_refused = "this build cannot record device graphs"
             return False
-        out = jt.empty(cap.output.shape, cap.output.dtype)
-        out.sync(False, False)
+        host = _core.graph_host_work(cap.outputs)
+        if host:
+            self._graph_refused = ("part of the graph runs on the host (%s), which a "
+                                   "recording would drop" % host)
+            return False
+        outs = [_empty_like(o) for o in cap.outputs]
         before = jt.flags.keep_graph
-        jt.flags.keep_graph = 1
+        # 2, as for a replay: an intermediate's memory goes back after its
+        # last use. While recording, the pools hold such a free for the
+        # recording and hand the block to a later allocation of the same
+        # recording, so the graph keeps what one call peaks at -- the way
+        # PyTorch's private graph pool does -- rather than every buffer it
+        # touches: an SD1.5 UNet step held 4.2 GB that way against 1.9 GB.
+        jt.flags.keep_graph = 2
         handle = 0
         try:
             # Drain first: the recording must contain the step, not the
             # backlog in front of it.
-            jt.sync([cap.output], True, False)
+            jt.sync(cap.outputs, True, False)
             if not _core.graph_capture_begin():
                 self._graph_refused = "the device refused to start recording"
                 return False
             try:
-                jt.sync([cap.output], False, False)
+                jt.sync(cap.outputs, False, False)
                 # Inside the recording, so a launch leaves the answer here.
-                out._copy_into(cap.output, False)
+                for out, src in zip(outs, cap.outputs):
+                    out._copy_into(src, False)
             finally:
                 handle = _core.graph_capture_end()
         except Exception as exc:            # a capture poisons its stream
@@ -501,66 +752,95 @@ class GraphReplay:
             self._graph_refused = "the recording contained no device work"
             return False
         self._cuda_graph = handle
-        self._graph_out = out
+        self._graph_out = outs
+        _core.graph_bind_leaves(handle, cap.outputs)
         return True
 
-    def _replay_once(self, cap, args):
+    def _recording_still_valid(self):
+        """Drop the recording if a leaf it reads has moved; see graph_bind_leaves.
+
+        Reading a parameter back to the host migrates it, and the recording
+        would go on writing the block it left -- no longer the parameter, and
+        free for anyone to take. The executor resolves addresses each run, so
+        this call goes there, and a later one records again.
+        """
+        if not _core.graph_leaves_moved(self._cuda_graph):
+            return True
+        _core.graph_release(self._cuda_graph)
+        self._cuda_graph = 0
+        self._graph_out = None
+        self._rerecords += 1
+        if self._rerecords >= _RERECORD_LIMIT:
+            self._graph_refused = "the leaves a recording reads kept moving"
+        else:
+            self._record_at = self.stats["replayed"] + 2
+        return False
+
+    def _replay_once(self, cap, args, kwargs=None):
+        # A recording copies a host input to the device when it runs, so the
+        # previous launch has to be done with that buffer before it is
+        # rewritten; the host is otherwise free to run ahead of the device.
+        if self._cuda_graph and cap.host_inputs:
+            _core.graph_wait()
         # Always, not "unless it is the same Var": the copy is what the graph
         # re-executes for, and the capture reads buffers no caller holds.
-        for captured, given in zip(cap.inputs,
-                                   [a for a in args if isinstance(a, jt.Var)]):
+        for captured, given in zip(cap.inputs, _input_vars((args, kwargs or {}), [])):
             captured._copy_into(given)
+
+        # Fresh Vars, so the answer is the caller's to keep. Allocating them
+        # per call is free as long as they are not waited on: `_empty_like`
+        # materializes without a device wait, whereas a wait here drains the
+        # device every call -- that alone cost 1.76 ms a call. Rotating a
+        # fixed pair of buffers instead measures exactly the same (1.183 vs
+        # 1.182 ms) and would make the result alias after two calls, which is
+        # not a contract worth accepting for nothing.
+        #
+        # Finished, too, with `keep_graph` still off. That matters for what
+        # the *caller* then does: a var that is still pending makes the
+        # caller's own `out.sync()` a weak sync, which sweeps in every other
+        # pending holder -- the capture among them -- and finishes it.
+        # `model(x).sync(False)`, which is how an inference loop is written,
+        # then destroyed the capture on every single call: 13 captures for 14
+        # replays, and the whole thing 3.5x slower than eager.
+        outs = [_empty_like(o) for o in cap.outputs]
 
         # A recorded device graph re-issues the whole step with one call. The
         # input copies above are on the same stream, so they are ordered ahead
         # of it without a wait.
-        if self._cuda_graph:
+        if self._cuda_graph and self._recording_still_valid():
             _core.graph_launch(self._cuda_graph)
-            out = jt.empty(cap.output.shape, cap.output.dtype)
-            out.sync(False, False)
             # `sync_src=False`: the launch already produced the bytes, and
-            # syncing the captured output would run the whole graph again
+            # syncing the captured outputs would run the whole graph again
             # through the executor -- which is exactly what the recording is
             # there to avoid.
-            out._copy_into(self._graph_out, False)
+            for out, src in zip(outs, self._graph_out):
+                out._copy_into(src, False)
             self.stats["graph"] += 1
-            return out
-        # A fresh Var, so the answer is the caller's to keep. Allocating one
-        # per call is free as long as it is not synced: `_copy_into`
-        # materializes its own destination, whereas a device wait here drains
-        # the device every call -- that alone cost 1.76 ms a call. Rotating a
-        # fixed pair of buffers instead measures exactly the same (1.183 vs
-        # 1.182 ms) and would make the result alias after two calls, which is
-        # not a contract worth accepting for nothing.
-        out = jt.empty(cap.output.shape, cap.output.dtype)
-        # Finish it here, with `keep_graph` still off and without a device
-        # wait. That matters for what the *caller* then does: a var that is
-        # still pending makes the caller's own `out.sync()` a weak sync, which
-        # sweeps in every other pending holder -- the capture among them -- and
-        # finishes it. `model(x).sync(False)`, which is how an inference loop
-        # is written, then destroyed the capture on every single call: 13
-        # captures for 14 replays, and the whole thing 3.5x slower than eager.
-        # A finished var leaves `top_weak_sync` with nothing to walk.
-        out.sync(False, False)
+            return _rebuild(cap.template, outs)
         before = jt.flags.keep_graph
-        jt.flags.keep_graph = 1
+        jt.flags.keep_graph = 2
         try:
-            # `_copy_into` syncs its source, which is what re-runs the graph;
-            # the copy itself builds no op, so the graph does not grow.
-            out._copy_into(cap.output)
+            # Syncing the captured outputs is what re-runs the graph, once
+            # for all of them; the copies build no op, so it does not grow.
+            jt.sync(cap.outputs, False, False)
+            for out, src in zip(outs, cap.outputs):
+                out._copy_into(src, False)
         finally:
             jt.flags.keep_graph = before
-        return out
+        return _rebuild(cap.template, outs)
 
-    def __call__(self, *args):
+    def _eager(self, args, kwargs):
+        self.stats["rebuilt"] += 1
+        with _no_auto(), jt.no_grad():
+            return self._module(*args, **kwargs)
+
+    def __call__(self, *args, **kwargs):
         if self._refused is not None:
-            self.stats["rebuilt"] += 1
-            with _no_auto(), jt.no_grad():
-                return self._module(*args)
+            return self._eager(args, kwargs)
 
         cap = self._capture
         if cap is not None:
-            reason = self._stale(cap, args)
+            reason = self._stale(cap, args, kwargs)
             if reason is not None:
                 self.invalidate()
                 cap = None
@@ -569,40 +849,49 @@ class GraphReplay:
             # One eager call first: it materializes the parameters and any
             # buffer the module builds lazily, so the capture that follows has
             # nothing pending underneath it.
+            allocated = _allocated_bytes()
             with _no_auto(), jt.no_grad():
-                _sync_result(self._module(*args))
-            cap = self._capture = self._capture_now(args)
+                result = self._module(*args, **kwargs)
+                _sync_result(result)
+            # What a device recording of this graph would hold: every buffer
+            # the call allocates, since a recording re-issues fixed pointers.
+            self._graph_bytes = _allocated_bytes() - allocated
+            cap = self._capture = self._capture_now(args, kwargs)
             self.stats["captured"] += 1
             if cap is None:
+                # The warm-up already computed this call's answer.
                 self.stats["rebuilt"] += 1
-                with _no_auto(), jt.no_grad():
-                    return self._module(*args)
+                return result
             if self._worth_it is None:
-                self._measure(args)
+                self._measure(args, kwargs)
                 if self._refused is not None:
-                    self.stats["rebuilt"] += 1
-                    with _no_auto(), jt.no_grad():
-                        return self._module(*args)
+                    return self._eager(args, kwargs)
                 # `_measure` dropped the capture it timed; take a fresh one.
-                cap = self._capture = self._capture_now(args)
+                cap = self._capture = self._capture_now(args, kwargs)
                 self.stats["captured"] += 1
                 if cap is None:
-                    self.stats["rebuilt"] += 1
-                    with _no_auto(), jt.no_grad():
-                        return self._module(*args)
+                    return self._eager(args, kwargs)
 
-        # The result is a copy, not the captured Var: reading the captured
+        # The results are copies, not the captured Vars: reading a captured
         # output directly would finish the graph -- `clone()` here finished it
         # outright, after which nothing re-ran and the replay silently kept
         # answering with the first input's result, in 0.08 ms.
-        out = self._replay_once(cap, args)
+        out = self._replay_once(cap, args, kwargs)
         self.stats["replayed"] += 1
         # Try to record only once per capture, and only after the graph has
         # run a few times: the first executions are the ones that allocate and
         # compile, and a recording tolerates neither.
         if (not self._cuda_graph and self._graph_refused is None
-                and self.stats["replayed"] == 3):
-            self._record_cuda_graph(cap)
+                and self.stats["replayed"] == self._record_at):
+            limit = self._max_retained_bytes
+            if limit and self._graph_bytes > limit:
+                # Replays through the executor free as they go; a recording
+                # would keep all of it, for as long as the capture lives.
+                self._graph_refused = (
+                    "a recording would keep %.1f MiB alive, over the %.1f MiB "
+                    "allowed" % (self._graph_bytes / 2**20, limit / 2**20))
+            else:
+                self._record_cuda_graph(cap)
         return out
 
     def invalidate(self):
@@ -625,7 +914,10 @@ class GraphReplay:
         self._graph_out = None
         self._graph_refused = None
         cap, self._capture = self._capture, None
-        if cap is None or cap.output.is_finished:
+        if cap is None:
+            return
+        pending = [o for o in cap.outputs if not o.is_finished]
+        if not pending:
             return
         before = jt.flags.keep_graph
         jt.flags.keep_graph = 0
@@ -633,8 +925,9 @@ class GraphReplay:
             # Take the mark off first: a marked node is never finished, by
             # design, so the sync below would otherwise run the graph and
             # leave it exactly as it was.
-            cap.output._release_kept()
-            cap.output.sync(False)
+            for output in pending:
+                output._release_kept()
+            jt.sync(pending, False, True)
         except Exception:
             # Releasing is best effort: a graph that cannot run any more (its
             # parameters went away, say) must not turn into an exception from
@@ -666,15 +959,22 @@ def graph_replay(module, *example_inputs, measure=False):
 #   - under `no_grad`, because a replay carries no gradient;
 #   - the outermost module call, not a submodule of one already running;
 #   - all-positional, all-Var, with inputs totalling less than
-#     `auto_graph_replay_bytes` -- which bounds what can be retained and is
-#     also exactly the regime where rebuilding is the cost;
+#     `auto_graph_replay_bytes` -- the regime where rebuilding is the cost;
 #   - repeating: the same shapes twice in a row, so a one-off call is never
-#     captured.
+#     captured;
+#
+# A capture replays through the executor and frees intermediates as it goes,
+# so it costs about what a normal call peaks at. Recording it as a device
+# graph, which is what makes a small step one launch, keeps every buffer, so
+# that is only done for a graph allocating at most
+# `auto_graph_replay_retain_bytes`. Small inputs do not bound it: an SD1.5 VAE
+# decode takes a 32 KB latent and allocates 6.2 GB of 512x512 feature maps.
 #
 # Everything the capture cannot serve (a graph that draws random numbers, a
-# traced call that read a value back, a module that returns something other
-# than one Var) falls back and is not tried again for that module. So does a
-# module whose shapes keep changing, after enough re-captures to show it.
+# traced call that read a value back, a result that is not Vars in tuples,
+# lists, dicts or dataclasses) falls back and is not tried again for that
+# module. So does a module whose shapes keep changing, after enough
+# re-captures to show it.
 
 
 #: Re-captures tolerated for one module before the policy leaves it alone. A
@@ -716,23 +1016,42 @@ def _element_size(dtype):
     return 1
 
 
-def _input_bytes(args):
+#: What an automatic replay accepts as an argument besides a Var: values that
+#: `_spec` compares by value. Anything else is matched by identity -- right for
+#: an explicit `graph_replay`, whose caller vouches for it, and wrong for a
+#: policy nobody asked for: a KV cache object is the same object every decode
+#: step while what it holds grows, and the capture would keep answering for the
+#: first step.
+_AUTO_SCALARS = (int, float, bool, str)
+
+
+def _auto_arguments(args, kw):
+    """Total bytes of the Vars among the arguments, or None if not eligible.
+
+    Keyword arguments count like positional ones. Transformers calls every
+    model by keyword -- ``model(input_ids=..., attention_mask=...)`` -- and
+    leaving those out meant no Hugging Face model was ever replayed.
+    """
     total = 0
-    for a in args:
-        total += a.numel() * _element_size(a.dtype)
-    return total
+    found = False
+    for values in (args, kw.values()):
+        for a in values:
+            if isinstance(a, jt.Var):
+                total += a.numel() * _element_size(a.dtype)
+                found = True
+            elif a is not None and type(a) not in _AUTO_SCALARS:
+                return None
+    return total if found else None
 
 
 def auto_replay_for(module, args, kw):
     """The GraphReplay to use for this call, or None to run normally."""
-    if kw or not args:
-        return None
     flags = jt.flags
     if not flags.auto_graph_replay or not flags.no_grad:
         return None
-    for a in args:
-        if not isinstance(a, jt.Var):
-            return None
+    nbytes = _auto_arguments(args, kw)
+    if nbytes is None:
+        return None
     state = module.__dict__.get("_auto_graph_replay")
     if state is None:
         # Written through __dict__: Module.__setattr__ classifies assignments
@@ -740,9 +1059,9 @@ def auto_replay_for(module, args, kw):
         state = module.__dict__["_auto_graph_replay"] = _AutoState()
     if state.give_up:
         return None
-    if _input_bytes(args) > flags.auto_graph_replay_bytes:
+    if nbytes > flags.auto_graph_replay_bytes:
         return None
-    signature = _signature(args)
+    signature = _signature(args, kw)
     if signature != state.signature:
         state.signature = signature
         state.seen = 1
@@ -760,7 +1079,9 @@ def auto_replay_for(module, args, kw):
         # `measure=False`: the timing check perturbs what it measures (see
         # `_measure`), and the eligibility rules above already restrict this to
         # the shape of step where replay wins.
-        state.replay = GraphReplay(module, measure=False, weak=True)
+        state.replay = GraphReplay(
+            module, measure=False, weak=True,
+            max_retained_bytes=flags.auto_graph_replay_retain_bytes)
     if state.replay.refused is not None:
         state.give_up = True
         state.replay = None

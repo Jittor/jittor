@@ -287,6 +287,14 @@ struct VarHolder {
         return (int64)var;
     }
 
+    // The address of this Var's bytes as it stands -- 0 if it has none --
+    // without materializing it the way `raw_ptr` does. For asking whether two
+    // executed Vars share storage.
+    // @pyjt(__get___mem_ptr_now)
+    inline int64 mem_ptr_now() {
+        return (int64)var->mem_ptr;
+    }
+
     // @pyjt(__get__flags)
     inline int32 flags() {
         return (int32)(var->flags.flags);
@@ -624,6 +632,15 @@ struct VarHolder {
     // @pyjt(_release_kept)
     void release_kept();
 
+    /**
+     * Mark this pending Var as part of a kept graph, which only its owner
+     * runs (see `keep_graph`): a node added to a graph that has already run
+     * kept, and so was not marked by that run. Unmarked, a bystander's sync
+     * -- `sync_all` -- ran it on its own and finished it.
+     */
+    // @pyjt(_mark_kept)
+    inline void mark_kept() { var->set_flag(VarFlags::_kept); }
+
     // @pyjt(share_with)
     // @attrs(return_self)
     inline VarHolder* share_with(VarHolder* other) {
@@ -721,8 +738,81 @@ struct VarHolder {
     VarHolder* transpose_view_base();
 
     /**
+     * The axes of this view's last step when it is a transpose, else empty.
+     */
+    // @pyjt(_transpose_view_axes)
+    NanoVector transpose_view_axes();
+
+    /**
+     * What this transpose view was before its last transpose: a new holder,
+     * itself a view of the same root one step shorter, so that a write to it
+     * still reaches the root. A kernel that can read the untransposed layout
+     * takes this instead of materializing the transpose, and a transpose of
+     * this view composes with it rather than stacking a second one.
+     */
+    // @pyjt(_transpose_view_source)
+    VarHolder* transpose_view_source();
+
+    /**
+     * The axes of the transpose that will compute this Var, else empty: the
+     * graph's answer where the view record is gone -- `q = proj(x).view(...)
+     * .transpose(1, 2)` drops the projection's holder, and a view's record
+     * lives only as long as its root's holder. ``_input(0)`` is the source.
+     */
+    // @pyjt(_producer_transpose_axes)
+    NanoVector producer_transpose_axes();
+
+    /**
      * Whether an assignment to this holder writes through to some base.
      */
+    /**
+     * This tensor permuted by ``axes`` as a view of the same storage: no
+     * copy, and no Python ``transpose`` wrapper on the way. What the
+     * channels-last helpers move between NCHW and NHWC with.
+     */
+    // @pyjt(_storage_permute)
+    VarHolder* storage_permute(NanoVector axes);
+
+    /**
+     * Whether this tensor costs nothing to read where it is: already in
+     * memory, or a view of storage that is. For `concat`, which folds such
+     * inputs into the kernel that consumes its result.
+     */
+    // @pyjt(_producer_is_view)
+    bool producer_is_view();
+
+    /**
+     * The elementwise unary op that is still to compute this tensor from one
+     * of the same shape -- its name, or the dtype for a cast -- or "".
+     */
+    // @pyjt(_producer_unary)
+    string producer_unary();
+
+    /**
+     * Whether this tensor is a dense copy still to be made (a pending
+     * `contiguous`); `_input(0)` is then what it copies. A consumer that reads
+     * strided input can read that instead, and the copy is never made.
+     */
+    // @pyjt(_is_pending_contiguous)
+    bool is_pending_contiguous();
+
+    /**
+     * The name of the op still to compute this tensor ("reshape",
+     * "broadcast_to", "getitem", ...), or "" once it is computed. For a
+     * consumer that can read what a pending chain of views and copies would
+     * produce from its source, without the chain ever running; `_input(i)`
+     * walks it.
+     */
+    // @pyjt(_producer_name)
+    string producer_name();
+
+    /**
+     * The same, with the operation spelled out ("binary.add", "unary.relu"),
+     * or "" once the tensor is computed.
+     */
+    // @pyjt(_producer_op)
+    string producer_op();
+
     // @pyjt(_is_view)
     inline bool is_view() { return view && view->base; }
 
@@ -745,6 +835,37 @@ struct VarHolder {
     void refresh_transpose_views();
 };
 
+/**
+    How many times the host has read a Var's value so far (`numpy`, `item`,
+    `data`, a fetch). Compared across a traced call, it says whether the call
+    read one.
+ */
+// @pyjt(_host_readback_count)
+int64 host_readback_count();
+
+/**
+    Start recording which live holders get rebound to a different Var.
+
+    A step that updates state -- an optimizer writing parameters and moments,
+    a norm layer its running statistics -- does it by rebinding the holder the
+    caller keeps (`update`, `assign`, an in-place op) to the Var that computes
+    the new value. A capture of that step has to know every such holder: the
+    graph it keeps reads the state's *old* Var, so a replay must write each new
+    value back there. Asking the holders themselves is the only way that does
+    not depend on knowing which modules and optimizers the step touched.
+ */
+// @pyjt(_state_capture_begin)
+void state_capture_begin();
+
+/**
+    Stop recording and return `[(holder, old, new), ...]` for every holder
+    still alive that now holds a different Var than when it was first
+    rebound, and whose first Var was already executed then. `old` and `new`
+    are fresh holders of those two Vars; `holder` is the caller's own object.
+ */
+// @pyjt(_state_capture_end)
+PyObject* state_capture_end();
+
 // @pyjt(sync)
 void sync(const vector<VarHolder*>& vh=vector<VarHolder*>(), bool device_sync=false, bool weak_sync=true);
 // @pyjt(fetch_sync)
@@ -752,6 +873,21 @@ vector<ArrayArgs> fetch_sync(const vector<VarHolder*>& vh);
 
 // @pyjt(sync_all)
 void sync_all(bool device_sync=false);
+
+/**
+ * Index of the first of `vars` already computed, or -1. A captured step checks
+ * its roots with this before every replay: 1,400 of them for a UNet training
+ * step, a Python attribute read each, 0.15 ms a replay.
+ */
+// @pyjt(_first_finished)
+int first_finished(const vector<VarHolder*>& vars);
+
+/**
+ * Index of the first holder no longer holding the Var `olds` holds at the
+ * same position, or -1. See `_first_finished`.
+ */
+// @pyjt(_first_rebound)
+int first_rebound(const vector<VarHolder*>& holders, const vector<VarHolder*>& olds);
 
 // Called after a complete VarHolder has crossed into a Python object.
 void schedule_pending_from_python(VarHolder* holder);

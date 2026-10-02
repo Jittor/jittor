@@ -660,10 +660,16 @@ DEF_IS(VarHolder*, T) from_py_object(PyObject* obj) {
     return GET_RAW_PTR(VarHolder, obj);
 }
 
+// Sets VarFlags::_python_number (var_holder.cc).
+void mark_python_number(VarHolder* holder);
+
 DEF_IS(VarHolder*, T) from_py_object(PyObject* obj, unique_ptr<VarHolder>& holder) {
     if (PyObject_TypeCheck(obj, &PyjtVarHolder.ht_type))
         return GET_RAW_PTR(VarHolder, obj);
     holder.reset(jit_op_maker::array__(obj));
+    if (PyFloat_CheckExact(obj) || PyLong_CheckExact(obj) || PyBool_Check(obj)
+            || PyComplex_Check(obj))
+        mark_python_number(holder.get());
     return holder.get();
 }
 

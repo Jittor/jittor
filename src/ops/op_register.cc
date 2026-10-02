@@ -696,6 +696,7 @@ bool unregister_op(const string& name) {
 DEFINE_BUILTIN_OP_ID(array)
 DEFINE_BUILTIN_OP_ID(binary)
 DEFINE_BUILTIN_OP_ID(broadcast_to)
+DEFINE_BUILTIN_OP_ID(contiguous)
 DEFINE_BUILTIN_OP_ID(empty)
 DEFINE_BUILTIN_OP_ID(fused)
 DEFINE_BUILTIN_OP_ID(getitem)
@@ -705,6 +706,8 @@ DEFINE_BUILTIN_OP_ID(reindex)
 DEFINE_BUILTIN_OP_ID(reindex_reduce)
 DEFINE_BUILTIN_OP_ID(safe_clip)
 DEFINE_BUILTIN_OP_ID(setitem)
+DEFINE_BUILTIN_OP_ID(transpose)
+DEFINE_BUILTIN_OP_ID(unary)
 
 #undef DEFINE_BUILTIN_OP_ID
 

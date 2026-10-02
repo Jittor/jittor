@@ -12,6 +12,7 @@ same files as the gate.
 """
 
 import ast
+import os
 from pathlib import Path
 import sys
 
@@ -157,6 +158,19 @@ def test_local_runner_matches_gate_execution_contract():
         sys.path.remove(str(REPO_ROOT / "tools"))
     assert module._session_environment("native")[
         "JITTOR_TEST_REQUIRE_EXECUTION"] == "1"
+    # A CPU session must empty the canonical nvcc name too: it outranks the
+    # legacy one, so a shell exporting JT_BUILD_NVCC_PATH made the CPU gate
+    # build CUDA and fail its own readiness probe before running a test.
+    previous = os.environ.get("JT_BUILD_NVCC_PATH")
+    os.environ["JT_BUILD_NVCC_PATH"] = "/opt/cuda/bin/nvcc"
+    try:
+        cpu = module._session_environment("native", backend="cpu")
+    finally:
+        if previous is None:
+            os.environ.pop("JT_BUILD_NVCC_PATH", None)
+        else:
+            os.environ["JT_BUILD_NVCC_PATH"] = previous
+    assert cpu["JT_BUILD_NVCC_PATH"] == cpu["nvcc_path"] == ""
     # Both halves the docstring claims, and which one this checkout can be
     # asked depends on a declared dev tool. Without pytest-xdist the runner
     # must refuse rather than run serially and report a wall clock for a gate

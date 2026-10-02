@@ -40,6 +40,8 @@ import json
 import textwrap
 import unittest
 
+import numpy as np
+
 import jittor as jt
 
 
@@ -163,6 +165,56 @@ class TestAutoFlushGraphSplit(unittest.TestCase):
                     abs(got - base) / max(abs(base), 1e-9), GRADIENT_TOLERANCE,
                     "auto_flush_ops=%d gradient norm %s against %s at 0"
                     % (flush, got, base))
+
+
+class _Twice(jt.Function):
+    """A Python-level Function: its backward runs Python and makes new Vars.
+
+    That is what reaches the auto-flush check during backward construction --
+    every Var Python creates goes through `submit_pending`.
+    """
+
+    def execute(self, x):
+        return x * 2
+
+    def grad(self, grad_output):
+        return grad_output * 2
+
+
+@unittest.skipIf(not _has_cuda(), "no CUDA device")
+class TestNoFlushWhileBuildingTheBackward(unittest.TestCase):
+    """A flush must not land inside `jt.grad`'s construction of the backward.
+
+    Mid-construction, every gradient Python has built so far is held and has
+    no consumer yet, so a flush computed each of them as a result and kept it,
+    with the forward activations it reads, until construction ended. Each flush
+    pinned another slice of the network: a 12-block residual/LayerNorm/GELU
+    stack peaked at 2534 MB against 460 MB fully lazy (PyTorch: 1417 MB), and
+    ViT-B/16, Qwen3-0.6B and the SD1.5 UNet ran out of a 24 GB card in training
+    steps PyTorch fits in 9-20 GB.
+    """
+
+    def test_the_backward_is_one_batch(self):
+        with jt.flag_scope(use_cuda=1, auto_flush_ops=1, auto_flush_bytes=0):
+            x = jt.random((64, 64))
+            y = x
+            for _ in range(8):
+                y = _Twice.apply(y) * 0.5
+            loss = y.sum()
+            jt.sync_all(True)
+            before = jt.introspection.counters.exec_calls
+            (dx,) = jt.grad(loss, [x])
+            during = jt.introspection.counters.exec_calls - before
+            # The result is still right; it just runs after construction.
+            np.testing.assert_allclose(dx.numpy(), np.ones((64, 64)), rtol=1e-6)
+        # One batch is the design: once construction returns, the first
+        # flush check submits the whole backward. It was 16 -- one per slice
+        # of a half-built graph -- when flushes could land inside it.
+        self.assertLessEqual(
+            during, 1,
+            "jt.grad executed %d batches while it was building the backward "
+            "graph" % during)
+
 
 
 if __name__ == "__main__":

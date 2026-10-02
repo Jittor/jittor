@@ -45,32 +45,44 @@ void FusedOp::update_jit_key() {
     do_jit_prepare(jk);
 }
 
-vector<Var*> FusedOp::snapshot_outputs(Op* op) const {
-    if (batch_op_outputs && op->batch_stamp == batch_stamp_wanted) {
+FusedOp::Snapshot<Var*> FusedOp::snapshot_outputs(Op* op) const {
+    Snapshot<Var*> out;
+    if (batch_plan && op->batch_stamp == batch_stamp_wanted) {
         int idx = op->batch_index_at(batch_stamp_wanted);
-        if (idx >= 0 && (uint)idx < batch_op_outputs->size())
-            return (*batch_op_outputs)[idx];
+        if (idx >= 0 && idx + 1 < (int)batch_plan->op_outputs_begin.size()) {
+            out.first = batch_plan->op_outputs.data() + batch_plan->op_outputs_begin[idx];
+            out.last = batch_plan->op_outputs.data() + batch_plan->op_outputs_begin[idx + 1];
+            return out;
+        }
     }
-    vector<Var*> out;
-    for (Var* o : op->outputs()) out.push_back(o);
+    for (Var* o : op->outputs()) out.own.push_back(o);
+    out.first = out.own.data();
+    out.last = out.own.data() + out.own.size();
     return out;
 }
 
-vector<pair<Var*, int>> FusedOp::snapshot_inputs(Op* op) const {
-    if (batch_op_inputs && op->batch_stamp == batch_stamp_wanted) {
+FusedOp::Snapshot<pair<Var*, int>> FusedOp::snapshot_inputs(Op* op) const {
+    Snapshot<pair<Var*, int>> in;
+    if (batch_plan && op->batch_stamp == batch_stamp_wanted) {
         int idx = op->batch_index_at(batch_stamp_wanted);
-        if (idx >= 0 && (uint)idx < batch_op_inputs->size())
-            return (*batch_op_inputs)[idx];
+        if (idx >= 0 && idx + 1 < (int)batch_plan->op_inputs_begin.size()) {
+            in.first = batch_plan->op_inputs.data() + batch_plan->op_inputs_begin[idx];
+            in.last = batch_plan->op_inputs.data() + batch_plan->op_inputs_begin[idx + 1];
+            return in;
+        }
     }
-    vector<pair<Var*, int>> in;
-    for (auto ve : op->_inputs) in.emplace_back(ve.node->var(), ve.reverse().index);
+    for (auto ve : op->_inputs) in.own.emplace_back(ve.node->var(), ve.reverse().index);
+    in.first = in.own.data();
+    in.last = in.own.data() + in.own.size();
     return in;
 }
 
 pair<Op*, int> FusedOp::snapshot_producer(Var* v) const {
-    if (batch_var_producer) {
-        auto it = batch_var_producer->find(v);
-        if (it != batch_var_producer->end()) return it->second;
+    if (batch_plan && v->batch_stamp == batch_stamp_wanted) {
+        int idx = v->batch_index_at(batch_stamp_wanted);
+        if (idx >= 0 && idx < (int)batch_plan->var_producer.size()
+                && batch_plan->all_vars[idx] == v)
+            return batch_plan->var_producer[idx];
     }
     int slot = 0;
     if (!v->_inputs.empty()) slot = v->_inputs.front().reverse().index;
@@ -83,6 +95,7 @@ void FusedOp::update_ops() {
     loop_options_merged.clear();
     loop_options_tuned.clear();
     loop_options = loop_options_origin = nullptr;
+    streamed_inputs = 0;
 
     _inputs.clear();
     _outputs.clear();
@@ -223,6 +236,7 @@ FusedOp::FusedOp(const FusedOp& other) {
     // that made `other`, and the copy is only kept for the compiler threads.
     // Anything that needed the verdict read it in update_ops(), before this.
     batch_var_fused = nullptr;
+    batch_plan = nullptr;
     batch_stamp_wanted = 0;
 }
 

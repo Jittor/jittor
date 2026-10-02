@@ -23,13 +23,57 @@ def module_setattr(module, name, value):
         elif name not in attributes.get("_buffer_names", ()):
             if name not in parameters:
                 non_parameters.add(name)
+    # torch registers a submodule or parameter when one is first assigned. A
+    # name that held something else until then -- diffusers writes
+    # `self.mid_block = None` and builds the block later -- is registered at
+    # that point, after everything registered in between. Attributes keep the
+    # position of their first assignment, so move the name to the end: without
+    # it `named_parameters()` listed an SD UNet's mid block before its up
+    # blocks, where torch lists it after, and anything pairing parameters by
+    # position paired the wrong ones.
+    if name in attributes and isinstance(value, (owner.native_module, owner.Parameter)) \
+            and not isinstance(attributes[name], (owner.native_module, owner.backend.Var)):
+        del attributes[name]
     object.__setattr__(module, name, value)
 
 
+#: The native module call (`src/bindings/pyjt/py_module_call.h`), once the
+#: nn installer has bound it: the same scope and dispatch, without the frames.
+_NATIVE_CALL = None
+
+
 def module_call(module, *args, **kwargs):
+    native = _NATIVE_CALL
+    if native is not None:
+        return native(module, args, kwargs)
+    return python_module_call(module, *args, **kwargs)
+
+
+def python_module_call(module, *args, **kwargs):
     owner = type(module)._nn_frontend_owner
-    with tensor_frontend(owner.tensor_type):
+    # A forward follows its inputs' device; only constructors use the default.
+    # The first tensor argument is the reference, as `*_like` uses its source:
+    # with none (or one without an explicit placement) allocation is left to
+    # the ambient device, and never forced onto the default one.
+    with tensor_frontend(owner.tensor_type, like=_first_tensor(owner, args, kwargs),
+                         default_placement=False):
         return owner.native_module.__call__(module, *args, **kwargs)
+
+
+def _first_tensor(owner, args, kwargs):
+    # No backend, no placement to follow -- `tensor_frontend` passes those
+    # straight through too.
+    backend = getattr(owner.tensor_type, "_frontend_backend", None)
+    if backend is None:
+        return None
+    var_type = backend.Var
+    for value in args:
+        if isinstance(value, var_type):
+            return value
+    for value in kwargs.values():
+        if isinstance(value, var_type):
+            return value
+    return None
 
 
 #: Padding modes torch's convolution layers accept. jittor's convolutions only

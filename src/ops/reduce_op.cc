@@ -426,7 +426,12 @@ void ReduceOp::jit_prepare(JK& jk) {
         << "«OP:" << ns
         << "«DIM=" << JK::hex1(x->shape.size())
         << "«REDUCE=" << JK::hex(reduce_mask)
-        << "«EMPTY_MEAN=" << JK::hex1(x->num == 0 && ns == ns_mean);
+        << "«EMPTY_MEAN=" << JK::hex1(x->num == 0 && ns == ns_mean)
+        // Which of the two xstride forms jit_run emits, so a strided input and
+        // a contiguous one of the same rank never share a compiled kernel.
+        // Always in the key, even for 0: the two forms are different code, and
+        // the key is the only thing that decides which one runs.
+        << "«XSTRIDED=" << JK::hex1(!x->is_contiguous());
 }
 
 #else // JIT
@@ -445,7 +450,25 @@ void ReduceOp::jit_run() {
     // the input value, which is what the reduction of a single element is.
     @if(DIM>0, index_t ystride@{DIM-1} = 1;)
     @for(i, DIM-2, -1, -1, auto ystride@i = ystride@{i+1} * yshape@{i+1};)
-    @for(i, 0, DIM, index_t xstride@i = x->storage_stride(@i);)
+    // A contiguous input's storage strides *are* the row-major chain of its own
+    // shape -- `Var::storage_stride` returns exactly this product when the var
+    // carries no explicit stride vector, and `is_contiguous` is true precisely
+    // when it does not (a size-1 axis may carry any stride; it is never read,
+    // because its loop bound is 1). Deriving the strides from `xshape` keeps
+    // `xid` a linear combination of the loop ids, so the tracer folds it and
+    // `MergeLoopVarPass` can merge the two outer loops. Reading
+    // `x->storage_stride` instead makes every stride an opaque call, `xid` stops
+    // matching `id_a*range_b*d + id_b*d + c`, and the merge is refused: two
+    // parallel dimensions instead of one, and no constant folding at all. That
+    // is what happened to this op in 7e83d6da and is recorded under
+    // KI-CODEGEN-001. A strided view (a broadcast, a stepped slice) has no
+    // shape-derived strides, so it keeps the run-time read.
+    @if(XSTRIDED,
+        @for(i, 0, DIM, index_t xstride@i = x->storage_stride(@i);)
+    ,
+        @if(DIM>0, index_t xstride@{DIM-1} = 1;)
+        @for(i, DIM-2, -1, -1, index_t xstride@i = xstride@{i+1} * xshape@{i+1};)
+    )
     Ty count = x->num*1.0 / y->num;
     Ty rcount = y->num*1.0 / x->num;
     @for(d, 0, DIM,@if(REDUCE>>d&1,, for (index_t xi@d=0; xi@d < xshape@d; xi@d++))) {

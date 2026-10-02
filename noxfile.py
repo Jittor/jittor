@@ -966,7 +966,7 @@ def _asv_has_measurement(results_dir, commit_hash):
 
 def _git_output(*arguments):
     result = subprocess.run(
-        ("git",) + arguments,
+        ("git", "-c", "safe.directory=%s" % REPO_ROOT) + arguments,
         cwd=str(REPO_ROOT),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -974,6 +974,7 @@ def _git_output(*arguments):
         check=False,
     )
     if result.returncode != 0:
+        print("git {} failed: {}".format(arguments[0], result.stderr.strip()), file=sys.stderr)
         return None
     return result.stdout.strip()
 
@@ -1482,6 +1483,12 @@ def _record_asv(session, root, env, asv_command, default_machine, external=False
     # ASV deliberately removes PYTHONPATH before launching an existing
     # environment. ASV_PYTHONPATH is its supported source-tree escape hatch.
     env["ASV_PYTHONPATH"] = str(REPO_ROOT / "python")
+    # CI containers may run under a different uid from the checkout owner.
+    # Trust only this checkout for ASV's Git subprocesses; an isolated HOME
+    # does not contain actions/checkout's temporary safe.directory setting.
+    env["GIT_CONFIG_COUNT"] = "1"
+    env["GIT_CONFIG_KEY_0"] = "safe.directory"
+    env["GIT_CONFIG_VALUE_0"] = str(REPO_ROOT)
     machine = os.environ.get("ASV_MACHINE", default_machine)
     factor = os.environ.get("ASV_COMPARE_FACTOR", "1.10")
     try:

@@ -8,6 +8,9 @@ import unittest
 import jittor as jt
 import numpy as np
 
+from _helpers.common import JittorTestCase
+from _helpers.device_types import instantiate_device_type_tests
+
 
 class TestFuser(unittest.TestCase):
     def test_wrong_fuse(self):
@@ -62,6 +65,172 @@ class TestFuser(unittest.TestCase):
         # docs/results/2026-09-14-vllm-omni-h3-enablement.md shows 8 is a little
         # faster than 16 and is not free, so the number is measured, not fixed.
         self.assertGreater(jt.flags.fuse_op_limit, 0)
+
+
+
+def _plans_and_agrees(build, limit):
+    """``build`` under ``fuse_op_limit=limit`` plans, and agrees with unbounded."""
+    with jt.flag_scope(fuse_op_limit=0):
+        unbounded = [v.float32().numpy() for v in build()]
+    with jt.flag_scope(fuse_op_limit=limit):
+        bounded = [v.float32().numpy() for v in build()]
+    for a, b in zip(unbounded, bounded):
+        # Not bit-identical on every backend: a wider kernel can keep an
+        # intermediate in float32 that a narrower one writes out as half.
+        np.testing.assert_allclose(a, b, rtol=1e-2, atol=1e-3)
+
+
+def _finished_input(dtype):
+    x = jt.array(np.linspace(0.1, 1, 32, dtype="float32")).cast(dtype)
+    x.sync()        # finished: a boundary of the batch below, as a weight is
+    return x
+
+
+class TestFuseOpLimitKeepsThePlanAcyclic(JittorTestCase):
+    """A bounded fusion partition must still order: its groups form a DAG.
+
+    ``count_fuse`` unions same-level neighbours into fused groups, and
+    ``build_exec_plan`` phase 4 topologically sorts those groups. Unbounded,
+    a whole level component becomes one group, so no path can leave a group and
+    come back. ``fuse_op_limit`` keeps only part of a half-precision component
+    together, and a greedy per-edge bound used to union A with C while refusing
+    the B on A -> B -> C -- or, one level up, union two ops that only a third
+    group connects. Phase 4 then dequeued nothing of the cycle and died on
+    ``exec_plan.cc: [check failed: queue.size() == roots.size()]``. Under
+    torch-shim ``autocast`` that is what reading the gradients of
+    ``nn.Sequential(Linear, GELU, Linear)`` reached at the default limit
+    (compat/tests/torch/test_torch_amp_training_loop.py); these graphs reach
+    it natively with a small limit. The bug is in the planner, so it is
+    device-independent and runs on every device.
+    """
+
+    def test_an_op_on_the_path_between_two_merged_ops(self, device):
+        for dtype in ("float16", "bfloat16"):
+            with self.subTest(dtype=dtype):
+                def build():
+                    x = _finished_input(dtype)
+                    a = x * x
+                    b = a * a
+                    c = b + a
+                    d = x + c
+                    return [a + d]
+                _plans_and_agrees(build, 2)
+
+    def test_two_groups_joined_only_through_a_third(self, device):
+        """Group {cast, x*n5, x+x} is entered at one op and left from another.
+
+        No op-level path runs through it, so a check that walks ops finds
+        nothing; the group-level quotient still has the cycle.
+        """
+        def build():
+            x = _finished_input("float16")
+            n1 = -x
+            n2 = x + x
+            n3 = n2 * n1
+            n4 = n2 * n3            # a sink of the same batch
+            n5 = n1 + n1
+            n6 = x * n5
+            return [n6, n4]
+        _plans_and_agrees(build, 3)
+
+
+instantiate_device_type_tests(TestFuseOpLimitKeepsThePlanAcyclic, globals())
+
+
+def _fused_run(build, enabled):
+    with jt.flag_scope(fuse_into_reduce=enabled):
+        outs = build()
+        jt.sync(outs)
+        return [o.numpy() for o in outs]
+
+
+def _fused_kernels(build, enabled):
+    with jt.flag_scope(fuse_into_reduce=enabled):
+        jt.sync(build())
+        jt.sync_all(True)
+        with jt.profile() as p:
+            jt.sync(build())
+            jt.sync_all(True)
+    return len(p.result.kernel_records)
+
+
+class TestFuseIntoReduce(JittorTestCase):
+    """A reduction takes in the elementwise group producing its input.
+
+    `fuse_into_reduce`: the input is also read by a matmul, which cannot fuse
+    and so puts the producer on another fuse level; the reduction still runs in
+    the producer's kernel, which writes the input out as well. A bias gradient
+    is this shape: the column sum of an activation gradient that also feeds
+    the weight gradient.
+    """
+
+    def test_the_reduction_and_its_producer_share_a_kernel(self, device):
+        rng = np.random.RandomState(0)
+        x = jt.array(rng.randn(256, 96).astype("float32"))
+        g = jt.array(rng.randn(256, 96).astype("float32"))
+        w = jt.array(rng.randn(96, 32).astype("float32"))
+        jt.sync([x, g, w])
+
+        def build():
+            y = (x * 0.5 + 1.0) * g
+            return [y.sum(0), jt.matmul(y, w)]
+        on, off = _fused_run(build, 1), _fused_run(build, 0)
+        for a, b in zip(on, off):
+            np.testing.assert_allclose(a, b, rtol=1e-5, atol=1e-4)
+        if jt.flags.use_cuda:
+            self.assertEqual(_fused_kernels(build, 1), _fused_kernels(build, 0) - 1)
+
+    def test_the_reduction_reads_what_it_stores_from_a_register(self, device):
+        # The kernel writes `y` out for the matmul and sums it; the sum reads
+        # the value it just computed rather than loading it back, which every
+        # iteration used to wait on behind its own store.
+        import re
+        rng = np.random.RandomState(2)
+        x = jt.array(rng.randn(256, 96).astype("float32"))
+        g = jt.array(rng.randn(256, 96).astype("float32"))
+        w = jt.array(rng.randn(96, 32).astype("float32"))
+        jt.sync([x, g, w])
+        with jt.flag_scope(fuse_into_reduce=1), jt.profile_scope() as rep:
+            y = (x * 0.5 + 1.0) * g
+            s = y.sum(0)
+            jt.sync([s, jt.matmul(y, w)])
+        sources = []
+        for record in rep[1:]:
+            try:
+                with open(record[1]) as f:
+                    sources.append(f.read())
+            except (OSError, TypeError, IndexError):
+                continue
+        fused = [src for src in sources if re.search(r"(op\d+_z)p\[\w+\] = \1d;", src)]
+        self.assertEqual(len(fused), 1, "no kernel stores a forwarded value")
+        stored = re.search(r"(op\d+_z)p\[\w+\] = \1d;", fused[0]).group(1)
+        body = fused[0].split("__global__", 1)[-1]
+        self.assertNotRegex(body, r"=[^;]*\b" + stored + r"p\[")
+        # The register is declared at the var's own type, spelled as a type:
+        # an op's type macros are named after its template parameters, and
+        # `broadcast_to` stores its `z` as `Tx`, so `opN_Tz` did not compile.
+        self.assertRegex(body, r"\bfloat32 " + stored + r"d = ")
+        ref = ((x.numpy() * 0.5 + 1.0) * g.numpy()).sum(0)
+        np.testing.assert_allclose(s.numpy(), ref, rtol=1e-4, atol=1e-3)
+
+    def test_a_reduction_whose_input_needs_the_matmul_stays_ordered(self, device):
+        # The reduction reads the matmul's result too: merging it with the
+        # elementwise group that feeds the matmul would be a cycle.
+        rng = np.random.RandomState(1)
+        x = jt.array(rng.randn(64, 32).astype("float32"))
+        w = jt.array(rng.randn(32, 32).astype("float32"))
+        jt.sync([x, w])
+
+        def build():
+            y = x * 2.0 + 1.0
+            m = jt.matmul(y, w)
+            return [(y * m).sum(0), m]
+        on, off = _fused_run(build, 1), _fused_run(build, 0)
+        for a, b in zip(on, off):
+            np.testing.assert_allclose(a, b, rtol=1e-5, atol=1e-3)
+
+
+instantiate_device_type_tests(TestFuseIntoReduce, globals())
 
 
 if __name__ == "__main__":

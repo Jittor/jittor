@@ -7,6 +7,7 @@
 #include <cmath>
 #include "core/var.h"
 #include "ops/binary_op.h"
+#include "ops/layout_propagation.h"
 #include "ops/broadcast_to_op.h"
 #include "ops/op_register.h"
 
@@ -450,6 +451,14 @@ BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
         auto zp = make_binary(xp, yp, op);
         forward(zp);
         return;
+    }
+    {
+        NanoVector axes;
+        vector<VarPtr> sources;
+        if (storage_layout_operands({x, y}, axes, sources)) {
+            forward(storage_view_transpose(make_binary(sources[0], sources[1], op), axes));
+            return;
+        }
     }
 
     #ifdef IS_ACL

@@ -8,6 +8,8 @@
 
 #include "core/node.h"
 #include "core/op.h"
+#include <algorithm>
+#include <unordered_set>
 #include "core/var.h"
 #include "codegen/op_compiler.h"
 #include "runtime/profiler/profiler.h"
@@ -212,6 +214,20 @@ static inline bool is_pending_scalar(Var* v) {
         && !v->flag(VarFlags::_placement_published);
 }
 
+// A Python number an operator was handed -- the `1.0` in `1.0 - mask` --
+// possibly cast or broadcast since: a constant, which no gradient flows into.
+// Neither a scalar computed from a tensor (`x.sum()`) nor a 0-d tensor the
+// caller made (`torch.tensor(2.0, requires_grad=True)`) is one.
+static bool is_constant_scalar(Var* v) {
+    for (;;) {
+        if (v->flag(VarFlags::_python_number)) return true;
+        if (!v->flag(VarFlags::_is_scalar)) return false;
+        Op* op = v->input();
+        if (!op || op->inputs().size() != 1) return false;
+        v = op->inputs().front();
+    }
+}
+
 // Move a pending scalar, and the pending subgraph that produces it, onto
 // `dev`. Refuses (returning false) if that subgraph reaches data that already
 // exists on another device -- then it is not a scalar constant being placed,
@@ -324,7 +340,14 @@ void Op::init() {
             has_disabled_input |= disabled;
             has_first_order_only_input |=
                 v->flag(VarFlags::_first_order_only);
-            all_inputs_stopped &= disabled || v->is_stop_grad();
+            // Under torch's rule a Python scalar never asks for a gradient,
+            // so `1.0 - mask` does not either. Counted as one, it made every
+            // float attention mask Transformers builds "require grad", and
+            // the fused attention kernels, which take no mask gradient,
+            // declined it for the O(L^2) math path.
+            all_inputs_stopped &= disabled || v->is_stop_grad()
+                || (autograd_policy.stop_outputs_when_inputs_stopped
+                    && is_constant_scalar(v));
         }
         if (has_disabled_input) {
             set_flag(OpFlags::_requires_grad_disabled);
@@ -365,6 +388,70 @@ void Op::init() {
                 v->set_stop_grad();
             }
         }
+    }
+}
+
+void order_after_readers(Op* op, const vector<Var*>& written) {
+    // A view of a written var reads it wherever its own readers do, so their
+    // readers count too: an output still asking to share its storage
+    // (`share_src`) or one already in its share ring -- a broadcast's expand
+    // that has run and left the graph, whose consumer has not.
+    vector<Var*> aliases;
+    auto alias = [&](Var* v) {
+        if (std::find(aliases.begin(), aliases.end(), v) == aliases.end())
+            aliases.push_back(v);
+    };
+    for (Var* v : written) alias(v);
+    vector<Node*> after;
+    for (size_t k = 0; k < aliases.size(); k++) {
+        Var* v = aliases[k];
+        if (v->share_next)
+            for (Var* member = v->share_next; member != v; member = member->share_next)
+                alias(member);
+        for (Op* reader : v->outputs()) {
+            if (reader == op) continue;
+            bool stands_for_reader = false;
+            for (Var* out : reader->outputs()) {
+                if (out->share_src == v) {
+                    alias(out);
+                    continue;
+                }
+                // A pending reader: its first unfinished output stands for it.
+                if (stands_for_reader || out->is_finished()) continue;
+                stands_for_reader = true;
+                if (std::find(after.begin(), after.end(), out) == after.end())
+                    after.push_back(out);
+            }
+        }
+    }
+    if (after.empty()) return;
+    // A reader upstream of the op -- the forward a gradient is computed
+    // from -- is ordered already by the data it feeds it, and an edge would
+    // only keep its output alive until the update: a captured step, whose
+    // whole forward is pending when the optimizer is built, held every
+    // activation to the end, half as much memory again.
+    std::unordered_set<Op*> upstream;
+    vector<Node*> stack;
+    for (auto& edge : op->_inputs) stack.push_back(edge.node);
+    while (!stack.empty()) {
+        Node* v = stack.back();
+        stack.pop_back();
+        if (v->is_finished()) continue;
+        Op* producer = ((Var*)v)->input();
+        if (!producer || !upstream.insert(producer).second) continue;
+        for (auto& edge : producer->_inputs) stack.push_back(edge.node);
+    }
+    size_t kept = 0;
+    for (Node* out : after)
+        if (!upstream.count(((Var*)out)->input())) after[kept++] = out;
+    after.resize(kept);
+    if (after.empty()) return;
+    op->add_inputs(after);
+    // Control edges: they order the two ops and carry no data.
+    auto edge = op->_inputs.end();
+    for (size_t i = 0; i < after.size(); i++) {
+        edge = std::prev(edge);
+        edge->reverse().index = -1;
     }
 }
 

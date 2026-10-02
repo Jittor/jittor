@@ -12,7 +12,8 @@ from builtins import bool as ori_bool, float as ori_float, int as ori_int
 import numpy as np
 import jittor_core as core
 from jittor_core import NanoString, NanoVector, Var, ops
-from .flags import flag_scope
+from jittor_core import _fast_transpose, _fast_unsqueeze
+from .flags import flag_scope, flags as _runtime_flags
 from .._runtime.acl_clamp import dispatch_acl_clamp
 from .._runtime.backend_libraries import get_library as _get_library
 from .._runtime.dispatch import register_kernel as _register_kernel, try_dispatch as _try_dispatch
@@ -160,13 +161,39 @@ def random(shape, dtype="float32", type="uniform"):
         if dim < 0:
             raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
     dtype = _dtype_for_compute(dtype)
-    if _jittor_dtype_name(dtype) in ("float16", "bfloat16"):
+    name = _jittor_dtype_name(dtype)
+    draw = "float32" if name in ("float16", "bfloat16") else name
+    ret = _captured_draw(shape, draw, type)
+    if ret is None:
+        ret = ops.random(shape, draw, type)
+    if draw != name:
         # The CPU and accelerator random engines generate standard floating
         # types; low-precision outputs use their regular cast kernels.
-        ret = ops.random(shape, "float32", type).cast(dtype)
-    else:
-        ret = ops.random(shape, dtype, type)
+        ret = ret.cast(dtype)
     return _amp_array_preference(ret)
+
+
+def _captured_draw(shape, dtype, type):
+    """A draw a captured step can replay (see step_capture.random_draw), or None."""
+    from jittor._runtime import step_capture
+    if not step_capture.active() or not _draws_on_device():
+        return None
+    return step_capture.random_draw(tuple(ori_int(s) for s in shape), dtype, type)
+
+
+def _captured_keep(shape, p):
+    """``random(shape) > p`` a captured step can replay (see step_capture.random_keep), or None."""
+    from jittor._runtime import step_capture
+    if not step_capture.active() or not _draws_on_device():
+        return None
+    return step_capture.random_keep(tuple(ori_int(s) for s in shape), ori_float(p))
+
+
+def _draws_on_device():
+    placement = core._current_tensor_placement()
+    if placement is not None:
+        return placement[0] != 0
+    return ori_bool(_runtime_flags.use_cuda)
 
 _core_to_device = Var.to_device
 
@@ -713,6 +740,14 @@ def _with_accelerator_kernel_loaded(func):
     """
     @_functools.wraps(func)
     def transpose_with_accelerator_kernel(x, *dim):
+        # Two axes, once cuTT has been asked for: the native transpose
+        # (`_fast_transpose` in src/bindings/pyjt/py_compat_fast.h) builds
+        # what `transpose` below does, without its frames.
+        if (_accelerator_transpose_tried and len(dim) == 2
+                and type(dim[0]) is _pyint and type(dim[1]) is _pyint):
+            out = _fast_transpose(x, dim[0], dim[1])
+            if out is not None:
+                return out
         _load_accelerator_transpose()
         return func(x, *dim)
     return transpose_with_accelerator_kernel
@@ -849,6 +884,27 @@ def transpose(x, *dim):
             break
     if coerce:
         dim = tuple(_pyint(d.item()) if isinstance(d, Var) else _pyint(d) for d in dim)
+    # A transpose of a transpose is one transpose of the source, and none at
+    # all when the two cancel: `attn(q.transpose(1, 2), ...).transpose(1, 2)`
+    # otherwise ran two copies to put the heads back where they started.
+    # The view record keeps writes reaching the root; where it is gone with
+    # the root's holder, the graph still says what the Var is a transpose of.
+    source = None
+    view_axes = getattr(x, "_transpose_view_axes", None)
+    if view_axes is not None:
+        prior = view_axes()
+        if prior:
+            source = x._transpose_view_source
+        else:
+            prior = x._producer_transpose_axes()
+            if prior:
+                source = lambda: x._input(0)
+    if source is not None and len(prior) == len(dim):
+        composed = tuple(prior[d] for d in dim)
+        source = source()
+        if composed == tuple(range(len(dim))):
+            return source
+        x, dim = source, composed
     out = _try_dispatch("tensor.transpose", x, dim)
     if out is None:
         out = origin_transpose(x, dim)
@@ -891,6 +947,10 @@ def detach(x):
     return x.detach()
 
 def unsqueeze(x, dim):
+    if type(dim) is _pyint:
+        out = _fast_unsqueeze(x, dim)
+        if out is not None:
+            return out
     shape = list(x.shape)
     if dim < 0: dim += len(shape) + 1
     if dim < 0 or dim > len(shape):

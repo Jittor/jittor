@@ -102,7 +102,8 @@ def routing(monkeypatch):
     ("silu", "nn.silu", {}),
 ])
 def test_activation_function_and_existing_class_share_registration(routing, name, key, kwargs):
-    ns = _definitions("nn/functional/activation.py", [name], routing.namespace)
+    routing.namespace["_RESIDUAL_OFFERS"] = {}
+    ns = _definitions("nn/functional/activation.py", [name, "_fused_activation"], routing.namespace)
     routing.register(key)
     function = ns[name]
     setattr(routing.jt.nn, name, function)
@@ -258,7 +259,8 @@ def test_matmul_bmm_and_transpose_reuse_existing_keys(routing):
 
 
 def test_dropout_keeps_the_native_probability_and_training_owner(routing):
-    ns = _definitions("nn/functional/dropout.py", ["_check_probability", "dropout"], routing.namespace)
+    ns = _definitions("nn/functional/dropout.py", ["_check_probability", "_keep_scale", "dropout"],
+                      routing.namespace)
     routing.jt.nn.dropout = ns["dropout"]
     _definitions("nn/modules/dropout.py", ["Dropout"], ns)
     cls = ns["Dropout"]
@@ -288,7 +290,9 @@ def test_softmax_uses_existing_key_after_public_axis_validation(routing, monkeyp
 
 
 def test_sdpa_validates_dtype_and_dropout_before_registered_attention(routing):
-    function = _definitions("nn/functional/attention.py", ["scaled_dot_product_attention"],
+    function = _definitions("nn/functional/attention.py",
+                            ["scaled_dot_product_attention", "_shape", "_repeated_heads",
+                             "_expand_heads"],
                             routing.namespace)["scaled_dot_product_attention"]
     routing.register("nn.scaled_dot_product_attention")
     query, key, value = Tensor((1, 2, 4, 8)), Tensor((1, 2, 4, 8)), Tensor((1, 2, 4, 8))

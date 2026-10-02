@@ -279,8 +279,11 @@ static inline bool capturing() {
 bool graph_capture_begin(int device) {
     return on_device(device, [&]() -> bool {
         cudaGetLastError();
+        // Relaxed: a pool that has to grow mid-recording calls cudaMalloc,
+        // which the stricter modes refuse. The block is ordinary memory and
+        // the recording holds it until the graph is released.
         const auto status = cudaStreamBeginCapture(cudaStreamPerThread,
-                                                   cudaStreamCaptureModeThreadLocal);
+                                                   cudaStreamCaptureModeRelaxed);
         if (status != cudaSuccess) {
             cudaGetLastError();
             LOGvv << "graph capture could not start:" << cudaGetErrorString(status);
@@ -484,7 +487,11 @@ void copy(void* dst, Device target, const void* src, Device source, size_t size,
                 || attr.type == cudaMemoryTypeUnregistered;
             checkCudaErrors(cudaMemcpyAsync(dst, src, size, cudaMemcpyHostToDevice,
                                             cudaStreamPerThread));
-            if (!pageable) {
+            // Except while recording a graph, where a wait is illegal and the
+            // copy becomes a node that reads `src` each time the graph runs;
+            // the recording's owner keeps `src` alive and waits for the
+            // previous launch before rewriting it (see `graph_wait`).
+            if (!pageable && !capturing()) {
                 LaunchErrorScope error_scope(
                     target, true, reinterpret_cast<uintptr_t>(cudaStreamPerThread));
                 checkCudaErrors(cudaStreamSynchronize(cudaStreamPerThread));

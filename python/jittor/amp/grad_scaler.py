@@ -57,6 +57,33 @@ def _jittor():
     return jittor
 
 
+def _device_scalar(like, value):
+    """A finished one-element float32 Var holding `value`, placed as `like` is.
+
+    Placed, not derived: ``like * 0 + value`` would put the loss's graph under
+    it, and executing it -- as a Var that is state must be -- would execute
+    part of a step being captured.
+    """
+    jt = _jittor()
+    core = jt.core
+    token = None
+    backend = like.placement_backend
+    if backend >= 0:
+        token = core._set_tensor_placement(backend, max(int(like.device_id), 0))
+    try:
+        var = jt.array(np.array([value], np.float32))
+    finally:
+        if token is not None:
+            core._reset_tensor_placement(token)
+    before = jt.flags.keep_graph
+    jt.flags.keep_graph = 0
+    try:
+        var.sync(False, False)
+    finally:
+        jt.flags.keep_graph = before
+    return var.stop_grad()
+
+
 class GradScaler:
     """Scale a loss for the backward pass, and unscale its gradients after.
 
@@ -76,12 +103,45 @@ class GradScaler:
         self._growth_tracker = 0
         self._found_inf = False
         self._unscaled = False
+        # [scale, growth tracker] on the device, once a captured step used
+        # the scaler; see `_device_state`. From then on they are the state.
+        self._device = None
+        self._found_inf_var = None
 
     def is_enabled(self):
         return self._enabled
 
+    # -- device state, for a captured step -------------------------------
+    def _device_state(self, like):
+        """The scale and growth tracker as device Vars, made on first use.
+
+        A captured step replays without running this class's Python, so what
+        it decides each step -- skip or not, the next scale -- has to be
+        computed on the device from state the step updates (and the capture
+        tracks, as it tracks parameters). Made next to `like`, the loss, so
+        they share its placement.
+        """
+        if self._device is None:
+            self._device = [_device_scalar(like, self._scale),
+                            _device_scalar(like, float(self._growth_tracker))]
+        return self._device
+
+    def _pull(self):
+        """Bring the device state back into the Python fields (a read)."""
+        if self._device is not None:
+            scale, tracker = self._device
+            self._scale = float(scale.numpy().reshape(-1)[0])
+            self._growth_tracker = int(tracker.numpy().reshape(-1)[0])
+
+    def _on_device(self):
+        from jittor._runtime import step_capture
+        return self._device is not None or step_capture.active()
+
     def get_scale(self):
-        return self._scale if self._enabled else 1.0
+        if not self._enabled:
+            return 1.0
+        self._pull()
+        return self._scale
 
     def get_growth_factor(self):
         return self._growth_factor
@@ -120,6 +180,9 @@ class GradScaler:
         if not self._enabled:
             return outputs
         jt = _jittor()
+        if isinstance(outputs, jt.Var) and self._on_device():
+            scale = self._device_state(outputs)[0]
+            return outputs * scale.reshape(()).cast(outputs.dtype)
         if isinstance(outputs, jt.Var):
             if (self._scale > self._FLOAT16_MAX
                     and _jittor_dtype_name(outputs.dtype) == "float16"):
@@ -160,6 +223,8 @@ class GradScaler:
         if not self._enabled:
             return
         jt = _jittor()
+        if self._on_device():
+            return self._unscale_on_device(optimizer)
         inv = np.float32(1.0 / self._scale)
         flattened = []
         for g in self._grads(optimizer):
@@ -181,6 +246,22 @@ class GradScaler:
         )
         self._unscaled = True
 
+    def _unscale_on_device(self, optimizer):
+        """`unscale_` without reading anything back: found-inf stays a Var."""
+        jt = _jittor()
+        grads = [g for g in self._grads(optimizer) if g.numel()]
+        flattened = []
+        if grads:
+            inv = 1.0 / self._device_state(grads[0])[0]
+            for g in grads:
+                unscaled = g * inv.reshape(()).cast(g.dtype)
+                g.update(unscaled)
+                flattened.append(unscaled.cast("float32").reshape((-1,)))
+        self._found_inf_var = (
+            jt.logical_not(jt.isfinite(jt.concat(flattened)).all())
+            if flattened else None)
+        self._unscaled = True
+
     def step(self, optimizer, *args, **kwargs):
         """Unscale if needed, then step -- unless a gradient was not finite.
 
@@ -193,6 +274,19 @@ class GradScaler:
         if not self._unscaled:
             self.unscale_(optimizer)
         self._unscaled = False
+        if self._on_device() and self._found_inf_var is not None:
+            from jittor._runtime import step_capture
+            skips = getattr(optimizer, "_skips_step_on_device", None)
+            if step_capture.active() and skips is not None and skips():
+                # The optimizer's update reads the flag and skips on the device.
+                optimizer.__dict__["_amp_found_inf"] = self._found_inf_var
+                try:
+                    return optimizer.step(*args, **kwargs)
+                finally:
+                    optimizer.__dict__.pop("_amp_found_inf", None)
+            # Decided here, which reads the flag back: a captured step then
+            # runs as written from this point, and is not replayed.
+            self._found_inf = bool(self._found_inf_var.numpy().reshape(-1)[0])
         if self._found_inf:
             # Clear the gradients the skipped step would have consumed.
             # `Optimizer.backward` *accumulates* into `pg["grads"]` and
@@ -217,6 +311,11 @@ class GradScaler:
         """Back off after an overflow, or grow after a clean run."""
         if not self._enabled:
             return
+        if self._on_device() and new_scale is None and self._found_inf_var is not None:
+            return self._update_on_device()
+        if new_scale is not None and self._device is not None:
+            self._pull()
+            self._device = None     # a new scale from outside: start over
         if new_scale is not None:
             self._scale = float(new_scale.item()
                                 if isinstance(new_scale, _jittor().Var)
@@ -235,6 +334,23 @@ class GradScaler:
                 self._growth_tracker = 0
         self._found_inf = False
 
+    def _update_on_device(self):
+        """`update` as arithmetic on the device state, for a captured step."""
+        jt = _jittor()
+        from jittor._runtime import step_capture
+        step_capture.guard(lambda: (self._growth_factor, self._backoff_factor,
+                                    self._growth_interval))
+        scale, tracker = self._device
+        found = self._found_inf_var.float32().reshape((1,))
+        grown = tracker + 1
+        grow = (grown >= float(self._growth_interval)).float32()
+        backed_off = jt.maximum(scale * self._backoff_factor, 1.0)
+        kept = grow * (scale * self._growth_factor) + (1 - grow) * scale
+        scale.update((found * backed_off + (1 - found) * kept).stop_grad())
+        tracker.update(((1 - found) * (1 - grow) * grown).stop_grad())
+        self._found_inf_var = None
+        self._found_inf = False
+
     def state_dict(self):
         """The scale and the policy that moves it.
 
@@ -245,6 +361,7 @@ class GradScaler:
         """
         if not self._enabled:
             return {}
+        self._pull()
         return {"scale": self._scale,
                 "growth_factor": self._growth_factor,
                 "backoff_factor": self._backoff_factor,
@@ -263,3 +380,4 @@ class GradScaler:
         self._backoff_factor = float(state_dict["backoff_factor"])
         self._growth_interval = int(state_dict["growth_interval"])
         self._growth_tracker = int(state_dict["_growth_tracker"])
+        self._device = None

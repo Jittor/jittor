@@ -29,6 +29,7 @@
 #include "core/fused_op.h"
 #include "core/fuser.h"
 #include "runtime/profiler/profiler_guard.h"
+#include "runtime/profiler/step_trace.h"
 #include "core/parallel_compiler.h"
 #include "core/memory_profiler.h"
 #include "debug/nan_checker.h"
@@ -74,6 +75,7 @@ void Executor::submit_pending(Var* target, bool force) {
 
 #ifdef HAS_ACCELERATOR
     if (auto_flush_ops > 0 && runtime_use_cuda()
+            && pipeline.grad_construction_depth == 0
             && backend_ops(accelerator_backend_id()).execution.supports_auto_flush
             && Op::number_of_created_ops - pipeline.last_run_ops >= auto_flush_ops) {
         vector<Var*> vars;
@@ -89,6 +91,16 @@ void Executor::submit_pending(Var* target, bool force) {
             if (var->flag(VarFlags::_kept)) continue;
             auto op = var->input();
             if (op && op->flag(OpFlags::_must_stay_pending)) continue;
+            // Nor a var an elementwise op is still to compute. Launched now it
+            // is written out, and a training forward keeps it for the backward,
+            // where it would otherwise have fused into its readers and never
+            // existed: where the cut fell decided how many of them a ViT-B/16
+            // step kept, and its peak moved by 0.33 GB between
+            // `auto_flush_ops` 120 and 136. What such a var reads is launched
+            // when something that must be written out -- a matmul, a
+            // convolution, a reduction -- needs it.
+            if (op && (op->type() == OpType::element || op->type() == OpType::broadcast))
+                continue;
             vars.push_back(var);
             pending_bytes += var->size;
         }
@@ -281,6 +293,45 @@ static void resolve_dynamic_inputs(Executor& executor, const vector<Var*>& roots
     }
 }
 
+// When each var of the batch has been used for the last time, as a queue
+// position: the Runner drops the var's hold after that segment (see
+// `ExecPlan::release_after`). A segment is read exactly as `run_exec_plan`
+// reads it -- its `fuse_ops` range, plus the root op itself -- and a var is
+// counted as used by every op that has it as an input or an output, from the
+// edge snapshot the planner recorded. The vars the caller asked for head
+// `all_vars` and are never scheduled: phase 7 checks them, and they stay held
+// to the end, as does anything no segment names.
+static void schedule_hold_release(ExecPlan& plan) {
+    const int n = plan.queue.size();
+    vector<int> last_use(plan.all_vars.size(), -1);
+    // A var's batch index is its position in `all_vars`; one that is not of
+    // this batch, or among the vars the caller asked for, is not scheduled.
+    auto index_of = [&](Var* v) {
+        int i = v->batch_index_in(plan.stamp);
+        return i >= plan.start_var_num && i < (int)plan.all_vars.size()
+            && plan.all_vars[i] == v ? i : -1;
+    };
+    auto touch = [&](int op_index, int rid) {
+        for (int k = plan.op_inputs_begin[op_index]; k < plan.op_inputs_begin[op_index + 1]; k++) {
+            int i = index_of(plan.op_inputs[k].first);
+            if (i >= 0) last_use[i] = rid;
+        }
+        for (int k = plan.op_outputs_begin[op_index]; k < plan.op_outputs_begin[op_index + 1]; k++) {
+            int i = index_of(plan.op_outputs[k]);
+            if (i >= 0) last_use[i] = rid;
+        }
+    };
+    for (int rid = 0; rid < n; rid++) {
+        touch(plan.queue[rid], rid);
+        int ll = rid < n - 1 ? plan.range[n - rid - 2] : 0;
+        int rr = plan.range[n - rid - 1];
+        for (int k = ll; k < rr; k++) touch(plan.fuse_ops[k], rid);
+    }
+    plan.release_after.assign(n, {});
+    for (int i = 0; i < (int)last_use.size(); i++)
+        if (last_use[i] >= 0) plan.release_after[last_use[i]].push_back(i);
+}
+
 void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     // == phase 1: setup ==
     // One batch at a time. Until the device waits inside started releasing the
@@ -289,6 +340,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     // has to be a lock. Explicit dynamic-input prerequisite submissions are
     // on this thread and pass straight through; constructors never submit.
     ExecutorEntryScope entry;
+    StepTraceBatchScope trace_batch;
     exec_called ++;
     auto& pipeline = runtime_submission_pipeline();
     pipeline.last_run_ops = Op::number_of_created_ops;
@@ -307,6 +359,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     // == phases 2-5: graph -> execution plan ==
     ExecPlan plan;
     build_exec_plan(vars, weak_sync, plan);
+    trace_batch.mark(stb_planned);
     // Hold the batch's vars for its duration -- and with them the ops that
     // produce them, since an op's liveness comes from its outputs, so an op
     // whose output var is held cannot be freed either.
@@ -334,6 +387,8 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     for (Var* v : plan.all_vars) batch_hold.emplace_back(v);
     // What phase 7 has to discount: this hold is bookkeeping, not a consumer.
     plan.batch_hold_per_var = 1;
+    schedule_hold_release(plan);
+    plan.batch_hold = &batch_hold;
     ExecutionBackendScope backend_scope(plan.backend);
 
     // The fusion verdict goes to FusedOp as the vector it already is, instead
@@ -344,13 +399,12 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     fused_op.batch_stamp_wanted = plan.stamp;
     // The batch's own record of the edges it was collected from; see
     // `ExecPlan::op_outputs`.
-    fused_op.batch_op_outputs = &plan.op_outputs;
-    fused_op.batch_op_inputs = &plan.op_inputs;
-    fused_op.batch_var_producer = &plan.var_producer;
+    fused_op.batch_plan = &plan;
 
     // compile all ops, prevent compiling during running
     parallel_compile_all_ops(plan.queue, plan.range, fused_op,
                              plan.fuse_ops, plan.ops, plan.stamp);
+    trace_batch.mark(stb_compiled);
 
     // Planning is the last consumer of the batch tflags. Restore any outer
     // traversal before SetupFreeBuffer can destroy nodes from this batch.

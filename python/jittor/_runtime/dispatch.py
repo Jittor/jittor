@@ -63,6 +63,8 @@ def _invalidate():
     global _resolved
     _resolved = {}
     _rebuild_op_names()
+    if _NATIVE_SELECT:
+        sys.modules["jittor"].core._kernel_select_invalidate(_registered_ops)
 
 
 def _candidates(op, backend):
@@ -112,9 +114,12 @@ def _dtype_names(tensors):
     memo is the same one, so an unusual spelling still resolves through
     ``dtype_name`` exactly once.
     """
+    if _VAR_TYPE is None:
+        _bind_core()
+    native_dtype = _NATIVE_DTYPE
     names = []
     for value in tensors:
-        dtype = value.dtype
+        dtype = value.dtype if native_dtype is None else native_dtype.__get__(value, None)
         raw = str(dtype)
         name = _DTYPE_NAMES.get(raw)
         if name is None:
@@ -169,17 +174,68 @@ def _collect_tensors(values, var_type, tensors, active_containers):
 #: hundred.
 _VAR_TYPE = None
 _DISPATCH_CONTEXT_NATIVE = None
+#: The native selection loop (`src/bindings/pyjt/py_kernel_select.h`), once
+#: bound: the same walk over the arguments, placement query and candidate
+#: loop as `select_kernel` below, without a frame per step.
+_NATIVE_SELECT = None
+#: The native Var's own `dtype` getter. A frontend tensor type overrides
+#: `dtype` with a Python property returning its framework's dtype object; the
+#: dispatcher only needs the name, and reading it here skips that property --
+#: a Python call per tensor argument of every dispatched operator.
+_NATIVE_DTYPE = None
 
 
 def _bind_core():
     """Bind the native handles, or say that Jittor is not up yet."""
-    global _VAR_TYPE, _DISPATCH_CONTEXT_NATIVE
+    global _VAR_TYPE, _DISPATCH_CONTEXT_NATIVE, _NATIVE_DTYPE
     native = sys.modules.get("jittor")
     if native is None or not hasattr(native, "core"):
         raise RuntimeError("Jittor must be initialized before selecting a kernel")
     core = native.core
     _VAR_TYPE = core.Var
     _DISPATCH_CONTEXT_NATIVE = core.dispatch_context
+    _NATIVE_DTYPE = core.Var.__dict__.get("dtype")
+
+
+#: `supports` predicates the native selector may evaluate itself, by the rule
+#: that answers the same question (`src/bindings/pyjt/py_kernel_select.h`).
+_NATIVE_RULES: Dict[Callable[..., bool], str] = {}
+
+
+def native_rule(rule):
+    """Declare that a ``supports`` predicate answers what native ``rule`` does.
+
+    A dispatch evaluates a registered predicate for every candidate it tries,
+    and for the relays every matrix product and every fused norm takes, that
+    Python call was most of the selection's cost. The rule may still answer
+    "cannot tell" -- then the predicate is called as before.
+    """
+    def mark(predicate):
+        _NATIVE_RULES[predicate] = rule
+        if _NATIVE_SELECT:
+            sys.modules["jittor"].core._kernel_select_native_rule(predicate, rule)
+        return predicate
+    return mark
+
+
+def _bind_native_select():
+    """Hand the registry's resolver to the native selection loop."""
+    global _NATIVE_SELECT
+    if _VAR_TYPE is None:
+        _bind_core()
+    core = sys.modules["jittor"].core
+    if not hasattr(core, "_kernel_select"):
+        # A core without it -- a stand-in built by a test -- keeps the loop
+        # below.
+        _NATIVE_SELECT = False
+        return False
+    with _lock:
+        core._kernel_select_bind(_candidates, canonical_dtype_name)
+        core._kernel_select_invalidate(_registered_ops)
+        for predicate, rule in _NATIVE_RULES.items():
+            core._kernel_select_native_rule(predicate, rule)
+        _NATIVE_SELECT = core._kernel_select
+    return _NATIVE_SELECT
 
 
 def _walk_container(container, var_type, tensors):
@@ -311,26 +367,25 @@ def registered_kernel(op, backend):
 
 
 def select_kernel(op, *args, **kwargs):
-    # Through the module-level name, not `_dispatch_backend`: replacing
-    # `dispatch_context` is how a caller states which device the arguments are
-    # on, and the ACL clamp facade's CPU contract is tested that way. Only when
-    # nobody has replaced it does this read placement directly, which lets the
-    # dtype names wait until a candidate actually filters on them. Not one ACL
-    # registration declares `dtypes`, and the CUDA softmax entry that does is
-    # only a candidate on a CUDA backend, so on ACL the names were built --
-    # a `str` and a memo lookup per argument -- and then never read.
     # Nothing is registered under this name on any backend, so no argument
     # walk and no placement query can change the answer.
     if op not in _registered_ops:
         return None
+    # Through the module-level name: replacing `dispatch_context` is how a
+    # caller states which device the arguments are on, and the ACL clamp
+    # facade's CPU contract is tested that way. Only when nobody has replaced
+    # it does the native loop read placement itself.
+    tensors = dtypes = None
     if dispatch_context is _NATIVE_DISPATCH_CONTEXT:
+        native = _NATIVE_SELECT
+        if native is None:
+            native = _bind_native_select()
+        if native:
+            return native(op, args, kwargs)
         tensors, backend, _device_id = _dispatch_placement(args, kwargs)
-        dtypes = None
     else:
         context = dispatch_context(*args, **kwargs)
-        tensors, backend, dtypes = None, context.backend, context.dtypes
-    # `_candidates` resolves and memoizes; once it has, the answer is a plain
-    # dict read, so take it here rather than through another frame.
+        backend, dtypes = context.backend, context.dtypes
     entries = _resolved.get((op, backend))
     if entries is None:
         entries = _candidates(op, backend)
@@ -343,10 +398,8 @@ def select_kernel(op, *args, **kwargs):
             if selected_mode not in entry.runtime_modes:
                 continue
         if entry.dtypes is not None:
-            if dtypes is None and tensors is not None:
+            if dtypes is None:
                 dtypes = _dtype_names(tensors)
-            # A set test, not a generator: `entry.dtypes` is a frozenset and
-            # this runs per candidate of every dtype-filtered operator.
             if not entry.dtypes.issuperset(dtypes):
                 continue
         if entry.supports is not None and not entry.supports(*args, **kwargs):

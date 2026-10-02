@@ -5,6 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
+#include <functional>
 #include "core/common.h"
 #include "runtime/backend.h"
 
@@ -87,6 +88,31 @@ struct Allocation {
 };
 
 EXTERN_LIB Allocator* cpu_allocator;
+
+// While a device graph is being recorded, the pools hold their frees here
+// instead of performing them: a recorded kernel keeps the address of every
+// buffer it touched, a workspace freed mid-recording included, and handing
+// that block to anything else -- or back to the driver -- before the graph is
+// released would have the next launch write into someone else's memory. The
+// recording's owner takes the list and destroys it, which frees each block,
+// when the graph goes (see runtime/graph_capture.cc). Null otherwise.
+EXTERN_LIB vector<Allocation>* capture_held_frees;
+// Hold one free for the recording in progress; false if none is.
+bool hold_free_for_capture(Allocator* allocator, void* mem_ptr, size_t size,
+                           size_t allocation);
+// Hand one held block of `allocator` out again, within the same recording:
+// the one for which `cost` (the block's size, or a negative value if it does
+// not fit) is smallest. A workspace lives only for the op that asked for it
+// and the recording runs its ops in order, so a later op may reuse an earlier
+// one's -- which is what a pool does outside a recording, and without it every
+// workspace of the recording stays distinct: 1.49 GB of them for an SD1.5
+// UNet step. False if nothing held fits.
+bool reuse_held_for_capture(Allocator* allocator,
+                            const std::function<int64(size_t allocation)>& cost,
+                            size_t& allocation);
+// Start holding frees, and stop and hand back what was held.
+void begin_capture_hold();
+vector<Allocation> end_capture_hold();
 EXTERN_LIB bool use_pinned_host_memory();
 EXTERN_LIB Allocator* get_array_host_allocator();
 Allocator* get_allocator(bool temp_allocator=false);

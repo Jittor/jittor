@@ -240,6 +240,7 @@ include backends/cuda/kernels/cutt/cutt_transpose_op.cc
 include backends/cuda/kernels/cutt/cutt_transpose_op.h
 include backends/cuda/kernels/debug/nan_checker.cu
 include backends/cuda/kernels/math/src/gamma_grad.h
+include backends/cuda/kernels/nn/cudnn_sdpa.cc
 include backends/cuda/libraries/cub/include/cub_test.h
 include backends/cuda/libraries/cublas/include/cublas_compute_type.h
 include backends/cuda/libraries/cublas/include/cublas_wrapper.h
@@ -338,11 +339,13 @@ include docs/notes/index.md
 include docs/notes/mixed-precision.md
 include docs/notes/numerics-contract.md
 include docs/notes/pipelined-execution.md
+include docs/notes/profiling.md
 include docs/performance/benchmarking.md
 include docs/performance/index.md
 include docs/performance/library-standing.md
 include docs/releases/2.0.md
 include docs/releases/index.md
+include docs/results/2026-09-12-batched-linear-graph-nodes.md
 include docs/results/2026-09-12-cuda-metaop-launch-index-scalar.md
 include docs/results/2026-09-12-minimax-h3-torch-compat.md
 include docs/results/2026-09-13-host-path-per-node-cost.md
@@ -352,6 +355,8 @@ include docs/results/2026-09-14-jittor-vs-pytorch.md
 include docs/results/2026-09-14-vllm-omni-h3-enablement.md
 include docs/results/2026-09-19-torch-compat-runbook-verification.md
 include docs/results/2026-09-22-openai-whisper-l2-cpu.md
+include docs/results/2026-09-24-torch-compat-real-models.md
+include docs/results/2026-09-25-profiling-tools.md
 include docs/results/index.md
 include docs/slides/jittor-overview.html
 include docs/slides/计图介绍.pptx
@@ -413,10 +418,16 @@ include src/bindings/pyjt/py_arg_printer.h
 include src/bindings/pyjt/py_array_op.cc
 include src/bindings/pyjt/py_caller.cc
 include src/bindings/pyjt/py_caller.h
+include src/bindings/pyjt/py_compat_fast.cc
+include src/bindings/pyjt/py_compat_fast.h
 include src/bindings/pyjt/py_converter.h
 include src/bindings/pyjt/py_dispatch_context.h
 include src/bindings/pyjt/py_dtype.cc
 include src/bindings/pyjt/py_dtype.h
+include src/bindings/pyjt/py_kernel_select.cc
+include src/bindings/pyjt/py_kernel_select.h
+include src/bindings/pyjt/py_module_call.cc
+include src/bindings/pyjt/py_module_call.h
 include src/bindings/pyjt/py_obj_holder.h
 include src/bindings/pyjt/py_ring_buffer.cc
 include src/bindings/pyjt/py_ring_buffer.h
@@ -492,6 +503,8 @@ include src/codegen/opt/pass/solve_conflict_define_pass.cc
 include src/codegen/opt/pass/solve_conflict_define_pass.h
 include src/codegen/opt/pass/split_loop_pass.cc
 include src/codegen/opt/pass/split_loop_pass.h
+include src/codegen/opt/pass/stream_load_pass.cc
+include src/codegen/opt/pass/stream_load_pass.h
 include src/codegen/opt/pass/unroll_pass.cc
 include src/codegen/opt/pass/unroll_pass.h
 include src/codegen/opt/pass/vectorize_pass.cc
@@ -641,6 +654,10 @@ include src/ops/composite/transpose_op.cc
 include src/ops/composite/transpose_op.h
 include src/ops/composite/where_op.cc
 include src/ops/composite/where_op.h
+include src/ops/composite/write_back_op.cc
+include src/ops/composite/write_back_op.h
+include src/ops/layout_propagation.cc
+include src/ops/layout_propagation.h
 include src/ops/op_register.cc
 include src/ops/op_register.h
 include src/ops/op_utils.cc
@@ -704,6 +721,8 @@ include src/runtime/profiler/profiler_guard.h
 include src/runtime/profiler/replacement.cc
 include src/runtime/profiler/replacement.h
 include src/runtime/profiler/simple_profiler.h
+include src/runtime/profiler/step_trace.cc
+include src/runtime/profiler/step_trace.h
 include src/runtime/profiler/vtop.cc
 include src/runtime/ring_buffer.cc
 include src/runtime/ring_buffer.h
@@ -761,6 +780,7 @@ include src/type/nano_string.cc
 include src/type/nano_string.h
 include src/type/nano_vector.h
 include src/type/pow_compute.h
+include src/type/stream_load.h
 include src/utils/cache_compile.cc
 include src/utils/cache_compile.h
 include src/utils/cross_platform.h

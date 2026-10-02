@@ -7,6 +7,7 @@
 #pragma once
 #include <string>
 #include <sstream>
+#include <atomic>
 #include <functional>
 #include <iostream>
 #include <type_traits>
@@ -124,6 +125,16 @@ EXTERN_LIB void log_capture_stop();
 EXTERN_LIB std::vector<std::map<string,string>> log_capture_read();
 EXTERN_LIB string& get_thread_name();
 
+template <class T>
+inline void append_log_value(std::ostringstream& out, const T& value) {
+    out << value;
+}
+
+template <class T>
+inline void append_log_value(std::ostringstream& out, const std::atomic<T>& value) {
+    out << value.load();
+}
+
 struct Log {
     std::ostringstream out;
     // Machine-generated detail, emitted after everything the caller wrote.
@@ -159,8 +170,11 @@ struct Log {
     template <class A, class B>
     inline Log& check_tail_op(const char* sa, const A& a, const char* sop,
                               const char* sb, const B& b) {
-        tail << " [check failed: " << sa << '(' << a << ") " << sop
-             << ' ' << sb << '(' << b << ")]";
+        tail << " [check failed: " << sa << '(';
+        append_log_value(tail, a);
+        tail << ") " << sop << ' ' << sb << '(';
+        append_log_value(tail, b);
+        tail << ")]";
         return *this;
     }
     inline Log& note_tail(const char* text) { tail << text; return *this; }
@@ -176,6 +190,11 @@ struct Log {
 
     template<class T>
     Log& operator<<(const T& a) { out << ' ' << a; return *this; }
+    template<class T>
+    Log& operator<<(const std::atomic<T>& a) {
+        out << ' ' << a.load();
+        return *this;
+    }
     template<class T>
     Log& operator>>(const T& a) { out << a; return *this; }
 };

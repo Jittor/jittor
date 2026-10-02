@@ -5,8 +5,10 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include <unordered_set>
+#include <unordered_map>
 #include <sstream>
 #include "core/var_holder.h"
+#include "ops/layout_propagation.h"
 #include "core/var.h"
 #include "core/executor.h"
 #include "runtime/device.h"
@@ -15,9 +17,12 @@
 #include "core/grad.h"
 #include "mem/allocator/cuda_dual_allocator.h"
 #include "ops/op_register.h"
+#include "ops/composite/transpose_op.h"
+#include "ops/composite/fuse_transpose_op.h"
 #include "type/fp16_compute.h"
 #include "mem/swap.h"
 #include "runtime/executor_entry.h"
+#include "runtime/holder_state.h"
 #include "bindings/pyjt/py_converter.h"
 
 namespace jittor {
@@ -52,6 +57,47 @@ PyObject* new_var_data_owner(VarHolder* vh) {
     return capsule;
 }
 
+// Holders rebound while a step is being captured, with the Var each held
+// first. See `state_capture_begin`.
+static std::unordered_map<VarHolder*, VarPtr>* state_capture = nullptr;
+
+static inline void note_rebind(VarHolder* holder) {
+    if (PREDICT_BRANCH_NOT_TAKEN(state_capture != nullptr)
+            && !state_capture->count(holder))
+        state_capture->emplace(holder, VarPtr(holder->var));
+}
+
+static bool capture_saw_readback = false;
+
+void state_capture_begin() {
+    USER_CHECK(!state_capture) << "a step capture is already recording state";
+    state_capture = new std::unordered_map<VarHolder*, VarPtr>();
+    capture_saw_readback = false;
+}
+
+PyObject* state_capture_end() {
+    unique_ptr<std::unordered_map<VarHolder*, VarPtr>> records(state_capture);
+    state_capture = nullptr;
+    PyObjHolder result(PyList_New(0));
+    if (!records) return result.release();
+    for (auto& kv : *records) {
+        VarHolder* holder = kv.first;
+        Var* old = kv.second.ptr;
+        // Rebound and back again, or state created inside the capture: a
+        // temporary's first Var is not an executed leaf.
+        if (holder->var == old || !old->is_finished() || !old->mem_ptr) continue;
+        PyObject* holder_obj = GET_OBJ_FROM_RAW_PTR(holder);
+        Py_INCREF(holder_obj);
+        PyObjHolder item(PyTuple_New(3));
+        PyTuple_SET_ITEM(item.obj, 0, holder_obj);
+        PyTuple_SET_ITEM(item.obj, 1, to_py_object<VarHolder*>(new VarHolder(old)));
+        PyTuple_SET_ITEM(item.obj, 2, to_py_object<VarHolder*>(new VarHolder(holder->var)));
+        if (PyList_Append(result.obj, item.obj) < 0)
+            throw std::runtime_error("cannot build the step capture's state list");
+    }
+    return result.release();
+}
+
 void add_hold_vars(VarHolder* self) {
     self->iter = runtime_holder_state().add(self);
 }
@@ -81,10 +127,65 @@ VarHolder* VarHolder::migrate_to_cpu_() {
     return this;
 }
 
+// Every read of a Var's value by the host. A capture asks whether the call it
+// traced read one: its Python path then depends on tensor values, and a
+// replay, which does not run that Python, would repeat whatever it did the
+// first time.
+static int64 host_readbacks = 0;
+int64 host_readback_count() { return host_readbacks; }
+
+int first_finished(const vector<VarHolder*>& vars) {
+    for (int i = 0; i < (int)vars.size(); i++)
+        if (vars[i]->var->is_finished()) return i;
+    return -1;
+}
+
+int first_rebound(const vector<VarHolder*>& holders, const vector<VarHolder*>& olds) {
+    CHECK(holders.size() == olds.size());
+    for (int i = 0; i < (int)holders.size(); i++)
+        if (holders[i]->var != olds[i]->var) return i;
+    return -1;
+}
+
+DECLARE_FLAG(int, keep_graph);
+#ifdef HAS_ACCELERATOR
+DECLARE_FLAG(int, use_cuda_managed_allocator);
+#endif
+
+// A read inside a captured step makes the capture unreplayable, and the step
+// has to happen exactly once all the same. So from the first read on, the
+// step runs as written: nothing more is kept, and what was kept so far --
+// which the read is about to execute -- is let go, so that it finishes here
+// rather than running again when the refused capture is finished off.
+static inline void note_readback() {
+    host_readbacks++;
+    if (PREDICT_BRANCH_NOT_TAKEN(state_capture != nullptr) && !capture_saw_readback) {
+        capture_saw_readback = true;
+        keep_graph = 0;
+        for (auto* holder : runtime_holder_state().holders())
+            if (holder->var && !holder->var->is_finished()) holder->release_kept();
+    }
+}
+
+// Whether a read of a Var's value has to wait for the devices, beyond its
+// own producer. It does not: device memory is read back by a copy that waits
+// for the stream that produced it, and host memory is written by host ops.
+// Only managed memory is read in place, where a device may still be writing.
+// Waiting for every device made each `.numpy()` of a host tensor -- a label,
+// a scheduler's timestep -- wait for all the work queued before it.
+static inline bool readback_waits_for_devices() {
+#ifdef HAS_ACCELERATOR
+    return use_cuda_managed_allocator;
+#else
+    return false;
+#endif
+}
+
 DataView VarHolder::data() {
+    note_readback();
     if (!(var->mem_ptr && !var->allocator->is_cuda())) {
         ExecutorEntryScope entry;
-        sync(true, false);
+        sync(readback_waits_for_devices(), false);
 #ifdef HAS_ACCELERATOR
         migrate_to_cpu(var, runtime_executor().allocator);
 #endif
@@ -93,6 +194,7 @@ DataView VarHolder::data() {
 }
 
 uint64 VarHolder::raw_ptr() {
+    note_readback();
     ExecutorEntryScope entry;
     sync(true, false);
 #ifdef HAS_ACCELERATOR
@@ -151,6 +253,14 @@ void VarHolder::copy_into(VarHolder* src, bool sync_src) {
         << "_copy_into(sync_src=False) needs a source that already holds its "
            "bytes; this one has never been executed";
     check_inplace_target(var, "_copy_into");
+    // A strided source -- a channels-last activation read as NCHW, a
+    // transposed view -- is made dense first; the copy below moves raw bytes.
+    unique_ptr<VarHolder> dense;
+    if (!src->var->is_contiguous()) {
+        dense.reset(new VarHolder(contiguous_storage(src->var)));
+        dense->sync(false, false);
+        src = dense.get();
+    }
     check_inplace_target(src->var, "_copy_into source");
     USER_CHECK(src->var->dtype() == var->dtype())
         << "_copy_into dtype mismatch:" << src->var->dtype() << "into" << var->dtype();
@@ -380,6 +490,10 @@ VarHolder* VarHolder::set_storage_view_of(VarHolder* base, bool expand) {
     return this;
 }
 
+VarHolder* VarHolder::storage_permute(NanoVector axes) {
+    return new VarHolder(storage_view_transpose(var, axes));
+}
+
 VarHolder* VarHolder::transpose_view_base() {
     USER_CHECK(is_last2_transpose_view()) << "tensor is not a live last-two-axis transpose view";
     VarPtr value(view->base->var);
@@ -390,6 +504,42 @@ VarHolder* VarHolder::transpose_view_base() {
     for (size_t i=0; i+1<view->steps.size(); ++i)
         value = apply_view_step(value.ptr, view->steps[i]);
     return new VarHolder(move(value));
+}
+
+NanoVector VarHolder::transpose_view_axes() {
+    if (!is_view() || view->steps.empty()) return NanoVector();
+    const auto& step = view->steps.back();
+    if (step.kind != VarViewStep::Transpose) return NanoVector();
+    return step.axes;
+}
+
+NanoVector VarHolder::producer_transpose_axes() {
+    if (var->is_finished()) return NanoVector();
+    Op* op = var->input();
+    if (!op) return NanoVector();
+    if (auto* transpose = dynamic_cast<TransposeOp*>(op)) return transpose->axes;
+    if (auto* transpose = dynamic_cast<FuseTransposeOp*>(op)) return transpose->axes;
+    return NanoVector();
+}
+
+VarHolder* VarHolder::transpose_view_source() {
+    USER_CHECK(transpose_view_axes().size()) << "tensor is not a live transpose view";
+    VarHolder* root = view->base;
+    VarPtr value(root->var);
+    if (view->steps.size() == 1)
+        value = make_getitem(value.ptr, VarSlices(0));
+    for (size_t i=0; i+1<view->steps.size(); ++i)
+        value = apply_view_step(value.ptr, view->steps[i]);
+    auto* result = new VarHolder(move(value));
+    vector<VarViewStep> steps(view->steps.begin(), view->steps.end() - 1);
+    // A view needs a step to write back through; the root itself is one
+    // whole-shape reshape away.
+    if (steps.empty())
+        steps.emplace_back(VarViewStep::Reshape, NanoVector(root->var->shape));
+    result->view = new VarView{root, result, move(steps), nullptr, root->views};
+    if (root->views) root->views->prev = result->view;
+    root->views = result->view;
+    return result;
 }
 
 // Whether one recorded view step still applies to `value`.
@@ -501,6 +651,8 @@ VarHolder::~VarHolder() {
     drop_view();
     orphan_views();
     if (PREDICT_BRANCH_NOT_TAKEN(!var)) return;
+    if (PREDICT_BRANCH_NOT_TAKEN(state_capture != nullptr))
+        state_capture->erase(this);
     unlink_from_hold_vars(iter);
     release_holder();
     // Dropping the last holder runs the liveness propagation, which frees
@@ -540,6 +692,7 @@ void VarHolder::operator=(VarPtr&& v) {
         if (var->flag(VarFlags::_explicit_requires_grad))
             v.ptr->set_flag(VarFlags::_explicit_requires_grad);
     }
+    note_rebind(this);
     assign_var(v.ptr, var);
     release_holder();
     var->release_both_liveness();
@@ -566,6 +719,43 @@ void VarHolder::set_requires_grad(bool flag) {
         // stay alive, while newly initialized Ops snapshot disabled input edges.
         var->set_flag(VarFlags::_requires_grad_disabled);
     }
+}
+
+bool VarHolder::producer_is_view() {
+    if (var->is_finished()) return true;
+    Op* op = var->input();
+    return op && op->is_storage_view();
+}
+
+string VarHolder::producer_unary() {
+    if (var->is_finished()) return "";
+    Op* op = var->input();
+    if (!op || !op->is_op(op_ids::unary()) || op->inputs().size() != 1) return "";
+    if (op->inputs().front()->shape != var->shape) return "";
+    if (op->ns == ns_cast) return var->dtype().to_cstring();
+    return op->ns.to_cstring();
+}
+
+string VarHolder::producer_name() {
+    if (var->is_finished()) return "";
+    Op* op = var->input();
+    return op ? string(op->name()) : "";
+}
+
+string VarHolder::producer_op() {
+    if (var->is_finished()) return "";
+    Op* op = var->input();
+    return op ? op->name_ex() : "";
+}
+
+bool VarHolder::is_pending_contiguous() {
+    if (var->is_finished()) return false;
+    Op* op = var->input();
+    return op && op->is_op(op_ids::contiguous()) && op->inputs().size() == 1;
+}
+
+void mark_python_number(VarHolder* holder) {
+    holder->var->set_flag(VarFlags::_python_number);
 }
 
 VarHolder* VarHolder::start_grad() {
@@ -618,6 +808,7 @@ VarHolder* VarHolder::assign(VarHolder* v) {
     // this is the one place that has to know that an in-place write to a view
     // is a write to the thing it is a view of.
     write_through_view(v->var);
+    note_rebind(this);
     assign_var(v->var, var);
     release_holder();
     v->var->own_both_liveness();
@@ -636,6 +827,7 @@ VarHolder* VarHolder::update(VarHolder* v) {
 VarHolder* VarHolder::_update(VarHolder* v) {
     if (var->flag(VarFlags::_placement_published))
         v->var->set_flag(VarFlags::_placement_published);
+    note_rebind(this);
     release_holder();
     v->var->own_both_liveness();
     var->release_both_liveness();
@@ -653,9 +845,10 @@ VarHolder* VarHolder::sync(bool device_sync, bool weak_sync) {
 }
 
 ArrayArgs VarHolder::fetch_sync() {
+    note_readback();
     if (!(var->mem_ptr && !var->allocator->is_cuda())) {
         ExecutorEntryScope entry;
-        sync(true);
+        sync(readback_waits_for_devices());
         if (save_mem || _HAS_ACCELERATOR)
             migrate_to_cpu(var, runtime_executor().allocator);
     }
@@ -694,6 +887,7 @@ inline static void cast_item_data(ItemData& data) {
 }
 
 ItemData VarHolder::item() {
+    note_readback();
     // Keep the entry lock through the final scalar copy, including managed
     // allocations which migrate_to_cpu deliberately leaves on the device.
     ExecutorEntryScope entry;
@@ -760,9 +954,10 @@ void sync(const vector<VarHolder*>& vh, bool device_sync, bool weak_sync) {
 }
 
 vector<ArrayArgs> fetch_sync(const vector<VarHolder*>& vh) {
+    note_readback();
     vector<ArrayArgs> ret(vh.size());
     ExecutorEntryScope entry;
-    sync(vh, true);
+    sync(vh, readback_waits_for_devices());
     for (uint i=0; i<vh.size(); i++) {
         if (save_mem || _HAS_ACCELERATOR)
             migrate_to_cpu(vh[i]->var, runtime_executor().allocator);

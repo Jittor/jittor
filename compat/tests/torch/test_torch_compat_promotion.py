@@ -30,8 +30,10 @@ Reference for torch's promotion rules (documented behavior, encoded below):
     tensor: int scalar keeps the tensor's int dtype, float scalar lifts an int tensor to
     the default float (float32).
 
-jittor has no 0-d scalars (a "scalar" is shape ``(1,)``); values are compared via
-``.numpy()``.
+  - a 0-dim tensor sits between the two: it bumps a dimensioned tensor's result only
+    from a higher category, and promotes normally against another 0-dim tensor.
+
+Values are compared via ``.numpy()``.
 
 Run:  python -m pytest compat/tests/torch/test_torch_compat_promotion.py
       python -m pytest compat/tests/torch/test_torch_compat_promotion.py
@@ -186,6 +188,38 @@ class TestResultTypeAPI(Base):
             self.assertEqual(dtn(torch.result_type(mk("int64"), 7)), "int64", dev)
         both_devices(body)
 
+    def test_result_type_with_a_zero_dim_tensor(self):
+        # torch ranks operands in three tiers: tensors with dimensions, 0-dim
+        # tensors, Python scalars. A 0-dim tensor bumps the result only from a
+        # higher category -- it used to count as a full tensor, so a diffusers
+        # scheduler's `alphas_cumprod[t] * latents` turned float16 latents
+        # float32 at every sampling step.
+        def body(dev):
+            half = torch.tensor([1.0, 2.0], dtype=torch.float16)
+            zero_f32 = torch.tensor(2.0)
+            zero_f64 = torch.tensor(2.0, dtype=torch.float64)
+            zero_i64 = torch.tensor(5)
+            def rt(a, b):
+                return dtn(torch.result_type(a, b))
+
+            self.assertEqual(rt(half, zero_f32), "float16", dev)       # same category: dims win
+            self.assertEqual(rt(zero_f32, half), "float16", dev)
+            self.assertEqual(rt(mk("int32"), zero_i64), "int32", dev)
+            self.assertEqual(rt(mk("int32"), zero_f64), "float64", dev)  # higher category joins
+            self.assertEqual(rt(torch.tensor(1, dtype=torch.int32), zero_f64),
+                             "float64", dev)                             # two 0-dim: plain promotion
+            self.assertEqual(rt(torch.tensor(1, dtype=torch.int32), 7), "int32", dev)
+            self.assertEqual(rt(torch.tensor(1, dtype=torch.int32), 2.5), "float32", dev)
+            for op in ("__add__", "__sub__", "__mul__", "__truediv__",
+                       "__radd__", "__rsub__", "__rmul__", "__rtruediv__"):
+                self.assertEqual(dts(getattr(half, op)(zero_f32)), "float16",
+                                 f"{op} {dev}")
+            self.assertEqual(dts(zero_f32 * half), "float16", dev)
+            self.assertEqual(dts(zero_f32 / half), "float16", dev)
+            self.ae((half * zero_f32).float().numpy(),
+                    np.array([2.0, 4.0], "float32"), dev)
+        both_devices(body)
+
     def test_can_cast(self):
         """`canCast` is categorical, not numpy's width rule.
 
@@ -267,6 +301,29 @@ class TestBinaryOpPromotion(Base):
             self.ae(r.numpy(), np.array([2.0, 4.0, 6.0], "float32"), dev)
             # reflected: scalar / int-tensor -> float32
             self.assertEqual(dts(8.0 / mk("int32", (2, 4, 8))), "float32", dev)
+        both_devices(body)
+
+    def test_python_scalar_truediv_keeps_a_half_tensor_half(self):
+        # A Python scalar joins promotion only from a higher category, so
+        # half / 1.0 is half in torch. It came back float32 here: every
+        # diffusers ResnetBlock2D ends in `/ self.output_scale_factor`, so a
+        # float16 SD UNet silently ran in float32 and then failed SDPA with
+        # "query, key and value must have the same dtype".
+        def body(dev):
+            for name in ("float16", "bfloat16"):
+                # numpy has no bfloat16, so not `mk`.
+                t = torch.tensor([1.0, 2.0, 4.0], dtype=getattr(torch, name))
+                self.assertEqual(dts(t / 1.0), name, f"{name}/1.0 {dev}")
+                self.assertEqual(dts(t / 2), name, f"{name}/2 {dev}")
+                self.assertEqual(dts(2.0 / t), name, f"2.0/{name} {dev}")
+                in_place = t.clone()
+                in_place /= 2.0
+                self.assertEqual(dts(in_place), name, f"{name} /= 2.0 {dev}")
+                self.ae((t / 2.0).float().numpy(),
+                        np.array([0.5, 1.0, 2.0], "float32"), f"{name} {dev}")
+            # The integral case still lands on the default float.
+            self.assertEqual(dts(mk("int64", (2, 4)) / 2.0), "float32", dev)
+            self.assertEqual(dts(mk("int64", (2, 4)) / 2), "float32", dev)
         both_devices(body)
 
     def test_python_float_truediv_preserves_torch_rounding_on_cpu(self):
