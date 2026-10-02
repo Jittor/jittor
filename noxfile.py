@@ -1121,6 +1121,7 @@ def structure(session):
         PYTEST,
         PYTEST_TIMEOUT,
         SETUPTOOLS,
+        SCIPY,
         "astunparse==1.6.3",
         JUPYTEXT,
         NBFORMAT,
@@ -1130,6 +1131,8 @@ def structure(session):
     )
     session.run("bash", "tools/check_repo_layout.sh", external=True, env=env)
     _install_compat_source(session, env)
+    if (REPO_ROOT / "adapters/pyproject.toml").is_file():
+        session.install("--no-deps", str(REPO_ROOT / "adapters"))
     test_paths = tuple(session.posargs) or STRUCTURE_TESTS
     if not session.posargs:
         # Portable adapter fixtures install fake modules: execute them outside

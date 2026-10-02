@@ -101,8 +101,8 @@ jobs:
     runs-on: ${{ fromJSON(needs.baseline.outputs.cuda_runner_labels) }}
     timeout-minutes: 240
     env:
-      ASV_RESULTS_DIR: ${{ runner.temp }}/jittor-asv-cuda/results
-      ASV_HTML_DIR: ${{ runner.temp }}/jittor-asv-cuda/html
+      ASV_RESULTS_DIR: ${{ github.workspace }}/../jittor-lab/_state/asv/cuda/results
+      ASV_HTML_DIR: ${{ github.workspace }}/../jittor-lab/_state/asv/cuda/html
       ASV_MACHINE: github-rtx4090-cuda12-2
       ASV_COMPARE_BASE: ${{ github.event.before }}
     steps:

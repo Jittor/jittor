@@ -22,7 +22,7 @@ def structure_calls(repo, posargs=()):
         "STRUCTURE_TESTS": ("tests/structure",),
         "NATIVE_MODE_PATHS": (),
     }
-    for name in ("PYTEST", "PYTEST_TIMEOUT", "SETUPTOOLS", "JUPYTEXT", "NBFORMAT"):
+    for name in ("PYTEST", "PYTEST_TIMEOUT", "SETUPTOOLS", "SCIPY", "JUPYTEXT", "NBFORMAT"):
         namespace[name] = name
     exec(compile(ast.Module(body=[function], type_ignores=[]), "<structure>", "exec"), namespace)
     namespace["structure"](session)

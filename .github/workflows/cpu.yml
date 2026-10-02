@@ -124,8 +124,8 @@ jobs:
       image: ${{ needs.baseline.outputs.cpu_ci_image }}
     timeout-minutes: 90
     env:
-      ASV_RESULTS_DIR: ${{ runner.temp }}/jittor-asv/results
-      ASV_HTML_DIR: ${{ runner.temp }}/jittor-asv/html
+      ASV_RESULTS_DIR: ${{ github.workspace }}/../jittor-lab/_state/asv/cpu/results
+      ASV_HTML_DIR: ${{ github.workspace }}/../jittor-lab/_state/asv/cpu/html
       ASV_MACHINE: github-ubuntu-cpu
       ASV_COMPARE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
     steps:
