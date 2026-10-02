@@ -220,18 +220,19 @@ class TestLtLinearTraining(unittest.TestCase):
         return x, w, b
 
     def _step(self, use_cuda, x, w, b, dout, dtype, x_grad=True, bias_grad=True,
-              transposed=False):
+              transposed=False, no_bias=False):
         with jt.flag_scope(use_cuda=use_cuda, cuda_allow_tf32=0):
             jx, jw, jb = (jt.array(t).cast(dtype) for t in (x, w, b))
             if not x_grad:
                 jx = jx.stop_grad()
             if not bias_grad:
                 jb = jb.stop_grad()
-            out = nn.linear(jx, jw, jb)
+            out = nn.linear(jx, jw, None if no_bias else jb)
             jd = jt.array(dout).cast(dtype)
             # A transposed product hands the backward a strided gradient.
             loss = (out.transpose() * jd.transpose()).sum() if transposed else (out * jd).sum()
-            wants = [v for v, keep in ((jx, x_grad), (jw, True), (jb, bias_grad)) if keep]
+            wants = [v for v, keep in ((jx, x_grad), (jw, True), (jb, bias_grad and not no_bias))
+                     if keep]
             grads = jt.grad(loss, wants)
             return [out.float64().numpy()] + [g.float64().numpy() for g in grads]
 
@@ -252,6 +253,24 @@ class TestLtLinearTraining(unittest.TestCase):
             for shape, cin, cout in (((96,), 64, 160), ((3, 40), 72, 48)):
                 with self.subTest(dtype=dtype, shape=shape):
                     self._check(shape, cin, cout, dtype, tol)
+
+    def test_without_a_bias(self):
+        for dtype, tol in (("float32", 1e-4), ("float16", 2e-2)):
+            with self.subTest(dtype=dtype):
+                self._check((3, 40), 72, 48, dtype, tol, no_bias=True)
+        self._check((96,), 64, 160, "float32", 1e-4, no_bias=True, transposed=True)
+
+    def test_a_module_without_a_bias_takes_the_route(self):
+        # `nn.Linear(bias=False)` has a native fast path; a large product that
+        # records gradients leaves it for the timed GEMMs.
+        _lt._MIN_ROWS, _lt._MIN_PRODUCT = 1024, 1 << 28
+        with jt.flag_scope(use_cuda=1):
+            model = nn.Linear(768, 768, bias=False)
+            x = jt.array(self.rs.randn(2048, 768).astype("float32"))
+            out = model(x)
+            grad = jt.grad((out * out).sum(), [model.weight])[0]
+            grad.sync()
+        self.assertEqual(self.calls, [1])
 
     def test_without_an_input_or_a_bias_gradient(self):
         self._check((3, 40), 72, 48, "float32", 1e-4, x_grad=False)

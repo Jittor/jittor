@@ -9,8 +9,13 @@
 #include "core/var_holder.h"
 #include "runtime/float32_precision.h"
 #include <stdexcept>
+#include "runtime/device_state.h"
 
 namespace jittor {
+
+DECLARE_FLAG(bool, no_grad);
+DECLARE_FLAG(int, amp_reg);
+
 
 namespace {
 
@@ -163,6 +168,16 @@ PyObject* linear_without_bias(PyObject* module, PyObject* dict, PyObject* x) {
     int rank = a->shape.size();
     if (w->shape.size() != 2 || rank < 2 || a->shape[rank - 1] != w->shape[1]) return nullptr;
     if (a->dtype() != w->dtype() || !a->dtype().is_float()) return nullptr;
+    // A large product that records gradients goes to `nn.Linear.execute`,
+    // whose training route times cuBLASLt's candidates for its three GEMMs
+    // (`lt_linear_train_cuda`, whose thresholds these are): for a Qwen3 MLP's
+    // weight gradient the heuristic pick taken here ran 219 us, the best
+    // candidate 172. That route makes its own checks and falls back to this
+    // same product.
+    if (runtime_flag_use_cuda() && !no_grad && !amp_reg && !w->is_stop_grad()) {
+        int64 rows = a->num / w->shape[1];
+        if (rows >= 1024 && rows * w->shape[0] * w->shape[1] >= (int64(1) << 28)) return nullptr;
+    }
     // `matmul_transpose` hands a batched input over flattened in place only
     // when its buffer is dense.
     if (rank > 2 && !a->is_contiguous()) return nullptr;
