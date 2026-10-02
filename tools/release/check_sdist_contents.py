@@ -17,7 +17,6 @@ REQUIRED_SOURCE_PATHS = (
     "src/codegen/op_compiler.cc",
     "docs/conf.py",
     "docs/index.md",
-    "docs/locales/zh_CN/LC_MESSAGES/index.po",
     "examples/README.md",
     "examples/gan/simple_cgan.py",
     "examples/notebooks/basics.md",

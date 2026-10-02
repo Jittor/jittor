@@ -124,20 +124,20 @@ jobs:
       image: ${{ needs.baseline.outputs.cpu_ci_image }}
     timeout-minutes: 90
     env:
-      ASV_RESULTS_DIR: ${{ github.workspace }}/../jittor-asv/results
-      ASV_HTML_DIR: ${{ github.workspace }}/../jittor-asv/html
+      ASV_RESULTS_DIR: /tmp/jittor-asv/results
+      ASV_HTML_DIR: /tmp/jittor-asv/html
       ASV_MACHINE: github-ubuntu-cpu
       ASV_COMPARE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
     steps:
+      - name: Install native CPU toolchain
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends build-essential git libomp-dev
       - name: Check out source
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Install native CPU toolchain
-        run: |
-          apt-get update
-          apt-get install --yes --no-install-recommends build-essential libomp-dev
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
