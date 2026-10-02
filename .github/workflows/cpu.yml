@@ -62,7 +62,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.JITTOR_LAB_ROOT }}/_state/nox/cache
-          key: jittor-build-${{ runner.os }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}
+          key: jittor-build-${{ runner.os }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}-${{ github.run_id }}
           restore-keys: |
             jittor-build-${{ runner.os }}-
       - name: Run the fast CPU tier
@@ -110,7 +110,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.JITTOR_LAB_ROOT }}/_state/nox/cache
-          key: jittor-build-${{ runner.os }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}
+          key: jittor-build-${{ runner.os }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}-${{ github.run_id }}
           restore-keys: |
             jittor-build-${{ runner.os }}-
       - name: Install independent CPU PyTorch oracle
@@ -126,7 +126,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ env.JITTOR_LAB_ROOT }}/_state/nox/cache
-          key: jittor-build-${{ runner.os }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}
+          key: jittor-build-${{ runner.os }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}-${{ github.run_id }}
 
   benchmark:
     needs: baseline

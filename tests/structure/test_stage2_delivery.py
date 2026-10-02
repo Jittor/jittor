@@ -198,6 +198,7 @@ class TestStage2Delivery(unittest.TestCase):
         self.assertIn("image: ${{ needs.baseline.outputs.cpu_ci_image }}", cpu_workflow)
         self.assertIn("image: ${{ needs.baseline.outputs.cpu_ci_image }}", structure_workflow)
         self.assertIn("actions/cache/restore@v4", cpu_workflow)
+        self.assertIn("${{ github.run_id }}", cpu_workflow)
         self.assertIn("actions/upload-artifact@v6", cpu_workflow)
         self.assertIn("ASV_RESULTS_DIR", cpu_workflow)
         self.assertIn("torch==2.7.1", cpu_workflow)
