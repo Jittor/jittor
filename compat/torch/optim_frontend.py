@@ -44,6 +44,19 @@ def initialize_rmsprop(self, *args, **kwargs):
     return _initialize_algorithm("RMSprop", self, args, kwargs)
 
 
+def adagrad_defaults(self):
+    """Torch exposes only the public hyperparameter defaults."""
+    return self._adagrad_defaults
+
+
+def initialize_adagrad(self, params, lr=1e-2, lr_decay=0, weight_decay=0,
+                       initial_accumulator_value=0, eps=1e-10, foreach=None, *,
+                       maximize=False, differentiable=False, fused=None):
+    return _initialize_algorithm("Adagrad", self,
+        (params, lr, lr_decay, weight_decay, initial_accumulator_value, eps, foreach),
+        dict(maximize=maximize, differentiable=differentiable, fused=fused))
+
+
 def initialize_adan(self, *args, **kwargs):
     return _initialize_algorithm("Adan", self, args, kwargs)
 
@@ -51,6 +64,7 @@ def initialize_adan(self, *args, **kwargs):
 _ALGORITHM_INITIALIZERS = {
     "SGD": initialize_sgd, "Adam": initialize_adam, "AdamW": initialize_adamw,
     "RMSprop": initialize_rmsprop, "Adan": initialize_adan,
+    "Adagrad": initialize_adagrad,
 }
 
 
@@ -71,17 +85,20 @@ def make_optimizer_frontend(native, tensor_type):
         "__init__": initialize_base,
     })
     setattr(module, "Optimizer", base)
-    for name in ("SGD", "Adam", "AdamW", "RMSprop", "Adan"):
+    for name in ("SGD", "Adam", "AdamW", "RMSprop", "Adan", "Adagrad"):
         algorithm = getattr(native, name, None)
         if algorithm is None:
             continue
         # Native super() calls traverse this MRO through the frontend base,
         # whose state/closure adapters can be installed without changing the
         # original Optimizer or any native algorithm class dictionary.
-        setattr(module, name, type(name, (algorithm, base), {
+        attributes = {
             "__module__": "torch.optim",
             "__init__": _ALGORITHM_INITIALIZERS[name],
-        }))
+        }
+        if name == "Adagrad":
+            attributes["defaults"] = property(adagrad_defaults)
+        setattr(module, name, type(name, (algorithm, base), attributes))
     for name in ("opt_grad", "LRScheduler", "LambdaLR"):
         if hasattr(native, name):
             setattr(module, name, getattr(native, name))

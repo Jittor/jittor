@@ -1326,7 +1326,7 @@ is_in_ipynb = in_ipynb()
 #: The compiled jit_utils_core extension, or None until it is imported.
 #: Any rather than ModuleType: callers reach for attributes that only exist
 #: on the compiled module.
-cc: Any = None
+cc = None  # type: Any
 LOG = Logwrapper()
 
 check_msvc_install = False

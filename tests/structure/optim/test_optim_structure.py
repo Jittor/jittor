@@ -10,7 +10,7 @@ import unittest
 import jittor as jt
 from jittor import nn, optim
 from jittor.optim import base, schedulers
-from jittor.optim.algorithms import adam, adan, rmsprop, sgd
+from jittor.optim.algorithms import adagrad, adam, adan, rmsprop, sgd
 
 
 _CLASSES = {
@@ -20,6 +20,7 @@ _CLASSES = {
     "Adam": adam.Adam,
     "AdamW": adam.AdamW,
     "Adan": adan.Adan,
+    "Adagrad": adagrad.Adagrad,
     "LRScheduler": schedulers.LRScheduler,
     "LambdaLR": schedulers.LambdaLR,
 }
@@ -41,13 +42,13 @@ class TestOptimStructure(unittest.TestCase):
         )
         self.assertEqual(
             {path.name for path in (self.package / "algorithms").glob("*.py")},
-            {"__init__.py", "sgd.py", "rmsprop.py", "adam.py", "adan.py"},
+            {"__init__.py", "sgd.py", "rmsprop.py", "adam.py", "adan.py", "adagrad.py"},
         )
 
     def test_facade_preserves_the_historical_public_surface(self):
         native = {
             "jt", "np", "deepcopy", "Optimizer", "opt_grad", "SGD",
-            "RMSprop", "Adam", "AdamW", "Adan", "LRScheduler", "LambdaLR",
+            "RMSprop", "Adam", "AdamW", "Adan", "Adagrad", "LRScheduler", "LambdaLR",
         }
         runtime = native | {"lr_scheduler"}
         self.assertEqual(set(optim._NATIVE_EXPORTS), native)
@@ -73,6 +74,7 @@ class TestOptimStructure(unittest.TestCase):
             "Adam": "jittor.optim.algorithms.adam",
             "AdamW": "jittor.optim.algorithms.adam",
             "Adan": "jittor.optim.algorithms.adan",
+            "Adagrad": "jittor.optim.algorithms.adagrad",
             "LRScheduler": "jittor.optim.schedulers",
             "LambdaLR": "jittor.optim.schedulers",
         }

@@ -36,6 +36,37 @@ from jittor.distributed.process_group import (
 )
 
 
+class GradBucket:
+    """Opaque reducer-owned type for imports and annotations only.
+
+    Native DDP does not produce communication buckets yet. Publishing the
+    type must not imply that gradient bucket hooks are implemented.
+    """
+
+    def __new__(cls, *args, **kwargs):
+        raise TypeError(
+            "torch.distributed.GradBucket has no public constructor; "
+            "Jittor DDP gradient bucket hooks are not implemented")
+
+    def index(self):
+        raise NotImplementedError("DDP gradient buckets are not implemented")
+
+    def buffer(self):
+        raise NotImplementedError("DDP gradient buckets are not implemented")
+
+    def gradients(self):
+        raise NotImplementedError("DDP gradient buckets are not implemented")
+
+    def parameters(self):
+        raise NotImplementedError("DDP gradient buckets are not implemented")
+
+    def is_last(self):
+        raise NotImplementedError("DDP gradient buckets are not implemented")
+
+    def set_buffer(self, buffer):
+        raise NotImplementedError("DDP gradient buckets are not implemented")
+
+
 def _native_distributed_active():
     return _process_group.is_initialized()
 
@@ -1230,6 +1261,12 @@ def _install_distributed(g, registry=None):
         g._C = _CNS()
     _install_fsdp2_distributed(dist, g, registry=registry)
     g.distributed = dist
+    dist.GradBucket = GradBucket
+    g._C._distributed_c10d.GradBucket = GradBucket
+    register_api_bindings(dist, "torch.distributed", ("GradBucket",),
+        Fidelity.UNIMPLEMENTED,
+        "Opaque import/annotation type only; native DDP reducer-owned "
+        "buckets and communication hooks are unavailable")
     register_api_bindings(dist, "torch.distributed",
         ("is_available", "is_backend_available", "is_nccl_available", "is_gloo_available",
          "is_mpi_available", "is_ucc_available", "is_initialized", "get_rank",
