@@ -1629,6 +1629,13 @@ def benchmark(session):
     root, env = _session_env(session, "asv-cpu")
     env["cache_name"] = "asv-nox-cpu"
     env["nvcc_path"] = ""
+    # ASV's per-case timeout includes import and cold native compilation.
+    # Finish the first CPU matmul build once in the same isolated cache before
+    # ASV starts its subprocesses, so a compile cannot masquerade as a slow op.
+    asv_home = root / "jittor-asv-home"
+    asv_home.mkdir(parents=True, exist_ok=True)
+    env["JITTOR_HOME"] = str(asv_home)
+    env["JITTOR_ASV_HOME"] = str(asv_home)
     session.install(
         ASV,
         "astunparse==1.6.3",
@@ -1636,6 +1643,16 @@ def benchmark(session):
         "pillow==11.0.0",
         SETUPTOOLS,
         "tqdm==4.67.1",
+    )
+    session.run(
+        "python",
+        "-c",
+        "import jittor as jt, numpy as np; "
+        "jt.flags.use_cuda=0; "
+        "a=jt.array(np.ones((8,256,256), dtype=np.float32)); "
+        "b=jt.array(np.ones((8,256,256), dtype=np.float32)); "
+        "jt.matmul(a,b).sync(); print('ASV CPU matmul cache warm')",
+        env=env,
     )
     _record_asv(session, root, env, ("asv",), "jittor-ci-cpu")
 
