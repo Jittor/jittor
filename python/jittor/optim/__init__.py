@@ -10,7 +10,7 @@ import jittor as jt
 import numpy as np
 
 from .base import Optimizer, opt_grad
-from .algorithms import Adan, Adam, AdamW, RMSprop, SGD
+from .algorithms import Adan, Adam, AdamW, RMSprop, SGD, Adagrad
 from .schedulers import LRScheduler, LambdaLR
 
 
@@ -25,6 +25,7 @@ _NATIVE_EXPORTS = (
     "Adam",
     "AdamW",
     "Adan",
+    "Adagrad",
     "LRScheduler",
     "LambdaLR",
 )

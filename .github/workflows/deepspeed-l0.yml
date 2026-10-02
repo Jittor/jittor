@@ -6,16 +6,28 @@ on:
       - .github/workflows/deepspeed-l0.yml
       - adapters/jittor_adapters/deepspeed/**
       - agent/skills/deepspeed-torch-compat/**
+      - compat/tests/torch/test_torch_adagrad_compat.py
       - compat/tests/torch/test_deepspeed_l0.py
+      - compat/torch/optim_frontend.py
+      - compat/torch/optimizer_api.py
+      - compat/torch/optimizer_state.py
+      - compat/torch/optimizers.py
       - noxfile.py
+      - python/jittor/optim/algorithms/adagrad.py
       - requirements/deepspeed-l0.txt
   pull_request:
     paths:
       - .github/workflows/deepspeed-l0.yml
       - adapters/jittor_adapters/deepspeed/**
       - agent/skills/deepspeed-torch-compat/**
+      - compat/tests/torch/test_torch_adagrad_compat.py
       - compat/tests/torch/test_deepspeed_l0.py
+      - compat/torch/optim_frontend.py
+      - compat/torch/optimizer_api.py
+      - compat/torch/optimizer_state.py
+      - compat/torch/optimizers.py
       - noxfile.py
+      - python/jittor/optim/algorithms/adagrad.py
       - requirements/deepspeed-l0.txt
   schedule:
     - cron: "30 2 * * *"

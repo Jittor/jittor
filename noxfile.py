@@ -1993,6 +1993,7 @@ def deepspeed_l0(session):
     _run_pytest_once(
         session,
         (
+            "compat/tests/torch/test_torch_adagrad_compat.py",
             "compat/tests/torch/test_torch_grad_bucket_protocol.py",
             "compat/tests/torch/test_deepspeed_l0.py",
         ),
