@@ -1,0 +1,64 @@
+name: DeepSpeed L0
+
+on:
+  schedule:
+    - cron: "30 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  baseline:
+    uses: ./.github/workflows/_ci-baseline.yml
+
+  deepspeed-l0:
+    needs: baseline
+    runs-on: ${{ needs.baseline.outputs.host_runner }}
+    container:
+      image: ${{ needs.baseline.outputs.cpu_ci_image }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install native CPU toolchain
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends build-essential libomp-dev
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install development tools
+        run: python -m pip install -r requirements/dev-tools.txt
+      - name: Build one fixed pure-Python DeepSpeed wheel in the binary oracle
+        env:
+          DS_ACCELERATOR: cpu
+          DS_BUILD_OPS: "0"
+          TORCH_DEVICE_BACKEND_AUTOLOAD: "0"
+        run: |
+          set -eu
+          python -m venv "${RUNNER_TEMP}/ds-oracle"
+          ORACLE="${RUNNER_TEMP}/ds-oracle/bin/python"
+          "$ORACLE" -m pip install setuptools wheel
+          "$ORACLE" -m pip install --index-url https://download.pytorch.org/whl/cpu torch==2.7.1
+          "$ORACLE" -m pip install -r requirements/deepspeed-l0.txt
+          mkdir -p "${RUNNER_TEMP}/ds-source" "${RUNNER_TEMP}/ds-wheel"
+          "$ORACLE" -m pip download --no-deps --no-build-isolation --no-binary=:all: \
+            deepspeed==0.17.6 -d "${RUNNER_TEMP}/ds-source"
+          echo "b3318064ee5798e8a27d201ea8b888f0439973c4eac9af9ab381dd1862ebdf45  ${RUNNER_TEMP}/ds-source/deepspeed-0.17.6.tar.gz" | sha256sum -c -
+          "$ORACLE" -m pip wheel --no-deps --no-build-isolation \
+            "${RUNNER_TEMP}/ds-source/deepspeed-0.17.6.tar.gz" -w "${RUNNER_TEMP}/ds-wheel"
+          WHEEL="${RUNNER_TEMP}/ds-wheel/deepspeed-0.17.6-py3-none-any.whl"
+          "$ORACLE" -m pip install --no-deps "$WHEEL"
+          echo "REAL_TORCH_PYTHON=$ORACLE" >> "$GITHUB_ENV"
+          echo "JITTOR_DEEPSPEED_WHEEL=$WHEEL" >> "$GITHUB_ENV"
+      - name: Compare required CPU import, config, parameters and buffers
+        env:
+          JITTOR_TEST_DEVICES: cpu
+          TORCH_DEVICE_BACKEND_AUTOLOAD: "0"
+        run: python -m nox -s deepspeed_l0

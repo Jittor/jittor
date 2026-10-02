@@ -92,7 +92,7 @@ ENVIRONMENT_SKIP_PATTERNS = (
     # covered by accident; these did not, so a CPU-only session reported the
     # files as unexplained and the whole selection exited non-zero with every
     # test passing.
-    "tensordict", "mmcv", "mmengine",
+    "tensordict", "mmcv", "mmengine", "deepspeed",
     # Facts about the *runner* rather than the machine's hardware: a case that
     # asserts directory permissions cannot hold when the suite runs as root,
     # because root bypasses them.
