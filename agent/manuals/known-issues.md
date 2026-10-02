@@ -3177,3 +3177,25 @@ about whether to take it.
   Any single file, any pair, and the five files before it together passed every
   time; only the full selection trips it, so it depends on collection timing.
 - Workaround: run the files in separate processes.
+
+## KI-MS-SWIFT-001: BF16 short decoder SDPA differs from ATen after fused flash
+
+- Severity: Medium (TinyLlama BF16 logits fail the fixed L2 scaled threshold).
+- Status: Open. Reproduced on job 1700 / RTX 4090; first divergent tensor is the
+  first layer attention output, while input RMSNorm and q/k/v projections are exact.
+- Symptom: default fused flash/SDPA gives logits relative L2 about `7.12e-3` after
+  the retained normalized-BF16 change; forcing Transformers eager attention makes
+  attention output and later norm exact.
+- Suspected: fused flash GQA/mask reduction and rounding order, not RMSNorm's first
+  reduction. Short-sequence math workarounds were tested and reverted after either
+  no improvement or a mask/GQA semantic mismatch.
+- Workaround: none retained; do not globally disable fused attention. Continue with
+  a fused-kernel reduction fix and native/shim CUDA regression.
+
+## KI-BUILD-001: preflight ignored configured Python headers
+
+- Severity: Low. Fixed in `python/jittor/build/utils/preflight.py` on 2026-09-28.
+- Symptom: a valid `JT_BUILD_PYTHON_CONFIG_PATH` for the Python 3.9 venv was ignored,
+  blocking Jittor core compilation with a false `/usr/include/python3.9/Python.h` error.
+- Fix: preflight now parses the configured helper's `--includes` before sysconfig;
+  verified on job 1700 with the isolated venv and CUDA core build.

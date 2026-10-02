@@ -781,6 +781,10 @@ def adam_init(self, params, lr=1e-3, *args, **kwargs):
 
 
 def adamw_init(self, params, lr=1e-3, *args, **kwargs):
+    # PyTorch's AdamW defaults to decoupled weight decay 0.01.  Jittor's
+    # native AdamW intentionally defaults to zero, so fill the torch default
+    # before delegating to the native initializer when the caller omitted it.
+    kwargs.setdefault('weight_decay', 0.01)
     return _initialize_default(self, params, lr, args, kwargs, 'AdamW')
 
 

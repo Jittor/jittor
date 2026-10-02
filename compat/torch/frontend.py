@@ -106,6 +106,11 @@ def _placement_request(backend, device, like=None, default_placement=True):
             device = default_device()
     numeric_index = isinstance(device, int) and not isinstance(device, bool)
     name = "cuda" if numeric_index else (getattr(device, "type", None) or str(device).split(":", 1)[0])
+    # Jittor has no meta storage backend. Transformers uses ``device='meta'``
+    # while inspecting checkpoint shapes; materialize those temporary tensors
+    # on host so the subsequent real-weight load can proceed.
+    if name == "meta":
+        return 0, 0
     if name == "cpu":
         return 0, 0
     if name not in ("cuda", "npu"):
