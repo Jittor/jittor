@@ -21,7 +21,9 @@ class OperatorBenchmarks:
     number = 1
     repeat = (3, 7, 30.0)
     rounds = 1
-    timeout = 180
+    # ASV includes first-use JIT and oneDNN setup in this limit. A clean CI
+    # checkout can spend more than three minutes compiling before measuring.
+    timeout = 600
 
     def setup(self, backend_name, device, operator):
         self.backend_name = backend_name

@@ -121,7 +121,11 @@ class TestDocsStructure(unittest.TestCase):
         tree = ast.parse((self.repo_root / "noxfile.py").read_text())
         writer = next(node for node in tree.body
                       if isinstance(node, ast.FunctionDef) and node.name == "_write_asv_config")
-        namespace = {"json": json, "REPO_ROOT": self.repo_root}
+        namespace = {
+            "json": json,
+            "REPO_ROOT": self.repo_root,
+            "_git_output": lambda *args: "feature/asv-ci",
+        }
         exec(compile(ast.Module(body=[writer], type_ignores=[]), "noxfile.py", "exec"), namespace)
         with TemporaryDirectory() as directory:
             state = Path(directory)
@@ -132,6 +136,7 @@ class TestDocsStructure(unittest.TestCase):
         self.assertEqual(runtime["results_dir"], str(state / "results"))
         self.assertEqual(runtime["html_dir"], str(state / "html"))
         self.assertEqual(runtime["env_dir"], str(state / "asv-env"))
+        self.assertEqual(runtime["branches"], ["feature/asv-ci"])
 
     def test_content_manifest_accounts_for_every_legacy_page(self):
         manifest = json.loads(
