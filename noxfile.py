@@ -1303,14 +1303,7 @@ def packaging(session):
     if len(sdists) != 1:
         session.error("expected exactly one sdist, found %d" % len(sdists))
     expected_paths = root / "expected-sdist-paths.txt"
-    inventory_command = (
-        "git",
-        "ls-files",
-        "-z",
-        "--cached",
-        "--others",
-        "--exclude-standard",
-        "--",
+    inventory_roots = (
         "docs",
         "examples",
         "tools",
@@ -1321,30 +1314,36 @@ def packaging(session):
         "backends",
         "src",
     )
-    inventory = subprocess.check_output(inventory_command, cwd=str(REPO_ROOT)).decode("utf-8")
-    inventory_paths = (
-        line
-        for line in inventory.split("\0")
-        if line
-        and ((REPO_ROOT / line).exists() or (REPO_ROOT / line).is_symlink())
-        and not any(
-            part
-            in {
-                "__pycache__",
-                ".pytest_cache",
-                ".mypy_cache",
-                ".ruff_cache",
-                ".ipynb_checkpoints",
-                ".git",
-                ".nox",
-                "dist",
-            }
-            for part in Path(line).parts[:-1]
-        )
-        and not (Path(line).parts and Path(line).parts[0] == "build")
-        and not line.endswith((".pyc", ".pyo"))
-        and not any(part.endswith(".egg-info") for part in Path(line).parts)
-    )
+    ignored_directories = {
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".ipynb_checkpoints",
+        ".git",
+        ".nox",
+        "dist",
+    }
+    inventory_paths = set()
+    for relative_root in inventory_roots:
+        source_root = REPO_ROOT / relative_root
+        if source_root.is_file():
+            inventory_paths.add(relative_root)
+            continue
+        for current, directories, filenames in os.walk(str(source_root)):
+            directories[:] = [name for name in directories if name not in ignored_directories]
+            for filename in filenames:
+                path = Path(current) / filename
+                relative = path.relative_to(REPO_ROOT).as_posix()
+                parts = Path(relative).parts
+                if (
+                    relative.endswith((".pyc", ".pyo"))
+                    or (parts and parts[0] == "build")
+                    or any(part.endswith(".egg-info") for part in parts)
+                ):
+                    continue
+                if path.is_file() or path.is_symlink():
+                    inventory_paths.add(relative)
     expected_paths.write_text("\n".join(sorted(inventory_paths)) + "\n", encoding="utf-8")
     session.run(
         "python",
