@@ -16,30 +16,26 @@ side ``load_state_dict`` then either refuses the entry or keeps the float copy.
 conversions have to describe the same tensors.
 """
 
-import importlib.util
+import sys
 import unittest
 
 import numpy as np
 
 import jittor as jt
+from _helpers.torch_runtime import modules_available
 
 
 def _torch_name_is_importable():
-    """Whether anything answers to ``import torch`` in this process.
+    """Whether a usable Torch namespace already belongs to this process.
 
-    ``state_dict(to="torch")`` imports it outright, and either owner of the
-    name will do: the compatibility shim in a Jittor development environment,
-    a binary PyTorch elsewhere. This is deliberately *not*
-    ``modules_available("torch")``, which reports False for the shim -- the
-    shim is a perfectly good subject for these assertions, and skipping on it
-    would leave the conversion untested in exactly the environment that has it.
+    A package discoverable on sys.path is insufficient: after Jittor imports,
+    a dormant shim placeholder or an unclaimed binary Torch cannot safely be
+    imported as the oracle. An active shim or a preloaded binary Torch works.
     """
-    if "torch" in __import__("sys").modules:
-        return True
-    try:
-        return importlib.util.find_spec("torch") is not None
-    except (ImportError, ValueError):
-        return False
+    owner = sys.modules.get("torch")
+    return owner is not None and (
+        hasattr(owner, "_torch_compat_install_context") or modules_available("torch")
+    )
 
 
 def _as_numpy(t):
@@ -61,8 +57,8 @@ class _Model(jt.Module):
 
 
 @unittest.skipIf(not _torch_name_is_importable(),
-                 "state_dict(to='torch') needs a module importable as `torch`: "
-                 "neither the Jittor shim nor a binary PyTorch is installed")
+                 "state_dict(to='torch') needs an active Jittor shim or "
+                 "independent PyTorch preloaded before Jittor")
 class TestStateDictDtypes(unittest.TestCase):
 
     def setUp(self):

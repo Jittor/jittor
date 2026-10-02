@@ -14,7 +14,6 @@ build anything.
 
 import json
 import os
-import tempfile
 import unittest
 
 import jittor_utils as jit_utils
@@ -27,9 +26,18 @@ def _cache_path_for(env_overrides):
     script = ("import jittor_utils, json, sys;"
               "sys.stdout.write(json.dumps(["
               "jittor_utils.cache_path, jittor_utils.lock_path]))")
-    out = run_python_child(["-c", script], env=env_overrides, text=False)
+    out = run_python_child(["-c", script], env=_cache_probe_env(env_overrides),
+                           inherit=False, text=False)
     assert out.returncode == 0, out.stderr.decode()
     return json.loads(out.stdout.decode())
+
+
+def _cache_probe_env(overrides):
+    """Use the caller's environment except for an inherited cache slot."""
+    env = dict(os.environ)
+    env.pop("cache_name", None)
+    env.update(overrides)
+    return env
 
 
 #: Locales the message-locale test uses. The second one only has to be a
@@ -172,7 +180,8 @@ class TestCachePathComponents(unittest.TestCase):
         script = ("import os, jittor_utils, sys;"
                   "jittor_utils.find_cache_path();"
                   "sys.stdout.write(repr(os.environ.get('cache_name')))")
-        out = run_python_child(["-c", script], env={}, text=False)
+        out = run_python_child(["-c", script], env=_cache_probe_env({}),
+                               inherit=False, text=False)
         self.assertEqual(out.returncode, 0, out.stderr.decode())
         # An import that mutates the environment changes every child process
         # the user starts afterwards.
