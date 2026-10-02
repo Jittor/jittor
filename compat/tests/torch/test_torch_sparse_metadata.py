@@ -15,14 +15,17 @@ import pytest
 import torch
 
 
-@pytest.mark.parametrize("array", [
-    np.array([[False, True, False], [True, False, True]], dtype=bool),
-    np.zeros((2, 3), dtype=bool),
-    np.ones((2, 2), dtype=bool),
-    np.array([False, True, True], dtype=bool),
-    np.arange(24).reshape(2, 3, 4) % 3 == 0,
-    np.zeros((0, 3), dtype=bool),
-])
+@pytest.mark.parametrize(
+    "array",
+    [
+        np.array([[False, True, False], [True, False, True]], dtype=bool),
+        np.zeros((2, 3), dtype=bool),
+        np.ones((2, 2), dtype=bool),
+        np.array([False, True, True], dtype=bool),
+        np.arange(24).reshape(2, 3, 4) % 3 == 0,
+        np.zeros((0, 3), dtype=bool),
+    ],
+)
 def test_bool_coo_values_indices_and_dense_roundtrip(array):
     dense = torch.from_numpy(array)
     sparse = dense.to_sparse()
@@ -60,7 +63,9 @@ def test_sparse_nonpersistent_buffer_participates_in_module_protocol():
     assert model.to(device="cpu", dtype=torch.float32) is model
     assert model.alignment.dtype == torch.bool
     assert model.alignment.device.type == "cpu"
-    np.testing.assert_array_equal(model.alignment.to_dense().numpy(), [[False, True], [True, False]])
+    np.testing.assert_array_equal(
+        model.alignment.to_dense().numpy(), [[False, True], [True, False]]
+    )
     original_parameters = dict(model.named_parameters())
     model.double()
     for name, parameter in model.named_parameters():
@@ -134,7 +139,9 @@ def test_sparse_owner_is_not_a_dense_var_and_dense_identity_is_unchanged():
 
 
 def test_sparse_copy_preserves_buffer_identity_and_owns_new_coordinates():
-    target = torch.tensor([[True, False, False], [False, False, False]], dtype=torch.bool).to_sparse()
+    target = torch.tensor(
+        [[True, False, False], [False, False, False]], dtype=torch.bool
+    ).to_sparse()
     source_array = np.array([[False, True, True], [True, False, False]], dtype=bool)
     source = torch.from_numpy(source_array).to_sparse()
     model = torch.nn.Module()
@@ -187,16 +194,19 @@ def test_dense_layout_metadata_does_not_modify_native_var():
         assert not hasattr(jt.Var, name)
 
 
-@pytest.mark.parametrize("data,shape", [
-    ([], (0,)),
-    ([], (1, 0)),
-    ([False], (1,)),
-    ([False], (1, 1)),
-    ([True], (1,)),
-    ([True], (1, 1)),
-    ([False, False], (2,)),
-    ([True, False], (1, 2)),
-])
+@pytest.mark.parametrize(
+    "data,shape",
+    [
+        ([], (0,)),
+        ([], (1, 0)),
+        ([False], (1,)),
+        ([False], (1, 1)),
+        ([True], (1,)),
+        ([True], (1, 1)),
+        ([False, False], (2,)),
+        ([True, False], (1, 2)),
+    ],
+)
 def test_sparse_truth_and_length_follow_logical_shape(data, shape):
     sparse = torch.tensor(data, dtype=torch.bool).reshape(shape).to_sparse()
     assert len(sparse) == shape[0]
@@ -255,6 +265,7 @@ def test_explicit_sparse_buffer_with_private_name_is_enumerated():
     assert model.cpu() is model
     assert dict(model.named_buffers())["_alignment"].device.type == "cpu"
 
+
 @pytest.mark.parametrize("factory", ["eye", "rand", "randn"])
 def test_sparse_layout_factory_never_silently_returns_dense(factory):
     options = {"layout": torch.sparse_coo}
@@ -266,13 +277,15 @@ def test_sparse_layout_factory_never_silently_returns_dense(factory):
 
 # Same public operation sequence runs in the active shim and a clean, genuine
 # PyTorch interpreter. Bool/int metadata is compared exactly (no tolerance).
-_PROBE_PATH = Path(__file__).resolve().parents[3] / "agent/skills/jittor-torch-diff/sparse_metadata_probe.py"
+_PROBE_PATH = (
+    Path(__file__).resolve().parents[3] / "agent/skills/jittor-torch-diff/sparse_metadata_probe.py"
+)
 # Read literal case metadata during collection, without executing the probe.
 _INVENTORY_NODE = next(
-    node.value for node in ast.parse(_PROBE_PATH.read_text(encoding="utf-8")).body
+    node.value
+    for node in ast.parse(_PROBE_PATH.read_text(encoding="utf-8")).body
     if isinstance(node, ast.Assign)
-    and any(isinstance(target, ast.Name) and target.id == "CASES"
-            for target in node.targets)
+    and any(isinstance(target, ast.Name) and target.id == "CASES" for target in node.targets)
 )
 _COLLECTED_SPARSE_CASES = ast.literal_eval(_INVENTORY_NODE)
 assert isinstance(_COLLECTED_SPARSE_CASES, (list, tuple)) and _COLLECTED_SPARSE_CASES
@@ -293,14 +306,25 @@ def sparse_probe():
 def sparse_torch_oracle(tmp_path_factory, sparse_probe):
     python = os.environ.get("REAL_TORCH_PYTHON", "").strip()
     if not python:
-        if os.environ.get("JITTOR_REQUIRE_REAL_TORCH", "").lower() not in ("", "0", "false", "no", "off"):
+        if os.environ.get("JITTOR_REQUIRE_REAL_TORCH", "").lower() not in (
+            "",
+            "0",
+            "false",
+            "no",
+            "off",
+        ):
             pytest.fail("REAL_TORCH_PYTHON is required for sparse COO differential tests")
         pytest.skip("REAL_TORCH_PYTHON is not configured")
     output = tmp_path_factory.mktemp("sparse-torch-oracle") / "oracle.json"
     env = child_env(without_torch_mode=True, repo_paths=False)
-    result = subprocess.run([python, str(_PROBE_PATH), "--output", str(output)],
-                            env=env, cwd=str(output.parent), capture_output=True,
-                            text=True, timeout=default_timeout())
+    result = subprocess.run(
+        [python, str(_PROBE_PATH), "--output", str(output)],
+        env=env,
+        cwd=str(output.parent),
+        capture_output=True,
+        text=True,
+        timeout=default_timeout(),
+    )
     assert result.returncode == 0, result.stdout + result.stderr
     report = json.loads(output.read_text(encoding="utf-8"))
     assert report["runtime"] == "pytorch" and report["device"] == "cpu"
@@ -316,4 +340,6 @@ def test_bool_coo_matches_independent_pytorch(sparse_case, sparse_probe, sparse_
 
     with jt.runtime.scope(use_cuda=0):
         actual = sparse_probe.run_case(torch, sparse_case)
-    assert actual == sparse_torch_oracle["cases"][sparse_case], "COO contract diverged: " + sparse_case
+    assert actual == sparse_torch_oracle["cases"][sparse_case], (
+        "COO contract diverged: " + sparse_case
+    )

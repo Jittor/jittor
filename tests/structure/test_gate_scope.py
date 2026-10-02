@@ -24,7 +24,7 @@ if str(TEST_ROOT) not in sys.path:
     sys.path.insert(0, str(TEST_ROOT))
 
 from _helpers import gate_scope  # noqa: E402
-from _helpers.paths import iter_test_files as all_test_files
+from _helpers.paths import iter_test_files as all_test_files  # noqa: E402
 
 
 def _all_test_files():

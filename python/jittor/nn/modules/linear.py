@@ -6,9 +6,16 @@ import jittor as jt
 from jittor import Module, init
 
 from ..functional.linear import linear as linear
-from jittor.backends.cuda.kernels.cublas.lt_linear_cuda import (
-    lt_linear_cuda as _lt_linear_cuda,
-)
+try:
+    from jittor.backends.cuda.kernels.cublas.lt_linear_cuda import (
+        lt_linear_cuda as _lt_linear_cuda,
+    )
+except ModuleNotFoundError as error:
+    # CPU and NPU installations do not ship this optional CUDA extension.
+    # Keep the portable Linear implementation importable on those backends.
+    if not (error.name or "").startswith("jittor.backends.cuda.kernels.cublas"):
+        raise
+    _lt_linear_cuda = None
 
 
 class Linear(Module):
@@ -31,9 +38,10 @@ class Linear(Module):
             # Both matter: the fold removes a kernel and an operator per layer,
             # and for this model's `fc2` shape the measured pick is 1.30x the
             # heuristic one. Returns None for anything it cannot serve.
-            fast = _lt_linear_cuda(x, self.weight, self.bias)
-            if fast is not None:
-                return fast
+            if _lt_linear_cuda is not None:
+                fast = _lt_linear_cuda(x, self.weight, self.bias)
+                if fast is not None:
+                    return fast
         # One definition with the functional otherwise: transcribing it here is
         # what kept the amp-register bias handling added to ``linear`` from
         # reaching ``nn.Linear`` -- which is what the H3 decoder uses.

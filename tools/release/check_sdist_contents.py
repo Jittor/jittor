@@ -295,9 +295,14 @@ def audit_sdist(path, expected_paths):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("sdist", type=Path)
+    parser.add_argument(
+        "--repo-root",
+        type=Path,
+        help="checkout to inventory (defaults to the source tree containing this script)",
+    )
     args = parser.parse_args(argv)
     try:
-        repo_root = Path(__file__).resolve().parents[2]
+        repo_root = args.repo_root or Path(__file__).resolve().parents[2]
         expected_paths = _expected_source_paths(repo_root)
         issues, members = audit_sdist(args.sdist, expected_paths)
     except SourceDistributionError as error:

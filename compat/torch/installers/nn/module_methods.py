@@ -1,4 +1,4 @@
-from ...fidelity import Fidelity, register_api_bindings
+from ...fidelity import Fidelity, register_api_bindings, register_fidelity
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import collections as _collections
 import functools as _functools
@@ -10,7 +10,6 @@ from jittor.nn.backends import hooks as _backend_hooks
 from jittor.backends.cuda.kernels.nn.rms_norm_training_cuda import _rms_norm_training_cuda
 from jittor.backends.cuda.kernels.nn.rms_norm_cuda import _rms_norm_cuda
 from ...context import registry_for
-from ...fidelity import Fidelity, register_fidelity
 from ...nested import _torch_register_leaf
 from ...tensor_state import get_tensor_state
 from ...types import _device_is_cpu, _device_is_cuda, _is_index, _make_cpu_resident, _make_cuda_resident, current_accelerator_index, device, dtype, _cuda_index_of

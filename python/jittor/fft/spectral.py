@@ -14,9 +14,18 @@ def _positive_size(name, value):
     return int(value)
 
 
-def stft(input, n_fft, hop_length=None, win_length=None, window=None,
-         center=True, pad_mode="reflect", normalized=False, onesided=True,
-         return_complex=True):
+def stft(
+    input,
+    n_fft,
+    hop_length=None,
+    win_length=None,
+    window=None,
+    center=True,
+    pad_mode="reflect",
+    normalized=False,
+    onesided=True,
+    return_complex=True,
+):
     """FP32 real STFT with complex64 output and input/window gradients.
 
     Frames and transforms stay in the native graph. Other input/window dtypes
@@ -42,6 +51,7 @@ def stft(input, n_fft, hop_length=None, win_length=None, window=None,
     if dtype_name(window.dtype) != "float32":
         raise NotImplementedError("stft currently supports float32 windows")
     from jittor._runtime.dispatch import dispatch_context
+
     if dispatch_context(input)[:2] != dispatch_context(window)[:2]:
         raise RuntimeError("stft: input and window must use the same device")
     squeeze = input.ndim == 1
@@ -60,10 +70,10 @@ def stft(input, n_fft, hop_length=None, win_length=None, window=None,
     if width != n_fft:
         window = window.reindex([n_fft], ["i0-{}".format((n_fft - width) // 2)])
     count = 1 + (samples.shape[-1] - n_fft) // hop
-    frames = samples.reindex([samples.shape[0], count, n_fft],
-                             ["i0", "i1*{}+i2".format(hop)])
+    frames = samples.reindex([samples.shape[0], count, n_fft], ["i0", "i1*{}+i2".format(hop)])
     frames = frames * window.reshape((1, 1, n_fft))
     from . import fft, rfft
+
     transform = rfft if onesided else fft
     result = transform(frames, dim=-1, norm="ortho" if normalized else None)
     result = result.permute(0, 2, 1)

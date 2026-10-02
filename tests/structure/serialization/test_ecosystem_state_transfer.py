@@ -17,8 +17,9 @@ ECOSYSTEM = ROOT / "compat/tests/torch"
 
 def _functions(filename, names, **globals_):
     tree = ast.parse((ECOSYSTEM / filename).read_text(encoding="utf-8"))
-    selected = [node for node in tree.body
-                if isinstance(node, ast.FunctionDef) and node.name in names]
+    selected = [
+        node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names
+    ]
     assert len(selected) == len(names)
     namespace = {"np": np, "hashlib": hashlib, **globals_}
     module = ast.Module(body=selected, type_ignores=[])
@@ -28,10 +29,17 @@ def _functions(filename, names, **globals_):
 
 @pytest.fixture
 def runner():
-    return _functions("_ecosystem_runner.py", {
-        "_tensor_manifest", "_snapshot_state", "_restore_state",
-        "_state_fingerprints", "_numpy_snapshot", "_collect_arrays",
-    })
+    return _functions(
+        "_ecosystem_runner.py",
+        {
+            "_tensor_manifest",
+            "_snapshot_state",
+            "_restore_state",
+            "_state_fingerprints",
+            "_numpy_snapshot",
+            "_collect_arrays",
+        },
+    )
 
 
 class Tensor:
@@ -87,8 +95,11 @@ def test_sparse_buffer_round_trip_preserves_layout_and_bool_values(runner):
     arrays, manifest = runner._snapshot_state([("alignment_heads", saved)])
     assert arrays["alignment_heads"].dtype == np.bool_
     assert manifest["alignment_heads"] == {
-        "layout": "sparse_coo", "shape": [2, 2], "dtype": "bool",
-        "sparse_dim": 2, "dense_dim": 0,
+        "layout": "sparse_coo",
+        "shape": [2, 2],
+        "dtype": "bool",
+        "sparse_dim": 2,
+        "dense_dim": 0,
     }
     target = Tensor(np.zeros((2, 2), dtype=bool), sparse=True)
     runner._restore_state(TORCH, [("alignment_heads", target)], arrays, manifest, lambda x: x)
@@ -168,9 +179,12 @@ def test_legacy_case_does_not_acquire_new_gradient_requirements(runner):
 
 @pytest.mark.parametrize("required", [False, True])
 def test_missing_whisper_is_visible_and_required_mode_fails(required):
-    harness = _functions("_ecosystem_harness.py", {"_require_case_dependencies"},
-                         _missing_distributions=lambda names: ["whisper"],
-                         _enabled=lambda flag: required)
+    harness = _functions(
+        "_ecosystem_harness.py",
+        {"_require_case_dependencies"},
+        _missing_distributions=lambda names: ["whisper"],
+        _enabled=lambda flag: required,
+    )
     expected = AssertionError if required else unittest.SkipTest
     with pytest.raises(expected, match="missing OpenAI Whisper dependency: whisper"):
         harness._require_case_dependencies(unittest.TestCase(), "openai_whisper", ("whisper",))
@@ -179,13 +193,18 @@ def test_missing_whisper_is_visible_and_required_mode_fails(required):
 @pytest.mark.parametrize("difference", ["nan", "shape", "dtype", "missing", "extra", "layout"])
 def test_comparison_rejects_false_green_arrays_and_metadata(difference):
     harness = _functions("_ecosystem_harness.py", {"_assert_strict_results"})
-    reference = {"__output__": np.ones((1,)), "grad::weight": np.ones((1,)),
-                 "ingrad::mel": np.ones((1,))}
+    reference = {
+        "__output__": np.ones((1,)),
+        "grad::weight": np.ones((1,)),
+        "ingrad::mel": np.ones((1,)),
+    }
     candidate = {key: value.copy() for key, value in reference.items()}
-    report = {"state_manifest": {"buffer": "sparse_coo"},
-              "state_fingerprints": {"buffer": "fingerprint"},
-              "required_parameter_gradients": ["weight"],
-              "required_input_gradients": ["mel"]}
+    report = {
+        "state_manifest": {"buffer": "sparse_coo"},
+        "state_fingerprints": {"buffer": "fingerprint"},
+        "required_parameter_gradients": ["weight"],
+        "required_input_gradients": ["mel"],
+    }
     candidate_report = dict(report)
     if difference == "nan":
         candidate["grad::weight"][:] = np.nan
@@ -200,8 +219,9 @@ def test_comparison_rejects_false_green_arrays_and_metadata(difference):
     else:
         candidate_report["state_manifest"] = {"buffer": "strided"}
     with pytest.raises(AssertionError):
-        harness._assert_strict_results(unittest.TestCase(), reference, candidate,
-                                       report, candidate_report)
+        harness._assert_strict_results(
+            unittest.TestCase(), reference, candidate, report, candidate_report
+        )
 
 
 def test_strict_capture_preserves_dtype_for_comparison(runner):

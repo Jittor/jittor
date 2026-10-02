@@ -24,13 +24,21 @@ def _nox_contract(**overrides):
         ):
             nodes.append(node)
         if isinstance(node, ast.FunctionDef) and node.name in (
-            "_validate_whisper_cpu_oracle", "whisper_cpu",
+            "_validate_whisper_cpu_oracle",
+            "whisper_cpu",
         ):
             node.decorator_list = []
             nodes.append(node)
-    namespace = {"Path": Path, "json": json, "os": SimpleNamespace(cpu_count=lambda: 8), "PYTEST": "pytest==7.4.4",
-                 "PYTEST_TIMEOUT": "pytest-timeout==2.3.1", "SCIPY": "scipy==1.13.1",
-                 "SETUPTOOLS": "setuptools==83.0.0", "WHEEL": "wheel==0.45.1"}
+    namespace = {
+        "Path": Path,
+        "json": json,
+        "os": SimpleNamespace(cpu_count=lambda: 8),
+        "PYTEST": "pytest==7.4.4",
+        "PYTEST_TIMEOUT": "pytest-timeout==2.3.1",
+        "SCIPY": "scipy==1.13.1",
+        "SETUPTOOLS": "setuptools==83.0.0",
+        "WHEEL": "wheel==0.45.1",
+    }
     namespace.update(overrides)
     exec(compile(ast.Module(body=nodes, type_ignores=[]), "noxfile.py", "exec"), namespace)
     return SimpleNamespace(**namespace)
@@ -38,12 +46,19 @@ def _nox_contract(**overrides):
 
 def _baseline(oracle):
     return {
-        "python": [3, 11, 16], "torch": "2.4.1+cpu", "numpy": "1.26.4",
-        "whisper": "20250625", "torch_is_shim": False, "torch_has_binary": True,
-        "torch_cuda": None, "prefix": str(oracle),
+        "python": [3, 11, 16],
+        "torch": "2.4.1+cpu",
+        "numpy": "1.26.4",
+        "whisper": "20250625",
+        "torch_is_shim": False,
+        "torch_has_binary": True,
+        "torch_cuda": None,
+        "prefix": str(oracle),
         "package_site": str(oracle / "lib/python3.11/site-packages"),
-        "source": {"url": "https://github.com/openai/whisper.git",
-                   "vcs_info": {"vcs": "git", "commit_id": COMMIT}},
+        "source": {
+            "url": "https://github.com/openai/whisper.git",
+            "vcs_info": {"vcs": "git", "commit_id": COMMIT},
+        },
     }
 
 
@@ -52,10 +67,23 @@ def test_official_exact_cpu_oracle_is_accepted(tmp_path):
     _nox_contract()._validate_whisper_cpu_oracle(_baseline(oracle), oracle)
 
 
-@pytest.mark.parametrize("difference", [
-    "python", "torch", "numpy", "whisper", "shim", "binary", "cuda",
-    "prefix", "site", "source", "commit", "vcs",
-])
+@pytest.mark.parametrize(
+    "difference",
+    [
+        "python",
+        "torch",
+        "numpy",
+        "whisper",
+        "shim",
+        "binary",
+        "cuda",
+        "prefix",
+        "site",
+        "source",
+        "commit",
+        "vcs",
+    ],
+)
 def test_source_version_or_oracle_drift_is_rejected_before_testing(tmp_path, difference):
     oracle = tmp_path / "oracle"
     report = _baseline(oracle)
@@ -102,21 +130,33 @@ def test_session_isolated_oracle_and_required_cpu_selection(tmp_path):
             pass
 
     contract = _nox_contract(
-        _session_env=lambda session, name: (tmp_path, {
-            "PYTHONPATH": str(ROOT / "python"), "JITTOR_HOME": "shared-jit-cache"}),
+        _session_env=lambda session, name: (
+            tmp_path,
+            {"PYTHONPATH": str(ROOT / "python"), "JITTOR_HOME": "shared-jit-cache"},
+        ),
         _run_pytest_once=lambda session, args, env, **kwargs: runs.append((args, env, kwargs)),
     )
     contract.whisper_cpu(Session())
     assert len(runs) == 1
     arguments, env, _ = runs[0]
-    assert "compat/tests/torch/test_ecosystem_parity.py::OpenAIWhisperParity::test_openai_whisper" in arguments
+    assert (
+        "compat/tests/torch/test_ecosystem_parity.py::OpenAIWhisperParity::test_openai_whisper"
+        in arguments
+    )
     assert "compat/tests/torch/test_torch_sparse_metadata.py" in arguments
     assert "compat/tests/torch/test_whisper_training.py" in arguments
     assert "--confcutdir=compat/tests" in arguments
-    assert "compat/tests/torch/test_ecosystem_parity.py::OpenAIWhisperParity::test_openai_whisper_log_mel" in arguments
+    assert (
+        "compat/tests/torch/test_ecosystem_parity.py::OpenAIWhisperParity::test_openai_whisper_log_mel"
+        in arguments
+    )
     for name in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
         assert env[name] == "8"
-    for name in ("JITTOR_REQUIRE_REAL_TORCH", "JITTOR_REQUIRE_WHISPER", "JITTOR_TEST_REQUIRE_EXECUTION"):
+    for name in (
+        "JITTOR_REQUIRE_REAL_TORCH",
+        "JITTOR_REQUIRE_WHISPER",
+        "JITTOR_TEST_REQUIRE_EXECUTION",
+    ):
         assert env[name] == "1"
     assert env["JITTOR_TEST_DEVICES"] == "cpu"
     assert env["JT_USE_CUDA"] == "0"
@@ -144,15 +184,22 @@ def test_session_isolated_oracle_and_required_cpu_selection(tmp_path):
 
 
 def test_workflow_has_an_independent_pinned_whisper_job():
-    document = yaml.safe_load((ROOT / ".github/workflows/ecosystem.yml").read_text(encoding="utf-8"))
+    document = yaml.safe_load(
+        (ROOT / ".github/workflows/ecosystem.yml").read_text(encoding="utf-8")
+    )
     existing = document["jobs"]["ecosystem"]
     assert any("torch==2.7.1" in step.get("run", "") for step in existing["steps"])
     whisper = document["jobs"]["whisper-cpu"]
     assert whisper["needs"] == "baseline"
-    setup = [step for step in whisper["steps"] if step.get("uses", "").startswith("actions/setup-python@")]
+    setup = [
+        step
+        for step in whisper["steps"]
+        if step.get("uses", "").startswith("actions/setup-python@")
+    ]
     assert setup[0]["with"]["python-version"] == "3.11.16"
-    command = next(step["run"] for step in whisper["steps"]
-                   if "nox -s whisper_cpu" in step.get("run", ""))
+    command = next(
+        step["run"] for step in whisper["steps"] if "nox -s whisper_cpu" in step.get("run", "")
+    )
     assert 'JITTOR_LAB_ROOT="${RUNNER_TEMP}/jittor-lab-whisper"' in command
     assert not whisper.get("continue-on-error", False)
     assert not any(step.get("continue-on-error", False) for step in whisper["steps"])

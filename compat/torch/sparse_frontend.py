@@ -142,14 +142,21 @@ class SparseCOOTensor(SparseVar):
         # and would lose Torch's bidirectional storage sharing on mutation.
         # A separate COO container lets copy_ replace one tensor's coordinates
         # without replacing the detached tensor's retained storage.
-        return type(self)(SparseVar(
-            self.indices(), self.values(), jt.NanoVector(self.shape), coalesced=True))
+        return type(self)(
+            SparseVar(self.indices(), self.values(), jt.NanoVector(self.shape), coalesced=True)
+        )
 
     def clone(self, *, memory_format=None):
         if memory_format not in (None, "preserve_format"):
             raise NotImplementedError("COO clone supports preserve_format only")
-        return type(self)(SparseVar(
-            self.indices().clone(), self.values().clone(), jt.NanoVector(self.shape), coalesced=True))
+        return type(self)(
+            SparseVar(
+                self.indices().clone(),
+                self.values().clone(),
+                jt.NanoVector(self.shape),
+                coalesced=True,
+            )
+        )
 
     def to(self, *args, **kwargs):
         unknown = set(kwargs) - {"device", "dtype", "copy", "non_blocking", "memory_format"}
@@ -188,7 +195,9 @@ class SparseCOOTensor(SparseVar):
     def copy_(self, source, non_blocking=False):
         """Copy supported COO storage while retaining this buffer's identity."""
         if not isinstance(source, SparseCOOTensor):
-            raise NotImplementedError("COO copy_ requires a boolean COO source; dense copying is unsupported")
+            raise NotImplementedError(
+                "COO copy_ requires a boolean COO source; dense copying is unsupported"
+            )
         if tuple(source.shape) != tuple(self.shape):
             raise RuntimeError("COO copy_ requires identical logical shapes")
         if source.dtype != self.dtype:
@@ -206,7 +215,9 @@ class SparseCOOTensor(SparseVar):
         return self.to(device="cpu", memory_format=memory_format)
 
     def cuda(self, device=None, non_blocking=False, memory_format=None):
-        target = "cuda" if device is None else "cuda:%d" % device if isinstance(device, int) else device
+        target = (
+            "cuda" if device is None else "cuda:%d" % device if isinstance(device, int) else device
+        )
         return self.to(device=target, non_blocking=non_blocking, memory_format=memory_format)
 
     def requires_grad_(self, requires_grad=True):
@@ -222,7 +233,9 @@ class SparseCOOTensor(SparseVar):
         return self
 
     def _unsupported(self, *args, **kwargs):
-        raise NotImplementedError("this operation is not supported for boolean COO metadata tensors")
+        raise NotImplementedError(
+            "this operation is not supported for boolean COO metadata tensors"
+        )
 
     # Do not inherit dense or sparse algebra that is outside the supported surface.
     t = transpose = permute = sum = __getitem__ = __setitem__ = _unsupported
@@ -233,7 +246,11 @@ class SparseCOOTensor(SparseVar):
 
     def __repr__(self):
         return "SparseCOOTensor(size=%r, nnz=%d, dtype=%s, device=%s)" % (
-            tuple(self.shape), self._nnz(), self.dtype, self.device)
+            tuple(self.shape),
+            self._nnz(),
+            self.dtype,
+            self.device,
+        )
 
 
 def _check_sparse_request(ndim, sparse_dim, layout, blocksize, dense_dim):
@@ -257,7 +274,9 @@ def to_sparse(input, sparse_dim=None, *, layout=None, blocksize=None, dense_dim=
 
 
 register_fidelity(
-    "torch.Tensor.to_sparse", to_sparse, Fidelity.APPROXIMATE,
+    "torch.Tensor.to_sparse",
+    to_sparse,
+    Fidelity.APPROXIMATE,
     "full-dimensional boolean COO metadata over native nonzero/gather storage; "
     "CPU bool metadata validated, accelerators unverified; arithmetic, floating gradients, "
     "hybrid/block layouts and persistent sparse buffers are unsupported",
