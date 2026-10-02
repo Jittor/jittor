@@ -1,0 +1,7 @@
+# Whisper CPU L2: exact changed wheel members relative to upstream 2.0-refactor.
+# The wheel's derived dist-info/RECORD is approved separately per built artifact.
+fc40f96f58d18bf2fc8adeb2928e2d99390da49119403ab3003c825f5c26c797  jittor/_core/module.py
+486796e437984c0fdf33cbb1d2e0adb2203f74797f1783646cee823ad899d36b  jittor/build/utils/__init__.py
+9b756ed43bddf8e5df3c93ede43b867f20d772237d38c40629d48aca296c8036  jittor/fft/__init__.py
+b7f0a3a1c4f5748432f59ae8a10d841edbd6236fd70c5975d65d7c2026b3ad3c  jittor/nn/modules/linear.py
+b95dfb4a8c50b19aef73cddbd19f2dc51393b4ccc6fda7f1126ca694370ab999  jittor/sparse/coo.py

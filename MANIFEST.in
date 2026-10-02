@@ -849,6 +849,8 @@ include tools/release/legacy/polish_centos.py
 include tools/release/pack_offline.py
 include tools/release/test_check_sdist_contents.py
 include tools/release/test_check_wheel_contents.py
+include tools/release/whisper-wheel-additions.txt
+include tools/release/whisper-wheel-content-changes.txt
 include tools/roundtrip_consistency_sweep.py
 include tools/run_test_suite.py
 include tools/semantic_divergence_probe.py

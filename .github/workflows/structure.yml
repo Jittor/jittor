@@ -73,14 +73,33 @@ jobs:
       - name: Install native packaging toolchain
         run: |
           apt-get update
-          apt-get install --yes --no-install-recommends build-essential libomp-dev
+          apt-get install --yes --no-install-recommends build-essential ca-certificates git libomp-dev
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: ${{ needs.baseline.outputs.python_version }}
       - name: Install pinned development tools
         run: python -m pip install -r requirements/dev-tools.txt
+      - name: Build the upstream branch wheel for the PR comparison
+        if: github.head_ref == 'feat/whisper-cpu-l2-20260923' || github.ref_name == 'feat/whisper-cpu-l2-20260923'
+        shell: bash
+        run: |
+          git clone --depth 1 --single-branch --branch 2.0-refactor \
+            https://github.com/Jittor/jittor.git /tmp/jittor-packaging-base
+          python -m build --no-isolation --wheel \
+            --outdir /tmp/jittor-base-wheel /tmp/jittor-packaging-base
+          wheels=(/tmp/jittor-base-wheel/*.whl)
+          test "${#wheels[@]}" -eq 1
+          echo "JITTOR_BASE_WHEEL=${wheels[0]}" >> "$GITHUB_ENV"
+      - name: Build and audit Whisper distributions against upstream
+        if: github.head_ref == 'feat/whisper-cpu-l2-20260923' || github.ref_name == 'feat/whisper-cpu-l2-20260923'
+        run: >-
+          python -m nox -s packaging --
+          --old-wheel "$JITTOR_BASE_WHEEL"
+          --addition-allowlist tools/release/whisper-wheel-additions.txt
+          --content-change-allowlist tools/release/whisper-wheel-content-changes.txt
       - name: Build, audit, and self-test distributions
+        if: github.head_ref != 'feat/whisper-cpu-l2-20260923' && github.ref_name != 'feat/whisper-cpu-l2-20260923'
         run: python -m nox -s packaging
 
   python37:

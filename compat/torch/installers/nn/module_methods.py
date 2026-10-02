@@ -512,7 +512,7 @@ class _ParamList:
             try:
                 self._produce()
             except StopIteration:
-                pass
+                break
         return self._items
 
     def __iter__(self):

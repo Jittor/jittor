@@ -2521,7 +2521,7 @@ the model passes `device=self.device` and `self.device` comes from
 form was already correct. So the fix closes a real silent-misplacement hole in
 the same family as sections 26/27, but the fault that survives is still open.
 
-## Verification
+## Verification for section 31: device index
 
 - 1: `tests/distributed/test_process_store.py::TestHostnameRendezvous` -- fails
   pre-fix with the connect timeout, passes after. Reproduced standalone before
@@ -2988,7 +2988,7 @@ wooden disc on a pink field, at 50 a pink card with glyphs -- the conditioning
 being correct, the model simply degenerates. It is identical on both ranks,
 which is exactly why TP1 and TP2 "agreed" while both were wrong.
 
-### The fix
+### The fix for section 35: strided operands
 
 `_tensor_is_contiguous` in `compat/triton/backend.py`, and the bounce is taken
 only for operands it accepts. It reads `Var._storage_is_contiguous` for jittor
@@ -3000,7 +3000,7 @@ allocator's slack, whereas bouncing something strided corrupts results. The guar
 itself is unchanged for the operands it was written for (weights, index and
 segment tables, all contiguous).
 
-### Verification
+### Verification for section 35: strided operands
 
 * `probe_modulation_strides2.py`: all four layouts now cos 0.99999863,
   max\|d\| 0.124 -- identical to the contiguous case.
@@ -3260,7 +3260,7 @@ fp32 is untouched throughout, as it must be -- it never enters the bridge. The
 bridge's own totals fall from 131.3 s to 59.4 s (`sync=41.9s pack=1.5s
 final=15.8s`), which is the same 2x.
 
-### Verification
+### Verification for section 38: fp16 VAE
 
 * **Values.** The decode is not bit-reproducible, so the check is tolerance-based
   and controlled: two runs of one build already differ (fp32, which never enters
@@ -6589,7 +6589,7 @@ against the first thread's buffers, which is what the unsynced arm does and
 what that arm does not. The conclusion was drawn from an arm that could not
 have failed either way.
 
-### The fix
+### The fix for section 49: compute stream
 
 `backend_compute_stream_acquire` / `backend_compute_stream_release`, in
 `src/runtime/backend_streams.cc`, called at the two ends of `run_exec_plan`.

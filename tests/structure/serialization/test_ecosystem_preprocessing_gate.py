@@ -14,9 +14,11 @@ ECOSYSTEM = ROOT / "compat/tests/torch"
 
 def _runner_with_completion(completed):
     tree = ast.parse((ECOSYSTEM / "_ecosystem_harness.py").read_text(encoding="utf-8"))
-    function = next(
-        node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_run"
-    )
+    functions = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name in ("_run", "_result_from_stdout")
+    ]
     namespace = {
         "json": json,
         "os": SimpleNamespace(environ={}),
@@ -26,7 +28,7 @@ def _runner_with_completion(completed):
         "subprocess": SimpleNamespace(run=lambda *args, **kwargs: completed, PIPE=-1, STDOUT=-2),
         "run_python_child": lambda *args, **kwargs: completed,
     }
-    exec(compile(ast.Module(body=[function], type_ignores=[]), "harness.py", "exec"), namespace)
+    exec(compile(ast.Module(body=functions, type_ignores=[]), "harness.py", "exec"), namespace)
     return namespace["_run"]
 
 

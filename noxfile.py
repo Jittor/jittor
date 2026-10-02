@@ -3,12 +3,14 @@
 from __future__ import print_function
 
 import json
+import hashlib
 import math
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+import zipfile
 from typing import Dict, Optional
 
 import nox
@@ -909,6 +911,10 @@ def _asv_state_path(variable, fallback):
 
 def _write_asv_config(root, results_dir, html_dir):
     config = json.loads((REPO_ROOT / "benchmarks" / "asv.conf.json").read_text(encoding="utf-8"))
+    checkout_branch = _git_output("symbolic-ref", "--quiet", "--short", "HEAD")
+    # ASV resolves every configured branch even when recording only one commit.
+    # A fork checkout need not contain the upstream names in asv.conf.json.
+    config["branches"] = [checkout_branch or "HEAD"]
     config.update(
         {
             "repo": str(REPO_ROOT),
@@ -1372,12 +1378,28 @@ def packaging(session):
         session.error("expected exactly one sdist-derived wheel, found %d" % len(sdist_wheels))
     wheel_args = tuple(session.posargs)
     for wheel in (wheels[0], sdist_wheels[0]):
+        record_args = ()
+        if "--old-wheel" in wheel_args:
+            # RECORD is generated from every wheel member and necessarily
+            # changes when an explicitly approved source member changes.
+            with zipfile.ZipFile(str(wheel)) as archive:
+                records = [
+                    name for name in archive.namelist() if name.endswith(".dist-info/RECORD")
+                ]
+                if len(records) != 1:
+                    session.error("expected exactly one wheel RECORD, found %d" % len(records))
+                record_args = (
+                    "--allow-content-change",
+                    hashlib.sha256(archive.read(records[0])).hexdigest(),
+                    records[0],
+                )
         session.run(
             "python",
             "tools/release/check_wheel_contents.py",
             "compare",
             str(wheel),
             *wheel_args,
+            *record_args,
             env=env,
         )
 

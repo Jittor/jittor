@@ -181,7 +181,10 @@ class tensor_frontend:
         return False
 
     def _restore(self):
-        core = self._backend.core
+        backend = self._backend
+        if backend is None:
+            return
+        core = backend.core
         bits = self._policy_bits
         if bits is not None:
             core._set_autograd_policy(bool(bits & 1), bool(bits & 2))
