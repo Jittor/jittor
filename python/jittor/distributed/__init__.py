@@ -3,10 +3,12 @@
 See ``jittor.distributed.launch`` (run as ``python -m jittor.distributed.launch``).
 """
 
+from .backend_status import get_hccl_world_info
 from .bucket import bucket_scope, comm_wait, join_pending
 from .store import FileStore, PrefixStore, Store, TCPStore, rendezvous
 from .process_group import ProcessGroup, Work
 
 
 __all__ = ["FileStore", "PrefixStore", "Store", "TCPStore", "rendezvous",
-           "bucket_scope", "comm_wait", "join_pending", "ProcessGroup", "Work"]
+           "bucket_scope", "comm_wait", "join_pending", "ProcessGroup", "Work",
+           "get_hccl_world_info"]

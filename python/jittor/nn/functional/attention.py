@@ -1,4 +1,5 @@
 """Canonical scaled dot-product attention."""
+
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import math
@@ -12,15 +13,17 @@ def _attention_bias(scores, attn_mask, is_causal):
     """``scores`` with the masks applied as ``-inf`` / additive terms."""
     if is_causal:
         query_length, source_length = int(scores.shape[-2]), int(scores.shape[-1])
-        causal = jt.triu(jt.ones((query_length, source_length), dtype="bool"),
-                         diagonal=1)
-        scores = jt.ternary(causal, jt.array(float("-inf")).cast(scores.dtype)
-                            .broadcast(scores.shape), scores)
+        causal = jt.triu(jt.ones((query_length, source_length), dtype="bool"), diagonal=1)
+        scores = jt.ternary(
+            causal, jt.array(float("-inf")).cast(scores.dtype).broadcast(scores.shape), scores
+        )
     if attn_mask is not None:
         if _jittor_dtype_name(attn_mask.dtype) == "bool":
-            scores = jt.ternary(attn_mask, scores,
-                                jt.array(float("-inf")).cast(scores.dtype)
-                                .broadcast(scores.shape))
+            scores = jt.ternary(
+                attn_mask,
+                scores,
+                jt.array(float("-inf")).cast(scores.dtype).broadcast(scores.shape),
+            )
         else:
             scores = scores + attn_mask.cast(scores.dtype)
     return scores
@@ -40,8 +43,9 @@ def _product(a, b, trans_a=False, trans_b=False):
         kernel = select_kernel("batched_matmul", a, b, trans_a, trans_b)
         if kernel is not None:
             return kernel(a, b, trans_a, trans_b)
-    return jt.nn.matmul(a.transpose(-2, -1) if trans_a else a,
-                        b.transpose(-2, -1) if trans_b else b)
+    return jt.nn.matmul(
+        a.transpose(-2, -1) if trans_a else a, b.transpose(-2, -1) if trans_b else b
+    )
 
 
 class _MemoryEfficientAttention(jt.Function):
@@ -95,8 +99,14 @@ class _MemoryEfficientAttention(jt.Function):
         grad_scores = (probabilities * (grad_prob - row)).cast(query.dtype)
         grad_query = _product(grad_scores, key) * self.scale
         grad_key = _product(grad_scores, query * self.scale, trans_a=True)
-        return (grad_query.cast(query.dtype), grad_key.cast(key.dtype),
-                grad_value.cast(value.dtype), None, None, None)
+        return (
+            grad_query.cast(query.dtype),
+            grad_key.cast(key.dtype),
+            grad_value.cast(value.dtype),
+            None,
+            None,
+            None,
+        )
 
 
 def _expand_heads(query, tensor, name):
@@ -137,8 +147,12 @@ def _repeated_heads(tensor):
     unsqueezed = expanded._input(0)
     if _shape(unsqueezed) != (b, heads, 1, length, dim):
         return None
-    if unsqueezed._producer_name() == "getitem" \
-            and _shape(unsqueezed._input(0)) == (b, heads, length, dim):
+    if unsqueezed._producer_name() == "getitem" and _shape(unsqueezed._input(0)) == (
+        b,
+        heads,
+        length,
+        dim,
+    ):
         return unsqueezed._input(0), group
     return unsqueezed.reshape((b, heads, length, dim)), group
 
@@ -163,61 +177,101 @@ def scaled_dot_product_attention(
     """
     if not enable_gqa and len(query.shape) == 4:
         repeated_key, repeated_value = _repeated_heads(key), _repeated_heads(value)
-        if (repeated_key is not None and repeated_value is not None
-                and repeated_key[1] == repeated_value[1]):
+        if (
+            repeated_key is not None
+            and repeated_value is not None
+            and repeated_key[1] == repeated_value[1]
+        ):
             fused = try_dispatch(
-                "nn.fused_attention_gqa", query, repeated_key[0], repeated_value[0],
-                attn_mask=attn_mask, dropout_p=float(dropout_p or 0.0),
-                is_causal=is_causal, scale=scale)
+                "nn.fused_attention_gqa",
+                query,
+                repeated_key[0],
+                repeated_value[0],
+                attn_mask=attn_mask,
+                dropout_p=float(dropout_p or 0.0),
+                is_causal=is_causal,
+                scale=scale,
+            )
             if fused is not None:
                 return fused
-    if enable_gqa and (int(key.shape[-3]) != int(query.shape[-3])
-                       or int(value.shape[-3]) != int(query.shape[-3])):
+    if enable_gqa and (
+        int(key.shape[-3]) != int(query.shape[-3]) or int(value.shape[-3]) != int(query.shape[-3])
+    ):
         fused = try_dispatch(
-            "nn.fused_attention_gqa", query, key, value,
-            attn_mask=attn_mask, dropout_p=float(dropout_p or 0.0),
-            is_causal=is_causal, scale=scale)
+            "nn.fused_attention_gqa",
+            query,
+            key,
+            value,
+            attn_mask=attn_mask,
+            dropout_p=float(dropout_p or 0.0),
+            is_causal=is_causal,
+            scale=scale,
+        )
         if fused is not None:
             return fused
         key = _expand_heads(query, key, "key")
         value = _expand_heads(query, value, "value")
     query_dtype = _jittor_dtype_name(query.dtype)
-    if _jittor_dtype_name(key.dtype) != query_dtype or _jittor_dtype_name(value.dtype) != query_dtype:
+    if (
+        _jittor_dtype_name(key.dtype) != query_dtype
+        or _jittor_dtype_name(value.dtype) != query_dtype
+    ):
         raise RuntimeError("query, key and value must have the same dtype")
     probability = float(dropout_p or 0.0)
     if probability < 0.0 or probability > 1.0:
         raise ValueError("dropout probability must be between 0 and 1")
     if attn_mask is not None:
         mask_dtype = _jittor_dtype_name(attn_mask.dtype)
-        if _jittor_dtype_name(mask_dtype) != "bool" and "float" not in _jittor_dtype_name(mask_dtype):
+        if _jittor_dtype_name(mask_dtype) != "bool" and "float" not in _jittor_dtype_name(
+            mask_dtype
+        ):
             raise AssertionError("only bool and floating attention masks are supported")
         allowed_mask_dtypes = {query_dtype}
         if _jittor_dtype_name(query_dtype) in {"bfloat16", "float16", "float64"}:
             allowed_mask_dtypes.add("float32")
-        if _jittor_dtype_name(mask_dtype) != "bool" and _jittor_dtype_name(mask_dtype) not in allowed_mask_dtypes:
+        if (
+            _jittor_dtype_name(mask_dtype) != "bool"
+            and _jittor_dtype_name(mask_dtype) not in allowed_mask_dtypes
+        ):
             raise RuntimeError("attention mask dtype must match query dtype or be float32")
     fast = try_dispatch(
-        "nn.scaled_dot_product_attention", query, key, value,
-        attn_mask=attn_mask, dropout_p=probability, is_causal=is_causal, scale=scale)
+        "nn.scaled_dot_product_attention",
+        query,
+        key,
+        value,
+        attn_mask=attn_mask,
+        dropout_p=probability,
+        is_causal=is_causal,
+        scale=scale,
+    )
     if fast is not None:
         return fast
     # A fused kernel never writes the [..., Lq, Lk] scores to memory; see
     # backends/cuda/kernels/nn/cudnn_attention_cuda.py. It declines what it
     # cannot run, and everything below is the path for that.
     fused = try_dispatch(
-        "nn.fused_attention", query, key, value,
-        attn_mask=attn_mask, dropout_p=probability, is_causal=is_causal, scale=scale)
+        "nn.fused_attention",
+        query,
+        key,
+        value,
+        attn_mask=attn_mask,
+        dropout_p=probability,
+        is_causal=is_causal,
+        scale=scale,
+    )
     if fused is not None:
         return fused
     query_length = int(query.shape[-2])
     scale_factor = 1.0 / math.sqrt(int(query.shape[-1])) if scale is None else scale
     if probability == 0.0 and _output_requires_grad(query, key, value):
         return _MemoryEfficientAttention.apply(
-            query, key, value, attn_mask, bool(is_causal), float(scale_factor))
+            query, key, value, attn_mask, bool(is_causal), float(scale_factor)
+        )
     block = _query_block(query, key, is_causal)
     if block is None:
-        return _composite(query, key, value, attn_mask, probability, is_causal,
-                          scale_factor, query_dtype)
+        return _composite(
+            query, key, value, attn_mask, probability, is_causal, scale_factor, query_dtype
+        )
     # Softmax is per query row, so blocks of rows are exact; each block's
     # scores are dead once its output is, and the executor runs the blocks in
     # the order they were built.
@@ -227,8 +281,18 @@ def scaled_dot_product_attention(
         mask = attn_mask
         if mask is not None and len(mask.shape) >= 2 and int(mask.shape[-2]) == query_length:
             mask = mask[..., start:stop, :]
-        outputs.append(_composite(query[..., start:stop, :], key, value, mask,
-                                  probability, False, scale_factor, query_dtype))
+        outputs.append(
+            _composite(
+                query[..., start:stop, :],
+                key,
+                value,
+                mask,
+                probability,
+                False,
+                scale_factor,
+                query_dtype,
+            )
+        )
     return jt.concat(outputs, dim=-2)
 
 
@@ -265,8 +329,7 @@ def _query_block(query, key, is_causal):
     return max(1, _SCORE_CHUNK_BYTES // per_query)
 
 
-def _composite(query, key, value, attn_mask, probability, is_causal, scale_factor,
-               query_dtype):
+def _composite(query, key, value, attn_mask, probability, is_causal, scale_factor, query_dtype):
     """Attention built from matmuls and a softmax, for calls without a backward."""
     query_length = int(query.shape[-2])
     source_length = int(key.shape[-2])
@@ -284,12 +347,8 @@ def _composite(query, key, value, attn_mask, probability, is_causal, scale_facto
     softmax_options = dict(log=False, zero_all_neg_inf=attn_mask is not None, dim=-1)
     fast_softmax = select_kernel("nn.softmax", scores, **softmax_options)
     zero_fully_masked = fast_softmax is not None and attn_mask is not None
-    skip_row_valid = fast_softmax is not None and (
-        is_causal or attn_mask is not None
-    )
-    negative = jt.array(float("-inf") if zero_fully_masked else -1e30).cast(
-        scores.dtype
-    )
+    skip_row_valid = fast_softmax is not None and (is_causal or attn_mask is not None)
+    negative = jt.array(float("-inf") if zero_fully_masked else -1e30).cast(scores.dtype)
     valid_positions = None
 
     if is_causal:
@@ -309,9 +368,7 @@ def _composite(query, key, value, attn_mask, probability, is_causal, scale_facto
         if _jittor_dtype_name(attn_mask.dtype) == "bool":
             if not skip_row_valid:
                 valid_positions = (
-                    attn_mask
-                    if valid_positions is None
-                    else valid_positions & attn_mask
+                    attn_mask if valid_positions is None else valid_positions & attn_mask
                 )
             scores = jt.ternary(
                 attn_mask,
@@ -329,11 +386,7 @@ def _composite(query, key, value, attn_mask, probability, is_causal, scale_facto
                 )
             scores = scores + attn_mask
 
-    row_valid = (
-        valid_positions.sum(-1, keepdims=True) > 0
-        if valid_positions is not None
-        else None
-    )
+    row_valid = valid_positions.sum(-1, keepdims=True) > 0 if valid_positions is not None else None
     if row_valid is not None:
         scores = jt.ternary(row_valid, scores, jt.zeros_like(scores))
     weights = (

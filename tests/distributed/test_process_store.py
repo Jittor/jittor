@@ -78,6 +78,13 @@ store.set("arrived/{}".format(rank), b"1")
 store.wait(["arrived/0", "arrived/1"])
 assert int(store.get("arrivals")) == 2
 store.wait(["payload", "reply"])
+# The master owns the TCP server. Keep it alive until rank 1 has received
+# the reply to its last request. arrive() publishes the marker only after its
+# own reply is flushed, unlike set(), so this also checks that ordering.
+if rank == 0:
+    store.wait(["client_done"])
+else:
+    store.arrive("client_done")
 print("DONE", rank, kind, flush=True)
 """
 

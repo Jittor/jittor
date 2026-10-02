@@ -456,6 +456,19 @@ def _index_select(input, dim, index, *, out=None):
     return result
 
 
+def _byte_tensor_constructor_data(data, *, nested=False):
+    """Match torch.ByteTensor for bytes nested in sequence inputs."""
+    if isinstance(data, bytes):
+        if not nested:
+            raise TypeError("new(): invalid data type 'bytes'")
+        return list(data)
+    if isinstance(data, bytearray):
+        return list(data)
+    if isinstance(data, (list, tuple)):
+        return [_byte_tensor_constructor_data(item, nested=True) for item in data]
+    return data
+
+
 class _TypedTensorMeta(type):
     def __instancecheck__(cls, obj):
         return isinstance(obj, compatibility_owner(jt).Var) and _jittor_dtype_name(obj.dtype) == cls._jdtype
@@ -465,7 +478,10 @@ class _TypedTensorMeta(type):
             if tensor_input:
                 v = args[0]
             elif len(args) == 1 and not isinstance(args[0], int):
-                v = jt.array(args[0], dtype=cls._jdtype)
+                data = args[0]
+                if cls._jdtype == "uint8":
+                    data = _byte_tensor_constructor_data(data)
+                v = jt.array(data, dtype=cls._jdtype)
             elif len(args) == 0:
                 v = jt.zeros((0,), dtype=cls._jdtype)
             else:
@@ -774,9 +790,17 @@ def cat(tensors, dim=0, out=None, axis=None):
     tensors = [t for t in tensors if t is not None]
     nonempty = [t for t in tensors if t.numel() > 0]
     if len(nonempty) == 0:
-        return tensors[0]
+        out_var = tensors[0]
+        if out is not None:
+            out.copy_(out_var)
+            return out
+        return out_var
     if len(nonempty) == 1:
-        return nonempty[0]
+        out_var = nonempty[0]
+        if out is not None:
+            out.copy_(out_var)
+            return out
+        return out_var
     # torch requires all tensors to share ndim. jittor has no 0-d scalars, so
     # a torch-scalar `s` (0-d) becomes a [1] Var and `s.unsqueeze(0)` yields
     # [1,1] instead of torch's [1] -- mixing 2-D and 1-D entries that torch
@@ -800,6 +824,9 @@ def cat(tensors, dim=0, out=None, axis=None):
         d = in_dtypes.pop()
         if _jittor_dtype_name(out_var.dtype) != d:
             out_var = out_var.cast(d)
+    if out is not None:
+        out.copy_(out_var)
+        return out
     return out_var
 
 

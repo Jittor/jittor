@@ -135,5 +135,42 @@ def test_manual_probes_are_opt_in_by_variable_not_by_selection_shape():
         "ordering is why test_notebooks.py was never actually deselected")
 
 
+def test_execution_snapshot_obeys_native_only_collection_ownership(tmp_path, monkeypatch):
+    """Ignoring the other mode must not hide an uncollected file in this mode."""
+    import importlib.util
+    from types import SimpleNamespace
+
+    spec = importlib.util.spec_from_file_location(
+        "_isolated_pytest_policy", TEST_ROOT / "_helpers/pytest_policy.py")
+    policy = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(policy)
+    monkeypatch.setattr(policy, "TEST_ROOT", tmp_path / "tests")
+    monkeypatch.setattr(policy, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(policy, "_PYTEST_ROOT", tmp_path)
+    native = policy.NATIVE_MODE_PATHS[0]
+    ordinary = "tests/structure/test_uncollected.py"
+    for relative in (native, ordinary):
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("def test_present(): pass\n", encoding="utf-8")
+    config = SimpleNamespace(
+        args=[str(tmp_path / "tests/structure")],
+        invocation_params=SimpleNamespace(dir=tmp_path),
+        option=SimpleNamespace(ignore=[]))
+    for torch_mode in (True, False):
+        monkeypatch.setattr(policy, "_torch_mode_is_active", lambda: torch_mode)
+        policy._SELECTED_FILES.clear()
+        policy._COLLECTED_FILES.clear()
+        policy._snapshot_selected_files(config)
+        expected = {ordinary} if torch_mode else {native, ordinary}
+        assert policy._SELECTED_FILES == expected
+        assert set(policy._files_that_collected_nothing()) == expected
+        assert policy.pytest_ignore_collect(tmp_path / native, config) is (
+            True if torch_mode else None)
+        policy._COLLECTED_FILES.add(ordinary)
+        assert set(policy._files_that_collected_nothing()) == (
+            set() if torch_mode else {native})
+
+
 if __name__ == "__main__":
     print(os.environ.get("JITTOR_TORCH_SHIM"))

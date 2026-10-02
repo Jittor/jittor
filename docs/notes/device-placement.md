@@ -172,4 +172,4 @@ a = jt.ones(3).cuda(1); b = jt.ones(3).cuda(2)   # 两个都没同步
   架构的卡未做处理。
 - **显存换出**（`save_mem`）仍假定 0 号卡。
 - **非 CUDA 后端**：设备放置与后端选择是两个维度，见
-  [多后端设计](../../refactor-wip/architecture/multi-backend-design.md)。
+  [多后端设计](https://github.com/Jittor/jittor/blob/2.0-refactor/refactor-wip/architecture/multi-backend-design.md)。

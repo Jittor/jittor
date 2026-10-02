@@ -1,9 +1,9 @@
 // ***************************************************************
 // Copyright (c) 2025 Jittor.
-// All Rights Reserved. 
+// All Rights Reserved.
 // Maintainers:
-//     Jiapeng Zhang <zjp24@mails.tsinghua.edu.cn>. 
-// 
+//     Jiapeng Zhang <zjp24@mails.tsinghua.edu.cn>.
+//
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -82,6 +82,10 @@ nothing (which used to be a confusing compile error inside generated code).
 
     EXTERN_LIB HcclRootInfo root_info;
     EXTERN_LIB uint32_t hccl_device_id;
+
+    // Query the live WORLD communicator without initializing it.
+    // @pyjt(hccl_is_initialized)
+    bool hccl_is_initialized();
 
     // Group 0 is WORLD; later ids own independent HCCL communicators.
     // @pyjt(hccl_create_process_group)

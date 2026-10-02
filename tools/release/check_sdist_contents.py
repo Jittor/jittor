@@ -17,7 +17,6 @@ REQUIRED_SOURCE_PATHS = (
     "src/codegen/op_compiler.cc",
     "docs/conf.py",
     "docs/index.md",
-    "docs/locales/zh_CN/LC_MESSAGES/index.po",
     "examples/README.md",
     "examples/gan/simple_cgan.py",
     "examples/notebooks/basics.md",
@@ -66,6 +65,7 @@ FORBIDDEN_EXACT_SOURCE_PATHS = frozenset(
         "README.cn",
         "README.cn.md",
         "python/jittor/attention.py",
+        "python/jittor/compat",
         "python/jittor/depthwise_conv.py",
         "python/jittor/extern/llvm/jt_alignment_from_assumptions.cc",
         "python/jittor/misc.py",
@@ -137,6 +137,9 @@ def _expected_source_paths(repo_root):
         item
         for item in result.stdout.decode("utf-8").split("\0")
         if item
+        # This tracked link is a development-only alias to the separate
+        # compatibility distribution, never a core sdist member.
+        and item != "python/jittor/compat"
         and ((repo_root / item).exists() or (repo_root / item).is_symlink())
         and _generated_cache_reason(item) is None
         and not _is_egg_info_path(item)

@@ -17,7 +17,7 @@ native fused FlashAttention path, and produce a video?
 
 The upstream integration is a diffusers `ModularPipeline`
 (`MiniMaxH3Blocks`), so this is a downstream-library adaptation and follows
-[`agent/skills/downstream-library-adaptation`](../../agent/skills/downstream-library-adaptation/SKILL.md):
+[`agent/skills/downstream-library-adaptation`](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/downstream-library-adaptation/SKILL.md):
 the model is consumed unmodified, and every breakpoint is routed to jittor core,
 `jittor.compat.torch`, or the shim.
 

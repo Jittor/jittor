@@ -11,7 +11,7 @@
 
 为 13 个下游仓库各写了一份"在 jittor shim 上跑 + 与原生 torch 对比"的 runbook
 （`agent/skills/<lib>-torch-compat/`），并把**模板与四轴验收协议**独立成
-[`torch-compat-repo-runbook`](../../agent/skills/torch-compat-repo-runbook/SKILL.md)。
+[`torch-compat-repo-runbook`](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/torch-compat-repo-runbook/SKILL.md)。
 runbook 不是文档草稿：每条都跑过，结果写回各自的 `## 实测（2026-09-19）` 一节。
 
 四轴 = **支持清单 / 精度 / 显存 / 速度**。执行工具

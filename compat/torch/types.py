@@ -183,6 +183,10 @@ def _dtype_to_str(d, *, require_compute=True):
     """
     if d is None:
         return None
+    # Python int in a dtype argument means torch.int64, not native int32.
+    # Resolve before storage construction, including empty Python lists.
+    if d is int:
+        return "int64"
     if isinstance(d, dtype):
         return d._jittor_compute_name if require_compute else d.name
     if isinstance(d, str):

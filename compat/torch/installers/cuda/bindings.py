@@ -120,6 +120,7 @@ from .api import (
     swallowed,
 )
 from ...context import InstallContext, registry_for
+from .npu import install as _install_npu
 
 
 def _install_cuda(g, registry=None):
@@ -513,3 +514,4 @@ def install(ctx):
     _install_version(g, ctx.registry)
     _install_accelerator(g, ctx.registry)
     _register_cuda_fidelity(ctx)
+    _install_npu(ctx)

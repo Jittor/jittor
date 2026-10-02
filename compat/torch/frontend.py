@@ -3,13 +3,14 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 from functools import update_wrapper
 from types import MethodType
+from typing import Any, Callable, Dict, Optional
 
 #: Resolved on first use, then reused. These two helpers sit on the per-op path
 #: (`torch.cat` alone re-imported them 91 times, ~110 us of its 340 us), and a
 #: function-local `import` pays the import machinery on every call. The import
 #: stays lazy so this module is still importable before the install context
 #: exists.
-_get_install_context = None
+_get_install_context: Optional[Callable[..., Any]] = None
 
 #: The two accumulation tiers, as the state object spells them.
 _TIERS = {"highest": 0, "high": 1, "medium": 2}
@@ -20,7 +21,7 @@ _TIERS = {"highest": 0, "high": 1, "medium": 2}
 #: determinism scope) and a cached tuple would answer with a stale policy.
 #: The type is created by the installer, so a reinstallation makes a new type and
 #: a new entry rather than reusing an old one.
-_precision_state = {}
+_precision_state: Dict[type, Any] = {}
 
 
 def _frontend_precision_policy(cls):
@@ -30,7 +31,9 @@ def _frontend_precision_policy(cls):
     if state is None:
         get_install_context = _get_install_context
         if get_install_context is None:
-            from .context import get_install_context as get_install_context
+            from . import context
+
+            get_install_context = context.get_install_context
             _get_install_context = get_install_context
         state = get_install_context(cls._frontend_backend).state.get("cuda_runtime")
         if state is None:
@@ -178,7 +181,9 @@ class tensor_frontend:
         return False
 
     def _restore(self):
-        core = self._backend.core
+        backend = self._backend
+        assert backend is not None
+        core = backend.core
         bits = self._policy_bits
         if bits is not None:
             core._set_autograd_policy(bool(bits & 1), bool(bits & 2))

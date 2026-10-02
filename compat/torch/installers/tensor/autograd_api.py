@@ -5,6 +5,7 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from jittor._runtime import step_capture as _step_capture
 _owner = import_module(__package__)
 _NativeVar = _owner.jt.Var
+from jittor._core.hooks import _RemovableHandle
 
 def _register_leaf(v):
     _owner._torch_register_leaf(v)
@@ -115,6 +116,71 @@ def _optimizer_maybe_has_fsdp_params(opt):
     return False
 
 
+def _register_post_accumulate_grad_hook(self, hook):
+    if not callable(hook):
+        raise TypeError("hook must be callable")
+    if not self.is_leaf:
+        raise RuntimeError("post accumulate grad hooks cannot be registered on non-leaf tensors")
+    if not self.requires_grad:
+        raise RuntimeError("cannot register a hook on a tensor that doesn't require gradient")
+    hooks = getattr(self, "_torch_post_accumulate_grad_hooks", None)
+    if hooks is None:
+        hooks = {}
+        object.__setattr__(self, "_torch_post_accumulate_grad_hooks", hooks)
+    key = max(hooks, default=-1) + 1
+    hooks[key] = hook
+    return _RemovableHandle(lambda: hooks.pop(key, None))
+
+
+def _run_post_accumulate_grad_hooks(parameter):
+    hooks = getattr(parameter, "_torch_post_accumulate_grad_hooks", None)
+    if not hooks:
+        return
+    for hook in list(hooks.values()):
+        result = hook(parameter)
+        if result is not None:
+            raise RuntimeError("Tensor post accumulate grad hooks should return None")
+
+
+def _collect_data_rebind_leaves(leaf_map):
+    """Add historical leaves kept by Tensor.data replacement.
+
+    The returned owner map lets backward publish a historical leaf's gradient
+    on the current Parameter object. Snapshots are also returned so a retained
+    graph keeps precisely the leaves that belong to that graph; storage swaps
+    performed by post-accumulate hooks must not grow the retained set.
+    """
+    historical_owner_by_id = {}
+    history_snapshots = {}
+    for owner in list(leaf_map.values()):
+        histories = getattr(owner, "_torch_data_rebind_leaves", None)
+        if not histories:
+            continue
+        snapshot = [leaf for leaf in histories
+                    if isinstance(leaf, _NativeVar)
+                    and leaf.requires_grad and leaf.is_backward_leaf]
+        if not snapshot:
+            continue
+        history_snapshots[id(owner)] = (owner, snapshot)
+        for leaf in snapshot:
+            historical_owner_by_id[id(leaf)] = owner
+            leaf_map.setdefault(id(leaf), leaf)
+    return historical_owner_by_id, history_snapshots
+
+
+def _restore_or_clear_data_rebind_leaves(history_snapshots, retain_graph, owners):
+    for owner in owners:
+        saved = history_snapshots.get(id(owner))
+        if saved is None and not hasattr(owner, "_torch_data_rebind_leaves"):
+            continue
+        snapshot = saved[1] if saved is not None else ()
+        object.__setattr__(
+            owner,
+            "_torch_data_rebind_leaves",
+            list(snapshot) if retain_graph else [],
+        )
+
+
 def _backward(self, gradient=None, retain_graph=None, create_graph=False, **kw):
     # torch's signature is (gradient=None, retain_graph=None,
     # create_graph=False, inputs=None) and retain_graph defaults to
@@ -214,6 +280,14 @@ def _backward(self, gradient=None, retain_graph=None, create_graph=False, **kw):
             if isinstance(v, _NativeVar) and v.requires_grad:
                 leaf_map.setdefault(id(v), v)
                 retained_ids.add(id(v))
+    # ZeRO-3 replaces the optimizer's public parameter groups with partition
+    # tensors. Preserve current Parameter owners that carry historical
+    # forward leaves before the optimizer-authoritative registry prune below.
+    data_rebind_owners = []
+    for v in list(tensor_state.leaf_params.values()):
+        if (isinstance(v, _NativeVar) and v.requires_grad
+                and getattr(v, "_torch_data_rebind_leaves", None)):
+            data_rebind_owners.append(v)
     if opts:
         # Optimizer parameter groups supersede stale Parameter objects after
         # parameter replacement, but unrelated input leaves must still receive
@@ -230,6 +304,10 @@ def _backward(self, gradient=None, retain_graph=None, create_graph=False, **kw):
         for v in list(tensor_state.leaf_params.values()):
             if isinstance(v, _NativeVar) and v.requires_grad and v.is_backward_leaf:
                 leaf_map.setdefault(id(v), v)
+    for v in data_rebind_owners:
+        if v.is_backward_leaf:
+            leaf_map.setdefault(id(v), v)
+    historical_owner_by_id, history_snapshots = _collect_data_rebind_leaves(leaf_map)
     if not leaf_map:
         return None
     leaves = list(leaf_map.values())
@@ -238,31 +316,39 @@ def _backward(self, gradient=None, retain_graph=None, create_graph=False, **kw):
     # core entry point that preserves missing gradients explicitly.
     grads = _owner.jt.core.grad_optional(self, leaves, retain_graph)
     grad_by_id = {}
+    target_by_id = {id(p): p for p in leaves
+                    if id(p) not in historical_owner_by_id}
     for p, gr in zip(leaves, grads):
+        owner = historical_owner_by_id.get(id(p), p)
+        target_id = id(owner)
+        target_by_id[target_id] = owner
         if gr is None:
-            if (id(p) not in opt_ids and id(p) not in retained_ids
-                    and not tensor_state.leaf_params.is_weak(id(p))):
-                tensor_state.leaf_params.pop(id(p), None)
             continue
-        # torch's AccumulateGrad gives a leaf a grad of the leaf's own dtype.
-        # jt.grad does not: under autocast a float32 weight read by a
-        # float16 op comes back with a float16 grad, and AdamW's
-        # (1 - beta2) * g * g then underflows in float16 -- an lr / eps step,
-        # NaN on the next forward (test_torch_amp_training_loop.py).
-        if gr.dtype != p.dtype:
-            gr = gr.cast(p.dtype)
-        grad_by_id[id(p)] = gr
-        if id(p) not in opt_ids:
+        # AccumulateGrad publishes the owner's dtype, including historical
+        # leaves rebound by ZeRO-3. Keep the upstream autocast correction
+        # before merging contributions into the current owner.
+        if gr.dtype != owner.dtype:
+            gr = gr.cast(owner.dtype)
+        previous = grad_by_id.get(target_id)
+        grad_by_id[target_id] = gr if previous is None else previous + gr
+    # Only current leaves belong to the global registry. Delay stale cleanup
+    # until historical contributions have been merged into their owner.
+    for target_id, p in target_by_id.items():
+        if target_id not in grad_by_id:
+            if (target_id not in opt_ids and target_id not in retained_ids
+                    and not tensor_state.leaf_params.is_weak(target_id)):
+                tensor_state.leaf_params.pop(target_id, None)
+            continue
+        gr = grad_by_id[target_id]
+        if target_id not in opt_ids:
             # non-optimizer leaf (retain_grad screenspace etc.): accumulate
             # onto .grad like torch (zeroed externally / per render).
             #
             # In place, the way torch's AccumulateGrad does it: when .grad
             # already exists, torch adds into that very tensor. Rebuilding it
-            # with ``prev + gr`` is numerically identical but hands back a new
-            # object, and a caller that already holds the previous ``.grad``
-            # (a training loop keeping ``[p.grad for p in model.parameters()]``,
-            # for instance) then keeps a full gradient set alive per step. That
-            # is a memory regression against torch, not a rounding detail.
+            # with prev + gr is numerically identical but hands back a new
+            # object, and a caller that already holds the previous .grad
+            # then keeps a full gradient set alive per step.
             prev = getattr(p, "_torch_grad", None)
             if prev is None:
                 object.__setattr__(p, "_torch_grad", gr)
@@ -276,18 +362,31 @@ def _backward(self, gradient=None, retain_graph=None, create_graph=False, **kw):
                 and not _fsdp2_backward.optimizer_has_non_fsdp_params(o):
             continue
         _fill_opt_grads(o, grad_by_id, filled_param_ids)
-    # DDP's synchronisation point, deliberately here rather than next to
-    # grad_optional above: it has to average the *accumulated* gradient.
-    # `no_sync()` exists so several micro-batches accumulate locally and
-    # only the closing backward pays for one collective -- averaging each
-    # backward's own contribution instead would leave everything gathered
-    # under no_sync() unsynchronised for good. By this line `p._torch_grad`
-    # is the accumulated Var and, for optimizer parameters, is the very Var
-    # in `pg["grads"]`, so one in-place assign updates `p.grad` and what
-    # step() consumes together. Still before backward() returns, which is
-    # what torch's autograd hooks guarantee: clipping and norm logging in
-    # between must see the synchronised gradient.
-    _owner._ddp_all_reduce_grads(leaves)
+    # PyTorch runs post-accumulate hooks after .grad is published for a leaf.
+    # DeepSpeed ZeRO uses this point to partition/reduce and may clear p.grad.
+    current_leaves = list(target_by_id.values())
+    try:
+        for p in current_leaves:
+            if id(p) in grad_by_id:
+                _run_post_accumulate_grad_hooks(p)
+        # DDP's synchronisation point, deliberately here rather than next to
+        # grad_optional above: it has to average the *accumulated* gradient.
+        # `no_sync()` exists so several micro-batches accumulate locally and
+        # only the closing backward pays for one collective -- averaging each
+        # backward's own contribution instead would leave everything gathered
+        # under no_sync() unsynchronised for good. By this line `p._torch_grad`
+        # is the accumulated Var and, for optimizer parameters, is the very Var
+        # in `pg["grads"]`, so one in-place assign updates `p.grad` and what
+        # step() consumes together. Still before backward() returns, which is
+        # what torch's autograd hooks guarantee: clipping and norm logging in
+        # between must see the synchronised gradient.
+        _owner._ddp_all_reduce_grads(current_leaves)
+    finally:
+        # Hooks such as ZeRO-3 may rebind parameter.data again. Drop those
+        # transient holders after a normal backward; for retain_graph preserve
+        # only the snapshot belonging to the retained forward graph.
+        _restore_or_clear_data_rebind_leaves(
+            history_snapshots, retain_graph, current_leaves)
     # Independent retain_grad lasts as long as its weakly indexed holder.
     # Preserve bounded cleanup only for legacy non-weak-referenceable Vars.
     if retained:

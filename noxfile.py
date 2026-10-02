@@ -28,8 +28,12 @@ try:
         torch_arguments as gate_torch_arguments,
     )
     from _helpers.tiers import (  # noqa: E402
-        apply_worker_thread_budget, budget_report, effective_cpu_count,
-        runtime_workers, THREAD_POOL_ENV_NAMES)
+        apply_worker_thread_budget,
+        budget_report,
+        effective_cpu_count,
+        runtime_workers,
+        THREAD_POOL_ENV_NAMES,
+    )
     from _helpers.process_modes import NATIVE_MODE_PATHS, is_torch_mode_path  # noqa: E402
 finally:
     sys.path.remove(str(REPO_ROOT / "tests"))
@@ -211,6 +215,13 @@ CPU_TORCH_ORACLE_TESTS = (
     "tests/nn/test_batchnorm.py",
     "tests/nn/test_loss.py",
     "tests/nn/test_relu.py",
+    "tests/nn/test_state_dict_dtypes.py::TestStateDictDtypes::"
+    "test_torch_conversion_keeps_every_dtype",
+    "tests/nn/test_state_dict_dtypes.py::TestStateDictDtypes::test_values_survive_the_conversion",
+    "tests/nn/test_state_dict_dtypes.py::TestStateDictDtypes::"
+    "test_a_value_that_float32_cannot_hold",
+    "tests/serialization/test_native_serialization_ownership.py::"
+    "test_torch_archive_save_load_roundtrip",
     "tests/models/test_network_training_parity.py",
 )
 CUDA_TESTS = (
@@ -511,6 +522,15 @@ def _session_env(session, backend):
     thread_count = str(_physical_cores_in_affinity(cpu_ids))
     env = _isolated_outer_environment()
     env.update({name: str(path) for name, path in paths.items()})
+    # A session has its own HOME, so Git cannot see checkout's global
+    # safe.directory entry. Scope the exception to this exact source tree.
+    env.update(
+        {
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "safe.directory",
+            "GIT_CONFIG_VALUE_0": str(REPO_ROOT),
+        }
+    )
     env.update(
         {
             "BLIS_NUM_THREADS": thread_count,
@@ -574,8 +594,7 @@ def _mode_env(env, args):
     native ones under the shim -- and a session that listed only Torch-mode
     paths depended on that inference to work at all.
     """
-    paths = [str(item).split("::", 1)[0] for item in args
-             if not str(item).startswith("-")]
+    paths = [str(item).split("::", 1)[0] for item in args if not str(item).startswith("-")]
     mode = "1" if any(is_torch_mode_path(path) for path in paths) else "0"
     if env.get("JITTOR_TORCH_SHIM") == mode:
         return env
@@ -687,30 +706,42 @@ def _enforce_smoke_budget(session, workers):
     session.log(
         "smoke budget: predicted %.0fs / %.0fs (headroom %.0fs; %d actual/%d "
         "configured workers; %d CPU quota; %d threads/worker)"
-        % (report["predicted_seconds"], report["budget_seconds"],
-           report["headroom_seconds"], report["workers"],
-           report["configured_workers"], report["effective_cpus"],
-           report["threads_per_worker"]))
+        % (
+            report["predicted_seconds"],
+            report["budget_seconds"],
+            report["headroom_seconds"],
+            report["workers"],
+            report["configured_workers"],
+            report["effective_cpus"],
+            report["threads_per_worker"],
+        )
+    )
     if report["headroom_seconds"] < 0:
         session.error(
             "smoke budget exceeded: predicted %.0fs / %.0fs with %d workers "
             "(%d configured, %d CPU quota, %d threads/worker); run the full "
             "tier or provide a runner with more CPU quota"
-            % (report["predicted_seconds"], report["budget_seconds"],
-               report["workers"], report["configured_workers"],
-               report["effective_cpus"], report["threads_per_worker"]))
+            % (
+                report["predicted_seconds"],
+                report["budget_seconds"],
+                report["workers"],
+                report["configured_workers"],
+                report["effective_cpus"],
+                report["threads_per_worker"],
+            )
+        )
     return report
 
 
 def _run_pytest(session, defaults, env, runner=None):
     if session.posargs:
-        _run_pytest_once(session, tuple(session.posargs),
-                         _mode_env(env, session.posargs), runner, timeout=600)
+        _run_pytest_once(
+            session, tuple(session.posargs), _mode_env(env, session.posargs), runner, timeout=600
+        )
         return
     for group in _by_process_mode(defaults):
         if group:
-            _run_pytest_once(session, tuple(group), _mode_env(env, group),
-                             runner, timeout=600)
+            _run_pytest_once(session, tuple(group), _mode_env(env, group), runner, timeout=600)
 
 
 _COMPAT_SOURCE_INSTALLS = set()
@@ -727,8 +758,15 @@ def _install_compat_source(session, env, runner=None):
     if key in _COMPAT_SOURCE_INSTALLS:
         return
     session.run(
-        python, "-m", "pip", "install", "--no-deps", "--no-build-isolation",
-        "-e", str(source / "compat"), external=runner is not None,
+        python,
+        "-m",
+        "pip",
+        "install",
+        "--no-deps",
+        "--no-build-isolation",
+        "-e",
+        str(source / "compat"),
+        external=runner is not None,
     )
     _COMPAT_SOURCE_INSTALLS.add(key)
 
@@ -890,6 +928,9 @@ def _write_asv_config(root, results_dir, html_dir):
             "html_dir": str(html_dir),
         }
     )
+    # A fork checkout can be detached and lack upstream's named branches.
+    # HEAD is the exact checked-out revision that this invocation measures.
+    config["branches"] = ["HEAD"]
     config_path = root / "asv-ci.conf.json"
     config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return config_path
@@ -1031,7 +1072,10 @@ def prefetch(session):
     session.install("tqdm")
     NOX_JITTOR_ASSETS.mkdir(parents=True, exist_ok=True)
     session.run(
-        "python", "-c", _PREFETCH_SCRIPT, str(NOX_JITTOR_ASSETS),
+        "python",
+        "-c",
+        _PREFETCH_SCRIPT,
+        str(NOX_JITTOR_ASSETS),
         env={"PYTHONPATH": str(REPO_ROOT / "python")},
     )
 
@@ -1058,8 +1102,9 @@ def imports(session):
     rule is enforced by `tests/structure/test_import_layering.py` in every
     gate as well as here, instead of only where a linter got installed.
     """
-    session.run("python", str(REPO_ROOT / "tools" / "lint" / "check_import_layering.py"),
-                external=True)
+    session.run(
+        "python", str(REPO_ROOT / "tools" / "lint" / "check_import_layering.py"), external=True
+    )
 
 
 @nox.session(python="3.11")
@@ -1099,17 +1144,29 @@ def structure(session):
         JUPYTEXT,
         NBFORMAT,
         "numpy==1.26.4",
+        "scipy==1.13.1",
         "pillow==11.0.0",
         "tqdm==4.67.1",
     )
     session.run("bash", "tools/check_repo_layout.sh", external=True, env=env)
+    # A regular core wheel must own the top-level jittor package before the
+    # compatibility editable install contributes its namespace portion.
+    session.install("--no-deps", "--no-build-isolation", str(REPO_ROOT))
     _install_compat_source(session, env)
+    session.install("--no-deps", "--no-build-isolation", "-e", str(REPO_ROOT / "adapters"))
     test_paths = tuple(session.posargs) or STRUCTURE_TESTS
     if not session.posargs:
+        # Portable adapter fixtures install fake modules: execute them outside
+        # the Torch-mode structure process. Independent adapter distributions
+        # may be absent from a core-only checkout.
+        offline = REPO_ROOT / "adapters/tests/test_deepspeed_offline.py"
+        if offline.is_file():
+            session.run("python", str(offline), "-v", env=env)
         native_env = env.copy()
         native_env["JITTOR_TORCH_SHIM"] = "0"
-        session.run("python", "-m", "pytest", "-v", "--timeout=600",
-                    *NATIVE_MODE_PATHS, env=native_env)
+        session.run(
+            "python", "-m", "pytest", "-v", "--timeout=600", *NATIVE_MODE_PATHS, env=native_env
+        )
     env = _mode_env(env, test_paths)
     session.run(
         "python",
@@ -1124,15 +1181,28 @@ def structure(session):
 
 def _build_compat_distribution(session, source, dist, env):
     session.run(
-        "python", "-m", "build", "--no-isolation", "--sdist", "--wheel",
-        "--outdir", str(dist), str(source / "compat"), env=env,
+        "python",
+        "-m",
+        "build",
+        "--no-isolation",
+        "--sdist",
+        "--wheel",
+        "--outdir",
+        str(dist),
+        str(source / "compat"),
+        env=env,
     )
     wheels = sorted(dist.glob("*.whl"))
     if len(wheels) != 1:
         session.error("expected exactly one compatibility wheel, found %d" % len(wheels))
     session.run(
-        "python", str(REPO_ROOT / "tools/release/check_wheel_contents.py"),
-        "audit", str(wheels[0]), "--profile", "compat", env=env,
+        "python",
+        str(REPO_ROOT / "tools/release/check_wheel_contents.py"),
+        "audit",
+        str(wheels[0]),
+        "--profile",
+        "compat",
+        env=env,
     )
     return wheels[0]
 
@@ -1180,7 +1250,7 @@ def packaging(session):
         session.error("expected exactly one sdist, found %d" % len(sdists))
     session.run(
         "python",
-        "tools/release/check_sdist_contents.py",
+        str(REPO_ROOT / "tools/release/check_sdist_contents.py"),
         str(sdists[0]),
         env=env,
     )
@@ -1235,15 +1305,26 @@ def packaging(session):
     # jittor/ members in one transaction rather than replacing that directory.
     compat_wheel = _build_compat_distribution(session, source, root / "compat-dist", env)
     session.run(
-        "python", "-m", "pip", "install", "--no-deps", "--upgrade",
-        "--target", str(wheel_install), str(wheels[0]), str(compat_wheel), env=env,
+        "python",
+        "-m",
+        "pip",
+        "install",
+        "--no-deps",
+        "--upgrade",
+        "--target",
+        str(wheel_install),
+        str(wheels[0]),
+        str(compat_wheel),
+        env=env,
     )
     with session.chdir(root):
         session.run(
-            "python", "-c",
+            "python",
+            "-c",
             "import torch, jittor; assert torch is not jittor; "
             "x = torch.tensor([2.0], requires_grad=True); (x*x).sum().backward(); "
-            "assert x.grad.item() == 4.0", env=selftest_env,
+            "assert x.grad.item() == 4.0",
+            env=selftest_env,
         )
 
 
@@ -1345,6 +1426,20 @@ def _record_asv(session, root, env, asv_command, default_machine, external=False
             env=env,
             external=external,
         )
+        if not external and default_machine == "jittor-ci-cpu":
+            # The first timed ASV case is matmul. A trivial tensor only warms
+            # jittor_core; matmul also builds oneDNN, which can exceed ASV's
+            # per-case timeout. Use the same cache, interpreter, and shape.
+            warm_env = dict(env)
+            warm_env["PYTHONPATH"] = str(REPO_ROOT / "python")
+            session.run(
+                "python",
+                "-c",
+                "import jittor as jt; "
+                "jt.matmul(jt.ones((8, 256, 256), dtype='float32'), "
+                "jt.ones((8, 256, 256), dtype='float32')).sync()",
+                env=warm_env,
+            )
         session.run(
             *(
                 tuple(asv_command)
@@ -1678,8 +1773,7 @@ def _cpu_gate_env(session):
     # error lands on the wrong test" report used to be answered by switching it
     # off somewhere (see 0.16). It is a lifetime bug, not a concurrency one, and
     # it is fixed where it lives; the gate does not pay for the workaround.
-    env["use_parallel_op_compiler"] = os.environ.get(
-        "use_parallel_op_compiler", "16")
+    env["use_parallel_op_compiler"] = os.environ.get("use_parallel_op_compiler", "16")
     return env
 
 
@@ -1772,12 +1866,11 @@ def cpu(session):
     # there; on their own they take about the same and mean something.
     manual_env = env.copy()
     manual_env["JITTOR_TEST_MANUAL"] = "1"
-    _run_pytest_once(
-        session, gate_native_arguments() + ("-m", "manual"),
-        manual_env, timeout=1800)
+    _run_pytest_once(session, gate_native_arguments() + ("-m", "manual"), manual_env, timeout=1800)
     oracle_env = env.copy()
     if real_torch_site:
         oracle_env["REAL_TORCH_SITE"] = real_torch_site
+        oracle_env["JITTOR_REQUIRE_REAL_TORCH"] = "1"
     elif require_real_torch:
         session.error("independent PyTorch oracle is required but unavailable")
     _run_pytest(session, CPU_TORCH_ORACLE_TESTS, oracle_env)
@@ -1793,6 +1886,8 @@ def full(session):
 ECOSYSTEM_TESTS = (
     "compat/tests/torch/test_ecosystem_parity.py",
     "compat/tests/torch/test_ecosystem_speed.py",
+    # DeepSpeed is gated at L0; it does not claim the numerical/performance tier.
+    "compat/tests/torch/test_deepspeed_l0.py",
 )
 
 #: Speed ceiling for the nightly ecosystem gate: Jittor may take at most this
@@ -1852,7 +1947,8 @@ def ecosystem(session):
             "JITTOR_TEST_REQUIRE_EXECUTION": "1",
             "JITTOR_TORCH_SHIM": "1",
             "JITTOR_ECOSYSTEM_SPEED_RATIO": os.environ.get(
-                "JITTOR_ECOSYSTEM_SPEED_RATIO", ECOSYSTEM_SPEED_RATIO),
+                "JITTOR_ECOSYSTEM_SPEED_RATIO", ECOSYSTEM_SPEED_RATIO
+            ),
             # Without this the whole speed half skips itself -- "set
             # JITTOR_ECOSYSTEM_LARGE=1 to run the realistic-size measurement"
             # -- and a nightly speed gate that measures nothing is the same
@@ -1864,22 +1960,73 @@ def ecosystem(session):
             "TRANSFORMERS_OFFLINE": "1",
         }
     )
-    reference_site = os.environ.get(
-        "JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE", "").strip()
+    reference_site = os.environ.get("JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE", "").strip()
     if reference_site:
         env["JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE"] = reference_site
     # Both interpreters report which device they ran on, and the harness fails
     # if they disagree -- a CPU-versus-GPU comparison would be meaningless.
     env.setdefault("JITTOR_TEST_DEVICES", os.environ.get("JITTOR_TEST_DEVICES", "cpu"))
     session.run(
-        oracle, "-c",
+        oracle,
+        "-c",
         "import torch, sys; "
         "assert not hasattr(torch, '_torch_compat_install_context'), "
         "'REAL_TORCH_PYTHON resolves to the Jittor shim, not an independent build'; "
         "print('oracle torch', torch.__version__)",
-        external=True, env=env,
+        external=True,
+        env=env,
     )
     _run_pytest_once(session, ECOSYSTEM_TESTS, env, timeout=3600)
+
+
+@nox.session(python="3.11", venv_backend="venv")
+def deepspeed_l0(session):
+    """Required CPU DeepSpeed L0 gate, with one prebuilt wheel on both sides."""
+    _root, env = _session_env(session, "deepspeed-l0")
+    if os.environ.get("JITTOR_TEST_DEVICES", "cpu").strip().lower() != "cpu":
+        session.error(
+            "This nightly session is CPU-only; use the documented NPU pytest gate in an allocation"
+        )
+    oracle = os.environ.get("REAL_TORCH_PYTHON", "").strip()
+    wheel = os.environ.get("JITTOR_DEEPSPEED_WHEEL", "").strip()
+    if not oracle or not Path(oracle).is_file():
+        session.error("REAL_TORCH_PYTHON must be an independent binary PyTorch interpreter")
+    if not wheel or not Path(wheel).is_file():
+        session.error("JITTOR_DEEPSPEED_WHEEL must name the validated 0.17.6 wheel")
+    session.install(
+        PYTEST,
+        PYTEST_TIMEOUT,
+        SETUPTOOLS,
+        WHEEL,
+        SCIPY,
+        "pillow==11.0.0",
+        "-r",
+        str(REPO_ROOT / "requirements/deepspeed-l0.txt"),
+    )
+    session.install("--no-deps", "--no-build-isolation", str(REPO_ROOT / "adapters"))
+    # Build once in the oracle; never build an extension against the shim.
+    session.install("--no-deps", wheel)
+    env.update(
+        REAL_TORCH_PYTHON=oracle,
+        JITTOR_REQUIRE_REAL_TORCH="1",
+        JITTOR_REQUIRE_DEEPSPEED="1",
+        JITTOR_TEST_REQUIRE_EXECUTION="1",
+        TORCH_DEVICE_BACKEND_AUTOLOAD="0",
+        JITTOR_TORCH_SHIM="1",
+        HF_HUB_OFFLINE="1",
+        TRANSFORMERS_OFFLINE="1",
+        JT_BACKEND="cpu",
+        JITTOR_TEST_DEVICES="cpu",
+    )
+    session.run(
+        oracle,
+        "-c",
+        "import torch; assert not hasattr(torch, '_torch_compat_install_context'); "
+        "print('oracle', torch.__version__, torch.__file__)",
+        external=True,
+        env=dict(env, JITTOR_TORCH_SHIM="0"),
+    )
+    _run_pytest_once(session, ("compat/tests/torch/test_deepspeed_l0.py",), env, timeout=3600)
 
 
 @nox.session(python=False)
@@ -1896,9 +2043,7 @@ def optional(session):
         flash_root = Path(flash_source).expanduser().resolve()
         flash_api = flash_root / "csrc" / "flash_attn" / "flash_api.cpp"
         if not flash_api.is_file():
-            session.error(
-                "JITTOR_FLASH_ATTN_JITTOR_SRC is not an official flash-attn checkout"
-            )
+            session.error("JITTOR_FLASH_ATTN_JITTOR_SRC is not an official flash-attn checkout")
         flash_source = os.fspath(flash_root)
     env.update(
         {
@@ -1923,19 +2068,17 @@ def optional(session):
             or ""
         )
         requested_dtypes = (
-            os.environ.get("JITTOR_FLASH_ATTN_DTYPES")
-            or os.environ.get("FLASH_ATTN_DTYPES")
-            or ""
+            os.environ.get("JITTOR_FLASH_ATTN_DTYPES") or os.environ.get("FLASH_ATTN_DTYPES") or ""
         )
         if requested_head_dims.strip().lower() in {"all", "full", "*"}:
             native_env["JITTOR_FLASH_ATTN_HEAD_DIMS"] = "all"
         else:
             head_dims = ["32"] + [
-                item.strip() for item in requested_head_dims.replace(";", ",").split(",")
+                item.strip()
+                for item in requested_head_dims.replace(";", ",").split(",")
                 if item.strip()
             ]
-            native_env["JITTOR_FLASH_ATTN_HEAD_DIMS"] = ",".join(
-                dict.fromkeys(head_dims))
+            native_env["JITTOR_FLASH_ATTN_HEAD_DIMS"] = ",".join(dict.fromkeys(head_dims))
         if requested_dtypes.strip().lower() in {"all", "full", "*"}:
             native_env["JITTOR_FLASH_ATTN_DTYPES"] = "all"
         else:
@@ -1944,8 +2087,7 @@ def optional(session):
                 for item in requested_dtypes.replace(";", ",").split(",")
                 if item.strip()
             ]
-            native_env["JITTOR_FLASH_ATTN_DTYPES"] = ",".join(
-                dict.fromkeys(dtypes))
+            native_env["JITTOR_FLASH_ATTN_DTYPES"] = ",".join(dict.fromkeys(dtypes))
     packages = repr(OPTIONAL_COMPAT_PACKAGES)
     dependency_probe = (
         "import importlib.util; "
@@ -1959,9 +2101,9 @@ def optional(session):
     session.run(python, "-c", dependency_probe, external=True, env=env)
     if session.posargs:
         native_requested = flash_source and any(
-            "native_flash_attn" in arg for arg in session.posargs)
-        _run_pytest(
-            session, (), native_env if native_requested else env, runner=python)
+            "native_flash_attn" in arg for arg in session.posargs
+        )
+        _run_pytest(session, (), native_env if native_requested else env, runner=python)
         return
     _run_pytest(session, OPTIONAL_COMPAT_TESTS, env, runner=python)
     if flash_source:
@@ -1970,14 +2112,9 @@ def optional(session):
         native_tests: tuple = OPTIONAL_NATIVE_FLASH_TESTS
         dtype_spec = native_env["JITTOR_FLASH_ATTN_DTYPES"].lower()
         head_dim_spec = native_env["JITTOR_FLASH_ATTN_HEAD_DIMS"].lower()
-        configured_dtypes = {
-            item.strip() for item in dtype_spec.replace(";", ",").split(",")
-        }
-        configured_head_dims = {
-            item.strip() for item in head_dim_spec.replace(";", ",").split(",")
-        }
-        bf16_enabled = bool(
-            configured_dtypes & {"bf16", "bfloat16", "all", "full", "*"})
+        configured_dtypes = {item.strip() for item in dtype_spec.replace(";", ",").split(",")}
+        configured_head_dims = {item.strip() for item in head_dim_spec.replace(";", ",").split(",")}
+        bf16_enabled = bool(configured_dtypes & {"bf16", "bfloat16", "all", "full", "*"})
         if bf16_enabled:
             native_tests += OPTIONAL_NATIVE_FLASH_BF16_TESTS
         if bf16_enabled and configured_head_dims & {"64", "all", "full", "*"}:
@@ -2084,8 +2221,11 @@ def npu(session):
         "assert x.numpy().tolist() == [[19.0, 22.0], [43.0, 50.0]]"
     )
     _run_with_cann(session, python, ("-c", probe), env)
-    groups = ((tuple(session.posargs),) if session.posargs
-              else tuple(group for group in _by_process_mode(NPU_TESTS) if group))
+    groups = (
+        (tuple(session.posargs),)
+        if session.posargs
+        else tuple(group for group in _by_process_mode(NPU_TESTS) if group)
+    )
     for group in groups:
         _run_with_cann(
             session,
@@ -2166,9 +2306,7 @@ def nccl(session):
     if world_size < 2:
         session.error("NCCL session requires JITTOR_NCCL_WORLD_SIZE >= 2")
     if raw_devices and len(devices) < world_size:
-        session.error(
-            "NCCL session requires at least %d CUDA_VISIBLE_DEVICES" % world_size
-        )
+        session.error("NCCL session requires at least %d CUDA_VISIBLE_DEVICES" % world_size)
     if not devices:
         devices = [str(index) for index in range(world_size)]
     selected_devices = devices[:world_size]

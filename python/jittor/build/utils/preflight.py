@@ -237,10 +237,7 @@ def check_network(needed=True, host=None, timeout=5.0):
         return _ok("network", "not needed, every archive is already on disk")
     if host is None:
         from jittor_utils import manifest
-        try:
-            from urllib.parse import urlparse
-        except ImportError:
-            from urlparse import urlparse
+        from urllib.parse import urlparse
         host = urlparse(manifest.ASSET_BASE).hostname
     import socket
     try:

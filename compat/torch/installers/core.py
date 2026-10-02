@@ -397,8 +397,9 @@ def _manual_seed(s):
     g = ctx.jittor_module
     s = int(s)
     ctx.state["core_misc"]["seed"] = s
-    if hasattr(jt, "set_global_seed"):
-        jt.set_global_seed(s)
+    # torch.manual_seed sets the Torch RNG to the requested value in each
+    # process; it does not offset distributed ranks or reseed NumPy/Python.
+    jt.set_seed(s)
     return g
 
 

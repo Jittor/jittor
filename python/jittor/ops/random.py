@@ -152,6 +152,12 @@ def multinomial(weights: Var, num_samples: int, replacement: bool=False) -> Var:
         index = one_hot.index(one_hot.ndim - 1) + 1
         return (one_hot * index).sum(-1)
     else:
+        from jittor._runtime.dispatch import dispatch_context
+        if num_samples == 1 and dispatch_context(weights).backend == "acl":
+            # CANN's native multinomial matches torch_npu's large-vocabulary
+            # selection and generator advancement. An inverse CDF does not.
+            from jittor.backends.acl.kernels.ops.multinomial_op import multinomial_acl
+            return multinomial_acl(weights)
         # A-Res algorithm
         # Pavlos S. Efraimidis and Paul G. Spirakis, 2006, Weighted random sampling with a reservoir
         if num_samples > weights.shape[-1]:

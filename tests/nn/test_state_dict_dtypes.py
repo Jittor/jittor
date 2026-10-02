@@ -16,7 +16,7 @@ side ``load_state_dict`` then either refuses the entry or keeps the float copy.
 conversions have to describe the same tensors.
 """
 
-import importlib.util
+import sys
 import unittest
 
 import numpy as np
@@ -24,22 +24,10 @@ import numpy as np
 import jittor as jt
 
 
-def _torch_name_is_importable():
-    """Whether anything answers to ``import torch`` in this process.
-
-    ``state_dict(to="torch")`` imports it outright, and either owner of the
-    name will do: the compatibility shim in a Jittor development environment,
-    a binary PyTorch elsewhere. This is deliberately *not*
-    ``modules_available("torch")``, which reports False for the shim -- the
-    shim is a perfectly good subject for these assertions, and skipping on it
-    would leave the conversion untested in exactly the environment that has it.
-    """
-    if "torch" in __import__("sys").modules:
-        return True
-    try:
-        return importlib.util.find_spec("torch") is not None
-    except (ImportError, ValueError):
-        return False
+def _torch_conversion_available():
+    """Require an already selected torch owner with the conversion API."""
+    torch = sys.modules.get("torch")
+    return callable(getattr(torch, "from_numpy", None))
 
 
 def _as_numpy(t):
@@ -60,12 +48,12 @@ class _Model(jt.Module):
         return x
 
 
-@unittest.skipIf(not _torch_name_is_importable(),
-                 "state_dict(to='torch') needs a module importable as `torch`: "
-                 "neither the Jittor shim nor a binary PyTorch is installed")
 class TestStateDictDtypes(unittest.TestCase):
 
     def setUp(self):
+        if (self._testMethodName != "test_numpy_conversion_keeps_every_dtype"
+                and not _torch_conversion_available()):
+            self.skipTest("torch.from_numpy is unavailable in this process")
         self.model = _Model()
         self.expected = {
             "weight": "float32", "steps": "int32",

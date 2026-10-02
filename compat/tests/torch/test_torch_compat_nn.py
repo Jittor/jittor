@@ -27,6 +27,7 @@ Run:  python -m pytest compat/tests/torch/test_torch_compat_nn.py
 
 from _helpers import capability as _test_capability
 import math
+from collections import OrderedDict
 import unittest
 import numpy as np
 import torch
@@ -376,6 +377,44 @@ class TestNorms(Base):
 # ---------------------------------------------------------------------------- modules
 
 class TestModules(Base):
+    def test_parameter_data_rebind_preserves_forward_leaf_for_post_accumulate_hook(self):
+        def body(dev):
+            x = torch.tensor([[1.0, 2.0]], requires_grad=True)
+            weight = nn.Parameter(torch.tensor([[3.0], [4.0]]))
+            # ZeRO-3's optimizer owns partition tensors rather than the model
+            # Parameter itself. Keep an unrelated optimizer live to exercise
+            # the optimizer-authoritative leaf-registry pruning path.
+            partition = nn.Parameter(torch.tensor([0.0]))
+            optimizer = torch.optim.SGD([partition], lr=0.1)
+            seen = []
+
+            def post_accumulate(parameter):
+                seen.append((parameter, parameter.grad.clone()))
+
+            handle = weight.register_post_accumulate_grad_hook(post_accumulate)
+            loss = (x @ weight).sum()
+            gathered = weight.detach().clone()
+            # Match ZeRO-3's forward lifecycle: free the full parameter to an
+            # empty placeholder, then gather it again before backward.
+            weight.data = torch.empty((0,), dtype=weight.dtype)
+            weight.data = gathered.data
+            loss.backward()
+
+            self.ac(x.grad.numpy(), np.array([[3.0, 4.0]], dtype="float32"),
+                    atol=0, rtol=0, msg=f"data rebind input grad {dev}")
+            self.ac(weight.grad.numpy(), np.array([[1.0], [2.0]], dtype="float32"),
+                    atol=0, rtol=0, msg=f"data rebind parameter grad {dev}")
+            self.assertEqual(len(seen), 1, dev)
+            self.assertIs(seen[0][0], weight, dev)
+            self.ac(seen[0][1].numpy(), np.array([[1.0], [2.0]], dtype="float32"),
+                    atol=0, rtol=0, msg=f"hook observes current parameter grad {dev}")
+            self.assertEqual(getattr(weight, "_torch_data_rebind_leaves", []), [], dev)
+            self.assertIsNone(partition.grad, dev)
+            handle.remove()
+            del optimizer
+
+        both_devices(body)
+
     def test_init_constant_writes_through_view(self):
         def body(dev):
             parameter = nn.Parameter(torch.zeros((1, 3)))
@@ -397,6 +436,19 @@ class TestModules(Base):
             w = lin.weight.numpy(); b = lin.bias.numpy()
             self.ac(out.numpy(), x @ w.T + b, atol=1e-4, msg=f"Linear fwd {dev}")
         both_devices(body)
+
+    def test_linear_module_repr_uses_wrapped_initializer_signature(self):
+        linear = nn.Linear(5, 3)
+        rendered = repr(linear)
+        self.assertIn("Linear", rendered)
+        self.assertTrue(hasattr(linear.__init__, "__code__"))
+
+    def test_module_parameter_mapping_can_be_replaced(self):
+        linear = nn.Linear(5, 3)
+        replacement = OrderedDict(linear._parameters.items())
+        linear._parameters = replacement
+        self.assertIs(linear._parameters, replacement)
+        self.assertIs(linear._parameters["weight"], linear.weight)
 
     def test_default_dtype_applies_to_module_parameters(self):
         previous = torch.get_default_dtype()

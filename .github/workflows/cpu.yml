@@ -36,14 +36,20 @@ jobs:
     # a cache miss, not just the tests.
     timeout-minutes: 45
     steps:
+      - name: Install Git and CA certificates for checkout
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends git ca-certificates
+          update-ca-certificates
       - name: Check out source
         uses: actions/checkout@v6
         with:
           persist-credentials: false
+      - name: Prepare Jittor cache path
+        run: echo "JITTOR_LAB_ROOT=$RUNNER_TEMP/jittor-lab" >> "$GITHUB_ENV"
       - name: Install native CPU toolchain
         run: |
-          apt-get update
-          apt-get install --yes --no-install-recommends build-essential libomp-dev
+          apt-get install --yes --no-install-recommends build-essential cmake libomp-dev
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -55,8 +61,8 @@ jobs:
       - name: Restore the Jittor build cache
         uses: actions/cache/restore@v4
         with:
-          path: ${{ github.workspace }}/../jittor-lab/_state/nox/cache
-          key: jittor-build-${{ runner.os }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}
+          path: ${{ env.JITTOR_LAB_ROOT }}/_state/nox/cache
+          key: jittor-build-${{ runner.os }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}-${{ github.run_id }}
           restore-keys: |
             jittor-build-${{ runner.os }}-
       - name: Run the fast CPU tier
@@ -72,14 +78,20 @@ jobs:
     # the manual probes and the independent-PyTorch oracle.
     timeout-minutes: 240
     steps:
+      - name: Install Git and CA certificates for checkout
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends git ca-certificates
+          update-ca-certificates
       - name: Check out source
         uses: actions/checkout@v6
         with:
           persist-credentials: false
+      - name: Prepare Jittor cache path
+        run: echo "JITTOR_LAB_ROOT=$RUNNER_TEMP/jittor-lab" >> "$GITHUB_ENV"
       - name: Install native CPU toolchain
         run: |
-          apt-get update
-          apt-get install --yes --no-install-recommends build-essential libomp-dev
+          apt-get install --yes --no-install-recommends build-essential cmake libomp-dev
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -97,8 +109,8 @@ jobs:
       - name: Restore the Jittor build cache
         uses: actions/cache/restore@v4
         with:
-          path: ${{ github.workspace }}/../jittor-lab/_state/nox/cache
-          key: jittor-build-${{ runner.os }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}
+          path: ${{ env.JITTOR_LAB_ROOT }}/_state/nox/cache
+          key: jittor-build-${{ runner.os }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}-${{ github.run_id }}
           restore-keys: |
             jittor-build-${{ runner.os }}-
       - name: Install independent CPU PyTorch oracle
@@ -113,8 +125,8 @@ jobs:
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: ${{ github.workspace }}/../jittor-lab/_state/nox/cache
-          key: jittor-build-${{ runner.os }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}
+          path: ${{ env.JITTOR_LAB_ROOT }}/_state/nox/cache
+          key: jittor-build-${{ runner.os }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}-${{ github.run_id }}
 
   benchmark:
     needs: baseline
@@ -124,11 +136,14 @@ jobs:
       image: ${{ needs.baseline.outputs.cpu_ci_image }}
     timeout-minutes: 90
     env:
-      ASV_RESULTS_DIR: ${{ runner.temp }}/jittor-asv/results
-      ASV_HTML_DIR: ${{ runner.temp }}/jittor-asv/html
       ASV_MACHINE: github-ubuntu-cpu
       ASV_COMPARE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
     steps:
+      - name: Install Git and CA certificates for checkout
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends git ca-certificates
+          update-ca-certificates
       - name: Check out source
         uses: actions/checkout@v6
         with:
@@ -136,8 +151,13 @@ jobs:
           persist-credentials: false
       - name: Install native CPU toolchain
         run: |
-          apt-get update
-          apt-get install --yes --no-install-recommends build-essential libomp-dev
+          apt-get install --yes --no-install-recommends build-essential cmake libomp-dev
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" rev-parse HEAD
+      - name: Prepare ASV paths
+        run: |
+          echo "ASV_RESULTS_DIR=$RUNNER_TEMP/jittor-asv/results" >> "$GITHUB_ENV"
+          echo "ASV_HTML_DIR=$RUNNER_TEMP/jittor-asv/html" >> "$GITHUB_ENV"
       - name: Set up Python
         uses: actions/setup-python@v6
         with:

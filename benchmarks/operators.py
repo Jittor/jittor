@@ -21,7 +21,8 @@ class OperatorBenchmarks:
     number = 1
     repeat = (3, 7, 30.0)
     rounds = 1
-    timeout = 180
+    # The first CPU case compiles jittor_core from a cold CI cache before timing starts.
+    timeout = 600
 
     def setup(self, backend_name, device, operator):
         self.backend_name = backend_name

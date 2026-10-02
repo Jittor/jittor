@@ -27,9 +27,16 @@ from .attention import (
 )
 from .fused_moe import fused_moe
 from .paged_attention import paged_attention, reshape_and_cache
-from .serving_ops import (dual_rms_norm, fused_add_rms_norm,
-                          has_qk_rms_norm_rotary, qk_rms_norm_rotary, rms_norm,
-                          rotary_emb, rotary_embedding, silu_and_mul)
+from .serving_ops import (
+    dual_rms_norm,
+    fused_add_rms_norm,
+    has_qk_rms_norm_rotary,
+    qk_rms_norm_rotary,
+    rms_norm,
+    rotary_emb,
+    rotary_embedding,
+    silu_and_mul,
+)
 from .dual_grid import finalize_dual_grid_mesh_cuda
 from .functional import *
 from .legacy_complex import ComplexNumber
@@ -58,8 +65,9 @@ globals().pop("_bindings", None)
 globals().pop("_cuda_inference", None)
 
 # Keep the historical jt.pool namespace after its canonical NN owners are ready.
-from jittor import pool as _legacy_pool
-from .functional.pooling._state import PoolingStateView as _PoolingStateView
-import sys as _sys
+from jittor import pool as _legacy_pool  # noqa: E402
+from .functional.pooling._state import PoolingStateView as _PoolingStateView  # noqa: E402
+import sys as _sys  # noqa: E402
+
 _sys.modules[__name__].__class__ = _PoolingStateView
 del _legacy_pool, _PoolingStateView, _sys

@@ -1,9 +1,9 @@
 // ***************************************************************
 // Copyright (c) 2025 Jittor.
-// All Rights Reserved. 
+// All Rights Reserved.
 // Maintainers:
-//     Jiapeng Zhang <zjp24@mails.tsinghua.edu.cn>. 
-// 
+//     Jiapeng Zhang <zjp24@mails.tsinghua.edu.cn>.
+//
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -78,6 +78,14 @@ struct HcclProcessGroupState {
 };
 
 static vector<HcclProcessGroupState> hccl_process_groups;
+
+bool hccl_is_initialized() {
+    if (!hccl_inited || !world_comm || hccl_process_groups.empty())
+        return false;
+    const auto& group = hccl_process_groups[0];
+    return group.communicator == world_comm && group.local_rank >= 0
+        && group.local_rank < (int)group.ranks.size();
+}
 
 static HcclProcessGroupState& hccl_process_group(int group_id) {
     if (group_id < 0 || group_id >= (int)hccl_process_groups.size())

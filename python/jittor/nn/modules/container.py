@@ -9,8 +9,7 @@ from jittor._core.module import _WALK_CHILDREN
 
 def _layer_children(container):
     """The ``(key, submodule)`` pairs `Sequential.dfs` descends into."""
-    return [(key, value) for key, value in container.layers.items()
-            if isinstance(value, jt.Module)]
+    return [(key, value) for key, value in container.layers.items() if isinstance(value, jt.Module)]
 
 
 class Sequential(jt.Module):

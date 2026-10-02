@@ -30,11 +30,13 @@ import json
 import os
 import sys
 import time
+from typing import Any
 
+fcntl = None  # type: Any
 try:
-    import fcntl
+    import fcntl as _fcntl
+    fcntl = _fcntl
 except ImportError:
-    fcntl = None
     try:
         import msvcrt
         import win32file
@@ -211,7 +213,7 @@ class Lock:
         '''
         handle = self.fd
         if fcntl is None:
-            handle = msvcrt.get_osfhandle(self.fd)
+            handle = getattr(msvcrt, "get_osfhandle")(self.fd)
         core.set_lock_fd(handle, self._py_is_locked)
         self.core = core
 

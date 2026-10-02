@@ -215,6 +215,8 @@ class TestAllAny(Base):
             self.ae(torch.any(t(b), dim=0).numpy(), b.any(0), msg=f"any d0 {dev}")
             self.ae(torch.all(t(b), dim=1, keepdim=True).numpy(),
                     b.all(1, keepdims=True), msg=f"all keepdim {dev}")
+            self.ae(torch.any(t(b), dim=-1, keepdim=True).numpy(),
+                    b.any(-1, keepdims=True), msg=f"any negative dim keepdim {dev}")
         both_devices(body)
 
     def test_all_any_full(self):
@@ -324,6 +326,9 @@ class TestRepeatTile(Base):
                     np.repeat(y, 2, axis=0), msg=f"repeat_interleave d0 {dev}")
             self.ac(torch.repeat_interleave(t(y), 3, dim=1).numpy(),
                     np.repeat(y, 3, axis=1), msg=f"repeat_interleave d1 {dev}")
+            ids = np.array([[1, 2, 3, 4]], dtype="int64")
+            self.ae(torch.repeat_interleave(t(ids), 2, dim=0).numpy(),
+                    np.repeat(ids, 2, axis=0), msg=f"beam-style int64 repeat_interleave {dev}")
         both_devices(body)
 
     def test_repeat_interleave_var_repeats_output_size(self):

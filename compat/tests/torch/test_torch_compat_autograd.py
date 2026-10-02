@@ -70,6 +70,34 @@ class TestCustomFunctionCompatibility(Base):
         self.assertNotIn("_fwd_outputs", function.__dict__)
         self.assertNotIn("needs_input_grad", function.__dict__)
 
+    def test_detached_forward_output_uses_custom_backward(self):
+        class DetachIdentity(torch.autograd.Function):
+            @staticmethod
+            def forward(ctx, value):
+                return value.detach()
+
+            @staticmethod
+            def backward(ctx, grad_output):
+                return grad_output
+
+        def body(dev):
+            value = torch.tensor(
+                np.array([1.0, 2.0], dtype="float32"),
+                requires_grad=True,
+            )
+            output = DetachIdentity.apply(value)
+            self.assertTrue(output.requires_grad, dev)
+            grad_value = torch.autograd.grad((output * 3).sum(), value)[0]
+            self.ac(
+                grad_value.numpy(),
+                np.full(2, 3.0, dtype="float32"),
+                atol=0,
+                rtol=0,
+                msg=f"detached custom Function output {dev}",
+            )
+
+        both_devices(body)
+
     def test_torch_style_function_keeps_context_and_broadcast_grad(self):
         # The torch bookkeeping lives on the per-call CONTEXT -- the object
         # handed to forward()/backward() as torch's `ctx` -- not on the

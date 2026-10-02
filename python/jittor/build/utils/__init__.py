@@ -12,6 +12,7 @@ import os
 import re
 import sys
 import inspect
+import importlib
 import datetime
 import contextlib
 import platform
@@ -255,9 +256,13 @@ class Logwrapper:
             if callable(m):
                 m = m()
             text += str(m)
-        f = inspect.currentframe()
-        fileline = inspect.getframeinfo(f.f_back.f_back)
-        fileline = f"{os.path.basename(fileline.filename)}:{fileline.lineno}"
+        frame = inspect.currentframe()
+        caller = frame.f_back.f_back if frame and frame.f_back and frame.f_back.f_back else None
+        if caller is None:
+            fileline = "<unknown>"
+        else:
+            caller_info = inspect.getframeinfo(caller)
+            fileline = f"{os.path.basename(caller_info.filename)}:{caller_info.lineno}"
         if cc and hasattr(cc, "log"):
             cc.log(fileline, level, verbose, text)
         else:
@@ -417,7 +422,7 @@ def do_compile(args):
 pool_size = 0
 #: The compile process pool, created on the first run_cmds() that needs one
 #: and torn down by the atexit hook registered alongside it.
-p: Any = None
+p = None  # type: Any
 
 def pool_cleanup():
     global p
@@ -514,8 +519,9 @@ def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
             do_compile([cmd, cache_path, jittor_path])
             dp.update(i)
         return
-    bk = mp.current_process()._config.get('daemon')
-    mp.current_process()._config['daemon'] = False
+    process_config = getattr(mp.current_process(), "_config")
+    bk = process_config.get('daemon')
+    process_config['daemon'] = False
     with _main_module_not_reexecuted():
         if pool_size == 0:
             try:
@@ -539,7 +545,7 @@ def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
             for i,_ in enumerate(p.imap_unordered(do_compile, cmds)):
                 dp.update(i)
         finally:
-            mp.current_process()._config['daemon'] = bk
+            process_config['daemon'] = bk
 
 if os.name=='nt' and getattr(mp.current_process(), '_inheriting', False):
     # when windows spawn multiprocess, disable sub-subprocess
@@ -602,7 +608,7 @@ def get_cpu_version():
     v = platform.processor()
     try:
         if os.name == 'nt':
-            import winreg
+            winreg = importlib.import_module("winreg")
             key_name = r"Hardware\Description\System\CentralProcessor\0"
             field_name = "ProcessorNameString"
             key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_name)
@@ -794,7 +800,7 @@ def check_cache_disk_space(path, minimum_mb=None):
 # Set by find_cache_path(). Deliberately *above* the build-configuration
 # directory: the lock also guards the third-party downloads (mkl, cutt, cub)
 # that every configuration on this toolchain shares.
-lock_path: Optional[str] = None
+lock_path = None  # type: Optional[str]
 
 
 def _git_head_file(path):
@@ -1281,7 +1287,9 @@ def get_py3_extension_suffix():
 
 def get_total_mem():
     if os.name == 'nt':
-        from ctypes import Structure, c_int32, c_uint64, sizeof, byref, windll
+        import ctypes
+        from ctypes import Structure, c_int32, c_uint64, sizeof, byref
+        windll = getattr(ctypes, "windll")
         class MemoryStatusEx(Structure):
             _fields_ = [
                 ('length', c_int32),
@@ -1326,7 +1334,7 @@ is_in_ipynb = in_ipynb()
 #: The compiled jit_utils_core extension, or None until it is imported.
 #: Any rather than ModuleType: callers reach for attributes that only exist
 #: on the compiled module.
-cc: Any = None
+cc = None  # type: Any
 LOG = Logwrapper()
 
 check_msvc_install = False
@@ -1346,9 +1354,9 @@ else:
 cc_type = get_cc_type(cc_path)
 cache_path = find_cache_path()
 
-_py3_config_path: Optional[str] = None
-_py3_include_path: Optional[str] = None
-_py3_extension_suffix: Optional[str] = None
+_py3_config_path = None  # type: Optional[str]
+_py3_include_path = None  # type: Optional[str]
+_py3_extension_suffix = None  # type: Optional[str]
 # NOTE: this used to be
 #     ssl._create_default_https_context = ssl._create_unverified_context
 # with no condition and no way to turn it off. That statement does not affect

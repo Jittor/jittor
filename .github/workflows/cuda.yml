@@ -101,8 +101,6 @@ jobs:
     runs-on: ${{ fromJSON(needs.baseline.outputs.cuda_runner_labels) }}
     timeout-minutes: 240
     env:
-      ASV_RESULTS_DIR: ${{ runner.temp }}/jittor-asv-cuda/results
-      ASV_HTML_DIR: ${{ runner.temp }}/jittor-asv-cuda/html
       ASV_MACHINE: github-rtx4090-cuda12-2
       ASV_COMPARE_BASE: ${{ github.event.before }}
     steps:
@@ -111,6 +109,11 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Prepare CUDA ASV paths
+        shell: bash
+        run: |
+          echo "ASV_RESULTS_DIR=$RUNNER_TEMP/jittor-asv-cuda/results" >> "$GITHUB_ENV"
+          echo "ASV_HTML_DIR=$RUNNER_TEMP/jittor-asv-cuda/html" >> "$GITHUB_ENV"
       - name: Describe CUDA build configuration
         id: cuda-config
         shell: bash

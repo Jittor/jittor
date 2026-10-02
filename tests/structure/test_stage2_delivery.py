@@ -79,7 +79,7 @@ class TestStage2Delivery(unittest.TestCase):
             "required_paths",
             "notebook product must stay outside",
             "module/package path collision",
-                "check_governance.py",
+            "check_governance.py",
         ):
             with self.subTest(contract=contract):
                 self.assertIn(contract, layout_gate)
@@ -104,12 +104,12 @@ class TestStage2Delivery(unittest.TestCase):
     @staticmethod
     def _cpu_gate_files():
         """Test files the CPU gate would collect, across both process modes."""
-        from _helpers.gate_scope import (
-            native_arguments, selected_files, torch_arguments)
+        from _helpers.gate_scope import native_arguments, selected_files, torch_arguments
 
         repo_root = Path(__file__).resolve().parents[2]
-        return (selected_files(repo_root, native_arguments())
-                | selected_files(repo_root, torch_arguments()))
+        return selected_files(repo_root, native_arguments()) | selected_files(
+            repo_root, torch_arguments()
+        )
 
     def test_nox_keeps_fast_structure_and_packaging_separate(self):
         path = self.repo_root / "noxfile.py"
@@ -128,8 +128,7 @@ class TestStage2Delivery(unittest.TestCase):
         # they are spread over three functions rather than one. Asserting only
         # `cpu` would have gone quietly green while `smoke` -- the tier a pull
         # request actually waits for -- inherited none of them.
-        cpu = (functions["cpu"] + functions["smoke"]
-               + functions["_cpu_gate_env"])
+        cpu = functions["cpu"] + functions["smoke"] + functions["_cpu_gate_env"]
         upper_python = functions["_upper_python_compatibility"]
         py312 = functions["py312"]
         py313 = functions["py313"]
@@ -199,6 +198,7 @@ class TestStage2Delivery(unittest.TestCase):
         self.assertIn("image: ${{ needs.baseline.outputs.cpu_ci_image }}", cpu_workflow)
         self.assertIn("image: ${{ needs.baseline.outputs.cpu_ci_image }}", structure_workflow)
         self.assertIn("actions/cache/restore@v4", cpu_workflow)
+        self.assertIn("${{ github.run_id }}", cpu_workflow)
         self.assertIn("actions/upload-artifact@v6", cpu_workflow)
         self.assertIn("ASV_RESULTS_DIR", cpu_workflow)
         self.assertIn("torch==2.7.1", cpu_workflow)
@@ -281,7 +281,9 @@ class TestStage2Delivery(unittest.TestCase):
                 # into a POD struct; the two are now arguments to it.
                 self.assertIn("conv_compute_type, conv_math_key,", source)
 
-        wrapper = (cuda / "libraries" / "cudnn" / "include" / "cudnn_wrapper.h").read_text(encoding="utf-8")
+        wrapper = (cuda / "libraries" / "cudnn" / "include" / "cudnn_wrapper.h").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("cudnnMathType_t cudnn_conv_math_type(", wrapper)
         self.assertIn("#ifndef IS_ROCM", wrapper)
         self.assertIn("#if CUDNN_VERSION >= 8000", wrapper)

@@ -194,7 +194,13 @@ struct FrontendPolicy {
     uint64 epoch = 0;
 };
 // Guarded by the GIL: apply_policy runs with it held (it may call Python).
-unordered_map<PyObject*, FrontendPolicy> frontend_policies;
+struct CachedFrontendPolicy {
+    FrontendPolicy policy;
+    // A heap type must not be kept alive by this process-wide cache. Static
+    // types are immortal, so their weak_type remains null.
+    PyObject* weak_type = nullptr;
+};
+unordered_map<PyObject*, CachedFrontendPolicy> frontend_policies;
 uint64 frontend_policy_epoch = 1;
 
 FrontendPolicy read_frontend_policy(PyObject* type) {
@@ -249,16 +255,36 @@ FrontendPolicy read_frontend_policy(PyObject* type) {
 
 const FrontendPolicy& frontend_policy(PyObject* type) {
     auto found = frontend_policies.find(type);
-    if (found != frontend_policies.end() && found->second.epoch == frontend_policy_epoch)
-        return found->second;
+    if (found != frontend_policies.end() && found->second.weak_type
+        && PyWeakref_GetObject(found->second.weak_type) != type) {
+        Py_DECREF(found->second.weak_type);
+        frontend_policies.erase(found);
+        found = frontend_policies.end();
+    }
+    if (found != frontend_policies.end() && found->second.policy.epoch == frontend_policy_epoch)
+        return found->second.policy;
     FrontendPolicy policy = read_frontend_policy(type);
     if (found == frontend_policies.end()) {
-        // Held so the address cannot be reused by another type.
-        Py_INCREF(type);
-        return frontend_policies.emplace(type, policy).first->second;
+        for (auto it = frontend_policies.begin(); it != frontend_policies.end();) {
+            if (it->second.weak_type && PyWeakref_GetObject(it->second.weak_type) == Py_None) {
+                Py_DECREF(it->second.weak_type);
+                it = frontend_policies.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        CachedFrontendPolicy entry;
+        entry.policy = policy;
+        if (PyType_HasFeature((PyTypeObject*)type, Py_TPFLAGS_HEAPTYPE)) {
+            entry.weak_type = PyWeakref_NewRef(type, nullptr);
+            if (!entry.weak_type) throw std::runtime_error("cannot weakly cache tensor frontend type");
+        } else {
+            Py_INCREF(type);
+        }
+        return frontend_policies.emplace(type, entry).first->second.policy;
     }
-    found->second = policy;
-    return found->second;
+    found->second.policy = policy;
+    return found->second.policy;
 }
 } // namespace
 

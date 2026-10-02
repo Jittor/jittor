@@ -61,12 +61,18 @@ class AdapterContracts(unittest.TestCase):
         package = Path(root) / "transformers"
         (package / "utils").mkdir(parents=True)
         (package / "__init__.py").write_text(
-            "__version__ = %r\nfrom .utils.import_utils import is_torch_npu_available\n"
-            "probe_result = is_torch_npu_available(check_device=True)\n" % version)
+            "__version__ = %r\n"
+            "from .utils.import_utils import is_torch_npu_available\n"
+            "from .modeling_utils import get_torch_context_manager_or_global_device\n"
+            "probe_result = is_torch_npu_available(check_device=True)\n"
+            "device_result = get_torch_context_manager_or_global_device()\n" % version)
         (package / "utils/__init__.py").write_text("")
         (package / "utils/import_utils.py").write_text(
             "def is_torch_npu_available(check_device=False):\n"
             "    raise RuntimeError('native torch_npu probe must not execute')\n")
+        (package / "modeling_utils.py").write_text(
+            "def get_torch_context_manager_or_global_device():\n"
+            "    return 'npu:0'\n")
 
     #: The shape transformers 5.x ships: the version is assigned while the
     #: package executes, then the module is handed to a ``_LazyModule`` and the
@@ -140,6 +146,12 @@ del __version__
                 self.assertFalse(guard())
                 self.assertIs(module.is_torch_npu_available, guard)
                 self.assertTrue(callable(guard.cache_clear))
+                self.assertIsNone(module.device_result)
+                device_guard = sys.modules[
+                    "transformers.modeling_utils"
+                ].get_torch_context_manager_or_global_device
+                self.assertTrue(
+                    device_guard._jittor_transformers_device_guard)
             finally:
                 sys.path.remove(root)
 
