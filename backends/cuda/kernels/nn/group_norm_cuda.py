@@ -327,9 +327,15 @@ def _group_norm_nhwc_source(shape, num_groups, eps, act=""):
     row_parts = row_segments * rows
     header = _header() + f"""
     __device__ __forceinline__ float jt_gn_act(float z) {{ {_ACTIVATIONS[act][0]} }}
+    // Per row, how many of its segments have stored their partial. The last
+    // one finishes the row and puts its count back to zero, so the next call
+    // -- a replay of a captured step too -- finds it zero. One module per
+    // shape, and one stream: no two calls of this kernel overlap.
+    __device__ unsigned int jt_gn_nhwc_done[{rows}];
     """
     source = f"""
-    __global__ static void group_norm_nhwc_statistics(const in0_type* x, float* partial) {{
+    __global__ static void group_norm_nhwc_statistics(
+            const in0_type* x, float* partial, float* mean, float* rstd) {{
         typedef cub::BlockReduce<JtBnWelford, {_THREADS}> BlockReduce;
         __shared__ typename BlockReduce::TempStorage storage;
         int row = blockIdx.x;
@@ -350,26 +356,39 @@ def _group_norm_nhwc_source(shape, num_groups, eps, act=""):
             local.m2 += delta * (value - local.mean);
         }}
         JtBnWelford sum = BlockReduce(storage).Reduce(local, JtBnWelfordSum());
+        // The row's last segment to store its partial finishes the row: a
+        // kernel of its own cost 3.5 us a call of an SD1.5 sampling step's
+        // 49, launch and all, for 64 rows of arithmetic.
+        __shared__ bool last;
         if (threadIdx.x == 0) {{
             int slot = blockIdx.y * {rows} + row;
             partial[slot] = sum.n;
             partial[{row_parts} + slot] = sum.mean;
             partial[{2 * row_parts} + slot] = sum.m2;
+            __threadfence();
+            last = atomicAdd(&jt_gn_nhwc_done[row], 1u) == {row_segments - 1}u;
         }}
-    }}
-    __global__ static void group_norm_nhwc_finish(
-            const float* partial, float* mean, float* rstd) {{
-        int row = blockIdx.x * blockDim.x + threadIdx.x;
-        if (row >= {rows}) return;
-        JtBnWelford sum{{0.0f, 0.0f, 0.0f}};
-        for (int s = 0; s < {row_segments}; s++) {{
+        __syncthreads();
+        if (!last || threadIdx.x >= 32) return;
+        __threadfence();
+        JtBnWelford total{{0.0f, 0.0f, 0.0f}};
+        for (int s = threadIdx.x; s < {row_segments}; s += 32) {{
             int slot = s * {rows} + row;
-            JtBnWelford part{{partial[slot], partial[{row_parts} + slot],
-                              partial[{2 * row_parts} + slot]}};
-            sum = JtBnWelfordSum()(sum, part);
+            JtBnWelford part{{__ldcg(partial + slot), __ldcg(partial + {row_parts} + slot),
+                              __ldcg(partial + {2 * row_parts} + slot)}};
+            total = JtBnWelfordSum()(total, part);
         }}
-        mean[row] = sum.mean;
-        rstd[row] = rsqrtf(sum.m2 / sum.n + {eps:.9g}f);
+        for (int offset = 16; offset > 0; offset >>= 1) {{
+            JtBnWelford other{{__shfl_down_sync(0xffffffffu, total.n, offset),
+                               __shfl_down_sync(0xffffffffu, total.mean, offset),
+                               __shfl_down_sync(0xffffffffu, total.m2, offset)}};
+            total = JtBnWelfordSum()(total, other);
+        }}
+        if (threadIdx.x == 0) {{
+            mean[row] = total.mean;
+            rstd[row] = rsqrtf(total.m2 / total.n + {eps:.9g}f);
+            jt_gn_nhwc_done[row] = 0u;
+        }}
     }}
     __global__ static void group_norm_nhwc_apply(
             const in0_type* x, const in1_type* weight, const in2_type* bias,
@@ -385,8 +404,8 @@ def _group_norm_nhwc_source(shape, num_groups, eps, act=""):
             y[i] = out0_type(jt_gn_act(static_cast<float>(x[i]) * k + b));
         }}
     }}
-    group_norm_nhwc_statistics<<<dim3({rows}, {row_segments}), {_THREADS}>>>(in0_p, out3_p);
-    group_norm_nhwc_finish<<<{_per_channel(rows)}>>>(out3_p, out1_p, out2_p);
+    group_norm_nhwc_statistics<<<dim3({rows}, {row_segments}), {_THREADS}>>>(
+        in0_p, out3_p, out1_p, out2_p);
     group_norm_nhwc_apply<<<{max(1, min(-(-total // _THREADS), 65535 * 8))}, {_THREADS}>>>(
         in0_p, in1_p, in2_p, out1_p, out2_p, out0_p);
     CHECK(0 == cudaGetLastError());

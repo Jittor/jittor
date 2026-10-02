@@ -175,6 +175,23 @@ class TestChannelsLast(unittest.TestCase):
         np.testing.assert_allclose(mid.float32().numpy(), want_mid, rtol=2e-2, atol=2e-2)
         np.testing.assert_allclose(got, want, rtol=2e-2, atol=2e-2 * np.abs(want).max())
 
+    def test_a_large_group_norm_finishes_its_rows_in_the_last_segment(self):
+        # Many segments a row, so the row's last segment to store its partial
+        # is the one that finishes it; called again, as a replay would, the
+        # same answer -- the per-row count went back to zero.
+        a = (self.rng.randn(2, 320, 32, 32) * 2 + 0.5).astype("float32")
+        weight, bias = self.rng.randn(320).astype("float32"), self.rng.randn(320).astype("float32")
+        x = _nhwc_view(a)
+        ref = x.float64().numpy().reshape(2, 32, -1)
+        mean, var = ref.mean(-1, keepdims=True), ref.var(-1, keepdims=True)
+        want = ((ref - mean) / np.sqrt(var + 1e-5)).reshape(a.shape) \
+            * weight[None, :, None, None] + bias[None, :, None, None]
+        with jt.no_grad():
+            for _ in range(3):
+                got = nn.group_norm(x, 32, jt.array(weight).float16(), jt.array(bias).float16(), 1e-5)
+                self.assertIsNotNone(channels_last_source(got))
+                np.testing.assert_allclose(got.float32().numpy(), want, rtol=2e-2, atol=2e-2)
+
     def test_interpolation_keeps_the_layout(self):
         a = self.rng.randn(2, 8, 5, 6).astype("float32")
         with jt.no_grad():

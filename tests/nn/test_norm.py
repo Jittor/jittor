@@ -108,8 +108,21 @@ class TestLayerNorm(_NormBase):
 
     @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA LayerNorm fast path needs CUDA")
     def test_cuda_fast_path_forward_and_all_gradients(self):
+        self._check_cuda_layer_norm((3, 5, 1024))
+
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA LayerNorm fast path needs CUDA")
+    def test_cuda_warp_per_row_forward_and_all_gradients(self):
+        # Rows enough for a warp each, on widths off the warp size, and the
+        # parameter gradients summed from many row segments.
+        from jittor.backends.cuda.kernels.nn import layer_norm_training_cuda as ln
+        for shape in ((4, 300, 768), (1100, 100), (2, 613, 320)):
+            rows = int(np.prod(shape[:-1]))
+            self.assertTrue(shape[-1] <= ln._WARP_ROW_LIMIT and rows >= ln._WARP_ROWS_MIN)
+            with self.subTest(shape=shape):
+                self._check_cuda_layer_norm(shape)
+
+    def _check_cuda_layer_norm(self, shape):
         rng = np.random.RandomState(20260826)
-        shape = (3, 5, 1024)
         weight_np = rng.randn(shape[-1]).astype("float32")
         bias_np = rng.randn(shape[-1]).astype("float32")
         cot_np = rng.randn(*shape).astype("float32")
@@ -161,6 +174,17 @@ class TestRMSNorm(_NormBase):
         # 4096 rows cut into segments, a width that is not a multiple of the
         # 32-channel blocks the gamma gradient is summed in.
         self._check_cuda_training((8, 512, 100))
+
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA RMSNorm fast path needs CUDA")
+    def test_cuda_warp_per_row_forward_and_all_gradients(self):
+        # A warp a row and one fused backward pass: Qwen3's hidden width and
+        # its per-head query/key width, on rows enough for that kernel.
+        from jittor.backends.cuda.kernels.nn import rms_norm_training_cuda as rms
+        for shape in ((2, 600, 1024), (1300, 128)):
+            rows = int(np.prod(shape[:-1]))
+            self.assertTrue(shape[-1] <= rms._WARP_ROW_LIMIT and rows >= rms._WARP_ROWS_MIN)
+            with self.subTest(shape=shape):
+                self._check_cuda_training(shape)
 
     def _check_cuda_training(self, shape):
         rng = np.random.RandomState(20260827)

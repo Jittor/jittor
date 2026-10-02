@@ -31,6 +31,99 @@ def _supports_layer_norm_inference(
     return True
 
 
+#: Rows at most this wide go a warp each, when there are at least this many
+#: of them; see `_warp_rows_source`. Fewer rows leave the device mostly idle
+#: at eight a block: BERT inference's 128 x 768 took 4.7 us that way, 3.4 a
+#: block per row.
+_WARP_ROW_LIMIT = 1024
+_WARP_ROWS_MIN = 1024
+
+
+def _warp_rows(x, hidden):
+    return hidden <= _WARP_ROW_LIMIT and int(x.numel()) // hidden >= _WARP_ROWS_MIN
+
+
+def _warp_rows_source(hidden, eps, affine):
+    """A warp per row: the row in registers, both reductions by shuffles.
+
+    The block-per-row kernel below gives a 320-wide row -- a Stable Diffusion
+    transformer's -- 128 threads with two or three values each and four block
+    barriers, and an SD1.5 sampling step spent 7.6 us a call on it, PyTorch
+    4. A warp per row needs no shared memory and no barrier. The double-
+    precision pass for a row whose float sums overflow is kept, warp-wide.
+
+    `affine` is (args, float expression, double expression) of the scale and
+    offset of element `j`.
+    """
+    args, scale_f, scale_d = affine
+    per = -(-hidden // 32)
+    return f"""
+    __device__ __forceinline__ float jt_ln_allsum(float v) {{
+        for (int o = 16; o > 0; o >>= 1) v += __shfl_xor_sync(0xffffffffu, v, o);
+        return v;
+    }}
+    __device__ __forceinline__ double jt_ln_allsum_double(double v) {{
+        for (int o = 16; o > 0; o >>= 1) v += __shfl_xor_sync(0xffffffffu, v, o);
+        return v;
+    }}
+    __global__ static void kernel_warp_rows(in0_type* x, {args}out0_type* y, long long rows) {{
+        long long row = ((long long)blockIdx.x * blockDim.x + threadIdx.x) >> 5;
+        int lane = threadIdx.x & 31;
+        if (row >= rows) return;
+        const in0_type* xr = x + row * {hidden};
+        out0_type* yr = y + row * {hidden};
+        float cache[{per}];
+        float sum = 0.0f;
+        #pragma unroll
+        for (int i = 0; i < {per}; i++) {{
+            int j = lane + i * 32;
+            cache[i] = j < {hidden} ? static_cast<float>(xr[j]) : 0.0f;
+            sum += cache[i];
+        }}
+        sum = jt_ln_allsum(sum);
+        bool use_double = !isfinite(sum);
+        float mean = sum / {hidden}, inv_std = 0.0f;
+        if (!use_double) {{
+            float var = 0.0f;
+            #pragma unroll
+            for (int i = 0; i < {per}; i++) {{
+                float d = cache[i] - mean;
+                if (lane + i * 32 < {hidden}) var += d * d;
+            }}
+            var = jt_ln_allsum(var);
+            use_double = !isfinite(var);
+            inv_std = rsqrtf(var / {hidden} + {eps:.9g}f);
+        }}
+        if (use_double) {{
+            double dsum = 0.0;
+            for (int j = lane; j < {hidden}; j += 32) dsum += static_cast<double>(xr[j]);
+            double dmean = jt_ln_allsum_double(dsum) / {hidden};
+            double dvar = 0.0;
+            for (int j = lane; j < {hidden}; j += 32) {{
+                double d = static_cast<double>(xr[j]) - dmean;
+                dvar += d * d;
+            }}
+            double dinv = 1.0 / sqrt(jt_ln_allsum_double(dvar) / {hidden} + {eps:.17g});
+            for (int j = lane; j < {hidden}; j += 32)
+                yr[j] = out0_type((static_cast<double>(xr[j]) - dmean) * dinv {scale_d});
+            return;
+        }}
+        #pragma unroll
+        for (int i = 0; i < {per}; i++) {{
+            int j = lane + i * 32;
+            if (j < {hidden}) yr[j] = out0_type((cache[i] - mean) * inv_std {scale_f});
+        }}
+    }}
+    """
+
+
+def _warp_rows_launch(hidden, pointers):
+    return f"""
+    long long rows = in0->num / {hidden};
+    kernel_warp_rows<<<(unsigned)((rows + 7) / 8), 256>>>({pointers}, rows);
+    """
+
+
 @optional_kernel("nn.layer_norm.inference", ("cuda", "rocm_legacy", "corex_legacy"),
                  dtypes=("float16", "bfloat16", "float32"),
                  supports=_supports_layer_norm_inference)
@@ -44,6 +137,13 @@ def _layer_norm_no_grad_cuda(
         offset_value = float(bias)
         scale_literal = f"{scale_value:.9e}f"
         offset_literal = f"{offset_value:.9e}f"
+        if _warp_rows(x, hidden):
+            affine = ("", f"* {scale_literal} + {offset_literal}",
+                      f"* {scale_value!r} + {offset_value!r}")
+            return jt.code(
+                x.shape, x.dtype, [x],
+                cuda_src=_warp_rows_source(hidden, eps_value, affine)
+                + _warp_rows_launch(hidden, "in0_p, out0_p"))
         y = jt.code(
             x.shape,
             x.dtype,
@@ -188,6 +288,15 @@ def _layer_norm_no_grad_cuda(
             """,
         )
         return y
+    if _warp_rows(x, hidden):
+        affine = ("in1_type* weight, in2_type* bias, ",
+                  "* static_cast<float>(weight[j]) + static_cast<float>(bias[j])",
+                  "* static_cast<double>(weight[j]) + static_cast<double>(bias[j])")
+        y = jt.code(
+            x.shape, x.dtype, [x, weight, bias],
+            cuda_src=_warp_rows_source(hidden, eps_value, affine)
+            + _warp_rows_launch(hidden, "in0_p, in1_p, in2_p, out0_p"))
+        return _stop_grad_outputs(y)
     y = jt.code(
         x.shape,
         x.dtype,

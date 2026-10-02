@@ -110,7 +110,13 @@ __global__ void fused_sgd_kernel(SgdLaunch launch, const float* rate, SgdStep s)
     const int total = launch.first_block[launch.count];
     int t = 0;
     for (int block = blockIdx.x; block < total; block += gridDim.x) {
-        while (t + 1 < launch.count && launch.first_block[t + 1] <= block) t++;
+        // The tensor whose blocks hold this one: the last that starts at or
+        // before it.
+        for (int lo = 0, hi = launch.count - 1; ; ) {
+            if (lo >= hi) { t = lo; break; }
+            int mid = (lo + hi + 1) >> 1;
+            if (launch.first_block[mid] <= block) lo = mid; else hi = mid - 1;
+        }
         const int64 base = (int64)(block - launch.first_block[t]) * kPerBlock;
         T* p = launch.p[t];
         T* v = launch.v[t];
@@ -155,14 +161,10 @@ void FusedSgdOp::jit_run() {
     SgdLaunch launch;
     launch.count = 0;
     int blocks = 0;
-    int device = 0, sms = 0;
-    cudaGetDevice(&device);
-    cudaDeviceGetAttribute(&sms, cudaDevAttrMultiProcessorCount, device);
-    const int grid = std::max(sms, 1) * 8;
     auto flush = [&]() {
         if (!launch.count) return;
         launch.first_block[launch.count] = blocks;
-        fused_sgd_kernel<<<std::min(blocks, grid), kThreads>>>(launch, rate_ptr, s);
+        fused_sgd_kernel<<<blocks, kThreads>>>(launch, rate_ptr, s);
         launch.count = 0;
         blocks = 0;
     };
