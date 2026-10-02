@@ -1983,8 +1983,29 @@ def cpu(session):
     workers = _runtime_gate_workers()
     parallel = _xdist(workers)
     full_env = _require_execution(_split_threads(env, workers))
+    if real_torch_site:
+        # Native parity tests import Jittor before checking whether Torch is
+        # available. Preload the independent binary in pytest_policy before
+        # Jittor owns the process; otherwise an importable Torch is reported as
+        # available but the first comparison fails during setUpModule.
+        full_env["REAL_TORCH_SITE"] = real_torch_site
+        session.run(
+            "python",
+            "-c",
+            "import importlib, os, pathlib, sys; "
+            "site = pathlib.Path(os.environ['REAL_TORCH_SITE']).resolve(); "
+            "sys.path.insert(0, str(site)); torch = importlib.import_module('torch'); "
+            "assert site in pathlib.Path(torch.__file__).resolve().parents; "
+            "assert site in pathlib.Path(torch._C.__file__).resolve().parents; "
+            "assert not hasattr(torch, '_torch_compat_install_context')",
+            env=full_env,
+        )
     _run_pytest_once(session, gate_native_arguments() + parallel, full_env)
     torch_env = full_env.copy()
+    # The shim has its own Torch namespace; an independent binary must never
+    # be preloaded into that process, nor required of its skip accounting.
+    torch_env["REAL_TORCH_SITE"] = ""
+    torch_env["JITTOR_REQUIRE_REAL_TORCH"] = "0"
     torch_env["JITTOR_TORCH_SHIM"] = "1"
     _run_pytest_once(session, gate_torch_arguments() + parallel, torch_env)
     # The manual probes get their own process, which is the whole reason they
@@ -1995,6 +2016,8 @@ def cpu(session):
     # (the marker was attached after the decision that reads it) and cost 537 s
     # there; on their own they take about the same and mean something.
     manual_env = env.copy()
+    if real_torch_site:
+        manual_env["REAL_TORCH_SITE"] = real_torch_site
     manual_env["JITTOR_TEST_MANUAL"] = "1"
     _run_pytest_once(session, gate_native_arguments() + ("-m", "manual"), manual_env, timeout=1800)
     oracle_env = env.copy()

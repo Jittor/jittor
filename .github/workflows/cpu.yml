@@ -43,13 +43,23 @@ jobs:
       - name: Install native CPU toolchain
         run: |
           apt-get update
-          apt-get install --yes --no-install-recommends build-essential cmake libomp-dev
+          apt-get install --yes --no-install-recommends build-essential ca-certificates cmake libomp-dev
+          update-ca-certificates
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: ${{ needs.baseline.outputs.python_version }}
       - name: Install pinned development tools
         run: python -m pip install -r requirements/dev-tools.txt
+      - name: Verify source download TLS
+        run: |
+          python - <<'PY'
+          import urllib.request
+
+          url = "https://codeload.github.com/uxlfoundation/oneDNN/tar.gz/refs/tags/v3.9.1"
+          with urllib.request.urlopen(urllib.request.Request(url, method="HEAD"), timeout=20):
+              pass
+          PY
       # The fast tier is only fast with the kernels already built; see the same
       # step in the `cpu` job.
       - name: Restore the Jittor build cache
@@ -79,13 +89,23 @@ jobs:
       - name: Install native CPU toolchain
         run: |
           apt-get update
-          apt-get install --yes --no-install-recommends build-essential cmake libomp-dev
+          apt-get install --yes --no-install-recommends build-essential ca-certificates cmake libomp-dev
+          update-ca-certificates
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: ${{ needs.baseline.outputs.python_version }}
       - name: Install pinned development tools
         run: python -m pip install -r requirements/dev-tools.txt
+      - name: Verify source download TLS
+        run: |
+          python - <<'PY'
+          import urllib.request
+
+          url = "https://codeload.github.com/uxlfoundation/oneDNN/tar.gz/refs/tags/v3.9.1"
+          with urllib.request.urlopen(urllib.request.Request(url, method="HEAD"), timeout=20):
+              pass
+          PY
       # Without this the gate rebuilds Jittor from scratch on every run: the
       # nox sessions share one cache under $JITTOR_LAB_ROOT/_state/nox/cache,
       # which persists on a self-hosted runner and is empty in a fresh
