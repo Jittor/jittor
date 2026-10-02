@@ -1990,7 +1990,15 @@ def deepspeed_l0(session):
         external=True,
         env=dict(env, JITTOR_TORCH_SHIM="0"),
     )
-    _run_pytest_once(session, ("compat/tests/torch/test_deepspeed_l0.py",), env, timeout=3600)
+    _run_pytest_once(
+        session,
+        (
+            "compat/tests/torch/test_torch_grad_bucket_protocol.py",
+            "compat/tests/torch/test_deepspeed_l0.py",
+        ),
+        env,
+        timeout=3600,
+    )
 
 
 @nox.session(python=False)
