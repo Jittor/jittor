@@ -300,10 +300,29 @@ def main(argv=None):
         type=Path,
         help="checkout to inventory (defaults to the source tree containing this script)",
     )
+    parser.add_argument(
+        "--expected-paths",
+        type=Path,
+        help="newline-delimited source inventory exported from the checkout",
+    )
     args = parser.parse_args(argv)
     try:
-        repo_root = args.repo_root or Path(__file__).resolve().parents[2]
-        expected_paths = _expected_source_paths(repo_root)
+        if args.expected_paths:
+            expected_paths = frozenset(
+                line.strip()
+                for line in args.expected_paths.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            )
+            missing_sentinels = sorted(set(REQUIRED_SOURCE_PATHS) - expected_paths)
+            if missing_sentinels:
+                raise SourceDistributionError(
+                    "source inventory is missing required paths: {}".format(
+                        ", ".join(missing_sentinels)
+                    )
+                )
+        else:
+            repo_root = args.repo_root or Path(__file__).resolve().parents[2]
+            expected_paths = _expected_source_paths(repo_root)
         issues, members = audit_sdist(args.sdist, expected_paths)
     except SourceDistributionError as error:
         print("ERROR: {}".format(error), file=sys.stderr)

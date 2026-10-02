@@ -1198,6 +1198,16 @@ def structure(session):
         "install",
         "--no-deps",
         "--no-build-isolation",
+        str(REPO_ROOT),
+        env=env,
+    )
+    session.run(
+        "python",
+        "-m",
+        "pip",
+        "install",
+        "--no-deps",
+        "--no-build-isolation",
         "-e",
         str(REPO_ROOT / "adapters"),
         env=env,
@@ -1292,12 +1302,56 @@ def packaging(session):
         session.error("expected exactly one wheel, found %d" % len(wheels))
     if len(sdists) != 1:
         session.error("expected exactly one sdist, found %d" % len(sdists))
+    expected_paths = root / "expected-sdist-paths.txt"
+    inventory_command = (
+        "git",
+        "ls-files",
+        "-z",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+        "--",
+        "docs",
+        "examples",
+        "tools",
+        "requirements/docs.in",
+        "requirements/docs.txt",
+        "requirements/examples.txt",
+        "python",
+        "backends",
+        "src",
+    )
+    inventory = subprocess.check_output(inventory_command, cwd=str(REPO_ROOT)).decode("utf-8")
+    inventory_paths = (
+        line
+        for line in inventory.split("\0")
+        if line
+        and ((REPO_ROOT / line).exists() or (REPO_ROOT / line).is_symlink())
+        and not any(
+            part
+            in {
+                "__pycache__",
+                ".pytest_cache",
+                ".mypy_cache",
+                ".ruff_cache",
+                ".ipynb_checkpoints",
+                ".git",
+                ".nox",
+                "dist",
+            }
+            for part in Path(line).parts[:-1]
+        )
+        and not (Path(line).parts and Path(line).parts[0] == "build")
+        and not line.endswith((".pyc", ".pyo"))
+        and not any(part.endswith(".egg-info") for part in Path(line).parts)
+    )
+    expected_paths.write_text("\n".join(sorted(inventory_paths)) + "\n", encoding="utf-8")
     session.run(
         "python",
         "tools/release/check_sdist_contents.py",
         str(sdists[0]),
-        "--repo-root",
-        str(REPO_ROOT),
+        "--expected-paths",
+        str(expected_paths),
         env=env,
     )
     sdist_wheel_dist = root / "sdist-wheel-dist"
