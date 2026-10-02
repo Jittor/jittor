@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import sys
 import zipfile
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 import nox
 
@@ -1378,7 +1378,7 @@ def packaging(session):
         session.error("expected exactly one sdist-derived wheel, found %d" % len(sdist_wheels))
     wheel_args = tuple(session.posargs)
     for wheel in (wheels[0], sdist_wheels[0]):
-        record_args = ()
+        record_args: Tuple[str, ...] = ()
         if "--old-wheel" in wheel_args:
             # RECORD is generated from every wheel member and necessarily
             # changes when an explicitly approved source member changes.

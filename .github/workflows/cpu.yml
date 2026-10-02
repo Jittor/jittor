@@ -43,7 +43,7 @@ jobs:
       - name: Install native CPU toolchain
         run: |
           apt-get update
-          apt-get install --yes --no-install-recommends build-essential libomp-dev
+          apt-get install --yes --no-install-recommends build-essential cmake libomp-dev
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -79,7 +79,7 @@ jobs:
       - name: Install native CPU toolchain
         run: |
           apt-get update
-          apt-get install --yes --no-install-recommends build-essential libomp-dev
+          apt-get install --yes --no-install-recommends build-essential cmake libomp-dev
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -132,7 +132,7 @@ jobs:
       - name: Install native CPU toolchain
         run: |
           apt-get update
-          apt-get install --yes --no-install-recommends build-essential ca-certificates git libomp-dev
+          apt-get install --yes --no-install-recommends build-essential ca-certificates cmake git libomp-dev
       - name: Check out source
         uses: actions/checkout@v6
         with:
