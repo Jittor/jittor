@@ -1,6 +1,22 @@
 name: DeepSpeed L0
 
 on:
+  push:
+    paths:
+      - .github/workflows/deepspeed-l0.yml
+      - adapters/jittor_adapters/deepspeed/**
+      - agent/skills/deepspeed-torch-compat/**
+      - compat/tests/torch/test_deepspeed_l0.py
+      - noxfile.py
+      - requirements/deepspeed-l0.txt
+  pull_request:
+    paths:
+      - .github/workflows/deepspeed-l0.yml
+      - adapters/jittor_adapters/deepspeed/**
+      - agent/skills/deepspeed-torch-compat/**
+      - compat/tests/torch/test_deepspeed_l0.py
+      - noxfile.py
+      - requirements/deepspeed-l0.txt
   schedule:
     - cron: "30 2 * * *"
   workflow_dispatch:
