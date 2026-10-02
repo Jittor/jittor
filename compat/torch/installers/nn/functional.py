@@ -219,7 +219,9 @@ def _ctc_loss(log_probs, targets, input_lengths, target_lengths, blank=0,
 
 
 def _api_F_logsigmoid(input):
-    return jt.minimum(input, 0.0) - jt.log(1.0 + jt.exp(-jt.abs(input)))
+    # The piecewise min/abs form has a zero subgradient at x=0. Preference
+    # losses start at exactly zero log-ratio and require d/dx logsigmoid(0)=1/2.
+    return -jt.nn.softplus(-input)
 
 
 def _api_F_softmin(input, dim=-1, _stacklevel=3, dtype=None):
