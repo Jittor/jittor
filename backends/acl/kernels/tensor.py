@@ -144,7 +144,13 @@ def scatter_acl(input, dim, index, src, reduce="void"):
 
 
 def arg_reduce_acl(input, op, dim, keepdims=False):
-    if _jittor_dtype_name(input.dtype) not in ("float16", "float32"):
+    dtype = _jittor_dtype_name(input.dtype)
+    if dtype == "int32":
+        # aclnnMaxDim/MinDim on Ascend A2 does not accept int32 values.
+        # int64 preserves every int32 value exactly across the reduction.
+        indices, values = ArgReduceACL(jt.ops.arg_reduce)(input.cast("int64"), op, dim, keepdims)
+        return indices, values.cast("int32")
+    if dtype not in ("float16", "float32", "int64"):
         return None
     return ArgReduceACL(jt.ops.arg_reduce)(input, op, dim, keepdims)
 
