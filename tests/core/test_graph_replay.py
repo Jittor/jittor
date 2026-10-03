@@ -108,7 +108,7 @@ class _Decoder(nn.Module):
         self.count = count
 
     def execute(self, x, position, cache=None):
-        h = self.l1(x)
+        h = self.l1(x) * getattr(cache, "temperature", 1.0)
         if self.draw:
             h = h + jt.rand(h.shape)
         if self.count:
@@ -437,6 +437,25 @@ class TestGraphReplay(unittest.TestCase):
         want, _ = self._decode(model, _KVCache(), 0, steps=10, between=rescale)
         got, _ = self._decode(model, _KVCache(), 1, steps=10, between=rescale)
         np.testing.assert_allclose(got, want, rtol=1e-5, atol=1e-6)
+
+    def test_a_scalar_the_cache_holds_changed_from_outside_is_noticed(self):
+        # The step bakes `cache.temperature` in as a constant. Set again to
+        # the same value it must still replay; to another, re-capture.
+        def adjust(t, cache):
+            if t == 6:
+                cache.temperature = float("1.0")
+            if t == 8:
+                cache.temperature = 0.25 * 2
+        jt.set_global_seed(3)
+        model = _Decoder()
+        ref_cache, cache = _KVCache(), _KVCache()
+        ref_cache.temperature = cache.temperature = 1.0
+        want, _ = self._decode(model, ref_cache, 0, steps=11, between=adjust)
+        got, _ = self._decode(model, cache, 1, steps=11, between=adjust)
+        np.testing.assert_allclose(got, want, rtol=1e-5, atol=1e-6)
+        steps = self._stateful_steps(model)
+        self.assertEqual(len(steps), 1)
+        self.assertEqual(steps[0].stats["captured"], 2)
 
     def test_a_call_that_changes_its_object_on_the_host_is_not_captured(self):
         jt.set_global_seed(3)
