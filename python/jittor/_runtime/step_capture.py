@@ -425,7 +425,11 @@ def _write_back_in_graph(state, roots):
         return state
     targets = [state[i][1] for i in pending]
     values = [state[i][2] for i in pending]
-    if any(int(v.device_id) < 0 or not v._storage_is_contiguous() for v in targets + values):
+    # The op has a device kernel only. `device_id` does not say where a Var
+    # lives -- a host Var in a CUDA build reports device 0 -- so ask the
+    # allocator, through the targets: they are executed, the values may not be.
+    if any(v.location() != "device" for v in targets) or any(
+            not v._storage_is_contiguous() for v in targets + values):
         return state
     before = jt.flags.keep_graph
     jt.flags.keep_graph = 2
