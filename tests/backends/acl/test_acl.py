@@ -460,6 +460,34 @@ class TestACL(unittest.TestCase):
                                        rtol=2e-5, atol=2e-5, err_msg=label)
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_argsort_values_indices_stay_on_acl(self):
+        from jittor._runtime.fallback import forbid_backend_fallbacks
+
+        before = jt.core.backend_fallback_count()
+        source = np.array([[3., 1., 2.], [-4., 7., 0.]], dtype=np.float32)
+        cases = [(source, 1, False, "int32"),
+                 (source, 0, True, "int64"),
+                 (source.astype(np.float16), 1, True, "int32")]
+        with jt.runtime.scope(backend_fallback="error"), forbid_backend_fallbacks():
+            for values, dim, descending, dtype in cases:
+                with self.subTest(dim=dim, descending=descending, dtype=dtype):
+                    x = jt.array(values)
+                    indices, sorted_values = jt.argsort(
+                        x, dim=dim, descending=descending, dtype=dtype)
+                    _assert_acl_device(self, indices)
+                    _assert_acl_device(self, sorted_values)
+                    actual_indices = indices.numpy()
+                    actual_values = sorted_values.numpy()
+                    expected_indices = np.argsort(values, axis=dim)
+                    if descending:
+                        expected_indices = np.flip(expected_indices, axis=dim)
+                    np.testing.assert_array_equal(actual_indices, expected_indices)
+                    np.testing.assert_array_equal(
+                        actual_values, np.take_along_axis(values, expected_indices, axis=dim))
+                    self.assertEqual(str(indices.dtype), dtype)
+        self.assertEqual(jt.core.backend_fallback_count(), before)
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_integer_arg_reduce_exact_values_stay_on_acl(self):
         from jittor._runtime.fallback import forbid_backend_fallbacks
 

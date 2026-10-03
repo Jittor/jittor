@@ -49,6 +49,7 @@ CORE_SOURCES = (
     "src/acl_fused_ascendc.cc",
     "kernels/native/adamw_op_acl.cc",
     "kernels/native/arg_reduce_op_acl.cc",
+    "kernels/native/sort_op_acl.cc",
     "kernels/native/base_op_acl.cc",
     "kernels/native/binary_op_acl.cc",
     "kernels/native/bmm_op_acl.cc",

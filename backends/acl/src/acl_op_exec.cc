@@ -21,6 +21,7 @@
 #include "ops/composite/random_op.h"
 #include "ops/reduce_op.h"
 #include "ops/composite/arg_reduce_op.h"
+#include "ops/composite/argsort_op.h"
 #include "ops/binary_op.h"
 #include "ops/broadcast_to_op.h"
 #include "ops/composite/transpose_op.h"
@@ -772,6 +773,16 @@ namespace jittor
                  runner.run();
              }
          }},
+        {"argsort", [](Op *op)
+         {
+             auto *_op = static_cast<ArgsortOp *>(op);
+             AclExecutionRunner<SortOpRunner, false> runner(_op->dim, _op->descending);
+             runner.jt_name = "argsort";
+             runner.add(_op->x, true);
+             runner.add(_op->y, false);
+             runner.add(_op->y_key, false);
+             runner.run();
+         }},
         {"arg_reduce", [](Op *op)
          {
              auto _op = (ArgReduceOp *)op;
@@ -814,6 +825,17 @@ namespace jittor
                 unsupported = acl_getitem_unsupported_reason(op);
             if (unsupported.empty() && op->name() == string("setitem"))
                 unsupported = acl_setitem_unsupported_reason(op);
+            if (op->name() == string("argsort"))
+            {
+                auto *sort = static_cast<ArgsortOp *>(op);
+                const auto dtype = sort->x->dtype();
+                if (dtype != ns_float16 && dtype != ns_float32 &&
+                    dtype != ns_int8 && dtype != ns_int16 &&
+                    dtype != ns_int32 && dtype != ns_int64 && dtype != ns_uint8)
+                    unsupported = "argsort requires a CANN Sort input dtype";
+                if (sort->y->dtype() != ns_int64)
+                    unsupported = "argsort ACL indices must be int64 before output cast";
+            }
             if (op->name() == string("arg_reduce"))
             {
                 auto *reduce = static_cast<ArgReduceOp *>(op);
