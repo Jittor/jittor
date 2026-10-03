@@ -942,6 +942,29 @@ class GraphReplay:
         return self._refused
 
 
+def release_auto_replay(module):
+    """Take `module` away from the automatic policy, captures included.
+
+    For an explicit capture of it -- `torch.compile` of the module or of one
+    of its methods -- which replays it from then on. What the policy captured
+    before stays alive otherwise, unused, with its device recording: Transformers
+    runs a `generate` as written before compiling its decode step, and the
+    decode step it captured held 46 MiB beside the compiled one, which also
+    captures the same KV cache a second time.
+    """
+    state = module.__dict__.get("_auto_graph_replay")
+    if state is None:
+        state = module.__dict__["_auto_graph_replay"] = _AutoState()
+    for entry in state.entries.values():
+        if entry.step is not None:
+            entry.step.invalidate()
+    state.entries.clear()
+    if state.replay is not None:
+        state.replay.invalidate()
+        state.replay = None
+    state.give_up = True
+
+
 def _stateful_call(module, state, args, kw, objects):
     """The `_StatefulCall` for a call that passes objects, or None."""
     if state.unstable >= _UNSTABLE_LIMIT:

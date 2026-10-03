@@ -60,14 +60,20 @@ def compile(model=None, *args, **kwargs):
         return lambda value: compile(value, *args, **kwargs)
     if not _wants_replay(kwargs.get("mode"), kwargs.get("options")):
         return model
+    from jittor._runtime.graph_replay import release_auto_replay
     if isinstance(model, jt.nn.Module):
         if isinstance(model, OptimizedModule):
             return model
+        release_auto_replay(model)
         cls = _compiler_context().state.get("nn_class_adapter", _identity)(OptimizedModule)
         return cls(model)
     from jittor._runtime.step_capture import StepCapture
     if isinstance(model, StepCapture) or not callable(model):
         return model
+    owner = getattr(model, "__self__", None)
+    if isinstance(owner, jt.nn.Module):
+        # A method of a module -- Transformers compiles `model.__call__`.
+        release_auto_replay(owner)
     # A function -- typically a whole training step, forward, backward and
     # optimizer update -- is captured and replayed as one graph.
     return StepCapture(model)

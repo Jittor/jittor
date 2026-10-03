@@ -86,6 +86,33 @@ class _Case:
         self.assertEqual(replay.stats["captured"], 1)
         self.assertEqual(replay.stats["replayed"], len(feeds))
 
+    def test_compiling_takes_the_module_from_the_automatic_policy(self):
+        # Run as written first, the module was captured by the automatic
+        # policy; compiled, that capture would be a second one, never used.
+        model = _Net().to(self.device).eval()
+        x, t = self._feeds(1)[0]
+        flag = jt.flags.auto_graph_replay
+        jt.flags.auto_graph_replay = 1
+        try:
+            with torch.no_grad():
+                for _ in range(4):
+                    model(x, t, context=self.context)
+            self.assertIsNotNone(model.__dict__["_auto_graph_replay"].replay)
+            call = torch.compile(model.__call__, mode="reduce-overhead")
+            state = model.__dict__["_auto_graph_replay"]
+            self.assertTrue(state.give_up)
+            self.assertIsNone(state.replay)
+            with torch.no_grad():
+                got = [call(x, t, context=self.context)["out"].sample.cpu().numpy()
+                       for _ in range(3)]
+            jt.flags.auto_graph_replay = 0
+            with torch.no_grad():
+                want = model(x, t, context=self.context)["out"].sample.cpu().numpy()
+        finally:
+            jt.flags.auto_graph_replay = flag
+        for g in got:
+            np.testing.assert_allclose(g, want, rtol=1e-5, atol=1e-6)
+
     def test_a_call_that_records_gradients_runs_the_module(self):
         x = torch.randn(4, 8, device=self.device, requires_grad=True)
         t = torch.tensor(3)
