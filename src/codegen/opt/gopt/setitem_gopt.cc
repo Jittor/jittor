@@ -72,8 +72,18 @@ static void setitem_inplace(SetitemOp* op) {
     if (data_op->flag(OpFlags::_custom_flag))
         return;
 
+    // The value is computed straight into the region it is written to, and
+    // the setitem itself then writes nothing -- so this is only right when the
+    // value covers the region exactly. The region was miscounted three ways:
+    // dimensions past the last slice were left out, an open-ended first slice
+    // (`x[:, :]`) counted its unfilled stop of 0, and an ellipsis counted 1.
+    // A scalar value then went into the first element and nothing else:
+    // `x[2] = 0.0`, `x[:, :] = 0.0` and `x[...] = 0.0` on an executed x left
+    // the rest of the region as it was.
     auto in_shape = input->shape;
     int64 inplace_size = 1;
+    for (int i = vs.n; i < (int)in_shape.size(); i++)
+        inplace_size *= in_shape[i];
     for (int i = vs.n - 1; i > 0; --i) {
         VarSlice s = vs.slices[i];
         if (!(s.is_slice())) return;
@@ -84,23 +94,24 @@ static void setitem_inplace(SetitemOp* op) {
     }
     
     VarSlice s = vs.slices[0];
-    if (s.is_var() || s.is_str()) return;
+    if (!(s.is_int() || s.is_slice())) return;
     
     int64 size = 0;
-    if (s.is_int())
-        size = in_shape[0] == 0 ? 0 : s.i * (input->size / in_shape[0]);
-    else if (s.is_slice()) {
+    if (s.is_int()) {
+        if (s.i < 0 || s.i >= in_shape[0]) return;
+        size = s.i * (input->size / in_shape[0]);
+    } else {
         Slice ss = s.slice;
         // we also need to check the first dim is continuous
         if (ss.step != 1)
             return;
+        ss.fill(in_shape[0]);
+        if (ss.start < 0 || ss.stop < ss.start || ss.stop > in_shape[0]) return;
         size = in_shape[0] == 0 ? 0 : ss.start * (input->size / in_shape[0]);
         inplace_size *= ss.stop - ss.start;
     }
-    if (inplace_size > data->num) {
-        // if data has been broadcast into input, don't
-        // inplace data, because their shapes are not match
-        // This would lead partial setitem
+    if (inplace_size != data->num) {
+        // A value broadcast into the region does not cover it.
         return;
     }
     add_dependency(data->input(), input->node());
