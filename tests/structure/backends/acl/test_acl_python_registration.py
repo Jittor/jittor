@@ -150,7 +150,7 @@ def test_acl_rejection_does_not_reenter_native_dispatch(providers):
     x = _Tensor()
     assert providers.tensor.getitem_acl(x, 0, return_x=True) is None
     assert providers.tensor.setitem_acl(x, 0, x, reduce="add") is None
-    assert providers.tensor.arg_reduce_acl(_Tensor(dtype="int64"), "max", 0) is None
+    assert providers.tensor.arg_reduce_acl(_Tensor(dtype="float64"), "max", 0) is None
     assert providers.tensor._roll_acl(_Tensor(dtype="float64"), 1) is None
     assert providers.tensor._split_acl(x, 0) is None
     assert providers.neural.resize_acl(x, (2, 2), mode="bilinear") is None

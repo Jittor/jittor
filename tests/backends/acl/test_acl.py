@@ -460,6 +460,35 @@ class TestACL(unittest.TestCase):
                                        rtol=2e-5, atol=2e-5, err_msg=label)
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_integer_arg_reduce_exact_values_stay_on_acl(self):
+        from jittor._runtime.fallback import forbid_backend_fallbacks
+
+        before = jt.core.backend_fallback_count()
+        int32_values = np.array(
+            [[2147483647, -2147483648, 7, 7], [-9, 12, 12, 1]], dtype=np.int32)
+        int64_values = np.array([[2**40, -2**40, 5]], dtype=np.int64)
+        with jt.runtime.scope(backend_fallback="error"), forbid_backend_fallbacks():
+            x32 = jt.array(int32_values)
+            max_idx, max_val = jt.arg_reduce(x32, "max", 1)
+            min_idx, min_val = jt.arg_reduce(x32, "min", 1, True)
+            x64 = jt.array64(int64_values)
+            long_idx, long_val = jt.arg_reduce(x64, "max", 1)
+            for result in (max_idx, max_val, min_idx, min_val, long_idx, long_val):
+                _assert_acl_device(self, result)
+            actual = [result.numpy() for result in
+                      (max_idx, max_val, min_idx, min_val, long_idx, long_val)]
+
+        np.testing.assert_array_equal(actual[0], [0, 1])
+        np.testing.assert_array_equal(actual[1], [2147483647, 12])
+        np.testing.assert_array_equal(actual[2], [[1], [0]])
+        np.testing.assert_array_equal(actual[3], [[-2147483648], [-9]])
+        np.testing.assert_array_equal(actual[4], [0])
+        np.testing.assert_array_equal(actual[5], [2**40])
+        self.assertEqual(str(max_val.dtype), "int32")
+        self.assertEqual(str(long_val.dtype), "int64")
+        self.assertEqual(jt.core.backend_fallback_count(), before)
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_float_arg_reduce_runs_on_acl(self):
         cases = [
             (jt.float32([[1, 5, 3, 5], [-2, -4, 7, 0]]), "max", 1, False,
