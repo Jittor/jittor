@@ -54,12 +54,15 @@ built state, such as optimizer moments); the second is captured; later calls
 replay. `stats` says what happened.
 """
 
+import weakref
+
 import numpy as np
 
 import jittor as jt
 import jittor_core as _core
 
-from .graph_replay import (_RERECORD_LIMIT, _Unreplayable, _dense, _empty_like, _native_dtype, _object_ids,
+from .graph_replay import (_RERECORD_LIMIT, _Unreplayable, _allocated_bytes, _dense, _empty_like,
+                           _host_state, _native_dtype, _object_ids, _training,
                            _graph_has_nondeterministic_op,
                            _input_vars, _map_inputs, _no_auto, _output_template,
                            _rebuild, _signature)
@@ -286,7 +289,9 @@ def random_draw(shape, dtype, type):
     distribution, a different stream.
     """
     cap = _ACTIVE
-    if cap is None or dtype not in ("float32", "float64") or type not in ("uniform", "normal"):
+    if cap is None or _exact_refuses(cap):
+        return None
+    if dtype not in ("float32", "float64") or type not in ("uniform", "normal"):
         return None
     if cap.random is None:
         seed = int(jt.get_seed()) * 1000003 + id(cap) % 1000003
@@ -316,7 +321,7 @@ def random_keep(shape, p):
     BERT-base training step.
     """
     cap = _ACTIVE
-    if cap is None:
+    if cap is None or _exact_refuses(cap):
         return None
     if cap.random is None:
         seed = int(jt.get_seed()) * 1000003 + id(cap) % 1000003
@@ -333,6 +338,21 @@ def random_keep(shape, p):
         if (n) jt_step_capture_keep<<<((n + 3) / 4 + 255) / 256, 256>>>(
             out0_p, n, (const long long*)in0_p, {draw}LL, {float(p)!r}f);
         """).stop_grad()
+
+
+def _exact_refuses(cap):
+    """Whether `cap` must not change a draw, and is refused instead.
+
+    A capture draws through Philox, a different stream from the one the call
+    would have drawn from as written. Someone who asked for the capture
+    accepted that; the automatic policy has nobody's word for it.
+    """
+    if not cap.exact:
+        return False
+    if cap.refused is None:
+        cap.refused = ("the call draws random numbers, which a replay would draw "
+                       "from a different stream than running it as written")
+    return True
 
 
 def live_rate(impl, read_lr, frozen):
@@ -359,13 +379,15 @@ def refuse(reason):
 class _Capture:
     __slots__ = ("inputs", "host_inputs", "outputs", "template", "roots", "state",
                  "state_lists", "prologue", "guards", "signature", "refused", "random",
-                 "frozen_random")
+                 "frozen_random", "exact", "graph_bytes")
 
     def __init__(self):
         self.prologue = []
         self.guards = []
         self.refused = None
         self.random = None
+        self.exact = False
+        self.graph_bytes = 0
 
 
 def _finish_normally(roots):
@@ -452,8 +474,14 @@ def _write_back_in_graph(state, roots):
 class StepCapture:
     """A callable that replays `fn`'s captured step. See the module docstring."""
 
-    def __init__(self, fn, *, record=True):
+    def __init__(self, fn, *, record=True, exact_random=False, max_retained_bytes=None):
+        """`exact_random` refuses a step that draws random numbers rather than
+        drawing them from a capture's own stream; `max_retained_bytes` bounds
+        what a device recording may keep allocated (see `_record_cuda_graph`).
+        """
         self._fn = fn
+        self._exact_random = exact_random
+        self._max_retained_bytes = max_retained_bytes
         self._capture = None
         self._refused = None
         self._seen = None
@@ -501,6 +529,8 @@ class StepCapture:
         private_args, private_kwargs = _map_inputs((args, kwargs), private_copy)
 
         cap = _Capture()
+        cap.exact = self._exact_random
+        allocated = _allocated_bytes()
         before = jt.flags.keep_graph
         # The step is built whole, as a replay runs it. CUDA's auto-flush
         # otherwise launches what is pending every `auto_flush_ops` operators,
@@ -548,6 +578,9 @@ class StepCapture:
         # A host-generator draw left in the graph re-runs, and so draws again,
         # on every executor replay; only a device recording would freeze it.
         cap.frozen_random = _graph_has_nondeterministic_op()
+        if cap.frozen_random and cap.exact and cap.refused is None:
+            cap.refused = ("the call draws random numbers, which a replay would draw "
+                           "again on every run")
         if cap.refused is not None:
             self._refused = cap.refused
             _finish_normally(roots)
@@ -583,6 +616,9 @@ class StepCapture:
         cap.state_lists = ([holder for holder, _, _, _ in state],
                            [old for _, old, _, _ in state])
         cap.signature = _signature(args, kwargs)
+        # What a device recording of this step would hold: every buffer the
+        # captured run allocated, since a recording re-issues fixed pointers.
+        cap.graph_bytes = _allocated_bytes() - allocated
         return cap, self._results(cap, outputs)
 
     def _results(self, cap, sources):
@@ -621,6 +657,14 @@ class StepCapture:
 
     def _record_cuda_graph(self, cap):
         """Record one replay -- the step and its write-backs -- as a device graph."""
+        limit = self._max_retained_bytes
+        if limit and cap.graph_bytes > limit:
+            # Replays through the executor free as they go; a recording would
+            # keep all of it, for as long as the capture lives.
+            self._graph_refused = (
+                "a recording would keep %.1f MiB alive, over the %.1f MiB allowed"
+                % (cap.graph_bytes / 2**20, limit / 2**20))
+            return
         if not _core.graph_capture_supported():
             self._graph_refused = "this build cannot record device graphs"
             return
@@ -758,6 +802,63 @@ class StepCapture:
         for root in cap.roots:
             if not root.is_finished:
                 root._release_kept()
+
+
+class _PolicyStep(StepCapture):
+    """A module call the automatic replay policy captures, state included.
+
+    See the policy in `graph_replay`. Nobody asked for this capture, so it
+    guards what an explicit one leaves to its caller, and re-captures when
+    any of it changes:
+
+      - the host-side state of the objects the call was given (`_host_state`),
+        which the capture run must also have left as it found it;
+      - which Var every parameter of the module, and every Var those objects
+        hold, is: a load or an assignment outside the call rebinds one, and
+        the graph would go on reading the old one. State the step updates is
+        put back first (`_adopt`), so a cache reset between two `generate`
+        calls is taken over rather than re-captured;
+      - the module's training mode.
+
+    And it refuses a call that draws random numbers (`exact_random`).
+    """
+
+    def __init__(self, module, objects, signature, max_retained_bytes):
+        ref = weakref.ref(module)
+
+        def call(*args, **kwargs):
+            return ref()(*args, **kwargs)
+        super().__init__(call, exact_random=True, max_retained_bytes=max_retained_bytes)
+        self._module_ref = ref
+        self._objects = objects
+        # The policy has run this signature as written already, which is what
+        # the first call of a signature is for.
+        self._seen = signature
+
+    def _capture_now(self, args, kwargs):
+        objects = self._objects
+        before = _host_state(objects)
+        cap, result = super()._capture_now(args, kwargs)
+        if cap is None:
+            return cap, result
+        leaves = []
+        after = _host_state(objects, leaves)
+        module = self._module_ref()
+        if after is None or after != before or module is None:
+            # What the capture baked in is out of date already.
+            self._refused = "the call changes the host-side state of what it was given"
+            for root in cap.roots:
+                if not root.is_finished:
+                    root._release_kept()
+            return None, result
+        params = getattr(module, "parameters", None)
+        if callable(params):
+            leaves.extend(v for v in params() if isinstance(v, jt.Var))
+        ref = self._module_ref
+        cap.guards.append((lambda: _host_state(objects), after))
+        cap.guards.append((lambda: [v.var_ptr for v in leaves], [v.var_ptr for v in leaves]))
+        cap.guards.append((lambda: _training(ref()), _training(module)))
+        return cap, result
 
 
 def capture_step(fn, *, record=True):

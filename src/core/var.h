@@ -73,6 +73,14 @@ struct Var : Node {
     // current device. Host residency is a different axis -- a Var migrated to
     // the CPU keeps its device_id and goes back to that device.
     int device_id = -1;
+    // How many of the holders owning this Var are a step capture's record of
+    // it as state (`state_capture_end`): the Var the captured graph reads, put
+    // back under its holder after every replay. Such a record adopts whatever
+    // the holder holds before the graph runs again (`_adopt` in
+    // step_capture.py), so it does not need the bytes to stay as they are --
+    // an in-place update may write them (see setitem_inplace). Maintained by
+    // VarHolder::capture_record.
+    uint16_t capture_owners = 0;
     TensorPlacement placement;
     // Circular list of the vars that currently point into one allocation.
     // `share_src` above is only the *request*, and alloc() clears it once it

@@ -942,6 +942,96 @@ class GraphReplay:
         return self._refused
 
 
+def _stateful_call(module, state, args, kw, objects):
+    """The `_StatefulCall` for a call that passes objects, or None."""
+    if state.unstable >= _UNSTABLE_LIMIT:
+        state.entries.clear()
+        return None
+    signature = _signature(args, kw)
+    entries = state.entries
+    entry = entries.pop(signature, None)
+    if entry is not None and not entry.holds(objects):
+        # The signature names objects by id, and these are new ones that
+        # happen to have the old ones' ids.
+        entry = None
+    if entry is None:
+        if len(entries) >= _AUTO_ENTRIES:
+            evicted = entries.pop(next(iter(entries)))
+            if evicted.step is not None:
+                evicted.step.invalidate()
+                state.recaptures += 1
+                if state.recaptures >= _GIVE_UP_AFTER:
+                    state.give_up = True
+                    entries.clear()
+                    return None
+        try:
+            entry = _StatefulCall(module, state, signature, objects)
+        except TypeError:
+            # An object without weak references: nothing to tell it apart by
+            # once it is gone.
+            return None
+    elif signature != state.previous:
+        # Another signature came in between: start counting again.
+        entry.last = None
+    entries[signature] = entry
+    state.previous = signature
+    if entry.step is not None and entry.step.refused is not None:
+        # Refused for good; running it as written needs no wrapper.
+        return None
+    entry.objects = objects
+    return entry
+
+
+class _StatefulCall:
+    """One signature of a module called with objects (see the policy comment).
+
+    Runs the call as written, comparing the objects' host-side state around
+    it, until two consecutive calls of this signature left it as they found
+    it; the next one is captured by a `_PolicyStep`, which replays from then
+    on. Until then the objects are only referenced weakly: a dynamic cache
+    that is never captured must not outlive its `generate`.
+    """
+
+    __slots__ = ("module_ref", "auto", "signature", "refs", "objects", "last", "step")
+
+    def __init__(self, module, auto, signature, objects):
+        self.module_ref = weakref.ref(module)
+        self.auto = auto
+        self.signature = signature
+        self.refs = [weakref.ref(o) for o in objects]
+        # This call's objects, for its duration only.
+        self.objects = None
+        self.last = None
+        self.step = None
+
+    def holds(self, objects):
+        refs = self.refs
+        return len(refs) == len(objects) and all(r() is o for r, o in zip(refs, objects))
+
+    def __call__(self, *args, **kw):
+        objects, self.objects = self.objects, None
+        step = self.step
+        if step is not None:
+            return step(*args, **kw)
+        module = self.module_ref()
+        before = _host_state(objects)
+        result = module._dispatch_call(*args, **kw)
+        after = _host_state(objects)
+        if before is None or before != after:
+            self.auto.unstable += 1
+            self.last = None
+            return result
+        self.auto.unstable = 0
+        if before == self.last:
+            from .step_capture import _PolicyStep
+            # The step holds them strongly: its guards read them, and the id
+            # in the signature must not pass to another object.
+            self.step = _PolicyStep(module, objects, self.signature,
+                                    jt.flags.auto_graph_replay_retain_bytes)
+        self.last = after
+        return result
+
+
 def graph_replay(module, *example_inputs, measure=False):
     """Wrap `module` so repeated inference re-runs its graph. See the module docstring."""
     return GraphReplay(module, *example_inputs, measure=measure)
@@ -975,6 +1065,31 @@ def graph_replay(module, *example_inputs, measure=False):
 # lists, dicts or dataclasses) falls back and is not tried again for that
 # module. So does a module whose shapes keep changing, after enough
 # re-captures to show it.
+#
+# A call may also pass objects: Transformers hands every decode step its KV
+# cache, ``model(input_ids=..., past_key_values=cache, ...)``, and the step
+# writes the new keys into the cache's tensors in place. Matched by identity
+# alone a capture would keep answering for the first step, so such a call
+# goes through a step capture (`step_capture._PolicyStep`) instead, which
+# replays the in-place updates as state, and only when the objects keep still
+# on the host side:
+#
+#   - their host-side state -- every attribute and container entry reachable
+#     from them, a scalar by value and anything else by identity (`_host_state`)
+#     -- is the same after a call as before it, and as after the previous
+#     call. A dynamic cache that appends a new tensor every step never is;
+#   - a replay first checks that state again, and that no parameter and no
+#     Var those objects hold was rebound from outside, and re-captures if one
+#     was;
+#   - a call that draws random numbers is refused, rather than replayed from a
+#     different random stream.
+#
+# Like a call of Vars, such a call is captured only once it repeats: the same
+# signature in consecutive calls. A model alternates between signatures here
+# -- the prompt, then one token at a time, on every `generate` -- so the policy
+# keeps track of the last `_AUTO_ENTRIES` signatures rather than only the
+# latest; otherwise every prompt would throw the decode step's capture away.
+# The prompt itself, once per run, is not captured.
 
 
 #: Re-captures tolerated for one module before the policy leaves it alone. A
@@ -983,8 +1098,23 @@ def graph_replay(module, *example_inputs, measure=False):
 _GIVE_UP_AFTER = 8
 
 
+#: Signatures of calls with objects a module keeps track of (see above).
+_AUTO_ENTRIES = 2
+
+#: Calls in a row that changed their objects' host-side state before the
+#: policy stops looking at a module's object arguments -- each look walks them
+#: twice.
+_UNSTABLE_LIMIT = 8
+
+#: The most host-side state the objects of one call may carry, in entries of
+#: `_host_state`. Transformers' static cache for Qwen3-0.6B (28 layers) is 657,
+#: which takes 0.13 ms to walk -- once a replayed decode step, 3.5% of it.
+_HOST_STATE_LIMIT = 4096
+
+
 class _AutoState:
-    __slots__ = ("signature", "seen", "replay", "recaptures", "give_up")
+    __slots__ = ("signature", "seen", "replay", "recaptures", "give_up",
+                 "entries", "unstable", "previous")
 
     def __init__(self):
         self.signature = None
@@ -992,6 +1122,11 @@ class _AutoState:
         self.replay = None
         self.recaptures = 0
         self.give_up = False
+        # signature -> _StatefulCall, least recently used first.
+        self.entries = {}
+        self.unstable = 0
+        # The signature of the last call that passed objects.
+        self.previous = None
 
 
 def _element_size(dtype):
@@ -1025,23 +1160,118 @@ def _element_size(dtype):
 _AUTO_SCALARS = (int, float, bool, str)
 
 
+def _auto_inputs(value, found, objects):
+    """Bytes of the Vars in `value`'s plain containers.
+
+    `found` counts them; any other object is appended to `objects`.
+    """
+    if isinstance(value, jt.Var):
+        found[0] += 1
+        return value.numel() * _element_size(value.dtype)
+    kind = type(value)
+    if value is None or kind in _AUTO_SCALARS:
+        return 0
+    if kind is tuple or kind is list:
+        return sum(_auto_inputs(v, found, objects) for v in value)
+    if kind is dict:
+        return sum(_auto_inputs(v, found, objects) for v in value.values())
+    objects.append(value)
+    return 0
+
+
 def _auto_arguments(args, kw):
-    """Total bytes of the Vars among the arguments, or None if not eligible.
+    """(total bytes of the Vars among the arguments, the other objects), or None.
 
     Keyword arguments count like positional ones. Transformers calls every
     model by keyword -- ``model(input_ids=..., attention_mask=...)`` -- and
-    leaving those out meant no Hugging Face model was ever replayed.
+    leaving those out meant no Hugging Face model was ever replayed. Plain
+    tuples, lists and dicts are looked into, as `_spec` does: a Transformers
+    decode step passes its attention masks as a dict. A call with no Var at
+    all is not eligible.
     """
-    total = 0
-    found = False
-    for values in (args, kw.values()):
-        for a in values:
-            if isinstance(a, jt.Var):
-                total += a.numel() * _element_size(a.dtype)
-                found = True
-            elif a is not None and type(a) not in _AUTO_SCALARS:
-                return None
-    return total if found else None
+    found = [0]
+    objects = []
+    total = _auto_inputs(args, found, objects)
+    if kw:
+        total += _auto_inputs(kw, found, objects)
+    return (total, objects) if found[0] else None
+
+
+class _TooMuchState(Exception):
+    pass
+
+
+def _host_state(objects, vars_out=None):
+    """How `objects` look from the host, as a list to compare, or None.
+
+    Every attribute and container entry reachable from them: a scalar by
+    value, anything else by identity -- a Var too, which `vars_out` collects.
+    What a Var holds is the capture's business: state it updates, or a leaf
+    whose rebinding the replay checks. Classes, functions and other callables
+    are not looked into. None when there is more than `_HOST_STATE_LIMIT` of
+    it, or an object that cannot be read.
+    """
+    out = []
+    try:
+        for value in objects:
+            _walk_host_state(value, out, {}, vars_out)
+    except _TooMuchState:
+        return None
+    return out
+
+
+def _walk_host_state(value, out, seen, vars_out):
+    if len(out) > _HOST_STATE_LIMIT:
+        raise _TooMuchState
+    kind = type(value)
+    if value is None or kind in _AUTO_SCALARS:
+        out.append(value)
+        return
+    if isinstance(value, jt.Var):
+        out.append(id(value))
+        if vars_out is not None:
+            vars_out.append(value)
+        return
+    key = id(value)
+    index = seen.get(key)
+    if index is not None:
+        out.append(("seen", index))
+        return
+    seen[key] = len(seen)
+    out.append(kind)
+    if kind is tuple or kind is list:
+        out.append(len(value))
+        for v in value:
+            _walk_host_state(v, out, seen, vars_out)
+        return
+    if kind is dict:
+        out.append(len(value))
+        for k, v in value.items():
+            _walk_host_state(k, out, seen, vars_out)
+            _walk_host_state(v, out, seen, vars_out)
+        return
+    if isinstance(value, type) or callable(value):
+        out.append(key)
+        return
+    attrs = getattr(value, "__dict__", None)
+    slots = [name for cls in kind.__mro__ for name in getattr(cls, "__slots__", ())
+             if name not in ("__dict__", "__weakref__")]
+    if attrs is None and not slots:
+        # Opaque: a number type, a dtype, a device. Identity is all there is.
+        out.append(key)
+        return
+    if attrs is not None:
+        out.append(len(attrs))
+        for k, v in attrs.items():
+            out.append(k)
+            _walk_host_state(v, out, seen, vars_out)
+    for name in slots:
+        out.append(name)
+        _walk_host_state(getattr(value, name, _MISSING), out, seen, vars_out)
+
+
+#: An unset slot, for `_walk_host_state`.
+_MISSING = object()
 
 
 def auto_replay_for(module, args, kw):
@@ -1049,9 +1279,10 @@ def auto_replay_for(module, args, kw):
     flags = jt.flags
     if not flags.auto_graph_replay or not flags.no_grad:
         return None
-    nbytes = _auto_arguments(args, kw)
-    if nbytes is None:
+    found = _auto_arguments(args, kw)
+    if found is None:
         return None
+    nbytes, objects = found
     state = module.__dict__.get("_auto_graph_replay")
     if state is None:
         # Written through __dict__: Module.__setattr__ classifies assignments
@@ -1061,6 +1292,8 @@ def auto_replay_for(module, args, kw):
         return None
     if nbytes > flags.auto_graph_replay_bytes:
         return None
+    if objects:
+        return _stateful_call(module, state, args, kw, objects)
     signature = _signature(args, kw)
     if signature != state.signature:
         state.signature = signature

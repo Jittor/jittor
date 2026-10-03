@@ -67,6 +67,14 @@ static inline void note_rebind(VarHolder* holder) {
         state_capture->emplace(holder, VarPtr(holder->var));
 }
 
+// A capture's record stops counting once its holder holds something else.
+static inline void drop_capture_record(VarHolder* holder) {
+    if (PREDICT_BRANCH_NOT_TAKEN(holder->capture_record)) {
+        holder->capture_record = false;
+        holder->var->capture_owners--;
+    }
+}
+
 static bool capture_saw_readback = false;
 
 void state_capture_begin() {
@@ -90,7 +98,11 @@ PyObject* state_capture_end() {
         Py_INCREF(holder_obj);
         PyObjHolder item(PyTuple_New(3));
         PyTuple_SET_ITEM(item.obj, 0, holder_obj);
-        PyTuple_SET_ITEM(item.obj, 1, to_py_object<VarHolder*>(new VarHolder(old)));
+        auto* record = new VarHolder(old);
+        record->capture_record = true;
+        ASSERT(old->capture_owners < UINT16_MAX);
+        old->capture_owners++;
+        PyTuple_SET_ITEM(item.obj, 1, to_py_object<VarHolder*>(record));
         PyTuple_SET_ITEM(item.obj, 2, to_py_object<VarHolder*>(new VarHolder(holder->var)));
         if (PyList_Append(result.obj, item.obj) < 0)
             throw std::runtime_error("cannot build the step capture's state list");
@@ -266,6 +278,9 @@ void VarHolder::copy_into(VarHolder* src, bool sync_src) {
         << "_copy_into dtype mismatch:" << src->var->dtype() << "into" << var->dtype();
     USER_CHECK(src->var->size == var->size)
         << "_copy_into size mismatch:" << src->var->size << "bytes into" << var->size;
+    // Already there: an in-place update wrote into this very buffer (a step
+    // capture taking over its state, see `capture_owners`).
+    if (src->var->mem_ptr == var->mem_ptr) return;
     auto device_of = [](Var* v) {
         Device d{};
         if (v->allocator && v->allocator->is_cuda())
@@ -344,6 +359,7 @@ VarHolder::VarHolder(VarHolder* v) : var(v->var) {
     own_holder();
     iter = v->iter;
     *iter = this;
+    capture_record = v->capture_record;
     // `v` is discarded without running ~VarHolder, so what ~VarHolder would
     // have relinked has to be relinked here: `v`'s own view record and the
     // records of every view that named `v` as its base. The records themselves
@@ -653,6 +669,7 @@ VarHolder::~VarHolder() {
     if (PREDICT_BRANCH_NOT_TAKEN(!var)) return;
     if (PREDICT_BRANCH_NOT_TAKEN(state_capture != nullptr))
         state_capture->erase(this);
+    drop_capture_record(this);
     unlink_from_hold_vars(iter);
     release_holder();
     // Dropping the last holder runs the liveness propagation, which frees
@@ -693,6 +710,7 @@ void VarHolder::operator=(VarPtr&& v) {
             v.ptr->set_flag(VarFlags::_explicit_requires_grad);
     }
     note_rebind(this);
+    drop_capture_record(this);
     assign_var(v.ptr, var);
     release_holder();
     var->release_both_liveness();
@@ -809,6 +827,7 @@ VarHolder* VarHolder::assign(VarHolder* v) {
     // is a write to the thing it is a view of.
     write_through_view(v->var);
     note_rebind(this);
+    drop_capture_record(this);
     assign_var(v->var, var);
     release_holder();
     v->var->own_both_liveness();
@@ -828,6 +847,7 @@ VarHolder* VarHolder::_update(VarHolder* v) {
     if (var->flag(VarFlags::_placement_published))
         v->var->set_flag(VarFlags::_placement_published);
     note_rebind(this);
+    drop_capture_record(this);
     release_holder();
     v->var->own_both_liveness();
     var->release_both_liveness();

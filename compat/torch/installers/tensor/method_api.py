@@ -1469,11 +1469,35 @@ _BINARY_APIS = {
 }
 
 
+def _fill_captured_state(self, val):
+    """Fill state a step capture replays in its own buffer; True if done.
+
+    `_ip` rebinds the tensor to a newly computed one. For state a capture
+    keeps (`_capture_owned`), the capture still holds the old buffer, so the
+    new one is a second copy for as long as the capture lives: a static KV
+    cache reset before every `generate` held two caches through the prompt.
+    A setitem over the whole tensor fills the old buffer in place instead.
+    Only a constant fill without a gradient: one that read the tensor itself
+    could read what it is overwriting.
+    """
+    if (not self._capture_owned() or not self.shape
+            or not (_owner.jt.flags.no_grad or self.is_stop_grad())
+            or getattr(self, "_torch_data_owner", None) is not None):
+        return False
+    value = _owner.jt.array(val).cast(self.dtype)
+    self.assign(self.setitem((slice(None),) * len(self.shape), value))
+    return True
+
+
 def _api_fill(self, val):
+    if _fill_captured_state(self, val):
+        return self
     return _ip(self, _owner.jt.ones(self.shape, self.dtype) * val)
 
 
 def _api_zero(self):
+    if _fill_captured_state(self, 0):
+        return self
     return _ip(self, _owner.jt.zeros(self.shape, self.dtype))
 
 

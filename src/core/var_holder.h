@@ -125,6 +125,9 @@ struct VarHolder {
     // Head of the list of views onto this holder, so that destruction can tell
     // them their base is gone.
     VarView* views = nullptr;
+    // This holder is a step capture's record of `var` as state, counted in
+    // `var->capture_owners` until it lets go of the Var.
+    bool capture_record = false;
     VarHolder(Var* v);
     VarHolder(VarPtr&& v);
     // will move and delete v
@@ -722,6 +725,10 @@ struct VarHolder {
     VarHolder* set_storage_view_of(VarHolder* base, bool expand);
     // @pyjt(_storage_is_contiguous)
     bool storage_is_contiguous() { return var->is_contiguous(); }
+    // Whether a step capture holds this Var as the state it replays; an
+    // in-place update then writes into it rather than beside it.
+    // @pyjt(_capture_owned)
+    bool capture_owned() { return var->capture_owners != 0; }
     // @pyjt(_storage_offset)
     int64 storage_offset() { return var->storage_offset_bytes / var->dsize(); }
     // @pyjt(_storage_strides)

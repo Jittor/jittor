@@ -89,6 +89,35 @@ class _Keywords(nn.Module):
         return self.l1(x) * scale + bias
 
 
+class _KVCache:
+    """What Transformers passes a decode step: tensors the step writes in place."""
+
+    def __init__(self, length=6, d=8):
+        self.keys = jt.zeros((length, d))
+        self.scale = jt.ones((d,))
+        self.length = length
+
+
+class _Decoder(nn.Module):
+    """One decode step: writes its row of the cache, reads all of it."""
+
+    def __init__(self, d=8, draw=False, count=False):
+        super().__init__()
+        self.l1 = nn.Linear(d, d)
+        self.draw = draw
+        self.count = count
+
+    def execute(self, x, position, cache=None):
+        h = self.l1(x)
+        if self.draw:
+            h = h + jt.rand(h.shape)
+        if self.count:
+            cache.calls += 1
+            h = h * cache.calls
+        cache.keys[position] = h[0]
+        return (cache.keys.sum(0, keepdims=True) * 0.5 + h * cache.scale).tanh()
+
+
 class _FlushObserver(nn.Module):
     def __init__(self):
         super().__init__()
@@ -320,8 +349,8 @@ class TestGraphReplay(unittest.TestCase):
     def test_the_automatic_policy_leaves_an_object_argument_alone(self):
         # A KV cache is the same object on every decode step while what it
         # holds changes; matched by identity, a capture would keep answering
-        # for the first step. An explicit graph_replay may take that risk on
-        # its caller's word, the automatic policy may not.
+        # for the first step. One that is handed a new tensor every step --
+        # a dynamic cache -- is never captured at all.
         class _Cache:
             def __init__(self):
                 self.value = jt.zeros(8)
@@ -338,7 +367,141 @@ class TestGraphReplay(unittest.TestCase):
                 cache.value = jt.full((8,), float(step))
                 np.testing.assert_allclose(model(x, cache=cache).numpy(),
                                            x.numpy() + step, rtol=1e-6)
-        self.assertNotIn("_auto_graph_replay", model.__dict__)
+        state = model.__dict__["_auto_graph_replay"]
+        self.assertTrue(all(e.step is None for e in state.entries.values()))
+
+    def _decode(self, model, cache, flag, steps=6, reset=False, between=None):
+        """Greedy-decode-shaped calls: each output is the next input."""
+        before = jt.flags.auto_graph_replay
+        jt.flags.auto_graph_replay = flag
+        x = self.feed[0][:1]
+        outs = []
+        try:
+            with jt.no_grad():
+                for t in range(steps):
+                    if reset and t == 0:
+                        cache.keys.assign(jt.zeros_like(cache.keys))
+                    if between is not None:
+                        between(t, cache)
+                    x = model(x, jt.array([t % cache.length]), cache=cache)
+                    outs.append(x.numpy().copy())
+        finally:
+            jt.flags.auto_graph_replay = before
+        return np.concatenate(outs), cache.keys.numpy().copy()
+
+    def _stateful_steps(self, model):
+        state = model.__dict__.get("_auto_graph_replay")
+        if state is None:
+            return []
+        return [e.step for e in state.entries.values() if e.step is not None]
+
+    def test_the_automatic_policy_replays_a_call_that_updates_its_cache_in_place(self):
+        # Transformers' static-cache decode: the same cache object every step,
+        # whose tensors the step writes in place. Captured as a step, the
+        # write is replayed as a state update.
+        jt.set_global_seed(3)
+        model = _Decoder()
+        want, want_keys = self._decode(model, _KVCache(), 0, steps=12)
+        got, got_keys = self._decode(model, _KVCache(), 1, steps=12)
+        np.testing.assert_allclose(got, want, rtol=1e-5, atol=1e-6)
+        np.testing.assert_allclose(got_keys, want_keys, rtol=1e-5, atol=1e-6)
+        steps = self._stateful_steps(model)
+        self.assertEqual(len(steps), 1)
+        self.assertIsNone(steps[0].refused)
+        self.assertGreaterEqual(steps[0].stats["replayed"], 6)
+
+    def test_a_cache_reset_between_runs_is_taken_over(self):
+        # `generate` resets its static cache in place before every run; the
+        # capture takes the reset tensors over instead of capturing again.
+        jt.set_global_seed(3)
+        model = _Decoder()
+        ref_cache, cache = _KVCache(), _KVCache()
+        for run in range(3):
+            want, want_keys = self._decode(model, ref_cache, 0, reset=True)
+            got, got_keys = self._decode(model, cache, 1, reset=True)
+            np.testing.assert_allclose(got, want, rtol=1e-5, atol=1e-6)
+            np.testing.assert_allclose(got_keys, want_keys, rtol=1e-5, atol=1e-6)
+        steps = self._stateful_steps(model)
+        self.assertEqual(len(steps), 1)
+        self.assertEqual(steps[0].stats["captured"], 1)
+
+    def test_a_tensor_the_cache_holds_rebound_from_outside_is_noticed(self):
+        # The step reads `cache.scale` without writing it. Rebinding it from
+        # outside leaves the captured graph reading the old one, unless the
+        # replay notices.
+        def rescale(t, cache):
+            if t == 7:
+                cache.scale.assign(jt.full((8,), 3.0))
+        jt.set_global_seed(3)
+        model = _Decoder()
+        want, _ = self._decode(model, _KVCache(), 0, steps=10, between=rescale)
+        got, _ = self._decode(model, _KVCache(), 1, steps=10, between=rescale)
+        np.testing.assert_allclose(got, want, rtol=1e-5, atol=1e-6)
+
+    def test_a_call_that_changes_its_object_on_the_host_is_not_captured(self):
+        jt.set_global_seed(3)
+        model = _Decoder(count=True)
+        ref_cache, cache = _KVCache(), _KVCache()
+        ref_cache.calls = cache.calls = 0
+        want, _ = self._decode(model, ref_cache, 0, steps=8)
+        got, _ = self._decode(model, cache, 1, steps=8)
+        np.testing.assert_allclose(got, want, rtol=1e-5, atol=1e-6)
+        self.assertEqual(self._stateful_steps(model), [])
+
+    def test_a_call_with_state_that_draws_random_numbers_is_refused(self):
+        # A capture would draw from its own stream, where running the call as
+        # written draws from the caller's generator.
+        model = _Decoder(draw=True)
+        self._decode(model, _KVCache(), 1, steps=8)
+        steps = self._stateful_steps(model)
+        self.assertEqual(len(steps), 1)
+        self.assertIn("random", steps[0].refused)
+        self.assertEqual(steps[0].stats["replayed"], 0)
+
+    def test_the_token_step_survives_the_prompt_between_runs(self):
+        # `generate` calls the model on the prompt, then token by token, and
+        # again on every run. One slot would throw the token step's capture
+        # away at every prompt; the prompt, once a run, is not captured.
+        jt.set_global_seed(3)
+        model = _Decoder()
+        prompt = self.feed[1]
+
+        def run(flag, cache):
+            before = jt.flags.auto_graph_replay
+            jt.flags.auto_graph_replay = flag
+            outs = []
+            try:
+                with jt.no_grad():
+                    for _ in range(4):
+                        cache.keys.assign(jt.zeros_like(cache.keys))
+                        x = model(prompt, jt.array([0, 1]), cache=cache)[1:]
+                        for t in range(2, 6):
+                            x = model(x, jt.array([t]), cache=cache)
+                            outs.append(x.numpy().copy())
+            finally:
+                jt.flags.auto_graph_replay = before
+            return np.concatenate(outs)
+
+        want = run(0, _KVCache())
+        got = run(1, _KVCache())
+        np.testing.assert_allclose(got, want, rtol=1e-5, atol=1e-6)
+        steps = self._stateful_steps(model)
+        self.assertEqual(len(steps), 1)
+        self.assertEqual(steps[0].stats["captured"], 1)
+        self.assertGreaterEqual(steps[0].stats["replayed"], 10)
+
+    def test_a_cache_that_is_dropped_is_not_kept_alive(self):
+        # Not captured -- it changes every call -- so nothing may hold it.
+        import gc
+        import weakref
+        model = _Decoder(count=True)
+        cache = _KVCache()
+        cache.calls = 0
+        self._decode(model, cache, 1, steps=4)
+        ref = weakref.ref(cache)
+        del cache
+        gc.collect()
+        self.assertIsNone(ref())
 
     def test_the_call_is_captured_as_one_graph(self):
         # Auto-flush would launch the traced call in pieces, and each piece's
