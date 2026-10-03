@@ -723,9 +723,10 @@ register_fidelity(
 )
 
 _STD_MEAN_FIDELITY_DETAIL = (
-    "matches the current Jittor mean/std values for supported real tensors; "
-    "correction is ignored and dim std does not preserve keepdim, while "
-    "device, layout, and out semantics are omitted"
+    "delegates paired moments to the shared mean/std/var owners, preserving "
+    "keepdim and unbiased/correction=0/1 for supported real tensors; "
+    "other correction values and out are explicitly unsupported; "
+    "CPU float32 shape/value/gradient parity is verified"
 )
 
 from .reductions import _std_mean_impl
@@ -1103,9 +1104,9 @@ register_fidelity(
     "torch.stft",
     stft,
     Fidelity.APPROXIMATE,
-    "matches Torch CPU NumPy STFT values for supported real waveforms; "
-    "gradient, device, window dtype, and return_complex=False semantics are "
-    "not implemented",
+    "native float32 STFT with waveform/window gradients and complex64 or "
+    "real/imag output; CPU verified, accelerator execution unverified; "
+    "other input/window dtypes are explicitly unsupported",
 )
 
 def _bind_missing(target, name, implementation):

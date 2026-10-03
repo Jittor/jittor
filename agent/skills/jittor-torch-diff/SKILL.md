@@ -130,3 +130,49 @@ input, not a jittor bug (both raise the same shape error).
 
 This is a living toolbox — when you build a new diff/debug probe (a new metric, a
 new failure class, an N-card CUDA variant), add it here so the next run starts warm.
+
+## Original OpenAI Whisper CPU probes
+
+`whisper_probe.py` records import, construction, fixed-waveform log-Mel, and
+STFT gradient results. It does not patch Whisper
+or turn an exception into a successful result. Use the same installed
+`openai-whisper` version in two independent interpreters, and keep reports,
+arrays and caches outside the repository. `JITTOR_ECOSYSTEM_PACKAGE_SITE`
+may expose the shared downstream package site after the shim owns `torch`.
+
+```bash
+# Configure PYTHONPATH, JITTOR_HOME and TMPDIR for the candidate checkout first.
+"$RT_PY" agent/skills/jittor-torch-diff/whisper_probe.py \
+  --runtime torch --stage construct --output "$OUT/oracle-construct.json"
+"$JT_PY" agent/skills/jittor-torch-diff/whisper_probe.py \
+  --runtime jittor --stage construct --output "$OUT/jittor-construct.json"
+```
+
+The `mel` stage also writes a NumPy array beside its JSON report. A passing
+`construct` or `mel` record alone is not forward, training, or zero-fallback
+acceptance. The ecosystem case `openai_whisper` owns same-weight forward and
+complete gradient comparison.
+
+## Boolean COO metadata differential tests
+
+`sparse_metadata_probe.py` owns deterministic public-API cases, with no runtime
+branches. `compat/tests/torch/test_torch_sparse_metadata.py` runs them in the
+active shim and in `REAL_TORCH_PYTHON`, using a cleaned oracle environment and
+checking its binary PyTorch identity and exit code. The existing `whisper_cpu`
+nox session includes this file, so the comparisons run alongside its unit tests.
+
+```bash
+JITTOR_TORCH_SHIM=1 JITTOR_TEST_DEVICES=cpu JT_USE_CUDA=0 \
+JITTOR_REQUIRE_REAL_TORCH=1 JITTOR_TEST_REQUIRE_EXECUTION=1 \
+REAL_TORCH_PYTHON="$RT_PY" "$JT_PY" -m pytest -q --confcutdir=compat/tests \
+  compat/tests/torch/test_torch_sparse_metadata.py
+```
+
+The 31 paired cases compare bool values and int64 coordinates exactly, including
+empty/strided inputs, conversion metadata, mutation sharing through detach,
+clone/copy isolation, retained references after copy_, nested nonpersistent
+buffers and error classes with semantic message checks. This is CPU bool COO
+evidence, not sparse arithmetic, sparse gradients, serialization or accelerator
+acceptance. Unsupported features remain separate explicit-failure unit tests.
+A missing oracle fails when `JITTOR_REQUIRE_REAL_TORCH=1`; no self-reference is
+permitted. Use the skill's standard candidate-source/JIT environment first.

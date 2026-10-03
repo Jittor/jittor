@@ -1,4 +1,4 @@
-"""Delay independent PyTorch imports until pytest executes a test module."""
+"""Use only independent PyTorch preloaded before Jittor owns the process."""
 
 import ast
 import importlib
@@ -75,8 +75,7 @@ def _spec_is_deployed_torch_shim(spec):
             continue
         targets = node.targets if isinstance(node, ast.Assign) else (node.target,)
         if any(
-            isinstance(target, ast.Attribute)
-            and target.attr == "_jittor_torch_shim_placeholder"
+            isinstance(target, ast.Attribute) and target.attr == "_jittor_torch_shim_placeholder"
             for target in targets
         ):
             return True
@@ -92,16 +91,18 @@ def modules_available(*module_names):
                 if _loaded_torch_is_jittor_shim():
                     return False
                 module = sys.modules.get("torch")
-                if module is not None:
-                    if getattr(module, "__name__", None) != "torch":
-                        return False
-                    site = _real_torch_site()
-                    if site is not None and not (
-                        _loaded_module_is_from_site("torch", site)
-                        and _loaded_torch_has_binary_core(site)
-                    ):
-                        return False
-                    continue
+                # import_torch_modules deliberately refuses to import Torch
+                # after Jittor. A discoverable but unclaimed package therefore
+                # is not an available oracle in this process.
+                if module is None or getattr(module, "__name__", None) != "torch":
+                    return False
+                site = _real_torch_site()
+                if site is not None and not (
+                    _loaded_module_is_from_site("torch", site)
+                    and _loaded_torch_has_binary_core(site)
+                ):
+                    return False
+                continue
             site = _real_torch_site()
             if module_name in ("torch", "torchvision") and site is not None:
                 if _loaded_module_is_from_site(module_name, site):

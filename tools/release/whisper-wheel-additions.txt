@@ -1,0 +1,3 @@
+# Whisper CPU L2: exact new wheel members relative to upstream 2.0-refactor.
+82020913b7edbc3ba60557674d2818fc5c44ca59acbced065f1bfa02463c411b  jittor/backends/cuda/kernels/cublas/lt_linear_cuda.py
+8ab27a78c4f331705f1b4405a69043be1ea7fe3912c5aaf04b9b9b3a4950088c  jittor/fft/spectral.py

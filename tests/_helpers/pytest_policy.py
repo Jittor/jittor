@@ -174,7 +174,9 @@ def pytest_configure(config):
     # module is collected: importing jittor under JITTOR_TORCH_SHIM=1 installs
     # the Torch shim, and a test file that says ``import torch`` before
     # ``import jittor`` must not depend on some earlier file having done so.
-    if _torch_mode_is_active() and not hasattr(sys.modules.get("torch"), "_torch_compat_install_context"):
+    if _torch_mode_is_active() and not hasattr(
+        sys.modules.get("torch"), "_torch_compat_install_context"
+    ):
         importlib.import_module("jittor")
     # Registered rather than reimplemented here: its hooks have to run even when
     # this module's own sessionfinish raises, because the thing it records is
@@ -184,6 +186,7 @@ def pytest_configure(config):
     # none. That is how the CPU-only gate ran only 48% of the Torch selection
     # without reporting anything wrong.
     from _helpers import session_completion
+
     if not config.pluginmanager.has_plugin("jittor_session_completion"):
         config.pluginmanager.register(session_completion, "jittor_session_completion")
     # Both repository test roots use exactly this marker policy, including
@@ -500,11 +503,11 @@ def rocm_backend(request):
 
     capability = jt.introspection.capabilities.backend("rocm")
     if capability.failed or capability.unprobed:
-        raise pytest.UsageError("ROCm backend is %s: %s" % (
-            capability.state.value, capability.reason))
+        raise pytest.UsageError(
+            "ROCm backend is %s: %s" % (capability.state.value, capability.reason)
+        )
     if not capability.enabled:
-        pytest.skip("ROCm backend is %s: %s" % (
-            capability.state.value, capability.reason))
+        pytest.skip("ROCm backend is %s: %s" % (capability.state.value, capability.reason))
     with jt.runtime.scope(use_rocm=1):
         yield
 
@@ -643,10 +646,22 @@ _ACCELERATOR_EXECUTED = 0
 #: Ordered, and the order is the classification: the first bucket whose pattern
 #: appears in the reason wins. "insufficient-devices" therefore has to precede
 #: "accelerator", because its reasons name the accelerator too.
-_SKIP_BUCKET_ORDER = ("insufficient-devices", "accelerator", "backend", "mpi",
-                      "torch", "network", "manual", "opt-in", "declared",
-                      "environment", "other")
+_SKIP_BUCKET_ORDER = (
+    "optional-dependency",
+    "insufficient-devices",
+    "accelerator",
+    "backend",
+    "mpi",
+    "torch",
+    "network",
+    "manual",
+    "opt-in",
+    "declared",
+    "environment",
+    "other",
+)
 _SKIP_BUCKET_PATTERNS = {
+    "optional-dependency": ("missing openai whisper dependency:",),
     # Not the same fact as "this box has no accelerator", and the difference is
     # the whole point of counting it apart. A test that wants two devices skips
     # on a one-GPU machine with a reason that names CUDA, so it landed in
@@ -695,11 +710,15 @@ _SKIP_BUCKET_PATTERNS = {
     # landed in "other", and `other > 0` fails a gate run outright. Every file
     # holding one therefore failed every gate that collected it, for doing
     # exactly what it was written to do.
-    "opt-in": ("performance_test", "skip slow test", "upper bound on wall-clock",
-               "load_sensitive",
-               # A documented known-failing case with its own switch; see the
-               # note on the same pattern in `gate_scope.ENVIRONMENT_SKIP_PATTERNS`.
-               "jt_test_thread_race"),
+    "opt-in": (
+        "performance_test",
+        "skip slow test",
+        "upper bound on wall-clock",
+        "load_sensitive",
+        # A documented known-failing case with its own switch; see the
+        # note on the same pattern in `gate_scope.ENVIRONMENT_SKIP_PATTERNS`.
+        "jt_test_thread_race",
+    ),
     # The subject itself says the case does not apply: an OpInfo entry that
     # declares no second derivative, no numpy reference, or no differentiable
     # sample. A fact about the operator, not about this machine -- and, like
@@ -710,9 +729,13 @@ _SKIP_BUCKET_PATTERNS = {
     # `tests/structure/build/test_env_var_manifest.py` is parametrized over the
     # modules that read a setting under its unprefixed name and skips the
     # resolver files, which are exactly where those names are resolved.
-    "declared": ("supports_gradgrad=false", "supports_autograd=false",
-                 "no numpy reference", "no differentiable samples",
-                 "the resolver is where these names are allowed"),
+    "declared": (
+        "supports_gradgrad=false",
+        "supports_autograd=false",
+        "no numpy reference",
+        "no differentiable samples",
+        "the resolver is where these names are allowed",
+    ),
 }
 
 
@@ -826,14 +849,17 @@ def _accepted_skip_patterns():
         from _helpers.gate_scope import ENVIRONMENT_SKIP_PATTERNS, REAL_TORCH_PATTERNS
     except Exception:
         return ()
-    if not _real_torch_is_required():
-        return ENVIRONMENT_SKIP_PATTERNS
+    patterns = ENVIRONMENT_SKIP_PATTERNS
     # The inversion: a session that declares it has real PyTorch cannot also
     # accept "no torch" as an explanation, or it reports success for the one
     # thing it exists to check.
-    return tuple(
-        pattern for pattern in ENVIRONMENT_SKIP_PATTERNS if pattern not in REAL_TORCH_PATTERNS
-    )
+    if _real_torch_is_required():
+        patterns = tuple(pattern for pattern in patterns if pattern not in REAL_TORCH_PATTERNS)
+    if os.environ.get("JITTOR_REQUIRE_WHISPER", "").strip().lower() in ("1", "true", "yes", "on"):
+        patterns = tuple(
+            pattern for pattern in patterns if pattern != "missing openai whisper dependency:"
+        )
+    return patterns
 
 
 def _environment_explains(reasons):
@@ -973,10 +999,14 @@ def _require_real_accelerator():
         try:
             capability = jt.introspection.capabilities.backend(name)
         except Exception as error:
-            raise pytest.UsageError("%s gate capability query failed: %s" % (name, error)) from error
+            raise pytest.UsageError(
+                "%s gate capability query failed: %s" % (name, error)
+            ) from error
         if not capability.enabled:
-            raise pytest.UsageError("%s gate requires an available backend; observed %s: %s" % (
-                name, capability.state.value, capability.reason))
+            raise pytest.UsageError(
+                "%s gate requires an available backend; observed %s: %s"
+                % (name, capability.state.value, capability.reason)
+            )
 
 
 def _report_files_that_executed_nothing(terminalreporter, config):
@@ -1064,21 +1094,21 @@ def _report_skip_reason_buckets(terminalreporter):
         # selection. Five of the six reasons behind this machine's twenty turned
         # out to be facts about the build (no ``jt_graph_build_profile``, no cub,
         # no MKL, no gdb) and the sixth a placeholder reason string.
-        terminalreporter.write_line(
-            "the reasons counted as `other` (fix or explain these):")
+        terminalreporter.write_line("the reasons counted as `other` (fix or explain these):")
         for reason, count in _OTHER_SKIP_REASONS.most_common(10):
             terminalreporter.write_line("  %d x %s" % (count, reason[:160]))
         if len(_OTHER_SKIP_REASONS) > 10:
             terminalreporter.write_line(
-                "  ... and %d more distinct reason(s)"
-                % (len(_OTHER_SKIP_REASONS) - 10))
+                "  ... and %d more distinct reason(s)" % (len(_OTHER_SKIP_REASONS) - 10)
+            )
     short = _SKIP_REASON_BUCKETS.get("insufficient-devices", 0)
     if short:
         # Said out loud because it is the one bucket that is not an environment
         # fact: the hardware is present and the coverage was still skipped.
         terminalreporter.write_line(
             "note: %d case(s) skipped for wanting more devices than this "
-            "machine has -- coverage lost on hardware that is present" % short)
+            "machine has -- coverage lost on hardware that is present" % short
+        )
 
 
 def _report_reference_caches(terminalreporter):
@@ -1193,6 +1223,7 @@ def _install_api_coverage(session):
     if getattr(session.config.option, "collectonly", False):
         return
     from _helpers import api_coverage
+
     if not api_coverage.enabled():
         return
     api_coverage.install("torch" if _torch_mode_is_active() else "native")
@@ -1207,13 +1238,15 @@ def _report_api_coverage(terminalreporter):
     under tests/ and would score ~96%.
     """
     from _helpers import api_coverage
+
     if not api_coverage.enabled():
         return
     data = api_coverage.report()
     terminalreporter.write_sep("=", "public API coverage")
     terminalreporter.write_line(
         "%s surface: called %d of %d wrapped entry points (%d unwrappable)"
-        % (data["surface"], data["called"], data["wrapped"], data["unwrappable"]))
+        % (data["surface"], data["called"], data["wrapped"], data["unwrappable"])
+    )
     destination = os.environ.get("JITTOR_API_COVERAGE_REPORT")
     if destination:
         api_coverage.write_report(destination)

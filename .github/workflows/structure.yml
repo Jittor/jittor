@@ -34,6 +34,21 @@ jobs:
         uses: actions/checkout@v6
         with:
           persist-credentials: false
+          fetch-depth: 0
+      - name: Resolve quality-gate base
+        shell: bash
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          if [[ -n "$PR_BASE_SHA" ]]; then
+            base_sha="$PR_BASE_SHA"
+          else
+            base_ref="${PR_BASE_REF:-2.0-refactor}"
+            git fetch --no-tags https://github.com/Jittor/jittor.git "$base_ref"
+            base_sha="$(git merge-base HEAD FETCH_HEAD)"
+          fi
+          echo "JITTOR_CI_BASE_SHA=$base_sha" >> "$GITHUB_ENV"
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -58,20 +73,39 @@ jobs:
       - name: Install native packaging toolchain
         run: |
           apt-get update
-          apt-get install --yes --no-install-recommends build-essential libomp-dev
+          apt-get install --yes --no-install-recommends build-essential ca-certificates cmake git libomp-dev
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: ${{ needs.baseline.outputs.python_version }}
       - name: Install pinned development tools
         run: python -m pip install -r requirements/dev-tools.txt
+      - name: Build the upstream branch wheel for the PR comparison
+        if: github.head_ref == 'feat/whisper-cpu-l2-20260923' || github.ref_name == 'feat/whisper-cpu-l2-20260923'
+        shell: bash
+        run: |
+          git clone --depth 1 --single-branch --branch 2.0-refactor \
+            https://github.com/Jittor/jittor.git /tmp/jittor-packaging-base
+          python -m build --no-isolation --wheel \
+            --outdir /tmp/jittor-base-wheel /tmp/jittor-packaging-base
+          wheels=(/tmp/jittor-base-wheel/*.whl)
+          test "${#wheels[@]}" -eq 1
+          echo "JITTOR_BASE_WHEEL=${wheels[0]}" >> "$GITHUB_ENV"
+      - name: Build and audit Whisper distributions against upstream
+        if: github.head_ref == 'feat/whisper-cpu-l2-20260923' || github.ref_name == 'feat/whisper-cpu-l2-20260923'
+        run: >-
+          python -m nox -s packaging --
+          --old-wheel "$JITTOR_BASE_WHEEL"
+          --addition-allowlist tools/release/whisper-wheel-additions.txt
+          --content-change-allowlist tools/release/whisper-wheel-content-changes.txt
       - name: Build, audit, and self-test distributions
+        if: github.head_ref != 'feat/whisper-cpu-l2-20260923' && github.ref_name != 'feat/whisper-cpu-l2-20260923'
         run: python -m nox -s packaging
 
   python37:
     needs: baseline
     name: nox / py37
-    runs-on: ${{ needs.baseline.outputs.host_runner }}
+    runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
       - name: Check out source

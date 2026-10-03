@@ -66,3 +66,42 @@ jobs:
           # half skips itself and the gate would be green having measured nothing.
           JITTOR_ECOSYSTEM_LARGE: "1"
         run: python -m nox -s ecosystem
+
+  whisper-cpu:
+    needs: baseline
+    name: nox / original Whisper CPU
+    runs-on: ${{ needs.baseline.outputs.host_runner }}
+    container:
+      image: ${{ needs.baseline.outputs.cpu_ci_image }}
+    timeout-minutes: 120
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install native CPU toolchain
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends build-essential libomp-dev git ca-certificates ffmpeg
+      - name: Set up the validated Whisper Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11.16"
+      - name: Install pinned development tools
+        run: python -m pip install -r requirements/dev-tools.txt
+      # The dedicated session creates its own torch 2.4.1+cpu oracle, validates
+      # Whisper's Git provenance and shares that exact downstream installation.
+      # It does not alter the existing ecosystem job's torch 2.7.1 baseline.
+      - name: Compare original Whisper and its required CPU operations
+        run: |
+          export JITTOR_LAB_ROOT="${RUNNER_TEMP}/jittor-lab-whisper"
+          python -m nox -s whisper_cpu
+      - name: Preserve Whisper baseline and test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: whisper-cpu-results
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/jittor-lab-whisper/_state/nox/**/whisper-baseline.json
+            ${{ runner.temp }}/jittor-lab-whisper/_state/nox/**/whisper-cpu.xml

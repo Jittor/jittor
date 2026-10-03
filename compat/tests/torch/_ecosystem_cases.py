@@ -242,6 +242,46 @@ def _transformers_whisper(torch):
     return model, inputs
 
 
+def _openai_whisper(torch):
+    """Original OpenAI package; synthetic dimensions, no checkpoint download.
+
+    This exercises the upstream encoder/decoder, not Transformers' independent
+    Whisper implementation. Audio preprocessing has a separate case; text
+    decoding is outside this intentionally small correctness fixture.
+    """
+    from whisper.model import ModelDimensions, Whisper
+
+    model = Whisper(ModelDimensions(
+        n_mels=80, n_audio_ctx=16, n_audio_state=32,
+        n_audio_head=4, n_audio_layer=2, n_vocab=128,
+        n_text_ctx=16, n_text_state=32, n_text_head=4, n_text_layer=2,
+    ))
+    # Upstream expects checkpoint loading to initialize this torch.empty tensor.
+    # A no-checkpoint correctness fixture must initialize it before capture.
+    with torch.no_grad():
+        model.decoder.positional_embedding.normal_(mean=0.0, std=0.02)
+    inputs = {
+        "mel": ("float32", (2, 80, 32), None),
+        "tokens": ("int64", (2, 8), 128),
+    }
+    return model, inputs
+
+
+def _openai_whisper_log_mel(torch):
+    """Original preprocessing for one fixed-seed second of 16-kHz audio.
+
+    There are no trainable parameters; the shared strict runner still checks the
+    complete waveform gradient. The runner owns deterministic input generation.
+    """
+    import whisper
+
+    class LogMel(torch.nn.Module):
+        def forward(self, audio):
+            return whisper.log_mel_spectrogram(audio, n_mels=80)
+
+    return LogMel(), {"audio": ("float32", (16000,), None)}
+
+
 def _diffusers_transformer(torch):
     """A DiT-style latent transformer, the backbone modern diffusion uses."""
     from diffusers import DiTTransformer2DModel
@@ -302,6 +342,8 @@ CASES = {
     "transformers_vit": (_tiny_vit, ("transformers",)),
     "transformers_t5": (_transformers_t5, ("transformers",)),
     "transformers_whisper": (_transformers_whisper, ("transformers",)),
+    "openai_whisper": (_openai_whisper, ("whisper",)),
+    "openai_whisper_log_mel": (_openai_whisper_log_mel, ("whisper",)),
     "diffusers_unet2d": (_diffusers_unet, ("diffusers",)),
     "diffusers_dit": (_diffusers_transformer, ("diffusers",)),
     "peft_lora_llama": (_peft_lora_llama, ("transformers", "peft")),
@@ -318,3 +360,10 @@ def _merge_speed_cases():
 
 
 _merge_speed_cases()
+
+
+# Explicit opt-in leaves existing cases' gradient and speed acceptance unchanged.
+# The Whisper fixture checks every originally trainable parameter and floating
+# input; its synthetic dimensions are not a real Whisper tiny speed benchmark.
+STRICT_GRADIENT_CASES = frozenset({"openai_whisper", "openai_whisper_log_mel"})
+REPORT_ONLY_TIMING_CASES = frozenset({"openai_whisper", "openai_whisper_log_mel"})

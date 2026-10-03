@@ -204,6 +204,7 @@ include backends/cuda/kernels/cublas/cublas_matmul_op.cc
 include backends/cuda/kernels/cublas/cublas_matmul_op.h
 include backends/cuda/kernels/cublas/cublas_test_op.cc
 include backends/cuda/kernels/cublas/cublas_test_op.h
+include backends/cuda/kernels/cublas/lt_linear_cuda.py
 include backends/cuda/kernels/cudnn/cudnn_capabilities.cc
 include backends/cuda/kernels/cudnn/cudnn_conv3d_backward_w_op.cc
 include backends/cuda/kernels/cudnn/cudnn_conv3d_backward_w_op.h
@@ -353,6 +354,7 @@ include docs/results/2026-09-14-exit-heap-corruption.md
 include docs/results/2026-09-14-jittor-vs-pytorch.md
 include docs/results/2026-09-14-vllm-omni-h3-enablement.md
 include docs/results/2026-09-19-torch-compat-runbook-verification.md
+include docs/results/2026-09-22-openai-whisper-l2-cpu.md
 include docs/results/2026-09-24-torch-compat-real-models.md
 include docs/results/2026-09-25-profiling-tools.md
 include docs/results/index.md
@@ -847,6 +849,8 @@ include tools/release/legacy/polish_centos.py
 include tools/release/pack_offline.py
 include tools/release/test_check_sdist_contents.py
 include tools/release/test_check_wheel_contents.py
+include tools/release/whisper-wheel-additions.txt
+include tools/release/whisper-wheel-content-changes.txt
 include tools/roundtrip_consistency_sweep.py
 include tools/run_test_suite.py
 include tools/semantic_divergence_probe.py

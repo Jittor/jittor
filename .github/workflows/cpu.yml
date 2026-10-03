@@ -34,7 +34,7 @@ jobs:
     # runner for reasons that have nothing to do with the change. The number
     # below is the runner's patience, and it has to cover the pip installs and
     # a cache miss, not just the tests.
-    timeout-minutes: 45
+    timeout-minutes: 150
     steps:
       - name: Check out source
         uses: actions/checkout@v6
@@ -43,19 +43,34 @@ jobs:
       - name: Install native CPU toolchain
         run: |
           apt-get update
-          apt-get install --yes --no-install-recommends build-essential libomp-dev
+          apt-get install --yes --no-install-recommends build-essential ca-certificates cmake libomp-dev
+          update-ca-certificates
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: ${{ needs.baseline.outputs.python_version }}
       - name: Install pinned development tools
         run: python -m pip install -r requirements/dev-tools.txt
+      - name: Verify source download TLS
+        run: |
+          python - <<'PY'
+          import urllib.request
+
+          url = "https://codeload.github.com/uxlfoundation/oneDNN/tar.gz/refs/tags/v3.9.1"
+          with urllib.request.urlopen(urllib.request.Request(url, method="HEAD"), timeout=20):
+              pass
+          PY
       # The fast tier is only fast with the kernels already built; see the same
       # step in the `cpu` job.
+      - name: Resolve the shared Jittor build cache path
+        run: |
+          path=$(realpath -m "$GITHUB_WORKSPACE/../jittor-lab/_state/nox/cache")
+          mkdir -p "$path"
+          echo "JITTOR_NOX_CACHE_PATH=$path" >> "$GITHUB_ENV"
       - name: Restore the Jittor build cache
         uses: actions/cache/restore@v4
         with:
-          path: ${{ github.workspace }}/../jittor-lab/_state/nox/cache
+          path: ${{ env.JITTOR_NOX_CACHE_PATH }}
           key: jittor-build-${{ runner.os }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}
           restore-keys: |
             jittor-build-${{ runner.os }}-
@@ -79,13 +94,23 @@ jobs:
       - name: Install native CPU toolchain
         run: |
           apt-get update
-          apt-get install --yes --no-install-recommends build-essential libomp-dev
+          apt-get install --yes --no-install-recommends build-essential ca-certificates cmake libomp-dev
+          update-ca-certificates
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: ${{ needs.baseline.outputs.python_version }}
       - name: Install pinned development tools
         run: python -m pip install -r requirements/dev-tools.txt
+      - name: Verify source download TLS
+        run: |
+          python - <<'PY'
+          import urllib.request
+
+          url = "https://codeload.github.com/uxlfoundation/oneDNN/tar.gz/refs/tags/v3.9.1"
+          with urllib.request.urlopen(urllib.request.Request(url, method="HEAD"), timeout=20):
+              pass
+          PY
       # Without this the gate rebuilds Jittor from scratch on every run: the
       # nox sessions share one cache under $JITTOR_LAB_ROOT/_state/nox/cache,
       # which persists on a self-hosted runner and is empty in a fresh
@@ -94,10 +119,15 @@ jobs:
       # kernels being compiled again to the same bytes. The key is the build
       # configuration -- the sources that decide what gets compiled -- so a
       # source change invalidates it and a test-only change does not.
+      - name: Resolve the shared Jittor build cache path
+        run: |
+          path=$(realpath -m "$GITHUB_WORKSPACE/../jittor-lab/_state/nox/cache")
+          mkdir -p "$path"
+          echo "JITTOR_NOX_CACHE_PATH=$path" >> "$GITHUB_ENV"
       - name: Restore the Jittor build cache
         uses: actions/cache/restore@v4
         with:
-          path: ${{ github.workspace }}/../jittor-lab/_state/nox/cache
+          path: ${{ env.JITTOR_NOX_CACHE_PATH }}
           key: jittor-build-${{ runner.os }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}
           restore-keys: |
             jittor-build-${{ runner.os }}-
@@ -110,10 +140,10 @@ jobs:
           JITTOR_REQUIRE_REAL_TORCH: "1"
         run: python -m nox -s full
       - name: Save the Jittor build cache
-        if: always()
+        if: always() && env.JITTOR_NOX_CACHE_PATH != ''
         uses: actions/cache/save@v4
         with:
-          path: ${{ github.workspace }}/../jittor-lab/_state/nox/cache
+          path: ${{ env.JITTOR_NOX_CACHE_PATH }}
           key: jittor-build-${{ runner.os }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}
 
   benchmark:
@@ -124,20 +154,20 @@ jobs:
       image: ${{ needs.baseline.outputs.cpu_ci_image }}
     timeout-minutes: 90
     env:
-      ASV_RESULTS_DIR: ${{ runner.temp }}/jittor-asv/results
-      ASV_HTML_DIR: ${{ runner.temp }}/jittor-asv/html
+      ASV_RESULTS_DIR: /tmp/jittor-asv/results
+      ASV_HTML_DIR: /tmp/jittor-asv/html
       ASV_MACHINE: github-ubuntu-cpu
       ASV_COMPARE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
     steps:
+      - name: Install native CPU toolchain
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends build-essential ca-certificates cmake git libomp-dev
       - name: Check out source
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Install native CPU toolchain
-        run: |
-          apt-get update
-          apt-get install --yes --no-install-recommends build-essential libomp-dev
       - name: Set up Python
         uses: actions/setup-python@v6
         with:

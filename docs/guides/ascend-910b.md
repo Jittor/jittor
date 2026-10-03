@@ -373,4 +373,4 @@ export trace_py_var=3
 [调试指南](debugging.md)。
 
 各 ACL 算子族迁移到共享 launcher 的逐条状态属于整改期记录，见
-[昇腾迁移记录](../../refactor-wip/architecture/ascend-migration-notes.md)。
+[昇腾迁移记录](https://github.com/Jittor/jittor/blob/2.0-refactor/refactor-wip/architecture/ascend-migration-notes.md)。

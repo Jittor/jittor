@@ -13,6 +13,7 @@ for parity *and* for no speed regression.
 
 import argparse
 from contextlib import ExitStack, nullcontext
+import hashlib
 import importlib
 import json
 import os
@@ -198,6 +199,27 @@ def _backend_report(runtime):
     return {}
 
 
+def _configure_cpu_threads(torch, runtime, device):
+    """Make the independent CPU oracle honor the declared OpenMP budget.
+
+    Some PyTorch builds initialize their pool to physical cores despite a
+    different OMP_NUM_THREADS environment value. Configure the real pool before
+    recording conditions; the Jittor process keeps its native OpenMP setup.
+    """
+    if runtime != "torch" or device != "cpu":
+        return
+    requested = os.environ.get("OMP_NUM_THREADS", "").strip()
+    if not requested:
+        return
+    try:
+        count = int(requested)
+    except ValueError as error:
+        raise ValueError("OMP_NUM_THREADS must be a positive integer") from error
+    if count <= 0:
+        raise ValueError("OMP_NUM_THREADS must be a positive integer")
+    torch.set_num_threads(count)
+
+
 def _runtime_conditions(torch, tf32):
     affinity = []
     if hasattr(os, "sched_getaffinity"):
@@ -285,8 +307,104 @@ def _primary_output(result):
     return result
 
 
-def _numpy_snapshot(value):
-    return np.array(value.detach().cpu().numpy(), dtype="float32", copy=True)
+def _numpy_snapshot(value, *, preserve_dtype=False):
+    return np.array(value.detach().cpu().numpy(),
+                    dtype=None if preserve_dtype else "float32", copy=True)
+
+
+def _tensor_manifest(value):
+    """Portable public metadata; never infer sparse layout from tensor shape."""
+    layout = str(value.layout).replace("torch.", "", 1)
+    if layout not in ("strided", "sparse_coo"):
+        raise NotImplementedError("ecosystem state transfer does not support " + layout)
+    result = {
+        "layout": layout,
+        "shape": list(value.shape),
+        "dtype": str(value.dtype).replace("torch.", "", 1),
+    }
+    if layout == "sparse_coo":
+        result.update(sparse_dim=value.sparse_dim(), dense_dim=value.dense_dim())
+        if result["dense_dim"] or not value.is_coalesced():
+            raise NotImplementedError("ecosystem state transfer requires full, coalesced COO")
+    return result
+
+
+def _snapshot_state(entries):
+    arrays, manifest = {}, {}
+    for name, value in entries:
+        manifest[name] = _tensor_manifest(value)
+        value = value.detach()
+        if manifest[name]["layout"] == "sparse_coo":
+            value = value.to_dense()
+        arrays[name] = np.array(value.cpu().numpy(), copy=True)
+    return arrays, manifest
+
+
+def _restore_state(torch, entries, arrays, manifest, to_device):
+    available = dict(entries)
+    if set(arrays) != set(available):
+        raise ValueError("saved state keys differ: missing=%s unexpected=%s" % (
+            sorted(set(available) - set(arrays)), sorted(set(arrays) - set(available))))
+    if manifest is not None and set(manifest) != set(available):
+        raise ValueError("saved state manifest keys differ from tensor keys")
+    # Validate every tensor before mutating any parameters or buffers. Legacy
+    # dense NPZ consumers need no sidecar, but COO must declare its layout.
+    for name, value in available.items():
+        actual = _tensor_manifest(value)
+        if manifest is None:
+            if actual["layout"] != "strided":
+                raise ValueError("sparse state requires a layout manifest: " + name)
+        elif actual != manifest[name]:
+            raise ValueError("saved state metadata differs for %s: %r != %r" % (
+                name, manifest[name], actual))
+        array = arrays[name]
+        if list(array.shape) != actual["shape"] or str(array.dtype) != actual["dtype"]:
+            raise ValueError("saved state array shape/dtype differs for " + name)
+    with torch.no_grad():
+        for name, value in available.items():
+            source = to_device(torch.from_numpy(arrays[name]))
+            if _tensor_manifest(value)["layout"] == "sparse_coo":
+                source = source.to_sparse()
+            value.copy_(source)
+
+
+def _state_fingerprints(arrays):
+    return {
+        name: hashlib.sha256(np.ascontiguousarray(value).tobytes()).hexdigest()
+        for name, value in arrays.items()
+    }
+
+
+def _collect_arrays(model, inputs, output, *, required_parameters=None):
+    """Strict cases fail on missing/nonfinite gradients before parity scoring."""
+    strict = required_parameters is not None
+    required = set(required_parameters or ())
+    arrays = {"__output__": _numpy_snapshot(output, preserve_dtype=strict)}
+    required_inputs = {name for name, tensor in inputs.items() if tensor.requires_grad}
+    for prefix, entries, expected in (
+        ("grad::", model.named_parameters(), required),
+        ("ingrad::", inputs.items(), required_inputs),
+    ):
+        for name, tensor in entries:
+            grad = getattr(tensor, "grad", None)
+            if grad is None:
+                if strict and name in expected:
+                    raise AssertionError("missing required gradient: " + prefix + name)
+                continue
+            array = _numpy_snapshot(grad, preserve_dtype=strict)
+            if strict and tuple(array.shape) != tuple(tensor.shape):
+                raise AssertionError("gradient shape differs: " + prefix + name)
+            arrays[prefix + name] = array
+    if strict:
+        expected = {"__output__"}
+        expected.update("grad::" + name for name in required)
+        expected.update("ingrad::" + name for name in required_inputs)
+        if set(arrays) != expected:
+            raise AssertionError("gradient tensor set differs from the trainable contract")
+        for name, array in arrays.items():
+            if not np.isfinite(array).all():
+                raise AssertionError("nonfinite output/gradient: " + name)
+    return arrays
 
 
 def main():
@@ -307,6 +425,7 @@ def _run(policy_stack):
 
     torch = _import_torch(options.runtime)
     to_device = _select_device(torch, options.runtime, options.device, policy_stack=policy_stack)
+    _configure_cpu_threads(torch, options.runtime, options.device)
     tf32 = _configure_tf32(torch, options.device)
     runtime_conditions = _runtime_conditions(torch, tf32)
 
@@ -325,6 +444,10 @@ def _run(policy_stack):
         builder, requirements = _ecosystem_cases.CASES[options.case]
         model, input_spec = builder(torch)
         dependencies = _dependency_report(requirements)
+        strict_gradients = options.case in _ecosystem_cases.STRICT_GRADIENT_CASES
+        trainable_parameters = {
+            name for name, value in model.named_parameters() if value.requires_grad
+        }
         model.eval()
         if options.runtime == "torch" and options.device != "cpu":
             model.to(options.device)
@@ -341,35 +464,29 @@ def _run(policy_stack):
             return entries
 
         if options.weights:
-            loaded = np.load(options.weights)
-            available = dict(transferable())
-            missing = sorted(key for key in loaded.files if key not in available)
-            if missing:
-                raise SystemExit("no counterpart for saved weights: %s" % missing[:5])
-            unset = sorted(key for key in available if key not in loaded.files)
-            if unset:
-                raise SystemExit("no saved weight for: %s" % unset[:5])
-            for name, value in available.items():
-                source = to_device(torch.from_numpy(loaded[name]))
-                with_no_grad = getattr(torch, "no_grad", None)
-                if with_no_grad is not None:
-                    with with_no_grad():
-                        value.copy_(source)
-                else:
-                    value.copy_(source)
+            manifest_path = Path(options.weights + ".manifest.json")
+            manifest = (json.loads(manifest_path.read_text(encoding="utf-8"))
+                        if manifest_path.exists() else None)
+            if strict_gradients and manifest is None:
+                raise ValueError("this case requires a complete state layout manifest")
+            with np.load(options.weights, allow_pickle=False) as loaded:
+                _restore_state(torch, transferable(), loaded, manifest, to_device)
         else:
             weights_path = os.path.splitext(options.output)[0] + ".weights.npz"
-            np.savez(
-                weights_path,
-                **{
-                    name: value.detach().cpu().numpy()
-                    for name, value in transferable()
-                },
-            )
+            saved, manifest = _snapshot_state(transferable())
+            np.savez(weights_path, **saved)
+            Path(weights_path + ".manifest.json").write_text(
+                json.dumps(manifest, sort_keys=True), encoding="utf-8")
+        state_manifest, state_fingerprints = None, None
+        if strict_gradients:
+            captured, state_manifest = _snapshot_state(transferable())
+            state_fingerprints = _state_fingerprints(captured)
 
         # ``eval()`` in Jittor also stops gradients on every parameter; PyTorch's
         # does not.  Re-enable them so both runtimes differentiate the same graph.
-        for parameter in model.parameters():
+        for name, parameter in model.named_parameters():
+            if strict_gradients and name not in trainable_parameters:
+                continue
             start_grad = getattr(parameter, "start_grad", None)
             if callable(start_grad):
                 start_grad()
@@ -385,16 +502,12 @@ def _run(policy_stack):
         loss.backward()
 
         _synchronize(torch, options.runtime, options.device)
-        arrays = {"__output__": _numpy_snapshot(output)}
-        for name, parameter in model.named_parameters():
-            grad = getattr(parameter, "grad", None)
-            if grad is None:
-                continue
-            arrays["grad::" + name] = _numpy_snapshot(grad)
-        for name, tensor in inputs.items():
-            grad = getattr(tensor, "grad", None)
-            if grad is not None:
-                arrays["ingrad::" + name] = _numpy_snapshot(grad)
+        arrays = _collect_arrays(
+            model, inputs, output,
+            required_parameters=trainable_parameters if strict_gradients else None,
+        )
+        if strict_gradients and not np.isfinite(_numpy_snapshot(loss)).all():
+            raise AssertionError("nonfinite diagnostic loss")
 
         # Timing runs after correctness capture. Inputs and loss weights are already
         # resident on the requested device, so the number excludes allocation/H2D.
@@ -467,6 +580,16 @@ def _run(policy_stack):
             {
                 "case": options.case,
                 "tensors": len(arrays),
+                "state_manifest": state_manifest,
+                "state_fingerprints": state_fingerprints,
+                "required_parameter_gradients": (
+                    sorted(trainable_parameters) if strict_gradients else None),
+                "required_input_gradients": sorted(
+                    name for name, value in inputs.items() if value.requires_grad
+                ) if strict_gradients else None,
+                "timing_scope": (
+                    "synthetic correctness fixture" if options.case in
+                    _ecosystem_cases.REPORT_ONLY_TIMING_CASES else "case configuration"),
                 "seconds": min(durations),
                 "loss": float(loss.detach().cpu().numpy().reshape(-1)[0]),
                 "device": _device_in_use(torch, options.runtime, options.device),

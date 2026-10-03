@@ -3,13 +3,15 @@
 from __future__ import print_function
 
 import json
+import hashlib
 import math
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
-from typing import Dict, Optional
+import zipfile
+from typing import Dict, Optional, Tuple
 
 import nox
 
@@ -28,8 +30,12 @@ try:
         torch_arguments as gate_torch_arguments,
     )
     from _helpers.tiers import (  # noqa: E402
-        apply_worker_thread_budget, budget_report, effective_cpu_count,
-        runtime_workers, THREAD_POOL_ENV_NAMES)
+        apply_worker_thread_budget,
+        budget_report,
+        effective_cpu_count,
+        runtime_workers,
+        THREAD_POOL_ENV_NAMES,
+    )
     from _helpers.process_modes import NATIVE_MODE_PATHS, is_torch_mode_path  # noqa: E402
 finally:
     sys.path.remove(str(REPO_ROOT / "tests"))
@@ -149,7 +155,9 @@ RATCHET_FILES = (
     "python/jittor/selftest.py",
     "python/jittor/build/utils/cuda_wheel.py",
     "compat/shim/deploy.py",
+    "compat/torch/installers/nn/module_methods.py",
     "tests/_helpers/torch_runtime.py",
+    "tests/structure/test_gate_scope.py",
     "compat/tests/torch/test_torchmetrics_compat.py",
     *PYTEST_POLICY_FILES,
     "tools/release/pack_offline.py",
@@ -189,6 +197,10 @@ FORMAT_FILES = (
     "tests/structure/test_pytest_contract.py",
     "tests/structure/test_selftest_structure.py",
     "tests/structure/test_stage2_delivery.py",
+)
+WHISPER_TYPED_FILES = (
+    "noxfile.py",
+    "compat/torch/frontend.py",
 )
 STRUCTURE_TESTS = (
     "tools/release/test_check_sdist_contents.py",
@@ -574,8 +586,7 @@ def _mode_env(env, args):
     native ones under the shim -- and a session that listed only Torch-mode
     paths depended on that inference to work at all.
     """
-    paths = [str(item).split("::", 1)[0] for item in args
-             if not str(item).startswith("-")]
+    paths = [str(item).split("::", 1)[0] for item in args if not str(item).startswith("-")]
     mode = "1" if any(is_torch_mode_path(path) for path in paths) else "0"
     if env.get("JITTOR_TORCH_SHIM") == mode:
         return env
@@ -687,30 +698,42 @@ def _enforce_smoke_budget(session, workers):
     session.log(
         "smoke budget: predicted %.0fs / %.0fs (headroom %.0fs; %d actual/%d "
         "configured workers; %d CPU quota; %d threads/worker)"
-        % (report["predicted_seconds"], report["budget_seconds"],
-           report["headroom_seconds"], report["workers"],
-           report["configured_workers"], report["effective_cpus"],
-           report["threads_per_worker"]))
+        % (
+            report["predicted_seconds"],
+            report["budget_seconds"],
+            report["headroom_seconds"],
+            report["workers"],
+            report["configured_workers"],
+            report["effective_cpus"],
+            report["threads_per_worker"],
+        )
+    )
     if report["headroom_seconds"] < 0:
         session.error(
             "smoke budget exceeded: predicted %.0fs / %.0fs with %d workers "
             "(%d configured, %d CPU quota, %d threads/worker); run the full "
             "tier or provide a runner with more CPU quota"
-            % (report["predicted_seconds"], report["budget_seconds"],
-               report["workers"], report["configured_workers"],
-               report["effective_cpus"], report["threads_per_worker"]))
+            % (
+                report["predicted_seconds"],
+                report["budget_seconds"],
+                report["workers"],
+                report["configured_workers"],
+                report["effective_cpus"],
+                report["threads_per_worker"],
+            )
+        )
     return report
 
 
 def _run_pytest(session, defaults, env, runner=None):
     if session.posargs:
-        _run_pytest_once(session, tuple(session.posargs),
-                         _mode_env(env, session.posargs), runner, timeout=600)
+        _run_pytest_once(
+            session, tuple(session.posargs), _mode_env(env, session.posargs), runner, timeout=600
+        )
         return
     for group in _by_process_mode(defaults):
         if group:
-            _run_pytest_once(session, tuple(group), _mode_env(env, group),
-                             runner, timeout=600)
+            _run_pytest_once(session, tuple(group), _mode_env(env, group), runner, timeout=600)
 
 
 _COMPAT_SOURCE_INSTALLS = set()
@@ -727,8 +750,15 @@ def _install_compat_source(session, env, runner=None):
     if key in _COMPAT_SOURCE_INSTALLS:
         return
     session.run(
-        python, "-m", "pip", "install", "--no-deps", "--no-build-isolation",
-        "-e", str(source / "compat"), external=runner is not None,
+        python,
+        "-m",
+        "pip",
+        "install",
+        "--no-deps",
+        "--no-build-isolation",
+        "-e",
+        str(source / "compat"),
+        external=runner is not None,
     )
     _COMPAT_SOURCE_INSTALLS.add(key)
 
@@ -881,6 +911,9 @@ def _asv_state_path(variable, fallback):
 
 def _write_asv_config(root, results_dir, html_dir):
     config = json.loads((REPO_ROOT / "benchmarks" / "asv.conf.json").read_text(encoding="utf-8"))
+    # ASV resolves every configured branch even when recording only one commit.
+    # A fork checkout need not contain the upstream names in asv.conf.json.
+    config["branches"] = ["HEAD"]
     config.update(
         {
             "repo": str(REPO_ROOT),
@@ -938,7 +971,7 @@ def _asv_has_measurement(results_dir, commit_hash):
 
 def _git_output(*arguments):
     result = subprocess.run(
-        ("git",) + arguments,
+        ("git", "-c", "safe.directory=%s" % REPO_ROOT) + arguments,
         cwd=str(REPO_ROOT),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -946,6 +979,7 @@ def _git_output(*arguments):
         check=False,
     )
     if result.returncode != 0:
+        print("git {} failed: {}".format(arguments[0], result.stderr.strip()), file=sys.stderr)
         return None
     return result.stdout.strip()
 
@@ -1031,23 +1065,76 @@ def prefetch(session):
     session.install("tqdm")
     NOX_JITTOR_ASSETS.mkdir(parents=True, exist_ok=True)
     session.run(
-        "python", "-c", _PREFETCH_SCRIPT, str(NOX_JITTOR_ASSETS),
+        "python",
+        "-c",
+        _PREFETCH_SCRIPT,
+        str(NOX_JITTOR_ASSETS),
         env={"PYTHONPATH": str(REPO_ROOT / "python")},
     )
+
+
+def _changed_python_files(session):
+    """Return Python paths changed by this PR, or None outside CI."""
+    base = os.environ.get("JITTOR_CI_BASE_SHA")
+    if not base or set(base) == {"0"}:
+        return None
+    result = subprocess.run(
+        ["git", "diff", "--name-only", "--diff-filter=ACMRT", base + "...HEAD"],
+        cwd=str(REPO_ROOT),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        universal_newlines=True,
+        check=False,
+    )
+    if result.returncode:
+        session.error("cannot determine PR Python files: " + result.stderr.strip())
+    return tuple(
+        path
+        for path in result.stdout.splitlines()
+        if path.endswith(".py") and (REPO_ROOT / path).is_file()
+    )
+
+
+def _quality_gate_files(session, fallback):
+    changed = _changed_python_files(session)
+    if changed is None:
+        return fallback
+    base = os.environ["JITTOR_CI_BASE_SHA"]
+    result = subprocess.run(
+        ["git", "diff", "--name-only", "--diff-filter=A", base + "...HEAD", "--", "*.py"],
+        cwd=str(REPO_ROOT),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        universal_newlines=True,
+        check=False,
+    )
+    if result.returncode:
+        session.error("cannot determine new PR Python files: " + result.stderr.strip())
+    admitted = set(fallback)
+    admitted.update(result.stdout.splitlines())
+    return tuple(path for path in changed if path in admitted)
 
 
 @nox.session(python="3.11")
 def lint(session):
     """Run the ratcheted, Python 3.7-aware Ruff lint baseline."""
     session.install(RUFF)
-    session.run("ruff", "check", "--no-cache", *RATCHET_FILES)
+    files = _quality_gate_files(session, RATCHET_FILES)
+    if not files:
+        session.log("No changed Python files; Ruff lint is not applicable.")
+        return
+    session.run("ruff", "check", "--no-cache", *files)
 
 
 @nox.session(python="3.11")
 def format(session):
     """Check Ruff formatting for files admitted to the format ratchet."""
     session.install(RUFF)
-    session.run("ruff", "format", "--check", "--no-cache", *FORMAT_FILES)
+    files = _quality_gate_files(session, FORMAT_FILES)
+    if not files:
+        session.log("No changed Python files; Ruff formatting is not applicable.")
+        return
+    session.run("ruff", "format", "--check", "--no-cache", *files)
 
 
 @nox.session(python="3.11", venv_backend="none")
@@ -1058,8 +1145,9 @@ def imports(session):
     rule is enforced by `tests/structure/test_import_layering.py` in every
     gate as well as here, instead of only where a linter got installed.
     """
-    session.run("python", str(REPO_ROOT / "tools" / "lint" / "check_import_layering.py"),
-                external=True)
+    session.run(
+        "python", str(REPO_ROOT / "tools" / "lint" / "check_import_layering.py"), external=True
+    )
 
 
 @nox.session(python="3.11")
@@ -1067,7 +1155,13 @@ def typing(session):
     """Type-check the explicit mypy ratchet without writing a repository cache."""
     cache_dir = str(Path(session.create_tmp()) / "mypy-cache")
     session.install(MYPY)
-    session.run("mypy", "--cache-dir", cache_dir)
+    changed = _changed_python_files(session)
+    if changed is None:
+        session.run("mypy", "--cache-dir", cache_dir)
+    else:
+        targets = tuple(path for path in changed if path in WHISPER_TYPED_FILES)
+        if targets:
+            session.run("mypy", "--cache-dir", cache_dir, *targets)
 
 
 @nox.session(python="3.11")
@@ -1100,7 +1194,29 @@ def structure(session):
         NBFORMAT,
         "numpy==1.26.4",
         "pillow==11.0.0",
+        "scipy==1.13.1",
         "tqdm==4.67.1",
+    )
+    session.run(
+        "python",
+        "-m",
+        "pip",
+        "install",
+        "--no-deps",
+        "--no-build-isolation",
+        str(REPO_ROOT),
+        env=env,
+    )
+    session.run(
+        "python",
+        "-m",
+        "pip",
+        "install",
+        "--no-deps",
+        "--no-build-isolation",
+        "-e",
+        str(REPO_ROOT / "adapters"),
+        env=env,
     )
     session.run("bash", "tools/check_repo_layout.sh", external=True, env=env)
     _install_compat_source(session, env)
@@ -1108,8 +1224,9 @@ def structure(session):
     if not session.posargs:
         native_env = env.copy()
         native_env["JITTOR_TORCH_SHIM"] = "0"
-        session.run("python", "-m", "pytest", "-v", "--timeout=600",
-                    *NATIVE_MODE_PATHS, env=native_env)
+        session.run(
+            "python", "-m", "pytest", "-v", "--timeout=600", *NATIVE_MODE_PATHS, env=native_env
+        )
     env = _mode_env(env, test_paths)
     session.run(
         "python",
@@ -1124,15 +1241,28 @@ def structure(session):
 
 def _build_compat_distribution(session, source, dist, env):
     session.run(
-        "python", "-m", "build", "--no-isolation", "--sdist", "--wheel",
-        "--outdir", str(dist), str(source / "compat"), env=env,
+        "python",
+        "-m",
+        "build",
+        "--no-isolation",
+        "--sdist",
+        "--wheel",
+        "--outdir",
+        str(dist),
+        str(source / "compat"),
+        env=env,
     )
     wheels = sorted(dist.glob("*.whl"))
     if len(wheels) != 1:
         session.error("expected exactly one compatibility wheel, found %d" % len(wheels))
     session.run(
-        "python", str(REPO_ROOT / "tools/release/check_wheel_contents.py"),
-        "audit", str(wheels[0]), "--profile", "compat", env=env,
+        "python",
+        str(REPO_ROOT / "tools/release/check_wheel_contents.py"),
+        "audit",
+        str(wheels[0]),
+        "--profile",
+        "compat",
+        env=env,
     )
     return wheels[0]
 
@@ -1178,10 +1308,55 @@ def packaging(session):
         session.error("expected exactly one wheel, found %d" % len(wheels))
     if len(sdists) != 1:
         session.error("expected exactly one sdist, found %d" % len(sdists))
+    expected_paths = root / "expected-sdist-paths.txt"
+    inventory_roots = (
+        "docs",
+        "examples",
+        "tools",
+        "requirements/docs.in",
+        "requirements/docs.txt",
+        "requirements/examples.txt",
+        "python",
+        "backends",
+        "src",
+    )
+    ignored_directories = {
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".ipynb_checkpoints",
+        ".git",
+        ".nox",
+        "dist",
+    }
+    inventory_paths = set()
+    for relative_root in inventory_roots:
+        source_root = REPO_ROOT / relative_root
+        if source_root.is_file():
+            inventory_paths.add(relative_root)
+            continue
+        for current, directories, filenames in os.walk(str(source_root)):
+            directories[:] = [name for name in directories if name not in ignored_directories]
+            for filename in filenames:
+                path = Path(current) / filename
+                relative = path.relative_to(REPO_ROOT).as_posix()
+                parts = Path(relative).parts
+                if (
+                    relative.endswith((".pyc", ".pyo"))
+                    or (parts and parts[0] == "build")
+                    or any(part.endswith(".egg-info") for part in parts)
+                ):
+                    continue
+                if path.is_file() or path.is_symlink():
+                    inventory_paths.add(relative)
+    expected_paths.write_text("\n".join(sorted(inventory_paths)) + "\n", encoding="utf-8")
     session.run(
         "python",
         "tools/release/check_sdist_contents.py",
         str(sdists[0]),
+        "--expected-paths",
+        str(expected_paths),
         env=env,
     )
     sdist_wheel_dist = root / "sdist-wheel-dist"
@@ -1202,12 +1377,28 @@ def packaging(session):
         session.error("expected exactly one sdist-derived wheel, found %d" % len(sdist_wheels))
     wheel_args = tuple(session.posargs)
     for wheel in (wheels[0], sdist_wheels[0]):
+        record_args: Tuple[str, ...] = ()
+        if "--old-wheel" in wheel_args:
+            # RECORD is generated from every wheel member and necessarily
+            # changes when an explicitly approved source member changes.
+            with zipfile.ZipFile(str(wheel)) as archive:
+                records = [
+                    name for name in archive.namelist() if name.endswith(".dist-info/RECORD")
+                ]
+                if len(records) != 1:
+                    session.error("expected exactly one wheel RECORD, found %d" % len(records))
+                record_args = (
+                    "--allow-content-change",
+                    hashlib.sha256(archive.read(records[0])).hexdigest(),
+                    records[0],
+                )
         session.run(
             "python",
             "tools/release/check_wheel_contents.py",
             "compare",
             str(wheel),
             *wheel_args,
+            *record_args,
             env=env,
         )
 
@@ -1235,15 +1426,26 @@ def packaging(session):
     # jittor/ members in one transaction rather than replacing that directory.
     compat_wheel = _build_compat_distribution(session, source, root / "compat-dist", env)
     session.run(
-        "python", "-m", "pip", "install", "--no-deps", "--upgrade",
-        "--target", str(wheel_install), str(wheels[0]), str(compat_wheel), env=env,
+        "python",
+        "-m",
+        "pip",
+        "install",
+        "--no-deps",
+        "--upgrade",
+        "--target",
+        str(wheel_install),
+        str(wheels[0]),
+        str(compat_wheel),
+        env=env,
     )
     with session.chdir(root):
         session.run(
-            "python", "-c",
+            "python",
+            "-c",
             "import torch, jittor; assert torch is not jittor; "
             "x = torch.tensor([2.0], requires_grad=True); (x*x).sum().backward(); "
-            "assert x.grad.item() == 4.0", env=selftest_env,
+            "assert x.grad.item() == 4.0",
+            env=selftest_env,
         )
 
 
@@ -1302,6 +1504,12 @@ def _record_asv(session, root, env, asv_command, default_machine, external=False
     # ASV deliberately removes PYTHONPATH before launching an existing
     # environment. ASV_PYTHONPATH is its supported source-tree escape hatch.
     env["ASV_PYTHONPATH"] = str(REPO_ROOT / "python")
+    # CI containers may run under a different uid from the checkout owner.
+    # Trust only this checkout for ASV's Git subprocesses; an isolated HOME
+    # does not contain actions/checkout's temporary safe.directory setting.
+    env["GIT_CONFIG_COUNT"] = "1"
+    env["GIT_CONFIG_KEY_0"] = "safe.directory"
+    env["GIT_CONFIG_VALUE_0"] = str(REPO_ROOT)
     machine = os.environ.get("ASV_MACHINE", default_machine)
     factor = os.environ.get("ASV_COMPARE_FACTOR", "1.10")
     try:
@@ -1421,6 +1629,13 @@ def benchmark(session):
     root, env = _session_env(session, "asv-cpu")
     env["cache_name"] = "asv-nox-cpu"
     env["nvcc_path"] = ""
+    # ASV's per-case timeout includes import and cold native compilation.
+    # Finish the first CPU matmul build once in the same isolated cache before
+    # ASV starts its subprocesses, so a compile cannot masquerade as a slow op.
+    asv_home = root / "jittor-asv-home"
+    asv_home.mkdir(parents=True, exist_ok=True)
+    env["JITTOR_HOME"] = str(asv_home)
+    env["JITTOR_ASV_HOME"] = str(asv_home)
     session.install(
         ASV,
         "astunparse==1.6.3",
@@ -1428,6 +1643,16 @@ def benchmark(session):
         "pillow==11.0.0",
         SETUPTOOLS,
         "tqdm==4.67.1",
+    )
+    session.run(
+        "python",
+        "-c",
+        "import jittor as jt, numpy as np; "
+        "jt.flags.use_cuda=0; "
+        "a=jt.array(np.ones((8,256,256), dtype=np.float32)); "
+        "b=jt.array(np.ones((8,256,256), dtype=np.float32)); "
+        "jt.matmul(a,b).sync(); print('ASV CPU matmul cache warm')",
+        env=env,
     )
     _record_asv(session, root, env, ("asv",), "jittor-ci-cpu")
 
@@ -1678,8 +1903,7 @@ def _cpu_gate_env(session):
     # error lands on the wrong test" report used to be answered by switching it
     # off somewhere (see 0.16). It is a lifetime bug, not a concurrency one, and
     # it is fixed where it lives; the gate does not pay for the workaround.
-    env["use_parallel_op_compiler"] = os.environ.get(
-        "use_parallel_op_compiler", "16")
+    env["use_parallel_op_compiler"] = os.environ.get("use_parallel_op_compiler", "16")
     return env
 
 
@@ -1759,8 +1983,29 @@ def cpu(session):
     workers = _runtime_gate_workers()
     parallel = _xdist(workers)
     full_env = _require_execution(_split_threads(env, workers))
+    if real_torch_site:
+        # Native parity tests import Jittor before checking whether Torch is
+        # available. Preload the independent binary in pytest_policy before
+        # Jittor owns the process; otherwise an importable Torch is reported as
+        # available but the first comparison fails during setUpModule.
+        full_env["REAL_TORCH_SITE"] = real_torch_site
+        session.run(
+            "python",
+            "-c",
+            "import importlib, os, pathlib, sys; "
+            "site = pathlib.Path(os.environ['REAL_TORCH_SITE']).resolve(); "
+            "sys.path.insert(0, str(site)); torch = importlib.import_module('torch'); "
+            "assert site in pathlib.Path(torch.__file__).resolve().parents; "
+            "assert site in pathlib.Path(torch._C.__file__).resolve().parents; "
+            "assert not hasattr(torch, '_torch_compat_install_context')",
+            env=full_env,
+        )
     _run_pytest_once(session, gate_native_arguments() + parallel, full_env)
     torch_env = full_env.copy()
+    # The shim has its own Torch namespace; an independent binary must never
+    # be preloaded into that process, nor required of its skip accounting.
+    torch_env["REAL_TORCH_SITE"] = ""
+    torch_env["JITTOR_REQUIRE_REAL_TORCH"] = "0"
     torch_env["JITTOR_TORCH_SHIM"] = "1"
     _run_pytest_once(session, gate_torch_arguments() + parallel, torch_env)
     # The manual probes get their own process, which is the whole reason they
@@ -1771,10 +2016,10 @@ def cpu(session):
     # (the marker was attached after the decision that reads it) and cost 537 s
     # there; on their own they take about the same and mean something.
     manual_env = env.copy()
+    if real_torch_site:
+        manual_env["REAL_TORCH_SITE"] = real_torch_site
     manual_env["JITTOR_TEST_MANUAL"] = "1"
-    _run_pytest_once(
-        session, gate_native_arguments() + ("-m", "manual"),
-        manual_env, timeout=1800)
+    _run_pytest_once(session, gate_native_arguments() + ("-m", "manual"), manual_env, timeout=1800)
     oracle_env = env.copy()
     if real_torch_site:
         oracle_env["REAL_TORCH_SITE"] = real_torch_site
@@ -1852,7 +2097,8 @@ def ecosystem(session):
             "JITTOR_TEST_REQUIRE_EXECUTION": "1",
             "JITTOR_TORCH_SHIM": "1",
             "JITTOR_ECOSYSTEM_SPEED_RATIO": os.environ.get(
-                "JITTOR_ECOSYSTEM_SPEED_RATIO", ECOSYSTEM_SPEED_RATIO),
+                "JITTOR_ECOSYSTEM_SPEED_RATIO", ECOSYSTEM_SPEED_RATIO
+            ),
             # Without this the whole speed half skips itself -- "set
             # JITTOR_ECOSYSTEM_LARGE=1 to run the realistic-size measurement"
             # -- and a nightly speed gate that measures nothing is the same
@@ -1864,22 +2110,234 @@ def ecosystem(session):
             "TRANSFORMERS_OFFLINE": "1",
         }
     )
-    reference_site = os.environ.get(
-        "JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE", "").strip()
+    reference_site = os.environ.get("JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE", "").strip()
     if reference_site:
         env["JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE"] = reference_site
     # Both interpreters report which device they ran on, and the harness fails
     # if they disagree -- a CPU-versus-GPU comparison would be meaningless.
     env.setdefault("JITTOR_TEST_DEVICES", os.environ.get("JITTOR_TEST_DEVICES", "cpu"))
     session.run(
-        oracle, "-c",
+        oracle,
+        "-c",
         "import torch, sys; "
         "assert not hasattr(torch, '_torch_compat_install_context'), "
         "'REAL_TORCH_PYTHON resolves to the Jittor shim, not an independent build'; "
         "print('oracle torch', torch.__version__)",
-        external=True, env=env,
+        external=True,
+        env=env,
     )
     _run_pytest_once(session, ECOSYSTEM_TESTS, env, timeout=3600)
+
+
+# Original OpenAI Whisper, distinct from the Transformers Whisper case.
+# Keep this baseline separate from ecosystem's torch 2.7.1 oracle.
+WHISPER_CPU_COMMIT = "86098128c0b4f24f0e2aa2994de830614b474227"
+WHISPER_CPU_SOURCE = (
+    "openai-whisper @ git+https://github.com/openai/whisper.git@" + WHISPER_CPU_COMMIT
+)
+WHISPER_CPU_TESTS = (
+    "--confcutdir=compat/tests",
+    "compat/tests/torch/test_torch_stft.py",
+    "compat/tests/torch/test_whisper_training.py",
+    "compat/tests/torch/test_torch_sparse_metadata.py",
+    "compat/tests/torch/test_ecosystem_parity.py::OpenAIWhisperParity::test_openai_whisper",
+    "compat/tests/torch/test_ecosystem_parity.py::OpenAIWhisperParity::test_openai_whisper_log_mel",
+)
+# Runtime constraints captured from the candidate CPU oracle. The source is
+# pinned above because upstream main and its release report the same version.
+WHISPER_CPU_CONSTRAINTS = (
+    "certifi==2026.7.22",
+    "charset-normalizer==3.5.1",
+    "filelock==3.32.3",
+    "fsspec==2026.7.0",
+    "idna==3.20",
+    "imageio-ffmpeg==0.6.0",
+    "iniconfig==2.3.0",
+    "Jinja2==3.1.6",
+    "llvmlite==0.49.0",
+    "MarkupSafe==3.0.3",
+    "more-itertools==11.1.0",
+    "mpmath==1.3.0",
+    "networkx==3.6.1",
+    "numba==0.67.0",
+    "numpy==1.26.4",
+    "packaging==26.3",
+    "pluggy==1.6.0",
+    "pytest==7.4.4",
+    "regex==2026.9.10",
+    "requests==2.34.2",
+    "sympy==1.14.0",
+    "tiktoken==0.14.0",
+    "torch==2.4.1+cpu",
+    "tqdm==4.70.1",
+    "triton==3.8.0",
+    "typing_extensions==4.16.0",
+    "urllib3==2.8.0",
+)
+
+_WHISPER_CPU_ORACLE_PROBE = """
+import importlib.metadata as metadata
+import json
+from pathlib import Path
+import sys
+import numpy
+import torch
+import whisper
+print(json.dumps({
+    "python": list(sys.version_info[:3]),
+    "torch": torch.__version__,
+    "numpy": numpy.__version__,
+    "whisper": whisper.__version__,
+    "torch_is_shim": hasattr(torch, "_torch_compat_install_context"),
+    "torch_has_binary": hasattr(torch, "_C"),
+    "torch_cuda": torch.version.cuda,
+    "prefix": sys.prefix,
+    "package_site": str(Path(whisper.__file__).resolve().parents[1]),
+    "source": json.loads(metadata.distribution("openai-whisper").read_text("direct_url.json")),
+}))
+"""
+
+
+def _validate_whisper_cpu_oracle(report, oracle_root):
+    expected = {
+        "python": [3, 11, 16],
+        "torch": "2.4.1+cpu",
+        "numpy": "1.26.4",
+        "whisper": "20250625",
+    }
+    for name, version in expected.items():
+        if report.get(name) != version:
+            raise RuntimeError(
+                "Whisper CPU baseline differs for %s: %r != %r" % (name, report.get(name), version)
+            )
+    if report.get("torch_is_shim") is not False or report.get("torch_has_binary") is not True:
+        raise RuntimeError("Whisper CPU oracle is not an independent binary PyTorch")
+    if report.get("torch_cuda") is not None:
+        raise RuntimeError("Whisper CPU oracle must use the CPU-only PyTorch build")
+    if Path(report["prefix"]).resolve() != Path(oracle_root).resolve():
+        raise RuntimeError("Whisper CPU oracle did not use its isolated venv")
+    Path(report["package_site"]).resolve().relative_to(Path(oracle_root).resolve())
+    source = report.get("source") or {}
+    if source.get("url") not in (
+        "https://github.com/openai/whisper",
+        "https://github.com/openai/whisper.git",
+    ):
+        raise RuntimeError("Whisper CPU oracle did not install the official upstream source")
+    vcs = source.get("vcs_info") or {}
+    if vcs.get("vcs") != "git" or vcs.get("commit_id") != WHISPER_CPU_COMMIT:
+        raise RuntimeError("Whisper CPU oracle source commit differs from the pinned baseline")
+
+
+@nox.session(python="3.11.16", venv_backend="venv")
+def whisper_cpu(session):
+    """Pinned original Whisper CPU correctness; no checkpoint or speed claim."""
+    root, env = _session_env(session, "whisper-cpu")
+    # The global nox envdir is already under JITTOR_LAB_ROOT/_state/nox. Use
+    # another cache within this session so other CPU jobs cannot contend here.
+    jittor_home = root / "jittor-home"
+    numba_cache = root / "numba-cache"
+    jittor_home.mkdir(exist_ok=True)
+    numba_cache.mkdir(exist_ok=True)
+    oracle_root = root / "oracle"
+    oracle = str(oracle_root / "bin" / "python")
+    constraints = root / "whisper-constraints.txt"
+    constraints.write_text("\n".join(WHISPER_CPU_CONSTRAINTS) + "\n", encoding="utf-8")
+    session.install(
+        "numpy==1.26.4",
+        "astunparse==1.6.3",
+        "six==1.17.0",
+        "pillow==12.3.0",
+        "tqdm==4.70.1",
+        PYTEST,
+        PYTEST_TIMEOUT,
+        SCIPY,
+        SETUPTOOLS,
+        WHEEL,
+    )
+    oracle_env = env.copy()
+    oracle_env.update({"PYTHONPATH": "", "JITTOR_TORCH_SHIM": "0"})
+    session.run("python", "-m", "venv", str(oracle_root), env=oracle_env)
+    session.run(oracle, "-m", "pip", "install", SETUPTOOLS, WHEEL, external=True, env=oracle_env)
+    session.run(
+        oracle,
+        "-m",
+        "pip",
+        "install",
+        "--index-url",
+        "https://download.pytorch.org/whl/cpu",
+        "torch==2.4.1+cpu",
+        "--constraint",
+        str(constraints),
+        external=True,
+        env=oracle_env,
+    )
+    session.run(
+        oracle,
+        "-m",
+        "pip",
+        "install",
+        "--constraint",
+        str(constraints),
+        "--no-build-isolation",
+        WHISPER_CPU_SOURCE,
+        "imageio-ffmpeg==0.6.0",
+        PYTEST,
+        external=True,
+        env=oracle_env,
+    )
+    session.run(oracle, "-m", "pip", "check", external=True, env=oracle_env)
+    baseline = json.loads(
+        session.run(
+            oracle,
+            "-c",
+            _WHISPER_CPU_ORACLE_PROBE,
+            external=True,
+            env=oracle_env,
+            silent=True,
+        )
+    )
+    _validate_whisper_cpu_oracle(baseline, oracle_root)
+    (root / "whisper-baseline.json").write_text(
+        json.dumps(baseline, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    session.log("Whisper CPU oracle: " + json.dumps(baseline, sort_keys=True))
+    # The current shim reports os.cpu_count(), while its set_num_threads is a
+    # placeholder. Align actual worker environments with that declared count;
+    # this is a scoped baseline condition, not a fix for the shared Torch API.
+    thread_count = str(os.cpu_count() or 1)
+    env.update(
+        {
+            "OMP_NUM_THREADS": thread_count,
+            "MKL_NUM_THREADS": thread_count,
+            "OPENBLAS_NUM_THREADS": thread_count,
+            "JITTOR_HOME": str(jittor_home),
+            "NUMBA_CACHE_DIR": str(numba_cache),
+            "REAL_TORCH_PYTHON": oracle,
+            "JITTOR_ECOSYSTEM_PACKAGE_SITE": baseline["package_site"],
+            "JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE": baseline["package_site"],
+            "JITTOR_REQUIRE_REAL_TORCH": "1",
+            "JITTOR_REQUIRE_WHISPER": "1",
+            "JITTOR_TEST_REQUIRE_EXECUTION": "1",
+            "JITTOR_TEST_DEVICES": "cpu",
+            "JITTOR_TORCH_SHIM": "1",
+            "JT_USE_CUDA": "0",
+            "JT_BUILD_NVCC_PATH": "",
+            "JT_BUILD_USE_MKL": "0",
+            "JT_BUILD_USE_MPI": "0",
+            "JT_USE_PARALLEL_OP_COMPILER": "0",
+            "JT_BACKEND_FALLBACK": "error",
+            "HF_HUB_OFFLINE": "1",
+            "TRANSFORMERS_OFFLINE": "1",
+            "TOKENIZERS_PARALLELISM": "false",
+            "JITTOR_ECOSYSTEM_SPEED_RATIO": "",
+        }
+    )
+    _run_pytest_once(
+        session,
+        WHISPER_CPU_TESTS + ("--junitxml=" + str(root / "whisper-cpu.xml"),),
+        env,
+        timeout=1800,
+    )
 
 
 @nox.session(python=False)
@@ -1896,9 +2354,7 @@ def optional(session):
         flash_root = Path(flash_source).expanduser().resolve()
         flash_api = flash_root / "csrc" / "flash_attn" / "flash_api.cpp"
         if not flash_api.is_file():
-            session.error(
-                "JITTOR_FLASH_ATTN_JITTOR_SRC is not an official flash-attn checkout"
-            )
+            session.error("JITTOR_FLASH_ATTN_JITTOR_SRC is not an official flash-attn checkout")
         flash_source = os.fspath(flash_root)
     env.update(
         {
@@ -1923,19 +2379,17 @@ def optional(session):
             or ""
         )
         requested_dtypes = (
-            os.environ.get("JITTOR_FLASH_ATTN_DTYPES")
-            or os.environ.get("FLASH_ATTN_DTYPES")
-            or ""
+            os.environ.get("JITTOR_FLASH_ATTN_DTYPES") or os.environ.get("FLASH_ATTN_DTYPES") or ""
         )
         if requested_head_dims.strip().lower() in {"all", "full", "*"}:
             native_env["JITTOR_FLASH_ATTN_HEAD_DIMS"] = "all"
         else:
             head_dims = ["32"] + [
-                item.strip() for item in requested_head_dims.replace(";", ",").split(",")
+                item.strip()
+                for item in requested_head_dims.replace(";", ",").split(",")
                 if item.strip()
             ]
-            native_env["JITTOR_FLASH_ATTN_HEAD_DIMS"] = ",".join(
-                dict.fromkeys(head_dims))
+            native_env["JITTOR_FLASH_ATTN_HEAD_DIMS"] = ",".join(dict.fromkeys(head_dims))
         if requested_dtypes.strip().lower() in {"all", "full", "*"}:
             native_env["JITTOR_FLASH_ATTN_DTYPES"] = "all"
         else:
@@ -1944,8 +2398,7 @@ def optional(session):
                 for item in requested_dtypes.replace(";", ",").split(",")
                 if item.strip()
             ]
-            native_env["JITTOR_FLASH_ATTN_DTYPES"] = ",".join(
-                dict.fromkeys(dtypes))
+            native_env["JITTOR_FLASH_ATTN_DTYPES"] = ",".join(dict.fromkeys(dtypes))
     packages = repr(OPTIONAL_COMPAT_PACKAGES)
     dependency_probe = (
         "import importlib.util; "
@@ -1959,9 +2412,9 @@ def optional(session):
     session.run(python, "-c", dependency_probe, external=True, env=env)
     if session.posargs:
         native_requested = flash_source and any(
-            "native_flash_attn" in arg for arg in session.posargs)
-        _run_pytest(
-            session, (), native_env if native_requested else env, runner=python)
+            "native_flash_attn" in arg for arg in session.posargs
+        )
+        _run_pytest(session, (), native_env if native_requested else env, runner=python)
         return
     _run_pytest(session, OPTIONAL_COMPAT_TESTS, env, runner=python)
     if flash_source:
@@ -1970,14 +2423,9 @@ def optional(session):
         native_tests: tuple = OPTIONAL_NATIVE_FLASH_TESTS
         dtype_spec = native_env["JITTOR_FLASH_ATTN_DTYPES"].lower()
         head_dim_spec = native_env["JITTOR_FLASH_ATTN_HEAD_DIMS"].lower()
-        configured_dtypes = {
-            item.strip() for item in dtype_spec.replace(";", ",").split(",")
-        }
-        configured_head_dims = {
-            item.strip() for item in head_dim_spec.replace(";", ",").split(",")
-        }
-        bf16_enabled = bool(
-            configured_dtypes & {"bf16", "bfloat16", "all", "full", "*"})
+        configured_dtypes = {item.strip() for item in dtype_spec.replace(";", ",").split(",")}
+        configured_head_dims = {item.strip() for item in head_dim_spec.replace(";", ",").split(",")}
+        bf16_enabled = bool(configured_dtypes & {"bf16", "bfloat16", "all", "full", "*"})
         if bf16_enabled:
             native_tests += OPTIONAL_NATIVE_FLASH_BF16_TESTS
         if bf16_enabled and configured_head_dims & {"64", "all", "full", "*"}:
@@ -2084,8 +2532,11 @@ def npu(session):
         "assert x.numpy().tolist() == [[19.0, 22.0], [43.0, 50.0]]"
     )
     _run_with_cann(session, python, ("-c", probe), env)
-    groups = ((tuple(session.posargs),) if session.posargs
-              else tuple(group for group in _by_process_mode(NPU_TESTS) if group))
+    groups = (
+        (tuple(session.posargs),)
+        if session.posargs
+        else tuple(group for group in _by_process_mode(NPU_TESTS) if group)
+    )
     for group in groups:
         _run_with_cann(
             session,
@@ -2166,9 +2617,7 @@ def nccl(session):
     if world_size < 2:
         session.error("NCCL session requires JITTOR_NCCL_WORLD_SIZE >= 2")
     if raw_devices and len(devices) < world_size:
-        session.error(
-            "NCCL session requires at least %d CUDA_VISIBLE_DEVICES" % world_size
-        )
+        session.error("NCCL session requires at least %d CUDA_VISIBLE_DEVICES" % world_size)
     if not devices:
         devices = [str(index) for index in range(world_size)]
     selected_devices = devices[:world_size]

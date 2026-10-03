@@ -72,7 +72,7 @@ Torch 兼容、机制说明（`docs/notes/`）、性能、发布说明、社区�
 文档检查维持这条"活跃/归档"边界。
 
 `agent/` 只包含 `manuals/` 与 `skills/`；仓库检查脚本一律在 `tools/`。工作流入口是
-[`agent/manuals/agent-index.md`](../../agent/manuals/agent-index.md)。社区项目列表在
+[`agent/manuals/agent-index.md`](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/agent-index.md)。社区项目列表在
 `docs/community/`；ASV 源配置在 `benchmarks/asv.conf.json`——nox 从该配置推导绝对的输入
 与外部输出路径，不把基准运行状态搬进工作树。
 
@@ -98,7 +98,7 @@ entry point。
 ## 目标布局
 
 下面这棵树是 2026-09-02 决定的目的地。理由、逐项的源到目的地对照表、打包耦合关系与
-排序，见 [`refactor-wip/architecture/target-layout.md`](../../refactor-wip/architecture/target-layout.md)。
+排序，见 [`refactor-wip/architecture/target-layout.md`](https://github.com/Jittor/jittor/blob/2.0-refactor/refactor-wip/architecture/target-layout.md)。
 
 ```text
 .

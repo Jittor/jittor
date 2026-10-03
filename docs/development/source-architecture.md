@@ -2,7 +2,7 @@
 
 - 状态：已接受
 - 上次复查：2026-09-09
-- 基线：[架构整合记录](../../refactor-wip/results/2026-09-08-architecture-integration.md)
+- 基线：[架构整合记录](https://github.com/Jittor/jittor/blob/2.0-refactor/refactor-wip/results/2026-09-08-architecture-integration.md)
 - Owner：Jittor 核心维护者
 - 复查触发：公开模块搬动、新增实现域、或运行时资源路径变化时
 
@@ -511,12 +511,12 @@ platform 与 worker 源码，**也不声称完整的 NPU serving 或硬件验证
 4. 核心发行物之外的项目专属集成。
 
 行为层面的判定规则见
-[Torch 兼容原则](../../refactor-wip/architecture/torch-compatibility-principles.md)。
+[Torch 兼容原则](https://github.com/Jittor/jittor/blob/2.0-refactor/refactor-wip/architecture/torch-compatibility-principles.md)。
 
 ## 导入与初始化规则
 
 Torch 的 dtype 对象及其原生/NumPy 消费点遵循
-[dtype 边界契约](../../refactor-wip/architecture/torch-dtype-boundary.md)。前端 dtype 是
+[dtype 边界契约](https://github.com/Jittor/jittor/blob/2.0-refactor/refactor-wip/architecture/torch-dtype-boundary.md)。前端 dtype 是
 不可变对象；原生代码用核心拥有的名字规范化器处理元数据、用带检查的原生转换器处理计算，
 **包括对占位符的拒绝**。
 

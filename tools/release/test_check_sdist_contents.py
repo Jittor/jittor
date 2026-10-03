@@ -52,6 +52,33 @@ class TestSourceDistributionContents(unittest.TestCase):
         self.assertEqual(status, 0, stderr)
         self.assertIn("source distribution OK", stdout)
 
+    def test_exported_checkout_inventory_passes_without_git(self):
+        archive = self._sdist("inventory.tar.gz", self.members)
+        inventory = self.root / "expected-paths.txt"
+        inventory.write_text("\n".join(sorted(self.members)) + "\n", encoding="utf-8")
+        with mock.patch.object(
+            checker.subprocess, "run", side_effect=AssertionError("git invoked")
+        ):
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                status = checker.main([str(archive), "--expected-paths", str(inventory)])
+        self.assertEqual(status, 0, stderr.getvalue())
+        self.assertIn("source distribution OK", stdout.getvalue())
+
+    def test_exported_checkout_inventory_requires_sentinels(self):
+        archive = self._sdist("inventory-missing.tar.gz", self.members)
+        inventory = self.root / "expected-paths-missing.txt"
+        paths = set(self.members)
+        paths.remove("tools/build/build_aarch64_mkl.sh")
+        inventory.write_text("\n".join(sorted(paths)) + "\n", encoding="utf-8")
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            status = checker.main([str(archive), "--expected-paths", str(inventory)])
+        self.assertEqual(status, 2)
+        self.assertIn("source inventory is missing required paths", stderr.getvalue())
+
     def test_checkout_inventory_includes_python_and_excludes_caches(self):
         tracked = set(checker.REQUIRED_SOURCE_PATHS)
         tracked.update(

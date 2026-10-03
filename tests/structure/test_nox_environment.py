@@ -220,3 +220,41 @@ def test_smoke_budget_log_reports_actual_and_configured_workers(
         "smoke budget: predicted 120s / 480s (headroom 360s; 1 actual/4 "
         "configured workers; 1 CPU quota; 1 threads/worker)"
     ]
+
+
+def test_full_cpu_gate_preloads_real_torch_only_for_native_runs(monkeypatch, tmp_path):
+    site = tmp_path / "real-torch-site"
+    site.mkdir()
+    monkeypatch.setenv("REAL_TORCH_SITE", str(site))
+    monkeypatch.setenv("JITTOR_REQUIRE_REAL_TORCH", "1")
+    module = _load_noxfile(monkeypatch, tmp_path)
+    namespace = module["cpu"].__globals__
+    namespace["_cpu_gate_env"] = lambda _session: {
+        "REAL_TORCH_SITE": "", "JITTOR_TORCH_SHIM": "0",
+    }
+    namespace["_runtime_gate_workers"] = lambda: 1
+    namespace["_xdist"] = lambda _workers: ()
+    namespace["_split_threads"] = lambda env, _workers: env.copy()
+    namespace["_require_execution"] = lambda env: env.copy()
+    namespace["gate_native_arguments"] = lambda: ("native",)
+    namespace["gate_torch_arguments"] = lambda: ("shim",)
+    selected = []
+    namespace["_run_pytest_once"] = (
+        lambda _session, args, env, **_kwargs: selected.append((args[0], env.copy()))
+    )
+    namespace["_run_pytest"] = (
+        lambda _session, _args, env: selected.append(("oracle", env.copy()))
+    )
+    session = _FakeSession(tmp_path, "/usr/bin/python3-config")
+    session.posargs = ()
+    session.install = lambda *_requirements: None
+
+    module["cpu"](session)
+
+    by_name = dict(selected)
+    assert by_name["native"]["REAL_TORCH_SITE"] == str(site)
+    assert by_name["shim"]["REAL_TORCH_SITE"] == ""
+    assert by_name["shim"]["JITTOR_REQUIRE_REAL_TORCH"] == "0"
+    assert by_name["oracle"]["REAL_TORCH_SITE"] == str(site)
+    assert session.calls[-1][0][:2] == ("python", "-c")
+    assert session.calls[-1][1]["env"]["REAL_TORCH_SITE"] == str(site)
