@@ -80,6 +80,20 @@ class TestLaunchFailurePropagation(unittest.TestCase):
         self.assertEqual(first["JT_HCCL_ROOTINFO_FILE"], second["JT_HCCL_ROOTINFO_FILE"])
         for name in ("JITTOR_HOME", "TMPDIR", "XDG_CACHE_HOME", "CCACHE_DIR"):
             self.assertNotEqual(first[name], second[name])
+        self.assertLessEqual(len(os.fsencode(first["TMPDIR"])), 64)
+        self.assertLessEqual(len(os.fsencode(second["TMPDIR"])), 64)
+
+    def test_long_state_path_does_not_lengthen_worker_socket_path(self):
+        worker_environment = runpy.run_path(str(_LAUNCH))["worker_environment"]
+        kwargs = dict(nproc=2, nnodes=1, node_rank=0, local_rank=0,
+                      backend="hccl", master_addr="localhost", master_port=29500,
+                      rootinfo="/shared/fresh-long.bin", run_id="fresh-long",
+                      state_root="/shared/" + "deep/" * 40)
+        env = worker_environment({"JT_LAUNCH_TMP_ROOT": "/tmp/jt-test"}, **kwargs)
+        self.assertTrue(env["TMPDIR"].startswith("/tmp/jt-test/jt-rank-"))
+        self.assertLessEqual(len(os.fsencode(env["TMPDIR"])), 64)
+        with self.assertRaisesRegex(ValueError, "too long for AF_UNIX"):
+            worker_environment({"JT_LAUNCH_TMP_ROOT": "/tmp/" + "x" * 70}, **kwargs)
 
     def test_fixed_private_cache_does_not_reuse_execution_identity(self):
         worker_environment = runpy.run_path(str(_LAUNCH))["worker_environment"]

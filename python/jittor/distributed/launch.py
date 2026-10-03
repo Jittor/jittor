@@ -101,7 +101,16 @@ def worker_environment(environ, *, nproc, nnodes, node_rank, local_rank,
         cache_rank = cache_root / ('rank-%05d' % rank)
         env.update(CCACHE_BASEDIR=str(cache_rank),
                    CCACHE_CONFIGPATH=str(cache_rank / 'ccache.conf'))
-    env.update(JITTOR_HOME=str(cache_rank / 'jittor-home'), TMPDIR=str(rank_root / 'tmp'),
+    # Multiprocessing managers use AF_UNIX sockets under TMPDIR. Deep shared
+    # state paths can exceed the kernel's socket-path limit before training.
+    tmp_root = Path(environ.get('JT_LAUNCH_TMP_ROOT') or '/tmp')
+    if not tmp_root.is_absolute() or '..' in tmp_root.parts:
+        raise ValueError('JT_LAUNCH_TMP_ROOT must be an absolute normalized path')
+    token = hashlib.sha256(repr((str(state_root), run_id, rank)).encode()).hexdigest()[:16]
+    rank_tmp = tmp_root / ('jt-rank-' + token)
+    if len(os.fsencode(str(rank_tmp))) > 64:
+        raise ValueError('JT_LAUNCH_TMP_ROOT is too long for AF_UNIX worker sockets')
+    env.update(JITTOR_HOME=str(cache_rank / 'jittor-home'), TMPDIR=str(rank_tmp),
                XDG_CACHE_HOME=str(rank_root / 'cache'), CCACHE_DIR=str(cache_rank / 'ccache'),
                cache_name='default')
     # Preserve the full visible-device list. LOCAL_RANK must address that list,
