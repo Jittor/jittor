@@ -409,6 +409,69 @@ class TestNativeGelu(unittest.TestCase):
         self.assertIsNone(jt.core._fast_gelu(torch.arange(4, device=_cuda())))
 
 
+    def test_a_gelu_of_a_linear_output_is_one_kernel_with_the_same_bits(self):
+        from jittor.nn.functional import activation
+        outer = torch.nn.Sequential(torch.nn.Linear(256, 512)).cuda()
+        flags = jt.flags.auto_graph_replay
+        jt.flags.auto_graph_replay = 0
+        try:
+            for dtype in (torch.float32, torch.float16):
+                outer = outer.to(dtype)
+                x = torch.randn(8, 256, device="cuda", dtype=dtype)
+                with torch.no_grad():
+                    outer(x)
+                    hidden = outer(x)
+                    self.assertEqual(hidden._producer_name(), "code")
+                    got = torch.nn.functional.gelu(hidden)
+                    self.assertEqual(got._producer_name(), "code")
+                    native = activation._FAST_GELU
+                    try:
+                        activation._FAST_GELU = None
+                        want = torch.nn.functional.gelu(hidden)
+                    finally:
+                        activation._FAST_GELU = native
+                self.assertEqual(got.dtype, dtype)
+                np.testing.assert_array_equal(got.float().numpy(), want.float().numpy())
+        finally:
+            jt.flags.auto_graph_replay = flags
+
+
+class TestSdpaRoutes(unittest.TestCase):
+    def test_a_remembered_route_gives_the_walk_s_answer(self):
+        from jittor.compat.torch.installers.nn import attention
+        from jittor._runtime import dispatch
+        from jittor.nn.functional import attention as native
+        sdpa = torch.nn.functional.scaled_dot_product_attention
+        q = torch.randn(1, 4, 16, 32, device="cuda")
+        k = torch.randn(1, 4, 16, 32, device="cuda")
+        v = torch.randn(1, 4, 16, 32, device="cuda")
+        mask = torch.randn(1, 1, 16, 16, device="cuda")
+        attention._ROUTES.clear()
+        with torch.no_grad():
+            first = sdpa(q, k, v, attn_mask=mask).numpy()
+            self.assertEqual(len(attention._ROUTES), 1)
+            second = sdpa(q, k, v, attn_mask=mask).numpy()
+        np.testing.assert_array_equal(first, second)
+        # A registry change is a new walk: the override answers.
+        calls = []
+
+        def kernel(query, key, value, **kwargs):
+            calls.append(1)
+            return None
+
+        with dispatch.override_kernel("nn.fused_attention", "cuda", kernel), torch.no_grad():
+            third = sdpa(q, k, v, attn_mask=mask).numpy()
+        self.assertEqual(len(calls), 1)
+        np.testing.assert_allclose(third, first, rtol=1e-4, atol=1e-5)
+        # Training is never remembered.
+        attention._ROUTES.clear()
+        qg = q.clone().requires_grad_(True)
+        sdpa(qg, k, v, attn_mask=mask).sum().backward()
+        self.assertEqual(len(attention._ROUTES), 0)
+        self.assertEqual(tuple(qg.grad.shape), (1, 4, 16, 32))
+        native.LAST_FUSED_KERNEL[0] = None
+
+
 class TestNativeRules(unittest.TestCase):
     def test_the_layer_norm_relay_is_chosen_natively_as_before(self):
         from jittor._runtime.dispatch import select_kernel

@@ -25,6 +25,8 @@ accepts it, and dropout drawn inside the kernels (the backward draws it
 again). A mask that needs a gradient declines.
 """
 
+import weakref
+
 import jittor as jt
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from jittor._core.flags import _output_requires_grad
@@ -570,15 +572,27 @@ def _mask_layout(mask, shape):
     if mask is None:
         return 0, None, (0, 0, 0, 0)
     last = _LAST_MASK
-    if last[0] is mask and last[1] == mask.var_ptr and last[2] == shape \
-            and not _output_requires_grad(mask):
+    if last[0] is not None and last[0]() is mask and last[1] == mask.var_ptr \
+            and last[2] == shape and not _output_requires_grad(mask):
         return last[3]
     layout = _new_mask_layout(mask, shape)
     # Only a small mask is kept past its forward: a long sequence's is tens of
-    # megabytes.
+    # megabytes. And only for as long as the mask itself lives -- a weak
+    # reference, so a mask the caller has let go does not keep its layout
+    # (and a Var) alive; a native Var takes none and is not kept.
     if layout is not None and int(mask.numel()) <= (1 << 20):
-        last[:] = [mask, mask.var_ptr, shape, layout]
+        try:
+            ref = weakref.ref(mask, _forget_mask)
+        except TypeError:
+            ref = None
+        if ref is not None:
+            last[:] = [ref, mask.var_ptr, shape, layout]
     return layout
+
+
+def _forget_mask(ref):
+    if _LAST_MASK[0] is ref:
+        _LAST_MASK[:] = [None, None, None, None]
 
 
 def _new_mask_layout(mask, shape):

@@ -143,6 +143,12 @@ def _repeated_heads(tensor):
     return unsqueezed.reshape((b, heads, length, dim)), group
 
 
+#: The `nn.fused_attention` kernel that answered the last call this module
+#: answered with one, for a caller that remembers the route (the Torch
+#: frontend's `scaled_dot_product_attention`); the caller clears it.
+LAST_FUSED_KERNEL = [None]
+
+
 def scaled_dot_product_attention(
     query,
     key,
@@ -204,10 +210,14 @@ def scaled_dot_product_attention(
     # A fused kernel never writes the [..., Lq, Lk] scores to memory; see
     # backends/cuda/kernels/nn/cudnn_attention_cuda.py. It declines what it
     # cannot run, and everything below is the path for that.
-    fused = try_dispatch(
+    fused_kernel = select_kernel(
         "nn.fused_attention", query, key, value,
         attn_mask=attn_mask, dropout_p=probability, is_causal=is_causal, scale=scale)
+    fused = None if fused_kernel is None else fused_kernel(
+        query, key, value,
+        attn_mask=attn_mask, dropout_p=probability, is_causal=is_causal, scale=scale)
     if fused is not None:
+        LAST_FUSED_KERNEL[0] = fused_kernel
         return fused
     query_length = int(query.shape[-2])
     scale_factor = 1.0 / math.sqrt(int(query.shape[-1])) if scale is None else scale

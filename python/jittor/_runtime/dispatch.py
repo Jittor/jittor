@@ -58,10 +58,16 @@ def _entry_priority(entry):
     return entry.priority
 
 
+#: Moves on every registration change, for a caller that remembers what a
+#: selection answered.
+generation = 0
+
+
 def _invalidate():
     """Drop the resolved candidate lists; callers must hold `_lock`."""
-    global _resolved
+    global _resolved, generation
     _resolved = {}
+    generation += 1
     _rebuild_op_names()
     if _NATIVE_SELECT:
         sys.modules["jittor"].core._kernel_select_invalidate(_registered_ops)
