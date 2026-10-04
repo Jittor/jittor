@@ -5,12 +5,17 @@
 #include "bindings/pyjt/py_kernel_select.h"
 #include "bindings/pyjt/py_tensor_frontend.h"
 #include "ops/op_register.h"
+#include "ops/composite/code_op.h"
+#include <cstring>
 #include "runtime/device.h"
 #include "runtime/backend.h"
 #include <stdexcept>
 #include <descrobject.h>
 
 namespace jittor {
+
+DECLARE_FLAG(bool, no_grad);
+DECLARE_FLAG(int, amp_reg);
 
 namespace {
 // Per frontend type: its dtype table, and the entries already looked up by
@@ -326,13 +331,53 @@ PyObject* fast_binary(PyObject* self, PyObject* other, int code) {
     return mark_like(out, self, other);
 }
 
+namespace {
+auto make_code = op_constructor<VarPtr, NanoVector, NanoString, vector<Var*>&&, string&&,
+    vector<string>&&, string&&, string&&, vector<string>&&, string&&, DataMap&&, string&&>("code");
+
+// The body below as one kernel, in the same order and precision: float32
+// throughout, the input widened and the result narrowed as `.float32()` and
+// `.cast()` would. Taken for the output of a code operator -- a Linear's, in
+// a transformer's MLP -- where the elementwise chain has nothing on its input
+// side to fuse with, under no_grad on CUDA: one operator to build and launch
+// instead of five.
+const string& gelu_source() {
+    static const string source = R"(
+    __global__ static void jt_gelu(const in0_type* __restrict__ x, out0_type* __restrict__ y,
+                                   long long n) {
+        long long stride = (long long)gridDim.x * blockDim.x;
+        for (long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x; i < n; i += stride) {
+            float v = static_cast<float>(x[i]);
+            y[i] = static_cast<out0_type>((0.5f * v) * (1.0f + erff(v * 0.7071067811865476f)));
+        }
+    }
+    long long n = in0->num;
+    long long blocks = (n + 255) / 256;
+    if (blocks > 65536) blocks = 65536;
+    jt_gelu<<<(unsigned)blocks, 256>>>(in0_p, out0_p, n);
+    )";
+    return source;
+}
+} // namespace
+
 PyObject* fast_gelu(PyObject* x) {
     if (!is_var(x) || !binary_slots[B_MUL] || !binary_slots[B_RMUL] || !binary_slots[B_RADD]
             || !mark_cpu_like_fn || kernel_op_registered("nn.gelu"))
         return none();
-    NanoString own = GET_RAW_PTR(VarHolder, x)->var->dtype();
+    Var* var = GET_RAW_PTR(VarHolder, x)->var;
+    NanoString own = var->dtype();
     if (!is_floating(own)) return none();
     bool low = own == ns_float16 || own == ns_bfloat16;
+    Op* producer = var->input();
+    if (own != ns_float64 && !amp_reg && runtime_flag_use_cuda() && producer
+            && producer->is_op(op_ids::code()) && var->num > 0 && var->is_contiguous()
+            && (no_grad || var->is_stop_grad())) {
+        PyTensorFrontendScope scope(x, nullptr, 0, false);
+        unique_ptr<VarHolder> out(new VarHolder(make_code(var->shape, own, {var},
+            "", {}, "", string(gelu_source()), {}, "", {}, "")));
+        out->stop_grad();
+        return to_py_object<VarHolder*>(out.release());
+    }
     static PyObject* half = PyFloat_FromDouble(0.5);
     static PyObject* one = PyFloat_FromDouble(1.0);
     static PyObject* inv_sqrt2 = PyFloat_FromDouble(0.7071067811865476);
