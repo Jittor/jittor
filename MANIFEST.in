@@ -607,6 +607,7 @@ include src/ops/composite/clone_op.cc
 include src/ops/composite/clone_op.h
 include src/ops/composite/code_op.cc
 include src/ops/composite/code_op.h
+include src/ops/composite/code_source.h
 include src/ops/composite/contiguous_op.cc
 include src/ops/composite/contiguous_op.h
 include src/ops/composite/copy_op.cc

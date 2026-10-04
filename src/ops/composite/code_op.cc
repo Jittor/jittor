@@ -7,9 +7,12 @@
 #include <cmath>
 #include "core/var.h"
 #include "ops/composite/code_op.h"
+#include "ops/composite/code_source.h"
 #include "ops/op_register.h"
 #include "runtime/device.h"
 #include <mutex>
+#include <sstream>
+#include <cstring>
 #include <unordered_map>
 
 #define __inline_static__ inline static
@@ -214,18 +217,7 @@ void CodeOp::grads(Var** douts, VarPtr* dins) {
 // microsecond. The distinct sources are few (one per specialised kernel), so
 // remember the result. References into an unordered_map stay valid across
 // rehashes, and the lock only guards the map, not the walk's cost.
-static const string& code_op_key_tail(const string& header, const string& src) {
-    static std::mutex tail_lock;
-    static unordered_map<string, string> tails;
-    string key;
-    key.reserve(header.size() + src.size() + 1);
-    key += header;
-    key += '\1';
-    key += src;
-    std::lock_guard<std::mutex> guard(tail_lock);
-    auto found = tails.find(key);
-    if (found != tails.end())
-        return found->second;
+static string code_op_build_tail(const string& header, const string& src) {
     string tail;
     tail.reserve(header.size() + src.size() + 32);
     tail += header;
@@ -252,7 +244,70 @@ static const string& code_op_key_tail(const string& header, const string& src) {
     }
     tail += "}«CODE:";
     for (; i<src.size(); i++) tail += src[i];
-    return tails.emplace(std::move(key), std::move(tail)).first->second;
+    return tail;
+}
+
+namespace {
+// Eight bytes a step, two independent lanes: a digest to look a source up by,
+// several times faster than hashing it with std::hash. The lookup still
+// compares the text, so a collision costs a miss, never a wrong kernel.
+inline void source_digest(const string& text, uint64& a, uint64& b) {
+    const unsigned char* p = (const unsigned char*)text.data();
+    size_t n = text.size(), i = 0;
+    for (; i + 8 <= n; i += 8) {
+        uint64 w;
+        memcpy(&w, p + i, 8);
+        a = (a ^ w) * 0x9E3779B97F4A7C15ull;
+        a ^= a >> 29;
+        b = (b + w) * 0xC2B2AE3D27D4EB4Full;
+        b = (b << 31) | (b >> 33);
+    }
+    for (; i < n; i++) {
+        a = (a ^ p[i]) * 0x100000001B3ull;
+        b = (b + p[i]) * 0x9E3779B97F4A7C15ull;
+    }
+}
+
+struct InternedSource {
+    string header, src, token, tail;
+};
+
+struct DigestHash {
+    size_t operator()(const pair<uint64, uint64>& d) const { return d.first ^ (d.second * 31); }
+};
+
+std::mutex interned_lock;
+std::unordered_multimap<pair<uint64, uint64>, InternedSource*, DigestHash> by_digest;
+unordered_map<string, InternedSource*> by_token;
+} // namespace
+
+const string& code_source_token(const string& header, const string& src) {
+    uint64 a = 0x243F6A8885A308D3ull ^ header.size(), b = 0x13198A2E03707344ull ^ src.size();
+    source_digest(header, a, b);
+    a ^= 0x1; b += 0x1;
+    source_digest(src, a, b);
+    auto digest = std::make_pair(a, b);
+    std::lock_guard<std::mutex> guard(interned_lock);
+    auto range = by_digest.equal_range(digest);
+    for (auto it = range.first; it != range.second; ++it)
+        if (it->second->src == src && it->second->header == header)
+            return it->second->token;
+    // First sight of this text (or a colliding one): build its tail once.
+    auto* entry = new InternedSource{header, src, "", code_op_build_tail(header, src)};
+    std::stringstream token;
+    token << code_source_prefix << std::hex << a << '_' << b << '_' << std::dec << entry->tail.size();
+    entry->token = token.str();
+    int dup = 0;
+    while (by_token.count(entry->token)) entry->token = token.str() + "_" + std::to_string(++dup);
+    by_digest.emplace(digest, entry);
+    by_token.emplace(entry->token, entry);
+    return entry->token;
+}
+
+const string* code_source_tail(const string& token) {
+    std::lock_guard<std::mutex> guard(interned_lock);
+    auto found = by_token.find(token);
+    return found == by_token.end() ? nullptr : &found->second->tail;
 }
 
 void CodeOp::jit_prepare(JK& jk) {
@@ -294,7 +349,7 @@ void CodeOp::jit_prepare(JK& jk) {
         cuda_src : cpu_src;
 
     USER_CHECK(src.size()) << "code requires source for the selected backend";
-    jk << "«HEADER:" << code_op_key_tail(header, src);
+    jk << "«HEADER:" << code_source_token(header, src);
 }
 
 } // jittor

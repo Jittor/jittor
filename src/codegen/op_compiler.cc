@@ -4,6 +4,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#include "ops/composite/code_source.h"
 #include <regex>
 #include <algorithm>
 #include <iomanip>
@@ -861,6 +862,19 @@ string OpCompiler::get_jit_src(Op* op) {
     // source that need to be added after the last #include statement
     string after_include_src = "";
     auto jit_define = op->get_jit_define();
+    // An interned code source: the key names it by token, the source is the
+    // header and code it stands for (see ops/composite/code_source.h).
+    for (size_t k = 0; k < jit_define.size(); k++) {
+        if (jit_define[k].first != "HEADER" || !is_code_source_token(jit_define[k].second))
+            continue;
+        const string* tail = code_source_tail(jit_define[k].second);
+        ASSERT(tail) << "code source token not interned in this process:" << jit_define[k].second;
+        auto cut = tail->find("«CODE:");
+        ASSERT(cut != string::npos) << "malformed interned code source";
+        jit_define[k].second = tail->substr(0, cut);
+        jit_define.emplace_back("CODE", tail->substr(cut + string("«CODE:").size()));
+        break;
+    }
     for (auto &t : jit_define) {
         // don't add CODE in define
         // this allowed comment exsit in CODE

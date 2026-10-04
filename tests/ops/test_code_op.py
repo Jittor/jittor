@@ -462,6 +462,23 @@ class TestCodeOp(unittest.TestCase):
         assert np.allclose(da.data, b.data)
         assert np.allclose(db.data, a.data)
 
+    def test_sources_keep_their_own_kernels(self):
+        # A source is named in the operator's key by a digest of its text
+        # (src/ops/composite/code_source.h). Texts that differ in one
+        # character, the same text twice, and a long text each get the kernel
+        # their own text compiles to.
+        a = jt.array(np.arange(6, dtype="float32"))
+        pad = " " * 20000
+
+        def scaled(k, padding=""):
+            return jt.code(a.shape, a.dtype, [a], cpu_src=padding + """
+                for (int i=0; i<in0_shape0; i++) @out0(i) = @in0(i) * %d;
+            """ % k)
+        for k in (2, 3, 2, 7):
+            np.testing.assert_array_equal(scaled(k).numpy(), np.arange(6) * k)
+        np.testing.assert_array_equal(scaled(5, pad).numpy(), np.arange(6) * 5)
+        np.testing.assert_array_equal(scaled(6, pad).numpy(), np.arange(6) * 6)
+
     def test_simple_var(self):
         a = jt.code([1], "float32", inputs=[], 
             data = {"x":123},
