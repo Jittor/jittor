@@ -188,13 +188,13 @@ def scaled_dot_product_attention(
     if probability < 0.0 or probability > 1.0:
         raise ValueError("dropout probability must be between 0 and 1")
     if attn_mask is not None:
+        # Names are names: `_jittor_dtype_name` of one is itself, and it was
+        # asked five more times here on every call.
         mask_dtype = _jittor_dtype_name(attn_mask.dtype)
-        if _jittor_dtype_name(mask_dtype) != "bool" and "float" not in _jittor_dtype_name(mask_dtype):
+        if mask_dtype != "bool" and "float" not in mask_dtype:
             raise AssertionError("only bool and floating attention masks are supported")
-        allowed_mask_dtypes = {query_dtype}
-        if _jittor_dtype_name(query_dtype) in {"bfloat16", "float16", "float64"}:
-            allowed_mask_dtypes.add("float32")
-        if _jittor_dtype_name(mask_dtype) != "bool" and _jittor_dtype_name(mask_dtype) not in allowed_mask_dtypes:
+        if mask_dtype != "bool" and mask_dtype != query_dtype and not (
+                mask_dtype == "float32" and query_dtype in ("bfloat16", "float16", "float64")):
             raise RuntimeError("attention mask dtype must match query dtype or be float32")
     fast = try_dispatch(
         "nn.scaled_dot_product_attention", query, key, value,

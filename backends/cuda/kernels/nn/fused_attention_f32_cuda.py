@@ -554,6 +554,12 @@ def _launch(kernel, grid, smem, args, threads):
     """
 
 
+#: The layout `_mask_layout` last gave, with the mask, the Var it held then and
+#: the shape it was for. Transformers builds one mask a forward and hands it
+#: to every layer; the entry holds the mask, so its id is not reused.
+_LAST_MASK = [None, None, None, None]
+
+
 def _mask_layout(mask, shape):
     """(kind, contiguous mask, strides) for an `attn_mask`, or None to decline.
 
@@ -563,6 +569,19 @@ def _mask_layout(mask, shape):
     """
     if mask is None:
         return 0, None, (0, 0, 0, 0)
+    last = _LAST_MASK
+    if last[0] is mask and last[1] == mask.var_ptr and last[2] == shape \
+            and not _output_requires_grad(mask):
+        return last[3]
+    layout = _new_mask_layout(mask, shape)
+    # Only a small mask is kept past its forward: a long sequence's is tens of
+    # megabytes.
+    if layout is not None and int(mask.numel()) <= (1 << 20):
+        last[:] = [mask, mask.var_ptr, shape, layout]
+    return layout
+
+
+def _new_mask_layout(mask, shape):
     dtype = _jittor_dtype_name(mask.dtype)
     if dtype == "bool":
         kind = 1
@@ -672,6 +691,12 @@ def _rows_args(t, seq, heads, group):
             f"(long long){t}->shape[3], {group}}}")
 
 
+#: The forward's launch source by everything it is formatted from: a model
+#: calls attention with the same settings in every layer, and formatting it
+#: was half of what building the operator cost in Python.
+_FORWARD_SOURCES = {}
+
+
 def _forward(query, key, value, call):
     if call.seq[0]:
         b, lq, h, d = (int(size) for size in query.shape)
@@ -680,18 +705,22 @@ def _forward(query, key, value, call):
     # Four query rows a thread; one where that leaves the grid smaller than
     # the device, which is what BERT at batch 1 (24 tiles of 64) did.
     rpt = 4 if -(-lq // 64) * b * h >= _SM_BLOCKS else 1
-    bq = 16 * rpt
-    smem = _smem_register_forward(d, rpt)
-    kernel = f"mea_fwd::forward<{d}, {rpt}, {call.template()}>"
-    lq_expr, lk_expr = call.lengths()
+    key_ = (d, rpt, call.causal, call.mask[0], call.mask[2], call.seq, call.group,
+            float(call.scale), call.seed is not None, call.keep)
+    src = _FORWARD_SOURCES.get(key_)
+    if src is None:
+        bq = 16 * rpt
+        smem = _smem_register_forward(d, rpt)
+        kernel = f"mea_fwd::forward<{d}, {rpt}, {call.template()}>"
+        lq_expr, lk_expr = call.lengths()
+        src = _FORWARD_SOURCES[key_] = _launch(
+            kernel, f"({lq_expr} + {bq} - 1) / {bq}, in0->shape[0] * {call.heads_expr()}",
+            smem, f"in0_p, in1_p, in2_p, out0_p, out1_p, {lq_expr}, {lk_expr}, "
+                  f"{float(call.scale)!r}f, {call.args(3)}",
+            threads="mea_fwd::THREADS")
     return jt.code(
         [query.shape, (b, h, lq)], ["float32", "float32"], [query, key, value] + call.extras(),
-        cuda_header=_KERNELS,
-        cuda_src=_launch(kernel, f"({lq_expr} + {bq} - 1) / {bq}, in0->shape[0] * "
-                                 f"{call.heads_expr()}",
-                         smem, f"in0_p, in1_p, in2_p, out0_p, out1_p, {lq_expr}, {lk_expr}, "
-                               f"{float(call.scale)!r}f, {call.args(3)}",
-                         threads="mea_fwd::THREADS"))
+        cuda_header=_KERNELS, cuda_src=src)
 
 
 def _backward(query, key, value, grad_out, lse, delta, call):
