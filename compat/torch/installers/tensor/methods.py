@@ -155,7 +155,10 @@ def _bind_native_binary(jt, natives, mark_cpu_like):
     bind = getattr(jt.core, "_compat_fast_bind_binary", None)
     if bind is None:
         return
-    bind(tuple(natives[name] for name in method_api._FAST_BINARY_OPERATORS), mark_cpu_like)
+    # ACL keeps a Python float divisor in the tensor's dtype (see
+    # `_true_division`); everywhere else the native path widens it the same way.
+    bind(tuple(natives[name] for name in method_api._FAST_BINARY_OPERATORS), mark_cpu_like,
+         not bool(getattr(jt.compiler, "has_acl", 0)))
     method_api._FAST_BINARY = jt.core._fast_binary
 
 

@@ -40,8 +40,11 @@ PyObject* fast_getitem(PyObject* self, PyObject* index);
 // `__rmul__`, `__truediv__` and `__rtruediv__` as captured before the frontend
 // replaced them (slot wrappers; anything else leaves that operator on the
 // Python path), and `mark_cpu_like` is the frontend's `_mark_cpu_like`.
+// `widen_scalar_division`: take a floating tensor over a Python float here,
+// widened as `_true_division` does (everywhere but ACL).
 // @pyjt(_compat_fast_bind_binary)
-void compat_fast_bind_binary(PyObject* natives, PyObject* mark_cpu_like);
+void compat_fast_bind_binary(PyObject* natives, PyObject* mark_cpu_like,
+                             bool widen_scalar_division=false);
 
 // `tensor <op> other` for the common case of `method_api._promoting_binary`
 // and `_true_division`: a Var of the same dtype (not unsigned; floating for a

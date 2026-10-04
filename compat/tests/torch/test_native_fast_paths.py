@@ -168,7 +168,10 @@ class TestFastBinary(unittest.TestCase):
         self.assertIsNone(jt.core._fast_binary(i, 2.5, 4))
         self.assertEqual((i * 2.5).dtype, torch.float32)
         self.assertIsNone(jt.core._fast_binary(h, True, 0))
-        self.assertIsNone(jt.core._fast_binary(h, 2.0, 6))
+        # A float divisor is widened natively as `_true_division` widens it
+        # (bit for bit: test_torch_compat_promotion.py); an int one is not.
+        self.assertEqual(jt.core._fast_binary(h, 2.0, 6).dtype, torch.float16)
+        self.assertIsNone(jt.core._fast_binary(h, 2, 6))
 
     def test_the_pairs_it_hands_back(self):
         f = torch.ones(3)
@@ -255,6 +258,50 @@ class TestNativeModuleDispatch(unittest.TestCase):
         torch.nn.Sequential(layer)(x).sum().backward()
         np.testing.assert_allclose(layer.weight.grad.numpy(),
                                    np.tile(x.numpy().sum(0), (2, 1)), rtol=1e-5)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "the cuBLASLt route is CUDA's")
+    def test_a_linear_with_a_bias_at_inference(self):
+        # Built natively as the same cuBLASLt operator `lt_linear_cuda` builds.
+        from jittor.backends.cuda.kernels.cublas.lt_linear_cuda import lt_linear_cuda
+        for dtype in (torch.float32, torch.float16):
+            layer = torch.nn.Linear(256, 1024).to(device="cuda", dtype=dtype)
+            outer = torch.nn.Sequential(layer)
+            x = torch.randn(1, 8, 256, device="cuda", dtype=dtype)
+            with torch.no_grad():
+                got = outer(x)
+                want = lt_linear_cuda(x, layer.weight, layer.bias)
+            self.assertEqual(got.dtype, dtype)
+            self.assertEqual(tuple(got.shape), (1, 8, 1024))
+            np.testing.assert_array_equal(got.float().numpy(), want.float().numpy())
+        # What it hands back: a product too small for that route, and a call
+        # that records gradients.
+        small = torch.nn.Linear(8, 4).cuda()
+        xs = torch.randn(2, 8, device="cuda")
+        with torch.no_grad():
+            np.testing.assert_allclose(
+                torch.nn.Sequential(small)(xs).numpy(),
+                xs.numpy() @ small.weight.numpy().T + small.bias.numpy(), rtol=1e-4, atol=1e-4)
+        layer = torch.nn.Linear(256, 1024).cuda()
+        x = torch.randn(1, 8, 256, device="cuda")
+        torch.nn.Sequential(layer)(x).sum().backward()
+        np.testing.assert_allclose(layer.bias.grad.numpy(), np.full(1024, 8.0), rtol=1e-5)
+
+    def test_a_dropout_that_does_not_train_hands_back_its_input(self):
+        x = torch.randn(4, 8, device=_cuda())
+        drop = torch.nn.Dropout(0.5)
+        outer = torch.nn.Sequential(drop)
+        outer.eval()
+        with torch.no_grad():
+            self.assertIs(outer(x), x)
+        outer.train()
+        with torch.no_grad():
+            dropped = outer(x)
+        self.assertIsNot(dropped, x)
+        self.assertTrue(bool((dropped == 0).any()))
+        none = torch.nn.Sequential(torch.nn.Dropout(0.0))
+        none.train()
+        with torch.no_grad():
+            self.assertIs(none(x), x)
 
     def test_a_standard_rms_norm(self):
         class ToyRMSNorm(torch.nn.Module):

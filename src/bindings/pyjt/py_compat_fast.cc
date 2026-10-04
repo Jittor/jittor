@@ -191,7 +191,11 @@ enum BinaryCode { B_ADD, B_RADD, B_SUB, B_RSUB, B_MUL, B_RMUL, B_TRUEDIV, B_RTRU
 binaryfunc binary_slots[B_COUNT] = {};
 bool binary_reflected[B_COUNT] = {};
 PyObject* mark_cpu_like_fn = nullptr;
+// Whether a scalar divisor widens the division, as `_true_division` does on
+// every backend but ACL (which has no float64 arithmetic).
+bool widen_division = false;
 auto make_unary = op_constructor<VarPtr, Var*, NanoString>("unary");
+auto make_array = op_constructor<VarPtr, const void*, NanoVector, NanoString>("array");
 auto make_reshape = op_constructor<VarPtr, Var*, NanoVector>("reshape");
 auto make_transpose = op_constructor<VarPtr, Var*, NanoVector>("transpose");
 
@@ -231,7 +235,8 @@ PyObject* wrap_like(PyObject* self, VarHolder* holder) {
 }
 } // namespace
 
-void compat_fast_bind_binary(PyObject* natives, PyObject* mark_cpu_like) {
+void compat_fast_bind_binary(PyObject* natives, PyObject* mark_cpu_like, bool widen_scalar_division) {
+    widen_division = widen_scalar_division;
     if (!PyTuple_Check(natives) || PyTuple_GET_SIZE(natives) != B_COUNT)
         throw std::runtime_error("_compat_fast_bind_binary needs one native per operator");
     for (int i = 0; i < B_COUNT; i++) {
@@ -248,6 +253,37 @@ void compat_fast_bind_binary(PyObject* natives, PyObject* mark_cpu_like) {
     mark_cpu_like_fn = mark_cpu_like;
 }
 
+namespace {
+// `_true_division` for a floating tensor over a Python float, op for op: the
+// quotient is taken in float32 for half precision and float64 for float32 --
+// the divisor a 0-d array of that dtype -- and cast back. In Python it built
+// those three operators through a `result_type`, two dtype promotions and
+// three install-context lookups, 21 us a call; every diffusers ResnetBlock2D
+// ends in one (`/ self.output_scale_factor`), 45 a DDPM UNet forward.
+PyObject* scalar_division(PyObject* self, PyObject* other, NanoString own) {
+    PyObject* out;
+    if (own == ns_float64) {
+        out = binary_slots[B_TRUEDIV](self, other);
+    } else {
+        NanoString wide = own == ns_float32 ? ns_float64 : ns_float32;
+        double value = PyFloat_AS_DOUBLE(other);
+        float narrow = (float)value;
+        Var* x = GET_RAW_PTR(VarHolder, self)->var;
+        PyObjHolder a(wrap_like(self, new VarHolder(make_unary(x, wide))));
+        PyObjHolder b(wrap_like(self, new VarHolder(make_array(
+            wide == ns_float64 ? (const void*)&value : (const void*)&narrow, {}, wide))));
+        out = binary_slots[B_TRUEDIV](a.obj, b.obj);
+    }
+    if (!out || out == Py_NotImplemented || !is_var(out)) return out;
+    Var* result = GET_RAW_PTR(VarHolder, out)->var;
+    if (result->dtype() != own) {
+        PyObjHolder uncast(out);
+        out = wrap_like(self, new VarHolder(make_unary(result, own)));
+    }
+    return mark_like(out, self, other);
+}
+} // namespace
+
 PyObject* fast_binary(PyObject* self, PyObject* other, int code) {
     if (code < 0 || code >= B_COUNT || !binary_slots[code] || !mark_cpu_like_fn
             || !is_var(self))
@@ -259,9 +295,12 @@ PyObject* fast_binary(PyObject* self, PyObject* other, int code) {
         if (GET_RAW_PTR(VarHolder, other)->var->dtype() != own) return none();
         if (division ? !(is_floating(own) || own.is_complex()) : is_uint(own)) return none();
     } else if (division) {
-        // A scalar divisor widens half and single precision on the Python
-        // path (`_true_division`); leave that to it.
-        return none();
+        // A float divisor of a floating tensor, as `_true_division` widens
+        // it; anything else -- an int, a reflected division -- stays there.
+        if (code != B_TRUEDIV || !widen_division || !PyFloat_CheckExact(other)
+                || !is_floating(own))
+            return none();
+        return scalar_division(self, other, own);
     } else if (PyFloat_CheckExact(other)) {
         if (!is_floating(own)) return none();
         scalar = true;
