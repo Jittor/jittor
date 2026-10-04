@@ -474,6 +474,18 @@ def _is_basic_index(index):
 
 
 def _torch_getitem(self, slices):
+    # PyTorch accepts NumPy integer/bool arrays as advanced indices.
+    # Convert them before the Jittor ACL dispatcher sees the index.
+    def normalize(index):
+        if isinstance(index, _owner.np.ndarray) and index.ndim:
+            if index.dtype.kind not in ("b", "i", "u"):
+                return index
+            return _owner.jt.array(index, dtype=str(index.dtype))
+        if isinstance(index, tuple):
+            return tuple(normalize(item) for item in index)
+        return index
+
+    slices = normalize(slices)
     _context = get_install_context(_owner.jt)
     _native = _context.state["tensor_native_api"]
     _orig_getitem = _native['_orig_getitem']
