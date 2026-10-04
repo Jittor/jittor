@@ -1181,6 +1181,8 @@ def _install_module_methods(nn, registry=None):
     from ...types import active_device_context as _active_device_context
     from jittor.nn.functional import matrix as _matrix
     from jittor.nn.modules.linear import Linear as _NativeLinear
+    from jittor.nn.modules.dropout import Dropout as _NativeDropout
+    from jittor.backends.cuda.kernels.cublas import lt_linear_cuda as _lt_linear
     # What `_dispatch_module_call` consults, so the native call can run it:
     # see `module_call_bind` in src/bindings/pyjt/py_module_call.h.
     _dispatch_parts = {
@@ -1190,6 +1192,9 @@ def _install_module_methods(nn, registry=None):
         "matmul_kernel": _matrix._cublas_matmul,
         "rms_norm_inference": _rms_norm_cuda.__wrapped__,
         "rms_norm_source": _rms_norm_source,
+        "dropout_execute": _NativeDropout.execute,
+        "lt_linear_header": _lt_linear._HEADER,
+        "lt_linear_source": _lt_linear._source,
         "acl_possible": bool(getattr(jt.compiler, "has_acl", 0)),
     }
     jt.core._module_call_bind(M, _call, _dispatch_module_call, _published_ids,

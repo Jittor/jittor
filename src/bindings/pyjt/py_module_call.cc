@@ -9,6 +9,7 @@
 #include "core/var_holder.h"
 #include "runtime/float32_precision.h"
 #include <stdexcept>
+#include <tuple>
 #include "runtime/device_state.h"
 
 namespace jittor {
@@ -40,6 +41,15 @@ PyObject* rms_source_fn = nullptr;
 bool acl_possible = true;
 PyObject* rms_training_name = nullptr;
 PyObject* rms_inference_name = nullptr;
+// `lt_linear_cuda`'s header and its (cached) source function, and the sources
+// it gave, per (rows, cin, cout, half precision).
+// `jittor.nn.Dropout.execute`, which hands its input back when it is not
+// training (or p is 0): see `dropout_passthrough`.
+PyObject* dropout_execute = nullptr;
+PyObject* lt_linear_header = nullptr;
+PyObject* lt_linear_source_fn = nullptr;
+std::map<std::tuple<int64, int64, int64, bool>, string> lt_linear_sources;
+string lt_linear_header_text;
 auto make_code = op_constructor<VarPtr, NanoVector, NanoString, vector<Var*>&&, string&&,
     vector<string>&&, string&&, string&&, vector<string>&&, string&&, DataMap&&, string&&>("code");
 // Source per (hidden size, epsilon), as `_rms_norm_source` formats it.
@@ -189,6 +199,74 @@ PyObject* linear_without_bias(PyObject* module, PyObject* dict, PyObject* x) {
     return to_py_object<VarHolder*>(new VarHolder(make_cublas_matmul(a, w, false, true)));
 }
 
+// A Dropout that is not training, or drops nothing, hands its input back --
+// `jittor.nn.dropout` returns `x` itself, as PyTorch does -- and a BERT-base
+// forward makes 37 such calls at 5.9 us each through Python. nullptr when it
+// would do anything else.
+PyObject* dropout_passthrough(PyObject* dict, PyObject* x) {
+    if (!dict || !is_var(x)) return nullptr;
+    PyObject* train = PyDict_GetItemString(dict, "is_train");
+    PyObject* p = PyDict_GetItemString(dict, "p");
+    if (!train || !p) return nullptr;
+    int training = PyObject_IsTrue(train);
+    if (training < 0) { PyErr_Clear(); return nullptr; }
+    if (training) {
+        if (!(PyFloat_Check(p) || PyLong_Check(p))) return nullptr;
+        double rate = PyFloat_AsDouble(p);
+        if (PyErr_Occurred()) { PyErr_Clear(); return nullptr; }
+        if (rate != 0.0) return nullptr;
+    }
+    Py_INCREF(x);
+    return x;
+}
+
+// `nn.Linear` with a bias on an inference call, as `lt_linear_cuda` builds it:
+// one cuBLASLt GEMM with the bias in its epilogue, from `_source`. Taken only
+// where that function would take it with no cast to make -- under `no_grad`,
+// outside autocast, all three operands one dtype it serves, dense, and a
+// product large enough for it -- so the operator is the one the Python path
+// builds. 8.6 us of host time to build in Python, 74 times a BERT-base forward.
+PyObject* linear_with_bias_inference(PyObject* dict, PyObject* x) {
+    if (!lt_linear_source_fn || lt_linear_header_text.empty() || !no_grad || amp_reg
+            || !runtime_flag_use_cuda() || !dict || !is_var(x))
+        return nullptr;
+    PyObject* weight = PyDict_GetItemString(dict, "weight");
+    PyObject* bias = PyDict_GetItemString(dict, "bias");
+    if (!weight || !is_var(weight) || !bias || !is_var(bias)) return nullptr;
+    Var* a = GET_RAW_PTR(VarHolder, x)->var;
+    Var* w = GET_RAW_PTR(VarHolder, weight)->var;
+    Var* b = GET_RAW_PTR(VarHolder, bias)->var;
+    NanoString dtype = a->dtype();
+    if ((dtype != ns_float32 && dtype != ns_float16) || w->dtype() != dtype || b->dtype() != dtype)
+        return nullptr;
+    if (!a->is_contiguous() || !w->is_contiguous() || !b->is_contiguous()) return nullptr;
+    int rank = a->shape.size();
+    if (w->shape.size() != 2 || b->shape.size() != 1 || rank < 2) return nullptr;
+    int64 cin = w->shape[1], cout = w->shape[0];
+    if (a->shape[rank - 1] != cin || b->shape[0] != cout || a->num < 0) return nullptr;
+    int64 rows = cin ? a->num / cin : 0;
+    if (rows * cout * cin < (int64(1) << 18)) return nullptr;
+    bool half = dtype == ns_float16;
+    auto key = std::make_tuple(rows, cin, cout, half);
+    auto found = lt_linear_sources.find(key);
+    if (found == lt_linear_sources.end()) {
+        PyObjHolder src(PyObject_CallFunction(lt_linear_source_fn, "LLLs",
+            (long long)rows, (long long)cin, (long long)cout, half ? "float16" : "float32"));
+        Py_ssize_t size;
+        const char* text = PyUnicode_AsUTF8AndSize(src.obj, &size);
+        if (!text) return nullptr;
+        found = lt_linear_sources.emplace(key, string(text, size)).first;
+    }
+    NanoVector shape;
+    for (int i = 0; i < rank - 1; i++) shape.push_back(a->shape[i]);
+    shape.push_back(cout);
+    PyTensorFrontendScope scope(x, nullptr, 0, false);
+    unique_ptr<VarHolder> out(new VarHolder(make_code(shape, dtype, {a, w, b},
+        "", {}, "", string(found->second), {}, string(lt_linear_header_text), {}, "")));
+    out->stop_grad();
+    return to_py_object<VarHolder*>(out.release());
+}
+
 // `_standard_rms_norm` on an inference call, natively: no training kernel
 // takes it, the dispatcher picks `_rms_norm_cuda` for it, and that builds its
 // code operator from `_rms_norm_source`. nullptr for anything else.
@@ -261,6 +339,14 @@ PyObject* dispatch_native(PyObject* module, const TypeInfo& info, PyObject* args
             && !(dict && PyDict_GetItemString(dict, "execute"))) {
         PyObject* fast = linear_without_bias(module, dict, PyTuple_GET_ITEM(args, 0));
         if (fast || PyErr_Occurred()) return fast;
+        fast = linear_with_bias_inference(dict, PyTuple_GET_ITEM(args, 0));
+        if (fast || PyErr_Occurred()) return fast;
+    }
+    if (!kwargs && PyTuple_GET_SIZE(args) == 1 && dropout_execute
+            && _PyType_Lookup(type, name_execute()) == dropout_execute
+            && !(dict && PyDict_GetItemString(dict, "execute"))) {
+        PyObject* same = dropout_passthrough(dict, PyTuple_GET_ITEM(args, 0));
+        if (same) return same;
     }
     PyObjHolder execute(PyObject_GetAttr(module, name_execute()));
     return PyObject_Call(execute.obj, args, kwargs);
@@ -290,6 +376,17 @@ void module_call_bind(PyObject* module_cls_, PyObject* dispatch_call_,
     part(matmul_kernel, "matmul_kernel");
     part(rms_inference_impl, "rms_norm_inference");
     part(rms_source_fn, "rms_norm_source");
+    part(dropout_execute, "dropout_execute");
+    part(lt_linear_header, "lt_linear_header");
+    part(lt_linear_source_fn, "lt_linear_source");
+    lt_linear_header_text.clear();
+    if (lt_linear_header && PyUnicode_Check(lt_linear_header)) {
+        Py_ssize_t size;
+        const char* text = PyUnicode_AsUTF8AndSize(lt_linear_header, &size);
+        if (text) lt_linear_header_text.assign(text, size);
+        else PyErr_Clear();
+    }
+    lt_linear_sources.clear();
     PyObject* acl = dispatch_parts && PyDict_Check(dispatch_parts)
         ? PyDict_GetItemString(dispatch_parts, "acl_possible") : nullptr;
     acl_possible = !acl || PyObject_IsTrue(acl) != 0;
