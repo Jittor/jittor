@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <tuple>
 #include "runtime/device_state.h"
+#include "ops/layout_propagation.h"
 
 namespace jittor {
 
@@ -43,6 +44,20 @@ PyObject* rms_training_name = nullptr;
 PyObject* rms_inference_name = nullptr;
 // `lt_linear_cuda`'s header and its (cached) source function, and the sources
 // it gave, per (rows, cin, cout, half precision).
+// `jittor.nn.Conv.execute` and what `select_kernel("conv2d")` answers with
+// cuDNN (`_try_cudnn_conv2d`); the cuDNN backend module, for its
+// `channels_last_activations` switch; and the key a weight keeps its OHWI
+// filter under. See `conv2d_inference`.
+PyObject* conv_execute = nullptr;
+PyObject* conv_cudnn_kernel = nullptr;
+PyObject* cudnn_backend = nullptr;
+PyObject* conv_filter_key = nullptr;
+PyObject* conv2d_name = nullptr;
+PyObject* depthwise_kwargs = nullptr;
+// `jittor.nn.BatchNorm.execute` and the key the tracked variance keeps the
+// inference scale and shift under. See `batch_norm_eval_channels_last`.
+PyObject* batch_norm_execute = nullptr;
+PyObject* bn_coefficients_key = nullptr;
 // `jittor.nn.Dropout.execute`, which hands its input back when it is not
 // training (or p is 0): see `dropout_passthrough`.
 PyObject* dropout_execute = nullptr;
@@ -199,6 +214,182 @@ PyObject* linear_without_bias(PyObject* module, PyObject* dict, PyObject* x) {
     return to_py_object<VarHolder*>(new VarHolder(make_cublas_matmul(a, w, false, true)));
 }
 
+bool pair_of_ints(PyObject* value, int& a, int& b) {
+    if (PyLong_Check(value)) {
+        a = b = (int)PyLong_AsLong(value);
+        return !PyErr_Occurred();
+    }
+    if (!(PyTuple_Check(value) || PyList_Check(value)) || PySequence_Size(value) != 2) return false;
+    PyObjHolder first(PySequence_GetItem(value, 0)), second(PySequence_GetItem(value, 1));
+    if (!PyLong_Check(first.obj) || !PyLong_Check(second.obj)) return false;
+    a = (int)PyLong_AsLong(first.obj);
+    b = (int)PyLong_AsLong(second.obj);
+    return !PyErr_Occurred();
+}
+
+// `channels_last_source`: the dense NHWC tensor `v` is an NCHW view of, or null.
+VarPtr channels_last_source(Var* v) {
+    if (v->shape.size() != 4 || v->is_contiguous() || v->storage_offset_bytes) return nullptr;
+    int64 c = v->shape[1], h = v->shape[2], w = v->shape[3];
+    if (std::min(c, std::min(h, w)) <= 1) return nullptr;
+    const auto& st = v->storage_strides;
+    if (st.size() != 4 || st[0] != h * w * c || st[1] != 1 || st[2] != w * c || st[3] != c)
+        return nullptr;
+    return storage_view_transpose(v, {0, 2, 3, 1});
+}
+
+PyObject* wrap_like_input(PyObject* x, VarPtr&& value) {
+    PyTensorFrontendScope scope(x, nullptr, 0, false);
+    return to_py_object<VarHolder*>(new VarHolder(move(value)));
+}
+
+// A half-precision `nn.Conv2d` on an inference call, as `_try_cudnn_conv2d`
+// builds it with channels-last activations: its filter already moved to OHWI
+// (or a 1x1 one relabelled), the input read as NHWC where it lies so, one
+// `cudnn_conv` writing NHWC, its bias added, and the result handed out as an
+// NCHW view. 12.6 us of host time in Python a call, 53 of them a ResNet-50
+// forward. nullptr for anything else -- the first call, which moves the
+// filter, among it.
+PyObject* conv2d_inference(PyObject* dict, PyObject* x) {
+    if (!conv_cudnn_kernel || !cudnn_backend || !conv_filter_key || !no_grad || amp_reg
+            || !runtime_flag_use_cuda() || !dict || !is_var(x))
+        return nullptr;
+    PyObject* weight = PyDict_GetItemString(dict, "weight");
+    PyObject* bias = PyDict_GetItemString(dict, "bias");
+    PyObject* groups = PyDict_GetItemString(dict, "groups");
+    PyObject* mode = PyDict_GetItemString(dict, "padding_mode");
+    if (!weight || !is_var(weight) || !bias || !groups || !PyLong_Check(groups)
+            || PyLong_AsLong(groups) != 1)
+        return nullptr;
+    if (mode && !(PyUnicode_Check(mode) && PyUnicode_CompareWithASCIIString(mode, "zeros") == 0))
+        return nullptr;
+    bool has_bias = bias != Py_None;
+    if (has_bias && !is_var(bias)) return nullptr;
+    int sh, sw, ph, pw, dh, dw;
+    PyObject* stride = PyDict_GetItemString(dict, "stride");
+    PyObject* padding = PyDict_GetItemString(dict, "padding");
+    PyObject* dilation = PyDict_GetItemString(dict, "dilation");
+    if (!stride || !padding || !dilation || !pair_of_ints(stride, sh, sw)
+            || !pair_of_ints(padding, ph, pw) || !pair_of_ints(dilation, dh, dw)) {
+        PyErr_Clear();
+        return nullptr;
+    }
+    if (sh <= 0 || sw <= 0 || dh <= 0 || dw <= 0 || ph < 0 || pw < 0) return nullptr;
+    Var* a = GET_RAW_PTR(VarHolder, x)->var;
+    Var* w = GET_RAW_PTR(VarHolder, weight)->var;
+    NanoString dtype = a->dtype();
+    if ((dtype != ns_float16 && dtype != ns_bfloat16) || w->dtype() != dtype) return nullptr;
+    if (has_bias && GET_RAW_PTR(VarHolder, bias)->var->dtype() != dtype) return nullptr;
+    if (a->shape.size() != 4 || w->shape.size() != 4 || a->shape[1] != w->shape[1]) return nullptr;
+    int64 oh = (a->shape[2] + 2 * ph - dh * (w->shape[2] - 1) - 1) / sh + 1;
+    int64 ow = (a->shape[3] + 2 * pw - dw * (w->shape[3] - 1) - 1) / sw + 1;
+    if (oh <= 0 || ow <= 0) return nullptr;
+    {
+        PyObjHolder on(PyObject_GetAttrString(cudnn_backend, "channels_last_activations"));
+        if (!on.obj || PyObject_IsTrue(on.obj) != 1) { PyErr_Clear(); return nullptr; }
+    }
+    // The dispatcher's answer, as `conv2d` asks for it.
+    {
+        PyObjHolder st(Py_BuildValue("(ii)", sh, sw)), pd(Py_BuildValue("(ii)", ph, pw)),
+            dl(Py_BuildValue("(ii)", dh, dw));
+        PyObjHolder call_args(PyTuple_Pack(7, x, weight, bias, st.obj, pd.obj, dl.obj, groups));
+        PyObjHolder kernel(kernel_select(conv2d_name, call_args.obj, depthwise_kwargs));
+        if (kernel.obj != conv_cudnn_kernel) { PyErr_Clear(); return nullptr; }
+    }
+    // The filter `_inference_filter` gives.
+    VarPtr filter;
+    int64 out_c = w->shape[0], in_c = w->shape[1];
+    if (w->shape[2] == 1 && w->shape[3] == 1 && w->is_contiguous()) {
+        static auto make_reshape_mc = op_constructor<VarPtr, Var*, NanoVector>("reshape");
+        filter = make_reshape_mc(w, {out_c, 1, 1, in_c});
+    } else {
+        PyObject** wdict = _PyObject_GetDictPtr(weight);
+        PyObject* moved = (wdict && *wdict) ? PyDict_GetItem(*wdict, conv_filter_key) : nullptr;
+        if (!moved || !PyTuple_Check(moved) || PyTuple_GET_SIZE(moved) != 2) return nullptr;
+        PyObject* ptr = PyTuple_GET_ITEM(moved, 0);
+        PyObject* dense = PyTuple_GET_ITEM(moved, 1);
+        if (!PyLong_Check(ptr) || (Var*)PyLong_AsVoidPtr(ptr) != w || !is_var(dense)) {
+            PyErr_Clear();
+            return nullptr;
+        }
+        filter = VarPtr(GET_RAW_PTR(VarHolder, dense)->var);
+    }
+    VarPtr source = channels_last_source(a);
+    if (!source && !a->is_finished()) {
+        Op* op = a->input();
+        if (op && op->is_op(op_ids::contiguous()) && op->inputs().size() == 1)
+            source = channels_last_source(op->inputs().front());
+    }
+    static auto make_cudnn_conv = op_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int,
+                                                 string, string, string>("cudnn_conv");
+    VarPtr y = make_cudnn_conv(source ? source.ptr : a, filter.ptr, sh, sw, ph, pw, dh, dw, 1,
+                               source ? "acdb" : "abcd", "ohwi", "acdb");
+    PyObject* out = wrap_like_input(x, move(y));
+    if (has_bias) {
+        PyObject* sum = PyNumber_Add(out, bias);
+        Py_DECREF(out);
+        if (!sum) return nullptr;
+        out = sum;
+    }
+    Var* nhwc = GET_RAW_PTR(VarHolder, out)->var;
+    PyObject* view = wrap_like_input(x, storage_view_transpose(nhwc, {0, 3, 1, 2}));
+    Py_DECREF(out);
+    return view;
+}
+
+// An inference `nn.BatchNorm2d` over a channels-last view, as `_batch_norm_eval`
+// computes it there -- the CUDA kernel takes dense NCHW only -- from the scale
+// and shift it keeps on the tracked variance: x * scale + shift, broadcast over
+// (0, 2, 3). nullptr when the kept pair is not for these parameters, or for a
+// dense input.
+PyObject* batch_norm_eval_channels_last(PyObject* dict, PyObject* x) {
+    if (!bn_coefficients_key || !dict || !is_var(x) || acl_possible) return nullptr;
+    PyObject* train = PyDict_GetItemString(dict, "is_train");
+    if (!train || PyObject_IsTrue(train) != 0) { PyErr_Clear(); return nullptr; }
+    Var* a = GET_RAW_PTR(VarHolder, x)->var;
+    if (a->shape.size() != 4 || a->is_contiguous()) return nullptr;
+    PyObject* names[4] = {PyDict_GetItemString(dict, "weight"), PyDict_GetItemString(dict, "bias"),
+                          PyDict_GetItemString(dict, "running_mean"),
+                          PyDict_GetItemString(dict, "running_var")};
+    for (auto* v : names) if (!v || !is_var(v)) return nullptr;
+    // As `_batch_norm_eval_coefficients` keeps them: only where no gradient
+    // flows through them.
+    if (!no_grad)
+        for (auto* v : names)
+            if (!GET_RAW_PTR(VarHolder, v)->var->is_stop_grad()) return nullptr;
+    PyObject* eps = PyDict_GetItemString(dict, "eps");
+    if (!eps || !(PyFloat_Check(eps) || PyLong_Check(eps))) return nullptr;
+    PyObject** vdict = _PyObject_GetDictPtr(names[3]);
+    PyObject* kept = (vdict && *vdict) ? PyDict_GetItem(*vdict, bn_coefficients_key) : nullptr;
+    if (!kept || !PyTuple_Check(kept) || PyTuple_GET_SIZE(kept) != 3) return nullptr;
+    PyObject* key = PyTuple_GET_ITEM(kept, 0);
+    if (!PyTuple_Check(key) || PyTuple_GET_SIZE(key) != 5) return nullptr;
+    for (int i = 0; i < 4; i++) {
+        PyObject* ptr = PyTuple_GET_ITEM(key, i);
+        if (!PyLong_Check(ptr) || (Var*)PyLong_AsVoidPtr(ptr) != GET_RAW_PTR(VarHolder, names[i])->var) {
+            PyErr_Clear();
+            return nullptr;
+        }
+    }
+    double e = PyFloat_AsDouble(eps);
+    PyObject* kept_eps = PyTuple_GET_ITEM(key, 4);
+    if (PyErr_Occurred() || !PyFloat_Check(kept_eps) || PyFloat_AS_DOUBLE(kept_eps) != e) {
+        PyErr_Clear();
+        return nullptr;
+    }
+    PyObject* scale = PyTuple_GET_ITEM(kept, 1);
+    PyObject* shift = PyTuple_GET_ITEM(kept, 2);
+    if (!is_var(scale) || !is_var(shift)) return nullptr;
+    PyObjHolder dims(Py_BuildValue("[iii]", 0, 2, 3));
+    PyObjHolder s(PyObject_CallMethod(scale, "broadcast", "OO", x, dims.obj));
+    if (!s.obj) return nullptr;
+    PyObjHolder b(PyObject_CallMethod(shift, "broadcast", "OO", x, dims.obj));
+    if (!b.obj) return nullptr;
+    PyObjHolder product(PyNumber_Multiply(x, s.obj));
+    if (!product.obj) return nullptr;
+    return PyNumber_Add(product.obj, b.obj);
+}
+
 // A Dropout that is not training, or drops nothing, hands its input back --
 // `jittor.nn.dropout` returns `x` itself, as PyTorch does -- and a BERT-base
 // forward makes 37 such calls at 5.9 us each through Python. nullptr when it
@@ -342,6 +533,18 @@ PyObject* dispatch_native(PyObject* module, const TypeInfo& info, PyObject* args
         fast = linear_with_bias_inference(dict, PyTuple_GET_ITEM(args, 0));
         if (fast || PyErr_Occurred()) return fast;
     }
+    if (!kwargs && PyTuple_GET_SIZE(args) == 1 && conv_execute
+            && _PyType_Lookup(type, name_execute()) == conv_execute
+            && !(dict && PyDict_GetItemString(dict, "execute"))) {
+        PyObject* fast = conv2d_inference(dict, PyTuple_GET_ITEM(args, 0));
+        if (fast || PyErr_Occurred()) return fast;
+    }
+    if (!kwargs && PyTuple_GET_SIZE(args) == 1 && batch_norm_execute
+            && _PyType_Lookup(type, name_execute()) == batch_norm_execute
+            && !(dict && PyDict_GetItemString(dict, "execute"))) {
+        PyObject* fast = batch_norm_eval_channels_last(dict, PyTuple_GET_ITEM(args, 0));
+        if (fast || PyErr_Occurred()) return fast;
+    }
     if (!kwargs && PyTuple_GET_SIZE(args) == 1 && dropout_execute
             && _PyType_Lookup(type, name_execute()) == dropout_execute
             && !(dict && PyDict_GetItemString(dict, "execute"))) {
@@ -377,6 +580,17 @@ void module_call_bind(PyObject* module_cls_, PyObject* dispatch_call_,
     part(rms_inference_impl, "rms_norm_inference");
     part(rms_source_fn, "rms_norm_source");
     part(dropout_execute, "dropout_execute");
+    part(conv_execute, "conv_execute");
+    part(conv_cudnn_kernel, "conv_cudnn_kernel");
+    part(cudnn_backend, "cudnn_backend");
+    part(conv_filter_key, "conv_filter_key");
+    part(batch_norm_execute, "batch_norm_execute");
+    part(bn_coefficients_key, "bn_coefficients_key");
+    if (!conv2d_name) conv2d_name = PyUnicode_InternFromString("conv2d");
+    if (!depthwise_kwargs) {
+        depthwise_kwargs = PyDict_New();
+        PyDict_SetItemString(depthwise_kwargs, "_depthwise_fast_path", Py_True);
+    }
     part(lt_linear_header, "lt_linear_header");
     part(lt_linear_source_fn, "lt_linear_source");
     lt_linear_header_text.clear();

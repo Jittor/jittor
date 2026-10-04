@@ -1182,6 +1182,10 @@ def _install_module_methods(nn, registry=None):
     from jittor.nn.functional import matrix as _matrix
     from jittor.nn.modules.linear import Linear as _NativeLinear
     from jittor.nn.modules.dropout import Dropout as _NativeDropout
+    from jittor.nn.modules.convolution import Conv as _NativeConv
+    from jittor.nn.modules.normalization import BatchNorm as _NativeBatchNorm
+    from jittor.nn.backends import cudnn as _cudnn_backend
+    from jittor.nn.functional import normalization as _normalization
     from jittor.backends.cuda.kernels.cublas import lt_linear_cuda as _lt_linear
     # What `_dispatch_module_call` consults, so the native call can run it:
     # see `module_call_bind` in src/bindings/pyjt/py_module_call.h.
@@ -1193,6 +1197,12 @@ def _install_module_methods(nn, registry=None):
         "rms_norm_inference": _rms_norm_cuda.__wrapped__,
         "rms_norm_source": _rms_norm_source,
         "dropout_execute": _NativeDropout.execute,
+        "conv_execute": _NativeConv.execute,
+        "conv_cudnn_kernel": getattr(_cudnn_backend._try_cudnn_conv2d, "__wrapped__", None),
+        "cudnn_backend": _cudnn_backend,
+        "conv_filter_key": _cudnn_backend._FILTER_OHWI,
+        "batch_norm_execute": _NativeBatchNorm.execute,
+        "bn_coefficients_key": _normalization._EVAL_COEFFICIENTS,
         "lt_linear_header": _lt_linear._HEADER,
         "lt_linear_source": _lt_linear._source,
         "acl_possible": bool(getattr(jt.compiler, "has_acl", 0)),
