@@ -155,9 +155,13 @@ class Module:
             flags = globals()["_FLAGS"] = jittor.flags
             globals()["_auto_replay_for"] = \
                 __import__("jittor._runtime.graph_replay", fromlist=["x"]).auto_replay_for
-        if not flags.auto_graph_replay:
-            return self._dispatch_call(*args, **kw)
-        replay = _auto_replay_for(self, args, kw)
+        # The depth is kept with the policy off too: submodules at depth 1
+        # are what the native module call takes without the Python dispatch
+        # (see `shortcut` in py_module_call.cc), and with the depth left at 0
+        # every one of BERT-base's 218 module calls went through it: its
+        # inference graph took 4.1 ms of host time to build, 3.6 with the
+        # depth kept.
+        replay = _auto_replay_for(self, args, kw) if flags.auto_graph_replay else None
         Module._call_depth = 1
         try:
             if replay is not None:
