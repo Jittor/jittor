@@ -18,6 +18,7 @@ takes the path it took before.
 import ctypes
 import hashlib
 import importlib.util
+import functools
 import os
 import subprocess
 import threading
@@ -189,25 +190,39 @@ def _forward(query, key, value, scale, causal, training, bias=None, layout=0):
     bias_b, bias_h = _bias_dims(bias)
     b, h, sq, _ = _logical(query, layout & _Q)
     stats_shape = (b, h, sq, 1)
-    dims = _dims(layout)
+    if _HEADER_TEXT[0] is None:
+        _HEADER_TEXT[0] = _header()
     outputs = jt.code(
         [query.shape, stats_shape] if training else [query.shape],
         [query.dtype, "float32"] if training else [query.dtype],
         [query, key, value] + ([] if bias is None else [bias]),
-        cuda_header=_header(),
-        cuda_src=f"""
+        cuda_header=_HEADER_TEXT[0],
+        cuda_src=_forward_source(dtype, layout, float(scale), bool(causal), bool(training),
+                                 bias is not None, bias_b, bias_h))
+    return outputs[0], (outputs[1] if training else None)
+
+
+#: `_header()`, formatted once: the descriptor's path does not move.
+_HEADER_TEXT = [None]
+
+
+@functools.lru_cache(maxsize=256)
+def _forward_source(dtype, layout, scale, causal, training, has_bias, bias_b, bias_h):
+    # A model calls attention with the same settings in every layer, and
+    # formatting this was a third of building the operator.
+    dims = _dims(layout)
+    return f"""
         cudnnHandle_t handle = jittor::cudnn_bind_stream();
         int64_t size = jt_cudnn_sdpa_forward_workspace(handle, {dtype}, {dims},
-            {float(scale)!r}f, {int(causal)}, {int(training)}, {layout}, {bias_b}, {bias_h});
+            {scale!r}f, {int(causal)}, {int(training)}, {layout}, {bias_b}, {bias_h});
         if (size < 0) LOGf << "cuDNN attention forward:" << jt_cudnn_sdpa_last_error();
         jittor::CudnnWorkspace workspace(size);
-        if (jt_cudnn_sdpa_forward(handle, {dtype}, {dims}, {float(scale)!r}f,
+        if (jt_cudnn_sdpa_forward(handle, {dtype}, {dims}, {scale!r}f,
                 {int(causal)}, {int(training)}, {layout}, {bias_b}, {bias_h},
-                in0_p, in1_p, in2_p, {"nullptr" if bias is None else "in3_p"}, out0_p,
+                in0_p, in1_p, in2_p, {"in3_p" if has_bias else "nullptr"}, out0_p,
                 {"out1_p" if training else "nullptr"}, workspace.ptr))
             LOGf << "cuDNN attention forward:" << jt_cudnn_sdpa_last_error();
-        """)
-    return outputs[0], (outputs[1] if training else None)
+        """
 
 
 def _backward(query, key, value, out, grad_out, stats, scale, causal, layout=0):

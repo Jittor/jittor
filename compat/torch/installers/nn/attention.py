@@ -122,16 +122,18 @@ def _try_flash_scaled_dot_product_attention(query, key, value, attn_mask,
     # required by the separate-QKV FlashAttention wrapper. Keep this
     # inference-only and narrowly shaped so decoding, GQA and training keep
     # their existing backend choice.
+    # The environment last: every other test is cheaper, and almost no call
+    # passes them.
     short_square_math = (
-        _sdpa_static_backend_cache_enabled()
-        and not enable_gqa and not is_causal
+        not enable_gqa and not is_causal
         and len(q_shape) == 4 and 0 < int(q_shape[0]) <= 8
         and query_heads == key_heads == value_heads == 12
         and int(q_shape[-1]) == 64
         and int(q_shape[-2]) == int(k_shape[-2]) == int(v_shape[-2])
         and int(q_shape[-2]) <= 64
         and _jittor_dtype_name(query.dtype) == _jittor_dtype_name(key.dtype) == _jittor_dtype_name(value.dtype)
-        and _jittor_dtype_name(query.dtype) == "float16")
+        and _jittor_dtype_name(query.dtype) == "float16"
+        and _sdpa_static_backend_cache_enabled())
     if short_square_math:
         _sdpa_flash_miss("short_square_math")
         return None
@@ -158,6 +160,15 @@ def _try_flash_scaled_dot_product_attention(query, key, value, attn_mask,
     except EXPECTED as exc:
         swallowed("torch/installers/nn.py _try_flash_scaled_dot_product_attention: from jittor.compat.shim.backends import flash_attention...", exc)
         _sdpa_flash_miss("no_loader")
+        return None
+    # Nothing to load: the miss everything below would end in, without the
+    # environment reads on the way. A training call keeps the full walk, which
+    # can decline it for the score count first, and so does the static
+    # backend cache, which keeps its own per-token answers.
+    if (not training_requested and not _sdpa_static_backend_cache_enabled()
+            and _fa_jittor.known_unavailable(template_dim, q_dtype)
+            and not _fa_jittor.required()):
+        _sdpa_flash_miss("no_backend")
         return None
     if training_requested and dropout == 0.0 and not _fa_jittor.required():
         min_scores = _fa_jittor.training_min_scores()
