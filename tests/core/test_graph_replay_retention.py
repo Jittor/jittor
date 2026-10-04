@@ -156,6 +156,21 @@ class TestReplayRetentionCuda(TestReplayRetention):
         peak = jt.core.device_memory_peak(0) - base
         self.assertLess(peak, 100 * _MIB, "peaked %.0f MiB above the weights" % (peak / _MIB))
 
+    def test_a_recording_is_bounded_by_what_the_call_holds_at_once(self):
+        # A recording hands a block the call frees to a later allocation of the
+        # same recording, so it keeps what the call holds at its most -- here
+        # about two of the four 32 MiB intermediates -- not everything the call
+        # was handed. Counting the latter refused it under this bound.
+        jt.flags.auto_graph_replay_retain_bytes = 100 * _MIB
+        model = _Wide()
+        answers, _ = self._calls(model)
+        replay = model.__dict__["_auto_graph_replay"].replay
+        self.assertLess(replay._graph_bytes, 100 * _MIB)
+        self.assertGreater(replay.stats["graph"], 0, replay._graph_refused)
+        for x, got in answers:
+            np.testing.assert_allclose(got, model.reference(x),
+                                       rtol=1e-2, atol=1e-4)  # TF32 on CUDA
+
 
 if __name__ == "__main__":
     unittest.main()

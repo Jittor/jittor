@@ -197,6 +197,10 @@ int64 sfrl_device_peak_bytes(int device);
 void sfrl_reset_device_peak(int device);
 // Every byte handed out so far; it never decreases. Device -1 is the host.
 int64 sfrl_device_allocated_bytes(int device);
+// A high-water mark of its own: restart it at the live bytes (returned), read
+// it later. One measurement at a time.
+int64 sfrl_device_window_start(int device);
+int64 sfrl_device_window_peak(int device);
 // Bytes the pools of one device hold from the underlying allocator (live plus
 // cached), and their high-water mark -- torch's `max_memory_reserved`. The
 // peak restarts with `sfrl_reset_device_peak`, like the allocated one.

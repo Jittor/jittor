@@ -369,12 +369,27 @@ def _sync_result(output):
         jt.sync(leaves)
 
 
-def _allocated_bytes():
-    """Every byte the pools have handed out so far, host and devices together."""
-    total = _core.device_memory_allocated_total(-1)
-    for device in range(_core.get_device_count()):
-        total += _core.device_memory_allocated_total(device)
-    return total
+class _WorkingSet:
+    """What a call holds at its most, beyond what was live when it started.
+
+    What a device recording of it keeps: while recording, a block the call
+    frees is handed to a later allocation of the same recording, so the
+    recording holds one call's peak, not every buffer the call touched. The
+    bound used to count the latter, every byte the pools handed out: 640 MiB
+    for BERT-base inference at batch 1, whose recording holds 12 MiB, and
+    3.5 GiB for a Qwen3-0.6B 2048-token prefill holding 47 MiB -- both refused
+    a recording they could well afford.
+    """
+
+    __slots__ = ("start",)
+
+    def __init__(self):
+        self.start = [(device, _core._device_memory_window_start(device))
+                      for device in range(-1, _core.get_device_count())]
+
+    def bytes(self):
+        return sum(_core._device_memory_window_peak(device) - live
+                   for device, live in self.start)
 
 
 def _graph_has_nondeterministic_op():
@@ -849,13 +864,12 @@ class GraphReplay:
             # One eager call first: it materializes the parameters and any
             # buffer the module builds lazily, so the capture that follows has
             # nothing pending underneath it.
-            allocated = _allocated_bytes()
+            working = _WorkingSet()
             with _no_auto(), jt.no_grad():
                 result = self._module(*args, **kwargs)
                 _sync_result(result)
-            # What a device recording of this graph would hold: every buffer
-            # the call allocates, since a recording re-issues fixed pointers.
-            self._graph_bytes = _allocated_bytes() - allocated
+            # What a device recording of this graph would hold.
+            self._graph_bytes = working.bytes()
             cap = self._capture = self._capture_now(args, kwargs)
             self.stats["captured"] += 1
             if cap is None:

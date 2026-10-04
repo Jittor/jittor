@@ -61,7 +61,7 @@ import numpy as np
 import jittor as jt
 import jittor_core as _core
 
-from .graph_replay import (_RERECORD_LIMIT, _Unreplayable, _allocated_bytes, _dense, _empty_like,
+from .graph_replay import (_RERECORD_LIMIT, _Unreplayable, _WorkingSet, _dense, _empty_like,
                            _host_state, _native_dtype, _object_ids, _training,
                            _graph_has_nondeterministic_op,
                            _input_vars, _map_inputs, _no_auto, _output_template,
@@ -530,7 +530,7 @@ class StepCapture:
 
         cap = _Capture()
         cap.exact = self._exact_random
-        allocated = _allocated_bytes()
+        working = _WorkingSet()
         before = jt.flags.keep_graph
         # The step is built whole, as a replay runs it. CUDA's auto-flush
         # otherwise launches what is pending every `auto_flush_ops` operators,
@@ -616,9 +616,8 @@ class StepCapture:
         cap.state_lists = ([holder for holder, _, _, _ in state],
                            [old for _, old, _, _ in state])
         cap.signature = _signature(args, kwargs)
-        # What a device recording of this step would hold: every buffer the
-        # captured run allocated, since a recording re-issues fixed pointers.
-        cap.graph_bytes = _allocated_bytes() - allocated
+        # What a device recording of this step would hold.
+        cap.graph_bytes = working.bytes()
         return cap, self._results(cap, outputs)
 
     def _results(self, cap, sources):

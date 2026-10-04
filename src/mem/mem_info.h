@@ -84,4 +84,14 @@ void reset_device_memory_peak(int device);
 // @pyjt(device_memory_allocated_total)
 int64 device_memory_allocated_total(int device);
 
+/**
+ * Restart a measurement window at the bytes live on ``device`` now and return
+ * them; :func:`_device_memory_window_peak` then reads the most live since.
+ * Separate from :func:`device_memory_peak`, which it leaves alone.
+ */
+// @pyjt(_device_memory_window_start)
+int64 device_memory_window_start(int device);
+// @pyjt(_device_memory_window_peak)
+int64 device_memory_window_peak(int device);
+
 } // jittor

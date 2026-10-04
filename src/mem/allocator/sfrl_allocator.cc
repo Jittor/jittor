@@ -33,6 +33,10 @@ std::atomic<int64> device_peak[kSlots];
 std::atomic<int64> device_allocated[kSlots];
 std::atomic<int64> device_reserved[kSlots];
 std::atomic<int64> device_reserved_peak[kSlots];
+// A second high-water mark that a caller restarts for one measurement -- what a
+// call holds at its most -- without touching the one `max_memory_allocated`
+// reports.
+std::atomic<int64> device_window_peak[kSlots];
 
 inline int slot(int device) {
     if (device < 0) return kPeakDevices;
@@ -46,6 +50,8 @@ void note_device_alloc(int device, int64 bytes) {
     int64 now = device_live[s].fetch_add(bytes) + bytes;
     int64 seen = device_peak[s].load();
     while (now > seen && !device_peak[s].compare_exchange_weak(seen, now)) {}
+    seen = device_window_peak[s].load();
+    while (now > seen && !device_window_peak[s].compare_exchange_weak(seen, now)) {}
 }
 
 void note_device_free(int device, int64 bytes) {
@@ -87,6 +93,19 @@ int64 sfrl_device_reserved_bytes(int device) {
 int64 sfrl_device_reserved_peak_bytes(int device) {
     int s = slot(device);
     return s >= 0 ? device_reserved_peak[s].load() : 0;
+}
+
+int64 sfrl_device_window_start(int device) {
+    int s = slot(device);
+    if (s < 0) return 0;
+    int64 live = device_live[s].load();
+    device_window_peak[s].store(live);
+    return live;
+}
+
+int64 sfrl_device_window_peak(int device) {
+    int s = slot(device);
+    return s >= 0 ? device_window_peak[s].load() : 0;
 }
 
 int64 sfrl_device_allocated_bytes(int device) {

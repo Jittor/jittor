@@ -360,6 +360,14 @@ void reset_device_memory_peak(int device) {
     sfrl_reset_device_peak(device);
 }
 
+int64 device_memory_window_start(int device) {
+    return sfrl_device_window_start(device);
+}
+
+int64 device_memory_window_peak(int device) {
+    return sfrl_device_window_peak(device);
+}
+
 int64 device_memory_allocated_total(int device) {
     return sfrl_device_allocated_bytes(device);
 }
