@@ -116,6 +116,7 @@ struct JtLtWorkspace {
     size_t size = 0, allocation = 0;
     jittor::Allocator* allocator = nullptr;
     explicit JtLtWorkspace(size_t bytes) : size(bytes) {
+        if (!bytes) return;
         allocator = jittor::runtime_executor().temp_allocator;
         ptr = allocator->alloc(size, allocation);
     }
@@ -140,6 +141,8 @@ struct JtLtChoice {
     bool ready = false;
     bool usable = false;
     cublasLtMatmulAlgo_t algo;
+    // What the chosen algorithm asks for; most ask for none.
+    size_t workspace = 0;
 };
 """
 
@@ -254,7 +257,12 @@ def _source(rows, cin, cout, dtype):
     int tier = {"jittor::float32_matmul_tier()" if dtype == "float32" else "0"};
     cublasComputeType_t compute = tier == jittor::F32_HIGH ? CUBLAS_COMPUTE_32F_FAST_TF32
         : tier == jittor::F32_MEDIUM ? CUBLAS_COMPUTE_32F_FAST_16BF : CUBLAS_COMPUTE_32F;
-    cublasLtMatmulDesc_t op = nullptr;
+    int slot = tier < 0 || tier > 2 ? 0 : tier;
+    // The descriptors depend only on the shape -- this kernel's -- and the
+    // tier, so they are made once; the bias pointer is the one attribute that
+    // changes from call to call. Creating, filling and destroying them on every
+    // launch was about 1 us of host time per linear layer.
+    //
     // The scale type follows the *compute* type and the float alpha/beta, not
     // the operand type. Handing it the operand type is rejected outright --
     // cuBLASLt answers `CUBLAS_STATUS_INVALID_VALUE` to
@@ -262,31 +270,36 @@ def _source(rows, cin, cout, dtype):
     // of it is the fallback running underneath (which is how the whole fused
     // route came to be 2.4x slower than not using it at all while still
     // producing correct numbers).
-    cublasLtMatmulDescCreate(&op, compute, CUDA_R_32F);
-    cublasOperation_t ta = CUBLAS_OP_T, tb = CUBLAS_OP_N;
-    cublasLtMatmulDescSetAttribute(op, CUBLASLT_MATMUL_DESC_TRANSA, &ta, sizeof(ta));
-    cublasLtMatmulDescSetAttribute(op, CUBLASLT_MATMUL_DESC_TRANSB, &tb, sizeof(tb));
-    cublasLtEpilogue_t ep = CUBLASLT_EPILOGUE_BIAS;
-    cublasLtMatmulDescSetAttribute(op, CUBLASLT_MATMUL_DESC_EPILOGUE, &ep, sizeof(ep));
+    static cublasLtMatmulDesc_t ops[3] = {{}};
+    if (!ops[slot]) {{
+        cublasLtMatmulDescCreate(&ops[slot], compute, CUDA_R_32F);
+        cublasOperation_t ta = CUBLAS_OP_T, tb = CUBLAS_OP_N;
+        cublasLtMatmulDescSetAttribute(ops[slot], CUBLASLT_MATMUL_DESC_TRANSA, &ta, sizeof(ta));
+        cublasLtMatmulDescSetAttribute(ops[slot], CUBLASLT_MATMUL_DESC_TRANSB, &tb, sizeof(tb));
+        cublasLtEpilogue_t ep = CUBLASLT_EPILOGUE_BIAS;
+        cublasLtMatmulDescSetAttribute(ops[slot], CUBLASLT_MATMUL_DESC_EPILOGUE, &ep, sizeof(ep));
+    }}
+    cublasLtMatmulDesc_t op = ops[slot];
     void* biasp = (void*)in2_p;
     cublasLtMatmulDescSetAttribute(op, CUBLASLT_MATMUL_DESC_BIAS_POINTER, &biasp, sizeof(biasp));
 
     // Column-major, which is what cuBLAS speaks: the row-major product
     // A[rows,cin] * B[cout,cin]^T is computed as B^T * A with the operands
     // swapped, so `la` describes the weight and `lb` the activations.
-    cublasLtMatrixLayout_t la = nullptr, lb = nullptr, lc = nullptr;
-    cublasLtMatrixLayoutCreate(&la, {ct}, cin, cout, cin);
-    cublasLtMatrixLayoutCreate(&lb, {ct}, cin, rows, cin);
-    cublasLtMatrixLayoutCreate(&lc, {ct}, cout, rows, cout);
-
-    JtLtWorkspace workspace({_WORKSPACE});
-    void* ws = workspace.ptr;
-    size_t wsize = ws ? (size_t){_WORKSPACE} : 0;
+    static cublasLtMatrixLayout_t la = nullptr, lb = nullptr, lc = nullptr;
+    if (!la) {{
+        cublasLtMatrixLayoutCreate(&la, {ct}, cin, cout, cin);
+        cublasLtMatrixLayoutCreate(&lb, {ct}, cin, rows, cin);
+        cublasLtMatrixLayoutCreate(&lc, {ct}, cout, rows, cout);
+    }}
 
     static JtLtChoice choices[3];
-    JtLtChoice& choice = choices[tier < 0 || tier > 2 ? 0 : tier];
+    JtLtChoice& choice = choices[slot];
     if (!choice.ready) {{
         choice.ready = true;
+        JtLtWorkspace probe({_WORKSPACE});
+        void* ws = probe.ptr;
+        size_t wsize = ws ? (size_t){_WORKSPACE} : 0;
         cublasLtMatmulPreference_t pref = nullptr;
         cublasLtMatmulPreferenceCreate(&pref);
         cublasLtMatmulPreferenceSetAttribute(
@@ -317,6 +330,7 @@ def _source(rows, cin, cout, dtype):
             if (ms > 0.0f && ms < best) {{
                 best = ms;
                 choice.algo = cand[c].algo;
+                choice.workspace = cand[c].workspaceSize;
                 choice.usable = true;
             }}
         }}
@@ -325,8 +339,10 @@ def _source(rows, cin, cout, dtype):
     }}
 
     if (choice.usable) {{
+        JtLtWorkspace workspace(choice.workspace);
         cublasLtMatmul(lt, op, &alpha, in1_p, la, in0_p, lb, &beta,
-                       out0_p, lc, out0_p, lc, &choice.algo, ws, wsize,
+                       out0_p, lc, out0_p, lc, &choice.algo,
+                       workspace.ptr, workspace.ptr ? choice.workspace : 0,
                        cudaStreamPerThread);
     }} else {{
         // Nothing cuBLASLt offered was usable. The portable GEMM plus a bias
@@ -342,11 +358,6 @@ def _source(rows, cin, cout, dtype):
         int total = rows * cout;
         jt_lt_add_bias<{kt}><<<(total + 255) / 256, 256>>>(out0_p, in2_p, total, cout);
     }}
-
-    cublasLtMatrixLayoutDestroy(la);
-    cublasLtMatrixLayoutDestroy(lb);
-    cublasLtMatrixLayoutDestroy(lc);
-    cublasLtMatmulDescDestroy(op);
     """
 
 
