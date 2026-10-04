@@ -232,6 +232,7 @@ def _supports(x, weight, bias, *args, **kwargs):
     return rows * int(weight.shape[0]) * int(weight.shape[1]) >= (1 << 18)
 
 
+@functools.lru_cache(maxsize=256)
 def _source(rows, cin, cout, dtype):
     # The one place the element type enters the kernel. The accumulate is
     # float32 for both -- `cublas_gemm_mode`'s choice for float16 -- so alpha

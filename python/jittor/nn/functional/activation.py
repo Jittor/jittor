@@ -223,12 +223,16 @@ def sign(x: jt.Var) -> jt.Var:
     return jt.ternary(x<0, -one, x)
 
 
-#: (half, one, 1/sqrt(2)) as a numpy scalar of the exact GELU's compute dtype,
-#: indexed by "is the input float64". A numpy scalar, not a python float: a
-#: python float would make the multiply promote to float64 under torch_compat.
+#: (half, one, 1/sqrt(2)) for the exact GELU, indexed by "is the input
+#: float64". Python floats: against a floating tensor they keep its dtype, both
+#: natively and under torch_compat, and take the frontend's native binary path.
+#: Numpy scalars -- this used to hold them, against a float64 promotion the
+#: frontend no longer does -- missed it, and three of a GELU's four operators
+#: went through the Python promotion instead: 18.7 us to build one, against
+#: 6.4 us for PyTorch to run it. Same bits either way.
 _GELU_CONSTANTS = (
-    (np.float32(0.5), np.float32(1.0), np.float32(0.7071067811865476)),
-    (np.float64(0.5), np.float64(1.0), np.float64(0.7071067811865476)),
+    (0.5, 1.0, 0.7071067811865476),
+    (0.5, 1.0, 0.7071067811865476),
 )
 
 
