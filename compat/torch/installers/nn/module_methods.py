@@ -1187,6 +1187,8 @@ def _install_module_methods(nn, registry=None):
     from jittor.nn.backends import cudnn as _cudnn_backend
     from jittor.nn.functional import normalization as _normalization
     from jittor.backends.cuda.kernels.cublas import lt_linear_cuda as _lt_linear
+    from jittor.backends.cuda.kernels.nn import layer_norm_cuda as _layer_norm_cuda
+    from jittor.nn.modules.normalization import LayerNorm as _NativeLayerNorm
     # What `_dispatch_module_call` consults, so the native call can run it:
     # see `module_call_bind` in src/bindings/pyjt/py_module_call.h.
     _dispatch_parts = {
@@ -1205,6 +1207,9 @@ def _install_module_methods(nn, registry=None):
         "bn_coefficients_key": _normalization._EVAL_COEFFICIENTS,
         "lt_linear_header": _lt_linear._HEADER,
         "lt_linear_source": _lt_linear._source,
+        "layer_norm_execute": _NativeLayerNorm.execute,
+        "layer_norm_inference": _layer_norm_cuda._layer_norm_no_grad_cuda.__wrapped__,
+        "layer_norm_source": _layer_norm_cuda._affine_source,
         "acl_possible": bool(getattr(jt.compiler, "has_acl", 0)),
     }
     jt.core._module_call_bind(M, _call, _dispatch_module_call, _published_ids,

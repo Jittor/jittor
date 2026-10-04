@@ -10,12 +10,29 @@ values, dtypes, views and gradients where the fast path answers, and the
 cases it must leave alone.
 """
 
+import contextlib
 import unittest
 
 import numpy as np
 import torch
 
 import jittor as jt
+
+
+@contextlib.contextmanager
+def _refusing(module, name):
+    """`module.name` raising for the duration: the path under test must not
+    reach it."""
+    original = getattr(module, name)
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("%s.%s was reached" % (module.__name__, name))
+
+    setattr(module, name, refuse)
+    try:
+        yield
+    finally:
+        setattr(module, name, original)
 
 
 def _cuda():
@@ -329,7 +346,90 @@ class TestNativeModuleDispatch(unittest.TestCase):
         self.assertEqual(tuple(x.grad.shape), (3, 16))
 
 
+    def test_a_layer_norm_at_inference(self):
+        # Built natively from the source `_layer_norm_no_grad_cuda` builds, the
+        # warp-a-row kernel and the block-a-row one alike: bit for bit.
+        from jittor.backends.cuda.kernels.nn.layer_norm_cuda import _layer_norm_no_grad_cuda
+        from jittor.nn.functional import normalization
+        for dtype, rows in ((torch.float32, 6), (torch.float16, 6), (torch.float32, 2048)):
+            norm = torch.nn.LayerNorm(320).to(device="cuda", dtype=dtype)
+            with torch.no_grad():
+                norm.weight.copy_(torch.randn(320, device="cuda", dtype=dtype))
+                norm.bias.copy_(torch.randn(320, device="cuda", dtype=dtype))
+            outer = torch.nn.Sequential(norm)
+            x = torch.randn(rows, 320, device="cuda", dtype=dtype) * 3 + 1
+            with torch.no_grad():
+                # A module's first call publishes its parameters in Python;
+                # from the second on it is native, and the functional's relay
+                # is not called.
+                outer(x)
+                with _refusing(normalization, "_layer_norm_no_grad_cuda"):
+                    got = outer(x)
+                want = _layer_norm_no_grad_cuda(x, (320,), norm.weight, norm.bias, norm.eps)
+            self.assertEqual(got.dtype, dtype)
+            np.testing.assert_array_equal(got.float().numpy(), want.float().numpy())
+        # A call that needs a gradient takes the Python way and gets one.
+        norm = torch.nn.LayerNorm(16).cuda()
+        x = torch.randn(3, 16, device="cuda", requires_grad=True)
+        torch.nn.Sequential(norm)(x).sum().backward()
+        self.assertEqual(tuple(norm.weight.grad.shape), (16,))
+        self.assertEqual(tuple(x.grad.shape), (3, 16))
+        # A shape `layer_norm` rejects is rejected as before.
+        with torch.no_grad(), self.assertRaises(Exception):
+            torch.nn.Sequential(torch.nn.LayerNorm(16).cuda())(torch.randn(3, 8, device="cuda"))
+
+
+class TestNativeGelu(unittest.TestCase):
+    def test_the_native_build_matches_the_python_one(self):
+        from jittor.nn.functional import activation
+        native = activation._FAST_GELU
+        self.assertIsNotNone(native)
+        for dtype in (torch.float32, torch.float16, torch.bfloat16, torch.float64):
+            x = torch.randn(4, 33, device=_cuda()).to(dtype) * 3
+            got = torch.nn.functional.gelu(x)
+            try:
+                activation._FAST_GELU = None
+                want = torch.nn.functional.gelu(x)
+            finally:
+                activation._FAST_GELU = native
+            self.assertEqual(got.dtype, dtype)
+            np.testing.assert_array_equal(got.double().numpy(), want.double().numpy())
+        x = torch.randn(5, device=_cuda(), requires_grad=True)
+        torch.nn.functional.gelu(x).sum().backward()
+        xn = x.detach().double().numpy()
+        from math import erf, pi, sqrt
+        expected = [0.5 * (1 + erf(v / sqrt(2))) + v * np.exp(-v * v / 2) / sqrt(2 * pi) for v in xn]
+        np.testing.assert_allclose(x.grad.numpy(), expected, rtol=1e-5, atol=1e-6)
+        # The tanh form, and an integer tensor, stay on the Python path.
+        y = torch.randn(7, device=_cuda())
+        yn = y.double().numpy()
+        expected = 0.5 * yn * (1 + np.tanh(np.sqrt(2 / np.pi) * (yn + 0.044715 * yn ** 3)))
+        np.testing.assert_allclose(torch.nn.functional.gelu(y, approximate="tanh").numpy(),
+                                   expected, rtol=1e-5, atol=1e-6)
+        self.assertIsNone(jt.core._fast_gelu(torch.arange(4, device=_cuda())))
+
+
 class TestNativeRules(unittest.TestCase):
+    def test_the_layer_norm_relay_is_chosen_natively_as_before(self):
+        from jittor._runtime.dispatch import select_kernel
+        from jittor.backends.cuda.kernels.nn import layer_norm_cuda
+        impl = layer_norm_cuda._layer_norm_no_grad_cuda.__wrapped__
+        w = torch.ones(32, device="cuda")
+        b = torch.zeros(32, device="cuda")
+        cases = [
+            (torch.randn(4, 32, device="cuda"), (32,), w, b),
+            (torch.randn(4, 32, device="cuda").half(), (32,), w.half(), b.half()),
+            (torch.randn(4, 32, device="cuda").bfloat16(), (32,), w, b),
+            (torch.randn(4, 16, device="cuda"), (16,), w, b),
+            (torch.randn(4, 32, device="cuda"), (4, 32), w, b),
+            (torch.randn(4, 32, device="cuda"), (32,), w, 0.0),
+        ]
+        with torch.no_grad():
+            for x, shape, weight, bias in cases:
+                python = layer_norm_cuda._supports_layer_norm_inference(x, shape, weight, bias, 1e-5)
+                chosen = select_kernel("nn.layer_norm.inference", x, shape, weight, bias, 1e-5)
+                self.assertIs(chosen, impl if python else None)
+
     def test_the_matmul_relay_is_chosen_natively_as_before(self):
         from jittor._runtime.dispatch import select_kernel
         from jittor.nn.functional import matrix

@@ -55,6 +55,14 @@ void compat_fast_bind_binary(PyObject* natives, PyObject* mark_cpu_like,
 // @pyjt(_fast_binary)
 PyObject* fast_binary(PyObject* self, PyObject* other, int code);
 
+// `nn.gelu(x)` (exact) as its Python body builds it, operator for operator:
+// `0.5 * x * (1.0 + erf(x * 0.7071067811865476))`, x widened to float32 for a
+// half type and the result cast back, each product and sum taken as
+// `_fast_binary` takes it. None when the binary operators are not bound, x is
+// not floating, a kernel is registered for "nn.gelu", or any step declines.
+// @pyjt(_fast_gelu)
+PyObject* fast_gelu(PyObject* x);
+
 // `tensor.view(*shape)` / `reshape(*shape)` of a dense tensor, shape given as
 // ints or one tuple or list of them: the reshape op, recorded as a storage
 // view of `self`, as `jittor.view` does. None for anything else.

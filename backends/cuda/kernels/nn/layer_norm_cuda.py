@@ -6,9 +6,10 @@ import os
 
 import jittor as jt
 from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
-from jittor._runtime.dispatch import optional_kernel
+from jittor._runtime.dispatch import native_rule, optional_kernel
 
 
+@native_rule("layer_norm_inference")
 def _supports_layer_norm_inference(
         x, normalized_shape, weight, bias, eps, *, allow_bfloat16=False):
     if _output_requires_grad(x, weight, bias):
@@ -452,19 +453,22 @@ def _layer_norm_no_grad_cuda(
             cuda_src=_block_rows_source_scalar(eps_value, hidden, offset_literal, scale_literal),
         )
         return y
-    if _warp_rows(x, hidden):
+    y = jt.code(x.shape, x.dtype, [x, weight, bias],
+                cuda_src=_affine_source(hidden, eps_value, _warp_rows(x, hidden)))
+    return _stop_grad_outputs(y)
+
+
+@functools.lru_cache(maxsize=256)
+def _affine_source(hidden, eps_value, warp):
+    """The kernel for a Var weight and bias: a warp a row, or a block.
+
+    Also what the native module call builds a `LayerNorm`'s inference
+    operator from (`src/bindings/pyjt/py_module_call.cc`).
+    """
+    if warp:
         affine = ("in1_type* weight, in2_type* bias, ",
                   "* static_cast<float>(weight[j]) + static_cast<float>(bias[j])",
                   "* static_cast<double>(weight[j]) + static_cast<double>(bias[j])")
-        y = jt.code(
-            x.shape, x.dtype, [x, weight, bias],
-            cuda_src=_warp_rows_source(hidden, eps_value, affine)
-            + _warp_rows_launch(hidden, "in0_p, in1_p, in2_p, out0_p"))
-        return _stop_grad_outputs(y)
-    y = jt.code(
-        x.shape,
-        x.dtype,
-        [x, weight, bias],
-        cuda_src=_block_rows_source(eps_value, hidden),
-    )
-    return _stop_grad_outputs(y)
+        return (_warp_rows_source(hidden, eps_value, affine)
+                + _warp_rows_launch(hidden, "in0_p, in1_p, in2_p, out0_p"))
+    return _block_rows_source(eps_value, hidden)

@@ -16,7 +16,7 @@ namespace {
 
 // A native stand-in for a `supports` predicate; see kernel_select_native_rule.
 struct NativeRule {
-    enum Kind { none, same_float, rms_inference, rms_training } kind = none;
+    enum Kind { none, same_float, rms_inference, rms_training, ln_inference } kind = none;
     string op;
 };
 enum Verdict { declines = 0, accepts = 1, unknown = 2 };
@@ -140,6 +140,32 @@ Verdict evaluate(const NativeRule& rule, PyObject* args, PyObject* kwargs) {
     }
     if (rule.kind == NativeRule::rms_training)
         return no_grad ? declines : unknown;
+    if (rule.kind == NativeRule::ln_inference) {
+        // `_supports_layer_norm_inference(x, normalized_shape, weight, bias, eps)`
+        // for a Var weight and bias; scalar ones read the environment, so
+        // Python answers those.
+        if (n != 5 || !is_var(PyTuple_GET_ITEM(args, 0))) return unknown;
+        PyObject* shape = PyTuple_GET_ITEM(args, 1);
+        PyObject* weight = PyTuple_GET_ITEM(args, 2);
+        PyObject* bias = PyTuple_GET_ITEM(args, 3);
+        if (!PyTuple_Check(shape)) return unknown;
+        Var* x = GET_RAW_PTR(VarHolder, PyTuple_GET_ITEM(args, 0))->var;
+        bool affine = is_var(weight) && is_var(bias);
+        if (!affine) return is_var(weight) || is_var(bias) ? declines : unknown;
+        Var* w = GET_RAW_PTR(VarHolder, weight)->var;
+        Var* b = GET_RAW_PTR(VarHolder, bias)->var;
+        // Grad mode is the Python side's to judge.
+        if (!no_grad && (requires_grad(x) || requires_grad(w) || requires_grad(b))) return unknown;
+        if (x->dtype() != ns_float16 && x->dtype() != ns_float32) return declines;
+        if (PyTuple_GET_SIZE(shape) != 1) return declines;
+        PyObject* size = PyTuple_GET_ITEM(shape, 0);
+        if (!PyLong_CheckExact(size) || !x->shape.size()) return unknown;
+        int64 hidden = PyLong_AsLongLong(size);
+        if (PyErr_Occurred()) { PyErr_Clear(); return unknown; }
+        if (x->shape[x->shape.size() - 1] != hidden) return declines;
+        if (w->num != hidden || b->num != hidden) return declines;
+        return accepts;
+    }
     if (rule.kind != NativeRule::rms_inference) return unknown;
     // `_rms_norm_contract(x, gamma, epsilon)`.
     if (n < 2 || n > 3 || !is_var(PyTuple_GET_ITEM(args, 0)) || !is_var(PyTuple_GET_ITEM(args, 1)))
@@ -177,6 +203,8 @@ void kernel_select_native_rule(PyObject* fn, const string& rule) {
         parsed.kind = NativeRule::rms_inference;
     } else if (rule == "rms_norm_training") {
         parsed.kind = NativeRule::rms_training;
+    } else if (rule == "layer_norm_inference") {
+        parsed.kind = NativeRule::ln_inference;
     } else {
         throw std::invalid_argument("unknown native kernel rule: " + rule);
     }

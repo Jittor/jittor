@@ -136,6 +136,10 @@ void reset_float32_precision_context(PyObject* token) {
     set_float32_precision_policy({matmul, cudnn});
 }
 
+namespace {
+PyObject* frontend_result_type(PyObject* actual_type);
+} // namespace
+
 void PyTensorFrontendScope::select(
     PyObject* self, PyObject** args, int64 count, bool scan_sequences) {
     // Factories may have no tensor inputs. Their explicit context still owns
@@ -155,15 +159,7 @@ void PyTensorFrontendScope::select(
         return;
     }
     if (!candidate) return;
-    PyObject* actual_type = reinterpret_cast<PyObject*>(Py_TYPE(candidate));
-    PyObject* result_type = PyObject_GetAttrString(actual_type, "_frontend_result_type");
-    if (!result_type) {
-        if (!PyErr_ExceptionMatches(PyExc_AttributeError))
-            throw std::runtime_error("cannot read tensor frontend result type");
-        PyErr_Clear();
-        result_type = actual_type;
-        Py_INCREF(result_type);
-    }
+    PyObject* result_type = frontend_result_type(reinterpret_cast<PyObject*>(Py_TYPE(candidate)));
     try {
         // Parameters retain their Python identity when explicitly constructed,
         // while their operations may request ordinary frontend Tensor results.
@@ -259,6 +255,37 @@ const FrontendPolicy& frontend_policy(PyObject* type) {
     }
     found->second = policy;
     return found->second;
+}
+
+// `type._frontend_result_type`, or `type` itself, as a new reference. Asked
+// for every native call made through a frontend tensor outside a frontend
+// scope -- and a type without the attribute answered with an AttributeError
+// whose message was formatted each time -- so it is kept per type, under the
+// same epoch as the policies.
+PyObject* frontend_result_type(PyObject* actual_type) {
+    static unordered_map<PyObject*, pair<PyObject*, uint64>> result_types;
+    auto found = result_types.find(actual_type);
+    if (found != result_types.end() && found->second.second == frontend_policy_epoch) {
+        Py_INCREF(found->second.first);
+        return found->second.first;
+    }
+    PyObject* result_type = PyObject_GetAttrString(actual_type, "_frontend_result_type");
+    if (!result_type) {
+        if (!PyErr_ExceptionMatches(PyExc_AttributeError))
+            throw std::runtime_error("cannot read tensor frontend result type");
+        PyErr_Clear();
+        result_type = actual_type;
+        Py_INCREF(result_type);
+    }
+    if (found == result_types.end()) {
+        // Held so the address cannot be reused by another type.
+        Py_INCREF(actual_type);
+        found = result_types.emplace(actual_type, std::make_pair(nullptr, 0)).first;
+    }
+    Py_XDECREF(found->second.first);
+    Py_INCREF(result_type);
+    found->second = {result_type, frontend_policy_epoch};
+    return result_type;
 }
 } // namespace
 

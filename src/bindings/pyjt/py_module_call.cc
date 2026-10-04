@@ -69,6 +69,14 @@ auto make_code = op_constructor<VarPtr, NanoVector, NanoString, vector<Var*>&&, 
     vector<string>&&, string&&, string&&, vector<string>&&, string&&, DataMap&&, string&&>("code");
 // Source per (hidden size, epsilon), as `_rms_norm_source` formats it.
 std::map<pair<int64, double>, string> rms_sources;
+// `jittor.nn.LayerNorm.execute`, the implementation registered for
+// "nn.layer_norm.inference" and `layer_norm_cuda._affine_source`; see
+// `layer_norm_inference`.
+PyObject* layer_norm_execute = nullptr;
+PyObject* layer_norm_impl = nullptr;
+PyObject* layer_norm_source_fn = nullptr;
+PyObject* layer_norm_name = nullptr;
+std::map<std::tuple<int64, double, bool>, string> layer_norm_sources;
 
 struct TypeInfo {
     PyObject* tensor_type = nullptr;
@@ -497,6 +505,64 @@ PyObject* rms_norm_inference(PyObject* dict, PyObject* x) {
     return to_py_object<VarHolder*>(out.release());
 }
 
+// `nn.LayerNorm` with a weight and a bias on an inference call: the operator
+// `_layer_norm_no_grad_cuda` builds, when the dispatcher picks it -- asked with
+// the arguments `layer_norm` asks with, which its native rule answers without
+// a Python predicate. Anything else -- a shape `layer_norm` rejects, a call that
+// needs a gradient, autocast -- goes the Python way. 7.6 us of host time a call
+// in Python, 25 a BERT-base forward and 48 an SD1.5 UNet step.
+PyObject* layer_norm_inference(PyObject* dict, PyObject* x) {
+    if (!layer_norm_impl || !layer_norm_source_fn || amp_reg || !runtime_flag_use_cuda()
+            || !dict || !is_var(x))
+        return nullptr;
+    PyObject* shape = PyDict_GetItemString(dict, "normalized_shape");
+    PyObject* eps = PyDict_GetItemString(dict, "eps");
+    PyObject* affine = PyDict_GetItemString(dict, "elementwise_affine");
+    PyObject* weight = PyDict_GetItemString(dict, "weight");
+    PyObject* bias = PyDict_GetItemString(dict, "bias");
+    if (!shape || !PyTuple_Check(shape) || PyTuple_GET_SIZE(shape) != 1 || affine != Py_True
+            || !eps || !PyFloat_Check(eps) || !weight || !is_var(weight)
+            || !bias || !is_var(bias))
+        return nullptr;
+    PyObject* size = PyTuple_GET_ITEM(shape, 0);
+    if (!PyLong_CheckExact(size)) return nullptr;
+    int64 hidden = PyLong_AsLongLong(size);
+    double epsilon = PyFloat_AS_DOUBLE(eps);
+    if (PyErr_Occurred()) { PyErr_Clear(); return nullptr; }
+    Var* a = GET_RAW_PTR(VarHolder, x)->var;
+    Var* gamma = GET_RAW_PTR(VarHolder, weight)->var;
+    Var* beta = GET_RAW_PTR(VarHolder, bias)->var;
+    int rank = a->shape.size();
+    if (!rank || a->shape[rank - 1] != hidden || a->num < 0) return nullptr;
+    if (gamma->shape.size() != 1 || gamma->shape[0] != hidden
+            || beta->shape.size() != 1 || beta->shape[0] != hidden)
+        return nullptr;
+    if (!no_grad && (!a->is_stop_grad() || !gamma->is_stop_grad() || !beta->is_stop_grad()))
+        return nullptr;
+    PyObjHolder call_args(PyTuple_Pack(5, x, shape, weight, bias, eps));
+    PyObjHolder chosen(kernel_select(layer_norm_name, call_args.obj, nullptr));
+    if (!chosen.obj || chosen.obj != layer_norm_impl) {
+        if (!chosen.obj) PyErr_Clear();
+        return nullptr;
+    }
+    bool warp = hidden <= 1024 && a->num / hidden >= 1024;
+    auto key = std::make_tuple(hidden, epsilon, warp);
+    auto found = layer_norm_sources.find(key);
+    if (found == layer_norm_sources.end()) {
+        PyObjHolder src(PyObject_CallFunction(layer_norm_source_fn, "LdO",
+            (long long)hidden, epsilon, warp ? Py_True : Py_False));
+        Py_ssize_t length;
+        const char* text = PyUnicode_AsUTF8AndSize(src.obj, &length);
+        if (!text) return nullptr;
+        found = layer_norm_sources.emplace(key, string(text, length)).first;
+    }
+    PyTensorFrontendScope scope(x, nullptr, 0, false);
+    unique_ptr<VarHolder> out(new VarHolder(make_code(a->shape, a->dtype(), {a, gamma, beta},
+        "", {}, "", string(found->second), {}, "", {}, "")));
+    out->stop_grad();
+    return to_py_object<VarHolder*>(out.release());
+}
+
 // `_dispatch_module_call`, for a call `shortcut` cleared: an instance-level
 // forward, a standard RMS norm, the class's forward, or `execute`.
 PyObject* dispatch_native(PyObject* module, const TypeInfo& info, PyObject* args, PyObject* kwargs) {
@@ -545,6 +611,12 @@ PyObject* dispatch_native(PyObject* module, const TypeInfo& info, PyObject* args
         PyObject* fast = batch_norm_eval_channels_last(dict, PyTuple_GET_ITEM(args, 0));
         if (fast || PyErr_Occurred()) return fast;
     }
+    if (!kwargs && PyTuple_GET_SIZE(args) == 1 && layer_norm_execute
+            && _PyType_Lookup(type, name_execute()) == layer_norm_execute
+            && !(dict && PyDict_GetItemString(dict, "execute"))) {
+        PyObject* fast = layer_norm_inference(dict, PyTuple_GET_ITEM(args, 0));
+        if (fast || PyErr_Occurred()) return fast;
+    }
     if (!kwargs && PyTuple_GET_SIZE(args) == 1 && dropout_execute
             && _PyType_Lookup(type, name_execute()) == dropout_execute
             && !(dict && PyDict_GetItemString(dict, "execute"))) {
@@ -585,6 +657,11 @@ void module_call_bind(PyObject* module_cls_, PyObject* dispatch_call_,
     part(cudnn_backend, "cudnn_backend");
     part(conv_filter_key, "conv_filter_key");
     part(batch_norm_execute, "batch_norm_execute");
+    part(layer_norm_execute, "layer_norm_execute");
+    part(layer_norm_impl, "layer_norm_inference");
+    part(layer_norm_source_fn, "layer_norm_source");
+    if (!layer_norm_name) layer_norm_name = PyUnicode_InternFromString("nn.layer_norm.inference");
+    layer_norm_sources.clear();
     part(bn_coefficients_key, "bn_coefficients_key");
     if (!conv2d_name) conv2d_name = PyUnicode_InternFromString("conv2d");
     if (!depthwise_kwargs) {

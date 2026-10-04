@@ -326,6 +326,54 @@ PyObject* fast_binary(PyObject* self, PyObject* other, int code) {
     return mark_like(out, self, other);
 }
 
+PyObject* fast_gelu(PyObject* x) {
+    if (!is_var(x) || !binary_slots[B_MUL] || !binary_slots[B_RMUL] || !binary_slots[B_RADD]
+            || !mark_cpu_like_fn || kernel_op_registered("nn.gelu"))
+        return none();
+    NanoString own = GET_RAW_PTR(VarHolder, x)->var->dtype();
+    if (!is_floating(own)) return none();
+    bool low = own == ns_float16 || own == ns_bfloat16;
+    static PyObject* half = PyFloat_FromDouble(0.5);
+    static PyObject* one = PyFloat_FromDouble(1.0);
+    static PyObject* inv_sqrt2 = PyFloat_FromDouble(0.7071067811865476);
+    // Owned references, any of which may be null (a step that declined).
+    struct Ref {
+        PyObject* obj = nullptr;
+        ~Ref() { Py_XDECREF(obj); }
+        // A declined step (None) becomes null; an error stays an error.
+        bool take(PyObject* out) {
+            obj = out;
+            if (out && out != Py_None && is_var(out)) return true;
+            Py_XDECREF(out);
+            obj = nullptr;
+            return false;
+        }
+    } compute, scaled, inner, erf, shifted, out;
+    auto bail = []() { return PyErr_Occurred() ? nullptr : none(); };
+    if (low) {
+        compute.obj = wrap_like(x, new VarHolder(
+            make_unary(GET_RAW_PTR(VarHolder, x)->var, ns_float32)));
+    } else {
+        Py_INCREF(x);
+        compute.obj = x;
+    }
+    if (!compute.obj) return nullptr;
+    if (!scaled.take(fast_binary(compute.obj, half, B_RMUL))) return bail();
+    if (!inner.take(fast_binary(compute.obj, inv_sqrt2, B_MUL))) return bail();
+    erf.obj = wrap_like(inner.obj, new VarHolder(
+        make_unary(GET_RAW_PTR(VarHolder, inner.obj)->var, ns_erf)));
+    if (!erf.obj) return nullptr;
+    if (!shifted.take(fast_binary(erf.obj, one, B_RADD))) return bail();
+    if (!out.take(fast_binary(scaled.obj, shifted.obj, B_MUL))) return bail();
+    if (!low) {
+        PyObject* result = out.obj;
+        out.obj = nullptr;
+        return result;
+    }
+    return wrap_like(out.obj, new VarHolder(
+        make_unary(GET_RAW_PTR(VarHolder, out.obj)->var, own)));
+}
+
 namespace {
 bool exact_int(PyObject* value, int64& out) {
     if (!PyLong_CheckExact(value)) return false;

@@ -236,6 +236,10 @@ _GELU_CONSTANTS = (
 )
 
 
+#: `src/bindings/pyjt/py_compat_fast.h`'s `_fast_gelu`.
+_FAST_GELU = getattr(jt.core, "_fast_gelu", None)
+
+
 def gelu(x, approximate='none'):
     r''' Applies the element-wise function:
 
@@ -262,6 +266,12 @@ def gelu(x, approximate='none'):
         >>> nn.gelu(a)
         jt.Var([-0.134547   0.9882567  6.128115 ], dtype=float32)
     '''
+    if approximate == 'none' and _FAST_GELU is not None:
+        # The body below, built natively when the frontend's binary operators
+        # are bound and no "nn.gelu" kernel is registered; None otherwise.
+        fast = _FAST_GELU(x)
+        if fast is not None:
+            return fast
     fast = try_dispatch("nn.gelu", x, approximate=approximate)
     if fast is not None:
         return fast

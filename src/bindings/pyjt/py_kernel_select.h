@@ -38,6 +38,8 @@ bool kernel_op_registered(const char* op);
 //                         dtype, and native op <op> is registered
 //   "rms_norm_inference"  `rms_norm_cuda._rms_norm_contract` holds
 //   "rms_norm_training"   declines under `no_grad`
+//   "layer_norm_inference" `layer_norm_cuda._supports_layer_norm_inference`
+//                         holds, for a Var weight and bias
 // @pyjt(_kernel_select_native_rule)
 void kernel_select_native_rule(PyObject* fn, const string& rule);
 
