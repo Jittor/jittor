@@ -73,6 +73,15 @@ def repeat_interleave(x,repeats,dim=None,output_size=None):
     if isinstance(repeats, int):
         tar_shape = list(x.shape)
         tar_shape[dim] = tar_shape[dim]*repeats
+        if repeats > 1:
+            # Uniform repetition is a broadcast of a new inner axis. The
+            # generic reindex below fuses into an unsupported ACL variant;
+            # broadcast preserves element order and gradients for every dim.
+            expanded_shape = list(x.shape)
+            expanded_shape.insert(dim + 1, 1)
+            broadcast_shape = list(expanded_shape)
+            broadcast_shape[dim + 1] = repeats
+            return x.reshape(expanded_shape).broadcast(broadcast_shape).reshape(tar_shape)
         dims = []
         for i in range(len(tar_shape)):
             if dim==i:
