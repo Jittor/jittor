@@ -346,6 +346,7 @@ class TestNativeModuleDispatch(unittest.TestCase):
         self.assertEqual(tuple(x.grad.shape), (3, 16))
 
 
+    @unittest.skipUnless(torch.cuda.is_available(), "the native LayerNorm build is CUDA's")
     def test_a_layer_norm_at_inference(self):
         # Built natively from the source `_layer_norm_no_grad_cuda` builds, the
         # warp-a-row kernel and the block-a-row one alike: bit for bit.
@@ -409,6 +410,7 @@ class TestNativeGelu(unittest.TestCase):
         self.assertIsNone(jt.core._fast_gelu(torch.arange(4, device=_cuda())))
 
 
+    @unittest.skipUnless(torch.cuda.is_available(), "the one-kernel GELU is built on CUDA")
     def test_a_gelu_of_a_linear_output_is_one_kernel_with_the_same_bits(self):
         from jittor.nn.functional import activation
         outer = torch.nn.Sequential(torch.nn.Linear(256, 512)).cuda()
@@ -437,6 +439,7 @@ class TestNativeGelu(unittest.TestCase):
 
 
 class TestSdpaRoutes(unittest.TestCase):
+    @unittest.skipUnless(torch.cuda.is_available(), "the routes remembered are CUDA kernels")
     def test_a_remembered_route_gives_the_walk_s_answer(self):
         from jittor.compat.torch.installers.nn import attention
         from jittor._runtime import dispatch
@@ -473,6 +476,7 @@ class TestSdpaRoutes(unittest.TestCase):
 
 
 class TestNativeRules(unittest.TestCase):
+    @unittest.skipUnless(torch.cuda.is_available(), "the LayerNorm relay is CUDA's")
     def test_the_layer_norm_relay_is_chosen_natively_as_before(self):
         from jittor._runtime.dispatch import select_kernel
         from jittor.backends.cuda.kernels.nn import layer_norm_cuda
