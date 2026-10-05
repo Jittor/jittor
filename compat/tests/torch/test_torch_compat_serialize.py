@@ -21,8 +21,10 @@ Run:  python -m pytest compat/tests/torch/test_torch_compat_serialize.py
 """
 
 from _helpers import capability as _test_capability
+import json
 import os
 import shutil
+import struct
 import tempfile
 import unittest
 import numpy as np
@@ -63,6 +65,89 @@ class Base(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # torch.save / torch.load
 # ---------------------------------------------------------------------------
+class TestSafetensorsHardening(Base):
+    """Aliased tensors are refused and corrupt files fail at open, as safetensors does."""
+
+    def setUp(self):
+        super().setUp()
+        try:
+            import safetensors
+            import safetensors.torch as st
+        except ImportError:
+            self.skipTest("safetensors is not installed")
+        self.st, self.error = st, safetensors.SafetensorError
+
+    def _write(self, name, header, payload):
+        path = self.path(name)
+        with open(path, "wb") as handle:
+            handle.write(self._raw(header, payload))
+        return path
+
+    def test_shared_storage_is_refused_and_distinct_tensors_round_trip(self):
+        def body(dev):
+            weight = torch.randn(3, 4, device=dev)
+            layer = torch.nn.Linear(4, 4).to(dev)
+            for name, tensors in (("same", {"a": weight, "b": weight}),
+                                  ("tied", {"embed": layer.weight, "head": layer.weight})):
+                path = self.path(f"{name}_{dev}.safetensors")
+                with self.assertRaisesRegex(RuntimeError, "share memory"):
+                    self.st.save_file(tensors, path)
+                self.assertFalse(os.path.exists(path), f"{name} wrote a file {dev}")
+                with self.assertRaisesRegex(RuntimeError, "share memory"):
+                    self.st.save(tensors)
+            path = self.path(f"distinct_{dev}.safetensors")
+            self.st.save_file({"a": weight, "b": weight.clone()}, path)
+            loaded = self.st.load_file(path)
+            self.ae(loaded["a"].numpy(), weight.numpy(), f"distinct a {dev}")
+            self.ae(loaded["b"].numpy(), weight.numpy(), f"distinct b {dev}")
+        both_devices(body)
+
+    def test_corrupt_headers_raise_safetensor_error_at_open(self):
+        from safetensors import safe_open
+        payload = np.arange(6, dtype=np.float32).tobytes()
+        header = {"w": {"dtype": "F32", "shape": [2, 3], "data_offsets": [0, 24]}}
+        raw_header = json.dumps(header).encode("utf-8")
+        cases = {
+            "header too small": b"\x01\x02",
+            "header too large": struct.pack("<Q", 10 ** 9) + raw_header + payload,
+            "invalid JSON": struct.pack("<Q", 5) + b"{abc}" + payload,
+            "expected an object": struct.pack("<Q", 2) + b"[]" + payload,
+            "invalid UTF-8": struct.pack("<Q", 2) + b"\xff\xfe" + payload,
+            "not fully covered": struct.pack("<Q", len(raw_header)) + raw_header + payload[:-2],
+            "invalid tensor info": self._raw({"w": {"dtype": "F32", "shape": [2, 3],
+                                                    "data_offsets": [24, 0]}}, payload),
+        }
+        for message, data in cases.items():
+            with self.subTest(message=message):
+                path = self.path("corrupt.safetensors")
+                with open(path, "wb") as handle:
+                    handle.write(data)
+                with self.assertRaisesRegex(self.error, message):
+                    safe_open(path, framework="pt", device="cpu")
+                with self.assertRaisesRegex(self.error, message):
+                    self.st.load(data)
+        path = self._write("ok.safetensors", header, payload)
+        with safe_open(path, framework="pt", device="cpu") as reader:
+            self.ae(reader.get_tensor("w").numpy(), np.arange(6, dtype=np.float32).reshape(2, 3))
+
+    def test_payload_truncated_after_open_fails_explicitly(self):
+        from safetensors import safe_open
+        payload = np.arange(6, dtype=np.float32).tobytes()
+        path = self._write("shrinks.safetensors", {
+            "w": {"dtype": "F32", "shape": [2, 3], "data_offsets": [0, 24]}}, payload)
+        with safe_open(path, framework="pt", device="cpu") as reader:
+            with open(path, "rb+") as handle:
+                handle.seek(-2, os.SEEK_END)
+                handle.truncate()
+            with self.assertRaisesRegex(EOFError, "short safetensors payload.*'w'"):
+                reader.get_tensor("w")
+
+    @staticmethod
+    def _raw(header, payload):
+        raw = json.dumps(header).encode("utf-8")
+        return struct.pack("<Q", len(raw)) + raw + payload
+
+
 class TestSaveLoad(Base):
     def test_save_load_tensor_zero_error(self):
         x = np.random.RandomState(0).randn(3, 4, 5).astype("float32")

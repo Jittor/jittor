@@ -1,5 +1,6 @@
 """SafeTensor codecs, readers and transactional optional frontend bindings."""
 import json
+import os
 import struct
 from types import MappingProxyType
 import numpy as np
@@ -73,13 +74,62 @@ class _PySafeSlice:
         return _to_tensor(arr, self._dtype, self._device)
 
 
+def _header_error(message):
+    """The error safetensors' own reader raises for an unusable header."""
+    try:
+        from safetensors import SafetensorError as error_type
+    except ImportError:
+        error_type = ValueError
+    return error_type("Error while deserializing header: " + message)
+
+
+def _parse_header(prefix, read_header, total_size):
+    """Decode and validate a header the way ``safe_open`` does before any read.
+
+    A truncated or corrupt file used to surface as a ``struct.error``,
+    ``UnicodeDecodeError``, ``JSONDecodeError`` or -- for a short payload -- a
+    reshape error inside whichever tensor happened to be read first. Every one
+    of those is reported up front now, as safetensors' ``SafetensorError``.
+    Returns ``(header, header_length)``.
+    """
+    if len(prefix) != 8:
+        raise _header_error("header too small")
+    n = struct.unpack("<Q", prefix)[0]
+    if n > total_size - 8:
+        raise _header_error("header too large")
+    try:
+        header = json.loads(read_header(n).decode("utf-8"))
+    except UnicodeDecodeError as exc:
+        raise _header_error("invalid UTF-8 in header: %s" % exc) from None
+    except json.JSONDecodeError as exc:
+        raise _header_error("invalid JSON in header: %s" % exc) from None
+    if not isinstance(header, dict):
+        raise _header_error("invalid JSON in header: expected an object, got %s"
+                            % type(header).__name__)
+    data_size = total_size - 8 - n
+    for key, entry in header.items():
+        if key == "__metadata__":
+            continue
+        offsets = entry.get("data_offsets") if isinstance(entry, dict) else None
+        if (not isinstance(offsets, list) or len(offsets) != 2
+                or not all(type(value) is int for value in offsets)
+                or not 0 <= offsets[0] <= offsets[1]):
+            raise _header_error("invalid tensor info for %r" % (key,))
+        if offsets[1] > data_size:
+            raise _header_error("incomplete metadata, file not fully covered")
+    return header, n
+
+
 class _PySafeOpen:
     def __init__(self, filename, framework="pt", device="cpu", backend="mmap"):
+        self._filename = filename
         self._device = device
         with open(filename, "rb") as fh:
-            n = struct.unpack("<Q", fh.read(8))[0]
-            self._header = json.loads(fh.read(n).decode("utf-8"))
-            self._data = fh.read()
+            size = os.fstat(fh.fileno()).st_size
+            self._header, n = _parse_header(fh.read(8), fh.read, size)
+        # Tensors are read on demand, as safetensors' mmap reader does: holding
+        # the whole payload doubled peak host memory while a checkpoint loaded.
+        self._data_offset = 8 + n
         self._meta = self._header.pop("__metadata__", {})
 
     def keys(self):
@@ -91,7 +141,14 @@ class _PySafeOpen:
     def _entry(self, key):
         entry = self._header[key]
         start, end = entry["data_offsets"]
-        return entry["dtype"], entry["shape"], self._data[start:end]
+        with open(self._filename, "rb") as fh:
+            fh.seek(self._data_offset + start)
+            raw = fh.read(end - start)
+        if len(raw) != end - start:
+            # The header was checked against the file at open; it shrank since.
+            raise EOFError("short safetensors payload for %r: expected %d bytes, got %d"
+                           % (key, end - start, len(raw)))
+        return entry["dtype"], entry["shape"], raw
 
     def get_slice(self, key):
         st_dtype, shape, raw = self._entry(key)
@@ -112,8 +169,7 @@ class _PySafeOpen:
 
 
 def _load_bytes(data):
-    n = struct.unpack("<Q", data[:8])[0]
-    header = json.loads(data[8:8 + n].decode("utf-8"))
+    header, n = _parse_header(data[:8], lambda length: data[8:8 + length], len(data))
     header.pop("__metadata__", None)
     base = 8 + n
     out = {}
@@ -129,7 +185,33 @@ def _load_file(filename, device="cpu"):
         return {key: safe.get_tensor(key) for key in safe.keys()}
 
 
+def _reject_shared_storage(tensors):
+    """Refuse tensors that share storage, as ``safetensors.torch`` does.
+
+    The format has no aliasing: two names for one storage would be written as
+    two copies and come back as two independent tensors, silently untying
+    weights. safetensors raises instead and points at ``save_model``, and
+    Transformers/PEFT remove the aliases before saving for exactly that reason.
+    Storage identity is the frontend's ``untyped_storage().data_ptr()``, the
+    same key those libraries deduplicate on.
+    """
+    names = {}
+    for key, value in tensors.items():
+        storage = getattr(value, "untyped_storage", None)
+        if storage is not None:
+            names.setdefault(storage().data_ptr(), []).append(key)
+    shared = [group for group in names.values() if len(group) > 1]
+    if shared:
+        raise RuntimeError(
+            "Some tensors share memory, this will lead to duplicate memory on disk "
+            "and potential differences when loading them again: %s.\n"
+            "A potential way to correctly save your model is to use `save_model`.\n"
+            "More information at https://huggingface.co/docs/safetensors/torch_shared_tensors"
+            % [set(group) for group in shared])
+
+
 def _save_dict(tensors, metadata=None):
+    _reject_shared_storage(tensors)
     # A state_dict's entries alias live parameters, and `numpy()` would move
     # their sharing group to the host: fetch them as `torch.save` does.
     snapshots = _snapshot_tensors(tensors)
