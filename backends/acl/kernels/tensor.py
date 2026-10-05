@@ -119,12 +119,22 @@ def embedding_acl(
     return EmbeddingACL(padding_idx, scale_grad_by_freq)(input, weight)
 
 
-def any_acl(input, dim=None):
-    return truth_reduce(input, dim, reduce_all=False)
+def _truth_reduce_keepdims(input, dim, reduce_all, keepdims):
+    result = truth_reduce(input, dim, reduce_all=reduce_all)
+    if not keepdims:
+        return result
+    dims = {axis % input.ndim for axis in range(input.ndim)} if dim is None or (
+        isinstance(dim, (list, tuple)) and not dim
+    ) else {axis % input.ndim for axis in ([dim] if isinstance(dim, int) else dim)}
+    return result.reshape([1 if axis in dims else size for axis, size in enumerate(input.shape)])
 
 
-def all_acl(input, dim=()):
-    return truth_reduce(input, dim, reduce_all=True)
+def any_acl(input, dim=None, keepdims=False):
+    return _truth_reduce_keepdims(input, dim, False, keepdims)
+
+
+def all_acl(input, dim=(), keepdims=False):
+    return _truth_reduce_keepdims(input, dim, True, keepdims)
 
 
 def cumsum_acl(input, dim=-1):
