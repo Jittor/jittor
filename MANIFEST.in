@@ -431,6 +431,8 @@ include src/bindings/pyjt/py_ring_buffer.cc
 include src/bindings/pyjt/py_ring_buffer.h
 include src/bindings/pyjt/py_tensor_frontend.cc
 include src/bindings/pyjt/py_tensor_frontend.h
+include src/bindings/pyjt/py_type_lifetime.cc
+include src/bindings/pyjt/py_type_lifetime.h
 include src/bindings/pyjt/pyjt_console.h
 include src/codegen/jit_compiler.cc
 include src/codegen/jit_compiler.h

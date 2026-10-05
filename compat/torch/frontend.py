@@ -3,6 +3,7 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 from functools import update_wrapper
 from types import MethodType
+import weakref
 
 #: Resolved on first use, then reused. These two helpers sit on the per-op path
 #: (`torch.cat` alone re-imported them 91 times, ~110 us of its 340 us), and a
@@ -19,8 +20,9 @@ _TIERS = {"highest": 0, "high": 1, "medium": 2}
 #: settable at runtime (`torch.backends.cuda.matmul.allow_tf32`, the H3 VAE's
 #: determinism scope) and a cached tuple would answer with a stale policy.
 #: The type is created by the installer, so a reinstallation makes a new type and
-#: a new entry rather than reusing an old one.
-_precision_state = {}
+#: a new entry rather than reusing an old one. Weak: subclasses made at run time
+#: (a Parameter subclass) ask too and must stay collectable.
+_precision_state = weakref.WeakKeyDictionary()
 
 
 def _frontend_precision_policy(cls):

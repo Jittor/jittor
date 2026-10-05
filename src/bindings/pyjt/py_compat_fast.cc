@@ -4,6 +4,7 @@
 #include "core/var_slices.h"
 #include "bindings/pyjt/py_kernel_select.h"
 #include "bindings/pyjt/py_tensor_frontend.h"
+#include "bindings/pyjt/py_type_lifetime.h"
 #include "ops/op_register.h"
 #include "ops/composite/code_op.h"
 #include <cstring>
@@ -19,12 +20,21 @@ DECLARE_FLAG(int, amp_reg);
 
 namespace {
 // Per frontend type: its dtype table, and the entries already looked up by
-// native name. A type is never freed while referenced here.
+// native name. Dropped when the type is collected.
 struct DtypeTable {
     PyObject* table = nullptr;
     std::unordered_map<string, PyObject*> by_name;
 };
 std::unordered_map<PyTypeObject*, DtypeTable> dtype_tables;
+
+void forget_dtype_table(PyObject* type) {
+    auto found = dtype_tables.find((PyTypeObject*)type);
+    if (found == dtype_tables.end()) return;
+    DtypeTable entry = move(found->second);
+    dtype_tables.erase(found);
+    for (auto& cached : entry.by_name) Py_DECREF(cached.second);
+    Py_DECREF(entry.table);
+}
 } // namespace
 
 PyObject* frontend_dtype(PyObject* self) {
@@ -36,7 +46,12 @@ PyObject* frontend_dtype(PyObject* self) {
         DtypeTable entry;
         entry.table = PyObject_GetAttrString((PyObject*)type, "_frontend_dtype_objects");
         if (!entry.table) throw std::runtime_error("frontend type without a dtype table");
-        Py_INCREF(type);
+        try {
+            on_type_collected((PyObject*)type, forget_dtype_table);
+        } catch (...) {
+            Py_DECREF(entry.table);
+            throw;
+        }
         found = dtype_tables.emplace(type, move(entry)).first;
     }
     auto& entry = found->second;

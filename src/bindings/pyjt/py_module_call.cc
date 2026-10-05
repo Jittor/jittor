@@ -1,4 +1,5 @@
 #include "bindings/pyjt/py_module_call.h"
+#include "bindings/pyjt/py_type_lifetime.h"
 #include "bindings/pyjt/py_tensor_frontend.h"
 #include "bindings/pyjt/py_converter.h"
 #include "bindings/pyjt/py_kernel_select.h"
@@ -117,7 +118,22 @@ struct TypeInfo {
     // The class is named like an RMS norm `_standard_rms_norm` may take.
     bool rms_named = false;
 };
+// Dropped when the type is collected.
 std::unordered_map<PyTypeObject*, TypeInfo> type_info;
+
+void release(TypeInfo& info) {
+    Py_XDECREF(info.tensor_type);
+    Py_XDECREF(info.native_call);
+    info.tensor_type = info.native_call = nullptr;
+}
+
+void forget_type_info(PyObject* type) {
+    auto found = type_info.find((PyTypeObject*)type);
+    if (found == type_info.end()) return;
+    TypeInfo info = found->second;
+    type_info.erase(found);
+    release(info);
+}
 
 void assign_ref(PyObject*& slot, PyObject* value) {
     Py_XINCREF(value);
@@ -149,7 +165,12 @@ const TypeInfo& info_of(PyTypeObject* type) {
             && name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0;
     };
     info.rms_named = ends_with("RMSNorm") && !ends_with("RMSNormGated");
-    Py_INCREF(type);
+    try {
+        on_type_collected((PyObject*)type, forget_type_info);
+    } catch (...) {
+        release(info);
+        throw;
+    }
     return type_info.emplace(type, info).first->second;
 }
 
@@ -930,6 +951,7 @@ void module_call_bind(PyObject* module_cls_, PyObject* dispatch_call_,
     rms_sources.clear();
     if (!empty_kwargs) empty_kwargs = PyDict_New();
     if (!matmul_name) matmul_name = PyUnicode_InternFromString("matmul");
+    for (auto& entry : type_info) release(entry.second);
     type_info.clear();
 }
 

@@ -62,8 +62,9 @@ def _forward_alias(self, *args, **kwargs):
 
 
 #: Per-class answer from ``_prefer_forward``. Module level so the answer is
-#: computed once per class per process rather than once per install.
-_dispatch_cache = {}
+#: computed once per class per process rather than once per install; weak, so
+#: a class made at run time (a module defined in a function) can be collected.
+_dispatch_cache = weakref.WeakKeyDictionary()
 
 
 # Central dispatch fix: an HF module may SUBCLASS a jittor builtin (e.g.
