@@ -1192,6 +1192,8 @@ def _install_module_methods(nn, registry=None):
     from jittor.nn.modules.activation import _FunctionModule as _NativeFunctionModule
     from jittor.nn.functional import activation as _activation
     from jittor._core import arg_policy as _arg_policy
+    from jittor.nn.modules.normalization import GroupNorm as _NativeGroupNorm
+    from jittor.backends.cuda.kernels.nn import group_norm_cuda as _group_norm_cuda
     # What `_dispatch_module_call` consults, so the native call can run it:
     # see `module_call_bind` in src/bindings/pyjt/py_module_call.h.
     _dispatch_parts = {
@@ -1205,6 +1207,14 @@ def _install_module_methods(nn, registry=None):
         "function_module_execute": _NativeFunctionModule.execute,
         "nn_namespace": jt.nn,
         "relu_function": _activation.relu,
+        "silu_function": _activation.silu,
+        "group_norm_execute": _NativeGroupNorm.execute,
+        "group_norm_function": _normalization.group_norm,
+        "group_norm_kernel": getattr(_group_norm_cuda._group_norm_cuda, "__wrapped__", None),
+        "group_norm_nhwc_source": _group_norm_cuda._group_norm_nhwc_source,
+        "group_norm_activations": _group_norm_cuda._ACTIVATIONS,
+        "group_norm_nhwc_build": jt.core._group_norm_nhwc_build,
+        "partial": _functools.partial,
         "residual_offers": _activation._RESIDUAL_OFFERS,
         "arg_policy_warned": _arg_policy._warned,
         "conv_execute": _NativeConv.execute,

@@ -42,4 +42,13 @@ void module_call_bind(PyObject* module_cls, PyObject* dispatch_call,
 // @pyjt(_module_call)
 PyObject* module_call_native(PyObject* module, PyObject* args, PyObject* kwargs);
 
+// The inference group norm of a dense [N, H, W, C] `source` with activation
+// `act` ("" for none) applied in its last pass, as the NCHW view of its
+// storage -- what `group_norm_cuda._group_norm_nhwc`'s `build(act)` makes. None
+// for an activation it has no pass for. The offer an inference `nn.GroupNorm`
+// leaves for the activation after it (see py_module_call.cc).
+// @pyjt(_group_norm_nhwc_build)
+PyObject* group_norm_nhwc_build(PyObject* source, PyObject* weight, PyObject* bias,
+                                int64 groups, double eps, const string& act);
+
 } // namespace jittor

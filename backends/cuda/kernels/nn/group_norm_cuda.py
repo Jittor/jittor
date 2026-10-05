@@ -20,7 +20,7 @@ import math
 import jittor as jt
 from jittor._core.dtypes import dtype_name as _dtype_name
 from jittor._runtime.backend_libraries import library_resource
-from jittor._runtime.dispatch import optional_kernel
+from jittor._runtime.dispatch import native_rule, optional_kernel
 from jittor.nn.functional._layout import channels_last_source, channels_last_view, records_no_grad
 from jittor.nn.functional.activation import offer_activation
 
@@ -640,6 +640,7 @@ def _group_norm_nhwc_training(source, num_groups, weight, bias, eps):
     return y
 
 
+@native_rule("group_norm")
 def _supports_group_norm(x, num_groups, weight, bias, eps):
     if not (
         isinstance(weight, jt.Var)

@@ -16,7 +16,8 @@ namespace {
 
 // A native stand-in for a `supports` predicate; see kernel_select_native_rule.
 struct NativeRule {
-    enum Kind { none, same_float, rms_inference, rms_training, ln_inference, depthwise_conv2d } kind = none;
+    enum Kind { none, same_float, rms_inference, rms_training, ln_inference, depthwise_conv2d,
+                group_norm } kind = none;
     string op;
 };
 enum Verdict { declines = 0, accepts = 1, unknown = 2 };
@@ -145,6 +146,29 @@ Verdict evaluate(const NativeRule& rule, PyObject* args, PyObject* kwargs) {
     bool conv2d_call = n == 7 && depthwise_fast_path(kwargs) >= 0;
     if (kwargs && kwargs != Py_None && PyDict_GET_SIZE(kwargs) && !conv2d_call)
         return unknown;
+    if (rule.kind == NativeRule::group_norm) {
+        // `_supports_group_norm(x, num_groups, weight, bias, eps)`.
+        if (n != 5 || !is_var(PyTuple_GET_ITEM(args, 0))) return unknown;
+        PyObject* groups = PyTuple_GET_ITEM(args, 1);
+        PyObject* weight = PyTuple_GET_ITEM(args, 2);
+        PyObject* bias = PyTuple_GET_ITEM(args, 3);
+        PyObject* eps = PyTuple_GET_ITEM(args, 4);
+        if (!is_var(weight) || !is_var(bias)) return declines;
+        if (!PyLong_CheckExact(groups) || !(PyFloat_CheckExact(eps) || PyLong_CheckExact(eps)))
+            return unknown;
+        Var* x = GET_RAW_PTR(VarHolder, PyTuple_GET_ITEM(args, 0))->var;
+        if (x->shape.size() != 4) return declines;
+        for (int i = 0; i < 4; i++) if (x->shape[i] <= 0) return declines;
+        int64 channels = x->shape[1];
+        int64 g = PyLong_AsLongLong(groups);
+        double e = PyFloat_AsDouble(eps);
+        if (PyErr_Occurred()) { PyErr_Clear(); return unknown; }
+        if (g <= 0 || channels % g || GET_RAW_PTR(VarHolder, weight)->var->num != channels
+                || GET_RAW_PTR(VarHolder, bias)->var->num != channels
+                || !std::isfinite(e) || e <= 0)
+            return declines;
+        return accepts;
+    }
     if (rule.kind == NativeRule::depthwise_conv2d) {
         // `_supports_depthwise_conv2d`: groups == weight.shape[0] ==
         // x.shape[1], one dtype, and the caller allowing it.
@@ -239,6 +263,8 @@ void kernel_select_native_rule(PyObject* fn, const string& rule) {
         parsed.kind = NativeRule::ln_inference;
     } else if (rule == "depthwise_conv2d") {
         parsed.kind = NativeRule::depthwise_conv2d;
+    } else if (rule == "group_norm") {
+        parsed.kind = NativeRule::group_norm;
     } else {
         throw std::invalid_argument("unknown native kernel rule: " + rule);
     }

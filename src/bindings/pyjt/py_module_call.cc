@@ -20,6 +20,7 @@ namespace jittor {
 
 DECLARE_FLAG(bool, no_grad);
 DECLARE_FLAG(int, amp_reg);
+DECLARE_FLAG(int, auto_mixed_precision_level);
 
 
 namespace {
@@ -71,11 +72,24 @@ PyObject* dropout_execute = nullptr;
 PyObject* function_module_execute = nullptr;
 PyObject* nn_namespace = nullptr;
 PyObject* relu_function = nullptr;
+PyObject* silu_function = nullptr;
 PyObject* residual_offers = nullptr;
 PyObject* arg_policy_warned = nullptr;
-PyObject* relu_inplace_key = nullptr;
 PyObject* function_name_key = nullptr;
-PyObject* relu_name = nullptr;
+PyObject* fuse_activation_key = nullptr;
+// `jittor.nn.GroupNorm.execute`, `jittor.nn.group_norm` as bound, the kernel
+// `select_kernel("nn.group_norm")` answers with by default (the backend hook
+// `group_norm` calls first is that same selection), `_group_norm_nhwc_source`,
+// the activations it can fuse, and `functools.partial`. See
+// `group_norm_inference`.
+PyObject* group_norm_execute = nullptr;
+PyObject* group_norm_function = nullptr;
+PyObject* group_norm_kernel = nullptr;
+PyObject* group_norm_source_fn = nullptr;
+PyObject* group_norm_activations = nullptr;
+PyObject* group_norm_build_fn = nullptr;
+PyObject* partial_type = nullptr;
+PyObject* group_norm_name = nullptr;
 PyObject* lt_linear_header = nullptr;
 PyObject* lt_linear_source_fn = nullptr;
 std::map<std::tuple<int64, int64, int64, bool>, string> lt_linear_sources;
@@ -446,25 +460,26 @@ PyObject* dropout_passthrough(PyObject* dict, PyObject* x) {
     return x;
 }
 
-// `nn.ReLU`, as `jittor.nn.relu` builds it when nothing asked to fuse it: one
-// `unary` relu. Through Python that is 3.9 us of host time a call -- the
-// function looked up by name, the `inplace` policy, the fusion offers, the
-// dispatcher -- and a ResNet-50 forward makes 49 of them. nullptr for
-// anything else: a fusion offer on the input or anywhere (the residual ones
-// are found through the add), a kernel registered for "nn.relu",
-// `jittor.nn.relu` replaced, arguments beyond `inplace`, or an
-// `inplace=True` that has not been warned about yet.
-PyObject* relu_module(PyTypeObject* type, PyObject* dict, PyObject* x) {
-    if (!nn_namespace || !relu_function || !residual_offers || !arg_policy_warned
-            || !dict || !is_var(x))
+// `nn.ReLU` and `nn.SiLU`, as `jittor.nn.relu` and `jittor.nn.silu` build
+// them: from the offer of the pass that makes the input, when it made one
+// (`_fused_activation`: a group norm applying the activation in its own last
+// pass), and otherwise one `unary` relu, or `x * x.sigmoid()`. Through Python
+// a ReLU was 3.9 us of host time a call -- the function looked up by name, the
+// `inplace` policy, the offers, the dispatcher -- and a ResNet-50 forward makes
+// 49; a SiLU 7.8 us, 21 of them a SD1.5 UNet step. nullptr for anything else:
+// a residual offer anywhere (those are found through the add), a kernel
+// registered for the activation, the `jittor.nn` function replaced, arguments
+// beyond `inplace`, or an `inplace=True` not warned about yet.
+PyObject* activation_module(PyTypeObject* type, PyObject* dict, PyObject* x) {
+    if (!nn_namespace || !residual_offers || !arg_policy_warned || !dict || !is_var(x))
         return nullptr;
     if (!function_name_key) function_name_key = PyUnicode_InternFromString("_function_name");
-    if (!relu_name) relu_name = PyUnicode_InternFromString("relu");
     PyObject* name = _PyType_Lookup(type, function_name_key);
-    if (!name || !PyUnicode_Check(name) || PyUnicode_Compare(name, relu_name) != 0) {
-        PyErr_Clear();
-        return nullptr;
-    }
+    if (!name || !PyUnicode_Check(name)) { PyErr_Clear(); return nullptr; }
+    bool relu = PyUnicode_CompareWithASCIIString(name, "relu") == 0;
+    bool silu = !relu && PyUnicode_CompareWithASCIIString(name, "silu") == 0;
+    PyObject* function = relu ? relu_function : silu ? silu_function : nullptr;
+    if (!function) return nullptr;
     PyObject* extra = PyDict_GetItemString(dict, "args");
     PyObject* kw = PyDict_GetItemString(dict, "kw");
     if (!extra || !PyTuple_Check(extra) || PyTuple_GET_SIZE(extra) || !kw || !PyDict_Check(kw))
@@ -475,22 +490,146 @@ PyObject* relu_module(PyTypeObject* type, PyObject* dict, PyObject* x) {
         int on = PyObject_IsTrue(inplace);
         if (on < 0) { PyErr_Clear(); return nullptr; }
         if (on) {
-            if (!relu_inplace_key) relu_inplace_key = Py_BuildValue("(ss)", "jittor.nn.relu", "inplace");
-            if (PySet_Contains(arg_policy_warned, relu_inplace_key) != 1) {
+            static PyObject* relu_key = Py_BuildValue("(ss)", "jittor.nn.relu", "inplace");
+            static PyObject* silu_key = Py_BuildValue("(ss)", "jittor.nn.silu", "inplace");
+            if (PySet_Contains(arg_policy_warned, relu ? relu_key : silu_key) != 1) {
                 PyErr_Clear();
                 return nullptr;
             }
         }
     }
-    PyObject* current = PyObject_GetAttr(nn_namespace, relu_name);
+    PyObject* current = PyObject_GetAttr(nn_namespace, name);
     Py_XDECREF(current);
-    if (current != relu_function) { PyErr_Clear(); return nullptr; }
+    if (current != function) { PyErr_Clear(); return nullptr; }
     if (PyDict_GET_SIZE(residual_offers)) return nullptr;
+    Var* v = GET_RAW_PTR(VarHolder, x)->var;
+    if (!fuse_activation_key) fuse_activation_key = PyUnicode_InternFromString("_fuse_activation");
     PyObject** xdict = _PyObject_GetDictPtr(x);
-    if (xdict && *xdict && PyDict_GetItemString(*xdict, "_fuse_activation")) return nullptr;
-    if (kernel_op_registered("nn.relu")) return nullptr;
+    PyObject* entry = xdict && *xdict ? PyDict_GetItem(*xdict, fuse_activation_key) : nullptr;
+    if (entry) {
+        if (!PyTuple_Check(entry) || PyTuple_GET_SIZE(entry) != 2
+                || !PyLong_Check(PyTuple_GET_ITEM(entry, 0)))
+            return nullptr;
+        long long id = PyLong_AsLongLong(PyTuple_GET_ITEM(entry, 0));
+        if (PyErr_Occurred()) { PyErr_Clear(); return nullptr; }
+        if (id == (long long)v->id && !v->is_finished()) {
+            PyObjHolder build(PyTuple_GET_ITEM(entry, 1));
+            Py_INCREF(build.obj);
+            PyObject* fused = PyObject_CallOneArg(build.obj, name);
+            if (!fused || fused != Py_None) return fused;
+            Py_DECREF(fused);
+        }
+    }
+    if (kernel_op_registered(relu ? "nn.relu" : "nn.silu")) return nullptr;
     static auto make_unary_mc = op_constructor<VarPtr, Var*, NanoString>("unary");
-    return wrap_like_input(x, make_unary_mc(GET_RAW_PTR(VarHolder, x)->var, ns_relu));
+    if (relu) return wrap_like_input(x, make_unary_mc(v, ns_relu));
+    // `x.sigmoid()` is the native unary unless a kernel is registered for it.
+    if (!v->dtype().is_float() || kernel_op_registered("tensor.sigmoid")) return nullptr;
+    PyObjHolder gate(wrap_like_input(x, make_unary_mc(v, ns_sigmoid)));
+    PyObject* out = fast_binary(x, gate.obj, 4);
+    if (out != Py_None) return out;
+    Py_DECREF(out);
+    return PyNumber_Multiply(x, gate.obj);
+}
+
+// The group norm of a dense [N, H, W, C] `source` with the activation `act`
+// ("" for none) in its last pass, handed out as the NCHW view of its storage,
+// as `group_norm_cuda._group_norm_nhwc` builds it -- source, launch and all.
+// None for an activation it has no pass for.
+struct GroupNormSource { string header, source; int64 rows, parts; };
+std::map<std::tuple<int64, int64, int64, int64, int64, double, string>, GroupNormSource> group_norm_sources;
+
+PyObject* build_group_norm_nhwc(PyObject* like, Var* source, Var* weight, Var* bias,
+                                int64 groups, double eps, const string& act) {
+    if (!group_norm_source_fn) return nullptr;
+    if (source->shape.size() != 4) return nullptr;
+    int64 n = source->shape[0], h = source->shape[1], w = source->shape[2], c = source->shape[3];
+    auto key = std::make_tuple(n, h, w, c, groups, eps, act);
+    auto found = group_norm_sources.find(key);
+    if (found == group_norm_sources.end()) {
+        PyObjHolder shape(Py_BuildValue("(LLLL)", (long long)n, (long long)h, (long long)w, (long long)c));
+        PyObjHolder made(PyObject_CallFunction(group_norm_source_fn, "OLds", shape.obj,
+                                               (long long)groups, eps, act.c_str()));
+        if (!PyTuple_Check(made.obj) || PyTuple_GET_SIZE(made.obj) != 4) return nullptr;
+        GroupNormSource text;
+        Py_ssize_t size;
+        const char* header = PyUnicode_AsUTF8AndSize(PyTuple_GET_ITEM(made.obj, 0), &size);
+        if (!header) return nullptr;
+        text.header.assign(header, size);
+        const char* source_text = PyUnicode_AsUTF8AndSize(PyTuple_GET_ITEM(made.obj, 1), &size);
+        if (!source_text) return nullptr;
+        text.source.assign(source_text, size);
+        text.rows = PyLong_AsLongLong(PyTuple_GET_ITEM(made.obj, 2));
+        text.parts = PyLong_AsLongLong(PyTuple_GET_ITEM(made.obj, 3));
+        if (PyErr_Occurred()) return nullptr;
+        found = group_norm_sources.emplace(key, std::move(text)).first;
+    }
+    static auto make_code_multi = op_constructor<vector<VarPtr>, vector<NanoVector>&&, vector<NanoString>&&,
+        vector<Var*>&&, string&&, vector<string>&&, string&&, string&&, vector<string>&&, string&&,
+        DataMap&&, string&&>("code");
+    auto outs = make_code_multi(
+        {source->shape, {found->second.rows}, {found->second.rows}, {found->second.parts}},
+        {source->dtype(), ns_float32, ns_float32, ns_float32}, {source, weight, bias},
+        "", {}, "", string(found->second.source), {}, string(found->second.header), {}, "");
+    return wrap_like_input(like, storage_view_transpose(outs[0].ptr, {0, 3, 1, 2}));
+}
+
+// An inference `nn.GroupNorm` over a channels-last view, as `jittor.nn.group_norm`
+// reaches `_group_norm_nhwc` for it, with the same offer to take a following
+// activation into its pass -- through the native build, so that the SiLU taking
+// it is native too. 17 us of host time a call through Python, 61 a SD1.5 UNet
+// step. nullptr for anything else.
+PyObject* group_norm_inference(PyObject* dict, PyObject* x) {
+    if (!group_norm_function || !group_norm_kernel || !group_norm_source_fn
+            || !group_norm_build_fn || !partial_type || !group_norm_activations
+            || !no_grad || amp_reg || auto_mixed_precision_level || !dict || !is_var(x))
+        return nullptr;
+    PyObject* groups_obj = PyDict_GetItemString(dict, "num_groups");
+    PyObject* channels_obj = PyDict_GetItemString(dict, "num_channels");
+    PyObject* eps_obj = PyDict_GetItemString(dict, "eps");
+    PyObject* weight = PyDict_GetItemString(dict, "weight");
+    PyObject* bias = PyDict_GetItemString(dict, "bias");
+    if (!groups_obj || !channels_obj || !eps_obj || !weight || !bias || !is_var(weight) || !is_var(bias)
+            || !PyLong_CheckExact(groups_obj) || !PyLong_CheckExact(channels_obj)
+            || !(PyFloat_CheckExact(eps_obj) || PyLong_CheckExact(eps_obj)))
+        return nullptr;
+    Var* a = GET_RAW_PTR(VarHolder, x)->var;
+    if (a->shape.size() != 4 || a->shape[1] != PyLong_AsLongLong(channels_obj)) {
+        PyErr_Clear();
+        return nullptr;
+    }
+    PyObject* current = PyObject_GetAttrString(nn_namespace, "group_norm");
+    Py_XDECREF(current);
+    if (current != group_norm_function) { PyErr_Clear(); return nullptr; }
+    VarPtr source = channels_last_source(a);
+    if (!source) return nullptr;
+    {
+        PyObjHolder call_args(PyTuple_Pack(5, x, groups_obj, weight, bias, eps_obj));
+        PyObjHolder kernel(kernel_select(group_norm_name, call_args.obj, nullptr));
+        if (kernel.obj != group_norm_kernel) { PyErr_Clear(); return nullptr; }
+    }
+    int64 groups = PyLong_AsLongLong(groups_obj);
+    double eps = PyFloat_AsDouble(eps_obj);
+    if (PyErr_Occurred()) { PyErr_Clear(); return nullptr; }
+    Var* w = GET_RAW_PTR(VarHolder, weight)->var;
+    Var* b = GET_RAW_PTR(VarHolder, bias)->var;
+    PyObject* y = build_group_norm_nhwc(x, source.ptr, w, b, groups, eps, "");
+    if (!y) return nullptr;
+    // `offer_activation(y, build)`, the build being the native one above.
+    PyObjHolder holder(y);
+    PyObjHolder source_obj(wrap_like_input(x, move(source)));
+    PyObjHolder build(PyObject_CallFunction(partial_type, "OOOOLd", group_norm_build_fn,
+                                            source_obj.obj, weight, bias, (long long)groups, eps));
+    if (!build.obj) return nullptr;
+    if (!fuse_activation_key) fuse_activation_key = PyUnicode_InternFromString("_fuse_activation");
+    PyObjHolder id(PyLong_FromLongLong(GET_RAW_PTR(VarHolder, y)->var->id));
+    PyObjHolder entry(PyTuple_Pack(2, id.obj, build.obj));
+    PyObject** ydict = _PyObject_GetDictPtr(y);
+    if (!ydict) return nullptr;
+    if (!*ydict) *ydict = PyDict_New();
+    if (!*ydict || PyDict_SetItem(*ydict, fuse_activation_key, entry.obj) < 0) return nullptr;
+    Py_INCREF(y);
+    return y;
 }
 
 // `nn.Linear` with a bias on an inference call, as `lt_linear_cuda` builds it:
@@ -703,7 +842,13 @@ PyObject* dispatch_native(PyObject* module, const TypeInfo& info, PyObject* args
     if (!kwargs && PyTuple_GET_SIZE(args) == 1 && function_module_execute
             && _PyType_Lookup(type, name_execute()) == function_module_execute
             && !(dict && PyDict_GetItemString(dict, "execute"))) {
-        PyObject* fast = relu_module(type, dict, PyTuple_GET_ITEM(args, 0));
+        PyObject* fast = activation_module(type, dict, PyTuple_GET_ITEM(args, 0));
+        if (fast || PyErr_Occurred()) return fast;
+    }
+    if (!kwargs && PyTuple_GET_SIZE(args) == 1 && group_norm_execute
+            && _PyType_Lookup(type, name_execute()) == group_norm_execute
+            && !(dict && PyDict_GetItemString(dict, "execute"))) {
+        PyObject* fast = group_norm_inference(dict, PyTuple_GET_ITEM(args, 0));
         if (fast || PyErr_Occurred()) return fast;
     }
     PyObjHolder execute(PyObject_GetAttr(module, name_execute()));
@@ -739,6 +884,16 @@ void module_call_bind(PyObject* module_cls_, PyObject* dispatch_call_,
     part(function_module_execute, "function_module_execute");
     part(nn_namespace, "nn_namespace");
     part(relu_function, "relu_function");
+    part(silu_function, "silu_function");
+    part(group_norm_execute, "group_norm_execute");
+    part(group_norm_function, "group_norm_function");
+    part(group_norm_kernel, "group_norm_kernel");
+    part(group_norm_source_fn, "group_norm_nhwc_source");
+    part(group_norm_activations, "group_norm_activations");
+    part(group_norm_build_fn, "group_norm_nhwc_build");
+    part(partial_type, "partial");
+    if (!group_norm_name) group_norm_name = PyUnicode_InternFromString("nn.group_norm");
+    group_norm_sources.clear();
     part(residual_offers, "residual_offers");
     part(arg_policy_warned, "arg_policy_warned");
     part(conv_execute, "conv_execute");
@@ -776,6 +931,22 @@ void module_call_bind(PyObject* module_cls_, PyObject* dispatch_call_,
     if (!empty_kwargs) empty_kwargs = PyDict_New();
     if (!matmul_name) matmul_name = PyUnicode_InternFromString("matmul");
     type_info.clear();
+}
+
+PyObject* group_norm_nhwc_build(PyObject* source, PyObject* weight, PyObject* bias,
+                                int64 groups, double eps, const string& act) {
+    if (!is_var(source) || !is_var(weight) || !is_var(bias) || !group_norm_activations)
+        throw std::runtime_error("_group_norm_nhwc_build needs three tensors and a bound module call");
+    PyObjHolder name(PyUnicode_FromStringAndSize(act.data(), act.size()));
+    int known = PySequence_Contains(group_norm_activations, name.obj);
+    if (known < 0) return nullptr;
+    if (!known) { Py_INCREF(Py_None); return Py_None; }
+    PyObject* out = build_group_norm_nhwc(source, GET_RAW_PTR(VarHolder, source)->var,
+                                          GET_RAW_PTR(VarHolder, weight)->var,
+                                          GET_RAW_PTR(VarHolder, bias)->var, groups, eps, act);
+    if (!out && !PyErr_Occurred())
+        throw std::runtime_error("_group_norm_nhwc_build could not build the group norm");
+    return out;
 }
 
 PyObject* module_call_native(PyObject* module, PyObject* args, PyObject* kwargs) {

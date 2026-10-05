@@ -280,6 +280,22 @@ class TestFastViews(unittest.TestCase):
         np.testing.assert_allclose(x.grad.numpy(), w.numpy().reshape(3, 2).T)
 
 
+class _ConvNormSilu(torch.nn.Module):
+    # The native module calls and the functions, on one convolution. At
+    # module level: the native module call keeps every class it has seen.
+    def __init__(self, conv, norm, silu):
+        super().__init__()
+        self.conv, self.norm, self.silu = conv, norm, silu
+
+    def forward(self, x, functions):
+        c = self.conv(x)
+        n = self.norm
+        if functions:
+            return (jt.nn.group_norm(c, n.num_groups, n.weight, n.bias, n.eps),
+                    jt.nn.silu(jt.nn.group_norm(c, n.num_groups, n.weight, n.bias, n.eps)))
+        return n(c), self.silu(n(c)), torch.nn.functional.silu(n(c))
+
+
 class TestNativeModuleDispatch(unittest.TestCase):
     """What `_dispatch_module_call` does, taken natively inside a module."""
 
@@ -372,6 +388,53 @@ class TestNativeModuleDispatch(unittest.TestCase):
         z = torch.randn(4, 8, device=_cuda(), requires_grad=True)
         outer(z).sum().backward()
         np.testing.assert_array_equal(z.grad.numpy(), (z.numpy() > 0).astype("float32"))
+
+    @unittest.skipUnless(torch.cuda.is_available(), "the channels-last group norm is CUDA's")
+    def test_an_inference_group_norm_and_the_silu_after_it(self):
+        # Built natively as `_group_norm_nhwc` builds it, with the same offer
+        # to take the activation into its pass -- which a SiLU module and
+        # `F.silu` both take -- bit for bit what the functions give.
+        from jittor.backends.cuda.kernels.nn import group_norm_cuda
+        conv = torch.nn.Conv2d(64, 64, 3, padding=1).cuda().half().eval()
+        norm = torch.nn.GroupNorm(32, 64).cuda().half().eval()
+        with torch.no_grad():
+            norm.weight.copy_(torch.randn(64, device="cuda").half())
+            norm.bias.copy_(torch.randn(64, device="cuda").half())
+        silu = torch.nn.SiLU()
+        outer = torch.nn.Sequential(conv, norm)
+
+        x = torch.randn(2, 64, 16, 16, device="cuda").half()
+        both = _ConvNormSilu(conv, norm, silu)
+        with torch.no_grad():
+            both(x, False)
+            with _refusing(group_norm_cuda, "_group_norm_nhwc"):
+                y, activated, functional = both(x, False)
+            want_y, want = both(x, True)
+            np.testing.assert_array_equal(y.numpy(), want_y.numpy())
+            np.testing.assert_array_equal(activated.numpy(), want.numpy())
+            np.testing.assert_array_equal(functional.numpy(), want.numpy())
+            # A SiLU with no offer to take: x * x.sigmoid().
+            plain = torch.randn(2, 8, 4, 4, device="cuda").half()
+            np.testing.assert_array_equal(torch.nn.Sequential(silu)(plain).numpy(),
+                                          jt.nn.silu(plain).numpy())
+            # A dense input goes the way it went.
+            dense = torch.randn(2, 64, 8, 8, device="cuda").half()
+            np.testing.assert_allclose(
+                torch.nn.Sequential(norm)(dense).float().numpy(),
+                jt.nn.group_norm(dense, 32, norm.weight, norm.bias, norm.eps).float().numpy(),
+                rtol=1e-3, atol=1e-3)
+            # A replaced `jittor.nn.group_norm` answers.
+            original = jt.nn.group_norm
+            jt.nn.group_norm = lambda value, *args: value * 0 + 3
+            try:
+                np.testing.assert_array_equal(outer(x).float().numpy(), np.full((2, 64, 16, 16), 3.0))
+            finally:
+                jt.nn.group_norm = original
+        # With a gradient to record it is the Python path's.
+        z = torch.randn(2, 64, 16, 16, device="cuda", requires_grad=True)
+        train = torch.nn.GroupNorm(32, 64).cuda()
+        torch.nn.Sequential(train, torch.nn.SiLU())(z).sum().backward()
+        self.assertEqual(tuple(z.grad.shape), (2, 64, 16, 16))
 
     def test_a_standard_rms_norm(self):
         class ToyRMSNorm(torch.nn.Module):
@@ -603,6 +666,24 @@ class TestNativeRules(unittest.TestCase):
                 self.assertNotIn(got, (depthwise._depthwise_conv2d, cudnn_kernel))
             else:
                 self.assertIs(got, want, (a.dtype, w.dtype, groups, kwargs))
+
+    @unittest.skipUnless(torch.cuda.is_available(), "the group norm kernel is CUDA's")
+    def test_the_group_norm_kernel_is_chosen_natively_as_before(self):
+        from jittor._runtime.dispatch import select_kernel
+        from jittor.backends.cuda.kernels.nn import group_norm_cuda
+        kernel = getattr(group_norm_cuda._group_norm_cuda, "__wrapped__", group_norm_cuda._group_norm_cuda)
+        x = torch.randn(2, 8, 4, 4, device="cuda")
+        w, b = torch.ones(8, device="cuda"), torch.zeros(8, device="cuda")
+        cases = [(x, 4, w, b, 1e-5), (x, 3, w, b, 1e-5), (x, 4, w[:4], b, 1e-5),
+                 (x, 4, w, b, 0.0), (x, 4, None, b, 1e-5), (x.reshape(2, 8, 16), 4, w, b, 1e-5),
+                 (x.half(), 2, w.half(), b.half(), 1e-6)]
+        for args in cases:
+            want = kernel if group_norm_cuda._supports_group_norm(*args) else None
+            got = select_kernel("nn.group_norm", *args)
+            if want is None:
+                self.assertIsNot(got, kernel, args[1:])
+            else:
+                self.assertIs(got, kernel)
 
     def test_the_matmul_relay_is_chosen_natively_as_before(self):
         from jittor._runtime.dispatch import select_kernel
