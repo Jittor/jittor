@@ -17,6 +17,7 @@
 #include "mem/allocator/nfef_allocator.h"
 #include "mem/allocator/temp_allocator.h"
 #include "mem/swap.h"
+#include "runtime/async_exec.h"
 #include "runtime/traversal_epoch.h"
 #include <mutex>
 #include <algorithm>
@@ -263,6 +264,9 @@ Allocator* get_allocator(Device device, bool temp_allocator) {
 }
 
 void gc_all() {
+    // After the batch on the worker thread, if any (runtime/async_exec.h): it
+    // allocates and frees as it goes.
+    async_exec_wait();
     // Copy under the lock, collect outside it: `gc()` walks and releases memory
     // and must not hold up every other thread's allocations while it does.
     vector<Allocator*> all;

@@ -920,6 +920,11 @@ def compile_src(src, h, basename):
         # that asked for the counts, and a reset would not read back as clean.
         gbp_entry_scope = ("" if name.startswith("graph_build_profile")
                            else "JT_GBP_SCOPE(gbp_pyjt_entry);")
+        # Every binding holds the graph lock while a batch runs on the worker
+        # thread (runtime/async_exec.h); a deallocator too, since releasing a
+        # Var releases liveness.
+        gbp_entry_scope = ("GraphEntryScope _jt_graph_entry{%s};\n            "
+                           % ("false" if name == "__dealloc__" else "true")) + gbp_entry_scope
         # A frontend subtype keeps the native VarHolder payload and graph.
         # Carry its Python allocation type across the complete conversion and
         # call, including tuple/vector results. Never enter a scope in dealloc.
@@ -1156,6 +1161,7 @@ def compile_src(src, h, basename):
     #include "bindings/pyjt/py_arg_printer.h"
     #include "core/common.h"
     #include "utils/graph_build_profile.h"
+    #include "runtime/async_exec.h"
     #include "{include_name}"
 
     namespace jittor {{

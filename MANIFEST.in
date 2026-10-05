@@ -670,6 +670,8 @@ include src/ops/ternary_op.cc
 include src/ops/ternary_op.h
 include src/ops/unary_op.cc
 include src/ops/unary_op.h
+include src/runtime/async_exec.cc
+include src/runtime/async_exec.h
 include src/runtime/backend.cc
 include src/runtime/backend.h
 include src/runtime/backend_fallback.cc

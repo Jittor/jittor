@@ -12,6 +12,8 @@
 #include <tuple>
 #include "runtime/device_state.h"
 #include "ops/layout_propagation.h"
+#include "runtime/async_exec.h"
+#include "core/executor.h"
 
 namespace jittor {
 
@@ -172,6 +174,9 @@ PyObject* call_with(PyObject* fn, PyObject* module, PyObject* args, PyObject* kw
         Py_INCREF(value);
         PyTuple_SET_ITEM(full.obj, i + 1, value);
     }
+    // A module's forward is Python, and the bulk of a model's: the batch on
+    // the worker thread, if any, may take the graph lock meanwhile.
+    GraphLockSuspend python_call;
     return PyObject_Call(fn, full.obj, kwargs);
 }
 
@@ -570,7 +575,10 @@ PyObject* dispatch_native(PyObject* module, const TypeInfo& info, PyObject* args
     PyObject* dict = dict_ptr ? *dict_ptr : nullptr;
     if (dict) {
         PyObject* own = PyDict_GetItemString(dict, "forward");
-        if (own && PyCallable_Check(own)) return PyObject_Call(own, args, kwargs);
+        if (own && PyCallable_Check(own)) {
+            GraphLockSuspend python_call;
+            return PyObject_Call(own, args, kwargs);
+        }
     }
     if (info.rms_named) {
         if (!kwargs && PyTuple_GET_SIZE(args) == 1) {
@@ -624,6 +632,7 @@ PyObject* dispatch_native(PyObject* module, const TypeInfo& info, PyObject* args
         if (same) return same;
     }
     PyObjHolder execute(PyObject_GetAttr(module, name_execute()));
+    GraphLockSuspend python_call;
     return PyObject_Call(execute.obj, args, kwargs);
 }
 
@@ -737,6 +746,8 @@ PyObject* module_call_native(PyObject* module, PyObject* args, PyObject* kwargs)
     PyObject *error_type, *error_value, *error_tb;
     PyErr_Fetch(&error_type, &error_value, &error_tb);
     set_autograd_policy(previous_policy & 1, previous_policy & 2);
+    // A module boundary: where a batch is cut for the worker thread.
+    if (result && !error_type) runtime_executor().flush_at_module_boundary();
     set_float32_precision_policy(previous_precision);
     if (placement_token) { reset_tensor_placement_context(placement_token); Py_DECREF(placement_token); }
     reset_tensor_frontend_type(type_token);

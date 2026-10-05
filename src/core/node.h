@@ -533,6 +533,32 @@ public:
     void unlock() {
         if (--depth_ == 0) owner_.store(nullptr, std::memory_order_release);
     }
+    bool try_lock() {
+        const void* self = thread_token();
+        if (owner_.load(std::memory_order_relaxed) == self) {
+            depth_++;
+            return true;
+        }
+        const void* expected = nullptr;
+        if (!owner_.compare_exchange_strong(
+                expected, self, std::memory_order_acquire, std::memory_order_relaxed))
+            return false;
+        depth_ = 1;
+        return true;
+    }
+    // Let go of it entirely, however deep this thread holds it, and say how
+    // deep that was; 0 when this thread does not hold it. For a wait on
+    // another thread that needs it (see runtime/async_exec.h).
+    int release_all() {
+        if (owner_.load(std::memory_order_relaxed) != thread_token()) return 0;
+        int depth = depth_;
+        depth_ = 0;
+        owner_.store(nullptr, std::memory_order_release);
+        return depth;
+    }
+    // After `lock()` or a successful `try_lock()`: hold it `depth` deep --
+    // what `release_all` returned, to take it back.
+    void deepen(int depth) { depth_ += depth - 1; }
 };
 EXTERN_LIB GraphMutationMutex& graph_mutation_mutex();
 

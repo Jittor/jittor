@@ -349,6 +349,8 @@ static std::mutex& cleanup_callback_mutex() {
     return *mutex;
 }
 
+void (*before_flag_set)(const char* name) = nullptr;
+
 void register_cleanup_callback(void (*cb)()) {
     std::lock_guard<std::mutex> guard(cleanup_callback_mutex());
     cleanup_callbacks().push_back(cb);

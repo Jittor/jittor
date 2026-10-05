@@ -4,6 +4,8 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include "runtime/graph_capture.h"
+#include "runtime/async_exec.h"
+#include "runtime/backend_streams.h"
 #include "runtime/backend.h"
 #include "runtime/device.h"
 #include "mem/allocator.h"
@@ -90,7 +92,16 @@ string graph_host_work(const vector<VarHolder*>& roots) {
     return "";
 }
 
+// A batch running on the worker thread (runtime/async_exec.h) is finished
+// first, and this thread's stream ordered after it: a recording must not take
+// the worker's launches in, nor a launch run ahead of what it reads.
+static void join_async_batch() {
+    async_exec_wait();
+    backend_compute_stream_acquire();
+}
+
 bool graph_capture_begin() {
+    join_async_batch();
     if (!backend_graph_capture_begin()) return false;
     begin_capture_hold();
     graph_capture_recording = true;
@@ -116,12 +127,14 @@ int64 graph_capture_end() {
 void graph_launch(int64 graph) {
     // Counted, and traced when a step trace is open: a replayed step runs no
     // executor batch, so without this record its profile is simply empty.
+    join_async_batch();
     note_graph_launch_begin();
     backend_graph_launch(reinterpret_cast<void*>(graph));
     note_graph_launch_end();
 }
 
 void graph_wait() {
+    async_exec_wait();
     if (backend_graph_supported())
         backend_synchronize({accelerator_backend_id(), current_device()});
 }

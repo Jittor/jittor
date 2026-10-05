@@ -9,6 +9,7 @@
 #ifdef HAS_ACCELERATOR
 #include "core/event_queue.h"
 #endif
+#include "runtime/async_exec.h"
 #include "runtime/device.h"
 #include "runtime/backend_streams.h"
 #include "runtime/executor_entry.h"
@@ -641,6 +642,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
     // copied because running the operator may reuse the shared key buffer.
     // One buffer for the batch, so the copy is not an allocation per op.
     string prepared_jit_key;
+    const bool on_worker = on_async_worker();
     for (uint rid=0; rid<queue.size(); rid++) {
         // Segment rid-1 has run, whichever `continue` it left by: nothing later
         // in the batch uses the vars scheduled after it, so their memory goes
@@ -658,6 +660,8 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         reused_inputs.clear();
         // One trace record per launched operator; see step_trace.h.
         StepTraceOpScope trace_op;
+        // See the outputs' allocation below.
+        unique_ptr<GraphLockSuspend> worker_unlocked;
         int root = queue[rid];
         Op* op = ops[root];
         bool is_fused_op = false;
@@ -747,6 +751,13 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
                 if (stream) fused_op.streamed_inputs = dying_stream_mask(fused_op, last_used, kept_pinned);
                 if (reuse) reuse_dying_inputs_of(fused_op, last_used, kept_pinned, allocator, reused_inputs);
             }
+            // On the worker the graph lock goes from here through the launch:
+            // the outputs' allocation (the pool has its own lock), the jit
+            // key, the migration checks and the launch read only this
+            // operator, its Vars and the memory the batch holds, and the
+            // Python thread may build meanwhile. Liveness, flags and the
+            // segment's loading above and below stay under it.
+            if (on_worker) worker_unlocked.reset(new GraphLockSuspend());
             for (auto* var : op->outputs()) {
                 // the return value used to be discarded: a CPU OOM reached the
                 // generated kernel as a null pointer and crashed there
@@ -845,6 +856,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         if (execution_backend != BackendId::Cpu)
             record_active_launch(backend_stream({execution_backend, execution_device}, BackendStreamKind::Compute));
         op->execute_prepared(jkl);
+        worker_unlocked.reset();
         // _JT_SEH_END2;
         #ifdef HAS_ACCELERATOR
         // migrate to gpu
