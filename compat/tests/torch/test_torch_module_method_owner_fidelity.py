@@ -605,7 +605,7 @@ class TestModuleMethodsAcrossDevices:
         with unbridged_grad():
             m = nn.Linear(3, 2)
             m.to(device)
-            m(torch.randn(4, 3)).sum().backward()
+            m(torch.randn(4, 3, device=device)).sum().backward()
             assert m.weight.grad is not None
             m.zero_grad(set_to_none=False)
             assert m.weight.grad is not None
@@ -616,7 +616,7 @@ class TestModuleMethodsAcrossDevices:
         with unbridged_grad():
             m = nn.Linear(3, 2)
             m.to(device)
-            m(torch.randn(4, 3)).sum().backward()
+            m(torch.randn(4, 3, device=device)).sum().backward()
             m.zero_grad(set_to_none=True)
             assert m.weight.grad is None
 
