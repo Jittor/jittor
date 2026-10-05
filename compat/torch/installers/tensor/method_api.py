@@ -132,7 +132,9 @@ def _assign_data_owner(view, value, extra_path=()):
     for base, index in reversed(bases):
         updated = base.setitem(index, updated)
 
-    owner_was_trainable = not owner.is_stop_grad()
+    # `requires_grad`, not the stop-grad bit: `requires_grad_(False)` need not
+    # set it, and reading the bit alone unfroze a frozen tensor on assignment.
+    owner_was_trainable = bool(owner.requires_grad)
     owner.assign(updated)
     _restore_trainable_state(owner, owner_was_trainable)
 
@@ -209,7 +211,8 @@ def _ip(self, value):
     if _assign_data_owner(self, value):
         return self
     target = self
-    was_trainable = not target.is_stop_grad()
+    # As above: a frozen tensor stays frozen through an in-place write.
+    was_trainable = bool(target.requires_grad)
     target.assign(value)
     if was_trainable and target.is_stop_grad():
         target.start_grad()
@@ -535,7 +538,7 @@ def _data_get(self):
 
 def _data_set(self, value):
     src = value if isinstance(value, _NativeVar) else _owner.jt.array(value)
-    was_trainable = not self.is_stop_grad()
+    was_trainable = bool(self.requires_grad)
     # torch's `x.data = y` *replaces* x's data, shape and dtype; it does not
     # copy elements into x's existing buffer. `assign` is the in-place
     # primitive used by `x.foo_()`: it writes x's values into y's storage and
