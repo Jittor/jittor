@@ -373,6 +373,38 @@ class TestIndexAdd(Base):
             self.ac(x.numpy(), ref, msg=f"index_add_ in-place dup {dev}")
         both_devices(body)
 
+    def test_index_add__in_place_preserves_source_gradient(self):
+        # MoE/token scatter pattern: a fresh buffer that does not require grad
+        # accumulates sources that do; torch makes the buffer part of their
+        # graph, so every source receives its gradient.
+        def body(dev):
+            first_parameter = torch.nn.Parameter(torch.ones((3, 2), device=dev))
+            second_parameter = torch.nn.Parameter(torch.full((3, 2), 2.0, device=dev))
+            first_source = torch.ones((2, 3), device=dev) @ first_parameter
+            second_source = torch.ones((2, 3), device=dev) @ second_parameter
+            output = torch.zeros((3, 2), device=dev)
+            index = torch.tensor([0, 2], device=dev)
+
+            self.assertIs(output.index_add_(0, index, first_source), output)
+            output.index_add_(0, index, second_source, alpha=2.0)
+            self.assertTrue(output.requires_grad, f"index_add_ graph missing {dev}")
+            self.ac(output.numpy(), np.array([[15., 15.], [0., 0.], [15., 15.]]),
+                    msg=f"index_add_ values {dev}")
+            output.sum().backward()
+
+            for name, parameter, scale in (
+                    ("first", first_parameter, 2.0), ("second", second_parameter, 4.0)):
+                self.assertIsNotNone(parameter.grad, f"index_add_ {name} grad missing {dev}")
+                self.ac(parameter.grad.numpy(), np.full((3, 2), scale),
+                        msg=f"index_add_ {name} source grad {dev}")
+            # Without grad the buffer stays a plain tensor.
+            with torch.no_grad():
+                frozen = torch.zeros((3, 2), device=dev)
+                frozen.index_add_(0, index, first_source)
+            self.assertFalse(frozen.requires_grad, f"no_grad index_add_ {dev}")
+
+        both_devices(body)
+
     def test_index_add_alpha(self):
         base = np.ones((3, 2), dtype="float32")
         index = np.array([0, 0], dtype="int64")

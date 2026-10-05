@@ -213,9 +213,22 @@ def _ip(self, value):
     target = self
     # As above: a frozen tensor stays frozen through an in-place write.
     was_trainable = bool(target.requires_grad)
+    # ...unless the written value itself requires grad: torch then makes the
+    # target a non-leaf of that graph (`out = zeros(); out.index_add_(0, i, h)`
+    # must backpropagate into `h`). A value built under no_grad is stop-grad,
+    # so the frozen-under-no_grad case above is unaffected. Read before the
+    # assignment, which hands the target's flags over to the value's Var.
+    gains_grad = (not was_trainable and isinstance(value, _NativeVar)
+                  and not value.is_stop_grad() and bool(value.requires_grad))
     target.assign(value)
     if was_trainable and target.is_stop_grad():
         target.start_grad()
+    elif gains_grad and not target.is_stop_grad():
+        # The native setter only clears the reversible requires-grad-disabled
+        # bit here (the Var is not stop-grad), so the graph edge is kept; the
+        # Python property would also register a non-leaf as a backward leaf.
+        _context = get_install_context(_owner.jt)
+        _context.state["tensor_native_api"]["_native_requires_grad"].__set__(target, True)
     elif not was_trainable and not target.is_stop_grad():
         target.stop_grad()
     return self
