@@ -276,6 +276,21 @@ class TestBinaryOpPromotion(Base):
                              "int16", dev)
         both_devices(body)
 
+    def test_integer_modulo_scalar_follows_divisor_sign(self):
+        def body(dev):
+            for dtype in ("int32", "int64"):
+                values = np.array([-7, -5, -1, 0, 1, 5, 7],
+                                  dtype=_NPDT[dtype])
+                for divisor in (3, -3):
+                    result = torch.tensor(values) % divisor
+                    self.ae(result.numpy(), np.mod(values, divisor),
+                            f"{dtype} % {divisor} {dev}")
+                    self.assertEqual(dts(result), dtype)
+            large = np.array([2**40 + 7, -(2**40 + 7)], dtype="int64")
+            self.ae((torch.tensor(large) % 151936).numpy(),
+                    np.mod(large, 151936), f"large int64 modulo {dev}")
+        both_devices(body)
+
     def test_truediv_is_float(self):
         # torch '/' ALWAYS yields float (the documented special case). For an
         # integral result_type it lands on the DEFAULT float (float32) regardless of
