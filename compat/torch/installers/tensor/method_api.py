@@ -2,7 +2,7 @@
 from importlib import import_module
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from ...context import get_install_context
-from ...types import _make_cpu_resident, _make_cuda_resident, _var_is_cpu_resident
+from ...types import _PYTHON_SCALAR_DTYPES, _make_cpu_resident, _make_cuda_resident, _var_is_cpu_resident
 from ....stub_policy import degraded as _degraded, unimplemented as _unimplemented
 from ..core import _promote_pair
 
@@ -607,6 +607,9 @@ def _to(self, *args, **kwargs):
             # .to(other) copies other's dtype AND device.
             ds = _jittor_dtype_name(a.dtype)
             dev = a.device
+        elif type(a) is type and a in _PYTHON_SCALAR_DTYPES:
+            # `.to(int)` is torch's int64; it used to match no branch and be dropped.
+            ds = _PYTHON_SCALAR_DTYPES[a]
         elif _owner._is_index(a):
             # A bare int can only mean a device index, and it used to match none
             # of these branches and be **dropped**: `.to(1)` returned the tensor

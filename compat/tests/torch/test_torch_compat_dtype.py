@@ -284,6 +284,29 @@ class TestCastMethods(Base):
 
 # ----------------------------------------------------------------- from_numpy dtype keep
 
+class TestPythonScalarDtypes(Base):
+    # torch reads the Python scalar types as int64 / float64 / bool wherever it
+    # takes a dtype; jittor's own `int` and `float` are 32-bit.
+    def test_factories_take_python_scalar_types(self):
+        def body(dev):
+            for py, want in ((int, "int64"), (float, "float64"), (bool, "bool")):
+                self.assertEqual(dts(torch.zeros(3, dtype=py)), want, dev)
+                self.assertEqual(dts(torch.full((2,), 1, dtype=py)), want, dev)
+                self.assertEqual(dts(torch.tensor([1, 0], dtype=py)), want, dev)
+                self.assertEqual(dts(torch.tensor([], dtype=py)), want, dev)
+            self.assertEqual(dts(torch.arange(3, dtype=int)), "int64", dev)
+        both_devices(body)
+
+    def test_to_takes_python_scalar_types(self):
+        def body(dev):
+            x = torch.tensor([1.5, -2.5])
+            self.assertEqual(dts(x.to(int)), "int64", dev)
+            self.assertEqual(dts(x.to(float)), "float64", dev)
+            self.assertEqual(dts(x.to(dtype=bool)), "bool", dev)
+            self.ae(x.to(int).numpy(), np.array([1, -2], dtype="int64"))
+        both_devices(body)
+
+
 class TestFromNumpyDtype(Base):
     def test_from_numpy_preserves_dtype(self):
         def body(dev):
