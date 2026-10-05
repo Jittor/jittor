@@ -122,12 +122,21 @@ def main():
         env = dict(os.environ)
         env[f"{prefix}_WORLD_SIZE"] = str(a.nproc)
         env[f"{prefix}_RANK"] = str(rank)
+        # Torch-compatible training entry points (including ms-swift) read
+        # torchrun's conventional rank variables before importing the
+        # framework. Keep the Jittor-specific variables above as the source of
+        # truth, but publish the aliases so a Jittor-launched shim process can
+        # use the same entry point without a wrapper script.
+        env["RANK"] = str(rank)
+        env["WORLD_SIZE"] = str(a.nproc)
         visible_device = _visible_devices_for_rank(rank) if backend == "nccl" else None
         if visible_device is not None:
             env["CUDA_VISIBLE_DEVICES"] = visible_device
             env[f"{prefix}_LOCAL_RANK"] = "0"
+            env["LOCAL_RANK"] = "0"
         else:
             env[f"{prefix}_LOCAL_RANK"] = str(rank)   # single node: local == global
+            env["LOCAL_RANK"] = str(rank)
         env[f"{prefix}_ROOTINFO_FILE"] = rootinfo
         # No per-rank cache_name. Every rank builds the same kernels from the
         # same sources, so a cache each meant an N-card job compiled the whole

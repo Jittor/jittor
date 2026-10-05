@@ -96,7 +96,11 @@ _RMS_NORM_SOURCE = r"""
         __syncthreads();
         for (int dim = tid; dim < %(hidden_size)d; dim += blockDim.x) {
             int index = row * %(hidden_size)d + dim;
-            y[index] = out0_type(static_cast<float>(x[index]) * inverse_rms
+            // ATen's BF16 RMSNorm rounds the normalized value before the
+            // affine weight multiply; retaining this cast is observable at
+            // one BF16 quantum on CUDA.
+            out0_type normalized = out0_type(static_cast<float>(x[index]) * inverse_rms);
+            y[index] = out0_type(static_cast<float>(normalized)
                                  * static_cast<float>(gamma[dim]));
         }
     }

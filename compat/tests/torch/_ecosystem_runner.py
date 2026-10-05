@@ -326,7 +326,11 @@ def _run(policy_stack):
         model, input_spec = builder(torch)
         dependencies = _dependency_report(requirements)
         model.eval()
-        if options.runtime == "torch" and options.device != "cpu":
+        # Keep module parameters and generated inputs on the same real device.
+        # Jittor normally creates Vars on the scoped accelerator, but modules
+        # assembled by downstream tuners can retain host-backed parameters;
+        # an explicit migration also matches the native Torch runner path.
+        if options.device != "cpu":
             model.to(options.device)
 
         # ``state_dict`` is not always complete: ms-swift's tuner deliberately
