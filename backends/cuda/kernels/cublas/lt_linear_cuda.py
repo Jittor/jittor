@@ -198,10 +198,16 @@ def _bfloat16_or(x, weight, fallback):
     return fallback
 
 
+#: cuBLASLt is CUDA's own. `use_cuda` is also set on ACL and ROCm builds, whose
+#: accelerator cannot compile this source: there `nn.Linear` raised (or, with
+#: fallbacks allowed, ran the code op on the host).
+_CUDA_BUILD = bool(getattr(jt.compiler, "is_cuda", False))
+
+
 def _supports(x, weight, bias, *args, **kwargs):
     # Only cuda_src is provided, so this op is CUDA-only; under use_cuda=0 the
     # portable path is the only correct one.
-    if not jt.flags.use_cuda:
+    if not jt.flags.use_cuda or not _CUDA_BUILD:
         return False
     # Forward only: this op has no backward source, so anything that needs a
     # gradient has to go the portable way. Silently losing the gradient would
@@ -582,7 +588,7 @@ class _LtLinearProduct(jt.Function):
 
 
 def _supports_training(x, weight, bias):
-    if not jt.flags.use_cuda or jt.flags.no_grad:
+    if not jt.flags.use_cuda or jt.flags.no_grad or not _CUDA_BUILD:
         return False
     if not (isinstance(x, jt.Var) and isinstance(weight, jt.Var)):
         return False
