@@ -384,7 +384,10 @@ PyObject* fast_gelu(PyObject* x) {
     if (!is_floating(own)) return none();
     bool low = own == ns_float16 || own == ns_bfloat16;
     Op* producer = var->input();
-    if (own != ns_float64 && !amp_reg && runtime_flag_use_cuda() && producer
+    // A CUDA kernel source: only where the accelerator is CUDA (`use_cuda` is
+    // also set on ACL).
+    if (own != ns_float64 && !amp_reg && runtime_flag_use_cuda()
+            && accelerator_backend_id() == BackendId::Cuda && producer
             && producer->is_op(op_ids::code()) && var->num > 0 && var->is_contiguous()
             && (no_grad || var->is_stop_grad())) {
         PyTensorFrontendScope scope(x, nullptr, 0, false);

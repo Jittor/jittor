@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <tuple>
 #include "runtime/device_state.h"
+#include "runtime/backend.h"
 #include "ops/layout_propagation.h"
 #include "runtime/async_exec.h"
 #include "core/executor.h"
@@ -660,8 +661,10 @@ PyObject* group_norm_inference(PyObject* dict, PyObject* x) {
 // product large enough for it -- so the operator is the one the Python path
 // builds. 8.6 us of host time to build in Python, 74 times a BERT-base forward.
 PyObject* linear_with_bias_inference(PyObject* dict, PyObject* x) {
+    // A cuBLASLt kernel: CUDA only. `use_cuda` is also set on ACL.
     if (!lt_linear_source_fn || lt_linear_header_text.empty() || !no_grad || amp_reg
-            || !runtime_flag_use_cuda() || !dict || !is_var(x))
+            || !runtime_flag_use_cuda() || accelerator_backend_id() != BackendId::Cuda
+            || !dict || !is_var(x))
         return nullptr;
     PyObject* weight = PyDict_GetItemString(dict, "weight");
     PyObject* bias = PyDict_GetItemString(dict, "bias");
