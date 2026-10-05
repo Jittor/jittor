@@ -781,6 +781,10 @@ def adam_init(self, params, lr=1e-3, *args, **kwargs):
 
 
 def adamw_init(self, params, lr=1e-3, *args, **kwargs):
+    # torch's AdamW decays by 0.01 unless told otherwise; the native one by 0.
+    # Positionally the native order is (eps, betas, weight_decay).
+    if len(args) < 3:
+        kwargs.setdefault('weight_decay', 0.01)
     return _initialize_default(self, params, lr, args, kwargs, 'AdamW')
 
 
