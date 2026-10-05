@@ -1,6 +1,7 @@
 """Explicit Tensor placement survives global policy and mixed native graphs."""
 
 from _helpers import capability as _test_capability
+from _helpers.child_process import run_python_child
 import numpy as np
 import pytest
 
@@ -246,6 +247,7 @@ def test_host_scalar_operands_queued_behind_device_work_keep_their_values():
         for i, out in enumerate(outs):
             np.testing.assert_allclose(out.numpy(), base * i, rtol=1e-6)
 
+
 def test_frequency_factories_use_native_placement_for_following_operations():
     import torch
     with _cuda_runtime():
@@ -258,3 +260,49 @@ def test_frequency_factories_use_native_placement_for_following_operations():
                 assert value.device.type == result.device.type == device
                 assert value.location() == result.location() == ("cpu" if device == "cpu" else "device")
                 np.testing.assert_array_equal(result.numpy(), reference * 2 + 1)
+
+
+_NUMPY_CODE_ON_EXPLICIT_CUDA = """
+import numpy as np
+import torch
+import jittor as jt
+
+jt.flags.use_cuda = 1
+gpu = torch.tensor([1., 2., 3., 4.], device="cuda")
+gpu.sync()
+
+def forward(np_, data):
+    np_.copyto(data["outputs"][0], data["inputs"][0] * 2)
+
+with jt.flag_scope(use_cuda=0):
+    doubled = jt.numpy_code(gpu.shape, gpu.dtype, [gpu], forward)
+    assert doubled.placement_backend == 1
+    try:
+        got = doubled.numpy()
+    except RuntimeError as error:
+        assert "CuPy" in str(error), error
+        # Still pending: leaving the scope would run it again.
+        del doubled
+        print("REFUSED")
+    else:
+        np.testing.assert_array_equal(got, [2., 4., 6., 8.])
+        print("RAN")
+"""
+
+
+def test_a_numpy_code_operator_on_explicit_cuda_inputs_gets_device_arrays():
+    # The operator follows its explicitly placed inputs onto CUDA under
+    # use_cuda=0, as `gpu + 2` does above, so its callback must be handed
+    # CuPy -- or refuse without it. It used to be chosen by use_cuda: numpy
+    # over device memory, and the first read was a segfault (the torch.linalg
+    # tests after a `set_default_device("cuda")`). In a child, since the
+    # failure is the process.
+    import jittor as jt
+    if not _test_capability.check_accelerator('cuda', backend=jt).enabled:
+        pytest.skip("accelerator prerequisite: CUDA runtime unavailable")
+    finished = run_python_child(["-c", _NUMPY_CODE_ON_EXPLICIT_CUDA],
+                                env={"JITTOR_TORCH_SHIM": "1"}, timeout=900,
+                                merge_stderr=True)
+    tail = finished.stdout[-3000:]
+    assert finished.returncode == 0, tail
+    assert {"REFUSED", "RAN"} & set(finished.stdout.splitlines()), tail
