@@ -494,8 +494,59 @@ class TestModuleForward(Base):
         expected = F.conv3d(padded, m.weight, m.bias, m.stride, 0, m.dilation, m.groups)
         self.ac(m(torch.tensor(x)).numpy(), expected.numpy(),
                 msg="Conv3d padding_mode='reflect'")
-        with self.assertRaises(NotImplementedError):
+        # torch raises ValueError for an unknown mode.
+        with self.assertRaises(ValueError):
             torch.nn.Conv3d(3, 5, 3, padding_mode="bogus")
+
+    def test_conv1d_conv2d_torch_padding_modes_and_same(self):
+        """``padding_mode`` and asymmetric ``'same'`` on the torch layers.
+
+        Conv2d used to ignore ``padding_mode`` (zero padding, with a warning)
+        and Conv1d padded its *channel* axis; ``'same'`` did not construct.
+        The reference pads explicitly (F.pad) and convolves with no padding;
+        an even kernel or odd dilation*(k-1) puts the odd element after.
+        """
+        rs = np.random.RandomState(25)
+        def body(dev):
+            for rank, cls, conv, spatial in (
+                    (1, torch.nn.Conv1d, torch.nn.functional.conv1d, (11,)),
+                    (2, torch.nn.Conv2d, torch.nn.functional.conv2d, (8, 9))):
+                for kernel, dilation, padding, mode in (
+                        (3, 1, 1, "reflect"), (3, 2, 2, "replicate"), (3, 1, 1, "circular"),
+                        (4, 1, "same", "zeros"), (3, 2, "same", "zeros"),
+                        (4, 3, "same", "zeros"), (4, 2, "same", "reflect")):
+                    label = f"conv{rank}d k={kernel} d={dilation} p={padding} {mode} {dev}"
+                    m = cls(3, 4, kernel, padding=padding, dilation=dilation,
+                            padding_mode=mode).to(dev)
+                    self.assertEqual(m.padding_mode, mode, label)
+                    x = torch.tensor(rs.randn(2, 3, *spatial).astype("float32"), device=dev)
+                    if padding == "same":
+                        total = dilation * (kernel - 1)
+                        pairs = [(total // 2, total - total // 2)] * rank
+                    else:
+                        pairs = [(padding, padding)] * rank
+                    widths = [w for pair in reversed(pairs) for w in pair]
+                    explicit = F.pad(x, widths, mode="constant" if mode == "zeros" else mode)
+                    expected = conv(explicit, m.weight, m.bias, 1, 0, dilation)
+                    got = m(x)
+                    self.assertEqual(got.device.type, dev, label)
+                    self.ac(got.numpy(), expected.numpy(), msg=label)
+                    if mode == "zeros":
+                        self.ac(conv(x, m.weight, m.bias, padding=padding,
+                                     dilation=dilation).numpy(),
+                                expected.numpy(), msg="functional " + label)
+            # numpy reference for one asymmetric case, independent of F.pad.
+            w = rs.randn(4, 3, 4, 4).astype("float32")
+            xn = rs.randn(1, 3, 7, 8).astype("float32")
+            padded = np.pad(xn, ((0, 0), (0, 0), (1, 2), (1, 2)))
+            self.ac(torch.nn.functional.conv2d(torch.tensor(xn, device=dev), torch.tensor(w, device=dev),
+                                               padding="same").numpy(),
+                    conv2d_ref(padded, w), msg=f"F.conv2d same even kernel {dev}")
+            with self.assertRaises(ValueError):
+                torch.nn.ConvTranspose2d(3, 4, 3, padding_mode="reflect")
+            self.assertEqual(
+                torch.nn.ConvTranspose2d(3, 4, 3, padding_mode="zeros").padding_mode, "zeros")
+        both_devices(body)
 
 
 # ---------------------------------------------------------------------------
