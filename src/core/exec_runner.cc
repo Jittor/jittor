@@ -889,8 +889,15 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
                 swap_epoch.mark(var);
             }
         } else {
+            // Only where a fused op is one generated kernel, each element read
+            // before it is written (`reads_before_writing`). A backend without
+            // generated device kernels (ACL) runs the group as a sequence of
+            // library calls, and a later one may still read the input the
+            // output has taken over.
             bool reuse = reuse_dying_inputs && is_fused_op && keep_graph != 1 && plan.batch_hold
-                && has_reuse_candidate(fused_op);
+                && has_reuse_candidate(fused_op)
+                && (requested_backend == BackendId::Cpu
+                    || backend_ops(requested_backend).execution.supports_generated_device_kernels);
             bool stream = stream_dying_inputs && is_fused_op && keep_graph != 1 && plan.batch_hold
                 && requested_backend == BackendId::Cuda && has_stream_candidate(fused_op);
             // These read liveness: on the worker, only with the queue applied
