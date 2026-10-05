@@ -2,6 +2,7 @@
 #include "bindings/pyjt/py_tensor_frontend.h"
 #include "bindings/pyjt/py_converter.h"
 #include "bindings/pyjt/py_kernel_select.h"
+#include "bindings/pyjt/py_compat_fast.h"
 #include "ops/op_register.h"
 #include "ops/composite/code_op.h"
 #include <cmath>
@@ -63,6 +64,18 @@ PyObject* bn_coefficients_key = nullptr;
 // `jittor.nn.Dropout.execute`, which hands its input back when it is not
 // training (or p is 0): see `dropout_passthrough`.
 PyObject* dropout_execute = nullptr;
+// `_FunctionModule.execute`, which `nn.ReLU` runs; `jittor.nn` and the
+// `relu` it is expected to find there; the activation offers a pass that
+// makes the input may have left (`_RESIDUAL_OFFERS`); and the warnings
+// `_arg_policy` has given. See `relu_module`.
+PyObject* function_module_execute = nullptr;
+PyObject* nn_namespace = nullptr;
+PyObject* relu_function = nullptr;
+PyObject* residual_offers = nullptr;
+PyObject* arg_policy_warned = nullptr;
+PyObject* relu_inplace_key = nullptr;
+PyObject* function_name_key = nullptr;
+PyObject* relu_name = nullptr;
 PyObject* lt_linear_header = nullptr;
 PyObject* lt_linear_source_fn = nullptr;
 std::map<std::tuple<int64, int64, int64, bool>, string> lt_linear_sources;
@@ -393,14 +406,23 @@ PyObject* batch_norm_eval_channels_last(PyObject* dict, PyObject* x) {
     PyObject* scale = PyTuple_GET_ITEM(kept, 1);
     PyObject* shift = PyTuple_GET_ITEM(kept, 2);
     if (!is_var(scale) || !is_var(shift)) return nullptr;
-    PyObjHolder dims(Py_BuildValue("[iii]", 0, 2, 3));
-    PyObjHolder s(PyObject_CallMethod(scale, "broadcast", "OO", x, dims.obj));
-    if (!s.obj) return nullptr;
-    PyObjHolder b(PyObject_CallMethod(shift, "broadcast", "OO", x, dims.obj));
-    if (!b.obj) return nullptr;
-    PyObjHolder product(PyNumber_Multiply(x, s.obj));
+    // `scale.broadcast(x, [0, 2, 3])` and the frontend's `*` and `+`, built
+    // here rather than through two method calls and two Python operators:
+    // the same broadcasts, and the same native binary path `_tensor_mul` and
+    // `_tensor_add` take first -- channels-last propagation and all -- with
+    // the Python operators still behind it for what that path declines.
+    static auto make_broadcast_to = op_constructor<VarPtr, Var*, Var*, NanoVector>("broadcast_to");
+    PyObjHolder s(wrap_like_input(x, make_broadcast_to(GET_RAW_PTR(VarHolder, scale)->var, a, {0, 2, 3})));
+    PyObjHolder b(wrap_like_input(x, make_broadcast_to(GET_RAW_PTR(VarHolder, shift)->var, a, {0, 2, 3})));
+    auto apply = [](PyObject* lhs, PyObject* rhs, int code, binaryfunc op) -> PyObject* {
+        PyObject* out = fast_binary(lhs, rhs, code);
+        if (out != Py_None) return out;
+        Py_DECREF(out);
+        return op(lhs, rhs);
+    };
+    PyObjHolder product(apply(x, s.obj, 4, PyNumber_Multiply));
     if (!product.obj) return nullptr;
-    return PyNumber_Add(product.obj, b.obj);
+    return apply(product.obj, b.obj, 0, PyNumber_Add);
 }
 
 // A Dropout that is not training, or drops nothing, hands its input back --
@@ -422,6 +444,53 @@ PyObject* dropout_passthrough(PyObject* dict, PyObject* x) {
     }
     Py_INCREF(x);
     return x;
+}
+
+// `nn.ReLU`, as `jittor.nn.relu` builds it when nothing asked to fuse it: one
+// `unary` relu. Through Python that is 3.9 us of host time a call -- the
+// function looked up by name, the `inplace` policy, the fusion offers, the
+// dispatcher -- and a ResNet-50 forward makes 49 of them. nullptr for
+// anything else: a fusion offer on the input or anywhere (the residual ones
+// are found through the add), a kernel registered for "nn.relu",
+// `jittor.nn.relu` replaced, arguments beyond `inplace`, or an
+// `inplace=True` that has not been warned about yet.
+PyObject* relu_module(PyTypeObject* type, PyObject* dict, PyObject* x) {
+    if (!nn_namespace || !relu_function || !residual_offers || !arg_policy_warned
+            || !dict || !is_var(x))
+        return nullptr;
+    if (!function_name_key) function_name_key = PyUnicode_InternFromString("_function_name");
+    if (!relu_name) relu_name = PyUnicode_InternFromString("relu");
+    PyObject* name = _PyType_Lookup(type, function_name_key);
+    if (!name || !PyUnicode_Check(name) || PyUnicode_Compare(name, relu_name) != 0) {
+        PyErr_Clear();
+        return nullptr;
+    }
+    PyObject* extra = PyDict_GetItemString(dict, "args");
+    PyObject* kw = PyDict_GetItemString(dict, "kw");
+    if (!extra || !PyTuple_Check(extra) || PyTuple_GET_SIZE(extra) || !kw || !PyDict_Check(kw))
+        return nullptr;
+    PyObject* inplace = PyDict_GetItemString(kw, "inplace");
+    if (PyDict_GET_SIZE(kw) != (inplace ? 1 : 0)) return nullptr;
+    if (inplace) {
+        int on = PyObject_IsTrue(inplace);
+        if (on < 0) { PyErr_Clear(); return nullptr; }
+        if (on) {
+            if (!relu_inplace_key) relu_inplace_key = Py_BuildValue("(ss)", "jittor.nn.relu", "inplace");
+            if (PySet_Contains(arg_policy_warned, relu_inplace_key) != 1) {
+                PyErr_Clear();
+                return nullptr;
+            }
+        }
+    }
+    PyObject* current = PyObject_GetAttr(nn_namespace, relu_name);
+    Py_XDECREF(current);
+    if (current != relu_function) { PyErr_Clear(); return nullptr; }
+    if (PyDict_GET_SIZE(residual_offers)) return nullptr;
+    PyObject** xdict = _PyObject_GetDictPtr(x);
+    if (xdict && *xdict && PyDict_GetItemString(*xdict, "_fuse_activation")) return nullptr;
+    if (kernel_op_registered("nn.relu")) return nullptr;
+    static auto make_unary_mc = op_constructor<VarPtr, Var*, NanoString>("unary");
+    return wrap_like_input(x, make_unary_mc(GET_RAW_PTR(VarHolder, x)->var, ns_relu));
 }
 
 // `nn.Linear` with a bias on an inference call, as `lt_linear_cuda` builds it:
@@ -631,6 +700,12 @@ PyObject* dispatch_native(PyObject* module, const TypeInfo& info, PyObject* args
         PyObject* same = dropout_passthrough(dict, PyTuple_GET_ITEM(args, 0));
         if (same) return same;
     }
+    if (!kwargs && PyTuple_GET_SIZE(args) == 1 && function_module_execute
+            && _PyType_Lookup(type, name_execute()) == function_module_execute
+            && !(dict && PyDict_GetItemString(dict, "execute"))) {
+        PyObject* fast = relu_module(type, dict, PyTuple_GET_ITEM(args, 0));
+        if (fast || PyErr_Occurred()) return fast;
+    }
     PyObjHolder execute(PyObject_GetAttr(module, name_execute()));
     GraphLockSuspend python_call;
     return PyObject_Call(execute.obj, args, kwargs);
@@ -661,6 +736,11 @@ void module_call_bind(PyObject* module_cls_, PyObject* dispatch_call_,
     part(rms_inference_impl, "rms_norm_inference");
     part(rms_source_fn, "rms_norm_source");
     part(dropout_execute, "dropout_execute");
+    part(function_module_execute, "function_module_execute");
+    part(nn_namespace, "nn_namespace");
+    part(relu_function, "relu_function");
+    part(residual_offers, "residual_offers");
+    part(arg_policy_warned, "arg_policy_warned");
     part(conv_execute, "conv_execute");
     part(conv_cudnn_kernel, "conv_cudnn_kernel");
     part(cudnn_backend, "cudnn_backend");

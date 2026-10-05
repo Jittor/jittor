@@ -1189,6 +1189,9 @@ def _install_module_methods(nn, registry=None):
     from jittor.backends.cuda.kernels.cublas import lt_linear_cuda as _lt_linear
     from jittor.backends.cuda.kernels.nn import layer_norm_cuda as _layer_norm_cuda
     from jittor.nn.modules.normalization import LayerNorm as _NativeLayerNorm
+    from jittor.nn.modules.activation import _FunctionModule as _NativeFunctionModule
+    from jittor.nn.functional import activation as _activation
+    from jittor._core import arg_policy as _arg_policy
     # What `_dispatch_module_call` consults, so the native call can run it:
     # see `module_call_bind` in src/bindings/pyjt/py_module_call.h.
     _dispatch_parts = {
@@ -1199,6 +1202,11 @@ def _install_module_methods(nn, registry=None):
         "rms_norm_inference": _rms_norm_cuda.__wrapped__,
         "rms_norm_source": _rms_norm_source,
         "dropout_execute": _NativeDropout.execute,
+        "function_module_execute": _NativeFunctionModule.execute,
+        "nn_namespace": jt.nn,
+        "relu_function": _activation.relu,
+        "residual_offers": _activation._RESIDUAL_OFFERS,
+        "arg_policy_warned": _arg_policy._warned,
         "conv_execute": _NativeConv.execute,
         "conv_cudnn_kernel": getattr(_cudnn_backend._try_cudnn_conv2d, "__wrapped__", None),
         "cudnn_backend": _cudnn_backend,

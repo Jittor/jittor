@@ -4,7 +4,7 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import os
 
 import jittor as jt
-from jittor._runtime.dispatch import optional_kernel, register_kernel
+from jittor._runtime.dispatch import native_rule, optional_kernel, register_kernel
 from jittor._runtime.backend_libraries import get_library_ops
 from jittor._runtime.core_api import _output_requires_grad
 from jittor.nn.functional._amp import bias_for_compute_dtype
@@ -129,6 +129,7 @@ def _training_channels_last(x, weight, bias, groups):
             and not jt.flags.no_grad and _output_requires_grad(x, weight, bias))
 
 
+@native_rule("same_float:cudnn_conv")
 def _supports_conv2d(x, weight, bias, stride, padding, dilation, groups,
                      *, _depthwise_fast_path=True):
     return x.dtype == weight.dtype and get_library_ops("cudnn") is not None

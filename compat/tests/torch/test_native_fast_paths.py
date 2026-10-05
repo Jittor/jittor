@@ -320,6 +320,34 @@ class TestNativeModuleDispatch(unittest.TestCase):
         with torch.no_grad():
             self.assertIs(none(x), x)
 
+    def test_a_relu(self):
+        # Built natively as `jittor.nn.relu` builds it -- one `unary` relu --
+        # without reaching Python, once `inplace=True` has had its warning.
+        from jittor.nn.functional import activation
+        x = torch.randn(4, 8, device=_cuda())
+        for inplace in (False, True):
+            outer = torch.nn.Sequential(torch.nn.ReLU(inplace=inplace))
+            outer(x)
+            with _refusing(activation, "_fused_activation"):
+                got = outer(x)
+            np.testing.assert_array_equal(got.numpy(), np.maximum(x.numpy(), 0))
+        # What it hands back to Python: a replaced `jittor.nn.relu` ...
+        outer = torch.nn.Sequential(torch.nn.ReLU())
+        original = jt.nn.relu
+        jt.nn.relu = lambda value, inplace=False: value * 0 + 7
+        try:
+            np.testing.assert_array_equal(outer(x).numpy(), np.full((4, 8), 7.0))
+        finally:
+            jt.nn.relu = original
+        # ... an input whose producer offered to apply the activation itself ...
+        y = x + 0
+        activation.offer_activation(y, lambda act: ("fused", act))
+        self.assertEqual(outer(y), ("fused", "relu"))
+        # ... and a gradient still flows.
+        z = torch.randn(4, 8, device=_cuda(), requires_grad=True)
+        outer(z).sum().backward()
+        np.testing.assert_array_equal(z.grad.numpy(), (z.numpy() > 0).astype("float32"))
+
     def test_a_standard_rms_norm(self):
         class ToyRMSNorm(torch.nn.Module):
             def __init__(self, size, eps=1e-6):
@@ -496,6 +524,33 @@ class TestNativeRules(unittest.TestCase):
                 python = layer_norm_cuda._supports_layer_norm_inference(x, shape, weight, bias, 1e-5)
                 chosen = select_kernel("nn.layer_norm.inference", x, shape, weight, bias, 1e-5)
                 self.assertIs(chosen, impl if python else None)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "the conv2d kernels compared are CUDA's")
+    def test_the_conv2d_kernels_are_chosen_natively_as_before(self):
+        # The depthwise kernel, then cuDNN, as their Python predicates answer.
+        from jittor._runtime.dispatch import select_kernel
+        from jittor.nn.backends import cudnn
+        from jittor.nn.modules import depthwise
+        cudnn_kernel = getattr(cudnn._try_cudnn_conv2d, "__wrapped__", cudnn._try_cudnn_conv2d)
+        x = torch.randn(1, 8, 9, 9, device="cuda")
+        dense = torch.randn(8, 8, 3, 3, device="cuda")
+        per_channel = torch.randn(8, 1, 3, 3, device="cuda")
+        cases = [(x, dense, 1, {}), (x, per_channel, 8, {}), (x.half(), per_channel.half(), 8, {}),
+                 (x, per_channel, 8, {"_depthwise_fast_path": False}), (x, dense.half(), 1, {}),
+                 (x.half(), dense.half(), 1, {"_depthwise_fast_path": True})]
+        for a, w, groups, kwargs in cases:
+            args = (a, w, None, (1, 1), (1, 1), (1, 1), groups)
+            if depthwise._supports_depthwise_conv2d(*args, **kwargs):
+                want = depthwise._depthwise_conv2d
+            elif cudnn._supports_conv2d(*args, **kwargs):
+                want = cudnn_kernel
+            else:
+                want = None
+            got = select_kernel("conv2d", *args, **kwargs)
+            if want is None:
+                self.assertNotIn(got, (depthwise._depthwise_conv2d, cudnn_kernel))
+            else:
+                self.assertIs(got, want, (a.dtype, w.dtype, groups, kwargs))
 
     def test_the_matmul_relay_is_chosen_natively_as_before(self):
         from jittor._runtime.dispatch import select_kernel

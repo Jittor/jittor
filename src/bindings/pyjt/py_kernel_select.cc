@@ -16,7 +16,7 @@ namespace {
 
 // A native stand-in for a `supports` predicate; see kernel_select_native_rule.
 struct NativeRule {
-    enum Kind { none, same_float, rms_inference, rms_training, ln_inference } kind = none;
+    enum Kind { none, same_float, rms_inference, rms_training, ln_inference, depthwise_conv2d } kind = none;
     string op;
 };
 enum Verdict { declines = 0, accepts = 1, unknown = 2 };
@@ -125,10 +125,42 @@ bool requires_grad(Var* v) {
 }
 
 // `rule` for `supports(*args, **kwargs)`, or `unknown` when Python must say.
+// `conv2d`'s one keyword argument: whether the depthwise kernel may take the
+// call (`select_kernel("conv2d", ..., _depthwise_fast_path=...)`). 1 or 0, or
+// -1 for any other keyword argument.
+int depthwise_fast_path(PyObject* kwargs) {
+    if (!kwargs || kwargs == Py_None || !PyDict_GET_SIZE(kwargs)) return 1;
+    PyObject* flag = PyDict_GetItemString(kwargs, "_depthwise_fast_path");
+    if (!flag || PyDict_GET_SIZE(kwargs) != 1) return -1;
+    int on = PyObject_IsTrue(flag);
+    if (on < 0) { PyErr_Clear(); return -1; }
+    return on;
+}
+
 Verdict evaluate(const NativeRule& rule, PyObject* args, PyObject* kwargs) {
-    if (!PyTuple_Check(args) || (kwargs && kwargs != Py_None && PyDict_GET_SIZE(kwargs)))
-        return unknown;
+    if (!PyTuple_Check(args)) return unknown;
     Py_ssize_t n = PyTuple_GET_SIZE(args);
+    // The conv2d predicates take `(x, weight, bias, stride, padding, dilation,
+    // groups, *, _depthwise_fast_path)`; nothing else here takes a keyword.
+    bool conv2d_call = n == 7 && depthwise_fast_path(kwargs) >= 0;
+    if (kwargs && kwargs != Py_None && PyDict_GET_SIZE(kwargs) && !conv2d_call)
+        return unknown;
+    if (rule.kind == NativeRule::depthwise_conv2d) {
+        // `_supports_depthwise_conv2d`: groups == weight.shape[0] ==
+        // x.shape[1], one dtype, and the caller allowing it.
+        if (!conv2d_call || !is_var(PyTuple_GET_ITEM(args, 0)) || !is_var(PyTuple_GET_ITEM(args, 1)))
+            return unknown;
+        PyObject* groups = PyTuple_GET_ITEM(args, 6);
+        if (!PyLong_CheckExact(groups)) return unknown;
+        if (!depthwise_fast_path(kwargs)) return declines;
+        Var* x = GET_RAW_PTR(VarHolder, PyTuple_GET_ITEM(args, 0))->var;
+        Var* w = GET_RAW_PTR(VarHolder, PyTuple_GET_ITEM(args, 1))->var;
+        if (x->shape.size() < 2 || w->shape.size() < 1) return unknown;
+        int64 g = PyLong_AsLongLong(groups);
+        if (PyErr_Occurred()) { PyErr_Clear(); return unknown; }
+        return g == w->shape[0] && w->shape[0] == x->shape[1] && x->dtype() == w->dtype()
+            ? accepts : declines;
+    }
     if (rule.kind == NativeRule::same_float) {
         if (n < 2 || !is_var(PyTuple_GET_ITEM(args, 0)) || !is_var(PyTuple_GET_ITEM(args, 1)))
             return unknown;
@@ -205,6 +237,8 @@ void kernel_select_native_rule(PyObject* fn, const string& rule) {
         parsed.kind = NativeRule::rms_training;
     } else if (rule == "layer_norm_inference") {
         parsed.kind = NativeRule::ln_inference;
+    } else if (rule == "depthwise_conv2d") {
+        parsed.kind = NativeRule::depthwise_conv2d;
     } else {
         throw std::invalid_argument("unknown native kernel rule: " + rule);
     }
