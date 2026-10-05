@@ -527,7 +527,8 @@ class Module:
         # so accelerate's `is_buffer = name in module._buffers` was True for the
         # weights too. write-through: accelerate's `module._parameters[name] = value`
         # has to reach the attribute (see _WriteThroughDict).
-        return _WriteThroughDict(self, self._named_vars("parameters", recurse=False))
+        return _WriteThroughDict(
+            self, self._named_vars("parameters", recurse=False, remove_duplicate=False))
 
     def requires_grad_(self, requires_grad=True):
         ''' Sets requires_grad for all parameters and sub-modules.
@@ -646,10 +647,10 @@ class Module:
             # torch's forward_pre_hook convention:
             #   default:          hook(module, args) -> None | new_args
             #   with_kwargs=True: hook(module, args, kwargs) -> None | (new_args, new_kwargs)
-            # When the hook was registered with_kwargs it must ALWAYS get the kwargs
-            # arg (even if empty) -- ms-swift's VL pre_forward_hook has a 3-arg
-            # signature and injects inputs_embeds via the kwargs dict.
-            if info.get("with_kwargs") or len(kw):
+            # Torch's default pre-hook gets only (module, args), even when
+            # the forward has kwargs. The native register_pre_forward_hook
+            # keeps its older convention of receiving present kwargs.
+            if info.get("with_kwargs") or (info.get("native_kwargs") and len(kw)):
                 args_kw_result = func(self, args, kw)
             else:
                 args_kw_result = func(self, args)
@@ -757,7 +758,7 @@ class Module:
 
         Returns a removable handle, like ``register_forward_pre_hook``.
         '''
-        return self._add_hook("_forward_pre_hooks", func, with_kwargs=False)
+        return self._add_hook("_forward_pre_hooks", func, native_kwargs=True)
 
     def register_forward_pre_hook(self, func, *, prepend=False, with_kwargs=False):
         ''' torch-compatible alias of the pre-forward hook.
@@ -1129,7 +1130,8 @@ Returns a handle that removes both halves.
         # torch's ``_buffers``. write-through so accelerate's
         # `module._buffers[name] = value` (the is_buffer branch of
         # set_module_tensor_to_device) persists to the module attribute.
-        return _WriteThroughDict(self, self._named_vars("buffers", recurse=False))
+        return _WriteThroughDict(
+            self, self._named_vars("buffers", recurse=False, remove_duplicate=False))
 
     def named_buffers(self, recurse=True):
         ''' Returns a list of (name, buffer) for all registered buffers.
