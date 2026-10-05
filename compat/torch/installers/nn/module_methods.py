@@ -534,7 +534,7 @@ class _ParamList:
             try:
                 self._produce()
             except StopIteration:
-                pass
+                break  # the walk is done; `_produce` has dropped the source
         return self._items
 
     def __iter__(self):
