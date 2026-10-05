@@ -5,7 +5,6 @@ import weakref as _weakref
 import jittor as jt
 import numpy as np
 from .context import get_install_context
-from .types import _dtype_to_str
 from ..diagnostics import EXPECTED, swallowed
 from typing import Any, Dict, List
 from .. import fsdp_hooks as _fsdp_hooks
@@ -781,10 +780,7 @@ def adam_init(self, params, lr=1e-3, *args, **kwargs):
 
 
 def adamw_init(self, params, lr=1e-3, *args, **kwargs):
-    # torch's AdamW decays by 0.01 unless told otherwise; the native one by 0.
-    # Positionally the native order is (eps, betas, weight_decay).
-    if len(args) < 3:
-        kwargs.setdefault('weight_decay', 0.01)
+    if len(args) < 3: kwargs.setdefault('weight_decay', 0.01)  # torch's; native (eps, betas, wd): 0
     return _initialize_default(self, params, lr, args, kwargs, 'AdamW')
 
 
