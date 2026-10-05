@@ -94,7 +94,8 @@ class _TensorSnapshots:
                            for value, array in zip(self.tensors, arrays))
 
 
-def save(obj, f, *a, **k):
+def _snapshot_tensors(obj):
+    """Host values for codecs without changing source tensor residency."""
     snapshot = _TensorSnapshots()
     snapshot.collect(obj)
     if snapshot.tensors:
@@ -103,7 +104,11 @@ def save(obj, f, *a, **k):
     jt.sync_all(True)
     if len(snapshot.values) != len(snapshot.tensors):
         raise RuntimeError("checkpoint tensor fetch did not complete")
-    portable = _to_portable(obj, snapshot.values)
+    return snapshot.values
+
+
+def save(obj, f, *a, **k):
+    portable = _to_portable(obj, _snapshot_tensors(obj))
     if hasattr(f, "write"):
         _pickle.dump(portable, f)
         return
