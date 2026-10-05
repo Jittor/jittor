@@ -1350,6 +1350,9 @@ def install_parity(ctx):
     import jittor.linalg as linalg
     from ...namespace import native_module_facade
     linalg = native_module_facade(linalg, "torch.linalg")
+    # torch's solve takes `left=`/`out=`; the native one is the left solve.
+    from .linalg import solve
+    linalg.solve = solve
     registry.publish("torch.linalg", linalg)
     g.linalg = linalg
 
