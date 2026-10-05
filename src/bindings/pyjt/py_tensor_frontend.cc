@@ -112,6 +112,8 @@ void reset_tensor_placement_context(PyObject* token) {
         throw std::runtime_error("cannot reset tensor placement context");
 }
 
+TensorPlacement frontend_placement_request() { return selected_placement(); }
+
 PyObject* current_tensor_placement_request() {
     TensorPlacement placement = selected_placement();
     if (!placement.explicit_backend) Py_RETURN_NONE;

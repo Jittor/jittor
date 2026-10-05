@@ -2,6 +2,7 @@
 #include "bindings/pyjt/py_converter.h"
 #include "core/var_holder.h"
 #include "runtime/dispatch_context.h"
+#include "bindings/pyjt/py_tensor_frontend.h"
 #include "runtime/device.h"
 #include "ops/op_register.h"
 #include <cmath>
@@ -312,8 +313,23 @@ PyObject* kernel_select(PyObject* op, PyObject* args, PyObject* kwargs) {
     collect(args, tensors, 0);
     if (kwargs && kwargs != Py_None && PyDict_Check(kwargs)) collect(kwargs, tensors, 0);
     vector<Var*> vars(tensors.size());
-    for (size_t i = 0; i < tensors.size(); i++) vars[i] = tensors[i]->var;
+    bool placed = false;
+    for (size_t i = 0; i < tensors.size(); i++) {
+        vars[i] = tensors[i]->var;
+        placed = placed || vars[i]->placement.explicit_backend;
+    }
+    // With no placed input the answer is where the result is being built:
+    // the frontend's request, which this binding (it takes no Var) does not
+    // enter a scope for. Without it `torch.arange()` on torch's default CPU
+    // device picked the accelerator's kernel -- ACL's `index` code op -- and
+    // then ran on the host, which that op has no source for.
+    unique_ptr<TensorPlacementScope> requested;
+    if (!placed) {
+        TensorPlacement wanted = frontend_placement_request();
+        if (wanted.explicit_backend) requested.reset(new TensorPlacementScope(wanted));
+    }
     auto context = query_dispatch_context(vars);
+    requested.reset();
     string backend = context.backend == "acl_legacy" ? "acl" : context.backend;
     const char* op_name = PyUnicode_AsUTF8(op);
     if (!op_name) throw std::runtime_error("kernel operator must be a str");

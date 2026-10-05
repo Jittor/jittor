@@ -27,6 +27,12 @@ void reset_tensor_placement_context(PyObject* token);
 // @pyjt(_current_tensor_placement)
 PyObject* current_tensor_placement_request();
 
+// The same request for native code, not explicit when there is none. A
+// binding applies it only inside the frontend scope it enters, which only a
+// binding that takes or returns a Var does; one that takes neither (the
+// native kernel selector) reads it here.
+TensorPlacement frontend_placement_request();
+
 // A frontend type's policies -- its autograd bits and its float32 precision
 // tiers -- are read from Python once and kept until this is called. The
 // Python side calls it whenever one of them changes (the CUDA runtime state's
