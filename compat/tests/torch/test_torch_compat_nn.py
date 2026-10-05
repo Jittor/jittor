@@ -376,6 +376,24 @@ class TestNorms(Base):
 # ---------------------------------------------------------------------------- modules
 
 class TestModules(Base):
+    def test_init_fan_helpers_return_python_ints(self):
+        # torch's helpers take the tensor and answer Python ints; jittor.init's
+        # own spelling takes a shape, and handed a tensor it returned tensors.
+        def body(dev):
+            weight = torch.empty((4, 3, 3, 3), device=dev)
+            fan_in, fan_out = nn.init._calculate_fan_in_and_fan_out(weight)
+            self.assertEqual((fan_in, fan_out), (27, 36), f"fan counts {dev}")
+            self.assertIs(type(fan_in), int, dev)
+            self.assertIs(type(fan_out), int, dev)
+            for mode, expected in (("fan_in", 27), ("fan_out", 36)):
+                fan = nn.init._calculate_correct_fan(weight, mode)
+                self.assertEqual(fan, expected, f"{mode} {dev}")
+                self.assertIs(type(fan), int, dev)
+            self.assertEqual(
+                nn.init._calculate_fan_in_and_fan_out(torch.empty((5, 2), device=dev)),
+                (2, 5), dev)
+        both_devices(body)
+
     def test_init_constant_writes_through_view(self):
         def body(dev):
             parameter = nn.Parameter(torch.zeros((1, 3)))
