@@ -175,6 +175,66 @@ class OptimizedModule(jt.nn.Module):
         return getattr(orig, name)
 
 
+class QuantStub(jt.nn.Module):
+    """``torch.ao.quantization.QuantStub``: identity until a model is converted.
+
+    Eager models (and remote Transformers code) build these stubs whether or
+    not quantization is requested. Jittor ships no AO observers, fake-quant or
+    convert pass, so the stubs stay what torch's are before ``convert``: the
+    identity. Nothing here pretends to quantize.
+    """
+
+    def __init__(self, qconfig=None):
+        super().__init__()
+        self.qconfig = qconfig
+
+    def execute(self, x):
+        return x
+
+    def forward(self, x):
+        return self.execute(x)
+
+
+class DeQuantStub(QuantStub):
+    """``torch.ao.quantization.DeQuantStub``: identity until converted."""
+
+
+class FloatFunctional(jt.nn.Module):
+    """``torch.ao.nn.quantized.FloatFunctional``: float ops behind named methods.
+
+    Used in place of operators so a quantization pass can attach observers;
+    before any such pass the methods are the plain float operations.
+    """
+
+    def forward(self, x):
+        raise RuntimeError("FloatFunctional is not intended to use the 'forward'. "
+                           "Please use the underlying operation")
+
+    def execute(self, x):
+        return self.forward(x)
+
+    def add(self, x, y):
+        return x + y
+
+    def add_scalar(self, x, y):
+        return x + y
+
+    def mul(self, x, y):
+        return x * y
+
+    def mul_scalar(self, x, y):
+        return x * y
+
+    def cat(self, x, dim=0):
+        return jt.concat(list(x), dim=dim)
+
+    def add_relu(self, x, y):
+        return jt.nn.relu(x + y)
+
+    def matmul(self, x, y):
+        return jt.matmul(x, y)
+
+
 class OperatorExportTypes:
     ONNX = 0
     ONNX_ATEN = 1
@@ -400,6 +460,11 @@ def _api_jit_is_tracing():
 
 def _api_jit_interface(c):
     return c
+
+
+def _api_jit_attribute(value, type=None):
+    # TorchScript's attribute annotation; outside scripting it is the value.
+    return value
 
 
 def _api_fx_wrap(f=None, *a, **k):
@@ -659,6 +724,7 @@ def install(ctx):
     _jit.is_tracing = _api_jit_is_tracing
     _jit.ScriptModule = g.nn.Module
     _jit.interface = _api_jit_interface
+    _jit.Attribute = _api_jit_attribute
     try:
         from typing import Final as _Final
     except ImportError:  # Python 3.7
@@ -667,6 +733,24 @@ def install(ctx):
     _bind_missing(g, "jit", _jit)
     _bind_missing(g, "ScriptModule", _jit.ScriptModule)
     _modules.setdefault("torch.jit", _jit)
+    # torch.ao: the quantization stubs eager models construct unconditionally.
+    _adapt_module = ctx.state.get("nn_class_adapter", _identity)
+    _ao = _types2.ModuleType("torch.ao")
+    _ao.__path__ = []
+    _ao_quantization = _types2.ModuleType("torch.ao.quantization")
+    _ao_quantization.QuantStub = _adapt_module(QuantStub)
+    _ao_quantization.DeQuantStub = _adapt_module(DeQuantStub)
+    _ao_nn = _types2.ModuleType("torch.ao.nn")
+    _ao_nn.__path__ = []
+    _ao_quantized = _types2.ModuleType("torch.ao.nn.quantized")
+    _ao_quantized.FloatFunctional = _adapt_module(FloatFunctional)
+    _ao.quantization = _ao_quantization
+    _ao.nn = _ao_nn
+    _ao_nn.quantized = _ao_quantized
+    for _name, _module in (("torch.ao", _ao), ("torch.ao.quantization", _ao_quantization),
+                           ("torch.ao.nn", _ao_nn), ("torch.ao.nn.quantized", _ao_quantized)):
+        _modules.setdefault(_name, _module)
+    _bind_missing(g, "ao", _modules["torch.ao"])
     _fx = _types2.ModuleType("torch.fx")
     # A package, so its submodules can be imported and answered below.
     _fx.__path__ = []
