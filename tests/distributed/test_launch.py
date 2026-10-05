@@ -49,10 +49,14 @@ print("env=" + ",".join(os.environ.get(k, "-") for k in
 
 # The store env:// rendezvous a Torch-style `init_process_group()` performs:
 # with WORLD_SIZE > 1 it needs MASTER_ADDR/MASTER_PORT, and every rank must
-# reach rank 0's store.
+# reach rank 0's store. `store.py` is loaded straight off disk: importing
+# jittor in a rank would start NCCL, which needs a GPU per rank.
 _ENV_RENDEZVOUS = """
-from jittor.distributed.store import rendezvous
-store, rank, world = next(rendezvous("env://"))
+import importlib.util
+spec = importlib.util.spec_from_file_location("store", STORE_PATH)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+store, rank, world = next(module.rendezvous("env://"))
 store.set("rank%d" % rank, str(rank))
 store.wait(["rank%d" % r for r in range(world)])
 print("rendezvous %d/%d" % (rank, world), flush=True)
@@ -151,7 +155,9 @@ class TestLaunchFailurePropagation(unittest.TestCase):
         self.assertEqual(len(masters), 1, masters)
 
     def test_env_rendezvous_reaches_every_rank(self):
-        done, _ = _launch(2, _ENV_RENDEZVOUS, self.tmp.name, timeout=600)
+        store = _REPO_ROOT / "python" / "jittor" / "distributed" / "store.py"
+        done, _ = _launch(2, _ENV_RENDEZVOUS.replace("STORE_PATH", repr(os.fspath(store))),
+                          self.tmp.name, timeout=120)
         self.assertEqual(done.returncode, 0, done.stdout[-3000:])
         for rank in range(2):
             text = Path(self.tmp.name, "rank%d.log" % rank).read_text()
