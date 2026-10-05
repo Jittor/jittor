@@ -50,44 +50,16 @@ def kaiser_window(window_length, periodic=True, beta=12.0, *, dtype=None,
 
 
 def stft(input, n_fft, hop_length=None, win_length=None, window=None,
-         center=True, pad_mode="reflect", normalized=False, onesided=True,
-         return_complex=True, **kwargs):
-    """Compute a CPU NumPy short-time Fourier transform."""
-    from . import (
-        jt,
-        np,
+         center=True, pad_mode="reflect", normalized=False, onesided=None,
+         return_complex=None):
+    """Adapt Torch's STFT protocol to the shared native signal operation."""
+    from jittor.fft import stft as native_stft
+    if return_complex is None:
+        raise RuntimeError(
+            "stft requires the return_complex parameter for real inputs")
+    return native_stft(
+        input, n_fft, hop_length=hop_length, win_length=win_length,
+        window=window, center=center, pad_mode=pad_mode,
+        normalized=normalized, onesided=True if onesided is None else onesided,
+        return_complex=return_complex,
     )
-    from ...tensor_state import compatibility_owner
-    owner = compatibility_owner(jt)
-    samples = np.asarray(input.numpy() if hasattr(input, "numpy") else input)
-    n_fft = int(n_fft)
-    hop = int(hop_length) if hop_length else n_fft // 4
-    win_len = int(win_length) if win_length else n_fft
-    if window is None:
-        win = np.ones(win_len, np.float64)
-    else:
-        win = np.asarray(window.numpy() if hasattr(window, "numpy") else window).astype(np.float64)
-    if win.shape[0] < n_fft:
-        left = (n_fft - win.shape[0]) // 2
-        win = np.pad(win, (left, n_fft - win.shape[0] - left))
-    squeeze = samples.ndim == 1
-    if squeeze:
-        samples = samples[None, :]
-    if center:
-        samples = np.pad(samples, ((0, 0), (n_fft // 2, n_fft // 2)), mode=pad_mode)
-    batch, length = samples.shape
-    frames = 1 + (length - n_fft) // hop
-    transform = np.fft.rfft if onesided else np.fft.fft
-    spectra = []
-    for row in range(batch):
-        windowed = np.stack(
-            [samples[row, i * hop:i * hop + n_fft] * win for i in range(frames)],
-            axis=-1)
-        spectrum = transform(windowed, n=n_fft, axis=0)
-        if normalized:
-            spectrum = spectrum / np.sqrt(n_fft)
-        spectra.append(spectrum)
-    out = np.stack(spectra, axis=0)
-    if squeeze:
-        out = out[0]
-    return owner.from_numpy(np.ascontiguousarray(out.astype(np.complex64)))
