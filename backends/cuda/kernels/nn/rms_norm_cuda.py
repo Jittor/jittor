@@ -96,7 +96,11 @@ _RMS_NORM_SOURCE = r"""
         __syncthreads();
         for (int dim = tid; dim < %(hidden_size)d; dim += blockDim.x) {
             int index = row * %(hidden_size)d + dim;
-            y[index] = out0_type(static_cast<float>(x[index]) * inverse_rms
+            // As ATen and HF's RMSNorm: the normalized value is rounded to the
+            // output type before the weight multiplies it -- one bf16/fp16
+            // quantum of difference otherwise.
+            out0_type normalized = out0_type(static_cast<float>(x[index]) * inverse_rms);
+            y[index] = out0_type(static_cast<float>(normalized)
                                  * static_cast<float>(gamma[dim]));
         }
     }
@@ -168,8 +172,9 @@ def _fused_add_rms_norm_cuda(x, residual, gamma, epsilon=1e-6):
         float sum = 0.0f;
         for (int dim = tid; dim < %(hidden_size)d; dim += blockDim.x) {
             int index = row * %(hidden_size)d + dim;
-            float value = static_cast<float>(x[index])
-                        + static_cast<float>(residual[index]);
+            // The residual sum in the input's type, as `x + residual` is.
+            float value = static_cast<float>(out1_type(static_cast<float>(x[index])
+                                                       + static_cast<float>(residual[index])));
             sum += value * value;
         }
         sum = warp_sum(sum);
@@ -184,10 +189,11 @@ def _fused_add_rms_norm_cuda(x, residual, gamma, epsilon=1e-6):
         __syncthreads();
         for (int dim = tid; dim < %(hidden_size)d; dim += blockDim.x) {
             int index = row * %(hidden_size)d + dim;
-            float value = static_cast<float>(x[index])
-                        + static_cast<float>(residual[index]);
+            float value = static_cast<float>(out1_type(static_cast<float>(x[index])
+                                                       + static_cast<float>(residual[index])));
             residual_out[index] = out1_type(value);
-            y[index] = out0_type(value * inverse_rms
+            out0_type normalized = out0_type(value * inverse_rms);
+            y[index] = out0_type(static_cast<float>(normalized)
                                  * static_cast<float>(gamma[dim]));
         }
     }

@@ -59,7 +59,9 @@ def _warp_kernels(hidden, eps, backward):
         #pragma unroll
         for (int i = 0; i < {per}; i++) {{
             int j = lane + i * 32;
-            if (j < {hidden}) yr[j] = out0_type(cache[i] * r * static_cast<float>(gamma[j]));
+            // Rounded before the weight, as the inference kernel and ATen do.
+            if (j < {hidden}) yr[j] = out0_type(static_cast<float>(out0_type(cache[i] * r))
+                                                * static_cast<float>(gamma[j]));
         }}
     }}
     """
@@ -186,7 +188,7 @@ def _rms_norm_training_cuda_cls(hidden_size, epsilon):
                     for (int j = threadIdx.x; j < {hidden_size}; j += blockDim.x) {{
                         int index = base + j;
                         y[index] = out0_type(
-                            static_cast<float>(x[index]) * row_rstd
+                            static_cast<float>(out0_type(static_cast<float>(x[index]) * row_rstd))
                             * static_cast<float>(gamma[j]));
                     }}
                 }}

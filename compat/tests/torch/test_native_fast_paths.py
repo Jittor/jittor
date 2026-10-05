@@ -296,6 +296,21 @@ class _ConvNormSilu(torch.nn.Module):
         return n(c), self.silu(n(c)), torch.nn.functional.silu(n(c))
 
 
+class _ToyRMSNorm(torch.nn.Module):
+    # Transformers' LlamaRMSNorm, by name and body.
+    def __init__(self, size, eps=1e-6):
+        super().__init__()
+        self.weight = torch.nn.Parameter(torch.ones(size))
+        self.variance_epsilon = eps
+
+    def forward(self, hidden):
+        dtype = hidden.dtype
+        hidden = hidden.to(torch.float32)
+        variance = hidden.pow(2).mean(-1, keepdim=True)
+        hidden = hidden * torch.rsqrt(variance + self.variance_epsilon)
+        return self.weight * hidden.to(dtype)
+
+
 class TestNativeModuleDispatch(unittest.TestCase):
     """What `_dispatch_module_call` does, taken natively inside a module."""
 
@@ -435,6 +450,32 @@ class TestNativeModuleDispatch(unittest.TestCase):
         train = torch.nn.GroupNorm(32, 64).cuda()
         torch.nn.Sequential(train, torch.nn.SiLU())(z).sum().backward()
         self.assertEqual(tuple(z.grad.shape), (2, 64, 16, 16))
+
+    @unittest.skipUnless(torch.cuda.is_available(), "the RMSNorm kernel is CUDA's")
+    def test_a_bfloat16_rms_norm_rounds_as_torch_does(self):
+        # The normalized value is rounded to bfloat16 before the weight
+        # multiplies it, as ATen and HF's `LlamaRMSNorm` do; rounding once at
+        # the end differed by one bfloat16 quantum in a quarter of the outputs.
+        def bf16(a):
+            bits = np.asarray(a, np.float32).copy().view(np.uint32)
+            bits += 0x7FFF + ((bits >> 16) & 1)
+            bits &= 0xFFFF0000
+            return bits.view(np.float32)
+
+        rng = np.random.RandomState(0)
+        x = bf16(rng.randn(64, 256) * 3)
+        w = bf16(rng.randn(256) * 0.5 + 1)
+        norm = _ToyRMSNorm(256).cuda().to(torch.bfloat16)
+        with torch.no_grad():
+            norm.weight.copy_(torch.tensor(w).to(torch.bfloat16))
+        outer = torch.nn.Sequential(norm)
+        x64 = x.astype(np.float64)
+        want = bf16(bf16(x64 / np.sqrt((x64 * x64).mean(-1, keepdims=True) + 1e-6)) * w)
+        xt = torch.tensor(x, device="cuda").to(torch.bfloat16)
+        with torch.no_grad():
+            np.testing.assert_array_equal(outer(xt).float().numpy(), want)
+        np.testing.assert_array_equal(
+            outer(xt.clone().requires_grad_(True)).float().detach().numpy(), want)
 
     def test_a_standard_rms_norm(self):
         class ToyRMSNorm(torch.nn.Module):
