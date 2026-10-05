@@ -12,7 +12,7 @@ from builtins import bool as ori_bool, float as ori_float, int as ori_int
 import numpy as np
 import jittor_core as core
 from jittor_core import NanoString, NanoVector, Var, ops
-from jittor_core import _fast_transpose, _fast_unsqueeze
+from jittor_core import _fast_permute, _fast_transpose, _fast_unsqueeze
 from .flags import flag_scope, flags as _runtime_flags
 from .._runtime.acl_clamp import dispatch_acl_clamp
 from .._runtime.backend_libraries import get_library as _get_library
@@ -743,9 +743,15 @@ def _with_accelerator_kernel_loaded(func):
         # Two axes, once cuTT has been asked for: the native transpose
         # (`_fast_transpose` in src/bindings/pyjt/py_compat_fast.h) builds
         # what `transpose` below does, without its frames.
-        if (_accelerator_transpose_tried and len(dim) == 2
-                and type(dim[0]) is _pyint and type(dim[1]) is _pyint):
-            out = _fast_transpose(x, dim[0], dim[1])
+        if _accelerator_transpose_tried:
+            if len(dim) == 2 and type(dim[0]) is _pyint and type(dim[1]) is _pyint:
+                out = _fast_transpose(x, dim[0], dim[1])
+            elif len(dim) > 2:
+                out = _fast_permute(x, dim)
+            elif len(dim) == 1 and type(dim[0]) in (tuple, list):
+                out = _fast_permute(x, dim[0])
+            else:
+                out = None
             if out is not None:
                 return out
         _load_accelerator_transpose()

@@ -476,17 +476,11 @@ PyObject* fast_unsqueeze(PyObject* self, int64 dim) {
     return storage_view(self, target);
 }
 
-PyObject* fast_transpose(PyObject* self, int64 dim0, int64 dim1) {
-    if (!is_var(self)) return none();
-    auto* holder = GET_RAW_PTR(VarHolder, self);
+namespace {
+// `jittor.transpose(self, axes)` for a valid permutation.
+PyObject* transpose_by(PyObject* self, VarHolder* holder, NanoVector axes) {
     int ndim = holder->var->shape.size();
-    if (ndim == 0) return none();
-    if (dim0 < 0) dim0 += ndim;
-    if (dim1 < 0) dim1 += ndim;
-    if (dim0 < 0 || dim0 >= ndim || dim1 < 0 || dim1 >= ndim) return none();
     if (kernel_op_registered("tensor.transpose")) return none();
-    NanoVector axes;
-    for (int i = 0; i < ndim; i++) axes.push_back(i == dim0 ? dim1 : i == dim1 ? dim0 : i);
     PyTensorFrontendScope scope(self, nullptr, 0, false);
     // A transpose of a transpose is one transpose of the source, and none at
     // all when the two cancel; see `jittor.transpose`.
@@ -513,6 +507,38 @@ PyObject* fast_transpose(PyObject* self, int64 dim0, int64 dim1) {
     unique_ptr<VarHolder> out(new VarHolder(make_transpose(base->var, axes)));
     out->set_transpose_view_of(base, axes);
     return to_py_object<VarHolder*>(out.release());
+}
+} // namespace
+
+PyObject* fast_transpose(PyObject* self, int64 dim0, int64 dim1) {
+    if (!is_var(self)) return none();
+    auto* holder = GET_RAW_PTR(VarHolder, self);
+    int ndim = holder->var->shape.size();
+    if (ndim == 0) return none();
+    if (dim0 < 0) dim0 += ndim;
+    if (dim1 < 0) dim1 += ndim;
+    if (dim0 < 0 || dim0 >= ndim || dim1 < 0 || dim1 >= ndim) return none();
+    NanoVector axes;
+    for (int i = 0; i < ndim; i++) axes.push_back(i == dim0 ? dim1 : i == dim1 ? dim0 : i);
+    return transpose_by(self, holder, axes);
+}
+
+PyObject* fast_permute(PyObject* self, PyObject* axes) {
+    if (!is_var(self) || !(PyTuple_Check(axes) || PyList_Check(axes))) return none();
+    auto* holder = GET_RAW_PTR(VarHolder, self);
+    int ndim = holder->var->shape.size();
+    if (ndim == 0 || PySequence_Fast_GET_SIZE(axes) != ndim) return none();
+    PyObject** items = PySequence_Fast_ITEMS(axes);
+    NanoVector order;
+    uint64 seen = 0;
+    for (int i = 0; i < ndim; i++) {
+        if (!PyLong_CheckExact(items[i])) return none();
+        long value = PyLong_AsLong(items[i]);
+        if (value < 0 || value >= ndim || (seen >> value & 1)) { PyErr_Clear(); return none(); }
+        seen |= uint64(1) << value;
+        order.push_back(value);
+    }
+    return transpose_by(self, holder, order);
 }
 
 } // namespace jittor

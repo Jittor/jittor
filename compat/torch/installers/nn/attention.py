@@ -332,10 +332,12 @@ def _route_key(query, key, value, attn_mask, dropout_p, is_causal, scale, enable
     token = loader.backend_cache_token()
     if token is None:
         return None
+    # Whether flash may take float32 as half precision, which decides a
+    # "dtype" miss as much as the dtypes do.
     return (tuple(query.shape), tuple(key.shape), tuple(value.shape),
             str(query.dtype), str(key.dtype), str(value.dtype), mask, bool(is_causal),
             None if scale is None else float(scale), jt.flags.device_id,
-            _dispatch_state[0].generation, token)
+            _dispatch_state[0].generation, token, _sdpa_flash_float32_cast_target())
 
 
 _flash_loader = [None]
@@ -382,10 +384,13 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None,
         enable_gqa=enable_gqa,
     )
     # Remember the walk only where it ended in a fused kernel and flash had
-    # declined for a reason the key holds: a mask, or nothing to load.
+    # declined for a reason the key holds: a mask, nothing to load, a dtype
+    # it does not take (float32, with no cast asked for: BERT-base in its
+    # bench precision walked all of it 12 times a step) or a head size it
+    # has no kernel for.
     kernel = _NATIVE_LAST_FUSED[0]
-    if route_key is not None and kernel is not None and miss in ("mask", "no_backend") \
-            and len(_ROUTES) < 256:
+    if route_key is not None and kernel is not None \
+            and miss in ("mask", "no_backend", "dtype", "head_dim") and len(_ROUTES) < 256:
         _ROUTES[route_key] = (miss, kernel)
     return out
 

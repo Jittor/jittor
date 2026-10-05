@@ -79,4 +79,10 @@ PyObject* fast_unsqueeze(PyObject* self, int64 dim);
 // @pyjt(_fast_transpose)
 PyObject* fast_transpose(PyObject* self, int64 dim0, int64 dim1);
 
+// `tensor.permute(axes)` / `transpose(*axes)` for a permutation of exact,
+// in-range, distinct non-negative ints, built as `_fast_transpose` builds it.
+// None for anything else, and `jittor.transpose` reports it.
+// @pyjt(_fast_permute)
+PyObject* fast_permute(PyObject* self, PyObject* axes);
+
 } // namespace jittor

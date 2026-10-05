@@ -241,6 +241,31 @@ class TestFastViews(unittest.TestCase):
         composed = a.transpose(0, 1).transpose(1, 2)
         np.testing.assert_array_equal(composed.numpy(), n.transpose(1, 2, 0))
 
+    def test_permutes(self):
+        # Built natively for a permutation of non-negative ints, as the
+        # transposes above; anything else is `jittor.transpose`'s to report.
+        a = torch.randn(2, 3, 4, 5, device=_cuda())
+        n = a.numpy()
+        heads = a.permute(0, 2, 1, 3)
+        np.testing.assert_array_equal(heads.numpy(), n.transpose(0, 2, 1, 3))
+        np.testing.assert_array_equal(a.permute((3, 0, 2, 1)).numpy(), n.transpose(3, 0, 2, 1))
+        np.testing.assert_array_equal(a.permute([1, 0, 3, 2]).numpy(), n.transpose(1, 0, 3, 2))
+        # Composed with the transpose it is a view of, and no transpose at
+        # all when the two cancel.
+        back = heads.permute(0, 2, 1, 3)
+        self.assertNotEqual(back._producer_op(), "transpose")
+        np.testing.assert_array_equal(back.numpy(), n)
+        np.testing.assert_array_equal(heads.permute(1, 0, 3, 2).numpy(),
+                                      n.transpose(2, 0, 3, 1))
+        np.testing.assert_array_equal(a.permute(0, -2, 1, -1).numpy(), n.transpose(0, 2, 1, 3))
+        with self.assertRaisesRegex(RuntimeError, "twice"):
+            a.permute(0, 0, 1, 2)
+        with self.assertRaises(RuntimeError):
+            a.permute(0, 1, 2)
+        z = torch.zeros(2, 3, 4)
+        z.permute(2, 0, 1)[1, 0, 2] = 6.0
+        self.assertEqual(float(z[0, 2, 1]), 6.0)
+
     def test_views_write_through(self):
         z = torch.zeros(2, 3)
         z.view(6)[1] = 5.0
@@ -501,6 +526,33 @@ class TestSdpaRoutes(unittest.TestCase):
         self.assertEqual(len(attention._ROUTES), 0)
         self.assertEqual(tuple(qg.grad.shape), (1, 4, 16, 32))
         native.LAST_FUSED_KERNEL[0] = None
+
+    @unittest.skipUnless(torch.cuda.is_available(), "the routes remembered are CUDA kernels")
+    def test_a_float32_call_flash_declines_is_remembered_with_its_cast_switch(self):
+        # Flash takes no float32 unless asked to cast it, which is part of
+        # what the route is remembered under.
+        import os
+        from jittor.compat.torch.installers.nn import attention
+        sdpa = torch.nn.functional.scaled_dot_product_attention
+        q, k, v = (torch.randn(1, 2, 8, 32, device="cuda") for _ in range(3))
+        attention._ROUTES.clear()
+        saved = os.environ.pop("JITTOR_FLASH_ATTN_CAST_FLOAT32", None)
+        try:
+            with torch.no_grad():
+                first = sdpa(q, k, v).numpy()
+                if attention._LAST_MISS[0] != "dtype":
+                    self.skipTest("flash declined float32 for %s" % attention._LAST_MISS[0])
+                self.assertEqual(len(attention._ROUTES), 1)
+                np.testing.assert_array_equal(sdpa(q, k, v).numpy(), first)
+                os.environ["JITTOR_FLASH_ATTN_CAST_FLOAT32"] = "1"
+                cast = sdpa(q, k, v).numpy()
+            self.assertNotEqual(attention._LAST_MISS[0], "dtype")
+            np.testing.assert_allclose(cast, first, rtol=2e-2, atol=2e-2)
+        finally:
+            os.environ.pop("JITTOR_FLASH_ATTN_CAST_FLOAT32", None)
+            if saved is not None:
+                os.environ["JITTOR_FLASH_ATTN_CAST_FLOAT32"] = saved
+            attention._ROUTES.clear()
 
 
 class TestNativeRules(unittest.TestCase):
