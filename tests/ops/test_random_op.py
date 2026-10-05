@@ -172,6 +172,30 @@ class TestRandomOp(unittest.TestCase):
     def test_linspace_endpoint_is_exact_cuda(self):
         self._check_linspace_endpoint()
 
+    def _check_arange_float_arguments(self):
+        # Any float bound or step makes a floating range, as in numpy; with
+        # only `end` fractional the integer index arithmetic used to win.
+        for args, ref in (((1.5,), np.arange(1.5)), ((0.5, 3), np.arange(0.5, 3)),
+                          ((0, 1, 0.25), np.arange(0, 1, 0.25)),
+                          ((np.float32(2.0),), np.arange(2.0)),
+                          ((jt.array(3.0),), np.arange(3.0))):
+            with self.subTest(args=args):
+                got = jt.arange(*args)
+                self.assertEqual(str(got.dtype), "float32")
+                np.testing.assert_allclose(got.numpy(), ref, rtol=0, atol=1e-7)
+        exact = jt.arange(0, 1, 0.1, dtype="float64")
+        self.assertEqual(str(exact.dtype), "float64")
+        self.assertEqual(exact.numpy()[3], 3 * 0.1)
+        self.assertEqual(str(jt.arange(5).dtype), "int32")
+
+    def test_arange_float_arguments(self):
+        self._check_arange_float_arguments()
+
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
+    @jt.flag_scope(use_cuda=1)
+    def test_arange_float_arguments_cuda(self):
+        self._check_arange_float_arguments()
+
     def test_a_descending_linspace_does_not_undershoot_its_end(self):
         """A schedule that ends below zero breaks its consumers.
 

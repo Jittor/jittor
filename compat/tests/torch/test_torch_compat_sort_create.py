@@ -180,6 +180,37 @@ class TestCreation(Base):
                     atol=1e-6, msg=f"linspace {dev}")
         both_devices(body)
 
+    def test_arange_float_arguments_make_a_float_range(self):
+        # Any float bound or step makes a floating range. `arange(1.5)` used to
+        # be an int32 range, and a 0-D float tensor step went through shape
+        # conversion and was truncated to 0 (ZeroDivisionError).
+        def body(dev):
+            cases = (
+                (torch.arange(1.5, device=dev), np.arange(1.5)),
+                (torch.arange(0.5, 3, device=dev), np.arange(0.5, 3)),
+                (torch.arange(0, 1, 0.25, device=dev), np.arange(0, 1, 0.25)),
+                (torch.arange(0, 4.5, np.float32(1.5), device=dev), np.arange(0, 4.5, 1.5)),
+                (torch.arange(torch.tensor(0.0, device=dev), torch.tensor(3.0, device=dev),
+                              device=dev), np.arange(3.0)),
+                (torch.arange(0, 1 - 1e-6, 1 / torch.tensor(32.0, device=dev), device=dev),
+                 np.arange(32) / 32),
+            )
+            for got, ref in cases:
+                self.assertEqual(got.dtype, torch.float32, f"arange {ref[:3]} dtype {dev}")
+                self.assertEqual(got.device.type, dev, f"arange device {dev}")
+                self.ac(got.numpy(), ref, atol=1e-6, msg=f"arange {ref[:3]} {dev}")
+            exact = torch.arange(0, 1, 0.1, dtype=torch.float64, device=dev)
+            self.assertEqual(exact.dtype, torch.float64, dev)
+            self.assertEqual(exact.numpy()[3], 3 * 0.1, f"float64 arange {dev}")
+            half = torch.arange(0, 1, 0.25, dtype=torch.float16, device=dev)
+            self.assertEqual(half.dtype, torch.float16, dev)
+            self.ac(half.float().numpy(), [0, 0.25, 0.5, 0.75], msg=f"half arange {dev}")
+            # Integer arguments, numpy scalars included, keep an integer range.
+            integer = torch.arange(np.int64(4), device=dev)
+            self.assertFalse(integer.is_floating_point(), dev)
+            self.ae(integer.numpy(), np.arange(4), msg=f"integer arange {dev}")
+        both_devices(body)
+
     def test_eye_diag_tri(self):
         def body(dev):
             self.ac(torch.eye(4).numpy(), np.eye(4), msg=f"eye {dev}")
