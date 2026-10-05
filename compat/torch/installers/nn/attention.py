@@ -334,9 +334,12 @@ def _route_key(query, key, value, attn_mask, dropout_p, is_causal, scale, enable
         return None
     # Whether flash may take float32 as half precision, which decides a
     # "dtype" miss as much as the dtypes do.
+    # Where the query lives, too: a route found for device tensors is a device
+    # kernel, and the same shapes on the host took it and failed.
     return (tuple(query.shape), tuple(key.shape), tuple(value.shape),
             str(query.dtype), str(key.dtype), str(value.dtype), mask, bool(is_causal),
             None if scale is None else float(scale), jt.flags.device_id,
+            int(query.placement_backend), int(query.device_id),
             _dispatch_state[0].generation, token, _sdpa_flash_float32_cast_target())
 
 

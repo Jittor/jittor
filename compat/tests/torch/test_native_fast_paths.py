@@ -632,6 +632,28 @@ class TestSdpaRoutes(unittest.TestCase):
         native.LAST_FUSED_KERNEL[0] = None
 
     @unittest.skipUnless(torch.cuda.is_available(), "the routes remembered are CUDA kernels")
+    def test_a_device_route_is_not_taken_by_host_tensors_of_the_same_shapes(self):
+        from jittor.compat.torch.installers.nn import attention
+        sdpa = torch.nn.functional.scaled_dot_product_attention
+        rng = np.random.RandomState(3)
+        q_np = rng.randn(2, 4, 16, 32).astype("float32")
+        mask_np = np.zeros((2, 1, 16, 16), "float32")
+        attention._ROUTES.clear()
+        outs = []
+        try:
+            with torch.no_grad():
+                for device in ("cuda", "cpu", "cuda"):
+                    q = torch.tensor(q_np, device=device)
+                    mask = torch.tensor(mask_np, device=device)
+                    out = sdpa(q, q, q, attn_mask=mask)
+                    self.assertEqual(out.device.type, device)
+                    outs.append(out.numpy())
+        finally:
+            attention._ROUTES.clear()
+        np.testing.assert_allclose(outs[1], outs[0], rtol=1e-4, atol=1e-5)
+        np.testing.assert_allclose(outs[2], outs[0], rtol=1e-4, atol=1e-5)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "the routes remembered are CUDA kernels")
     def test_a_float32_call_flash_declines_is_remembered_with_its_cast_switch(self):
         # Flash takes no float32 unless asked to cast it, which is part of
         # what the route is remembered under.
