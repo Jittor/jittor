@@ -163,6 +163,34 @@ class TestAsyncExecution(unittest.TestCase):
         want, _ = self._run(0)
         np.testing.assert_array_equal(got, want)
 
+    def _chain_peak(self, async_on, steps=60):
+        # Each product is 8 MiB and read once, by the next one: what a batch
+        # keeps of them is how promptly it lets go of what it has used last.
+        rng = np.random.RandomState(3)
+        x0 = jt.array(rng.randn(2048, 1024).astype("float32") / 32)
+        w = jt.array((np.eye(1024) + rng.randn(1024, 1024) / 64).astype("float32"))
+        jt.sync_all(True)
+        with jt.flag_scope(async_execution=async_on), jt.no_grad():
+            before = jt.core.async_exec_batches()
+            live = jt.core._device_memory_window_start(0)
+            x = x0
+            for _ in range(steps):
+                x = jt.matmul(jt.tanh(x), w)
+            got = x.numpy()
+            peak = jt.core._device_memory_window_peak(0) - live
+            return got, peak, jt.core.async_exec_batches() - before
+
+    def test_the_worker_lets_go_of_what_a_batch_has_used_as_it_goes(self):
+        # The worker applies the graph's bookkeeping behind its launches, and
+        # what that holds back is bounded by `async_release_lag_bytes`; a batch
+        # that kept everything it used until its end would hold ~23 products.
+        want, sync_peak, _ = self._chain_peak(0)
+        got, peak, ran = self._chain_peak(1)
+        self._need_worker(ran)
+        np.testing.assert_array_equal(got, want)
+        self.assertLessEqual(peak, sync_peak + jt.flags.async_release_lag_bytes + (8 << 20),
+                             (peak, sync_peak))
+
     def test_a_second_python_thread_may_build_meanwhile(self):
         # In a child: a second thread's bindings stand the worker down for the
         # rest of the process, which would leave the other cases nothing to

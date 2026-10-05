@@ -173,8 +173,8 @@ void worker_main() {
         }
         std::exception_ptr error;
         {
-            // The whole batch, its state's release included, under the graph
-            // lock; the runner lets go of it around each launch.
+            // The batch's setup and wind-down, its state's release included,
+            // under the graph lock; the runner lets go of it in between.
             std::lock_guard<GraphMutationMutex> graph(graph_mutation_mutex());
             try {
                 job();

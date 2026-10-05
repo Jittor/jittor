@@ -21,9 +21,11 @@ namespace jittor {
 //
 // The graph is shared, so the two take turns on `graph_mutation_mutex()`:
 //
-//   * the worker holds it for the whole batch except the launches themselves
-//     (`Op::execute_prepared`), which read only the operator and the memory
-//     the batch already holds;
+//   * the worker holds it to set the batch up and to wind it down; in
+//     between it loads each segment from the batch's own snapshot, allocates
+//     and launches without it, and queues the liveness the segments release
+//     and finish, applying the queue whenever the lock is free
+//     (`DeferredGraphWork` in exec_runner.cc);
 //   * while a batch is in flight, every Python binding (`GraphEntryScope`,
 //     entered by the generated pyjt wrappers) holds it for the duration of the
 //     call, so jittor's own code on the Python thread never interleaves with

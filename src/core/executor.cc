@@ -177,11 +177,12 @@ void Executor::submit_pending(Var* target, bool force) {
 void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, int ll, int rr, int64 tt) {
     fused_op.ops.clear();
     fused_op.edges.clear();
-    TraversalEpoch fused_epoch("load_fused_op");
+    // Membership through the segment's own index rather than a traversal
+    // mark: a mark writes every node's `tflag`, and on the async worker this
+    // runs while the Python thread builds the graph, outside the graph lock.
     for (int i=ll; i<rr; i++) {
         int opid = fuse_ops[i];
         Op* op = ops[opid];
-        fused_epoch.mark(op);
         fused_op.ops.push_back(op);
     }
     LOGvvv << "Prepare fused_op" << fused_op.ops;
@@ -197,7 +198,7 @@ void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, i
             int iop_id;
             int iv_id;
             pair<Op*, int> producer = fused_op.snapshot_producer(v);
-            if (producer.first && fused_epoch.marked(producer.first)) {
+            if (producer.first && fused_op.op_index.count(producer.first)) {
                 iop_id = fused_op.op_index.at(producer.first);
                 iv_id = producer.second;
             } else {
