@@ -97,6 +97,18 @@ python bench/torch_compat/run.py --workloads qwen3,sd15_sample --torch-python $R
 `--batch N` 把选中任务的 batch 在**两侧同时**改成 N——一侧装不下时用它拿到可比的数字，
 原规格的 OOM 本身仍是要报告的结果。
 
+**昇腾 NPU**：`--device npu`，参考侧是装了与 CANN 配套的 `torch_npu` 的 PyTorch 环境，
+两侧都先 `source` CANN 的 `set_env.sh`；`--gpu` 此时设置 `ASCEND_RT_VISIBLE_DEVICES`。
+参考侧的 matmul/conv 关掉 HF32，与 Jittor ACL 内核的 `cubeMathType` KEEP_DTYPE 同为完整
+float32；**mem** 列取 `npu-smi info` 进程表里本进程的占用（约每 250 ms 采样），口径同
+CUDA 上的 NVML。ACL 上有算子会回退到主机（例如 float64），需要时加 `--allow-fallback`，
+回退次数记在结果的 `fallbacks` 里。
+
+```bash
+source $CANN_SET_ENV
+python bench/torch_compat/run.py --device npu --gpu 0 --torch-python $NPU_REF/bin/python
+```
+
 每个（工作负载，运行时）都在**全新进程**里跑，显存和 JIT 状态不会串到下一次测量。结果写在
 `$JITTOR_LAB_ROOT/_state/bench-torch-compat/<时间戳>/`：`results.json`、`results.md` 和
 每次测量的完整日志 `logs/`。Jittor 编译缓存放在同一目录下的 `cache-<size>/`，**不与单元

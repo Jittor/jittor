@@ -3,7 +3,7 @@
 Launched by ``run.py``, once per (workload, runtime), in a fresh interpreter so
 neither memory nor JIT state carries from one measurement into the next.
 
-    python worker.py <workload> --runtime {torch,jittor} --device cuda
+    python worker.py <workload> --runtime {torch,jittor} --device {cuda,npu,cpu}
 
 The last stdout line is ``BENCH_RESULT <json>``. A failure still prints a
 result line, with ``status`` set and the exception attached, so one broken
@@ -14,7 +14,9 @@ import argparse
 import json
 import os
 import platform
+import shutil
 import statistics
+import subprocess
 import sys
 import time
 import traceback
@@ -26,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 MARKER = "BENCH_RESULT "
 
 
-def import_torch(runtime):
+def import_torch(runtime, device="cuda"):
     """Return ``torch`` for the requested runtime, and refuse the other one.
 
     The Jittor side is a plain ``import torch`` in an environment with
@@ -49,10 +51,14 @@ def import_torch(runtime):
 
     if not hasattr(torch, "_C") or hasattr(torch, "_torch_compat_install_context"):
         raise SystemExit("torch did not resolve to an independent PyTorch")
+    if device == "npu":
+        import torch_npu  # noqa: F401 -- registers the "npu" device and torch.npu
     return torch
 
 
-def configure(torch, device, tf32, cudnn_benchmark):
+def configure(torch, device, tf32, cudnn_benchmark, runtime="torch"):
+    if device == "npu":
+        return configure_npu(torch, runtime)
     if device != "cuda":
         return {}
     torch.backends.cuda.matmul.allow_tf32 = tf32
@@ -68,6 +74,26 @@ def configure(torch, device, tf32, cudnn_benchmark):
         "cudnn_benchmark": bool(torch.backends.cudnn.benchmark),
         "matmul_precision": get_precision() if callable(get_precision) else None,
     }
+
+
+def configure_npu(torch, runtime):
+    """Both runtimes at full float32 on the NPU's cube units.
+
+    Jittor's ACL kernels run float32 matmuls and convolutions with
+    ``cubeMathType`` KEEP_DTYPE; torch_npu allows HF32 for convolutions by
+    default (the NPU's TF32), which would time torch at a lower precision than
+    Jittor. ``--no-tf32`` has no other meaning here.
+    """
+    if runtime != "torch":
+        return {"npu_cube_math": "keep_dtype (jittor ACL default)"}
+    npu = torch.npu
+    settings = {}
+    for unit in ("matmul", "conv"):
+        owner = getattr(npu, unit, None)
+        if owner is not None and hasattr(owner, "allow_hf32"):
+            owner.allow_hf32 = False
+            settings["hf32_" + unit] = bool(owner.allow_hf32)
+    return settings
 
 
 class Synchronizer:
@@ -93,6 +119,8 @@ class Synchronizer:
             self.jt.sync_all(self.device != "cpu")
         elif self.device == "cuda":
             self.torch.cuda.synchronize()
+        elif self.device == "npu":
+            self.torch.npu.synchronize()
 
 
 class DeviceMemorySampler:
@@ -168,11 +196,65 @@ class DeviceMemorySampler:
         return used or None
 
 
+class NpuMemorySampler(DeviceMemorySampler):
+    """Peak NPU memory this process holds, from ``npu-smi info``'s process table.
+
+    The NPU counterpart of the NVML sampler: what the driver says the process
+    holds -- context, allocator pools and all -- read the same way for both
+    runtimes. ``npu-smi`` takes a few hundred milliseconds a call, so it is
+    sampled less often; a step's peak inside one interval is still caught by
+    the allocator, which does not hand memory back between steps.
+    """
+
+    def __init__(self, interval=0.25):
+        super().__init__(interval)
+
+    def start(self):
+        if shutil.which("npu-smi") is None:
+            return self
+        import threading
+
+        self._pid = os.getpid()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        return self
+
+    def _held(self):
+        try:
+            text = subprocess.run(["npu-smi", "info"], stdout=subprocess.PIPE,
+                                  stderr=subprocess.DEVNULL, text=True,
+                                  timeout=10).stdout
+        except (OSError, subprocess.SubprocessError):
+            return 0
+        used = 0
+        for line in text.splitlines():
+            # | NPU  Chip | Process id | Process name | Process memory(MB) |
+            cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+            if len(cells) < 4 or not cells[1].isdigit() or int(cells[1]) != self._pid:
+                continue
+            megabytes = cells[3].split()[0] if cells[3] else ""
+            if megabytes.isdigit():
+                used += int(megabytes) << 20
+        return used
+
+    def _sample(self):
+        used = self._held()
+        if used and (self.peak is None or used > self.peak):
+            self.peak = used
+
+    def current(self):
+        if self._thread is None:
+            return None
+        return self._held() or None
+
+
 def peak_memory(torch, runtime, device):
-    if device != "cuda":
+    if device not in ("cuda", "npu"):
         return None
     try:
-        value = int(torch.cuda.max_memory_allocated())
+        module = torch.npu if device == "npu" else torch.cuda
+        value = int(module.max_memory_allocated())
     except Exception:  # an unreported number is recorded as unknown
         return None
     return value or None
@@ -195,6 +277,8 @@ def versions(torch, runtime):
         report["cuda"] = getattr(torch.version, "cuda", None)
         cudnn = getattr(torch.backends, "cudnn", None)
         report["cudnn"] = cudnn.version() if cudnn is not None else None
+        if "torch_npu" in sys.modules:
+            report["torch_npu"] = getattr(sys.modules["torch_npu"], "__version__", None)
     return report
 
 
@@ -212,7 +296,8 @@ def is_device_oom(error, text):
         "cuda out of memory", "out of memory on the accelerator",
         "gpu memory is overflow",
         "cudaerrormemoryallocation",
-        "cuda_error_out_of_memory", "cublas_status_alloc_failed"))
+        "cuda_error_out_of_memory", "cublas_status_alloc_failed",
+        "npu out of memory", "out of memory. tried to allocate"))
 
 
 #: Warmup steps allowed beyond a workload's configured count while its step
@@ -293,10 +378,10 @@ def compile_report(torch, runtime, workload):
 
 
 def measure(options, stack, result, sampler=None):
-    torch = import_torch(options.runtime)
+    torch = import_torch(options.runtime, options.device)
     result["versions"] = versions(torch, options.runtime)
     result["settings"] = configure(torch, options.device, options.tf32,
-                                   options.cudnn_benchmark)
+                                   options.cudnn_benchmark, options.runtime)
     if options.runtime == "jittor":
         import jittor as jt
 
@@ -413,7 +498,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("workload")
     parser.add_argument("--runtime", choices=("torch", "jittor"), required=True)
-    parser.add_argument("--device", choices=("cuda", "cpu"), default="cuda")
+    parser.add_argument("--device", choices=("cuda", "npu", "cpu"), default="cuda")
     parser.add_argument("--dtype", default=None)
     parser.add_argument("--size", choices=("full", "tiny"), default="full")
     parser.add_argument("--warmup", type=int, default=None)
@@ -431,7 +516,8 @@ def main():
 
     result = {"workload": options.workload, "runtime": options.runtime,
               "device": options.device, "size": options.size}
-    sampler = DeviceMemorySampler().start() if options.device == "cuda" else None
+    sampler = {"cuda": DeviceMemorySampler, "npu": NpuMemorySampler}.get(options.device)
+    sampler = sampler().start() if sampler is not None else None
     try:
         with ExitStack() as stack:
             measure(options, stack, result, sampler)
