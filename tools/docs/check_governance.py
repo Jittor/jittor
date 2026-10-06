@@ -52,8 +52,6 @@ def _relative(path):
 
 
 def _is_excluded(relative):
-    if relative == "refactor-wip/results/README.md":
-        return False
     return any(relative.startswith(prefix) for prefix in EXCLUDED_PREFIXES)
 
 
