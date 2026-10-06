@@ -248,7 +248,13 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
     # the matrix to transform, and a 1x1 matrix holds a single element,
     # so shape conversion would collapse it into an integer dimension.
     _takes_shape = not (name.endswith("_like") or name in _TENSOR_ARGUMENT)
-    if args and _takes_shape:
+    if args and name == "arange":
+        # arange takes bounds and a step, not dimensions: a 0-D float tensor
+        # step (`1 / count`) must stay fractional, which `_shape_arg` would
+        # truncate to 0. Only numpy scalars need unwrapping; Vars are read by
+        # the native arange itself.
+        args = tuple(a.item() if isinstance(a, np.generic) else a for a in args)
+    elif args and _takes_shape:
         args = tuple(_shape_arg(a) for a in args)
     # Jittor factories reject Size/NanoVector tuple subclasses.
     if _takes_shape and args and (isinstance(args[0], jt.NanoVector) or

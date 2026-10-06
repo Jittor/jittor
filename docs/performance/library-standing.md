@@ -54,7 +54,7 @@
 
 | 库 / 用例 | 设备 | 比值 | 状态 | 证据 |
 |---|---|---|---|---|
-| ViT | CUDA | `1.33x` | **开口**，主导的 CUDA GEMM 落后于参考 | `2026-08-26-common-network-training-trajectories.md` |
+| ViT | CUDA | `1.33x` | **开口**，但归因已失效，见下 | `2026-08-26-common-network-training-trajectories.md` |
 | ConvNet | CUDA | `1.08x` | 已改善 | 同上 |
 | UNet | CUDA | `0.79x` | 已接受 | 同上 |
 | GPT-2（数学注意力） | CUDA | `1.13x` | 配置相关，见下 | `2026-08-23-ecosystem-parity-performance.md` |
@@ -74,6 +74,91 @@
 
 报告路径均相对 `refactor-wip/results/`。**整改收口后该目录整体删除**，届时仍需保留的
 行应把证据迁往 `docs/performance/` 或重测。
+
+### `fuse_op_limit` 已经在好的区间里（2026-09-22 实测，负面结果）
+
+视频 VAE 的 profile 是平的——最高的算子只占 `11.8%`，一次 decode 有 `499GB`
+访存而输出只有 `41MB`。这种形状的直觉是「融合得更狠一点，少几遍」，所以扫了
+`fuse_op_limit`（H3 video VAE `decode_base`，4 帧）：
+
+| `fuse_op_limit` | decode | 相对默认 |
+| --- | --- | --- |
+| `4` | `1.748s` | 慢 37% |
+| `8` | `1.236s` / `1.240s` | — |
+| `12` | `1.266s` | — |
+| `16`（默认） | `1.275s` | 基准 |
+| `32` | `1.369s` | 慢 7% |
+| `64` | `1.529s` | 慢 20% |
+| `0`（无上限） | `2.694s` | **慢 111%** |
+
+**方向和直觉相反：融合越宽越慢**，无上限直接翻倍。flag 自己的说明早写了原因——
+很宽的融合要把每个活跃中间量留在寄存器里。默认值 `16` 已经在曲线的好区间里，
+**「提高融合上限」这条路是死的**，记在这里免得后人重走。
+
+**`8` 看起来比 `16` 快 3%，但这台机器测不出 3%。** 串行 A/B/A/B 的四次里，
+`fuse=8` 两次是 `1.236`/`1.240`（差 0.3%），`fuse=16` 两次是 `1.275`/`2.402`
+——后者几乎翻倍。机器负载在测量期间漂移，**运行间方差可达 90%**，所以低于约
+10% 的差异在这里不可测量。上表里 `4`、`32`、`64`、`0` 那几档远在噪声之上，可信；
+`8` 与 `16` 之间的差不可信，没有据此改默认值。
+
+### 两条 2026-09-22 的加速测量
+
+**分组 `conv_transpose` 现在会问加速 kernel。** `conv_transpose` 的
+`groups == 1` 分支一直调 `select_kernel`，分组分支从来没调过，所以每个 depthwise
+转置卷积都走八维 `reindex * reindex -> reindex_reduce` 降级——而 cuDNN 适配器本身
+就接收 `groups` 并传给 `cudnn_conv_backward_x`。能力一直在，没人问。
+
+| 用例 | 设备 | 改前 | 改后 | 比值 |
+| --- | --- | --- | --- | --- |
+| H3 音频 VAE `decode` | CUDA | `2.962s` | `1.404s` | `0.47x` |
+
+那一个融合算子原先占整个 decode 的 `79.8%`，带宽 `344MB/s`。两条路径在
+depthwise、`groups < C`、padding、output_padding 和 dilation 下**逐位相同**
+（`rel = 0`），用例断言相等而非容差。
+
+**`transpose_storage_view` 的默认值维持关闭，因为两个方向的测量互相矛盾。**
+它让permutation 成为输入分配的视图而不是拷贝。哪边快取决于谁消费这个转置：
+
+| 负载 | 关 | 开 | 变化 |
+| --- | --- | --- | --- |
+| H3 视频 VAE `decode_base`（4 帧） | `1.581s` | `1.272s` | **快 24%** |
+| `1576x768 @ 768x3072`（转置操作数喂 cuBLAS） | `594us` | `702us` | **慢 18%** |
+| `4096³` | `9964us` | `10260us` | 慢 3% |
+| `8192³` | `76485us` | `77812us` | 慢 1.7% |
+
+转置喂逐元素/卷积链时视图省下一次拷贝；喂 cuBLAS 时 GEMM 要的是稠密操作数。
+视频 VAE 这一档的数值差（`0.00151`）**小于**同一档自己的运行间抖动
+（`0.00166`），所以不是精度换速度。**没有单一正确的默认值**，逐模型测。
+
+### ViT 行的归因已经过期（2026-09-22 实测）
+
+那一行写的是「主导的 CUDA GEMM 落后于参考」，依据是 `27.97ms` 对 `16.11ms` 的
+每步普通 GEMM，结论是「需要更强的 CUDA GEMM backend/algorithm」。**这条归因今天
+不成立。** 同一张卡、同一进程节奏、来回背靠背测的四个形状：
+
+| 形状 | Jittor | 独立 PyTorch | 比值 |
+| --- | --- | --- | --- |
+| `1576x768 @ 768x3072`（ViT 那个） | `593.0us` | `583.4us` | `1.02x` |
+| `1576x768 @ 768x768` | `230.2us` | `229.6us` | `1.00x` |
+| `4096³` | `9963us` | `12798us` | `0.78x` |
+| `8192³` | `76497us` | `78463us` | `0.97x` |
+
+两边都是 `float32_matmul_precision = highest`（两个框架的默认值都是它，所以差距
+也不是精度档）。**普通 GEMM 已经持平**——前两行的差在百分之二以内，而本文件另一节
+记下这台机器的运行间方差可达 90%，所以「持平」正是这两行能支持的全部措辞，不能
+读成任何一方更快。`4096³` 那行的 22% 高于噪声底线，但**只测了一次**，够不上
+「Jittor 更快」这个断言；它只说明这里没有一个能盖过噪声的反向差距。
+
+**没有一并重测的是端到端的 `1.33x` 本身**：它要 `nox -s ecosystem` 的口径，也就是
+环境里装有独立二进制 PyTorch，而做这次测量的环境没有，用例直接 skip。所以这里只
+推翻归因，不宣布比值。手搓一个 ViT 来代替那个口径是行不通的——本文件开头就写了
+为什么：那比的是两套实现。
+
+这一行也是「一次性行会静默变旧」的实例：数字放了一个月，它给出的方向（换 GEMM
+backend）今天会让人白做。
+
+**这台机器上的绝对吞吐不可引用**：一个 `gpu_occupy` 作业在全部八张卡上空转到
+100% 利用率，上表每个数字都被它压低。同机来回测出的比值不受影响，峰值百分比受。
 
 一条被记录过的反例值得留着：昇腾上直接用 CANN RoPE 可达 `0.988x`，**被拒绝**，
 因为它的 logits 与梯度轨迹与参考不同。**更快但不一致的路径不是性能成果。**
@@ -106,3 +191,158 @@ PyTorch 对照物**。JDet 不是 mmdetection，JSeg 不是 mmsegmentation，模
   不是"测完了"；
 - **拒绝掉的更快路径要记下来**（如上面的 CANN RoPE），否则后人会重新发现它、
   重新采纳它，再重新发现它不对。
+
+### 原生 SDPA 在 CUDA 上没有注册 kernel，长序列上差 2.72x（2026-09-22 实测）
+
+`python/jittor/nn/functional/attention.py` 会问
+`try_dispatch("nn.scaled_dot_product_attention", ...)`。CUDA 上没有任何东西注册
+在这个名字下——`backends/acl/kernels/install.py:53` 注册了它，**只给昇腾**——所以
+每一次原生调用都落到数学降级，物化一个 N×N 的分数矩阵。flash 路径存在，但住在
+`compat/torch/installers/nn/attention.py`，只有走 torch shim 才够得着。
+
+同一批 q/k/v，交错 A/B/A/B 取中位数，fp16，`hits=6 misses=0`（flash 每次都命中）：
+
+| 形状 | 原生（数学） | shim（flash） | 比值 |
+| --- | --- | --- | --- |
+| H3 video VAE 注意力 `2x32x1797x1797x64` | `0.0081s` | `0.0030s` | **`2.72x`** |
+| GPT-2 medium `4x16x1024x1024x64` | `0.0030s` | `0.0026s` | `1.14x` |
+| Llama prefill `1x32x2048x2048x128` | `0.0038s` | `0.0031s` | `1.23x` |
+
+**差距随序列长度增长**，和 O(N²) 显存对 O(N) 的预期一致。五次重复之间的离散度
+低于 1%，远在这台机器的噪声之上（占卡程序在跑，绝对值不可比，比值可比）。
+
+`no_grad` 和带梯度两档结果相同：只要反向 kernel 已经编出来，
+`attention.py:212` 的 training 能力检查就过得去，所以「带梯度会挡住 flash」这个
+担心是多余的。
+
+**这个口子已经补上。** `backends/cuda/kernels/nn/flash_attention_cuda.py`
+把桥注册到了这个名字下，`nn/functional/attention.py` 在第一次调用时延迟导入它
+（和 `softmax.py` 对 `softmax_cuda` 的做法同形）。原生入口本身的前后对比，两个
+独立进程各跑一档，避免进程内注销 kernel 扰动派发状态：
+
+| 形状 | 改前（数学） | 改后（flash） | 比值 |
+| --- | --- | --- | --- |
+| H3 video VAE `2x32x1797x1797x64` | `0.0081s` | `0.0029s` | **`2.79x`** |
+| GPT-2 medium | `0.0030s` | `0.0026s` | `1.15x` |
+| Llama prefill | `0.0037s` | `0.0030s` | `1.23x` |
+
+**同一批输入、同一进程内**比对两条路径：四个形状上
+`max|flash-math|` 都是 `0.000488`（即 `2**-11`，相对 `4.9e-4`），就是 flash 把
+softmax 累加换了顺序在 float16 下的舍入，不随形状变化。跨进程的 checksum 只能
+说明大和会集中，不是证据，所以没有用它下结论。
+
+**没装 flash 的人一个比特都不会变。** `load_backend_for` 找不到源码 checkout
+就没有 backend，kernel 返回 None，`try_dispatch` 原样传回，调用方走的还是那条
+数学路径。会被拒的情况都列在 kernel 的注释里：mask、dropout、非四维、q/k/v 头数
+不等、flash 没有模板的 head_dim，以及 `is_causal` 且 q/k 长度不等——最后一条是
+因为 flash 的因果掩码在长度不等时对齐右下，而这里的降级用 `triu(diagonal=1)`
+对齐左上，形状一样答案不一样。
+
+一个必须记下来的坑：kernel 最初直接返回扩展输出的 `reshape().permute()` 惰性
+视图，之后同进程里的一次数学注意力就在 `matmul` 里带着一个乱掉的 NanoVector
+形状崩了。输出和输入一样要 `clone()` 落地。
+
+复现：`$JITTOR_LAB_ROOT/sdpa-dispatch/bench_sdpa_paths.py`。跑之前需要 pybind11
+头文件和 `JITTOR_FLASH_ATTN_JITTOR_SRC`，见 `examples/flash-attention/README.md`。
+
+### 补上对 PyTorch 的那一栏：接上 flash 之后仍慢 6–14%，因为 kernel 选错了
+
+上一节的 `2.79x` 是 **jittor 改前对 jittor 改后**，不是对 PyTorch。拿它当「加速」
+的结论汇报是误导——PyTorch 的 SDPA 本来就走融合注意力，所以那次改动是**追平**，
+不是超过。这一节把缺的那一栏补上。
+
+真 PyTorch `2.13.0+cu129`，同一张 H20，同样的形状/dtype/`is_causal`，同样的
+10 次 warmup + 20 次重复取中位数（5 次重复对 torch 不够：raw 会从 `0.0024`
+一路掉到 `0.0001`，那是没热起来，不是结果）：
+
+| 形状 | jittor + flash-attn 2 | torch 默认 | 比值 |
+| --- | --- | --- | --- |
+| H3 video VAE `2x32x1797x1797x64` | `0.00292s` | `0.00262s` | 慢 `11%` |
+| GPT-2 medium | `0.00258s` | `0.00244s` | 慢 `6%` |
+| Llama prefill | `0.00303s` | `0.00266s` | 慢 `14%` |
+
+**差距的来源不是 jittor 的调用路径，是算法选择。** 把 torch 的后端逐个钉死来问：
+
+| 形状 | torch cudnn（= 默认） | torch flash | torch mem_efficient | jittor flash |
+| --- | --- | --- | --- | --- |
+| H3 video VAE | `0.00262s` | `0.00280s` | `0.00296s` | `0.00292s` |
+| GPT-2 medium | `0.00244s` | `0.00250s` | `0.00256s` | `0.00258s` |
+| Llama prefill | `0.00266s` | `0.00289s` | `0.00303s` | `0.00302s` |
+
+两条结论：
+
+1. **jittor 的 flash 路径和 torch 的 flash 路径只差 `3–5%`**。layout 转换、
+   派发、跨扩展边界这些加起来就这么多，管道基本追平了。
+2. **在 H20 上 cuDNN 的融合注意力比 flash-attn 2 快 `6–9%`**，torch 默认选它。
+   jittor 跑的是慢的那个算法。
+
+所以「让 jittor 的注意力不慢于 torch」这件事的下一步是**给 CUDA 后端写一个
+cuDNN 融合注意力 kernel**，注册到同一个 `nn.scaled_dot_product_attention` 名字
+下、优先级高于 flash 桥。收益已经量出来了：对 flash-attn 2 再快 `6–9%`，并且
+cuDNN 随 CUDA 栈发货，不需要 flash 源码 checkout 和 pybind11。
+
+**一条被推翻的猜想，记下来免得后人重走。** 我以为差距来自这个 kernel 对 q/k/v
+各做的 `permute().reshape().clone()` 和输出那次 `clone()`——四次整张量拷贝，
+H3 那档约 117MB 额外访存，量级上足够解释。去掉输入那三次 clone 后实测
+`0.00292 / 0.00258 / 0.00302`，和保留时的 `0.00292 / 0.00258 / 0.00303`
+**逐档相同**，正确性也不变。jittor 的图把冗余拷贝消掉了，那几次 clone 不花钱，
+这条路是死的。clone 予以保留（它挡的是扩展边界上的悬挂视图，见上节）。
+
+### 更正：flash 一直在这台机器上编得出来，之前那条「从未编出」是错的
+
+上面两条（`469d8445` 的提交信息、以及 SDPA 那一节）都写了「这台机器上
+`torch_extensions` 全是空的，从来没有一个扩展编出来过」，并据此推断 H3 的运行
+走的是数学注意力、还有 `2.72x` 没拿。**这是错的，现予撤回。**
+
+实际情况：H3 部署有自己的
+`XDG_CACHE_HOME=/root/jittor-lab/_state/h3/run/xdg-cache`，那底下
+`torch-shim/minimax-h3-*/torch_extensions/flashattn_jittor/official_flash_attn/`
+里有 **225 个目标文件**和多份
+`flash_attn_2_cuda_jittor.cpython-312-*.so`。桥一直编得出来，server 也一直带
+`JITTOR_FLASH_ATTN_JITTOR_REQUIRED=1` 在跑——真编不出来它启动就会失败。
+
+错因是一次**不完整的搜索**：只看了 `/root/.cache/jittor/torch-shim/`，没看
+`XDG_CACHE_HOME` 指到哪里，就从「这里没有」推出了「全机器没有」。另外
+`/root/jittor-lab` 和 `/apdcephfs_private/qy/projects/zy/jittor-lab` 是两个不同的目录，前者是 H3 部署，
+后者是做基准的 lab，我把它们当成同一处了。
+
+**`src_inc` 那个 bug 本身仍然成立，但范围要收窄**：它只影响**源码 checkout**。
+H3 部署用的是装好的 wheel（`jittor-1.3.11.0.dist-info`），那里
+`jittor/src/core/common.h` 存在，所以 `jittor_path/src` 这个 join 是对的。
+`469d8445` 修的是 checkout 这一侧，价值不变；但「3DGS 那几个包从来编不出来」
+之类的推广说法不成立，wheel 装法下它们一直是好的。
+
+**连带后果**：H3 流水线里没有一个等着被捡的 `2.72x`。那条流水线本来就在用 flash。
+
+### 端到端：接上 flash 之后 Llama 快 `1.94x`，GPT-2 快 `3%`（2026-09-23 实测）
+
+前面那些都是裸 SDPA 调用。这一节是真模型的训练 step，用项目自带的 ecosystem
+对拍 harness（两个解释器，`REAL_TORCH_PYTHON` 出 oracle，realistic 尺寸，
+「至少十次重复取最快」）。真 torch `2.13.0+cu129`，两侧 transformers 都是 `5.5.3`
+（jittor 侧的 adapter 只支持 `4.56.2` / `5.5.3`），`OMP_NUM_THREADS=1` 两侧对齐。
+
+同机同会话，唯一变量是 `JITTOR_FLASH_ATTN_JITTOR=0`：
+
+| 用例 | 关 flash | 开 flash | 本次改动的贡献 |
+| --- | --- | --- | --- |
+| `large_transformers_gpt2` | `0.0851s`（`0.97x`） | `0.0825s`（`0.94x`） | 快 `3%` |
+| `large_transformers_llama` | `0.0865s`（`0.94x`） | `0.0445s`（`0.48x`） | 快 **`1.94x`** |
+
+比值是 jittor/torch，小于 1 表示 jittor 更快。梯度也逐个比对通过（100 / 75 个）。
+
+**要说清楚的是：jittor 在这两项上本来就已经快过 torch**（`0.97x` / `0.94x`），
+那部分不是这次改动带来的。这次改动是在此之上把 Llama 又砍掉一半。
+
+两条被这次测量逼出来的修复，都不是为了过门：
+
+- `torch.get_num_threads()` 既不认 `OMP_NUM_THREADS` 也不认 `set_num_threads`
+  （无条件返回 `os.cpu_count()`），harness 因两侧线程数不一致而拒绝比较——它拒得
+  对，该修的是 shim。见 `f9481ddf`。
+- `_ecosystem_harness.py:274` 用 `line.startswith("ECOSYSTEM_RESULT ")` 找 runner
+  的 JSON。这台机器 384 核，numexpr 会打一条不带换行的告警，marker 就落到行中间
+  被漏掉，于是**一次成功的测量被报成 `runner failed`**。失败方向是最坏的那种。
+  尚未修复，记在这里。
+
+台账里 GPT-2 `1.13x` / Llama `1.22x` 那两行是 2026-08-23 在 RTX 4090 + torch
+2.12.1 + python 3.11 上测的，**不要和上表相减**：硬件、torch 版本、python 版本
+全变了，中间还隔着几个月的其它工作。上表的归因只来自同机同会话的开/关对照。

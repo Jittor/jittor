@@ -15,6 +15,11 @@ _VAR_TAG = "__jt_var__"
 
 def _to_portable(obj, snapshots):
     g = get_install_context(jt).target_namespace
+    # Tensor.shape is backed by jittor_core.NanoVector. PyTorch exposes the
+    # equivalent value as the picklable torch.Size tuple subclass.
+    if (type(obj).__name__ == "NanoVector"
+            and type(obj).__module__ == "jittor_core"):
+        return g.Size(tuple(int(value) for value in obj))
     if isinstance(obj, jt.Var):
         # Batched fetch supplies a host copy without moving live tensors.
         # Persist the native name, not the frontend object's torch-prefixed
@@ -143,7 +148,9 @@ def _apply_map_location(obj, map_location, _depth=0, source_devices=None):
     if isinstance(obj, (list, tuple)):
         built = [_apply_map_location(v, map_location, _depth + 1, source_devices) for v in obj]
         if isinstance(obj, tuple):
-            return type(obj)(*built) if hasattr(obj, "_fields") else tuple(built)
+            if hasattr(obj, "_fields"):
+                return type(obj)(*built)
+            return tuple(built) if type(obj) is tuple else type(obj)(built)
         return type(obj)(built) if type(obj) is not list else built
     if not isinstance(obj, jt.Var):
         return obj

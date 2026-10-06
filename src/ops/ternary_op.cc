@@ -6,6 +6,7 @@
 // ***************************************************************
 #include "core/var.h"
 #include "ops/ternary_op.h"
+#include "ops/layout_propagation.h"
 #include "ops/op_register.h"
 
 namespace jittor {
@@ -31,6 +32,15 @@ TernaryOp::TernaryOp(Var* cond, Var* x, Var* y) : cond(cond), x(x), y(y) {
         if (by) yy = make_broadcast(y, cond, NanoVector()), y = yy;
         forward(make_ternary(cond, x, y));
         return;
+    }
+    {
+        NanoVector axes;
+        vector<VarPtr> sources;
+        if (storage_layout_operands({cond, x, y}, axes, sources)) {
+            forward(storage_view_transpose(
+                make_ternary(sources[0], sources[1], sources[2]), axes));
+            return;
+        }
     }
     set_flag(OpFlags::_cpu);
     set_flag(OpFlags::_cuda);
@@ -109,29 +119,32 @@ void TernaryOp::jit_run() {
     auto* __restrict__ yp = y->ptr<Ty>();
     auto* __restrict__ zp = z->ptr<Tz>();
     index_t num = z->num;
+    // The product of the shapes above each axis, so one axis' index is a single
+    // division away (`i / zabove@d % zstorage_shape@d`) instead of a chain of
+    // them; `(i/a)/b == i/(a*b)` for non-negative integers. See KI-CODEGEN-001,
+    // and keep the macro arguments comma-free -- the template parser splits them
+    // on commas.
     @if(TSMASK,
         @for(d, 0, DIM, index_t zstorage_shape@d = z->shape[@d];)
+        index_t zabove@{DIM-1} = 1;
+        @for(d, DIM-2, -1, -1, index_t zabove@d = zabove@{d+1} * zstorage_shape@{d+1};)
     )
     @if(XSTRIDED, @for(d, 0, DIM, index_t xstride@d = x->storage_stride(@d);))
     @if(YSTRIDED, @for(d, 0, DIM, index_t ystride@d = y->storage_stride(@d);))
     @if(CSTRIDED, @for(d, 0, DIM, index_t cstride@d = cond->storage_stride(@d);))
     for (index_t i=0; i<num; i++) {
-        // One remainder chain shared by whichever operands are strided. An axis
-        // no strided operand moves is skipped entirely; axis 0 needs no modulo
-        // because `i` is already below its extent; the division at an axis
-        // survives only while a lower axis still reads `rem`.
+        // One axis index shared by whichever operands are strided on it; axis 0
+        // needs no modulo because `i` is already below its extent.
         @if(XSTRIDED, index_t xi=0;, index_t xi=i;)
         @if(YSTRIDED, index_t yi=0;, index_t yi=i;)
         @if(CSTRIDED, index_t ci=0;, index_t ci=i;)
-        @if(TSMASK, index_t rem=i;)
-        @for(d, DIM-1, -1, -1,
+        @for(d, 0, DIM,
             @if(TSMASK>>d&1,
-                index_t q@d = @if(d, rem % zstorage_shape@d, rem);
+                index_t q@d = @if(d, (i / zabove@d % zstorage_shape@d), (i / zabove@d));
                 @if(XSMASK>>d&1, xi += q@d * xstride@d;)
                 @if(YSMASK>>d&1, yi += q@d * ystride@d;)
                 @if(CSMASK>>d&1, ci += q@d * cstride@d;)
             )
-            @if(TSMASK&((1<<d)-1), rem /= zstorage_shape@d;)
         )
         Tz xd_ = xp[xi];
         Tz yd_ = yp[yi];

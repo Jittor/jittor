@@ -4,6 +4,7 @@ from jittor.optim.base import _group_state
 from importlib import import_module
 from ...context import get_install_context
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
+from jittor._runtime import step_capture as _step_capture
 _owner = import_module(__package__)
 _NativeVar = _owner.jt.Var
 
@@ -148,10 +149,17 @@ def _backward(self, gradient=None, retain_graph=None, create_graph=False, **kw):
     # factory op re-runs WITHOUT the kernel's writes -> garbage/NaN loss
     # (proven: a plain float(loss) before backward makes train.py finite).
     # Forcing the forward to settle once here decouples it from the grad pass.
-    try:
-        self.sync()
-    except _owner.EXPECTED as exc:
-        _owner.swallowed("torch/installers/tensor.py _backward: self.sync()", exc)
+    #
+    # Not while a step is being captured: a capture builds the step whole and
+    # runs it once, and a forward settled in the middle of it had its buffers
+    # freed after their last use and was computed again by that run -- a
+    # Qwen3 training step's forward ran twice to capture it. Nor can a
+    # capture replay an extension that writes out of band anyway.
+    if not _step_capture.active():
+        try:
+            self.sync()
+        except _owner.EXPECTED as exc:
+            _owner.swallowed("torch/installers/tensor.py _backward: self.sync()", exc)
     # Collect EVERY live optimizer (torch allows several at once — 3DGS uses a
     # Gaussian Adam + an exposure Adam; routing to just _current_optimizer
     # left the other's params with .grad=None -> KeyError 'grads' in step()).
@@ -238,6 +246,13 @@ def _backward(self, gradient=None, retain_graph=None, create_graph=False, **kw):
                     and not tensor_state.leaf_params.is_weak(id(p))):
                 tensor_state.leaf_params.pop(id(p), None)
             continue
+        # torch's AccumulateGrad gives a leaf a grad of the leaf's own dtype.
+        # jt.grad does not: under autocast a float32 weight read by a
+        # float16 op comes back with a float16 grad, and AdamW's
+        # (1 - beta2) * g * g then underflows in float16 -- an lr / eps step,
+        # NaN on the next forward (test_torch_amp_training_loop.py).
+        if gr.dtype != p.dtype:
+            gr = gr.cast(p.dtype)
         grad_by_id[id(p)] = gr
         if id(p) not in opt_ids:
             # non-optimizer leaf (retain_grad screenspace etc.): accumulate
@@ -299,6 +314,36 @@ def _grad_get(self):
         except _owner.EXPECTED as exc:
             _owner.swallowed("torch/installers/tensor.py _grad_get: return o.find_grad(self)", exc)
     return None
+
+
+def _param_slots(opt, param):
+    """Every (group, index) at which ``opt`` holds ``param``.
+
+    Answered from an index kept on the optimizer. Scanning every parameter of
+    every group on each assignment made ``zero_grad(set_to_none=True)``, which
+    assigns ``p.grad = None`` for each parameter, quadratic in the parameter
+    count: 21 ms of a 90 ms DDPM training step at 450 parameters. A hit is
+    checked against the group it names before it is used and a miss rescans,
+    so an index made stale by a parameter replaced in place (3DGS
+    densification does ``group["params"][0] = new``) or a group added later
+    is rebuilt, never trusted.
+    """
+    index = opt.__dict__.get("_torch_param_slots")
+    if index is not None:
+        slots = index.get(id(param))
+        if slots is not None:
+            for pg, i in slots:
+                params = pg.get("params", ())
+                if i >= len(params) or params[i] is not param:
+                    break
+            else:
+                return slots
+    index = {}
+    for pg in getattr(opt, "param_groups", []):
+        for i, p in enumerate(pg.get("params", [])):
+            index.setdefault(id(p), []).append((pg, i))
+    object.__setattr__(opt, "_torch_param_slots", index)
+    return index.get(id(param), ())
 
 
 def _grad_set(self, value):

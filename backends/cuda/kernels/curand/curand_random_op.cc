@@ -14,6 +14,7 @@
 #include "curand_random_op.h"
 #include "curand_wrapper.h"
 #include "core/executor.h"
+#include "runtime/device.h"
 
 namespace jittor {
 
@@ -61,9 +62,18 @@ void CurandRandomOp::jit_run() {
     // and takes the last element from a two-element scratch buffer, so nothing
     // is written outside the output. An odd-length normal draw still consumes
     // num+1 values; that is inherent to the even-count requirement.
+    // Count what this draw costs the generator, so a checkpoint has a position
+    // to save. Measured against CURAND_RNG_PSEUDO_DEFAULT: a uniform draw of n
+    // costs n and a normal draw of n costs n/2, whatever the precision, and a
+    // mixed history costs the sum. The odd-length normal below draws num-1 and
+    // then 2, so it costs (num-1)/2 + 1.
     @if(@strcmp(@R,uniform)==0,
+        curand_advance(current_device(), num);
         checkCudaErrors(curandGenerateUniform@TT (generator, x, num));
     ,
+        index_t normal_cost = num/2;
+        if (num & 1) normal_cost = (num-1)/2 + 1;
+        curand_advance(current_device(), normal_cost);
         if (num & 1) {
             if (num > 1)
                 checkCudaErrors(curandGenerateNormal@TT (generator, x, num-1, 0, 1));

@@ -620,5 +620,53 @@ class TestHalfErrorAgainstTorch(unittest.TestCase):
                                 relative=False)
 
 
+# ---------------------------------------------------------------------------
+# Kernels that index with integers while holding a half value.
+# ---------------------------------------------------------------------------
+
+def _max_pool_reference(values, kernel, stride, padding):
+    """NCHW max pooling in numpy, padding with -inf (what torch pads with)."""
+    padded = np.pad(values, ((0, 0), (0, 0), (padding, padding), (padding, padding)),
+                    constant_values=-np.inf)
+    rows = (padded.shape[2] - kernel) // stride + 1
+    cols = (padded.shape[3] - kernel) // stride + 1
+    out = np.empty(values.shape[:2] + (rows, cols))
+    for i in range(rows):
+        for j in range(cols):
+            window = padded[:, :, i * stride:i * stride + kernel,
+                            j * stride:j * stride + kernel]
+            out[:, :, i, j] = window.max(axis=(2, 3))
+    return out
+
+
+class TestHalfPooling(unittest.TestCase):
+    """``MaxPool2d`` on a half input compiles, and selects exactly.
+
+    The CUDA pooling kernel clamps its window with ``min(k + 3, shape)`` and
+    ``max(0, k)`` on ints. The half ``jittor::min``/``max`` overloads hid the
+    global integer ones inside ``namespace jittor``, so on float16 or bfloat16
+    the call was ambiguous and nvcc rejected the kernel -- fp16 ResNet
+    inference failed at its first pooling layer. The float32 kernel never
+    includes those overloads, which is why only the half dtypes broke.
+
+    A maximum does no arithmetic, so the answer must equal the rounded input's
+    maximum exactly: no tolerance.
+    """
+
+    def test_max_pool2d_selects_exactly(self):
+        rng = np.random.RandomState(7)
+        values = rng.randn(2, 3, 13, 13).astype(np.float32)
+        for device, use_cuda in _DEVICES:
+            for name in ("float16", "bfloat16"):
+                with self.subTest(device=device, dtype=name):
+                    with jt.flag_scope(use_cuda=use_cuda):
+                        x = _cast(jt.array(values), name)
+                        y = jt.nn.MaxPool2d(3, stride=2, padding=1)(x)
+                        self.assertEqual(str(y.dtype), name)
+                        got = y.float32().numpy().astype(np.float64)
+                    exact = _max_pool_reference(_round_trip(values, name), 3, 2, 1)
+                    np.testing.assert_array_equal(got, exact)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -4,6 +4,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#include "core/var.h"
 #include "runtime/device.h"
 #include "runtime/backend.h"
 
@@ -60,7 +61,11 @@ void setter_use_cuda(const int& old_value, const int& requested) {
 #else
     USER_CHECK(value == 0) << "No CUDA found.";
 #endif
-    if (old_value != value) {
+    // Only with something to sync: the flag is also set from the environment
+    // while the library is being loaded, before the executor's own globals
+    // (the fetch list) are constructed, and a sweep then walked one of them
+    // unconstructed -- which object files come first decides whether it does.
+    if (old_value != value && Var::number_of_lived_vars > 0) {
         // Pending graphs were prepared for the old backend. The generated
         // setter rolls back to this value if submission throws.
         runtime_device_state().use_cuda = old_value;

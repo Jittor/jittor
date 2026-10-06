@@ -253,10 +253,13 @@ def _refuses_collection(path):
     if path.suffix != ".py" or not path.name.startswith("test_"):
         return False
     try:
-        source = path.read_text(encoding="utf-8")
+        source = path.read_bytes()
     except OSError:
         return False
     try:
+        # Bytes rather than text: `ast.parse` honours a PEP 263 coding
+        # declaration, which a test file is allowed to have, while decoding as
+        # UTF-8 here would raise out of the collection hook instead.
         tree = ast.parse(source, filename=str(path))
     except (SyntaxError, ValueError):
         return False
@@ -396,6 +399,7 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         repo_relative = _relative_to_repo(item.fspath)
         _FILES_WITH_ITEMS.add(repo_relative)
+        _COLLECTED_FILES.add(repo_relative)
         # The fast tier selects with `-m "not slow"`; the marker is attached from
         # one recorded list rather than from decorators scattered through the
         # tree, so "what a pull request waits for" is reviewable in one diff.
@@ -625,8 +629,16 @@ def _flush_worker_state_leaks(session):
 # --------------------------------------------------------------------------
 #: {relative path: {"executed": n, "skipped": n}} for this session.
 _FILE_OUTCOMES = {}
+#: Files whose tests survived the marker and keyword filters.
 _FILES_WITH_ITEMS = set()
+#: Files that produced tests at all, filters included. Filled by
+#: ``pytest_collection_modifyitems`` and ``pytest_deselected``; the pair is what
+#: lets ``_files_that_collected_nothing()`` mean collection.
+_COLLECTED_FILES = set()
 _SKIP_REASON_BUCKETS = Counter()
+#: {lowercased reason: n} for the skips that landed in `other`, so the report can
+#: name them instead of printing a count that reds a run and explains nothing.
+_OTHER_SKIP_REASONS = Counter()
 _ACCELERATOR_EXECUTED = 0
 #: Ordered, and the order is the classification: the first bucket whose pattern
 #: appears in the reason wins. "insufficient-devices" therefore has to precede
@@ -660,6 +672,7 @@ _SKIP_BUCKET_PATTERNS = {
         "cusparse",
         "cufft",
         "curand",
+        "nvcc",
         "gpu",
         "rocm",
         "hip",
@@ -683,15 +696,23 @@ _SKIP_BUCKET_PATTERNS = {
     # holding one therefore failed every gate that collected it, for doing
     # exactly what it was written to do.
     "opt-in": ("performance_test", "skip slow test", "upper bound on wall-clock",
-               "load_sensitive"),
+               "load_sensitive",
+               # A documented known-failing case with its own switch; see the
+               # note on the same pattern in `gate_scope.ENVIRONMENT_SKIP_PATTERNS`.
+               "jt_test_thread_race"),
     # The subject itself says the case does not apply: an OpInfo entry that
     # declares no second derivative, no numpy reference, or no differentiable
     # sample. A fact about the operator, not about this machine -- and, like
     # the opt-in bucket, explained but wordless about hardware, so it counted
     # as unexplained and failed the run. `tests/ops/test_ops.py` alone emits
     # seven of them.
+    # The last entry is the same shape in a structure gate:
+    # `tests/structure/build/test_env_var_manifest.py` is parametrized over the
+    # modules that read a setting under its unprefixed name and skips the
+    # resolver files, which are exactly where those names are resolved.
     "declared": ("supports_gradgrad=false", "supports_autograd=false",
-                 "no numpy reference", "no differentiable samples"),
+                 "no numpy reference", "no differentiable samples",
+                 "the resolver is where these names are allowed"),
 }
 
 
@@ -737,7 +758,10 @@ def pytest_runtest_logreport(report):
         record["skipped"] += 1
         reason = _skip_reason(report)
         record["reasons"].add(reason)
-        _SKIP_REASON_BUCKETS[classify_skip_reason_bucket(reason)] += 1
+        bucket = classify_skip_reason_bucket(reason)
+        _SKIP_REASON_BUCKETS[bucket] += 1
+        if bucket == "other":
+            _OTHER_SKIP_REASONS[reason] += 1
         if _real_torch_is_required() and _blames_missing_torch(reason):
             _MISSING_REAL_TORCH.append((report.nodeid, reason))
 
@@ -849,8 +873,14 @@ def _snapshot_selected_files(config):
         arguments = [_absolute_selection(argument, invocation) for argument in config.args]
         if not arguments:
             return
+        # A `test_*.py` that is a script is not part of the selection as a test
+        # file -- the refusal above is what keeps it out of collection -- so it
+        # must not be reported as a file the session proved nothing about
+        # either. Otherwise closing KI-TEST-006 would only move its red from
+        # "collection error" to "collected 0 tests".
         _SELECTED_FILES.update(
-            selected_files(
+            path
+            for path in selected_files(
                 TEST_ROOT.parent,
                 arguments
                 + [
@@ -858,6 +888,7 @@ def _snapshot_selected_files(config):
                     for item in getattr(config.option, "ignore", []) or []
                 ],
             )
+            if not _refuses_collection(REPO_ROOT / path)
         )
     except Exception:
         pass
@@ -873,8 +904,33 @@ def _files_that_collected_nothing():
 
     Distinct from "everything skipped": a file that generates zero cases never
     reaches a skip either, so it is invisible in every count pytest prints.
+
+    About *collection*, not about the selection expression applied after it: a
+    file whose tests ``-m "not slow"`` or ``-k`` filtered out did produce
+    tests, and counting it here made the fast tier red on exactly the files it
+    exists to drop -- see :func:`pytest_deselected`.
     """
-    return sorted(_SELECTED_FILES - _FILES_WITH_ITEMS)
+    return sorted(_SELECTED_FILES - _COLLECTED_FILES)
+
+
+def pytest_deselected(items):
+    """Record files whose tests the marker or keyword expression removed.
+
+    ``_files_that_collected_nothing()`` has to tell "this file generated no
+    test" from "this file's tests were filtered out", and pytest applies the
+    filter after collection: by the time the loop in
+    ``pytest_collection_modifyitems`` sees ``items``, a filtered-out file is in
+    neither it nor ``_FILES_WITH_ITEMS``. Measured 2026-09-22, that made a
+    fast-tier run report every slow file in the selection as "the session
+    proved nothing about <path>", and ``unexplained`` sets
+    ``exitstatus = 1`` -- so a green ``--tier smoke`` selection exited non-zero
+    with nothing wrong in it. The two files that are genuinely not collected
+    were the only other entries.
+
+    Fires for ``-m`` and ``-k`` alike, in the process that applied the filter.
+    """
+    for item in items:
+        _COLLECTED_FILES.add(_relative_to_repo(item.fspath))
 
 
 def _execution_exemptions():
@@ -1001,6 +1057,21 @@ def _report_skip_reason_buckets(terminalreporter):
     for bucket, count in buckets:
         terminalreporter.write_line("%d skipped: %s" % (count, bucket))
     terminalreporter.write_line("other skipped: %d" % _other_skip_count())
+    if _OTHER_SKIP_REASONS:
+        # Name them. `other > 0` fails a ``JITTOR_TEST_REQUIRE_EXECUTION=1`` run,
+        # and a bare count is unactionable: the only way to find these was to
+        # patch a print into the accounting hook yourself and re-run the whole
+        # selection. Five of the six reasons behind this machine's twenty turned
+        # out to be facts about the build (no ``jt_graph_build_profile``, no cub,
+        # no MKL, no gdb) and the sixth a placeholder reason string.
+        terminalreporter.write_line(
+            "the reasons counted as `other` (fix or explain these):")
+        for reason, count in _OTHER_SKIP_REASONS.most_common(10):
+            terminalreporter.write_line("  %d x %s" % (count, reason[:160]))
+        if len(_OTHER_SKIP_REASONS) > 10:
+            terminalreporter.write_line(
+                "  ... and %d more distinct reason(s)"
+                % (len(_OTHER_SKIP_REASONS) - 10))
     short = _SKIP_REASON_BUCKETS.get("insufficient-devices", 0)
     if short:
         # Said out loud because it is the one bucket that is not an environment

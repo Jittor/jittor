@@ -13,6 +13,7 @@
 
 #include <csignal>
 #include "runtime/init.h"
+#include "runtime/async_exec.h"
 #include "ops/op_register.h"
 #include "ops/composite/op_registration.h"
 #include "ops/composite/tape_op.h"
@@ -117,6 +118,7 @@ void init() {
 }
 
 void set_seed(int seed) {
+    async_exec_wait();
     ExecutorEntryScope lock;
     auto& rng = runtime_rng_state();
     rng.global_seed = static_cast<uint64>(seed);

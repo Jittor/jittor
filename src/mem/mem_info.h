@@ -69,5 +69,45 @@ int64 device_memory_peak_used(int device);
 int64 device_memory_peak_reserved(int device);
 // @pyjt(reset_device_memory_peaks)
 void reset_device_memory_peaks(int device);
+/**
+ * The most bytes held by Vars on one accelerator device at any instant since
+ * the process started or :func:`reset_device_memory_peak`, recorded by the
+ * pools on every allocation -- torch's ``max_memory_allocated(N)``. Zero when
+ * the caching pools are disabled (``use_sfrl_allocator=0``).
+ */
+// @pyjt(device_memory_peak)
+int64 device_memory_peak(int device);
+
+/**
+ * The most bytes the pools of one device have held from the driver (live plus
+ * cached) since the process started or :func:`reset_device_memory_peak` --
+ * torch's ``max_memory_reserved(N)``.
+ */
+// @pyjt(device_memory_reserved_peak)
+int64 device_memory_reserved_peak(int device);
+
+/// Restart both high-water marks (allocated and reserved) at their current
+/// values, like torch's ``reset_peak_memory_stats``.
+// @pyjt(reset_device_memory_peak)
+void reset_device_memory_peak(int device);
+
+/**
+ * Every byte the pools have handed out for Vars on one device since the
+ * process started; it only grows. Device -1 is the host. The difference
+ * across a call is the sum of everything that call allocated -- what it would
+ * keep if nothing were ever freed, which is what a kept graph does.
+ */
+// @pyjt(device_memory_allocated_total)
+int64 device_memory_allocated_total(int device);
+
+/**
+ * Restart a measurement window at the bytes live on ``device`` now and return
+ * them; :func:`_device_memory_window_peak` then reads the most live since.
+ * Separate from :func:`device_memory_peak`, which it leaves alone.
+ */
+// @pyjt(_device_memory_window_start)
+int64 device_memory_window_start(int device);
+// @pyjt(_device_memory_window_peak)
+int64 device_memory_window_peak(int device);
 
 } // jittor

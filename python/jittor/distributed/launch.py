@@ -23,6 +23,13 @@ _POLL_S = 0.2
 _TERM_GRACE_S = 5.0
 
 
+def _free_port():
+    """A TCP port nothing listens on right now, for MASTER_PORT."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
 def _detect_backend():
     if os.environ.get('use_acl') == '1':
         return 'hccl'

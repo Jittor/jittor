@@ -18,6 +18,7 @@
 #include "core/common.h"
 #include "core/op.h"
 #include "acl_jittor.h"
+#include "acl_runtime.h"
 #include "ops/composite/random_op.h"
 #include "ops/reduce_op.h"
 #include "ops/composite/arg_reduce_op.h"
@@ -58,6 +59,9 @@ namespace jittor
         void *storage = nullptr;
         size_t storage_size = 0;
         size_t offset = 0;
+        // Storage replaced while a recorded graph lived: its copies read
+        // from here. Freed with the last graph (acl_live_graphs).
+        std::vector<void *> retired;
 
         void reset()
         {
@@ -81,11 +85,32 @@ namespace jittor
     public:
         ~AclScalarHostCache()
         {
-            if (storage != nullptr)
-            {
+            if (storage != nullptr || !retired.empty())
                 aclrtSynchronizeStream(aclstream);
+            if (storage != nullptr)
                 aclrtFreeHost(storage);
+            for (auto *block : retired)
+                aclrtFreeHost(block);
+        }
+
+        void release_retired()
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (retired.empty())
+                return;
+            auto ret = aclrtSynchronizeStream(aclstream);
+            if (ret != ACL_SUCCESS)
+                throw std::runtime_error(
+                    "aclrtSynchronizeStream failed: " +
+                    acl_error_to_string(ret));
+            for (auto *block : retired)
+            {
+                ret = aclrtFreeHost(block);
+                if (ret != ACL_SUCCESS)
+                    throw std::runtime_error(
+                        "aclrtFreeHost failed: " + acl_error_to_string(ret));
             }
+            retired.clear();
         }
 
         const void *get(const void *data, size_t size)
@@ -99,6 +124,16 @@ namespace jittor
             size_t aligned_size = (size + 63) / 64 * 64;
             if (storage == nullptr || offset + aligned_size > storage_size)
             {
+                if (storage != nullptr && acl_live_graphs() > 0)
+                {
+                    // Kept, and nothing waited on: the stream may be the
+                    // one recording.
+                    retired.push_back(storage);
+                    storage = nullptr;
+                    storage_size = 0;
+                    offset = 0;
+                    values.clear();
+                }
                 reset();
                 storage_size = std::max(capacity(), aligned_size);
                 auto ret = aclrtMallocHost(&storage, storage_size);
@@ -115,11 +150,21 @@ namespace jittor
         }
     };
 
-    static const void *persistent_acl_scalar_data(const void *data, size_t size)
+    static AclScalarHostCache &scalar_host_cache()
     {
         // Async H2D copies may outlive temporary scalar buffers owned by an op.
         static AclScalarHostCache cache;
-        return cache.get(data, size);
+        return cache;
+    }
+
+    static const void *persistent_acl_scalar_data(const void *data, size_t size)
+    {
+        return scalar_host_cache().get(data, size);
+    }
+
+    void acl_scalar_cache_release_retired()
+    {
+        scalar_host_cache().release_retired();
     }
 
     unordered_map<uint32, string> opname_map = {
@@ -182,6 +227,7 @@ namespace jittor
     class AclCpuFallbackScope
     {
         ExecutionBackendScope execution_scope{BackendId::Cpu};
+        HostExecutionScope host_execution;
         int previous_mode;
         FusedOp *fused = nullptr;
         FusedOpContext *context = nullptr;
@@ -352,7 +398,7 @@ namespace jittor
         {
             if (op->name() == string("array")) continue;
             const auto name = fused_acl_name(op);
-            if (name.empty()) return string("unregistered fused operator variant: ") + op->name() + "/" + S(op->ns);
+            if (name.empty()) return string("unregistered fused operator variant: ") + op->name() + "/" + string(op->ns.to_cstring());
             auto found = acl_op_registry().find(name);
             if (found == acl_op_registry().end()) return "unregistered ACL launcher: " + name;
             INTERNAL_ASSERT(found->second.launcher()) << "Empty registered ACL launcher:" << name;
@@ -365,9 +411,9 @@ namespace jittor
                     ? AclOpFunctions::QueryKind::Add : AclOpFunctions::QueryKind::Binary))
                     << "Wrong registered binary launcher signature:" << name;
             for (auto *input : op->inputs())
-                if (!acl_has_dtype(input->dtype())) return name + " does not support input dtype " + S(input->dtype());
+                if (!acl_has_dtype(input->dtype())) return name + " does not support input dtype " + string(input->dtype().to_cstring());
             for (auto *output : op->outputs())
-                if (!acl_has_dtype(output->dtype())) return name + " does not support output dtype " + S(output->dtype());
+                if (!acl_has_dtype(output->dtype())) return name + " does not support output dtype " + string(output->dtype().to_cstring());
             if ((name == "Add" || name == "Sub") && op->input(0)->dtype() == ns_complex64)
                 return name + " has no complex alpha-scalar implementation";
         }
@@ -817,10 +863,10 @@ namespace jittor
             INTERNAL_ASSERT(iter->second) << "Empty ACL implementation for" << op->name();
             for (auto *input : op->inputs())
                 if (!acl_has_dtype(input->dtype()))
-                    unsupported = string(op->name()) + " does not support input dtype " + S(input->dtype());
+                    unsupported = string(op->name()) + " does not support input dtype " + string(input->dtype().to_cstring());
             for (auto *output : op->outputs())
                 if (!acl_has_dtype(output->dtype()))
-                    unsupported = string(op->name()) + " does not support output dtype " + S(output->dtype());
+                    unsupported = string(op->name()) + " does not support output dtype " + string(output->dtype().to_cstring());
             if (unsupported.empty() && op->name() == string("getitem"))
                 unsupported = acl_getitem_unsupported_reason(op);
             if (unsupported.empty() && op->name() == string("setitem"))

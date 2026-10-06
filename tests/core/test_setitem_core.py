@@ -276,6 +276,47 @@ class TestSetitemOverwrite(_SetitemCore):
         self._for_devices(body)
 
 
+class TestSetitemIntoExecutedTensor(_SetitemCore):
+    """``x[key] = v`` on an x that has already run, written in place.
+
+    The value is then computed straight into the region, and the setitem
+    writes nothing itself -- right only when the value covers the region. A
+    scalar was let through for ``x[2]``, ``x[:, :]`` and ``x[...]`` and set the
+    region's first element alone.
+    """
+
+    _KEYS = (2, (1, slice(None)), slice(None), (slice(None), slice(None)),
+             Ellipsis, slice(1, 3), (slice(None), slice(None), slice(None)))
+
+    def test_a_scalar_fills_the_whole_region(self):
+        x_np = np.random.RandomState(0).rand(4, 3, 5).astype("float32")
+        for key in self._KEYS:
+            def body(dev):
+                x = self._f32(x_np)
+                x.sync()
+                x[key] = 0.5
+                ref = x_np.copy()
+                ref[key] = 0.5
+                self.assertEqual(x, ref, msg=f"x[{key!r}] = 0.5 [{dev}]")
+            self._for_devices(body)
+
+    def test_a_value_covering_the_region_is_written(self):
+        rs = np.random.RandomState(1)
+        x_np = rs.rand(4, 3, 5).astype("float32")
+        for key in self._KEYS:
+            region = x_np[key].shape
+            v_np = rs.rand(*region).astype("float32")
+
+            def body(dev):
+                x = self._f32(x_np)
+                x.sync()
+                x[key] = self._f32(v_np) * 2
+                ref = x_np.copy()
+                ref[key] = v_np * 2
+                self.assertEqual(x, ref, msg=f"x[{key!r}] = v [{dev}]")
+            self._for_devices(body)
+
+
 # ===========================================================================
 # 2. NEGATIVE-index backward  (regression lock: 58e95b73)
 # ===========================================================================

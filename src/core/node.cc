@@ -97,8 +97,8 @@ static size_t liveness_queue_front = 0;
 
 // Leaked on purpose: this is taken from an atexit handler and from static
 // destructors, where a function-local static may already be gone.
-std::recursive_mutex& graph_mutation_mutex() {
-    static std::recursive_mutex* mutex = new std::recursive_mutex();
+GraphMutationMutex& graph_mutation_mutex() {
+    static GraphMutationMutex* mutex = new GraphMutationMutex();
     return *mutex;
 }
 
@@ -120,7 +120,7 @@ static void run_liveness_queue(const char* caller) {
     // The drain owns the queue -- it clears it on the way out -- so two threads
     // draining at once would empty each other's work and run each other's
     // callbacks on nodes neither of them owns.
-    std::lock_guard<std::recursive_mutex> guard(graph_mutation_mutex());
+    std::lock_guard<GraphMutationMutex> guard(graph_mutation_mutex());
     LOGvvvv << "run liveness queue from" << caller << "size" << liveness_queue.size();
     // A step can throw: the counters assert their own invariants and `free`
     // reaches the allocator. Leaving the queue half-drained would make the
@@ -200,7 +200,7 @@ void Node::free() {
     // Same lock as the drain: this appends to `liveness_queue` and erases this
     // node from its neighbours' edge lists, and those neighbours may belong to
     // another worker's relay.
-    std::lock_guard<std::recursive_mutex> guard(graph_mutation_mutex());
+    std::lock_guard<GraphMutationMutex> guard(graph_mutation_mutex());
     // already scheduled for deletion in this free_buffer round
     if (flags.get(NodeFlags::_queued_for_free)) return;
     // A var that still has an input op and is either alive forward or still

@@ -1,7 +1,7 @@
 """Stable CUDA facade APIs with installation-owned mutable runtime state.
 
 Installation publishes these objects; it does not manufacture implementations.
-Logical streams, sampled memory peaks and unsupported placeholders retain their
+Logical streams, pool-recorded memory peaks and unsupported placeholders retain their
 existing behavior and have explicit fidelity records.
 """
 
@@ -342,6 +342,17 @@ def _cuda_runtime():
 
 class CudaRuntimeState:
     """Mutable CUDA facade state owned by one frontend installation."""
+
+    #: Fields the native frontend scope reads as float32 precision tiers. It
+    #: caches them per frontend type (py_tensor_frontend.cc, apply_policy), so
+    #: every assignment -- direct, through a transaction, or its rollback --
+    #: has to tell it to read them again.
+    _NATIVE_POLICY_FIELDS = frozenset(("matmul_precision", "cudnn_precision"))
+
+    def __setattr__(self, name, value):
+        object.__setattr__(self, name, value)
+        if name in self._NATIVE_POLICY_FIELDS:
+            jt.core._invalidate_frontend_policies()
 
     def __init__(self):
         import os
@@ -806,14 +817,64 @@ def _mem_reserved(device=None, *a, **k):
     return _mem_bytes(index, reserved=True)
 
 
+def _native_peak(index):
+    """The pools' own high-water mark for one device, or 0 if they keep none.
+
+    The Python-side mark only moves when some memory API is *called*, so on its
+    own it misses every peak reached inside an execution batch: a training step
+    that filled 22 GB read 0.1-1.3 GB. The pools record the peak on every
+    allocation; the sampled mark stays as the fallback for a process that
+    turned them off.
+    """
+    if index < 0:
+        return 0
+    return int(jt.core.device_memory_peak(int(index)))
+
+
 def _mem_max(device=None, *a, **k):
     index = _mem_device_key(device)
-    _mem_sample(index, _mem_bytes(index))
-    return _cuda_runtime().device_mem_peak.get(index, 0)
+    sampled = _mem_sample(index, _mem_bytes(index))
+    return max(_native_peak(index), _cuda_runtime().device_mem_peak.get(index, sampled))
+
+
+def _mem_max_reserved(device=None, *a, **k):
+    """torch.cuda.max_memory_reserved: the pools' own reserved high-water.
+
+    It used to be the *allocated* high-water under this name, which is
+    never more than what the pools reserve -- a reading below
+    ``memory_reserved()`` taken a moment earlier.
+    """
+    index = _mem_device_key(device)
+    reserved = _mem_bytes(index, reserved=True)
+    if index < 0:
+        return reserved
+    return max(int(jt.core.device_memory_reserved_peak(int(index))), reserved)
+
+
+def _mem_summary(device=None, abbreviated=False):
+    """torch.cuda.memory_summary: jittor's pool counters as a short table."""
+    index = _mem_device_key(device)
+    stats = _api_cuda_memory_stats(device)
+    mib = float(1 << 20)
+    rows = [("Allocated memory (current)", stats["allocated_bytes.all.current"]),
+            ("Allocated memory (peak)", stats["allocated_bytes.all.peak"]),
+            ("Allocated memory (total allocated)", stats.get("allocated_bytes.all.allocated", 0)),
+            ("Reserved memory (current)", stats["reserved_bytes.all.current"]),
+            ("Reserved memory (peak)", stats["reserved_bytes.all.peak"])]
+    width = 75
+    lines = ["|" + "=" * width + "|",
+             "|" + ("jittor pool memory summary, device %d" % index).center(width) + "|",
+             "|" + "-" * width + "|"]
+    for label, value in rows:
+        lines.append("| %-45s %23.1f MiB |" % (label, value / mib))
+    lines.append("|" + "=" * width + "|")
+    return "\n".join(lines) + "\n"
 
 
 def _reset_peak(device=None, *a, **k):
     index = _mem_device_key(device)
+    if index >= 0:
+        jt.core.reset_device_memory_peak(int(index))
     _cuda_runtime().device_mem_peak[index] = _mem_bytes(index)
 
 
@@ -1122,9 +1183,13 @@ def _api_cuda_default_stream(device=None, *a, **k):
 def _api_cuda_memory_stats(device=None, *a, **k):
     index = _mem_device_key(device)
     current = _mem_used(device)
-    return {'allocated_bytes.all.current': current,
-            'allocated_bytes.all.peak': _cuda_runtime().device_mem_peak.get(index, current),
-            'reserved_bytes.all.current': _mem_bytes(index, reserved=True)}
+    stats = {'allocated_bytes.all.current': current,
+             'allocated_bytes.all.peak': _mem_max(device),
+             'reserved_bytes.all.current': _mem_bytes(index, reserved=True),
+             'reserved_bytes.all.peak': _mem_max_reserved(device)}
+    if index >= 0:
+        stats['allocated_bytes.all.allocated'] = int(jt.core.device_memory_allocated_total(int(index)))
+    return stats
 
 
 def _api_cuda_ipc_collect(*a, **k):
@@ -1135,32 +1200,173 @@ def _api_cuda_memory__set_allocator_settings(*a, **k):
     return None
 
 
-def _api_cuda_get_rng_state(*a, **k):
-    return jt.array([0], dtype='uint8')
+#: The CUDA RNG state, as a seed and a position.
+#:
+#: `get_rng_state` used to return the constant `[0]` and `set_rng_state` used
+#: to do nothing, so `accelerator.save_state()` wrote a byte that meant
+#: nothing, `load_state()` restored nothing, and the resumed run drew a
+#: different sequence than the one it was continuing -- with no error anywhere.
+#:
+#: What makes a real state possible is that cuRAND's offset turns out to
+#: describe the position completely. Measured against
+#: CURAND_RNG_PSEUDO_DEFAULT on this box, by drawing a history, drawing a
+#: continuation, then reseeding, setting the summed offset and drawing again:
+#:
+#:   uniform float32/float64   n elements advance the generator by n
+#:   normal  float32/float64   n elements advance it by n/2
+#:
+#: a mixed history advances by the sum of its parts, and after a restore every
+#: one of the four kinds continues exactly. So a seed plus one integer is the
+#: whole state -- `backends/cuda/libraries/curand/` counts it, this packs it.
+#:
+#: The bytes are jittor's own format, not torch's CUDA state bytes: save them,
+#: hand them back, do not parse them, and do not feed torch's to this.
+_RNG_STATE_MAGIC = b"JTCURAND"
+_RNG_STATE_VERSION = 1
+
+
+def _rng_state_pack(seed, offset):
+    import struct
+    import numpy as _np
+    blob = _RNG_STATE_MAGIC + struct.pack("<Iqq", _RNG_STATE_VERSION,
+                                          int(seed), int(offset))
+    return jt.array(_np.frombuffer(blob, dtype=_np.uint8).copy())
+
+
+def _rng_state_unpack(state):
+    import struct
+    import numpy as _np
+    raw = state
+    if hasattr(raw, "numpy"):
+        raw = raw.numpy()
+    raw = _np.asarray(raw, dtype=_np.uint8).reshape(-1).tobytes()
+    if not raw.startswith(_RNG_STATE_MAGIC):
+        raise ValueError(
+            "not a jittor CUDA RNG state. torch's own state bytes are a "
+            "different format and a different algorithm; they cannot be "
+            "restored into jittor's cuRAND generator.")
+    version, seed, offset = struct.unpack("<Iqq", raw[len(_RNG_STATE_MAGIC):])
+    if version != _RNG_STATE_VERSION:
+        raise ValueError("unsupported jittor CUDA RNG state version %d" % version)
+    return int(seed), int(offset)
+
+
+#: What to say when the native half is not there.
+#:
+#: The seed/offset counting lives in `backends/cuda/libraries/curand/`. When
+#: that is absent -- an older build, a backend compiled without it, or the
+#: native change not present -- there is no position to save, and the honest
+#: answer is to say so rather than to call a function that is not there or,
+#: worse, to go back to answering with a constant.
+_NO_NATIVE_RNG_STATE = (
+    "this jittor build cannot express the CUDA RNG state: its cuRAND wrapper "
+    "does not count how far the generator has advanced, so there is no "
+    "position to save and a restore could only reseed. "
+    "torch.cuda.manual_seed(seed) starts a reproducible sequence; resuming one "
+    "from a checkpoint needs curand_generator_offset/curand_restore_state in "
+    "the native cuRAND backend."
+)
+
+
+def _curand(required=True):
+    backend = getattr(jt.compile_extern, "curand", None)
+    if backend is None or not hasattr(backend, "curand_generator_offset") \
+            or not hasattr(backend, "curand_restore_state"):
+        if required:
+            raise NotImplementedError(_NO_NATIVE_RNG_STATE)
+        return None
+    return backend
+
+
+def cuda_rng_state_is_supported():
+    """Whether this build can save and restore the CUDA RNG position."""
+    return _curand(required=False) is not None
+
+
+def _rng_device_index(device):
+    """Which device's generator, as a real index.
+
+    `jt.flags.device_id` is -1 until something sets it, meaning "whichever is
+    current" rather than device -1, and passing that through reached the
+    native restore as `device >= 0` failing. `jt.current_device()` is the one
+    the cuRAND wrapper itself indexes by.
+    """
+    if device is None:
+        index = -1
+    elif isinstance(device, bool):
+        raise TypeError("device index must not be a bool")
+    elif isinstance(device, int):
+        index = int(device)
+    elif isinstance(device, str):
+        # Before the `.index` probe below, because `str` *has* an `.index`
+        # method: `getattr("cuda:0", "index", None)` hands back a bound method,
+        # which is not None, and `int()` on it raised "int() argument must be
+        # ... not 'builtin_function_or_method'". torch accepts this spelling.
+        index = int(device.split(":")[1]) if ":" in device else -1
+    else:
+        attr = getattr(device, "index", None)
+        # An int, not merely present: the same trap one line up, for any object
+        # that happens to carry a callable `.index`.
+        index = int(attr) if isinstance(attr, int) else -1
+    if index < 0:
+        index = int(jt.current_device())
+    return max(index, 0)
+
+
+def _api_cuda_get_rng_state(device=None, *a, **k):
+    # Everything queued has to have happened, or the offset describes a
+    # position the device has not reached: the saved state would then be ahead
+    # of the data the checkpoint was taken with.
+    jt.sync_all(True)
+    backend = _curand()
+    index = _rng_device_index(device)
+    return _rng_state_pack(backend.curand_generator_seed(),
+                           backend.curand_generator_offset(index))
 
 
 def _api_cuda_get_rng_state_all(*a, **k):
-    return [jt.array([0], dtype='uint8')]
+    jt.sync_all(True)
+    backend = _curand()
+    seed = backend.curand_generator_seed()
+    return [_rng_state_pack(seed, backend.curand_generator_offset(i))
+            for i in range(int(jt.get_device_count()))]
 
 
-def _api_cuda_set_rng_state(*a, **k):
-    return None
+def _api_cuda_set_rng_state(state, device=None, *a, **k):
+    seed, offset = _rng_state_unpack(state)
+    # Parsed before anything is touched, so a malformed state leaves the
+    # generator where it was rather than half-restored.
+    jt.sync_all(True)
+    _curand().curand_restore_state(_rng_device_index(device), seed, offset)
 
 
-def _api_cuda_set_rng_state_all(*a, **k):
-    return None
+def _api_cuda_set_rng_state_all(states, *a, **k):
+    parsed = [_rng_state_unpack(state) for state in states]
+    jt.sync_all(True)
+    backend = _curand()
+    for index, (seed, offset) in enumerate(parsed):
+        backend.curand_restore_state(index, seed, offset)
 
 
 def _api_cuda_initial_seed(*a, **k):
-    return 0
+    # The seed jittor is actually running on, not 0. `set_seed` records it and
+    # the cuRAND wrapper replays it onto every device generator, so this is the
+    # one part of the state that *is* expressible.
+    return int(jt.get_seed())
 
 
 def _api_cuda_seed(*a, **k):
-    return None
+    # torch reseeds from a fresh nondeterministic value and returns None; doing
+    # nothing instead left the caller on the old sequence while looking
+    # reseeded.
+    import random as _random
+    jt.set_seed(_random.SystemRandom().randrange(1 << 31))
 
 
 def _api_cuda_seed_all(*a, **k):
-    return None
+    # One generator per device, all replayed from the same seed by the cuRAND
+    # wrapper's set_seed callback, so seeding "all" is seeding.
+    _api_cuda_seed()
 
 
 def _api_mp_reductions_reduce_tensor(tensor):
@@ -1181,6 +1387,61 @@ def _api_g__C__autograd__push_saved_tensors_default_hooks(*a, **k):
 
 def _api_g__C__autograd__pop_saved_tensors_default_hooks(*a, **k):
     return None
+
+
+class _CudnnFlags:
+    """`torch.backends.cudnn.flags(...)`: set the switches, then put them back.
+
+    A context manager, which is how callers use it::
+
+        with torch.backends.cudnn.flags(enabled=False, benchmark=True):
+            ...
+
+    **It restores the attributes; it does not change which kernels run.** The
+    module's four switches are already settings nothing acts on -- convolution
+    here picks its own path -- and this does not make them act. What it buys is
+    that the attribute a caller reads back inside the block is the one it set,
+    and that the block is not an AttributeError. MiniMax-H3's reference path
+    wraps work in it, and a missing `flags` killed the request outright.
+
+    A class rather than `@contextlib.contextmanager` so the old values are read
+    on `__enter__`, not when the object is built.
+    """
+
+    _NAMES = ("enabled", "benchmark", "deterministic", "allow_tf32")
+
+    def __init__(self, module, values):
+        self._module = module
+        self._values = values
+        self._saved = {}
+
+    def __enter__(self):
+        for name in self._NAMES:
+            if name in self._values:
+                self._saved[name] = getattr(self._module, name, None)
+                setattr(self._module, name, self._values[name])
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        for name, previous in self._saved.items():
+            setattr(self._module, name, previous)
+        return False
+
+
+def _api_cudnn_flags(module, enabled=False, benchmark=False, benchmark_limit=10,
+                     deterministic=False, allow_tf32=True):
+    """The module comes in bound, it is not looked up.
+
+    `bindings.py` binds this to the cudnn module it just built. An installer
+    reaching into the interpreter's module registry is what
+    `test_torch_compat_structure::test_canonical_module_line_budgets` forbids
+    -- "it fails on growth, not on a boundary violation" -- and the first
+    version of this did exactly that.
+    """
+    del benchmark_limit          # accepted for signature parity; nothing reads it
+    return _CudnnFlags(module, {"enabled": enabled, "benchmark": benchmark,
+                                "deterministic": deterministic,
+                                "allow_tf32": allow_tf32})
 
 
 def _api_cudnn_version():
@@ -1387,9 +1648,11 @@ _CUDA_FIDELITY_DETAILS = {
     _Event: "Host timestamps after synchronization; not native CUDA event timing.",
     _mem_used: "Per-device live bytes from jittor's own pools; excludes the CUDA context and other processes.",
     _mem_reserved: "Per-device bytes held by jittor's pools (live plus cached); not the driver's view of the card.",
-    _mem_max: "Per-device high-water mark sampled at memory queries, not at every allocation.",
-    _reset_peak: "Resets one device's sampled live-byte high-water mark.",
-    _api_cuda_memory_stats: "Current and sampled peak live bytes plus pool reservation, per device; other PyTorch counters absent.",
+    _mem_max: "Per-device high-water mark the pools record at every allocation; sampled at memory queries only when the caching pools are disabled.",
+    _reset_peak: "Restarts one device's live-byte high-water mark at the current live bytes.",
+    _api_cuda_memory_stats: "Current, peak and total allocated bytes and current/peak pool reservation, per device; other PyTorch counters absent.",
+    _mem_max_reserved: "Per-device high-water of what jittor's pools hold from the driver; excludes the CUDA context and library workspaces.",
+    _mem_summary: "A table of jittor's per-device pool counters, not PyTorch's allocator breakdown.",
     _mem_get_info: "cudaMemGetInfo on the device asked about; the fallback reports jittor's pools only, so it excludes other processes.",
     _api_cuda_synchronize: "Waits for every device this run touched, which is stronger than torch's per-device synchronize.",
     _api_cuda_can_device_access_peer: "Answered by the CUDA driver for the named pair; raises where the driver cannot be loaded rather than guessing.",
@@ -1403,9 +1666,6 @@ _CUDA_FIDELITY_DETAILS = {
 
 _CUDA_PLACEHOLDERS = frozenset((
     CUDAGraph, CUDAPluggableAllocator, TorchFunctionMode,
-    _api_cuda_get_rng_state, _api_cuda_get_rng_state_all,
-    _api_cuda_set_rng_state, _api_cuda_set_rng_state_all,
-    _api_cuda_initial_seed, _api_cuda_seed, _api_cuda_seed_all,
     _api_cuda_ipc_collect, _api_cuda_memory__set_allocator_settings,
     _api_mp_reductions_rebuild_cuda_tensor,
     _api_g__C__autograd__push_saved_tensors_default_hooks,

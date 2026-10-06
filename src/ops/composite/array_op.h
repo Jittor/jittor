@@ -30,8 +30,10 @@ struct ArrayOp : Op {
     ArrayOp(ArrayArgs&& args);
 
     ArrayOp(PyObject* obj);
+    // The data, wherever it is now: `run` hands the allocation to the output,
+    // and a kept graph that runs again still has to read the constant.
     template<class T>
-    inline T* ptr() { return (T*)allocation.ptr; }
+    inline T* ptr() { return (T*)(allocation.ptr ? allocation.ptr : output->mem_ptr); }
     
     const char* name() const override { return "array"; }
     void run() override;

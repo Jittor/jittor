@@ -5,7 +5,7 @@ import math
 
 import jittor as jt
 from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
-from jittor._runtime.dispatch import optional_kernel
+from jittor._runtime.dispatch import native_rule, optional_kernel
 
 from ._inference import cached_source
 
@@ -65,19 +65,7 @@ def _rms_norm_contract(x, gamma, epsilon, residual=None):
     return hidden_size, threads, threads // 32, epsilon_value
 
 
-def _rms_norm_supported(x, gamma, epsilon=1e-6):
-    return _rms_norm_contract(x, gamma, epsilon) is not None
-
-
-@optional_kernel("nn.rms_norm.inference", ("cuda", "rocm_legacy", "corex_legacy"),
-                 supports=_rms_norm_supported)
-def _rms_norm_cuda(x, gamma, epsilon=1e-6):
-    """Inference-only fused CUDA RMSNorm, or ``None`` when unsupported."""
-    contract = _rms_norm_contract(x, gamma, epsilon)
-    if contract is None:
-        return None
-    hidden_size, threads, warps, epsilon_value = contract
-    cuda_src = cached_source(r"""
+_RMS_NORM_SOURCE = r"""
     __device__ __forceinline__ float warp_sum(float value) {
         for (int offset = 16; offset > 0; offset >>= 1)
             value += __shfl_down_sync(0xffffffff, value, offset);
@@ -108,19 +96,48 @@ def _rms_norm_cuda(x, gamma, epsilon=1e-6):
         __syncthreads();
         for (int dim = tid; dim < %(hidden_size)d; dim += blockDim.x) {
             int index = row * %(hidden_size)d + dim;
-            y[index] = out0_type(static_cast<float>(x[index]) * inverse_rms
+            // As ATen and HF's RMSNorm: the normalized value is rounded to the
+            // output type before the weight multiplies it -- one bf16/fp16
+            // quantum of difference otherwise.
+            out0_type normalized = out0_type(static_cast<float>(x[index]) * inverse_rms);
+            y[index] = out0_type(static_cast<float>(normalized)
                                  * static_cast<float>(gamma[dim]));
         }
     }
     int rows = in0->num / %(hidden_size)d;
     rms_norm<<<rows, %(threads)d>>>(in0_p, in1_p, out0_p);
     CHECK(0 == cudaGetLastError());
-    """, {
+    """
+
+
+def _rms_norm_source(hidden_size, threads, warps, epsilon_value):
+    """The CUDA source of the kernel below for one contract.
+
+    Also what the native module call (`src/bindings/pyjt/py_module_call.cc`)
+    builds the same operator from, so the two cannot drift apart.
+    """
+    return cached_source(_RMS_NORM_SOURCE, {
         "epsilon": epsilon_value,
         "hidden_size": hidden_size,
         "threads": threads,
         "warps": warps,
     })
+
+
+@native_rule("rms_norm_inference")
+def _rms_norm_supported(x, gamma, epsilon=1e-6):
+    return _rms_norm_contract(x, gamma, epsilon) is not None
+
+
+@optional_kernel("nn.rms_norm.inference", ("cuda", "rocm_legacy", "corex_legacy"),
+                 supports=_rms_norm_supported)
+def _rms_norm_cuda(x, gamma, epsilon=1e-6):
+    """Inference-only fused CUDA RMSNorm, or ``None`` when unsupported."""
+    contract = _rms_norm_contract(x, gamma, epsilon)
+    if contract is None:
+        return None
+    hidden_size, threads, warps, epsilon_value = contract
+    cuda_src = _rms_norm_source(hidden_size, threads, warps, epsilon_value)
     return _stop_grad_outputs(
         jt.code(x.shape, x.dtype, [x, gamma], cuda_src=cuda_src))
 
@@ -155,8 +172,9 @@ def _fused_add_rms_norm_cuda(x, residual, gamma, epsilon=1e-6):
         float sum = 0.0f;
         for (int dim = tid; dim < %(hidden_size)d; dim += blockDim.x) {
             int index = row * %(hidden_size)d + dim;
-            float value = static_cast<float>(x[index])
-                        + static_cast<float>(residual[index]);
+            // The residual sum in the input's type, as `x + residual` is.
+            float value = static_cast<float>(out1_type(static_cast<float>(x[index])
+                                                       + static_cast<float>(residual[index])));
             sum += value * value;
         }
         sum = warp_sum(sum);
@@ -171,10 +189,11 @@ def _fused_add_rms_norm_cuda(x, residual, gamma, epsilon=1e-6):
         __syncthreads();
         for (int dim = tid; dim < %(hidden_size)d; dim += blockDim.x) {
             int index = row * %(hidden_size)d + dim;
-            float value = static_cast<float>(x[index])
-                        + static_cast<float>(residual[index]);
+            float value = static_cast<float>(out1_type(static_cast<float>(x[index])
+                                                       + static_cast<float>(residual[index])));
             residual_out[index] = out1_type(value);
-            y[index] = out0_type(value * inverse_rms
+            out0_type normalized = out0_type(value * inverse_rms);
+            y[index] = out0_type(static_cast<float>(normalized)
                                  * static_cast<float>(gamma[dim]));
         }
     }

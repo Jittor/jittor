@@ -329,7 +329,13 @@ inline ConvPlanRequest conv_plan_request(
     // candidates: both belong in the key, because both change which plan the
     // build picks.
     r.allow_tf32 = math_type == CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION;
-    r.benchmark = cudnn_benchmark != 0;
+    // Channels-last half precision is timed whatever `cudnn_benchmark` says:
+    // there the heuristic's first plan is often not the fast one, and the
+    // difference is most of what the layout is for -- a ResNet-50 batch-64
+    // inference ran its NHWC convolutions in 6.6 ms on the first plan and in
+    // 5.0 ms on the fastest of six, the same as PyTorch's.
+    bool channels_last = dimX[1] > 1 && strideX[1] == 1;
+    r.benchmark = cudnn_benchmark != 0 || channels_last;
     return r;
 }
 

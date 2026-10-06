@@ -7,6 +7,7 @@
 #pragma once
 #include <mutex>
 #include <atomic>
+#include <thread>
 #include "core/common.h"
 #include "type/nano_string.h"
 #include "type/nano_vector.h"
@@ -104,6 +105,10 @@ struct VarFlags {
         // and an ordinary `jt.sync_all()` is such a batch. Cleared by
         // `Var::release_kept`, which is what gives the graph back.
         _kept,
+        // Made from a Python number an operator was handed (`x - 1.0`), not
+        // from a tensor anyone holds. Under torch's rule it never asks for a
+        // gradient; see `is_constant_scalar` in op.cc.
+        _python_number,
         _end,
     };
 };
@@ -392,6 +397,10 @@ struct Node {
             batch_index_mismatch(stamp);
         return batch_index;
     }
+    // The same read for a node that may not be of the batch: -1 then.
+    inline int batch_index_in(int64 stamp) const {
+        return batch_stamp == stamp ? batch_index : -1;
+    }
 
     int64 tflag = 0;
     int64 id; 
@@ -494,7 +503,64 @@ inline Node::input_t& Node::output_t::reverse() {
 // later, at exit, as "corrupted double-linked list". Recursive because a
 // propagation step re-enters these same functions; nothing here waits on
 // another thread, so there is no lock order to get wrong.
-EXTERN_LIB std::recursive_mutex& graph_mutation_mutex();
+//
+// Taken several times per operator by the executor and by every op
+// constructor, almost always by the thread that already holds it or with
+// nobody else waiting, so the uncontended path is one compare-and-swap rather
+// than a pthread recursive mutex's lock and unlock.
+class GraphMutationMutex {
+    std::atomic<const void*> owner_{nullptr};
+    int depth_ = 0;  // written by the owner only
+    static const void* thread_token() {
+        thread_local char token;
+        return &token;
+    }
+public:
+    void lock() {
+        const void* self = thread_token();
+        if (owner_.load(std::memory_order_relaxed) == self) {
+            depth_++;
+            return;
+        }
+        const void* expected = nullptr;
+        for (int spins = 0; !owner_.compare_exchange_weak(
+                expected, self, std::memory_order_acquire, std::memory_order_relaxed); ) {
+            expected = nullptr;
+            if (++spins > 64) std::this_thread::yield();
+        }
+        depth_ = 1;
+    }
+    void unlock() {
+        if (--depth_ == 0) owner_.store(nullptr, std::memory_order_release);
+    }
+    bool try_lock() {
+        const void* self = thread_token();
+        if (owner_.load(std::memory_order_relaxed) == self) {
+            depth_++;
+            return true;
+        }
+        const void* expected = nullptr;
+        if (!owner_.compare_exchange_strong(
+                expected, self, std::memory_order_acquire, std::memory_order_relaxed))
+            return false;
+        depth_ = 1;
+        return true;
+    }
+    // Let go of it entirely, however deep this thread holds it, and say how
+    // deep that was; 0 when this thread does not hold it. For a wait on
+    // another thread that needs it (see runtime/async_exec.h).
+    int release_all() {
+        if (owner_.load(std::memory_order_relaxed) != thread_token()) return 0;
+        int depth = depth_;
+        depth_ = 0;
+        owner_.store(nullptr, std::memory_order_release);
+        return depth;
+    }
+    // After `lock()` or a successful `try_lock()`: hold it `depth` deep --
+    // what `release_all` returned, to take it back.
+    void deepen(int depth) { depth_ += depth - 1; }
+};
+EXTERN_LIB GraphMutationMutex& graph_mutation_mutex();
 
 struct SetupFreeBuffer {
 
@@ -508,7 +574,7 @@ inline ~SetupFreeBuffer() {
         // Held across the delete round: another thread must not be walking a
         // node that this round is destroying, nor appending to the buffer
         // while it is being drained.
-        std::lock_guard<std::recursive_mutex> guard(graph_mutation_mutex());
+        std::lock_guard<GraphMutationMutex> guard(graph_mutation_mutex());
         for (int i=0; i<free_buffer().size(); i++)
             delete free_buffer()[i];
         free_buffer().clear();

@@ -16,6 +16,7 @@ float32-precision-policy
 mixed-precision
 complex-dtype
 pipelined-execution
+profiling
 ```
 
 ## 按问题索引
@@ -28,3 +29,4 @@ pipelined-execution
 | fp16 / bf16 训练怎么开、loss scale、`GradScaler` | [混合精度训练](mixed-precision.md) |
 | 复数支持到什么程度 | [复数 dtype](complex-dtype.md) |
 | 为什么 GPU 利用率上不去、`auto_flush_ops` 是什么 | [流水式惰性执行](pipelined-execution.md) |
+| 一步的时间和显存去哪了、主机瓶颈还是设备瓶颈 | [性能与显存画像](profiling.md) |

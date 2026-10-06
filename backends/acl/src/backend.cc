@@ -1,5 +1,6 @@
 #include "acl_foreach_coefficients.h"
 #include "acl_runtime.h"
+#include "acl_jittor.h"
 #include "acl_workspace.h"
 #include "runtime/backend.h"
 #include "runtime/backend_streams.h"
@@ -285,6 +286,70 @@ void* compute_stream(int device) {
     if (unsigned(device) < unsigned(kFastDeviceSlots))
         fast_compute_stream[device].store(found->second, std::memory_order_release);
     return found->second;
+}
+
+// -- graph capture ---------------------------------------------------------
+// CANN's model-run-instance capture records what is issued on a stream into
+// a replayable aclmdlRI, as cudaStreamBeginCapture does for CUDA, and the
+// replay is one aclmdlRIExecuteAsync: an aclnn operator's host time (the
+// workspace query, the descriptors, the launch) is paid once, at recording.
+// Relaxed mode, as on CUDA: a pool that has to grow mid-recording allocates.
+// A capture that cannot start or close is not an error: the caller keeps
+// launching operator by operator, as it did before.
+std::atomic<int> live_graphs{0};
+
+// The last graph gone: what was kept for the recordings can go too.
+void graph_gone() {
+    if (live_graphs.fetch_sub(1) != 1) return;
+    acl_workspace_release_retired();
+    acl_scalar_cache_release_retired();
+}
+
+bool graph_capture_begin(int device) {
+    bool started = false;
+    on_device(device, [&] {
+        auto stream = static_cast<aclrtStream>(compute_stream(device));
+        const aclError status = aclmdlRICaptureBegin(stream, ACL_MODEL_RI_CAPTURE_MODE_RELAXED);
+        if (status != ACL_SUCCESS) {
+            LOGvv << "ACL graph capture could not start:" << acl_error_to_string(status);
+            return;
+        }
+        started = true;
+    });
+    // Counted from the start of the recording: what the recording reads has
+    // to be kept from then on.
+    if (started) live_graphs.fetch_add(1);
+    return started;
+}
+
+void* graph_capture_end(int device) {
+    aclmdlRI model = nullptr;
+    on_device(device, [&] {
+        auto stream = static_cast<aclrtStream>(compute_stream(device));
+        const aclError status = aclmdlRICaptureEnd(stream, &model);
+        if (status != ACL_SUCCESS || !model) {
+            LOGvv << "ACL graph capture did not close:" << acl_error_to_string(status);
+            if (model) report_acl(aclmdlRIDestroy(model), "aclmdlRIDestroy");
+            model = nullptr;
+        }
+    });
+    if (!model) graph_gone();
+    return reinterpret_cast<void*>(model);
+}
+
+void graph_launch(void* graph, int device) {
+    on_device(device, [&] {
+        auto stream = static_cast<aclrtStream>(compute_stream(device));
+        check_acl(aclmdlRIExecuteAsync(reinterpret_cast<aclmdlRI>(graph), stream),
+                  "aclmdlRIExecuteAsync");
+    });
+}
+
+void graph_release(void* graph, int device) {
+    on_device(device, [&] {
+        report_acl(aclmdlRIDestroy(reinterpret_cast<aclmdlRI>(graph)), "aclmdlRIDestroy");
+    });
+    graph_gone();
 }
 
 void synchronize_stream(BackendStream stream) {
@@ -673,6 +738,8 @@ aclrtStream acl_current_stream() {
     return static_cast<aclrtStream>(compute_stream(acl_runtime_current_device()));
 }
 
+int acl_live_graphs() { return live_graphs.load(std::memory_order_acquire); }
+
 void shutdown_acl_backend() noexcept {
     try {
     auto* owner = created_state.load(std::memory_order_acquire);
@@ -755,6 +822,10 @@ BackendOps make_acl_backend() {
     ops.get_deterministic_algorithms = get_deterministic_algorithms;
     ops.check_error = check_callback_failure;
     ops.compute_stream = compute_stream;
+    ops.graph_capture_begin = graph_capture_begin;
+    ops.graph_capture_end = graph_capture_end;
+    ops.graph_launch = graph_launch;
+    ops.graph_release = graph_release;
     ops.stream_create = create_stream;
     ops.stream_destroy = destroy_stream;
     ops.stream_synchronize = synchronize_stream;

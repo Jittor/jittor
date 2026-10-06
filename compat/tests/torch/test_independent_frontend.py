@@ -124,10 +124,14 @@ assert torch.nn.init is not native_init
 assert torch.nn.Module is not jt.Module
 assert issubclass(torch.nn.Linear, torch.nn.Module)
 assert jt.autograd.get_policy() is policy_before
-x = torch.tensor([1., 2.], requires_grad=True)
+# torch's default device is the CPU whatever `use_cuda` says, so a device run
+# has to ask for the device to exercise it.
+on_device = bool(jt.introspection.policy.runtime.use_cuda)
+x = torch.tensor([1., 2.], requires_grad=True,
+                 device="cuda" if on_device else "cpu")
 assert type(x) is torch.Tensor
 assert x.dtype is torch.float32
-if jt.introspection.policy.runtime.use_cuda:
+if on_device:
     x.sync()
     assert x.location() == "device"
 (x * x).sum().backward()
@@ -345,7 +349,8 @@ try:
     assert torch.get_default_dtype() is torch.float64
 finally:
     torch.set_default_dtype(previous_dtype)
-original = torch.tensor([1., 2.], dtype=torch.float64, requires_grad=True)
+original = torch.tensor([1., 2.], dtype=torch.float64, requires_grad=True,
+                        device="cuda" if on_device else "cpu")
 alias = torch.Tensor(original)
 clone = original.clone()
 assert clone.data_ptr() != original.data_ptr()

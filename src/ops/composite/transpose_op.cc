@@ -5,6 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include "ops/composite/transpose_op.h"
+#include "ops/layout_propagation.h"
 #include "core/var.h"
 #include "ops/op_register.h"
 #include "ops/composite/op_capability.h"
@@ -14,6 +15,21 @@ namespace jittor {
 
 #ifndef JIT
 static auto make_transpose = op_constructor<VarPtr, Var*, NanoVector>("transpose");
+
+DEFINE_FLAG(int, transpose_storage_view, 0,
+    "Return a permutation as a view of its input's allocation instead of a "
+    "materialised copy: same storage, swapped strides, and a write through the "
+    "result reaches its base -- what torch returns. Off by default, and the "
+    "benchmark that decided that says why: which way is faster depends on what "
+    "consumes the transpose, and the two directions disagree. Feeding an "
+    "elementwise or convolution chain, the view wins by skipping a copy -- the "
+    "MiniMax-H3 video VAE decodes 1.24x faster with it on (1.581s -> 1.272s, "
+    "same picture to within the run-to-run fp16 spread). Feeding cuBLAS, the "
+    "dense copy wins, because a transposed operand that is a strided view is "
+    "not what the GEMM wants: 1576x768 @ 768x3072 goes from 594us to 702us, "
+    "18% slower, and 4096-cubed and 8192-cubed lose a few percent each. So "
+    "there is no single right default; turn it on for a model whose transposes "
+    "feed elementwise work, and measure.");
 
 TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
     // A rank-0 var has no axes to permute, and the empty permutation of
@@ -47,7 +63,43 @@ TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
         for (int i=0; i<(int)xdim; i++)
             axes.push_back(xdim-1-i);
     }
-    if (axes.size() < xdim || (axes.size() == xdim && axes[xdim-1]==xdim-1)) {
+    // Moving only unit axes moves no element: every non-unit axis keeps its
+    // place relative to the others, so the dense result is the input's own
+    // bytes under another shape. Decoding one token transposes [b, 1, h, d]
+    // into [b, h, 1, d] three times a layer; each was a copy kernel -- 10 ms of
+    // device time and 10k launches over a 128-token Qwen3 decode.
+    if (x->num >= 0 && axes.size() == xdim && x->is_contiguous()) {
+        int64 seen = 0;
+        int last = -1;
+        bool kept = true;
+        for (uint i=0; i<xdim; i++) {
+            int a = axes[i];
+            if (a < 0 || a >= (int)xdim || (seen >> a & 1)) { kept = false; break; }
+            seen |= 1ll << a;
+            if (x->shape[a] == 1) continue;
+            if (a < last) { kept = false; break; }
+            last = a;
+        }
+        if (kept) {
+            static auto make_reshape = op_constructor<VarPtr, Var*, NanoVector>("reshape");
+            NanoVector shape;
+            for (uint i=0; i<xdim; i++) shape.push_back(x->shape[axes[i]]);
+            forward(make_reshape(x, shape));
+            return;
+        }
+    }
+    // A view is asked for: nothing below may turn it into a copy.
+    const bool as_view = transpose_storage_view != 0;
+    // The copying kernels below read a dense input. Before strided inputs
+    // were accepted this copy was made for every transpose by the op
+    // constructor -- including a view's, which then permuted a fresh dense
+    // copy instead of the storage it was asked to view.
+    if (!as_view && !x->is_contiguous()) {
+        auto dense = contiguous_storage(x);
+        forward(make_transpose(dense, axes));
+        return;
+    }
+    if (!as_view && (axes.size() < xdim || (axes.size() == xdim && axes[xdim-1]==xdim-1))) {
         static VarPtr(*fuse_transpose)(Var*, NanoVector) = get_op_info("fuse_transpose").get_constructor<VarPtr, Var*, NanoVector>();
         auto var = fuse_transpose(x, axes);
         forward(var);
@@ -55,7 +107,7 @@ TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
     }
     #ifdef HAS_ACCELERATOR
     const auto backend = construction_target_backend(x);
-    if (backend != BackendId::Cpu) {
+    if (backend != BackendId::Cpu && !as_view) {
         auto accelerated_transpose = find_op_capability<VarPtr, Var*, NanoVector>(
             backend, OpCapability::Transpose, x, axes);
         if (accelerated_transpose) {
@@ -66,6 +118,9 @@ TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
     }
     #endif
     y = create_output(nullptr, x->dtype());
+    // Decided here rather than in infer_shape so the flag is read once, at
+    // construction, and the op's identity does not change under it afterwards.
+    storage_view = transpose_storage_view != 0;
     set_flag(OpFlags::_cuda);
     set_flag(OpFlags::_manual_set_vnbb);
 }
@@ -86,6 +141,21 @@ void TransposeOp::infer_shape() {
     for (uint i=0; i<xdim; i++)
         shape.push_back(x->shape[axes[i]]);
     y->set_shape(shape);
+    if (storage_view) {
+        // The permutation applied to the *input's* strides, so a transpose of
+        // something already strided composes instead of assuming dense input.
+        vector<int64> strides(xdim);
+        for (uint i=0; i<xdim; i++)
+            strides[i] = x->storage_stride(axes[i]);
+        if (NanoVector::fits(strides)) {
+            y->set_storage_strides(strides);
+            y->share_with(x);
+        } else {
+            // A stride this cannot encode is not one to guess at; fall back to
+            // the copy, which is always correct.
+            storage_view = false;
+        }
+    }
 }
 
 VarPtr TransposeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
@@ -93,6 +163,11 @@ VarPtr TransposeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     reverse.reserve(axes.size(), axes.size());
     for (uint i=0; i<axes.size(); i++)
         reverse.set_data(axes[i], i);
+    // A view's gradient is a view too. The storage view a channels-last
+    // activation is read through (NCHW over NHWC memory) used to hand back a
+    // materialised NCHW copy of every gradient reaching it, which the next
+    // convolution's backward then converted back to NHWC.
+    if (storage_view) return storage_view_transpose(dout, reverse);
     return make_transpose(dout, reverse);
 }
 

@@ -43,6 +43,10 @@ DEFINE_FLAG(int, fuse_op_limit, 16,
     "traffic; a very wide one has to keep every live intermediate in registers, "
     "and under autocast nothing breaks the chain. 0 is unbounded.");
 
+DEFINE_FLAG(int, fuse_into_reduce, 1,
+    "Let a reduction take in the elementwise group producing its input even "
+    "when that input is also read by an op that cannot fuse; the group then "
+    "writes the input and reduces it in one pass. 0 disables it.");
 // count_fuse decides, for one execution batch, which ops end up inside the
 // same fused op and which intermediate vars survive as real memory.
 //
@@ -91,9 +95,17 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
     //                so the question is whether the two ops may merge).
     // relation == 0: `op` and `other` both read `var` (siblings, so the
     //                question is only whether they may share one kernel).
+    // `requested_backend()` walks an op's outputs for a placement, and the
+    // passes below ask it of both ends of every edge they look at, several
+    // times over. Asked once per op instead.
+    vector<BackendId> op_backend(ops.size());
+    for (uint i = 0; i < ops.size(); i++) {
+        if (i + 8 < ops.size()) __builtin_prefetch(ops[i + 8]);
+        op_backend[i] = ops[i]->requested_backend();
+    }
     auto edge_fusable = [&](Var* var, Op* op, Op* other, int relation) -> bool {
         if (op->float32_precision != other->float32_precision) return false;
-        if (op->requested_backend() != other->requested_backend()) return false;
+        if (op_backend[op->batch_index_at(tt)] != op_backend[other->batch_index_at(tt)]) return false;
         if (var->flag(VarFlags::_stop_fuse)) return false;
         if (relation == 1) {
             // vars before start_var_num are the batch's inputs: they already
@@ -241,15 +253,40 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
 
     // Pass 3: union neighbours that sit on the same fuse level.
     //
-    // `group_size` bounds how many operators one fused kernel may hold; see
-    // `fuse_op_limit` at the top of this file for the measurements that set it.
-    // There was no bound at all, and the MiniMax-H3 video VAE decode under
-    // `autocast(float16)` built kernels of 361 operators that way -- mean width
-    // 16.47 against 2.90 for the same graph in float32, and 15.97 s against
-    // 8.32 s -- because a uniformly half-precision chain has no dtype boundary
-    // to break it while the float32 one is cut by the shim's promotion.
+    // The partition this produces has one hard invariant, owned by
+    // `build_exec_plan` phase 4: the fused groups, taken as nodes, must form a
+    // DAG. An unbounded union of same-level neighbours gives that, because a
+    // path between two ops of one level-connected component only passes
+    // through ops of that component, and the whole component becomes one group.
+    //
+    // `fuse_op_limit` is what breaks it. It bounds how many operators one
+    // fused kernel may hold -- see the top of this file for the measurements
+    // that set it: the MiniMax-H3 video VAE decode under `autocast(float16)`
+    // built kernels of 361 operators, because a uniformly half-precision
+    // chain has no dtype boundary to break it. Bounding a component means
+    // keeping only *part* of it together, and a greedy edge-by-edge bound
+    // happily unions A with C while refusing the B on the path A -> B -> C.
+    // Then {A, C} waits for B and B waits for {A, C}: phase 4 dequeues nothing
+    // of the cycle and dies on `queue.size() == roots.size()`. That is what an
+    // autocast forward + backward reached (`nn.Sequential(Linear, GELU,
+    // Linear)`, reading the gradients), and five float16 elementwise ops reach
+    // it with `fuse_op_limit=2` (tests/core/test_fuser.py).
+    //
+    // So pass 3 runs in two stages:
+    //   3a -- the unbounded union, as before the limit existed. It also records
+    //         which components a half-precision edge was unioned through.
+    //   3b -- only components that are over the limit *and* half precision
+    //         (float32 is never bounded; see `fuse_op_limit`) are split back
+    //         into single ops and re-merged in the same edge order, with two
+    //         refusals: the limit, and any merge that would put a path through
+    //         a third group between the two groups being merged.
+    // Every other component keeps exactly the grouping it had before.
     vector<int> group_size(ops.size(), 1);
     vector<char> forced_material(vars.size(), 0);
+    vector<char> half_union(ops.size(), 0);
+    auto is_half = [](Var* var) {
+        return var->dtype() == ns_float16 || var->dtype() == ns_bfloat16;
+    };
     for (uint i = 0; i < ops.size(); i++) {
         Op* op = ops[i];
         for_each_neighbor(op, 1, 1, [&](Var* var, Op* other, int relation, int is_control_dep) {
@@ -261,57 +298,241 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
             // walk goes stale.
             int root = find_father(i);
             int other_root = find_father(other_id);
-            if (root == other_root) return;
-            // Half precision only. A float32 chain stops itself -- on the H3
-            // decode float32 never exceeds 17 operators, and bounding it costs
-            // 8.1% on a 40-operator float32 elementwise chain (3.649 -> 3.944
-            // ms) for nothing. Half precision is where the runaway is, and the
-            // reason is not the dtype as such: under `autocast` the chain is
-            // uniformly float16, so none of the casts that break a mixed chain
-            // into pieces are there.
-            bool half = var->dtype() == ns_float16 || var->dtype() == ns_bfloat16;
-            if (half && fuse_op_limit > 0 &&
-                    group_size[root] + group_size[other_root] > fuse_op_limit) {
-                // Producer/consumer only, and the restriction is load-bearing
-                // twice over.
-                //
-                // It is what the mark is for. The two ops stay in different
-                // kernels, so the var between them has to exist in memory. The
-                // verdict loop does set it to 1 on the root mismatch -- and
-                // then, if every individual edge was fusable, falls into its
-                // `else if (var_fused[i])` arm and re-decides that 1 into a 2
-                // or a 3, i.e. recompute the producer inside each consumer
-                // instead of writing it out. A group whose every output went
-                // that way reaches the executor with no outputs at all
-                // (`fused_op.cc: [check failed: outputs().size()]`, which is
-                // what `fuse_op_limit=16` hit). Forcing 1 here is what that
-                // arm cannot undo.
-                //
-                // It is also the only safe spelling. `relation == 0` is the
-                // sibling walk, whose `var` is an *input* of `op` -- and that
-                // is the one branch of for_each_neighbor that does not filter
-                // on `var->tflag == tt`, because until this flag existed
-                // nothing on that path asked for a batch index. It can hand us
-                // a var outside the batch: `build_exec_plan` enqueues an input
-                // node only when it is unfinished, so an already-computed
-                // shared input is never stamped, and `batch_index_at` asserts
-                // rather than returning a stale index. Nothing is lost by
-                // skipping it -- separating two *consumers* of a var cannot
-                // empty a group's outputs, and the verdict loop materialises
-                // that var on its own, since one of the two consumers now
-                // fails the `find_father(consumer) != root` test.
-                if (relation == 1)
-                    forced_material[var->batch_index_at(tt)] = 1;
-                return;
+            char half = is_half(var);
+            if (root != other_root) {
+                father[other_root] = root;
+                group_size[root] += group_size[other_root];
+                half |= half_union[other_root];
             }
-            father[other_root] = root;
-            group_size[root] += group_size[other_root];
+            half_union[root] |= half;
         });
+    }
+
+    vector<char> bounded(ops.size(), 0);
+    int any_bounded = 0;
+    if (fuse_op_limit > 0) {
+        for (uint i = 0; i < ops.size(); i++) {
+            int root = find_father(i);
+            if (half_union[root] && group_size[root] > fuse_op_limit) {
+                bounded[i] = 1;
+                any_bounded = 1;
+            }
+        }
+    }
+    if (any_bounded) {
+        // Stage 3b. The question a merge has to answer is about groups, not
+        // ops: a group is entered at one member and left from another, and the
+        // two need not be connected inside it. So the search walks groups --
+        // from `src`, through any group but the two being merged, to `dst`.
+        // It stays inside the level component: a group path that left the
+        // component and came back would be a cycle of the unbounded partition
+        // too, which the argument above rules out.
+        vector<int> component(ops.size());
+        for (uint i = 0; i < ops.size(); i++) component[i] = find_father(i);
+        vector<vector<int>> members(ops.size());
+        for (uint i = 0; i < ops.size(); i++) {
+            if (!bounded[i]) continue;
+            father[i] = i;
+            group_size[i] = 1;
+            members[i].assign(1, i);
+        }
+        // The consumers of `op` in this batch, over exactly the edges phase 4
+        // counts: control edges order ops as surely as data edges do.
+        auto for_each_consumer = [&](Op* op, auto&& func) {
+            for (auto e : op->_outputs) {
+                auto var = e.node->var();
+                if (!var || var->tflag != tt) continue;
+                for (auto o : var->_outputs) {
+                    Op* other = o.node->op();
+                    if (other && other->tflag == tt) func(other->batch_index_at(tt));
+                }
+            }
+        };
+        vector<int> seen(ops.size(), 0);
+        int seen_stamp = 0;
+        vector<int> stack;
+        // Does a group path src -> (a third group) -> ... -> dst exist? A
+        // direct src -> dst edge is fine: it becomes internal.
+        auto reaches_through_third = [&](int src, int dst) -> bool {
+            seen_stamp++;
+            stack.assign(1, src);
+            seen[src] = seen_stamp;
+            int comp = component[src];
+            while (stack.size()) {
+                int g = stack.back();
+                stack.pop_back();
+                for (int m : members[g]) {
+                    bool found = false;
+                    for_each_consumer(ops[m], [&](int y) {
+                        if (found || component[y] != comp) return;
+                        int r = find_father(y);
+                        if (r == dst) { found = g != src; return; }
+                        if (seen[r] == seen_stamp) return;
+                        seen[r] = seen_stamp;
+                        stack.push_back(r);
+                    });
+                    if (found) return true;
+                }
+            }
+            return false;
+        };
+        for (uint i = 0; i < ops.size(); i++) {
+            if (!bounded[i]) continue;
+            Op* op = ops[i];
+            for_each_neighbor(op, 1, 1, [&](Var* var, Op* other, int relation, int is_control_dep) {
+                if (is_control_dep) return;
+                int other_id = other->batch_index_at(tt);
+                if (fuse_level[other_id] != fuse_level[i]) return;
+                int root = find_father(i);
+                int other_root = find_father(other_id);
+                if (root == other_root) return;
+                bool refuse = is_half(var) &&
+                    group_size[root] + group_size[other_root] > fuse_op_limit;
+                refuse = refuse || reaches_through_third(root, other_root) ||
+                    reaches_through_third(other_root, root);
+                if (refuse) {
+                    // Producer/consumer only, and the restriction is
+                    // load-bearing twice over.
+                    //
+                    // It is what the mark is for. The two ops stay in
+                    // different kernels, so the var between them has to exist
+                    // in memory. The verdict loop does set it to 1 on the root
+                    // mismatch -- and then, if every individual edge was
+                    // fusable, falls into its `else if (var_fused[i])` arm and
+                    // re-decides that 1 into a 2 or a 3, i.e. recompute the
+                    // producer inside each consumer instead of writing it out.
+                    // A group whose every output went that way reaches the
+                    // executor with no outputs at all (`fused_op.cc: [check
+                    // failed: outputs().size()]`, which is what
+                    // `fuse_op_limit=16` hit). Forcing 1 here is what that arm
+                    // cannot undo.
+                    //
+                    // It is also the only safe spelling. `relation == 0` is
+                    // the sibling walk, whose `var` is an *input* of `op` --
+                    // and that is the one branch of for_each_neighbor that does
+                    // not filter on `var->tflag == tt`. It can hand us a var
+                    // outside the batch: `build_exec_plan` enqueues an input
+                    // node only when it is unfinished, so an already-computed
+                    // shared input is never stamped, and `batch_index_at`
+                    // asserts rather than returning a stale index. Nothing is
+                    // lost by skipping it -- separating two *consumers* of a
+                    // var cannot empty a group's outputs, and the verdict loop
+                    // materialises that var on its own, since one of the two
+                    // consumers now fails the `find_father(consumer) != root`
+                    // test.
+                    if (relation == 1)
+                        forced_material[var->batch_index_at(tt)] = 1;
+                    return;
+                }
+                father[other_root] = root;
+                group_size[root] += group_size[other_root];
+                auto& into = members[root];
+                into.insert(into.end(), members[other_root].begin(), members[other_root].end());
+                vector<int>().swap(members[other_root]);
+            });
+        }
+    }
+
+    // Stage 3c: a reduction takes in the elementwise group that produces its
+    // input when that group computes nothing else -- even though the input is
+    // also read by something that cannot fuse (a matmul, a custom kernel),
+    // which is what keeps them on different fuse levels. The group then writes
+    // the input out and reduces it in the same pass: a bias gradient, the
+    // column sum of a GELU backward whose result also feeds the weight
+    // gradient, took a second full read of it -- 72 kernels and 3.5 ms of a
+    // ViT-B/16 training step. Levels are what made pass 3 acyclic, so a merge
+    // across them checks it: no path may leave one of the two groups and
+    // reach the other through a third.
+    // Only a reduction whose input comes from another fusable group can take
+    // anything in; most batches have none, and the member lists below cost an
+    // allocation per group to build.
+    bool reduce_candidate = false;
+    if (fuse_into_reduce)
+        for (uint i = 0; i < ops.size() && !reduce_candidate; i++) {
+            Op* reduce = ops[i];
+            if (reduce->type() != OpType::reduce) continue;
+            for (Var* var : reduce->inputs()) {
+                if (var->tflag != tt || var->batch_index_at(tt) < start_var_num) continue;
+                Op* producer = var->input();
+                if (!producer || producer->tflag != tt) continue;
+                if (find_father(producer->batch_index_at(tt)) == find_father(i)) continue;
+                if (!edge_fusable(var, reduce, producer, 1)) continue;
+                reduce_candidate = true;
+                break;
+            }
+        }
+    if (reduce_candidate) {
+        vector<vector<int>> gm(ops.size());
+        for (uint i = 0; i < ops.size(); i++) gm[find_father(i)].push_back(i);
+        auto consumers_of = [&](int op_index, auto&& func) {
+            for (auto e : ops[op_index]->_outputs) {
+                auto var = e.node->var();
+                if (!var || var->tflag != tt) continue;
+                for (auto o : var->_outputs) {
+                    Op* other = o.node->op();
+                    if (other && other->tflag == tt) func(other->batch_index_at(tt));
+                }
+            }
+        };
+        vector<int> seen(ops.size(), 0);
+        int stamp = 0;
+        vector<int> stack;
+        auto reaches_via_third = [&](int src, int dst) -> bool {
+            stamp++;
+            stack.clear();
+            auto visit = [&](int y) {
+                int r = find_father(y);
+                if (r == src || r == dst || seen[r] == stamp) return;
+                seen[r] = stamp;
+                stack.push_back(r);
+            };
+            for (int m : gm[src]) consumers_of(m, visit);
+            while (stack.size()) {
+                int g = stack.back();
+                stack.pop_back();
+                bool found = false;
+                for (int m : gm[g]) consumers_of(m, [&](int y) {
+                    if (find_father(y) == dst) found = true;
+                    else visit(y);
+                });
+                if (found) return true;
+            }
+            return false;
+        };
+        for (uint i = 0; i < ops.size(); i++) {
+            Op* reduce = ops[i];
+            if (reduce->type() != OpType::reduce) continue;
+            for (Var* var : reduce->inputs()) {
+                if (var->tflag != tt || var->batch_index_at(tt) < start_var_num) continue;
+                Op* producer = var->input();
+                if (!producer || producer->tflag != tt) continue;
+                int gp = find_father(producer->batch_index_at(tt)), gr = find_father(i);
+                if (gp == gr || !edge_fusable(var, reduce, producer, 1)) continue;
+                // Only a group that runs over the reduction's own input, so it
+                // shares the reduction's loop: elementwise work and the
+                // broadcasts that feed it constants.
+                bool shares_loop = true;
+                for (int m : gm[gp]) {
+                    Op* o = ops[m];
+                    if ((o->type() != OpType::element && o->type() != OpType::broadcast)
+                            || o->outputs().size() != 1) { shares_loop = false; break; }
+                    Var* out = o->outputs().front();
+                    if (out->num != 1 && out->shape != var->shape) { shares_loop = false; break; }
+                }
+                if (!shares_loop) continue;
+                if (reaches_via_third(gp, gr) || reaches_via_third(gr, gp)) continue;
+                father[gp] = gr;
+                group_size[gr] += group_size[gp];
+                gm[gr].insert(gm[gr].end(), gm[gp].begin(), gm[gp].end());
+                vector<int>().swap(gm[gp]);
+            }
+        }
     }
 
     if (V_ON(1000)) {
         for (uint i = 0; i < ops.size(); i++)
-            LOGvvvv << ops[i] << fuse_level[i] << unvisited_consumers[i];
+            LOGvvvv << ops[i] << fuse_level[i] << unvisited_consumers[i]
+                << "group" << find_father(i) << "bounded" << (int)bounded[i];
     }
     // Every op must have been dequeued exactly once. A smaller queue means the
     // walk above stopped early, i.e. the batch is not a DAG.
@@ -346,10 +567,19 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
             continue;
         }
         int root = find_father(producer->batch_index_at(tt));
+        // Whether an op of this batch waits on the var through a control
+        // edge (`order_after_readers`), whether one reads its data, and
+        // whether anything outside the batch still will.
+        bool ordered_before = false, read_here = false, read_later = var->holder;
         for (auto o : var->_outputs) {
-            if (o.index < 0) continue;  // control edge, carries no data
+            if (o.index < 0) {
+                if (o.node->op()->tflag == tt) ordered_before = true;
+                continue;
+            }
             auto consumer = o.node->op();
+            if (consumer->tflag != tt) read_later = true;
             if (consumer->tflag == tt) {
+                read_here = true;
                 if (all_consumers_fusable && !edge_fusable(var, consumer, producer, 1))
                     all_consumers_fusable = 0;
                 if (consumer->type() != OpType::reduce) all_consumers_reduce = 0;
@@ -359,7 +589,11 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
                     var_fused[i] = 1;
             }
         }
-        if (all_consumers_fusable == 0 || var->flag(VarFlags::_out_hint)) {
+        // A var the in-place op waits on is materialized unless it is a mere
+        // intermediate of this batch: fused away, it would be recomputed
+        // when read later -- from the inputs the op is about to overwrite.
+        if (all_consumers_fusable == 0 || var->flag(VarFlags::_out_hint)
+                || (ordered_before && (!read_here || read_later))) {
             var_fused[i] = 1;
         } else if (var_fused[i]) {
             // The var crosses a kernel boundary but every individual edge is

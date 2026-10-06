@@ -7,6 +7,7 @@
 #pragma once
 #include <string>
 #include <sstream>
+#include <atomic>
 #include <functional>
 #include <iostream>
 #include <type_traits>
@@ -124,6 +125,16 @@ EXTERN_LIB void log_capture_stop();
 EXTERN_LIB std::vector<std::map<string,string>> log_capture_read();
 EXTERN_LIB string& get_thread_name();
 
+template <class T>
+inline void append_log_value(std::ostringstream& out, const T& value) {
+    out << value;
+}
+
+template <class T>
+inline void append_log_value(std::ostringstream& out, const std::atomic<T>& value) {
+    out << value.load();
+}
+
 struct Log {
     std::ostringstream out;
     // Machine-generated detail, emitted after everything the caller wrote.
@@ -159,8 +170,11 @@ struct Log {
     template <class A, class B>
     inline Log& check_tail_op(const char* sa, const A& a, const char* sop,
                               const char* sb, const B& b) {
-        tail << " [check failed: " << sa << '(' << a << ") " << sop
-             << ' ' << sb << '(' << b << ")]";
+        tail << " [check failed: " << sa << '(';
+        append_log_value(tail, a);
+        tail << ") " << sop << ' ' << sb << '(';
+        append_log_value(tail, b);
+        tail << ")]";
         return *this;
     }
     inline Log& note_tail(const char* text) { tail << text; return *this; }
@@ -176,6 +190,11 @@ struct Log {
 
     template<class T>
     Log& operator<<(const T& a) { out << ' ' << a; return *this; }
+    template<class T>
+    Log& operator<<(const std::atomic<T>& a) {
+        out << ' ' << a.load();
+        return *this;
+    }
     template<class T>
     Log& operator>>(const T& a) { out << a; return *this; }
 };
@@ -433,6 +452,11 @@ template<class T> T get_from_env(const char* name,const T& _default) {
 
 template<> std::string get_from_env(const char* name, const std::string& _default);
 
+// Called with a flag's name before any flag is assigned from its setter, when
+// set: a batch running on the worker thread (runtime/async_exec.h) reads
+// flags, so an assignment waits for it.
+EXTERN_LIB void (*before_flag_set)(const char* name);
+
 #define DECLARE_FLAG(type, name) \
 EXTERN_LIB type name; \
 EXTERN_LIB std::string doc_ ## name; \
@@ -462,6 +486,7 @@ EXTERN_LIB void set_ ## name (const type&);
     type name; \
     std::string doc_ ## name = doc; \
     void set_ ## name (const type& value) { \
+        if (jittor::before_flag_set) jittor::before_flag_set(#name); \
         name = value; \
     }; \
     void init_ ## name (const type& value) { \
@@ -485,6 +510,7 @@ EXTERN_LIB void set_ ## name (const type&);
     std::string doc_ ## name = doc; \
     void setter_ ## name (const type& old_value, const type& new_value); \
     void set_ ## name (const type& value) { \
+        if (jittor::before_flag_set) jittor::before_flag_set(#name); \
         type old_value = name; \
         name = value; \
         try { \
@@ -507,6 +533,7 @@ EXTERN_LIB void set_ ## name (const type&);
     DECLARE_RUNTIME_FLAG(type, name) \
     std::string doc_ ## name = doc; \
     void set_ ## name (const type& value) { \
+        if (jittor::before_flag_set) jittor::before_flag_set(#name); \
         runtime_flag_ ## name () = value; \
     }; \
     void init_ ## name (const type& value) { \
@@ -519,6 +546,7 @@ EXTERN_LIB void set_ ## name (const type&);
     std::string doc_ ## name = doc; \
     void setter_ ## name (const type& old_value, const type& new_value); \
     void set_ ## name (const type& value) { \
+        if (jittor::before_flag_set) jittor::before_flag_set(#name); \
         type& storage = runtime_flag_ ## name (); \
         type old_value = storage; \
         storage = value; \
