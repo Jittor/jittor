@@ -18,6 +18,7 @@
 #include "core/common.h"
 #include "core/op.h"
 #include "acl_jittor.h"
+#include "acl_runtime.h"
 #include "ops/composite/random_op.h"
 #include "ops/reduce_op.h"
 #include "ops/composite/arg_reduce_op.h"
@@ -56,6 +57,9 @@ namespace jittor
         void *storage = nullptr;
         size_t storage_size = 0;
         size_t offset = 0;
+        // Storage replaced while a recorded graph lived: its copies read
+        // from here. Freed with the last graph (acl_live_graphs).
+        std::vector<void *> retired;
 
         void reset()
         {
@@ -79,11 +83,32 @@ namespace jittor
     public:
         ~AclScalarHostCache()
         {
-            if (storage != nullptr)
-            {
+            if (storage != nullptr || !retired.empty())
                 aclrtSynchronizeStream(aclstream);
+            if (storage != nullptr)
                 aclrtFreeHost(storage);
+            for (auto *block : retired)
+                aclrtFreeHost(block);
+        }
+
+        void release_retired()
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (retired.empty())
+                return;
+            auto ret = aclrtSynchronizeStream(aclstream);
+            if (ret != ACL_SUCCESS)
+                throw std::runtime_error(
+                    "aclrtSynchronizeStream failed: " +
+                    acl_error_to_string(ret));
+            for (auto *block : retired)
+            {
+                ret = aclrtFreeHost(block);
+                if (ret != ACL_SUCCESS)
+                    throw std::runtime_error(
+                        "aclrtFreeHost failed: " + acl_error_to_string(ret));
             }
+            retired.clear();
         }
 
         const void *get(const void *data, size_t size)
@@ -97,6 +122,16 @@ namespace jittor
             size_t aligned_size = (size + 63) / 64 * 64;
             if (storage == nullptr || offset + aligned_size > storage_size)
             {
+                if (storage != nullptr && acl_live_graphs() > 0)
+                {
+                    // Kept, and nothing waited on: the stream may be the
+                    // one recording.
+                    retired.push_back(storage);
+                    storage = nullptr;
+                    storage_size = 0;
+                    offset = 0;
+                    values.clear();
+                }
                 reset();
                 storage_size = std::max(capacity(), aligned_size);
                 auto ret = aclrtMallocHost(&storage, storage_size);
@@ -113,11 +148,21 @@ namespace jittor
         }
     };
 
-    static const void *persistent_acl_scalar_data(const void *data, size_t size)
+    static AclScalarHostCache &scalar_host_cache()
     {
         // Async H2D copies may outlive temporary scalar buffers owned by an op.
         static AclScalarHostCache cache;
-        return cache.get(data, size);
+        return cache;
+    }
+
+    static const void *persistent_acl_scalar_data(const void *data, size_t size)
+    {
+        return scalar_host_cache().get(data, size);
+    }
+
+    void acl_scalar_cache_release_retired()
+    {
+        scalar_host_cache().release_retired();
     }
 
     unordered_map<uint32, string> opname_map = {
