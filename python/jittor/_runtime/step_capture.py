@@ -278,6 +278,13 @@ class _StepRandom:
         return [self._seed, self.base]
 
 
+#: The Philox kernels below are CUDA source. `use_cuda` is set on ACL and ROCm
+#: builds as well; there a step's draws stay the runtime's own random ops,
+#: which a capture refuses (`_graph_has_nondeterministic_op`), so the step
+#: runs as written instead of failing to compile.
+_CUDA_BUILD = bool(getattr(jt.compiler, "is_cuda", False))
+
+
 def random_draw(shape, dtype, type):
     """A random Var for a step being captured on the device, or None.
 
@@ -289,7 +296,7 @@ def random_draw(shape, dtype, type):
     distribution, a different stream.
     """
     cap = _ACTIVE
-    if cap is None or _exact_refuses(cap):
+    if cap is None or not _CUDA_BUILD or _exact_refuses(cap):
         return None
     if dtype not in ("float32", "float64") or type not in ("uniform", "normal"):
         return None
@@ -321,7 +328,7 @@ def random_keep(shape, p):
     BERT-base training step.
     """
     cap = _ACTIVE
-    if cap is None or _exact_refuses(cap):
+    if cap is None or not _CUDA_BUILD or _exact_refuses(cap):
         return None
     if cap.random is None:
         seed = int(jt.get_seed()) * 1000003 + id(cap) % 1000003
