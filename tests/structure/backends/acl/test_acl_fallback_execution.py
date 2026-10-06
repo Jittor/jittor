@@ -100,6 +100,12 @@ struct ExecutionBackendScope {
     }
     ~ExecutionBackendScope() { requested_backend = previous; }
 };
+bool host_execution_forced = false;
+struct HostExecutionScope {
+    bool previous;
+    HostExecutionScope() : previous(host_execution_forced) { host_execution_forced = true; }
+    ~HostExecutionScope() { host_execution_forced = previous; }
+};
 struct OpFlags { enum Flags { _cpu, _cuda }; };
 struct Op {
     string identity;
@@ -137,6 +143,9 @@ int main() {
             AclCpuFallbackScope restore(&fused);
             assert(state.use_cuda == 0);
             assert(requested_backend == BackendId::Cpu);
+            // An op placed on the device resolves to its CPU implementation
+            // too, rather than to ACL and back into the fallback.
+            assert(host_execution_forced);
             assert(fused.cpu == 0 && fused.cuda == 1 && child.cpu == 1 && child.cuda == 1);
             fused.context = &temporary;
             fused.loop_options_tuned = {{"cpu_tuned", 99}};
@@ -145,6 +154,7 @@ int main() {
         } catch (int value) { assert(value == 13); }
         assert(state.use_cuda == mode);
         assert(requested_backend == BackendId::Acl);
+        assert(!host_execution_forced);
         assert(fused.cpu == 0 && fused.cuda == 1 && child.cpu == 1 && child.cuda == 1);
         assert(fused.context == &original && fused.loop_options == &original_options);
         assert(fused.loop_options_tuned == loop_options_t({{"before", 3}}));
