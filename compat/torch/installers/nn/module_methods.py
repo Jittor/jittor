@@ -1285,9 +1285,9 @@ def _install_module_methods(nn, registry=None):
     M = nn.Module
     global _COOPERATIVE_NATIVE_MODULE
     _COOPERATIVE_NATIVE_MODULE = M.__bases__[0]
-    if getattr(_COOPERATIVE_NATIVE_MODULE.__init__, "_jittor_torch_cooperative", False) is False:
-        _native_module_init._jittor_torch_cooperative = True
-        _COOPERATIVE_NATIVE_MODULE.__init__ = _native_module_init
+    # Keep the cooperative MRO bridge on the Torch-owned subclass.  Writing it
+    # to the native base changes jt.Module for unrelated Jittor users.
+    M.__init__ = _native_module_init
 
     # A fresh install re-reads the pipelining env var and forgets any threshold a
     # previous one had been asked for.

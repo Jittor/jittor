@@ -93,6 +93,22 @@ def test_module_method_is_documented(attr, owner_name):
     assert (owner.__doc__ or "").strip(), "%s needs a docstring" % owner_name
 
 
+def test_cooperative_initializer_belongs_to_torch_module():
+    assert jt.Module.__init__ is nn_installer._ORIG_NATIVE_MODULE_INIT
+    assert nn.Module.__dict__["__init__"] is nn_installer._native_module_init
+
+    class Tail:
+        def __init__(self, marker):
+            self.marker = marker
+
+    class Model(nn.Module, Tail):
+        def __init__(self, marker):
+            super().__init__(marker)
+
+    assert Model("cooperative").marker == "cooperative"
+    assert isinstance(jt.Module(), jt.Module)
+
+
 def test_reinstall_keeps_identity():
     """A second install rebinds the same objects (no closure churn)."""
     before = {attr: nn.Module.__dict__.get(attr)
