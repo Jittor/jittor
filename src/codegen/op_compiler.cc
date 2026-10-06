@@ -972,7 +972,7 @@ static void fix_op_member(
                 << "vars in its jit source but has" << op->inputs().size()
                 << "inputs and" << op->outputs().size() << "outputs."
                 << "An op cannot be kept with only some of its outputs;"
-                << "see KI-EXEC-006. members:" << member;
+                << "members:" << member;
         while (member.size() < var_num) {
             member.insert(member.end() - op->outputs().size(), "__fill__");
         }

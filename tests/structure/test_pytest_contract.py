@@ -74,7 +74,7 @@ def _test_files():
     statements about what a collected module is allowed to do while it is
     imported -- are about what is left. Asserting them against a script that
     is never collected is how one file parked under ``tests/`` turned three
-    gates red at once (KI-TEST-006); the refused set is pinned by
+    gates red at once; the refused set is pinned by
     ``test_test_named_scripts_are_refused_rather_than_collected`` so a second
     one cannot appear quietly.
     """

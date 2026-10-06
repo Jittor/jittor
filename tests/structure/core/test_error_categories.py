@@ -114,7 +114,7 @@ MIGRATED_BINARY_SHAPE_BOUNDARIES = {
 # -- a shape that does not match, an ellipsis with too many indices after it, a
 # `int` index outside the dimension, too many slices, a setitem operation that
 # is neither void nor binary, a data dimension larger than the target. The new
-# one is the Var index the kernel now range-checks (KI-OPS-010); it is
+# one is the Var index the kernel now range-checks; it is
 # `USER_CHECK` rather than `CHECK` because an out-of-range index is exactly the
 # case `USER_ERROR` in `src/utils/log.h` describes -- "a caller supplied an
 # unsupported value, shape, dtype, or index" -- and callers should be able to

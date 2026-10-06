@@ -151,8 +151,8 @@ def _simple_for(x, func):
 
     This started as a workaround: CPU kernels were built with ``-Ofast``, which
     implies that promise, so the predicate had to escape the fused kernel's
-    flags to work at all. KI-BACKEND-005 removed ``-Ofast`` (kernels build at
-    ``-O3``), which makes the escape **redundant on a default CPU build**.
+    flags to work at all. Kernels now build at ``-O3`` instead of ``-Ofast``,
+    which makes the escape **redundant on a default CPU build**.
 
     It is kept as defence in depth rather than deleted, for two reasons that
     are still true: the flags a kernel is compiled with are decided outside

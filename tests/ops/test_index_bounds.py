@@ -8,8 +8,8 @@
 ``x[99]`` on a length-5 tensor has always raised: a Python ``int`` index is
 normalised and checked while the op is being built. ``x[jt.array([99])]`` took
 a different path and was checked nowhere. It read past the buffer and returned
-whatever was there -- ``0.0`` for a small overshoot, a segfault at ``1e8``
-(KI-OPS-010). ``setitem`` shared the hole and was worse: it *wrote* past the
+whatever was there -- ``0.0`` for a small overshoot, a segfault at ``1e8``.
+``setitem`` shared the hole and was worse: it *wrote* past the
 buffer, which is heap corruption that surfaces somewhere else entirely.
 
 Both spellings reach the same two kernels, so the gap covered every operator
@@ -69,7 +69,7 @@ class TestVarIndexBoundsCpu(unittest.TestCase):
         with jt.flag_scope(use_cuda=self.device_flag):
             with self.assertRaises(RuntimeError, msg=(
                     "%s accepted an index outside the dimension. Before "
-                    "KI-OPS-010 was fixed this returned 0.0 for a small "
+                    "the fix this returned 0.0 for a small "
                     "overshoot and segfaulted for a large one." % what)) as caught:
                 fn()
         # The message has to name the offending index, not merely fail. A check

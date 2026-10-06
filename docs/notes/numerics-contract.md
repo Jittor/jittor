@@ -337,7 +337,6 @@ dim 0：改前改后同为 2.47e-3。这不是退化——**NumPy 在同一形�
 | 现象 | 范围 | 条目 |
 | --- | --- | --- |
 | 全是 `-inf` 的 float32 张量，`jt.max` 返回 `-3.4028235e38` 而不是 `-inf`（`jt.min` 镜像）。一个被完全 mask 的 attention 行正是这个输入 | **CPU**；CUDA 正确 | `KI-OPS-008` |
-| `digamma(nan)` 返回 `-inf` 而不是 `nan`；`digamma(-0.0)` 返回 `-inf` 而不是 `inf` | **CPU**；CUDA 正确 | `KI-OPS-011` |
 | float32 的 `max`/`min` 归约比修 NaN 之前慢约 2 倍（只是吞吐，答案是对的） | CPU | `KI-OPS-006` |
 | 关掉 cuDNN 自动调优之后，梯度仍有 `1.1e-6` 的残余随 `auto_flush_ops` 变动 | CUDA | `KI-EXEC-003` |
 

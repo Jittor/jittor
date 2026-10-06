@@ -390,7 +390,7 @@ def probe_numerical_stability(jt, device):
 
     The CPU half of this used to be the compiler's doing as well -- `-Ofast`
     granted it reassociation outright -- which made this the neighbouring
-    category to KI-BACKEND-005. That flag is gone; CPU kernels build at `-O3`,
+    category to the `-Ofast` defect. That flag is gone; CPU kernels build at `-O3`,
     and the accuracy these cases ask about is now produced deliberately by
     `BlockedReductionPass` instead of bought from a flag.
 
@@ -415,7 +415,7 @@ def probe_numerical_stability(jt, device):
     # cry wolf.
     #
     # The cause was `-Ofast` reassociating the fused expression, and
-    # KI-BACKEND-005 removed it: `tools/probes/fusion_consistency_sweep.py` went from
+    # removing it (CPU kernels build at `-O3`) took `tools/probes/fusion_consistency_sweep.py` from
     # 1 differing case to 12/12 identical on CPU with that change. So this is
     # a candidate for reinstatement -- but as a fused-versus-unfused agreement
     # check, which needs no expectation, rather than as a fixed expected value.

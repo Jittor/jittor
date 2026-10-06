@@ -352,7 +352,7 @@ void ReduceOp::infer_shape() {
     // an empty var are well defined and stay legal; maximum and minimum have
     // no answer to give, and the kernel's seed was being returned as if it were
     // data, so `jt.zeros((0,3)).max(0)` answered [-3.4e38, -3.4e38, -3.4e38].
-    // That seed is now +-inf for the float dtypes (KI-OPS-008) and the dtype's
+    // That seed is now +-inf for the float dtypes and the dtype's
     // lowest/highest for the integers, which changes the value but not the
     // decision: a fold's identity is where the fold starts, never an element of
     // an empty input, and numpy raises ValueError for this reduction while
@@ -445,7 +445,7 @@ void ReduceOp::jit_run() {
     // then `-1`: this line used to emit `index_t ystride-1 = 1;`, which does
     // not compile. `loss.sum()` where the loss is already a scalar is ordinary
     // code -- PyTorch returns the value unchanged -- and it died here on both
-    // devices (KI-OPS-004). With the guard, every `@for` below produces an
+    // devices. With the guard, every `@for` below produces an
     // empty nest, the body runs once with `yid == xid == 0`, and the result is
     // the input value, which is what the reduction of a single element is.
     @if(DIM>0, index_t ystride@{DIM-1} = 1;)

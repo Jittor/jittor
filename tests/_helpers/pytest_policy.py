@@ -875,7 +875,7 @@ def _snapshot_selected_files(config):
         # A `test_*.py` that is a script is not part of the selection as a test
         # file -- the refusal above is what keeps it out of collection -- so it
         # must not be reported as a file the session proved nothing about
-        # either. Otherwise closing KI-TEST-006 would only move its red from
+        # either. Otherwise refusing it would only move its red from
         # "collection error" to "collected 0 tests".
         _SELECTED_FILES.update(
             path

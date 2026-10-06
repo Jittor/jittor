@@ -13,8 +13,7 @@ emitted **nowhere**: the argument list is split off the C++ declaration, so
 every argument after the first still carries the space that followed the comma,
 and ``" VarSlices&& slices".startswith("VarSlices")`` is false. The call had no
 callers for as long as it existed, and a broadcast index Var reached the
-``getitem``/``setitem`` kernels, which read index Vars as if they were dense
-(KI-OPS-009).
+``getitem``/``setitem`` kernels, which read index Vars as if they were dense.
 
 The behavioural gate is ``tests/ops/test_broadcast_index.py``. This file is the
 label: it reads the generated source, so a maker that loses the call again says
@@ -69,7 +68,7 @@ class TestIndexStorageAdaptation(unittest.TestCase):
                     "%s takes a VarSlices and never calls adapt_index_storage, "
                     "so a non-contiguous index Var (a broadcast, a strided "
                     "view) reaches its kernel, which reads index Vars as if "
-                    "they were dense (KI-OPS-009)." % name)
+                    "they were dense." % name)
         self.assertGreaterEqual(
             seen, 2, "expected at least the getitem and setitem makers to take "
                      "a VarSlices; found %d, so this test is no longer looking "

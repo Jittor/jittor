@@ -524,7 +524,7 @@ BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
         // Comparisons must keep IEEE semantics whatever level the kernel is
         // built at. CPU kernel flags used to end in -Ofast, whose
         // -ffinite-math-only permits folding x==x to true even when x is NaN;
-        // since KI-BACKEND-005 they end in -O3, so on a default build this
+        // now they end in -O3, so on a default build this
         // option no longer changes the command. It stays because the flags are
         // decided elsewhere -- a cc_flags or kernel_flags carrying -Ofast
         // reaches here -- and an ordinary level appended last was measured to
