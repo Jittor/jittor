@@ -114,8 +114,8 @@ CUDA 参数抛出显式的 ASV skip。真实 PyTorch 是**可选的 oracle**，�
 ## 昇腾 NPU 的手工对照
 
 ASV 套件不覆盖昇腾。ACL 后端与同机 `torch + torch_npu` 的速度和数值对照放在
-[`bench/`](../../bench/README.md)：`bench_jittor.py` / `bench_torch.py` 跑同一组网络
-（规格见 [`bench/models.md`](../../bench/models.md)），`bench/xval/` 把 Jittor 的权重和
+[`bench/`](https://github.com/Jittor/jittor/blob/master/bench/README.md)：`bench_jittor.py` / `bench_torch.py` 跑同一组网络
+（规格见 [`bench/models.md`](https://github.com/Jittor/jittor/blob/master/bench/models.md)），`bench/xval/` 把 Jittor 的权重和
 输入灌进 torch 逐步比对 loss 与梯度，`bench/aclprobe/` 是绕开 Jittor 直接调 aclnn 的
 探针。这些都需要真实设备，**手工运行**，不进 CI，并且要与 ASV 用不同的编译缓存。
 

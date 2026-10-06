@@ -231,7 +231,7 @@ vLLM 的粘合代码及其专属测试由主仓库的 `adapters/jittor_adapters/
 - 共享测试工具在 `tests/_helpers/`；测试模块**不互相导入**作为隐式 helper API。
 - 结构、CPU、CUDA、NPU 套件是**分开的 CI 层**。
 - 测试选择使用名字与 marker，**绝不使用 `listdir()` 的位置**。
-- C++ 的 `test.h` 资源与其编译器 include 消费者一起放在 `python/jittor/src/utils/`。
+- C++ 的 `test.h` 资源与其编译器 include 消费者一起放在 `src/utils/`。
 - 已安装环境的检查用 `jittor.selftest`，而不是随包发布一个测试包。
 
 ## 工具与示例边界

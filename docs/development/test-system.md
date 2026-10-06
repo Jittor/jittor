@@ -253,6 +253,41 @@ Marker 在 [`pyproject.toml`](https://github.com/Jittor/jittor/blob/master/pypro
 **使用适用范围最窄的 marker。** 硬件测试要探测真实运算，**不得在 CPU 上静默通过**。
 network 与 manual 测试要在模块 docstring 里说明其外部要求。
 
+## 可选 fixture 与手动脚本
+
+有些覆盖需要机器上恰好有的东西——一份数据集、一份 checkpoint、一个独立的 PyTorch。
+这些入口**一律显式**：不设就按具体前置条件 skip，**绝不悄悄换成一个弱一点的检查**。
+
+| 变量 | 谁读它 | 不设时 |
+| --- | --- | --- |
+| `JITTOR_TEST_IMAGENET_TRAIN` | ImageNet 布局的训练目录（每类一个子目录）。`tests/data/test_dataset.py` 用它验证多 worker `Dataset` 与 `num_workers=0` 的逐 batch 一致；`tests/data/test_image_folder.py` 再加上可选的 `torch`/`torchvision`，把 Jittor 的 `ImageFolder` 与 `torchvision` 的对齐 | 整个用例类 skip，reason 指名该变量 |
+| `REAL_TORCH_SITE` | 进程内的独立 PyTorch oracle（见上文"进程模式隔离"） | 跳过可选的 PyTorch 对比；**已部署的 shim 不顶替它** |
+| `QWEN3_0_6B` | `tests/backends/acl/manual/xcheck/qwen_logits.py` 的 Qwen3-0.6B checkpoint 目录。该脚本在真实 torch 与 Jittor shim 下各 dump 一次下一个 token 的 logits，再由 `compare.py` 对位 | 脚本直接报 `KeyError` 退出——它是 `manual`，不由门禁调度 |
+
+`tests/backends/acl/manual/` 下的脚本（GPT-2 的前向/梯度对位、Qwen3 的 logits 对位）
+需要真实昇腾设备，**手动运行**，用法与已验证的结果见该目录的 README；设备侧的配置见
+[昇腾 910B 指南](../guides/ascend-910b.md)。
+
+## 维护者探针
+
+[`tools/probes/`](https://github.com/Jittor/jittor/blob/master/tools/README.md) 下是**扫描**，
+不是测试：它们不断言一条性质然后变红，而是把两个本应相等的东西放在一起、把不一致全部
+打出来，供人判断。输出是问题总账条目引用的证据，因此**不进门禁**，由维护者按需运行。
+
+| 探针 | 拿什么和什么比 |
+| --- | --- |
+| `adversarial_device_sweep.py` | 整个 OpInfo 数据库在 NaN、±inf、±0、ties、次正规数上的 CPU 与 CUDA 结果 |
+| `equivalent_form_sweep.py` | 同一个量的两种写法 |
+| `fusion_consistency_sweep.py` | 同一个表达式开融合与 `no_fuse` 两次求值 |
+| `roundtrip_consistency_sweep.py` | 保存-重载-重算的往返，以及 `no_grad` 与普通前向 |
+| `semantic_divergence_probe.py` | 两种合理实现真会分歧的那些 dtype 与边界语义 |
+| `side_effect_probe.py` | 只被要求"读"的操作改了什么（`a.numpy()` 迁走了 `a` 本身） |
+| `opinfo_dtype_gaps.py` | 哪些 (算子, dtype) 跑得通却没声明（见上文覆盖面一节） |
+| `error_message_probe.py` | 用户真会犯的错当前收到的**原文**；两次运行的 diff 就是该次改动的验收记录 |
+
+这些扫描**不需要外部参考值**——这正是它们能指向没有参考实现的表达式的原因。需要外部
+参考的那一类（把解析梯度比到差分商）已经试过并被放弃：它产出的每一条都是参考本身不对。
+
 ## Skip 与已知失败
 
 - **skip** 表示前置条件不可用，或某个契约有意不被支持；它的 reason 要指明**确切的

@@ -356,6 +356,50 @@ MaxDim/MinDim，反向把上游梯度散射到选中的第一个下标；当前�
 可执行证据与退出条件见
 [活跃问题总账](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-issues.md)。
 
+## 在昇腾上调试
+
+Jittor 自己的日志、`JT_SYNC=1` 与 `sync_run=1` 见上文和[调试指南](debugging.md)。
+下面这些是 **CANN 侧**的开关：它们属于厂商运行时，与 Jittor 的 flag 互不覆盖，
+只在 `source` 过 `set_env.sh` 的进程里生效。
+
+| 变量 | 作用 |
+| --- | --- |
+| `ASCEND_SLOG_PRINT_TO_STDOUT=1` | 把 CANN 的 slog 打到标准输出，而不是写进默认日志目录；这样厂商报错与 Jittor 的算子日志按时间顺序交错在同一份输出里 |
+| `ASCEND_GLOBAL_LOG_LEVEL` | CANN 组件的全局日志等级：`0` DEBUG、`1` INFO、`2` WARNING、`3` ERROR（默认）。`0` 和 `1` 极其啰嗦并明显拖慢执行，**只用于最小复现** |
+| `DUMP_GE_GRAPH` / `DUMP_GRAPH_LEVEL` | GE（Graph Engine）的图 dump：前者控制详细程度，后者控制 dump 哪些阶段的图；`DUMP_GRAPH_PATH` 指定输出目录 |
+| `TASK_QUEUE_ENABLE` | **torch_npu 侧**的异步下发队列。`0` 关闭，使下发变成同步，主机耗时才归属到真正发起它的那一行 |
+
+两条使用上的要点：
+
+- **GE 的图 dump 对 Jittor 不产出东西。** Jittor 的 ACL 后端逐算子发射 aclnn
+  （外加少量 AscendC 融合 kernel），进程里**不存在 GE 图**。`DUMP_GE_GRAPH` 只在确实
+  构图的那一侧有用——例如对照用的 torch_npu 图模式；拿它来找 Jittor 的图是找不到的，
+  要看 Jittor 自己的图请用 `jt.profile`（见[性能与显存画像](../notes/profiling.md)）。
+- **`TASK_QUEUE_ENABLE` 是参考侧的旋钮，不要只在一侧改。** 它改变 torch_npu 的下发方式，
+  因此也改变它的墙钟时间。对照测速时**保持两侧各自的默认**，只在归因主机开销时临时
+  设 `TASK_QUEUE_ENABLE=0`，并说明这个数字是在关掉队列的条件下取得的。
+
+诊断变量同样属于"用完就去掉"的那一类：它们改变时序，开着它们测出来的时间不构成证据。
+
+### 与 torch_npu 对照测速
+
+同一份模型代码在 Jittor 兼容层与 `torch + torch_npu` 上的端到端差距，用维护中的
+对照套件跑（参考侧需要一个装了配套 `torch_npu` 的独立 Python 环境，两侧都先 `source`
+CANN 的 `set_env.sh`）：
+
+```bash
+source "$CANN_SET_ENV"
+python bench/torch_compat/run.py --device npu --gpu <分配到的设备> \
+  --torch-python /path/to/torch-npu-env/bin/python
+```
+
+此时 `--gpu` 设置的是 `ASCEND_RT_VISIBLE_DEVICES`，显存口径取 `npu-smi` 进程表里本进程
+的占用。默认禁止 CPU 回退，调查时才加 `--allow-fallback`。口径、读表方式与绕开 Jittor
+直接调 aclnn 的探针见
+[基准测试](../performance/benchmarking.md)与
+[`bench/README.md`](https://github.com/Jittor/jittor/blob/master/bench/README.md)。
+**测速要和单元测试用不同的编译缓存，也不要与别人共用同一块卡。**
+
 ## 排错
 
 **ACL 未被检测到**：在同一个 shell 里核对 `CANN_SET_ENV`、`ccec --version`、Python

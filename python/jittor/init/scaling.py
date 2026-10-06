@@ -42,7 +42,7 @@ def invariant_uniform_(var, mode="fan_in"):
     ''' Inplace initialize Jittor Var by invariant_uniform.
 
     Args:
-        var (Jittor Var):
+        var (jittor.Var):
             Var to be initialized by random invariant_uniform
         mode (string):
             mode selection, should be fan_in or fan_out.
@@ -90,7 +90,7 @@ def relu_invariant_gauss_(var, mode="fan_in"):
     ''' Inplace initialize Jittor Var by relu_invariant_gauss.
 
     Args:
-        var (Jittor Var):
+        var (jittor.Var):
             Var to be initialized by random relu_invariant_gauss
         mode (string):
             mode selection, should be fan_in or fan_out.
@@ -113,7 +113,7 @@ def kaiming_uniform_(var, a=0, mode='fan_in', nonlinearity='leaky_relu', generat
     ''' Inplace initialize Jittor Var by kaiming_uniform.
 
     Args:
-        var (Jittor Var):
+        var (jittor.Var):
             Var to be initialized by random kaiming_uniform
         a (float):
             the negative slope of the rectifier used after this layer (only used with 'leaky_relu')
@@ -168,7 +168,7 @@ def kaiming_normal_(var, a=0, mode='fan_in', nonlinearity='leaky_relu', generato
     ''' Inplace initialize Jittor Var by kaiming_normal.
 
     Args:
-        var (Jittor Var):
+        var (jittor.Var):
             Var to be initialized by random kaiming_normal
         a (float):
             the negative slope of the rectifier used after this layer (only used with 'leaky_relu')
@@ -250,7 +250,7 @@ def xavier_uniform_(var, gain=1.0):
         a = \text{gain} \times \sqrt{\frac{6}{\text{fan\_in} + \text{fan\_out}}}
 
     Args:
-        var (Jittor Var):
+        var (jittor.Var):
             Var to be initialized by random xavier_uniform
         gain (float):
             an optional scaling factor.
@@ -309,7 +309,7 @@ def xavier_gauss_(var, gain=1.0):
         \text{std} = \text{gain} \times \sqrt{\frac{2}{\text{fan\_in} + \text{fan\_out}}}
 
     Args:
-        var (Jittor Var):
+        var (jittor.Var):
             Var to be initialized by random xavier_gauss
         gain (float):
             an optional scaling factor.
