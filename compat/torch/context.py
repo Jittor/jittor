@@ -6,7 +6,7 @@ import importlib
 import importlib.machinery
 import sys
 import types
-from typing import Any
+from typing import Any, Callable, Dict, Optional, Tuple
 from collections.abc import MutableMapping
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -20,7 +20,7 @@ from .contracts import Installer, validate_installer
 #: several times per tensor operation, and a function-local import pays the
 #: import machinery every time. Lazy so this module stays importable while the
 #: install context is still being built.
-_compatibility_owner = None
+_compatibility_owner: Optional[Callable[[Any], Any]] = None
 
 
 def _native_backend_for(target):
@@ -321,7 +321,7 @@ class InstallContext:
         setattr(self.target_namespace, self.COMPLETE_ATTR, True)
 
 
-_context_cache = None
+_context_cache: Optional[Dict[Any, Tuple[Any, Any]]] = None
 
 
 def get_install_context(module, *, required=True):
@@ -344,11 +344,13 @@ def get_install_context(module, *, required=True):
     global _compatibility_owner, _context_cache
     compatibility_owner = _compatibility_owner
     if compatibility_owner is None:
-        from .tensor_state import compatibility_owner as compatibility_owner
+        from .tensor_state import compatibility_owner as resolve_owner
+        compatibility_owner = resolve_owner
         _compatibility_owner = compatibility_owner
     cache = _context_cache
     if cache is None:
-        from .tensor_state import _CONTEXT_CACHE as cache
+        from .tensor_state import _CONTEXT_CACHE
+        cache = _CONTEXT_CACHE
         _context_cache = cache
 
     entry = cache.get(module)

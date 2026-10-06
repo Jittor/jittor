@@ -39,14 +39,19 @@ def _loaded_module_is_from_site(module_name, site):
         return False
 
 
-def _loaded_torch_has_binary_core(site):
+def _loaded_torch_has_binary_core(site=None):
     torch = sys.modules.get("torch")
     binary = getattr(torch, "_C", None)
     origin = getattr(binary, "__file__", None)
     if not origin:
         return False
     try:
-        return site in Path(origin).resolve().parents
+        path = Path(origin).resolve()
+        if not path.is_file() or not any(
+            str(path).endswith(suffix) for suffix in importlib.machinery.EXTENSION_SUFFIXES
+        ):
+            return False
+        return site is None or site in path.parents
     except OSError:
         return False
 
@@ -60,7 +65,12 @@ def _spec_is_deployed_torch_shim(spec):
     loader = getattr(spec, "loader", None)
     get_source = getattr(loader, "get_source", None)
     if not callable(get_source):
-        return False
+        origin = getattr(spec, "origin", None)
+        if not isinstance(origin, str) or not origin.endswith(".py"):
+            return False
+        # Assertion-rewriting loaders expose a source-file origin but no
+        # get_source. Read that source without executing or importing it.
+        get_source = importlib.machinery.SourceFileLoader("torch", origin).get_source
     try:
         source = get_source("torch")
         if not source:
@@ -75,8 +85,7 @@ def _spec_is_deployed_torch_shim(spec):
             continue
         targets = node.targets if isinstance(node, ast.Assign) else (node.target,)
         if any(
-            isinstance(target, ast.Attribute)
-            and target.attr == "_jittor_torch_shim_placeholder"
+            isinstance(target, ast.Attribute) and target.attr == "_jittor_torch_shim_placeholder"
             for target in targets
         ):
             return True
@@ -84,33 +93,29 @@ def _spec_is_deployed_torch_shim(spec):
 
 
 def modules_available(*module_names):
-    """Return whether top-level optional dependencies are discoverable without importing."""
+    """Require a preloaded binary Torch owner; probe other optional packages."""
     top_level_names = {module_name.partition(".")[0] for module_name in module_names}
     for module_name in top_level_names:
         try:
             if module_name == "torch":
-                if _loaded_torch_is_jittor_shim():
-                    return False
+                # Discoverability alone cannot satisfy the oracle importer:
+                # Jittor must not load a different Torch owner after startup.
                 module = sys.modules.get("torch")
-                if module is not None:
-                    if getattr(module, "__name__", None) != "torch":
-                        return False
-                    site = _real_torch_site()
-                    if site is not None and not (
-                        _loaded_module_is_from_site("torch", site)
-                        and _loaded_torch_has_binary_core(site)
-                    ):
-                        return False
-                    continue
+                if module is None or _loaded_torch_is_jittor_shim():
+                    return False
+                if getattr(module, "__name__", None) != "torch":
+                    return False
+                site = _real_torch_site()
+                if not _loaded_torch_has_binary_core(site):
+                    return False
+                if site is not None and not _loaded_module_is_from_site("torch", site):
+                    return False
+                continue
             site = _real_torch_site()
-            if module_name in ("torch", "torchvision") and site is not None:
+            if module_name == "torchvision" and site is not None:
                 if _loaded_module_is_from_site(module_name, site):
                     continue
                 if _site_spec(module_name, site) is None:
-                    return False
-            elif module_name == "torch":
-                spec = importlib.util.find_spec(module_name)
-                if spec is None or _spec_is_deployed_torch_shim(spec):
                     return False
             elif module_name == "torchvision":
                 module = sys.modules.get(module_name)
@@ -132,7 +137,7 @@ def import_torch_modules(*module_names):
     import jittor as jt
 
     owner = sys.modules.get("torch")
-    if owner is None or _loaded_torch_is_jittor_shim():
+    if owner is None or _loaded_torch_is_jittor_shim() or not _loaded_torch_has_binary_core():
         raise RuntimeError("independent Torch was not preloaded before Jittor")
     jt.dirty_fix_pytorch_runtime_error()
     site = _real_torch_site()

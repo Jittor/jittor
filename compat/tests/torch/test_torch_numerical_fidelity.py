@@ -10,6 +10,8 @@ STACKING_NAMES = (
     "vstack", "row_stack", "hstack", "dstack", "column_stack",
 )
 COMPLEX_NAMES = ("complex", "view_as_complex", "view_as_real")
+# NumPy 1.26 calls this trapz; NumPy 2 also exposes trapezoid.
+_numpy_trapezoid = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
 
 
 class TestTorchNumericalFidelity(unittest.TestCase):
@@ -1378,8 +1380,8 @@ class TestTorchNumericalFidelity(unittest.TestCase):
     def test_trapz_cpu_dx_coordinate_and_var_delegate_match_numpy(self):
         values = np.array([[0.0, 1.0, 4.0], [2.0, 3.0, 8.0]], dtype="float32")
         coord = np.array([0.0, 0.5, 2.0], dtype="float32")
-        expected_dx = np.trapezoid(values, dx=2.0, axis=1)
-        expected_x = np.trapezoid(values, coord, axis=1)
+        expected_dx = _numpy_trapezoid(values, dx=2.0, axis=1)
+        expected_x = _numpy_trapezoid(values, coord, axis=1)
         with _native_jittor.flag_scope(use_cuda=0):
             values_tensor = torch.tensor(values)
             coord_tensor = torch.tensor(coord)
@@ -1392,7 +1394,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
 
     def test_trapz_cpu_out_identity(self):
         values = np.array([1.0, 2.0, 5.0], dtype="float32")
-        expected = np.trapezoid(values, dx=0.5)
+        expected = _numpy_trapezoid(values, dx=0.5)
         with _native_jittor.flag_scope(use_cuda=0):
             values_tensor = torch.tensor(values)
             out = torch.zeros(1)

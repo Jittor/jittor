@@ -26,9 +26,9 @@ class TestMatmulTuner(unittest.TestCase):
         # this case would be asserting that the build has a library it does not
         # have. Measured 2026-09-22 on the CPU gate: every capability query
         # (`matmul`, `conv2d`, `random`, `transpose`) returns `[]` there.
-        # KI-TUNER-001 still holds for builds that *do* have one: the relay
-        # cannot carry an operand that lives outside the fused op, which is what
-        # the expand became when it turned into a stride-0 view.
+        # Expanded operands are now stride-0 storage views outside the fused
+        # op. The legacy pattern must decline, while nn.matmul reaches the
+        # registered oneDNN row (checked by test_onednn_contract.py).
         _test_capability.require_library("mkl")
         n,m,k = 10,10,10
         a = jt.random([n,m])
@@ -45,12 +45,10 @@ class TestMatmulTuner(unittest.TestCase):
         logs = find_log_with_re(rawlogs, 
             "Run tuner matmul: confidence\\((.*)\\) candidates\\((.*)\\)$")
         assert len(logs) == 1
-        assert logs[0][0] == "20", "confidence of reorder should be 20"
-        candidates = simple_parser(logs[0][1])
-        assert candidates == {"relay0":[1,0]}, candidates
-        logs = find_log_with_re(rawlogs, r"get_relay_src([\s\S]*)")
-        assert len(logs)==1
-        assert "@relay_op" in logs[0]
+        assert logs[0][0] == "0", logs
+        assert simple_parser(logs[0][1]) == {}, logs
+        relay_sources = find_log_with_re(rawlogs, r"get_relay_src([\s\S]*)")
+        assert not relay_sources, relay_sources
 
     def test_relay_declines_when_output_dtype_differs(self):
         # The relay op takes its output dtype from its operands, so it can only

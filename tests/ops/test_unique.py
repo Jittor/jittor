@@ -27,8 +27,12 @@ def setUpModule():
         (torch,) = import_torch_modules("torch")
 
 def check_unique_against_torch(input, dim=None):
-    jt0, jt1, jt2 = jt.unique(jt.array(input), True, True, dim)
-    torch0, torch1, torch2 = torch.unique(torch.tensor(input), True, True, True, dim)
+    jt0, jt1, jt2 = jt.unique(
+        jt.array(input), sorted=True, return_inverse=True, return_counts=True, dim=dim
+    )
+    torch0, torch1, torch2 = torch.unique(
+        torch.tensor(input), sorted=True, return_inverse=True, return_counts=True, dim=dim
+    )
     assert np.allclose(jt0, torch0) and np.allclose(jt1, torch1) and np.allclose(jt2, torch2)
 
 

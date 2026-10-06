@@ -70,7 +70,8 @@ oihw = [4, 3, 5, 5]
 import jittor as jt
 x = jt.random(nchw)
 w = jt.random(oihw)
-jt.mkl_ops.mkl_conv(x, w, 1, 1, 2, 2).sync()
+from jittor._runtime.backend_libraries import get_library_ops
+get_library_ops("mkl", load=True).mkl_conv(x, w, 1, 1, 2, 2).sync()
 
 jt.dirty_fix_pytorch_runtime_error()
 
@@ -97,7 +98,8 @@ m(torch.rand(*nchw))
 import jittor as jt
 x = jt.random(nchw)
 w = jt.random(oihw)
-jt.mkl_ops.mkl_conv(x, w, 1, 1, 2, 2).sync()
+from jittor._runtime.backend_libraries import get_library_ops
+get_library_ops("mkl", load=True).mkl_conv(x, w, 1, 1, 2, 2).sync()
 
 
 """

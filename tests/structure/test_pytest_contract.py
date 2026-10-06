@@ -3,11 +3,14 @@
 from __future__ import print_function
 
 import ast
+from typing import Callable, Set
 import importlib.util
 import os
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
+
+import pytest
 
 from _helpers.child_process import run_python_child
 from _helpers import pytest_policy
@@ -78,8 +81,7 @@ def _test_files():
     ``test_test_named_scripts_are_refused_rather_than_collected`` so a second
     one cannot appear quietly.
     """
-    return [path for path in all_test_files()
-            if not pytest_policy._refuses_collection(path)]
+    return [path for path in all_test_files() if not pytest_policy._refuses_collection(path)]
 
 
 def _dotted_name(node):
@@ -176,6 +178,12 @@ def _assignment_value(node):
     return None
 
 
+def _unparse(node: ast.AST) -> str:
+    # Tests run on the host interpreter; the package ratchet targets Python 3.7.
+    unparse: Callable[[ast.AST], str] = getattr(ast, "unparse")
+    return unparse(node)
+
+
 def _pytest_config():
     with (REPO_ROOT / "pyproject.toml").open("rb") as stream:
         return tomllib.load(stream)["tool"]["pytest"]["ini_options"]
@@ -184,6 +192,8 @@ def _pytest_config():
 def _load_test_conftest():
     path = TEST_ROOT / "_helpers/pytest_policy.py"
     spec = importlib.util.spec_from_file_location("jittor_test_conftest_contract", str(path))
+    if spec is None or spec.loader is None:
+        raise ImportError("Cannot load module from its source path")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -192,6 +202,8 @@ def _load_test_conftest():
 def _load_test_suite_runner():
     path = REPO_ROOT / "tools" / "run_test_suite.py"
     spec = importlib.util.spec_from_file_location("jittor_test_suite_runner_contract", str(path))
+    if spec is None or spec.loader is None:
+        raise ImportError("Cannot load module from its source path")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -200,48 +212,58 @@ def _load_test_suite_runner():
 def test_opinfo_forward_battery_runs_every_declared_dtype():
     source = (TEST_ROOT / "ops" / "test_ops.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
-    common = next(node for node in tree.body
-                  if isinstance(node, ast.ClassDef) and node.name == "TestCommon")
-    reference = next(node for node in common.body
-                     if isinstance(node, ast.FunctionDef)
-                     and node.name == "test_reference")
-    decorators = [ast.unparse(node) for node in reference.decorator_list]
+    common = next(
+        node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "TestCommon"
+    )
+    reference = next(
+        node
+        for node in common.body
+        if isinstance(node, ast.FunctionDef) and node.name == "test_reference"
+    )
+    decorators = [_unparse(node) for node in reference.decorator_list]
     assert "ops(op_db, dtypes=OpDTypes.supported)" in decorators
 
 
 def test_opinfo_error_battery_is_generated_only_for_declared_error_inputs():
     source = (TEST_ROOT / "ops" / "test_ops.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
-    error_class = next(node for node in tree.body
-                       if isinstance(node, ast.ClassDef)
-                       and node.name == "TestErrorInputs")
-    errors = next(node for node in error_class.body
-                  if isinstance(node, ast.FunctionDef)
-                  and node.name == "test_errors")
-    decorators = [ast.unparse(node) for node in errors.decorator_list]
+    error_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "TestErrorInputs"
+    )
+    errors = next(
+        node
+        for node in error_class.body
+        if isinstance(node, ast.FunctionDef) and node.name == "test_errors"
+    )
+    decorators = [_unparse(node) for node in errors.decorator_list]
     assert "ops(error_op_db, dtypes=OpDTypes.any_one)" in decorators
-    assert "assertRaisesRegex" in ast.unparse(errors)
+    assert "assertRaisesRegex" in _unparse(errors)
 
-    coverage = next(node for node in tree.body
-                    if isinstance(node, ast.FunctionDef)
-                    and node.name ==
-                    "test_opinfo_error_input_coverage_exceeds_fifteen_percent")
-    assert "coverage > 0.15" in ast.unparse(coverage)
+    coverage = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "test_opinfo_error_input_coverage_exceeds_fifteen_percent"
+    )
+    assert "coverage > 0.15" in _unparse(coverage)
 
 
 def test_opinfo_known_defects_use_strict_xfail_and_fft_gradients_stay_visible():
     core_source = (TEST_ROOT / "opinfo" / "core.py").read_text(encoding="utf-8")
     core_tree = ast.parse(core_source)
-    helper = next(node for node in core_tree.body
-                  if isinstance(node, ast.FunctionDef) and node.name == "xfail")
-    helper_source = ast.unparse(helper)
+    helper = next(
+        node
+        for node in core_tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "xfail"
+    )
+    helper_source = _unparse(helper)
     assert "pytest.mark.xfail(reason=reason, raises=raises, strict=True)" in helper_source
     assert "reason, raises" in helper_source
 
-    fft_source = (TEST_ROOT / "opinfo" / "definitions" / "fft.py").read_text(
-        encoding="utf-8")
-    fft_entries = fft_source.split("op_db =", 1)[1].split(
-        'OpInfo(\n        "irfft"', 1)[0]
+    fft_source = (TEST_ROOT / "opinfo" / "definitions" / "fft.py").read_text(encoding="utf-8")
+    fft_entries = fft_source.split("op_db =", 1)[1].split('OpInfo(\n        "irfft"', 1)[0]
     assert "supports_autograd=False" not in fft_entries
     assert 'xfail(\n            "test_gradcheck"' in fft_source
     assert 'xfail(\n            "test_gradgradcheck"' in fft_source
@@ -251,8 +273,9 @@ def test_opinfo_known_defects_use_strict_xfail_and_fft_gradients_stay_visible():
 
 
 def test_device_parity_has_a_narrow_integer_dtype_axis_and_fails_closed():
-    source = (TEST_ROOT / "backends" / "parity" /
-              "test_device_parity.py").read_text(encoding="utf-8")
+    source = (TEST_ROOT / "backends" / "parity" / "test_device_parity.py").read_text(
+        encoding="utf-8"
+    )
     assert '_PARITY_DTYPES = ("float32", "int8", "int16")' in source
     assert "np.array_equal(fa, fc)" in source
     assert "np.sqrt(reduce_size) * np.finfo(fc.dtype).eps" in source
@@ -348,7 +371,7 @@ def test_the_tier_marker_is_attached_from_the_recorded_list():
     that subtraction were silently hiding a marker nobody attaches any more,
     the tier would have stopped working with nothing to show for it.
     """
-    listed = "ops/test_ops.py"          # in tiers.SLOW_FILES
+    listed = "ops/test_ops.py"  # in tiers.SLOW_FILES
     unlisted = "ops/test_broadcast_to_op.py"
     assert "slow" in _automatic_markers(listed, "cpu", "cpu")
     assert "slow" not in _automatic_markers(unlisted, "cpu", "cpu")
@@ -362,6 +385,7 @@ def test_torch_semantic_core_suites_run_in_the_torch_process():
     required = {
         "tests/backends/parity/test_device_parity.py",
         "tests/core/test_regression.py",
+        "tests/nn/test_state_dict_dtypes.py",
         "tests/type/test_type_system.py",
     }
     assert required <= set(module.TORCH_MODE_PATHS)
@@ -430,8 +454,7 @@ def test_complete_suite_runner_retries_a_zero_exit_cold_cache_refresh():
     # The runner starts its children through _helpers.child_process now, so
     # that is what a warm-up retry has to be observed through (0.21: the
     # warm-up used to compile whatever the editable install pointed at).
-    with mock.patch.object(module, "run_python_child",
-                           side_effect=(refreshed, ready)) as run:
+    with mock.patch.object(module, "run_python_child", side_effect=(refreshed, ready)) as run:
         code, output = module._warmup({})
 
     assert code == 0
@@ -451,10 +474,10 @@ def test_complete_suite_runner_warms_up_per_backend():
     assert set(module._WARMUP_MARKERS) == set(module.BACKENDS)
     assert len(set(module._WARMUP_MARKERS.values())) == len(module.BACKENDS)
 
-    cpu_ready = SimpleNamespace(
-        returncode=0, stdout=module._WARMUP_MARKERS["cpu"] + "\n")
-    with mock.patch.object(module, "run_python_child",
-                           side_effect=(cpu_ready,) * module._WARMUP_ATTEMPTS):
+    cpu_ready = SimpleNamespace(returncode=0, stdout=module._WARMUP_MARKERS["cpu"] + "\n")
+    with mock.patch.object(
+        module, "run_python_child", side_effect=(cpu_ready,) * module._WARMUP_ATTEMPTS
+    ):
         code, output = module._warmup({"JITTOR_TEST_DEVICES": "cuda"})
     assert code != 0
     assert "cuda probe" in output
@@ -497,7 +520,7 @@ def test_network_access_is_explicitly_marked():
     assert "pytest.mark.network" in functions["test_resnet_infer_with_feature"]
 
 
-def test_optional_dependency_probe_only_checks_top_level_packages(monkeypatch):
+def test_optional_dependency_probe_only_checks_top_level_packages(monkeypatch, tmp_path):
     from _helpers import torch_runtime
 
     monkeypatch.delenv("REAL_TORCH_SITE", raising=False)
@@ -511,7 +534,9 @@ def test_optional_dependency_probe_only_checks_top_level_packages(monkeypatch):
     # instead of assuming a clean interpreter.
     monkeypatch.delitem(torch_runtime.sys.modules, "torchvision", raising=False)
     checked = []
-    independent = SimpleNamespace(__name__="torch")
+    binary = tmp_path / "_C.so"
+    binary.write_bytes(b"owned binary identity fixture")
+    independent = SimpleNamespace(__name__="torch", _C=SimpleNamespace(__file__=str(binary)))
 
     def fake_find_spec(module_name):
         checked.append(module_name)
@@ -525,13 +550,26 @@ def test_optional_dependency_probe_only_checks_top_level_packages(monkeypatch):
     assert checked == ["torchvision"]
 
 
-def test_optional_dependency_probe_accepts_preloaded_independent_torch(monkeypatch):
+def test_optional_dependency_probe_accepts_preloaded_independent_torch(monkeypatch, tmp_path):
     from _helpers import torch_runtime
 
     monkeypatch.delenv("REAL_TORCH_SITE", raising=False)
-    independent = SimpleNamespace(__name__="torch")
+    binary = tmp_path / "_C.so"
+    binary.write_bytes(b"owned binary identity fixture")
+    independent = SimpleNamespace(__name__="torch", _C=SimpleNamespace(__file__=str(binary)))
     with mock.patch.dict(torch_runtime.sys.modules, {"torch": independent}):
         assert torch_runtime.modules_available("torch.nn")
+
+
+def test_optional_dependency_probe_rejects_loaded_nonbinary_torch(monkeypatch):
+    from _helpers import torch_runtime
+
+    monkeypatch.delenv("REAL_TORCH_SITE", raising=False)
+    # An incomplete frontend can own the torch name without supplying the
+    # independent binary API that the numerical oracle promises.
+    incomplete = SimpleNamespace(__name__="torch")
+    with mock.patch.dict(torch_runtime.sys.modules, {"torch": incomplete}):
+        assert not torch_runtime.modules_available("torch.nn")
 
 
 def test_optional_dependency_probe_rejects_loaded_jittor_torch_alias(monkeypatch):
@@ -554,8 +592,95 @@ _sys.modules[__name__]._jittor_torch_shim_placeholder = True
 """
     loader = SimpleNamespace(get_source=lambda _name: source)
     spec = SimpleNamespace(loader=loader)
+    assert torch_runtime._spec_is_deployed_torch_shim(spec)
     with mock.patch.object(torch_runtime.importlib.util, "find_spec", return_value=spec):
         assert not torch_runtime.modules_available("torch.autograd")
+
+
+def test_optional_dependency_probe_rejects_a_real_rewritten_torch_stub(monkeypatch, pytestconfig):
+    from _helpers import torch_runtime
+    from _pytest.assertion.rewrite import AssertionRewritingHook
+
+    monkeypatch.delenv("REAL_TORCH_SITE", raising=False)
+    monkeypatch.delitem(torch_runtime.sys.modules, "torch", raising=False)
+    owner = torch_runtime.sys.modules.get("jittor")
+    hook = AssertionRewritingHook(pytestconfig)
+    hook.mark_rewrite("torch")
+    monkeypatch.setattr(
+        torch_runtime.sys,
+        "meta_path",
+        [hook]
+        + [
+            item
+            for item in torch_runtime.sys.meta_path
+            if not isinstance(item, AssertionRewritingHook)
+        ],
+    )
+    monkeypatch.syspath_prepend(str(REPO_ROOT / "compat" / "shim" / "resources"))
+    spec = torch_runtime.importlib.util.find_spec("torch")
+    assert isinstance(spec.loader, AssertionRewritingHook)
+    assert not callable(getattr(spec.loader, "get_source", None))
+    assert torch_runtime._spec_is_deployed_torch_shim(spec)
+    assert not torch_runtime.modules_available("torch.autograd")
+    assert "torch" not in torch_runtime.sys.modules
+    assert torch_runtime.sys.modules.get("jittor") is owner
+
+
+def test_optional_dependency_probe_rejects_a_discoverable_unloaded_package(monkeypatch, tmp_path):
+    from _helpers import torch_runtime
+    from _pytest.assertion.rewrite import AssertionRewritingHook
+
+    monkeypatch.delenv("REAL_TORCH_SITE", raising=False)
+    monkeypatch.delitem(torch_runtime.sys.modules, "torch", raising=False)
+    owner = torch_runtime.sys.modules.get("jittor")
+    package = tmp_path / "torch"
+    package.mkdir()
+    (package / "__init__.py").write_text("answer = 42\n", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setattr(
+        torch_runtime.sys,
+        "meta_path",
+        [
+            item
+            for item in torch_runtime.sys.meta_path
+            if not isinstance(item, AssertionRewritingHook)
+        ],
+    )
+    spec = torch_runtime.importlib.util.find_spec("torch")
+    assert isinstance(spec.loader, torch_runtime.importlib.machinery.SourceFileLoader)
+    assert not torch_runtime._spec_is_deployed_torch_shim(spec)
+    # The package is discoverable but importing it after Jittor would not
+    # satisfy the independent, already-loaded binary oracle contract.
+    assert not torch_runtime.modules_available("torch.nn")
+    assert "torch" not in torch_runtime.sys.modules
+    assert torch_runtime.sys.modules.get("jittor") is owner
+
+
+def test_deployed_shim_probe_handles_a_removed_rewritten_source(tmp_path, pytestconfig):
+    from _helpers import torch_runtime
+    from _pytest.assertion.rewrite import AssertionRewritingHook
+
+    source = tmp_path / "torch.py"
+    source.write_text("placeholder = True\n", encoding="utf-8")
+    spec = torch_runtime.importlib.util.spec_from_file_location(
+        "torch", str(source), loader=AssertionRewritingHook(pytestconfig)
+    )
+    source.unlink()
+    assert not torch_runtime._spec_is_deployed_torch_shim(spec)
+
+
+def test_deployed_shim_probe_does_not_read_non_source_origins(monkeypatch):
+    from _helpers import torch_runtime
+
+    def refuse_read(*args, **kwargs):
+        raise AssertionError("non-source origins must not be read")
+
+    monkeypatch.setattr(
+        torch_runtime.importlib.machinery.SourceFileLoader, "get_source", refuse_read
+    )
+    for origin in (None, "built-in", "torch_binary.so"):
+        spec = SimpleNamespace(loader=object(), origin=origin)
+        assert not torch_runtime._spec_is_deployed_torch_shim(spec)
 
 
 def test_optional_dependency_probe_rejects_a_deployed_shim_as_real_torch(monkeypatch, tmp_path):
@@ -665,7 +790,16 @@ def test_private_test_method_holders_are_plain_mixins():
 #: Fixtures pytest itself supplies. Everything else has to be resolved from the
 #: tree, because a frozen list rejects every locally declared fixture.
 _BUILTIN_FIXTURES = frozenset(
-    ("tmp_path", "tmp_path_factory", "monkeypatch", "capsys", "capfd", "caplog", "request")
+    (
+        "tmp_path",
+        "tmp_path_factory",
+        "monkeypatch",
+        "capsys",
+        "capfd",
+        "caplog",
+        "request",
+        "pytestconfig",
+    )
 )
 
 
@@ -691,7 +825,8 @@ def _fixtures_from_conftests(path):
         if conftest.is_file():
             try:
                 names |= _fixtures_declared_in(
-                    ast.parse(conftest.read_text(encoding="utf-8"), filename=str(conftest)))
+                    ast.parse(conftest.read_text(encoding="utf-8"), filename=str(conftest))
+                )
             except SyntaxError:
                 pass
         if directory == REPO_ROOT:
@@ -720,6 +855,13 @@ def _parametrized_arguments(node):
     return names
 
 
+def _unsatisfied_fixture_arguments(node, available):
+    arguments = node.args
+    required = arguments.args[: len(arguments.args) - len(arguments.defaults)]
+    supplied = available | _parametrized_arguments(node)
+    return [argument.arg for argument in required if argument.arg not in supplied]
+
+
 def test_module_level_helpers_are_not_named_like_tests():
     """A ``test_*`` helper that takes arguments is collected and then errors.
 
@@ -737,19 +879,13 @@ def test_module_level_helpers_are_not_named_like_tests():
     offenders = []
     for path in all_test_files():
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        available = (_BUILTIN_FIXTURES | _fixtures_declared_in(tree)
-                     | _fixtures_from_conftests(path))
+        available = _BUILTIN_FIXTURES | _fixtures_declared_in(tree) | _fixtures_from_conftests(path)
         for node in tree.body:
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             if not node.name.startswith("test"):
                 continue
-            arguments = node.args
-            required = arguments.args[: len(arguments.args) - len(arguments.defaults)]
-            supplied = available | _parametrized_arguments(node)
-            unsatisfied = [
-                argument.arg for argument in required if argument.arg not in supplied
-            ]
+            unsatisfied = _unsatisfied_fixture_arguments(node, available)
             if unsatisfied:
                 offenders.append(
                     "{}::{} requires {}".format(
@@ -759,18 +895,40 @@ def test_module_level_helpers_are_not_named_like_tests():
     assert offenders == []
 
 
+@pytest.mark.parametrize(
+    "source, expected",
+    (
+        ("def test_probe(pytestconfig): pass", []),
+        ("def test_probe(pytestconfig_typo): pass", ["pytestconfig_typo"]),
+        (
+            "@pytest.mark.parametrize('pytestconfig_typo', [0])\n"
+            "def test_probe(pytestconfig_typo): pass",
+            [],
+        ),
+        ("def test_probe(pytestconfig_typo=None): pass", []),
+    ),
+)
+def test_fixture_scanner_accepts_only_supplied_arguments(source, expected):
+    node = ast.parse(source).body[-1]
+    assert _unsatisfied_fixture_arguments(node, _BUILTIN_FIXTURES) == expected
+
+
 def _test_functions(tree):
     return (
-        node for node in ast.walk(tree)
+        node
+        for node in ast.walk(tree)
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         and node.name.startswith("test")
     )
 
 
 def _without_docstring(body):
-    if (body and isinstance(body[0], ast.Expr)
-            and isinstance(body[0].value, ast.Constant)
-            and isinstance(getattr(body[0].value, "value", None), str)):
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and isinstance(getattr(body[0].value, "value", None), str)
+    ):
         return body[1:]
     return body
 
@@ -782,8 +940,9 @@ def test_test_bodies_do_not_start_with_an_unconditional_return():
         for node in _test_functions(tree):
             body = _without_docstring(node.body)
             if body and isinstance(body[0], ast.Return):
-                offenders.append("{}:{} {}".format(
-                    path.relative_to(REPO_ROOT), body[0].lineno, node.name))
+                offenders.append(
+                    "{}:{} {}".format(path.relative_to(REPO_ROOT), body[0].lineno, node.name)
+                )
     assert offenders == [], "test bodies cannot silently pass via an initial return:\n" + "\n".join(
         offenders
     )
@@ -807,8 +966,9 @@ def test_tests_do_not_use_constant_true_skip_decorators():
                 except (ValueError, TypeError):
                     continue
                 if bool(condition):
-                    offenders.append("{}:{} {}".format(
-                        path.relative_to(REPO_ROOT), decorator.lineno, node.name))
+                    offenders.append(
+                        "{}:{} {}".format(path.relative_to(REPO_ROOT), decorator.lineno, node.name)
+                    )
     assert offenders == [], "constant-true skips hide disabled tests:\n" + "\n".join(offenders)
 
 
@@ -822,9 +982,12 @@ def test_legacy_numeric_selection_fails_loudly():
     env = os.environ.copy()
     env["test_skip_l"] = "10"
     result = run_python_child(
-        ["-m", "pytest", "--collect-only", "-q",
-         "tests/structure/test_pytest_contract.py"],
-        cwd=REPO_ROOT, env=env, inherit=False, merge_stderr=True)
+        ["-m", "pytest", "--collect-only", "-q", "tests/structure/test_pytest_contract.py"],
+        cwd=REPO_ROOT,
+        env=env,
+        inherit=False,
+        merge_stderr=True,
+    )
     assert result.returncode != 0
     assert "legacy jittor.test selection variables are unsupported" in result.stdout
 
@@ -858,9 +1021,7 @@ def _collection_side_effects(relative_text, tree):
     """Backend side effects a bare ``import`` of this module would perform."""
     violations = []
     local_functions = {
-        node.name
-        for node in tree.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
     for statement in tree.body:
         for node in _runtime_nodes(statement):
@@ -880,9 +1041,7 @@ def _collection_side_effects(relative_text, tree):
                 name = _dotted_name(target)
                 if name.startswith(("jt.flags.", "jittor.flags.")):
                     violations.append(
-                        "{}:{} writes {} during collection".format(
-                            relative_text, node.lineno, name
-                        )
+                        "{}:{} writes {} during collection".format(relative_text, node.lineno, name)
                     )
             value = _assignment_value(node)
             if value is not None:
@@ -913,9 +1072,7 @@ def _collection_side_effects(relative_text, tree):
                 )
                 if prohibited:
                     violations.append(
-                        "{}:{} calls {} during collection".format(
-                            relative_text, node.lineno, name
-                        )
+                        "{}:{} calls {} during collection".format(relative_text, node.lineno, name)
                     )
             if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
                 name = _dotted_name(node.value.func)
@@ -935,7 +1092,7 @@ def _collection_side_effects(relative_text, tree):
 #: than a name that quietly stops being collected. The last one, a reproduction
 #: script its author ran by path, moved out under the layout rule (standalone
 #: experiments live under ``$JITTOR_LAB_ROOT``).
-_REFUSED_TEST_SCRIPTS = set()
+_REFUSED_TEST_SCRIPTS: Set[str] = set()
 
 
 def test_test_named_scripts_are_refused_rather_than_collected():
@@ -967,10 +1124,11 @@ def test_test_named_scripts_are_refused_rather_than_collected():
 #: base, and the last two have nothing collection could reach.
 _REFUSAL_SHAPES = {
     "module-level test function": ("def test_x():\n    pass\n", False),
-    "Test-prefixed class": ("class TestX:\n    def test_y(self):\n        pass\n",
-                            False),
-    "class with a base": ("import unittest\n\n\n"
-                          "class Helper(unittest.TestCase):\n    pass\n", False),
+    "Test-prefixed class": ("class TestX:\n    def test_y(self):\n        pass\n", False),
+    "class with a base": (
+        "import unittest\n\n\nclass Helper(unittest.TestCase):\n    pass\n",
+        False,
+    ),
     "helper function only": ("def decode():\n    return 1\n", True),
     "no definitions at all": ("import sys\nROUNDS = int(sys.argv[1])\n", True),
 }

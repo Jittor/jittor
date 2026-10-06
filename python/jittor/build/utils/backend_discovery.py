@@ -1,6 +1,7 @@
 """Select a backend provider without importing or probing unselected backends."""
 
 import os
+import importlib
 import inspect
 import sys
 from typing import TYPE_CHECKING, Optional, Tuple
@@ -87,9 +88,9 @@ def requested_backend(environ=None, *, is_file=os.path.isfile):
 
 def backend_entry_point(name, *, entries=None):
     try:
-        from importlib import metadata
+        metadata = importlib.import_module("importlib.metadata")
     except ImportError:
-        import importlib_metadata as metadata
+        metadata = importlib.import_module("importlib_metadata")
     if entries is None:
         entries = metadata.entry_points()
         if hasattr(entries, "select"):

@@ -23,8 +23,11 @@ def _manifest():
     needs, and both of which would make packaging require a build toolchain.
     """
     import importlib.util
+
     path = _repo_root() / "python" / "jittor" / "build" / "utils" / "manifest.py"
     spec = importlib.util.spec_from_file_location("jittor_manifest", path)
+    if spec is None or spec.loader is None:
+        raise ImportError("Cannot load module from its source path")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -37,8 +40,7 @@ def _urls():
     missing msvc.zip and every jtcuda archive, so the "offline" package still
     went to the network on any Windows or driver-only CUDA machine.
     """
-    return tuple((asset.url, asset.filename)
-                 for asset in _manifest().offline_assets())
+    return tuple((asset.url, asset.filename) for asset in _manifest().offline_assets())
 
 
 SETUP_SOURCE = """\

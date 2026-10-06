@@ -145,7 +145,6 @@ def _install_cuda(g, registry=None):
     # model exactly. This used to be `lambda: 0` next to a set_device that
     # refused anything but 0.
 
-
     cuda.current_device = current_device
     cuda.set_device = set_device
 
@@ -181,7 +180,6 @@ def _install_cuda(g, registry=None):
     cuda.CUDAGraph = CUDAGraph
     cuda.Stream = _Stream
 
-
     cuda.Event = _Event
     g.Stream = cuda.Stream
     g.Event = cuda.Event
@@ -195,16 +193,13 @@ def _install_cuda(g, registry=None):
     cuda.default_stream = _api_cuda_default_stream
     nvtx = _types.ModuleType("torch.cuda.nvtx")
 
-
     nvtx.range_push = _nvtx_range_push
     nvtx.range_pop = _nvtx_range_pop
     nvtx.range_start = _nvtx_range_start
     nvtx.range_end = _nvtx_range_end
     nvtx.mark = _nvtx_mark
     nvtx.range = _nvtx_range
-    nvtx.__all__ = [
-        "range_push", "range_pop", "range_start", "range_end", "mark", "range"
-    ]
+    nvtx.__all__ = ["range_push", "range_pop", "range_start", "range_end", "mark", "range"]
     cuda.nvtx = nvtx
     _modules["torch.cuda.nvtx"] = nvtx
     # report REAL device memory from jittor's MemInfo (was a 0-stub, so training-code
@@ -256,6 +251,7 @@ def _install_cuda(g, registry=None):
     cuda.seed = _api_cuda_seed
     cuda.seed_all = _api_cuda_seed_all
     import types as _types_cuda
+
     _curandom = _types_cuda.ModuleType("torch.cuda.random")
     _curandom.get_rng_state = cuda.get_rng_state
     _curandom.get_rng_state_all = cuda.get_rng_state_all
@@ -285,14 +281,21 @@ def _install_cuda(g, registry=None):
         _mod.manual_seed = getattr(_mod, "manual_seed", _api_mod_manual_seed)
         _mod.manual_seed_all = getattr(_mod, "manual_seed_all", _api_mod_manual_seed_all)
         _mod.seed = getattr(_mod, "seed", _api_mod_seed)
-        _mod.reset_peak_memory_stats = getattr(_mod, "reset_peak_memory_stats", _api_mod_reset_peak_memory_stats)
-        _mod.reset_max_memory_allocated = getattr(_mod, "reset_max_memory_allocated", _api_mod_reset_max_memory_allocated)
+        _mod.reset_peak_memory_stats = getattr(
+            _mod, "reset_peak_memory_stats", _api_mod_reset_peak_memory_stats
+        )
+        _mod.reset_max_memory_allocated = getattr(
+            _mod, "reset_max_memory_allocated", _api_mod_reset_max_memory_allocated
+        )
         _mod.memory_allocated = getattr(_mod, "memory_allocated", _api_mod_memory_allocated)
-        _mod.max_memory_allocated = getattr(_mod, "max_memory_allocated", _api_mod_max_memory_allocated)
+        _mod.max_memory_allocated = getattr(
+            _mod, "max_memory_allocated", _api_mod_max_memory_allocated
+        )
         setattr(g, _dev_ns, _mod)
 
     if "torch.multiprocessing" not in _modules:
         import multiprocessing as _mp
+
         _modules["torch.multiprocessing"] = _mp
     g.multiprocessing = _modules["torch.multiprocessing"]
     _mp_reductions = _types.ModuleType("torch.multiprocessing.reductions")
@@ -303,11 +306,13 @@ def _install_cuda(g, registry=None):
     try:
         g.multiprocessing.reductions = _mp_reductions
     except (AttributeError, TypeError) as exc:
-        swallowed("torch/installers/cuda/bindings.py _install_cuda: g.multiprocessing.reductions = _mp_reductions", exc)
+        swallowed(
+            "torch/installers/cuda/bindings.py _install_cuda: g.multiprocessing.reductions = _mp_reductions",
+            exc,
+        )
 
     if "torch.overrides" not in _modules:
         overrides = _types.ModuleType("torch.overrides")
-
 
         overrides.TorchFunctionMode = TorchFunctionMode
         overrides.BaseTorchFunctionMode = TorchFunctionMode
@@ -342,15 +347,20 @@ def _install_cuda(g, registry=None):
         # asking whether it could have had any effect.
         c_mod._accelerator_setAllocatorSettings = _api_c_mod__accelerator_setAllocatorSettings
         c_mod._cuda_setAllocatorSettings = getattr(
-            c_mod, "_cuda_setAllocatorSettings", _api_c_mod__cuda_setAllocatorSettings)
+            c_mod, "_cuda_setAllocatorSettings", _api_c_mod__cuda_setAllocatorSettings
+        )
         _modules["torch._C"] = c_mod
         _modules["torch._C._nn"] = nn_c
         _modules["torch._C._functorch"] = functorch_c
     g._C = _modules["torch._C"]
     if not hasattr(g._C, "_autograd"):
         g._C._autograd = _types.SimpleNamespace()
-    g._C._autograd._push_saved_tensors_default_hooks = _api_g__C__autograd__push_saved_tensors_default_hooks
-    g._C._autograd._pop_saved_tensors_default_hooks = _api_g__C__autograd__pop_saved_tensors_default_hooks
+    g._C._autograd._push_saved_tensors_default_hooks = (
+        _api_g__C__autograd__push_saved_tensors_default_hooks
+    )
+    g._C._autograd._pop_saved_tensors_default_hooks = (
+        _api_g__C__autograd__pop_saved_tensors_default_hooks
+    )
     _modules["torch._C._autograd"] = g._C._autograd
 
     backends = _modules.get("torch.backends")
@@ -372,6 +382,7 @@ def _install_cuda(g, registry=None):
         # Bound to this module, so the implementation never has to look
         # itself up in the interpreter's module registry.
         from functools import partial as _partial
+
         cudnn.flags = _partial(_api_cudnn_flags, cudnn)
     if not isinstance(getattr(cudnn, "conv", None), _PrecisionBackend):
         cudnn.conv = _PrecisionBackend("cudnn", "torch.backends.cudnn.conv")
@@ -383,22 +394,39 @@ def _install_cuda(g, registry=None):
         cuda_backend = _types.ModuleType("torch.backends.cuda")
         _modules["torch.backends.cuda"] = cuda_backend
     cuda_backend.sdp_kernel = getattr(cuda_backend, "sdp_kernel", _api_cuda_backend_sdp_kernel)
-    cuda_backend.enable_flash_sdp = getattr(cuda_backend, "enable_flash_sdp", _api_cuda_backend_enable_flash_sdp)
-    cuda_backend.enable_mem_efficient_sdp = getattr(cuda_backend, "enable_mem_efficient_sdp", _api_cuda_backend_enable_mem_efficient_sdp)
-    cuda_backend.enable_math_sdp = getattr(cuda_backend, "enable_math_sdp", _api_cuda_backend_enable_math_sdp)
+    cuda_backend.enable_flash_sdp = getattr(
+        cuda_backend, "enable_flash_sdp", _api_cuda_backend_enable_flash_sdp
+    )
+    cuda_backend.enable_mem_efficient_sdp = getattr(
+        cuda_backend, "enable_mem_efficient_sdp", _api_cuda_backend_enable_mem_efficient_sdp
+    )
+    cuda_backend.enable_math_sdp = getattr(
+        cuda_backend, "enable_math_sdp", _api_cuda_backend_enable_math_sdp
+    )
     # The fourth of torch's attention-backend switches. Attention here picks
     # its own path, so all four are settings nothing acts on -- but a serving
     # stack turns cuDNN's off during platform detection, and an AttributeError
     # there is swallowed into "no platform detected" rather than reported.
-    cuda_backend.enable_cudnn_sdp = getattr(cuda_backend, "enable_cudnn_sdp", _api_cuda_backend_enable_cudnn_sdp)
-    cuda_backend.flash_sdp_enabled = getattr(cuda_backend, "flash_sdp_enabled", _api_cuda_backend_flash_sdp_enabled)
-    cuda_backend.mem_efficient_sdp_enabled = getattr(cuda_backend, "mem_efficient_sdp_enabled", _api_cuda_backend_mem_efficient_sdp_enabled)
-    cuda_backend.math_sdp_enabled = getattr(cuda_backend, "math_sdp_enabled", _api_cuda_backend_math_sdp_enabled)
-    cuda_backend.cudnn_sdp_enabled = getattr(cuda_backend, "cudnn_sdp_enabled", _api_cuda_backend_cudnn_sdp_enabled)
+    cuda_backend.enable_cudnn_sdp = getattr(
+        cuda_backend, "enable_cudnn_sdp", _api_cuda_backend_enable_cudnn_sdp
+    )
+    cuda_backend.flash_sdp_enabled = getattr(
+        cuda_backend, "flash_sdp_enabled", _api_cuda_backend_flash_sdp_enabled
+    )
+    cuda_backend.mem_efficient_sdp_enabled = getattr(
+        cuda_backend, "mem_efficient_sdp_enabled", _api_cuda_backend_mem_efficient_sdp_enabled
+    )
+    cuda_backend.math_sdp_enabled = getattr(
+        cuda_backend, "math_sdp_enabled", _api_cuda_backend_math_sdp_enabled
+    )
+    cuda_backend.cudnn_sdp_enabled = getattr(
+        cuda_backend, "cudnn_sdp_enabled", _api_cuda_backend_cudnn_sdp_enabled
+    )
     if not hasattr(cuda_backend, "matmul") or not isinstance(cuda_backend.matmul, _MatmulBackend):
         cuda_backend.matmul = _MatmulBackend()
     cuda_backend._preferred_blas_library = getattr(
-        cuda_backend, "_preferred_blas_library", "cublas")
+        cuda_backend, "_preferred_blas_library", "cublas"
+    )
     cuda_backend.preferred_blas_library = _preferred_blas_library
     mps = _modules.get("torch.backends.mps")
     if mps is None:
@@ -438,8 +466,11 @@ def _install_version(g, registry=None):
     """Install torch.version for libraries that probe torch.cuda/hip versions."""
     _modules = registry_for(g, registry).module_map
     import types as _types
+
     torch_api_version = "2.11.0"
-    jittor_version = getattr(g, "__jittor_version__", getattr(g, "__version__", getattr(jt, "__version__", None)))
+    jittor_version = getattr(
+        g, "__jittor_version__", getattr(g, "__version__", getattr(jt, "__version__", None))
+    )
     g.__jittor_version__ = jittor_version
     g.__torch_version__ = torch_api_version
     version = _types.ModuleType("torch.version")
@@ -449,7 +480,10 @@ def _install_version(g, registry=None):
         nv = getattr(getattr(jt, "compiler", None), "nvcc_version", None)
         version.cuda = ".".join(map(str, nv[:2])) if nv else None
     except EXPECTED as exc:
-        swallowed("torch/installers/cuda/bindings.py _install_version: nv = getattr(getattr(jt, 'compiler', None), 'nvcc_versi...", exc)
+        swallowed(
+            "torch/installers/cuda/bindings.py _install_version: nv = getattr(getattr(jt, 'compiler', None), 'nvcc_versi...",
+            exc,
+        )
         version.cuda = None
     version.hip = None
     version.git_version = "jittor"

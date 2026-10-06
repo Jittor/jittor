@@ -20,7 +20,9 @@ jobs:
     needs: baseline
     name: nox / ${{ matrix.session }}
     runs-on: ${{ needs.baseline.outputs.host_runner }}
-    timeout-minutes: 20
+    # Cold structure with a rebuilt native core takes about 17 minutes locally;
+    # allow checkout and tool installation within the same job budget.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -51,14 +53,14 @@ jobs:
       image: ${{ needs.baseline.outputs.cpu_ci_image }}
     timeout-minutes: 30
     steps:
+      - name: Install native packaging toolchain
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends build-essential libomp-dev cmake git ca-certificates
       - name: Check out source
         uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - name: Install native packaging toolchain
-        run: |
-          apt-get update
-          apt-get install --yes --no-install-recommends build-essential libomp-dev
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -71,7 +73,7 @@ jobs:
   python37:
     needs: baseline
     name: nox / py37
-    runs-on: ${{ needs.baseline.outputs.host_runner }}
+    runs-on: ${{ needs.baseline.outputs.py37_runner }}
     timeout-minutes: 20
     steps:
       - name: Check out source

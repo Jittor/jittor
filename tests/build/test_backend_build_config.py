@@ -62,11 +62,20 @@ def _fail_if_a_late_call_arrived():
 
 atexit.register(_fail_if_a_late_call_arrived)
 '''
-    result = run_child_script(
-        script, directory=tmp_path, name="explicit_cpu_backend", timeout=600,
-        env={"JT_BACKEND": "cpu", "nvcc_path": "/must/not/probe/nvcc",
-             "JTCUDA_AUTO_INSTALL": "1"}, without_torch_mode=True, text=True,
-    )
+    for _ in range(2):
+        result = run_child_script(
+            script, directory=tmp_path, name="explicit_cpu_backend", timeout=600,
+            env={"JT_BACKEND": "cpu", "nvcc_path": "/must/not/probe/nvcc",
+                 "JTCUDA_AUTO_INSTALL": "1"}, without_torch_mode=True, text=True,
+        )
+        # This deliberately different build config can rebuild jit_utils on
+        # first import. Exit 3 asks for the same command in a fresh process;
+        # the test must still reject any CUDA service call, including at exit.
+        if result.returncode != 3 or (
+            "jit_utils was rebuilt and cannot be reloaded in this process"
+            not in result.stderr
+        ):
+            break
     assert result.returncode == 0, result.stdout[-4000:] + result.stderr[-4000:]
     assert 'CPU_BUILD_CONFIG={"cuda_services": 0, "backend": "cpu"}' in result.stdout
     # The last line means the import path finished; the exit status above means

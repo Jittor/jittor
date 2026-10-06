@@ -86,6 +86,9 @@ if rank == 0:
 else:
     store.arrive("client_done")
 print("DONE", rank, kind, flush=True)
+if rank == 0:
+    import sys
+    assert sys.stdin.readline() == "release\n"
 """
 
 
@@ -116,6 +119,9 @@ else:
 if rank == 0:
     assert store.get("ack") == b"1"
 print("DONE", rank, os.environ["STORE_INIT_METHOD"], flush=True)
+if rank == 0:
+    import sys
+    assert sys.stdin.readline() == "release\n"
 """
 
 
@@ -189,8 +195,9 @@ class TestCrossProcessStores(unittest.TestCase):
         # only turns a true hang (both children stuck) into a failure instead of
         # a hung session.
         budget = default_timeout()
+        assert len(rank_envs) == 2
         processes = []
-        outputs = []
+        outputs = [None, None]
         killed = set()
         try:
             for rank, extra in enumerate(rank_envs):
@@ -205,19 +212,26 @@ class TestCrossProcessStores(unittest.TestCase):
                     [PYTHON, "-c", source],
                     cwd=REPO_ROOT,
                     env=child_env(env),
+                    stdin=subprocess.PIPE if rank == 0 else subprocess.DEVNULL,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
                     start_new_session=True,
                 ))
-            for rank, process in enumerate(processes):
+            # Rank 0 owns the TCP server. Keep it alive until rank 1 has
+            # finished every store request, including its final response.
+            for rank in (1, 0):
+                process = processes[rank]
                 try:
-                    output, _ = process.communicate(timeout=budget)
+                    output, _ = process.communicate(
+                        input="release\n" if rank == 0 else None,
+                        timeout=budget,
+                    )
                 except subprocess.TimeoutExpired:
                     killed.add(rank)
                     os.killpg(os.getpgid(process.pid), signal.SIGKILL)
                     output, _ = process.communicate(timeout=5)
-                outputs.append(output)
+                outputs[rank] = output
         finally:
             for process in processes:
                 if process.poll() is None:

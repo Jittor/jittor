@@ -12,8 +12,9 @@ def _normalize_dim(value, dim):
         dim += ndim
     if dim < 0 or dim >= ndim:
         raise IndexError(
-            "Dimension out of range (expected to be in range of [{}, {}], "
-            "but got {})".format(-ndim, ndim - 1, dim)
+            "Dimension out of range (expected to be in range of [{}, {}], but got {})".format(
+                -ndim, ndim - 1, dim
+            )
         )
     return dim
 
@@ -77,13 +78,10 @@ class WeightNorm:
     def apply(module, name, dim):
         functions = _ensure_reparam_hook(module)
         if any(
-            isinstance(function, WeightNorm) and function.name == name
-            for function in functions
+            isinstance(function, WeightNorm) and function.name == name for function in functions
         ):
             raise RuntimeError(
-                "Cannot register two weight_norm hooks on the same parameter {}".format(
-                    name
-                )
+                "Cannot register two weight_norm hooks on the same parameter {}".format(name)
             )
 
         weight = getattr(module, name)

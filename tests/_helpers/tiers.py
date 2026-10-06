@@ -462,7 +462,6 @@ def worker_thread_budget(workers, available=None):
     """
     if not workers or workers <= 1:
         return None
-    import os
 
     if available is None:
         available = effective_cpu_count()
@@ -592,6 +591,8 @@ def budget_report(workers=None, configured_workers=None):
     actual`` rather than silently relabelling the run as a one-worker gate.
     """
     if workers is None:
+        if configured_workers is None:
+            configured_workers = SMOKE_WORKERS
         workers = runtime_workers(configured_workers)
     if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
         raise ValueError("workers must be a positive integer")

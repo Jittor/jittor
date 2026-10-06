@@ -1,7 +1,6 @@
 """Install neural-network convenience methods on :class:`jittor.Var`."""
 
 import jittor as jt
-import numpy as np
 
 from .functional.activation import hardsigmoid, hardswish, prelu, rrelu
 from .functional.autograd import backward

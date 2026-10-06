@@ -2,7 +2,7 @@
 from contextlib import nullcontext
 from functools import wraps
 from types import MappingProxyType
-from typing import Any, cast
+from typing import Any, ContextManager, cast
 import jittor as jt
 from jittor import nn
 from ..diagnostics import EXPECTED, swallowed
@@ -45,7 +45,8 @@ def _sampling_scope(function):
     @wraps(function)
     def call(self, *args, **kwargs):
         target = getattr(self, "_frontend_type", None)
-        with tensor_frontend(target) if target is not None else nullcontext():
+        scope: ContextManager[Any] = tensor_frontend(target) if target is not None else cast(ContextManager[Any], nullcontext())
+        with scope:
             return function(self, *args, **kwargs)
     return call
 

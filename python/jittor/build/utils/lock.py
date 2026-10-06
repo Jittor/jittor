@@ -26,11 +26,14 @@ either language goes through that single shared state.
 '''
 
 import errno
+from types import ModuleType
+from typing import Callable, Optional
 import json
 import os
 import sys
 import time
 
+fcntl: Optional[ModuleType]
 try:
     import fcntl
 except ImportError:
@@ -211,7 +214,8 @@ class Lock:
         '''
         handle = self.fd
         if fcntl is None:
-            handle = msvcrt.get_osfhandle(self.fd)
+            get_osfhandle: Callable[[int], int] = getattr(msvcrt, "get_osfhandle")
+            handle = get_osfhandle(self.fd)
         core.set_lock_fd(handle, self._py_is_locked)
         self.core = core
 

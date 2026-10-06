@@ -181,9 +181,17 @@ def one_hot(x: jt.Var, num_classes: int = -1) -> jt.Var:
     """
 
     from jittor._core.dtypes import dtype_name
+
     assert dtype_name(x.dtype) in (
-        "bool", "int8", "int16", "int32", "int64",
-        "uint8", "uint16", "uint32", "uint64",
+        "bool",
+        "int8",
+        "int16",
+        "int32",
+        "int64",
+        "uint8",
+        "uint16",
+        "uint32",
+        "uint64",
     ), f"one_hot expects an integer or bool input, got {dtype_name(x.dtype)}"
     if num_classes == -1:
         num_classes = x.max().item() + 1

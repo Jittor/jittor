@@ -17,6 +17,7 @@ REQUIRED_SOURCE_PATHS = (
     "src/codegen/op_compiler.cc",
     "docs/conf.py",
     "docs/index.md",
+    "docs/development/repository-layout.md",
     "examples/README.md",
     "examples/gan/simple_cgan.py",
     "examples/notebooks/basics.md",
@@ -136,6 +137,8 @@ def _expected_source_paths(repo_root):
         item
         for item in result.stdout.decode("utf-8").split("\0")
         if item
+        and item != "python/jittor/compat"
+        and not item.startswith("docs/slides/")
         and ((repo_root / item).exists() or (repo_root / item).is_symlink())
         and _generated_cache_reason(item) is None
         and not _is_egg_info_path(item)
@@ -187,6 +190,8 @@ def _pollution_reason(relative):
     if _is_egg_info_path(relative):
         return "unapproved generated .egg-info metadata"
     parts = PurePosixPath(relative).parts
+    if relative == "docs/slides" or relative.startswith("docs/slides/"):
+        return "retired presentation assets excluded from sdist"
     if parts and parts[0] in FORBIDDEN_TOP_LEVEL_NAMES:
         return "forbidden legacy top-level path"
     if relative in FORBIDDEN_EXACT_SOURCE_PATHS:

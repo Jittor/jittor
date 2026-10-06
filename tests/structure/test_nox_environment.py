@@ -4,6 +4,8 @@ import sys
 import types
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -146,6 +148,65 @@ def test_session_env_blocks_host_test_controls(monkeypatch, tmp_path):
     assert env["PATH"] == os.environ["PATH"]
 
 
+def test_source_gate_installs_core_before_the_compat_namespace(monkeypatch, tmp_path):
+    module = _load_noxfile(monkeypatch, tmp_path)
+    session = _FakeSession(tmp_path, "/fixture/python3-config")
+    source = tmp_path / "source"
+    env = {"JITTOR_SOURCE_ROOT": str(source)}
+
+    module["_install_compat_source"](session, env)
+    module["_install_compat_source"](session, env)
+
+    assert len(session.calls) == 2  # Repeated pytest groups reuse both installs.
+    core, compat = [args for args, _kwargs in session.calls]
+    assert core[:4] == compat[:4] == ("python", "-m", "pip", "install")
+    assert core[-2:] == ("-e", str(source.resolve()))
+    assert core[core.index("--config-settings") + 1] == "editable_mode=compat"
+    assert compat[-2:] == ("-e", str(source.resolve() / "compat"))
+
+
+def test_installed_artifact_gate_never_installs_source_distributions(monkeypatch, tmp_path):
+    module = _load_noxfile(monkeypatch, tmp_path)
+    session = _FakeSession(tmp_path, "/fixture/python3-config")
+
+    module["_install_compat_source"](session, {"JITTOR_SOURCE_ROOT": ""})
+
+    assert session.calls == []
+
+
+def test_structure_installs_opinfo_collection_dependencies(monkeypatch, tmp_path):
+    module = _load_noxfile(monkeypatch, tmp_path)
+    session = _FakeSession(tmp_path, "/fixture/python3-config")
+    session.posargs = []
+    installed = []
+    session.install = lambda *packages: installed.extend(packages)
+
+    module["structure"](session)
+
+    assert module["SCIPY"] in installed
+    assert module["PYTEST_XDIST"] in installed
+
+
+def test_structure_exposes_adapter_sources_only_to_its_torch_process(monkeypatch, tmp_path):
+    monkeypatch.setenv("PYTHONPATH", "outer-path-must-stay-unchanged")
+    module = _load_noxfile(monkeypatch, tmp_path)
+    session = _FakeSession(tmp_path, "/fixture/python3-config")
+    session.posargs = []
+    session.install = lambda *packages: None
+
+    module["structure"](session)
+
+    pytest_envs = [kwargs["env"] for args, kwargs in session.calls if "pytest" in args]
+    native, torch = pytest_envs
+    core_path = str(module["REPO_ROOT"] / "python")
+    adapter_path = str(module["REPO_ROOT"] / "adapters")
+    assert native["JITTOR_TORCH_SHIM"] == "0"
+    assert native["PYTHONPATH"] == core_path
+    assert torch["JITTOR_TORCH_SHIM"] == "1"
+    assert torch["PYTHONPATH"].split(os.pathsep) == [core_path, adapter_path]
+    assert os.environ["PYTHONPATH"] == "outer-path-must-stay-unchanged"
+
+
 def test_session_env_records_the_exact_cpu_affinity(monkeypatch, tmp_path):
     monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: {7, 3, 5})
     module = _load_noxfile(monkeypatch, tmp_path)
@@ -189,8 +250,7 @@ def test_gate_workers_respect_a_smaller_cgroup_quota(monkeypatch, tmp_path):
     assert module["_runtime_gate_workers"]() == 1
 
 
-def test_gate_workers_keep_the_configured_count_when_quota_is_sufficient(
-        monkeypatch, tmp_path):
+def test_gate_workers_keep_the_configured_count_when_quota_is_sufficient(monkeypatch, tmp_path):
     module = _load_noxfile(monkeypatch, tmp_path)
     module["_runtime_gate_workers"].__globals__["GATE_WORKERS"] = 4
     module["_runtime_gate_workers"].__globals__["effective_cpu_count"] = lambda: 8
@@ -198,8 +258,7 @@ def test_gate_workers_keep_the_configured_count_when_quota_is_sufficient(
     assert module["_runtime_gate_workers"]() == 4
 
 
-def test_smoke_budget_log_reports_actual_and_configured_workers(
-        monkeypatch, tmp_path):
+def test_smoke_budget_log_reports_actual_and_configured_workers(monkeypatch, tmp_path):
     module = _load_noxfile(monkeypatch, tmp_path)
     module["_enforce_smoke_budget"].__globals__["GATE_WORKERS"] = 4
     module["_enforce_smoke_budget"].__globals__["budget_report"] = (
@@ -211,7 +270,8 @@ def test_smoke_budget_log_reports_actual_and_configured_workers(
             "configured_workers": configured_workers,
             "effective_cpus": 1,
             "threads_per_worker": 1,
-        })
+        }
+    )
     session = _FakeSession(tmp_path, "/usr/bin/python3-config")
 
     module["_enforce_smoke_budget"](session, workers=1)
@@ -220,3 +280,139 @@ def test_smoke_budget_log_reports_actual_and_configured_workers(
         "smoke budget: predicted 120s / 480s (headroom 360s; 1 actual/4 "
         "configured workers; 1 CPU quota; 1 threads/worker)"
     ]
+
+
+def test_shared_pytest_entry_exposes_adapter_sources_without_global_changes(monkeypatch, tmp_path):
+    monkeypatch.setenv("PYTHONPATH", "host-path-must-stay-unchanged")
+    module = _load_noxfile(monkeypatch, tmp_path)
+    session = _FakeSession(tmp_path, "/fixture/python3-config")
+    source = tmp_path / "explicit-source"
+    env = {"JITTOR_TORCH_SHIM": "1", "JITTOR_SOURCE_ROOT": str(source), "PYTHONPATH": "core-path"}
+    original = env.copy()
+
+    module["_run_pytest_once"](session, ("adapters/tests/vllm/test_backend.py::test_case",), env)
+
+    args, kwargs = session.calls[-1]
+    assert args[:3] == ("python", "-m", "pytest")
+    scoped = kwargs["env"]
+    assert scoped["PYTHONPATH"].split(os.pathsep) == [
+        "core-path",
+        str(source.resolve() / "adapters"),
+    ]
+    assert env == original
+    assert os.environ["PYTHONPATH"] == "host-path-must-stay-unchanged"
+    assert module["_adapter_source_test_env"](scoped, ("adapters/tests",)) is scoped
+
+
+@pytest.mark.parametrize(
+    "mode,source,args",
+    [
+        ("0", None, ("adapters/tests",)),
+        ("1", "", ("adapters/tests",)),
+        ("1", None, ("tests/structure",)),
+        ("1", None, ("adapters/testsuite",)),
+        ("1", None, ("--ignore=adapters/tests",)),
+        ("1", None, ("--ignore", "adapters/tests")),
+        ("1", None, ("--ignore-glob", "adapters/tests/*")),
+        ("1", None, ("--deselect", "adapters/tests/vllm/test_backend.py::test_case")),
+        ("1", None, ("-k", "adapters/tests")),
+        ("1", None, ("-m", "adapters/tests")),
+    ],
+)
+def test_adapter_source_path_does_not_leak_into_other_invocations(
+    monkeypatch, tmp_path, mode, source, args
+):
+    monkeypatch.delenv("JITTOR_SOURCE_ROOT", raising=False)
+    module = _load_noxfile(monkeypatch, tmp_path)
+    env = {"JITTOR_TORCH_SHIM": mode, "PYTHONPATH": "core-path"}
+    if source is not None:
+        env["JITTOR_SOURCE_ROOT"] = source
+    assert module["_adapter_source_test_env"](env, args) is env
+
+
+def test_adapter_test_path_honors_the_inherited_source_root(monkeypatch, tmp_path):
+    source = tmp_path / "inherited-source"
+    monkeypatch.setenv("JITTOR_SOURCE_ROOT", str(source))
+    module = _load_noxfile(monkeypatch, tmp_path)
+    env = {"JITTOR_TORCH_SHIM": "1", "PYTHONPATH": None}
+    scoped = module["_adapter_source_test_env"](env, ("adapters/tests/vllm",))
+    assert scoped["PYTHONPATH"] == str(source.resolve() / "adapters")
+    assert env["PYTHONPATH"] is None
+
+
+def test_adapter_test_path_preserves_existing_search_segments(monkeypatch, tmp_path):
+    monkeypatch.delenv("JITTOR_SOURCE_ROOT", raising=False)
+    module = _load_noxfile(monkeypatch, tmp_path)
+    original = os.pathsep.join(("first", "", "last"))
+    env = {"JITTOR_TORCH_SHIM": "1", "PYTHONPATH": original}
+    scoped = module["_adapter_source_test_env"](env, ("adapters/tests/vllm",))
+    assert scoped["PYTHONPATH"] == original + os.pathsep + str(module["REPO_ROOT"] / "adapters")
+    assert env["PYTHONPATH"] == original
+
+
+@pytest.mark.parametrize("inherited_manual", ("0", "1"))
+def test_tutorial_gate_runs_manual_probes_independently_of_the_host(
+    monkeypatch, tmp_path, inherited_manual
+):
+    from _helpers import pytest_policy
+
+    monkeypatch.setenv("JITTOR_TEST_MANUAL", inherited_manual)
+    module = _load_noxfile(monkeypatch, tmp_path)
+    session = _FakeSession(tmp_path, "/fixture/python3-config")
+    session.install = lambda *args, **kwargs: None
+    calls = []
+
+    def capture(_session, targets, env):
+        calls.append((targets, env))
+
+    tutorial = module["tutorials"]
+    monkeypatch.setitem(tutorial.__globals__, "_run_pytest", capture)
+    tutorial(session)
+    assert len(calls) == 1
+    targets, env = calls[0]
+    assert targets == ("tests/integration/test_notebooks.py",)
+    config = types.SimpleNamespace(option=types.SimpleNamespace(markexpr=""))
+    with monkeypatch.context() as scoped:
+        for key, value in env.items():
+            if value is None:
+                scoped.delenv(key, raising=False)
+            else:
+                scoped.setenv(key, value)
+        assert pytest_policy._manual_probes_are_enabled(config)
+    assert env["JITTOR_TEST_REQUIRE_EXECUTION"] == "1"
+    assert env["JITTOR_TEST_DEVICES"] == "cpu"
+    assert env["nvcc_path"] == ""
+    assert os.environ["JITTOR_TEST_MANUAL"] == inherited_manual
+
+
+def test_tutorial_gate_installs_the_plotting_dependency(monkeypatch, tmp_path):
+    from packaging.requirements import Requirement
+
+    module = _load_noxfile(monkeypatch, tmp_path)
+    session = _FakeSession(tmp_path, "/fixture/python3-config")
+    installed = []
+
+    def consume_install(*args, **kwargs):
+        arguments = iter(args)
+        for argument in arguments:
+            if argument == "-r":
+                lines = Path(next(arguments)).read_text().splitlines()
+                installed.extend(
+                    Requirement(line) for line in lines if line.strip() and not line.startswith("#")
+                )
+            else:
+                installed.append(Requirement(argument))
+
+    session.install = consume_install
+    tutorial = module["tutorials"]
+    monkeypatch.setitem(tutorial.__globals__, "_run_pytest", lambda *args: None)
+    tutorial(session)
+    canonical = [
+        Requirement(line)
+        for line in (REPO_ROOT / "requirements" / "examples.txt").read_text().splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    expected = next(requirement for requirement in canonical if requirement.name == "matplotlib")
+    actual = [requirement for requirement in installed if requirement.name == expected.name]
+    assert len(actual) == 1
+    assert actual[0].specifier == expected.specifier

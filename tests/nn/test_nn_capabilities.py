@@ -612,7 +612,9 @@ class TestSparseCapabilities(unittest.TestCase):
         self.assertEqual(calls.count("matmul"), 1)
 
 
-@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
+@unittest.skipIf(
+    not _test_capability.check_accelerator("cuda", backend=jt).enabled, "No CUDA found"
+)
 class TestCudaCapabilities(unittest.TestCase):
     def test_submanifold_conv_cuda_hash_and_backward(self):
         coords_np = np.array(
@@ -655,29 +657,16 @@ class TestCudaCapabilities(unittest.TestCase):
         for num_heads, head_dim in ((3, 96), (12, 128), (4, 256)):
             with self.subTest(num_heads=num_heads, head_dim=head_dim):
                 x_np = rng.randn(2, 5, num_heads, head_dim).astype("float32")
-                gamma_np = (
-                    1 + 0.1 * rng.randn(num_heads, head_dim)
-                ).astype("float32")
+                gamma_np = (1 + 0.1 * rng.randn(num_heads, head_dim)).astype("float32")
                 with jt.flag_scope(use_cuda=1), jt.no_grad():
                     x = jt.array(x_np).bfloat16()
                     gamma = jt.array(gamma_np)
                     actual = rms_norm_cuda.multihead_rms_norm_cuda(x, gamma)
                     self.assertIsNotNone(actual)
-                    quantized_x, actual_np = jt.fetch_sync(
-                        [x.float32(), actual.float32()]
-                    )
-                norm = np.sqrt(
-                    (quantized_x * quantized_x).sum(-1, keepdims=True)
-                )
-                expected = (
-                    quantized_x
-                    / np.maximum(norm, 1e-12)
-                    * gamma_np
-                    * math.sqrt(head_dim)
-                )
-                np.testing.assert_allclose(
-                    actual_np, expected, atol=0.02, rtol=0.01
-                )
+                    quantized_x, actual_np = jt.fetch_sync([x.float32(), actual.float32()])
+                norm = np.sqrt((quantized_x * quantized_x).sum(-1, keepdims=True))
+                expected = quantized_x / np.maximum(norm, 1e-12) * gamma_np * math.sqrt(head_dim)
+                np.testing.assert_allclose(actual_np, expected, atol=0.02, rtol=0.01)
 
     def test_inference_rms_norm_cuda(self):
         rng = np.random.RandomState(224)
@@ -695,29 +684,25 @@ class TestCudaCapabilities(unittest.TestCase):
                     residual = jt.array(residual_np).cast(dtype)
                     gamma = jt.array(gamma_np).cast(dtype)
                     actual = rms_norm_cuda._rms_norm_cuda(x, gamma, epsilon)
-                    fused = rms_norm_cuda._fused_add_rms_norm_cuda(
-                        x, residual, gamma, epsilon)
+                    fused = rms_norm_cuda._fused_add_rms_norm_cuda(x, residual, gamma, epsilon)
                     self.assertIsNotNone(actual)
                     self.assertIsNotNone(fused)
                     actual_np = actual.float32().numpy()
                     fused_np, fused_residual_np = jt.fetch_sync(
-                        [fused[0].float32(), fused[1].float32()])
+                        [fused[0].float32(), fused[1].float32()]
+                    )
 
                 quantized_x = x.float32().numpy()
                 quantized_residual = residual.float32().numpy()
                 quantized_gamma = gamma.float32().numpy()
                 variance = np.mean(quantized_x * quantized_x, axis=-1, keepdims=True)
-                expected = (
-                    quantized_x / np.sqrt(variance + epsilon) * quantized_gamma)
+                expected = quantized_x / np.sqrt(variance + epsilon) * quantized_gamma
                 summed = quantized_x + quantized_residual
                 fused_variance = np.mean(summed * summed, axis=-1, keepdims=True)
-                expected_fused = (
-                    summed / np.sqrt(fused_variance + epsilon) * quantized_gamma)
+                expected_fused = summed / np.sqrt(fused_variance + epsilon) * quantized_gamma
                 np.testing.assert_allclose(actual_np, expected, atol=atol, rtol=rtol)
-                np.testing.assert_allclose(
-                    fused_np, expected_fused, atol=atol, rtol=rtol)
-                np.testing.assert_allclose(
-                    fused_residual_np, summed, atol=atol, rtol=rtol)
+                np.testing.assert_allclose(fused_np, expected_fused, atol=atol, rtol=rtol)
+                np.testing.assert_allclose(fused_residual_np, summed, atol=atol, rtol=rtol)
 
     def test_modulated_layer_norm_preserves_bfloat_rounding(self):
         from jittor.backends.cuda.kernels.nn.modulated_layer_norm_cuda import (
@@ -733,20 +718,12 @@ class TestCudaCapabilities(unittest.TestCase):
             x = jt.array(x_np).bfloat16()
             scale = jt.array(scale_np).bfloat16()
             shift = jt.array(shift_np).bfloat16()
-            actual = _modulated_layer_norm_no_grad_cuda(
-                x, scale, shift, eps
-            )
+            actual = _modulated_layer_norm_no_grad_cuda(x, scale, shift, eps)
             self.assertIsNotNone(actual)
-            reference = _layer_norm_no_grad_cuda(
-                x, (96,), 1.0, 0.0, eps, allow_bfloat16=True
-            )
+            reference = _layer_norm_no_grad_cuda(x, (96,), 1.0, 0.0, eps, allow_bfloat16=True)
             reference = reference * (1 + scale) + shift
-            actual_np, reference_np = jt.fetch_sync(
-                [actual.float32(), reference.float32()]
-            )
-        np.testing.assert_allclose(
-            actual_np, reference_np, atol=0.016, rtol=0.008
-        )
+            actual_np, reference_np = jt.fetch_sync([actual.float32(), reference.float32()])
+        np.testing.assert_allclose(actual_np, reference_np, atol=0.016, rtol=0.008)
 
     def test_partial_rope_uses_explicit_prefix_and_rotary_dim(self):
         rng = np.random.RandomState(227)
@@ -780,12 +757,8 @@ class TestCudaCapabilities(unittest.TestCase):
         rng = np.random.RandomState(230)
         token_count, num_heads, head_dim = 7, 3, 128
         qkv_np = rng.randn(token_count, 3, num_heads, head_dim).astype("float32")
-        q_gamma_np = (
-            1 + 0.1 * rng.randn(num_heads, head_dim)
-        ).astype("float32")
-        k_gamma_np = (
-            1 + 0.1 * rng.randn(num_heads, head_dim)
-        ).astype("float32")
+        q_gamma_np = (1 + 0.1 * rng.randn(num_heads, head_dim)).astype("float32")
+        k_gamma_np = (1 + 0.1 * rng.randn(num_heads, head_dim)).astype("float32")
         angles = rng.randn(token_count, head_dim // 2).astype("float32")
         phases_np = np.stack((np.cos(angles), np.sin(angles)), axis=-1)
 
@@ -798,9 +771,7 @@ class TestCudaCapabilities(unittest.TestCase):
                 jt.array(phases_np),
             )
             self.assertIsNotNone(result)
-            quantized_qkv, actual = jt.fetch_sync(
-                [qkv.float32(), result.float32()]
-            )
+            quantized_qkv, actual = jt.fetch_sync([qkv.float32(), result.float32()])
 
             def quantize(value):
                 return jt.array(value).bfloat16().float32().numpy()
@@ -810,12 +781,8 @@ class TestCudaCapabilities(unittest.TestCase):
             k = quantized_qkv[:, 1]
             q_norm = np.sqrt((q * q).sum(-1, keepdims=True))
             k_norm = np.sqrt((k * k).sum(-1, keepdims=True))
-            q = quantize(
-                q / np.maximum(q_norm, 1e-12) * q_gamma_np * scale
-            )
-            k = quantize(
-                k / np.maximum(k_norm, 1e-12) * k_gamma_np * scale
-            )
+            q = quantize(q / np.maximum(q_norm, 1e-12) * q_gamma_np * scale)
+            k = quantize(k / np.maximum(k_norm, 1e-12) * k_gamma_np * scale)
 
         def rotate(value):
             pairs = value.reshape(token_count, num_heads, head_dim // 2, 2)
@@ -867,19 +834,25 @@ class TestCudaCapabilities(unittest.TestCase):
                     k = jt.array(k_np).cast(dtype)
                     cache = jt.array(cache_np).cast(dtype)
                     result = rope_cuda._rotary_embedding_cuda(
-                        jt.array(positions_np), q, k, cache,
-                        head_size=40, rotary_dim=24, is_neox_style=True)
+                        jt.array(positions_np),
+                        q,
+                        k,
+                        cache,
+                        head_size=40,
+                        rotary_dim=24,
+                        is_neox_style=True,
+                    )
                     self.assertIsNotNone(result)
-                    actual_q, actual_k = jt.fetch_sync(
-                        [result[0].float32(), result[1].float32()])
+                    actual_q, actual_k = jt.fetch_sync([result[0].float32(), result[1].float32()])
                     quantized_q, quantized_k, quantized_cache = jt.fetch_sync(
-                        [q.float32(), k.float32(), cache.float32()])
+                        [q.float32(), k.float32(), cache.float32()]
+                    )
                 np.testing.assert_allclose(
-                    actual_q, reference(quantized_q, quantized_cache),
-                    atol=atol, rtol=rtol)
+                    actual_q, reference(quantized_q, quantized_cache), atol=atol, rtol=rtol
+                )
                 np.testing.assert_allclose(
-                    actual_k, reference(quantized_k, quantized_cache),
-                    atol=atol, rtol=rtol)
+                    actual_k, reference(quantized_k, quantized_cache), atol=atol, rtol=rtol
+                )
 
     def test_inference_silu_and_mul_cuda(self):
         from jittor.backends.cuda.kernels.nn.swiglu_cuda import _silu_and_mul_cuda
@@ -895,12 +868,10 @@ class TestCudaCapabilities(unittest.TestCase):
                     x = jt.array(x_np).cast(dtype)
                     result = _silu_and_mul_cuda(x)
                     self.assertIsNotNone(result)
-                    actual, quantized = jt.fetch_sync(
-                        [result.float32(), x.float32()])
+                    actual, quantized = jt.fetch_sync([result.float32(), x.float32()])
                 gate, value = np.split(quantized, 2, axis=-1)
                 expected = gate / (1.0 + np.exp(-gate)) * value
-                np.testing.assert_allclose(
-                    actual, expected, atol=atol, rtol=rtol)
+                np.testing.assert_allclose(actual, expected, atol=atol, rtol=rtol)
 
     def test_inference_paged_kv_cache_cuda(self):
         from jittor.backends.cuda.kernels.nn.kv_cache_cuda import _reshape_and_cache_cuda
@@ -915,11 +886,11 @@ class TestCudaCapabilities(unittest.TestCase):
                     key = jt.array(key_np).cast(dtype)
                     value = jt.array(value_np).cast(dtype)
                     cache = jt.zeros((3, 2, 4, 2, 3), dtype=dtype)
-                    result = _reshape_and_cache_cuda(
-                        key, value, cache, jt.array(slots_np))
+                    result = _reshape_and_cache_cuda(key, value, cache, jt.array(slots_np))
                     self.assertIs(result, cache)
                     actual, quantized_key, quantized_value = jt.fetch_sync(
-                        [cache.float32(), key.float32(), value.float32()])
+                        [cache.float32(), key.float32(), value.float32()]
+                    )
                 expected = np.zeros((3, 2, 4, 2, 3), dtype="float32")
                 expected[0, 0, 0] = quantized_key[0]
                 expected[0, 1, 0] = quantized_value[0]
@@ -935,7 +906,7 @@ class TestCudaCapabilities(unittest.TestCase):
         cache_np = rng.randn(4, 2, 4, 2, 16).astype("float32")
         seq_lens_np = np.array([5, 3], dtype="int32")
         block_table_np = np.array([[2, 0], [1, 3]], dtype="int32")
-        scale = 16 ** -0.5
+        scale = 16**-0.5
 
         def reference(query, cache):
             output = np.empty_like(query)
@@ -974,10 +945,11 @@ class TestCudaCapabilities(unittest.TestCase):
                     )
                     self.assertIsNotNone(result)
                     actual, quantized_query, quantized_cache = jt.fetch_sync(
-                        [result.float32(), query.float32(), cache.float32()])
+                        [result.float32(), query.float32(), cache.float32()]
+                    )
                 np.testing.assert_allclose(
-                    actual, reference(quantized_query, quantized_cache),
-                    atol=atol, rtol=rtol)
+                    actual, reference(quantized_query, quantized_cache), atol=atol, rtol=rtol
+                )
 
     def test_dual_grid_mesh_finalizer(self):
         coords_np = np.array(
@@ -1045,8 +1017,10 @@ class TestCapabilityStructure(unittest.TestCase):
                 return "device"
 
         value = LazyCudaValue()
-        with patch("jittor.backends.cuda.kernels.nn._inference.dispatch_context",
-                   return_value=SimpleNamespace(backend="cuda", device_id=3)) as resolve:
+        with patch(
+            "jittor.backends.cuda.kernels.nn._inference.dispatch_context",
+            return_value=SimpleNamespace(backend="cuda", device_id=3),
+        ) as resolve:
             self.assertEqual(device_index(value), 3)
             resolve.assert_called_once_with(value)
 

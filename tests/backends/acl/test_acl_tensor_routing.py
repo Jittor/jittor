@@ -351,7 +351,7 @@ class DomainRouting(unittest.TestCase):
         # defect class as the module-level *constants* `a1977f68` taught the
         # loader to carry: a name the surviving function reads and the sandbox
         # never provided.
-        owner = definitions("ops/concatenation.py", {"concat", "_merge_dtypes"},
+        owner = definitions("ops/concatenation.py", {"concat", "_concat", "_merge_dtypes"},
                             jt=jt, _jt=lambda: jt, Sequence=(list, tuple),
                             select_kernel=select)
         inputs = (Var("int32"), Var("float32"))

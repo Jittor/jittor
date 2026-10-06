@@ -11,7 +11,13 @@ import types
 import unittest
 from unittest import mock
 
+import pytest
+
 from _helpers.child_process import run_python_child
+
+# The stamp probes use the same gen_ops_stamp_probe cache product.
+# Keep their two-process build checks together under smoke's loadgroup mode.
+pytestmark = pytest.mark.xdist_group("custom_op_build_stamp")
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]

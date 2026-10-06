@@ -109,7 +109,10 @@ if child_pid == 0:
     jt.jt_init_subprocess()
 
     def watchdog():
-        time.sleep(8)
+        # Four fresh kernels may compile behind other CI workers. The outer
+        # child-process timeout is 180 seconds; allow normal compilation while
+        # still failing a forked worker deadlock well before that boundary.
+        time.sleep(120)
         os._exit(124)
 
     threading.Thread(target=watchdog, daemon=True).start()

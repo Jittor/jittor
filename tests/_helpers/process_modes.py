@@ -27,6 +27,8 @@ TORCH_MODE_PATHS = (
     "tests/backends/acl/test_acl_torch_compat.py",
     # These suites intentionally lock Torch defaults and dtype semantics.
     "tests/core/test_regression.py",
+    # state_dict(to="torch") needs the installed compatibility frontend.
+    "tests/nn/test_state_dict_dtypes.py",
     "tests/type/test_type_system.py",
     "tests/structure",
     "compat/tests/triton/test_triton_torch_compat.py",

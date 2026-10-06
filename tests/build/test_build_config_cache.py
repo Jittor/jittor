@@ -22,12 +22,21 @@ import jittor_utils as jit_utils
 from _helpers.child_process import run_python_child
 
 
+def _cache_env(env_overrides=None):
+    """An isolated child input, with no inherited cache-slot setting."""
+    env = dict(os.environ)
+    for name in ("cache_name", "JT_BUILD_CACHE_NAME"):
+        env.pop(name, None)
+    env.update(env_overrides or {})
+    return env
+
+
 def _cache_path_for(env_overrides):
     """cache_path as computed by a fresh interpreter with these variables set."""
     script = ("import jittor_utils, json, sys;"
               "sys.stdout.write(json.dumps(["
               "jittor_utils.cache_path, jittor_utils.lock_path]))")
-    out = run_python_child(["-c", script], env=env_overrides, text=False)
+    out = run_python_child(["-c", script], env=_cache_env(env_overrides), inherit=False, text=False)
     assert out.returncode == 0, out.stderr.decode()
     return json.loads(out.stdout.decode())
 
@@ -172,7 +181,7 @@ class TestCachePathComponents(unittest.TestCase):
         script = ("import os, jittor_utils, sys;"
                   "jittor_utils.find_cache_path();"
                   "sys.stdout.write(repr(os.environ.get('cache_name')))")
-        out = run_python_child(["-c", script], env={}, text=False)
+        out = run_python_child(["-c", script], env=_cache_env(), inherit=False, text=False)
         self.assertEqual(out.returncode, 0, out.stderr.decode())
         # An import that mutates the environment changes every child process
         # the user starts afterwards.
