@@ -6,8 +6,12 @@
 - 日期：2026-09-12（2026-09-23 归档）
 - 基线提交：`2cd9d6d0`（本轮改动为 `077e97ad`）
 - 分支：`perf/matmul-rank`（已合并，分支本身可弃）
-- Owner：Jittor 核心维护者
-- 复查触发：`cublas_matmul` 的形状契约变化、`matmul`/`matmul_transpose` 的路由变化，
+- 验证范围：单张 CUDA 卡上的 decode/prefill（b1、d512、8 层）与大 batch MLP/CNN/transformer
+  计时，`tests/ops/test_matmul_higher_rank.py` 的 CPU 与 CUDA 两遍；卡型原文未记，同一基线
+  `d40a2e97` 的[元算子报告](2026-09-12-cuda-metaop-launch-index-scalar.md)记为 H20（sm_90）。未跑：真实网络前向/反向对拍、
+  `tools/run_test_suite.py` 的完整口径、ROCm、NPU
+- 维护者：Jittor 核心维护者
+- 复查条件：`cublas_matmul` 的形状契约变化、`matmul`/`matmul_transpose` 的路由变化，
   或 CPU 侧也要走同一条路时
 
 ## 问题

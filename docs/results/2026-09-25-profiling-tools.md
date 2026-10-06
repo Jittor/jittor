@@ -3,10 +3,10 @@
 - 状态：已实现并在真实 CUDA 设备上验证；未合入 `2.0-refactor`
 - 日期：2026-09-25
 - 基线提交：`cb93ba04`（分支 `wip/profiler-rework`）
-- 硬件：RTX 4090 24 GB（驱动 580.178.04），nvcc 12.2.140，CUPTI 12.2.142
+- 验证范围：RTX 4090 24 GB（驱动 580.178.04），nvcc 12.2.140，CUPTI 12.2.142
   （`nvidia-cuda-cupti-cu12` wheel，经 `JITTOR_CUPTI_LIB` 指向；jittor 环境默认不带 CUPTI）
-- Owner：Jittor 核心维护者
-- 复查触发：执行器发射路径、SFRL/Temp 分配器记账、图重放、CUPTI 版本变化
+- 维护者：Jittor 核心维护者
+- 复查条件：执行器发射路径、SFRL/Temp 分配器记账、图重放、CUPTI 版本变化
 - 机制说明：[性能与显存画像](../notes/profiling.md)
 
 ## 结论

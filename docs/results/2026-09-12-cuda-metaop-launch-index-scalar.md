@@ -4,8 +4,12 @@
 - 日期：2026-09-12
 - 基线提交：`d40a2e97`
 - 分支：`perf/metaop-speed`（前两项）、`perf/scalar-fusion`（第三项）
-- Owner：Jittor 核心维护者
-- 复查触发：新增 CUDA 架构、`broadcast_to` 的存储语义变化、或发射配置再次调整
+- 验证范围：单张 H20（sm_90）、CUDA 12.9、g++ 12.3.1、Python 3.12；元算子微基准与同进程
+  整网 A/B，`tests/backends/cuda`、逐算子 CPU/CUDA 对拍（约 227 个生成用例）与原生 CPU
+  套件逐 nodeid 对比基线。未跑：`tools/run_test_suite.py` 的完整口径、ROCm、NPU；
+  sm_89 及更早的卡上发射配置默认值未验证
+- 维护者：Jittor 核心维护者
+- 复查条件：新增 CUDA 架构、`broadcast_to` 的存储语义变化、或发射配置再次调整
 
 ## 问题
 
