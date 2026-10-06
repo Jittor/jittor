@@ -23,7 +23,7 @@ ms-swift 对该依赖的实际调用路径，不能推出 Transformers、PEFT、
 | 轨道 | 必须验证的实际工作负载 |
 | --- | --- |
 | 单 NPU 训练 | 同权重同数据的前向、梯度、优化器更新、多步轨迹、完整 checkpoint 恢复及公开 Swift 训练入口 |
-| 单机多 NPU 训练 | 逐项验证当前必需的 2/4 NPU，实际 HCCL、固定数据划分、全局 batch、梯度同步、每 rank 更新/恢复及公开分布式 launcher |
+| 单机多 NPU 训练 | 以 2 NPU 验证实际 HCCL、固定数据划分、全局 batch、梯度同步、每 rank 更新/恢复及公开分布式 launcher；4/8 NPU 仅在用户要求或故障定位需要时另列运行键 |
 | 真实多机多 NPU 训练 | 至少两个真实主机且每主机至少两张 NPU，同步与恢复覆盖全部 rank，由真实公开 Swift launcher 启动 |
 | 单 NPU 推理 | 真实模型及 adapter 加载、前向结构/logits、确定性 greedy tokens、公开 Swift 推理入口 |
 
