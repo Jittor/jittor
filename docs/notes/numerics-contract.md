@@ -332,16 +332,12 @@ dim 0：改前改后同为 2.47e-3。这不是退化——**NumPy 在同一形�
 (numerics-open)=
 ## 还没有成立的部分
 
-以下每一条**当前都会算错**，都已复现、都还没修。对拍时撞上它们不是你的错。
+以下每一条都已复现、都还没修——不是算错，是吞吐或残余随设置波动。对拍时撞上它们不是你的错。
 
 | 现象 | 范围 | 条目 |
 | --- | --- | --- |
-| 全是 `-inf` 的 float32 张量，`jt.max` 返回 `-3.4028235e38` 而不是 `-inf`（`jt.min` 镜像）。一个被完全 mask 的 attention 行正是这个输入 | **CPU**；CUDA 正确 | `KI-OPS-008` |
 | float32 的 `max`/`min` 归约比修 NaN 之前慢约 2 倍（只是吞吐，答案是对的） | CPU | `KI-OPS-006` |
 | 关掉 cuDNN 自动调优之后，梯度仍有 `1.1e-6` 的残余随 `auto_flush_ops` 变动 | CUDA | `KI-EXEC-003` |
-
-`KI-OPS-008` 的绕行：在 CPU 上，把等于 `numpy.finfo(dtype).min` 的 `max()` 结果
-（或 `min()` 的 `.max`）当成"可能其实是无穷"来处理，或者把这个归约放到 CUDA 上。
 
 完整的条目——严重度、证据、owner 和退出条件——在仓库的
 [`agent/manuals/known-issues.md`](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-issues.md)。
