@@ -6,18 +6,19 @@ description: Reproducible CUDA and Ascend performance analysis for Transformers 
 # Jittor Transformers 性能基准
 
 本 skill 的可复用源码位于 `scripts/`，运行状态与结果默认写到
-`${JITTOR_LAB_ROOT:-/home/zy/projects/jittor-lab}/jittor_transformers_perf/`。
+`$JITTOR_LAB_ROOT/jittor_transformers_perf/`（未设置时为仓库同级的 `jittor-lab/`）。
 目标是得到能解释、能复现的
 Jittor vs 真 PyTorch 数据，而不是把 JIT、H2D 或 lazy graph 漏执行当成性能结论。
 
 ## 环境
 
-- Jittor：`/home/zy/miniconda3/envs/jt311/bin/python`，仓库源码 `python/jittor`。
-- PyTorch oracle：`/home/zy/rt_venv/bin/python`。运行前必须断言 `torch.__file__`
+- Jittor：`<jittor-python>`（Python 3.11，跑仓库源码 `python/jittor`）。
+- PyTorch oracle：`<real-torch-python>`，独立的真 PyTorch。运行前必须断言 `torch.__file__`
   不含 Jittor shim。
 - 所有命令通过 `agent/skills/jittor-transformers-perf/scripts/run_perf_env.sh`，
-  并为并行任务设置唯一 `cache_name` 与 `CUDA_VISIBLE_DEVICES`。缓存、日志和
-  结果必须留在 lab 工作区，不得写入 Jittor 主仓库。
+  并为并行任务设置唯一 `cache_name` 与 `CUDA_VISIBLE_DEVICES=<gpu>`。缓存、日志和
+  结果必须留在 lab 工作区，不得写入 Jittor 主仓库。需要指定 CUDA toolkit 时设
+  `JTCUDA=<cuda-root>`（含 `bin/nvcc` 与 `lib64`）；不设则由 Jittor 自行发现 nvcc，设错直接退出。
 
 ## 不可省略的计时规则
 
@@ -29,8 +30,10 @@ Jittor vs 真 PyTorch 数据，而不是把 JIT、H2D 或 lazy graph 漏执行�
    fallback 不能直接与 PyTorch default fused kernel 归因成“softmax 慢”。
 5. 训练结果必须检查每个目标梯度 finite 且非零。显式 cuBLAS op 若缺反向，会产生看似
    很快的静默零梯度。
-6. HF 对比必须使用同一 Transformers 版本。`benchmark_hf_tiny_models.py` 会把真
-   PyTorch/torchvision 固定在 `rt_venv`，再加载 jt311 的 Transformers 4.56.2。
+6. HF 对比必须使用同一 Transformers 版本。`benchmark_hf_tiny_models.py` 从
+   `JITTOR_PERF_RT_SITE`（真 PyTorch/torchvision 的 site-packages）固定 torch，再从
+   `JITTOR_PERF_JT_SITE`（装 Transformers 4.56.2 的 site-packages）加载 Transformers；
+   两个变量都没有默认值，未设置时脚本直接退出。
 7. allocator 指标只能作为 harness 工作集方向性数据；严格峰值需另用 NVML/进程级采样。
 8. SDPA 同时报告 `--sync-mode per_call` 延迟与 `queued` 吞吐。前者每步同步，后者保留
    全部输出/梯度后统一同步；二者不可互相替代。per-call 结果还分别记录 graph/build
@@ -116,11 +119,12 @@ backend，`direct` 使用预物化 BSHD 输入，`default` 验证生产 dispatch
 ## 常用命令
 
 ```bash
-JITTOR_LAB_ROOT=${JITTOR_LAB_ROOT:-/home/zy/projects/jittor-lab}
 SCRIPT_ROOT=agent/skills/jittor-transformers-perf/scripts
-CUDA_VISIBLE_DEVICES=2 cache_name=hf_tiny_gpu2 \
+JITTOR_PERF_JT_SITE=<site-packages with transformers 4.56.2> \
+JITTOR_PERF_RT_SITE=<real torch site-packages> \
+CUDA_VISIBLE_DEVICES=<gpu> cache_name=hf_tiny \
   "$SCRIPT_ROOT/run_perf_env.sh" \
-  /home/zy/miniconda3/envs/jt311/bin/python \
+  <jittor-python> \
   "$SCRIPT_ROOT/benchmark_hf_tiny_models.py" \
   --backend jittor --model bert --phase forward --repeats 20
 ```
@@ -129,9 +133,9 @@ CUDA_VISIBLE_DEVICES=2 cache_name=hf_tiny_gpu2 \
 SCRIPT_ROOT=agent/skills/jittor-transformers-perf/scripts
 JITTOR_FLASH_ATTN_JITTOR_SRC=/path/to/flash-attention \
 JITTOR_FLASH_ATTN_HEAD_DIMS=64 JITTOR_FLASH_ATTN_DTYPES=fp16 \
-CUDA_VISIBLE_DEVICES=2 cache_name=sdpa_train_gpu2 \
+CUDA_VISIBLE_DEVICES=<gpu> cache_name=sdpa_train \
   "$SCRIPT_ROOT/run_perf_env.sh" \
-  /home/zy/miniconda3/envs/jt311/bin/python \
+  <jittor-python> \
   "$SCRIPT_ROOT/benchmark_training_hotspots.py" \
   --backend jittor --case sdpa --phase fwd_bwd --dtype float16 \
   --sdpa-backend default --sync-mode per_call \
@@ -139,11 +143,10 @@ CUDA_VISIBLE_DEVICES=2 cache_name=sdpa_train_gpu2 \
 ```
 
 ```bash
-JITTOR_LAB_ROOT=${JITTOR_LAB_ROOT:-/home/zy/projects/jittor-lab}
 SCRIPT_ROOT=agent/skills/jittor-transformers-perf/scripts
-CUDA_VISIBLE_DEVICES=6 cache_name=softmax_boundary_gpu6 \
+CUDA_VISIBLE_DEVICES=<gpu> cache_name=softmax_boundary \
   "$SCRIPT_ROOT/run_perf_env.sh" \
-  /home/zy/miniconda3/envs/jt311/bin/python \
+  <jittor-python> \
   "$SCRIPT_ROOT/audit_kernel_changes_gpu.py" \
   --task softmax-case --length 50257 --rows 2 --dtype float32
 ```

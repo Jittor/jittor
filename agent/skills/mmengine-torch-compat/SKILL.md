@@ -21,25 +21,25 @@ description: 在 Jittor torch shim 与独立 PyTorch 两侧跑通并对比 MMEng
 
 | 角色 | 解释器 | 环境脚本 |
 | --- | --- | --- |
-| shim | `/root/jittor-lab/_state/h3/venv-jittor/bin/python` | `/root/jittor-lab/minimax-h3/env-jittor.sh` |
-| 原生 torch（oracle） | `/root/jittor-lab/_state/h3/venv-oracle-cu129/bin/python` | `/root/jittor-lab/minimax-h3/env-oracle-cu129.sh` |
+| shim | `<jittor-python>` | 本地 env 脚本（不入库） |
+| 原生 torch（oracle） | `<real-torch-python>` | 本地 env 脚本（不入库） |
 
-- shim 侧：Python 3.12.12，Jittor 1.3.11.0；`source env-jittor.sh` 后 `import jittor`
-  再 `import torch`，`torch` 带 `_torch_compat_install_context` 标记（本机已实测）。
+- shim 侧：Python 3.12.12，Jittor 1.3.11.0；激活 shim 侧 env 脚本（本地、不入库）后 `import jittor`
+  再 `import torch`，`torch` 带 `_torch_compat_install_context` 标记（已实测）。
   `JITTOR_TORCH_SHIM=1`，`HF_HUB_OFFLINE=1`、`TRANSFORMERS_OFFLINE=1`，`JITTOR_HOME`
   等缓存都在 lab 的 run root 下。
 - oracle 侧：Python 3.12.12，真 PyTorch 2.13.0+cu129。两侧 Python 主版本同为 3.12，
   可共享同一个下游 site；CPython 主版本不同时才需要
   `JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE` 或显式 `JITTOR_ECOSYSTEM_PACKAGE_SITE_CROSS_ABI=1`。
-- **本机 mmengine 两侧都未安装**（`importlib.metadata.version` 与 `find_spec` 均实测
-  缺席，见「证据」）。因此**本机产不出任何 mmengine 数字**。
+- **验证环境里 mmengine 两侧都未安装**（`importlib.metadata.version` 与 `find_spec` 均实测
+  缺席，见「证据」）。因此**验证环境产不出任何 mmengine 数字**。
 
 任何数字之前先过 oracle 断言（`nox -s ecosystem` 已内置）：
 
 ```bash
-/root/jittor-lab/_state/h3/venv-oracle-cu129/bin/python -c \
+<real-torch-python> -c \
   "import torch, sys; assert not hasattr(torch, '_torch_compat_install_context'); print('oracle torch', torch.__version__)"
-# 本机实测输出：oracle torch 2.13.0+cu129
+# 实测输出：oracle torch 2.13.0+cu129
 ```
 
 **规范门禁怎么得到环境**：`nox -s ecosystem`（需设 `REAL_TORCH_PYTHON`）只安装基础
@@ -56,19 +56,19 @@ docstring。硬件门禁 `nox -s optional` 在预置 CUDA python 上探测含 `m
 runner 是唯一入口：
 
 ```bash
-source /root/jittor-lab/minimax-h3/env-jittor.sh
-cd /apdcephfs_private/qy/projects/zy/jittor
-"$VENV/bin/python" compat/tests/torch/_ecosystem_runner.py \
+# 已激活 shim 侧环境（本地 env 脚本，不入库）
+cd <repo-root>
+<jittor-python> compat/tests/torch/_ecosystem_runner.py \
     mmengine_base_module /tmp/mmengine_shim.npz --runtime jittor --device cpu
 ```
 
-本机实测：命令在构造模型时以 `ModuleNotFoundError: No module named 'mmengine'`
+实测：命令在构造模型时以 `ModuleNotFoundError: No module named 'mmengine'`
 退出，**不是** shim 的失败。
 
-库自带的 import 契约（本机因缺库会 skip）：
+库自带的 import 契约（验证环境因缺库会 skip）：
 
 ```bash
-"$VENV/bin/python" -m pytest compat/tests/torch/test_mmcv_compat.py -q
+<jittor-python> -m pytest compat/tests/torch/test_mmcv_compat.py -q
 ```
 
 注意该文件里 `TestMmcvCompat` 同时 import `mmcv.cnn` 与 `mmengine.model`，缺任一都会
@@ -78,13 +78,13 @@ cd /apdcephfs_private/qy/projects/zy/jittor
 ## 在原生 torch 上跑
 
 ```bash
-cd /apdcephfs_private/qy/projects/zy/jittor
-/root/jittor-lab/_state/h3/venv-oracle-cu129/bin/python \
+cd <repo-root>
+<real-torch-python> \
     compat/tests/torch/_ecosystem_runner.py \
     mmengine_base_module /tmp/mmengine_torch.npz --runtime torch --device cpu
 ```
 
-本机同样因 `mmengine` 缺席而失败（已实测）。harness 会清掉 oracle 继承到的 Jittor
+验证环境同样因 `mmengine` 缺席而失败（已实测）。harness 会清掉 oracle 继承到的 Jittor
 变量，oracle 不得看到本 checkout 与 shim。
 
 ## 对拍
@@ -96,12 +96,12 @@ cd /apdcephfs_private/qy/projects/zy/jittor
 `2e-3/1e-2`、加速卡 `5e-3/2e-2`（`_ecosystem_harness.py`）。
 
 ```bash
-source /root/jittor-lab/minimax-h3/env-jittor.sh
-cd /apdcephfs_private/qy/projects/zy/jittor
-REAL_TORCH_PYTHON=/root/jittor-lab/_state/h3/venv-oracle-cu129/bin/python \
+# 已激活 shim 侧环境（本地 env 脚本，不入库）
+cd <repo-root>
+REAL_TORCH_PYTHON=<real-torch-python> \
 JITTOR_ECOSYSTEM_PACKAGE_SITE=<含 mmengine 0.10.7 的 site> \
 JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE=<oracle 侧 site，可同上> \
-JITTOR_TORCH_SHIM=1 "$VENV/bin/python" -m pytest \
+JITTOR_TORCH_SHIM=1 <jittor-python> -m pytest \
     compat/tests/torch/test_ecosystem_parity.py -q -k 'mmengine or mmcv'
 ```
 
@@ -134,7 +134,7 @@ per-tensor device，有卡机器上 CUDA 默认就是开的，所以 CPU 必须�
 ## 坑与假绿
 
 1. **缺库 = skip = 看起来通过。** `_distributions_available` 找不到 `mmengine` 时
-   `skipTest`。本机正是这种状态：门禁会绿，但什么都没证明。真机/nightly 用
+   `skipTest`。验证环境正是这种状态：门禁会绿，但什么都没证明。真机/nightly 用
    `JITTOR_REQUIRE_REAL_TORCH=1`（和 `JITTOR_TEST_REQUIRE_EXECUTION=1`）把这类 skip
    变成失败。
 2. **有卡机器上"跑 CPU"默认不是 CPU。** 只"不请求 CUDA"不等于 CPU 对比，必须显式关。
@@ -156,22 +156,22 @@ per-tensor device，有卡机器上 CUDA 默认就是开的，所以 CPU 必须�
   NPU 数值与性能（`2026-08-30-mmcv-mmengine-ascend-parity.md`），两份均为已退役报告，Git 历史 `e3c369acb` 可查；
   [`project-context`](../../manuals/project-context.md) 引用 `0.927x/0.796x`。
 
-**本机实测**（2026-09-19）：两个 venv 存在；两侧 Python 3.12.12；shim venv 的
+**实测**（2026-09-19）：两个 venv 存在；两侧 Python 3.12.12；shim venv 的
 `jittor 1.3.11.0`、`import jittor` 后 `torch` 带 shim 标记；oracle 断言通过
 （`torch 2.13.0+cu129`）；`find_spec` mmengine/mmcv 两侧均为 False；
 `_ecosystem_runner.py --help` 可用；`test_ecosystem_speed.py` 无 mmengine 条目。
 
-**未在本机验证**（只来自报告，换机器须重跑）：任何 mmengine/mmcv 数值或速度；
+**未验证**（只来自报告，换机器须重跑）：任何 mmengine/mmcv 数值或速度；
 `0.796x`、forward `6.525e-8`、最差梯度 `7.411e-8` 等出自 Ascend 910B3 报告；
-`JITTOR_ECOSYSTEM_PACKAGE_SITE` 的实际路径未在本机确认（报告记在
+`JITTOR_ECOSYSTEM_PACKAGE_SITE` 的实际路径未确认（报告记在
 `$JITTOR_LAB_ROOT/_state/npu-ecosystem/20260830/`）。
 
 ## 实测（2026-09-19）
 
-上面「本机未验证」一节的缺库状态已补齐，以下为首次实跑。GPU 4，oracle
+上面「未验证」一节的缺库状态已补齐，以下为首次实跑。单卡 CUDA，oracle
 `torch 2.13.0+cu129`、shim `jittor 1.3.11.0`，`--device cuda --repeats 5`。
 
-**package site**：`/root/jittor-lab/_state/verify-ml/site`，`pip install --target site
+**package site**：`$JITTOR_LAB_ROOT/_state/verify-ml/site`，`pip install --target site
 peft ms-swift mmcv-lite mmengine` 装出 **mmengine 0.10.7**（及 mmcv-lite 2.2.0、peft
 0.20.0、ms-swift 4.5.3）；pip 拉入的 torch 2.14.0 / transformers 5.16.1 / numpy 2.5.3
 已从 site 删除，改用 venv 的 torch 2.13.0 / transformers 5.5.3 / numpy 2.3.5。
@@ -179,15 +179,15 @@ peft ms-swift mmcv-lite mmengine` 装出 **mmengine 0.10.7**（及 mmcv-lite 2.2
 **命令**：
 
 ```bash
-cd /apdcephfs_private/qy/projects/zy/jittor
-source /root/jittor-lab/minimax-h3/env-jittor.sh && unset PYTHONPATH
-export JITTOR_HOME=/root/jittor-lab/_state/verify-ml/jittor-home
-export CUDA_VISIBLE_DEVICES=4
-export JITTOR_ECOSYSTEM_PACKAGE_SITE=/root/jittor-lab/_state/verify-ml/site
-export JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE=/root/jittor-lab/_state/verify-ml/site
-REAL_TORCH_PYTHON=/root/jittor-lab/_state/h3/venv-oracle-cu129/bin/python \
-  "$VENV/bin/python" agent/skills/torch-compat-repo-runbook/scripts/verify_repo.py \
-  --repo mmengine --device cuda --repeats 5 --out /root/jittor-lab/_state/verify-ml/out/mmengine
+cd <repo-root>
+unset PYTHONPATH   # 已激活 shim 侧环境（本地 env 脚本，不入库）
+export JITTOR_HOME=$JITTOR_LAB_ROOT/_state/verify-ml/jittor-home
+export CUDA_VISIBLE_DEVICES=<gpu>
+export JITTOR_ECOSYSTEM_PACKAGE_SITE=$JITTOR_LAB_ROOT/_state/verify-ml/site
+export JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE=$JITTOR_LAB_ROOT/_state/verify-ml/site
+REAL_TORCH_PYTHON=<real-torch-python> \
+  <jittor-python> agent/skills/torch-compat-repo-runbook/scripts/verify_repo.py \
+  --repo mmengine --device cuda --repeats 5 --out $JITTOR_LAB_ROOT/_state/verify-ml/out/mmengine
 ```
 
 **支持的 case 清单**：`--list-only` 收 1 条 `mmengine_base_module`（requires mmengine）；
@@ -205,4 +205,4 @@ REAL_TORCH_PYTHON=/root/jittor-lab/_state/h3/venv-oracle-cu129/bin/python \
 **没跑到的**：mmengine runner/hook/registry 全链路训练与真实 mmdet/mmseg 模型未测；
 `mmcv.ops` 编译扩展属契约外；无真实尺寸速度 case。`test_mmcv_compat.py` 需 mmcv 与
 mmengine 同时在位，本次只经 `verify_repo.py` 跑了 ecosystem case。原始报告见
-`/root/jittor-lab/_state/verify-ml/{mmengine.log,out/mmengine/verify-report.json}`。
+`$JITTOR_LAB_ROOT/_state/verify-ml/{mmengine.log,out/mmengine/verify-report.json}`。

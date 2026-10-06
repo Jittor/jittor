@@ -1,198 +1,109 @@
 ---
 name: github-collaboration-commit
-description: 在 Jittor 2.0-refactor 基准分支上进行多人协作、分支提交和 Pull Request 时使用，规范个人分支、提交粒度、同步基线、PR 前检查和交接信息。
+description: 多人或多 agent 在 Jittor 仓库协作时的同步、提交、推送与 Pull Request 流程：开工前以远端为准同步并记录 SHA、只暂存当前任务的文件、简明中文提交信息、只做快进推送、PR 描述写清验证证据与未完成项。开始或恢复一个任务、准备提交或推送、发起或更新 PR、交接未完成工作时使用。
 ---
 
-# GitHub 多人协作与提交规范
+# 协作、提交与 Pull Request
 
-本 skill 用于 `2.0-refactor` 基准分支上的多人协作。它适用于开始一个独立任务、在个人分支提交修改、准备向 `2.0-refactor` 发起 Pull Request（PR）、更新已有 PR，以及交接未完成工作。
+本 skill 把 `AGENTS.md` 的协作规则落成命令。下文 `<target>` 指本次任务的目标远端分支
+（默认分支是 `master`；以任务说明为准），`origin` 指它所在的远端。
 
-目标是让每个改动都能被独立审阅、验证和回溯，同时避免直接污染共享基准分支或把基于旧代码的修改合入最新分支。
-
-## 基本原则
-
-1. `2.0-refactor` 是共享基准分支。个人开发不得直接在该分支上修改、提交或推送。
-2. 每个人、每个相互独立的任务都应使用自己的开发分支；分支应从最新的 `2.0-refactor` 创建。
-3. 一个 PR 应围绕一个完整、可说明和可验证的较大问题。小的中间步骤先保留在个人分支中，不要为了尽快发起 PR 把未完成的半成品提交到基准分支。
-4. PR 合并前必须重新确认 `2.0-refactor` 是否已经更新，并把自己的分支同步到最新基线后再验证和提交 PR。
-5. 提交内容、测试结果和 PR 描述应让没有参与实现的人能够理解改动目的、范围、验证方式和已知限制。
-
-## 开始任务
-
-开始工作前先确认本地状态和远端基线：
+## 1. 开工或恢复任务：先以远端为准同步
 
 ```bash
-git fetch origin
-git status --short --branch
-git log -1 --oneline origin/2.0-refactor
+git status --short --branch            # 先看有没有未提交改动
+ps -eo pid,etimes,args | grep -E "[p]ytest|[n]ox"   # 同一工作树里有没有在跑的测试
+git fetch origin <target>
+git log -1 --format='%H %s' origin/<target>          # 记下同步基线的 SHA
 ```
 
-不要在带有其他未提交修改的工作区中直接切换或创建任务分支。优先使用干净工作区或独立 worktree：
+- **保留本地工作，不清场**：禁止 `git stash`（stash 栈是所有 worktree 共用的，见
+  `git-worktree-shared-state`），禁止用 `git checkout -- .`、`git reset --hard` 丢弃改动来同步。
+- **整合期间冻结同一工作树**：停下本工作树里的测试与协作者写入，整合完再继续。
+- 本地改动已提交在个人分支上：`git rebase origin/<target>`（分支未共享时）或
+  `git merge origin/<target>`（已被他人引用时）。还未提交的改动先在个人分支上提交成一个
+  WIP 提交（只暂存自己的文件），再 rebase 或 merge，整合完再整理提交信息：
+
+  ```bash
+  git add <你的文件...> && git commit -m "WIP：<主题>"   # 显式路径，不用 -A
+  git rebase origin/<target>                             # 冲突逐个解决
+  ```
+
+  不要用 `git checkout -- <文件>` 或 `git reset` 把工作树清空后再同步。
+
+- **重叠处以远端实现为准**，再把本地意图重新落在它上面；不得用旧的本地版本覆盖远端更新。
+  冲突文件逐个读，必要时对比合并基线与双方提交（`git merge-file`，见 `codebase-wide-fix-as-rule`）。
+- 同步前跑出的结果属于旧基线：在 PR 或交接里按旧 SHA 记录，并**按实际带进来的变更复验受影响范围**，
+  不要把旧结果当成新基线的证据。
+
+并行任务用独立 worktree，放在 `$JITTOR_LAB_ROOT/worktrees/`：
 
 ```bash
-git worktree add <worktree-path> -b <type>/<short-topic> origin/2.0-refactor
+git worktree add "$JITTOR_LAB_ROOT/worktrees/<topic>" -b <type>/<short-topic> origin/<target>
 ```
 
-分支名使用小写、短且能表达任务目的的形式，例如：
+分支名小写、短、说明目的（`fix/npu-reduction-gradient`、`docs/agent-manuals`），不带机器路径或实验编号。
 
-```text
-fix/npu-reduction-gradient
-feat/torch-serialization-compat
-refactor/runtime-state-boundary
-docs/developer-onboarding
-```
-
-分支名不应包含个人姓名以外的无关信息、临时机器路径或实验编号。一个分支原则上只承载一个主题；如果发现任务已经分成互不依赖的部分，应拆成多个分支和 PR。
-
-## 修改和提交
-
-提交应保持小而完整：每个提交表达一个可以独立理解的逻辑步骤，并尽量保持代码可构建、测试可运行。不要把无关的格式化、批量重命名、缓存、日志、模型文件或个人环境文件混入功能提交。
-
-提交前检查自己的改动：
+## 2. 提交
 
 ```bash
-git status --short
-git diff
-git diff --cached
+git status --short          # 只能出现本任务碰过的文件；不认识的路径先查清来源
+git diff -- <文件...>
+git add <文件1> <文件2>      # 显式路径，不用 git add -A / git add . / git commit -a
+git diff --cached --stat
+git commit                  # 简明中文提交信息
+git show --stat --format="" HEAD   # 确认提交里没有你没碰过的路径
 ```
 
-只暂存当前任务需要的文件，使用明确的路径：
+- 一个提交表达一个可独立理解的逻辑步骤，不混入无关格式化、缓存、日志、模型或个人环境文件。
+  拆开会造出比修复前更糟的中间状态时才合并，并在提交信息里写明为什么不能拆。
+- 提交信息标题用简明中文，以动词或变更对象开头，例如「修复 NPU 归约反向的 dtype 处理」。
+  改动大或原因不明显时在正文写：问题、原因、改动、验证（命令与 device）、限制。
+- 提交前运行仓库约定的检查：
+
+  ```bash
+  bash tools/check_repo_layout.sh
+  JITTOR_TORCH_SHIM=1 PYTHONPATH=python python -m pytest -q tests/structure
+  python tools/run_test_suite.py --tier core    # 改了代码时
+  ```
+
+## 3. 推送：只做快进
 
 ```bash
-git add path/to/file1 path/to/file2
-git commit
+git fetch origin <target>
+git merge-base --is-ancestor origin/<target> HEAD && git push origin HEAD:<target>
 ```
 
-不要使用 `git add -A` 或 `git commit -am` 来代替逐项检查。不要使用共享仓库的 `git stash` 在多个 worktree 之间传递工作；当前项目的 stash 栈是仓库级共享状态。
+- 推送被拒（远端前进了）就回到第 1 节重新整合、复验，再推。**不 force push**，
+  不对共享分支 `reset` 或改写历史。
+- 个人分支推到自己的分支名（`git push origin HEAD:<type>/<short-topic>`），同样不 force；
+  确需整理个人分支历史时，先确认没有别人基于它工作。
 
-提交信息使用简明中文，标题以动词或明确的变更对象开头，建议控制在一行内：
+## 4. Pull Request
 
-```text
-修复 NPU 归约反向的 dtype 处理
-补充 Torch 序列化兼容回归测试
-重构 runtime 状态的归属边界
-完善 2.0-refactor 开发者导览
-```
+只有问题已经完整解决、实现与测试可审阅时才发 PR。描述至少写：
 
-提交正文在改动较大或原因不明显时补充以下信息：
+1. **问题和结果**：触发场景，合并后行为如何变化；
+2. **范围**：改了哪些模块，哪些有意不包含；
+3. **验证证据**：实际执行的命令、结果计数、device、同步基线 SHA 与缓存说明；
+   没执行的（缺 CUDA/NPU/ROCm、缺依赖）写成「未执行」而不是通过；
+4. **兼容与风险**：导入路径、序列化、后端、下游库、性能；
+5. **未完成事项**：未覆盖的后端、已知限制、后续工作。缺陷记入
+   `agent/manuals/known-issues.md`，等硬件的验收记入 `agent/manuals/deferred-hardware.md`。
 
-- **问题**：当前行为或用户场景是什么；
-- **原因**：为什么会产生问题；
-- **改动**：采用了什么解决方式，以及影响了哪些边界；
-- **验证**：运行了哪些命令、覆盖了哪些 device；
-- **限制**：哪些后端、场景或性能结论仍未验证。
-
-不要在一个提交中混合互不相关的修复。纯格式调整、重命名和实现修改如果没有必要，应分开提交；如果必须一起提交，应在提交信息或 PR 描述中解释原因。
-
-## 验证和提交前同步
-
-提交 PR 之前必须重新获取远端信息，并确认基准分支没有在开发期间前进：
+发 PR 前的最终检查：
 
 ```bash
-git fetch origin
-git log --oneline --decorate -5 origin/2.0-refactor
-git log --oneline --decorate --left-right HEAD...origin/2.0-refactor
+git fetch origin <target>
+git log --oneline origin/<target>..HEAD
+git diff --stat origin/<target>...HEAD
+git diff --check origin/<target>...HEAD
 ```
 
-如果 `origin/2.0-refactor` 有新的提交，先把自己的分支同步到最新基线，再重新运行受影响的验证。团队可以根据改动类型选择 merge 或 rebase，但应遵守以下边界：
+review 意见用新的提交处理，并在 PR 里说明对应的验证。
 
-- 个人分支尚未共享给其他人时，可以使用 rebase 保持历史清晰；
-- 已经有人基于个人分支开发、或 PR 已被他人引用时，不要擅自改写公共历史；
-- 不要对 `2.0-refactor` 做 force push、reset 或 rebase；
-- 解决冲突后必须检查冲突文件，并重新运行受影响的测试；
-- 如果冲突解决可能覆盖已有修复，应对比合并基线和双方提交，确认两边的行为都得到保留。
+## 5. 交接
 
-一个常见的个人分支同步流程如下：
-
-```bash
-git fetch origin
-git rebase origin/2.0-refactor
-# 或按团队约定使用：git merge origin/2.0-refactor
-
-# 解决冲突后
-git status
-git diff --check
-# 运行与改动相关的定向测试和门禁
-```
-
-Jittor 改动还需要遵循项目自身的验证纪律：先最小复现，再定向测试；涉及后端时在真实 device 上验证；并行 JIT 任务使用隔离的 `JITTOR_HOME` 或 `cache_name`；提交前运行仓库布局检查和适用的结构测试。
-
-## 发起 Pull Request
-
-只有当一个较大问题已经完整解决，并且实现、测试和文档达到可审阅状态时，才向 `2.0-refactor` 发起 PR。一个 PR 至少应说明：
-
-1. **问题和结果**：触发场景是什么，合并后行为如何变化；
-2. **实现范围**：修改了哪些模块，哪些内容有意不包含；
-3. **验证证据**：列出实际执行的命令、测试结果、device 和必要的缓存或配置说明；
-4. **兼容和风险**：是否影响历史导入、序列化、后端路径、下游库或性能；
-5. **未完成事项**：明确列出尚未覆盖的后端、已知限制或后续任务。
-
-PR 标题应概括最终行为变化，而不是描述开发过程。PR 描述应围绕最终实现重写，删除已经放弃的方案和无关的会话记录。相关 issue、验证报告和架构文档应使用链接关联。
-
-创建 PR 前再做一次最终检查：
-
-```bash
-git fetch origin
-git diff --stat origin/2.0-refactor...HEAD
-git log --oneline origin/2.0-refactor..HEAD
-git diff --check origin/2.0-refactor...HEAD
-bash tools/check_repo_layout.sh
-python -m pytest -q tests/structure
-```
-
-最后一次结构测试应按照该测试目录要求的 process mode 执行；如果环境缺少 `jittor-torch`、CUDA、NPU 或其他依赖，应在 PR 中明确记录，而不是将未执行写成通过。
-
-如果 `2.0-refactor` 在最终检查后再次更新，必须重新同步和验证。PR 的目标基线应是当前最新的 `origin/2.0-refactor`，而不是开发开始时的旧提交。
-
-## Review、修改和合并
-
-提交 PR 后，review 意见应通过新的提交或清晰的修订提交处理，并在 PR 描述或评论中说明对应的验证。不要用不可解释的强制推送隐藏审阅历史；只有在团队明确约定、且确认没有其他人基于该分支工作时，才整理个人分支历史。
-
-作者负责回答以下问题：
-
-- 改动是否仍然只解决 PR 声明的问题；
-- 冲突解决是否保留了基准分支近期的行为；
-- 新增或修改的计算是否在声明支持的真实 device 上执行；
-- 失败测试是代码回归、基线已有问题，还是环境、缓存和资源问题；
-- 合并后是否需要更新文档、结构门禁、已知问题或验证报告。
-
-合并前应等待必要的 review 和 CI/门禁结果。未经审阅的半成品、仅有 CPU 结果的后端改动和无法说明验证范围的性能结论，不应合入 `2.0-refactor`。
-
-## 交接和并行工作
-
-需要暂停或转交任务时，在对应的 GitHub issue 或 PR 描述中记录：
-
-- 个人分支和最新提交；
-- 已完成的工作与尚未完成的部分；
-- 已运行的命令和结果；
-- 当前已知失败及其判断；
-- 后续建议和需要注意的冲突区域。
-
-并行修改同一模块时，提前划分文件或职责边界。不要直接修改其他人的 worktree，也不要假设远程分支更新只对当前 worktree 可见。需要复用其他人的代码时，引用具体提交或 PR，而不是复制工作区文件。
-
-## 快速检查清单
-
-### 开始任务
-
-- [ ] 已 `git fetch origin` 并确认 `origin/2.0-refactor`。
-- [ ] 已从最新基准创建个人分支或独立 worktree。
-- [ ] 工作区没有无关的未提交修改。
-- [ ] 已阅读相关架构、环境和已知问题文档。
-
-### 准备提交
-
-- [ ] 改动只包含当前任务相关文件。
-- [ ] 提交粒度清晰，没有混入无关重构或产物。
-- [ ] 提交信息使用简明中文并说明实际变更。
-- [ ] 已运行最小复现、定向测试和适用的真实设备验证。
-- [ ] 已检查 `git diff --check`。
-
-### 发起或更新 PR
-
-- [ ] 问题已经完整解决，PR 可以独立审阅和验证。
-- [ ] 已重新获取远端并确认基准分支是最新的。
-- [ ] 已将个人分支同步到最新 `2.0-refactor`。
-- [ ] 已重新运行受影响的测试和结构门禁。
-- [ ] PR 描述包含问题、实现、验证、风险和限制。
-- [ ] 未把未执行的后端或测试写成通过。
-
+暂停或转交时在对应的 GitHub issue 或 PR 里记录：分支与最新提交、同步基线 SHA、已完成与未完成的部分、
+已运行的命令与结果、已知失败及判断、需要注意的冲突区域。不要修改别人的 worktree；
+复用别人的代码时引用具体提交或 PR，不复制工作区文件。

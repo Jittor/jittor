@@ -26,9 +26,9 @@ import time
 
 import numpy as np
 
-REPO = os.environ.get("JITTOR_REFACTOR_REPO") or os.path.abspath(
+REPO = os.environ.get("JITTOR_REPO") or os.path.abspath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))
-sys.path.insert(0, os.path.join(REPO, "tests", "compat", "torch"))
+sys.path.insert(0, os.path.join(REPO, "compat", "tests", "torch"))
 
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")

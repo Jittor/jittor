@@ -29,7 +29,7 @@ python agent/skills/acl-host-syntax-check/syntax_check.py \
 ```
 
 退出码 0 表示全过。每个源文件打一行 `ok` 或 `FAIL` 加具体诊断。
-当前全树为 47 个源文件（41 个 native 与 6 个 src），另检查 70 个 launcher ABI 站点。
+文件数随树变化（写这一行时是 47 个 native 加 8 个 src），launcher ABI 站点数以脚本输出为准。
 使用 `*.cc` 而不是 `*_acl.cc`，后者会漏掉 `utils.cc`。HCCL 属通信后端，不在此扫描范围。
 
 `cache_path` 只在 `import jittor` 成功后才有；**第一次会重编核心**，而且 jittor 常会要求
@@ -58,8 +58,8 @@ python agent/skills/acl-host-syntax-check/syntax_check.py \
 **改了 launcher 相关的东西一定要带 `--check-launchers`。**
 
 **坑 2：不能重新过滤注册头的诊断。**
-旧`AclOpFunctions`构造重载曾在variadic桩下产生歧义，脚本因而过滤整个
-`acl_jittor.h`的诊断。8.06将活跃查询改成显式family adapter后，该例外已删除。
+旧 `AclOpFunctions` 构造重载曾在 variadic 桩下产生歧义，脚本因而过滤整个
+`acl_jittor.h` 的诊断。活跃查询改成显式 family adapter 之后，该例外已删除。
 现在任意头文件的错误及任意非零compiler退出码都必须失败；不能把错误恢复后
 继续解析误当成完整TU通过。查询实参的SDK签名限制仍然存在，见上节。
 

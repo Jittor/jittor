@@ -13,28 +13,28 @@ description: 把 diffusers 分别跑在 jittor 的 `import torch` shim 与原生
 [`jittor-torch-diff`](../jittor-torch-diff/SKILL.md)，本 skill 只写 diffusers 的落地细节。
 
 **不覆盖**：transformers / peft / mmcv 等其它库；vLLM、TRELLIS 服务化；长训练与大 benchmark
-的启动；NPU 实机（本机没有）。不要求也不允许改 diffusers checkout 或 jittor 源码；本 skill
+的启动；NPU 实机。不要求也不允许改 diffusers checkout 或 jittor 源码；本 skill
 只做"怎么跑、怎么读结果"。
 
 ## 两侧环境
 
 | | shim 侧 | 原生 torch 侧 |
 |---|---|---|
-| venv | `/root/jittor-lab/_state/h3/venv-jittor` | `/root/jittor-lab/_state/h3/venv-oracle-cu129` |
-| 入口 | `source /root/jittor-lab/minimax-h3/env-jittor.sh` | `source /root/jittor-lab/minimax-h3/env-oracle-cu129.sh` |
+| 解释器 | `<jittor-python>`（部署了 shim，`import torch` 解析到 Jittor） | `<real-torch-python>`（独立的真 PyTorch，不含 jittor） |
+| 激活 | 本地、不入库的 env 脚本：`PYTHONPATH` 指向 diffusers checkout、设 HF 离线变量与隔离缓存 | 同左，但不部署 shim |
 | Python | 3.12.12 | 3.12.12 |
 | torch | jittor shim，`torch.__version__ == "1.3.11.0"`，`hasattr(torch,'_torch_compat_install_context') is True`（实测） | `torch 2.13.0+cu129`，有 `torch._C`，`torch.cuda.is_available() is True`（实测） |
 
-- **diffusers 没有 pip 安装在任何一侧**（实测 `"$VENV/bin/pip" show diffusers` → not found）。
+- **diffusers 没有 pip 安装在任何一侧**（实测两侧 `python -m pip show diffusers` → not found）。
   两侧都由 env 脚本的 `PYTHONPATH` 指向 lab checkout
-  `/root/jittor-lab/diffusers-main/src`（HEAD `a71e62e0d226c284b86abf518791a5ffbba064bf`，
+  `$JITTOR_LAB_ROOT/diffusers-main/src`（HEAD `a71e62e0d226c284b86abf518791a5ffbba064bf`，
   remote `huggingface/diffusers`），实测版本 `0.41.0.dev0`，origin 两侧一致。
   用别的 checkout 时必须同时核对 remote 和 commit。
 - 两侧同为 CPython 3.12，ABI 相同，可以共用一个 package site；harness 的
   `_reference_shares_this_abi()` 会自行判断。
 - 离线：`HF_HUB_OFFLINE=1`、`TRANSFORMERS_OFFLINE=1`（env 脚本已设，runner 也会 setdefault）。
 - 缓存隔离：`JITTOR_HOME` / `TMPDIR` / `XDG_CACHE_HOME` 都在 `$JITTOR_LAB_ROOT/_state/h3/run`
-  下；一个 device 一套 `JITTOR_HOME`。本机实测会与别的 JIT 进程抢构建锁，并发前先确认。
+  下；一个 device 一套 `JITTOR_HOME`。共享机器上会与别的 JIT 进程抢构建锁，并发前先确认。
 - **oracle 断言**（任何数字可信前必须过）：
   `assert not hasattr(torch, '_torch_compat_install_context')`。实测原生侧为 `False`（通过）；
   shim 侧为 `True`（若在 shim 上跑这条断言就会红，这正是它要抓的"拿 shim 当 oracle"）。
@@ -43,78 +43,73 @@ description: 把 diffusers 分别跑在 jittor 的 `import torch` shim 与原生
 **PYTHONPATH 陷阱**：diffusers 只存在于 `PYTHONPATH`。读 `_ecosystem_harness._run()` 可知它
 会给 oracle 子进程 `PYTHONPATH = ""`，因此走 harness 时 oracle 侧会因找不到 diffusers 而
 skip；此时需显式设 `JITTOR_ECOSYSTEM_PACKAGE_SITE`（或
-`JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE`）指向 `/root/jittor-lab/diffusers-main/src`
-（这条是代码推导，本机未跑通 harness 路径；本机实际验证的是下面的 runner CLI，
+`JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE`）指向 `$JITTOR_LAB_ROOT/diffusers-main/src`
+（这条是代码推导，未实际跑通 harness 路径；实际验证的是下面的 runner CLI，
 它在 env 脚本的 `PYTHONPATH` 下能找到 diffusers）。
 
 ## 在 shim 上跑
 
-先 `source /root/jittor-lab/minimax-h3/env-jittor.sh`，`cd` 到仓库根。单解释器 smoke 只证明
+先激活 shim 侧环境，`cd` 到仓库根。单解释器 smoke 只证明
 "能跑"，数值结论必须走下面的对拍。
 
 ```bash
 # 单解释器 smoke（可直接 unittest 运行，不需要 pytest 的包收集）
-# 本机直接跑会 2 error / 1 failure：它没关 CUDA，见"坑与假绿"第 2 条
-PYTHONPATH="$PWD/tests:/root/jittor-lab/diffusers-main/src" \
-  "$VENV/bin/python" compat/tests/torch/test_diffusers.py
+# 有 CUDA 的机器上直接跑会 2 error / 1 failure：它没关 CUDA，见"坑与假绿"第 2 条
+PYTHONPATH="$PWD/tests:$JITTOR_LAB_ROOT/diffusers-main/src" \
+  <jittor-python> compat/tests/torch/test_diffusers.py
 
 # 生态 runner：与 oracle 共用同一权重/输入契约，对拍用它
-"$VENV/bin/python" compat/tests/torch/_ecosystem_runner.py \
-  diffusers_unet2d /tmp/jittor_diffusers.npz --runtime jittor --device cpu --repeats 10
+<jittor-python> compat/tests/torch/_ecosystem_runner.py \
+  diffusers_unet2d "$TMPDIR/jittor_diffusers.npz" --runtime jittor --device cpu --repeats 10
 ```
 
 - runner 是自足的：内部 `sys.path.insert` 会挂上 `tests/`；case 名取
   `compat/tests/torch/_ecosystem_cases.py` 的 `CASES`（diffusers 有 `diffusers_unet2d`、
   `diffusers_dit`），速度大用例在 `_ecosystem_speed.py` 的 `large_diffusers_unet2d`。
 - `--device cpu` 会走 `jt.runtime.scope(use_cuda=0)`。**必须显式给**：Jittor 没有 per-tensor
-  device，本机默认 `use_cuda=1`，不给就会在加速卡上跑。
-- 实测（本机，CPU）：`diffusers_unet2d` 输出 146 个张量、loss `12.708709716796875`、
+  device，有 CUDA 时默认 `use_cuda=1`，不给就会在加速卡上跑。
+- 实测（CPU）：`diffusers_unet2d` 输出 146 个张量、loss `12.708709716796875`、
   `seconds=0.9557`、`device="cpu"`、`fallback_policy="error"`、`fallback_count=0`、
   `backend={has_acl:false,use_acl:false,use_cuda:false}`，diffusers `0.41.0.dev0`。
-- 直接 `python -m pytest compat/tests/torch/test_ecosystem_parity.py` 在本 lab venv 里会
+- 直接 `python -m pytest compat/tests/torch/test_ecosystem_parity.py` 在部署 shim 的 venv 里会
   在 setup 阶段 `ImportError: attempted relative import beyond top-level package`
   （`compat/__init__.py`）；`--import-mode=importlib` 又会丢 `_ecosystem_harness`。维护入口是
-  `python -m nox -s ecosystem`（并设 `REAL_TORCH_PYTHON`），不要在 lab venv 里裸跑 pytest
+  `python -m nox -s ecosystem`（并设 `REAL_TORCH_PYTHON`），不要在部署 venv 里裸跑 pytest
   并把结果当门禁。
 
 ## 在原生 torch 上跑
 
 ```bash
-source /root/jittor-lab/minimax-h3/env-oracle-cu129.sh
-/root/jittor-lab/_state/h3/venv-oracle-cu129/bin/python \
-  compat/tests/torch/_ecosystem_runner.py \
-  diffusers_unet2d /tmp/oracle_diffusers.npz --runtime torch --device cpu --repeats 10
+<real-torch-python> compat/tests/torch/_ecosystem_runner.py \
+  diffusers_unet2d "$TMPDIR/oracle_diffusers.npz" --runtime torch --device cpu --repeats 10
 ```
 
-实测（本机，CPU）：146 个张量、loss `12.708718299865723`、`seconds=0.4688`、`device="cpu"`、
+实测（CPU）：146 个张量、loss `12.708718299865723`、`seconds=0.4688`、`device="cpu"`、
 diffusers origin 与 shim 侧相同。`--device cuda` 可用（`torch.cuda.is_available()` 为真），
-但本 skill 未在本机复验 CUDA 行。
+CUDA 行见文末 2026-09-19 实测。
 
 ## 对拍
 
 **数值**：同一份权重 + 同一份输入，两个解释器各跑一次。`_ecosystem_runner.py` 的结构保证
 了这一点——不带 `--weights` 的 oracle 跑会把权重存成 `<output>.weights.npz`，shim 侧用
 `--weights` 载入完全相同的权重；种子固定（`--seed`），输入由同一个 `RandomState` 生成。
-比较的是 forward 输出、**全部**参数梯度和输入梯度（本机 146 张量 = 1 输出 + 145 梯度）。
+比较的是 forward 输出、**全部**参数梯度和输入梯度（`diffusers_unet2d` 是 146 张量 = 1 输出 + 145 梯度）。
 
 ```bash
-# 1) oracle 生成权重与参考值
-source /root/jittor-lab/minimax-h3/env-oracle-cu129.sh
-/root/jittor-lab/_state/h3/venv-oracle-cu129/bin/python \
-  compat/tests/torch/_ecosystem_runner.py \
-  diffusers_unet2d /tmp/oracle.npz --runtime torch --device cpu --repeats 10
+# 1) oracle 生成权重与参考值（原生侧环境）
+<real-torch-python> compat/tests/torch/_ecosystem_runner.py \
+  diffusers_unet2d "$TMPDIR/oracle.npz" --runtime torch --device cpu --repeats 10
 
-# 2) shim 用同一权重重算
-source /root/jittor-lab/minimax-h3/env-jittor.sh
-/root/jittor-lab/_state/h3/venv-jittor/bin/python \
-  compat/tests/torch/_ecosystem_runner.py \
-  diffusers_unet2d /tmp/jittor.npz --weights /tmp/oracle.weights.npz \
+# 2) shim 用同一权重重算（shim 侧环境）
+<jittor-python> compat/tests/torch/_ecosystem_runner.py \
+  diffusers_unet2d "$TMPDIR/jittor.npz" --weights "$TMPDIR/oracle.weights.npz" \
   --runtime jittor --device cpu --repeats 10
 
 # 3) 用 harness 的净量级归一化比较（_divergence / _comparison_floor 的等价实现）
 python3 - <<'PY'
-import numpy as np
-ref, cand = np.load('/tmp/oracle.npz'), np.load('/tmp/jittor.npz')
+import os, numpy as np
+tmp = os.environ["TMPDIR"]
+ref, cand = np.load(tmp + '/oracle.npz'), np.load(tmp + '/jittor.npz')
 assert not (set(ref.files) - set(cand.files)), "缺张量"
 def div(a, b, floor):
     a, b = np.asarray(a, np.float64), np.asarray(b, np.float64)
@@ -126,13 +121,13 @@ print('worst_grad', max((div(cand[k], ref[k], floor(grads)), k) for k in grads))
 PY
 ```
 
-实测（本机，CPU，`diffusers_unet2d`）：forward 归一化偏差 `8.885e-07`，最差梯度
-`4.555e-06`（`grad::mid_block.resnets.1.norm1.bias`），均在容差内。这是本机唯一被完整复验的
+实测（CPU，`diffusers_unet2d`）：forward 归一化偏差 `8.885e-07`，最差梯度
+`4.555e-06`（`grad::mid_block.resnets.1.norm1.bias`），均在容差内。这是 CPU 上唯一被完整复验的
 diffusers 两解释器数值结论。
 
 **速度**：重复、交替采样，报最小值（干扰只会让单次变慢，最小值是对的统计量）；大尺寸用例
 `JITTOR_ECOSYSTEM_REPEATS` 不低于 10。**墙钟永不在 PR 门禁里断言**：`JITTOR_ECOSYSTEM_SPEED_RATIO`
-只在 nightly 生效（`noxfile.py:ECOSYSTEM_SPEED_RATIO = "1.07"`），平时只报告。本机单次 CPU
+只在 nightly 生效（`noxfile.py:ECOSYSTEM_SPEED_RATIO = "1.07"`），平时只报告。单次 CPU
 读数 oracle `0.4688 s` / shim `0.9557 s`（≈2.04x，tiny case 受 dispatch 主导），只作说明，
 不得当作性能结论。
 
@@ -151,7 +146,7 @@ diffusers 走的是纯 `import torch` 消费者路线，**没有 adapter**。历
 | GroupNorm / SiLU / 最近邻 upsample / 训练 SDPA 的 ACL 原生路径 | jittor 核心 ACL 后端 + compat 路由 | `2026-08-30-diffusers-ascend-parity-performance.md`（已退役报告，Git 历史 `e3c369acb` 可查） |
 | torchvision / torchaudio / torchdata / flash_attn | 部署 stub（`jittor.compat.shim` 资源），不是 adapter | `compat/shim/resources/stubs/` |
 
-已接受的结论引用（非本机复验，两份报告均已退役，Git 历史 `e3c369acb` 可查）：`2026-08-23-ecosystem-parity-performance.md`
+已接受的结论引用（未复验，两份报告均已退役，Git 历史 `e3c369acb` 可查）：`2026-08-23-ecosystem-parity-performance.md`
 （12 个生态用例 CPU/CUDA 全过，真实规模 Diffusers UNet 在双方 cuDNN autotune 下中位数比约
 `0.93x`）；`2026-08-30-diffusers-ascend-parity-performance.md`（910B3 上
 forward + 145 梯度通过、零 fallback，`0.964x`）；`agent/manuals/project-context.md` 的中文结论
@@ -162,7 +157,7 @@ forward + 145 梯度通过、零 fallback，`0.964x`）；`agent/manuals/project
 
 1. **单解释器 smoke 不是对拍。** `test_diffusers.py` 只断言"能跑、梯度非 None、eval 两次一致"，
    不跟 PyTorch 比。
-2. **不显式关 CUDA，"CPU" 就不是 CPU。** 本机默认 `use_cuda=1`；实测直接跑 `test_diffusers.py`
+2. **不显式关 CUDA，"CPU" 就不是 CPU。** 有 CUDA 时默认 `use_cuda=1`；实测直接跑 `test_diffusers.py`
    （它设 `torch.tensor(...)` 不带 device）会在加速卡默认下混到后端不匹配，出现
    `dispatch_context ... Expected all tensor inputs on the same backend and device`，以及
    eval 两次不一致的失败。必须显式 `use_cuda=0`（runner 的 `--device cpu` 会做）。
@@ -172,33 +167,32 @@ forward + 145 梯度通过、零 fallback，`0.964x`）；`agent/manuals/project
    `AttributeError: __file__. Did you mean: '__all__'?`；用 `getattr(..., default)` 或
    `torch.__name__`/`torch.__version__` 判断。harness 已用 `getattr(torch, "__file__", "")` 兜住。
 5. **copy-deploy**：改仓库 `python/jittor/` 不会影响已部署的解释器，必须先拷到
-   `/root/jittor-lab/_state/h3/venv-jittor/lib/python3.12/site-packages/jittor/` 才对运行生效。
+   `<jittor-python>` 的 `site-packages/jittor/` 才对运行生效。
 6. **Jittor decode/懒求值与 eval 非确定性**：`eval()` 在 Jittor 里还会停掉参数梯度（runner
    会 `start_grad()` 恢复），且未 sync 的两次前向不一定逐位一致；逐位校验不能当门禁。
 
 ## 证据
 
-**本机实测（本次会话）**
+**实测（CPU）**
 
 - 环境：两个 venv 的 Python/torch 版本、oracle 断言、diffusers 两个 venv 都未 pip 安装且由
-  `PYTHONPATH=/root/jittor-lab/diffusers-main/src` 提供（版本 `0.41.0.dev0`）。
+  `PYTHONPATH=$JITTOR_LAB_ROOT/diffusers-main/src` 提供（版本 `0.41.0.dev0`）。
 - `diffusers_unet2d` CPU 两解释器对拍：146 张量 / 145 梯度；forward 归一化偏差 `8.885e-07`、
   最差梯度 `4.555e-06`；shim `fallback_count=0`、`fallback_policy="error"`、`use_cuda=false`；
   单次墙钟 oracle `0.4688 s` / shim `0.9557 s`。
-- 直接 pytest 在本 lab venv 会因 `compat` 包导入方式失败（见上），故本 skill 用 runner CLI。
+- 直接 pytest 在部署 venv 会因 `compat` 包导入方式失败（见上），故本 skill 用 runner CLI。
 - 直接跑 `test_diffusers.py`（未关 CUDA）失败 2 error / 1 failure，作为"必须显式选 device"的
   证据保留。
 
-**仅引用、未在本机复验**：CUDA/NPU 数值与性能、`large_diffusers_unet2d` 速度门禁、
-上面三份已退役报告的结论（各自环境见报告）。本机无 Ascend 卡，NPU 一列是引用，
-不是本机结论。
+**仅引用、未复验**：NPU 数值与性能、`large_diffusers_unet2d` 速度门禁、
+上面三份已退役报告的结论（各自环境见报告）。NPU 一列是引用，不是复验结论。
 
 ## 实测（2026-09-19）
 
-本机在 CUDA（`CUDA_VISIBLE_DEVICES=3`）上把 `verify_repo.py` 完整跑了一遍，三个已注册 case
+在单卡 CUDA 上把 `verify_repo.py` 完整跑了一遍，三个已注册 case
 全部 `status="ran"`。oracle 侧先自证可用：`import torch` 为 `2.13.0+cu129`、
 `torch.cuda.is_available() is True`、`import diffusers` 成功且
-`__file__=/root/jittor-lab/diffusers-main/src/diffusers/__init__.py`（`0.41.0.dev0`），
+`__file__=$JITTOR_LAB_ROOT/diffusers-main/src/diffusers/__init__.py`（`0.41.0.dev0`），
 与 skill 侧同一份 `PYTHONPATH` checkout，故 diffusers 数字可信。runner 侧
 `_import_torch("torch")` 会 `pop JITTOR_TORCH_SHIM` 并断言 `hasattr(torch,"_C")`，oracle
 不是 shim。
@@ -206,14 +200,14 @@ forward + 145 梯度通过、零 fallback，`0.964x`）；`agent/manuals/project
 命令（仓库根，独立 JIT home，避免与默认缓存抢构建锁）：
 
 ```bash
-source /root/jittor-lab/minimax-h3/env-jittor.sh
-export JITTOR_HOME=/root/jittor-lab/_state/verify-diff/jittor-home
+# shim 侧环境已激活
+export JITTOR_HOME="$JITTOR_LAB_ROOT/_state/verify-diff/<run>/jittor-home"
 mkdir -p "$JITTOR_HOME"
-export CUDA_VISIBLE_DEVICES=3
-REAL_TORCH_PYTHON=/root/jittor-lab/_state/h3/venv-oracle-cu129/bin/python \
-"$VENV/bin/python" agent/skills/torch-compat-repo-runbook/scripts/verify_repo.py \
+export CUDA_VISIBLE_DEVICES=<gpu>
+REAL_TORCH_PYTHON=<real-torch-python> \
+<jittor-python> agent/skills/torch-compat-repo-runbook/scripts/verify_repo.py \
   --repo diffusers --device cuda --repeats 5 \
-  --out /root/jittor-lab/_state/verify-diff/out
+  --out "$JITTOR_LAB_ROOT/_state/verify-diff/<run>/out"
 ```
 
 **支持的 case**：`--list-only` 列出 `diffusers_dit`、`diffusers_unet2d`、
@@ -246,5 +240,5 @@ REAL_TORCH_PYTHON=/root/jittor-lab/_state/h3/venv-oracle-cu129/bin/python \
 - 本次全程耗时 ~23.5 min，主要花在首次 JIT 内核编译与官方 flash 扩展构建（fresh
   `JITTOR_HOME`），非 case 本身。
 
-**没有运行/未复验**：CPU 行（本次只跑 CUDA）、NPU/ACL（本机无卡）、`nox -s ecosystem`
-门禁、`compat/tests/torch/*.py` 的 pytest（lab venv 无法导入 `compat` 包，见上，非本次范围）。
+**没有运行/未复验**：CPU 行（本次只跑 CUDA）、NPU/ACL、`nox -s ecosystem`
+门禁、`compat/tests/torch/*.py` 的 pytest（部署 venv 无法导入 `compat` 包，见上，非本次范围）。

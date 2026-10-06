@@ -1,6 +1,6 @@
 ---
 name: verifying-a-gate-actually-ran
-description: 在相信一次绿色的测试运行之前，先证明它跑的是你的代码、而且真的实例化出了用例。用于改动 tests/_helpers、noxfile 门禁清单、设备参数化、或在 git worktree / 多环境里验证任何改动。
+description: 在相信一次绿色的测试运行之前，先证明它跑的是你的代码、而且真的实例化出了用例；在相信一次红之前，先排除磁盘满、缓存损坏、并发污染、串号与卡住的进程，再把失败归因到提交。用于改动 tests/_helpers、noxfile 门禁清单、设备参数化、判读门禁结果，或在 git worktree / 多环境里验证任何改动。
 ---
 
 # 一次绿色运行要满足两个前提
@@ -75,7 +75,8 @@ JITTOR_TEST_DEVICES=cpu python -m pytest <目标> --collect-only -q | grep -c '<
 **整体忽略**这些路径。所以：
 
 - `pytest tests`（宽选择）= native 会话，这些路径根本不被收集；
-- 只有把路径**显式**写在命令行上，才会进入 Torch 模式并真的运行。
+- 只有设了 `JITTOR_TORCH_SHIM=1` 才会进入 Torch 模式并真的运行；native 模式下在命令行上显式点名这些路径，
+  `tests/_helpers/pytest_policy.py` 的 `pytest_sessionstart` 会以 `UsageError` 拒绝，而不是静默收集零个。
 
 这意味着「`pytest tests` 全绿」不覆盖这些文件。要覆盖全树必须跑两个会话
 （`tools/run_test_suite.py` 就是干这个的：native 会话 `tests` 加 `--ignore=`，torch 会话只跑这些路径）。
@@ -156,7 +157,7 @@ JITTOR_TEST_DEVICES=cpu python -m pytest <目标> --collect-only -q | grep -c '<
 
 实测的一次：`tools/run_test_suite.py` 的预热重试是为「冷缓存重建了 jit_utils，本进程无法
 重载，请重跑」准备的，判据写成「没有 marker 且退出 0」。它一直**靠巧合工作**——那条路径
-当时 `sys.exit(0)`。0.11 把它改成非零退出（为了让 CI 看得见），**同一个改动让这个重试在
+当时 `sys.exit(0)`。后来一次改动把它改成非零退出（为了让 CI 看得见），**同一个改动让这个重试在
 第一次尝试就放弃**，一整轮全树跑因此零用例退出。
 
 这和"新的报错照亮旧的错误"不是一回事，更隐蔽一层：**旧代码依赖的正是那个错误的行为**。
@@ -231,13 +232,13 @@ if inherit and extra and "PATH" in extra:
 ## 九、给门禁提速：结论集合是判据，快不是
 
 一次门禁优化的失败形态**不是变慢，是少给一个结论**，而少给一个结论不会改变
-「N passed」那一行的可信度。0.16 实测过一次：设备对拍加 `-n 4`，快 6%，
+「N passed」那一行的可信度。实测过一次：设备对拍加 `-n 4`，快 6%，
 **26 条里丢了 3 个结论**，退出码是绿的、摘要行看起来正常。
 
 > **一个有时不给结论的验证器比一个慢的更糟。**
 
 所以口径是两条，不是一条：（1）更快；（2）**两轮对每一个 nodeid 给出同一个结论**。
-「数量相同」不等于「集合相同」——0.16 那次丢结论时数量看着也合理。
+「数量相同」不等于「集合相同」——那次丢结论时数量看着也合理。
 
 ### 怎么做：记下来，再逐条比
 
@@ -270,15 +271,15 @@ python tools/gate_conclusion_diff.py compare $RUNS/base.json $RUNS/cand.json
 三条容易漏的：
 
 - **skip 原因变了也算结论变了。** 「从 passed 变成 skipped」和「skip 的理由换了一个」
-  都是靠扩大排除清单假达标的形状（0.15 的红线）。
+  都是靠扩大排除清单假达标的形状。
 - **墙钟只报告，不做判据。** 有负载的机器上墙钟能差两倍（见 `gate-tier-budget`）。
 - **两轮要选同一批测试**，变的是配置。选择集不同时 `compare` 会把两边的
   `pytest_arguments` 一起打出来，别把它当成通过。
 
 ### 报「快了多少」之前，先说清缓存是冷是热
 
-这条让 0.16 的归因整个反了。它记录「热缓存 1405s ≈ 冷缓存串行 1444s，**所以这条电池组
-不是编译瓶颈**」，0.22 的三个方向都是从这句推出来的。**2026-09-05 复测（同一批 26 个
+这条曾让一次归因整个反了：报告记录「热缓存 1405s ≈ 冷缓存串行 1444s，**所以这条电池组
+不是编译瓶颈**」，后续三个优化方向都是从这句推出来的。**2026-09-05 复测（同一批 26 个
 nodeid、同一个 `JITTOR_HOME`、背靠背两轮）：冷 623s，热 25s——25 倍。它就是编译瓶颈。**
 
 所以任何「快了 N%」都必须写明这一轮是冷是热，两轮之间对缓存做了什么。否则下一个人会
@@ -293,8 +294,8 @@ mv "$CACHE/jit" "$CACHE/jit.aside" && mkdir -p "$CACHE/jit"   # 只丢算子 ker
 
 `jit/` 之外的东西（`jittor_core*.so`、`obj_files/`、`gen/`）都留着。**mv 而不是 rm**：
 恢复是免费的，而且量完了还能对照。另外，Torch shim 模式与原生模式的 `cache_path`
-**不是同一个目录**（0.07 的配置指纹里有 shim 数学开关），所以「我刚跑过一遍所以是热的」
-在换了模式之后不成立——这也是 0.16 那个 1405s 最可能的来源。
+**不是同一个目录**（配置指纹里有 shim 数学开关），所以「我刚跑过一遍所以是热的」
+在换了模式之后不成立——这也是那个 1405s 最可能的来源。
 
 ### 如果你的提速手段是「缓存期望值」
 
@@ -360,7 +361,7 @@ caps       = jt.core.backend_supported_capabilities(名)
    实测：`jt.argsort` 在 `JITTOR_TORCH_SHIM=1` 下让探针以
    `ValueError: too many values to unpack` 失败，`jt.ops.argsort` 两种进程模式一致。
 
-**没有硬件的那几档要在这台机器上主动测。** 本机 ACL/ROCm/Corex 走的是
+**没有硬件的那几档要在手边的机器上主动测。** 没有 ACL/ROCm/Corex 的主机上它们走的是
 `not-built`，`no-device` 这一档一个格子都不会走到——也就是「标为未验证」的代码
 本身是未验证的。把 `BackendRow`/`cell_status` 写成纯函数，用合成的行去驱动
 `no-device`，并且传一个「一旦被调用就 assert 失败」的探针进去，证明它确实没跑探针：
@@ -393,7 +394,7 @@ Jittor 的可选库是惰性加载的（`jittor/_runtime/backend_libraries.py` �
 「这个库不可用」，于是依赖它的用例 `skip`，理由写「没有 cuTT」——而机器上有 cuTT，
 真正的原因是 wrapper 编译不过。
 
-实测的一次（本波发现）：`backends/cuda/libraries/cutt/src/cutt_wrapper.cc` 编译报
+实测的一次：`backends/cuda/libraries/cutt/src/cutt_wrapper.cc` 编译报
 `stream_compat.h: No such file or directory`，修掉之后紧接着报
 `cuda_runtime.h: No such file or directory`。原因是后端搬到顶层 `backends/` 之后，
 `setup_cuda_lib()` 拿到了 `-I backends/cuda/include` 与 `cuda_sdk_flags`，而
@@ -404,7 +405,7 @@ Jittor 的可选库是惰性加载的（`jittor/_runtime/backend_libraries.py` �
 
 1. **快照注册表之前，先强制加载全部可选库**，否则你的矩阵会比 build 的真实契约小。
    实测：不强制加载时 `backend_supported_ops("cpu")` 是 35 个；强制加载后是 41 个——
-   少掉的正是 `mkl_matmul`/`mkl_conv*`/`mkl_test`，也就是 8.05 要验的那几个。
+   少掉的正是 `mkl_matmul`/`mkl_conv*`/`mkl_test`，也就是 oneDNN 那一层要验的那几个。
 
    ```python
    from jittor._runtime.backend_libraries import LIBRARY_NAMES, get_library
@@ -433,7 +434,7 @@ Jittor 的可选库是惰性加载的（`jittor/_runtime/backend_libraries.py` �
 `get_library_ops(名)`，**不带 `load=True`**。所以它回答的是「这个库在本进程里加载过没有」，
 而惰性加载器要到有人用它才触发（MKL 是 `nn/functional/matrix.py`）。导入期读它一律得 `None`。
 
-实测（本波在 8.05 上量的，改前）：
+实测（改前）：
 
 | 位置 | 用例数 | 表现 |
 | --- | --- | --- |
@@ -463,7 +464,7 @@ def requires_onednn():
    `setUp`/fixture。
 2. **`use_mkl` 之类的 flag 拦不住这个**。它默认为 True，说的是「允许用」，
    与「加载了没有」无关——上表第一行的 class 上就挂着 `skipIf(not use_mkl)`。
-3. **改活之后新暴露的失败要分清是谁的**。本波实测：`test_matmul.py` 从 5 failed 降到
+3. **改活之后新暴露的失败要分清是谁的**。实测：`test_matmul.py` 从 5 failed 降到
    3 failed，剩下的 3 条是先于改动存在的独立缺陷；其中 `test_backward_once` 断言 relay
    日志恰 1 条，库没加载时是 0 条、加载后是 6 条——**两种情况都失败，说明这条断言本身
    从来没对过**。把这种「换了失败原因」的条目逐条写清楚，不要混进「我修好了」里。
@@ -472,7 +473,7 @@ def requires_onednn():
 
 上一节最后一行（结论随命令行顺序变）是症状。这一节是**怎么定位到那句话，以及怎么证明它**。
 
-交接里读到「某条用例会连累后面跑的用例」时，注意它其实是三个独立命题，而修错一个不解决问题：
+PR 或 issue 里读到「某条用例会连累后面跑的用例」时，注意它其实是三个独立命题，而修错一个不解决问题：
 
 1. 污染源自己红；
 2. 污染源留下了坏的进程状态；
@@ -502,9 +503,9 @@ python -m pytest --version && pip list | grep -iE "pytest|random|order"
 `ImportError: No module named 'randomly'`。（`-p no:randomly` 不报错，因为 `no:` 不需要 import，
 所以它**不能**用来判断插件在不在。）
 
-于是这台机器上的顺序来源只有 `-n`（xdist 的分发）。这有两个后果：
+于是在没装这类插件的环境里，顺序来源只有 `-n`（xdist 的分发）。这有两个后果：
 
-- 交接里「随机顺序下才复现」这句话，在本环境里要么来自 `-n`，要么来自别的机器。**先查再信。**
+- PR 或 issue 里「随机顺序下才复现」这句话，在本环境里要么来自 `-n`，要么来自别的机器。**先查再信。**
 - 钉顺序不用种子，**直接把 nodeid 按想要的顺序写在命令行上**——pytest 按给定顺序跑，
   比种子更短、可复现、且不依赖任何插件：
 
@@ -517,7 +518,7 @@ run "$POLLUTER" "$VICTIM"  # 右上／右下
 ```
 
 「修前」那两格若缺陷已经被别人修掉，就**临时把洞打回去**再跑（改产品文件、跑、
-`git checkout --` 还原，顺序与注意事项见 `structure-rule-has-teeth`）。本波实测的四格：
+`git checkout --` 还原，顺序与注意事项见 `codebase-wide-fix-as-rule` 第 2 节）。实测的四格：
 洞在时「单独受害者」1 passed、「污染源+受害者」2 failed；HEAD 上两格分别 1 passed / 2 passed。
 
 ### 陷阱：用 `mock.patch.object` 当探针，探不出「先改后拒」
@@ -528,7 +529,7 @@ run "$POLLUTER" "$VICTIM"  # 右上／右下
 `__exit__` 回滚**，而回滚的动作是 `setattr(target, attr, 原值)`。于是：
 
 - 被测代码若是「先赋值、再抛异常」，回滚那一句**正好把它修好了**，探针看到的属性是干净的
-  → 门禁绿，洞还在。本波实测：打洞之后经 `patch.object` 的断言 **28 passed / 3 skipped**，
+  → 门禁绿，洞还在。实测：打洞之后经 `patch.object` 的断言 **28 passed / 3 skipped**，
   一条没红；把同一条断言改成直接 `setattr` 一个**不同的值**，立刻 **10 failed**。
 - 冻结属性还有一个附带现象值得记住：回滚那一句也会被拒，所以**报出来的异常来自回滚、
   且消息里带的是「原值」**，读起来像「还原被禁止」而不是「打补丁被禁止」。
@@ -541,4 +542,95 @@ run "$POLLUTER" "$VICTIM"  # 右上／右下
 > 它测的是「抛没抛」，不是「改没改」。要写一个**不同**的值，再断言旧值还在。
 
 本仓库原有的 `test_all_native_flag_instances_reject_late_startup_writes` 正是前者，
-它在 2.19 这一波补上了后者（`tests/runtime/test_startup_config.py`）。
+后来补上了后者（`tests/runtime/test_startup_config.py`）。
+
+## 十三、判读一次红：假失败、卡住的进程与归因
+
+门禁的产出只有一句可信的「这个提交是红还是绿」。难在假失败比真失败多——缓存损坏、磁盘满、
+被杀的编译进程，表现和真回归一模一样。
+
+### 红绿的判据
+
+- **红的定义是失败集合比基线多**，不是 `failed > 0`。基线本身未必全绿，先在基线提交上跑同一批
+  nodeid 拿到失败集合，再逐条比（`tools/gate_conclusion_diff.py`，见第九节）。
+- **`passed` 只许涨不许跌，收集总数也要看**：passed 不变而 skipped 掉了一大截，说明用例被删了或被
+  静默过滤了，而不是被修好了。两个数都写进 PR 描述。
+- **参数列表是算出来的规则要放哨兵**：`rglob`、注册表或 AST 扫描产生的 `parametrize` 列表在扫描根
+  失配时为空，这条规则贡献零个用例而同文件其他用例照样 passed。列表为空时塞一个必败条目，每个扫描
+  根各自断言非空（用「它必须包含的某个文件」来断，不要写「总数 > N」），再加一条反向用例：拿一个
+  不存在的根去调同一个扫描函数，断言它返回空。
+
+      _EMPTY_SCAN = "<scan matched nothing>"
+
+      def _scanned_modules():
+          found = sorted(str(p.relative_to(SOURCE)) for p in SOURCE.rglob("*.py"))
+          return found or [_EMPTY_SCAN]      # 空列表会让这条规则整体消失
+
+- **只信哨兵文件和汇总行**：长跑的门禁一律带 `timeout`，结束写 `.done`；没有 `.done` 或日志尾部没有
+  pytest 汇总行（段错误会让进程死在一串点上）就按「未完成」报，不按通过报。等它跑完用哨兵，不要用
+  `pgrep -f`（它会匹配到你自己那个等待的 shell 和 heredoc 文本）；问「是否正在跑」用锁：
+
+  ```bash
+  until [ -f "$G/native.done" ]; do sleep 20; done
+  if flock -n 9 9>"$G/native.lock"; then echo "没在跑"; else echo "在跑"; fi
+  ```
+
+- **nox 不认你导出的 `JITTOR_HOME`**：`_session_env` 把编译缓存放在
+  `$JITTOR_LAB_ROOT/_state/nox/cache/jittor`（所有 session 共用），venv 也在 `$JITTOR_LAB_ROOT` 下。
+  要隔离就给自己的运行设一个独立的 `JITTOR_LAB_ROOT`，或设 `JITTOR_NOX_SHARED_CACHE=0`
+  让 session 用一次性缓存。
+
+### 假失败的形状
+
+真回归是**集中**的：同一个文件、同一族算子、和某个提交改的东西对得上。下面几类是**散布**的：
+
+- **磁盘满**：散布在不相干算子上的失败加一个段错误，事后从日志区分不出来。跑之前先 `df -h`。
+- **缓存损坏**：`kill -9` 了正在编译的进程，留下半截 `.so`，下一轮在不相干的算子上大面积报梯度不符
+  （三位数的失败、集中在同一种断言上）。处理是删掉整个 `JITTOR_HOME` 重跑，不要试图定位。
+- **并发污染**：两个进程共用一个 `JITTOR_HOME` 或 `TMPDIR`。同一个提交跑两遍结果不一样，就是它。
+  **独立的 `JITTOR_HOME` 还不够**：两个进程同时冷启动时，cuda key 曾把另一个进程的日志行当成算力值读
+  进来（`cuda key:` 那行不是干净的 `sm_XX`，随后 `make_cache_dir` 报 `FileNotFoundError`），两棵树
+  双双 `1 error`。做 A/B 一律串行。
+- **串号**：stash 栈是所有 worktree 共用的（见 `git-worktree-shared-state`），一个提交可能带着别人的
+  WIP。判据是 `git show --stat` 改的文件与提交声称的范围对不上。这不是逻辑回归，通知改动来源方和提交方，
+  不要去读代码找 bug。
+- **上界型墙钟断言**：机器上负载高时 `assert elapsed < <绝对秒数>` 必然假红；相对比值（最好 best-of-n）
+  或「有界 vs 无界」的断言抗噪得多。修法是换断言的形状，不是放宽数字。
+
+### 卡住的进程：不报错，只是让别人变慢
+
+崩溃处理器 fork 出的 gdb 挂住、把被追踪进程 ptrace-stop 在那里，或者一个进程握着构建锁不干活，
+都不会进任何日志，只会让所有等锁的人变慢：
+
+```bash
+# 跑很久、CPU 接近 0：在等，不是在算
+ps -eo pid,etimes,stat,pcpu,args --sort=-etimes | awk '$2>1800 && $4<1.0' | grep -E "python|pytest|gdb"
+# stat 带 t/T：被 ptrace 停住了，不会自己醒
+ps -eo pid,stat,args | awk '$2 ~ /^[tT]/'
+# 谁握着构建锁
+fuser -v "$JITTOR_HOME/.cache/jittor/jittor.lock" 2>&1
+```
+
+先杀挂住的 gdb（按确切 PID），被停住的进程通常会继续；握锁不干活的，确认没人在用那个 `JITTOR_HOME`
+之后再杀，杀完删掉它的缓存再重跑。测试里起可能崩溃的子进程一律 `crash_isolated=True`
+（`tests/_helpers/child_process.py`），它同时给子进程设 `gdb_path=""`。
+
+### 归因：比 bisect 便宜的手法
+
+1. **对照基线用只读 worktree**：`git worktree add --detach "$JITTOR_LAB_ROOT/worktrees/baseline" <基线提交>`，
+   用它自己的 `JITTOR_HOME` 跑那几条失败用例。重建一次要重编核心，跑完留着下次再用。
+2. **rebase 前后对拍**：rebase 前跑一遍受影响目录，rebase 后再跑一遍，差出来的是别人在这段区间引入的。
+3. 锁定区间后 `git log --oneline <上次绿>..HEAD -- <失败用例涉及的文件>`；对嫌疑提交先
+   `git show --stat` 核对它改的文件与声称的范围（不符先怀疑串号）；一步定不了再 `git bisect run`，脚本
+   只跑失败的那几条。
+4. **被点名的提交不等于有罪**：先读执行顺序再跑对照。例：一条原子调优日志的断言失败，嫌疑指向一个新加的
+   pass，但 `src/codegen/opt/pass_manager.cc` 里它排在 `AtomicTunerPass` 之后，读一眼就能排除；真正的原因
+   是 CUDA 全归约的快路径（`backends/cuda/kernels/nn/full_reduce_cuda.py`）让 `x.sum()` 不再进融合算子 JIT。
+   `$JITTOR_HOME` 下 `jit/` 目录的文件名带算子键，看有没有对应的 kernel 族比读断言快得多。
+5. 定位到就停手：把归因写进对应的 GitHub issue/PR，真实缺陷记入 `agent/manuals/known-issues.md`。
+
+**一次正确的优化可以让一条测试静默失去意义**：给热路径装快路径、绕过某个 pass 时，去 grep 谁在测被绕开的
+那条路径——测试不会因为它测的路径消失而变红，只会变得没有意义。同一类的活口：`SharedReducePass::run()`
+开头是 `if (para_opt_level < 4) return;`，而 `para_opt_level` 默认 3（`loop_var_analyze_pass.cc`），
+所以默认门禁对这个 pass 的覆盖是零，要覆盖就得显式 `jt.flags.para_opt_level = 4`。
+

@@ -18,17 +18,17 @@ description: 在 Jittor 的 torch shim 与原生 PyTorch/torch_npu 两侧运行�
 
 ## 两侧环境
 
-本机（`/root/jittor-lab`）已实测：
+已实测：
 
 | 侧 | 解释器 | 关键事实 |
 | --- | --- | --- |
-| shim | `/root/jittor-lab/_state/h3/venv-jittor/bin/python` | py3.12.12；jittor 1.3.11.0；`import torch` → shim（`_torch_compat_install_context` 存在）；transformers 5.5.3、safetensors 0.8.0、numpy 2.3.5 |
-| 原生 torch | `/root/jittor-lab/_state/h3/venv-oracle-cu129/bin/python` | py3.12.12；torch 2.13.0+cu129；transformers 5.5.3 |
+| shim | `<jittor-python>` | py3.12.12；jittor 1.3.11.0；`import torch` → shim（`_torch_compat_install_context` 存在）；transformers 5.5.3、safetensors 0.8.0、numpy 2.3.5 |
+| 原生 torch | `<real-torch-python>` | py3.12.12；torch 2.13.0+cu129；transformers 5.5.3 |
 
-先 `source /root/jittor-lab/minimax-h3/env-jittor.sh`（原生侧
-`env-oracle-cu129.sh`）：导出 `JITTOR_TORCH_SHIM=1`、缓存收进
+先激活 shim 侧 env 脚本（本地、不入库的 lab 脚本，如 `$JITTOR_LAB_ROOT/<topic>/env-jittor.sh`；原生侧
+对应 `env-oracle.sh`）：导出 `JITTOR_TORCH_SHIM=1`、缓存收进
 `$JITTOR_LAB_ROOT/_state/h3/run`、`HF_HUB_OFFLINE=1`/`TRANSFORMERS_OFFLINE=1`，并设
-`JT_BUILD_PYTHON_CONFIG_PATH=/opt/python3.12/bin/python3.12-config`——**不设它
+`JT_BUILD_PYTHON_CONFIG_PATH=<base-python-prefix>/bin/python3.12-config`——**不设它
 `import jittor` 直接 `RuntimeError: python3.12-config not found`**（实测）。
 
 两侧同 py3.12、ABI 相同，共享一个 package site 即可。**注意**：NPU 验收报告用的是
@@ -39,39 +39,39 @@ py3.9(jittor) 对 py3.10(torch_npu)，ABI 不同，必须分别给
 **看任何数字前先过 oracle 断言**：
 
 ```bash
-/root/jittor-lab/_state/h3/venv-oracle-cu129/bin/python -c \
+<real-torch-python> -c \
   "import torch; assert not hasattr(torch,'_torch_compat_install_context'), 'oracle 是 shim'; print('oracle', torch.__version__)"
-# 本机实测：oracle 2.13.0+cu129
+# 实测：oracle 2.13.0+cu129
 ```
 
-**本机 `swift` / `ms-swift` / `peft` 两侧都未安装**（`PackageNotFoundError`，
+**验证环境里 `swift` / `ms-swift` / `peft` 两侧都未安装**（`PackageNotFoundError`，
 `find_spec('swift')` 为 False）。补上之前本 skill 的 ms-swift 数字都是未验证。
 
 ## 在 shim 上跑
 
 ms-swift 的 case 依赖 `swift` 与 `peft` 两个包，都放进
 `JITTOR_ECOSYSTEM_PACKAGE_SITE` 指向的 site（契约见
-`../../../compat/tests/torch/_ecosystem_harness.py` 模块 docstring）。本机两侧同 py3.12，
-一个共享 site 即可。构建办法（**本机未执行**）：建空目录 `<site>`，`pip install --target <site>
+`../../../compat/tests/torch/_ecosystem_harness.py` 模块 docstring）。两侧同 py3.12，
+一个共享 site 即可。构建办法（**未执行**）：建空目录 `<site>`，`pip install --target <site>
 ms-swift==4.5.2 peft==0.17.1`（版本取自 NPU 报告），并保证两侧 transformers 版本一致。
 **不要**把 `ms-swift`/`peft` 装进 oracle venv 去覆盖 torch。
 
 跑单条 case（pytest 起在 shim 解释器）：
 
 ```bash
-set -a; source /root/jittor-lab/minimax-h3/env-jittor.sh >/dev/null 2>&1; set +a
+# 已激活 shim 侧环境（本地 env 脚本，不入库）
 unset PYTHONPATH
-cd /apdcephfs_private/qy/projects/zy/jittor
-export REAL_TORCH_PYTHON=/root/jittor-lab/_state/h3/venv-oracle-cu129/bin/python
+cd <repo-root>
+export REAL_TORCH_PYTHON=<real-torch-python>
 export JITTOR_ECOSYSTEM_PACKAGE_SITE=<含 swift/peft 的 site>
-"$VENV/bin/python" -m pytest -q \
+<jittor-python> -m pytest -q \
   "compat/tests/torch/test_ecosystem_parity.py::EcosystemParity::test_ms_swift_lora_llama"
 ```
 
 `ms_swift_lora_llama` 在 CPU / CUDA / NPU 三档都有：`EcosystemParity`（CPU）、
 `EcosystemParityCUDA`（继承）与 `EcosystemParityNPU` 都收了它（NPU 档另有 diffusers、
 mmcv、mmengine 三个用例）。NPU 档跑法（需先 source CANN，shim 侧 python 与 oracle
-torch_npu 解释器按各自主机环境给出；下面是报告里的维护命令，本机不是 Ascend 环境）：
+torch_npu 解释器按各自主机环境给出；下面是报告里的维护命令，验证环境不是 Ascend 环境）：
 
 ```bash
 REAL_TORCH_PYTHON=/path/to/torch-npu/python JITTOR_TORCH_SHIM=1 \
@@ -89,10 +89,10 @@ python -m pytest -q \
 ```bash
 cd compat/tests/torch
 env -u PYTHONPATH -u JITTOR_TORCH_SHIM \
-  /root/jittor-lab/_state/h3/venv-oracle-cu129/bin/python \
+  <real-torch-python> \
   _ecosystem_runner.py ms_swift_lora_llama /tmp/torch.npz --runtime torch --device cpu
-source /root/jittor-lab/minimax-h3/env-jittor.sh
-JITTOR_ECOSYSTEM_PACKAGE_SITE=<site> "$VENV/bin/python" \
+# 已激活 shim 侧环境（本地 env 脚本，不入库）
+JITTOR_ECOSYSTEM_PACKAGE_SITE=<site> <jittor-python> \
   _ecosystem_runner.py ms_swift_lora_llama /tmp/jittor.npz --runtime jittor --device cpu \
   --weights /tmp/torch.weights.npz
 ```
@@ -117,7 +117,7 @@ runner CLI（`--help` 实测）：`python _ecosystem_runner.py <case> <output.np
 - **速度**：harness 取 `min(durations)`、`JITTOR_ECOSYSTEM_REPEATS>=10`（speed 模块），
   **只在设 `JITTOR_ECOSYSTEM_SPEED_RATIO` 时才断言墙钟**。`_ecosystem_speed.CASES` 里
   **没有 ms-swift 的 large case**，报告里的 50 步取最小值是独立于 harness 的协议。
-- **device 规则**：两侧必须同 device。Jittor 没有 per-tensor device，本机 `import jittor`
+- **device 规则**：两侧必须同 device。Jittor 没有 per-tensor device，验证环境 `import jittor`
   直接 `CUDA enabled`（实测）；CPU 档必须显式 `jt.runtime.scope(use_cuda=0)`（runner 的
   `--device cpu` 已处理），否则就是 Jittor 在加速卡上对原生 CPU。NPU 档还额外断言
   `has_acl/use_acl/use_cuda` 与 `fallback_count == 0`、`fallback_policy == "error"`。
@@ -144,16 +144,16 @@ ms-swift 是纯 `import torch` 消费者，**adapter（第三行）为空**。�
 - **`peft` 版本上限**：不满足 `peft < 0.20` 时真 PyTorch 也会失败，别误判。
 - **在 tiny case 上读速度**：hidden 64 / seq 8 的 ratio 说明不了 kernel；NPU 性能结论要用
   报告的 50 步取最小协议。
-- **skip 看起来像通过**：本机 `swift` 缺失时整类 `skipTest("missing ...")`。验收用
+- **skip 看起来像通过**：验证环境 `swift` 缺失时整类 `skipTest("missing ...")`。验收用
   `JITTOR_REQUIRE_REAL_TORCH=1`（`nox -s ecosystem` 会设）把「没有 oracle」变成失败。
 
 ## 证据
 
-- **本机已实测**：两个 venv 中 `swift`/`ms-swift`/`peft` 缺失；oracle 断言
+- **已实测**：两个 venv 中 `swift`/`ms-swift`/`peft` 缺失；oracle 断言
   `oracle 2.13.0+cu129`；无 `env-jittor.sh` 时 `import jittor` 报 `python3.12-config not found`；
   `test_ecosystem_parity.py` 收集 28 项，`ms_swift_lora_llama` 在 CPU/CUDA/NPU 三档各有一项。
-- **未在本机验证**：ms-swift 的安装、`ms_swift_lora_llama` 的任何数值/速度、上述 NPU 命令
-  （本机不是 Ascend 环境）。命令按 harness/runner 与报告的真实接口给出，但**没有跑过**。
+- **未验证**：ms-swift 的安装、`ms_swift_lora_llama` 的任何数值/速度、上述 NPU 命令
+  （验证环境不是 Ascend 环境）。命令按 harness/runner 与报告的真实接口给出，但**没有跑过**。
 - 维护者报告：`2026-08-31-ms-swift-ascend-parity-performance.md`（已退役，Git 历史 `e3c369acb` 可查）
   （Ascend 910B3，ms-swift 4.5.2 / PEFT 0.17.1 / Transformers 4.57.6；前向归一化误差
   `1.980e-7`、最差梯度归一化误差 `4.268e-7`；50 步取最小 `torch_npu 14.089 ms` 对
@@ -162,29 +162,29 @@ ms-swift 是纯 `import torch` 消费者，**adapter（第三行）为空**。�
 
 ## 实测（2026-09-19）
 
-GPU 4，oracle `torch 2.13.0+cu129`、shim `jittor 1.3.11.0`，`--device cuda --repeats 5`。
+单卡 CUDA，oracle `torch 2.13.0+cu129`、shim `jittor 1.3.11.0`，`--device cuda --repeats 5`。
 
 **package site**（两侧同 py3.12 共用）：
 
-- `/root/jittor-lab/_state/verify-ml/site`：按本文件给出的构建命令装出 **ms-swift 4.5.3 +
+- `$JITTOR_LAB_ROOT/_state/verify-ml/site`：按本文件给出的构建命令装出 **ms-swift 4.5.3 +
   peft 0.20.0**（及 mmcv-lite 2.2.0、mmengine 0.10.7）；pip 拉入的 torch 2.14.0 /
   transformers 5.16.1 / numpy 2.5.3 已从 site 删除，改用 venv 的对应版本。
-- `/root/jittor-lab/_state/verify-ml/site-peft17`：`pip install --target site-peft17
+- `$JITTOR_LAB_ROOT/_state/verify-ml/site-peft17`：`pip install --target site-peft17
   transformers==4.56.2 peft==0.17.1 ms-swift==4.5.2`（4.56.2 是 `jittor_adapters` 允许的
   版本），torch 已删除。
 
 **实际跑通的命令**（site-peft17；原命令的 ms-swift 4.5.3+peft 0.20.0 在 shim 上失败，见下）：
 
 ```bash
-cd /apdcephfs_private/qy/projects/zy/jittor
-source /root/jittor-lab/minimax-h3/env-jittor.sh && unset PYTHONPATH
-export JITTOR_HOME=/root/jittor-lab/_state/verify-ml/jittor-home
-export CUDA_VISIBLE_DEVICES=4
-export JITTOR_ECOSYSTEM_PACKAGE_SITE=/root/jittor-lab/_state/verify-ml/site-peft17
-export JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE=/root/jittor-lab/_state/verify-ml/site-peft17
-REAL_TORCH_PYTHON=/root/jittor-lab/_state/h3/venv-oracle-cu129/bin/python \
-  "$VENV/bin/python" agent/skills/torch-compat-repo-runbook/scripts/verify_repo.py \
-  --repo ms-swift --device cuda --repeats 5 --out /root/jittor-lab/_state/verify-ml/out2/ms-swift
+cd <repo-root>
+unset PYTHONPATH   # 已激活 shim 侧环境（本地 env 脚本，不入库）
+export JITTOR_HOME=$JITTOR_LAB_ROOT/_state/verify-ml/jittor-home
+export CUDA_VISIBLE_DEVICES=<gpu>
+export JITTOR_ECOSYSTEM_PACKAGE_SITE=$JITTOR_LAB_ROOT/_state/verify-ml/site-peft17
+export JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE=$JITTOR_LAB_ROOT/_state/verify-ml/site-peft17
+REAL_TORCH_PYTHON=<real-torch-python> \
+  <jittor-python> agent/skills/torch-compat-repo-runbook/scripts/verify_repo.py \
+  --repo ms-swift --device cuda --repeats 5 --out $JITTOR_LAB_ROOT/_state/verify-ml/out2/ms-swift
 ```
 
 **支持的 case 清单**：`--list-only` 收 1 条 `ms_swift_lora_llama`（requires
@@ -203,4 +203,4 @@ transformers,peft,swift；仓库名里的 `-` 由工具归一化）；`_ecosyste
 （`swift/tuners/lora_layers.py` 与 peft 0.20 的 `Linear` 签名不符）——即第 135 行所述
 ms-swift/peft 版本组合问题，与 jittor 无关；换成报告用的 **ms-swift 4.5.2 + peft 0.17.1 +
 transformers 4.56.2** 即跑通。原始报告见
-`/root/jittor-lab/_state/verify-ml/{ms-swift.unpinned-peft0.20.log,ms-swift.pinned.log}`。
+`$JITTOR_LAB_ROOT/_state/verify-ml/{ms-swift.unpinned-peft0.20.log,ms-swift.pinned.log}`。

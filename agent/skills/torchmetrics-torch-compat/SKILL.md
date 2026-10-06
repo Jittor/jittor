@@ -22,28 +22,28 @@ CUDA 会话提供。这点与 peft/ms-swift 不同，不要照搬「同权重重
 
 ## 两侧环境
 
-本机（`/root/jittor-lab`）已实测：
+已实测：
 
 | 侧 | 解释器 | 关键事实 |
 | --- | --- | --- |
-| shim | `/root/jittor-lab/_state/h3/venv-jittor/bin/python` | py3.12.12；jittor 1.3.11.0；`import torch` → shim；**`jittor-torch-adapters` 1.3.11.0 已装（editable，指向本仓 `adapters/`）**；transformers 5.5.3 |
-| 原生 torch | `/root/jittor-lab/_state/h3/venv-oracle-cu129/bin/python` | py3.12.12；torch 2.13.0+cu129；无 jittor |
+| shim | `<jittor-python>` | py3.12.12；jittor 1.3.11.0；`import torch` → shim；**`jittor-torch-adapters` 1.3.11.0 已装（editable，指向本仓 `adapters/`）**；transformers 5.5.3 |
+| 原生 torch | `<real-torch-python>` | py3.12.12；torch 2.13.0+cu129；无 jittor |
 
-先 `source /root/jittor-lab/minimax-h3/env-jittor.sh`（原生
-`env-oracle-cu129.sh`）：导出 `JITTOR_TORCH_SHIM=1`、缓存收进
+先激活 shim 侧 env 脚本（本地、不入库的 lab 脚本，如 `$JITTOR_LAB_ROOT/<topic>/env-jittor.sh`；原生侧
+对应 `env-oracle.sh`）：导出 `JITTOR_TORCH_SHIM=1`、缓存收进
 `$JITTOR_LAB_ROOT/_state/h3/run`、离线标志，并设
-`JT_BUILD_PYTHON_CONFIG_PATH=/opt/python3.12/bin/python3.12-config`——**不设它
+`JT_BUILD_PYTHON_CONFIG_PATH=<base-python-prefix>/bin/python3.12-config`——**不设它
 `import jittor` 直接 `RuntimeError: python3.12-config not found`**（实测）。
 
 **看任何数字前先过 oracle 断言**：
 
 ```bash
-/root/jittor-lab/_state/h3/venv-oracle-cu129/bin/python -c \
+<real-torch-python> -c \
   "import torch; assert not hasattr(torch,'_torch_compat_install_context'), 'oracle 是 shim'; print('oracle', torch.__version__)"
-# 本机实测：oracle 2.13.0+cu129
+# 实测：oracle 2.13.0+cu129
 ```
 
-**本机 torchmetrics 两侧都未安装**（`PackageNotFoundError`，`find_spec('torchmetrics')`
+**验证环境里 torchmetrics 两侧都未安装**（`PackageNotFoundError`，`find_spec('torchmetrics')`
 为 False）。补上之前本 skill 的 torchmetrics 数字都是未验证。
 
 ## 在 shim 上跑
@@ -51,10 +51,10 @@ CUDA 会话提供。这点与 peft/ms-swift 不同，不要照搬「同权重重
 单测不依赖 `REAL_TORCH_PYTHON`，直接（缺 torchmetrics 时整类 skip）：
 
 ```bash
-set -a; source /root/jittor-lab/minimax-h3/env-jittor.sh >/dev/null 2>&1; set +a
+# 已激活 shim 侧环境（本地 env 脚本，不入库）
 unset PYTHONPATH
-cd /apdcephfs_private/qy/projects/zy/jittor
-"$VENV/bin/python" -m pytest -q compat/tests/torch/test_torchmetrics_compat.py
+cd <repo-root>
+<jittor-python> -m pytest -q compat/tests/torch/test_torchmetrics_compat.py
 ```
 
 覆盖四组：`classification`、`regression`、`aggregation`、以及
@@ -65,11 +65,11 @@ cd /apdcephfs_private/qy/projects/zy/jittor
 **环境怎么来**：`nox -s optional` 不安装包，它要求解释器里已经预置
 `OPTIONAL_COMPAT_PACKAGES`（`noxfile.py:234`：torchmetrics / mmcv / mmengine / peft /
 safetensors / tensordict / flash_attn），缺任何一个直接 fail-closed 报错。补齐办法
-（**本机未执行**）：按 adapter 的 `SUPPORTED_VERSIONS` 装 **torchmetrics==1.7.4**，
+（**未执行**）：按 adapter 的 `SUPPORTED_VERSIONS` 装 **torchmetrics==1.7.4**，
 放进 shim 解释器可导入的位置；`JITTOR_REQUIRE_OPTIONAL_DEPS=1` 让缺包变成失败而不是 skip。
 
 ```bash
-# 维护者真机 CUDA 档（需 nvcc + 预置包），本机未验证
+# 维护者真机 CUDA 档（需 nvcc + 预置包），未验证
 python -m nox -s optional -- compat/tests/torch/test_torchmetrics_compat.py
 ```
 
@@ -90,7 +90,7 @@ TorchMetrics 测试本身按 shim 语义写（`forward`/`jittor.compat` 行为�
 - **速度**：**没有** speed case，也没有 ratio。`nox -s optional` 只有单测 timeout（冷编
   会 timeout，报告把失败点归为环境吞吐限制，不是数值回归）。速度只能自行用
   `../jittor-torch-diff/SKILL.md` 的协议单独量。
-- **device 规则**：Jittor 没有 per-tensor device，本机 `import jittor` 直接 `CUDA enabled`
+- **device 规则**：Jittor 没有 per-tensor device，验证环境 `import jittor` 直接 `CUDA enabled`
   （实测）。`optional` session 设 `JITTOR_TEST_DEVICES=cuda`、`use_cuda=1`，跑真实 CUDA；
   要 CPU 档必须自己显式 `jt.runtime.scope(use_cuda=0)`，不能靠「不请求」。
 
@@ -114,12 +114,12 @@ Adapter 的契约（`adapters/README.md`）：`SUPPORTED_VERSIONS = {"1.7.4"}`�
 ## 坑与假绿
 
 - **缺包整文件 skip**：测试顶部是
-  `@unittest.skipIf(importlib.util.find_spec("torchmetrics") is None, ...)`。本机缺包时
+  `@unittest.skipIf(importlib.util.find_spec("torchmetrics") is None, ...)`。验证环境缺包时
   `0 passed, N skipped` 看起来和通过一样；必须配 `JITTOR_REQUIRE_OPTIONAL_DEPS=1` 才有意义。
 - **adapter 标记命名**：`test_torchmetrics_compat.py` 断言模块上有
   `_jittor_fast_bincount` / `_jittor_fast_dim_zero_cat` / `_jittor_fast_safe_divide`，而当前
   `adapters/jittor_adapters/torchmetrics.py` 的 `_publish(..., marker)` 用的是
-  `_jittor_orig_*` 命名。**本机没有 torchmetrics，未能执行验证**这两处是否一致；装包后
+  `_jittor_orig_*` 命名。**验证环境没有 torchmetrics，未能执行验证**这两处是否一致；装包后
   第一次跑务必先确认 `test_torchmetrics_required_torch_ops` 真的 pass，不要假设。
 - **把「装上了」当「起作用了」**：adapter 未加载时报告里是 `unavailable` 不是 applied；
   用 `jittor.compat.module_patcher.last_module_patch_report()` 看实际状态。
@@ -129,10 +129,10 @@ Adapter 的契约（`adapters/README.md`）：`SUPPORTED_VERSIONS = {"1.7.4"}`�
 
 ## 证据
 
-- **本机已实测**：两侧均无 torchmetrics；shim venv 的 `jittor-torch-adapters` 1.3.11.0 已装
+- **已实测**：两侧均无 torchmetrics；shim venv 的 `jittor-torch-adapters` 1.3.11.0 已装
   且 `find_spec('jittor_adapters')` 为 True；oracle 断言 `oracle 2.13.0+cu129`；无
   `env-jittor.sh` 时 `import jittor` 报 `python3.12-config not found`。
-- **未在本机验证**：torchmetrics 的安装、`test_torchmetrics_compat.py` 的任何 pass/fail、
+- **未验证**：torchmetrics 的安装、`test_torchmetrics_compat.py` 的任何 pass/fail、
   上述 `_jittor_fast_*` / `_jittor_orig_*` 命名是否真的不一致（仅读代码发现，需装包后确认）、
   `nox -s optional` 的 CUDA 结果。
 - 维护者报告：`2026-08-24-optional-compat-cuda-gate.md`（已退役报告，Git 历史 `e3c369acb` 可查）
@@ -143,8 +143,8 @@ Adapter 的契约（`adapters/README.md`）：`SUPPORTED_VERSIONS = {"1.7.4"}`�
 
 ## 实测（2026-09-19）
 
-环境：仓库 HEAD `90fe0b9`；GPU 5；oracle 断言 `2.13.0+cu129`。包站点
-`/root/jittor-lab/_state/verify-misc/site`，用 `pip install --target ... --no-deps`
+环境：仓库 HEAD `90fe0b9`；单卡 CUDA；oracle 断言 `2.13.0+cu129`。包站点
+`$JITTOR_LAB_ROOT/_state/verify-misc/site`，用 `pip install --target ... --no-deps`
 锁定 `torchmetrics==1.7.4`（另补 `lightning-utilities/orjson/pyvers`，**不装 torch**）。
 不锁版本会装成 `torchmetrics 1.9.0` + `torch 2.14.0`，被 adapter 的
 `SUPPORTED_VERSIONS={"1.7.4"}` 拒绝——已弃用不锁版本的那次安装。
@@ -178,5 +178,5 @@ collection 阶段 `compat/__init__.py:3 → compat/_aliases.py:8` 的
 而 `adapters/jittor_adapters/torchmetrics.py` 的 `_publish` 设的 marker 是 `_jittor_orig_*`；
 skill 标为「未验证」的这处**确实不一致**（执行未走到该断言）。
 
-**证据状态**：部分机器验证。报告/`nox -s optional` 的「4 passed」在本机**未复现**：
-1 组通过、3 组 error（1 个真实 jittor reduce 错误 + 2 个 nvcc 编译失败）。未在本机跑 nox。
+**证据状态**：部分机器验证。报告/`nox -s optional` 的「4 passed」**未复现**：
+1 组通过、3 组 error（1 个真实 jittor reduce 错误 + 2 个 nvcc 编译失败）。未跑 nox。

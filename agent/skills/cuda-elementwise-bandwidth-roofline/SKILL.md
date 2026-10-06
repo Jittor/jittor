@@ -1,6 +1,6 @@
 ---
 name: cuda-elementwise-bandwidth-roofline
-description: 量一个网络里逐元素/访存受限 CUDA kernel 花了多少时间、离带宽上限还有多远，以及怎么和真 PyTorch 做同口径对比。用于任务 3.23 这类「某类 kernel 只跑到峰值一半」的性能结论、改融合逐元素代码生成之后要出 before/after、或者要判断一个 kernel 到底是访存受限还是别的原因。含屋顶线怎么量、Jittor profiler 的两个会让数字差两倍的坑、nsys 与 profiler 怎么互校、以及角色分类的口径。
+description: 量一个网络里逐元素/访存受限 CUDA kernel 花了多少时间、离带宽上限还有多远，以及怎么和真 PyTorch 做同口径对比。用于「某类 kernel 只跑到峰值一半」这类性能结论、改融合逐元素代码生成之后要出 before/after、或者要判断一个 kernel 到底是访存受限还是别的原因。含屋顶线怎么量、Jittor profiler 的两个会让数字差两倍的坑、nsys 与 profiler 怎么互校、以及角色分类的口径。
 ---
 
 # 逐元素 kernel 的带宽与屋顶线怎么量
@@ -285,17 +285,17 @@ H20 的访存快了四倍，于是**先到的瓶颈不再是访存，而是发�
 | 来源 | 代价 | 归属 |
 | --- | ---: | --- |
 | **float64 标量除法**（两族 kernel，593 / 397 GB/s） | 0.55 ms | torch shim，见下 |
-| 裸 `transpose`（565 GB/s，写合并读不合并） | 0.10 ms | `src/ops/transpose_op.cc` |
+| 裸 `transpose`（565 GB/s，写合并读不合并） | 0.10 ms | `src/ops/composite/transpose_op.cc` |
 | 一堆几乎不搬数据的小 kernel（约 60 次、每次约 1.6 µs） | 0.23 ms | 纯 launch 延迟，改不动 |
 
-**float64 那条值得单独记**：`compat/torch/installers/tensor.py`
-的 `_make_truediv` 对「float32 张量 ÷ Python float」**故意加宽到 float64**
+**float64 那条值得单独记**：`compat/torch/installers/tensor/method_api.py`
+的真除法路径（`use_wide`）对「float32 张量 ÷ Python float」**故意加宽到 float64**
 （注释说是为 1-ulp 对齐 PyTorch）。sm_89 的 FP64 是 FP32 的 1/64，
 于是 diffusers `ResnetBlock2D` 那句 `(input + hidden) / self.output_scale_factor`
 （`output_scale_factor` 默认就是 `1.0`）在整张特征图上跑双精度除法。
 把 `use_wide` 临时改成 `False` 实测：逐元素类 **3.29 ms → 2.73 ms**（−16.8%），
-整步 22.03 → 21.29 ms。这条改动由兼容层分区决定（有 bit-exact 用例钉着它，
-`compat/tests/torch/test_torch_compat_promotion.py`），不要顺手改。
+整步 22.03 → 21.29 ms。这条改动由兼容层决定（有 bit-exact 用例钉着它，
+`compat/tests/torch/test_torch_compat_promotion.py`；待决事项见 KI-COMPAT-009），不要顺手改。
 
 **判据：看到某个融合 kernel 的带宽只有同类的一半，先去生成的 `.cc` 里搜 `float64`。**
 路径就在 profiler 报告的 `FileName` 列里。
@@ -325,7 +325,7 @@ before/after 必须是**同一个脚本、同一台卡、同一个 `--tag` 之�
 - 每一轮换一个只进 jit key、不进生成文本的标记，否则第二轮直接命中缓存里第一轮的
   `.cc`，diff 全绿而你什么都没测到（见 `jittor-core-cpp-edit-loop` §7）。
   **注意 `--flag` 未必够**：`jt.flags` 里只有一部分进 jit key，`para_opt_level`
-  就不进（key 里的 `«choices:` 段只收 `loop_options`，见 `fused_op.cc` 的
+  就不进（key 里的 `«choices:` 段只收 `loop_options`，见 `src/core/fused_op.cc` 的
   `do_jit_prepare`）。改这类 flag 要同时给 `--compile-option name=int`，
   否则第二轮量到的是第一轮的 kernel，而且完全没有提示。
 - 生成源码的逐字节 diff 与 profiler 数字一起放进提交说明。

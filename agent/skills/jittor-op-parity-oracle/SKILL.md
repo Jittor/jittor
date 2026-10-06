@@ -17,8 +17,8 @@ description: 给 Jittor 的 Python 层算子做数值对拍（correctness oracle
 > **允许编译器假设 NaN 和 Inf 不存在**，于是 `x != x`、`x >= 0 || x <= 0`、
 > `|x| == inf` 这些写法可以被直接折叠成常量。
 >
-> **现状（2026-09-11）**：CPU 融合内核**已经不带** `-Ofast` 了——KI-BACKEND-005 把
-> `compiler.py` 的 `kernel_opt_flags` 换成了 `-O3`（提交 `1e50d76c5`），
+> **现状（2026-09-11）**：CPU 融合内核**已经不带** `-Ofast` 了——提交 `1e50d76c5` 把
+> `python/jittor/build/compiler.py` 的 `kernel_opt_flags` 换成了 `-O3`，
 > `tests/structure/codegen/test_kernel_math_flags.py` 盯着这件事。**CUDA 仍然带
 > `--use_fast_math`**（`compiler.py` 的 `nvcc_flags`，可用
 > `jt.flags.cuda_kernel_math = "strict"` 按进程关掉）。
@@ -237,7 +237,7 @@ pool→unpool、argmax→scatter 这类算子，索引是一个**扁平下标**�
 
 ## 7. `reindex` 与 `reindex_reduce` 里 `xshape`/`yshape` 的方向是反的
 
-这是最容易改错方向的地方，实测结论（见 `python/jittor/src/ops/*.cc`）：
+这是最容易改错方向的地方，实测结论（见 `src/ops/reindex_op.cc`、`src/ops/reindex_reduce_op.cc`）：
 
 | op | `xshape*` | `yshape*` | 迭代变量 `i0..iN` 走的是 |
 |---|---|---|---|
@@ -255,8 +255,8 @@ for name in ("xshape1", "yshape1"):
 
 ## 7.5 `use_cuda` 打开时，`jt.numpy_code` 里的 `np` **不是 numpy，是 cupy**
 
-`pyjt/py_converter.h` 在 `use_cuda` 为真时 import 的是 `cupy`，并通过
-`init_cupy.numpy2cupy` 把 `data` 里的每个数组换成 `cupy.ndarray`。所以回调里的
+`src/bindings/pyjt/py_converter.h` 在 `use_cuda` 为真时 import 的是 `cupy`，并通过
+`python/jittor/build/init_cupy.py` 的 `numpy2cupy` 把 `data` 里的每个数组换成 `cupy.ndarray`。所以回调里的
 `np.linalg.*`、`np.einsum`、`np.copyto` 全都是 cupy 的实现。影响到**所有**
 `numpy_code` 算子（linalg 全家、cumsum 的 CPU 路径、gamma 采样……）：
 
@@ -304,7 +304,7 @@ for name in ("xshape1", "yshape1"):
 后者要同步更新快照并在旁边写清楚为什么变。别把它当成回归就把改动撤回去。
 
 同类还有：`test_package_import_direction` 这种"实现模块只准 `import jittor`"的规则，
-所以别在 `jittor/pool/*.py` 里随手 `import numpy`——纯 Python 算得出来就纯 Python 算。
+所以别在 `python/jittor/pool/*.py` 里随手 `import numpy`——纯 Python 算得出来就纯 Python 算。
 
 ### 9.2 已知差异要用"锁"钉住，不要留白
 
@@ -425,7 +425,7 @@ finally:
 ⚠ **`jt.in_mpi` / `jt.rank` / `jt.world_size` 必须写 `jt.compile_extern.*`，不能写 `jt.*`。**
 它们由 `compile_extern.distributed_state_getattr` 通过模块级 `__getattr__` 提供；给
 `jt.in_mpi` 赋值会在 `jittor.__dict__` 里留下一个条目，**永久遮蔽那个访问器**，
-后面所有读到的都是这个陈旧副本（6.B15 的提交说明写明了这一点）。
+后面所有读到的都是这个陈旧副本（`python/jittor/__init__.py` 的注释写明了这一点）。
 
 
 ## 14. 「某个后端上这个算子是错的」——别信注释里的原因，自己按 dtype 扫一遍
@@ -490,7 +490,7 @@ for dtype in ("int8","int32","int64","float16","float32","float64"):
 
 | | 默认旗标 | 谁盯着 |
 | --- | --- | --- |
-| CPU 融合内核 | `-O3`（KI-BACKEND-005 之前是 `-Ofast`） | `tests/structure/codegen/test_kernel_math_flags.py` 读构建落定的 `cc_flags`；`tests/ops/test_ieee_arithmetic.py` 测行为 |
+| CPU 融合内核 | `-O3`（2026-09-10 之前是 `-Ofast`） | `tests/structure/codegen/test_kernel_math_flags.py` 读构建落定的 `cc_flags`；`tests/ops/test_ieee_arithmetic.py` 测行为 |
 | CUDA JIT | 仍带 `--use_fast_math`（`compiler.py` 的 `nvcc_flags`） | `jt.flags.cuda_kernel_math = "strict"` 可按进程去掉；`tests/backends/parity/test_subnormal_contract.py` 钉住默认档与 strict 的差别 |
 
 所以：

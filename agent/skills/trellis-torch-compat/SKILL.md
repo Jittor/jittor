@@ -1,6 +1,6 @@
 ---
 name: trellis-torch-compat
-description: 在 Jittor torch shim 与独立 PyTorch 上运行和验证 TRELLIS.2 3D 生成 pipeline（含 CuMesh/FlexGEMM/nvdiffrast/o-voxel/FlashAttention 四个真实 CUDA 扩展）的 runbook，含断点分流、PLY mesh 数值对拍、重复交错速度协议与假绿清单。用于复验 TRELLIS 接入或推进其尚未通过的性能门禁。本 skill 为报告派生，未在本机复验。
+description: 在 Jittor torch shim 与独立 PyTorch 上运行和验证 TRELLIS.2 3D 生成 pipeline（含 CuMesh/FlexGEMM/nvdiffrast/o-voxel/FlashAttention 四个真实 CUDA 扩展）的 runbook，含断点分流、PLY mesh 数值对拍、重复交错速度协议与假绿清单。用于复验 TRELLIS 接入或推进其尚未通过的性能门禁。本 skill 为报告派生，未复验。
 ---
 
 # TRELLIS.2 的 shim ⇄ 原生 torch 对拍
@@ -10,8 +10,8 @@ description: 在 Jittor torch shim 与独立 PyTorch 上运行和验证 TRELLIS.
 回答 TRELLIS.2 4B 在 shim 上怎么跑、原生 PyTorch 上怎么跑、怎么对拍几何输出与速度，以及
 断点归 jittor 核心 / `jittor.compat.torch` / `jittor-trellis` adapter 哪一层。
 
-**不覆盖，也不夸大**：本机没有 TRELLIS checkout、`jittor-trellis` adapter 或 harness，
-两个 venv 都未安装 trellis（已实测）。本 skill **是报告派生的，未在本机复验**。
+**不覆盖，也不夸大**：验证环境没有 TRELLIS checkout、`jittor-trellis` adapter 或 harness，
+两个 venv 都未安装 trellis（已实测）。本 skill **是报告派生的，未复验**。
 TRELLIS 的性能门禁**仍然开放**：报告里 Jittor 比真实 PyTorch 慢 `1.0926x`，不能声称达标；
 也不宣称反向数值一致（它是 inference pipeline）或 NPU/ROCm 支持。
 
@@ -23,7 +23,7 @@ TRELLIS 的性能门禁**仍然开放**：报告里 Jittor 比真实 PyTorch 慢
 | oracle | 真实 PyTorch `2.12.1`，同机 | TRELLIS 参考 `transformers 4.56.2` |
 
 实测：`trellis` / `jittor_trellis` 在两个 venv 中均 **NOT INSTALLED**；
-`/root/jittor-lab/` 下无 `trellis*`，`_state/` 下无 `trellis-current`；
+`$JITTOR_LAB_ROOT/` 下无 `trellis*`，`_state/` 下无 `trellis-current`；
 `grep` 全仓无 trellis harness/case（只有报告与文档提及）。
 版本身份（报告）：TRELLIS.2 checkout `75fbf0183001ed9876c8dbb35de6b68552ee08bd`，
 `jittor-trellis` adapter `f2c23acdf2402abcf04222a4866fc87451efe959`；
@@ -43,7 +43,7 @@ TRANSFORMERS_OFFLINE=1`。双解释器 harness 契约见
 
 ## 在 shim 上跑
 
-本机**没有可运行入口**。报告里的运行方式（验收机、未版本化）：
+验证环境**没有可运行入口**。报告里的运行方式（验收机、未版本化）：
 
 - 用当前 source checkout + adapter `src/` + 本地 checkpoint + offline 模型资产 + 隔离的
   extension/JIT cache + 一张可见 GPU。
@@ -63,7 +63,7 @@ TRANSFORMERS_OFFLINE=1`。双解释器 harness 契约见
 报告用同机真实 PyTorch `2.12.1` 跑同一 pipeline，独立进程，每进程 1 次 warmup + 3 次测量。
 结果 JSON 的 SHA-256 为
 `a9e9a5d8d8f575d3e0c36e21e9d98957ed5011a4994dc83ec7d6f02adecd6154`。
-本机不可复现（无 checkout、无 GPU、无安装）。
+验证环境不可复现（无 checkout、无 GPU、无安装）。
 
 ## 对拍
 
@@ -110,22 +110,22 @@ cross-KV cache、C2S topology cache；历史 cublasLt/GELU/RoPE 实验在负结�
    扩展，必须从隔离状态加载并记录运行时选择的 backend（`flash_attn`、`flex_gemm`、sm_89…），
    否则是在比较不同后端。
 5. **adapter 未版本化**：报告里的 `jittor-trellis` 与脚本是验收机产物，SHA 只用于身份，
-   不要照抄路径当本机命令。
-6. **本 skill 的所有数字都不可复现于本机**——当复验指引读，不要当"已验证"。
+   不要照抄路径当可运行命令。
+6. **本 skill 的所有数字都不可复现**——当复验指引读，不要当"已验证"。
 
 ## 证据
 
 - 报告：`2026-08-23-verl-vllm-trellis-current-baseline.md`（已退役报告，Git 历史 `e3c369acb` 可查）。
 - 状态索引：[`project-context.md`](../../manuals/project-context.md)（TRELLIS.2 约 `1.20x` → `1.093x`，
   性能门禁仍开放）。
-- **本机已核实**：`CASES` 无 trellis；`/root/jittor-lab/` 与 `_state/` 下无 trellis checkout；
+- **已核实**：`CASES` 无 trellis；`$JITTOR_LAB_ROOT/` 与 `_state/` 下无 trellis checkout；
   两个 venv 均未安装 trellis。
-- **仅报告 / 未在本机复验**：全部数值、速度、命令、扩展加载与 mesh 比较。
+- **仅报告 / 未复验**：全部数值、速度、命令、扩展加载与 mesh 比较。
 
 ## 实测（2026-09-19）
 
-仓库 HEAD `90fe0b9`。**本机环境缺席**：`find_spec('trellis')`/`find_spec('jittor_trellis')`
-在 `venv-jittor` 与 `venv-oracle-cu129` 都为 False；`/root/jittor-lab/` 与 `_state/` 下无
+仓库 HEAD `90fe0b9`。**验证环境缺席**：`find_spec('trellis')`/`find_spec('jittor_trellis')`
+在 shim 与 oracle 两个解释器里都为 False；`$JITTOR_LAB_ROOT/` 与 `_state/` 下无
 `trellis*` checkout；`CASES` 无 trellis；`verify_repo.py --repo trellis --list-only` 无输出。
 因此**未跑任何命令**，也未加载四个 CUDA 扩展。
 
@@ -141,8 +141,8 @@ checkout `75fbf018...`、adapter `f2c23acd...`。
 **不能核对**：任何可运行命令、运行时后端选择（`flash_attn`/`flex_gemm`/sm_89）、PLY 比较、
 计时与两个 SHA-256 的产物。
 
-**四轴**：全部未测——支持的 case、精度、显存、速度在本机都没有可运行载体；性能门禁
-`1.0926x` 仍开放，本机不能声称达标或复现。
+**四轴**：全部未测——支持的 case、精度、显存、速度在验证环境都没有可运行载体；性能门禁
+`1.0926x` 仍开放，验证环境不能声称达标或复现。
 
 **证据状态**：**报告派生**（report-derived）。报告存在且内容与 skill 一致这一点已核对；
-数值/速度本身未在本机复现。
+数值/速度本身未复现。

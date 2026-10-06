@@ -21,28 +21,28 @@ description: 在 Jittor 的 torch shim 上运行 TensorDict 并与 numpy/torch �
 
 ## 两侧环境
 
-本机（`/root/jittor-lab`）已实测：
+已实测：
 
 | 侧 | 解释器 | 关键事实 |
 | --- | --- | --- |
-| shim | `/root/jittor-lab/_state/h3/venv-jittor/bin/python` | py3.12.12；jittor 1.3.11.0；`import torch` → shim；`jittor-torch-adapters` 1.3.11.0 已装；transformers 5.5.3 |
-| 原生 torch | `/root/jittor-lab/_state/h3/venv-oracle-cu129/bin/python` | py3.12.12；torch 2.13.0+cu129；无 jittor |
+| shim | `<jittor-python>` | py3.12.12；jittor 1.3.11.0；`import torch` → shim；`jittor-torch-adapters` 1.3.11.0 已装；transformers 5.5.3 |
+| 原生 torch | `<real-torch-python>` | py3.12.12；torch 2.13.0+cu129；无 jittor |
 
-先 `source /root/jittor-lab/minimax-h3/env-jittor.sh`（原生
-`env-oracle-cu129.sh`）：导出 `JITTOR_TORCH_SHIM=1`、缓存收进
+先激活 shim 侧 env 脚本（本地、不入库的 lab 脚本，如 `$JITTOR_LAB_ROOT/<topic>/env-jittor.sh`；原生侧
+对应 `env-oracle.sh`）：导出 `JITTOR_TORCH_SHIM=1`、缓存收进
 `$JITTOR_LAB_ROOT/_state/h3/run`、离线标志，并设
-`JT_BUILD_PYTHON_CONFIG_PATH=/opt/python3.12/bin/python3.12-config`——**不设它
+`JT_BUILD_PYTHON_CONFIG_PATH=<base-python-prefix>/bin/python3.12-config`——**不设它
 `import jittor` 直接 `RuntimeError: python3.12-config not found`**（实测）。
 
 **看任何数字前先过 oracle 断言**：
 
 ```bash
-/root/jittor-lab/_state/h3/venv-oracle-cu129/bin/python -c \
+<real-torch-python> -c \
   "import torch; assert not hasattr(torch,'_torch_compat_install_context'), 'oracle 是 shim'; print('oracle', torch.__version__)"
-# 本机实测：oracle 2.13.0+cu129
+# 实测：oracle 2.13.0+cu129
 ```
 
-**本机 tensordict 两侧都未安装**（`PackageNotFoundError`，`find_spec('tensordict')`
+**验证环境里 tensordict 两侧都未安装**（`PackageNotFoundError`，`find_spec('tensordict')`
 为 False）。补上之前本 skill 的任何 tensordict 数字都是未验证。
 
 ## 在 shim 上跑
@@ -51,10 +51,10 @@ description: 在 Jittor 的 torch shim 上运行 TensorDict 并与 numpy/torch �
 `REAL_TORCH_PYTHON`：
 
 ```bash
-set -a; source /root/jittor-lab/minimax-h3/env-jittor.sh >/dev/null 2>&1; set +a
+# 已激活 shim 侧环境（本地 env 脚本，不入库）
 unset PYTHONPATH
-cd /apdcephfs_private/qy/projects/zy/jittor
-"$VENV/bin/python" -m pytest -q compat/tests/torch/test_tensordict_compat.py
+cd <repo-root>
+<jittor-python> -m pytest -q compat/tests/torch/test_tensordict_compat.py
 ```
 
 覆盖三组：`test_cpu_conversion_uses_device_objects`（`torch._C._nn._parse_to("cpu")`
@@ -63,12 +63,12 @@ cd /apdcephfs_private/qy/projects/zy/jittor
 `TensorDictBase._jittor_index_compat` 为真）。
 
 **环境怎么来**：`nox -s optional` 不装包，要求预置 `OPTIONAL_COMPAT_PACKAGES`
-（`noxfile.py:234`），缺一个就 fail-closed。补齐办法（**本机未执行**）：装
+（`noxfile.py:234`），缺一个就 fail-closed。补齐办法（**未执行**）：装
 **tensordict==0.10.0**（报告里的版本）到 shim 解释器；并设
 `JITTOR_REQUIRE_OPTIONAL_DEPS=1` 让缺包变成失败而非 skip。
 
 ```bash
-# 维护者真机 CUDA 档（需 nvcc + 预置包），本机未验证
+# 维护者真机 CUDA 档（需 nvcc + 预置包），未验证
 python -m nox -s optional -- compat/tests/torch/test_tensordict_compat.py
 ```
 
@@ -95,7 +95,7 @@ assert torch.equal(d["value"].cpu(), expected)
   因此**没有**同权重-同输入的双解释器结构保证。
 - **速度**：**没有** speed case，也没有 ratio。速度只能自行按
   `../jittor-torch-diff/SKILL.md` 的协议单独量。
-- **device 规则**：Jittor 没有 per-tensor device，本机 `import jittor` 直接 `CUDA enabled`
+- **device 规则**：Jittor 没有 per-tensor device，验证环境 `import jittor` 直接 `CUDA enabled`
   （实测）。该测试自己用 `jt.flag_scope(use_cuda=1)` 包住 CUDA 段；若机器没有 CUDA，整个
   文件会 skip。要 CPU 档必须显式关 `use_cuda`，不能靠「不请求」。
 
@@ -115,7 +115,7 @@ TensorDict 的 index 兼容补丁**住在 `jittor.compat.torch`（第二行）�
 ## 坑与假绿
 
 - **两重 skip 掩盖一切**：文件同时 `skipUnless(_HAS_TENSORDICT)` 与
-  `skipUnless(check_accelerator('cuda'))`。本机缺 tensordict，`0 passed, N skipped`
+  `skipUnless(check_accelerator('cuda'))`。验证环境缺 tensordict，`0 passed, N skipped`
   看起来和通过一样。必须配 `JITTOR_REQUIRE_OPTIONAL_DEPS=1`，并在 CUDA 机器上跑，才算验证。
 - **patch 幂等标记不是 patch 生效的证据**：`_jittor_index_compat` 只是「已安装过」的守卫。
   真正的行为断言是测试里的 `selected`/`masked`/`lazy_selected` 数组比较。
@@ -126,11 +126,11 @@ TensorDict 的 index 兼容补丁**住在 `jittor.compat.torch`（第二行）�
 
 ## 证据
 
-- **本机已实测**：两侧均无 tensordict；shim venv 的 `jittor-torch-adapters` 1.3.11.0 已装；
+- **已实测**：两侧均无 tensordict；shim venv 的 `jittor-torch-adapters` 1.3.11.0 已装；
   oracle 断言 `oracle 2.13.0+cu129`；无 `env-jittor.sh` 时 `import jittor` 报
   `python3.12-config not found`；读代码确认 `_jittor_index_compat` 由
   `compat/torch/installers/autograd.py` 安装、`adapters/` 下无 tensordict adapter。
-- **未在本机验证**：tensordict 的安装、`test_tensordict_compat.py` 的任何 pass/fail、
+- **未验证**：tensordict 的安装、`test_tensordict_compat.py` 的任何 pass/fail、
   `nox -s optional` 的 CUDA 结果。
 - 维护者报告：`2026-08-24-optional-compat-cuda-gate.md`（已退役报告，Git 历史 `e3c369acb` 可查）
   （TensorDict 0.10.0；「TensorDict 与 FlashAttention 新增真实行为模块：
@@ -139,8 +139,8 @@ TensorDict 的 index 兼容补丁**住在 `jittor.compat.torch`（第二行）�
 
 ## 实测（2026-09-19）
 
-环境：仓库 HEAD `90fe0b9`；GPU 5；oracle 断言 `2.13.0+cu129`。包站点
-`/root/jittor-lab/_state/verify-misc/site` 用 `pip install --target ... --no-deps`
+环境：仓库 HEAD `90fe0b9`；单卡 CUDA；oracle 断言 `2.13.0+cu129`。包站点
+`$JITTOR_LAB_ROOT/_state/verify-misc/site` 用 `pip install --target ... --no-deps`
 锁定 `tensordict==0.10.0`（另补 `pyvers/orjson`，**不装 torch**）。
 
 **case 清单**：`verify_repo.py --repo tensordict --list-only` **无任何输出**
@@ -160,7 +160,7 @@ File ".../site/tensordict/nn/distributions/truncated_normal.py", line 33
 AttributeError: module 'torch.distributions.constraints' has no attribute 'real'
 ```
 
-根因是本机 shim 的 `torch.distributions.constraints` 是空模块：
+根因是验证环境 shim 的 `torch.distributions.constraints` 是空模块：
 `import jittor; import torch; import torch.distributions.constraints as c` 后
 `hasattr(c,'real') == False`，`dir(c)` 连 `positive` 等一个约束都没有。tensordict 0.10.0 的
 `__init__` 会导入 `tensordict.nn`，因此整个包都起不来。
@@ -169,5 +169,5 @@ AttributeError: module 'torch.distributions.constraints' has no attribute 'real'
 精度/显存/速度——均未测。
 
 **证据状态**：仅安装可验证（0.10.0 已就位），**测试未能运行**。报告里的
-「`5 passed in 11.31s`」在本机**未复现**；本机的阻断点在
+「`5 passed in 11.31s`」**未复现**；验证环境的阻断点在
 `torch.distributions.constraints` 为空，与本 skill 正文列出的断点无关。

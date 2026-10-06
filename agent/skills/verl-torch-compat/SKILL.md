@@ -1,6 +1,6 @@
 ---
 name: verl-torch-compat
-description: 在 Jittor torch shim 与独立 PyTorch/torch_npu 上运行和验证 verl（PPO 核心算法、FSDP2 训练、权重传输）的 runbook，含断点分流、对拍协议与假绿清单。用于复验 verl 接入、定位 verl 在 shim 上的 clamp/autograd/version-identity/分布式断点，或重建 verl 对拍环境。本 skill 为报告派生，未在本机复验。
+description: 在 Jittor torch shim 与独立 PyTorch/torch_npu 上运行和验证 verl（PPO 核心算法、FSDP2 训练、权重传输）的 runbook，含断点分流、对拍协议与假绿清单。用于复验 verl 接入、定位 verl 在 shim 上的 clamp/autograd/version-identity/分布式断点，或重建 verl 对拍环境。本 skill 为报告派生，未复验。
 ---
 
 # verl 的 shim ⇄ 原生 torch 对拍
@@ -10,17 +10,17 @@ description: 在 Jittor torch shim 与独立 PyTorch/torch_npu 上运行和验�
 回答 verl 在 shim 上怎么跑、原生 PyTorch / `torch_npu` 上怎么跑、怎么对拍数值与速度，
 以及断点归 jittor 核心 / `jittor.compat.torch` / adapter 哪一层。
 
-**不覆盖，也不夸大**：本机（当前 checkout）**没有** verl 的 in-repo case 或 harness，
-`/root/jittor-lab/verl_jittor/` 也不存在，两个 venv 都没有安装 verl（均已 grep / 实测）。
-因此本 skill **是报告派生的，未在本机复验**；命令与数字都应回到报告核对，不要当成
-本机可跑的已验证结论。完整安装、Ray worker、rollout、1-step PPO、NPU/ROCm 均由报告
+**不覆盖，也不夸大**：验证环境（当前 checkout）**没有** verl 的 in-repo case 或 harness，
+`$JITTOR_LAB_ROOT/verl_jittor/` 也不存在，两个 venv 都没有安装 verl（均已 grep / 实测）。
+因此本 skill **是报告派生的，未复验**；命令与数字都应回到报告核对，不要当成
+验证环境可跑的已验证结论。完整安装、Ray worker、rollout、1-step PPO、NPU/ROCm 均由报告
 分别限定，不要跨报告外推。
 
 ## 两侧环境
 
 | 角色 | 解释器 / 入口 | 说明 |
 | --- | --- | --- |
-| shim | `/root/jittor-lab/_state/h3/venv-jittor/bin/python`，`source /root/jittor-lab/minimax-h3/env-jittor.sh` | 本机有该 shim 环境，但**没有** verl 源码/安装 |
+| shim | `<jittor-python>`（本地 env 脚本激活，不入库） | 验证环境有该 shim 环境，但**没有** verl 源码/安装 |
 | oracle（CUDA） | 报告：真实 RTX 4090（单机最多 4 张）+ Jittor `566d8087`/`40e7df7d` | verl `3d66a3d7ca1cf783df949816ec6862d5a7af9406` |
 | oracle（NPU） | 报告：Ascend 910B3 + `torch_npu`，Jittor `97dc6ce9`（源码行为 `3758c4ab`） | 单卡串行对照 |
 
@@ -44,7 +44,7 @@ description: 在 Jittor torch shim 与独立 PyTorch/torch_npu 上运行和验�
 
 ## 在 shim 上跑
 
-本机**没有可运行入口**。报告里的入口（均在验收机、未版本化）：
+验证环境**没有可运行入口**。报告里的入口（均在验收机、未版本化）：
 
 - `$JITTOR_LAB_ROOT/verl_jittor/scripts/run_all.sh`：14 个 stage，依次
   `py_compile import_scan ppo_config_smoke protocol_smoke protocol_extended_smoke
@@ -53,7 +53,7 @@ description: 在 Jittor torch shim 与独立 PyTorch/torch_npu 上运行和验�
   core_algos_parity_cuda cuda_sanity`；`--cpu-only` 时跳过 CUDA。
 - `scripts/weight_transfer_smoke.py`、`scripts/vllm_weight_apply_smoke.py`
   （设 `VERL_VLLM_MODEL` 时由 `run_all.sh` 追加）、`scripts/ray_weight_transfer_smoke.py`。
-- 原生分布式 PPO 门禁：`CUDA_VISIBLE_DEVICES=2,3 python -m nox -s nccl`，
+- 原生分布式 PPO 门禁：`CUDA_VISIBLE_DEVICES=<gpu0>,<gpu1> python -m nox -s nccl`，
   四卡用 `JITTOR_NCCL_WORLD_SIZE=4`。
 
 重建流程按 [`downstream-library-adaptation`](../downstream-library-adaptation/SKILL.md)：
@@ -62,9 +62,9 @@ description: 在 Jittor torch shim 与独立 PyTorch/torch_npu 上运行和验�
 ## 在原生 torch 上跑
 
 报告的原生参考是同一张 910B3 上的 `torch_npu`（NPU 报告）或真实 PyTorch CUDA（PPO 报告），
-都在验收机上，本机不可复现。PPO harness 的 Hydra 配置与 Ray worker 日志保存在
+都在验收机上，验证环境不可复现。PPO harness 的 Hydra 配置与 Ray worker 日志保存在
 `$JITTOR_LAB_ROOT/_state/verl-ppo/` 与 `_state/verl-fsdp2/` 下（报告给出各 SHA-256），
-本机不存在这些目录。
+验证环境不存在这些目录。
 
 ## 对拍
 
@@ -108,7 +108,7 @@ description: 在 Jittor torch shim 与独立 PyTorch/torch_npu 上运行和验�
    `transfer_queue`、TorchTitan 三种明确缺环境，其余缺失算失败。
 6. **假绿**：只看 `training/global_step=1` 不够，要同时看 actor/critic grad norm 非空、rollout
    与训练概率差门禁、权重同步真的发生；否则可能是一个未被使用的参数表被更新。
-7. **本 skill 的所有数字都不可复现于本机**——当复验指引读，不要当"已验证"。
+7. **本 skill 的所有数字都不可复现**——当复验指引读，不要当"已验证"。
 
 ## 证据
 
@@ -116,14 +116,14 @@ description: 在 Jittor torch shim 与独立 PyTorch/torch_npu 上运行和验�
   `2026-08-24-verl-weight-transfer.md`（CUDA PPO/权重传输）与
   `2026-08-23-verl-vllm-trellis-current-baseline.md`（当前基线）两份已退役，Git 历史 `e3c369acb` 可查。
 - 状态索引：[`project-context.md`](../../manuals/project-context.md) 第 105–110 行。
-- **本机已核实**：`CASES` 无 verl；`/root/jittor-lab/` 下无 `verl_jittor`；两个 venv 均未安装
+- **已核实**：`CASES` 无 verl；`$JITTOR_LAB_ROOT/` 下无 `verl_jittor`；两个 venv 均未安装
   verl。
-- **仅报告 / 未在本机复验**：全部数值、速度、命令与分布式门禁。
+- **仅报告 / 未复验**：全部数值、速度、命令与分布式门禁。
 
 ## 实测（2026-09-19）
 
-仓库 HEAD `90fe0b9`。**本机环境缺席**：`find_spec('verl')` 在
-`venv-jittor` 与 `venv-oracle-cu129` 都为 False；`/root/jittor-lab/verl_jittor` 不存在；
+仓库 HEAD `90fe0b9`。**验证环境缺席**：`find_spec('verl')` 在
+shim 与 oracle 两个解释器里都为 False；`$JITTOR_LAB_ROOT/verl_jittor` 不存在；
 `_ecosystem_cases.py` 的 `CASES` 无 verl；`verify_repo.py --repo verl --list-only`
 无输出。因此**没有可运行入口，未跑任何命令**（未安装、未训练、未起 Ray worker）。
 
@@ -142,9 +142,9 @@ description: 在 Jittor torch shim 与独立 PyTorch/torch_npu 上运行和验�
   GPG 过 NPU 微性能协议」的表述。
 
 **不能核对**：所有命令的可执行性、任何数值/速度/分布式门禁、Hydra 配置与 Ray 日志
-（报告给出的 `_state/verl-ppo/`、`_state/verl-fsdp2/` 在本机不存在）。
+（报告给出的 `_state/verl-ppo/`、`_state/verl-fsdp2/` 在验证环境不存在）。
 
-**四轴**：全部未测——支持的 case、精度、显存、速度在本机都没有可运行载体。
+**四轴**：全部未测——支持的 case、精度、显存、速度在验证环境都没有可运行载体。
 
 **证据状态**：**报告派生**（report-derived）。报告文件存在且内容与 skill 一致这一点已核对；
-数值本身未在本机复现。
+数值本身未复现。

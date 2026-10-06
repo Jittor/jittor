@@ -18,19 +18,19 @@ description: 在 Jittor 的 torch shim 与原生 PyTorch 两侧运行并对比 P
 
 ## 两侧环境
 
-本机（`/root/jittor-lab`）已实测：
+已实测：
 
 | 侧 | 解释器 | 关键事实（`importlib.metadata` / import 探针） |
 | --- | --- | --- |
-| shim | `/root/jittor-lab/_state/h3/venv-jittor/bin/python` | py3.12.12；`jittor` 1.3.11.0；`import torch` → shim（`hasattr(torch,'_torch_compat_install_context')` 为 True）；transformers 5.5.3、safetensors 0.8.0、accelerate 1.15.0、numpy 2.3.5、`jittor-torch-adapters` 1.3.11.0 |
-| 原生 torch | `/root/jittor-lab/_state/h3/venv-oracle-cu129/bin/python` | py3.12.12；torch 2.13.0+cu129；transformers 5.5.3、numpy 2.3.5；无 jittor |
+| shim | `<jittor-python>` | py3.12.12；`jittor` 1.3.11.0；`import torch` → shim（`hasattr(torch,'_torch_compat_install_context')` 为 True）；transformers 5.5.3、safetensors 0.8.0、accelerate 1.15.0、numpy 2.3.5、`jittor-torch-adapters` 1.3.11.0 |
+| 原生 torch | `<real-torch-python>` | py3.12.12；torch 2.13.0+cu129；transformers 5.5.3、numpy 2.3.5；无 jittor |
 
-先 `source /root/jittor-lab/minimax-h3/env-jittor.sh`（原生侧对应
-`env-oracle-cu129.sh`）：
+先激活 shim 侧 env 脚本（本地、不入库的 lab 脚本，如 `$JITTOR_LAB_ROOT/<topic>/env-jittor.sh`；原生侧
+对应 `env-oracle.sh`）：
 
 - 导出 `JITTOR_TORCH_SHIM=1`，并把 `JITTOR_HOME`/`TMPDIR`/`XDG_CACHE_HOME` 收进
   `$JITTOR_LAB_ROOT/_state/h3/run`，JIT 缓存隔离；
-- 设 `JT_BUILD_PYTHON_CONFIG_PATH=/opt/python3.12/bin/python3.12-config`——**不设它
+- 设 `JT_BUILD_PYTHON_CONFIG_PATH=<base-python-prefix>/bin/python3.12-config`——**不设它
   `import jittor` 直接 `RuntimeError: python3.12-config not found`**（实测）；
 - 导出 `HF_HUB_OFFLINE=1`、`TRANSFORMERS_OFFLINE=1`。
 
@@ -41,26 +41,26 @@ description: 在 Jittor 的 torch shim 与原生 PyTorch 两侧运行并对比 P
 **看任何数字前先过 oracle 断言**（`noxfile.py` 的 `ecosystem` session 起手也做同一件事）：
 
 ```bash
-/root/jittor-lab/_state/h3/venv-oracle-cu129/bin/python -c \
+<real-torch-python> -c \
   "import torch; assert not hasattr(torch,'_torch_compat_install_context'), 'oracle 是 shim'; print('oracle', torch.__version__)"
-# 本机实测：oracle 2.13.0+cu129
+# 实测：oracle 2.13.0+cu129
 ```
 
 shim 身份同法可查（实测 `torch True`，即 torch 名、对象属 jittor 前端）：
 
 ```bash
-source /root/jittor-lab/minimax-h3/env-jittor.sh
-"$VENV/bin/python" -c "import jittor, torch; print(torch.__name__, hasattr(torch,'_torch_compat_install_context'))"
+# 已激活 shim 侧环境（本地 env 脚本，不入库）
+<jittor-python> -c "import jittor, torch; print(torch.__name__, hasattr(torch,'_torch_compat_install_context'))"
 ```
 
-**本机 peft 未安装**：shim 与 oracle 两侧 `importlib.metadata.version('peft')` 都是
+**验证环境里 peft 未安装**：shim 与 oracle 两侧 `importlib.metadata.version('peft')` 都是
 `PackageNotFoundError`，`find_spec('peft')` 为 False。补上之前，任何 peft 数字都是未验证。
 
 ## 在 shim 上跑
 
 环境契约是 ecosystem 门禁把下游库放在 `JITTOR_ECOSYSTEM_PACKAGE_SITE` 指向的
 site-packages 里（以 `../../../compat/tests/torch/_ecosystem_harness.py` 模块 docstring
-为准）。本机两侧同 py3.12，一个共享 site 即可。构建办法（**本机未执行**，按契约给出）：
+为准）。两侧同 py3.12，一个共享 site 即可。构建办法（**未执行**，按契约给出）：
 建空目录 `<site>`，`pip install --target <site> peft==0.17.1`（0.17.1 是
 已退役报告 `2026-08-24-optional-compat-cuda-gate.md` 验证过的版本，Git 历史 `e3c369acb` 可查），并保证两侧
 transformers 等依赖版本一致（harness 会断言依赖版本相同）。**不要**把新库 `pip install`
@@ -69,26 +69,26 @@ transformers 等依赖版本一致（harness 会断言依赖版本相同）。**
 跑单条 case（pytest 必须在 shim 解释器里起）：
 
 ```bash
-set -a; source /root/jittor-lab/minimax-h3/env-jittor.sh >/dev/null 2>&1; set +a
+# 已激活 shim 侧环境（本地 env 脚本，不入库）
 unset PYTHONPATH                      # env 脚本把 PYTHONPATH 指向 diffusers checkout，对拍不需要
-cd /apdcephfs_private/qy/projects/zy/jittor
-export REAL_TORCH_PYTHON=/root/jittor-lab/_state/h3/venv-oracle-cu129/bin/python
+cd <repo-root>
+export REAL_TORCH_PYTHON=<real-torch-python>
 export JITTOR_ECOSYSTEM_PACKAGE_SITE=<含 peft 的 site>
-"$VENV/bin/python" -m pytest -q \
+<jittor-python> -m pytest -q \
   "compat/tests/torch/test_ecosystem_parity.py::EcosystemParity::test_peft_lora_llama"
 ```
 
 CUDA 档换 `EcosystemParityCUDA::test_peft_lora_llama`。**NPU 档没有 peft 用例**
 （`test_ecosystem_parity.py:EcosystemParityNPU` 只收 diffusers/mmcv/mmengine/ms-swift）。
-本机 `--collect-only` 实测：该文件收集 28 项，含上述两个 peft 节点；但冷启动 import
+验证环境 `--collect-only` 实测：该文件收集 28 项，含上述两个 peft 节点；但冷启动 import
 jittor + CUDA 就花掉约 5m10s，单条 case 不会秒回。
 
 单库契约（不依赖 `REAL_TORCH_PYTHON`，单解释器，覆盖 LoRA 冻结与梯度语义、200 步拟合、
 adapter `save_pretrained → PeftModel.from_pretrained` roundtrip）：
 
 ```bash
-source /root/jittor-lab/minimax-h3/env-jittor.sh; unset PYTHONPATH
-"$VENV/bin/python" -m pytest -q compat/tests/torch/test_peft.py     # 期望 3 passed
+unset PYTHONPATH   # 已激活 shim 侧环境（本地 env 脚本，不入库）
+<jittor-python> -m pytest -q compat/tests/torch/test_peft.py     # 期望 3 passed
 ```
 
 **或用 runner CLI 手动分两步**（`../../../compat/tests/torch/_ecosystem_runner.py`，CLI 实测）：
@@ -98,11 +98,11 @@ source /root/jittor-lab/minimax-h3/env-jittor.sh; unset PYTHONPATH
 cd compat/tests/torch
 # 1) oracle 造权重 + 参考值，写 <output>.weights.npz
 env -u PYTHONPATH -u JITTOR_TORCH_SHIM \
-  /root/jittor-lab/_state/h3/venv-oracle-cu129/bin/python \
+  <real-torch-python> \
   _ecosystem_runner.py peft_lora_llama /tmp/torch.npz --runtime torch --device cpu
 # 2) shim 载同一权重复算
-source /root/jittor-lab/minimax-h3/env-jittor.sh
-JITTOR_ECOSYSTEM_PACKAGE_SITE=<含 peft 的 site> "$VENV/bin/python" \
+# 已激活 shim 侧环境（本地 env 脚本，不入库）
+JITTOR_ECOSYSTEM_PACKAGE_SITE=<含 peft 的 site> <jittor-python> \
   _ecosystem_runner.py peft_lora_llama /tmp/jittor.npz --runtime jittor --device cpu \
   --weights /tmp/torch.weights.npz
 ```
@@ -131,7 +131,7 @@ harness 的 oracle 半边，即上面第 1 步 `--runtime torch`；或在 `test_
   只有 transformers/diffusers/convnet，没有 peft 的 large 配置。真实尺寸性能必须先在
   `_ecosystem_speed.CASES` 加一个 case，或用 runner 自定义 `--repeats` 单独量，不要在
   parity 的 tiny case 上读速度（那里量的是 dispatch 开销）。
-- **device 规则**：两侧必须同 device。Jittor 没有 per-tensor device，本机 `import jittor`
+- **device 规则**：两侧必须同 device。Jittor 没有 per-tensor device，验证环境 `import jittor`
   日志直接打印 `CUDA enabled`（实测），所以「不请求 CUDA」的 CPU 对拍实际是 Jittor 在 GPU
   上对 PyTorch CPU。harness 用 `jt.runtime.scope(use_cuda=0)` 显式请求 CPU，并读回
   `report['device']` 断言两侧都在 `cpu`；runner 只认 `--device cpu/cuda/npu` 三档。
@@ -166,13 +166,13 @@ peft 是纯 `import torch` 消费者，**第三行（adapter）为空**；修复
 
 ## 证据
 
-- **本机已实测**：两个 venv 的包清单（peft/mmengine/mmcv/swift/ms-swift/torchmetrics/tensordict
+- **已实测**：两个 venv 的包清单（peft/mmengine/mmcv/swift/ms-swift/torchmetrics/tensordict
   全部缺失，只有 transformers/vllm/jittor/torch/numpy 等）；oracle 断言输出
   `oracle 2.13.0+cu129`；shim 身份探针；无 `env-jittor.sh` 时 `import jittor` 报
   `python3.12-config not found`；`test_ecosystem_parity.py` 收集 28 项、含两个 peft 节点、
   冷启动约 5m10s。
-- **未在本机验证**：peft 的安装、`peft_lora_llama` 的任何数值/速度、`test_peft.py` 的
-  3 passed——因为本机两侧都没有 peft。上述命令按 harness/runner 真实接口给出，但**没有跑过**。
+- **未验证**：peft 的安装、`peft_lora_llama` 的任何数值/速度、`test_peft.py` 的
+  3 passed——因为验证环境两侧都没有 peft。上述命令按 harness/runner 真实接口给出，但**没有跑过**。
 - 维护者报告：`2026-08-24-optional-compat-cuda-gate.md`（已退役，Git 历史 `e3c369acb` 可查；PEFT 0.17.1，
   修复后 `3 passed in 126.50s`）；`docs/compatibility/torch.md`（peft 覆盖行）；
   `agent/manuals/project-context.md`。原始 runtime 状态/日志按仓库规则放
@@ -180,30 +180,30 @@ peft 是纯 `import torch` 消费者，**第三行（adapter）为空**；修复
 
 ## 实测（2026-09-19）
 
-GPU 4，oracle `torch 2.13.0+cu129`、shim `jittor 1.3.11.0`，`--device cuda --repeats 5`。
+单卡 CUDA，oracle `torch 2.13.0+cu129`、shim `jittor 1.3.11.0`，`--device cuda --repeats 5`。
 
 **package site**（两侧同 py3.12 共用）：
 
-- `/root/jittor-lab/_state/verify-ml/site`：按本文件给出的构建命令 `pip install --target site
+- `$JITTOR_LAB_ROOT/_state/verify-ml/site`：按本文件给出的构建命令 `pip install --target site
   peft ms-swift mmcv-lite mmengine` 装出 **peft 0.20.0**、ms-swift 4.5.3、mmcv-lite 2.2.0、
   mmengine 0.10.7。pip 顺带拉入的 torch 2.14.0 / transformers 5.16.1 / numpy 2.5.3 已从
   site 删除，改用 venv 的 torch 2.13.0 / transformers 5.5.3 / numpy 2.3.5。
-- `/root/jittor-lab/_state/verify-ml/site-peft17`：`pip install --target site-peft17
+- `$JITTOR_LAB_ROOT/_state/verify-ml/site-peft17`：`pip install --target site-peft17
   transformers==4.56.2 peft==0.17.1 ms-swift==4.5.2`（4.56.2 是 `jittor_adapters` 允许的
   版本之一；transformers 走 site 覆盖 venv 的 5.5.3），torch 已删除。
 
 **实际跑通的命令**（site-peft17；原命令的 peft 0.20.0 在 shim 上起不来，见下）：
 
 ```bash
-cd /apdcephfs_private/qy/projects/zy/jittor
-source /root/jittor-lab/minimax-h3/env-jittor.sh && unset PYTHONPATH
-export JITTOR_HOME=/root/jittor-lab/_state/verify-ml/jittor-home
-export CUDA_VISIBLE_DEVICES=4
-export JITTOR_ECOSYSTEM_PACKAGE_SITE=/root/jittor-lab/_state/verify-ml/site-peft17
-export JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE=/root/jittor-lab/_state/verify-ml/site-peft17
-REAL_TORCH_PYTHON=/root/jittor-lab/_state/h3/venv-oracle-cu129/bin/python \
-  "$VENV/bin/python" agent/skills/torch-compat-repo-runbook/scripts/verify_repo.py \
-  --repo peft --device cuda --repeats 5 --out /root/jittor-lab/_state/verify-ml/out2/peft
+cd <repo-root>
+unset PYTHONPATH   # 已激活 shim 侧环境（本地 env 脚本，不入库）
+export JITTOR_HOME=$JITTOR_LAB_ROOT/_state/verify-ml/jittor-home
+export CUDA_VISIBLE_DEVICES=<gpu>
+export JITTOR_ECOSYSTEM_PACKAGE_SITE=$JITTOR_LAB_ROOT/_state/verify-ml/site-peft17
+export JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE=$JITTOR_LAB_ROOT/_state/verify-ml/site-peft17
+REAL_TORCH_PYTHON=<real-torch-python> \
+  <jittor-python> agent/skills/torch-compat-repo-runbook/scripts/verify_repo.py \
+  --repo peft --device cuda --repeats 5 --out $JITTOR_LAB_ROOT/_state/verify-ml/out2/peft
 ```
 
 **支持的 case 清单**：`--list-only` 收 1 条 `peft_lora_llama`（requires
@@ -220,6 +220,6 @@ tiny case，由 Python 派发主导，`2.04x` 不是 kernel 性能结论。
 **没跑到的及原因**：`site` 上的 **peft 0.20.0**（原命令解析结果）在 shim 上 import 即
 `ModuleNotFoundError: No module named 'torch.distributions.wishart'`（新依赖
 `tuners/lora/monteclora.py`），case 失败；**peft 0.17.1** 又要求 transformers 4.x
-（`from transformers import HybridCache`），与本机 venv 的 transformers 5.5.3 不兼容。
+（`from transformers import HybridCache`），与验证环境 venv 的 transformers 5.5.3 不兼容。
 只有把它降到 adapter 允许的 `4.56.2` 才跑通。原始报告见
-`/root/jittor-lab/_state/verify-ml/{peft.unpinned-peft0.20.log,peft.pinned.log}`。
+`$JITTOR_LAB_ROOT/_state/verify-ml/{peft.unpinned-peft0.20.log,peft.pinned.log}`。
