@@ -31,6 +31,7 @@
 #include "ops/composite/fused_adamw_op.h"
 #include "ops/composite/fused_sgd_op.h"
 #include "ops/composite/mapped_matmul_op.h"
+#include "ops/composite/write_back_op.h"
 #include "core/fused_op.h"
 #include "ops/unary_op.h"
 #include "ops/ternary_op.h"
@@ -849,6 +850,32 @@ namespace jittor
         // backends publish. ACL has no separate capability op, so the core
         // `random` op reaches the same launcher under its own name.
         {"random", exec_acl_random},
+        {"write_back", [](Op *op)
+         {
+             // Each entry is a plain device-to-device copy: `values[i]` into
+             // the storage `written[i]` shares with `targets[i]` (set up in
+             // WriteBackOp::infer_shape, backend-agnostic). CUDA batches all
+             // entries into one fused kernel; ACL has no such primitive, so
+             // each entry is its own aclrtMemcpyAsync on the current ACL
+             // stream -- ordered with the rest of a captured step the same
+             // way every other op here is. dtype/shape were already
+             // USER_CHECKed at construction.
+             auto *_op = (WriteBackOp *)op;
+             for (uint i = 0; i < _op->targets.size(); ++i)
+             {
+                 const int64 bytes = _op->targets[i]->size;
+                 if (!bytes || _op->written[i]->mem_ptr == _op->values[i]->mem_ptr)
+                     continue;
+                 auto ret = aclrtMemcpyAsync(
+                     _op->written[i]->mem_ptr, bytes,
+                     _op->values[i]->mem_ptr, bytes,
+                     ACL_MEMCPY_DEVICE_TO_DEVICE, aclstream);
+                 if (ret != ACL_SUCCESS)
+                     throw std::runtime_error(
+                         "aclrtMemcpyAsync failed: " +
+                         acl_error_to_string(ret));
+             }
+         }},
     };
 
     static bool is_acl_random(const string &name)

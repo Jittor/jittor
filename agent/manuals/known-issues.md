@@ -665,39 +665,6 @@ workaround.
 - Exit condition: all three classes pass, with the coupling behind the second
   attempt understood rather than worked around.
 
-## KI-BACKEND-015: ACL device-graph replay crashes on any step with 2+ batched state writes (`write_back` has no ACL kernel)
-
-- Severity: High (a supported capability crashes without a practical
-  equivalent path once a step needs batched write-back)
-- Status: Open
-- Owner: ACL backend maintainers
-- Symptom: a static-KV-cache greedy decode (`qwen3_decode_static` in
-  `bench/torch_compat`) captured and replayed as an ACL device graph fails
-  with `exec_runner.cc:1093: Execute fused operator(.../...) failed` followed
-  by `backend_fallback.cc: Backend fallback: op=write_back backend=acl
-  target=cpu reason=no registered ACL implementation for write_back`, raised
-  (not silently handled) because the bench harness runs with
-  `backend_fallback=error`.
-- Cause: `WriteBackOp` (`src/ops/composite/write_back_op.cc`) declares
-  `backend_mask = OpBackendAccelerator` but its constructor only ever calls
-  `set_flag(OpFlags::_cuda)`, and its `jit_run` body is compiled only under
-  `#ifdef JIT_cuda`; it has never had an ACL flag or ACL kernel body added.
-  `jittor._runtime.step_capture._write_back_in_graph` calls this op to fold a
-  captured step's per-piece state copies (e.g. one per transformer layer's KV
-  cache slice) into one launch whenever a step has 2 or more non-in-place
-  writes -- a path that was unreachable on ACL before device-graph capture
-  landed there (`43333abf9`, "ACL 后端支持设备图录制") and is now reachable by
-  any multi-layer model using a static cache under capture/replay.
-- Workaround: set `jt.flags.auto_graph_replay = 0` (or otherwise avoid
-  `jt.capture_step`/`graph_replay` on ACL) for workloads with 2 or more
-  per-step state writes; this loses the replay speedup capture exists for.
-- Evidence: `PYTHONPATH=python JITTOR_HOME=<isolated> cache_name=<isolated>
-  python bench/torch_compat/worker.py qwen3_decode_static --runtime jittor
-  --device npu --size full --seed 0 --compile none` on a 910B3.
-- Exit condition: give `WriteBackOp` an ACL kernel (or an ACL-safe per-item
-  fallback inside `_write_back_in_graph`) and the workload above completes
-  with `status: ok`.
-
 ## KI-OPS-002: integer floor-division ROCm verification incomplete
 
 - Severity: Critical (until verified on the backend)
