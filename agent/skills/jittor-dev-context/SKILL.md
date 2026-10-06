@@ -16,9 +16,9 @@ description: Jittor 开发任务的上下文路由入口。用于定位当前状
 - 环境、缓存和后端前置：[`agent/manuals/environment.md`](../../manuals/environment.md)
 - 活跃缺陷与 workaround：[`agent/manuals/known-issues.md`](../../manuals/known-issues.md)
 - 架构与模块边界：[`docs/development/source-architecture.md`](../../../docs/development/source-architecture.md)
-- Torch 兼容验收：[`refactor-wip/architecture/torch-compatibility-principles.md`](../../../refactor-wip/architecture/torch-compatibility-principles.md)
+- Torch 兼容验收：[`docs/compatibility/principles.md`](../../../docs/compatibility/principles.md)
 - 测试体系：[`docs/development/test-system.md`](../../../docs/development/test-system.md)
-- 已有验证报告：[`refactor-wip/results/README.md`](../../../refactor-wip/results/README.md)
+- 已有验证报告：[`docs/results/index.md`](../../../docs/results/index.md)
 
 ## 工作纪律速记
 

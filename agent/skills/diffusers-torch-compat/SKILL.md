@@ -147,13 +147,13 @@ diffusers 走的是纯 `import torch` 消费者路线，**没有 adapter**。历
 |---|---|---|
 | UNet/DiT/VAE/DDIM 前向+反向 | `jittor.compat.torch`（零适配代码，注册成生态 case 即可） | 实测 `_ecosystem_cases.py` 的 `diffusers_unet2d`/`diffusers_dit` |
 | `torch.linalg.inv_ex`（kornia import 期需要，返回含 `.info` 的结构） | jittor 核心 | `compat/tests/torch/test_torch_compat_diffusers_video.py` 的注释：加速卡上它是需要 CuPy 的 numpy-code op |
-| 旧报告里的配置边界：`attention_head_dim=8` + 4 通道触发 `invariant_uniform` 的 `ZeroDivisionError`；默认 `norm_num_groups=32` 触发 GroupNorm 整除断言 | jittor 核心（初始化/GroupNorm 语义） | `refactor-wip/results/2026-09-09-ecosystem-vllm-diffusers.md` |
-| GroupNorm / SiLU / 最近邻 upsample / 训练 SDPA 的 ACL 原生路径 | jittor 核心 ACL 后端 + compat 路由 | `refactor-wip/results/2026-08-30-diffusers-ascend-parity-performance.md` |
+| 旧报告里的配置边界：`attention_head_dim=8` + 4 通道触发 `invariant_uniform` 的 `ZeroDivisionError`；默认 `norm_num_groups=32` 触发 GroupNorm 整除断言 | jittor 核心（初始化/GroupNorm 语义） | `2026-09-09-ecosystem-vllm-diffusers.md`（已退役报告，Git 历史 `e3c369acb` 可查） |
+| GroupNorm / SiLU / 最近邻 upsample / 训练 SDPA 的 ACL 原生路径 | jittor 核心 ACL 后端 + compat 路由 | `2026-08-30-diffusers-ascend-parity-performance.md`（已退役报告，Git 历史 `e3c369acb` 可查） |
 | torchvision / torchaudio / torchdata / flash_attn | 部署 stub（`jittor.compat.shim` 资源），不是 adapter | `compat/shim/resources/stubs/` |
 
-已接受的结论引用（非本机复验）：`refactor-wip/results/2026-08-23-ecosystem-parity-performance.md`
+已接受的结论引用（非本机复验，两份报告均已退役，Git 历史 `e3c369acb` 可查）：`2026-08-23-ecosystem-parity-performance.md`
 （12 个生态用例 CPU/CUDA 全过，真实规模 Diffusers UNet 在双方 cuDNN autotune 下中位数比约
-`0.93x`）；`refactor-wip/results/2026-08-30-diffusers-ascend-parity-performance.md`（910B3 上
+`0.93x`）；`2026-08-30-diffusers-ascend-parity-performance.md`（910B3 上
 forward + 145 梯度通过、零 fallback，`0.964x`）；`agent/manuals/project-context.md` 的中文结论
 "Diffusers correctness and maintained float32 performance are accepted at `0.964x` native
 `torch_npu`"。这些各自绑定当时的 device、版本和 baseline commit，不能外推。
@@ -190,7 +190,7 @@ forward + 145 梯度通过、零 fallback，`0.964x`）；`agent/manuals/project
   证据保留。
 
 **仅引用、未在本机复验**：CUDA/NPU 数值与性能、`large_diffusers_unet2d` 速度门禁、
-`refactor-wip/results/` 里三份报告的结论（各自环境见报告）。本机无 Ascend 卡，NPU 一列是引用，
+上面三份已退役报告的结论（各自环境见报告）。本机无 Ascend 卡，NPU 一列是引用，
 不是本机结论。
 
 ## 实测（2026-09-19）

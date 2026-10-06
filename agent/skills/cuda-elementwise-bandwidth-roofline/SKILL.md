@@ -335,7 +335,7 @@ before/after 必须是**同一个脚本、同一台卡、同一个 `--tag` 之�
 - **shim 的 `Tensor.backward()` 在这个 UNet 的 CUDA 图上直接 abort**
   （`node.h Check failed: value_ > 0  backward liveness release without a matching owner`），
   `_ecosystem_runner.py --runtime jittor --device cuda` 同样崩。`jt.grad(loss, params)`
-  提交的是同一批反向算子且不走那条路径，脚本因此用 `jt.grad`。看板上有这条。
+  提交的是同一批反向算子且不走那条路径，脚本因此用 `jt.grad`。
 - 第一条命令可能拿到 `jit_utils was rebuilt ... rerun the same command`，
   原样重跑，不需要清缓存。
 - shim 模式与非 shim 模式的 cfg 哈希不同，交替跑会各重编一次核心（约 40 s）。

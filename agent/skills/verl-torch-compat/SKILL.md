@@ -112,9 +112,9 @@ description: 在 Jittor torch shim 与独立 PyTorch/torch_npu 上运行和验�
 
 ## 证据
 
-- 报告：[`2026-09-02-verl-ascend-core-algorithms.md`](../../../refactor-wip/results/2026-09-02-verl-ascend-core-algorithms.md)（NPU）、
-  [`2026-08-24-verl-weight-transfer.md`](../../../refactor-wip/results/2026-08-24-verl-weight-transfer.md)（CUDA PPO/权重传输）、
-  [`2026-08-23-verl-vllm-trellis-current-baseline.md`](../../../refactor-wip/results/2026-08-23-verl-vllm-trellis-current-baseline.md)（当前基线）。
+- 报告：[`2026-09-02-verl-ascend-core-algorithms.md`](../../../docs/results/2026-09-02-verl-ascend-core-algorithms.md)（NPU）；
+  `2026-08-24-verl-weight-transfer.md`（CUDA PPO/权重传输）与
+  `2026-08-23-verl-vllm-trellis-current-baseline.md`（当前基线）两份已退役，Git 历史 `e3c369acb` 可查。
 - 状态索引：[`project-context.md`](../../manuals/project-context.md) 第 105–110 行。
 - **本机已核实**：`CASES` 无 verl；`/root/jittor-lab/` 下无 `verl_jittor`；两个 venv 均未安装
   verl。
@@ -129,14 +129,14 @@ description: 在 Jittor torch shim 与独立 PyTorch/torch_npu 上运行和验�
 
 **能核对与不能核对的**：读到并核对了 skill 引用的报告存在且确有对应数字：
 
-- `refactor-wip/results/2026-09-02-verl-ascend-core-algorithms.md`（184 行）：六类
+- `docs/results/2026-09-02-verl-ascend-core-algorithms.md`（原报告 184 行，现为精简版）：六类
   policy loss/gradient 与 GRPO advantage 最大绝对误差 `0` 的表（vanilla PPO/GSPO/
   SAPO/GPG/geometric-mean/CISPO，GRPO=0），NPU 微协议 GPG `0.776x`/`0.774x`、
   其余 `1.25x-1.75x`。
-- `refactor-wip/results/2026-08-24-verl-weight-transfer.md`（316 行）：CPU/CUDA 梯度
+- `2026-08-24-verl-weight-transfer.md`（316 行，已退役）：CPU/CUDA 梯度
   `2.794e-9`/`1.863e-9`、forward `2.384e-7`；`395.99s/step` 只作功能门禁；
   `1086.65s/529.15s` critic/actor update。
-- `refactor-wip/results/2026-08-23-verl-vllm-trellis-current-baseline.md`：CPU/CUDA 算法
+- `2026-08-23-verl-vllm-trellis-current-baseline.md`（已退役）：CPU/CUDA 算法
   矩阵 `2.384e-7` / `2.794e-9`、`1.863e-9`。
 - `agent/manuals/project-context.md` 第 105–110 行确有「910B3 上损失/梯度精确对拍、只有
   GPG 过 NPU 微性能协议」的表述。

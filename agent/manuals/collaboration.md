@@ -69,6 +69,8 @@ agent/
 
 长期设计资料不放在 `agent/manuals/` 的主题子目录，按语义写入根目录 `docs/`。
 仓库维护检查统一放在 `tools/`，不在 `agent/` 保留第二份脚本。
-设计与唯一看板位于 `docs/architecture/`，验证报告和历史基线位于 `docs/results/`。
-任务领取、状态和验收证据只更新 `docs/architecture/refactor-board.md`；
-接手步骤与分工分别维护于同目录的 `refactor-handoff.md` 和 `refactor-dispatch.md`。
+设计与机制文档位于 `docs/development/`、`docs/notes/` 与 `docs/compatibility/`，可复现的
+验证结论位于 `docs/results/`，wheel 内容基线位于 `tools/release/baselines/`。
+任务领取、状态、接手步骤与分工记在 GitHub issue 与 PR 中，验收证据写进 PR 描述；
+等待硬件的验收项记在 `agent/manuals/deferred-hardware.md`，缺陷与限制记在
+`agent/manuals/known-issues.md`。

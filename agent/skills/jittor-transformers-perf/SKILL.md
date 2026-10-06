@@ -148,5 +148,7 @@ CUDA_VISIBLE_DEVICES=6 cache_name=softmax_boundary_gpu6 \
   --task softmax-case --length 50257 --rows 2 --dtype float32
 ```
 
-详细结果优先查 `docs/results/transformers/`；数值精度对拍仍使用
+详细结果查 `docs/results/index.md`（昇腾 Qwen3 训练见
+`docs/results/2026-08-30-qwen3-ascend-training.md`；早期按算子的 transformers 报告已退役，
+Git 历史 `e3c369acb` 可查）；数值精度对拍仍使用
 `agent/skills/jittor-torch-diff/`。

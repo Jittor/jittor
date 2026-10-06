@@ -10,7 +10,7 @@ description: 在 Jittor 的 torch shim 上运行 TensorDict 并与 numpy/torch �
 回答「TensorDict 架在 `import torch` → Jittor 上能否跑、CUDA 上 `__getitem__`/lazy stack
 对不对」。仓库覆盖文件：`../../../compat/tests/torch/test_tensordict_compat.py`；相关实现：
 `../../../compat/torch/installers/autograd.py`（`_install_tensordict_compat`）；报告：
-`refactor-wip/results/2026-08-24-optional-compat-cuda-gate.md`。
+`2026-08-24-optional-compat-cuda-gate.md`（已退役报告，Git 历史 `e3c369acb` 可查）。
 
 **不覆盖**：torchrl / RL 训练循环、分布式与多 device TensorDict、`TensorDictModule` 的
 计算图语义，以及 two-interpreter 速度对拍。
@@ -132,7 +132,7 @@ TensorDict 的 index 兼容补丁**住在 `jittor.compat.torch`（第二行）�
   `compat/torch/installers/autograd.py` 安装、`adapters/` 下无 tensordict adapter。
 - **未在本机验证**：tensordict 的安装、`test_tensordict_compat.py` 的任何 pass/fail、
   `nox -s optional` 的 CUDA 结果。
-- 维护者报告：`refactor-wip/results/2026-08-24-optional-compat-cuda-gate.md`
+- 维护者报告：`2026-08-24-optional-compat-cuda-gate.md`（已退役报告，Git 历史 `e3c369acb` 可查）
   （TensorDict 0.10.0；「TensorDict 与 FlashAttention 新增真实行为模块：
   `5 passed in 11.31s`，覆盖 CUDA 构造/更新/index/lazy stack」）；
   `agent/manuals/project-context.md`。

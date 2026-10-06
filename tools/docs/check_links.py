@@ -33,14 +33,14 @@ def _tracked_markdown(repo_root):
     for relative in result.stdout.decode("utf-8").split("\0"):
         if not relative.endswith(".md"):
             continue
-        if relative != "docs/results/README.md" and any(
+        if relative != "docs/results/index.md" and any(
                 relative.startswith(prefix) for prefix in HISTORICAL_TREES):
             continue
         # Cached paths may have been deleted or moved in the working tree.
         if not (repo_root / relative).is_file():
             continue
         parts = Path(relative).parts
-        if len(parts) == 1 or parts[0] in ("agent", "docs", "examples", "refactor-wip"):
+        if len(parts) == 1 or parts[0] in ("agent", "docs", "examples"):
             selected.append(repo_root / relative)
     return sorted(selected)
 

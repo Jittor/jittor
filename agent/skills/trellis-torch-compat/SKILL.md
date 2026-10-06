@@ -115,7 +115,7 @@ cross-KV cache、C2S topology cache；历史 cublasLt/GELU/RoPE 实验在负结�
 
 ## 证据
 
-- 报告：[`2026-08-23-verl-vllm-trellis-current-baseline.md`](../../../refactor-wip/results/2026-08-23-verl-vllm-trellis-current-baseline.md)。
+- 报告：`2026-08-23-verl-vllm-trellis-current-baseline.md`（已退役报告，Git 历史 `e3c369acb` 可查）。
 - 状态索引：[`project-context.md`](../../manuals/project-context.md)（TRELLIS.2 约 `1.20x` → `1.093x`，
   性能门禁仍开放）。
 - **本机已核实**：`CASES` 无 trellis；`/root/jittor-lab/` 与 `_state/` 下无 trellis checkout；
@@ -130,7 +130,7 @@ cross-KV cache、C2S topology cache；历史 cublasLt/GELU/RoPE 实验在负结�
 因此**未跑任何命令**，也未加载四个 CUDA 扩展。
 
 **能核对与不能核对的**：读到并核对了
-`refactor-wip/results/2026-08-23-verl-vllm-trellis-current-baseline.md`（277 行），
+`2026-08-23-verl-vllm-trellis-current-baseline.md`（277 行，现已退役），
 skill 引用的数字都在：三进程中位数 Jittor `7.6291 / 7.5149 / 7.4246s`、
 median-of-medians `7.5149s`，PyTorch `6.7972 / 6.8778 / 6.8979s` → `6.8778s`，
 比值 `1.0926x`、从同轮起点 `8.2843s` 改善 `9.3%`；几何对照 `+3,368`（`0.226515%`）vertex、

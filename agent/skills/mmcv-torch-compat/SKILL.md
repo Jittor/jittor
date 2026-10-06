@@ -154,8 +154,8 @@ Jittor 加速卡对 PyTorch CPU。
   `float32 (2,3,16,16)`）。
 - 分流与契约：[`downstream-library-adaptation`](../downstream-library-adaptation/SKILL.md)、
   [`jittor-torch-diff`](../jittor-torch-diff/SKILL.md)。
-- 结果文档：[CI 上 CUDA typed tensor 兼容](../../../refactor-wip/results/2026-08-21-mmcv-cuda-typed-tensors.md)、
-  [NPU 数值与性能](../../../refactor-wip/results/2026-08-30-mmcv-mmengine-ascend-parity.md)；
+- 结果文档：CI 上 CUDA typed tensor 兼容（`2026-08-21-mmcv-cuda-typed-tensors.md`）、
+  NPU 数值与性能（`2026-08-30-mmcv-mmengine-ascend-parity.md`），两份均为已退役报告，Git 历史 `e3c369acb` 可查；
   [`project-context`](../../manuals/project-context.md) 引用 `0.927x/0.796x`。
 
 **本机实测**（2026-09-19）：两个 venv 存在；两侧 Python 3.12.12；shim venv 的

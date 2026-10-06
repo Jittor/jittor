@@ -10,7 +10,7 @@ description: 在 Jittor 的 torch shim 上运行 TorchMetrics 并与原生 PyTor
 回答「TorchMetrics 架在 `import torch` → Jittor 上能否跑、指标值对不对、需不需要 adapter」。
 本仓覆盖文件：`../../../compat/tests/torch/test_torchmetrics_compat.py`；adapter：
 `../../../adapters/jittor_adapters/torchmetrics.py`；报告：
-`refactor-wip/results/2026-08-24-optional-compat-cuda-gate.md`。
+`2026-08-24-optional-compat-cuda-gate.md`（已退役报告，Git 历史 `e3c369acb` 可查）。
 
 **不覆盖**：分布式/多 device 聚合指标、`MetricCollection` 的高级状态、可视化，以及
 two-interpreter 的速度对拍。
@@ -77,7 +77,7 @@ python -m nox -s optional -- compat/tests/torch/test_torchmetrics_compat.py
 
 TorchMetrics 测试本身按 shim 语义写（`forward`/`jittor.compat` 行为、adapter 断言）。
 原生侧没有等价的仓库测试；要拿原生值只能在 oracle 解释器里手工跑同样的 tensor/指标，
-或用 `refactor-wip/results/2026-08-24-optional-compat-cuda-gate.md` 里记录的期望常数作对照。
+或用已退役报告 `2026-08-24-optional-compat-cuda-gate.md`（Git 历史 `e3c369acb`）里记录的期望常数作对照。
 **不要**把 `test_torchmetrics_compat.py` 拿到 oracle 解释器跑：它依赖 shim 的 adapter 标记，
 在原生 Torch 下这些断言本就不适用。
 
@@ -135,7 +135,7 @@ Adapter 的契约（`adapters/README.md`）：`SUPPORTED_VERSIONS = {"1.7.4"}`�
 - **未在本机验证**：torchmetrics 的安装、`test_torchmetrics_compat.py` 的任何 pass/fail、
   上述 `_jittor_fast_*` / `_jittor_orig_*` 命名是否真的不一致（仅读代码发现，需装包后确认）、
   `nox -s optional` 的 CUDA 结果。
-- 维护者报告：`refactor-wip/results/2026-08-24-optional-compat-cuda-gate.md`
+- 维护者报告：`2026-08-24-optional-compat-cuda-gate.md`（已退役报告，Git 历史 `e3c369acb` 可查）
   （TorchMetrics 1.7.4；拆成四个 test timeout 后同一保留 cache `4 passed in 46.41s`；
   五模块合并 `16 passed in 259.54s`；冷 cache timeout 归为环境吞吐）；
   `agent/manuals/project-context.md`（16 TorchMetrics/MMCV/MMEngine/PEFT/TensorDict/

@@ -62,7 +62,7 @@ source /root/jittor-lab/minimax-h3/env-jittor.sh
 site-packages 里（以 `../../../compat/tests/torch/_ecosystem_harness.py` 模块 docstring
 为准）。本机两侧同 py3.12，一个共享 site 即可。构建办法（**本机未执行**，按契约给出）：
 建空目录 `<site>`，`pip install --target <site> peft==0.17.1`（0.17.1 是
-`refactor-wip/results/2026-08-24-optional-compat-cuda-gate.md` 验证过的版本），并保证两侧
+已退役报告 `2026-08-24-optional-compat-cuda-gate.md` 验证过的版本，Git 历史 `e3c369acb` 可查），并保证两侧
 transformers 等依赖版本一致（harness 会断言依赖版本相同）。**不要**把新库 `pip install`
 进 oracle venv 去覆盖 torch，那会作废整个对拍（见 downstream-library-adaptation 第 3 节）。
 
@@ -173,7 +173,7 @@ peft 是纯 `import torch` 消费者，**第三行（adapter）为空**；修复
   冷启动约 5m10s。
 - **未在本机验证**：peft 的安装、`peft_lora_llama` 的任何数值/速度、`test_peft.py` 的
   3 passed——因为本机两侧都没有 peft。上述命令按 harness/runner 真实接口给出，但**没有跑过**。
-- 维护者报告：`refactor-wip/results/2026-08-24-optional-compat-cuda-gate.md`（PEFT 0.17.1，
+- 维护者报告：`2026-08-24-optional-compat-cuda-gate.md`（已退役，Git 历史 `e3c369acb` 可查；PEFT 0.17.1，
   修复后 `3 passed in 126.50s`）；`docs/compatibility/torch.md`（peft 覆盖行）；
   `agent/manuals/project-context.md`。原始 runtime 状态/日志按仓库规则放
   `$JITTOR_LAB_ROOT/_state/<topic>/`，不入库。

@@ -3,8 +3,9 @@
 `docs/` 下的中文 MyST Markdown 是 Sphinx 的唯一文档源。**不要新增按语言复制的
 第二棵文档树**；仓库根目录的 `README.md` 是唯一的双语文件。
 
-整改期的过程文档（任务看板、迁移期契约、验证报告）不在 `docs/` 里，而在仓库顶层的
-`refactor-wip/`，整改收口后整个目录删除。
+任务状态与交接记在 GitHub issue 与 PR 中，**不在仓库里维护看板**；PR 描述携带验证证据。
+可复现的维护者验证结论写进 `docs/results/`，格式与必填元数据见
+[NPU 缺陷与性能记录模板](development/npu-validation-templates.md)。
 
 ## 本地构建
 

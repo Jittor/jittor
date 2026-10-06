@@ -308,6 +308,7 @@ include docs/community/AWESOME-JITTOR-LIST.cn.md
 include docs/community/AWESOME-JITTOR-LIST.md
 include docs/community/index.md
 include docs/compatibility/index.md
+include docs/compatibility/principles.md
 include docs/compatibility/torch-architecture.md
 include docs/compatibility/torch-lowering.md
 include docs/compatibility/torch-shim.md
@@ -315,6 +316,7 @@ include docs/compatibility/torch.md
 include docs/conf.py
 include docs/content-manifest.json
 include docs/contributing.md
+include docs/development/acl-backend-contracts.md
 include docs/development/async-error-diagnostics.md
 include docs/development/error-categories.md
 include docs/development/index.md
@@ -326,6 +328,7 @@ include docs/development/source-architecture.md
 include docs/development/static-graph-replay.md
 include docs/development/storage-layout.md
 include docs/development/test-system.md
+include docs/development/torch-install-transactions.md
 include docs/guides/ascend-910b.md
 include docs/guides/corex.md
 include docs/guides/cpp-console.md
@@ -336,6 +339,7 @@ include docs/guides/memory-optimization.md
 include docs/guides/performance-comparison.md
 include docs/index.md
 include docs/notes/complex-dtype.md
+include docs/notes/cuda-library-plan-caches.md
 include docs/notes/device-placement.md
 include docs/notes/float32-precision-policy.md
 include docs/notes/index.md
@@ -343,11 +347,19 @@ include docs/notes/mixed-precision.md
 include docs/notes/numerics-contract.md
 include docs/notes/pipelined-execution.md
 include docs/notes/profiling.md
+include docs/notes/runtime-introspection.md
 include docs/performance/benchmarking.md
 include docs/performance/index.md
 include docs/performance/library-standing.md
 include docs/releases/2.0.md
 include docs/releases/index.md
+include docs/research/agentic-optimization.md
+include docs/research/index.md
+include docs/results/2026-08-28-ascend-910b-validation.md
+include docs/results/2026-08-30-qwen3-ascend-training.md
+include docs/results/2026-08-31-vllm-ascend-jittor-bootstrap.md
+include docs/results/2026-09-02-verl-ascend-core-algorithms.md
+include docs/results/2026-09-04-import-jittor-cost-attribution.md
 include docs/results/2026-09-12-batched-linear-graph-nodes.md
 include docs/results/2026-09-12-cuda-metaop-launch-index-scalar.md
 include docs/results/2026-09-12-minimax-h3-torch-compat.md
@@ -838,6 +850,10 @@ include tools/probes/roundtrip_consistency_sweep.py
 include tools/probes/semantic_divergence_probe.py
 include tools/probes/side_effect_probe.py
 include tools/release/README.md
+include tools/release/baselines/torch-shim-resources-stage7.txt
+include tools/release/baselines/wheel-additions-final.txt
+include tools/release/baselines/wheel-content-changes-final.txt
+include tools/release/baselines/wheel-contents-final.txt
 include tools/release/check_sdist_contents.py
 include tools/release/check_wheel_contents.py
 include tools/release/legacy/README.md

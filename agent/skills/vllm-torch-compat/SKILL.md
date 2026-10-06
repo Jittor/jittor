@@ -129,9 +129,9 @@ Qwen3 engine 协议。双解释器 runner 的 oracle 侧由 harness 拉起，会
 
 ## 证据
 
-- 报告：[`2026-08-31-vllm-ascend-jittor-bootstrap.md`](../../../refactor-wip/results/2026-08-31-vllm-ascend-jittor-bootstrap.md)（NPU）、
-  [`2026-09-08-vllm-independent-distribution.md`](../../../refactor-wip/results/2026-09-08-vllm-independent-distribution.md)（adapter 抽取进仓）、
-  [`2026-08-23-verl-vllm-trellis-current-baseline.md`](../../../refactor-wip/results/2026-08-23-verl-vllm-trellis-current-baseline.md)（CUDA）。
+- 报告：[`2026-08-31-vllm-ascend-jittor-bootstrap.md`](../../../docs/results/2026-08-31-vllm-ascend-jittor-bootstrap.md)（NPU）；
+  `2026-09-08-vllm-independent-distribution.md`（adapter 抽取进仓）与
+  `2026-08-23-verl-vllm-trellis-current-baseline.md`（CUDA）两份已退役，Git 历史 `e3c369acb` 可查。
 - 准入与版本矩阵：[`adapters/README.md`](../../../adapters/README.md)、
   [`_common.py`](../../../adapters/jittor_adapters/_common.py)。
 - **本机已核实**：两侧 venv 的 vllm/transformers/torch 版本、oracle 断言、shim 身份、

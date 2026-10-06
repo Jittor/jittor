@@ -152,8 +152,8 @@ per-tensor device，有卡机器上 CUDA 默认就是开的，所以 CPU 必须�
   `Linear(64,32)`，forward = `fc2(relu(fc1(norm(x)))) + x`，输入 `float32 (2,12,32)`。
 - 分流与契约：[`downstream-library-adaptation`](../downstream-library-adaptation/SKILL.md)、
   [`jittor-torch-diff`](../jittor-torch-diff/SKILL.md)。
-- 结果文档：[CUDA typed tensor 兼容](../../../refactor-wip/results/2026-08-21-mmcv-cuda-typed-tensors.md)、
-  [NPU 数值与性能](../../../refactor-wip/results/2026-08-30-mmcv-mmengine-ascend-parity.md)；
+- 结果文档：CUDA typed tensor 兼容（`2026-08-21-mmcv-cuda-typed-tensors.md`）、
+  NPU 数值与性能（`2026-08-30-mmcv-mmengine-ascend-parity.md`），两份均为已退役报告，Git 历史 `e3c369acb` 可查；
   [`project-context`](../../manuals/project-context.md) 引用 `0.927x/0.796x`。
 
 **本机实测**（2026-09-19）：两个 venv 存在；两侧 Python 3.12.12；shim venv 的

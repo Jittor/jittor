@@ -81,8 +81,8 @@ python -m pytest -q \
   "compat/tests/torch/test_ecosystem_parity.py::EcosystemParityNPU::test_ms_swift_lora_llama"
 ```
 
-（该维护命令来自 `refactor-wip/results/2026-08-31-ms-swift-ascend-parity-performance.md`，
-报告里写的是旧路径 `tests/compat/...`，本仓当前路径是 `compat/tests/...`。）
+（该维护命令来自 `2026-08-31-ms-swift-ascend-parity-performance.md`（已退役报告，Git 历史
+`e3c369acb` 可查），报告里写的是旧路径 `tests/compat/...`，本仓当前路径是 `compat/tests/...`。）
 
 **或手动两步**（`../../../compat/tests/torch/_ecosystem_runner.py`）：
 
@@ -154,7 +154,7 @@ ms-swift 是纯 `import torch` 消费者，**adapter（第三行）为空**。�
   `test_ecosystem_parity.py` 收集 28 项，`ms_swift_lora_llama` 在 CPU/CUDA/NPU 三档各有一项。
 - **未在本机验证**：ms-swift 的安装、`ms_swift_lora_llama` 的任何数值/速度、上述 NPU 命令
   （本机不是 Ascend 环境）。命令按 harness/runner 与报告的真实接口给出，但**没有跑过**。
-- 维护者报告：`refactor-wip/results/2026-08-31-ms-swift-ascend-parity-performance.md`
+- 维护者报告：`2026-08-31-ms-swift-ascend-parity-performance.md`（已退役，Git 历史 `e3c369acb` 可查）
   （Ascend 910B3，ms-swift 4.5.2 / PEFT 0.17.1 / Transformers 4.57.6；前向归一化误差
   `1.980e-7`、最差梯度归一化误差 `4.268e-7`；50 步取最小 `torch_npu 14.089 ms` 对
   Jittor ACL compressed causal mask `13.654 ms`，`0.969x`；优化前 `1.182x`）；

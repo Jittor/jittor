@@ -1,7 +1,6 @@
 # 上机验证：删除 HCCL 集合通信的 4 次同步（8.02 待实机部分）
 
-审计 [06-backends.md §分布式](../../refactor-wip/architecture/codebase-audit/06-backends.md) 里严重度为
-**关键**的一条：四个 HCCL 集合通信算子各自在调用前后都做
+整改期后端审计（分布式部分）里严重度为**关键**的一条：四个 HCCL 集合通信算子各自在调用前后都做
 `aclrtSynchronizeDevice()` + `aclrtSynchronizeStream(aclstream)`，**每次通信 4 次全设备
 或全流同步**，NPU 多卡训练的流水被彻底打断。
 
@@ -21,7 +20,8 @@
 都只调这两个函数，不再各写一遍同步。
 
 **本文档的清单在真机上全绿之后，才可以把默认值改成 `stream-order`，并把开关和它的注释
-一起删掉。** 在那之前看板 8.02 的 HCCL 部分保持「待实机」。
+一起删掉。** 在那之前这项 HCCL 同步优化保持「待实机」，登记在
+[硬件延迟清单](deferred-hardware.md)。
 
 ## 需要的机器与软件
 

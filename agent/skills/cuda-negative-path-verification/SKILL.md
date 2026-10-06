@@ -1,11 +1,11 @@
 ---
 name: cuda-negative-path-verification
-description: 在有 CUDA 的开发机上真正跑 CUDA 负向用例（错误路径），并判断一次绿色运行是否算数。适用于：验收 USER_CHECK / ASSERT 迁移、给某个后端边界补负向用例、或看到交接文档写着「本机无 CUDA，未运行负向」而需要核实时。也用于诊断「pytest 跑到一半无声消失」「整目录只跑了 36% 就结束」这类现象。
+description: 在有 CUDA 的开发机上真正跑 CUDA 负向用例（错误路径），并判断一次绿色运行是否算数。适用于：验收 USER_CHECK / ASSERT 迁移、给某个后端边界补负向用例、或看到 PR 描述/交接记录写着「本机无 CUDA，未运行负向」而需要核实时。也用于诊断「pytest 跑到一半无声消失」「整目录只跑了 36% 就结束」这类现象。
 ---
 
 # 先证明这台机器有 CUDA
 
-**交接文档里的「本机无 CUDA」几乎总是环境变量造成的假象。** 最常见的成因是照搬
+**PR 描述或交接记录里的「本机无 CUDA」几乎总是环境变量造成的假象。** 最常见的成因是照搬
 了 CPU-only 的加速写法（`JITTOR_TEST_DEVICES=cpu nvcc_path=""`）之后再去读
 `jt.has_cuda`——`nvcc_path=""` 会让 jittor 认为没有 nvcc，于是 `has_cuda` 为 0，
 而这与硬件无关。

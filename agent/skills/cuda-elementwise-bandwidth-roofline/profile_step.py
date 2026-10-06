@@ -116,8 +116,8 @@ def main():
             loss_weights[0] = torch.from_numpy(
                 weights.randn(*tuple(output.shape)).astype("float32"))
         loss = (output * loss_weights[0]).sum()
-        # The shim's Tensor.backward() aborts on this graph (see the board
-        # entry on backward liveness); jt.grad submits the same backward
+        # The shim's Tensor.backward() aborts on this graph (a backward
+        # liveness underflow in node.h); jt.grad submits the same backward
         # operators without going through it.
         grads = jt.grad(loss, parameters)
         jt.sync([loss] + list(grads), device_sync=True)
