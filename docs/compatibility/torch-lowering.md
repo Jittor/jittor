@@ -241,7 +241,7 @@ FSDP2 真路径与流水线逻辑都挂在 `_call` 里。
 1. **先定 owner**：探测 `hasattr(jt, name)` / `hasattr(jt.Var, name)`。契约相同 →
    薄转发并在 import 期捕获原生对象；契约不同 → 由 compat 拥有包装并写清差异；
    没有原生 owner → compat 是最终 owner。判据见
-   [`agent/skills/torch-api-cohort-promotion/SKILL.md`](../../agent/skills/torch-api-cohort-promotion/SKILL.md)。
+   [`agent/skills/torch-api-cohort-promotion/SKILL.md`](https://github.com/Jittor/jittor/blob/master/agent/skills/torch-api-cohort-promotion/SKILL.md)。
 2. **登记**：进 `compat/torch/api_manifest.py` 的 `API_PATHS`（`APPROXIMATE`）
    或 `UNIMPLEMENTED_PATHS`。
 3. **保真度**：用 `register_fidelity()` 写清级别与限制明细。
