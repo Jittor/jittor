@@ -42,9 +42,8 @@ HCCL 多卡看 [`hccl-on-device-verification.md`](hccl-on-device-verification.md
 2. **行为形状的静态合同。** 断言「每个 family 都不自己发 execute 调用」这类**不变量**，而不是
    「共有 65 处调用 `checkRet`」这类**计数**。计数式合同挡不住合法重构：`test_acl_runner_failure_contract`
    曾断言 65 处，ACL 去样板的第一个提交把样板收进共享 launcher 后它就作废，然后红了约 40 个提交没人看见。
-   不变量式合同还要**自证扫到了东西**：ACL 曾处在 `python/jittor/extern/acl` 与 `backends/acl`
-   两处都有内容的半途搬迁状态（现在只剩 `backends/acl`），按「总数 > N」断言会在只扫到一侧时仍然
-   发绿，所以要求**每个扫描根各自非空**。
+   不变量式合同还要**自证扫到了东西**：源码分处多个扫描根时（例如搬迁进行到一半），按「总数 > N」
+   断言会在只扫到一侧时仍然发绿，所以要求**每个扫描根各自非空**。
 2b. **去样板前后的静态等价性。** 把每个 owner 归约成 (workspace 查询, execute 入口, 同步策略)
    的有序 token 流，逐 owner 对比改前改后。`tools/build/acl_launch_program.py` 做这件事，两个树
    当参数、退出码非 0 即有差异。它把「样板删对了」和「顺手改了行为」分开：前者 token 流不动，
@@ -107,7 +106,7 @@ launcher ABI 断言全过，反向对照见下）、以及不变量式静态合�
    ```
 
    判据：`tests/backends/acl/test_aclop.py`（114 条）、`test_acl.py`（43 条）、
-   `test_acl_indexing.py`（7 条）全部**执行**而非 skip——本机这 164 条一条都没执行。
+   `test_acl_indexing.py`（7 条）全部**执行**而非 skip——无 CANN 的主机上这 164 条一条都没执行。
    重点算子：`prod`（三条路径都要覆盖：整张量归约、单轴、多轴分步）、`argmax`/`argmin`、
    `all`/`any`、`GroupNorm` 前反向、`UpsampleNearest2d` 前反向。
 
@@ -217,7 +216,7 @@ launcher ABI 断言全过，反向对照见下）、以及不变量式静态合�
 
 全树共 **60 个后端梯度实现**（C++ `::grad()` 28 个，Python `jt.Function.grad` 32 个），清单在
 `tests/structure/test_backend_grad_contract.py` 的 `BACKEND_GRAD_COVERAGE`，与源码树逐条相等，
-新增或删除任何一条都会报红。其中 **24 条在本机能真跑**（CUDA 22 条 + oneDNN 1 条 + …），
+新增或删除任何一条都会报红。其中 **24 条在 CPU+CUDA 主机上能真跑**（CUDA 22 条 + oneDNN 1 条 + …），
 **36 条要等硬件**。清单里的 `kind` 字段就是下面这张表：
 
 | kind | 含义 | 硬件到手那天跑什么 | 通过判据 |

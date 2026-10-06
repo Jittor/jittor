@@ -1,8 +1,8 @@
 # Jittor Development Environment
 
 - Status: Maintained
-- Last reviewed: 2026-08-29
-- Baseline: `f62d8470` plus the Python 3.13 compatibility changes
+- Last reviewed: 2026-10-06
+- Baseline: `1a6e203fc`
 - Owner: repository and CI maintainers
 - Review when: supported Python, nox sessions, backend prerequisites, or cache
   behavior changes
@@ -88,7 +88,7 @@ For a real CUDA run, verify `nvcc` and select the device explicitly:
 
 ```bash
 export nvcc_path="$(command -v nvcc)"
-CUDA_VISIBLE_DEVICES=0 uv run --locked \
+CUDA_VISIBLE_DEVICES=<gpu> uv run --locked \
     python tools/run_test_suite.py --tier core --backend cuda
 ```
 
@@ -99,7 +99,7 @@ separate from that toolchain:
 
 ```bash
 export CUDA_COMPAT_ROOT=/path/to/cuda-compat
-export CUDA_VISIBLE_DEVICES=2
+export CUDA_VISIBLE_DEVICES=<gpu>
 export nvcc_path="$CUDA_COMPAT_ROOT/bin/nvcc"
 export cc_path="$CUDA_COMPAT_ROOT/bin/g++"
 export CUDA_HOME="$CUDA_COMPAT_ROOT"
