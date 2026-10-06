@@ -352,3 +352,18 @@ def test_acl_rfft_keeps_lazy_dft_constants_alive():
 if __name__ == "__main__":
     test_acl_indexing()
     raise SystemExit(1 if FAIL else 0)
+
+
+def test_acl_bool_slice_assignment_matches_numpy():
+    if not _test_capability.check_accelerator('acl', backend=jt).enabled:
+        pytest.skip("ACL backend is unavailable")
+    source = np.array([[True, False, True, True],
+                       [False, True, False, True]], dtype=bool)
+    expected = source.copy()
+    expected[..., :2] = False
+    with jt.flag_scope(use_acl=1):
+        actual = jt.array(source)
+        actual[..., :2] = False
+        actual.sync()
+        np.testing.assert_array_equal(actual.numpy(), expected)
+        assert actual.dtype == "bool"

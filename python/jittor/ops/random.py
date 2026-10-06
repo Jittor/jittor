@@ -167,6 +167,14 @@ def multinomial(weights: Var, num_samples: int, replacement: bool=False) -> Var:
         index = one_hot.index(one_hot.ndim - 1) + 1
         return (one_hot * index).sum(-1)
     else:
+        # A backend's own sampler for a single draw -- CANN's on ACL, which
+        # keeps the device generator's stream as torch_npu does; None leaves
+        # it to the A-Res sampler below.
+        if num_samples == 1:
+            from .._runtime.dispatch import try_dispatch
+            drawn = try_dispatch("random.multinomial", weights, num_samples, replacement)
+            if drawn is not None:
+                return drawn
         # A-Res algorithm
         # Pavlos S. Efraimidis and Paul G. Spirakis, 2006, Weighted random sampling with a reservoir
         if num_samples > weights.shape[-1]:

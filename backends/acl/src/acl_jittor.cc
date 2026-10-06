@@ -8,6 +8,8 @@
 #include "acl_op_registry.h"
 #include <aclnnop/aclnn_adaptive_avg_pool2d.h>
 #include <aclnnop/aclnn_adaptive_avg_pool2d_backward.h>
+#include <aclnnop/level2/aclnn_sort.h>
+#include <aclnnop/level2/aclnn_multinomial.h>
 
 namespace jittor {
 const AclOpRegistry& acl_op_registry() {
@@ -127,6 +129,8 @@ const AclOpRegistry& acl_op_registry() {
         {"CrossEntropyLossGrad", AclOpFunctions::direct(aclnnCrossEntropyLossGrad)},
         {"All", AclOpFunctions::direct(aclnnAll)},
         {"Any", AclOpFunctions::direct(aclnnAny)},
+        {"Sort", AclOpFunctions::direct(aclnnSort)},
+        {"Multinomial", AclOpFunctions::direct(aclnnMultinomial)},
         {"AdamWList", AclOpFunctions::direct(aclnnApplyAdamWV2)},
         {"FusedSgd", AclOpFunctions::direct(aclnnForeachAddList)},
         {"ClampTensor", AclOpFunctions::direct(aclnnClampTensor)},

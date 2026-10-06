@@ -36,6 +36,7 @@ include backends/acl/include/aclops/gelu_op_acl.h
 include backends/acl/include/aclops/getitem_op_acl.h
 include backends/acl/include/aclops/index_op_acl.h
 include backends/acl/include/aclops/matmul_op_acl.h
+include backends/acl/include/aclops/multinomial_op_acl.h
 include backends/acl/include/aclops/nantonum_op_acl.h
 include backends/acl/include/aclops/native_indexing_op_acl.h
 include backends/acl/include/aclops/norms_op_acl.h
@@ -49,6 +50,7 @@ include backends/acl/include/aclops/setitem_op_acl.h
 include backends/acl/include/aclops/sigmoid_op_acl.h
 include backends/acl/include/aclops/silu_op_acl.h
 include backends/acl/include/aclops/softmax_op_acl.h
+include backends/acl/include/aclops/sort_op_acl.h
 include backends/acl/include/aclops/stack_op_acl.h
 include backends/acl/include/aclops/ternary_op_acl.h
 include backends/acl/include/aclops/transpose_op_acl.h
@@ -81,6 +83,7 @@ include backends/acl/kernels/native/gelu_op_acl.cc
 include backends/acl/kernels/native/getitem_op_acl.cc
 include backends/acl/kernels/native/index_op_acl.cc
 include backends/acl/kernels/native/matmul_op_acl.cc
+include backends/acl/kernels/native/multinomial_op_acl.cc
 include backends/acl/kernels/native/nantonum_op_acl.cc
 include backends/acl/kernels/native/native_indexing_op_acl.cc
 include backends/acl/kernels/native/norms_op_acl.cc
@@ -94,6 +97,7 @@ include backends/acl/kernels/native/setitem_op_acl.cc
 include backends/acl/kernels/native/sigmoid_op_acl.cc
 include backends/acl/kernels/native/silu_op_acl.cc
 include backends/acl/kernels/native/softmax_op_acl.cc
+include backends/acl/kernels/native/sort_op_acl.cc
 include backends/acl/kernels/native/stack_op_acl.cc
 include backends/acl/kernels/native/ternary_op_acl.cc
 include backends/acl/kernels/native/transpose_op_acl.cc

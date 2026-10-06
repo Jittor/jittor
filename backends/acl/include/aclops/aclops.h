@@ -7,6 +7,8 @@
 #include <aclops/reduce_op_acl.h>
 #include <aclops/truth_reduce_op_acl.h>
 #include <aclops/arg_reduce_op_acl.h>
+#include <aclops/sort_op_acl.h>
+#include <aclops/multinomial_op_acl.h>
 #include <aclops/expand_op_acl.h>
 #include <aclops/getitem_op_acl.h>
 #include <aclops/setitem_op_acl.h>
