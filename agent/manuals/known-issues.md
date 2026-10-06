@@ -665,6 +665,60 @@ workaround.
 - Exit condition: all three classes pass, with the coupling behind the second
   attempt understood rather than worked around.
 
+## KI-BACKEND-016: sd15_unet_train intermittently aborts on Ascend with ACL 507035
+
+- Severity: Medium (intermittent crash of one training workload on Ascend)
+- Status: Open (verification pending: Ascend 910B3). Non-deterministic -- three
+  isolated runs of the same workload gave three outcomes.
+- Owner: ACL backend maintainers
+- Symptom: `sd15_unet_train` on a 910B3 sometimes aborts with
+  `aclrtSynchronizeDevice failed with ACL status 507035`
+  (ACL_ERROR_RT_VECTOR_CORE_EXCEPTION); another run instead fails earlier in
+  setup with "code requires source for the selected backend", op `code` out
+  `int32[1000]` -- the 1000-step DDPM timestep table built at module
+  construction (a `torch.arange(1000)` issued before the front end's placement
+  scope exists); another run completes cleanly (peak 19.09 GB). No OOM, card
+  idle.
+- Cause: not isolated. 507035 means an operator received an illegal argument.
+  The call-time version of the construction-time arange placement was fixed in
+  `c8fffce72`; the module-construction-time path is not covered, which can feed
+  a not-yet-placed Var to a vector kernel. Looks like a placement/timing issue
+  in graph capture, not numerics; concurrent machine load may contribute.
+- Workaround: `jt.flags.auto_graph_replay=0` avoids the capture path (losing the
+  replay speedup); re-running sometimes succeeds. Neither is reliable.
+- Evidence: `bench/torch_compat --device npu --workloads sd15_unet_train`; peer
+  Ascend runs 2026-10-06 under `$JITTOR_LAB_ROOT/_state/npu-verify`.
+- Exit condition: a deterministic reproduction, the module-construction-time
+  placement path covered, and `sd15_unet_train` completing across repeated 910B3
+  runs with `backend_fallback=error` and zero fallbacks.
+
+## KI-BACKEND-017: on Ascend, device-bound single-kernel workloads trail torch_npu
+
+- Severity: Limitation (performance, Ascend)
+- Status: Limitation. Measured on a 910B3 at `71eff3105`.
+- Owner: ACL backend maintainers
+- Symptom: against `torch` + `torch_npu` on the same card, Jittor's ACL backend
+  is competitive or faster where graph recompute and operator fusion dominate
+  (`qwen3_train` 0.89x, ~11-13% faster, loss agrees to 7.7e-8), but slower where
+  a few large aclnn kernels dominate device time (`qwen3_prefill` ~3.2x,
+  `vit_b16_train` ~9.9x). `jt.profile` shows the latter are device-bound: host
+  launch is a minority of wall time and overlaps device execution, so the gap is
+  aclnn single-kernel device time, not host overhead, missing fusion, or CPU
+  fallback.
+- Cause: individual aclnn kernels on the 910B3 run slower than torch_npu's, and
+  Jittor does not yet close that at the kernel level (fusing into fewer/larger
+  aclnn calls, HF32/precision modes, op-combo selection are unexplored). Raising
+  `auto_graph_replay_retain_bytes` lets more graphs record as device graphs but
+  saved only ~4% on `qwen3_prefill`, because the launches it removes already
+  overlapped device work.
+- Workaround: none; expect torch_npu-level or better throughput on
+  training/launch-bound graphs and a gap on single-kernel-bound inference.
+- Evidence: `bench/torch_compat --device npu`; peer Ascend runs 2026-10-06 under
+  `$JITTOR_LAB_ROOT/_state/npu-verify`. Attributing per kernel needs a CANN
+  msprof op-level timeline (jt.profile has no device-side equivalent on ACL).
+- Exit condition: close the per-kernel device-time gap on the device-bound
+  workloads, or accept and keep this as a documented characteristic.
+
 ## KI-OPS-002: integer floor-division ROCm verification incomplete
 
 - Severity: Critical (until verified on the backend)

@@ -65,6 +65,8 @@
 | `KI-BACKEND-006` | `cublas_test` / `cudnn_test` 被派发到主机且主机没有 kernel | 两个库自检算子跑不了；库本身可用 |
 | `KI-BACKEND-012` | ACL 描述符缓存没接进任何 runner，launcher 与属性迁移没在昇腾设备上跑过 | 这几条 ACL 路径只有主机侧证据 |
 | `KI-BACKEND-013` | 7 条后端梯度没有梯度测试，1 条未实现 | HCCL / ROCm / ACL |
+| `KI-BACKEND-016` | ACL 上 `sd15_unet_train` 偶发崩在 507035（非确定性） | 该训练 workload 在昇腾上时成时败；`jt.flags.auto_graph_replay=0` 可绕开 |
+| `KI-BACKEND-017` | 昇腾上 device-bound 的单核密集 workload 比 torch_npu 慢 | 训练/发射受限图（`qwen3_train` 快约 11-13%）持平或更快，`qwen3_prefill`/`vit` 这类慢 |
 | `KI-COMPILER-001` | 并行编译器可能破坏进程状态 | 文件级编译池死锁已于 2026-09-16 修复，算子级状态仍开口；见[并行编译器段错误](../development/known-issues/parallel-compiler-segfault.md) |
 | `KI-COMPILER-007` | CPU-only 无 CUDA 的 import 在退出时报堆损坏 | 目前只在门禁内复现 |
 | `KI-EXEC-003` | cuDNN 自动调优没有与执行调度隔离 | 同一模型同一输入的训练数值会静默变化 |
