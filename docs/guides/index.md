@@ -5,6 +5,8 @@
 ```{toctree}
 :maxdepth: 1
 
+platform-support
+known-limitations
 debugging
 memory-optimization
 performance-comparison
@@ -16,6 +18,8 @@ cpp-console
 
 | 指南 | 适用场景 |
 | --- | --- |
+| [平台与后端支持](platform-support.md) | 这套组合（系统、Python、CUDA/CANN、torch 版本）支持到什么程度、在哪里验证过 |
+| [已知限制](known-limitations.md) | 动手之前先看看要踩的坑有没有已经记录在案 |
 | [调试](debugging.md) | 报错定位、梯度异常、编译失败 |
 | [显存优化](memory-optimization.md) | 显存不足、想跑更大的批次 |
 | [性能对比](performance-comparison.md) | 与其他框架做可复现的速度对比 |

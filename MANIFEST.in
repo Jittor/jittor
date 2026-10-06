@@ -335,8 +335,10 @@ include docs/guides/cpp-console.md
 include docs/guides/debugging.md
 include docs/guides/distributed-mpi.md
 include docs/guides/index.md
+include docs/guides/known-limitations.md
 include docs/guides/memory-optimization.md
 include docs/guides/performance-comparison.md
+include docs/guides/platform-support.md
 include docs/index.md
 include docs/notes/complex-dtype.md
 include docs/notes/cuda-library-plan-caches.md
