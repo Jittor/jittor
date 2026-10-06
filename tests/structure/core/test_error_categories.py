@@ -382,8 +382,10 @@ MIGRATED_ITEM_USER_BOUNDARIES = {
 # for a gradient of a first-order-only result is something the caller's
 # program did, and the message already tells them so. The same commit moved
 # two `LOGf` in this file to `USER_ERROR`, which this count does not see.
+# Three additional USER_CHECK calls cover backward leaf, replacement shape,
+# and replacement backend; count every current user-facing boundary.
 MIGRATED_GRAD_DTYPE_USER_BOUNDARIES = {
-    "src/core/grad.cc": 3,
+    "src/core/grad.cc": 6,
 }
 
 

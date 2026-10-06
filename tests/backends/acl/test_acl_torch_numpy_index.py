@@ -1,7 +1,6 @@
 import unittest
 
 import numpy as np
-import torch
 import jittor as jt
 
 from _helpers import capability as _test_capability
@@ -12,6 +11,7 @@ from jittor._runtime.fallback import forbid_backend_fallbacks
 class TestACLTorchNumPyIndex(unittest.TestCase):
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_numpy_integer_array_index_values_and_gradient(self):
+        import torch
         self.assertIsNot(torch, jt)
         self.assertIs(torch.Tensor._frontend_backend, jt)
         before = jt.core.backend_fallback_count()
