@@ -40,7 +40,7 @@ E="JITTOR_HOME=$JH TMPDIR=$TD PYTHONPATH=$WT/python nvcc_path=/usr/local/cuda/bi
 而是**看日志第一行**：
 
 ```
-[i ...] Jittor(1.3.11.0) src: /path/to/some/tree/python/jittor
+[i ...] Jittor(2.0.0) src: /path/to/some/tree/python/jittor
 ```
 
 这个路径不是你的 worktree，后面的一切结论全部作废——而且它会安安静静地把**别人那棵树**
