@@ -627,8 +627,50 @@ def frombuffer(buffer, *, dtype, count=-1, offset=0, requires_grad=False):
         return v
 
 
-def _numpy_stream(seed):
-    """One independent numpy stream per generator, seeded deterministically."""
+class _TorchCPUStream:
+    """CPU generator stream with the MT19937 ordering used by torch.randperm.
+
+    PyTorch's small CPU randperm uses a forward Fisher-Yates shuffle fed by
+    uint32 MT19937 draws. NumPy's RandomState exposes the same seeded raw words;
+    its own permutation uses a different shuffle order, so use the raw words.
+    Other distributions retain their existing approximate factory contract.
+    """
+
+    def __init__(self, seed):
+        import numpy as _np
+        self._rng = _np.random.RandomState(int(seed) & 0xffffffff)
+
+    def permutation(self, n):
+        import numpy as _np
+        result = _np.arange(n, dtype=_np.int64)
+        for i in range(n):
+            word = int(self._rng.randint(0, 1 << 32, dtype=_np.uint32))
+            j = i + word % (n - i)
+            result[i], result[j] = result[j], result[i]
+        return result
+
+    def integers(self, low, high, size=None):
+        return self._rng.randint(low, high, size=size)
+
+    def random(self, size=None):
+        return self._rng.random_sample(size)
+
+    def standard_normal(self, size=None):
+        return self._rng.standard_normal(size)
+
+    def normal(self, loc=0.0, scale=1.0, size=None):
+        return self._rng.normal(loc, scale, size=size)
+
+    def get_state(self):
+        return self._rng.get_state()
+
+    def set_state(self, state):
+        self._rng.set_state(state)
+
+
+def _numpy_stream(seed, stream_device):
+    if stream_device.type == 'cpu':
+        return _TorchCPUStream(seed)
     import numpy as _np
     return _np.random.default_rng(int(seed))
 
@@ -656,12 +698,12 @@ class Generator:
         self._seed = int(s)
         # one stream per generator: deterministic, and independent of whatever
         # the process's global generator has already produced.
-        self._rng = _numpy_stream(self._seed)
+        self._rng = _numpy_stream(self._seed, self.device)
         return self
     def _stream(self):
         """The generator's stream, built on first use so an unseeded one has one too."""
         if self._rng is None:
-            self._rng = _numpy_stream(self._seed)
+            self._rng = _numpy_stream(self._seed, self.device)
         return self._rng
     def get_state(self):
         """The stream's position, not just its seed.
@@ -673,14 +715,21 @@ class Generator:
         restored nothing. Accelerate's `save_state`/`load_state` and
         `RandomSampler`'s replay both rest on this round-tripping.
 
-        The bytes are the numpy bit generator's own state, pickled. They are
-        this shim's format, not torch's CUDA/CPU state bytes, and are not
+        The bytes are this shim's versioned MT19937 state, pickled. Older
+        PCG64 state blobs are still readable. They are not torch's CPU state
+        bytes and are not
         interchangeable with them -- the same rule torch states for its own
         opaque state: save it, hand it back, do not parse it.
         """
         import numpy as _np
         import pickle as _pickle
-        blob = _pickle.dumps(self._stream().bit_generator.state, protocol=4)
+        stream = self._stream()
+        if isinstance(stream, _TorchCPUStream):
+            state = ('torch-mt19937-v1', self._seed, stream.get_state())
+        else:
+            # Existing checkpoints encoded NumPy PCG64 state as a dict.
+            state = stream.bit_generator.state
+        blob = _pickle.dumps(state, protocol=4)
         return jt.array(_np.frombuffer(blob, dtype=_np.uint8).copy())
     def set_state(self, s):
         import numpy as _np
@@ -699,8 +748,17 @@ class Generator:
         except EXPECTED as exc:
             swallowed("torch/installers/tensor Generator.set_state", exc)
             raise ValueError("generator state is not one this generator produced")
-        stream = self._stream()
-        stream.bit_generator.state = state
+        if isinstance(state, tuple) and len(state) == 3 and state[0] == 'torch-mt19937-v1':
+            self._seed = int(state[1])
+            stream = _TorchCPUStream(self._seed)
+            stream.set_state(state[2])
+            self._rng = stream
+        elif isinstance(state, dict):
+            # Restore the prior PCG64 wire format for existing checkpoints.
+            self._rng = _np.random.default_rng()
+            self._rng.bit_generator.state = state
+        else:
+            raise ValueError('generator state is not one this generator produced')
         return self
     def seed(self):
         return self._seed
