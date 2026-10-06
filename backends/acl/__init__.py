@@ -8,28 +8,6 @@ import os
 import shutil
 from jittor_utils.env_config import build_env
 from jittor_utils.build_config import BuildConfig, BuildContext, BuildSource
-# export LD_LIBRARY_PATH=/usr/local/Ascend/ascend-toolkit/latest/tools/aoe/lib64:/usr/local/Ascend/ascend-toolkit/latest/compiler/lib64:/usr/local/Ascend/ascend-toolkit/latest/compiler/lib64/plugin/opskernel:/usr/local/Ascend/ascend-toolkit/latest/compiler/lib64/plugin/nnengine:/usr/local/Ascend/ascend-toolkit/latest/runtime/lib64:/usr/local/Ascend/ascend-toolkit/latest/compiler/lib64/stub:/usr/local/Ascend/ascend-toolkit/latest/tools/tikicpulib/lib/Ascend910A:/usr/local/Ascend/ascend-toolkit/latest/toolkit/tools/simulator/Ascend910A/lib:/opt/AXESMI/lib64:/usr/local/Ascend/driver/lib64/driver/
-# export PYTHONPATH=/home/cjld/new_jittor/jittor/python
-# export JT_BUILD_TIKCC_PATH=g++
-
-# conda activate cann
-# source /usr/local/Ascend/ascend-toolkit/set_env.sh
-# export PYTHONPATH=/home/cjld/new_jittor/jittor/python:/home/cjld/new_jittor/jittor/my/jtorch/python:$PYTHONPATH
-# export TASK_QUEUE_ENABLE=0
-# python3 -m pytest tests/backends/npu/test_acl.py -k array
-# jittor: conda activate cann && source /usr/local/Ascend/ascend-toolkit/set_env.sh && PYTHONPATH=/home/cjld/new_jittor/jittor/python:/home/cjld/new_jittor/jittor/my/jtorch/python:$PYTHONPATH && cd /home/cjld/new_jittor/jittor/my/mm_benchmark
-# python3 -m pytest tests/backends/npu/test_acl.py -k test_sum
-# export ASCEND_SLOG_PRINT_TO_STDOUT=0
-# ASCEND_GLOBAL_LOG_LEVEL
-# export DUMP_GE_GRAPH=1
-# export DUMP_GRAPH_LEVEL=1
-
-# build pytorch-npu
-# bash ./ci/build.sh
-# python3 -m pip install ./dist/torch_npu-1.11.0.post1-cp37-cp37m-linux_x86_64.whl  --force-reinstall
-# pytorch: conda activate cann && source /usr/local/Ascend/ascend-toolkit/set_env.sh && export TASK_QUEUE_ENABLE=0  && cd /home/cjld/new_jittor/jittor/my/mm_benchmark
-# python3 ./mm_bench_pt_npu.py
-
 
 # Preserve the previous provider's sorted source order and compilation split.
 # The provider runtime in src/backend.cc and src/workspace.cc is compiled by

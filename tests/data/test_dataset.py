@@ -23,17 +23,11 @@ import pytest
 from _helpers.child_process import run_child_script as _run_child_script
 from _helpers.child_process import run_mpi_python
 
-pass_this_test = False
-msg = ""
-mid = 0
-if hasattr(os, "uname") and os.uname()[1] == "jittor-ce":
-    mid = 1
-try:
-    traindir = ["/data1/cjld/imagenet/train/","/home/cjld/imagenet/train/"][mid]
-    assert os.path.isdir(traindir)
-except Exception as e:
-    pass_this_test = True
-    msg = str(e)
+# An ImageNet-layout training directory (one subdirectory per class). The
+# multi-worker test only runs where a maintainer points this at one.
+traindir = os.environ.get("JITTOR_TEST_IMAGENET_TRAIN", "")
+pass_this_test = not os.path.isdir(traindir)
+msg = "set JITTOR_TEST_IMAGENET_TRAIN to an ImageNet-layout train directory"
 
 @unittest.skipIf(pass_this_test, f"can not run imagenet dataset test: {msg}")
 class TestDataset(unittest.TestCase):

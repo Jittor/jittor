@@ -295,16 +295,15 @@ H3 那档约 117MB 额外访存，量级上足够解释。去掉输入那三次 
 走的是数学注意力、还有 `2.72x` 没拿。**这是错的，现予撤回。**
 
 实际情况：H3 部署有自己的
-`XDG_CACHE_HOME=/root/jittor-lab/_state/h3/run/xdg-cache`，那底下
+`XDG_CACHE_HOME`（指向部署自己的 `_state` 目录），那底下
 `torch-shim/minimax-h3-*/torch_extensions/flashattn_jittor/official_flash_attn/`
 里有 **225 个目标文件**和多份
 `flash_attn_2_cuda_jittor.cpython-312-*.so`。桥一直编得出来，server 也一直带
 `JITTOR_FLASH_ATTN_JITTOR_REQUIRED=1` 在跑——真编不出来它启动就会失败。
 
-错因是一次**不完整的搜索**：只看了 `/root/.cache/jittor/torch-shim/`，没看
+错因是一次**不完整的搜索**：只看了默认的 `~/.cache/jittor/torch-shim/`，没看
 `XDG_CACHE_HOME` 指到哪里，就从「这里没有」推出了「全机器没有」。另外
-`/root/jittor-lab` 和 `/apdcephfs_private/qy/projects/zy/jittor-lab` 是两个不同的目录，前者是 H3 部署，
-后者是做基准的 lab，我把它们当成同一处了。
+H3 部署和做基准的 lab 是两个不同的 `JITTOR_LAB_ROOT`，当时把它们当成了同一处。
 
 **`src_inc` 那个 bug 本身仍然成立，但范围要收窄**：它只影响**源码 checkout**。
 H3 部署用的是装好的 wheel（`jittor-1.3.11.0.dist-info`），那里

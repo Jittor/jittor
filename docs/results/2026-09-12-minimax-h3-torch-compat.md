@@ -187,16 +187,16 @@ regression.
 ## Reproducing
 
 ```bash
-export JITTOR_LAB_ROOT=/root/jittor-lab
+export JITTOR_LAB_ROOT=<lab-root>
 source $JITTOR_LAB_ROOT/minimax-h3/env-jittor.sh
 export use_cuda=1
-export JITTOR_FLASH_ATTN_JITTOR_SRC=/root/jittor-lab/flash-attention
+export JITTOR_FLASH_ATTN_JITTOR_SRC=$JITTOR_LAB_ROOT/flash-attention
 export JITTOR_FLASH_ATTN_JITTOR_REQUIRED=1
 export JITTOR_FLASH_ATTN_HEAD_DIMS=128 JITTOR_FLASH_ATTN_DTYPES=bf16
 export JITTOR_FLASH_ATTN_CAST_FLOAT32=bf16
 $VENV/bin/python $JITTOR_LAB_ROOT/minimax-h3/infer_h3.py \
-  --model /root/jittor-lab/_state/h3/models/tiny-h3 \
-  --outdir /root/jittor-lab/_state/h3/runs/tiny-cuda --tag tiny-cuda \
+  --model $JITTOR_LAB_ROOT/_state/h3/models/tiny-h3 \
+  --outdir $JITTOR_LAB_ROOT/_state/h3/runs/tiny-cuda --tag tiny-cuda \
   --height 64 --width 64 --num-frames 124 --steps 2 \
   --device cuda --vae-dtype float16
 ```

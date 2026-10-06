@@ -370,7 +370,7 @@ Jittor 的逐元素已到 2800 GB/s（eager torch 2911、torch.compile 2938）�
 ## 复现
 
 ```bash
-export JITTOR_LAB_ROOT=/root/jittor-lab
+export JITTOR_LAB_ROOT=<lab-root>
 source $JITTOR_LAB_ROOT/_state/metaop/env-scalar.sh
 cd $WT
 CUDA_VISIBLE_DEVICES=<一张卡> $PY $JITTOR_LAB_ROOT/metaop-perf/bench3.py --n $((1<<22))

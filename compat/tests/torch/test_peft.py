@@ -9,7 +9,7 @@
 #   - adapter save/load reloads exact adapter weights (output diff 0.0).
 #
 #   export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
-#   /home/yizhang/miniconda3/envs/jt-torch/bin/python -m pytest compat/tests/torch/test_peft.py
+#   JITTOR_TORCH_SHIM=1 python -m pytest compat/tests/torch/test_peft.py
 # Skips cleanly if torch_shim / peft are unavailable.
 # ***************************************************************
 import os

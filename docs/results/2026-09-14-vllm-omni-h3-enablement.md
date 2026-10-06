@@ -1097,7 +1097,7 @@ the shim ships the bridged implementation only as
 A two-line top-level alias that re-exports the bridged functions fixes the
 resolution (verified: `flash_attn_varlen_func.__module__ == "flash_attn"`,
 `is_flashattn_jittor_available() == True`, backend
-`flashattn_jittor_official:/root/jittor-lab/flash-attention`). It is not landed
+`flashattn_jittor_official:$JITTOR_LAB_ROOT/flash-attention`). It is not landed
 in the repo yet because it is a deploy-surface change: the stub lists in
 `compat/tests/structure/test_torch_shim_structure.py` and
 `test_torch_shim_deploy.py` would have to carry it.
@@ -1766,7 +1766,7 @@ triton bridge in section 27 -- but that is not this fault's cause, because nothi
 reaches the extension here.
 
 **Correction to the paragraph above, and the reason the stream fix did nothing.**
-`serve-vllmomni.sh` exports `JITTOR_FLASH_ATTN_JITTOR_SRC=/root/jittor-lab/flash-attention`
+`serve-vllmomni.sh` exports `JITTOR_FLASH_ATTN_JITTOR_SRC=$JITTOR_LAB_ROOT/flash-attention`
 and `JITTOR_FLASH_ATTN_JITTOR_REQUIRED=1`, so the real run *does* build and load
 the official extension: it lands in
 `$XDG_CACHE_HOME/jittor/torch-shim/<tag>/torch_extensions/flashattn_jittor/official_flash_attn*/<digest>/flash_attn_2_cuda_jittor.cpython-312-x86_64-linux-gnu.so`
@@ -2382,7 +2382,7 @@ allocator timing rather than on a reference.
 core, on device 1 with device 0 as the ambient one -- the failing rank's
 configuration -- it passes for S in {289, 489, 512, 1000, 1023} in both fp16 and
 bf16, all ten through the official extension (`backend:
-flashattn_jittor_official:/root/jittor-lab/flash-attention`, `hits: 10`), with
+flashattn_jittor_official:$JITTOR_LAB_ROOT/flash-attention`, `hits: 10`), with
 every tensor reporting device 1.
 
 So there is no geometry-, dtype- or device-level defect in the attention call
@@ -4370,7 +4370,7 @@ name, and it names the reason exactly:
 | configuration | decode | `sdpa_flash_stats` |
 | --- | --- | --- |
 | no source named (before) | 10.13 s | `hits=0`, `misses={'no_backend': 2268}` |
-| source named (after) | **8.30 s** | `hits=6804`, `misses={}`, `backend='flashattn_jittor_official:/root/jittor-lab/flash-attention'` |
+| source named (after) | **8.30 s** | `hits=6804`, `misses={}`, `backend='flashattn_jittor_official:$JITTOR_LAB_ROOT/flash-attention'` |
 
 `env-jittor.sh` now names the source. It deliberately does **not** set
 `JITTOR_FLASH_ATTN_JITTOR_REQUIRED` (a shape or dtype the extension does not
@@ -4459,7 +4459,7 @@ server run now gets the fused backend as well. One full generation
 318.9 s engine construction) reports:
 
 ```
-[gen] sdpa_flash_stats: hits=304 backend='flashattn_jittor_official:/root/jittor-lab/flash-attention' misses={'mask': 50}
+[gen] sdpa_flash_stats: hits=304 backend='flashattn_jittor_official:$JITTOR_LAB_ROOT/flash-attention' misses={'mask': 50}
 [gen] frames: (124, 256, 256, 3)  audio: (1, 2, 165600)  peak_memory_mb: 26340.0
 ```
 
@@ -6501,9 +6501,9 @@ Reproducing a row of the sweep is the copy-deploy trap from
 deployed tree, and a `src/` edit means a core rebuild.
 
 ```bash
-D=/root/jittor-lab/_state/h3/venv-jittor/lib/python3.12/site-packages/jittor
+D=$JITTOR_LAB_ROOT/_state/h3/venv-jittor/lib/python3.12/site-packages/jittor
 cp src/core/fuser.cc "$D/src/core/fuser.cc"      # then rebuild the deployed core
-cd /root/jittor-lab/minimax-h3 && source ./env-jittor.sh
+cd $JITTOR_LAB_ROOT/minimax-h3 && source ./env-jittor.sh
 CUDA_VISIBLE_DEVICES=2 "$VENV/bin/python" -u probe_share_limit.py    # no grep: it buffers
 ```
 

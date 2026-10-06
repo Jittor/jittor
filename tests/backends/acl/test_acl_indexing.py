@@ -4,7 +4,7 @@ getitem / setitem correctness suite for the ACL (Ascend) backend.
 Each case computes a reference on CPU (use_acl=0 path / numpy) and compares the
 ACL result for BOTH forward and backward. Run on a free NPU:
 
-    ASCEND_RT_VISIBLE_DEVICES=6 python test_indexing.py
+    python tests/backends/acl/test_acl_indexing.py
 
 Exit code 0 = all pass. Failures are printed with the max abs error.
 """

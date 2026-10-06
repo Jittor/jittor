@@ -205,9 +205,9 @@ pool，四轴工具报的 whole-run 峰值也就一直带着它。
 
 ```bash
 cd <repo>
-source /root/jittor-lab/minimax-h3/env-jittor.sh
+source $JITTOR_LAB_ROOT/minimax-h3/env-jittor.sh
 export JITTOR_HOME=<本任务独占的缓存目录>
-REAL_TORCH_PYTHON=/root/jittor-lab/_state/h3/venv-oracle-cu129/bin/python \
+REAL_TORCH_PYTHON=$JITTOR_LAB_ROOT/_state/h3/venv-oracle-cu129/bin/python \
 "$VENV/bin/python" agent/skills/torch-compat-repo-runbook/scripts/verify_repo.py \
   --repo <lib> --device cuda --repeats 5 --out <lab>/_state/<topic>/verify/<lib>
 ```
@@ -216,9 +216,9 @@ REAL_TORCH_PYTHON=/root/jittor-lab/_state/h3/venv-oracle-cu129/bin/python \
 `pip install --target <site>` 建包站，再把 `JITTOR_ECOSYSTEM_PACKAGE_SITE` /
 `JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE` 指过去；**不要装进 shim 解释器本身**。
 
-本次用到的包站：`/root/jittor-lab/_state/verify-ml/site`（peft 0.20.0、ms-swift 4.5.3、
+本次用到的包站：`$JITTOR_LAB_ROOT/_state/verify-ml/site`（peft 0.20.0、ms-swift 4.5.3、
 mmcv-lite 2.2.0、mmengine 0.10.7）与 `site-peft17`（transformers 4.56.2、peft 0.17.1、
-ms-swift 4.5.2）；`/root/jittor-lab/_state/verify-misc/site`（torchmetrics、tensordict）。
+ms-swift 4.5.2）；`$JITTOR_LAB_ROOT/_state/verify-misc/site`（torchmetrics、tensordict）。
 原始 `verify-report.json` 在各 lab 输出目录，不进主仓库。
 
 ## 合并远端后的复验
