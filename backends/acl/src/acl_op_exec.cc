@@ -396,7 +396,7 @@ namespace jittor
         {
             if (op->name() == string("array")) continue;
             const auto name = fused_acl_name(op);
-            if (name.empty()) return string("unregistered fused operator variant: ") + op->name() + "/" + S(op->ns);
+            if (name.empty()) return string("unregistered fused operator variant: ") + op->name() + "/" + string(op->ns.to_cstring());
             auto found = acl_op_registry().find(name);
             if (found == acl_op_registry().end()) return "unregistered ACL launcher: " + name;
             INTERNAL_ASSERT(found->second.launcher()) << "Empty registered ACL launcher:" << name;
@@ -409,9 +409,9 @@ namespace jittor
                     ? AclOpFunctions::QueryKind::Add : AclOpFunctions::QueryKind::Binary))
                     << "Wrong registered binary launcher signature:" << name;
             for (auto *input : op->inputs())
-                if (!acl_has_dtype(input->dtype())) return name + " does not support input dtype " + S(input->dtype());
+                if (!acl_has_dtype(input->dtype())) return name + " does not support input dtype " + string(input->dtype().to_cstring());
             for (auto *output : op->outputs())
-                if (!acl_has_dtype(output->dtype())) return name + " does not support output dtype " + S(output->dtype());
+                if (!acl_has_dtype(output->dtype())) return name + " does not support output dtype " + string(output->dtype().to_cstring());
             if ((name == "Add" || name == "Sub") && op->input(0)->dtype() == ns_complex64)
                 return name + " has no complex alpha-scalar implementation";
         }
@@ -854,10 +854,10 @@ namespace jittor
             INTERNAL_ASSERT(iter->second) << "Empty ACL implementation for" << op->name();
             for (auto *input : op->inputs())
                 if (!acl_has_dtype(input->dtype()))
-                    unsupported = string(op->name()) + " does not support input dtype " + S(input->dtype());
+                    unsupported = string(op->name()) + " does not support input dtype " + string(input->dtype().to_cstring());
             for (auto *output : op->outputs())
                 if (!acl_has_dtype(output->dtype()))
-                    unsupported = string(op->name()) + " does not support output dtype " + S(output->dtype());
+                    unsupported = string(op->name()) + " does not support output dtype " + string(output->dtype().to_cstring());
             if (unsupported.empty() && op->name() == string("getitem"))
                 unsupported = acl_getitem_unsupported_reason(op);
             if (unsupported.empty() && op->name() == string("setitem"))
