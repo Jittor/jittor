@@ -77,9 +77,12 @@ struct PendingSubmissionScope {
 // Not once a second Python thread has used jittor: the worker stands down for
 // good (async_exec.cc), and so do the extra flushes it was taken for -- every
 // flush releases the GIL inside the executor, and two threads building one
-// graph is not something the executor serializes.
+// graph is not something the executor serializes. Nor where the worker does
+// not run at all (anywhere but CUDA, see `may_run_async`): there the extra
+// flushes would only cut fusion.
 static bool deferrable_flush() {
-    return async_execution && no_grad && async_flush_ops > 0 && async_exec_single_thread();
+    return async_execution && no_grad && async_flush_ops > 0 && async_exec_single_thread()
+        && accelerator_backend_id() == BackendId::Cuda;
 }
 
 void Executor::auto_flush() {
@@ -392,8 +395,13 @@ struct BatchState {
 // allocator, whose delayed frees go back in the order their stream callbacks
 // fire -- an order that only holds while every free is on one stream.
 static bool may_run_async(const ExecPlan& plan) {
+    // CUDA only. The worker thread runs the batch with whatever device context
+    // it has, which on ACL is none (aclrtGetDevice: 107002, context null), and
+    // an ACL host fallback flips the process-wide `use_cuda` under the Python
+    // thread's feet; `use_cuda` alone is set on every accelerator.
     if (!async_execution || !no_grad || keep_graph || save_mem || use_threading
-            || !runtime_use_cuda() || graph_capture_recording || profiler_enable
+            || !runtime_use_cuda() || accelerator_backend_id() != BackendId::Cuda
+            || graph_capture_recording || profiler_enable
             || profile_memory_enable || trace_py_var || step_trace_active()
             || !use_pinned_host_memory())
         return false;
