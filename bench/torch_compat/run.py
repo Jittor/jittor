@@ -84,7 +84,8 @@ def environment_for(runtime, options, state):
         env["JITTOR_TORCH_CACHE_ROOT"] = str(state / "torch-shim")
         env["cache_name"] = "bench-torch-compat"
     if options.gpu is not None:
-        env["CUDA_VISIBLE_DEVICES"] = options.gpu
+        visible = "ASCEND_RT_VISIBLE_DEVICES" if options.device == "npu" else "CUDA_VISIBLE_DEVICES"
+        env[visible] = options.gpu
     env.setdefault("HF_HUB_OFFLINE", "1")
     env.setdefault("TRANSFORMERS_OFFLINE", "1")
     env["TMPDIR"] = str(state / "tmp")
@@ -153,7 +154,28 @@ def git(*args):
         return None
 
 
+def npu_name(options):
+    """The chip name and driver of the first visible NPU, from ``npu-smi``."""
+    try:
+        text = subprocess.run(["npu-smi", "info"], stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL, text=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    index = (options.gpu or "0").split(",")[0]
+    version = None
+    for line in text.splitlines():
+        if "Version:" in line:
+            version = line.split("Version:", 1)[1].strip(" |")
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        head = cells[0].split() if cells else []
+        if len(head) >= 2 and head[0] == index and not head[1].isdigit():
+            return "%s (npu %s), npu-smi %s" % (head[1], index, version)
+    return None
+
+
 def gpu_name(options):
+    if options.device == "npu":
+        return npu_name(options)
     try:
         query = subprocess.run(
             ["nvidia-smi", "--query-gpu=name,driver_version",
@@ -175,9 +197,10 @@ def main():
     parser.add_argument("--torch-python",
                         default=os.environ.get("REAL_TORCH_PYTHON"))
     parser.add_argument("--jittor-python", default=sys.executable)
-    parser.add_argument("--device", choices=("cuda", "cpu"), default="cuda")
+    parser.add_argument("--device", choices=("cuda", "npu", "cpu"), default="cuda")
     parser.add_argument("--gpu", default=None,
-                        help="CUDA_VISIBLE_DEVICES for both runtimes")
+                        help="CUDA_VISIBLE_DEVICES (ASCEND_RT_VISIBLE_DEVICES for "
+                             "--device npu) for both runtimes")
     parser.add_argument("--dtype", default=None,
                         help="override every workload's default dtype")
     parser.add_argument("--size", choices=("full", "tiny"), default="full")
@@ -236,7 +259,7 @@ def main():
         "started": datetime.datetime.now().isoformat(timespec="seconds"),
         "commit": git("rev-parse", "HEAD"),
         "dirty": bool(git("status", "--porcelain", "--untracked-files=no")),
-        "gpu": gpu_name(options) if options.device == "cuda" else None,
+        "gpu": gpu_name(options) if options.device in ("cuda", "npu") else None,
         "device": options.device, "size": options.size, "tf32": options.tf32,
         "batch": options.batch,
         "compile": options.compile,
