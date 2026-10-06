@@ -224,7 +224,8 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
   ownership. A later complete notebook smoke still reproduced a separate death
   with eight compile workers, including with Jittor's signal handler disabled,
   so the maintained notebook gate remains serial. See the
-  [SIGCHLD verification and addendum](../../refactor-wip/results/2026-08-21-jupyter-sigchld.md).
+  SIGCHLD verification and addendum, `2026-08-21-jupyter-sigchld.md`
+  (retired report; in Git history at `e3c369acb`).
 - Measured, do not re-litigate from intuition: inside one process the op-level
   parallel compiler is worth about 6x (50 distinct CPU kernels, 7s at the
   default against 42s at `use_parallel_op_compiler=0`, two trials), so turning
@@ -292,7 +293,7 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
 - Status: NPU skip
 - Owner: binary operator and ACL backend maintainers
 - Evidence: [`pointwise_binary.py`](../../tests/opinfo/definitions/pointwise_binary.py)
-  and [Ascend 910B validation](../../refactor-wip/results/2026-08-28-ascend-910b-validation.md)
+  and [Ascend 910B validation](../../docs/results/2026-08-28-ascend-910b-validation.md)
 - Symptom: the maintained float32 `atan2` composition can terminate the process
   with an ACL vector-core exception on a real 910B3
 - Workaround: run this operation on a backend with a maintained `atan2` kernel;
@@ -306,7 +307,7 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
 - Status: NPU skip
 - Owner: FFT and ACL backend maintainers
 - Evidence: [`fft.py`](../../tests/opinfo/definitions/fft.py) and
-  [Ascend 910B validation](../../refactor-wip/results/2026-08-28-ascend-910b-validation.md)
+  [Ascend 910B validation](../../docs/results/2026-08-28-ascend-910b-validation.md)
 - Symptom: the complex-to-real inverse FFT does not complete within 600 seconds
   on a real 910B3, and the stalled native call is not interrupted reliably by
   pytest's signal timeout
@@ -321,7 +322,8 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
 - Owner: binary operator maintainers
 - Evidence: [`test_floor_divide.py`](../../tests/ops/test_floor_divide.py),
   [`sample_floor_divide`](../../tests/opinfo/definitions/pointwise_binary.py), and
-  [2026-08-21 verification](../../refactor-wip/results/2026-08-21-floor-divide.md)
+  the 2026-08-21 verification, `2026-08-21-floor-divide.md`
+  (retired report; in Git history at `e3c369acb`)
 - Previous symptom: C++ integer division made negative quotients truncate toward
   zero instead of flooring toward negative infinity
 - Current implementation: shared CPU/CUDA codegen subtracts one exactly when a
@@ -773,8 +775,9 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
 - Owner: compiler and comparison-operator maintainers
 - Evidence: [`test_nan_self_comparisons_across_dtypes`](../../tests/debug/test_kernel_traps.py),
   [`test_float_comparisons_with_nan`](../../tests/ops/test_fusion_correctness.py),
-  [2026-08-21 verification](../../refactor-wip/results/2026-08-21-ieee-nan-comparisons.md), and
-  [Ascend 910B validation](../../refactor-wip/results/2026-08-28-ascend-910b-validation.md)
+  the 2026-08-21 verification, `2026-08-21-ieee-nan-comparisons.md`
+  (retired report; in Git history at `e3c369acb`), and
+  [Ascend 910B validation](../../docs/results/2026-08-28-ascend-910b-validation.md)
 - Previous symptom: CPU JIT kernels inherited `-Ofast`, allowing both same-object
   and distinct floating comparisons to violate IEEE NaN behavior; low-precision
   `!=`, `<=`, and `>=` could also fail to compile on CPU
@@ -1869,11 +1872,13 @@ build never decided what its floating-point contract is.**
   being the obvious spelling, and their NaN behaviour -- accidental on CPU,
   deliberate IEEE `maxNum` on CUDA -- was never part of the choice. It is fixed;
   the record is below, and the numbers are in
-  [the result report](../../refactor-wip/results/2026-09-10-minmax-nan-numpy-parity.md).
+  the result report `2026-09-10-minmax-nan-numpy-parity.md`
+  (retired report; in Git history at `e3c369acb`).
 - 006 was the reduction shape. A single serial accumulator is what you write
   when accuracy at scale is not a stated requirement. It is fixed and its entry
   is gone; see
-  [the result report](../../refactor-wip/results/2026-09-10-cpu-reduction-blocked-pairwise.md).
+  the result report `2026-09-10-cpu-reduction-blocked-pairwise.md`
+  (retired report; in Git history at `e3c369acb`).
   (`KI-OPS-006`, a different number, is what is left of 004's throughput cost.)
 
 None of the three is a coding mistake. Each is a reasonable local decision
@@ -1983,7 +1988,7 @@ about whether to take it.
   [KI-OPS-006], which is what remains of that entry. Elementwise and the
   softmax case are unaffected, and CUDA is unaffected.
 - Removal condition: delete this record once the result report
-  [2026-09-10-minmax-nan-numpy-parity.md](../../refactor-wip/results/2026-09-10-minmax-nan-numpy-parity.md)
+  `2026-09-10-minmax-nan-numpy-parity.md` (retired report; in Git history at `e3c369acb`)
   has been read by a maintainer.
 
 ## KI-BACKEND-005: fixed -- CPU kernels build at `-O3`, not `-Ofast`
@@ -2072,7 +2077,8 @@ about whether to take it.
 - Status: Withdrawn 2026-08-21; the old aggregate outcome is not reproducible on
   the current implementation
 - Owner: FFT and Torch-compat maintainers
-- Evidence: [CUDA rFFT sequence review](../../refactor-wip/results/2026-08-21-rfft-sequence-review.md)
+- Evidence: CUDA rFFT sequence review, `2026-08-21-rfft-sequence-review.md`
+  (retired report; in Git history at `e3c369acb`)
   and
   [`test_rfft_after_complex_forward_backward_sequence`](../../compat/tests/torch/test_torch_compat_fft_einsum.py)
 - What it claimed: complex forward/gradient work earlier in one CUDA process could
@@ -2356,7 +2362,8 @@ about whether to take it.
   rewrite to CUDA double-accumulated launch bit boundaries and left large fused
   outputs partially unwritten. `0a3458b3` limits the rewrite to `JIT_cpu`; the
   complete CPU and CUDA gates and compact network parity now pass. See the
-  [parallel-range follow-up](../../refactor-wip/results/2026-08-22-cuda-parallel-range-network-oracle.md).
+  parallel-range follow-up, `2026-08-22-cuda-parallel-range-network-oracle.md`
+  (retired report; in Git history at `e3c369acb`).
 - Lesson for the next probe: never use `.data` to force evaluation inside a
   `log_capture_scope`; call `jt.sync_all()` and keep a reference to the Var.
 
@@ -3177,3 +3184,360 @@ about whether to take it.
   Any single file, any pair, and the five files before it together passed every
   time; only the full selection trips it, so it depends on collection timing.
 - Workaround: run the files in separate processes.
+
+## KI-EXEC-009: a taped multi-output `Function` op can release its backward liveness once too often
+
+- Severity: Medium (an abort at interpreter exit, or two Vars leaked per
+  occurrence; no wrong value has been observed)
+- Status: Open, environment-dependent. Found 2026-09-06; recorded here
+  2026-10-05 when the refactor tracker was retired. Not reproduced on
+  `e3c369acb` with Python 3.11: `tests/backends/cuda/test_cudnn_rnn_parity.py`
+  9 passed (exit 0), `tests/autograd/test_function.py` 46 passed, and
+  `compat/tests/torch/test_torch_numerical_fidelity.py -k split_with_sizes`
+  3 passed (exit 0). Not fixed: `eaa50ed5f` bisected the disappearance to a
+  docs-only commit, so it depends on the order in which `var_holder.cc` tears
+  holders down, which the interpreter decides.
+- Owner: core node liveness (`src/core/node.cc`, `src/core/op.cc`); the forward
+  counterpart is KI-EXEC-008.
+- Evidence: `tests/core/test_core_invariant_properties.py`
+  (`KNOWN_LEAKING_SHAPES`; `test_dropping_a_graph_leaks_nothing_new` stays green
+  and fails on any new leaking shape, `test_dropping_a_graph_leaks_nothing_at_all`
+  is a non-strict xfail, `test_the_leak_is_two_vars_per_occurrence` pins the
+  count where it reproduces).
+- Symptom: a multi-output op built through `Function` (a tape,
+  `src/ops/composite/tape_op.h`) with some but not all outputs `stop_grad()`,
+  executed as a batch, calls `LivenessCounter<backward>::release()` one extra
+  time: `node.h` reports `backward liveness release without a matching owner`.
+  Where the teardown path catches it, exactly two Vars stay registered with
+  `f=0 b=1` (`test_function.py::TestFunctionWithEagerExecution::test_zmem_leak{,2,3}`
+  then fail with `2 != 0`); where it does not, the process aborts at exit
+  (exit code 134). Seen as cuDNN LSTM training with `jt.grad` on CUDA, and as
+  `torch.split_with_sizes` plus `Tensor.split` on CPU in Torch mode. Native
+  multi-output `jt.code` ops do not leak, so the taped path is the suspect.
+- Suspected: two asymmetries, not yet confirmed as the fix point. The
+  needed-by-backward guard in `Op::init` (`src/core/op.cc`, `manual_set_vnbb`)
+  only special-cases `_outputs.size()==1 && ... is_stop_grad()`; and
+  `Node::release_forward_liveness` (`src/core/node.cc`, the "b3" loop) enqueues
+  one `release_backward_liveness` on the op for every finished, non-stop-grad
+  output while the op's backward count may be one.
+- Workaround: none needed for values; keep a process that hits it out of a
+  shared pytest session.
+- Review/expiry condition: fix the accounting (do not relax the `node.h`
+  check), make `test_dropping_a_graph_leaks_nothing_at_all` pass on an
+  interpreter where `KNOWN_LEAKING_SHAPES` reproduces, then empty
+  `KNOWN_LEAKING_SHAPES` and delete this entry.
+
+## KI-COMPAT-009: a float32 tensor divided by a Python float is computed in float64
+
+- Severity: Limitation (performance; the result is the float32 PyTorch gives)
+- Status: Open by design decision pending. Measured 2026-09-06 on an sm_89
+  GPU; recorded 2026-10-05.
+- Owner: torch compatibility / tensor operators
+- Evidence: `compat/torch/installers/tensor/method_api.py` (`use_wide` in the
+  true-division path: float32 widens to float64, float16/bfloat16 widen only to
+  float32, ACL does not widen); `fd43ebb28` made the native `_fast_binary`
+  build the same widened sequence bit for bit
+  (`compat/tests/torch/test_torch_compat_promotion.py`,
+  `compat/tests/torch/test_native_fast_paths.py`).
+- Symptom: `x / 2.0` for a float32 `x` on CPU or CUDA casts `x` to float64,
+  divides by a float64 0-d array and casts back, to match PyTorch to the last
+  ulp. On GPUs whose FP64 rate is 1/64 of FP32 this is the largest single
+  excess in the fused elementwise class: about 0.55 ms of a diffusers UNet2D
+  step (every `ResnetBlock2D` ends in `/ self.output_scale_factor`); removing
+  the widening measured 3.29 -> 2.73 ms for that class (see KI-CODEGEN-004).
+- Workaround: multiply by the reciprocal (`x * (1 / s)`), which stays float32,
+  where 1-ulp agreement with PyTorch is not required.
+- Review/expiry condition: decide whether 1-ulp parity is worth FP64 on
+  consumer GPUs (for example widen only where FP64 is fast, or compute
+  `x * (1/s)` with a correction); update the promotion tests with the decision
+  and delete this entry.
+
+## KI-CODEGEN-002: the `split{i}` and `parallel` loop options cannot be combined
+
+- Severity: Limitation (a compile error, never a wrong result; blocks a tuner
+  candidate)
+- Status: Open. Recorded 2026-10-05; still true on `e3c369acb`.
+- Owner: code generation (loop passes, reduce tuner)
+- Evidence:
+  `tests/codegen/test_reduce_tuner.py::TestReduceTuner::test_a_split_candidate_would_not_compile_under_parallel`
+  (passes because the combination still fails); the guard and its rationale are
+  in `src/codegen/opt/tuner/reduce_tuner.cc`.
+- Symptom: with both options set, `ParallelPass` fails `ASSERT(def)`
+  (`src/codegen/opt/pass/parallel_pass.cc`): `SplitLoopPass` gives the inner
+  loop the range `::min(range{i}-id{i}, stride{i})`, defined inside the outer
+  loop and varying with it, which `ParallelPass` cannot find or evaluate at the
+  call site where it sizes the thread grid. CUDA always runs `ParallelPass`, so
+  every `split{i}` candidate would break a CUDA reduction; the reduce tuner
+  therefore offers none there.
+- Workaround: none needed; the tuner does not offer the combination.
+- Review/expiry condition: make `ParallelPass` accept a split inner range (or
+  hoist it), let the test above fail, then revisit the CUDA guard in
+  `reduce_tuner.cc` and delete this entry.
+
+## KI-CODEGEN-003: CUDA code-generated reductions trail PyTorch on UNet shapes
+
+- Severity: Limitation (performance)
+- Status: Open. Measured 2026-09-06 on an sm_89 GPU (diffusers UNet2D training
+  step); the GroupNorm kernels have been rewritten since (`d99a59e87`,
+  `1b6950c35`, `b578dc24e`), so the split below needs re-measuring.
+- Owner: code generation (CUDA reduction passes) and CUDA kernels
+- Evidence: measurement method and scripts in
+  `agent/skills/cuda-reduction-strategy-comparison/` (`reduce_ab.py`,
+  `group_norm_ab.py`) and `agent/skills/cuda-elementwise-bandwidth-roofline/`
+  (`profile_step_torch.py --attribute` pairs each PyTorch kernel with its aten
+  op so the two sides compare the same work).
+- Symptom: with call counts matched one to one, the reduction class was
+  2279-2297 us (profiler; ~2705 us under nsys) against PyTorch's 1928-1998 us,
+  15-36% slower. The generic code-generated sums were 745-753 us against
+  653-682 us; at the time 75% of the gap was in the hand-written GroupNorm.
+  `para_opt_level=4` (warp shuffle, one shared value per warp, then a
+  first-warp shuffle in `SharedReducePass`) is opt-in: about 8% faster than the
+  default warp reduction on the UNet's reduce shapes, but up to 1.39x slower on
+  the representative shapes, and it also switches `AtomicTunerPass`, so the
+  default stays 3.
+- Workaround: none.
+- Review/expiry condition: re-measure the class against PyTorch on the same
+  step; close when it is no slower, or narrow this entry to what remains.
+
+## KI-CODEGEN-004: fused elementwise kernels of a UNet2D step run about 10% behind PyTorch
+
+- Severity: Limitation (performance)
+- Status: Open. Measured 2026-09-06 on an sm_89 GPU with TF32, exclusive card.
+- Owner: code generation, with the torch-compat division in KI-COMPAT-009
+- Evidence: `agent/skills/cuda-elementwise-bandwidth-roofline/` (measurement
+  scripts, nsys and profiler cross-checked, measured copy roofline).
+- Symptom: the elementwise class of a `large_diffusers_unet2d` step was
+  3.37 ms (nsys) / 3.29 ms (profiler), 1086 GB/s, roofline ratio 0.84 -- already
+  at the measured copy bandwidth -- against PyTorch's 3.04 ms. The positive
+  excess of the 49 fused kernels was about 0.59 ms and none of it is in code
+  generation: the float64 scalar division of KI-COMPAT-009 (0.55 ms), a bare
+  `transpose` (`src/ops/composite/transpose_op.cc`, 0.10 ms), and about 60
+  kernels that move almost no data (0.23 ms of launch latency).
+- Workaround: none.
+- Review/expiry condition: re-measure after KI-COMPAT-009 is decided; close
+  when the class is no slower than PyTorch's on the same step.
+
+## KI-EXEC-010: backward graph construction does not take part in pipelined submission
+
+- Severity: Limitation (performance; device idle during backward graph build)
+- Status: Open. Recorded 2026-10-05.
+- Owner: executor / autograd
+- Evidence: the explicit partial-graph boundary exists --
+  `jt.submit_pending(*vars, device_sync=False)` in `python/jittor/_core/var.py`
+  (see "动态形状与提交边界" in `docs/development/source-architecture.md`) and
+  `tests/core/test_partial_graph_submit.py`; its only production consumer is
+  `compat/fsdp2/shard.py`.
+- Symptom: `jt.grad` and `Function` backward callbacks still build the whole
+  backward graph before any of it is submitted, so the device idles while the
+  host constructs the backward of Llama- and UNet-sized steps. Cutting the
+  backward graph inside `grad()` was tried and rejected; the intended route is
+  to submit selected roots through the boundary above
+  (an `ExecPlan` handed to `run_exec_plan`, with timing owned by
+  `SubmissionPipeline`).
+- Workaround: none.
+- Review/expiry condition: `jt.grad`/`Function` callbacks submit completed
+  backward segments, and GPU idle time in the backward of a Llama and a UNet
+  step drops without the step getting slower.
+
+## KI-COMPILER-008: user-reachable JIT source checks still report as internal errors
+
+- Severity: Medium (the error is catchable, but its category and message are
+  wrong: user mistakes ask the user to report a framework bug)
+- Status: Open. Recorded 2026-10-05; the catch below is unchanged on
+  `e3c369acb`.
+- Owner: core error handling / code generation
+- Evidence: `docs/development/error-categories.md` (the two categories);
+  `tests/structure/core/test_error_categories.py` (source-level gate).
+  Reachability was probed with seven `jt.code(..., cpu_src=<bad @ syntax>)`
+  calls: 7/7 raised a catchable `RuntimeError` whose message contains
+  `Jit compiler error:`.
+- Symptom: `precompile` in `src/codegen/op_compiler.cc` wraps its
+  whole loop in `catch (std::exception& e)` and rethrows through `LOGf`, so a
+  `UserError` raised inside it arrives as a plain error. Migrating the
+  `ASSERT`s there to `USER_CHECK` would therefore change nothing observable
+  while the source-count gate turns green. Most `@`-syntax errors in
+  `precompile` are user-reachable (a misspelt `@out(0)=@nosuchvar` today says
+  "Something wrong... Could you please report this issue?"). The other large
+  unclassified groups -- `src/codegen/opt/kernel_ir.cc`,
+  `src/utils/cache_compile.cc` (most of its checks are in its `#ifdef TEST`
+  self-test), `src/codegen/opt/expr.cc`, `src/ops/op_register.cc`,
+  `src/mem/swap.cc` -- have not been walked for public-argument reachability.
+- Workaround: none needed; the exceptions are catchable.
+- Review/expiry condition: first let `precompile`'s catch preserve the
+  `UserError` category, then migrate the user-reachable checks with a negative
+  test each; delete this entry when the listed files are classified.
+
+## KI-BACKEND-011: the oneDNN CPU path is float32-only and its per-call cost is unmeasured
+
+- Severity: Limitation (narrower dtype support; performance unverified)
+- Status: Open. The oneDNN v3 functional migration is in
+  (`backends/cpu/libraries/mkl/onednn_runtime.cc` refuses oneDNN < 3 and keeps
+  a bounded per-shape plan cache, 32 plans / 64 MiB scratch); recorded
+  2026-10-05.
+- Owner: CPU backend (oneDNN)
+- Evidence: `tests/backends/cpu/test_onednn_v3_runtime.py`,
+  `tests/backends/cpu/test_onednn_contract.py`,
+  `tests/backends/cpu/test_mkl_conv_op.py`; capability declarations in
+  `python/jittor/nn/backends/onednn.py` (`dtypes={"float32"}`);
+  `backends/cpu/libraries/mkl/mkl_matmul_op.cc` ("support float32 only now").
+- Symptom: convolution and matmul through oneDNN accept float32 only; other
+  dtypes take the generic kernels (declared, not silent). The plan cache
+  replaced the per-call engine/descriptor/primitive rebuild, but the
+  acceptance it was built for -- lower CPU convolution per-call overhead -- has
+  never been measured against the old path. oneDNN no longer ships prebuilt
+  v3 binaries, so verification needs a source-built installation
+  (`JT_BUILD_MKL_INCLUDE_PATH` / `JT_BUILD_MKL_LIB_PATH`).
+- Workaround: none needed for float32.
+- Review/expiry condition: measure per-call convolution overhead before/after
+  on a fixed shape set; widen matmul through `dnnl::matmul` if fp64/fp16/bf16
+  are wanted; delete this entry when both are settled.
+
+## KI-BACKEND-012: the ACL descriptor cache is not wired into any runner, and the ACL launcher and attribute migration never ran on an Ascend device
+
+- Severity: Medium (unvalidated backend paths; host-only evidence)
+- Status: Open. Recorded 2026-10-05.
+- Owner: ACL backend maintainers
+- Evidence: [`docs/development/acl-backend-contracts.md`](../../docs/development/acl-backend-contracts.md)
+  (migration order and the device acceptance command); host contracts under
+  `tests/structure/backends/acl/`; what to run on hardware in
+  [deferred-hardware.md](deferred-hardware.md) (Ascend 910B3 single card).
+- Symptom: every `executeOp` owner goes through the shared `BaseOpRunner::launch`
+  (`tests/_helpers/acl_launch_tails.py` finds no hand-rolled tail), and the
+  attribute-carrying owners declared in
+  `backends/acl/include/aclops/acl_code_attributes.h` receive their attributes
+  through the versioned data channel instead of generated source. The
+  descriptor identity/cache shell in `acl_data_channel.h`/`acl_data.py` is not
+  used by any runner yet, so descriptors are still rebuilt per call; pool
+  descriptors keep their own lifetime. All of this has host-only evidence
+  (stub-SDK syntax checks, CPU-compiled contract probes); none of these changes
+  has executed on a 910B3.
+- Workaround: validate on hardware with `backend_fallback=error` and the
+  fallback-count check before relying on an ACL operator.
+- Review/expiry condition: wire descriptor address rebinding and invalidation
+  into a real runner, and pass the 910B3 acceptance runs in the contract page;
+  delete this entry then.
+
+## KI-BACKEND-013: seven backend gradients have no gradient test, and one is not implemented
+
+- Severity: Medium (untested gradients on backends this project rarely has)
+- Status: Open. Recorded 2026-10-05. Of the 60 backend gradient
+  implementations, 24 run on a CPU+CUDA host and were re-checked against CPU
+  references without finding a gradient bug; 36 wait for hardware.
+- Owner: backend maintainers (HCCL, ROCm, ACL)
+- Evidence: `tests/structure/test_backend_grad_contract.py`
+  (`BACKEND_GRAD_COVERAGE`, equal to the source tree in both directions); the
+  per-kind commands and the seven gaps are listed in
+  [deferred-hardware.md](deferred-hardware.md) ("后端 `grad()` 的 CPU 参考对拍").
+- Symptom: `HcclAllGatherOp::grad()` is `LOGf << "not implemented"`;
+  `RocprimCumsumOp` has no test at all; `FloorIntACL`, `IndexACL`,
+  `NonzeroACL`, `StackACL` and `TriuACL` have forward tests only, so even with
+  a card their backward is not exercised.
+- Workaround: none; do not cite these backends' gradients as verified.
+- Review/expiry condition: add the gradient tests (and the HCCL
+  implementation), change their `kind`, and run them on the hardware; the
+  structure test then lets the manual's list shrink.
+
+## KI-DIST-001: FSDP2 flat sharding peaks above the unsharded model
+
+- Severity: Limitation (memory; numerics are correct)
+- Status: Open. Measured 2026-09-08 on two CUDA ranks; recorded 2026-10-05.
+- Owner: torch compatibility / distributed (FSDP2)
+- Evidence: `compat/tests/fsdp2/test_fsdp_memory.py` (same model -- four
+  512x512 Linear layers, batch 2, Adam, five steps -- in fresh ranks per mode);
+  numerics in `compat/tests/fsdp2/test_fsdp2_nccl.py` and
+  `compat/tests/fsdp2/test_fsdp_optimizer_math.py`.
+- Symptom: allocator used high-water mark 19,977,728 B unsharded against
+  23,123,456 B for flat sharding (about 15.7% higher); the trajectory is flat
+  over five steps, so it is a peak, not growth. A smaller CUDA Var snapshot is
+  not a peak measurement and must not be cited as one.
+  `core.get_peak_allocator_used_memory()` reads the memory profiler's
+  executor-checkpoint high-water mark; `get_mem_info().total_cuda_used`
+  includes cached blocks.
+- Reproduce (Torch mode, `JITTOR_TORCH_SHIM=1`, CUDA with NCCL):
+  `JITTOR_FSDP2_MEMORY_MODE=full mpirun -np 2 python -m pytest -q -s
+  compat/tests/fsdp2/test_fsdp_memory.py`, then `JITTOR_FSDP2_MEMORY_MODE=shard
+  JITTOR_FSDP2_REFERENCE_PEAK_BYTES=<full peak> mpirun -np 2 ...`; the second
+  fails today.
+- Workaround: nonflat sharding peaked lower in the diagnostic run; neither is
+  below unsharded.
+- Review/expiry condition: find the flat update regrouping and temporaries
+  that are alive together, and pass the reference-peak run; NPU/HCCL and
+  multi-node have no evidence yet (see deferred-hardware.md).
+
+## KI-TEST-011: `test_shared_reduce.py` decodes generated source with the locale encoding
+
+- Severity: Low (a test reads its input wrongly; no product code affected)
+- Status: Open. Reproduced 2026-10-05 on `e3c369acb`.
+- Owner: CUDA codegen tests
+- Evidence: `tests/backends/cuda/test_shared_reduce.py` opens generated JIT
+  source with plain `open(...)`.
+  `LC_ALL=C PYTHONCOERCECLOCALE=0 PYTHONUTF8=0 python -m pytest -q
+  tests/backends/cuda/test_shared_reduce.py -k two_stage` fails with
+  `UnicodeDecodeError: 'ascii' codec can't decode byte 0xe2`; plain
+  `LC_ALL=C` passes on Python 3.7+ only because of locale coercion.
+- Symptom: Jittor's generated source contains non-ASCII (op keys are separated
+  by U+00AB), so whether the read fails depends on the locale and on which op
+  was generated.
+- Workaround: run under a UTF-8 locale.
+- Review/expiry condition: pass `encoding="utf-8"` there, sweep the tree for
+  other locale-dependent reads of generated source, and delete this entry.
+
+## KI-TEST-012: the PR smoke tier takes about 390 s, not under five minutes
+
+- Severity: Limitation (gate cost)
+- Status: Open. Measured 2026-09-06 (warm cache, `-n 4`, 16 cores, load
+  13-18); recorded 2026-10-05.
+- Owner: test infrastructure
+- Evidence: `python tools/run_test_suite.py --tier smoke`;
+  `tests/_helpers/tiers.py` (`SLOW_FILES`); `tests/structure/test_gate_tiers.py`.
+- Symptom: the tier is work-bound, not stuck behind one long file: native
+  406.3 s + torch 91.8 s = 498.1 s on that load (native work 1592.9 s over 4
+  workers). Reaching 300 s needs the native half's work cut to about 550 s.
+  `tests/structure` is about 9.4% of the wall time, all in the torch half; the
+  native half is `tests/ops` 31.8%, `tests/core` 27.3% (`test_setitem.py`
+  alone 15.0%), `tests/distributed` 16.2%, the former `tests/compiler` (now
+  `tests/codegen` and `tests/build`) 12.1%, `tests/nn` 9.5%. Results also show a jitter floor of about 27 nodeids between
+  two runs, so "two runs conclude identically" cannot be the acceptance yet.
+- Workaround: `--tier core` (~44 s) after an edit; smoke before a PR.
+- Review/expiry condition: make the comparisons themselves cheaper or fewer
+  (not a longer exclusion list), or add machines; close when the tier fits five
+  minutes on the reference runner.
+
+## KI-TEST-013: the CUDA device-parity gate is compile-bound, and its warm duration is unmeasured
+
+- Severity: Limitation (gate cost)
+- Status: Open. Measured in September 2026; recorded 2026-10-05.
+- Owner: test infrastructure
+- Evidence: `tests/backends/parity/test_device_parity.py`; the CPU-side
+  reference cache `tests/_helpers/reference_cache.py`
+  (`tests/backends/parity/test_reference_cache.py`);
+  `tools/gate_conclusion_diff.py compare` (per-nodeid conclusion diff);
+  `.github/workflows/cuda.yml` restores and saves the JIT cache.
+- Symptom: for the same 26 nodeids with one `JITTOR_HOME`, cold took 848.5 s
+  and warm 23.6 s (36x), so the cost is JIT compilation, not the comparisons;
+  extrapolated, a cold full gate is about two hours. Caching CPU references cut
+  cold time 16.2% with identical conclusions. Splitting across workers was
+  measured as only 6% faster and lost conclusions, so the gate stays one
+  process. Nobody has measured the full gate on a warm CI cache since the
+  workflow started persisting it.
+- Workaround: keep a warm `JITTOR_HOME` for local runs.
+- Review/expiry condition: measure the nightly gate with a restored cache; if
+  acceptable, delete this entry, otherwise reduce cold compilation.
+
+## KI-LINT-001: mypy covers the build utilities and part of compat only
+
+- Severity: Limitation (static checking coverage)
+- Status: Open. Recorded 2026-10-05. The import-direction half is done:
+  `tools/lint/check_import_layering.py` via
+  `tests/structure/test_import_layering.py` and `nox -s imports`, with the
+  remaining cycles (three Python SCCs, one ACL header cycle) as a ratchet that
+  may only shrink.
+- Owner: build and tooling maintainers
+- Evidence: `[tool.mypy] files` in `pyproject.toml`; `nox -s typing`.
+- Symptom: `python/jittor` outside `python/jittor/build` and the `backends/`
+  overlay are not type-checked; when last measured they carried about 2,500
+  and 80 errors respectively (about 2,600 errors in about 200 files).
+- Workaround: none.
+- Review/expiry condition: extend `files` one package at a time with real
+  fixes (no `# type: ignore`, no relaxed configuration); delete this entry
+  when `python/jittor` and `backends/` are covered.
