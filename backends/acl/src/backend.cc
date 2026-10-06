@@ -63,6 +63,7 @@ struct AclState {
     std::map<aclrtStream, StreamRecord> streams;
     std::map<aclrtEvent, EventRecord> events;
     std::map<void*, MemoryRecord> memory;
+    std::set<std::pair<int, int>> peer_access;
     std::map<int, std::unique_ptr<ReportThread>> reporters;
     std::exception_ptr callback_failure;
 };
@@ -477,8 +478,31 @@ aclrtMemcpyKind copy_kind(Device destination, Device source) {
         << "ACL copy requires an ACL endpoint";
     if (source.backend == BackendId::Cpu) return ACL_MEMCPY_HOST_TO_DEVICE;
     if (destination.backend == BackendId::Cpu) return ACL_MEMCPY_DEVICE_TO_HOST;
-    USER_CHECK(destination.index == source.index) << "ACL peer copy is not supported";
     return ACL_MEMCPY_DEVICE_TO_DEVICE;
+}
+
+void enable_peer_copy(int destination, int source) {
+    auto& owner = state();
+    std::lock_guard<std::recursive_mutex> guard(owner.mutex);
+    if (owner.peer_access.count({destination, source})) return;
+    int32_t supported = 0;
+    check_acl(aclrtDeviceCanAccessPeer(&supported, destination, source),
+              "aclrtDeviceCanAccessPeer");
+    USER_CHECK(supported) << "ACL devices do not support peer access:"
+                          << destination << "<-" << source;
+    check_acl(aclrtDeviceCanAccessPeer(&supported, source, destination),
+              "aclrtDeviceCanAccessPeer");
+    USER_CHECK(supported) << "ACL devices do not support peer access:"
+                          << source << "<-" << destination;
+    for (auto pair : {std::make_pair(destination, source),
+                      std::make_pair(source, destination)}) {
+        if (owner.peer_access.count(pair)) continue;
+        on_device(pair.first, [&] {
+            check_acl(aclrtDeviceEnablePeerAccess(pair.second, 0),
+                      "aclrtDeviceEnablePeerAccess");
+        });
+        owner.peer_access.insert(pair);
+    }
 }
 
 void copy_async(void* destination, Device destination_device, const void* source,
@@ -489,6 +513,14 @@ void copy_async(void* destination, Device destination_device, const void* source
     const int device = destination_device.backend == BackendId::Acl
         ? destination_device.index : source_device.index;
     USER_CHECK(device == stream.device.index) << "ACL copy stream belongs to another device";
+    if (source_device.backend == BackendId::Acl &&
+        destination_device.backend == BackendId::Acl &&
+        source_device.index != destination_device.index) {
+        enable_peer_copy(destination_device.index, source_device.index);
+        // The destination stream cannot wait on a source-device event. Finish
+        // source producers before scheduling a copy on the destination stream.
+        synchronize(1ull << source_device.index);
+    }
     on_device(device, [&] {
         check_acl(aclrtMemcpyAsync(destination, size, source, size, kind,
                                    static_cast<aclrtStream>(stream.handle)), "aclrtMemcpyAsync");
@@ -522,8 +554,12 @@ void* allocate_memory(int device, BackendMemoryKind kind, size_t size) {
     USER_CHECK(kind != BackendMemoryKind::Managed) << "ACL has no managed-memory allocator";
     void* pointer = nullptr;
     on_device(device, [&] {
+        // Multi-device tensors may later move to a peer, so their storage
+        // must be accessible through the peer link from its first allocation.
+        auto policy = ready_device_count.load(std::memory_order_relaxed) > 1
+            ? ACL_MEM_MALLOC_HUGE_FIRST_P2P : ACL_MEM_MALLOC_HUGE_FIRST;
         check_acl(kind == BackendMemoryKind::Pinned ? aclrtMallocHost(&pointer, size)
-            : aclrtMalloc(&pointer, size, ACL_MEM_MALLOC_HUGE_FIRST), "allocate ACL memory");
+            : aclrtMalloc(&pointer, size, policy), "allocate ACL memory");
         try {
             std::lock_guard<std::recursive_mutex> guard(state().mutex);
             state().memory.emplace(pointer, MemoryRecord{device, kind});
