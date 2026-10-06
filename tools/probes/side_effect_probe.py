@@ -26,7 +26,7 @@ to say why. An operation that mutates without being declared is the finding.
 
 Usage::
 
-    PYTHONPATH=<repo>/python python tools/side_effect_probe.py --device cuda
+    PYTHONPATH=<repo>/python python tools/probes/side_effect_probe.py --device cuda
     # run under an isolated JITTOR_HOME; residency findings need a real device
 """
 
@@ -39,7 +39,7 @@ import sys
 import numpy as np
 
 
-REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 MANIFEST = REPO_ROOT / "tests" / "structure" / "public_api_manifest.json"
 
 #: Operations whose whole purpose is to change their receiver or an argument.

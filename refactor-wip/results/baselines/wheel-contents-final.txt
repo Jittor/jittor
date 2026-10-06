@@ -1,7 +1,7 @@
 # Jittor wheel contents baseline (SHA-256 and exact archive member paths)
 # source-wheel: jittor-1.3.11.0-py3-none-any.whl
 # source-wheel-sha256: 09aa1156c2d41fc63d45c0a5281d4fbd4630891da4d785e729c93c2548215848
-# entries: 1033
+# entries: 1029
 # Regenerate only after reviewing every path and content change.
 3889c713af1ec11c73c069d9543a49d10b304e8f50fe0ef64fdccbfbabef1689  jittor-1.3.11.0.dist-info/METADATA
 032954d06be86f1a0f1b8599e0d024071e67c8648d0005a91a3692469f19326f  jittor-1.3.11.0.dist-info/RECORD
@@ -415,9 +415,6 @@ f016216ceac0875538a84cf7fc415e94956824753fb71d71eaa91e04c98da207  jittor/build/u
 e558168907a91ff0612813087cf16db4e9ff8459f1febf5deeb7d8c32eae7567  jittor/build/utils/backend_resources.py
 a2ff78d28fefc648ada7b78a87c9ae78235f661fe39deae39e89bf1feeb46547  jittor/build/utils/bootstrap.py
 23e9592b0cb53edad212d7ffec0b41b6fc6c15a5ffb126d752b0e8fbf923b5bc  jittor/build/utils/build_config.py
-9f78044f406c4bc9013754abaf2178d55bb16cb39518562eb224d0ccc63f3324  jittor/build/utils/class/motd
-5a09fb12e28aa68f4e8300100a000a89dda36271e4a7c48167eb0055ca434ae1  jittor/build/utils/class/setup.py
-51edb1460b355eba58bb439851790ba8019af6c32ffe9edd23fd00432a768a0f  jittor/build/utils/class/setup_env.py
 5e3eb16811e88b90ec27aa9a3913bedcee82b21db50b28367d86106800410453  jittor/build/utils/clean_cache.py
 c3fc3e2772c4fd779abf25a82432b5bba7b7f58cf3311646b21b4a715cb8acc3  jittor/build/utils/compiler_flags.py
 c750067935188a2e1b38c13b726db1946e1cf81aaa312adb5f104805dd11fb3d  jittor/build/utils/config.py
@@ -437,7 +434,6 @@ e2fdac8547d3e0b6af60e3ee4e637dd5615965aeef439fdcbf85321a954acf11  jittor/build/u
 0db776dc570252dc81f3ee6e7e49f39e6c8d9011d6bba6a1943243e0d19f25ec  jittor/build/utils/ring_buffer.py
 1214833b1ae1c0c36a972e8978394c5ece692a53c3fe694b2be6241cdb0b4c8c  jittor/build/utils/runtime_services.py
 81e7083ef6ee0493f8d99b138189bdfb9ea832e0b34306551cff8548bb74ce10  jittor/build/utils/save_pytorch.py
-5edef8a08fcd9cb400276c946f313d1f83a5d1847878cce339404a26f49c1e59  jittor/build/utils/student_queue.py
 9b2fa65e1986803e244b8257933c9ff2d93703da35412f4904c5c7bdfa84561e  jittor/ccl/__init__.py
 d05b969b388a36c12e9ae6b197da37337efe10c6e5b63829c80b9a14c7323776  jittor/ccl/ccl_2d.py
 c951502ac35f7d2e0c176dd31816d83f5f9768e013cd6a8f0b2ccf92c4aa1b80  jittor/ccl/ccl_3d.py

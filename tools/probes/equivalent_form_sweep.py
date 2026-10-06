@@ -23,7 +23,7 @@ defect.
 
 Usage::
 
-    PYTHONPATH=<repo>/python python tools/equivalent_form_sweep.py [--device cuda]
+    PYTHONPATH=<repo>/python python tools/probes/equivalent_form_sweep.py [--device cuda]
 """
 
 import argparse

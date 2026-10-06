@@ -239,10 +239,9 @@ def _refuses_collection(path):
     The file name *is* the collection instruction, so a reproduce-by-hand
     script parked under a test root is collected, imported, and -- because its
     body really does something -- reported as a gate failure about code it
-    never exercised. ``tests/integration/test_h3_decode_thread_race.py`` is
-    the case that happened (KI-TEST-006): it is run by path
-    (``python3 <path> 12 1``), so it stays where its author keeps it and the
-    *policy* stops treating it as a test module.
+    never exercised. An H3 decode reproduction run by path
+    (``python3 <path> 12 1``) is the case that happened; the *policy* stops
+    treating such a file as a test module.
 
     Refusing is only safe in one direction, and this errs hard that way: a
     file is refused when it could contribute nothing to collection anyway, so

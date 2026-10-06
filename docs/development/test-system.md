@@ -128,7 +128,7 @@ NumPy 或数学参考比对。
 | [`tests/structure/torch_api_manifest.json`](https://github.com/Jittor/jittor/blob/master/tests/structure/torch_api_manifest.json) 与其门禁 | Torch 面的 1295 个名字**还在不在** |
 | [`tests/_helpers/api_coverage.py`](https://github.com/Jittor/jittor/blob/master/tests/_helpers/api_coverage.py)（`JITTOR_API_COVERAGE=1`） | 一次运行**真的调用**了哪些入口 |
 | [`tools/api_coverage_ratchet.py`](https://github.com/Jittor/jittor/blob/master/tools/api_coverage_ratchet.py) 与两份基线 | 没被调用的那个集合**有没有变大** |
-| [`tools/opinfo_dtype_gaps.py`](https://github.com/Jittor/jittor/blob/master/tools/opinfo_dtype_gaps.py) | 哪些 (算子, dtype) **跑得通却没声明** |
+| [`tools/probes/opinfo_dtype_gaps.py`](https://github.com/Jittor/jittor/blob/master/tools/probes/opinfo_dtype_gaps.py) | 哪些 (算子, dtype) **跑得通却没声明** |
 
 覆盖测量默认关闭：包装每个公开入口是诊断，不是常态。它用开/关对照验证不改变被测
 系统——原生 `tests/ops/test_where_op.py` 开关两侧同为 18 passed，Torch 会话在排除
@@ -274,7 +274,7 @@ collected/executed 计数，于是「完成了但悄悄收集得更少」也可�
 会解析到哪里"）也走 helper，写成 `child_env(..., repo_paths=False)`——一个读起来像
 疏忽的例外无法和疏忽区分开。
 
-**光传对树还不够，设备也要传，而且要自证。** `tools/roundtrip_consistency_sweep.py`
+**光传对树还不够，设备也要传，而且要自证。** `tools/probes/roundtrip_consistency_sweep.py`
 的子进程一直没设 `use_cuda`，靠默认值——而**全新进程里 `use_cuda` 默认是 0，即便机器上
 有八张卡**。于是 `--device cuda` 那一档比的是「CUDA 父进程」对「CPU 子进程」，把两个
 设备的差异当成了序列化缺陷。它一直报 OK，是因为在 `-Ofast` 下这个模型在两个设备上

@@ -20,7 +20,7 @@ special values where reassociation is visible rather than in the last bit.
 
 Usage::
 
-    PYTHONPATH=<repo>/python python tools/fusion_consistency_sweep.py [--device cuda]
+    PYTHONPATH=<repo>/python python tools/probes/fusion_consistency_sweep.py [--device cuda]
 """
 
 import argparse
@@ -73,7 +73,7 @@ def opinfo_cases(jt):
     and what gives the pass something to do.
     """
     import sys, pathlib as _pl
-    sys.path.insert(0, str(_pl.Path(__file__).resolve().parents[1] / "tests"))
+    sys.path.insert(0, str(_pl.Path(__file__).resolve().parents[2] / "tests"))
     from opinfo.database import op_db
     cases = []
     for info in op_db:

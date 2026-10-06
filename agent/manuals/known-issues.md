@@ -888,7 +888,7 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
   Reading a *single element* is worse: `d[0].item()` leaves `d` itself on the
   host, so a one-element read moves 40 MiB off the device.
   `tolist()` is a third spelling of the same relocation, found by
-  `tools/side_effect_probe.py` rather than by hand; it was not in this entry
+  `tools/probes/side_effect_probe.py` rather than by hand; it was not in this entry
   when the entry was written, which is the argument for the probe.
 - Not this issue: a reduction result. `u.sum().item()` leaves `u` on the
   device, because the scalar is a new Var rather than a view of `u`. The common
@@ -1026,7 +1026,7 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
   Every other reading of them is trustworthy, so a caller who checks residency
   around a hook gets a wrong answer with no way to tell it apart from a genuine
   unmaterialized Var.
-- Found by: `tools/side_effect_probe.py`, which compares a Var against a
+- Found by: `tools/probes/side_effect_probe.py`, which compares a Var against a
   snapshot of itself across every public operation. It was not looking for this;
   the operation appears because it changes an input it was not asked to change.
   The probe reports *that* something changed, not what it costs -- the severity
@@ -1039,7 +1039,7 @@ the **op-level** one (`parallel_compiler.cc`, `std::thread`, corruption) is not.
   (`jt.grad` with a `g*2` hook returns `[2,2,2]`). So this is one accessor
   answering about the wrong node, which is why it stays Low.
 - It is also the only one of its kind, which is the rest of why Low is right:
-  `tools/side_effect_probe.py --device cpu` on 2026-09-21 reports
+  `tools/probes/side_effect_probe.py --device cpu` on 2026-09-21 reports
   `probed=223 {'OK': 182, 'UNCALLED': 40, 'MUTATES': 1}`, and the single
   undeclared mutation is this `location cpu->none`. The 40 uncalled are the ones
   that need a device.
@@ -1889,7 +1889,7 @@ growth* -- the relative error at 16M within a small factor of the error at
 65,536, and within a small factor of NumPy's on the same input -- so it says
 what "accurate enough" means without a threshold that turns red on a different
 machine. The probe categories added alongside these entries (`device-agree`,
-`stability`, `float-edge` in `tools/semantic_divergence_probe.py`) are the rest
+`stability`, `float-edge` in `tools/probes/semantic_divergence_probe.py`) are the rest
 of that gate in draft; they are what found all three, and the CPU `stability`
 mismatch they reported for 006 is now clear.
 
@@ -2023,7 +2023,7 @@ about whether to take it.
   gives `0.0` unfused -- `2.0` is below the ULP of `1e8`, so the addition
   discards it, which is what the written expression says -- and `2.0` fused,
   because the larger expression handed to the compiler is reassociated to
-  `b + (a - a)`. Measured with `tools/fusion_consistency_sweep.py`: 12 cases,
+  `b + (a - a)`. Measured with `tools/probes/fusion_consistency_sweep.py`: 12 cases,
   CPU has one differing, CUDA has none.
 
   Fusion depends on what else is in the graph, so the same code gives different
@@ -2052,7 +2052,7 @@ about whether to take it.
   and it is the reason KI-OPS-006's ratio changed without either measurement
   being wrong.
 - The fused-versus-unfused divergence went with it:
-  `tools/fusion_consistency_sweep.py` on CPU went from 1 differing case to
+  `tools/probes/fusion_consistency_sweep.py` on CPU went from 1 differing case to
   12/12 identical.
 - No workaround is needed any more. Before the fix there was none inside a
   kernel: values that might be infinite had to be masked before they reached

@@ -22,7 +22,7 @@ things are worth reading for in the output:
 
 Usage::
 
-    PYTHONPATH=<repo>/python python tools/error_message_probe.py [--json out.json]
+    PYTHONPATH=<repo>/python python tools/probes/error_message_probe.py [--json out.json]
     # run under an isolated JITTOR_HOME so it does not queue behind other work
     # --device cpu|cuda   (default cpu)
 """

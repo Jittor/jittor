@@ -23,7 +23,7 @@ flatter the result.
 
 Usage::
 
-    PYTHONPATH=<repo>/python python tools/opinfo_dtype_gaps.py [--json out.json]
+    PYTHONPATH=<repo>/python python tools/probes/opinfo_dtype_gaps.py [--json out.json]
 """
 
 import argparse
@@ -33,7 +33,7 @@ import sys
 import pathlib
 
 
-REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 def _load_db():

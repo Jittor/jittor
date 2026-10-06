@@ -21,7 +21,7 @@ itself.
 
 Usage::
 
-    PYTHONPATH=<repo>/python python tools/semantic_divergence_probe.py [--json out.json]
+    PYTHONPATH=<repo>/python python tools/probes/semantic_divergence_probe.py [--json out.json]
     # run under an isolated JITTOR_HOME so it does not queue behind other work
 """
 
@@ -415,7 +415,7 @@ def probe_numerical_stability(jt, device):
     # cry wolf.
     #
     # The cause was `-Ofast` reassociating the fused expression, and
-    # KI-BACKEND-005 removed it: `tools/fusion_consistency_sweep.py` went from
+    # KI-BACKEND-005 removed it: `tools/probes/fusion_consistency_sweep.py` went from
     # 1 differing case to 12/12 identical on CPU with that change. So this is
     # a candidate for reinstatement -- but as a fused-versus-unfused agreement
     # check, which needs no expectation, rather than as a fixed expected value.

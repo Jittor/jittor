@@ -174,10 +174,6 @@ RUNTIME_BUILD_HELPERS = frozenset((
     "jittor/build/utils/ring_buffer.py",
     "jittor/build/utils/runtime_services.py",
     "jittor/build/utils/save_pytorch.py",
-    "jittor/build/utils/student_queue.py",
-    "jittor/build/utils/class/motd",
-    "jittor/build/utils/class/setup.py",
-    "jittor/build/utils/class/setup_env.py",
 ))
 
 

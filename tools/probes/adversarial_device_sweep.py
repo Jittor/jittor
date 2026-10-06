@@ -16,7 +16,7 @@ ordinary, which is why the divergences it exists to catch survived in it.
 
 Usage::
 
-    PYTHONPATH=<repo>/python python tools/adversarial_device_sweep.py [--json out.json]
+    PYTHONPATH=<repo>/python python tools/probes/adversarial_device_sweep.py [--json out.json]
 """
 
 import argparse
@@ -27,7 +27,7 @@ import sys
 import numpy as np
 
 
-REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 #: The values implementations disagree about. Two vectors rather than one,
 #: because they probe different mechanisms: the first is about what the format
