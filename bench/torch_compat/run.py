@@ -219,6 +219,10 @@ def main():
                              "workload under, e.g. none,reduce-overhead")
     parser.add_argument("--timeout", type=int, default=3600)
     parser.add_argument("--out", default=None, help="result directory")
+    parser.add_argument("--state", default=None,
+                        help="Jittor compile cache and TMPDIR for this run "
+                             "(default: $JITTOR_LAB_ROOT/_state/bench-torch-compat/"
+                             "cache-<size>); give concurrent runs separate ones")
     parser.add_argument("--label", default=None)
     parser.add_argument("--list", action="store_true")
     options = parser.parse_args()
@@ -249,7 +253,8 @@ def main():
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     out = Path(options.out) if options.out else (
         lab_root() / "_state" / "bench-torch-compat" / stamp)
-    state = lab_root() / "_state" / "bench-torch-compat" / ("cache-" + options.size)
+    state = Path(options.state) if options.state else (
+        lab_root() / "_state" / "bench-torch-compat" / ("cache-" + options.size))
     (state / "tmp").mkdir(parents=True, exist_ok=True)
     log_dir = out / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
