@@ -39,6 +39,11 @@ def _cuda():
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
+#: The CUDA kernels these paths build. `torch.cuda.is_available()` is also
+#: true for an NPU under the torch frontend, where ACL's own kernels serve.
+_CUDA_KERNELS = torch.cuda.is_available() and bool(getattr(jt.compiler, "is_cuda", False))
+
+
 class TestFastCat(unittest.TestCase):
     def test_values_dims_and_dtypes(self):
         device = _cuda()
@@ -185,9 +190,13 @@ class TestFastBinary(unittest.TestCase):
         self.assertIsNone(jt.core._fast_binary(i, 2.5, 4))
         self.assertEqual((i * 2.5).dtype, torch.float32)
         self.assertIsNone(jt.core._fast_binary(h, True, 0))
+        self.assertEqual((h / 2.0).dtype, torch.float16)
+        np.testing.assert_array_equal((h / 2.0).numpy(), np.full(3, 0.5, "float16"))
         # A float divisor is widened natively as `_true_division` widens it
-        # (bit for bit: test_torch_compat_promotion.py); an int one is not.
-        self.assertEqual(jt.core._fast_binary(h, 2.0, 6).dtype, torch.float16)
+        # (bit for bit: test_torch_compat_promotion.py) -- everywhere but ACL,
+        # whose widening stays in Python; an int one is not.
+        if not getattr(jt.compiler, "has_acl", 0):
+            self.assertEqual(jt.core._fast_binary(h, 2.0, 6).dtype, torch.float16)
         self.assertIsNone(jt.core._fast_binary(h, 2, 6))
 
     def test_the_pairs_it_hands_back(self):
@@ -332,7 +341,7 @@ class TestNativeModuleDispatch(unittest.TestCase):
         np.testing.assert_allclose(layer.weight.grad.numpy(),
                                    np.tile(x.numpy().sum(0), (2, 1)), rtol=1e-5)
 
-    @unittest.skipUnless(torch.cuda.is_available(), "the cuBLASLt route is CUDA's")
+    @unittest.skipUnless(_CUDA_KERNELS, "the cuBLASLt route is CUDA's")
     def test_a_linear_with_a_bias_at_inference(self):
         # Built natively as the same cuBLASLt operator `lt_linear_cuda` builds.
         from jittor.backends.cuda.kernels.cublas.lt_linear_cuda import lt_linear_cuda
@@ -376,6 +385,7 @@ class TestNativeModuleDispatch(unittest.TestCase):
         with torch.no_grad():
             self.assertIs(none(x), x)
 
+    @unittest.skipIf(getattr(jt.compiler, "has_acl", 0), "ACL launches its own relu kernel")
     def test_a_relu(self):
         # Built natively as `jittor.nn.relu` builds it -- one `unary` relu --
         # without reaching Python, once `inplace=True` has had its warning.
@@ -404,7 +414,7 @@ class TestNativeModuleDispatch(unittest.TestCase):
         outer(z).sum().backward()
         np.testing.assert_array_equal(z.grad.numpy(), (z.numpy() > 0).astype("float32"))
 
-    @unittest.skipUnless(torch.cuda.is_available(), "the channels-last group norm is CUDA's")
+    @unittest.skipUnless(_CUDA_KERNELS, "the channels-last group norm is CUDA's")
     def test_an_inference_group_norm_and_the_silu_after_it(self):
         # Built natively as `_group_norm_nhwc` builds it, with the same offer
         # to take the activation into its pass -- which a SiLU module and
@@ -451,7 +461,7 @@ class TestNativeModuleDispatch(unittest.TestCase):
         torch.nn.Sequential(train, torch.nn.SiLU())(z).sum().backward()
         self.assertEqual(tuple(z.grad.shape), (2, 64, 16, 16))
 
-    @unittest.skipUnless(torch.cuda.is_available(), "the RMSNorm kernel is CUDA's")
+    @unittest.skipUnless(_CUDA_KERNELS, "the RMSNorm kernel is CUDA's")
     def test_a_bfloat16_rms_norm_rounds_as_torch_does(self):
         # The normalized value is rounded to bfloat16 before the weight
         # multiplies it, as ATen and HF's `LlamaRMSNorm` do; rounding once at
@@ -503,7 +513,7 @@ class TestNativeModuleDispatch(unittest.TestCase):
         self.assertEqual(tuple(x.grad.shape), (3, 16))
 
 
-    @unittest.skipUnless(torch.cuda.is_available(), "the native LayerNorm build is CUDA's")
+    @unittest.skipUnless(_CUDA_KERNELS, "the native LayerNorm build is CUDA's")
     def test_a_layer_norm_at_inference(self):
         # Built natively from the source `_layer_norm_no_grad_cuda` builds, the
         # warp-a-row kernel and the block-a-row one alike: bit for bit.
@@ -567,7 +577,7 @@ class TestNativeGelu(unittest.TestCase):
         self.assertIsNone(jt.core._fast_gelu(torch.arange(4, device=_cuda())))
 
 
-    @unittest.skipUnless(torch.cuda.is_available(), "the one-kernel GELU is built on CUDA")
+    @unittest.skipUnless(_CUDA_KERNELS, "the one-kernel GELU is built on CUDA")
     def test_a_gelu_of_a_linear_output_is_one_kernel_with_the_same_bits(self):
         from jittor.nn.functional import activation
         outer = torch.nn.Sequential(torch.nn.Linear(256, 512)).cuda()
@@ -596,7 +606,7 @@ class TestNativeGelu(unittest.TestCase):
 
 
 class TestSdpaRoutes(unittest.TestCase):
-    @unittest.skipUnless(torch.cuda.is_available(), "the routes remembered are CUDA kernels")
+    @unittest.skipUnless(_CUDA_KERNELS, "the routes remembered are CUDA kernels")
     def test_a_remembered_route_gives_the_walk_s_answer(self):
         from jittor.compat.torch.installers.nn import attention
         from jittor._runtime import dispatch
@@ -631,7 +641,7 @@ class TestSdpaRoutes(unittest.TestCase):
         self.assertEqual(tuple(qg.grad.shape), (1, 4, 16, 32))
         native.LAST_FUSED_KERNEL[0] = None
 
-    @unittest.skipUnless(torch.cuda.is_available(), "the routes remembered are CUDA kernels")
+    @unittest.skipUnless(_CUDA_KERNELS, "the routes remembered are CUDA kernels")
     def test_a_device_route_is_not_taken_by_host_tensors_of_the_same_shapes(self):
         from jittor.compat.torch.installers.nn import attention
         sdpa = torch.nn.functional.scaled_dot_product_attention
@@ -646,14 +656,14 @@ class TestSdpaRoutes(unittest.TestCase):
                     q = torch.tensor(q_np, device=device)
                     mask = torch.tensor(mask_np, device=device)
                     out = sdpa(q, q, q, attn_mask=mask)
-                    self.assertEqual(out.device.type, device)
+                    self.assertEqual(out.device.type, q.device.type)
                     outs.append(out.numpy())
         finally:
             attention._ROUTES.clear()
         np.testing.assert_allclose(outs[1], outs[0], rtol=1e-4, atol=1e-5)
         np.testing.assert_allclose(outs[2], outs[0], rtol=1e-4, atol=1e-5)
 
-    @unittest.skipUnless(torch.cuda.is_available(), "the routes remembered are CUDA kernels")
+    @unittest.skipUnless(_CUDA_KERNELS, "the routes remembered are CUDA kernels")
     def test_a_float32_call_flash_declines_is_remembered_with_its_cast_switch(self):
         # Flash takes no float32 unless asked to cast it, which is part of
         # what the route is remembered under.
@@ -682,7 +692,7 @@ class TestSdpaRoutes(unittest.TestCase):
 
 
 class TestNativeRules(unittest.TestCase):
-    @unittest.skipUnless(torch.cuda.is_available(), "the LayerNorm relay is CUDA's")
+    @unittest.skipUnless(_CUDA_KERNELS, "the LayerNorm relay is CUDA's")
     def test_the_layer_norm_relay_is_chosen_natively_as_before(self):
         from jittor._runtime.dispatch import select_kernel
         from jittor.backends.cuda.kernels.nn import layer_norm_cuda
@@ -703,7 +713,7 @@ class TestNativeRules(unittest.TestCase):
                 chosen = select_kernel("nn.layer_norm.inference", x, shape, weight, bias, 1e-5)
                 self.assertIs(chosen, impl if python else None)
 
-    @unittest.skipUnless(torch.cuda.is_available(), "the conv2d kernels compared are CUDA's")
+    @unittest.skipUnless(_CUDA_KERNELS, "the conv2d kernels compared are CUDA's")
     def test_the_conv2d_kernels_are_chosen_natively_as_before(self):
         # The depthwise kernel, then cuDNN, as their Python predicates answer.
         from jittor._runtime.dispatch import select_kernel
@@ -730,7 +740,7 @@ class TestNativeRules(unittest.TestCase):
             else:
                 self.assertIs(got, want, (a.dtype, w.dtype, groups, kwargs))
 
-    @unittest.skipUnless(torch.cuda.is_available(), "the group norm kernel is CUDA's")
+    @unittest.skipUnless(_CUDA_KERNELS, "the group norm kernel is CUDA's")
     def test_the_group_norm_kernel_is_chosen_natively_as_before(self):
         from jittor._runtime.dispatch import select_kernel
         from jittor.backends.cuda.kernels.nn import group_norm_cuda
