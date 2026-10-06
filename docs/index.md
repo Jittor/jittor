@@ -30,6 +30,7 @@ results/index
 :caption: 项目
 
 development/index
+research/index
 releases/index
 community/index
 contributing

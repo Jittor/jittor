@@ -123,6 +123,18 @@ weights = load_file("model.safetensors")
 
 两者都能直接加载真实 torch 保存的文件（含 bf16 在内的全部 dtype），**不需要装真 torch**。
 
+`torch.load` 的安全规则：
+
+- **`weights_only` 默认为 `True`**，与 torch ≥ 2.6 一致；格式探测本身也走受限的
+  Unpickler，所以一个恶意的普通 `.pt` pickle 在探测阶段就不会被执行。
+- 标准的 torch zip checkpoint 在受限模式下读取：按 storage offset、shape 与 stride 重建，
+  负 stride 和越出存储的描述在构造之前报错，未知的存储 dtype 被拒绝而不是当成 float32。
+  读取会把值物化出来：共享存储的往返标识、非连续的物理布局都不保留。
+- 旧版（非 zip）torch 格式、原生 URL 加载与原生 `.pkl` 回退**没有**可注入受限 Unpickler
+  的接口，因此必须显式传 `weights_only=False`，并且只用于可信输入。
+- safetensors：NumPy 请求仍然返回 NumPy 数组；torch 请求保留宽整数、BF16 与所请求的设备；
+  float8 显式不支持；编码不支持的 dtype 在打开输出文件之前就报错。
+
 ## 跑 transformers / LlamaFactory
 
 环境要求：
@@ -311,6 +323,13 @@ Lightning 风格训练核心，以及清晰的报错。算子面通过算子级�
 `module._parameters[name] = value` 真正生效并保持参数/缓冲的分类。已验证：diffusers
 `UNet2DModel` 的 save → `from_pretrained` → 前向往返在 meta 与普通两条路径上都吻合到
 `0.0`，transformers `BertModel` 往返同样吻合到 `0.0`。
+
+**优化器与调度器的已知限制。** Adam/AdamW 调用共享的原生 `adam_update`，SGD、RMSprop 与
+Adan 委托各自的原生 step，没有第二套更新公式。`torch.optim.LBFGS` 未实现（构造时报
+`NotImplementedError`，保真度登记为 `unimplemented`）；`SGD` 还不接受 `foreach=`/`fused=`
+（见已知问题 `KI-COMPAT-008`）。调度器公式保持原样，但**不承诺**完整的 resume 语义，也不
+填充被忽略的可选参数；`AveragedModel` 仍以原生 Module 为基类，接受 `use_buffers` 但不做
+buffer 平均。这些 API 在保真度报告里登记为 `approximate`。
 
 **NumPy 2.x 与 Python 3.13** 是维护中的兼容路径。Jittor 为数组拷贝选择带版本的
 NumPy C-API 入口，避免构造 legacy dtype descriptor，并从 Jittor dtype 推导传输尺寸。

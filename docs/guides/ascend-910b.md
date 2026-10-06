@@ -372,5 +372,5 @@ export trace_py_var=3
 这些开关是诊断用途且会拖慢执行，**定位到出错运算后就去掉**。通用的 JIT 与显存诊断见
 [调试指南](debugging.md)。
 
-各 ACL 算子族迁移到共享 launcher 的逐条状态属于整改期记录，见
-[昇腾迁移记录](../../refactor-wip/architecture/ascend-migration-notes.md)。
+共享 launcher、属性数据通道、描述符缓存外壳以及设备验收判据的开发者契约见
+[ACL 后端契约](../development/acl-backend-contracts.md)。

@@ -189,6 +189,11 @@ FSDP2 真路径与流水线逻辑都挂在 `_call` 里。
   `register_autograd` 分别写前向、fake 与反向；`infer_schema()` 从 Python 注解
   推导 op schema。
 
+注册了 backward 的算子在原生输出 tape 构造之前就把浮点/复数结果标为需要梯度（即使 kernel
+内部 detach 了结果），整数/bool 结果不标；`Library` 的注册表与算子元数据写入参与当前的安装
+事务（`_transactional_registry = True`），失败时随事务回滚，见
+[Torch 安装事务](../development/torch-install-transactions.md)。
+
 下游库的同名算子可以被集成覆盖：`compat/integrations.py` 的
 `custom_op_overrides()` 提供替换表，`custom_op` 命中时记录
 `_overridden_by_integration`，而不是悄悄换掉实现。
