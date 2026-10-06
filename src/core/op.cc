@@ -103,6 +103,7 @@ const OpDef& Op::definition() const {
 }
 
 static thread_local int execution_target_override = -1;
+static thread_local bool host_execution_forced = false;
 
 BackendId execution_target_backend() {
     return execution_target_override < 0
@@ -123,6 +124,12 @@ ExecutionBackendScope::ExecutionBackendScope(BackendId backend)
 
 ExecutionBackendScope::~ExecutionBackendScope() { execution_target_override = previous; }
 
+HostExecutionScope::HostExecutionScope() : previous(host_execution_forced) {
+    host_execution_forced = true;
+}
+
+HostExecutionScope::~HostExecutionScope() { host_execution_forced = previous; }
+
 TensorPlacement Op::graph_placement() const {
     for (const auto& edge : _outputs) {
         Var* output = edge.node->var();
@@ -138,6 +145,7 @@ BackendId Op::requested_backend() const {
 }
 
 BackendId Op::execution_backend() const {
+    if (PREDICT_BRANCH_NOT_TAKEN(host_execution_forced)) return BackendId::Cpu;
     const auto requested = requested_backend();
     return flag(OpFlags::_cuda) && requested != BackendId::Cpu
         ? requested : BackendId::Cpu;

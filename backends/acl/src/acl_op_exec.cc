@@ -180,6 +180,7 @@ namespace jittor
     class AclCpuFallbackScope
     {
         ExecutionBackendScope execution_scope{BackendId::Cpu};
+        HostExecutionScope host_execution;
         int previous_mode;
         FusedOp *fused = nullptr;
         FusedOpContext *context = nullptr;

@@ -28,6 +28,18 @@ struct ExecutionBackendScope {
     ExecutionBackendScope(const ExecutionBackendScope&) = delete;
     ExecutionBackendScope& operator=(const ExecutionBackendScope&) = delete;
 };
+// Every op the calling thread runs meanwhile resolves to its CPU
+// implementation, whatever it is placed on. For a backend's host fallback
+// (ACL's `fallback_cpu`): an op explicitly placed on the device -- a torch
+// tensor on the NPU -- resolved to the device implementation again under a
+// CPU `ExecutionBackendScope`, which fell back again, until the stack ran out.
+struct HostExecutionScope {
+    bool previous;
+    HostExecutionScope();
+    ~HostExecutionScope();
+    HostExecutionScope(const HostExecutionScope&) = delete;
+    HostExecutionScope& operator=(const HostExecutionScope&) = delete;
+};
 struct Op : Node {
     Float32PrecisionPolicy float32_precision;
     uint64 launch_origin = 0;
