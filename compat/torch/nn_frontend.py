@@ -163,7 +163,13 @@ class NNFrontendOwner:
         self.tensor_type = tensor_type
         self.native_module = backend.nn.Module
         self.Parameter = make_parameter_type(backend, tensor_type)
-        self.Module = type("Module", (self.native_module,), {
+        # Torch's explicit ``super(nn.Module, self).__init__(...)`` must cross a
+        # Torch-owned base before reaching the native Jittor class.  The base
+        # receives the cooperative initializer without mutating jt.Module.
+        self.cooperative_module = type("_TorchNativeModule", (self.native_module,), {
+            "__module__": "jittor.compat.torch.nn_frontend", "__slots__": (),
+        })
+        self.Module = type("Module", (self.cooperative_module,), {
             "__module__": "torch.nn", "__slots__": (),
             "_frontend_tensor_type": tensor_type, "_nn_frontend_owner": self,
             "__setattr__": module_setattr, "__call__": module_call,

@@ -106,6 +106,14 @@ def test_cooperative_initializer_belongs_to_torch_module():
             super().__init__(marker)
 
     assert Model("cooperative").marker == "cooperative"
+
+    class ExplicitTail(nn.Module, Tail):
+        def __init__(self, marker):
+            super().__init__()
+            super(nn.Module, self).__init__(marker)
+
+    assert ExplicitTail("swift-adapter").marker == "swift-adapter"
+    assert nn.Module.__bases__[0].__dict__["__init__"] is nn_installer._native_module_init
     assert isinstance(jt.Module(), jt.Module)
 
 

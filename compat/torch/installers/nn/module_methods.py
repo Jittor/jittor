@@ -1284,9 +1284,12 @@ def _install_module_methods(nn, registry=None):
     registry = registry_for(jt, registry)
     M = nn.Module
     global _COOPERATIVE_NATIVE_MODULE
-    _COOPERATIVE_NATIVE_MODULE = M.__bases__[0]
-    # Keep the cooperative MRO bridge on the Torch-owned subclass.  Writing it
-    # to the native base changes jt.Module for unrelated Jittor users.
+    torch_native_base = M.__bases__[0]
+    _COOPERATIVE_NATIVE_MODULE = torch_native_base.__bases__[0]
+    # Both levels belong to the Torch frontend.  Explicit
+    # super(nn.Module, self).__init__(...) resolves to the private base;
+    # ordinary super().__init__(...) resolves to Module itself.
+    torch_native_base.__init__ = _native_module_init
     M.__init__ = _native_module_init
 
     # A fresh install re-reads the pipelining env var and forgets any threshold a
