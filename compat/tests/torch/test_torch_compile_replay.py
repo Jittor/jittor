@@ -113,6 +113,35 @@ class _Case:
         for g in got:
             np.testing.assert_allclose(g, want, rtol=1e-5, atol=1e-6)
 
+    def test_auto_replay_does_not_reuse_a_peft_adapter_path(self):
+        class AdapterModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                # The same structural markers PeftModel sets before its first
+                # forward, without importing PEFT into this runtime test.
+                self._peft_config = None
+                self.base_model = nn.Linear(2, 2, bias=False)
+                self.adapter_enabled = True
+
+            def forward(self, x):
+                out = self.base_model(x)
+                return out + 1 if self.adapter_enabled else out
+
+        model = AdapterModel().to(self.device).eval()
+        x = torch.ones(1, 2, device=self.device)
+        flag = jt.flags.auto_graph_replay
+        jt.flags.auto_graph_replay = 1
+        try:
+            with torch.no_grad():
+                for _ in range(3):
+                    enabled = model(x).detach().cpu().numpy()
+                model.adapter_enabled = False
+                disabled = model(x).detach().cpu().numpy()
+            np.testing.assert_allclose(enabled - disabled, np.ones_like(enabled), rtol=0, atol=0)
+            self.assertNotIn("_auto_graph_replay", model.__dict__)
+        finally:
+            jt.flags.auto_graph_replay = flag
+
     def test_a_call_that_records_gradients_runs_the_module(self):
         x = torch.randn(4, 8, device=self.device, requires_grad=True)
         t = torch.tensor(3)
