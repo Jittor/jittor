@@ -1,6 +1,6 @@
 # 2026-09-22：ms-swift LoRA 的 Ascend torch shim 验证
 
-**状态：锁定 tiny 单卡公开训练已完成前向/梯度对拍、完整 checkpoint 新进程恢复和精确续训；tiny 公开推理 L0/L1/L4 已通过。真实尺寸推理 v4 严格数值对拍仍失败，逐层诊断定位中；分布式训练未完成，真实多机受资源阻塞，所有轨道 L5 均未通过。**
+**状态（2026-10-07 复核）：历史锁定 tiny 单卡 LLaMA 训练与恢复、tiny 推理证据按各自旧运行基线保留；新 Qwen3 公开 SFT 训练已到真实 optimizer 更新但 L2 严格数值失败。独立 Qwen3 tiny 公开推理 L0/L1/L4 通过，使用同一原生 checkpoint-3 adapter，两侧 37 份快照一致。真实尺寸推理 v4 严格数值失败；候选双卡训练与真实多机仍未闭合，多机为资源阻塞；所有轨道 L5 均未通过。**
 
 已有运行基线为 `69c3bdfd80e67cfbbacb5192f59ae859f86f4df0`，另有各运行 manifest 所记录的未提交修改。当前工作树已同步到 `61294cd14673ba60f4072542a2e73ea2c8f8c509`；后续公开入口与断点运行采用该同步基线及各自归档的 dirty source；没有把旧运行重新标记为新提交验证。维护者：Torch compatibility / ACL backend maintainers。核心初始化、梯度状态语义、依赖版本、后端/驱动或协议变化时重新验证。本任务不提交、推送或创建 PR。
 
@@ -400,3 +400,18 @@ v3 观察协议，包含真实 Slurm 主机核验、全局 rank 私有缓存、�
 截止本节：候选双卡新运行、候选四/八卡完整 public 路径均未完成；真实多机仍缺至少两台主机。
 所有轨道 L5 未通过。原生 torch_npu 无通用 fallback 计数器，继续记录 null；
 候选 error+0 与真实 NPU 驻留证据仅对各自已经实际验证的运行生效。
+
+## 2026-10-07 增量：Qwen3 SDPA 训练失败与公开推理通过
+
+本节同步到 upstream `2.0-refactor=9e37dc025bc2e3e94f59e04a8fa5004e934e6b83` 后记录；集成基线为 `a53220d37640458b8fb48e51d1877791990dd963`。原始产物未版本化，位于 `$TASK_STATE/runs/qwen3-sdpa-public-r3-20261007/` 与 `$TASK_STATE/runs/qwen3-public-infer-nativeckpt-r1-20261007/`。
+
+| 单 NPU 轨道 | L0 | L1 | L2 | L3 | L4 | L5 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Qwen3 tiny 公开 SFT，FP32、Swift LoRA、bool-mask SDPA、batch 2、3 步 | passed（实际公开构造） | passed（同权重 forward） | **failed**（第二次 AdamW 更新/参数轨迹超出预置阈值） | not-run | not-passed（L2 前置失败） | not-run |
+| Qwen3 tiny 公开推理，FP32、Swift LoRA、greedy 4 token | passed | passed（完整加载参数、logits、token ID） | not-applicable（推理） | not-applicable（推理） | passed（`swift.cli.main infer`） | not-run（tiny 且无稳态协议） |
+
+**公开 SFT 失败仍按原结论保留。** 原生 job 1608 与严格候选 job 1609 都真实执行 3 步。候选使用 ACL、`fallback_policy=error`、`fallback_count=0`；两侧实际 bool attention mask SDPA、batch、参数、forward logits、梯度和 AdamW moments 均在 NPU。固定容差文件 `public-parity-tolerances-v1.json` 未改：forward logits 最大差 `2.16e-7`、梯度最大差 `6.61e-8`；优化器更新 step index 1 失败，`lora_A` 对应最大更新差 `4.0270388e-6`，最终参数差 `4.0754676e-6`。诊断表明一个近零梯度误差被 AdamW 归一化放大；未调宽阈值、未改源码。optimizer scalar step 状态按原生语义在 CPU，其余 moment tensor 驻留 NPU；若准入要求每个标量状态也必须在 NPU，此项另外不满足该更严门槛。详细逐项证据见运行 manifest 与 `comparison.json`。
+
+**独立公开推理通过。** 新运行键 `qwen3-public-infer-nativeckpt-r1-20261007`，oracle job 1613 先于严格候选 job 1614；候选之后由 worker 比较 job 1617 对拍。两侧从相同 Qwen3 base 和同一份**原生** SFT checkpoint-3 adapter 加载，使用四条固定请求、FP32、SDPA、greedy 生成 4 token。公开 `swift.cli.main infer` 两侧均成功；全部加载参数、16 组实际前向输入、16 组 logits 和四组生成 token ID 精确一致，37 份 snapshot 完整，logits 最大差为 0。候选 launcher/child 都报告 ACL、严格 error 策略、fallback 计数 0；两侧模型参数、forward 输入与 logits 的审计设备均为 `npu:0`。原生 fallback 通用计数器 unavailable，记录为 unknown。候选首次构建使用隔离 JITTOR_HOME；推理 job 1614 的墙钟包含 JIT 编译，不能作为 L5。比较器 job 1615 因系统 Python 缺 NumPy、job 1616 因读取 Python 字面量时误用 JSON 而失败，均在比较前失败并保留；job 1617 使用 oracle Python 与 `ast.literal_eval` 后通过。这是 Qwen3 tiny 推理路径证据，不覆盖官方大权重、其他模型/tuner、训练 checkpoint 恢复或性能门槛；推理通过不改判同模型族训练 L2 失败。
+
+完成推理对拍时，Slurm 作业 1613–1617 均已退出。个人 fork 远端仍在 `a4fa5b2801bef077b54d9bf669c08c1b3c6b4b37`；已获授权的普通推送再次因未配置 HTTPS username 凭证而失败，没有读取或保存 token，也没有 force push。该认证待办独立于验证结论。
