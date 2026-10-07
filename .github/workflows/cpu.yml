@@ -65,6 +65,11 @@ jobs:
 
   cpu:
     needs: baseline
+    # The full tier remains a scheduled, manual, and target-branch gate.
+    # Pull requests use smoke, as defined by tests/structure/test_gate_tiers.py.
+    if: >-
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/2.0-refactor')
     name: nox / cpu
     runs-on: ${{ needs.baseline.outputs.host_runner }}
     container:
