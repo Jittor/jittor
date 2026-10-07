@@ -1,10 +1,10 @@
 # Jittor wheel contents baseline (SHA-256 and exact archive member paths)
 # source-wheel: jittor-2.0.0-py3-none-any.whl
-# source-wheel-sha256: afcf9ee6d7ef79ad7147809f8af742af0d34ee02f87046b71f2fe6941952385f
+# source-wheel-sha256: 13122509f09b2aadc9c614f4b364432f1233804f1de1bfaa4a8d50d35f62d000
 # entries: 1103
 # Regenerate only after reviewing every path and content change.
 3d88b51843e114ed94e217833288f71464dfc3a3547f12cd9e1f355ce109f90c  jittor-2.0.0.dist-info/METADATA
-e5f2452a948a2fd122db80555294366613ef673233ec6cf8423d96cab740da33  jittor-2.0.0.dist-info/RECORD
+18c975c60b3b324b5f70c2026a1c9878b47d59bd7739666c8fe692d60e395076  jittor-2.0.0.dist-info/RECORD
 2b6eb4118ce7cd7b09601406aa623c553c4476265836f0d9c16f5c061f7efcc0  jittor-2.0.0.dist-info/WHEEL
 864c2e74b36529d4afe73ee937a6b6866e772360fc8bd32541f3ce026544906c  jittor-2.0.0.dist-info/entry_points.txt
 8b18f18c9c43b17e6e2bcdefc8df9d423c12e6769d5d13cf6a46fed31e7e1666  jittor-2.0.0.dist-info/licenses/LICENSE.txt
@@ -117,7 +117,7 @@ b593aada924f97cb6ddbbdc256c61cf4d87fa1035cb6bf707f9e7863f4fda73d  jittor/backend
 19db5e5638ce1879cddea57670e6fbd49d999bffe9eaab37c28643d0fe4e0609  jittor/backends/acl/kernels/native/conv_op_acl.cc
 98d2168c4ffe078b06a3b1192b6036458f15d04ea0493b76abd0b9a7d29b4b7d  jittor/backends/acl/kernels/native/cross_entropy_loss_op_acl.cc
 b5d24d76f49759190aee118cc37d77930ad81d5b86aed8738f43a60f34edf41b  jittor/backends/acl/kernels/native/cumsum_op_acl.cc
-368ddb3979da68e2c66cbc63d53e790695415243ae4ffba2f4284872ba1c2fe2  jittor/backends/acl/kernels/native/dropout_op_acl.cc
+1abc6053c0ad00916ccf87f1f701fdaa852872e02cf0113f56d3cb86db1c342a  jittor/backends/acl/kernels/native/dropout_op_acl.cc
 b30ba9fdd79162330552dde26e3efa3475bdd7730ebc63d82f2ca38594fd5ed7  jittor/backends/acl/kernels/native/embedding_op_acl.cc
 18d0f6fd20230f3df1eaa33919fc9f0336d892b89499ab09527ebf0026bf9ad0  jittor/backends/acl/kernels/native/expand_op_acl.cc
 bdc53ba6611f69d0ac0883b513f579b813e9e31bfe9b40598eff66744c858008  jittor/backends/acl/kernels/native/flashattention_op_acl.cc
@@ -168,7 +168,7 @@ e5543e64b3acc8d72ca474cf3708466f87d8e8d60b542c06cf9d64ff436900b2  jittor/backend
 743c2ad5e2502c36d4b3ba9e223a1c29b143b286c7a4531f33497ee981b357fb  jittor/backends/acl/kernels/ops/conv_op.py
 38741dbffdedd793ce929a2039ad53330d14db14b712d1ba207dcf3611b7c920  jittor/backends/acl/kernels/ops/cross_entropy_loss_op.py
 2dd10ab70ca5c1b7e07e9ae5d3a7dd5f90e1232d8a50c7a5decc844bab0fe39b  jittor/backends/acl/kernels/ops/cumsum_op.py
-09686807a495b79f71515d0b9b72117d4703ffd72d37bacfb99068fe1f218ccf  jittor/backends/acl/kernels/ops/dropout_op.py
+5470f1384bfa77ef9c19ce0f53a4b8a20a1ba2b33949a7696d15f377ad216662  jittor/backends/acl/kernels/ops/dropout_op.py
 0ad17bba79c8740815a15c2eb2684d485787c10c1c89f405cf754ea216b8370b  jittor/backends/acl/kernels/ops/embedding_op.py
 605a59290019a556372f00c802fbed0d4ae0685d97f30133fb00d97ac290ab0b  jittor/backends/acl/kernels/ops/flashattention_op.py
 00e3022e88074b72787db3ef272627a7e32b6b266d8f70394d8d4db5065a280b  jittor/backends/acl/kernels/ops/flip_op.py
