@@ -722,6 +722,26 @@ workaround.
   against this same question (does its attention call actually reach a
   fused kernel, or does it also silently fall back) and should be before its
   gap is attributed to kernel speed.
+- Update (2026-10-07): `vit_b16_train` checked against the same
+  dispatch-fallback question -- it is not that. A trace on
+  `scaled_dot_product_attention_acl` shows it engaging
+  (`acl_flash_attention_score_v2`) on every call, no mask (ViT is
+  bidirectional, unmasked, so the `qwen3_prefill` polarity bug does not
+  apply). An aclprof capture's `op_statistic.csv` puts
+  `FlashAttentionScore`+`FlashAttentionScoreGrad` at 1.3% of device time
+  combined. The real cost is `Dilation` (55.6%, 3 calls, ~899 ms each) and
+  `Conv2DBackpropInput` (34.1%, 3 calls, ~552 ms each) -- ~90% of all device
+  time, both counts matching the 3 measured steps exactly. This is the
+  patch-embedding `Conv2d`'s backward with respect to its *input* (the
+  image), which nothing downstream reads -- `images.requires_grad` reports
+  `False` correctly through the compat shim. Whether that `False` actually
+  stops the native backward-graph construction from building (or from
+  executing before a too-late prune of) the `grad_input` chain through a
+  stride-16/kernel-16 conv -- exactly the shape where a naive
+  dilate-then-convolve backward is most expensive -- is not confirmed; that
+  is native autodiff-graph territory this entry does not have visibility
+  into, and not ACL-specific if real (any backend paying a full grad_input
+  for an unused large-stride conv input would show a similar tax).
 - Workaround: none needed for `qwen3_prefill`. For `vit_b16_train`, none
   known; expect a gap until it is root-caused.
 - Evidence: `bench/torch_compat --device npu`; peer Ascend runs 2026-10-06
@@ -734,12 +754,13 @@ workaround.
   core rebuild) around the measured region works, and `msprof --export=on
   --type=text --output=<dir>` then parses the result offline into
   `op_summary`/`op_statistic` CSVs with real per-op-type device time -- this
-  is how the `qwen3_prefill` cause above was found, and is the path to
-  checking `vit_b16_train`.
-- Exit condition: `vit_b16_train` checked against the same dispatch-fallback
-  question as `qwen3_prefill`; if it is a true per-kernel speed gap after
-  that, close it at the kernel level or accept and keep this as a documented
-  characteristic for that workload specifically.
+  is how both causes above were found.
+- Exit condition: confirm whether the native backward graph honors
+  `requires_grad=False` on a leaf feeding only a convolution's `grad_input`
+  (skipping that computation, not just discarding its result), fix if not,
+  and `vit_b16_train` closes its gap to torch_npu; or, if the per-kernel
+  convolution-backward speed itself is still behind after that, close it at
+  the kernel level or accept and keep this as a documented characteristic.
 
 ## KI-OPS-002: integer floor-division ROCm verification incomplete
 
