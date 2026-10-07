@@ -857,7 +857,21 @@ workaround.
   bug -- a fix would mean caching a pre-transformed weight tensor across
   calls and getting aclnn to skip its own internal conversion, which needs
   CANN-side format-pinning documentation this session did not have before
-  attempting it.
+  attempting it. `bert_base_train`'s 1.76x gap is similarly not a dispatch
+  bug: an aclprof capture shows `MatMulV2` at 42.4% of device time (the
+  expected dominant cost for a transformer) and `DSARandomUniform` --
+  `jt.random`'s fused ACL kernel, which every dropout call in HF's BERT
+  goes through via the correct composite path (see KI-BACKEND-018, which
+  is about a *different*, unreachable dropout implementation) -- at 19.3%,
+  190 calls over 5 steps averaging 383us each on a separate `DSA_SQE`
+  core/queue, longer per call than `MatMulV2`'s own 143.6us average despite
+  comparable or smaller tensor sizes. `jt.random` is dispatching correctly
+  (confirmed: `RandomOpRunner` reads and advances the shared
+  `current_seed`/`current_offset` pair, giving a fresh mask every call);
+  the cost looks like a cross-engine handoff specific to the `DSA` block
+  rather than a software defect, but this session had no CANN-side
+  documentation of that engine's dispatch cost to confirm it, so it is
+  recorded as observed, not diagnosed.
 - Evidence: `bench/torch_compat --device npu`; peer Ascend runs 2026-10-06
   and 2026-10-07 under `$JITTOR_LAB_ROOT/_state/npu-verify`. `msprof`'s CLI
   wrapper (`msprof <app>`) hangs indefinitely around an ACL profiling-channel
@@ -880,6 +894,75 @@ workaround.
   out dispatch fallback and host overhead first, the way `qwen3_prefill`,
   `vit_b16_train`'s `grad_input` waste, and `resnet50_infer`'s remaining
   `TransData`/`BNInfer` cost were.
+
+## KI-BACKEND-018: `DropoutACL` reused the same mask forever and under-scaled its gradient, but nothing calls it
+
+- Severity: Low (the class is unreachable from every live dispatch path, so
+  no training run observes either defect) with a Medium-severity caveat: the
+  coverage ledger that exists specifically to prevent this kind of defect
+  from going unnoticed (`tests/structure/test_backend_grad_contract.py`)
+  names a test for this class that does not actually exercise it, so if the
+  class is ever wired back up, the ledger will not catch a regression.
+- Status: Fixed (both defects), 2026-10-07, verified on a 910B3. The ledger
+  mismatch is not fixed -- see Exit condition.
+- Owner: ACL backend maintainers
+- Symptom: `DropoutACL` (`backends/acl/kernels/ops/dropout_op.py`,
+  `backends/acl/kernels/native/dropout_op_acl.cc`) is a `jt.Function`
+  implementing dropout directly on `aclnnDropout`/`aclnnDropoutBackward`.
+  Two independent defects, found while profiling `bert_base_train` for
+  KI-BACKEND-017 and chasing why its dropout calls looked expensive (see
+  that entry's evidence; this class turned out not to be the one `jt.random`
+  uses):
+  1. Every call produced the identical mask: `DropoutOpRunner::executeOp`
+     read `attr->seed`/`attr->offset`, and the Python wrapper hardcoded both
+     to `0`. Four consecutive calls with the same shape and `p` returned
+     byte-identical masks.
+  2. The gradient was under-scaled by a factor of `(1 - p)` whenever dropout
+     was actually active: `DropoutACL.grad` hardcoded `DropoutBackward`'s
+     `scale` attribute to `1.0` instead of `1 / (1 - p)` -- consistent with
+     `p` never being stored on `self` in the first place, so `grad` had no
+     way to compute the right value even if it had tried.
+  Neither defect is reachable from a real workload: `jt.nn.dropout`
+  (`python/jittor/nn/functional/dropout.py`, what `BertForSequenceClassification`
+  hits through the torch-compat shim) is a separate, `jt.random`-based
+  composite implementation that never calls `DropoutACL`, and it is correct
+  (verified independently: two consecutive calls differ, gradient matches a
+  closed-form reference). `DropoutACL` is not registered in
+  `backends/acl/kernels/install.py`'s `KERNELS` table, so no dispatch path
+  reaches it; a comment already in `dropout.py` explains the composite
+  implementation was chosen specifically to keep dropout inside the
+  surrounding kernel's fusion boundary, which a `jt.Function` like
+  `DropoutACL` cannot do -- this class looks like it predates that design
+  and was left behind, not a live alternate path.
+- Cause: `DropoutOpRunner`/`MultinomialOpRunner`/`RandomOpRunner` all need a
+  position in `aclnnDropout`'s (or the equivalent random op's) Philox-style
+  stream; the project's established way to supply one is the global
+  `current_seed`/`current_offset` pair (`src/runtime/init.cc`), which
+  `RandomOpRunner` and `MultinomialOpRunner` already read and advance.
+  `DropoutOpRunner` alone skipped this and used the Python-serialized
+  attribute fields instead, which were never populated with anything but
+  the literal placeholders `0, 0`.
+- Workaround: none needed -- the class is dead code on every path this
+  session traced.
+- Evidence: a standalone correctness probe (not checked in, per the repo
+  boundary) called `DropoutACL` directly: 4 calls, same shape and `p`,
+  compared mask bytes -- identical before the fix, distinct after; a second
+  probe compared gradients against `2 * out` with and without the correct
+  `1 / (1 - p)^2` factor on a constant input. `tests/backends/acl/` 228
+  passed (1 known unrelated failure); `tests/structure/` 1378 passed, 8
+  failed (known bmm broadcast failures, see KI-BACKEND-017's sibling
+  evidence) -- no new failures except
+  `test_acl_launcher_contract.py::test_dropout_forward_uses_launcher_and_backward_remains_present`,
+  updated in the same change since it asserted the now-removed
+  `attr->seed`/`attr->offset` literals instead of the corrected
+  `current_seed`/`current_offset` ones.
+- Exit condition: either `tests/structure/test_backend_grad_contract.py`'s
+  entry for `DropoutACL` points at a test that actually instantiates and
+  runs it on real hardware, or the class (and its two unused source files)
+  is deleted and the entry removed from that ledger. Whichever happens
+  first; this session did neither, to avoid conflating a benchmark-speed
+  investigation with a dead-code removal decision that deserves its own
+  review.
 
 ## KI-OPS-002: integer floor-division ROCm verification incomplete
 
