@@ -692,32 +692,54 @@ workaround.
   placement path covered, and `sd15_unet_train` completing across repeated 910B3
   runs with `backend_fallback=error` and zero fallbacks.
 
-## KI-BACKEND-017: on Ascend, device-bound single-kernel workloads trail torch_npu
+## KI-BACKEND-017: on Ascend, vit_b16_train trails torch_npu; qwen3_prefill's gap was a dispatch bug, not a kernel-speed limit
 
-- Severity: Limitation (performance, Ascend)
-- Status: Limitation. Measured on a 910B3 at `71eff3105`.
+- Severity: Limitation (performance, Ascend) for the remaining case
+- Status: Limitation for `vit_b16_train`. `qwen3_prefill`'s instance of this
+  is fixed (see Cause) and moved to 0.63x, ~1.6x faster than torch_npu -- it
+  is evidence the original diagnosis was incomplete, not a second data point
+  for the same limitation. Measured on a 910B3.
 - Owner: ACL backend maintainers
-- Symptom: against `torch` + `torch_npu` on the same card, Jittor's ACL backend
-  is competitive or faster where graph recompute and operator fusion dominate
-  (`qwen3_train` 0.89x, ~11-13% faster, loss agrees to 7.7e-8), but slower where
-  a few large aclnn kernels dominate device time (`qwen3_prefill` ~3.2x,
-  `vit_b16_train` ~9.9x). `jt.profile` shows the latter are device-bound: host
-  launch is a minority of wall time and overlaps device execution, so the gap is
-  aclnn single-kernel device time, not host overhead, missing fusion, or CPU
-  fallback.
-- Cause: individual aclnn kernels on the 910B3 run slower than torch_npu's, and
-  Jittor does not yet close that at the kernel level (fusing into fewer/larger
-  aclnn calls, HF32/precision modes, op-combo selection are unexplored). Raising
-  `auto_graph_replay_retain_bytes` lets more graphs record as device graphs but
-  saved only ~4% on `qwen3_prefill`, because the launches it removes already
-  overlapped device work.
-- Workaround: none; expect torch_npu-level or better throughput on
-  training/launch-bound graphs and a gap on single-kernel-bound inference.
-- Evidence: `bench/torch_compat --device npu`; peer Ascend runs 2026-10-06 under
-  `$JITTOR_LAB_ROOT/_state/npu-verify`. Attributing per kernel needs a CANN
-  msprof op-level timeline (jt.profile has no device-side equivalent on ACL).
-- Exit condition: close the per-kernel device-time gap on the device-bound
-  workloads, or accept and keep this as a documented characteristic.
+- Symptom: against `torch` + `torch_npu` on the same card, Jittor's ACL
+  backend is competitive or faster where graph recompute and operator fusion
+  dominate (`qwen3_train` 0.89x; `qwen3_prefill`, after the fix below, 0.63x;
+  both loss/logits agree with torch_npu to within bf16/fp32 noise). Still
+  slower on `vit_b16_train` (~9.9x). `jt.profile` shows it is device-bound:
+  host launch is a minority of wall time and overlaps device execution.
+- Cause: `qwen3_prefill`'s ~3.2x gap was never a raw aclnn-kernel-speed
+  problem. `scaled_dot_product_attention_acl`
+  (`backends/acl/kernels/ops/flashattention_op.py`) only accepted a
+  `float32` `attn_mask`; HF's `sdpa` attention implementation passes a
+  `bool` mask (`True` = attend, the opposite of this kernel's own
+  `attenMask` convention -- see `_causal_mask`, `True` on the strictly-upper
+  triangle it drops). The dtype guard rejected every call, silently falling
+  through to the unfused `_composite` path, which rebuilds the full
+  `[B,H,Lq,Lk]` score matrix and pays `SelectV2`+`Cast`+`BroadcastTo` on it
+  (>60% of device time in an aclprof capture) on top of the real
+  `BatchMatMulV2`/`SoftmaxV2` cost. Fixed by accepting `bool` masks, inverted
+  once to the kernel's own convention, through the same `attenMask` slot the
+  internal causal mask already uses. `vit_b16_train` has not been checked
+  against this same question (does its attention call actually reach a
+  fused kernel, or does it also silently fall back) and should be before its
+  gap is attributed to kernel speed.
+- Workaround: none needed for `qwen3_prefill`. For `vit_b16_train`, none
+  known; expect a gap until it is root-caused.
+- Evidence: `bench/torch_compat --device npu`; peer Ascend runs 2026-10-06
+  and 2026-10-07 under `$JITTOR_LAB_ROOT/_state/npu-verify`. `msprof`'s CLI
+  wrapper (`msprof <app>`) hangs indefinitely around an ACL profiling-channel
+  handshake with this CANN build, with or without `--ascendcl`, even on the
+  workload's first subprocess-based tool probe (`mpicc --version`) -- it is
+  not usable live. Calling `aclprofInit`/`aclprofCreateConfig`/`aclprofStart`
+  /`aclprofStop`/`aclprofFinalize` directly (ctypes on `libascendcl.so`, no
+  core rebuild) around the measured region works, and `msprof --export=on
+  --type=text --output=<dir>` then parses the result offline into
+  `op_summary`/`op_statistic` CSVs with real per-op-type device time -- this
+  is how the `qwen3_prefill` cause above was found, and is the path to
+  checking `vit_b16_train`.
+- Exit condition: `vit_b16_train` checked against the same dispatch-fallback
+  question as `qwen3_prefill`; if it is a true per-kernel speed gap after
+  that, close it at the kernel level or accept and keep this as a documented
+  characteristic for that workload specifically.
 
 ## KI-OPS-002: integer floor-division ROCm verification incomplete
 
