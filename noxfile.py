@@ -999,11 +999,14 @@ def _asv_state_path(variable, fallback):
     return path
 
 
-def _write_asv_config(root, results_dir, html_dir):
+def _write_asv_config(root, results_dir, html_dir, current_commit):
     config = json.loads((REPO_ROOT / "benchmarks" / "asv.conf.json").read_text(encoding="utf-8"))
     config.update(
         {
             "repo": str(REPO_ROOT),
+            # The PR checkout may not have local copies of configured branches.
+            # Pin this transient run to its exact commit for ASV's branch lookup.
+            "branches": [current_commit],
             "benchmark_dir": str(REPO_ROOT / "benchmarks"),
             "env_dir": str(root / "asv-env"),
             "results_dir": str(results_dir),
@@ -1478,10 +1481,10 @@ def _record_asv(session, root, env, asv_command, default_machine, external=False
 
     results_dir = _asv_state_path("ASV_RESULTS_DIR", root / "asv-results")
     html_dir = _asv_state_path("ASV_HTML_DIR", root / "asv-html")
-    config_path = _write_asv_config(root, results_dir, html_dir)
     current_commit = _git_output("rev-parse", "HEAD")
     if not current_commit:
         session.error("cannot resolve the current commit for ASV")
+    config_path = _write_asv_config(root, results_dir, html_dir, current_commit)
     dirty = _git_output("status", "--porcelain", "--untracked-files=all")
     if dirty and os.environ.get("ASV_ALLOW_DIRTY") != "1":
         session.error(
@@ -1526,9 +1529,6 @@ def _record_asv(session, root, env, asv_command, default_machine, external=False
                     "--record-samples",
                     "--show-stderr",
                     "--no-pull",
-                    # Select this checkout explicitly: GitHub PR checkouts need
-                    # not contain the configured base branch as a local ref.
-                    "HEAD",
                 )
                 + tuple(session.posargs)
             ),

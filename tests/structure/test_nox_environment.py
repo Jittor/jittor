@@ -1,3 +1,4 @@
+import json
 import os
 import runpy
 import subprocess
@@ -45,6 +46,18 @@ def _load_noxfile(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "nox", fake_nox)
     monkeypatch.setenv("JITTOR_LAB_ROOT", str(tmp_path / "lab"))
     return runpy.run_path(str(REPO_ROOT / "noxfile.py"), run_name="jittor_noxfile")
+
+
+def test_asv_run_config_uses_the_checked_out_commit(monkeypatch, tmp_path):
+    module = _load_noxfile(monkeypatch, tmp_path)
+    commit = "a" * 40
+
+    path = module["_write_asv_config"](tmp_path, tmp_path / "results", tmp_path / "html", commit)
+    config = json.loads(path.read_text(encoding="utf-8"))
+
+    assert config["branches"] == [commit]
+    assert config["repo"] == str(REPO_ROOT)
+    assert config["benchmark_dir"] == str(REPO_ROOT / "benchmarks")
 
 
 def test_session_env_uses_the_session_interpreters_python_config(monkeypatch, tmp_path):
