@@ -1,10 +1,10 @@
 # Jittor wheel contents baseline (SHA-256 and exact archive member paths)
 # source-wheel: jittor-2.0.0-py3-none-any.whl
-# source-wheel-sha256: 403de08b83f3782fffe14436eb9dbdbbe728fecc2cdad1a8a40abc5880b3e781
+# source-wheel-sha256: afcf9ee6d7ef79ad7147809f8af742af0d34ee02f87046b71f2fe6941952385f
 # entries: 1103
 # Regenerate only after reviewing every path and content change.
 3d88b51843e114ed94e217833288f71464dfc3a3547f12cd9e1f355ce109f90c  jittor-2.0.0.dist-info/METADATA
-f2dc4a06d6ed2d75b90867905cfb9c2a6d5cde2e0dbaf3957476a7ca73bf4908  jittor-2.0.0.dist-info/RECORD
+e5f2452a948a2fd122db80555294366613ef673233ec6cf8423d96cab740da33  jittor-2.0.0.dist-info/RECORD
 2b6eb4118ce7cd7b09601406aa623c553c4476265836f0d9c16f5c061f7efcc0  jittor-2.0.0.dist-info/WHEEL
 864c2e74b36529d4afe73ee937a6b6866e772360fc8bd32541f3ce026544906c  jittor-2.0.0.dist-info/entry_points.txt
 8b18f18c9c43b17e6e2bcdefc8df9d423c12e6769d5d13cf6a46fed31e7e1666  jittor-2.0.0.dist-info/licenses/LICENSE.txt
@@ -155,7 +155,7 @@ aab84284df10c9a753271b8dde7f8dbbbc6a5d039b8b50d83e507ed17cc7bfcf  jittor/backend
 7e8925c40877378f1fc3cf156e68e9b29f4605297a5d71640b93bd4fe8cad1f1  jittor/backends/acl/kernels/native/utils.cc
 08a7a1ef8bcdf49882cb99dbbee79a0a1e0934dc8df0423c9f040b8e797f7901  jittor/backends/acl/kernels/native/where_op_acl.cc
 6aed16a3324649d925860bed09de4bd14cd19df1626a0e91d34561711964c969  jittor/backends/acl/kernels/neural.py
-32c1a562e880965f9577d49e5f55ae693cc0e5b144d982c5ba620927f6535650  jittor/backends/acl/kernels/normalization.py
+5ab385f5ce32a709d56d419b01a26b1e682537675191ce2cf878f68bedaf7fa0  jittor/backends/acl/kernels/normalization.py
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  jittor/backends/acl/kernels/ops/__init__.py
 f55896256dfccb5829a2dc3f7eb6900f62c4a37e8d00cdf1ceb7b2a6480b79a0  jittor/backends/acl/kernels/ops/_attributes.py
 356bac4d8e6381dfa523226471c581b9e1828118361fb320e5db9f4a5fc140d3  jittor/backends/acl/kernels/ops/_code.py
