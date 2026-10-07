@@ -737,29 +737,35 @@ workaround.
   and `sd15_unet_train` and `resnet50_train` both completing across repeated
   910B3 runs with `backend_fallback=error` and zero fallbacks.
 
-## KI-BACKEND-017: on Ascend, device-bound workloads trail torch_npu by a modest margin; two specific causes found and fixed
+## KI-BACKEND-017: on Ascend, device-bound workloads trail torch_npu by a modest margin; four specific causes found and fixed
 
 - Severity: Limitation (performance, Ascend)
-- Status: Limitation, narrowed twice. Measured on a 910B3 with a real paired
-  `bench/torch_compat --device npu` run (same card, same seed) each time, not
-  an isolated probe -- the first full-suite run of this project
+- Status: Limitation, narrowed four times. Measured on a 910B3 with a real
+  paired `bench/torch_compat --device npu` run (same card, same seed) each
+  time, not an isolated probe -- the first full-suite run of this project
   (2026-10-06) measured `vit_b16_train` at "~9.9x" from an isolated,
   unwarmed aclprof capture; the properly warmed-up paired run (2026-10-07,
   14 workloads, geometric-mean ratio 1.12x) measured it at 1.21x. The
   earlier number was a measurement artifact of comparing an unwarmed probe
   to a warmed-up baseline, not a regression or a second real data point.
+  Two more dispatch-guard fixes landed after that 14-workload run (GroupNorm,
+  BatchNorm eval, both float16-only guards rejecting the dtype every real
+  fp16 workload actually uses): `sd15_vae_decode` moved from 3.12x to 1.19x;
+  `resnet50_infer` moved from 1.73x to about 1.68x (real, but modest --
+  profiling ruled out further dispatch fallback as the cause of what is
+  left, see cause 4).
 - Owner: ACL backend maintainers
 - Symptom: against `torch` + `torch_npu` on the same card (2026-10-07, 12/14
   workloads compared, geometric-mean ratio 1.12x): `qwen3_prefill` 0.68x,
   `qwen3_decode_static` 0.41x, `qwen3_train` 0.87x, `resnet50_infer_b1`
   0.43x, `bert_base_infer` 0.75x are at or ahead of torch_npu; `vit_b16_train`
-  1.21x, `ddpm_unet_train` 1.22x, `resnet50_infer` 1.73x, `sd15_sample`
-  1.67x, `bert_base_train` 1.76x, `sd15_vae_decode` 3.12x,
-  `qwen3_decode` 2.23x (bf16 argmax tie-break divergence on a repeating
+  1.21x, `ddpm_unet_train` 1.22x, `resnet50_infer` about 1.68x (was 1.73x),
+  `sd15_sample` 1.67x, `bert_base_train` 1.76x, `sd15_vae_decode` 1.19x
+  (was 3.12x), `qwen3_decode` 2.23x (bf16 argmax tie-break divergence on a repeating
   prompt, not a correctness bug -- its `agree` matches `qwen3_decode_static`'s
   accepted pattern) trail by a modest-to-large margin. `sd15_unet_train` and
   `resnet50_train` error (`507035`, tracked as KI-BACKEND-016).
-- Cause (two found, both fixed):
+- Cause (four found, all fixed):
   1. `qwen3_prefill`'s gap (originally ~3.2x) was a dispatch bug, not kernel
      speed: `scaled_dot_product_attention_acl`
      (`backends/acl/kernels/ops/flashattention_op.py`) only accepted a
@@ -793,9 +799,65 @@ workaround.
      moved (199.3 ms to 199.8 ms) -- replay was already hiding the host-side
      waste this removes, confirming device-graph replay, not this fix, is
      why the real gap is 1.21x and not what the unwarmed probe measured.
-- Workaround: none needed for the two fixed cases. For the remaining
-  device-bound gaps (`vit_b16_train` 1.21x downward to `sd15_vae_decode`
-  3.12x), none known.
+  3. `_group_norm_cuda_acl` (`backends/acl/kernels/normalization.py`)
+     required `x`/`weight`/`bias` all `float32`; `aclnnGroupNorm`
+     (`GroupNormOpRunner`) forwards the input's own dtype unconditionally
+     and does not care. SD1.5's VAE decoder runs entirely in fp16, so every
+     GroupNorm call was rejected and fell back to the hand-written
+     `Sub`/`ReduceMean`/`Sqrt`/`RealDiv`/`Mul`/`Add` decomposition --
+     unlike eval-mode BatchNorm (cause 4), group norm has no fixed running
+     stats to cache a scale/shift from, so this decomposition re-pays its
+     full cost every call. An aclprof capture showed it at 45%+ of device
+     time against 18% for the actual `Conv2D`. Verified on a 910B3:
+     `GroupNormACL` called directly at fp16 against a CPU reference,
+     `max_abs_diff` about 0.007 (fp16 noise); fp32 sentinel unchanged.
+     Fixed by widening the guard to `{"float32", "float16"}`, requiring
+     `weight`/`bias` to match `x`'s dtype instead of hardcoding `float32`.
+     `sd15_vae_decode`: 70.4 ms to 26.9 ms/step (2.61x), moving the gap
+     from 3.12x to 1.19x; `sd15_sample` also improved to 1.67x from the
+     same fix with no extra code, since it shares the VAE decode path.
+  4. `_batch_norm_eval_cuda_acl` (same file) had the identical
+     `float32`-only guard; `aclnnBatchNorm`'s `BNInfer` kernel is likewise
+     dtype-agnostic (`BatchNormACL` forwards `[x.dtype] * 3`). ResNet-50
+     inference in this project's own benchmark runs entirely in fp16
+     (`.to(dtype=torch.float16)` casts the running stats too, not just the
+     weights), so every call fell back to the composite path. That path is
+     cheaper than GroupNorm's, though, because eval-mode batch norm has
+     fixed running statistics: `_batch_norm_eval_coefficients` already
+     caches the derived `scale`/`shift` across steps when nothing tracks a
+     gradient through them, so the composite fallback was paying its full
+     `sqrt`/`div` cost only once, not every step. Verified on a 910B3:
+     `_batch_norm_eval_cuda_acl` called directly at fp16 (all-fp16, and the
+     fp16-x/fp32-stats mixed case some training setups use) against a CPU
+     reference, both within fp16 noise; fp32 sentinel unchanged. Fixed by
+     widening the guard the same way as cause 3, with `running_mean`/
+     `running_var` additionally accepted at `float32` even when `x` is
+     `float16`. `resnet50_infer`: 0.0333 s to 0.0323 s/step, a real but
+     modest 3% -- an aclprof capture after the fix showed why: `BNInfer`
+     itself is 31.8% of device time (more than `Conv2D`'s 24.2%), and a
+     further 25.1% is `TransData` inside `aclnnConvolution` itself
+     (`aclnnConvolution_TransData_TransData`/`..._MemSet`, NCHW to
+     `NC1HWC0`/`FRACTAL_Z` and back -- `aclnnConvolution`'s own internal
+     format conversion, not anything this op's Python wrapper issues).
+     265 of those `TransData` calls reformat the *weights* to `FRACTAL_Z`
+     on every single forward call despite them being frozen for inference
+     -- confirmed redundant (same weight, same shape, 5 calls = 5 identical
+     reformats in the profiled window) but not fixed here: there is no
+     existing weight-format-cache precedent anywhere in this backend, and
+     reusing a pre-transformed tensor would mean bypassing aclnn's own
+     internal re-conversion by lower-level, undocumented means -- exactly
+     the kind of guess the convOutPads mistake (cause 2's sibling
+     investigation) warned against. Left open below, not attempted blind.
+- Workaround: none needed for the four fixed cases. For the remaining
+  device-bound gaps (`vit_b16_train` 1.21x downward to `bert_base_train`
+  1.76x), none known yet. `resnet50_infer`'s residual ~1.68x is now
+  attributed to `aclnnConvolution`'s own `NCHW<->NC1HWC0`/`FRACTAL_Z`
+  format-conversion overhead (including the redundant per-call weight
+  reformat above) and `BNInfer`'s intrinsic kernel cost, not a dispatch
+  bug -- a fix would mean caching a pre-transformed weight tensor across
+  calls and getting aclnn to skip its own internal conversion, which needs
+  CANN-side format-pinning documentation this session did not have before
+  attempting it.
 - Evidence: `bench/torch_compat --device npu`; peer Ascend runs 2026-10-06
   and 2026-10-07 under `$JITTOR_LAB_ROOT/_state/npu-verify`. `msprof`'s CLI
   wrapper (`msprof <app>`) hangs indefinitely around an ACL profiling-channel
@@ -806,13 +868,18 @@ workaround.
   core rebuild) around the measured region works, and `msprof --export=on
   --type=text --output=<dir>` then parses the result offline into
   `op_summary`/`op_statistic` CSVs with real per-op-type device time -- this
-  is how both causes above were found, and is a cheaper path to a per-kernel
-  breakdown than the full-suite paired run when that is all a question needs.
+  is how all four causes above were found, and is a cheaper path to a
+  per-kernel breakdown than the full-suite paired run when that is all a
+  question needs. The export step refuses a group-writable (not just
+  world-writable) output directory ("is writable by any other users",
+  despite the message) -- `chmod -R 755 <dir>` before `--export=on` fixes
+  it; this is a reusable gotcha, not specific to one run.
 - Exit condition: each remaining workload's gap attributed to a specific,
-  fixable cause (as the two above were) or accepted as a documented
-  aclnn-kernel-speed characteristic with evidence ruling out dispatch
-  fallback and host overhead first, the way `qwen3_prefill` and
-  `vit_b16_train`'s `grad_input` waste were.
+  fixable cause (as the four above were) or accepted as a documented
+  aclnn-kernel-speed or runtime-format characteristic with evidence ruling
+  out dispatch fallback and host overhead first, the way `qwen3_prefill`,
+  `vit_b16_train`'s `grad_input` waste, and `resnet50_infer`'s remaining
+  `TransData`/`BNInfer` cost were.
 
 ## KI-OPS-002: integer floor-division ROCm verification incomplete
 
