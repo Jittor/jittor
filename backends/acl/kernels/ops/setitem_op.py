@@ -126,6 +126,12 @@ class SetItemACL(jt.Function):
                 )[0]
                 return result
 
+        if _jittor_dtype_name(x.dtype) == "bool":
+            # CANN StridedSliceAssignV2 has no bool signature. Use its int32
+            # signature, then restore the public bool result on the device.
+            cast_value = value.int32() if isinstance(value, jt.Var) else value
+            return SetItemACL()(x.int32(), slices, cast_value).cast("bool")
+
         # assert isinstance(value,jt.Var), "value must be jt.Var"
         # self.value_shape = value.shape
         if not isinstance(slices, tuple):
@@ -136,6 +142,75 @@ class SetItemACL(jt.Function):
                 slices[i] = x.shape[i] + s
         slices = tuple(slices)
         slices_list = list(slices)
+
+        # A Var index mixed with trivial full-range slices on the other axes
+        # (e.g. ``cache[:, :, position] = key_states`` for a static KV cache)
+        # is not a StridedSliceAssignV2 case: StridedSliceAssignV2 only takes
+        # Python-level begin/end/step, never a device-resident position
+        # tensor. It is, however, exactly the index-put case already handled
+        # below for an all-index subscript -- a full-range slice on axis
+        # ``dim`` is the same index as ``jt.arange(x.shape[dim])`` on that
+        # axis, broadcast against the other axes' indices. Reshaping each
+        # axis's index onto its own axis (size 1 elsewhere) makes that
+        # broadcast exact instead of colliding unrelated axes of the same
+        # size, and is restricted to full-range slices: a partial slice
+        # (``start``/``stop``/``step`` set) mixed with a Var index keeps
+        # raising below -- its begin/end is itself dynamic in a way this
+        # construction does not cover.
+        def _is_full_slice(s):
+            return isinstance(s, slice) and s.start is None and s.stop is None and s.step is None
+        has_var_index = any(isinstance(s, jt.Var) for s in slices_list)
+        mixable = has_var_index and all(
+            isinstance(s, jt.Var) or isinstance(s, int) or _is_full_slice(s)
+            for s in slices_list
+        )
+        if mixable:
+            ndim_idx = len(slices_list)
+            axis_indices = []
+            ok = True
+            for dim, s in enumerate(slices_list):
+                if isinstance(s, jt.Var):
+                    if s.ndim > 1:
+                        ok = False
+                        break
+                    idx = s.int32()
+                    if idx.ndim == 1:
+                        shape = [1] * ndim_idx
+                        shape[dim] = idx.shape[0]
+                        idx = idx.reshape(shape)
+                elif isinstance(s, int):
+                    idx = jt.Var(s).int32()
+                else:  # a trivial full-range slice: every position on this axis
+                    shape = [1] * ndim_idx
+                    shape[dim] = x.shape[dim]
+                    idx = jt.arange(x.shape[dim]).int32().reshape(shape)
+                axis_indices.append(idx)
+            if ok:
+                broadcast_shape = axis_indices[0].shape
+                for idx in axis_indices[1:]:
+                    can, broadcast_shape = can_broadcast_and_shape(broadcast_shape, idx.shape)
+                    if not can:
+                        ok = False
+                        break
+            if ok:
+                value_shape = list(broadcast_shape) + list(x.shape[ndim_idx:])
+                if isinstance(value, (int, float)):
+                    value = jt.full(value_shape, value, dtype=x.dtype)
+                else:
+                    value = value.broadcast(value_shape)
+                self.indices = axis_indices
+                self.value_shape = value_shape
+                self.type_ = "index"
+                attr_code = """
+                op.jt_name = "indexputimpl";
+                """
+                inputs = [value] + axis_indices
+                outputs = [x.clone()]
+                result = setitem_cmd(
+                    "IndexPutImpl", inputs=inputs, outputs=outputs, attr_code=attr_code
+                )[0]
+                return result
+
         # check slices contains slice type
         contains_slice = False
         for s in slices:

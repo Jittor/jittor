@@ -91,7 +91,7 @@ def compile_backend_sources(config, common_flags):
             # cannot work. `--use_fast_math` is still on every CUDA compile
             # line by default (see `nvcc_flags` below), so this exemption is
             # live for `nan_checker.cu`. `-Ofast` is no longer added to kernel
-            # flags -- KI-BACKEND-005 replaced it with `-O3` -- and is stripped
+            # flags -- kernels build at `-O3` -- and is stripped
             # here only because a user-supplied `cc_flags`/`nvcc_flags` can
             # still carry it in.
             flags = remove_flags(flags, ["--use_fast_math", "-Ofast"]) + " -O2 "
@@ -918,7 +918,7 @@ if ' -O' not in cc_flags:
     # `-ffinite-math-only`: a promise that no operand is ever infinite or NaN.
     # The compiler optimises on that promise, and operands that *are* infinite
     # take whatever path the transformed code happens to produce -- `1/0` came
-    # back as `nan` instead of `inf`, and `-inf/0` likewise (KI-BACKEND-005).
+    # back as `nan` instead of `inf`, and `-inf/0` likewise.
     # The wrong answers are plausible rather than obviously broken, which is
     # what makes them expensive: a fully masked attention row subtracts its own
     # `-inf` maximum, and a finite result there produces a well-formed but

@@ -25,7 +25,7 @@ device 1 inside the process. Never write a physical card number into a test.
 
 A hand-written `python -c`/script additionally needs
 `PYTHONPATH=<worktree>/python` — without it you are testing the main tree
-(see `AGENT-BRIEF.md` §1).
+(see [`jittor-worktree-verification`](../jittor-worktree-verification/SKILL.md)).
 
 ## 1. Proving a tensor is really on device N
 
@@ -122,9 +122,10 @@ If `can == 0`, the driver stages every cross-device copy through host memory
 and serialises it against the source device *itself*. The ordering is then
 unobservable: deleting the `cudaEventRecord`/`cudaStreamWaitEvent` pair from
 `DeviceCopyOp::run` leaves every test passing. Verified, not assumed — all
-eight GPUs on this box report `canAccessPeer == 0` for every pair (consumer
-cards; NVIDIA disables P2P), so **on this box the ordering test is a
-correctness assertion, not a regression guard.** Run it on a peer-capable pair
+eight GPUs of the consumer-card host this was measured on report
+`canAccessPeer == 0` for every pair (NVIDIA disables P2P on consumer cards), so
+**on such a host the ordering test is a correctness assertion, not a regression
+guard.** Run it on a peer-capable pair
 (`nvidia-smi topo -m` showing NV#/PIX) to get the guard.
 
 Report the regime rather than reporting a pass: `tests/backends/cuda/
@@ -187,4 +188,5 @@ JITTOR_TORCH_SHIM=1 pytest compat/tests/torch/test_multi_device.py -q
 
 Never put `compat/tests/torch` and a native path in one pytest command: the
 shim is process-global and switches the whole tree into torch semantics
-(`AGENT-BRIEF.md` §4, board §"正确跑法").
+(the process modes are declared in `tests/_helpers/process_modes.py`;
+`python tools/run_test_suite.py` runs the two modes as separate sessions).

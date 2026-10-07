@@ -12,11 +12,10 @@ afterwards does nothing: the ops that would call MPI were never built.
 
 So two agents sharing one source checkout, with separate `JITTOR_HOME`s, can
 hold jittor builds with **different capabilities** — and neither is told.
-2026-09-03: the compat partition concluded "this machine has no MPI, 7.02
-cannot be verified" while the distributed partition had been running 2-rank
-MPI tests all along. `mpicc` lives in the conda env's `bin`, which is not on
-the default PATH; whichever agent happened to compile without it got a jittor
-with MPI compiled out.
+2026-09-03: one agent concluded "this machine has no MPI, this cannot be
+verified" while another had been running 2-rank MPI tests all along. `mpicc`
+lived in the conda env's `bin`, which was not on the default PATH; whichever
+agent happened to compile without it got a jittor with MPI compiled out.
 
 ## The symptom, and why it is easy to misread
 
@@ -37,8 +36,8 @@ skip count. Ask the build, then ask the machine, and compare:
       "import jittor as jt; print('has_mpi =', jt.compile_extern.has_mpi); \
        print('mpicc  =', repr(jt.compile_extern.mpicc_path))"
 
-    # what the MACHINE actually has (note the conda bin, not the default PATH)
-    ls /home/zy/miniconda3/envs/jt311/bin/mpirun /home/zy/miniconda3/envs/jt311/bin/mpicc
+    # what the MACHINE actually has (look in the env's bin, not only the default PATH)
+    ls <env-prefix>/bin/mpirun <env-prefix>/bin/mpicc    # <env-prefix>: e.g. $CONDA_PREFIX
 
 `has_mpi = False` **and** the binaries exist ⇒ your build is the crippled one.
 `mpicc_path` being the empty string is the tell: the probe found nothing.
@@ -50,7 +49,7 @@ return `""` — the launcher is silently unusable rather than reported missing.
 ## Rebuild with the capability on
 
     rm -rf $JITTOR_HOME/.cache
-    PATH=/home/zy/miniconda3/envs/jt311/bin:/usr/local/cuda/bin:$PATH \
+    PATH=<env-prefix>/bin:/usr/local/cuda/bin:$PATH \
     JITTOR_HOME=... TMPDIR=... PYTHONPATH=<worktree>/python \
       python -c "import jittor as jt; print(jt.compile_extern.has_mpi)"
 
@@ -73,7 +72,7 @@ bare `sys.executable` subprocesses are rejected by
 PYTHONPATH explicitly or every rank imports the *installed* jittor instead of
 your worktree:
 
-    PATH=/home/zy/miniconda3/envs/jt311/bin:$PATH JITTOR_HOME=... TMPDIR=... \
+    PATH=<env-prefix>/bin:$PATH JITTOR_HOME=... TMPDIR=... \
     mpirun -np 2 --allow-run-as-root \
       env PYTHONPATH=<worktree>/python JITTOR_TORCH_SHIM=1 python probe.py
 

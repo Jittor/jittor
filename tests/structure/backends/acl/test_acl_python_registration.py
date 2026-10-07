@@ -137,7 +137,8 @@ def test_acl_install_publishes_real_owners_idempotently_without_facade_writes(pr
     # A literal count is the canary that a new registration was deliberate.
     # The duplicate check above catches a name registered twice, but not a
     # kernel that appears because an import side effect grew the table.
-    assert len(operations) == 45, "ACL kernel count changed; update deliberately"
+    # 46: random.multinomial, CANN's single draw.
+    assert len(operations) == 46, "ACL kernel count changed; update deliberately"
     assert len(first) == len(operations)
     for operation, implementation in providers.install.KERNELS:
         assert providers.dispatch.registered_kernel(operation, "acl") is implementation

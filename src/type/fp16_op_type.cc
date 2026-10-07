@@ -76,7 +76,7 @@ struct FP16OpType : OpByType {
             {"maximum", "::max($1($2), $1($4))"},
             {"minimum", "::min($1($2), $1($4))"},
             {"mod", "$1(($2)-::hfloor(($2)/($4))*($4))"},
-            // Half floor division: divide, then floor. KI-OPS-003.
+            // Half floor division: divide, then floor.
             {"floor_divide", "$1(::hfloor(($1($2))/($1($4))))"},
             {"init_maximum", "@if(@strcmp($1,float16)==0,-65000.0f,-1e38)"},
             {"init_minimum", "@if(@strcmp($1,float16)==0,65000.0f,1e38)"},

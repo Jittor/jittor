@@ -104,7 +104,7 @@ include-package-data = true
 # Single source of runtime resources. MANIFEST.in is generated from these
 # declarations plus the sdist-only selections below; setup.py has no inventory.
 [tool.setuptools.package-data]
-"jittor" = ["__init__.pyi", "contrib/math_util/src/*", "build/utils/class/*"]
+"jittor" = ["__init__.pyi", "contrib/math_util/src/*"]
 "jittor_utils" = ["__init__.pyi"]
 "jittor.src" = ["**/*.cc", "**/*.h"]
 "jittor.backends.cpu" = ["**/*.cc", "**/*.h", "**/*.cpp", "**/*.cu", "**/*.cuh"]
@@ -119,7 +119,7 @@ include-package-data = true
 
 [tool.jittor.sdist]
 include = ["examples/**", "tools/**", "docs/**", "requirements/examples.txt", "requirements/docs.in", "requirements/docs.txt"]
-exclude = ["compat/**", "adapters/**", "build/**", "dist/**"]
+exclude = ["compat/**", "adapters/**", "build/**", "dist/**", "docs/slides/**"]
 
 [tool.setuptools.dynamic]
 version = { attr = "jittor.__version__" }

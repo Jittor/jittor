@@ -23,17 +23,11 @@ import pytest
 from _helpers.child_process import run_child_script as _run_child_script
 from _helpers.child_process import run_mpi_python
 
-pass_this_test = False
-msg = ""
-mid = 0
-if hasattr(os, "uname") and os.uname()[1] == "jittor-ce":
-    mid = 1
-try:
-    traindir = ["/data1/cjld/imagenet/train/","/home/cjld/imagenet/train/"][mid]
-    assert os.path.isdir(traindir)
-except Exception as e:
-    pass_this_test = True
-    msg = str(e)
+# An ImageNet-layout training directory (one subdirectory per class). The
+# multi-worker test only runs where a maintainer points this at one.
+traindir = os.environ.get("JITTOR_TEST_IMAGENET_TRAIN", "")
+pass_this_test = not os.path.isdir(traindir)
+msg = "set JITTOR_TEST_IMAGENET_TRAIN to an ImageNet-layout train directory"
 
 @unittest.skipIf(pass_this_test, f"can not run imagenet dataset test: {msg}")
 class TestDataset(unittest.TestCase):
@@ -232,17 +226,9 @@ class TestDatasetSeed(unittest.TestCase):
             assert y[i] == b
             assert z[i] == c
 
-    # A real, reproducible defect, not a flake: when a worker process is killed
-    # the parent is supposed to notice (SIGCHLD) and quick-exit. It does not --
-    # it blocks waiting for data from the dead worker until something times it
-    # out. Measured alone on an idle box: fails at the child timeout, every
-    # time, and it failed the same way at the branch point (9eb696d9), so it is
-    # nobody's regression. Registered in the A list on the board.
-    #
-    # `xfail(strict=True)` rather than a bare red or a skip: a red that is
-    # expected teaches people to read past the whole gate, and a skip would let
-    # the day someone fixes this pass unnoticed. Strict means the fix turns the
-    # gate red until this marker is deleted -- which is the correct next event.
+    # When a worker process is killed the parent must not block forever on
+    # data from the dead worker. The ring-buffer wait is bounded, so the child
+    # fails promptly with a timeout message instead of hanging the gate.
     def test_children_died(self):
         if os.name == 'nt':
             # TODO: windows cannot pass this test now

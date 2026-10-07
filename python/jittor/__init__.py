@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.11.0'
+__version__ = '2.0.0'
 
 import os as _os
 import sys as _sys

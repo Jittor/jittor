@@ -133,7 +133,7 @@ curand 的口径：`curandGenerateUniform` 没有奇偶要求；`curandGenerateN
 
 | 库 | 触发方式 | 得到的错误 |
 | --- | --- | --- |
-| cuFFT | `jt.nn._fft2(jt.zeros((1, 0, 4, 2), "float32"))`——任一变换维长度为 0 | `cufftPlanMany` 返回 `CUFFT_INVALID_SIZE` |
+| cuFFT | `_fft2(jt.zeros((1, 0, 4, 2), "float32"))`（`from jittor.nn.legacy_complex import _fft2`）——任一变换维长度为 0 | `cufftPlanMany` 返回 `CUFFT_INVALID_SIZE` |
 | 全部（退出期） | 见下「让每个 Destroy 都失败」 | `cudnnDestroy` 返回 `CUDNN_STATUS_INTERNAL_ERROR`，`cublasDestroy` 等同理 |
 
 判据不止「抛了」。**修前那一版会把无效句柄写进缓存**，所以还要断言：
@@ -144,7 +144,7 @@ curand 的口径：`curandGenerateUniform` 没有奇偶要求；`curandGenerateN
 修前跑这个测试，退出时 `peekCudaErrors(cufftDestroy(...))` 会打出
 `code=1( CUFFT_INVALID_PLAN )`——那就是坏句柄进了缓存的直接证据。
 
-`jt.nn._fft2` 是 cuFFT 算子唯一的入口（`jt.fft.*` 走 DFT 矩阵乘，不碰 cuFFT），
+`jittor.nn.legacy_complex._fft2` 是 cuFFT 算子唯一的入口（`jt.fft.*` 走 DFT 矩阵乘，不碰 cuFFT），
 且要求 `jt.flags.use_cuda == 1`、输入形状 `(batch, n1, n2, 2)`。
 
 ### 让每个 Destroy 都失败（测退出期的析构/teardown 路径）
@@ -180,10 +180,10 @@ libcudnn 内部 `cuStreamDestroy` 处**段错误**而不是返回错误码，测
 
 ### 坑：子进程 abort 会把 pytest 父进程一起带走
 
-jittor 装了**进程级** SIGCHLD handler（`utils/log.cc`），子进程只要不是正常退出或
+jittor 装了**进程级** SIGCHLD handler（`src/utils/log.cc`），子进程只要不是正常退出或
 SIGTERM，父进程就 `quick_exit(1)` 且不刷 stdio。于是「把会崩的用例放子进程里」这个
 标准做法反而**变成它本来要防的那件事**：pytest 零输出消失，看起来像 runner 坏了而
-不是测试失败（任务 6.C31）。
+不是测试失败。
 
 **写法**：用 `tests/_helpers/child_process.py`，预期会崩的子进程传 `crash_isolated=True`：
 
@@ -198,25 +198,25 @@ assert proc.returncode == 0, proc.stderr[-4000:]   # 崩了也能断言，134/13
 134/139），并给子进程设 `gdb_path=""`（否则 jittor 的崩溃处理器会 fork gdb，
 gdb 先 ptrace-stop 住子进程，gdb 一死子进程就永远停在那）。
 
-**不要裸起子进程**：`tests/structure/test_child_process_contract.py`（0.21）是静态门禁，
+**不要裸起子进程**：`tests/structure/test_child_process_contract.py` 是静态门禁，
 `tests/` 下任何直接写 `sys.executable` 的启动都会红。
 
 ## 后端库的 `_cudaGetErrorEnum` 重载约定
 
 `checkCudaErrors(x)` 需要一个 `_cudaGetErrorEnum(该状态类型)` 重载。
-`extern/cuda/src/helper_cuda.cc` 里那些重载被 `#ifdef _CUFFT_H_` / `#ifdef CUSPARSEAPI`
+`backends/cuda/src/helper_cuda.cc` 里那些重载被 `#ifdef _CUFFT_H_` / `#ifdef CUSPARSEAPI`
 之类包着，而该文件并不 include 这些库的头，所以**它们一个都没被编进 libcuda_extern**。
-每个后端靠自己目录下的 `*/src/helper_<lib>.cc` 提供重载（cublas/cudnn/curand/cusparse 都有）。
+每个后端靠自己目录下的 `backends/cuda/libraries/<lib>/src/helper_<lib>.cc` 提供重载（cublas/cudnn/cufft/curand/cusparse 都有）。
 
 症状：`ImportError: .../gen_ops_xxx.so: undefined symbol: _Z17_cudaGetErrorEnum13cufftResult_t`，
-接着被 `compile_extern.py` 翻译成误导性的 `CUDA found but cufft is not loaded`。
-修法：照抄 `curand/src/helper_curand.cc` 的写法，在该后端的 `src/` 下补一个。
+接着被 `python/jittor/build/compile_extern.py` 翻译成误导性的 `CUDA found but cufft is not loaded`。
+修法：照抄 `backends/cuda/libraries/curand/src/helper_curand.cc` 的写法，在该后端的 `src/` 下补一个。
 
 ## 证明「缓存有界」「句柄不泄漏」
 
 缓存与泄漏从 Python 看不见，得先把观测点做出来，再断言。
 
-**观测点**：按 `cudnn_wrapper.h` 的既有写法，在该后端的 wrapper 头里加两个 pyjt 自由函数——
+**观测点**：按 `backends/cuda/libraries/cudnn/include/cudnn_wrapper.h` 的既有写法，在该后端的 wrapper 头里加两个 pyjt 自由函数——
 一个读当前缓存条数、一个设上限：
 
 ```cpp
@@ -266,32 +266,12 @@ python -m pytest tests/backends/cuda/<...> -q
 - **`nvcc_path` 少了就跑成 CPU 版**，cuBLAS/cuDNN 算子根本不会被实例化，测试静默跳过或走别的路。
 - **`JITTOR_HOME` 与别人共用会损坏缓存**，症状是毫不相干的算子大面积报错。
 
-### 已知坑：cuda key 被日志污染导致 `FileNotFoundError`
-
-首次在一个新的 `JITTOR_HOME` 里跑时可能崩在：
-
-```
-FileNotFoundError: .../cu12.2.140_..._sm_0902_211521.482820_88_89_Create_[i_file..._jittor.lock_lock_lock.py85]
-```
-
-原因：`compiler.py` 用 `sp.getstatusoutput(... -m jittor_utils.query_cuda_cc)` 取 SM 版本，
-`getstatusoutput` 把 stderr 也合进来了，而该子进程首次运行会往 stderr 打一行
-`Create lock file:...`，于是这行被拼进了 cache 目录名。
-
-修法（一次性）：
-
-```bash
-find $JITTOR_HOME/.cache/jittor -maxdepth 9 -name "*sm_[0-9][0-9][0-9][0-9]_*" -exec rm -rf {} +
-JITTOR_HOME=<自己的> python -m jittor_utils.query_cuda_cc   # 预热，让 lock 文件先建出来
-```
-
-之后 `query_cuda_cc` 只输出 `89` 这样的纯数字，key 就正常了。
-
 ## 改了头之后，「跑绿了」不能当作改动生效
 
-依赖跟踪在 9.04 之前不认识 `#ifdef`、也不跟踪 `<...>`：真机核对显示 `array_op.cc.o.key`
-里 **`helper_cuda.h` 的计数是 0**。也就是说 9.04 之前**只改 `extern/cuda/inc/` 下的头
-可能根本不触发重编**，跑出来的是旧二进制。
+依赖跟踪曾经不认识 `#ifdef`、也不跟踪 `<...>`：当时核对 `array_op.cc.o.key`，里面
+**`helper_cuda.h` 的计数是 0**，只改 `backends/cuda/include/` 下的头可能根本不触发重编，
+跑出来的是旧二进制。依赖跟踪的实现在 `src/utils/cache_compile.cc`，改头之前先看一眼它现在
+认哪些 include。
 
 **判据：改了头之后，必须有一条只可能来自新代码的可观测量**，否则不能断言改动生效。够格的：
 
@@ -302,13 +282,14 @@ JITTOR_HOME=<自己的> python -m jittor_utils.query_cuda_cc   # 预热，让 lo
 不够格的：「相关测试还是绿的」「数值和以前一样」——这两条对「改动根本没编进去」同样成立。
 
 同一条也适用于**只改注释/常量的头**：这类改动本来就没有可观测量，那就顺手改一行同 TU 的
-`.cc`（或确认 9.04 之后的依赖跟踪覆盖了它），否则你无法区分「没生效」和「没差别」。
+`.cc`（或在对应 `.o.key` 里确认依赖跟踪覆盖了它），否则你无法区分「没生效」和「没差别」。
 
 ## 重编代价
 
-`extern/cuda/**` 下的算子按**所有源码的哈希**编成一个 `custom_ops` .so：改一个算子会
-把 cublas/cudnn/cufft/cutt/cusparse 全部重编。单次约 30~60 秒（核心 .so 不动的话），
-但改了 `python/jittor/src/**` 就是十分钟级全量重编。**攒着一次验证，不要改一行跑一次。**
+`backends/cuda/libraries/<lib>/` 下的算子按**该库全部源码**编成一个 `gen_ops_<...>` .so
+（`compile_custom_ops`，`python/jittor/build/compilation.py`）：改一个 cuDNN 算子会把整个
+cuDNN 库重编。单次约 30~60 秒（核心 .so 不动的话），但改了 `src/**` 就是十分钟级全量重编。
+**攒着一次验证，不要改一行跑一次。**
 
 ## 「修前失败」怎么低成本演示
 

@@ -250,7 +250,7 @@ PyTorch 侧**没有对应的独立 kernel**：PyTorch 走 memory-efficient atten
 
 ## 手写 kernel 少存一个中间量：三类证据都要，缺一条判不了
 
-`group_norm_ab.py` 是 8.20 用的那套，改任何一个手写 norm kernel 都可以照抄：
+`group_norm_ab.py` 是改 GroupNorm 手写 kernel 时用的那套，改任何一个手写 norm kernel 都可以照抄：
 
 ```bash
 python group_norm_ab.py --what accuracy     # float32 对 float64 NumPy 参考
@@ -377,7 +377,7 @@ for r in rows:
 
 ## 走不走 JIT：先确认这个形状还在代码生成器里
 
-`nn/backends/full_reduce_cuda.py` 把 `jt.Var.sum` / `jt.Var.mean` 猴补成了两级
+`backends/cuda/kernels/nn/full_reduce_cuda.py` 把 `jt.Var.sum` / `jt.Var.mean` 猴补成了两级
 CUB 折叠，**全量归约（不指定 dim）根本不进代码生成器**。所以
 
 - 想量代码生成器产出的归约，用 `jt.reduce(x, "add", dims)`，不要用 `x.sum()`；

@@ -1,27 +1,27 @@
-# 上机验证：删除 HCCL 集合通信的 4 次同步（8.02 待实机部分）
+# 上机验证：删除 HCCL 集合通信的 4 次同步（硬件清单项 `8.02` 的 HCCL 部分）
 
-审计 [06-backends.md §分布式](../../refactor-wip/architecture/codebase-audit/06-backends.md) 里严重度为
-**关键**的一条：四个 HCCL 集合通信算子各自在调用前后都做
+后端审计（分布式部分）里严重度为**关键**的一条：四个 HCCL 集合通信算子各自在调用前后都做
 `aclrtSynchronizeDevice()` + `aclrtSynchronizeStream(aclstream)`，**每次通信 4 次全设备
 或全流同步**，NPU 多卡训练的流水被彻底打断。
 
-这四次同步**按读代码是多余的**：`aclstream` 是全局唯一的（`extern/acl/acl_jittor.h`），
+这四次同步**按读代码是多余的**：`aclstream` 是全局唯一的（`backends/acl/include/acl_jittor.h`），
 所有 ACL 算子都往它上面排队，所以集合通信天然排在「算出输入的那些算子」之后、
 「消费输出的那些算子」之前。
 
-**但"按读代码"不是"验证过"。** 本仓库所在机器没有昇腾硬件，这段代码连编译都做不到，
-更不可能跑一次。所以 8.02 **没有直接删掉**这四次同步，而是把它们收进一个开关：
+**但"按读代码"不是"验证过"。** 做这项改动的主机没有昇腾硬件，这段代码连编译都做不到，
+更不可能跑一次。所以这四次同步**没有直接删掉**，而是收进一个开关：
 
 - `JT_HCCL_COLLECTIVE_SYNC=full`（**默认**）——保持历史行为，与改动前逐字等价。
 - `JT_HCCL_COLLECTIVE_SYNC=stream-order`——不做那四次同步，依赖流序。
 
-代码位置：`extern/acl/hccl/inc/hccl_wrapper.h` 的 `hccl_collective_begin()` /
-`hccl_collective_end()`，开关读取在 `extern/acl/hccl/src/hccl_wrapper.cc` 的
+代码位置：`backends/comm/hccl/inc/hccl_wrapper.h` 的 `hccl_collective_begin()` /
+`hccl_collective_end()`，开关读取在 `backends/comm/hccl/src/hccl_wrapper.cc` 的
 `hccl_collective_full_sync()`。四个算子（all_reduce / all_gather / reduce / broadcast）
 都只调这两个函数，不再各写一遍同步。
 
 **本文档的清单在真机上全绿之后，才可以把默认值改成 `stream-order`，并把开关和它的注释
-一起删掉。** 在那之前看板 8.02 的 HCCL 部分保持「待实机」。
+一起删掉。** 在那之前这项 HCCL 同步优化保持「待实机」，登记在
+[硬件延迟清单](deferred-hardware.md)。
 
 ## 需要的机器与软件
 
@@ -78,12 +78,12 @@ for MODE in full stream-order; do
   PYTHONPATH=<worktree>/python JITTOR_HOME=... TMPDIR=... \
   JT_HCCL_WORLD_SIZE=$N JT_HCCL_RANK=$R JT_HCCL_LOCAL_RANK=$R \
   JT_HCCL_ROOTINFO_FILE=$TMPDIR/hccl_root.bin \
-  python -m pytest -q <worktree>/tests/distributed/test_hccl_ops_on_device.py
+  python -m pytest -q <worktree>/tests/backends/comm/hccl/test_hccl_ops_on_device.py
 done
 ```
 
 （`test_hccl_ops_on_device.py` 还不存在——写它是上机那次的第一件事。口径照
-`tests/distributed/test_nccl_comm_stream.py`：四个集合通信各一次 rank 相关数值对拍，
+`tests/backends/comm/nccl/test_nccl_comm_stream.py`：四个集合通信各一次 rank 相关数值对拍，
 期望值从 rank 推出来，非 root 初值填 `-1`，`reduce` 的非 root 断言「全尺寸 + 清零」。）
 
 **判据**：两种模式**逐元素完全相同**（`assert_array_equal`，不是 `allclose`），
@@ -119,4 +119,4 @@ done
 
 `hccl_broadcast_op.cc` 里 root 分支在 `aclrtMemcpy`（同步版本）之后还有一次单独的
 `aclrtSynchronizeDevice()`。`aclrtMemcpy` 本身就是同步的，所以它也是多余的，但它不属于
-「每次通信 4 次同步」那一条，也同样没法在本机验证。上机时一并测掉，或留成新任务。
+「每次通信 4 次同步」那一条，也同样没在设备上验证过。上机时一并测掉，或另开 issue。

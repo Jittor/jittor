@@ -5,6 +5,7 @@ from collections.abc import Iterable
 from typing import Union
 import numpy as np
 import jittor as jt
+from .ops.multinomial_op import multinomial_acl
 from .ops.clamp_op import ClampACL
 from .ops.triu_op import TriuACL
 from .ops.flip_op import FlipACL
@@ -135,6 +136,17 @@ def any_acl(input, dim=None, keepdims=False):
 
 def all_acl(input, dim=(), keepdims=False):
     return _truth_reduce_keepdims(input, dim, True, keepdims)
+
+
+def multinomial_single_draw_acl(weights, num_samples=1, replacement=False):
+    """``jt.multinomial`` on ACL for the one draw CANN serves, or None.
+
+    Registered as ``random.multinomial``: a None answer leaves the call to the
+    portable sampler, as any other draw goes.
+    """
+    if num_samples != 1 or replacement or weights.ndim not in (1, 2):
+        return None
+    return multinomial_acl(weights, num_samples, replacement)
 
 
 def cumsum_acl(input, dim=-1):

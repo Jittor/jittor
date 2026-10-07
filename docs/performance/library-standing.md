@@ -66,14 +66,15 @@
 | Diffusers | 昇腾 910B3 | `0.964x` | 已接受 | `2026-08-30-diffusers-ascend-parity-performance.md` |
 | MMCV / MMEngine（tiny） | 昇腾 910B3 | `0.927x` / `0.796x` | 已接受 | `2026-08-30-mmcv-mmengine-ascend-parity.md` |
 | ms-swift LoRA（tiny，融合 fp32 因果 SDPA） | 昇腾 910B3 | `0.969x` | 已接受 | `2026-08-31-ms-swift-ascend-parity-performance.md` |
-| Qwen3-0.6B 解码 | 昇腾 910B3 | 15.90 对 16.19 token/s | 已接受 | `transformers/2026-08-28-qwen3-ascend-performance.md` |
-| Qwen3-0.6B BF16 SDPA 生成 | 昇腾 910B3 | 14.92 对 15.31 token/s | 已接受，零 CPU fallback | `transformers/2026-08-30-qwen3-ascend-training.md` |
+| Qwen3-0.6B 解码 | 昇腾 910B3 | 15.90 对 16.19 token/s | 已接受 | `2026-08-28-qwen3-ascend-performance.md` |
+| Qwen3-0.6B BF16 SDPA 生成 | 昇腾 910B3 | 14.92 对 15.31 token/s | 已接受，零 CPU fallback | [`2026-08-30-qwen3-ascend-training.md`](../results/2026-08-30-qwen3-ascend-training.md) |
 | Qwen3-0.6B FP32 前向/损失/反向 | 昇腾 910B3 | `1.07–1.12x` | 已接受 | 同上 |
 | Qwen3 同设备训练协议 | 昇腾 910B3 | `1.063x`（曾为 `1.195x`） | **开口**，精确路径性能门禁未建 | 同上 |
-| vLLM Qwen3-0.6B 暖态请求中位数 | 昇腾 910B3 | `0.36330s` 对原生 `vllm-ascend` `0.38998s` | 已接受，单请求短上下文 TP=1 | `2026-08-31-vllm-ascend-jittor-bootstrap.md` |
+| vLLM Qwen3-0.6B 暖态请求中位数 | 昇腾 910B3 | `0.36330s` 对原生 `vllm-ascend` `0.38998s` | 已接受，单请求短上下文 TP=1 | [`2026-08-31-vllm-ascend-jittor-bootstrap.md`](../results/2026-08-31-vllm-ascend-jittor-bootstrap.md) |
 
-报告路径均相对 `refactor-wip/results/`。**整改收口后该目录整体删除**，届时仍需保留的
-行应把证据迁往 `docs/performance/` 或重测。
+带链接的两份报告已压缩迁入[验证结论](../results/index.md)；其余证据列是 2.0 整改期的原始
+报告名，那些报告已随整改收口退役，只在 Git 历史（`e3c369acb`）中可查。**这些行此后无人
+重测**，需要引用某一行时先重测，再把结论写成新的 `docs/results/` 报告。
 
 ### `fuse_op_limit` 已经在好的区间里（2026-09-22 实测，负面结果）
 
@@ -295,16 +296,15 @@ H3 那档约 117MB 额外访存，量级上足够解释。去掉输入那三次 
 走的是数学注意力、还有 `2.72x` 没拿。**这是错的，现予撤回。**
 
 实际情况：H3 部署有自己的
-`XDG_CACHE_HOME=/root/jittor-lab/_state/h3/run/xdg-cache`，那底下
+`XDG_CACHE_HOME`（指向部署自己的 `_state` 目录），那底下
 `torch-shim/minimax-h3-*/torch_extensions/flashattn_jittor/official_flash_attn/`
 里有 **225 个目标文件**和多份
 `flash_attn_2_cuda_jittor.cpython-312-*.so`。桥一直编得出来，server 也一直带
 `JITTOR_FLASH_ATTN_JITTOR_REQUIRED=1` 在跑——真编不出来它启动就会失败。
 
-错因是一次**不完整的搜索**：只看了 `/root/.cache/jittor/torch-shim/`，没看
+错因是一次**不完整的搜索**：只看了默认的 `~/.cache/jittor/torch-shim/`，没看
 `XDG_CACHE_HOME` 指到哪里，就从「这里没有」推出了「全机器没有」。另外
-`/root/jittor-lab` 和 `/apdcephfs_private/qy/projects/zy/jittor-lab` 是两个不同的目录，前者是 H3 部署，
-后者是做基准的 lab，我把它们当成同一处了。
+H3 部署和做基准的 lab 是两个不同的 `JITTOR_LAB_ROOT`，当时把它们当成了同一处。
 
 **`src_inc` 那个 bug 本身仍然成立，但范围要收窄**：它只影响**源码 checkout**。
 H3 部署用的是装好的 wheel（`jittor-1.3.11.0.dist-info`），那里

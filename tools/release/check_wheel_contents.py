@@ -26,7 +26,7 @@ import sys
 import zipfile
 
 
-BASELINE_ROOT = Path(__file__).resolve().parents[2] / "refactor-wip" / "results" / "baselines"
+BASELINE_ROOT = Path(__file__).resolve().parent / "baselines"
 DEFAULT_BASELINE = BASELINE_ROOT / "wheel-contents-final.txt"
 DEFAULT_ADDITION_ALLOWLIST = BASELINE_ROOT / "wheel-additions-final.txt"
 DEFAULT_CONTENT_CHANGE_ALLOWLIST = BASELINE_ROOT / "wheel-content-changes-final.txt"
@@ -174,10 +174,6 @@ RUNTIME_BUILD_HELPERS = frozenset((
     "jittor/build/utils/ring_buffer.py",
     "jittor/build/utils/runtime_services.py",
     "jittor/build/utils/save_pytorch.py",
-    "jittor/build/utils/student_queue.py",
-    "jittor/build/utils/class/motd",
-    "jittor/build/utils/class/setup.py",
-    "jittor/build/utils/class/setup_env.py",
 ))
 
 

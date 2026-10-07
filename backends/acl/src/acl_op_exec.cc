@@ -31,13 +31,13 @@
 #include "ops/composite/fused_adamw_op.h"
 #include "ops/composite/fused_sgd_op.h"
 #include "ops/composite/mapped_matmul_op.h"
+#include "ops/composite/write_back_op.h"
 #include "core/fused_op.h"
 #include "ops/unary_op.h"
 #include "ops/ternary_op.h"
 #include "core/executor.h"
 #include "runtime/device.h"
 #include "runtime/backend_fallback.h"
-#include "runtime/rng_state.h"
 #include "mem/allocator.h"
 #include "codegen/op_compiler.h"
 #include "ops/op_register.h"
@@ -695,6 +695,9 @@ namespace jittor
         exec_acl_sequence(op, {op});
     }
 
+    extern int current_seed;
+    extern int64 current_offset;
+
     static void exec_acl_random(Op *op)
     {
         auto _op = (RandomOp *)op;
@@ -702,14 +705,14 @@ namespace jittor
             _op->type == ns_uniform ? "RandomUniform" : "RandomNormal");
         auto out = op->output(0);
         RandomAttr *attr = new RandomAttr();
-        const auto random_span = reserve_acl_random(out->device_id, out->numel());
-        attr->seed = random_span.seed;
-        attr->offset = random_span.offset;
+        attr->seed = current_seed;
+        attr->offset = current_offset;
         runner.jt_name = "random";
         runner.op_attr.reset(attr);
 
         runner.add(out, false);
         runner.run();
+        current_offset += out->numel();
     }
 
     static unordered_map<string, std::function<void(Op *)>> acl_ops = {
@@ -821,12 +824,14 @@ namespace jittor
          }},
         {"argsort", [](Op *op)
          {
+             // CANN Sort writes (values, indices); ArgsortOp holds the
+             // indices in y and the sorted values in y_key.
              auto *_op = static_cast<ArgsortOp *>(op);
-             AclExecutionRunner<SortOpRunner, false> runner(_op->dim, _op->descending);
+             AclExecutionRunner<SortOpRunner, false> runner(false, _op->dim, _op->descending);
              runner.jt_name = "argsort";
              runner.add(_op->x, true);
-             runner.add(_op->y, false);
              runner.add(_op->y_key, false);
+             runner.add(_op->y, false);
              runner.run();
          }},
         {"arg_reduce", [](Op *op)
@@ -845,6 +850,32 @@ namespace jittor
         // backends publish. ACL has no separate capability op, so the core
         // `random` op reaches the same launcher under its own name.
         {"random", exec_acl_random},
+        {"write_back", [](Op *op)
+         {
+             // Each entry is a plain device-to-device copy: `values[i]` into
+             // the storage `written[i]` shares with `targets[i]` (set up in
+             // WriteBackOp::infer_shape, backend-agnostic). CUDA batches all
+             // entries into one fused kernel; ACL has no such primitive, so
+             // each entry is its own aclrtMemcpyAsync on the current ACL
+             // stream -- ordered with the rest of a captured step the same
+             // way every other op here is. dtype/shape were already
+             // USER_CHECKed at construction.
+             auto *_op = (WriteBackOp *)op;
+             for (uint i = 0; i < _op->targets.size(); ++i)
+             {
+                 const int64 bytes = _op->targets[i]->size;
+                 if (!bytes || _op->written[i]->mem_ptr == _op->values[i]->mem_ptr)
+                     continue;
+                 auto ret = aclrtMemcpyAsync(
+                     _op->written[i]->mem_ptr, bytes,
+                     _op->values[i]->mem_ptr, bytes,
+                     ACL_MEMCPY_DEVICE_TO_DEVICE, aclstream);
+                 if (ret != ACL_SUCCESS)
+                     throw std::runtime_error(
+                         "aclrtMemcpyAsync failed: " +
+                         acl_error_to_string(ret));
+             }
+         }},
     };
 
     static bool is_acl_random(const string &name)

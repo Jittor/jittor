@@ -4,7 +4,7 @@ getitem / setitem correctness suite for the ACL (Ascend) backend.
 Each case computes a reference on CPU (use_acl=0 path / numpy) and compares the
 ACL result for BOTH forward and backward. Run on a free NPU:
 
-    ASCEND_RT_VISIBLE_DEVICES=6 python test_indexing.py
+    python tests/backends/acl/test_acl_indexing.py
 
 Exit code 0 = all pass. Failures are printed with the max abs error.
 """
@@ -352,3 +352,18 @@ def test_acl_rfft_keeps_lazy_dft_constants_alive():
 if __name__ == "__main__":
     test_acl_indexing()
     raise SystemExit(1 if FAIL else 0)
+
+
+def test_acl_bool_slice_assignment_matches_numpy():
+    if not _test_capability.check_accelerator('acl', backend=jt).enabled:
+        pytest.skip("ACL backend is unavailable")
+    source = np.array([[True, False, True, True],
+                       [False, True, False, True]], dtype=bool)
+    expected = source.copy()
+    expected[..., :2] = False
+    with jt.flag_scope(use_acl=1):
+        actual = jt.array(source)
+        actual[..., :2] = False
+        actual.sync()
+        np.testing.assert_array_equal(actual.numpy(), expected)
+        assert actual.dtype == "bool"

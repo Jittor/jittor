@@ -9,26 +9,34 @@ Reusable harness for proving **G3 (逐层数值对齐)** and debugging autograd 
 jittor-as-torch stack. Built from repeatedly-rebuilt ad-hoc scripts — use these
 instead of re-deriving them.
 
-## Boxes & environments (cscg-hw00, the Ascend box — the Bash host)
+## Environments: two interpreters
 
-| role | python | what it is |
+Every tool here runs the same script twice, in two interpreters that must never be
+the same one:
+
+| role | variable | what it is |
 |---|---|---|
-| **JITTOR** (`$JT_PY`) | `/home/yizhang/miniconda3/envs/jt-torch/bin/python` | py3.11, `import torch` == jittor dev tree, transformers 5.12.1 + safetensors deployed, CPU build |
-| **REAL TORCH** (`$RT_PY`) | `/home/yizhang/miniconda3/envs/rt/bin/python` | real torch 2.12.1+cpu (the oracle). **Needs** `export LD_PRELOAD=/home/yizhang/miniconda3/envs/rt/lib/libstdc++.so.6` |
+| **JITTOR** | `$JT_PY` (`<jittor-python>`) | Python 3.11 whose `import torch` resolves to the Jittor shim built from the tree under test (`JITTOR_TORCH_SHIM=1`, or a deployed shim), plus the downstream packages the probe needs (transformers, safetensors) |
+| **REAL TORCH** | `$RT_PY` (`<real-torch-python>`) | an independent real PyTorch (the oracle), same downstream package versions, no jittor. If its wheels need a newer `libstdc++` than the system one, set `RT_LIBSTDCXX` to that library and the scripts preload it |
 
-N-card box (4090, CUDA) for G2: `ssh -p 20002 -o BatchMode=yes zy@116.177.253.46`,
-dev tree `/home/zy/jittor_dev`, env `jt311` (`/home/zy/miniconda3/envs/jt311/bin/python`). No real torch there.
+Neither has a default: export `JT_PY` and `RT_PY` (and optionally `RT_LIBSTDCXX`)
+before running anything below. A CPU build is enough for the model and op
+batteries; the CUDA probes additionally need a CUDA build of the shim interpreter
+and a CUDA build of real torch on a GPU host (select the card with
+`CUDA_VISIBLE_DEVICES=<gpu>`).
 
 ## Non-negotiable gotchas (each cost real time before)
 
-1. **Remote-fs**: the Write tool writes to a *different* filesystem than the Bash
-   host's `/tmp`. Write throwaway scripts to the box via **Bash heredoc** (`cat > $TMPDIR/x.py <<'PY'`), NOT the Write tool. (Files **under the project tree** ARE shared — those are fine to Write.) Always use `$TMPDIR`, never `/tmp`.
+1. **Remote-fs**: in a split agent setup (file tools on one host, the shell on another)
+   the Write tool writes to a *different* filesystem than the shell host's `/tmp`. Write throwaway scripts to the box via **Bash heredoc** (`cat > $TMPDIR/x.py <<'PY'`), NOT the Write tool. (Files **under the project tree** ARE shared — those are fine to Write.) Always use `$TMPDIR`, never `/tmp`.
 2. **Offline**: set `HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1` in both envs.
 3. **Confirm the oracle is real**: assert `not hasattr(torch, 'jittor')` and
    `torch.__version__` endswith `+cpu` on the RT side — never compare jittor to itself.
 4. **Noise**: filter jittor's compile spam: `| grep -v -E "^\[i |^\[w |Compiling|cache_path|mpicc|addr2line|Total mem|Load cc|Writing model|Loading weights|Model config|DeprecationWarning"`.
 5. **JIT warmup**: first iter compiles (gpt2 train 1st-iter ≈ 41s). Time *steady state* separately; bump Bash `timeout` to ≥420000ms for first runs.
-6. **py3.13**: jittor 1.3.11 miscompiles JIT ops under py3.13 — always verify on **py3.11**.
+6. **Python version**: verify on the maintainer interpreter (**py3.11**) first; an older
+   1.3.11 build miscompiled JIT ops under py3.13, so a 3.13-only divergence needs a 3.11
+   re-run before it is reported.
 
 ## The net-scaled grad metric (don't trust per-param rel-diff)
 
@@ -43,7 +51,7 @@ from pure float32 roundoff while being numerically perfect. Normalize by the
 
 ```bash
 bash agent/skills/jittor-torch-diff/run_parity.sh gpt2     # forward+backward parity vs real torch
-bash agent/skills/jittor-torch-diff/run_parity.sh bert /tmp/p_bert
+bash agent/skills/jittor-torch-diff/run_parity.sh bert "$TMPDIR/p_bert"
 ```
 `parity.py` has three subcommands (`jt` save side, `rt` oracle side, `cmp` compare);
 `run_parity.sh` chains them across the two envs and prints the verdict table.
@@ -67,7 +75,7 @@ only `.grad` exposure was broken.
 ```bash
 OUT=$TMPDIR/op_parity
 env PYTHONPATH=$PWD/python HF_HUB_OFFLINE=1 $JT_PY agent/skills/jittor-torch-diff/op_parity.py jt  $OUT
-env LD_PRELOAD=$RT_LIBSTDCXX        $RT_PY agent/skills/jittor-torch-diff/op_parity.py rt  $OUT
+env ${RT_LIBSTDCXX:+LD_PRELOAD=$RT_LIBSTDCXX} $RT_PY agent/skills/jittor-torch-diff/op_parity.py rt  $OUT
                                     $JT_PY agent/skills/jittor-torch-diff/op_parity.py cmp $OUT
 ```
 Runs ~38 tensor ops (the torch *public* API: where/gather/scatter/sort/topk/var/std/
@@ -92,27 +100,28 @@ Use this when auditing native `complex64` CUDA support against real PyTorch CUDA
 It has the same three-phase shape as the other parity tools:
 
 ```bash
-export JITTOR_LAB_ROOT=${JITTOR_LAB_ROOT:-/home/zy/projects/jittor-lab}
+export JITTOR_LAB_ROOT="${JITTOR_LAB_ROOT:-$(cd .. && pwd)/jittor-lab}"   # from the repository root
 STATE="$JITTOR_LAB_ROOT/_state/jittor-torch-diff/complex_cuda_parity"
 OUT="$JITTOR_LAB_ROOT/jittor-torch-diff/complex_cuda_parity_out"
+CUDA_ROOT=<cuda-root>      # CUDA toolkit with bin/nvcc, e.g. the one Jittor auto-installs
 mkdir -p "$STATE" "$OUT"
-env REAL_HOME=/home/zy HOME="$STATE/home" JITTOR_HOME="$STATE/jittor" \
-    JTCUDA=/home/zy/.cache/jittor/jtcuda/cuda12.2_cudnn8_linux \
-    CUDA_HOME=/home/zy/.cache/jittor/jtcuda/cuda12.2_cudnn8_linux \
-    nvcc_path=/home/zy/.cache/jittor/jtcuda/cuda12.2_cudnn8_linux/bin/nvcc \
-    PYTHONPATH=/home/zy/projects/jittor/python cache_name=complex_audit_probe \
-    use_parallel_op_compiler=0 CUDA_VISIBLE_DEVICES=0 \
-    /home/zy/miniconda3/envs/jt311/bin/python \
-    agent/skills/jittor-torch-diff/complex_cuda_parity.py jt "$OUT"
-CUDA_VISIBLE_DEVICES=0 /home/zy/rt_venv/bin/python agent/skills/jittor-torch-diff/complex_cuda_parity.py rt "$OUT"
-/home/zy/miniconda3/envs/jt311/bin/python agent/skills/jittor-torch-diff/complex_cuda_parity.py cmp "$OUT"
+env HOME="$STATE/home" JITTOR_HOME="$STATE/jittor" \
+    JTCUDA="$CUDA_ROOT" CUDA_HOME="$CUDA_ROOT" nvcc_path="$CUDA_ROOT/bin/nvcc" \
+    PYTHONPATH="$PWD/python" cache_name=complex_audit_probe \
+    use_parallel_op_compiler=0 CUDA_VISIBLE_DEVICES=<gpu> \
+    "$JT_PY" agent/skills/jittor-torch-diff/complex_cuda_parity.py jt "$OUT"
+CUDA_VISIBLE_DEVICES=<gpu> "$RT_PY" agent/skills/jittor-torch-diff/complex_cuda_parity.py rt "$OUT"
+"$JT_PY" agent/skills/jittor-torch-diff/complex_cuda_parity.py cmp "$OUT"
 ```
 
 It compares stable native complex64 items directly and records known CUDA gaps
 (`prod`, general `linalg.eig`) as expected Jittor-side errors. Some aggregate
-items are marked `sequence_sensitive`: focused tests should be used for final
-linalg/ComplexNumber conclusions, while `torch.fft.rfft` has a confirmed CUDA
-sequence-sensitive risk after a complex forward/grad prelude.
+items (ComplexNumber and linalg residuals, `SEQUENCE_SENSITIVE_ITEMS`) are marked
+`sequence_sensitive`: focused tests should be used for final linalg/ComplexNumber
+conclusions. `rfft` and `irfft_rfft` are hard failures, not sequence-sensitive: the
+earlier report of an rfft sequence risk after a complex forward/grad prelude was not
+reproducible and was withdrawn; the deterministic regression is
+`compat/tests/torch/test_torch_compat_fft_einsum.py::test_rfft_after_complex_forward_backward_sequence`.
 
 ## Op-level BACKWARD parity (`grad_ops.py`)
 

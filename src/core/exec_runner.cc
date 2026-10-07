@@ -56,7 +56,7 @@ static inline void check_input_is_backed(Var* v, Op* op) {
                                  && !v->flag(VarFlags::_is_swapped)))
         LOGf << "input" << v << "of" << op->name()
              << "has no memory at launch time. Its storage was released while a"
-             << "graph that still reads it was retained; see KI-EXEC-006.";
+             << "graph that still reads it was retained.";
 }
 
 
@@ -978,7 +978,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
                 // memory is released once nothing is pending, and a second
                 // backward over a retained graph asks for them again after
                 // `release_inputs` has removed the producer that could have
-                // rebuilt them. See KI-EXEC-006.
+                // rebuilt them.
                 check_input_is_backed(v, op);
                 if (v->allocator->is_cuda() && !op->flag(OpFlags::_manual_device))
                     migrate_to_cpu(v, allocator);

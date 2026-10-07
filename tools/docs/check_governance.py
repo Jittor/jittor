@@ -12,10 +12,9 @@ from urllib.parse import unquote, urlsplit
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# These trees are historical evidence, not authoritative active documentation.
-EXCLUDED_PREFIXES = (
-    "refactor-wip/results/",
-)
+# Trees of historical evidence that are not authoritative active documentation.
+# None at present: dated docs/results/ reports are kept link-clean like any page.
+EXCLUDED_PREFIXES = ()
 
 REQUIRED_DOCUMENTS = (
     "README.md",
@@ -26,21 +25,18 @@ REQUIRED_DOCUMENTS = (
     "agent/manuals/known-issues.md",
     "docs/development/repository-layout.md",
     "docs/development/source-architecture.md",
-    "refactor-wip/README.md",
-    "refactor-wip/architecture/refactor-board.md",
-    "refactor-wip/architecture/refactor-plan.md",
-    "refactor-wip/architecture/refactor-handoff.md",
-    "refactor-wip/architecture/refactor-dispatch.md",
-    "refactor-wip/architecture/target-layout.md",
-    "refactor-wip/results/README.md",
+    "docs/development/acl-backend-contracts.md",
+    "docs/development/torch-install-transactions.md",
+    "docs/results/index.md",
     "agent/manuals/agent-index.md",
+    "agent/manuals/deferred-hardware.md",
     "benchmarks/asv.conf.json",
-    "refactor-wip/architecture/torch-compatibility-principles.md",
+    "docs/compatibility/principles.md",
     "docs/notes/complex-dtype.md",
     "docs/development/test-system.md",
     "docs/development/known-issues/parallel-compiler-segfault.md",
     "docs/performance/benchmarking.md",
-    "refactor-wip/research/agentic-optimization.md",
+    "docs/research/agentic-optimization.md",
     "docs/releases/2.0.md",
 )
 
@@ -56,8 +52,6 @@ def _relative(path):
 
 
 def _is_excluded(relative):
-    if relative == "refactor-wip/results/README.md":
-        return False
     return any(relative.startswith(prefix) for prefix in EXCLUDED_PREFIXES)
 
 

@@ -20,10 +20,15 @@ torch` 包，或历史路径 `import jittor.torch_compat`。
 - 普通的 `import jittor as jt` 保持原生 Jittor 行为，**不会占用 `torch` 命名空间**。
 - `import jittor as torch` 只是一个本地 Python 别名，**不会激活兼容层**。
 
-默认的 `activate()` 与部署包使用**独立的** Tensor、Parameter、Module 和 NN 类型。
-原生前端与 Torch 前端共享 Var/Op 运行时，但 **`torch is not jittor`**。历史上的
-别名式安装仍可用（`activate(independent_namespace=False)`，或设了 `JITTOR_TORCH_SHIM=1`
-但没设 `JITTOR_TORCH_INDEPENDENT=1`）；**在创建任何应用状态之前选定一种模式**。
+`activate()` 与部署包使用**独立的** Tensor、Parameter、Module 和 NN 类型。
+原生前端与 Torch 前端共享 Var/Op 运行时，但 **`torch is not jittor`**。
+
+**把 Torch API 装到原生 `jittor` 模块上的别名模式已经移除**，它不再是一种可选形态：
+`activate(independent_namespace=False)`、`JITTOR_TORCH_INDEPENDENT=0` 和直接调用
+`compat.torch.install(jittor)` 都会明确报错而不是退回旧行为（`compat/shim/preflight.py`
+的 `require_independent_frontend()`，以及部署的 `torch/__init__.py` 开头那条检查）。
+保留下来的关键字只用于给出迁移错误。曾经用来选模式的 `JITTOR_TORCH_INDEPENDENT`
+现在**不需要设**；把它设成假值会让 `import torch` 直接失败。
 
 这种分离在原生与 Torch 契约不同的 API 上是可观察的。典型例子：原生的 `Var.data`
 仍是共享的 NumPy 视图，而 Torch 模式返回一个 detach 的 Tensor 别名，对它的原地写入
@@ -59,9 +64,36 @@ Jittor 就把 `flags.use_cuda` 置 1。
 > **务必确认它真的在设备上跑**：`npu-smi` / `nvidia-smi` 应显示该进程占用 GB 级显存。
 > 只有约 100 MB 说明算子跑在 CPU 上（慢约 1000 倍）。
 
+## 设备怎么命名
+
+**加速器一律以 `cuda` 这个设备名对外暴露，昇腾也是。** 这不是笔误：昇腾构建上
+`torch.cuda.is_available()` 返回 `True`（`compat/torch/installers/cuda/api.py` 的
+`is_available()` 同时看 `has_cuda` 与 `has_acl`），`torch.cuda.get_device_name()`
+返回 `Ascend910B/NPU`，`.cuda()` / `.to("cuda")` 把张量放到昇腾卡上。这样写死
+`cuda` 的上游代码不用改一行就能跑。
+
+`npu` 的拼写同时可用：`.npu()`、`.to("npu")`、`"npu:1"` 这类设备串都会解析到 ACL
+后端（`compat/torch/types.py`、`compat/torch/frontend.py`、
+`compat/torch/installers/nn/module_methods.py`）。
+
+**但 `torch.npu` 是一个有意保持惰性的命名空间：`torch.npu.is_available()` 永远返回
+`False`。** `torch.npu`、`torch.xpu`、`torch.mps`、`torch.mtia` 都是同一批占位模块
+（`compat/torch/installers/cuda/bindings.py`）。这是刻意的：很多库用
+`torch.npu.is_available()` 作为开关去走 `torch_npu` 专属路径——而 `torch_npu` 是编译
+过的 PyTorch 扩展，这里没有它。答 `False` 让那些分支保持关闭，计算走通用的 `cuda`
+路径。同理，可选的 Transformers 适配器把 `is_torch_npu_available()` 也改成返回
+`False`（`adapters/jittor_adapters/transformers.py`）。所以：**判断有没有加速器请问
+`torch.cuda.is_available()`，不要问 `torch.npu.is_available()`。**
+
+`torch.__file__` 指向实际被导入的那个 `torch/__init__.py`——已部署的那份入口文件，
+或者（未经部署入口激活时）它所复制自的 shim 源文件。独立命名空间自己没有文件，
+`compat/shim/runtime.py` 的 `_adopt_entry_file()` 把入口的路径接到它上面，这样
+`os.path.dirname(torch.__file__)` 这种常见写法才能拿到一个真实目录。
+
 ## 数值正确性
 
-与**真实 PyTorch**用相同权重和输入对拍（`tests/backends/npu/manual/xcheck/`）：
+与**真实 PyTorch**用相同权重和输入对拍（`tests/backends/acl/manual/xcheck/`，
+手工运行，需要真实昇腾设备）：
 
 - GPT-2 前向 + 反向与 torch 相差约 `1e-7`（CUDA）/ `1e-5`（昇腾）；
 - 真实 Qwen3-0.6B（经 transformers）产生**完全相同的 top-5 下一 token 预测**，
@@ -123,6 +155,18 @@ weights = load_file("model.safetensors")
 
 两者都能直接加载真实 torch 保存的文件（含 bf16 在内的全部 dtype），**不需要装真 torch**。
 
+`torch.load` 的安全规则：
+
+- **`weights_only` 默认为 `True`**，与 torch ≥ 2.6 一致；格式探测本身也走受限的
+  Unpickler，所以一个恶意的普通 `.pt` pickle 在探测阶段就不会被执行。
+- 标准的 torch zip checkpoint 在受限模式下读取：按 storage offset、shape 与 stride 重建，
+  负 stride 和越出存储的描述在构造之前报错，未知的存储 dtype 被拒绝而不是当成 float32。
+  读取会把值物化出来：共享存储的往返标识、非连续的物理布局都不保留。
+- 旧版（非 zip）torch 格式、原生 URL 加载与原生 `.pkl` 回退**没有**可注入受限 Unpickler
+  的接口，因此必须显式传 `weights_only=False`，并且只用于可信输入。
+- safetensors：NumPy 请求仍然返回 NumPy 数组；torch 请求保留宽整数、BF16 与所请求的设备；
+  float8 显式不支持；编码不支持的 dtype 在打开输出文件之前就报错。
+
 ## 跑 transformers / LlamaFactory
 
 环境要求：
@@ -137,10 +181,18 @@ weights = load_file("model.safetensors")
 
 ## 已验证的模型覆盖
 
-以下模型都跑通了 `import torch` → jittor 这条链，并与**真实 PyTorch 2.12 逐层对拍**
-（相同权重与输入；前向比 `last_hidden_state`，反向比每个参数的 `jt.grad` 与 torch
-的 `.grad`，按网络规模归一）。约 30 个 `transformers` 架构与 CNN/diffusers 栈的
-**前向和反向**都吻合到约 `1e-6`：
+以下模型都跑通了 `import torch` → jittor 这条链，并与**独立安装的真实 PyTorch
+逐层对拍**（相同权重与输入；前向比 `last_hidden_state`，反向比每个参数的 `jt.grad`
+与 torch 的 `.grad`，按网络规模归一）。约 30 个 `transformers` 架构与 CNN/diffusers
+栈的**前向和反向**都吻合到约 `1e-6`。
+
+> **对拍用的是哪个 torch。** 兼容层声明的 Torch API 级别是 `2.11.0`
+> （`torch.__torch_version__` / `torch.version.__version__`；`torch.__version__`
+> 报告的是 Jittor 自己的版本）。作为参照物的真实 PyTorch 版本**按报告而异**：
+> nightly 生态门禁用 CPU 版 `2.7.1`（`.github/workflows/ecosystem.yml`），
+> [真实模型差距表](../results/2026-09-24-torch-compat-real-models.md)用
+> `2.11.0+cu128`，[下游库台账](../performance/library-standing.md)里较新的几次测量
+> 用 `2.13.0+cu129`。引用某个数字时连它的参照版本一起引用。
 
 - **解码器 LLM**：gpt2、llama、qwen2/qwen3、mistral、gemma/gemma2、phi/phi3、opt、
   bloom、gpt_neox、gptj、gpt_neo、stablelm、starcoder2、mpt、**falcon**（multi-query）、
@@ -168,16 +220,16 @@ weights = load_file("model.safetensors")
 `model.generate()` 支持**贪心**（带 KV cache 的解码与从头重算逐位一致，说明 cache 是对的）、
 **beam search**、**采样**（temperature/top-k/top-p）和**批量**生成。
 
-回归套件覆盖约 30 个架构（`tests/compat/torch/test_torch_hf_models.py`，含
+回归套件覆盖约 30 个架构（`compat/tests/torch/test_torch_hf_models.py`，含
 `generate()` 的贪心/beam/采样测试）与 diffusers 生成路径
-（`tests/compat/torch/test_diffusers.py`）。
+（`compat/tests/torch/test_diffusers.py`）。
 
 `jittor.models` 提供经典 CNN 以及现代 **Vision Transformer**（`vit_b_16`/`vit_b_32`/
 `vit_l_16`）。LLM 与扩散模型直接来自 `transformers` / `diffusers`。
 
 ## 下游库状态
 
-`tests/compat/torch/test_ecosystem_parity.py` 把每个用例**跑两遍**——一次在 `torch`
+`compat/tests/torch/test_ecosystem_parity.py` 把每个用例**跑两遍**——一次在 `torch`
 是真实 PyTorch 的解释器里，一次在本解释器里——从相同权重出发，比较前向输出以及
 **每一个参数梯度和输入梯度**，CPU 与 CUDA 都比。另有一个真实 NPU 的作用域类覆盖
 MMCV ConvModule 与 MMEngine BaseModule 对 `torch_npu` 的对拍，含 fail-closed 的
@@ -191,6 +243,7 @@ CPU 回退检测。用 `REAL_TORCH_PYTHON` 指向真 PyTorch 解释器，可选�
 | `peft` | llama 上的 LoRA | |
 | `ms-swift` | 它自己的 LoRA tuner（llama） | 需要 `peft < 0.20`；ms-swift 4.5.2 配 peft 0.19 在真 PyTorch 下也报同样的 `TypeError` |
 | `mmcv` / `mmengine` | `mmcv.cnn.ConvModule`、`mmengine.model.BaseModule` | CPU、CUDA、NPU；仅限纯 Python 层，见下 |
+| `torchmetrics` | 分类与回归指标（`compat/tests/torch/test_torchmetrics_compat.py`） | 1.7.4，经 `jittor_adapters.torchmetrics` 适配 |
 
 有两条边界属于**架构性的**，不是尚未完成的工作：
 
@@ -198,18 +251,25 @@ CPU 回退检测。用 `REAL_TORCH_PYTHON` 指向真 PyTorch 解释器，可选�
   针对 PyTorch 的 C++ ABI 编译的。**Python 层的兼容层无法加载它们**；这些算子需要
   Jittor 自己的实现——`jittor.models` 和原生算子面就是为要紧的那些场景提供的。
 - **自己掌管设备的运行时。** vLLM 内嵌自定义 CUDA kernel 和它自己的显存与调度层，
-  而不是调用 `torch.*`，所以光靠 shim 带不动它。它通过外部适配器
-  （`vllm_jittor_ops`）运行，由适配器针对 Jittor 提供那些 kernel：vLLM V1 能加载
+  而不是调用 `torch.*`，所以光靠 shim 带不动它。它通过可选适配器
+  `jittor_adapters.vllm`（随 `jittor-torch-adapters` 发行物分发，entry point 名
+  `jittor_vllm`）运行，由适配器针对 Jittor 提供那些 kernel：vLLM V1 能加载
   Qwen3-0.6B、建立 KV cache、完成真实 CUDA 上的贪心解码，token 与真实
   PyTorch/Transformers **完全一致**，四 token 暖启动生成 `0.109s` 对 `0.137s`。
   verl 走同一条路——它的 import、协议、FSDP2 和 PPO 门禁都通过，含四卡 FSDP2。
 
-TRELLIS.2 4B 在同一个外部适配器上以四个真实 CUDA 扩展完成了对齐的端到端流水，但
-暖态流水中位数是 `7.515s` 对真实 PyTorch 的 `6.878s`——约 `1.09x`，**性能尚未验收**。
+TRELLIS.2 4B 曾在一个**不在本仓库**的外部适配器上以四个真实 CUDA 扩展完成对齐的
+端到端流水，暖态流水中位数是 `7.515s` 对真实 PyTorch 的 `6.878s`——约 `1.09x`，
+**性能尚未验收**；该测量是一次性结论，见[下游库台账](../performance/library-standing.md)。
 
-TRELLIS 这类项目粘合代码放在通过 entry point 注册的可选集成发行物里
-（`jittor-trellis` 等），**不在主线 Jittor 中**，理由见
-[仓库布局](../development/repository-layout.md)。
+项目专属的粘合代码都在通过 entry point 注册的可选适配器里，**不在主线 Jittor 中**，
+理由见[仓库布局](../development/repository-layout.md)。本仓库维护的一份是
+[`adapters/`](https://github.com/Jittor/jittor/blob/master/adapters/README.md)
+（发行物 `jittor-torch-adapters`，Python 包 `jittor_adapters`），它有三个 entry
+point：`jittor_transformers`（Transformers 4.56.2 / 5.5.3：让它自带的 `torch_npu`
+探测返回假）、`jittor_torchmetrics`（TorchMetrics 1.7.4）、`jittor_vllm`。版本是显式
+的：未识别的版本会抛 `UnsupportedAdapterVersion` 而不是碰运气。TRELLIS 与 Gaussian
+Splatting 的粘合代码不在本仓库，也没有随本发布线发布。
 
 ## 复数与 FFT
 
@@ -226,36 +286,19 @@ torch.fft.fft2(x2); torch.fft.fftn(x, dim=(-2,-1))   # norm='backward'|'forward'
 再把结果转回原生张量。该桥接是实现细节，限制已登记，见
 [复数 dtype](../notes/complex-dtype.md)。
 
-## Lightning 风格训练
-
-```python
-import jittor.lightning as pl          # 或：import pytorch_lightning as pl（已做别名）
-
-class Lit(pl.LightningModule):
-    def training_step(self, batch, idx): ...; return loss
-    def configure_optimizers(self): return torch.optim.Adam(self.parameters(), lr=1e-3)
-
-pl.Trainer(max_epochs=5, gradient_clip_val=1.0,
-           callbacks=[pl.ModelCheckpoint(monitor="val_loss"),
-                      pl.EarlyStopping(monitor="val_loss", patience=3)]).fit(model, train_loader)
-```
-
-核心训练/验证循环已实现（epoch、梯度累积、裁剪、lr 调度、`self.log`、
-`ModelCheckpoint`/`EarlyStopping` 回调）。**DDP 策略、精度插件和完整的 logger 生态
-尚未覆盖。**
-
 ## 报错
 
 算子失败会给出真实原因（算子类型、输入形状/dtype、`[Reason]`），而不是旧的
 "Wrong inputs arguments / help(jt.sync)" 噪声。不支持的 dtype（例如昇腾上的 float64）
 抛出干净的 Python 异常而不是直接中止。异步算子失败时设 `JT_SYNC=1` 精确定位。
 
-## torch API 覆盖（对真实 PyTorch 2.12 验证）
+## torch API 覆盖（对真实 PyTorch 验证）
 
 下列每一项都在 **CPU 与 CUDA 上**与真实 PyTorch 用相同输入/权重**逐位（或到约 1e-6）
-对拍**过，并锁进回归套件（`test_torch_compat.py`、`test_torch_compat_linalg.py`、
-`test_torch_compat_distributions.py`、`test_torch_hf_models.py`、`test_peft.py`、
-`test_diffusers.py`）。
+对拍**过，并锁进回归套件（`compat/tests/torch/` 下的 `test_torch_compat.py`、
+`test_torch_compat_linalg.py`、`test_torch_compat_distributions.py`、
+`test_torch_hf_models.py`、`test_peft.py`、`test_diffusers.py`）。参照版本见上面
+「已验证的模型覆盖」里的说明。
 
 - **注意力 / transformer**：`F.scaled_dot_product_attention`（普通/因果/bool mask/
   scale/GQA，前向+反向）、`F.multi_head_attention_forward`、`nn.MultiheadAttention`、
@@ -289,17 +332,18 @@ pl.Trainer(max_epochs=5, gradient_clip_val=1.0,
 
 ## 状态与限制
 
-**两种后端上都已完成并验证**：约 75 个 transformers（解码器/编码器/编码器-解码器/
-音频/视觉/MoE）加 CNN 加 diffusers 生成模型的前向/反向/训练精度一致性、设备分派、
+**两种后端上都已完成并验证**：上面列出的那批 transformers（解码器/编码器/
+编码器-解码器/音频/视觉/MoE，其中 33 个架构锁在
+`compat/tests/torch/test_torch_hf_models.py` 的回归套件里，其余来自手工对拍）加 CNN
+加 diffusers 生成模型的前向/反向/训练精度一致性、设备分派、
 bf16 与混合精度、无需 mpirun 的 DDP、梯度检查点、checkpoint/safetensors 迁移、
 `model.save()`/`load()`、真实的 `torch.cuda` 显存报告、复数与 `torch.fft.*`、
 `F.multi_head_attention_forward`、`torch.func`（functorch 系列，与真 torch 逐位一致）、
 `nn.utils.weight_norm`/`spectral_norm`（真实重参数化：`weight` → `weight_g`/`weight_v`
 在前向前重算，σ 用幂迭代；与真 torch 和 `np.linalg.svd` 对拍过）、
-`nn.utils.rnn.pad_sequence`、torch 兼容的 `torch.optim.lr_scheduler`（在
-`import jittor as torch` 与已部署 shim **两条路径上单一实现**；HF 的
-`get_*_schedule_with_warmup` 包装 LambdaLR 并产生与 torch 完全相同的曲线）、
-Lightning 风格训练核心，以及清晰的报错。算子面通过算子级差分对拍
+`nn.utils.rnn.pad_sequence`、torch 兼容的 `torch.optim.lr_scheduler`（`activate()`
+与已部署 shim **两条路径上单一实现**；HF 的 `get_*_schedule_with_warmup` 包装
+LambdaLR 并产生与 torch 完全相同的曲线），以及清晰的报错。算子面通过算子级差分对拍
 （`op_parity.py`：约 84 个算子对真 torch，另有反向对拍）在**昇腾和 CUDA 上都**验证过。
 
 **用 `from_pretrained` 加载预训练 checkpoint**——包括 accelerate 快路径（diffusers，
@@ -312,12 +356,26 @@ Lightning 风格训练核心，以及清晰的报错。算子面通过算子级�
 `UNet2DModel` 的 save → `from_pretrained` → 前向往返在 meta 与普通两条路径上都吻合到
 `0.0`，transformers `BertModel` 往返同样吻合到 `0.0`。
 
+**优化器与调度器的已知限制。** Adam/AdamW 调用共享的原生 `adam_update`，SGD、RMSprop 与
+Adan 委托各自的原生 step，没有第二套更新公式。`torch.optim.LBFGS` 未实现（构造时报
+`NotImplementedError`，保真度登记为 `unimplemented`）；`SGD` 还不接受 `foreach=`/`fused=`
+（见已知问题 `KI-COMPAT-008`）。调度器公式保持原样，但**不承诺**完整的 resume 语义，也不
+填充被忽略的可选参数；`AveragedModel` 仍以原生 Module 为基类，接受 `use_buffers` 但不做
+buffer 平均。这些 API 在保真度报告里登记为 `approximate`。
+
 **NumPy 2.x 与 Python 3.13** 是维护中的兼容路径。Jittor 为数组拷贝选择带版本的
 NumPy C-API 入口，避免构造 legacy dtype descriptor，并从 Jittor dtype 推导传输尺寸。
 Python 3.13 的 wheel 门禁在 NumPy 2.x 下运行，覆盖 CPU 自检、非 C 连续数组传输和
 Python 变量追踪。包接受 3 以下的所有 NumPy 版本。
 
+**不提供的**：`pytorch_lightning` / `lightning`。曾经有一份自研的 Lightning 风格
+训练循环（`jittor.lightning`），已于 2026-07 删除（`5d49afc3`）；现在没有 Lightning
+兼容层，也没有 `pytorch_lightning` 别名。请直接用 `transformers.Trainer`，或自己写
+训练循环。
+
 **进行中（更底层）**：`complex128` 与消除剩余内部复数桥接的原生 kernel、PP/TP、
 显存管理器调优、CUDA 11/13 的 wheel 家族（对齐的 CUDA 12.2 栈——cuDNN 8.9.7 或更新
-——已通过 `jittor[cuda12]` 提供）、Lightning 的剩余接口（DDP/精度/logger），以及
-triton/tilelang 自定义算子支持。
+——已通过 `jittor[cuda12]` 提供），以及 triton/tilelang 自定义算子支持。
+
+用户可见的限制与它们在问题总账里的编号集中在[已知限制](../guides/known-limitations.md)；
+各后端与 Torch 版本的验证位置见[平台支持](../guides/platform-support.md)。

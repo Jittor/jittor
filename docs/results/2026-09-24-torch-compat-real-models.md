@@ -1,17 +1,17 @@
 # Torch 兼容层在真实模型上对 PyTorch：差距表、显存与性能修复
 
 - 状态：第三版（显存、融合注意力、fused AdamW 与主机开销修复后）。套件
-  （[`bench/torch_compat/`](../../bench/torch_compat/README.md)）可复用。修复与本报告一同
+  （[`bench/torch_compat/`](https://github.com/Jittor/jittor/blob/master/bench/torch_compat/README.md)）可复用。修复与本报告一同
   提交；表中「修后」来自提交前 `f1e3dfa9` 加这些修改的工作区（结果文件标 dirty），与提交
   内容一致。
 - 日期：2026-09-24
 - 基线提交：`f1e3dfa9`
-- 硬件：RTX 4090 24 GB（驱动 580.178.04），AMD EPYC 9554
+- 验证范围：RTX 4090 24 GB（驱动 580.178.04），AMD EPYC 9554
 - 对照：PyTorch 2.11.0+cu128（cuDNN 9.19），Transformers 4.56.2，Diffusers 0.35.1，
   两侧 NumPy 1.26.4；Jittor 侧 nvcc 12.2.140 + `jittor[cuda12]` 组件（含
   `nvidia-cudnn-frontend` 1.30），shim 声明的 torch API 为 2.11.0
-- Owner：Jittor 核心维护者
-- 复查触发：执行器释放时机、反向构图、图重放、SDPA 分派、优化器、placement/类型提升
+- 维护者：Jittor 核心维护者
+- 复查条件：执行器释放时机、反向构图、图重放、SDPA 分派、优化器、placement/类型提升
   变化；换卡或换对照版本
 
 ## 测的是什么
@@ -205,10 +205,10 @@ cuDNN 卷积计划的主机侧执行，没有单一热点。
 映射到通用的图重放上：
 
 - 模块（推理）：`OptimizedModule`，`no_grad` 下重放
-  [`GraphReplay`](../../python/jittor/_runtime/graph_replay.py)（支持关键字参数与
+  [`GraphReplay`](https://github.com/Jittor/jittor/blob/master/python/jittor/_runtime/graph_replay.py)（支持关键字参数与
   tuple/dict/dataclass/`ModelOutput` 结构化输出）；
 - 函数（整个训练步，前向 + 反向 + 优化器）：
-  [`StepCapture`](../../python/jittor/_runtime/step_capture.py)，状态更新靠运行时记录
+  [`StepCapture`](https://github.com/Jittor/jittor/blob/master/python/jittor/_runtime/step_capture.py)，状态更新靠运行时记录
   holder 换绑得到，不需要认识具体模块和优化器；CUDA fused AdamW 的 step 与 lr 从设备读，
   调度器改 lr 照常生效。
 - 稳定后录成 CUDA graph，每步一次 launch。

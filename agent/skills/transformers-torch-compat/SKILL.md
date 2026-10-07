@@ -14,68 +14,67 @@ case（`large_transformers_llama`、`_gpt2`、`_qwen3`、`_bert`、`_vit`）。
 
 **不覆盖**：`transformers` 的完整训练/微调、真实 checkpoint 与数据集、generation 采样；
 任何 `_C` 编译扩展（flash-attn、bitsandbytes、torchvision.ops）；vLLM 等推理引擎；
-NPU 专项（条目存在但本机未跑）。深度性能分析（SDPA 后端、算子热点、allocator）走
-[`jittor-transformers-perf`](../jittor-transformers-perf/SKILL.md)，**注意它文档里的解释器
-路径**（`/home/zy/miniconda3/envs/jt311/bin/python`、`/home/zy/rt_venv/bin/python`）**来自旧机器，
-不描述当前 lab**；当前 lab 以本文件「两侧环境」为准。
+NPU 专项（条目存在但未跑）。深度性能分析（SDPA 后端、算子热点、allocator）走
+[`jittor-transformers-perf`](../jittor-transformers-perf/SKILL.md)；两边的解释器约定相同
+（`<jittor-python>` / `<real-torch-python>`），环境以本文件「两侧环境」为准。
 
 ## 两侧环境
 
 | 角色 | 解释器 | 环境脚本 |
 | --- | --- | --- |
-| shim | `/root/jittor-lab/_state/h3/venv-jittor/bin/python` | `/root/jittor-lab/minimax-h3/env-jittor.sh` |
-| 原生 torch（oracle） | `/root/jittor-lab/_state/h3/venv-oracle-cu129/bin/python` | `/root/jittor-lab/minimax-h3/env-oracle-cu129.sh` |
+| shim | `<jittor-python>` | 本地 env 脚本（不入库） |
+| 原生 torch（oracle） | `<real-torch-python>` | 本地 env 脚本（不入库） |
 
-- shim 侧：Python 3.12.12，Jittor 1.3.11.0；`source env-jittor.sh` 后必须
+- shim 侧：Python 3.12.12，Jittor 1.3.11.0；激活 shim 侧 env 脚本后必须
   **先 `import jittor` 再 `import torch`**，`torch` 才带 `_torch_compat_install_context`
-  标记（本机已实测）。env 设 `JITTOR_TORCH_SHIM=1`、`HF_HUB_OFFLINE=1`、
+  标记（已实测）。env 设 `JITTOR_TORCH_SHIM=1`、`HF_HUB_OFFLINE=1`、
   `TRANSFORMERS_OFFLINE=1`，`JITTOR_HOME`/`TMPDIR`/`XDG_CACHE_HOME` 都在
-  `$RUN_ROOT`（`/root/jittor-lab/_state/h3/run`）下。
+  `$RUN_ROOT`（`$JITTOR_LAB_ROOT/_state/h3/run`）下。
 - oracle 侧：Python 3.12.12，真 PyTorch **2.13.0+cu129**。
-- **Transformers 两侧都是 5.5.3**（本机实测 `importlib.metadata.version` 与
+- **Transformers 两侧都是 5.5.3**（实测 `importlib.metadata.version` 与
   `transformers.__version__`）。两侧 Python 主版本相同（3.12）→ ABI 相同 → harness
   默认让两侧**共用同一份下游 site**（shim venv 的 `site-packages`，即
-  `JITTOR_ECOSYSTEM_PACKAGE_SITE` 的推导值）；本机已验证 oracle 能直接 import 该 site 的
+  `JITTOR_ECOSYSTEM_PACKAGE_SITE` 的推导值）；已验证 oracle 能直接 import 该 site 的
   `transformers 5.5.3`。这也意味着**两侧同版本是数字可比的前提**，换机器先用下面的命令
   各测一次，不一致就别看数字。
-- `env-jittor.sh` 把 `$JITTOR_LAB_ROOT/diffusers-main/src` 放进 `PYTHONPATH`。对纯
+- 实测用的 shim 侧 env 脚本把 `$JITTOR_LAB_ROOT/diffusers-main/src` 放进 `PYTHONPATH`。对纯
   transformers case **不影响数字**（这些 case 不 import diffusers）；harness 在起 oracle
   子进程时会把继承的 `PYTHONPATH` 清空（`_ecosystem_harness.py:254`），所以不会把
   shim 侧的 diffusers 泄漏进 oracle。
-- `env-jittor.sh` **不把 venv 放进 `PATH`**，`python` 仍是系统解释器；必须显式用
-  `"$VENV/bin/python"`（`VENV` 由脚本导出）。
+- 该 env 脚本**不把 venv 放进 `PATH`**，`python` 仍是系统解释器；必须显式用
+  `<jittor-python>`。
 
 任何数字之前先过 oracle 断言（`noxfile.py` 的 `ecosystem` session 起手就做同一件事）：
 
 ```bash
-/root/jittor-lab/_state/h3/venv-oracle-cu129/bin/python -c \
+<real-torch-python> -c \
   "import torch; assert not hasattr(torch,'_torch_compat_install_context'); print('oracle torch', torch.__version__)"
-# 本机实测输出：oracle torch 2.13.0+cu129
+# 实测输出：oracle torch 2.13.0+cu129
 ```
 
 反向确认 shim 一侧（证明 `torch` 不是真 torch）：
 
 ```bash
-source /root/jittor-lab/minimax-h3/env-jittor.sh
-"$VENV/bin/python" -c "import jittor, torch; assert hasattr(torch,'_torch_compat_install_context'); print('shim jittor', jittor.__version__)"
-# 本机实测输出：shim jittor 1.3.11.0
+# 已激活 shim 侧环境（本地 env 脚本，不入库）
+<jittor-python> -c "import jittor, torch; assert hasattr(torch,'_torch_compat_install_context'); print('shim jittor', jittor.__version__)"
+# 实测输出：shim jittor 1.3.11.0
 ```
 
 Transformer 专用 adapter 只做一件事：把 `transformers.utils.import_utils.is_torch_npu_available`
 钉成返回 `False`，避免原生 `torch_npu` 探测进入独立 Jittor 前端
 （[`adapters/jittor_adapters/transformers.py`](../../../adapters/jittor_adapters/transformers.py)，
-`SUPPORTED_VERSIONS = {4.56.2, 5.5.3}`）。本机实测该 guard 已生效
+`SUPPORTED_VERSIONS = {4.56.2, 5.5.3}`）。实测该 guard 已生效
 （`_jittor_transformers_npu_guard is True`，`is_torch_npu_available() is False`）。
 
 ## 在 shim 上跑
 
-唯一入口是 runner（`--help` 本机两个解释器都实测可用）：
+唯一入口是 runner（`--help` 验证环境两个解释器都实测可用）：
 
 ```bash
-source /root/jittor-lab/minimax-h3/env-jittor.sh
-cd /apdcephfs_private/qy/projects/zy/jittor
+# 已激活 shim 侧环境（本地 env 脚本，不入库）
+cd <repo-root>
 mkdir -p "$JITTOR_LAB_ROOT/_state/h3/ecosystem"
-"$VENV/bin/python" compat/tests/torch/_ecosystem_runner.py \
+<jittor-python> compat/tests/torch/_ecosystem_runner.py \
     transformers_llama "$JITTOR_LAB_ROOT/_state/h3/ecosystem/llama_shim.npz" \
     --runtime jittor --device cpu
 ```
@@ -90,11 +89,11 @@ pytest（`conftest` 会把 checkout 钉上 `PYTHONPATH`），或先把改动拷�
 整套 shim gate（pytest 用 shim venv 跑，`PYTHON=sys.executable`）：
 
 ```bash
-source /root/jittor-lab/minimax-h3/env-jittor.sh
-cd /apdcephfs_private/qy/projects/zy/jittor
-REAL_TORCH_PYTHON=/root/jittor-lab/_state/h3/venv-oracle-cu129/bin/python \
+# 已激活 shim 侧环境（本地 env 脚本，不入库）
+cd <repo-root>
+REAL_TORCH_PYTHON=<real-torch-python> \
 JITTOR_REQUIRE_REAL_TORCH=1 JITTOR_TEST_REQUIRE_EXECUTION=1 JITTOR_TORCH_SHIM=1 \
-"$VENV/bin/python" -m pytest compat/tests/torch/test_ecosystem_parity.py -q -k transformers
+<jittor-python> -m pytest compat/tests/torch/test_ecosystem_parity.py -q -k transformers
 ```
 
 `-k transformers` 选中 6 个 tiny case；跑速度那半再加 `JITTOR_ECOSYSTEM_LARGE=1`、
@@ -106,8 +105,8 @@ JITTOR_REQUIRE_REAL_TORCH=1 JITTOR_TEST_REQUIRE_EXECUTION=1 JITTOR_TORCH_SHIM=1 
 oracle 也要清掉 Jittor 变量并零 `PYTHONPATH`，否则可能 import 到 deployed facade：
 
 ```bash
-cd /apdcephfs_private/qy/projects/zy/jittor
-O=/root/jittor-lab/_state/h3/venv-oracle-cu129/bin/python
+cd <repo-root>
+O=<real-torch-python>
 PYTHONPATH= JITTOR_TORCH_SHIM= \
   "$O" compat/tests/torch/_ecosystem_runner.py \
     transformers_llama "$JITTOR_LAB_ROOT/_state/h3/ecosystem/llama_torch.npz" \
@@ -128,13 +127,13 @@ seed、权重传递、序列化都归 runner。torch 侧产出 `*.weights.npz`�
 容差 CPU `2e-3/1e-2`、加速卡 `5e-3/2e-2`（`_ecosystem_harness.py`）。手动两段：
 
 ```bash
-source /root/jittor-lab/minimax-h3/env-jittor.sh
-cd /apdcephfs_private/qy/projects/zy/jittor
+# 已激活 shim 侧环境（本地 env 脚本，不入库）
+cd <repo-root>
 D="$JITTOR_LAB_ROOT/_state/h3/ecosystem"
-O=/root/jittor-lab/_state/h3/venv-oracle-cu129/bin/python
+O=<real-torch-python>
 topk=transformers_bert
 PYTHONPATH= "$O" compat/tests/torch/_ecosystem_runner.py "$topk" "$D/torch.npz" --runtime torch --device cpu
-"$VENV/bin/python" compat/tests/torch/_ecosystem_runner.py "$topk" "$D/jittor.npz" --runtime jittor --device cpu --weights "$D/torch.weights.npz"
+<jittor-python> compat/tests/torch/_ecosystem_runner.py "$topk" "$D/jittor.npz" --runtime jittor --device cpu --weights "$D/torch.weights.npz"
 ```
 
 对比两个 npz 的 `__output__`、`grad::*`、`ingrad::*` 用**全场最大量级**做 scale
@@ -148,7 +147,7 @@ llama/gpt2/qwen3/bert/vit；注意 **qwen3 只有速度 case，没有 tiny 数�
 只有 tiny 数值 case、没有大尺寸速度 case。
 
 **device 规则**：两侧必须同 device，harness 读回并断言 `report["device"]`。Jittor 没有
-per-tensor device，有卡机器上 CUDA 默认就是开的（本机 Jittor 日志实测 `CUDA enabled`，
+per-tensor device，有卡机器上 CUDA 默认就是开的（验证环境 Jittor 日志实测 `CUDA enabled`，
 8 卡 sm_90），所以 CPU 必须显式关：runner 的 `--device cpu`（也是默认值）会进入
 `jt.runtime.scope(use_cuda=0)`。绕开 runner 直接跑模型时不会自动关，会拿 Jittor 加速卡对
 PyTorch CPU。
@@ -166,29 +165,29 @@ PyTorch CPU。
 | 能力本身 jittor 没有（例：NPU bool 归约，公共 `jt.all`/`Tensor.all`/`jt.any` 是 Transformers 需要的路径） | **jittor 核心** | [`known-issues` KI-BACKEND-001](../../manuals/known-issues.md) |
 | `*._C` 编译扩展（flash-attn / bitsandbytes / torchvision.ops） | **契约外** | Python shim 无法使其 ABI 兼容 |
 
-本机**没有**独立列出 5.5.3 版本下全部 transformers 断点；上表是分流判据与已入仓的实例，
+验证环境**没有**独立列出 5.5.3 版本下全部 transformers 断点；上表是分流判据与已入仓的实例，
 不是完整缺口清单。断点先复现、再分流，不先写适配代码。
 
 ## 坑与假绿
 
 1. **`import torch` 单独用不了。** shim venv 里直接 `python -c "import torch"` 抛
    `ModuleNotFoundError`；必须先 `import jittor`（runner 内部就是这顺序）。只 source
-   `env-jittor.sh` 不设 `JITTOR_TORCH_SHIM` 也不够。
-2. **`env-jittor.sh` 不激活 venv。** `python` 是系统解释器、没有 torch；用 `"$VENV/bin/python"`。
+   env 脚本而不设 `JITTOR_TORCH_SHIM` 也不够。
+2. **实测用的 env 脚本不激活 venv。** `python` 是系统解释器、没有 torch；用 `<jittor-python>`。
 3. **有卡机器上「跑 CPU」默认不是 CPU。** 只「不请求 CUDA」不等于 CPU 对拍，必须显式关；
    见「对拍」的 device 规则。
 4. **缺 oracle = skip = 看起来通过。** `REAL_TORCH_PYTHON` 未设时 parity/speed 全部
    `skipTest`，缺 oracle 的 nightly 会为它唯一存在的理由报绿。用
    `JITTOR_REQUIRE_REAL_TORCH=1` + `JITTOR_TEST_REQUIRE_EXECUTION=1` 把这类 skip 变失败。
 5. **COPY-DEPLOY。** deployed jittor 是 `site-packages/jittor` 的**真实拷贝**（非 symlink），
-   本机实测其 `__init__.py` 与仓库 `python/jittor/__init__.py` 已不同。改仓库 `python/jittor/`
+   实测其 `__init__.py` 与仓库 `python/jittor/__init__.py` 已不同。改仓库 `python/jittor/`
    不会影响直接调用 runner 时 `import jittor` 的结果，除非把改动拷进 deployed 树或走会钉
    checkout 的 pytest。
-6. **并行 JIT 抢同一缓存。** `env-jittor.sh` 把 `JITTOR_HOME` 固定在 `$RUN_ROOT`，本机观测到
+6. **并行 JIT 抢同一缓存。** 实测用的 env 脚本把 `JITTOR_HOME` 固定在 `$RUN_ROOT`，实测观测到
    该缓存锁被另一个进程（`probe_decode_flag_matrix.py`）持有。并行任务必须另设
    `JITTOR_HOME` 或 `cache_name`，否则会在 `jittor.lock` 上串行等待。
 7. **两侧版本不一致就换了参考物。** harness 断言两侧 `transformers` 版本（及共享 site 时的
-   依赖 origin）相等；本机两侧当前都是 5.5.3，**未出现**版本不一致。换机器先核对。
+   依赖 origin）相等；验证环境两侧当前都是 5.5.3，**未出现**版本不一致。换机器先核对。
 8. **tiny case 通过 ≠ 库真正用到的 API 面是真的。** 见
    [`torch-shim-noop-audit`](../torch-shim-noop-audit/SKILL.md)。
 
@@ -206,7 +205,7 @@ PyTorch CPU。
   [`downstream-library-adaptation`](../downstream-library-adaptation/SKILL.md)；
   更深的性能方法：[`jittor-transformers-perf`](../jittor-transformers-perf/SKILL.md)。
 
-**本机实测**（2026-09-19，仓库 HEAD `90fe0b9`，分支 `2.0-refactor`）：
+**实测**（2026-09-19，仓库 HEAD `90fe0b9`，分支 `2.0-refactor`）：
 两个 venv 存在（Python 均 3.12.12）；shim venv `jittor 1.3.11.0`、`import jittor` 后 `torch`
 带 shim 标记；oracle 断言通过（`torch 2.13.0+cu129`）；两侧 `transformers` 均 5.5.3，
 oracle 能 import shim site 的 `transformers 5.5.3`；shim 侧 `import transformers` 成功；
@@ -214,30 +213,30 @@ adapter NPU guard 生效；runner `--help` 两个解释器均可用；shim venv 
 两侧 `numpy 2.3.5`；deployed jittor 为拷贝且与仓库 `__init__.py` 不同；shim venv 裸
 `import torch` 报 `ModuleNotFoundError`。
 
-**未在本机验证**：任何 transformers 的数值或速度数字；整套 `test_ecosystem_parity/speed`
+**未验证**：任何 transformers 的数值或速度数字；整套 `test_ecosystem_parity/speed`
 是否在当前 lab 一次跑通；CUDA `--device cuda` 与 NPU 路径；`JITTOR_ECOSYSTEM_PACKAGE_SITE`
-显式路径（本机走的是从已装 transformers 推导的默认值）。
+显式路径（验证环境走的是从已装 transformers 推导的默认值）。
 
 ## 实测（2026-09-19）
 
 用四轴工具 `agent/skills/torch-compat-repo-runbook/scripts/verify_repo.py` 实跑。工具让 oracle 与
 shim 吃**同一份权重、同一批输入**，每 case 报 min-over-repeats 秒数、worst abs / worst rel
-（相对**全场**最大幅值）、两侧 peak 字节、fallback 数、device 一致性。环境：GPU 2（H20），
+（相对**全场**最大幅值）、两侧 peak 字节、fallback 数、device 一致性。环境：单卡 H20，
 `--device cuda --repeats 5 --seed 0`，shim/oracle 用上文两侧解释器；
-`JITTOR_HOME=/root/jittor-lab/_state/verify-tf/jittor-home`（独立缓存，避免与其他 agent 抢锁）。
+`JITTOR_HOME=$JITTOR_LAB_ROOT/_state/verify-tf/jittor-home`（独立缓存，避免与其他 agent 抢锁）。
 
 命令（同一工具分两档跑，`--cases` 只决定派发哪些 case，不改任何执行路径）：
 
 ```bash
-source /root/jittor-lab/minimax-h3/env-jittor.sh
-export JITTOR_HOME=/root/jittor-lab/_state/verify-tf/jittor-home
+# 已激活 shim 侧环境（本地 env 脚本，不入库）
+export JITTOR_HOME=$JITTOR_LAB_ROOT/_state/verify-tf/jittor-home
 mkdir -p "$JITTOR_HOME"
-export CUDA_VISIBLE_DEVICES=2
-REAL_TORCH_PYTHON=/root/jittor-lab/_state/h3/venv-oracle-cu129/bin/python \
-"$VENV/bin/python" agent/skills/torch-compat-repo-runbook/scripts/verify_repo.py \
+export CUDA_VISIBLE_DEVICES=<gpu>
+REAL_TORCH_PYTHON=<real-torch-python> \
+<jittor-python> agent/skills/torch-compat-repo-runbook/scripts/verify_repo.py \
   --repo transformers \
   --cases transformers_bert,transformers_gpt2,transformers_llama,transformers_t5,transformers_vit,transformers_whisper \
-  --device cuda --repeats 5 --out /root/jittor-lab/_state/verify-tf/out
+  --device cuda --repeats 5 --out $JITTOR_LAB_ROOT/_state/verify-tf/out
 # large 速度档把 --cases 换成：
 #   large_transformers_bert,large_transformers_gpt2,large_transformers_llama,large_transformers_qwen3,large_transformers_vit
 ```
@@ -302,7 +301,7 @@ oracle 报 `torch.cuda.max_memory_allocated`（**活跃**字节，单卡），ji
 
 - **`transformers_t5`（CUDA）：oracle 先崩，shim 侧没执行到。** 真实错误是真 torch 2.13.0+cu129
   走 apex：
-  `File "/opt/python3.12/lib/python3.12/site-packages/apex/normalization/fused_layer_norm.py", line 254, in fused_rms_norm_affine_fwd ... RuntimeError: input must be contiguous`
+  `File "<site-packages>/apex/normalization/fused_layer_norm.py", line 254, in fused_rms_norm_affine_fwd ... RuntimeError: input must be contiguous`
   （transformers 5.5.3 的 `T5LayerNorm` 在 CUDA 上命中 apex fused RMSNorm，拒绝非连续输入）。
   与 shim 无关：手工只跑 shim（`--runtime jittor --device cuda`）该 case 成功，
   `seconds=0.01938`、`fallback_count=0`、`device=cuda`。工具先跑 oracle 再跑 shim，oracle 一崩整

@@ -63,16 +63,19 @@
 Torch 兼容、机制说明（`docs/notes/`）、性能、发布说明、社区，以及贡献者文档
 （`docs/development/`）。**源语言是中文。**
 
-整改期的过程材料在顶层 `refactor-wip/`：任务看板、计划、交接、分工、迁移期的 API owner
-对照表、后端与安装器的内部契约，以及 `refactor-wip/results/` 下的历次验证报告。
-**看板是当前任务状态的唯一来源。** 整改收口后 `refactor-wip/` 整个目录删除，其中内容
-不迁回 `docs/`。
+**仓库不保存任务看板、计划、交接或分工这类过程文档。** 任务、状态与交接记在 GitHub issue
+与 PR 中，验证证据写进 PR 描述；等待硬件验收的事项见
+[`agent/manuals/deferred-hardware.md`](https://github.com/Jittor/jittor/blob/master/agent/manuals/deferred-hardware.md)，缺陷与限制见
+[问题总账](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-issues.md)。2.0 整改期的过程材料已在收口时删除（Git
+历史中可查）：仍然成立的设计契约迁入了 `docs/development/`、`docs/notes/` 与
+`docs/compatibility/`，仍是某项未关闭问题唯一证据的验证报告压缩后迁入 `docs/results/`，
+wheel 内容基线迁入 `tools/release/baselines/`。
 
 活跃索引与入链必须可解析；已归档的结论及其原始测试证据**不被改写成当前的成功**。
 文档检查维持这条"活跃/归档"边界。
 
 `agent/` 只包含 `manuals/` 与 `skills/`；仓库检查脚本一律在 `tools/`。工作流入口是
-[`agent/manuals/agent-index.md`](../../agent/manuals/agent-index.md)。社区项目列表在
+[`agent/manuals/agent-index.md`](https://github.com/Jittor/jittor/blob/master/agent/manuals/agent-index.md)。社区项目列表在
 `docs/community/`；ASV 源配置在 `benchmarks/asv.conf.json`——nox 从该配置推导绝对的输入
 与外部输出路径，不把基准运行状态搬进工作树。
 
@@ -97,8 +100,8 @@ entry point。
 
 ## 目标布局
 
-下面这棵树是 2026-09-02 决定的目的地。理由、逐项的源到目的地对照表、打包耦合关系与
-排序，见 [`refactor-wip/architecture/target-layout.md`](../../refactor-wip/architecture/target-layout.md)。
+下面这棵树是 2026-09-02 决定、现已落地的布局。逐项的源到目的地对照表与搬迁排序属于整改
+过程，只保留在 Git 历史中；布局本身由结构门禁与 `tools/check_repo_layout.sh` 守住。
 
 ```text
 .
@@ -228,7 +231,7 @@ vLLM 的粘合代码及其专属测试由主仓库的 `adapters/jittor_adapters/
 - 共享测试工具在 `tests/_helpers/`；测试模块**不互相导入**作为隐式 helper API。
 - 结构、CPU、CUDA、NPU 套件是**分开的 CI 层**。
 - 测试选择使用名字与 marker，**绝不使用 `listdir()` 的位置**。
-- C++ 的 `test.h` 资源与其编译器 include 消费者一起放在 `python/jittor/src/utils/`。
+- C++ 的 `test.h` 资源与其编译器 include 消费者一起放在 `src/utils/`。
 - 已安装环境的检查用 `jittor.selftest`，而不是随包发布一个测试包。
 
 ## 工具与示例边界

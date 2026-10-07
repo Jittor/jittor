@@ -23,6 +23,10 @@ LOGDIR=${LOGDIR:-$TMPDIR/verify-build}
 mkdir -p "$LOGDIR"
 
 fail=0
+# What a compile looks like in the log: run_cmds' progress line
+# ("Compiling <what>(i/n) ...", printed once a batch takes over 2 s) and the
+# jit_utils_core rebuild that ends the process with exit code 3.
+RECOMPILED='Compiling [^(]*\([0-9]+/[0-9]+\)|jit_utils was rebuilt|jit_utils updated'
 step() { printf '\n=== %s ===\n' "$*"; }
 bad()  { printf 'FAIL: %s\n' "$*"; fail=1; }
 ok()   { printf 'ok: %s\n' "$*"; }
@@ -77,7 +81,7 @@ echo "cold import: ${cold_secs}s -> $COLD_CACHE"
 [ -n "$COLD_CONFIG" ] && [ -f "$COLD_CONFIG/build_config.json" ] \
   || bad "no build_config.json above the products"
 [ -f "$JITTOR_HOME/.cache/jittor/probe.json" ] || bad "no probe.json"
-grep -q "please rerun" "$LOGDIR/1-cold.log" && bad "cold build asked for a rerun"
+grep -qE "please rerun|rerun the same command" "$LOGDIR/1-cold.log" && bad "cold build asked for a rerun"
 ok "cold cache"
 
 step "2/4 hot cache: a second import must not compile anything"
@@ -85,7 +89,7 @@ run_import "$LOGDIR/2-hot.log" ${NVCC:+nvcc_path="$NVCC"} || bad "hot import fai
 [ "$(cache_of "$LOGDIR/2-hot.log")" = "$COLD_CACHE" ] || bad "hot run landed in a different cache directory"
 # "Compiling" lines in a warm run mean something invalidated a product that
 # nothing changed -- a nondeterministic key, a timestamp in a command line.
-if grep -qE "Compiling [0-9]+ files|jit_utils updated" "$LOGDIR/2-hot.log"; then
+if grep -qE "$RECOMPILED" "$LOGDIR/2-hot.log"; then
   bad "hot import recompiled; see $LOGDIR/2-hot.log"
 else
   ok "hot cache: nothing recompiled"
@@ -124,7 +128,7 @@ run_import "$LOGDIR/4-cuda-2.log" ${NVCC:+nvcc_path="$NVCC"} || bad "CUDA import
 run_import "$LOGDIR/4-cpu-2.log" nvcc_path=""                 || bad "CPU-only import after CUDA failed"
 # The whole point: after each side has been built once, alternating is free.
 for f in "$LOGDIR/4-cuda-2.log" "$LOGDIR/4-cpu-2.log"; do
-  grep -qE "Compiling [0-9]+ files|jit_utils updated" "$f" \
+  grep -qE "$RECOMPILED" "$f" \
     && bad "switching configurations recompiled: $f"
 done
 # Both configurations must still share one lock: it guards the downloads that

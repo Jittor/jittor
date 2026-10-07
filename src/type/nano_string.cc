@@ -119,7 +119,7 @@ static unordered_set<string> float_ops = {
 // both answer a float for float operands. Listing it here forced the output to
 // int32, and the expansion casts both operands to the *output* type before
 // dividing, so `-2.7 // 2.0` divided `int(-2.7) == -2` by 2 and answered -1
-// where numpy answers -2: the truncation landed on the operands. KI-OPS-003.
+// where numpy answers -2: the truncation landed on the operands.
 static unordered_set<string> int_ops = {
     "round_int",
     "floor_int",

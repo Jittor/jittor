@@ -112,7 +112,9 @@ python bench/torch_compat/run.py --device npu --gpu 0 --torch-python $NPU_REF/bi
 每个（工作负载，运行时）都在**全新进程**里跑，显存和 JIT 状态不会串到下一次测量。结果写在
 `$JITTOR_LAB_ROOT/_state/bench-torch-compat/<时间戳>/`：`results.json`、`results.md` 和
 每次测量的完整日志 `logs/`。Jittor 编译缓存放在同一目录下的 `cache-<size>/`，**不与单元
-测试或 ASV 共享**。
+测试或 ASV 共享**。同时跑两个 run（例如两张卡分别测 eager 和默认模式）时，用
+`--state <目录>` 给每个 run 一份自己的缓存，并把两个 run 绑到不相交的 CPU 核上：主机受限的行
+对同机负载很敏感。
 
 ```bash
 python bench/torch_compat/report.py results.json            # 重新出表

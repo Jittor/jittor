@@ -14,7 +14,7 @@ optimization or cache implementation.
 ```bash
 PYTHONPATH=$PWD/python python \
   agent/skills/jittor-single-kernel-cold-profile/profile_single_kernel.py \
-  --json /tmp/single-kernel.json
+  --json "$TMPDIR/single-kernel.json"
 ```
 
 Use `--compiler clang++` to make the compiler phase explicit. Give the script a

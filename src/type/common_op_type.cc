@@ -142,9 +142,9 @@ struct CommonOpType : OpByType {
             // Floats divide at full precision and floor the quotient; integers
             // keep the truncate-and-correct helper, which is what `%` is for.
             // Casting the operands to the output type first discarded the
-            // fraction of the *inputs*: KI-OPS-003.
+            // fraction of the *inputs*.
             {"floor_divide", "@if(@strcmp($1,float32)==0,(($1)std::floor(($1($2))/($1($4)))),@if(@strcmp($1,float64)==0,(($1)std::floor(($1($2))/($1($4)))),jittor::_floor_divide($1($2), $1($4))))"},
-            // KI-OPS-008: the identity a float reduction folds *from* has to be
+            // The identity a float reduction folds *from* has to be
             // an infinity, not the lowest finite value. `max(lowest(), -inf)`
             // keeps `lowest()`, so a float32 tensor whose maximum really is
             // -inf reported -3.4e38 here while CUDA reported -inf -- reachable

@@ -75,7 +75,7 @@ helper 的策略，否则这个工具在最该报警的地方沉默。
   作废；本仓真发生过，然后红穿约四十个提交没人看见。要断言的是「没有任何调用点自己发 execute
   调用 / 自己分配 workspace / 自己处理查询失败」。
 - **让门禁自证扫到了东西。** 断言「每个扫描根各自非空」，不要断言「总数 > N」。半途搬迁的目录
-  结构下（本仓 ACL 同时存在 `python/jittor/extern/acl` 与 `backends/acl`），只扫到一侧的门禁
+  结构下（一个后端的源码同时存在于旧目录与 `backends/<name>/`，ACL 曾经就是这样），只扫到一侧的门禁
   看起来和健康的门禁一模一样。参考 `tests/_helpers/acl_launch_tails.py` 的 `populated_roots`。
 
 ## 这个方法证明不了什么

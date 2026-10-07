@@ -32,7 +32,7 @@ Notes / honest limits:
   that inflated the Jittor side. Numbers in reports written before this change
   are that old pair and must not be quoted as a memory ratio. Jittor's profiling
   can perturb timing, so the memory pass is a separate run from the timing pass.
-* Wall clock on this box is contention-sensitive. Quote the minimum and keep
+* Wall clock on a shared host is contention-sensitive. Quote the minimum and keep
   the CPU/GPU and the case identical between the two runtimes.
 """
 import argparse
@@ -54,7 +54,7 @@ UNMEASURABLE_RE = re.compile(r"^MEMORY_UNMEASURABLE (.+)$", re.M)
 
 #: Runs a case while sampling the runtime's own device-memory accounting.
 #:
-#: Neither external sampler works on this box: `nvidia-smi --query-compute-apps`
+#: Neither external sampler works in a shared container: `nvidia-smi --query-compute-apps`
 #: does not list the process (container pid mapping), and per-GPU `memory.used`
 #: includes co-tenants. So ask each runtime instead, and ask both for the *same
 #: two numbers*: live bytes (torch `memory_allocated`, Jittor
