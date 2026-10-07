@@ -722,8 +722,39 @@ workaround.
   against this same question (does its attention call actually reach a
   fused kernel, or does it also silently fall back) and should be before its
   gap is attributed to kernel speed.
+- Update (2026-10-07): `vit_b16_train` checked against the same
+  dispatch-fallback question -- it is not that. A trace on
+  `scaled_dot_product_attention_acl` shows it engaging
+  (`acl_flash_attention_score_v2`) on every call, no mask (ViT is
+  bidirectional, unmasked, so the `qwen3_prefill` polarity bug does not
+  apply). An aclprof capture's `op_statistic.csv` puts
+  `FlashAttentionScore`+`FlashAttentionScoreGrad` at 1.3% of device time
+  combined. The real cost is `Dilation` (55.6%, 3 calls, ~899 ms each) and
+  `Conv2DBackpropInput` (34.1%, 3 calls, ~552 ms each) -- ~90% of all device
+  time, both counts matching the 3 measured steps exactly. This is the
+  patch-embedding `Conv2d`'s backward with respect to its *input* (the
+  image), which nothing downstream reads -- `images.requires_grad` reports
+  `False` correctly through the compat shim.
+- Update (2026-10-07, root cause confirmed): this is ACL-specific, not a
+  core autodiff bug. On CUDA, a real ViT-B/16 training step profiles to
+  `cudnn_conv_backward_w` only -- no `conv_backward_x` -- and
+  `images.grad` is `None`; plain `jt.grad(loss, [weight])` likewise only
+  runs `backward_w`. CUDA keeps grad-input and grad-weight as two
+  independent ops, so ordinary dead-op pruning drops the one nobody reads.
+  ACL's conv backward does not: `backends/acl/kernels/native/conv_op_acl.cc:119`
+  hardcodes `bool outputMask[3] = {true, true, true}` (ACL only ever turns
+  off `mask[2]`, the bias grad, when there is no bias), and
+  `backends/acl/kernels/ops/conv_op.py`'s `_BIASED`/`_UNBIASED_GRAD_SRC`
+  build the backward as one merged `Conv2dBackwardOpRunner` call that
+  produces `grad_input` (out0) and `grad_weight` (out1) together. Pruning
+  the unused `grad_input` Var afterward does not stop the merged op from
+  computing it first -- and for ViT's stride-16/kernel-16 patch-embedding
+  conv, computing it costs the `Dilation`+`Conv2DBackpropInput` 90% above.
+  The per-call `code_program`/`multi_grad_*` plumbing (`_code.py`) only
+  carries static output counts, not "which outputs this particular call
+  needs", so the op has no signal to act on yet.
 - Workaround: none needed for `qwen3_prefill`. For `vit_b16_train`, none
-  known; expect a gap until it is root-caused.
+  known; expect a gap until the fix below lands.
 - Evidence: `bench/torch_compat --device npu`; peer Ascend runs 2026-10-06
   and 2026-10-07 under `$JITTOR_LAB_ROOT/_state/npu-verify`. `msprof`'s CLI
   wrapper (`msprof <app>`) hangs indefinitely around an ACL profiling-channel
@@ -734,12 +765,18 @@ workaround.
   core rebuild) around the measured region works, and `msprof --export=on
   --type=text --output=<dir>` then parses the result offline into
   `op_summary`/`op_statistic` CSVs with real per-op-type device time -- this
-  is how the `qwen3_prefill` cause above was found, and is the path to
-  checking `vit_b16_train`.
-- Exit condition: `vit_b16_train` checked against the same dispatch-fallback
-  question as `qwen3_prefill`; if it is a true per-kernel speed gap after
-  that, close it at the kernel level or accept and keep this as a documented
-  characteristic for that workload specifically.
+  is how both causes above were found.
+- Exit condition: `conv_op_acl.cc`'s `outputMask` set from whether each
+  output is actually consumed rather than hardcoded `true` (core side:
+  a query for "is this op output read by anything", added and verified on
+  CUDA; ACL side: wire `outputMask` to it and verify on a 910B3 -- ViT's
+  grad/loss unchanged and `grad_input` genuinely skipped in a fresh aclprof
+  capture, a both-needed conv -- e.g. a ResNet inner layer -- still produces
+  correct `grad_input`+`grad_weight` from one call, full ACL+structure
+  suites clean). Splitting into two independent ops (CUDA's shape) was
+  considered and dropped: correct for ViT but would cost a second
+  `aclnnConvolutionBackward` call whenever both outputs are needed, with no
+  measurement showing that is still a net win.
 
 ## KI-OPS-002: integer floor-division ROCm verification incomplete
 
