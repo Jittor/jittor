@@ -1,10 +1,10 @@
 # Jittor wheel contents baseline (SHA-256 and exact archive member paths)
 # source-wheel: jittor-2.0.0-py3-none-any.whl
-# source-wheel-sha256: 654cc58a7aae1465614886c211f21e5a78b0f3aa1da90082f0c3758726601541
+# source-wheel-sha256: 7f75b5cd67b3028a25c75478d9f525db5ab7cfd7a92e0560a9b9c9bf791a4e7a
 # entries: 1103
 # Regenerate only after reviewing every path and content change.
 3d88b51843e114ed94e217833288f71464dfc3a3547f12cd9e1f355ce109f90c  jittor-2.0.0.dist-info/METADATA
-d09160a9eed2880f133d97205376199918af4b0282fe8b630f3c5dc976350ad1  jittor-2.0.0.dist-info/RECORD
+d39b07f7f2225461db2a6f33b842eb3a06d8b46fb24ef50463c1677f4a94d850  jittor-2.0.0.dist-info/RECORD
 2b6eb4118ce7cd7b09601406aa623c553c4476265836f0d9c16f5c061f7efcc0  jittor-2.0.0.dist-info/WHEEL
 864c2e74b36529d4afe73ee937a6b6866e772360fc8bd32541f3ce026544906c  jittor-2.0.0.dist-info/entry_points.txt
 8b18f18c9c43b17e6e2bcdefc8df9d423c12e6769d5d13cf6a46fed31e7e1666  jittor-2.0.0.dist-info/licenses/LICENSE.txt
@@ -114,7 +114,7 @@ b593aada924f97cb6ddbbdc256c61cf4d87fa1035cb6bf707f9e7863f4fda73d  jittor/backend
 6766efcc46c4fc06978251536b0f75f2ef8e745d695421b41ffaf6dbfc1fcf94  jittor/backends/acl/kernels/native/bmm_op_acl.cc
 3de8920458c3ceb8d00667b84f88e33c5ef066da5c0bb14c6ac51073e2695254  jittor/backends/acl/kernels/native/clamp_op_acl.cc
 33da0b1d0828d9f36d4c6e67cc5ff1dcb0e0b79bc9a7f5e3ada912375b378f10  jittor/backends/acl/kernels/native/concat_op_acl.cc
-a2620b708dcd6cc89e39f9ae6939e7a4a9ec4f63f1c46f3cbdcb5ac83cc49250  jittor/backends/acl/kernels/native/conv_op_acl.cc
+19db5e5638ce1879cddea57670e6fbd49d999bffe9eaab37c28643d0fe4e0609  jittor/backends/acl/kernels/native/conv_op_acl.cc
 98d2168c4ffe078b06a3b1192b6036458f15d04ea0493b76abd0b9a7d29b4b7d  jittor/backends/acl/kernels/native/cross_entropy_loss_op_acl.cc
 b5d24d76f49759190aee118cc37d77930ad81d5b86aed8738f43a60f34edf41b  jittor/backends/acl/kernels/native/cumsum_op_acl.cc
 368ddb3979da68e2c66cbc63d53e790695415243ae4ffba2f4284872ba1c2fe2  jittor/backends/acl/kernels/native/dropout_op_acl.cc
