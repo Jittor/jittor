@@ -1,5 +1,6 @@
 import os
 import runpy
+import subprocess
 import sys
 import types
 from pathlib import Path
@@ -146,6 +147,32 @@ def test_session_env_blocks_host_test_controls(monkeypatch, tmp_path):
     assert env["OMP_DYNAMIC"] == "false"
     assert env["MKL_DYNAMIC"] == "false"
     assert env["PATH"] == os.environ["PATH"]
+
+
+def test_release_git_trust_survives_nox_home_isolation(monkeypatch, tmp_path):
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "safe.directory")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "*")
+    module = _load_noxfile(monkeypatch, tmp_path)
+    session = _FakeSession(tmp_path, "/usr/bin/python3-config")
+
+    _root, env = module["_session_env"](session, "packaging")
+    assert env["GIT_CONFIG_COUNT"] is None  # The host's wildcard is rejected.
+    module["_trust_source_checkout_for_git"](env)
+
+    assert env["GIT_CONFIG_COUNT"] == "1"
+    assert env["GIT_CONFIG_KEY_0"] == "safe.directory"
+    assert env["GIT_CONFIG_VALUE_0"] == str(REPO_ROOT)
+    child_env = {name: value for name, value in env.items() if value is not None}
+    result = subprocess.run(
+        ["git", "config", "--get-all", "safe.directory"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=child_env,
+    )
+    assert str(REPO_ROOT) in result.stdout.splitlines()
+    assert "*" not in result.stdout.splitlines()
 
 
 def test_source_gate_installs_core_before_the_compat_namespace(monkeypatch, tmp_path):

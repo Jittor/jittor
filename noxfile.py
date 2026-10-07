@@ -543,6 +543,22 @@ def _session_env(session, backend):
     return root, env
 
 
+def _trust_source_checkout_for_git(env):
+    """Let release and ASV subprocesses inspect this checkout after HOME changes.
+
+    The runner's global Git config lives under its original HOME, while Nox
+    isolates each session under a different HOME. These command-scope values
+    trust only this source checkout and survive both Nox and ASV subprocesses.
+    """
+    env.update(
+        {
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "safe.directory",
+            "GIT_CONFIG_VALUE_0": str(REPO_ROOT),
+        }
+    )
+
+
 def _source_copy(destination):
     ignored = shutil.ignore_patterns(
         ".git",
@@ -1274,6 +1290,7 @@ def _build_compat_distribution(session, source, dist, env):
 def packaging(session):
     """Build, audit, install, and self-test direct and sdist-derived artifacts."""
     root, env = _session_env(session, "packaging")
+    _trust_source_checkout_for_git(env)
     session.install(
         BUILD,
         PYTEST,
@@ -1568,6 +1585,7 @@ def _record_asv(session, root, env, asv_command, default_machine, external=False
 def benchmark(session):
     """Record selected CPU benchmarks for this commit and publish ASV HTML."""
     root, env = _session_env(session, "asv-cpu")
+    _trust_source_checkout_for_git(env)
     env["cache_name"] = "asv-nox-cpu"
     env["nvcc_path"] = ""
     session.install(
