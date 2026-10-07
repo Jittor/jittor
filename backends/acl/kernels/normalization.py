@@ -53,14 +53,23 @@ def _batch_norm_eval_cuda_acl(x, weight, bias, running_mean, running_var, eps):
 
 
 def _group_norm_cuda_acl(x, num_groups, weight, bias, eps):
+    # aclnnGroupNorm takes the input dtype as-is (GroupNormOpRunner forwards
+    # whatever dtype the Vars already have); float16 was verified correct
+    # against a CPU reference (max abs diff ~0.007, well inside fp16 noise).
+    # Restricting to float32 only forced every float16 call -- e.g. SD1.5's
+    # VAE decoder, which runs its norms in fp16 -- through the generic
+    # Sub/ReduceMean/Sqrt/RealDiv/Mul/Add decomposition instead of this one
+    # fused kernel (>45% of that workload's device time in an aclprof
+    # capture).
+    norm_dtypes = ("float32", "float16")
     if (
         isinstance(x, jt.Var)
         and isinstance(weight, jt.Var)
         and isinstance(bias, jt.Var)
         and isinstance(eps, Real)
-        and (_jittor_dtype_name(x.dtype) == "float32")
-        and (_jittor_dtype_name(weight.dtype) == "float32")
-        and (_jittor_dtype_name(bias.dtype) == "float32")
+        and (_jittor_dtype_name(x.dtype) in norm_dtypes)
+        and (_jittor_dtype_name(weight.dtype) == _jittor_dtype_name(x.dtype))
+        and (_jittor_dtype_name(bias.dtype) == _jittor_dtype_name(x.dtype))
     ):
         shape = tuple((int(size) for size in x.shape))
         groups = int(num_groups)
