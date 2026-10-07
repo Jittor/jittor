@@ -1526,6 +1526,9 @@ def _record_asv(session, root, env, asv_command, default_machine, external=False
                     "--record-samples",
                     "--show-stderr",
                     "--no-pull",
+                    # Select this checkout explicitly: GitHub PR checkouts need
+                    # not contain the configured base branch as a local ref.
+                    "HEAD",
                 )
                 + tuple(session.posargs)
             ),
