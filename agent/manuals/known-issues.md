@@ -737,10 +737,10 @@ workaround.
   and `sd15_unet_train` and `resnet50_train` both completing across repeated
   910B3 runs with `backend_fallback=error` and zero fallbacks.
 
-## KI-BACKEND-017: on Ascend, device-bound workloads trail torch_npu by a modest margin; four specific causes found and fixed
+## KI-BACKEND-017: on Ascend, device-bound workloads trail torch_npu by a modest margin; five specific causes found and fixed
 
 - Severity: Limitation (performance, Ascend)
-- Status: Limitation, narrowed four times. Measured on a 910B3 with a real
+- Status: Limitation, narrowed five times. Measured on a 910B3 with a real
   paired `bench/torch_compat --device npu` run (same card, same seed) each
   time, not an isolated probe -- the first full-suite run of this project
   (2026-10-06) measured `vit_b16_train` at "~9.9x" from an isolated,
@@ -753,19 +753,22 @@ workaround.
   fp16 workload actually uses): `sd15_vae_decode` moved from 3.12x to 1.19x;
   `resnet50_infer` moved from 1.73x to about 1.68x (real, but modest --
   profiling ruled out further dispatch fallback as the cause of what is
-  left, see cause 4).
+  left, see cause 4). A fifth fix, a genuine aclnn kernel-speed cliff rather
+  than a dispatch guard, landed after that: `ddpm_unet_train` moved from
+  1.22x to about 1.03x (see cause 5).
 - Owner: ACL backend maintainers
 - Symptom: against `torch` + `torch_npu` on the same card (2026-10-07, 12/14
   workloads compared, geometric-mean ratio 1.12x): `qwen3_prefill` 0.68x,
   `qwen3_decode_static` 0.41x, `qwen3_train` 0.87x, `resnet50_infer_b1`
   0.43x, `bert_base_infer` 0.75x are at or ahead of torch_npu; `vit_b16_train`
-  1.21x, `ddpm_unet_train` 1.22x, `resnet50_infer` about 1.68x (was 1.73x),
-  `sd15_sample` 1.67x, `bert_base_train` 1.76x, `sd15_vae_decode` 1.19x
-  (was 3.12x), `qwen3_decode` 2.23x (bf16 argmax tie-break divergence on a repeating
+  1.21x, `ddpm_unet_train` about 1.03x (was 1.22x), `resnet50_infer` about
+  1.68x (was 1.73x), `sd15_sample` 1.67x, `bert_base_train` 1.76x,
+  `sd15_vae_decode` 1.19x (was 3.12x), `qwen3_decode` 2.23x (bf16 argmax
+  tie-break divergence on a repeating
   prompt, not a correctness bug -- its `agree` matches `qwen3_decode_static`'s
   accepted pattern) trail by a modest-to-large margin. `sd15_unet_train` and
   `resnet50_train` error (`507035`, tracked as KI-BACKEND-016).
-- Cause (four found, all fixed):
+- Cause (five found, all fixed):
   1. `qwen3_prefill`'s gap (originally ~3.2x) was a dispatch bug, not kernel
      speed: `scaled_dot_product_attention_acl`
      (`backends/acl/kernels/ops/flashattention_op.py`) only accepted a
@@ -848,7 +851,40 @@ workaround.
      internal re-conversion by lower-level, undocumented means -- exactly
      the kind of guess the convOutPads mistake (cause 2's sibling
      investigation) warned against. Left open below, not attempted blind.
-- Workaround: none needed for the four fixed cases. For the remaining
+  5. `ddpm_unet_train`'s GroupNorm calls, 47.9% of device time in an
+     aclprof capture under the op-type name `GroupNormSilu` (not a name
+     this backend's code ever asks for -- see Evidence; it turned out to
+     have nothing to do with the SiLU that happens to follow every one of
+     these calls in diffusers' UNet). Bisected directly against
+     `aclnnGroupNorm` at a 910B3, independent of the full model: fixing
+     channel count (1024), group count (32) and batch (16), spatial extent
+     1x1 runs at 0.21ms and 3x3 at 0.26ms, but 1x2, 1x4, 1x5, 1x7, 2x2 and
+     2x3 all run at 8.9-9.5ms -- about 45x slower -- and 2x4 (spatial 8)
+     is back to 0.19ms. The boundary is exactly between spatial 7 and 8,
+     reproduces independent of channel count (256 through 2048, same
+     ~45x factor at each), group count (8 through 64) and batch size, and
+     is unaffected by `.stop_fuse()` on the GroupNorm output before the
+     following `silu` call (ruling out jittor's own op-fusion pass as the
+     cause -- whatever picks `GroupNormSilu` over plain `GroupNorm` does
+     so below jittor's graph layer). Looks like a hardcoded tile size of 8
+     with a catastrophic remainder path inside aclnn's own kernel, not
+     anything reachable from this backend's code. DDPM's deepest UNet
+     block concatenates two 512-channel skip connections at the mid
+     block's output resolution, landing on 1024 channels at exactly 2x2 --
+     squarely in the pathological band. Fixed by excluding spatial extents
+     from 2 to 7 (inclusive) from `_group_norm_cuda_acl`'s dispatch guard,
+     falling back to the decomposed implementation for that narrow band
+     only; every other spatial size still dispatches to the fused kernel
+     exactly as before. Verified on a 910B3: the decomposed fallback at the
+     pathological shape (`[16,1024,2,2]`) matches a CPU/numpy reference to
+     `max_abs_diff` about 1e-6 (float32, so exact to numerical noise, not
+     the fp16-noise tolerance causes 3 and 4 needed); shapes outside the
+     excluded band are confirmed to still reach `GroupNormACL` unchanged.
+     `ddpm_unet_train`: 229.1 ms to 193.1 ms/step, moving the gap from
+     1.22x to about 1.03x against an unchanged 187.5 ms torch_npu baseline
+     -- loss values still decrease normally end to end (1.42 to 0.40 over
+     the warmup-plus-measured window), `fallbacks: 0`.
+- Workaround: none needed for the five fixed cases. For the remaining
   device-bound gaps (`vit_b16_train` 1.21x downward to `bert_base_train`
   1.76x), none known yet. `resnet50_infer`'s residual ~1.68x is now
   attributed to `aclnnConvolution`'s own `NCHW<->NC1HWC0`/`FRACTAL_Z`
@@ -882,14 +918,14 @@ workaround.
   core rebuild) around the measured region works, and `msprof --export=on
   --type=text --output=<dir>` then parses the result offline into
   `op_summary`/`op_statistic` CSVs with real per-op-type device time -- this
-  is how all four causes above were found, and is a cheaper path to a
+  is how all five causes above were found, and is a cheaper path to a
   per-kernel breakdown than the full-suite paired run when that is all a
   question needs. The export step refuses a group-writable (not just
   world-writable) output directory ("is writable by any other users",
   despite the message) -- `chmod -R 755 <dir>` before `--export=on` fixes
   it; this is a reusable gotcha, not specific to one run.
 - Exit condition: each remaining workload's gap attributed to a specific,
-  fixable cause (as the four above were) or accepted as a documented
+  fixable cause (as the five above were) or accepted as a documented
   aclnn-kernel-speed or runtime-format characteristic with evidence ruling
   out dispatch fallback and host overhead first, the way `qwen3_prefill`,
   `vit_b16_train`'s `grad_input` waste, and `resnet50_infer`'s remaining

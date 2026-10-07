@@ -88,6 +88,20 @@ def _group_norm_cuda_acl(x, num_groups, weight, bias, eps):
         shape = tuple((int(size) for size in x.shape))
         groups = int(num_groups)
         epsilon = float(eps)
+        spatial = 1
+        for size in shape[2:]:
+            spatial *= size
+        # aclnnGroupNorm has a severe (~45x, measured 9ms vs 0.2ms on a
+        # 910B3) performance cliff for a per-sample spatial extent (product
+        # of every dim past the channel axis) from 2 to 7 elements inclusive
+        # -- bisected directly against this exact kernel at fixed channel
+        # and group counts: 1x1 and 3x3 are fast, 1x2/1x4/1x5/1x7/2x2/2x3 are
+        # all ~45x slower, 2x4 and everything larger is fast again. Looks
+        # like a hardcoded tile size of 8 with a catastrophic remainder
+        # path, not anything this wrapper controls -- ddpm_unet_train hits
+        # exactly this (its bottleneck block is 2x2), so route that narrow
+        # band to the decomposed fallback instead of eating the cliff.
+        pathological_spatial = 2 <= spatial <= 7
         if (
             len(shape) >= 2
             and all((size > 0 for size in shape))
@@ -97,6 +111,7 @@ def _group_norm_cuda_acl(x, num_groups, weight, bias, eps):
             and (tuple(bias.shape) == (shape[1],))
             and math.isfinite(epsilon)
             and (epsilon > 0.0)
+            and (not pathological_spatial)
         ):
             return GroupNormACL(groups, epsilon)(x, weight, bias)
     return None
