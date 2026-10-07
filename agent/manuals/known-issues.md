@@ -734,16 +734,27 @@ workaround.
   time, both counts matching the 3 measured steps exactly. This is the
   patch-embedding `Conv2d`'s backward with respect to its *input* (the
   image), which nothing downstream reads -- `images.requires_grad` reports
-  `False` correctly through the compat shim. Whether that `False` actually
-  stops the native backward-graph construction from building (or from
-  executing before a too-late prune of) the `grad_input` chain through a
-  stride-16/kernel-16 conv -- exactly the shape where a naive
-  dilate-then-convolve backward is most expensive -- is not confirmed; that
-  is native autodiff-graph territory this entry does not have visibility
-  into, and not ACL-specific if real (any backend paying a full grad_input
-  for an unused large-stride conv input would show a similar tax).
+  `False` correctly through the compat shim.
+- Update (2026-10-07, root cause confirmed): this is ACL-specific, not a
+  core autodiff bug. On CUDA, a real ViT-B/16 training step profiles to
+  `cudnn_conv_backward_w` only -- no `conv_backward_x` -- and
+  `images.grad` is `None`; plain `jt.grad(loss, [weight])` likewise only
+  runs `backward_w`. CUDA keeps grad-input and grad-weight as two
+  independent ops, so ordinary dead-op pruning drops the one nobody reads.
+  ACL's conv backward does not: `backends/acl/kernels/native/conv_op_acl.cc:119`
+  hardcodes `bool outputMask[3] = {true, true, true}` (ACL only ever turns
+  off `mask[2]`, the bias grad, when there is no bias), and
+  `backends/acl/kernels/ops/conv_op.py`'s `_BIASED`/`_UNBIASED_GRAD_SRC`
+  build the backward as one merged `Conv2dBackwardOpRunner` call that
+  produces `grad_input` (out0) and `grad_weight` (out1) together. Pruning
+  the unused `grad_input` Var afterward does not stop the merged op from
+  computing it first -- and for ViT's stride-16/kernel-16 patch-embedding
+  conv, computing it costs the `Dilation`+`Conv2DBackpropInput` 90% above.
+  The per-call `code_program`/`multi_grad_*` plumbing (`_code.py`) only
+  carries static output counts, not "which outputs this particular call
+  needs", so the op has no signal to act on yet.
 - Workaround: none needed for `qwen3_prefill`. For `vit_b16_train`, none
-  known; expect a gap until it is root-caused.
+  known; expect a gap until the fix below lands.
 - Evidence: `bench/torch_compat --device npu`; peer Ascend runs 2026-10-06
   and 2026-10-07 under `$JITTOR_LAB_ROOT/_state/npu-verify`. `msprof`'s CLI
   wrapper (`msprof <app>`) hangs indefinitely around an ACL profiling-channel
@@ -755,12 +766,17 @@ workaround.
   --type=text --output=<dir>` then parses the result offline into
   `op_summary`/`op_statistic` CSVs with real per-op-type device time -- this
   is how both causes above were found.
-- Exit condition: confirm whether the native backward graph honors
-  `requires_grad=False` on a leaf feeding only a convolution's `grad_input`
-  (skipping that computation, not just discarding its result), fix if not,
-  and `vit_b16_train` closes its gap to torch_npu; or, if the per-kernel
-  convolution-backward speed itself is still behind after that, close it at
-  the kernel level or accept and keep this as a documented characteristic.
+- Exit condition: `conv_op_acl.cc`'s `outputMask` set from whether each
+  output is actually consumed rather than hardcoded `true` (core side:
+  a query for "is this op output read by anything", added and verified on
+  CUDA; ACL side: wire `outputMask` to it and verify on a 910B3 -- ViT's
+  grad/loss unchanged and `grad_input` genuinely skipped in a fresh aclprof
+  capture, a both-needed conv -- e.g. a ResNet inner layer -- still produces
+  correct `grad_input`+`grad_weight` from one call, full ACL+structure
+  suites clean). Splitting into two independent ops (CUDA's shape) was
+  considered and dropped: correct for ViT but would cost a second
+  `aclnnConvolutionBackward` call whenever both outputs are needed, with no
+  measurement showing that is still a net win.
 
 ## KI-OPS-002: integer floor-division ROCm verification incomplete
 
