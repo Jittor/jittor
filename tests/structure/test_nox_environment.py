@@ -65,6 +65,8 @@ def test_cpu_gate_subprocesses_trust_only_this_checkout(monkeypatch, tmp_path):
 
     env = module["_cpu_gate_env"](session)
 
+    assert env["GIT_CONFIG_GLOBAL"] == os.devnull
+    assert env["GIT_CONFIG_NOSYSTEM"] == "1"
     assert env["GIT_CONFIG_COUNT"] == "1"
     assert env["GIT_CONFIG_KEY_0"] == "safe.directory"
     assert env["GIT_CONFIG_VALUE_0"] == str(REPO_ROOT)
@@ -161,6 +163,9 @@ def test_session_env_blocks_host_test_controls(monkeypatch, tmp_path):
 
 
 def test_release_git_trust_survives_nox_home_isolation(monkeypatch, tmp_path):
+    wildcard_config = tmp_path / "wildcard.gitconfig"
+    wildcard_config.write_text("[safe]\n\tdirectory = *\n", encoding="utf-8")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(wildcard_config))
     monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
     monkeypatch.setenv("GIT_CONFIG_KEY_0", "safe.directory")
     monkeypatch.setenv("GIT_CONFIG_VALUE_0", "*")
@@ -174,7 +179,10 @@ def test_release_git_trust_survives_nox_home_isolation(monkeypatch, tmp_path):
     assert env["GIT_CONFIG_COUNT"] == "1"
     assert env["GIT_CONFIG_KEY_0"] == "safe.directory"
     assert env["GIT_CONFIG_VALUE_0"] == str(REPO_ROOT)
+    assert env["GIT_CONFIG_GLOBAL"] == os.devnull
+    assert env["GIT_CONFIG_NOSYSTEM"] == "1"
     child_env = {name: value for name, value in env.items() if value is not None}
+    child_env["GIT_CONFIG_SYSTEM"] = str(wildcard_config)
     result = subprocess.run(
         ["git", "config", "--get-all", "safe.directory"],
         check=True,

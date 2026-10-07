@@ -552,6 +552,11 @@ def _trust_source_checkout_for_git(env):
     """
     env.update(
         {
+            # A CI image may trust every directory in its system/global config.
+            # Isolate those files so the exact command-scope entry is the only
+            # safe.directory seen by Nox and ASV children.
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_CONFIG_COUNT": "1",
             "GIT_CONFIG_KEY_0": "safe.directory",
             "GIT_CONFIG_VALUE_0": str(REPO_ROOT),
