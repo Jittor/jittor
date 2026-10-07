@@ -737,38 +737,45 @@ workaround.
   and `sd15_unet_train` and `resnet50_train` both completing across repeated
   910B3 runs with `backend_fallback=error` and zero fallbacks.
 
-## KI-BACKEND-017: on Ascend, device-bound workloads trail torch_npu by a modest margin; five specific causes found and fixed
+## KI-BACKEND-017: on Ascend, device-bound workloads trailed torch_npu by a modest margin; five fixes closed the gap to parity on average
 
-- Severity: Limitation (performance, Ascend)
-- Status: Limitation, narrowed five times. Measured on a 910B3 with a real
-  paired `bench/torch_compat --device npu` run (same card, same seed) each
-  time, not an isolated probe -- the first full-suite run of this project
-  (2026-10-06) measured `vit_b16_train` at "~9.9x" from an isolated,
-  unwarmed aclprof capture; the properly warmed-up paired run (2026-10-07,
-  14 workloads, geometric-mean ratio 1.12x) measured it at 1.21x. The
-  earlier number was a measurement artifact of comparing an unwarmed probe
-  to a warmed-up baseline, not a regression or a second real data point.
-  Two more dispatch-guard fixes landed after that 14-workload run (GroupNorm,
-  BatchNorm eval, both float16-only guards rejecting the dtype every real
-  fp16 workload actually uses): `sd15_vae_decode` moved from 3.12x to 1.19x;
-  `resnet50_infer` moved from 1.73x to about 1.68x (real, but modest --
-  profiling ruled out further dispatch fallback as the cause of what is
-  left, see cause 4). A fifth fix, a genuine aclnn kernel-speed cliff rather
-  than a dispatch guard, landed after that: `ddpm_unet_train` moved from
-  1.22x to about 1.03x (see cause 5).
+- Severity: Limitation (performance, Ascend), narrowed to the point this is
+  closer to a closed record than an open one -- kept open only because
+  `vit_b16_train`, `bert_base_train`, `qwen3_decode` and `resnet50_infer`
+  still individually trail and `sd15_unet_train`/`resnet50_train` are still
+  blocked on KI-BACKEND-016.
+- Status: Limitation, narrowed five times, each against a real paired
+  `bench/torch_compat --device npu` run (same card, same seed), not an
+  isolated probe. (2026-10-06) the first full-suite run measured
+  `vit_b16_train` at "~9.9x" from an isolated, unwarmed aclprof capture; the
+  properly warmed-up paired run (2026-10-07, 14 workloads, geometric-mean
+  ratio 1.12x) measured it at 1.21x -- the earlier number was a measurement
+  artifact of comparing an unwarmed probe to a warmed-up baseline, not a
+  regression or a second real data point. Two more dispatch-guard fixes
+  landed after that 14-workload run (GroupNorm, BatchNorm eval, both
+  float16-only guards rejecting the dtype every real fp16 workload actually
+  uses), then a fifth fix, a genuine aclnn kernel-speed cliff rather than a
+  dispatch guard (see causes 3-5 below for each). A fresh, full 12-workload
+  paired run after all five landed (commit `61519b939`, same card and seed,
+  `sd15_unet_train`/`resnet50_train` excluded, still blocked on
+  KI-BACKEND-016) measured the geometric-mean ratio at **0.99x** -- Jittor
+  is, on average, no longer slower than torch_npu on this suite. That run's
+  own numbers supersede every individual ratio quoted below from the
+  2026-10-06/07 runs; they are kept for the before/after story each cause
+  tells, but the Symptom line now gives the 2026-10-07 (five-fixes-later)
+  numbers.
 - Owner: ACL backend maintainers
-- Symptom: against `torch` + `torch_npu` on the same card (2026-10-07, 12/14
-  workloads compared, geometric-mean ratio 1.12x): `qwen3_prefill` 0.68x,
-  `qwen3_decode_static` 0.41x, `qwen3_train` 0.87x, `resnet50_infer_b1`
-  0.43x, `bert_base_infer` 0.75x are at or ahead of torch_npu; `vit_b16_train`
-  1.21x, `ddpm_unet_train` about 1.03x (was 1.22x), `resnet50_infer` about
-  1.68x (was 1.73x), `sd15_sample` about 1.17x (was 1.67x), `bert_base_train`
-  1.76x, `sd15_vae_decode` 1.19x (was 3.12x, unaffected by cause 5 --
-  measured again after it landed, 26.5 ms vs 26.9 ms, within noise),
-  `qwen3_decode` 2.23x (bf16 argmax tie-break divergence on a repeating
-  prompt, not a correctness bug -- its `agree` matches `qwen3_decode_static`'s
-  accepted pattern) trail by a modest-to-large margin. `sd15_unet_train` and
-  `resnet50_train` error (`507035`, tracked as KI-BACKEND-016).
+- Symptom: against `torch` + `torch_npu` on the same card, same seed, after
+  all five causes below were fixed (12/12 workloads compared, commit
+  `61519b939`, geometric-mean ratio **0.99x**): `qwen3_decode_static` 0.39x,
+  `resnet50_infer_b1` 0.43x, `qwen3_prefill` 0.70x, `bert_base_infer` 0.71x,
+  `qwen3_train` 0.89x are at or ahead of torch_npu; `ddpm_unet_train` 1.04x,
+  `sd15_vae_decode` 1.18x, `vit_b16_train` 1.21x, `sd15_sample` 1.30x,
+  `bert_base_train` 1.69x, `resnet50_infer` 1.69x, `qwen3_decode` 2.05x
+  (bf16 argmax tie-break divergence on a repeating prompt, not a correctness
+  bug -- its `agree` matches `qwen3_decode_static`'s accepted pattern) trail
+  by a modest-to-large margin. `sd15_unet_train` and `resnet50_train` error
+  (`507035`, tracked as KI-BACKEND-016).
 - Cause (five found, all fixed):
   1. `qwen3_prefill`'s gap (originally ~3.2x) was a dispatch bug, not kernel
      speed: `scaled_dot_product_attention_acl`
@@ -893,17 +900,19 @@ workaround.
      does not share this: remeasured at 26.5 ms/step, unchanged from 26.9 ms
      before this fix, consistent with its decoder never going as deep as
      DDPM's or the main UNet's bottleneck.
-- Workaround: none needed for the five fixed cases. For the remaining
-  device-bound gaps (`vit_b16_train` 1.21x downward to `bert_base_train`
-  1.76x), none known yet. `resnet50_infer`'s residual ~1.68x is now
-  attributed to `aclnnConvolution`'s own `NCHW<->NC1HWC0`/`FRACTAL_Z`
-  format-conversion overhead (including the redundant per-call weight
-  reformat above) and `BNInfer`'s intrinsic kernel cost, not a dispatch
-  bug -- a fix would mean caching a pre-transformed weight tensor across
-  calls and getting aclnn to skip its own internal conversion, which needs
-  CANN-side format-pinning documentation this session did not have before
-  attempting it. `bert_base_train`'s 1.76x gap is similarly not a dispatch
-  bug: an aclprof capture shows `MatMulV2` at 42.4% of device time (the
+- Workaround: none needed for the five fixed cases, and the overall suite
+  no longer needs one: the 12-workload geometric mean is 0.99x. For the
+  individual workloads still behind (`vit_b16_train` 1.21x, `resnet50_infer`
+  1.69x, `bert_base_train` 1.69x, `qwen3_decode` 2.05x), none known yet.
+  `resnet50_infer`'s residual is now attributed to `aclnnConvolution`'s own
+  `NCHW<->NC1HWC0`/`FRACTAL_Z` format-conversion overhead (including the
+  redundant per-call weight reformat above) and `BNInfer`'s intrinsic
+  kernel cost, not a dispatch bug -- a fix would mean caching a
+  pre-transformed weight tensor across calls and getting aclnn to skip its
+  own internal conversion, which needs CANN-side format-pinning
+  documentation this session did not have before attempting it.
+  `bert_base_train`'s gap is similarly not a dispatch bug: an aclprof
+  capture shows `MatMulV2` at 42.4% of device time (the
   expected dominant cost for a transformer) and `DSARandomUniform` --
   `jt.random`'s fused ACL kernel, which every dropout call in HF's BERT
   goes through via the correct composite path (see KI-BACKEND-018, which
@@ -918,7 +927,14 @@ workaround.
   documentation of that engine's dispatch cost to confirm it, so it is
   recorded as observed, not diagnosed.
 - Evidence: `bench/torch_compat --device npu`; peer Ascend runs 2026-10-06
-  and 2026-10-07 under `$JITTOR_LAB_ROOT/_state/npu-verify`. `msprof`'s CLI
+  and 2026-10-07 under `$JITTOR_LAB_ROOT/_state/npu-verify`. The post-fix
+  12-workload run (`--workloads qwen3_prefill,qwen3_decode_static,
+  qwen3_train,resnet50_infer_b1,bert_base_infer,vit_b16_train,
+  ddpm_unet_train,resnet50_infer,sd15_sample,bert_base_train,
+  sd15_vae_decode,qwen3_decode --compile none`) saved its
+  `results.json`/`results.md` under
+  `$JITTOR_LAB_ROOT/_state/npu-verify/full_bench_verify/results/`.
+  `msprof`'s CLI
   wrapper (`msprof <app>`) hangs indefinitely around an ACL profiling-channel
   handshake with this CANN build, with or without `--ascendcl`, even on the
   workload's first subprocess-based tool probe (`mpicc --version`) -- it is
