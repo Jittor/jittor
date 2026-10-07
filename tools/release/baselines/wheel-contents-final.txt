@@ -4,7 +4,7 @@
 # entries: 1103
 # Regenerate only after reviewing every path and content change.
 3d88b51843e114ed94e217833288f71464dfc3a3547f12cd9e1f355ce109f90c  jittor-2.0.0.dist-info/METADATA
-e115e12d3171ee4b307b13c6a1d5e7e995f9cf497e690608b807306c31dcaa77  jittor-2.0.0.dist-info/RECORD
+d09160a9eed2880f133d97205376199918af4b0282fe8b630f3c5dc976350ad1  jittor-2.0.0.dist-info/RECORD
 2b6eb4118ce7cd7b09601406aa623c553c4476265836f0d9c16f5c061f7efcc0  jittor-2.0.0.dist-info/WHEEL
 864c2e74b36529d4afe73ee937a6b6866e772360fc8bd32541f3ce026544906c  jittor-2.0.0.dist-info/entry_points.txt
 8b18f18c9c43b17e6e2bcdefc8df9d423c12e6769d5d13cf6a46fed31e7e1666  jittor-2.0.0.dist-info/licenses/LICENSE.txt
@@ -849,7 +849,7 @@ d025fc72f6fdda963f445d95b9840e1c83dd8353199c422785fb4326434b75d9  jittor/src/cor
 a1a7a46f9b6c2d562a1193ebb0779edb699e1de5ad1abb575948e24635898283  jittor/src/core/parallel_compiler.h
 9e6c4068099aa1722b2dacbbea15ca698e349266079056ad7b08ec0ac7b9c57c  jittor/src/core/types.h
 bd0bccf3451b271554f46d7b8a7191563978655daf43fd183262883d05e90d3b  jittor/src/core/var.cc
-a46d8e10b0ab439bde302dd397ab4540e62219cff053b3f4e457ee67421453e6  jittor/src/core/var.h
+a3c22ddbabdc82c9f9b7ddff95ce73ded5508906848ebef3fe04cd9abc8b232d  jittor/src/core/var.h
 6056ea7b0ff69dabb72636022196dd2008aafc57661f69a65c7343652eec9d46  jittor/src/core/var_holder.cc
 f1ce11a97a1daaa0747c4422b815e7e95acf9b90a71f8a37cb2403fd3eae3547  jittor/src/core/var_holder.h
 98359e2b9ec5017d964f196e0ab4903a3276d5a2da99b7de008e0bdac3168d61  jittor/src/core/var_slices.cc
