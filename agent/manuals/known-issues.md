@@ -762,9 +762,10 @@ workaround.
   `qwen3_decode_static` 0.41x, `qwen3_train` 0.87x, `resnet50_infer_b1`
   0.43x, `bert_base_infer` 0.75x are at or ahead of torch_npu; `vit_b16_train`
   1.21x, `ddpm_unet_train` about 1.03x (was 1.22x), `resnet50_infer` about
-  1.68x (was 1.73x), `sd15_sample` 1.67x, `bert_base_train` 1.76x,
-  `sd15_vae_decode` 1.19x (was 3.12x), `qwen3_decode` 2.23x (bf16 argmax
-  tie-break divergence on a repeating
+  1.68x (was 1.73x), `sd15_sample` about 1.17x (was 1.67x), `bert_base_train`
+  1.76x, `sd15_vae_decode` 1.19x (was 3.12x, unaffected by cause 5 --
+  measured again after it landed, 26.5 ms vs 26.9 ms, within noise),
+  `qwen3_decode` 2.23x (bf16 argmax tie-break divergence on a repeating
   prompt, not a correctness bug -- its `agree` matches `qwen3_decode_static`'s
   accepted pattern) trail by a modest-to-large margin. `sd15_unet_train` and
   `resnet50_train` error (`507035`, tracked as KI-BACKEND-016).
@@ -883,7 +884,15 @@ workaround.
      `ddpm_unet_train`: 229.1 ms to 193.1 ms/step, moving the gap from
      1.22x to about 1.03x against an unchanged 187.5 ms torch_npu baseline
      -- loss values still decrease normally end to end (1.42 to 0.40 over
-     the warmup-plus-measured window), `fallbacks: 0`.
+     the warmup-plus-measured window), `fallbacks: 0`. `sd15_sample`'s UNet
+     hits the same pathological band somewhere in its sampling loop (SD1.5
+     is architecturally similar to DDPM's UNet -- GroupNorm before every
+     SiLU, concatenated skip connections): 1784.5 ms to 1270.5 ms/step with
+     no further code change, moving its gap from 1.67x to about 1.17x
+     against an unchanged 1086.1 ms torch_npu baseline. `sd15_vae_decode`
+     does not share this: remeasured at 26.5 ms/step, unchanged from 26.9 ms
+     before this fix, consistent with its decoder never going as deep as
+     DDPM's or the main UNet's bottleneck.
 - Workaround: none needed for the five fixed cases. For the remaining
   device-bound gaps (`vit_b16_train` 1.21x downward to `bert_base_train`
   1.76x), none known yet. `resnet50_infer`'s residual ~1.68x is now
