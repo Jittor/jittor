@@ -33,10 +33,24 @@ def _unit_weight(weight):
 
 
 def _batch_norm_eval_cuda_acl(x, weight, bias, running_mean, running_var, eps):
+    # aclnnBatchNorm forwards x/weight/bias's own dtype (BatchNormACL passes
+    # [x.dtype] * 3 through, unconditionally); float16 was verified correct
+    # against a CPU reference, both with the running stats also float16 (a
+    # plain module.to(dtype=float16) casts everything, including buffers --
+    # ResNet-50 inference in this project's own fp16 benchmark does exactly
+    # that) and with them left float32 (the mixed-precision convention some
+    # training setups use instead). Restricting to float32-only forced every
+    # float16 inference call through the generic decomposition instead of
+    # this fused kernel.
     values = (x, weight, bias, running_mean, running_var)
+    norm_dtypes = ("float32", "float16")
     if (
         all((isinstance(value, jt.Var) for value in values))
-        and all((_jittor_dtype_name(value.dtype) == "float32" for value in values))
+        and (_jittor_dtype_name(x.dtype) in norm_dtypes)
+        and (_jittor_dtype_name(weight.dtype) == _jittor_dtype_name(x.dtype))
+        and (_jittor_dtype_name(bias.dtype) == _jittor_dtype_name(x.dtype))
+        and (_jittor_dtype_name(running_mean.dtype) in ("float32", _jittor_dtype_name(x.dtype)))
+        and (_jittor_dtype_name(running_var.dtype) in ("float32", _jittor_dtype_name(x.dtype)))
         and isinstance(eps, Real)
     ):
         shape = tuple((int(size) for size in x.shape))
