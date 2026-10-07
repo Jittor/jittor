@@ -1,4 +1,3 @@
-import json
 import os
 import runpy
 import subprocess
@@ -48,18 +47,6 @@ def _load_noxfile(monkeypatch, tmp_path):
     return runpy.run_path(str(REPO_ROOT / "noxfile.py"), run_name="jittor_noxfile")
 
 
-def test_asv_run_config_uses_the_checked_out_commit(monkeypatch, tmp_path):
-    module = _load_noxfile(monkeypatch, tmp_path)
-    commit = "a" * 40
-
-    path = module["_write_asv_config"](tmp_path, tmp_path / "results", tmp_path / "html", commit)
-    config = json.loads(path.read_text(encoding="utf-8"))
-
-    assert config["branches"] == [commit]
-    assert config["repo"] == str(REPO_ROOT)
-    assert config["benchmark_dir"] == str(REPO_ROOT / "benchmarks")
-
-
 def test_session_env_uses_the_session_interpreters_python_config(monkeypatch, tmp_path):
     expected = "/opt/python-3.11/bin/python3.11-config"
     monkeypatch.setenv("python_config_path", "/opt/python-3.12/bin/python3.12-config")
@@ -70,6 +57,17 @@ def test_session_env_uses_the_session_interpreters_python_config(monkeypatch, tm
 
     assert env["python_config_path"] == expected
     assert session.calls[0][0][:2] == ("python", "-c")
+
+
+def test_cpu_gate_subprocesses_trust_only_this_checkout(monkeypatch, tmp_path):
+    module = _load_noxfile(monkeypatch, tmp_path)
+    session = _FakeSession(tmp_path, "/usr/bin/python3-config")
+
+    env = module["_cpu_gate_env"](session)
+
+    assert env["GIT_CONFIG_COUNT"] == "1"
+    assert env["GIT_CONFIG_KEY_0"] == "safe.directory"
+    assert env["GIT_CONFIG_VALUE_0"] == str(REPO_ROOT)
 
 
 def test_sessions_share_one_jittor_cache(monkeypatch, tmp_path):

@@ -129,8 +129,12 @@ class TestDocsStructure(unittest.TestCase):
         exec(compile(ast.Module(body=[writer], type_ignores=[]), "noxfile.py", "exec"), namespace)
         with TemporaryDirectory() as directory:
             state = Path(directory)
-            generated = namespace["_write_asv_config"](state, state / "results", state / "html")
+            commit = "a" * 40
+            generated = namespace["_write_asv_config"](
+                state, state / "results", state / "html", commit
+            )
             runtime = json.loads(generated.read_text())
+        self.assertEqual(runtime["branches"], [commit])
         self.assertEqual(runtime["repo"], str(self.repo_root))
         self.assertEqual(runtime["benchmark_dir"], str(self.repo_root / "benchmarks"))
         self.assertEqual(runtime["results_dir"], str(state / "results"))

@@ -1495,9 +1495,14 @@ def _record_asv(session, root, env, asv_command, default_machine, external=False
 
     with session.chdir(REPO_ROOT):
         if not external:
-            # The first CPU import builds jittor_core. Do it with ASV's exact
-            # cache before ASV starts its per-parameter 180-second timer.
-            session.run("python", "-c", "import jittor; print(jittor.__file__)", env=env)
+            # Build the CPU core and oneDNN with ASV's exact cache before
+            # ASV starts its per-parameter 180-second timer.
+            session.run(
+                "python",
+                "-c",
+                "import jittor as jt; jt.compile_extern.setup_mkl(); print(jt.__file__)",
+                env=env,
+            )
         session.run(
             *(tuple(asv_command) + ("check", "--config", str(config_path), "--python=same")),
             env=env,
@@ -1841,6 +1846,7 @@ _CPU_PROBE = (
 def _cpu_gate_env(session):
     """The environment both CPU tiers run in, and what it refuses to inherit."""
     _root, env = _session_env(session, "cpu")
+    _trust_source_checkout_for_git(env)
     # Nox overlays this mapping on the parent environment, so removing the key
     # would still leak a caller-provided real Torch into ordinary Jittor tests.
     env["REAL_TORCH_SITE"] = ""
