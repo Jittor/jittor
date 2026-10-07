@@ -1494,6 +1494,10 @@ def _record_asv(session, root, env, asv_command, default_machine, external=False
     compare_base = _asv_compare_base(results_dir, current_commit)
 
     with session.chdir(REPO_ROOT):
+        if not external:
+            # The first CPU import builds jittor_core. Do it with ASV's exact
+            # cache before ASV starts its per-parameter 180-second timer.
+            session.run("python", "-c", "import jittor; print(jittor.__file__)", env=env)
         session.run(
             *(tuple(asv_command) + ("check", "--config", str(config_path), "--python=same")),
             env=env,
