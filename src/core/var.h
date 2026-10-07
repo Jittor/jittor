@@ -112,6 +112,17 @@ struct Var : Node {
     template <typename T>
     inline T* ptr() { CHECK_EXIST; return (T*)mem_ptr; }
     inline Op* input() { CHECK_EXIST; return _inputs.size() ? (Op*)_inputs.front() : (Op*)nullptr; }
+    // Whether anything will read this var's value: a downstream op on a path to
+    // a requested result, or a holder (a Python reference, a sync target). This
+    // is the backward liveness the executor already tracks (node.h, b2 var
+    // holder / b3 output with b>0), valid while the producing op runs -- the var
+    // is not freed until its last reader has. A multi-output op whose k-th output
+    // is not wanted (a conv backward asked for the weight gradient only, its input
+    // gradient discarded) reads false here and can skip that output's work; one
+    // output being wanted is why the op runs at all. A result the caller keeps --
+    // `jt.grad(loss, [x])` held in Python -- is wanted through its holder, so this
+    // stays true for it.
+    inline bool is_result_needed() const { CHECK_EXIST; return liveness.backward.active(); }
     inline Caster<Op*, Node::output_t> outputs()  { CHECK_EXIST; return &_outputs; }
     inline Caster<Node::var_output_t, Node::output_t> outputs_with_index() { CHECK_EXIST; return &_outputs; }
     inline Op* input(uint i) { return Node::input(i)->op(); }
