@@ -539,16 +539,14 @@ Example::
         raise RuntimeError(
             "exception in dataset worker %d:\n%s" % (worker_id, message))
 
-    def _raise_worker_death(self, cause):
-        """Explain a blocking read that came back stopped, and re-raise.
+    def _raise_worker_death(self, cause, allow_alive=False):
+        """Report a worker failure; optionally let a live pool keep waiting.
 
-        A worker that fails stores its traceback and then stops its buffer, so
-        a parent asleep in ``recv()`` wakes with a bare ``RuntimeError("stop")``
-        that says nothing about what happened. This turns that into the real
-        exception. Every worker is examined rather than the one whose id was
-        popped: the wake-up says "someone died", not who.
-
-        Always raises.
+        A worker that fails stores its traceback and then stops its buffer, so a
+        parent asleep in ``recv()`` wakes with a bare ``RuntimeError("stop")``
+        that says nothing about what happened. Every worker is examined rather
+        than the one whose id was popped: the wake-up says "someone died", not
+        who. A timed-out id queue may instead mean a live worker is just slow.
         """
         deaths = []
         for other_id, worker in enumerate(getattr(self, "workers", ())):
@@ -568,7 +566,8 @@ Example::
                 "crashed in native code, so nothing ran to report it"
                 % ", ".join("%d (exit code %s)" % pair for pair in deaths)
             ) from cause
-        raise cause
+        if not allow_alive:
+            raise cause
 
     def _abort_workers(self):
         """Drop the worker pool without waiting for it to go idle.
@@ -805,11 +804,19 @@ Example::
                                 gid_obj.value = 0
                                 self.gidc.notify_all()
 
-                    # get which worker has this batch
-                    try:
-                        worker_id = self.idqueue.pop_for(5000)
-                    except Exception as stopped:
-                        self._raise_worker_death(stopped)
+                    # A live worker may need more than five seconds for its
+                    # first batch on a busy runner. Check for a real death on
+                    # every queue timeout, then give it a bounded retry.
+                    wait_deadline = time.monotonic() + 60
+                    while True:
+                        try:
+                            worker_id = self.idqueue.pop_for(5000)
+                            break
+                        except RuntimeError as stopped:
+                            self._raise_worker_death(stopped, allow_alive=True)
+                            if ("ring buffer pop timed out" not in str(stopped)
+                                    or time.monotonic() >= wait_deadline):
+                                raise
 
                     now = time.time()
                     self.wait_time = now - start
