@@ -665,7 +665,7 @@ workaround.
 - Exit condition: all three classes pass, with the coupling behind the second
   attempt understood rather than worked around.
 
-## KI-BACKEND-016: ACL 507035 on strided-conv backward (sd15_unet_train, resnet50_train)
+## KI-BACKEND-016: ACL 507035 in batched strided-conv backward (sd15_unet_train, resnet50_train)
 
 - Severity: Medium (crashes two training workloads on Ascend; deterministic
   on one of them)
@@ -707,19 +707,30 @@ workaround.
   still explain `sd15_unet_train`'s DDPM-timestep failure mode specifically,
   but cannot be the whole story now that `resnet50_train` -- no arange, no
   DDPM table -- hits the identical error code deterministically.
-- Workaround: `jt.flags.auto_graph_replay=0` avoids the capture path (losing
-  the replay speedup) for `sd15_unet_train`; re-running sometimes succeeds
-  for it. Neither helps `resnet50_train`, which fails every time. No known
-  workaround for the strided-conv-backward case.
+- Workaround: `JT_SYNC=1` completes `resnet50_train` cleanly (status ok, zero
+  507035) -- serialising execution avoids it, which is the key narrowing below.
+  `jt.flags.auto_graph_replay=0` avoids the capture path for `sd15_unet_train`
+  (losing the replay speedup); re-running sometimes succeeds for it.
 - Evidence: `bench/torch_compat --device npu --workloads sd15_unet_train,
   resnet50_train`; peer Ascend runs 2026-10-06 and 2026-10-07 under
-  `$JITTOR_LAB_ROOT/_state/npu-verify`. Next step (in progress): bisect the
-  real repro shape (`[64,256,56,56]` x `[512,256,1,1]`, stride 2, pad 0) by
-  `outputMask` combination (input-grad alone, weight-grad alone, both) and
-  by stride/kernel (stride 1 instead of 2; a 3x3 stride-2 shape that divides
-  evenly instead of 1x1) to find which combination actually triggers
-  507035, using the `is_result_needed()`-wired `outputMask` from
-  KI-BACKEND-017 to isolate outputs cheaply without further code changes.
+  `$JITTOR_LAB_ROOT/_state/npu-verify`. Narrowed 2026-10-07 and it is NOT the
+  conv op or its tensor layout: (a) the exact repro shape run as a standalone
+  single-conv backward (both grads, same batch 64) PASSES -- no 507035; the
+  real failure is `Execute fused operator(643/979)`, i.e. the conv backward is
+  op #643 of a 979-op fused execution batch, and only fails in that batched
+  context. (b) `resnet50_train` under `JT_SYNC=1` completes cleanly. (c) a
+  layout trace (`is_contiguous`/`storage_offset`/`mem_ptr`/aliasing on dout, x,
+  weight, grad_input, grad_weight) before every `Conv2dBackward` in the
+  `JT_SYNC=1` run showed every tensor fully contiguous, zero offset, no
+  aliasing. So the trigger is the asynchronous/batched execution context --
+  in-batch buffer reuse and free ordering across ACL's sequence of aclnn calls
+  -- not a per-op kernel defect on a specific layout (cf. the gated-off
+  `reuse_dying_inputs` on ACL, which is the same class of hazard: an aclnn op
+  in a batch handed a block already reused or freed). This is executor-side.
+  Next: capture the layout trace of the actual crashing (`JT_SYNC=0`) call to
+  finish ruling out layout, then investigate the executor's per-batch release
+  ordering for ACL (`src/core/exec_plan.cc` `release_after`, deferred frees in
+  a non-async batch) -- needs a 910B3 to reproduce and verify.
 - Exit condition: a deterministic reproduction's real mechanism identified
   (a CANN kernel defect needing a different call shape or an upstream
   report, or a jittor-side parameter/format bug fixable at the call site),
