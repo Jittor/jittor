@@ -1865,6 +1865,15 @@ def smoke(session):
     env = _require_execution(_cpu_gate_env(session))
     session.install(*CPU_GATE_REQUIREMENTS)
     _run_with_jit_utils_restart(session, "python", "-c", _CPU_PROBE, env=env)
+    # A cold oneDNN source build can exceed pytest's 900-second per-test
+    # timeout. Finish that required build before the timed test process starts.
+    _run_with_jit_utils_restart(
+        session,
+        "python",
+        "-c",
+        "import jittor as jt; jt.compile_extern.setup_mkl()",
+        env=env,
+    )
     if session.posargs:
         _run_pytest(session, (), env)
         return
