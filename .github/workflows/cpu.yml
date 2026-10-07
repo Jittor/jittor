@@ -160,6 +160,7 @@ jobs:
             asv-results-${{ runner.os }}-${{ runner.arch }}-
       - name: Record, compare, and publish ASV results
         run: >-
+          git config --global --add safe.directory "$GITHUB_WORKSPACE" &&
           python -m nox -s benchmark --
           --bench '^(operators|optimizer_step)\.'
       - name: Save ASV results for the next commit
