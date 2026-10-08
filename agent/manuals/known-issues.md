@@ -950,34 +950,24 @@ workaround.
   `resnet50_infer`'s residual is now attributed to `aclnnConvolution`'s own
   `NCHW<->NC1HWC0`/`FRACTAL_Z` format-conversion overhead (including the
   redundant per-call weight reformat above) and `BNInfer`'s intrinsic
-  kernel cost, not a dispatch bug. A real, documented mechanism for the
-  weight half of that exists -- `aclnnCalculateConvolutionWeightSize` and
+  kernel cost, not a dispatch bug. The weight-prepack mechanism that would
+  address the reformat half -- `aclnnCalculateConvolutionWeightSize` and
   `aclnnTransConvolutionWeightGetWorkspaceSize`/`aclnnTransConvolutionWeight`
-  (`$CANN_HOME/aarch64-linux/include/aclnnop/aclnn_trans_convolution_weight.h`;
-  an analogous pair for matmul weights lives in
-  `aclnn_trans_matmul_weight.h`, relevant to `vit_b16_train`'s and
-  `bert_base_train`'s own matmul-heavy profiles) -- but the header
-  documents only the transform's own behavior (ND float16/float32 in,
-  private format out, cast to float16), not whether
-  `aclnnConvolutionGetWorkspaceSize` recognizes an already-transformed
-  weight and skips its own internal reconversion when given one; that
-  consumption behavior is undocumented. Confirming it needs a new native
-  C++ op runner (this codebase has no generic passthrough from Python to
-  an arbitrary aclnn call -- every aclnn function in use has its own
-  hand-written runner, confirmed by reading `backends/acl/kernels/native/`
-  end to end for a passthrough and finding none) plus a cache keyed safely
-  by the weight Var's identity and `var_ptr` (mirroring the existing
-  `_batch_norm_eval_coefficients` pattern in `normalization.py`, not a new
-  invalidation scheme). The realistic payoff even if it works is small: the
-  weight-reformat slice measured at about 691us of a 32.3ms step (roughly
-  2%), well under the activation `NCHW<->NC1HWC0` round-trip's ~4.2ms/step,
-  which this would not touch. Undocumented consumption behavior, real new
-  native-code surface, and a ~2% ceiling is the same shape of bet the
-  `convOutPads` mistake (cause 2's sibling investigation, KI-BACKEND-016)
-  already paid for guessing wrong on -- not attempted this session without
-  either stronger documentation or a reason to accept that specific risk.
-  Left here as a concrete, bounded lead with exact header paths and
-  signatures for whoever picks it up.
+  (`$CANN_HOME/aarch64-linux/include/aclnnop/aclnn_trans_convolution_weight.h`)
+  -- was tried directly, not just read about: a standalone C++ program
+  (`aclInit`/`aclrtCreateContext`/`aclCreateTensor`, linked straight against
+  `libascendcl.so`/`libnnopbase.so`/`libopapi.so`, no jittor code touched)
+  called `aclnnCalculateConvolutionWeightSize` on this exact 910B3 and got
+  back `AclNN_Parameter_Error(EZ1001): only support ascend310P, now soc is
+  Ascend910B` -- the API is restricted to a different chip and cannot run
+  here at all, closing this lead outright, not on a risk judgment. The
+  matching `aclnn_trans_matmul_weight.h` pair (relevant in principle to
+  `vit_b16_train`'s and `bert_base_train`'s matmul-heavy profiles) has no
+  such restriction -- `aclnnCalculateMatmulWeightSizeV2` ran fine on this
+  910B3 in the same standalone program -- but there is no problem for it to
+  solve: both workloads' own `op_statistic` captures already show
+  `TransData` at a negligible 0.275% of device time, so matmul was never
+  paying the reformat cost conv does.
 
   A systematic re-scan of every `op_statistic` capture this entry's causes
   were found from -- not just the one that found cause 5 -- for the same
@@ -1008,7 +998,18 @@ workaround.
   28-layer, growing-KV-cache `generate()` loop -- `qwen3_decode_static`
   avoids this by compiling, which a dynamically growing cache cannot do by
   the workload's own design), a core/executor-level dispatch-overhead
-  characteristic rather than anything scoped to this backend.
+  characteristic rather than anything scoped to this backend. That last
+  claim was traced, not assumed: `cProfile.print_callers("isinstance")`
+  over one real decode step attributes the heaviest contributors to
+  `python/jittor/ops/indexing.py` (`_is_basic_index`, `_dispatch_slices`,
+  `getitem`) and `python/jittor/compat/torch/installers/tensor/
+  method_api.py`'s `_torch_getitem` -- shared indexing/slicing machinery
+  every backend goes through for HF's plain `torch.cat`-based
+  `DynamicCache`, not anything under `backends/acl/`. This backend's own
+  `kv_cache.py` (paged attention, block tables) is a different feature
+  this workload's plain dynamic cache never reaches. There is no
+  ACL-scoped fix available for this cause; a fix would mean changing the
+  core indexing path every backend shares.
   `bert_base_train`'s gap is similarly not a dispatch bug: an aclprof
   capture shows `MatMulV2` at 42.4% of device time (the
   expected dominant cost for a transformer) and `DSARandomUniform` --
