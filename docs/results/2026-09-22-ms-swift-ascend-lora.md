@@ -506,3 +506,9 @@ ORPO identityfix01 job 1790 在启动 `launch.sh` 时因文件缺少可执行权
 2026-10-08 21:22 CST 再次检查同一运行键时，job 1801 仍在 `cscg-hw01` 运行。共享 `jittor_core` 已完成 289/289；候选随后进入 Jittor Python 绑定扩展编译，worker 上可见活跃 `cc1plus`，rank 0 的独立编译缓存仍有新对象写入。rank 0/1 launcher 日志仍只有 `ORPO_DEVICE_AUDIT_START`，没有候选模型构造、batch、forward、gradient、optimizer 或 fallback 结果；因此候选验收仍未通过任何目标级别。job 1802/1803、DPO 定向复现 1821 和结构门禁 1823 仍依赖前序作业；不重跑或替换这些运行键。
 
 2026-10-08 21:42 CST 对同一 job/运行键复核：job 1801 仍为 `RUNNING`（已运行 53 分钟，4 小时上限），worker 上 torchrun 父进程和两个 rank 子进程仍存活；rank 0 的隔离 ccache 在 21:41:49 继续生成新 manifest/cache 统计，说明首次扩展编译仍有进展。两 rank 观测日志和 shim 汇总日志仍停留在 launcher 开始标记，没有新增候选模型、batch、前向、梯度、优化器或 fallback 结果。Slurm accounting 当前不可用（`sacct` 报 storage disabled）；队列中 1802、1803、1821、1823 仍按既有依赖等待。故保持原运行继续，不因编译耗时重新提交；本次状态检查不构成任何候选 L0–L4 通过证据。
+
+## DPO Bool-mask 探针的过期基线修正（2026-10-08）
+
+只读检查发现待运行 job 1821 的脚本在 oracle 前要求工作树 HEAD 精确为 `4d1c8c617d1c3f5b44bebb38f16065bc59c61355`，而当前基线为 `79eadd9c5ab225474c3253bb2c306b755646212f`。两 SHA 间 `src/`、`python/`、`backends/` 无差异，只有结果报告有变更，但原 SHA 守卫仍会阻止该脚本启动 oracle。保留 1821 原提交和 r3 运行目录，不覆盖其记录。
+
+为避免让这项过期前置条件占用节点后才失败，已新增唯一运行键 `getitem-boolmask-fused-acl-repro-20261008-r4`，对应 Slurm job 1825，依赖 `afterany:1823`。r4 固定当前 `79eadd9`，复用 r3 同一 probe 源和已完成 r2 编译缓存，先执行 torch_npu oracle，再顺序执行 `backend_fallback=error` 严格 ACL candidate，并断言设备驻留与零 fallback。job 1823 完成后才会启动 r4，不与现有 ORPO/恢复/比较 JIT 链并发。探针仍仅用于定位 `roll → bool mask → leading-row slice → masked select` 的 ACL 算子断点，不代表 DPO 公开训练通过。r4 脚本、manifest 和 SHA256SUMS 未版本化，位于 `$TASK_STATE/runs/getitem-boolmask-fused-acl-repro-20261008-r4/`。
