@@ -47,6 +47,6 @@
 | [主机受限步长：把每算子的 Python 开销从图构建里拿掉](2026-09-13-host-path-per-node-cost.md) | Python 路径已完成 | 2026-09-13 |
 | [batched Linear 的两个展平节点](2026-09-12-batched-linear-graph-nodes.md) | 已落地，H20 上实测；对拍结论未附 | 2026-09-12，2026-09-23 归档 |
 | [Jittor vs 真 PyTorch 2.9.1：现在差在哪](2026-09-14-jittor-vs-pytorch.md) | 快照：对 eager 赢 6 平 5 输 1，对 `torch.compile` 赢 2 平 2 输 5 | 2026-09-14 |
-| [ms-swift LoRA 的 Ascend torch shim 验证](2026-09-22-ms-swift-ascend-lora.md) | 2026-10-07 增补 Qwen3：tiny 公开推理 L0/L1/L4 通过；公开训练第二次 AdamW 更新严格对拍失败；多卡候选、恢复、真实尺寸性能与多机仍未闭合 | 2026-10-07 |
+| [ms-swift LoRA 的 Ascend torch shim 验证](2026-09-22-ms-swift-ascend-lora.md) | 2026-10-08 增补 IA3 两卡设备审计：标准 AdamW step 留 CPU；fused AdamW 参数/梯度/update 数值匹配且 optimizer state 驻留 NPU，但 candidate optimizer.pt 格式失败、forward 数值缺证；整体 L2/L3/L4、L5、多机仍未闭合 | 2026-10-08 |
 | [Torch 兼容层在真实模型上对 PyTorch：差距表、显存与性能修复](2026-09-24-torch-compat-real-models.md) | 11 项全部跑通，几何平均 1.26x，进程显存峰值为 PyTorch 的 0.87–1.45 倍；余下差距在主机侧 | 2026-09-24 |
 | [性能/显存分析工具：审计与重写](2026-09-25-profiling-tools.md) | 已实现，RTX 4090 上验证；未合入 | 2026-09-25 |

@@ -1,6 +1,6 @@
 # 2026-09-22：ms-swift LoRA 的 Ascend torch shim 验证
 
-**状态（2026-10-07 复核）：历史锁定 tiny 单卡 LLaMA 训练与恢复、tiny 推理证据按各自旧运行基线保留；新 Qwen3 公开 SFT 训练已到真实 optimizer 更新但 L2 严格数值失败。独立 Qwen3 tiny 公开推理 L0/L1/L4 通过，使用同一原生 checkpoint-3 adapter，两侧 37 份快照一致。真实尺寸推理 v4 严格数值失败；候选双卡训练与真实多机仍未闭合，多机为资源阻塞；所有轨道 L5 均未通过。**
+**状态（2026-10-08 复核）：历史 tiny 单卡 LLaMA 训练/恢复与 tiny 推理按各自基线保留；Qwen3 公开 SFT 的 L2 严格数值仍失败，Qwen3 tiny 公开推理 L0/L1/L4 通过。新增 IA3 两卡公开 SFT 设备审计：标准 AdamW 的 14 个标量 step/rank 留在 CPU；fused AdamW 的参数、梯度和更新对拍通过预置容差，所有 42 个 optimizer state/rank 在 NPU且候选回退计数为 0，但候选 `optimizer.pt` 不是有效 ZIP、optimizer checkpoint 数值无法对拍，forward 值快照也缺失，因此严格门禁仍未通过。真实多机仍资源阻塞；所有轨道 L5 均未通过。**
 
 已有运行基线为 `69c3bdfd80e67cfbbacb5192f59ae859f86f4df0`，另有各运行 manifest 所记录的未提交修改。当前工作树已同步到 `61294cd14673ba60f4072542a2e73ea2c8f8c509`；后续公开入口与断点运行采用该同步基线及各自归档的 dirty source；没有把旧运行重新标记为新提交验证。维护者：Torch compatibility / ACL backend maintainers。核心初始化、梯度状态语义、依赖版本、后端/驱动或协议变化时重新验证。本任务不提交、推送或创建 PR。
 
@@ -11,7 +11,7 @@
 | 轨道 | 当前证据 | 未完成项或阻塞 |
 | --- | --- | --- |
 | 单 NPU 训练 | 锁定 tiny case 的公开三步对拍、完整 checkpoint fresh-process 精确续训通过，覆盖 L0–L4 适用门禁 | L5 真实尺寸稳态性能未完成；不推广其他模型或浮点输入 |
-| 单机多 NPU 训练 | 两卡真实 HCCL 四类通信通过；完整训练验收仍未完成 | 按资源分别验证 2/4/8 NPU；实际 HCCL、每 rank 梯度/优化器状态、完整恢复与公开 launcher 待验证 |
+| 单机多 NPU 训练 | 两卡真实 HCCL 通信通过；IA3 公开 SFT 三步/恢复轨迹已有数值证据；本轮 fresh 设备审计确认标准 AdamW CPU step 状态，fused AdamW 单步参数/梯度/update 数值匹配且 42/42 optimizer tensors 驻留 NPU | optimizer checkpoint 可移植性失败，fused optimizer 状态值与 forward 输出值未完成跨运行时对拍；公开训练完整设备门禁、完整恢复候选、真实尺寸稳态性能未通过；真实多机仍资源阻塞 |
 | 真实多机多 NPU 训练 | `resource-blocked`：作业 720 当前仅一个实际主机 | 需要至少两个真实主机且每主机至少两张 NPU；不能用单机多进程或主机别名代替 |
 | 单 NPU 推理 | tiny 公开 Swift 推理 L0/L1/L4 通过；约 1.1B 公开入口执行完成但 logits/KV 严格比较失败 | L5 稳态性能未运行；训练 L2/L3 不适用 |
 
@@ -415,3 +415,20 @@ v3 观察协议，包含真实 Slurm 主机核验、全局 rank 私有缓存、�
 **独立公开推理通过。** 新运行键 `qwen3-public-infer-nativeckpt-r1-20261007`，oracle job 1613 先于严格候选 job 1614；候选之后由 worker 比较 job 1617 对拍。两侧从相同 Qwen3 base 和同一份**原生** SFT checkpoint-3 adapter 加载，使用四条固定请求、FP32、SDPA、greedy 生成 4 token。公开 `swift.cli.main infer` 两侧均成功；全部加载参数、16 组实际前向输入、16 组 logits 和四组生成 token ID 精确一致，37 份 snapshot 完整，logits 最大差为 0。候选 launcher/child 都报告 ACL、严格 error 策略、fallback 计数 0；两侧模型参数、forward 输入与 logits 的审计设备均为 `npu:0`。原生 fallback 通用计数器 unavailable，记录为 unknown。候选首次构建使用隔离 JITTOR_HOME；推理 job 1614 的墙钟包含 JIT 编译，不能作为 L5。比较器 job 1615 因系统 Python 缺 NumPy、job 1616 因读取 Python 字面量时误用 JSON 而失败，均在比较前失败并保留；job 1617 使用 oracle Python 与 `ast.literal_eval` 后通过。这是 Qwen3 tiny 推理路径证据，不覆盖官方大权重、其他模型/tuner、训练 checkpoint 恢复或性能门槛；推理通过不改判同模型族训练 L2 失败。
 
 完成推理对拍时，Slurm 作业 1613–1617 均已退出。个人 fork 远端仍在 `a4fa5b2801bef077b54d9bf669c08c1b3c6b4b37`；已获授权的普通推送再次因未配置 HTTPS username 凭证而失败，没有读取或保存 token，也没有 force push。该认证待办独立于验证结论。
+
+
+## IA3 两卡公开 SFT optimizer/device 审计（2026-10-08）
+
+基线为 integration HEAD `fbe0b1d1b29d3f35279c71c3591d7388c16a4b19`，upstream `2.0-refactor` 已同步到 `0b8850c3d1c48a284c81f0395bb05647f521a218`；工作树开始时 clean。远端个人 fork 的跟踪 SHA 上次确认为 `a4fa5b2801bef077b54d9bf669c08c1b3c6b4b37`；本轮针对 fork 的 live refspec fetch 挂起后中断，未改写跟踪引用。作业、插件与原始张量证据未版本化，位于 `$TASK_STATE/runs/ia3-world2-device-audit-20261007/`、`ia3-world2-device-audit-r3-20261007/` 和 `ia3-world2-fused-optimizer-audit-20261007/`。
+
+| 运行键/作业 | 结论 |
+| --- | --- |
+| `ia3-world2-device-audit-20261007`，native fresh job 1626；candidate job 1627 | 原生 torch_npu 每 rank 35 参数、4 输入、2 forward outputs、14 梯度均在对应 NPU；42 个 optimizer tensors 中 28 moments 在 NPU、14 scalar step 在 CPU。候选 1627 在 Jittor 首次编译中于 20:22:28 达 1h walltime，未产生张量证据，保留 timeout。 |
+| `ia3-world2-device-audit-r3-20261007`，native resume job 1628；条件 candidate job 1629 | job 1629 的两个 rank 均记录 ACL/HCCL world=2、`fallback_count=0`；参数、实际 batch、forward/compute outputs、梯度和 28 个 moment tensors 在对应 NPU，但 14 个 scalar step tensors 在 CPU。该设备审计没有保存 forward/optimizer state 数值，因此不宣称该运行完成跨运行时数值对拍。job 1628 原生恢复 step 3→4 的 optimizer tensors/rank 均在 NPU；缺候选恢复设备配对。 |
+| `ia3-world2-fused-optimizer-audit-20261007`，native job 1630；candidate job 1631 | 公开 `swift.cli.sft`、IA3、FP32、真实两 rank/HCCL、单步。原生 torch_npu 与候选 ACL 的每 rank 35 参数、输入 4、forward outputs 2、compute output 1、14 可训练参数、14 梯度及 42 optimizer state tensors 均位于相应 NPU。候选 process end 与回调记录两 rank `fallback_count=0`；原生通用计数器 unavailable/unknown。 |
+
+fused profile 在预先锁定的 FP32 容差下：两 rank 的 14 个初始 IA3 参数精确相等，4 组 batch 精确相等，22 个冻结参数/buffer 精确相等且训练前后未变；14 梯度最大绝对差 `3.725290298461914e-9`，pre/post/final 可训练参数快照最大绝对差均为 0。两侧每 rank 均为 14/14 非零梯度与 14/14 非零更新。worker 数值报告为 `$TASK_STATE/runs/ia3-world2-fused-optimizer-audit-20261007/numeric-audit-v3.json`（job 1665）。
+
+此结果仍失败于严格序列化门禁：原生 `optimizer.pt` 为有效 ZIP（27141 bytes），候选文件为 11612 bytes 且 `zipfile.is_zipfile` 返回 false；独立 worker `torch.load` 报 `Invalid magic number`。候选 optimizer checkpoint 的 state 数值因此未能读取/对拍。插件同时只记录 forward output 的 device/shape/dtype 元数据，没有保存 logits/hidden 数值，所以 forward/output 数值比较未执行。optimizer checkpoint 与 forward 值缺失都不能从参数/梯度/更新轨迹间接推定通过。比较器 job 1660 因 final 路径拼错失败，1661 因无法读取候选 optimizer 文件失败；1665 将可比快照写入 JSON 后，其 stdout 摘要代码 KeyError 退出，报告中的单项实质失败是候选 checkpoint 归档格式。
+
+因此本证据只补强单机两卡 IA3 的 L0–L2 设备观察与部分数值轨迹，不授予严格 L2、L3 或整体 L4；不覆盖恢复候选、推理、其他 tuner/model、L5 或多机。下一断点是用修正后的观测协议保存 forward 数值和 optimizer state 数值，并先修复/定位 candidate optimizer checkpoint 格式；按验收顺序 native oracle 在前。
