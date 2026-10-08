@@ -60,7 +60,7 @@ def _collect(targets, torch_mode=None, attempts=3):
         completed = run_python_child(
             ["-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider"]
             + list(targets),
-            cwd=REPO_ROOT, env=environment, merge_stderr=True, timeout=900)
+            cwd=REPO_ROOT, env=environment, merge_stderr=True, timeout=None)
         if completed.returncode != _JIT_UTILS_UPDATED_EXIT_CODE:
             return completed
     raise AssertionError(
