@@ -4,10 +4,11 @@
 #include <optional>
 #include <tuple>
 #include <ATen/cuda/CUDAContext.h>
+#include "runtime/device.h"
+#include "runtime/rng_state.h"
 
 namespace jittor {
 int get_seed();
-extern int64_t current_offset;
 }
 
 namespace at {
@@ -24,10 +25,11 @@ struct Generator {};
 struct CUDAGeneratorImpl : public Generator {
     std::mutex mutex_;
     PhiloxCudaState philox_cuda_state(uint64_t increment) {
+        const auto span = jittor::reserve_acl_random(
+            jittor::current_device(), static_cast<int64_t>(increment));
         auto state = PhiloxCudaState(
-            static_cast<uint64_t>(jittor::get_seed()),
-            static_cast<uint64_t>(jittor::current_offset));
-        jittor::current_offset += static_cast<int64_t>(increment);
+            static_cast<uint64_t>(span.seed),
+            static_cast<uint64_t>(span.offset));
         return state;
     }
 };

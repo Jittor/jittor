@@ -123,7 +123,15 @@ void seed_stream(const string& backend, int device, uint64 seed) {
 } // namespace
 
 AclRngSpan reserve_acl_random(int device, int64 elements) {
-    if (!inside_executor()) throw std::runtime_error("ACL RNG reservation requires executor ownership");
+    // Kernel launchers already own the executor. Compatibility generator
+    // hooks can reserve counters from the host before a graph is submitted,
+    // so acquire the same process-wide entry lock when called externally.
+    // ExecutorEntryScope is recursive by thread; the recursive call below
+    // reaches the state mutation with the lock held in either case.
+    if (!inside_executor()) {
+        ExecutorEntryScope lock;
+        return reserve_acl_random(device, elements);
+    }
     if (device < 0 || elements < 0) throw std::invalid_argument("Invalid ACL random reservation");
     auto& state = acl_stream(device);
     if (elements > std::numeric_limits<int64>::max() - state.offset)

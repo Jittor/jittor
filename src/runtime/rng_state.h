@@ -21,7 +21,8 @@ struct RuntimeRngState {
 
 EXTERN_LIB RuntimeRngState& runtime_rng_state();
 struct AclRngSpan { int64 seed; int64 offset; };
-// Called under the executor lock by the actual ACL RandomOp launcher.
+// Atomically reserves counters from the selected device stream. Callers may
+// already own the executor (kernel launchers) or enter from a host generator.
 EXTERN_LIB AclRngSpan reserve_acl_random(int device, int64 elements);
 
 // These checkpoint APIs are synchronized state operations, not passive

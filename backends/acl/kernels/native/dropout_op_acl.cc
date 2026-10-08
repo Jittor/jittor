@@ -20,6 +20,7 @@
 #include "ops/unary_op.h"
 #include "ops/ternary_op.h"
 #include "core/executor.h"
+#include "runtime/rng_state.h"
 #include "runtime/device.h"
 #include "mem/allocator.h"
 #include "codegen/op_compiler.h"
@@ -31,9 +32,6 @@
 
 namespace jittor
 {
-    extern int current_seed;
-    extern int64 current_offset;
-
     DropoutOpRunner::DropoutOpRunner() : BaseOpRunner("Dropout")
     {
     }
@@ -41,21 +39,16 @@ namespace jittor
     void DropoutOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         auto attr = dynamic_cast<DropoutAttr *>(op_attr.get());
-        // attr->seed/offset come from the Python wrapper as fixed 0,0
-        // placeholders (DropoutAttr's schema requires the fields, but the
-        // actual stream position has to come from jittor's own global RNG
-        // counter, the same one RandomOpRunner and MultinomialOpRunner
-        // already read -- otherwise every call lands on the same point in
-        // aclnnDropout's Philox stream and produces the identical mask
-        // every time, for the life of the process).
-        int64 seed = current_seed;
-        int64 offset = current_offset;
+        // Dropout shares the selected device's Philox counter with the other
+        // ACL random operators. Evaluation mode observes the current state
+        // without consuming counters.
+        const auto rng = reserve_acl_random(
+            in_[0]->device_id, attr->train ? in_[0]->numel() : 0);
+        const int64 seed = rng.seed;
+        const int64 offset = rng.offset;
         ret = aclnnDropoutGetWorkspaceSize(inputTensors[0], attr->p, attr->train, seed, offset, outputTensors[0], outputTensors[1], &workspaceSize, &executor);
 
         launch(ret, aclnnDropout, true);
-
-        if (attr->train)
-            current_offset += in_[0]->numel();
 
         return;
     }
