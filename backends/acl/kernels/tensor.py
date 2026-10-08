@@ -267,7 +267,10 @@ def _roll_acl(x, shifts, dims=None):
     if not (
         isinstance(x, jt.Var)
         and _jittor_dtype_name(x.dtype)
-        in ("bfloat16", "float16", "float32", "int8", "uint8", "int32", "uint32", "bool")
+        in (
+            "bfloat16", "float16", "float32", "int8", "uint8",
+            "int32", "int64", "uint32", "bool",
+        )
     ):
         return None
     if dims is None:
@@ -331,4 +334,3 @@ def _split_acl(x, split_size, dim=0):
     if sum(split_sizes) != int(x.shape[axis]):
         return None
     return SplitWithSizeACL()(x, split_sizes, axis)
-

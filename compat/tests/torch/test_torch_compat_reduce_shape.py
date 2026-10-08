@@ -374,6 +374,15 @@ class TestRollFlip(Base):
                     msg=f"roll 1 d0 {dev}")
         both_devices(body)
 
+    def test_roll_int64_labels(self):
+        # Preference-training labels use int64. On ACL they must take the
+        # registered Roll kernel instead of falling through to generic reindex.
+        z = np.array([[-100, 10, 11, 2], [-100, 12, 13, 2]], dtype="int64")
+        def body(dev):
+            self.ae(torch.roll(t(z), -1, 1).numpy(), np.roll(z, -1, axis=1),
+                    msg=f"int64 roll for labels {dev}")
+        both_devices(body)
+
     def test_flip(self):
         z = np.arange(24).reshape(2, 3, 4).astype("float32")
         def body(dev):

@@ -97,6 +97,22 @@ class TestACLTorchCompat(unittest.TestCase):
         self.assertIsNot(torch.Tensor, jt.Var)
         self.assertIs(torch.Tensor._frontend_backend, jt)
 
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_npu_int64_roll_stays_on_acl(self):
+        from jittor._runtime.fallback import forbid_backend_fallbacks
+
+        before = jt.core.backend_fallback_count()
+        with jt.runtime.scope(backend_fallback="error"), forbid_backend_fallbacks():
+            labels = torch.tensor([[-100, 10, 11, 2], [-100, 12, 13, 2]],
+                                  dtype=torch.int64, device="npu:0")
+            rolled = torch.roll(labels, -1, 1)
+            _assert_acl_device(self, rolled)
+            np.testing.assert_array_equal(
+                rolled.detach().cpu().numpy(),
+                [[10, 11, 2, -100], [12, 13, 2, -100]],
+            )
+        self.assertEqual(jt.core.backend_fallback_count() - before, 0)
+
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_npu_bare_none_index_preserves_values_and_gradient(self):
