@@ -502,3 +502,5 @@ trace comparator 同时检查连续训练与恢复轨迹中的每 rank batch、�
 已将外部运行时守卫改为读取 `current-job-id-$SLURM_JOB_ID`，并要求 Slurm job ID 合法、存在该 job 的独立 marker，且 marker 与当前 job 一致；所有子进程仍须处于 Slurm overlap step。DPO 新键复用已成功且先运行的原生 torch_npu oracle job 1783（连续训练与 fresh-process resume），候选使用独立 JITTOR_HOME、运行缓存、launcher 状态和运行 ID，并串行复用已构建的 ccache 对象；Slurm 1797 正运行，1798 依赖候选、1799 依赖恢复完成。原始失败运行键与日志保留。
 
 ORPO identityfix01 job 1790 在启动 `launch.sh` 时因文件缺少可执行权限退出（exit 13），模型没有启动；该键保留为失败。全新 jobguardfix01 键修正权限和 per-job marker：原生 job 1800 在 2026-10-08 20:45:55 至 20:48:18 于 worker 成功完成，候选 job 1801 于 20:48:18 在 `cscg-hw01` 启动。2026-10-08 21:00 CST 复核时，候选仍处于 Jittor 首次编译阶段，rank 日志推进到 87/289；尚未产生候选模型训练、设备审计或回退计数证据。恢复 job 1802 依赖候选成功，比较 job 1803 依赖恢复完成。不能把原生 oracle 成功提升为候选通过。相关包、checksum、Slurm 日志和 manifest 均未版本化，位于 `$TASK_STATE/runs/`。
+
+2026-10-08 21:22 CST 再次检查同一运行键时，job 1801 仍在 `cscg-hw01` 运行。共享 `jittor_core` 已完成 289/289；候选随后进入 Jittor Python 绑定扩展编译，worker 上可见活跃 `cc1plus`，rank 0 的独立编译缓存仍有新对象写入。rank 0/1 launcher 日志仍只有 `ORPO_DEVICE_AUDIT_START`，没有候选模型构造、batch、forward、gradient、optimizer 或 fallback 结果；因此候选验收仍未通过任何目标级别。job 1802/1803、DPO 定向复现 1821 和结构门禁 1823 仍依赖前序作业；不重跑或替换这些运行键。
