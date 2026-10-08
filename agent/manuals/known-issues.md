@@ -950,10 +950,66 @@ workaround.
   `resnet50_infer`'s residual is now attributed to `aclnnConvolution`'s own
   `NCHW<->NC1HWC0`/`FRACTAL_Z` format-conversion overhead (including the
   redundant per-call weight reformat above) and `BNInfer`'s intrinsic
-  kernel cost, not a dispatch bug -- a fix would mean caching a
-  pre-transformed weight tensor across calls and getting aclnn to skip its
-  own internal conversion, which needs CANN-side format-pinning
-  documentation this session did not have before attempting it.
+  kernel cost, not a dispatch bug. The weight-prepack mechanism that would
+  address the reformat half -- `aclnnCalculateConvolutionWeightSize` and
+  `aclnnTransConvolutionWeightGetWorkspaceSize`/`aclnnTransConvolutionWeight`
+  (`$CANN_HOME/aarch64-linux/include/aclnnop/aclnn_trans_convolution_weight.h`)
+  -- was tried directly, not just read about: a standalone C++ program
+  (`aclInit`/`aclrtCreateContext`/`aclCreateTensor`, linked straight against
+  `libascendcl.so`/`libnnopbase.so`/`libopapi.so`, no jittor code touched)
+  called `aclnnCalculateConvolutionWeightSize` on this exact 910B3 and got
+  back `AclNN_Parameter_Error(EZ1001): only support ascend310P, now soc is
+  Ascend910B` -- the API is restricted to a different chip and cannot run
+  here at all, closing this lead outright, not on a risk judgment. The
+  matching `aclnn_trans_matmul_weight.h` pair (relevant in principle to
+  `vit_b16_train`'s and `bert_base_train`'s matmul-heavy profiles) has no
+  such restriction -- `aclnnCalculateMatmulWeightSizeV2` ran fine on this
+  910B3 in the same standalone program -- but there is no problem for it to
+  solve: both workloads' own `op_statistic` captures already show
+  `TransData` at a negligible 0.275% of device time, so matmul was never
+  paying the reformat cost conv does.
+
+  A systematic re-scan of every `op_statistic` capture this entry's causes
+  were found from -- not just the one that found cause 5 -- for the same
+  "max time far above average" signature that bisected the GroupNorm
+  cliff, restricted to the three captures taken after all six causes
+  (`vit_b16_train`, `bert_base_train`, `sd15_sample`; the others predate a
+  fix each was used to find and so only re-surface already-closed causes)
+  found nothing of the same shape. Every large spread in those three --
+  `bert_base_train`'s `ApplyAdamWV2` (30.8x, embedding table vs. a bias),
+  `vit_b16_train`'s `Add` (6.0x, the 3072-wide FFN activation vs. the
+  768-wide one), `sd15_sample`'s `TransData`/`Conv2D`/`BatchMatMulV2` (up
+  to 7.4x, across the UNet's several resolution stages) -- tracks input
+  size proportionally once the shapes are pulled from `op_summary`, the
+  opposite of cause 5's signature (smaller input, paradoxically slower).
+  No further cliff of that kind found.
+
+  `qwen3_decode`'s gap was checked for the same class of bug as cause 6
+  (a dispatch guard silently picking the slow path) and ruled out directly:
+  instrumenting `scaled_dot_product_attention_acl` with `override_kernel`
+  during a real `new_tokens=8` run showed the prefill call (`q_len=128`,
+  causal) correctly taking `acl_flash_attention_score_v2` (28 calls = 1
+  prefill x 28 layers) and every decode call (`q_len=1`) correctly taking
+  the faster `acl_incre_flash_attention_v4` path (196 calls = 7 decode
+  steps x 28 layers) -- both exactly as they should. The gap is not an ACL
+  dispatch bug; it is the cProfile finding from earlier in this entry's
+  investigation, restated with the dispatch question now closed: thousands
+  of small Python-level op calls per generated token (an uncompiled,
+  28-layer, growing-KV-cache `generate()` loop -- `qwen3_decode_static`
+  avoids this by compiling, which a dynamically growing cache cannot do by
+  the workload's own design), a core/executor-level dispatch-overhead
+  characteristic rather than anything scoped to this backend. That last
+  claim was traced, not assumed: `cProfile.print_callers("isinstance")`
+  over one real decode step attributes the heaviest contributors to
+  `python/jittor/ops/indexing.py` (`_is_basic_index`, `_dispatch_slices`,
+  `getitem`) and `python/jittor/compat/torch/installers/tensor/
+  method_api.py`'s `_torch_getitem` -- shared indexing/slicing machinery
+  every backend goes through for HF's plain `torch.cat`-based
+  `DynamicCache`, not anything under `backends/acl/`. This backend's own
+  `kv_cache.py` (paged attention, block tables) is a different feature
+  this workload's plain dynamic cache never reaches. There is no
+  ACL-scoped fix available for this cause; a fix would mean changing the
+  core indexing path every backend shares.
   `bert_base_train`'s gap is similarly not a dispatch bug: an aclprof
   capture shows `MatMulV2` at 42.4% of device time (the
   expected dominant cost for a transformer) and `DSARandomUniform` --
@@ -997,8 +1053,16 @@ workaround.
   fixable cause (as the six above were) or accepted as a documented
   aclnn-kernel-speed or runtime-format characteristic with evidence ruling
   out dispatch fallback and host overhead first, the way `qwen3_prefill`,
-  `vit_b16_train`'s `grad_input` waste, and `resnet50_infer`'s remaining
-  `TransData`/`BNInfer` cost were.
+  `vit_b16_train`'s `grad_input` waste, `resnet50_infer`'s `TransData`/
+  `BNInfer` cost, `qwen3_decode`'s attention dispatch, and `bert_base_train`'s
+  `DSARandomUniform` cost all were. All four remaining workloads
+  (`vit_b16_train`, `resnet50_infer`, `bert_base_train`, `qwen3_decode`) are
+  now in that second state: a specific, named, evidence-backed cause with
+  no further dispatch-level lever found, not an open question. A
+  lower-confidence native-code lead exists for `resnet50_infer` (above);
+  pursuing it, or finding a core-level fix for `qwen3_decode`'s dispatch
+  overhead (outside this backend's scope), would be the next move if
+  either is picked up again.
 
 ## KI-BACKEND-018: `DropoutACL` reused the same mask forever and under-scaled its gradient, but nothing calls it
 
