@@ -511,6 +511,8 @@ ORPO identityfix01 job 1790 在启动 `launch.sh` 时因文件缺少可执行权
 
 2026-10-08 21:56 CST，同一运行键的 rank0/1 均新增 `forward-values-step0-call0.npz`（各 4388 bytes），候选的 step-0 模型前向已实际返回并保存数值。两 rank 日志继续有 HCCL all-gather；尚无 step-0 梯度、optimizer state、更新后参数或完整 fallback/device 清单文件。故暂仅记录候选前向已执行，尚不能判定其设备驻留、数值对拍或训练层通过；比较仍依赖后续原生 oracle/候选结果与 job 1803。
 
+2026-10-08 21:59 CST，候选两 rank 均已产生 step-0 gradient、pre/post 参数和 optimizer-values 快照，且 rank0/1 均已记录 step-1 batch；公开训练日志显示保存 `checkpoint-1`。job 1801 仍在运行并继续编译/执行 ACL kernels，未完成四步轨迹。由于 per-rank 原始 device 事件和最终 fallback 汇总要等 callback train-end 写出、原生对照及 job 1803 比较尚未发生，这只是候选单步执行证据，不授予 L2/L3/L4 通过。
+
 ## DPO Bool-mask 探针的过期基线修正（2026-10-08）
 
 只读检查发现待运行 job 1821 的脚本在 oracle 前要求工作树 HEAD 精确为 `4d1c8c617d1c3f5b44bebb38f16065bc59c61355`，而当前基线为 `79eadd9c5ab225474c3253bb2c306b755646212f`。两 SHA 间 `src/`、`python/`、`backends/` 无差异，只有结果报告有变更，但原 SHA 守卫仍会阻止该脚本启动 oracle。保留 1821 原提交和 r3 运行目录，不覆盖其记录。
