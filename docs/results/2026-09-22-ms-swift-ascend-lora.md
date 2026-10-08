@@ -507,6 +507,8 @@ ORPO identityfix01 job 1790 在启动 `launch.sh` 时因文件缺少可执行权
 
 2026-10-08 21:42 CST 对同一 job/运行键复核：job 1801 仍为 `RUNNING`（已运行 53 分钟，4 小时上限），worker 上 torchrun 父进程和两个 rank 子进程仍存活；rank 0 的隔离 ccache 在 21:41:49 继续生成新 manifest/cache 统计，说明首次扩展编译仍有进展。两 rank 观测日志和 shim 汇总日志仍停留在 launcher 开始标记，没有新增候选模型、batch、前向、梯度、优化器或 fallback 结果。Slurm accounting 当前不可用（`sacct` 报 storage disabled）；队列中 1802、1803、1821、1823 仍按既有依赖等待。故保持原运行继续，不因编译耗时重新提交；本次状态检查不构成任何候选 L0–L4 通过证据。
 
+2026-10-08 21:54 CST，job 1801 已越过首次 JIT/ACL 扩展编译，进入真实公开 `swift.cli.rlhf --rlhf_type orpo` 两 rank 训练初始化：rank 0 配置显示 `Train: 0/4`，日志出现 HCCL all-gather；trace 目录已有 rank0/1 的 trainable initial、frozen initial、buffer initial 和 `batch-step0.npz`。这只证明入口已开始执行且 step-0 batch 已被采集；尚无前向数值、梯度、优化器更新/状态和 fallback 完整窗口。设备事件与最终回退计数由回调在 train-end 才落盘，因此目前仍不能通过 L0–L4。worker 同时输出 `torch.utils.checkpoint` 在 shim 下仅直接执行函数、不会重算激活的警告；该警告已保留，待结果中评估其对该工作负载内存/性能解释的影响。
+
 ## DPO Bool-mask 探针的过期基线修正（2026-10-08）
 
 只读检查发现待运行 job 1821 的脚本在 oracle 前要求工作树 HEAD 精确为 `4d1c8c617d1c3f5b44bebb38f16065bc59c61355`，而当前基线为 `79eadd9c5ab225474c3253bb2c306b755646212f`。两 SHA 间 `src/`、`python/`、`backends/` 无差异，只有结果报告有变更，但原 SHA 守卫仍会阻止该脚本启动 oracle。保留 1821 原提交和 r3 运行目录，不覆盖其记录。
