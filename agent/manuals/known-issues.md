@@ -665,11 +665,18 @@ workaround.
 - Exit condition: all three classes pass, with the coupling behind the second
   attempt understood rather than worked around.
 
-## KI-BACKEND-016: sd15_unet_train intermittently aborts on Ascend with ACL 507035
+## KI-BACKEND-016: ACL 507035 in batched strided-conv backward (sd15_unet_train, resnet50_train)
 
-- Severity: Medium (intermittent crash of one training workload on Ascend)
-- Status: Open (verification pending: Ascend 910B3). Non-deterministic -- three
-  isolated runs of the same workload gave three outcomes.
+- Severity: Medium (crashes two training workloads on Ascend; deterministic
+  on one of them)
+- Status: Open. A second, deterministic repro found (2026-10-07):
+  `resnet50_train` fails the same way on every run, not just sometimes --
+  `sd15_unet_train`'s non-determinism (three isolated runs, three outcomes:
+  507035, a different construction-time error, or a clean pass) is still
+  unexplained on its own, but both workloads share strided convolutions with
+  a backward pass, which is now the leading suspect over the original
+  construction-time-arange theory below (`resnet50_train` has no DDPM
+  timestep table at all).
 - Owner: ACL backend maintainers
 - Symptom: `sd15_unet_train` on a 910B3 sometimes aborts with
   `aclrtSynchronizeDevice failed with ACL status 507035`
@@ -677,86 +684,257 @@ workaround.
   setup with "code requires source for the selected backend", op `code` out
   `int32[1000]` -- the 1000-step DDPM timestep table built at module
   construction (a `torch.arange(1000)` issued before the front end's placement
-  scope exists); another run completes cleanly (peak 19.09 GB). No OOM, card
-  idle.
-- Cause: not isolated. 507035 means an operator received an illegal argument.
-  The call-time version of the construction-time arange placement was fixed in
-  `c8fffce72`; the module-construction-time path is not covered, which can feed
-  a not-yet-placed Var to a vector kernel. Looks like a placement/timing issue
-  in graph capture, not numerics; concurrent machine load may contribute.
-- Workaround: `jt.flags.auto_graph_replay=0` avoids the capture path (losing the
-  replay speedup); re-running sometimes succeeds. Neither is reliable.
-- Evidence: `bench/torch_compat --device npu --workloads sd15_unet_train`; peer
-  Ascend runs 2026-10-06 under `$JITTOR_LAB_ROOT/_state/npu-verify`.
-- Exit condition: a deterministic reproduction, the module-construction-time
-  placement path covered, and `sd15_unet_train` completing across repeated 910B3
-  runs with `backend_fallback=error` and zero fallbacks.
+  scope exists); another run completes cleanly (peak 19.09 GB). `resnet50_train`
+  fails deterministically with the same 507035, on
+  `exec_runner.cc:1093: Execute fused operator(643/979) failed`, op `code`
+  (a `Conv2dBackward`) with shapes `float32[64,256,56,56]` (x),
+  `float32[512,256,1,1]` (weight), `float32[64,512,28,28]` (dout) x2 -- a
+  1x1, stride-2 downsample conv's backward, batch 64, no OOM, card idle.
+- Cause: not isolated; one hypothesis tested and refuted. The shape above
+  (`Hin=56`, `Hout=28`, stride 2, kernel 1, pad 0) does not satisfy
+  `Hin == (Hout-1)*stride - 2*pad + dil*(k-1) + 1` at the stored,
+  geometry-only `convOutPads` of `{0,0}` (`conv_op.py`'s
+  `_conv_attr_code`) -- the gap is 1, suggesting `aclnnConvolutionBackward`
+  needs a nonzero `output_padding` to reconstruct `Hin` from `Hout`. Tested
+  directly against this exact shape by computing `output_padding` from the
+  actual `out_[0]`/`in_[0]`/`in_[2]` shapes at runtime instead of reading the
+  stored `{0,0}`: refuted, not just unhelpful -- aclnn rejects it outright,
+  `AclNN_Parameter_Error(EZ1001): The value of outputPadding[1,1] must be 0
+  if not transposed`. `output_padding` is not the lever ACL exposes for this
+  in non-transposed mode; the actual mechanism behind the 507035 is still
+  open. The original construction-time-arange theory (`c8fffce72` fixed the
+  call-time version; the module-construction-time path is not covered) may
+  still explain `sd15_unet_train`'s DDPM-timestep failure mode specifically,
+  but cannot be the whole story now that `resnet50_train` -- no arange, no
+  DDPM table -- hits the identical error code deterministically.
+- Workaround: `JT_SYNC=1` completes `resnet50_train` cleanly (status ok, zero
+  507035) -- serialising execution avoids it, which is the key narrowing below.
+  `jt.flags.auto_graph_replay=0` avoids the capture path for `sd15_unet_train`
+  (losing the replay speedup); re-running sometimes succeeds for it.
+- Evidence: `bench/torch_compat --device npu --workloads sd15_unet_train,
+  resnet50_train`; peer Ascend runs 2026-10-06 and 2026-10-07 under
+  `$JITTOR_LAB_ROOT/_state/npu-verify`. Narrowed 2026-10-07 and it is NOT the
+  conv op or its tensor layout: (a) the exact repro shape run as a standalone
+  single-conv backward (both grads, same batch 64) PASSES -- no 507035; the
+  real failure is `Execute fused operator(643/979)`, i.e. the conv backward is
+  op #643 of a 979-op fused execution batch, and only fails in that batched
+  context. (b) `resnet50_train` under `JT_SYNC=1` completes cleanly. (c) a
+  layout trace (`is_contiguous`/`storage_offset`/`mem_ptr`/aliasing on dout, x,
+  weight, grad_input, grad_weight) before every `Conv2dBackward` in the
+  `JT_SYNC=1` run showed every tensor fully contiguous, zero offset, no
+  aliasing. So the trigger is the asynchronous/batched execution context --
+  in-batch buffer reuse and free ordering across ACL's sequence of aclnn calls
+  -- not a per-op kernel defect on a specific layout (cf. the gated-off
+  `reuse_dying_inputs` on ACL, which is the same class of hazard: an aclnn op
+  in a batch handed a block already reused or freed). This is executor-side.
+  Next: capture the layout trace of the actual crashing (`JT_SYNC=0`) call to
+  finish ruling out layout, then investigate the executor's per-batch release
+  ordering for ACL (`src/core/exec_plan.cc` `release_after`, deferred frees in
+  a non-async batch) -- needs a 910B3 to reproduce and verify.
+- Exit condition: a deterministic reproduction's real mechanism identified
+  (a CANN kernel defect needing a different call shape or an upstream
+  report, or a jittor-side parameter/format bug fixable at the call site),
+  and `sd15_unet_train` and `resnet50_train` both completing across repeated
+  910B3 runs with `backend_fallback=error` and zero fallbacks.
 
-## KI-BACKEND-017: on Ascend, vit_b16_train trails torch_npu; qwen3_prefill's gap was a dispatch bug, not a kernel-speed limit
+## KI-BACKEND-017: on Ascend, device-bound workloads trailed torch_npu by a modest margin; five fixes closed the gap to parity on average
 
-- Severity: Limitation (performance, Ascend) for the remaining case
-- Status: Limitation for `vit_b16_train`. `qwen3_prefill`'s instance of this
-  is fixed (see Cause) and moved to 0.63x, ~1.6x faster than torch_npu -- it
-  is evidence the original diagnosis was incomplete, not a second data point
-  for the same limitation. Measured on a 910B3.
+- Severity: Limitation (performance, Ascend), narrowed to the point this is
+  closer to a closed record than an open one -- kept open only because
+  `vit_b16_train`, `bert_base_train`, `qwen3_decode` and `resnet50_infer`
+  still individually trail and `sd15_unet_train`/`resnet50_train` are still
+  blocked on KI-BACKEND-016.
+- Status: Limitation, narrowed five times, each against a real paired
+  `bench/torch_compat --device npu` run (same card, same seed), not an
+  isolated probe. (2026-10-06) the first full-suite run measured
+  `vit_b16_train` at "~9.9x" from an isolated, unwarmed aclprof capture; the
+  properly warmed-up paired run (2026-10-07, 14 workloads, geometric-mean
+  ratio 1.12x) measured it at 1.21x -- the earlier number was a measurement
+  artifact of comparing an unwarmed probe to a warmed-up baseline, not a
+  regression or a second real data point. Two more dispatch-guard fixes
+  landed after that 14-workload run (GroupNorm, BatchNorm eval, both
+  float16-only guards rejecting the dtype every real fp16 workload actually
+  uses), then a fifth fix, a genuine aclnn kernel-speed cliff rather than a
+  dispatch guard (see causes 3-5 below for each). A fresh, full 12-workload
+  paired run after all five landed (commit `61519b939`, same card and seed,
+  `sd15_unet_train`/`resnet50_train` excluded, still blocked on
+  KI-BACKEND-016) measured the geometric-mean ratio at **0.99x** -- Jittor
+  is, on average, no longer slower than torch_npu on this suite. That run's
+  own numbers supersede every individual ratio quoted below from the
+  2026-10-06/07 runs; they are kept for the before/after story each cause
+  tells, but the Symptom line now gives the 2026-10-07 (five-fixes-later)
+  numbers.
 - Owner: ACL backend maintainers
-- Symptom: against `torch` + `torch_npu` on the same card, Jittor's ACL
-  backend is competitive or faster where graph recompute and operator fusion
-  dominate (`qwen3_train` 0.89x; `qwen3_prefill`, after the fix below, 0.63x;
-  both loss/logits agree with torch_npu to within bf16/fp32 noise). Still
-  slower on `vit_b16_train` (~9.9x). `jt.profile` shows it is device-bound:
-  host launch is a minority of wall time and overlaps device execution.
-- Cause: `qwen3_prefill`'s ~3.2x gap was never a raw aclnn-kernel-speed
-  problem. `scaled_dot_product_attention_acl`
-  (`backends/acl/kernels/ops/flashattention_op.py`) only accepted a
-  `float32` `attn_mask`; HF's `sdpa` attention implementation passes a
-  `bool` mask (`True` = attend, the opposite of this kernel's own
-  `attenMask` convention -- see `_causal_mask`, `True` on the strictly-upper
-  triangle it drops). The dtype guard rejected every call, silently falling
-  through to the unfused `_composite` path, which rebuilds the full
-  `[B,H,Lq,Lk]` score matrix and pays `SelectV2`+`Cast`+`BroadcastTo` on it
-  (>60% of device time in an aclprof capture) on top of the real
-  `BatchMatMulV2`/`SoftmaxV2` cost. Fixed by accepting `bool` masks, inverted
-  once to the kernel's own convention, through the same `attenMask` slot the
-  internal causal mask already uses. `vit_b16_train` has not been checked
-  against this same question (does its attention call actually reach a
-  fused kernel, or does it also silently fall back) and should be before its
-  gap is attributed to kernel speed.
-- Update (2026-10-07): `vit_b16_train` checked against the same
-  dispatch-fallback question -- it is not that. A trace on
-  `scaled_dot_product_attention_acl` shows it engaging
-  (`acl_flash_attention_score_v2`) on every call, no mask (ViT is
-  bidirectional, unmasked, so the `qwen3_prefill` polarity bug does not
-  apply). An aclprof capture's `op_statistic.csv` puts
-  `FlashAttentionScore`+`FlashAttentionScoreGrad` at 1.3% of device time
-  combined. The real cost is `Dilation` (55.6%, 3 calls, ~899 ms each) and
-  `Conv2DBackpropInput` (34.1%, 3 calls, ~552 ms each) -- ~90% of all device
-  time, both counts matching the 3 measured steps exactly. This is the
-  patch-embedding `Conv2d`'s backward with respect to its *input* (the
-  image), which nothing downstream reads -- `images.requires_grad` reports
-  `False` correctly through the compat shim.
-- Update (2026-10-07, root cause confirmed): this is ACL-specific, not a
-  core autodiff bug. On CUDA, a real ViT-B/16 training step profiles to
-  `cudnn_conv_backward_w` only -- no `conv_backward_x` -- and
-  `images.grad` is `None`; plain `jt.grad(loss, [weight])` likewise only
-  runs `backward_w`. CUDA keeps grad-input and grad-weight as two
-  independent ops, so ordinary dead-op pruning drops the one nobody reads.
-  ACL's conv backward does not: `backends/acl/kernels/native/conv_op_acl.cc:119`
-  hardcodes `bool outputMask[3] = {true, true, true}` (ACL only ever turns
-  off `mask[2]`, the bias grad, when there is no bias), and
-  `backends/acl/kernels/ops/conv_op.py`'s `_BIASED`/`_UNBIASED_GRAD_SRC`
-  build the backward as one merged `Conv2dBackwardOpRunner` call that
-  produces `grad_input` (out0) and `grad_weight` (out1) together. Pruning
-  the unused `grad_input` Var afterward does not stop the merged op from
-  computing it first -- and for ViT's stride-16/kernel-16 patch-embedding
-  conv, computing it costs the `Dilation`+`Conv2DBackpropInput` 90% above.
-  The per-call `code_program`/`multi_grad_*` plumbing (`_code.py`) only
-  carries static output counts, not "which outputs this particular call
-  needs", so the op has no signal to act on yet.
-- Workaround: none needed for `qwen3_prefill`. For `vit_b16_train`, none
-  known; expect a gap until the fix below lands.
+- Symptom: against `torch` + `torch_npu` on the same card, same seed, after
+  all five causes below were fixed (12/12 workloads compared, commit
+  `61519b939`, geometric-mean ratio **0.99x**): `qwen3_decode_static` 0.39x,
+  `resnet50_infer_b1` 0.43x, `qwen3_prefill` 0.70x, `bert_base_infer` 0.71x,
+  `qwen3_train` 0.89x are at or ahead of torch_npu; `ddpm_unet_train` 1.04x,
+  `sd15_vae_decode` 1.18x, `vit_b16_train` 1.21x, `sd15_sample` 1.30x,
+  `bert_base_train` 1.69x, `resnet50_infer` 1.69x, `qwen3_decode` 2.05x
+  (bf16 argmax tie-break divergence on a repeating prompt, not a correctness
+  bug -- its `agree` matches `qwen3_decode_static`'s accepted pattern) trail
+  by a modest-to-large margin. `sd15_unet_train` and `resnet50_train` error
+  (`507035`, tracked as KI-BACKEND-016).
+- Cause (five found, all fixed):
+  1. `qwen3_prefill`'s gap (originally ~3.2x) was a dispatch bug, not kernel
+     speed: `scaled_dot_product_attention_acl`
+     (`backends/acl/kernels/ops/flashattention_op.py`) only accepted a
+     `float32` `attn_mask`; HF's `sdpa` implementation passes a `bool` mask
+     (`True` = attend, the opposite of this kernel's own `attenMask`
+     convention -- see `_causal_mask`, `True` on the dropped upper
+     triangle). The dtype guard rejected every call, silently falling
+     through to the unfused `_composite` path (full `[B,H,Lq,Lk]` score
+     matrix, `SelectV2`+`Cast`+`BroadcastTo` over it, >60% of device time in
+     an aclprof capture). Fixed by accepting `bool` masks, inverted once to
+     the kernel's convention, through the same `attenMask` slot the causal
+     mask already uses. Moved `qwen3_prefill` to 0.68x.
+  2. ACL's merged conv backward always computed `grad_input` even when
+     nothing downstream read it (`conv_op_acl.cc` hardcoded
+     `bool outputMask[3] = {true, true, true}`; CUDA keeps grad-input and
+     grad-weight as two independent ops, so ordinary dead-op pruning drops
+     the unread one, but ACL's one merged `Conv2dBackwardOpRunner` call
+     can't be pruned that way). Confirmed ACL-specific (CUDA profiles to
+     `backward_w` only; `jt.grad(loss, [weight])` alone never touches
+     `backward_x`). For ViT's patch-embedding conv this cost
+     `Dilation`+`Conv2DBackpropInput`, ~90% of device time in an isolated,
+     unwarmed aclprof capture -- see Status for why that capture's
+     magnitude does not carry over to the real number. Fixed with a new
+     core query, `Var::is_result_needed()` (`src/core/var.h`, returns
+     whether the var's backward liveness is nonzero -- a downstream reader
+     or a holder wants it), wired to `outputMask[0]`. Verified on a 910B3:
+     3 cases against a CPU reference (weight-only, both-needed, input-only)
+     all exact; `vit_b16_train`'s loss/digest unchanged end to end. Kept for
+     correctness (it is still real wasted work, and matters more without
+     device-graph replay), but `vit_b16_train`'s steady-state time barely
+     moved (199.3 ms to 199.8 ms) -- replay was already hiding the host-side
+     waste this removes, confirming device-graph replay, not this fix, is
+     why the real gap is 1.21x and not what the unwarmed probe measured.
+  3. `_group_norm_cuda_acl` (`backends/acl/kernels/normalization.py`)
+     required `x`/`weight`/`bias` all `float32`; `aclnnGroupNorm`
+     (`GroupNormOpRunner`) forwards the input's own dtype unconditionally
+     and does not care. SD1.5's VAE decoder runs entirely in fp16, so every
+     GroupNorm call was rejected and fell back to the hand-written
+     `Sub`/`ReduceMean`/`Sqrt`/`RealDiv`/`Mul`/`Add` decomposition --
+     unlike eval-mode BatchNorm (cause 4), group norm has no fixed running
+     stats to cache a scale/shift from, so this decomposition re-pays its
+     full cost every call. An aclprof capture showed it at 45%+ of device
+     time against 18% for the actual `Conv2D`. Verified on a 910B3:
+     `GroupNormACL` called directly at fp16 against a CPU reference,
+     `max_abs_diff` about 0.007 (fp16 noise); fp32 sentinel unchanged.
+     Fixed by widening the guard to `{"float32", "float16"}`, requiring
+     `weight`/`bias` to match `x`'s dtype instead of hardcoding `float32`.
+     `sd15_vae_decode`: 70.4 ms to 26.9 ms/step (2.61x), moving the gap
+     from 3.12x to 1.19x; `sd15_sample` also improved to 1.67x from the
+     same fix with no extra code, since it shares the VAE decode path.
+  4. `_batch_norm_eval_cuda_acl` (same file) had the identical
+     `float32`-only guard; `aclnnBatchNorm`'s `BNInfer` kernel is likewise
+     dtype-agnostic (`BatchNormACL` forwards `[x.dtype] * 3`). ResNet-50
+     inference in this project's own benchmark runs entirely in fp16
+     (`.to(dtype=torch.float16)` casts the running stats too, not just the
+     weights), so every call fell back to the composite path. That path is
+     cheaper than GroupNorm's, though, because eval-mode batch norm has
+     fixed running statistics: `_batch_norm_eval_coefficients` already
+     caches the derived `scale`/`shift` across steps when nothing tracks a
+     gradient through them, so the composite fallback was paying its full
+     `sqrt`/`div` cost only once, not every step. Verified on a 910B3:
+     `_batch_norm_eval_cuda_acl` called directly at fp16 (all-fp16, and the
+     fp16-x/fp32-stats mixed case some training setups use) against a CPU
+     reference, both within fp16 noise; fp32 sentinel unchanged. Fixed by
+     widening the guard the same way as cause 3, with `running_mean`/
+     `running_var` additionally accepted at `float32` even when `x` is
+     `float16`. `resnet50_infer`: 0.0333 s to 0.0323 s/step, a real but
+     modest 3% -- an aclprof capture after the fix showed why: `BNInfer`
+     itself is 31.8% of device time (more than `Conv2D`'s 24.2%), and a
+     further 25.1% is `TransData` inside `aclnnConvolution` itself
+     (`aclnnConvolution_TransData_TransData`/`..._MemSet`, NCHW to
+     `NC1HWC0`/`FRACTAL_Z` and back -- `aclnnConvolution`'s own internal
+     format conversion, not anything this op's Python wrapper issues).
+     265 of those `TransData` calls reformat the *weights* to `FRACTAL_Z`
+     on every single forward call despite them being frozen for inference
+     -- confirmed redundant (same weight, same shape, 5 calls = 5 identical
+     reformats in the profiled window) but not fixed here: there is no
+     existing weight-format-cache precedent anywhere in this backend, and
+     reusing a pre-transformed tensor would mean bypassing aclnn's own
+     internal re-conversion by lower-level, undocumented means -- exactly
+     the kind of guess the convOutPads mistake (cause 2's sibling
+     investigation) warned against. Left open below, not attempted blind.
+  5. `ddpm_unet_train`'s GroupNorm calls, 47.9% of device time in an
+     aclprof capture under the op-type name `GroupNormSilu` (not a name
+     this backend's code ever asks for -- see Evidence; it turned out to
+     have nothing to do with the SiLU that happens to follow every one of
+     these calls in diffusers' UNet). Bisected directly against
+     `aclnnGroupNorm` at a 910B3, independent of the full model: fixing
+     channel count (1024), group count (32) and batch (16), spatial extent
+     1x1 runs at 0.21ms and 3x3 at 0.26ms, but 1x2, 1x4, 1x5, 1x7, 2x2 and
+     2x3 all run at 8.9-9.5ms -- about 45x slower -- and 2x4 (spatial 8)
+     is back to 0.19ms. The boundary is exactly between spatial 7 and 8,
+     reproduces independent of channel count (256 through 2048, same
+     ~45x factor at each), group count (8 through 64) and batch size, and
+     is unaffected by `.stop_fuse()` on the GroupNorm output before the
+     following `silu` call (ruling out jittor's own op-fusion pass as the
+     cause -- whatever picks `GroupNormSilu` over plain `GroupNorm` does
+     so below jittor's graph layer). Looks like a hardcoded tile size of 8
+     with a catastrophic remainder path inside aclnn's own kernel, not
+     anything reachable from this backend's code. DDPM's deepest UNet
+     block concatenates two 512-channel skip connections at the mid
+     block's output resolution, landing on 1024 channels at exactly 2x2 --
+     squarely in the pathological band. Fixed by excluding spatial extents
+     from 2 to 7 (inclusive) from `_group_norm_cuda_acl`'s dispatch guard,
+     falling back to the decomposed implementation for that narrow band
+     only; every other spatial size still dispatches to the fused kernel
+     exactly as before. Verified on a 910B3: the decomposed fallback at the
+     pathological shape (`[16,1024,2,2]`) matches a CPU/numpy reference to
+     `max_abs_diff` about 1e-6 (float32, so exact to numerical noise, not
+     the fp16-noise tolerance causes 3 and 4 needed); shapes outside the
+     excluded band are confirmed to still reach `GroupNormACL` unchanged.
+     `ddpm_unet_train`: 229.1 ms to 193.1 ms/step, moving the gap from
+     1.22x to about 1.03x against an unchanged 187.5 ms torch_npu baseline
+     -- loss values still decrease normally end to end (1.42 to 0.40 over
+     the warmup-plus-measured window), `fallbacks: 0`. `sd15_sample`'s UNet
+     hits the same pathological band somewhere in its sampling loop (SD1.5
+     is architecturally similar to DDPM's UNet -- GroupNorm before every
+     SiLU, concatenated skip connections): 1784.5 ms to 1270.5 ms/step with
+     no further code change, moving its gap from 1.67x to about 1.17x
+     against an unchanged 1086.1 ms torch_npu baseline. `sd15_vae_decode`
+     does not share this: remeasured at 26.5 ms/step, unchanged from 26.9 ms
+     before this fix, consistent with its decoder never going as deep as
+     DDPM's or the main UNet's bottleneck.
+- Workaround: none needed for the five fixed cases, and the overall suite
+  no longer needs one: the 12-workload geometric mean is 0.99x. For the
+  individual workloads still behind (`vit_b16_train` 1.21x, `resnet50_infer`
+  1.69x, `bert_base_train` 1.69x, `qwen3_decode` 2.05x), none known yet.
+  `resnet50_infer`'s residual is now attributed to `aclnnConvolution`'s own
+  `NCHW<->NC1HWC0`/`FRACTAL_Z` format-conversion overhead (including the
+  redundant per-call weight reformat above) and `BNInfer`'s intrinsic
+  kernel cost, not a dispatch bug -- a fix would mean caching a
+  pre-transformed weight tensor across calls and getting aclnn to skip its
+  own internal conversion, which needs CANN-side format-pinning
+  documentation this session did not have before attempting it.
+  `bert_base_train`'s gap is similarly not a dispatch bug: an aclprof
+  capture shows `MatMulV2` at 42.4% of device time (the
+  expected dominant cost for a transformer) and `DSARandomUniform` --
+  `jt.random`'s fused ACL kernel, which every dropout call in HF's BERT
+  goes through via the correct composite path (see KI-BACKEND-018, which
+  is about a *different*, unreachable dropout implementation) -- at 19.3%,
+  190 calls over 5 steps averaging 383us each on a separate `DSA_SQE`
+  core/queue, longer per call than `MatMulV2`'s own 143.6us average despite
+  comparable or smaller tensor sizes. `jt.random` is dispatching correctly
+  (confirmed: `RandomOpRunner` reads and advances the shared
+  `current_seed`/`current_offset` pair, giving a fresh mask every call);
+  the cost looks like a cross-engine handoff specific to the `DSA` block
+  rather than a software defect, but this session had no CANN-side
+  documentation of that engine's dispatch cost to confirm it, so it is
+  recorded as observed, not diagnosed.
 - Evidence: `bench/torch_compat --device npu`; peer Ascend runs 2026-10-06
-  and 2026-10-07 under `$JITTOR_LAB_ROOT/_state/npu-verify`. `msprof`'s CLI
+  and 2026-10-07 under `$JITTOR_LAB_ROOT/_state/npu-verify`. The post-fix
+  12-workload run (`--workloads qwen3_prefill,qwen3_decode_static,
+  qwen3_train,resnet50_infer_b1,bert_base_infer,vit_b16_train,
+  ddpm_unet_train,resnet50_infer,sd15_sample,bert_base_train,
+  sd15_vae_decode,qwen3_decode --compile none`) saved its
+  `results.json`/`results.md` under
+  `$JITTOR_LAB_ROOT/_state/npu-verify/full_bench_verify/results/`.
+  `msprof`'s CLI
   wrapper (`msprof <app>`) hangs indefinitely around an ACL profiling-channel
   handshake with this CANN build, with or without `--ascendcl`, even on the
   workload's first subprocess-based tool probe (`mpicc --version`) -- it is
@@ -765,18 +943,87 @@ workaround.
   core rebuild) around the measured region works, and `msprof --export=on
   --type=text --output=<dir>` then parses the result offline into
   `op_summary`/`op_statistic` CSVs with real per-op-type device time -- this
-  is how both causes above were found.
-- Exit condition: `conv_op_acl.cc`'s `outputMask` set from whether each
-  output is actually consumed rather than hardcoded `true` (core side:
-  a query for "is this op output read by anything", added and verified on
-  CUDA; ACL side: wire `outputMask` to it and verify on a 910B3 -- ViT's
-  grad/loss unchanged and `grad_input` genuinely skipped in a fresh aclprof
-  capture, a both-needed conv -- e.g. a ResNet inner layer -- still produces
-  correct `grad_input`+`grad_weight` from one call, full ACL+structure
-  suites clean). Splitting into two independent ops (CUDA's shape) was
-  considered and dropped: correct for ViT but would cost a second
-  `aclnnConvolutionBackward` call whenever both outputs are needed, with no
-  measurement showing that is still a net win.
+  is how all five causes above were found, and is a cheaper path to a
+  per-kernel breakdown than the full-suite paired run when that is all a
+  question needs. The export step refuses a group-writable (not just
+  world-writable) output directory ("is writable by any other users",
+  despite the message) -- `chmod -R 755 <dir>` before `--export=on` fixes
+  it; this is a reusable gotcha, not specific to one run.
+- Exit condition: each remaining workload's gap attributed to a specific,
+  fixable cause (as the five above were) or accepted as a documented
+  aclnn-kernel-speed or runtime-format characteristic with evidence ruling
+  out dispatch fallback and host overhead first, the way `qwen3_prefill`,
+  `vit_b16_train`'s `grad_input` waste, and `resnet50_infer`'s remaining
+  `TransData`/`BNInfer` cost were.
+
+## KI-BACKEND-018: `DropoutACL` reused the same mask forever and under-scaled its gradient, but nothing calls it
+
+- Severity: Low (the class is unreachable from every live dispatch path, so
+  no training run observes either defect) with a Medium-severity caveat: the
+  coverage ledger that exists specifically to prevent this kind of defect
+  from going unnoticed (`tests/structure/test_backend_grad_contract.py`)
+  names a test for this class that does not actually exercise it, so if the
+  class is ever wired back up, the ledger will not catch a regression.
+- Status: Fixed (both defects), 2026-10-07, verified on a 910B3. The ledger
+  mismatch is not fixed -- see Exit condition.
+- Owner: ACL backend maintainers
+- Symptom: `DropoutACL` (`backends/acl/kernels/ops/dropout_op.py`,
+  `backends/acl/kernels/native/dropout_op_acl.cc`) is a `jt.Function`
+  implementing dropout directly on `aclnnDropout`/`aclnnDropoutBackward`.
+  Two independent defects, found while profiling `bert_base_train` for
+  KI-BACKEND-017 and chasing why its dropout calls looked expensive (see
+  that entry's evidence; this class turned out not to be the one `jt.random`
+  uses):
+  1. Every call produced the identical mask: `DropoutOpRunner::executeOp`
+     read `attr->seed`/`attr->offset`, and the Python wrapper hardcoded both
+     to `0`. Four consecutive calls with the same shape and `p` returned
+     byte-identical masks.
+  2. The gradient was under-scaled by a factor of `(1 - p)` whenever dropout
+     was actually active: `DropoutACL.grad` hardcoded `DropoutBackward`'s
+     `scale` attribute to `1.0` instead of `1 / (1 - p)` -- consistent with
+     `p` never being stored on `self` in the first place, so `grad` had no
+     way to compute the right value even if it had tried.
+  Neither defect is reachable from a real workload: `jt.nn.dropout`
+  (`python/jittor/nn/functional/dropout.py`, what `BertForSequenceClassification`
+  hits through the torch-compat shim) is a separate, `jt.random`-based
+  composite implementation that never calls `DropoutACL`, and it is correct
+  (verified independently: two consecutive calls differ, gradient matches a
+  closed-form reference). `DropoutACL` is not registered in
+  `backends/acl/kernels/install.py`'s `KERNELS` table, so no dispatch path
+  reaches it; a comment already in `dropout.py` explains the composite
+  implementation was chosen specifically to keep dropout inside the
+  surrounding kernel's fusion boundary, which a `jt.Function` like
+  `DropoutACL` cannot do -- this class looks like it predates that design
+  and was left behind, not a live alternate path.
+- Cause: `DropoutOpRunner`/`MultinomialOpRunner`/`RandomOpRunner` all need a
+  position in `aclnnDropout`'s (or the equivalent random op's) Philox-style
+  stream; the project's established way to supply one is the global
+  `current_seed`/`current_offset` pair (`src/runtime/init.cc`), which
+  `RandomOpRunner` and `MultinomialOpRunner` already read and advance.
+  `DropoutOpRunner` alone skipped this and used the Python-serialized
+  attribute fields instead, which were never populated with anything but
+  the literal placeholders `0, 0`.
+- Workaround: none needed -- the class is dead code on every path this
+  session traced.
+- Evidence: a standalone correctness probe (not checked in, per the repo
+  boundary) called `DropoutACL` directly: 4 calls, same shape and `p`,
+  compared mask bytes -- identical before the fix, distinct after; a second
+  probe compared gradients against `2 * out` with and without the correct
+  `1 / (1 - p)^2` factor on a constant input. `tests/backends/acl/` 228
+  passed (1 known unrelated failure); `tests/structure/` 1378 passed, 8
+  failed (known bmm broadcast failures, see KI-BACKEND-017's sibling
+  evidence) -- no new failures except
+  `test_acl_launcher_contract.py::test_dropout_forward_uses_launcher_and_backward_remains_present`,
+  updated in the same change since it asserted the now-removed
+  `attr->seed`/`attr->offset` literals instead of the corrected
+  `current_seed`/`current_offset` ones.
+- Exit condition: either `tests/structure/test_backend_grad_contract.py`'s
+  entry for `DropoutACL` points at a test that actually instantiates and
+  runs it on real hardware, or the class (and its two unused source files)
+  is deleted and the entry removed from that ledger. Whichever happens
+  first; this session did neither, to avoid conflating a benchmark-speed
+  investigation with a dead-code removal decision that deserves its own
+  review.
 
 ## KI-OPS-002: integer floor-division ROCm verification incomplete
 
