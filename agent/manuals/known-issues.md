@@ -979,6 +979,21 @@ workaround.
   Left here as a concrete, bounded lead with exact header paths and
   signatures for whoever picks it up.
 
+  A systematic re-scan of every `op_statistic` capture this entry's causes
+  were found from -- not just the one that found cause 5 -- for the same
+  "max time far above average" signature that bisected the GroupNorm
+  cliff, restricted to the three captures taken after all six causes
+  (`vit_b16_train`, `bert_base_train`, `sd15_sample`; the others predate a
+  fix each was used to find and so only re-surface already-closed causes)
+  found nothing of the same shape. Every large spread in those three --
+  `bert_base_train`'s `ApplyAdamWV2` (30.8x, embedding table vs. a bias),
+  `vit_b16_train`'s `Add` (6.0x, the 3072-wide FFN activation vs. the
+  768-wide one), `sd15_sample`'s `TransData`/`Conv2D`/`BatchMatMulV2` (up
+  to 7.4x, across the UNet's several resolution stages) -- tracks input
+  size proportionally once the shapes are pulled from `op_summary`, the
+  opposite of cause 5's signature (smaller input, paradoxically slower).
+  No further cliff of that kind found.
+
   `qwen3_decode`'s gap was checked for the same class of bug as cause 6
   (a dispatch guard silently picking the slow path) and ruled out directly:
   instrumenting `scaled_dot_product_attention_acl` with `override_kernel`
