@@ -950,10 +950,50 @@ workaround.
   `resnet50_infer`'s residual is now attributed to `aclnnConvolution`'s own
   `NCHW<->NC1HWC0`/`FRACTAL_Z` format-conversion overhead (including the
   redundant per-call weight reformat above) and `BNInfer`'s intrinsic
-  kernel cost, not a dispatch bug -- a fix would mean caching a
-  pre-transformed weight tensor across calls and getting aclnn to skip its
-  own internal conversion, which needs CANN-side format-pinning
-  documentation this session did not have before attempting it.
+  kernel cost, not a dispatch bug. A real, documented mechanism for the
+  weight half of that exists -- `aclnnCalculateConvolutionWeightSize` and
+  `aclnnTransConvolutionWeightGetWorkspaceSize`/`aclnnTransConvolutionWeight`
+  (`$CANN_HOME/aarch64-linux/include/aclnnop/aclnn_trans_convolution_weight.h`;
+  an analogous pair for matmul weights lives in
+  `aclnn_trans_matmul_weight.h`, relevant to `vit_b16_train`'s and
+  `bert_base_train`'s own matmul-heavy profiles) -- but the header
+  documents only the transform's own behavior (ND float16/float32 in,
+  private format out, cast to float16), not whether
+  `aclnnConvolutionGetWorkspaceSize` recognizes an already-transformed
+  weight and skips its own internal reconversion when given one; that
+  consumption behavior is undocumented. Confirming it needs a new native
+  C++ op runner (this codebase has no generic passthrough from Python to
+  an arbitrary aclnn call -- every aclnn function in use has its own
+  hand-written runner, confirmed by reading `backends/acl/kernels/native/`
+  end to end for a passthrough and finding none) plus a cache keyed safely
+  by the weight Var's identity and `var_ptr` (mirroring the existing
+  `_batch_norm_eval_coefficients` pattern in `normalization.py`, not a new
+  invalidation scheme). The realistic payoff even if it works is small: the
+  weight-reformat slice measured at about 691us of a 32.3ms step (roughly
+  2%), well under the activation `NCHW<->NC1HWC0` round-trip's ~4.2ms/step,
+  which this would not touch. Undocumented consumption behavior, real new
+  native-code surface, and a ~2% ceiling is the same shape of bet the
+  `convOutPads` mistake (cause 2's sibling investigation, KI-BACKEND-016)
+  already paid for guessing wrong on -- not attempted this session without
+  either stronger documentation or a reason to accept that specific risk.
+  Left here as a concrete, bounded lead with exact header paths and
+  signatures for whoever picks it up.
+
+  `qwen3_decode`'s gap was checked for the same class of bug as cause 6
+  (a dispatch guard silently picking the slow path) and ruled out directly:
+  instrumenting `scaled_dot_product_attention_acl` with `override_kernel`
+  during a real `new_tokens=8` run showed the prefill call (`q_len=128`,
+  causal) correctly taking `acl_flash_attention_score_v2` (28 calls = 1
+  prefill x 28 layers) and every decode call (`q_len=1`) correctly taking
+  the faster `acl_incre_flash_attention_v4` path (196 calls = 7 decode
+  steps x 28 layers) -- both exactly as they should. The gap is not an ACL
+  dispatch bug; it is the cProfile finding from earlier in this entry's
+  investigation, restated with the dispatch question now closed: thousands
+  of small Python-level op calls per generated token (an uncompiled,
+  28-layer, growing-KV-cache `generate()` loop -- `qwen3_decode_static`
+  avoids this by compiling, which a dynamically growing cache cannot do by
+  the workload's own design), a core/executor-level dispatch-overhead
+  characteristic rather than anything scoped to this backend.
   `bert_base_train`'s gap is similarly not a dispatch bug: an aclprof
   capture shows `MatMulV2` at 42.4% of device time (the
   expected dominant cost for a transformer) and `DSARandomUniform` --
@@ -997,8 +1037,16 @@ workaround.
   fixable cause (as the six above were) or accepted as a documented
   aclnn-kernel-speed or runtime-format characteristic with evidence ruling
   out dispatch fallback and host overhead first, the way `qwen3_prefill`,
-  `vit_b16_train`'s `grad_input` waste, and `resnet50_infer`'s remaining
-  `TransData`/`BNInfer` cost were.
+  `vit_b16_train`'s `grad_input` waste, `resnet50_infer`'s `TransData`/
+  `BNInfer` cost, `qwen3_decode`'s attention dispatch, and `bert_base_train`'s
+  `DSARandomUniform` cost all were. All four remaining workloads
+  (`vit_b16_train`, `resnet50_infer`, `bert_base_train`, `qwen3_decode`) are
+  now in that second state: a specific, named, evidence-backed cause with
+  no further dispatch-level lever found, not an open question. A
+  lower-confidence native-code lead exists for `resnet50_infer` (above);
+  pursuing it, or finding a core-level fix for `qwen3_decode`'s dispatch
+  overhead (outside this backend's scope), would be the next move if
+  either is picked up again.
 
 ## KI-BACKEND-018: `DropoutACL` reused the same mask forever and under-scaled its gradient, but nothing calls it
 
