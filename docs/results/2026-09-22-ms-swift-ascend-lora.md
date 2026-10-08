@@ -1,6 +1,6 @@
 # 2026-09-22：ms-swift LoRA 的 Ascend torch shim 验证
 
-**状态（2026-10-08 复核）：完整逐格矩阵见下文。tiny 单卡 LLaMA LoRA 公开 SFT/恢复 L0–L4 通过，L5 未运行；两卡 tiny IA3 fused AdamW 的公开训练/完整恢复在锁定配置下通过 L0–L4。DPO 与 ORPO 的旧双卡数值/恢复结果均来自 Jittor 1.3.11，不计入目标 2.0-refactor 验收；当前基线的逐 rank 设备驻留和前向值审计已排队。Qwen3 tiny 公开 SFT 的 L2 失败，tiny 推理 L0/L1/L4 通过，约 1.1B 推理严格数值比较失败。IA3 双卡旧 optimizer/device 失败仍按历史记录保留。所有通过只适用于各自锁定配置。真实多机仍受资源阻塞。**
+**状态（2026-10-08 复核）：完整逐格矩阵见下文。tiny 单卡 LLaMA LoRA 公开 SFT/恢复 L0–L4 通过，L5 未运行；两卡 tiny IA3 fused AdamW 的公开训练/完整恢复在锁定配置下通过 L0–L4。DPO/ORPO 旧双卡结果来自 Jittor 1.3.11，不计入目标 2.0-refactor。目标基线 DPO 原生 oracle 已通过，但严格候选 job 1761 在训练前因共享 Slurm 身份标记竞争失败；job-guard 修复后的候选 job 1797 正在运行。ORPO 全审计尚未开始：job 1790 在执行前因 launch 脚本权限失败，新的原生优先链 1800–1803 等待 DPO 比较后运行。Qwen3 tiny 公开 SFT 的 L2 失败，tiny 推理 L0/L1/L4 通过，约 1.1B 推理严格数值比较失败。IA3 双卡旧 optimizer/device 失败仍按历史记录保留。所有通过只适用于各自锁定配置。真实多机仍受资源阻塞。**
 
 各历史运行均绑定其 manifest 中的源基线与 dirty source，不因后续同步而改判。IA3 r3 工作负载的集成代码基线为 `a8dbba3984931a699aa814c31bcec7edf09fcb73`，upstream `2.0-refactor` 为 `7a18abf295668d9b19da5fa1657f5606e84b65a0`；此次追补的是同一原始运行产物的 comparator 协议 v2/v3，不重跑模型。此前报告记录的较早 SHA 仍是对应历史运行的真实基线。维护者：Torch compatibility / ACL backend maintainers。核心初始化、梯度状态语义、依赖版本、后端/驱动或协议变化时重新验证。本结果仍在持续验收；不创建 PR 或合并 PR。
 
@@ -11,7 +11,7 @@
 | 轨道 | 当前证据 | 未完成项或阻塞 |
 | --- | --- | --- |
 | 单 NPU 训练 | 锁定 tiny case 的公开三步对拍、完整 checkpoint fresh-process 精确续训通过，覆盖 L0–L4 适用门禁 | L5 真实尺寸稳态性能未完成；不推广其他模型或浮点输入 |
-| 单机多 NPU 训练 | IA3/fused AdamW 锁定配置公开双 rank 训练、严格 ACL 与完整恢复对拍通过；DPO/ORPO 有旧版公开双 rank 数值训练/恢复记录 | DPO/ORPO 旧候选均为 Jittor 1.3.11；目标 2.0-refactor 的设备/forward 全审计仍排队。其它模型/tuner未覆盖，L5 未运行；真实多机仍资源阻塞 |
+| 单机多 NPU 训练 | IA3/fused AdamW 锁定配置公开双 rank 训练、严格 ACL 与完整恢复对拍通过；当前 DPO native oracle 已完成 | DPO 目标基线候选 job 1761 在训练前遇到 Slurm marker 竞争；修复键 job 1797 运行中。ORPO job 1790 在模型前因脚本权限失败，修复键 1800–1803 排队。其它模型/tuner未覆盖，L5 未运行；真实多机仍资源阻塞 |
 | 真实多机多 NPU 训练 | `resource-blocked`：历史作业 720 及 2026-10-08 16:55 的 Slurm `sinfo -N -p npu` 均只列出 NPU 节点 `cscg-hw01`（`gpu:8`） | 需要至少两个真实主机且每主机至少两张 NPU；不能用单机多进程或主机别名代替。解除条件是调度器提供第二台实际 NPU 主机并能分配到两台各至少两卡 |
 | 单 NPU 推理 | tiny 公开 Swift 推理 L0/L1/L4 通过；约 1.1B 公开入口执行完成但 logits/KV 严格比较失败 | L5 稳态性能未运行；训练 L2/L3 不适用 |
 
@@ -29,6 +29,8 @@
 | 单机 2 NPU 训练：IA3、FP32、`adamw_torch_fused`、公开 `swift.cli.sft` 四步及 checkpoint-3 fresh-process 恢复 | passed | passed | passed | passed | passed | not-run | 新运行键 `ia3-world2-fullstate-fused-l3-r3-20261008`；Slurm 1713/1714 执行候选，1724 在 worker 上完成 protocol v3 比较。checkpoint 224 项与轨迹/设备 298 项零失败；optimizer 浮点状态按 `1e-7` 比较、adapter/参数轨迹及 forward/gradient/update 按预锁容差比较；每 rank NPU/HCCL、候选 strict error、fallback=0。L5 未运行。首次比较器 `1715` 与 protocol v2 的失败原样保留，原因及修正见下文。 |
 | 单机 2 NPU 训练：tiny LLaMA、Swift LoRA、FP32、公开 `swift.cli.rlhf --rlhf_type dpo` 三步与 checkpoint-3 fresh-process 恢复（历史 Jittor 1.3.11） | not-run | not-run | not-run | not-run | not-run | not-run | 运行键 `dpo-world2-20261003` 的候选日志实际为 Jittor 1.3.11，目标为 Jittor 2.0-refactor，故不计入本矩阵。旧 case 有公开双卡训练/恢复与 adapter/optimizer 数值比较，但没有全梯度、每 rank batch/forward 输出和计算张量物理设备审计；不得据此授予目标 L0–L4。需在当前基线下 oracle-first 完整审计。 |
 | 单机 2 NPU 训练：tiny LLaMA、Swift LoRA、FP32、公开 `swift.cli.rlhf --rlhf_type orpo` 四步及 checkpoint-3 fresh-process 恢复（历史 Jittor 1.3.11） | not-run | not-run | not-run | not-run | not-run | not-run | 运行键 `orpo-world2-rngfix-20261007` 的候选日志实际为 Jittor 1.3.11，不是本任务目标 Jittor 2.0-refactor；故不计入本矩阵。该历史运行的 native/candidate 数值轨迹与恢复 comparator 均为零失败，但 observer 未保存 forward 值或每 rank batch/参数/gradient/optimizer 物理 device。需在当前 2.0 基线下 oracle-first 重跑完整审计。 |
+| 单机 2 NPU 训练：tiny LLaMA、Swift LoRA、FP32、公开 DPO 四步与 checkpoint-3 fresh-process 恢复（目标 2.0-refactor） | not-run | not-run | not-run | not-run | not-run | not-run | 原生 job 1783 已完成且 worker 设备审计通过；候选 job 1761 编译 289/289 核心单元后因共享 job-id marker 被 ORPO compare 1787 覆盖，在训练前失败。新键 `dpo-world2-2x-full-audit-20261008-jobguardfix01` 的候选 job 1797 正在运行；1798/1799 等待。未产生候选训练证据，保留失败日志。 |
+| 单机 2 NPU 训练：tiny LLaMA、Swift LoRA、FP32、公开 ORPO 四步与 checkpoint-3 fresh-process 恢复（目标 2.0-refactor） | not-run | not-run | not-run | not-run | not-run | not-run | 身份审计键 job 1790 在模型前因 `launch.sh` 无执行权限失败。新键 `orpo-world2-2x-full-audit-20261008-jobguardfix01` 已提交原生优先链 1800–1803，依赖 DPO 比较 job 1799；尚无模型训练证据。 |
 | 单机多 NPU 训练：Swift LoRA 候选公开分布式路径 | not-run | not-run | failed | not-run | failed | not-run | 第 349 节：已有真实 HCCL 微检，但候选公开 Trainer 路径先后在 DDP hook 导入、token-count gather 处失败；未产生可验收的分布式训练轨迹。原生 2/4/8 NPU 仅为 oracle。 |
 | 真实多机训练：每台至少 2 NPU、至少 2 台主机 | resource-blocked | resource-blocked | resource-blocked | resource-blocked | resource-blocked | resource-blocked | 第 316、349 节：现有真实分配只有单主机；解除需实际多机 Slurm 资源。单机模拟不计。 |
 | 单 NPU 推理：其它模型族、其它 tuner 或推理配置 | not-run | not-run | not-applicable | not-applicable | not-run | not-run | 需按实际 registry/可选依赖另立锁定运行键；不从 Qwen3 tiny 推广。 |
@@ -491,3 +493,12 @@ trace comparator 同时检查连续训练与恢复轨迹中的每 rank batch、�
 跨实现比较 job 1407 对每 rank 四步 batch、21 冻结参数、1 buffer、28 梯度/更新、adapter、optimizer、scheduler 和 trainer；`failure_count=0`，batch/frozen/buffer 精确，28/28 可训练张量每步都实际更新，最大梯度差 `2.61e-8`、更新差 `5.60e-8`、参数差 `1.24e-7`。恢复 job 1408 在全新双 rank 进程从 checkpoint-3 继续到 step 4；job 1409 将其与候选 continuous 轨迹比较，`failure_count=0`，数据/冻结状态精确，梯度最大差 `1.49e-8`、更新最大差 `1.11e-8`，adapter 差 `1.11e-8`、optimizer 差 `3.73e-9`，scheduler/trainer 与双 rank RNG 状态精确。
 
 复核还发现 candidate logs 明确报告 Jittor `1.3.11.0`，与当前目标 Jittor 2.0-refactor 不同；故该运行在目标矩阵所有等级都记为 `not-run`。即便只看它的历史数值运行，它也不满足全部 L1–L4 设备门禁：`trajectory.py`/`recovery_trajectory.py` 仅将 batch、冻结参数、buffer、梯度及参数快照搬到 CPU 保存，没有记录原始 `.device`；也没有保存 model forward 输出值。日志中的 model `hf_device_map={'': npu:<rank>}` 与 `fallback=0` 不能代替对每 rank batch、forward、gradient、optimizer state 的物理驻留核验。故该行 L1 首先失败，L2–L4 保持未通过；需要新的带 device/forward observer 的双侧运行键才能关闭。数值比较与原失败历史仍按原样保留。详细原始结果和各作业日志位于 `$TASK_STATE/runs/orpo-world2-rngfix-20261007/`，CPU Generator 先行 oracle/回归及原修复说明见同目录 manifest 与 `cpu-generator-parity-20261007` manifest。
+
+
+## 目标 2.0-refactor 的 DPO/ORPO 全审计调度与失败记录（2026-10-08）
+
+运行时守卫原先依赖共享文件 `current-job-id`。DPO candidate job 1761 与 ORPO analysis job 1787 并发时，1787 覆盖了 1761 写入值；DPO 完成全部 289 个 `jittor_core` 编译单元和 ACL backend 编译后，shim 子进程按 fail-closed 规则拒绝 job identity。作业在训练前退出，没有候选 batch、forward、gradient、参数更新或 optimizer 状态证据，因此该键不授予目标 L0–L4。失败日志与 manifest 保存在 `$TASK_STATE/runs/dpo-world2-2x-full-audit-20261008/`。
+
+已将外部运行时守卫改为读取 `current-job-id-$SLURM_JOB_ID`，并要求 Slurm job ID 合法、存在该 job 的独立 marker，且 marker 与当前 job 一致；所有子进程仍须处于 Slurm overlap step。DPO 新键复用已成功且先运行的原生 torch_npu oracle job 1783（连续训练与 fresh-process resume），候选使用独立 JITTOR_HOME、运行缓存、launcher 状态和运行 ID，并串行复用已构建的 ccache 对象；Slurm 1797 正运行，1798 依赖候选、1799 依赖恢复完成。原始失败运行键与日志保留。
+
+ORPO identityfix01 job 1790 在启动 `launch.sh` 时因文件缺少可执行权限退出（exit 13），模型没有启动；该键保留为失败。全新 jobguardfix01 键修正权限和 per-job marker，原生 job 1800 依赖 DPO 比较 1799，候选 1801、恢复 1802、比较 1803 按 native-first/afterok 排序。当前这些作业仍为依赖等待状态。相关包、checksum、Slurm 日志和 manifest 均未版本化，位于 `$TASK_STATE/runs/`。
