@@ -1,6 +1,6 @@
 # 2026-09-22：ms-swift LoRA 的 Ascend torch shim 验证
 
-**状态（2026-10-08 21:24 CST 复核）：完整逐格矩阵见下文。tiny 单卡 LLaMA LoRA 公开 SFT/恢复 L0–L4 通过，L5 未运行；两卡 tiny IA3 fused AdamW 的公开训练/完整恢复在锁定配置下通过 L0–L4。DPO/ORPO 旧双卡结果来自 Jittor 1.3.11，不计入目标 2.0-refactor。目标基线 DPO 原生 oracle 已通过；候选 job 1797 在公开 L4 首步因 ACL fused graph 中未注册 `reindex/void` 且 strict fallback 阻断而失败，恢复/比较链 1798–1799 未完成。ORPO 的权限失败键 1790 保留；原生 oracle job 1800 已完成，候选 job 1801 仍在 Jittor Python 绑定扩展编译，尚无模型或设备审计证据；恢复/比较 job 1802–1803 依赖其终态。Qwen3 tiny 公开 SFT 的 L2 失败，tiny 推理 L0/L1/L4 通过，约 1.1B 推理严格数值比较失败。IA3 双卡旧 optimizer/device 失败仍按历史记录保留；另一个锁定的 fused AdamW 完整训练/恢复配置通过 L0–L4。所有通过只适用于各自锁定配置。真实多机仍受资源阻塞。**
+**状态（2026-10-08 22:03 CST 复核）：完整逐格矩阵见下文。tiny 单卡 LLaMA LoRA 公开 SFT/恢复 L0–L4 通过，L5 未运行；两卡 tiny IA3 fused AdamW 的公开训练/完整恢复在锁定配置下通过 L0–L4。目标基线 DPO 原生 oracle 已通过；candidate job 1797 在公开 L4 首步因 ACL fused graph 中未注册 `reindex/void` 且 strict fallback 阻断而失败，恢复 job 1798 因前置失败进入 `DependencyNeverSatisfied`，比较 job 1799 仍等待其终态。DPO 单步布尔掩码探针 job 1826 的 oracle 先运行成功，candidate 在 Jittor 导入前因 Slurm 脚本未设置私有 `CCACHE_DIR` 失败；此前 r2 同类窄探针通过但未复现 DPO 的融合图，不能消除公开训练失败。ORPO 权限失败键 1790 保留；新键原生 job 1800、candidate job 1801、fresh-process resume job 1802 和比较 job 1803 均成功。该锁定的双卡公开 ORPO 四步连续训练及 checkpoint-3 新进程续训完成 146 项比较、0 失败，逐 rank 设备审计通过，覆盖 L0–L4；L5 未运行。Qwen3 tiny 公开 SFT 的 L2 失败，tiny 推理 L0/L1/L4 通过，约 1.1B 推理严格数值比较失败。IA3 双卡旧 optimizer/device 失败仍按历史记录保留；另一个锁定的 fused AdamW 完整训练/恢复配置通过 L0–L4。所有通过只适用于各自锁定配置。真实多机仍受资源阻塞。**
 
 各历史运行均绑定其 manifest 中的源基线与 dirty source，不因后续同步而改判。IA3 r3 工作负载的集成代码基线为 `a8dbba3984931a699aa814c31bcec7edf09fcb73`，upstream `2.0-refactor` 为 `7a18abf295668d9b19da5fa1657f5606e84b65a0`；此次追补的是同一原始运行产物的 comparator 协议 v2/v3，不重跑模型。此前报告记录的较早 SHA 仍是对应历史运行的真实基线。维护者：Torch compatibility / ACL backend maintainers。核心初始化、梯度状态语义、依赖版本、后端/驱动或协议变化时重新验证。本结果仍在持续验收；不创建 PR 或合并 PR。
 
@@ -11,7 +11,7 @@
 | 轨道 | 当前证据 | 未完成项或阻塞 |
 | --- | --- | --- |
 | 单 NPU 训练 | 锁定 tiny case 的公开三步对拍、完整 checkpoint fresh-process 精确续训通过，覆盖 L0–L4 适用门禁 | L5 真实尺寸稳态性能未完成；不推广其他模型或浮点输入 |
-| 单机多 NPU 训练 | IA3/fused AdamW 锁定配置公开双 rank 训练、严格 ACL 与完整恢复对拍通过；DPO 与 ORPO 目标基线的公开候选均有独立 oracle | DPO job 1797 在公开 L4 首步 strict ACL fused graph 失败；ORPO native job 1800 完成，candidate job 1801 仍在绑定扩展编译，尚无模型证据。其它模型/tuner未覆盖，L5 未运行；真实多机仍资源阻塞 |
+| 单机多 NPU 训练 | IA3/fused AdamW 与 ORPO 锁定配置公开双 rank 训练、严格 ACL、逐 rank 设备驻留及完整恢复对拍通过；DPO 有独立 oracle 但 candidate 首步失败 | DPO job 1797 在公开 L4 首步 strict ACL fused graph 失败；ORPO 仅限下表中的 tiny LoRA/FP32/fused AdamW 配置，L5 未运行。其它模型/tuner未覆盖；真实多机仍资源阻塞 |
 | 真实多机多 NPU 训练 | `resource-blocked`：2026-10-08 21:24 CST 的 Slurm `sinfo -N -p npu` 仅列出实际 NPU 节点 `cscg-hw01`（`gpu:8`）；没有第二个 `cscg-hw00` 调度节点 | 需要至少两个真实主机且每主机至少两张 NPU；不能用单机多进程或主机别名代替。解除条件是调度器提供第二台实际 NPU 主机并能分配到两台各至少两卡 |
 | 单 NPU 推理 | tiny 公开 Swift 推理 L0/L1/L4 通过；约 1.1B 公开入口执行完成但 logits/KV 严格比较失败 | L5 稳态性能未运行；训练 L2/L3 不适用 |
 
@@ -30,7 +30,7 @@
 | 单机 2 NPU 训练：tiny LLaMA、Swift LoRA、FP32、公开 `swift.cli.rlhf --rlhf_type dpo` 三步与 checkpoint-3 fresh-process 恢复（历史 Jittor 1.3.11） | not-run | not-run | not-run | not-run | not-run | not-run | 运行键 `dpo-world2-20261003` 的候选日志实际为 Jittor 1.3.11，目标为 Jittor 2.0-refactor，故不计入本矩阵。旧 case 有公开双卡训练/恢复与 adapter/optimizer 数值比较，但没有全梯度、每 rank batch/forward 输出和计算张量物理设备审计；不得据此授予目标 L0–L4。需在当前基线下 oracle-first 完整审计。 |
 | 单机 2 NPU 训练：tiny LLaMA、Swift LoRA、FP32、公开 `swift.cli.rlhf --rlhf_type orpo` 四步及 checkpoint-3 fresh-process 恢复（历史 Jittor 1.3.11） | not-run | not-run | not-run | not-run | not-run | not-run | 运行键 `orpo-world2-rngfix-20261007` 的候选日志实际为 Jittor 1.3.11，不是本任务目标 Jittor 2.0-refactor；故不计入本矩阵。该历史运行的 native/candidate 数值轨迹与恢复 comparator 均为零失败，但 observer 未保存 forward 值或每 rank batch/参数/gradient/optimizer 物理 device。需在当前 2.0 基线下 oracle-first 重跑完整审计。 |
 | 单机 2 NPU 训练：tiny LLaMA、Swift LoRA、FP32、公开 DPO 四步与 checkpoint-3 fresh-process 恢复（目标 2.0-refactor） | not-run | not-run | not-run | not-run | failed | not-run | 原生 job 1783 已完成且 worker 设备审计通过；候选 job 1761 因共享 job-id marker 在训练前失败。新键 `dpo-world2-2x-full-audit-20261008-jobguardfix01` 的 job 1797 于 2026-10-08 20:20 CST 在公开 DPO L4 首步 compute 失败：两 rank 已记录初始状态、batch 与一个 forward 输出，但 `backends/acl/kernels/ops/getitem_op.py:304` 的 `slices.sum().item()` 将 bool-mask 生成图融合为含未注册 `reindex/void` 的 ACL fused op；`backend_fallback=error` 阻断 CPU 回退。失败日志记录 fused node `array → broadcast_to → reindex → broadcast_to → binary.subtract → unary.cast → unary.abs → binary.greater`，输入 `int64[]` 与 `int64[2,4]`、输出 `bool[2,4]`；触发公开调用为 `origin_per_token_logps[:num_examples][loss_mask[:num_examples]]`。这定位到掩码构造/切片参与的图，而非只有 bool getitem 的孤立图。L0/L1 因两侧逐 rank 设备审计与前向对拍未完成保持 `not-run`；未产生梯度、optimizer update 或 checkpoint，L2/L3/L5 保持 `not-run`。诊断键 `getitem-boolmask-fused-acl-repro-20261008-r2` 的 job 1812 在单 NPU 上先行 torch_npu oracle、后运行严格 ACL；两侧均得到固定 7 个选中值，候选 fallback=0，且 `.numpy()` 前的设备断言通过。它未复现/记录上述 `reindex` 图，不能清除 DPO 失败。job 1798 因 `afterok:1797` 变为 `DependencyNeverSatisfied`；为推进独立 ORPO 项，原生 oracle job 1800 的依赖已改为 `afterany:1812` 并于 20:45:55 启动，1801–1803 保持原生优先串行链。失败日志及不完整快照保留；r1 仅因缺少 srun overlap step 而在 oracle 前退出。 |
-| 单机 2 NPU 训练：tiny LLaMA、Swift LoRA、FP32、公开 ORPO 四步与 checkpoint-3 fresh-process 恢复（目标 2.0-refactor） | not-run | not-run | not-run | not-run | not-run | not-run | 身份审计键 job 1790 在模型前因 `launch.sh` 无执行权限失败。新键 `orpo-world2-2x-full-audit-20261008-jobguardfix01` 的原生 torch_npu oracle job 1800 已成功；严格 ACL 候选 job 1801 于 2026-10-08 20:48 CST 在 `cscg-hw01` 启动，复核时仍在 Jittor 首次编译（日志推进至 87/289），尚无候选训练证据。恢复 job 1802 与比较 job 1803 仍依赖候选/恢复完成；因此目标候选各级仍为 `not-run`。 |
+| 单机 2 NPU 训练：tiny LLaMA、Swift LoRA、FP32 fused AdamW、公开 ORPO 四步与 checkpoint-3 fresh-process 恢复（目标 2.0-refactor） | passed | passed | passed | passed | passed | not-run | 新键 `orpo-world2-2x-full-audit-20261008-jobguardfix01`；native oracle job 1800 → strict ACL candidate job 1801 → fresh-process resume job 1802 → comparator job 1803。公开 `swift.cli.rlhf --rlhf_type orpo`，world-size 2、HCCL、四步固定轨迹和 checkpoint-3 续训；146 项比较、0 失败。两侧 rank0/rank1 的参数、实际 batch/计算输入、前向输出、梯度及 84 个 optimizer-state 张量均在对应 NPU；candidate runtime=Jittor shim/provider=ACL、`backend_fallback=error`、起始/结束 fallback=0。native runtime/provider=torch_npu，通用 fallback counter `unavailable/unknown`。L5 真实尺寸稳态性能未运行；结论只适用于该锁定配置。未版本化原始证据位于 `$TASK_STATE/runs/orpo-world2-2x-full-audit-20261008-jobguardfix01/`。 |
 | 单机多 NPU 训练：Swift LoRA 候选公开分布式路径 | not-run | not-run | failed | not-run | failed | not-run | 第 349 节：已有真实 HCCL 微检，但候选公开 Trainer 路径先后在 DDP hook 导入、token-count gather 处失败；未产生可验收的分布式训练轨迹。原生 2/4/8 NPU 仅为 oracle。 |
 | 真实多机训练：每台至少 2 NPU、至少 2 台主机 | resource-blocked | resource-blocked | resource-blocked | resource-blocked | resource-blocked | resource-blocked | 第 316、349 节：现有真实分配只有单主机；解除需实际多机 Slurm 资源。单机模拟不计。 |
 | 单 NPU 推理：其它模型族、其它 tuner 或推理配置 | not-run | not-run | not-applicable | not-applicable | not-run | not-run | 需按实际 registry/可选依赖另立锁定运行键；不从 Qwen3 tiny 推广。 |
@@ -43,15 +43,15 @@ IA3 r3 已完成：native oracle 连续训练与 fresh-process resume 先运行�
 | --- | --- | --- |
 | 入口与配置 | not-run | tiny 单卡 `swift` SFT 与 Qwen3 tiny `swift infer` 已在上表逐配置判定；完整 CLI/launcher 与配置组合矩阵未跑完。 |
 | 模型族 | not-run | causal LM 的 tiny LLaMA、Qwen3 有配置级证据；Qwen3 约 1.1B 推理严格数值失败；seq2seq/encoder、视觉/多模态入口未运行。 |
-| tuner | not-run | Swift LoRA tiny 单卡 SFT 与 IA3 两卡 FP32 fused AdamW 有 L0–L4 证据；ORPO LoRA 有数值训练/恢复证据但缺 forward/device 门禁；其它 Swift tuner 与独立 PEFT 互操作未运行。 |
-| 训练流程 | not-run | 上表锁定的单卡 SFT 有通过/失败项；IA3 fused AdamW 双卡 SFT/恢复通过 L0–L4；ORPO 双卡数值轨迹/恢复比较通过但严格 device/forward 门禁未闭合；DPO/RL 与其它公开训练组合尚未完成相应 oracle 先行对拍。 |
-| optimizer、scheduler 与 AMP | not-run | tiny FP32 AdamW、ORPO 与 IA3 fused AdamW 的数值 optimizer checkpoint/恢复状态按锁定运行验收；ORPO 运行态 optimizer 物理驻留仍未审计，AMP及其它 optimizer 组合未运行。 |
-| checkpoint 与恢复 | not-run | tiny 单卡 LoRA、IA3 fused AdamW 有严格全新进程恢复证据；ORPO 数值恢复比较通过但缺逐 rank 状态驻留核验；其它模型、tuner 与状态组合未运行。 |
+| tuner | not-run | Swift LoRA tiny 单卡 SFT、IA3 两卡 FP32 fused AdamW、ORPO 锁定配置均有 L0–L4 证据；其它 Swift tuner 与独立 PEFT 互操作未运行。 |
+| 训练流程 | not-run | 上表锁定的单卡 SFT 有通过/失败项；IA3 fused AdamW 与 ORPO 双卡公开流程通过 L0–L4；DPO 在公开训练首步失败，其它 RL/奖励训练组合尚未完成 oracle-first 对拍。 |
+| optimizer、scheduler 与 AMP | not-run | tiny FP32 AdamW、ORPO 与 IA3 fused AdamW 的 optimizer checkpoint/恢复状态及逐 rank 物理驻留按锁定运行验收；AMP及其它 optimizer 组合未运行。 |
+| checkpoint 与恢复 | not-run | tiny 单卡 LoRA、IA3 fused AdamW、ORPO 有严格全新进程恢复证据；其它模型、tuner 与状态组合未运行。 |
 | 推理与生成 | not-run | Qwen3 tiny adapter 加载、logits 与 greedy token ID 通过；约 1.1B logits/KV 严格比较失败；采样、cache 变体和批处理矩阵未运行。 |
 | datasets、tokenizers、collator | not-run | 固定本地 JSONL 与锁定 tokenizer/collator 路径随已列训练 case 被执行；通用数据源、流式数据、划分策略及更广 collator 组合未运行。 |
 | safetensors、导出与设备迁移 | not-run | 已列 tiny 与 IA3 锁定配置 checkpoint/adapter 路径通过；其它 export 格式和跨设备迁移组合未运行。 |
 | Transformers、PEFT、Accelerate 等依赖调用 | not-run | 只验证 ms-swift 在上述公开 case 实际经过的调用路径；不代表任一依赖库独立全量支持，未覆盖 API 未运行。 |
-| 分布式 | not-run | IA3 锁定配置候选公开训练/恢复在 HCCL 双卡严格对拍通过；ORPO 公开 HCCL 数值轨迹/恢复对拍通过但物理驻留门禁未闭合；其它公开流程未覆盖，真实多机资源阻塞。原生多卡 oracle 不等于候选兼容。 |
+| 分布式 | not-run | IA3 与 ORPO 锁定配置候选公开训练/恢复在 HCCL 双卡严格对拍和逐 rank 驻留审计通过；其它公开流程未覆盖，真实多机资源阻塞。原生多卡 oracle 不等于候选兼容。 |
 | 稳态性能 | not-run | 所有轨道尚未同时满足相应正确性与 L4 前置，现存 tiny/编译计时不作 L5。 |
 
 功能面表中的多个状态表示不同锁定配置的分项状态，不是“部分通过”的合成等级；具体模型、流程、设备和拓扑以紧邻的工作负载矩阵及后续章节为准。
@@ -520,3 +520,11 @@ ORPO identityfix01 job 1790 在启动 `launch.sh` 时因文件缺少可执行权
 只读检查发现待运行 job 1821 的脚本在 oracle 前要求工作树 HEAD 精确为 `4d1c8c617d1c3f5b44bebb38f16065bc59c61355`，而当前基线为 `79eadd9c5ab225474c3253bb2c306b755646212f`。两 SHA 间 `src/`、`python/`、`backends/` 无差异，只有结果报告有变更，但原 SHA 守卫仍会阻止该脚本启动 oracle。保留 1821 原提交和 r3 运行目录，不覆盖其记录。
 
 最初新增 r4/job 1825 依赖 `afterany:1823`，并将精确 SHA 守卫更新到 `79eadd9`；提交本报告后，守卫又会因新的文档提交而失效。故在其启动前取消 1825，保留其作业历史和 r4 运行目录，再新增唯一运行键 `getitem-boolmask-fused-acl-repro-20261008-r5`，job 1826 同样依赖 `afterany:1823`。r5 固定代码基线 `79eadd9`，在 worker 上要求该基线为当前 checkout 的祖先且 `src/`、`python/`、`backends/` 无差异，同时记录 worker 实际 HEAD；这样允许后续仅文档的提交，不会掩盖源代码变化。r5 复用 r3 probe 与已完成 r2 编译缓存，先执行 torch_npu oracle，再顺序执行 `backend_fallback=error` 严格 ACL candidate，并断言设备驻留与零 fallback。job 1823 完成后才会启动 r5，不与现有 ORPO/恢复/比较 JIT 链并发。探针仅用于定位 `roll → bool mask → leading-row slice → masked select` 的 ACL 算子断点，不代表 DPO 公开训练通过。r3/r4/r5 脚本、manifest 和 SHA256SUMS 未版本化，分别位于 `$TASK_STATE/runs/getitem-boolmask-fused-acl-repro-20261008-r3/`、`r4/`、`r5/`。
+
+## 本轮终态复核（2026-10-08）
+
+ORPO `orpo-world2-2x-full-audit-20261008-jobguardfix01` 已由 native job 1800、candidate job 1801、恢复 job 1802 和 comparator job 1803 完整闭环。公开入口为 `swift.cli.rlhf --rlhf_type orpo`，tiny LLaMA、Swift LoRA、FP32 fused AdamW，world-size 2；连续四步并从 checkpoint-3 在新进程续到 step 4。比较器共 146 项、0 失败。native torch_npu 和 candidate ACL 两边 rank 0/1 的初始/最终参数、batch 对应计算输入、前向输出、梯度和 84 个 optimizer state 张量均分别在 `npu:0`/`npu:1`；candidate HCCL、`backend_fallback=error`，连续训练和恢复阶段 fallback 均为 0。native 通用 fallback counter 不可用，记录 unknown。此锁定配置的 L0–L4 通过，L5 未运行。
+
+DPO 独立公开候选仍在首步 ACL fused graph 处失败，首个未注册节点为 `reindex/void`；不能用已通过的窄布尔选择探针替代该图。r5/job 1826 的 native oracle 已运行，但 candidate 与结构门禁 job 1823 都在 Jittor 导入前因未设置 `CCACHE_DIR` 而退出；这是运行脚本环境错误，不是算子验收结果。Slurm 当前仍保留 1798 (`DependencyNeverSatisfied`) 与 1799（等待 1798）两项终态不可达的依赖作业；不把它们描述成仍会执行的验证。
+
+结构门禁 job 1832 在 NPU worker 上运行至结束：1385 passed、8 skipped，另有 `test_process_mode_contract.py` 两项因子进程冷启动超过默认 600 秒而失败，child collector 明确提示提高 `JITTOR_TEST_CHILD_TIMEOUT`。仅复制编译产物到另一 `JITTOR_HOME` 的 job 1858 在测试前因路径相关缓存键变化而重建 `jit_utils` 并以退出码 3 结束，不作为测试结果。随后 job 1860 在原 Jittor/ccache 路径上把 child timeout 设为 1200 秒，仅重跑该失败文件，4 项全部通过（20.90 秒）；因此定向覆盖已通过，但 job 1832 的全量结构门禁仍记为未全绿，不宣称全量门禁通过。原始日志在 `$TASK_STATE/runs/ms-swift-report-structure-timeout-retry-20261008/pytest.log` 和 `$TASK_STATE/runs/ms-swift-process-mode-contract-retry-20261008/pytest.log`。
