@@ -1,8 +1,8 @@
 # 2026-09-22：ms-swift LoRA 的 Ascend torch shim 验证
 
-**状态（2026-10-08 复核）：历史 tiny 单卡 LLaMA 训练/恢复与 tiny 推理按各自基线保留；Qwen3 公开 SFT 的 L2 严格数值仍失败，Qwen3 tiny 公开推理 L0/L1/L4 通过。新增 IA3 两卡公开 SFT 设备审计：标准 AdamW 的 14 个标量 step/rank 留在 CPU；fused AdamW 的参数、梯度和更新对拍通过预置容差，所有 42 个 optimizer state/rank 在 NPU且候选回退计数为 0，但候选 `optimizer.pt` 不是有效 ZIP、optimizer checkpoint 数值无法对拍，forward 值快照也缺失，因此严格门禁仍未通过。真实多机仍资源阻塞；所有轨道 L5 均未通过。**
+**状态（2026-10-08 复核）：完整逐格矩阵见下文。历史 tiny 单卡 LLaMA LoRA 公开训练/恢复 L0–L4 通过，L5 未运行；Qwen3 tiny 公开 SFT 在 L2 失败，tiny 推理 L0/L1/L4 通过，约 1.1B 推理严格数值比较失败。IA3 两卡旧审计的标准 AdamW 标量 step 留在 CPU；fused AdamW 的参数、梯度和更新通过预置容差，42 个 optimizer state/rank 在 NPU且候选回退计数为 0，但候选 `optimizer.pt` 不是有效 ZIP，forward 数值快照缺失，严格门禁失败。真实多机资源阻塞；所有 L5 均未运行或未通过前置条件。**
 
-已有运行基线为 `69c3bdfd80e67cfbbacb5192f59ae859f86f4df0`，另有各运行 manifest 所记录的未提交修改。当前工作树已同步到 `61294cd14673ba60f4072542a2e73ea2c8f8c509`；后续公开入口与断点运行采用该同步基线及各自归档的 dirty source；没有把旧运行重新标记为新提交验证。维护者：Torch compatibility / ACL backend maintainers。核心初始化、梯度状态语义、依赖版本、后端/驱动或协议变化时重新验证。本任务不提交、推送或创建 PR。
+各历史运行均绑定其 manifest 中的源基线与 dirty source，不因后续同步而改判。2026-10-08 本矩阵整理所依据的当前集成代码为 `a8dbba3984931a699aa814c31bcec7edf09fcb73`，upstream `2.0-refactor` 为 `7a18abf295668d9b19da5fa1657f5606e84b65a0`；IA3 r3 在途运行使用该代码基线。此前报告记录的较早 SHA 仍是对应历史运行的真实基线。维护者：Torch compatibility / ACL backend maintainers。核心初始化、梯度状态语义、依赖版本、后端/驱动或协议变化时重新验证。本结果仍在持续验收；不创建 PR 或合并 PR。
 
 ## 验收范围与当前状态
 
@@ -14,6 +14,42 @@
 | 单机多 NPU 训练 | 两卡真实 HCCL 通信通过；IA3 公开 SFT 三步/恢复轨迹已有数值证据；本轮 fresh 设备审计确认标准 AdamW CPU step 状态，fused AdamW 单步参数/梯度/update 数值匹配且 42/42 optimizer tensors 驻留 NPU | optimizer checkpoint 可移植性失败，fused optimizer 状态值与 forward 输出值未完成跨运行时对拍；公开训练完整设备门禁、完整恢复候选、真实尺寸稳态性能未通过；真实多机仍资源阻塞 |
 | 真实多机多 NPU 训练 | `resource-blocked`：作业 720 当前仅一个实际主机 | 需要至少两个真实主机且每主机至少两张 NPU；不能用单机多进程或主机别名代替 |
 | 单 NPU 推理 | tiny 公开 Swift 推理 L0/L1/L4 通过；约 1.1B 公开入口执行完成但 logits/KV 严格比较失败 | L5 稳态性能未运行；训练 L2/L3 不适用 |
+
+### 按锁定工作负载逐格记录的 L0–L5 矩阵（2026-10-08）
+
+格子状态只使用验收合同规定的 `passed`、`failed`、`not-run`、`resource-blocked`、`not-applicable`。只有同一行锁定配置及其原始运行证据支持的格子才标为通过；其它模型、拓扑或依赖不从该行外推。
+
+| 轨道 × 锁定工作负载 | L0 | L1 | L2 | L3 | L4 | L5 | 证据与首个未闭合点 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 单 NPU 训练：tiny LLaMA、Swift q/v LoRA、FP32、固定整数 token，公开 SFT | passed | passed | passed | passed | passed | not-run | 第 292、349 节的三步轨迹与全新进程恢复；真实尺寸稳态性能及浮点输入梯度未验证。 |
+| 单 NPU 训练：Qwen3 tiny、Swift LoRA、FP32、bool-mask SDPA、公开 SFT | passed | passed | failed | not-run | failed | not-run | 第 404 节：第二次 AdamW 更新超出预置容差；L3 未进入，L4 端到端严格验收失败。 |
+| 单 NPU 推理：Qwen3 tiny、原生 checkpoint adapter、greedy 4 token、公开 infer | passed | passed | not-applicable | not-applicable | passed | not-run | 第 404 节：加载状态、logits 与 token ID 精确相等；tiny 计时不满足 L5。 |
+| 单 NPU 推理：约 1.1B Qwen3、公开 infer | passed | failed | not-applicable | not-applicable | failed | not-run | 第 349 节：公开响应/tokens 精确，但 logits/KV 数值有 34/1618 项超出固定阈值；L5 不得启动。 |
+| 单机 2 NPU 训练：IA3、旧 fused AdamW 设备/单步审计、公开 SFT | passed | failed | failed | failed | failed | not-run | 第 420 节：forward 数值未保存，故 L1/L2 严格比较失败；候选 `optimizer.pt` 非有效 ZIP，L3 失败。局部参数、梯度、更新与设备观察保留为部分证据，不提升等级。 |
+| 单机多 NPU 训练：Swift LoRA 候选公开分布式路径 | not-run | not-run | failed | not-run | failed | not-run | 第 349 节：已有真实 HCCL 微检，但候选公开 Trainer 路径先后在 DDP hook 导入、token-count gather 处失败；未产生可验收的分布式训练轨迹。原生 2/4/8 NPU 仅为 oracle。 |
+| 真实多机训练：每台至少 2 NPU、至少 2 台主机 | resource-blocked | resource-blocked | resource-blocked | resource-blocked | resource-blocked | resource-blocked | 第 316、349 节：现有真实分配只有单主机；解除需实际多机 Slurm 资源。单机模拟不计。 |
+| 单 NPU 推理：其它模型族、其它 tuner 或推理配置 | not-run | not-run | not-applicable | not-applicable | not-run | not-run | 需按实际 registry/可选依赖另立锁定运行键；不从 Qwen3 tiny 推广。 |
+
+当前运行 `ia3-world2-fullstate-fused-l3-r3-20261008` 正在真实 Slurm 双 NPU worker 上进行严格 ACL 候选连续训练的首次编译。它尚无训练或比较结论，因此在本矩阵中仍按 `not-run` 处理；oracle 两侧已先运行，但不能替代候选对拍。候选完成后还需按原计划执行新进程恢复和 checkpoint/轨迹比较，再更新此表。运行原始证据及每次活性记录位于外部 `$TASK_STATE/runs/ia3-world2-fullstate-fused-l3-r3-20261008/`，未版本化。
+
+### 按适配功能面列出的覆盖边界
+
+| 功能面 | 全范围状态 | 已验证的锁定配置与缺口 |
+| --- | --- | --- |
+| 入口与配置 | not-run | tiny 单卡 `swift` SFT 与 Qwen3 tiny `swift infer` 已在上表逐配置判定；完整 CLI/launcher 与配置组合矩阵未跑完。 |
+| 模型族 | not-run | causal LM 的 tiny LLaMA、Qwen3 有配置级证据；Qwen3 约 1.1B 推理严格数值失败；seq2seq/encoder、视觉/多模态入口未运行。 |
+| tuner | not-run | Swift LoRA tiny 单卡通过；IA3 两卡严格门禁失败且新 full-state 运行未完成；其它 Swift tuner 与独立 PEFT 互操作未运行。 |
+| 训练流程 | not-run | 上表锁定的单卡 SFT 分别通过/失败；候选双卡公开 SFT 未闭合；DPO/ORPO/RL 等完整公开训练轨道尚无本报告可引用的原生先行对拍。 |
+| optimizer、scheduler 与 AMP | not-run | tiny FP32 AdamW 状态按对应训练结果验收；IA3 fused optimizer 的 checkpoint 序列化失败；混合精度轨迹未运行。 |
+| checkpoint 与恢复 | not-run | tiny 单卡 LoRA 的全新进程恢复通过；IA3 fused 候选 optimizer checkpoint 读取失败；候选双卡完整恢复等待 r3 证据。 |
+| 推理与生成 | not-run | Qwen3 tiny adapter 加载、logits 与 greedy token ID 通过；约 1.1B logits/KV 严格比较失败；采样、cache 变体和批处理矩阵未运行。 |
+| datasets、tokenizers、collator | not-run | 固定本地 JSONL 与锁定 tokenizer/collator 路径随已列训练 case 被执行；通用数据源、流式数据、划分策略及更广 collator 组合未运行。 |
+| safetensors、导出与设备迁移 | not-run | 已列 tiny checkpoint/adapter 加载路径通过；IA3 optimizer 序列化失败；其它 export 格式和跨设备迁移组合未运行。 |
+| Transformers、PEFT、Accelerate 等依赖调用 | not-run | 只验证 ms-swift 在上述公开 case 实际经过的调用路径；不代表任一依赖库独立全量支持，未覆盖 API 未运行。 |
+| 分布式 | not-run | 候选 HCCL 双卡通信微检通过；候选公开训练有失败记录，完整双卡对拍等待 IA3 r3；真实多机资源阻塞。原生多卡 oracle 不等于候选兼容。 |
+| 稳态性能 | not-run | 所有轨道尚未同时满足相应正确性与 L4 前置，现存 tiny/编译计时不作 L5。 |
+
+功能面表中的多个状态表示不同锁定配置的分项状态，不是“部分通过”的合成等级；具体模型、流程、设备和拓扑以紧邻的工作负载矩阵及后续章节为准。
 
 四轨分别验收，不能用单卡 case 或通信微检替代分布式公开 launcher。CPU 模型、对拍、训练与性能不在本任务范围。没有新增 adapter，也没有修改 ms-swift 掩盖缺口。已有记录证明的是下列确实执行的部分，不再沿用“单卡 L0–L5 完成”的总体声明。
 
