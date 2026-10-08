@@ -509,6 +509,8 @@ ORPO identityfix01 job 1790 在启动 `launch.sh` 时因文件缺少可执行权
 
 2026-10-08 21:54 CST，job 1801 已越过首次 JIT/ACL 扩展编译，进入真实公开 `swift.cli.rlhf --rlhf_type orpo` 两 rank 训练初始化：rank 0 配置显示 `Train: 0/4`，日志出现 HCCL all-gather；trace 目录已有 rank0/1 的 trainable initial、frozen initial、buffer initial 和 `batch-step0.npz`。这只证明入口已开始执行且 step-0 batch 已被采集；尚无前向数值、梯度、优化器更新/状态和 fallback 完整窗口。设备事件与最终回退计数由回调在 train-end 才落盘，因此目前仍不能通过 L0–L4。worker 同时输出 `torch.utils.checkpoint` 在 shim 下仅直接执行函数、不会重算激活的警告；该警告已保留，待结果中评估其对该工作负载内存/性能解释的影响。
 
+2026-10-08 21:56 CST，同一运行键的 rank0/1 均新增 `forward-values-step0-call0.npz`（各 4388 bytes），候选的 step-0 模型前向已实际返回并保存数值。两 rank 日志继续有 HCCL all-gather；尚无 step-0 梯度、optimizer state、更新后参数或完整 fallback/device 清单文件。故暂仅记录候选前向已执行，尚不能判定其设备驻留、数值对拍或训练层通过；比较仍依赖后续原生 oracle/候选结果与 job 1803。
+
 ## DPO Bool-mask 探针的过期基线修正（2026-10-08）
 
 只读检查发现待运行 job 1821 的脚本在 oracle 前要求工作树 HEAD 精确为 `4d1c8c617d1c3f5b44bebb38f16065bc59c61355`，而当前基线为 `79eadd9c5ab225474c3253bb2c306b755646212f`。两 SHA 间 `src/`、`python/`、`backends/` 无差异，只有结果报告有变更，但原 SHA 守卫仍会阻止该脚本启动 oracle。保留 1821 原提交和 r3 运行目录，不覆盖其记录。
