@@ -1,6 +1,6 @@
 # 2026-09-22：ms-swift LoRA 的 Ascend torch shim 验证
 
-**状态（2026-10-08 复核）：完整逐格矩阵见下文。tiny 单卡 LLaMA LoRA 公开训练/恢复 L0–L4 通过，L5 未运行；Qwen3 tiny 公开 SFT 的 L2 失败，tiny 推理 L0/L1/L4 通过，约 1.1B 推理严格数值比较失败。IA3 双卡旧 optimizer/device 审计仍保留其标准 AdamW scalar step 在 CPU、以及旧 fused checkpoint 序列化失败的结论；新的 IA3 fused AdamW 四步公开 SFT 与全新进程恢复在预置容差下通过 L0–L4，候选两 rank ACL/HCCL、零回退和每步设备驻留检查通过。该配置 L5 未运行，不能推广到其它 tuner/工作负载。真实多机仍受资源阻塞。**
+**状态（2026-10-08 复核）：完整逐格矩阵见下文。tiny 单卡 LLaMA LoRA 公开 SFT/恢复 L0–L4 通过，L5 未运行；两卡 tiny IA3 fused AdamW 的公开训练/完整恢复在锁定配置下通过 L0–L4。DPO 与 ORPO 的旧双卡数值/恢复结果均来自 Jittor 1.3.11，不计入目标 2.0-refactor 验收；当前基线的逐 rank 设备驻留和前向值审计已排队。Qwen3 tiny 公开 SFT 的 L2 失败，tiny 推理 L0/L1/L4 通过，约 1.1B 推理严格数值比较失败。IA3 双卡旧 optimizer/device 失败仍按历史记录保留。所有通过只适用于各自锁定配置。真实多机仍受资源阻塞。**
 
 各历史运行均绑定其 manifest 中的源基线与 dirty source，不因后续同步而改判。IA3 r3 工作负载的集成代码基线为 `a8dbba3984931a699aa814c31bcec7edf09fcb73`，upstream `2.0-refactor` 为 `7a18abf295668d9b19da5fa1657f5606e84b65a0`；此次追补的是同一原始运行产物的 comparator 协议 v2/v3，不重跑模型。此前报告记录的较早 SHA 仍是对应历史运行的真实基线。维护者：Torch compatibility / ACL backend maintainers。核心初始化、梯度状态语义、依赖版本、后端/驱动或协议变化时重新验证。本结果仍在持续验收；不创建 PR 或合并 PR。
 
@@ -11,8 +11,8 @@
 | 轨道 | 当前证据 | 未完成项或阻塞 |
 | --- | --- | --- |
 | 单 NPU 训练 | 锁定 tiny case 的公开三步对拍、完整 checkpoint fresh-process 精确续训通过，覆盖 L0–L4 适用门禁 | L5 真实尺寸稳态性能未完成；不推广其他模型或浮点输入 |
-| 单机多 NPU 训练 | IA3 fused AdamW 四步公开 SFT 与 checkpoint-3 全新进程恢复在两 rank 完成；checkpoint 比较 224 项、轨迹/设备比较 298 项均零失败，严格 ACL 回退计数 0 | 结论仅覆盖该 FP32 IA3/fused AdamW 配置；其它 tuner/公开流程未覆盖，L5 真实尺寸性能未运行；真实多机仍资源阻塞 |
-| 真实多机多 NPU 训练 | `resource-blocked`：历史作业 720 与 2026-10-08 15:41 的当前 Slurm `sinfo -N` 均只列出 NPU 节点 `cscg-hw01`（`gpu:8`） | 需要至少两个真实主机且每主机至少两张 NPU；不能用单机多进程或主机别名代替。解除条件是调度器提供第二台实际 NPU 主机并能分配到两台各至少两卡 |
+| 单机多 NPU 训练 | IA3/fused AdamW 锁定配置公开双 rank 训练、严格 ACL 与完整恢复对拍通过；DPO/ORPO 有旧版公开双 rank 数值训练/恢复记录 | DPO/ORPO 旧候选均为 Jittor 1.3.11；目标 2.0-refactor 的设备/forward 全审计仍排队。其它模型/tuner未覆盖，L5 未运行；真实多机仍资源阻塞 |
+| 真实多机多 NPU 训练 | `resource-blocked`：历史作业 720 及 2026-10-08 16:55 的 Slurm `sinfo -N -p npu` 均只列出 NPU 节点 `cscg-hw01`（`gpu:8`） | 需要至少两个真实主机且每主机至少两张 NPU；不能用单机多进程或主机别名代替。解除条件是调度器提供第二台实际 NPU 主机并能分配到两台各至少两卡 |
 | 单 NPU 推理 | tiny 公开 Swift 推理 L0/L1/L4 通过；约 1.1B 公开入口执行完成但 logits/KV 严格比较失败 | L5 稳态性能未运行；训练 L2/L3 不适用 |
 
 ### 按锁定工作负载逐格记录的 L0–L5 矩阵（2026-10-08）
@@ -27,6 +27,8 @@
 | 单 NPU 推理：约 1.1B Qwen3、公开 infer | passed | failed | not-applicable | not-applicable | failed | not-run | 第 349 节：公开响应/tokens 精确，但 logits/KV 数值有 34/1618 项超出固定阈值；L5 不得启动。 |
 | 单机 2 NPU 训练：IA3、旧 fused AdamW 设备/单步审计、公开 SFT | passed | failed | failed | failed | failed | not-run | 第 420 节：forward 数值未保存，故 L1/L2 严格比较失败；候选 `optimizer.pt` 非有效 ZIP，L3 失败。局部参数、梯度、更新与设备观察保留为部分证据，不提升等级。 |
 | 单机 2 NPU 训练：IA3、FP32、`adamw_torch_fused`、公开 `swift.cli.sft` 四步及 checkpoint-3 fresh-process 恢复 | passed | passed | passed | passed | passed | not-run | 新运行键 `ia3-world2-fullstate-fused-l3-r3-20261008`；Slurm 1713/1714 执行候选，1724 在 worker 上完成 protocol v3 比较。checkpoint 224 项与轨迹/设备 298 项零失败；optimizer 浮点状态按 `1e-7` 比较、adapter/参数轨迹及 forward/gradient/update 按预锁容差比较；每 rank NPU/HCCL、候选 strict error、fallback=0。L5 未运行。首次比较器 `1715` 与 protocol v2 的失败原样保留，原因及修正见下文。 |
+| 单机 2 NPU 训练：tiny LLaMA、Swift LoRA、FP32、公开 `swift.cli.rlhf --rlhf_type dpo` 三步与 checkpoint-3 fresh-process 恢复（历史 Jittor 1.3.11） | not-run | not-run | not-run | not-run | not-run | not-run | 运行键 `dpo-world2-20261003` 的候选日志实际为 Jittor 1.3.11，目标为 Jittor 2.0-refactor，故不计入本矩阵。旧 case 有公开双卡训练/恢复与 adapter/optimizer 数值比较，但没有全梯度、每 rank batch/forward 输出和计算张量物理设备审计；不得据此授予目标 L0–L4。需在当前基线下 oracle-first 完整审计。 |
+| 单机 2 NPU 训练：tiny LLaMA、Swift LoRA、FP32、公开 `swift.cli.rlhf --rlhf_type orpo` 四步及 checkpoint-3 fresh-process 恢复（历史 Jittor 1.3.11） | not-run | not-run | not-run | not-run | not-run | not-run | 运行键 `orpo-world2-rngfix-20261007` 的候选日志实际为 Jittor 1.3.11，不是本任务目标 Jittor 2.0-refactor；故不计入本矩阵。该历史运行的 native/candidate 数值轨迹与恢复 comparator 均为零失败，但 observer 未保存 forward 值或每 rank batch/参数/gradient/optimizer 物理 device。需在当前 2.0 基线下 oracle-first 重跑完整审计。 |
 | 单机多 NPU 训练：Swift LoRA 候选公开分布式路径 | not-run | not-run | failed | not-run | failed | not-run | 第 349 节：已有真实 HCCL 微检，但候选公开 Trainer 路径先后在 DDP hook 导入、token-count gather 处失败；未产生可验收的分布式训练轨迹。原生 2/4/8 NPU 仅为 oracle。 |
 | 真实多机训练：每台至少 2 NPU、至少 2 台主机 | resource-blocked | resource-blocked | resource-blocked | resource-blocked | resource-blocked | resource-blocked | 第 316、349 节：现有真实分配只有单主机；解除需实际多机 Slurm 资源。单机模拟不计。 |
 | 单 NPU 推理：其它模型族、其它 tuner 或推理配置 | not-run | not-run | not-applicable | not-applicable | not-run | not-run | 需按实际 registry/可选依赖另立锁定运行键；不从 Qwen3 tiny 推广。 |
@@ -39,15 +41,15 @@ IA3 r3 已完成：native oracle 连续训练与 fresh-process resume 先运行�
 | --- | --- | --- |
 | 入口与配置 | not-run | tiny 单卡 `swift` SFT 与 Qwen3 tiny `swift infer` 已在上表逐配置判定；完整 CLI/launcher 与配置组合矩阵未跑完。 |
 | 模型族 | not-run | causal LM 的 tiny LLaMA、Qwen3 有配置级证据；Qwen3 约 1.1B 推理严格数值失败；seq2seq/encoder、视觉/多模态入口未运行。 |
-| tuner | not-run | Swift LoRA tiny 单卡通过；IA3 两卡 FP32 fused AdamW 公开 SFT/恢复 L0–L4 对拍通过；其它 Swift tuner 与独立 PEFT 互操作未运行。 |
-| 训练流程 | not-run | 上表锁定的单卡 SFT 分别通过/失败，IA3 fused AdamW 双卡公开 SFT/恢复 L0–L4 对拍通过；DPO/ORPO/RL 等其它公开训练轨道尚未完成相应 oracle 先行对拍。 |
-| optimizer、scheduler 与 AMP | not-run | tiny FP32 AdamW 与 IA3 fused AdamW checkpoint/恢复状态分别按对应锁定运行验收；混合精度轨迹及其它 optimizer 组合未运行。 |
-| checkpoint 与恢复 | not-run | tiny 单卡 LoRA 与 IA3 fused AdamW 这两个锁定配置的全新进程恢复通过；其它模型、tuner 与状态组合未运行。 |
+| tuner | not-run | Swift LoRA tiny 单卡 SFT 与 IA3 两卡 FP32 fused AdamW 有 L0–L4 证据；ORPO LoRA 有数值训练/恢复证据但缺 forward/device 门禁；其它 Swift tuner 与独立 PEFT 互操作未运行。 |
+| 训练流程 | not-run | 上表锁定的单卡 SFT 有通过/失败项；IA3 fused AdamW 双卡 SFT/恢复通过 L0–L4；ORPO 双卡数值轨迹/恢复比较通过但严格 device/forward 门禁未闭合；DPO/RL 与其它公开训练组合尚未完成相应 oracle 先行对拍。 |
+| optimizer、scheduler 与 AMP | not-run | tiny FP32 AdamW、ORPO 与 IA3 fused AdamW 的数值 optimizer checkpoint/恢复状态按锁定运行验收；ORPO 运行态 optimizer 物理驻留仍未审计，AMP及其它 optimizer 组合未运行。 |
+| checkpoint 与恢复 | not-run | tiny 单卡 LoRA、IA3 fused AdamW 有严格全新进程恢复证据；ORPO 数值恢复比较通过但缺逐 rank 状态驻留核验；其它模型、tuner 与状态组合未运行。 |
 | 推理与生成 | not-run | Qwen3 tiny adapter 加载、logits 与 greedy token ID 通过；约 1.1B logits/KV 严格比较失败；采样、cache 变体和批处理矩阵未运行。 |
 | datasets、tokenizers、collator | not-run | 固定本地 JSONL 与锁定 tokenizer/collator 路径随已列训练 case 被执行；通用数据源、流式数据、划分策略及更广 collator 组合未运行。 |
 | safetensors、导出与设备迁移 | not-run | 已列 tiny 与 IA3 锁定配置 checkpoint/adapter 路径通过；其它 export 格式和跨设备迁移组合未运行。 |
 | Transformers、PEFT、Accelerate 等依赖调用 | not-run | 只验证 ms-swift 在上述公开 case 实际经过的调用路径；不代表任一依赖库独立全量支持，未覆盖 API 未运行。 |
-| 分布式 | not-run | IA3 锁定配置候选公开 SFT/恢复在 HCCL 双卡对拍通过；其它公开流程未覆盖，真实多机资源阻塞。原生多卡 oracle 不等于候选兼容。 |
+| 分布式 | not-run | IA3 锁定配置候选公开训练/恢复在 HCCL 双卡严格对拍通过；ORPO 公开 HCCL 数值轨迹/恢复对拍通过但物理驻留门禁未闭合；其它公开流程未覆盖，真实多机资源阻塞。原生多卡 oracle 不等于候选兼容。 |
 | 稳态性能 | not-run | 所有轨道尚未同时满足相应正确性与 L4 前置，现存 tiny/编译计时不作 L5。 |
 
 功能面表中的多个状态表示不同锁定配置的分项状态，不是“部分通过”的合成等级；具体模型、流程、设备和拓扑以紧邻的工作负载矩阵及后续章节为准。
@@ -480,3 +482,12 @@ fused profile 在预先锁定的 FP32 容差下：两 rank 的 14 个初始 IA3 
 trace comparator 同时检查连续训练与恢复轨迹中的每 rank batch、前向输出、梯度、更新前后参数、最终参数和 optimizer 数值/标量；checkpoint 比较检查完整键、shape、dtype、有限值、adapter/optimizer/scheduler/trainer 状态及两 rank RNG。候选每 rank runtime 为 ACL/HCCL、`backend_fallback=error` 且 fallback 计数 0；batch、forward、trainable 参数、梯度和 optimizer tensors 的物理设备记录均为对应 NPU。原生通用 fallback counter 不可用，记为 unknown。工作负载满足适用 L0–L4；不授予其他模型、tuner、数据/精度组合或 L5 性能通过。
 
 2026-10-08 的 Slurm structure job 1718 在 NPU worker 完成：`tests/structure` 1389 passed、6 skipped、24 warnings，严格 execution 要求开启；`tools/check_repo_layout.sh` 通过。该门禁完成后报告矩阵按上述结果更新。
+
+
+## ORPO 双卡公开训练与恢复增量（2026-10-07）
+
+既有 ORPO 失败键和 rank 样本顺序错位结论继续保留。本轮只采用修正 RNG/CPU Generator 语义后的新运行 `orpo-world2-rngfix-20261007`：锁定 tiny LLaMA、Swift LoRA、FP32、两条偏好样本、seed/data_seed=42、HCCL world-size=2、四步公开 `swift.cli.rlhf --rlhf_type orpo`。原生公开轨迹 oracle job 1390 在先；候选 job 1406 完成 continuous steps 1–4 和 checkpoint-1..4，两个 rank 都报告严格成功及 fallback=0。
+
+跨实现比较 job 1407 对每 rank 四步 batch、21 冻结参数、1 buffer、28 梯度/更新、adapter、optimizer、scheduler 和 trainer；`failure_count=0`，batch/frozen/buffer 精确，28/28 可训练张量每步都实际更新，最大梯度差 `2.61e-8`、更新差 `5.60e-8`、参数差 `1.24e-7`。恢复 job 1408 在全新双 rank 进程从 checkpoint-3 继续到 step 4；job 1409 将其与候选 continuous 轨迹比较，`failure_count=0`，数据/冻结状态精确，梯度最大差 `1.49e-8`、更新最大差 `1.11e-8`，adapter 差 `1.11e-8`、optimizer 差 `3.73e-9`，scheduler/trainer 与双 rank RNG 状态精确。
+
+复核还发现 candidate logs 明确报告 Jittor `1.3.11.0`，与当前目标 Jittor 2.0-refactor 不同；故该运行在目标矩阵所有等级都记为 `not-run`。即便只看它的历史数值运行，它也不满足全部 L1–L4 设备门禁：`trajectory.py`/`recovery_trajectory.py` 仅将 batch、冻结参数、buffer、梯度及参数快照搬到 CPU 保存，没有记录原始 `.device`；也没有保存 model forward 输出值。日志中的 model `hf_device_map={'': npu:<rank>}` 与 `fallback=0` 不能代替对每 rank batch、forward、gradient、optimizer state 的物理驻留核验。故该行 L1 首先失败，L2–L4 保持未通过；需要新的带 device/forward observer 的双侧运行键才能关闭。数值比较与原失败历史仍按原样保留。详细原始结果和各作业日志位于 `$TASK_STATE/runs/orpo-world2-rngfix-20261007/`，CPU Generator 先行 oracle/回归及原修复说明见同目录 manifest 与 `cpu-generator-parity-20261007` manifest。
