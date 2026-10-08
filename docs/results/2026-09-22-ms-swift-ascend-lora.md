@@ -528,3 +528,9 @@ ORPO `orpo-world2-2x-full-audit-20261008-jobguardfix01` 已由 native job 1800�
 DPO 独立公开候选仍在首步 ACL fused graph 处失败，首个未注册节点为 `reindex/void`；不能用已通过的窄布尔选择探针替代该图。r5/job 1826 的 native oracle 已运行，但 candidate 与结构门禁 job 1823 都在 Jittor 导入前因未设置 `CCACHE_DIR` 而退出；这是运行脚本环境错误，不是算子验收结果。Slurm 当前仍保留 1798 (`DependencyNeverSatisfied`) 与 1799（等待 1798）两项终态不可达的依赖作业；不把它们描述成仍会执行的验证。
 
 结构门禁 job 1832 在 NPU worker 上运行至结束：1385 passed、8 skipped，另有 `test_process_mode_contract.py` 两项因子进程冷启动超过默认 600 秒而失败，child collector 明确提示提高 `JITTOR_TEST_CHILD_TIMEOUT`。仅复制编译产物到另一 `JITTOR_HOME` 的 job 1858 在测试前因路径相关缓存键变化而重建 `jit_utils` 并以退出码 3 结束，不作为测试结果。随后 job 1860 在原 Jittor/ccache 路径上把 child timeout 设为 1200 秒，仅重跑该失败文件，4 项全部通过（20.90 秒）；因此定向覆盖已通过，但 job 1832 的全量结构门禁仍记为未全绿，不宣称全量门禁通过。原始日志在 `$TASK_STATE/runs/ms-swift-report-structure-timeout-retry-20261008/pytest.log` 和 `$TASK_STATE/runs/ms-swift-process-mode-contract-retry-20261008/pytest.log`。
+
+## DPO 掩码融合图的精确重现（2026-10-09）
+
+运行键 `dpo-mask-select-exact-repro-20261008-r1`（worker job 1862）以两个 chosen/rejected label batch 重现公开路径 `cat → roll → labels != -100 → origin[:num_examples][loss_mask[:num_examples]].mean()`。原生 torch_npu oracle 先在 NPU 完成，labels、mask、origin、selected、loss 在拷贝回主机前均为 `npu:0`；选中值为 `[0,1,2,4,5,6]`，均值为 `3`。随后 candidate 使用 ACL 和 `backend_fallback=error`，在 `getitem_op.py:304` 计算 `slices.sum().item()` 时失败。严格门禁报告融合序列 `array → reindex → broadcast_to → unary.cast → binary.not_equal` 中 `reindex/void` 未注册；fallback 被拒绝，没有把该失败转为 CPU 执行或通过。原始 oracle、候选栈和脚本位于 `$TASK_STATE/runs/dpo-mask-select-exact-repro-20261008-r1/`，候选日志为 `candidate-1862.jsonl`。
+
+该精确路径确认公开失败至少发生在生成 `labels != -100` 的掩码图，而不仅是后续 bool masked-select/getitem；但目前日志没有记录 ReindexOp 的索引表达式与 overflow 元数据，故尚不能安全地把它化约为 Expand 或声称通用 reindex 已有 ACL 语义。DPO 公开入口仍是首步失败，L0/L1 严格验收不完整，L2/L3/L5 未运行；下一步先从 worker 生成图/Op 元数据确定这一实例的实际映射，再评估有语义约束的 ACL 实现或融合切分。通用 `ReindexOp` 支持任意索引表达式、overflow 条件和额外索引张量，不能通过无条件名称映射到 `Expand` 处理。
