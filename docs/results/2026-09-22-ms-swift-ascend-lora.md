@@ -1,6 +1,6 @@
 # 2026-09-22：ms-swift LoRA 的 Ascend torch shim 验证
 
-**状态（2026-10-08 复核）：完整逐格矩阵见下文。tiny 单卡 LLaMA LoRA 公开 SFT/恢复 L0–L4 通过，L5 未运行；两卡 tiny IA3 fused AdamW 的公开训练/完整恢复在锁定配置下通过 L0–L4。DPO/ORPO 旧双卡结果来自 Jittor 1.3.11，不计入目标 2.0-refactor。目标基线 DPO 原生 oracle 已通过，但严格候选 job 1761 在训练前因共享 Slurm 身份标记竞争失败；job-guard 修复后的候选 job 1797 正在运行。ORPO 全审计尚未开始：job 1790 在执行前因 launch 脚本权限失败，新的原生优先链 1800–1803 等待 DPO 比较后运行。Qwen3 tiny 公开 SFT 的 L2 失败，tiny 推理 L0/L1/L4 通过，约 1.1B 推理严格数值比较失败。IA3 双卡旧 optimizer/device 失败仍按历史记录保留。所有通过只适用于各自锁定配置。真实多机仍受资源阻塞。**
+**状态（2026-10-08 21:24 CST 复核）：完整逐格矩阵见下文。tiny 单卡 LLaMA LoRA 公开 SFT/恢复 L0–L4 通过，L5 未运行；两卡 tiny IA3 fused AdamW 的公开训练/完整恢复在锁定配置下通过 L0–L4。DPO/ORPO 旧双卡结果来自 Jittor 1.3.11，不计入目标 2.0-refactor。目标基线 DPO 原生 oracle 已通过；候选 job 1797 在公开 L4 首步因 ACL fused graph 中未注册 `reindex/void` 且 strict fallback 阻断而失败，恢复/比较链 1798–1799 未完成。ORPO 的权限失败键 1790 保留；原生 oracle job 1800 已完成，候选 job 1801 仍在 Jittor Python 绑定扩展编译，尚无模型或设备审计证据；恢复/比较 job 1802–1803 依赖其终态。Qwen3 tiny 公开 SFT 的 L2 失败，tiny 推理 L0/L1/L4 通过，约 1.1B 推理严格数值比较失败。IA3 双卡旧 optimizer/device 失败仍按历史记录保留；另一个锁定的 fused AdamW 完整训练/恢复配置通过 L0–L4。所有通过只适用于各自锁定配置。真实多机仍受资源阻塞。**
 
 各历史运行均绑定其 manifest 中的源基线与 dirty source，不因后续同步而改判。IA3 r3 工作负载的集成代码基线为 `a8dbba3984931a699aa814c31bcec7edf09fcb73`，upstream `2.0-refactor` 为 `7a18abf295668d9b19da5fa1657f5606e84b65a0`；此次追补的是同一原始运行产物的 comparator 协议 v2/v3，不重跑模型。此前报告记录的较早 SHA 仍是对应历史运行的真实基线。维护者：Torch compatibility / ACL backend maintainers。核心初始化、梯度状态语义、依赖版本、后端/驱动或协议变化时重新验证。本结果仍在持续验收；不创建 PR 或合并 PR。
 
@@ -11,8 +11,8 @@
 | 轨道 | 当前证据 | 未完成项或阻塞 |
 | --- | --- | --- |
 | 单 NPU 训练 | 锁定 tiny case 的公开三步对拍、完整 checkpoint fresh-process 精确续训通过，覆盖 L0–L4 适用门禁 | L5 真实尺寸稳态性能未完成；不推广其他模型或浮点输入 |
-| 单机多 NPU 训练 | IA3/fused AdamW 锁定配置公开双 rank 训练、严格 ACL 与完整恢复对拍通过；当前 DPO native oracle 已完成 | DPO 目标基线候选 job 1761 在训练前遇到 Slurm marker 竞争；修复键 job 1797 运行中。ORPO job 1790 在模型前因脚本权限失败，修复键 1800–1803 排队。其它模型/tuner未覆盖，L5 未运行；真实多机仍资源阻塞 |
-| 真实多机多 NPU 训练 | `resource-blocked`：历史作业 720 及 2026-10-08 16:55 的 Slurm `sinfo -N -p npu` 均只列出 NPU 节点 `cscg-hw01`（`gpu:8`） | 需要至少两个真实主机且每主机至少两张 NPU；不能用单机多进程或主机别名代替。解除条件是调度器提供第二台实际 NPU 主机并能分配到两台各至少两卡 |
+| 单机多 NPU 训练 | IA3/fused AdamW 锁定配置公开双 rank 训练、严格 ACL 与完整恢复对拍通过；DPO 与 ORPO 目标基线的公开候选均有独立 oracle | DPO job 1797 在公开 L4 首步 strict ACL fused graph 失败；ORPO native job 1800 完成，candidate job 1801 仍在绑定扩展编译，尚无模型证据。其它模型/tuner未覆盖，L5 未运行；真实多机仍资源阻塞 |
+| 真实多机多 NPU 训练 | `resource-blocked`：2026-10-08 21:24 CST 的 Slurm `sinfo -N -p npu` 仅列出实际 NPU 节点 `cscg-hw01`（`gpu:8`）；没有第二个 `cscg-hw00` 调度节点 | 需要至少两个真实主机且每主机至少两张 NPU；不能用单机多进程或主机别名代替。解除条件是调度器提供第二台实际 NPU 主机并能分配到两台各至少两卡 |
 | 单 NPU 推理 | tiny 公开 Swift 推理 L0/L1/L4 通过；约 1.1B 公开入口执行完成但 logits/KV 严格比较失败 | L5 稳态性能未运行；训练 L2/L3 不适用 |
 
 ### 按锁定工作负载逐格记录的 L0–L5 矩阵（2026-10-08）
