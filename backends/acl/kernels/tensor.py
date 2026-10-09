@@ -189,9 +189,28 @@ def floor_int_acl(x):
     return FloorIntACL()(x)
 
 
+#: The numpy integer scalar types that reach an index, resolved once. Asking
+#: `hasattr(np, "int128")` per call goes through numpy's module `__getattr__`
+#: and raises -- twice an index, 5710 times a Qwen3 decode step -- to learn
+#: something that is fixed for the process.
+_NUMPY_INTS = tuple(
+    getattr(np, name) for name in
+    ("int8", "int16", "int32", "int64", "int128", "int256")
+    if hasattr(np, name))
+
+
 def getitem_acl(x, slices, return_x=None):
     if return_x is not None:
         return None
+    # A tuple of plain slices and ellipses -- `q[..., :64]` in a rotary
+    # embedding, `cache[:, :, :n]` in an attention -- is what the decode
+    # loop indexes with, and none of the shapes below apply to it.
+    if type(slices) is tuple and x.ndim > 1:
+        for item in slices:
+            if item is not Ellipsis and item.__class__ is not slice:
+                break
+        else:
+            return _getitem_without_none(x, slices)
     # ZeRO unflattens one dense 1-D parameter buffer with unit-stride slices.
     # The native getitem represents those slices as storage views, while the
     # ACL SliceV2 lowering materializes every result.  Materializing hundreds
@@ -209,11 +228,7 @@ def getitem_acl(x, slices, return_x=None):
         return GetItemACL()(x, slices, return_x)
     if isinstance(slices, list):
         return GetItemACL()(x, jt.array(slices), return_x)
-    if isinstance(slices, (np.int8, np.int16, np.int32, np.int64)):
-        slices = int(slices)
-    if hasattr(np, "int128") and isinstance(slices, np.int128):
-        slices = int(slices)
-    if hasattr(np, "int256") and isinstance(slices, np.int256):
+    if isinstance(slices, _NUMPY_INTS):
         slices = int(slices)
 
     if slices is not None and (not isinstance(slices, Iterable) or isinstance(slices, str)):

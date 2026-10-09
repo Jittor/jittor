@@ -1030,6 +1030,27 @@ workaround.
   this workload's plain dynamic cache never reaches. There is no
   ACL-scoped fix available for this cause; a fix would mean changing the
   core indexing path every backend shares.
+  (2026-10-08) That last sentence was only half right: part of the per-op
+  host cost was ACL-scoped. `basic_slice_acl` and `ConcatACL` rebuilt their
+  program (attribute dicts, two to three `code_program`/`attribute_program`
+  keys) on every call, the three grouped RMSNorm runners did the same
+  through `code_with_attributes`, and `getitem_acl` asked
+  `hasattr(np, "int128")` twice per index through numpy's module
+  `__getattr__`. Memoising each program on the scalars it derives from
+  (dtype/shape/bounds, split sizes/axis, kind/eps) halved the host cost of
+  `x[..., :64]` (72.5 -> 34.5 us) and `cat` (39.4 -> 22.0 us) with
+  byte-identical `jt.code` arguments (48 captured calls compared against
+  HEAD). Paired 12-workload run on npu 3 against the HEAD `7a18abf29`
+  baseline: `qwen3_decode` 2.22x -> 2.04x, geometric mean 0.944x ->
+  0.932x, no workload regressing beyond run-to-run noise. Pipelining the
+  executor instead was measured and rejected: enabling ACL
+  `supports_auto_flush` made a 24-token decode slower at every setting
+  (2979 ms off; 3271/3183/3093 ms at `auto_flush_ops` 128/64/256) because
+  each extra ACL executor batch costs more host time than the device time
+  it hides. What remains is generic Python dispatch above the kernels and
+  the executor running on the Python thread; the async worker
+  (`may_run_async`) is still CUDA-only and would need an ACL thread device
+  bind plus a thread-safe `AclCpuFallbackScope` before it can overlap them.
   `bert_base_train`'s gap is similarly not a dispatch bug: an aclprof
   capture shows `MatMulV2` at 42.4% of device time (the
   expected dominant cost for a transformer) and `DSARandomUniform` --
