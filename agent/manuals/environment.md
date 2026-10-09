@@ -84,7 +84,25 @@ uv run --locked python -m jittor.selftest
 uv run --locked python tools/run_test_suite.py --tier core --backend cpu
 ```
 
-For a real CUDA run, verify `nvcc` and select the device explicitly:
+For the self-contained Linux x86_64 path, `jittor[cuda12]` installs CUDA 12.2
+runtime/cuDNN/NPP wheels and a pinned pip CUDA 13.4 `nvcc` plus CCCL headers.
+Jittor compiles with the first local nvcc 12.2-13.x that passes a host-compiler
+test compile, else with the pip nvcc, and always links and loads the CUDA 12
+runtime libraries from the wheels. Do not set `CUDA_HOME`, `nvcc_path`, or
+`LD_LIBRARY_PATH` for this path; an explicit `nvcc_path` overrides the search.
+Skipped local compilers are logged with the reason. An unresolved pip stack is
+an import error, never a fallback to system CUDA libraries.
+
+```bash
+python -m pip install "jittor[cuda12]"
+CUDA_VISIBLE_DEVICES=<gpu> use_cuda=1 python -m jittor.selftest
+```
+
+A clean-environment uv/conda acceptance with a system CUDA visible (usable,
+unusable, too old, or library-only) is
+[`cuda12-pip-stack-acceptance`](../skills/cuda12-pip-stack-acceptance/SKILL.md).
+
+For a system toolkit run, set the compiler explicitly:
 
 ```bash
 export nvcc_path="$(command -v nvcc)"

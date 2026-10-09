@@ -6,10 +6,10 @@
 
 """Discover a coherent NVIDIA CUDA component-wheel installation.
 
-CUDA 11/12 pip packages install each component below ``site-packages/nvidia``
-instead of a single CUDA toolkit root.  Jittor still needs a real ``nvcc``
-from the system or JTCUDA; this module only resolves the headers and shared
-libraries supplied by pip.
+CUDA 12 component wheels install below ``site-packages/nvidia`` instead of a
+single toolkit root. Jittor compiles with a local nvcc that fits the stack, or
+else the pinned CUDA 13 nvcc wheel, and keeps runtime libraries on the CUDA 12
+stack; this module resolves both.
 """
 
 from __future__ import print_function
@@ -43,6 +43,8 @@ class CudaWheelError(RuntimeError):
 # check in compile_extern), so a range is what belongs here.
 CUDA12_COMPONENTS = (
     ("cuda_runtime", "nvidia-cuda-runtime-cu12", "==12.2.140", "nvidia/cuda_runtime"),
+    # cuda_limits.h includes the NPP header for CUDA min/max constants.
+    ("npp", "nvidia-npp-cu12", "==12.2.1.4", "nvidia/npp"),
     ("cublas", "nvidia-cublas-cu12", "==12.2.5.6", "nvidia/cublas"),
     ("cuda_nvrtc", "nvidia-cuda-nvrtc-cu12", "==12.2.140", "nvidia/cuda_nvrtc"),
     ("cudnn", "nvidia-cudnn-cu12", ">=8.9.7,<10", "nvidia/cudnn"),
@@ -53,6 +55,25 @@ CUDA12_COMPONENTS = (
     ("nvtx", "nvidia-nvtx-cu12", "==12.2.140", "nvidia/nvtx"),
     ("nccl", "nvidia-nccl-cu12", "==2.18.3", "nvidia/nccl"),
 )
+
+# Compilers that can build against the CUDA 12.2 stack. Older ones predate the
+# runtime headers; newer majors are untested. CRT headers always come from the
+# compiler's own toolkit, since the runtime wheel ships none.
+STACK_NVCC_MIN = (12, 2)
+STACK_NVCC_MAX_MAJOR = 13
+
+# The CUDA 12 pip compiler component does not ship the ``nvcc`` driver. This
+# standalone compiler wheel does, and is the fallback when no local nvcc fits.
+# Its CUDA 13 runtime is deliberately not part of CudaWheelStack: Jittor
+# compiles with it but runs on the CUDA 12 stack.
+CUDA_NVCC_DISTRIBUTION = "nvidia-cuda-nvcc"
+CUDA_NVCC_VERSION = "13.4.92"
+CUDA_NVCC_RELATIVE_PATH = os.path.join("nvidia", "cu13", "bin", "nvcc")
+# CUDA 13 nvcc adds ``-isystem <root>/include/cccl`` to every compile, but the
+# compiler wheel does not depend on the wheel that fills it.
+CUDA_CCCL_DISTRIBUTION = "nvidia-cuda-cccl"
+CUDA_CCCL_VERSION = "13.3.4.3.1"
+CUDA_CCCL_RELATIVE_PATH = os.path.join("nvidia", "cu13", "include", "cccl")
 
 
 #: The versioned split libraries a cuDNN wheel is made of, by major version.
@@ -301,6 +322,7 @@ class CudaWheelStack:
 def _validate_stack(stack):
     required_headers = {
         "cuda_runtime": "cuda_runtime.h",
+        "npp": "npp.h",
         "cublas": "cublas.h",
         "cudnn": "cudnn.h",
         "cufft": "cufft.h",
@@ -346,8 +368,99 @@ CudaWheelReport = collections.namedtuple(
     "CudaWheelReport", "stack reason present broken")
 
 
+def nvcc_fits_stack(nvcc_version):
+    """Whether an nvcc of this version can build against the CUDA 12.2 stack."""
+    version = _version_tuple(nvcc_version)
+    return (len(version) >= 2 and version[:2] >= STACK_NVCC_MIN
+            and version[0] <= STACK_NVCC_MAX_MAJOR)
+
+
+def select_local_nvcc(candidates, version_of):
+    """The first local nvcc that fits the stack, and why the others did not.
+
+    ``candidates`` are paths in preference order; ``version_of(path)`` returns
+    the nvcc version, or raises when that nvcc is unusable here (for example
+    it rejects the host compiler). A pip nvcc is not local and is skipped here.
+    Returns ``(path or None, [(path, reason), ...])``.
+    """
+    skipped = []
+    seen = set()
+    for path in candidates:
+        if not path:
+            continue
+        real = os.path.realpath(path)
+        if real in seen:
+            continue
+        seen.add(real)
+        if is_nvidia_wheel_path(path) or is_nvidia_wheel_path(real):
+            continue
+        if not os.path.isfile(real) or not os.access(real, os.X_OK):
+            continue
+        try:
+            version = version_of(path)
+        except (RuntimeError, OSError, ValueError) as error:
+            skipped.append((path, str(error)))
+            continue
+        version_text = ".".join(str(part) for part in _version_tuple(version))
+        if nvcc_fits_stack(version_text):
+            return path, skipped
+        skipped.append((path, "nvcc %s is outside %d.%d through %d.x" % (
+            version_text, STACK_NVCC_MIN[0], STACK_NVCC_MIN[1],
+            STACK_NVCC_MAX_MAJOR)))
+    return None, skipped
+
+
+def find_pip_nvcc(distribution=None):
+    """Return the pinned NVIDIA pip nvcc executable, or ``None`` if absent."""
+
+    if os.name != "posix":
+        return None
+    distribution = distribution or importlib_metadata.distribution
+    try:
+        compiler = distribution(CUDA_NVCC_DISTRIBUTION)
+    except importlib_metadata.PackageNotFoundError:
+        return None
+    if str(compiler.version) != CUDA_NVCC_VERSION:
+        raise CudaWheelError(
+            "%s==%s is required, found %s" % (
+                CUDA_NVCC_DISTRIBUTION, CUDA_NVCC_VERSION, compiler.version))
+    path = os.path.abspath(os.fspath(
+        compiler.locate_file(CUDA_NVCC_RELATIVE_PATH)))
+    if not is_nvidia_wheel_path(path):
+        raise CudaWheelError(
+            "%s does not resolve inside site-packages/nvidia: %s" % (
+                CUDA_NVCC_DISTRIBUTION, path))
+    if not os.path.isfile(path) or not os.access(path, os.X_OK):
+        raise CudaWheelError(
+            "%s==%s does not contain an executable %s" % (
+                CUDA_NVCC_DISTRIBUTION, CUDA_NVCC_VERSION,
+                CUDA_NVCC_RELATIVE_PATH))
+    try:
+        cccl = distribution(CUDA_CCCL_DISTRIBUTION)
+    except importlib_metadata.PackageNotFoundError:
+        raise CudaWheelError(
+            "%s is installed but %s==%s is not; reinstall jittor[cuda12]" % (
+                CUDA_NVCC_DISTRIBUTION, CUDA_CCCL_DISTRIBUTION,
+                CUDA_CCCL_VERSION))
+    if str(cccl.version) != CUDA_CCCL_VERSION:
+        raise CudaWheelError(
+            "%s==%s is required, found %s" % (
+                CUDA_CCCL_DISTRIBUTION, CUDA_CCCL_VERSION, cccl.version))
+    cccl_dir = os.path.abspath(os.fspath(
+        cccl.locate_file(CUDA_CCCL_RELATIVE_PATH)))
+    if not os.path.isdir(cccl_dir):
+        raise CudaWheelError(
+            "%s==%s does not contain %s" % (
+                CUDA_CCCL_DISTRIBUTION, CUDA_CCCL_VERSION,
+                CUDA_CCCL_RELATIVE_PATH))
+    return path
+
+
 def inspect_cuda_wheel_stack(nvcc_version=None, distribution=None):
     """Resolve the CUDA 12.2 wheel stack and say why if it cannot be.
+
+    Any nvcc from 12.2 through 13.x is accepted, local or the pinned pip
+    compiler; it is used only as a compiler, and libraries resolve from CUDA 12.
 
     Every one of these failures used to be swallowed -- the diagnostic strings
     below were constructed and then dropped on the floor by a bare
@@ -365,12 +478,15 @@ def inspect_cuda_wheel_stack(nvcc_version=None, distribution=None):
     if _truthy(os.environ.get("JITTOR_CUDA_WHEEL_DISABLE")):
         return CudaWheelReport(
             None, "JITTOR_CUDA_WHEEL_DISABLE is set", 0, False)
-    if nvcc_version and _version_tuple(nvcc_version)[:2] != (12, 2):
+    distribution = distribution or importlib_metadata.distribution
+    if nvcc_version and not nvcc_fits_stack(nvcc_version):
         return CudaWheelReport(
-            None, "jittor[cuda12] requires nvcc 12.2, found %s" % nvcc_version,
+            None,
+            "jittor[cuda12] requires nvcc %d.%d through %d.x, found %s" % (
+                STACK_NVCC_MIN[0], STACK_NVCC_MIN[1], STACK_NVCC_MAX_MAJOR,
+                nvcc_version),
             0, False)
 
-    distribution = distribution or importlib_metadata.distribution
     components = {}
     versions = {}
     reason = None

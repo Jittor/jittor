@@ -286,6 +286,9 @@ def check_cuda():
     cuda_include_dirs = cuda_toolkit_include_dirs(cuda_home)
     cuda_lib_dirs = [cuda_lib, cuda_bin]
     if cuda_wheel_stack:
+        # CUDA 12 component headers stay ahead of the nvcc root, which may be
+        # a newer toolkit (CUDA 13 dropped public fields Jittor still uses);
+        # the toolkit include list below still supplies CRT and CCCL.
         cuda_include_dirs = cuda_wheel_stack.include_dirs() + cuda_include_dirs
         cuda_lib_dirs = cuda_wheel_stack.lib_dirs() + cuda_lib_dirs
     cuda_include_dirs = list(dict.fromkeys(
@@ -641,9 +644,98 @@ ex_python_path = python_path + '.' + str(sys.version_info.minor)
 if os.path.isfile(ex_python_path):
     python_path = ex_python_path
 
+_NVCC_HOST_CHECK_SOURCE = (
+    "#include <cuda_runtime.h>\n"
+    "__global__ void jittor_nvcc_check(float* x) { x[threadIdx.x] = 1; }\n")
+
+
+def _nvcc_host_check(nvcc):
+    """'' if ``nvcc`` compiles a kernel with Jittor's host compiler, else why not."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as directory:
+        source = os.path.join(directory, "check.cu")
+        with open(source, "w") as f:
+            f.write(_NVCC_HOST_CHECK_SOURCE)
+        try:
+            result = sp.run(
+                [nvcc, "-ccbin", cc_path, "-std=c++17", "-c", source,
+                 "-o", os.path.join(directory, "check.o")],
+                stdout=sp.PIPE, stderr=sp.STDOUT, timeout=300)
+        except (OSError, sp.TimeoutExpired) as error:
+            return str(error)
+    if result.returncode == 0:
+        return ""
+    lines = result.stdout.decode(errors="replace").strip().splitlines()
+    errors = [line for line in lines if "error" in line]
+    return (errors or lines or ["exit code %d" % result.returncode])[0].strip()
+
+
+def _local_nvcc_version(nvcc):
+    """The version of a local nvcc that can build here; raises when it cannot.
+
+    A version inside the stack's range is not enough: CUDA 12.4, say, refuses
+    gcc 14 in its own headers, so the first JIT compile would fail.
+    """
+    version = jit_utils.get_int_version(nvcc)
+    if install_cuda.cuda_wheel.nvcc_fits_stack(".".join(map(str, version))):
+        failure = jit_utils.probe.cached(
+            "nvcc_host_check:" + os.path.realpath(nvcc),
+            [nvcc, cc_path], lambda: _nvcc_host_check(nvcc))
+        if failure:
+            raise RuntimeError("cannot compile with %s: %s" % (cc_path, failure))
+    return version
+
+
+def _local_nvcc_candidates():
+    """Local nvcc paths in the order the system/JTCUDA search has always used."""
+    import shutil
+    candidates = []
+    if install_cuda.has_installation():
+        candidates.append(install_cuda.install_cuda())
+    candidates += [shutil.which("nvcc"), "/usr/local/cuda/bin/nvcc",
+                   "/usr/bin/nvcc", "/opt/cuda/bin/nvcc"]
+    return candidates
+
+
 def _discover_cuda_compiler(requested_backend):
     if requested_backend not in (None, "cuda"):
         return ""
+    # An explicit nvcc_path remains authoritative.
+    configured_nvcc = build_env("nvcc_path", None)
+    if configured_nvcc is not None:
+        return build_env("nvcc_path", configured_nvcc)
+
+    cuda_wheel = install_cuda.cuda_wheel
+    if cuda_wheel.inspect_cuda_wheel_stack().stack is not None:
+        # jittor[cuda12] supplies every CUDA library; only the compiler may be
+        # local, because the CUDA 12 pip compiler wheel has no nvcc driver.
+        local_nvcc, skipped = cuda_wheel.select_local_nvcc(
+            _local_nvcc_candidates(), _local_nvcc_version)
+        for path, reason in skipped:
+            LOG.i("Not using local nvcc ", path, ": ", reason)
+        if local_nvcc:
+            LOG.i("Found local nvcc at ", local_nvcc,
+                  "; CUDA libraries come from the pip wheels")
+            return build_env("nvcc_path", local_nvcc)
+        pip_nvcc = cuda_wheel.find_pip_nvcc()
+        if pip_nvcc:
+            LOG.i("No local nvcc fits the CUDA 12 pip wheels; using ", pip_nvcc)
+            return build_env("nvcc_path", pip_nvcc)
+        low_major, low_minor = cuda_wheel.STACK_NVCC_MIN
+        raise cuda_wheel.CudaWheelError(
+            "CUDA 12 pip libraries are installed, but no local nvcc %d.%d "
+            "through %d.x was found and %s==%s is not installed; reinstall "
+            "jittor[cuda12]" % (
+                low_major, low_minor, cuda_wheel.STACK_NVCC_MAX_MAJOR,
+                cuda_wheel.CUDA_NVCC_DISTRIBUTION, cuda_wheel.CUDA_NVCC_VERSION))
+
+    if not cuda_wheel._truthy(os.environ.get("JITTOR_CUDA_WHEEL_DISABLE")):
+        pip_nvcc = cuda_wheel.find_pip_nvcc()
+        if pip_nvcc:
+            # jittor[cuda12] is installed but its libraries do not resolve;
+            # get_cuda_wheel_stack names the missing package.
+            return build_env("nvcc_path", pip_nvcc)
+
     nvcc = None
     if install_cuda.has_installation() or os.name == 'nt':
         nvcc = install_cuda.install_cuda()
@@ -673,7 +765,7 @@ if nvcc_path:
     v = jit_utils.get_version(nvcc_path)[1:-1]
     nvcc_version = list(map(int,v.split('.')))
     cu += v
-    cuda_wheel_stack = install_cuda.get_cuda_wheel_stack(v)
+    cuda_wheel_stack = install_cuda.get_cuda_wheel_stack(v, nvcc_path=nvcc_path)
     if cuda_wheel_stack:
         cu += "_" + cuda_wheel_stack.fingerprint
     archs = query_cuda_archs()
@@ -1014,7 +1106,14 @@ if has_cuda:
         nvcc_flags = nvcc_flags.replace("-fsanitize", "-Xcompiler -fsanitize")
         nvcc_flags = nvcc_flags.replace("-fno-omit-frame-pointer",
                                         "-Xcompiler -fno-omit-frame-pointer")
-        nvcc_flags += f" -x cu --cudart=shared -ccbin=\"{cc_path}\" --use_fast_math "
+        if cuda_wheel_stack:
+            # Component wheels expose only versioned libcudart. The core links
+            # that CUDA 12 SONAME and preloads it globally; generated kernels
+            # must not inject the nvcc toolkit's own runtime or need libcudart.so.
+            nvcc_flags += " --cudart=none "
+        else:
+            nvcc_flags += " --cudart=shared "
+        nvcc_flags += f" -x cu -ccbin=\"{cc_path}\" --use_fast_math "
         # The device half of the per-thread default stream; see cc_flags above.
         nvcc_flags += " --default-stream per-thread "
         # nvcc warning is noise
@@ -1500,6 +1599,12 @@ if platform.system() == 'Linux':
 
 build_core()
 cc_flags += f" -l\"jittor_core{lib_suffix}\" "
+
+if cuda_wheel_stack:
+    # jittor_core needs libcudart.so.12 by name, and the loader searches
+    # LD_LIBRARY_PATH before the core's RUNPATH: a system CUDA there would be
+    # bound instead of the wheel's runtime. A loaded SONAME is reused.
+    preload_cuda_library("cudart", required=True)
 
 with jit_utils.import_scope(import_flags):
     import jittor_core as core

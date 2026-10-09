@@ -347,15 +347,17 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
     if link:
         extra_include_path = os.path.abspath(os.path.join(cuda_include, "..", f"targets/{arch_key}-linux/include"))
         extra_lib_path = os.path.abspath(os.path.join(cuda_lib, "..", f"targets/{arch_key}-linux/lib"))
-        component_include_dirs = []
-        component_lib_dirs = []
         if cuda_wheel_stack:
-            component_include_dirs = cuda_wheel_stack.include_dirs(lib_name)
-            component_lib_dirs = cuda_wheel_stack.lib_dirs(lib_name)
-        include_search_dirs = cuda_include_search_dirs(
-            component_include_dirs, cuda_include, extra_include_path)
-        library_search_dirs = cuda_library_search_dirs(
-            component_lib_dirs, cuda_bin, cuda_lib, extra_lib_path, arch_key)
+            # The pip stack is the whole CUDA here: a header or library that
+            # is not in its component wheel must fail, not resolve from
+            # /usr/include or a distro lib directory.
+            include_search_dirs = cuda_wheel_stack.include_dirs(lib_name)
+            library_search_dirs = cuda_wheel_stack.lib_dirs(lib_name)
+        else:
+            include_search_dirs = cuda_include_search_dirs(
+                (), cuda_include, extra_include_path)
+            library_search_dirs = cuda_library_search_dirs(
+                (), cuda_bin, cuda_lib, extra_lib_path, arch_key)
         cuda_include_name = search_file(include_search_dirs, lib_name+".h")
         extra_flags = f' -I"{os.path.dirname(cuda_include_name)}" ' + extra_flags
         # cuda11 prefer cudnn 8

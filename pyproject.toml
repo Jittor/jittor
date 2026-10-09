@@ -32,7 +32,14 @@ dependencies = [
 
 [project.optional-dependencies]
 cuda12 = [
-    "cuda-toolkit[cublas,cudart,cufft,curand,cusparse,nvjitlink,nvrtc,nvtx]==12.2.2; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
+    "cuda-toolkit[cublas,cudart,cufft,curand,cusparse,npp,nvjitlink,nvrtc,nvtx]==12.2.2; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
+    # CUDA 12 component wheels named nvidia-cuda-nvcc-cu12 contain ptxas and
+    # NVVM, but not the nvcc driver. This wheel is the compiler when no local
+    # nvcc 12.2-13.x is found; either way Jittor resolves runtime libraries
+    # from the CUDA 12 components above.
+    "nvidia-cuda-nvcc==13.4.92; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
+    # CUDA 13 nvcc needs CCCL headers; runtime linking remains on the CUDA 12 stack.
+    "nvidia-cuda-cccl==13.3.4.3.1; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
     # A range, not a pin: every modern torch pins its own exact
     # nvidia-cudnn-cu12, and pip reads two different exact pins on one
     # distribution as a conflict. Pinning here made jittor[cuda12] and torch
@@ -41,8 +48,9 @@ cuda12 = [
     "nvidia-nccl-cu12==2.18.3; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
     # Headers for cuDNN's fused attention (backends/cuda/kernels/nn/
     # cudnn_attention_cuda.py). Without them that kernel declines and
-    # attention takes the matmul-and-softmax path.
-    "nvidia-cudnn-frontend>=1.30,<2; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.9'",
+    # attention takes the matmul-and-softmax path. 1.29 and later publish
+    # only cp310+ wheels.
+    "nvidia-cudnn-frontend>=1.30,<2; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.10'",
 ]
 # Device time in `jt.profile` (python/jittor/profiling/_cupti.py): CUPTI for
 # the CUDA 12.2 runtime `cuda12` installs. Without it a profile reports device

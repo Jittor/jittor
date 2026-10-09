@@ -371,8 +371,10 @@ include docs/results/2026-09-14-exit-heap-corruption.md
 include docs/results/2026-09-14-jittor-vs-pytorch.md
 include docs/results/2026-09-14-vllm-omni-h3-enablement.md
 include docs/results/2026-09-19-torch-compat-runbook-verification.md
+include docs/results/2026-09-22-cuda13-nvcc-cuda12-runtime.md
 include docs/results/2026-09-24-torch-compat-real-models.md
 include docs/results/2026-09-25-profiling-tools.md
+include docs/results/2026-10-09-cuda12-pip-stack-decoy-acceptance.md
 include docs/results/index.md
 include docs/tutorials/index.md
 include examples/README.md
