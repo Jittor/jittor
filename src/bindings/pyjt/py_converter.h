@@ -431,6 +431,8 @@ DEF_IS(NanoVector, PyObject*) to_py_object(T a) {
     PyObjHolder obj(_PyObject_New(&PyjtNanoVector));
     auto ptr = GET_RAW_PTR(T, obj.obj);
     new (ptr) T(a);
+    // NanoVector declares __dealloc__ (a spilled vector owns heap storage).
+    GET_INITED_FLAG(T, 0, obj.obj) = 1;
     return obj.release();
 }
 

@@ -123,9 +123,17 @@ void setter_auto_mixed_precision_level(const int& old_value, const int& value) {
     if (value == 6) amp_reg = amp_prefer16 | amp_array_prefer | amp_keep_reduce | amp_keep_white;
 }
 
+// Per-axis masks (reduce, broadcast, strided-input patterns) are 32-bit.
+static inline void check_tensor_rank(const NanoVector& shape) {
+    USER_CHECK(shape.size() <= NanoVector::max_tensor_rank)
+        << "Jittor tensors support at most" << (int)NanoVector::max_tensor_rank
+        << "dimensions, got shape" << shape;
+}
+
 Var::Var(NanoVector shape, NanoString dtype)
     : shape(shape), 
       loop_options(compile_options) {
+    check_tensor_rank(shape);
     flags.set(NodeFlags::_var, 1);
     device_id = current_device();
     placement = current_tensor_placement();
@@ -165,6 +173,7 @@ int64 Var::numel() {
 }
 
 void Var::set_shape(NanoVector shape) {
+    check_tensor_rank(shape);
     this->shape = shape;
     storage_strides.clear();
     numel();
@@ -195,22 +204,21 @@ bool Var::is_contiguous() const {
     return true;
 }
 
-int Var::stride_pattern() const {
-    int mask = 0;
+uint Var::stride_pattern() const {
+    uint mask = 0;
     for (uint i=0; i<shape.size(); ++i)
-        if (storage_stride(i) != 0) mask |= 1 << i;
+        if (storage_stride(i) != 0) mask |= 1u << i;
     return mask;
 }
 
 // A view whose strides are exactly the contiguous ones needs no vector:
 // `storage_stride` derives those from the shape, and the empty vector is
 // already the "contiguous" sentinel every reader tests for. Storing them anyway
-// is not just redundant, it is impossible past a point -- the packed NanoVector
-// holds 64 bits, while the strides of a 5-D view of a large tensor (the video
-// VAE decodes into `[1, 3, 28, 288, 512]`) need 75, and the overflow check
-// rejects that outright with "NanoVector exceeds its ten-entry or 64-bit value
-// capacity". Every value is identical either way, so dropping the vector
-// changes no layout, only whether it is materialized.
+// is redundant and, past a point, costs a heap block -- the packed NanoVector
+// holds 64 value bits, while the strides of a 5-D view of a large tensor (the
+// video VAE decodes into `[1, 3, 28, 288, 512]`) need 75 and spill. Every
+// value is identical either way, so dropping the vector changes no layout,
+// only whether it is materialized.
 static bool is_contiguous_strides(const NanoVector& shape, const int64* strides, int n) {
     int64 expected = 1;
     for (int i = n - 1; i >= 0; --i) {
@@ -224,9 +232,6 @@ void Var::set_storage_strides(const vector<int64>& strides) {
     USER_CHECK((int)strides.size() == shape.size()) << "Storage stride rank must match shape";
     for (auto stride : strides)
         USER_CHECK(stride >= 0) << "Negative storage strides require an explicit offset view";
-    // The check has to happen before the packing: `NanoVector::make` rejects an
-    // over-long vector, so a caller that builds one first never reaches this
-    // function at all.
     if (is_contiguous_strides(shape, strides.data(), strides.size())) {
         storage_strides.clear();
         return;

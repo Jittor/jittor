@@ -85,7 +85,7 @@ void FuseTransposeOp::infer_shape() {
     } else {
         USER_CHECKop(axes.size(),==,xdim);
         int64_t mask=0;
-        for (auto i : axes) mask |= 1<<i;
+        for (auto i : axes) mask |= 1u<<i;
         USER_CHECK(mask==((1ll<<xdim)-1)) << "Invalid axes" << axes;
     }
     NanoVector shape;
@@ -102,10 +102,10 @@ void FuseTransposeOp::jit_prepare(JK& jk) {
     auto bc = type()==OpType::broadcast;
     auto ax = bc ? axes : get_reverse(axes);
     jk << "«Tx:" << x->dtype();
-    jk << "«DIM=" << JK::hex1(axes.size());
-    jk << "«BC:" << JK::hex1(bc);
+    jk << "«DIM=" << JK::hex(axes.size());
+    jk << "«BC:" << JK::hex(bc);
     for (uint i=0; i<ax.size(); i++)
-        jk << "«AXES" << JK::hex1(ax[i]) << '=' << JK::hex1(i);
+        jk << "«AXES" << JK::dec(ax[i]) << '=' << JK::hex(i);
 }
 
 #else // JIT

@@ -13,7 +13,7 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from functools import partial
 from ..nn import ComplexNumber
 from ._helpers import (
-    _complex_to_stack, _conj_transpose, _matmul, _stack_to_complex,
+    _complex_to_stack, _conj_transpose, _linalg_errors_raise, _matmul, _stack_to_complex,
 )
 
 
@@ -39,7 +39,8 @@ def complex_inv(x:ComplexNumber):
 
         a = _stack_to_complex(data["inputs"][0])
         m_a = data["outputs"][0]
-        t_a = np.linalg.inv(a)
+        with _linalg_errors_raise(np):
+            t_a = np.linalg.inv(a)
         np.copyto(m_a, _complex_to_stack(t_a))
 
 

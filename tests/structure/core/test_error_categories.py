@@ -66,7 +66,10 @@ MIGRATED_SHAPE_CARDINALITY_BOUNDARIES = {
     # of them reading `jt.reindex`'s `indexes`/`shape` arguments. It also
     # reclassified `ASSERT(extras.size())` (reindex without an explicit shape
     # needs the caller to pass an overflow extras tensor).
-    "src/ops/reindex_op.cc": 8,
+    # 2026-10-05: 8 -> 7. The "at most ten dimensions" check is gone: tensors
+    # go up to 32 dimensions and the rank limit is checked once, where every
+    # Var's shape is set (`Var::set_shape`).
+    "src/ops/reindex_op.cc": 7,
     # 2026-09-11: 3 -> 4. `0f5eab25e` reclassified
     # `ASSERT((ns.is_binary() && ns!=ns_mean) || ns == ns_void)`: `op` is the
     # reduction name the caller passed to `jt.reindex_reduce`.
@@ -112,7 +115,9 @@ MIGRATED_REINTERPRET_VIEW_BOUNDARIES = {
 # passed to `jt.binary`) and `CHECK(x_ok && y_ok)` -> `USER_CHECK` (a bitwise
 # or shift op on float dtypes).
 MIGRATED_BINARY_SHAPE_BOUNDARIES = {
-    "src/ops/binary_op.cc": 3,
+    # 2026-10-05: 3 -> 4. `maximum`/`minimum` of a complex operand is a caller
+    # error (complex numbers have no order); it used to fail in the compiler.
+    "src/ops/binary_op.cc": 4,
 }
 
 # 2026-09-10: both counts were one short of the source before the index bounds
@@ -486,7 +491,7 @@ def test_public_shape_cardinality_migration_is_explicit_and_bounded():
     # behind one that failed earlier in iteration order and stayed invisible
     # until that earlier one was fixed (2026-09-11).
     assert counts == dict(_LEDGER), (counts, dict(_LEDGER))
-    assert sum(counts.values()) == 43
+    assert sum(counts.values()) == 42
 
 
 def test_public_view_shape_migration_is_explicit_and_bounded():
@@ -535,6 +540,7 @@ def test_binary_shape_migration_is_explicit_and_bounded():
     assert source.count("USER_CHECK(ns.is_binary())") == 1
     assert "ASSERT(ns.is_binary())" not in source
     assert source.count("USER_CHECK(x_ok && y_ok)") == 1
+    assert source.count("USER_CHECK(!x->dtype().is_complex() && !y->dtype().is_complex())") == 1
 
 
 def test_setitem_shape_migration_is_explicit_and_bounded():

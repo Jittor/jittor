@@ -129,6 +129,20 @@ struct JitKey {
         explicit shex1(int data) : data(data) {}
     };
 
+    // Decimal, any width. Key names that a template spells as `NAME@i` must
+    // carry `i` in decimal: `@i` expands to decimal, so a hex index stops
+    // matching at 10. Plain (`:`) values that a template uses as numbers
+    // likewise need decimal; `=` values are read back as hex.
+    struct dec {
+        uint64 data;
+        explicit dec(uint64 data) : data(data) {}
+    };
+
+    struct sdec {
+        int64 data;
+        explicit sdec(int64 data) : data(data) {}
+    };
+
     struct hex2 {
         uint data;
         explicit hex2(uint data) : data(data) {}
@@ -268,6 +282,21 @@ inline JK& operator<<(JK& jk, const JK::Oxhex1& h) {
 
 inline JK& operator<<(JK& jk, const JK::Oxhex2& h) {
     return jk << "0x" << JK::hex2(h.data);
+}
+
+inline JK& operator<<(JK& jk, const JK::dec& h) {
+    char buf[20];
+    int n = 0;
+    uint64 a = h.data;
+    do { buf[n++] = (char)('0' + a % 10); a /= 10; } while (a);
+    jk.reserve(n);
+    while (n) jk.buffer[jk.size++] = buf[--n];
+    return jk;
+}
+
+inline JK& operator<<(JK& jk, const JK::sdec& h) {
+    if (h.data < 0) return jk << '-' << JK::dec(-(uint64)h.data);
+    return jk << JK::dec((uint64)h.data);
 }
 
 inline JK& operator<<(JK& jk, const JK::dec3& h) {

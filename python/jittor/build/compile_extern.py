@@ -140,10 +140,46 @@ from .onednn import (  # noqa: F401 - compatibility aliases are public here
 from . import onednn as _onednn_provider
 
 
+def _mkl_root():
+    return os.path.join(jit_utils.home(), ".cache", "jittor", "mkl")
+
+
 def install_mkl(root_folder):
     return _onednn_provider.install_source(
         root_folder, manifest.mkl_asset(), manifest.ONEDNN_VERSION, cc_path,
         download_url_to_local, safe_tar_extractall, allow_build=build_is_allowed())
+
+
+# Settled once per process: the policy is consulted on every library lookup
+# that misses the registry's memo, and a disabled library is never memoized.
+_mkl_obtainable_answer = None
+
+
+def _mkl_obtainable():
+    """Whether oneDNN can be had at all: given explicitly, built, or buildable.
+
+    ``use_mkl`` is on by default, and the default install builds oneDNN from
+    source on first use, which needs cmake. Without cmake (and without an
+    existing build or explicit paths) that build cannot even start, so the
+    library is reported as unavailable -- the CPU products then take the
+    generic kernels -- instead of failing every first CPU matmul. A build that
+    starts and fails still raises; ``JITTOR_NO_BUILD=1`` keeps its own error.
+    """
+    global _mkl_obtainable_answer
+    if _mkl_obtainable_answer is None:
+        _mkl_obtainable_answer = (
+            bool(build_env("mkl_include_path", environ=os.environ))
+            or bool(build_env("mkl_lib_path", environ=os.environ))
+            or not build_is_allowed()
+            or _onednn_provider.source_build_available(
+                _mkl_root(), manifest.mkl_asset(), manifest.ONEDNN_VERSION, cc_path))
+        if not _mkl_obtainable_answer:
+            LOG.w("use_mkl is on, but oneDNN v3 is not installed and cannot be built "
+                  "here: building it requires cmake, which is not on PATH. CPU matmul "
+                  "and convolution use Jittor's generic kernels. Install cmake, or set "
+                  "JT_BUILD_MKL_INCLUDE_PATH/JT_BUILD_MKL_LIB_PATH, to enable oneDNN; "
+                  "set use_mkl=0 to silence this warning.")
+    return _mkl_obtainable_answer
 
 
 def check_mkl_usable(dirname):
@@ -154,7 +190,7 @@ def check_mkl_usable(dirname):
 
 
 def _mkl_library_enabled():
-    return bool(use_mkl) and build_flag("use_mkl", True, os.environ)
+    return bool(use_mkl) and build_flag("use_mkl", True, os.environ) and _mkl_obtainable()
 
 
 def setup_mkl():
@@ -168,8 +204,7 @@ def setup_mkl():
         include = os.path.abspath(include)
         library_file, linker = _onednn_provider.explicit_library(library)
     else:
-        root = os.path.join(jit_utils.home(), ".cache", "jittor", "mkl")
-        prefix = install_mkl(root)
+        prefix = install_mkl(_mkl_root())
         include = os.path.join(prefix, "include")
         library_file, linker = mkl_library_layout(prefix)
     _onednn_provider.check_usable(library_file, include)

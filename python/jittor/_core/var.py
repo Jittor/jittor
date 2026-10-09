@@ -632,7 +632,10 @@ def norm(x, p=2, dim=-1, keepdims=False, eps=1e-30, keepdim=False):
     if p==1:
         return x.abs().sum(dim, keepdim)
     if p==2:
-        return (x.sqr()).sum(dim, keepdim).maximum(eps).sqrt()
+        # |x|**2, not x*x: for a complex x the square is complex and has no
+        # order to clamp with `maximum`. The norm is real either way.
+        sq = x.real.sqr() + x.imag.sqr() if x.dtype.is_complex() else x.sqr()
+        return sq.sum(dim, keepdim).maximum(eps).sqrt()
 
 Var.norm = norm
 

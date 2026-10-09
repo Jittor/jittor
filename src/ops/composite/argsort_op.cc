@@ -98,19 +98,17 @@ VarPtr ArgsortOp::get_grad(Var* out, Var* dout, Var* v, int v_index, int dim, Va
         indexes_.push_back(indexes.back());
     }
 
-    string temp;
-    temp.reserve(6+3*shape.size()); // @e0(i0,i1)
-    temp += "@e0(";
+    // "(i0,i1,...)": the argument list of every @e{i}(...) below.
+    string args = "(";
     for (uint i=0; i<shape.size(); i++) {
-        if (i) temp += ',';
-        temp += 'i';
-        temp += '0'+i;
-    };
-    temp += ')';
+        if (i) args += ',';
+        args += 'i';
+        args += S(i);
+    }
+    args += ')';
     indexes__.reserve(indexes.size());
     for (uint i=0; i<indexes.size(); i++) {
-        temp[2] = '0'+i; // @ei
-        indexes__.emplace_back(temp);
+        indexes__.emplace_back("@e"+S(i)+args);
     }
     
     return make_reindex_reduce(dout, ns_add, v->shape, move(indexes__), {}, move(indexes_));
@@ -134,8 +132,8 @@ void ArgsortOp::infer_shape() {
 void ArgsortOp::jit_prepare(JK& jk) {
     jk << "«Tx:" << x->dtype();
     jk << "«Ty:" << y->dtype();
-    jk << "«XDIM=" << JK::hex1(x->shape.size());
-    jk << "«DIM=" << JK::hex1(dim);
+    jk << "«XDIM=" << JK::hex(x->shape.size());
+    jk << "«DIM=" << JK::hex(dim);
     jk << "«CMP:" << (descending ? '>' : '<');
     jk << "«STABLE:" << (stable ? '1' : '0');
 }

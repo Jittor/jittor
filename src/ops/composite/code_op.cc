@@ -277,14 +277,14 @@ void CodeOp::jit_prepare(JK& jk) {
     for (uint i=0; i<_inputs.size(); i++) {
         //LOGir<<JK::dec3(i);
         jk << "«in" << JK::dec3(i) << "_dim:"
-            << JK::hex1(_inputs[i]->shape.size());
+            << JK::dec(_inputs[i]->shape.size());
         jk << "«in" << JK::dec3(i) << "_type:"
             << _inputs[i]->dtype();
     }
     jk << "«OUT_SIZE:" << JK::dec3(_outputs.size());
     for (uint i=0; i<_outputs.size(); i++) {
         jk << "«out" << JK::dec3(i) << "_dim:"
-            << JK::hex1(_outputs[i]->shape.size());
+            << JK::dec(_outputs[i]->shape.size());
         jk << "«out" << JK::dec3(i) << "_type:"
             << _outputs[i]->dtype();
     }

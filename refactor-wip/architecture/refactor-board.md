@@ -1,5 +1,7 @@
 # 整改看板
 
+2026-10-05 下游评测核心缺口（未提交，基线`316e1fe7`，未能同步远端）：[维度上限与四项缺口](../results/2026-10-05-high-rank-and-downstream-core-gaps.md)。张量维度上限 10→32（NanoVector 溢出堆存储、JIT key 维度编码、32 位掩码、StackVector、nvcc 深层循环编译时间），复数 `norm`/`maximum`，二元数字协议返回 `NotImplemented`，CuPy 奇异矩阵与 CPU 一致报错，无 cmake 时 oneDNN 不可用即回退。CPU 与 RTX 4090 实机通过；`Var @ obj` 回退、ROCm/NPU 未做。
+
 2026-09-13 当前本地合并复验：[新基线增量修复与验证](../results/2026-09-13-ascend-merge-validation.md)。远端`cb823778`已合并到本地工作树，未提交、未推送；原生选择集231通过/2项既有FlashAttention类跳过，233项全部处理；独立compat+定向OpInfo65通过/0跳过。两轮使用同一补丁且源码未变，选择集含CPU共享案例；ACL结构定向274通过，完整结构修后1358通过/4跳过，严格注册30项实际执行通过，KI-TEST004已关闭；当前注册函数及参数化与远端一致，没有删除案例。全库OpInfo和新基线性能复测未完成，不覆盖下方历史结果。
 
 2026-09-10 当前实机复验：[Ascend 原生/独立 Torch 验证与性能记录](../results/2026-09-10-ascend-refactor-validation.md)。已按远端`7df15e31`同步并重放本地修复至`952b5042`后继续修改；Abs独立NPU dtype声明及一般adaptive pooling前后向两项缺口已真机修复，追加amax/amin keepdim与共享allocator view修复。独立compat+定向OpInfo最终65项首轮55通过/1失败、56执行，新增NPU amax keepdim descriptor问题已修并通过28项CPU/NPU归约回归，65项正在重跑；完整CPU structure已1357通过/4跳过、1361项全部处理，最后归约改动追加370项结构回归通过、native-only6项另行通过；原生最终215通过/2项既有FlashAttention类入口跳过、217项全部处理；未审计NPU算子标记UNVERIFIED，不宣称全库OpInfo通过。性能保留初始`1a1f175e`的临时采样证据。不改写下方历史验收结论。

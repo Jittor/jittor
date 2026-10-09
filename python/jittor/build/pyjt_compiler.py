@@ -938,6 +938,14 @@ def compile_src(src, h, basename):
                 f"PyTensorFrontendScope tensor_frontend(self, args, {count}, {sequences});"
                 if has_args else
                 "PyTensorFrontendScope tensor_frontend(self);")
+        # A binary number slot that matches no overload has to hand the
+        # operation back with NotImplemented: that is what makes Python try
+        # the other operand's reflected method (`Var * obj` reaching
+        # `obj.__rmul__`), and raise the usual TypeError when there is none.
+        if name in binary_number_slots:
+            no_overload_code = "Py_INCREF(Py_NotImplemented); return Py_NotImplemented;"
+        else:
+            no_overload_code = 'LOGf << "Not a valid call.";'
         func = f"""
         {func_cast}[]{func_head} {{
             {gbp_entry_scope}
@@ -966,7 +974,7 @@ def compile_src(src, h, basename):
                 '''
                 for did in range(len(arr_func_return))
                 ])}
-                LOGf << "Not a valid call.";
+                {no_overload_code}
             }} catch (const std::exception& e) {{
                 if (!PyErr_Occurred()) {{
                     std::stringstream ss;

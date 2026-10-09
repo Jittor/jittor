@@ -79,17 +79,17 @@ void TernaryOp::jit_prepare(JK& jk) {
     // the full unflattening on the two value operands as well, which are
     // usually the contiguous ones.
     bool cs = !cond->is_contiguous(), xs = !x->is_contiguous(), ys = !y->is_contiguous();
-    int cmask = cs ? cond->stride_pattern() : 0;
-    int xmask = xs ? x->stride_pattern() : 0;
-    int ymask = ys ? y->stride_pattern() : 0;
+    uint cmask = cs ? cond->stride_pattern() : 0;
+    uint xmask = xs ? x->stride_pattern() : 0;
+    uint ymask = ys ? y->stride_pattern() : 0;
     jk << "«Tc:" << cond->dtype();
     jk << "«Tx:" << x->dtype();
     jk << "«Ty:" << y->dtype();
     jk << "«Tz:" << z->dtype();
-    jk << "«DIM=" << JK::hex1(z->shape.size());
-    jk << "«CSTRIDED=" << JK::hex1(cs);
-    jk << "«XSTRIDED=" << JK::hex1(xs);
-    jk << "«YSTRIDED=" << JK::hex1(ys);
+    jk << "«DIM=" << JK::hex(z->shape.size());
+    jk << "«CSTRIDED=" << JK::hex(cs);
+    jk << "«XSTRIDED=" << JK::hex(xs);
+    jk << "«YSTRIDED=" << JK::hex(ys);
     // All four unconditionally: the template reads a per-operand mask from
     // inside the shared chain's `@if(TSMASK...)`, which a contiguous operand
     // still reaches, so leaving its mask out of the key would leave the

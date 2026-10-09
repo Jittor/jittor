@@ -12,7 +12,7 @@
 import numpy as np
 
 from ._helpers import (
-    _batching_aware,
+    _batching_aware, _linalg_errors_raise,
     _cn_to_native, _is_native_complex, _matmul, _native_to_cn, _reconnect,
     _transpose,
 )
@@ -38,7 +38,8 @@ def inv(x):
     def forward_code(np, data):
         a = data["inputs"][0]
         m_a = data["outputs"][0]
-        t_a = np.linalg.inv(a)
+        with _linalg_errors_raise(np):
+            t_a = np.linalg.inv(a)
         np.copyto(m_a, t_a)
 
     class _Inv(jt.Function):
@@ -349,7 +350,8 @@ def _solve_matrix(a, b):
     def forward_code(np, data):
         a, b = data["inputs"]
         L = data["outputs"][0]
-        ans = np.linalg.solve(a, b)
+        with _linalg_errors_raise(np):
+            ans = np.linalg.solve(a, b)
         np.copyto(L, ans)
 
     def _T(v):

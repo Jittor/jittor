@@ -10,7 +10,7 @@
 # ***************************************************************
 """Real and native-complex matrix factorizations."""
 from ._helpers import (
-    _batching_aware, _conj_T, _diag_embed, _diag_of, _eye_like,
+    _batching_aware, _conj_T, _diag_embed, _diag_of, _eye_like, _linalg_errors_raise,
     _cn_to_native, _is_native_complex, _matmul, _native_to_cn, _reconnect,
     _transpose,
 )
@@ -382,7 +382,8 @@ def cholesky(x):
     def forward_code(np, data):
         a = data["inputs"][0]
         L = data["outputs"][0]
-        tL = np.linalg.cholesky(a)
+        with _linalg_errors_raise(np):
+            tL = np.linalg.cholesky(a)
         np.copyto(L, tL)
 
     k = x.shape[-1]

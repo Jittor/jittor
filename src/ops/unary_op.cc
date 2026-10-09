@@ -1093,8 +1093,8 @@ void UnaryOp::jit_prepare(JK& jk) {
     jk << "«Tx:" << x->dtype()
         << "«Ty:" << y->dtype()
         << "«OP:" << ns
-        << "«DIM=" << JK::hex1(x->shape.size())
-        << "«XSTRIDED=" << JK::hex1(strided);
+        << "«DIM=" << JK::hex(x->shape.size())
+        << "«XSTRIDED=" << JK::hex(strided);
     // Only when it is read, so a contiguous operand keeps the key it had.
     if (strided) jk << "«XSMASK=" << JK::hex(x->stride_pattern());
 }

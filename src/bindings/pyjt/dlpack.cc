@@ -401,8 +401,9 @@ struct DLTensorSpan {
 };
 
 static DLTensorSpan validate_dl_tensor(const DLTensor& t, NanoString dtype) {
-    USER_CHECK(t.ndim >= 0 && t.ndim <= 10)
-        << "dlpack: ndim=" << t.ndim << " is out of range (Jittor supports 0..10 dims)";
+    USER_CHECK(t.ndim >= 0 && t.ndim <= NanoVector::max_tensor_rank)
+        << "dlpack: ndim=" << t.ndim << " is out of range (Jittor supports 0.."
+        << (int)NanoVector::max_tensor_rank << " dims)";
     USER_CHECK(t.ndim == 0 || t.shape != nullptr) << "dlpack: DLTensor.shape is null";
     DLTensorSpan span;
     for (int32_t i = 0; i < t.ndim; i++) {

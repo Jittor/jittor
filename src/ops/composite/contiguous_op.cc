@@ -14,7 +14,7 @@ ContiguousOp::ContiguousOp(Var* input) : x(input) {
 void ContiguousOp::infer_shape() { y->set_shape(x->shape); }
 VarPtr ContiguousOp::grad(Var*, Var* dout, Var*, int) { return dout; }
 void ContiguousOp::jit_prepare(JK& jk) {
-    jk << "«Tx:" << x->dtype() << "«DIM=" << JK::hex1(x->shape.size());
+    jk << "«Tx:" << x->dtype() << "«DIM=" << JK::hex(x->shape.size());
 }
 #else
 void ContiguousOp::jit_run() {

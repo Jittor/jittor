@@ -87,7 +87,7 @@ void TransposeOp::infer_shape() {
     } else {
         USER_CHECKop(axes.size(),==,xdim);
         int64_t mask=0;
-        for (auto i : axes) mask |= 1<<i;
+        for (auto i : axes) mask |= 1u<<i;
         USER_CHECK(mask==((1ll<<xdim)-1)) << "Invalid axes" << axes;
     }
     NanoVector shape;
@@ -106,9 +106,9 @@ VarPtr TransposeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 
 void TransposeOp::jit_prepare(JK& jk) {
     jk << "«Tx:" << x->dtype();
-    jk << "«DIM=" << JK::hex1(axes.size());
+    jk << "«DIM=" << JK::hex(axes.size());
     for (uint i=0; i<axes.size(); i++)
-        jk << "«AXES" << JK::hex1(axes[i]) << '=' << JK::hex1(i);
+        jk << "«AXES" << JK::dec(axes[i]) << '=' << JK::hex(i);
 }
 
 #else // JIT

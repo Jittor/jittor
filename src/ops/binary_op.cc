@@ -542,6 +542,15 @@ BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
             "y:" >> y->dtype().to_cstring() <<
             "(bitwise/shift ops are not defined for floating-point or complex types).";
     }
+    // Complex numbers have no order, so there is no kernel to generate: the
+    // build used to fail inside the compiler. torch.maximum/minimum reject
+    // complex inputs the same way.
+    if (ns==ns_maximum || ns==ns_minimum) {
+        USER_CHECK(!x->dtype().is_complex() && !y->dtype().is_complex())
+            << "Binary op '" >> op.to_cstring() >> "' is not defined for complex dtypes, but got x:"
+            >> x->dtype().to_cstring() << "y:" >> y->dtype().to_cstring()
+            << "(complex numbers have no order; compare abs() or the real part instead).";
+    }
     z = create_output(x->shape, binary_dtype_infer(op, x->ns, y->ns, x->flag(VarFlags::_is_scalar), y->flag(VarFlags::_is_scalar)));
     bool is_comparison = ns==ns_less || ns==ns_less_equal ||
         ns==ns_greater || ns==ns_greater_equal ||
@@ -711,9 +720,9 @@ void BinaryOp::jit_prepare(JK& jk) {
         << "«Ty:" << y->dtype()
         << "«Tz:" << z->dtype()
         << "«OP:" << ns
-        << "«DIM=" << JK::hex1(z->shape.size())
-        << "«XSTRIDED=" << JK::hex1(xs)
-        << "«YSTRIDED=" << JK::hex1(ys);
+        << "«DIM=" << JK::hex(z->shape.size())
+        << "«XSTRIDED=" << JK::hex(xs)
+        << "«YSTRIDED=" << JK::hex(ys);
     // Only when read, so a contiguous operand keeps the key it had.
     if (xs) jk << "«XSMASK=" << JK::hex(x->stride_pattern());
     if (ys) jk << "«YSMASK=" << JK::hex(y->stride_pattern());

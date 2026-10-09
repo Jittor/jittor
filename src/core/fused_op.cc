@@ -285,7 +285,8 @@ void FusedOp::prepare_fused_key(JK& jk) {
     jk << "«var_info:" << JK::val;
     bool use_int64_t = false;
     for (auto& vi : vars) {
-        jk << JK::hex1(vi.type) << JK::hex1(vi.var->shape.size());
+        // Rank can exceed one hex digit, so each entry is delimited.
+        jk << JK::hex(vi.type) << JK::hex(vi.var->shape.size()) << ',';
         if (vi.type != 1 && (vi.var->num >= std::numeric_limits<int32_t>::max()
                 || vi.var->storage_span_bytes() / vi.var->dsize() >= std::numeric_limits<int32_t>::max()))
             use_int64_t = true;

@@ -13,6 +13,22 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import numpy as np
 
 
+def _linalg_errors_raise(array_module):
+    """Make a numpy_code callback's array module raise on singular input.
+
+    On CUDA the callback receives CuPy, whose ``linalg.solve``/``inv``/
+    ``cholesky`` return NaN for a singular (or non-positive-definite) matrix
+    where NumPy raises ``LinAlgError`` -- so the same call raised on CPU and
+    went silently wrong on CUDA. CuPy raises the same error under
+    ``cupyx.errstate(linalg="raise")``.
+    """
+    import contextlib
+    if getattr(array_module, "__name__", "") != "cupy":
+        return contextlib.nullcontext()
+    import cupyx
+    return cupyx.errstate(linalg="raise")
+
+
 def _is_batched(value):
     # vmap's BatchedVar, recognised without importing jittor.vmap on the hot
     # path (and without touching BatchedVar.__getattr__, which raises for
