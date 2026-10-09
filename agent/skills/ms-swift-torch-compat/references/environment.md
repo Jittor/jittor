@@ -61,6 +61,12 @@ PyTorch 或把 shim 部署进 oracle。
 不能共享正在编译的缓存。分布式 checkpoint 恢复必须使用新的 worker 进程，不能靠同一
 Python 进程保留的对象证明恢复成功。
 
+## 预检、编译与依赖作业
+
+长作业前在短时 worker 验证 runner 参数、探针/钩子签名、模块来源、模型和数据文件、短 `TMPDIR`、私有 `CCACHE_DIR`、结果读取器的 dtype 支持、实际后端和 Slurm 环境；预检失败只算 harness/环境故障。冷编译和模型阶段分别计时。预编译产物仅在源码、ABI、编译器、CANN 与目标设备指纹一致时复用；并发阶段不共享可写 `JITTOR_HOME`。
+
+提交依赖作业前确认前置成功条件。前置失败时收集证据并取消已不可能产生有效结果的下游作业；避免 `DependencyNeverSatisfied` 长期留队。监督者只在作业状态、编译进度异常或证据状态变化时唤起 Codex，不把同一冷编译阶段的重复观察当成新的实验。
+
 ## 内容寻址运行键
 
 运行键至少哈希：同步 SHA、相关 dirty diff、测试与 runner 源码、依赖锁、解释器 ABI、
