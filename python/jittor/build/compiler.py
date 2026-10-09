@@ -694,7 +694,7 @@ if nvcc_path:
     v = jit_utils.get_version(nvcc_path)[1:-1]
     nvcc_version = list(map(int,v.split('.')))
     cu += v
-    cuda_wheel_stack = install_cuda.get_cuda_wheel_stack(v)
+    cuda_wheel_stack = install_cuda.get_cuda_wheel_stack(v, nvcc_path=nvcc_path)
     if cuda_wheel_stack:
         cu += "_" + cuda_wheel_stack.fingerprint
     archs = query_cuda_archs()
@@ -1528,6 +1528,12 @@ if platform.system() == 'Linux':
 
 build_core()
 cc_flags += f" -l\"jittor_core{lib_suffix}\" "
+
+if cuda_wheel_stack:
+    # jittor_core needs libcudart.so.12 by name, and the loader searches
+    # LD_LIBRARY_PATH before the core's RUNPATH: a system CUDA there would be
+    # bound instead of the wheel's runtime. A loaded SONAME is reused.
+    preload_cuda_library("cudart", required=True)
 
 with jit_utils.import_scope(import_flags):
     import jittor_core as core

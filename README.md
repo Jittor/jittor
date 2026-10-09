@@ -285,15 +285,24 @@ Jittor 会从那里拷贝而不是下载。`python -m jittor_utils.preflight` �
 On Linux x86_64, the `cuda12` extra installs CUDA 12.2 runtime wheels, cuDNN
 8.9.7 through 9.x, and the NPP headers used by Jittor. It also installs a
 pinned CUDA 13.4 `nvcc` and CCCL headers for JIT compilation; Jittor still
-links and loads runtime libraries from the CUDA 12 wheels. A system CUDA toolkit
-or `nvcc` on `PATH` is not required. Unless `nvcc_path` is explicitly set,
-Jittor selects this pip compiler before searching system/JTCUDA locations.
+links and loads runtime libraries from the CUDA 12 wheels. The host needs only
+the NVIDIA driver and the C++ compiler Jittor always needs; no system CUDA
+toolkit, cuDNN, or `nvcc` on `PATH`, and no `CUDA_HOME` or `LD_LIBRARY_PATH`.
+Unless `nvcc_path` is explicitly set, Jittor selects this pip compiler, and then
+takes every CUDA library from the pip wheels even when `/usr/local/cuda`, a
+distribution toolkit, or another CUDA on `PATH`/`LD_LIBRARY_PATH` is present.
+If a wheel is missing or at the wrong version, import fails and names it. The
+CUDA 13 compiler generates code for SM 7.5 (Turing) and newer only.
 
 Linux x86_64 的 `cuda12` extra 安装 CUDA 12.2 运行时、cuDNN 8.9.7–9.x 及
 Jittor 编译依赖的 NPP 头文件；还会安装用于 JIT 编译的 CUDA 13.4 `nvcc` 和
 CCCL 头文件。Jittor 实际链接和加载仍来自 CUDA 12 wheel 的运行库。
-不需要系统 CUDA 工具链或 PATH 上的 `nvcc`；除非显式设置 `nvcc_path`，
-否则优先使用 pip 安装的 nvcc，再搜索系统/JTCUDA。
+宿主机只需要 NVIDIA 驱动和 Jittor 本来就要的 C++ 编译器；不需要系统 CUDA、cuDNN、
+PATH 上的 `nvcc`，也不需要设置 `CUDA_HOME` 或 `LD_LIBRARY_PATH`。除非显式设置
+`nvcc_path`，Jittor 选用这个 pip 编译器，之后所有 CUDA 库都取自 pip 包，即使机器上
+有 `/usr/local/cuda`、发行版工具链或 `PATH`/`LD_LIBRARY_PATH` 里的其他 CUDA。
+缺包或版本不符时 import 直接报错并指出是哪个包。CUDA 13 编译器只支持 SM 7.5
+（Turing）及更新的 GPU。
 
 ```bash
 python -m pip install "jittor[cuda12]"
@@ -308,8 +317,14 @@ uv 环境对应的 CUDA 安装命令为：
 uv sync --locked --no-default-groups --extra cuda12
 ```
 
-Set `JITTOR_CUDA_WHEEL_STRICT=1` to reject an incomplete or mismatched component
-stack. Set `JITTOR_CUDA_WHEEL_DISABLE=1` to use only the system/JTCUDA libraries.
+With a system/JTCUDA `nvcc`, set `JITTOR_CUDA_WHEEL_STRICT=1` to reject an
+incomplete or mismatched component stack, or `JITTOR_CUDA_WHEEL_DISABLE=1` to
+use only the system/JTCUDA libraries. To build against a system toolkit while
+`jittor[cuda12]` is installed, set `nvcc_path` to its `nvcc`.
+
+使用系统/JTCUDA 的 `nvcc` 时，设 `JITTOR_CUDA_WHEEL_STRICT=1` 拒绝不完整或版本不符的
+组件包，或设 `JITTOR_CUDA_WHEEL_DISABLE=1` 只用系统/JTCUDA 的库。已安装
+`jittor[cuda12]` 但想用系统工具链编译时，把 `nvcc_path` 设为它的 `nvcc`。
 
 ### Install from source / 从源码安装
 

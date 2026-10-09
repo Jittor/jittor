@@ -47,8 +47,9 @@ cuda12 = [
     "nvidia-nccl-cu12==2.18.3; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
     # Headers for cuDNN's fused attention (backends/cuda/kernels/nn/
     # cudnn_attention_cuda.py). Without them that kernel declines and
-    # attention takes the matmul-and-softmax path.
-    "nvidia-cudnn-frontend>=1.30,<2; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.9'",
+    # attention takes the matmul-and-softmax path. 1.29 and later publish
+    # only cp310+ wheels.
+    "nvidia-cudnn-frontend>=1.30,<2; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.10'",
 ]
 # Device time in `jt.profile` (python/jittor/profiling/_cupti.py): CUPTI for
 # the CUDA 12.2 runtime `cuda12` installs. Without it a profile reports device

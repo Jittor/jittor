@@ -141,6 +141,11 @@ class _WheelStackFixture:
         self.distributions[cuda_wheel.CUDA_NVCC_DISTRIBUTION] = _FakeDistribution(
             cuda_wheel.CUDA_NVCC_VERSION, compiler_site_packages)
 
+        cccl_site_packages = self.base / "nvidia-cuda-cccl" / "site-packages"
+        (cccl_site_packages / cuda_wheel.CUDA_CCCL_RELATIVE_PATH).mkdir(parents=True)
+        self.distributions[cuda_wheel.CUDA_CCCL_DISTRIBUTION] = _FakeDistribution(
+            cuda_wheel.CUDA_CCCL_VERSION, cccl_site_packages)
+
         self.registry = _DistributionRegistry(self.distributions)
 
     def discover(self, nvcc_version="12.2.140", strict=True):
@@ -322,6 +327,23 @@ class TestCudaWheel(unittest.TestCase):
                 r"nvidia-cuda-nvcc==13\.4\.92 is required"):
             self.fixture.discover(nvcc_version="13.4.92")
 
+    def test_pip_nvcc_requires_the_cccl_wheel_it_does_not_depend_on(self):
+        """nvcc 13 puts ``include/cccl`` on every compile; nothing pulls it in
+        but jittor[cuda12], so its absence is named here rather than surfacing
+        as a missing ``cuda/std`` header in the first JIT compile."""
+        cccl = self.fixture.distributions.pop(cuda_wheel.CUDA_CCCL_DISTRIBUTION)
+        with self.assertRaisesRegex(
+                cuda_wheel.CudaWheelError,
+                r"nvidia-cuda-cccl==13\.3\.4\.3\.1 is not"):
+            cuda_wheel.find_pip_nvcc(self.fixture.registry)
+
+        cccl.version = "13.0.85"
+        self.fixture.distributions[cuda_wheel.CUDA_CCCL_DISTRIBUTION] = cccl
+        with self.assertRaisesRegex(
+                cuda_wheel.CudaWheelError,
+                r"nvidia-cuda-cccl==13\.3\.4\.3\.1 is required, found 13\.0\.85"):
+            cuda_wheel.find_pip_nvcc(self.fixture.registry)
+
     def test_fingerprint_is_order_independent_and_version_sensitive(self):
         stack = self.fixture.discover()
         version_text = ";".join(
@@ -424,6 +446,42 @@ class TestCudnnMajorDecidesTheLayout(unittest.TestCase):
         self.assertIsNone(report.stack)
         self.assertIn("nvidia-cudnn-cu12>=8.9.7,<10 is required, found 10.0.0.1",
                       report.reason)
+
+
+class TestPipCompilerNeverFallsBackToSystemCuda(unittest.TestCase):
+    """With the jittor[cuda12] nvcc selected, the pip stack is the only CUDA.
+
+    The fallback that a system nvcc gets -- warn and use the system libraries
+    -- would here pair the pip compiler with whatever libcudnn the machine
+    has, which is the mix jittor[cuda12] exists to rule out.
+    """
+
+    PIP_NVCC = "/env/lib/python3.11/site-packages/nvidia/cu13/bin/nvcc"
+
+    def setUp(self):
+        import importlib
+        self.installer = importlib.import_module("jittor_utils.install_cuda")
+        missing = self.installer.cuda_wheel.CudaWheelReport(
+            None, "nvidia-cudnn-cu12 is not installed",
+            len(self.installer.cuda_wheel.CUDA12_COMPONENTS) - 1, False)
+        for patch in (
+                mock.patch.object(self.installer.cuda_wheel,
+                                  "inspect_cuda_wheel_stack",
+                                  return_value=missing),
+                mock.patch.dict(self.installer._cuda_wheel_stacks, clear=True)):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def test_unresolved_stack_with_pip_nvcc_names_the_package(self):
+        with self.assertRaises(self.installer.cuda_wheel.CudaWheelError) as caught:
+            self.installer.get_cuda_wheel_stack("13.4.92", nvcc_path=self.PIP_NVCC)
+        message = str(caught.exception)
+        self.assertIn("nvidia-cudnn-cu12 is not installed", message)
+        self.assertIn('pip install "jittor[cuda12]"', message)
+
+    def test_system_nvcc_keeps_the_system_fallback(self):
+        self.assertIsNone(self.installer.get_cuda_wheel_stack(
+            "12.4.131", nvcc_path="/usr/local/cuda/bin/nvcc"))
 
 
 if __name__ == "__main__":

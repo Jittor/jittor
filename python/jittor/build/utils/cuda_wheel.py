@@ -61,6 +61,11 @@ CUDA12_COMPONENTS = (
 CUDA_NVCC_DISTRIBUTION = "nvidia-cuda-nvcc"
 CUDA_NVCC_VERSION = "13.4.92"
 CUDA_NVCC_RELATIVE_PATH = os.path.join("nvidia", "cu13", "bin", "nvcc")
+# CUDA 13 nvcc adds ``-isystem <root>/include/cccl`` to every compile, but the
+# compiler wheel does not depend on the wheel that fills it.
+CUDA_CCCL_DISTRIBUTION = "nvidia-cuda-cccl"
+CUDA_CCCL_VERSION = "13.3.4.3.1"
+CUDA_CCCL_RELATIVE_PATH = os.path.join("nvidia", "cu13", "include", "cccl")
 
 
 #: The versioned split libraries a cuDNN wheel is made of, by major version.
@@ -380,6 +385,24 @@ def find_pip_nvcc(distribution=None):
             "%s==%s does not contain an executable %s" % (
                 CUDA_NVCC_DISTRIBUTION, CUDA_NVCC_VERSION,
                 CUDA_NVCC_RELATIVE_PATH))
+    try:
+        cccl = distribution(CUDA_CCCL_DISTRIBUTION)
+    except importlib_metadata.PackageNotFoundError:
+        raise CudaWheelError(
+            "%s is installed but %s==%s is not; reinstall jittor[cuda12]" % (
+                CUDA_NVCC_DISTRIBUTION, CUDA_CCCL_DISTRIBUTION,
+                CUDA_CCCL_VERSION))
+    if str(cccl.version) != CUDA_CCCL_VERSION:
+        raise CudaWheelError(
+            "%s==%s is required, found %s" % (
+                CUDA_CCCL_DISTRIBUTION, CUDA_CCCL_VERSION, cccl.version))
+    cccl_dir = os.path.abspath(os.fspath(
+        cccl.locate_file(CUDA_CCCL_RELATIVE_PATH)))
+    if not os.path.isdir(cccl_dir):
+        raise CudaWheelError(
+            "%s==%s does not contain %s" % (
+                CUDA_CCCL_DISTRIBUTION, CUDA_CCCL_VERSION,
+                CUDA_CCCL_RELATIVE_PATH))
     return path
 
 
