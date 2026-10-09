@@ -1342,6 +1342,45 @@ class TestACL(unittest.TestCase):
             prefill_bf16, decode_bf16 = jt.fetch_sync([
                 prefill_bf16.float32(), decode_bf16.float32()])
 
+            # float16: the same fused kernel as float32 (query_length > 1
+            # never qualifies for the bfloat16-only incre-decode path above,
+            # so both prefill and this GQA-decode shape go through
+            # aclnnFlashAttentionScoreV2, which forwards the query's own
+            # dtype and does not reject float16 -- verified against a numpy
+            # reference, see KI-BACKEND-017 cause 6).
+            q_fp16 = q.float16()
+            k_fp16 = k.float16()
+            v_fp16 = v.float16()
+            prefill_fp16 = backend_hooks.acl_scaled_dot_product_attention(
+                q_fp16, k_fp16, v_fp16,
+                is_causal=True, enable_gqa=True)
+            decode_fp16 = backend_hooks.acl_scaled_dot_product_attention(
+                q_fp16[:, :, :1, :], k_fp16, v_fp16,
+                enable_gqa=True)
+            self.assertIsNotNone(prefill_fp16)
+            self.assertIsNotNone(decode_fp16)
+            self.assertEqual(str(prefill_fp16.dtype), "float16")
+            self.assertEqual(str(decode_fp16.dtype), "float16")
+            self.assertEqual(
+                backend_hooks.acl_scaled_dot_product_attention.backend_name,
+                "acl_flash_attention_score_v2")
+            prefill_fp16, decode_fp16 = jt.fetch_sync([
+                prefill_fp16.float32(), decode_fp16.float32()])
+
+            # aclnn's additive-mask ("pse") slot has to match the query's own
+            # dtype exactly (AclNN_Parameter_Error EZ1001 otherwise, verified
+            # directly on a 910B3) -- a float32 mask with a non-float32
+            # query must fall back, not crash, whichever of the two dtypes
+            # this build happens to exercise first.
+            additive_bf16 = backend_hooks.acl_scaled_dot_product_attention(
+                q_bf16, k_bf16, v_bf16,
+                attn_mask=jt.array(additive_np), enable_gqa=True)
+            additive_fp16 = backend_hooks.acl_scaled_dot_product_attention(
+                q_fp16, k_fp16, v_fp16,
+                attn_mask=jt.array(additive_np), enable_gqa=True)
+            self.assertIsNone(additive_bf16)
+            self.assertIsNone(additive_fp16)
+
         np.testing.assert_allclose(
             prefill, expected(q_np, k_np, v_np, True), atol=3e-5, rtol=3e-5)
         np.testing.assert_allclose(
@@ -1357,13 +1396,16 @@ class TestACL(unittest.TestCase):
             decode_bf16,
             expected(q_np[:, :, :1, :], k_np, v_np, False),
             atol=2e-3, rtol=2e-2)
+        np.testing.assert_allclose(
+            prefill_fp16, expected(q_np, k_np, v_np, True),
+            atol=2e-2, rtol=2e-2)
+        np.testing.assert_allclose(
+            decode_fp16,
+            expected(q_np[:, :, :1, :], k_np, v_np, False),
+            atol=2e-2, rtol=2e-2)
 
         self.assertIsNone(backend_hooks.acl_scaled_dot_product_attention(
             q, k, v, dropout_p=0.1, enable_gqa=True))
-        with jt.no_grad():
-            self.assertIsNone(backend_hooks.acl_scaled_dot_product_attention(
-                q.float16(), k.float16(), v.float16(),
-                is_causal=True, enable_gqa=True))
 
     @jt.flag_scope(use_acl=1)
     def test_max(self):

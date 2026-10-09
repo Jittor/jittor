@@ -288,7 +288,15 @@ def scaled_dot_product_attention_acl(
         query.dtype
     ) != _jittor_dtype_name(value.dtype):
         return None
-    if _jittor_dtype_name(query.dtype) not in ("float32", "bfloat16"):
+    # aclnnFlashAttentionScoreV2 forwards q's own dtype for its output
+    # (FlashAttentionACL.__call__ passes output_dtypes=[..., q.dtype]) and
+    # does not reject float16 itself -- verified directly against a numpy
+    # reference for both self-attention and cross-attention (mismatched
+    # query/key-value length) shapes, max_abs_diff ~2e-5, far inside fp16
+    # noise. SD1.5's UNet runs its attention in float16 and was rejected
+    # here, falling through to a decomposed BatchMatMul+Softmax+BatchMatMul
+    # that was 19%+22% of sd15_sample's device time in an aclprof capture.
+    if _jittor_dtype_name(query.dtype) not in ("float32", "bfloat16", "float16"):
         return None
 
     query_heads = int(q_shape[-3])
@@ -321,6 +329,16 @@ def scaled_dot_product_attention_acl(
             return None
         mask_dtype = _jittor_dtype_name(attn_mask.dtype)
         if mask_dtype not in ("float32", "bool"):
+            return None
+        # A float (non-bool) mask is the additive "pse" slot, and aclnn
+        # requires its dtype to exactly equal the attention output's (the
+        # query's) dtype -- confirmed on a 910B3 with bfloat16 q/k/v and a
+        # float32 mask: AclNN_Parameter_Error(EZ1001), "The data type
+        # DT_FLOAT of pse is not equal to the data type DT_BFLOAT16 of
+        # attentionOut." This was already reachable before float16 was
+        # accepted below (any non-float32 query already hit it), just never
+        # exercised by a test; reject the mismatch instead of crashing.
+        if mask_dtype == "float32" and _jittor_dtype_name(query.dtype) != "float32":
             return None
         mask_shape = tuple(attn_mask.shape)
         if len(mask_shape) == 2:
