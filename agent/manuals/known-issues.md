@@ -1051,6 +1051,16 @@ workaround.
   the executor running on the Python thread; the async worker
   (`may_run_async`) is still CUDA-only and would need an ACL thread device
   bind plus a thread-safe `AclCpuFallbackScope` before it can overlap them.
+  (2026-10-09) One piece of that generic dispatch was ACL-scoped after all:
+  ACL registers `tensor.concat`, so the native `_fast_cat` always declines
+  and every `torch.cat` walked the whole compat frontend
+  (`__torch_function__` scan, `None` filter, scalar squeeze, uint8 restore)
+  only to reach `jittor.concat`. For a list of plain Vars of one signed
+  dtype and one rank, none empty, every one of those steps is a no-op, and
+  the compat `cat` now goes straight to `jittor.concat` (147 -> 124 us per
+  call). Clean paired run on npu 3 against the same baseline: `qwen3_decode`
+  2.04x -> 1.91x, geometric mean 0.932x -> 0.917x, zero fallbacks, nothing
+  else moving beyond noise.
   `bert_base_train`'s gap is similarly not a dispatch bug: an aclprof
   capture shows `MatMulV2` at 42.4% of device time (the
   expected dominant cost for a transformer) and `DSARandomUniform` --
