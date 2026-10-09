@@ -49,6 +49,6 @@
 | [batched Linear 的两个展平节点](2026-09-12-batched-linear-graph-nodes.md) | 已落地，H20 上实测；对拍结论未附 | 2026-09-12，2026-09-23 归档 |
 | [Jittor vs 真 PyTorch 2.9.1：现在差在哪](2026-09-14-jittor-vs-pytorch.md) | 快照：对 eager 赢 6 平 5 输 1，对 `torch.compile` 赢 2 平 2 输 5 | 2026-09-14 |
 | [CUDA 13.4 编译器 + CUDA 12 运行时](2026-09-22-cuda13-nvcc-cuda12-runtime.md) | 已被 2026-10-09 的干扰项验收取代 | 2026-09-22 |
-| [jittor[cuda12]：系统 CUDA 可见时的干净环境验收](2026-10-09-cuda12-pip-stack-decoy-acceptance.md) | uv 与 conda 真 GPU 通过；修复 cudart 被系统库抢先加载 | 2026-10-09 |
+| [jittor[cuda12]：系统 CUDA 可见时的干净环境验收](2026-10-09-cuda12-pip-stack-decoy-acceptance.md) | uv 与 conda 真 GPU 通过；本机合适的 nvcc 优先、否则 pip nvcc，运行库只取 pip；修复 cudart 被系统库抢先加载 | 2026-10-09 |
 | [Torch 兼容层在真实模型上对 PyTorch：差距表、显存与性能修复](2026-09-24-torch-compat-real-models.md) | 11 项全部跑通，几何平均 1.26x，进程显存峰值为 PyTorch 的 0.87–1.45 倍；余下差距在主机侧 | 2026-09-24 |
 | [性能/显存分析工具：审计与重写](2026-09-25-profiling-tools.md) | 已实现，RTX 4090 上验证；未合入 | 2026-09-25 |

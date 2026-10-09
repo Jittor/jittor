@@ -34,8 +34,9 @@ dependencies = [
 cuda12 = [
     "cuda-toolkit[cublas,cudart,cufft,curand,cusparse,npp,nvjitlink,nvrtc,nvtx]==12.2.2; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
     # CUDA 12 component wheels named nvidia-cuda-nvcc-cu12 contain ptxas and
-    # NVVM, but not the nvcc driver. This wheel supplies the real compiler;
-    # Jittor still resolves runtime libraries from the CUDA 12 components above.
+    # NVVM, but not the nvcc driver. This wheel is the compiler when no local
+    # nvcc 12.2-13.x is found; either way Jittor resolves runtime libraries
+    # from the CUDA 12 components above.
     "nvidia-cuda-nvcc==13.4.92; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
     # CUDA 13 nvcc needs CCCL headers; runtime linking remains on the CUDA 12 stack.
     "nvidia-cuda-cccl==13.3.4.3.1; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",

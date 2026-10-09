@@ -1,10 +1,12 @@
 """GPU smoke for a jittor[cuda12] environment, with provenance checks.
 
 Runs an add, a matmul forward/backward and a cuDNN conv2d on the visible GPU,
-then asserts that nvcc, libcudart and libcudnn all come from this
-interpreter's ``site-packages/nvidia``. Decoy roots that must not be used are
-passed in ``CUDA12_PIP_FORBIDDEN`` (os.pathsep separated). Prints one JSON
-line prefixed ``CUDA12_PIP_SMOKE=`` and exits non-zero on the first failure.
+then asserts that libcudart and libcudnn come from this interpreter's
+``site-packages/nvidia`` and never from the system roots in
+``CUDA12_PIP_FORBIDDEN`` (os.pathsep separated). ``CUDA12_PIP_EXPECT_NVCC``
+says where nvcc must be: ``pip`` (the environment's wheel) or ``system`` (one
+of those system roots). Prints one JSON line prefixed ``CUDA12_PIP_SMOKE=``
+and exits non-zero on the first failure.
 """
 
 import ctypes
@@ -24,6 +26,11 @@ purelib = os.path.realpath(sysconfig.get_paths()["purelib"])
 prefix = os.path.realpath(sys.prefix)
 nvidia_root = os.path.join(purelib, "nvidia") + os.sep
 forbidden = [p for p in os.environ.get("CUDA12_PIP_FORBIDDEN", "").split(os.pathsep) if p]
+expect_nvcc = os.environ.get("CUDA12_PIP_EXPECT_NVCC", "pip")
+if expect_nvcc not in ("pip", "system"):
+    fail("CUDA12_PIP_EXPECT_NVCC must be pip or system")
+if expect_nvcc == "system" and not forbidden:
+    fail("CUDA12_PIP_FORBIDDEN must name the system roots")
 if not purelib.startswith(prefix + os.sep):
     fail("site-packages %s is outside the environment %s" % (purelib, prefix))
 if not os.environ.get("CUDA_VISIBLE_DEVICES"):
@@ -113,9 +120,12 @@ if not np.allclose(conv.numpy(), want, rtol=1e-3, atol=1e-3):
 report["conv2d"] = list(conv.shape)
 
 nvcc = jt.flags.nvcc_path
-if not from_env(nvcc):
+if expect_nvcc == "pip" and not from_env(nvcc):
     fail("nvcc %s is not this environment's pip nvcc" % nvcc)
+if expect_nvcc == "system" and not is_forbidden(nvcc):
+    fail("nvcc %s is not the system nvcc" % nvcc)
 report["nvcc"] = os.path.realpath(nvcc)
+report["expect_nvcc"] = expect_nvcc
 report["nvcc_version"] = [
     line for line in subprocess.run(
         [nvcc, "--version"], capture_output=True, text=True).stdout.splitlines()
