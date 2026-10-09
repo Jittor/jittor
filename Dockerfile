@@ -9,6 +9,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential \
         ca-certificates \
+        cmake \
         g++ \
         libomp-dev \
         libopenmpi-dev \
@@ -31,6 +32,8 @@ WORKDIR /opt/jittor
 COPY pyproject.toml setup.py README.md MANIFEST.in LICENSE.txt ./
 COPY requirements/examples.txt ./requirements/examples.txt
 COPY python ./python
+COPY src ./src
+COPY backends ./backends
 COPY examples ./examples
 
 RUN python -m pip install --no-cache-dir . \

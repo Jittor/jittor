@@ -19,6 +19,9 @@ jittor_vllm = "jittor_adapters.vllm:register"
 where = ["."]
 include = ["jittor_adapters*"]
 
+[tool.setuptools.package-data]
+"jittor_adapters.deepspeed" = ["README.md"]
+
 [tool.jittor.sdist]
 include = ["README.md", "tests/**/*.py"]
 exclude = ["build/**", "dist/**"]

@@ -60,7 +60,10 @@ def _is_build_output(relative, base):
     global _BUILD_OUTPUT_FILTER
     if _BUILD_OUTPUT_FILTER is None:
         spec = importlib.util.spec_from_file_location(
-            "jittor_check_import_layering", _IMPORT_LAYERING_CHECKER)
+            "jittor_check_import_layering", _IMPORT_LAYERING_CHECKER
+        )
+        if spec is None or spec.loader is None:
+            raise ImportError("Cannot load module from its source path")
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         _BUILD_OUTPUT_FILTER = module._is_build_output
@@ -77,6 +80,8 @@ def _runtime_sources(repo_root):
 
 
 class TestCleanupStructure(unittest.TestCase):
+    repo_root: Path
+
     @classmethod
     def setUpClass(cls):
         cls.repo_root = Path(__file__).resolve().parents[2]
@@ -94,8 +99,7 @@ class TestCleanupStructure(unittest.TestCase):
             MIGRATION_GUARD_EXPIRY,
             "these one-shot migration guards have been true since the migration "
             "landed and are now pure gate weight: %s. Delete them together with "
-            "this test, or move MIGRATION_GUARD_EXPIRY with a written reason."
-            % ", ".join(guards),
+            "this test, or move MIGRATION_GUARD_EXPIRY with a written reason." % ", ".join(guards),
         )
 
     def test_retired_runtime_payloads_are_absent(self):
@@ -190,8 +194,12 @@ class TestCleanupStructure(unittest.TestCase):
         implementations: Dict[str, List[Tuple[str, str]]] = {}
         sources = sorted(
             path
-            for root in (self.repo_root / "python", self.repo_root / "backends",
-                         self.repo_root / "compat", self.repo_root / "tests")
+            for root in (
+                self.repo_root / "python",
+                self.repo_root / "backends",
+                self.repo_root / "compat",
+                self.repo_root / "tests",
+            )
             for path in root.rglob("*.py")
             if not _is_build_output(path.relative_to(root), root)
         )
@@ -208,7 +216,9 @@ class TestCleanupStructure(unittest.TestCase):
                     continue
                 if getattr(node, "end_lineno", node.lineno) - node.lineno < 3:
                     continue
-                normalized = copy.deepcopy(node)
+                # Only the outer name and decorators change; copying child nodes is unnecessary.
+                # Deep copies can follow parent links attached to shared AST context nodes.
+                normalized = copy.copy(node)
                 normalized.name = "_"
                 normalized.decorator_list = []
                 fingerprint = ast.dump(normalized, include_attributes=False)
@@ -365,20 +375,24 @@ class TestCleanupStructure(unittest.TestCase):
             key=repr,
         )
         self.assertEqual(
-            unreviewed_shipped, [],
+            unreviewed_shipped,
+            [],
             "shipped-code duplicates with no reviewed answer: %r" % (unreviewed_shipped,),
         )
 
         # Test tree: reviewed by name, with the reason above. The kind is named
         # in the message so that the next failure says which tree changed.
-        unreviewed_test_names = sorted({
-            name
-            for group in test_groups
-            for _path, name in group
-            if name not in reviewed_test_tree_names
-        })
+        unreviewed_test_names = sorted(
+            {
+                name
+                for group in test_groups
+                for _path, name in group
+                if name not in reviewed_test_tree_names
+            }
+        )
         self.assertEqual(
-            unreviewed_test_names, [],
+            unreviewed_test_names,
+            [],
             "test-tree definitions repeated across files with no reviewed reason: %r"
             % (unreviewed_test_names,),
         )
@@ -483,9 +497,11 @@ class TestCleanupStructure(unittest.TestCase):
                     )
                     argument = node.args[0]
                     # ``ast.Str``/``.s``: removed in Python 3.12.
-                    if ((is_import_module or is_builtin_import)
-                            and isinstance(argument, ast.Constant)
-                            and isinstance(argument.value, str)):
+                    if (
+                        (is_import_module or is_builtin_import)
+                        and isinstance(argument, ast.Constant)
+                        and isinstance(argument.value, str)
+                    ):
                         imported.append(argument.value)
                     elif (
                         (is_import_module or is_builtin_import)
@@ -510,12 +526,11 @@ class TestCleanupStructure(unittest.TestCase):
 
     def test_documentation_governance_checker(self):
         checker = self.repo_root / "tools" / "docs" / "check_governance.py"
-        result = run_python_child(
-            [checker], cwd=self.repo_root, merge_stderr=True)
+        result = run_python_child([checker], cwd=self.repo_root, merge_stderr=True)
         self.assertEqual(result.returncode, 0, result.stdout)
 
     def test_development_trees_are_not_import_packages(self):
-        initializers = []
+        initializers: List[Path] = []
         for relative in ("examples", "tools"):
             initializers.extend((self.repo_root / relative).rglob("__init__.py"))
         self.assertEqual(initializers, [])
@@ -545,6 +560,8 @@ path = Path(sys.argv[1]).resolve()
 work = Path.cwd()
 before = sorted(item.relative_to(work).as_posix() for item in work.rglob('*'))
 spec = importlib.util.spec_from_file_location('stage6_import_probe', str(path))
+if spec is None or spec.loader is None:
+    raise ImportError("Cannot load module from its source path")
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 after = sorted(item.relative_to(work).as_posix() for item in work.rglob('*'))
@@ -574,8 +591,12 @@ for forbidden in ('jittor', 'PIL', 'pywebio'):
             for target in targets:
                 with self.subTest(path=target.relative_to(self.repo_root).as_posix()):
                     result = run_python_child(
-                        ["-c", probe, str(target)], cwd=work, env=env,
-                        inherit=False, merge_stderr=True)
+                        ["-c", probe, str(target)],
+                        cwd=work,
+                        env=env,
+                        inherit=False,
+                        merge_stderr=True,
+                    )
                     self.assertEqual(result.returncode, 0, result.stdout)
 
     def test_pack_offline_dry_run_writes_nothing(self):
@@ -586,7 +607,11 @@ for forbidden in ('jittor', 'PIL', 'pywebio'):
             env["PYTHONDONTWRITEBYTECODE"] = "1"
             result = run_python_child(
                 [script, "--dry-run", "--output-dir", str(output)],
-                cwd=temporary, env=env, inherit=False, merge_stderr=True)
+                cwd=temporary,
+                env=env,
+                inherit=False,
+                merge_stderr=True,
+            )
             self.assertEqual(result.returncode, 0, result.stdout)
             self.assertFalse(output.exists(), result.stdout)
 
@@ -600,6 +625,7 @@ for forbidden in ('jittor', 'PIL', 'pywebio'):
         # is what the heading says -- the English word never was.
         self.assertIn("破坏性变更", source)
         self.assertIn("compile_custom_op", source)
+
 
 if __name__ == "__main__":
     unittest.main()

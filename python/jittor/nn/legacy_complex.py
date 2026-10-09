@@ -26,8 +26,7 @@ def _fft2_cuda(x, inverse=False):
 
 
 for _backend in ("cuda", "rocm_legacy", "corex_legacy"):
-    register_kernel("nn.legacy_fft2", _backend, _fft2_cuda,
-                    runtime_modes=(1,))
+    register_kernel("nn.legacy_fft2", _backend, _fft2_cuda, runtime_modes=(1,))
 del _backend
 
 

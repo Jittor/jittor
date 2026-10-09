@@ -101,11 +101,17 @@ jobs:
     runs-on: ${{ fromJSON(needs.baseline.outputs.cuda_runner_labels) }}
     timeout-minutes: 240
     env:
-      ASV_RESULTS_DIR: ${{ runner.temp }}/jittor-asv-cuda/results
-      ASV_HTML_DIR: ${{ runner.temp }}/jittor-asv-cuda/html
       ASV_MACHINE: github-rtx4090-cuda12-2
       ASV_COMPARE_BASE: ${{ github.event.before }}
     steps:
+      - name: Initialize ASV paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            printf 'ASV_RESULTS_DIR=%s/jittor-asv-cuda/results\n' "$RUNNER_TEMP"
+            printf 'ASV_HTML_DIR=%s/jittor-asv-cuda/html\n' "$RUNNER_TEMP"
+          } >> "$GITHUB_ENV"
       - name: Check out source with benchmark history
         uses: actions/checkout@v6
         with:

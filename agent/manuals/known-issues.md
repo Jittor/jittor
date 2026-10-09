@@ -1325,6 +1325,27 @@ workaround.
   a read costs the same as one without it, and the residency contract covers all
   spellings including the reduction case.
 
+## KI-MEM-004: ZeRO-2 memory profiling can fail during NPU gradient reduction
+
+- Severity: Medium
+- Status: Open; reproduced on two Ascend NPU devices on 2026-10-09
+- Owner: memory, executor and distributed maintainers
+- Symptom: DeepSpeed 0.17.6 ZeRO-2 training of Qwen3-0.6B with
+  `profile_memory_enable=1` can raise `nano_vector.h:41: slice overflow` when
+  `torch.distributed.all_reduce` synchronizes the lazy graph during backward.
+  The failure occurred in two independent two-rank jobs (2087 and 2088).
+- Cause: the invalid slice is reached while flushing the graph with memory
+  profiling enabled; its originating operation is not yet identified. The
+  same 16-step training completed on the same device pair with profiling
+  disabled (job 2095), with both ranks reporting nonzero input gradients and
+  zero backend fallbacks.
+- Workaround: disable `profile_memory_enable` for this ZeRO-2 run. Training
+  and timing can be checked, but peak device memory cannot be claimed.
+- Evidence: [DeepSpeed single-node NPU result](../../docs/results/2026-10-09-deepspeed-single-node-npu.md),
+  jobs 2087, 2088 and 2095.
+- Exit condition: the 10-warmup, 5-sample two-rank ZeRO-2 Qwen3 run completes
+  with profiling enabled and returns valid peak-memory readings on both ranks.
+
 ## KI-AUTOGRAD-003: register_hook makes the receiver misreport its residency
 
 - Severity: Low

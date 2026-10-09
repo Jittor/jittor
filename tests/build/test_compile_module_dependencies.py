@@ -31,8 +31,10 @@ print("MODULE_DEPENDENCY_RESULT=" + json.dumps({
 """.replace("SOURCE", repr(source))
 
     def execute():
+        # A cold child can compile the core under four smoke workers.
+        # Keep a finite bound with room for a cold CI cache.
         result = run_child_script(child_source, directory=tmp_path,
-                                  name="module_dependency", timeout=180,
+                                  name="module_dependency", timeout=600,
                                   without_torch_mode=True, text=True)
         assert result.returncode == 0, result.stdout[-4000:] + result.stderr[-4000:]
         rows = [line.partition("=")[2]

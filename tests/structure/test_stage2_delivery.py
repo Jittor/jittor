@@ -2,8 +2,12 @@
 
 import ast
 import json
+import os
 from pathlib import Path
 import shlex
+import subprocess
+import tempfile
+import textwrap
 import unittest
 
 
@@ -33,6 +37,7 @@ class TestStage2Delivery(unittest.TestCase):
     def test_baseline_is_complete_and_machine_readable(self):
         required = {
             "CI_HOST_RUNNER",
+            "CI_PY37_RUNNER",
             "CI_PYTHON_VERSION",
             "CI_CPU_CI_IMAGE",
             "CI_CUDA_VERSION",
@@ -60,6 +65,85 @@ class TestStage2Delivery(unittest.TestCase):
         self.assertIn("source .github/ci-baseline.env", reusable)
         self.assertIn("runs-on: " + self.baseline["CI_HOST_RUNNER"], reusable)
 
+    def test_python37_runner_preserves_the_real_interpreter_gate(self):
+        structure = (self.workflows / "structure.yml").read_text(encoding="utf-8")
+        job = structure.split("  python37:\n", 1)[1].split("\n  python312:", 1)[0]
+        self.assertEqual(self.baseline["CI_PY37_RUNNER"], "ubuntu-22.04")
+        self.assertIn("runs-on: ${{ needs.baseline.outputs.py37_runner }}", job)
+        self.assertIn('python-version: "3.7"', job)
+        self.assertIn("python -m nox -s py37", job)
+        reusable = (self.workflows / "_ci-baseline.yml").read_text(encoding="utf-8")
+        self.assertIn("value: ${{ jobs.read.outputs.py37_runner }}", reusable)
+        self.assertIn("py37_runner: ${{ steps.baseline.outputs.py37_runner }}", reusable)
+        self.assertIn('echo "py37_runner=${CI_PY37_RUNNER}"', reusable)
+
+    def test_packaging_ci_provisions_the_default_mkl_toolchain(self):
+        workflow = (self.workflows / "structure.yml").read_text(encoding="utf-8")
+        job = workflow.split("  packaging:\n", 1)[1].split("\n  python37:", 1)[0]
+        commands = [
+            shlex.split(line.strip())
+            for line in job.splitlines()
+            if line.strip().startswith("apt-get install ")
+        ]
+        self.assertEqual(len(commands), 1)
+        required = {"build-essential", "libomp-dev", "cmake", "git", "ca-certificates"}
+        self.assertTrue(required.issubset(set(commands[0])))
+        self.assertLess(job.index("apt-get install "), job.index("uses: actions/checkout@v6"))
+
+    def test_cpu_ci_provisions_the_default_mkl_toolchain(self):
+        workflow = (self.workflows / "cpu.yml").read_text(encoding="utf-8")
+        required = {"build-essential", "libomp-dev", "cmake", "git", "ca-certificates"}
+        for job_name, next_job in (("smoke", "cpu"), ("cpu", "benchmark"), ("benchmark", None)):
+            with self.subTest(job=job_name):
+                job = workflow.split("  " + job_name + ":\n", 1)[1]
+                if next_job is not None:
+                    job = job.split("\n  " + next_job + ":", 1)[0]
+                commands = [
+                    shlex.split(line.strip())
+                    for line in job.splitlines()
+                    if line.strip().startswith("apt-get install ")
+                ]
+                self.assertEqual(len(commands), 1)
+                self.assertTrue(required.issubset(set(commands[0])))
+                self.assertLess(
+                    job.index("apt-get install "), job.index("uses: actions/checkout@v6")
+                )
+
+    def test_asv_paths_are_available_before_restore_and_preserve_spaces(self):
+        for workflow, job_name, directory in (
+            ("cpu", "benchmark", "jittor-asv"),
+            ("cuda", "benchmark-cuda", "jittor-asv-cuda"),
+        ):
+            with self.subTest(workflow=workflow):
+                source = (self.workflows / (workflow + ".yml")).read_text(encoding="utf-8")
+                job = source.split("  " + job_name + ":\n", 1)[1]
+                job_env, steps = job.split("    steps:\n", 1)
+                self.assertNotIn("runner.temp", job_env)
+                self.assertTrue(steps.startswith("      - name: Initialize ASV paths\n"))
+                initialize = steps.split("\n      - name:", 1)[0]
+                self.assertIn("shell: bash", initialize)
+                script = textwrap.dedent(initialize.split("        run: |\n", 1)[1])
+                with tempfile.TemporaryDirectory() as temporary:
+                    temporary = Path(temporary)
+                    env_file = temporary / "github-env"
+                    runner_temp = temporary / "runner temp"
+                    environment = os.environ.copy()
+                    environment.update(RUNNER_TEMP=str(runner_temp), GITHUB_ENV=str(env_file))
+                    subprocess.run(["bash", "-c", script], env=environment, check=True)
+                    exported = dict(
+                        line.split("=", 1)
+                        for line in env_file.read_text(encoding="utf-8").splitlines()
+                    )
+                    self.assertEqual(
+                        exported,
+                        {
+                            "ASV_RESULTS_DIR": str(runner_temp / directory / "results"),
+                            "ASV_HTML_DIR": str(runner_temp / directory / "html"),
+                        },
+                    )
+                self.assertIn("path: ${{ env.ASV_RESULTS_DIR }}", steps)
+                self.assertIn("${{ env.ASV_HTML_DIR }}", steps)
+
     def test_retired_gitlab_ci_does_not_return(self):
         self.assertFalse((self.repo_root / ".gitlab-ci.yml").exists())
         layout_gate = (self.repo_root / "tools" / "check_repo_layout.sh").read_text(
@@ -79,7 +163,7 @@ class TestStage2Delivery(unittest.TestCase):
             "required_paths",
             "notebook product must stay outside",
             "module/package path collision",
-                "check_governance.py",
+            "check_governance.py",
         ):
             with self.subTest(contract=contract):
                 self.assertIn(contract, layout_gate)
@@ -104,12 +188,12 @@ class TestStage2Delivery(unittest.TestCase):
     @staticmethod
     def _cpu_gate_files():
         """Test files the CPU gate would collect, across both process modes."""
-        from _helpers.gate_scope import (
-            native_arguments, selected_files, torch_arguments)
+        from _helpers.gate_scope import native_arguments, selected_files, torch_arguments
 
         repo_root = Path(__file__).resolve().parents[2]
-        return (selected_files(repo_root, native_arguments())
-                | selected_files(repo_root, torch_arguments()))
+        return selected_files(repo_root, native_arguments()) | selected_files(
+            repo_root, torch_arguments()
+        )
 
     def test_nox_keeps_fast_structure_and_packaging_separate(self):
         path = self.repo_root / "noxfile.py"
@@ -128,8 +212,7 @@ class TestStage2Delivery(unittest.TestCase):
         # they are spread over three functions rather than one. Asserting only
         # `cpu` would have gone quietly green while `smoke` -- the tier a pull
         # request actually waits for -- inherited none of them.
-        cpu = (functions["cpu"] + functions["smoke"]
-               + functions["_cpu_gate_env"])
+        cpu = functions["cpu"] + functions["smoke"] + functions["_cpu_gate_env"]
         upper_python = functions["_upper_python_compatibility"]
         py312 = functions["py312"]
         py313 = functions["py313"]
@@ -281,7 +364,9 @@ class TestStage2Delivery(unittest.TestCase):
                 # into a POD struct; the two are now arguments to it.
                 self.assertIn("conv_compute_type, conv_math_key,", source)
 
-        wrapper = (cuda / "libraries" / "cudnn" / "include" / "cudnn_wrapper.h").read_text(encoding="utf-8")
+        wrapper = (cuda / "libraries" / "cudnn" / "include" / "cudnn_wrapper.h").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("cudnnMathType_t cudnn_conv_math_type(", wrapper)
         self.assertIn("#ifndef IS_ROCM", wrapper)
         self.assertIn("#if CUDNN_VERSION >= 8000", wrapper)

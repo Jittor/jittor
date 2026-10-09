@@ -48,7 +48,9 @@ void HcclBroadcastOp::jit_run() {
         @Root == group_rank ? xp : yp, (uint64_t)x->num,
         hccl_dtype(x->dtype()), @Root,
         hccl_process_group_comm(group_id), aclstream));
-    if (@Root == group_rank) {
+    // Zero-element tensors have no storage; ACL rejects a zero-byte memcpy.
+    // Keep the collective above on all ranks to preserve communication order.
+    if (@Root == group_rank && x->num > 0) {
         ACLCHECK(aclrtMemcpy(yp, x->num * sizeof(Tx), xp, x->num * sizeof(Tx), ACL_MEMCPY_DEVICE_TO_DEVICE));
         ACLCHECK(aclrtSynchronizeDevice());
     }

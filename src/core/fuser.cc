@@ -451,7 +451,10 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
         for (uint i = 0; i < ops.size() && !reduce_candidate; i++) {
             Op* reduce = ops[i];
             if (reduce->type() != OpType::reduce) continue;
-            for (Var* var : reduce->inputs()) {
+            for (auto edge : reduce->_inputs) {
+                // Only data inputs define the reduction iteration space.
+                if (edge.reverse().index < 0) continue;
+                Var* var = edge.node->var();
                 if (var->tflag != tt || var->batch_index_at(tt) < start_var_num) continue;
                 Op* producer = var->input();
                 if (!producer || producer->tflag != tt) continue;
@@ -502,7 +505,10 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
         for (uint i = 0; i < ops.size(); i++) {
             Op* reduce = ops[i];
             if (reduce->type() != OpType::reduce) continue;
-            for (Var* var : reduce->inputs()) {
+            for (auto edge : reduce->_inputs) {
+                // Only data inputs define the reduction iteration space.
+                if (edge.reverse().index < 0) continue;
+                Var* var = edge.node->var();
                 if (var->tflag != tt || var->batch_index_at(tt) < start_var_num) continue;
                 Op* producer = var->input();
                 if (!producer || producer->tflag != tt) continue;

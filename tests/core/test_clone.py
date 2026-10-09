@@ -13,17 +13,20 @@ import numpy as np
 class TestClone(unittest.TestCase):
     def test_mid_stop_grad(self):
         jt.clean()
+        # Other tests may still hold variables in this worker. Assert the
+        # graph's change in live variables rather than an absolute total.
+        initial_live_vars = jt.introspection.counters.live_vars
         b = a = jt.array(1.0)
         for i in range(10):
             b = b.clone()
             if i==5: c=b
         b.sync()
-        assert jt.introspection.counters.live_vars==11
+        assert jt.introspection.counters.live_vars == initial_live_vars + 11
         c.name("c")
         c.stop_grad()
         for n in jt.dump_all_graphs().nodes_info:
             print(n)
-        assert jt.introspection.counters.live_vars==3, jt.introspection.counters.live_vars
+        assert jt.introspection.counters.live_vars == initial_live_vars + 3, jt.introspection.counters.live_vars
 
     def test2(self):
         a = jt.array([1,2])

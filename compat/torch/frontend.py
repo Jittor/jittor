@@ -3,6 +3,7 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 from functools import update_wrapper
 from types import MethodType
+from typing import Any, Callable, Optional
 import weakref
 
 #: Resolved on first use, then reused. These two helpers sit on the per-op path
@@ -10,7 +11,7 @@ import weakref
 #: function-local `import` pays the import machinery on every call. The import
 #: stays lazy so this module is still importable before the install context
 #: exists.
-_get_install_context = None
+_get_install_context: Optional[Callable[..., Any]] = None
 
 #: The two accumulation tiers, as the state object spells them.
 _TIERS = {"highest": 0, "high": 1, "medium": 2}
@@ -22,7 +23,7 @@ _TIERS = {"highest": 0, "high": 1, "medium": 2}
 #: The type is created by the installer, so a reinstallation makes a new type and
 #: a new entry rather than reusing an old one. Weak: subclasses made at run time
 #: (a Parameter subclass) ask too and must stay collectable.
-_precision_state = weakref.WeakKeyDictionary()
+_precision_state: "weakref.WeakKeyDictionary[type, Any]" = weakref.WeakKeyDictionary()
 
 
 def _frontend_precision_policy(cls):
@@ -32,7 +33,8 @@ def _frontend_precision_policy(cls):
     if state is None:
         get_install_context = _get_install_context
         if get_install_context is None:
-            from .context import get_install_context as get_install_context
+            from .context import get_install_context as resolve_context
+            get_install_context = resolve_context
             _get_install_context = get_install_context
         state = get_install_context(cls._frontend_backend).state.get("cuda_runtime")
         if state is None:
@@ -147,7 +149,7 @@ class tensor_frontend:
         self._device = device
         self._like = like
         self._default_placement = default_placement
-        self._backend = None
+        self._backend: Any = None
 
     def __enter__(self):
         backend = getattr(self._type, "_frontend_backend", None)

@@ -93,11 +93,15 @@ class TestProbeCache(unittest.TestCase):
 class TestWarmImportRunsNoProbes(unittest.TestCase):
     """The acceptance criterion: a warm import spawns no probe subprocess."""
 
-    def _import_and_report(self):
-        script = ("import jittor;"
+    def _import_and_report(self, cache_file):
+        script = ("import sys;"
                   "from jittor_utils import probe;"
+                  "probe.cache_file = lambda: sys.argv[1];"
+                  "probe._entries = None;"
+                  "probe.MISSES = 0;"
+                  "import jittor;"
                   "print('MISSES', probe.MISSES)")
-        out = run_python_child(["-c", script], text=False)
+        out = run_python_child(["-c", script, cache_file], text=False)
         assert out.returncode == 0, out.stderr.decode()[-4000:]
         for line in out.stdout.decode().splitlines():
             if line.startswith("MISSES "):
@@ -105,11 +109,13 @@ class TestWarmImportRunsNoProbes(unittest.TestCase):
         raise AssertionError("child did not report: " + out.stdout.decode()[-2000:])
 
     def test_second_import_probes_nothing(self):
-        probe.forget()
-        first = self._import_and_report()
-        self.assertGreater(first, 0, "nothing was probed even from an empty cache")
-        self.assertEqual(self._import_and_report(), 0,
-                         "a warm import is still starting probe subprocesses")
+        # Use a private probe file; other xdist workers share JITTOR_HOME.
+        with tempfile.TemporaryDirectory() as directory:
+            cache_file = os.path.join(directory, "probe.json")
+            first = self._import_and_report(cache_file)
+            self.assertGreater(first, 0, "nothing was probed even from an empty cache")
+            self.assertEqual(self._import_and_report(cache_file), 0,
+                             "a warm import is still starting probe subprocesses")
 
 
 if __name__ == "__main__":

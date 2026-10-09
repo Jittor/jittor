@@ -27,6 +27,7 @@
 2026-09-19-torch-compat-runbook-verification
 2026-09-24-torch-compat-real-models
 2026-09-25-profiling-tools
+2026-10-09-deepspeed-single-node-npu
 ```
 
 ## 按主题索引
@@ -48,3 +49,4 @@
 | [Jittor vs 真 PyTorch 2.9.1：现在差在哪](2026-09-14-jittor-vs-pytorch.md) | 快照：对 eager 赢 6 平 5 输 1，对 `torch.compile` 赢 2 平 2 输 5 | 2026-09-14 |
 | [Torch 兼容层在真实模型上对 PyTorch：差距表、显存与性能修复](2026-09-24-torch-compat-real-models.md) | 11 项全部跑通，几何平均 1.26x，进程显存峰值为 PyTorch 的 0.87–1.45 倍；余下差距在主机侧 | 2026-09-24 |
 | [性能/显存分析工具：审计与重写](2026-09-25-profiling-tools.md) | 已实现，RTX 4090 上验证；未合入 | 2026-09-25 |
+| [DeepSpeed 0.17.6 单机双 Ascend NPU 验收](2026-10-09-deepspeed-single-node-npu.md) | ZeRO-1/2/3 双卡原模型数值与正式训练通过，回退计数为 0 | 2026-10-09 |

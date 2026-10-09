@@ -128,6 +128,32 @@ def test_compat_working_directory_uses_repository_relative_execution_accounting(
     assert pytest_policy._relative_to_repo("tests/structure/test_factory_install_owners.py") == expected
 
 
+def test_xdist_collection_merges_executed_and_deselected_files(monkeypatch):
+    """A parallel gate must report only the file that truly collected nothing."""
+    selected = {"tests/a.py", "tests/filtered.py", "tests/empty.py"}
+    monkeypatch.setattr(pytest_policy, "_SELECTED_FILES", set())
+    monkeypatch.setattr(pytest_policy, "_COLLECTED_FILES", set())
+    monkeypatch.setattr(pytest_policy, "_requires_execution", lambda: False)
+    monkeypatch.setattr(pytest_policy, "_required_accelerator_executions", lambda: 0)
+    monkeypatch.setattr(pytest_policy, "_flush_worker_state_leaks", lambda session: None)
+    monkeypatch.setattr(pytest_policy, "_snapshot_selected_files", lambda config: None)
+    monkeypatch.setattr(pytest_policy, "_MISSING_REAL_TORCH", [])
+    worker = SimpleNamespace(config=SimpleNamespace(workeroutput={},
+                                                    option=SimpleNamespace(collectonly=False)),
+                             exitstatus=0)
+    pytest_policy._SELECTED_FILES.update(selected)
+    pytest_policy._COLLECTED_FILES.update({"tests/a.py", "tests/filtered.py"})
+    pytest_policy.pytest_sessionfinish(worker, 0)
+    output = worker.config.workeroutput
+    assert output["jittor_selected_files"] == sorted(selected)
+    assert output["jittor_collected_files"] == ["tests/a.py", "tests/filtered.py"]
+
+    pytest_policy._SELECTED_FILES.clear()
+    pytest_policy._COLLECTED_FILES.clear()
+    pytest_policy.pytest_testnodedown(SimpleNamespace(workeroutput=output), None)
+    assert pytest_policy._files_that_collected_nothing() == ["tests/empty.py"]
+
+
 def test_sessionfinish_flushes_worker_survey_and_keeps_execution_gate(monkeypatch):
     flushed = []
     monkeypatch.setattr(pytest_policy, "_write_state_leak_report", lambda suffix: flushed.append(suffix))

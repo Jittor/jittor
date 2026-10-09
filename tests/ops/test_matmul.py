@@ -106,9 +106,13 @@ def check_matmul2(s1, s2, t1, t2, dtype = 'float32'):
     assert np.allclose(c_, c__)
     logs = find_log_with_re(logs, 
         "Jit op key (not )?found: (mkl)|(cublas)_matmul.*")
-    if (dtype.startswith('float')):
-        if jt.introspection.policy.runtime.use_cuda or dtype == 'float32':
-            assert(len(logs)==1)
+    if dtype.startswith('float'):
+        if jt.introspection.policy.runtime.use_cuda:
+            assert len(logs) == 1
+        else:
+            # Broadcast operands are storage views; CPU direct nn.matmul
+            # is the registered oneDNN path, not this meta-op spelling.
+            assert not logs, logs
 
 class TestMatmul(unittest.TestCase):
     def setUp(self):

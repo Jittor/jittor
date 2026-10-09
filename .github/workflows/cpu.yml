@@ -33,17 +33,18 @@ jobs:
     # per-file costs; an assertion on elapsed wall clock would fail on a busy
     # runner for reasons that have nothing to do with the change. The number
     # below is the runner's patience, and it has to cover the pip installs and
-    # a cache miss, not just the tests.
-    timeout-minutes: 45
+    # a cache miss, not just the tests. The local e3c cold run spent 94 minutes
+    # in native tests and 26 minutes in Torch tests before setup overhead.
+    timeout-minutes: 180
     steps:
+      - name: Install native CPU toolchain
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends build-essential libomp-dev cmake git ca-certificates
       - name: Check out source
         uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - name: Install native CPU toolchain
-        run: |
-          apt-get update
-          apt-get install --yes --no-install-recommends build-essential libomp-dev
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -64,6 +65,11 @@ jobs:
 
   cpu:
     needs: baseline
+    # The full tier remains a scheduled, manual, and target-branch gate.
+    # Pull requests use smoke, as defined by tests/structure/test_gate_tiers.py.
+    if: >-
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/2.0-refactor')
     name: nox / cpu
     runs-on: ${{ needs.baseline.outputs.host_runner }}
     container:
@@ -72,14 +78,14 @@ jobs:
     # the manual probes and the independent-PyTorch oracle.
     timeout-minutes: 240
     steps:
+      - name: Install native CPU toolchain
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends build-essential libomp-dev cmake git ca-certificates
       - name: Check out source
         uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - name: Install native CPU toolchain
-        run: |
-          apt-get update
-          apt-get install --yes --no-install-recommends build-essential libomp-dev
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -124,20 +130,26 @@ jobs:
       image: ${{ needs.baseline.outputs.cpu_ci_image }}
     timeout-minutes: 90
     env:
-      ASV_RESULTS_DIR: ${{ runner.temp }}/jittor-asv/results
-      ASV_HTML_DIR: ${{ runner.temp }}/jittor-asv/html
       ASV_MACHINE: github-ubuntu-cpu
       ASV_COMPARE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
     steps:
+      - name: Initialize ASV paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            printf 'ASV_RESULTS_DIR=%s/jittor-asv/results\n' "$RUNNER_TEMP"
+            printf 'ASV_HTML_DIR=%s/jittor-asv/html\n' "$RUNNER_TEMP"
+          } >> "$GITHUB_ENV"
+      - name: Install native CPU toolchain
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends build-essential libomp-dev cmake git ca-certificates
       - name: Check out source
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Install native CPU toolchain
-        run: |
-          apt-get update
-          apt-get install --yes --no-install-recommends build-essential libomp-dev
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -153,6 +165,7 @@ jobs:
             asv-results-${{ runner.os }}-${{ runner.arch }}-
       - name: Record, compare, and publish ASV results
         run: >-
+          git config --global --add safe.directory "$GITHUB_WORKSPACE" &&
           python -m nox -s benchmark --
           --bench '^(operators|optimizer_step)\.'
       - name: Save ASV results for the next commit

@@ -6,6 +6,7 @@
 # ***************************************************************
 from multiprocessing import Pool
 import builtins
+import importlib
 import multiprocessing as mp
 import subprocess as sp
 import os
@@ -256,8 +257,10 @@ class Logwrapper:
                 m = m()
             text += str(m)
         f = inspect.currentframe()
-        fileline = inspect.getframeinfo(f.f_back.f_back)
-        fileline = f"{os.path.basename(fileline.filename)}:{fileline.lineno}"
+        if f is None or f.f_back is None or f.f_back.f_back is None:
+            raise RuntimeError("Logging requires an available caller frame")
+        frameinfo = inspect.getframeinfo(f.f_back.f_back)
+        fileline = f"{os.path.basename(frameinfo.filename)}:{frameinfo.lineno}"
         if cc and hasattr(cc, "log"):
             cc.log(fileline, level, verbose, text)
         else:
@@ -514,8 +517,9 @@ def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
             do_compile([cmd, cache_path, jittor_path])
             dp.update(i)
         return
-    bk = mp.current_process()._config.get('daemon')
-    mp.current_process()._config['daemon'] = False
+    process_config = getattr(mp.current_process(), '_config')
+    bk = process_config.get('daemon')
+    process_config['daemon'] = False
     with _main_module_not_reexecuted():
         if pool_size == 0:
             try:
@@ -539,7 +543,7 @@ def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
             for i,_ in enumerate(p.imap_unordered(do_compile, cmds)):
                 dp.update(i)
         finally:
-            mp.current_process()._config['daemon'] = bk
+            process_config['daemon'] = bk
 
 if os.name=='nt' and getattr(mp.current_process(), '_inheriting', False):
     # when windows spawn multiprocess, disable sub-subprocess
@@ -602,7 +606,7 @@ def get_cpu_version():
     v = platform.processor()
     try:
         if os.name == 'nt':
-            import winreg
+            winreg = importlib.import_module("winreg")
             key_name = r"Hardware\Description\System\CentralProcessor\0"
             field_name = "ProcessorNameString"
             key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_name)
@@ -1281,7 +1285,9 @@ def get_py3_extension_suffix():
 
 def get_total_mem():
     if os.name == 'nt':
-        from ctypes import Structure, c_int32, c_uint64, sizeof, byref, windll
+        from ctypes import Structure, c_int32, c_uint64, sizeof, byref
+        import ctypes
+        windll = getattr(ctypes, "windll")
         class MemoryStatusEx(Structure):
             _fields_ = [
                 ('length', c_int32),
@@ -1326,7 +1332,7 @@ is_in_ipynb = in_ipynb()
 #: The compiled jit_utils_core extension, or None until it is imported.
 #: Any rather than ModuleType: callers reach for attributes that only exist
 #: on the compiled module.
-cc: Any = None
+cc = None  # type: Any
 LOG = Logwrapper()
 
 check_msvc_install = False
@@ -1346,9 +1352,9 @@ else:
 cc_type = get_cc_type(cc_path)
 cache_path = find_cache_path()
 
-_py3_config_path: Optional[str] = None
-_py3_include_path: Optional[str] = None
-_py3_extension_suffix: Optional[str] = None
+_py3_config_path = None  # type: Optional[str]
+_py3_include_path = None  # type: Optional[str]
+_py3_extension_suffix = None  # type: Optional[str]
 # NOTE: this used to be
 #     ssl._create_default_https_context = ssl._create_unverified_context
 # with no condition and no way to turn it off. That statement does not affect

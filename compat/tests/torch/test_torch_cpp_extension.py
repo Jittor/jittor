@@ -482,8 +482,11 @@ class TestCoreHeadersAreOnTheIncludePath(unittest.TestCase):
 
     def test_src_inc_contains_the_marker_header(self):
         import os
-        from jittor.compat.shim.cpp_extension import cfg
-        src_inc = cfg()["src_inc"]
+        from jittor.compat.shim.cpp_extension import _jittor_config
+        # This CPU gate has no detected GPU architecture. Supply a valid
+        # explicit value while checking the independent source include path.
+        with mock.patch.dict(os.environ, {"TORCH_CUDA_ARCH_LIST": "8.0"}):
+            src_inc = _jittor_config()["src_inc"]
         self.assertTrue(
             os.path.isfile(os.path.join(src_inc, "core", "common.h")),
             "src_inc=%r has no core/common.h, so every extension built "

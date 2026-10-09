@@ -289,6 +289,14 @@ def test_skip_reason_buckets_are_stable_and_other_is_counted(monkeypatch):
             "at least 2 devices are required") == "insufficient-devices"
         assert policy.classify_skip_reason_bucket("No CUDA found") == "accelerator"
         assert policy.classify_skip_reason_bucket("cuda is required") == "accelerator"
+        for reason in (
+            "the pools count device memory only",
+            "the peak and the launch order are read off the device",
+            "counts device kernels",
+            "needs /dev/nvidia* nodes to be meaningful",
+        ):
+            assert policy.classify_skip_reason_bucket(reason) == "environment"
+            assert policy._environment_explains({reason})
         assert policy._other_skip_count() == 1
     finally:
         policy._SKIP_REASON_BUCKETS.clear()

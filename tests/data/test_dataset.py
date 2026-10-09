@@ -142,6 +142,34 @@ class TestDataset2(unittest.TestCase):
     def test_dataset_use_jittor_cuda(self):
         self.test_dataset_use_jittor()
 
+class TestDelayedDatasetWorker(unittest.TestCase):
+    def test_live_worker_can_deliver_after_the_first_queue_timeout(self):
+        script = """
+import time
+import numpy as np
+from jittor.dataset.dataset import Dataset
+
+class DelayedFirstBatch(Dataset):
+    def __init__(self):
+        super().__init__()
+        self.set_attrs(total_len=1, batch_size=1, shuffle=False, num_workers=1)
+    def __getitem__(self, index):
+        time.sleep(5.5)
+        return np.array([index], dtype="float32")
+
+dataset = DelayedFirstBatch()
+try:
+    batches = [batch.numpy().tolist() for batch in dataset]
+    assert batches == [[[0.0]]], batches
+finally:
+    dataset.terminate()
+print("DELAYED_WORKER_OK")
+"""
+        result = _run_child_script(script)
+        assert result.returncode == 0, result.stdout.decode()[-4000:] + result.stderr.decode()[-4000:]
+        assert "DELAYED_WORKER_OK" in result.stdout.decode()
+
+
 class TestDatasetSeed(unittest.TestCase):
     def test_np(self):
 

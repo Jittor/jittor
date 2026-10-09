@@ -69,7 +69,8 @@ class TestSelftestStructure(unittest.TestCase):
             self.assertIn(needle, source)
         tree = ast.parse(source)
         assignment = next(
-            node for node in tree.body
+            node
+            for node in tree.body
             if isinstance(node, ast.Assign)
             and getattr(node.targets[0], "id", None) == "KEY_MODULES"
         )
@@ -88,8 +89,9 @@ class TestSelftestStructure(unittest.TestCase):
         archive: version, member list, three resource files. None of them
         imports it.
         """
-        workflow = (self.repo_root / ".github" / "workflows"
-                    / "release.yml").read_text(encoding="utf-8")
+        workflow = (self.repo_root / ".github" / "workflows" / "release.yml").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("jittor.selftest", workflow)
         validation = workflow.split("platform-validation:", 1)
         self.assertEqual(len(validation), 2, "no platform-validation job")

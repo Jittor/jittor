@@ -52,12 +52,42 @@ class TestSourceDistributionContents(unittest.TestCase):
         self.assertEqual(status, 0, stderr)
         self.assertIn("source distribution OK", stdout)
 
+    def test_required_paths_match_the_real_checkout(self):
+        paths = checker._expected_source_paths(_SCRIPT.parents[2])
+        self.assertIn("docs/development/repository-layout.md", paths)
+        self.assertNotIn("python/jittor/compat", paths)
+
+    def test_missing_repository_layout_document_fails(self):
+        members = dict(self.members)
+        del members["docs/development/repository-layout.md"]
+        status, _stdout, stderr = self._run(self._sdist("missing-layout.tar.gz", members))
+        self.assertEqual(status, 1)
+        self.assertIn("missing required source-distribution member", stderr)
+        self.assertIn("docs/development/repository-layout.md", stderr)
+
+    def test_compat_stub_remains_forbidden_in_core_archive(self):
+        members = dict(self.members)
+        members["python/jittor/compat"] = b"../../compat\n"
+        status, _stdout, stderr = self._run(self._sdist("compat-stub.tar.gz", members))
+        self.assertEqual(status, 1)
+        self.assertIn("forbidden legacy source subtree", stderr)
+        self.assertIn("python/jittor/compat", stderr)
+
+    def test_retired_slide_is_rejected_from_sdist(self):
+        members = dict(self.members)
+        members["docs/slides/retired.html"] = b"presentation\n"
+        status, _stdout, stderr = self._run(self._sdist("retired-slide.tar.gz", members))
+        self.assertEqual(status, 1)
+        self.assertIn("retired presentation assets excluded from sdist", stderr)
+
     def test_checkout_inventory_includes_python_and_excludes_caches(self):
         tracked = set(checker.REQUIRED_SOURCE_PATHS)
         tracked.update(
             (
+                "python/jittor/compat",
                 "python/jittor/deleted_from_worktree.py",
                 "python/jittor/runtime_source.py",
+                "docs/slides/retired.html",
                 "python/jittor/__pycache__/runtime_source.cpython-311.pyc",
                 "python/jittor.egg-info/PKG-INFO",
             )
@@ -65,7 +95,10 @@ class TestSourceDistributionContents(unittest.TestCase):
         for relative in tracked - {"python/jittor/deleted_from_worktree.py"}:
             path = self.root / relative
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(b"tracked\n")
+            if relative == "python/jittor/compat":
+                path.symlink_to("../../compat", target_is_directory=True)
+            else:
+                path.write_bytes(b"tracked\n")
         result = mock.Mock(
             returncode=0,
             stdout=("\0".join(sorted(tracked)) + "\0").encode("utf-8"),
@@ -77,9 +110,11 @@ class TestSourceDistributionContents(unittest.TestCase):
         command = run.call_args.args[0]
         self.assertIn("python", command)
         self.assertIn("python/jittor/runtime_source.py", paths)
+        self.assertNotIn("python/jittor/compat", paths)
         self.assertNotIn("python/jittor/deleted_from_worktree.py", paths)
         self.assertNotIn("python/jittor/__pycache__/runtime_source.cpython-311.pyc", paths)
         self.assertNotIn("python/jittor.egg-info/PKG-INFO", paths)
+        self.assertNotIn("docs/slides/retired.html", paths)
 
     def test_canonical_generated_egg_info_members_pass(self):
         members = dict(self.members)

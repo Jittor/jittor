@@ -73,16 +73,14 @@ class TestMklConvOp(unittest.TestCase):
         _test_policy_stack = _TestPolicyStack()
         self.addCleanup(_test_policy_stack.close)
         self.mkl_ops = requires_onednn()
-        # Every case here asserts a `Run tuner conv` relay log, which is a
-        # native-semantics claim: in Torch-compatibility mode convolution does
-        # not go through the reindex meta-operator form the conv tuner
-        # recognises, so no relay happens and the assertion finds zero logs.
-        # This directory is not in `process_modes.TORCH_MODE_PATHS`, so no gate
-        # runs it in that mode -- the guard is here so that someone who does
-        # gets a stated reason instead of a red run. (Only visible at all now
-        # that these cases run; before, they failed on a None `mkl_ops`.)
+        # These legacy reindex/broadcast products now contain storage views,
+        # so ConvTuner must decline instead of relaying an invalid fused op.
+        # The registered nn.conv2d oneDNN row, including gradients, is
+        # exercised by tests/nn/test_onednn_conv_row.py. These cases still
+        # compare their outputs and gradients with direct oneDNN calls.
+        # This meta-op spelling is owned by the native process mode.
         if "_torch_compat_install_context" in jt.__dict__:
-            self.skipTest("the conv tuner relay is native-only; this process "
+            self.skipTest("legacy convolution meta-op semantics are native-only; "
                           "is in torch compatibility mode")
         self._use_cuda = jt.introspection.policy.runtime.use_cuda
         _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=0))
@@ -112,8 +110,8 @@ class TestMklConvOp(unittest.TestCase):
         logs = find_log_with_re(raw_logs, 
             "Run tuner conv: confidence\\((.*)\\) candidates\\((.*)\\)$")
         assert len(logs)==1
-        assert logs[0][0] == '20'
-        assert simple_parser(logs[0][1]) == {'relay0':[1,0]}
+        assert logs[0][0] == '0'
+        assert simple_parser(logs[0][1]) == {}
 
     def test_forward_nhwc_hwio(self):
         uid = [123]
@@ -139,8 +137,8 @@ class TestMklConvOp(unittest.TestCase):
             logs = find_log_with_re(raw_logs, 
                 "Run tuner conv: confidence\\((.*)\\) candidates\\((.*)\\)$")
             assert len(logs)==1, raw_logs
-            assert logs[0][0] == '20'
-            assert simple_parser(logs[0][1]) == {'relay0':[1,0]}
+            assert logs[0][0] == '0'
+            assert simple_parser(logs[0][1]) == {}
             
         check([1,100,100,3], [1,1,3,64], 1, 0)
         check([1,100,100,3], [3,3,3,16], 1, 0)
@@ -179,16 +177,13 @@ class TestMklConvOp(unittest.TestCase):
             dx_jt_tune=gs_tune[0].data
             dw_jt_tune=gs_tune[1].data
         logs = find_log_with_re(rawlogs, 
-            "Run tuner conv: confidence\\((20)\\) candidates\\((.*)\\)$")
-        assert len(logs) == 2, len(logs)
-        assert logs[0][0] == "20", "confidence of reorder should be 20"
-        candidates = simple_parser(logs[0][1])
-        assert candidates == {"relay0":[1,0]}, candidates
+            "Run tuner conv: confidence\\((.*)\\) candidates\\((.*)\\)$")
+        assert logs, rawlogs
+        assert all(row[0] == "0" for row in logs), logs
+        assert all(simple_parser(row[1]) == {} for row in logs), logs
 
         logs = find_log_with_re(rawlogs, r"get_relay_src([\s\S]*)")
-        assert len(logs)==2
-        assert "@relay_op" in logs[0]
-        assert "@relay_op" in logs[1]
+        assert not logs, logs
 
         assert np.max(dx_jt-dx)<1e-5 and np.max(dw_jt-dw)<1e-5
         assert np.max(dx_jt_tune-dx)<1e-5 and np.max(dw_jt_tune-dw)<1e-5
@@ -226,17 +221,13 @@ class TestMklConvOp(unittest.TestCase):
             dx_jt_tune=gs_tune[0].data
             dw_jt_tune=gs_tune[1].data
         logs = find_log_with_re(rawlogs, 
-            "Run tuner conv: confidence\\((20)\\) candidates\\((.*)\\)$")
-        assert len(logs) == 2
-        assert logs[0][0] == "20", "confidence of reorder should be 20"
-        candidates = simple_parser(logs[0][1])
-        assert candidates == {"relay0":[1,0]}, candidates
-        # assert candidates == {"relay0":[1,0],"relay1":[1,0]}, candidates
+            "Run tuner conv: confidence\\((.*)\\) candidates\\((.*)\\)$")
+        assert logs, rawlogs
+        assert all(row[0] == "0" for row in logs), logs
+        assert all(simple_parser(row[1]) == {} for row in logs), logs
 
         logs = find_log_with_re(rawlogs, r"get_relay_src([\s\S]*)")
-        assert len(logs)==2
-        assert "@relay_op" in logs[0]
-        assert "@relay_op" in logs[1]
+        assert not logs, logs
 
         assert np.max(dx_jt_tune-dx)<1e-5 and np.max(dw_jt_tune-dw)<1e-5
         assert np.max(dx_jt-dx)<1e-5 and np.max(dw_jt-dw)<1e-5

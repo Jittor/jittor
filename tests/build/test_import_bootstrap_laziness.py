@@ -11,7 +11,13 @@ import types
 import unittest
 from unittest import mock
 
+import pytest
+
 from _helpers.child_process import run_python_child
+
+# The stamp probes use the same gen_ops_stamp_probe cache product.
+# Keep their two-process build checks together under smoke's loadgroup mode.
+pytestmark = pytest.mark.xdist_group("custom_op_build_stamp")
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -175,7 +181,10 @@ class TestImportBootstrapLaziness(unittest.TestCase):
         from jittor._core import var
 
         operand = jt.array([[1.0, 2.0], [3.0, 4.0]])
-        with mock.patch.object(var, "_load_accelerator_transpose") as load:
+        # Other tests may already have made the process's first transpose.
+        # Re-create that first-use state while keeping the loader observable.
+        with mock.patch.object(var, "_accelerator_transpose_tried", False), \
+                mock.patch.object(var, "_load_accelerator_transpose") as load:
             result = jt.transpose(operand, (1, 0))
         load.assert_called_once_with()
         # The bootstrap wrapper must not change what transpose returns.

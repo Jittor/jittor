@@ -303,11 +303,34 @@ time.sleep(300)
 
 
 def _still_running(pid):
+    # A killed grandchild may remain as a zombie when the container's PID 1
+    # does not reap it. kill(pid, 0) still succeeds for a zombie, although it
+    # cannot execute or hold a pipe open.
+    try:
+        state = (Path("/proc") / str(pid) / "stat").read_text().rsplit(")", 1)[1].split()[0]
+        if state in {"Z", "X", "x"}:
+            return False
+    except (OSError, IndexError):
+        pass
     try:
         os.kill(pid, 0)
     except (ProcessLookupError, PermissionError):
         return False
     return True
+
+
+def test_a_zombie_is_not_counted_as_a_running_grandchild(monkeypatch):
+    pid = 999999
+    original_read_text = Path.read_text
+
+    def read_text(path, *args, **kwargs):
+        if path == Path("/proc") / str(pid) / "stat":
+            return "%d (test worker) Z 1 2 3" % pid
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+    monkeypatch.setattr(os, "kill", lambda *_args: None)
+    assert not _still_running(pid)
 
 
 def test_a_timeout_ends_the_grandchildren_too(tmp_path):

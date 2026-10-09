@@ -8,10 +8,13 @@ from .context import get_install_context
 from ..diagnostics import EXPECTED, swallowed
 from typing import Any, Dict, List
 from .. import fsdp_hooks as _fsdp_hooks
-from .. import optimizer_kinds as _optimizer_kinds
 from .tensor_state import get_tensor_state
 from .installers.tensor.autograd_api import _optimizer_maybe_has_fsdp_params
 from jittor.optim.algorithms.adam import adam_update
+from .optimizer_state import (
+    _OptState, _ParamState, _ensure_adam_group_state,
+    _reset_adam_state_to_lazy, _torch_optimizer_kind, _torch_param_steps,
+)
 
 def _init(self, *a, **k):
     _context = get_install_context(jt)
@@ -29,172 +32,6 @@ def _init(self, *a, **k):
             pg.setdefault("lr", self.lr)
     except EXPECTED as exc:
         swallowed("torch/optimizers.py _init: for pg in self.param_groups:", exc)
-
-
-def _torch_param_steps(pg):
-    params = list(pg.get("params", []))
-    steps = pg.get("_torch_steps")
-    if not isinstance(steps, list):
-        steps = pg["_torch_steps"] = [0] * len(params)
-    while len(steps) < len(params):
-        steps.append(0)
-    if len(steps) > len(params):
-        del steps[len(params):]
-    return steps
-
-
-def _torch_optimizer_kind(opt):
-    """Which optimizer's state layout `opt` has.
-
-    Identity through the MRO, not a substring of the class name -- `SGDW`
-    and `MyAdamWrapper` used to match rules they do not implement. This
-    answer only describes *state layout* (which keys `state` and
-    `state_dict()` expose), so unlike the FSDP2 one it does not refuse a
-    subclass that overrides step(): such a subclass still keeps the base
-    class's state arrays. It falls back to the lowercased class name so an
-    unrecognised optimizer keeps its previous, harmless behaviour here.
-
-    See jittor/compat/optimizer_kinds.py.
-    """
-    return (_optimizer_kinds.kind_of(opt)
-            or type(opt).__name__.lower())
-
-
-class _ParamState(dict):
-    def __init__(self, owner, param, values):
-        dict.__init__(self, values)
-        self._owner = owner
-        self._param = param
-    def __setitem__(self, key, value):
-        self._owner._set_field(self._param, key, value)
-        dict.__setitem__(self, key, value)
-    def update(self, *args, **kwargs):
-        values = dict(*args, **kwargs)
-        for key, value in values.items():
-            self[key] = value
-
-
-class _OptState:
-    def __init__(self, opt):
-        self._opt = opt
-    def _find(self, param):
-        for pg in self._opt.param_groups:
-            for i, p in enumerate(pg.get("params", [])):
-                if p is param:
-                    return pg, i
-        return None, None
-    def _params(self):
-        for pg in self._opt.param_groups:
-            for p in pg.get("params", []):
-                marker = object()
-                if self.get(p, marker) is not marker:
-                    yield p
-    def _reset_slot(self, pg, i):
-        _torch_param_steps(pg)[i] = 0
-        for key in ("m", "values", "v", "d", "pre_grad"):
-            buffers = pg.get(key)
-            if not isinstance(buffers, list) or i >= len(buffers):
-                continue
-            buffer = buffers[i]
-            buffers[i] = (jt.zeros_like(buffer).stop_grad()
-                          if isinstance(buffer, jt.Var) else None)
-    def _sync_n_step(self):
-        self._opt.n_step = max(
-            (int(step) for pg in self._opt.param_groups
-             for step in _torch_param_steps(pg)), default=0)
-    def _set_field(self, param, key, value):
-        pg, i = self._find(param)
-        if pg is None:
-            raise KeyError(param)
-        kind = _torch_optimizer_kind(self._opt)
-        if key == "step":
-            if isinstance(value, jt.Var):
-                value = value.item()
-            _torch_param_steps(pg)[i] = int(value)
-            self._sync_n_step()
-            return
-        mappings = {
-            "adam": {"exp_avg": "m", "exp_avg_sq": "values"},
-            "adamw": {"exp_avg": "m", "exp_avg_sq": "values"},
-            "sgd": {"momentum_buffer": "values"},
-            "rmsprop": {"square_avg": "values"},
-            "adan": {"exp_avg": "m", "exp_avg_sq": "v",
-                     "exp_avg_diff": "d", "pre_grad": "pre_grad"},
-        }
-        target = mappings.get(kind, {}).get(key)
-        buffers = pg.get(target) if target is not None else None
-        if isinstance(buffers, list) and i < len(buffers):
-            buffers[i] = value
-    def get(self, param, default=None):
-        pg, i = self._find(param)
-        if pg is None:
-            return default
-        steps = _torch_param_steps(pg)
-        if int(steps[i]) <= 0:
-            return default
-        kind = _torch_optimizer_kind(self._opt)
-        if kind in ("adam", "adamw") and "m" in pg and "values" in pg:
-            return _ParamState(self, param, {
-                "exp_avg": pg["m"][i],
-                "exp_avg_sq": pg["values"][i],
-                "step": float(steps[i])})
-        if kind == "sgd" and "values" in pg and pg.get(
-                "momentum", getattr(self._opt, "momentum", 0)):
-            return _ParamState(self, param, {
-                "momentum_buffer": pg["values"][i]})
-        if kind == "rmsprop" and "values" in pg:
-            return _ParamState(self, param, {
-                "square_avg": pg["values"][i],
-                "step": float(steps[i])})
-        if kind == "adan":
-            out = {"step": float(steps[i])}
-            for source, target in (
-                    ("m", "exp_avg"), ("v", "exp_avg_sq"),
-                    ("d", "exp_avg_diff"),
-                    ("pre_grad", "pre_grad")):
-                if source in pg and i < len(pg[source]):
-                    out[target] = pg[source][i]
-            return _ParamState(self, param, out)
-        return default
-    def __getitem__(self, param):
-        r = self.get(param, None)
-        if r is None:
-            raise KeyError(param)
-        return r
-    def __setitem__(self, param, d):
-        pg, i = self._find(param)
-        if pg is None:
-            raise KeyError(param)
-        if not isinstance(d, Mapping):
-            raise TypeError("optimizer state must be a mapping")
-        values = dict(d)
-        self._reset_slot(pg, i)
-        for key, value in values.items():
-            if key != "step":
-                self._set_field(param, key, value)
-        self._set_field(param, "step", values.get("step", 1 if values else 0))
-    def __delitem__(self, param):
-        pg, i = self._find(param)
-        marker = object()
-        if pg is None or self.get(param, marker) is marker:
-            raise KeyError(param)
-        self._reset_slot(pg, i)
-        self._sync_n_step()
-    def __contains__(self, param):
-        marker = object()
-        return self.get(param, marker) is not marker
-    def __iter__(self):
-        return self._params()
-    def __len__(self):
-        return sum(1 for _ in self._params())
-    def keys(self):
-        return list(self._params())
-    def values(self):
-        return [self.get(p, {}) for p in self._params()]
-    def items(self):
-        return [(p, self.get(p, {})) for p in self._params()]
-    def get_state_dict_key(self, param):
-        return self._find(param)
 
 
 def _state_dict_torch(self):
@@ -456,14 +293,51 @@ def _backward_with_step_marker(self, *args, **kwargs):
 
 
 def _optimizer_has_ready_grads(opt):
-    for _pg in getattr(opt, "param_groups", []):
-        _grads = _pg.get("grads")
-        if not _grads:
-            continue
-        for _p, _g in zip(_pg.get("params", []), _grads):
-            if isinstance(_p, jt.Var) and isinstance(_g, jt.Var) and list(_p.shape) == list(_g.shape):
-                return True
-    return False
+    """Use public parameter gradients when a caller rebuilt the group cache.
+
+    DeepSpeed ZeRO assigns gradients to its flat FP32 parameters before it
+    calls the underlying AdamW optimizer. Its public ``param.grad`` may be
+    present even when Jittor's group-local ``grads`` list is absent; treating
+    that list as authoritative silently skips the entire update.
+    """
+    ready = False
+    fsdp2 = _load_fsdp2_for_optimizer(opt)
+    for pg in getattr(opt, "param_groups", []):
+        params = list(pg.get("params", ()))
+        grads = pg.get("grads")
+        if not isinstance(grads, list):
+            grads = [None] * len(params)
+        elif len(grads) != len(params):
+            grads = (grads + [None] * len(params))[:len(params)]
+        restored = False
+        for index, param in enumerate(params):
+            if not isinstance(param, jt.Var):
+                continue
+            # FSDP has already stepped its shard and cleared its group grad.
+            # Its public grad belongs to that step, not the ordinary AdamW pass.
+            if fsdp2 is not None and fsdp2.is_fsdp_managed_param(param):
+                continue
+            grad = grads[index]
+            public_grad = getattr(param, "_torch_grad", None)
+            if (isinstance(public_grad, jt.Var)
+                    and list(public_grad.shape) == list(param.shape)
+                    and public_grad is not grad):
+                # ZeRO may assign the next flat gradient while this parameter
+                # is temporarily absent from the base optimizer group.  A
+                # same-shaped group cache from the previous step is stale.
+                grad = public_grad
+                grads[index] = grad
+                restored = True
+            if not isinstance(grad, jt.Var) or list(grad.shape) != list(param.shape):
+                grad = getattr(param, "grad", None)
+                if isinstance(grad, jt.Var) and list(grad.shape) == list(param.shape):
+                    grads[index] = grad
+                    restored = True
+            if isinstance(grad, jt.Var) and list(grad.shape) == list(param.shape):
+                ready = True
+        if restored:
+            pg["grads"] = grads
+    return ready
 
 
 def _advance_ready_param_steps(opt):
@@ -663,6 +537,12 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
         # unused parameters. loss.backward() then leaves the group
         # without gradients and step() must be a no-op, not KeyError.
         grads = pg.get("grads") or [None] * len(pg["params"])
+        if not any(
+                isinstance(p, jt.Var) and isinstance(g, jt.Var)
+                and p.requires_grad and list(g.shape) == list(p.shape)
+                for p, g in zip(pg["params"], grads)):
+            continue
+        _ensure_adam_group_state(pg)
         # `use_acl` is an alias of `use_cuda` (see FLAG_ALIASES), so it is true
         # on a CUDA build as well and cannot say which backend is actually in
         # use. Asking the dispatcher does: `optim.adamw_fused` is registered
@@ -776,12 +656,16 @@ def adan_step(self, loss=None, retain_graph=False, closure=None, **kwargs):
 _STEP_APIS = {"sgd": sgd_step, "rmsprop": rmsprop_step, "adan": adan_step}
 
 def adam_init(self, params, lr=1e-3, *args, **kwargs):
-    return _initialize_default(self, params, lr, args, kwargs, 'Adam')
+    result = _initialize_default(self, params, lr, args, kwargs, 'Adam')
+    _reset_adam_state_to_lazy(self)
+    return result
 
 
 def adamw_init(self, params, lr=1e-3, *args, **kwargs):
     if len(args) < 3: kwargs.setdefault('weight_decay', 0.01)  # torch's; native (eps, betas, wd): 0
-    return _initialize_default(self, params, lr, args, kwargs, 'AdamW')
+    result = _initialize_default(self, params, lr, args, kwargs, 'AdamW')
+    _reset_adam_state_to_lazy(self)
+    return result
 
 
 def rmsprop_init(self, params, lr=1e-3, *args, **kwargs):

@@ -134,6 +134,12 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1,
     # so validating inside the reindex branches only would leave CUDA silent.
     _check_conv2d_output_size(x, out_height, out_width, (Kh, Kw), stride,
                               padding, dilation)
+    # The CPU fallback sums in the inputs' dtype. Merely setting prefer16 on
+    # the reduction leaves float32 operands and returns float32, so cast the
+    # convolution operands just as autocast does before selecting a backend.
+    if jt.flags.amp_reg & jt.amp_flags.prefer16:
+        x = x.float16()
+        weight = weight.float16()
     kernel = select_kernel("conv2d", x, weight, bias, stride, padding, dilation, groups,
                            _depthwise_fast_path=_depthwise_fast_path)
     if kernel is not None:

@@ -12,6 +12,8 @@ on:
       - "README.md"
       - "setup.py"
       - "python/**"
+      - "src/**"
+      - "backends/**"
       - "requirements/examples.txt"
       - ".github/ci-baseline.env"
       - ".github/workflows/_ci-baseline.yml"

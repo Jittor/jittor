@@ -62,7 +62,7 @@ jobs:
     needs: baseline
     name: nox / tutorials (offline CPU)
     runs-on: ${{ needs.baseline.outputs.host_runner }}
-    timeout-minutes: 45
+    timeout-minutes: 180
     steps:
       - name: Check out source
         uses: actions/checkout@v6

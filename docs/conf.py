@@ -80,6 +80,20 @@ def _sanitize_autodoc_docstring(app, what, name, obj, options, lines):
     del app, what, obj, options
     if name == "jittor.array":
         lines[:] = [line for line in lines if line.strip() != "----------------"]
+    elif name == "jittor.save":
+        lines[:] = [
+            line.replace(":type params_dict: list or dictionary", ":type params_dict: list or dict")
+            for line in lines
+        ]
+    elif name in (
+        "jittor.init.kaiming_normal_",
+        "jittor.init.kaiming_uniform_",
+        "jittor.init.xavier_gauss_",
+        "jittor.init.xavier_uniform_",
+    ):
+        lines[:] = [
+            line.replace(":type var: Jittor Var", ":type var: jittor.Var") for line in lines
+        ]
     elif name == "jittor.linalg.det":
         lines[:] = [line.replace("|x|", r"\|x\|") for line in lines]
     elif name == "jittor.transform.ColorJitter":

@@ -6,6 +6,9 @@ on:
       host_runner:
         description: GitHub-hosted Linux runner baseline
         value: ${{ jobs.read.outputs.host_runner }}
+      py37_runner:
+        description: GitHub-hosted runner with Python 3.7 setup-python assets
+        value: ${{ jobs.read.outputs.py37_runner }}
       python_version:
         description: Python version used by Stage 2 tooling
         value: ${{ jobs.read.outputs.python_version }}
@@ -36,6 +39,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       host_runner: ${{ steps.baseline.outputs.host_runner }}
+      py37_runner: ${{ steps.baseline.outputs.py37_runner }}
       python_version: ${{ steps.baseline.outputs.python_version }}
       cpu_ci_image: ${{ steps.baseline.outputs.cpu_ci_image }}
       cuda_version: ${{ steps.baseline.outputs.cuda_version }}
@@ -56,6 +60,7 @@ jobs:
           source .github/ci-baseline.env
           {
             echo "host_runner=${CI_HOST_RUNNER}"
+            echo "py37_runner=${CI_PY37_RUNNER}"
             echo "python_version=${CI_PYTHON_VERSION}"
             echo "cpu_ci_image=${CI_CPU_CI_IMAGE}"
             echo "cuda_version=${CI_CUDA_VERSION}"

@@ -1,10 +1,37 @@
 """Stable Tensor gradient APIs using the shared native Var/Op graph."""
+import os
 from importlib import import_module
 from ...context import get_install_context
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
+from jittor._core.hooks import _RemovableHandle
 from jittor._runtime import step_capture as _step_capture
 _owner = import_module(__package__)
 _NativeVar = _owner.jt.Var
+
+def _register_post_accumulate_grad_hook(self, hook):
+    if not callable(hook):
+        raise TypeError("hook must be callable")
+    if not self.is_leaf:
+        raise RuntimeError("post accumulate grad hooks cannot be registered on non-leaf tensors")
+    if not self.requires_grad:
+        raise RuntimeError("cannot register a hook on a tensor that doesn't require gradient")
+    hooks = getattr(self, "_torch_post_accumulate_grad_hooks", None)
+    if hooks is None:
+        hooks = {}
+        object.__setattr__(self, "_torch_post_accumulate_grad_hooks", hooks)
+    key = max(hooks, default=-1) + 1
+    hooks[key] = hook
+    return _RemovableHandle(lambda: hooks.pop(key, None))
+
+
+def _run_post_accumulate_grad_hooks(parameter):
+    hooks = getattr(parameter, "_torch_post_accumulate_grad_hooks", None)
+    if not hooks:
+        return
+    for hook in list(hooks.values()):
+        if hook(parameter) is not None:
+            raise RuntimeError("Tensor post accumulate grad hooks should return None")
+
 
 def _register_leaf(v):
     _owner._torch_register_leaf(v)
@@ -233,16 +260,32 @@ def _backward(self, gradient=None, retain_graph=None, create_graph=False, **kw):
     if not leaf_map:
         return None
     leaves = list(leaf_map.values())
+    # ZeRO can rebind one parameter several times in a forward/backward. Each
+    # displaced native node and a still-full current node may contribute to
+    # the same parameter gradient; publish their sum through the holder.
+    grad_targets = []
+    target_owners = []
+    for p in leaves:
+        snapshots = getattr(p, "_torch_backward_data_snapshots", None) or ()
+        for snapshot in snapshots:
+            if isinstance(snapshot, _NativeVar):
+                grad_targets.append(snapshot)
+                target_owners.append(p)
+        if not snapshots or p.numel():
+            grad_targets.append(p)
+            target_owners.append(p)
     # torch leaves a disconnected target at grad=None. Keep jt.grad's
     # historical zero-materialization untouched and use the compatibility
     # core entry point that preserves missing gradients explicitly.
-    grads = _owner.jt.core.grad_optional(self, leaves, retain_graph)
+    # Syncing the loss leaves unrelated HCCL all-gathers in the lazy graph.
+    # Finish that work before traversing the full gradient graph; otherwise a
+    # later ZeRO-3 step can race graph traversal with unfinished collectives.
+    if int(os.environ.get("JT_HCCL_WORLD_SIZE", "1")) > 1:
+        _owner.jt.sync_all(True)
+    grads = _owner.jt.core.grad_optional(self, grad_targets, retain_graph)
     grad_by_id = {}
-    for p, gr in zip(leaves, grads):
+    for p, gr in zip(target_owners, grads):
         if gr is None:
-            if (id(p) not in opt_ids and id(p) not in retained_ids
-                    and not tensor_state.leaf_params.is_weak(id(p))):
-                tensor_state.leaf_params.pop(id(p), None)
             continue
         # torch's AccumulateGrad gives a leaf a grad of the leaf's own dtype.
         # jt.grad does not: under autocast a float32 weight read by a
@@ -251,7 +294,19 @@ def _backward(self, gradient=None, retain_graph=None, create_graph=False, **kw):
         # NaN on the next forward (test_torch_amp_training_loop.py).
         if gr.dtype != p.dtype:
             gr = gr.cast(p.dtype)
+        previous = grad_by_id.get(id(p))
+        if previous is not None:
+            if list(previous.shape) != list(gr.shape):
+                raise RuntimeError("parameter data rebind produced incompatible gradient shapes")
+            gr = previous + gr
         grad_by_id[id(p)] = gr
+    for p in leaves:
+        gr = grad_by_id.get(id(p))
+        if gr is None:
+            if (id(p) not in opt_ids and id(p) not in retained_ids
+                    and not tensor_state.leaf_params.is_weak(id(p))):
+                tensor_state.leaf_params.pop(id(p), None)
+            continue
         if id(p) not in opt_ids:
             # non-optimizer leaf (retain_grad screenspace etc.): accumulate
             # onto .grad like torch (zeroed externally / per render).
@@ -276,6 +331,12 @@ def _backward(self, gradient=None, retain_graph=None, create_graph=False, **kw):
                 and not _fsdp2_backward.optimizer_has_non_fsdp_params(o):
             continue
         _fill_opt_grads(o, grad_by_id, filled_param_ids)
+    # ZeRO's post-accumulate hooks immediately launch HCCL operations on
+    # parameter gradients. Materialize combined gradients from displaced
+    # parameter nodes before those collectives consume them.
+    if int(os.environ.get("JT_HCCL_WORLD_SIZE", "1")) > 1 and any(
+            getattr(p, "_torch_backward_data_snapshots", None) for p in leaves):
+        _owner.jt.sync_all(True)
     # DDP's synchronisation point, deliberately here rather than next to
     # grad_optional above: it has to average the *accumulated* gradient.
     # `no_sync()` exists so several micro-batches accumulate locally and
@@ -287,7 +348,15 @@ def _backward(self, gradient=None, retain_graph=None, create_graph=False, **kw):
     # step() consumes together. Still before backward() returns, which is
     # what torch's autograd hooks guarantee: clipping and norm logging in
     # between must see the synchronised gradient.
+    # PyTorch calls these hooks after each leaf's gradient is accumulated,
+    # while the grad remains visible to ZeRO and before DDP synchronization.
+    for p in leaves:
+        if id(p) in grad_by_id:
+            _run_post_accumulate_grad_hooks(p)
     _owner._ddp_all_reduce_grads(leaves)
+    for p in leaves:
+        if getattr(p, "_torch_backward_data_snapshots", None) is not None:
+            object.__setattr__(p, "_torch_backward_data_snapshots", None)
     # Independent retain_grad lasts as long as its weakly indexed holder.
     # Preserve bounded cleanup only for legacy non-weak-referenceable Vars.
     if retained:

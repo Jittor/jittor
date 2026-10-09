@@ -136,6 +136,9 @@ ENVIRONMENT_SKIP_PATTERNS = (
     # single-case file, so it also executed nothing -- red the run for doing what
     # it was written to do.
     "jt_test_thread_race",
+    # Device-memory and kernel probes skip on a CPU runner. Their established
+    # messages name the unavailable device resource without spelling CUDA.
+    "device memory only", "read off the device", "device kernels", "/dev/nvidia",
 )
 
 #: The subset of the above that stops being an explanation once a session

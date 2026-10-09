@@ -48,10 +48,11 @@ DTYPES = ("float32", "float64", "float16", "bfloat16")
 def _matmul_implementation(dtype):
     """``(executed oneDNN implementation or None, result, reference)``.
 
-    The two-dimensional broadcast/multiply/reduce spelling is the only form
-    ``MatmulTuner`` recognises, so this is the shape in which a CPU matmul can
-    reach oneDNN at all. ``auto_convert_64_to_32=0`` matters: with Jittor's
-    default on, ``jt.array`` of a float64 array yields a **float32** Var, so a
+    The current frontend registers a direct oneDNN row for ``nn.matmul``.
+    The old broadcast/multiply/reduce tuner pattern no longer relays after
+    expanded operands became storage views. ``auto_convert_64_to_32=0`` matters:
+    with Jittor's default on, ``jt.array`` of a float64 array yields a
+    **float32** Var, so a
     "float64" case would silently measure float32 and agree with any
     declaration at all.
     """
@@ -64,8 +65,7 @@ def _matmul_implementation(dtype):
         b = jt.array(right).cast(dtype)
         jt.sync([a, b])
         with jt.profile_scope() as report:
-            product = (a.broadcast([16, 24, 12], [2]) *
-                       b.broadcast([16, 24, 12], [0])).sum(1)
+            product = jt.nn.matmul(a, b)
             result = product.numpy()
     executed = [row[0] for row in report[1:] if "mkl_matmul" in row[0]]
     return (executed[0] if executed else None), result, left @ right
