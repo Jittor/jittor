@@ -1,6 +1,6 @@
 # 2026-09-22：ms-swift LoRA 的 Ascend torch shim 验证
 
-**状态（2026-10-09 15:41 CST 复核）：完整逐格矩阵见下文。tiny 单卡 LLaMA LoRA 公开 SFT/恢复 L0–L4 通过，L5 未运行；两卡 tiny IA3 fused AdamW、ORPO 与目标 2.0-refactor DPO 锁定配置的公开训练/完整恢复及逐 rank 设备审计均通过 L0–L4，L5 未运行。另有 tiny LLaMAPro 单 NPU 公开 SFT 通过 L0–L2、L4 和逐 rank 设备/数值审计；其原生 torch_npu checkpoint 新进程恢复先行失败，故 L3 未通过且未启动候选恢复。tiny LLaMA Swift Adapter 双 NPU公开 SFT 通过 L0–L2、L4；strict ACL 候选 2092 项比较零失败、逐 rank 驻留及 fallback=0；原生完整恢复 oracle 因 Transformers checkpoint 分支失败，L3 failed。其单 NPU公开推理另完成 2461 项严格比较，L0/L1/L4 通过，L5 未运行。DPO int64 `labels.roll()` 的 ACL dtype 门禁由提交 `ac515b406` 修复；公开 DPO 新运行键完成四步连续训练、checkpoint-3 全新进程恢复及 170 项严格对拍，0 失败，最大绝对差 `1.1920928955078125e-07`。旧候选与比较器失败均保留为历史证据，详见 DPO 公开入口修复验收。历史结构门禁 job 1832 为 1385 passed、8 skipped，另有 2 个 child cold-start timeout；job 1860 定向重跑失败文件 4 项通过。新全量结构门禁 job 1911 在隔离安装 `pytest-xdist==3.6.1` 后于 NPU worker 1389 passed、6 skipped、0 other skips，布局检查通过。Qwen3 tiny 公开 SFT 的 L2 失败，tiny 推理 L0/L1/L4 通过，约 1.1B 推理严格数值比较失败。所有通过只适用于各自锁定配置。真实多机仍受资源阻塞。**
+**状态（2026-10-09 16:03 CST 复核）：完整逐格矩阵见下文。tiny 单卡 LLaMA LoRA 公开 SFT/恢复 L0–L4 通过，L5 未运行；两卡 tiny IA3 fused AdamW、ORPO 与目标 2.0-refactor DPO 锁定配置的公开训练/完整恢复及逐 rank 设备审计均通过 L0–L4，L5 未运行。另有 tiny LLaMAPro 单 NPU 公开 SFT 通过 L0–L2、L4 和逐 rank 设备/数值审计；其原生 torch_npu checkpoint 新进程恢复先行失败，故 L3 未通过且未启动候选恢复。tiny LLaMA Swift Adapter 双 NPU公开 SFT 通过 L0–L2、L4；strict ACL 候选 2092 项比较零失败、逐 rank 驻留及 fallback=0；原生完整恢复 oracle 因 Transformers checkpoint 分支失败，L3 failed。其单 NPU公开推理另完成 2461 项严格比较，L0/L1/L4 通过，L5 未运行。DPO int64 `labels.roll()` 的 ACL dtype 门禁由提交 `ac515b406` 修复；公开 DPO 新运行键完成四步连续训练、checkpoint-3 全新进程恢复及 170 项严格对拍，0 失败，最大绝对差 `1.1920928955078125e-07`。旧候选与比较器失败均保留为历史证据，详见 DPO 公开入口修复验收。历史结构门禁 job 1832 为 1385 passed、8 skipped，另有 2 个 child cold-start timeout；job 1860 定向重跑失败文件 4 项通过。新全量结构门禁 job 1911 在隔离安装 `pytest-xdist==3.6.1` 后于 NPU worker 1389 passed、6 skipped、0 other skips，布局检查通过。Qwen3 tiny 公开 SFT 的 L2 失败，tiny 推理 L0/L1/L4 通过，约 1.1B 推理严格数值比较失败。所有通过只适用于各自锁定配置。真实多机仍受资源阻塞。**
 
 各历史运行均绑定其 manifest 中的源基线与 dirty source，不因后续同步而改判。IA3 r3 工作负载的集成代码基线为 `a8dbba3984931a699aa814c31bcec7edf09fcb73`，upstream `2.0-refactor` 为 `7a18abf295668d9b19da5fa1657f5606e84b65a0`；此次追补的是同一原始运行产物的 comparator 协议 v2/v3，不重跑模型。此前报告记录的较早 SHA 仍是对应历史运行的真实基线。维护者：Torch compatibility / ACL backend maintainers。核心初始化、梯度状态语义、依赖版本、后端/驱动或协议变化时重新验证。本结果仍在持续验收；不创建 PR 或合并 PR。
 
@@ -45,7 +45,7 @@ IA3 r3 已完成：native oracle 连续训练与 fresh-process resume 先运行�
 | 功能面 | 全范围状态 | 已验证的锁定配置与缺口 |
 | --- | --- | --- |
 | 入口与配置 | not-run | tiny 单卡 `swift` SFT 与 Qwen3 tiny `swift infer` 已在上表逐配置判定；完整 CLI/launcher 与配置组合矩阵未跑完。 |
-| 模型族 | not-run | causal LM 的 tiny LLaMA、Qwen3 有配置级证据；Qwen3 约 1.1B 推理严格数值失败；seq2seq/encoder、视觉/多模态入口未运行。 |
+| 模型族 | not-run | causal LM 的 tiny LLaMA、Qwen3 有配置级证据；Qwen3 约 1.1B 推理严格数值失败。当前 ms-swift 4.5.2 worker registry 盘点有 222 个 model type，其中 118 个标记多模态；无 T5 type，但含 BERT/ModernBERT encoder/reranker 与视觉/多模态类型。该盘点不代表模型运行：除已列 case 外，encoder 与视觉/多模态 L0–L5 仍未运行。 |
 | tuner | not-run | Swift LoRA tiny 单卡 SFT、IA3 两卡 FP32 fused AdamW、ORPO 锁定配置均有 L0–L4 证据；LLaMAPro 单 NPU与 Adapter 双 NPU训练各有配置级 L0–L2/L4 证据，但 native L3 均未通过；其它 Swift tuner 与独立 PEFT 互操作未运行。 |
 | 训练流程 | not-run | 上表锁定的单卡 SFT 有通过/失败项；IA3 fused AdamW 与 ORPO 双卡公开流程通过 L0–L4；Adapter 双卡公开训练 L0–L2/L4 通过但 L3 native oracle 失败；DPO 在公开训练首步失败，其它 RL/奖励训练组合尚未完成 oracle-first 对拍。 |
 | optimizer、scheduler 与 AMP | not-run | tiny FP32 AdamW、ORPO 与 IA3 fused AdamW 的 optimizer checkpoint/恢复状态及逐 rank 物理驻留按锁定运行验收；AMP及其它 optimizer 组合未运行。 |
@@ -571,5 +571,9 @@ L3 独立遵循 oracle-first。native 新进程恢复 job 1928 失败，尚未�
 ## Swift Adapter 单 NPU 公开推理（2026-10-09）
 
 锁定 tiny LLaMA、已验证的原生/候选 Adapter checkpoint-3、Swift Adapter length=16/GELU、FP32/eager、4 条固定 prompt、greedy 4 token、公开 `swift.cli.main infer`。原生 oracle job 1940 运行键 `adapter-world1-infer-audit-20261009-jittor2-r4`；strict ACL candidate job 1975 使用 candidate-only 运行键 `...-r6` 并复用同配置原生结果；worker comparator job 1976 检查 2461 项、0 失败。比较精确检查输入和 token ID、响应结构、键/形状/dtype/有限值、所有前向输出和每次前向后的完整参数值与设备；参数 atol=`1e-6`，logits atol=`1e-5`/rtol=`1e-4`，均为预先锁定阈值。最大绝对差分别为参数 `4.470348358154297e-08`、logits `1.1920928955078125e-07`。两侧 16 次前向的输入、logits、tokens 均记录在 `npu:0`；全部 29 个参数在每次前向后都在 `npu:0`。Swift 4.5.2 `AdapterModule.forward` 会在第一次收到激活时将 8 个 Adapter 线性参数从 CPU 延迟迁移到激活设备，因此记录了前向前 CPU 状态和迁移后每次前向设备，不把构造前快照混作计算阶段驻留。候选 runtime identity 为 Jittor shim/ACL，`backend_fallback=error`，完整推理过程起止 counter 均为 0。故此锁定公开推理配置 L0/L1/L4 通过；训练 L2/L3 不适用，tiny case 的 L5 未运行。
+
+## ms-swift 模型 registry 盘点（2026-10-09）
+
+只读盘点运行键 `ms-swift-registry-inventory-20261009-r2` 在 Slurm job 2042 的 `cscg-hw01`、Ascend 910B3 worker 上运行原生环境导入与设备探测；读取的是安装版 ms-swift 4.5.2 的 `swift.model.MODEL_MAPPING`（registry 源文件 SHA-256 `78e73070ab92a352ad1ebf34580d2e090a460c95e4661c8722203e50310bf9a9`），共 222 个 model type，其中 118 个 `is_multimodal=true`，无 T5 model type。注册表含 BERT/ModernBERT 编码器及 reranker，也有 118 个多模态 model type。job 2041 的首版盘点在 JSON 序列化 `ModelKeys` 对象时失败并保留；r2 已完整写出 222 条 registry JSON，worker 脚本最后的可选格式化命令因该环境没有 `python` 可执行名而返回非零。原始 JSON 由控制端 JSON::PP 成功解析并校验条目数。此项仅证明公开安装包暴露哪些 registry 类型及无 T5 注册，不执行模型构造、前向或 Swift CLI，也不为任一 L0–L5 授予通过。原始结果、模块路径、版本、设备与失败栈位于 `$TASK_STATE/runs/ms-swift-registry-inventory-20261009-r1/` 和 `...-r2/`。
 
 原始证据位于 `$TASK_STATE/runs/adapter-world1-infer-audit-20261009-jittor2-r4/` 和 `...-r6/`。run r1 的探针钩错 SwiftModel.forward，r2/r3 的路径与协议缺陷、r5 的 fallback 计数缺口和 comparator 部分结果均保留在各自运行目录，不用于本结论；没有重新运行已完成的 native r4 oracle。
