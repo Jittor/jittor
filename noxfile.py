@@ -1240,6 +1240,10 @@ def structure(session):
     _install_compat_source(session, env)
     test_paths = tuple(session.posargs) or STRUCTURE_TESTS
     if not session.posargs:
+        # Controlled third-party fixtures must stay outside Torch-mode pytest.
+        offline = REPO_ROOT / "adapters/tests/test_deepspeed_offline.py"
+        if offline.is_file():
+            session.run("python", str(offline), "-v", env=env)
         native_env = env.copy()
         native_env["JITTOR_TORCH_SHIM"] = "0"
         source_probe = (

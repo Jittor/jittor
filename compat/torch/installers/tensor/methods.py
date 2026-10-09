@@ -93,6 +93,7 @@ from .method_api import (
     _numpy_data_value,
     _optimizer_maybe_has_fsdp_params,
     _register_leaf,
+    _register_post_accumulate_grad_hook,
     _resolve_size,
     _restore_trainable_state,
     _retain_grad,
@@ -392,6 +393,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
 
 
     Var.backward = _backward
+    Var.register_post_accumulate_grad_hook = _register_post_accumulate_grad_hook
 
     Var.grad = property(_grad_get, _grad_set)
 

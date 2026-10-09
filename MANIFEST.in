@@ -374,6 +374,7 @@ include docs/results/2026-09-14-vllm-omni-h3-enablement.md
 include docs/results/2026-09-19-torch-compat-runbook-verification.md
 include docs/results/2026-09-24-torch-compat-real-models.md
 include docs/results/2026-09-25-profiling-tools.md
+include docs/results/2026-10-09-deepspeed-single-node-npu.md
 include docs/results/index.md
 include docs/tutorials/index.md
 include examples/README.md

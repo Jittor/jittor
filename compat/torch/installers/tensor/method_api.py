@@ -450,6 +450,8 @@ def _invert(self):
 
 
 def _device(self):
+    if getattr(self, "_torch_meta_placeholder", False):
+        return _owner.device("meta")
     if self.placement_backend >= 0:
         if self.placement_backend == 0:
             return _owner.device("cpu")
@@ -477,7 +479,7 @@ def _device(self):
 
 def _var_get_device(self):
     d = _device(self)
-    if getattr(d, "type", "cpu") == "cpu":
+    if getattr(d, "type", "cpu") in ("cpu", "meta"):
         return -1
     return int(getattr(d, "index", 0) or 0)
 
@@ -560,6 +562,19 @@ def _data_set(self, value):
     # depends on the replace semantics -- it swaps a parameter for a
     # zero-element placeholder -- and `assign` rejected that with
     # "reshape shape is invalid for input of size [x_items(0) == y_items(1152)]".
+    # ZeRO swaps a hooked parameter to an empty shard after forward and
+    # restores its data while walking backward. _update rebinds this Python
+    # holder to a different native graph node. Keep every displaced node:
+    # repeated gathers can make several nodes contribute to one backward.
+    if (was_trainable and self.numel() and not src.numel()
+            and getattr(self, "_torch_post_accumulate_grad_hooks", None)):
+        snapshot = _owner.jt.empty((0,), dtype=self.dtype)
+        self.swap(snapshot)
+        snapshots = getattr(self, "_torch_backward_data_snapshots", None)
+        if snapshots is None:
+            snapshots = []
+            object.__setattr__(self, "_torch_backward_data_snapshots", snapshots)
+        snapshots.append(snapshot)
     self._update(src)
     if was_trainable:
         self.start_grad()
@@ -1769,6 +1784,7 @@ from .autograd_api import (
     _grad_set,
     _optimizer_maybe_has_fsdp_params,
     _register_leaf,
+    _register_post_accumulate_grad_hook,
     _retain_grad,
     _rg_get,
     _rg_set,

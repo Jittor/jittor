@@ -83,6 +83,10 @@ nothing (which used to be a confusing compile error inside generated code).
     EXTERN_LIB HcclRootInfo root_info;
     EXTERN_LIB uint32_t hccl_device_id;
 
+    // Query the live WORLD communicator without initializing it.
+    // @pyjt(hccl_is_initialized)
+    bool hccl_is_initialized();
+
     // Group 0 is WORLD; later ids own independent HCCL communicators.
     // @pyjt(hccl_create_process_group)
     int hccl_create_process_group(vector<int> ranks);

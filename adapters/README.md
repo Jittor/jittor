@@ -44,6 +44,22 @@ guard, reject an unsupported version, check missing-adapter reports and retain
 TorchMetrics' original fallback. They do not establish new hardware or
 performance claims.
 
+## DeepSpeed
+
+The optional DeepSpeed 0.17.6 adapter is in `jittor_adapters/deepspeed`.
+Importing it alone has no effect. Select the Jittor Torch frontend,
+then call `activate(device="npu")` before importing DeepSpeed. The
+adapter checks the exact upstream source identity and uses public Jittor
+ownership and HCCL WORLD-status APIs; unsupported sources, configurations,
+or an uninitialized communicator fail closed. It has no automatic entry
+point and does not change installed DeepSpeed files.
+
+The detailed single-node two-rank FP32 and ZeRO 0/1/2/3 scope, unsupported
+features, and activation example are in `jittor_adapters/deepspeed/README.md`.
+The default structure gate runs isolated source and lifecycle contracts.
+Device and model acceptance require separate real NPU tests on the same
+candidate source.
+
 ## vLLM
 
 The vLLM implementation lives in this repository at `jittor_adapters/vllm` and

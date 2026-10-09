@@ -21,7 +21,7 @@ import jittor as jt
 
 from .diagnostics import EXPECTED, swallowed
 
-__all__ = ["_world_size", "_rank", "_in_true_distributed", "_nccl_ops",
+__all__ = ["_world_size", "_rank", "_in_true_distributed", "_nccl_ops", "_hccl_ops",
            "_slice_flat", "_all_gather_shards", "_reduce_scatter_padded",
            "_all_reduce_mean", "_broadcast_from_rank0", "_reduce_scalar"]
 
@@ -43,6 +43,7 @@ def _rank():
 def _in_true_distributed():
     return _world_size() > 1 and (
         os.environ.get("JT_NCCL_WORLD_SIZE") is not None
+        or os.environ.get("JT_HCCL_WORLD_SIZE") is not None
         or os.environ.get("OMPI_COMM_WORLD_SIZE") is not None
         or getattr(jt, "in_mpi", False)
     )
@@ -87,6 +88,13 @@ def _nccl_ops():
         return None
 
 
+def _hccl_ops():
+    """Return the HCCL ops loaded during Jittor import for an Ascend job."""
+    if os.environ.get("JT_HCCL_WORLD_SIZE") is None:
+        return None
+    return getattr(jt.compile_extern, "hccl_ops", None)
+
+
 def _slice_flat(flat, start, length):
     start = int(start)
     length = int(length)
@@ -100,12 +108,15 @@ def _all_gather_shards(local_shard):
     # CPU -- and demanding NCCL there turns a no-op into a hard failure.
     if _world_size() <= 1:
         return local_shard
+    ops = _hccl_ops()
+    if ops is not None and callable(getattr(ops, "hccl_all_gather", None)):
+        return ops.hccl_all_gather(local_shard)
     ops = _nccl_ops()
     if ops is not None and callable(getattr(ops, "nccl_all_gather", None)):
         return ops.nccl_all_gather(local_shard)
     if callable(getattr(local_shard, "mpi_all_gather", None)):
         return local_shard.mpi_all_gather()
-    raise RuntimeError("Jittor NCCL all_gather is not available; launch with jittor.distributed.launch and use_nccl=1")
+    raise RuntimeError("Jittor all_gather requires an initialized HCCL, NCCL, or MPI backend")
 
 
 def _reduce_scatter_padded(full_grad):
