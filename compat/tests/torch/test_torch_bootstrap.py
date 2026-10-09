@@ -774,6 +774,34 @@ class TestTorchBootstrap(unittest.TestCase):
             loaded = build._preload_jittor_cores(verbose=False)
         self.assertIn(origin, loaded)
 
+    def test_published_torch_names_an_existing_entry_file(self):
+        """``os.path.dirname(torch.__file__)`` is how libraries locate Torch.
+
+        The published namespace is detached from the import machinery, so it
+        had no ``__file__`` and the deploy hint's own verification command
+        raised ``AttributeError``.
+        """
+        import torch
+
+        self.assertTrue(hasattr(torch, "_torch_compat_install_context"))
+        self.assertEqual(os.path.basename(torch.__file__), "__init__.py")
+        self.assertTrue(os.path.isfile(torch.__file__), torch.__file__)
+
+    def test_published_namespace_takes_the_deployed_entry_file(self):
+        from jittor.compat.shim import runtime
+
+        placeholder = types.ModuleType("torch")
+        placeholder._jittor_torch_shim_placeholder = True
+        placeholder.__file__ = "/site/torch/__init__.py"
+        published = types.ModuleType("torch")
+        with mock.patch.dict(sys.modules, {"torch": placeholder}):
+            runtime._adopt_entry_file(published)
+        self.assertEqual(published.__file__, "/site/torch/__init__.py")
+
+        published.__file__ = "kept"
+        runtime._adopt_entry_file(published)
+        self.assertEqual(published.__file__, "kept")
+
     def test_plain_preflight_is_side_effect_free(self):
         from jittor.compat.shim.preflight import prepare_import_environment
 

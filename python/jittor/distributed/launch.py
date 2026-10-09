@@ -22,6 +22,7 @@ import argparse
 import glob
 import os
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -35,6 +36,13 @@ def _visible_devices_for_rank(rank):
     if rank < len(devices):
         return devices[rank]
     return None
+
+
+def _free_port():
+    """A TCP port nothing listens on right now, for MASTER_PORT."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
 
 
 def _detect_backend():
@@ -117,17 +125,29 @@ def main():
         except Exception:
             pass
 
+    # Torch-style entry points (ms-swift, accelerate scripts) read torchrun's
+    # variables, and `init_process_group()` defaults to env://, which needs
+    # MASTER_ADDR/MASTER_PORT as soon as WORLD_SIZE > 1. Publish all of them;
+    # the JT_* variables stay the source of truth for jittor's own rendezvous.
+    master_addr = os.environ.get("MASTER_ADDR") or "127.0.0.1"
+    master_port = os.environ.get("MASTER_PORT") or str(_free_port())
+
     procs = []
     for rank in range(a.nproc):
         env = dict(os.environ)
         env[f"{prefix}_WORLD_SIZE"] = str(a.nproc)
         env[f"{prefix}_RANK"] = str(rank)
+        env["RANK"] = str(rank)
+        env["WORLD_SIZE"] = str(a.nproc)
+        env["MASTER_ADDR"] = master_addr
+        env["MASTER_PORT"] = master_port
         visible_device = _visible_devices_for_rank(rank) if backend == "nccl" else None
         if visible_device is not None:
             env["CUDA_VISIBLE_DEVICES"] = visible_device
             env[f"{prefix}_LOCAL_RANK"] = "0"
         else:
             env[f"{prefix}_LOCAL_RANK"] = str(rank)   # single node: local == global
+        env["LOCAL_RANK"] = env[f"{prefix}_LOCAL_RANK"]
         env[f"{prefix}_ROOTINFO_FILE"] = rootinfo
         # No per-rank cache_name. Every rank builds the same kernels from the
         # same sources, so a cache each meant an N-card job compiled the whole

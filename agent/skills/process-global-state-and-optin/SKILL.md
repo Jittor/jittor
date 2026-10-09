@@ -124,10 +124,12 @@ def _run_call(self, *args, **kw):   # self 就是那个一次性上下文
 包装层于是自己建 ctx、往 ctx 上记账、再 `ctx._run_call(*args)`，forward 和 backward
 读到的是同一个对象。
 
-## 6. 在 `python/jittor/_runtime/core_api.py` 里写代码的一个地雷
+## 6. 在 jittor 核心 Python 模块里写代码的一个地雷：内建名字可能不是内建
 
-这个文件顶上有 `from jittor import *`，**它把好几个内建名字重新绑定成了 jittor 的
-算子**：`bool`、`int`、`float`、`abs`、`max`、`min` 都不再是 Python 内建。所以
+jittor 的命名空间里 `bool`、`int`、`float`、`abs`、`max`、`min` 都是 jittor 的 dtype 或
+算子；凡是把这些名字带进模块全局的地方（历史上的 `from jittor import *`，以及 Torch 模式下
+兼容层对 `python/jittor/_core/module.py` 全局名 `bool` 的改写），**模块里的 `bool(...)` 调到的
+就不再是 Python 内建**。所以
 
 ```python
 return bool(d.get("_forward_hooks"))     # RuntimeError: Wrong inputs arguments,
@@ -137,10 +139,12 @@ return bool(d.get("_forward_hooks"))     # RuntimeError: Wrong inputs arguments,
 报错信息完全不提"你以为在调内建"，只说某个算子的重载都不匹配。写这个文件时：
 
 - 需要真值就直接把表达式交给 `if` / `or` 链，不要 `bool(...)`；
-- 需要真正的内建，用文件里已有的别名（例如 `ori_int`），或者 `import builtins`。
+- 需要真正的内建，用文件里已有的别名（`_core/var.py`、`_core/module.py` 顶上的
+  `from builtins import int as ori_int` 一类），或者 `import builtins`。
 
-文件里已经有注释警告过 `bool`，但只在一处；改这个文件之前先
-`grep -n "ori_int\|rebinds the name" python/jittor/_runtime/core_api.py`。
+改这类文件之前先
+`grep -n "ori_int\|ori_bool\|rebinds the name\|no bool()" python/jittor/_core/*.py`，
+看清哪些名字在这里不是内建。
 
 ## 6.5 全进程状态改成「可回滚 ledger」之后怎么验
 
@@ -226,7 +230,8 @@ def test_writes_ignore_a_ledger_that_has_already_closed(closed):
 
 ### 7.1 找一个不用编译就能观察到的落点
 
-构建期变量的效果最后都体现在**产物放在哪**，而缓存目录名在 `import jittor_utils` 就算好了，
+构建期变量的效果最后都体现在**产物放在哪**，而缓存目录名在 `import jittor_utils`（源码在
+`python/jittor/build/utils/`）就算好了，
 **不需要编译核心**。所以判据是一行、一秒钟的事：
 
 ```python
@@ -258,8 +263,8 @@ verbosity），按设置名合并，否则数量是错的。
 
 ### 7.3 分界线不要新发明，用已有的那条
 
-构建期与运行期分两个命名空间时，**不要另写一份名单**。`2.13` 的
-`_runtime/flag_policy.py` 已经把 flag 分成 `STARTUP_FLAGS`（启动配置）与其余，
+构建期与运行期分两个命名空间时，**不要另写一份名单**。
+`python/jittor/_runtime/flag_policy.py` 已经把 flag 分成 `STARTUP_FLAGS`（启动配置）与其余，
 直接拿它当 `JT_BUILD_` 与 `JT_` 的分界。C++ 侧因为不能 import Python 必须重抄一份，
 那就让结构门禁读两边断言集合相同——两份名单一定会漂。
 

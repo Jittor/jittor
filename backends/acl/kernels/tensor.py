@@ -5,6 +5,7 @@ from collections.abc import Iterable
 from typing import Union
 import numpy as np
 import jittor as jt
+from .ops.multinomial_op import multinomial_acl
 from .ops.clamp_op import ClampACL
 from .ops.triu_op import TriuACL
 from .ops.flip_op import FlipACL
@@ -119,12 +120,33 @@ def embedding_acl(
     return EmbeddingACL(padding_idx, scale_grad_by_freq)(input, weight)
 
 
-def any_acl(input, dim=None):
-    return truth_reduce(input, dim, reduce_all=False)
+def _truth_reduce_keepdims(input, dim, reduce_all, keepdims):
+    result = truth_reduce(input, dim, reduce_all=reduce_all)
+    if not keepdims:
+        return result
+    dims = {axis % input.ndim for axis in range(input.ndim)} if dim is None or (
+        isinstance(dim, (list, tuple)) and not dim
+    ) else {axis % input.ndim for axis in ([dim] if isinstance(dim, int) else dim)}
+    return result.reshape([1 if axis in dims else size for axis, size in enumerate(input.shape)])
 
 
-def all_acl(input, dim=()):
-    return truth_reduce(input, dim, reduce_all=True)
+def any_acl(input, dim=None, keepdims=False):
+    return _truth_reduce_keepdims(input, dim, False, keepdims)
+
+
+def all_acl(input, dim=(), keepdims=False):
+    return _truth_reduce_keepdims(input, dim, True, keepdims)
+
+
+def multinomial_single_draw_acl(weights, num_samples=1, replacement=False):
+    """``jt.multinomial`` on ACL for the one draw CANN serves, or None.
+
+    Registered as ``random.multinomial``: a None answer leaves the call to the
+    portable sampler, as any other draw goes.
+    """
+    if num_samples != 1 or replacement or weights.ndim not in (1, 2):
+        return None
+    return multinomial_acl(weights, num_samples, replacement)
 
 
 def cumsum_acl(input, dim=-1):
@@ -144,7 +166,13 @@ def scatter_acl(input, dim, index, src, reduce="void"):
 
 
 def arg_reduce_acl(input, op, dim, keepdims=False):
-    if _jittor_dtype_name(input.dtype) not in ("float16", "float32"):
+    dtype = _jittor_dtype_name(input.dtype)
+    if dtype == "int32":
+        # aclnnMaxDim/MinDim on Ascend A2 does not accept int32 values.
+        # int64 preserves every int32 value exactly across the reduction.
+        indices, values = ArgReduceACL(jt.ops.arg_reduce)(input.cast("int64"), op, dim, keepdims)
+        return indices, values.cast("int32")
+    if dtype not in ("float16", "float32", "int64"):
         return None
     return ArgReduceACL(jt.ops.arg_reduce)(input, op, dim, keepdims)
 
@@ -163,6 +191,19 @@ def floor_int_acl(x):
 
 def getitem_acl(x, slices, return_x=None):
     if return_x is not None:
+        return None
+    # ZeRO unflattens one dense 1-D parameter buffer with unit-stride slices.
+    # The native getitem represents those slices as storage views, while the
+    # ACL SliceV2 lowering materializes every result.  Materializing hundreds
+    # of views multiplies the full flat-buffer footprint and can OOM before the
+    # first training step.  Leave this exact view-safe case to native getitem;
+    # ACL still handles tensor indices, masks and multi-dimensional slices.
+    flat_slice = None
+    if x.ndim == 1 and isinstance(slices, slice):
+        flat_slice = slices
+    elif x.ndim == 1 and isinstance(slices, tuple) and len(slices) == 1:
+        flat_slice = slices[0]
+    if isinstance(flat_slice, slice) and flat_slice.step in (None, 1):
         return None
     if isinstance(slices, jt.Var):
         return GetItemACL()(x, slices, return_x)

@@ -1,6 +1,6 @@
 ---
 name: hang-that-holds-the-gil
-description: 定位「进程再也不返回」的挂死——Jittor 的阻塞调用（RingBuffer recv/pop、dataset worker 握手）是在 C++ 里等条件变量且**不释放 GIL**，所以 Python 的 signal handler、定时器、看门狗线程一律不会跑，gdb 又常因 ptrace_scope 附不上。给出能拿到 Python 栈的两种手段、把挂死变成有界失败的测试写法，以及多进程唤醒路径的核查清单。遇到 timeout 124 收尾、pytest 卡住不动、「worker 报错了但父进程不返回」时读这一篇。
+description: 定位「进程再也不返回」的挂死——Jittor 的无界阻塞调用（RingBuffer 的 `pop()`/`push()` 等）是在 C++ 里等条件变量且**不释放 GIL**，所以 Python 的 signal handler、定时器、看门狗线程一律不会跑，gdb 又常因 ptrace_scope 附不上。给出能拿到 Python 栈的两种手段、把挂死变成有界失败的测试写法，以及多进程唤醒路径的核查清单。遇到 timeout 124 收尾、pytest 卡住不动、「worker 报错了但父进程不返回」时读这一篇。
 ---
 
 # 挂死在一个握着 GIL 的调用里
@@ -21,7 +21,8 @@ description: 定位「进程再也不返回」的挂死——Jittor 的阻塞调
 1. **gdb 附不上。** `/proc/sys/kernel/yama/ptrace_scope=1` 只允许祖先进程附加，
    而你新起的 gdb 不是那个挂死进程的祖先；没有 root 就改不了。
 2. **Python 的 signal handler 不会跑。** 阻塞发生在 C++ 里且**没有释放 GIL**
-   （`py_ring_buffer.cc` 全文没有 `Py_BEGIN_ALLOW_THREADS`），解释器停在字节码之间，
+   （`src/bindings/pyjt/py_ring_buffer.cc` 里只有有界的 `pop_for` 包了
+   `Py_BEGIN_ALLOW_THREADS`，`pop()`/`push()` 仍握着 GIL 无限等），解释器停在字节码之间，
    `signal.signal` 注册的处理器、`threading.Timer`、任何 Python 看门狗线程都不会被调度。
 
 `faulthandler` 两个入口都在 C 层，不需要 GIL，所以两个都能用：
@@ -88,9 +89,15 @@ dataset worker 这类孙进程会继续跑并攥着 stdout 管道。用
    子进程可以直接 `buffer.stop()`**，让睡在 `recv()` 里的父进程抛出 `runtime_error("stop")`。
    注意 `stop()` 用的是 `pthread_cond_signal`（只叫醒一个），多个等待者时不够。
 5. **子进程被信号杀死（SIGKILL/OOM/段错误）这条路谁兜？** 它跑不到任何 Python 收尾
-   代码：不写共享槽、不 `stop()`、不推队列。父进程握着 GIL 阻塞，Python 看门狗线程
-   也跑不了。**今天没有兜底**，这是已知的残留（`TestDatasetSeed::test_children_died`
-   就是它，现为 xfail）。真正的修法是让阻塞调用释放 GIL 并带超时，属于核心改动。
+   代码：不写共享槽、不 `stop()`、不推队列。兜底只能来自父进程自己的**有界等待**：
+   `RingBuffer::wait_pop_for`（`src/runtime/ring_buffer.h`）用 `pthread_cond_timedwait`
+   等，`PyMultiprocessRingBuffer::pop_for(timeout_ms)` 在等的期间释放 GIL、超时抛
+   `ring buffer pop timed out`；dataset 的主循环用 `idqueue.pop_for(5000)` 取 worker id，
+   超时交给 `_raise_worker_death` 报错。`tests/data/test_dataset.py::TestDatasetSeed::test_children_died`
+   杀掉一个 worker 后断言子脚本在 20 s 内以非零退出、stderr 里有那句超时；
+   `tests/structure/build/test_ring_buffer_timeout_contract.py` 钉住「`pop()` 仍无界、
+   `pop_for` 显式有界」这个契约。新加的阻塞等待照这个形状写：**有界、释放 GIL、超时抛错**，
+   不要指望信号或看门狗线程来救。
 6. **不要退回"给父进程发信号"。** Jittor 装了进程级 SIGCHLD/SIGINT 处理器：
    SIGINT 分不清是不是用户按了 Ctrl-C，处理器会直接退进程；旧的 SIGCHLD 处理器
-   会让父进程**无声消失**。挂住很糟，无声消失更糟（见任务 6.C31）。
+   会让父进程**无声消失**。挂住很糟，无声消失更糟。

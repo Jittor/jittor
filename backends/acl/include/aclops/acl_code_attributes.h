@@ -85,6 +85,8 @@ inline acl_data::AclAttrSchema acl_code_attribute_schema(const string& name) {
     if (name == "BatchMatMul") return {{"mode", required(Type::int64)}, {"cube_math_type", required(Type::int64)}};
     if (name == "Unary") return {{"operation", required(Type::int64_vector)}};
     if (name == "TruthReduce") return {{"axes", required(Type::int64_vector)}, {"keepdims", required(Type::boolean)}, {"reduce_all", required(Type::boolean)}};
+    if (name == "Sort") return {{"stable", required(Type::boolean)}, {"dim", required(Type::int64)}, {"descending", required(Type::boolean)}};
+    if (name == "Multinomial") return {{"num_samples", required(Type::int64)}, {"replacement", required(Type::boolean)}};
     acl_data::internal_error("ACL runner has no attribute schema: " + name); return {};
 }
 template<class Runner>

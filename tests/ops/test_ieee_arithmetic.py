@@ -16,8 +16,7 @@ ever infinite or NaN. It then optimised on that promise, and operands that
 A single element computed correctly; the wrong answers began at length 4, which
 is where the kernel vectorises, so a scalar spot-check saw nothing. CUDA was
 correct throughout, which is the other half of what makes this expensive: the
-same expression on the same data disagreed between the two devices
-(KI-BACKEND-005).
+same expression on the same data disagreed between the two devices.
 
 The dangerous shape is not the obviously broken one. A fully masked attention
 row subtracts its own ``-inf`` maximum; a finite result there produces a

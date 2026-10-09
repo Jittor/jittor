@@ -1,9 +1,9 @@
 """Python frontend types sharing the native VarHolder payload and graph."""
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
-from contextlib import contextmanager
 from functools import update_wrapper
 from types import MethodType
+import weakref
 
 #: Resolved on first use, then reused. These two helpers sit on the per-op path
 #: (`torch.cat` alone re-imported them 91 times, ~110 us of its 340 us), and a
@@ -20,8 +20,9 @@ _TIERS = {"highest": 0, "high": 1, "medium": 2}
 #: settable at runtime (`torch.backends.cuda.matmul.allow_tf32`, the H3 VAE's
 #: determinism scope) and a cached tuple would answer with a stale policy.
 #: The type is created by the installer, so a reinstallation makes a new type and
-#: a new entry rather than reusing an old one.
-_precision_state = {}
+#: a new entry rather than reusing an old one. Weak: subclasses made at run time
+#: (a Parameter subclass) ask too and must stay collectable.
+_precision_state = weakref.WeakKeyDictionary()
 
 
 def _frontend_precision_policy(cls):
@@ -50,8 +51,37 @@ def _default_tensor_dtype(backend):
     return _dtype_to_str(getter()) if getter is not None else "float32"
 
 
-def _placement_request(backend, device, like=None):
-    """Resolve native placement without changing Runtime flags or materializing."""
+#: What `torch.set_default_device` was last told, or None meaning CPU.
+#: Deliberately *not* jittor's `use_cuda`: that flag answers "is the
+#: accelerator enabled", which torch treats as a different question from
+#: "where does a tensor with no device go".
+_DEFAULT_DEVICE = None
+
+
+def default_device():
+    """The device a factory with no `device=` should use."""
+    return _DEFAULT_DEVICE or "cpu"
+
+
+def set_default_device_spelling(device):
+    """Record what `torch.set_default_device` chose; None clears it to CPU."""
+    global _DEFAULT_DEVICE
+    _DEFAULT_DEVICE = device
+
+
+def _placement_request(backend, device, like=None, default_placement=True):
+    """Resolve native placement without changing Runtime flags or materializing.
+
+    ``default_placement=False`` is for a scope that *runs* ops rather than
+    constructs tensors -- a module's forward. torch's default device answers
+    "where does a new tensor with no ``device=`` go"; it does not relocate the
+    buffers an op allocates for its result, which follow the op's inputs.
+    Returning the default there put the whole forward under an ambient CPU
+    placement: every native allocation inside it (the destination
+    ``jt.concat`` fills) landed on the host while the inputs were on the GPU,
+    and the first ``setitem`` died in dispatch_context. An explicit
+    ``with torch.device(...)`` still applies.
+    """
     if device is None:
         if isinstance(like, backend.Var) and like.placement_backend >= 0:
             return int(like.placement_backend), max(int(like.device_id), 0)
@@ -60,8 +90,22 @@ def _placement_request(backend, device, like=None):
         # device rather than the ambient context's.
         from .types import active_device_context
         device = active_device_context()
-        if device is None:
+        if device is None and not default_placement:
             return None
+        if device is None:
+            # torch's default device is CPU, and stays CPU until somebody calls
+            # `set_default_device`. This used to return None -- "no placement,
+            # let jittor decide" -- which means jittor's global `use_cuda`, and
+            # that flag says *the accelerator is enabled*, not *the accelerator
+            # is the default device*. torch keeps those apart.
+            #
+            # The cost of conflating them: MiniMax-H3's VAE does
+            # `latent = latent.float().cpu()` and then builds its normalisation
+            # constants with a plain `torch.tensor(...)`. Under torch both are
+            # on the CPU; here the constants landed on cuda:0 and the subtract
+            # died in device_copy_op with "Expected all tensor inputs on the
+            # same backend and device".
+            device = default_device()
     numeric_index = isinstance(device, int) and not isinstance(device, bool)
     name = "cuda" if numeric_index else (getattr(device, "type", None) or str(device).split(":", 1)[0])
     if name == "cpu":
@@ -84,28 +128,67 @@ def _placement_request(backend, device, like=None):
     return {"cuda": 1, "acl": 2, "acl_legacy": 2, "rocm": 3, "corex": 4}[selected], int(index)
 
 
-@contextmanager
-def tensor_frontend(tensor_type, *, device=None, like=None):
-    backend = getattr(tensor_type, "_frontend_backend", None)
-    if backend is None:
-        yield
-        return
-    token = backend.core._set_tensor_frontend_type(tensor_type)
-    placement_token = None
-    precision_token = None
-    try:
-        precision_token = backend.core._set_float32_precision(*tensor_type._frontend_precision_policy())
-        placement = _placement_request(backend, device, like)
-        if placement is not None:
-            placement_token = backend.core._set_tensor_placement(*placement)
-        with backend.autograd.policy_scope(backend.autograd.EXPLICIT_REQUIRES_GRAD):
-            yield
-    finally:
-        if precision_token is not None:
-            backend.core._reset_float32_precision(precision_token)
-        if placement_token is not None:
-            backend.core._reset_tensor_placement(placement_token)
-        backend.core._reset_tensor_frontend_type(token)
+class tensor_frontend:
+    """Build/run under the frontend's tensor type, precision and placement.
+
+    See `_placement_request` for ``default_placement``: construction scopes
+    keep it, a scope that executes ops (a module's forward) turns it off.
+
+    A class rather than a generator: every module call and every tensor
+    factory enters one, and a `@contextmanager` generator plus the nested
+    autograd `policy_scope` cost more than the native calls they wrap.
+    """
+
+    __slots__ = ("_type", "_device", "_like", "_default_placement", "_backend",
+                 "_token", "_placement_token", "_precision_token", "_policy_bits")
+
+    def __init__(self, tensor_type, *, device=None, like=None, default_placement=True):
+        self._type = tensor_type
+        self._device = device
+        self._like = like
+        self._default_placement = default_placement
+        self._backend = None
+
+    def __enter__(self):
+        backend = getattr(self._type, "_frontend_backend", None)
+        self._backend = backend
+        if backend is None:
+            return None
+        core = backend.core
+        self._token = core._set_tensor_frontend_type(self._type)
+        self._placement_token = self._precision_token = self._policy_bits = None
+        try:
+            self._precision_token = core._set_float32_precision(
+                *self._type._frontend_precision_policy())
+            placement = _placement_request(backend, self._device, self._like,
+                                           self._default_placement)
+            if placement is not None:
+                self._placement_token = core._set_tensor_placement(*placement)
+            # backend.autograd.policy_scope(EXPLICIT_REQUIRES_GRAD), inline.
+            policy = backend.autograd.EXPLICIT_REQUIRES_GRAD
+            self._policy_bits = core._get_autograd_policy()
+            core._set_autograd_policy(policy.stop_outputs_when_inputs_stopped,
+                                      policy.preserve_requires_grad_on_assignment)
+        except BaseException:
+            self._restore()
+            raise
+        return None
+
+    def __exit__(self, *exc):
+        if self._backend is not None:
+            self._restore()
+        return False
+
+    def _restore(self):
+        core = self._backend.core
+        bits = self._policy_bits
+        if bits is not None:
+            core._set_autograd_policy(bool(bits & 1), bool(bits & 2))
+        if self._precision_token is not None:
+            core._reset_float32_precision(self._precision_token)
+        if self._placement_token is not None:
+            core._reset_tensor_placement(self._placement_token)
+        core._reset_tensor_frontend_type(self._token)
 
 
 class FrontendFactory:
@@ -233,12 +316,25 @@ def make_parameter_type(backend, tensor_type):
     })
 
 
+#: Attributes a runtime notes on a tensor -- the weight version a convolution
+#: has seen, see `jittor/nn/backends/cudnn.py` -- which a pickle or a copy of
+#: the tensor must not carry.
+_RUNTIME_CACHES = ("_jittor_conv_filter",)
+
+
+def _python_state(value):
+    state = value.__dict__.copy()
+    for name in _RUNTIME_CACHES:
+        state.pop(name, None)
+    return state
+
+
 def reduce_tensor(value):
     return (
         rebuild_tensor,
         (type(value), value.numpy(), _jittor_dtype_name(value.dtype), value.requires_grad,
          str(value.device)),
-        value.__dict__.copy(),
+        _python_state(value),
     )
 
 
@@ -257,5 +353,5 @@ def deepcopy_tensor(value, memo):
     result = rebuild_tensor(type(value), value.numpy(), _jittor_dtype_name(value.dtype),
                             value.requires_grad, str(value.device))
     memo[id(value)] = result
-    result.__dict__.update(deepcopy(value.__dict__, memo))
+    result.__dict__.update(deepcopy(_python_state(value), memo))
     return result

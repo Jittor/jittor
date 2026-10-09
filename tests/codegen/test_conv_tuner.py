@@ -136,6 +136,17 @@ def check_backward(xshape, wshape, stride, padding, dilation, use_cuda, nhwc):
 
 class TestConvTuner(unittest.TestCase):
     def test_forward(self):
+        # The relay needs somewhere to relay *to*, and on this backend only the
+        # CPU library registers a conv implementation
+        # (`backends/cpu/libraries/mkl/mkl_capabilities.cc`, compiled in only
+        # with `use_mkl=1`). Without it `find_op_capability` finds no candidate,
+        # the tuner correctly declines, and the `mkl_conv` key this case looks
+        # for is never logged -- so the assertion would be about the build, not
+        # about the tuner. Measured on the CPU gate 2026-09-22: every capability
+        # query returns `[]` there. KI-TUNER-001 still holds for a build that
+        # does register one. (Same guard as `test_matmul_tuner.py` and
+        # `test_group_conv_tuner.py`; these two CPU cases were missed.)
+        _test_capability.require_library("mkl")
         for dilation in [1,2,3]:
             check_forward([10,100,100,3], [5,3,3,3], 2, 0, dilation, 0, True)
             check_forward([10,40,50,4], [5,4,5,5], 1, 1, dilation, 0, True)
@@ -146,6 +157,9 @@ class TestConvTuner(unittest.TestCase):
             check_forward([10,4,40,50], [5,4,4,4], 3, 1, dilation, 0, False)
 
     def test_backward(self):
+        # See `test_forward`: both CPU cases need the registered conv
+        # implementation, or they assert the build rather than the tuner.
+        _test_capability.require_library("mkl")
         for dilation in [1,2,3]:
             check_backward([10,3,100,100], [5,3,3,3], 2, 0, dilation, 0, False)
             check_backward([10,4,40,50], [5,4,5,5], 1, 1, dilation, 0, False)

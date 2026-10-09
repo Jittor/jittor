@@ -97,8 +97,8 @@ static size_t liveness_queue_front = 0;
 
 // Leaked on purpose: this is taken from an atexit handler and from static
 // destructors, where a function-local static may already be gone.
-std::recursive_mutex& graph_mutation_mutex() {
-    static std::recursive_mutex* mutex = new std::recursive_mutex();
+GraphMutationMutex& graph_mutation_mutex() {
+    static GraphMutationMutex* mutex = new GraphMutationMutex();
     return *mutex;
 }
 
@@ -120,7 +120,7 @@ static void run_liveness_queue(const char* caller) {
     // The drain owns the queue -- it clears it on the way out -- so two threads
     // draining at once would empty each other's work and run each other's
     // callbacks on nodes neither of them owns.
-    std::lock_guard<std::recursive_mutex> guard(graph_mutation_mutex());
+    std::lock_guard<GraphMutationMutex> guard(graph_mutation_mutex());
     LOGvvvv << "run liveness queue from" << caller << "size" << liveness_queue.size();
     // A step can throw: the counters assert their own invariants and `free`
     // reaches the allocator. Leaving the queue half-drained would make the
@@ -158,8 +158,8 @@ void Node::batch_index_mismatch(int64 stamp) const {
 //
 // A var the fuser inlined holds no storage of its own: the kernel recomputes
 // it from its producer on every use. Three readings say so together, and all
-// three are needed -- the counts below are from the bilinear `interpolate`
-// graph in KI-EXEC-006, logged at the moment its `index` op was freed.
+// three are needed -- the counts below are from a retained bilinear
+// `interpolate` graph differentiated twice, logged at the moment its `index` op was freed.
 //
 //   * `mem_ptr == nullptr`: nothing to read. A materialised var fails here,
 //     which is what keeps this from firing on the ordinary case; testing only
@@ -200,7 +200,7 @@ void Node::free() {
     // Same lock as the drain: this appends to `liveness_queue` and erases this
     // node from its neighbours' edge lists, and those neighbours may belong to
     // another worker's relay.
-    std::lock_guard<std::recursive_mutex> guard(graph_mutation_mutex());
+    std::lock_guard<GraphMutationMutex> guard(graph_mutation_mutex());
     // already scheduled for deletion in this free_buffer round
     if (flags.get(NodeFlags::_queued_for_free)) return;
     // A var that still has an input op and is either alive forward or still
@@ -234,7 +234,7 @@ void Node::free() {
     // The same statement from the op's side: freeing this op would erase the
     // only producer edge and leave a var alive, unbacked and unrecomputable --
     // which reached the launch as a null allocator until
-    // `check_input_is_backed` gave it a name (KI-EXEC-006).
+    // `check_input_is_backed` gave it a name.
     if (!is_var() && outputs_need_recomputing(this)) {
         return;
     }
@@ -446,7 +446,7 @@ void Node::finish_pending_liveness() {
     // Reaching that state needs a var that goes backward-dead and is then
     // finished, in that order, which cannot happen while such a var is freed
     // on the spot. Keeping a fused-away var alive for a retained graph
-    // (KI-EXEC-006) is exactly what makes it possible: `index`'s output
+    // is exactly what makes it possible: `index`'s output
     // withdrew at 4 -> 3 -> 2 -> 1 -> 0 as the gradients ran, and then
     // withdrew a fifth time at teardown, aborting the process.
     if ((is_var() || is_stop_grad()) && liveness.backward.active()) {

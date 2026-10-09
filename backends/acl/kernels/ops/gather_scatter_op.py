@@ -6,13 +6,14 @@ class GatherACL(jt.Function):
     def execute(self, input, dim, index):
         self.dim = dim
         self.index = index
+        self.input_shape = tuple(input.shape)
         return acl_code(
             "Gather", [input, index], output_dtypes=[input.dtype],
             output_shapes=[index.shape], attributes={"dim": dim},
         )[0]
 
     def grad(self, grad_output):
-        tmp = jt.zeros(self.index.shape, dtype=grad_output.dtype)
+        tmp = jt.zeros(self.input_shape, dtype=grad_output.dtype)
         return acl_code(
             "Scatter", [tmp, self.index, grad_output], output_dtypes=[grad_output.dtype],
             output_shapes=[tmp.shape], attributes={"axis": self.dim, "reduction": 1},

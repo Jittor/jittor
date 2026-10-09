@@ -88,6 +88,24 @@ def _dtype_spec(value):
         return value
     if isinstance(value, str) and _device_spec(value) is None:
         return value.replace("torch.", "")
+    # torch spells a dtype as an object, not a string, and code written against
+    # torch hands it straight to `.to()` -- `images.to(dtype=torch.float32)` is
+    # what `transformers/image_processing_backends.py` does for every image it
+    # preprocesses. Only strings were accepted here, so both `x.to(torch.float32)`
+    # and `x.to(dtype=torch.float32)` raised, and the failure surfaced from
+    # inside transformers as "to() expected dtype to be a dtype spelling".
+    #
+    # Matched on `.name` rather than the shim's class, because this is core
+    # jittor and must not import from the compatibility layer. It discriminates:
+    # a `torch.device` has no `.name`, and a Var's `.name` is a bound method,
+    # not a string.
+    name = getattr(value, "name", None)
+    if isinstance(name, str):
+        try:
+            jt.NanoString(name)
+        except RuntimeError:
+            return None
+        return name
     return None
 
 

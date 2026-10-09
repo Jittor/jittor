@@ -30,6 +30,7 @@ results/index
 :caption: 项目
 
 development/index
+research/index
 releases/index
 community/index
 contributing
@@ -46,6 +47,9 @@ contributing
 | 弄清显存、精度或异步执行的行为 | [机制说明](notes/index.md) |
 | 调查一个报错或性能问题 | [调试指南](guides/debugging.md)、[性能](performance/index.md) |
 | 看别人已经查过的现象和结论 | [验证结论](results/index.md) |
+| 确认某个系统 / Python / 后端有没有被验证过 | [平台支持](guides/platform-support.md) |
+| 查一个已知的数值、性能或兼容缺口 | [已知限制](guides/known-limitations.md) |
+| 从 1.x 升上来 | [2.0 发布说明](releases/2.0.md) |
 | 给 Jittor 提交代码 | [贡献指南](contributing.md)、[开发文档](development/index.md) |
 
 ## 项目链接

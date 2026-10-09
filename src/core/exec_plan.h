@@ -47,24 +47,41 @@ struct ExecPlan {
     // once; recording what it saw costs one vector per op and makes the batch
     // independent of any concurrent `free()`, with no lock and no deferral.
     //
-    // Indexed by an op's batch index: `ops[i]` is `op_outputs[i]`.
-    vector<vector<Var*>> op_outputs;
+    // Indexed by an op's batch index, flattened: op `i`'s outputs are
+    // `op_outputs[op_outputs_begin[i] .. op_outputs_begin[i+1])`. One vector
+    // per op was an allocation per op per batch -- with the map below, a tenth
+    // of an eager decode token's executor time went to malloc and free.
+    vector<Var*> op_outputs;
+    vector<int> op_outputs_begin;
     // Same, per op: its input vars and the argument position each occupies on
     // the producing side (`output_t::index`), which is what separates a real
     // data edge from a control dependency (see `reverse().index < 0`).
-    vector<vector<pair<Var*, int>>> op_inputs;
-    // For every var the BFS touched, the op that produces it and the slot it
-    // occupies in that op's output list -- that is
-    // `Var::_inputs.front().reverse().index`, read while the edge still existed.
-    // A segment asks both questions to decide whether an input is produced
-    // inside it (and under which output index), instead of asking the var,
-    // whose `_inputs` may have been cleared by now.
-    unordered_map<Var*, pair<Op*, int>> var_producer;
+    vector<pair<Var*, int>> op_inputs;
+    vector<int> op_inputs_begin;
+    // For every var the BFS touched, by its batch index (like `all_vars`), the
+    // op that produces it and the slot it occupies in that op's output list --
+    // that is `Var::_inputs.front().reverse().index`, read while the edge
+    // still existed. A segment asks both questions to decide whether an input
+    // is produced inside it (and under which output index), instead of asking
+    // the var, whose `_inputs` may have been cleared by now.
+    vector<pair<Op*, int>> var_producer;
     // Backward liveness `Executor::run_sync` contributes to every var above,
     // for the batch's duration -- one per var once the hold is taken, zero
     // before that and for a plan built by anything else. Phase 7 subtracts it
     // before asking whether anyone still needs a var; see the assert there.
     int batch_hold_per_var = 0;
+    // The hold itself, and when each part of it may go. `release_after[rid]`
+    // lists the `all_vars` indices whose last use in this batch is the
+    // segment executed at queue position `rid`; the Runner drops their hold
+    // once that segment has run. Held to the end of the batch, a var's memory
+    // could not be freed until every kernel of the batch had run -- for a
+    // backward, the whole backward -- so the peak was the sum of every
+    // intermediate rather than the most alive at once: 13.07 GB against
+    // PyTorch's 9.17 GB on an 8-layer Qwen3 step, and the 28-layer one did
+    // not fit a 24 GB card. After its last use nothing in the batch reads the
+    // node again, which is all the hold was protecting.
+    vector<VarPtr>* batch_hold = nullptr;
+    vector<vector<int>> release_after;
     // ops.size(), kept because the Runner reports it after `ops` has been
     // consumed.
     int op_num = 0;

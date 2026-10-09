@@ -91,7 +91,7 @@ def compile_backend_sources(config, common_flags):
             # cannot work. `--use_fast_math` is still on every CUDA compile
             # line by default (see `nvcc_flags` below), so this exemption is
             # live for `nan_checker.cu`. `-Ofast` is no longer added to kernel
-            # flags -- KI-BACKEND-005 replaced it with `-O3` -- and is stripped
+            # flags -- kernels build at `-O3` -- and is stripped
             # here only because a user-supplied `cc_flags`/`nvcc_flags` can
             # still carry it in.
             flags = remove_flags(flags, ["--use_fast_math", "-Ofast"]) + " -O2 "
@@ -242,6 +242,24 @@ def preload_cuda_library(name, required=False):
             _loaded_cuda_libraries[path] = ctypes.CDLL(path, dlopen_flags)
     return _loaded_cuda_libraries.get(paths[-1]) if paths else None
 
+def cuda_toolkit_include_dirs(cuda_home, machine=None):
+    """Where the toolkit that owns ``nvcc`` keeps its headers.
+
+    A system toolkit has them in ``<home>/include`` (a symlink into
+    ``targets/``). A conda toolkit has only ``targets/<target>/include``,
+    which is what nvcc itself adds through ``nvcc.profile``
+    (``TOP = bin/../targets/<target>``). Host compilation must follow the
+    same rule, or ``cuda_runtime.h`` fails on ``crt/host_config.h``.
+    """
+    machine = machine or platform.machine()
+    targets = ["x86_64-linux"]
+    if machine in ("aarch64", "arm64"):
+        targets = ["sbsa-linux", "aarch64-linux"]
+    return [os.path.join(cuda_home, "include")] + [
+        os.path.join(cuda_home, "targets", target, "include")
+        for target in targets
+    ]
+
 def check_cuda():
     if not nvcc_path:
         return
@@ -265,11 +283,12 @@ def check_cuda():
     if nvcc_path == "/usr/bin/nvcc":
         # this nvcc is install by package manager
         cuda_lib = "/usr/lib/x86_64-linux-gnu"
-    # Keep CUDA 12 component headers first: CUDA 13 nvcc removed public
-    # fields still used by Jittor. The nvcc root supplies CRT/CCCL headers.
-    cuda_include_dirs = [cuda_include]
+    cuda_include_dirs = cuda_toolkit_include_dirs(cuda_home)
     cuda_lib_dirs = [cuda_lib, cuda_bin]
     if cuda_wheel_stack:
+        # CUDA 12 component headers stay ahead of the CUDA 13 nvcc root.
+        # That compiler dropped public fields Jittor still uses; the toolkit
+        # include list below still supplies CRT and CCCL.
         cuda_include_dirs = cuda_wheel_stack.include_dirs() + cuda_include_dirs
         cuda_lib_dirs = cuda_wheel_stack.lib_dirs() + cuda_lib_dirs
     cuda_include_dirs = list(dict.fromkeys(
@@ -920,7 +939,7 @@ if ' -O' not in cc_flags:
     # `-ffinite-math-only`: a promise that no operand is ever infinite or NaN.
     # The compiler optimises on that promise, and operands that *are* infinite
     # take whatever path the transformed code happens to produce -- `1/0` came
-    # back as `nan` instead of `inf`, and `-inf/0` likewise (KI-BACKEND-005).
+    # back as `nan` instead of `inf`, and `-inf/0` likewise.
     # The wrong answers are plausible rather than obviously broken, which is
     # what makes them expensive: a fully masked attention row subtracts its own
     # `-inf` maximum, and a finite result there produces a well-formed but

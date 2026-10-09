@@ -9,6 +9,168 @@ from jittor._runtime.backend_libraries import library_resource
 from jittor._runtime.dispatch import optional_kernel
 
 
+#: Rows at most this wide, when there are at least this many of them, go a
+#: warp each in the forward and the input gradient; see `_warp_kernels`.
+_WARP_ROW_LIMIT = 1024
+_WARP_ROWS_MIN = 1024
+
+#: Blocks of the fused backward: eight warps each, every warp walking rows.
+#: Each leaves a partial row of each parameter gradient.
+_FUSED_BLOCKS = 256
+
+
+
+def _warp_kernels(hidden, eps, backward):
+    """The forward and the input gradient with a warp per row.
+
+    A block per row is mostly idle at these widths and pays its barriers for
+    nothing: ViT-B/16's 12608 rows of 768 took 53 us forward and 115 us for
+    the input gradient that way, the gradient reading `grad_y`, `x` and the
+    weight three times over. Here a lane keeps its values of the row in
+    registers and both reductions are shuffles, so each tensor is read once.
+    """
+    per = -(-hidden // 32)
+    allsum = """
+    __device__ __forceinline__ float jt_ln_allsum(float v) {
+        for (int o = 16; o > 0; o >>= 1) v += __shfl_xor_sync(0xffffffffu, v, o);
+        return v;
+    }
+    """
+    forward = f"""
+    __global__ static void layer_norm_forward_warp(
+            const in0_type* x, const in1_type* weight, const in2_type* bias,
+            out0_type* y, out1_type* mean, out2_type* rstd, long long rows) {{
+        long long row = ((long long)blockIdx.x * blockDim.x + threadIdx.x) >> 5;
+        int lane = threadIdx.x & 31;
+        if (row >= rows) return;
+        const in0_type* xr = x + row * {hidden};
+        float cache[{per}];
+        float sum = 0.0f;
+        #pragma unroll
+        for (int i = 0; i < {per}; i++) {{
+            int j = lane + i * 32;
+            cache[i] = j < {hidden} ? static_cast<float>(xr[j]) : 0.0f;
+            sum += cache[i];
+        }}
+        float m = jt_ln_allsum(sum) / {hidden}.0f;
+        float var = 0.0f;
+        #pragma unroll
+        for (int i = 0; i < {per}; i++) {{
+            float d = cache[i] - m;
+            if (lane + i * 32 < {hidden}) var += d * d;
+        }}
+        float r = rsqrtf(jt_ln_allsum(var) / {hidden}.0f + {eps:.9g}f);
+        if (lane == 0) {{
+            mean[row] = out1_type(m);
+            rstd[row] = out2_type(r);
+        }}
+        out0_type* yr = y + row * {hidden};
+        #pragma unroll
+        for (int i = 0; i < {per}; i++) {{
+            int j = lane + i * 32;
+            if (j < {hidden})
+                yr[j] = out0_type((cache[i] - m) * r * static_cast<float>(weight[j])
+                                  + static_cast<float>(bias[j]));
+        }}
+    }}
+    """
+    # The backward, fused: each warp takes rows `_FUSED_BLOCKS * 8` apart and,
+    # besides the row's input gradient, keeps its lanes' share of the
+    # parameter gradients in registers, so `grad_y` and `x` are read once for
+    # all three -- they were read again for the parameter gradients, which on
+    # ViT's rows made that kernel as slow as the input gradient's. A block's
+    # warps then fold theirs through shared memory into one partial row, and
+    # `layer_norm_backward_finish` sums the blocks' rows in block order: lanes
+    # across channels, the partials split down the block. (No comments inside
+    # the source: `jt.code` lifts the kernels out by their text.)
+    backward_x = f"""
+    __global__ static void layer_norm_backward_fused(
+            const in0_type* grad_y, const in1_type* x, const in2_type* mean,
+            const in3_type* rstd, const in4_type* weight, out0_type* grad_x,
+            float* partial, long long rows) {{
+        __shared__ float fold[8][{hidden}];
+        int warp = threadIdx.x >> 5, lane = threadIdx.x & 31;
+        float acc_w[{per}], acc_b[{per}], w[{per}];
+        #pragma unroll
+        for (int i = 0; i < {per}; i++) {{
+            int j = lane + i * 32;
+            acc_w[i] = acc_b[i] = 0.0f;
+            w[i] = j < {hidden} ? static_cast<float>(weight[j]) : 0.0f;
+        }}
+        for (long long row = (long long)blockIdx.x * 8 + warp; row < rows;
+             row += (long long)gridDim.x * 8) {{
+            const in0_type* gr = grad_y + row * {hidden};
+            const in1_type* xr = x + row * {hidden};
+            float m = static_cast<float>(mean[row]), r = static_cast<float>(rstd[row]);
+            float dy[{per}], xhat[{per}];
+            float sum_g = 0.0f, sum_gx = 0.0f;
+            #pragma unroll
+            for (int i = 0; i < {per}; i++) {{
+                int j = lane + i * 32;
+                bool in = j < {hidden};
+                dy[i] = in ? static_cast<float>(gr[j]) : 0.0f;
+                xhat[i] = in ? (static_cast<float>(xr[j]) - m) * r : 0.0f;
+                float g = dy[i] * w[i];
+                sum_g += g;
+                sum_gx += g * xhat[i];
+                acc_w[i] += dy[i] * xhat[i];
+                acc_b[i] += dy[i];
+            }}
+            float mean_g = jt_ln_allsum(sum_g) / {hidden}.0f;
+            float mean_gx = jt_ln_allsum(sum_gx) / {hidden}.0f;
+            out0_type* dr = grad_x + row * {hidden};
+            #pragma unroll
+            for (int i = 0; i < {per}; i++) {{
+                int j = lane + i * 32;
+                if (j < {hidden})
+                    dr[j] = out0_type(r * (dy[i] * w[i] - mean_g - xhat[i] * mean_gx));
+            }}
+        }}
+        #pragma unroll
+        for (int pass = 0; pass < 2; pass++) {{
+            #pragma unroll
+            for (int i = 0; i < {per}; i++) {{
+                int j = lane + i * 32;
+                if (j < {hidden}) fold[warp][j] = pass ? acc_b[i] : acc_w[i];
+            }}
+            __syncthreads();
+            for (int j = threadIdx.x; j < {hidden}; j += 256) {{
+                float t = 0.0f;
+                #pragma unroll
+                for (int k = 0; k < 8; k++) t += fold[k][j];
+                partial[((long long)pass * gridDim.x + blockIdx.x) * {hidden} + j] = t;
+            }}
+            __syncthreads();
+        }}
+    }}
+    __global__ static void layer_norm_backward_finish(
+            const float* partial, out1_type* grad_weight, out2_type* grad_bias, int parts) {{
+        __shared__ float fold[2][8][33];
+        int channel = blockIdx.x * 32 + threadIdx.x;
+        float tw = 0.0f, tb = 0.0f;
+        if (channel < {hidden}) {{
+            for (int p = threadIdx.y; p < parts; p += 8) {{
+                tw += partial[(long long)p * {hidden} + channel];
+                tb += partial[(long long)(parts + p) * {hidden} + channel];
+            }}
+        }}
+        fold[0][threadIdx.y][threadIdx.x] = tw;
+        fold[1][threadIdx.y][threadIdx.x] = tb;
+        __syncthreads();
+        if (threadIdx.y || channel >= {hidden}) return;
+        tw = tb = 0.0f;
+        #pragma unroll
+        for (int k = 0; k < 8; k++) {{
+            tw += fold[0][k][threadIdx.x];
+            tb += fold[1][k][threadIdx.x];
+        }}
+        grad_weight[channel] = out1_type(tw);
+        grad_bias[channel] = out2_type(tb);
+    }}
+    """
+    return allsum + (backward_x if backward else forward)
+
+
 @lru_cache(maxsize=128)
 def _layer_norm_cuda_cls(hidden, eps):
     threads = 32
@@ -24,6 +186,20 @@ def _layer_norm_cuda_cls(hidden, eps):
     class LayerNormCUDA(jt.Function):
         def execute(self, x, weight, bias):
             rows = int(x.numel()) // hidden
+            self.warp = hidden <= _WARP_ROW_LIMIT and rows >= _WARP_ROWS_MIN
+            if self.warp:
+                y, mean, rstd = jt.code(
+                    [x.shape, (rows,), (rows,)],
+                    [x.dtype, "float32", "float32"],
+                    [x, weight, bias],
+                    cuda_src=_warp_kernels(hidden, eps, False) + f"""
+                    long long rows = in0->num / {hidden};
+                    layer_norm_forward_warp<<<(unsigned)((rows + 7) / 8), 256>>>(
+                        in0_p, in1_p, in2_p, out0_p, out1_p, out2_p, rows);
+                    CHECK(0 == cudaGetLastError());
+                    """)
+                self.saved = x, mean, rstd, weight
+                return y
             y, mean, rstd = jt.code(
                 [x.shape, (rows,), (rows,)],
                 [x.dtype, "float32", "float32"],
@@ -112,6 +288,22 @@ def _layer_norm_cuda_cls(hidden, eps):
 
         def grad(self, grad_y):
             x, mean, rstd, weight = self.saved
+            rows = int(x.numel()) // hidden
+            if self.warp:
+                blocks = min(_FUSED_BLOCKS, -(-rows // 8))
+                grad_x, grad_weight, grad_bias, _ = jt.code(
+                    [grad_y.shape, weight.shape, weight.shape, (2 * blocks * hidden,)],
+                    [grad_y.dtype, weight.dtype, weight.dtype, "float32"],
+                    [grad_y, x, mean, rstd, weight],
+                    cuda_src=_warp_kernels(hidden, eps, True) + f"""
+                    long long rows = in0->num / {hidden};
+                    layer_norm_backward_fused<<<{blocks}, 256>>>(
+                        in0_p, in1_p, in2_p, in3_p, in4_p, out0_p, out3_p, rows);
+                    layer_norm_backward_finish<<<{-(-hidden // 32)}, dim3(32, 8)>>>(
+                        out3_p, out1_p, out2_p, {blocks});
+                    CHECK(0 == cudaGetLastError());
+                    """)
+                return grad_x, grad_weight, grad_bias
             grad_x, grad_weight, grad_bias = jt.code(
                 [grad_y.shape, weight.shape, weight.shape],
                 [grad_y.dtype, weight.dtype, weight.dtype],

@@ -2,7 +2,7 @@
 from importlib import import_module
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from ...context import get_install_context
-from ...types import _make_cpu_resident, _make_cuda_resident, _var_is_cpu_resident
+from ...types import _PYTHON_SCALAR_DTYPES, _make_cpu_resident, _make_cuda_resident, _var_is_cpu_resident
 from ....stub_policy import degraded as _degraded, unimplemented as _unimplemented
 from ..core import _promote_pair
 
@@ -40,12 +40,13 @@ _TYPENAME_TO_DTYPE.update({v.replace("torch.", "torch.cuda."): k
 
 
 def _dtype_get(self):
-    _context = get_install_context(_owner.jt)
-    _native = _context.state["tensor_native_api"]
-    _DTYPE_OBJS = _native['_DTYPE_OBJS']
-    _d = _native['_native_desc']
-    name = str(_d.__get__(self, type(self)))
-    return _DTYPE_OBJS.get(name, name)
+    # Every `.dtype` read on a frontend tensor lands here -- kernel selection,
+    # promotion and each `supports` check ask it, about 5000 times in one SD1.5
+    # UNet step -- so it reads what it needs from the tensor's own type, where
+    # the installer put it, instead of resolving the install context each time.
+    cls = type(self)
+    name = str(cls._frontend_native_dtype.__get__(self, cls))
+    return cls._frontend_dtype_objects.get(name, name)
 
 
 def _numpy_data_value(value):
@@ -131,7 +132,9 @@ def _assign_data_owner(view, value, extra_path=()):
     for base, index in reversed(bases):
         updated = base.setitem(index, updated)
 
-    owner_was_trainable = not owner.is_stop_grad()
+    # `requires_grad`, not the stop-grad bit: `requires_grad_(False)` need not
+    # set it, and reading the bit alone unfroze a frozen tensor on assignment.
+    owner_was_trainable = bool(owner.requires_grad)
     owner.assign(updated)
     _restore_trainable_state(owner, owner_was_trainable)
 
@@ -208,10 +211,24 @@ def _ip(self, value):
     if _assign_data_owner(self, value):
         return self
     target = self
-    was_trainable = not target.is_stop_grad()
+    # As above: a frozen tensor stays frozen through an in-place write.
+    was_trainable = bool(target.requires_grad)
+    # ...unless the written value itself requires grad: torch then makes the
+    # target a non-leaf of that graph (`out = zeros(); out.index_add_(0, i, h)`
+    # must backpropagate into `h`). A value built under no_grad is stop-grad,
+    # so the frozen-under-no_grad case above is unaffected. Read before the
+    # assignment, which hands the target's flags over to the value's Var.
+    gains_grad = (not was_trainable and isinstance(value, _NativeVar)
+                  and not value.is_stop_grad() and bool(value.requires_grad))
     target.assign(value)
     if was_trainable and target.is_stop_grad():
         target.start_grad()
+    elif gains_grad and not target.is_stop_grad():
+        # The native setter only clears the reversible requires-grad-disabled
+        # bit here (the Var is not stop-grad), so the graph edge is kept; the
+        # Python property would also register a non-leaf as a backward leaf.
+        _context = get_install_context(_owner.jt)
+        _context.state["tensor_native_api"]["_native_requires_grad"].__set__(target, True)
     elif not was_trainable and not target.is_stop_grad():
         target.stop_grad()
     return self
@@ -474,6 +491,10 @@ def _is_basic_index(index):
 
 
 def _torch_getitem(self, slices):
+    # A basic index, natively (`src/bindings/pyjt/py_compat_fast.h`).
+    fast = _owner.jt.core._fast_getitem(self, slices)
+    if fast is not NotImplemented:
+        return fast
     _context = get_install_context(_owner.jt)
     _native = _context.state["tensor_native_api"]
     _orig_getitem = _native['_orig_getitem']
@@ -530,7 +551,7 @@ def _data_get(self):
 
 def _data_set(self, value):
     src = value if isinstance(value, _NativeVar) else _owner.jt.array(value)
-    was_trainable = not self.is_stop_grad()
+    was_trainable = bool(self.requires_grad)
     # torch's `x.data = y` *replaces* x's data, shape and dtype; it does not
     # copy elements into x's existing buffer. `assign` is the in-place
     # primitive used by `x.foo_()`: it writes x's values into y's storage and
@@ -599,6 +620,9 @@ def _to(self, *args, **kwargs):
             # .to(other) copies other's dtype AND device.
             ds = _jittor_dtype_name(a.dtype)
             dev = a.device
+        elif type(a) is type and a in _PYTHON_SCALAR_DTYPES:
+            # `.to(int)` is torch's int64; it used to match no branch and be dropped.
+            ds = _PYTHON_SCALAR_DTYPES[a]
         elif _owner._is_index(a):
             # A bare int can only mean a device index, and it used to match none
             # of these branches and be **dropped**: `.to(1)` returned the tensor
@@ -1214,20 +1238,50 @@ def _var_norm(self, p="fro", dim=None, keepdims=None, *rest,
 
 
 
-def _binary_native(opname, left, right):
-    native = get_install_context(_owner.jt).state["tensor_native_api"]["operators"][opname]
-    result = native(left, right)
+def _binary_native(opname, left, right, native_api=None):
+    if native_api is None:
+        native_api = get_install_context(_owner.jt).state["tensor_native_api"]
+    result = native_api["operators"][opname](left, right)
     return _owner._mark_cpu_like(result, left, right)
 
+
+#: A Python scalar of these kinds against a tensor of these dtypes leaves the
+#: tensor's dtype, in torch's promotion: a float against a floating tensor, an
+#: int against any non-bool tensor. Everything else asks `result_type`.
+_FLOATING_NAMES = frozenset(("float16", "bfloat16", "float32", "float64"))
+_SCALAR_KEEPS_DTYPE = {
+    float: _FLOATING_NAMES,
+    int: _FLOATING_NAMES | frozenset(("uint8", "int8", "int16", "int32", "int64")),
+}
+
+
+def _own_dtype_name(value, native_api):
+    """A Var's native dtype name, without the torch dtype object round trip.
+
+    `.dtype` on a frontend tensor builds the torch dtype object from the native
+    name, and `_jittor_dtype_name` turns it back into that name; an elementwise
+    operator asked both questions for both operands, and a diffusers step makes
+    thousands of them.
+    """
+    descriptor = native_api['_native_desc']
+    if descriptor is None:
+        return _jittor_dtype_name(value.dtype)
+    return str(descriptor.__get__(value, type(value)))
+
+
 def _promoting_binary(self, other, opname, reflected):
-    g = get_install_context(_owner.jt).target_namespace
+    context = get_install_context(_owner.jt)
+    native_api = context.state["tensor_native_api"]
+    g = context.target_namespace
     if isinstance(other, (complex, _owner.np.complexfloating)):
         other = _complex_scalar_var(other)
     if isinstance(other, _NativeVar):
-        da, db = _jittor_dtype_name(self.dtype), _jittor_dtype_name(other.dtype)
+        da, db = _own_dtype_name(self, native_api), _own_dtype_name(other, native_api)
         if da == db and not da.startswith("uint"):
-            return _binary_native(opname, self, other)
-        res = _promote_pair(da, db)
+            return _binary_native(opname, self, other, native_api)
+        # `result_type`, not `_promote_pair`: a 0-dim operand promotes only
+        # from a higher category, so half_tensor * tensor(2.0) stays half.
+        res = _owner._dtype_to_str(g.result_type(self, other))
         a = self if da == res else self.cast(res)
         b = other if db == res else other.cast(res)
         out = _binary_native(opname, a, b)
@@ -1243,10 +1297,14 @@ def _promoting_binary(self, other, opname, reflected):
     # `_extend_tokens` list concatenation). Match torch: defer to the sequence.
     if isinstance(other, (list, tuple)):
         return NotImplemented
-    out = _binary_native(opname, self, other)
+    out = _binary_native(opname, self, other, native_api)
     if isinstance(other, (bool, int, float)) and isinstance(out, _NativeVar):
-        expected = _owner._dtype_to_str(g.result_type(self, other))
-        if expected is not None and _jittor_dtype_name(out.dtype) != expected:
+        own = _own_dtype_name(self, native_api)
+        if own in _SCALAR_KEEPS_DTYPE.get(type(other), ()):
+            expected = own
+        else:
+            expected = _owner._dtype_to_str(g.result_type(self, other))
+        if expected is not None and _own_dtype_name(out, native_api) != expected:
             out = out.cast(expected)
     return out
 
@@ -1258,7 +1316,12 @@ def _true_division(self, other, opname):
         da, db = _jittor_dtype_name(self.dtype), _jittor_dtype_name(other.dtype)
         if da == db and da.startswith(("float", "bfloat", "complex")):
             return _binary_native(opname, self, other)
-        tgt = _truediv_target(da, db)
+        # The 0-dim tier, as in `_promoting_binary`. The quotient's dtype is
+        # the promoted type alone (or the default float for an integral one):
+        # promoting it with `self` again would let a 0-dim `self` back in.
+        rt = _owner._dtype_to_str(
+            get_install_context(_owner.jt).target_namespace.result_type(self, other))
+        tgt = _truediv_target(rt, rt)
         a = self if da == tgt else self.cast(tgt)
         b = other if db == tgt else other.cast(tgt)
         out = _binary_native(opname, a, b)
@@ -1271,14 +1334,28 @@ def _true_division(self, other, opname):
         return NotImplemented
     sd = _scalar_dtype_name(other)
     if sd is not None:
-        tgt = _truediv_target(_jittor_dtype_name(self.dtype), sd)
+        # A Python scalar joins type promotion only when it is of a higher
+        # category than the tensor (torch's `result_type`), so a float16 tensor
+        # divided by 1.0 stays float16. Promoting the pair as if the scalar were
+        # a float32 tensor turned it into float32: every diffusers ResnetBlock2D
+        # ends in `/ self.output_scale_factor`, so a float16 UNet silently ran
+        # in float32 from its first block and then refused SDPA for mixing a
+        # float32 query with float16 keys.
+        rt = _owner._dtype_to_str(
+            get_install_context(_owner.jt).target_namespace.result_type(self, other))
+        tgt = _truediv_target(rt, rt)
         src_dt = _jittor_dtype_name(self.dtype)
         # CPU/CUDA widen Python floats for PyTorch 1-ulp parity; torch_npu
         # stays in the tensor dtype because ACL has no float64 arithmetic.
         acl_active = bool(getattr(_owner.jt.compiler, "has_acl", 0)) and (
             bool(getattr(_owner.jt.flags, "use_acl", 0)) and bool(_owner.jt.flags.use_cuda))
+        # Half precision widens to float32 only: that is PyTorch's opmath for
+        # it, and a float64 division ran every diffusers attention block's
+        # `/ rescale_output_factor` in double -- 15 ms of a 20-step SD1.5
+        # sample on a part with 1/64-rate double -- to round to the same half.
+        wide = "float32" if src_dt in ("float16", "bfloat16") else "float64"
         use_wide = sd.startswith("float") and src_dt != "float64" and not acl_active
-        calc_dt = "float64" if use_wide else tgt
+        calc_dt = wide if use_wide else tgt
         a = self if src_dt == calc_dt else self.cast(calc_dt)
         b = _owner.jt.array(other, dtype=calc_dt) if use_wide else other
         out = _binary_native(opname, a, b)
@@ -1288,27 +1365,66 @@ def _true_division(self, other, opname):
     return _binary_native(opname, self, other)
 
 
+#: `src/bindings/pyjt/py_compat_fast.h`'s `_fast_binary`, once the tensor
+#: installer has bound it: the common operand pairs below, built without the
+#: frames. It answers None for everything else, which takes the Python path.
+#: The order of `_FAST_BINARY_OPERATORS` is the code each operator passes.
+_FAST_BINARY = None
+_FAST_BINARY_OPERATORS = ('__add__', '__radd__', '__sub__', '__rsub__',
+                          '__mul__', '__rmul__', '__truediv__', '__rtruediv__')
+
+
 def _tensor_add(self, other):
+    fast = _FAST_BINARY
+    if fast is not None:
+        out = fast(self, other, 0)
+        if out is not None:
+            return out
     return _promoting_binary(self, other, '__add__', False)
 
 
 def _tensor_radd(self, other):
+    fast = _FAST_BINARY
+    if fast is not None:
+        out = fast(self, other, 1)
+        if out is not None:
+            return out
     return _promoting_binary(self, other, '__radd__', True)
 
 
 def _tensor_sub(self, other):
+    fast = _FAST_BINARY
+    if fast is not None:
+        out = fast(self, other, 2)
+        if out is not None:
+            return out
     return _promoting_binary(self, other, '__sub__', False)
 
 
 def _tensor_rsub(self, other):
+    fast = _FAST_BINARY
+    if fast is not None:
+        out = fast(self, other, 3)
+        if out is not None:
+            return out
     return _promoting_binary(self, other, '__rsub__', True)
 
 
 def _tensor_mul(self, other):
+    fast = _FAST_BINARY
+    if fast is not None:
+        out = fast(self, other, 4)
+        if out is not None:
+            return out
     return _promoting_binary(self, other, '__mul__', False)
 
 
 def _tensor_rmul(self, other):
+    fast = _FAST_BINARY
+    if fast is not None:
+        out = fast(self, other, 5)
+        if out is not None:
+            return out
     return _promoting_binary(self, other, '__rmul__', True)
 
 
@@ -1337,10 +1453,20 @@ def _tensor_rpow(self, other):
 
 
 def _tensor_truediv(self, other):
+    fast = _FAST_BINARY
+    if fast is not None:
+        out = fast(self, other, 6)
+        if out is not None:
+            return out
     return _true_division(self, other, '__truediv__')
 
 
 def _tensor_rtruediv(self, other):
+    fast = _FAST_BINARY
+    if fast is not None:
+        out = fast(self, other, 7)
+        if out is not None:
+            return out
     return _true_division(self, other, '__rtruediv__')
 
 
@@ -1362,11 +1488,35 @@ _BINARY_APIS = {
 }
 
 
+def _fill_captured_state(self, val):
+    """Fill state a step capture replays in its own buffer; True if done.
+
+    `_ip` rebinds the tensor to a newly computed one. For state a capture
+    keeps (`_capture_owned`), the capture still holds the old buffer, so the
+    new one is a second copy for as long as the capture lives: a static KV
+    cache reset before every `generate` held two caches through the prompt.
+    A setitem over the whole tensor fills the old buffer in place instead.
+    Only a constant fill without a gradient: one that read the tensor itself
+    could read what it is overwriting.
+    """
+    if (not self._capture_owned() or not self.shape
+            or not (_owner.jt.flags.no_grad or self.is_stop_grad())
+            or getattr(self, "_torch_data_owner", None) is not None):
+        return False
+    value = _owner.jt.array(val).cast(self.dtype)
+    self.assign(self.setitem((slice(None),) * len(self.shape), value))
+    return True
+
+
 def _api_fill(self, val):
+    if _fill_captured_state(self, val):
+        return self
     return _ip(self, _owner.jt.ones(self.shape, self.dtype) * val)
 
 
 def _api_zero(self):
+    if _fill_captured_state(self, 0):
+        return self
     return _ip(self, _owner.jt.zeros(self.shape, self.dtype))
 
 

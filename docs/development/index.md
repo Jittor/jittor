@@ -15,6 +15,8 @@
 
 repository-layout
 source-architecture
+acl-backend-contracts
+torch-install-transactions
 storage-layout
 jit-operator-source
 error-categories
@@ -28,11 +30,14 @@ known-issues/parallel-compiler-segfault
 | 文档 | 内容 |
 | --- | --- |
 | [仓库布局](repository-layout.md) | 顶层目录的职责与打包边界 |
-| [源码架构](source-architecture.md) | Python 侧的模块归属与依赖方向 |
-| [静态图回放](static-graph-replay.md) | 重复步长不再每次用 Python 重建图：设计与预算 |
+| [源码架构](source-architecture.md) | Python 侧的模块归属与依赖方向；后端构建配置、动态形状与提交边界 |
+| [ACL 后端契约](acl-backend-contracts.md) | 共享 launcher、属性数据通道、描述符缓存外壳，以及昇腾设备验收的判据 |
+| [Torch 安装事务](torch-install-transactions.md) | 安装与延迟钩子写了哪些进程状态、哪些可回滚、测试能声称什么 |
+| [静态图回放](static-graph-replay.md) | 重复步长不再每次用 Python 重建图：`jt.graph_replay`、`jt.capture_step`、自动策略与护栏 |
 | [存储布局契约](storage-layout.md) | stride 与存储归原生所有，前端不维护第二份 |
 | [JIT 算子源码契约](jit-operator-source.md) | 算子源文件被编译两遍，`jit_run` 要同时满足 C++ 与 KernelIR |
 | [错误分级](error-categories.md) | 用户错误与内部不变量各走哪个入口 |
 | [异步错误诊断契约](async-error-diagnostics.md) | 有界发射记录环，与图元数据的区别 |
-| [测试体系](test-system.md) | 测试分层、门禁与验证口径 |
+| [测试体系](test-system.md) | 测试分层、门禁与验证口径；可选 fixture、手动脚本与维护者探针 |
+| [NPU 缺陷与性能记录模板](npu-validation-templates.md) | 昇腾验证结论要写进 `docs/results/` 的哪些字段 |
 | [并行编译器：文件级死锁与算子级段错误](known-issues/parallel-compiler-segfault.md) | `KI-COMPILER-001` 的调查记录：两个同名不同因的失败、复现协议与验收门槛 |

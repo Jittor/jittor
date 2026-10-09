@@ -81,7 +81,8 @@ clang++ -Ofast -march=native -c x.cc -Rpass=loop-vectorize -o /dev/null
 ```
 
 Use **the flags the kernel actually ships with**, not the loudest ones. Jittor's
-CPU kernels build at `-O3 -march=native` since KI-BACKEND-005, not `-Ofast`;
+CPU kernels build at `-O3 -march=native`, not `-Ofast` (`-Ofast` was dropped
+because `-ffinite-math-only` broke IEEE infinity/NaN results);
 asking at `-Ofast` answers a question about a build nobody runs, and for
 reductions the two answers differ — `-ffast-math` licenses the reassociation
 that makes a reduction vectorizable at all.

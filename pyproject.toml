@@ -45,6 +45,16 @@ cuda12 = [
     # uninstallable together. Keep in sync with jittor_utils/cuda_wheel.py.
     "nvidia-cudnn-cu12>=8.9.7,<10; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
     "nvidia-nccl-cu12==2.18.3; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
+    # Headers for cuDNN's fused attention (backends/cuda/kernels/nn/
+    # cudnn_attention_cuda.py). Without them that kernel declines and
+    # attention takes the matmul-and-softmax path.
+    "nvidia-cudnn-frontend>=1.30,<2; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.9'",
+]
+# Device time in `jt.profile` (python/jittor/profiling/_cupti.py): CUPTI for
+# the CUDA 12.2 runtime `cuda12` installs. Without it a profile reports device
+# time as unavailable rather than inventing it.
+profile = [
+    "nvidia-cuda-cupti-cu12==12.2.142; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
 ]
 perf = [
     "asv==0.6.6; python_version >= '3.9'",
@@ -100,7 +110,7 @@ include-package-data = true
 # Single source of runtime resources. MANIFEST.in is generated from these
 # declarations plus the sdist-only selections below; setup.py has no inventory.
 [tool.setuptools.package-data]
-"jittor" = ["__init__.pyi", "contrib/math_util/src/*", "build/utils/class/*"]
+"jittor" = ["__init__.pyi", "contrib/math_util/src/*"]
 "jittor_utils" = ["__init__.pyi"]
 "jittor.src" = ["**/*.cc", "**/*.h"]
 "jittor.backends.cpu" = ["**/*.cc", "**/*.h", "**/*.cpp", "**/*.cu", "**/*.cuh"]
@@ -115,7 +125,7 @@ include-package-data = true
 
 [tool.jittor.sdist]
 include = ["examples/**", "tools/**", "docs/**", "requirements/examples.txt", "requirements/docs.in", "requirements/docs.txt"]
-exclude = ["compat/**", "adapters/**", "build/**", "dist/**"]
+exclude = ["compat/**", "adapters/**", "build/**", "dist/**", "docs/slides/**"]
 
 [tool.setuptools.dynamic]
 version = { attr = "jittor.__version__" }

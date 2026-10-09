@@ -66,6 +66,7 @@ struct FP16OpType : OpByType {
             {"tanh", "(($1) ::tanhf(($2)))"},
             {"atanh", "(($1) ::atanhf(($2)))"},
             {"sigmoid", "(($1) (1.0f/(1.0f+::expf((::min($1(-($2)), $1(@if(@strcmp($1,float16)==0,30,300))))))))"},
+            {"relu", "((($1)($2)>($1)(0.0f))?($1)($2):($1)(0.0f))"},
             {"erf", "(($1) ::erff(($2)))"},
             {"erfinv", "(($1) ::erfinvf(($1)($2)))"},
             {"cast", "(($1)($2))"},
@@ -75,7 +76,7 @@ struct FP16OpType : OpByType {
             {"maximum", "::max($1($2), $1($4))"},
             {"minimum", "::min($1($2), $1($4))"},
             {"mod", "$1(($2)-::hfloor(($2)/($4))*($4))"},
-            // Half floor division: divide, then floor. KI-OPS-003.
+            // Half floor division: divide, then floor.
             {"floor_divide", "$1(::hfloor(($1($2))/($1($4))))"},
             {"init_maximum", "@if(@strcmp($1,float16)==0,-65000.0f,-1e38)"},
             {"init_minimum", "@if(@strcmp($1,float16)==0,65000.0f,1e38)"},
@@ -110,6 +111,7 @@ struct FP16OpType : OpByType {
             {"tanh", "(($1) std::tanh(($2)))"},
             {"atanh", "(($1) std::atanh(($2)))"},
             {"sigmoid", "(($1) (1.0f/(1.0f+std::exp(std::min<float>($1(-($2)), $1(@if(@strcmp($1,float32)==0,30,300)))))))"},
+            {"relu", "((($1)($2)>($1)(0.0f))?($1)($2):($1)(0.0f))"},
             {"erf", "(($1) std::erf(($2)))"},
             {"erfinv", "(jittor::_erfinv($2))"},
             {"cast", "(($1)($2))"},

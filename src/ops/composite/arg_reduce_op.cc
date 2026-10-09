@@ -85,7 +85,7 @@ ArgReduceOp::ArgReduceOp(Var* x, NanoString op, int dim, bool keepdims)
     y = create_output(nullptr, ns_int32);
     y_key = create_output(nullptr, x->dtype());
     #ifdef IS_ACL
-    if (x->dtype() == ns_float32 || x->dtype() == ns_float16)
+    if (x->dtype() == ns_float32 || x->dtype() == ns_float16 || x->dtype() == ns_int64)
         set_flag(OpFlags::_cuda);
     #endif
     set_flag(OpFlags::_manual_set_vnbb);

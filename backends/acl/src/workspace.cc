@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <limits>
 #include <map>
+#include <vector>
 
 namespace jittor {
 namespace {
@@ -30,6 +31,10 @@ std::map<int, Workspace>& workspaces() {
         state = new std::map<int, Workspace>();
     return *state;
 }
+
+// Workspaces replaced while a recorded graph was alive or being recorded: the
+// recording still reads them. Freed with the last graph (acl_live_graphs).
+std::vector<Workspace> retired_workspaces;
 
 // Both entry points below run twice per ACL operator (mallocWorkSpace then the
 // workspaceAddr macro), so the per-device record is reached through a direct
@@ -88,7 +93,13 @@ void* mallocWorkSpace(uint64_t size) {
     if (alloc_size <= workspace.size)
         return workspace.address;
 
-    release_workspace(workspace);
+    if (acl_live_graphs() > 0) {
+        // Kept, and nothing waited on: the stream may be the one recording.
+        if (workspace.address) retired_workspaces.push_back(workspace);
+        workspace = Workspace();
+    } else {
+        release_workspace(workspace);
+    }
     Allocator* allocator = runtime_executor().temp_allocator;
     if (!allocator || allocator->device() != device)
         allocator = get_allocator(device, true);
@@ -115,6 +126,11 @@ void* mallocWorkSpace(uint64_t size) {
     workspace.allocation = allocation;
     workspace.stream = stream;
     return address;
+}
+
+void acl_workspace_release_retired() {
+    for (auto& retired : retired_workspaces) release_workspace(retired);
+    retired_workspaces.clear();
 }
 
 void release_all_acl_workspaces() noexcept {

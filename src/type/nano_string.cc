@@ -87,7 +87,8 @@ static unordered_set<string> unary_ops = {
     "acosh",
     "sigmoid",
     "erf",
-    "erfinv"
+    "erfinv",
+    "relu"
 };
 
 static unordered_set<string> float_ops = {
@@ -118,7 +119,7 @@ static unordered_set<string> float_ops = {
 // both answer a float for float operands. Listing it here forced the output to
 // int32, and the expansion casts both operands to the *output* type before
 // dividing, so `-2.7 // 2.0` divided `int(-2.7) == -2` by 2 and answered -1
-// where numpy answers -2: the truncation landed on the operands. KI-OPS-003.
+// where numpy answers -2: the truncation landed on the operands.
 static unordered_set<string> int_ops = {
     "round_int",
     "floor_int",
@@ -159,6 +160,12 @@ static unordered_set<string> white_ops = {
     "pow",
 };
 
+// A unary op listed here differentiates from its output alone, so its input
+// is not kept alive for the backward: exp, sqrt and sigmoid read `y` in
+// `UnaryOp::grad`, and relu's gradient `dy * (y > 0)` does too. For relu
+// that is the difference between keeping one extra mask or input per
+// activation and keeping nothing -- the output is saved anyway by the
+// convolution or linear layer that reads it.
 static unordered_set<string> no_need_back_in = {
     "void",
     "cast",
@@ -166,6 +173,10 @@ static unordered_set<string> no_need_back_in = {
     "add",
     "subtract",
     "mean",
+    "exp",
+    "sqrt",
+    "sigmoid",
+    "relu",
 };
 
 static unordered_set<string> no_need_back_out = {

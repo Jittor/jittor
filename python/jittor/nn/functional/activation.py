@@ -5,6 +5,7 @@ import numpy as np
 
 import jittor as jt
 from jittor._runtime.dispatch import try_dispatch
+from jittor.nn.functional._layout import channels_last_source
 
 from ... import _arg_policy
 
@@ -13,6 +14,81 @@ _INPLACE_CONSEQUENCE = (
     "the input var is left untouched and a new one is returned, so none of the "
     "memory the flag asks for is saved"
 )
+
+
+
+#: Offers to take a residual add into the pass as well: var id -> (build,
+#: whether the add's operands are in storage order). The add is a new Var
+#: whose operands come back as new Python objects, so the offer cannot live on
+#: the offering object alone; an entry lives exactly as long as that object
+#: does (`_OfferLease`), since it holds what its pass reads.
+_RESIDUAL_OFFERS = {}
+
+
+class _OfferLease:
+    """Removes residual offers when the object they were made on goes."""
+    __slots__ = ("keys",)
+
+    def __init__(self, keys):
+        self.keys = keys
+
+    def __del__(self):
+        for key in self.keys:
+            _RESIDUAL_OFFERS.pop(key, None)
+
+
+def offer_activation(y, build, residual=None, storage=None):
+    """Say that ``build(act)`` computes ``act(y)`` in the pass that makes ``y``.
+
+    The offer describes the Var ``y`` holds now. An in-place op rebinds the
+    same Python object to a new Var -- ``out = bn(out); out += identity;
+    relu(out)``, every torchvision bottleneck -- and an offer read through the
+    object afterwards applied the activation to the normalization alone,
+    dropping the residual.
+
+    ``residual(act, r)``, when given, computes ``act(y + r)`` in that pass: an
+    activation of ``y`` plus a residual found through the add's operands,
+    however the add was spelled. With ``storage`` -- the dense tensor ``y``
+    is a channels-last view of -- the offer is found through it as well: an
+    add of channels-last operands runs on their storage
+    (`propagate_storage_layout`), and ``residual(act, r, True)`` then gets
+    ``r`` in that storage order too.
+    """
+    y.__dict__["_fuse_activation"] = (y.id, build)
+    if residual is not None:
+        keys = [y.id]
+        _RESIDUAL_OFFERS[y.id] = (residual, False)
+        if storage is not None:
+            _RESIDUAL_OFFERS[storage.id] = (residual, True)
+            keys.append(storage.id)
+        y.__dict__["_residual_offer"] = _OfferLease(keys)
+
+
+def _fused_activation(x, act):
+    """``act(x)`` from the pass that makes ``x``, if that pass offered it."""
+    entry = getattr(x, "__dict__", {}).get("_fuse_activation")
+    if entry is not None and entry[0] == x.id and not x.is_finished:
+        _RESIDUAL_OFFERS.pop(entry[0], None)
+        return entry[1](act)
+    if not _RESIDUAL_OFFERS or x.is_finished:
+        return None
+    add, storage = x, False
+    if x._producer_op() == "transpose" and channels_last_source(x) is not None:
+        # An add kept channels-last hands out the NCHW view of a result it
+        # computed on its operands' storage.
+        add, storage = x._input(0), True
+    if add._producer_op() != "binary.add":
+        return None
+    a, b = add._input(0), add._input(1)
+    for y, r in ((a, b), (b, a)):
+        offer = _RESIDUAL_OFFERS.get(y.id)
+        if offer is None or offer[1] != storage:
+            continue
+        del _RESIDUAL_OFFERS[y.id]
+        fused = offer[0](act, r, True) if storage else offer[0](act, r)
+        if fused is not None:
+            return fused
+    return None
 
 
 def relu(x, inplace=False):
@@ -38,11 +114,18 @@ def relu(x, inplace=False):
     if inplace:
         _arg_policy.ignored("jittor.nn.relu", "inplace", inplace,
                             _INPLACE_CONSEQUENCE)
+    # A normalization that can apply the activation in its own last pass
+    # (the training batch norm) says so on its unexecuted output.
+    fused = _fused_activation(x, "relu")
+    if fused is not None:
+        return fused
     fast = try_dispatch("nn.relu", x, inplace=inplace)
     if fast is not None:
         return fast
-    cond = x>0.0
-    return jt.ternary_out_hint(cond, x, 0.0)
+    # One elementwise operator: it fuses into whatever produced `x` (a batch
+    # norm, a residual add) and differentiates from its own output, so neither
+    # the input nor a sign mask is kept for the backward. See `UnaryOp::grad`.
+    return jt.unary(x, "relu")
 
 
 def leaky_relu(x, scale=0.01, negative_slope=None, inplace=False):
@@ -140,13 +223,21 @@ def sign(x: jt.Var) -> jt.Var:
     return jt.ternary(x<0, -one, x)
 
 
-#: (half, one, 1/sqrt(2)) as a numpy scalar of the exact GELU's compute dtype,
-#: indexed by "is the input float64". A numpy scalar, not a python float: a
-#: python float would make the multiply promote to float64 under torch_compat.
+#: (half, one, 1/sqrt(2)) for the exact GELU, indexed by "is the input
+#: float64". Python floats: against a floating tensor they keep its dtype, both
+#: natively and under torch_compat, and take the frontend's native binary path.
+#: Numpy scalars -- this used to hold them, against a float64 promotion the
+#: frontend no longer does -- missed it, and three of a GELU's four operators
+#: went through the Python promotion instead: 18.7 us to build one, against
+#: 6.4 us for PyTorch to run it. Same bits either way.
 _GELU_CONSTANTS = (
-    (np.float32(0.5), np.float32(1.0), np.float32(0.7071067811865476)),
-    (np.float64(0.5), np.float64(1.0), np.float64(0.7071067811865476)),
+    (0.5, 1.0, 0.7071067811865476),
+    (0.5, 1.0, 0.7071067811865476),
 )
+
+
+#: `src/bindings/pyjt/py_compat_fast.h`'s `_fast_gelu`.
+_FAST_GELU = getattr(jt.core, "_fast_gelu", None)
 
 
 def gelu(x, approximate='none'):
@@ -175,6 +266,12 @@ def gelu(x, approximate='none'):
         >>> nn.gelu(a)
         jt.Var([-0.134547   0.9882567  6.128115 ], dtype=float32)
     '''
+    if approximate == 'none' and _FAST_GELU is not None:
+        # The body below, built natively when the frontend's binary operators
+        # are bound and no "nn.gelu" kernel is registered; None otherwise.
+        fast = _FAST_GELU(x)
+        if fast is not None:
+            return fast
     fast = try_dispatch("nn.gelu", x, approximate=approximate)
     if fast is not None:
         return fast
@@ -229,6 +326,11 @@ def silu(x, inplace=False):     # inplace: accepted for torch/mmcv compat, ignor
     if inplace:
         _arg_policy.ignored("jittor.nn.silu", "inplace", inplace,
                             _INPLACE_CONSEQUENCE)
+    # A normalization that can apply the activation in its own last pass
+    # (group norm, see `group_norm_cuda.py`) says so on its unexecuted output.
+    fused = _fused_activation(x, "silu")
+    if fused is not None:
+        return fused
     fast = try_dispatch("nn.silu", x, inplace=inplace)
     if fast is not None:
         return fast

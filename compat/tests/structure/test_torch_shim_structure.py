@@ -23,9 +23,8 @@ class TestTorchShimStructure(unittest.TestCase):
     def setUpClass(cls):
         cls.repo_root = Path(__file__).resolve().parents[3]
         cls.shim_root = cls.repo_root / "compat" / "shim"
-        # The refactor moved its process documents out of docs/; the packaging
-        # inventory went with them.
-        cls.manifest = (cls.repo_root / "refactor-wip" / "results" / "baselines"
+        # A packaging inventory, kept next to the wheel baselines it belongs with.
+        cls.manifest = (cls.repo_root / "tools" / "release" / "baselines"
                         / "torch-shim-resources-stage7.txt")
 
     def test_legacy_physical_package_is_absent(self):

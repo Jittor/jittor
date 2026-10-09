@@ -27,8 +27,8 @@ namespace jittor {
 // where the accumulator is always the first operand -- so `x.max()` could not
 // see a NaN at all. CUDA's `::max` lowers to `fmaxf`, IEEE `maxNum`, which
 // deliberately returns the operand that is *not* NaN, so the same expression
-// on the same data disagreed between the two devices (KI-BACKEND-004,
-// KI-OPS-006).
+// on the same data disagreed between the two devices (the reduction's
+// remaining throughput cost is KI-OPS-006).
 //
 // One test on `a` covers a NaN in *either* operand, which is what makes the
 // fold `acc = _max(acc, x)` both admit a NaN and keep one. An arriving NaN
@@ -57,7 +57,7 @@ namespace jittor {
 //
 // Written as `a != a` rather than `std::isnan(a)` because this header is
 // included into kernels whose compile flags are decided elsewhere. Under
-// `-ffinite-math-only` -- implied by the `-Ofast` that KI-BACKEND-005 removed
+// `-ffinite-math-only` -- implied by the `-Ofast` CPU kernels no longer use
 // -- *every* spelling of the test folds to false, so the flag is the load
 // bearing part; `a != a` is the form that survives everywhere else, needs no
 // header, and works unchanged on device.

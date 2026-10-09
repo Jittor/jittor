@@ -193,6 +193,21 @@ class TestShapeOps(Base):
                     msg=f"unsqueeze {dev}")
         both_devices(body)
 
+    def test_cat_out_writes_through_view(self):
+        def body(dev):
+            flat = torch.zeros(8, dtype=torch.float32)
+            out = flat.narrow(0, 2, 4)
+            left = torch.tensor([1.0, 2.0], dtype=torch.float32)
+            right = torch.tensor([3.0, 4.0], dtype=torch.float32)
+            returned = torch.cat([left, right], out=out)
+            self.assertIs(returned, out)
+            self.ae(out.numpy(), np.array([1, 2, 3, 4], dtype=np.float32),
+                    msg=f"cat out view {dev}")
+            self.ae(flat.numpy(), np.array([0, 0, 1, 2, 3, 4, 0, 0], dtype=np.float32),
+                    msg=f"cat out base {dev}")
+
+        both_devices(body)
+
     def test_cat_stack(self):
         a = np.random.RandomState(4).randn(2, 3).astype("float32")
         b = np.random.RandomState(5).randn(2, 3).astype("float32")

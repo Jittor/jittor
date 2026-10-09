@@ -452,6 +452,11 @@ template<class T> T get_from_env(const char* name,const T& _default) {
 
 template<> std::string get_from_env(const char* name, const std::string& _default);
 
+// Called with a flag's name before any flag is assigned from its setter, when
+// set: a batch running on the worker thread (runtime/async_exec.h) reads
+// flags, so an assignment waits for it.
+EXTERN_LIB void (*before_flag_set)(const char* name);
+
 #define DECLARE_FLAG(type, name) \
 EXTERN_LIB type name; \
 EXTERN_LIB std::string doc_ ## name; \
@@ -481,6 +486,7 @@ EXTERN_LIB void set_ ## name (const type&);
     type name; \
     std::string doc_ ## name = doc; \
     void set_ ## name (const type& value) { \
+        if (jittor::before_flag_set) jittor::before_flag_set(#name); \
         name = value; \
     }; \
     void init_ ## name (const type& value) { \
@@ -504,6 +510,7 @@ EXTERN_LIB void set_ ## name (const type&);
     std::string doc_ ## name = doc; \
     void setter_ ## name (const type& old_value, const type& new_value); \
     void set_ ## name (const type& value) { \
+        if (jittor::before_flag_set) jittor::before_flag_set(#name); \
         type old_value = name; \
         name = value; \
         try { \
@@ -526,6 +533,7 @@ EXTERN_LIB void set_ ## name (const type&);
     DECLARE_RUNTIME_FLAG(type, name) \
     std::string doc_ ## name = doc; \
     void set_ ## name (const type& value) { \
+        if (jittor::before_flag_set) jittor::before_flag_set(#name); \
         runtime_flag_ ## name () = value; \
     }; \
     void init_ ## name (const type& value) { \
@@ -538,6 +546,7 @@ EXTERN_LIB void set_ ## name (const type&);
     std::string doc_ ## name = doc; \
     void setter_ ## name (const type& old_value, const type& new_value); \
     void set_ ## name (const type& value) { \
+        if (jittor::before_flag_set) jittor::before_flag_set(#name); \
         type& storage = runtime_flag_ ## name (); \
         type old_value = storage; \
         storage = value; \

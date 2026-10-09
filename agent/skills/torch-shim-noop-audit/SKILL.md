@@ -12,8 +12,8 @@ missing keys for a checkpoint with every key wrong, `dcp.save()` that writes zer
 bytes and returns success. The program finishes. The numbers are wrong. Nothing
 in the output says so.
 
-This is the method used to work through that list (task 7.01). It is written for
-the next person adding an API to it.
+This is the method used to work through that list. It is written for the next
+person adding an API to it.
 
 ## 1. Three-question test
 
@@ -62,7 +62,7 @@ Order of preference:
    `set_device(i != 0)`). This is what keeps single-process test suites green
    while closing the real hole.
 3. **`unimplemented(api, effect, hint)`** otherwise — from
-   `jittor/compat/stub_policy.py`. `effect` completes the sentence "running it
+   `compat/stub_policy.py` (imported as `jittor.compat.stub_policy`). `effect` completes the sentence "running it
    as a no-op would ..." and must name the *damage*, not the gap: not "is not
    supported" but "write no bytes at all while reporting a successful save".
 4. **`degraded(api, difference, hint)`** for APIs that do work but not torch's

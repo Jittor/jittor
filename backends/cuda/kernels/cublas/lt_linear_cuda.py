@@ -39,15 +39,33 @@ belongs to the compute type, and cuBLASLt answers every fp16 query with
 is silent -- the fallback below is correct, so the only symptom is speed -- and
 it cost a 2.4x regression before it was traced.
 
+**Training: the weight gradient timed, the bias gradient folded where it is
+cheap.** `lt_linear_train_cuda` keeps the portable forward and takes the
+backward's dW through cuBLASLt with the algorithm picked by timing, as the
+forward route does: ViT-B/16's 72 weight-gradient GEMMs went 28.6 -> 27.5 ms.
+The portable backward sums the output gradient over every row for `db`, and
+jittor fuses that sum into whatever produced the gradient -- BERT's GELU
+backward became a column reduction, 123 us a call where the elementwise kernel
+alone is 96. cuBLASLt's BGRADB epilogue answers the same sums, but on this
+cuBLASLt as a kernel of its own that reads the gradient again: 5-16 us while
+the gradient is still in L2, 270 us for ViT's 148 MB one, against ~60 us for
+the sum fused into its producer. So the fold is taken only for a gradient
+that fits the L2 cache (`_FOLD_L2_FRACTION`); a larger one keeps the fused
+sum.
+
 Kept out on purpose:
 
-  - **Anything that needs a gradient.** This op has no backward source, so a
-    training step goes the portable way. Silently losing a gradient would be
-    the worst possible outcome of a speedup.
+  - **A forward that needs a gradient.** `lt_linear_cuda` has no backward
+    source, so a training step takes `lt_linear_train_cuda` or the portable
+    way. Silently losing a gradient would be the worst possible outcome of a
+    speedup.
   - Anything whose compute dtype is not float16 or float32 (bfloat16, float64),
     or not dense, or that leaves a non-contiguous operand; those fall back to
     the portable path.
 """
+
+import functools
+import os
 
 import jittor as jt
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
@@ -59,8 +77,10 @@ from jittor._runtime.core_api import _output_requires_grad
 _CANDIDATES = 8
 
 #: Per-problem workspace. cuBLASLt reports what each candidate wants; the
-#: fast ones for these shapes asked for 8 MB.
-_WORKSPACE = 32 << 20
+#: fast ones for these shapes asked for 8 MB. It is borrowed from the tensor
+#: pool on every call, so asking for more than the winners use only leaves a
+#: larger hole in that pool between calls.
+_WORKSPACE = 8 << 20
 
 #: `dsize_` as `src/type/nano_string.h` defines it: 2**code is the byte width.
 _DSIZE = {"float16": 1, "bfloat16": 1, "float32": 2, "float64": 3}
@@ -70,6 +90,9 @@ _HEADER = r"""
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
+#include "core/executor.h"
+#include "mem/allocator.h"
+#include "runtime/float32_precision.h"
 
 static cublasLtHandle_t jt_lt_handle() {
     static cublasLtHandle_t handle = nullptr;
@@ -83,16 +106,24 @@ static cublasHandle_t jt_blas_handle() {
     return handle;
 }
 
-static void* jt_lt_workspace(size_t bytes) {
-    static void* ws = nullptr;
-    static size_t have = 0;
-    if (have < bytes) {
-        if (ws) cudaFree(ws);
-        if (cudaMalloc(&ws, bytes) != cudaSuccess) { ws = nullptr; have = 0; }
-        else have = bytes;
+// The workspace of one call, from the executor's temporary pool, as cuDNN's
+// are (see `CudnnWorkspace`). It was a function-local static -- and every
+// problem shape compiles its own kernel, so that was one 32 MB cudaMalloc per
+// shape, held for the life of the process and outside every pool: 512 MB of
+// an SD1.5 UNet's device memory, for sixteen shapes.
+struct JtLtWorkspace {
+    void* ptr = nullptr;
+    size_t size = 0, allocation = 0;
+    jittor::Allocator* allocator = nullptr;
+    explicit JtLtWorkspace(size_t bytes) : size(bytes) {
+        if (!bytes) return;
+        allocator = jittor::runtime_executor().temp_allocator;
+        ptr = allocator->alloc(size, allocation);
     }
-    return ws;
-}
+    ~JtLtWorkspace() { if (ptr) allocator->free(ptr, size, allocation); }
+    JtLtWorkspace(const JtLtWorkspace&) = delete;
+    JtLtWorkspace& operator=(const JtLtWorkspace&) = delete;
+};
 
 // Chosen once per problem shape. Each shape compiles its own kernel, so a
 // function-local static here IS per shape.
@@ -110,8 +141,29 @@ struct JtLtChoice {
     bool ready = false;
     bool usable = false;
     cublasLtMatmulAlgo_t algo;
+    // What the chosen algorithm asks for; most ask for none.
+    size_t workspace = 0;
 };
 """
+
+_WGRAD_HEADER = _HEADER + r"""
+#include <cuda_bf16.h>
+// The bias gradient when cuBLASLt offers no algorithm: g's column sums.
+template <typename T>
+__global__ static void jt_lt_column_sum(const T* g, T* out, int rows, int cols) {
+    int c = blockIdx.x * blockDim.x + threadIdx.x;
+    if (c >= cols) return;
+    float s = 0.f;
+    for (int r = 0; r < rows; r++) s += (float)g[(size_t)r * cols + c];
+    out[c] = (T)s;
+}
+"""
+
+#: cuBLASLt's name and the kernel's for each element type the training route
+#: serves. bfloat16 is here though the forward route leaves it out: BGRADB
+#: takes it with the same float32 accumulate.
+_LT_TYPES = {"float32": ("CUDA_R_32F", "float"), "float16": ("CUDA_R_16F", "half"),
+             "bfloat16": ("CUDA_R_16BF", "__nv_bfloat16")}
 
 
 def compute_dtype_name(x, weight):
@@ -146,10 +198,16 @@ def _bfloat16_or(x, weight, fallback):
     return fallback
 
 
+#: cuBLASLt is CUDA's own. `use_cuda` is also set on ACL and ROCm builds, whose
+#: accelerator cannot compile this source: there `nn.Linear` raised (or, with
+#: fallbacks allowed, ran the code op on the host).
+_CUDA_BUILD = bool(getattr(jt.compiler, "is_cuda", False))
+
+
 def _supports(x, weight, bias, *args, **kwargs):
     # Only cuda_src is provided, so this op is CUDA-only; under use_cuda=0 the
     # portable path is the only correct one.
-    if not jt.flags.use_cuda:
+    if not jt.flags.use_cuda or not _CUDA_BUILD:
         return False
     # Forward only: this op has no backward source, so anything that needs a
     # gradient has to go the portable way. Silently losing the gradient would
@@ -183,6 +241,7 @@ def _supports(x, weight, bias, *args, **kwargs):
     return rows * int(weight.shape[0]) * int(weight.shape[1]) >= (1 << 18)
 
 
+@functools.lru_cache(maxsize=256)
 def _source(rows, cin, cout, dtype):
     # The one place the element type enters the kernel. The accumulate is
     # float32 for both -- `cublas_gemm_mode`'s choice for float16 -- so alpha
@@ -194,7 +253,22 @@ def _source(rows, cin, cout, dtype):
     const float alpha = 1.0f, beta = 0.0f;
     cublasLtHandle_t lt = jt_lt_handle();
 
-    cublasLtMatmulDesc_t op = nullptr;
+    // float32 follows the float32 matmul policy (`allow_tf32`,
+    // `set_float32_matmul_precision`), as `cublas_gemm_mode` does for the
+    // portable path: this route used to compute every float32 linear layer in
+    // full float32 on the SIMT kernels while the policy asked for TF32 -- BERT
+    // inference ran its GEMMs 24% slower than PyTorch's for no difference the
+    // caller asked for. The tier is read when the op runs, so each tier keeps
+    // its own measured algorithm.
+    int tier = {"jittor::float32_matmul_tier()" if dtype == "float32" else "0"};
+    cublasComputeType_t compute = tier == jittor::F32_HIGH ? CUBLAS_COMPUTE_32F_FAST_TF32
+        : tier == jittor::F32_MEDIUM ? CUBLAS_COMPUTE_32F_FAST_16BF : CUBLAS_COMPUTE_32F;
+    int slot = tier < 0 || tier > 2 ? 0 : tier;
+    // The descriptors depend only on the shape -- this kernel's -- and the
+    // tier, so they are made once; the bias pointer is the one attribute that
+    // changes from call to call. Creating, filling and destroying them on every
+    // launch was about 1 us of host time per linear layer.
+    //
     // The scale type follows the *compute* type and the float alpha/beta, not
     // the operand type. Handing it the operand type is rejected outright --
     // cuBLASLt answers `CUBLAS_STATUS_INVALID_VALUE` to
@@ -202,29 +276,36 @@ def _source(rows, cin, cout, dtype):
     // of it is the fallback running underneath (which is how the whole fused
     // route came to be 2.4x slower than not using it at all while still
     // producing correct numbers).
-    cublasLtMatmulDescCreate(&op, CUBLAS_COMPUTE_32F, CUDA_R_32F);
-    cublasOperation_t ta = CUBLAS_OP_T, tb = CUBLAS_OP_N;
-    cublasLtMatmulDescSetAttribute(op, CUBLASLT_MATMUL_DESC_TRANSA, &ta, sizeof(ta));
-    cublasLtMatmulDescSetAttribute(op, CUBLASLT_MATMUL_DESC_TRANSB, &tb, sizeof(tb));
-    cublasLtEpilogue_t ep = CUBLASLT_EPILOGUE_BIAS;
-    cublasLtMatmulDescSetAttribute(op, CUBLASLT_MATMUL_DESC_EPILOGUE, &ep, sizeof(ep));
+    static cublasLtMatmulDesc_t ops[3] = {{}};
+    if (!ops[slot]) {{
+        cublasLtMatmulDescCreate(&ops[slot], compute, CUDA_R_32F);
+        cublasOperation_t ta = CUBLAS_OP_T, tb = CUBLAS_OP_N;
+        cublasLtMatmulDescSetAttribute(ops[slot], CUBLASLT_MATMUL_DESC_TRANSA, &ta, sizeof(ta));
+        cublasLtMatmulDescSetAttribute(ops[slot], CUBLASLT_MATMUL_DESC_TRANSB, &tb, sizeof(tb));
+        cublasLtEpilogue_t ep = CUBLASLT_EPILOGUE_BIAS;
+        cublasLtMatmulDescSetAttribute(ops[slot], CUBLASLT_MATMUL_DESC_EPILOGUE, &ep, sizeof(ep));
+    }}
+    cublasLtMatmulDesc_t op = ops[slot];
     void* biasp = (void*)in2_p;
     cublasLtMatmulDescSetAttribute(op, CUBLASLT_MATMUL_DESC_BIAS_POINTER, &biasp, sizeof(biasp));
 
     // Column-major, which is what cuBLAS speaks: the row-major product
     // A[rows,cin] * B[cout,cin]^T is computed as B^T * A with the operands
     // swapped, so `la` describes the weight and `lb` the activations.
-    cublasLtMatrixLayout_t la = nullptr, lb = nullptr, lc = nullptr;
-    cublasLtMatrixLayoutCreate(&la, {ct}, cin, cout, cin);
-    cublasLtMatrixLayoutCreate(&lb, {ct}, cin, rows, cin);
-    cublasLtMatrixLayoutCreate(&lc, {ct}, cout, rows, cout);
+    static cublasLtMatrixLayout_t la = nullptr, lb = nullptr, lc = nullptr;
+    if (!la) {{
+        cublasLtMatrixLayoutCreate(&la, {ct}, cin, cout, cin);
+        cublasLtMatrixLayoutCreate(&lb, {ct}, cin, rows, cin);
+        cublasLtMatrixLayoutCreate(&lc, {ct}, cout, rows, cout);
+    }}
 
-    void* ws = jt_lt_workspace({_WORKSPACE});
-    size_t wsize = ws ? (size_t){_WORKSPACE} : 0;
-
-    static JtLtChoice choice;
+    static JtLtChoice choices[3];
+    JtLtChoice& choice = choices[slot];
     if (!choice.ready) {{
         choice.ready = true;
+        JtLtWorkspace probe({_WORKSPACE});
+        void* ws = probe.ptr;
+        size_t wsize = ws ? (size_t){_WORKSPACE} : 0;
         cublasLtMatmulPreference_t pref = nullptr;
         cublasLtMatmulPreferenceCreate(&pref);
         cublasLtMatmulPreferenceSetAttribute(
@@ -255,6 +336,7 @@ def _source(rows, cin, cout, dtype):
             if (ms > 0.0f && ms < best) {{
                 best = ms;
                 choice.algo = cand[c].algo;
+                choice.workspace = cand[c].workspaceSize;
                 choice.usable = true;
             }}
         }}
@@ -263,8 +345,10 @@ def _source(rows, cin, cout, dtype):
     }}
 
     if (choice.usable) {{
+        JtLtWorkspace workspace(choice.workspace);
         cublasLtMatmul(lt, op, &alpha, in1_p, la, in0_p, lb, &beta,
-                       out0_p, lc, out0_p, lc, &choice.algo, ws, wsize,
+                       out0_p, lc, out0_p, lc, &choice.algo,
+                       workspace.ptr, workspace.ptr ? choice.workspace : 0,
                        cudaStreamPerThread);
     }} else {{
         // Nothing cuBLASLt offered was usable. The portable GEMM plus a bias
@@ -276,9 +360,143 @@ def _source(rows, cin, cout, dtype):
         cublasGemmEx(h, CUBLAS_OP_T, CUBLAS_OP_N, cout, rows, cin, &alpha,
                      in1_p, {ct}, cin, in0_p, {ct}, cin, &beta,
                      out0_p, {ct}, cout,
-                     CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT);
+                     compute, CUBLAS_GEMM_DEFAULT);
         int total = rows * cout;
         jt_lt_add_bias<{kt}><<<(total + 255) / 256, 256>>>(out0_p, in2_p, total, cout);
+    }}
+    """
+
+
+#: The share of the L2 cache an output gradient may fill and still have its
+#: bias gradient folded into the weight gradient's GEMM; see the module notes.
+_FOLD_L2_FRACTION = 0.75
+
+#: The L2 cache of each CUDA device, by ordinal, as the driver reports it.
+_L2_BYTES = {}
+
+
+def _l2_bytes():
+    """The current CUDA device's L2 cache in bytes, or 0 if the driver cannot say."""
+    index = int(jt.core.current_device())
+    if index in _L2_BYTES:
+        return _L2_BYTES[index]
+    import ctypes
+    size = 0
+    try:
+        driver = ctypes.CDLL("nvcuda" if os.name == "nt" else "libcuda.so.1")
+    except OSError:
+        driver = None
+    if driver is not None:
+        dev, value = ctypes.c_int(0), ctypes.c_int(0)
+        # CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE
+        if (driver.cuInit(0) == 0 and driver.cuDeviceGet(ctypes.byref(dev), index) == 0
+                and driver.cuDeviceGetAttribute(ctypes.byref(value), 38, dev) == 0):
+            size = int(value.value)
+    _L2_BYTES[index] = size
+    return size
+
+
+#: The three products of a linear layer in cuBLAS's column-major terms, the
+#: row-major operands being `x` [rows, cin], `W` [cout, cin], `g` [rows, cout]:
+#:   fwd  y  = x W^T   inputs (x, W)
+#:   dx   dx = g W     inputs (g, W)
+#:   dw   dW = g^T x   inputs (x, g) -- computed as dW^T = x^T g, so the bias
+#:                     gradient, B summed over k, is BGRADB
+#: Each is (m, n, k, A, op(A), A's stored rows and columns, B, op(B), B's
+#: stored rows and columns); a stored matrix's leading dimension is its rows,
+#: and C's is m.
+_GEMMS = {
+    "fwd": ("cout", "rows", "cin", "in1_p", "CUBLAS_OP_T", "cin", "cout",
+            "in0_p", "CUBLAS_OP_N", "cin", "rows"),
+    "dx": ("cin", "rows", "cout", "in1_p", "CUBLAS_OP_N", "cin", "cout",
+           "in0_p", "CUBLAS_OP_N", "cout", "rows"),
+    "dw": ("cin", "cout", "rows", "in0_p", "CUBLAS_OP_N", "cin", "rows",
+           "in1_p", "CUBLAS_OP_T", "cout", "rows"),
+}
+
+
+@functools.lru_cache(maxsize=256)
+def _gemm_source(kind, rows, cin, cout, dtype, fold_bias=False):
+    ct, kt = _LT_TYPES[dtype]
+    m, n, k, a, ta, a_rows, a_cols, b, tb, b_rows, b_cols = _GEMMS[kind]
+    lda, ldb, ldc = a_rows, b_rows, m
+    fold_bias = fold_bias and kind == "dw"
+    epilogue = "CUBLASLT_EPILOGUE_BGRADB" if fold_bias else "CUBLASLT_EPILOGUE_DEFAULT"
+    column_sum = (f"jt_lt_column_sum<{kt}><<<(cout + 255) / 256, 256>>>(\n"
+                  f"            ({kt}*)in1_p, ({kt}*)out1_p, rows, cout);") if fold_bias else ""
+    bias_pointer = ("void* biasp = (void*)out1_p;\n    cublasLtMatmulDescSetAttribute(op, "
+                    "CUBLASLT_MATMUL_DESC_BIAS_POINTER, &biasp, sizeof(biasp));") if fold_bias else ""
+
+    return f"""
+    const int rows = {rows}, cin = {cin}, cout = {cout};
+    const float alpha = 1.0f, beta = 0.0f;
+    cublasLtHandle_t lt = jt_lt_handle();
+    int tier = {"jittor::float32_matmul_tier()" if dtype == "float32" else "0"};
+    cublasComputeType_t compute = tier == jittor::F32_HIGH ? CUBLAS_COMPUTE_32F_FAST_TF32
+        : tier == jittor::F32_MEDIUM ? CUBLAS_COMPUTE_32F_FAST_16BF : CUBLAS_COMPUTE_32F;
+    cublasLtMatmulDesc_t op = nullptr;
+    cublasLtMatmulDescCreate(&op, compute, CUDA_R_32F);
+    cublasOperation_t ta = {ta}, tb = {tb};
+    cublasLtMatmulDescSetAttribute(op, CUBLASLT_MATMUL_DESC_TRANSA, &ta, sizeof(ta));
+    cublasLtMatmulDescSetAttribute(op, CUBLASLT_MATMUL_DESC_TRANSB, &tb, sizeof(tb));
+    cublasLtEpilogue_t ep = {epilogue};
+    cublasLtMatmulDescSetAttribute(op, CUBLASLT_MATMUL_DESC_EPILOGUE, &ep, sizeof(ep));
+    {bias_pointer}
+    cublasLtMatrixLayout_t la = nullptr, lb = nullptr, lc = nullptr;
+    cublasLtMatrixLayoutCreate(&la, {ct}, {a_rows}, {a_cols}, {lda});
+    cublasLtMatrixLayoutCreate(&lb, {ct}, {b_rows}, {b_cols}, {ldb});
+    cublasLtMatrixLayoutCreate(&lc, {ct}, {m}, {n}, {ldc});
+
+    JtLtWorkspace workspace({_WORKSPACE});
+    void* ws = workspace.ptr;
+    size_t wsize = ws ? (size_t){_WORKSPACE} : 0;
+    auto once = [&](const cublasLtMatmulAlgo_t* algo) {{
+        return cublasLtMatmul(lt, op, &alpha, {a}, la, {b}, lb, &beta,
+                              out0_p, lc, out0_p, lc, algo, ws, wsize, cudaStreamPerThread);
+    }};
+
+    static JtLtChoice choices[3];
+    JtLtChoice& choice = choices[tier < 0 || tier > 2 ? 0 : tier];
+    if (!choice.ready) {{
+        choice.ready = true;
+        cublasLtMatmulPreference_t pref = nullptr;
+        cublasLtMatmulPreferenceCreate(&pref);
+        cublasLtMatmulPreferenceSetAttribute(
+            pref, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, &wsize, sizeof(wsize));
+        cublasLtMatmulHeuristicResult_t cand[{_CANDIDATES}];
+        int found = 0;
+        cublasLtMatmulAlgoGetHeuristic(lt, op, la, lb, lc, lc, pref,
+                                       {_CANDIDATES}, cand, &found);
+        cudaEvent_t beg, end;
+        cudaEventCreate(&beg); cudaEventCreate(&end);
+        float best = 1e30f;
+        for (int c = 0; c < found; c++) {{
+            if (once(&cand[c].algo) != CUBLAS_STATUS_SUCCESS) continue;
+            cudaDeviceSynchronize();
+            cudaEventRecord(beg, cudaStreamPerThread);
+            for (int r = 0; r < 3; r++) once(&cand[c].algo);
+            cudaEventRecord(end, cudaStreamPerThread);
+            if (cudaEventSynchronize(end) != cudaSuccess) continue;
+            float ms = 0.0f;
+            cudaEventElapsedTime(&ms, beg, end);
+            if (ms > 0.0f && ms < best) {{
+                best = ms;
+                choice.algo = cand[c].algo;
+                choice.usable = true;
+            }}
+        }}
+        cudaEventDestroy(beg); cudaEventDestroy(end);
+        cublasLtMatmulPreferenceDestroy(pref);
+    }}
+
+    if (choice.usable) {{
+        once(&choice.algo);
+    }} else {{
+        cublasHandle_t h = jt_blas_handle();
+        cublasGemmEx(h, {ta}, {tb}, {m}, {n}, {k}, &alpha,
+                     {a}, {ct}, {lda}, {b}, {ct}, {ldb}, &beta, out0_p, {ct}, {ldc},
+                     compute, CUBLAS_GEMM_DEFAULT);
+        {column_sum}
     }}
 
     cublasLtMatrixLayoutDestroy(la);
@@ -286,6 +504,141 @@ def _source(rows, cin, cout, dtype):
     cublasLtMatrixLayoutDestroy(lc);
     cublasLtMatmulDescDestroy(op);
     """
+
+
+def _rows_of(t):
+    rows = 1
+    for d in t.shape[:-1]:
+        rows *= int(d)
+    return rows
+
+
+def lt_linear_gemm_cuda(kind, a, b, rows, cin, cout):
+    """One product of a linear layer through cuBLASLt, the algorithm picked by
+    timing once per shape; see `_GEMMS` for `kind` and its operands. Returns
+    [rows, cout] for fwd, [rows, cin] for dx, [cout, cin] for dw."""
+    dtype = _jittor_dtype_name(a.dtype)
+    shape = {"fwd": list(a.shape[:-1]) + [cout], "dx": list(a.shape[:-1]) + [cin],
+             "dw": [cout, cin]}[kind]
+    return jt.code(shape, dtype, [a, b], cuda_header=_WGRAD_HEADER,
+                   cuda_src=_gemm_source(kind, rows, cin, cout, dtype))
+
+
+def lt_linear_wgrad_cuda(x, grad, fold_bias=True):
+    """dW of `x @ W.T + b` for the output gradient `grad` -- and db with it,
+    from the same cuBLASLt call, when `fold_bias`.
+
+    `x` and `grad` are dense, of one dtype, with the rows in their leading
+    dimensions; dW is [cout, cin] and db [cout], in that dtype. Returns
+    (dW, db), or dW alone without `fold_bias`.
+    """
+    cin, cout = int(x.shape[-1]), int(grad.shape[-1])
+    rows = _rows_of(x)
+    if not fold_bias:
+        return lt_linear_gemm_cuda("dw", x, grad, rows, cin, cout)
+    dtype = _jittor_dtype_name(x.dtype)
+    return jt.code([(cout, cin), (cout,)], [dtype, dtype], [x, grad], cuda_header=_WGRAD_HEADER,
+                   cuda_src=_gemm_source("dw", rows, cin, cout, dtype, True))
+
+
+class _LtLinearProduct(jt.Function):
+    """`x @ W.T` -- each of its three products a cuBLASLt GEMM picked by
+    timing -- whose backward also answers for the bias added after it.
+
+    The bias, when there is one, is an input so that its gradient comes from
+    here -- folded into the weight gradient's GEMM, or summed where that is
+    cheaper; the caller adds a detached copy of it. Adding it in here instead
+    would make the sum this Function's output -- and a Function's output is a
+    tape, which shares its input's storage, so the sum would have to be
+    written out rather than fused into whatever reads it.
+    """
+
+    def execute(self, x, weight, *bias):
+        self.x, self.weight, self.has_bias = x, weight, bool(bias)
+        self.wants_dx = not x.is_stop_grad()
+        self.rows, self.cout, self.cin = _rows_of(x), int(weight.shape[0]), int(weight.shape[1])
+        return lt_linear_gemm_cuda("fwd", x, weight, self.rows, self.cin, self.cout)
+
+    def grad(self, grad):
+        if grad is None:
+            return (None, None) + (None,) * self.has_bias
+        x, rows, cin, cout = self.x, self.rows, self.cin, self.cout
+        dense = (_jittor_dtype_name(grad.dtype) == _jittor_dtype_name(x.dtype)
+                 and grad._storage_is_contiguous() and x._storage_is_contiguous())
+        db = None
+        if not dense:
+            rows_x = x.reshape((-1, cin))
+            rows_g = grad.reshape((-1, cout))
+            dw = jt.nn.matmul(rows_g.transpose(), rows_x)
+            if self.has_bias:
+                db = rows_g.sum(0)
+            dx = jt.nn.matmul(grad, self.weight) if self.wants_dx else None
+        else:
+            if self.has_bias and grad.nbytes <= _l2_bytes() * _FOLD_L2_FRACTION:
+                dw, db = lt_linear_wgrad_cuda(x, grad)
+            else:
+                dw = lt_linear_gemm_cuda("dw", x, grad, rows, cin, cout)
+                if self.has_bias:
+                    # Over the leading dimensions as they are: a reshape in
+                    # between keeps the sum out of the kernel producing `grad`.
+                    db = grad.sum(tuple(range(grad.ndim - 1)))
+            dx = lt_linear_gemm_cuda("dx", grad, self.weight, rows, cin, cout) \
+                if self.wants_dx else None
+        return (dx, dw) + ((db,) if self.has_bias else ())
+
+
+def _supports_training(x, weight, bias):
+    if not jt.flags.use_cuda or jt.flags.no_grad or not _CUDA_BUILD:
+        return False
+    if not (isinstance(x, jt.Var) and isinstance(weight, jt.Var)):
+        return False
+    if bias is not None and not isinstance(bias, jt.Var):
+        return False
+    # A frozen weight leaves only the input gradient, which the portable path
+    # serves as well; an autocast register casts inside the portable path,
+    # which this does not reproduce.
+    if weight.is_stop_grad() or jt.flags.amp_reg:
+        return False
+    dtype = _jittor_dtype_name(x.dtype)
+    if dtype not in _LT_TYPES or _jittor_dtype_name(weight.dtype) != dtype:
+        return False
+    if bias is not None and (_jittor_dtype_name(bias.dtype) != dtype or len(bias.shape) != 1
+                             or int(bias.shape[0]) != int(weight.shape[0])):
+        return False
+    if len(weight.shape) != 2 or len(x.shape) < 2:
+        return False
+    cout, cin = int(weight.shape[0]), int(weight.shape[1])
+    if int(x.shape[-1]) != cin or not x._storage_is_contiguous():
+        return False
+    rows = _rows_of(x)
+    # The route costs a Function call -- tapes, a context, a second operator
+    # in the backward -- about 70 us of host time a layer, forward and
+    # backward together. A product too small for a better GEMM or for its
+    # bias sum to matter pays that for nothing: a DDPM UNet's forty-odd
+    # 16-row time-embedding projections made its eager step 64.0 -> 68.3 ms
+    # at an unchanged device time.
+    return rows >= _MIN_ROWS and rows * cin * cout >= _MIN_PRODUCT
+
+
+#: The smallest problem the training route takes: rows, and rows x cin x cout.
+_MIN_ROWS = 1024
+_MIN_PRODUCT = 1 << 28
+
+
+def lt_linear_train_cuda(x, weight, bias=None):
+    """`x @ weight.T (+ bias)` for a call that records gradients, its three
+    GEMMs picked by timing and its bias gradient folded into the weight
+    gradient's where that pays, or None if this cannot serve it.
+
+    cuBLAS's heuristic pick is not the fastest for every shape: Qwen3's MLP
+    weight gradients, [1024, 3072] over 2048 rows, ran 219 us against the
+    172 of the best of cuBLASLt's candidates, and its 151936-wide output
+    projection 8.23 ms against 7.50."""
+    if not _supports_training(x, weight, bias):
+        return None
+    if bias is None:
+        return _LtLinearProduct.apply(x, weight)
+    return _LtLinearProduct.apply(x, weight, bias) + bias.detach()
 
 
 def lt_linear_cuda(x, weight, bias):
@@ -320,4 +673,5 @@ def lt_linear_cuda(x, weight, bias):
                    cuda_header=_HEADER, cuda_src=_source(rows, cin, cout, dtype))
 
 
-__all__ = ["lt_linear_cuda", "compute_dtype_name"]
+__all__ = ["lt_linear_cuda", "lt_linear_train_cuda", "lt_linear_wgrad_cuda",
+           "compute_dtype_name"]

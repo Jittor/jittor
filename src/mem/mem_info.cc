@@ -69,8 +69,8 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
     log << "total_device_ram:" << 
         FloatOutput{(double)mem_info.total_cuda_ram, " KMG", 1024, "B"} >> "\n";
     log << "hold_vars:" << runtime_holder_state().holders().size()
-        << "lived_vars:" << Var::number_of_lived_vars
-        << "lived_ops:" << Op::number_of_lived_ops >> '\n';
+        << "lived_vars:" << Var::number_of_lived_vars.load()
+        << "lived_ops:" << Op::number_of_lived_ops.load() >> '\n';
     if (_grad_backup_ptr)
         log << "autograd_backup_vars:" << _grad_backup_ptr->size() >> '\n';
 
@@ -346,6 +346,30 @@ int64 device_memory_reserved(int device) {
     int64 used = 0, reserved = 0;
     device_pool_bytes(device, used, reserved);
     return reserved;
+}
+
+int64 device_memory_peak(int device) {
+    return sfrl_device_peak_bytes(device);
+}
+
+int64 device_memory_reserved_peak(int device) {
+    return sfrl_device_reserved_peak_bytes(device);
+}
+
+void reset_device_memory_peak(int device) {
+    sfrl_reset_device_peak(device);
+}
+
+int64 device_memory_window_start(int device) {
+    return sfrl_device_window_start(device);
+}
+
+int64 device_memory_window_peak(int device) {
+    return sfrl_device_window_peak(device);
+}
+
+int64 device_memory_allocated_total(int device) {
+    return sfrl_device_allocated_bytes(device);
 }
 
 } // jittor

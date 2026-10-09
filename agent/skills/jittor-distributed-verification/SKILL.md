@@ -1,6 +1,6 @@
 ---
 name: jittor-distributed-verification
-description: 在单机上验证 Jittor 分布式改动（MPI / NCCL 集合通信、rank 与 world_size、rendezvous）。用于改动 extern/mpi、extern/cuda/nccl、extern/acl/hccl、compile_extern 的分布式分支或 distributed/launch.py 之后，需要真正跑起多进程对拍而不是只读代码的场合。也说明哪些后端在本机根本无法验证。
+description: 在单机上验证 Jittor 分布式改动（MPI / NCCL 集合通信、rank 与 world_size、rendezvous）。用于改动 backends/comm/{mpi,nccl,hccl}、python/jittor/build/compile_extern.py 的分布式分支或 python/jittor/distributed/launch.py 之后，需要真正跑起多进程对拍而不是只读代码的场合。也说明哪些后端在没有对应硬件的机器上根本无法验证。
 ---
 
 # 单机验证 Jittor 分布式改动
@@ -35,7 +35,7 @@ python -c "import jittor as jt; print('has_mpi', jt.compile_extern.has_mpi)"
 
 **3. 有没有对应硬件？**
 
-| 后端 | 本机 | 能验证到什么程度 |
+| 后端 | 典型开发机 | 能验证到什么程度 |
 | --- | --- | --- |
 | MPI（CPU 集合通信） | 有 | **完全可验证**：多进程真跑，和 numpy 期望值对拍 |
 | NCCL（CUDA） | 有 GPU | **可编译 + 可单 rank 跑**；多 rank 数值对拍需要多张卡 |
@@ -60,7 +60,7 @@ JITTOR_HOME=... TMPDIR=... PATH=<env>/bin:$PATH nvcc_path="" JITTOR_TEST_DEVICES
 
 ```bash
 JITTOR_HOME=... TMPDIR=... PATH=<env>/bin:$PATH nvcc_path="" \
-  mpirun --allow-run-as-root -np 2 python -m pytest -q <worktree>/tests/distributed/<file>.py
+  mpirun --allow-run-as-root -np 2 python -m pytest -q <worktree>/tests/backends/comm/mpi/<file>.py
 ```
 
 内层不需要额外设 `PYTHONPATH`：子进程还是 pytest，且 `cwd`/参数落在仓库内，
@@ -78,7 +78,7 @@ rootdir 会重新解析。**换成裸 `python script.py` 就必须自己传 `PYT
 - **每个 dtype 都要测**。dtype 表是逐条手写的，错一条只影响一条。
 - **断言要 `assert_array_equal` 而不是 `allclose`**（整数类型上 allclose 会放过一些错）。
 
-### 已知的真实例子（6.B01）
+### 已知的真实例子：int64 被映射成 `MPI_DOUBLE_INT`
 
 `mpi_all_reduce` / `mpi_reduce` / `mpi_broadcast` 三个算子把 int64 映射成
 `MPI_DOUBLE_INT`。那是 MAXLOC 用的 (double,int) 二元组、含填充 16 字节，不是整数类型。
@@ -178,7 +178,7 @@ assert max(float(e.numpy()) for e in errors) == 0.0
 ### 4. 反证：把依赖删掉，它必须变红
 
 **这一步不能跳。** 上面三条写完之后，临时把 `nccl_stream_begin`/`nccl_stream_end`
-（`nccl/inc/nccl_wrapper.h`）里的两次 event 调用删掉，**算子仍留在 side stream 上**，
+（`backends/comm/nccl/inc/nccl_wrapper.h`）里的两次 event 调用删掉，**算子仍留在 side stream 上**，
 重跑第 3 条。
 
 **判据**：第 3 条报出一个非零的 `worst`（实测 4 MB × 200 次、两张 4090 上是 `885.0`），
@@ -190,8 +190,8 @@ assert max(float(e.numpy()) for e in errors) == 0.0
 
 ## 怎么证明通信真的和计算重叠了（不要用墙钟）
 
-**墙钟证明不了重叠。** 变快可能来自缓存、来自别的分区腾出了卡、来自你换了张量大小；
-而在**没有 P2P 的机器上重叠了也不会变快**（见下面「本机的实测结论」）。所以判据是
+**墙钟证明不了重叠。** 变快可能来自缓存、来自别人腾出了卡、来自你换了张量大小；
+而在**没有 P2P 的机器上重叠了也不会变快**（见下面「无 P2P 机器上的实测结论」）。所以判据是
 **profiler timeline 上两条流的 kernel 时间区间真的相交**，墙钟只能当补充。
 
 ### 取证：nsys + 同一进程内的 A/B
@@ -229,9 +229,9 @@ python agent/skills/jittor-distributed-verification/nccl_overlap_report.py tl.sq
 事件是空的，于是 `defer_join=False` 也「重叠」了 61%。**这就是那个 bug 的样子。**
 group 语义下 join 必须放在 `ncclGroupEnd()` **之后**。
 
-### 本机的实测结论：重叠是真的，但墙钟不会变好
+### 无 P2P 机器上的实测结论：重叠是真的，但墙钟不会变好
 
-8 卡 RTX 4090、`nvidia-smi topo -p2p r` 全 CNS（任何一对卡都没有 peer access），
+在一台多卡 RTX 4090、`nvidia-smi topo -p2p r` 全 CNS（任何一对卡都没有 peer access）的机器上，
 于是 NCCL 走共享内存传输，集合通信 kernel 在卡上**自旋等对端**。实测（4×1 MB
 all_reduce 一桶，对照负载是 35 个 2048² matmul 链）：
 
@@ -275,7 +275,7 @@ python -c "import jittor"
 ```
 
 **判据**：约 5 秒内退出，且错误里同时有「rendezvous」「rank 1」和那个路径。
-`JT_RENDEZVOUS_TIMEOUT_S` 生效本身就是一半的验收——8.09 之前的轮询是写死的
+`JT_RENDEZVOUS_TIMEOUT_S` 生效本身就是一半的验收——它出现之前的轮询是写死的
 6000×20ms，任何环境变量都改不动它。
 
 把 `JT_NCCL_ROOTINFO_FILE` 整个不设，是同一个缺陷的另一张脸（不等待，直接拿
@@ -288,7 +288,7 @@ happy path，必须仍然通过——只测失败分支的话，「无条件抛�
 
 两个都会让**测试进程自己消失**，而不是给你一条失败。
 
-**1. 子进程被信号打死会连带打死父进程。** jittor 在 `utils/log.cc` 里装了 SIGCHLD
+**1. 子进程被信号打死会连带打死父进程。** jittor 在 `src/utils/log.cc` 里装了 SIGCHLD
 处理器：任何 `si_code != CLD_EXITED` 的子进程都被当成 OOM，父进程直接
 `_Exit(1)`。`_Exit` **不刷 stdio**，所以 pytest 会**一个字都不输出**、退出码 1。
 它看起来不像崩溃，看起来像什么都没发生。
@@ -318,8 +318,8 @@ atexit。没跑完时 `~std::thread` 落在 joinable 的线程上：
 1. **先各自预热**。每个 rank 用 `JT_NCCL_WORLD_SIZE=1` 单独跑一遍（`cache_name=nccl<r>`
    一 rank 一个缓存，和 `jittor.distributed.launch` 一致）。不预热的话，冷编译会和
    rendezvous 的超时赛跑。
-2. **`NCCL_P2P_DISABLE=1`**。本机 `nvidia-smi topo -p2p r` 全是 CNS（任何一对 GPU 都没有
-   peer access），而 NCCL 把被拒的 peer access 当致命错误，报的是
+2. **`NCCL_P2P_DISABLE=1`**（`nvidia-smi topo -p2p r` 全是 CNS、任何一对 GPU 都没有
+   peer access 的机器上）。NCCL 把被拒的 peer access 当致命错误，报的是
    `unhandled cuda error`。`_skip_nccl_p2p_without_peer_access()` 在能看见整张设备表时会
    替你设上；每个 rank 只看得见一张卡，它判断不出来，所以手写实验必须自己设。
 3. **按 pid 杀**，绝不用 `pkill -f`——模式会匹配到你自己的 shell 和脚本文本。
@@ -335,7 +335,7 @@ atexit。没跑完时 `~std::thread` 落在 joinable 的线程上：
 内存传输，**没有 socket 可断**，异步错误就不会被置位。所以只靠 `ncclCommGetAsyncError`
 的 watchdog 在单机多卡上是**恒绿的死代码**——写完必须真杀一个 rank 验证，不能读代码通过。
 
-补的办法是心跳文件（`<rootinfo>.hb<rank>`，见 `nccl_wrapper.cc`）：不挑传输方式，而且能
+补的办法是心跳文件（`<rootinfo>.hb<rank>`，见 `backends/comm/nccl/src/nccl_wrapper.cc`）：不挑传输方式，而且能
 说出是哪个 rank。判定陈旧要用**本机 steady clock 上「这个文件多久没变过」**，不要拿文件
 mtime 去和本机时钟比——共享文件系统差几秒就会让所有 peer 看起来都死了。
 
@@ -385,7 +385,7 @@ store 的跨进程契约不需要 GPU 或 mpirun。父进程启动两个普通 P
 ## 「等别的 rank」和「拿着编译锁」不能同时发生
 
 `jittor.lock` 是**整个缓存目录一把 flock**，而 `import jittor` 从头到尾都握着它
-（`jittor/__init__.py` 的 `with lock.lock_scope():`）。所以：
+（`python/jittor/__init__.py` 的 `with _lock.lock_scope():`）。所以：
 
 > **任何会阻塞等待其他 rank 的动作，都必须在释放编译锁之后做。**
 
@@ -395,7 +395,7 @@ store 的跨进程契约不需要 GPU 或 mpirun。父进程启动两个普通 P
 所以正好落在锁外。**把它改成显式调用就同时把它挪回了锁内**，2 卡冷缓存 MPI 跑立刻死锁。
 
 现在 `setup_nccl()` / `setup_hccl()` 都用 `lock.unlock_scope()` 包住 init 调用，
-`runtime/file_rendezvous.h` 里的 `rendezvous_require_unlocked()` 在真去等之前检查一次，
+`src/runtime/file_rendezvous.h` 里的 `rendezvous_require_unlocked()` 在真去等之前检查一次，
 拿着锁就直接报错而不是挂死。
 
 ### 认出它（症状是「什么都没有」）
@@ -439,7 +439,7 @@ find $JITTOR_HOME -name jittor.lock -exec sh -c 'echo "== $1"; head -c 400 "$1"'
    `ATTEMPTED` / `SKIPPED` 两种结果都能看见，而不是「没报错就算过」。
 2. **初值不能是零，也不能是期望值**。广播/归约的测试里，非 root 的初值填 `-1`
    这种既不是期望值也不是 0 的数。填 0 的话，「广播没执行」和「广播执行了但结果是 0」
-   分不开——6.B01 修前 int64 all_reduce 返回的正是全 0。
+   分不开——int64 all_reduce 曾经返回的正是全 0。
 3. **期望值要依赖 rank**。所有 rank 用同一份输入时，「没通信」和「通信了」结果一样。
 
 同理，**`skipped` 不是 `passed`**。`has_mpi` 为 False 时整个文件被 skip，pytest 照样
@@ -453,10 +453,11 @@ skip 的数量有没有突然变大。
 
 **1. 副本冒充读通道。** 一个名字看着是"当前值"，其实是某次 import 时抄的快照。
 之后有人改了真正的来源，快照不会跟着变，读它的代码就悄悄走错分支。
-- 实例：`_runtime/core_api.py` 顶上 `from jittor import *` 抄走一份 `in_mpi`，
-  `Module.mpi_param_broadcast()` 读的是它。任何在 import 之后才打开分布式的路径
-  （torch 的 NCCL installer 就是）都改不到这份快照，于是参数广播**直接 return**，
-  每个 rank 保留自己的随机初始化。
+- 实例（已修）：`python/jittor/_runtime/core_api.py` 曾经在顶上 `from jittor import *`
+  抄走一份 `in_mpi`，`Module.mpi_param_broadcast()` 读的是它。任何在 import 之后才打开
+  分布式的路径（torch 的 NCCL installer 就是）都改不到这份快照，于是参数广播**直接
+  return**，每个 rank 保留自己的随机初始化。现在 `(rank, world_size, in_mpi)` 只在
+  `compile_extern._resolve_distributed_state()` 一处决定。
 - **判据**：`"x" in vars(mod)` 为真 -> 是副本；为假而 `mod.x` 能取到 -> 是读通道
   （模块级 `__getattr__`）。
 - **改法**：让所有读取点走读通道（PEP 562 的模块 `__getattr__`），唯一来源只有一处。
@@ -467,11 +468,12 @@ skip 的数量有没有突然变大。
 - **改法**：try/finally 还原，并在测试里**断言还原成功**。
 
 **3. 上下文由调用方式推断。** 不是快照也不是开关，而是"进程的语义取决于你怎么调它"。
-- 实例：`tests/conftest.py` 按 `sys.argv` 决定整个进程的 torch shim 模式。选择集合里
-  只要有一个路径命中 `TORCH_MODE_PATHS`（含 `tests/compat/torch`），**整个进程**就设
-  `JITTOR_TORCH_SHIM=1`，惰性求值、归约默认值、梯度语义全部换一套。于是
-  `pytest tests/core tests/nn tests/compat/torch` 会让 core 和 nn 在 shim 语义下跑，
-  产生一大批**假失败**。
+- 实例（已修）：测试的 conftest 曾经按 `sys.argv` 决定整个进程的 torch shim 模式。选择
+  集合里只要有一个路径命中 `TORCH_MODE_PATHS`（`tests/_helpers/process_modes.py`，含
+  `compat/tests/torch`），**整个进程**就设 `JITTOR_TORCH_SHIM=1`，惰性求值、归约默认值、
+  梯度语义全部换一套，`pytest tests/core tests/nn compat/tests/torch` 于是产生一大批
+  **假失败**。现在只有 `JITTOR_TORCH_SHIM` 决定模式，原生会话里点名 Torch 模式路径会被
+  `tests/_helpers/pytest_policy.py` 以 `UsageError` 拒绝。
 - **判据**：加一个目录进选择集合，前面那些目录的结果会不会变？会，就是这个形状。
 - **改法（测试侧）**：按语义分组跑，不要混：
   ```bash
@@ -506,7 +508,7 @@ with scope: assertFalse(三份)                                                #
   MPI 版」不是在原缓存上多跑几个用例，是从零编一棵树。排时间的时候按十分钟起算。
 - **别 `kill -9` 正在编译的 rank**：留下损坏的 JIT 缓存，下次在毫不相干的算子上大面积报错。
 - **`JT_NCCL_WORLD_SIZE` / `JT_HCCL_WORLD_SIZE` 一旦设了，`use_mpi` 会被强制关掉**
-  （`compile_extern.py` 里显式 `os.environ["use_mpi"]="0"`），MPI 算子根本不会编译。
+  （`python/jittor/build/compile_extern.py` 里显式 `os.environ["JT_BUILD_USE_MPI"] = "0"`），MPI 算子根本不会编译。
   想同时验证 MPI 和 NCCL，必须分两次跑，不能塞进同一个进程。
 - **`mpirun` 会重置环境**：验证用的所有变量都要通过 `mpirun` 之前的 env 传进去，
   确认每个 rank 日志里的 `cache_path:` 指向自己的 `JITTOR_HOME`。

@@ -74,7 +74,7 @@ def _test_files():
     statements about what a collected module is allowed to do while it is
     imported -- are about what is left. Asserting them against a script that
     is never collected is how one file parked under ``tests/`` turned three
-    gates red at once (KI-TEST-006); the refused set is pinned by
+    gates red at once; the refused set is pinned by
     ``test_test_named_scripts_are_refused_rather_than_collected`` so a second
     one cannot appear quietly.
     """
@@ -930,26 +930,23 @@ def _collection_side_effects(relative_text, tree):
 
 
 #: Every ``test_*.py`` in the tree that defines no test, and is therefore
-#: refused by ``pytest_policy`` instead of being collected. Kept as a list so a
-#: second one is a decision somebody writes here with the file's story, rather
-#: than a name that quietly stops being collected. This one is a script its
-#: author runs by path; the layout rule (standalone experiments live under
-#: ``$JITTOR_LAB_ROOT``) is what should have kept it out of the tree.
-_REFUSED_TEST_SCRIPTS = {
-    "integration/test_h3_decode_thread_race.py",
-}
+#: refused by ``pytest_policy`` instead of being collected. Kept as a set so a
+#: new one is a decision somebody writes here with the file's story, rather
+#: than a name that quietly stops being collected. The last one, a reproduction
+#: script its author ran by path, moved out under the layout rule (standalone
+#: experiments live under ``$JITTOR_LAB_ROOT``).
+_REFUSED_TEST_SCRIPTS = set()
 
 
 def test_test_named_scripts_are_refused_rather_than_collected():
     """A script named ``test_*.py`` must not be collected as a test.
 
     The name is the whole collection instruction, so without this the file is
-    imported and whatever its body does becomes a gate failure: the H3
-    reproduction reads ``sys.argv``, opens a checkpoint and builds a VAE at
-    module scope, which the native session reported as a collection error on
-    every run and which two scanners below also flagged (KI-TEST-006).
-    Refusing it costs nothing -- it could not contribute a test -- and its
-    author keeps running it by path.
+    imported and whatever its body does becomes a gate failure: an H3
+    reproduction script read ``sys.argv``, opened a checkpoint and built a VAE
+    at module scope, which the native session reported as a collection error on
+    every run and which two scanners below also flagged. Refusing such a file
+    costs nothing -- it could not contribute a test.
     """
     refused = {
         relative_test_path(path).as_posix()

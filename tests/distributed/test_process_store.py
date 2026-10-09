@@ -78,6 +78,13 @@ store.set("arrived/{}".format(rank), b"1")
 store.wait(["arrived/0", "arrived/1"])
 assert int(store.get("arrivals")) == 2
 store.wait(["payload", "reply"])
+# The master owns the TCP server. Keep it alive until rank 1 has received
+# the reply to its last request. arrive() publishes the marker only after its
+# own reply is flushed, unlike set(), so this also checks that ordering.
+if rank == 0:
+    store.wait(["client_done"])
+else:
+    store.arrive("client_done")
 print("DONE", rank, kind, flush=True)
 """
 
@@ -312,6 +319,34 @@ class TestHostnameRendezvous(unittest.TestCase):
             self.assertEqual(store.get("payload"), b"reachable")
         finally:
             store.close()
+
+
+class TestStoreClose(unittest.TestCase):
+    """A closed store stops listening, so the next one on its port is reached.
+
+    The server's accept thread was blocked in ``accept`` when ``close`` ran,
+    and on Linux closing the socket does not wake that call: the port went on
+    accepting into the dead store. NCCL's own rendezvous closes its store on
+    MASTER_PORT, and a Torch-style ``init_process_group`` then makes another on
+    the same port -- whose peers connected to the old one and waited forever.
+    """
+
+    def test_a_new_store_on_the_port_of_a_closed_one_is_the_one_reached(self):
+        module = TestHostnameRendezvous._store_module()
+        port = TestHostnameRendezvous._free_port()
+        first = module.TCPStore("127.0.0.1", port, 1, True, timeout=5)
+        first.set("generation", b"first")
+        first.close()
+        second = module.TCPStore("127.0.0.1", port, 1, True, timeout=5)
+        try:
+            second.set("generation", b"second")
+            client = module.TCPStore("127.0.0.1", port, 1, False, timeout=5)
+            try:
+                self.assertEqual(client.get("generation"), b"second")
+            finally:
+                client.close()
+        finally:
+            second.close()
 
 
 if __name__ == "__main__":

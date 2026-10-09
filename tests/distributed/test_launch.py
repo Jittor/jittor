@@ -41,6 +41,27 @@ if rank == 1:
 time.sleep(600)
 """
 
+_PRINT_TORCH_ENV = """
+import os
+print("env=" + ",".join(os.environ.get(k, "-") for k in
+      ("RANK", "WORLD_SIZE", "LOCAL_RANK", "MASTER_ADDR", "MASTER_PORT")), flush=True)
+"""
+
+# The store env:// rendezvous a Torch-style `init_process_group()` performs:
+# with WORLD_SIZE > 1 it needs MASTER_ADDR/MASTER_PORT, and every rank must
+# reach rank 0's store. `store.py` is loaded straight off disk: importing
+# jittor in a rank would start NCCL, which needs a GPU per rank.
+_ENV_RENDEZVOUS = """
+import importlib.util
+spec = importlib.util.spec_from_file_location("store", STORE_PATH)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+store, rank, world = next(module.rendezvous("env://"))
+store.set("rank%d" % rank, str(rank))
+store.wait(["rank%d" % r for r in range(world)])
+print("rendezvous %d/%d" % (rank, world), flush=True)
+"""
+
 _PRINT_CACHE_NAME = """
 import os
 print("cache_name=%r" % os.environ.get("cache_name"), flush=True)
@@ -117,6 +138,30 @@ class TestLaunchFailurePropagation(unittest.TestCase):
             names.add(text.strip().split("cache_name=", 1)[1])
         self.assertEqual(len(names), 1,
                          "ranks got different JIT caches: %s" % sorted(names))
+
+
+    def test_ranks_get_torchrun_variables(self):
+        """RANK/WORLD_SIZE/LOCAL_RANK and one MASTER_ADDR/MASTER_PORT for all."""
+        done, _ = _launch(2, _PRINT_TORCH_ENV, self.tmp.name, timeout=120)
+        self.assertEqual(done.returncode, 0, done.stdout[-3000:])
+        masters = set()
+        for rank in range(2):
+            text = Path(self.tmp.name, "rank%d.log" % rank).read_text()
+            values = text.strip().split("env=", 1)[1].split(",")
+            self.assertEqual(values[:2], [str(rank), "2"], text)
+            self.assertNotEqual(values[2], "-", text)
+            self.assertTrue(values[4].isdigit(), text)
+            masters.add(tuple(values[3:]))
+        self.assertEqual(len(masters), 1, masters)
+
+    def test_env_rendezvous_reaches_every_rank(self):
+        store = _REPO_ROOT / "python" / "jittor" / "distributed" / "store.py"
+        done, _ = _launch(2, _ENV_RENDEZVOUS.replace("STORE_PATH", repr(os.fspath(store))),
+                          self.tmp.name, timeout=120)
+        self.assertEqual(done.returncode, 0, done.stdout[-3000:])
+        for rank in range(2):
+            text = Path(self.tmp.name, "rank%d.log" % rank).read_text()
+            self.assertIn("rendezvous %d/2" % rank, text)
 
 
 if __name__ == "__main__":

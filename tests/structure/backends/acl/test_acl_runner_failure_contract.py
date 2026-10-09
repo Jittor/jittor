@@ -117,11 +117,11 @@ def test_ascend_guide_records_runner_failure_attribution():
 def test_ascend_guide_states_the_launcher_migration_is_closed():
     """The claim of zero remaining tails must be written down, with the caveats.
 
-    Ten board waves recorded the launcher owners as "exhausted" while four
-    standard owners still drove the execute call, so what is and is not covered
-    is pinned here rather than left to prose.
+    The launcher owners were once recorded as "exhausted" while four standard
+    owners still drove the execute call, so what is and is not covered is
+    pinned here rather than left to prose.
     """
-    guide = (REPO_ROOT / "refactor-wip/architecture/ascend-migration-notes.md").read_text(encoding="utf-8")
+    guide = (REPO_ROOT / "docs/development/acl-backend-contracts.md").read_text(encoding="utf-8")
     for required in (
         "Shared launcher migration is closed for the standard owners",
         "SWhere, Sigmoid backward, BatchNorm",
