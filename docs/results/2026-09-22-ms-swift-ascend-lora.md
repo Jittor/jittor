@@ -603,6 +603,8 @@ worker comparator job 2139 使用 compare-only key `adapter-world2-resume-audit-
 
 所有运行脚本、快照和日志均未版本化，位于 `$TASK_STATE/runs/encoder-bert-full-audit-20261009-jittor2-r1/` 至 `...-r8-eps1e-6-candidate/`，比较诊断在 `...-r6-numeric-diagnostic/`。
 
+2026-10-10 开始探测该 BERT 配置的公开训练 CLI。预检键 `bert-seqcls-cli-preflight-20261010-r1`（job 2196）在 Python 启动前因脚本变量未传入子 shell 失败；r2（job 2197）成功记录原生 torch_npu / Ascend910B3 身份，但误调用内部 `swift.cli.sft` 模块帮助，该模块仅显示 `--tuner_backend`，随后选项 grep 以 1 退出。r3（job 2198）确认安装的 `oracle/bin/swift` shebang 指向容器绝对路径 `/usr/local/python3.11.15`，主机命名空间无法解析，退出 126。r4（job 2199）通过隔离 runtime 调用已安装 `swift.cli.main.cli_main`，其确实分发到 `swift/cli/sft.py`；但该脚本中的 `try_init_unsloth()` 先以仅声明 `--tuner_backend` 的 argparse 解析器处理 `--help`，截断了完整训练参数帮助，grep 再次返回 1。四项失败均为 CLI 探测/harness 证据，不含模型构造或训练，不授予 L0–L4 通过；BERT sequence-classification 公开训练入口及 L5 仍为 `not-run`。r1–r4 的原始 manifest、输出和 worker runtime 记录未版本化，分别位于 `$TASK_STATE/runs/bert-seqcls-cli-preflight-20261010-r1/` 至 `...-r4/`。结果报告更新后，Slurm job 2203 在真实 NPU worker 完成 `JITTOR_TORCH_SHIM=1` 的结构门禁：1387 passed、8 skipped、0 failed；两个 skip 来自环境未安装 pytest-xdist。job 2200、2201、2202 的 ccache 初始化缺失、冷编译超时和子进程 600 秒超时均保留原始证据，最终 r4 通过。
+
 ## arange dtype 与 NPU 设备语义回归（2026-10-10）
 
 针对 BERT `position_ids` 暴露出的 Torch 整数 arange 默认 int64，新增了纯整数边界时传入 int64 的工厂适配，并将测试设备名改为真实的 `npu`。原生 torch_npu oracle job 2181 通过 NPU `.is_cuda == False` 与 float64 arange 检查；job 2185 在 `npu:0` 上通过 9 种 arange 语义（浮点 start/stop/step、NumPy 浮点 step、tensor 边界/step、float64、float16、NumPy int64 stop）。原生侧 fallback 计数不可得。
