@@ -256,6 +256,13 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
         args = tuple(a.item() if isinstance(a, np.generic) else a for a in args)
     elif args and _takes_shape:
         args = tuple(_shape_arg(a) for a in args)
+    # Torch infers int64 for an integer-only arange. Jittor's native default
+    # is int32, which silently changes registered model state such as
+    # Transformers' BERT position_ids buffer. Preserve Jittor's float inference
+    # for floating bounds and only supply the Torch default for integer bounds.
+    if (name == "arange" and args and "dtype" not in kwargs and
+            all(type(a) is int for a in args)):
+        kwargs["dtype"] = "int64"
     # Jittor factories reject Size/NanoVector tuple subclasses.
     if _takes_shape and args and (isinstance(args[0], jt.NanoVector) or
                  (isinstance(args[0], tuple) and type(args[0]) is not tuple)):

@@ -587,3 +587,27 @@ worker comparator job 2139 使用 compare-only key `adapter-world2-resume-audit-
 只读盘点运行键 `ms-swift-registry-inventory-20261009-r2` 在 Slurm job 2042 的 `cscg-hw01`、Ascend 910B3 worker 上运行原生环境导入与设备探测；读取的是安装版 ms-swift 4.5.2 的 `swift.model.MODEL_MAPPING`（registry 源文件 SHA-256 `78e73070ab92a352ad1ebf34580d2e090a460c95e4661c8722203e50310bf9a9`），共 222 个 model type，其中 118 个 `is_multimodal=true`，无 T5 model type。注册表含 BERT/ModernBERT 编码器及 reranker，也有 118 个多模态 model type。job 2041 的首版盘点在 JSON 序列化 `ModelKeys` 对象时失败并保留；r2 已完整写出 222 条 registry JSON，worker 脚本最后的可选格式化命令因该环境没有 `python` 可执行名而返回非零。原始 JSON 由控制端 JSON::PP 成功解析并校验条目数。此项仅证明公开安装包暴露哪些 registry 类型及无 T5 注册，不执行模型构造、前向或 Swift CLI，也不为任一 L0–L5 授予通过。原始结果、模块路径、版本、设备与失败栈位于 `$TASK_STATE/runs/ms-swift-registry-inventory-20261009-r1/` 和 `...-r2/`。
 
 原始证据位于 `$TASK_STATE/runs/adapter-world1-infer-audit-20261009-jittor2-r4/` 和 `...-r6/`。run r1 的探针钩错 SwiftModel.forward，r2/r3 的路径与协议缺陷、r5 的 fallback 计数缺口和 comparator 部分结果均保留在各自运行目录，不用于本结论；没有重新运行已完成的 native r4 oracle。
+
+## BERT encoder / Swift Adapter 严格恢复对拍（2026-10-09）
+
+在真实 Ascend 910B3 worker 上复核 Swift Adapter direct API 的 BERT sequence-classification 代表面。配置为 hidden=64、2 层、FP32、固定 batch、AdamW 三步，oracle 与候选共享完整初始参数、输入及 adapter。原生 torch_npu jobs 2144/2145 先完成连续三步和独立进程恢复，job 2147 对 95 个状态键、105,206 个值做 exact internal resume 检查。候选使用真实 ACL 和 `backend_fallback=error`。
+
+最初严格比较 job 2157 首先发现 BERT 非持久整数 buffer `position_ids` dtype 不符：native 为 int64，shim 为 int32。根因是 compat 工厂未覆盖 Jittor `arange` 的 int32 默认值，而 Torch 整数边界 `arange` 默认 int64。修复位于 `compat/torch/installers/factories.py`：仅纯 Python 整数边界且调用方未指定 dtype 时显式传 int64；浮点边界和显式 dtype 保持原逻辑。对应 worker 回归 job 2162 在 Jittor 2.0.0 / ACL worker 上 1 passed、0 skipped；测试在 CPU 与可用加速器执行，冷编译串行完成。
+
+修复后严格 ACL candidate job 2165 的连续训练与新进程恢复均成功，损失与 oracle 相同，候选 fallback 起止均为 0；每步参数/buffer、输入、输出、梯度、optimizer tensor 均记录为 NPU 驻留。job 2166 comparator-only 诊断确认初始参数与 buffer（含 int64 `position_ids`）逐项 exact，输入、logits、loss、梯度和 optimizer 状态符合原协议，且两侧各自连续 step 2 与 fresh resume 逐位 exact。跨运行时却在 AdamW 更新上失败：配置仍为 `eps=1e-8`，step 0 的两个 `linear2` 更新最大差分别为 `6.243179e-6` 和 `4.089903e-6`，超过预锁 `atol=1e-6, rtol=1e-5`；梯度最大差 `1.66e-9`、optimizer moments 最大差 `1.66e-10`，loss 精确相同。差异符合近零梯度在过小 epsilon 下被归一化放大的现象，不以放宽容差处理。故该 direct API 配置可记 L0/L1 通过、L2/L3 失败；公开 CLI L4 与稳态 L5 未运行。
+
+后续运行键 `encoder-bert-full-audit-20261009-jittor2-r7-eps1e-6-native` 的 native-first job 2167 已通过：原生 torch_npu 连续三步与 fresh resume 均在 Ascend910B3 执行；内部 exact 检查 95 键通过，loss `0.7017301917076111`，每步模型、输入、前向、梯度、buffer 和 optimizer tensor 均实测 NPU 驻留。
+
+严格 ACL candidate 与 full comparator job 2168 随后通过，使用同一 `AdamW eps=1e-6`。oracle 与 candidate 各自 continuous step2 / fresh resume 均为 95 键、105,206 个值 exact 一致；跨运行时三步轨迹、初始完整参数与 buffers、以及恢复 step 共有 95 键并全部通过既定 dtype/shape 与数值门禁。各步骤最大绝对差：更新 `1.313e-7`、参数 `2.006e-7`、梯度 `4.427e-10`、optimizer tensors `5.554e-11`、logits `1.886e-8`、loss `5.961e-8`；初始参数和 buffers exact。候选运行全阶段 `backend_fallback=error` 且 fallback start/end 均为 0，所有模型、batch、forward、梯度与 optimizer tensor 均为 NPU 驻留。故锁定的 BERT encoder / Swift Adapter direct API case 的 L0–L3 通过。该运行不是公开 CLI，L4/L5 仍未运行，也不推广至其他模型、tuner 或真实尺寸工作负载。
+
+所有运行脚本、快照和日志均未版本化，位于 `$TASK_STATE/runs/encoder-bert-full-audit-20261009-jittor2-r1/` 至 `...-r8-eps1e-6-candidate/`，比较诊断在 `...-r6-numeric-diagnostic/`。
+
+## arange dtype 与 NPU 设备语义回归（2026-10-10）
+
+针对 BERT `position_ids` 暴露出的 Torch 整数 arange 默认 int64，新增了纯整数边界时传入 int64 的工厂适配，并将测试设备名改为真实的 `npu`。原生 torch_npu oracle job 2181 通过 NPU `.is_cuda == False` 与 float64 arange 检查；job 2185 在 `npu:0` 上通过 9 种 arange 语义（浮点 start/stop/step、NumPy 浮点 step、tensor 边界/step、float64、float16、NumPy int64 stop）。原生侧 fallback 计数不可得。
+
+严格 ACL job 2186 使用 `backend_fallback=error`，float64 之前的 6 个 float32 arange 构造断言通过；float64 执行在 CANN 9.0 `Expand` workspace 查询失败，运行时列出的支持类型不含 DOUBLE。失败之后的 float16 与 NumPy int64 stop 未执行。候选 fallback 计数为 0，但整体失败，不能记为兼容通过。为验证 DOUBLE 临时增加的 ACL dtype 映射与白名单代码已撤回，不能宣称该 ACL 路径支持 float64 arange。
+
+另一个严格 ACL 回归 job 2184 中，NPU `.is_cuda` 断言通过，随后 median 梯度触发未注册 fused `reindex_reduce/add`，严格模式捕获 11 次 fallback 尝试，整组结果为 33 passed、10 failed。该证据说明当前 median backward ACL 缺少该 fused kernel；没有声称 median 梯度兼容。job 2180 首次整组回归还记录了 `.is_cuda` 语义错误与异步失败；job 2182 编译中止，未运行测试。这些失败均保留在原始运行记录中。
+
+以上是窄范围兼容回归，不赋予 ms-swift 功能面 L0–L5 通过。运行目录：`$TASK_STATE/runs/torch-npu-device-semantics-oracle-20261010-r1/`、`torch-arange-int64-acl-regression-20261010-r5/` 至 `...-r7/`、`torch-arange-full-semantics-oracle-20261010-r1/` 与 `torch-arange-full-semantics-acl-20261010-r1/`。

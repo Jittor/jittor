@@ -818,9 +818,16 @@ def _scalar_dtype_name(x):
 
 
 def _is_cuda(self):
-    if self.placement_backend >= 0:
-        return self.placement_backend != 0
-    if not (_owner.jt.flags.use_cuda or getattr(_owner.jt.compiler, "has_acl", 0)):
+    backend = int(self.placement_backend)
+    if backend >= 0:
+        # CUDA and ROCm use CUDA-compatible Torch semantics. ACL/NPU tensors
+        # are accelerators too, but Torch reports is_cuda=False for them.
+        return backend in (1, 3)
+    if not _owner.jt.flags.use_cuda:
+        return False
+    # Jittor's legacy use_cuda flag also enables ACL and Corex. Do not expose
+    # those runtimes as CUDA tensors when their Var has only ambient placement.
+    if getattr(_owner.jt.compiler, "has_acl", 0):
         return False
     return not _owner._var_is_cpu_resident(self)
 
