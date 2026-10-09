@@ -611,3 +611,9 @@ worker comparator job 2139 使用 compare-only key `adapter-world2-resume-audit-
 另一个严格 ACL 回归 job 2184 中，NPU `.is_cuda` 断言通过，随后 median 梯度触发未注册 fused `reindex_reduce/add`，严格模式捕获 11 次 fallback 尝试，整组结果为 33 passed、10 failed。该证据说明当前 median backward ACL 缺少该 fused kernel；没有声称 median 梯度兼容。job 2180 首次整组回归还记录了 `.is_cuda` 语义错误与异步失败；job 2182 编译中止，未运行测试。这些失败均保留在原始运行记录中。
 
 以上是窄范围兼容回归，不赋予 ms-swift 功能面 L0–L5 通过。运行目录：`$TASK_STATE/runs/torch-npu-device-semantics-oracle-20261010-r1/`、`torch-arange-int64-acl-regression-20261010-r5/` 至 `...-r7/`、`torch-arange-full-semantics-oracle-20261010-r1/` 与 `torch-arange-full-semantics-acl-20261010-r1/`。
+
+## IA3 双卡 optimizer state 驻留补证（2026-10-08）
+
+标准 `adamw_torch` 的 IA3 双卡审计已证明 optimizer moments 在各自 NPU，但每 rank 的 14 个 scalar `step` tensor 在 CPU，未满足“所有 optimizer state 物理驻留 NPU”。独立运行键 `ia3-world2-fused-optimizer-audit-20261007` 使用公开 Swift SFT 的 `adamw_torch_fused` 配置，native job 1630 先于严格 ACL candidate job 1631 完成。两 rank 的参数、真实 batch、梯度、更新前后参数与 optimizer state 均有设备记录：原生与候选各自 42/42 optimizer state tensors 全在对应 NPU；候选 HCCL world size 为 2，两个 rank 的 backend 为 ACL，完整观察窗 fallback count 均为 0；原生通用 fallback counter 不可用，记 `unavailable/unknown`。
+
+只读数值审计 job 1665 确认每 rank 的初始 14 个 IA3 参数 exact，batch 与冻结参数/buffers exact，14 个梯度最大差 `3.7253e-9`，更新前后及最终参数最大差均为 0，14 个 trainable tensor 都产生非零梯度和更新。该运行仍不能授予完整 L2：探针未保存 forward output 数组；候选 `optimizer.pt` 是该 Torch shim 的 portable pickle 容器而非 PyTorch ZIP，原 comparator 错把容器格式当作 optimizer 数值缺失，未能通过 shim loader 恢复并比较 optimizer state 值。报告因此保留一个失败项，optimizer checkpoint 数值未比较；没有推出 checkpoint 跨运行时可移植、L3 恢复或完整 L0–L2 通过。原始审计 JSON 位于 `$TASK_STATE/runs/ia3-world2-fused-optimizer-audit-20261007/numeric-audit-v3.json`，日志与逐 rank 快照在同目录。
