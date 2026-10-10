@@ -86,6 +86,9 @@ uv run --locked python tools/run_test_suite.py --tier core --backend cpu
 
 For the self-contained Linux x86_64 path, `jittor[cuda12]` installs CUDA 12.2
 runtime/cuDNN/NPP wheels and a pinned pip CUDA 13.4 `nvcc` plus CCCL headers.
+Kernels that use CUB/Thrust compile against `nvidia-cuda-cccl-cu12` (CCCL 2.x),
+which sits ahead of the compiler's CUDA 13 CCCL: CCCL 3 needs CUDA 13 runtime
+headers and C++17.
 Jittor compiles with the first local nvcc 12.2-13.x that passes a host-compiler
 test compile, else with the pip nvcc, and always links and loads the CUDA 12
 runtime libraries from the wheels. Do not set `CUDA_HOME`, `nvcc_path`, or

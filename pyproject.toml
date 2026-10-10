@@ -40,6 +40,11 @@ cuda12 = [
     "nvidia-cuda-nvcc==13.4.92; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
     # CUDA 13 nvcc needs CCCL headers; runtime linking remains on the CUDA 12 stack.
     "nvidia-cuda-cccl==13.3.4.3.1; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
+    # The CUB/Thrust/libcu++ kernels compile against: CCCL 2.x, which builds
+    # with the CUDA 12.2 runtime headers. Not cuda-toolkit[cccl]==12.2.2, whose
+    # wheel lacks most of libcu++. Keep in sync with CUDA12_COMPONENTS in
+    # python/jittor/build/utils/cuda_wheel.py.
+    "nvidia-cuda-cccl-cu12==12.9.27; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
     # A range, not a pin: every modern torch pins its own exact
     # nvidia-cudnn-cu12, and pip reads two different exact pins on one
     # distribution as a conflict. Pinning here made jittor[cuda12] and torch

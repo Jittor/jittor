@@ -43,6 +43,14 @@ class CudaWheelError(RuntimeError):
 # check in compile_extern), so a range is what belongs here.
 CUDA12_COMPONENTS = (
     ("cuda_runtime", "nvidia-cuda-runtime-cu12", "==12.2.140", "nvidia/cuda_runtime"),
+    # CUB, Thrust and libcu++ for the kernels that include them (argsort,
+    # cumsum, where, arg_reduce, ...). Their include directory sits ahead of
+    # the compiler's own CCCL: CUDA 13's CCCL 3 needs CUDA 13 runtime headers
+    # and C++17, and fails to compile against the 12.2 headers above. Not
+    # 12.2.140, whose wheel lacks most of libcu++ (no <cuda/std/utility>,
+    # which CUB includes); 12.9 is the last CCCL 2.x and works with every
+    # compiler in STACK_NVCC_MIN..STACK_NVCC_MAX_MAJOR.
+    ("cuda_cccl", "nvidia-cuda-cccl-cu12", "==12.9.27", "nvidia/cuda_cccl"),
     # cuda_limits.h includes the NPP header for CUDA min/max constants.
     ("npp", "nvidia-npp-cu12", "==12.2.1.4", "nvidia/npp"),
     ("cublas", "nvidia-cublas-cu12", "==12.2.5.6", "nvidia/cublas"),
@@ -322,6 +330,7 @@ class CudaWheelStack:
 def _validate_stack(stack):
     required_headers = {
         "cuda_runtime": "cuda_runtime.h",
+        "cuda_cccl": os.path.join("cub", "cub.cuh"),
         "npp": "npp.h",
         "cublas": "cublas.h",
         "cudnn": "cudnn.h",

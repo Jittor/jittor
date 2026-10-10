@@ -1,6 +1,7 @@
 """GPU smoke for a jittor[cuda12] environment, with provenance checks.
 
-Runs an add, a matmul forward/backward and a cuDNN conv2d on the visible GPU,
+Runs an add, a matmul forward/backward, a cuDNN conv2d and two CUB kernels
+(argsort, cumsum) on the visible GPU,
 then asserts that libcudart and libcudnn come from this interpreter's
 ``site-packages/nvidia`` and never from the system roots in
 ``CUDA12_PIP_FORBIDDEN`` (os.pathsep separated). ``CUDA12_PIP_EXPECT_NVCC``
@@ -118,6 +119,19 @@ for i in range(16):
 if not np.allclose(conv.numpy(), want, rtol=1e-3, atol=1e-3):
     fail("conv2d differs from numpy by %g" % np.abs(conv.numpy() - want).max())
 report["conv2d"] = list(conv.shape)
+
+# argsort and cumsum are CUB kernels, the only ones here that include CCCL;
+# with the compiler's CUDA 13 CCCL they do not compile against the 12.2 stack.
+values = rng.standard_normal(64).astype("float32")
+order = jt.argsort(jt.array(values))[0]
+running = jt.cumsum(jt.array(values))
+if device_of(order) != 0 or device_of(running) != 0:
+    fail("argsort/cumsum result is not in GPU memory")
+if not np.array_equal(order.numpy(), np.argsort(values, kind="stable")):
+    fail("argsort differs from numpy")
+if not np.allclose(running.numpy(), np.cumsum(values), rtol=1e-4, atol=1e-4):
+    fail("cumsum differs from numpy by %g" % np.abs(running.numpy() - np.cumsum(values)).max())
+report["cub"] = "argsort+cumsum ok"
 
 nvcc = jt.flags.nvcc_path
 if expect_nvcc == "pip" and not from_env(nvcc):

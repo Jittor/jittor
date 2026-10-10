@@ -42,6 +42,7 @@ def setUpModule():
 
 _REQUIRED_HEADERS = {
     "cuda_runtime": "cuda_runtime.h",
+    "cuda_cccl": os.path.join("cub", "cub.cuh"),
     "npp": "npp.h",
     "cublas": "cublas.h",
     "cudnn": "cudnn.h",
@@ -119,7 +120,9 @@ class _WheelStackFixture:
             self.distributions[dist_name] = _FakeDistribution(version, site_packages)
 
         for component, header in _REQUIRED_HEADERS.items():
-            (self.components[component] / "include" / header).touch()
+            path = self.components[component] / "include" / header
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
 
         self.cudnn_major = int(self.versions["cudnn"].split(".")[0])
         abis = dict(_LIBRARY_ABIS)

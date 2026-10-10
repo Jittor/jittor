@@ -292,7 +292,8 @@ def check_cuda():
     if cuda_wheel_stack:
         # CUDA 12 component headers stay ahead of the nvcc root, which may be
         # a newer toolkit (CUDA 13 dropped public fields Jittor still uses);
-        # the toolkit include list below still supplies CRT and CCCL.
+        # the toolkit include list below still supplies CRT. CCCL comes from
+        # the stack too, ahead of the compiler's own; see CUDA12_COMPONENTS.
         cuda_include_dirs = cuda_wheel_stack.include_dirs() + cuda_include_dirs
         cuda_lib_dirs = cuda_wheel_stack.lib_dirs() + cuda_lib_dirs
     cuda_include_dirs = list(dict.fromkeys(
