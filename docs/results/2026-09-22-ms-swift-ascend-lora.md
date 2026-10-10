@@ -651,3 +651,13 @@ worker comparator job 2139 使用 compare-only key `adapter-world2-resume-audit-
 在两 rank 上，14 个初始可训练参数、22 个冻结参数/buffer 与 4 个实际 batch 张量逐项精确一致。每 rank 2 个前向输出最大绝对差 `4.76837158203125e-7`，14 个梯度最大差 `3.725290298461914e-9`，42 个 optimizer state 数值最大差 `3.4924596548080444e-10`；预先锁定的浮点容差为 `atol=1e-6, rtol=1e-5`。更新前、更新后和最终参数快照均在预置容差内（最大绝对差为 0）。job 2193 的 `numeric-audit.json` 汇总 20 类 rank/阶段张量比较，0 失败。
 
 候选 observer 对每个 rank 的参数、计算输入、前向输出、梯度及 optimizer tensor 执行 live-device 检查，确认位于该 rank 绑定的 NPU；候选 runtime/provider 为 Jittor shim/ACL，HCCL world size 为 2，严格 `backend_fallback=error` 且完整观察窗 fallback count 为 0。native runtime/provider 为原生 torch/torch_npu；没有通用 fallback counter，故记 `unavailable/unknown`。该补证关闭旧 fused optimizer 单步探针“forward 数组缺失、optimizer 数值未比较”的缺口，但只覆盖单步 L1/L2 证据；四步训练及 checkpoint-3 全新进程恢复仍由 `ia3-world2-fullstate-fused-l3-r3-20261008` 独立证明，不能拼接成新的跨运行 checkpoint 对拍。标准 `adamw_torch` profile 的 CPU scalar step 状态问题仍未解决，L5 真实尺寸稳态性能未运行。原始证据未版本化，位于 `$TASK_STATE/runs/ia3-world2-fused-value-audit-20261010-r2/` 和 `$TASK_STATE/runs/ia3-world2-fused-value-compare-20261010-r2/`。
+
+## PEFT DoRA 公开 SFT 对拍失败（2026-10-10）
+
+运行键 `dora-world1-public-audit-20261010-r5` 基于 integration HEAD `2a8736d755dec83f392110017686f8704d6257a0`，使用 ms-swift 4.5.2、PEFT 0.17.1、tiny LLaMA、FP32、公开 `swift.cli.sft`、PEFT LoRA `use_dora=true`、q/v targets、rank 8、alpha 16、fused AdamW 和固定三步数据。原生 torch_npu oracle job 2269 先完成，严格 Jittor ACL candidate job 2277 随后完成三步，worker comparator job 2278 检查并判失败；前面 r1–r4 候选均在有效模型训练前退出，保留为 harness/JIT 启动失败，不计作兼容结果。
+
+两侧 12 个可训练初始参数、22 个冻结参数/buffers 和三步实际 batch 精确相等。step-0 前向值最大绝对差 `4.76837158203125e-7`，首步 loss 差 `4.76837158203125e-7`；但首步梯度最大差 `0.019399959594011307`，后续轨迹扩大，最终参数最大差 `0.0054405564442276955`、前向最大差 `0.00379335880279541`、更新最大差 `0.0020000040531158447`、optimizer state 最大差 `0.002043604850769043`，逐项比较不满足固定容差。完整 loss、参数、梯度、更新、optimizer 差异和失败条目见 worker `comparison.json`。两侧安装的 `peft/tuners/lora/variants.py` 与 `layer.py` 源码哈希相同；现有证据尚不能确定梯度偏差的算子根因，不能放宽阈值或把该运行改判通过。
+
+候选实际使用 shim/ACL、HCCL world size 1、`backend_fallback=error`，起始与结束 fallback 计数均为 0；observer 记录的参数、计算输入、梯度和 optimizer 张量均在 `npu:0`。但两侧 `devices.json` 都缺少三步 `forward-output` 设备事件，尽管另有三份前向值快照，因此输出的物理设备证据不完整。当前只确认公开构造/CLI 三步训练执行完成；DoRA 的 L1 设备门禁未通过审计，L2 数值对拍失败，完整恢复 L3 未运行，公开端到端 L4 不通过，L5 未运行。PEFT DoRA 属于单独互操作面，不代表 ms-swift 自有 LoRA 或整个 ms-swift 的状态变化。
+
+原始日志、插件、比较器及快照未版本化，位于 `$TASK_STATE/runs/dora-world1-public-audit-20261010-r5/`；复查需先修正前向设备 hook，再用新运行键按 oracle-first 隔离复现反向差异。候选 JIT 首次编译后正常完成，不需为启动问题重跑 r1–r5。
