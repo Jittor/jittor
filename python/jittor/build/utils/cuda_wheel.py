@@ -29,44 +29,50 @@ class CudaWheelError(RuntimeError):
     pass
 
 
-# Keep this matrix in sync with pyproject.toml's ``cuda12`` extra.  The CUDA
-# components are pinned exactly: mixing component wheels from different CUDA
-# families is the failure this module exists to prevent.
+# Keep this matrix in sync with pyproject.toml's ``cuda12`` extra.
 #
-# cuDNN is the one range, and the reason is outside jittor: every modern torch
-# pins its own exact ``nvidia-cudnn-cu12``, and pip resolves two different
-# exact pins on one distribution as a conflict rather than as a choice. An
-# exact pin here therefore made ``jittor[cuda12]`` and torch uninstallable in
-# the same environment -- which is the whole point of the shim. cuDNN's ABI is
-# stable within a major version, and the majors jittor supports are checked
-# where it matters (the split-library names below, and the load-time version
-# check in compile_extern), so a range is what belongs here.
+# The components are ranges inside the CUDA 12 family, not exact pins. Every
+# torch pins its own exact versions of these same wheels (torch 2.8: runtime
+# 12.8.90, cuBLAS 12.8.4.1, NCCL 2.27.3, ...), and pip resolves two different
+# exact pins on one distribution as a conflict rather than as a choice: with
+# pins here, jittor[cuda12] and any torch from 2.5 on could not share an
+# environment, and an unpinned ``pip install torch`` silently went back to
+# torch 2.0.1, the last one without CUDA 12 pins. CUDA 12 libraries keep
+# their ABI across minor versions, and the stack fingerprint keys the
+# compilation cache by the exact versions found.
+#
+# Lower bounds are CUDA 12.2.2's components, the oldest set jittor runs on.
+# Upper bounds are the next major of each library's own numbering (cuFFT is
+# 11.x and cuRAND 10.x throughout CUDA 12); cuDNN's majors are checked where
+# its layout depends on them (the split-library names below, and the
+# load-time version check in compile_extern).
 CUDA12_COMPONENTS = (
-    ("cuda_runtime", "nvidia-cuda-runtime-cu12", "==12.2.140", "nvidia/cuda_runtime"),
+    ("cuda_runtime", "nvidia-cuda-runtime-cu12", ">=12.2.140,<13", "nvidia/cuda_runtime"),
     # CUB, Thrust and libcu++ for the kernels that include them (argsort,
     # cumsum, where, arg_reduce, ...). Their include directory sits ahead of
     # the compiler's own CCCL: CUDA 13's CCCL 3 needs CUDA 13 runtime headers
-    # and C++17, and fails to compile against the 12.2 headers above. Not
-    # 12.2.140, whose wheel lacks most of libcu++ (no <cuda/std/utility>,
-    # which CUB includes); 12.9 is the last CCCL 2.x and works with every
-    # compiler in STACK_NVCC_MIN..STACK_NVCC_MAX_MAJOR.
+    # and C++17, and fails to compile against CUDA 12 ones. Exact, unlike the
+    # rest: 12.2.140's wheel lacks most of libcu++ (no <cuda/std/utility>,
+    # which CUB includes), and 12.9 is the last CCCL 2.x and works with every
+    # compiler in STACK_NVCC_MIN..STACK_NVCC_MAX_MAJOR. Nothing else pins it.
     ("cuda_cccl", "nvidia-cuda-cccl-cu12", "==12.9.27", "nvidia/cuda_cccl"),
     # cuda_limits.h includes the NPP header for CUDA min/max constants.
-    ("npp", "nvidia-npp-cu12", "==12.2.1.4", "nvidia/npp"),
-    ("cublas", "nvidia-cublas-cu12", "==12.2.5.6", "nvidia/cublas"),
-    ("cuda_nvrtc", "nvidia-cuda-nvrtc-cu12", "==12.2.140", "nvidia/cuda_nvrtc"),
+    ("npp", "nvidia-npp-cu12", ">=12.2.1.4,<13", "nvidia/npp"),
+    ("cublas", "nvidia-cublas-cu12", ">=12.2.5.6,<13", "nvidia/cublas"),
+    ("cuda_nvrtc", "nvidia-cuda-nvrtc-cu12", ">=12.2.140,<13", "nvidia/cuda_nvrtc"),
     ("cudnn", "nvidia-cudnn-cu12", ">=8.9.7,<10", "nvidia/cudnn"),
-    ("cufft", "nvidia-cufft-cu12", "==11.0.8.103", "nvidia/cufft"),
-    ("curand", "nvidia-curand-cu12", "==10.3.3.141", "nvidia/curand"),
-    ("cusparse", "nvidia-cusparse-cu12", "==12.1.2.141", "nvidia/cusparse"),
-    ("nvjitlink", "nvidia-nvjitlink-cu12", "==12.2.140", "nvidia/nvjitlink"),
-    ("nvtx", "nvidia-nvtx-cu12", "==12.2.140", "nvidia/nvtx"),
-    ("nccl", "nvidia-nccl-cu12", "==2.18.3", "nvidia/nccl"),
+    ("cufft", "nvidia-cufft-cu12", ">=11.0.8.103,<12", "nvidia/cufft"),
+    ("curand", "nvidia-curand-cu12", ">=10.3.3.141,<11", "nvidia/curand"),
+    ("cusparse", "nvidia-cusparse-cu12", ">=12.1.2.141,<13", "nvidia/cusparse"),
+    ("nvjitlink", "nvidia-nvjitlink-cu12", ">=12.2.140,<13", "nvidia/nvjitlink"),
+    ("nvtx", "nvidia-nvtx-cu12", ">=12.2.140,<13", "nvidia/nvtx"),
+    ("nccl", "nvidia-nccl-cu12", ">=2.18.3,<3", "nvidia/nccl"),
 )
 
-# Compilers that can build against the CUDA 12.2 stack. Older ones predate the
-# runtime headers; newer majors are untested. CRT headers always come from the
-# compiler's own toolkit, since the runtime wheel ships none.
+# Compilers that build against the CUDA 12 runtime headers above, nvcc 12.2
+# against 12.9's included. Older ones predate the 12.2 headers; newer majors
+# are untested. CRT headers always come from the compiler's own toolkit,
+# since the runtime wheel ships none.
 STACK_NVCC_MIN = (12, 2)
 STACK_NVCC_MAX_MAJOR = 13
 
@@ -118,12 +124,18 @@ LIBRARY_COMPONENTS = {
     "cusparse": "cusparse",
     "nvJitLink": "nvjitlink",
     "nvToolsExt": "nvtx",
+    "nvtx3interop": "nvtx",
     "nccl": "nccl",
 }
 for _names in CUDNN_SPLIT_LIBRARIES.values():
     for _name in _names:
         LIBRARY_COMPONENTS[_name] = "cudnn"
 del _names, _name
+
+#: The NVTX C API (``nvtxRangePushA``, ``nvtxRangePop``, ...) as a shared
+#: library, either of which will do: the nvtx wheel ships libnvToolsExt
+#: through 12.8 and libnvtx3interop, with the same entry points, from 12.9.
+NVTX_LIBRARIES = ("nvToolsExt", "nvtx3interop")
 
 
 #: What has to be loaded, in order, before the named library. cuDNN's entry
@@ -228,8 +240,6 @@ def _truthy(value):
 class CudaWheelStack:
     """Resolved paths and versions for one supported CUDA wheel stack."""
 
-    cuda_version = "12.2"
-
     def __init__(self, components, versions):
         self.components = dict(components)
         self.versions = dict(versions)
@@ -238,7 +248,14 @@ class CudaWheelStack:
             for name, _, _, _ in CUDA12_COMPONENTS
         )
         digest = hashlib.sha256(version_text.encode("ascii")).hexdigest()[:12]
-        self.fingerprint = "pipcu122_" + digest
+        self.fingerprint = "pipcu%s_%s" % (
+            self.cuda_version.replace(".", ""), digest)
+
+    @property
+    def cuda_version(self):
+        """``major.minor`` of the CUDA runtime wheel, e.g. ``"12.8"``."""
+        return ".".join(
+            str(part) for part in _version_tuple(self.versions["cuda_runtime"])[:2])
 
     @property
     def cudnn_major(self):
@@ -355,30 +372,41 @@ def _validate_stack(stack):
     required_libraries = (
         "cudart", "cublas", "cublasLt", "nvrtc", "nvrtc-builtins", "cudnn",
     ) + CUDNN_SPLIT_LIBRARIES[stack.cudnn_major] + (
-        "cufft", "curand", "cusparse", "nvJitLink", "nvToolsExt", "nccl",
+        "cufft", "curand", "cusparse", "nvJitLink", "nccl",
     )
     for name in required_libraries:
         if not stack.find_library(name):
             raise CudaWheelError("lib%s is missing from the NVIDIA wheel stack" % name)
+    if not any(stack.find_library(name) for name in NVTX_LIBRARIES):
+        raise CudaWheelError(
+            "neither %s is in the NVIDIA wheel stack" % " nor ".join(
+                "lib" + name for name in NVTX_LIBRARIES))
 
 
 #: What ``inspect_cuda_wheel_stack`` returns.
 #:
 #: ``stack``   the resolved stack, or None
 #: ``reason``  why it is None, in one sentence, or None on success
-#: ``present`` how many of the pinned component distributions are installed at
+#: ``present`` how many of the component distributions are installed at
 #:             all, at any version -- the signal for whether the user asked
 #:             for this stack or merely has some ``nvidia-*`` wheels because
 #:             something else (torch, most often) depends on them
-#: ``broken``  the stack resolved completely at the pinned versions and then
-#:             failed validation, which no third party's dependencies can
-#:             cause: this is a broken ``jittor[cuda12]`` and nothing else
+#: ``broken``  every component resolved inside its range and the set then
+#:             failed validation. That includes nvidia-cuda-cccl-cu12 and
+#:             nvidia-npp-cu12, which nothing but jittor[cuda12] installs, so
+#:             this is a broken ``jittor[cuda12]`` and nothing else
+#: ``requirers`` for a component outside its range, the installed packages
+#:             whose requirement the out-of-range version satisfies, as
+#:             ``"torch 2.4.1 requires nvidia-cuda-runtime-cu12==12.1.105"``
+#:             -- the likely cause, which reinstalling jittor[cuda12] over
+#:             them would break
 CudaWheelReport = collections.namedtuple(
-    "CudaWheelReport", "stack reason present broken")
+    "CudaWheelReport", "stack reason present broken requirers",
+    defaults=((),))
 
 
 def nvcc_fits_stack(nvcc_version):
-    """Whether an nvcc of this version can build against the CUDA 12.2 stack."""
+    """Whether an nvcc of this version can build against the CUDA 12 stack."""
     version = _version_tuple(nvcc_version)
     return (len(version) >= 2 and version[:2] >= STACK_NVCC_MIN
             and version[0] <= STACK_NVCC_MAX_MAJOR)
@@ -465,8 +493,48 @@ def find_pip_nvcc(distribution=None):
     return path
 
 
-def inspect_cuda_wheel_stack(nvcc_version=None, distribution=None):
-    """Resolve the CUDA 12.2 wheel stack and say why if it cannot be.
+def _normalized_name(name):
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def requirers_of(dist_name, found_version, distributions=None):
+    """Installed packages that require `dist_name` at a stated version that
+    `found_version` satisfies -- the ones that plausibly put it there.
+
+    Requirements behind an ``extra`` marker are skipped: metadata does not
+    record which extras were installed, so they say nothing about this
+    environment. That also skips jittor's own ``cuda12`` requirements. A
+    specifier this module cannot evaluate (``~=``, say) is kept.
+    """
+    distributions = distributions or importlib_metadata.distributions
+    wanted = _normalized_name(dist_name)
+    found = []
+    for dist in distributions():
+        for requirement in dist.requires or ():
+            spec, _, marker = requirement.partition(";")
+            if "extra" in marker:
+                continue
+            match = re.match(r"\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(.*)", spec)
+            if not match or _normalized_name(match.group(1)) != wanted:
+                continue
+            version_spec = match.group(2).strip().strip("()").strip()
+            if not version_spec:
+                continue
+            try:
+                if not _specifier_matches(version_spec, found_version):
+                    continue
+            except CudaWheelError:
+                pass
+            line = "%s %s requires %s%s" % (
+                dist.metadata["Name"], dist.version, dist_name, version_spec)
+            if line not in found:
+                found.append(line)
+    return tuple(found)
+
+
+def inspect_cuda_wheel_stack(nvcc_version=None, distribution=None,
+                             distributions=None):
+    """Resolve the CUDA 12 wheel stack and say why if it cannot be.
 
     Any nvcc from 12.2 through 13.x is accepted, local or the pinned pip
     compiler; it is used only as a compiler, and libraries resolve from CUDA 12.
@@ -478,8 +546,8 @@ def inspect_cuda_wheel_stack(nvcc_version=None, distribution=None):
     and found out several minutes later through an unrelated-looking cuDNN 9
     error. The two events had no visible connection.
 
-    ``distribution`` is injectable for unit tests and follows
-    ``importlib.metadata.distribution``'s interface.
+    ``distribution`` and ``distributions`` are injectable for unit tests and
+    follow ``importlib.metadata``'s interfaces of the same names.
     """
 
     if os.name != "posix":
@@ -499,6 +567,7 @@ def inspect_cuda_wheel_stack(nvcc_version=None, distribution=None):
     components = {}
     versions = {}
     reason = None
+    requirers = ()
     for component, dist_name, specifier, relative_path in CUDA12_COMPONENTS:
         try:
             dist = distribution(dist_name)
@@ -507,8 +576,12 @@ def inspect_cuda_wheel_stack(nvcc_version=None, distribution=None):
             continue
         actual = str(dist.version)
         if not _specifier_matches(specifier, actual):
-            reason = reason or (
-                "%s%s is required, found %s" % (dist_name, specifier, actual))
+            if reason is None:
+                reason = "%s%s is required, found %s" % (
+                    dist_name, specifier, actual)
+                requirers = requirers_of(dist_name, actual, distributions)
+                if requirers:
+                    reason += " (%s)" % "; ".join(requirers)
             continue
         root = os.path.abspath(os.fspath(dist.locate_file(relative_path)))
         if not os.path.isdir(root):
@@ -522,21 +595,21 @@ def inspect_cuda_wheel_stack(nvcc_version=None, distribution=None):
         # Only now, and only on the failure path: the success path must not
         # read any distribution's metadata twice.
         return CudaWheelReport(
-            None, reason, _count_installed(distribution), False)
+            None, reason, _count_installed(distribution), False, requirers)
     stack = CudaWheelStack(components, versions)
     try:
         _validate_stack(stack)
     except CudaWheelError as error:
-        # Every pinned wheel is installed at its pinned version and the set is
-        # still unusable. Nothing outside jittor[cuda12] pins this exact
-        # combination, so this is that installation and it is broken.
+        # Every component is installed inside its range and the set is still
+        # unusable. Nothing outside jittor[cuda12] installs the CCCL and NPP
+        # wheels, so this is that installation and it is broken.
         return CudaWheelReport(
             None, str(error), len(CUDA12_COMPONENTS), True)
     return CudaWheelReport(stack, None, len(CUDA12_COMPONENTS), False)
 
 
 def _count_installed(distribution):
-    """How many of the pinned component distributions exist at any version."""
+    """How many of the component distributions exist at any version."""
     present = 0
     for _, dist_name, _, _ in CUDA12_COMPONENTS:
         try:
@@ -547,8 +620,9 @@ def _count_installed(distribution):
     return present
 
 
-def discover_cuda_wheel_stack(nvcc_version=None, distribution=None, strict=None):
-    """Return the supported CUDA 12.2 wheel stack, or ``None``.
+def discover_cuda_wheel_stack(nvcc_version=None, distribution=None, strict=None,
+                              distributions=None):
+    """Return the supported CUDA 12 wheel stack, or ``None``.
 
     ``strict`` unset means "raise for a failure that can only be a broken
     ``jittor[cuda12]``". That is strict by default for the case where strict
@@ -557,7 +631,7 @@ def discover_cuda_wheel_stack(nvcc_version=None, distribution=None, strict=None)
     it is the *normal* case, and raising there would refuse to run on every
     system-CUDA install. ``strict=True`` raises for any failure to resolve.
     """
-    report = inspect_cuda_wheel_stack(nvcc_version, distribution)
+    report = inspect_cuda_wheel_stack(nvcc_version, distribution, distributions)
     if report.stack is not None:
         return report.stack
     if strict is None:

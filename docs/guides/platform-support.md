@@ -44,7 +44,7 @@ wheel。
 | --- | --- | --- |
 | CPU | g++ ≥ 5.4（Linux）、clang ≥ 8 + `libomp`（macOS），需要 OpenMP | 门禁，`cpu.yml` |
 | CPU oneDNN relay | 只有 float32 | 随 CPU 门禁；dtype 范围与单次调用开销是开口项 `KI-BACKEND-011` |
-| CUDA | 构建需要 `nvcc`；CUDA < 11 会额外取 cub，CUDA 11 优先选 cuDNN 8。`jittor[cuda12]` extra 钉 CUDA 12.2.2 运行时与 cuDNN ≥ 8.9.7 < 10（Linux x86_64） | 门禁，`cuda.yml`：自托管 RTX 4090（sm_89）+ CUDA 12.2（`CI_CUDA_VERSION`）。CUDA 11 与 13 的 wheel 家族**未提供** |
+| CUDA | 构建需要 `nvcc`；CUDA < 11 会额外取 cub，CUDA 11 优先选 cuDNN 8。`jittor[cuda12]` extra 装 CUDA 12 运行时（≥ 12.2，版本范围，可与 torch 2.5+ 共存）与 cuDNN ≥ 8.9.7 < 10（Linux x86_64） | 门禁，`cuda.yml`：自托管 RTX 4090（sm_89）+ CUDA 12.2（`CI_CUDA_VERSION`）。CUDA 11 与 13 的 wheel 家族**未提供** |
 | 昇腾 NPU（ACL/HCCL），单卡 | CANN 9（门禁断言 `atc --version` 为 9.x），设备须报 Ascend 910B | 门禁，`npu.yml`（Linux ARM64、`/dev/davinci0`、fail-closed 的设备探针）。一次完整的冷缓存验证记在 [Ascend 910B3 验证](../results/2026-08-28-ascend-910b-validation.md)：CANN 9.0.0、驱动 25.5.1、`397 passed, 9 skipped` |
 | 昇腾 NPU（ACL），Ascend 950PR / x86-64 | CANN 9.1 | **部分验证，无门禁**。`e5886b6f6`（2026-09-10）在真机上以 `backend_fallback=error` 零回退跑通 matmul、卷积前向反向、随机分布、CNN 与 transformer block 训练；同一提交上 `tests/backends/acl/test_acl.py` 为 32 passed / 11 failed。`docs/guides/ascend-910b.md` 里的一处同步开关测量也来自这台机器 |
 | 昇腾 NPU，多卡 HCCL | — | **未验证**：需要 ≥ 2 张 910B3，见 [`agent/manuals/deferred-hardware.md`](https://github.com/Jittor/jittor/blob/master/agent/manuals/deferred-hardware.md) 的 `8.02` |

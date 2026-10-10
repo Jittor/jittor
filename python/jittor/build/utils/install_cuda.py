@@ -46,11 +46,20 @@ def get_cuda_wheel_stack(nvcc_version=None, refresh=False, nvcc_path=None):
     report = cuda_wheel.inspect_cuda_wheel_stack(nvcc_version)
     stack = report.stack
     if stack is None and nvcc_path and cuda_wheel.is_nvidia_wheel_path(nvcc_path):
+        if report.requirers:
+            advice = (
+                "Reinstalling jittor[cuda12] would move that wheel back and "
+                "break what requires it; upgrade that package to a release "
+                "built for CUDA 12.2 or later, or keep it in a separate "
+                "environment.")
+        else:
+            advice = "Reinstall with `pip install \"jittor[cuda12]\"`."
         raise cuda_wheel.CudaWheelError(
             "%s is the pip nvcc from jittor[cuda12], so CUDA libraries are "
             "taken only from the jittor[cuda12] pip wheels, and those do not "
-            "resolve: %s. Reinstall with `pip install \"jittor[cuda12]\"`."
-            % (nvcc_path, report.reason or "the CUDA wheel stack is unavailable"))
+            "resolve: %s. %s"
+            % (nvcc_path, report.reason or "the CUDA wheel stack is unavailable",
+               advice))
     if stack is None and report.reason:
         # A failure here is not fatal -- the build falls back to the system
         # CUDA, which is a supported way to run. What was fatal was doing it

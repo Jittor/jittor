@@ -511,43 +511,6 @@ wheels = [
 ]
 
 [[package]]
-name = "cuda-toolkit"
-version = "12.2.2"
-source = { registry = "https://pypi.org/simple" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/01/74/5829b57ded27dc4b70b1e814dd11f7b2341e3cf20aa54635ce1ebf4a3df8/cuda_toolkit-12.2.2-py2.py3-none-any.whl", hash = "sha256:9f83758e6262f12b2c57c4cb5426a58119c6039d9117ff63ffddcf91ff830122", size = 2208, upload-time = "2025-08-13T02:02:50.252Z" },
-]
-
-[package.optional-dependencies]
-cublas = [
-    { name = "nvidia-cublas-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
-]
-cudart = [
-    { name = "nvidia-cuda-runtime-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
-]
-cufft = [
-    { name = "nvidia-cufft-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
-]
-curand = [
-    { name = "nvidia-curand-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
-]
-cusparse = [
-    { name = "nvidia-cusparse-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
-]
-npp = [
-    { name = "nvidia-npp-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
-]
-nvjitlink = [
-    { name = "nvidia-nvjitlink-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
-]
-nvrtc = [
-    { name = "nvidia-cuda-nvrtc-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
-]
-nvtx = [
-    { name = "nvidia-nvtx-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
-]
-
-[[package]]
 name = "debugpy"
 version = "1.8.22"
 source = { registry = "https://pypi.org/simple" }
@@ -910,13 +873,21 @@ dependencies = [
 
 [package.optional-dependencies]
 cuda12 = [
-    { name = "cuda-toolkit", extra = ["cublas", "cudart", "cufft", "curand", "cusparse", "npp", "nvjitlink", "nvrtc", "nvtx"], marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cublas-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "nvidia-cuda-cccl", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "nvidia-cuda-cccl-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "nvidia-cuda-nvcc", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cuda-nvrtc-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cuda-runtime-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "nvidia-cudnn-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "nvidia-cudnn-frontend", marker = "python_full_version >= '3.10' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cufft-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-curand-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cusparse-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "nvidia-nccl-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-npp-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-nvjitlink-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-nvtx-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 perf = [
     { name = "asv", marker = "python_full_version >= '3.9'" },
@@ -970,16 +941,24 @@ test = [
 requires-dist = [
     { name = "astunparse" },
     { name = "asv", marker = "python_full_version >= '3.9' and extra == 'perf'", specifier = "==0.6.6" },
-    { name = "cuda-toolkit", extras = ["cublas", "cudart", "cufft", "curand", "cusparse", "npp", "nvjitlink", "nvrtc", "nvtx"], marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda12'", specifier = "==12.2.2" },
     { name = "importlib-metadata", marker = "python_full_version < '3.8'" },
     { name = "numpy", specifier = "<3.0" },
+    { name = "nvidia-cublas-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda12'", specifier = ">=12.2.5.6,<13" },
     { name = "nvidia-cuda-cccl", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda12'", specifier = "==13.3.4.3.1" },
     { name = "nvidia-cuda-cccl-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda12'", specifier = "==12.9.27" },
-    { name = "nvidia-cuda-cupti-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'profile'", specifier = "==12.2.142" },
+    { name = "nvidia-cuda-cupti-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'profile'", specifier = ">=12.2.142,<13" },
     { name = "nvidia-cuda-nvcc", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda12'", specifier = "==13.4.92" },
+    { name = "nvidia-cuda-nvrtc-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda12'", specifier = ">=12.2.140,<13" },
+    { name = "nvidia-cuda-runtime-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda12'", specifier = ">=12.2.140,<13" },
     { name = "nvidia-cudnn-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda12'", specifier = ">=8.9.7,<10" },
     { name = "nvidia-cudnn-frontend", marker = "python_full_version >= '3.10' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda12'", specifier = ">=1.30,<2" },
-    { name = "nvidia-nccl-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda12'", specifier = "==2.18.3" },
+    { name = "nvidia-cufft-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda12'", specifier = ">=11.0.8.103,<12" },
+    { name = "nvidia-curand-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda12'", specifier = ">=10.3.3.141,<11" },
+    { name = "nvidia-cusparse-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda12'", specifier = ">=12.1.2.141,<13" },
+    { name = "nvidia-nccl-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda12'", specifier = ">=2.18.3,<3" },
+    { name = "nvidia-npp-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda12'", specifier = ">=12.2.1.4,<13" },
+    { name = "nvidia-nvjitlink-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda12'", specifier = ">=12.2.140,<13" },
+    { name = "nvidia-nvtx-cu12", marker = "python_full_version >= '3.8' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda12'", specifier = ">=12.2.140,<13" },
     { name = "pillow" },
     { name = "pywin32", marker = "sys_platform == 'win32'", specifier = ">=1.0" },
     { name = "tqdm" },

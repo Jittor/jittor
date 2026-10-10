@@ -708,6 +708,8 @@ def _discover_cuda_compiler(requested_backend):
     # An explicit nvcc_path remains authoritative.
     configured_nvcc = build_env("nvcc_path", None)
     if configured_nvcc is not None:
+        if configured_nvcc:
+            jit_utils.check_configured_exe("nvcc_path", configured_nvcc, "nvcc")
         return build_env("nvcc_path", configured_nvcc)
 
     cuda_wheel = install_cuda.cuda_wheel
@@ -755,6 +757,17 @@ def _discover_cuda_compiler(requested_backend):
         nvcc = install_cuda.install_cuda()
         if nvcc:
             nvcc = try_find_exe(nvcc)
+    if not nvcc and cuda_wheel._truthy(os.environ.get("JITTOR_CUDA_WHEEL_DISABLE")):
+        try:
+            cuda_wheel.importlib_metadata.distribution(
+                cuda_wheel.CUDA_NVCC_DISTRIBUTION)
+        except cuda_wheel.importlib_metadata.PackageNotFoundError:
+            pass
+        else:
+            LOG.w("JITTOR_CUDA_WHEEL_DISABLE is set, so the jittor[cuda12] "
+                  "compiler and libraries are ignored, and no system nvcc was "
+                  "found: this build is CPU-only. Unset it to use "
+                  "jittor[cuda12].")
     return build_env("nvcc_path", nvcc or "")
 
 
