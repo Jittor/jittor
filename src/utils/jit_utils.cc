@@ -54,6 +54,53 @@ bool check_async_executor_error(const std::exception& e, std::ostream& os) {
     return true;
 }
 
+// The Python classes for errors raised by the C++ core. Created once, when
+// jit_utils_core is imported, so every binding -- core, custom op libraries,
+// this module -- raises the same classes; `jittor` re-exports them.
+static PyObject* jittor_error = nullptr;
+static PyObject* jittor_internal_error = nullptr;
+static PyObject* jittor_index_error = nullptr;
+static PyObject* jittor_type_error = nullptr;
+
+static PyObject* add_error_class(PyObject* m, const char* name, PyObject* bases,
+                                 const char* doc) {
+    string qualified = string("jittor.") + name;
+    PyObject* cls = PyErr_NewExceptionWithDoc(qualified.c_str(), doc, bases, nullptr);
+    ASSERT(cls) << "could not create" << name;
+    // One reference for the module, one kept here for the bindings.
+    Py_INCREF(cls);
+    ASSERT(PyModule_AddObject(m, name, cls) == 0);
+    return cls;
+}
+
+static void def_error_classes(PyObject* m) {
+    jittor_error = add_error_class(m, "JittorError", PyExc_RuntimeError,
+        "An error raised by Jittor's C++ core. A RuntimeError, so code that "
+        "caught RuntimeError before keeps working.");
+    PyObjHolder internal_bases(PyTuple_Pack(1, jittor_error));
+    jittor_internal_error = add_error_class(m, "JittorInternalError", internal_bases.obj,
+        "Jittor reached a state its own implementation says is impossible: a "
+        "bug in Jittor, not in the calling code.");
+    PyObjHolder index_bases(PyTuple_Pack(2, jittor_error, PyExc_IndexError));
+    jittor_index_error = add_error_class(m, "JittorIndexError", index_bases.obj,
+        "An index outside the tensor, or more indices than it has dimensions.");
+    PyObjHolder type_bases(PyTuple_Pack(2, jittor_error, PyExc_TypeError));
+    jittor_type_error = add_error_class(m, "JittorTypeError", type_bases.obj,
+        "No overload of a Jittor operator accepts these argument types.");
+}
+
+PyObject* python_error_class(const std::exception& e) {
+    // Only before jit_utils_core has finished importing.
+    if (!jittor_error) return PyExc_RuntimeError;
+    if (dynamic_cast<const UserIndexError*>(&e)) return jittor_index_error;
+    if (dynamic_cast<const InternalInvariantError*>(&e)) return jittor_internal_error;
+    return jittor_error;
+}
+
+PyObject* python_type_error_class() {
+    return jittor_type_error ? jittor_type_error : PyExc_TypeError;
+}
+
 SEH_HOOK;
 
 void init_subprocess() {
@@ -306,7 +353,7 @@ static void pyjt_def_core(PyObject* m) {
             LOGf << "Not a valid call.";
         } catch (const std::exception& e) {
             if (!PyErr_Occurred()) {
-                PyErr_Format(PyExc_RuntimeError, "%s", e.what());
+                PyErr_SetString(python_error_class(e), e.what());
             }
         }
         return nullptr;
@@ -393,7 +440,7 @@ bool cache_compile(const string& cmd, const string& cache_path="", const string&
             LOGf << "Not a valid call.";
         } catch (const std::exception& e) {
             if (!PyErr_Occurred()) {
-                PyErr_Format(PyExc_RuntimeError, "%s", e.what());
+                PyErr_SetString(python_error_class(e), e.what());
             }
         }
         return nullptr;
@@ -422,7 +469,7 @@ void log(const std::string& fileline, const char* level, int verbose, const std:
             LOGf << "Not a valid call.";
         } catch (const std::exception& e) {
             if (!PyErr_Occurred()) {
-                PyErr_Format(PyExc_RuntimeError, "%s", e.what());
+                PyErr_SetString(python_error_class(e), e.what());
             }
         }
         return nullptr;
@@ -451,7 +498,7 @@ void init_subprocess()
             LOGf << "Not a valid call.";
         } catch (const std::exception& e) {
             if (!PyErr_Occurred()) {
-                PyErr_Format(PyExc_RuntimeError, "%s", e.what());
+                PyErr_SetString(python_error_class(e), e.what());
             }
         }
         return nullptr;
@@ -480,7 +527,7 @@ void log_capture_start()
             LOGf << "Not a valid call.";
         } catch (const std::exception& e) {
             if (!PyErr_Occurred()) {
-                PyErr_Format(PyExc_RuntimeError, "%s", e.what());
+                PyErr_SetString(python_error_class(e), e.what());
             }
         }
         return nullptr;
@@ -511,7 +558,7 @@ void log_capture_stop()
             LOGf << "Not a valid call.";
         } catch (const std::exception& e) {
             if (!PyErr_Occurred()) {
-                PyErr_Format(PyExc_RuntimeError, "%s", e.what());
+                PyErr_SetString(python_error_class(e), e.what());
             }
         }
         return nullptr;
@@ -576,7 +623,7 @@ void log_capture_read()
             LOGf << "Not a valid call.";
         } catch (const std::exception& e) {
             if (!PyErr_Occurred()) {
-                PyErr_Format(PyExc_RuntimeError, "%s", e.what());
+                PyErr_SetString(python_error_class(e), e.what());
             }
         }
         return nullptr;
@@ -598,5 +645,6 @@ void ostream_redirect(bool stdout, bool stderr)
 static void init_module(PyModuleDef* mdef, PyObject* m) {
     mdef->m_doc = "Inner c++ core of jittor_utils";
     jittor::pyjt_def_core(m);
+    jittor::def_error_classes(m);
 }
 PYJT_MODULE_INIT(jit_utils_core);

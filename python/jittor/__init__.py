@@ -213,6 +213,11 @@ gradfunctional = autograd
 dtype = NanoString
 
 import jittor_utils
+# Created by jit_utils_core so that the bindings raise these very classes.
+JittorError = jittor_utils.cc.JittorError
+JittorInternalError = jittor_utils.cc.JittorInternalError
+JittorIndexError = jittor_utils.cc.JittorIndexError
+JittorTypeError = jittor_utils.cc.JittorTypeError
 
 _ran_post_process = False
 for backend in compiler.backend_modules:
@@ -371,6 +376,7 @@ _ROOT_EXPORTS = (
     "amp",
     "world_size", "config", "capability", "introspection", "graph_replay", "capture_step",
     "profile", "profiling",
+    "JittorError", "JittorInternalError", "JittorIndexError", "JittorTypeError",
 )
 
 __all__ = tuple(sorted(set(

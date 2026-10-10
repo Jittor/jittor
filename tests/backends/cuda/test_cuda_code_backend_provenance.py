@@ -42,6 +42,27 @@ def test_cuda_source_provenance_forward_and_backward():
         np.testing.assert_array_equal(gradient.numpy(), [2, 2, 2])
 
 
+@pytest.mark.parametrize("broken, line", [
+    ("if (i < in0_shape0) @out(i) = @in0(i) + not_a_symbol;", 5),
+    ("if (i < in0_shape0) @out(i) = @in0(i);\n    }\n    host_missing();\n    {", 7),
+])
+def test_cuda_compile_error_names_the_users_line(broken, line):
+    """nvcc reports `jt.code source(N)` with N counted in the string passed.
+
+    `@ARGS_DEF`/`@PRECALC` used to expand over several lines each, so a
+    kernel's error landed a dozen lines past the user's, in code_op.cc.
+    """
+    _require_cuda()
+    source = ("\n    __global__ static void kernel1(@ARGS_DEF) {\n"
+              "        @PRECALC\n        int i = threadIdx.x;\n        "
+              + broken + "\n    }\n    kernel1<<<1, 32>>>(@ARGS);\n")
+    with jt.flag_scope(use_cuda=1):
+        x = jt.array(np.array([1, 2, 3], dtype=np.float32))
+        with pytest.raises(RuntimeError) as caught:
+            jt.code(x.shape, x.dtype, [x], cuda_src=source).sync()
+    assert "jt.code source(%d)" % line in str(caught.value), str(caught.value)
+
+
 def test_foreign_backend_source_is_rejected_and_runtime_remains_usable():
     _require_cuda()
     with jt.flag_scope(use_cuda=1, lazy_execution=1, auto_flush_ops=0):

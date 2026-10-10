@@ -155,7 +155,7 @@ void check_op_async_error(Op* op, bool is_fused_op, const std::exception& e,
     // look next rather than what happened.
     if (jit_src_path.size()) logf >> "\n  jit source: " >> jit_src_path;
     logf >> "\n";
-    jittor::LogFatalVoidify() && logf;
+    jittor::LogRethrowVoidify{e} && logf;
 }
 
 

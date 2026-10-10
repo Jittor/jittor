@@ -112,7 +112,7 @@ void infer_index_slices(Var* in, VarSlices& vs, int& first_oid_of_var, int& var_
                     remain_slice--;
             auto remain_idims = nin-i;
             auto ellipsis_size = remain_idims - remain_slice;
-            USER_CHECK(ellipsis_size>=0) << "NDims not match: too many indices after ellipsis";
+            USER_INDEX_CHECK(ellipsis_size>=0) << "too many indices after the ellipsis for tensor of dimension" << nin;
             for (int j=0; j<ellipsis_size; j++) {
                 i_to_vs[i+j] = -1;
                 i_to_o[i+j] = out_shape.size();
@@ -134,7 +134,7 @@ void infer_index_slices(Var* in, VarSlices& vs, int& first_oid_of_var, int& var_
             auto& v = s.slice.start;
             auto index = v;
             if (v<0) v += in_shape_i;
-            USER_CHECK(v>=0 && v<in_shape_i) << "index" << index
+            USER_INDEX_CHECK(v>=0 && v<in_shape_i) << "index" << index
                 << "is out of bounds for dimension" << i << "with size" << in_shape_i;
         } else 
         if (s.is_str()) {
@@ -174,7 +174,8 @@ void infer_index_slices(Var* in, VarSlices& vs, int& first_oid_of_var, int& var_
         if (s.is_none()) {
             out_shape.push_back(1);
         } else
-            USER_CHECK(s.is_ellipsis()) << "Too many slices" << vs << "shape:" << in->shape;
+            USER_INDEX_CHECK(s.is_ellipsis()) << "too many indices for tensor of dimension"
+                << nin >> ": got" << vs << "for shape" << in->shape;
     }
 }
 
@@ -459,7 +460,7 @@ void GetitemOp::jit_run() {
     // says so when it happens). The device does not need this: it is handed a
     // null fault and traps where the bad index is, in `index_bounds.h`.
     @if(@is_def(JIT_cpu),
-    USER_CHECK(!index_fault.bad()) << "index" << index_fault.index <<
+    USER_INDEX_CHECK(!index_fault.bad()) << "index" << index_fault.index <<
         "is out of bounds for dimension" << index_fault.dim <<
         "with size" << index_fault.size;
     )

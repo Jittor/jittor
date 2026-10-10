@@ -900,6 +900,15 @@ static string strip_ansi_escapes(const string& text) {
 // See the declaration in log.h for why an exception must not carry the log
 // line's prefix. Two steps, in this order: the colour escapes wrap the prefix,
 // so they have to go first for the prefix to be recognisable.
+void throw_same_kind(const std::exception& like, const string& message) {
+    // Most derived first.
+    if (dynamic_cast<const UserIndexError*>(&like)) throw UserIndexError(message);
+    if (dynamic_cast<const UserError*>(&like)) throw UserError(message);
+    if (dynamic_cast<const InternalInvariantError*>(&like))
+        throw InternalInvariantError(message);
+    throw std::runtime_error(message);
+}
+
 string message_without_log_prefix(const string& message) {
     auto text = strip_ansi_escapes(message);
     // `[f 0911 00:12:17.212067 84 binary_op.cc:426] rest` -> `binary_op.cc:426: rest`
@@ -1007,7 +1016,7 @@ static string compile_failure_message(const char* cmd, const string& raw_output,
     auto hint = cuda_toolchain_hint(text);
     if (hint.size()) out += "\n\nhint: " + hint;
     out += "\n\ncompiler: " + program +
-           "\n(set the log_v flag to 1 to see the full command line and output)";
+           "\n(run with JT_LOG_V=1 to see the full command line and output)";
     return out;
 }
 

@@ -919,7 +919,8 @@ ItemData VarHolder::item() {
     // Keep the entry lock through the final scalar copy, including managed
     // allocations which migrate_to_cpu deliberately leaves on the device.
     ExecutorEntryScope entry;
-    USER_CHECK(var->num==1) << "Item var size should be 1, but got" << var->num;
+    USER_CHECK(var->num==1) << "item() needs a Var with exactly one element, but this one has"
+        << var->num << "(shape" << var->shape >> ")";
     // Value-initialize: only dsize bytes are written below, and the converter
     // may read all 8 (unsigned dtypes go through PyLong_FromUnsignedLongLong).
     ItemData data{};

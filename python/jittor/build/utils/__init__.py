@@ -5,6 +5,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 from multiprocessing import Pool
+from multiprocessing.pool import RemoteTraceback
 import builtins
 import multiprocessing as mp
 import subprocess as sp
@@ -411,7 +412,14 @@ def do_compile(args):
     cmd, cache_path, jittor_path = args
     try_import_jit_utils_core(True)
     if cc:
-        return cc.cache_compile(cmd, cache_path, jittor_path)
+        try:
+            return cc.cache_compile(cmd, cache_path, jittor_path)
+        except RuntimeError as error:
+            # The pool pickles the exception back to the parent, and pickling
+            # jittor.JittorError looks it up as `jittor.JittorError`: in a
+            # worker that is half way through `import jittor`, or (forkserver)
+            # never imported it and would start to, under the parent's lock.
+            raise RuntimeError(str(error)) from None
     else:
         run_cmd(cmd)
         return True
@@ -540,6 +548,13 @@ def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
             dp = DelayProgress(msg, n)
             for i,_ in enumerate(p.imap_unordered(do_compile, cmds)):
                 dp.update(i)
+        except Exception as error:
+            # The pool chains the worker's traceback as the cause, and it ends
+            # in this same message: the compiler diagnostic was printed twice.
+            if isinstance(error.__cause__, RemoteTraceback):
+                error.__cause__ = None
+                error.__suppress_context__ = True
+            raise
         finally:
             mp.current_process()._config['daemon'] = bk
 
@@ -1224,7 +1239,7 @@ def get_py3_config_path():
         else:
             raise RuntimeError(f"python3.{sys.version_info.minor}-config "
                 f"not found in {py3_config_paths}, please specify "
-                f"enviroment variable 'JT_BUILD_PYTHON_CONFIG_PATH',"
+                f"environment variable 'JT_BUILD_PYTHON_CONFIG_PATH',"
                 f" or install python3.{sys.version_info.minor}-dev")
         _py3_config_path = py3_config_path
         return py3_config_path

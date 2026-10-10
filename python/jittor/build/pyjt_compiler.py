@@ -991,19 +991,16 @@ def compile_src(src, h, basename):
                 if (!PyErr_Occurred()) {{
                     std::stringstream ss;
                     if (check_async_executor_error(e, ss)) {{
-                        PyErr_Format(PyExc_RuntimeError,
-                            "%s",
-                            ss.str().c_str()
-                        );
+                        PyErr_SetString(python_error_class(e), ss.str().c_str());
                     }} else if (matched_overload) {{
                         // An overload matched the argument types and its body threw
                         // at runtime -> this is a real op error, NOT bad arguments.
                         // Surface jittor's actual message (carries [OP TYPE]/[Input]/
                         // [Reason]) instead of the misleading "Wrong inputs arguments".
-                        PyErr_Format(PyExc_RuntimeError, "%s", e.what());
+                        PyErr_SetString(python_error_class(e), e.what());
                     }} else {{
                         ss {error_log_code};
-                        PyErr_Format(PyExc_RuntimeError,
+                        PyErr_Format(python_type_error_class(),
                             "%s\\n%s\\nFailed reason:%s",
                             ss.str().c_str(),
                             R""({decs})"",

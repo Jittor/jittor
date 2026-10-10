@@ -61,7 +61,7 @@ class TestItem(unittest.TestCase):
         expect_error(
             lambda: jt.array([1, 2]).item(),
             exc_type=RuntimeError,
-            match=r"Item var size should be 1, but got 2",
+            match=r"item\(\) needs a Var with exactly one element, but this one has 2",
         )
 
     def test_integer_dtypes_round_trip(self):

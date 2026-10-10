@@ -4,6 +4,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#include <algorithm>
 #include <cmath>
 #include "core/var.h"
 #include "ops/composite/code_op.h"
@@ -217,11 +218,16 @@ void CodeOp::grads(Var** douts, VarPtr* dins) {
 // microsecond. The distinct sources are few (one per specialised kernel), so
 // remember the result. References into an unordered_map stay valid across
 // rehashes, and the lock only guards the map, not the walk's cost.
+// The user's text is spliced into this file's template, so without a #line the
+// compiler reports its errors at a line of code_op.cc. Lines are counted from
+// the start of the string the user passed; the template text that follows each
+// piece is named as generated, not left to inherit the user's numbering.
 static string code_op_build_tail(const string& header, const string& src) {
     string tail;
-    tail.reserve(header.size() + src.size() + 32);
+    tail.reserve(header.size() + src.size() + 160);
+    tail += "#line 1 \"jt.code header\"\n";
     tail += header;
-    tail += "\nnamespace jittor {\n";
+    tail += "\nnamespace jittor {\n#line 1 \"jt.code source\"\n";
     size_t i = 0;
     // move cuda kernel function into header
     for (; i<src.size(); i++) {
@@ -242,7 +248,9 @@ static string code_op_build_tail(const string& header, const string& src) {
             }
         } else break;
     }
-    tail += "}«CODE:";
+    size_t code_line = 1 + std::count(src.begin(), src.begin() + i, '\n');
+    tail += "\n}\n#line 1 \"jt.code generated wrapper\"\n";
+    tail += "«CODE:#line " + S(code_line) + " \"jt.code source\"\n";
     for (; i<src.size(); i++) tail += src[i];
     return tail;
 }
@@ -394,38 +402,13 @@ void CodeOp::jit_prepare(JK& jk) {
     @define(out@i@@_stride@{out@i@@_dim-1},1)
 )
 
-@define(ARGS_DEF, 
-@for(i, 0, IN_SIZE, @(
-    in@i@@_type* __restrict__ in@i@@_p,
-    @for(j, 0, in@i@@_dim, @(index_t in@i@@_shape@j,))
-))
-@for(i, 0, OUT_SIZE, @(
-    out@i@@_type* __restrict__ out@i@@_p,
-    @for(j, 0, out@i@@_dim, @(index_t out@i@@_shape@j,))
-))
-int __tmp
-)
+// One line each: they expand inside the user's source, and a newline in an
+// expansion would shift every line number reported after it.
+@define(ARGS_DEF, @for(i, 0, IN_SIZE, @( in@i@@_type* __restrict__ in@i@@_p, @for(j, 0, in@i@@_dim, @(index_t in@i@@_shape@j,)))) @for(i, 0, OUT_SIZE, @( out@i@@_type* __restrict__ out@i@@_p, @for(j, 0, out@i@@_dim, @(index_t out@i@@_shape@j,)))) int __tmp)
 
-@define(ARGS, 
-@for(i, 0, IN_SIZE, @(
-    in@i@@_p,
-    @for(j, 0, in@i@@_dim, @(in@i@@_shape@j,))
-))
-@for(i, 0, OUT_SIZE, @(
-    out@i@@_p,
-    @for(j, 0, out@i@@_dim, @(out@i@@_shape@j,))
-))
-0
-)
+@define(ARGS, @for(i, 0, IN_SIZE, @( in@i@@_p, @for(j, 0, in@i@@_dim, @(in@i@@_shape@j,)))) @for(i, 0, OUT_SIZE, @( out@i@@_p, @for(j, 0, out@i@@_dim, @(out@i@@_shape@j,)))) 0)
 
-@define(PRECALC,
-@for(i, 0, IN_SIZE,
-    @for(j, in@i@@_dim-2, -1, -1, auto in@i@@_stride@j = in@i@@_stride@{j+1} * in@i@@_shape@{j+1};)
-)
-@for(i, 0, OUT_SIZE,
-    @for(j, out@i@@_dim-2, -1, -1, auto out@i@@_stride@j = out@i@@_stride@{j+1} * out@i@@_shape@{j+1};)
-)
-)
+@define(PRECALC, @for(i, 0, IN_SIZE, @for(j, in@i@@_dim-2, -1, -1, auto in@i@@_stride@j = in@i@@_stride@{j+1} * in@i@@_shape@{j+1};)) @for(i, 0, OUT_SIZE, @for(j, out@i@@_dim-2, -1, -1, auto out@i@@_stride@j = out@i@@_stride@{j+1} * out@i@@_shape@{j+1};)))
 
 @alias(out, out0)
 #undef out

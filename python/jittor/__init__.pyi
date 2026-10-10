@@ -8570,7 +8570,7 @@ class Flags:
 	l1_cache_size: _builtins.int
 	'''size of level 1 cache (byte). Default: 32768): size of level 1 cache (byte'''
 	lazy_execution: _builtins.int
-	'''Default enabled, if disable, use immediately eager execution rather than lazy execution, This flag makes error message and traceback infomation better. But this flag will raise memory consumption and lower the performance. Default: 1'''
+	'''Default enabled, if disable, use immediately eager execution rather than lazy execution, This flag makes error message and traceback information better. But this flag will raise memory consumption and lower the performance. Default: 1'''
 	log_file: str
 	'''log to file, mpi env will add $OMPI_COMM_WORLD_RANK suffix. Default: ""'''
 	log_op_hash: str

@@ -63,6 +63,7 @@ def test_asynchronous_fault_reports_creation_line(boundary):
                 assert "op=code" in report, report
                 assert "candidates are not proof" in report, report
                 assert "device=0" in report, report
+                assert "sticky" in report and "Restart the process" in report, report
                 print("ASYNC-ORIGIN-PASS", flush=True)
             else:
                 raise AssertionError("asynchronous poison was never reported")

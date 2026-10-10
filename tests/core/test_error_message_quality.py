@@ -73,7 +73,25 @@ class TestCompileFailureCarriesTheDiagnostic(unittest.TestCase):
 
     def test_it_says_how_to_get_the_full_command(self):
         """Removing something is only right if it stays reachable."""
-        self.assertIn("log_v", self._failure_text())
+        self.assertIn("JT_LOG_V=1", self._failure_text())
+
+    def test_the_location_is_in_the_users_source(self):
+        """The source is spliced into code_op.cc's template; the line is the user's.
+
+        It was reported as `code_op.cc:456:28`, a line of the framework, with
+        `@`-macro expansions and inserted defines shifting it further.
+        """
+        source = "\n    @PRECALC\n    int k = 0;\n    out0_p[k] = not_a_symbol;\n"
+        header = "#include <cmath>\nint broken_header = ;"
+        with jt.flag_scope(use_cuda=0):
+            with self.assertRaises(Exception) as caught:
+                jt.code([1], "float32", [jt.ones(1)], cpu_src=source).sync()
+            self.assertIn("jt.code source:4:", str(caught.exception))
+            self.assertNotIn("code_op.cc", str(caught.exception))
+            with self.assertRaises(Exception) as caught:
+                jt.code([1], "float32", [jt.ones(1)], cpu_header=header,
+                        cpu_src="out0_p[0] = 1;").sync()
+            self.assertIn("jt.code header:2:", str(caught.exception))
 
     def test_the_exit_code_is_the_compilers(self):
         """`pclose` returns a wait status: exit code 1 is 256, exit code 2 is 512.

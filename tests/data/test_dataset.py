@@ -489,9 +489,10 @@ class TestDatasetDeepcopy(unittest.TestCase):
 
 class TestWorkerExceptionPropagation(unittest.TestCase):
     """An exception raised inside a worker must come back to the caller as an
-    exception. It used to be delivered as SIGINT to the parent, which jittor's
-    handler turns into an immediate process exit -- indistinguishable from the
-    user pressing Ctrl-C, and impossible to catch."""
+    exception of the same class. It used to be delivered as SIGINT to the
+    parent, which jittor's handler then turned into an immediate process exit
+    -- indistinguishable from the user pressing Ctrl-C, and impossible to
+    catch."""
 
     SRC = """
 import numpy as np
@@ -531,10 +532,13 @@ if __name__ == "__main__":
             % (r.returncode, out[-2000:], err[-3000:]))
         assert "STILL_ALIVE" in out, out[-2000:] + err[-2000:]
         assert "NO_EXCEPTION" not in out, out[-2000:]
-        assert "RAISED=RuntimeError" in out, out[-2000:]
+        # The worker's own class, so `except ValueError` around the loop works.
+        assert "RAISED=ValueError" in out, out[-2000:]
         assert "HAS_MESSAGE=True" in out, out[-2000:]
         assert "HAS_TRACEBACK=True" in out, out[-2000:]
         assert "HAS_VALUEERROR=True" in out, out[-2000:]
+        # The traceback is in the exception; the worker does not print it too.
+        assert "boom in worker" not in err, err[-2000:]
         # and nothing pretends the user pressed Ctrl-C
         assert "Caught SIGINT" not in err, err[-2000:]
 
@@ -603,7 +607,7 @@ if __name__ == "__main__":
             "was stuck.\n%s\n%s" % (r.returncode, out[-2000:], err[-4000:]))
         assert "STILL_ALIVE" in out, out[-2000:] + err[-2000:]
         assert "NO_EXCEPTION" not in out, out[-2000:]
-        assert "RAISED=RuntimeError" in out, out[-2000:]
+        assert "RAISED=ValueError" in out, out[-2000:]
         assert "HAS_MESSAGE=True" in out, out[-2000:]
 
 

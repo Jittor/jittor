@@ -227,9 +227,20 @@ struct UserError : JittorError {
     using JittorError::JittorError;
 };
 
+// An index outside the tensor, or more indices than it has dimensions.
+// Python sees IndexError, which is also what ends `for x in var`.
+struct UserIndexError : UserError {
+    using UserError::UserError;
+};
+
 struct InternalInvariantError : JittorError {
     using JittorError::JittorError;
 };
+
+// Throw `message` as an exception of the same kind as `like`. For the layers
+// that add context to an error on its way up: rethrowing it as a plain
+// std::runtime_error is what made every error reach Python as RuntimeError.
+[[noreturn]] void throw_same_kind(const std::exception& like, const string& message);
 
 template <class Error>
 struct LogErrorVoidify {
@@ -247,6 +258,16 @@ struct LogFatalVoidify {
         log.flush();
         if (g_supports_color) log.out << log.color_end;
         throw std::runtime_error(message_without_log_prefix(log.out.str()));
+    }
+};
+
+struct LogRethrowVoidify {
+    const std::exception& like;
+    inline void operator&&(Log& log) {
+        log.seal();
+        log.flush();
+        if (g_supports_color) log.out << log.color_end;
+        throw_same_kind(like, message_without_log_prefix(log.out.str()));
     }
 };
 
@@ -280,6 +301,9 @@ struct LogFatalVoidify {
 #define USER_CHECKop(a, op, b) \
     _TYPED_ERROR_TAIL(jittor::UserError, !((a) op (b)), \
         check_tail_op(#a, (a), #op, #b, (b)))
+#define USER_INDEX_CHECK(cond) \
+    _TYPED_ERROR_TAIL(jittor::UserIndexError, PREDICT_BRANCH_NOT_TAKEN(!(cond)), \
+        check_tail(#cond))
 
 // The framework reached a state its own implementation says is impossible.
 // This remains a distinct exception while the legacy call sites are migrated,
