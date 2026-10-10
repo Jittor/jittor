@@ -394,7 +394,7 @@ def run_cmd(cmd, cwd=None, err_msg=None, print_error=True, env=None):
         r = sp.run(cmd, shell=True, stdout=sp.PIPE, stderr=sp.STDOUT, env=env)
     try:
         s = r.stdout.decode('utf8')
-    except:
+    except UnicodeDecodeError:
         s = r.stdout.decode('gbk')
     if r.returncode != 0:
         if print_error:
@@ -636,7 +636,7 @@ def get_cpu_version():
                     if cpu_line.startswith("model name"):
                         v = cpu_line.split(':')[-1].strip()
                         break
-    except:
+    except OSError:
         pass
     return v
 
@@ -1153,7 +1153,7 @@ def env_or_try_find(name, bname):
 def try_find_exe(*args):
     try:
         return find_exe(*args)
-    except:
+    except RuntimeError:
         LOG.v(f"{args[0]} not found.")
         return ""
 
@@ -1382,7 +1382,8 @@ try:
     if os.name != 'nt':
         import resource
         resource.setrlimit(resource.RLIMIT_STACK, (2**29,-1))
-except:
+except (ValueError, OSError):
+    # A hard limit below the request; the default stack is used.
     pass
 
 if os.name == 'nt':

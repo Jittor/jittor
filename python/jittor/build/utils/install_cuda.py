@@ -94,7 +94,7 @@ def get_cuda_driver_win():
             return None
         v = driver_version.value
         return [v//1000, v%1000//10, v%10]
-    except:
+    except (OSError, AttributeError):
         return None
 
 def get_cuda_driver():
@@ -127,7 +127,7 @@ def _read_cuda_driver():
             .strip()
         out = [ int(s) for s in out.split('.')]
         return out
-    except:
+    except (IndexError, ValueError):
         return None
 
 def has_installation():

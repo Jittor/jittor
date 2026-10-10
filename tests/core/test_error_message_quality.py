@@ -272,6 +272,16 @@ class TestCreationRejectsAStringShape(unittest.TestCase):
         self.assertEqual(jt.ones(2, 3, "int32").dtype, "int32")
         self.assertEqual(list(jt.zeros((2, 3), "float64").shape), [2, 3])
 
+    def test_an_unknown_dtype_names_the_function_called(self):
+        """It used to be reported by the internal `unary()`, with its signature."""
+        for fn in (jt.ones, jt.zeros, jt.empty):
+            with self.subTest(fn=fn.__name__):
+                with self.assertRaises(TypeError) as caught:
+                    fn((2,), dtype="float99")
+                text = str(caught.exception)
+                self.assertTrue(text.startswith(fn.__name__ + "(): unknown dtype 'float99'"), text)
+                self.assertNotIn("unary", text)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -371,7 +371,27 @@ def _creation_shape(fn, shape, dtype):
         if isinstance(dim, str):
             raise TypeError(f"{fn}(): shape must be a sequence of ints, "
                             f"but found element of type str: {dim!r}")
+    if dtype.__class__ is str and dtype not in _KNOWN_DTYPE_STRINGS:
+        _check_dtype_string(fn, dtype)
     return shape, dtype
+
+
+#: dtype strings already accepted by the native converter. Only valid names
+#: are added, so it stays as small as the set of dtypes.
+_KNOWN_DTYPE_STRINGS = set()
+
+
+def _check_dtype_string(fn, dtype):
+    '''Name ``fn`` when ``dtype`` is not a dtype. Otherwise the error came from
+    the internal op the value is built with, ``unary()``, listing its C++
+    signature.'''
+    import jittor_utils
+    try:
+        _dtype_for_compute(dtype)
+    except jittor_utils.cc.JittorTypeError:
+        raise TypeError(f"{fn}(): unknown dtype {dtype!r}; expected a jittor "
+                        f"dtype such as 'float32', 'int64' or 'bool'") from None
+    _KNOWN_DTYPE_STRINGS.add(dtype)
 
 def ones(*shape, dtype="float32"):
     ''' Constructs a jittor Var with all elements set to 1.

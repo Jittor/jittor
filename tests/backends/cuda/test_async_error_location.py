@@ -33,6 +33,36 @@ def test_launch_history_survives_graph_release():
     assert "CUDA error at" not in result.stderr
 
 
+@pytest.mark.parametrize("access", ["getitem", "setitem"])
+def test_an_out_of_range_index_on_the_device_is_named_in_the_error(access):
+    """The kernel's report used to go to stdout only, beside a bare code=719."""
+    _require_cuda()
+    source = textwrap.dedent('''
+        import jittor as jt
+        with jt.runtime.scope(use_cuda=1):
+            x = jt.array([1.0, 2.0, 3.0])
+            index = jt.array([10])
+            try:
+                ACCESS
+            except RuntimeError as error:
+                report = str(error)
+                assert "index 10 is out of bounds for dimension 0 with size 3" in report, report
+                assert "Restart the process" in report, report
+                print("INDEX-NAMED-PASS", flush=True)
+            else:
+                raise AssertionError("the out-of-range index was never reported")
+    ''').replace("ACCESS", {
+        "getitem": "x[index].numpy()",
+        "setitem": "x[index] = jt.array([5.0]); x.numpy()",
+    }[access])
+    result = run_child_script(source, env={"JT_SYNC": "0"}, text=True, timeout=180,
+                              crash_isolated=True, name="device_index_" + access)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "INDEX-NAMED-PASS" in result.stdout
+    assert "[jittor] index" not in result.stdout
+    assert "Readback event cleanup failed" not in result.stderr
+
+
 @pytest.mark.parametrize("boundary", ["device_wait", "readback"])
 def test_asynchronous_fault_reports_creation_line(boundary):
     _require_cuda()

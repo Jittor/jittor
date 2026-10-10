@@ -1,6 +1,7 @@
 #include "runtime/backend.h"
 #include "runtime/backend_streams.h"
 #include "runtime/device_state.h"
+#include "ops/composite/index_bounds.h"
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
 #include <algorithm>
@@ -214,14 +215,21 @@ void* raw_allocate(int device, BackendMemoryKind kind, size_t size) {
                         ? (", device " + S(device) + " has " + S(device_free >> 20) +
                            " MiB free of " + S(device_total >> 20) + " MiB")
                         : (", and device " + S(device) + "'s free memory could not be read");
+                    // Freeing memory cannot help a request bigger than the
+                    // card, and advice about batch sizes sends the reader
+                    // after the wrong thing: it is usually a shape bug.
+                    string advice = info == cudaSuccess && size > device_total
+                        ? "This one allocation is larger than the whole device, "
+                          "so freeing memory will not help; check the shape of "
+                          "the operator that requested it."
+                        : "Another process may be holding the device; reduce the "
+                          "batch size, or set auto_flush_ops=0 to let the whole "
+                          "graph be scheduled at once, which frees intermediates "
+                          "earlier.";
                     throw std::runtime_error(
                         "out of memory on the accelerator: could not allocate " +
-                        S(size >> 20) + " MiB (" + S(size) + " bytes)" + where +
-                        ". CUDA said: " + cudaGetErrorString(error) +
-                        ". Another process may be holding the device; reduce the "
-                        "batch size, or set auto_flush_ops=0 to let the whole "
-                        "graph be scheduled at once, which frees intermediates "
-                        "earlier.");
+                        readable_bytes(size) + " (" + S(size) + " bytes)" + where +
+                        ". CUDA said: " + cudaGetErrorString(error) + ". " + advice);
                 }
                 LOGw << "Unable to alloc cuda device memory for size" << size
                      << ", falling back to cudaMallocManaged";
@@ -552,8 +560,10 @@ void copy(void* dst, Device target, const void* src, Device source, size_t size,
                 checkCudaErrors(cudaEventRecord(done, cudaStreamPerThread));
                 checkCudaErrors(cudaEventSynchronize(done));
             } catch (...) {
+                // A sticky error fails the cleanup too, and the exception
+                // being rethrown already says the context is gone.
                 const auto cleanup = cudaEventDestroy(done);
-                if (cleanup != cudaSuccess)
+                if (cleanup != cudaSuccess && !cuda_error_is_sticky(cleanup))
                     LOGe << "Readback event cleanup failed:" << cudaGetErrorString(cleanup);
                 throw;
             }
@@ -575,6 +585,31 @@ void copy(void* dst, Device target, const void* src, Device source, size_t size,
             checkCudaErrors(cudaMemcpy(dst, src, size, copy_kind(target, source)));
         }
     });
+}
+
+// Page-locked and mapped, so an indexing kernel can write it and the host can
+// still read it after the kernel has trapped (index_bounds.h). Portable,
+// because the faulting kernel may run on any device. Kept for the life of the
+// process.
+bool allocate_index_fault(IndexFault** host, IndexFault** device) {
+    void* host_ptr = nullptr;
+    auto error = cudaHostAlloc(&host_ptr, sizeof(IndexFault),
+                               cudaHostAllocMapped | cudaHostAllocPortable);
+    void* device_ptr = nullptr;
+    if (error == cudaSuccess) {
+        error = cudaHostGetDevicePointer(&device_ptr, host_ptr, 0);
+        if (error != cudaSuccess) cudaFreeHost(host_ptr);
+    }
+    if (error != cudaSuccess) {
+        cudaGetLastError();
+        LOGw << "Could not allocate the device index-fault record:"
+            << cudaGetErrorString(error) >> "; indexing kernels will print an"
+            << "out-of-range index to stdout instead of naming it in the error.";
+        return false;
+    }
+    *host = static_cast<IndexFault*>(host_ptr);
+    *device = static_cast<IndexFault*>(device_ptr);
+    return true;
 }
 } // namespace
 
@@ -613,6 +648,7 @@ BackendOps make_cuda_backend() {
     ops.host_callback = host_callback;
     ops.architectures = architectures;
     ops.check_nan = cuda_backend_check_nan;
+    set_device_index_fault_allocator(allocate_index_fault);
     return ops;
 }
 } // namespace jittor

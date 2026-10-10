@@ -700,8 +700,6 @@ class GraphReplay:
         try:
             jt.sync_all(True)
             jt.gc()
-        except Exception:
-            pass
         finally:
             jt.flags.keep_graph = before
 

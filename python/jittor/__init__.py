@@ -141,10 +141,7 @@ with _lock.lock_scope():
         numpy2cupy = None
         # CPU arrays default to the CUDA pinned-host allocator (cudaMallocHost),
         # which also fails with no device -- switch to the plain host allocator.
-        try:
-            core.flags.use_cuda_host_allocator = 0
-        except Exception:
-            pass
+        core.Flags().use_cuda_host_allocator = 0
 
 
 from ._core import api as _core_api

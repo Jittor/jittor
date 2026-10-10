@@ -784,8 +784,12 @@ void mark_python_number(VarHolder* holder) {
 }
 
 VarHolder* VarHolder::start_grad() {
-    if (!var->dtype().is_float() && !var->dtype().is_complex())
-        LOGw << "cannot enable grad of a non-float value:" << var;
+    if (!var->dtype().is_float() && !var->dtype().is_complex()) {
+        std::stringstream message;
+        message << "requires_grad has no effect on this " << var->dtype() << var->shape
+            << " Var: only floating-point and complex values have gradients.";
+        user_warning(message.str());
+    }
     bool no_grad_bk = no_grad;
     AutogradPolicyOverride policy_guard({});
     no_grad = 0;

@@ -102,13 +102,10 @@ def check_python_headers():
                 if token.startswith("-I") and len(token) > 2)
         except (OSError, subprocess.CalledProcessError):
             pass
-    try:
-        import sysconfig
-        include = sysconfig.get_paths().get("include")
-        if include:
-            includes.append(include)
-    except Exception:
-        pass
+    import sysconfig
+    include = sysconfig.get_paths().get("include")
+    if include:
+        includes.append(include)
     candidates = list(dict.fromkeys(path for path in includes if path))
     for path in candidates:
         if os.path.isfile(os.path.join(path, "Python.h")):

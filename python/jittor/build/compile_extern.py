@@ -374,7 +374,7 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
             try:
                 cublas_lt_lib_path = search_file(library_search_dirs, "libcublasLt.so", nvcc_version)
                 ctypes.CDLL(cublas_lt_lib_path, dlopen_flags)
-            except:
+            except (RuntimeError, OSError):
                 # some aarch64 os, such as uos with FT2000 cpu,
                 # it's cuda 10 doesn't have libcublasLt.so
                 pass
@@ -406,8 +406,8 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
             try:
                 cusparse_spmv_path = search_file(library_search_dirs, "libcusparse.so")
                 ctypes.CDLL(cusparse_spmv_path, dlopen_flags)
-            except:
-                LOG.w("Failed to load cusparse-specific shared libraries.")
+            except (RuntimeError, OSError) as error:
+                LOG.w(f"Failed to load cusparse-specific shared libraries: {error}")
 
     # find all source files
     culib_src_files = _cuda_library_sources(lib_name)

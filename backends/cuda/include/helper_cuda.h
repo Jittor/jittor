@@ -44,6 +44,24 @@ inline const char *_cudaGetErrorEnum(cudaError_t error) {
   return cudaGetErrorName(error);
 }
 
+// Whether `error` leaves the CUDA context unusable for the rest of the process.
+inline bool cuda_error_is_sticky(cudaError_t error) {
+  switch (error) {
+    case cudaErrorIllegalAddress:
+    case cudaErrorLaunchFailure:
+    case cudaErrorAssert:
+    case cudaErrorHardwareStackError:
+    case cudaErrorIllegalInstruction:
+    case cudaErrorMisalignedAddress:
+    case cudaErrorInvalidAddressSpace:
+    case cudaErrorInvalidPc:
+    case cudaErrorLaunchTimeout:
+      return true;
+    default:
+      return false;
+  }
+}
+
 // What a reader needs to know about `error` beyond its name, or "".
 inline const char *cuda_error_note(cudaError_t error) {
   switch (error) {
@@ -51,22 +69,18 @@ inline const char *cuda_error_note(cudaError_t error) {
     case cudaErrorLaunchFailure:
     case cudaErrorAssert:
       return "\nA kernel faulted. When it indexes a tensor, an out-of-range "
-             "index is the usual cause; Jittor's indexing kernels print the "
-             "offending index to stdout as `[jittor] index ... is out of bounds`."
+             "index is the usual cause; Jittor's indexing kernels name the "
+             "offending index above, or print it to stdout as "
+             "`[jittor] index ... is out of bounds` when more than one faulted."
              "\nThis error is sticky: the CUDA context of this process can no "
              "longer be used, and every later CUDA call fails with it. Restart "
              "the process.";
-    case cudaErrorHardwareStackError:
-    case cudaErrorIllegalInstruction:
-    case cudaErrorMisalignedAddress:
-    case cudaErrorInvalidAddressSpace:
-    case cudaErrorInvalidPc:
-    case cudaErrorLaunchTimeout:
-      return "\nThis error is sticky: the CUDA context of this process can no "
-             "longer be used, and every later CUDA call fails with it. Restart "
-             "the process.";
     default:
-      return "";
+      return cuda_error_is_sticky(error)
+          ? "\nThis error is sticky: the CUDA context of this process can no "
+            "longer be used, and every later CUDA call fails with it. Restart "
+            "the process."
+          : "";
   }
 }
 #endif
@@ -163,7 +177,8 @@ void check(T result, char const *const func, const char *const file,
     // DEVICE_RESET
     LOGf << "CUDA error at" << file >> ":" >> line << " code="
       >> static_cast<unsigned int>(result) >> "(" << _cudaGetErrorEnum(result) << ")"
-      << func >> cuda_error_note(result) << jittor::cuda_launch_error_context();
+      << func >> jittor::take_device_index_fault() >> cuda_error_note(result)
+      << jittor::cuda_launch_error_context();
   }
 }
 
@@ -207,7 +222,7 @@ inline void __getLastCudaError(const char *errorMessage, const char *file,
     // DEVICE_RESET
     LOGf << "CUDA error at" << file >> ":" >> line << " code="
       >> static_cast<unsigned int>(err) >> "(" << _cudaGetErrorEnum(err) << ")"
-      << errorMessage >> cuda_error_note(err);
+      << errorMessage >> jittor::take_device_index_fault() >> cuda_error_note(err);
   }
 }
 
@@ -223,7 +238,7 @@ inline void __printLastCudaError(const char *errorMessage, const char *file,
     // DEVICE_RESET
     LOGf << "CUDA error at" << file >> ":" >> line << " code="
       >> static_cast<unsigned int>(err) >> "(" << _cudaGetErrorEnum(err) << ")"
-      << errorMessage >> cuda_error_note(err);
+      << errorMessage >> jittor::take_device_index_fault() >> cuda_error_note(err);
   }
 }
 #endif

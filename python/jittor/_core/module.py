@@ -548,10 +548,7 @@ class Module:
         # propagate to every parameter leaf (recurse through sub-modules), matching
         # torch.nn.Module.requires_grad_.
         for p in self.parameters():
-            try:
-                p.requires_grad = requires_grad
-            except Exception:
-                pass
+            p.requires_grad = requires_grad
         return self
 
     #: Hook ids come from one counter, so a handle names exactly one hook even
@@ -1114,17 +1111,14 @@ Returns a handle that removes both halves.
         # parameters()/named_parameters() can no longer tell it's a buffer and it
         # leaks into the optimizer (then weight-decay corrupts e.g. rope inv_freq).
         # Name-based tracking survives any Var replacement -- the torch invariant.
-        try:
-            self.__dict__.setdefault("_buffer_names", set()).add(key)
-            non_persistent = self.__dict__.setdefault(
-                "_non_persistent_buffer_names", set()
-            )
-            if persistent:
-                non_persistent.discard(key)
-            else:
-                non_persistent.add(key)
-        except Exception:
-            pass
+        self.__dict__.setdefault("_buffer_names", set()).add(key)
+        non_persistent = self.__dict__.setdefault(
+            "_non_persistent_buffer_names", set()
+        )
+        if persistent:
+            non_persistent.discard(key)
+        else:
+            non_persistent.add(key)
         self.__dict__.setdefault("_parameter_names", set()).discard(key)
         self.__dict__.setdefault("_non_parameter_names", set()).discard(key)
         object.__setattr__(self, key, value)
