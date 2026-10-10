@@ -38,6 +38,8 @@ _TORCH_TARGET = "compat/tests/torch/test_torch_compiler_fidelity.py"
 #: because importing it means importing jittor, and this module is collected in
 #: Torch mode where that is the thing under test.
 _JIT_UTILS_UPDATED_EXIT_CODE = 3
+_JIT_UTILS_UPDATED_MESSAGE = (
+    "jit_utils was rebuilt and cannot be reloaded in this process")
 
 
 def _collect(targets, torch_mode=None, attempts=3):
@@ -61,7 +63,12 @@ def _collect(targets, torch_mode=None, attempts=3):
             ["-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider"]
             + list(targets),
             cwd=REPO_ROOT, env=environment, merge_stderr=True, timeout=None)
-        if completed.returncode != _JIT_UTILS_UPDATED_EXIT_CODE:
+        # Pytest turns SystemExit(3) raised while collecting a child test into
+        # its own collection-error exit code (2). In that case the stable
+        # Jittor diagnostic, rather than the outer process code, identifies
+        # the same retryable cache rebuild.
+        if (completed.returncode != _JIT_UTILS_UPDATED_EXIT_CODE
+                and _JIT_UTILS_UPDATED_MESSAGE not in completed.stdout):
             return completed
     raise AssertionError(
         "jit_utils reported a rebuild %d times in a row, so the cache never "
