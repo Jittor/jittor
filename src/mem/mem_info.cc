@@ -163,7 +163,7 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
             if (a->large_blocks.blocks.size()) {
                 size_t largest_block = 0;
                 auto block = a->large_blocks.blocks.rbegin()->second;
-                largest_block = a->large_blocks.blocks.rbegin()->first.first;
+                largest_block = std::get<0>(a->large_blocks.blocks.rbegin()->first);
                 // unused largest block
                 log << "ULB:" << FloatOutput{(double)largest_block, " KMG", 1024, "B"};
                 log << "ULBO:" << FloatOutput{(double)block->origin_size, " KMG", 1024, "B"};

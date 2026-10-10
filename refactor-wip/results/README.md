@@ -10,6 +10,7 @@
 
 ## 兼容性与功能验证
 
+- [2026-10-09 下游 P1：分配器并存上限、数值协议与 transpose 的运行时置换](2026-10-09-downstream-p1-allocator-protocol-transpose.md)
 - [2026-10-05 张量维度上限 10 → 32，及下游评测暴露的四项核心缺口](2026-10-05-high-rank-and-downstream-core-gaps.md)
 - [2026-09-13 远端合并后的 Ascend 增量修复与原生/独立 compat 复验](2026-09-13-ascend-merge-validation.md)
 - [2026-09-10 CPU float32 归约改为分块 + 成对折叠](2026-09-10-cpu-reduction-blocked-pairwise.md)

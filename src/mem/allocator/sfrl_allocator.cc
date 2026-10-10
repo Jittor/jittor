@@ -40,8 +40,8 @@ CachingBlockPool::~CachingBlockPool() {
     }
 }
 
-pair<size_t, size_t> CachingBlockPool::get_key(CachingBlock* block) {
-    return std::make_pair((size_t)block->size, (size_t)(block->origin_size * ID_LIMIT + block->id));
+CachingBlockPool::Key CachingBlockPool::get_key(CachingBlock* block) {
+    return Key((size_t)block->size, (size_t)block->origin_size, (size_t)block->id);
 }
 
 // TEMP DIAGNOSTIC (KI-EXEC-007): gate for the per-id event log below.
@@ -59,7 +59,8 @@ size_t BlockIdSpace::new_block_id() {
         if (PREDICT_BRANCH_NOT_TAKEN(ki007_trace_on())) note(id, "reissued", 0);
         return id;
     }
-    ASSERT(tot_block_id < ID_LIMIT - 1) << "block id limit extended.";
+    ASSERT(tot_block_id < ID_LIMIT - 1) << "block id limit extended:" << tot_block_id
+        << "allocations live at once in one allocator.";
     if (PREDICT_BRANCH_NOT_TAKEN(ki007_trace_on())) note(tot_block_id+1, "fresh_id", 0);
     return ++tot_block_id;
 }

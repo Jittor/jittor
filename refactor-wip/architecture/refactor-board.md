@@ -1,5 +1,7 @@
 # 整改看板
 
+2026-10-09 下游 P1（未提交，基线`6a850ea5`，未能同步远端）：[分配器、数值协议与 transpose](../results/2026-10-09-downstream-p1-allocator-protocol-transpose.md)。SFRL 并存分配上限 2^21→2^40（池键改三元组），`Var.__complex__`，`Var @` 按 torch 合同转换/回退，transpose 置换移出 JIT key，CpuParallelPass 工作量估计修正（兄弟循环相加）。30 比特 1024 次采样通过；6 比特 DMCircuit 热身后 11 ms、零新编译。oneDNN 已加载时的 relay/mkl_ops 既有失败未处理。
+
 2026-10-05 下游评测核心缺口（未提交，基线`316e1fe7`，未能同步远端）：[维度上限与四项缺口](../results/2026-10-05-high-rank-and-downstream-core-gaps.md)。张量维度上限 10→32（NanoVector 溢出堆存储、JIT key 维度编码、32 位掩码、StackVector、nvcc 深层循环编译时间），复数 `norm`/`maximum`，二元数字协议返回 `NotImplemented`，CuPy 奇异矩阵与 CPU 一致报错，无 cmake 时 oneDNN 不可用即回退。CPU 与 RTX 4090 实机通过；`Var @ obj` 回退、ROCm/NPU 未做。
 
 2026-09-13 当前本地合并复验：[新基线增量修复与验证](../results/2026-09-13-ascend-merge-validation.md)。远端`cb823778`已合并到本地工作树，未提交、未推送；原生选择集231通过/2项既有FlashAttention类跳过，233项全部处理；独立compat+定向OpInfo65通过/0跳过。两轮使用同一补丁且源码未变，选择集含CPU共享案例；ACL结构定向274通过，完整结构修后1358通过/4跳过，严格注册30项实际执行通过，KI-TEST004已关闭；当前注册函数及参数化与远端一致，没有删除案例。全库OpInfo和新基线性能复测未完成，不覆盖下方历史结果。

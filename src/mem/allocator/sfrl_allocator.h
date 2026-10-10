@@ -8,6 +8,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
+#include <tuple>
 #include <mutex>
 #include <thread>
 #include <unordered_map>
@@ -52,7 +53,16 @@ struct CachingBlock {
 struct BlockIdSpace {
     // Ids start at 1: slot 0 is never a live allocation, so a zero
     // `allocation` handle is always a caller error rather than a hit.
-    static const size_t ID_LIMIT = 1 << 21;
+    //
+    // Ids are recycled, so this bounds the allocations live *at once*, not
+    // the allocations ever made. It used to be 1 << 21 because the pool key
+    // packed `origin_size * ID_LIMIT + id` into one word; a lazily built graph
+    // can legitimately hold more than two million small buffers at its peak
+    // (1024 tensor-network samples of a 30-qubit circuit hold about eight
+    // million, ~28 GB), and the run then failed with the process's allocator
+    // left unusable. With the key a tuple the limit only guards against a
+    // corrupted counter; memory runs out long before it.
+    static const size_t ID_LIMIT = size_t(1) << 40;
     // One lock per id space, always taken *inside* the owning allocator's
     // lock and never the other way round.
     std::mutex mutex;
@@ -78,14 +88,17 @@ struct BlockIdSpace {
 };
 
 struct CachingBlockPool {
-    std::map<pair<size_t,size_t>, CachingBlock*> blocks;
+    // (size, origin_size, id): ordered by size first, so lower_bound on a
+    // size finds the smallest block that fits.
+    typedef std::tuple<size_t, size_t, size_t> Key;
+    std::map<Key, CachingBlock*> blocks;
     // The id space of the allocator that owns this pool. Both of an
     // allocator's pools (small and large) share one space, because `free`
     // only gets an id and has to find the block in either.
     BlockIdSpace* ids = nullptr;
     static const size_t ID_LIMIT = BlockIdSpace::ID_LIMIT;
 
-    pair<size_t,size_t> get_key(CachingBlock* block);
+    Key get_key(CachingBlock* block);
 
     CachingBlockPool();
     ~CachingBlockPool();

@@ -19,6 +19,9 @@ class Reflected:
     def __rmul__(self, other):
         return ("rmul", other)
 
+    def __rmatmul__(self, other):
+        return ("rmatmul", other)
+
     def __radd__(self, other):
         return ("radd", other)
 
@@ -35,6 +38,26 @@ class TestReflectedOperands(JittorTestCase):
         self.assertEqual((x - other)[0], "rsub")
         self.assertIs((x * other)[1], x)
 
+    def test_matmul_follows_torch_operand_contract(self):
+        # Var @ ndarray converts the array (a Var, as torch gives a Tensor),
+        # ndarray @ Var is a TypeError (as for a torch Tensor), and any other
+        # operand reaches its own __rmatmul__ -- never an AttributeError from
+        # inside matmul.
+        x = jt.array(np.eye(2, dtype="float32"))
+        array = np.arange(4, dtype="float32").reshape(2, 2)
+        product = x @ array
+        self.assertIsInstance(product, jt.Var)
+        np.testing.assert_allclose(product.numpy(), array)
+        with self.assertRaises(TypeError):
+            array @ x
+        self.assertEqual((x @ Reflected())[0], "rmatmul")
+        with self.assertRaises(TypeError):
+            x @ object()
+        np.testing.assert_allclose((x @ x).numpy(), np.eye(2))
+        y = jt.array(np.eye(2, dtype="float32"))
+        y @= array
+        np.testing.assert_allclose(y.numpy(), array)
+
     def test_unknown_operand_without_reflection_is_a_type_error(self):
         with self.assertRaises(TypeError):
             jt.ones(2) * object()
@@ -46,6 +69,22 @@ class TestReflectedOperands(JittorTestCase):
         np.testing.assert_allclose((x * 2).numpy(), [2.0, 4.0])
         np.testing.assert_allclose((3 * x).numpy(), [3.0, 6.0])
         np.testing.assert_allclose((x + [1.0, 1.0]).numpy(), [2.0, 3.0])
+
+
+class TestComplexConversion(JittorTestCase):
+    def test_zero_dim_complex_var_converts_like_a_python_complex(self):
+        # complex(v) used to fall back to __float__, and NumPy builds an array
+        # from a list of 0-d Vars through that same call.
+        for dtype in ("complex64", "complex128"):
+            with self.subTest(dtype=dtype):
+                v = jt.array(np.array(1.5 - 2j, dtype))
+                w = jt.array(np.array(-0.5 + 4j, dtype))
+                self.assertEqual(complex(v), 1.5 - 2j)
+                np.testing.assert_array_equal(np.asarray([v, w]), [1.5 - 2j, -0.5 + 4j])
+                np.testing.assert_array_equal(np.real([v, w]), [1.5, -0.5])
+        self.assertEqual(complex(jt.array(2.5)), 2.5 + 0j)
+        with self.assertRaises(TypeError):
+            float(jt.array(np.array(1j, "complex64")))
 
 
 class TestComplexNormAndOrder(JittorTestCase):

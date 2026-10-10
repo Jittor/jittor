@@ -7,7 +7,7 @@ from jittor._core.dtypes import is_dtype as _is_dtype
 import functools as _functools
 import numbers
 from collections.abc import Sequence
-from builtins import bool as ori_bool, float as ori_float, int as ori_int
+from builtins import bool as ori_bool, complex as ori_complex, float as ori_float, int as ori_int
 
 import numpy as np
 import jittor_core as core
@@ -1593,6 +1593,12 @@ def to_int(v):
 def to_float(v):
     return ori_float(v.item())
 
+def to_complex(v):
+    # Without this `complex(v)` fell back to __float__, which rejects a
+    # complex value -- and NumPy builds an array from a list of 0-d complex
+    # Vars through exactly that call.
+    return ori_complex(v.item())
+
 def to_bool(v):
     if not (v.dtype.is_int() or v.dtype.is_bool()):
         raise TypeError("bool conversion requires an integer or boolean Var")
@@ -1601,6 +1607,8 @@ def to_bool(v):
 Var.__int__ = to_int
 
 Var.__float__ = to_float
+
+Var.__complex__ = to_complex
 
 Var.__bool__ = to_bool
 
