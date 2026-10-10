@@ -661,3 +661,7 @@ worker comparator job 2139 使用 compare-only key `adapter-world2-resume-audit-
 候选实际使用 shim/ACL、HCCL world size 1、`backend_fallback=error`，起始与结束 fallback 计数均为 0；observer 记录的参数、计算输入、梯度和 optimizer 张量均在 `npu:0`。但两侧 `devices.json` 都缺少三步 `forward-output` 设备事件，尽管另有三份前向值快照，因此输出的物理设备证据不完整。当前只确认公开构造/CLI 三步训练执行完成；DoRA 的 L1 设备门禁未通过审计，L2 数值对拍失败，完整恢复 L3 未运行，公开端到端 L4 不通过，L5 未运行。PEFT DoRA 属于单独互操作面，不代表 ms-swift 自有 LoRA 或整个 ms-swift 的状态变化。
 
 原始日志、插件、比较器及快照未版本化，位于 `$TASK_STATE/runs/dora-world1-public-audit-20261010-r5/`；复查需先修正前向设备 hook，再用新运行键按 oracle-first 隔离复现反向差异。候选 JIT 首次编译后正常完成，不需为启动问题重跑 r1–r5。
+
+DoRA 反向路径诊断（2026-10-10）：运行键 `dora-gradient-path-audit-20261010-r4` 的 worker 比较显示，四个 q/v 投影的输入和完整模块输出在两侧逐位一致，输出 cotangent 相对 L2 差低于 `3e-7`；当时看到的投影参数梯度差集中在 v_proj。随后 `dora-shape-gradient-probe-20261010-r2`（job 2297）在 `[1,22,64]` 输入上先跑原生 torch_npu，再跑严格 ACL，按 PEFT 0.17.1 `DoraLinearLayer` 公式重算四个投影。两侧各 52 个公式张量设备记录均为 `npu:0`；候选 `backend_fallback=error`，完整公式运行 fallback 计数为 0。worker 比较 job 2299 与 2300 只读取快照：两侧重算输出均与 R4 实际 q/v 模块输出逐位相同，重算的 B 与 magnitude 梯度两侧也逐位相同。
+
+这还没有定位原始 L2 偏差。R4 的梯度快照由 `on_pre_optimizer_step` 记录；该回调在 Transformers Trainer 的 `max_grad_norm=1.0` 全局裁剪之后执行。因而将独立公式的未裁剪梯度直接与 R4 快照比较不能作为反向根因证据。下一步需在新运行键中记录裁剪前梯度及实际裁剪系数，再用同一公开训练步比较；此前“偏差来自投影层反向算子”的推断撤回。R1/job 2296 候选路径映射错误、R2 配套比较 job 2298 数组路径错误均在模型/公式计算前失败并原样保留；它们没有改变 DoRA 的失败判定。原始产物未版本化，位于 `$TASK_STATE/runs/dora-gradient-path-audit-20261010-r4/`、`$TASK_STATE/runs/dora-shape-gradient-probe-20261010-r1/`、`...-r2/`、`$TASK_STATE/runs/dora-shape-gradient-compare-20261010-r1/` 与 `...-r2/`。
