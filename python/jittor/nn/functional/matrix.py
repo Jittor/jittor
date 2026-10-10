@@ -206,7 +206,8 @@ def _mkl_batched_matmul(a, b, trans_a=False, trans_b=False):
     return get_library_ops("mkl").mkl_batched_matmul(a, b, trans_a, trans_b)
 
 
-def _check_matmul_shapes(a, b, trans_a=False, trans_b=False, op="matmul"):
+def _check_matmul_shapes(a, b, trans_a=False, trans_b=False, op="matmul",
+                         names=("a", "b")):
     """Reject a product the two shapes cannot form, and say which dims disagree.
 
     This is the operand boundary of every matrix product in the frontend, so it
@@ -233,21 +234,22 @@ def _check_matmul_shapes(a, b, trans_a=False, trans_b=False, op="matmul"):
     # model. It is now inlined into the two error paths; the text is unchanged.
     a_ndim = a.ndim
     b_ndim = b.ndim
+    a_name, b_name = names
     if a_ndim == 0 or b_ndim == 0:
         raise RuntimeError(
-            "%s: both operands need at least 1 dim, but got a:%s%s (%d-D) and "
-            "b:%s%s (%d-D)" % (op, a.dtype, list(a.shape), a_ndim,
-                               b.dtype, list(b.shape), b_ndim))
+            "%s: both operands need at least 1 dim, but got %s:%s%s (%d-D) and "
+            "%s:%s%s (%d-D)" % (op, a_name, a.dtype, list(a.shape), a_ndim,
+                                b_name, b.dtype, list(b.shape), b_ndim))
     a_axis = 0 if a_ndim == 1 else (-2 if trans_a else -1)
     b_axis = 0 if b_ndim == 1 else (-1 if trans_b else -2)
     inner_a = a.shape[a_axis]
     inner_b = b.shape[b_axis]
     if inner_a != inner_b:
         raise RuntimeError(
-            "%s: shapes cannot be multiplied, a:%s%s and b:%s%s: dim %d of a is "
-            "%d but dim %d of b is %d, and the two contracted dims must be equal"
-            % (op, a.dtype, list(a.shape), b.dtype, list(b.shape),
-               a_axis, inner_a, b_axis, inner_b))
+            "%s: shapes cannot be multiplied, %s:%s%s and %s:%s%s: dim %d of %s is "
+            "%d but dim %d of %s is %d, and the two contracted dims must be equal"
+            % (op, a_name, a.dtype, list(a.shape), b_name, b.dtype, list(b.shape),
+               a_axis, a_name, inner_a, b_axis, b_name, inner_b))
     # `shape[:-2]` is empty as soon as either operand has 2 dims or fewer, so
     # the loop below cannot run then -- but it still built two slices, two
     # reversed views, a zip and an enumerate to discover that, on every matrix
@@ -258,17 +260,20 @@ def _check_matmul_shapes(a, b, trans_a=False, trans_b=False, op="matmul"):
             zip(reversed(a.shape[:-2]), reversed(b.shape[:-2]))):
         if left != right and left != 1 and right != 1:
             raise RuntimeError(
-                "%s: batch dims do not broadcast, a:%s%s and b:%s%s: dim %d is "
-                "%d in a and %d in b, which must be equal or 1 in one of them"
-                % (op, a.dtype, list(a.shape), b.dtype, list(b.shape),
-                   -3 - offset, left, right))
+                "%s: batch dims do not broadcast, %s:%s%s and %s:%s%s: dim %d is "
+                "%d in %s and %d in %s, which must be equal or 1 in one of them"
+                % (op, a_name, a.dtype, list(a.shape), b_name, b.dtype, list(b.shape),
+                   -3 - offset, left, a_name, right, b_name))
 
 
-def matmul_transpose(a, b):
+def matmul_transpose(a, b, *, _op="matmul_transpose", _names=("a", "b")):
     """
     returns a * b^T
+
+    ``_op`` and ``_names`` name the call and operands in a shape error, for a
+    caller that is not itself spelled ``matmul_transpose(a, b)`` -- ``linear``.
     """
-    _check_matmul_shapes(a, b, trans_b=True, op="matmul_transpose")
+    _check_matmul_shapes(a, b, trans_b=True, op=_op, names=_names)
     if b.ndim > 2:
         # Preserve batch axes and let the shared matmul route broadcast them.
         axes = list(range(b.ndim))

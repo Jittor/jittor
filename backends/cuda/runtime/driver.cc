@@ -163,14 +163,37 @@ void on_device_void(int device, Func&& func) {
     on_device(device, [&] { func(); return 0; });
 }
 
+static string readable_bytes(size_t size) {
+    const char* units[] = {"bytes", "KiB", "MiB", "GiB", "TiB", "PiB"};
+    double value = (double)size;
+    int unit = 0;
+    while (value >= 1024 && unit < 5) { value /= 1024; unit++; }
+    std::ostringstream out;
+    out.precision(unit ? 1 : 0);
+    out << std::fixed << value << ' ' << units[unit];
+    return out.str();
+}
+
 void* raw_allocate(int device, BackendMemoryKind kind, size_t size) {
     if (!size) return nullptr;
     return on_device(device, [&]() -> void* {
         void* ptr = nullptr;
-        if (kind == BackendMemoryKind::Pinned) {
-            checkCudaErrors(cudaMallocHost(&ptr, size));
-        } else if (kind == BackendMemoryKind::Managed) {
-            checkCudaErrors(cudaMallocManaged(&ptr, size));
+        if (kind == BackendMemoryKind::Pinned || kind == BackendMemoryKind::Managed) {
+            bool pinned = kind == BackendMemoryKind::Pinned;
+            auto error = pinned ? cudaMallocHost(&ptr, size) : cudaMallocManaged(&ptr, size);
+            if (error == cudaErrorMemoryAllocation) {
+                // Not the generic CUDA error report: "code=2(cudaErrorMemoryAllocation)
+                // cudaMallocHost" does not say how much was asked for, and the
+                // launch history it appends has nothing to do with an allocation.
+                cudaGetLastError();
+                throw std::runtime_error(
+                    "out of memory: could not allocate " + readable_bytes(size) + " (" +
+                    S(size) + " bytes) of " +
+                    (pinned ? "page-locked host memory" : "CUDA managed memory") +
+                    ". CUDA said: " + cudaGetErrorString(error) + ".");
+            }
+            check(error, pinned ? "cudaMallocHost(&ptr, size)" : "cudaMallocManaged(&ptr, size)",
+                  __FILE__, __LINE__);
         } else {
             auto error = cudaMalloc(&ptr, size);
             if (error != cudaSuccess) {

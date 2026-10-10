@@ -290,8 +290,9 @@ torch.fft.fft2(x2); torch.fft.fftn(x, dim=(-2,-1))   # norm='backward'|'forward'
 
 算子失败会给出真实原因（算子类型、输入形状/dtype、`[Reason]`），而不是旧的
 "Wrong inputs arguments / help(jt.sync)" 噪声。不支持的 dtype（例如昇腾上的 float64）
-抛出干净的 Python 异常而不是直接中止。异步算子失败时设 `JT_TRACE_PY_VAR=3` 记录算子的
-创建位置；错误来自加速器 kernel 时再加 `JT_SYNC_RUN=1`。（`JT_SYNC` 是编译期宏，改它会重编核心。）
+抛出干净的 Python 异常而不是直接中止。惰性执行的算子失败时，报告默认给出创建它的那一行；
+要完整的创建栈设 `JT_TRACE_PY_VAR=3`，错误来自加速器 kernel 时再加 `JT_SYNC_RUN=1`。
+（`JT_SYNC` 是编译期宏，改它会重编核心。）
 
 ## torch API 覆盖（对真实 PyTorch 验证）
 

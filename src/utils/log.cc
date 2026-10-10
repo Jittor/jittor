@@ -367,6 +367,14 @@ string& get_thread_name() {
     return thread_name;
 }
 
+static std::atomic<UserWarningHook> user_warning_hook{nullptr};
+void set_user_warning_hook(UserWarningHook hook) { user_warning_hook.store(hook); }
+void user_warning(const string& message) {
+    auto hook = user_warning_hook.load();
+    if (hook && hook(message)) return;
+    LOGw << message;
+}
+
 #ifdef _WIN32
 void handle_signal(int signal) {
     std::cerr << "Caught SIGNAL " << signal << ", quick exit";
@@ -897,18 +905,44 @@ static string strip_ansi_escapes(const string& text) {
     return out;
 }
 
+template <class Error>
+struct ExecutedError : Error, OperatorExecutionError {
+    using Error::Error;
+};
+
+template <class Error>
+[[noreturn]] static void throw_kind(const string& message, bool executed) {
+    if (executed) throw ExecutedError<Error>(message);
+    throw Error(message);
+}
+
+void throw_same_kind(const std::exception& like, const string& message, bool executed) {
+    // Most derived first.
+    if (dynamic_cast<const UserIndexError*>(&like)) throw_kind<UserIndexError>(message, executed);
+    if (dynamic_cast<const UserError*>(&like)) throw_kind<UserError>(message, executed);
+    if (dynamic_cast<const InternalInvariantError*>(&like))
+        throw_kind<InternalInvariantError>(message, executed);
+    throw_kind<std::runtime_error>(message, executed);
+}
+
+string user_error_message(const string& line, size_t body_start, const string& tail,
+                          const char* fileline) {
+    auto body = strip_ansi_escapes(line.substr(std::min(body_start, line.size())));
+    size_t begin = body.find_first_not_of(" \n");
+    if (begin == string::npos)
+        return message_without_log_prefix(line + tail);
+    size_t end = body.find_last_not_of(" \n");
+    body = body.substr(begin, end - begin + 1);
+    string where = string(" (") + fileline + ")";
+    if (log_v > 0) where += tail;
+    auto first_line_end = body.find('\n');
+    if (first_line_end == string::npos) return body + where;
+    return body.substr(0, first_line_end) + where + body.substr(first_line_end);
+}
+
 // See the declaration in log.h for why an exception must not carry the log
 // line's prefix. Two steps, in this order: the colour escapes wrap the prefix,
 // so they have to go first for the prefix to be recognisable.
-void throw_same_kind(const std::exception& like, const string& message) {
-    // Most derived first.
-    if (dynamic_cast<const UserIndexError*>(&like)) throw UserIndexError(message);
-    if (dynamic_cast<const UserError*>(&like)) throw UserError(message);
-    if (dynamic_cast<const InternalInvariantError*>(&like))
-        throw InternalInvariantError(message);
-    throw std::runtime_error(message);
-}
-
 string message_without_log_prefix(const string& message) {
     auto text = strip_ansi_escapes(message);
     // `[f 0911 00:12:17.212067 84 binary_op.cc:426] rest` -> `binary_op.cc:426: rest`

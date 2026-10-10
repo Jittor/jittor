@@ -49,7 +49,8 @@ void setter_use_cuda(const int& old_value, const int& requested) {
 #ifdef HAS_ACCELERATOR
     if (value) {
         if (backend_ops(accelerator_backend_id()).device_count() == 0) {
-            LOGw << "No CUDA device available; falling back to CPU (use_cuda=0).";
+            user_warning("use_cuda=1 was requested, but no CUDA device is "
+                         "available; running on the CPU (use_cuda=0).");
             value = 0;
         } else {
             LOGi << "CUDA enabled.";

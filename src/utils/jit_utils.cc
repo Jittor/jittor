@@ -23,34 +23,16 @@
 
 namespace jittor {
 
+// An operator failed while executing: report it as thrown, rerun advice
+// included (exec_runner.cc check_op_async_error), and never as bad arguments
+// to the call that triggered execution. Decided by type: looking for
+// "exec_runner.cc:" in the text changed behaviour whenever a file was renamed
+// or a message reworded.
 bool check_async_executor_error(const std::exception& e, std::ostream& os) {
-    if (!e.what()) return false;
-    auto s = string(e.what());
-    if (s.find("[Recent launch candidates]") != string::npos) {
-        os << s;
-        return true;
-    }
-    if (s.find("executor.cc:") == string::npos && s.find("exec_runner.cc:") == string::npos)
+    if (!dynamic_cast<const OperatorExecutionError*>(&e) &&
+        !strstr(e.what(), "[Recent launch candidates]"))
         return false;
-    os << s;
-    // Only when the report could not name the line that built the operator:
-    // with JT_TRACE_PY_VAR set it already did, and there is nothing to add.
-    if (s.find("[Async Backtrace]: unavailable") == string::npos)
-        return true;
-    // Not JT_SYNC: that is a build macro (compiler.py JT_CONFIG_MACROS), and
-    // changing it rebuilds the core.
-    os << "\n**********\n"
-        "Jittor runs operators lazily, so the traceback above points at the line "
-        "that needed the result, not the line that created the failing operator. "
-        "To record where operators are created, rerun with:\n"
-        #ifdef _WIN32
-        ">>> set JT_TRACE_PY_VAR=3          (cmd)\n"
-        ">>> $env:JT_TRACE_PY_VAR=3         (powershell)\n"
-        #else
-        ">>> export JT_TRACE_PY_VAR=3\n"
-        #endif
-        "If the error came from an accelerator kernel, also set JT_SYNC_RUN=1 so "
-        "that each operator is waited for before the next one starts.\n";
+    os << e.what();
     return true;
 }
 

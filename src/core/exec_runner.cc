@@ -105,8 +105,33 @@ static string describe_vars(const vector<Var*>& vars) {
     return out.size() ? out : "(none)";
 }
 
+// The Python lines that built the operator, from the origin every op records
+// at construction (`Op::launch_origin`, no tracing needed). A fused op names
+// each distinct line of its members: which member failed is not known here.
+static string creation_sites(Op* op, bool is_fused_op) {
+    vector<uint64> origins;
+    if (is_fused_op) {
+        for (auto* sub : ((FusedOp*)op)->ops)
+            if (std::find(origins.begin(), origins.end(), sub->launch_origin) == origins.end())
+                origins.push_back(sub->launch_origin);
+    } else {
+        origins.push_back(op->launch_origin);
+    }
+    string out;
+    int shown = 0;
+    for (auto id : origins) {
+        LaunchOrigin where;
+        if (!id || !runtime_launch_history().origin(id, where)) continue;
+        if (shown == 4) { out += ", ..."; break; }
+        if (out.size()) out += ", ";
+        out += string(where.file) + ":" + S(where.line);
+        shown++;
+    }
+    return out;
+}
+
 void check_op_async_error(Op* op, bool is_fused_op, const std::exception& e,
-                          jittor::Log& logf, const string& jit_src_path) {
+                          const string& jit_src_path) {
     vector<Stack> stack;
     string op_name;
     vector<Var*> ins, outs;
@@ -129,33 +154,53 @@ void check_op_async_error(Op* op, bool is_fused_op, const std::exception& e,
     }
     if (outs.size()) stack = get_node_trace(outs.back());
 
-    logf >> "\n" >> message_without_log_prefix(string(e.what())) >> "\n";
+    // No log-line prefix: the first line is the reason, so that it is what a
+    // Python traceback ends with.
+    std::ostringstream report;
+    report << message_without_log_prefix(string(e.what())) << "\n";
 
     // The Python frames are the second thing a reader wants and the only part
-    // that names their own code.
+    // that names their own code: the traceback points at the line that needed
+    // the result, not the one that built the operator.
+    string sites = stack.size() ? "" : creation_sites(op, is_fused_op);
     if (stack.size()) {
-        logf >> "\n[Async Backtrace]: ---";
+        report << "\n[Async Backtrace]: ---";
         for (auto& s : stack) {
-            logf << "\n    " << s.file_path >> ":" >> s.lineno;
-            if (s.module_type.size()) logf << '<' >> s.module_type >> '>';
+            report << "\n    " << s.file_path << ":" << s.lineno;
+            if (s.module_type.size()) report << " <" << s.module_type << '>';
             if (s.module_name.size() && s.module_name.find(":") == string::npos)
-                logf << '[' >> s.module_name >> ']';
+                report << " [" << s.module_name << ']';
         }
-        logf >> "\n";
+        report << "\n";
+    } else if (sites.size()) {
+        report << "\nThe failing operator was created at: " << sites << "\n";
     } else {
-        // No instruction here. `jit_utils.cc` prints one banner saying how to
-        // get the backtrace; saying it twice was how this message used to end.
-        logf >> "\n[Async Backtrace]: unavailable\n";
+        report << "\n[Async Backtrace]: unavailable\n";
     }
 
-    logf >> "\nop: " >> op_name;
-    logf >> "\n  in:  " >> describe_vars(ins);
-    logf >> "\n  out: " >> describe_vars(outs);
-    // Last, because it is a ~260-character cache filename and it is where to
-    // look next rather than what happened.
-    if (jit_src_path.size()) logf >> "\n  jit source: " >> jit_src_path;
-    logf >> "\n";
-    jittor::LogRethrowVoidify{e} && logf;
+    report << "\nop: " << op_name;
+    report << "\n  in:  " << describe_vars(ins);
+    report << "\n  out: " << describe_vars(outs);
+    // A ~260-character cache filename: where a framework developer looks
+    // next, not what happened.
+    if (jit_src_path.size() && V_ON(1)) report << "\n  jit source: " << jit_src_path;
+    report << "\n";
+    if (!stack.size() && !sites.size()) {
+        // Not JT_SYNC: that is a build macro (compiler.py JT_CONFIG_MACROS),
+        // and changing it rebuilds the core.
+        report << "\nJittor runs operators lazily, so the traceback above points at the line "
+            "that needed the result, not the line that created the failing operator. "
+            "To record where operators are created, rerun with:\n"
+            #ifdef _WIN32
+            ">>> set JT_TRACE_PY_VAR=3          (cmd)\n"
+            ">>> $env:JT_TRACE_PY_VAR=3         (powershell)\n"
+            #else
+            ">>> export JT_TRACE_PY_VAR=3\n"
+            #endif
+            "If the error came from an accelerator kernel, also set JT_SYNC_RUN=1 so "
+            "that each operator is waited for before the next one starts.\n";
+    }
+    throw_same_kind(e, report.str(), /*executed=*/true);
 }
 
 
@@ -1094,16 +1139,13 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
             // first exception and whatever key it produced instead of running
             // the failing, potentially stateful preparation a second time.
             if (prepared_jit_key.empty()) prepared_jit_key = jkl.to_string();
-            jittor::Log logf(__FILELINE__, 'f', 0);
-            logf << "\nExecute fused operator(" >> rid >> '/' >> queue.size() >> ")"
-                << "failed.";
             string jit_src_path;
             if (prepared_jit_key.size()) {
                 auto candidate = Op::get_filename_from_jit_key(
                     prepared_jit_key, ".cc");
                 if (jit_compiler::file_exist(candidate)) jit_src_path = candidate;
             }
-            check_op_async_error(op, is_fused_op, e, logf, jit_src_path);
+            check_op_async_error(op, is_fused_op, e, jit_src_path);
         }
     }
     if (on_worker) {

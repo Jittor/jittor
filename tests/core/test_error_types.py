@@ -47,7 +47,24 @@ class TestErrorClasses(unittest.TestCase):
         source = jt.array(np.arange(3, dtype="float32"))
         error = self._raised(lambda: source[jt.array([10])].numpy())
         self.assertIsInstance(error, jt.JittorIndexError)
-        self.assertIn("Execute fused operator", str(error))
+        self.assertIn("op: getitem", str(error))
+
+    def test_an_executor_failure_triggered_by_argument_conversion(self):
+        """Reported as the operator's failure, not as bad arguments.
+
+        Assigning a Var to `.data` reads it while converting the argument,
+        before any overload has matched. The binding used to tell the two
+        apart by looking for "exec_runner.cc:" in the text.
+        """
+        source = jt.array(np.arange(3, dtype="int32"))
+        target = jt.zeros(1, dtype="int32")
+
+        def assign():
+            target.data = source[jt.array([10])]
+
+        error = self._raised(assign)
+        self.assertIsInstance(error, jt.JittorIndexError)
+        self.assertNotIn("match none of its signatures", str(error))
 
     def test_setitem_with_an_index_out_of_range(self):
         def assign():
