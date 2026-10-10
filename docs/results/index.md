@@ -23,6 +23,7 @@
 2026-09-23-vllm-singlecard-extended-acceptance
 2026-09-24-vllm-metadata-performance
 2026-09-27-vllm-multigpu
+2026-10-10-vllm-cudagraph-shape-switch
 ```
 
 ## 按主题索引
@@ -39,3 +40,4 @@
 | [vLLM 单卡扩展验收](2026-09-23-vllm-singlecard-extended-acceptance.md) | 两模型回归、质量与 HTTP 通过；严格批次一致性和高级模式仍有边界 | 2026-09-23 |
 | [vLLM 元数据查询优化](2026-09-24-vllm-metadata-performance.md) | 逐项减少重复配置查询；验证范围和计时限制见报告 | 2026-09-24 |
 | [vLLM 双卡验证](2026-09-27-vllm-multigpu.md) | CPU/GPU 通信通过；模型验收进展与配置边界见报告 | 2026-09-27 |
+| [vLLM CUDA Graph 形状切换修复](2026-10-10-vllm-cudagraph-shape-switch.md) | TP1 下 batch 1/4 双向切换通过 64-token 对拍；其他配置待验证 | 2026-10-10 |

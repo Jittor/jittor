@@ -192,6 +192,33 @@ def _torch_setitem(self, slices, value):
                 value = value.squeeze(0)
     except _owner.EXPECTED as exc:
         _owner.swallowed("torch/installers/tensor.py _torch_setitem: mask = slices", exc)
+    # vLLM's graph input and output buffers use ordinary Torch slice writes.
+    # Native setitem builds a fresh Var and rebinds the base, invalidating raw
+    # addresses already recorded in an earlier CUDA graph. For an inference
+    # buffer's dense basic slice, write the same values into its existing
+    # storage. Keep the graph-aware native route for training/strided indexing.
+    if (not self.requires_grad and str(self.device).startswith("cuda")
+            and getattr(self, "_torch_data_owner", None) is None
+            and _is_basic_data_index(slices)
+            and (not isinstance(value, _NativeVar) or not value.requires_grad)):
+        target = _native['_orig_getitem'](self, slices)
+        if target.is_contiguous():
+            if not isinstance(value, _NativeVar):
+                dtype = _jittor_dtype_name(self.dtype)
+                if (dtype == "int64" and isinstance(value, _owner.numbers.Integral)
+                        and abs(int(value)) >= 2 ** 31):
+                    # The native full factory currently narrows a large int64
+                    # scalar. Write exact NumPy bytes into the existing view.
+                    target._write_inplace(_owner.np.full(
+                        tuple(target.shape), int(value), dtype="int64"))
+                    return self
+                else:
+                    value = _owner.jt.full(target.shape, value, dtype)
+            if tuple(value.shape) == tuple(target.shape):
+                if _jittor_dtype_name(value.dtype) != _jittor_dtype_name(target.dtype):
+                    value = value.cast(_jittor_dtype_name(target.dtype))
+                target._copy_into(value)
+                return self
     result = _orig_setitem(self, slices, value)
     return result
 
@@ -217,6 +244,24 @@ def _ip(self, value):
     return self
 
 
+def _ip_or_copy_cuda_storage(self, value, constant=False):
+    """Preserve the address of a materialized CUDA tensor for graph replay.
+
+    ``assign`` rebinds the native Var (including its allocation). CUDA graphs
+    and foreign kernels retain the original raw pointer, so value-only writes
+    to an inference tensor must copy bytes into its existing storage instead.
+    Training, detached ``.data`` aliases, and strided views still use the
+    normal graph-aware assignment path.
+    """
+    if (not self.requires_grad and (constant or not value.requires_grad)
+            and getattr(self, "_torch_data_owner", None) is None
+            and self.is_contiguous() and str(self.device).startswith("cuda")
+            and tuple(value.shape) == tuple(self.shape)):
+        self._copy_into(value)
+        return self
+    return _ip(self, value)
+
+
 def _copy_(self, other, non_blocking=False):
     src = other if isinstance(other, _NativeVar) else _owner.jt.array(other)
     src = src.cast(_jittor_dtype_name(self.dtype)) if hasattr(self, "dtype") else src
@@ -232,7 +277,7 @@ def _copy_(self, other, non_blocking=False):
     if destination is not None and str(destination).split(":")[0] in ("cpu", "cuda", "npu"):
         if src.device != destination:
             src = src.to(destination)
-    return _ip(self, src)
+    return _ip_or_copy_cuda_storage(self, src)
 
 
 def _norm_size(args):
@@ -1318,12 +1363,14 @@ _BINARY_APIS = {
 
 def _api_fill(self, val):
     with _new_scope(self, None):
-        return _ip(self, _owner.jt.ones(self.shape, self.dtype) * val)
+        return _ip_or_copy_cuda_storage(
+            self, _owner.jt.ones(self.shape, self.dtype) * val, constant=True)
 
 
 def _api_zero(self):
     with _new_scope(self, None):
-        return _ip(self, _owner.jt.zeros(self.shape, self.dtype))
+        return _ip_or_copy_cuda_storage(
+            self, _owner.jt.zeros(self.shape, self.dtype), constant=True)
 
 
 def _api_add(self, o, alpha=1):
