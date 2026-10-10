@@ -215,6 +215,7 @@ JittorError = jittor_utils.cc.JittorError
 JittorInternalError = jittor_utils.cc.JittorInternalError
 JittorIndexError = jittor_utils.cc.JittorIndexError
 JittorTypeError = jittor_utils.cc.JittorTypeError
+JittorShapeError = jittor_utils.cc.JittorShapeError
 
 _ran_post_process = False
 for backend in compiler.backend_modules:
@@ -374,6 +375,7 @@ _ROOT_EXPORTS = (
     "world_size", "config", "capability", "introspection", "graph_replay", "capture_step",
     "profile", "profiling",
     "JittorError", "JittorInternalError", "JittorIndexError", "JittorTypeError",
+    "JittorShapeError",
 )
 
 __all__ = tuple(sorted(set(

@@ -52,6 +52,7 @@ def routing(monkeypatch):
         flags=SimpleNamespace(amp_reg=0),
         amp_flags=SimpleNamespace(keep_reduce=1, reduce16_no_fp32_acc=2,
                                   prefer16=4, prefer32=8),
+        JittorShapeError=type("JittorShapeError", (RuntimeError, ValueError), {}),
     )
     # `dispatch.py` imports `jittor._core.dtypes` at module scope. A
     # SimpleNamespace is not a package, so once "jittor" is replaced below the

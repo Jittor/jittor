@@ -21,7 +21,7 @@ class TestNanoVector(unittest.TestCase):
         assert str(nv) == "[1,2,3,1099511627776,]"
         assert nv == [1,2,3,1099511627776,]
         expect_error(lambda : nv.append(1<<40), exc_type=RuntimeError,
-                     match="next_offset<=64")
+                     match="NanoVector exceeds its ten-entry or 64-bit value capacity")
         assert len(nv)==4, nv
         s = 0
         for a in nv:

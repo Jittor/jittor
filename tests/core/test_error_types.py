@@ -91,10 +91,31 @@ class TestErrorClasses(unittest.TestCase):
         self.assertIs(type(pickle.loads(pickle.dumps(error))), jt.JittorIndexError)
 
     def test_the_hierarchy(self):
-        for cls in (jt.JittorInternalError, jt.JittorIndexError, jt.JittorTypeError):
+        for cls in (jt.JittorInternalError, jt.JittorIndexError, jt.JittorTypeError,
+                    jt.JittorShapeError):
             with self.subTest(cls=cls.__name__):
                 self.assertTrue(issubclass(cls, jt.JittorError))
         self.assertTrue(issubclass(jt.JittorError, RuntimeError))
+
+    def test_matmul_and_conv_raise_the_same_shape_error(self):
+        """matmul raised RuntimeError and conv ValueError for the same kind of
+        mistake. One class that is both keeps either `except` working."""
+        cases = {
+            "matmul": lambda: jt.matmul(jt.ones((2, 3)), jt.ones((5, 4))),
+            "linear": lambda: jt.nn.Linear(4, 5)(jt.ones((2, 3))),
+            "conv2d": lambda: jt.nn.Conv2d(3, 8, 3)(jt.ones((1, 4, 8, 8))),
+            "conv2d rank": lambda: jt.nn.Conv2d(3, 8, 3)(jt.ones((4, 8, 8))),
+        }
+        for name, fn in cases.items():
+            with self.subTest(name):
+                error = self._raised(fn)
+                self.assertIs(type(error), jt.JittorShapeError)
+                self.assertIsInstance(error, RuntimeError)
+                self.assertIsInstance(error, ValueError)
+
+    def test_shapes_in_conv_messages_are_lists(self):
+        error = self._raised(lambda: jt.nn.Conv2d(3, 8, 3)(jt.ones((1, 4, 8, 8))))
+        self.assertIn("input shape [1, 4, 8, 8]", str(error))
 
 
 if __name__ == "__main__":

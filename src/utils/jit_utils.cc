@@ -43,6 +43,7 @@ static PyObject* jittor_error = nullptr;
 static PyObject* jittor_internal_error = nullptr;
 static PyObject* jittor_index_error = nullptr;
 static PyObject* jittor_type_error = nullptr;
+static PyObject* jittor_shape_error = nullptr;
 
 static PyObject* add_error_class(PyObject* m, const char* name, PyObject* bases,
                                  const char* doc) {
@@ -69,6 +70,13 @@ static void def_error_classes(PyObject* m) {
     PyObjHolder type_bases(PyTuple_Pack(2, jittor_error, PyExc_TypeError));
     jittor_type_error = add_error_class(m, "JittorTypeError", type_bases.obj,
         "No overload of a Jittor operator accepts these argument types.");
+    // A ValueError as well because conv raised ValueError and matmul
+    // RuntimeError for the same kind of mistake; this keeps both catchable.
+    PyObjHolder shape_bases(PyTuple_Pack(2, jittor_error, PyExc_ValueError));
+    jittor_shape_error = add_error_class(m, "JittorShapeError", shape_bases.obj,
+        "Operand shapes that the operator cannot combine: a contracted "
+        "dimension that differs, a channel count that does not match the "
+        "weight, too few dimensions.");
 }
 
 PyObject* python_error_class(const std::exception& e) {

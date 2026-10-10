@@ -212,8 +212,9 @@ def _check_matmul_shapes(a, b, trans_a=False, trans_b=False, op="matmul",
 
     This is the operand boundary of every matrix product in the frontend, so it
     is where the C++ standard applies: a caller mistake raises a catchable
-    ``RuntimeError`` -- the type torch raises for the same mistake and the type
-    ``USER_CHECK`` raises across the border in C++ -- and the message names the
+    ``jt.JittorShapeError`` -- a ``RuntimeError``, the type torch raises for the
+    same mistake and the type ``USER_CHECK`` raises across the border in C++,
+    and a ``ValueError``, the type conv raises -- and the message names the
     operation, both operands with their dtype and shape, and *which* dim of
     which operand is wrong.
 
@@ -236,7 +237,7 @@ def _check_matmul_shapes(a, b, trans_a=False, trans_b=False, op="matmul",
     b_ndim = b.ndim
     a_name, b_name = names
     if a_ndim == 0 or b_ndim == 0:
-        raise RuntimeError(
+        raise jt.JittorShapeError(
             "%s: both operands need at least 1 dim, but got %s:%s%s (%d-D) and "
             "%s:%s%s (%d-D)" % (op, a_name, a.dtype, list(a.shape), a_ndim,
                                 b_name, b.dtype, list(b.shape), b_ndim))
@@ -245,7 +246,7 @@ def _check_matmul_shapes(a, b, trans_a=False, trans_b=False, op="matmul",
     inner_a = a.shape[a_axis]
     inner_b = b.shape[b_axis]
     if inner_a != inner_b:
-        raise RuntimeError(
+        raise jt.JittorShapeError(
             "%s: shapes cannot be multiplied, %s:%s%s and %s:%s%s: dim %d of %s is "
             "%d but dim %d of %s is %d, and the two contracted dims must be equal"
             % (op, a_name, a.dtype, list(a.shape), b_name, b.dtype, list(b.shape),
@@ -259,7 +260,7 @@ def _check_matmul_shapes(a, b, trans_a=False, trans_b=False, op="matmul",
     for offset, (left, right) in enumerate(
             zip(reversed(a.shape[:-2]), reversed(b.shape[:-2]))):
         if left != right and left != 1 and right != 1:
-            raise RuntimeError(
+            raise jt.JittorShapeError(
                 "%s: batch dims do not broadcast, %s:%s%s and %s:%s%s: dim %d is "
                 "%d in %s and %d in %s, which must be equal or 1 in one of them"
                 % (op, a_name, a.dtype, list(a.shape), b_name, b.dtype, list(b.shape),
@@ -280,7 +281,7 @@ def matmul_transpose(a, b, *, _op="matmul_transpose", _names=("a", "b")):
         axes[-1], axes[-2] = axes[-2], axes[-1]
         return jt.nn.matmul(a, b.transpose(axes))
     if len(b.shape) != 2:
-        raise RuntimeError(
+        raise jt.JittorShapeError(
             "matmul_transpose: b must be 2-D once a is, but got "
             "a:%s%s and b:%s%s" % (a.dtype, list(a.shape),
                                    b.dtype, list(b.shape)))
@@ -325,7 +326,7 @@ def bmm_transpose(a, b):
     returns a * b^T
     """
     if a.ndim <= 2 or b.ndim <= 2:
-        raise RuntimeError(
+        raise jt.JittorShapeError(
             "bmm_transpose: both operands must have more than 2 dims (a batch "
             "dim and a matrix), but got a:%s%s and b:%s%s"
             % (a.dtype, list(a.shape), b.dtype, list(b.shape)))
@@ -361,7 +362,7 @@ def bmm(a, b):
         c = nn.bmm(a, b)
     """
     if len(a.shape) <= 2 or len(b.shape) <= 2:
-        raise RuntimeError(
+        raise jt.JittorShapeError(
             "bmm: both operands must have more than 2 dims (a batch dim and a "
             "matrix), but got a:%s%s and b:%s%s"
             % (a.dtype, list(a.shape), b.dtype, list(b.shape)))
@@ -586,12 +587,12 @@ def matmul(a, b):
 
 def bilinear(in1, in2, weight, bias):
     if weight.shape[1] != in1.shape[1]:
-        raise RuntimeError(
-            f"bilinear(): input1 size deos not match weight size: got {in1.shape[1]} but expected {weight.shape[1]}"
+        raise jt.JittorShapeError(
+            f"bilinear(): input1 size does not match weight size: got {in1.shape[1]} but expected {weight.shape[1]}"
         )
     if weight.shape[2] != in2.shape[1]:
-        raise RuntimeError(
-            f"bilinear(): input2 size deos not match weight size: got {in2.shape[1]} but expected {weight.shape[2]}"
+        raise jt.JittorShapeError(
+            f"bilinear(): input2 size does not match weight size: got {in2.shape[1]} but expected {weight.shape[2]}"
         )
     w = weight.transpose((1, 0, 2))
     w = w.reshape((w.shape[0], -1))
