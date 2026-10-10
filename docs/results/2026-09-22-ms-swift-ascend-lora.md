@@ -661,7 +661,7 @@ worker comparator job 2139 使用 compare-only key `adapter-world2-resume-audit-
 
 候选实际使用 shim/ACL、HCCL world size 1、`backend_fallback=error`，起始与结束 fallback 计数均为 0；observer 记录的参数、计算输入、梯度和 optimizer 张量均在 `npu:0`。但两侧 `devices.json` 都缺少三步 `forward-output` 设备事件，尽管另有三份前向值快照，因此输出的物理设备证据不完整。这是旧严格数值对拍协议下的历史结果，保留其差异和失败结论；新协议不再仅因跨实现浮点差异判训练 L1–L3 失败，但旧运行因缺少前向输出驻留事件仍不能补判 L1/L2 通过。完整恢复 L3 未运行，公开端到端 L4 未通过，L5 未运行。PEFT DoRA 属于单独互操作面，不代表 ms-swift 自有 LoRA 或整个 ms-swift 的状态变化。
 
-原始日志、插件、比较器及快照未版本化，位于 `$TASK_STATE/runs/dora-world1-public-audit-20261010-r5/`；复查需先修正前向设备 hook，再用新运行键按 oracle-first 隔离复现反向差异。候选 JIT 首次编译后正常完成，不需为启动问题重跑 r1–r5。
+原始日志、插件、比较器及快照未版本化，位于 `$TASK_STATE/runs/dora-world1-public-audit-20261010-r5/`；r3 已用修正后的 forward hook 在新运行键补齐设备事件。若后续继续定位旧运行中的跨实现梯度差异，需在新运行键记录裁剪前梯度和裁剪系数，结果仅作诊断；不得因协议变化追溯改写 r5 的严格对拍失败。候选 JIT 首次编译后正常完成，不需为启动问题重跑 r1–r5。
 
 DoRA 反向路径诊断（2026-10-10）：运行键 `dora-gradient-path-audit-20261010-r4` 的 worker 比较显示，四个 q/v 投影的输入和完整模块输出在两侧逐位一致，输出 cotangent 相对 L2 差低于 `3e-7`；当时看到的投影参数梯度差集中在 v_proj。随后 `dora-shape-gradient-probe-20261010-r2`（job 2297）在 `[1,22,64]` 输入上先跑原生 torch_npu，再跑严格 ACL，按 PEFT 0.17.1 `DoraLinearLayer` 公式重算四个投影。两侧各 52 个公式张量设备记录均为 `npu:0`；候选 `backend_fallback=error`，完整公式运行 fallback 计数为 0。worker 比较 job 2299 与 2300 只读取快照：两侧重算输出均与 R4 实际 q/v 模块输出逐位相同，重算的 B 与 magnitude 梯度两侧也逐位相同。
 
