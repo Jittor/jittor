@@ -193,11 +193,18 @@ static inline bool readback_waits_for_devices() {
 #endif
 }
 
+// Whether the value can be read from host memory without running anything.
+static inline bool host_value_ready(Var* var) {
+    return var->mem_ptr && !var->allocator->is_cuda()
+        && !var->flag(VarFlags::_execution_failed);
+}
+
 DataView VarHolder::data() {
     note_readback();
-    if (!(var->mem_ptr && !var->allocator->is_cuda())) {
+    if (!host_value_ready(var)) {
         ExecutorEntryScope entry;
         sync(readback_waits_for_devices(), false);
+        var->set_flag(VarFlags::_execution_failed, 0);
 #ifdef HAS_ACCELERATOR
         migrate_to_cpu(var, runtime_executor().allocator);
 #endif
@@ -866,9 +873,10 @@ VarHolder* VarHolder::sync(bool device_sync, bool weak_sync) {
 
 ArrayArgs VarHolder::fetch_sync() {
     note_readback();
-    if (!(var->mem_ptr && !var->allocator->is_cuda())) {
+    if (!host_value_ready(var)) {
         ExecutorEntryScope entry;
         sync(readback_waits_for_devices());
+        var->set_flag(VarFlags::_execution_failed, 0);
         if (save_mem || _HAS_ACCELERATOR)
             migrate_to_cpu(var, runtime_executor().allocator);
     }
@@ -917,9 +925,10 @@ ItemData VarHolder::item() {
     ItemData data{};
     data.dtype = var->dtype();
     auto dsize = data.dtype.dsize();
-    if (!(var->mem_ptr && !var->allocator->is_cuda())) {
+    if (!host_value_ready(var)) {
         // A blocking backend host copy waits for its producer stream.
         sync(false, false);
+        var->set_flag(VarFlags::_execution_failed, 0);
         if (save_mem || _HAS_ACCELERATOR)
             migrate_to_cpu(var, runtime_executor().allocator);
     }

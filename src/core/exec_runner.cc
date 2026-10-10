@@ -1084,8 +1084,12 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         }
         finish_unfused(op, outputs_bk);
         } catch (const std::exception& e) {
-            // log memory info
-            display_memory_info(__FILELINE__, false, true);
+            // Never with red_color: that mode throws its own "memory is
+            // overflow" error whenever an allocator holds 95% of a device,
+            // and that error would replace the one this op failed with.
+            if (V_ON(1)) display_memory_info(__FILELINE__, false, false);
+            for (Var* v : op->outputs())
+                v->set_flag(VarFlags::_execution_failed);
             // do_prepare may itself be the throwing operation. Preserve its
             // first exception and whatever key it produced instead of running
             // the failing, potentially stateful preparation a second time.
@@ -1154,8 +1158,8 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
             DeviceWaitScope wait;
             sync_devices(touched_devices);
         } catch (const std::exception& e) {
-            // log memory info
-            display_memory_info(__FILELINE__, false, true);
+            // Not red_color, for the same reason as the op-level catch above.
+            if (V_ON(1)) display_memory_info(__FILELINE__, false, false);
             throw;
         }
         // Outside the wait on purpose: these are fetch callbacks, and they

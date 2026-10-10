@@ -33,25 +33,24 @@ bool check_async_executor_error(const std::exception& e, std::ostream& os) {
     if (s.find("executor.cc:") == string::npos && s.find("exec_runner.cc:") == string::npos)
         return false;
     os << s;
-    if (getenv("JT_SYNC") && getenv("trace_py_var"))
+    // Only when the report could not name the line that built the operator:
+    // with JT_TRACE_PY_VAR set it already did, and there is nothing to add.
+    if (s.find("[Async Backtrace]: unavailable") == string::npos)
         return true;
-    if (s.find("[Async Backtrace]: ---") != string::npos)
-        return true;
-    os << "\n**********\nAsync error was detected. "
-        "To locate the async backtrace and get better error report, please rerun your code with "
-        "two enviroment variables set:\n"
+    // Not JT_SYNC: that is a build macro (compiler.py JT_CONFIG_MACROS), and
+    // changing it rebuilds the core.
+    os << "\n**********\n"
+        "Jittor runs operators lazily, so the traceback above points at the line "
+        "that needed the result, not the line that created the failing operator. "
+        "To record where operators are created, rerun with:\n"
         #ifdef _WIN32
-        "cmd: \n"
-        ">>> set JT_SYNC=1\n"
-        ">>> set trace_py_var=3\n"
-        "powershell: \n"
-        ">>> $env:JT_SYNC=1\n"
-        ">>> $env:trace_py_var=3\n"
+        ">>> set JT_TRACE_PY_VAR=3          (cmd)\n"
+        ">>> $env:JT_TRACE_PY_VAR=3         (powershell)\n"
         #else
-        ">>> export JT_SYNC=1\n"
-        ">>> export trace_py_var=3\n"
+        ">>> export JT_TRACE_PY_VAR=3\n"
         #endif
-        ;
+        "If the error came from an accelerator kernel, also set JT_SYNC_RUN=1 so "
+        "that each operator is waited for before the next one starts.\n";
     return true;
 }
 

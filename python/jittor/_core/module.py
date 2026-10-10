@@ -881,6 +881,7 @@ Returns a handle that removes both halves.
         from jittor.compiler import LOG
         from .var import array
         n_failed = 0
+        mismatched = []
         for key in params.keys():
             v = self
             key_ = key.split('.')
@@ -923,8 +924,16 @@ Returns a handle that removes both halves.
                     v.update(param)
                     v.sync(False, False)
                 else:
-                    n_failed += 1
-                    LOG.e(f'load parameter {key} failed: expect the shape of {key} to be {v.shape}, but got {param.shape}')
+                    mismatched.append(
+                        f"size mismatch for {key}: copying a param with shape "
+                        f"{list(param.shape)} from checkpoint, the shape in "
+                        f"current model is {list(v.shape)}.")
+        # A value of the wrong shape cannot be loaded at all; carrying on would
+        # leave that parameter at its initialisation without anyone noticing.
+        if mismatched:
+            raise RuntimeError(
+                f"Error(s) in loading state_dict for {type(self).__name__}:\n\t"
+                + "\n\t".join(mismatched))
         if n_failed:
             LOG.w(f"load total {len(params)} params, {n_failed} failed")
 
@@ -968,18 +977,15 @@ Returns a handle that removes both halves.
         This method also supports loading a state dict from a pytorch .pth file.
 
         .. note::
-            当载入的参数与模型定义不一致时, jittor 会输出错误信息, 但是不会抛出异常.
-            若载入参数出现模型定义中没有的参数名, 则会输出如下信息, 并忽略此参数:
+            若载入参数出现模型定义中没有的参数名, jittor 会输出如下警告, 并忽略此参数:
 
             >>> [w 0205 21:49:39.962762 96 __init__.py:723] load parameter w failed ...
+            >>> [w 0205 21:49:39.962906 96 __init__.py:741] load total 100 params, 1 failed
 
-            若载入参数的 shape 与模型定义不一致, 则会输出如下信息, 并忽略此参数:
+            若载入参数的 shape 与模型定义不一致, 则抛出 RuntimeError, 列出所有不一致的参数:
 
-            >>> [e 0205 21:49:39.962822 96 __init__.py:739] load parameter w failed: expect the shape of w to be [1000,100,], but got [3,100,100,]
-
-            如载入过程中出现错误, jittor 会输出概要信息, 您需要仔细核对错误信息
-
-            >>> [w 0205 21:49:39.962906 96 __init__.py:741] load total 100 params, 3 failed
+            >>> RuntimeError: Error(s) in loading state_dict for Net:
+            >>>     size mismatch for w: copying a param with shape [3, 100, 100] from checkpoint, the shape in current model is [1000, 100].
         '''
         from jittor.serialization.native import load
         self.load_parameters(load(path))

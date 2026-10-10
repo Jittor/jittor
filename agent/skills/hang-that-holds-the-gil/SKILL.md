@@ -98,6 +98,6 @@ dataset worker 这类孙进程会继续跑并攥着 stdout 管道。用
    `tests/structure/build/test_ring_buffer_timeout_contract.py` 钉住「`pop()` 仍无界、
    `pop_for` 显式有界」这个契约。新加的阻塞等待照这个形状写：**有界、释放 GIL、超时抛错**，
    不要指望信号或看门狗线程来救。
-6. **不要退回"给父进程发信号"。** Jittor 装了进程级 SIGCHLD/SIGINT 处理器：
-   SIGINT 分不清是不是用户按了 Ctrl-C，处理器会直接退进程；旧的 SIGCHLD 处理器
-   会让父进程**无声消失**。挂住很糟，无声消失更糟。
+6. **不要退回"给父进程发信号"。** SIGINT 分不清是不是用户按了 Ctrl-C：它会在父进程
+   随便哪一行抛 `KeyboardInterrupt`，而不是一个可定位的 worker 错误；Jittor 装的进程级
+   SIGCHLD 处理器（旧版）会让父进程**无声消失**。挂住很糟，无声消失更糟。

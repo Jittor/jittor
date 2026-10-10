@@ -139,7 +139,8 @@ void SetitemOp::infer_shape() {
         int j = i - data_dim + out_shape.size();
         if (!(data_shape[i]==1 && out_shape[j]!=-1)) {
             USER_CHECK(data_shape[i]<0 || out_shape[j]<0 || data_shape[i]==out_shape[j])
-                << "Data shape not match" << data_shape << out_shape;
+                << "cannot assign a value of shape" << data_shape
+                << "to a slice of shape" << out_shape;
             bmask |= 1<<j;
         }
     }

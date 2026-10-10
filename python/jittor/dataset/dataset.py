@@ -351,6 +351,11 @@ class Dataset(object):
     
     def _worker_main(self, worker_id, buffer, status, error):
         import jittor_utils
+        import signal
+        # Ctrl-C reaches the whole process group. It is the parent's to handle;
+        # a worker leaves only via os._exit, or dies with the parent
+        # (init_subprocess sets PDEATHSIG) or by terminate().
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
         jt.flags.use_cuda_host_allocator = 0
 
         jittor_utils.cc.init_subprocess()

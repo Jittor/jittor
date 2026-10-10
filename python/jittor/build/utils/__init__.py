@@ -248,7 +248,9 @@ class Logwrapper:
         return cc.log_capture_read()
 
     def _log(self, level, verbose, *msg):
-        if self.log_silent or verbose > self.log_v:
+        # Same rule as send_log in log.cc: log_silent hides info and warnings,
+        # never an error -- some errors are followed by sys.exit.
+        if (self.log_silent and level in "iw") or verbose > self.log_v:
             return
         text = ""
         for m in msg:

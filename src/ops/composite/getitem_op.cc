@@ -132,8 +132,10 @@ void infer_index_slices(Var* in, VarSlices& vs, int& first_oid_of_var, int& var_
             i_to_o[i] = -1;
             auto in_shape_i = in_shape[i];
             auto& v = s.slice.start;
+            auto index = v;
             if (v<0) v += in_shape_i;
-            USER_CHECK(v>=0 && v<in_shape_i) << "slice overflow, " << v << "not in [0,">>in_shape_i>>")";
+            USER_CHECK(v>=0 && v<in_shape_i) << "index" << index
+                << "is out of bounds for dimension" << i << "with size" << in_shape_i;
         } else 
         if (s.is_str()) {
             i_to_vs[i] = vid++;

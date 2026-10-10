@@ -55,7 +55,7 @@ class TestSlice(unittest.TestCase):
         expect_error(
             lambda: jt.ones((2, 3))[5],
             exc_type=RuntimeError,
-            match="slice overflow",
+            match="index 5 is out of bounds for dimension 0 with size 2",
         )
 
     def test_too_many_slices_is_a_catchable_user_error(self):
