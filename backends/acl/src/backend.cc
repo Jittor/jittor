@@ -388,8 +388,14 @@ void destroy_stream(BackendStream stream) {
 void* create_event(int device, bool timing) {
     aclrtEvent event = nullptr;
     on_device(device, [&] {
+        // `...ExWithFlag` for the plain event because the caller records it
+        // again every time it needs it -- the compute-stream handoff keeps
+        // one event per device and records it once per batch -- and only
+        // that constructor gives an event that "can be reused naturally".
+        // An `aclrtCreateEvent` event fails the second record with
+        // ACL_ERROR_RT_FEATURE_NOT_SUPPORT (207000).
         auto status = timing ? aclrtCreateEventWithFlag(&event, ACL_EVENT_TIME_LINE)
-                             : aclrtCreateEvent(&event);
+                             : aclrtCreateEventExWithFlag(&event, ACL_EVENT_SYNC);
         check_acl(status, "create ACL event");
         try {
             std::lock_guard<std::recursive_mutex> guard(state().mutex);
