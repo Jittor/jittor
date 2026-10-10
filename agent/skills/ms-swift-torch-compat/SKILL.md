@@ -40,7 +40,7 @@ description: 设计、实现和验证 ms-swift 在 Jittor torch shim 上的兼�
 
 ## 工作流程
 
-1. 遵循仓库协作规则：检查 dirty worktree 和运行中测试，保留本地改动，整合并记录目标远端 SHA；不丢弃改动、不自动 stash。所有运行继续使用独立 state、解释器、`JITTOR_HOME` 和临时目录。
+1. 遵循仓库协作规则：检查 dirty worktree 和运行中测试，保留本地改动，整合并记录目标远端 SHA；不丢弃改动、不自动 stash。所有运行继续使用独立 state、解释器和临时目录；`JITTOR_HOME` 按下文缓存复用条件串行共享或并发隔离。
 2. 读取[环境合同](references/environment.md)、[验收合同](references/verification.md)和 [`downstream-library-adaptation`](../downstream-library-adaptation/SKILL.md)。先记录 ms-swift、transformers、peft、accelerate、datasets、tokenizers、safetensors 版本和实际模块路径。
 3. 从 ms-swift 的公开 CLI、launcher、model/tuner registry 和已安装依赖生成适配面矩阵；不把内部手写循环当作公开入口，也不把不存在的可选功能加入必验范围。
 4. 每个面先做裸跑最小复现，再按三行判据分流：能力缺失修 Jittor core/ACL/HCCL，torch API/状态语义差异修 `jittor.compat.torch`，只有可迁出且确属 ms-swift 私有行为才允许 adapter。
@@ -50,9 +50,9 @@ description: 设计、实现和验证 ms-swift 在 Jittor torch shim 上的兼�
 
 ## 短预检、根因与续接
 
-真机长作业前用短时 worker 预检解释器与模块身份、依赖 pin、固定模型/数据摘要、CLI 参数、钩子签名、审计变量、短 `TMPDIR`、私有 `CCACHE_DIR`、结果读取器和退出码。先证明两侧逐步样本身份、输入、初始权重与参数映射一致，再比较 loss/logits/梯度；同 seed 不保证相同 batch。harness/调度失败单列无效运行，不升级兼容结论。
+真机长作业前用短时 worker 预检解释器与模块身份、依赖 pin、固定模型/数据摘要、CLI 参数、钩子签名、审计变量、短 `TMPDIR`、私有 `CCACHE_DIR`、结果读取器和退出码。先证明两侧逐步样本身份、输入、初始权重与参数映射一致；训练以两侧各自真实收敛和状态正确为验收，跨实现 loss/logits/梯度误差仅作诊断；推理仍按确定性输出对拍。同 seed 不保证相同 batch。harness/调度失败单列无效运行，不升级兼容结论。
 
-按源码、ABI、编译器、CANN 和设备指纹分离冷编译与模型验证；只有指纹一致才复用预编译产物，并发作业各自独占可写缓存。冷编译有进展时看编译产物与活跃进程，不只看 pytest 百分比；冷编译不计入 L5。前置失败就收集根因并取消无效依赖作业，修复后用新运行键。每个根因最多五轮不同假设的修复，仍失败则留断点并推进独立面。
+按源码、Python ABI、编译器、CANN、设备及编译参数分离冷编译与模型验证。同一指纹的串行作业在 state 中固定持久的 `JITTOR_HOME`、`JITTOR_TORCH_CACHE_ROOT` 和 `CCACHE_DIR`，不要每次指向新的运行目录；多 rank 与并发作业各自独占可写缓存。先在 Slurm NPU worker 用正式作业的 `host-shim-python`、ACL/HCCL 环境执行 `python -m jittor_utils.bootstrap` 和严格 NPU 预检；再提交**新的**作业执行 `python -m jittor_utils.bootstrap --check`，在 `JITTOR_NO_BUILD=1` 下重复预检并核对缓存路径、编译日志及启动耗时。只有该复验无新编译且指纹一致，才能称这一预热路径可复用；新算子、输入形状或配置仍可能增量编译，不能由单次预检推断所有 ms-swift 路径均免编译。冷编译有进展时看编译产物与活跃进程，不只看 pytest 百分比；冷编译不计入 L5。前置失败就收集根因并取消无效依赖作业，修复后用新运行键。每个根因最多五轮不同假设的修复，仍失败则留断点并推进独立面。
 
 监督脚本以作业终态、新错误、完整证据和需要决策为 Codex 唤醒事件；等待作业时用轻量状态检查，不按分钟重新读全套 Skill/Git/日志。Git fetch 只在新任务、集成或推送边界执行，网络失败退避并保留最近可信 SHA。矩阵仅在验收结论、根因或范围改变时更新，逐次日志保留在 state。
 
@@ -64,7 +64,7 @@ description: 设计、实现和验证 ms-swift 在 Jittor torch shim 上的兼�
 
 - **模型族**：从实际任务中选 causal LM、seq2seq/encoder、视觉/多模态代表；同一共享 transformer 模块的模型可复用算子证据，但仍需验证各自输入/输出结构。
 - **tuner**：首个 Swift LoRA smoke 后，逐一加入实际要支持的 tuner/target module、frozen/trainable 参数策略、adapter 保存与加载；PEFT 与 Swift tuner 的结果分开。
-- **训练阶段**：L0 构造，L1 forward，L2 全部适用梯度和真实 optimizer 更新，L3 完整 checkpoint 新进程恢复，L4 真实公开 CLI，L5 锁定真实尺寸稳态测量。
+- **训练阶段**：L0 构造，L1 有限且可反向的 forward/loss，L2 必需梯度、真实 optimizer 更新与预先锁定窗口内的 loss 下降，L3 完整 checkpoint 新进程恢复后继续训练并保持下降趋势，L4 真实公开 CLI，L5 锁定真实尺寸稳态测量。
 - **输入与状态**：整数 token、浮点输入、label/mask、梯度累积、scheduler、AMP、随机状态、dataloader/sampler 游标和多 rank 数据划分按实际使用情况逐项锁定。
 - **入口与依赖**：公开 `swift` 命令必须与原生入口分别运行；依赖库只验证 ms-swift 实际使用的 API。若用户另要求某个依赖库整体适配，改用该库自己的 runbook。
 
