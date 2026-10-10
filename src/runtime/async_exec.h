@@ -41,6 +41,11 @@ namespace jittor {
 //
 // Taken only for what is safe to hand over -- see `may_run_async` in
 // executor.cc -- and off with `async_execution=0`.
+//
+// The worker starts with no accelerator device of its own. It needs no
+// binding of its own either: a backend's `current_device` is asked by
+// everything that runs work and binds a thread that has none yet (see
+// `BackendOps::set_device`).
 
 // Whether a batch is running on the worker.
 EXTERN_LIB std::atomic<int> async_exec_inflight;

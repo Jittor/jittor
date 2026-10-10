@@ -1061,6 +1061,28 @@ workaround.
   call). Clean paired run on npu 3 against the same baseline: `qwen3_decode`
   2.04x -> 1.91x, geometric mean 0.932x -> 0.917x, zero fallbacks, nothing
   else moving beyond noise.
+  (2026-10-09) The core-level fix named above then landed too: the async
+  worker now runs on ACL, overlapping the step's ~1.1 s of device sync with
+  its ~2.1 s of graph construction. Both obstacles turned out to be
+  tractable and both were pre-existing bugs rather than design limits -- a
+  fresh thread's missing ACL device context (KI-EXEC-012) and a fork while a
+  batch is in flight (KI-EXEC-011). The `AclCpuFallbackScope` hazard is
+  excluded by policy instead of being made thread-safe: ACL takes the worker
+  only under `backend_fallback=error`, where no fallback runs at all
+  (`async_requires_strict_fallback`). ACL also auto-flushes only when the
+  worker takes the batch (`async_auto_flush_only`), which is what reconciles
+  this with the refutation above -- an inline flush pays the Python thread's
+  time for nothing, the same flush on the worker overlaps it.
+  Clean paired 12-workload run on npu 3, same baseline, zero fallbacks:
+  geometric mean 0.917x -> 0.880x. `qwen3_decode` 1.91x -> 1.27x and
+  `resnet50_infer` 1.65x -> 1.29x, the latter a surprise -- part of what had
+  been attributed to `TransData`/`BNInfer` device cost was the host building
+  the next step instead of the device running this one. The price is 2-5% on
+  the three shortest steps, where there is not enough device time to hide a
+  handover: `resnet50_infer_b1` (9 ms) 0.395x -> 0.416x, `bert_base_infer`
+  (15 ms) 0.629x -> 0.669x, `sd15_vae_decode` (22 ms) 1.202x -> 1.239x. All
+  three are real regressions, not noise, and no threshold is in place to
+  decline a batch too small to pay for the handover.
   `bert_base_train`'s gap is similarly not a dispatch bug: an aclprof
   capture shows `MatMulV2` at 42.4% of device time (the
   expected dominant cost for a transformer) and `DSARandomUniform` --
@@ -1640,6 +1662,55 @@ workaround.
 - Exit condition: `jt.grad`/`Function` callbacks submit completed backward
   segments, and GPU idle time in the backward of a Llama and a UNet step drops
   without the step getting slower.
+
+## KI-EXEC-011: a fork while a batch is in flight deadlocked three ways
+
+- Severity: High (a hang, not a wrong answer), Fixed
+- Status: Fixed (2026-10-09)
+- Owner: executor / async execution
+- Symptom: a Qwen3 decode step on ACL hung with the device idle. Three
+  threads, in a cycle: the main Python thread held the graph lock and waited
+  for the GIL inside `GraphEntryScope`; a second thread held the GIL inside
+  `subprocess.Popen` -> `__libc_fork` -> the `pthread_atfork` prepare handler
+  `before_fork` -> `wait_for_worker`; and the worker spun for the graph lock
+  in `GraphLockSuspend`'s destructor between its segments.
+- Cause: `before_fork` (and `stop_worker`) called `wait_for_worker` bare,
+  holding both the GIL and whatever graph lock the calling thread had.
+  `async_exec_wait` already released both for the same wait and explained
+  why -- the worker takes the graph lock between segments, and compiling an
+  operator calls back into Python -- but the two other callers did not. Not
+  ACL-specific: the second thread only forks, which a dataloader or an
+  `nvidia-smi`/`npu-smi` sampler does, and CUDA was equally exposed. It had
+  simply never been exercised, because nothing forked mid-batch in the
+  CUDA benchmarks.
+- Workaround: none needed; `async_execution=0` avoided it before the fix.
+- Evidence: native backtraces of all 211 threads of the hung process
+  (`eu-stack`) showing the cycle. Regression test:
+  `tests/runtime/test_async_execution.py::...::test_a_second_thread_may_fork_while_a_batch_is_in_flight`,
+  which forks from a second thread with a batch in flight.
+- Fix: one `wait_for_worker_unlocked` -- graph lock and GIL released, no
+  error rethrown so a fork handler can use it -- for all three callers.
+
+## KI-EXEC-012: ACL failed every operator on a second Python thread
+
+- Severity: High (a supported operation aborts), Fixed
+- Status: Fixed (2026-10-09)
+- Owner: ACL backend
+- Symptom: `jt.array(...)` on any thread but the first raised `RuntimeError:
+  aclrtGetDevice failed with ACL status 107002` on a 910B3. A multi-threaded
+  weight loader, a dataloader thread, or the async-execution worker all hit
+  it on their first operator.
+- Cause: a thread that has never bound a device has no ACL context, and
+  `aclrtGetDevice` reports that as a failure rather than answering "none".
+  `acl_runtime_current_device()` and `set_device()` both treated it as an
+  error. CUDA never had the problem because `accelerator_current()` binds a
+  thread whose `tls_bound_device` does not match the process device.
+- Workaround: bind the device on the thread before using jittor from it.
+- Evidence:
+  `tests/runtime/test_async_execution.py::...::test_a_second_python_thread_may_build_meanwhile`,
+  which was CUDA-only-skipped before and now runs on ACL.
+- Fix: both ACL entry points treat the status as "unbound" and bind the
+  device the process is using, mirroring CUDA.
 
 ## KI-COMPAT-001: Torch namespaces publish native-only helpers and imported symbols
 

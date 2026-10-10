@@ -206,9 +206,22 @@ void wait_for_worker() {
     worker->done.wait(lock, [] { return !async_exec_inflight.load(std::memory_order_acquire); });
 }
 
+// Waiting for the batch while holding either the graph lock or the GIL
+// deadlocks: the worker takes the graph lock between its segments, and
+// compiling an operator calls back into Python. Let go of both, as
+// `async_exec_wait` does, and say nothing about an error -- a caller that
+// cannot throw (a fork handler) still has to wait.
+void wait_for_worker_unlocked() {
+    GraphLockSuspend suspend;
+    PyThreadState* state = Py_IsInitialized() && PyGILState_Check()
+        ? PyEval_SaveThread() : nullptr;
+    wait_for_worker();
+    if (state) PyEval_RestoreThread(state);
+}
+
 void stop_worker() {
     if (!worker->thread) return;
-    wait_for_worker();
+    wait_for_worker_unlocked();
     {
         std::lock_guard<std::mutex> lock(worker->mutex);
         worker->stopping = true;
@@ -223,7 +236,9 @@ void stop_worker() {
 #ifdef __linux__
 // A batch is not carried across a fork: the parent finishes it first, and
 // the child starts without a worker (threads do not survive a fork).
-void before_fork() { if (worker->thread) wait_for_worker(); }
+// `subprocess.Popen` forks with the GIL held, and from a thread that may hold
+// the graph lock, so this waits with neither.
+void before_fork() { if (worker->thread) wait_for_worker_unlocked(); }
 void in_child() {
     worker = new Worker();
     placement->pinned = -2;
@@ -330,15 +345,8 @@ void async_exec_submit(std::function<void()>&& job) {
 
 void async_exec_wait() {
     if (is_worker) return;
-    if (async_exec_inflight.load(std::memory_order_acquire)) {
-        // Without the graph lock and without the GIL: the batch may compile an
-        // operator, and the compiler calls back into Python.
-        GraphLockSuspend suspend;
-        PyThreadState* state = Py_IsInitialized() && PyGILState_Check()
-            ? PyEval_SaveThread() : nullptr;
-        wait_for_worker();
-        if (state) PyEval_RestoreThread(state);
-    }
+    if (async_exec_inflight.load(std::memory_order_acquire))
+        wait_for_worker_unlocked();
     if (!error_pending.load(std::memory_order_acquire)) return;
     std::exception_ptr error;
     {

@@ -1,7 +1,8 @@
 """Inference batches executed on a worker thread (src/runtime/async_exec.h).
 
-Under ``no_grad`` on CUDA an auto-flushed batch runs on one worker thread while
-Python keeps building the graph. What has to hold: the numbers are the ones a
+Under ``no_grad`` on CUDA -- and on ACL, where the worker also binds the
+device the batch was posted from -- an auto-flushed batch runs on one worker
+thread while Python keeps building the graph. What has to hold: the numbers are the ones a
 batch on the calling thread gives, every read of a Var's data sees the
 worker's writes, a flag assignment does not overtake a batch that reads flags,
 anything that needs a gradient stays on the calling thread, and a second
@@ -21,8 +22,16 @@ from _helpers import capability as _test_capability
 from _helpers.child_process import run_child_script
 
 
-def _cuda():
-    return _test_capability.check_accelerator("cuda", backend=jt).enabled
+def _worker_backend():
+    """The accelerator the worker runs on here, or None.
+
+    ACL takes a batch only under ``backend_fallback=error`` (see
+    `may_run_async`), so the cases set that policy there.
+    """
+    for name in ("cuda", "acl"):
+        if _test_capability.check_accelerator(name, backend=jt).enabled:
+            return name
+    return None
 
 
 def _chain(x, w, steps):
@@ -39,6 +48,50 @@ def _chain(x, w, steps):
     return x + sum(k[:1, :1] for k in kept[-3:])
 
 
+_FORK_MID_BATCH = """
+import subprocess
+import threading
+import numpy as np
+import jittor as jt
+
+jt.flags.use_cuda = 1
+jt.flags.auto_graph_replay = 0
+jt.flags.auto_flush_ops = 23
+jt.flags.backend_fallback = "error"
+rng = np.random.RandomState(7)
+x0 = jt.array(rng.randn(64, 64).astype("float32"))
+w = jt.array((rng.randn(64, 64) / 8).astype("float32"))
+jt.sync_all(True)
+
+def chain(x, steps):
+    for i in range(steps):
+        y = jt.tanh(x * 0.5 + 0.25) + x * 0.125
+        x = jt.matmul(y, w)
+    return x
+
+forked = []
+
+def fork_now():
+    # Nothing of jittor's: this thread only forks, the way a data loader or a
+    # `nvidia-smi`/`npu-smi` sampler does.
+    forked.append(subprocess.call(["true"]))
+
+with jt.no_grad():
+    before = jt.core.async_exec_batches()
+    x = chain(x0, 60)
+    thread = threading.Thread(target=fork_now)
+    thread.start()
+    thread.join(120)
+    assert not thread.is_alive(), "the fork handler did not return"
+    ran = jt.core.async_exec_batches() - before
+    got = chain(x, 60).numpy()
+with jt.flag_scope(async_execution=0), jt.no_grad():
+    want = chain(chain(x0, 60), 60).numpy()
+assert forked == [0], forked
+assert np.array_equal(got, want)
+print("FORK_OK", ran)
+"""
+
 _TWO_THREADS = """
 import threading
 import numpy as np
@@ -47,6 +100,7 @@ import jittor as jt
 jt.flags.use_cuda = 1
 jt.flags.auto_graph_replay = 0
 jt.flags.auto_flush_ops = 23
+jt.flags.backend_fallback = "error"
 rng = np.random.RandomState(7)
 x0 = jt.array(rng.randn(64, 64).astype("float32"))
 w = jt.array((rng.randn(64, 64) / 8).astype("float32"))
@@ -87,13 +141,13 @@ print("TWO_THREADS_OK", middle - before)
 """
 
 
-@unittest.skipIf(not _cuda(), "No CUDA found")
+@unittest.skipIf(not _worker_backend(), "No accelerator the worker runs on")
 class TestAsyncExecution(unittest.TestCase):
     def setUp(self):
         # A prime count, so the crossings fall on different operators of the
         # chain and some on a product.
         self.flags = jt.flag_scope(use_cuda=1, async_execution=1, auto_flush_ops=23,
-                                   auto_graph_replay=0)
+                                   auto_graph_replay=0, backend_fallback="error")
         self.flags.__enter__()
         rng = np.random.RandomState(7)
         self.x = jt.array(rng.randn(64, 64).astype("float32"))
@@ -188,8 +242,24 @@ class TestAsyncExecution(unittest.TestCase):
         got, peak, ran = self._chain_peak(1)
         self._need_worker(ran)
         np.testing.assert_array_equal(got, want)
-        self.assertLessEqual(peak, sync_peak + jt.flags.async_release_lag_bytes + (8 << 20),
+        # The lag, one more product, and a megabyte for the per-allocation
+        # padding a backend adds (ACL pads to 32 bytes, and the worker has
+        # more blocks live at once than the calling thread does). A batch
+        # that let go of nothing would be at ~184 MB, not ~41 MB.
+        self.assertLessEqual(peak,
+                             sync_peak + jt.flags.async_release_lag_bytes + (9 << 20),
                              (peak, sync_peak))
+
+    def test_a_second_thread_may_fork_while_a_batch_is_in_flight(self):
+        # `subprocess.Popen` forks with the GIL held, and the fork handler
+        # waits for the batch. Waiting there while holding the GIL -- or the
+        # graph lock -- deadlocks three ways: the worker wants the graph lock
+        # between its segments, the thread holding it wants the GIL back, and
+        # the GIL is held by the thread doing the waiting.
+        done = run_child_script(_FORK_MID_BATCH, text=True, merge_stderr=True,
+                                name="async_fork_mid_batch", timeout=600)
+        self.assertEqual(done.returncode, 0, done.stdout[-3000:])
+        self.assertIn("FORK_OK", done.stdout)
 
     def test_a_second_python_thread_may_build_meanwhile(self):
         # In a child: a second thread's bindings stand the worker down for the

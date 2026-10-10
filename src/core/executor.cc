@@ -54,7 +54,7 @@ DEFINE_FLAG(int, gopt_disable, 0, "Disable graph optimizer.");
 DEFINE_FLAG(int, use_threading, 0, "Allow to use python threading with jittor.");
 
 DEFINE_FLAG(int, exec_called, 0, "exec sync called");
-DEFINE_FLAG(int, async_execution, 1, "Run an auto-flushed batch of an inference graph (under no_grad, on CUDA) on a worker thread while Python keeps building the graph; every executor entry, and so every read of a Var's data, waits for it first. See runtime/async_exec.h. 0 executes every batch on the calling thread. Without the worker such a flush also has to carry `auto_flush_bytes` of output to be taken; with it, any auto-flush is.");
+DEFINE_FLAG(int, async_execution, 1, "Run an auto-flushed batch of an inference graph (under no_grad, on CUDA, or on ACL with `backend_fallback=error`) on a worker thread while Python keeps building the graph; every executor entry, and so every read of a Var's data, waits for it first. See runtime/async_exec.h. 0 executes every batch on the calling thread. Without the worker such a flush also has to carry `auto_flush_bytes` of output to be taken; with it, any auto-flush is. On ACL nothing is auto-flushed at all unless the worker takes it (`async_auto_flush_only`): an inline flush there was measured slower at every batch size.");
 DEFINE_FLAG(int, async_flush_ops, 64, "With `async_execution`, an inference graph is also flushed to the worker when a module call returns and this many operators have been created since the last flush (`auto_flush_ops` still applies between). 0 flushes at `auto_flush_ops` only.");
 DECLARE_FLAG(bool, no_grad);
 DECLARE_FLAG(int, keep_graph);
@@ -78,20 +78,29 @@ struct PendingSubmissionScope {
 // good (async_exec.cc), and so do the extra flushes it was taken for -- every
 // flush releases the GIL inside the executor, and two threads building one
 // graph is not something the executor serializes. Nor where the worker does
-// not run at all (anywhere but CUDA, see `may_run_async`): there the extra
-// flushes would only cut fusion.
+// not run at all (anywhere but CUDA and ACL, see `may_run_async`): there the
+// extra flushes would only cut fusion.
+static bool worker_admits_accelerator() {
+    const BackendId accelerator = accelerator_backend_id();
+    if (accelerator != BackendId::Cuda && accelerator != BackendId::Acl) return false;
+    return !backend_ops(accelerator).execution.async_requires_strict_fallback
+        || runtime_backend_fallback().policy == "error";
+}
+
 static bool deferrable_flush() {
     return async_execution && no_grad && async_flush_ops > 0 && async_exec_single_thread()
-        && accelerator_backend_id() == BackendId::Cuda;
+        && worker_admits_accelerator();
 }
 
 void Executor::auto_flush() {
 #ifdef HAS_ACCELERATOR
     auto& pipeline = runtime_submission_pipeline();
-    if (pipeline.flush_active || !runtime_use_cuda() || pipeline.grad_construction_depth
-            || !backend_ops(accelerator_backend_id()).execution.supports_auto_flush)
+    if (pipeline.flush_active || !runtime_use_cuda() || pipeline.grad_construction_depth)
         return;
+    const auto& policy = backend_ops(accelerator_backend_id()).execution;
     const bool deferrable = deferrable_flush();
+    if (!policy.supports_auto_flush && !(policy.async_auto_flush_only && deferrable))
+        return;
     vector<Var*> vars;
     int64 pending_bytes = 0;
     for (auto holder : runtime_holder_state().holders()) {
@@ -395,12 +404,14 @@ struct BatchState {
 // allocator, whose delayed frees go back in the order their stream callbacks
 // fire -- an order that only holds while every free is on one stream.
 static bool may_run_async(const ExecPlan& plan) {
-    // CUDA only. The worker thread runs the batch with whatever device context
-    // it has, which on ACL is none (aclrtGetDevice: 107002, context null), and
-    // an ACL host fallback flips the process-wide `use_cuda` under the Python
-    // thread's feet; `use_cuda` alone is set on every accelerator.
+    // CUDA, and ACL under `backend_fallback=error`: an ACL host fallback
+    // flips the process-wide `use_cuda` under the Python thread's feet, and
+    // only that policy rules a fallback out entirely
+    // (`async_requires_strict_fallback`). The worker needs no device binding
+    // of its own; `BackendOps::set_device` says why. `use_cuda` alone is set
+    // on every accelerator.
     if (!async_execution || !no_grad || keep_graph || save_mem || use_threading
-            || !runtime_use_cuda() || accelerator_backend_id() != BackendId::Cuda
+            || !runtime_use_cuda() || !worker_admits_accelerator()
             || graph_capture_recording || profiler_enable
             || profile_memory_enable || trace_py_var || step_trace_active()
             || !use_pinned_host_memory())

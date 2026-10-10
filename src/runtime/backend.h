@@ -39,6 +39,15 @@ struct BackendExecutionPolicy {
     bool requires_pinned_host_storage = false;
     bool preserve_reduction_dtype = false;
     bool native_low_precision_reduction = false;
+    // Auto-flush only a batch the async worker takes (see `may_run_async`).
+    // For a backend whose every extra batch costs the calling thread more than
+    // the device time it hides, a flush pays only once it is off that thread.
+    bool async_auto_flush_only = false;
+    // The async worker takes a batch only under `backend_fallback=error`. Set
+    // by a backend whose host fallback switches the process-wide `use_cuda`
+    // while it runs: on the worker that would switch it under the thread
+    // still building the graph. Under "error" no fallback ever runs.
+    bool async_requires_strict_fallback = false;
 };
 
 // The registry copies this versioned table; callback code and allocator pools
@@ -50,6 +59,10 @@ struct BackendOps {
     const char* name = nullptr;
     int (*device_count)() = nullptr;
     int (*current_device)() = nullptr;
+    // `current_device` is asked on every thread that runs work, so it binds a
+    // thread that has none yet (CUDA's `tls_bound_device`, ACL's
+    // `aclrtSetDevice` after a failed `aclrtGetDevice`) rather than failing:
+    // the async-execution worker and any dataloader thread arrive there.
     void (*set_device)(int) = nullptr;
     Allocator* (*allocator)(int, BackendMemoryKind) = nullptr;
     void (*copy)(void*, Device, const void*, Device, size_t, bool) = nullptr;

@@ -215,7 +215,13 @@ int device_count() { initialize(); return ready_device_count.load(std::memory_or
 void set_device(int device) {
     validate_device(device);
     int32_t previous = -1;
-    check_acl(aclrtGetDevice(&previous), "aclrtGetDevice");
+    // A thread that has never bound a device has no context, and asking which
+    // device it is on fails (107002) instead of answering "none". That is the
+    // state every fresh thread starts in -- the async-execution worker among
+    // them -- and binding is exactly what it is here to do, so the question
+    // not having an answer is not an error. A device that cannot be bound is
+    // still reported, by `aclrtSetDevice` below.
+    if (aclrtGetDevice(&previous) != ACL_SUCCESS) previous = -1;
     if (previous != device) check_acl(aclrtSetDevice(device), "aclrtSetDevice");
     auto& runtime = runtime_device_state();
     runtime.current_device = runtime.device_id = device;
@@ -228,7 +234,8 @@ void set_device(int device) {
         for (auto callback : runtime.switch_hooks) callback(device);
     } catch (...) {
         auto failure = std::current_exception();
-        if (aclrtSetDevice(previous) == ACL_SUCCESS) {
+        // Nothing to restore on a thread that had no device to begin with.
+        if (previous >= 0 && aclrtSetDevice(previous) == ACL_SUCCESS) {
             runtime.current_device = runtime.device_id = previous;
             try { for (auto callback : runtime.switch_hooks) callback(previous); }
             catch (...) { std::fprintf(stderr, "ACL device-hook rollback failed\n"); }
@@ -707,7 +714,17 @@ int acl_runtime_current_device() {
     const int count = ready_device_count.load(std::memory_order_relaxed);
     if (!count) return -1;
     int32_t device = -1;
-    check_acl(aclrtGetDevice(&device), "aclrtGetDevice");
+    if (aclrtGetDevice(&device) != ACL_SUCCESS) {
+        // A thread that has never bound a device has no context, and ACL
+        // answers "which device am I on" with a failure (107002) rather than
+        // "none". Every thread but the first starts there -- a dataloader
+        // thread, the async-execution worker -- and the answer it is owed is
+        // the device the process is using, so bind that one here instead of
+        // making a second thread's first operator an error.
+        device = runtime_device_state().device_id;
+        if (device < 0) device = 0;
+        check_acl(aclrtSetDevice(device), "aclrtSetDevice");
+    }
     if (count == 1) {
         cache.device = device;
         cache.epoch = epoch;
@@ -819,6 +836,12 @@ BackendOps make_acl_backend() {
     ops.execution.allocation_padding = 32;
     ops.execution.supports_parallel_compile = false;
     ops.execution.requires_pinned_host_storage = true;
+    // Measured on a Qwen3 decode step: every inline flush (128/64/256 ops)
+    // was slower than none, an extra batch costing the Python thread more
+    // than the device time it hides.
+    ops.execution.async_auto_flush_only = true;
+    // AclCpuFallbackScope flips `runtime_device_state().use_cuda`.
+    ops.execution.async_requires_strict_fallback = true;
     ops.execution.preserve_reduction_dtype = true;
     ops.execution.native_low_precision_reduction = true;
     ops.execution.supports_generated_device_kernels = false;
