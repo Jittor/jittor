@@ -25,7 +25,7 @@ repo, master's own `2.0-refactor` branch left untouched.
 Podman image `jittor-cuda:local`/`jittor-cuda:merge-base`, built from this
 repo's own `Containerfile.cuda` (adapted from flowey's original — same base
 image, `nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04`), storage/cache rooted at
-`/home/flowey/ocean/jittor/` via `run-jittor.sh`. 3× RTX 4090 available via CDI.
+`$JITTOR_LAB_ROOT/` via `run-jittor.sh`. 3× RTX 4090 available via CDI.
 
 Two environment defects blocked even a baseline build/import and are fixed on
 this branch, independent of the feature work:

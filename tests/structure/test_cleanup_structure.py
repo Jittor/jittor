@@ -350,6 +350,11 @@ class TestCleanupStructure(unittest.TestCase):
             "gen_data": "an input builder repeated across the op tests",
             "transpose0231": "permutation indices in the fp16/bf16 pair",
             "transpose0231_2": "the second of that pair's permutations",
+            "_oracle_env": "the real-PyTorch oracle's environment minus the shim, per oracle test",
+            "device": "a cpu/cuda parametrised fixture with the capability guard",
+            "complex_device": "the same fixture, named for the complex dtype tests",
+            "scalar_device": "the same fixture, named for the scalar-contract tests",
+            "scalar_promotion_device": "the same fixture, named for the promotion tests",
         }
 
         def in_test_tree(group):
