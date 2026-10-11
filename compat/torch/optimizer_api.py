@@ -1,10 +1,14 @@
 """Stable optimizer state and update adapters, sharing native mathematics."""
+
+from jittor.optim.base import _group_state, _OptimizerParamGroup, _update_preserve_dtype
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name, var_dtype_name
 from collections.abc import Mapping
 import weakref as _weakref
 import jittor as jt
 import numpy as np
 from .context import get_install_context
+from .optim_frontend import _public_group_defaults
+from .types import _dtype_to_str
 from ..diagnostics import EXPECTED, swallowed
 from typing import Any, Dict, List
 from .. import fsdp_hooks as _fsdp_hooks
@@ -31,16 +35,84 @@ def _init(self, *a, **k):
         swallowed("torch/optimizers.py _init: for pg in self.param_groups:", exc)
 
 
+class _TorchStepList(list):
+    """Persistent public step tensors; internal integer assignments write through."""
+    def __init__(self, values, group):
+        super().__init__()
+        self.params = group["params"]
+        self.device_steps = bool(group.get("capturable", False) or group.get("fused", False))
+        self.fused = bool(group.get("fused", False))
+        self.initialized = []
+        self.extend(values)
+
+    @staticmethod
+    def _numeric(value):
+        if isinstance(value, jt.Var):
+            value = value.item()
+        value = float(value)
+        if not np.isfinite(value) or value < 0 or value != int(value):
+            raise ValueError("optimizer step must be a non-negative integer")
+        return value
+
+    def append(self, value):
+        numeric = self._numeric(value)
+        g = get_install_context(jt).target_namespace
+        dtype = (g.float32 if self.fused else
+                 g.float64 if g.get_default_dtype() == g.float64 else g.float32)
+        device = self.params[len(self)].device if self.device_steps else "cpu"
+        super().append(g.tensor(numeric, dtype=dtype, device=device))
+        self.initialized.append(numeric > 0)
+
+    def extend(self, values):
+        for value in values:
+            self.append(value)
+
+    def __setitem__(self, index, value):
+        if isinstance(index, slice):
+            raise TypeError("optimizer step slice assignment is unsupported")
+        numeric = self._numeric(value)
+        # Retain the object seen by optimizer.state and state_dict callers.
+        list.__getitem__(self, index).fill_(numeric)
+        self.initialized[index] = numeric > 0
+
+    def __delitem__(self, index):
+        super().__delitem__(index)
+        del self.initialized[index]
+
+
+def _param_state_initialized(steps, index):
+    return (steps.initialized[index] if isinstance(steps, _TorchStepList)
+            else int(steps[index]) > 0)
+
+
 def _torch_param_steps(pg):
     params = list(pg.get("params", []))
-    steps = pg.get("_torch_steps")
-    if not isinstance(steps, list):
-        steps = pg["_torch_steps"] = [0] * len(params)
+    steps = _group_state(pg).get("_torch_steps")
+    if isinstance(pg, _OptimizerParamGroup):
+        if not isinstance(steps, _TorchStepList):
+            steps = _group_state(pg)["_torch_steps"] = _TorchStepList(
+                steps if isinstance(steps, list) else [0] * len(params), pg)
+    elif not isinstance(steps, list):
+        steps = _group_state(pg)["_torch_steps"] = [0] * len(params)
     while len(steps) < len(params):
         steps.append(0)
     if len(steps) > len(params):
         del steps[len(params):]
     return steps
+
+
+def _loaded_moment(value, param):
+    """Normalize once into authoritative frontend state, on its parameter."""
+    if not isinstance(value, jt.Var):
+        raise TypeError("optimizer moment must be a tensor")
+    if tuple(value.shape) != tuple(param.shape):
+        raise ValueError("optimizer moment shape does not match its parameter")
+    g = get_install_context(jt).target_namespace
+    if not isinstance(value, g.Tensor):
+        value = g.Tensor(value)
+    # Public load_state_dict uses an independent snapshot. The private slot
+    # owns this Tensor; state reads return it directly, with no export wrapper.
+    return value.detach().to(device=param.device, dtype=param.dtype).clone()
 
 
 def _torch_optimizer_kind(opt):
@@ -67,7 +139,8 @@ class _ParamState(dict):
         self._param = param
     def __setitem__(self, key, value):
         self._owner._set_field(self._param, key, value)
-        dict.__setitem__(self, key, value)
+        canonical = self._owner.get(self._param, {}).get(key, value)
+        dict.__setitem__(self, key, canonical)
     def update(self, *args, **kwargs):
         values = dict(*args, **kwargs)
         for key, value in values.items():
@@ -92,11 +165,11 @@ class _OptState:
     def _reset_slot(self, pg, i):
         _torch_param_steps(pg)[i] = 0
         for key in ("m", "values", "v", "d", "pre_grad"):
-            buffers = pg.get(key)
+            buffers = _group_state(pg).get(key)
             if not isinstance(buffers, list) or i >= len(buffers):
                 continue
             buffer = buffers[i]
-            buffers[i] = (jt.zeros_like(buffer).stop_grad()
+            buffers[i] = (get_install_context(jt).target_namespace.zeros_like(buffer).detach()
                           if isinstance(buffer, jt.Var) else None)
     def _sync_n_step(self):
         self._opt.n_step = max(
@@ -110,7 +183,11 @@ class _OptState:
         if key == "step":
             if isinstance(value, jt.Var):
                 value = value.item()
-            _torch_param_steps(pg)[i] = int(value)
+            steps = _torch_param_steps(pg)
+            initialized = _param_state_initialized(steps, i)
+            steps[i] = value
+            if isinstance(steps, _TorchStepList) and initialized:
+                steps.initialized[i] = True
             self._sync_n_step()
             return
         mappings = {
@@ -122,7 +199,7 @@ class _OptState:
                      "exp_avg_diff": "d", "pre_grad": "pre_grad"},
         }
         target = mappings.get(kind, {}).get(key)
-        buffers = pg.get(target) if target is not None else None
+        buffers = _group_state(pg).get(target) if target is not None else None
         if isinstance(buffers, list) and i < len(buffers):
             buffers[i] = value
     def get(self, param, default=None):
@@ -130,30 +207,30 @@ class _OptState:
         if pg is None:
             return default
         steps = _torch_param_steps(pg)
-        if int(steps[i]) <= 0:
+        if not _param_state_initialized(steps, i):
             return default
         kind = _torch_optimizer_kind(self._opt)
-        if kind in ("adam", "adamw") and "m" in pg and "values" in pg:
+        if kind in ("adam", "adamw") and "m" in _group_state(pg) and "values" in _group_state(pg):
             return _ParamState(self, param, {
-                "exp_avg": pg["m"][i],
-                "exp_avg_sq": pg["values"][i],
-                "step": float(steps[i])})
-        if kind == "sgd" and "values" in pg and pg.get(
+                "exp_avg": _group_state(pg)["m"][i],
+                "exp_avg_sq": _group_state(pg)["values"][i],
+                "step": steps[i]})
+        if kind == "sgd" and "values" in _group_state(pg) and pg.get(
                 "momentum", getattr(self._opt, "momentum", 0)):
             return _ParamState(self, param, {
-                "momentum_buffer": pg["values"][i]})
-        if kind == "rmsprop" and "values" in pg:
+                "momentum_buffer": _group_state(pg)["values"][i]})
+        if kind == "rmsprop" and "values" in _group_state(pg):
             return _ParamState(self, param, {
-                "square_avg": pg["values"][i],
-                "step": float(steps[i])})
+                "square_avg": _group_state(pg)["values"][i],
+                "step": steps[i]})
         if kind == "adan":
-            out = {"step": float(steps[i])}
+            out = {"step": steps[i]}
             for source, target in (
                     ("m", "exp_avg"), ("v", "exp_avg_sq"),
                     ("d", "exp_avg_diff"),
                     ("pre_grad", "pre_grad")):
-                if source in pg and i < len(pg[source]):
-                    out[target] = pg[source][i]
+                if source in _group_state(pg) and i < len(_group_state(pg)[source]):
+                    out[target] = _group_state(pg)[source][i]
             return _ParamState(self, param, out)
         return default
     def __getitem__(self, param):
@@ -215,46 +292,11 @@ def _state_dict_torch(self):
                 param_ids[id(p)] = pid
             params.append(pid)
         for k, v in pg.items():
-            if k in ("params", "grads", "m", "values", "v", "d",
-                     "pre_grad", "_torch_steps"):
+            if k == "params":
                 continue
             group[k] = v
-        group.setdefault("lr", pg.get("lr", getattr(self, "lr", 0.0)))
-        if kind in ("adam", "adamw"):
-            group.setdefault("betas", pg.get(
-                "betas", getattr(self, "betas", (0.9, 0.999))))
-            group.setdefault("eps", pg.get(
-                "eps", getattr(self, "eps", 1e-8)))
-            group.setdefault("weight_decay", pg.get(
-                "weight_decay", getattr(self, "weight_decay", 0)))
-            group.setdefault("amsgrad", False)
-            group.setdefault("maximize", False)
-            group.setdefault("foreach", None)
-            group.setdefault("capturable", False)
-            group.setdefault("differentiable", False)
-            group.setdefault("fused", getattr(self, "fused", None))
-        elif kind == "sgd":
-            for key, default in (
-                    ("momentum", 0), ("dampening", 0),
-                    ("weight_decay", 0), ("nesterov", False)):
-                group.setdefault(key, pg.get(
-                    key, getattr(self, key, default)))
-            group.setdefault("maximize", False)
-            group.setdefault("foreach", None)
-            group.setdefault("differentiable", False)
-            group.setdefault("fused", None)
-        elif kind == "rmsprop":
-            group.setdefault("alpha", pg.get(
-                "alpha", getattr(self, "alpha", 0.99)))
-            group.setdefault("eps", pg.get(
-                "eps", getattr(self, "eps", 1e-8)))
-            group.setdefault("weight_decay", 0)
-            group.setdefault("momentum", 0)
-            group.setdefault("centered", False)
-            group.setdefault("capturable", False)
-            group.setdefault("foreach", None)
-            group.setdefault("maximize", False)
-            group.setdefault("differentiable", False)
+        for key, value in _public_group_defaults(self, kind).items():
+            group.setdefault(key, value)
         group["params"] = params
         param_groups.append(group)
     state = {}
@@ -262,33 +304,33 @@ def _state_dict_torch(self):
         steps = _torch_param_steps(pg)
         for i, p in enumerate(pg.get("params", [])):
             pid = param_ids.get(id(p))
-            if pid is None or int(steps[i]) <= 0:
+            if pid is None or not _param_state_initialized(steps, i):
                 continue
             entry = {}
             if kind in ("adam", "adamw"):
-                if "m" in pg and i < len(pg["m"]):
-                    entry["exp_avg"] = pg["m"][i]
-                if "values" in pg and i < len(pg["values"]):
-                    entry["exp_avg_sq"] = pg["values"][i]
+                if "m" in _group_state(pg) and i < len(_group_state(pg)["m"]):
+                    entry["exp_avg"] = _group_state(pg)["m"][i]
+                if "values" in _group_state(pg) and i < len(_group_state(pg)["values"]):
+                    entry["exp_avg_sq"] = _group_state(pg)["values"][i]
             elif kind == "sgd":
                 momentum = pg.get(
                     "momentum", getattr(self, "momentum", 0))
-                if momentum and "values" in pg and i < len(pg["values"]):
-                    entry["momentum_buffer"] = pg["values"][i]
+                if momentum and "values" in _group_state(pg) and i < len(_group_state(pg)["values"]):
+                    entry["momentum_buffer"] = _group_state(pg)["values"][i]
             elif kind == "rmsprop":
-                if "values" in pg and i < len(pg["values"]):
-                    entry["square_avg"] = pg["values"][i]
+                if "values" in _group_state(pg) and i < len(_group_state(pg)["values"]):
+                    entry["square_avg"] = _group_state(pg)["values"][i]
             elif kind == "adan":
                 for source, target in (
                         ("m", "exp_avg"), ("v", "exp_avg_sq"),
                         ("d", "exp_avg_diff"),
                         ("pre_grad", "pre_grad")):
-                    values = pg.get(source)
+                    values = _group_state(pg).get(source)
                     if values is not None and i < len(values):
                         entry[target] = values[i]
             if entry:
                 if kind != "sgd":
-                    entry["step"] = g.tensor(float(steps[i]), dtype=g.float32)
+                    entry["step"] = steps[i]
                 state[pid] = entry
     return {"state": state, "param_groups": param_groups}
 
@@ -321,7 +363,7 @@ def _load_state_dict_torch(self, state_dict):
                 "loaded state dict contains a parameter group that "
                 "doesn't match the size of optimizer's group")
         slots = []
-        for pid in saved_params:
+        for pid, param in zip(saved_params, current_pg["params"]):
             missing = object()
             try:
                 st = saved_state.get(pid, missing)
@@ -345,6 +387,13 @@ def _load_state_dict_torch(self, state_dict):
                     raise ValueError(
                         "loaded optimizer step must be a non-negative integer")
                 step = int(numeric)
+            for key in ("exp_avg", "exp_avg_sq", "momentum_buffer",
+                        "square_avg", "exp_avg_diff", "pre_grad"):
+                if key in st:
+                    st[key] = _loaded_moment(st[key], param)
+            if kind in ("adam", "adamw") and st and not {
+                    "exp_avg", "exp_avg_sq"}.issubset(st):
+                raise ValueError("loaded Adam state requires both moment tensors")
             max_step = max(max_step, step)
             slots.append((st, step))
         load_plan.append((dict(saved_pg), slots))
@@ -355,12 +404,12 @@ def _load_state_dict_torch(self, state_dict):
         for i in range(len(steps)):
             steps[i] = 0
         for key in ("m", "values", "v", "d", "pre_grad"):
-            buffers = pg.get(key)
+            buffers = _group_state(pg).get(key)
             if not isinstance(buffers, list):
                 continue
             for i, buffer in enumerate(buffers):
                 if isinstance(buffer, jt.Var):
-                    buffers[i] = jt.zeros_like(buffer).stop_grad()
+                    buffers[i] = get_install_context(jt).target_namespace.zeros_like(buffer).detach()
     for gi, (saved_pg, slots) in enumerate(load_plan):
         pg = self.param_groups[gi]
         steps = _torch_param_steps(pg)
@@ -368,25 +417,32 @@ def _load_state_dict_torch(self, state_dict):
             if k == "params":
                 continue
             pg[k] = v
+        # Saved group policy determines scalar placement, even if this fresh
+        # optimizer was constructed with different fused/capturable defaults.
+        if isinstance(pg, _OptimizerParamGroup):
+            steps = _group_state(pg)["_torch_steps"] = _TorchStepList(
+                [0] * len(pg["params"]), pg)
         for i, (st, step) in enumerate(slots):
             if kind in ("adam", "adamw"):
-                if "m" in pg and i < len(pg["m"]) and "exp_avg" in st:
-                    pg["m"][i] = st["exp_avg"]
-                if "values" in pg and i < len(pg["values"]) \
+                if "m" in _group_state(pg) and i < len(_group_state(pg)["m"]) and "exp_avg" in st:
+                    _group_state(pg)["m"][i] = st["exp_avg"]
+                if "values" in _group_state(pg) and i < len(_group_state(pg)["values"]) \
                         and "exp_avg_sq" in st:
-                    pg["values"][i] = st["exp_avg_sq"]
+                    _group_state(pg)["values"][i] = st["exp_avg_sq"]
             elif kind == "sgd" and "momentum_buffer" in st:
-                pg["values"][i] = st["momentum_buffer"]
+                _group_state(pg)["values"][i] = st["momentum_buffer"]
             elif kind == "rmsprop" and "square_avg" in st:
-                pg["values"][i] = st["square_avg"]
+                _group_state(pg)["values"][i] = st["square_avg"]
             elif kind == "adan":
                 for source, target in (
                         ("m", "exp_avg"), ("v", "exp_avg_sq"),
                         ("d", "exp_avg_diff"),
                         ("pre_grad", "pre_grad")):
-                    if target in st and source in pg and i < len(pg[source]):
-                        pg[source][i] = st[target]
+                    if target in st and source in _group_state(pg) and i < len(_group_state(pg)[source]):
+                        _group_state(pg)[source][i] = st[target]
             steps[i] = step
+            if isinstance(steps, _TorchStepList):
+                steps.initialized[i] = bool(st)
     self.n_step = max_step
     return None
 
@@ -398,9 +454,9 @@ def _zero_grad_compat(self, set_to_none=True):
         _params = list(_pg.get("params", []))
         _new_grads: List[Any] = []
         if set_to_none:
-            _pg.pop("grads", None)
+            _group_state(_pg).pop("grads", None)
         else:
-            _old_grads = list(_pg.get("grads") or [])
+            _old_grads = list(_group_state(_pg).get("grads") or [])
             _new_grads = []
             for _i, _p in enumerate(_params):
                 _old = _old_grads[_i] if _i < len(_old_grads) else None
@@ -421,9 +477,9 @@ def _zero_grad_compat(self, set_to_none=True):
                 else:
                     _new_grads.append(None)
             if any(isinstance(_g, jt.Var) for _g in _new_grads):
-                _pg["grads"] = _new_grads
+                _group_state(_pg)["grads"] = _new_grads
             else:
-                _pg.pop("grads", None)
+                _group_state(_pg).pop("grads", None)
         for _i, _p in enumerate(_params):
             if not isinstance(_p, jt.Var):
                 continue
@@ -457,7 +513,7 @@ def _backward_with_step_marker(self, *args, **kwargs):
 
 def _optimizer_has_ready_grads(opt):
     for _pg in getattr(opt, "param_groups", []):
-        _grads = _pg.get("grads")
+        _grads = _group_state(_pg).get("grads")
         if not _grads:
             continue
         for _p, _g in zip(_pg.get("params", []), _grads):
@@ -469,7 +525,7 @@ def _optimizer_has_ready_grads(opt):
 def _advance_ready_param_steps(opt):
     for pg in getattr(opt, "param_groups", []):
         steps = _torch_param_steps(pg)
-        grads = pg.get("grads") or []
+        grads = _group_state(pg).get("grads") or []
         for i, (param, grad) in enumerate(zip(pg.get("params", []), grads)):
             if isinstance(param, jt.Var) and isinstance(grad, jt.Var) \
                     and list(param.shape) == list(grad.shape):
@@ -604,9 +660,9 @@ def _step_with_closure(self, loss, retain_graph, closure, kwargs, native_kind):
 
 
 def _update_in_target_dtype(target, value):
-    if var_dtype_name(value) != var_dtype_name(target):  # native, not `.dtype`
-        value = value.cast(var_dtype_name(target))
-    target.update(value)
+    # Torch Adam/AdamW and native optimizer families share the same commit
+    # boundary; preserving dtype alone left a live optimizer grad_fn on p.
+    _update_preserve_dtype(target, value)
 
 
 def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay):
@@ -662,7 +718,7 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
         # torch permits optimizers containing frozen or otherwise
         # unused parameters. loss.backward() then leaves the group
         # without gradients and step() must be a no-op, not KeyError.
-        grads = pg.get("grads") or [None] * len(pg["params"])
+        grads = _group_state(pg).get("grads") or [None] * len(pg["params"])
         # `use_acl` is an alias of `use_cuda` (see FLAG_ALIASES), so it is true
         # on a CUDA build as well and cannot say which backend is actually in
         # use. Asking the dispatcher does: `optim.adamw_fused` is registered
@@ -682,7 +738,7 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
         active = []
         if want_fused:
             for i, (p, g, v, m) in enumerate(zip(
-                    pg["params"], grads, pg["values"], pg["m"])):
+                    pg["params"], grads, _group_state(pg)["values"], _group_state(pg)["m"])):
                 if not p.requires_grad or not isinstance(g, jt.Var) \
                         or list(g.shape) != list(p.shape):
                     continue
@@ -693,7 +749,7 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
         if fused_impl is not None:
             stepped = []
             for i, (p, g, v, m) in enumerate(zip(
-                    pg["params"], grads, pg["values"], pg["m"])):
+                    pg["params"], grads, _group_state(pg)["values"], _group_state(pg)["m"])):
                 if not p.requires_grad or not isinstance(g, jt.Var) \
                         or list(g.shape) != list(p.shape):
                     continue
@@ -718,14 +774,14 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
             continue
         step_capture.refuse("the per-parameter Adam update bakes its step count in")
         for i, (p, g, v, m) in enumerate(zip(
-                pg["params"], grads, pg["values"], pg["m"])):
+                pg["params"], grads, _group_state(pg)["values"], _group_state(pg)["m"])):
             was_trainable = bool(p.requires_grad)
             if not was_trainable or not isinstance(g, jt.Var) or list(g.shape) != list(p.shape):
                 continue
             param_steps[i] = int(param_steps[i]) + 1
             _update_in_target_dtype(p, adam_update(
                 p, g, v, m, lr=lr, eps=eps, weight_decay=weight_decay,
-                betas=(b0, b1), step=param_steps[i],
+                betas=(b0, b1), step=int(param_steps[i]),
                 decoupled_weight_decay=decoupled_weight_decay,
                 torch_math=True,
             ))

@@ -45,6 +45,8 @@ _ORIG_MODULE_NAMED_BUFFERS = nn.Module.named_buffers
 _ORIG_MODULE_NAMED_MODULES = nn.Module.named_modules
 _ORIG_MODULE_LOAD_STATE_DICT = nn.Module.load_state_dict
 _ORIG_MODULE_PARAMETERS = nn.Module.parameters
+_ORIG_NATIVE_MODULE_INIT = nn.Module.__init__
+_COOPERATIVE_NATIVE_MODULE = None
 _ORIG_MODULE_PARAMETER_MAP = nn.Module.__dict__["_parameters"].fget
 
 
@@ -232,9 +234,8 @@ def _dispatch_module_call(self, *args, **kwargs):
     inst_fwd = self.__dict__.get("forward", None)
     if inst_fwd is not None and callable(inst_fwd):
         return inst_fwd(*args, **kwargs)
-    rms_norm = _standard_rms_norm(self, args, kwargs)
-    if rms_norm is not None:
-        return rms_norm
+    # A class name is not a semantic contract: execute the declared forward.
+    # Explicit native RMSNorm APIs retain their own backend dispatch.
     if _prefer_forward(type(self)):
         return type(self).forward(self, *args, **kwargs)
     return _ORIG_MODULE_DISPATCH_CALL(self, *args, **kwargs)
@@ -447,6 +448,41 @@ def _state_dict_key_diff(root, state_dict):
     return missing, unexpected, mismatched
 
 
+def _registered_state_slots(module, recurse=True, persistent_only=True):
+    """Read canonical native ownership; never introduce a shadow registry."""
+    modules = module.named_modules(remove_duplicate=False) if recurse else [("", module)]
+    for prefix, child in modules:
+        for name, value, role in tuple(child._var_roles()):
+            allowed = ("parameter", "buffer") if persistent_only else ("parameter", "buffer", "non_persistent_buffer")
+            if role in allowed:
+                yield ((prefix + "." if prefix else "") + str(name), child, str(name), value, role)
+
+
+def _replace_registered_value(child, name, value, role):
+    if role == "parameter":
+        child.register_parameter(name, value)
+    else:
+        child.register_buffer(name, value, persistent=role == "buffer")
+
+
+def _assign_state_properties(module, state_dict):
+    from ...context import get_install_context
+    owner = get_install_context(jt).target_namespace
+    wrapped = {}
+    for key, child, name, target, role in _registered_state_slots(module):
+        if key not in state_dict:
+            continue
+        source = state_dict[key]
+        if not isinstance(source, jt.Var):
+            raise TypeError("assign=True requires tensor checkpoint values: " + key)
+        if role == "parameter":
+            cache_key = (id(source), bool(target.requires_grad))
+            if cache_key not in wrapped:
+                wrapped[cache_key] = owner.nn.Parameter(source, requires_grad=target.requires_grad)
+            source = wrapped[cache_key]
+        _replace_registered_value(child, name, source, role)
+
+
 def _load_state_dict(self, state_dict, strict=True, assign=False):
     """Torch's ``load_state_dict``: honours ``strict`` and returns the keys."""
     missing, unexpected, mismatched = _state_dict_key_diff(self, state_dict)
@@ -471,6 +507,16 @@ def _load_state_dict(self, state_dict, strict=True, assign=False):
         raise RuntimeError(
             "Error(s) in loading state_dict for %s:\n\t%s"
             % (type(self).__name__, "\n\t".join(parts)))
+    if assign:
+        _assign_state_properties(self, state_dict)
+        return _IncompatibleKeys(missing, unexpected)
+    metadata_targets = {name for name, value in self.state_dict().items() if value.is_metadata}
+    if metadata_targets:
+        import warnings
+        for name in sorted(metadata_targets.intersection(state_dict)):
+            warnings.warn("Copying checkpoint tensor to meta parameter " + name
+                          + " is a no-op; use assign=True to replace it.", UserWarning)
+        state_dict = {name: value for name, value in state_dict.items() if name not in metadata_targets}
     # preserve trainable flags: jittor assign can flip stop_grad
     trainable = set()
     try:
@@ -917,10 +963,21 @@ def _module_to(self, *args, **kwargs):
 
 
 def _module_to_empty(self, *, device, recurse=True):
-    """Torch's ``to_empty``; Jittor has no meta storage, so values survive."""
-    # Jittor does not expose meta storage. Models are already materialized,
-    # so preserve their values while honoring the requested residency.
-    return _module_to(self, device=device)
+    """Replace tensor storage without attempting to read the previous values."""
+    from ...context import get_install_context
+    owner = get_install_context(jt).target_namespace
+    converted = {}
+    for _, child, name, value, role in _registered_state_slots(self, recurse=recurse, persistent_only=False):
+        if getattr(value, "grad", None) is not None:
+            raise NotImplementedError("to_empty with existing gradients is not yet supported")
+        key = (id(value), role == "parameter")
+        if key not in converted:
+            replacement = owner.empty_like(value, device=device)
+            if role == "parameter":
+                replacement = owner.nn.Parameter(replacement, requires_grad=value.requires_grad)
+            converted[key] = replacement
+        _replace_registered_value(child, name, converted[key], role)
+    return self
 
 
 def _module_accelerator_device(kind, dev):
@@ -1153,8 +1210,9 @@ register_fidelity(
     "torch.nn.Module.load_state_dict", _load_state_dict, Fidelity.APPROXIMATE,
     "Returns a namedtuple with missing_keys/unexpected_keys like torch, and "
     "preserves each target parameter's existing dtype so loading a float32 "
-    "checkpoint into a half module stays half. assign= is accepted but always "
-    "copies into the existing Var so parameter identity survives.")
+    "checkpoint into a half module stays half. assign=True replaces registered "
+    "parameter/buffer objects with incoming tensor properties, preserving target "
+    "parameter requires_grad; construct optimizers after assigning.")
 register_fidelity(
     "torch.nn.Module.parameters", _parameters, Fidelity.APPROXIMATE,
     "Returns a list-like that also registers its members as autograd leaves, so "
@@ -1178,9 +1236,9 @@ register_fidelity(
     "device.")
 register_fidelity(
     "torch.nn.Module.to_empty", _module_to_empty, Fidelity.APPROXIMATE,
-    "Honors the requested residency but preserves values instead of leaving "
-    "them uninitialized, because jittor exposes no meta storage. Callers that "
-    "rely on torch's uninitialized result see initialized data.")
+    "Replaces registered storage without copying values; honors recurse and "
+    "preserves tied tensor references. Existing-gradient conversion is explicitly "
+    "unsupported; validate optimizer ownership after replacing parameter objects.")
 register_fidelity(
     "torch.nn.Module.cuda", _module_cuda, Fidelity.APPROXIMATE,
     "Delegates to to(); a bare .cuda() keeps a parameter on the device it is "
@@ -1197,6 +1255,22 @@ def _module_extra_repr(self):
     return ""
 
 
+def _native_module_init(self, *args, **kwargs):
+    """Preserve cooperative initializers mixed after the native Module."""
+    if not args and not kwargs:
+        return _ORIG_NATIVE_MODULE_INIT(self)
+    mro = type(self).__mro__
+    try:
+        module_index = mro.index(_COOPERATIVE_NATIVE_MODULE)
+    except ValueError:
+        return _ORIG_NATIVE_MODULE_INIT(self, *args, **kwargs)
+    next_type = mro[module_index + 1] if module_index + 1 < len(mro) else object
+    next_init = next_type.__dict__.get("__init__", object.__init__)
+    if next_init is object.__init__:
+        return _ORIG_NATIVE_MODULE_INIT(self, *args, **kwargs)
+    return next_init(self, *args, **kwargs)
+
+
 def _install_module_methods(nn, registry=None):
     """Bind the torch-compatible ``nn.Module`` methods; all are module level.
 
@@ -1209,6 +1283,14 @@ def _install_module_methods(nn, registry=None):
     """
     registry = registry_for(jt, registry)
     M = nn.Module
+    global _COOPERATIVE_NATIVE_MODULE
+    torch_native_base = M.__bases__[0]
+    _COOPERATIVE_NATIVE_MODULE = torch_native_base.__bases__[0]
+    # Both levels belong to the Torch frontend.  Explicit
+    # super(nn.Module, self).__init__(...) resolves to the private base;
+    # ordinary super().__init__(...) resolves to Module itself.
+    torch_native_base.__init__ = _native_module_init
+    M.__init__ = _native_module_init
 
     # A fresh install re-reads the pipelining env var and forgets any threshold a
     # previous one had been asked for.

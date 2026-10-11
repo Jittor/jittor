@@ -1,6 +1,7 @@
 #pragma once
 #include "core/executor.h"
 #include "runtime/holder_state.h"
+#include "runtime/fetch_state.h"
 #include "runtime/submission_pipeline.h"
 #include "runtime/traversal_state.h"
 #include "runtime/device_state.h"
@@ -9,6 +10,8 @@
 #include "runtime/backend.h"
 #include "runtime/backend_fallback.h"
 #include "runtime/launch_diagnostics.h"
+#include "runtime/rng_state.h"
+#include "runtime/memory_state.h"
 
 namespace jittor {
 
@@ -23,6 +26,7 @@ public:
     Executor& executor() { return executor_; }
     SubmissionPipeline& submissions() { return submissions_; }
     RuntimeHolderState& holders() { return holders_; }
+    RuntimeFetchState& fetches() { return fetches_; }
     RuntimeTraversalState& traversals() { return traversals_; }
     RuntimeDeviceState& devices() { return devices_; }
     RuntimeJitPolicy& jit_policy() { return jit_policy_; }
@@ -30,11 +34,14 @@ public:
     BackendRegistry& backends() { return backends_; }
     BackendFallbackState& fallbacks() { return fallbacks_; }
     LaunchHistory& launches() { return launches_; }
+    RuntimeRngState& rng() { return rng_; }
+    RuntimeMemoryState& memory() { return memory_; }
 
 private:
     Executor executor_;
     SubmissionPipeline submissions_;
     RuntimeHolderState holders_;
+    RuntimeFetchState fetches_;
     RuntimeTraversalState traversals_;
     RuntimeDeviceState devices_;
     RuntimeJitPolicy jit_policy_;
@@ -42,6 +49,8 @@ private:
     BackendRegistry backends_;
     BackendFallbackState fallbacks_;
     LaunchHistory launches_;
+    RuntimeRngState rng_;
+    RuntimeMemoryState memory_;
 };
 
 EXTERN_LIB NativeRuntime& native_runtime();

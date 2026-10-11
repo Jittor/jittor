@@ -326,27 +326,9 @@ class device:
     # tensors built inside the block default to that device. The factory
     # frontend reads `active_device_context()` to honor it.
     #
-    # transformers' from_pretrained builds the model under `with
-    # torch.device("meta")` and uses that context to SKIP weight inits (and the
-    # `_is_hf_initialized` marking) -- see modeling_utils.get_torch_context_
-    # manager_or_global_device(), which probes `torch.tensor([]).device`. If the
-    # inits run anyway, modules end up flagged initialized, and the later
-    # `_initialize_missing_keys()` step never recomputes non-persistent buffers
-    # (e.g. RoPE inv_freq), leaving them as the `torch.empty_like` garbage that
-    # `_move_missing_keys_from_meta_to_device` wrote. We can't allocate real
-    # meta tensors in jittor, but we can make the *meta* context observable: push
-    # it on a thread-local stack so Var.device reports "meta" inside it. Tensors
-    # are still really allocated (harmless -- real weights get loaded over them),
-    # but transformers correctly skips the eager init. A meta block therefore
-    # does not join the default-device stack.
-    # An *indexed* CUDA device context is not a no-op any more: torch's
-    # `with torch.device("cuda:1"):` makes device 1 the default new tensors
-    # are built on, and jittor now has a current device that means exactly
-    # that. A bare "cuda" still names the current device, so it stays a no-op.
+    # Meta is a persistent native storage kind, not a device-report override.
+    # Its context shares the thread-local default stack with physical devices.
     def __enter__(self):
-        if self.type == "meta":
-            _DEVICE_CTX_STACK.append(self)
-            return self
         _default_device_stack().append(self)
         if self.type in ("cuda", "npu") and self.index is not None:
             try:
@@ -360,13 +342,9 @@ class device:
         return self
 
     def __exit__(self, *exc):
-        if self.type == "meta":
-            if _DEVICE_CTX_STACK and _DEVICE_CTX_STACK[-1] is self:
-                _DEVICE_CTX_STACK.pop()
-        else:
-            stack = _default_device_stack()
-            if stack and stack[-1] is self:
-                stack.pop()
+        stack = _default_device_stack()
+        if stack and stack[-1] is self:
+            stack.pop()
         prev = getattr(self, "_prev_index", None)
         if prev is not None and prev >= 0:
             try:

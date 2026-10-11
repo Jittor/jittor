@@ -396,14 +396,10 @@ def test_dropout_forward_uses_launcher_and_backward_remains_present():
     forward = source[source.index("void DropoutOpRunner::executeOp"):source.index("DropoutBackwardOpRunner::DropoutBackwardOpRunner")]
     assert "attr->p" in forward
     assert "attr->train" in forward
-    # Not attr->seed/attr->offset: those came from the Python wrapper as
-    # fixed 0,0 placeholders, which made aclnnDropout return the identical
-    # mask on every call (the attribute schema still declares the fields,
-    # and still requires them to serialize, but the actual stream position
-    # has to come from jittor's own global RNG counter -- the same one
-    # RandomOpRunner and MultinomialOpRunner already read -- and advance.
-    assert "current_seed" in forward
-    assert "current_offset" in forward
+    # The selected device's RNG stream supplies both Philox values and
+    # advances atomically through the shared reservation API.
+    assert "reserve_acl_random" in forward
+    assert "in_[0]->device_id" in forward
     assert "launch(ret, aclnnDropout, true);" in forward
     assert "checkRet(ret);" not in forward
     assert "mallocWorkSpace(workspaceSize)" not in forward

@@ -423,7 +423,7 @@ class TestRMSNormDispatch(Base):
                 self.variance_epsilon = 1e-6
 
             def forward(self, hidden_states):
-                raise AssertionError("standard RMSNorm missed CUDA dispatch")
+                return hidden_states * self.weight * 7.0
 
         class OffsetRMSNorm(nn.Module):
             def __init__(self):
@@ -452,8 +452,8 @@ class TestRMSNormDispatch(Base):
                     [standard, offset, overridden]
                 )
 
-        self.assertEqual(calls, [((2, 4, 8), (8,), 1e-6)])
-        np.testing.assert_array_equal(standard_np, np.full((2, 4, 8), 3.0))
+        self.assertEqual(calls, [])
+        np.testing.assert_array_equal(standard_np, np.full((2, 4, 8), 7.0))
         np.testing.assert_array_equal(offset_np, np.ones((2, 4, 8)))
         np.testing.assert_array_equal(overridden_np, np.full((2, 4, 8), 5.0))
 

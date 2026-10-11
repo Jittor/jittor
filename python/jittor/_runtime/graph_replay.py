@@ -1316,6 +1316,14 @@ def auto_replay_for(module, args, kw):
     flags = jt.flags
     if not flags.auto_graph_replay or not flags.no_grad:
         return None
+    # PEFT switches LoRA layers on and off in-place for reference-model
+    # forwards.  No parameter is rebound and training mode stays unchanged,
+    # so a captured student graph would silently stand in for the base model.
+    # Automatic replay cannot observe this host-side control state.  Keep
+    # explicit graph_replay/torch.compile opt-in available to the caller.
+    attributes = module.__dict__
+    if "base_model" in attributes and "_peft_config" in attributes:
+        return None
     found = _auto_arguments(args, kw)
     if found is None:
         return None

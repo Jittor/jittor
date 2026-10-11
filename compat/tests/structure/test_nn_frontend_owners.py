@@ -155,6 +155,46 @@ class TestNNFrontendOwners(unittest.TestCase):
         with self.assertRaises(TypeError):
             values.extend(source)
 
+    def test_distinct_module_list_does_not_match_sequential(self):
+        class NativeSequential(NativeModule):
+            def __init__(self, modules=()):
+                self.layers = list(modules)
+
+            def __iter__(self):
+                return iter(self.layers)
+
+            def execute(self, value):
+                for layer in self.layers:
+                    value = layer(value)
+                return value
+
+        sequential_type = self.owner.adapt_class(NativeSequential)
+        module_list_type = self.frontend.make_distinct_module_list(self.owner, NativeSequential)
+        sequential = sequential_type([])
+        module_list = module_list_type([])
+        self.assertIsInstance(sequential, self.owner.Module)
+        self.assertIsInstance(module_list, self.owner.Module)
+        self.assertNotIsInstance(sequential, module_list_type)
+        self.assertNotIsInstance(module_list, sequential_type)
+        with self.assertRaisesRegex(NotImplementedError, "ModuleList"):
+            module_list(None)
+
+    def test_sequential_setattr_registers_attached_child(self):
+        class NativeSequential(NativeModule):
+            def __init__(self):
+                self.layers = {}
+
+            def add_module(self, name, value):
+                self.layers[name] = value
+
+        self.backend.nn.Sequential = NativeSequential
+        sequential_type = self.owner.adapt_class(NativeSequential)
+        sequential = sequential_type()
+        child = self.owner.Module()
+        sequential.side_default = child
+        self.assertIs(sequential.layers["side_default"], child)
+        self.assertNotIn("side_default", vars(sequential))
+
     def test_factories_have_no_nested_behavior_definitions(self):
         for filename in ("nn_frontend.py", "parameter_containers.py", "nn_adoption.py"):
             tree = ast.parse((SOURCE / filename).read_text())

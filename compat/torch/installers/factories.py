@@ -237,6 +237,7 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
         if native_shape:
             out = orig(*args)
             out._jittor_torch_ext_mutable = True
+            out.requires_grad_(False)
             return out
     # _invoke_factory already established native construction placement.
     _requires_grad = bool(kwargs.get("requires_grad", False))
@@ -255,6 +256,13 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
         args = tuple(a.item() if isinstance(a, np.generic) else a for a in args)
     elif args and _takes_shape:
         args = tuple(_shape_arg(a) for a in args)
+    # Torch infers int64 for an integer-only arange. Jittor's native default
+    # is int32, which silently changes registered model state such as
+    # Transformers' BERT position_ids buffer. Preserve Jittor's float inference
+    # for floating bounds and only supply the Torch default for integer bounds.
+    if (name == "arange" and args and "dtype" not in kwargs and
+            all(type(a) is int for a in args)):
+        kwargs["dtype"] = "int64"
     # Jittor factories reject Size/NanoVector tuple subclasses.
     if _takes_shape and args and (isinstance(args[0], jt.NanoVector) or
                  (isinstance(args[0], tuple) and type(args[0]) is not tuple)):
@@ -298,7 +306,9 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
             _cast_to = _dtype_to_str(kwargs.pop("dtype"))
     out = orig(*args, **kwargs)
     if _cast_to is not None:
-        out = out.cast(_cast_to)
+        # A metadata factory has no storage or CastOp to execute. Preserve its
+        # native shape/stride metadata while changing only the requested dtype.
+        out = out.metadata_copy(_cast_to) if out.is_metadata else out.cast(_cast_to)
     out._jittor_torch_ext_mutable = True
     out.requires_grad_(_requires_grad)
     if _requires_grad:

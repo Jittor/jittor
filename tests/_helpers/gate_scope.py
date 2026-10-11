@@ -93,6 +93,11 @@ ENVIRONMENT_SKIP_PATTERNS = (
     # files as unexplained and the whole selection exited non-zero with every
     # test passing.
     "tensordict", "mmcv", "mmengine",
+    # The package-resolution contract runs only after an installed core package
+    # is available. Source-tree sessions deliberately remove checkout paths in
+    # that child, so this exact skip reason means the installation probe is not
+    # applicable here rather than that its assertion passed.
+    "jittor is not installed in this interpreter",
     # Facts about the *runner* rather than the machine's hardware: a case that
     # asserts directory permissions cannot hold when the suite runs as root,
     # because root bypasses them.

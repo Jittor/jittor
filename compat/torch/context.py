@@ -162,6 +162,29 @@ class ModuleRegistry:
                 module.__path__ = []
         return module
 
+    def ensure_entrypoint(self, name, entry_module, entry_name="main"):
+        """Publish a runnable synthetic leaf through the same ownership registry."""
+        from .module_entrypoint import ModuleEntrypointLoader
+        parent_name = name.rpartition(".")[0]
+        if parent_name:
+            parent = self.ensure(parent_name, package=True)
+            parent.__spec__.submodule_search_locations = list(parent.__path__)
+        existing = self.get(name)
+        if existing is not None:
+            loader = getattr(existing, "__loader__", None)
+            if (not isinstance(loader, ModuleEntrypointLoader)
+                    or (loader.entry_module, loader.entry_name) != (entry_module, entry_name)):
+                raise RuntimeError("entrypoint ownership collision: " + name)
+            return existing
+        loader = ModuleEntrypointLoader(name, entry_module, entry_name)
+        spec = importlib.machinery.ModuleSpec(name, loader, is_package=False)
+        module = types.ModuleType(name)
+        module.__loader__ = loader
+        module.__spec__ = spec
+        module.__package__ = parent_name
+        loader.exec_module(module)
+        return self.publish(name, module)
+
     def get(self, name):
         return self._modules.get(name)
 

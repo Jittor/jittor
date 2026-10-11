@@ -17,8 +17,13 @@ import numpy as np
 import torch
 import jittor as jt
 
-# The legacy cuda sweep label also exercises the registered ACL/ROCm backend.
-_DEVICES = [("cpu", 0)] + ([("cuda", 1)] if _test_capability.any_accelerator_enabled(backend=jt) else [])
+# Use the runtime's truthful Torch device name while retaining Jittor's legacy
+# accelerator flag to enter the selected backend.
+_HAS_ACCELERATOR = _test_capability.any_accelerator_enabled(backend=jt)
+_ACCELERATOR_DEVICE = (
+    "npu" if _test_capability.check_accelerator("acl", backend=jt).enabled else "cuda"
+) if _HAS_ACCELERATOR else None
+_DEVICES = [("cpu", 0)] + ([(_ACCELERATOR_DEVICE, 1)] if _HAS_ACCELERATOR else [])
 
 
 def both_devices(fn):
@@ -198,9 +203,9 @@ class TestConstructorDtype(Base):
 
     def test_arange_dtype(self):
         def body(dev):
-            self.assertEqual(dts(torch.arange(5)), "int32", dev)          # int range -> int32
+            self.assertEqual(dts(torch.arange(5)), "int64", dev)          # Torch integer default
             self.assertEqual(dts(torch.arange(0.0, 5.0)), "float32", dev)  # float range -> float32
-            self.ae(torch.arange(5).numpy(), np.arange(5, dtype="int32"), dev)
+            self.ae(torch.arange(5).numpy(), np.arange(5, dtype="int64"), dev)
         both_devices(body)
 
     def test_like_constructors_keep_dtype(self):
@@ -244,10 +249,16 @@ class TestCastMethods(Base):
         def body(dev):
             x = torch.tensor(self.x)
             self.assertEqual(dts(x.to(torch.float64)), "float64", dev)
-            if _DEVICES[-1][0] == "cuda":
-                moved = x.to("cuda")
+            if dev != "cpu":
+                moved = x.to(dev)
                 self.assertEqual(dts(moved), "float32", dev)
-                self.assertEqual(moved.device.type, "cuda", dev)
+                self.assertEqual(moved.device.type, dev, dev)
+            elif _HAS_ACCELERATOR:
+                # Move to the truthful accelerator name from CPU instead of
+                # relying on the legacy CUDA alias used by older sweeps.
+                moved = x.to(_ACCELERATOR_DEVICE)
+                self.assertEqual(dts(moved), "float32", _ACCELERATOR_DEVICE)
+                self.assertEqual(moved.device.type, _ACCELERATOR_DEVICE)
             else:
                 with self.assertRaises(RuntimeError):
                     x.to("cuda")

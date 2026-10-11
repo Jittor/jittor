@@ -1,5 +1,7 @@
 """Adan optimizer."""
 
+from jittor.optim.base import _group_state
+
 import jittor as jt
 
 from ..base import (
@@ -40,27 +42,28 @@ class Adan(Optimizer):
         self.max_grad_norm = max_grad_norm
 
         for pg in self.param_groups:
-            pg["m"] = []
-            pg["v"] = []
-            pg["d"] = []
-            pg["pre_grad"] = []
+            _group_state(pg)["m"] = []
+            _group_state(pg)["v"] = []
+            _group_state(pg)["d"] = []
+            _group_state(pg)["pre_grad"] = []
             for p in pg["params"]:
-                pg["m"].append(_state_buffer(p))
-                pg["v"].append(_state_buffer(p))
-                pg["d"].append(_state_buffer(p))
-                pg["pre_grad"].append(_state_buffer(p))
+                _group_state(pg)["m"].append(self._new_state_buffer(p))
+                _group_state(pg)["v"].append(self._new_state_buffer(p))
+                _group_state(pg)["d"].append(self._new_state_buffer(p))
+                _group_state(pg)["pre_grad"].append(self._new_state_buffer(p))
 
 
     def add_param_group(self, group):
-        group["m"] = []
-        group["v"] = []
-        group["d"] = []
-        group["pre_grad"] = []
+        group = self._prepare_param_group(group)
+        _group_state(group)["m"] = []
+        _group_state(group)["v"] = []
+        _group_state(group)["d"] = []
+        _group_state(group)["pre_grad"] = []
         for p in group["params"]:
-            group["m"].append(_state_buffer(p))
-            group["v"].append(_state_buffer(p))
-            group["d"].append(_state_buffer(p))
-            group["pre_grad"].append(_state_buffer(p))
+            _group_state(group)["m"].append(self._new_state_buffer(p))
+            _group_state(group)["v"].append(self._new_state_buffer(p))
+            _group_state(group)["d"].append(self._new_state_buffer(p))
+            _group_state(group)["pre_grad"].append(self._new_state_buffer(p))
         self.param_groups.append(group)
 
     def _global_max_grad_norm(self):
@@ -109,11 +112,11 @@ class Adan(Optimizer):
             eps_bias_sqrt = eps * bias_correction3_sqrt
 
             for p, g, m, v, d, pre_g in zip(pg["params"],
-                                            pg["grads"],
-                                            pg["m"],
-                                            pg["v"],
-                                            pg["d"],
-                                            pg["pre_grad"]):
+                                            _group_state(pg)["grads"],
+                                            _group_state(pg)["m"],
+                                            _group_state(pg)["v"],
+                                            _group_state(pg)["d"],
+                                            _group_state(pg)["pre_grad"]):
                 if not _param_requires_grad(p) or not _grad_matches_param(p, g): continue
 
                 if first_step:

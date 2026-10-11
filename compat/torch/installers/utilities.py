@@ -527,28 +527,9 @@ _INTRA_OP_THREADS = None
 
 
 def _api_g_get_num_threads():
-    """torch's intra-op thread count, as torch would report it.
-
-    Was `os.cpu_count()` unconditionally, which is wrong twice: it ignored
-    `OMP_NUM_THREADS` (real torch honours it -- measured, `OMP_NUM_THREADS=1`
-    gives 1), and it ignored `set_num_threads` entirely, so
-    `set_num_threads(n); get_num_threads()` never gave back `n`. Code that
-    sizes a pool from this got the machine's logical core count no matter what
-    it or its operator asked for, and the ecosystem speed harness refused to
-    compare runtimes because the two sides disagreed (384 here against real
-    torch's 192).
-
-    Affinity, not `cpu_count`, is the fallback: inside a cpuset the process
-    cannot use the cores `cpu_count` counts.
-    """
     if _INTRA_OP_THREADS is not None:
         return _INTRA_OP_THREADS
-    requested = os.environ.get("OMP_NUM_THREADS", "").strip()
-    if requested.isdigit() and int(requested) > 0:
-        return int(requested)
-    if hasattr(os, "sched_getaffinity"):
-        return len(os.sched_getaffinity(0)) or 1
-    return os.cpu_count() or 1
+    return int(jt.core.runtime_openmp_max_threads())
 
 
 def _api_g_set_num_threads(threads=None, *args, **kwargs):

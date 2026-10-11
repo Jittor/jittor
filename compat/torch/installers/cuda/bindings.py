@@ -269,7 +269,7 @@ def _install_cuda(g, registry=None):
     g.cuda = cuda
     _modules["torch.cuda"] = cuda
     _modules["torch.cuda.memory"] = cuda.memory
-    for _dev_ns in ("mps", "cpu", "npu", "xpu", "mtia"):
+    for _dev_ns in ("mps", "cpu", "xpu", "mtia"):
         _mod = _modules.get("torch." + _dev_ns)
         if _mod is None:
             _mod = _types.ModuleType("torch." + _dev_ns)
@@ -512,4 +512,6 @@ def install(ctx):
     _install_cuda(g, ctx.registry)
     _install_version(g, ctx.registry)
     _install_accelerator(g, ctx.registry)
+    from ..npu import install as _install_npu
+    _install_npu(ctx)
     _register_cuda_fidelity(ctx)

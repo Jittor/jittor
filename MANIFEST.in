@@ -371,6 +371,7 @@ include docs/results/2026-09-14-exit-heap-corruption.md
 include docs/results/2026-09-14-jittor-vs-pytorch.md
 include docs/results/2026-09-14-vllm-omni-h3-enablement.md
 include docs/results/2026-09-19-torch-compat-runbook-verification.md
+include docs/results/2026-09-22-ms-swift-ascend-lora.md
 include docs/results/2026-09-24-torch-compat-real-models.md
 include docs/results/2026-09-25-profiling-tools.md
 include docs/results/index.md
@@ -711,6 +712,7 @@ include src/runtime/dispatch_context.cc
 include src/runtime/dispatch_context.h
 include src/runtime/executor_entry.cc
 include src/runtime/executor_entry.h
+include src/runtime/fetch_state.h
 include src/runtime/file_rendezvous.h
 include src/runtime/float32_precision.cc
 include src/runtime/float32_precision.h
@@ -726,6 +728,7 @@ include src/runtime/launch_diagnostics.cc
 include src/runtime/launch_diagnostics.h
 include src/runtime/lock.cc
 include src/runtime/lock.h
+include src/runtime/memory_state.h
 include src/runtime/node_index.h
 include src/runtime/profiler/cache_info.cc
 include src/runtime/profiler/cache_info.h
@@ -742,11 +745,15 @@ include src/runtime/profiler/step_trace.h
 include src/runtime/profiler/vtop.cc
 include src/runtime/ring_buffer.cc
 include src/runtime/ring_buffer.h
+include src/runtime/rng_state.cc
+include src/runtime/rng_state.h
 include src/runtime/runtime.cc
 include src/runtime/runtime.h
 include src/runtime/submission_pipeline.h
 include src/runtime/tensor_placement.cc
 include src/runtime/tensor_placement.h
+include src/runtime/threading.cc
+include src/runtime/threading.h
 include src/runtime/traversal_epoch.cc
 include src/runtime/traversal_epoch.h
 include src/runtime/traversal_state.h

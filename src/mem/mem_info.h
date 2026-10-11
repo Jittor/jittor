@@ -53,6 +53,22 @@ int64 device_memory_used(int device);
 // @pyjt(device_memory_reserved)
 int64 device_memory_reserved(int device);
 
+// Exact event-driven metrics for supported default SFRL device pools only.
+// Unknown/nested allocator stacks and alternate allocator modes are rejected.
+struct Allocator;
+void register_device_pool(const Allocator* pool, Allocator* underlying);
+void unregister_device_pool(const Allocator* pool);
+void update_device_pool(const Allocator* pool, int64 live_delta, int64 reserved_delta);
+// @pyjt(device_pool_memory_used)
+int64 device_pool_memory_used(int device);
+// @pyjt(device_pool_memory_reserved)
+int64 device_pool_memory_reserved(int device);
+// @pyjt(device_memory_peak_used)
+int64 device_memory_peak_used(int device);
+// @pyjt(device_memory_peak_reserved)
+int64 device_memory_peak_reserved(int device);
+// @pyjt(reset_device_memory_peaks)
+void reset_device_memory_peaks(int device);
 /**
  * The most bytes held by Vars on one accelerator device at any instant since
  * the process started or :func:`reset_device_memory_peak`, recorded by the

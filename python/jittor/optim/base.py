@@ -17,6 +17,22 @@ import jittor as jt
 import numpy as np
 from copy import deepcopy
 
+class _OptimizerParamGroup(dict):
+    """Public options with separately owned algorithm buffers.
+
+    Native optimizers retain ordinary dictionaries; frontend optimizers opt in
+    through _prepare_param_group. No key is reserved in the public mapping.
+    """
+    def __init__(self, group):
+        super().__init__(group)
+        self._optimizer_state = {}
+
+
+def _group_state(group):
+    return (group._optimizer_state
+            if isinstance(group, _OptimizerParamGroup) else group)
+
+
 def _grad_matches_param(p, g):
     return isinstance(g, jt.Var) and list(g.shape) == list(p.shape)
 
@@ -24,7 +40,7 @@ def _param_requires_grad(p):
     return bool(p.requires_grad)
 
 #: Group-dict keys that are not per-parameter state buffers.
-_NON_STATE_KEYS = frozenset(("params", "grads"))
+_NON_STATE_KEYS = frozenset(("params", "grads", "_torch_steps"))
 
 
 def _state_buffer(param):
@@ -58,7 +74,7 @@ def _realign_state_buffers(param_groups):
         params = group.get("params")
         if not params:
             continue
-        for key, buffers in group.items():
+        for key, buffers in _group_state(group).items():
             if key in _NON_STATE_KEYS or type(buffers) is not list:
                 continue
             if len(buffers) != len(params):
@@ -114,7 +130,14 @@ def _effective_device(var):
 def _update_preserve_dtype(target, value):
     if _jittor_dtype_name(value.dtype) != _jittor_dtype_name(target.dtype):
         value = value.to(target.dtype)
-    target.update(value)
+    # An optimizer commits state, not a differentiable connection to the
+    # previous iteration. Preserve the target's policy for both trainable
+    # parameters and frozen momentum/state buffers; do not alter the input
+    # update graph or re-enable gradients on a frozen target.
+    trainable = bool(target.requires_grad)
+    committed = value.detach()
+    committed.requires_grad = trainable
+    target.update(committed)
 
 class Optimizer(object):
     """ Basic class of Optimizer.
@@ -141,7 +164,7 @@ class Optimizer(object):
             # `parameters()` under the torch frontend produces as it is walked.
             if not isinstance(pg.get('params'), (list, tuple)) and 'params' in pg:
                 pg['params'] = list(pg['params'])
-            self.param_groups.append(pg)
+            self.param_groups.append(self._prepare_param_group(pg))
         self.n_step = 0
         # __zero_grad is a value for fast determ the grad is zero or not
         # so we can omit 0+x
@@ -149,10 +172,16 @@ class Optimizer(object):
         self._grad_map = {}
         self.__input_params = []
 
+    def _new_state_buffer(self, param):
+        return _state_buffer(param)
+
+    def _prepare_param_group(self, group):
+        return group
+
     def add_param_group(self, group):
         if 'params' in group and not isinstance(group['params'], (list, tuple)):
             group['params'] = list(group['params'])
-        self.param_groups.append(group)
+        self.param_groups.append(self._prepare_param_group(group))
 
     def _advance_step_count(self, pg):
         """Number of optimizer steps this param group has taken, 1-based.
@@ -167,8 +196,8 @@ class Optimizer(object):
         from jittor._runtime import step_capture
         # Baked into the update as a constant, so a replay would repeat it.
         step_capture.refuse("the optimizer bakes its step count into the graph")
-        n = int(pg.get("n_step", 0)) + 1
-        pg["n_step"] = n
+        n = int(_group_state(pg).get("n_step", 0)) + 1
+        _group_state(pg)["n_step"] = n
         return n
 
     def set_input_into_param_group(self, inputs):
@@ -216,14 +245,14 @@ class Optimizer(object):
         if self.__zero_grad: return
         grads = []
         for pg in self.param_groups:
-            for p, g in zip(pg["params"], pg["grads"]):
+            for p, g in zip(pg["params"], _group_state(pg)["grads"]):
                 if not _param_requires_grad(p) or not _grad_matches_param(p, g): continue
                 grads.append(g.flatten())
         if len(grads) == 0: return
         total_norm = jt.norm(jt.concat(grads), norm_type)
         clip_coef = jt.minimum(max_norm / (total_norm + 1e-6), 1.0)
         for pg in self.param_groups:
-            for p, g in zip(pg["params"], pg["grads"]):
+            for p, g in zip(pg["params"], _group_state(pg)["grads"]):
                 if not _param_requires_grad(p) or not _grad_matches_param(p, g): continue
                 g.update(g*clip_coef)
 
@@ -261,7 +290,14 @@ class Optimizer(object):
             for i in range(len(param_groups)):
                 for k, v in param_groups[i].items():
                     if k != "params":
-                        self.param_groups[i][k] = dfs(v)
+                        group = self.param_groups[i]
+                        # This loader reads the historical native schema, whose
+                        # algorithm slots were embedded in the group dictionary.
+                        if k in ("grads", "m", "values", "v", "d",
+                                 "pre_grad", "_torch_steps", "n_step"):
+                            _group_state(group)[k] = dfs(v)
+                        else:
+                            group[k] = dfs(v)
 
 
 
@@ -293,7 +329,7 @@ class Optimizer(object):
             # in the process and would never be released.
             cache = self.__dict__.setdefault("_zero_grad_cache", {})
             for pg in self.param_groups:
-                for g in pg.get("grads", ()):
+                for g in _group_state(pg).get("grads", ()):
                     key = id(g)
                     zero = cache.get(key)
                     if zero is None or zero.shape != g.shape or zero.dtype != g.dtype:
@@ -372,9 +408,9 @@ class Optimizer(object):
         # set up grads in param_groups
         pid = 0
         for pg in self.param_groups:
-            if "grads" not in pg:
-                pg["grads"] = [ jt.zeros_like(p).stop_grad().stop_fuse() for p in pg['params'] ]
-            pg_grads = pg["grads"]
+            if "grads" not in _group_state(pg):
+                _group_state(pg)["grads"] = [ jt.zeros_like(p).stop_grad().stop_fuse() for p in pg['params'] ]
+            pg_grads = _group_state(pg)["grads"]
             for i, p in enumerate(pg['params']):
                 if _param_requires_grad(p):
                     # accumulate grad and stop grad of grad
@@ -420,7 +456,7 @@ class Optimizer(object):
         self.pre_step(loss, retain_graph)
         for pg in self.param_groups:
             lr = pg.get("lr", self.lr)
-            for p, g in zip(pg["params"], pg["grads"]):
+            for p, g in zip(pg["params"], _group_state(pg)["grads"]):
                 if not _param_requires_grad(p) or not _grad_matches_param(p, g): continue
                 _update_preserve_dtype(p, p - g * lr)
         self.post_step()
@@ -428,7 +464,7 @@ class Optimizer(object):
     def _build_grad_map(self):
         _grad_map = {}
         for pg in self.param_groups:
-            for p, g in zip(pg["params"], pg["grads"]):
+            for p, g in zip(pg["params"], _group_state(pg)["grads"]):
                 if not _grad_matches_param(p, g):
                     continue
                 _grad_map[id(p)] = g

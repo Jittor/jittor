@@ -1,5 +1,7 @@
 """RMSprop optimizer."""
 
+from jittor.optim.base import _group_state
+
 import jittor as jt
 
 from ..base import (
@@ -26,14 +28,15 @@ class RMSprop(Optimizer):
 
         # initialize required arguments for each param_groups
         for pg in self.param_groups:
-            values = pg["values"] = []
+            values = _group_state(pg)["values"] = []
             for p in pg["params"]:
-                values.append(_state_buffer(p))
+                values.append(self._new_state_buffer(p))
 
     def add_param_group(self, group):
-        values = group["values"] = []
+        group = self._prepare_param_group(group)
+        values = _group_state(group)["values"] = []
         for p in group["params"]:
-            values.append(_state_buffer(p))
+            values.append(self._new_state_buffer(p))
         self.param_groups.append(group)
 
     def step(self, loss=None, retain_graph=False):
@@ -43,7 +46,7 @@ class RMSprop(Optimizer):
             lr = pg.get("lr", self.lr)
             eps = pg.get("eps", self.eps)
             alpha = pg.get("alpha", self.alpha)
-            for p, g, v in zip(pg["params"], pg["grads"], pg["values"]):
+            for p, g, v in zip(pg["params"], _group_state(pg)["grads"], _group_state(pg)["values"]):
                 if not _param_requires_grad(p) or not _grad_matches_param(p, g): continue
                 _update_preserve_dtype(v, alpha * v + (1-alpha) * g * g)
                 _update_preserve_dtype(

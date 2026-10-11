@@ -402,7 +402,7 @@ MPI、NCCL、HCCL 资源在 `backends/comm/{mpi,nccl,hccl}` 下，各有对应�
 高级索引或跨后端视图变体都有硬件覆盖。**
 
 ACL 后处理只发布它的原生实现。它对锁页主机内存、编译器并发和归约的要求属于**后端描述符**，
-由分配器、编译器和归约的归属者消费；**公开 flag 不会被覆盖**。BackendOps ABI 3 拒绝更旧的
+由分配器、编译器和归约的归属者消费；**公开 flag 不会被覆盖**。BackendOps ABI 4 拒绝更旧的
 描述符，扩展必须重建。历史的整树 SDK 转换（`process_acl`、`process_jittor_source`）已经
 消失；**真实的 CANN/NPU 验证仍然是必需的**。
 

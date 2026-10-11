@@ -150,6 +150,36 @@ void warn_grad_break(int i, Var* v) {
     LOGw << "grads[">>i>>"] '">> v->name>>"' doesn't have gradient. It will be set to zero:" << v;
 }
 
+void set_leaf_grad_callback(VarHolder* holder, GradCallback&& callback) {
+    USER_CHECK(holder->get_requires_grad() && is_backward_leaf(holder->var))
+        << "Leaf gradient callbacks require a differentiable backward leaf";
+    holder->leaf_grad_callback = std::make_shared<GradCallback>(std::move(callback));
+    holder->var->leaf_grad_callback = holder->leaf_grad_callback;
+}
+
+// Run once after this leaf's contributions have been summed, before any caller
+// consumes/accumulates the returned derivative. No forward graph edge changes.
+static void apply_leaf_grad_callback(Var* var, VarPtr& gradient) {
+    auto callback = var->leaf_grad_callback;
+    if (!callback || !gradient) return;
+    const auto expected_backend = gradient->placement.explicit_backend
+        ? gradient->placement.device.backend : execution_target_backend();
+    Var* input = gradient.ptr;
+    VarPtr replacement;
+    callback->func(1, &input, 1, &replacement);
+    if (!replacement) return; // Python None preserves the incoming gradient.
+    USER_CHECK(replacement->shape == gradient->shape &&
+               replacement->ns == gradient->ns &&
+               replacement->device_id == gradient->device_id &&
+               !replacement->placement.metadata_only)
+        << "Leaf gradient hook must preserve shape, dtype and device";
+    const auto replacement_backend = replacement->placement.explicit_backend
+        ? replacement->placement.device.backend : execution_target_backend();
+    USER_CHECK(replacement_backend == expected_backend)
+        << "Leaf gradient hook changed backend placement";
+    gradient = std::move(replacement);
+}
+
 vector<VarPtr> grad(
     Var* loss,
     vector<Var*> targets,
@@ -237,6 +267,7 @@ vector<VarPtr> grad(
     if (grads.size()) {
         grads[0] = make_number(1.f, loss);
         assign_attrs(grads[0].ptr, loss);
+        apply_leaf_grad_callback(loss, grads[0]);
     }
 
     NodeIndex consumed_grouped_ops;
@@ -351,6 +382,7 @@ vector<VarPtr> grad(
         if (grad && auto_mixed_precision_level == 3 && grad->ns != var->ns) {
             grad = make_unary(grad, var->ns);
         }
+        apply_leaf_grad_callback(var, grad);
     }
     trace_grad_op = nullptr;
     // set zero grad

@@ -1,5 +1,7 @@
 """Adam-family optimizers."""
 
+from jittor.optim.base import _group_state
+
 import jittor as jt
 from ..._core.dtypes import dtype_name
 from ..._runtime.dispatch import register_kernel, select_kernel
@@ -83,18 +85,19 @@ class Adam(Optimizer):
 
         # initialize required arguments for each param_groups
         for pg in self.param_groups:
-            values = pg["values"] = []
-            m = pg["m"] = []
+            values = _group_state(pg)["values"] = []
+            m = _group_state(pg)["m"] = []
             for p in pg["params"]:
-                values.append(_state_buffer(p))
-                m.append(_state_buffer(p))
+                values.append(self._new_state_buffer(p))
+                m.append(self._new_state_buffer(p))
 
     def add_param_group(self, group):
-        values = group["values"] = []
-        m = group["m"] = []
+        group = self._prepare_param_group(group)
+        values = _group_state(group)["values"] = []
+        m = _group_state(group)["m"] = []
         for p in group["params"]:
-            values.append(_state_buffer(p))
-            m.append(_state_buffer(p))
+            values.append(self._new_state_buffer(p))
+            m.append(self._new_state_buffer(p))
         self.param_groups.append(group)
 
     def step(self, loss=None, retain_graph=False):
@@ -108,7 +111,7 @@ class Adam(Optimizer):
             eps = pg.get("eps", self.eps)
             weight_decay = pg.get("weight_decay", self.weight_decay)
             b0, b1 = pg.get("betas", self.betas)
-            for p, g, v, m in zip(pg["params"], pg["grads"], pg["values"], pg["m"]):
+            for p, g, v, m in zip(pg["params"], _group_state(pg)["grads"], _group_state(pg)["values"], _group_state(pg)["m"]):
                 if not _param_requires_grad(p) or not _grad_matches_param(p, g): continue
                 _update_preserve_dtype(p, adam_update(
                     p, g, v, m, lr=lr, eps=eps, weight_decay=weight_decay,
@@ -135,18 +138,19 @@ class AdamW(Optimizer):
 
         # initialize required arguments for each param_groups
         for pg in self.param_groups:
-            values = pg["values"] = []
-            m = pg["m"] = []
+            values = _group_state(pg)["values"] = []
+            m = _group_state(pg)["m"] = []
             for p in pg["params"]:
-                values.append(_state_buffer(p))
-                m.append(_state_buffer(p))
+                values.append(self._new_state_buffer(p))
+                m.append(self._new_state_buffer(p))
 
     def add_param_group(self, group):
-        values = group["values"] = []
-        m = group["m"] = []
+        group = self._prepare_param_group(group)
+        values = _group_state(group)["values"] = []
+        m = _group_state(group)["m"] = []
         for p in group["params"]:
-            values.append(_state_buffer(p))
-            m.append(_state_buffer(p))
+            values.append(self._new_state_buffer(p))
+            m.append(self._new_state_buffer(p))
         self.param_groups.append(group)
 
     def step(self, loss=None, retain_graph=False):
@@ -162,7 +166,7 @@ class AdamW(Optimizer):
             fused = None
             if pg.get("fused", self.fused) is True:
                 active = [(p, m, v, g, n - 1) for p, g, v, m in zip(
-                    pg["params"], pg["grads"], pg["values"], pg["m"])
+                    pg["params"], _group_state(pg)["grads"], _group_state(pg)["values"], _group_state(pg)["m"])
                     if _param_requires_grad(p) and _grad_matches_param(p, g)]
                 if active:
                     fused = select_kernel("optim.adamw_fused", active)
@@ -177,7 +181,7 @@ class AdamW(Optimizer):
                     if p.is_stop_grad():
                         p.start_grad()
                 continue
-            for p, g, v, m in zip(pg["params"], pg["grads"], pg["values"], pg["m"]):
+            for p, g, v, m in zip(pg["params"], _group_state(pg)["grads"], _group_state(pg)["values"], _group_state(pg)["m"]):
                 if not _param_requires_grad(p) or not _grad_matches_param(p, g): continue
                 _update_preserve_dtype(p, adam_update(
                     p, g, v, m, lr=lr, eps=eps, weight_decay=weight_decay,

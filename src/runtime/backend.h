@@ -44,7 +44,7 @@ struct BackendExecutionPolicy {
 // The registry copies this versioned table; callback code and allocator pools
 // must outlive the runtime. Published callbacks retain the serialized contract.
 struct BackendOps {
-    uint32 abi_version = 3;
+    uint32 abi_version = 4;
     uint32 struct_size = sizeof(BackendOps);
     BackendId id = BackendId::Cpu;
     const char* name = nullptr;
@@ -87,6 +87,9 @@ struct BackendOps {
     void* (*graph_capture_end)(int) = nullptr;
     void (*graph_launch)(void*, int) = nullptr;
     void (*graph_release)(void*, int) = nullptr;
+    // Optional process-wide deterministic algorithm policy. No synthetic default.
+    void (*set_deterministic_algorithms)(bool) = nullptr;
+    bool (*get_deterministic_algorithms)() = nullptr;
     BackendExecutionPolicy execution;
 };
 
@@ -134,6 +137,11 @@ EXTERN_LIB void backend_graph_release(void* graph);
 // This is the enum's own name, not a registry lookup.
 EXTERN_LIB const char* backend_name(BackendId id);
 
+// @pyjt(backend_set_deterministic_algorithms)
+void backend_set_deterministic_algorithms(bool enabled);
+// @pyjt(backend_get_deterministic_algorithms)
+bool backend_get_deterministic_algorithms();
+
 // @pyjt(registered_backends)
 vector<string> registered_backends();
 // Every backend this core declares, whether or not this build registered one.
@@ -147,6 +155,9 @@ vector<string> known_backends();
 int backend_device_count(const string& name);
 // @pyjt(initialize_backend_operators)
 void initialize_backend_operators();
+// Native backend memory capability; free and total bytes for one device.
+// @pyjt(backend_memory_info)
+vector<int64> backend_memory_info(const string& name, int device);
 
 BackendOps make_cpu_backend();
 BackendOps make_accelerator_backend();

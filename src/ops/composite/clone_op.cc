@@ -7,6 +7,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include "core/var.h"
+#include "core/var_holder.h"
 #include "ops/composite/array_op.h"
 #include "ops/op_register.h"
 #include "ops/composite/clone_op.h"
@@ -35,12 +36,18 @@ void CloneOp::infer_shape() {
 }
 
 VarPtr detach(Var* x) {
+    if (x->is_metadata()) {
+        auto result = make_metadata_var(x->shape, x->dtype(), x);
+        result->set_stop_grad();
+        return result;
+    }
     auto y = make_clone(x);
     y->input()->set_stop_grad();
     return y;
 }
 
 VarPtr clone(Var* x) {
+    if (x->is_metadata()) return make_metadata_var(x->shape, x->dtype(), x);
     return make_clone(x);
 }
 

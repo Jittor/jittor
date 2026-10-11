@@ -25,6 +25,7 @@
 2026-09-14-jittor-vs-pytorch
 2026-09-14-vllm-omni-h3-enablement
 2026-09-19-torch-compat-runbook-verification
+2026-09-22-ms-swift-ascend-lora
 2026-09-24-torch-compat-real-models
 2026-09-25-profiling-tools
 ```
@@ -46,5 +47,6 @@
 | [主机受限步长：把每算子的 Python 开销从图构建里拿掉](2026-09-13-host-path-per-node-cost.md) | Python 路径已完成 | 2026-09-13 |
 | [batched Linear 的两个展平节点](2026-09-12-batched-linear-graph-nodes.md) | 已落地，H20 上实测；对拍结论未附 | 2026-09-12，2026-09-23 归档 |
 | [Jittor vs 真 PyTorch 2.9.1：现在差在哪](2026-09-14-jittor-vs-pytorch.md) | 快照：对 eager 赢 6 平 5 输 1，对 `torch.compile` 赢 2 平 2 输 5 | 2026-09-14 |
+| [ms-swift LoRA 的 Ascend torch shim 验证](2026-09-22-ms-swift-ascend-lora.md) | 2026-10-11：真实尺寸 109.48M BERT-base full-finetuning 公开 CLI 锁定配置通过 L0–L5；10 次同步计时中 candidate 为 `172.812 ms/step`、原生 `70.354 ms/step`，吞吐比为 `0.407x`。tiny BERT 与其他配置按各自门槛记录；真实尺寸 BERT-base 公开推理的 GELU 层内差异已复现，L1/L4 失败，历史严格 GELU/更新对拍失败保留。tiny LLaMA Adapter 双 NPU完整恢复、IA3、ORPO、目标 2.0 DPO 双卡也各自通过锁定矩阵；新增 tiny IA3 单 NPU公开推理 L0/L1/L4 通过（37 快照、2,048 logits 值零失败）；Swift Prompt CLI 路由缺失且 direct API 真机未运行；L5 未运行，多机资源阻塞。全范围功能面仍未完成 | 2026-10-11 |
 | [Torch 兼容层在真实模型上对 PyTorch：差距表、显存与性能修复](2026-09-24-torch-compat-real-models.md) | 11 项全部跑通，几何平均 1.26x，进程显存峰值为 PyTorch 的 0.87–1.45 倍；余下差距在主机侧 | 2026-09-24 |
 | [性能/显存分析工具：审计与重写](2026-09-25-profiling-tools.md) | 已实现，RTX 4090 上验证；未合入 | 2026-09-25 |

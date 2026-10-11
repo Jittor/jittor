@@ -83,6 +83,8 @@ def _placement_request(backend, device, like=None, default_placement=True):
     ``with torch.device(...)`` still applies.
     """
     if device is None:
+        if isinstance(like, backend.Var) and like.is_metadata:
+            return -2, 0
         if isinstance(like, backend.Var) and like.placement_backend >= 0:
             return int(like.placement_backend), max(int(like.device_id), 0)
         # `with torch.device(d):` -- torch builds new tensors on `d`. `like`
@@ -108,6 +110,8 @@ def _placement_request(backend, device, like=None, default_placement=True):
             device = default_device()
     numeric_index = isinstance(device, int) and not isinstance(device, bool)
     name = "cuda" if numeric_index else (getattr(device, "type", None) or str(device).split(":", 1)[0])
+    if name == "meta":
+        return -2, 0
     if name == "cpu":
         return 0, 0
     if name not in ("cuda", "npu"):
@@ -279,6 +283,8 @@ def clone(input, *, memory_format=None):
         raise NotImplementedError("clone supports preserve_format and contiguous_format")
     target = compatibility_owner(backend)
     with tensor_frontend(target.Var, like=input):
+        if input.is_metadata:
+            return input.metadata_copy()
         if input.placement_backend < 0 and backend.flags.use_cuda and _var_is_cpu_resident(input):
             with backend.flag_scope(use_cuda=0):
                 result = backend.Var.copy(input)

@@ -33,6 +33,7 @@ TensorPlacement selected_placement() {
     int backend = int(PyLong_AsLong(PyTuple_GET_ITEM(value, 0)));
     int index = int(PyLong_AsLong(PyTuple_GET_ITEM(value, 1)));
     Py_DECREF(value);
+    if (backend == -2) { TensorPlacement result; result.metadata_only = true; return result; }
     return TensorPlacement({static_cast<BackendId>(backend), index});
 }
 
@@ -97,7 +98,7 @@ void reset_tensor_frontend_type(PyObject* token) {
 }
 
 PyObject* set_tensor_placement_context(int backend, int device) {
-    USER_CHECK(backend >= 0 && backend <= int(BackendId::Corex) && device >= 0)
+    USER_CHECK((backend == -2 || (backend >= 0 && backend <= int(BackendId::Corex))) && device >= 0)
         << "tensor placement requires a registered backend id and a non-negative device index";
     PyObject* value = Py_BuildValue("(ii)", backend, backend == 0 ? 0 : device);
     if (!value) throw std::runtime_error("cannot create tensor placement value");
@@ -116,6 +117,7 @@ TensorPlacement frontend_placement_request() { return selected_placement(); }
 
 PyObject* current_tensor_placement_request() {
     TensorPlacement placement = selected_placement();
+    if (placement.metadata_only) return Py_BuildValue("(ii)", -2, 0);
     if (!placement.explicit_backend) Py_RETURN_NONE;
     return Py_BuildValue("(ii)", int(placement.device.backend), placement.device.index);
 }
@@ -332,10 +334,10 @@ void PyTensorFrontendScope::apply_policy(PyObject* type, PyObject* candidate) {
     previous_policy_ = get_autograd_policy();
     set_autograd_policy((bits & 1) != 0, (bits & 2) != 0);
     TensorPlacement placement = selected_placement();
-    if (!placement.explicit_backend && candidate && GET_INITED_FLAG(VarHolder, 1, candidate))
+    if (!placement.metadata_only && !placement.explicit_backend && candidate && GET_INITED_FLAG(VarHolder, 1, candidate))
         placement = GET_RAW_PTR(VarHolder, candidate)->var->placement;
-    if (!placement.explicit_backend) placement = current_tensor_placement();
-    if (!placement.explicit_backend)
+    if (!placement.metadata_only && !placement.explicit_backend) placement = current_tensor_placement();
+    if (!placement.metadata_only && !placement.explicit_backend)
         placement = TensorPlacement({runtime_use_cuda() ? accelerator_backend_id() : BackendId::Cpu,
                                      runtime_use_cuda() ? current_device() : 0});
     previous_placement_ = current_tensor_placement();

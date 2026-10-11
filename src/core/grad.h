@@ -86,6 +86,9 @@ vector<VarPtr> grad(
     bool materialize_grads
 );
 
+// @pyjt(_set_leaf_grad_callback)
+void set_leaf_grad_callback(VarHolder* holder, GradCallback&& callback);
+
 // @pyjt(tape_together)
 void tape_together(
     const vector<VarHolder*>& taped_inputs,

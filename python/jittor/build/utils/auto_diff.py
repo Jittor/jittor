@@ -360,7 +360,10 @@ class Hook:
                     if hasattr(p, "is_stop_grad"):
                         if p.is_stop_grad():
                             continue
-                        grad = pg["grads"][i]
+                        # Optimizer groups carry their algorithm state; keep
+                        # this build utility independent of the framework.
+                        state = getattr(pg, "_optimizer_state", pg)
+                        grad = state["grads"][i]
                     else:
                         grad = p.grad
                     pname = self.get_param_name(p)

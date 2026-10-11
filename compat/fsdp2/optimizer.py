@@ -1,5 +1,7 @@
 """FSDP2 optimizer updates and local sharded state helpers."""
 
+from jittor.optim.base import _group_state
+
 import jittor as jt
 from jittor.optim.algorithms.adam import adam_update
 from jittor.optim.algorithms.sgd import sgd_update
@@ -30,7 +32,7 @@ _EXPORTS = (
 
 def clear_fsdp_optimizer_grads(opt):
     for pg in getattr(opt, "param_groups", []):
-        grads = pg.get("grads")
+        grads = _group_state(pg).get("grads")
         if grads is None:
             continue
         for i, param in enumerate(pg.get("params", [])):
@@ -187,7 +189,7 @@ def optimizer_step(opt, loss=None, retain_graph=False, *, native_kind=None):
         raise NotImplementedError(_unsupported_optimizer_message(opt, kind))
     has_fsdp_grad = False
     for pg in getattr(opt, "param_groups", []):
-        grads = pg.get("grads") or []
+        grads = _group_state(pg).get("grads") or []
         for i, param in enumerate(pg.get("params", [])):
             if not shard.is_fsdp_managed_param(param):
                 continue
@@ -216,16 +218,16 @@ def optimizer_step(opt, loss=None, retain_graph=False, *, native_kind=None):
         for state in states if getattr(state, "true_fsdp_flat", False)
     }
     for pg in getattr(opt, "param_groups", []):
-        grads = pg.get("grads") or []
+        grads = _group_state(pg).get("grads") or []
         param_steps = _optimizer_param_steps(pg)
-        values = pg.get("values")
+        values = _group_state(pg).get("values")
         if values is None:
-            values = pg["values"] = [None] * len(pg.get("params", []))
+            values = _group_state(pg)["values"] = [None] * len(pg.get("params", []))
         while len(values) < len(pg.get("params", [])):
             values.append(None)
-        momentums = pg.get("m")
+        momentums = _group_state(pg).get("m")
         if momentums is None and kind in ("adam", "adamw"):
-            momentums = pg["m"] = [None] * len(pg.get("params", []))
+            momentums = _group_state(pg)["m"] = [None] * len(pg.get("params", []))
         if momentums is not None:
             while len(momentums) < len(pg.get("params", [])):
                 momentums.append(None)
@@ -247,7 +249,7 @@ def optimizer_step(opt, loss=None, retain_graph=False, *, native_kind=None):
                 new_param, new_value, new_momentum = _adam_update_for_param(
                     opt, pg, entry.shard, grad, values[i], momentums[i],
                     decoupled_weight_decay=(kind == "adamw"),
-                    n_step=param_steps[i])
+                    n_step=int(param_steps[i]))
                 values[i] = new_value
                 momentums[i] = new_momentum
             if getattr(state, "true_fsdp_flat", False):

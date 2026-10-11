@@ -1,4 +1,6 @@
 """Stable Tensor gradient APIs using the shared native Var/Op graph."""
+
+from jittor.optim.base import _group_state
 from importlib import import_module
 from ...context import get_install_context
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
@@ -68,9 +70,9 @@ def _fill_opt_grads(opt, grad_by_id, filled_param_ids=None):
     if filled_param_ids is None:
         filled_param_ids = set()
     for pg in opt.param_groups:
-        grads_list = pg.get("grads")
+        grads_list = _group_state(pg).get("grads")
         if grads_list is None:
-            grads_list = pg["grads"] = [None] * len(pg["params"])
+            grads_list = _group_state(pg)["grads"] = [None] * len(pg["params"])
         for i, p in enumerate(pg["params"]):
             if not isinstance(p, _NativeVar) or not p.requires_grad:
                 continue
@@ -371,34 +373,27 @@ def _grad_set(self, value):
         if o is None:
             continue
         changed = False
-        if fsdp_entry is None:
-            slots = _param_slots(o, self)
-        else:
-            # An FSDP shard answers for its full parameter too, which only a
-            # scan comparing entries finds.
-            slots = []
-            for pg in getattr(o, "param_groups", []):
-                for i, p in enumerate(pg.get("params", [])):
-                    same_fsdp_entry = getattr(p, "_jittor_fsdp2_entry", None) is fsdp_entry
-                    if p is not self and not same_fsdp_entry:
-                        continue
-                    if fsdp_role == "full" and value is not None and p is not self:
-                        continue
-                    slots.append((pg, i))
-        for pg, i in slots:
-            count = len(pg.get("params", []))
-            if value is None:
-                grads = pg.get("grads")
-                if grads is not None and i < len(grads):
-                    grads[i] = None
-            else:
-                grads = pg.get("grads")
-                if grads is None:
-                    grads = pg["grads"] = [None] * count
-                while len(grads) < count:
-                    grads.append(None)
-                grads[i] = value
-            changed = True
+        for pg in getattr(o, "param_groups", []):
+            params = list(pg.get("params", []))
+            for i, p in enumerate(params):
+                same_fsdp_entry = fsdp_entry is not None and getattr(
+                    p, "_jittor_fsdp2_entry", None) is fsdp_entry
+                if p is not self and not same_fsdp_entry:
+                    continue
+                if fsdp_role == "full" and value is not None and p is not self:
+                    continue
+                if value is None:
+                    grads = _group_state(pg).get("grads")
+                    if grads is not None and i < len(grads):
+                        grads[i] = None
+                else:
+                    grads = _group_state(pg).get("grads")
+                    if grads is None:
+                        grads = _group_state(pg)["grads"] = [None] * len(params)
+                    while len(grads) < len(params):
+                        grads.append(None)
+                    grads[i] = value
+                changed = True
         if changed:
             try:
                 object.__setattr__(o, "_grad_map", {})

@@ -34,6 +34,16 @@ def module_setattr(module, name, value):
     if name in attributes and isinstance(value, (owner.native_module, owner.Parameter)) \
             and not isinstance(attributes[name], (owner.native_module, owner.backend.Var)):
         del attributes[name]
+    # Native Sequential keeps registered children in ``layers`` and its
+    # named_children() only traverses that mapping. Torch permits attaching a
+    # child with setattr; route it through add_module so it is visible to
+    # parameters(), state_dict(), and forward traversal.
+    sequential_type = getattr(owner.backend.nn, "Sequential", None)
+    if (sequential_type is not None and isinstance(module, sequential_type)
+            and isinstance(value, owner.native_module) and not name.startswith("_")
+            and "layers" in attributes):
+        module.add_module(name, value)
+        return
     object.__setattr__(module, name, value)
 
 
@@ -131,6 +141,21 @@ class LayerInitializer:
         return mode
 
 
+def module_list_execute(module, *args, **kwargs):
+    """Torch ModuleList stores modules but has no callable forward."""
+    raise NotImplementedError("ModuleList is missing the required forward function")
+
+
+def make_distinct_module_list(owner, native_sequential):
+    """Separate Torch ModuleList from Jittor's Sequential/ModuleList alias."""
+    return type("ModuleList", (native_sequential, owner.Module), {
+        "__module__": "torch.nn", "__slots__": (),
+        "__init__": LayerInitializer(owner, native_sequential),
+        "_torch_native_layer": native_sequential,
+        "execute": module_list_execute,
+    })
+
+
 class NNFrontendOwner:
     """Own types and memoized namespace copies for a single installation."""
     def __init__(self, backend, tensor_type):
@@ -138,7 +163,13 @@ class NNFrontendOwner:
         self.tensor_type = tensor_type
         self.native_module = backend.nn.Module
         self.Parameter = make_parameter_type(backend, tensor_type)
-        self.Module = type("Module", (self.native_module,), {
+        # Torch's explicit ``super(nn.Module, self).__init__(...)`` must cross a
+        # Torch-owned base before reaching the native Jittor class.  The base
+        # receives the cooperative initializer without mutating jt.Module.
+        self.cooperative_module = type("_TorchNativeModule", (self.native_module,), {
+            "__module__": "jittor.compat.torch.nn_frontend", "__slots__": (),
+        })
+        self.Module = type("Module", (self.cooperative_module,), {
             "__module__": "torch.nn", "__slots__": (),
             "_frontend_tensor_type": tensor_type, "_nn_frontend_owner": self,
             "__setattr__": module_setattr, "__call__": module_call,
@@ -213,6 +244,16 @@ def prepare_nn_namespace(context):
     Module, Parameter = owner.Module, owner.Parameter
     namespace = owner.copy_module(backend.nn, "torch.nn")
     namespace.Module = Module
+    # Native Jittor aliases ModuleList to Sequential. Torch distinguishes them:
+    # a Sequential must not match isinstance(x, nn.ModuleList), and a ModuleList
+    # is only a container. Keep native Jittor's alias untouched.
+    native_sequential = getattr(backend.nn, "Sequential", None)
+    if native_sequential is not None and getattr(backend.nn, "ModuleList", None) is native_sequential:
+        ModuleList = make_distinct_module_list(owner, native_sequential)
+        namespace.ModuleList = ModuleList
+        namespace.modules.ModuleList = ModuleList
+        if hasattr(namespace.modules, "container"):
+            namespace.modules.container.ModuleList = ModuleList
     ParameterList, ParameterDict = make_parameter_containers(Module, Parameter, backend.Var)
     namespace.ParameterList = ParameterList
     namespace.ParameterDict = ParameterDict

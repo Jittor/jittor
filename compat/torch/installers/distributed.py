@@ -4,10 +4,7 @@ This module contains source moved from the former monolithic installer without
 changing the compatibility semantics.
 """
 
-import atexit
-import glob
 import os
-import warnings
 import pickle
 
 import numpy as np
@@ -34,6 +31,53 @@ from jittor.distributed.process_group import (
     ProcessGroup as _JittorProcessGroup,
     Work as _JittorWork,
 )
+
+
+def _install_ddp_comm_hooks(algorithms, modules):
+    """Publish optional compression APIs without claiming communication support."""
+    import types
+
+    prefix = "torch.distributed.algorithms.ddp_comm_hooks"
+    package = modules.setdefault(prefix, types.ModuleType(prefix))
+    package.__path__ = []
+    algorithms.ddp_comm_hooks = package
+
+    def unsupported(name, module_name):
+        def hook(*args, **kwargs):
+            raise NotImplementedError(
+                module_name + "." + name + " is not implemented; "
+                "use the default DDP communication path without compression hooks")
+        hook.__name__ = name
+        hook.__qualname__ = name
+        hook.__module__ = module_name
+        return hook
+
+    for child, names in (
+        ("default_hooks", ("fp16_compress_hook", "bf16_compress_hook",
+                           "fp16_compress_wrapper", "bf16_compress_wrapper")),
+        ("powerSGD_hook", ("powerSGD_hook", "batched_powerSGD_hook")),
+    ):
+        module_name = prefix + "." + child
+        module = modules.setdefault(module_name, types.ModuleType(module_name))
+        setattr(package, child, module)
+        for name in names:
+            if not hasattr(module, name):
+                setattr(module, name, unsupported(name, module_name))
+        register_api_bindings(module, module_name, names, Fidelity.UNIMPLEMENTED,
+                              "Optional DDP compression hooks explicitly reject execution")
+
+    class PowerSGDState:
+        def __init__(self, *args, **kwargs):
+            raise NotImplementedError(
+                prefix + ".powerSGD_hook.PowerSGDState is not implemented")
+
+    PowerSGDState.__module__ = prefix + ".powerSGD_hook"
+    PowerSGDState.__qualname__ = "PowerSGDState"
+    if not hasattr(package.powerSGD_hook, "PowerSGDState"):
+        package.powerSGD_hook.PowerSGDState = PowerSGDState
+    register_api_bindings(package.powerSGD_hook, prefix + ".powerSGD_hook",
+                          ("PowerSGDState",), Fidelity.UNIMPLEMENTED,
+                          "PowerSGD state and compressed communication are unavailable")
 
 
 def _native_distributed_active():
@@ -1046,6 +1090,7 @@ def _install_distributed(g, registry=None):
         setattr(dist, sub, mod)
 
     dist.algorithms.__path__ = getattr(dist.algorithms, "__path__", [])
+    _install_ddp_comm_hooks(dist.algorithms, _modules)
     const_mod = _modules.get("torch.distributed.constants")
     if const_mod is None:
         const_mod = _types.ModuleType("torch.distributed.constants")
@@ -1283,3 +1328,9 @@ def _install_distributed(g, registry=None):
 
 def install(ctx):
     _install_distributed(ctx.jittor_module, ctx.registry)
+    run = ctx.registry.ensure_entrypoint(
+        "torch.distributed.run", "jittor.compat.torch.distributed_run")
+    register_api_bindings(run, "torch.distributed.run", ("main",),
+        Fidelity.APPROXIMATE,
+        "Static uniform-node torchrun spelling delegates to native Jittor launch; "
+        "elastic rendezvous, restarts and nonuniform node sizes fail explicitly")

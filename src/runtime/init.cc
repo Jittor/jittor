@@ -6,6 +6,9 @@
 // ***************************************************************
 #include "runtime/device.h"
 #include "runtime/backend.h"
+#include "runtime/fetch_state.h"
+#include "runtime/rng_state.h"
+#include "runtime/executor_entry.h"
 #include <random>
 
 #include <csignal>
@@ -59,22 +62,15 @@ DEFINE_FLAG(int, cuda_allow_cudnn_tf32, 0,
     "Deprecated, use float32_matmul_precision. Raises the float32 cuDNN "
     "convolution accumulate tier to high (tf32).");
 
-unique_ptr<std::default_random_engine> eng;
-
 vector<set_seed_callback> callbacks;
-int current_seed;
-int64 current_offset;
 
-// fron fetch_op.cc
-EXTERN_LIB list<VarPtr> fetcher;
-EXTERN_LIB list<VarPtr> fetcher_to_free;
 EXTERN_LIB vector<void(*)()> take_cleanup_callbacks();
 EXTERN_LIB volatile sig_atomic_t exited;
 
 void cleanup() {
     exited = true;
-    fetcher_to_free.clear();
-    fetcher.clear();
+    runtime_fetch_state().deferred().clear();
+    runtime_fetch_state().pending().clear();
     // Walk a private copy, taken under the registration lock, rather than the
     // live vector: a callback may register another one (`get_resources` does,
     // on whichever thread first touches a side stream), and `push_back` then
@@ -122,25 +118,27 @@ void init() {
 }
 
 void set_seed(int seed) {
-    // Random operators of a batch on the worker read the generator.
     async_exec_wait();
-    current_seed = seed;
-    current_offset = 0;
-    eng.reset(new std::default_random_engine(seed));
+    ExecutorEntryScope lock;
+    auto& rng = runtime_rng_state();
+    rng.global_seed = static_cast<uint64>(seed);
+    rng.host_seed = rng.global_seed;
+    rng.host_engine.seed(seed);
+    rng.acl_streams.clear();
     for (auto cb : callbacks)
         cb(seed);
 }
 
 int get_seed() {
-    return current_seed;
+    return static_cast<int>(runtime_rng_state().host_seed);
 }
 
 void add_set_seed_callback(set_seed_callback callback) {
     callbacks.push_back(callback);
-    callback(current_seed);
+    callback(get_seed());
 }
 
-std::default_random_engine* get_random_engine() { return eng.get(); }
+std::default_random_engine* get_random_engine() { return &runtime_rng_state().host_engine; }
 
 #ifdef HAS_ACCELERATOR
 bool no_device_error_when_free = 0;

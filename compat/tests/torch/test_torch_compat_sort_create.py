@@ -12,7 +12,11 @@ import numpy as np
 import torch
 import jittor as jt
 
-_DEVICES = [("cpu", 0)] + ([("cuda", 1)] if _test_capability.any_accelerator_enabled(backend=jt) else [])
+_HAS_ACCELERATOR = _test_capability.any_accelerator_enabled(backend=jt)
+_ACCELERATOR_DEVICE = (
+    "npu" if _test_capability.check_accelerator("acl", backend=jt).enabled else "cuda"
+) if _HAS_ACCELERATOR else None
+_DEVICES = [("cpu", 0)] + ([(_ACCELERATOR_DEVICE, 1)] if _HAS_ACCELERATOR else [])
 
 
 def both_devices(fn):
@@ -68,11 +72,13 @@ class TestSortSelect(Base):
         ], dtype="float32")
 
         def body(dev):
-            global_input = torch.tensor(x, requires_grad=True)
+            global_input = torch.tensor(x, device=dev, requires_grad=True)
             global_result = torch.median(global_input)
-            if dev == "cuda":
-                self.assertTrue(global_input.is_cuda)
-                self.assertTrue(global_result.is_cuda)
+            if dev != "cpu":
+                self.assertEqual(global_input.device.type, dev)
+                self.assertEqual(global_result.device.type, dev)
+                self.assertEqual(global_input.is_cuda, dev == "cuda")
+                self.assertEqual(global_result.is_cuda, dev == "cuda")
             global_index = np.argsort(x.reshape(-1))[(x.size - 1) // 2]
             global_expected = x.reshape(-1)[global_index]
             self.ac(global_result.numpy().reshape(-1), np.array([global_expected]),
@@ -97,13 +103,16 @@ class TestSortSelect(Base):
                     else:
                         expected_indices = np.expand_dims(expected_indices, axis)
 
-                    value = torch.tensor(x, requires_grad=True)
-                    if dev == "cuda":
-                        self.assertTrue(value.is_cuda)
+                    value = torch.tensor(x, device=dev, requires_grad=True)
+                    if dev != "cpu":
+                        self.assertEqual(value.device.type, dev)
+                        self.assertEqual(value.is_cuda, dev == "cuda")
                     result = torch.median(value, dim=dim, keepdim=keepdim)
-                    if dev == "cuda":
-                        self.assertTrue(result.values.is_cuda)
-                        self.assertTrue(result.indices.is_cuda)
+                    if dev != "cpu":
+                        self.assertEqual(result.values.device.type, dev)
+                        self.assertEqual(result.indices.device.type, dev)
+                        self.assertEqual(result.values.is_cuda, dev == "cuda")
+                        self.assertEqual(result.indices.is_cuda, dev == "cuda")
                     self.assertEqual(type(result).__name__, "median")
                     self.ac(result.values.numpy(), expected_values,
                             msg=f"median values dim={dim} keep={keepdim} {dev}")

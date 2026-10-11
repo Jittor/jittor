@@ -289,6 +289,9 @@ def test_skip_reason_buckets_are_stable_and_other_is_counted(monkeypatch):
             "at least 2 devices are required") == "insufficient-devices"
         assert policy.classify_skip_reason_bucket("No CUDA found") == "accelerator"
         assert policy.classify_skip_reason_bucket("cuda is required") == "accelerator"
+        assert policy.classify_skip_reason_bucket(
+            "jittor is not installed in this interpreter, so there is no resolution to check"
+        ) == "environment"
         assert policy._other_skip_count() == 1
     finally:
         policy._SKIP_REASON_BUCKETS.clear()

@@ -68,7 +68,7 @@ Allocator* setup_allocator(Allocator* underlying) {
 Allocator* cpu_allocator = setup_allocator<SFRLAllocator>(
     backend_raw_allocator({BackendId::Cpu, 0}, BackendMemoryKind::Device));
 
-DECLARE_FLAG(int, use_cuda_managed_allocator);
+DEFINE_FLAG(int, use_cuda_managed_allocator, 0, "Enable cuda_managed_allocator");
 
 DEFINE_FLAG_WITH_SETTER(int, use_cuda_host_allocator, 1, "use cuda host allocator for cpu memory globally");
 

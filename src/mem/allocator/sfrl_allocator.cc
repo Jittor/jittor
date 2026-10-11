@@ -17,6 +17,7 @@
 #include "mem/allocator/sfrl_allocator.h"
 #include "runtime/device.h"
 #include "runtime/backend.h"
+#include "mem/mem_info.h"
 #include "runtime/profiler/step_trace.h"
 
 namespace jittor {
@@ -265,6 +266,7 @@ CachingBlock* CachingBlockPool::pop_block(size_t size) {
 list<SFRLAllocator*> SFRLAllocator::sfrl_allocators;
 //SFRLAllocator
 SFRLAllocator::~SFRLAllocator() {
+    unregister_device_pool(this);
     sfrl_allocators.erase(iter);
     for (auto it = occupied_blocks.begin(); it != occupied_blocks.end(); ++it) {
         delete it->second;
@@ -279,6 +281,7 @@ size_t SFRLAllocator::align_size(size_t size) {
 
 void SFRLAllocator::setup(Allocator* underlying) {
     this->underlying = underlying;
+    register_device_pool(this, underlying);
 }
 
 size_t SFRLAllocator::allocation_size(size_t size) {
@@ -321,7 +324,7 @@ bool SFRLAllocator::should_split(CachingBlock* block, size_t size) {
     return block->size - size >= ALIGN_SIZE;
 }
 
-size_t CachingBlockPool::free_all_cached_blocks(Allocator* underlying, long long free_size) {
+size_t CachingBlockPool::free_all_cached_blocks(Allocator* underlying, const Allocator* owner, long long free_size) {
     auto it = blocks.begin();
     size_t freed_memory = 0;
     while (it != blocks.end()) {
@@ -333,6 +336,7 @@ size_t CachingBlockPool::free_all_cached_blocks(Allocator* underlying, long long
             // a nested caching allocator below would otherwise be asked to
             // release block id 0, which is never a live allocation.
             underlying->free((void*)block->memory_ptr, block->size, block->allocation);
+            update_device_pool(owner, 0, -static_cast<int64>(block->size));
             freed_memory += block->size;
             auto cur = it;
             ++it;
@@ -430,6 +434,7 @@ void SFRLAllocator::trim_before_growing(size_t need) {
     }
     if (!freed) return;
     unused_memory -= freed;
+    update_device_pool(this, 0, -(int64)freed);
     note_device_reserve(device(), -(int64)freed);
     step_trace_mem(stm_reserve, device(), -(int64)freed, this, 0);
 }
@@ -438,7 +443,7 @@ size_t SFRLAllocator::release_cached(CachingBlockPool& pool, long long free_size
     // A segment a recording touched may be free in the pool by now, and the
     // recording still holds its addresses; see `fence_capture`.
     if (capture_held_frees != nullptr) return 0;
-    size_t freed = pool.free_all_cached_blocks(underlying, free_size);
+    size_t freed = pool.free_all_cached_blocks(underlying, this, free_size);
     unused_memory -= freed;
     if (freed) {
         note_device_reserve(device(), -(int64)freed);
@@ -473,6 +478,7 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
             gc_all();
             ptr = underlying->alloc(alloc_size, under_allocation);
         }
+        update_device_pool(this, 0, static_cast<int64>(alloc_size));
         note_device_reserve(device(), alloc_size);
         step_trace_mem(stm_reserve, device(), alloc_size, this, 0);
         held_high = std::max(held_high, used_memory + unused_memory + (int64)alloc_size);
@@ -499,6 +505,7 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
     block->occupied = true;
     allocation = blocks->insert_occupied(block);
     used_memory += block->size;
+    update_device_pool(this, static_cast<int64>(block->size), 0);
     note_device_alloc(device(), block->size);
     step_trace_mem(stm_pool, device(), block->size, this, allocation);
     if (PREDICT_BRANCH_NOT_TAKEN(capture_held_frees != nullptr))
@@ -524,6 +531,7 @@ void SFRLAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
             note_capture_touch(block);
         id_space.erase_occupied(allocation);
         used_memory -= block->size;
+        update_device_pool(this, -static_cast<int64>(block->size), 0);
         note_device_free(device(), block->size);
         step_trace_mem(stm_pool, device(), -(int64)block->size, this, allocation);
         unused_memory += block->size;
@@ -623,6 +631,7 @@ void SFRLAllocator::fence_capture(vector<Allocation>& held) {
         block->occupied = true;
         size_t id = block->blocks->insert_occupied(block);
         used_memory += block->size;
+        update_device_pool(this, static_cast<int64>(block->size), 0);
         note_device_alloc(device(), block->size);
         held.emplace_back(block->memory_ptr, id, block->size, this);
     }

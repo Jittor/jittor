@@ -101,6 +101,24 @@ def test_collection_traverses_torch_ancestors_for_explicit_native_mock(monkeypat
     assert pytest_policy.pytest_ignore_collect(REPO_ROOT / "tests/structure/test_gate_scope.py", None) is True
 
 
+def test_torch_session_accounting_excludes_native_owned_files(monkeypatch):
+    """The strict execution report must follow the collector's mode filter."""
+    monkeypatch.setattr(pytest_policy, "_torch_mode_is_active", lambda: True)
+    selected = set()
+    monkeypatch.setattr(pytest_policy, "_SELECTED_FILES", selected)
+    config = SimpleNamespace(
+        invocation_params=SimpleNamespace(dir=REPO_ROOT),
+        args=["tests/structure"],
+        option=SimpleNamespace(ignore=[]),
+    )
+
+    pytest_policy._snapshot_selected_files(config)
+
+    native_owned = "tests/structure/backends/acl/test_acl_dtype_preservation.py"
+    assert native_owned not in selected
+    assert "tests/structure/test_gate_scope.py" in selected
+
+
 def test_sessionstart_executes_accelerator_and_legacy_selection_guards(monkeypatch):
     calls = []
     monkeypatch.setattr(pytest_policy, "_require_real_accelerator", lambda: calls.append("accelerator"))

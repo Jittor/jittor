@@ -305,6 +305,12 @@ def _divergence(actual, expected, floor):
     """
     actual = np.asarray(actual, dtype=np.float64)
     expected = np.asarray(expected, dtype=np.float64)
+    if actual.shape != expected.shape:
+        raise AssertionError(
+            "comparison shape mismatch: {} != {}".format(actual.shape, expected.shape)
+        )
+    if not np.isfinite(actual).all() or not np.isfinite(expected).all():
+        raise AssertionError("comparison contains non-finite values")
     scale = max(float(np.abs(expected).max()), floor, 1e-6)
     return float(np.abs(actual - expected).max() / scale)
 
@@ -313,6 +319,81 @@ def _comparison_floor(reference, keys):
     """A small fraction of the largest reference magnitude in the comparison."""
     magnitudes = [float(np.abs(reference[key]).max()) for key in keys]
     return 1e-3 * max(magnitudes + [0.0])
+
+
+def _validate_npu_evidence(reference, candidate, trainable, frozen, input_grad_na):
+    """Validate one synchronized phase; shared by single/multistep workloads."""
+    if not isinstance(reference, dict) or not isinstance(candidate, dict):
+        raise AssertionError("missing NPU inventory")
+    inventories = []
+    for label, report in (("oracle", reference), ("candidate", candidate)):
+        identity = report.get("backend_identity")
+        tensors = report.get("tensors")
+        if not isinstance(identity, dict) or not isinstance(tensors, dict) or not tensors:
+            raise AssertionError(label + ": missing backend identity/tensor inventory")
+        if type(identity.get("device_count")) is not int or identity["device_count"] != 1:
+            raise AssertionError(label + ": expected one visible NPU")
+        if not isinstance(identity.get("module"), str) or not identity["module"]:
+            raise AssertionError(label + ": missing runtime module provenance")
+        if label == "oracle":
+            if identity.get("runtime") != "torch_npu" or not identity.get("torch_module"):
+                raise AssertionError("oracle is not native torch_npu")
+        elif (identity.get("runtime") != "jittor" or identity.get("build_backend") != "acl"
+              or "acl" not in identity.get("registered_backends", [])):
+            raise AssertionError("candidate is not an ACL provider")
+        input_dtypes = report.get("input_dtypes")
+        if not isinstance(input_dtypes, dict) or not input_dtypes:
+            raise AssertionError(label + ": missing input dtype metadata")
+        if not set(input_grad_na) <= set(input_dtypes):
+            raise AssertionError(label + ": unknown non-differentiable input")
+        if set(trainable) & set(frozen):
+            raise AssertionError("trainable and frozen parameter sets overlap")
+        expected = {"primary_output"}
+        expected.update("parameter::" + name for name in list(trainable) + list(frozen))
+        expected.update("grad::" + name for name in trainable)
+        expected.update("input::" + name for name in input_dtypes)
+        expected.update("ingrad::" + name for name in set(input_dtypes) - set(input_grad_na))
+        # Buffer completeness is owned by runner.named_buffers enumeration;
+        # compare its exact names across runtimes below rather than guessing.
+        expected.update(name for name in tensors if name.startswith("buffer::"))
+        if set(tensors) != expected:
+            raise AssertionError(label + ": incomplete or extra tensor inventory")
+        for name, tensor in tensors.items():
+            if not isinstance(tensor, dict):
+                raise AssertionError(label + ": malformed tensor " + name)
+            shape, dtype = tensor.get("shape"), tensor.get("dtype")
+            if not isinstance(shape, list) or any(type(n) is not int or n < 0 for n in shape):
+                raise AssertionError(label + ": invalid tensor shape " + name)
+            if not isinstance(dtype, str) or not dtype:
+                raise AssertionError(label + ": missing tensor dtype " + name)
+            if type(tensor.get("device_id")) is not int or tensor["device_id"] != 0:
+                raise AssertionError(label + ": wrong device index " + name)
+            if label == "oracle":
+                if tensor.get("device_type") != "npu":
+                    raise AssertionError("oracle CPU/non-NPU tensor: " + name)
+            else:
+                if type(tensor.get("placement_backend")) is not int or tensor["placement_backend"] not in (-1, 2):
+                    raise AssertionError("candidate non-ACL placement: " + name)
+                location = tensor.get("location")
+                if location != "device":
+                    if not (location == "none" and 0 in shape and
+                            tensor.get("residency_exception") == "zero-sized tensor has no allocation"):
+                        raise AssertionError("candidate non-device residency: " + name)
+                elif "residency_exception" in tensor:
+                    raise AssertionError("unexpected residency exception: " + name)
+            if name.startswith("input::") and input_dtypes[name[7:]] != dtype:
+                raise AssertionError(label + ": inconsistent input dtype " + name)
+        if report.get("primary_dtype") != tensors["primary_output"]["dtype"]:
+            raise AssertionError(label + ": inconsistent primary dtype")
+        inventories.append(tensors)
+    if reference["input_dtypes"] != candidate["input_dtypes"]:
+        raise AssertionError("NPU input dtypes differ")
+    if set(inventories[0]) != set(inventories[1]):
+        raise AssertionError("NPU tensor inventory keys differ")
+    for name in inventories[0]:
+        for field in ("shape", "dtype"):
+            if inventories[0][name][field] != inventories[1][name][field]:
+                raise AssertionError("NPU tensor {} differs: {}".format(field, name))
 
 
 class EcosystemComparison(unittest.TestCase):
@@ -328,6 +409,181 @@ class EcosystemComparison(unittest.TestCase):
 
     device = "cpu"
     repeats = REPEATS
+
+    def _compare_adamw3(self, reference, candidate, torch_report, jittor_report):
+        names = torch_report["trainable_parameters"]
+        self.assertEqual(len(names), 8)
+        self.assertEqual(names, jittor_report["trainable_parameters"])
+        for report in (torch_report, jittor_report):
+            self.assertEqual(report.get("protocol"), "adamw3")
+            self.assertEqual(report.get("steps"), 3)
+            observations = report.get("step_observations", [])
+            self.assertEqual(len(observations), 3)
+            for step, observation in enumerate(observations):
+                self.assertEqual(observation["step"], step)
+                self.assertEqual(observation["trainable_parameters"], names)
+                self.assertEqual(observation["device"], "npu")
+                self.assertIn("fallback_count", observation)
+                if report is torch_report:
+                    self.assertIsNone(observation["fallback_count"])
+                else:
+                    self.assertIs(type(observation["fallback_count"]), int)
+                    self.assertEqual(observation["fallback_count"], 0)
+        self.assertEqual(torch_report["optimizer"], jittor_report["optimizer"])
+        for step in range(3):
+            native = torch_report["step_observations"][step]
+            shim = jittor_report["step_observations"][step]
+            self.assertEqual(native["loss_dtype"], "float32")
+            self.assertEqual(shim["loss_dtype"], native["loss_dtype"])
+            for phase in ("backward_npu_evidence", "update_npu_evidence"):
+                a, b = native[phase], shim[phase]
+                self.assertEqual(a["primary_dtype"], "float32")
+                self.assertEqual(b["primary_dtype"], a["primary_dtype"])
+                self.assertEqual(a["input_dtypes"], {"input_ids": "int64"})
+                self.assertEqual(b["input_dtypes"], a["input_dtypes"])
+                _validate_npu_evidence(
+                    a, b, names, torch_report["frozen_parameters"],
+                    torch_report["input_grad_not_applicable"])
+        expected = {"initial::" + name for name in names}
+        for step in range(3):
+            prefix = "step::{}::".format(step)
+            expected.add(prefix + "loss")
+            for name in names:
+                expected.update((prefix + "grad::" + name, prefix + "param::" + name,
+                                 prefix + "delta::" + name))
+        self.assertEqual(set(reference.files), expected)
+        self.assertEqual(set(candidate.files), expected)
+        for report, snapshot in ((torch_report, reference), (jittor_report, candidate)):
+            self.assertEqual(set(report["trajectory_dtypes"]), expected)
+            for key in expected:
+                dtype = "float64" if "::delta::" in key else "float32"
+                self.assertEqual(report["trajectory_dtypes"][key], dtype, key)
+                self.assertEqual(str(snapshot[key].dtype), dtype, key)
+        for name in names:
+            self.assertTrue(np.array_equal(reference["initial::" + name],
+                                           candidate["initial::" + name]), name)
+        for step in range(3):
+            prefix = "step::{}::".format(step)
+            key = prefix + "loss"
+            self.assertLess(_divergence(candidate[key], reference[key], 1e-6),
+                            self.forward_tolerance, key)
+            for kind, tolerance in (("grad::", self.backward_tolerance),
+                                    ("param::", self.forward_tolerance)):
+                keys = [prefix + kind + name for name in names]
+                floor = _comparison_floor(reference, keys)
+                for key in keys:
+                    if kind == "grad::":
+                        # Gradient scale is independent of parameters and updates.
+                        scale = max(float(np.abs(reference[key]).max()), floor, 1e-12)
+                        error = _divergence(candidate[key] / scale, reference[key] / scale, 1.0)
+                    else:
+                        error = _divergence(candidate[key], reference[key], floor)
+                    self.assertLess(error, tolerance, key)
+            delta_keys = [prefix + "delta::" + name for name in names]
+            # Scale only against oracle updates, never initial parameter values.
+            # No _divergence 1e-6 absolute floor: normalize first so tiny real
+            # updates cannot disappear under the parameter comparison tolerance.
+            delta_floor = max(_comparison_floor(reference, delta_keys), 1e-12)
+            previous_prefix = "initial::" if step == 0 else "step::{}::param::".format(step - 1)
+            for name, key in zip(names, delta_keys):
+                for snapshot in (reference, candidate):
+                    actual_delta = (snapshot[prefix + "param::" + name].astype("float64")
+                                    - snapshot[previous_prefix + name].astype("float64"))
+                    self.assertTrue(np.array_equal(snapshot[key], actual_delta),
+                                    "inconsistent saved update: " + key)
+                scale = max(float(np.abs(reference[key]).max()), delta_floor)
+                error = _divergence(candidate[key] / scale, reference[key] / scale, 1.0)
+                self.assertLess(error, self.backward_tolerance, "update delta " + key)
+        print("[training/npu] ms_swift_lora_llama_adamw3: three loss/gradient/update steps matched")
+
+    def _validate_lora_performance_evidence(self, oracle, shim):
+        self.assertIsNone(oracle["fallback_count"])
+        self.assertEqual(len(oracle["step_fallback_counts"]), oracle["timed_steps"])
+        self.assertTrue(all(value is None for value in oracle["step_fallback_counts"]))
+        self.assertIs(type(shim["fallback_count"]), int)
+        self.assertEqual(shim["fallback_count"], 0)
+        self.assertEqual(shim["fallback_policy"], "error")
+        self.assertEqual(len(shim["step_fallback_counts"]), shim["timed_steps"])
+        self.assertTrue(all(type(value) is int and value == 0
+                            for value in shim["step_fallback_counts"]))
+        for field in ("trainable_parameters", "frozen_parameters", "input_grad_not_applicable"):
+            self.assertEqual(oracle[field], shim[field])
+        for phase in ("warmup_npu_evidence", "npu_evidence"):
+            _validate_npu_evidence(oracle[phase], shim[phase],
+                oracle["trainable_parameters"], oracle["frozen_parameters"],
+                oracle["input_grad_not_applicable"])
+
+        self.assertEqual(len(oracle["loss_npu_evidence"]), 3 + oracle["timed_steps"])
+        self.assertEqual(len(shim["loss_npu_evidence"]), len(oracle["loss_npu_evidence"]))
+        for native_loss, candidate_loss in zip(oracle["loss_npu_evidence"], shim["loss_npu_evidence"]):
+            inventories = []
+            for report, loss in ((oracle, native_loss), (shim, candidate_loss)):
+                self.assertEqual(loss["shape"], [])
+                self.assertEqual(loss["dtype"], "float32")
+                evidence = dict(report["npu_evidence"])
+                evidence["tensors"] = dict(evidence["tensors"], primary_output=loss)
+                evidence["primary_dtype"] = loss["dtype"]
+                inventories.append(evidence)
+            _validate_npu_evidence(*inventories, oracle["trainable_parameters"],
+                oracle["frozen_parameters"], oracle["input_grad_not_applicable"])
+
+    def _validate_lora_performance_artifacts(self, snapshot, report):
+        names = report["trainable_parameters"]
+        self.assertEqual(len(names), 88)
+        expected = {"losses"} | {"final::" + name for name in names} | {"grad::" + name for name in names}
+        self.assertEqual(set(snapshot.files), expected)
+        self.assertEqual(set(report["artifact_dtypes"]), expected)
+        for key in expected:
+            self.assertEqual(report["artifact_dtypes"][key], "float32", key)
+            self.assertEqual(str(snapshot[key].dtype), "float32", key)
+            if key == "losses":
+                shape = (3 + report["timed_steps"],)
+            else:
+                name = key.split("::", 1)[1]
+                shape = tuple(report["npu_evidence"]["tensors"]["parameter::" + name]["shape"])
+            self.assertEqual(tuple(snapshot[key].shape), shape, key)
+
+    def _compare_lora_performance(self, reference, candidate, oracle, shim, oracle_log):
+        self._validate_lora_performance_evidence(oracle, shim)
+        self._validate_lora_performance_artifacts(reference, oracle)
+        self._validate_lora_performance_artifacts(candidate, shim)
+        # Known native CPU-fallback diagnostics are fatal; absence is not a
+        # substitute for a universal native dispatch counter.
+        lowered = oracle_log.lower()
+        self.assertNotIn("fallback to run on the cpu", lowered)
+        self.assertNotIn("fall back to cpu", lowered)
+        for field in ("protocol", "warmup_steps", "timed_steps", "attention", "tuner",
+                      "optimizer", "parameter_count", "trainable_parameter_count"):
+            self.assertEqual(oracle[field], shim[field], field)
+        # Config metadata can contain runtime-specific dtype/version objects;
+        # compare every semantic dimension explicitly.
+        for field in ("hidden_size", "intermediate_size", "num_hidden_layers", "num_attention_heads",
+                      "num_key_value_heads", "vocab_size", "max_position_embeddings",
+                      "attention_dropout", "tie_word_embeddings", "use_cache"):
+            self.assertEqual(oracle["config"][field], shim["config"][field], field)
+        self.assertEqual(oracle["warmup_steps"], 3)
+        for report in (oracle, shim):
+            self.assertGreaterEqual(report["timed_steps"], 10)
+            self.assertEqual(report["precision"]["dtype"], "float32")
+            self.assertFalse(report["precision"]["allow_hf32"])
+            self.assertEqual(report["precision"]["cube_math_type"], 0)
+            stats = report["statistics"]
+            self.assertEqual(len(stats["durations_seconds"]), report["timed_steps"])
+            self.assertTrue(all(np.isfinite(x) and x > 0 for x in stats["durations_seconds"]))
+            self.assertEqual(report["memory_end"]["units"], "bytes")
+            self.assertGreater(report["memory_end"]["allocated"], 0)
+            for phase in ("warmup_npu_evidence", "npu_evidence"):
+                self.assertEqual(report[phase]["primary_dtype"], "float32")
+                self.assertEqual(report[phase]["input_dtypes"], {"input_ids": "int64"})
+        self.assertIsNone(shim["memory_end"]["peak_allocated"])
+        self.assertIsNone(shim["memory_end"]["peak_reserved"])
+        self.assertEqual(reference["losses"].shape, (3 + oracle["timed_steps"],))
+        for key in reference.files:
+            self.assertLess(_divergence(candidate[key], reference[key], 1e-6), 2e-2, key)
+        ratio = shim["statistics"]["median_seconds"] / oracle["statistics"]["median_seconds"]
+        print("[performance/npu] Swift LoRA 1.1B FP32: median ratio={:.3f}".format(ratio))
+        if SPEED_RATIO:
+            self.assertLessEqual(ratio, float(SPEED_RATIO))
 
     def _compare(self, case):
         _builder, requirements = _ecosystem_cases.CASES[case]
@@ -404,6 +660,12 @@ class EcosystemComparison(unittest.TestCase):
                 "{} timed the runtimes with different thread counts, affinity, "
                 "or precision policy".format(case),
             )
+            for field in ("trainable_parameters", "frozen_parameters",
+                          "input_grad_not_applicable", "output_structure"):
+                self.assertIn(field, torch_report)
+                self.assertIn(field, jittor_report)
+                self.assertEqual(torch_report[field], jittor_report[field],
+                                 "{}: different {}".format(case, field))
             self.assertEqual(jittor_report.get("fallback_policy"), "error")
             self.assertEqual(jittor_report.get("fallback_count"), 0)
             if self.device == "npu":
@@ -411,12 +673,25 @@ class EcosystemComparison(unittest.TestCase):
                 self.assertTrue(backend.get("has_acl"), "ACL was not detected")
                 self.assertTrue(backend.get("use_acl"), "ACL dispatch was not enabled")
                 self.assertTrue(backend.get("use_cuda"), "device dispatch was not enabled")
+                _validate_npu_evidence(
+                    torch_report.get("npu_evidence"), jittor_report.get("npu_evidence"),
+                    torch_report["trainable_parameters"], torch_report["frozen_parameters"],
+                    torch_report["input_grad_not_applicable"])
 
             reference = np.load(torch_output)
             candidate = np.load(jittor_output)
 
             missing = sorted(set(reference.files) - set(candidate.files))
             self.assertEqual(missing, [], "{}: Jittor produced no {}".format(case, missing))
+            extra = sorted(set(candidate.files) - set(reference.files))
+            self.assertEqual(extra, [], "{}: Jittor produced extra {}".format(case, extra))
+
+            if case == "ms_swift_lora_llama_adamw3":
+                return self._compare_adamw3(reference, candidate, torch_report, jittor_report)
+
+            if case == "large_ms_swift_lora_llama_1b_train":
+                return self._compare_lora_performance(reference, candidate, torch_report,
+                                                      jittor_report, torch_log)
 
             forward_error = _divergence(
                 candidate["__output__"],

@@ -7,12 +7,15 @@ namespace jittor {
 // Vars default to following the Runtime; explicit frontend Vars retain their
 // backend even when an allocation is staged on the host or Runtime changes.
 struct TensorPlacement {
+    // Metadata-only tensors have no compute backend or payload allocation.
+    bool metadata_only = false;
     bool explicit_backend = false;
     Device device;
 
     TensorPlacement() = default;
     explicit TensorPlacement(Device target) : explicit_backend(true), device(target) {}
     bool operator==(const TensorPlacement& other) const {
+        if (metadata_only || other.metadata_only) return metadata_only == other.metadata_only;
         return explicit_backend == other.explicit_backend &&
             (!explicit_backend || (device.backend == other.device.backend &&
                 (device.backend == BackendId::Cpu || device.index == other.device.index)));

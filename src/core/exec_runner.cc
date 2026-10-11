@@ -14,6 +14,7 @@
 #include "runtime/backend_streams.h"
 #include "runtime/executor_entry.h"
 #include "runtime/backend.h"
+#include "runtime/fetch_state.h"
 #include "runtime/graph_capture.h"
 #include "runtime/backend_fallback.h"
 #include "runtime/launch_diagnostics.h"
@@ -41,8 +42,6 @@ namespace jittor {
 EXTERN_LIB MemoryProfiler memory_profiler;
 DECLARE_FLAG(int, profile_memory_enable);
 
-// from fetch_op.cc
-EXTERN_LIB list<VarPtr> fetcher_to_free;
 // from cuda_managed_allocator
 #ifdef HAS_ACCELERATOR
 DECLARE_FLAG(int, use_cuda_managed_allocator);
@@ -1137,7 +1136,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
                || v->liveness.backward.count() <= held
                || released_here.holds(v)) << v;
     // clean fetcher free buffer
-    fetcher_to_free.clear();
+    runtime_fetch_state().deferred().clear();
     if (device_sync && !runtime_use_cuda())
         backend_ops(BackendId::Cpu).synchronize(0);
     #ifdef HAS_ACCELERATOR

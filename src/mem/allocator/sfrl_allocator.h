@@ -101,7 +101,7 @@ struct CachingBlockPool {
     // insert a block, id of this block will be obtanined and returned in this function.
     size_t insert_occupied(CachingBlock* block);
     // free all unsplit unoccupied blocks and recycle id.
-    size_t free_all_cached_blocks(Allocator* underlying, long long free_size = -1);
+    size_t free_all_cached_blocks(Allocator* underlying, const Allocator* owner, long long free_size = -1);
 };
 
 // Segregate fit range list allocator

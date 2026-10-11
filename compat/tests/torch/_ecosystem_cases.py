@@ -308,6 +308,7 @@ CASES = {
     "mmcv_conv_module": (_mmcv_conv_module, ("mmcv", "mmengine")),
     "mmengine_base_module": (_mmengine_base_model, ("mmengine",)),
     "ms_swift_lora_llama": (_ms_swift_lora_llama, ("transformers", "peft", "swift")),
+    "ms_swift_lora_llama_adamw3": (_ms_swift_lora_llama, ("transformers", "peft", "swift")),
 }
 
 

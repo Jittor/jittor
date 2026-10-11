@@ -450,16 +450,13 @@ def _invert(self):
 
 
 def _device(self):
+    if self.is_metadata:
+        return _owner.device("meta")
     if self.placement_backend >= 0:
         if self.placement_backend == 0:
             return _owner.device("cpu")
         name = "npu" if self.placement_backend == 2 else "cuda"
         return _owner.device(name, int(self.device_id))
-    # Inside a `with torch.device("meta")` block (transformers'
-    # from_pretrained), report "meta" so its meta-context detection
-    # fires and eager weight init is skipped. See device.__enter__.
-    if _owner._DEVICE_CTX_STACK:
-        return _owner._DEVICE_CTX_STACK[-1]
     # Report the Var's ACTUAL memory residency (matches jtorch's C++
     # is_cpu()/device()): a Var built/migrated to host -- e.g. via
     # torch.zeros(device='cpu') or .cpu() -- is "cpu" even while the
@@ -491,6 +488,18 @@ def _is_basic_index(index):
 
 
 def _torch_getitem(self, slices):
+    # PyTorch accepts NumPy integer/bool arrays as advanced indices.
+    # Convert them before the Jittor ACL dispatcher sees the index.
+    def normalize(index):
+        if isinstance(index, _owner.np.ndarray) and index.ndim:
+            if index.dtype.kind not in ("b", "i", "u"):
+                return index
+            return _owner.jt.array(index, dtype=str(index.dtype))
+        if isinstance(index, tuple):
+            return tuple(normalize(item) for item in index)
+        return index
+
+    slices = normalize(slices)
     # A basic index, natively (`src/bindings/pyjt/py_compat_fast.h`).
     fast = _owner.jt.core._fast_getitem(self, slices)
     if fast is not NotImplemented:
@@ -643,7 +652,7 @@ def _to(self, *args, **kwargs):
             bare = a.replace("torch.", "")
             if bare in _owner.dtype._registry:
                 ds = bare
-            elif bare.split(":")[0] in ("cpu", "cuda", "npu"):
+            elif bare.split(":")[0] in ("cpu", "cuda", "npu", "meta"):
                 dev = bare
             else:
                 # An unrecognised string used to fall off the end of this
@@ -666,6 +675,13 @@ def _to(self, *args, **kwargs):
                     stub_result=None)
     if dev is None:
         dev = self.device
+    target_name = getattr(dev, "type", None) or str(dev).split(":", 1)[0]
+    if target_name == "meta":
+        if self.is_metadata and not copy and (ds is None or ds == _jittor_dtype_name(self.dtype)):
+            return self
+        return self.metadata_copy(ds or _jittor_dtype_name(self.dtype))
+    if self.is_metadata:
+        raise NotImplementedError("Cannot copy out of meta tensor; no data. Use to_empty or assign real values.")
     out = self.clone() if copy else self
     if ds is not None:
         out = _cast_if_needed(out, ds)
@@ -802,9 +818,16 @@ def _scalar_dtype_name(x):
 
 
 def _is_cuda(self):
-    if self.placement_backend >= 0:
-        return self.placement_backend != 0
-    if not (_owner.jt.flags.use_cuda or getattr(_owner.jt.compiler, "has_acl", 0)):
+    backend = int(self.placement_backend)
+    if backend >= 0:
+        # CUDA and ROCm use CUDA-compatible Torch semantics. ACL/NPU tensors
+        # are accelerators too, but Torch reports is_cuda=False for them.
+        return backend in (1, 3)
+    if not _owner.jt.flags.use_cuda:
+        return False
+    # Jittor's legacy use_cuda flag also enables ACL and Corex. Do not expose
+    # those runtimes as CUDA tensors when their Var has only ambient placement.
+    if getattr(_owner.jt.compiler, "has_acl", 0):
         return False
     return not _owner._var_is_cpu_resident(self)
 
@@ -1511,13 +1534,15 @@ def _fill_captured_state(self, val):
 def _api_fill(self, val):
     if _fill_captured_state(self, val):
         return self
-    return _ip(self, _owner.jt.ones(self.shape, self.dtype) * val)
+    with _new_scope(self, self.device):
+        return _ip(self, _owner.jt.ones(self.shape, self.dtype) * val)
 
 
 def _api_zero(self):
     if _fill_captured_state(self, 0):
         return self
-    return _ip(self, _owner.jt.zeros(self.shape, self.dtype))
+    with _new_scope(self, self.device):
+        return _ip(self, _owner.jt.zeros(self.shape, self.dtype))
 
 
 def _api_add(self, o, alpha=1):

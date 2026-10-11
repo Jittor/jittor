@@ -34,6 +34,7 @@ from ..types import (
 )
 from ..core_install_api import bind_core_install_api
 from ..fidelity import Fidelity, register_fidelity
+from ..rng import get_cpu_rng_state, set_cpu_rng_state, manual_seed_cpu_and_acl
 from ...diagnostics import EXPECTED, swallowed
 from ...transaction import set_flag
 
@@ -396,6 +397,10 @@ def _manual_seed(s):
     ctx = _misc_context()
     g = ctx.jittor_module
     s = int(s)
+    if "acl" in jt.core.registered_backends():
+        s = manual_seed_cpu_and_acl(s)
+        ctx.state["core_misc"]["seed"] = s
+        return g
     ctx.state["core_misc"]["seed"] = s
     # torch.manual_seed sets the Torch RNG to the requested value in each
     # process; it does not offset distributed ranks or reseed NumPy/Python.
@@ -424,23 +429,11 @@ def _seed(value=_seed_sentinel):
 
 
 def _get_rng_state():
-    return jt.array([initial_seed()], dtype="int64")
+    return get_cpu_rng_state()
 
 
 def _set_rng_state(state):
-    ctx = _misc_context()
-    Var = ctx.state["Var"]
-    try:
-        if isinstance(state, Var):
-            state = int(state.reshape(-1)[0].item())
-        elif hasattr(state, "__len__"):
-            state = int(list(state)[0])
-        else:
-            state = int(state)
-    except EXPECTED as exc:
-        swallowed("torch/installers/core.py _set_rng_state: if isinstance(state, Var):", exc)
-        state = initial_seed()
-    _manual_seed(state)
+    return set_cpu_rng_state(state)
 
 
 class PyTorchFileReader:
@@ -712,6 +705,14 @@ def get_default_device():
     """
     ctx = _misc_context()
     g = ctx.jittor_module
+    # Factories resolve this same per-thread stack before the runtime default.
+    from ..types import active_device_context, _accelerator_type
+    active = active_device_context()
+    if active is not None:
+        if active.type not in ("cuda", "npu"):
+            return g.device(active)
+        if active.index is not None:
+            return g.device(_accelerator_type(), active.index)
     from ..frontend import default_device as _recorded_default
     spelling = _recorded_default()
     if str(spelling).split(":")[0] == "cpu":
@@ -724,10 +725,10 @@ def get_default_device():
         swallowed(
             "torch/installers/core.py get_default_device: index = int(jt.current_device())",
             exc,
-            "reporting cuda:0, which is wrong on any other device",
+            "reporting accelerator index 0, which is wrong on any other device",
         )
         index = 0
-    return g.device("cuda", index if index >= 0 else 0)
+    return g.device(_accelerator_type(), index if index >= 0 else 0)
 
 
 def get_device_module(device=None):
@@ -908,7 +909,7 @@ def _result_type_info(x):
 
 
 def initial_seed():
-    return int(_misc_context().state["core_misc"].get("seed", 0))
+    return int(jt.core.rng_initial_seed("cpu", 0))
 
 
 def is_tensor(value):
@@ -948,11 +949,18 @@ def get_autocast_gpu_dtype(*args, **kwargs):
 
 
 def are_deterministic_algorithms_enabled():
-    return False
+    return bool(jt.core.backend_get_deterministic_algorithms())
 
 
-def use_deterministic_algorithms(*args, **kwargs):
-    return None
+def use_deterministic_algorithms(mode, *, warn_only=False):
+    if type(mode) is not bool or type(warn_only) is not bool:
+        raise TypeError("mode and warn_only must be bool")
+    if warn_only:
+        raise NotImplementedError("Backend deterministic warn_only policy is not implemented")
+    # Materialize outstanding lazy operations under their original policy.
+    jt.sync_all(True)
+    jt.core.backend_set_deterministic_algorithms(mode)
+
 
 
 def is_floating_point(value):
@@ -1217,9 +1225,9 @@ _MISC_DETAILS = {
     "clear_autocast_cache": "jittor keeps no cached weight casts, so the postcondition already holds",
     "autocast_increment_nesting": "real thread-local nesting depth, as torch's counter",
     "autocast_decrement_nesting": "real thread-local nesting depth, as torch's counter",
-    "use_deterministic_algorithms": "no-op setter; deterministic algorithm policy is not implemented",
-    "get_rng_state": "seed-only state, not a full generator snapshot or exact stream restoration",
-    "set_rng_state": "restores the recorded seed, not an exact generator stream snapshot",
+    "use_deterministic_algorithms": "native backend process-wide deterministic policy with runtime readback; warn_only is refused",
+    "get_rng_state": "complete synchronized native CPU engine state as versioned CPU ByteTensor",
+    "set_rng_state": "validates and restores the complete native CPU engine without changing ACL streams",
     "norm": "existing Torch norm adapter; out and extra keyword semantics are not implemented",
     "where": "existing one- or three-argument selection; out is not implemented",
     "bincount": "native scatter-add implementation; existing flatten/minlength behavior retained",
@@ -1227,14 +1235,14 @@ _MISC_DETAILS = {
     "finfo": "NumPy limits plus declared metadata-only low-precision specs; this does not enable their computation",
     "iinfo": "NumPy integer-limit metadata for supported dtype names",
     "is_autocast_available": "answers for the backends this build can run -- cpu and cuda always, npu when ACL is built -- so it is False for the xpu/mps/xla/ipu/mtia device types torch answers True for",
-    "are_deterministic_algorithms_enabled": "legacy False answer; deterministic algorithms are not configurable",
+    "are_deterministic_algorithms_enabled": "reads the effective native backend deterministic policy; unsupported backends raise",
     "as_strided": "gather-based view; reads are exact but the result does not alias the input storage",
     "empty_strided": "contiguous allocation; the requested strides are not honored",
 }
 for _name, _implementation in _MISC_BINDINGS.items():
     _level = (
         Fidelity.UNIMPLEMENTED
-        if _name in ("PyTorchFileReader", "use_deterministic_algorithms")
+        if _name == "PyTorchFileReader"
         else Fidelity.APPROXIMATE
     )
     register_fidelity(

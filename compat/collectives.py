@@ -100,6 +100,11 @@ def _all_gather_shards(local_shard):
     # CPU -- and demanding NCCL there turns a no-op into a hard failure.
     if _world_size() <= 1:
         return local_shard
+    if bool(getattr(jt.compiler, "has_acl", False)):
+        ops = getattr(jt.compile_extern, "hccl_ops", None)
+        if ops is None or not callable(getattr(ops, "hccl_all_gather", None)):
+            raise RuntimeError("Jittor HCCL all_gather is not available for this ACL process")
+        return ops.hccl_all_gather(local_shard)
     ops = _nccl_ops()
     if ops is not None and callable(getattr(ops, "nccl_all_gather", None)):
         return ops.nccl_all_gather(local_shard)

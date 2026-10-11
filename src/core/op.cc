@@ -64,6 +64,8 @@ bool lookup_requires_grad_disabled_edge(Node* source, Node* target) {
 }
 
 Op::Op() {
+    USER_CHECK(!current_tensor_placement().metadata_only)
+        << "This operator has no metadata-only construction rule";
     launch_origin = capture_launch_origin();
     float32_precision = current_float32_precision_policy();
     flags.set(NodeFlags::_var, 0);
@@ -331,6 +333,12 @@ void Op::propagate_device() {
 }
 
 void Op::init() {
+    // Metadata operations need explicit metadata rules. Never execute a real
+    // kernel or resolve data-dependent shapes using an absent payload.
+    for (Var* value : inputs()) USER_CHECK(!value->is_metadata())
+        << "Operator " << name() << " has no metadata-only rule";
+    for (Var* value : outputs()) USER_CHECK(!value->is_metadata())
+        << "Operator " << name() << " has no metadata-only rule";
     Float32PrecisionScope precision_scope(float32_precision);
     JT_GBP_SCOPE(gbp_op_init);
     // Graph-only diagnostic Ops may deliberately be unregistered. Execution

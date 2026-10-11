@@ -494,6 +494,9 @@ def empty(*shape, dtype="float32"):
         shape = shape[:-1]
     if isinstance(shape, tuple) and isinstance(shape[0], (Sequence, NanoVector)):
         shape = shape[0]
+    placement = core._current_tensor_placement()
+    if placement is not None and placement[0] == -2:
+        return core.metadata_empty(shape, dtype)
     return ops.empty(shape, dtype)
 
 def new_empty(x, size):

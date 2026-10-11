@@ -13,6 +13,7 @@
 #include "core/executor.h"
 #include "runtime/device.h"
 #include "runtime/backend.h"
+#include "runtime/fetch_state.h"
 #include "core/graph.h"
 #include "core/grad.h"
 #include "mem/allocator/cuda_dual_allocator.h"
@@ -26,6 +27,33 @@
 #include "bindings/pyjt/py_converter.h"
 
 namespace jittor {
+
+VarPtr make_metadata_var(NanoVector shape, NanoString dtype, Var* like) {
+    for (auto extent : shape) USER_CHECK(extent >= 0) << "Metadata shapes must be nonnegative";
+    TensorPlacement metadata;
+    metadata.metadata_only = true;
+    TensorPlacementScope scope(metadata);
+    VarPtr result(shape, dtype);
+    if (like) {
+        result->storage_strides = like->storage_strides;
+        result->storage_offset_bytes = like->storage_offset_bytes / like->dsize() * dtype.dsize();
+        result->flags.set(NodeFlags::_stop_grad, like->is_stop_grad());
+        result->set_flag(VarFlags::_explicit_requires_grad,
+            like->flag(VarFlags::_explicit_requires_grad));
+        result->set_flag(VarFlags::_requires_grad_disabled,
+            like->flag(VarFlags::_requires_grad_disabled));
+    }
+    return result;
+}
+
+VarHolder* metadata_empty(NanoVector shape, NanoString dtype) {
+    return new VarHolder(make_metadata_var(shape, dtype));
+}
+
+VarHolder* VarHolder::metadata_copy(NanoString dtype) {
+    if (dtype == ns_void) dtype = var->dtype();
+    return new VarHolder(make_metadata_var(var->shape, dtype, var));
+}
 
 namespace {
 struct VarDataOwner {
@@ -131,6 +159,7 @@ void submit_pending(VarHolder* holder) {
 // (`DeviceWaitScope` in mem/allocator.cc) -- which it only does while this lock
 // is held, so holding it here is what makes that release reachable at all.
 VarHolder* VarHolder::migrate_to_cpu_() {
+    USER_CHECK(!var->is_metadata()) << "Cannot read or copy data from a metadata-only tensor";
     ExecutorEntryScope entry;
     sync(true, false);
 #ifdef HAS_ACCELERATOR
@@ -194,6 +223,7 @@ static inline bool readback_waits_for_devices() {
 }
 
 DataView VarHolder::data() {
+    USER_CHECK(!var->is_metadata()) << "Cannot read or copy data from a metadata-only tensor";
     note_readback();
     if (!(var->mem_ptr && !var->allocator->is_cuda())) {
         ExecutorEntryScope entry;
@@ -206,6 +236,7 @@ DataView VarHolder::data() {
 }
 
 uint64 VarHolder::raw_ptr() {
+    USER_CHECK(!var->is_metadata()) << "Cannot read or copy data from a metadata-only tensor";
     note_readback();
     ExecutorEntryScope entry;
     sync(true, false);
@@ -341,7 +372,7 @@ void VarHolder::set_data(ArrayArgs&& array) {
     }
 }
 
-VarHolder::VarHolder(Var* v) : var(v) {
+VarHolder::VarHolder(Var* v) : var(v), leaf_grad_callback(v->leaf_grad_callback) {
     // Var holder has both forward and backward liveness
     own_holder();
     var->own_both_liveness();
@@ -350,12 +381,14 @@ VarHolder::VarHolder(Var* v) : var(v) {
 
 VarHolder::VarHolder(VarPtr&& v) {
     var = v.ptr;
+    leaf_grad_callback = var->leaf_grad_callback;
     v.ptr = nullptr;
     own_holder();
     add_hold_vars(this);
 }
 
-VarHolder::VarHolder(VarHolder* v) : var(v->var) {
+VarHolder::VarHolder(VarHolder* v) : var(v->var),
+    leaf_grad_callback(std::move(v->leaf_grad_callback)) {
     own_holder();
     iter = v->iter;
     *iter = this;
@@ -783,6 +816,11 @@ VarHolder* VarHolder::start_grad() {
     AutogradPolicyOverride policy_guard({});
     no_grad = 0;
     auto dvar = jittor::detach(var);
+    // Real detach produces a differentiable leaf behind a stopped input op.
+    // Metadata has no producer/input edge: its leaf flag is stopped directly,
+    // so enabling gradients must clear that flag on the newly owned metadata.
+    if (dvar->is_metadata())
+        dvar->flags.set(NodeFlags::_stop_grad, false);
     std::swap(dvar.ptr, var);
     no_grad = no_grad_bk;
     var->set_flag(VarFlags::_explicit_requires_grad);
@@ -865,6 +903,7 @@ VarHolder* VarHolder::sync(bool device_sync, bool weak_sync) {
 }
 
 ArrayArgs VarHolder::fetch_sync() {
+    USER_CHECK(!var->is_metadata()) << "Cannot read or copy data from a metadata-only tensor";
     note_readback();
     if (!(var->mem_ptr && !var->allocator->is_cuda())) {
         ExecutorEntryScope entry;
@@ -937,9 +976,6 @@ ItemData VarHolder::item() {
     return data;
 }
 
-// from fetch_op.cc
-EXTERN_LIB list<VarPtr> fetcher;
-
 void sync_all(bool device_sync) {
     vector<Var*> vars;
     vars.reserve(runtime_holder_state().holders().size());
@@ -948,7 +984,7 @@ void sync_all(bool device_sync) {
         // purpose by whoever kept it. `sync_all` cannot finish one anyway --
         // `keep_graph` is what leaves it pending -- so sweeping it up here
         // only re-runs it, every time anyone asks for everything to complete.
-        if (v->var->flag(VarFlags::_kept)) continue;
+        if (v->var->is_metadata() || v->var->flag(VarFlags::_kept)) continue;
         // Sinks only. Sweeping every holder and forcing weak_sync=false were
         // both tried against MiniMax-H3's uniform-random-byte video: ~70%
         // failure becomes ~17% and ~33% respectively, and ~17% with both. They
@@ -957,7 +993,7 @@ void sync_all(bool device_sync) {
         if (!v->var->_outputs.size())
             vars.push_back(v->var);
     }
-    for (auto& v :fetcher)
+    for (auto& v : runtime_fetch_state().pending())
         vars.push_back(v.ptr);
     graph_check();
     runtime_executor().run_sync(vars, device_sync); //need sync at last
@@ -967,7 +1003,10 @@ void sync_all(bool device_sync) {
 void sync(const vector<VarHolder*>& vh, bool device_sync, bool weak_sync) {
     vector<Var*> vars;
     vars.reserve(vh.size());
-    for (auto v : vh) vars.push_back(v->var);
+    for (auto v : vh) {
+        USER_CHECK(!v->var->is_metadata()) << "Cannot execute a metadata-only tensor";
+        vars.push_back(v->var);
+    }
     graph_check();
     runtime_executor().run_sync(vars, device_sync, weak_sync); //need sync at last
     graph_check();

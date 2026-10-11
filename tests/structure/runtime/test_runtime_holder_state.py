@@ -21,10 +21,25 @@ struct VarHolder { int id; };
 // Stubbed rather than linking backend.cc, which drags the whole backend
 // registry into a case about holder-state ownership.
 const char* backend_name(BackendId) { return "cpu"; }
+// Empty queue lifecycle only: releasing a real Var is outside this fixture.
+void Node::release_both_liveness() { assert(false); }
 }
 using namespace jittor;
+// Exercise construction before main, just like init_use_cuda during dlopen.
+static const bool fetch_queues_ready = [] {
+    assert(runtime_fetch_state().pending().empty());
+    assert(runtime_fetch_state().deferred().empty());
+    runtime_fetch_state().deferred().clear();
+    return true;
+}();
 int main() {
     NativeRuntime isolated;
+    assert(fetch_queues_ready);
+    assert(&runtime_fetch_state() == &native_runtime().fetches());
+    assert(&isolated.fetches() != &runtime_fetch_state());
+    assert(isolated.fetches().pending().empty());
+    assert(isolated.fetches().deferred().empty());
+    static_assert(!std::is_copy_constructible<RuntimeFetchState>::value, "fetch owner");
     assert(isolated.executor().allocator == nullptr);
     assert(isolated.executor().temp_allocator == nullptr);
     assert(!isolated.executor().last_is_cuda);
@@ -163,3 +178,25 @@ def test_device_header_is_sdk_free_and_callbacks_belong_to_native_providers():
         callback = callback[:callback.index("\n}") + 2] if "\n}" in callback else callback
         assert expected in callback
         assert "ops.host_callback = host_callback" in driver
+
+
+def test_fetch_queues_have_no_cross_translation_unit_initialization():
+    """Device flag initialization can synchronize before fetch_op constructors."""
+    runtime_header = (SRC / "runtime/runtime.h").read_text(encoding="utf-8")
+    runtime_source = (SRC / "runtime/runtime.cc").read_text(encoding="utf-8")
+    assert "RuntimeFetchState fetches_;" in runtime_header
+    assert "return native_runtime().fetches();" in runtime_source
+    consumers = {
+        "ops/composite/fetch_op.cc": ("pending()", "deferred()"),
+        "core/var_holder.cc": ("pending()",),
+        "core/exec_runner.cc": ("deferred()",),
+        "runtime/init.cc": ("pending()", "deferred()"),
+    }
+    for path, queues in consumers.items():
+        source = (SRC / path).read_text(encoding="utf-8")
+        assert "list<VarPtr> fetcher" not in source, path
+        for queue in queues:
+            assert "runtime_fetch_state()." + queue in source, (path, queue)
+    cleanup = (SRC / "runtime/init.cc").read_text(encoding="utf-8")
+    assert cleanup.index("runtime_fetch_state().deferred().clear()") < cleanup.index(
+        "runtime_fetch_state().pending().clear()")

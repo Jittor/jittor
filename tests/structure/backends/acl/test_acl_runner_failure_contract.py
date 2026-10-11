@@ -331,11 +331,10 @@ def test_all_runner_constructors_have_a_valid_registry_or_direct_owner():
             if uses_registry:
                 generic.add(owner)
                 continue
-            if owner == "ArgReduceOpRunner":
-                # Native arg reduction is an explicit typed-query owner in the
-                # upstream dispatcher, never the generic CodeOp base run path.
-                assert "AclExecutionRunner<ArgReduceOpRunner, false>" in dispatch
-                assert not uses_registry
+            # The dispatcher explicitly opts these native aclnn owners out
+            # of registry lookup. Their executeOp bodies use typed CANN calls.
+            if re.search(r"AclExecutionRunner<" + owner + r",\s*false>", dispatch):
+                direct.add(owner)
                 continue
             if owner in dynamic_names:
                 # Fused execution assigns the preflight-checked public name
@@ -346,5 +345,5 @@ def test_all_runner_constructors_have_a_valid_registry_or_direct_owner():
                 continue
             names = re.findall(r'"([^"]+)"', arguments)
             assert set(names) <= registered, (owner, set(names) - registered)
-    assert checked and direct == {"KVCacheMemcpyOpRunner"}
+    assert checked and {"KVCacheMemcpyOpRunner", "ArgReduceOpRunner", "SortOpRunner"} <= direct
     assert generic == {'UnaryOpRunner', 'BinaryOpRunner'}

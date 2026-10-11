@@ -1,206 +1,79 @@
 ---
 name: ms-swift-torch-compat
-description: 在 Jittor 的 torch shim 与原生 PyTorch/torch_npu 两侧运行并对比 ms-swift 自带 LoRA tuner，用于复现 ms_swift_lora_llama 的数值/梯度对拍与真实设备性能结论；不覆盖 PEFT 的 LoRA、全量微调、优化器与分布式训练。
+description: 设计、实现和验证 ms-swift 在 Jittor torch shim 上的兼容性。覆盖实际使用的模型、tuner、训练/推理入口、状态恢复、数据与序列化、分布式和目标设备；不把单个 LoRA case 当作完整适配。
 ---
 
-# ms-swift × Jittor torch shim
+# ms-swift Jittor Torch 兼容
 
-## 用途
+## 目标
 
-回答「`ms-swift` 的 `Swift`/`swift.tuners.LoRAConfig` 架在 `import torch` → Jittor 上能否跑、
-和原生 torch/torch_npu 是否同数、加速卡上快不快」。上游用例：
-`../../../compat/tests/torch/_ecosystem_cases.py:_ms_swift_lora_llama`（case 名
-`ms_swift_lora_llama`，依赖 `transformers` + `peft` + `swift`）。
+本 skill 的对象是 **ms-swift 通过公开 torch API 使用 Jittor** 的完整兼容面，而不是某一个模型或某一个 LoRA 示例。首个 `ms_swift_lora_llama` case 只是快速定位和回归入口；它通过后仍必须按适配面矩阵扩展验证，未执行的面必须明确记录为 `not-run`，不能从首个 case 推广结论。
 
-**不覆盖**：PEFT 的 LoRA（见 `../peft-torch-compat/SKILL.md`）、真实 checkpoint 全量微调、
-优化器更新、分布式 ms-swift 训练。分流/定级/device 阶梯走
-`../downstream-library-adaptation/SKILL.md`。
+适配范围由任务声明的 ms-swift 版本、安装的可选依赖和用户要求共同确定。开始时先盘点真实版本暴露的公开入口，再建立范围矩阵；不要凭印象声称“支持整个 ms-swift”。
 
-## 两侧环境
+## 统一等级与本轮完成边界
 
-已实测：
+本任务只使用[验收合同](references/verification.md)的飞书 L0–L5：L0 构造、L1 前向、L2 梯度与更新、L3 完整恢复、L4 公开入口、L5 稳态性能。通用 `downstream-library-adaptation` 的同名等级不可换算。缺陷 C 类、首个失败 L 层和 core/compat/adapter 归属分别记录。
 
-| 侧 | 解释器 | 关键事实 |
-| --- | --- | --- |
-| shim | `<jittor-python>` | py3.12.12；jittor 1.3.11.0；`import torch` → shim（`_torch_compat_install_context` 存在）；transformers 5.5.3、safetensors 0.8.0、numpy 2.3.5 |
-| 原生 torch | `<real-torch-python>` | py3.12.12；torch 2.13.0+cu129；transformers 5.5.3 |
+先冻结本轮必须交付的代表性“功能面 × 模型/流程 × 设备 × 拓扑”清单。选实际共享机制的代表用例，不逐个穷举全部注册模型；未执行者标 `not-run`。每格分开记录“公开入口实际运行/产出”和“层级验收状态”：CLI 跑完但 dtype、激活重算或恢复语义失败，只能记入口运行，不得授予 L4。诊断性性能可定位瓶颈，不能充当 L5。
 
-先激活 shim 侧 env 脚本（本地、不入库的 lab 脚本，如 `$JITTOR_LAB_ROOT/<topic>/env-jittor.sh`；原生侧
-对应 `env-oracle.sh`）：导出 `JITTOR_TORCH_SHIM=1`、缓存收进
-`$JITTOR_LAB_ROOT/_state/h3/run`、`HF_HUB_OFFLINE=1`/`TRANSFORMERS_OFFLINE=1`，并设
-`JT_BUILD_PYTHON_CONFIG_PATH=<base-python-prefix>/bin/python3.12-config`——**不设它
-`import jittor` 直接 `RuntimeError: python3.12-config not found`**（实测）。
+## 适配面矩阵
 
-两侧同 py3.12、ABI 相同，共享一个 package site 即可。**注意**：NPU 验收报告用的是
-py3.9(jittor) 对 py3.10(torch_npu)，ABI 不同，必须分别给
-`JITTOR_ECOSYSTEM_PACKAGE_SITE` 和 `JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE`，harness 会
-只断言依赖**版本**相同、允许 origin 不同。
+至少逐项盘点并给出状态、首个断点、运行键和证据位置：
 
-**看任何数字前先过 oracle 断言**：
-
-```bash
-<real-torch-python> -c \
-  "import torch; assert not hasattr(torch,'_torch_compat_install_context'), 'oracle 是 shim'; print('oracle', torch.__version__)"
-# 实测：oracle 2.13.0+cu129
-```
-
-**验证环境里 `swift` / `ms-swift` / `peft` 两侧都未安装**（`PackageNotFoundError`，
-`find_spec('swift')` 为 False）。补上之前本 skill 的 ms-swift 数字都是未验证。
-
-## 在 shim 上跑
-
-ms-swift 的 case 依赖 `swift` 与 `peft` 两个包，都放进
-`JITTOR_ECOSYSTEM_PACKAGE_SITE` 指向的 site（契约见
-`../../../compat/tests/torch/_ecosystem_harness.py` 模块 docstring）。两侧同 py3.12，
-一个共享 site 即可。构建办法（**未执行**）：建空目录 `<site>`，`pip install --target <site>
-ms-swift==4.5.2 peft==0.17.1`（版本取自 NPU 报告），并保证两侧 transformers 版本一致。
-**不要**把 `ms-swift`/`peft` 装进 oracle venv 去覆盖 torch。
-
-跑单条 case（pytest 起在 shim 解释器）：
-
-```bash
-# 已激活 shim 侧环境（本地 env 脚本，不入库）
-unset PYTHONPATH
-cd <repo-root>
-export REAL_TORCH_PYTHON=<real-torch-python>
-export JITTOR_ECOSYSTEM_PACKAGE_SITE=<含 swift/peft 的 site>
-<jittor-python> -m pytest -q \
-  "compat/tests/torch/test_ecosystem_parity.py::EcosystemParity::test_ms_swift_lora_llama"
-```
-
-`ms_swift_lora_llama` 在 CPU / CUDA / NPU 三档都有：`EcosystemParity`（CPU）、
-`EcosystemParityCUDA`（继承）与 `EcosystemParityNPU` 都收了它（NPU 档另有 diffusers、
-mmcv、mmengine 三个用例）。NPU 档跑法（需先 source CANN，shim 侧 python 与 oracle
-torch_npu 解释器按各自主机环境给出；下面是报告里的维护命令，验证环境不是 Ascend 环境）：
-
-```bash
-REAL_TORCH_PYTHON=/path/to/torch-npu/python JITTOR_TORCH_SHIM=1 \
-JITTOR_ECOSYSTEM_PACKAGE_SITE=/path/to/python39/site-packages \
-JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE=/path/to/python310/site-packages \
-python -m pytest -q \
-  "compat/tests/torch/test_ecosystem_parity.py::EcosystemParityNPU::test_ms_swift_lora_llama"
-```
-
-（该维护命令来自 `2026-08-31-ms-swift-ascend-parity-performance.md`（已退役报告，Git 历史
-`e3c369acb` 可查），报告里写的是旧路径 `tests/compat/...`，本仓当前路径是 `compat/tests/...`。）
-
-**或手动两步**（`../../../compat/tests/torch/_ecosystem_runner.py`）：
-
-```bash
-cd compat/tests/torch
-env -u PYTHONPATH -u JITTOR_TORCH_SHIM \
-  <real-torch-python> \
-  _ecosystem_runner.py ms_swift_lora_llama /tmp/torch.npz --runtime torch --device cpu
-# 已激活 shim 侧环境（本地 env 脚本，不入库）
-JITTOR_ECOSYSTEM_PACKAGE_SITE=<site> <jittor-python> \
-  _ecosystem_runner.py ms_swift_lora_llama /tmp/jittor.npz --runtime jittor --device cpu \
-  --weights /tmp/torch.weights.npz
-```
-
-runner CLI（`--help` 实测）：`python _ecosystem_runner.py <case> <output.npz> [--weights W]
-[--repeats N] [--seed N] [--runtime {torch,jittor}] [--device {cpu,cuda,npu}]`。
-`--runtime` 默认 `torch`，shim 解释器里**必须显式 `--runtime jittor`**。
-
-## 在原生 torch 上跑
-
-原生侧入口是 harness 的 oracle 半边（上面的 `--runtime torch`，NPU 档是 `torch_npu` 解释器）。
-仓库里没有独立的 ms-swift 单测文件；契约就是 `_ms_swift_lora_llama` 这个 case 本身。
-
-## 对拍
-
-- **数字**：同权重同输入由 harness 结构保证；比较前向、每个参数梯度、每个输入梯度。
-  容差 CPU `2e-3 / 1e-2`，CUDA/NPU `5e-3 / 2e-2`。
-  **关键细节**：ms-swift 的 tuner 只把 adapter 放进 `state_dict`，若按 `state_dict` 传权重，
-  两侧 backbone 会各自随机初始化、对拍无意义；runner 因此枚举
-  `named_parameters()+named_buffers()`（`_ecosystem_runner.py` 的 `transferable()`），
-  任何一侧不匹配即 `SystemExit`。这是 ms-swift 与 peft 用例的实质差别。
-- **速度**：harness 取 `min(durations)`、`JITTOR_ECOSYSTEM_REPEATS>=10`（speed 模块），
-  **只在设 `JITTOR_ECOSYSTEM_SPEED_RATIO` 时才断言墙钟**。`_ecosystem_speed.CASES` 里
-  **没有 ms-swift 的 large case**，报告里的 50 步取最小值是独立于 harness 的协议。
-- **device 规则**：两侧必须同 device。Jittor 没有 per-tensor device，验证环境 `import jittor`
-  直接 `CUDA enabled`（实测）；CPU 档必须显式 `jt.runtime.scope(use_cuda=0)`（runner 的
-  `--device cpu` 已处理），否则就是 Jittor 在加速卡上对原生 CPU。NPU 档还额外断言
-  `has_acl/use_acl/use_cuda` 与 `fallback_count == 0`、`fallback_policy == "error"`。
-
-## 断点与分流
-
-ms-swift 是纯 `import torch` 消费者，**adapter（第三行）为空**。已记录的断点：
-
-| 现象 | 分流 |
+| 面 | 必须覆盖的内容 |
 | --- | --- |
-| LoRA 训练步比 torch_npu 慢 ~18% | 不在 tuner；是 Transformers Llama 选了 SDPA，而 ACL adapter 拒绝 causal/masked training，退回 matmul/softmax，而 torch_npu 用 CANN fused attention → **jittor 核心**（ACL FlashAttentionScoreV2 接入） |
-| `TypeError` 且真 PyTorch 下同样报 | 下游版本组合问题，不是 jittor 缺陷 |
-| `state_dict` 只有 adapter | runner 侧已按 `named_parameters` 枚举，不是断点 |
+| 入口与配置 | `swift` CLI/launcher、配置解析、runtime 初始化、设备/精度/随机性配置 |
+| 模型 | 任务要求的模型族；至少区分 causal LM、seq2seq/encoder、视觉或多模态入口（实际暴露者） |
+| tuner | ms-swift 自有 LoRA 及版本中实际公开的其他 tuner；PEFT LoRA 只能作为互操作路径单独标注 |
+| 训练 | SFT/监督训练；任务或安装依赖要求时增加 preference/DPO、RL/奖励训练等公开流程 |
+| 状态 | optimizer、scheduler、梯度累积、混合精度、保存、全新进程恢复和继续训练 |
+| 推理 | adapter 加载、generate、greedy/采样配置、cache、批处理和公开推理入口 |
+| 数据链路 | datasets、tokenizers、collator、padding/label、离线数据读取及有效样本划分 |
+| 序列化 | safetensors、模型/adapter export、checkpoint 元数据与设备迁移 |
+| 分布式 | 单卡、单机多卡和在资源具备时的多机；实际 backend、rank、同步与恢复 |
+| 生态调用 | transformers、peft、accelerate 等被 ms-swift 实际路径调用的 API；只证明调用路径，不能冒充这些库的独立全量支持 |
+| 设备 | CPU 参考、任务目标加速器（如 Ascend ACL/NPU）；CUDA/其他后端仅在任务声明时加入 |
+| 性能 | 真实目标尺寸的训练/推理稳态性能、显存和零 fallback；tiny case 只用于正确性定位 |
 
-文档明确：`ms-swift 4.5.2` 需 `peft < 0.20`；`ms-swift 4.5.2 + peft 0.19` 在真 PyTorch 下
-也报同样的 `TypeError`（`docs/compatibility/torch.md`）。**遇到该错先怀疑版本，不要当 jittor bug。**
+“不适用”只能在版本/配置确实没有该入口并留有盘点证据时使用；资源不足、依赖缺失、尚未执行都写 `resource-blocked` 或 `not-run`，不得改写成通过。
 
-## 坑与假绿
+## 工作流程
 
-- **名字相同不是同一个 tuner**：`swift.tuners.LoRAConfig` 与 PEFT 的 `LoraConfig` 行为不同，
-  不要把 peft 的结论搬过来。case 注释原文即「ms-swift's own LoRA tuner, which is not PEFT's」。
-- **权重只传 adapter 的假绿**：用 `model.state_dict()` 传权重会让两侧 backbone 独立初始化，
-  数值仍然「一致」可能只是都碰巧接近随机初值；runner 的 `transferable()` 是绕开它的原因。
-- **`peft` 版本上限**：不满足 `peft < 0.20` 时真 PyTorch 也会失败，别误判。
-- **在 tiny case 上读速度**：hidden 64 / seq 8 的 ratio 说明不了 kernel；NPU 性能结论要用
-  报告的 50 步取最小协议。
-- **skip 看起来像通过**：验证环境 `swift` 缺失时整类 `skipTest("missing ...")`。验收用
-  `JITTOR_REQUIRE_REAL_TORCH=1`（`nox -s ecosystem` 会设）把「没有 oracle」变成失败。
+1. 遵循仓库协作规则：检查 dirty worktree 和运行中测试，保留本地改动，整合并记录目标远端 SHA；不丢弃改动、不自动 stash。所有运行继续使用独立 state、解释器和临时目录；`JITTOR_HOME` 按下文缓存复用条件串行共享或并发隔离。
+2. 读取[环境合同](references/environment.md)、[验收合同](references/verification.md)和 [`downstream-library-adaptation`](../downstream-library-adaptation/SKILL.md)。先记录 ms-swift、transformers、peft、accelerate、datasets、tokenizers、safetensors 版本和实际模块路径。
+3. 从 ms-swift 的公开 CLI、launcher、model/tuner registry 和已安装依赖生成适配面矩阵；不把内部手写循环当作公开入口，也不把不存在的可选功能加入必验范围。
+4. 每个面先做裸跑最小复现，再按三行判据分流：能力缺失修 Jittor core/ACL/HCCL，torch API/状态语义差异修 `jittor.compat.torch`，只有可迁出且确属 ms-swift 私有行为才允许 adapter。
+5. 先用 CPU 外部 PyTorch oracle 收敛公共语义，再在真实目标设备用原生 PyTorch/torch_npu oracle 对拍。设备运行必须确认实际 provider、tensor residency、backend 和完整工作阶段 `fallback_policy=error`；import 成功或 CPU fallback 不算通过。
+6. 按“功能面 × 模型/流程 × 设备 × 执行拓扑”推进 L0-L5。相同运行键且证据完整时复用，源码、依赖、设备、协议或输入改变则生成新键；保留旧失败，不事后改判。
+7. 维护性回归进入生态门禁。新增公共 shim 行为必须有定向结构/API/数值测试；公开入口、分布式、恢复和性能证据必须分别记录，不能用通信微检或单步循环替代。
 
-## 证据
+## 短预检、根因与续接
 
-- **已实测**：两个 venv 中 `swift`/`ms-swift`/`peft` 缺失；oracle 断言
-  `oracle 2.13.0+cu129`；无 `env-jittor.sh` 时 `import jittor` 报 `python3.12-config not found`；
-  `test_ecosystem_parity.py` 收集 28 项，`ms_swift_lora_llama` 在 CPU/CUDA/NPU 三档各有一项。
-- **未验证**：ms-swift 的安装、`ms_swift_lora_llama` 的任何数值/速度、上述 NPU 命令
-  （验证环境不是 Ascend 环境）。命令按 harness/runner 与报告的真实接口给出，但**没有跑过**。
-- 维护者报告：`2026-08-31-ms-swift-ascend-parity-performance.md`（已退役，Git 历史 `e3c369acb` 可查）
-  （Ascend 910B3，ms-swift 4.5.2 / PEFT 0.17.1 / Transformers 4.57.6；前向归一化误差
-  `1.980e-7`、最差梯度归一化误差 `4.268e-7`；50 步取最小 `torch_npu 14.089 ms` 对
-  Jittor ACL compressed causal mask `13.654 ms`，`0.969x`；优化前 `1.182x`）；
-  `docs/compatibility/torch.md`；`agent/manuals/project-context.md`。
+真机长作业前用短时 worker 预检解释器与模块身份、依赖 pin、固定模型/数据摘要、CLI 参数、钩子签名、审计变量、短 `TMPDIR`、私有 `CCACHE_DIR`、结果读取器和退出码。先证明两侧逐步样本身份、输入、初始权重与参数映射一致；训练以两侧各自真实收敛和状态正确为验收，跨实现 loss/logits/梯度误差仅作诊断；推理仍按确定性输出对拍。同 seed 不保证相同 batch。harness/调度失败单列无效运行，不升级兼容结论。
 
-## 实测（2026-09-19）
+按源码、Python ABI、编译器、CANN、设备及编译参数分离冷编译与模型验证。同一指纹的串行作业在 state 中固定持久的 `JITTOR_HOME`、`JITTOR_TORCH_CACHE_ROOT` 和 `CCACHE_DIR`，不要每次指向新的运行目录；多 rank 与并发作业各自独占可写缓存。先在 Slurm NPU worker 用正式作业的 `host-shim-python`、ACL/HCCL 环境执行 `python -m jittor_utils.bootstrap` 和严格 NPU 预检；再提交**新的**作业执行 `python -m jittor_utils.bootstrap --check`，在 `JITTOR_NO_BUILD=1` 下重复预检并核对缓存路径、编译日志及启动耗时。只有该复验无新编译且指纹一致，才能称这一预热路径可复用；新算子、输入形状或配置仍可能增量编译，不能由单次预检推断所有 ms-swift 路径均免编译。冷编译有进展时看编译产物与活跃进程，不只看 pytest 百分比；冷编译不计入 L5。前置失败就收集根因并取消无效依赖作业，修复后用新运行键。每个根因最多五轮不同假设的修复，仍失败则留断点并推进独立面。
 
-单卡 CUDA，oracle `torch 2.13.0+cu129`、shim `jittor 1.3.11.0`，`--device cuda --repeats 5`。
+监督脚本以作业终态、新错误、完整证据和需要决策为 Codex 唤醒事件；等待作业时用轻量状态检查，不按分钟重新读全套 Skill/Git/日志。Git fetch 只在新任务、集成或推送边界执行，网络失败退避并保留最近可信 SHA。矩阵仅在验收结论、根因或范围改变时更新，逐次日志保留在 state。
 
-**package site**（两侧同 py3.12 共用）：
+若当前只剩等待 Slurm 作业，在回复末尾独占一行写 WAIT_JOBS=123,456（真实作业号）；监督脚本仅用 shell 等状态变化或最多 30 分钟再唤起 Codex。
 
-- `$JITTOR_LAB_ROOT/_state/verify-ml/site`：按本文件给出的构建命令装出 **ms-swift 4.5.3 +
-  peft 0.20.0**（及 mmcv-lite 2.2.0、mmengine 0.10.7）；pip 拉入的 torch 2.14.0 /
-  transformers 5.16.1 / numpy 2.5.3 已从 site 删除，改用 venv 的对应版本。
-- `$JITTOR_LAB_ROOT/_state/verify-ml/site-peft17`：`pip install --target site-peft17
-  transformers==4.56.2 peft==0.17.1 ms-swift==4.5.2`（4.56.2 是 `jittor_adapters` 允许的
-  版本），torch 已删除。
+## 代表性测试策略
 
-**实际跑通的命令**（site-peft17；原命令的 ms-swift 4.5.3+peft 0.20.0 在 shim 上失败，见下）：
+不要穷举每个模型，而要覆盖每种共享机制，并把未覆盖的组合列出来：
 
-```bash
-cd <repo-root>
-unset PYTHONPATH   # 已激活 shim 侧环境（本地 env 脚本，不入库）
-export JITTOR_HOME=$JITTOR_LAB_ROOT/_state/verify-ml/jittor-home
-export CUDA_VISIBLE_DEVICES=<gpu>
-export JITTOR_ECOSYSTEM_PACKAGE_SITE=$JITTOR_LAB_ROOT/_state/verify-ml/site-peft17
-export JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE=$JITTOR_LAB_ROOT/_state/verify-ml/site-peft17
-REAL_TORCH_PYTHON=<real-torch-python> \
-  <jittor-python> agent/skills/torch-compat-repo-runbook/scripts/verify_repo.py \
-  --repo ms-swift --device cuda --repeats 5 --out $JITTOR_LAB_ROOT/_state/verify-ml/out2/ms-swift
-```
+- **模型族**：从实际任务中选 causal LM、seq2seq/encoder、视觉/多模态代表；同一共享 transformer 模块的模型可复用算子证据，但仍需验证各自输入/输出结构。
+- **tuner**：首个 Swift LoRA smoke 后，逐一加入实际要支持的 tuner/target module、frozen/trainable 参数策略、adapter 保存与加载；PEFT 与 Swift tuner 的结果分开。
+- **训练阶段**：L0 构造，L1 有限且可反向的 forward/loss，L2 必需梯度、真实 optimizer 更新与预先锁定窗口内的 loss 下降，L3 完整 checkpoint 新进程恢复后继续训练并保持下降趋势，L4 真实公开 CLI，L5 锁定真实尺寸稳态测量。
+- **输入与状态**：整数 token、浮点输入、label/mask、梯度累积、scheduler、AMP、随机状态、dataloader/sampler 游标和多 rank 数据划分按实际使用情况逐项锁定。
+- **入口与依赖**：公开 `swift` 命令必须与原生入口分别运行；依赖库只验证 ms-swift 实际使用的 API。若用户另要求某个依赖库整体适配，改用该库自己的 runbook。
 
-**支持的 case 清单**：`--list-only` 收 1 条 `ms_swift_lora_llama`（requires
-transformers,peft,swift；仓库名里的 `-` 由工具归一化）；`_ecosystem_speed.py` 无大尺寸 case。
+## 分布式与设备规则
 
-| case | 状态 | 精度（最差绝对 / 全场相对） | 速度 torch→jittor | 峰值显存 torch / jittor | fallback | device |
-| --- | --- | --- | --- | --- | --- | --- |
-| `ms_swift_lora_llama` | ran（30 张量，无缺失） | `1.209e-2` / `2.745e-4`（均 `grad::...embed_tokens.weight`，梯度容差 2e-2 内） | `5.77 → 11.84 ms`，`2.05x` | `65.0 MiB / 4.0 MiB` | 0 | 两侧 cuda |
+四种执行拓扑是 Ascend/NPU profile 的验收维度，不是全部适配面：单 NPU 训练、单机多 NPU 训练、真实多机多 NPU 训练和单 NPU 推理分别记录；CPU profile 则至少记录单进程训练/推理及公开入口。单机微检不能代表公开分布式训练；单机不能模拟多机。每个 rank 记录 hostname、global/local rank、world size、目标设备 ID、process group/backend、同步前后梯度/状态、退出结果和恢复结果。没有目标硬件就记未验证，不用 CPU fallback 冒充。
 
-**显存口径警告**：torch 报自身分配器真实峰值，jittor 是 `profile_memory_enable` 下 sync
-后采样的 allocator 用量，不可直接比较，只并列原始值。tiny case（hidden 64 / seq 8）的
-`2.05x` 由 Python 派发主导，不是 kernel 性能结论。
+## 交付与边界
 
-**没跑到的及原因**：原命令解析出的 **ms-swift 4.5.3 + peft 0.20.0** 在 shim 上构造 tuner
-时 `TypeError: Linear.__init__() missing 1 required positional argument: 'config'`
-（`swift/tuners/lora_layers.py` 与 peft 0.20 的 `Linear` 签名不符）——即第 135 行所述
-ms-swift/peft 版本组合问题，与 jittor 无关；换成报告用的 **ms-swift 4.5.2 + peft 0.17.1 +
-transformers 4.56.2** 即跑通。原始报告见
-`$JITTOR_LAB_ROOT/_state/verify-ml/{ms-swift.unpinned-peft0.20.log,ms-swift.pinned.log}`。
+仓库只保留 skill、源码、测试、可复用工具和简洁结果；原始日志、checkpoint、缓存和运行环境放在任务 state。报告必须写精确 baseline、dirty diff、依赖/设备、命令、运行键、每个适配面的状态和边界。完成 `git diff --check`、布局检查和受影响结构门禁。
+
+本 skill 不自动扩大到 vLLM、DeepSpeed、Megatron 或其他下游产品；这些路径只有在用户明确要求且按对应 adapter/runbook 分流后才加入矩阵。不得为了让某个下游流程变绿而在 ms-swift 中复制 Jittor 或 torch 的第二套实现。

@@ -25,7 +25,9 @@ class NonzeroACL(jt.Function):
         attr_code = f"""
         op.jt_name = "nonzero";
         """
-        nonzero_cnt = (x != 0.0).sum().item()
+        nonzero_cnt = (x != 0.0).int32().sum().item()
+        if nonzero_cnt == 0:
+            return jt.empty((0, x.ndim), dtype="int64")
 
         result = where_cmd(
             "Nonzero",

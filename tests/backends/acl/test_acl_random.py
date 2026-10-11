@@ -119,6 +119,28 @@ class TestACLNativeRandom(unittest.TestCase):
         np.testing.assert_array_equal(after, expected_after)
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_multinomial_and_random_replay_from_acl_checkpoint_state(self):
+        device = jt.core.current_device()
+        with forbid_backend_fallbacks():
+            probabilities = jt.array([[0.2, 0.3, 0.5]], dtype="float32")
+            jt.set_seed(20261007)
+            saved = jt.core.rng_state("acl", device)
+            first = jt.multinomial(probabilities, 1)
+            following = jt.rand((16,))
+            self.assert_acl_resident(first)
+            self.assert_acl_resident(following)
+            first_values = first.numpy().copy()
+            following_values = following.numpy().copy()
+            self.assertNotEqual(jt.core.rng_state("acl", device), saved)
+            jt.core.set_rng_state("acl", saved, device)
+            replay = jt.multinomial(probabilities, 1)
+            replay_following = jt.rand((16,))
+            self.assert_acl_resident(replay)
+            self.assert_acl_resident(replay_following)
+            np.testing.assert_array_equal(replay.numpy(), first_values)
+            np.testing.assert_array_equal(replay_following.numpy(), following_values)
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_random_float64_declines_acl_with_explicit_fallback_error(self):
         result = run_child_script(
             """

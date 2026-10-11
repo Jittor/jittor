@@ -70,3 +70,47 @@ def test_generator_state_round_trips():
 
     g.set_state(state)
     assert torch.randint(0, 100, (5,), generator=g).tolist() == after_state
+
+
+def test_small_cpu_randperm_matches_locked_torch_oracle_vectors():
+    # Native torch 2.10 CPU oracle, captured on the Ascend worker. These
+    # permutations determine which sample each distributed rank receives.
+    expected = {
+        (42, 2): [0, 1],
+        (42, 4): [2, 3, 0, 1],
+        (42, 8): [6, 3, 0, 7, 2, 1, 4, 5],
+        (43, 2): [0, 1],
+        (43, 4): [0, 1, 3, 2],
+        (44, 8): [4, 7, 3, 2, 1, 5, 6, 0],
+    }
+    for (seed, size), indices in expected.items():
+        g = torch.Generator(device="cpu").manual_seed(seed)
+        assert torch.randperm(size, generator=g).tolist() == indices
+        sampler = RandomSampler(range(size), generator=torch.Generator(device="cpu").manual_seed(seed))
+        assert list(sampler) == indices
+
+
+def test_cpu_generator_replays_mixed_float_and_permutation_draws():
+    g = torch.Generator(device="cpu").manual_seed(42)
+    torch.rand(5, generator=g)
+    state = g.get_state()
+    first = torch.randperm(8, generator=g).tolist()
+    g.set_state(state)
+    assert torch.randperm(8, generator=g).tolist() == first
+
+
+def test_legacy_pcg64_generator_state_can_still_be_restored():
+    import pickle
+    import numpy as np
+
+    old = np.random.default_rng(42)
+    old_state = pickle.dumps(old.bit_generator.state, protocol=4)
+    g = torch.Generator(device="cpu")
+    g.set_state(torch.tensor(np.frombuffer(old_state, dtype=np.uint8).copy()))
+    expected = old.permutation(8).tolist()
+    assert torch.randperm(8, generator=g).tolist() == expected
+    state = g.get_state()
+    next_expected = old.permutation(8).tolist()
+    assert torch.randperm(8, generator=g).tolist() == next_expected
+    g.set_state(state)
+    assert torch.randperm(8, generator=g).tolist() == next_expected

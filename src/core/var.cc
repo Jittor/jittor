@@ -130,7 +130,8 @@ Var::Var(NanoVector shape, NanoString dtype)
     flags.set(NodeFlags::_var, 1);
     device_id = current_device();
     placement = current_tensor_placement();
-    if (placement.explicit_backend)
+    if (placement.metadata_only) device_id = -1;
+    else if (placement.explicit_backend)
         device_id = placement.device.backend == BackendId::Cpu ? -1 : placement.device.index;
     // complex dtypes are differentiable too (Wirtinger autograd), so they must not be
     // auto-stop_grad like integer/bool vars are. Only non-float AND non-complex stops grad.
@@ -245,6 +246,7 @@ void Var::set_storage_strides(NanoVector strides) {
 }
 
 bool Var::alloc(Allocator* allocator) {
+    USER_CHECK(!is_metadata()) << "Cannot allocate payload storage for a metadata-only tensor";
     if (mem_ptr) return true;
     if (auto* x = share_src) {
         // x->allocator used to be dereferenced unconditionally: sharing with a

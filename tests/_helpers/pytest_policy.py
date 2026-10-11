@@ -877,17 +877,25 @@ def _snapshot_selected_files(config):
         # must not be reported as a file the session proved nothing about
         # either. Otherwise refusing it would only move its red from
         # "collection error" to "collected 0 tests".
+        selected = selected_files(
+            TEST_ROOT.parent,
+            arguments
+            + [
+                "--ignore=" + _relative_to_repo(_absolute_selection(item, invocation))
+                for item in getattr(config.option, "ignore", []) or []
+            ],
+        )
+        if _torch_mode_is_active():
+            # `selected_files` models the static gate arguments. The live
+            # collector also applies the process-global mode filter, which
+            # intentionally excludes native-owned files from a Torch session.
+            # Keep execution accounting aligned with the tests pytest can
+            # actually collect in this process.
+            from _helpers.process_modes import NATIVE_MODE_PATHS
+
+            selected = tuple(path for path in selected if path not in NATIVE_MODE_PATHS)
         _SELECTED_FILES.update(
-            path
-            for path in selected_files(
-                TEST_ROOT.parent,
-                arguments
-                + [
-                    "--ignore=" + _relative_to_repo(_absolute_selection(item, invocation))
-                    for item in getattr(config.option, "ignore", []) or []
-                ],
-            )
-            if not _refuses_collection(REPO_ROOT / path)
+            path for path in selected if not _refuses_collection(REPO_ROOT / path)
         )
     except Exception:
         pass

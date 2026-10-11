@@ -6,6 +6,9 @@
 // ***************************************************************
 #include <iomanip>
 #include <algorithm>
+#include <mutex>
+#include <map>
+#include <stdexcept>
 #if defined(__linux__)
 #include <sys/sysinfo.h>
 #elif defined(__APPLE__)
@@ -26,15 +29,18 @@
 #include "core/graph.h"
 #include "runtime/device.h"
 #include "runtime/backend.h"
+#include "runtime/runtime.h"
 #include "mem/allocator/sfrl_allocator.h"
 #include "mem/allocator/stat_allocator.h"
 #include "mem/allocator/temp_allocator.h"
 #include "mem/mem_info.h"
+#include "mem/allocator/nfef_allocator.h"
 #include "mem/swap.h"
 #include "core/executor.h"
 #include "bindings/pybind/py_var_tracer.h"
 
 namespace jittor {
+DECLARE_FLAG(int, use_cuda_managed_allocator);
 
 struct FloatOutput {
     double value;
@@ -323,6 +329,107 @@ MemInfo::MemInfo() {
 }
 
 MemInfo mem_info;
+
+// Event-driven accounting for default framework SFRL device pools. Temporary
+// workspace pools and driver/runtime allocations are outside this pool metric.
+namespace {
+RuntimeMemoryState& pool_ledger() { return native_runtime().memory(); }
+void validate_pool_device(int device) {
+    if (!use_sfrl_allocator || use_nfef_allocator || use_stat_allocator || use_cuda_managed_allocator)
+        throw std::runtime_error("Memory peak metrics require the default direct-raw SFRL allocator mode");
+    if (device < 0 || device >= backend_ops(accelerator_backend_id()).device_count())
+        throw std::out_of_range("Memory peak device index out of range");
+}
+RuntimeDevicePoolBytes& checked_pool_device(RuntimeMemoryState& ledger, int device) {
+    auto& state = ledger.devices[device];
+    if (state.unsupported)
+        throw std::runtime_error("Memory peak metrics encountered an unsupported or invalid SFRL pool stack");
+    return state;
+}
+} // namespace
+
+void register_device_pool(const Allocator* pool, Allocator* underlying) {
+    if (!underlying->is_cuda()) return;
+    const auto device = allocation_device(underlying);
+    const bool supported = underlying == backend_raw_allocator(device, BackendMemoryKind::Device);
+    auto& ledger = pool_ledger();
+    std::lock_guard<std::mutex> lock(ledger.mutex);
+    auto& state = ledger.devices[device.index];
+    auto result = ledger.pools.emplace(pool, RuntimePoolBytes(device.index, supported));
+    // Creating an unused allocator descriptor does not allocate bytes.
+    // setup_allocator caches descriptors across temporary flag scopes; an
+    // unsupported stack invalidates history only if it actually handles memory.
+    if (!result.second) state.unsupported = true;
+}
+
+void unregister_device_pool(const Allocator* pool) {
+    auto& ledger = pool_ledger();
+    std::lock_guard<std::mutex> lock(ledger.mutex);
+    auto found = ledger.pools.find(pool);
+    if (found == ledger.pools.end()) return;
+    auto& state = ledger.devices.at(found->second.device);
+    // A disappearing pool with live/reserved storage cannot be represented as
+    // a successful free. Fail future queries rather than silently losing it.
+    if (found->second.live || found->second.reserved) state.unsupported = true;
+    ledger.pools.erase(found);
+}
+
+void update_device_pool(const Allocator* pool, int64 live_delta, int64 reserved_delta) {
+    if (!pool->is_cuda()) return;
+    auto& ledger = pool_ledger();
+    std::lock_guard<std::mutex> lock(ledger.mutex);
+    auto found = ledger.pools.find(pool);
+    if (found == ledger.pools.end()) return;
+    auto& local = found->second;
+    auto& state = ledger.devices.at(local.device);
+    if (!local.supported) {
+        // Real activity through an unknown/nested stack cannot be counted
+        // without risking overlap. Retain fail-closed historical semantics.
+        if (live_delta || reserved_delta) state.unsupported = true;
+        return;
+    }
+    local.live += live_delta;
+    local.reserved += reserved_delta;
+    state.live += live_delta;
+    state.reserved += reserved_delta;
+    if (local.live < 0 || local.reserved < local.live || state.live < 0 || state.reserved < state.live)
+        state.unsupported = true;
+    state.peak_live = std::max(state.peak_live, state.live);
+    state.peak_reserved = std::max(state.peak_reserved, state.reserved);
+}
+
+int64 device_pool_memory_used(int device) {
+    validate_pool_device(device);
+    auto& ledger = pool_ledger();
+    std::lock_guard<std::mutex> lock(ledger.mutex);
+    return checked_pool_device(ledger, device).live;
+}
+int64 device_pool_memory_reserved(int device) {
+    validate_pool_device(device);
+    auto& ledger = pool_ledger();
+    std::lock_guard<std::mutex> lock(ledger.mutex);
+    return checked_pool_device(ledger, device).reserved;
+}
+int64 device_memory_peak_used(int device) {
+    validate_pool_device(device);
+    auto& ledger = pool_ledger();
+    std::lock_guard<std::mutex> lock(ledger.mutex);
+    return checked_pool_device(ledger, device).peak_live;
+}
+int64 device_memory_peak_reserved(int device) {
+    validate_pool_device(device);
+    auto& ledger = pool_ledger();
+    std::lock_guard<std::mutex> lock(ledger.mutex);
+    return checked_pool_device(ledger, device).peak_reserved;
+}
+void reset_device_memory_peaks(int device) {
+    validate_pool_device(device);
+    auto& ledger = pool_ledger();
+    std::lock_guard<std::mutex> lock(ledger.mutex);
+    auto& state = checked_pool_device(ledger, device);
+    state.peak_live = state.live;
+    state.peak_reserved = state.reserved;
+}
 
 static void device_pool_bytes(int device, int64& used, int64& reserved) {
     used = reserved = 0;

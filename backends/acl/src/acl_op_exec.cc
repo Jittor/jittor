@@ -37,6 +37,7 @@
 #include "ops/ternary_op.h"
 #include "core/executor.h"
 #include "runtime/device.h"
+#include "runtime/rng_state.h"
 #include "runtime/backend_fallback.h"
 #include "mem/allocator.h"
 #include "codegen/op_compiler.h"
@@ -695,24 +696,21 @@ namespace jittor
         exec_acl_sequence(op, {op});
     }
 
-    extern int current_seed;
-    extern int64 current_offset;
-
     static void exec_acl_random(Op *op)
     {
         auto _op = (RandomOp *)op;
         AclExecutionRunner<RandomOpRunner> runner(
             _op->type == ns_uniform ? "RandomUniform" : "RandomNormal");
         auto out = op->output(0);
+        const auto rng = reserve_acl_random(out->device_id, out->numel());
         RandomAttr *attr = new RandomAttr();
-        attr->seed = current_seed;
-        attr->offset = current_offset;
+        attr->seed = rng.seed;
+        attr->offset = rng.offset;
         runner.jt_name = "random";
         runner.op_attr.reset(attr);
 
         runner.add(out, false);
         runner.run();
-        current_offset += out->numel();
     }
 
     static unordered_map<string, std::function<void(Op *)>> acl_ops = {

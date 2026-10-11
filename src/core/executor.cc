@@ -35,7 +35,6 @@
 #include "core/parallel_compiler.h"
 #include "core/memory_profiler.h"
 #include "debug/nan_checker.h"
-#include "core/memory_profiler.h"
 #include "utils/seh.h"
 #include "utils/cache_compile.h"
 #include "core/var_holder.h"
@@ -146,7 +145,7 @@ void Executor::flush_at_module_boundary() {
 
 void Executor::submit_pending(Var* target, bool force) {
     auto& pipeline = runtime_submission_pipeline();
-    if (!target || pipeline.flush_active || target->is_finished()) return;
+    if (!target || target->is_metadata() || pipeline.flush_active || target->is_finished()) return;
 
     if (force || target->num < 0) {
         PendingSubmissionScope scope(pipeline);
@@ -249,7 +248,7 @@ static void top_weak_sync(vector<Var*>& vars) {
         if (v->id > max_id) break;
         roots.consume_pending();
         if (epoch.marked(v)) continue;
-        if (v->_outputs.size()) continue;
+        if (v->is_metadata() || v->_outputs.size()) continue;
         if (v->is_finished()) continue;
         // A kept graph is run on purpose, by whoever kept it, and never as a
         // bystander of somebody else's sync. Widening a batch with one costs a
@@ -433,6 +432,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync, boo
     pipeline.last_run_ops = Op::number_of_created_ops;
     if (weak_sync && !use_threading)
         top_weak_sync(vars);
+    for (auto* value : vars) USER_CHECK(!value->is_metadata()) << "Cannot execute a metadata-only tensor";
     resolve_dynamic_inputs(*this, vars);
     this->allocator = get_allocator();
     this->temp_allocator = get_allocator(true);

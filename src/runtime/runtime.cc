@@ -28,6 +28,10 @@ NativeRuntime& native_runtime() {
     return *state;
 }
 
+RuntimeFetchState& runtime_fetch_state() {
+    return native_runtime().fetches();
+}
+
 Executor& runtime_executor() {
     return native_runtime().executor();
 }
