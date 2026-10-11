@@ -42,11 +42,15 @@ namespace jittor {
 // `sum` the kernel goes from 4.5 GB/s to 17 GB/s, so the accuracy here is a
 // consequence of the faster shape rather than a payment for it.
 //
-// Only floating point *additive* reductions are rewritten, and only those:
-// ReduceAccumulatorPass marks a loop with `kir::reduce_acc` when every
-// accumulating store in it qualifies. `maximum`, `minimum` and the bitwise
-// folds are exactly associative and gain nothing; `multiply` is not a
-// reassociation anyone asked for; an integer sum is already exact.
+// Which reductions may be rewritten, and with what, is ReduceAccumulatorPass's
+// decision: it marks a loop with `kir::reduce_acc` when every accumulating
+// store in it qualifies, and each entry carries the combiner to fold partials
+// with ("sum:+" and "max:max" today). `multiply` is not a reassociation anyone
+// asked for, an integer sum is already exact, and the bitwise folds would each
+// need their own identity, so none of those is marked. `maximum`/`minimum` are
+// marked: they are exactly associative, their identity is already in the
+// accumulator, and the shape is worth as much to them as it is to `sum`
+// (KI-OPS-006).
 //
 // The pass runs last, after every pass that reshapes, clones or renames loops,
 // and leaves behind one opaque text node -- so nothing downstream has to
@@ -191,8 +195,20 @@ void BlockedReductionPass::run() {
         }
         if (!plain) continue;
 
-        auto accs = split(inner->get_attr(kir::reduce_acc), ",");
-        if (accs.size() == 0) continue;
+        // Each entry is "<accumulator>:<combiner>" (written by
+        // ReduceAccumulatorPass). The combiner decides how two partial results
+        // are folded, and whether a partial starts at a literal zero or at the
+        // identity the accumulator already holds.
+        auto entries = split(inner->get_attr(kir::reduce_acc), ",");
+        if (entries.size() == 0) continue;
+        vector<string> accs, combs;
+        for (auto& e : entries) {
+            auto colon = e.rfind(':');
+            if (colon == string::npos) { accs.clear(); break; }
+            accs.push_back(e.substr(0, colon));
+            combs.push_back(e.substr(colon + 1));
+        }
+        if (accs.size() != entries.size()) continue;
 
         // The accumulator declarations, and the store that follows them. Both
         // move out of the whole nest below, so everything they name has to
@@ -234,9 +250,23 @@ void BlockedReductionPass::run() {
         const int WAY_COUNT = body.size() > BIG_BODY ? FEW_WAYS : WAYS;
         const int BLOCK = PER_WAY * WAY_COUNT;
         const string blk = S(BLOCK), ways = S(WAY_COUNT);
+        // What a partial starts from. For `+` that is a literal zero. For
+        // max/min it is the identity, which is exactly what ReduceOp's init
+        // loop left in the accumulator -- reading it back is type-correct for
+        // every dtype without a table of infinities, and it is a local by the
+        // time this pass runs.
         vector<string> zero(accs.size());
         for (uint s=0; s<accs.size(); s++)
-            zero[s] = "decltype(" + accs[s] + ")(0)";
+            zero[s] = combs[s] == "+" ? "decltype(" + accs[s] + ")(0)" : accs[s];
+
+        // Fold two partial results with this accumulator's combiner. The type
+        // comes from the accumulator, never from `decltype` of a subscript --
+        // that would be a reference type, and `_max<T&>` does not compile.
+        auto combine = [&](const string& a, const string& b, uint s) {
+            if (combs[s] == "+") return "(" + a + ") + (" + b + ")";
+            return "jittor::_" + combs[s] + "<decltype(" + accs[s] + ")>("
+                   + a + ", " + b + ")";
+        };
 
         // One copy of the body per partial sum, each with its own index. The
         // braces give every copy its own scope, so the definitions the body
@@ -257,8 +287,9 @@ void BlockedReductionPass::run() {
                + "t & 1); " + p + "t >>= 1) {\n";
             t += p + "top -= 1;\n";
             for (uint s=0; s<accs.size(); s++)
-                t += p + "a" + S(s) + "_0 = (" + p + "stack" + S(s) + "[" + p
-                   + "top]) + (" + p + "a" + S(s) + "_0);\n";
+                t += p + "a" + S(s) + "_0 = "
+                   + combine(p + "stack" + S(s) + "[" + p + "top]",
+                             p + "a" + S(s) + "_0", s) + ";\n";
             t += "}\n";
             for (uint s=0; s<accs.size(); s++)
                 t += p + "stack" + S(s) + "[" + p + "top] = " + p + "a" + S(s)
@@ -279,10 +310,10 @@ void BlockedReductionPass::run() {
         for (uint s=0; s<accs.size(); s++) {
             text += "decltype(" + accs[s] + ") " + p + "stack" + S(s) + "["
                   + S(DEPTH) + "];\n";
-            // The partials start at the additive identity, never at the
-            // accumulator: the accumulator is read once, by the drain at the
-            // bottom, and seeding the partials with it would add whatever it
-            // holds once per block.
+            // See `zero` above: a literal zero for `+`, the accumulator
+            // itself for max/min. Folding the accumulator in once per block is
+            // only harmless when it holds the identity, which is why `+` does
+            // not do this and max/min may.
             text += "decltype(" + accs[s] + ") ";
             for (int w=0; w<WAY_COUNT; w++)
                 text += (w ? ", " : "") + p + "a" + S(s) + "_" + S(w)
@@ -318,8 +349,8 @@ void BlockedReductionPass::run() {
             for (int width=WAY_COUNT/2; width>=1; width>>=1)
                 for (int w=0; w<width; w++) {
                     string a = p + "a" + S(s) + "_";
-                    text += a + S(w) + " = (" + a + S(w) + ") + ("
-                          + a + S(w+width) + ");\n";
+                    text += a + S(w) + " = "
+                          + combine(a + S(w), a + S(w+width), s) + ";\n";
                 }
         text += push();
         text += "}\n";
@@ -338,8 +369,8 @@ void BlockedReductionPass::run() {
         text += "while (" + p + "top > 0) {\n";
         text += p + "top -= 1;\n";
         for (uint s=0; s<accs.size(); s++)
-            text += accs[s] + " = (" + p + "stack" + S(s) + "[" + p
-                  + "top]) + (" + accs[s] + ");\n";
+            text += accs[s] + " = " + combine(p + "stack" + S(s) + "[" + p
+                  + "top]", accs[s], s) + ";\n";
         text += "}\n";
         text += epilogue;
         text += "}\n";

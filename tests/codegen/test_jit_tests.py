@@ -32,11 +32,12 @@ LOAD_SENSITIVE_TESTS = frozenset((
 #: Asserted on the child's exit status rather than with ``expect_error()``,
 #: because there is nothing to catch: the fault is delivered to jittor's signal
 #: handler, which reports through ``write(2)`` and ``_exit``s -- throwing out of
-#: a signal handler is undefined behaviour. ``crash_isolated`` keeps the crash
-#: from taking this pytest process down with it: here the crash is what is under
-#: test, but the runner surviving is a precondition for reporting it, which is
-#: the opposite of the cases in ``tests/bindings/test_signal_and_teardown.py`` that
-#: deliberately do not isolate.
+#: a signal handler is undefined behaviour. ``crash_isolated`` gives the crash a
+#: status this file can assert on. It is no longer what keeps the runner alive:
+#: the ``SIGCHLD`` branch that used to end pytest along with the child reports
+#: and returns since ``64350894``. A contrast with the cases in
+#: ``tests/bindings/test_signal_and_teardown.py`` that deliberately do not
+#: isolate.
 #:
 #: This held ``jit_key_guard_page`` until 3.02. Writing past the end of the jit
 #: key buffer used to run into an mprotect'ed guard page, so an over-long key

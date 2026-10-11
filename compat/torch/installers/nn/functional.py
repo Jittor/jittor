@@ -85,6 +85,17 @@ def _softmax(input, dim=-1, _stacklevel=3, dtype=None):
     return _jt_softmax(input, dim=dim)
 
 
+def _log_softmax(input, dim=None, _stacklevel=3, dtype=None):
+    # torch: F.log_softmax(input, dim=None, _stacklevel=3, dtype=None); dtype
+    # casts the input first (losses ask for float32 log-probabilities of half
+    # logits). The native function takes no dtype, as with softmax above.
+    _context = get_install_context(jt)
+    _jt_log_softmax = _context.state["nn_functional_native"]['_jt_log_softmax']
+    if dtype is not None:
+        input = input.cast(_dtype_to_str(dtype))
+    return _jt_log_softmax(input, dim=dim)
+
+
 def _interpolate(input=None, size=None, scale_factor=None,
                  mode="nearest", align_corners=None,
                  recompute_scale_factor=None, antialias=False,
@@ -219,7 +230,9 @@ def _ctc_loss(log_probs, targets, input_lengths, target_lengths, blank=0,
 
 
 def _api_F_logsigmoid(input):
-    return jt.minimum(input, 0.0) - jt.log(1.0 + jt.exp(-jt.abs(input)))
+    # The piecewise min/abs form has a zero subgradient at x=0. Preference
+    # losses start at exactly zero log-ratio and require d/dx logsigmoid(0)=1/2.
+    return -jt.nn.softplus(-input)
 
 
 def _api_F_softmin(input, dim=-1, _stacklevel=3, dtype=None):
@@ -258,6 +271,9 @@ def _install_functional(ctx):
         # transformers' eager attention: F.softmax(scores, dim=-1, dtype=fp32)).
         _jt_softmax = nn.softmax
         F.softmax = _softmax
+    if hasattr(nn, "log_softmax"):
+        _jt_log_softmax = nn.log_softmax
+        F.log_softmax = _log_softmax
     if hasattr(nn, "linear"): F.linear = nn.linear
     if hasattr(nn, "interpolate"):
         # torch.nn.functional.interpolate defaults to mode='nearest', but
@@ -360,13 +376,14 @@ def _install_functional(ctx):
     ctx.state["nn_functional_native"] = MappingProxyType({
         "loss_functions": MappingProxyType(_loss_functions),
         "_jt_softmax": locals().get("_jt_softmax"),
+        "_jt_log_softmax": locals().get("_jt_log_softmax"),
         "_jt_interpolate": locals().get("_jt_interpolate"),
         "_jt_ce": locals().get("_jt_ce"),
         "_CNEG": locals().get("_CNEG"),
     })
 
     register_api_bindings(F, 'torch.nn.functional',
-        ('celu', 'cross_entropy', 'ctc_loss', 'embedding', 'gelu', 'gumbel_softmax', 'interpolate', 'layer_norm', 'linear', 'logsigmoid', 'pixel_shuffle', 'pixel_unshuffle', 'poisson_nll_loss', 'relu', 'rms_norm', 'selu', 'softmax', 'softmin', 'tanhshrink', 'threshold', 'triplet_margin_loss') + tuple(()),
+        ('celu', 'cross_entropy', 'ctc_loss', 'embedding', 'gelu', 'gumbel_softmax', 'interpolate', 'layer_norm', 'linear', 'log_softmax', 'logsigmoid', 'pixel_shuffle', 'pixel_unshuffle', 'poisson_nll_loss', 'relu', 'rms_norm', 'selu', 'softmax', 'softmin', 'tanhshrink', 'threshold', 'triplet_margin_loss') + tuple(()),
         Fidelity.APPROXIMATE, 'Native neural-network mathematics with Torch argument adaptation; dtype, backend, and optional parameter restrictions apply')
     register_api_bindings(F, "torch.nn.functional",
         ("binary_cross_entropy", "cosine_embedding_loss", "gaussian_nll_loss",

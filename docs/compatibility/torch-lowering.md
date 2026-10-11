@@ -189,6 +189,11 @@ FSDP2 真路径与流水线逻辑都挂在 `_call` 里。
   `register_autograd` 分别写前向、fake 与反向；`infer_schema()` 从 Python 注解
   推导 op schema。
 
+注册了 backward 的算子在原生输出 tape 构造之前就把浮点/复数结果标为需要梯度（即使 kernel
+内部 detach 了结果），整数/bool 结果不标；`Library` 的注册表与算子元数据写入参与当前的安装
+事务（`_transactional_registry = True`），失败时随事务回滚，见
+[Torch 安装事务](../development/torch-install-transactions.md)。
+
 下游库的同名算子可以被集成覆盖：`compat/integrations.py` 的
 `custom_op_overrides()` 提供替换表，`custom_op` 命中时记录
 `_overridden_by_integration`，而不是悄悄换掉实现。
@@ -236,7 +241,7 @@ FSDP2 真路径与流水线逻辑都挂在 `_call` 里。
 1. **先定 owner**：探测 `hasattr(jt, name)` / `hasattr(jt.Var, name)`。契约相同 →
    薄转发并在 import 期捕获原生对象；契约不同 → 由 compat 拥有包装并写清差异；
    没有原生 owner → compat 是最终 owner。判据见
-   [`agent/skills/torch-api-cohort-promotion/SKILL.md`](../../agent/skills/torch-api-cohort-promotion/SKILL.md)。
+   [`agent/skills/torch-api-cohort-promotion/SKILL.md`](https://github.com/Jittor/jittor/blob/master/agent/skills/torch-api-cohort-promotion/SKILL.md)。
 2. **登记**：进 `compat/torch/api_manifest.py` 的 `API_PATHS`（`APPROXIMATE`）
    或 `UNIMPLEMENTED_PATHS`。
 3. **保真度**：用 `register_fidelity()` 写清级别与限制明细。

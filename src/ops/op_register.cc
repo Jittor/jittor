@@ -19,6 +19,8 @@
 
 namespace jittor {
 
+std::atomic<uint64> op_definition_generation{1};
+
 //: The one key the map is read and written by.
 //:
 //: `op_registe` used to insert under `op_info.name` while `has_op` and
@@ -123,6 +125,7 @@ void NativeOpRegistry::register_backend_implementation_composer(
     implementation_composers.emplace(backend, BackendImplementationComposer{composer, bootstrap_identity});
     for (auto& replacement : pending)
         entries.find(replacement.first)->second = move(replacement.second);
+        op_definition_generation.fetch_add(1, std::memory_order_release);
 }
 
 void register_backend_implementation_composer(BackendId backend,
@@ -145,6 +148,7 @@ void NativeOpRegistry::register_op(const OpInfo& op_info) {
             replacement.compile_identity = replacement_compile_identity();
             compose_backend_implementations(replacement);
             iter->second = std::make_shared<const OpDef>(move(replacement));
+            op_definition_generation.fetch_add(1, std::memory_order_release);
             return;
         }
         ASSERT(false) << "Op" << op_info.name << "is already registed, "
@@ -164,6 +168,7 @@ void NativeOpRegistry::register_op(const OpInfo& op_info) {
     compose_backend_implementations(registered);
     const auto registered_id = registered.id;
     entries[op_file_name] = std::make_shared<const OpDef>(move(registered));
+    op_definition_generation.fetch_add(1, std::memory_order_release);
     registered_names.emplace(op_file_name);
     op_keys_by_id.emplace(registered_id, op_file_name);
 }
@@ -186,6 +191,7 @@ void NativeOpRegistry::register_op_implementation(
     }
     compose_backend_implementations(replacement);
     found->second = std::make_shared<const OpDef>(move(replacement));
+    op_definition_generation.fetch_add(1, std::memory_order_release);
 }
 
 void register_op_implementation(const string& name, BackendId backend,
@@ -230,6 +236,34 @@ shared_ptr<const OpDef> get_op_definition(const string& name, bool required) {
     return op_registry().definition(name, required);
 }
 
+// Every operator construction asks for its definition by name, and the
+// registry answers under its lock, after cutting the name at '.' into a fresh
+// string and hashing it. `Op::name()` is a literal per operator class, so a few
+// entries keyed by that pointer -- the text compared too, and dropped whenever
+// the registry changes -- answer nearly all of them.
+shared_ptr<const OpDef> get_op_definition(const char* name, bool required) {
+    struct Entry {
+        const char* pointer = nullptr;
+        string text;
+        uint64 generation = 0;
+        shared_ptr<const OpDef> definition;
+    };
+    static thread_local Entry cache[16];
+    uint64 generation = op_definition_generation.load(std::memory_order_acquire);
+    Entry& entry = cache[(reinterpret_cast<uintptr_t>(name) >> 3) & 15];
+    if (entry.pointer == name && entry.generation == generation && entry.definition
+            && entry.text == name)
+        return entry.definition;
+    auto definition = op_registry().definition(name, required);
+    if (definition) {
+        entry.pointer = name;
+        entry.text = name;
+        entry.generation = generation;
+        entry.definition = definition;
+    }
+    return definition;
+}
+
 OpId NativeOpRegistry::id(const string& name) const {
     return get(name).id;
 }
@@ -269,6 +303,7 @@ bool NativeOpRegistry::unregister(const string& name) {
     }
     op_keys_by_id.erase(op_iter->second->id);
     entries.erase(op_iter);
+    op_definition_generation.fetch_add(1, std::memory_order_release);
     observer = lifecycle_observer;
     removed = true;
     }
@@ -696,6 +731,8 @@ bool unregister_op(const string& name) {
 DEFINE_BUILTIN_OP_ID(array)
 DEFINE_BUILTIN_OP_ID(binary)
 DEFINE_BUILTIN_OP_ID(broadcast_to)
+DEFINE_BUILTIN_OP_ID(code)
+DEFINE_BUILTIN_OP_ID(contiguous)
 DEFINE_BUILTIN_OP_ID(empty)
 DEFINE_BUILTIN_OP_ID(fused)
 DEFINE_BUILTIN_OP_ID(getitem)
@@ -705,6 +742,8 @@ DEFINE_BUILTIN_OP_ID(reindex)
 DEFINE_BUILTIN_OP_ID(reindex_reduce)
 DEFINE_BUILTIN_OP_ID(safe_clip)
 DEFINE_BUILTIN_OP_ID(setitem)
+DEFINE_BUILTIN_OP_ID(transpose)
+DEFINE_BUILTIN_OP_ID(unary)
 
 #undef DEFINE_BUILTIN_OP_ID
 

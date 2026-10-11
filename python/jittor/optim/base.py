@@ -66,6 +66,13 @@ def _realign_state_buffers(param_groups):
             for param, buffer in zip(params, buffers):
                 if not isinstance(buffer, jt.Var) or not isinstance(param, jt.Var):
                     continue
+                # The same raw placement is the same device, whatever the
+                # ambient flag says -- and it is what every step of an
+                # unmoved model sees, so the resolution below (a dispatch
+                # lookup for an unplaced Var) is kept for the pairs that differ.
+                if (buffer.placement_backend == param.placement_backend
+                        and buffer.device_id == param.device_id):
+                    continue
                 target = _effective_device(param)
                 if _effective_device(buffer) == target:
                     continue
@@ -129,6 +136,11 @@ class Optimizer(object):
         for pg in params:
             if not isinstance(pg, dict):
                 raise TypeError("optimizer parameter groups must be dictionaries")
+            # A group is walked on every step and saved with the optimizer, so
+            # it holds a list, whatever iterable it was given -- a module's
+            # `parameters()` under the torch frontend produces as it is walked.
+            if not isinstance(pg.get('params'), (list, tuple)) and 'params' in pg:
+                pg['params'] = list(pg['params'])
             self.param_groups.append(pg)
         self.n_step = 0
         # __zero_grad is a value for fast determ the grad is zero or not
@@ -138,6 +150,8 @@ class Optimizer(object):
         self.__input_params = []
 
     def add_param_group(self, group):
+        if 'params' in group and not isinstance(group['params'], (list, tuple)):
+            group['params'] = list(group['params'])
         self.param_groups.append(group)
 
     def _advance_step_count(self, pg):
@@ -150,6 +164,9 @@ class Optimizer(object):
         it rides along in ``state_dict``/``load_state_dict`` and so a group
         added mid-training starts its own correction at step 1.
         """
+        from jittor._runtime import step_capture
+        # Baked into the update as a constant, so a replay would repeat it.
+        step_capture.refuse("the optimizer bakes its step count into the graph")
         n = int(pg.get("n_step", 0)) + 1
         pg["n_step"] = n
         return n

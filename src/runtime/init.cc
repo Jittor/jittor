@@ -10,6 +10,7 @@
 
 #include <csignal>
 #include "runtime/init.h"
+#include "runtime/async_exec.h"
 #include "ops/op_register.h"
 #include "ops/composite/op_registration.h"
 #include "ops/composite/tape_op.h"
@@ -121,6 +122,8 @@ void init() {
 }
 
 void set_seed(int seed) {
+    // Random operators of a batch on the worker read the generator.
+    async_exec_wait();
     current_seed = seed;
     current_offset = 0;
     eng.reset(new std::default_random_engine(seed));

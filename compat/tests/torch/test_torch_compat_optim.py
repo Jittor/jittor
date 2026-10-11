@@ -216,6 +216,22 @@ class TestAdam(Base):
 
         both_devices(body)
 
+    def test_adamw_decays_by_torch_s_default(self):
+        # torch.optim.AdamW's weight_decay defaults to 0.01 (decoupled): with
+        # a zero gradient a step only decays, w -= lr * 0.01 * w.
+        def body(dev):
+            w = torch.tensor(np.array([1.0, -2.0], "float32"), requires_grad=True)
+            optimizer = torch.optim.AdamW([w], lr=0.1)
+            self.assertEqual(optimizer.weight_decay, 0.01)
+            (w * 0).sum().backward()
+            optimizer.step()
+            self.ac(w.detach().numpy(), np.array([1.0, -2.0]) * (1 - 0.1 * 0.01), msg=dev)
+            explicit = torch.optim.AdamW([torch.ones(1, requires_grad=True)], lr=0.1,
+                                         weight_decay=0.0)
+            self.assertEqual(explicit.weight_decay, 0.0)
+
+        both_devices(body)
+
     def test_adamw_accepts_and_serializes_fused_option(self):
         value = jt.array(np.array([1.0, -2.0], dtype=np.float32))
         optimizer = torch.optim.AdamW(

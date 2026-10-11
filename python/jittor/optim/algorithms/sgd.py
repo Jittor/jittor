@@ -162,6 +162,7 @@ class SGD(Optimizer):
             pg[MOMENTUM_INITIALIZED] = [legacy] * len(pg.get("params", []))
 
     def step(self, loss=None, retain_graph=False):
+        from jittor._runtime import step_capture
         self.pre_step(loss, retain_graph=retain_graph)
         jt.flags.node_order = 1
         for pg in self.param_groups:
@@ -225,6 +226,14 @@ class SGD(Optimizer):
                     [var for item in active for var in item
                      if isinstance(var, jt.Var)])
             if fused is not None:
+                rate = lr
+                if step_capture.active():
+                    rate = step_capture.live_rate(
+                        fused, lambda pg=pg: pg.get("lr", self.lr),
+                        lambda pg=pg: (pg.get("momentum", self.momentum),
+                                       pg.get("weight_decay", self.weight_decay),
+                                       pg.get("dampening", self.dampening),
+                                       pg.get("nesterov", self.nesterov)))
                 # The fused kernels take one first-step switch per launch, so
                 # buffers seeding now and buffers continuing their recurrence
                 # go in separate launches (`step` 1 and 2). Without momentum
@@ -237,17 +246,23 @@ class SGD(Optimizer):
                     if not batch:
                         continue
                     entries = [(pg["params"][i], pg["grads"][i], pg["values"][i]) for i in batch]
-                    updates = fused(entries, lr, momentum, weight_decay, dampening, nesterov, step)
+                    updates = fused(entries, rate, momentum, weight_decay, dampening, nesterov, step)
                     for (p, _, v), (new_p, new_v) in zip(entries, updates):
                         # Without momentum the velocity buffer holds nothing
-                        # the step needs, so kernels hand it back as the same
-                        # Var and it is not rebound. With momentum the new
-                        # velocity is a kernel output and must be rebound, so
-                        # reading the buffer depends on the update.
+                        # the step needs, and a kernel that keeps it updates it
+                        # in place, so it is handed back as the same Var:
+                        # rebinding it would be a holder write per parameter
+                        # for no reason.
                         if new_v is not v:
                             _update_preserve_dtype(v, new_v)
                         _update_preserve_dtype(p, new_p)
             else:
+                # Baked into the graph as numbers; a captured step re-captures
+                # when they change.
+                step_capture.guard(lambda pg=pg: (pg.get("lr", self.lr), pg.get("momentum", self.momentum),
+                                                  pg.get("weight_decay", self.weight_decay),
+                                                  pg.get("dampening", self.dampening),
+                                                  pg.get("nesterov", self.nesterov)))
                 for i, (p, g, v) in zip(active_index, active):
                     # `p * 0 + g` is a whole extra pass over the parameter.
                     _update_preserve_dtype(p, sgd_update(
@@ -255,6 +270,11 @@ class SGD(Optimizer):
                         dampening=dampening, nesterov=nesterov,
                         momentum_initialized=initialized[i]))
             if uses_momentum:
+                # Whether a buffer seeds is baked into the step too (which
+                # launch it is in, or which formula): a captured seeding step
+                # must not be replayed once the buffers are initialized. Read
+                # before the flags flip, so the next step re-captures.
+                step_capture.guard(lambda pg=pg: tuple(momentum_initialized_flags(pg)))
                 for i in active_index:
                     initialized[i] = True
         self.post_step()

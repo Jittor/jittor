@@ -1,11 +1,11 @@
 ---
 name: jittor-core-planning-cost
-description: 给「改 Executor::run_sync 的记账方式」这类核心数据结构改动定价——把规划开销与 kernel 时间分开量、避开惰性图与并行算子编译器两个陷阱、用「常数还是比例」判断一个回归值不值得。改 node.h / executor.cc / fuser.cc / fused_op.cc 里的索引、标记、epoch 之前读。
+description: 给「改 Executor::run_sync 的记账方式」这类核心数据结构改动定价——把规划开销与 kernel 时间分开量、避开惰性图与并行算子编译器两个陷阱、用「常数还是比例」判断一个回归值不值得。改 src/core/ 下 node.h / executor.cc / fuser.cc / fused_op.cc 里的索引、标记、epoch 之前读。
 ---
 
 # 给核心记账改动定价
 
-整改计划里有一批任务是「把某个per-node 的共享槽位换成局部数据结构」（2.02、2.03、2.06、2.10）。
+有一类改动是「把某个 per-node 的共享槽位换成局部数据结构」。
 这类改动**功能上等价、正确性上更好、性能上不免费**：`run_sync` 每执行一次要在图上做
 几万次「给我这个节点的下标」。**没有量过就不要提交**——实测把 `Node::custom_data` 全部
 换成局部哈希表是 `run_sync` **+43%**。
@@ -98,7 +98,7 @@ times = [one_round()[0] for _ in range(21)]  # 取中位数
 `(vid<<2)|已访问|不可融合` 不是遍历标记，而是要跨整条 JIT 管线保持有效的映射
 （`do_jit_prepare`、`get_loop_options`、`context->vrm` 都读它）。**判据是「这个值活到
 什么时候」**：活到本次遍历结束的是标记，活到 JIT 编译的是映射，后者要改就得连同它的
-读取点一起改，那是另一条任务（2.24）。审计里那句「遍历用局部 vector 按 node id 索引」
+读取点一起改，那是另一件事。审计里那句「遍历用局部 vector 按 node id 索引」
 对前者成立、对后者不成立——**动手前先按生命周期把用法分类，别按字段分类。**
 
 ## 4. stamp 不要复用 `tflag`
@@ -120,7 +120,7 @@ times = [one_round()[0] for _ in range(21)]  # 取中位数
 
 量法：给每个阶段加一个临时的 `DEFINE_FLAG(int, exec_xxx_us, 0, "tmp")` 累加微秒。
 用 flag 而不是日志，是因为 **flag 在 Python 侧就是 `jt.flags.exec_xxx_us`**，读起来
-    10|不用解析日志，也不用开 `log_v`（开了会自己变成开销）。
+不用解析日志，也不用开 `log_v`（开了会自己变成开销）。
 
 两个会挡路的地方：
 
@@ -130,7 +130,7 @@ times = [one_round()[0] for _ in range(21)]  # 取中位数
 - **临时脚手架不要提交**，量完连同 `flag_policy.py` 的那一行一起撤掉。
 
 2026-09 在这棵树上实测（`tests/models/_parity_networks.py` 的 diffusion UNet，
-    20|CUDA，`batch=16 res=128`，每步 7 次 `run_sync`，中位数）：
+CUDA，`batch=16 res=128`，每步 7 次 `run_sync`，中位数）：
 
 | 阶段 | 每步 | 占比 |
 | --- | --- | --- |
@@ -141,8 +141,8 @@ times = [one_round()[0] for _ in range(21)]  # 取中位数
 | 6 发射循环 | **1.94 ms** | 14% |
 | 7 等设备 | **9.78 ms** | 69% |
 | 整步墙钟 | 14.21 ms | |
-    30|
-**三条结论，做执行器性能任务之前先读一遍：**
+
+**三条结论，做执行器性能优化之前先读一遍：**
 
 1. **「每步 16 ms」里绝大部分是等 GPU 算完，不是 CPU 在规划。** 把 `jt.sync_all(True)`
    放进计时区间的话，phase 7 会把设备时间算进「执行器 CPU 时间」，于是任何 CPU 侧
@@ -151,7 +151,7 @@ times = [one_round()[0] for _ in range(21)]  # 取中位数
    0.17 ms），发射开销也基本是常数（1.93 / 1.94 ms），只有 phase 7 随规模涨。
    这正是第 2 节那条判据的又一个实例：**先换一个规模再量一遍，看差值是不是常数**。
 3. 于是 **「按图结构哈希缓存执行计划」的收益上界是 0.128 ms/步**（能跳过的只有
-    40|   3–5；phase 2 无论如何都要走一遍，否则拿不到本批的 `Op*`）。那是整步的 0.9%，
+   3–5；phase 2 无论如何都要走一遍，否则拿不到本批的 `Op*`）。那是整步的 0.9%，
    而代价是一个必须覆盖 `count_fuse` 会分支的每一个字段（`_stop_fuse`、`_force_fuse`、
    `_out_hint`、`num`、`dtype`、`shape`、消费者个数、边的下标次序……）的结构哈希，
    算它本身又是一次 O(算子+边) 的遍历。**漏掉任何一个字段就是静默的错误融合。**

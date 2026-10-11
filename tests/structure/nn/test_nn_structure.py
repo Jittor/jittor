@@ -222,6 +222,7 @@ _MODULE_API = (
     "LeakyReLU",
     "Leaky_relu",
     "Linear",
+    "LogSoftmax",
     "MSELoss",
     "MaxPool1d",
     "MaxPool2d",

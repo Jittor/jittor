@@ -131,20 +131,58 @@ def _type_attribute(Var, name):
     return None
 
 
+def _bind_native_fast_paths(jt):
+    """Hand the native fast paths what they ask Python about.
+
+    `src/bindings/pyjt/py_compat_fast.h`: whether a step is being captured,
+    and -- through the kernel registry the native selector keeps -- whether
+    a backend registered its own kernel for an op they build.
+    """
+    from jittor._runtime import dispatch
+    from jittor._runtime.step_capture import tracing
+    if dispatch._NATIVE_SELECT is None:
+        dispatch._bind_native_select()
+    jt.core._compat_fast_bind(tracing)
+
+
+def _bind_native_binary(jt, natives, mark_cpu_like):
+    """Hand `_fast_binary` the native operators the frontend replaces.
+
+    `natives` are the Var's own operators, captured before the frontend
+    installs its promoting ones over them; see `method_api._FAST_BINARY`.
+    """
+    from . import method_api
+    bind = getattr(jt.core, "_compat_fast_bind_binary", None)
+    if bind is None:
+        return
+    # ACL keeps a Python float divisor in the tensor's dtype (see
+    # `_true_division`); everywhere else the native path widens it the same way.
+    bind(tuple(natives[name] for name in method_api._FAST_BINARY_OPERATORS), mark_cpu_like,
+         not bool(getattr(jt.compiler, "has_acl", 0)))
+    method_api._FAST_BINARY = jt.core._fast_binary
+
+
 def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # Var.dtype natively returns jittor's NanoString, which is unhashable and
     # not == to torch dtype objects. Return the canonical immutable frontend
     # dtype so `t.dtype in {torch.float16, ...}` and dictionary keys work.
     from importlib import import_module as _import_module
     _owner = _import_module(__package__)
+    _bind_native_fast_paths(_owner.jt)
     _NativeVar = _owner.jt.Var
     _native_operators = {name: getattr(Var, name, None) for name in _BINARY_APIS}
+    _bind_native_binary(_owner.jt, _native_operators, _owner._mark_cpu_like)
 
     if _jittor_dtype_name(_DTYPE_OBJS) is not None and not getattr(Var, "_dtype_wrapped", False):
         try:
             _native_desc = _type_attribute(Var, "dtype")  # C getset_descriptor
             if _native_desc is not None:
-                Var.dtype = property(_dtype_get)
+                # What `_dtype_get` needs, kept on the type it serves: the
+                # native descriptor and this installation's dtype objects.
+                Var._frontend_native_dtype = _native_desc
+                Var._frontend_dtype_objects = _DTYPE_OBJS
+                # `_dtype_get`, natively: every operator reads it.
+                Var.dtype = property(_owner.jt.core._frontend_dtype)
                 Var._dtype_wrapped = True
         except _owner.EXPECTED as exc:
             _owner.swallowed("torch/installers/tensor.py _install_tensor_methods: _native_desc = Var.__dict__.get('dtype') # C getset_des...", exc)

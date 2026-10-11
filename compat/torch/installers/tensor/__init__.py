@@ -456,6 +456,19 @@ def _index_select(input, dim, index, *, out=None):
     return result
 
 
+def _byte_tensor_constructor_data(data, *, nested=False):
+    """Match torch.ByteTensor for bytes nested in sequence inputs."""
+    if isinstance(data, bytes):
+        if not nested:
+            raise TypeError("new(): invalid data type 'bytes'")
+        return list(data)
+    if isinstance(data, bytearray):
+        return list(data)
+    if isinstance(data, (list, tuple)):
+        return [_byte_tensor_constructor_data(item, nested=True) for item in data]
+    return data
+
+
 class _TypedTensorMeta(type):
     def __instancecheck__(cls, obj):
         return isinstance(obj, compatibility_owner(jt).Var) and _jittor_dtype_name(obj.dtype) == cls._jdtype
@@ -465,7 +478,10 @@ class _TypedTensorMeta(type):
             if tensor_input:
                 v = args[0]
             elif len(args) == 1 and not isinstance(args[0], int):
-                v = jt.array(args[0], dtype=cls._jdtype)
+                data = args[0]
+                if cls._jdtype == "uint8":
+                    data = _byte_tensor_constructor_data(data)
+                v = jt.array(data, dtype=cls._jdtype)
             elif len(args) == 0:
                 v = jt.zeros((0,), dtype=cls._jdtype)
             else:
@@ -611,6 +627,12 @@ def frombuffer(buffer, *, dtype, count=-1, offset=0, requires_grad=False):
         return v
 
 
+def _numpy_stream(seed):
+    """One independent numpy stream per generator, seeded deterministically."""
+    import numpy as _np
+    return _np.random.default_rng(int(seed))
+
+
 class Generator:
     """A torch.Generator with its OWN stream.
 
@@ -634,12 +656,51 @@ class Generator:
         self._seed = int(s)
         # one stream per generator: deterministic, and independent of whatever
         # the process's global generator has already produced.
-        import numpy as _numpy_rng
-        self._rng = _numpy_rng.random.default_rng(self._seed)
+        self._rng = _numpy_stream(self._seed)
         return self
+    def _stream(self):
+        """The generator's stream, built on first use so an unseeded one has one too."""
+        if self._rng is None:
+            self._rng = _numpy_stream(self._seed)
+        return self._rng
     def get_state(self):
-        return jt.array([self._seed])
+        """The stream's position, not just its seed.
+
+        `set_state(get_state())` has to replay the *next* draws, which a seed
+        alone cannot do once the generator has been used -- and this used to
+        return `[seed]` against a `set_state` that did nothing at all, so a
+        caller checkpointing a generator got a value that looked like state and
+        restored nothing. Accelerate's `save_state`/`load_state` and
+        `RandomSampler`'s replay both rest on this round-tripping.
+
+        The bytes are the numpy bit generator's own state, pickled. They are
+        this shim's format, not torch's CUDA/CPU state bytes, and are not
+        interchangeable with them -- the same rule torch states for its own
+        opaque state: save it, hand it back, do not parse it.
+        """
+        import numpy as _np
+        import pickle as _pickle
+        blob = _pickle.dumps(self._stream().bit_generator.state, protocol=4)
+        return jt.array(_np.frombuffer(blob, dtype=_np.uint8).copy())
     def set_state(self, s):
+        import numpy as _np
+        import pickle as _pickle
+        raw = s
+        if hasattr(raw, "numpy"):
+            raw = raw.numpy()
+        raw = _np.asarray(raw)
+        # The old format was a single int64 seed. Restoring one of those can
+        # only reseed, which is what it always meant.
+        if raw.dtype != _np.uint8:
+            self.manual_seed(int(raw.reshape(-1)[0]))
+            return self
+        try:
+            state = _pickle.loads(raw.tobytes())
+        except EXPECTED as exc:
+            swallowed("torch/installers/tensor Generator.set_state", exc)
+            raise ValueError("generator state is not one this generator produced")
+        stream = self._stream()
+        stream.bit_generator.state = state
         return self
     def seed(self):
         return self._seed
@@ -673,7 +734,25 @@ def _check_to_pybool(cond):
     return bool(cond)
 
 
+#: The native `cat` fast path (`src/bindings/pyjt/py_compat_fast.h`), bound
+#: on first use: a KV-cache update or a RoPE half swap, a hundred a decode
+#: token, built without the eight Python frames between here and the ops.
+_FAST_CAT = None
+
+
+def _bind_fast_cat():
+    global _FAST_CAT
+    from .methods import _bind_native_fast_paths
+    _bind_native_fast_paths(jt)
+    _FAST_CAT = jt.core._fast_cat
+    return _FAST_CAT
+
+
 def cat(tensors, dim=0, out=None, axis=None):
+    if out is None and axis is None and type(dim) is int:
+        fast = (_FAST_CAT or _bind_fast_cat())(tensors, dim)
+        if fast is not NotImplemented:
+            return fast
     g = compatibility_owner(jt)
     if axis is not None: dim = axis      # torch accepts axis= (mmrotate PSC head)
     # Honor the __torch_function__ protocol: tensordict (and other tensor-likes)
@@ -711,9 +790,9 @@ def cat(tensors, dim=0, out=None, axis=None):
     tensors = [t for t in tensors if t is not None]
     nonempty = [t for t in tensors if t.numel() > 0]
     if len(nonempty) == 0:
-        return tensors[0]
+        return _cat_result(tensors[0], out)
     if len(nonempty) == 1:
-        return nonempty[0]
+        return _cat_result(nonempty[0], out)
     # torch requires all tensors to share ndim. jittor has no 0-d scalars, so
     # a torch-scalar `s` (0-d) becomes a [1] Var and `s.unsqueeze(0)` yields
     # [1,1] instead of torch's [1] -- mixing 2-D and 1-D entries that torch
@@ -737,7 +816,15 @@ def cat(tensors, dim=0, out=None, axis=None):
         d = in_dtypes.pop()
         if _jittor_dtype_name(out_var.dtype) != d:
             out_var = out_var.cast(d)
-    return out_var
+    return _cat_result(out_var, out)
+
+
+def _cat_result(value, out):
+    # ``out=`` may be a view (``flat.narrow(...)``): write through it.
+    if out is None:
+        return value
+    out.copy_(value)
+    return out
 
 
 def stack(tensors, dim=0, *, axis=None, out=None):
@@ -1025,6 +1112,12 @@ def install_methods(ctx):
     _np_view_of = None
     Var.reshape = _torch_reshape
     Var.view = _torch_reshape
+    # The native view builds what jittor's own reshape does, so only while
+    # that is what `_torch_reshape` would delegate to.
+    from . import shape_api as _shape_api
+    from jittor._core import var as _native_var
+    _shape_api._FAST_VIEW = (getattr(jt.core, "_fast_view", None)
+                             if _orig_reshape is _native_var.reshape else None)
 
     # Keep the existing Torch-facing promotion for narrow integer sums
     # (yolox/rtmdet SimOTA assigners do mask.sum() on a uint8 match matrix).

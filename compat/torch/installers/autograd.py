@@ -35,8 +35,12 @@ def _install_autograd(g, registry=None):
     register_api_bindings(autograd, "torch.autograd", ("set_detect_anomaly", "detect_anomaly"),
                           Fidelity.UNIMPLEMENTED, "Annotation-only scope; no anomaly detection.")
     register_api_bindings(profiler, "torch.autograd.profiler",
-                          ("EventList", "profile", "record_function", "emit_nvtx", "kineto_available"),
-                          Fidelity.UNIMPLEMENTED, "Placeholder profiling scopes; no events or traces collected.")
+                          ("EventList", "profile", "record_function", "kineto_available"),
+                          Fidelity.APPROXIMATE,
+                          "Backed by jittor.profiling: one event per launched jittor operator with "
+                          "executor host time and CUPTI device time; no kineto.")
+    register_api_bindings(profiler, "torch.autograd.profiler", ("emit_nvtx",),
+                          Fidelity.UNIMPLEMENTED, "Placeholder scope; no NVTX ranges are emitted.")
 
 
 def install(ctx):

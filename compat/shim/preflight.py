@@ -11,6 +11,7 @@ import hashlib
 import os
 import pathlib
 import sys
+import tempfile
 import importlib.util
 from ..diagnostics import EXPECTED, swallowed
 
@@ -184,6 +185,38 @@ def _ensure_dir(path, purpose=None):
             "that directory is not writable. %s" % (value, what, _UNWRITABLE_HINT)
         )
     return value
+
+
+#: What a caller may still append to $TMPDIR and expect to work.
+#:
+#: A unix socket path is capped at 108 bytes including the terminator by
+#: ``sockaddr_un.sun_path``, and the error a program gets for exceeding it is
+#: not about length -- vLLM-Omni's orchestrator simply dies at startup. The
+#: names that land here are of the form ``<tmpdir>/ipc_<uuid4hex>``, so 45
+#: bytes of headroom covers them with room to spare.
+_TMPDIR_SOCKET_HEADROOM = 45
+_SUN_PATH_MAX = 107
+
+
+def _short_enough_tmpdir(preferred):
+    """The isolated tmpdir, or a short stand-in when that one cannot hold a socket.
+
+    The shim points $TMPDIR inside its per-project runtime so a run leaves
+    nothing behind. That directory is nested deep enough to be 90+ bytes on a
+    normal install, which leaves no room for a socket name and is why
+    deployments set ``JITTOR_TORCH_KEEP_TMPDIR=1`` -- a variable nobody can be
+    expected to know about, whose absence shows up as a startup that dies
+    without saying why.
+
+    Measure instead. When the preferred path has room, use it. When it does
+    not, fall back to a short directory that is still per-project, rather than
+    to the caller's real $TMPDIR, so the isolation survives.
+    """
+    preferred = pathlib.Path(preferred)
+    if len(os.fspath(preferred)) + _TMPDIR_SOCKET_HEADROOM <= _SUN_PATH_MAX:
+        return preferred
+    digest = hashlib.sha1(os.fspath(preferred).encode("utf-8")).hexdigest()[:10]
+    return pathlib.Path(tempfile.gettempdir()) / ("jt-%s" % digest)
 
 
 def _set_env_dir(environ, name, path, override=False):
@@ -489,7 +522,7 @@ def prepare_import_environment(
     _set_env_dir(
         env,
         "TMPDIR",
-        runtime / "tmp",
+        _short_enough_tmpdir(runtime / "tmp"),
         override=not is_truthy(env.get("JITTOR_TORCH_KEEP_TMPDIR")),
     )
     _prepare_kernel_math(env)

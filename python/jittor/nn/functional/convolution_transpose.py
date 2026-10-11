@@ -78,6 +78,23 @@ def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding
         oh = (H-1) * stride_h + output_padding[0] - 2*padding_h + 1 + (h-1)*dilation_h
         ow = (W-1) * stride_w + output_padding[1] - 2*padding_w + 1 + (w-1)*dilation_w
         out_shape = (N, oc, oh, ow)
+        # The grouped branch never asked for an accelerated kernel, so a
+        # depthwise transposed convolution always took the eight-dimensional
+        # lowering below -- while the `groups == 1` branch above has asked
+        # since it was written, and cuDNN's adapter takes a `groups` argument
+        # and passes it to `cudnn_conv_backward_x`. The capability was there;
+        # nothing consulted it.
+        #
+        # Measured on the H3 audio VAE, whose alias-free resampler upsamples
+        # with `conv_transpose1d(..., groups=C)`: one fused
+        # `reindex * -> reindex_reduce` was 79.8% of the whole decode, moving
+        # 344 MB/s on a card that does ~3 TB/s, and the decode was 20.1x
+        # torch's. That single call is why.
+        kernel = select_kernel("conv_transpose2d", input, weight, bias, stride,
+                               padding, output_padding, dilation, groups)
+        if kernel is not None:
+            return kernel(input, weight, bias, stride, padding, output_padding,
+                          dilation, groups)
         shape = [N,G,oc//G,CpG,oh,ow,h,w]
         xx = input.reindex(shape, [
             'i0',

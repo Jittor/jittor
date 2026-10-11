@@ -28,12 +28,57 @@ __global__ static void transpose_kernel(
     }
 }
 
+// A batched two-dimensional transpose, [batch][rows][cols] -> [batch][cols]
+// [rows], through a shared-memory tile so that both the reads and the writes
+// run along memory. The element-wise kernel above reads a stride apart on
+// every step whenever the last axis moves: NHWC -> NCHW of a [1, 256, 512,
+// 512] float16 tensor took 769 us there.
+__global__ static void transpose_tiled_kernel(
+    const Tx* __restrict__ xp, Tx* __restrict__ yp, index_t rows, index_t cols) {
+    __shared__ Tx tile[32][33];
+    const index_t base = (index_t)blockIdx.z * rows * cols;
+    const index_t c0 = (index_t)blockIdx.x * 32, r0 = (index_t)blockIdx.y * 32;
+    for (int j = threadIdx.y; j < 32; j += 8) {
+        index_t r = r0 + j, c = c0 + threadIdx.x;
+        if (r < rows && c < cols) tile[j][threadIdx.x] = xp[base + r * cols + c];
+    }
+    __syncthreads();
+    for (int j = threadIdx.y; j < 32; j += 8) {
+        index_t c = c0 + j, r = r0 + threadIdx.x;
+        if (r < rows && c < cols) yp[base + c * rows + r] = tile[threadIdx.x][j];
+    }
+}
+
 void TransposeOp::jit_run() {
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
     index_t num = y->num;
     if (num == 0)
         return;
+    {
+        // axes = [0..k) then [p..DIM) then [k..p): a leading run kept in
+        // place and two runs swapped behind it -- NCHW <-> NHWC among them.
+        const int dim = DIM;
+        int k = 0;
+        while (k < dim && (int)axes[k] == k) k++;
+        if (k < dim - 1) {
+            int p = axes[k];
+            bool swapped = p > k;
+            for (int i = 0; swapped && i < dim - p; i++) swapped = (int)axes[k + i] == p + i;
+            for (int i = 0; swapped && i < p - k; i++) swapped = (int)axes[k + (dim - p) + i] == k + i;
+            if (swapped) {
+                index_t batch = 1, rows = 1, cols = 1;
+                for (int i = 0; i < k; i++) batch *= x->shape[i];
+                for (int i = k; i < p; i++) rows *= x->shape[i];
+                for (int i = p; i < dim; i++) cols *= x->shape[i];
+                if (batch <= 65535 && rows > 1 && cols > 1 && (rows + 31) / 32 <= 65535) {
+                    dim3 grid((cols + 31) / 32, (rows + 31) / 32, batch);
+                    transpose_tiled_kernel<<<grid, dim3(32, 8)>>>(xp, yp, rows, cols);
+                    return;
+                }
+            }
+        }
+    }
     @for(i, 0, DIM, index_t yshape@i = y->shape[@i];)
     index_t ystride@{DIM-1} = 1;
     @for(i, DIM-2, -1, -1, auto ystride@i = ystride@{i+1} * yshape@{i+1};)

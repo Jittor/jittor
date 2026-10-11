@@ -1,8 +1,29 @@
 # 缺硬件时怎么把代码改完，以及硬件到手那天跑什么
 
-看板上有两个归并桶（「并入 硬件验收」「并入 多机硬件验收」）和几条混合任务，共同的意思是
-「代码可以现在写，验收要等机器」。桶只说了归并，没说**到时候跑什么**、**绿了之后哪几条算被证明**、
-**哪些还根本没有可跑的测试**。这一页只回答这三个问题。
+有一批工作「代码可以现在写，验收要等机器」。这一页是它们的**唯一清单**（见下表），并回答三个
+问题：硬件到手那天**跑什么**、**绿了之后哪几项算被证明**、**哪些还根本没有可跑的测试**。
+
+表里的编号沿用整改期的任务号，只作稳定标签，便于在提交历史里检索。各项的进展与验证证据记在
+GitHub issue 和 PR 描述里；本页不记进度，只记硬件到手那天要执行什么。代码缺陷与性能限制记在
+[已知问题总账](known-issues.md)。
+
+## 待硬件验收的项目
+
+| 编号 | 内容 | 硬件 | 章节 |
+| --- | --- | --- | --- |
+| `6.B02` | ACL `executeOp` 的失败一律抛出（带算子名与解码后的 ACL 状态），tensor/workspace 在失败路径上也释放 | Ascend 910B3 + CANN | Ascend 910B3，单卡 |
+| `6.B16` | `sync_run=1` 与 `sync_run=0` 在 ACL 上都是真实的同步策略，失败可归因 | Ascend 910B3 + CANN | Ascend 910B3，单卡 |
+| `8.06` | ACL 去样板：全部 `executeOp` owner 走共享 `BaseOpRunner::launch`，带属性的 owner 经版本化数据通道传属性；逐 family 的设备行为与数值 | Ascend 910B3 + CANN | Ascend 910B3，单卡 |
+| `4.11` | ACL 作为注册表后端（不再替换 Python 函数或公共类）的注册与分派路径 | Ascend 910B3 + CANN | Ascend 910B3，单卡 |
+| `4.12` | 非 CUDA 后端只编自己的源码、不再改写共享源码：ACL 注册路径与 ROCm 自有 HIP provider | Ascend 910B3；ROCm 卡 | Ascend 910B3，单卡；ROCm |
+| `8.02` | 集合通信的 HCCL 那半：`JT_HCCL_COLLECTIVE_SYNC` 开关下的全设备同步能否去掉 | ≥2 张 Ascend 910B3 | Ascend 910B3，≥2 卡（HCCL） |
+| `10.19` | 每个带 `grad()` 的后端算子都有对 CPU 参考的梯度测试：60 条里 36 条要硬件，7 条连测试都还没有 | 多卡 CUDA/MPI、Ascend、ROCm | 后端 `grad()` 的 CPU 参考对拍；HCCL |
+| `8.14` | Corex 探测只读、路径可配置：`discover()` 在真实安装上给出正确结论 | Corex / 天数卡 | Corex / 天数 |
+| `8.15` | 多机 rendezvous：真实两机 collective 对拍 | 两台机器 | 两台机器 |
+| `8.16` | 多机启动器：`torchrun --nnodes=2` 跑通 transformers 训练 | 两台机器 | 两台机器 |
+| `8.17` | 跨机网络与诊断：带宽微基准、掉线在超时内退出 | 两台机器 | 两台机器 |
+| `8.18` | 多机 checkpoint：2 机保存、4 机加载的续训 | 两台机器（加载需 4 机） | 两台机器 |
+| `10.22` | 两节点 DDP/FSDP 冒烟与掉线门禁进 nightly | 两台机器 | 两台机器 |
 
 各硬件的操作步骤不在这里：Ascend 看 [`docs/guides/ascend-910b.md`](../../docs/guides/ascend-910b.md)，
 HCCL 多卡看 [`hccl-on-device-verification.md`](hccl-on-device-verification.md)，Corex 看
@@ -20,9 +41,9 @@ HCCL 多卡看 [`hccl-on-device-verification.md`](hccl-on-device-verification.md
    条时值得照着建一个。
 2. **行为形状的静态合同。** 断言「每个 family 都不自己发 execute 调用」这类**不变量**，而不是
    「共有 65 处调用 `checkRet`」这类**计数**。计数式合同挡不住合法重构：`test_acl_runner_failure_contract`
-   曾断言 65 处，8.06 的第一个提交把样板收进共享 launcher 后它就作废，然后红了约 40 个提交没人看见。
-   不变量式合同还要**自证扫到了东西**：ACL 正处在 `python/jittor/extern/acl` 与 `backends/acl`
-   两处都有内容的半途搬迁状态，按「总数 > N」断言会在只扫到一侧时仍然发绿，所以要求**每个根各自非空**。
+   曾断言 65 处，ACL 去样板的第一个提交把样板收进共享 launcher 后它就作废，然后红了约 40 个提交没人看见。
+   不变量式合同还要**自证扫到了东西**：源码分处多个扫描根时（例如搬迁进行到一半），按「总数 > N」
+   断言会在只扫到一侧时仍然发绿，所以要求**每个扫描根各自非空**。
 2b. **去样板前后的静态等价性。** 把每个 owner 归约成 (workspace 查询, execute 入口, 同步策略)
    的有序 token 流，逐 owner 对比改前改后。`tools/build/acl_launch_program.py` 做这件事，两个树
    当参数、退出码非 0 即有差异。它把「样板删对了」和「顺手改了行为」分开：前者 token 流不动，
@@ -49,16 +70,18 @@ HCCL 多卡看 [`hccl-on-device-verification.md`](hccl-on-device-verification.md
 | 覆盖 | `tests/backends/acl/test_acl.py`、`test_acl_torch_compat.py`、`test_aclop.py`、`test_acl_indexing.py`、`tests/ops/test_ops.py`、`tests/ops/test_floor_divide.py::TestFloorDivideNPU` 等 |
 | 步骤 | [`docs/guides/ascend-910b.md`](../../docs/guides/ascend-910b.md) |
 
-绿了之后可以判定的看板项：**`6.B02`**（executeOp 失败都抛；静态侧已由
+绿了之后可以判定的项：**`6.B02`**（executeOp 失败都抛；静态侧已由
 `test_acl_runner_failure_contract` 与 `test_acl_tensor_workspace_contract` 钉住）、**`6.B16`**
 （`sync_run=1/0` 两条路径；精确 nodeid 在 Ascend 指南里）、**`8.06`** 的已迁 family（静态合同
 102 passed，逐 family 的设备行为要在这里过一遍）、**`4.11`/`4.12`** 的 ACL 注册路径。
+ACL 的主机侧契约（数据通道、描述符缓存外壳、launcher 收口）见
+[`docs/development/acl-backend-contracts.md`](../../docs/development/acl-backend-contracts.md)。
 
-#### 8.06 的 launch 尾部归零，还差什么
+#### `8.06`：launch 尾部归零之后，还差什么
 
-本机做到的是三档里的第 1、2 档：桩 SDK 过 TU（44 个源文件 `-fsyntax-only` 全过、70 个
+无 CANN 的主机上做到的是三档里的第 1、2 档：桩 SDK 过 TU（44 个源文件 `-fsyntax-only` 全过、70 个
 launcher ABI 断言全过，反向对照见下）、以及不变量式静态合同。**一条设备指令都没执行过**，
-`tests/backends/acl` 在本机是 `164 skipped, 0 executed -- explained: skipped: no acl found`。
+`tests/backends/acl` 在无 CANN 的主机上是 `164 skipped, 0 executed -- explained: skipped: no acl found`。
 
 前置：Ascend 910B3 + CANN，`CANN_SET_ENV` 指向 `set_env.sh`。四条按顺序跑，前一条不过不要往下走。
 
@@ -83,7 +106,7 @@ launcher ABI 断言全过，反向对照见下）、以及不变量式静态合�
    ```
 
    判据：`tests/backends/acl/test_aclop.py`（114 条）、`test_acl.py`（43 条）、
-   `test_acl_indexing.py`（7 条）全部**执行**而非 skip——本机这 164 条一条都没执行。
+   `test_acl_indexing.py`（7 条）全部**执行**而非 skip——无 CANN 的主机上这 164 条一条都没执行。
    重点算子：`prod`（三条路径都要覆盖：整张量归约、单轴、多轴分步）、`argmax`/`argmin`、
    `all`/`any`、`GroupNorm` 前反向、`UpsampleNearest2d` 前反向。
 
@@ -107,7 +130,7 @@ launcher ABI 断言全过，反向对照见下）、以及不变量式静态合�
 | 现有材料 | [`hccl-on-device-verification.md`](hccl-on-device-verification.md) 的四步：第 0 步先证明没静默回落 CPU、A/B 数值对拍、200 轮压竞态、证明时序真的变了 |
 | 主机侧已可跑 | `tests/backends/comm/hccl/test_hccl_check_macros.py`、`test_hccl_collective_sync_switch.py`（对桩编译，任何机器都能跑），但**它们不在任何 nox session 里** |
 
-等它的看板项：**`8.02`** 的 HCCL 那半（4 次全设备同步收进了 `JT_HCCL_COLLECTIVE_SYNC` 开关，
+等它的项：**`8.02`** 的 HCCL 那半（4 次全设备同步收进了 `JT_HCCL_COLLECTIVE_SYNC` 开关，
 默认 `full` 与改前逐字等价，删除要等实机 A/B）、**`10.19`** 的 HCCL 四项（`HcclAllGatherOp::grad()`
 目前直接 `LOGf << "not implemented"`，另三个要在多卡上补真实梯度与 CPU 对照）。
 
@@ -119,9 +142,9 @@ launcher ABI 断言全过，反向对照见下）、以及不变量式静态合�
 | 覆盖 | `tests/backends/rocm/test_rocm.py` 与 `tests/backends/comm/mpi/` 的 MPI 组 |
 | 静态侧 | `tests/structure/test_no_unexplained_binaries.py`、`tests/structure/backends/rocm/test_rocm_library_provider.py`、`tests/structure/backends/rocm/test_rocm_native_provider.py` |
 
-等它的看板项：**`4.12`** 的 ROCm 那半。**代码半已闭合并标已合并**，这里只剩真卡确认。
+等它的项：**`4.12`** 的 ROCm 那半。**代码半已闭合**，这里只剩真卡确认。
 
-4.12 把 ROCm 从「吃 CUDA 源码文本替换的产物」换成了 `backends/rocm/` 下自有的 HIP provider。
+`4.12` 把 ROCm 从「吃 CUDA 源码文本替换的产物」换成了 `backends/rocm/` 下自有的 HIP provider。
 主机侧能证明的只有形状：`configure()` 返回的 `BuildConfig` 只带 `runtime/driver.cc` 一个
 `BuildSource`（`language="hip"`）、`resources` 里没有 `rocm_converter`、入口点是
 `rocm = "jittor.backends.rocm"`。**这些都没碰过 hipcc，更没跑过 kernel。**
@@ -140,10 +163,10 @@ launcher ABI 断言全过，反向对照见下）、以及不变量式静态合�
    加 `JITTOR_TEST_ACCELERATOR_MIN_EXECUTED=1`，否则缺卡时整组自我 skip 读着是绿的。
 4. **库族的边界是真的。** `backends/rocm/build.py` 目前对 MIOpen 与 rccl 抛
    `NotImplementedError("no native ROCm library provider")`——这是**有意的未实现**，不是 bug。
-   真卡上确认依赖它们的用例是明确失败而不是算出错误结果；要补实现的话是新任务，不在 4.12 内。
+   真卡上确认依赖它们的用例是明确失败而不是算出错误结果；要补实现的话是新任务，不在 `4.12` 内。
 
-绿了之后可以判定的：4.12 的 ROCm 那半。**在此之前不得声称 ROCm 硬件验证完成**；
-本机是 8 张 RTX 4090，无 ROCm 设备，上述四条一条都没跑过。
+绿了之后可以判定的：`4.12` 的 ROCm 那半。**在此之前不得声称 ROCm 硬件验证完成**；
+写这一页时所用的主机没有 ROCm 设备，上述四条一条都没跑过。
 
 ### Corex / 天数
 
@@ -152,8 +175,8 @@ launcher ABI 断言全过，反向对照见下）、以及不变量式静态合�
 | 命令 | **尚无 nox session** ← 硬件日之前要建 |
 | 现有材料 | [`docs/guides/corex.md`](../../docs/guides/corex.md)（48 行，最薄的一份）；`tests/backends/corex/test_corex_discovery.py` 用离线 fake compiler 验发现路径 |
 
-等它的看板项：**`8.14`**（`check()` 只读、路径可配置）。**代码半已闭合**（2026-09-07 复核）：
-前置 `4.12` 已合并，`process_acl` 全树 0 处；`corex_compiler.py` 现在没有 `check()`，只有只读的
+等它的项：**`8.14`**（`check()` 只读、路径可配置）。**代码半已闭合**（2026-09-07 复核）：
+前置 `4.12` 已合并，`process_acl` 全树 0 处；`backends/corex/__init__.py` 现在没有 `check()`，只有只读的
 `discover()`，路径经 `corex_home` 实参或 `COREX_HOME` 解析、默认 `/usr/local/corex`。
 
 **「探测无副作用」这条验收现在真的被证明了。** 原来那条断言只比较一个临时目录**顶层**的
@@ -165,9 +188,9 @@ launcher ABI 断言全过，反向对照见下）、以及不变量式静态合�
 `TestTheGuardCanNoticeSideEffects` 给上面几条装牙齿:把三类副作用分别注入 `discover()` 的一份
 **副本**，断言守卫报得出来。牙齿本身也验过——把守卫里的 `os.environ` 比较去掉，那条立刻报
 `env side effect went unnoticed`（1 failed / 4 passed）。没有这一层，前几条会在守卫悄悄失效后
-继续全绿，正是本轮那七例的形状（见交接文档 §6bis）。
+继续全绿——「守卫悄悄失效、门禁照样发绿」正是这类合同最常见的失效方式。
 
-**硬件日要跑的**（本机无 Corex/Iluvatar 卡）：
+**硬件日要跑的**（写这一页时所用的主机没有 Corex/Iluvatar 卡）：
 
 1. `COREX_HOME=<真实安装路径> python -c "from jittor.backends import corex as c; print(c.discover())"`
    ——判据：`available=True`、`reason == "ready"`、`compiler_path` 指向真实 `bin/clang++`。
@@ -183,9 +206,9 @@ launcher ABI 断言全过，反向对照见下）、以及不变量式静态合�
 | | |
 | --- | --- |
 | 命令 | **尚无 nox session** ← 这本身就是 `10.22` 的内容 |
-| 现有材料 | `8.15` 已合入 TCP/SQLite Store 与 NCCL WORLD bootstrap，可在单机多进程下验 rendezvous、超时与失败传播 |
+| 现有材料 | 已合入 TCP/SQLite Store 与 NCCL WORLD bootstrap，可在单机多进程下验 rendezvous、超时与失败传播（`8.15` 的单机前置） |
 
-等它的看板项：**`8.15`**（真实两机 collective 对拍）、**`8.16`**（`torchrun --nnodes=2` 跑通 transformers
+等它的项：**`8.15`**（真实两机 collective 对拍）、**`8.16`**（`torchrun --nnodes=2` 跑通 transformers
 训练、两机 loss 轨迹一致）、**`8.17`**（跨机带宽微基准、掉线在超时内退出）、**`8.18`**（2 机保存、
 4 机加载的续训）、**`10.22`**（两节点 smoke 进 nightly）。
 
@@ -193,7 +216,7 @@ launcher ABI 断言全过，反向对照见下）、以及不变量式静态合�
 
 全树共 **60 个后端梯度实现**（C++ `::grad()` 28 个，Python `jt.Function.grad` 32 个），清单在
 `tests/structure/test_backend_grad_contract.py` 的 `BACKEND_GRAD_COVERAGE`，与源码树逐条相等，
-新增或删除任何一条都会报红。其中 **24 条在本机能真跑**（CUDA 22 条 + oneDNN 1 条 + …），
+新增或删除任何一条都会报红。其中 **24 条在 CPU+CUDA 主机上能真跑**（CUDA 22 条 + oneDNN 1 条 + …），
 **36 条要等硬件**。清单里的 `kind` 字段就是下面这张表：
 
 | kind | 含义 | 硬件到手那天跑什么 | 通过判据 |
@@ -210,7 +233,7 @@ launcher ABI 断言全过，反向对照见下）、以及不变量式静态合�
 
 | 符号 | 源码 | 现状 |
 | --- | --- | --- |
-| `HcclAllGatherOp` | `python/jittor/extern/acl/hccl/ops/hccl_all_gather_op.cc` | `grad()` 直接 `LOGf << "not implemented"`；要在 Ascend 910B3 多卡上补实现与 CPU 对照 |
+| `HcclAllGatherOp` | `backends/comm/hccl/ops/hccl_all_gather_op.cc` | `grad()` 直接 `LOGf << "not implemented"`；要在 Ascend 910B3 多卡上补实现与 CPU 对照 |
 | `RocprimCumsumOp` | `backends/rocm/libraries/rocprim/rocprim_cumsum_op.cc` | 全树**没有任何用例**碰过它，前向反向都没有；`tests/backends/rocm/test_rocm.py` 里要补一条照 `TestBMM` 形状的 CPU 对拍 |
 | `FloorIntACL` | `backends/acl/kernels/ops/floor_op.py` | 只有 `test_aclop.py::TestACL::test_floor_int` 前向 |
 | `IndexACL` | `backends/acl/kernels/ops/index_op.py` | 只有 `test_aclop.py::TestACL::test_index` 前向 |
@@ -231,7 +254,10 @@ launcher ABI 断言全过，反向对照见下）、以及不变量式静态合�
 
 ## 这一页怎么保持不过期
 
-`tests/structure/test_deferred_hardware_manifest.py` 钉住三件事：看板上归入硬件验收桶的每条任务都
-在本页出现；本页提到的每个测试路径都真实存在；本页声称有 nox session 的每种硬件，`noxfile.py` 里
-确实有那个 session（而声称「尚无 session」的，确实没有——这一条是为了让上面那三件事被补上之后，
-本页必须跟着改，而不是留着一句过期的「尚无」）。
+`tests/structure/test_deferred_hardware_manifest.py` 钉住三件事：开头那张表与正文一致（表里每个编号
+都在某一节被引用，正文引用的每个编号都在表里，编号不重复）；本页提到的每个测试路径都真实存在；
+本页声称有 nox session 的每种硬件，`noxfile.py` 里确实有那个 session（而声称「尚无 session」的，
+确实没有——这一条是为了让上面那三件事被补上之后，本页必须跟着改，而不是留着一句过期的「尚无」）。
+
+一项真机验收通过后，在对应 PR 描述里给出命令、设备型号、软件版本与结论，再把它从表和正文里删掉；
+验收中暴露的缺陷记进[已知问题总账](known-issues.md)。

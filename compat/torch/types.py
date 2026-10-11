@@ -171,6 +171,12 @@ def _make_dtypes(ns):
     return objs
 
 
+#: What torch reads a Python scalar type as where it takes a dtype
+#: (``torch.zeros(3, dtype=int)``, ``x.to(float)``): the 64-bit types, not
+#: jittor's default ``int``/``float``, which are 32-bit.
+_PYTHON_SCALAR_DTYPES = {bool: "bool", int: "int64", float: "float64"}
+
+
 def _dtype_to_str(d, *, require_compute=True):
     """The dtype's canonical Jittor name.
 
@@ -191,6 +197,8 @@ def _dtype_to_str(d, *, require_compute=True):
         if registered is None:
             return name
         return registered._jittor_compute_name if require_compute else registered.name
+    if type(d) is type and d in _PYTHON_SCALAR_DTYPES:
+        return _PYTHON_SCALAR_DTYPES[d]
     if callable(d) and hasattr(d, "__name__"):
         return d.__name__
     return str(d)

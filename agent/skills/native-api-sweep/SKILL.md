@@ -26,7 +26,7 @@ export JITTOR_TORCH_SHIM=0                 # 原生语义
 export JITTOR_HOME=$JITTOR_LAB_ROOT/_state/<topic>/<run>/jittor-home
 python drive_public_surface.py   --device cpu  --out cpu.json
 python precision_vs_numpy.py     --device cuda --out prec_cuda.json
-CUDA_VISIBLE_DEVICES=7 python memory_categories.py --smi-index 7 --out mem.json
+CUDA_VISIBLE_DEVICES=<gpu> python memory_categories.py --smi-index <gpu> --out mem.json
 ```
 
 `--smi-index` 是给 `nvidia-smi` 的**物理**卡号；进程自己跑在
@@ -56,6 +56,6 @@ sweep 报出来的多数不是缺陷，先证再改：
   逐位相等就说明运算本身没问题。
 - **形状对不上**：先查签名默认值。`jt.norm` 默认 `dim=-1`（按行），NumPy 默认整体
   Frobenius；这是 API 约定差异，不是缺陷。
-- **bitwise 系列吃到浮点**：会漏出原始 C++ 编译错误。属报错质量问题（2.19），
+- **bitwise 系列吃到浮点**：会漏出原始 C++ 编译错误。属报错质量问题，
   不是静默错误。
 - **logical 归约吃到浮点是合法的**（非零即真），公开的 `jt.all`/`jt.any` 正确。

@@ -10,15 +10,20 @@
 一致且没有一份完整——`tests/integration/test_notebooks.py` 现在会检查权威路径列全了
 所有教程，一篇存在却没被编排的教程会让门禁变红。
 
-## 两条入门线
+## 从哪里开始
 
-* **零基础**：从「60 分钟入门」四篇开始，安装到 MNIST。
-* **有其它框架经验**：走主线，它只讲 Jittor 与它们的差异——先读
-  [算子与 Var](https://github.com/Jittor/jittor/blob/master/examples/notebooks/basics.md)，
-  再读
-  [设备与驻留](https://github.com/Jittor/jittor/blob/master/examples/notebooks/device_placement.md)，
-  然后是
+**唯一的入口**是
+[从零开始：装好、跑通、训练第一个模型](https://github.com/Jittor/jittor/blob/master/examples/notebooks/getting_started.md)，
+它从安装讲到训练，全程 CPU 可跑完。之后按背景选一条主线：
+
+* **原生 Jittor**：接着读
+  [算子与 Var](https://github.com/Jittor/jittor/blob/master/examples/notebooks/basics.md)、
+  [设备与驻留](https://github.com/Jittor/jittor/blob/master/examples/notebooks/device_placement.md)、
   [模型定义与训练](https://github.com/Jittor/jittor/blob/master/examples/notebooks/example.md)。
+* **PyTorch 兼容**：手上已有 `torch` 代码时，从
+  [用 PyTorch API 写 Jittor](https://github.com/Jittor/jittor/blob/master/examples/notebooks/torch_compat.md)
+  开始，再读
+  [把已有 PyTorch 脚本迁到 Jittor](https://github.com/Jittor/jittor/blob/master/examples/notebooks/torch_compat_migration.md)。
 
 「设备与驻留」排在训练之前是有意的：Jittor 用一个全局标志移动整张计算图，而不是
 每个张量自带设备；不先弄清这个差异，后面的性能问题会被归因到错误的地方。

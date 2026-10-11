@@ -57,6 +57,7 @@ from .api import (
     _api_cuda_set_rng_state,
     _api_cuda_set_rng_state_all,
     _api_cuda_synchronize,
+    _api_cudnn_flags,
     _api_cudnn_version,
     _api_functorch_c__add_batch_dim,
     _api_functorch_c__remove_batch_dim,
@@ -93,7 +94,9 @@ from .api import (
     _has_torch_function,
     _mem_get_info,
     _mem_max,
+    _mem_max_reserved,
     _mem_reserved,
+    _mem_summary,
     _mem_used,
     _nvtx_mark,
     _nvtx_range,
@@ -216,9 +219,10 @@ def _install_cuda(g, registry=None):
     cuda.memory_allocated = _mem_used
     cuda.max_memory_allocated = _mem_max
     cuda.memory_reserved = _mem_reserved
-    cuda.max_memory_reserved = _mem_max
+    cuda.max_memory_reserved = _mem_max_reserved
     cuda.memory_cached = _mem_reserved
-    cuda.max_memory_cached = _mem_max
+    cuda.max_memory_cached = _mem_max_reserved
+    cuda.memory_summary = _mem_summary
     cuda.reset_peak_memory_stats = _reset_peak
     cuda.reset_max_memory_allocated = _reset_peak
     cuda.memory_stats = _api_cuda_memory_stats
@@ -238,6 +242,8 @@ def _install_cuda(g, registry=None):
     cuda.memory.max_memory_allocated = cuda.max_memory_allocated
     cuda.memory.memory_reserved = cuda.memory_reserved
     cuda.memory.max_memory_reserved = cuda.max_memory_reserved
+    cuda.memory.memory_stats = cuda.memory_stats
+    cuda.memory.memory_summary = cuda.memory_summary
     cuda.memory.CUDAPluggableAllocator = CUDAPluggableAllocator
     cuda.CUDAPluggableAllocator = CUDAPluggableAllocator
     # rng state (trainer checkpoints save/restore it). jittor has no portable
@@ -362,6 +368,11 @@ def _install_cuda(g, registry=None):
     cudnn.benchmark = getattr(cudnn, "benchmark", False)
     cudnn.deterministic = getattr(cudnn, "deterministic", False)
     cudnn.version = getattr(cudnn, "version", _api_cudnn_version)
+    if not hasattr(cudnn, "flags"):
+        # Bound to this module, so the implementation never has to look
+        # itself up in the interpreter's module registry.
+        from functools import partial as _partial
+        cudnn.flags = _partial(_api_cudnn_flags, cudnn)
     if not isinstance(getattr(cudnn, "conv", None), _PrecisionBackend):
         cudnn.conv = _PrecisionBackend("cudnn", "torch.backends.cudnn.conv")
     if not isinstance(getattr(cudnn, "rnn", None), _PrecisionBackend):

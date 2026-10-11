@@ -7,9 +7,12 @@
 #include <cmath>
 #include "core/var.h"
 #include "ops/composite/code_op.h"
+#include "ops/composite/code_source.h"
 #include "ops/op_register.h"
 #include "runtime/device.h"
 #include <mutex>
+#include <sstream>
+#include <cstring>
 #include <unordered_map>
 
 #define __inline_static__ inline static
@@ -214,18 +217,7 @@ void CodeOp::grads(Var** douts, VarPtr* dins) {
 // microsecond. The distinct sources are few (one per specialised kernel), so
 // remember the result. References into an unordered_map stay valid across
 // rehashes, and the lock only guards the map, not the walk's cost.
-static const string& code_op_key_tail(const string& header, const string& src) {
-    static std::mutex tail_lock;
-    static unordered_map<string, string> tails;
-    string key;
-    key.reserve(header.size() + src.size() + 1);
-    key += header;
-    key += '\1';
-    key += src;
-    std::lock_guard<std::mutex> guard(tail_lock);
-    auto found = tails.find(key);
-    if (found != tails.end())
-        return found->second;
+static string code_op_build_tail(const string& header, const string& src) {
     string tail;
     tail.reserve(header.size() + src.size() + 32);
     tail += header;
@@ -252,7 +244,99 @@ static const string& code_op_key_tail(const string& header, const string& src) {
     }
     tail += "}«CODE:";
     for (; i<src.size(); i++) tail += src[i];
-    return tails.emplace(std::move(key), std::move(tail)).first->second;
+    return tail;
+}
+
+namespace {
+// The full digest names a source; it is computed once, the first time the
+// source is seen. Every launch after that finds its entry by a sampled key --
+// the two sizes and a few words spread over the text -- and confirms it with a
+// full comparison, which costs a fraction of digesting the text again: a 7.5 KB
+// cuBLASLt Linear source took ~1.3 us to digest on every launch, as much as the
+// rest of the launch. Sources that differ only between the samples share a key
+// and are told apart by the comparison, never mistaken for each other.
+inline void source_digest(const string& text, uint64& a, uint64& b) {
+    const unsigned char* p = (const unsigned char*)text.data();
+    size_t n = text.size(), i = 0;
+    uint64 l0 = a, l1 = b, l2 = a ^ 0x452821E638D01377ull, l3 = b ^ 0xBE5466CF34E90C6Cull;
+    for (; i + 32 <= n; i += 32) {
+        uint64 w0, w1, w2, w3;
+        memcpy(&w0, p + i, 8);
+        memcpy(&w1, p + i + 8, 8);
+        memcpy(&w2, p + i + 16, 8);
+        memcpy(&w3, p + i + 24, 8);
+        l0 = (l0 ^ w0) * 0x9E3779B97F4A7C15ull; l0 ^= l0 >> 29;
+        l1 = (l1 ^ w1) * 0xC2B2AE3D27D4EB4Full; l1 ^= l1 >> 31;
+        l2 = (l2 ^ w2) * 0x165667B19E3779F9ull; l2 ^= l2 >> 27;
+        l3 = (l3 ^ w3) * 0xD6E8FEB86659FD93ull; l3 ^= l3 >> 33;
+    }
+    for (; i + 8 <= n; i += 8) {
+        uint64 w;
+        memcpy(&w, p + i, 8);
+        l0 = (l0 ^ w) * 0x9E3779B97F4A7C15ull; l0 ^= l0 >> 29;
+    }
+    for (; i < n; i++)
+        l1 = (l1 ^ p[i]) * 0x100000001B3ull;
+    a = (l0 ^ (l2 >> 7) ^ (l3 << 11)) * 0x9E3779B97F4A7C15ull;
+    b = (l1 ^ (l3 >> 13) ^ (l2 << 5)) * 0xC2B2AE3D27D4EB4Full;
+    a ^= a >> 32; b ^= b >> 29;
+}
+
+inline uint64 sampled_key(const string& header, const string& src) {
+    uint64 key = header.size() * 0x9E3779B97F4A7C15ull ^ src.size();
+    for (const string* text : {&header, &src}) {
+        size_t n = text->size();
+        if (n < 8) {
+            for (unsigned char c : *text) key = (key ^ c) * 0x100000001B3ull;
+            continue;
+        }
+        const char* p = text->data();
+        for (int k = 0; k < 16; k++) {
+            uint64 w;
+            memcpy(&w, p + (n - 8) * k / 15, 8);
+            key = (key ^ w) * 0xC2B2AE3D27D4EB4Full;
+            key ^= key >> 31;
+        }
+    }
+    return key;
+}
+
+struct InternedSource {
+    string header, src, token, tail;
+};
+
+std::mutex interned_lock;
+std::unordered_multimap<uint64, InternedSource*> by_sample;
+unordered_map<string, InternedSource*> by_token;
+} // namespace
+
+const string& code_source_token(const string& header, const string& src) {
+    uint64 sample = sampled_key(header, src);
+    std::lock_guard<std::mutex> guard(interned_lock);
+    auto range = by_sample.equal_range(sample);
+    for (auto it = range.first; it != range.second; ++it)
+        if (it->second->src == src && it->second->header == header)
+            return it->second->token;
+    // First sight of this text: name it by its full digest and build its tail.
+    uint64 a = 0x243F6A8885A308D3ull ^ header.size(), b = 0x13198A2E03707344ull ^ src.size();
+    source_digest(header, a, b);
+    a ^= 0x1; b += 0x1;
+    source_digest(src, a, b);
+    auto* entry = new InternedSource{header, src, "", code_op_build_tail(header, src)};
+    std::stringstream token;
+    token << code_source_prefix << std::hex << a << '_' << b << '_' << std::dec << entry->tail.size();
+    entry->token = token.str();
+    int dup = 0;
+    while (by_token.count(entry->token)) entry->token = token.str() + "_" + std::to_string(++dup);
+    by_sample.emplace(sample, entry);
+    by_token.emplace(entry->token, entry);
+    return entry->token;
+}
+
+const string* code_source_tail(const string& token) {
+    std::lock_guard<std::mutex> guard(interned_lock);
+    auto found = by_token.find(token);
+    return found == by_token.end() ? nullptr : &found->second->tail;
 }
 
 void CodeOp::jit_prepare(JK& jk) {
@@ -294,7 +378,7 @@ void CodeOp::jit_prepare(JK& jk) {
         cuda_src : cpu_src;
 
     USER_CHECK(src.size()) << "code requires source for the selected backend";
-    jk << "«HEADER:" << code_op_key_tail(header, src);
+    jk << "«HEADER:" << code_source_token(header, src);
 }
 
 } // jittor

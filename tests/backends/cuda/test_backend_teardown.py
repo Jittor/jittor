@@ -19,12 +19,13 @@ standing in for the message about the fault.  The test below reproduces that
 sequence and asserts the real error is the one that survives.
 
 Note when re-checking this against the old code: the child's SIGABRT used to
-take the *runner* with it.  jittor installs a SIGCHLD handler that
-quick_exit(1)s the parent whenever a direct child dies other than by a clean
-exit or SIGTERM (``utils/log.cc``), so a pre-fix run of this file ended as
-``pytest`` exiting 1 after one dot, not as a reported failure (6.C31).
-``crash_isolated=True`` below puts a shell in between, so the abort is now
-reported as this test failing.
+take the *runner* with it.  jittor's SIGCHLD handler quick_exit(1)ed the parent
+whenever a direct child died other than by a clean exit or SIGTERM
+(``utils/log.cc``), so a pre-fix run of this file ended as ``pytest`` exiting 1
+after one dot, not as a reported failure (6.C31).  That branch reports and
+returns since ``64350894`` (2026-09-03), but ``crash_isolated=True`` below is
+what leaves the abort assertable as ``returncode == 134`` instead of a negative
+status, which is the shape this file checks.
 """
 
 from _helpers import capability as _test_capability
@@ -39,9 +40,10 @@ from _helpers.child_process import run_python_child
 def _run_child(body):
     """Run ``body`` in a fresh interpreter against *this* jittor tree.
 
-    ``crash_isolated``: the whole point of this file is a child that aborts,
-    and without the shell in between jittor's SIGCHLD handler deletes pytest
-    instead of letting the abort be asserted.
+    ``crash_isolated``: the whole point of this file is a child that aborts, and
+    the shell turns that into the ``128 + signo`` status the assertions below
+    expect.  It is not what keeps pytest alive any more -- ``64350894`` fixed
+    the handler that used to delete it.
     """
     return run_python_child(
         ["-c", textwrap.dedent(body)], timeout=1800, crash_isolated=True)

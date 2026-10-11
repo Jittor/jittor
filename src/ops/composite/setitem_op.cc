@@ -37,6 +37,67 @@ static VarPtr sum_setitem_value_gradient(Var* gradient, Var* value) {
     return make_reshape(result, value->shape);
 }
 
+// Per dimension of `shape`, the [begin, end) a slice list of ints and
+// unit-step slices selects; false for anything else (a var, an ellipsis, a
+// new axis, a stride).
+static bool basic_ranges(const VarSlices& vs, const NanoVector& shape,
+                         vector<int64>& begin, vector<int64>& end) {
+    int n = shape.size();
+    if (vs.n > n) return false;
+    begin.assign(n, 0);
+    end.resize(n);
+    for (int i=0; i<n; i++) end[i] = shape[i];
+    for (int i=0; i<vs.n; i++) {
+        const auto& s = vs.slices[i];
+        int64 size = shape[i];
+        if (s.is_int()) {
+            int64 v = s.i < 0 ? s.i + size : s.i;
+            if (v < 0 || v >= size) return false;
+            begin[i] = v;
+            end[i] = v + 1;
+        } else if (s.is_slice()) {
+            const auto& sl = s.slice;
+            if (!(sl.mask & 4) && sl.step != 1) return false;
+            int64 b = (sl.mask & 1) ? 0 : sl.start, e = (sl.mask & 2) ? size : sl.stop;
+            if (b < 0) b += size;
+            if (e < 0) e += size;
+            b = std::max<int64>(0, std::min(b, size));
+            e = std::max<int64>(0, std::min(e, size));
+            begin[i] = b;
+            end[i] = std::max(b, e);
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
+// What `x` read through `vs` reads, followed back through the pending
+// setitems that write a region `vs` does not touch: those leave the read
+// region as their source had it. A concatenation is a chain of setitems, so
+// the gradient of each piece but the last was read through the zero-filled
+// copies the later pieces' backwards make (`grad` below, v_index 0) -- a
+// full copy of the concatenation's gradient each, 0.9 ms of a DDPM UNet
+// step. Read from the gradient itself, the slice is a view and the copies
+// are never run. Only pending ones: a setitem already run may have let its
+// source go.
+static Var* skip_disjoint_setitems(Var* x, const VarSlices& vs) {
+    vector<int64> b1, e1, b2, e2;
+    while (true) {
+        Op* op = x->input();
+        if (!op || x->is_finished() || !op->is_op(op_ids::setitem())) break;
+        auto* s = static_cast<SetitemOp*>(op);
+        if (s->op != ns_void) break;
+        if (!basic_ranges(vs, x->shape, b1, e1) || !basic_ranges(s->vs, x->shape, b2, e2)) break;
+        bool disjoint = false;
+        for (uint d=0; d<b1.size(); d++)
+            if (e1[d] <= b2[d] || e2[d] <= b1[d]) { disjoint = true; break; }
+        if (!disjoint) break;
+        x = s->inputs().front();
+    }
+    return x;
+}
+
 SetitemOp::SetitemOp(Var* x, VarSlices&& slices, Var* y, NanoString op)
     : vs(move(slices)), op(op) {
     set_flag(OpFlags::_cpu);
@@ -153,7 +214,8 @@ VarPtr SetitemOp::grad(Var* out, Var* dout, Var* v, int v_index) {
             if (zero->dtype() != dout->dtype()) zero = make_unary(zero, dout->dtype());
             return make_setitem(dout, VarSlices(vs, true), zero, ns_void);
         } else {
-            return sum_setitem_value_gradient(make_getitem(dout, VarSlices(vs, true)), v);
+            return sum_setitem_value_gradient(
+                make_getitem(skip_disjoint_setitems(dout, vs), VarSlices(vs, true)), v);
         }
     }
     if (op == ns_add) {

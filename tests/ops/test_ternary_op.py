@@ -53,6 +53,25 @@ class TestTernaryOp(unittest.TestCase):
         assert (jda.data==(a<b)*1).all()
         assert (jdb.data==1-(a<b)).all()
 
+    def test_selects_a_value_the_same_kernel_stores(self):
+        # A pending view keeps `y` an output of the fused kernel that also
+        # reads it back through the select; the read must see the store, not
+        # what `y`'s memory held before (here, the freed float32 source).
+        a = np.random.RandomState(0).randn(2, 5, 6, 8).astype("float32")
+        for dtype in ("float16", "float32"):
+            with self.subTest(dtype=dtype):
+                x = jt.array(a).cast(dtype)
+                x.sync()
+                s = a.astype(dtype).astype("float32")
+                with jt.no_grad():
+                    y = x + 1.0
+                    z = jt.ternary(y > 0.5, y, x)
+                    y_view = y.reshape(-1)
+                    z.reshape(-1).sync()
+                np.testing.assert_allclose(
+                    z.numpy().astype("float32"),
+                    np.where(s + 1 > 0.5, s + 1, s), atol=1e-2)
+
 class TestTernaryOpCuda(TestTernaryOp, cuda_test_case(2)):
     pass
 

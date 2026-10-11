@@ -9,8 +9,7 @@ The CUDA expression table spelled every unary maths function with its
 **float-only** C variant -- `::logf`, `::expf`, `::sinf` and sixteen more --
 whatever the operand's dtype. A float64 input was therefore narrowed to
 float32, the function evaluated at single precision, and the result widened
-back. `round` had been given a dtype dispatch at some point; the rest had not
-(KI-OPS-007).
+back. `round` had been given a dtype dispatch at some point; the rest had not.
 
 What made it hard to see is that most inputs hide it: `exp(1e-300)` is `1.0` in
 both precisions. It shows where the answer lives below float32's resolution:

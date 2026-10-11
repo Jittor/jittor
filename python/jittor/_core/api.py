@@ -1,13 +1,9 @@
 """Explicit composition of the native Python API after core bootstrap."""
 
 import atexit
-import os
 
 from jittor._runtime.state import RuntimeContext, RuntimeState
 from . import diagnostics as _diagnostics
-
-if "SKEY" in os.environ:
-    import jittor_utils.student_queue
 
 from .flags import (
     enable_grad,

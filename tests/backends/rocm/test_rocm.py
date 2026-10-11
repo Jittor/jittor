@@ -376,7 +376,7 @@ class MnistNet(Module):
         x = self.layer(x)
         return x
 
-@unittest.skipIf(not _test_capability.check_accelerator('rocm', backend=jt).enabled, "skip_this_test")
+@unittest.skipIf(not _test_capability.check_accelerator('rocm', backend=jt).enabled, "No ROCm found")
 class TestResnetFp32(unittest.TestCase):
     # setup random seed
     def setup_seed(self, seed):

@@ -11,8 +11,9 @@ What it does and does not prove
 It runs ``g++ -fsyntax-only`` over the real translation unit, with the real
 Jittor core headers and a generated stub CANN tree (``make_cann_stub.py``). So
 it does catch: parse errors, unknown identifiers, wrong argument counts to
-Jittor-side helpers, and -- the reason this exists for 8.06 -- a launcher that
-does not convert to ``BaseOpRunner::launch``'s ``AclExecuteLauncher``, because
+Jittor-side helpers, and -- the reason this exists for the executeOp launcher
+migration -- a launcher that does not convert to ``BaseOpRunner::launch``'s
+``AclExecuteLauncher``, because
 the stub declares every ``aclnn`` execute entry point with its real
 ``(void*, uint64_t, aclOpExecutor*, aclrtStream)`` ABI.
 

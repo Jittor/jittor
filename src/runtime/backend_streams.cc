@@ -1,3 +1,4 @@
+#include <thread>
 #include "runtime/backend_streams.h"
 #include "runtime/cuda_streams.h"
 #include "runtime/device.h"
@@ -65,6 +66,41 @@ SideStreams& get_resources(int device) {
     return *resources[device];
 }
 
+// The relay that orders one thread's compute work against the next thread's.
+// Only ever touched from inside the executor, which the entry lock keeps to
+// one thread at a time, so it needs no lock of its own.
+struct ComputeHandoff {
+    BackendEvent event{};
+    bool created = false;
+    bool recorded = false;
+};
+vector<ComputeHandoff> handoffs;
+std::thread::id handoff_owner;
+bool handoff_owner_known = false;
+bool handoff_cleanup_registered = false;
+// Every device any batch has run on, and whether a second thread has ever
+// reached the executor. Until one has, there is nobody to hand off to and the
+// recording side is skipped entirely -- a single-threaded process pays nothing
+// at all for this, not even an event record per batch.
+uint64 handoff_devices = 0;
+bool handoff_multi_thread = false;
+
+void cleanup_handoffs() {
+    const auto& ops = backend_ops(accelerator_backend_id());
+    for (auto& item : handoffs) {
+        if (!item.created) continue;
+        try {
+            ops.event_destroy(item.event);
+        } catch (const std::exception& error) {
+            LOGe << "Compute handoff cleanup failed:" << error.what();
+        }
+    }
+    handoffs.clear();
+    handoff_owner_known = false;
+    handoff_devices = 0;
+    handoff_multi_thread = false;
+}
+
 BackendStreamKind legacy_kind(int kind) {
     CHECK(kind == 0 || kind == 1) << "Invalid side-stream kind" << kind;
     return kind == 0 ? BackendStreamKind::Copy : BackendStreamKind::Communication;
@@ -103,6 +139,81 @@ void backend_default_stream_wait_side(BackendStreamKind kind, int stream_device,
     ops.event_record(item.done[side], item.streams[side]);
     ops.stream_wait_event(backend_stream({ops.id, default_device}, BackendStreamKind::Compute), item.done[side]);
     item.dependencies[side]++;
+}
+
+// -- cross-thread compute handoff -----------------------------------------
+//
+// The compute stream is the backend's *per-thread* default stream
+// (`cudaStreamPerThread`; see `compute_stream` in the CUDA driver), so every
+// thread that issues work gets a different one -- while the graph, the Vars
+// and their buffers are process-global and carry no stream affinity at all.
+// Two threads taking turns in the executor therefore leave their kernels
+// unordered against each other, and the second thread's operators can read a
+// buffer the first thread's are still writing. That raises no error and logs
+// nothing; it only comes out as wrong numbers. `compute_stream`'s own comment
+// makes this argument for the legacy stream against the per-thread one, and
+// it holds just as well for two threads' per-thread streams.
+//
+// Measured on the H3 video VAE: a graph built on one Python thread and
+// executed on another decoded to values around 4e7 where the answer ranges
+// over +-6, every frame of every run, and `CUDA_LAUNCH_BLOCKING=1` alone
+// restored it. A graph short enough never to cross `auto_flush_ops` is clean,
+// because then the building thread issues nothing and the executing thread's
+// stream holds the whole graph -- which is why this hid behind "big model
+// only" for so long.
+//
+// The entry lock already serialises the executor, so ordering the handoff is
+// a single global relay: whoever issued last records an event on its own
+// compute stream, and the next thread in makes its stream wait for that event
+// before it issues anything. That is the exact dependency rather than a
+// device-wide wait, and while one thread does all the work -- the normal case
+// -- the waiting side is skipped after one thread-id comparison.
+void backend_compute_stream_acquire() {
+    if (!handoff_owner_known) return;
+    if (handoff_owner == std::this_thread::get_id()) return;
+    const auto& ops = backend_ops(accelerator_backend_id());
+    if (!handoff_multi_thread) {
+        // The first time a second thread reaches the executor. Nothing was
+        // recorded for it to wait on, because until this moment there was
+        // nobody to record for, so this one handoff is paid with a device
+        // wait -- once per process, and never again.
+        handoff_multi_thread = true;
+        ops.synchronize(handoff_devices);
+        return;
+    }
+    for (int device = 0; device < (int)handoffs.size(); ++device) {
+        auto& item = handoffs[device];
+        if (!item.recorded) continue;
+        ops.stream_wait_event(backend_stream({ops.id, device}, BackendStreamKind::Compute),
+                              item.event);
+    }
+}
+
+// `devices` is the batch's touched-device set, so a batch that ran entirely on
+// the host records nothing and leaves the previous owner in place.
+void backend_compute_stream_release(uint64 devices) {
+    if (!devices) return;
+    handoff_devices |= devices;
+    handoff_owner = std::this_thread::get_id();
+    handoff_owner_known = true;
+    if (!handoff_multi_thread) return;
+    const auto& ops = backend_ops(accelerator_backend_id());
+    for (int device = 0; device < 64; ++device) {
+        if (!(devices & (1ull << device))) continue;
+        if ((int)handoffs.size() <= device) handoffs.resize(device + 1);
+        auto& item = handoffs[device];
+        if (!item.created) {
+            item.event = backend_event({ops.id, device});
+            item.created = true;
+            if (!handoff_cleanup_registered) {
+                register_cleanup_callback(&cleanup_handoffs);
+                handoff_cleanup_registered = true;
+            }
+        }
+        ops.event_record(item.event,
+                         backend_stream({ops.id, device}, BackendStreamKind::Compute));
+        item.recorded = true;
+    }
 }
 
 void backend_side_stream_defer_join(BackendStreamKind kind, int device) {

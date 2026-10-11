@@ -1,36 +1,46 @@
 # Jittor Agent 协作手册
 
-本手册说明 AI agent 在 Jittor 仓库内的协作、验证和文档规则。
+本手册说明 AI agent 与维护者在 Jittor 仓库内的协作、验证和文档规则。入口索引见
+[agent-index.md](agent-index.md)。
 
 ## 开工流程
 
-1. **先读上下文**：阅读 [`agent/skills/jittor-dev-context/SKILL.md`](../skills/jittor-dev-context/SKILL.md)，
-   再通过 [`project-context.md`](project-context.md) 定位相关架构契约。
-2. **确认环境与问题**：按需阅读 [`environment.md`](environment.md) 和
+1. **先同步**：按 [`AGENTS.md`](../../AGENTS.md) 获取并整合目标远端分支，记录同步后的提交 SHA；
+   保留本地工作，不用 stash 或丢弃改动来清场。
+2. **再读上下文**：阅读 [`jittor-dev-context`](../skills/jittor-dev-context/SKILL.md)，
+   再通过 [`project-context.md`](project-context.md) 定位相关文档。
+3. **确认环境与问题**：按需阅读 [`environment.md`](environment.md) 和
    [`known-issues.md`](known-issues.md)，不要依赖个人机器路径或过期会话记录。
-3. **确认结果文档**：已有主题继续更新 `docs/results/` 中的报告；新主题使用
-   `YYYY-MM-DD-topic.md`。
-4. **开始工作**，遵循下面的协作规范。
+4. **确认既有证据**：在 [`docs/results/`](../../docs/results/index.md) 查找已有结论；新主题的
+   报告使用 `YYYY-MM-DD-topic.md`。
+5. **开始工作**，遵循下面的协作规范。
 
 ## 协作规范
 
 ### 文档更新（核心纪律）
 
 - **`project-context.md`** 是当前状态索引，只在目标、状态或文档入口变化时更新。
-- **`known-issues.md`** 是活跃问题总账。新增问题要有 owner、可执行证据、workaround
-  和退出条件；问题修复后删除条目，历史由 Git 和结果报告保留。
+- **`known-issues.md`** 是未关闭缺陷与已知限制的总账。新增条目按其头部的格式写清
+  severity、owner、可执行证据、workaround 和退出条件；修复后删除条目，修复提交在提交信息或
+  PR 中注明条目编号。
+- **`deferred-hardware.md`** 只记等硬件验收的事项与上机命令，不记进度。
 - **`docs/`** 保存长期架构决策、测试契约、开发指南和研究提案。
 - **结果报告**记录验证口径、命令、结果、结论和已知边界。原始日志、缓存、
   二进制和大体积结果放在 `$JITTOR_LAB_ROOT`，
   报告中标明“未版本化”，不要放进 Jittor 主仓库。
 - 稳定文档注明状态、复查日期、对应基线、owner 和复查触发条件。
+- 任务领取、状态、交接与验收证据记在 GitHub issue 与 PR 中，仓库不保留看板或交接文档。
 
 ### Skill 沉淀
 
 工作过程中写出的**可复用工具**（对拍脚本、验证 harness、调试探针等），沉淀为 skill：
 
-- 在 `../skills/` 下创建新目录，包含 `SKILL.md`（说明用途和用法）与工具文件。
-- 已有 skill 直接复用，别重新造轮子。
+- 在 `../skills/` 下创建新目录，包含 `SKILL.md`（说明用途和用法）与工具文件，并在
+  [agent-index.md](agent-index.md) 加一行。
+- skill 里的命令要能在当前树上运行：路径用 `git ls-files` 核对，机器相关的位置写成
+  `$JITTOR_LAB_ROOT/...`、`<jittor-python>`、`CUDA_VISIBLE_DEVICES=<gpu>` 这类占位，
+  脚本不带个人默认路径（未设置时报错退出）。
+- 已有 skill 直接复用，别重新造轮子；方法不再适用于当前树的 skill 应删除或并入相关 skill。
 
 ### 效率原则
 
@@ -57,18 +67,8 @@ Jittor 使用文件锁串行化 JIT 编译。多个进程共享缓存并首次�
   wheel/模型/编译缓存与原始日志。
 - `$JITTOR_LAB_ROOT/worktrees/`：并行 agent 的 Git worktree。
 - 不在主仓库顶层新建 `jittor_fsdp2`、`*_work`、`*_probe` 等实验目录。
-- 提交前运行 `tools/check_repo_layout.sh`，直接检查工作区顶层是否越界。
+- 提交前运行 `bash tools/check_repo_layout.sh`，直接检查工作区顶层是否越界；
+  `tests/structure/test_no_private_paths.py` 拒绝个人目录、主机地址和按主机名分支的代码。
 
-## 目录结构
-
-```
-agent/
-├── manuals/                  # 协作、环境、问题总账和上下文索引
-└── skills/                   # SKILL.md 与可复用工具
-```
-
-长期设计资料不放在 `agent/manuals/` 的主题子目录，按语义写入根目录 `docs/`。
-仓库维护检查统一放在 `tools/`，不在 `agent/` 保留第二份脚本。
-设计与唯一看板位于 `docs/architecture/`，验证报告和历史基线位于 `docs/results/`。
-任务领取、状态和验收证据只更新 `docs/architecture/refactor-board.md`；
-接手步骤与分工分别维护于同目录的 `refactor-handoff.md` 和 `refactor-dispatch.md`。
+`agent/` 只有 `manuals/` 与 `skills/` 两个目录；长期设计资料按语义写入根目录 `docs/`，
+仓库维护命令统一放在 `tools/`，wheel 内容基线位于 `tools/release/baselines/`。

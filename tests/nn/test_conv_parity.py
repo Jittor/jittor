@@ -34,6 +34,35 @@ import numpy as np
 import jittor as jt
 
 
+_NUMPY_PAD_MODES = {"zeros": "constant", "reflect": "reflect",
+                    "replicate": "edge", "circular": "wrap"}
+
+
+def _numpy_conv(x, weight, bias, pads, mode, dilation, groups):
+    """Stride-1 N-D convolution of ``x`` padded by ``pads`` [(before, after)]."""
+    x = np.pad(x.astype(np.float64), [(0, 0), (0, 0)] + list(pads),
+               mode=_NUMPY_PAD_MODES[mode])
+    rank = x.ndim - 2
+    kernel = weight.shape[2:]
+    out_shape = [x.shape[2 + i] - dilation[i] * (kernel[i] - 1) for i in range(rank)]
+    out = np.zeros((x.shape[0], weight.shape[0], *out_shape))
+    in_group, out_group = x.shape[1] // groups, weight.shape[0] // groups
+    for g in range(groups):
+        for offset in np.ndindex(*kernel):
+            window = tuple(slice(offset[i] * dilation[i], offset[i] * dilation[i] + out_shape[i])
+                           for i in range(rank))
+            patch = x[(slice(None), slice(g * in_group, (g + 1) * in_group)) + window]
+            taps = weight[(slice(g * out_group, (g + 1) * out_group), slice(None)) + offset]
+            out[:, g * out_group:(g + 1) * out_group] += np.einsum("nc...,oc->no...", patch, taps)
+    return out + bias.reshape((1, -1) + (1,) * rank)
+
+
+def _same_pads(kernel, dilation):
+    """torch's split: total d*(k-1), the odd element after."""
+    return [(d * (k - 1) // 2, d * (k - 1) - d * (k - 1) // 2)
+            for k, d in zip(kernel, dilation)]
+
+
 class _ConvParity:
     """Plain mixin; the CPU and CUDA classes below pick ``use_cuda``."""
 
@@ -137,6 +166,83 @@ class _ConvParity:
                         layer(jt.array(
                             self.rng.standard_normal(bad).astype("float32")))
                     self.assertIn(needle, str(ctx.exception))
+
+
+    def test_padding_modes_and_same_padding_match_explicit_padding(self):
+        """torch's ``padding_mode`` and ``'same'``/``'valid'`` for 1-, 2- and 3-D.
+
+        ``padding_mode`` used to be ignored with a warning (zero padding), and
+        a string padding failed. ``'same'`` with an even kernel or dilation > 1
+        pads asymmetrically: total ``d*(k-1)``, the odd element after.
+        """
+        layers = {1: jt.nn.Conv1d, 2: jt.nn.Conv2d, 3: jt.nn.Conv3d}
+        functionals = {1: jt.nn.conv1d, 2: jt.nn.conv2d, 3: jt.nn.conv3d}
+        spatial = {1: (11,), 2: (9, 10), 3: (6, 7, 5)}
+        cases = ((3, 1, 1, "reflect"), (3, 1, 2, "replicate"), (3, 2, 2, "circular"),
+                 (3, 1, "same", "zeros"), (4, 1, "same", "zeros"), (3, 2, "same", "zeros"),
+                 (4, 3, "same", "zeros"), (2, 2, "same", "zeros"), (4, 1, "same", "reflect"),
+                 (3, 2, "same", "replicate"), (4, 2, "same", "circular"),
+                 (3, 1, "valid", "zeros"))
+        with jt.flag_scope(use_cuda=self.use_cuda):
+            for rank, (kernel, dilation, padding, mode) in (
+                    (rank, case) for rank in (1, 2, 3) for case in cases):
+                with self.subTest(rank=rank, kernel=kernel, dilation=dilation,
+                                  padding=padding, mode=mode):
+                    layer = layers[rank](4, 6, kernel, padding=padding, dilation=dilation,
+                                         groups=2, padding_mode=mode)
+                    self.assertEqual(layer.padding_mode, mode)
+                    x = self.rng.standard_normal((2, 4) + spatial[rank]).astype("float32")
+                    weight = self.rng.standard_normal(
+                        (6, 2) + (kernel,) * rank).astype("float32")
+                    bias = self.rng.standard_normal(6).astype("float32")
+                    layer.weight.assign(jt.array(weight))
+                    layer.bias.assign(jt.array(bias))
+                    if padding == "same":
+                        pads = _same_pads((kernel,) * rank, (dilation,) * rank)
+                    elif padding == "valid":
+                        pads = [(0, 0)] * rank
+                    else:
+                        pads = [(padding, padding)] * rank
+                    expected = _numpy_conv(x, weight, bias, pads, mode,
+                                           (dilation,) * rank, 2)
+                    got = layer(jt.array(x)).numpy()
+                    self.assertEqual(got.shape, expected.shape)
+                    np.testing.assert_allclose(got, expected, rtol=1e-4, atol=1e-4)
+                    if mode == "zeros":
+                        got = functionals[rank](jt.array(x), jt.array(weight), jt.array(bias),
+                                                padding=padding, dilation=dilation,
+                                                groups=2).numpy()
+                        np.testing.assert_allclose(got, expected, rtol=1e-4, atol=1e-4)
+
+    def test_padding_option_errors(self):
+        with jt.flag_scope(use_cuda=self.use_cuda):
+            for layer in (jt.nn.Conv1d, jt.nn.Conv2d, jt.nn.Conv3d):
+                with self.subTest(layer=layer.__name__):
+                    with self.assertRaisesRegex(ValueError, "padding_mode must be one of"):
+                        layer(2, 2, 3, padding_mode="bogus")
+                    with self.assertRaisesRegex(ValueError, "strided convolutions"):
+                        layer(2, 2, 3, stride=2, padding="same")
+                    with self.assertRaisesRegex(ValueError, "Invalid padding string"):
+                        layer(2, 2, 3, padding="full")
+            x = jt.array(self.rng.standard_normal((1, 2, 6, 6)).astype("float32"))
+            weight = jt.array(self.rng.standard_normal((2, 2, 3, 3)).astype("float32"))
+            with self.assertRaisesRegex(RuntimeError, "strided convolutions"):
+                jt.nn.conv2d(x, weight, stride=2, padding="same")
+            with self.assertRaisesRegex(RuntimeError, "Invalid padding string"):
+                jt.nn.conv2d(x, weight, padding="full")
+
+    def test_padding_mode_set_after_construction_is_honoured(self):
+        """As in torch, ``padding_mode`` is read per call (seamless tiling sets it)."""
+        with jt.flag_scope(use_cuda=self.use_cuda):
+            layer = jt.nn.Conv2d(2, 3, 3, padding=1)
+            x = self.rng.standard_normal((1, 2, 5, 6)).astype("float32")
+            weight = layer.weight.numpy()
+            bias = layer.bias.numpy()
+            layer.padding_mode = "circular"
+            np.testing.assert_allclose(
+                layer(jt.array(x)).numpy(),
+                _numpy_conv(x, weight, bias, [(1, 1), (1, 1)], "circular", (1, 1), 1),
+                rtol=1e-4, atol=1e-4)
 
 
 class TestConvParityCPU(_ConvParity, unittest.TestCase):

@@ -1,6 +1,6 @@
 ---
 name: optimizer-semantics-diffing
-description: 验证 jittor 优化器语义（梯度累积等价性、全局梯度裁剪只施加一次、偏差修正按 param group 步数、zero_grad 清缓冲）的对拍口径与陷阱。改 optim/base.py、optim/algorithms/*、optim/legacy_schedulers.py 或写这些地方的回归用例前先读。
+description: 验证 jittor 优化器语义（梯度累积等价性、全局梯度裁剪只施加一次、偏差修正按 param group 步数、zero_grad 清缓冲）的对拍口径与陷阱。改 python/jittor/optim/{base.py,algorithms/*,legacy_schedulers.py} 或写这些地方的回归用例前先读。
 ---
 
 # 优化器语义怎么测才算数
@@ -155,15 +155,16 @@ assert effective_lr(opt) == predicted
 
 ## 5. 不要在同一个 pytest 进程里混跑原生用例与 torch 兼容用例
 
-`tests/conftest.py` 的 `pytest_ignore_collect` 会在**宽选择**（`pytest tests/`）时
-把 torch 模式路径整个跳掉，两种语义各跑各的 session。
-手动写 `pytest tests/compat/... tests/optim` 会强制进 torch 模式，
-`jt.optim.*` 被整体换掉（`pg["grads"]` 变成 `_torch_grad`、每组自带 `lr`），
-于是得到一堆与你的改动无关的失败。要么单独跑一个目录，要么用 `tools/run_test_suite.py`。
+进程模式只由 `JITTOR_TORCH_SHIM` 决定（`tests/_helpers/pytest_policy.py`）：原生会话的
+**宽选择**（`pytest tests/`）会把 torch 模式路径整个跳掉，点名它们则直接 `UsageError`。
+反过来，`JITTOR_TORCH_SHIM=1 pytest compat/tests/torch/... tests/optim` 会让 `tests/optim`
+也在 torch 模式下跑，`jt.optim.*` 被整体换掉（`pg["grads"]` 变成 `_torch_grad`、每组自带
+`lr`），于是得到一堆与你的改动无关的失败。两种用例分两条命令跑，或用
+`tools/run_test_suite.py`。
 
 ## 6. 真 PyTorch 对拍
 
-本机没有与 jittor 同一个 Python 小版本的真 torch（jittor 环境 3.11、torch oracle 3.12），
+真 torch 的解释器与 jittor 环境的 Python 小版本不同时（例如 jittor 3.11、torch oracle 3.12），
 `REAL_TORCH_SITE` 的进程内加载走不通。做法：
 用 torch oracle 的解释器**另起一个子进程**导出参考数值，把公式（不是路径）固化进用例，
 用 numpy 复现同一套公式做断言，并在提交说明里写清对拍用的 torch 版本。

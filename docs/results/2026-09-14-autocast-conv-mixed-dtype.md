@@ -1,11 +1,15 @@
 # Auto-mixed-precision requested mixed-dtype convolutions
 
-- Status: Fixed; verified on a real CUDA device
-- Date: 2026-09-14
-- Baseline commit: `4c3ab0e4` (the two fix commits, on top of `5a084737`)
-- Owner: Jittor compatibility maintainers
-- Review when: the amp register's operand handling changes, or the shim's
-  `torch.autocast` stops recording only `jt.flags.amp_reg`
+- 状态：已修复，在真实 CUDA 设备上验证
+- 日期：2026-09-14
+- 基线提交：`4c3ab0e4`（两个修复提交 `63fc1485`、`4c3ab0e4` 中的后一个，基于 `5a084737`）
+- 验证范围：真实 CUDA 设备（MiniMax-H3 实验环境，卡型原文未记）上的
+  `tests/backends/cuda/test_cudnn_conv_amp_dtype.py`、`test_cublas_matmul_amp_dtype.py`、
+  shim 的 `TestAutocast` 与下文的回归选择，以及 MiniMax-H3 tiny 32x32 t2va 端到端。
+  未覆盖：ROCm、NPU
+- 维护者：Torch 兼容层维护者
+- 复查条件：amp 寄存器的操作数处理变化，或 shim 的 `torch.autocast` 不再只记录
+  `jt.flags.amp_reg`
 
 ## Question
 

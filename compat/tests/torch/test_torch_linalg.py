@@ -5,7 +5,7 @@
 # (U, S, Vh) tuple (jittor's svd is the REDUCED form and already returns Vh), plus
 # svdvals/eigvalsh/eigvals/matrix_rank/multi_dot/lstsq. Verified vs numpy/torch.
 #
-#   /home/yizhang/miniconda3/envs/jt-torch/bin/python -m pytest compat/tests/torch/test_torch_linalg.py
+#   JITTOR_TORCH_SHIM=1 python -m pytest compat/tests/torch/test_torch_linalg.py
 # Skips cleanly if the torch_shim is unavailable.
 # ***************************************************************
 import unittest, numpy as np

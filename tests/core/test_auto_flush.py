@@ -205,3 +205,28 @@ class TestExplicitSubmission(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@_test_preserve_policy(jt, 'auto_flush_ops', 'auto_flush_bytes', 'use_cuda')
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No cuda found")
+class TestAutoFlushLeavesElementwise(unittest.TestCase):
+    """A flush launches what must be written out anyway, not elementwise vars.
+
+    An elementwise var launched early is written out, and a training forward
+    keeps it for the backward, where it would have fused into its readers:
+    where the cut fell decided a ViT-B/16 step's peak, within 0.33 GB.
+    """
+
+    def test_an_elementwise_var_waits_for_its_readers(self):
+        with jt.runtime.scope(use_cuda=1, auto_flush_ops=4, auto_flush_bytes=0):
+            rng = np.random.RandomState(3)
+            w_np = rng.randn(32, 32).astype("float32")
+            w = jt.array(w_np)
+            w.sync()
+            written = jt.matmul(w, w)       # a matmul's output is written out anyway
+            product = jt.matmul(w, w)
+            scaled = [product * float(i) + 1.0 for i in range(1, 12)]
+            self.assertTrue(written.is_finished)
+            self.assertFalse(any(s.is_finished for s in scaled))
+            np.testing.assert_allclose(scaled[-1].numpy(), (w_np @ w_np) * 11.0 + 1.0,
+                                       rtol=1e-4, atol=1e-3)
