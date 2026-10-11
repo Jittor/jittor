@@ -36,7 +36,9 @@ def test_shared_device_consumers_have_no_vendor_sdk_dependency():
 def test_auto_flush_requires_backend_support_and_nan_diagnostics_dispatch():
     executor = (SRC / "core/executor.cc").read_text(encoding="utf-8")
     diagnostics = (SRC / "debug/nan_checker.cc").read_text(encoding="utf-8")
-    assert "execution.supports_auto_flush" in executor
+    assert "backend_ops(accelerator_backend_id()).execution" in executor
+    assert ("!policy.supports_auto_flush && "
+            "!(policy.async_auto_flush_only && deferrable)") in executor
     assert "CHECK(backend.check_nan)" in diagnostics
     assert "backend.check_nan(v, op)" in diagnostics
     assert "allocation_device(v->allocator)" in diagnostics

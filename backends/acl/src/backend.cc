@@ -848,6 +848,10 @@ BackendOps make_acl_backend() {
     ops.execution.async_auto_flush_only = true;
     // AclCpuFallbackScope flips `runtime_device_state().use_cuda`.
     ops.execution.async_requires_strict_fallback = true;
+    // Measured: the worker is worth a third of a Qwen3 decode step and a
+    // fifth of a ResNet50 batch-32 inference, and costs 2-5% on the steps
+    // short enough that the caller waits right after handing over.
+    ops.execution.async_handover_must_pay = true;
     ops.execution.preserve_reduction_dtype = true;
     ops.execution.native_low_precision_reduction = true;
     ops.execution.supports_generated_device_kernels = false;

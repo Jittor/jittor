@@ -93,6 +93,17 @@ void async_exec_wait();
 // How many batches the worker has run, for tests and diagnostics.
 // @pyjt(async_exec_batches)
 int64 async_exec_batches();
+
+// Whether handing the next batch over looks worth its cost: how long the
+// calling thread has recently kept building between submitting a batch and
+// needing it, against `async_min_caller_us`. Consulted only where the
+// backend's policy says the handover has to pay for itself
+// (`async_handover_must_pay`). Not a pure query -- it counts the batches it
+// declines, so that one in 64 goes through and is measured again.
+bool async_exec_handover_pays();
+// The recent average of that, in nanoseconds; -1 before the first handover.
+// @pyjt(async_exec_caller_work_ns)
+int64 async_exec_caller_work_ns();
 // Lock the graph for every binding of the calling thread active since its
 // last suspension: called just before a batch is handed over from inside
 // them, so their remaining C++ runs under the lock.

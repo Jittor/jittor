@@ -48,6 +48,10 @@ struct BackendExecutionPolicy {
     // while it runs: on the worker that would switch it under the thread
     // still building the graph. Under "error" no fallback ever runs.
     bool async_requires_strict_fallback = false;
+    // Hand a batch to the worker only while the calling thread has something
+    // to do meanwhile (`async_exec_handover_pays`). For a backend where a
+    // handover the caller immediately waits on costs more than it saves.
+    bool async_handover_must_pay = false;
 };
 
 // The registry copies this versioned table; callback code and allocator pools

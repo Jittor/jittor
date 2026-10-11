@@ -1083,6 +1083,25 @@ workaround.
   (15 ms) 0.629x -> 0.669x, `sd15_vae_decode` (22 ms) 1.202x -> 1.239x. All
   three are real regressions, not noise, and no threshold is in place to
   decline a batch too small to pay for the handover.
+  (2026-10-11) A size threshold cannot be that threshold: `qwen3_decode`
+  hands over ~200 KB per batch and gains the most, `resnet50_infer_b1`
+  hands over as little and loses. What separates them is whether the
+  Python thread has anything to build between submitting a batch and
+  waiting on it. ACL now measures exactly that (`async_min_caller_us`,
+  default 150 us, a running average with one in 64 declined batches let
+  through to notice a step that grows heavier) and stops both handing over
+  and auto-flushing while it is short (`async_handover_must_pay`). Paired
+  on npu 2, same tree with the gate off (`async_min_caller_us=0`) and on,
+  12 workloads, zero fallbacks: geometric mean 0.9005x -> 0.8961x.
+  `resnet50_infer_b1` is the one consistent gain (0.419x -> 0.405x, and
+  the same ~3% in two further pairs of a four-workload sweep); `qwen3_decode`
+  (1.273x -> 1.235x) and `resnet50_infer` (1.287x -> 1.260x) are not hurt.
+  `bert_base_infer` and `sd15_vae_decode` do not recover -- off and on are
+  inside their own run-to-run spread (`bert_base_infer` read 0.79x and
+  0.68x on two gate-off runs) -- so their 2-5% is not the handover the gate
+  declines, and remains open. Absolute ratios on npu 2 differ from npu 3
+  because the torch baseline does (`qwen3_prefill` 74.7 ms vs 84.8 ms);
+  compare within a card only.
   `bert_base_train`'s gap is similarly not a dispatch bug: an aclprof
   capture shows `MatMulV2` at 42.4% of device time (the
   expected dominant cost for a transformer) and `DSARandomUniform` --

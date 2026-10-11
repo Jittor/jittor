@@ -24,6 +24,8 @@
 
 namespace jittor {
 
+DEFINE_FLAG(int, async_min_caller_us, 150, "How long the calling thread must typically keep building, between handing a batch to the async-execution worker and needing its result, for the handover to be worth its cost (a condition variable's wake and two transfers of the graph lock). Averaged over recent batches, not judged per batch, with one in 64 declined batches let through so a step that grows heavier is picked up again. Only consulted on a backend whose policy sets `async_handover_must_pay`; 0 hands over regardless.");
+
 EXTERN_LIB void register_cleanup_callback(void (*cb)());
 
 std::atomic<int> async_exec_inflight{0};
@@ -142,6 +144,29 @@ void wait_before_flag_set(const char* name) {
 }
 
 std::atomic<bool> job_posted{false};
+
+// Does handing a batch over pay for itself here?
+//
+// The worker is worth its handover -- a condition variable's wake, two
+// transfers of the graph lock -- only while the calling thread has something
+// to do meanwhile. A Qwen3 decode step builds seconds of graph after each
+// flush and gains a third of its time; a batch-1 ResNet50 step is finished
+// building almost at once and then waits, so the same handover is pure cost.
+// Nothing static separates them: both carry a few hundred KB, both cross the
+// same operator counts. What separates them is measurable and already
+// happening -- how long the caller runs between submitting a batch and
+// needing it -- so that is what decides, over the recent average rather than
+// one batch, and with an occasional batch let through so a step that grows
+// heavier is noticed.
+std::chrono::steady_clock::time_point submitted_at;
+int64 caller_work_ns = -1;
+int declines_since_probe = 0;
+
+void note_caller_work() {
+    auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now() - submitted_at).count();
+    caller_work_ns = caller_work_ns < 0 ? ns : (caller_work_ns * 3 + ns) / 4;
+}
 
 // Up to ~100 us of polling before the caller falls back to blocking.
 template <class Ready>
@@ -331,9 +356,25 @@ bool async_exec_single_thread() {
 
 int64 async_exec_batches() { return batches_run.load(std::memory_order_relaxed); }
 
+int64 async_exec_caller_work_ns() { return caller_work_ns; }
+
+bool async_exec_handover_pays() {
+    if (caller_work_ns < 0) return true;  // nothing handed over yet
+    if (caller_work_ns >= (int64)async_min_caller_us * 1000) {
+        declines_since_probe = 0;
+        return true;
+    }
+    if (++declines_since_probe >= 64) {
+        declines_since_probe = 0;
+        return true;
+    }
+    return false;
+}
+
 void async_exec_hold_active_bindings() { lock_resumed_bindings(); }
 
 void async_exec_submit(std::function<void()>&& job) {
+    submitted_at = std::chrono::steady_clock::now();
     std::unique_lock<std::mutex> lock(worker->mutex);
     worker->pending = std::move(job);
     worker->ready = true;
@@ -345,8 +386,10 @@ void async_exec_submit(std::function<void()>&& job) {
 
 void async_exec_wait() {
     if (is_worker) return;
-    if (async_exec_inflight.load(std::memory_order_acquire))
+    if (async_exec_inflight.load(std::memory_order_acquire)) {
+        note_caller_work();
         wait_for_worker_unlocked();
+    }
     if (!error_pending.load(std::memory_order_acquire)) return;
     std::exception_ptr error;
     {

@@ -56,6 +56,7 @@ DEFINE_FLAG(int, use_threading, 0, "Allow to use python threading with jittor.")
 DEFINE_FLAG(int, exec_called, 0, "exec sync called");
 DEFINE_FLAG(int, async_execution, 1, "Run an auto-flushed batch of an inference graph (under no_grad, on CUDA, or on ACL with `backend_fallback=error`) on a worker thread while Python keeps building the graph; every executor entry, and so every read of a Var's data, waits for it first. See runtime/async_exec.h. 0 executes every batch on the calling thread. Without the worker such a flush also has to carry `auto_flush_bytes` of output to be taken; with it, any auto-flush is. On ACL nothing is auto-flushed at all unless the worker takes it (`async_auto_flush_only`): an inline flush there was measured slower at every batch size.");
 DEFINE_FLAG(int, async_flush_ops, 64, "With `async_execution`, an inference graph is also flushed to the worker when a module call returns and this many operators have been created since the last flush (`auto_flush_ops` still applies between). 0 flushes at `auto_flush_ops` only.");
+DECLARE_FLAG(int, async_min_caller_us);
 DECLARE_FLAG(bool, no_grad);
 DECLARE_FLAG(int, keep_graph);
 DECLARE_FLAG(int, profiler_enable);
@@ -83,8 +84,15 @@ struct PendingSubmissionScope {
 static bool worker_admits_accelerator() {
     const BackendId accelerator = accelerator_backend_id();
     if (accelerator != BackendId::Cuda && accelerator != BackendId::Acl) return false;
-    return !backend_ops(accelerator).execution.async_requires_strict_fallback
-        || runtime_backend_fallback().policy == "error";
+    const auto& policy = backend_ops(accelerator).execution;
+    if (policy.async_requires_strict_fallback
+            && runtime_backend_fallback().policy != "error")
+        return false;
+    // Asked here rather than in `may_run_async` alone so that a backend which
+    // only flushes for the worker (`async_auto_flush_only`) stops flushing
+    // too, instead of paying for a cut nobody takes.
+    return !policy.async_handover_must_pay || !async_min_caller_us
+        || async_exec_handover_pays();
 }
 
 static bool deferrable_flush() {
