@@ -47,6 +47,6 @@
 | [主机受限步长：把每算子的 Python 开销从图构建里拿掉](2026-09-13-host-path-per-node-cost.md) | Python 路径已完成 | 2026-09-13 |
 | [batched Linear 的两个展平节点](2026-09-12-batched-linear-graph-nodes.md) | 已落地，H20 上实测；对拍结论未附 | 2026-09-12，2026-09-23 归档 |
 | [Jittor vs 真 PyTorch 2.9.1：现在差在哪](2026-09-14-jittor-vs-pytorch.md) | 快照：对 eager 赢 6 平 5 输 1，对 `torch.compile` 赢 2 平 2 输 5 | 2026-09-14 |
-| [ms-swift LoRA 的 Ascend torch shim 验证](2026-09-22-ms-swift-ascend-lora.md) | 2026-10-12：真实尺寸 109.48M BERT-base full-finetuning 公开 CLI 锁定配置通过 L0–L5；10 次同步计时中 candidate 为 `172.812 ms/step`、原生 `70.354 ms/step`，吞吐比为 `0.407x`。Qwen3 tiny 新 32 步收敛/恢复合同配置通过 L0–L4；历史三步 strict AdamW 更新失败仍保留，不追溯改判。真实尺寸 BERT-base GELU 推理差异、Swift Prompt CLI/direct generation 失败等边界仍按原记录；L5 未覆盖的配置与真实多机资源阻塞保持未完成。IA3/ORPO 新收敛协议和目标 2.0 DPO 双卡配置的通过范围仍限定于各自锁定用例；全范围功能面仍未完成 | 2026-10-12 |
+| [ms-swift LoRA 的 Ascend torch shim 验证](2026-09-22-ms-swift-ascend-lora.md) | 2026-10-12：真实尺寸 109.48M BERT-base full-finetuning 公开 CLI 锁定配置通过 L0–L5；10 次同步计时中 candidate 为 `172.812 ms/step`、原生 `70.354 ms/step`，吞吐比为 `0.407x`。Qwen3 tiny 新 32 步收敛/恢复合同配置通过 L0–L4；历史三步 strict AdamW 更新失败仍保留，不追溯改判。真实尺寸 BERT-base GELU 推理差异、Swift Prompt direct API 新收敛协议 tiny 单 NPU L0–L3 锁定配置通过；公开 CLI 路由缺失、direct generation native 失败仍按原记录；L5 未覆盖的配置与真实多机资源阻塞保持未完成。IA3/ORPO 新收敛协议和目标 2.0 DPO 双卡配置的通过范围仍限定于各自锁定用例；全范围功能面仍未完成 | 2026-10-12 |
 | [Torch 兼容层在真实模型上对 PyTorch：差距表、显存与性能修复](2026-09-24-torch-compat-real-models.md) | 11 项全部跑通，几何平均 1.26x，进程显存峰值为 PyTorch 的 0.87–1.45 倍；余下差距在主机侧 | 2026-09-24 |
 | [性能/显存分析工具：审计与重写](2026-09-25-profiling-tools.md) | 已实现，RTX 4090 上验证；未合入 | 2026-09-25 |
