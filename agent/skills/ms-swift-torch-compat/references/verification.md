@@ -51,6 +51,8 @@ ms-swift 对该依赖的实际调用路径，不能推出 Transformers、PEFT、
   `fallback_count == 0`。策略未启用、计数缺失、观察窗口不完整或任一次回退均失败。
   原生 torch_npu 若无已验证的通用 counter，明确记 `unavailable/unknown`，不得填零；
   仍检查其身份、驻留、已知 CPU fallback 告警，观察到实际计算回退即失败。
+  此硬门禁针对 candidate 的实际工作负载；通用仓库测试按各自声明的设备和测试合同运行，
+  不继承 candidate 的全局严格 fallback 环境，也不能替代 candidate 的逐 rank 零回退审计。
 - **结构与训练语义**：返回结构、参数/buffer/梯度/优化器状态键集合和形状须一致，dtype
   与锁定配置一致；缺键、多键、缺失必需梯度、NaN/Inf、错误广播或 device 错配均失败。
   初始参数与持久 buffer 来自同一锁定文件；整数状态和数据身份仍精确检查。训练中
