@@ -65,25 +65,44 @@ def _real_part(y):
     return y.real if _is_complex(y) else y
 
 
-_CASES = {
-    "eigh values": (lambda x: _real_part(jt.linalg.eigh(_herm(x, 0.0))[0]).sin().sum(), (3, 3)),
-    "eigh vectors": (lambda x: _gauge_invariant(jt.linalg.eigh(_herm(x, 0.0))[1]), (3, 3)),
-    "cholesky": (lambda x: _smooth(jt.linalg.cholesky(_herm(x, 8.0))), (3, 3)),
-    "qr tall": (lambda x: _smooth(jt.linalg.qr(x)[0]) + _smooth(jt.linalg.qr(x)[1], 0.5), (4, 2)),
-    "qr wide": (lambda x: _smooth(jt.linalg.qr(x)[0]) + _smooth(jt.linalg.qr(x)[1], 0.5), (2, 4)),
-    "svd values": (lambda x: _real_part(jt.linalg.svd(x)[1]).sin().sum(), (3, 3)),
-    "svd vectors tall": (lambda x: _gauge_invariant(jt.linalg.svd(x)[0])
-                         + _gauge_invariant(jt.linalg.svd(x)[2], 0.6), (4, 2)),
-    "svd vectors wide": (lambda x: _gauge_invariant(jt.linalg.svd(x)[0])
-                         + _gauge_invariant(jt.linalg.svd(x)[2], 0.6), (2, 4)),
-    "svd reconstruction": (lambda x: _smooth(jt.matmul(
-        jt.linalg.svd(x)[0] * jt.linalg.svd(x)[1].unsqueeze(-2), jt.linalg.svd(x)[2])), (3, 2)),
-    "inv": (lambda x: _smooth(jt.linalg.inv(x)), (3, 3)),
-    "det": (lambda x: _smooth(jt.linalg.det(x)), (3, 3)),
-    # sign and log|det|: the complex sign term was missing from the gradient.
-    "slogdet": (lambda x: _smooth(jt.linalg.slogdet(x)[0], 0.8)
-                + _real_part(jt.linalg.slogdet(x)[1]).sin().sum(), (3, 3)),
-}
+# Built on call, not at import: the lambdas name local helpers, and a module
+# that runs nothing at collection is a structure-gate contract.
+def _cases():
+    return {
+        "eigh values": (lambda x: _real_part(jt.linalg.eigh(_herm(x, 0.0))[0]).sin().sum(), (3, 3)),
+        "eigh vectors": (lambda x: _gauge_invariant(jt.linalg.eigh(_herm(x, 0.0))[1]), (3, 3)),
+        "cholesky": (lambda x: _smooth(jt.linalg.cholesky(_herm(x, 8.0))), (3, 3)),
+        "qr tall": (lambda x: _smooth(jt.linalg.qr(x)[0]) + _smooth(jt.linalg.qr(x)[1], 0.5), (4, 2)),
+        "qr wide": (lambda x: _smooth(jt.linalg.qr(x)[0]) + _smooth(jt.linalg.qr(x)[1], 0.5), (2, 4)),
+        "svd values": (lambda x: _real_part(jt.linalg.svd(x)[1]).sin().sum(), (3, 3)),
+        "svd vectors tall": (lambda x: _gauge_invariant(jt.linalg.svd(x)[0])
+                             + _gauge_invariant(jt.linalg.svd(x)[2], 0.6), (4, 2)),
+        "svd vectors wide": (lambda x: _gauge_invariant(jt.linalg.svd(x)[0])
+                             + _gauge_invariant(jt.linalg.svd(x)[2], 0.6), (2, 4)),
+        "svd reconstruction": (lambda x: _smooth(jt.matmul(
+            jt.linalg.svd(x)[0] * jt.linalg.svd(x)[1].unsqueeze(-2), jt.linalg.svd(x)[2])), (3, 2)),
+        "inv": (lambda x: _smooth(jt.linalg.inv(x)), (3, 3)),
+        "det": (lambda x: _smooth(jt.linalg.det(x)), (3, 3)),
+        # sign and log|det|: the complex sign term was missing from the gradient.
+        "slogdet": (lambda x: _smooth(jt.linalg.slogdet(x)[0], 0.8)
+                    + _real_part(jt.linalg.slogdet(x)[1]).sin().sum(), (3, 3)),
+    }
+
+
+_CASES_NAMES = (
+    "eigh values",
+    "eigh vectors",
+    "cholesky",
+    "qr tall",
+    "qr wide",
+    "svd values",
+    "svd vectors tall",
+    "svd vectors wide",
+    "svd reconstruction",
+    "inv",
+    "det",
+    "slogdet",
+)
 
 
 def _grad(f, x_np):
@@ -114,9 +133,9 @@ def _rel(a, b):
 
 
 @pytest.mark.parametrize("kind", ["real", "complex"])
-@pytest.mark.parametrize("name", list(_CASES))
+@pytest.mark.parametrize("name", _CASES_NAMES)
 def test_first_and_second_order_match_finite_differences(device, name, kind):
-    f, shape = _CASES[name]
+    f, shape = _cases()[name]
     rng = np.random.default_rng(abs(hash((name, kind))) % (2 ** 32))
     cplx = kind == "complex"
     x = rng.standard_normal(shape) + (1j * rng.standard_normal(shape) if cplx else 0)
@@ -161,20 +180,31 @@ def _herm_shifted(x):
     return _herm(x, 6.0)
 
 
-_COMPOSED = {
-    "svd values": (lambda x: jt.linalg.svd(x)[1], lambda a: np.linalg.svd(a)[1]),
-    "eigh values": (lambda x: jt.linalg.eigh(_herm_shifted(x))[0],
-                    lambda a: np.linalg.eigh((a + a.T) / 2 + 6 * np.eye(3))[0]),
-    "cholesky": (lambda x: jt.linalg.cholesky(_herm_shifted(x)),
-                 lambda a: np.linalg.cholesky((a + a.T) / 2 + 6 * np.eye(3))),
-    "qr R": (lambda x: jt.linalg.qr(x)[1], lambda a: np.linalg.qr(a)[1]),
-}
+# Built on call, not at import: the lambdas name local helpers, and a module
+# that runs nothing at collection is a structure-gate contract.
+def _composed():
+    return {
+        "svd values": (lambda x: jt.linalg.svd(x)[1], lambda a: np.linalg.svd(a)[1]),
+        "eigh values": (lambda x: jt.linalg.eigh(_herm_shifted(x))[0],
+                        lambda a: np.linalg.eigh((a + a.T) / 2 + 6 * np.eye(3))[0]),
+        "cholesky": (lambda x: jt.linalg.cholesky(_herm_shifted(x)),
+                     lambda a: np.linalg.cholesky((a + a.T) / 2 + 6 * np.eye(3))),
+        "qr R": (lambda x: jt.linalg.qr(x)[1], lambda a: np.linalg.qr(a)[1]),
+    }
 
 
-@pytest.mark.parametrize("name", list(_COMPOSED))
+_COMPOSED_NAMES = (
+    "svd values",
+    "eigh values",
+    "cholesky",
+    "qr R",
+)
+
+
+@pytest.mark.parametrize("name", _COMPOSED_NAMES)
 def test_jvp_vjp_and_vmap_of_grad(device, name):
     from jittor.autograd.functional import jvp, vjp
-    f_jt, f_np = _COMPOSED[name]
+    f_jt, f_np = _composed()[name]
     rng = np.random.default_rng(7)
     a = rng.standard_normal((3, 3)) + 2 * np.eye(3)
     t = rng.standard_normal((3, 3))

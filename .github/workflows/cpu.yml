@@ -124,11 +124,16 @@ jobs:
       image: ${{ needs.baseline.outputs.cpu_ci_image }}
     timeout-minutes: 90
     env:
-      ASV_RESULTS_DIR: ${{ runner.temp }}/jittor-asv/results
-      ASV_HTML_DIR: ${{ runner.temp }}/jittor-asv/html
       ASV_MACHINE: github-ubuntu-cpu
       ASV_COMPARE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
     steps:
+      # `runner` is not an allowed context in a job-level `env:` -- using it
+      # there made GitHub reject the whole workflow file, so no job ran.
+      - name: Locate ASV output
+        shell: bash
+        run: |
+          echo "ASV_RESULTS_DIR=${RUNNER_TEMP}/jittor-asv/results" >> "${GITHUB_ENV}"
+          echo "ASV_HTML_DIR=${RUNNER_TEMP}/jittor-asv/html" >> "${GITHUB_ENV}"
       - name: Check out source
         uses: actions/checkout@v6
         with:

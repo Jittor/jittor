@@ -1,4 +1,5 @@
 """Matrix multiplication and bilinear neural-network operations."""
+
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
@@ -236,8 +237,8 @@ def _check_matmul_shapes(a, b, trans_a=False, trans_b=False, op="matmul"):
     if a_ndim == 0 or b_ndim == 0:
         raise RuntimeError(
             "%s: both operands need at least 1 dim, but got a:%s%s (%d-D) and "
-            "b:%s%s (%d-D)" % (op, a.dtype, list(a.shape), a_ndim,
-                               b.dtype, list(b.shape), b_ndim))
+            "b:%s%s (%d-D)" % (op, a.dtype, list(a.shape), a_ndim, b.dtype, list(b.shape), b_ndim)
+        )
     a_axis = 0 if a_ndim == 1 else (-2 if trans_a else -1)
     b_axis = 0 if b_ndim == 1 else (-1 if trans_b else -2)
     inner_a = a.shape[a_axis]
@@ -246,22 +247,21 @@ def _check_matmul_shapes(a, b, trans_a=False, trans_b=False, op="matmul"):
         raise RuntimeError(
             "%s: shapes cannot be multiplied, a:%s%s and b:%s%s: dim %d of a is "
             "%d but dim %d of b is %d, and the two contracted dims must be equal"
-            % (op, a.dtype, list(a.shape), b.dtype, list(b.shape),
-               a_axis, inner_a, b_axis, inner_b))
+            % (op, a.dtype, list(a.shape), b.dtype, list(b.shape), a_axis, inner_a, b_axis, inner_b)
+        )
     # `shape[:-2]` is empty as soon as either operand has 2 dims or fewer, so
     # the loop below cannot run then -- but it still built two slices, two
     # reversed views, a zip and an enumerate to discover that, on every matrix
     # product in every model. `nn.Linear` is exactly that shape.
     if a_ndim <= 2 or b_ndim <= 2:
         return
-    for offset, (left, right) in enumerate(
-            zip(reversed(a.shape[:-2]), reversed(b.shape[:-2]))):
+    for offset, (left, right) in enumerate(zip(reversed(a.shape[:-2]), reversed(b.shape[:-2]))):
         if left != right and left != 1 and right != 1:
             raise RuntimeError(
                 "%s: batch dims do not broadcast, a:%s%s and b:%s%s: dim %d is "
                 "%d in a and %d in b, which must be equal or 1 in one of them"
-                % (op, a.dtype, list(a.shape), b.dtype, list(b.shape),
-                   -3 - offset, left, right))
+                % (op, a.dtype, list(a.shape), b.dtype, list(b.shape), -3 - offset, left, right)
+            )
 
 
 def matmul_transpose(a, b):
@@ -277,8 +277,8 @@ def matmul_transpose(a, b):
     if len(b.shape) != 2:
         raise RuntimeError(
             "matmul_transpose: b must be 2-D once a is, but got "
-            "a:%s%s and b:%s%s" % (a.dtype, list(a.shape),
-                                   b.dtype, list(b.shape)))
+            "a:%s%s and b:%s%s" % (a.dtype, list(a.shape), b.dtype, list(b.shape))
+        )
     # A batched `a` is flattened and the result un-flattened, but by falling
     # through rather than recursing into this function. A recursive branch for
     # exactly this case used to sit above the `b` rank check, and it undid the
@@ -323,7 +323,8 @@ def bmm_transpose(a, b):
         raise RuntimeError(
             "bmm_transpose: both operands must have more than 2 dims (a batch "
             "dim and a matrix), but got a:%s%s and b:%s%s"
-            % (a.dtype, list(a.shape), b.dtype, list(b.shape)))
+            % (a.dtype, list(a.shape), b.dtype, list(b.shape))
+        )
     _check_matmul_shapes(a, b, trans_b=True, op="bmm_transpose")
     # The same scope as `matmul` and `matmul_transpose`. It is what tells the
     # reduce in the generic path below to hand back the operands' dtype rather
@@ -358,8 +359,8 @@ def bmm(a, b):
     if len(a.shape) <= 2 or len(b.shape) <= 2:
         raise RuntimeError(
             "bmm: both operands must have more than 2 dims (a batch dim and a "
-            "matrix), but got a:%s%s and b:%s%s"
-            % (a.dtype, list(a.shape), b.dtype, list(b.shape)))
+            "matrix), but got a:%s%s and b:%s%s" % (a.dtype, list(a.shape), b.dtype, list(b.shape))
+        )
     return jt.nn.matmul(a, b)
 
 
@@ -601,14 +602,20 @@ def bilinear(in1, in2, weight, bias):
 
 _FLOAT_DTYPES = {"float16", "bfloat16", "float32", "float64"}
 for _backend in ("cuda", "rocm_legacy", "corex_legacy"):
-    register_kernel("matmul", _backend, _cublas_matmul,
-                    dtypes=_FLOAT_DTYPES, supports=_supports_cublas)
-    register_kernel("batched_matmul", _backend, _cublas_batched_matmul,
-                    dtypes=_FLOAT_DTYPES, supports=_supports_cublas)
-register_kernel("matmul", "cpu", _mkl_matmul,
-                dtypes={"float32"}, supports=_supports_mkl)
-register_kernel("batched_matmul", "cpu", _mkl_batched_matmul,
-                dtypes={"float32"}, supports=_supports_mkl_batched)
+    register_kernel(
+        "matmul", _backend, _cublas_matmul, dtypes=_FLOAT_DTYPES, supports=_supports_cublas
+    )
+    register_kernel(
+        "batched_matmul",
+        _backend,
+        _cublas_batched_matmul,
+        dtypes=_FLOAT_DTYPES,
+        supports=_supports_cublas,
+    )
+register_kernel("matmul", "cpu", _mkl_matmul, dtypes={"float32"}, supports=_supports_mkl)
+register_kernel(
+    "batched_matmul", "cpu", _mkl_batched_matmul, dtypes={"float32"}, supports=_supports_mkl_batched
+)
 del _backend
 
 

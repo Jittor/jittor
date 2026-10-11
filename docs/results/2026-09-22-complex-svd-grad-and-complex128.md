@@ -72,7 +72,7 @@ output's cotangent contribution is exactly additive, so per-branch
 `out_index` calls with the other cotangent implicitly zero sum to the same
 total as a joint call; no `jt.Function` restructuring needed).
 
-### Verification
+### Verification of the SVD gradient
 
 New `tests/linalg/test_complex_spectral_gradients.py`: joint-reconstruction
 gradient exactly matches `P` (square/tall/wide/batched), matches an
@@ -172,7 +172,7 @@ and a different `NanoString` bit layout after `refactor-2.0`'s own
 `_index_nbits` fix); it was used only as a pattern reference, each site
 re-verified against this branch's actual current code.
 
-### Verification
+### Verification of complex128
 
 New `tests/core/test_complex128_native.py`: 16-byte `dsize()`, lossless
 NumPy round-trip, mixed complex64/complex128 promotion (and that a narrower

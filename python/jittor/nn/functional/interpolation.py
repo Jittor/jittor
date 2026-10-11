@@ -126,8 +126,9 @@ def resize(img, size, mode="nearest", align_corners=False, tf_mode=False):
         # size, 1 GB at an SD1.5 VAE's last upsample -- instead of fusing them.
         if source is None:
             return img.reindex([n, c, H, W], ["i0", "i1", f"i2*{h}/{H}", f"i3*{w}/{W}"])
-        return channels_last_view(source.reindex(
-            [n, H, W, c], ["i0", f"i1*{h}/{H}", f"i2*{w}/{W}", "i3"]))
+        return channels_last_view(
+            source.reindex([n, H, W, c], ["i0", f"i1*{h}/{H}", f"i2*{w}/{W}", "i3"])
+        )
     if source is None:
         nid, cid, hid, wid = jt.index((n, c, H, W))
     else:

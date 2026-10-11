@@ -108,13 +108,11 @@ def _read_cuda_driver():
     if ret != 0:
         return None
     try:
-        out = out.lower()
-        out = out.split('cuda version')[1] \
+        version = out.lower().split('cuda version')[1] \
             .split(':')[1] \
             .splitlines()[0] \
             .strip()
-        out = [ int(s) for s in out.split('.')]
-        return out
+        return [ int(s) for s in version.split('.')]
     except:
         return None
 
@@ -128,11 +126,10 @@ def check_cuda_env():
     if os.name == "nt":
         return
     def fix_env(key):
-        env = os.environ.get(key, "")
-        env = env.replace(";",":").split(":")
+        entries = os.environ.get(key, "").replace(";",":").split(":")
         new_env = []
         changed = False
-        for cp in env:
+        for cp in entries:
             x = cp.lower()
             if cuda_wheel.is_nvidia_wheel_path(cp):
                 new_env.append(cp)

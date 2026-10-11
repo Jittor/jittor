@@ -1,4 +1,5 @@
 """Native complex tensor bridge operations."""
+
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import numpy as np
@@ -68,7 +69,8 @@ def _real2_to_complex64_raw(x):
         raise NotImplementedError(
             "view_as_complex builds complex64 and needs a float32 pair, got %s. "
             "jittor has no complex128 (KI-COMPLEX-001); cast the input with "
-            ".float32() if the precision is not needed." % x.dtype)
+            ".float32() if the precision is not needed." % x.dtype
+        )
     reinterpret_view = getattr(jt, "reinterpret_view", None)
     if reinterpret_view is not None:
         return reinterpret_view(x, list(x.shape[:-1]), "complex64")
@@ -156,7 +158,8 @@ def _real2_to_complex_raw(x):
     real_name = _jittor_dtype_name(x.dtype)
     if real_name not in _REAL_COMPLEX_DTYPE:
         raise NotImplementedError(
-            "view_as_complex needs a float32 or float64 pair, got %s." % x.dtype)
+            "view_as_complex needs a float32 or float64 pair, got %s." % x.dtype
+        )
     complex_dtype = _REAL_COMPLEX_DTYPE[real_name]
     reinterpret_view = getattr(jt, "reinterpret_view", None)
     if reinterpret_view is not None:

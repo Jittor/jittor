@@ -125,8 +125,7 @@ def _materialize(topic, destination):
     output = destination / (topic + ".ipynb")
     output.parent.mkdir(parents=True, exist_ok=True)
     result = run_python_child(
-        ["-m", "jupytext", "--to", "ipynb", "--output", str(output),
-         str(_topic_path(topic))],
+        ["-m", "jupytext", "--to", "ipynb", "--output", str(output), str(_topic_path(topic))],
         cwd=destination,
         merge_stderr=True,
     )
@@ -192,7 +191,8 @@ def test_every_tutorial_appears_in_the_learning_path():
     missing = [topic for topic in _TOPICS if not _index_mentions(targets, topic)]
     assert missing == [], (
         "these tutorials exist but the learning path in "
-        "examples/notebooks/README.md never names them: %s" % missing)
+        "examples/notebooks/README.md never names them: %s" % missing
+    )
 
 
 @pytest.mark.structure
@@ -205,8 +205,7 @@ def test_the_learning_path_links_nowhere_dead():
         resolved = (index_path.parent / target).resolve()
         if not resolved.is_file():
             broken.append(target)
-    assert broken == [], (
-        "the learning path points at files that do not exist: %s" % broken)
+    assert broken == [], "the learning path points at files that do not exist: %s" % broken
 
 
 def _index_link_targets(index):
@@ -253,13 +252,15 @@ def test_expensive_and_external_cells_are_tagged():
             total += 1
             if "skip-execution" in tags:
                 skipped += 1
-                assert tags.intersection(reason_tags), \
+                assert tags.intersection(reason_tags), (
                     "{} has skip-execution without a reason tag".format(topic)
+                )
             if tags.intersection({"network", "cuda", "long-running"}):
                 assert "skip-execution" in tags
 
-    assert {"gan", "network", "cuda", "long-running", "interactive",
-            "skip-execution"}.issubset(all_tags)
+    assert {"gan", "network", "cuda", "long-running", "interactive", "skip-execution"}.issubset(
+        all_tags
+    )
     assert skipped / float(total) <= 0.35, (skipped, total)
     assert _markdown_cells(_topic_path("basics"))
     assert all(not cell["tags"] for cell in _markdown_cells(_topic_path("basics")))
@@ -342,11 +343,13 @@ def _warm_the_notebook_cache(attempts=3):
         if completed.returncode == _JIT_UTILS_UPDATED_EXIT_CODE:
             continue
         assert completed.returncode == 0, (
-            "could not warm the notebook cache:\n" + completed.stdout[-4000:])
+            "could not warm the notebook cache:\n" + completed.stdout[-4000:]
+        )
         return
     raise AssertionError(
         "jit_utils kept rebuilding after %d attempts; the notebook kernel would "
-        "have died in cell 0 with SystemExit" % attempts)
+        "have died in cell 0 with SystemExit" % attempts
+    )
 
 
 @pytest.fixture(scope="module")
@@ -361,7 +364,8 @@ def notebook_runtime_root(tmp_path_factory):
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize("topic", _SMOKE_TOPICS, ids=_SMOKE_TOPICS)
 def test_notebook_smokes_execute_offline_on_cpu(
-        topic, tmp_path, monkeypatch, notebook_runtime_root):
+    topic, tmp_path, monkeypatch, notebook_runtime_root
+):
     python_path = str(_repo_root() / "python")
     if os.environ.get("PYTHONPATH"):
         python_path += os.pathsep + os.environ["PYTHONPATH"]

@@ -1,14 +1,13 @@
 """Torch-semantics Adam/AdamW step for the stable optimizer adapters.
 
-Split out of ``optimizer_api`` by size. Helpers that stay there are reached as
-``_api.<name>`` at call time: ``optimizer_api`` imports this module, so a
-from-import here would be circular.
+Split out of ``optimizer_api`` by size. Helpers that stay there are reached
+through a call-time import of that module: ``optimizer_api`` imports this one,
+and an import at module level here would put both on an import-time cycle.
 """
 from jittor._core.dtypes import var_dtype_name
 import jittor as jt
 from jittor.optim.algorithms.adam import adam_update
 from ..diagnostics import EXPECTED, swallowed
-from . import optimizer_api as _api
 
 
 def _update_in_target_dtype(target, value):
@@ -18,6 +17,7 @@ def _update_in_target_dtype(target, value):
 
 
 def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay):
+    from . import optimizer_api as _api
     native_fsdp_loss = None
     if closure is None and callable(loss):
         closure = loss

@@ -101,11 +101,16 @@ jobs:
     runs-on: ${{ fromJSON(needs.baseline.outputs.cuda_runner_labels) }}
     timeout-minutes: 240
     env:
-      ASV_RESULTS_DIR: ${{ runner.temp }}/jittor-asv-cuda/results
-      ASV_HTML_DIR: ${{ runner.temp }}/jittor-asv-cuda/html
       ASV_MACHINE: github-rtx4090-cuda12-2
       ASV_COMPARE_BASE: ${{ github.event.before }}
     steps:
+      # `runner` is not an allowed context in a job-level `env:` -- using it
+      # there made GitHub reject the whole workflow file, so no job ran.
+      - name: Locate ASV output
+        shell: bash
+        run: |
+          echo "ASV_RESULTS_DIR=${RUNNER_TEMP}/jittor-asv-cuda/results" >> "${GITHUB_ENV}"
+          echo "ASV_HTML_DIR=${RUNNER_TEMP}/jittor-asv-cuda/html" >> "${GITHUB_ENV}"
       - name: Check out source with benchmark history
         uses: actions/checkout@v6
         with:

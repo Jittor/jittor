@@ -416,8 +416,7 @@ def qr(x):
     r"""
     do the qr factorization of x in the below formula:
     x = QR where Q has orthonormal columns and R is upper-triangular.
-    :param x (...,M,N): forward and backward both work for any M, N
-        (tall/square M>=N and wide M<N).
+    :param x (...,M,N): forward and backward both work for any M, N (tall/square M>=N and wide M<N).
     :return: q (...,M,K), r (...,K,N), K=min(M,N).
     """
     import jittor as jt

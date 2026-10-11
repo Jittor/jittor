@@ -11,7 +11,6 @@ import re
 import sys
 
 
-
 def _check_api(html_root, inventory_path):
     inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
     issues = []
@@ -59,7 +58,6 @@ def main(argv=None):
         issues.append("rendered logo is missing or empty")
     api_issues, checked = _check_api(html_root, args.inventory.resolve())
     issues.extend(api_issues)
-
 
     if issues:
         print("\n".join("ERROR: " + issue for issue in issues), file=sys.stderr)

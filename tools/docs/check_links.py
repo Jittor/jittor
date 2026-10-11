@@ -34,7 +34,8 @@ def _tracked_markdown(repo_root):
         if not relative.endswith(".md"):
             continue
         if relative != "docs/results/index.md" and any(
-                relative.startswith(prefix) for prefix in HISTORICAL_TREES):
+            relative.startswith(prefix) for prefix in HISTORICAL_TREES
+        ):
             continue
         # Cached paths may have been deleted or moved in the working tree.
         if not (repo_root / relative).is_file():
@@ -117,8 +118,7 @@ def _markdown_targets(path):
 #: ``tests/core/test_complex*.py`` long after those files moved to
 #: ``tests/type`` and ``tests/autograd``; nothing noticed, because a link with a
 #: scheme was skipped whether or not it named something local.
-_REPOSITORY_BLOB = re.compile(
-    r"^/Jittor/jittor/(?P<kind>blob|tree)/(?P<ref>[^/]+)/(?P<path>.+)$")
+_REPOSITORY_BLOB = re.compile(r"^/Jittor/jittor/(?P<kind>blob|tree)/(?P<ref>[^/]+)/(?P<path>.+)$")
 
 
 def _resolve_repository_url(repo_root, split, raw_target):
@@ -143,8 +143,7 @@ def _resolve_repository_url(repo_root, split, raw_target):
     except ValueError:
         return "repository URL escapes repository: {}".format(raw_target)
     if not candidate.exists():
-        return ("missing repository URL target: {} (from {})"
-                .format(clean, raw_target))
+        return "missing repository URL target: {} (from {})".format(clean, raw_target)
     if match.group("kind") == "tree" and not candidate.is_dir():
         return "tree URL names a file: {}".format(raw_target)
     if match.group("kind") == "blob" and candidate.is_dir():
