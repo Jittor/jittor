@@ -432,6 +432,7 @@
 | 8.24 | 原生 `DistributedDataParallel`：参数/缓冲广播、结构签名、梯度 mean-reduce、`no_sync` 和 NCCL bucket | 8.23 | [后端](codebase-audit/06-backends.md)§分布式 | 多卡梯度/副本对拍，常见训练步和 optimizer state 续训通过 |
 | 8.25 | Dataset 分片、epoch/worker seed 与 SyncBN 改用 native rank/world-size；非整除 batch 统一补齐尾样本 | 8.24 | [后端](codebase-audit/06-backends.md)§分布式 | CPU Dataset 回归与多卡分片、BN 冒烟通过 |
 | 8.26 | 原生单机多卡验收：限定单机、NCCL，不扩展到多机、FSDP 或 Tensor Parallel；共享内存回退基线与 P2P-capable 主机补充验证均保留 | 8.22–8.25 | [后端](codebase-audit/06-backends.md)§分布式 | 物理多卡 NCCL smoke、训练 loss、模型与 optimizer state continuation 通过；P2P 开启后实际传输路径见 `refactor-wip/results/2026-10-02-jtrun-p2p-validation.md` |
+| 8.27 | 原生单机多卡全场景矩阵与大模型通信重叠：覆盖 dtype/AMP、模型架构、优化器、累积/恢复、Dataset/worker、NCCL 拓扑与失败生命周期；先建立单卡及同步归约基线，再实现原生梯度 bucket readiness | 8.22–8.26 | [真实训练](../results/2026-10-12-native-ddp-real-training-comparison.md)、[性能核查](../results/2026-10-12-native-ddp-transformer-performance.md)；负责人 2026-10-12 的后续目标 | 冻结测试矩阵和分精度容差，真实 CUDA/NCCL 多步及恢复、梯度和副本检查通过；记录独立 PyTorch 的曲线、时间、吞吐、显存及失败/未验证边界；逐桶依赖、buffer 生命周期、rank 次序和设备 timeline 证明计算/通信重叠。矩阵与 overlap 验收完成后才合并最新 `origin/2.0-refactor`、复验受影响范围并考虑远端提交；范围保持单机 DDP |
 
 ## 12. 阶段 9 · 构建、缓存与打包
 
