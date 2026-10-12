@@ -16,9 +16,12 @@ Torch 风格的 `loss.backward()` 不属于原生 DDP 契约。
 CUDA_VISIBLE_DEVICES=0,1 jtrun --nproc-per-node=2 examples/distributed/native_ddp.py
 ```
 
-当前已验证的单机条件要求显式设置 `NCCL_P2P_DISABLE=1`。`jtrun` 对 NCCL 子进程也会强制
-写入这个值，保证所有 rank 选择相同的共享内存传输路径；在具备可靠 P2P 的主机上重新验证
-后，才能移除这项限制。
+`jtrun` 会把调用方的 `NCCL_P2P_DISABLE` 原样传给每个 NCCL rank，不会无条件覆盖传输策略。
+在支持 P2P 的主机上可以不设置该变量，或显式设置为 `0` 允许 NCCL 选择 P2P；需要共享内存
+回退时再显式设置 `NCCL_P2P_DISABLE=1`。允许 P2P 后，NCCL 仍会按拓扑选择传输方式，
+跨 NUMA 链路可能使用共享内存。设置 `NCCL_DEBUG=INFO`，通过实际 `Channel ... via`
+日志确认 `P2P/CUMEM` 或 `SHM`；在已验证 peer access 的主机上，可显式使用
+`NCCL_P2P_LEVEL=SYS` 测试跨 NUMA 的 P2P。启动器会统一继承这个设置。
 
 `python -m jittor.distributed.launch` 是同一 launcher 的模块入口。每个进程获得
 `RANK`、`LOCAL_RANK`、`WORLD_SIZE`、`LOCAL_WORLD_SIZE`、`MASTER_ADDR` 和 `MASTER_PORT`；

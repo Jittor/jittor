@@ -1,9 +1,11 @@
+import jittor as jt
 import numpy as np
 import pytest
 
 from jittor import distributed as dist
 from jittor.dataset import Dataset
 from jittor.dataset.dataset import _dataset_worker_seed
+from _helpers.child_process import run_child_script
 
 
 class _IndexDataset(Dataset):
@@ -107,3 +109,121 @@ def test_dataset_worker_seed_is_repeatable_and_rank_specific():
     assert seed != _dataset_worker_seed(17, 3, 1, 2)
     assert seed != _dataset_worker_seed(17, 4, 0, 2)
     assert seed != _dataset_worker_seed(17, 3, 0, 3)
+
+
+@pytest.mark.parametrize("rank", [1, 2])
+def test_native_distributed_workers_start_with_generated_seed(monkeypatch, rank):
+    # These ranks produced uint32 seeds above INT32_MAX and crashed before
+    # sending a batch when the native seed setter received them unchanged.
+    monkeypatch.setattr(dist, "get_world_size", lambda: 4)
+    monkeypatch.setattr(dist, "get_rank", lambda: rank)
+    with jt.flag_scope(use_cuda=0):
+        dataset = _IndexDataset(total_len=16, batch_size=8, seed=20261012)
+        dataset.set_attrs(num_workers=2, persistent_workers=False)
+        values = np.concatenate([batch.numpy() for batch in dataset])
+    expected = (np.arange(2)[:, None] * 8 + rank * 2 + np.arange(2)).reshape(-1)
+    np.testing.assert_array_equal(values, expected)
+
+
+def test_dataset_reset_wakes_worker_announcing_into_full_queue():
+    result = run_child_script('''
+import faulthandler
+import jittor as jt
+from jittor.dataset import Dataset
+from jittor.dataset.dataset import mp
+jt.flags.use_cuda = 0
+ready = mp.Event()
+calls = mp.Value('i', 0)
+original = jt.RingBuffer
+class FullQueue:
+    def __init__(self, size):
+        self.inner = original(16)
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+    def push(self, value):
+        with calls.get_lock():
+            calls.value += 1
+            if calls.value == 2:
+                ready.set()
+        return self.inner.push(value)
+jt.RingBuffer = lambda size: FullQueue(size) if size == 2048 else original(size)
+class Source(Dataset):
+    def __init__(self):
+        super().__init__(batch_size=4, num_workers=2)
+        self.set_attrs(total_len=8, keep_numpy_array=True)
+    def __getitem__(self, index):
+        return index
+faulthandler.dump_traceback_later(30, exit=True)
+ds = Source()
+ds._init_workers(ds._get_index_list())
+assert ready.wait(10)
+ds.set_epoch(1)
+assert not hasattr(ds, 'workers')
+faulthandler.cancel_dump_traceback_later()
+print('RESET_OK')
+''', text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "RESET_OK" in result.stdout
+    assert "RuntimeError: stop" not in result.stderr
+
+
+@pytest.mark.parametrize("failure", ["error", "exit"])
+def test_dataset_reset_reports_worker_failure(failure):
+    source = '''
+import faulthandler
+import os
+import jittor as jt
+from jittor.dataset import Dataset
+from jittor.dataset.dataset import mp
+jt.flags.use_cuda = 0
+ready = mp.Event()
+class Source(Dataset):
+    def __init__(self):
+        super().__init__(batch_size=4, num_workers=2)
+        self.set_attrs(total_len=8, keep_numpy_array=True)
+    def __getitem__(self, index):
+        if index >= 4:
+            ready.set()
+            FAILURE
+        return index
+faulthandler.dump_traceback_later(30, exit=True)
+ds = Source()
+ds._init_workers(ds._get_index_list())
+assert ready.wait(10)
+try:
+    ds.reset()
+except RuntimeError as error:
+    assert EXPECTED in str(error), str(error)
+else:
+    raise AssertionError('reset concealed a failed worker')
+assert not hasattr(ds, 'workers')
+faulthandler.cancel_dump_traceback_later()
+print('FAILURE_REPORTED')
+'''
+    if failure == "error":
+        source = source.replace("            FAILURE\n", '            raise ValueError("reset data error")\n')
+        source = source.replace("EXPECTED", '"ValueError: reset data error"')
+    else:
+        source = source.replace("            FAILURE\n", "            os._exit(3)\n")
+        source = source.replace("EXPECTED", '"exit code 3"')
+    result = run_child_script(source, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "REPORTED" in result.stdout
+
+
+def test_dataset_workers_observe_new_epoch_after_early_reset():
+    class EpochDataset(_IndexDataset):
+        def __getitem__(self, index):
+            return index + 100 * self.epoch_id
+
+    with jt.flag_scope(use_cuda=0):
+        dataset = EpochDataset(total_len=32, batch_size=4, seed=20261012)
+        dataset.set_attrs(num_workers=2)
+        try:
+            next(iter(dataset))
+            for epoch in (1, 2, 3):
+                dataset.set_epoch(epoch)
+                values = np.concatenate([batch.numpy() for batch in dataset])
+                np.testing.assert_array_equal(np.sort(values), np.arange(32) + 100 * epoch)
+        finally:
+            dataset.reset()

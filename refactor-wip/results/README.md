@@ -10,6 +10,7 @@
 
 ## 兼容性与功能验证
 
+- [2026-10-12 原生 DDP 真实 ResNet 与 Transformer 训练对比](2026-10-12-native-ddp-real-training-comparison.md)
 - [2026-09-17 Accelerate 训练能力整改与显式支持边界](2026-09-17-accelerate-maturity-repair.md)
 - [2026-09-16 Accelerate 优化器与数据批处理性能修复](2026-09-16-accelerate-wrapper-performance-repair.md)
 - [2026-09-13 远端合并后的 Ascend 增量修复与原生/独立 compat 复验](2026-09-13-ascend-merge-validation.md)

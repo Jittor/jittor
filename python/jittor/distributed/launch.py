@@ -249,11 +249,9 @@ def _rank_environment(args, rank, backend, devices, rootinfo, master_addr, maste
         "{}_LOCAL_RANK".format(prefix): str(backend_local_rank),
         "{}_ROOTINFO_FILE".format(prefix): rootinfo,
     })
-    if backend == "nccl":
-        # The validated host requires the shared-memory NCCL path.  Keep the
-        # condition explicit and inherited by every rank until a P2P-capable
-        # host is revalidated; never let ranks choose different transports.
-        env["NCCL_P2P_DISABLE"] = "1"
+    # Preserve the caller's NCCL transport policy verbatim.  In particular,
+    # an explicit NCCL_P2P_DISABLE value is copied to every rank through the
+    # environment above, while an unset value lets NCCL choose its transport.
     return env, backend_local_rank, device
 
 

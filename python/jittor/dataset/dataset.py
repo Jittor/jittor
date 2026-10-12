@@ -59,7 +59,9 @@ _PERSISTENT_WORKERS_UNSET = object()
 def _dataset_worker_seed(seed, epoch, rank, worker_id):
     sequence = np.random.SeedSequence(
         (int(seed), int(epoch), int(rank), int(worker_id)))
-    return int(sequence.generate_state(1, dtype=np.uint32)[0])
+    # The native RNG setter accepts a signed int32; NumPy generates uint32.
+    # Keep the worker seed nonnegative for NumPy/Python and within that ABI.
+    return int(sequence.generate_state(1, dtype=np.uint32)[0]) & 0x7fffffff
 
 dataset_root = os.path.join(jit_utils.home(), ".cache", "jittor", "dataset")
 # int() like the CHECK_MEMORY line below: os.environ.get returns a *string*,
@@ -377,7 +379,8 @@ class Dataset(object):
         jt.jt_init_subprocess()
         wseed = _dataset_worker_seed(
             self.seed, self.epoch_id, getattr(self, "_worker_rank", 0), worker_id)
-        jt.set_global_seed(wseed)
+        # Rank is already part of SeedSequence, including for MPI workers.
+        jt.set_global_seed(wseed, different_seed_for_mpi=False)
         # torch-compatible: run user worker init hook once per worker process,
         # after seeding so users can re-seed deterministically if desired.
         worker_init_fn = getattr(self, "worker_init_fn", None)
@@ -449,8 +452,17 @@ class Dataset(object):
                 # send makes the invariant "an id in the queue means a whole
                 # batch is readable, or an error is stored" hold, which is what
                 # `_check_worker_error` needs to be reachable at all.
-                with self.idqueue_lock:
-                    self.idqueue.push(worker_id)
+                try:
+                    with self.idqueue_lock:
+                        self.idqueue.push(worker_id)
+                except RuntimeError as stopped:
+                    # reset() stops both queues before waiting for idle.
+                    # A committed batch may still be waiting to announce
+                    # itself in a full idqueue; resume the idle handshake.
+                    if (str(stopped) == "stop" and self.idqueue.is_stop()
+                            and buffer.is_stop()):
+                        continue
+                    raise
                 now = time.time()
                 send_time = now - start
                 start = now
@@ -610,16 +622,21 @@ Example::
         for w in self.workers:
             w.buffer.stop()
         self.idqueue.stop()
-        # wait until all workers idle
-        if self.num_idle.value < self.num_workers:
-            with self.gid.get_lock():
-                self.gid.get_obj().value = self.batch_len
+        # A failed worker cannot report idle. Poll its error/exit status even
+        # when it no longer has a live condition notifier to wake the parent.
+        with self.gid.get_lock():
+            self.gid.get_obj().value = self.batch_len
+            while True:
+                for worker_id, worker in enumerate(self.workers):
+                    self._check_worker_error(worker_id, worker)
+                if any(worker.p.exitcode is not None for worker in self.workers):
+                    self._raise_worker_death(
+                        RuntimeError("dataset worker exited during reset"))
+                if self.num_idle.value >= self.num_workers:
+                    break
+                self.num_idle_c.wait(timeout=0.1)
                 if mp_log_v:
                     print("idle num", self.num_idle.value)
-                while self.num_idle.value < self.num_workers:
-                    self.num_idle_c.wait()
-                    if mp_log_v:
-                        print("idle num", self.num_idle.value)
         # clean workers' buffer
         for w in self.workers:
             w.buffer.clear()

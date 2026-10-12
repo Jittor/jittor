@@ -8,8 +8,18 @@
 `optimizer.backward(loss)` 与 `optimizer.step()`。多机、FSDP、TP、ZeRO 和 `compat.torch`
 核心逻辑不在范围内。
 
-本机验证条件固定为 `NCCL_P2P_DISABLE=1`，设备为物理卡 `5,7,8,9`。`jtrun` 对每个 NCCL
-子进程强制注入该变量，避免不同 rank 选择不同传输路径；因此本报告不宣称 P2P 已验证。
+本报告记录的是 2026-09-28 的共享内存回退基线：验证条件固定为 `NCCL_P2P_DISABLE=1`，
+设备为物理卡 `5,7,8,9`。当时 `jtrun` 对每个 NCCL 子进程强制注入该变量，因此该轮不宣称
+P2P 已验证。2026-10-02 的 P2P 能力与正式 launcher 验证见
+[`2026-10-02-jtrun-p2p-validation.md`](2026-10-02-jtrun-p2p-validation.md)。
+
+## P2P 路径补充验证（2026-10-02）
+
+同一服务器的 P2P capability 矩阵、CUDA 双向 peer copy 和四 rank NCCL/DDP smoke 均通过。
+在 `NCCL_P2P_DISABLE=0` 下，rank 0 报告 `NATIVE_NCCL_SMOKE_OK checks=20`，NCCL 日志实际
+出现 `via P2P/CUMEM`，未出现 `via SHM` 或 `via NET`。launcher 已移除对 `NCCL_P2P_DISABLE`
+的无条件写入：调用方显式设置的值会统一继承到所有 rank，未设置时由 NCCL 自主选择；旧的
+`NCCL_P2P_DISABLE=1` 共享内存回退仍可复现。
 
 ## 已完成适配
 
@@ -31,7 +41,7 @@
 ## 证据
 
 CPU 定向回归：`test_native_ddp.py`、`test_native_process_group.py` 和 Dataset 原生分片
-测试共 **27 passed**；启动器测试（含 P2P 环境冻结）**15 passed**。GPU 4-rank 冒烟使用
+测试共 **27 passed**；启动器测试（含 P2P 环境继承与未注入）**16 passed**。GPU 4-rank 冒烟使用
 `CUDA_VISIBLE_DEVICES=5,7,8,9`，共 **20 项检查通过**，覆盖 NCCL sum/broadcast/all-gather、
 BF16 归约、Dataset 分片、SyncBN、参数/buffer 广播、梯度平均、`no_sync`、最终副本一致性，
 日志中的 NCCL 版本为 `2.21.5`。
@@ -49,7 +59,6 @@ batch 128 的稳定吞吐实测约 **6.5k--8.7k samples/s**（卡上已有负载
 
 ## 尚未宣称完成的事项
 
-`Work(async_op=True)` 当前仍是同步完成句柄，NCCL/HCCL communicator 没有可调用 teardown，
-默认 P2P 路径未在正式 P2P 主机验证，吞吐仍受本机共享内存路径和外部 GPU 负载影响。还需要
-在 P2P 可用机器上复验传输路径，并在更多常见模型/优化器和冷缓存环境下扩大回归；这些不改变
-本轮单机、NCCL、原生 DDP 的功能边界，也不引入多机或 FSDP 目标。
+`Work(async_op=True)` 当前仍是同步完成句柄，NCCL/HCCL communicator 没有可调用 teardown；
+P2P 与共享内存的吞吐对照、更多常见模型/优化器和冷缓存环境仍需扩大回归。这些不改变本轮
+单机、NCCL、原生 DDP 的功能边界，也不引入多机或 FSDP 目标。

@@ -71,7 +71,8 @@ print(" ".join("%s=%s" % (key, os.environ.get(key)) for key in keys), flush=True
 """
 
 
-def _launch(nproc, code, logdir, timeout, rendezvous_timeout=120):
+def _launch(nproc, code, logdir, timeout, rendezvous_timeout=120,
+            env=None, inherit=True):
     # Through _helpers.child_process, the launcher passes its environment down
     # to every rank, so an unpinned PYTHONPATH here would put another checkout
     # in all of them. The ranks need no GPU; explicit backend setup is tested
@@ -82,7 +83,8 @@ def _launch(nproc, code, logdir, timeout, rendezvous_timeout=120):
          "--device-ids", ",".join(str(rank) for rank in range(nproc)),
          "--log-dir", logdir, "--standalone", "--timeout", str(rendezvous_timeout),
          "--", PYTHON, "-c", code],
-        cwd=_REPO_ROOT, merge_stderr=True, timeout=timeout)
+        cwd=_REPO_ROOT, env=env, inherit=inherit,
+        merge_stderr=True, timeout=timeout)
     return done, time.time() - start
 
 
@@ -150,12 +152,28 @@ class TestLaunchFailurePropagation(unittest.TestCase):
             text = Path(self.tmp.name, "rank%d.log" % rank).read_text()
             self.assertIn("use_nccl=1 use_mpi=0", text, text)
 
-    def test_nccl_p2p_is_frozen_disabled_for_every_rank(self):
-        done, _ = _launch(3, _PRINT_NCCL_P2P, self.tmp.name, timeout=120)
+    def test_nccl_p2p_setting_is_inherited_by_every_rank(self):
+        for value in ("1", "0"):
+            logdir = Path(self.tmp.name, "explicit-%s" % value)
+            done, _ = _launch(3, _PRINT_NCCL_P2P, logdir, timeout=120,
+                              env={"NCCL_P2P_DISABLE": value})
+            self.assertEqual(done.returncode, 0, done.stdout[-3000:])
+            for rank in range(3):
+                text = Path(logdir, "rank%d.log" % rank).read_text()
+                self.assertIn("nccl_p2p_disable=%s" % value, text, text)
+
+    def test_nccl_p2p_is_not_injected_when_unset(self):
+        # Use a complete environment with the setting removed so an ambient
+        # test-shell value cannot hide an accidental launcher default.
+        env = dict(os.environ)
+        env.pop("NCCL_P2P_DISABLE", None)
+        logdir = Path(self.tmp.name, "unset")
+        done, _ = _launch(3, _PRINT_NCCL_P2P, logdir, timeout=120,
+                          env=env, inherit=False)
         self.assertEqual(done.returncode, 0, done.stdout[-3000:])
         for rank in range(3):
-            text = Path(self.tmp.name, "rank%d.log" % rank).read_text()
-            self.assertIn("nccl_p2p_disable=1", text, text)
+            text = Path(logdir, "rank%d.log" % rank).read_text()
+            self.assertIn("nccl_p2p_disable=None", text, text)
 
     def test_auto_cuda_detection_sets_nccl_build_flags_before_import(self):
         done = run_python_child(
