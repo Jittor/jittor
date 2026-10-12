@@ -2,6 +2,8 @@
 
 import importlib
 import pickle
+import sys
+from types import ModuleType
 
 import jittor as jt
 import numpy as np
@@ -33,6 +35,34 @@ def test_torch_archive_save_load_roundtrip(tmp_path):
     for name in source:
         assert restored[name].dtype == source[name].dtype
         np.testing.assert_array_equal(restored[name].numpy(), source[name].numpy())
+
+
+def test_torch_archive_does_not_require_preloaded_torch_utils(tmp_path, monkeypatch):
+    monkeypatch.setitem(sys.modules, "torch", ModuleType("torch"))
+    monkeypatch.delitem(sys.modules, "torch._utils", raising=False)
+    path = str(tmp_path / "weights.pth")
+    source = {"weight": jt.array([1.25, -2.0])}
+    jt.save(source, path)
+    assert "torch._utils" not in sys.modules
+    restored = jt.load(path)
+    np.testing.assert_array_equal(restored["weight"].numpy(), source["weight"].numpy())
+
+
+def test_torch_archive_pickle_globals_are_restored_on_error(monkeypatch):
+    from jittor.serialization.save_pytorch import _pickle_targets
+
+    fake_torch = ModuleType("torch")
+    original_storage = object()
+    fake_torch.FloatStorage = original_storage
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.delitem(sys.modules, "torch._utils", raising=False)
+    with pytest.raises(RuntimeError, match="forced failure"):
+        with _pickle_targets():
+            assert fake_torch.FloatStorage is not original_storage
+            assert "torch._utils" in sys.modules
+            raise RuntimeError("forced failure")
+    assert fake_torch.FloatStorage is original_storage
+    assert "torch._utils" not in sys.modules
 
 
 def test_historical_rebuild_pickle_roundtrip():

@@ -59,22 +59,33 @@ CI requirements are documented in [`agent/manuals/environment.md`](agent/manuals
 
 ```text
 .
-├── python/jittor/       # runtime package and JIT C++/CUDA sources
-├── python/jittor_utils/ # installation and compiler utilities
+├── src/                 # C++ core: core/ type/ mem/ codegen/ ops/ runtime/ bindings/
+├── backends/            # one directory per backend: cpu/ cuda/ acl/ rocm/ corex/ comm/
+├── python/jittor/       # the Python runtime package (pure Python)
+├── python/jittor_utils/ # bootstrap for the build utilities in jittor/build/utils/
+├── compat/              # the optional `jittor-torch` distribution: torch shim, FSDP2, triton
+├── adapters/            # the optional `jittor-torch-adapters` distribution
 ├── tests/               # repository pytest suite; not shipped in wheels
 ├── examples/            # runnable examples and MyST notebook sources
-├── benchmarks/          # ASV performance suite
-├── tools/               # build, release, install, and maintenance commands
-├── docs/                # durable architecture, development, and release docs
-├── agent/               # operational manuals, skills and maintenance scripts
+├── benchmarks/          # ASV performance suite, indexed by commit
+├── bench/               # manual Torch/torch_npu comparison runs, not collected by pytest
+├── tools/               # build, docs, lint, release and maintenance commands
+├── docs/                # the single user- and contributor-facing documentation tree
+├── agent/               # operational manuals and skills (manuals/ and skills/ only)
 ├── pyproject.toml       # authoritative package, tool, and pytest configuration
 └── noxfile.py           # reproducible local and CI sessions
 ```
 
-Runtime files loaded by path, especially `python/jittor/src/` and
-`python/jittor/extern/`, have packaging and compiler contracts. Read the
-[repository layout decision](docs/development/repository-layout.md) before
-moving them.
+The C++ and CUDA sources are **beside** the Python package, not inside it:
+`src/` is the core and each `backends/<name>/` is one backend. A source checkout
+resolves them next to `python/jittor/`; a wheel installs the same trees as
+`jittor/src/` and `jittor/backends/<name>/`. Those paths are loaded by path at
+build time and have packaging and compiler contracts, as do
+`python/jittor/contrib/math_util/src/` and
+`compat/shim/cpp_extension/{include,src}/`. Read the
+[repository layout decision](docs/development/repository-layout.md) and
+[source architecture](docs/development/source-architecture.md) before moving
+them.
 
 ## Making a change / 修改代码
 
@@ -130,24 +141,42 @@ python -m pytest --collect-only -q tests
 
 ### Nox gates / Nox 门禁
 
-[`noxfile.py`](noxfile.py) is the canonical command surface. The default gate is
-`lint`, `format`, `typing`, `structure`, and `py37`.
+[`noxfile.py`](noxfile.py) is the canonical command surface. `python -m nox`
+with no argument runs the default gate: `lint`, `format`, `typing`,
+`structure`, `cpu`, `packaging`, `py37`, `py312` and `py313`.
 
-[`noxfile.py`](noxfile.py) 是统一命令入口；默认门禁包括 `lint`、`format`、
-`typing`、`structure` 与 `py37`。
+[`noxfile.py`](noxfile.py) 是统一命令入口；不带参数的 `python -m nox` 运行默认门禁：
+`lint`、`format`、`typing`、`structure`、`cpu`、`packaging`、`py37`、`py312`、`py313`。
 
 ```bash
 python -m nox
 python -m nox -s structure
+python -m nox -s smoke        # the pull-request CPU tier
 python -m nox -s cpu
 python -m nox -s cuda
 python -m nox -s npu
 python -m nox -s rocm
 python -m nox -s mpi
+python -m nox -s ecosystem    # nightly: downstream libraries against real PyTorch
 python -m nox -s benchmark
 python -m nox -s docs
 python -m nox -s docs_links
 python -m nox -s tutorials
+```
+
+Between edits, [`tools/run_test_suite.py`](tools/run_test_suite.py) is cheaper
+than a gate. It runs native and Torch-compatibility tests in separate processes
+with separate JIT caches, because Torch mode is process-global, and reports one
+combined result:
+
+两次编辑之间用 [`tools/run_test_suite.py`](tools/run_test_suite.py) 比跑门禁便宜。
+Torch 模式是进程级的，所以它把原生测试与 Torch 兼容测试分进程、分编译缓存执行，
+最后给一个合并结论：
+
+```bash
+python tools/run_test_suite.py --tier core    # after an edit
+python tools/run_test_suite.py --tier smoke   # before opening a pull request
+python tools/run_test_suite.py                # the whole tree, on demand
 ```
 
 The `structure` session checks repository layout, source and wheel contents, a
@@ -173,21 +202,40 @@ values for concurrent jobs; do not run benchmarks and tests against one cache.
 
 ## Documentation / 文档
 
-- Update [`README.md`](README.md) for installation or first-use changes. It is
-  the single authoritative root README and keeps English and Chinese together.
-- Put durable decisions under `docs/architecture/`, testing contracts under
-  `docs/testing/`, development guidance under `docs/development/`, and research
-  proposals under `docs/research/`.
-- Put reproducible maintainer evidence under `docs/results/`; keep raw logs and
-  generated artifacts outside the source checkout.
-- Use relative links for repository files and run the structure gate after moves.
+`docs/` is the only documentation tree, its source language is Chinese, and
+every page belongs to exactly one section:
 
+| Section | Contents |
+| --- | --- |
+| [`docs/guides/`](docs/guides/) | task guides: hardware, debugging, memory, platform support and limitations |
+| [`docs/notes/`](docs/notes/) | long-lived framework mechanisms (precision, placement, async execution) |
+| [`docs/compatibility/`](docs/compatibility/) | the Torch compatibility layer and its acceptance rules |
+| [`docs/development/`](docs/development/) | repository layout, source architecture, test system, known-issue write-ups |
+| [`docs/research/`](docs/research/) | proposals that are not yet decided |
+| [`docs/results/`](docs/results/) | reproducible maintainer conclusions, each with status, commit, scope, maintainer and recheck condition |
+| [`docs/releases/`](docs/releases/) | release notes |
+
+- Update [`README.md`](README.md) for installation or first-use changes. It is
+  the single authoritative root README and keeps English and Chinese together;
+  do not add a second, per-language or generated README.
+- Keep raw logs, caches and benchmark artifacts out of the documentation tree.
+- Use relative links between documentation pages, and a
+  `https://github.com/Jittor/jittor/blob/master/<path>` URL for a repository
+  file outside `docs/`; both forms are checked.
+- Run `python -m nox -s docs` and `python -m nox -s docs_links` after any
+  documentation change, and the structure gate after moves.
+
+- `docs/` 是唯一的文档树，源语言是中文，每一页只属于一个栏目：使用指南
+  (`docs/guides/`)、机制说明 (`docs/notes/`)、Torch 兼容 (`docs/compatibility/`)、
+  开发文档 (`docs/development/`)、研究提案 (`docs/research/`)、验证结论
+  (`docs/results/`)、发布说明 (`docs/releases/`)。
 - 安装和首次使用发生变化时更新 [`README.md`](README.md)；它是唯一权威的根 README，
-  中英文共同维护。
-- 长期决策、测试契约、开发指南和研究提案分别放入 `docs/architecture/`、
-  `docs/testing/`、`docs/development/` 与 `docs/research/`。
-- 可复现的维护者结论放入 `docs/results/`；原始日志与生成产物不进入源码仓库。
-- 仓库内文件使用相对链接，移动后执行结构门禁。
+  中英文共同维护，不要再加按语言复制或生成的第二份。
+- 原始日志、缓存与基准产物不进入文档树。
+- 文档之间使用相对链接；指向 `docs/` 之外的仓库文件时使用
+  `https://github.com/Jittor/jittor/blob/master/<路径>`，两种形式都会被检查。
+- 文档改动后运行 `python -m nox -s docs` 与 `python -m nox -s docs_links`，
+  移动文件后再跑结构门禁。
 
 ## Pull requests / 合并请求
 

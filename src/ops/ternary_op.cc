@@ -6,6 +6,7 @@
 // ***************************************************************
 #include "core/var.h"
 #include "ops/ternary_op.h"
+#include "ops/layout_propagation.h"
 #include "ops/op_register.h"
 
 namespace jittor {
@@ -31,6 +32,15 @@ TernaryOp::TernaryOp(Var* cond, Var* x, Var* y) : cond(cond), x(x), y(y) {
         if (by) yy = make_broadcast(y, cond, NanoVector()), y = yy;
         forward(make_ternary(cond, x, y));
         return;
+    }
+    {
+        NanoVector axes;
+        vector<VarPtr> sources;
+        if (storage_layout_operands({cond, x, y}, axes, sources)) {
+            forward(storage_view_transpose(
+                make_ternary(sources[0], sources[1], sources[2]), axes));
+            return;
+        }
     }
     set_flag(OpFlags::_cpu);
     set_flag(OpFlags::_cuda);

@@ -18,7 +18,7 @@ description: 接入或验证一个下游 Torch 生态库时的流程与准入标
 | 能力有，拼写/签名不同 | **`jittor.compat.torch`** | compat 只做适配；**出现第二套实现就是放错了** |
 | 这个库私有的实现细节 | **adapter** | 它根本不是 torch API |
 
-[`torch-compatibility-principles`](../../../refactor-wip/architecture/torch-compatibility-principles.md)
+[`torch-compatibility-principles`](../../../docs/compatibility/principles.md)
 和 [`project-context`](../../manuals/project-context.md) 写了前两行；第三行原先只用
 排除法说"不属于 core"，没给地址，这是 adapter 失控的根源。
 

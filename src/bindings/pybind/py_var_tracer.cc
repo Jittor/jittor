@@ -8,6 +8,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include <Python.h>
+#include <unordered_map>
 #include <frameobject.h>
 #include "bindings/pyjt/py_obj_holder.h"
 #include "bindings/pyjt/py_converter.h"
@@ -103,10 +104,86 @@ static PyFrameObject* frame_back(PyFrameObject* f) {
     #endif
 }
 
+#if PY_VERSION_HEX >= 0x030B0000
+// Every Op construction lands here, so the walk has to be cheap. It used to
+// look each frame's globals up by attribute name and its `__name__` by a C
+// string -- a new str, a UTF-8 decode and a hash per frame -- and then compute
+// the line number from the code object's line table. In a diffusers training
+// step those were 5-8% of all host time. Now both questions are asked once:
+// whether a code object is Jittor's or Torch's own is a property of the code
+// object, and the origin of a (code object, instruction) pair never changes.
+// The GIL guards both tables; the code objects are held so their addresses
+// cannot be reused by another.
+namespace {
+struct OriginCaches {
+    std::unordered_map<PyObject*, bool> internal;
+    std::unordered_map<PyObject*, std::unordered_map<int, uint64>> origin;
+    PyObject* name_key = nullptr;
+};
+OriginCaches& origin_caches() {
+    static OriginCaches* caches = new OriginCaches();  // never freed: outlives the interpreter
+    return *caches;
+}
+bool code_is_internal(OriginCaches& caches, PyFrameObject* frame, PyObject* code) {
+    auto found = caches.internal.find(code);
+    if (found != caches.internal.end()) return found->second;
+    if (!caches.name_key) caches.name_key = PyUnicode_InternFromString("__name__");
+    PyObject* globals = PyFrame_GetGlobals(frame);
+    PyObject* module = globals && PyDict_Check(globals) ? PyDict_GetItem(globals, caches.name_key) : nullptr;
+    const char* name = module && PyUnicode_Check(module) ? PyUnicode_AsUTF8(module) : nullptr;
+    bool internal = name && (!strcmp(name, "jittor") || !strncmp(name, "jittor.", 7)
+                             || !strcmp(name, "torch") || !strncmp(name, "torch.", 6));
+    Py_XDECREF(globals);
+    Py_INCREF(code);
+    caches.internal.emplace(code, internal);
+    return internal;
+}
+} // namespace
+#endif
+
 // A location, not a retained frame or a full module/value trace. Capture at
 // construction while the GIL is held; launch and error paths use native data.
 static uint64 capture_python_launch_origin() {
     if (!Py_IsInitialized() || !PyGILState_Check()) return 0;
+#if PY_VERSION_HEX >= 0x030B0000
+    {
+        auto& caches = origin_caches();
+        PyObject *error_type=nullptr, *error_value=nullptr, *error_traceback=nullptr;
+        PyErr_Fetch(&error_type, &error_value, &error_traceback);
+        uint64 result = 0;
+        PyFrameObject* frame = PyEval_GetFrame(); // borrowed
+        Py_XINCREF(frame);
+        for (int depth=0; frame && depth<64; ++depth) {
+            PyObject* code = (PyObject*)PyFrame_GetCode(frame);
+            if (!code_is_internal(caches, frame, code)) {
+                auto& lines = caches.origin[code];
+                if (lines.empty()) Py_INCREF(code);
+                const int lasti = PyFrame_GetLasti(frame);
+                auto found = lines.find(lasti);
+                if (found != lines.end()) {
+                    result = found->second;
+                } else {
+                    PyObject* file = ((PyCodeObject*)code)->co_filename;
+                    const char* path = file && PyUnicode_Check(file) ? PyUnicode_AsUTF8(file) : nullptr;
+                    if (path) result = runtime_launch_history().intern_origin(path, PyFrame_GetLineNumber(frame));
+                    // Only a real id is kept: 0 means the table was full, and
+                    // asking again is what counts the unrecorded capture.
+                    if (result) lines.emplace(lasti, result);
+                }
+                Py_DECREF(code);
+                break;
+            }
+            Py_DECREF(code);
+            auto* previous = frame;
+            frame = frame_back(frame);
+            Py_DECREF(previous);
+        }
+        Py_XDECREF(frame);
+        PyErr_Clear();
+        PyErr_Restore(error_type, error_value, error_traceback);
+        return result;
+    }
+#endif
     PyObject *error_type=nullptr, *error_value=nullptr, *error_traceback=nullptr;
     PyErr_Fetch(&error_type, &error_value, &error_traceback);
     uint64 result = 0;

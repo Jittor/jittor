@@ -105,6 +105,10 @@ print("jt.sync_all() 真正等待: %.2f ms" % real_sync)
 `jt.profiler.start()` / `stop()` 之间执行的算子会被记录：每个算子被调用了多少次、总耗时、
 平均耗时，以及访存和计算吞吐。
 
+它是**单算子微基准**：每个算子执行后都会同步设备（还可以按 `warmup`/`rerun` 重跑），
+所以每行时间是"发射 + kernel + 同步"，适合比较单个 kernel；整步的时间分布要用第 5 节
+的 `jt.profile`。
+
 ```{code-cell} ipython3
 from jittor import nn
 
@@ -258,8 +262,10 @@ peak = jt.core.get_peak_device_used_memory(device)
 print("第 %d 号卡峰值: %.1f MiB" % (device, peak / mib))
 ```
 
-这个峰值是**进程生命周期内的高水位，没有重置接口**。它答的是"打开画像以来最高到过多少"。
-想单独量某个阶段，就在那个阶段开始时才打开 `profile_memory_enable`。
+每次打开 `profile_memory_enable` 都从零开始记录。更轻的做法不需要开画像：内存池在每次
+分配时都记录高水位，`jt.core.reset_device_memory_peak(device)` 把它重置到当前值，
+`jt.core.device_memory_peak(device)` 读出来（`device_memory_reserved_peak` 是池向驱动
+申请量的高水位）。
 
 `jt.get_max_memory_info()` / `jt.display_max_memory_info()` 也受同一个开关约束，它们返回的
 是"哪些张量活得最久"的文字报告。在纯 CPU 环境下 `get_peak_device_used_memory` 返回 0。
@@ -268,13 +274,34 @@ print("第 %d 号卡峰值: %.1f MiB" % (device, peak / mib))
 [混合精度](mixed_precision.md)）、检查是否有张量被意外地一直持有（比如在循环里把
 `loss` 累积进了一个 list）、最后才是换更小的模型。
 
-## 5. 一次体检的完整流程
+## 5. 一步体检：`jt.profile`
+
+上面的工具各答一个问题。`jt.profile` 把它们合在一起，而且**不改变被测的那一步**
+（`jt.profiler` 会在每个算子后同步，量到的是单个 kernel，不是一步）：
+
+```{code-cell} ipython3
+with jt.profile() as prof:
+    outputs = model(inputs)
+    loss = (outputs ** 2).mean()
+    loss.sync()
+
+print(prof.bound)                          # 主机瓶颈还是设备瓶颈，以及依据
+print(prof.table(sort_by="host_time", row_limit=5))
+print("峰值 %.2f MiB" % (prof.memory.peak_allocated / mib))
+```
+
+`prof.summary()` 给出完整报告：墙钟被拆成 Python 构图、执行器规划、算子发射、等待设备
+几项；有显卡且装了 CUPTI 时还有每个算子、每个 kernel 的设备时间；显存部分给出峰值那一刻
+谁活着、是哪一行 Python 建的。`prof.export_chrome_trace("step.json")` 可以在
+Perfetto 里看时间线。细节见[性能与显存画像](../../docs/notes/profiling.md)。
+
+## 6. 一次体检的完整流程
 
 把上面的工具串起来，分析一个训练步骤可以固定成这四步：
 
 1. **热身**：先跑几步，把编译开销排除掉。
 2. **掐表**：整段跑完后 `jt.sync_all()`，测稳定态的每步耗时。
-3. **分解**：用 `jt.profiler` 看这一步里时间花在哪些算子上。
+3. **分解**：用 `jt.profile` 看这一步的时间和显存去了哪里。
 4. **对照**：改一处，只改一处，再测一次。
 
 ```{code-cell} ipython3
@@ -297,13 +324,12 @@ for _ in range(20):
 jt.sync_all()
 print("稳定态每步: %.3f ms" % ((time.perf_counter() - start) / 20 * 1000))
 
-jt.profiler.start()             # 3. 分解
-one_step()
-jt.sync_all()
-jt.profiler.stop()
+with jt.profile() as prof:      # 3. 分解
+    one_step()
+print(prof.summary(row_limit=8))
 ```
 
-## 6. 排查清单
+## 7. 排查清单
 
 **测量本身出错**，比对结果没有结论更常见。动手优化前先确认这几条：
 

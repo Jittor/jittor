@@ -2,10 +2,9 @@
 # torch-level regression test (#6): run real transformers models
 # through `import torch` -> jittor, on the torch-compat layer.
 #
-# REQUIRES an env with the torch_shim deployed + transformers, e.g. the
-# py3.11 conda env used for jittor-as-torch:
+# REQUIRES an env with the torch_shim deployed + transformers:
 #   export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DEACTIVATE_ASYNC_LOAD=1
-#   /home/yizhang/miniconda3/envs/jt-torch/bin/python -m pytest compat/tests/torch/test_torch_hf_models.py
+#   JITTOR_TORCH_SHIM=1 python -m pytest compat/tests/torch/test_torch_hf_models.py
 # Skips cleanly if torch_shim/transformers are unavailable.
 #
 # Covers ~30 architectures (decoder / encoder / encoder-decoder / vision):

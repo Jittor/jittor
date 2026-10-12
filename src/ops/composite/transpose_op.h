@@ -10,6 +10,9 @@
 namespace jittor {
 
 struct TransposeOp : Op {
+    // A view composes the input's strides (see infer_shape), so a strided
+    // input is taken as it is; the copying form densifies it itself.
+    static constexpr bool accepts_storage_strides = true;
     Var* x, * y;
     NanoVector axes;
     TransposeOp(Var* x, NanoVector axes=NanoVector());

@@ -1,11 +1,11 @@
 ---
 name: jittor-core-cpp-edit-loop
-description: 改 python/jittor/src 下 C++ 核心时的编辑—重编—验证循环。包含隔离缓存与解释器选树的自检、把重编从 ~10 分钟压到 ~30 秒的 CPU-only 循环、每次 C++ 改动后第一次 pytest 必然失败的"jit_utils updated"陷阱、"读到未初始化字节"这类静默错值的复现判据、怎么给 UB 类改动找到可达后果（以及缺陷在几乎无依赖的头文件里时直接单编它跑 ASan 这条捷径）、把守护页/崩溃换成可捕获错误的四个必查项、给只长不消的缓存表加容量上限时会变成 UB 的三处调用写法，并在禁止 git stash 的前提下跑出「修前失败」那一轮。
+description: 改 src/ 下 C++ 核心时的编辑—重编—验证循环。包含隔离缓存与解释器选树的自检、把重编从 ~10 分钟压到 ~30 秒的 CPU-only 循环、每次改 src/utils 后第一次运行必然退出的「jit_utils was rebuilt，rerun」陷阱、"读到未初始化字节"这类静默错值的复现判据、怎么给 UB 类改动找到可达后果（以及缺陷在几乎无依赖的头文件里时直接单编它跑 ASan 这条捷径）、把守护页/崩溃换成可捕获错误的四个必查项、给只长不消的缓存表加容量上限时会变成 UB 的三处调用写法，并在禁止 git stash 的前提下跑出「修前失败」那一轮。
 ---
 
 # 改 Jittor C++ 核心的验证循环
 
-改 `python/jittor/src/**` 的人每次都会重新踩同样四个坑：导错源码树、缓存互相污染、
+改 `src/**` 的人每次都会重新踩同样四个坑：导错源码树、缓存互相污染、
 每改一行等十分钟、以及改完第一次跑测试拿到一个假失败。本 skill 是这四件事的固定答案。
 
 ## 1. 先自检：解释器导入的是哪棵树
@@ -43,27 +43,29 @@ CPU-only 是**另一个缓存分区**（路径里没有 `cu12.x` 段），核心
 可以一分钟一轮。代价是 `jt.has_cuda` 为假，所有 CUDA 用例被 skip——所以**收尾时必须再跑一次带
 `nvcc_path` 的 CUDA 轮**，两轮都绿才算完。
 
-缓存目录名里带**源码内容哈希**与**分支名**，所以改一行 C++ 就换一个目录：老目录不会被复用，
-但也不会被清理。跑几十轮之后 `du -sh $JITTOR_HOME`，超过 20G 就整个删掉重来。
+缓存目录按 checkout 路径（`jittor_path_key`）、`cache_name` 与构建配置指纹（`cfg*`）分区，
+不再带分支名；改源码只触发 `cache_compile` 的增量重编。跑久了 `du -sh $JITTOR_HOME`，
+切过很多配置、超过 20G 就整个删掉重来。
 
-## 4. 每次 C++ 改动后的第一次运行必然"失败"
+## 4. 改 `src/utils` 后的第一次运行必然"失败"
 
-改完 `python/jittor/src/**` 后第一次跑 pytest，会在 collect 阶段拿到：
+改完 `src/utils/{cache_compile,log,tracer,jit_utils,str_utils}.cc` 后第一次 `import jittor`
+（包括 pytest 的 collect 阶段）会拿到：
 
 ```
-E   SystemExit: 0
-[e ... compiler.py:927] jit_utils updated, please rerun your command.
+E   SystemExit: 3
+[e ... compiler.py] jit_utils was rebuilt and cannot be reloaded in this process. Nothing else has run: rerun the same command.
 ```
 
-这**不是**你的改动有问题：jittor 重新生成了 `jit_utils` 之后要求换一个新进程。
-**原样重跑同一条命令**即可。不要因为这个去改代码。
+这**不是**你的改动有问题：jittor 重新编了 `jit_utils_core` 之后要求换一个新进程
+（退出码 3，`JIT_UTILS_UPDATED_EXIT_CODE`）。**原样重跑同一条命令**即可。不要因为这个去改代码。
 
 同一类的第二种假失败：**rebase 之后 `tests/build/test_cache_dependencies.py` 会红
 一次**。它断言同一个头文件在所有缓存条目里记的哈希一致，而 rebase 会带进别人对
 `var.h` 这类头文件的改动，缓存里还留着 rebase 之前记录的条目：
 
 ```
-AssertionError: 'a6e2...' != 'e6e1...' : .../python/jittor/src/var.h
+AssertionError: 'a6e2...' != 'e6e1...' : .../src/core/var.h
 ```
 
 看起来像自己的改动破坏了缓存依赖，其实 `rm -rf $JITTOR_HOME/.cache` 重跑就绿。
@@ -89,7 +91,7 @@ assert [first] * 8 == [var.item() for _ in range(8)]   # 修前会差最后一�
 int64 变 int32。一律写 `jt.array(v, dtype="float64")`。
 
 **而且不能只有一个元素。** `_is_scalar` 这个 flag 曾经**按形状**设置：
-`py_array_op.cc` 里凡是 shape 为 `(1,)` 的 Var 都被标成"标量"，而标量在
+`src/bindings/pyjt/py_array_op.cc` 里凡是 shape 为 `(1,)` 的 Var 都被标成"标量"，而标量在
 `binary_dtype_infer` 里**不参与类型提升**（它取另一边的 dtype）。后果是同一对
 dtype、同一组值，长度 1 与长度 2 走两条完全不同的代码路径：
 
@@ -106,7 +108,7 @@ i2 = jt.array(np.array([1,1],     "int8"),  dtype="int8")
 （`x * 2`、`x * 2.0`）。用长度 1 的数组写的"提升测试"证明的是标量规则，
 反过来也一样——两边都要写，否则改了一半会绿。
 
-## 5b. 别在别人跑着测试的时候动 `python/jittor/src/**`
+## 5b. 别在别人跑着测试的时候动 `src/**`
 
 正在跑的测试会起子进程，子进程 `import jittor` 时发现源码变了就**重编核心**。
 这时候树里如果有一个还编不过的半成品 `.cc`，那些子进程全部编译失败，
@@ -120,7 +122,7 @@ i2 = jt.array(np.array([1,1],     "int8"),  dtype="int8")
 
 ```bash
 # 1. 自检导入树（见 §1）
-# 2. 定向测试，CPU-only，跑两次（第一次吃掉 jit_utils updated）
+# 2. 定向测试，CPU-only，跑两次（第一次可能吃掉 jit_utils 重建的那次退出）
 JITTOR_TEST_DEVICES=cpu nvcc_path="" pytest tests/core/test_xxx.py -q
 JITTOR_TEST_DEVICES=cpu nvcc_path="" pytest tests/core/test_xxx.py -q
 # 3. 受影响目录，CPU-only
@@ -131,7 +133,7 @@ nvcc_path=/usr/local/cuda/bin/nvcc pytest tests/core/test_xxx.py -q
 
 ## 7. 改代码生成器：先证明生成结果没变，或只按预期变
 
-改 `opt/pass/**`、`op_compiler.cc`、tuner 这类**产出源码**的代码时，「测试绿了」
+改 `src/codegen/opt/pass/**`、`src/codegen/op_compiler.cc`、tuner 这类**产出源码**的代码时，「测试绿了」
 是很弱的证据：生成器的输出空间远大于测试覆盖的那几种形状，一个只在
 `parallel depth=4 且有归约` 时才出现的形状变化，全套测试可以一条都不碰。
 
@@ -157,7 +159,7 @@ open(out_dir + tag + ".cc", "w").write(open(src_path).read())
 - **该变的，变化必须逐条能解释**，并且你能说出为什么新旧两种写法数值恒等。
 - 数值断言与 dump 写在同一个脚本里，**不要分开跑**：形状对而值错是最容易漏的一种。
 
-dump 脚本按分区放在自己的 `$TMPDIR` 下，不要提交；把 diff 摘要写进提交说明。
+dump 脚本放在自己的 `$TMPDIR` 下，不要提交；把 diff 摘要写进提交说明。
 
 ### 四个会让 A/B 比对说谎的坑（都踩过）
 
@@ -232,7 +234,7 @@ assert jit_precompile({"a":"2","b":"5"}, "@for(i,b,a,-1,@i)") == "543"
 
 **先 grep 测试里有没有人断言过这条错误消息。** 断言错误文本的测试会把缺陷钉成契约：
 `@for(i,0,-1,@i)` 抛 `"Too much step"` 被断言了很久，而这正是 0 维算子编译不出来的那个行为。
-同一个根因还让另一份用例改用标量绕开（`05-tests.md` 的 `dcc335d6`）。**改边界行为之前
+同一个根因还让另一份用例改用标量绕开（`dcc335d6`）。**改边界行为之前
 `rg "Too much step" tests/`**——命中的每一条都要判断它钉的是契约还是缺陷。
 
 ## 7bis. 一次改几百处的机械替换：先逐文件 `-fsyntax-only`，再整体重编
@@ -243,9 +245,9 @@ assert jit_precompile({"a":"2","b":"5"}, "@for(i,b,a,-1,@i)") == "543"
 
 ```bash
 CFG=$(ls -d $JITTOR_HOME/.cache/jittor/*/*/*/*/*/*/default/cfg* | head -1)   # 生成的头文件在这里
-for f in $(find python/jittor/src/opt -name '*.cc'); do
+for f in $(find src/codegen/opt -name '*.cc'); do
   out=$(g++ $f -std=c++14 -fPIC -march=native \
-        -I python/jittor/src -I python/jittor/extern \
+        -I src \
         -I <python include> -I "$CFG" -O0 -fsyntax-only 2>&1 | grep error)
   [ -n "$out" ] && { echo "### $f"; echo "$out" | head -4; }
 done
@@ -261,7 +263,7 @@ done
 
 ## 7. 给 UB 和「只是不该这么写」的改动写修前失败的测试
 
-整改里有一类任务没有错的返回值可断言：字段被类型双关、`std::next(end())`、setter 与赋值的
+有一类改动没有错的返回值可断言：字段被类型双关、`std::next(end())`、setter 与赋值的
 顺序。**不要试图直接观测 UB**——它按定义没有稳定表现，写出来的断言换个编译器就翻。
 做法是找**同一个缺陷的可达后果**：先问「这个缺陷让代码没法做到什么」，再从那里找必然的失败。
 
@@ -287,7 +289,7 @@ done
 
 1. **先 grep 谁在断言那次崩溃。** 这里有两处，漏一处就是「修对了但门禁红」：
    `tests/codegen/test_jit_tests.py` 的 `CRASHING_TESTS` 拿子进程退出码断言输出里有
-   "Accessing protect pages"，`utils/log.cc` 的 SIGSEGV 处理器里有一段专门认那个页。
+   "Accessing protect pages"，`src/utils/log.cc` 的 SIGSEGV 处理器里有一段专门认那个页。
 2. **找到所有写入口，确认它们汇成一个漏斗。** `JitKey` 上百个 `operator<<` 最终只有四个
    真的动内存（`jk_put_str_with_len`、`operator<<(const string&)`、`operator<<(char)`、
    `operator<<(const NanoString&)`），其余都由它们组合而成；判据是 grep 直接写缓冲区的
@@ -317,14 +319,14 @@ done
 ```bash
 PYINC=$(python -c 'import sysconfig;print(sysconfig.get_path("include"))')
 g++ -std=c++14 -g -O0 -fsanitize=address case.cc -o case \
-    -I python/jittor/src -I "$PYINC"
+    -I src -I "$PYINC"
 ASAN_OPTIONS=detect_leaks=0 ./case
 ```
 
 四件必须做的事：
 
-1. **把它变成常驻用例，不要跑一次就扔。** 3.03 落成
-   `tests/codegen/test_jit_cache_map_asan.py`：编译 `utils/jit_cache_map.h`、跑场景、
+1. **把它变成常驻用例，不要跑一次就扔。** 例如
+   `tests/codegen/test_jit_cache_map_asan.py`：编译 `src/utils/jit_cache_map.h`、跑场景、
    断言输出里没有 `AddressSanitizer`。
 2. **给这个用例装牙齿：同一个文件里再编一份「修之前那个写法」，断言 ASan 抓得到它。**
    否则 libasan 缺失、场景根本没触发缺陷、`-fsanitize=address` 被忽略——三种情况下第一条
@@ -374,10 +376,10 @@ C++ 改动没有开关可切，只能真的拿旧代码编一次。两种做法�
 **A. 换回文件重编**（同一个缓存，适合改动只在一两个文件里）
 
 ```bash
-cp python/jittor/src/xxx.cc $SCRATCH/xxx.cc.fixed      # 先存好，别只靠 git
-git checkout -- python/jittor/src/xxx.cc
+cp src/<dir>/xxx.cc $SCRATCH/xxx.cc.fixed      # 先存好，别只靠 git
+git checkout -- src/<dir>/xxx.cc
 <跑用例，记录失败输出>
-cp $SCRATCH/xxx.cc.fixed python/jittor/src/xxx.cc      # 换回来
+cp $SCRATCH/xxx.cc.fixed src/<dir>/xxx.cc      # 换回来
 ```
 
 **B. 拿一棵干净的源码树另建一个缓存**（不动自己的工作树，可以在别的任务跑着的时候做）
@@ -394,7 +396,7 @@ CPU-only 缓存小得多。前提是复现路径与 CUDA 无关——`Var::alloc
 环境变量解析都满足，`setter_use_cuda` 的回退不满足（要 `HAS_CUDA`），那一条只能用 A，
 或者在应用该任务的补丁**之前**先在当前构建上跑一次探针。
 
-两种做法都要记得：换过源码之后第一次 pytest 必然吃一个 "jit_utils updated"（见 §4），
+两种做法都要记得：换过 `src/utils` 的源码之后第一次运行会吃一次 jit_utils 重建的退出（见 §4），
 要原样重跑一遍。
 
 ### C++ 源码不只在 `.cc` 里：改核心接口要一并 grep `.py`
@@ -402,17 +404,17 @@ CPU-only 缓存小得多。前提是复现路径与 CUDA 无关——`Var::alloc
 这个仓库有 **54 个 `.py` 文件内嵌 `cuda_src` / `cpu_src` / `cpu_header` 字符串，约 15000 行
 C++**，由 JIT 在运行期编译。**`grep -r 'XXX' --include=*.cc` 看不见它们。**
 
-2.01 改 flag 枚举时就漏了三处（`tests/backends/cuda/test_cuda.py` 两处、
+一次改 flag 枚举时就漏了三处（`tests/backends/cuda/test_cuda.py` 两处、
 `tests/backends/rocm/test_rocm.py` 一处），只在跑到那些用例时才以
 `'_cpu' is not a member of 'jittor::NodeFlags'` 的形式冒出来。
 
 ```bash
 # 改任何核心 C++ 名字（类型、枚举、成员、宏）之后，两条都要跑
-grep -rn "OldName" --include=*.cc --include=*.h python/ 
+grep -rn "OldName" --include=*.cc --include=*.h --include=*.cu src/ backends/ python/
 grep -rn "OldName" --include=*.py .          # 内嵌源码在这里
 ```
 
-**而且这类失败的表现比「两条红」严重得多。** CUDA 后端分区实测：
+**而且这类失败的表现比「两条红」严重得多。** CUDA 上实测：
 
 | 跑法 | 结果 |
 | --- | --- |
@@ -428,8 +430,8 @@ grep -rn "OldName" --include=*.py .          # 内嵌源码在这里
 ### 类型系统能替你找出「靠巧合才对」的读法
 
 把一个「谁都能读」的字段改成「必须先知道种类才能读」之后，**编译错误的清单就是审计
-报告**。2.01 把 Var 与 Op 的 flag 拆成两个枚举、私有位只能经 `Var::flag`/`Op::flag`
-读写，编译器立刻指出 `executor.cc` 的 `run_sync` 在一个同时装 var 和 op 的队列上读
+报告**。把 Var 与 Op 的 flag 拆成两个枚举、私有位只能经 `Var::flag`/`Op::flag`
+读写的那次改动里，编译器立刻指出 `src/core/executor.cc` 的 `run_sync` 在一个同时装 var 和 op 的队列上读
 Op 专用的 `_has_gopt`，随后对**任何答是的节点**调 `n->op()->graph_optimize()`。它今天
 不出事，只因为那个位号在 Var 布局里恰好没人用。
 
@@ -452,8 +454,8 @@ grep "waiting for build lock" <你的日志>   # 拿不到锁，不是编译慢
 正确做法是**再开一个 `JITTOR_HOME`**，不是杀掉那个门禁：
 
 ```bash
-export JITTOR_HOME=/home/zy/jittor-lab/refactor/_home/<分区>-b
-export TMPDIR=/home/zy/jittor-lab/refactor/_tmp/<分区>-b
+export JITTOR_HOME=$JITTOR_LAB_ROOT/_state/<topic>/<run>-b/jittor-home
+export TMPDIR=$JITTOR_LAB_ROOT/_state/<topic>/<run>-b/tmp
 ```
 
 代价是一次冷构建（CPU-only 约 60s，CUDA 约 10 分钟）与约 350MB 磁盘，
@@ -498,32 +500,33 @@ cp $MYTMP/impl.fixed <改过的实现文件>         # 还原
 
 写用例时把「为什么不能端到端测」写进 docstring，否则下一个人会以为你偷懒。
 
-## 11. 「这条红是不是我造成的」：把最小复现打到整改基线上
+## 11. 「这条红是不是我造成的」：把最小复现打到基线上
 
-改核心的分区常收到「你那块的某个测试红了」，而失败形状指向的往往不是真凶。
+改核心的人常收到「你那块的某个测试红了」，而失败形状指向的往往不是真凶。
 **别靠读 diff 猜，一次实验就能定性。**
 
-整改基线 `9eb696d9` 有一棵现成的 worktree（`refactor/gatecheck-base`）。
+给分支的基线提交（`git merge-base HEAD <目标分支>`）建一棵只读 worktree，
 用**自己的** `JITTOR_HOME` 去跑同一个脚本——只读那棵树，不改它，缓存也不撞：
 
 ```bash
+git worktree add --detach "$JITTOR_LAB_ROOT/worktrees/base" <基线提交>
 # 1) 先把复现缩成一个不依赖 pytest 的脚本 repro.py（几秒到几十秒）
 # 2) 在自己的分支上确认它必现（跑三次，别信一次）
 for i in 1 2 3; do
   PYTHONPATH=$WT/python JITTOR_HOME=$HOME_MINE TMPDIR=$TMP_MINE \
-  CUDA_VISIBLE_DEVICES=$N nvcc_path=/usr/local/cuda/bin/nvcc \
+  CUDA_VISIBLE_DEVICES=<gpu> nvcc_path=/usr/local/cuda/bin/nvcc \
   taskset -c $CORES python repro.py; done
 
 # 3) 同一个脚本打基线（第一次是冷编译，约 10 分钟；缓存目录必须另开一个）
-PYTHONPATH=/home/zy/jittor-lab/refactor/gatecheck-base/python \
+PYTHONPATH=$JITTOR_LAB_ROOT/worktrees/base/python \
 JITTOR_HOME=$HOME_MINE-base TMPDIR=$TMP_MINE/base \
-CUDA_VISIBLE_DEVICES=$N nvcc_path=/usr/local/cuda/bin/nvcc \
+CUDA_VISIBLE_DEVICES=<gpu> nvcc_path=/usr/local/cuda/bin/nvcc \
 taskset -c $CORES python repro.py
 ```
 
-基线绿 + 自己红 = 整改期回归，接着 `git log -- <相关文件>` 逐个提交读**说明**
+基线绿 + 自己红 = 分支引入的回归，接着 `git log -- <相关文件>` 逐个提交读**说明**
 （不是 diff）：说明里会写「我把 X 从 A 改成了 B」，而回归通常就是那句 B 的副作用。
-基线也红 = 陈年缺陷，写进看板，别自己扛。
+基线也红 = 陈年缺陷，记入 `agent/manuals/known-issues.md`（或开 GitHub issue），别自己扛。
 
 **`PYTHONPATH` 那一行不能省**（见 §1）：少了它你在拿主树的代码打主树的分。
 

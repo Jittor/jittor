@@ -2,6 +2,7 @@
 
 import jittor as jt
 from jittor._runtime.dispatch import try_dispatch
+from ._layout import channels_last_source, channels_last_view, records_no_grad
 
 
 def _bicubic(x, a, func):
@@ -11,6 +12,31 @@ def _bicubic(x, a, func):
     if func == 2:
         return a * (jt.abs(x) ** 3) - 5 * a * (x**2) + 8 * a * jt.abs(x) - 4 * a
     return 0
+
+
+class _ChannelsLast:
+    """[N, H, W, C] storage, sampled through NCHW index lists.
+
+    `_interpolate` indexes an image as (n, c, x, y); this answers the same
+    samples from the NHWC tensor a channels-last activation is a view of, so
+    the result comes out NHWC too, laid out for the next convolution.
+    """
+
+    def __init__(self, source):
+        self.source = source
+        n, h, w, c = source.shape
+        self.shape = (n, c, h, w)
+
+    @staticmethod
+    def _nhwc(index):
+        n, c, x, y = index
+        return [n, x, y, c]
+
+    def reindex(self, index):
+        return self.source.reindex(self._nhwc(index))
+
+    def reindex_var(self, index):
+        return self.source.reindex_var(self._nhwc(index))
 
 
 def _interpolate(img, x, y, ids, mode):
@@ -88,7 +114,24 @@ def resize(img, size, mode="nearest", align_corners=False, tf_mode=False):
     fast = try_dispatch("nn.resize", img, (H, W), mode, align_corners, tf_mode)
     if fast is not None:
         return fast
-    nid, cid, hid, wid = jt.index((n, c, H, W))
+    # A channels-last input is sampled from its NHWC storage and answered in
+    # it; the indices are then laid out [N, H, W, C] for the same reason.
+    source = None
+    if mode in ("nearest", "bilinear", "bicubic") and records_no_grad(img):
+        source = channels_last_source(img)
+    if mode == "nearest" and not align_corners:
+        # Index expressions, not index tensors: `floor(i * h / H)` is the
+        # integer quotient. Tensors held here are what an auto-flush inside
+        # this call computes in full -- four int32/float maps of the output's
+        # size, 1 GB at an SD1.5 VAE's last upsample -- instead of fusing them.
+        if source is None:
+            return img.reindex([n, c, H, W], ["i0", "i1", f"i2*{h}/{H}", f"i3*{w}/{W}"])
+        return channels_last_view(source.reindex(
+            [n, H, W, c], ["i0", f"i1*{h}/{H}", f"i2*{w}/{W}", "i3"]))
+    if source is None:
+        nid, cid, hid, wid = jt.index((n, c, H, W))
+    else:
+        nid, hid, wid, cid = jt.index((n, H, W, c))
     # The sampling coordinates come from an int32 `jt.index` scaled by a Python
     # float, and int32 * float promotes to float32 whatever the image is. So a
     # float64 image was resampled with float32 weights: the reference test
@@ -159,6 +202,8 @@ def resize(img, size, mode="nearest", align_corners=False, tf_mode=False):
             y = (wid + 0.5) * w / W - 0.5
             if W > w:
                 y = y.clamp(0, w - 1)
+    if source is not None:
+        return channels_last_view(_interpolate(_ChannelsLast(source), x, y, (nid, cid), mode))
     return _interpolate(img, x, y, (nid, cid), mode)
 
 

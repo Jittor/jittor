@@ -4,6 +4,13 @@ import collections
 import types
 
 import jittor as jt
+from jittor._core.module import _WALK_CHILDREN
+
+
+def _layer_children(container):
+    """The ``(key, submodule)`` pairs `Sequential.dfs` descends into."""
+    return [(key, value) for key, value in container.layers.items()
+            if isinstance(value, jt.Module)]
 
 
 class Sequential(jt.Module):
@@ -54,9 +61,8 @@ class Sequential(jt.Module):
             return
         parents.append(self)
         if recurse:
-            for key, value in self.layers.items():
-                if isinstance(value, jt.Module):
-                    value.dfs(parents, key, callback, callback_leave)
+            for key, value in _layer_children(self):
+                value.dfs(parents, key, callback, callback_leave)
         parents.pop()
         if callback_leave:
             callback_leave(parents, k, self, n_children)
@@ -124,3 +130,6 @@ class Sequential(jt.Module):
 
 
 __all__ = ["Sequential"]
+
+
+_WALK_CHILDREN[Sequential.dfs] = _layer_children

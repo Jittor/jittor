@@ -373,6 +373,38 @@ class TestIndexAdd(Base):
             self.ac(x.numpy(), ref, msg=f"index_add_ in-place dup {dev}")
         both_devices(body)
 
+    def test_index_add__in_place_preserves_source_gradient(self):
+        # MoE/token scatter pattern: a fresh buffer that does not require grad
+        # accumulates sources that do; torch makes the buffer part of their
+        # graph, so every source receives its gradient.
+        def body(dev):
+            first_parameter = torch.nn.Parameter(torch.ones((3, 2), device=dev))
+            second_parameter = torch.nn.Parameter(torch.full((3, 2), 2.0, device=dev))
+            first_source = torch.ones((2, 3), device=dev) @ first_parameter
+            second_source = torch.ones((2, 3), device=dev) @ second_parameter
+            output = torch.zeros((3, 2), device=dev)
+            index = torch.tensor([0, 2], device=dev)
+
+            self.assertIs(output.index_add_(0, index, first_source), output)
+            output.index_add_(0, index, second_source, alpha=2.0)
+            self.assertTrue(output.requires_grad, f"index_add_ graph missing {dev}")
+            self.ac(output.numpy(), np.array([[15., 15.], [0., 0.], [15., 15.]]),
+                    msg=f"index_add_ values {dev}")
+            output.sum().backward()
+
+            for name, parameter, scale in (
+                    ("first", first_parameter, 2.0), ("second", second_parameter, 4.0)):
+                self.assertIsNotNone(parameter.grad, f"index_add_ {name} grad missing {dev}")
+                self.ac(parameter.grad.numpy(), np.full((3, 2), scale),
+                        msg=f"index_add_ {name} source grad {dev}")
+            # Without grad the buffer stays a plain tensor.
+            with torch.no_grad():
+                frozen = torch.zeros((3, 2), device=dev)
+                frozen.index_add_(0, index, first_source)
+            self.assertFalse(frozen.requires_grad, f"no_grad index_add_ {dev}")
+
+        both_devices(body)
+
     def test_index_add_alpha(self):
         base = np.ones((3, 2), dtype="float32")
         index = np.array([0, 0], dtype="int64")
@@ -447,6 +479,22 @@ class TestMasked(Base):
             self.ac(t(x).masked_fill(t(m), -1.0).numpy(), ref, msg=f"masked_fill {dev}")
         both_devices(body)
 
+    def test_masked_fill_function_form_leaves_input_unchanged(self):
+        x = np.arange(12).reshape(3, 4).astype("float32")
+        m = (x % 2 == 0)
+        def body(dev):
+            source = torch.tensor(x, device=dev)
+            mask = torch.tensor(m, device=dev)
+            for name, out in (
+                    ("method", source.masked_fill(mask, -1.0)),
+                    ("function", torch.masked_fill(source, mask, -1.0)),
+                    ("tensor value", torch.masked_fill(
+                        source, mask, torch.tensor(-1.0, device=dev)))):
+                self.assertEqual(out.device.type, dev, f"masked_fill {name} {dev}")
+                self.ac(out.numpy(), np.where(m, -1.0, x), msg=f"masked_fill {name} {dev}")
+            self.ac(source.numpy(), x, msg=f"masked_fill input unchanged {dev}")
+        both_devices(body)
+
     def test_masked_fill_broadcast_mask(self):
         # torch broadcasts a lower-rank mask against x (row mask over (3,4)).
         x = np.arange(12).reshape(3, 4).astype("float32")
@@ -483,6 +531,28 @@ class TestTake(Base):
         def body(dev):
             self.ac(torch.take_along_dim(t(a), t(ti), dim=1).numpy(),
                     np.take_along_axis(a, ti, axis=1), msg=f"take_along_dim d1 {dev}")
+        both_devices(body)
+
+    def test_take_along_dim_non_contiguous_input_and_indices(self):
+        # Transposed/sliced inputs and broadcast or strided index views reach
+        # the native gather as storage views; values must match numpy.
+        x = np.random.RandomState(7).randn(4, 6, 5).astype("float32")
+        big = np.random.RandomState(8).randint(0, 3, size=(6, 4, 8))
+        def body(dev):
+            base = torch.tensor(x, device=dev)
+            transposed, ref_t = base.transpose(0, 2), x.transpose(2, 1, 0)   # (5, 6, 4)
+            index = np.array([[[3, 0, 1]]], dtype="int64")                  # broadcast
+            self.ac(torch.take_along_dim(transposed, torch.tensor(index, device=dev), dim=2).numpy(),
+                    np.take_along_axis(ref_t, np.broadcast_to(index, (5, 6, 3)), axis=2),
+                    msg=f"take_along_dim transposed+broadcast {dev}")
+            sliced, ref_s = base[1:, ::2, 1:3], x[1:, ::2, 1:3]             # (3, 3, 2)
+            strided = torch.tensor(big, device=dev)[::2, ::2, ::4]          # (3, 2, 2)
+            self.ac(torch.take_along_dim(sliced, strided, dim=1).numpy(),
+                    np.take_along_axis(ref_s, big[::2, ::2, ::4], axis=1),
+                    msg=f"take_along_dim sliced+strided {dev}")
+            flat = torch.take_along_dim(transposed, torch.tensor([7, 0, 119], device=dev))
+            self.ac(flat.numpy(), ref_t.reshape(-1)[[7, 0, 119]],
+                    msg=f"take_along_dim flat {dev}")
         both_devices(body)
 
     def test_take_along_dim_broadcast(self):

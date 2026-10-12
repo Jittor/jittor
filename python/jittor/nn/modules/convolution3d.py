@@ -4,6 +4,7 @@ import math
 
 import jittor as jt
 from jittor.misc import _triple
+from .convolution import _check_padding_options, _reversed_padding_repeated_twice
 
 
 class Conv3d(jt.Module):
@@ -42,7 +43,12 @@ class Conv3d(jt.Module):
     >>> input = jt.randn(4, 24, 50, 50, 50)
     >>> output = conv(input)
     '''
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
+    #: Class default, so a subclass that skips ``__init__`` still convolves.
+    padding_mode = 'zeros'
+
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True, padding_mode='zeros'):
+        _check_padding_options(padding, padding_mode, _triple(stride))
+        self.padding_mode = padding_mode
         self.in_channels = in_channels
         self.out_channels = out_channels
         # torch accepts int OR any sequence (list/tuple) for these; the old
@@ -52,8 +58,11 @@ class Conv3d(jt.Module):
         # and passes sequences through (matching torch's _triple).
         self.kernel_size = _triple(kernel_size)
         self.stride = _triple(stride)
-        self.padding = _triple(padding)
+        # A string stays a string, as on torch's layers; nn.conv3d resolves it.
+        self.padding = padding if isinstance(padding, str) else _triple(padding)
         self.dilation = _triple(dilation)
+        self._reversed_padding_repeated_twice = _reversed_padding_repeated_twice(
+            self.padding, self.kernel_size, self.dilation)
         self.groups = groups
         if groups <= 0:
             raise ValueError("groups must be a positive integer")
@@ -75,4 +84,7 @@ class Conv3d(jt.Module):
             self.bias = None
 
     def execute(self, x):
+        if self.padding_mode != 'zeros':
+            x = jt.nn.pad(x, self._reversed_padding_repeated_twice, mode=self.padding_mode)
+            return jt.nn.conv3d(x, self.weight, self.bias, self.stride, 0, self.dilation, self.groups)
         return jt.nn.conv3d(x, self.weight, self.bias, self.stride, self.padding, self.dilation, self.groups)

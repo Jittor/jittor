@@ -100,7 +100,7 @@ class _FamilyChecks(object):
                         "int floor_divide({0})".format(divisor))
 
     def test_float_floor_divide_matches_numpy(self):
-        """Float operands divide at full precision -- KI-OPS-003, fixed.
+        """Float operands divide at full precision (they used to be truncated first).
 
         This was a strict expected failure: `floor_divide` cast both operands
         to the integer output dtype before dividing, so `-2.7 // 2.0` was
@@ -133,7 +133,7 @@ class _FamilyChecks(object):
     def test_reducing_a_scalar_tensor(self):
         """Reducing over no dimensions returns the value, as PyTorch does.
 
-        This was a strict expected failure until 2026-09-10 (KI-OPS-004). The
+        This was a strict expected failure until 2026-09-10. The
         reduce kernel emitted `index_t ystride-1 = 1;` for a rank-0 input --
         `@{DIM-1}` with `DIM` zero -- so the generated source did not compile
         and `loss.sum()` on an already-scalar loss died on both devices.

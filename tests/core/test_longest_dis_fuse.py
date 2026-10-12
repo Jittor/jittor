@@ -74,7 +74,7 @@ def _rank_and_ptr(info):
 #: So this asserts memory, which is what "assert not alloc big tensor" meant --
 #: 256 MiB leaves the legitimate 33 MiB far below the bound and still catches a
 #: materialised 450 MiB intermediate, which is how the entry this replaces
-#: (KI-OPS-013) was read. The rank-and-pointer enumeration it replaces could not
+#: (since withdrawn) was read. The rank-and-pointer enumeration it replaces could not
 #: tell the two apart: a var with a rank-7 shape and a non-null pointer may own
 #: four hundred bytes, and reporting that as a materialised buffer is a false
 #: red, not a finding.

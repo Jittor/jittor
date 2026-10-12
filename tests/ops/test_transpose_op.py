@@ -216,6 +216,24 @@ class TestTransposeOp(unittest.TestCase):
 
     @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     @jt.flag_scope(use_cuda=1)
+    def test_moving_only_unit_axes_launches_nothing(self):
+        # [b, 1, h, d] -> [b, h, 1, d] keeps every element where it was: one
+        # token's query per layer in a decode. It is a reshape, not a copy.
+        a = np.arange(2 * 1 * 3 * 4, dtype="float32").reshape(2, 1, 3, 4)
+        x = jt.array(a)
+        x.sync()
+        with jt.profile(device=True) as prof:
+            y = x.transpose(0, 2, 1, 3)
+            y.sync()
+        self.assertEqual(prof.device["kernels"], 0)
+        np.testing.assert_array_equal(y.numpy(), a.transpose(0, 2, 1, 3))
+        # The gradient still comes back in the input's shape.
+        w = np.arange(24, dtype="float32").reshape(2, 3, 1, 4)
+        g = jt.grad((x.transpose(0, 2, 1, 3) * jt.array(w)).sum(), x)
+        np.testing.assert_array_equal(g.numpy(), w.transpose(0, 2, 1, 3))
+
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
+    @jt.flag_scope(use_cuda=1)
     def test_cutt_bug(self):
         a = jt.rand(640000,4,3)
         b = a.transpose(0,2,1)
@@ -293,6 +311,64 @@ class TestFuseTransposeCudaOp(TestFuseTransposeOp):
         with _TestPolicyStack() as _test_policy_stack:
             jt.sync_all()
             _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=self._previous_use_cuda))
+
+class TestTransposeComposition(unittest.TestCase):
+    """A transpose of a transpose is one transpose, or none when they cancel.
+
+    `attn(q.transpose(1, 2), ...)` hands back heads that the caller moves
+    back with another `transpose(1, 2)`; stacked, the two ran as two copies.
+    """
+
+    def test_cancelling_transposes_return_the_source_as_a_view(self):
+        a = jt.array(np.arange(24, dtype="float32").reshape(2, 3, 4))
+        b = a.transpose(0, 2, 1).transpose(0, 2, 1)
+        np.testing.assert_array_equal(b.numpy(), a.numpy())
+        b[0, 1, 2] = -1.0
+        self.assertEqual(a.numpy()[0, 1, 2], -1.0)
+
+    def test_transposes_compose(self):
+        x = np.arange(120, dtype="float32").reshape(2, 3, 4, 5)
+        got = jt.array(x).transpose(0, 2, 1, 3).transpose(3, 1, 0, 2).numpy()
+        np.testing.assert_array_equal(got, x.transpose(0, 2, 1, 3).transpose(3, 1, 0, 2))
+
+    def test_the_graph_answers_once_the_root_holder_is_gone(self):
+        # `proj(x).view(...).transpose(1, 2)` keeps no holder of the root, so
+        # the view record is gone; the transpose op in the graph is not.
+        x = np.arange(48, dtype="float32").reshape(2, 4, 6)
+        heads = (jt.array(x) * 2).reshape(2, 4, 3, 2).transpose(0, 2, 1, 3)
+        self.assertEqual(tuple(heads._transpose_view_axes()), ())
+        self.assertEqual(tuple(heads._producer_transpose_axes()), (0, 2, 1, 3))
+        back = heads.transpose(0, 2, 1, 3)
+        np.testing.assert_array_equal(back.numpy(), (x * 2).reshape(2, 4, 3, 2))
+
+    def test_gradients_flow_through_a_cancelled_pair(self):
+        a = jt.array(np.random.RandomState(0).randn(3, 4, 5).astype("float32"))
+        y = (a.transpose(0, 2, 1).transpose(0, 2, 1) * jt.arange(5).float32()).sum()
+        grad = jt.grad(y, a).numpy()
+        np.testing.assert_array_equal(grad, np.broadcast_to(np.arange(5, dtype="float32"),
+                                                           (3, 4, 5)))
+
+
+@unittest.skipIf(not jt.has_cuda, "No CUDA found")
+class TestTransposeTiled(unittest.TestCase):
+    """Permutations that swap two runs of axes behind a kept prefix.
+
+    NCHW <-> NHWC is one: a batched two-dimensional transpose, which runs
+    through a shared-memory tile so that reads and writes both follow memory.
+    """
+
+    def test_swapped_runs_match_numpy(self):
+        rng = np.random.RandomState(3)
+        cases = [((2, 5, 7, 9), (0, 3, 1, 2)), ((2, 5, 7, 9), (0, 2, 3, 1)),
+                 ((3, 33, 65), (0, 2, 1)), ((70, 40), (1, 0)), ((1, 64, 3, 5), (0, 3, 1, 2))]
+        with jt.flag_scope(use_cuda=1):
+            for shape, axes in cases:
+                for dtype in ("float32", "float16"):
+                    with self.subTest(shape=shape, axes=axes, dtype=dtype):
+                        a = rng.randn(*shape).astype(dtype)
+                        x = jt.array(a)
+                        np.testing.assert_array_equal(x.transpose(axes).numpy(), a.transpose(axes))
+
 
 if __name__ == "__main__":
     unittest.main()

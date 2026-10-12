@@ -519,6 +519,63 @@ class TestACL(unittest.TestCase):
                                        err_msg=label)
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_argsort_values_indices_stay_on_acl(self):
+        from jittor._runtime.fallback import forbid_backend_fallbacks
+
+        before = jt.core.backend_fallback_count()
+        source = np.array([[3., 1., 2.], [-4., 7., 0.]], dtype=np.float32)
+        cases = [(source, 1, False, "int32"),
+                 (source, 0, True, "int64"),
+                 (source.astype(np.float16), 1, True, "int32")]
+        with jt.runtime.scope(backend_fallback="error"), forbid_backend_fallbacks():
+            for values, dim, descending, dtype in cases:
+                with self.subTest(dim=dim, descending=descending, dtype=dtype):
+                    x = jt.array(values)
+                    indices, sorted_values = jt.argsort(
+                        x, dim=dim, descending=descending, dtype=dtype)
+                    _assert_acl_device(self, indices)
+                    _assert_acl_device(self, sorted_values)
+                    actual_indices = indices.numpy()
+                    actual_values = sorted_values.numpy()
+                    expected_indices = np.argsort(values, axis=dim)
+                    if descending:
+                        expected_indices = np.flip(expected_indices, axis=dim)
+                    np.testing.assert_array_equal(actual_indices, expected_indices)
+                    np.testing.assert_array_equal(
+                        actual_values, np.take_along_axis(values, expected_indices, axis=dim))
+                    self.assertEqual(str(indices.dtype), dtype)
+        self.assertEqual(jt.core.backend_fallback_count(), before)
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_integer_arg_reduce_exact_values_stay_on_acl(self):
+        from jittor._runtime.fallback import forbid_backend_fallbacks
+
+        before = jt.core.backend_fallback_count()
+        int32_values = np.array(
+            [[2147483647, -2147483648, 7, 7], [-9, 12, 12, 1]], dtype=np.int32)
+        int64_values = np.array([[2**40, -2**40, 5]], dtype=np.int64)
+        with jt.runtime.scope(backend_fallback="error"), forbid_backend_fallbacks():
+            x32 = jt.array(int32_values)
+            max_idx, max_val = jt.arg_reduce(x32, "max", 1)
+            min_idx, min_val = jt.arg_reduce(x32, "min", 1, True)
+            x64 = jt.array64(int64_values)
+            long_idx, long_val = jt.arg_reduce(x64, "max", 1)
+            for result in (max_idx, max_val, min_idx, min_val, long_idx, long_val):
+                _assert_acl_device(self, result)
+            actual = [result.numpy() for result in
+                      (max_idx, max_val, min_idx, min_val, long_idx, long_val)]
+
+        np.testing.assert_array_equal(actual[0], [0, 1])
+        np.testing.assert_array_equal(actual[1], [2147483647, 12])
+        np.testing.assert_array_equal(actual[2], [[1], [0]])
+        np.testing.assert_array_equal(actual[3], [[-2147483648], [-9]])
+        np.testing.assert_array_equal(actual[4], [0])
+        np.testing.assert_array_equal(actual[5], [2**40])
+        self.assertEqual(str(max_val.dtype), "int32")
+        self.assertEqual(str(long_val.dtype), "int64")
+        self.assertEqual(jt.core.backend_fallback_count(), before)
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_float_arg_reduce_runs_on_acl(self):
         cases = [
             (jt.float32([[1, 5, 3, 5], [-2, -4, 7, 0]]), "max", 1, False,
@@ -1400,23 +1457,28 @@ class TestACL(unittest.TestCase):
                 expected(q_np[:, :, :1, :], k_np, v_np, False),
                 atol=2e-3, rtol=2e-2)
 
-        self.assertIsNone(backend_hooks.acl_scaled_dot_product_attention(
-            q, k, v, dropout_p=0.1, enable_gqa=True))
         with jt.no_grad():
-            if _acl_kernel_available("FlashAttention"):
-                self.assertIsNone(backend_hooks.acl_scaled_dot_product_attention(
-                    q.float16(), k.float16(), v.float16(),
-                    is_causal=True, enable_gqa=True))
-            else:
-                # SoCs without FlashAttentionScore (Ascend310P) run fp16
-                # prefill through the math-composite path instead.
-                fp16 = backend_hooks.acl_scaled_dot_product_attention(
-                    q.float16(), k.float16(), v.float16(),
-                    is_causal=True, enable_gqa=True)
-                self.assertIsNotNone(fp16)
-                np.testing.assert_allclose(
-                    fp16.float32().numpy(), expected(q_np, k_np, v_np, True),
-                    atol=2e-3, rtol=2e-2)
+            q_fp16 = q.float16()
+            k_fp16 = k.float16()
+            v_fp16 = v.float16()
+            prefill_fp16 = backend_hooks.acl_scaled_dot_product_attention(
+                q_fp16, k_fp16, v_fp16,
+                is_causal=True, enable_gqa=True)
+            decode_fp16 = backend_hooks.acl_scaled_dot_product_attention(
+                q_fp16[:, :, :1, :], k_fp16, v_fp16,
+                enable_gqa=True)
+            self.assertIsNotNone(prefill_fp16)
+            self.assertIsNotNone(decode_fp16)
+            self.assertEqual(str(prefill_fp16.dtype), "float16")
+            self.assertEqual(str(decode_fp16.dtype), "float16")
+            prefill_fp16, decode_fp16 = jt.fetch_sync([
+                prefill_fp16.float32(), decode_fp16.float32()])
+
+        np.testing.assert_allclose(prefill_fp16, expected(q_np, k_np, v_np, True), atol=2e-2, rtol=2e-2)
+        np.testing.assert_allclose(decode_fp16, expected(q_np[:, :, :1, :], k_np, v_np, False), atol=2e-2, rtol=2e-2)
+        with jt.no_grad():
+            self.assertIsNone(backend_hooks.acl_scaled_dot_product_attention(q.float16(), k.float16(), v.float16(), attn_mask=jt.array(additive_np), enable_gqa=True))
+        self.assertIsNone(backend_hooks.acl_scaled_dot_product_attention(q, k, v, dropout_p=0.1, enable_gqa=True))
 
     @jt.flag_scope(use_acl=1)
     def test_max(self):

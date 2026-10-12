@@ -173,8 +173,8 @@ class TestCleanupStructure(unittest.TestCase):
         This scans the test tree as well as the shipped one. It used to skip any
         path with a `tests` component, which made the gate green by narrowing
         what it looks at: that also stopped it noticing an implementation copied
-        into a test, which is the failure this gate exists for. KI-CLEANUP-001
-        left the choice written down -- "excluding the tree outright would also
+        into a test, which is the failure this gate exists for. The ledger entry
+        that tracked it left the choice written down -- "excluding the tree outright would also
         stop it noticing a real implementation copied into a test. Reporting the
         two kinds separately is the shape that keeps both."
 

@@ -308,6 +308,28 @@ def _cuda_library_sources(lib_name):
     return sorted(sources)
 
 
+def cuda_include_search_dirs(component_dirs, cuda_include, extra_include_path):
+    """Where a CUDA component's header may live, most specific first."""
+    return list(component_dirs) + [cuda_include, extra_include_path, "/usr/include"]
+
+
+def cuda_library_search_dirs(component_dirs, cuda_bin, cuda_lib,
+                             extra_lib_path, arch_key):
+    """Where a CUDA component's shared library may live, most specific first.
+
+    `/usr/lib64` is the one that is easy to forget: it is where RHEL-family
+    distros (and the tlinux kernels this project runs on) put 64-bit system
+    libraries. Without it a cudnn installed as a distro package is invisible,
+    and `setup_cuda_extern` aborts the whole import claiming cudnn is not
+    installed -- on a machine where `/usr/lib64/libcudnn.so` is sitting right
+    there. The NCCL lookup in this module has always searched it.
+    """
+    return list(component_dirs) + [
+        cuda_bin, cuda_lib, extra_lib_path,
+        f"/usr/lib/{arch_key}-linux-gnu", "/usr/lib", "/usr/lib64",
+    ]
+
+
 def setup_cuda_lib(lib_name, link=True, extra_flags=""):
     arch_key = "x86_64"
     if platform.machine() not in ["x86_64", "AMD64"]:
@@ -330,11 +352,10 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
         if cuda_wheel_stack:
             component_include_dirs = cuda_wheel_stack.include_dirs(lib_name)
             component_lib_dirs = cuda_wheel_stack.lib_dirs(lib_name)
-        include_search_dirs = component_include_dirs + [cuda_include, extra_include_path, "/usr/include"]
-        library_search_dirs = component_lib_dirs + [
-            cuda_bin, cuda_lib, extra_lib_path,
-            f"/usr/lib/{arch_key}-linux-gnu", "/usr/lib",
-        ]
+        include_search_dirs = cuda_include_search_dirs(
+            component_include_dirs, cuda_include, extra_include_path)
+        library_search_dirs = cuda_library_search_dirs(
+            component_lib_dirs, cuda_bin, cuda_lib, extra_lib_path, arch_key)
         cuda_include_name = search_file(include_search_dirs, lib_name+".h")
         extra_flags = f' -I"{os.path.dirname(cuda_include_name)}" ' + extra_flags
         # cuda11 prefer cudnn 8

@@ -24,7 +24,7 @@ nineteen twentieths, and everything below still distinguishes the defect.
 The ``getitem``/``setitem`` kernels read index Vars as if they were dense --
 ``vp[i0*oshape1 + i1]``, with the strides derived from the *output* shape --
 so such an index made the kernel walk 20 elements off the end of a one-element
-buffer and use whatever it found as an index (KI-OPS-009). The guard that was
+buffer and use whatever it found as an index. The guard that was
 supposed to prevent this, ``adapt_index_storage``, existed but was never
 emitted into the generated ``make_getitem``/``make_setitem``.
 
@@ -33,7 +33,7 @@ Why the sizes matter
 The overshoot for a ``(4, 5)`` index is 152 bytes. Whether that is garbage or
 zeroes is a property of the heap, not of the code: the same defect returned the
 right answer on one build and an out-of-bounds index on another, which is how
-KI-OPS-009 was first recorded as build-specific. It is not. Larger index shapes
+the defect was first recorded as build-specific. It is not. Larger index shapes
 overshoot further and fail on any build, so they are in this file too.
 
 ``test_a_broadcast_index_reads_its_own_element`` is the case that does not
@@ -114,7 +114,7 @@ class TestBroadcastIndexCpu(unittest.TestCase):
                     np.testing.assert_array_equal(
                         got, np.broadcast_to(a_np[0], (4, width)),
                         "gather read a row other than 0 for an all-zero "
-                        "broadcast index (KI-OPS-009)")
+                        "broadcast index")
 
     def test_a_broadcast_index_reads_its_own_element(self):
         """Heap-independent: the wrong answer is a *known* pattern, not garbage.
@@ -135,7 +135,7 @@ class TestBroadcastIndexCpu(unittest.TestCase):
         np.testing.assert_array_equal(
             rows, np.tile((np.arange(5) % 4).astype(int), (4, 1)),
             "the index kernel walked the index Var's neighbours in memory "
-            "instead of its own five elements (KI-OPS-009)")
+            "instead of its own five elements")
 
     def test_setitem_through_a_broadcast_index(self):
         """The write side, which was an out-of-bounds *write* before the check."""
@@ -148,7 +148,7 @@ class TestBroadcastIndexCpu(unittest.TestCase):
         expect[0, :] = 1.0
         np.testing.assert_array_equal(
             got, expect, "setitem wrote somewhere other than row 0 for an "
-                         "all-zero broadcast index (KI-OPS-009)")
+                         "all-zero broadcast index")
 
     def test_scatter_add_through_a_broadcast_index(self):
         """``index_add`` builds its index by broadcasting, so this is the
@@ -159,8 +159,7 @@ class TestBroadcastIndexCpu(unittest.TestCase):
         expect = np.zeros((4, 5), "float32")
         expect[0, :] = 4.0
         np.testing.assert_array_equal(
-            got, expect, "scatter_add accumulated into rows other than 0 "
-                         "(KI-OPS-009)")
+            got, expect, "scatter_add accumulated into rows other than 0")
 
     def test_a_dense_index_is_unchanged(self):
         """The fix must not move the path that was already right."""

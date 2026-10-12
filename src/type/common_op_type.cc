@@ -56,6 +56,7 @@ unordered_map<string,string> common_op_type_cuda_map = {
     {"tanh", "@if(@strcmp($1,float32)==0,(($1) ::tanhf(($2))),(($1) ::tanh(($2))))"},
     {"atanh", "@if(@strcmp($1,float32)==0,(($1) ::atanhf(($2))),(($1) ::atanh(($2))))"},
     {"sigmoid", "(($1) (1.0f/(1.0f+::expf((::min($1(-($2)), $1(@if(@strcmp($1,float32)==0,30,300))))))))"},
+    {"relu", "((($1)($2)>($1)(0.0f))?($1)($2):($1)(0.0f))"},
     {"erf", "@if(@strcmp($1,float32)==0,(($1) ::erff(($2))),(($1) ::erf(($2))))"},
     {"erfinv", "@if(@strcmp($1,float32)==0,(($1) ::erfinvf(($1)($2))),(($1) ::erfinv(($1)($2))))"},
     {"cast", "(($1)($2))"},
@@ -130,6 +131,7 @@ struct CommonOpType : OpByType {
             {"tanh", "(($1) std::tanh(($2)))"},
             {"atanh", "(($1) std::atanh(($2)))"},
             {"sigmoid", "(($1) (1.0f/(1.0f+std::exp(std::min($1(-($2)), $1(@if(@strcmp($1,float32)==0,30,300)))))))"},
+            {"relu", "((($1)($2)>($1)(0.0f))?($1)($2):($1)(0.0f))"},
             {"erf", "(($1) std::erf(($2)))"},
             {"erfinv", "(jittor::_erfinv($2))"},
             {"cast", "(($1)($2))"},
@@ -140,9 +142,9 @@ struct CommonOpType : OpByType {
             // Floats divide at full precision and floor the quotient; integers
             // keep the truncate-and-correct helper, which is what `%` is for.
             // Casting the operands to the output type first discarded the
-            // fraction of the *inputs*: KI-OPS-003.
+            // fraction of the *inputs*.
             {"floor_divide", "@if(@strcmp($1,float32)==0,(($1)std::floor(($1($2))/($1($4)))),@if(@strcmp($1,float64)==0,(($1)std::floor(($1($2))/($1($4)))),jittor::_floor_divide($1($2), $1($4))))"},
-            // KI-OPS-008: the identity a float reduction folds *from* has to be
+            // The identity a float reduction folds *from* has to be
             // an infinity, not the lowest finite value. `max(lowest(), -inf)`
             // keeps `lowest()`, so a float32 tensor whose maximum really is
             // -inf reported -3.4e38 here while CUDA reported -inf -- reachable

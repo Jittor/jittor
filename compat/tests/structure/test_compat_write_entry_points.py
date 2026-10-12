@@ -1,10 +1,10 @@
 """Every process-global write in ``jittor/compat`` is classified, or the run fails.
 
-7.05 asks for an install that is either fully reversible or an explicit hard
-failure. The obstacle was never the ledger -- it was not knowing what still had
-to go into it. Eleven waves of the board recorded "some other installer's write
-entry points remain", each time from a fresh grep, each time with a different
-answer, because a grep says what matched and not what is left.
+The install contract is that an install is either fully reversible or an
+explicit hard failure. The obstacle was never the ledger -- it was not knowing
+what still had to go into it. Status notes kept recording "some other
+installer's write entry points remain", each time from a fresh grep, each time
+with a different answer, because a grep says what matched and not what is left.
 
 So the inventory lives here as a closed set. The scanner finds every statement in
 ``compat`` that writes ``os.environ``, ``sys.modules``,

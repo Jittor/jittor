@@ -13,7 +13,7 @@ For a float those are -3.4e38 and -inf, and they are not interchangeable:
 whose maximum really is -inf reported -3.4e38 on CPU and -inf on CUDA -- one
 call, two answers, no error. An attention mask is the obvious way to hit it: a
 fully masked row is all -inf, and ``logits.max(-1)`` is exactly this reduction.
-That was KI-OPS-008; the CPU table now dispatches on ``has_infinity``.
+That is fixed; the CPU table now dispatches on ``has_infinity``.
 
 Integers are unaffected and must stay that way: ``lowest()`` *is* their
 identity, and there is no integer infinity to lose. The integer test below is
@@ -129,7 +129,7 @@ class TestMinMaxReductionIdentityCpu(_IdentityContract, unittest.TestCase):
     device_flag = 0
 
     def test_infinite_reductions_use_the_right_identity(self):
-        # Was a strict expected failure for KI-OPS-008. The CPU table now
+        # Was a strict expected failure. The CPU table now
         # dispatches on has_infinity, so this is a plain assertion again.
         self._check_infinite_identity()
 

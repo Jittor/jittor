@@ -17,13 +17,22 @@ flash-attention source checkout on first use and caches the result.
 ## Install
 
 ```bash
+pip install pybind11                    # headers only; see below
 git clone https://github.com/Dao-AILab/flash-attention
 export JITTOR_FLASH_ATTN_JITTOR_SRC=/path/to/flash-attention
 ```
 
-That is the only variable you need. The checkout is **source**, not a built
-wheel -- the bridge generates and compiles the kernels itself, so no
-`pip install flash-attn` build step and no matching torch ABI.
+`JITTOR_FLASH_ATTN_JITTOR_SRC` is the only *variable* you need, but **pybind11
+is a hard prerequisite**: the shim's `torch/extension.h` includes
+`<pybind11/pybind11.h>` unconditionally, so without those headers no extension
+compiles and the bridge reports `No module named 'flash_attn_jittor_cuda'` --
+a symptom that names a missing Python module rather than a missing header. If
+you cannot install into the environment, any directory holding
+`pybind11/include` on `PYTHONPATH` is enough.
+
+The checkout is **source**, not a built wheel -- the bridge generates and
+compiles the kernels itself, so no `pip install flash-attn` build step and no
+matching torch ABI.
 
 `JITTOR_FLASH_ATTN_JITTOR_REQUIRED=1` turns a bridge that fails to build into
 an error instead of a silent fall back to another attention path. Worth setting
@@ -48,7 +57,7 @@ it carries the build or import failure that the caller never saw.
 
 ## A run that proves it end to end
 
-Measured output is in the comments.
+Measured output is in the comments, from a CUDA sm_90 build on 2026-09-22 with the official flash-attention checkout.
 
 ```python
 import torch
@@ -64,8 +73,13 @@ out = flash_attn_func(q, k, v, causal=True)      # (2, 256, 8, 64) float16
 ref = torch.nn.functional.scaled_dot_product_attention(
     q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), is_causal=True
 ).transpose(1, 2)
-print((out.float() - ref.float()).abs().max().item())   # 0.0
+print((out.float() - ref.float()).abs().max().item())   # 0.001953125
 ```
+
+**Not zero, and it should not be.** Flash-attention accumulates the softmax in
+a different order than the math path, so in float16 the two differ by about
+`2**-9` on this shape. Compare against a tolerance; an equality assertion here
+fails for a reason that has nothing wrong with it.
 
 ## The variables that only make startup faster
 

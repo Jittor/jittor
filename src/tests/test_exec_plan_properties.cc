@@ -380,7 +380,7 @@ JIT_TEST(exec_plan_building_executes_nothing) {
         CHECK(var->mem_ptr == nullptr);
         CHECK(!var->is_finished());
     }
-    CHECKop(Op::number_of_lived_ops,==,ops_before);
+    CHECKop(Op::number_of_lived_ops.load(),==,ops_before);
     plan.epoch.reset();
 }
 

@@ -7,6 +7,7 @@
 #include <type_traits>
 
 #include "core/var.h"
+#include "runtime/profiler/step_trace.h"
 #include "core/op.h"
 #include "core/grad.h"
 #include "mem/allocator.h"
@@ -274,7 +275,10 @@ bool Var::alloc(Allocator* allocator) {
         USER_CHECK(size == 0 || (is_contiguous() && (!input() || !input()->is_storage_view())))
             << "Allocator cannot represent shared strided storage";
     }
-    mem_ptr = allocator->alloc(storage_span_bytes(), allocation);
+    {
+        StepTraceVarScope trace_var(this);
+        mem_ptr = allocator->alloc(storage_span_bytes(), allocation);
+    }
     storage_offset_bytes = 0;
     this->allocator = allocator;
     // A failed allocation throws (see AlignedAllocator::alloc and

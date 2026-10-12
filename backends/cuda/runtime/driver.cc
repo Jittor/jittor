@@ -3,7 +3,10 @@
 #include "runtime/device_state.h"
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
+#include <algorithm>
+#include <cstring>
 #include <exception>
+#include <vector>
 
 namespace jittor {
 DECLARE_FLAG(int, cuda_device_allocator_managed_fallback);
@@ -279,8 +282,11 @@ static inline bool capturing() {
 bool graph_capture_begin(int device) {
     return on_device(device, [&]() -> bool {
         cudaGetLastError();
+        // Relaxed: a pool that has to grow mid-recording calls cudaMalloc,
+        // which the stricter modes refuse. The block is ordinary memory and
+        // the recording holds it until the graph is released.
         const auto status = cudaStreamBeginCapture(cudaStreamPerThread,
-                                                   cudaStreamCaptureModeThreadLocal);
+                                                   cudaStreamCaptureModeRelaxed);
         if (status != cudaSuccess) {
             cudaGetLastError();
             LOGvv << "graph capture could not start:" << cudaGetErrorString(status);
@@ -480,11 +486,32 @@ void copy(void* dst, Device target, const void* src, Device source, size_t size,
             // An unregistered pointer is the ordinary case, not a failure;
             // older drivers report it as an error, so clear the sticky flag.
             if (query != cudaSuccess) cudaGetLastError();
-            const bool pageable = query != cudaSuccess
+            bool pageable = query != cudaSuccess
                 || attr.type == cudaMemoryTypeUnregistered;
-            checkCudaErrors(cudaMemcpyAsync(dst, src, size, cudaMemcpyHostToDevice,
+            // A small pinned source goes through a pageable bounce buffer
+            // instead, which the driver stages before returning. Host Vars are
+            // pinned whenever CUDA is in use, so this is every 0-d CPU operand
+            // of a CUDA op -- `cuda_x / cpu_scalar`, a scheduler's
+            // `alphas_cumprod[t] ** 0.5 * sample` -- and the wait below made
+            // each one block the host until the GPU drained its queue: 54 ms
+            // behind 20 queued 4096^2 matmuls, 2.35 ms twice per DDIM step.
+            // Not while recording a graph: the node would read the bounce
+            // buffer on every launch.
+            const void* from = src;
+            thread_local vector<char> bounce;
+            if (!pageable && !capturing() && size <= (64u << 10)) {
+                bounce.resize(std::max(bounce.size(), size));
+                std::memcpy(bounce.data(), src, size);
+                from = bounce.data();
+                pageable = true;
+            }
+            checkCudaErrors(cudaMemcpyAsync(dst, from, size, cudaMemcpyHostToDevice,
                                             cudaStreamPerThread));
-            if (!pageable) {
+            // Except while recording a graph, where a wait is illegal and the
+            // copy becomes a node that reads `src` each time the graph runs;
+            // the recording's owner keeps `src` alive and waits for the
+            // previous launch before rewriting it (see `graph_wait`).
+            if (!pageable && !capturing()) {
                 LaunchErrorScope error_scope(
                     target, true, reinterpret_cast<uintptr_t>(cudaStreamPerThread));
                 checkCudaErrors(cudaStreamSynchronize(cudaStreamPerThread));

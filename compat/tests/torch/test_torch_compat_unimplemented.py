@@ -672,9 +672,16 @@ class TestOverridesAndDefaults(StubPolicyBase):
     def setUp(self):
         super().setUp()
         self._use_cuda = jt.introspection.policy.runtime.use_cuda
+        # `set_default_device` also records where a `device=`-less tensor
+        # goes, and restoring use_cuda does not undo that: left at "cuda", the
+        # files after this one built every plain `torch.tensor` on the device.
+        from jittor.compat.torch import frontend
+        self._default_device = frontend._DEFAULT_DEVICE
 
     def tearDown(self):
         from contextlib import ExitStack as _TestPolicyStack
+        from jittor.compat.torch import frontend
+        frontend.set_default_device_spelling(self._default_device)
         with _TestPolicyStack() as _test_policy_stack:
             _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=self._use_cuda))
             super().tearDown()

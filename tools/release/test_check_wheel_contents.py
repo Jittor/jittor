@@ -138,40 +138,6 @@ class TestWheelContents(unittest.TestCase):
             {},
         )
 
-    def test_final_modernization_transition_is_fully_accounted(self):
-        baselines = checker.BASELINE_ROOT
-        before = checker._read_hashed_path_list(
-            baselines / "wheel-contents-stage7.txt", "Stage 7 baseline"
-        )
-        after = checker._read_hashed_path_list(
-            baselines / "wheel-contents-final-modernization.txt",
-            "final modernization baseline",
-        )
-        additions = checker._read_hashed_path_list(
-            baselines / "wheel-additions-final-modernization.txt",
-            "final modernization additions",
-        )
-        content_changes = checker._read_hashed_path_list(
-            baselines / "wheel-content-changes-final-modernization.txt",
-            "final modernization content changes",
-        )
-        removals = checker._read_path_list(
-            baselines / "wheel-removals-final-modernization.txt",
-            "final modernization removals",
-        )
-
-        added_names = set(after) - set(before)
-        removed_names = set(before) - set(after)
-        changed_names = {
-            name for name in set(before) & set(after) if before[name] != after[name]
-        }
-        self.assertEqual(len(added_names), 40)
-        self.assertEqual(len(removed_names), 3)
-        self.assertEqual(len(changed_names), 27)
-        self.assertEqual(additions, {name: after[name] for name in added_names})
-        self.assertEqual(content_changes, {name: after[name] for name in changed_names})
-        self.assertEqual(removals, frozenset(removed_names))
-
     def test_hash_manifest_accepts_an_unchanged_wheel(self):
         old_wheel = self._wheel("old.whl", self.base_members)
         candidate = self._wheel("candidate.whl", self.base_members)

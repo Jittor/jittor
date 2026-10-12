@@ -5,7 +5,18 @@
 
 ## 分析大块分配
 
-内存分析器把峰值分配归因到 Python 调用点：
+首选 `jt.profile`：它回放分配器自己的事件日志，给出一步的精确峰值、峰值那一刻活着的
+张量（按生产算子、Python 调用点、shape 分组）、工作区、池的缓存与碎片，以及 NVML 看到的
+进程占用，并且不需要 `trace_py_var`：
+
+```python
+with jt.profile() as prof:
+    train_step()
+print(prof.memory.summary())
+```
+
+细节见[性能与显存画像](../notes/profiling.md)。旧的内存分析器也把峰值分配归因到 Python
+调用点，但要开 `trace_py_var=3`（显著变慢），且只能看到开启之后创建的张量：
 
 ```python
 import jittor as jt
@@ -20,6 +31,21 @@ with jt.flag_scope(trace_py_var=3, profile_memory_enable=1):
 
 看报告里最大的几个分支。在动全局显存上限之前，先做这三件事：缩小临时张量、释放
 那些让图活着的 Python 引用、把工作拆成更小的批次。
+
+## 先试这一个开关：关掉提前发射
+
+CUDA 上默认的流水式执行（`auto_flush_ops=128`）把图切成段，跨段存活的中间值释放不掉，
+峰值因此比"整图一次发射"高——实测 ResNet-50 训练一步是 5.104 GiB 对 3.574 GiB，代价是
+慢 32%。**撞到显存不够时，`auto_flush_ops=0` 是第一个该试的开关**，而且方向和直觉相反：
+把它调小（而不是调到 0）只会更费。数据、机制与那张分段表见
+[流水式惰性执行](../notes/pipelined-execution.md)。
+
+```python
+jt.flags.auto_flush_ops = 0
+```
+
+半精度是另一条正交的路：它同时降低激活与参数的存储，开法、loss scale 与数值边界见
+[混合精度训练](../notes/mixed-precision.md)。
 
 ## 自动换出（实验性）
 
@@ -53,3 +79,5 @@ python -m jittor_utils.clean_cache swap
 
 - 显存到底去哪了、缓存分配器为什么不还给驱动：见[调试指南](debugging.md)
 - 把大张量搬回主机：`.cpu()` 的目标缓冲分配在主机侧，见[设备与放置](../notes/device-placement.md)
+- 一步的峰值与分配归因、哪些张量在峰值时刻活着：见[性能与显存画像](../notes/profiling.md)
+- 半精度训练的显存与数值代价：见[混合精度训练](../notes/mixed-precision.md)

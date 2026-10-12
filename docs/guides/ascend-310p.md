@@ -20,7 +20,7 @@
 模型级验收：Transformers 4.56.2 + Torch shim，Qwen3-0.6B FP16 greedy
 生成零回退且三次重复一致（需 `acl_allow_hf32=1`，RoPE 的 FP32
 `inv_freq @ position_ids` 走显式降精度），详见
-`refactor-wip/results/transformers/2026-09-22-qwen3-ascend310p-fp16.md`。
+`docs/results/2026-09-22-qwen3-ascend310p-fp16.md`。
 
 ## 与 910B 的能力差异
 
@@ -64,7 +64,7 @@ with jt.flag_scope(acl_allow_hf32=1):
 - `x[i]`（纯整数索引）的反向在 310P 上可能读到未初始化字节：这是
   `setitem_inplace` 图优化把梯度打包进零基座后的调度层缺陷，与 ACL 核
   无关。公开路径（`GetItemACL`）已绕行；原生 op 路径在测试中声明为
-  预期失败，详见 `agent/manuals/known-issues.md` KI-BACKEND-011。
+  预期失败，详见 `agent/manuals/known-issues.md` KI-BACKEND-020。
 - bool mask 的 `where`/`masked_fill` 在 310P 上静默无效；涉及非有限值
   的路径已改用 `nonzero`+`IndexPutImpl`。
 - 310P 不声明训练能力：缺少的反向算子由组合实现补齐并逐一对拍，

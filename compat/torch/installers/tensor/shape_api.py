@@ -1,6 +1,7 @@
 """Stable Torch shape and reduction adapters using native Tensor operations."""
 from ...context import get_install_context
 from . import jt, np, dtype, _jittor_dtype_name, _dtype_to_str, _diff, _trapz, nn
+from .method_api import _ip
 
 def _torch_size(self, dim=None):
     _context = get_install_context(jt)
@@ -45,7 +46,17 @@ def _bitcast(self, dt):
     return jt.array(_np.ascontiguousarray(self.numpy()).view(npd))
 
 
+#: `src/bindings/pyjt/py_compat_fast.h`'s `_fast_view`, once the tensor
+#: installer has bound it: a dense tensor reshaped by integer sizes, without
+#: the frames. None answers for everything else.
+_FAST_VIEW = None
+
+
 def _torch_reshape(self, *shape, **_kw):
+    if not _kw and _FAST_VIEW is not None:
+        out = _FAST_VIEW(self, shape)
+        if out is not None:
+            return out
     # torch's `.view(dtype)` / `.view(dtype=...)` REINTERPRETS the bytes as
     # another dtype (bitcast), e.g. weight.view(torch.uint8) for byte-packing
     # in vLLM weight transfer. jittor has no dtype-view; bitcast via numpy.
@@ -151,13 +162,12 @@ def _torch_sum(input, *a, **k):
 
 
 def _index_add_inplace(self, dim, index, source, *, alpha=1):
-    _context = get_install_context(jt)
-    _native = _context.state["tensor_shape_api"]
-    _orig_index_add_inplace = _native['_orig_index_add_inplace']
+    # Through the Tensor in-place owner, not the native `index_add_`: that one
+    # assigns without the requires-grad bookkeeping, so the written sources
+    # dropped out of the graph whenever the target did not already require grad.
     if alpha != 1:
         source = source * alpha
-    _orig_index_add_inplace(self, dim, index, source)
-    return self
+    return _ip(self, self.index_add(dim, index, source))
 
 
 

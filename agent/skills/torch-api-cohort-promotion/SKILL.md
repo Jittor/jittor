@@ -1,13 +1,13 @@
 ---
 name: torch-api-cohort-promotion
-description: 把 compat 层某一族 torch API 从 install 期闭包提升为模块级一等对象并登记保真度（任务 7.03）的完整口径——先核 owner、三件套验收怎么写、`_axis_to_dim` 适配器为什么会让「模块级对象」与 Var 方法不是同一个对象、以及怎么让一个 cohort 真的在 CUDA 上跑一遍而不是只写「CPU N passed」。改 `compat/torch/installers/**` 里的 install 闭包、或要给某个 torch API 写 fidelity 元数据时读这一篇。
+description: 新增或提升 compat 层一族 torch API 时，把它写成模块级一等对象并登记保真度的完整口径——先核 owner、三件套验收怎么写、Var 方法上的 `axis=`→`dim=` 翻译包装为什么会让「模块级对象」与 Var 方法不是同一个对象、以及怎么让一个 cohort 真的在 CUDA 上跑一遍而不是只写「CPU N passed」。改 `compat/torch/installers/**` 里的 install 闭包、或要给某个 torch API 写 fidelity 元数据时读这一篇。
 ---
 
 # 把一族 torch API 提升为模块级一等对象
 
-适用对象：`compat/torch/installers/{tensor,nn,numerical,cuda,data}.py`
-里那些定义在 `install(...)` / `_install_*(...)` 内部的闭包。目标形态是
-**模块级 def + `register_fidelity` + install 只做绑定**。
+适用对象：`compat/torch/installers/` 下各包（`tensor/`、`nn/`、`numerical/`、`cuda/`）与
+`data.py` 等模块里新增的 torch API，以及仍定义在 `install(...)` / `_install_*(...)` 内部的闭包。
+目标形态是**模块级 def + `register_fidelity`（`compat/torch/fidelity.py`）+ install 只做绑定**。
 
 ## 1. 先核最终 owner（跳过这步会写出重复实现）
 
@@ -21,10 +21,10 @@ import jittor as jt
 for n in ['amax','logaddexp','cumsum']:
     print(n, 'mod=', hasattr(jt,n), 'Var=', hasattr(jt.Var,n))"
 # 有原生 owner 的，再把定义读出来逐行比对
-rg -n 'def amax|def amin' python/jittor/misc python/jittor/nn --glob '!compat/**'
+rg -n 'def amax|def amin' python/jittor/ops python/jittor/nn
 ```
 
-- **原生 owner 存在且契约就是 torch 的**（例：`jittor/misc/reductions.py` 的
+- **原生 owner 存在且契约就是 torch 的**（例：`python/jittor/ops/reductions.py` 的
   `amax`/`amin`/`count_nonzero`）→ 模块级对象写成**薄转发**，捕获原生 owner
   （`_NATIVE_AMAX = jt.amax`，在模块导入期捕获，那时 install 还没覆写它），
   fidelity detail 里写 "re-exports Jittor's native ... owner"。**删掉 compat 里
@@ -40,8 +40,7 @@ rg -n 'def amax|def amin' python/jittor/misc python/jittor/nn --glob '!compat/**
 install 期取到**的东西——典型是 `_orig_setitem = Var.__setitem__`（必须在打补丁前取），
 `_write_index_parent` 这类 retained-view 传播器就建立在它上面。
 
-做法照 `numerical.py` 的 `_vmap_runtime_impl`：模块级留一个 `None` 句柄，install
-时用 `global` 交接。
+做法：模块级留一个 `None` 句柄，install 时用 `global` 交接。
 
 ```python
 _index_parent_writer = None          # 模块级
@@ -63,21 +62,15 @@ def _install_tensor_methods(g, Var, ...):
 判据：模块级对象**单独 import 不炸**（`out=None` 的路径必须能跑），只有需要那份
 install 期状态的分支才依赖句柄。
 
-## 3. `_axis_to_dim` 会让身份断言失败——这是坑，不是你的 bug
+## 3. `axis=` 翻译包装会让身份断言失败——这是坑，不是你的 bug
 
-`installers/tensor.py` 的 `install_methods` 末尾有一段：
+`compat/torch/installers/tensor/__init__.py` 的安装逻辑给
+`max`/`min`/`argmax`/`argmin`/`amax`/`amin`/`cumsum`/`norm`/`std`/`var` 这十个 Var 方法
+**重新包一层**做 `axis=` → `dim=` 翻译（`_SHAPE_REDUCTION_APIS`）。被包过之后
+`torch.amax is jittor.Var.amax` 会失败，报的是两个不同的函数对象。
 
-```python
-for _rn in ("max", "min", "argmax", "argmin", "amax", "amin", "cumsum",
-            "norm", "std", "var"):
-    setattr(Var, _rn, _axis_to_dim(getattr(Var, _rn)))
-```
-
-它给这十个 Var 方法**重新包一层**做 `axis=` → `dim=` 翻译。于是
-`torch.amax is jittor.Var.amax` 会失败，报的是
-`<function install_methods.<locals>._axis_to_dim.<locals>._w> is not <function amax>`。
-
-**正确的解法不是放弃身份断言**，而是让稳定对象自己接 `axis=`，并让适配器跳过它：
+**正确的解法不是放弃身份断言**，而是让稳定对象自己接 `axis=`，并让包装跳过它
+（树上的 `amax`/`amin`/`count_nonzero` 就是这样做的）：
 
 ```python
 def amax(input, dim=None, keepdim=False, keepdims=None, axis=None):
@@ -85,14 +78,12 @@ def amax(input, dim=None, keepdim=False, keepdims=None, axis=None):
                         keepdim=keepdim, keepdims=keepdims)
 amax._torch_accepts_axis = True      # 适配器据此跳过
 
-def _axis_to_dim(orig):
-    if getattr(orig, "_torch_accepts_axis", False):
-        return orig
-    ...
+# 安装处：带标记的方法原样保留
+if not getattr(_ro, "_torch_accepts_axis", False):
+    setattr(Var, _rn, _SHAPE_REDUCTION_APIS[_rn])
 ```
 
-这十个名字里 `max`/`min`/`argmax`/`argmin`/`cumsum`/`norm`/`std`/`var` 都还没迁，
-后面每个 cohort 都会撞上同一条。
+这十个名字里还没带 `_torch_accepts_axis` 的，迁的时候都会撞上同一条。
 
 ## 4. 三件套验收（每个 cohort 都要这三样）
 
@@ -109,7 +100,7 @@ def _axis_to_dim(orig):
 3. **数值对拍**：对 NumPy 的 CPU 定点对拍 + Var 方法委托一致。dtype 相关的用例写
    `jt.array(v, dtype="float64")`，`jt.array(np.ones(4,"float64"))` 会静默变 float32。
 
-## 5. 让 cohort 真的过 CUDA（第 §0 条完成定义要求的那一层）
+## 5. 让 cohort 真的过 CUDA（新增计算必须在声明的真实 device 上执行）
 
 **不要**手写 `if jt.has_cuda: with flag_scope(use_cuda=1)`。用设备参数化引擎，
 门禁的 `JITTOR_TEST_DEVICES` 就能同时驱动两侧：
@@ -137,7 +128,7 @@ JITTOR_TORCH_SHIM=1 JITTOR_HOME=<...> TMPDIR=<...> \
 JITTOR_TEST_DEVICES=cpu nvcc_path="" taskset -c <核> python -m pytest <文件> -q
 # CUDA
 JITTOR_TORCH_SHIM=1 JITTOR_HOME=<...> TMPDIR=<...> \
-JITTOR_TEST_DEVICES=cuda CUDA_VISIBLE_DEVICES=<卡> \
+JITTOR_TEST_DEVICES=cuda CUDA_VISIBLE_DEVICES=<gpu> \
 nvcc_path=/usr/local/cuda/bin/nvcc PATH=/usr/local/cuda/bin:$PATH \
 taskset -c <核> python -m pytest <文件> -q
 # 判据：生成的类名里必须有 ...CUDA，不能是 ...Unselected
@@ -182,15 +173,18 @@ CPU 与 float64 差 3.7e-03、CUDA 与 float64 差 2.1e-03、两者互差 2.7e-0
 ## 7. 整个 installer 清空（比逐 cohort 提升更可验收）
 
 「再挑一个 cohort」这种任务形状关不掉；「某个 installer 内嵌 def/class 归零」能。
-计数就是验收口径，随手可测：
+计数就是验收口径，随手可测（多数 installer 已经是 CLEARED；`--only` 按文件名过滤）：
 
 ```bash
+python agent/skills/torch-api-cohort-promotion/count_installer_closures.py --min 1
 python agent/skills/torch-api-cohort-promotion/count_installer_closures.py \
-    --only nn.py tensor.py
+    --only module_methods.py methods.py
 # CLEARED 标记 = nested 与 lambda 同时为 0
 ```
 
-把这个计数**同时写进测试**，否则下一波会有人往空 installer 里塞新闭包：
+把这个计数**同时写进测试**（树上的例子是
+`compat/tests/torch/test_torch_module_method_owner_fidelity.py::test_install_module_methods_defines_nothing`），
+否则下一次会有人往空 installer 里塞新闭包：
 
 ```python
 def test_install_module_methods_defines_nothing():
@@ -245,11 +239,11 @@ contextmanager 即可。
 
 ## 9. 收尾前必查
 
-- `JITTOR_TORCH_SHIM=1 pytest tests/structure -q`——**注意它不是 3 秒、也不是全绿**：
-  本机实测约 2 分 15 秒，HEAD 上就有 15 条红。判据是**与改前逐条同集合**，
-  不是「全绿」。先在改前跑一次留基线。
+- `JITTOR_TORCH_SHIM=1 PYTHONPATH=python python -m pytest tests/structure -q`——**注意它不是
+  3 秒**：实测要几分钟，HEAD 上也可能有既存红。判据是**与改前逐条同集合**，
+  不是「全绿」。先在改前跑一次留基线（`tools/gate_conclusion_diff.py record`/`compare`）。
 - 每个测试目录单独一条 pytest 命令；`tests/structure` 与 `compat/tests/torch`
   合并会因 `conftest` 模块名被抢而报假错。
 - 禁止 `git stash` 的前提下要拿改前基线：`cp <文件> $TMPDIR/<文件>.wip`
-  → `git checkout -- <文件>` → 跑 → `cp` 回来。**不要用 `git apply`**，它会写索引，
-  后续不带路径的 `git commit` 会把别的东西一起带走。
+  → `git checkout -- <文件>` → 跑 → `cp` 回来。提交时只 `git add` 自己的文件路径，
+  不要用不带路径的 `git commit -a` 或 `git add -A`。

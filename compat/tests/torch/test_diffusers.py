@@ -8,7 +8,7 @@
 # weights -- see test_unet_from_pretrained_roundtrip).
 #
 #   export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
-#   /home/yizhang/miniconda3/envs/jt-torch/bin/python -m pytest compat/tests/torch/test_diffusers.py
+#   JITTOR_TORCH_SHIM=1 python -m pytest compat/tests/torch/test_diffusers.py
 # Skips cleanly if torch_shim/diffusers are unavailable.
 # ***************************************************************
 import os
