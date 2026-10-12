@@ -8,4 +8,5 @@
 
 test-layout
 torch-install-state-boundary
+2026-10-13-hf-stack-validation-plan
 ```
