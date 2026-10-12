@@ -11,7 +11,7 @@ description: 在 Jittor torch shim 与原生 PyTorch 上运行/验证 vLLM-Omni 
 数值与速度，以及每个断点归 jittor 核心 / `jittor.compat.torch` / adapter / shim 部署
 哪一层。这是团队当前焦点（vLLM-Omni checkout 为本报告锁定 HEAD）。
 
-**不覆盖**：不宣称本机跑过（本 skill 只读取脚本与报告，未启动任何 server/长跑）；TP2 的
+**不覆盖**：不宣称验证环境跑过（本 skill 只读取脚本与报告，未启动任何 server/长跑）；TP2 的
 画面噪声与「非注意力 device 侧 gap」仍是开放项，不要据此接受性能；不覆盖 vLLM-Omni 的
 训练（它是 inference runtime）。
 
@@ -19,20 +19,20 @@ description: 在 Jittor torch shim 与原生 PyTorch 上运行/验证 vLLM-Omni 
 
 | 角色 | 解释器 / 入口 | 说明 |
 | --- | --- | --- |
-| shim | `/root/jittor-lab/_state/h3/venv-jittor/bin/python`，`source /root/jittor-lab/minimax-h3/env-jittor.sh` | `JITTOR_TORCH_SHIM=1`；`JITTOR_HOME=/root/jittor-lab/_state/h3/run/jittor-home` |
-| oracle | `/root/jittor-lab/_state/h3/venv-oracle-cu129/bin/python`，`source /root/jittor-lab/minimax-h3/env-oracle-cu129.sh` | 独立 PyTorch，cu129 |
+| shim | `<jittor-python>`（本地 env 脚本激活，不入库） | `JITTOR_TORCH_SHIM=1`；`JITTOR_HOME=$JITTOR_LAB_ROOT/_state/h3/run/jittor-home` |
+| oracle | `<real-torch-python>`（本地 env 脚本激活，不入库） | 独立 PyTorch，cu129 |
 
-本机实测（2026-09-19）：`vllm 0.29.0` 两侧相同；`transformers 5.5.3` 两侧相同；
+实测（2026-09-19）：`vllm 0.29.0` 两侧相同；`transformers 5.5.3` 两侧相同；
 `torch 2.11.0`（shim）对 `2.13.0+cu129`（oracle）。
-`.../venv-oracle`（`transformers 5.17.0`、`torch 2.13.0`）不是可用 pair——报告指出它会
-破坏 lab 的 diffusers，必须用 `venv-oracle-cu129`。
+另一个装了 `transformers 5.17.0`、`torch 2.13.0` 的 oracle venv 不是可用 pair——报告指出它会
+破坏 lab 的 diffusers；oracle 必须是与 shim 侧同版本下游库的 `torch 2.13.0+cu129` 环境。
 
-上游 checkout：`/root/jittor-lab/vllm-omni`，remote
-`https://github.com/vllm-project/vllm-omni.git`，HEAD 本机实测
+上游 checkout：`$JITTOR_LAB_ROOT/vllm-omni`，remote
+`https://github.com/vllm-project/vllm-omni.git`，HEAD 实测
 `446c2b5474dabffccf9a0034836eeab77c62b4b8`。
 
-shim 侧 `env-jittor.sh` 已经：把 flash-attn 经
-`JITTOR_FLASH_ATTN_JITTOR_SRC=/root/jittor-lab/flash-attention` 命名为
+shim 侧 env 脚本（本地、不入库）已经：把 flash-attn 经
+`JITTOR_FLASH_ATTN_JITTOR_SRC=$JITTOR_LAB_ROOT/flash-attention` 命名为
 `HEAD_DIMS=64,128`、`DTYPES=bf16,fp16`（故意**不设** `..._REQUIRED` 与
 `..._CAST_FLOAT32`，未覆盖形态落回组合路径）；把 diffusers main 放进 `PYTHONPATH`；设
 `HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1`；把 `/usr/local/openmpi/bin` 提前（避开坏 mpicc）。
@@ -40,12 +40,12 @@ shim 侧 `env-jittor.sh` 已经：把 flash-attn 经
 **oracle 断言（看任何数字之前必须过）**：
 
 ```bash
-source /root/jittor-lab/minimax-h3/env-oracle-cu129.sh
-"$VENV/bin/python" -c \
+# 已激活原生侧环境（本地 env 脚本，不入库）
+<real-torch-python> -c \
   "import torch; assert not hasattr(torch, '_torch_compat_install_context'); print(torch.__version__)"
 ```
 
-本机实测输出 `2.13.0+cu129`。shim 侧该属性为 `True`（实测）；shim 侧必须先 `import jittor`
+实测输出 `2.13.0+cu129`。shim 侧该属性为 `True`（实测）；shim 侧必须先 `import jittor`
 再 `import torch`，shim 的 `torch.__version__` 是后端版本 `1.3.11.0`、`torch.__torch_version__`
 才是模拟 API level `2.11.0`（均实测）。双解释器 harness 契约见
 [`_ecosystem_harness.py`](../../../compat/tests/torch/_ecosystem_harness.py) 的 docstring，
@@ -53,9 +53,9 @@ source /root/jittor-lab/minimax-h3/env-oracle-cu129.sh
 
 ## 在 shim 上跑
 
-所有脚本都 `cd /root/jittor-lab/minimax-h3` 后 source `env-jittor.sh`，并设
+所有脚本都 `cd $JITTOR_LAB_ROOT/minimax-h3` 后 source `env-jittor.sh`，并设
 `use_cuda=1`、`JITTOR_TORCH_SKIP_EXT_BUILD=1`（只 import vllm-omni，不建 CUDA 扩展）、
-`VLLM_ENABLE_V1_MULTIPROCESSING=0`、`PYTHONPATH=/root/jittor-lab/vllm-omni`。
+`VLLM_ENABLE_V1_MULTIPROCESSING=0`、`PYTHONPATH=$JITTOR_LAB_ROOT/vllm-omni`。
 
 | 目的 | 命令 |
 | --- | --- |
@@ -67,15 +67,15 @@ source /root/jittor-lab/minimax-h3/env-oracle-cu129.sh
 起 server（默认单卡 layerwise offload `dit`+`text_encoder`，`ATTN=TORCH_SDPA`）：
 
 ```bash
-cd /root/jittor-lab/minimax-h3
+cd $JITTOR_LAB_ROOT/minimax-h3
 ./serve-vllmomni.sh                                  # 单卡，lab 验证过的 profile
-TP=2 NUM_GPUS=2 GPU=0,1 ./serve-vllmomni.sh          # TP2
+TP=2 NUM_GPUS=2 GPU=<gpu0>,<gpu1> ./serve-vllmomni.sh         # TP2
 ```
 
 多 rank 时脚本自己设置 `JITTOR_TORCH_DISTRIBUTED_AUTO_INIT=1`、
 `JT_BUILD_NCCL_{INCLUDE,LIB}_PATH`、`JITTOR_TORCH_KEEP_TMPDIR=1`，并清
 `/tmp/jittor-nccl-*.bin*`；`ATTN=FLASH_ATTN` 时另设
-`PYTHONPATH=/root/jittor-lab/minimax-h3/shim-extra:...`（顶层 `flash_attn_interface`
+`PYTHONPATH=$JITTOR_LAB_ROOT/minimax-h3/shim-extra:...`（顶层 `flash_attn_interface`
 别名，见坑 8）。停服务必须用 `./stop-vllmomni.sh <PORT>`。
 
 ## 在原生 torch 上跑
@@ -83,13 +83,13 @@ TP=2 NUM_GPUS=2 GPU=0,1 ./serve-vllmomni.sh          # TP2
 diffusers 路径；与 shim 注入同一份 latents，保证两侧同输入：
 
 ```bash
-cd /root/jittor-lab/minimax-h3
+cd $JITTOR_LAB_ROOT/minimax-h3
 ./run-oracle-cu129.sh            # infer_h3.py，512x512x124 6 步
 ```
 
 脚本里 `--dump-tensors` 与 `--latents-file` 指向
-`/root/jittor-lab/_state/h3/runs/tensors/` 的固定张量。`--attn-backend` 默认 `flash`。
-vLLM-Omni server 的原生对拍属于 vllm-omni 自身栈，本机未做。
+`$JITTOR_LAB_ROOT/_state/h3/runs/tensors/` 的固定张量。`--attn-backend` 默认 `flash`。
+vLLM-Omni server 的原生对拍属于 vllm-omni 自身栈，未做。
 
 ## 对拍
 
@@ -98,7 +98,7 @@ vLLM-Omni server 的原生对拍属于 vllm-omni 自身栈，本机未做。
 - tiny checkpoint（`hf-internal-testing/tiny-minimax-h3-modular-pipe`，t2va，124 帧，2 步，
   注入 noise）：视频帧 max abs diff `1`（uint8）/ mean `0.046`；soundtrack 未对齐
   （corr≈0.05、RMS 比 0.53）——音频 VAE 路径结构性差异，**不要拿视频结论覆盖音频**。
-- VAE decode 用 `/root/jittor-lab/minimax-h3/compare_vae_outputs.py` 做容差比较
+- VAE decode 用 `$JITTOR_LAB_ROOT/minimax-h3/compare_vae_outputs.py` 做容差比较
   （`max|d|`、`mean|d|`、`rel`），按运行间噪声 floor 判；decode 不是 bit-reproducible，
   单次 checksum 不能当门禁。
 
@@ -154,14 +154,13 @@ MiniMax-H3 按报告是**消费未修改**：断点尽量落 jittor core / compa
 ## 坑与假绿
 
 1. **copy-deploy trap**：改 `python/jittor/` 对运行**没有影响**，必须先复制到
-   `/root/jittor-lab/_state/h3/venv-jittor/lib/python3.12/site-packages/jittor/`（本机确认
-   该路径存在）。deployed tree 是自洽快照，逐文件部署再重跑。
-2. **JIT 缓存**：`$JITTOR_HOME` = `/root/jittor-lab/_state/h3/run/jittor-home`（本机存在）。
+   `<jittor-python>` 的 `site-packages/jittor/`。deployed tree 是自洽快照，逐文件部署再重跑。
+2. **JIT 缓存**：`$JITTOR_HOME` = `$JITTOR_LAB_ROOT/_state/h3/run/jittor-home`（验证环境存在）。
    冷 cache 首请求 332.2 s、首次 512 请求 300.9 s；一个源码改动让受影响算子 kernel 全部
    失效。速度只取 warm；冷数字不是吞吐。
 3. **残留进程**：只按 `--port` 字符串 kill 会留下 DiffusionWorker 子进程占住 MASTER_PORT，
    下一次 rank1 与孤儿 store rendezvous，报 "NCCL store rendezvous timeout"。用
-   `/root/jittor-lab/minimax-h3/stop-vllmomni.sh` 走进程树。
+   `$JITTOR_LAB_ROOT/minimax-h3/stop-vllmomni.sh` 走进程树。
 4. **NCCL rendezvous 文件**：`/tmp/jittor-nccl-*.bin*` 按 `MASTER_ADDR-MASTER_PORT` 命名，
    同端口重跑会继承上一轮 unique id 并挂起；serve/stop 都会清。
 5. **TMPDIR 太长**：shim 把 TMPDIR 换成 `<runtime>/tmp`，ipc socket 超过 `sun_path`(107)；
@@ -181,29 +180,29 @@ MiniMax-H3 按报告是**消费未修改**：断点尽量落 jittor core / compa
 - 主报告：[`docs/results/2026-09-14-vllm-omni-h3-enablement.md`](../../../docs/results/2026-09-14-vllm-omni-h3-enablement.md)（34+ 节）。
 - [`2026-09-12-minimax-h3-torch-compat.md`](../../../docs/results/2026-09-12-minimax-h3-torch-compat.md)、
   [`2026-09-14-autocast-conv-mixed-dtype.md`](../../../docs/results/2026-09-14-autocast-conv-mixed-dtype.md)。
-- lab：`/root/jittor-lab/minimax-h3/`（run/env 脚本 + 176 个 `probe_*.py`）；原始日志、权重、
-  FlashAttention build、JIT cache 未版本化于 `/root/jittor-lab/_state/h3/`。
-- **本机已核实**：两个 env 脚本内容、两侧 venv 版本、vllm-omni HEAD、oracle 断言、shim 身份、
+- lab：`$JITTOR_LAB_ROOT/minimax-h3/`（run/env 脚本 + 176 个 `probe_*.py`）；原始日志、权重、
+  FlashAttention build、JIT cache 未版本化于 `$JITTOR_LAB_ROOT/_state/h3/`。
+- **已核实**：两个 env 脚本内容、两侧 venv 版本、vllm-omni HEAD、oracle 断言、shim 身份、
   deployed site 与 `$JITTOR_HOME` 路径存在、脚本清单与参数。
-- **仅报告 / 未在本机复验**：所有 serving/TP2、数值与速度数字；本机未启动任何 server 或长跑。
+- **仅报告 / 未复验**：所有 serving/TP2、数值与速度数字；验证环境未启动任何 server 或长跑。
 
 ## 实测（2026-09-19）
 
-环境：仓库 HEAD `90fe0b9`；GPU 5；oracle 断言 `2.13.0+cu129`；两侧 `vllm 0.29.0`、
+环境：仓库 HEAD `90fe0b9`；单卡 CUDA；oracle 断言 `2.13.0+cu129`；两侧 `vllm 0.29.0`、
 `transformers 5.5.3`。
 
-**已核实的身份/版本**：`git -C /root/jittor-lab/vllm-omni rev-parse HEAD` =
+**已核实的身份/版本**：`git -C $JITTOR_LAB_ROOT/vllm-omni rev-parse HEAD` =
 `446c2b5474dabffccf9a0034836eeab77c62b4b8`，与 skill 一致。但该 checkout **不是干净消费**：
 `git status` 显示 `M vllm_omni/diffusion/models/minimax_h3/minimax_h3_transformer.py`——
 skill 正文「MiniMax-H3 按报告是消费未修改」在**本 lab checkout 不成立**。
 
-**有界的唯一实跑**（不建 CUDA 扩展、不建 engine、不启动 server；`source env-jittor.sh`，
-`JITTOR_HOME=verify-misc/jittor-home`，`CUDA_VISIBLE_DEVICES=5`）：
+**有界的唯一实跑**（不建 CUDA 扩展、不建 engine、不启动 server；已激活 shim 侧环境，
+`JITTOR_HOME=verify-misc/jittor-home`，`CUDA_VISIBLE_DEVICES=<gpu>`）：
 
 ```
-"$VENV/bin/python" probe_vae_bare.py \
-  --model /root/jittor-lab/_state/h3/models/tiny-h3 \
-  --latents /root/jittor-lab/_state/verify-misc/tiny_latent17.npy \
+<jittor-python> probe_vae_bare.py \
+  --model $JITTOR_LAB_ROOT/_state/h3/models/tiny-h3 \
+  --latents $JITTOR_LAB_ROOT/_state/verify-misc/tiny_latent17.npy \
   --dtype float32 --device cuda --warmup 0 --trials 1
 ```
 
@@ -225,4 +224,4 @@ range`（chunking 需要至少 `tokens_chunk_size` 帧），T=17 后成功。`16
 
 **证据状态**：整体仍**报告派生**。仅「vllm-omni HEAD、两侧版本、oracle 身份」与
 「shim 能完成一次小型 H3 VAE decode（dtype/shape）」是机器验证；报告中全部 serving/TP2、
-数值、速度结论本机未复验。本机未启动 server 或长跑。
+数值、速度结论未复验。验证环境未启动 server 或长跑。

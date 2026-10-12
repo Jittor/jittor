@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.11.0'
+__version__ = '2.0.0'
 
 import os as _os
 import sys as _sys
@@ -46,7 +46,7 @@ _NATIVE_CORE_EXPORTS = (
     "migrate_all_to_cpu", "number_of_hold_vars", "number_of_lived_ops",
     "number_of_lived_vars", "op_compiler", "ops", "print_trace", "profiler",
     "reuse_np_array", "seed", "set_device", "set_lock_fd", "set_seed",
-    "graph_capture_begin", "graph_capture_end", "graph_capture_supported",
+    "graph_capture_active", "graph_capture_begin", "graph_capture_end", "graph_capture_supported",
     "graph_launch", "graph_release",
     "sync", "sync_all", "tape_together", "ternary_out_hint", "tests",
     "wrap_var_addr",
@@ -75,7 +75,7 @@ _NATIVE_OP_EXPORTS = (
     "reindex_var", "reinterpret_view", "reshape", "right_shift", "round",
     "round_int", "safe_clip", "setitem", "sigmoid", "sin", "sinh", "sqrt",
     "sub", "subtract", "sum", "tan", "tanh", "tape", "ternary",
-    "transpose", "uint16", "uint32", "uint64", "uint8", "unary", "where",
+    "transpose", "uint16", "uint32", "uint64", "uint8", "unary", "where", "write_back",
 )
 
 
@@ -173,6 +173,9 @@ from .nn.functional.softmax import logsumexp
 from .nn.functional.tensor import kron, tensordot
 from . import numpy2cupy
 from ._runtime.graph_replay import graph_replay, graph_replay_barrier
+from ._runtime.step_capture import capture_step
+from . import profiling
+from .profiling import profile
 from .misc.concatenation import concat, cat
 from .misc.indexing import install_var_indexing as _install_var_indexing
 from .misc.indexing import var_getitem as getitem, var_setitem as setitem
@@ -367,6 +370,7 @@ _ROOT_EXPORTS = (
     "numpy2cupy", "optim", "ops", "rank", "sparse", "tensordot",
     "amp",
     "world_size", "config", "capability", "introspection", "graph_replay", "graph_replay_barrier",
+    "capture_step", "profile", "profiling",
 )
 
 __all__ = tuple(sorted(set(

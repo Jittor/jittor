@@ -65,12 +65,20 @@ struct Executor {
     // was launched by an earlier batch. `init.cc` resets it when the runtime
     // restarts; a nested batch overwrites it for its parent.
     bool last_is_cuda = false;
-    void run_sync(vector<Var*> vars, bool device_sync, bool weak_sync=true);
+    // `may_defer`: an auto-flush, which may run on the worker thread and return
+    // before it is done (runtime/async_exec.h).
+    void run_sync(vector<Var*> vars, bool device_sync, bool weak_sync=true, bool may_defer=false);
     // Submit from a Python return boundary. `force` is the explicit API;
     // otherwise lazy/eager/auto-flush flags retain their scheduling policy.
     // *When* to submit is the pipeline's decision and its state lives there
     // (`runtime/submission_pipeline.h`), not on the executor.
     void submit_pending(Var* target, bool force=false);
+    // The auto-flush: launch the pending work Python holds, if it is worth it.
+    void auto_flush();
+    // Called when a module call returns: an auto-flush that may go to the
+    // worker thread (runtime/async_exec.h), once `async_flush_ops` operators
+    // are pending.
+    void flush_at_module_boundary();
 
     inline Allocation alloc_temp(size_t size) {
         return Allocation(temp_allocator, size);

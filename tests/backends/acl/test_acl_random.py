@@ -73,6 +73,52 @@ class TestACLNativeRandom(unittest.TestCase):
                 self.assertFalse(np.array_equal(first[0], changed[0]))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_single_draw_multinomial_distribution_and_replay(self):
+        probabilities = np.tile(
+            np.asarray([0.2, 0.3, 0.5], dtype=np.float32), (4096, 1))
+        with forbid_backend_fallbacks():
+            jt.set_seed(20260925)
+            first = jt.multinomial(jt.array(probabilities), 1)
+            self.assert_acl_resident(first)
+            actual = first.numpy().copy()
+            jt.set_seed(20260925)
+            replay = jt.multinomial(jt.array(probabilities), 1).numpy()
+            one_hot = jt.multinomial(
+                jt.array([[0.0, 0.0, 1.0], [0.0, 1.0, 0.0]],
+                         dtype="float32"), 1).numpy()
+        self.assertEqual(actual.shape, (4096, 1))
+        self.assertEqual(str(first.dtype), "int64")
+        np.testing.assert_array_equal(actual, replay)
+        np.testing.assert_array_equal(one_hot, [[2], [1]])
+        frequencies = np.bincount(actual.ravel(), minlength=3) / 4096
+        np.testing.assert_allclose(frequencies, [0.2, 0.3, 0.5], atol=0.03)
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_large_vocabulary_multinomial_matches_torch_npu_rng(self):
+        # Independent torch_npu 2.7.1.post4 on Ascend 910B3, seed 20260925.
+        # The old inverse-CDF ACL path returned index 3837 and advanced the
+        # stream differently; native CANN multinomial returns 47764.
+        weights = np.zeros((1, 151936), dtype=np.float32)
+        weights[0, [1773, 3837, 47764]] = [0.1, 0.4, 0.5]
+        expected_after = np.asarray(
+            [0.6222606897354126, 0.597446084022522,
+             0.9208430051803589, 0.9523041248321533,
+             0.022185802459716797, 0.9120728969573975,
+             0.5148977041244507, 0.6582885980606079],
+            dtype=np.float32)
+        with forbid_backend_fallbacks():
+            jt.set_seed(20260925)
+            sampled = jt.multinomial(jt.array(weights), 1)
+            self.assert_acl_resident(sampled)
+            actual = sampled.numpy()
+            following = jt.rand((8,))
+            self.assert_acl_resident(following)
+            after = following.numpy()
+        self.assertEqual(str(sampled.dtype), "int64")
+        np.testing.assert_array_equal(actual, [[47764]])
+        np.testing.assert_array_equal(after, expected_after)
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_random_float64_declines_acl_with_explicit_fallback_error(self):
         result = run_child_script(
             """

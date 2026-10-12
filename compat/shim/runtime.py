@@ -71,9 +71,31 @@ def _installation_target(owner):
     return target
 
 
+_ENTRY_SOURCE = pathlib.Path(__file__).resolve().parent / "resources" / "torch" / "__init__.py"
+
+
+def _adopt_entry_file(module):
+    """Give the published namespace the ``__file__`` of the entry it replaces.
+
+    Libraries locate an installation through ``torch.__file__`` (for example
+    ``os.path.dirname(torch.__file__)``), and the deploy hint prints it. A
+    detached namespace has no file of its own, so it takes the deployed
+    ``torch/__init__.py`` that is importing it, or the source that file is
+    copied from when activation did not come through a deployed entry point.
+    """
+    if "__file__" in vars(module):
+        return
+    current = sys.modules.get("torch")
+    source = None
+    if getattr(current, "_jittor_torch_shim_placeholder", False):
+        source = getattr(current, "__file__", None)
+    module.__file__ = os.fspath(source or _ENTRY_SOURCE)
+
+
 def _publish_torch_module(transaction, module, owner):
     """Publish an opt-in namespace while retaining transaction rollback."""
 
+    _adopt_entry_file(module)
     current = sys.modules.get("torch")
     if current is owner and module is not owner:
         sys.modules["torch"] = module
@@ -264,6 +286,7 @@ def _activate_once(
         transaction=_transaction,
     )
     if _transaction is None:
+        _adopt_entry_file(published)
         sys.modules["torch"] = published
     else:
         _publish_torch_module(_transaction, published, jt)

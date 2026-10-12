@@ -91,7 +91,7 @@ def compile_backend_sources(config, common_flags):
             # cannot work. `--use_fast_math` is still on every CUDA compile
             # line by default (see `nvcc_flags` below), so this exemption is
             # live for `nan_checker.cu`. `-Ofast` is no longer added to kernel
-            # flags -- KI-BACKEND-005 replaced it with `-O3` -- and is stripped
+            # flags -- kernels build at `-O3` -- and is stripped
             # here only because a user-supplied `cc_flags`/`nvcc_flags` can
             # still carry it in.
             flags = remove_flags(flags, ["--use_fast_math", "-Ofast"]) + " -O2 "
@@ -242,6 +242,24 @@ def preload_cuda_library(name, required=False):
             _loaded_cuda_libraries[path] = ctypes.CDLL(path, dlopen_flags)
     return _loaded_cuda_libraries.get(paths[-1]) if paths else None
 
+def cuda_toolkit_include_dirs(cuda_home, machine=None):
+    """Where the toolkit that owns ``nvcc`` keeps its headers.
+
+    A system toolkit has them in ``<home>/include`` (a symlink into
+    ``targets/``). A conda toolkit has only ``targets/<target>/include``,
+    which is what nvcc itself adds through ``nvcc.profile``
+    (``TOP = bin/../targets/<target>``). Host compilation must follow the
+    same rule, or ``cuda_runtime.h`` fails on ``crt/host_config.h``.
+    """
+    machine = machine or platform.machine()
+    targets = ["x86_64-linux"]
+    if machine in ("aarch64", "arm64"):
+        targets = ["sbsa-linux", "aarch64-linux"]
+    return [os.path.join(cuda_home, "include")] + [
+        os.path.join(cuda_home, "targets", target, "include")
+        for target in targets
+    ]
+
 def check_cuda():
     if not nvcc_path:
         return
@@ -255,10 +273,17 @@ def check_cuda():
     # assert cuda_dir.endswith("bin") and "cuda" in cuda_dir.lower(), f"Wrong cuda_dir: {cuda_dir}"
     cuda_include = os.path.abspath(os.path.join(cuda_dir, "..", "include"))
     cuda_lib = os.path.abspath(os.path.join(cuda_dir, "..", "lib64"))
+    # Conda-style CUDA environments use ``lib`` instead of the system
+    # toolkit's ``lib64``. Keep the conventional path first, but accept the
+    # layout used by uv/conda-managed toolchains as well.
+    if not os.path.isdir(cuda_lib):
+        conda_cuda_lib = os.path.abspath(os.path.join(cuda_dir, "..", "lib"))
+        if os.path.isdir(conda_cuda_lib):
+            cuda_lib = conda_cuda_lib
     if nvcc_path == "/usr/bin/nvcc":
         # this nvcc is install by package manager
         cuda_lib = "/usr/lib/x86_64-linux-gnu"
-    cuda_include_dirs = [cuda_include]
+    cuda_include_dirs = cuda_toolkit_include_dirs(cuda_home)
     cuda_lib_dirs = [cuda_lib, cuda_bin]
     if cuda_wheel_stack:
         cuda_include_dirs = cuda_wheel_stack.include_dirs() + cuda_include_dirs
@@ -893,7 +918,7 @@ if ' -O' not in cc_flags:
     # `-ffinite-math-only`: a promise that no operand is ever infinite or NaN.
     # The compiler optimises on that promise, and operands that *are* infinite
     # take whatever path the transformed code happens to produce -- `1/0` came
-    # back as `nan` instead of `inf`, and `-inf/0` likewise (KI-BACKEND-005).
+    # back as `nan` instead of `inf`, and `-inf/0` likewise.
     # The wrong answers are plausible rather than obviously broken, which is
     # what makes them expensive: a fully masked attention row subtracts its own
     # `-inf` maximum, and a finite result there produces a well-formed but
@@ -1074,7 +1099,18 @@ CORE_GENERATOR_SIGNATURE_VERSION = 1
 
 
 def core_build_stamp_path():
-    return core_output_path + ".build_stamp.json"
+    """Where this configuration's core build stamp lives.
+
+    ``JITTOR_CORE_BUILD_STAMP_PATH`` points it somewhere else. That is how a
+    test can ask "what happens when the core is not known to be current" about
+    a *child* process without answering the question for every other process:
+    the stamp is shared by everything using this ``JITTOR_HOME``, and a child
+    decides by reading ``os.environ`` itself, so an override is the only seam
+    that reaches it. See ``_looks_unbuilt`` in
+    ``tests/build/test_import_bootstrap_laziness.py``.
+    """
+    return os.environ.get("JITTOR_CORE_BUILD_STAMP_PATH") or \
+        core_output_path + ".build_stamp.json"
 
 
 def core_source_signature(root=None):

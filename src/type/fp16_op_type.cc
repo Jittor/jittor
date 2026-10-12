@@ -66,6 +66,7 @@ struct FP16OpType : OpByType {
             {"tanh", "(($1) ::tanhf(($2)))"},
             {"atanh", "(($1) ::atanhf(($2)))"},
             {"sigmoid", "(($1) (1.0f/(1.0f+::expf((::min($1(-($2)), $1(@if(@strcmp($1,float16)==0,30,300))))))))"},
+            {"relu", "((($1)($2)>($1)(0.0f))?($1)($2):($1)(0.0f))"},
             {"erf", "(($1) ::erff(($2)))"},
             {"erfinv", "(($1) ::erfinvf(($1)($2)))"},
             {"cast", "(($1)($2))"},
@@ -75,7 +76,7 @@ struct FP16OpType : OpByType {
             {"maximum", "::max($1($2), $1($4))"},
             {"minimum", "::min($1($2), $1($4))"},
             {"mod", "$1(($2)-::hfloor(($2)/($4))*($4))"},
-            // Half floor division: divide, then floor. KI-OPS-003.
+            // Half floor division: divide, then floor.
             {"floor_divide", "$1(::hfloor(($1($2))/($1($4))))"},
             {"init_maximum", "@if(@strcmp($1,float16)==0,-65000.0f,-1e38)"},
             {"init_minimum", "@if(@strcmp($1,float16)==0,65000.0f,1e38)"},
@@ -110,6 +111,7 @@ struct FP16OpType : OpByType {
             {"tanh", "(($1) std::tanh(($2)))"},
             {"atanh", "(($1) std::atanh(($2)))"},
             {"sigmoid", "(($1) (1.0f/(1.0f+std::exp(std::min<float>($1(-($2)), $1(@if(@strcmp($1,float32)==0,30,300)))))))"},
+            {"relu", "((($1)($2)>($1)(0.0f))?($1)($2):($1)(0.0f))"},
             {"erf", "(($1) std::erf(($2)))"},
             {"erfinv", "(jittor::_erfinv($2))"},
             {"cast", "(($1)($2))"},
@@ -127,8 +129,15 @@ struct FP16OpType : OpByType {
             {"minimum", "jittor::_min<float32>(float32($2), float32($4))"},
             {"mod", "$1(($2)-std::floor(($2)/($4))*($4))"},
             {"floor_divide", "$1(std::floor(($1($2))/($1($4))))"},
-            {"init_maximum", "-32768.0f"},
-            {"init_minimum", "32768.0f"},
+            // KI-OPS-012: an infinity, not a finite literal. `-32768.0f` is
+            // *above* float16's lowest finite value (-65504), so `max` of a
+            // tensor that is entirely -65504 -- an ordinary number, the edge of
+            // the format -- answered -32768, a value that was not in its input.
+            // `min` mirrored it. The rest of this table already widens to
+            // float32 (see `maximum`/`minimum` above), so the float32 infinity
+            // is the identity this path computes with.
+            {"init_maximum", "-std::numeric_limits<float>::infinity()"},
+            {"init_minimum", "std::numeric_limits<float>::infinity()"},
             {"equal", "(float($2)==float($4))"},
         };
 

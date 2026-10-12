@@ -752,6 +752,32 @@ def _ptx_param_count(ptx, name):
 # --------------------------------------------------------------------------- #
 _COMPILE_CACHE = {}
 _compile_lock = threading.Lock()
+_JIT_CALL_METADATA = {}
+
+
+def _jit_call_metadata(jitfn, fn):
+    """Cache immutable Python signature metadata for a Triton JIT function."""
+    key = id(jitfn)
+    cached = _JIT_CALL_METADATA.get(key)
+    if cached is not None and cached[0] is jitfn:
+        return cached[1], cached[2]
+
+    import inspect
+    call_signature = inspect.signature(fn)
+    constexpr_names = set()
+    params = getattr(jitfn, "params", None)
+    if params:
+        for param in params:
+            if getattr(param, "is_constexpr", False):
+                constexpr_names.add(param.name)
+    else:
+        for name, param in call_signature.parameters.items():
+            if "constexpr" in str(param.annotation):
+                constexpr_names.add(name)
+    result = call_signature, frozenset(constexpr_names)
+    # Retaining the JIT function also prevents an id-reuse cache collision.
+    _JIT_CALL_METADATA[key] = (jitfn,) + result
+    return result
 
 # --------------------------------------------------------------------------- #
 #  over-read guard configuration
@@ -777,6 +803,78 @@ GUARD_BYTES = 256 * 1024
 GUARD_MAX_PAYLOAD = 64 * 1024 * 1024
 #: opt-out hook (set False to disable bounce buffers entirely, e.g. for A/B tests)
 GUARD_ENABLE = True
+
+# ``torch.cuda.CUDAGraph`` captures the real Python forward, so launches made
+# by this bridge are recorded by CUDA itself. Capture cannot tolerate context
+# switches, synchronous allocation, or the guard path's memset/copies.
+_GRAPH_CAPTURE_STATE = threading.local()
+
+
+def graph_capture_enter():
+    depth = int(getattr(_GRAPH_CAPTURE_STATE, "depth", 0))
+    if depth == 0:
+        # A foreign launch records raw pointers, but unlike a native Jittor op
+        # it is not represented by an Op node that owns its Var operands.
+        # Keep those Vars until the executable graph is destroyed; otherwise a
+        # later shape capture can recycle a pointer still stored in this graph.
+        _GRAPH_CAPTURE_STATE.keepalive = {}
+    _GRAPH_CAPTURE_STATE.depth = depth + 1
+
+
+def graph_capture_exit():
+    depth = int(getattr(_GRAPH_CAPTURE_STATE, "depth", 0))
+    if depth <= 0:
+        return ()
+    depth -= 1
+    _GRAPH_CAPTURE_STATE.depth = depth
+    if depth:
+        return ()
+    refs = tuple(getattr(_GRAPH_CAPTURE_STATE, "keepalive", {}).values())
+    _GRAPH_CAPTURE_STATE.keepalive = {}
+    return refs
+
+
+def _graph_capture_retain(values):
+    if not graph_capture_active():
+        return
+    keepalive = getattr(_GRAPH_CAPTURE_STATE, "keepalive", None)
+    if keepalive is None:
+        keepalive = {}
+        _GRAPH_CAPTURE_STATE.keepalive = keepalive
+    for value in values:
+        keepalive[id(value)] = value
+
+
+def graph_capture_active():
+    return int(getattr(_GRAPH_CAPTURE_STATE, "depth", 0)) > 0
+
+# These vLLM kernels use bounds masks against the logical tensor sizes and do
+# not rely on allocator padding.  Bouncing every one of their small metadata
+# operands is therefore pure overhead: a four-token V1 request currently issues
+# more than 100 launches and 500 D2D copies through this list.  Keep the fast
+# path tied to both the defining module and the exact kernel name so an unrelated
+# project cannot opt into it by accidentally reusing a generic function name.
+_VLLM_EXACT_BOUNDS_KERNELS = frozenset({
+    "_apply_write_kernel",
+    "_get_num_sampled_and_rejected_kernel",
+    "_prepare_pos_seq_lens_kernel",
+    "_combine_sampled_and_draft_tokens_kernel",
+    "_gather_block_tables_kernel",
+    "_compute_slot_mappings_kernel",
+    "_post_update_kernel",
+    "_prepare_prefill_inputs_kernel",
+    "_gumbel_sample_kernel",
+    "_topk_log_softmax_kernel",
+    "_ranks_kernel",
+    "_temperature_kernel",
+    "_penalties_kernel",
+    "_min_p_kernel",
+    "_bias_kernel",
+    "_bad_words_kernel",
+    "_bincount_kernel",
+    "_apply_grammar_bitmask_kernel",
+    "_prompt_logprobs_token_ids_kernel",
+})
 
 
 #: Per-launch timing, printed under ``JITTOR_TRITON_STATS=1``. The bridge does
@@ -840,10 +938,26 @@ def _int_env(name, default):
         return default
 
 
-def _guard_enabled():
+def _guard_enabled(jitfn=None, kname=None):
+    """Whether this launch needs allocator-padding compatibility guards.
+
+    An explicit environment setting always wins.  Without one, known vLLM
+    metadata and sampling kernels can use their original pointers because their
+    loads/stores are masked to exact logical bounds.
+    """
+    # Bounce buffers allocate and synchronously clear memory. Either operation
+    # invalidates an active CUDA stream capture, whose inputs must already have
+    # stable allocations.
+    if graph_capture_active():
+        return False
     if _truthy_env("JITTOR_TRITON_GUARD_ENABLE"):
         return True
     if _falsey_env("JITTOR_TRITON_GUARD_ENABLE"):
+        return False
+    fn = getattr(jitfn, "fn", jitfn)
+    module = getattr(fn, "__module__", "")
+    if (isinstance(module, str) and module.startswith("vllm.")
+            and kname in _VLLM_EXACT_BOUNDS_KERNELS):
         return False
     return GUARD_ENABLE
 
@@ -891,7 +1005,7 @@ def _copy_bounced_inputs_back():
     return True
 
 
-def _sync_after_launch_enabled():
+def _sync_after_launch_enabled(fast_sync=None):
     """Whether to wait for the device after a launch.
 
     Default: the conservative answer outside the shim, and no wait inside it.
@@ -909,15 +1023,15 @@ def _sync_after_launch_enabled():
         return True
     if _falsey_env("JITTOR_TRITON_SYNC_AFTER_LAUNCH"):
         return False
-    return not _fast_sync_enabled()
+    return not (_fast_sync_enabled() if fast_sync is None else fast_sync)
 
 
-def _sync_before_launch_enabled():
+def _sync_before_launch_enabled(fast_sync=None):
     if _truthy_env("JITTOR_TRITON_SYNC_BEFORE_LAUNCH"):
         return True
     if _falsey_env("JITTOR_TRITON_SYNC_BEFORE_LAUNCH"):
         return False
-    return not _fast_sync_enabled()
+    return not (_fast_sync_enabled() if fast_sync is None else fast_sync)
 
 
 def _looks_like_output_arg(name):
@@ -989,9 +1103,6 @@ def _compile(jitfn, signature, constants, options=None, device=0):
     device 0 in a rank that uses another device and may not be allowed near
     that one.
     """
-    triton = real_triton()
-    from triton.compiler import ASTSource
-
     drv = _Driver.get(device)
     opt_items = tuple(sorted((options or {}).items()))
     key = (id(jitfn), tuple(sorted(signature.items())),
@@ -1004,6 +1115,8 @@ def _compile(jitfn, signature, constants, options=None, device=0):
         cached = _COMPILE_CACHE.get(key)
         if cached is not None:
             return cached
+        triton = real_triton()
+        from triton.compiler import ASTSource
         from triton.backends.compiler import GPUTarget
         target = GPUTarget("cuda", drv.arch, 32)
         try:
@@ -1144,7 +1257,6 @@ def _run(jitfn, args, kwargs, grid):
     Returns ``None`` — results are written in place into the output Var(s),
     matching real triton's pointer-output convention.
     """
-    import inspect
     import jittor as jt
 
     # This driver launch writes pointers outside the native Jittor graph.
@@ -1153,6 +1265,11 @@ def _run(jitfn, args, kwargs, grid):
 
     fn = getattr(jitfn, "fn", jitfn)
     kname = getattr(jitfn, "__name__", getattr(fn, "__name__", "triton_kernel"))
+    capture_active = graph_capture_active()
+    fast_sync = _fast_sync_enabled()
+    guard_enabled = _guard_enabled(jitfn, kname)
+    sync_before_launch = _sync_before_launch_enabled(fast_sync)
+    sync_after_launch = _sync_after_launch_enabled(fast_sync)
 
     if os.environ.get("JT_TRITON_PTRTRACE"):
         import sys as _sys
@@ -1179,22 +1296,12 @@ def _run(jitfn, args, kwargs, grid):
               "launch_cooperative_grid", "launch_pdl", "profile_scratch"):
         kwargs.pop(m, None)
 
-    # -- which params are constexpr? (use triton's own param metadata if present)
-    constexpr_names = set()
-    params = getattr(jitfn, "params", None)
-    if params:
-        for p in params:
-            if getattr(p, "is_constexpr", False):
-                constexpr_names.add(p.name)
-    else:
-        for n, p in inspect.signature(fn).parameters.items():
-            ann = p.annotation
-            if "constexpr" in str(ann):
-                constexpr_names.add(n)
+    # -- immutable parameter metadata is shared by every launch ------------- #
+    call_signature, constexpr_names = _jit_call_metadata(jitfn, fn)
 
     # -- bind call args to parameter names ---------------------------------- #
     try:
-        bound = inspect.signature(fn).bind(*args, **kwargs)
+        bound = call_signature.bind(*args, **kwargs)
         bound.apply_defaults()
     except TypeError as e:
         raise JittorTritonError(
@@ -1285,6 +1392,11 @@ def _run(jitfn, args, kwargs, grid):
             signature[name] = sig
             runtime_vals.append((name, sig, val))
 
+    # Native ops keep their operand Vars through Jittor's graph.  Triton
+    # launches bypass that graph and CUDA records only their raw addresses, so
+    # explicitly transfer operand lifetime to the enclosing CUDAGraph.
+    _graph_capture_retain(out_vars)
+
     # Device the launch must happen on: the operands'. The driver context, its
     # module/function handles and the guard buffers are all per-device.
     _launch_dev = None
@@ -1303,7 +1415,10 @@ def _run(jitfn, args, kwargs, grid):
     # Operands' device current before anything else touches a device: the
     # materialising ``sync_all`` below and the compilation path must not run
     # with another device (or context) current.
-    _Driver.get(_launch_dev).ensure_ctx()
+    # Capture begins on the already-current context. Reasserting either the
+    # driver context or runtime device while it is active invalidates capture.
+    if not capture_active:
+        _Driver.get(_launch_dev).ensure_ctx()
 
     if not any(_is_tensor(v) for (_, _, v) in runtime_vals):
         raise JittorTritonError(
@@ -1380,13 +1495,29 @@ def _run(jitfn, args, kwargs, grid):
     # `jt.sync` takes the operand list instead, and `_is_var` already says which
     # operands are jittor Vars -- under the shim, all of them.
     operand_vars = [v for (_, _, v) in runtime_vals if _is_var(v)]
-    if operand_vars:
-        jt.sync(operand_vars, not _fast_sync_enabled())
-    elif any(_is_tensor(v) for (_, _, v) in runtime_vals):
+    # Persistent serving metadata is commonly materialised already. Calling
+    # jt.sync on those Vars still builds an execution plan and walks their
+    # dependencies even though there is nothing left to submit; six tiny vLLM
+    # metadata kernels paid that fixed cost on every decode step. A finished
+    # Var has a stable allocation and any previously submitted CUDA work is
+    # ordered before this launch on the shared per-thread stream, so only
+    # unfinished operands belong in the submission target set.
+    pending_vars = [v for v in operand_vars if not v.is_finished]
+    if os.environ.get("JT_TRITON_DEBUG"):
+        import sys as _sys
+        pending_names = [name for name, _, value in runtime_vals
+                         if _is_var(value) and not value.is_finished]
+        print("[JT_TRITON_DEBUG] operands kernel=%s pending=%d total=%d names=%s" %
+              (kname, len(pending_vars), len(operand_vars), pending_names),
+              file=_sys.stderr)
+    if pending_vars:
+        jt.sync(pending_vars, not fast_sync)
+    elif not operand_vars and any(
+            _is_tensor(v) for (_, _, v) in runtime_vals):
         # A launchable tensor that is not a jittor Var (a genuine torch.Tensor)
         # cannot be named to `jt.sync`; keep the broad sweep for that case.
-        jt.sync_all(not _fast_sync_enabled())
-    if _sync_before_launch_enabled():
+        jt.sync_all(not fast_sync)
+    if sync_before_launch:
         jt.sync_all(True)
     _stats_t1 = time.perf_counter() if _stats_on() else 0.0
     if _ptrtrace:
@@ -1395,7 +1526,8 @@ def _run(jitfn, args, kwargs, grid):
 
     # -- pack kernel params (in param order; pointers first only if scratch) - #
     drv = _Driver.get(_launch_dev)
-    drv.ensure_ctx()
+    if not capture_active:
+        drv.ensure_ctx()
     keepalive = []
     cvals = []
     # bounced tensors to copy back + guard buffers to recycle after the launch:
@@ -1407,7 +1539,7 @@ def _run(jitfn, args, kwargs, grid):
                 cv = ctypes.c_uint64(0)
             else:
                 ptr = _tensor_ptr(val)
-                nbytes = _tensor_nbytes(val, sig) if _guard_enabled() else 0
+                nbytes = _tensor_nbytes(val, sig) if guard_enabled else 0
                 # Only a contiguous operand can be bounced: the copy is a flat
                 # memcpy of the payload and the kernel keeps the caller's
                 # strides, so a strided view would be copied wrongly and then
@@ -1451,6 +1583,10 @@ def _run(jitfn, args, kwargs, grid):
             continue
         base = 0
         if size > 0:
+            if capture_active:
+                raise JittorTritonError(
+                    "triton kernel %r needs %d bytes of dynamic scratch, which "
+                    "cannot be allocated during CUDA graph capture" % (kname, size))
             base = drv.alloc(size * grid_programs)
             scratch_bases.append(base)
         cv = ctypes.c_uint64(base)
@@ -1511,7 +1647,7 @@ def _run(jitfn, args, kwargs, grid):
     # A bounce buffer does NOT: its copy-back is on the launch stream, and the
     # only other access to a pooled buffer is `guard_acquire`'s memset of the
     # *tail*, which is disjoint from the payload that copy-back reads.
-    need_sync_after_launch = _sync_after_launch_enabled() or bool(scratch_bases)
+    need_sync_after_launch = sync_after_launch or bool(scratch_bases)
     if need_sync_after_launch:
         drv.synchronize()
     if _ptrtrace:

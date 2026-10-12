@@ -33,6 +33,22 @@ void BroadcastTuner::run(PassManager* pm, TunerManager* tm) {
         if (op->type() == OpType::reduce) rd = 1;
         if (op->type() == OpType::broadcast) bc = 1;
     }
+    // An expand of more than one element is a stride-0 *view* now
+    // (`OpType::other`, see broadcast_to_op.cc), so it is not a member of the
+    // fused op at all: it is the producer of an input var, and the fused kernel
+    // reads it through those strides. Without this the tuner silently stopped
+    // running for every non-scalar broadcast -- the scalar case still sets
+    // `OpType::broadcast`, which is why only this file's non-scalar case went
+    // red. Recognise the view by its *producer* instead of by membership; the
+    // matmul and conv tuners carry the same membership assumption on the same
+    // ops.
+    for (uint i=0; i<fo->vars.size() && !bc; i++) {
+        if (fo->vars[i].type != 0) continue;
+        Var* var = fo->vars[i].var;
+        if (!var) continue;
+        Op* producer = var->input();
+        if (producer && producer->is_op(op_ids::broadcast_to())) bc = 1;
+    }
     if (!bc || rd) return;
 
     auto* lva_pass = pm->get_pass<LoopVarAnalyzePass>();

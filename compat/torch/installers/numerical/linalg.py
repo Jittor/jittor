@@ -91,6 +91,26 @@ def inverse(input):
     return jt.linalg.inv(input)
 
 
+def solve(A, B, *, left=True, out=None):
+    """Solve ``A @ X = B`` or, with ``left=False``, ``X @ A = B``.
+
+    ``X @ A = B`` is ``A^T @ X^T = B^T``, so the right-hand form reuses the
+    native left solve on transposed operands.
+    """
+    from . import (
+        jt,
+    )
+    if left:
+        result = jt.linalg.solve(A, B)
+    else:
+        result = jt.linalg.solve(
+            A.transpose(-2, -1), B.transpose(-2, -1)).transpose(-2, -1)
+    if out is not None:
+        out.assign(result)
+        return out
+    return result
+
+
 def _trace_impl(input):
     from . import (
         jt,

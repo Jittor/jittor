@@ -28,6 +28,18 @@ struct ExecutionBackendScope {
     ExecutionBackendScope(const ExecutionBackendScope&) = delete;
     ExecutionBackendScope& operator=(const ExecutionBackendScope&) = delete;
 };
+// Every op the calling thread runs meanwhile resolves to its CPU
+// implementation, whatever it is placed on. For a backend's host fallback
+// (ACL's `fallback_cpu`): an op explicitly placed on the device -- a torch
+// tensor on the NPU -- resolved to the device implementation again under a
+// CPU `ExecutionBackendScope`, which fell back again, until the stack ran out.
+struct HostExecutionScope {
+    bool previous;
+    HostExecutionScope();
+    ~HostExecutionScope();
+    HostExecutionScope(const HostExecutionScope&) = delete;
+    HostExecutionScope& operator=(const HostExecutionScope&) = delete;
+};
 struct Op : Node {
     Float32PrecisionPolicy float32_precision;
     uint64 launch_origin = 0;
@@ -114,6 +126,15 @@ struct Op : Node {
 };
 
 std::ostream& operator<<(std::ostream& os, const Op* var);
+
+// For an op that writes some of its inputs in place -- outputs that share
+// their storage (`fused_sgd`, `fused_adamw`): order it after every other
+// pending op that reads one of them, through control edges, which also bring
+// those readers into the batch the op runs in. Execution is lazy, so a reader
+// built before the update but not upstream of it -- a forward output the
+// gradients do not depend on -- could otherwise run after it and read the
+// new values.
+void order_after_readers(Op* op, const vector<Var*>& written);
 
 // The two process-wide kernel caches for non-fused ops: the compiled entry
 // point by jit key, and the map from the key an op prepares to the key its

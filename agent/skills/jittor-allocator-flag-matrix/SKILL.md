@@ -52,7 +52,7 @@ CUDA_VISIBLE_DEVICES=<你的卡> nvcc_path=/usr/local/cuda/bin/nvcc \
 taskset -c <你的核> python agent/skills/jittor-allocator-flag-matrix/probe_allocator_matrix.py
 ```
 
-**`PYTHONPATH` 不能省**：jt311 里的 jittor 是 editable 安装，`.pth` 指向主树；
+**`PYTHONPATH` 不能省**：开发环境里的 jittor 若是 editable 安装，`.pth` 指向主树；
 手写的 `python -c` / `python 脚本.py` 不加它就是在测别人的代码，症状是「bug 复现不出来」。
 pytest 不需要（`tests/conftest.py` 已经处理）。
 
@@ -151,7 +151,7 @@ assert b.numpy()[0][1] == 7.0
 ## 跨流的时序 bug 怎么稳定复现
 
 `fetch_op` 在自己的非阻塞流上拷贝，源 var 的块在 `run_sync` 末尾
-（`executor.cc` 的 `fetcher_to_free.clear()`，**在 `cudaDeviceSynchronize` 之前**）
+（`src/core/exec_runner.cc` 的 `fetcher_to_free.clear()`，**在 `cudaDeviceSynchronize` 之前**）
 就回了 free list。要赢这个竞争，得让副流上堆着足够多的活，而主流这边尽快把块要回来：
 
 1. **一次 fetch 多个 var**：`jt.fetch(v1, …, v8, cb)` 会在同一条流上排 8 组
@@ -189,9 +189,9 @@ liveness 问题时开。
 ## 换页（swap / save_mem）怎么测
 
 `save_mem` 是**编译期**常量，不是运行期 flag（`jt.flags.save_mem` 不存在，这是
-故意的：swap.h 顶上那张 TODO 还没做完，而 `if (save_mem)` 挂在每一次 Var 释放上）。
+故意的：`src/mem/swap.h` 顶上那张 TODO 还没做完，而 `if (save_mem)` 挂在每一次 Var 释放上）。
 `export JT_SAVE_MEM=1` 现在会被翻译成 `-DJT_SAVE_MEM=1`，并且它**自带一个缓存目录**
-（`jittor_utils.save_mem_build_flags` 进了构建配置指纹），所以开关它只会各编一次，
+（`jittor_utils.save_mem_build_flags`，定义在 `python/jittor/build/utils/__init__.py`，进了构建配置指纹），所以开关它只会各编一次，
 不会互相顶掉对方的产物：
 
 ```bash

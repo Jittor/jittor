@@ -2,10 +2,9 @@
 # torch-level regression test (#6): run real transformers models
 # through `import torch` -> jittor, on the torch-compat layer.
 #
-# REQUIRES an env with the torch_shim deployed + transformers, e.g. the
-# py3.11 conda env used for jittor-as-torch:
+# REQUIRES an env with the torch_shim deployed + transformers:
 #   export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DEACTIVATE_ASYNC_LOAD=1
-#   /home/yizhang/miniconda3/envs/jt-torch/bin/python -m pytest compat/tests/torch/test_torch_hf_models.py
+#   JITTOR_TORCH_SHIM=1 python -m pytest compat/tests/torch/test_torch_hf_models.py
 # Skips cleanly if torch_shim/transformers are unavailable.
 #
 # Covers ~30 architectures (decoder / encoder / encoder-decoder / vision):
@@ -89,6 +88,16 @@ def _inp(m):
     return dict(pixel_values=torch.tensor(np.random.randn(1, c, h, h).astype('float32')))
 
 
+#: Parameters that `last_hidden_state` legitimately does not reach.
+#:
+#: ``AutoModel`` for an encoder with a pooler carries ``pooler.dense.{weight,bias}``,
+#: which reads the CLS token *out of* ``last_hidden_state``. A loss built on
+#: ``last_hidden_state`` alone therefore has no autograd path into it, and real
+#: torch reports ``grad is None`` for exactly these two as well. Every other
+#: parameter of every model in ``CFG`` is on that path.
+_UNUSED_BY_LAST_HIDDEN_STATE = {"pooler.dense.weight", "pooler.dense.bias"}
+
+
 @unittest.skipUnless(_HAS, "needs torch_shim + transformers")
 class TestTorchHFModels(unittest.TestCase):
     def test_forward_and_eval_determinism(self):
@@ -137,7 +146,11 @@ class TestTorchHFModels(unittest.TestCase):
                 loss = m(**_inp(m)).last_hidden_state.float().pow(2).sum()
                 loss.backward()
                 none = [n for n, p in named if p.grad is None]
-                self.assertEqual(none, [], f"{a}: {len(none)} params have None grad after backward")
+                unexpected = sorted(set(none) - _UNUSED_BY_LAST_HIDDEN_STATE)
+                self.assertEqual(
+                    unexpected, [],
+                    f"{a}: {len(unexpected)} params have None grad after backward "
+                    f"(only the pooler of an AutoModel may be ungraded); all None: {none}")
                 m.zero_grad()
                 self.assertTrue(all(p.grad is None for _, p in named), f"{a}: zero_grad did not clear")
 

@@ -25,10 +25,10 @@ race does to a real workload -- there it is silent wrong data rather than a
 crash.
 """
 import os
-import subprocess
-import sys
 import textwrap
 import unittest
+
+from _helpers.child_process import run_python_child
 
 
 CHILD = textwrap.dedent("""
@@ -71,13 +71,15 @@ CHILD = textwrap.dedent("""
 class TestExecutorUnderPythonThreads(unittest.TestCase):
 
     def _run(self, secs):
-        env = dict(os.environ)
-        env["PYTHONPATH"] = os.pathsep.join(
-            [os.path.dirname(os.path.dirname(os.path.dirname(
-                os.path.abspath(__file__))))] + [env.get("PYTHONPATH", "")])
-        return subprocess.run([sys.executable, "-c", CHILD, str(secs)],
-                              capture_output=True, text=True, timeout=secs + 180,
-                              env=env)
+        # Through the shared helper, not a hand-rolled PYTHONPATH. This test
+        # launches the interpreter, and every such launch has to import the
+        # tree *this session* imports -- the hand-rolled version pinned the
+        # repository root rather than `python/`, so a child could have imported
+        # an installed jittor instead (tests/structure/test_child_process_contract).
+        # stderr is merged because a segfault's message is on whichever stream
+        # the runtime chose; the exit status is what the case asserts on.
+        return run_python_child(["-c", CHILD, str(secs)],
+                                timeout=secs + 180, merge_stderr=True)
 
     def test_a_held_non_sink_var_survives_other_threads_in_the_executor(self):
         proc = self._run(8.0)
@@ -85,8 +87,8 @@ class TestExecutorUnderPythonThreads(unittest.TestCase):
             proc.returncode, 0,
             "jittor died on signal %d while three other Python threads were "
             "inside the executor. `use_threading` advertises this "
-            "configuration. Last child output:\n%s\n%s"
-            % (-proc.returncode, proc.stdout[-2000:], proc.stderr[-2000:]))
+            "configuration. Last child output:\n%s"
+            % (-proc.returncode, proc.stdout[-2000:]))
 
 
 if __name__ == "__main__":

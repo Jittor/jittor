@@ -9,7 +9,7 @@
 compiler is told no operand is ever infinite or NaN and optimises on it. Under
 that flag ``1 / 0`` came back as ``nan`` instead of ``inf`` and a hand-written
 ``x != x`` may be folded to false, so the arithmetic *and* the checks written
-to catch it both stop working (KI-BACKEND-005).
+to catch it both stop working.
 
 The gate that matters is behavioural -- ``tests/ops/test_ieee_arithmetic.py``
 evaluates the IEEE table on both devices, and it goes red the moment the flag
@@ -46,7 +46,7 @@ class TestKernelMathFlags(unittest.TestCase):
                     flag, flags,
                     "%s promises the compiler that infinities and NaN do not "
                     "occur. Under it `1/0` returns nan and `x != x` may be "
-                    "folded to false (KI-BACKEND-005). If this is deliberate, "
+                    "folded to false. If this is deliberate, "
                     "the IEEE table in tests/ops/test_ieee_arithmetic.py has "
                     "to be reconciled first." % flag)
 

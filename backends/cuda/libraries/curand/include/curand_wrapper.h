@@ -22,6 +22,19 @@ curandGenerator_t curand_bind_stream();
 // @pyjt(curand_stream_bind_count)
 uint64 curand_stream_bind_count(int device);
 
+// How far this device's generator has advanced since its last seed or restore,
+// in `curandSetGeneratorOffset` units. cuRAND will set an offset but not report
+// one, so a checkpoint has nothing to save unless jittor counts -- and a resume
+// that cannot restore the position restarts the sequence silently.
+void curand_advance(int device, int64 cost);
+// @pyjt(curand_generator_offset)
+int64 curand_generator_offset(int device);
+// @pyjt(curand_generator_seed)
+int curand_generator_seed();
+// Seed *and* position, which is what a resume needs: seeding alone rewinds.
+// @pyjt(curand_restore_state)
+void curand_restore_state(int device, int seed, int64 offset);
+
 // Destroys the generator, reporting a failure instead of raising. Idempotent.
 void curand_shutdown();
 

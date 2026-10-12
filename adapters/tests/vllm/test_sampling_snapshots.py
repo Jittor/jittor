@@ -102,8 +102,9 @@ def harness(monkeypatch):
 
     install()
     yield types.SimpleNamespace(runtime=runtime, States=SamplingStates,
-                                Buffer=Buffer, Pool=UvaBufferPool, install=install,
-                                hooks=hooks, original=original, module=module)
+                                Buffer=Buffer, Pool=UvaBufferPool,
+                                install=install, hooks=hooks, original=original,
+                                module=module)
     for hook in reversed(hooks):
         if hook.state != 'rolled_back':
             hook.rollback()

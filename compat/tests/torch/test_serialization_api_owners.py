@@ -101,7 +101,8 @@ def test_portable_roundtrip_dtype_parameter_view_and_map_location(tmp_path, dest
     parameter = torch.nn.Parameter(view)
     values = {"view": view, "parameter": parameter,
               "wide": torch.tensor([2**45, 2**45 + 1], dtype=torch.int64),
-              "bf16": torch.tensor(3.25, dtype=torch.bfloat16), "dtype": torch.float64}
+              "bf16": torch.tensor(3.25, dtype=torch.bfloat16),
+              "shape": view.shape, "dtype": torch.float64}
     output = tmp_path / "weights.pkl" if destination == "file" else io.BytesIO()
     torch.save(values, output)
     assert (view.data_ptr(), tuple(view.stride())) == before
@@ -113,6 +114,8 @@ def test_portable_roundtrip_dtype_parameter_view_and_map_location(tmp_path, dest
         return None
     restored = torch.load(output, map_location=location)
     assert restored["dtype"] is torch.float64
+    assert isinstance(restored["shape"], torch.Size)
+    assert restored["shape"] == torch.Size((3, 2))
     assert isinstance(restored["parameter"], torch.nn.Parameter)
     assert restored["parameter"].requires_grad
     for name in ("view", "parameter", "wide", "bf16"):

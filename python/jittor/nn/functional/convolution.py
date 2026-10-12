@@ -6,6 +6,44 @@ from jittor._runtime.dispatch import select_kernel
 
 from ._amp import bias_for_compute_dtype
 
+def same_padding_pairs(kernel_size, dilation):
+    """Torch's per-dimension ``(before, after)`` split for ``padding='same'``.
+
+    The total is ``dilation * (kernel - 1)``; when it is odd (an even kernel
+    with odd dilation) the extra element goes after, as in torch's
+    ``_reversed_padding_repeated_twice`` and ``F.conv*d(padding='same')``.
+    """
+    pairs = []
+    for size, step in zip(kernel_size, dilation):
+        total = int(step) * (int(size) - 1)
+        pairs.append((total // 2, total - total // 2))
+    return pairs
+
+
+def _resolve_string_padding(x, padding, kernel_size, stride, dilation):
+    """``(x, padding)`` with torch's ``'valid'``/``'same'`` made explicit.
+
+    The kernels take one symmetric amount per dimension. An asymmetric
+    ``'same'`` keeps the smaller side there and zero-pads the input by the
+    difference on the after side first -- what torch's convolution does for
+    the same case.
+    """
+    rank = len(kernel_size)
+    if padding == "valid":
+        return x, (0,) * rank
+    if padding != "same":
+        raise RuntimeError("Invalid padding string: %r" % (padding,))
+    if any(int(value) != 1 for value in stride):
+        raise RuntimeError("padding='same' is not supported for strided convolutions")
+    pairs = same_padding_pairs(kernel_size, dilation)
+    extra = []
+    for before, after in reversed(pairs):
+        extra.extend((0, after - before))
+    if any(extra):
+        x = jt.nn.pad(x, extra)
+    return x, tuple(before for before, _after in pairs)
+
+
 def _check_conv2d_output_size(x, oh, ow, kernel_size, stride, padding, dilation):
     """Reject a geometry whose output has no elements, with the numbers in it."""
     if oh <= 0 or ow <= 0:
@@ -44,8 +82,9 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1,
     :param stride: Stride of the convolution. Default: 1
     :type stride: int or tuple, optional
 
-    :param padding: Padding added to all four sides of the input. Default: 0
-    :type padding: int or tuple, optional
+    :param padding: Padding added to all four sides of the input, or torch's
+        ``'valid'`` / ``'same'`` (stride 1 only). Default: 0
+    :type padding: int, tuple or str, optional
 
     :param dilation: Spacing between kernel elements. Default: 1
     :type dilation: int or tuple, optional
@@ -59,11 +98,13 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1,
     >>> w = jt.randn(32, 24, 3, 3)
     >>> y = nn.conv2d(x, w)
     '''
-    padding = _pair(padding)
     stride = _pair(stride)
     dilation = _pair(dilation)
     if weight.ndim != 4:
         raise ValueError("Conv2d expected a 4-D weight, got shape {}".format(tuple(weight.shape)))
+    if isinstance(padding, str):
+        x, padding = _resolve_string_padding(x, padding, weight.shape[-2:], stride, dilation)
+    padding = _pair(padding)
     if any(len(values) != 2 for values in (padding, stride, dilation)):
         raise ValueError("Conv2d stride, padding and dilation must each have two entries")
     if (any(value <= 0 for values in (stride, dilation) for value in values)
@@ -190,9 +231,11 @@ def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     >>> w = jt.randn(32, 24, 3, 3, 3)
     >>> y = nn.conv2d(x, w)
     '''
-    padding = _triple(padding)
     stride = _triple(stride)
     dilation = _triple(dilation)
+    if isinstance(padding, str):
+        x, padding = _resolve_string_padding(x, padding, weight.shape[-3:], stride, dilation)
+    padding = _triple(padding)
     out_channels = weight.shape[0]
     if groups <= 0:
         raise ValueError("groups must be a positive integer")
@@ -293,6 +336,9 @@ def conv1d(input, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     stride = stride[0] if isinstance(stride, (tuple, list)) else stride
     padding = padding[0] if isinstance(padding, (tuple, list)) else padding
     dilation = dilation[0] if isinstance(dilation, (tuple, list)) else dilation
+    if isinstance(padding, str):
+        input, (padding,) = _resolve_string_padding(
+            input, padding, weight.shape[-1:], (stride,), (dilation,))
     # reuse the 2D conv by adding a singleton width dimension
     x = input.unsqueeze(-1)
     w = weight.unsqueeze(-1)

@@ -9,6 +9,9 @@
 namespace jittor {
 
 struct DeviceCopyOp : Op {
+    // The host copy reads a strided input as it lies and puts it in order on
+    // the host; a device-to-device copy is given a dense one (constructor).
+    static constexpr bool accepts_storage_strides = true;
     Var* x, * y;
     int device;
     /**

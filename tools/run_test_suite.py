@@ -103,7 +103,8 @@ def _lab_root():
 
 def _resolve_nvcc():
     """The nvcc the CUDA backend will build with, or None."""
-    configured = os.environ.get("nvcc_path") or os.environ.get("NVCC_PATH")
+    configured = (os.environ.get("JT_BUILD_NVCC_PATH")
+                  or os.environ.get("nvcc_path") or os.environ.get("NVCC_PATH"))
     if configured and Path(configured).exists():
         return configured
     found = shutil.which("nvcc")
@@ -111,6 +112,19 @@ def _resolve_nvcc():
         return found
     default = Path("/usr/local/cuda/bin/nvcc")
     return str(default) if default.exists() else None
+
+
+def _set_nvcc(environment, nvcc):
+    """Pin the build's nvcc under both of the names jittor reads.
+
+    ``JT_BUILD_NVCC_PATH`` is the canonical name and wins over the legacy
+    ``nvcc_path``, so setting only the legacy one did nothing in a shell that
+    exports the canonical one: the "cpu" session built CUDA anyway and its own
+    readiness probe (``assert not jt.compiler.has_cuda``) refused to start.
+    The empty string is jittor's documented "no CUDA" value.
+    """
+    environment["JT_BUILD_NVCC_PATH"] = nvcc
+    environment["nvcc_path"] = nvcc
 
 
 def _session_environment(session, serial_compile=False, backend="cpu"):
@@ -131,7 +145,7 @@ def _session_environment(session, serial_compile=False, backend="cpu"):
         if not nvcc:
             raise SystemExit(
                 "--backend cuda needs nvcc: set nvcc_path or put nvcc on PATH")
-        environment["nvcc_path"] = nvcc
+        _set_nvcc(environment, nvcc)
         environment["JITTOR_TEST_DEVICES"] = "cuda"
         # Both names are read by tests/_helpers/pytest_policy.py, and both are
         # what make this a gate rather than a run: without them a build that
@@ -140,7 +154,7 @@ def _session_environment(session, serial_compile=False, backend="cpu"):
         environment["JITTOR_TEST_REQUIRE_CUDA"] = "1"
         environment["JITTOR_TEST_ACCELERATOR_MIN_EXECUTED"] = "1"
     else:
-        environment["nvcc_path"] = ""
+        _set_nvcc(environment, "")
         environment["JITTOR_TEST_DEVICES"] = "cpu"
         environment.pop("JITTOR_TEST_REQUIRE_CUDA", None)
         environment.pop("JITTOR_TEST_ACCELERATOR_MIN_EXECUTED", None)

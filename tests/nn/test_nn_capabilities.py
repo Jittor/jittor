@@ -979,6 +979,90 @@ class TestCudaCapabilities(unittest.TestCase):
                     actual, reference(quantized_query, quantized_cache),
                     atol=atol, rtol=rtol)
 
+                with jt.flag_scope(use_cuda=1), jt.no_grad():
+                    query = jt.array(query_np).cast(dtype)
+                    cache = jt.array(cache_np).cast(dtype)
+                    output = jt.full(query.shape, -7, dtype=dtype)
+                    result = _paged_attention_decode_cuda(
+                        query,
+                        cache,
+                        jt.array(seq_lens_np),
+                        jt.array(block_table_np),
+                        scale,
+                        out=output,
+                    )
+                    self.assertIs(result, output)
+                    actual, quantized_query, quantized_cache = jt.fetch_sync(
+                        [output.float32(), query.float32(), cache.float32()])
+                np.testing.assert_allclose(
+                    actual, reference(quantized_query, quantized_cache),
+                    atol=atol, rtol=rtol)
+
+    def test_inference_fused_cache_paged_decode_cuda(self):
+        from jittor.backends.cuda.kernels.nn.kv_cache_cuda import (
+            _reshape_cache_and_paged_attention_decode_cuda)
+
+        rng = np.random.RandomState(232)
+        query_np = rng.randn(2, 4, 16).astype("float32")
+        key_np = rng.randn(2, 2, 16).astype("float32")
+        value_np = rng.randn(2, 2, 16).astype("float32")
+        cache_np = rng.randn(4, 2, 4, 2, 16).astype("float32")
+        seq_lens_np = np.array([5, 3], dtype="int32")
+        block_table_np = np.array([[2, 0], [1, 3]], dtype="int32")
+        slot_mapping_np = np.array([0, 6], dtype="int64")
+        scale = 16 ** -0.5
+
+        def reference(query, cache):
+            output = np.empty_like(query)
+            for request, seq_len in enumerate(seq_lens_np):
+                keys = []
+                values = []
+                for position in range(int(seq_len)):
+                    block = block_table_np[request, position // 4]
+                    offset = position % 4
+                    keys.append(cache[block, 0, offset])
+                    values.append(cache[block, 1, offset])
+                keys = np.stack(keys)
+                values = np.stack(values)
+                for head in range(4):
+                    kv_head = head // 2
+                    scores = query[request, head] @ keys[:, kv_head].T * scale
+                    scores = np.exp(scores - scores.max())
+                    scores /= scores.sum()
+                    output[request, head] = scores @ values[:, kv_head]
+            return output
+
+        for dtype, atol, rtol in (
+            ("float16", 0.004, 0.004),
+            ("bfloat16", 0.04, 0.02),
+        ):
+            with self.subTest(dtype=dtype):
+                with jt.flag_scope(use_cuda=1), jt.no_grad():
+                    query = jt.array(query_np).cast(dtype)
+                    key = jt.array(key_np).cast(dtype)
+                    value = jt.array(value_np).cast(dtype)
+                    cache = jt.array(cache_np).cast(dtype)
+                    output = jt.full(query.shape, -7, dtype=dtype)
+                    result = _reshape_cache_and_paged_attention_decode_cuda(
+                        query, key, value, cache,
+                        jt.array(slot_mapping_np), jt.array(seq_lens_np),
+                        jt.array(block_table_np), scale, output)
+                    self.assertIs(result, output)
+                    (actual, actual_cache, quantized_query,
+                     quantized_key, quantized_value) = jt.fetch_sync([
+                         output.float32(), cache.float32(), query.float32(),
+                         key.float32(), value.float32()])
+                expected_cache = cache_np.copy()
+                expected_cache[0, 0, 0] = quantized_key[0]
+                expected_cache[0, 1, 0] = quantized_value[0]
+                expected_cache[1, 0, 2] = quantized_key[1]
+                expected_cache[1, 1, 2] = quantized_value[1]
+                np.testing.assert_allclose(
+                    actual_cache, expected_cache, atol=atol, rtol=0)
+                np.testing.assert_allclose(
+                    actual, reference(quantized_query, expected_cache),
+                    atol=atol, rtol=rtol)
+
     def test_dual_grid_mesh_finalizer(self):
         coords_np = np.array(
             [

@@ -74,6 +74,14 @@ void ArrayOp::jit_prepare(JK& jk) {
 }
 
 void ArrayOp::run() {
+    // Run again, by a kept graph (`keep_graph`): the first run already handed
+    // the data to the output, which still holds it -- see
+    // `release_kept_storage`, which leaves a constant's memory alone. Running
+    // on would put a null pointer in the output.
+    if (!allocation.ptr) {
+        ASSERT(output->mem_ptr) << "a re-run array op has lost its data";
+        return;
+    }
     #ifdef HAS_ACCELERATOR
     if (allocation.allocator == &cuda_dual_allocator) {
         auto host_ptr = cuda_dual_allocator.get_dual_allocation(allocation.allocation).host_ptr;

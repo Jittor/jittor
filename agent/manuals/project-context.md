@@ -1,51 +1,56 @@
 # Jittor Project Context
 
-- Status: Current index, not a history log
-- Last reviewed: 2026-09-02
-- Baseline reviewed: `d02a72ed` plus the contiguous slice-gradient follow-up
+- Status: Current-state index, not a history log
+- Last reviewed: 2026-10-06
+- Baseline reviewed: `1a6e203fc`
 - Owner: Jittor core maintainers
-- Freshness expires: 2026-11-12
-- Review when: a modernization stage lands, a top-level goal changes, or an
-  indexed contract becomes stale
-This file is the short handoff entry for repository work. Read only the linked
-document relevant to the task; do not append experiment transcripts or completed
-history here.
+- Freshness expires: 2027-01-06
+- Review when: the release line, a top-level goal or an indexed location changes
 
-## North star
+Find where things are here, then read only the document your task needs.
 
-The project is moving Jittor toward a maintainable, Torch-grade framework while
-preserving its JIT/meta-operator design. Changes are accepted only when they meet
-the correctness, real-device, composition, maintainability, and evidence gates
-defined in [Torch compatibility principles](../../refactor-wip/architecture/torch-compatibility-principles.md).
+## What the project is
 
-Operational rules:
+Jittor is a JIT deep-learning framework built on meta-operators: Python builds a
+graph, the C++ core in `src/` fuses and compiles kernels, and backends live under
+`backends/<name>/` (CPU, CUDA, ROCm, ACL/Ascend, Corex, and `comm/{mpi,nccl,hccl}`).
+The Torch compatibility layer is the separate `jittor-torch` project in `compat/`
+(published as `jittor.compat`, including the `import torch` shim); downstream
+library adapters live in `adapters/`. The goal is a maintainable, Torch-grade
+framework that keeps the JIT/meta-operator design, under the gates in
+[Torch compatibility principles](../../docs/compatibility/principles.md).
 
-- verify before fixing;
-- prefer a clear unsupported error over a silent wrong result;
-- exercise every advertised backend rather than relying on CPU fallback;
-- keep one canonical implementation and explicit compatibility aliases;
-- isolate caches and record reproducible evidence.
+## Current state
 
-## Current repository state
+The 2.0 restructuring has landed and the tree is in pre-release cleanup: the
+refactor-period board, plans and handoff documents are gone, and task status now
+lives in GitHub issues and pull requests. The accepted layout is in
+[repository layout](../../docs/development/repository-layout.md); packaging targets
+Python 3.7-3.13; [`noxfile.py`](../../noxfile.py) and
+[`tools/run_test_suite.py`](../../tools/run_test_suite.py) are the maintained gate
+surface (tiers `core` / `smoke` / full, see `AGENTS.md`). User-facing breaking
+changes: [2.0 migration notes](../../docs/releases/2.0.md).
 
-The accepted repository shape and packaging boundaries are documented in
-[Jittor repository layout](../../docs/development/repository-layout.md). The
-current tree has:
+## Where information lives
 
-- normal packages for `jittor.nn`, `jittor.misc`, `jittor.pool`, and
-  `jittor.compat.torch`;
-- compatibility domains (`jittor.compat`) owned by the top-level `compat/` independent `jittor-torch` project;
-- repository tests under root `tests/`, examples under `examples/`, tools under
-  `tools/`, and ASV benchmarks under `benchmarks/`;
-- `pyproject.toml` as package/tool configuration and `noxfile.py` as the
-  maintained gate surface;
-- one installed smoke test at `python -m jittor.selftest`;
-- durable design documents under semantic `docs/` directories;
-- Python 3.7-3.13 packaging, with real 3.12/3.13 wheel gates and NumPy 2.x on 3.13.
+| Kind | Location |
+| --- | --- |
+| Rules for agents and maintainers | [`AGENTS.md`](../../AGENTS.md), [collaboration](collaboration.md) |
+| Entry index of manuals and skills | [agent-index.md](agent-index.md) |
+| Environment, isolation, backend prerequisites | [environment.md](environment.md) |
+| Open defects and limitations | [known-issues.md](known-issues.md) |
+| Work waiting for hardware | [deferred-hardware.md](deferred-hardware.md) |
+| Source architecture and module boundaries | [source architecture](../../docs/development/source-architecture.md), [development index](../../docs/development/index.md) |
+| Test system and gate tiers | [test system](../../docs/development/test-system.md) |
+| Mechanism notes (numerics, placement, profiling) | [notes index](../../docs/notes/index.md) |
+| Torch compatibility | [compatibility index](../../docs/compatibility/index.md) |
+| Backend guides (Ascend, Corex, MPI) | [guides index](../../docs/guides/index.md) |
+| Performance method | [benchmarking](../../docs/performance/benchmarking.md) |
+| Reproducible verification results | [results index](../../docs/results/index.md) |
+| Reusable verification tools | `agent/skills/` (listed in [agent-index.md](agent-index.md)) |
+| Task status, handoff, evidence | GitHub issues and pull requests |
 
-Follow [source architecture](../../docs/development/source-architecture.md): CUDA resources
-live under top-level `backends/`, including `comm/{mpi,nccl,hccl}`; shared core
-lives in `src/` and is packaged as `jittor/src`. Package-local `src/extern` are removed.
+## Active focus areas
 
 ## Active work areas
 
@@ -132,49 +137,8 @@ research only; no autonomous mutation path is implemented. See
 
 ## Before running work
 
-1. Read [collaboration rules](collaboration.md).
-2. Configure a portable, isolated run from [environment](environment.md).
-3. Search the [active known-issues ledger](known-issues.md) and
-   [`docs/results/`](../../refactor-wip/results/README.md) for existing evidence.
-4. Confirm the branch, exact commit, dirty state, and target backend.
-5. Run the smallest reproduction before editing.
-
-## Validation map
-
-| Change | Minimum maintained evidence |
-| --- | --- |
-| Repository/docs only | layout checker, structure tests, relative-link check |
-| Python API/refactor | focused tests, public identity/import tests, structure gate |
-| Core operator/autograd | independent forward reference, gradcheck, CPU regression |
-| Accelerator behavior | real-device execution and CPU/device parity |
-| Packaging/runtime resource | sdist/wheel audits and installed selftest |
-| Performance claim | correctness gate plus reproducible ASV comparison |
-| Distributed behavior | focused process test and the relevant MPI/FSDP2 gate |
-
-Use [`noxfile.py`](../../noxfile.py) for the maintained `lint`, `format`,
-`typing`, `structure`, `py37`, `cpu`, `cuda`, `npu`, `rocm`, `mpi`, and
-`benchmark` sessions.
-
-## Open issues
-
-The canonical list is [known-issues.md](known-issues.md). Highest-risk active
-items include pending ROCm verification of corrected negative integer floor
-division, the parallel compiler crash hypothesis, NPU reduction and FFT gaps,
-and remaining NPU dtype/ROCm verification of corrected floating NaN comparisons.
-
-Do not add a second bug narrative here. Add or update the ledger entry with an
-owner, executable evidence, workaround, and exit condition.
-
-## Recording progress
-
-- Update this index only when its current-state summary or links change.
-- Put durable architectural decisions under `docs/`.
-- Put compact, reproducible verification and performance conclusions in a dated
-  `docs/results/YYYY-MM-DD-topic.md` report.
-- Keep raw logs, generated source, caches, wheels, profiles, and large benchmark
-  data under `$JITTOR_LAB_ROOT/_state/`.
-- A report names the exact commit, environment, commands, results, limitations,
-  and any unversioned artifact hashes.
-
-The Git history is the completed-work ledger. Do not rebuild a chronological
-commit diary in this file.
+Sync with the target remote branch as `AGENTS.md` requires and record the SHA;
+isolate the run per [environment](environment.md); search
+[known-issues.md](known-issues.md) and the [results index](../../docs/results/index.md)
+for existing evidence; reproduce minimally before editing. Update this page only
+when its current-state summary or a location changes.

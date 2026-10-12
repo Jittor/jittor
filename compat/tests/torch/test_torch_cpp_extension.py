@@ -355,7 +355,12 @@ class TestShimHeadersInvalidateTheBuildCache(unittest.TestCase):
     _CFG = {
         "cc_path": "/bin/true", "nvcc_path": "/bin/true", "ext_suffix": ".so",
         "src_inc": "", "extern_inc": "", "extern_cuda_inc": "",
-        "py_inc": "", "pybind_inc": "", "cuda_includes": [],
+        # Every other include is an empty placeholder because the compiler is
+        # faked and the values never reach one. `pybind_inc` is not: a build
+        # without pybind11 headers cannot succeed, so `_common_includes`
+        # refuses instead of emitting a command g++ would reject later.
+        "py_inc": "", "pybind_inc": "/stub/pybind11/include",
+        "cuda_includes": [],
         "core_dirs": [], "arch_flags": [], "cores": {}, "cuda_libs": [],
         # The real cfg() always carries these two (None when there is no CUDA
         # runtime / no wheel stack); the build path reads them unconditionally.
@@ -426,3 +431,60 @@ class TestShimHeadersInvalidateTheBuildCache(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestMissingPybind11IsNamed(unittest.TestCase):
+    """A missing prerequisite has to name itself.
+
+    ``include/torch/extension.h`` includes <pybind11/pybind11.h> and
+    <pybind11/stl.h> unconditionally, so an extension cannot build without the
+    headers. Before this, ``_common_includes`` simply dropped the ``-I`` and
+    let g++ fail, and the flash-attention bridge reported the result as
+    ``import flash_attn_jittor_cuda failed: No module named
+    'flash_attn_jittor_cuda'`` -- a symptom that sends the reader looking for a
+    missing Python module rather than a missing header.
+    """
+
+    def _config(self, pybind_inc):
+        return {
+            "pybind_inc": pybind_inc,
+            "src_inc": "/src", "extern_inc": "/extern",
+            "extern_cuda_inc": "/extern/cuda", "py_inc": "/py",
+            "cuda_includes": (), "core_dirs": (),
+        }
+
+    def test_the_error_names_pybind11_and_how_to_supply_it(self):
+        from jittor.compat.shim.cpp_extension import _common_includes
+        with self.assertRaises(RuntimeError) as caught:
+            _common_includes(self._config(None), [])
+        message = str(caught.exception)
+        self.assertIn("pybind11", message)
+        self.assertIn("PYTHONPATH", message)
+
+    def test_a_found_include_still_reaches_the_command_line(self):
+        # The guard must not cost the ordinary path its include.
+        from jittor.compat.shim.cpp_extension import _common_includes
+        flags = _common_includes(self._config("/somewhere/pybind11/include"), [])
+        self.assertIn("-I/somewhere/pybind11/include", flags)
+
+
+class TestCoreHeadersAreOnTheIncludePath(unittest.TestCase):
+    """`src_inc` has to find `core/common.h` in a checkout, not just a wheel.
+
+    4.15 moved the C++ core out of the Python package to the repo top level.
+    The config used to join `jittor_path/src`, which is the installed-wheel
+    layout; from a checkout it named a directory that does not exist, so every
+    extension failed on `#include "core/common.h"`. The flash-attention bridge
+    reported that as `No module named 'flash_attn_jittor_cuda'`, so the cause
+    never reached the caller. `core_root()` exists for exactly this and names
+    `core/common.h` as its marker.
+    """
+
+    def test_src_inc_contains_the_marker_header(self):
+        import os
+        from jittor.compat.shim.cpp_extension import cfg
+        src_inc = cfg()["src_inc"]
+        self.assertTrue(
+            os.path.isfile(os.path.join(src_inc, "core", "common.h")),
+            "src_inc=%r has no core/common.h, so every extension built "
+            "through the shim will fail to compile" % (src_inc,))

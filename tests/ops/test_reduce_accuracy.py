@@ -9,7 +9,7 @@ A single running total rounds against a sum that is by then much larger than
 the next element, so its error is proportional to ``n``: the CPU ``sum`` of
 sixteen million copies of ``0.1`` was 15% wrong, growing 6.2e-4 -> 9.9e-3 ->
 1.5e-1 as the size went 65,536 -> 1,048,576 -> 16,777,216, while CUDA's tree
-reduction stayed near 1.6e-7 throughout (KI-BACKEND-006). Nothing warned; the
+reduction stayed near 1.6e-7 throughout. Nothing warned; the
 answer was a plausible number rather than an obviously broken one.
 
 What is asserted here is the *shape of the growth*, not a threshold. A fixed
@@ -90,7 +90,7 @@ class _ReductionErrorDoesNotGrow:
             max(errors), SPREAD * floor,
             "%s relative error grows with size: %s over n=%s. An error "
             "proportional to n is the signature of a single serial "
-            "accumulator (KI-BACKEND-006)."
+            "accumulator."
             % (what, ["%.3g" % e for e in errors], list(SIZES)))
 
     def test_sum_error_does_not_grow_with_size(self):
@@ -130,7 +130,7 @@ class _ReductionErrorDoesNotGrow:
         self.assertLessEqual(
             got, SPREAD * max(reference, EPS),
             "sum of %d float32 elements is %.3g off, against %.3g for NumPy's "
-            "pairwise summation on the same input (KI-BACKEND-006)."
+            "pairwise summation on the same input."
             % (n, got, reference))
 
 
@@ -177,7 +177,7 @@ class TestLargeReductionAgreesAcrossDevices(unittest.TestCase):
             spread, self.AGREEMENT,
             "CPU and CUDA disagree by %.3g on the sum of %d float32 elements: "
             "%r against %r. A backend comparison at this size is measured "
-            "against whichever side is wrong (KI-BACKEND-006)."
+            "against whichever side is wrong."
             % (spread, n, values["cpu"], values["cuda"]))
 
 

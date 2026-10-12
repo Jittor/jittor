@@ -6,8 +6,8 @@
 """Reducing a rank-0 tensor returns the value, as PyTorch and NumPy do.
 
 ``loss.sum()`` where the loss is already a scalar is ordinary code -- generic
-training loops reduce without checking rank -- and it died on both devices
-(KI-OPS-004). The reduce kernel opens with ``index_t ystride@{DIM-1} = 1;``,
+training loops reduce without checking rank -- and it died on both devices.
+The reduce kernel opens with ``index_t ystride@{DIM-1} = 1;``,
 and ``DIM`` is zero for a rank-0 input, so the generated source read
 ``index_t ystride-1 = 1;`` and never compiled. The error surfaced as a
 compiler diagnostic about a template file, naming neither the shape nor the

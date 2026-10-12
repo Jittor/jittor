@@ -920,9 +920,23 @@ def compile_src(src, h, basename):
         # that asked for the counts, and a reset would not read back as clean.
         gbp_entry_scope = ("" if name.startswith("graph_build_profile")
                            else "JT_GBP_SCOPE(gbp_pyjt_entry);")
+        # Every binding holds the graph lock while a batch runs on the worker
+        # thread (runtime/async_exec.h); a deallocator too, since releasing a
+        # Var releases liveness.
+        gbp_entry_scope = ("GraphEntryScope _jt_graph_entry{%s};\n            "
+                           % ("false" if name == "__dealloc__" else "true")) + gbp_entry_scope
         # A frontend subtype keeps the native VarHolder payload and graph.
         # Carry its Python allocation type across the complete conversion and
         # call, including tuple/vector results. Never enter a scope in dealloc.
+        #
+        # Only a call that can create a Var needs the scope: what it sets --
+        # the result's Python type, the autograd policy, the placement and
+        # float32 precision -- is read when an op or a VarHolder is made, and
+        # an op keeps its precision for execution. A method of VarHolder that
+        # takes and returns no Var (`shape`, `dtype`, `placement_backend`,
+        # `numel()`) made none, yet entered the scope on every call: 0.55 us
+        # of a torch.Tensor attribute read against 0.05 us on a native Var,
+        # several reads per operator of every frontend call.
         frontend_scope = ""
         frontend_arg_types = [arg[0] for df in dfs for arg in df["args"]]
         # Only explicitly audited metadata reads may omit the complete frontend
@@ -1145,6 +1159,7 @@ def compile_src(src, h, basename):
     #include "bindings/pyjt/py_arg_printer.h"
     #include "core/common.h"
     #include "utils/graph_build_profile.h"
+    #include "runtime/async_exec.h"
     #include "{include_name}"
 
     namespace jittor {{

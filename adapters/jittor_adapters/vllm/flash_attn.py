@@ -31,6 +31,27 @@ _BUNDLE = "vllm.vllm_flash_attn"
 _INTERFACE = _BUNDLE + ".flash_attn_interface"
 
 
+def _cuda_graph_capture_active():
+    """Whether the shim is recording the real CUDA launch stream."""
+    try:
+        from jittor.compat.triton import backend
+        return backend.graph_capture_active()
+    except (ImportError, AttributeError):
+        return False
+
+
+def _require_explicit_graph_ownership(capturing):
+    # vLLM already owns the complete decode CUDA graph. Jittor 2.0's default
+    # automatic module replay is a second, independent owner of the same KV
+    # state; across requests it can replay stale buffers and return wrong
+    # tokens. Fail before recording such a graph instead of silently serving
+    # corrupted output. The benchmark harness selects this safe configuration.
+    if capturing and jt.flags.auto_graph_replay:
+        raise RuntimeError(
+            "vLLM CUDA Graph requires JT_AUTO_GRAPH_REPLAY=0; set it before "
+            "importing Jittor so the outer graph is the only replay owner")
+
+
 def host_lengths(tensor):
     """Bring a small metadata tensor to the host as plain ints.
 
@@ -139,7 +160,7 @@ def flash_attn_with_kvcache(query, key_cache, value_cache, key=None, value=None,
 def flash_attn_varlen_paged(query, kv_cache, cu_seqlens_q, seqused_k,
                             block_table, softmax_scale, causal, cq=None,
                             sk=None, cur_k=None, cur_v=None,
-                            decode_fast_path=False):
+                            decode_fast_path=False, out=None):
     """vLLM's unified V1 attention, in terms of Jittor's paged attention.
 
     Choosing between the fused decode kernel, a batched path for a uniform
@@ -149,7 +170,8 @@ def flash_attn_varlen_paged(query, kv_cache, cu_seqlens_q, seqused_k,
     """
     return jt.nn.paged_attention(
         query, kv_cache, cu_seqlens_q, seqused_k, block_table,
-        scale=softmax_scale, causal=causal, query_lengths=cq, key_lengths=sk)
+        scale=softmax_scale, causal=causal, query_lengths=cq, key_lengths=sk,
+        out=out)
 
 
 def reshape_and_cache_kv_v1(key, value, kv_cache, slot_mapping, slots=None,
@@ -243,6 +265,12 @@ def patch_attention_impl(module):
     if impl is None or getattr(impl, "_jittor_paged_attention", False):
         return False
     layers_between_syncs = _layers_between_syncs()
+    reuse_full_token_views = (
+        os.environ.get("JITTOR_VLLM_REUSE_FULL_TOKEN_VIEWS", "1") != "0"
+    )
+    fused_cache_decode = (
+        os.environ.get("JITTOR_VLLM_FUSED_CACHE_DECODE", "0") != "0"
+    )
     counter = [0]
     metadata_cache = {}
 
@@ -251,22 +279,69 @@ def patch_attention_impl(module):
         if attn_metadata is None:      # the profiling pass has no cache yet
             return output.fill_(0)
         tokens = attn_metadata.num_actual_tokens
-        converted = _host_metadata(attn_metadata, metadata_cache)
-        slots, starts, lengths = converted
-        if (key is not None and value is not None and kv_cache is not None
-                and kv_cache.numel() > 0
-                and attn_metadata.slot_mapping is not None):
+        capturing = _cuda_graph_capture_active()
+        _require_explicit_graph_ownership(capturing)
+        if capturing:
+            # Full decode graphs read all varying metadata directly from the
+            # persistent GPU tensors. The CUDA cache-write and paged-decode
+            # fast paths below do not consume these host lists; reading them
+            # back here would issue an illegal D2H synchronization in capture.
+            slots = starts = lengths = None
+        else:
+            slots, starts, lengths = _host_metadata(
+                attn_metadata, metadata_cache)
+        full_query = (
+            reuse_full_token_views and tokens == int(query.shape[0])
+        )
+        query_tokens = query if full_query else query[:tokens]
+        has_cache_update = (
+            key is not None and value is not None
+            and kv_cache is not None and kv_cache.numel() > 0
+            and attn_metadata.slot_mapping is not None
+        )
+        full_kv = (
+            has_cache_update and reuse_full_token_views
+            and tokens == int(key.shape[0])
+            and tokens == int(value.shape[0])
+        )
+        key_tokens = key if full_kv else (key[:tokens] if key is not None else None)
+        value_tokens = (
+            value if full_kv else (value[:tokens] if value is not None else None)
+        )
+        direct_out = output if tokens == int(output.shape[0]) else None
+        one_token_decode = (
+            fused_cache_decode and has_cache_update and direct_out is not None
+            and tokens == int(query_tokens.shape[0])
+            and tokens == int(key_tokens.shape[0])
+            and tokens == int(value_tokens.shape[0])
+            and lengths is not None and starts is not None
+            and len(lengths) == tokens and len(starts) == tokens + 1
+            and starts[0] == 0 and starts[-1] == tokens
+            and all(starts[index + 1] == starts[index] + 1
+                    for index in range(tokens))
+        )
+        attended = None
+        if one_token_decode:
+            attended = jt.nn.reshape_cache_and_paged_attention_decode(
+                query_tokens, key_tokens, value_tokens, kv_cache,
+                attn_metadata.slot_mapping, attn_metadata.seq_lens,
+                attn_metadata.block_table, self.scale, direct_out)
+        if has_cache_update and attended is None:
             reshape_and_cache_kv_v1(
-                key[:tokens], value[:tokens], kv_cache,
+                key_tokens, value_tokens,
+                kv_cache,
                 attn_metadata.slot_mapping, slots=slots, no_sync=True)
-        attended = flash_attn_varlen_paged(
-            query[:tokens], kv_cache, attn_metadata.query_start_loc,
-            attn_metadata.seq_lens, attn_metadata.block_table, self.scale,
-            attn_metadata.causal, cq=starts, sk=lengths)
-        output[:tokens] = attended.reshape(
-            (tokens,) + tuple(output.shape[1:]))
+        if attended is None:
+            attended = flash_attn_varlen_paged(
+                query_tokens, kv_cache, attn_metadata.query_start_loc,
+                attn_metadata.seq_lens, attn_metadata.block_table, self.scale,
+                attn_metadata.causal, cq=starts, sk=lengths, out=direct_out)
+        if attended is not direct_out:
+            output[:tokens] = attended.reshape(
+                (tokens,) + tuple(output.shape[1:]))
         counter[0] += 1
-        if counter[0] % layers_between_syncs == 0:
+        if (layers_between_syncs > 0
+                and counter[0] % layers_between_syncs == 0):
             jt.sync_all()
         return output
 
@@ -285,11 +360,17 @@ def patch_attention_impl(module):
 
 
 def _layers_between_syncs():
-    raw = os.environ.get("JITTOR_VLLM_LAYERS_PER_SYNC", "16")
+    # Sampling's Triton bridge submits the graph that produces logits once per
+    # decode step, so an additional attention-layer sync only cuts that graph
+    # in half and drains overlap. Keep an explicit positive override for models
+    # that does not reach the ordinary sampling path. The large default is a
+    # safety valve for that unusual caller while keeping the validated serving
+    # path free of a per-token global barrier; zero remains a full disable.
+    raw = os.environ.get("JITTOR_VLLM_LAYERS_PER_SYNC", "1000000")
     try:
-        return max(1, int(raw))
+        return max(0, int(raw))
     except ValueError:
-        return 16
+        return 1000000
 
 
 def _host_metadata(attn_metadata, cache):

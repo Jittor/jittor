@@ -38,6 +38,57 @@ from .context import get_install_context
 from .fidelity import Fidelity, register_api_bindings
 from types import MappingProxyType
 
+def replay_books_of_step(opt):
+    """Advance, on every replay of a captured step, the counts `step()` keeps.
+
+    `n_step` and the per-parameter step counts are Python state that the
+    torch-style SGD step moves before running the native update; a replay does
+    not run it, so the capture is told to do the same. Nothing when no step
+    is being captured.
+    """
+    from jittor._runtime import step_capture
+    from .optimizer_api import _advance_ready_param_steps
+    if not step_capture.active():
+        return
+    advanced = not getattr(opt, "_torch_backward_advanced_n_step", False)
+
+    def books():
+        if advanced:
+            opt.n_step = int(getattr(opt, "n_step", 0)) + 1
+        _advance_ready_param_steps(opt)
+    step_capture.on_replay(books)
+
+
+def _adamw_skips_step_on_device(self):
+    """Whether this AdamW step can take a gradient scaler's found-inf on the device.
+
+    It can when every group takes the fused update that reads its step on the
+    device (``accepts_live_step``); the scaler then hands over its flag, and a
+    captured step skips an overflow without reading anything back. Any other
+    update leaves the decision to the scaler, on the host.
+    """
+    from jittor._runtime.dispatch import select_kernel
+    from .optimizer_api import _torch_param_steps
+    for pg in self.param_groups:
+        fused = pg.get("fused", getattr(self, "fused", None))
+        if fused is False or (fused is not True and pg.get("foreach") is False):
+            return False
+        if pg.get("amsgrad") or pg.get("maximize"):
+            return False
+        grads = pg.get("grads") or [None] * len(pg["params"])
+        steps = _torch_param_steps(pg)
+        active = [(p, m, v, g, int(steps[i])) for i, (p, g, v, m) in enumerate(zip(
+            pg["params"], grads, pg["values"], pg["m"]))
+            if p.requires_grad and isinstance(g, jt.Var) and list(g.shape) == list(p.shape)]
+        if not active:
+            continue
+        impl = select_kernel("optim.adamw_fused", active)
+        if (impl is None or not getattr(impl, "accepts_live_step", False)
+                or len({entry[4] for entry in active}) != 1):
+            return False
+    return True
+
+
 def _install_optimizers(g, registry=None):
     """Register optimizer instances weakly on construction and mirror lr into
     each param_group. This makes the
@@ -117,6 +168,7 @@ def _install_optimizers(g, registry=None):
     if AdamW is not None and not getattr(AdamW, "_torch_adamw_step", False):
         AdamW.step = adamw_step
         AdamW._torch_adamw_step = True
+        AdamW._skips_step_on_device = _adamw_skips_step_on_device
     for _cls_name, _native_kind in (("SGD", "sgd"), ("RMSprop", "rmsprop"), ("Adan", "adan")):
         _cls = getattr(_optim, _cls_name, None)
         if _cls is not None and not getattr(_cls, "_torch_closure_step", False):

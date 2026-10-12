@@ -3,6 +3,7 @@
 import numpy as np
 import time
 from jittor_core import Var
+from .._core.dtypes import dtype_name as _dtype_name
 
 def bernoulli(input):
     import jittor as jt
@@ -20,6 +21,20 @@ def arange(start=0, end=None, step=1,dtype=None):
     if (l-1)*step+start>=end:
         l-=1
     x = jt.index((l,),0)
+    # A float bound or step makes a floating range (torch and numpy both): do
+    # the arithmetic in floating point before any requested cast. `index` is
+    # int32, and with only `end` fractional -- `arange(1.5)` -- the integer
+    # product made an int32 range; a fractional step that reached the integer
+    # path through a frontend's scalar conversion collapsed to zero.
+    if any(isinstance(value, (float, np.floating)) for value in (start, end, step)):
+        if dtype is not None and _dtype_name(dtype) == "float64":
+            # A Python scalar operand is folded as a float32 constant; keep
+            # start and step in double for a double range, as torch does.
+            x = x.float64()
+            step = jt.array(float(step), dtype="float64")
+            start = jt.array(float(start), dtype="float64")
+        else:
+            x = x.float32()
     x = x*step+start
     if dtype is not None:
         x= x.cast(dtype)
@@ -152,6 +167,14 @@ def multinomial(weights: Var, num_samples: int, replacement: bool=False) -> Var:
         index = one_hot.index(one_hot.ndim - 1) + 1
         return (one_hot * index).sum(-1)
     else:
+        # A backend's own sampler for a single draw -- CANN's on ACL, which
+        # keeps the device generator's stream as torch_npu does; None leaves
+        # it to the A-Res sampler below.
+        if num_samples == 1:
+            from .._runtime.dispatch import try_dispatch
+            drawn = try_dispatch("random.multinomial", weights, num_samples, replacement)
+            if drawn is not None:
+                return drawn
         # A-Res algorithm
         # Pavlos S. Efraimidis and Paul G. Spirakis, 2006, Weighted random sampling with a reservoir
         if num_samples > weights.shape[-1]:

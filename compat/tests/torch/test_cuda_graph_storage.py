@@ -7,6 +7,61 @@ import torch
 
 @unittest.skipUnless(jt.has_cuda, "CUDA is unavailable")
 class TestCudaGraphStorage(unittest.TestCase):
+    def test_automatic_replay_does_not_capture_inside_outer_graph(self):
+        previous_cuda = jt.flags.use_cuda
+        previous_auto = jt.flags.auto_graph_replay
+        jt.flags.use_cuda = 1
+        jt.flags.auto_graph_replay = 1
+        graph = None
+        try:
+            class Scale(jt.nn.Module):
+                def execute(self, x):
+                    return x * 3
+
+            model = Scale()
+            root = torch.full((4,), 2, dtype=torch.float32, device="cuda")
+            graph = torch.cuda.CUDAGraph()
+            with jt.no_grad(), torch.cuda.graph(graph):
+                output = model(root)
+                output.sync(False)
+            self.assertIsNone(model.__dict__.get("_auto_graph_replay"))
+            graph.replay()
+            torch.cuda.synchronize()
+            self.assertEqual(output.cpu().tolist(), [6.0] * 4)
+        finally:
+            if graph is not None:
+                graph.reset()
+            jt.flags.auto_graph_replay = previous_auto
+            jt.flags.use_cuda = previous_cuda
+
+    def test_graph_replay_wrapper_uses_outer_cuda_capture(self):
+        previous = jt.flags.use_cuda
+        jt.flags.use_cuda = 1
+        graph = None
+        try:
+            class Scale(jt.nn.Module):
+                def execute(self, x):
+                    return x * 2
+
+            root = torch.full((4,), 3, dtype=torch.float32, device="cuda")
+            replay = jt.graph_replay(Scale())
+            # The explicit replay wrapper is also used by the native module
+            # frontend; it must not start its own capture during vLLM's graph.
+            graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(graph):
+                self.assertTrue(jt.graph_capture_active())
+                output = replay(root)
+                output.sync(False)
+            self.assertFalse(jt.graph_capture_active())
+            self.assertEqual(replay.stats["captured"], 0)
+            graph.replay()
+            torch.cuda.synchronize()
+            self.assertEqual(output.cpu().tolist(), [6.0] * 4)
+        finally:
+            if graph is not None:
+                graph.reset()
+            jt.flags.use_cuda = previous
+
     def test_fill_zero_and_copy_update_recorded_input(self):
         previous = jt.flags.use_cuda
         jt.flags.use_cuda = 1

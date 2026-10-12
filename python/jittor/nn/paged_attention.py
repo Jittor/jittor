@@ -45,9 +45,25 @@ def reshape_and_cache(key, value, kv_cache, slot_mapping, slots=None):
     return kv_cache
 
 
+def reshape_cache_and_paged_attention_decode(
+        query, key, value, kv_cache, slot_mapping, seq_lens, block_table,
+        scale, out):
+    """Fuse a one-token decode cache update with paged attention.
+
+    Returns ``None`` when the tensors do not meet the CUDA fast path's
+    constraints, so serving adapters can fall back without changing behavior.
+    """
+    from jittor.backends.cuda.kernels.nn.kv_cache_cuda import (
+        _reshape_cache_and_paged_attention_decode_cuda)
+
+    return _reshape_cache_and_paged_attention_decode_cuda(
+        query, key, value, kv_cache, slot_mapping, seq_lens, block_table,
+        scale, out)
+
+
 def paged_attention(query, kv_cache, cu_seqlens_q, seq_lens, block_table,
                     scale=None, causal=True, query_lengths=None,
-                    key_lengths=None):
+                    key_lengths=None, out=None):
     """Attention of packed queries against a paged KV cache.
 
     ``query`` is ``[total_tokens, num_heads, head_dim]``; ``kv_cache`` is
@@ -76,7 +92,7 @@ def paged_attention(query, kv_cache, cu_seqlens_q, seq_lens, block_table,
 
     if causal:
         decoded = _paged_attention_decode_cuda(
-            query, kv_cache, seq_lens, block_table, scale)
+            query, kv_cache, seq_lens, block_table, scale, out=out)
         if decoded is not None:
             return decoded
         from jittor.backends.acl.kernels.kv_cache import _paged_attention_decode_acl
@@ -246,4 +262,8 @@ def _decode_attention(query, key, value, scale):
 
 
 
-__all__ = ["paged_attention", "reshape_and_cache"]
+__all__ = [
+    "paged_attention",
+    "reshape_and_cache",
+    "reshape_cache_and_paged_attention_decode",
+]

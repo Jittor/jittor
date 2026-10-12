@@ -21,6 +21,10 @@ namespace jittor {
 
 static auto make_index = op_constructor<VarPtr, NanoVector, int64, NanoString>("index");
 static auto make_reindex_reduce = op_constructor<VarPtr, Var*, NanoString, NanoVector, vector<string>&&, vector<string>&&, vector<Var*>&&>("reindex_reduce");
+#ifdef IS_ACL
+static auto make_argsort = op_constructor<vector<VarPtr>, Var*, int, bool, NanoString>("argsort");
+static auto make_unary = op_constructor<VarPtr, Var*, NanoString>("unary");
+#endif
 
 #ifdef HAS_ACCELERATOR
 static auto make_array = op_constructor<VarPtr, const void*, NanoVector, NanoString>("array");
@@ -36,6 +40,16 @@ ArgsortOp::ArgsortOp(Var* x, int dim, bool descending, NanoString dtype)
     #ifdef HAS_ACCELERATOR
     const auto backend = construction_target_backend(x);
     if (backend != BackendId::Cpu) {
+#ifdef IS_ACL
+        // CANN Sort returns int64 indices. Preserve the requested Jittor
+        // index dtype through an accelerator Cast instead of a CPU copy.
+        if (backend == BackendId::Acl && dtype != ns_int64) {
+            auto sorted = make_argsort(x, dim, descending, ns_int64);
+            forward(make_unary(sorted[0], dtype));
+            forward(sorted[1]);
+            return;
+        }
+#endif
         if (has_op_capability(backend, OpCapability::SegmentedArgsort)) {
             int dims = x->shape.size();
             vector<int64> axes;
@@ -76,6 +90,15 @@ ArgsortOp::ArgsortOp(Var* x, int dim, bool descending, NanoString dtype)
     #endif
     y = create_output(nullptr, dtype);
     y_key = create_output(nullptr, x->dtype());
+#ifdef IS_ACL
+    const auto input_dtype = x->dtype();
+    if (dtype == ns_int64 &&
+        (input_dtype == ns_float16 || input_dtype == ns_float32 ||
+         input_dtype == ns_int8 || input_dtype == ns_int16 ||
+         input_dtype == ns_int32 || input_dtype == ns_int64 ||
+         input_dtype == ns_uint8))
+        set_flag(OpFlags::_cuda);
+#endif
     set_flag(OpFlags::_manual_set_vnbb);
     y->set_flag(VarFlags::_needed_by_backward);
 }

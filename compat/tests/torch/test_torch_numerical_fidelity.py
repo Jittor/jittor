@@ -590,8 +590,12 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             np_b = np.array([4.0, 5.0, 6.0])
             np.testing.assert_array_equal(
                 torch.vstack([a, b]).numpy(), np.vstack([np_a, np_b]))
+            # `row_stack` is the name under test, not the reference: numpy's own
+            # alias is deprecated (2.2: "Use np.vstack directly") and already
+            # gone by 2.5, while pyproject only bounds `numpy<3.0`. Referring to
+            # np.row_stack made this case red for a numpy version choice.
             np.testing.assert_array_equal(
-                torch.row_stack([a, b]).numpy(), np.row_stack([np_a, np_b]))
+                torch.row_stack([a, b]).numpy(), np.vstack([np_a, np_b]))
             np.testing.assert_array_equal(
                 torch.hstack([a, b]).numpy(), np.hstack([np_a, np_b]))
             np.testing.assert_array_equal(

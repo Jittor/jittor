@@ -660,10 +660,16 @@ DEF_IS(VarHolder*, T) from_py_object(PyObject* obj) {
     return GET_RAW_PTR(VarHolder, obj);
 }
 
+// Sets VarFlags::_python_number (var_holder.cc).
+void mark_python_number(VarHolder* holder);
+
 DEF_IS(VarHolder*, T) from_py_object(PyObject* obj, unique_ptr<VarHolder>& holder) {
     if (PyObject_TypeCheck(obj, &PyjtVarHolder.ht_type))
         return GET_RAW_PTR(VarHolder, obj);
     holder.reset(jit_op_maker::array__(obj));
+    if (PyFloat_CheckExact(obj) || PyLong_CheckExact(obj) || PyBool_Check(obj)
+            || PyComplex_Check(obj))
+        mark_python_number(holder.get());
     return holder.get();
 }
 
@@ -1000,7 +1006,10 @@ DEF_IS(NumpyFunc, T) from_py_object(PyObject* obj) {
             #ifdef HAS_ACCELERATOR
             // CuPy is a CUDA interop detail, not a property of every
             // accelerator backend (ACL and ROCm use their own array bridges).
-            if (runtime_use_cuda() && accelerator_backend_id() == BackendId::Cuda)
+            // Where the operator runs, not the ambient `use_cuda`: a torch
+            // tensor placed on CUDA keeps its operators there under
+            // `use_cuda=0`, and numpy over its device memory is a segfault.
+            if (result->on_accelerator && accelerator_backend_id() == BackendId::Cuda)
                 npstr="cupy";
             #endif
 
@@ -1021,8 +1030,9 @@ DEF_IS(NumpyFunc, T) from_py_object(PyObject* obj) {
                     PyErr_Clear();
                     LOGf << "a numpy_code operator on CUDA needs CuPy, which is"
                          << "not installed. Install it, or run this operator"
-                         << "with use_cuda=0 -- the CPU path uses numpy and"
-                         << "needs nothing extra.";
+                         << "on the host (use_cuda=0, inputs not placed on"
+                         << "CUDA) -- the CPU path uses numpy and needs"
+                         << "nothing extra.";
                 }
             } else {
                 np.assign(PyImport_ImportModule(npstr.data()));

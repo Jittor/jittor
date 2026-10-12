@@ -2,6 +2,7 @@
 
 import types
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -100,6 +101,39 @@ class TestQwen3AttentionPatch(unittest.TestCase):
         hidden = jt.zeros((2, 8))
         output = module.Qwen3Attention().forward(jt.zeros((2,)), hidden)
         np.testing.assert_array_equal(output.numpy(), np.ones((2, 8)))
+
+
+class TestUnquantizedLinearPatch(unittest.TestCase):
+    def test_direct_cublas_is_cached_and_bias_uses_original(self):
+        module = types.ModuleType("vllm.model_executor.layers.linear")
+
+        class UnquantizedLinearMethod:
+            def apply(self, layer, x, bias=None):
+                del layer, x, bias
+                return "original"
+
+        module.UnquantizedLinearMethod = UnquantizedLinearMethod
+        relay = mock.Mock(return_value="direct")
+        library = types.SimpleNamespace(cublas_matmul=relay)
+        with mock.patch.object(layers, "get_library_ops", return_value=library):
+            self.assertTrue(layers.patch_unquantized_linear(module))
+        self.assertFalse(layers.patch_unquantized_linear(module))
+
+        layer = types.SimpleNamespace(weight=jt.ones((3, 4), "float32"))
+        method = module.UnquantizedLinearMethod()
+        fake_jt = types.SimpleNamespace(
+            flags=types.SimpleNamespace(use_cuda=1, no_grad=1),
+            Var=jt.Var,
+        )
+        with mock.patch.object(layers, "jt", fake_jt):
+            self.assertEqual(method.apply(layer, jt.ones((2, 4))), "direct")
+            self.assertEqual(method.apply(layer, jt.ones((5, 4))), "direct")
+            self.assertEqual(
+                method.apply(layer, jt.ones((2, 4)), jt.ones((3,))),
+                "original",
+            )
+        self.assertTrue(layer.__dict__["_jittor_direct_cublas"])
+        self.assertEqual(relay.call_count, 2)
 
 
 if __name__ == "__main__":

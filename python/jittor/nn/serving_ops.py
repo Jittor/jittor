@@ -18,8 +18,10 @@ from jittor._core.flags import _output_requires_grad, _stop_grad_outputs
 from jittor._runtime.dispatch import dispatch_context, optional_kernel, try_dispatch
 
 from .backends import hooks as _backend_hooks
-from jittor.backends.cuda.kernels.nn.rms_norm_cuda import _fused_add_rms_norm_cuda, _rms_norm_cuda
-from jittor.backends.cuda.kernels.nn.rope_cuda import _rotary_embedding_cuda
+from jittor.backends.cuda.kernels.nn.rms_norm_cuda import (
+    _dual_rms_norm_cuda, _fused_add_rms_norm_cuda, _rms_norm_cuda)
+from jittor.backends.cuda.kernels.nn.rope_cuda import (
+    _qk_rms_norm_rotary_cuda, _rotary_embedding_cuda)
 from jittor.backends.cuda.kernels.nn.swiglu_cuda import _silu_and_mul_cuda
 
 __all__ = [
@@ -108,6 +110,10 @@ def dual_rms_norm(first, second, first_weight, second_weight, eps=1e-6):
             first, second, first_weight, second_weight, eps)
         if grouped is not None:
             return grouped
+    grouped = _dual_rms_norm_cuda(
+        first, second, first_weight, second_weight, eps)
+    if grouped is not None:
+        return grouped
     return (
         rms_norm(first, first_weight, eps),
         rms_norm(second, second_weight, eps),
@@ -140,7 +146,10 @@ def has_qk_rms_norm_rotary():
     and preparing one costs a cast the caller should not pay to find out the
     answer is no.
     """
-    return _backend_hooks.acl_grouped_qk_rms_norm_rotary is not None
+    return (
+        _backend_hooks.acl_grouped_qk_rms_norm_rotary is not None
+        or (getattr(jt.compiler, "has_cuda", 0) and jt.flags.use_cuda)
+    )
 
 
 def qk_rms_norm_rotary(positions, query, key, query_weight, key_weight,
@@ -158,10 +167,24 @@ def qk_rms_norm_rotary(positions, query, key, query_weight, key_weight,
     ``rotary_embedding``.
     """
     acl_backend = _backend_hooks.acl_grouped_qk_rms_norm_rotary
-    if acl_backend is None:
-        return None
-    return acl_backend(positions, query, key, query_weight, key_weight,
-                       cos_sin_cache, head_size, rotary_dim, is_neox, eps)
+    if acl_backend is not None:
+        grouped = acl_backend(
+            positions, query, key, query_weight, key_weight,
+            cos_sin_cache, head_size, rotary_dim, is_neox, eps)
+        if grouped is not None:
+            return grouped
+    return _qk_rms_norm_rotary_cuda(
+        positions,
+        query,
+        key,
+        query_weight,
+        key_weight,
+        cos_sin_cache,
+        head_size=head_size,
+        rotary_dim=rotary_dim,
+        is_neox_style=is_neox,
+        epsilon=eps,
+    )
 
 
 def rotary_embedding(positions, query, key, cos_sin_cache, head_size=None,

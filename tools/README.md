@@ -9,12 +9,15 @@ Most commands write state below
 directory before use; they preserve old workflows but are not recommended for
 new deployments.
 
-- `benchmarks/legacy/`: historical one-off comparisons; maintained benchmarks
-  live in the root `benchmarks/` ASV suite.
+- `benchmarks/`: one-off phase timers; maintained benchmarks live in the root
+  `benchmarks/` ASV suite and the `bench/` Torch comparison.
 - `build/`: explicit source and asset builders.
 - `distributed/`: operator-facing distributed helpers.
 - `docs/`: documentation builders, links and governance checks.
-- `install/legacy/`: installers for old environments.
+- `lint/`: import-layering and other source checks used by the structure gate.
+- `probes/`: maintainer sweeps that print where two equivalent computations,
+  devices or round trips disagree. They are not tests; their output is the
+  evidence quoted by known-issue entries.
 - `release/`: release-only utilities and offline asset packaging.
 - `check_repo_layout.sh`: repository layout gate; delegates documentation governance.
 - `build/generate_manifest.py`: derive both MANIFEST.in files from their pyproject declarations.
