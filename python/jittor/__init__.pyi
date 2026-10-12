@@ -168,7 +168,6 @@ dtype = NanoString
 #   floor
 #   floor_divide
 #   floor_int
-#   fmod
 #   format
 #   from_torch
 #   full
@@ -9101,7 +9100,6 @@ flatten: Any
 flip: Any
 float: Any
 float_auto: Any
-fmod: Any
 format: Any
 from_torch: Any
 full: Any

@@ -1332,8 +1332,10 @@ def dirty_fix_pytorch_runtime_error():
 is_in_ipynb = in_ipynb()
 #: The compiled jit_utils_core extension, or None until it is imported.
 #: Any rather than ModuleType: callers reach for attributes that only exist
-#: on the compiled module.
-cc: Any = None
+#: on the compiled module. A type comment, not an annotation: Python 3.7
+#: rejects annotating a module name after a function above declared it
+#: ``global`` ("annotated name 'cc' can't be global").
+cc = None  # type: Any
 LOG = Logwrapper()
 
 check_msvc_install = False
@@ -1353,9 +1355,10 @@ else:
 cc_type = get_cc_type(cc_path)
 cache_path = find_cache_path()
 
-_py3_config_path: Optional[str] = None
-_py3_include_path: Optional[str] = None
-_py3_extension_suffix: Optional[str] = None
+# Type comments for the reason given at ``cc`` above.
+_py3_config_path = None  # type: Optional[str]
+_py3_include_path = None  # type: Optional[str]
+_py3_extension_suffix = None  # type: Optional[str]
 # NOTE: this used to be
 #     ssl._create_default_https_context = ssl._create_unverified_context
 # with no condition and no way to turn it off. That statement does not affect

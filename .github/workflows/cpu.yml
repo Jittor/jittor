@@ -134,15 +134,24 @@ jobs:
         run: |
           echo "ASV_RESULTS_DIR=${RUNNER_TEMP}/jittor-asv/results" >> "${GITHUB_ENV}"
           echo "ASV_HTML_DIR=${RUNNER_TEMP}/jittor-asv/html" >> "${GITHUB_ENV}"
+      # Before the checkout: the CI image is a bare ubuntu with no git, and
+      # without one actions/checkout downloads a tarball instead -- no .git, so
+      # ASV could neither name the commit it measured nor compare it with the
+      # base ("No such file or directory: 'git'" in `_record_asv`).
+      - name: Install native CPU toolchain and git
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends build-essential libomp-dev git ca-certificates
       - name: Check out source
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Install native CPU toolchain
-        run: |
-          apt-get update
-          apt-get install --yes --no-install-recommends build-essential libomp-dev
+      # The job runs as root in the container and the workspace belongs to the
+      # runner user, so git refuses the repository as unsafe -- and
+      # `_git_output` reports that only as "cannot resolve the current commit".
+      - name: Trust the checkout
+        run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
