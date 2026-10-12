@@ -2,6 +2,11 @@
 
 状态：两类真实数据 FP32 训练及单/双/四卡、梯度累积、实际 P2P 和持久状态恢复通过；小型 Transformer 性能仍有差距。维护者：native distributed 维护组。复查条件：Dataset、DDP、优化器状态、CUDA 数值策略或 NCCL 传输配置改变时，复验受影响的真实训练任务。首期范围保持单机 NCCL 数据并行。
 
+后续[分桶与性能核查](2026-10-12-native-ddp-transformer-performance.md)确认，本报告基线的
+默认 WORLD 没有进入旧 NCCL group 分支：其 `_backend_kind` 为 `None`，实际后端需通过
+运行时查询取得。因此下文“同步 bucket 已接入”仅描述当时的代码分支，不证明这些 WORLD
+训练实际启用了分桶。后续修复连续梯度块及后端选择；本报告原始训练数值与耗时保留原基线。
+
 ## 基线与产物
 
 本轮开始与恢复工作时均 fetch 目标分支，`HEAD` 与 `origin/cgq_transformers` 为

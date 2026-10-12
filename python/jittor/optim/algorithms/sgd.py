@@ -103,7 +103,7 @@ class SGD(Optimizer):
         values = group["values"] = []
         for p in group["params"]:
             values.append(_momentum_buffer(p))
-        self.param_groups.append(group)
+        super().add_param_group(group)
 
     def step(self, loss=None, retain_graph=False):
         from jittor._runtime import step_capture

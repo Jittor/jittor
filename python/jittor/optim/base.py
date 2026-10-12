@@ -192,11 +192,24 @@ class Optimizer(object):
         self.__zero_grad = True
         self._grad_map = {}
         self.__input_params = []
+        # Runtime DDP bindings stay with this optimizer, including when a user
+        # edits a group to remove every managed parameter. Private fields are
+        # excluded from defaults/state_dict in normal checkpoints.
+        self._jittor_ddp_states = {}
+        for pg in self.param_groups:
+            for p in pg['params']:
+                state = getattr(p, '_jittor_ddp_state', None)
+                if state is not None:
+                    self._jittor_ddp_states[state] = None
 
     def add_param_group(self, group):
         if 'params' in group and not isinstance(group['params'], (list, tuple)):
             group['params'] = list(group['params'])
         self.param_groups.append(group)
+        for p in group.get('params', ()):
+            state = getattr(p, '_jittor_ddp_state', None)
+            if state is not None:
+                self._jittor_ddp_states[state] = None
 
     def _advance_step_count(self, pg):
         """Number of optimizer steps this param group has taken, 1-based.
@@ -343,13 +356,13 @@ class Optimizer(object):
                     if zero is None or zero.shape != g.shape or zero.dtype != g.dtype:
                         zero = cache[key] = jt.zeros_like(g).stop_grad()
                     g.update(zero)
-        seen_ddp_states = set()
         for pg in self.param_groups:
             for p in pg["params"]:
                 state = getattr(p, "_jittor_ddp_state", None)
-                if state is not None and id(state) not in seen_ddp_states:
-                    state.has_unsynced_grads = False
-                    seen_ddp_states.add(id(state))
+                if state is not None:
+                    self._jittor_ddp_states[state] = None
+        for state in self._jittor_ddp_states:
+            state.has_unsynced_grads = False
         self.__zero_grad = True
 
     def backward(self, loss, retain_graph=False):
@@ -428,7 +441,7 @@ class Optimizer(object):
         from jittor.nn.parallel.distributed_data_parallel import (
             _sync_optimizer_gradients,
         )
-        ddp_parameter_ids, dep = _sync_optimizer_gradients(entries)
+        ddp_parameter_ids, dep = _sync_optimizer_gradients(entries, optimizer=self)
 
         # Legacy MPI synchronization remains available for optimizer
         # parameters outside a DDP wrapper.

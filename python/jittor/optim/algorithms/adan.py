@@ -61,7 +61,7 @@ class Adan(Optimizer):
             group["v"].append(_state_buffer(p))
             group["d"].append(_state_buffer(p))
             group["pre_grad"].append(_state_buffer(p))
-        self.param_groups.append(group)
+        super().add_param_group(group)
 
     def _global_max_grad_norm(self):
         """The single gradient-norm bound to enforce this step.

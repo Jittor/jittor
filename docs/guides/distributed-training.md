@@ -52,11 +52,30 @@ for batch in loader:
     optimizer.step()
 ```
 
-DDP 构造时从 group rank 0 广播参数和启用广播的 buffers；每次同步 backward 前，reducer
-按稳定参数顺序对累积梯度做 mean all-reduce。NCCL 后端会把同一轮参数梯度放进一个
-collective bucket，减少逐参数的 stream join 和 host launch；`with model.no_sync():` 会暂存
+DDP 构造时验证跨 rank 的参数/buffer 结构，并从 group rank 0 广播参数和启用广播的
+buffers。构造后应保持参数对象、shape、dtype、可训练状态和设备固定；每次 backward
+在本地检查结构及优化器参数覆盖，优化器应包含该 wrapper 的全部可训练参数且不重复。
+`parameter.update()` 和同结构的 `load_state_dict()` 可以保留已有参数对象并更新其值。
+本地契约错误会抛出异常，`jtrun` 随后终止其他 rank；自行管理进程时也需要负责停止
+可能正等待 collective 的同伴。
+
+同步 backward 按稳定模型顺序对累积梯度求平均。NCCL 使用同 dtype、同设备的连续
+梯度块，每块通常不超过 25 MiB 且最多含 64 个参数；单个超出容量的参数单独通信。
+分组内只提交原始 sum，退出 NCCL group 并建立流依赖后才平均和拆回优化器梯度。
+这减少了逐参数通信及构图成本，当前没有计算通信重叠。`with model.no_sync():` 暂存
 本地梯度，退出后需要一次同步的 `optimizer.backward(loss)` 才能调用 `optimizer.step()`。
 该实现每个进程只使用一张设备，不会替用户搬运模型；先把模型放到当前 rank 的设备上。
+
+使用 AdamW 的 CUDA 训练可显式选择已有的融合更新，以减少 Python 构图和 kernel
+launch 成本；对照其他框架时，两侧应使用相同的融合设置并独立验证训练与恢复结果：
+
+```python
+optimizer = jt.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=0.01,
+                           betas=(0.9, 0.999), eps=1e-8, fused=True)
+```
+
+原生 DDP 的 buffers 在构造时广播，当前不会像 PyTorch DDP 的默认配置那样在每次
+forward 前广播；需要全局 batch 统计时使用原生 `SyncBatchNorm`。
 
 文件写入、日志和普通 checkpoint 只由 rank 0 执行：
 

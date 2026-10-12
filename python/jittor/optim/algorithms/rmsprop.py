@@ -34,7 +34,7 @@ class RMSprop(Optimizer):
         values = group["values"] = []
         for p in group["params"]:
             values.append(_state_buffer(p))
-        self.param_groups.append(group)
+        super().add_param_group(group)
 
     def step(self, loss=None, retain_graph=False):
         self.pre_step(loss, retain_graph)

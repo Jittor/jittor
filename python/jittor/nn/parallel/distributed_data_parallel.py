@@ -10,6 +10,8 @@ from jittor import Module
 _DDP_SEQUENCE = itertools.count()
 _SIGNATURE_WORDS = 16
 _SIGNATURE_VARIANCE_TOLERANCE = 5e-2
+_BUCKET_BYTES = 25 * 1024 * 1024
+_BUCKET_INPUTS = 64
 
 
 class _ReducerState:
@@ -19,6 +21,10 @@ class _ReducerState:
         self.world_size = world_size
         self.parameters = tuple(parameters)
         self.initial_signature = _module_signature(wrapper.module)
+        self.parameter_ids = tuple(id(parameter) for _, parameter in parameters)
+        self.local_placements = _local_placements(
+            parameters, wrapper.module.named_buffers())
+        self.buckets = _gradient_buckets(parameters)
         self.sync_enabled = True
         self.has_unsynced_grads = False
         self.sequence = next(_DDP_SEQUENCE)
@@ -48,39 +54,84 @@ def _group_size(distributed, group):
     return int(size())
 
 
-def _module_signature(module):
-    parameters = []
-    for name, parameter in module.named_parameters():
-        parameters.append((
+def _module_signature(module, parameters=None, buffers=None):
+    if parameters is None:
+        parameters = module.named_parameters()
+    if buffers is None:
+        buffers = module.named_buffers()
+    parameter_metadata = []
+    for name, parameter in parameters:
+        parameter_metadata.append((
             name,
             tuple(int(dim) for dim in parameter.shape),
             str(parameter.dtype),
             str(getattr(parameter, "placement_backend", "unknown")),
             bool(parameter.requires_grad),
         ))
-    buffers = []
-    for name, buffer in module.named_buffers():
-        buffers.append((
+    buffer_metadata = []
+    for name, buffer in buffers:
+        buffer_metadata.append((
             name,
             tuple(int(dim) for dim in buffer.shape),
             str(buffer.dtype),
             str(getattr(buffer, "placement_backend", "unknown")),
         ))
-    return tuple(parameters), tuple(buffers)
+    return tuple(parameter_metadata), tuple(buffer_metadata)
+
+
+def _value_placement(value):
+    # Native Vars expose an integer backend id; -1 follows the runtime.
+    # Residency may temporarily be CPU after numpy(); dispatch resolves the
+    # graph's device without mistaking that host read for a model migration.
+    from jittor._runtime.dispatch import dispatch_context
+    backend = dispatch_context(value).backend
+    device_id = int(getattr(value, "device_id", 0))
+    if backend != "cpu" and device_id < 0:
+        device_id = int(jt.current_device())
+    return backend, device_id
+
+
+def _local_placements(parameters, buffers):
+    return tuple((getattr(value, "placement_backend", None),
+                  int(getattr(value, "device_id", 0)))
+                 for _, value in list(parameters) + list(buffers))
 
 
 def _module_placements(parameters, buffers):
-    placements = {
-        (getattr(value, "placement_backend", "unknown"),
-         int(getattr(value, "device_id", 0)))
-        for _, value in list(parameters) + list(buffers)
-    }
+    placements = {_value_placement(value)
+                  for _, value in list(parameters) + list(buffers)}
     if len(placements) > 1:
         raise ValueError(
             "native DistributedDataParallel requires all module parameters and "
             "buffers on one device per process"
         )
     return next(iter(placements), None)
+
+
+def _gradient_buckets(parameters):
+    """Bounded homogeneous buckets in the agreed module parameter order."""
+    buckets = []
+    current = []
+    current_key = None
+    current_bytes = 0
+    for index, (_, parameter) in enumerate(parameters):
+        if not parameter.requires_grad:
+            continue
+        key = (str(parameter.dtype),
+               str(getattr(parameter, "placement_backend", "unknown")),
+               int(getattr(parameter, "device_id", 0)))
+        size = int(parameter.numel()) * int(parameter.dtype.dsize())
+        if current and (key != current_key or current_bytes + size > _BUCKET_BYTES
+                        or len(current) >= _BUCKET_INPUTS):
+            buckets.append(tuple(current))
+            current = []
+            current_bytes = 0
+        current.append(index)
+        current_key = key
+        current_bytes += size
+    if current:
+        buckets.append(tuple(current))
+    return tuple(buckets)
 
 
 def _signature_check(distributed, group, payload, description, reference):
@@ -92,8 +143,7 @@ def _signature_check(distributed, group, payload, description, reference):
     values = jt.array(
         words + [word * word for word in words], dtype="float32"
     ).stop_grad()
-    backend = getattr(reference, "placement_backend", None)
-    device_id = int(getattr(reference, "device_id", 0))
+    backend, device_id = _value_placement(reference)
     if backend == "cuda":
         values = values.cuda(device_id)
     elif backend == "npu":
@@ -258,20 +308,23 @@ class _NoSync:
         return False
 
 
-def _sync_optimizer_gradients(entries):
+def _sync_optimizer_gradients(entries, optimizer=None):
     """Reduce DDP-managed optimizer buffers once, in module parameter order.
 
     ``entries`` contains ``(parameter, accumulated_gradient)`` pairs after the
     optimizer has added the current local gradient. Unmanaged parameters are
     returned to the optimizer so its legacy MPI path can continue handling them.
     """
-    grouped = {}
+    known_states = getattr(optimizer, "_jittor_ddp_states", {})
+    grouped = {state: {} for state in known_states}
     owned_parameter_ids = set()
     for parameter, gradient in entries:
         state = getattr(parameter, "_jittor_ddp_state", None)
         if state is None:
             continue
         owned_parameter_ids.add(id(parameter))
+        if optimizer is not None:
+            known_states[state] = None
         group = grouped.setdefault(state, {})
         group.setdefault(id(parameter), []).append(gradient)
 
@@ -282,38 +335,30 @@ def _sync_optimizer_gradients(entries):
     dependencies = []
     for state in sorted(grouped, key=lambda item: item.sequence):
         by_parameter = grouped[state]
-        if state.world_size <= 1:
-            current = _module_signature(state.wrapper.module)
-            if current != state.initial_signature:
-                raise RuntimeError(
-                    "DistributedDataParallel module parameters or buffers changed "
-                    "after construction"
-                )
-            continue
-        if not state.sync_enabled:
-            state.has_unsynced_grads = True
-            continue
-
-        current_signature = _module_signature(state.wrapper.module)
+        # Construction checks the complete schema across ranks. Every backward
+        # then checks that local schema and parameter holders still match that
+        # agreed schema; a valid step cannot change the collective sequence.
+        # This avoids a device-to-host metadata round trip on every update.
+        # As with a rank's forward exception, the launcher must stop peers when
+        # a local contract violation raises before their gradient collective.
+        current_parameters = list(state.wrapper.module.named_parameters())
+        current_buffers = list(state.wrapper.module.named_buffers())
+        current_signature = _module_signature(
+            state.wrapper.module, current_parameters, current_buffers)
+        if (current_signature != state.initial_signature
+                or tuple(id(parameter) for _, parameter in current_parameters)
+                != state.parameter_ids
+                or _local_placements(current_parameters, current_buffers)
+                != state.local_placements):
+            raise RuntimeError(
+                "DistributedDataParallel module parameters or buffers changed "
+                "after construction"
+            )
         coverage = tuple(
             len(by_parameter.get(id(parameter), ()))
             if parameter.requires_grad else 0
             for _, parameter in state.parameters
         )
-        _signature_check(
-            distributed, state.group,
-            (current_signature, coverage),
-            "DDP module structure or optimizer parameter coverage",
-            reference=_metadata_reference(
-                list(state.wrapper.module.named_parameters()),
-                list(state.wrapper.module.named_buffers()),
-            ),
-        )
-        if current_signature != state.initial_signature:
-            raise RuntimeError(
-                "DistributedDataParallel module parameters or buffers changed "
-                "after construction"
-            )
         for (name, parameter), count in zip(state.parameters, coverage):
             if parameter.requires_grad and count == 0:
                 raise RuntimeError(
@@ -323,31 +368,54 @@ def _sync_optimizer_gradients(entries):
                 raise RuntimeError(
                     "DDP parameter {!r} appears more than once in the optimizer".format(name)
                 )
+        if not state.sync_enabled:
+            state.has_unsynced_grads = True
+            continue
+        if state.world_size <= 1:
+            continue
 
         gradients = [
             by_parameter[id(parameter)][0]
             for _, parameter in state.parameters
             if parameter.requires_grad
         ]
-        # The NCCL backend already provides a grouped collective scope.  Keep
-        # the outputs as the graph sinks while the group is open, then publish
-        # them into the optimizer's gradient holders after the synchronous
-        # join.  This reduces one stream join and one host launch per DDP
-        # parameter without changing the optimizer.backward contract.
-        use_bucket = getattr(state.group, "_backend_kind", None) == "nccl"
+        # Only raw sum outputs may be executed while the NCCL group is open.
+        # Scaling and unpacking consume the output after group end and join.
+        # WORLD uses the runtime backend and has no private subgroup kind.
+        backend_query = getattr(state.group, "_get_backend_name", None)
+        backend = (backend_query() if callable(backend_query)
+                   else getattr(state.group, "_backend_kind", None))
+        use_bucket = backend == "nccl"
         if use_bucket and gradients:
             from jittor.distributed.bucket import bucket_scope
+            from jittor.backends.cuda.kernels.misc.ddp_bucket import (
+                pack_gradients, unpack_gradients,
+            )
+            gradient_map = {
+                index: by_parameter[id(parameter)][0]
+                for index, (_, parameter) in enumerate(state.parameters)
+                if parameter.requires_grad
+            }
             reduced_pairs = []
+            packed = []
+            for indices in state.buckets:
+                members = [gradient_map[index] for index in indices]
+                value = pack_gradients(members) if len(members) > 1 else members[0]
+                packed.append((members, value))
             with bucket_scope(defer_join=False):
-                for gradient in gradients:
+                for members, value in packed:
                     reduced = distributed.all_reduce(
-                        gradient, op="mean", group=state.group
+                        value, op="sum", group=state.group
                     )
-                    reduced_pairs.append((gradient, reduced))
+                    reduced_pairs.append((members, reduced))
                 jt.sync([reduced for _, reduced in reduced_pairs])
-            for gradient, reduced in reduced_pairs:
-                if reduced is not gradient:
-                    gradient.assign(reduced)
+            for members, reduced in reduced_pairs:
+                if len(members) == 1:
+                    members[0].assign(reduced / state.world_size)
+                    continue
+                for gradient, averaged in zip(
+                        members, unpack_gradients(reduced, members, state.world_size)):
+                    gradient.assign(averaged)
         else:
             for gradient in gradients:
                 reduced = distributed.all_reduce(
@@ -363,18 +431,18 @@ def _sync_optimizer_gradients(entries):
 
 def _assert_ddp_step_ready(optimizer):
     """Refuse an optimizer update if DDP gradients were only accumulated locally."""
-    checked = set()
+    states = dict(getattr(optimizer, "_jittor_ddp_states", {}))
     for group in optimizer.param_groups:
         for parameter in group["params"]:
             state = getattr(parameter, "_jittor_ddp_state", None)
-            if state is None or id(state) in checked:
-                continue
-            checked.add(id(state))
-            if state.world_size > 1 and state.has_unsynced_grads:
-                raise RuntimeError(
-                    "DistributedDataParallel gradients are still local; run a synced "
-                    "optimizer.backward(loss) before optimizer.step()"
-                )
+            if state is not None:
+                states[state] = None
+    for state in states:
+        if state.world_size > 1 and state.has_unsynced_grads:
+            raise RuntimeError(
+                "DistributedDataParallel gradients are still local; run a synced "
+                "optimizer.backward(loss) before optimizer.step()"
+            )
 
 
 __all__ = ["DistributedDataParallel"]

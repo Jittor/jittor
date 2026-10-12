@@ -5,6 +5,27 @@ description: 在单机上验证 Jittor 分布式改动（MPI / NCCL 集合通信
 
 # 单机验证 Jittor 分布式改动
 
+## 原生 DDP 连续梯度块回归
+
+[`scripts/verify_native_ddp_gradients.py`](scripts/verify_native_ddp_gradients.py)
+在 `jtrun` 下执行真实 CUDA/NCCL。每个 rank 的输入梯度不同，验证 40 步解析平均梯度、
+SGD momentum 更新、`no_sync` 累积、不同优化器顺序、FP32/FP64 多 bucket、超容量
+参数、未使用叶子、仅部分 rank 使用的参数及空参数。输出 JSON/NPZ 放到 lab，不能
+将 mock collective 或同 rank 输入的结果代替该门禁。
+
+```bash
+PYTHONPATH=python CUDA_VISIBLE_DEVICES=<已分配的设备> \
+  JITTOR_HOME=<已预热且当前独占的缓存> TMPDIR=<lab 临时目录> \
+  jtrun --nproc-per-node=<rank 数> \
+  agent/skills/jittor-distributed-verification/scripts/verify_native_ddp_gradients.py \
+  --output <lab 新结果目录>
+```
+
+`--reference` 用未分组的 NCCL mean 路径交叉核对。`--failure` 支持 `replace`、`add`、
+`remove`、`trainable`、`missing`、`allmissing` 和 `duplicate`：第 3 步仅 rank 0 违反
+契约，要求其日志包含对应原因、launcher 非零退出且停止其余 rank，不能在异常后用
+barrier 收尾。该脚本只处理单机一进程一张 GPU，不声称多机、NPU 或低精度训练验收。
+
 **先读 [`agent/skills/jittor-worktree-verification/SKILL.md`](../jittor-worktree-verification/SKILL.md)**。
 分布式验证全是多进程，每个 rank 各自 `import jittor`，PYTHONPATH 错了就是每个 rank 都在
 测主树。
