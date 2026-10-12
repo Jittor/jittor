@@ -30,6 +30,31 @@ def _attend(query, key, value, causal):
 
 
 class TestVarlenAttention(unittest.TestCase):
+    def test_direct_full_prefill_gqa_and_chunk_guard(self):
+        rng = np.random.default_rng(17)
+        tokens, heads, kv_heads, dim = 12, 4, 2, 8
+        query = rng.normal(size=(tokens, heads, dim)).astype("float16")
+        key = rng.normal(size=(tokens, kv_heads, dim)).astype("float16")
+        value = rng.normal(size=(tokens, kv_heads, dim)).astype("float16")
+        tensors = tuple(jt.array(t) for t in (query, key, value))
+        scale = dim ** -0.5
+
+        got = flash_attn._direct_full_prefill(
+            *tensors, [0, tokens], [tokens], True, scale)
+        expected = _attend(
+            query.astype("float32"),
+            np.repeat(key.astype("float32"), heads // kv_heads, axis=1),
+            np.repeat(value.astype("float32"), heads // kv_heads, axis=1),
+            causal=True)
+        np.testing.assert_allclose(got.numpy(), expected, atol=2e-2, rtol=2e-2)
+        self.assertIsNone(flash_attn._direct_full_prefill(
+            *tensors, [0, tokens], [tokens + 1], True, scale))
+        self.assertIsNone(flash_attn._direct_full_prefill(
+            *tensors, [0, 6, tokens], [6, 6], True, scale))
+        self.assertIsNone(flash_attn._direct_full_prefill(
+            tensors[0][:1], tensors[1][:1], tensors[2][:1],
+            [0, 1], [1], True, scale))
+
     def test_matches_a_per_sequence_reference(self):
         np.random.seed(3)
         lengths = [3, 5, 1]

@@ -201,6 +201,30 @@ def reshape_and_cache_flash(key, value, key_cache, value_cache, slot_mapping,
         value_cache[block, offset] = value[token]
 
 
+def _direct_full_prefill(query, key, value, starts, lengths, causal, scale):
+    """Use the fresh Q/K/V for a complete, single-request prefill.
+
+    Chunked prefill and prefix-cache hits still need the paged cache.  This
+    case does not: reading back the cache we just wrote adds a gather, dtype
+    conversions, GQA expansion and a separate attention graph at every layer.
+    """
+    if (starts is None or lengths is None or len(starts) != 2
+            or len(lengths) != 1 or starts[1] <= 1
+            or starts[0] != 0 or starts[1] != lengths[0]
+            or starts[1] != int(query.shape[0])
+            or starts[1] != int(key.shape[0])
+            or starts[1] != int(value.shape[0])):
+        return None
+    tokens = starts[1]
+    query = query.reshape((1, tokens, query.shape[1], query.shape[2])).transpose(1, 2)
+    key = key.reshape((1, tokens, key.shape[1], key.shape[2])).transpose(1, 2)
+    value = value.reshape((1, tokens, value.shape[1], value.shape[2])).transpose(1, 2)
+    result = jt.nn.scaled_dot_product_attention(
+        query, key, value, is_causal=bool(causal), scale=float(scale),
+        enable_gqa=True)
+    return result.transpose(1, 2).reshape((tokens, query.shape[1], query.shape[3]))
+
+
 def _no_scheduler_metadata(*args, **kwargs):
     """FA3 plans its work ahead; the path taken here does not."""
     return None
@@ -271,6 +295,9 @@ def patch_attention_impl(module):
     fused_cache_decode = (
         os.environ.get("JITTOR_VLLM_FUSED_CACHE_DECODE", "0") != "0"
     )
+    direct_full_prefill = (
+        os.environ.get("JITTOR_VLLM_DIRECT_FULL_PREFILL", "0") == "1"
+    )
     counter = [0]
     metadata_cache = {}
 
@@ -331,6 +358,10 @@ def patch_attention_impl(module):
                 key_tokens, value_tokens,
                 kv_cache,
                 attn_metadata.slot_mapping, slots=slots, no_sync=True)
+        if attended is None and has_cache_update and direct_full_prefill:
+            attended = _direct_full_prefill(
+                query_tokens, key_tokens, value_tokens, starts, lengths,
+                attn_metadata.causal, self.scale)
         if attended is None:
             attended = flash_attn_varlen_paged(
                 query_tokens, kv_cache, attn_metadata.query_start_loc,

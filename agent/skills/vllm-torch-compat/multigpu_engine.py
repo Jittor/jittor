@@ -17,7 +17,7 @@ def install_phase_trace(worker_wrapper):
         return {"rank": worker_wrapper.worker.rank, "installed": False}
     state = {"prepare_inputs": [], "prepare_attn": [], "model_forward": [],
              "sample_tokens": [], "parameters": [], "subphases": {},
-             "rotary_cache": {}, "liveness": []}
+             "rotary_cache": {}, "liveness": [], "prefill_profile": []}
     runner._jt_phase_trace = state
 
     def snapshot():
@@ -35,7 +35,39 @@ def install_phase_trace(worker_wrapper):
             if synchronize_timers:
                 torch.cuda.synchronize()
             start = time.perf_counter()
-            result = original(*args, **kwargs)
+            profile_prefill = (
+                name == "model_forward"
+                and os.environ.get("JT_PREFILL_PROFILE") == "1"
+                and len(state["prefill_profile"]) < 2
+                and "input_ids" in kwargs
+                and int(kwargs["input_ids"].shape[0]) > 1
+            )
+            if profile_prefill and hasattr(torch, "_torch_compat_install_context"):
+                import jittor as jt
+                with jt.profile(device="auto", memory=False,
+                                python=False, sync=True) as prof:
+                    result = original(*args, **kwargs)
+                state["prefill_profile"].append({
+                    "host_ns": dict(prof.host),
+                    "device_ns": None if prof.device is None else dict(prof.device),
+                    "device_note": prof.device_note,
+                    "operator_table": prof.table(row_limit=24),
+                })
+            elif profile_prefill:
+                with torch.profiler.profile(activities=[
+                        torch.profiler.ProfilerActivity.CPU,
+                        torch.profiler.ProfilerActivity.CUDA]) as prof:
+                    result = original(*args, **kwargs)
+                    torch.cuda.synchronize()
+                totals = prof.key_averages().total_average()
+                state["prefill_profile"].append({
+                    "cpu_time_us": totals.self_cpu_time_total,
+                    "cuda_time_us": totals.self_device_time_total,
+                    "operator_table": prof.key_averages().table(
+                        sort_by="self_cuda_time_total", row_limit=24),
+                })
+            else:
+                result = original(*args, **kwargs)
             if synchronize_timers:
                 torch.cuda.synchronize()
             state[name].append((time.perf_counter() - start) * 1000.0)
@@ -235,6 +267,7 @@ def phase_trace(worker_wrapper):
                 key: list(value) for key, value in state["subphases"].items()},
             "rotary_cache": dict(state["rotary_cache"]),
             "liveness": list(state["liveness"]),
+            "prefill_profile": list(state["prefill_profile"]),
             "module_timings_ms": dict(getattr(
                 worker_wrapper.worker.model_runner, "_jt_module_trace", {})),
             "sample_profile": sample_profile,
