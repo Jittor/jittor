@@ -132,7 +132,11 @@ def _assign_data_owner(view, value, extra_path=()):
     for base, index in reversed(bases):
         updated = base.setitem(index, updated)
 
-    owner_was_trainable = not owner.is_stop_grad()
+    # ``requires_grad`` is the public Torch state.  A compat Parameter may
+    # have ``requires_grad=False`` while its native ``is_stop_grad`` bit is
+    # still clear (the reversible setter deliberately preserves graph edges),
+    # so deriving this from ``is_stop_grad`` would re-enable frozen weights.
+    owner_was_trainable = bool(owner.requires_grad)
     owner.assign(updated)
     _restore_trainable_state(owner, owner_was_trainable)
 
@@ -147,6 +151,14 @@ def _assign_data_owner(view, value, extra_path=()):
     # by setting it on the RHS, so give the alias its own detached node.
     view.assign(view_updated.detach())
     _restore_trainable_state(view, view_was_trainable)
+    # Under ``torch.no_grad`` Jittor may let the detached data alias retain a
+    # trainable state while it shares the owner's storage.  Re-apply the
+    # owner's state after updating the alias so an explicitly frozen
+    # Parameter cannot be re-enabled by ``parameter.data.normal_()``.
+    if hasattr(owner, "requires_grad_"):
+        owner.requires_grad_(owner_was_trainable)
+    else:
+        _restore_trainable_state(owner, owner_was_trainable)
     return True
 
 

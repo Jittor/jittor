@@ -615,6 +615,36 @@ class TestModuleMethodsAcrossDevices:
         assert output.placement_backend == 0
         assert output.is_cpu
 
+    def test_load_cpu_state_dict_keeps_accelerator_target_placement(self, device):
+        if str(device).split(":")[0] == "cpu":
+            pytest.skip("requires an accelerator-backed target model")
+        src = _Net().to("cpu")
+        dst = _Net().to(device)
+        weight = dst.lin.weight
+        optimizer = torch.optim.SGD(dst.parameters(), lr=0.01)
+        state = src.state_dict()
+        assert all(value.device.type == "cpu" for value in state.values())
+
+        result = dst.load_state_dict(state)
+
+        assert list(result.missing_keys) == []
+        assert list(result.unexpected_keys) == []
+        assert dst.lin.weight is weight
+        assert weight.device == device
+        assert all(parameter.device == device for parameter in dst.parameters())
+        assert optimizer.param_groups[0]["params"][0] is weight
+        np.testing.assert_array_equal(dst.lin.weight.numpy(), src.lin.weight.numpy())
+        output = dst(torch.ones(2, 4, device=device))
+        assert output.device == device
+
+    def test_no_grad_data_initializer_preserves_frozen_parameter(self, device):
+        parameter = torch.nn.Parameter(torch.ones(4, device=device))
+        parameter.requires_grad_(False)
+        with torch.no_grad():
+            parameter.data.normal_()
+        assert parameter.requires_grad is False
+        assert parameter.grad is None
+
     def test_zero_grad_set_to_none_false_zeroes_on_this_device(self, device):
         """The silent-wrong fix must hold on the accelerator too, not just CPU."""
         with unbridged_grad():

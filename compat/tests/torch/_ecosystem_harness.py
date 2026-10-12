@@ -327,10 +327,17 @@ def _result_from_stdout(stdout, case, python):
     checks the numbers.
     """
     marker = "ECOSYSTEM_RESULT "
+    decoder = json.JSONDecoder()
     for line in stdout.splitlines():
         position = line.find(marker)
         if position != -1:
-            return json.loads(line[position + len(marker):])
+            payload = line[position + len(marker):]
+            # Jittor may emit a runtime log without a preceding newline while
+            # the runner is printing its final marker.  The marker payload is
+            # a complete JSON document; parse its prefix and leave any
+            # same-line diagnostic text outside the result contract.
+            result, _ = decoder.raw_decode(payload)
+            return result
     raise AssertionError(
         "runner failed for {} under {}:\n{}".format(case, python, stdout[-4000:])
     )

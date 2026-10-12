@@ -37,6 +37,11 @@ class TestResultMarkerScan(unittest.TestCase):
         parsed = _result_from_stdout(stdout, "demo", "py")
         self.assertEqual(parsed, self.payload)
 
+    def test_json_payload_before_same_line_runtime_log(self):
+        noisy = self._line() + "[i 1013 device.cc:54] CUDA enabled."
+        parsed = _result_from_stdout(noisy, "demo", "py")
+        self.assertEqual(parsed, self.payload)
+
     def test_a_run_with_no_marker_still_fails(self):
         # The guard must not turn every failure into a pass.
         with self.assertRaises(AssertionError):

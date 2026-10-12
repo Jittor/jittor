@@ -10,6 +10,7 @@
 
 ## 兼容性与功能验证
 
+- [2026-10-13 HF stack 组合验证进展](2026-10-13-hf-stack-validation-progress.md)
 - [2026-10-12 原生 DDP 真实 ResNet 与 Transformer 训练对比](2026-10-12-native-ddp-real-training-comparison.md)
 - [2026-10-12 原生 DDP Transformer 分桶与训练性能核查](2026-10-12-native-ddp-transformer-performance.md)
 - [2026-09-17 Accelerate 训练能力整改与显式支持边界](2026-09-17-accelerate-maturity-repair.md)

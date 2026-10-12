@@ -1,10 +1,12 @@
 # Hugging Face 组合工作流兼容性与性能实验计划
 
-状态：待执行的实验设计；本文没有新增模型实验结果。日期：2026-10-13（Asia/Shanghai）。维护者：cgq / Jittor Torch 兼容层维护者。同步目标为当前分支的 upstream `origin/cgq_transformers`，本轮已 fetch，远端提交为 `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`；同步后源码基线为 `fe6ea642f1286eb8e93a8a27392814e24eb0fab8`，该基线包含远端，保留三个本地提交。工作区原有看板改动和未跟踪文档未作为源码验证结果。复查触发条件：上述库版本、Torch frontend、autograd、RNG、device placement、序列化、AMP 或分布式实现变化。
+状态：增量执行中；已登记的选择集结果见 [2026-10-13 HF stack 验证进展](../results/2026-10-13-hf-stack-validation-progress.md)。日期：2026-10-13（Asia/Shanghai）。维护者：cgq / Jittor Torch 兼容层维护者。同步目标为当前分支的 upstream `origin/cgq_transformers`，本轮已 fetch，远端提交为 `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`；本轮实验启动时源码基线为 `fe4e738338de5e275471da125816968af7d945fc`，修复和结果文档已提交为 `b9bedf636`，远端提交是两者的祖先。工作区仍有其他未提交改动，不能把 dirty tree 当成单一提交基线。工作区原有看板改动和未跟踪文档未作为本轮模型验证结果。复查触发条件：上述库版本、Torch frontend、autograd、RNG、device placement、序列化、AMP 或分布式实现变化。
 
 目标是证明 Transformers、PEFT、Tokenizers、Safetensors、Accelerate 和 FSDP2 在真实组合工作流中可用，并提供与独立 PyTorch 可比较的结果、时间和内存证据。Tokenizer 指 Hugging Face `tokenizers` 及 Transformers 的 tokenizer/processor 交接。FSDP2 是 Torch 分布式 API 的兼容面，不是第七个需要独立版本号的下游包。
 
 本文是实验设计入口，实际整改状态仍只维护在[整改看板](../architecture/refactor-board.md)。实验配置、脚本和结果 JSON 留在 lab；已复现问题按[下游适配流程](../../agent/skills/downstream-library-adaptation/SKILL.md)分流，验收结论写 `refactor-wip/results/`，不把本文变成第二个问题看板。
+
+本轮首批执行状态（均为 tiny/定向证据，不等同于完整组合验收）：`ENV-01/02` 的双解释器、实际 device 和 fallback 断言随 runner 生效；`TOK-02` 的 tokenizer→collator→BatchEncoding 交接在 CPU/CUDA 通过；`SER-01/SER-05` 的有限 dtype、owner placement 和畸形 bytes 拒绝用例通过；`PEF-01` 的 Llama/Qwen 单步 forward/backward 对拍在 CPU/CUDA 通过；`ACC-05` 的混合 RNG fresh-process 续训以及 CPU checkpoint→CUDA model placement 定向回归通过；`INF-01` 的 Transformers GPT-2、Llama、BERT、ViT、T5、Whisper tiny forward/backward 对拍在 CPU `6/6`、CUDA `6/6` 通过。完整 Trainer/PEFT 多步训练、真实 checkpoint、DDP/FSDP2 组合、稳态性能和大分片仍为 `NOT_RUN`，详见结果报告的边界表。
 
 ## 1. 推荐先跑什么
 
@@ -22,7 +24,7 @@
 
 ## 2. 基线、已有证据和不能外推的边界
 
-本轮直接读取两套 venv 的包元数据，得到如下共同基线。原生环境另做了 `import torch` 身份断言，确认来自其 venv 的真实 PyTorch，`torch.version.cuda == '12.4'` 且 CUDA 可用。Jittor 环境本轮检查安装元数据、环境脚本并做CPU结构维护检查，尚未运行模型实验；`ENV-01` 仍必须检查模型进程的实际导入文件与 frontend 归属。
+本轮直接读取两套 venv 的包元数据，得到如下共同基线。原生环境另做了 `import torch` 身份断言，确认来自其 venv 的真实 PyTorch，`torch.version.cuda == '12.4'` 且 CUDA 可用。模型 runner 已进一步在子进程中检查实际导入文件、frontend 归属、device 和 fallback；下表仍是环境入口基线，具体执行证据见结果报告。
 
 | 项目 | Jittor 侧 | PyTorch oracle 侧 | 约束 |
 | --- | --- | --- | --- |
