@@ -4,7 +4,7 @@
 - 日期：2026-10-13（Asia/Shanghai）
 - 维护者：cgq / Jittor Torch 兼容层维护者
 - 实验启动源码基线：`fe4e738338de5e275471da125816968af7d945fc`
-- 本轮修复和结果文档提交：`b9bedf636`
+- 本轮修复和结果文档提交：`2a5b0123a`
 - 目标远端：`origin/cgq_transformers@e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，已确认是当前 `HEAD` 的祖先
 - 工作区：dirty；本报告不把其他优化器、看板和开发文档改动归入本轮实验提交
 - 环境脚本：`env_jittor.sh` SHA-256 `5c31abdf9f8921e66e331dc5b0c0ad1bfe44ce1ce80abc78c0cd9d20dac0daca`；`env_pytorch.sh` SHA-256 `a664bfed00a10840a1134f7e6f4778d9153022fdc4c959bd87f7ca4afbd34d33`

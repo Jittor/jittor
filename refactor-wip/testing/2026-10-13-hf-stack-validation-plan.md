@@ -1,6 +1,6 @@
 # Hugging Face 组合工作流兼容性与性能实验计划
 
-状态：增量执行中；已登记的选择集结果见 [2026-10-13 HF stack 验证进展](../results/2026-10-13-hf-stack-validation-progress.md)。日期：2026-10-13（Asia/Shanghai）。维护者：cgq / Jittor Torch 兼容层维护者。同步目标为当前分支的 upstream `origin/cgq_transformers`，本轮已 fetch，远端提交为 `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`；本轮实验启动时源码基线为 `fe4e738338de5e275471da125816968af7d945fc`，修复和结果文档已提交为 `b9bedf636`，远端提交是两者的祖先。工作区仍有其他未提交改动，不能把 dirty tree 当成单一提交基线。工作区原有看板改动和未跟踪文档未作为本轮模型验证结果。复查触发条件：上述库版本、Torch frontend、autograd、RNG、device placement、序列化、AMP 或分布式实现变化。
+状态：增量执行中；已登记的选择集结果见 [2026-10-13 HF stack 验证进展](../results/2026-10-13-hf-stack-validation-progress.md)。日期：2026-10-13（Asia/Shanghai）。维护者：cgq / Jittor Torch 兼容层维护者。同步目标为当前分支的 upstream `origin/cgq_transformers`，本轮已 fetch，远端提交为 `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`；本轮实验启动时源码基线为 `fe4e738338de5e275471da125816968af7d945fc`，修复和结果文档提交为本轮历史中的 `2a5b0123a`，远端提交是其祖先。工作区仍有其他未提交改动，不能把 dirty tree 当成单一提交基线。工作区原有看板改动和未跟踪文档未作为本轮模型验证结果。复查触发条件：上述库版本、Torch frontend、autograd、RNG、device placement、序列化、AMP 或分布式实现变化。
 
 目标是证明 Transformers、PEFT、Tokenizers、Safetensors、Accelerate 和 FSDP2 在真实组合工作流中可用，并提供与独立 PyTorch 可比较的结果、时间和内存证据。Tokenizer 指 Hugging Face `tokenizers` 及 Transformers 的 tokenizer/processor 交接。FSDP2 是 Torch 分布式 API 的兼容面，不是第七个需要独立版本号的下游包。
 
