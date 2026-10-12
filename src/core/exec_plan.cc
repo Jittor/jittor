@@ -400,8 +400,7 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
                     auto fopid = father[opid];
                     if (fopid == root)
                         deps[i]++;
-                    // Control inputs order segments, but their producers are not data to recompute.
-                    else if (plan.op_inputs[k].second >= 0 && shared_id[opid] != root) {
+                    else if (shared_id[opid] != root) {
                         auto& vf = var_fused[vi];
                         // var_fused = 1 cannot share input op
                         // TODO: check this input op's output var all can be shared
@@ -424,7 +423,7 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
                 int id = sharegraph[i];
                 for (int k = in_begin[id]; k < in_begin[id + 1]; k++) {
                     int vi = in_var[k];
-                    if (vi < 0 || plan.op_inputs[k].second < 0) continue;
+                    if (vi < 0) continue;
                     if (var_fused[vi] == 1)
                         continue;
                     // if weak share, cut off
@@ -465,7 +464,7 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
                 int id = sharegraph_q[i];
                 for (int k = in_begin[id]; k < in_begin[id + 1]; k++) {
                     int vi = in_var[k];
-                    if (vi < 0 || plan.op_inputs[k].second < 0) continue;
+                    if (vi < 0) continue;
                     if (var_fused[vi] == 1)
                         continue;
                     // Balanced with the increment above: both skip a boundary.
