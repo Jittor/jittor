@@ -405,10 +405,16 @@ def placement_scope_like(x):
     if backend < 0 or jt.core._current_tensor_placement() is not None:
         yield
         return
-    token = jt.core._set_tensor_placement(backend, max(ori_int(x.device_id), 0))
+    device = max(ori_int(x.device_id), 0)
+    token = jt.core._set_tensor_placement(backend, device)
+    # The request alone reaches only bindings inside a frontend scope; a
+    # native constructor (`zeros` is `array(0).broadcast`) stamps the
+    # construction placement, so set that too.
+    previous = jt.core._set_construction_placement(backend, device)
     try:
         yield
     finally:
+        jt.core._restore_construction_placement(previous)
         jt.core._reset_tensor_placement(token)
 
 

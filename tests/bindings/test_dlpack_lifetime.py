@@ -318,7 +318,8 @@ def test_valid_flat_subspan_imports_only_that_span(versioned):
     [
         ("shape", -1, "negative extent"),
         ("ndim", -1, r"ndim=\s*-1\s+is out of range"),
-        ("ndim", 11, r"ndim=\s*11\s+is out of range"),
+        # One past NanoVector::max_tensor_rank (32).
+        ("ndim", 33, r"ndim=\s*33\s+is out of range"),
         ("data", None, "non-empty tensor with a null data pointer"),
     ],
 )

@@ -169,7 +169,9 @@ class BinaryOpCases:
         c = a % b
         da, db = jt.grad(c, [a, b])
         np.testing.assert_allclose(da.data, 1)
-        np.testing.assert_allclose(db.data, -np.floor(a.data/b.data))
+        # The quotient is the corrected one the forward uses (Python's and
+        # numpy's floor division), not floor() of the rounded a / b.
+        np.testing.assert_allclose(db.data, -np.floor_divide(a.data, b.data))
 
     def test_mod_negtive(self):
         a = jt.random((100,)) - 0.5

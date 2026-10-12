@@ -45,8 +45,12 @@ def _fused_sgd_cuda(entries, lr, momentum, weight_decay, dampening, nesterov, st
     reads the rate on the device (see `accepts_live_lr`).
 
     ``fused_sgd`` (src/ops/composite/fused_sgd_op.cc) updates the parameters
-    and velocities in place: its outputs share the inputs' storage. The
-    velocity is handed back as the same Var, so nothing rebinds it.
+    and velocities in place: its outputs share the inputs' storage. Without
+    momentum the kernel never touches the velocity, which is handed back as
+    the same Var so nothing rebinds it. With momentum the op's velocity output
+    is handed back: sharing storage does not make the old Var depend on the
+    op, so a read of the momentum buffer before anything read the parameter
+    would see the buffer as it was before the step.
 
     ``step`` 1 marks every velocity in `entries` as on its first update: it is
     seeded from the undampened gradient, as PyTorch does, rather than going
@@ -59,7 +63,8 @@ def _fused_sgd_cuda(entries, lr, momentum, weight_decay, dampening, nesterov, st
     outs = jt.fused_sgd(params, vels, grads, 0.0 if live else float(lr),
                         float(momentum), float(weight_decay), float(dampening),
                         bool(nesterov), False, bool(step <= 1), live)
-    return list(zip(outs[:len(entries)], vels))
+    plain = momentum == 0 and dampening == 0 and not nesterov
+    return list(zip(outs[:len(entries)], vels if plain else outs[len(entries):]))
 
 
 #: Takes the learning rate as a device Var as well as a number.

@@ -170,7 +170,9 @@ class SGD(Optimizer):
             # bias-correction counter (Optimizer._advance_step_count). Kept for
             # state compatibility; whether a buffer's update is its first is
             # decided per parameter by `initialized` below, not by this count.
-            self._advance_step_count(pg)
+            # Nothing reads it into the update, so unlike
+            # `_advance_step_count` it does not refuse step capture.
+            pg["n_step"] = int(pg.get("n_step", 0)) + 1
             initialized = momentum_initialized_flags(pg)
             # get arguments from each param_groups
             lr = pg.get("lr", self.lr)

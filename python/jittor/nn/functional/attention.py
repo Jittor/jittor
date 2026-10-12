@@ -48,6 +48,20 @@ def _product(a, b, trans_a=False, trans_b=False):
     )
 
 
+def _softmax_precision(x):
+    """``x`` at least float32: half precision widens, float64 keeps its own.
+
+    The softmax and its gradient row sums are what float16 cannot hold, so
+    they are taken in float32. That used to be an unconditional
+    ``.float32()``, which narrowed float64 attention to float32: its forward
+    agreed with a float64 reference to only ~1e-7, and gradcheck, which
+    differentiates numerically at float64 step sizes, failed outright.
+    """
+    if _jittor_dtype_name(x.dtype) in ("float16", "bfloat16"):
+        return x.float32()
+    return x
+
+
 class _MemoryEfficientAttention(jt.Function):
     """Attention whose backward recomputes the probabilities.
 
@@ -79,9 +93,9 @@ class _MemoryEfficientAttention(jt.Function):
         return out
 
     def _probabilities(self, query, key):
-        """Softmax over keys, in float32."""
+        """Softmax over keys, in float32 or wider."""
         scores = _product(query * self.scale, key, trans_b=True)
-        scores = _attention_bias(scores.float32(), self.attn_mask, self.is_causal)
+        scores = _attention_bias(_softmax_precision(scores), self.attn_mask, self.is_causal)
         top = scores.max([-1], keepdims=True)
         top = jt.ternary(jt.isinf(top), jt.zeros_like(top), top)
         weights = (scores - top).exp()
@@ -94,8 +108,8 @@ class _MemoryEfficientAttention(jt.Function):
         probabilities = self._probabilities(query, key)
         grad_out = grad_out.cast(value.dtype)
         grad_value = _product(probabilities.cast(value.dtype), grad_out, trans_a=True)
-        grad_prob = _product(grad_out, value, trans_b=True).float32()
-        row = (grad_out.float32() * out.float32()).sum([-1], keepdims=True)
+        grad_prob = _softmax_precision(_product(grad_out, value, trans_b=True))
+        row = (_softmax_precision(grad_out) * _softmax_precision(out)).sum([-1], keepdims=True)
         grad_scores = (probabilities * (grad_prob - row)).cast(query.dtype)
         grad_query = _product(grad_scores, key) * self.scale
         grad_key = _product(grad_scores, query * self.scale, trans_a=True)
