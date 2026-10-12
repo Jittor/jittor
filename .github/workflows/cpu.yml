@@ -148,10 +148,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       # The job runs as root in the container and the workspace belongs to the
-      # runner user, so git refuses the repository as unsafe -- and
-      # `_git_output` reports that only as "cannot resolve the current commit".
+      # runner user, so git refuses the repository as unsafe. System-wide, not
+      # --global: nox gives every session its own HOME (noxfile `_session_env`),
+      # so asv's own git calls never read a global config, and failed with
+      # `git rev-parse <sha>^{commit}` exit 128 while nox's had succeeded.
       - name: Trust the checkout
-        run: git config --global --add safe.directory "${GITHUB_WORKSPACE}"
+        run: git config --system --add safe.directory "${GITHUB_WORKSPACE}"
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
