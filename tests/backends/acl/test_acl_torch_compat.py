@@ -811,6 +811,62 @@ class TestACLTorchCompat(unittest.TestCase):
         np.testing.assert_array_equal(bf_values[1], expected_gradient_bf)
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_silu_float16_forward_backward_stays_on_acl(self):
+        from jittor._runtime.fallback import forbid_backend_fallbacks
+
+        # Half-precision inputs, including saturated sigmoid tails, zero,
+        # and SiLU's negative-slope region. The oracle evaluates the function
+        # and its derivative independently in NumPy, rounding only the result.
+        source_np = np.asarray(
+            [-12.0, -8.0, -4.0, -1.25, -0.125, 0.0,
+             0.125, 0.75, 3.5, 5.9375, 8.0, 12.0],
+            dtype=np.float16,
+        ).reshape(3, 4)
+        cotangent_np = np.asarray(
+            [0.25, -0.5, 1.5, 2.0, -1.0, 0.75,
+             -0.25, 1.25, 0.5, -1.5, 2.0, -0.75],
+            dtype=np.float16,
+        ).reshape(3, 4)
+        source_reference = source_np.astype(np.float32)
+        sigmoid = 1.0 / (1.0 + np.exp(-source_reference))
+        expected_output = (source_reference * sigmoid).astype(np.float16)
+        expected_gradient = (
+            cotangent_np.astype(np.float32)
+            * sigmoid * (1.0 + source_reference * (1.0 - sigmoid))
+        ).astype(np.float16)
+
+        acl_silu = registered_kernel("nn.silu", "acl")
+        self.assertIsNotNone(acl_silu)
+        dispatches = []
+
+        def record_silu(*args, **kwargs):
+            result = acl_silu(*args, **kwargs)
+            dispatches.append(result is not None)
+            return result
+
+        fallback_before = jt.core.backend_fallback_count()
+        with forbid_backend_fallbacks(), override_kernel("nn.silu", "acl", record_silu):
+            source = torch.tensor(
+                source_np, dtype=torch.float16, device="npu", requires_grad=True)
+            cotangent = torch.tensor(cotangent_np, dtype=torch.float16, device="npu")
+            with torch.no_grad():
+                inference = torch.nn.functional.silu(source)
+            output = torch.nn.functional.silu(source)
+            gradient = torch.autograd.grad((output * cotangent).sum(), source)[0]
+            for value in (inference, output, gradient):
+                self.assertIs(type(value), torch.Tensor)
+                self.assertEqual(value.dtype, torch.float16)
+                self.assertEqual(tuple(value.shape), source_np.shape)
+            candidate = _fetch_acl(self, [inference, output, gradient])
+        self.assertEqual(dispatches, [True, True])
+        self.assertEqual(jt.core.backend_fallback_count(), fallback_before)
+        for actual, expected in zip(
+            candidate, [expected_output, expected_output, expected_gradient]
+        ):
+            self.assertTrue(np.isfinite(actual).all())
+            np.testing.assert_allclose(actual, expected, rtol=2e-3, atol=2e-3)
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_sdpa_forward_backward_stays_on_acl(self):
         rng = np.random.RandomState(20260830)
         shape = (2, 1, 64, 32)

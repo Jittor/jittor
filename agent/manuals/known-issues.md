@@ -599,9 +599,9 @@ workaround.
   shape set; widen matmul through `dnnl::matmul` if fp64/fp16/bf16 are wanted;
   delete the entry when both are settled.
 
-## KI-BACKEND-012: the ACL descriptor cache is not wired into any runner, and the ACL launcher and attribute migration never ran on an Ascend device
+## KI-BACKEND-012: the ACL data-channel descriptor cache and full 910B3 launcher acceptance remain unverified
 
-- Severity: Medium (unvalidated backend paths; host-only evidence)
+- Severity: Medium (full backend hardware acceptance remains incomplete)
 - Status: Open
 - Owner: ACL backend maintainers
 - Symptom: every `executeOp` owner goes through the shared
@@ -611,8 +611,11 @@ workaround.
   through the versioned data channel instead of generated source. The descriptor
   identity/cache shell in `acl_data_channel.h`/`acl_data.py` is not used by any
   runner yet, so descriptors are still rebuilt per call; pool descriptors keep
-  their own lifetime. All of this has host-only evidence (stub-SDK syntax checks,
-  CPU-compiled contract probes); none of it has executed on a 910B3.
+  their own lifetime. The full acceptance run still needs 910B3 evidence.
+  The narrower 310P3 FP16 inference subset, shared launch path and attributes
+  have device evidence in the
+  [Qwen3 performance report](../../docs/results/2026-10-12-qwen3-ascend310p-performance.md);
+  this does not validate the data-channel cache or close the 910B3 requirement.
 - Workaround: validate on hardware with `backend_fallback=error` and the
   fallback-count check before relying on an ACL operator.
 - Evidence: [`docs/development/acl-backend-contracts.md`](../../docs/development/acl-backend-contracts.md)
@@ -1009,7 +1012,11 @@ workaround.
   `kv_cache.py` (paged attention, block tables) is a different feature
   this workload's plain dynamic cache never reaches. There is no
   ACL-scoped fix available for this cause; a fix would mean changing the
-  core indexing path every backend shares.
+  core indexing path every backend shares. The
+  [310P3 Qwen3 report](../../docs/results/2026-10-12-qwen3-ascend310p-performance.md)
+  validates native frontend indexing/cat dispatch, explicit packed weights and
+  attention changes for a separate FP16 workload. That measured speedup does
+  not close this entry's broader 910B3 workload gaps.
   `bert_base_train`'s gap is similarly not a dispatch bug: an aclprof
   capture shows `MatMulV2` at 42.4% of device time (the
   expected dominant cost for a transformer) and `DSARandomUniform` --

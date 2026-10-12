@@ -189,9 +189,31 @@ def floor_int_acl(x):
     return FloorIntACL()(x)
 
 
+def _static_basic_view_index(index):
+    """Indices the native storage view can resolve without tensor values."""
+    items = index if isinstance(index, tuple) else (index,)
+    for item in items:
+        if item is None or item is Ellipsis or type(item) is int:
+            continue
+        if not isinstance(item, slice):
+            return False
+        if any(part is not None and type(part) is not int
+               for part in (item.start, item.stop, item.step)):
+            return False
+        if item.step is not None and item.step <= 0:
+            return False
+    return True
+
+
 def getitem_acl(x, slices, return_x=None):
     if return_x is not None:
         return None
+    if jt.flags.no_grad and _static_basic_view_index(slices):
+        # GetitemOp already carries positive strides and the storage offset.
+        # The public indexing owner records writeback to the base afterwards.
+        # Inference needs neither a SliceV2 copy nor a generated gradient;
+        # training keeps the existing Concat gradient for last-axis slices.
+        return jt.core.ops.getitem(x, slices)
     # ZeRO unflattens one dense 1-D parameter buffer with unit-stride slices.
     # The native getitem represents those slices as storage views, while the
     # ACL SliceV2 lowering materializes every result.  Materializing hundreds

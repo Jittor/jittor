@@ -227,21 +227,6 @@ def _is_index(value):
     return isinstance(value, numbers.Integral) and not isinstance(value, bool)
 
 
-def _is_meta_device_request(value):
-    """Whether a ``device=`` argument names the meta device.
-
-    Jittor has no meta backend; callers that honour the request must do so
-    through the observable-meta contract (see ``device.__enter__``), not by
-    silently picking a real device.
-    """
-    if value is None:
-        return False
-    name = getattr(value, "type", None)
-    if name is None:
-        name = str(value).split(":", 1)[0]
-    return name == "meta"
-
-
 def _check_index(index):
     """torch rejects a negative device index rather than storing it."""
     if index is None:

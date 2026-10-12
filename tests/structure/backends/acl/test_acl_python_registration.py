@@ -155,13 +155,30 @@ def test_acl_rejection_does_not_reenter_native_dispatch(providers):
     assert providers.tensor._roll_acl(_Tensor(dtype="float64"), 1) is None
     assert providers.tensor._split_acl(x, 0) is None
     assert providers.neural.resize_acl(x, (2, 2), mode="bilinear") is None
-    assert providers.neural._silu_acl(_Tensor(dtype="float16")) is None
+    assert providers.neural._silu_acl(_Tensor(dtype="float64")) is None
     assert providers.neural.softmax_acl(x, zero_all_neg_inf=True) is None
     assert providers.normalization.layer_norm_acl(x, (4,), 1, 0, 1e-5) is None
     assert providers.calls == []
     providers.install.install()
     assert providers.dispatch.select_kernel("nn.softmax", x, dim=-1) is providers.neural.softmax_acl
     assert providers.dispatch.select_kernel("nn.softmax", x, dim=-1, zero_all_neg_inf=True) is None
+
+
+@pytest.mark.parametrize("dtype,runner", [
+    ("float16", "SiLUACL"),
+    ("float32", "SiLUACL"),
+    ("bfloat16", "SwishACL"),
+])
+@pytest.mark.parametrize("no_grad", [0, 1])
+def test_acl_silu_routes_supported_dtypes_with_and_without_grad(providers, dtype, runner, no_grad, monkeypatch):
+    monkeypatch.setattr(providers.native.flags, "no_grad", no_grad)
+    source = _Tensor(dtype=dtype)
+    result = providers.neural._silu_acl(source)
+    assert result is not None
+    assert providers.calls == [
+        (runner, "construct", (), {}),
+        (runner, "execute", (source,), {}),
+    ]
 
 
 def test_acl_setitem_returns_result_and_arg_reduce_uses_unwrapped_kernel(providers):

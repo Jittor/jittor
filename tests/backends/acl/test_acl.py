@@ -1480,6 +1480,87 @@ class TestACL(unittest.TestCase):
             self.assertIsNone(backend_hooks.acl_scaled_dot_product_attention(q.float16(), k.float16(), v.float16(), attn_mask=jt.array(additive_np), enable_gqa=True))
         self.assertIsNone(backend_hooks.acl_scaled_dot_product_attention(q, k, v, dropout_p=0.1, enable_gqa=True))
 
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_310p_masked_incremental_attention_gqa_and_broadcast(self):
+        from jittor._runtime.fallback import forbid_backend_fallbacks
+        from jittor.backends.acl.kernels._soc import soc_name
+
+        if not soc_name().startswith("Ascend310P") or _acl_kernel_available("FlashAttention"):
+            self.skipTest("masked FP16 incremental attention route is scoped to Ascend310P without FlashAttentionScore")
+
+        def reference(query, key, value, keep):
+            batch, heads, _, width = query.shape
+            length = key.shape[-2]
+            group = heads // key.shape[1]
+            keys = np.repeat(key.astype(np.float64), group, axis=1)
+            values = np.repeat(value.astype(np.float64), group, axis=1)
+            scores = np.matmul(query.astype(np.float64), keys.swapaxes(-1, -2))
+            scores *= width ** -0.5
+            keep = (np.ones((batch, 1, 1, length), dtype=bool) if keep is None
+                    else np.broadcast_to(keep, (batch, 1, 1, length)))
+            any_kept = keep.any(axis=-1, keepdims=True)
+            scores = np.where(keep, scores, -np.inf)
+            maxima = np.where(any_kept, scores.max(axis=-1, keepdims=True), 0.0)
+            weights = np.where(keep, np.exp(scores - maxima), 0.0)
+            denominator = weights.sum(axis=-1, keepdims=True)
+            weights = np.divide(weights, denominator, out=np.zeros_like(weights),
+                                where=denominator != 0)
+            return np.matmul(weights, values), ~any_kept.reshape(batch)
+
+        rng = np.random.RandomState(20261012)
+        fallback_before = jt.core.backend_fallback_count()
+        with jt.no_grad(), forbid_backend_fallbacks():
+            for batch in (1, 2):
+                for length in (64, 502):
+                    q_np = (rng.randn(batch, 16, 1, 128) * 0.2).astype(np.float16)
+                    k_np = (rng.randn(batch, 8, length, 128) * 0.2).astype(np.float16)
+                    v_np = (rng.randn(batch, 8, length, 128) * 0.2).astype(np.float16)
+                    q, k, v = (jt.array(array) for array in (q_np, k_np, v_np))
+                    padding = np.zeros((batch, 1, 1, length), dtype=bool)
+                    for row in range(batch):
+                        padding[row, :, :, :length // 2 + row * 7] = True
+                    cases = [
+                        ("unmasked_before", None),
+                        ("per_batch_padding", padding),
+                        ("broadcast_batch_4d", padding[:1]),
+                        ("broadcast_batch_2d", padding[0, 0]),
+                        ("broadcast_keep_all", np.ones((1, 1), dtype=bool)),
+                        ("all_masked", np.zeros_like(padding)),
+                        ("broadcast_all_masked", np.zeros((1, 1, 1, 1), dtype=bool)),
+                    ]
+                    if batch == 2:
+                        mixed = padding.copy()
+                        mixed[1] = False
+                        cases.extend([
+                            ("one_batch_masked", mixed),
+                            ("broadcast_keys_per_batch", np.array([True, False]).reshape(2, 1, 1, 1)),
+                        ])
+                    cases.append(("unmasked_after", None))
+                    unmasked_before = None
+                    for name, keep in cases:
+                        with self.subTest(batch=batch, length=length, mask=name):
+                            mask = None if keep is None else jt.array(keep, dtype="bool")
+                            output = backend_hooks.acl_scaled_dot_product_attention(
+                                q, k, v, attn_mask=mask, enable_gqa=True)
+                            self.assertIsNotNone(output)
+                            self.assertEqual(
+                                backend_hooks.acl_scaled_dot_product_attention.backend_name,
+                                "acl_incre_flash_attention_v4")
+                            self.assertEqual(str(output.dtype), "float16")
+                            _assert_acl_device(self, output)
+                            actual = output.numpy()
+                            expected, all_masked = reference(q_np, k_np, v_np, keep)
+                            self.assertEqual(actual.shape, q_np.shape)
+                            self.assertTrue(np.isfinite(actual).all())
+                            np.testing.assert_allclose(actual, expected, rtol=3e-3, atol=3e-4)
+                            np.testing.assert_array_equal(
+                                actual[all_masked], np.zeros_like(actual[all_masked]))
+                            if name == "unmasked_before":
+                                unmasked_before = actual.copy()
+                            elif name == "unmasked_after":
+                                np.testing.assert_array_equal(actual, unmasked_before)
+        self.assertEqual(jt.core.backend_fallback_count() - fallback_before, 0)
+
     @jt.flag_scope(use_acl=1)
     def test_max(self):
         x = jt.rand(3, 3)

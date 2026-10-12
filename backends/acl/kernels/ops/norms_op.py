@@ -16,6 +16,7 @@ from collections.abc import Sequence, Iterable
 
 from ._code import acl_code as norms_cmd
 from ._code import check_acl_float_dtype
+from .._soc import soc_name
 
 
 class BatchNormACL:
@@ -95,7 +96,17 @@ class RmsNormACL(jt.Function):
         ]
         result = norms_cmd("RmsNorm", inputs=[x, weight], outputs=outputs,
                            attributes={"eps": eps})
-        self.rstd = result[1]
+        if not jt.flags.no_grad and soc_name().startswith("Ascend310P"):
+            # This SoC can return correct y with a partly zero vendor rstd.
+            # Preserve that output's lifetime, but obtain the backward's
+            # statistics independently in FP32 on the device.
+            self._vendor_rstd = result[1]
+            with jt.no_grad(), jt.flag_scope(amp_reg=0):
+                wide = x.float32()
+                self.rstd = jt.rsqrt(
+                    (wide * wide).mean(-1, keepdims=True) + float(np.float32(eps)))
+        else:
+            self.rstd = result[1]
         return result[0]
 
     def grad(self, grad_output):

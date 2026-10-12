@@ -538,18 +538,43 @@ void* allocate_memory(int device, BackendMemoryKind kind, size_t size) {
 void free_memory(int device, BackendMemoryKind kind, void* pointer) {
     if (!pointer) return;
     auto& owner = state();
+    std::vector<int> users{device};
     {
         std::lock_guard<std::recursive_mutex> guard(owner.mutex);
         auto found = owner.memory.find(pointer);
         USER_CHECK(found != owner.memory.end() && found->second.device == device && found->second.kind == kind)
             << "ACL allocation does not belong to this device and memory kind";
         if (owner.shutdown && !owner.drained) return;
+        // Pinned host storage can be the endpoint of copies on any device,
+        // independently of which device owned its allocation request.
+        if (kind == BackendMemoryKind::Pinned)
+            for (int touched : owner.touched)
+                if (touched != device) users.push_back(touched);
     }
     int32_t previous = -1;
     check_acl(aclrtGetDevice(&previous), "aclrtGetDevice before free");
-    if (previous != device) check_acl(aclrtSetDevice(device), "aclrtSetDevice before free");
-    auto status = kind == BackendMemoryKind::Pinned ? aclrtFreeHost(pointer) : aclrtFree(pointer);
-    if (previous >= 0 && previous != device) report_acl(aclrtSetDevice(previous), "restore ACL device after free");
+    // Returning a block to the caching allocator is stream-ordered reuse;
+    // releasing its underlying allocation is different. ACL's raw free does
+    // not wait for queued kernels or copies. Pool trimming, GC and allocation
+    // retries can reach here while those tasks still use the allocation.
+    // Synchronize only at this SDK release boundary, including pinned sources
+    // of asynchronous copies, before making the address inaccessible.
+    int32_t selected = previous;
+    aclError sync_status = ACL_SUCCESS;
+    for (int user : users) {
+        if (selected != user) {
+            sync_status = aclrtSetDevice(user);
+            if (sync_status != ACL_SUCCESS) break;
+            selected = user;
+        }
+        sync_status = aclrtSynchronizeDevice();
+        if (sync_status != ACL_SUCCESS) break;
+    }
+    auto status = sync_status == ACL_SUCCESS
+        ? (kind == BackendMemoryKind::Pinned ? aclrtFreeHost(pointer) : aclrtFree(pointer))
+        : sync_status;
+    if (previous >= 0 && previous != selected) report_acl(aclrtSetDevice(previous), "restore ACL device after free");
+    check_acl(sync_status, "synchronize ACL memory before free");
     check_acl(status, "free ACL memory");
     {
         std::lock_guard<std::recursive_mutex> guard(owner.mutex);

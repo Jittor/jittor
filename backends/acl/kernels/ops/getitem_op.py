@@ -75,7 +75,9 @@ def basic_slice_acl(x, slices):
         start == 0 and stop == int(size) and step == 1
         for start, stop, step, size in zip(begins, ends, steps, x.shape)
     ):
-        return x.clone()
+        # The independent Torch Tensor overrides clone() to copy storage.
+        # A full slice needs the native identity view and its identity gradient.
+        return jt.core.ops.clone(x)
 
     forward_attr = code_program(
         [

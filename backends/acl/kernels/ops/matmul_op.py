@@ -96,4 +96,11 @@ class MatmulACL:
         return mapped_matmul(x1, x2, False, self.trans_x2)
 
 
-__all__ = ["MatmulACL", "align_operands", "mapped_matmul"]
+class PackedMatmulACL:
+    """Apply an explicitly packed FP16 weight to an activation's final axis."""
+
+    def __call__(self, x, packed_weight, in_features, out_features):
+        return jt.core.ops.mapped_packed_matmul(x, packed_weight, in_features, out_features)
+
+
+__all__ = ["MatmulACL", "PackedMatmulACL", "align_operands", "mapped_matmul"]

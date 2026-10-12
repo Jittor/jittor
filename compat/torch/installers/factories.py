@@ -58,13 +58,26 @@ _EMPTY_LIKE_FIDELITY_DETAIL = (
 )
 
 
+def _is_meta_device_request(value):
+    """Recognize factories that must apply the observable-meta contract.
+
+    Jittor has no meta backend. The factory allocates host storage and marks
+    the result, matching ``with torch.device("meta")``.
+    """
+    if value is None:
+        return False
+    name = getattr(value, "type", None)
+    if name is None:
+        name = str(value).split(":", 1)[0]
+    return name == "meta"
+
+
 def _invoke_factory(name, args, kwargs):
     context = get_install_context(jt)
     implementation = context.state.get("factory_implementations", {}).get(name)
     if implementation is None:
         raise RuntimeError("torch.%s is not installed" % name)
     from ..frontend import tensor_frontend
-    from ..types import _is_meta_device_request
     like = args[0] if args and (name.endswith("_like") or name in _TENSOR_FIRST_ARGUMENT) else None
     requested = kwargs.get("device")
     meta = _is_meta_device_request(requested)
