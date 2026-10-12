@@ -78,6 +78,15 @@ def install_phase_trace(worker_wrapper):
     runner.prepare_inputs = timed("prepare_inputs", original_prepare_inputs)
     runner.prepare_attn = timed("prepare_attn", runner.prepare_attn)
     original_forward = runner.model.forward
+    if os.environ.get("JT_CPROFILE_FORWARD") == "1":
+        import cProfile
+        forward_profiler = cProfile.Profile()
+
+        def profiled_forward(*args, __original=original_forward, **kwargs):
+            return forward_profiler.runcall(__original, *args, **kwargs)
+
+        state["forward_profiler"] = forward_profiler
+        original_forward = profiled_forward
     runner.model.forward = timed("model_forward", original_forward)
     original_sample = runner.sample_tokens
     if os.environ.get("JT_CPROFILE_SAMPLE") == "1":
@@ -251,14 +260,16 @@ def phase_trace(worker_wrapper):
         if current != first:
             changed.append({"step": index, "changed_entries": sum(a != b for a, b in zip(first, current)),
                             "count": len(current)})
-    sample_profile = None
-    if state.get("sample_profiler") is not None:
+    def stats_for(name):
+        profiler = state.get(name)
+        if profiler is None:
+            return None
         import io
         import pstats
         stream = io.StringIO()
-        pstats.Stats(state["sample_profiler"], stream=stream).sort_stats(
+        pstats.Stats(profiler, stream=stream).sort_stats(
             "cumtime").print_stats(80)
-        sample_profile = stream.getvalue()
+        return stream.getvalue()
     return {"rank": worker_wrapper.worker.rank,
             "timings_ms": {key: list(state[key]) for key in (
                 "prepare_inputs", "prepare_attn", "model_forward",
@@ -270,7 +281,8 @@ def phase_trace(worker_wrapper):
             "prefill_profile": list(state["prefill_profile"]),
             "module_timings_ms": dict(getattr(
                 worker_wrapper.worker.model_runner, "_jt_module_trace", {})),
-            "sample_profile": sample_profile,
+            "sample_profile": stats_for("sample_profiler"),
+            "forward_profile": stats_for("forward_profiler"),
             "parameter_count": len(first), "parameter_changes": changed}
 
 
@@ -301,6 +313,63 @@ def attention_trace(worker_wrapper):
     return {"rank": worker_wrapper.worker.rank,
             "calls": 0 if state is None else state["calls"],
             "fused": 0 if state is None else state["fused"]}
+
+
+def install_prefill_attention_bypass(worker_wrapper):
+    """Diagnostic only: zero attention output and skip cache updates.
+
+    The caller must request exactly one output token. Decode after this
+    intervention would use an invalid KV cache and must never be measured.
+    """
+    import importlib
+    import torch
+
+    impl = importlib.import_module(
+        "vllm.v1.attention.backends.flash_attn").FlashAttentionImpl
+    if getattr(impl, "_jt_prefill_bypass", None) is not None:
+        raise RuntimeError("prefill attention bypass was already installed")
+    original_forward = impl.forward
+    state = {"forward_calls": 0, "cache_update_calls": 0}
+    code_zero = (os.environ.get("JT_PREFILL_BYPASS_ZERO_CODE") == "1"
+                 and hasattr(torch, "_torch_compat_install_context"))
+
+    def bypass_forward(self, layer, query, key, value, kv_cache,
+                       attn_metadata, output, output_scale=None,
+                       output_block_scale=None):
+        if attn_metadata is None or int(attn_metadata.num_actual_tokens) <= 1:
+            return original_forward(self, layer, query, key, value, kv_cache,
+                                    attn_metadata, output, output_scale,
+                                    output_block_scale)
+        state["forward_calls"] += 1
+        if code_zero:
+            import jittor as jt
+            jt.code(inputs=[], outputs=[output], cuda_src=r"""
+                __global__ static void zero_output(out0_type* dst, int n) {
+                    int i = blockIdx.x * blockDim.x + threadIdx.x;
+                    if (i < n) dst[i] = out0_type(0);
+                }
+                zero_output<<<(out0->num + 255) / 256, 256>>>(out0_p, out0->num);
+                CHECK(0 == cudaGetLastError());
+            """)
+            return output
+        return output.fill_(0)
+
+    def bypass_update(self, layer, key, value, kv_cache, slot_mapping):
+        state["cache_update_calls"] += 1
+        return None
+
+    impl.forward = bypass_forward
+    impl.do_kv_cache_update = bypass_update
+    impl._jt_prefill_bypass = state
+    return {"rank": worker_wrapper.worker.rank, "installed": True}
+
+
+def prefill_attention_bypass_state(worker_wrapper):
+    import importlib
+    impl = importlib.import_module(
+        "vllm.v1.attention.backends.flash_attn").FlashAttentionImpl
+    return {"rank": worker_wrapper.worker.rank,
+            **dict(getattr(impl, "_jt_prefill_bypass", {}))}
 
 
 def install_collective_trace(worker_wrapper):

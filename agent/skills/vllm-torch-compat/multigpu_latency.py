@@ -62,8 +62,10 @@ def main():
         os.environ.setdefault('JT_AUTO_GRAPH_REPLAY', '0')
     if min(args.batches + [args.repetitions, args.warmups, args.input_tokens]) < 1:
         parser.error('batch sizes, repetitions, warmups and input tokens must be positive')
-    if args.output_tokens < 2:
-        parser.error('at least two output tokens are required for ITL')
+    if args.output_tokens < 1:
+        parser.error('at least one output token is required')
+    if os.environ.get('JT_PREFILL_ATTENTION_BYPASS') == '1' and args.output_tokens != 1:
+        parser.error('attention bypass requires exactly one output token; decode needs a valid KV cache')
     if args.tensor_parallel_size < 1:
         parser.error('tensor parallel size must be positive')
     path = Path(args.output)
@@ -71,6 +73,8 @@ def main():
         parser.error('output already exists; choose a new path to preserve evidence')
     path.parent.mkdir(parents=True, exist_ok=True)
     report = dict(status='running', backend=args.backend, arguments=vars(args),
+                  prefill_attention_bypass=os.environ.get('JT_PREFILL_ATTENTION_BYPASS') == '1',
+                  prefill_bypass_zero_code=os.environ.get('JT_PREFILL_BYPASS_ZERO_CODE') == '1',
                   scope='offline engine.step token delivery; not HTTP or isolated kernel timing',
                   script_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                   warmups=[], measurements=[], summary=[])
@@ -107,7 +111,9 @@ def main():
         from multigpu_engine import (isolated_workers, placement, shutdown_engine,
                                      install_phase_trace, phase_trace,
                                      install_attention_trace, attention_trace,
-                                     install_collective_trace, collective_trace)
+                                     install_collective_trace, collective_trace,
+                                     install_prefill_attention_bypass,
+                                     prefill_attention_bypass_state)
         shutdown = shutdown_engine
         report.update(default_device=str(torch.get_default_device()),
                       cuda_visible_devices=os.environ.get('CUDA_VISIBLE_DEVICES'),
@@ -125,11 +131,15 @@ def main():
                        max_num_seqs=max(args.batches), gpu_memory_utilization=.35,
                        attention_config={'backend': 'FLASH_ATTN'})
         if use_cuda_graph:
+            graph_mode = os.environ.get(
+                'JITTOR_VLLM_CUDAGRAPH_MODE', 'FULL_DECODE_ONLY')
+            if graph_mode not in ('FULL_DECODE_ONLY', 'FULL'):
+                parser.error('unsupported diagnostic CUDA Graph mode: ' + graph_mode)
             capture_sizes = sorted({int(value) for value in os.environ.get(
                 'JITTOR_VLLM_CUDAGRAPH_SIZES', '1').split(',') if value.strip()})
             options['compilation_config'] = {
                 'mode': 0,
-                'cudagraph_mode': 'FULL_DECODE_ONLY',
+                'cudagraph_mode': graph_mode,
                 'cudagraph_capture_sizes': capture_sizes,
                 'cudagraph_num_of_warmups': 2,
             }
@@ -150,6 +160,9 @@ def main():
         if os.environ.get('JT_PHASE_TRACE') == '1':
             report['phase_trace_install'] = executor.collective_rpc(
                 install_phase_trace, timeout=120)
+        if os.environ.get('JT_PREFILL_ATTENTION_BYPASS') == '1':
+            report['prefill_attention_bypass_install'] = executor.collective_rpc(
+                install_prefill_attention_bypass, timeout=120)
         if os.environ.get('JT_ATTENTION_TRACE') == '1':
             report['attention_trace_install'] = executor.collective_rpc(
                 install_attention_trace, timeout=120)
@@ -239,7 +252,9 @@ def main():
                 batch=batch, repetitions=args.repetitions,
                 batch_seconds=distribution([r['seconds'] for r in samples]),
                 ttft_seconds=distribution([v['ttft_seconds'] for r in samples for v in r['outputs']]),
-                itl_seconds=distribution([t for r in samples for v in r['outputs'] for t in v['itl_seconds']]),
+                itl_seconds=(distribution([t for r in samples for v in r['outputs']
+                                           for t in v['itl_seconds']])
+                             if args.output_tokens > 1 else None),
                 per_round_output_tokens_per_second=distribution(
                     [r['output_tokens_per_second'] for r in samples]),
                 output_tokens_per_second=(batch * args.output_tokens * args.repetitions
@@ -250,6 +265,9 @@ def main():
         if os.environ.get('JT_PHASE_TRACE') == '1':
             report['phase_trace'] = executor.collective_rpc(phase_trace,
                                                             timeout=120)
+        if os.environ.get('JT_PREFILL_ATTENTION_BYPASS') == '1':
+            report['prefill_attention_bypass_state'] = executor.collective_rpc(
+                prefill_attention_bypass_state, timeout=120)
         if os.environ.get('JT_ATTENTION_TRACE') == '1':
             report['attention_trace'] = executor.collective_rpc(
                 attention_trace, timeout=120)
