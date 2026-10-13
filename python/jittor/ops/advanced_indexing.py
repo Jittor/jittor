@@ -2,7 +2,7 @@
 
 import numbers as _numbers
 from jittor_core import Var
-from .._core.dtypes import dtype_name as _dtype_name
+from .._core.dtypes import dtype_name as _jittor_dtype_name
 from .._runtime.dispatch import try_dispatch
 
 def index_add_(x, dim, index, tensor):
@@ -128,7 +128,7 @@ def _indexing_index(op, x, dim, index, bounded):
     # callable flags.  Use the canonical name at this shared boundary so both
     # process modes reject floating/complex indices without a shape-dependent
     # ``bool object is not callable`` failure.
-    index_dtype = _dtype_name(index.dtype)
+    index_dtype = _jittor_dtype_name(index.dtype)
     if index_dtype.startswith(("float", "bfloat", "complex")):
         raise TypeError("%s: index must have an integer dtype, got %s"
                         % (op, index.dtype))
