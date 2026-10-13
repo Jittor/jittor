@@ -15,8 +15,6 @@ import numpy as np
 import jittor as jt
 from jittor.contrib.loss_ssl import coding_rate, TotalCodingRate
 
-jt.flags.use_cuda = 0
-
 
 def reference_numpy(x_np, eps=0.01):
     """Literal numpy transcription of the reference PyTorch
@@ -32,6 +30,7 @@ def reference_numpy(x_np, eps=0.01):
 class TestLossSSL(unittest.TestCase):
 
     def setUp(self):
+        jt.flags.use_cuda = 0
         jt.set_global_seed(0)
         np.random.seed(0)
 
