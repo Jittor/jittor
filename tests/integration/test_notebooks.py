@@ -355,8 +355,10 @@ def _warm_the_notebook_cache(attempts=3):
 #: Smokes that fail for a registered reason, as strict expected failures: the
 #: day one passes, the mark has to go with its ledger entry.
 _SMOKE_KNOWN_ISSUES = {
-    "resnet_training": "KI-TEST-014: the plain network no longer stalls for "
-                       "three epochs, which the notebook asserts",
+    "resnet_training": (
+        "KI-TEST-014: the plain network no longer stalls for "
+        "three epochs, which the notebook asserts"
+    ),
 }
 
 
@@ -372,9 +374,14 @@ def _cell_failures():
 
 def _smoke_params():
     return [
-        pytest.param(topic, marks=pytest.mark.xfail(
-            strict=True, raises=_cell_failures(), reason=_SMOKE_KNOWN_ISSUES[topic]))
-        if topic in _SMOKE_KNOWN_ISSUES else topic
+        pytest.param(
+            topic,
+            marks=pytest.mark.xfail(
+                strict=True, raises=_cell_failures(), reason=_SMOKE_KNOWN_ISSUES[topic]
+            ),
+        )
+        if topic in _SMOKE_KNOWN_ISSUES
+        else topic
         for topic in _SMOKE_TOPICS
     ]
 

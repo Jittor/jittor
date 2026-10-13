@@ -73,8 +73,8 @@ changes: [2.0 migration notes](../../docs/releases/2.0.md).
   (KI-CODEGEN-003, KI-CODEGEN-004, KI-COMPAT-009), pipelined memory and backward
   submission (KI-EXEC-004, KI-EXEC-010).
 - **Gate trust.** Dead sessions (KI-TEST-002), test-order failures (KI-TEST-007,
-  KI-TEST-010), gate cost (KI-TEST-012, KI-TEST-013), an injected CUDA fault that
-  never reports (KI-BACKEND-019), a stale notebook trajectory (KI-TEST-014).
+  KI-TEST-010), gate cost (KI-TEST-012, KI-TEST-013), a stale notebook trajectory
+  (KI-TEST-014).
 - **Research.** [Agent-operable optimization](../../docs/research/agentic-optimization.md)
   is a proposal only; no autonomous mutation path exists.
 

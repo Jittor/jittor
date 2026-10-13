@@ -63,7 +63,6 @@ def test_an_out_of_range_index_on_the_device_is_named_in_the_error(access):
     assert "Readback event cleanup failed" not in result.stderr
 
 
-@pytest.mark.xfail(reason="KI-BACKEND-019: async device-fault-location needs executor sync-boundary integration; this tree's async/auto-flush executor path diverged and does not surface the sticky CUDA fault through the new launch_diagnostics at device_wait/readback. The synchronous OOB/provenance/OOM reporting works.", strict=False)
 @pytest.mark.parametrize("boundary", ["device_wait", "readback"])
 def test_asynchronous_fault_reports_creation_line(boundary):
     _require_cuda()
@@ -78,7 +77,11 @@ def test_asynchronous_fault_reports_creation_line(boundary):
                 __global__ void delayed_illegal_write(float* p) {
                     unsigned long long start = clock64();
                     while (clock64() - start < 200000000ULL) {}
-                    ((volatile float*)p)[1<<28] = 1.0f;
+                    // Address 16, not p past its end: under HMM a GPU write to
+                    // any mapped host page succeeds, and what lies past p depends
+                    // on the stack rlimit this child inherited. Page 0 is never
+                    // mapped. See tests/backends/cuda/test_backend_teardown.py.
+                    *((volatile float*)16) = 1.0f;
                 }
                 delayed_illegal_write<<<1,1>>>(out0_p);
             """)

@@ -1,7 +1,7 @@
 # Known-Issues Ledger
 
 - Status: Maintained
-- Last reviewed: 2026-10-12
+- Last reviewed: 2026-10-13
 - Baseline: `1a6e203fc`
 - Owner: Jittor core maintainers
 - Review when: an entry is fixed or narrowed, a strict expected failure
@@ -1152,28 +1152,6 @@ workaround.
   first; this session did neither, to avoid conflating a benchmark-speed
   investigation with a dead-code removal decision that deserves its own
   review.
-
-## KI-BACKEND-019: an out-of-bounds write injected into a CUDA kernel is never reported
-
-- Severity: Medium (the gate cannot report what these cases are for: fault
-  attribution and teardown reporting go unverified)
-- Status: Open; reproduced 2026-10-12 on RTX 4090 / CUDA 12.2 in `nox -s cuda`;
-  the 2026-09-24 report saw it on HEAD. The three cases run as strict expected
-  failures.
-- Owner: CUDA backend maintainers
-- Symptom: a `jt.code` kernel writing `p[1<<28]` past a one-element buffer
-  completes; neither `jt.sync_all(True)` nor `y.numpy()` raises
-  `cudaErrorIllegalAddress` ("asynchronous poison was never reported"), and the
-  teardown case never reaches `POISONED`.
-- Cause: not isolated. Suspected: the write lands in memory the caching
-  allocator already maps (1 GiB past the buffer), so nothing faults and the
-  cases exercise nothing.
-- Workaround: none needed for results.
-- Evidence: `tests/backends/cuda/test_async_error_location.py::test_asynchronous_fault_reports_creation_line[device_wait]`,
-  `...[readback]`,
-  `tests/backends/cuda/test_backend_teardown.py::TestBackendTeardown::test_failing_teardown_is_reported_not_fatal`.
-- Exit condition: the injected write faults reliably (an address outside every
-  allocation) and the three cases pass.
 
 ## KI-OPS-002: integer floor-division ROCm verification incomplete
 
