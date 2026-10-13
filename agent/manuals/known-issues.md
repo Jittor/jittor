@@ -2164,6 +2164,57 @@ workaround.
 - Exit condition: the collective input is placed on the rank's device and the test
   passes on every rank.
 
+## KI-BACKEND-020: the NPU work in #18036 and #18039 was only partly on this branch
+
+- Severity: Medium (supported operations failed or answered wrongly), Fixed
+- Status: Fixed (2026-10-14), verified on a 910B3
+- Owner: ACL backend / Torch compatibility
+- Symptom: the maintainer's cherry-picks from #18035, #18036, #18039 and
+  #18031 took their backend-agnostic parts, so the Ascend-specific halves
+  were missing. What that cost, each confirmed on hardware before the fix:
+  `labels[:, mask]` raised `NotImplementedError: ACL getitem does not support
+  Var slice indices`; a boolean slice assignment had no lowering because CANN
+  refuses a bool payload; `x[None]` raised a TypeError; `roll` declined int64;
+  `nonzero` counted with a bool sum, so more than one match shaped the output
+  for a single row, and an all-false mask reached a kernel that rejects a
+  zero-row output. `torch.npu.is_available()` answered False and
+  `device_count()` 0 on a machine with eight 910Bs, because `torch.npu` got
+  the same placeholders as `torch.mps` and `torch.xpu`; a downstream library
+  that asks before choosing a device believed it. `torch.use_deterministic_
+  algorithms` was a no-op setter and the query a constant False. A
+  device-to-device copy between two cards was refused outright. The ACL RNG
+  counter was one process-wide pair, not one per device, and could not be
+  checkpointed.
+- Cause: the cherry-picks were deliberately scoped to backend-agnostic
+  changes; nothing recorded which Ascend-specific parts were left, so they
+  were not picked up later either.
+- Workaround: none.
+- Evidence: six commits, each with its own hardware verification, from
+  `a48b4e828` to `1df5bef15`. New tests, all run on a 910B3: four ACL index
+  cases in `tests/backends/acl/test_acl_torch_compat.py`, five in
+  `compat/tests/torch/test_npu_device_protocol.py` (and its CPU half, which
+  asserts the facade still refuses rather than inventing a device), the
+  deterministic-policy case, ten in
+  `tests/backends/comm/hccl/test_hccl_backend_status.py`,
+  `compat/tests/torch/test_npu_peer_copy.py` on two visible cards, and four
+  per-device RNG cases including one that runs the draws on the
+  async-execution worker. Gates after the merge: core tier 322 passed; the
+  NPU gate's failure set byte-identical to the pre-merge baseline (91 both
+  ways, `comm` empty) with passes up from 466+241 to 471+245;
+  `tests/structure` green except the upstream ratchet below.
+- Not merged, and why: #18030's getitem stride fix and #18031's ACL changes
+  are already on this branch; #18028 shares #18031's head against a different
+  base. #18036's `truth_reduce` keepdims push-down duplicates the reshape
+  `_truth_reduce_keepdims` already does, and its `getitem_op.py` and
+  `tensor.py` are behind this branch's memoization work, which was kept.
+  `torch.npu`'s memory metrics were left refusing rather than answered,
+  because the memory-pool bindings they read (`device_pool_memory_used` and
+  the rest) are not on this branch; a zero peak reads as a measurement.
+- Open alongside this: ACL `all()`/`any()` with no dim returns shape (1,)
+  where torch returns a scalar -- `test_reference_all_*`/`test_reference_any_*`
+  in the NPU gate's baseline failures. Neither branch nor PR fixes it.
+
+
 ## KI-LINT-001: mypy covers the build utilities and part of compat only
 
 - Severity: Limitation (static checking coverage)
