@@ -38,15 +38,19 @@ class _PolicyCase(unittest.TestCase):
         _arg_policy.set_allow_unsupported(self._saved_override)
         _arg_policy.reset_warned()
 
-    def assertWarnsOnce(self, needle, call):
+    def assertWarnsOnce(self, needle, call, ignore=None):
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
+            if ignore:
+                warnings.filterwarnings("ignore", message=ignore)
             first = call()
             self.assertEqual(len(caught), 1, [str(c.message) for c in caught])
             self.assertIn(needle, str(caught[0].message))
             self.assertIs(caught[0].category, UserWarning)
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
+            if ignore:
+                warnings.filterwarnings("ignore", message=ignore)
             call()
             self.assertEqual(len(caught), 0, "warning must fire once per process")
         return first
@@ -354,9 +358,12 @@ class TestVjpJvpStrict(_PolicyCase):
     def test_escape_hatch_warns_and_returns_strict_false_behaviour(self):
         _arg_policy.set_allow_unsupported(True)
         vjp, _jvp, f, inputs, v = self._independent()
+        # `b` is independent on purpose, and jt.grad reports its zero gradient
+        # on every call; only the strict=True warning is once per process.
         got = self.assertWarnsOnce(
             "jittor.autograd.functional.vjp: strict=True",
-            lambda: vjp(f, inputs, v=v, strict=True))
+            lambda: vjp(f, inputs, v=v, strict=True),
+            ignore=r"jt\.grad: target 1 ")
         np.testing.assert_allclose(got[1][1].numpy(), [0.0, 0.0], atol=0)
 
 

@@ -91,6 +91,23 @@ static string annotate_jit_run_lines(const string& src, const string& path) {
     return annotated;
 }
 
+// A `#line` that restores the numbering in force at `pos`, for text spliced in
+// there; empty when no directive precedes `pos` and the file's own numbering
+// is the right one anyway.
+static string line_directive_at(const string& src, size_t pos) {
+    if (!pos) return "";
+    size_t marker = src.rfind("#line ", pos-1);
+    if (marker == string::npos) return "";
+    size_t directive_end = src.find('\n', marker);
+    if (directive_end == string::npos || directive_end >= pos) return "";
+    std::istringstream directive(src.substr(marker + 6, directive_end - marker - 6));
+    size_t line = 0;
+    string path;
+    if (!(directive >> line) || !(directive >> std::quoted(path))) return "";
+    line += std::count(src.begin() + directive_end + 1, src.begin() + pos, '\n');
+    return "#line " + S(line) + " \"" + line_directive_path(path) + "\"\n";
+}
+
 DECLARE_FLAG(string, jittor_path);
 
 using namespace jit_compiler;
@@ -914,7 +931,7 @@ string OpCompiler::get_jit_src(Op* op) {
     }
     
     string new_src = begin_src + src.substr(0, pos) +
-        after_include_src + src.substr(pos) + "\n" + end_src;
+        after_include_src + line_directive_at(src, pos) + src.substr(pos) + "\n" + end_src;
     return new_src;
 }
 

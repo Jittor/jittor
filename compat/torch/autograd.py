@@ -148,6 +148,22 @@ def _call_record_inputs(self, *args, **kw):
     except EXPECTED as exc:
         swallowed("torch/installers/autograd.py _call_record_inputs: ctx.needs_input_grad = tuple(", exc)
         ctx.needs_input_grad = tuple(isinstance(v, jt.Var) for v in args)
+    # Torch custom Functions own their backward edge even when forward()
+    # returns input.detach(). Clear the stop-grad bit before Jittor tapes the
+    # output, or DeepSpeed ZeRO-3's backward-hook wrapper loses that edge.
+    if any(ctx.needs_input_grad) and not jt.flags.no_grad:
+        execute = ctx.execute
+
+        def execute_with_grad(*forward_args, **forward_kw):
+            result = execute(*forward_args, **forward_kw)
+            values = result if isinstance(result, (tuple, list)) else (result,)
+            for value in values:
+                if isinstance(value, jt.Var) and _jittor_dtype_name(
+                        value.dtype).startswith(("float", "bfloat", "complex")):
+                    value.start_grad()
+            return result
+
+        ctx.execute = execute_with_grad
     out = ctx._run_call(*args, **kw)
     # Capture each forward OUTPUT's (shape, dtype) so the grad bridge can
     # materialize a zeros grad for outputs that don't reach the backward'd

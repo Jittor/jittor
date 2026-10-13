@@ -49,7 +49,8 @@ void setter_use_cuda(const int& old_value, const int& requested) {
 #ifdef HAS_ACCELERATOR
     if (value) {
         if (backend_ops(accelerator_backend_id()).device_count() == 0) {
-            LOGw << "No CUDA device available; falling back to CPU (use_cuda=0).";
+            user_warning("use_cuda=1 was requested, but no CUDA device is "
+                         "available; running on the CPU (use_cuda=0).");
             value = 0;
         } else {
             LOGi << "CUDA enabled.";
@@ -59,7 +60,10 @@ void setter_use_cuda(const int& old_value, const int& requested) {
         LOGv << "CUDA disabled.";
     }
 #else
-    USER_CHECK(value == 0) << "No CUDA found.";
+    USER_CHECK(value == 0) << "This Jittor build has no accelerator support: nvcc "
+        "was not found when the core was compiled, so it was built for CPU only. "
+        "Install the CUDA toolchain (pip install jittor[cuda12]) or point "
+        "JT_BUILD_NVCC_PATH at an nvcc, then restart Python so the core is rebuilt.";
 #endif
     // Only with something to sync: the flag is also set from the environment
     // while the library is being loaded, before the executor's own globals

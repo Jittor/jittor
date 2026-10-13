@@ -497,16 +497,25 @@ class TestMatmulOperandShapes(unittest.TestCase):
         self.assertIn("bmm_transpose", str(caught.exception))
 
     def test_a_transposed_product_names_itself_and_its_own_dim(self):
-        # nn.Linear reaches matmul_transpose, so the weight is [out, in] and the
-        # contracted dim of b is -1, not -2. Reporting it as "matmul" with dim
-        # -2 -- which is what the shared sentence did -- pointed at the wrong
-        # number of the wrong operand.
+        # The contracted dim of a transposed b is -1, not -2. Reporting it as
+        # "matmul" with dim -2 -- which is what the shared sentence did --
+        # pointed at the wrong number of the wrong operand.
         with self.assertRaises(RuntimeError) as caught:
-            jt.nn.Linear(4, 5)(jt.ones((3, 6)))
+            jt.nn.matmul_transpose(jt.ones((3, 6)), jt.ones((5, 4)))
         text = str(caught.exception)
         self.assertIn("matmul_transpose", text)
         self.assertIn("dim -1 of a is 6", text)
         self.assertIn("dim -1 of b is 4", text)
+
+    def test_linear_names_the_call_and_operands_the_user_wrote(self):
+        # nn.Linear reaches matmul_transpose, but the user called neither it
+        # nor anything with operands named a and b.
+        with self.assertRaises(RuntimeError) as caught:
+            jt.nn.Linear(4, 5)(jt.ones((3, 6)))
+        text = str(caught.exception)
+        self.assertTrue(text.startswith("linear:"), text)
+        self.assertIn("dim -1 of input is 6", text)
+        self.assertIn("dim -1 of weight is 4", text)
 
     def test_the_message_survives_python_optimize(self):
         """``assert`` is compiled out under ``-O``; this report must not be.

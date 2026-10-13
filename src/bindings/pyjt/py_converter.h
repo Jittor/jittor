@@ -1241,5 +1241,10 @@ DEF_IS(VarSlices, T) from_py_object(PyObject* obj, vector<unique_ptr<VarHolder>>
 }
 
 EXTERN_LIB bool check_async_executor_error(const std::exception& e, std::ostream& os);
+// The Python exception class for a C++ exception, chosen by its type
+// (jittor.JittorIndexError for UserIndexError, ...). Defined in jit_utils.cc.
+EXTERN_LIB PyObject* python_error_class(const std::exception& e);
+// jittor.JittorTypeError: no overload accepts the arguments.
+EXTERN_LIB PyObject* python_type_error_class();
 
 } // jittor

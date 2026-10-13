@@ -193,11 +193,18 @@ static inline bool readback_waits_for_devices() {
 #endif
 }
 
+// Whether the value can be read from host memory without running anything.
+static inline bool host_value_ready(Var* var) {
+    return var->mem_ptr && !var->allocator->is_cuda()
+        && !var->flag(VarFlags::_execution_failed);
+}
+
 DataView VarHolder::data() {
     note_readback();
-    if (!(var->mem_ptr && !var->allocator->is_cuda())) {
+    if (!host_value_ready(var)) {
         ExecutorEntryScope entry;
         sync(readback_waits_for_devices(), false);
+        var->set_flag(VarFlags::_execution_failed, 0);
 #ifdef HAS_ACCELERATOR
         migrate_to_cpu(var, runtime_executor().allocator);
 #endif
@@ -777,8 +784,12 @@ void mark_python_number(VarHolder* holder) {
 }
 
 VarHolder* VarHolder::start_grad() {
-    if (!var->dtype().is_float() && !var->dtype().is_complex())
-        LOGw << "cannot enable grad of a non-float value:" << var;
+    if (!var->dtype().is_float() && !var->dtype().is_complex()) {
+        std::stringstream message;
+        message << "requires_grad has no effect on this " << var->dtype() << var->shape
+            << " Var: only floating-point and complex values have gradients.";
+        user_warning(message.str());
+    }
     bool no_grad_bk = no_grad;
     AutogradPolicyOverride policy_guard({});
     no_grad = 0;
@@ -844,6 +855,9 @@ VarHolder* VarHolder::update(VarHolder* v) {
 }
 
 VarHolder* VarHolder::_update(VarHolder* v) {
+    // Python in-place wrappers call `_update` directly. A view must write the
+    // replacement through its root instead of rebinding only the view holder.
+    if (is_view()) return assign(v);
     if (var->flag(VarFlags::_placement_published))
         v->var->set_flag(VarFlags::_placement_published);
     note_rebind(this);
@@ -866,9 +880,10 @@ VarHolder* VarHolder::sync(bool device_sync, bool weak_sync) {
 
 ArrayArgs VarHolder::fetch_sync() {
     note_readback();
-    if (!(var->mem_ptr && !var->allocator->is_cuda())) {
+    if (!host_value_ready(var)) {
         ExecutorEntryScope entry;
         sync(readback_waits_for_devices());
+        var->set_flag(VarFlags::_execution_failed, 0);
         if (save_mem || _HAS_ACCELERATOR)
             migrate_to_cpu(var, runtime_executor().allocator);
     }
@@ -911,15 +926,17 @@ ItemData VarHolder::item() {
     // Keep the entry lock through the final scalar copy, including managed
     // allocations which migrate_to_cpu deliberately leaves on the device.
     ExecutorEntryScope entry;
-    USER_CHECK(var->num==1) << "Item var size should be 1, but got" << var->num;
+    USER_CHECK(var->num==1) << "item() needs a Var with exactly one element, but this one has"
+        << var->num << "(shape" << var->shape >> ")";
     // Value-initialize: only dsize bytes are written below, and the converter
     // may read all 8 (unsigned dtypes go through PyLong_FromUnsignedLongLong).
     ItemData data{};
     data.dtype = var->dtype();
     auto dsize = data.dtype.dsize();
-    if (!(var->mem_ptr && !var->allocator->is_cuda())) {
+    if (!host_value_ready(var)) {
         // A blocking backend host copy waits for its producer stream.
         sync(false, false);
+        var->set_flag(VarFlags::_execution_failed, 0);
         if (save_mem || _HAS_ACCELERATOR)
             migrate_to_cpu(var, runtime_executor().allocator);
     }

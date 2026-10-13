@@ -277,10 +277,12 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
             double used = gpu_overflow ? (double)gpu_total : (double)cpu_total;
             double total = gpu_overflow ? (double)mem_info.total_cuda_ram : (double)mem_info.total_cpu_ram;
             log.end();
-            LOGf << "\n*******************\n"
+            // LOGe, not LOGf: this runs while another error is being reported,
+            // and throwing here would replace it.
+            LOGe << "\n*******************\n"
                 >> (gpu_overflow?"GPU":"CPU") << "memory is overflow, please reduce your batch_size or data size!\nTotal:" << FloatOutput{(double)total, " KMG", 1024, "B"} << "Used:" << FloatOutput{(double)used, " KMG", 1024, "B"};
-        } else
-            return;
+        }
+        return;
     }
 
     log.end();

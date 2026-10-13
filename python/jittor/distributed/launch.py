@@ -48,10 +48,15 @@ def _free_port():
 def _detect_backend():
     try:
         import jittor
-        if getattr(jittor.compiler, "has_acl", 0):
-            return "hccl"
-    except Exception:
-        pass
+    except Exception as error:
+        # Guessing silently would launch every rank on the wrong collective
+        # library on an Ascend machine, and they fail far from here.
+        print(f"warning: could not import jittor to detect the backend "
+              f"({type(error).__name__}: {error}); assuming nccl. Pass --backend "
+              f"to choose.", file=sys.stderr)
+        return "nccl"
+    if getattr(jittor.compiler, "has_acl", 0):
+        return "hccl"
     return "nccl"
 
 
@@ -122,8 +127,12 @@ def main():
         try:
             from jittor.compile_extern import _skip_nccl_p2p_without_peer_access
             _skip_nccl_p2p_without_peer_access()
-        except Exception:
-            pass
+        except Exception as error:
+            print(f"warning: could not check GPU peer access "
+                  f"({type(error).__name__}: {error}); NCCL will try "
+                  f"peer-to-peer transfers, which can hang on machines without "
+                  f"it. Set NCCL_P2P_DISABLE=1 if the ranks stall.",
+                  file=sys.stderr)
 
     # Torch-style entry points (ms-swift, accelerate scripts) read torchrun's
     # variables, and `init_process_group()` defaults to env://, which needs

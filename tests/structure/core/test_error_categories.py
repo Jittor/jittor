@@ -8,14 +8,16 @@ _LINE_COMMENT = re.compile(r"//.*")
 
 
 def _count_user_check_sites(source):
-    """``USER_CHECK``/``USER_CHECKop`` call sites in *source*, prose excluded.
+    """``USER_CHECK``/``USER_CHECKop``/``USER_INDEX_CHECK`` call sites in *source*, prose excluded.
 
     A ledger counts boundaries, and a comment that quotes a check by name is
     documentation of one, not another one: counting it would make every
     ledger grow the moment someone explains why a check is there.
+    ``USER_INDEX_CHECK`` raises a ``UserError`` too, of the index kind.
     """
     code = "\n".join(_LINE_COMMENT.sub("", line) for line in source.splitlines())
-    return code.count("USER_CHECK(") + code.count("USER_CHECKop(")
+    return (code.count("USER_CHECK(") + code.count("USER_CHECKop(")
+            + code.count("USER_INDEX_CHECK("))
 # 2026-09-11, two changes landing together. `0f5eab25e` had reclassified
 # `ASSERT(ns.is_binary())` to `USER_CHECK` in both `ReduceOp` constructors;
 # that is right for the public `ReduceOp(x, op, dims, keepdims)`, where `op` is
@@ -545,14 +547,14 @@ def test_binary_shape_migration_is_explicit_and_bounded():
 
 def test_setitem_shape_migration_is_explicit_and_bounded():
     source = (ROOT / "src/ops/composite/setitem_op.cc").read_text()
-    actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+    actual = _count_user_check_sites(source)
     assert actual == MIGRATED_SETITEM_SHAPE_BOUNDARIES[
         "src/ops/composite/setitem_op.cc"]
 
 
 def test_getitem_shape_migration_is_explicit_and_bounded():
     source = (ROOT / "src/ops/composite/getitem_op.cc").read_text()
-    actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+    actual = _count_user_check_sites(source)
     assert actual == MIGRATED_GETITEM_SHAPE_BOUNDARIES[
         "src/ops/composite/getitem_op.cc"]
 

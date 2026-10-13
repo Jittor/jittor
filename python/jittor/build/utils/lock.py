@@ -38,8 +38,8 @@ if sys.platform == "win32":
         import win32file
         import pywintypes
         _OVERLAPPED = pywintypes.OVERLAPPED()
-    except:
-        raise Exception("""pywin32 package not found, please install it.
+    except ImportError:
+        raise ImportError("""pywin32 package not found, please install it.
 >>> python3.x -m pip install pywin32
 If conda is used, please install with command:
 >>> conda install pywin32""")

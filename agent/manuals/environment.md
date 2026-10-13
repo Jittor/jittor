@@ -45,10 +45,10 @@ export TMPDIR="$run_root/tmp"
 export XDG_CACHE_HOME="$run_root/xdg-cache"
 export PYTHONDONTWRITEBYTECODE=1
 export PYTHONPATH="$PWD/python${PYTHONPATH:+:$PYTHONPATH}"
-export cache_name="<topic>-<run>"
+export JT_BUILD_CACHE_NAME="<topic>-<run>"
 ```
 
-Each concurrent run needs a distinct `JITTOR_HOME` or `cache_name`. A new JIT
+Each concurrent run needs a distinct `JITTOR_HOME` or `JT_BUILD_CACHE_NAME`. A new JIT
 operation or extension compiles serially once before parallel validation.
 Benchmarks and tests never share a cache.
 
