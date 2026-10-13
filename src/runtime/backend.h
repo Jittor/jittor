@@ -83,6 +83,11 @@ struct BackendOps {
     void* (*memory_allocate)(int, BackendMemoryKind, size_t) = nullptr;
     void (*memory_free)(int, BackendMemoryKind, void*) = nullptr;
     void (*memory_info)(int, size_t&, size_t&) = nullptr;
+    // A process-wide deterministic-algorithm policy, where the runtime has
+    // one. Left null rather than defaulted: a backend that cannot promise
+    // determinism must say so, not report that it is already deterministic.
+    void (*set_deterministic_algorithms)(bool) = nullptr;
+    bool (*get_deterministic_algorithms)() = nullptr;
     void (*check_error)() = nullptr;
     void* (*compute_stream)(int) = nullptr;
     void* (*stream_create)(int, bool) = nullptr;
@@ -144,6 +149,15 @@ EXTERN_LIB void backend_copy_async(void* dst, Device dst_device, const void* src
 EXTERN_LIB void backend_synchronize(Device device);
 EXTERN_LIB BackendStream backend_stream(Device device, BackendStreamKind kind);
 EXTERN_LIB BackendEvent backend_event(Device device, bool timing = false);
+// The accelerator's deterministic-algorithm policy. Unlike graph capture
+// below, these throw where the backend has no such control: "deterministic"
+// is a promise about results, and a caller that asked for it has no fallback
+// that would still keep it.
+// @pyjt(backend_set_deterministic_algorithms)
+void backend_set_deterministic_algorithms(bool enabled);
+// @pyjt(backend_get_deterministic_algorithms)
+bool backend_get_deterministic_algorithms();
+
 // Graph capture on the accelerator's compute stream. `backend_graph_supported`
 // answers before anything is recorded; the rest return false/nullptr when the
 // backend cannot capture, so the caller never has to know which one it is.

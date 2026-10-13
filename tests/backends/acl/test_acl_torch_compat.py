@@ -1179,3 +1179,32 @@ class TestACLTorchCompat(unittest.TestCase):
             np.testing.assert_array_equal(_fetch_acl(self, [rows])[0], [0, 0, 1, 1, 1])
             np.testing.assert_array_equal(_fetch_acl(self, [columns])[0], [1, 2, 0, 1, 2])
         self.assertEqual(jt.core.backend_fallback_count() - before, 0)
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_npu_deterministic_policy_toggles_backend_and_restores_state(self):
+        """The policy lives in the ACL runtime, not in a Python shadow flag."""
+        from jittor._runtime.fallback import forbid_backend_fallbacks
+
+        previous = torch.are_deterministic_algorithms_enabled()
+        before = jt.core.backend_fallback_count()
+        with jt.runtime.scope(backend_fallback="error"), forbid_backend_fallbacks():
+            try:
+                for enabled in (True, False, True):
+                    torch.use_deterministic_algorithms(enabled)
+                    self.assertEqual(torch.are_deterministic_algorithms_enabled(), enabled)
+                    self.assertEqual(
+                        bool(jt.core.backend_get_deterministic_algorithms()), enabled)
+                    value = torch.ones((4,), device="npu").sum()
+                    _assert_acl_device(self, value)
+                    self.assertEqual(value.item(), 4)
+                # Refused rather than silently ignored: a caller that asked to
+                # be warned instead of stopped would get neither.
+                with self.assertRaisesRegex(NotImplementedError, "warn_only"):
+                    torch.use_deterministic_algorithms(False, warn_only=True)
+                self.assertTrue(torch.are_deterministic_algorithms_enabled())
+                with self.assertRaises(TypeError):
+                    torch.use_deterministic_algorithms(1)
+            finally:
+                torch.use_deterministic_algorithms(previous)
+            self.assertEqual(torch.are_deterministic_algorithms_enabled(), previous)
+            self.assertEqual(jt.core.backend_fallback_count() - before, 0)

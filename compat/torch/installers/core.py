@@ -948,11 +948,20 @@ def get_autocast_gpu_dtype(*args, **kwargs):
 
 
 def are_deterministic_algorithms_enabled():
-    return False
+    """Read the accelerator's own policy, not a flag kept here."""
+    return bool(jt.core.backend_get_deterministic_algorithms())
 
 
-def use_deterministic_algorithms(*args, **kwargs):
-    return None
+def use_deterministic_algorithms(mode, *, warn_only=False):
+    if type(mode) is not bool or type(warn_only) is not bool:
+        raise TypeError("mode and warn_only must be bool")
+    if warn_only:
+        raise NotImplementedError(
+            "Backend deterministic warn_only policy is not implemented")
+    # Work already built was planned under the old policy; run it before the
+    # option changes underneath it.
+    jt.sync_all(True)
+    jt.core.backend_set_deterministic_algorithms(mode)
 
 
 def is_floating_point(value):
@@ -1217,7 +1226,7 @@ _MISC_DETAILS = {
     "clear_autocast_cache": "jittor keeps no cached weight casts, so the postcondition already holds",
     "autocast_increment_nesting": "real thread-local nesting depth, as torch's counter",
     "autocast_decrement_nesting": "real thread-local nesting depth, as torch's counter",
-    "use_deterministic_algorithms": "no-op setter; deterministic algorithm policy is not implemented",
+    "use_deterministic_algorithms": "sets the accelerator runtime's own deterministic option; warn_only is refused",
     "get_rng_state": "seed-only state, not a full generator snapshot or exact stream restoration",
     "set_rng_state": "restores the recorded seed, not an exact generator stream snapshot",
     "norm": "existing Torch norm adapter; out and extra keyword semantics are not implemented",
@@ -1227,7 +1236,7 @@ _MISC_DETAILS = {
     "finfo": "NumPy limits plus declared metadata-only low-precision specs; this does not enable their computation",
     "iinfo": "NumPy integer-limit metadata for supported dtype names",
     "is_autocast_available": "answers for the backends this build can run -- cpu and cuda always, npu when ACL is built -- so it is False for the xpu/mps/xla/ipu/mtia device types torch answers True for",
-    "are_deterministic_algorithms_enabled": "legacy False answer; deterministic algorithms are not configurable",
+    "are_deterministic_algorithms_enabled": "reads the accelerator runtime's own deterministic option",
     "as_strided": "gather-based view; reads are exact but the result does not alias the input storage",
     "empty_strided": "contiguous allocation; the requested strides are not honored",
 }
