@@ -8,10 +8,10 @@ namespace jittor {
 FusedSgdOp::FusedSgdOp(
     vector<Var*>&& parameters, vector<Var*>&& velocities, vector<Var*>&& gradients,
     float64 lr, float64 momentum, float64 weight_decay, float64 dampening,
-    bool nesterov, bool maximize, vector<Var*>&& rate)
+    bool nesterov, bool maximize, bool first_step, vector<Var*>&& rate)
     : parameters(parameters), velocities(velocities), gradients(gradients), rate(rate),
       lr(lr), momentum(momentum), weight_decay(weight_decay), dampening(dampening),
-      nesterov(nesterov), maximize(maximize) {
+      nesterov(nesterov), maximize(maximize), first_step(first_step) {
     USER_CHECKop(parameters.size(),>,0);
     USER_CHECKop(parameters.size(),==,velocities.size());
     USER_CHECKop(parameters.size(),==,gradients.size());
@@ -68,7 +68,7 @@ void FusedSgdOp::jit_prepare(JK& jk) {
 //
 // The arithmetic is the one the per-parameter path and PyTorch use:
 //   dp = g + wd * p
-//   v  = momentum * v + (1 - dampening) * dp
+//   v  = first_step ? dp : momentum * v + (1 - dampening) * dp
 //   p  = p - lr * (nesterov ? dp + momentum * v : v)
 // and without momentum or dampening, p = p - lr * dp with v untouched.
 namespace {
@@ -91,7 +91,7 @@ struct SgdLaunch {
 
 struct SgdStep {
     float lr, momentum, weight_decay, dampening;
-    bool nesterov, maximize, plain;
+    bool nesterov, maximize, plain, first_step;
 };
 
 __device__ __forceinline__ void sgd_element(const SgdStep& s, float grad, float& p, float& v) {
@@ -101,7 +101,8 @@ __device__ __forceinline__ void sgd_element(const SgdStep& s, float grad, float&
         p = p - dp * s.lr;
         return;
     }
-    v = fmaf(s.momentum, v, dp * (1.0f - s.dampening));
+    // The first update seeds the buffer with the undampened dp.
+    v = s.first_step ? dp : fmaf(s.momentum, v, dp * (1.0f - s.dampening));
     p = p - (s.nesterov ? fmaf(s.momentum, v, dp) : v) * s.lr;
 }
 
@@ -158,6 +159,7 @@ void FusedSgdOp::jit_run() {
     s.nesterov = nesterov;
     s.maximize = maximize;
     s.plain = momentum == 0 && dampening == 0 && !nesterov;
+    s.first_step = first_step;
     SgdLaunch launch;
     launch.count = 0;
     int blocks = 0;

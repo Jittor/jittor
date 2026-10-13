@@ -774,9 +774,14 @@ namespace jittor
              attr->dampening = _op->dampening;
              attr->nesterov = _op->nesterov;
              attr->maximize = _op->maximize;
-             // The velocity buffers jittor hands over already hold the running
-             // momentum, so the kernel must never re-seed them from the grad.
-             attr->isFirstStep = false;
+             // jittor-core-gaps.md §3.3: the velocity buffer is zero-
+             // initialized at optimizer construction and only holds real
+             // running momentum from its SECOND touch onward -- the caller
+             // (fused_sgd_acl, from SGD.step()'s per-group step counter)
+             // says whether this call is the first, and the kernel below
+             // must seed from the raw gradient then, not fold a dampened
+             // recurrence into the zero buffer.
+             attr->isFirstStep = _op->first_step;
              runner.jt_name = "fused_sgd";
              runner.op_attr.reset(attr);
              for (auto value : _op->parameters) runner.add(value, true);

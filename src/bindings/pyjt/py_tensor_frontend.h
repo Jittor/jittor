@@ -21,6 +21,16 @@ void reset_tensor_frontend_type(PyObject* token);
 PyObject* set_tensor_placement_context(int backend, int device=0);
 // @pyjt(_reset_tensor_placement)
 void reset_tensor_placement_context(PyObject* token);
+// The placement native constructors (`jt.empty`, `jt.array`, `jt.zeros`)
+// stamp on the Vars they build. `_set_tensor_placement` only reaches Vars
+// built by a binding inside a frontend scope; outside one -- a native
+// `zeros_like` of an explicitly placed tensor -- a constructor read this and
+// nothing else, so the result followed the Runtime instead of the reference.
+// Returns the previous placement for `_restore_construction_placement`.
+// @pyjt(_set_construction_placement)
+PyObject* set_construction_placement(int backend, int device=0);
+// @pyjt(_restore_construction_placement)
+void restore_construction_placement(PyObject* previous);
 // The placement the caller asked for, as (backend, index), or None when the
 // caller asked for nothing. A `*_like` default reads it so that an explicit
 // request outranks the reference tensor's own device.

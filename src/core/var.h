@@ -31,7 +31,7 @@ struct Var : Node {
     // needs neither the modulo nor the division belonging to a cleared bit, so
     // this belongs in the JIT key: it is the shape of the index arithmetic, and
     // unlike the stride values themselves it takes only a handful of values.
-    int stride_pattern() const;
+    uint stride_pattern() const;
     void set_storage_strides(NanoVector strides);
     void set_storage_strides(const vector<int64>& strides);
     cstr name;

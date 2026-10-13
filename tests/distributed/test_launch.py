@@ -19,6 +19,7 @@ the collective it would now wait for forever. The job never ended, no rank
 reported anything, and the launcher printed nothing until someone killed it by
 hand. Every extra rank makes this more likely, which is the wrong direction.
 """
+import ast
 import os
 from pathlib import Path
 import tempfile
@@ -157,12 +158,15 @@ class TestLaunchFailurePropagation(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stdout[-3000:])
         for rank in range(2):
             text = Path(self.tmp.name, "rank%d.log" % rank).read_text()
-            self.assertIn("'RANK': '%d'" % rank, text)
-            # Each child receives one entry in CUDA_VISIBLE_DEVICES, so its
-            # local device index is always zero even when its global rank is 1.
-            self.assertIn("'LOCAL_RANK': '0'", text)
-            self.assertIn("'WORLD_SIZE': '2'", text)
-            self.assertIn("'JT_NCCL_RANK': '%d'" % rank, text)
+            ranks = ast.literal_eval(text.strip().split("ranks=", 1)[1])
+            self.assertEqual(ranks["RANK"], str(rank), text)
+            self.assertEqual(ranks["WORLD_SIZE"], "2", text)
+            self.assertEqual(ranks["JT_NCCL_RANK"], str(rank), text)
+            # The alias, not a fixed value: a rank pinned to one device by
+            # CUDA_VISIBLE_DEVICES has local rank 0, and one that is not (a
+            # CPU-only run) has its global rank, single node.
+            self.assertEqual(ranks["LOCAL_RANK"], ranks["JT_NCCL_LOCAL_RANK"], text)
+            self.assertIsNotNone(ranks["LOCAL_RANK"], text)
 
 
     def test_ranks_get_torchrun_variables(self):

@@ -140,6 +140,31 @@ def _capability(state):
                            reason="driver/probe evidence")
 
 
+@pytest.mark.parametrize(
+    "parameter,expected",
+    [
+        ("cuda", True),
+        ("cuda-float64", True),
+        ("float64-cuda", True),
+        ("float64-cuda-scalar", True),
+        ("rocm-float32", True),
+        ("npu-float32", True),
+        ("cpu-float64", False),
+        ("nocuda", False),
+        ("cudagraph", False),
+    ],
+)
+def test_accelerator_execution_counter_recognizes_backend_parameters(
+    parameter, expected
+):
+    from _helpers import pytest_policy as policy
+
+    report = SimpleNamespace(
+        nodeid="tests/core/test_numeric.py::test_value[%s]" % parameter
+    )
+    assert policy._is_accelerator_case(report) is expected
+
+
 @pytest.mark.parametrize("name,variable", [("cuda", "JITTOR_TEST_REQUIRE_CUDA"), ("acl", "JITTOR_TEST_REQUIRE_ACL")])
 @pytest.mark.parametrize("state", ["available", "disabled", "failed", "unprobed"])
 def test_declared_gate_observes_the_requested_backend(monkeypatch, name, variable, state):

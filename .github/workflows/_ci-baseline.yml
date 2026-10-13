@@ -9,6 +9,9 @@ on:
       python_version:
         description: Python version used by Stage 2 tooling
         value: ${{ jobs.read.outputs.python_version }}
+      py37_runner:
+        description: GitHub-hosted runner that still provides Python 3.7
+        value: ${{ jobs.read.outputs.py37_runner }}
       cpu_ci_image:
         description: Linux image used by CPU and packaging jobs
         value: ${{ jobs.read.outputs.cpu_ci_image }}
@@ -37,6 +40,7 @@ jobs:
     outputs:
       host_runner: ${{ steps.baseline.outputs.host_runner }}
       python_version: ${{ steps.baseline.outputs.python_version }}
+      py37_runner: ${{ steps.baseline.outputs.py37_runner }}
       cpu_ci_image: ${{ steps.baseline.outputs.cpu_ci_image }}
       cuda_version: ${{ steps.baseline.outputs.cuda_version }}
       cuda_runner_labels: ${{ steps.baseline.outputs.cuda_runner_labels }}
@@ -57,6 +61,7 @@ jobs:
           {
             echo "host_runner=${CI_HOST_RUNNER}"
             echo "python_version=${CI_PYTHON_VERSION}"
+            echo "py37_runner=${CI_PY37_RUNNER}"
             echo "cpu_ci_image=${CI_CPU_CI_IMAGE}"
             echo "cuda_version=${CI_CUDA_VERSION}"
             echo "cuda_runner_labels=${CI_CUDA_RUNNER_LABELS}"

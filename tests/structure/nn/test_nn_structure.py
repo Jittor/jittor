@@ -484,7 +484,10 @@ class TestPublicBindings(unittest.TestCase):
         for name in ("softmax", "log_softmax", "logsumexp", "backward"):
             with self.subTest(compatibility_override=name):
                 self.assertTrue(callable(getattr(jittor.Var, name)))
-        self.assertIs(jittor.Var.__matmul__, nn.matmul)
+        # The operator is a thin guard over `nn.matmul`: it returns
+        # NotImplemented for a non-Var operand so the reflected method runs.
+        from jittor.nn import _bindings
+        self.assertIs(jittor.Var.__matmul__, _bindings._var_matmul)
         for name in ("real", "imag"):
             with self.subTest(complex_accessor=name):
                 self.assertIsInstance(getattr(jittor.Var, name), property)

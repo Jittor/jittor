@@ -20,8 +20,14 @@ class TestNanoVector(unittest.TestCase):
         assert nv[3] == (1<<40)
         assert str(nv) == "[1,2,3,1099511627776,]"
         assert nv == [1,2,3,1099511627776,]
-        expect_error(lambda : nv.append(1<<40), exc_type=RuntimeError,
-                     match="NanoVector exceeds its ten-entry or 64-bit value capacity")
+        # Past 64 packed bits the vector spills to the heap instead of failing;
+        # only the entry count is bounded.
+        spilled = nvector(list(nv))
+        spilled.append(1<<40)
+        assert spilled == [1,2,3,1<<40,1<<40], spilled
+        full = nvector(list(range(64)))
+        expect_error(lambda : full.append(1), exc_type=RuntimeError,
+                     match="supports at most")
         assert len(nv)==4, nv
         s = 0
         for a in nv:

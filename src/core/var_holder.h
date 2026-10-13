@@ -109,7 +109,14 @@ struct DataView {
 PyObject* new_var_data_owner(VarHolder* vh);
 
 struct ItemData {
-    int64 data;
+    // Widened from a flat int64 (8 bytes) to fit complex128 (16 bytes)
+    // without the memcpy in VarHolder::item() overflowing into `dtype`.
+    // `data` keeps its old name/type for every existing 8-byte-or-narrower
+    // dtype's read sites; `bytes` is only for the complex128 (16-byte) path.
+    union {
+        int64 data;
+        char bytes[16];
+    };
     NanoString dtype;
 };
 
@@ -225,6 +232,29 @@ struct VarHolder {
             return "device";
         return "cpu";
     }
+
+    // DLPack export (this Var -> a foreign framework's capsule). Implemented
+    // in bindings/pyjt/dlpack.cc, not inline here, since the implementation
+    // needs the vendored DLPack ABI structs (bindings/pyjt/dlpack.h) and
+    // CPython capsule APIs this header does not otherwise pull in.
+    //
+    // Bound under a plain name, not __dlpack__/__dlpack_device__ directly:
+    // pyjt_compiler.py treats any "__xxx__" @pyjt name as a CPython type slot
+    // and only recognizes a fixed whitelist -- an unrecognized one is a hard
+    // compile error, not a fallback to a plain method. python/jittor/__init__.py
+    // aliases Var.__dlpack__ = Var.dlpack (same pattern already used for the
+    // other dunder-shaped @pyjt methods in this codebase).
+    //
+    // `stream`/`max_version`/`dl_device`/`copy` mirror the modern
+    // __dlpack__(self, *, stream=None, max_version=None, dl_device=None,
+    // copy=None) protocol signature so this is a real drop-in any DLPack
+    // consumer can call with (not just the legacy DLPack 0.x `stream`-only
+    // form) -- see dlpack.cc for what each parameter actually does.
+    // @pyjt(dlpack)
+    PyObject* dlpack(PyObject* stream=nullptr, PyObject* max_version=nullptr,
+                      PyObject* dl_device=nullptr, PyObject* copy=nullptr);
+    // @pyjt(dlpack_device)
+    PyObject* dlpack_device();
 
     // @pyjt(migrate_to_cpu)
     // @attrs(return_self)

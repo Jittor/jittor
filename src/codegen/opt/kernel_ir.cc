@@ -529,6 +529,13 @@ vector<KernelIR*> KernelIR::find_loops(string lid) {
     return loops;
 }
 
+int KernelIR::loop_depth() const {
+    int depth = 0;
+    for (auto* p = father; p; p = p->father)
+        if (p->type == KernelIRType::loop) depth++;
+    return depth;
+}
+
 string KernelIR::to_string(int level, bool debug) {
     if (level==0 && debug) {
         check_father();
@@ -571,11 +578,31 @@ string KernelIR::to_string(int level, bool debug) {
     for (int i=0; i<level*4; i++) s << ' ';
     int inner_left=0;
     bool has_bc = false;
+    bool hoisted_loop_var = false;
     if (type == KernelIRType::loop) {
         if (inner.size()) {
             ASSERT(inner.size()>=3);
+            // nvcc's front end (cudafe++) is exponential in the nesting depth
+            // of loops that declare their variable in the for-init: a 17-deep
+            // nest compiles in 30 s and every further level costs 2.5x, so a
+            // reduction over a rank-20 tensor did not finish compiling in ten
+            // minutes. Declaring the variable in an enclosing block instead,
+            // `{ T i = 0; for (; ...) }`, is the same program and compiles the
+            // 20-deep nest in under a second. Shallow nests keep the usual form
+            // (and their existing source text): below about ten levels the
+            // cost is not measurable.
+            hoisted_loop_var = inner[0]->type == KernelIRType::define
+                && loop_depth() >= hoist_loop_var_depth;
+            if (hoisted_loop_var) {
+                auto c = inner[0]->to_string();
+                s << "{ " << c.substr(0, c.size()-1) << ' ';
+            }
             s << "for (";
             for (int i=0; i<3; i++) {
+                if (i==0 && hoisted_loop_var) {
+                    s << "; ";
+                    continue;
+                }
                 auto c = inner[i]->to_string();
                 c = c.substr(0, c.size()-2); // remove ;\n
                 s << c << (i==2?"":"; ");
@@ -623,7 +650,7 @@ string KernelIR::to_string(int level, bool debug) {
         s << c->to_string(level+1, debug);
     if (has_bc) {
         for (int i=0; i<level*4; i++) s << ' ';
-        s << "}\n";
+        s << (hoisted_loop_var ? "}}\n" : "}\n");
     }
     
     for (auto& c : after) s << c->to_string(level, debug);

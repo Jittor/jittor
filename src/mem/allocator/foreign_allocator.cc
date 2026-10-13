@@ -4,6 +4,9 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#include <unordered_map>
+#include <memory>
+#include <mutex>
 #include "mem/allocator/foreign_allocator.h"
 #include "core/var.h"
 
@@ -17,6 +20,18 @@ struct ForeignAllocation {
 };
 
 ForeignAllocator foreign_allocator;
+
+ForeignAllocator& get_foreign_allocator(int device_id) {
+    if (device_id < 0) return foreign_allocator;
+    static std::mutex pool_mutex;
+    static std::unordered_map<int, std::unique_ptr<ForeignAllocator>> pool;
+    std::lock_guard<std::mutex> lock(pool_mutex);
+    auto iter = pool.find(device_id);
+    if (iter != pool.end()) return *iter->second;
+    auto* p = new ForeignAllocator(device_id);
+    pool[device_id] = std::unique_ptr<ForeignAllocator>(p);
+    return *p;
+}
 
 const char* ForeignAllocator::name() const {return "foreign";}
 
@@ -33,9 +48,10 @@ void ForeignAllocator::free(void* mem_ptr, size_t size, const size_t& allocation
     }
 }
 
-void make_foreign_allocation(Allocation& a, void* ptr, size_t size, std::function<void()>&& del_func) {
+void make_foreign_allocation(Allocation& a, void* ptr, size_t size, std::function<void()>&& del_func,
+        Allocator* target) {
     auto fa = new ForeignAllocation(std::move(del_func));
-    a.allocator = &foreign_allocator;
+    a.allocator = target ? target : &foreign_allocator;
     a.allocation = (size_t)fa;
     a.ptr = ptr;
     a.size = size;

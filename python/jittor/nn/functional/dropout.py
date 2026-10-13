@@ -22,6 +22,7 @@ def _keep_scale(shape, p, dtype):
     before the dropout and the residual add after it into three kernels.
     """
     from jittor._core.var import _captured_keep
+
     mask = _captured_keep(shape, p)
     if mask is None:
         mask = (jt.random(shape) > p).stop_fuse()

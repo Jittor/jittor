@@ -283,7 +283,7 @@ ReduceOp::ReduceOp(Var* x, NanoString op, NanoVector dims, bool keepdims)
     auto xdim = x->shape.size();
     keepdims_mask = keepdims ? (int)-1 : (int)0;
     if (!dims.size()) {
-        reduce_mask = (1<<xdim)-1;
+        reduce_mask = xdim >= 32 ? ~0u : (1u<<xdim)-1;
     } else {
         reduce_mask = 0;
         for (auto dim : dims) {
@@ -291,7 +291,7 @@ ReduceOp::ReduceOp(Var* x, NanoString op, NanoVector dims, bool keepdims)
             USER_CHECK(dim>=0 && dim<xdim) << "Reduce dim out of range: requested dims" << dims
                 << "for a" << (int)xdim >> "-D var; valid dims are" << -(int)xdim
                 << "to" << ((int)xdim-1) >> ".";
-            reduce_mask |= 1<<dim;
+            reduce_mask |= 1u<<dim;
         }
     }
     // if (x->dtype() == ns_bool && ns == ns_add)
@@ -424,14 +424,14 @@ void ReduceOp::jit_prepare(JK& jk) {
         << "«Ty:" << y->dtype()
         << "«Tz:" << y->dtype()
         << "«OP:" << ns
-        << "«DIM=" << JK::hex1(x->shape.size())
+        << "«DIM=" << JK::hex(x->shape.size())
         << "«REDUCE=" << JK::hex(reduce_mask)
-        << "«EMPTY_MEAN=" << JK::hex1(x->num == 0 && ns == ns_mean)
+        << "«EMPTY_MEAN=" << JK::hex(x->num == 0 && ns == ns_mean)
         // Which of the two xstride forms jit_run emits, so a strided input and
         // a contiguous one of the same rank never share a compiled kernel.
         // Always in the key, even for 0: the two forms are different code, and
         // the key is the only thing that decides which one runs.
-        << "«XSTRIDED=" << JK::hex1(!x->is_contiguous());
+        << "«XSTRIDED=" << JK::hex(!x->is_contiguous());
 }
 
 #else // JIT

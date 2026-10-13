@@ -84,8 +84,12 @@ print("BODY-DONE", flush=True)
 _POISON_CONTEXT = textwrap.dedent("""
     import sys
     x = jt.zeros((1,), "float32")
+    # Address 16, not p past its end: under HMM a GPU write to any mapped host
+    # page succeeds, and `import jittor` raises RLIMIT_STACK to 512 MiB, which a
+    # child inherits as the size of each thread stack -- p[1<<28] landed in one
+    # and nothing faulted. Page 0 is never mapped, by any process.
     y = jt.code(x.shape, x.dtype, [x], cuda_src=\"\"\"
-        __global__ void jt_out_of_bounds_write(float* p) { p[1<<28] = 1.0f; }
+        __global__ void jt_out_of_bounds_write(float* p) { *((volatile float*)16) = 1.0f; }
         jt_out_of_bounds_write<<<1,1>>>(out0_p);
     \"\"\")
     try:

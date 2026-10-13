@@ -22,8 +22,8 @@ struct BroadcastToOp : Op {
     void run() override;
     Var* x, * y, * z;
     NanoVector shape;
-    uint16 bcast_mask;
-    uint16 keepdims_mask;
+    uint32 bcast_mask;
+    uint32 keepdims_mask;
 
     /**
     Broadcast ``x`` to a given shape.

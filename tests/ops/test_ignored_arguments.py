@@ -248,14 +248,14 @@ class TestCtcLossZeroInfinity(_PolicyCase):
 
 
 class TestSortStable(_PolicyCase):
-    def test_stable_raises(self):
+    def test_stable_preserves_equal_key_order(self):
         x = jt.array(np.array([3, 1, 1, 2], dtype="int32"))
-        with self.assertRaises(NotImplementedError) as ctx:
-            jt.sort(x, stable=True)
-        self.assertIn("stable", str(ctx.exception))
+        values, indices = jt.sort(x, stable=True)
+        np.testing.assert_array_equal(values.numpy(), [1, 1, 2, 3])
+        np.testing.assert_array_equal(indices.numpy(), [1, 2, 3, 0])
 
     def test_argsort_really_is_unstable_on_cpu(self):
-        """The reason ``stable=True`` is refused rather than accepted."""
+        """Opt-in stability does not change the default CPU sorting path."""
         from contextlib import ExitStack as _TestPolicyStack
         with _TestPolicyStack() as _test_policy_stack:
             saved = jt.introspection.policy.runtime.use_cuda
@@ -267,8 +267,7 @@ class TestSortStable(_PolicyCase):
                 stable_reference = np.argsort(keys, kind="stable")
                 self.assertFalse(
                     np.array_equal(index.numpy(), stable_reference),
-                    "argsort became stable on CPU -- implement sort(stable=True) "
-                "instead of refusing it",
+                    "the default CPU argsort path unexpectedly became stable",
                 )
                 # it is still a correct sort, just not a stable one
                 np.testing.assert_array_equal(

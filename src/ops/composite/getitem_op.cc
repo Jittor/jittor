@@ -316,25 +316,25 @@ void GetitemOp::jit_prepare(JK& jk) {
     auto in = inputs().front();
     int idim = i_to_vs.size();
     jk << "«Ti:" << in->dtype();
-    jk << "«IDIM=" << JK::hex1(i_to_vs.size());
-    jk << "«ODIM=" << JK::hex1(o_shape.size());
+    jk << "«IDIM=" << JK::hex(i_to_vs.size());
+    jk << "«ODIM=" << JK::hex(o_shape.size());
     if (first_oid_of_var>=0) {
-        jk << "«FOV=" << JK::hex1(first_oid_of_var);
-        jk << "«VD=" << JK::hex1(var_dim);
+        jk << "«FOV=" << JK::hex(first_oid_of_var);
+        jk << "«VD=" << JK::hex(var_dim);
     }
     for (int i=0; i<idim; i++) {
         auto iv = i_to_vs[i];
         auto io = i_to_o[i];
-        jk << "«IV" << JK::hex1(i) << ':' << JK::shex1(iv);
-        jk << "«IO" << JK::hex1(i) << ':' << JK::shex1(io);
+        jk << "«IV" << JK::dec(i) << ':' << JK::sdec(iv);
+        jk << "«IO" << JK::dec(i) << ':' << JK::sdec(io);
         auto& v = vs.slices[iv];
         if (iv>=0 && io==-1) {
             if (v.is_int()) {
-                jk << "«VS" << JK::hex1(i) << ":-1";
+                jk << "«VS" << JK::dec(i) << ":-1";
             } else
             if (v.is_str()) {
-                jk << "«VS" << JK::hex1(i) << ":-5";
-                jk << "«VSS" << JK::hex1(i) << ":" << v.get_str();
+                jk << "«VS" << JK::dec(i) << ":-5";
+                jk << "«VSS" << JK::dec(i) << ":" << v.get_str();
             } else {
                 ASSERT(v.is_var());
                 auto var = v.var;
@@ -344,17 +344,17 @@ void GetitemOp::jit_prepare(JK& jk) {
                 for (int j=0; j<vdim; j++) {
                     int k = first_oid_of_var+j+var_dim-vdim;
                     if (vshape[j] == o_shape[k])
-                        vsmask |= 1<<(j+var_dim-vdim);
+                        vsmask |= (int)(1u<<(j+var_dim-vdim));
                 }
-                jk << "«VS" << JK::hex1(i) << '=' << JK::hex(vsmask);
-                jk << "«VST" << JK::hex1(i) << ':' << var->dtype();
+                jk << "«VS" << JK::dec(i) << '=' << JK::hex((uint)vsmask);
+                jk << "«VST" << JK::dec(i) << ':' << var->dtype();
             }
         } else
         if (iv>=0 && io>=0) {
             ASSERT(v.is_slice());
-            jk << "«VS" << JK::hex1(i) << ':';
+            jk << "«VS" << JK::dec(i) << ':';
             if (std::abs(v.slice.step) <= 1)
-                jk << JK::shex1(v.slice.step);
+                jk << JK::sdec(v.slice.step);
             else
                 jk << '0';
         }

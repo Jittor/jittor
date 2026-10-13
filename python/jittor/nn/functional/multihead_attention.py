@@ -1,4 +1,5 @@
 """Canonical functional multi-head attention."""
+
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt

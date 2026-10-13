@@ -59,7 +59,7 @@ void ReduceTuner::run(PassManager* pm, TunerManager* tm) {
         if (op->type() == OpType::reduce) {
             rd = 1;
             auto mask = ((ReduceOp*)op)->reduce_mask;
-            for (uint j=0; (1<<j)<=mask; j++)
+            for (uint j=0; j<32; j++)
                 if (mask>>j&1) dim_map[j] = 1;
         }
     }

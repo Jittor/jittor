@@ -19,6 +19,7 @@ def pytest_addoption(parser, pluginmanager):
 
 def _torch_mode_is_active():
     import os
+
     value = os.environ.get("JITTOR_TORCH_SHIM", "").strip().lower()
     return value not in ("", "0", "false", "no", "off")
 
@@ -37,13 +38,16 @@ def pytest_configure(config):
     """
     import os
     import sys as _sys
+
     if not _torch_mode_is_active():
         return
     from jittor.compat.shim.deploy import deploy
     from jittor.compat.shim.preflight import resources_root
     import jittor_utils
-    target = os.path.join(jittor_utils.home(), ".cache", "jittor",
-                          "torch-shim", "pytest-site-packages")
+
+    target = os.path.join(
+        jittor_utils.home(), ".cache", "jittor", "torch-shim", "pytest-site-packages"
+    )
     deploy(target)
     # In *this* process the stubs come from the packaged resources rather than
     # from the copy: they are what is under test, and a test that asks where

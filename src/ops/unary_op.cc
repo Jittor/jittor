@@ -927,6 +927,13 @@ VarPtr UnaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
         // unaries are implemented. Others return nullptr (loud no-grad, never silent-wrong).
         if (ns == ns_cast && y->dtype().is_float())
             return make_unary(dout, x->dtype());  // d(real-cast z) -> real dout + 0j
+        if (ns == ns_cast && y->dtype().is_complex())
+            // complex64<->complex128 precision cast: linear (a coordinate-wise
+            // real/imag width change), so the adjoint is just casting the
+            // incoming cotangent back to x's own width -- same shape as the
+            // real float32<->float64 cast backward below (ns_cast, !is_complex
+            // branch), generalized to complex.
+            return make_unary(dout, x->dtype());
         if (ns == ns_negative) return make_unary(dout, ns_negative);  // d(-z) -> -dout
         if (ns == ns_conj) return make_unary(dout, ns_conj);          // d(conj z) -> conj(dout)
         if (ns == ns_abs) {
@@ -1104,8 +1111,8 @@ void UnaryOp::jit_prepare(JK& jk) {
     jk << "«Tx:" << x->dtype()
         << "«Ty:" << y->dtype()
         << "«OP:" << ns
-        << "«DIM=" << JK::hex1(x->shape.size())
-        << "«XSTRIDED=" << JK::hex1(strided);
+        << "«DIM=" << JK::hex(x->shape.size())
+        << "«XSTRIDED=" << JK::hex(strided);
     // Only when it is read, so a contiguous operand keeps the key it had.
     if (strided) jk << "«XSMASK=" << JK::hex(x->stride_pattern());
 }

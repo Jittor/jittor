@@ -351,9 +351,13 @@ class DomainRouting(unittest.TestCase):
         # defect class as the module-level *constants* `a1977f68` taught the
         # loader to carry: a name the surviving function reads and the sandbox
         # never provided.
-        owner = definitions("ops/concatenation.py", {"concat", "_merge_dtypes"},
+        # `concat` now validates and dispatches in `_concat` (it only scopes
+        # the AMP flag itself), which reads dtypes through the module's
+        # `_jittor_dtype_name` import -- the stand-in dtypes here are already
+        # names.
+        owner = definitions("ops/concatenation.py", {"concat", "_concat", "_merge_dtypes"},
                             jt=jt, _jt=lambda: jt, Sequence=(list, tuple),
-                            select_kernel=select)
+                            select_kernel=select, _jittor_dtype_name=str)
         inputs = (Var("int32"), Var("float32"))
         self.assertIs(owner.concat(inputs, -1), result)
         self.assertEqual([value.dtype for value in calls[0][0]], ["float32", "float32"])

@@ -1,19 +1,41 @@
-# The image is built from the Python package and versioned examples. A
-# default-deny context keeps local experiments, worktrees, caches and raw results
-# out even when they use a name that has not appeared in this repository before.
+# Default-deny context keeps local experiments, worktrees, caches and raw
+# results out even when they use a name that has not appeared in this
+# repository before. Containerfile.cuda installs this repo's two
+# distributions from source -- core (pyproject.toml at the root, whose
+# package-dir maps jittor.src -> src/ and jittor.backends.* -> backends/*/)
+# and compat (compat/pyproject.toml) -- plus runs its pytest suite, so both
+# distributions' full source and the test tree need to reach the build
+# context, not just the plain `python/` package the old single-distribution
+# image needed.
 **
 !setup.py
 !pyproject.toml
 !README.md
 !MANIFEST.in
 !LICENSE.txt
+!AGENTS.md
 !python/
 !python/**
+!src/
+!src/**
+!backends/
+!backends/**
+!compat/
+!compat/**
+!tests/
+!tests/**
+!tools/
+!tools/**
+!agent/
+!agent/**
 !requirements/
-!requirements/examples.txt
+!requirements/**
 !examples/
 !examples/**
 examples/**/__pycache__/
 examples/**/.pytest_cache/
 examples/**/.ipynb_checkpoints/
 examples/**/*.ipynb
+**/__pycache__/
+**/.pytest_cache/
+**/*.pyc

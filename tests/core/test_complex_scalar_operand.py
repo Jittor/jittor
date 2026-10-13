@@ -11,9 +11,16 @@ arithmetic operators, so every ``+``, ``-``, ``*`` and ``/`` in every model
 paid a python frame for it. The conversion belongs in the argument
 converter, and these tests pin down what it has to produce.
 
-jittor's complex support is complex64 throughout -- ``dtype_infer`` answers
-``ns_complex64`` for every complex combination -- so a complex128 operand
-narrows, exactly as a python float narrows to float32.
+A bare python/numpy complex *scalar* narrows to complex64 here, exactly as a
+python float narrows to float32 -- this is the argument converter's literal-
+construction default (see ``py_converter.h``'s ``ArrayArgs`` scalar path), not
+a width limit of jittor's complex support. jittor also has a native complex128
+dtype (``KI-COMPLEX-001`` is closed; see ``docs/notes/complex-dtype.md``):
+``dtype_infer``/``binary_dtype_infer`` promote to complex128 when either
+*Var* operand actually needs double precision (a complex128 Var, or a
+float64/int64-width real Var). That promotion rule is exercised by
+``tests/core/test_complex128_native.py``, not here -- this file is only about
+the scalar-literal narrowing default.
 """
 
 import unittest

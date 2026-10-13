@@ -7,20 +7,11 @@ from .._runtime.dispatch import select_kernel
 def sort(input, dim=-1, descending=False, stable=False):
     ''' Sort along ``dim``, returning ``(values, indices)`` like ``torch.sort``.
 
-    ``stable=True`` is not implemented: jittor's ``argsort`` is not a stable sort
-    on CPU (verified against ``numpy.argsort(kind="stable")`` -- equal keys come
-    back permuted), so accepting the flag would promise an ordering the sort does
-    not deliver. It happens to be stable on the current CUDA backend, which is
-    exactly why the difference has to be refused rather than assumed.
+    ``stable=True`` preserves the input order of equal keys on CPU and CUDA.
+    The default keeps the existing, potentially unstable ordering.
     '''
     import jittor as jt
-    if stable:
-        _arg_policy.unsupported(
-            "jittor.sort", "stable", stable,
-            "jittor's argsort is not stable on CPU, so equal elements come back "
-            "in an arbitrary order and the indices of tied keys differ from "
-            "torch's")
-    index, value = jt.argsort(input, dim, descending)
+    index, value = jt.argsort(input, dim, descending, stable=stable)
     return value, index
 
 
