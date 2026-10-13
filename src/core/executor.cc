@@ -54,8 +54,8 @@ DEFINE_FLAG(int, gopt_disable, 0, "Disable graph optimizer.");
 DEFINE_FLAG(int, use_threading, 0, "Allow to use python threading with jittor.");
 
 DEFINE_FLAG(int, exec_called, 0, "exec sync called");
-DEFINE_FLAG(int, async_execution, 1, "Run an auto-flushed batch of an inference graph (under no_grad, on CUDA, or on ACL with `backend_fallback=error`) on a worker thread while Python keeps building the graph; every executor entry, and so every read of a Var's data, waits for it first. See runtime/async_exec.h. 0 executes every batch on the calling thread. Without the worker such a flush also has to carry `auto_flush_bytes` of output to be taken; with it, any auto-flush is. On ACL nothing is auto-flushed at all unless the worker takes it (`async_auto_flush_only`): an inline flush there was measured slower at every batch size.");
-DEFINE_FLAG(int, async_flush_ops, 64, "With `async_execution`, an inference graph is also flushed to the worker when a module call returns and this many operators have been created since the last flush (`auto_flush_ops` still applies between). 0 flushes at `auto_flush_ops` only.");
+DEFINE_FLAG(int, async_execution, 1, "Run an auto-flushed batch (of an inference graph on CUDA; on ACL, with `backend_fallback=error`, of a training forward too) on a worker thread while Python keeps building the graph; every executor entry, and so every read of a Var's data, waits for it first. See runtime/async_exec.h. 0 executes every batch on the calling thread. Without the worker such a flush also has to carry `auto_flush_bytes` of output to be taken; with it, any auto-flush is. On ACL nothing is auto-flushed at all unless the worker takes it (`async_auto_flush_only`): an inline flush there was measured slower at every batch size.");
+DEFINE_FLAG(int, async_flush_ops, 64, "With `async_execution`, such a graph is also flushed to the worker when a module call returns and this many operators have been created since the last flush (`auto_flush_ops` still applies between). 0 flushes at `auto_flush_ops` only.");
 DECLARE_FLAG(int, async_min_caller_us);
 DECLARE_FLAG(bool, no_grad);
 DECLARE_FLAG(int, keep_graph);
@@ -95,9 +95,18 @@ static bool worker_admits_accelerator() {
         || async_exec_handover_pays();
 }
 
+// Whether the graph being built is one the worker may take. An inference
+// graph always; a training forward's only where the backend's policy says a
+// flush costs it nothing (`async_admits_grad`). The backward's own
+// construction window is excluded either way, in `auto_flush`.
+static bool worker_admits_grad() {
+    return no_grad
+        || backend_ops(accelerator_backend_id()).execution.async_admits_grad;
+}
+
 static bool deferrable_flush() {
-    return async_execution && no_grad && async_flush_ops > 0 && async_exec_single_thread()
-        && worker_admits_accelerator();
+    return async_execution && worker_admits_grad() && async_flush_ops > 0
+        && async_exec_single_thread() && worker_admits_accelerator();
 }
 
 void Executor::auto_flush() {
@@ -401,8 +410,9 @@ struct BatchState {
     vector<Var*> vars;
 };
 
-// Whether a planned batch may run on the worker: an auto-flushed batch of an
-// inference graph, every operator of it on the accelerator, and nothing
+// Whether a planned batch may run on the worker: an auto-flushed batch of a
+// graph the worker is allowed to take (`worker_admits_grad`), every operator
+// of it on the accelerator, and nothing
 // watching the executor that expects it on this thread -- step traces,
 // profilers, recordings, kept graphs, swapping. A dynamic shape is resolved
 // before planning (`resolve_dynamic_inputs`), so none is left to sync from
@@ -418,7 +428,7 @@ static bool may_run_async(const ExecPlan& plan) {
     // (`async_requires_strict_fallback`). The worker needs no device binding
     // of its own; `BackendOps::set_device` says why. `use_cuda` alone is set
     // on every accelerator.
-    if (!async_execution || !no_grad || keep_graph || save_mem || use_threading
+    if (!async_execution || !worker_admits_grad() || keep_graph || save_mem || use_threading
             || !runtime_use_cuda() || !worker_admits_accelerator()
             || graph_capture_recording || profiler_enable
             || profile_memory_enable || trace_py_var || step_trace_active()

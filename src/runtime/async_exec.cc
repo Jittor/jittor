@@ -162,6 +162,18 @@ std::chrono::steady_clock::time_point submitted_at;
 int64 caller_work_ns = -1;
 int declines_since_probe = 0;
 
+// Python objects the worker was the last owner of, waiting for the Python
+// thread to drop them (`async_exec_defer_python_release`).
+struct PythonReleases {
+    std::mutex mutex;
+    std::vector<std::function<void()>> queue;
+    std::atomic<bool> pending{false};
+};
+PythonReleases& python_releases_state() {
+    static PythonReleases state;
+    return state;
+}
+
 void note_caller_work() {
     auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now() - submitted_at).count();
@@ -373,6 +385,28 @@ bool async_exec_handover_pays() {
 
 void async_exec_hold_active_bindings() { lock_resumed_bindings(); }
 
+bool async_exec_defer_python_release(std::function<void()>&& release) {
+    if (!is_worker) return false;
+    auto& state = python_releases_state();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    state.queue.push_back(std::move(release));
+    state.pending.store(true, std::memory_order_release);
+    return true;
+}
+
+void async_exec_run_python_releases() {
+    auto& state = python_releases_state();
+    if (is_worker || !state.pending.load(std::memory_order_acquire)) return;
+    if (!Py_IsInitialized() || !PyGILState_Check()) return;
+    std::vector<std::function<void()>> taken;
+    {
+        std::lock_guard<std::mutex> lock(state.mutex);
+        taken.swap(state.queue);
+        state.pending.store(false, std::memory_order_release);
+    }
+    for (auto& release : taken) release();
+}
+
 void async_exec_submit(std::function<void()>&& job) {
     submitted_at = std::chrono::steady_clock::now();
     std::unique_lock<std::mutex> lock(worker->mutex);
@@ -386,6 +420,7 @@ void async_exec_submit(std::function<void()>&& job) {
 
 void async_exec_wait() {
     if (is_worker) return;
+    async_exec_run_python_releases();
     if (async_exec_inflight.load(std::memory_order_acquire)) {
         note_caller_work();
         wait_for_worker_unlocked();

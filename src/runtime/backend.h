@@ -52,6 +52,12 @@ struct BackendExecutionPolicy {
     // to do meanwhile (`async_exec_handover_pays`). For a backend where a
     // handover the caller immediately waits on costs more than it saves.
     bool async_handover_must_pay = false;
+    // Hand a training forward's batches to the worker too, not an inference
+    // graph's only. What an auto-flush costs a training step is that an
+    // intermediate the backward reads is written out instead of fusing into
+    // its readers, so this is for a backend that does not fuse generated
+    // kernels in the first place.
+    bool async_admits_grad = false;
 };
 
 // The registry copies this versioned table; callback code and allocator pools

@@ -1,12 +1,14 @@
-"""Inference batches executed on a worker thread (src/runtime/async_exec.h).
+"""Batches executed on a worker thread (src/runtime/async_exec.h).
 
 Under ``no_grad`` on CUDA -- and on ACL, where the worker also binds the
-device the batch was posted from -- an auto-flushed batch runs on one worker
-thread while Python keeps building the graph. What has to hold: the numbers are the ones a
+device the batch was posted from and takes a training forward as well -- an
+auto-flushed batch runs on one worker thread while Python keeps building the
+graph. What has to hold: the numbers are the ones a
 batch on the calling thread gives, every read of a Var's data sees the
 worker's writes, a flag assignment does not overtake a batch that reads flags,
-anything that needs a gradient stays on the calling thread, and a second
-Python thread building meanwhile neither deadlocks nor corrupts the graph.
+a gradient is handed over only where the backend's policy says a flush costs
+a training step nothing, and a second Python thread building meanwhile
+neither deadlocks nor corrupts the graph.
 
 Each case says whether the worker took a batch (``async_exec_batches``); where
 this process cannot place a worker -- no second core in the calling thread's
@@ -195,14 +197,67 @@ class TestAsyncExecution(unittest.TestCase):
         for got, ref in zip(values, want):
             np.testing.assert_array_equal(got, ref)
 
-    def test_training_stays_on_the_calling_thread(self):
+    def _train(self, async_on, steps=20):
         w = jt.array(self.w.numpy())
-        before = jt.core.async_exec_batches()
-        out = _chain(self.x, w, 20)
-        grad = jt.grad(out.sum(), w)
-        grad.sync()
-        self.assertEqual(jt.core.async_exec_batches(), before)
-        self.assertTrue(np.isfinite(grad.numpy()).all())
+        with jt.flag_scope(async_execution=async_on, async_min_caller_us=0):
+            before = jt.core.async_exec_batches()
+            out = _chain(self.x, w, steps)
+            grad = jt.grad(out.sum(), w)
+            grad.sync()
+            return grad.numpy(), jt.core.async_exec_batches() - before
+
+    def test_a_training_forward_goes_to_the_worker_only_where_it_is_free(self):
+        """Whether training is handed over is the backend's call.
+
+        An auto-flush costs a training step an intermediate written out
+        instead of fused into its readers; a backend that fuses nothing loses
+        nothing by it and sets `async_admits_grad`.
+        """
+        want, ran_sync = self._train(0)
+        got, ran = self._train(1)
+        self.assertEqual(ran_sync, 0)
+        if _worker_backend() == "acl":
+            self._need_worker(ran)
+        else:
+            self.assertEqual(ran, 0)
+        np.testing.assert_array_equal(got, want)
+
+    def test_a_python_owned_tape_released_by_the_worker(self):
+        """A `jt.Function`'s backward is a Python callable the tape owns.
+
+        The worker has no GIL, so dropping the last reference to one as a
+        batch winds down used to be a segfault rather than a refcount; the
+        release goes back to this thread instead
+        (`async_exec_defer_python_release`). Training on ACL builds these
+        constantly -- its convolutions and norms are `jt.Function`s.
+        """
+        class Scale(jt.Function):
+            def execute(self, x):
+                self.saved = x
+                return x * 2.0
+
+            def grad(self, grad_output):
+                return grad_output * 2.0
+
+        def run(async_on):
+            w = jt.array(self.w.numpy())
+            with jt.flag_scope(async_execution=async_on, async_min_caller_us=0):
+                before = jt.core.async_exec_batches()
+                x = self.x
+                for _ in range(12):
+                    x = Scale()(_chain(x, w, 3))
+                grad = jt.grad(x.sum(), w)
+                grad.sync()
+                return grad.numpy(), jt.core.async_exec_batches() - before
+
+        want, _ = run(0)
+        got, ran = run(1)
+        if _worker_backend() == "acl":
+            self._need_worker(ran)
+        np.testing.assert_array_equal(got, want)
+        # The deferred releases are run on this thread at the next executor
+        # entry; reaching here without a crash is the assertion.
+        jt.sync_all(True)
 
     def test_a_flag_assignment_waits_for_the_batch(self):
         with jt.no_grad():

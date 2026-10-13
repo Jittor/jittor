@@ -852,6 +852,11 @@ BackendOps make_acl_backend() {
     // fifth of a ResNet50 batch-32 inference, and costs 2-5% on the steps
     // short enough that the caller waits right after handing over.
     ops.execution.async_handover_must_pay = true;
+    // ACL fuses nothing (`supports_generated_device_kernels` is false), so a
+    // flush in the middle of a training forward cuts no fusion the backward
+    // was relying on: measured over the four training workloads, the peak
+    // moved between -4.6% and +3.7% while the step got 8-18% faster.
+    ops.execution.async_admits_grad = true;
     ops.execution.preserve_reduction_dtype = true;
     ops.execution.native_low_precision_reduction = true;
     ops.execution.supports_generated_device_kernels = false;

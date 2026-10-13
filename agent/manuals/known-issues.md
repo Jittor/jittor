@@ -1102,6 +1102,48 @@ workaround.
   declines, and remains open. Absolute ratios on npu 2 differ from npu 3
   because the torch baseline does (`qwen3_prefill` 74.7 ms vs 84.8 ms);
   compare within a card only.
+  (2026-10-13) The worker then stopped being an inference-only device, which
+  is where the four training workloads' remaining gap mostly was. `no_grad`
+  was never a correctness requirement in itself -- the backward's own
+  construction window is excluded separately (`grad_construction_depth`) --
+  but one thing did make a training forward unsafe to hand over, and it was a
+  real bug, not a design limit: a tape made from a `jt.Function` owns the
+  Python callable its backward calls, and the worker, which has no GIL, was
+  the thread that ran the `Py_DECREF` ending the batch. `ddpm_unet_train` and
+  `qwen3_train` segfaulted in `Tapes::~Tapes` inside `worker_main` on the
+  first attempt. That release now goes back to the Python thread
+  (`async_exec_defer_python_release`, drained at every executor entry), and a
+  backend whose policy sets `async_admits_grad` hands training forwards over.
+  ACL sets it because it fuses nothing: the cost an auto-flush has for a
+  training step is an intermediate written out instead of fused into its
+  readers, and there is no fusion there to lose.
+  Paired on npu 2, the four training workloads, same tree with and without
+  the handover, zero fallbacks: geometric mean 1.1743x -> 0.9851x.
+  `bert_base_train` 1.749x -> 1.336x, `qwen3_train` 0.860x -> 0.724x,
+  `ddpm_unet_train` 1.031x -> 0.860x, `vit_b16_train` 1.227x -> 1.131x.
+  Device peaks moved between -4.6% and +3.7%, which is what the no-fusion
+  argument predicts. Numerics are unchanged: eight SGD steps of a
+  convolutional stack differ from the serial run by exactly as much as the
+  serial run differs from itself (loss 2.4e-7, weights 7.6e-7 -- ACL
+  convolution is not bit-reproducible run to run).
+  The 12-workload geometric mean on npu 2 read 0.8588x after this, against
+  0.8941x for the previous tree on the same torch baseline. Its inference
+  rows read 1.5-4% worse than the earlier run, which is drift and not this
+  change: two repeats of one build on that card spread 5-7% on them
+  (`resnet50_infer_b1` 0.377x and 0.404x, `qwen3_decode` 1.298x and 1.236x),
+  and the torch baseline itself moved 12% on `sd15_sample` between runs. Only
+  the paired same-session A/B above is quoted as this change's effect.
+  `bert_base_train` is still the furthest behind at ~1.32x. Its dropout is a
+  second, independent lever, measured but not taken: the live path
+  (`_keep_scale`) draws a float32 uniform through `DSARandomUniform`, then
+  compares, casts and multiplies, where `aclnnDropout` does all of it in one
+  op and returns a mask of numel/8 bytes. On the BERT-base shapes, forward
+  plus backward, `aclnnDropout` costs 0.47-0.77x of the live path
+  (595.6 -> 459.9 us on (32,128,768) with 24 calls in flight) and is
+  numerically right (keeps 0.9011 of elements, scales by 1.1111, a fresh mask
+  per call). An implementation already exists and is already correct --
+  `DropoutACL`, fixed under KI-BACKEND-018 -- and is reachable from no
+  dispatch path.
   `bert_base_train`'s gap is similarly not a dispatch bug: an aclprof
   capture shows `MatMulV2` at 42.4% of device time (the
   expected dominant cost for a transformer) and `DSARandomUniform` --
@@ -1730,6 +1772,37 @@ workaround.
   which was CUDA-only-skipped before and now runs on ACL.
 - Fix: both ACL entry points treat the status as "unbound" and bind the
   device the process is using, mirroring CUDA.
+
+## KI-EXEC-013: the worker dropped a `jt.Function`'s Python callable without the GIL
+
+- Severity: High (a segfault), Fixed
+- Status: Fixed (2026-10-13), verified on a 910B3
+- Owner: executor / async execution
+- Symptom: `ddpm_unet_train` and `qwen3_train` on ACL died with
+  `Caught segfault at address ...` the first time the async-execution worker
+  was allowed to take a training forward's batches. The backtrace was the
+  same in both: `worker_main` -> `Executor::run_sync`'s batch lambda ->
+  `run_exec_plan` -> `Tapes::~Tapes` ->
+  `from_py_object<GradCallback>`'s deleter lambda.
+- Cause: a tape built from a `jt.Function` owns the Python callable its
+  backward calls, and `GradCallback`'s deleter is a bare
+  `Py_DECREF(obj); Py_DECREF(frontend_type)`. When the last owner of such a
+  tape is a batch the worker is winding down, that runs on a thread with no
+  GIL, which is a memory corruption rather than a refcount. Not ACL-specific
+  in itself, but only ACL hands a training forward over
+  (`async_admits_grad`), and ACL reaches it constantly because its
+  convolutions and norms are `jt.Function`s. Latent before that: under
+  `no_grad` no tape exists, which is what had kept the worker safe.
+- Workaround: `async_execution=0`.
+- Evidence: the two crash reports with their resolved frames (`addr2line`
+  against the run's `jittor_core` build). Regression test:
+  `tests/runtime/test_async_execution.py::...::test_a_python_owned_tape_released_by_the_worker`,
+  which puts a `jt.Function` in a chain long enough to be handed over and
+  compares the gradient against the serial run.
+- Fix: `async_exec_defer_python_release` -- on the worker the two references
+  are queued instead of dropped, and the Python thread runs the queue at its
+  next executor entry (`async_exec_run_python_releases`, which also checks it
+  holds the GIL). Off the worker the deleter still drops them itself.
 
 ## KI-COMPAT-001: Torch namespaces publish native-only helpers and imported symbols
 

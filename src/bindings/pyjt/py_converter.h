@@ -18,6 +18,7 @@
 #include "utils/fast_shared_ptr.h"
 #include "runtime/profiler/simple_profiler.h"
 #include "runtime/dispatch_context.h"
+#include "runtime/async_exec.h"
 #ifdef HAS_ACCELERATOR
 #include "runtime/device.h"
 #include "runtime/backend.h"
@@ -1166,8 +1167,14 @@ DEF_IS(GradCallback, T) from_py_object(PyObject* obj) {
         },
         // deleter
         [obj, frontend_type]() {
-            Py_DECREF(obj); 
-            Py_DECREF(frontend_type);
+            // The last owner of this callable may be a batch the
+            // async-execution worker is winding down, and that thread has no
+            // GIL; hand the two references back to the Python thread.
+            auto drop = [obj, frontend_type]() {
+                Py_DECREF(obj);
+                Py_DECREF(frontend_type);
+            };
+            if (!async_exec_defer_python_release(drop)) drop();
         }
     );
     frontend_owner.release();
