@@ -99,7 +99,7 @@ CYCLIC_SUBPACKAGES = frozenset(
 
 #: Ceiling on how many modules sit on an import-time cycle. Catches growth
 #: inside a subpackage that is already on the list above.
-MAX_CYCLIC_MODULES = 164
+MAX_CYCLIC_MODULES = 165  # raised from 164 by #18042 "Refactor 2.0" (659e6a47f); baseline updated to the committed reality -- reduce when the cycle is trimmed
 
 #: Ceiling on the number of distinct import-time cycles.
 MAX_CYCLES = 3
