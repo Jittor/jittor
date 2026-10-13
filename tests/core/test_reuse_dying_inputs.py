@@ -131,7 +131,7 @@ class TestReuseDyingInputs(JittorTestCase):
 instantiate_device_type_tests(TestReuseDyingInputs, globals())
 
 
-@unittest.skipUnless(_HAS_CUDA, "the peak and the launch order are read off the device")
+@unittest.skipUnless(_HAS_CUDA, "the peak and the launch order are read off the CUDA device")
 class TestReuseDyingInputsOnDevice(JittorTestCase):
 
     def setUp(self):

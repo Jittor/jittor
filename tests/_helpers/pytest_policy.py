@@ -732,6 +732,17 @@ _SKIP_BUCKET_PATTERNS = {
         "no numpy reference",
         "no differentiable samples",
         "the resolver is where these names are allowed",
+        # OpInfo entries that declare a generic gradient check inapplicable and
+        # name where the derivative is verified instead: `split`
+        # (tests/opinfo/definitions/shape.py) and `digamma`
+        # (special_unary.py, checked against scipy in test_special_grad.py).
+        "harness-limited",
+        "see test_gradcheck skip",
+        "verified analytically",
+        # The FFT OpInfo's float64 samples (tests/opinfo/definitions/fft.py):
+        # the spectrum of a float64 input is complex128, recorded against
+        # KI-COMPLEX-001 -- a fact about the operator, not this machine.
+        "needs complex128",
     ),
 }
 

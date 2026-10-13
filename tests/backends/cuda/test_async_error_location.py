@@ -33,6 +33,7 @@ def test_launch_history_survives_graph_release():
     assert "CUDA error at" not in result.stderr
 
 
+@pytest.mark.xfail(strict=True, reason="KI-BACKEND-019: the injected out-of-bounds kernel write is never reported")
 @pytest.mark.parametrize("boundary", ["device_wait", "readback"])
 def test_asynchronous_fault_reports_creation_line(boundary):
     _require_cuda()

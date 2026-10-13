@@ -451,7 +451,10 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
         for (uint i = 0; i < ops.size() && !reduce_candidate; i++) {
             Op* reduce = ops[i];
             if (reduce->type() != OpType::reduce) continue;
-            for (Var* var : reduce->inputs()) {
+            for (auto& e : reduce->_inputs) {
+                // A control edge orders, it does not feed: see the merge below.
+                if (e.reverse().index < 0) continue;
+                Var* var = e.node->var();
                 if (var->tflag != tt || var->batch_index_at(tt) < start_var_num) continue;
                 Op* producer = var->input();
                 if (!producer || producer->tflag != tt) continue;
@@ -502,7 +505,18 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
         for (uint i = 0; i < ops.size(); i++) {
             Op* reduce = ops[i];
             if (reduce->type() != OpType::reduce) continue;
-            for (Var* var : reduce->inputs()) {
+            for (auto& e : reduce->_inputs) {
+                // `inputs()` lists control edges too, and the in-place setitem
+                // adds one from the buffer it writes into to the op computing
+                // the value, precisely so the buffer is filled first. Taken as
+                // a data input, that buffer's fill (`zeros` -- a broadcast, of
+                // the reduction's shape whenever the value is a whole slice)
+                // passed every test here and was merged into the reduction's
+                // kernel, where nothing orders the two: `z[1] = (p * q).sum(-1)`
+                // on a fresh `z` came back with its first element zeroed, and
+                // so did every non-MKL CPU matmul gradient taken through `x[t]`.
+                if (e.reverse().index < 0) continue;
+                Var* var = e.node->var();
                 if (var->tflag != tt || var->batch_index_at(tt) < start_var_num) continue;
                 Op* producer = var->input();
                 if (!producer || producer->tflag != tt) continue;

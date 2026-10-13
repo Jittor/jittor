@@ -580,6 +580,42 @@ _sys.modules[__name__]._jittor_torch_shim_placeholder = True
         assert not torch_runtime.modules_available("torch.autograd")
 
 
+def test_optional_dependency_probe_rejects_a_directory_that_shares_the_name(monkeypatch, tmp_path):
+    """``compat/tests/torch`` on ``sys.path`` is not an installed PyTorch.
+
+    The native CPU gate collects part of ``compat/tests``; its conftest puts
+    that directory on ``sys.path``, and ``torch`` then resolved to the test
+    directory as a namespace package. Every oracle test collected afterwards
+    took it for an independent PyTorch and errored in setup instead of
+    skipping -- on the whole tree only, never when a file ran on its own.
+    """
+    from _helpers import torch_runtime
+
+    monkeypatch.delenv("REAL_TORCH_SITE", raising=False)
+    monkeypatch.delitem(torch_runtime.sys.modules, "torch", raising=False)
+    monkeypatch.delitem(torch_runtime.sys.modules, "torchvision", raising=False)
+    for name in ("torch", "torchvision", "fairseq"):
+        (tmp_path / name).mkdir()
+    monkeypatch.syspath_prepend(str(tmp_path))
+    real_find_spec = torch_runtime.importlib.util.find_spec
+
+    def only_the_decoy(module_name, *args):
+        # A real installation elsewhere on this machine must not decide it.
+        if module_name in ("torch", "torchvision", "fairseq"):
+            return torch_runtime.importlib.machinery.PathFinder.find_spec(
+                module_name, [str(tmp_path)]
+            )
+        return real_find_spec(module_name, *args)
+
+    with mock.patch.object(torch_runtime.importlib.util, "find_spec", only_the_decoy):
+        assert only_the_decoy("torch").origin is None  # it is a namespace package
+        assert not torch_runtime.modules_available("torch")
+        assert not torch_runtime.modules_available("torch", "torchvision")
+        assert not torch_runtime.modules_available("torch.nn")
+        with mock.patch.object(torch_runtime, "_loaded_torch_is_jittor_shim", return_value=False):
+            assert not torch_runtime.modules_available("fairseq")
+
+
 def test_optional_dependency_probe_rejects_a_deployed_shim_as_real_torch(monkeypatch, tmp_path):
     from _helpers import torch_runtime
 

@@ -14,6 +14,7 @@ import unittest
 import numpy as np
 import jittor as jt
 
+from _helpers.child_process import run_child_script
 from _helpers.common import JittorTestCase, get_all_device_types, use_cuda_for
 
 
@@ -99,6 +100,51 @@ class TestHighRankTensors(JittorTestCase):
         self.assertEqual(tuple(jt.ones([1] * 32).shape), (1,) * 32)
         with self.assertRaisesRegex(RuntimeError, "at most 32 dimensions"):
             jt.ones([1] * 33)
+
+
+_SMALL_THREAD_STACK_CHILD = r"""
+import os, resource, sys
+# glibc fixes the default thread stack when the process starts: 2 MB if
+# `ulimit -s` is unlimited, which is what a Slurm node hands out. Raise the
+# soft limit and start over so the compile threads get that stack.
+if os.environ.get("JT_TEST_STACK_REEXEC") != "1":
+    soft, hard = resource.getrlimit(resource.RLIMIT_STACK)
+    if hard != resource.RLIM_INFINITY:
+        print("NO_UNLIMITED_STACK")
+        sys.exit(0)
+    resource.setrlimit(resource.RLIMIT_STACK, (resource.RLIM_INFINITY, hard))
+    os.environ["JT_TEST_STACK_REEXEC"] = "1"
+    os.execv(sys.executable, [sys.executable] + sys.argv)
+
+import numpy as np
+import jittor as jt
+
+jt.flags.use_cuda = 0
+rng = np.random.default_rng(12)
+a = rng.standard_normal([2] * 12).astype("float32")
+b = rng.standard_normal([2] * 12).astype("float32")
+got = jt.matmul(jt.array(a), jt.array(b)).numpy()
+assert np.allclose(got, np.matmul(a, b), atol=1e-4), "wrong result"
+print("COMPILED_ON_A_SMALL_STACK")
+"""
+
+
+class TestCompileThreadStack(unittest.TestCase):
+    def test_a_rank_13_kernel_compiles_on_a_2mb_thread_stack(self):
+        """Generating a fused kernel's source used to recurse once per
+        character (`std::regex_match` over the whole source), and the generic
+        CPU matmul of two rank-12 tensors is a rank-13 reduction whose source
+        took ~17,800 frames: past the 2 MB stack a compile thread gets when
+        `ulimit -s` is unlimited. The process died with SIGSEGV and no
+        backtrace, on compute nodes only."""
+        env = {"use_mkl": "0", "use_parallel_op_compiler": "16",
+               "nvcc_path": "", "CUDA_VISIBLE_DEVICES": ""}
+        result = run_child_script(_SMALL_THREAD_STACK_CHILD, env=env, text=True,
+                                  merge_stderr=True, name="compile_stack")
+        if "NO_UNLIMITED_STACK" in result.stdout:
+            raise unittest.SkipTest("the stack hard limit here is finite")
+        self.assertEqual(result.returncode, 0, result.stdout[-4000:])
+        self.assertIn("COMPILED_ON_A_SMALL_STACK", result.stdout)
 
 
 class TestShapeVectorSpill(JittorTestCase):

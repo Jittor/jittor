@@ -93,6 +93,8 @@ JUPYTEXT = "jupytext==1.17.3"
 NBCLIENT = "nbclient==0.10.2"
 NBFORMAT = "nbformat==5.10.4"
 IPYKERNEL = "ipykernel==6.29.5"
+# The notebook smokes plot (rnn, dcgan, ...); same pin as requirements/examples.txt.
+MATPLOTLIB = "matplotlib==3.10.5"
 DOCS_REQUIREMENTS = REPO_ROOT / "requirements" / "docs.txt"
 
 NN_MIGRATION_FILES = (
@@ -611,6 +613,7 @@ CPU_GATE_REQUIREMENTS = (
     "astunparse==1.6.3",
     IPYKERNEL,
     JUPYTEXT,
+    MATPLOTLIB,
     NBCLIENT,
     NBFORMAT,
     "numpy==1.26.4",
@@ -741,6 +744,23 @@ def _install_compat_source(session, env, runner=None):
     key = (id(session), python, str(source))
     if key in _COMPAT_SOURCE_INSTALLS:
         return
+    if runner is None:
+        # The core as well, in this session's own venv: an editable
+        # `jittor-torch` alone makes `jittor` a namespace package there, which
+        # is the shadowing tests/structure/test_core_package_not_shadowed.py
+        # guards (and a pre-provisioned hardware interpreter is left alone).
+        session.run(
+            python,
+            "-m",
+            "pip",
+            "install",
+            "--no-deps",
+            "--no-build-isolation",
+            "--config-settings",
+            "editable_mode=compat",
+            "-e",
+            str(source),
+        )
     session.run(
         python,
         "-m",
@@ -752,6 +772,19 @@ def _install_compat_source(session, env, runner=None):
         str(source / "compat"),
         external=runner is not None,
     )
+    if runner is None:
+        # adapters/tests/vllm imports `jittor_adapters`, a separate
+        # distribution in the tree; without it those files fail collection.
+        session.run(
+            python,
+            "-m",
+            "pip",
+            "install",
+            "--no-deps",
+            "--no-build-isolation",
+            "-e",
+            str(source / "adapters"),
+        )
     _COMPAT_SOURCE_INSTALLS.add(key)
 
 
@@ -906,6 +939,14 @@ def _write_asv_config(root, results_dir, html_dir):
     config.update(
         {
             "repo": str(REPO_ROOT),
+            # The checkout being measured, whatever it is called. `asv run`
+            # resolves every configured branch before it looks at
+            # --set-commit-hash, and benchmarks/asv.conf.json names the
+            # upstream branches -- which a fork's branch or a pull request's
+            # detached HEAD does not have ("Unknown branch 2.0-refactor in
+            # configuration"). `asv publish` then graphs HEAD's first-parent
+            # line, which is the history the comparison is against.
+            "branches": ["HEAD"],
             "benchmark_dir": str(REPO_ROOT / "benchmarks"),
             "env_dir": str(root / "asv-env"),
             "results_dir": str(results_dir),
@@ -1129,35 +1170,8 @@ def structure(session):
         "tqdm==4.67.1",
     )
     session.run("bash", "tools/check_repo_layout.sh", external=True, env=env)
-    # The core as well as the compat distribution: an editable `jittor-torch`
-    # alone makes `jittor` a namespace package in this venv, which is the very
-    # shadowing tests/structure/test_core_package_not_shadowed.py guards.
-    session.run(
-        "python",
-        "-m",
-        "pip",
-        "install",
-        "--no-deps",
-        "--no-build-isolation",
-        "--config-settings",
-        "editable_mode=compat",
-        "-e",
-        str(REPO_ROOT),
-    )
+    # The core, compat and adapters distributions, editable (see the helper).
     _install_compat_source(session, env)
-    # STRUCTURE_TESTS includes adapters/tests/vllm/test_structure.py, which
-    # imports `jittor_adapters`; without the package the whole run stopped at
-    # collection.
-    session.run(
-        "python",
-        "-m",
-        "pip",
-        "install",
-        "--no-deps",
-        "--no-build-isolation",
-        "-e",
-        str(REPO_ROOT / "adapters"),
-    )
     test_paths = tuple(session.posargs) or STRUCTURE_TESTS
     if not session.posargs:
         native_env = env.copy()

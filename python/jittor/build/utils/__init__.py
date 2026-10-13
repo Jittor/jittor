@@ -947,6 +947,33 @@ def _read_target_arch(cc):
     raise RuntimeError("could not read the -march=native expansion from " + cc)
 
 
+def _cpu_fingerprint():
+    """What identifies this CPU cheaply enough to check on every import.
+
+    The ``-march=native`` expansion is memoised in the home's probe.json, and a
+    home is routinely shared between machines -- a cluster's shared filesystem,
+    a CI build cache restored onto whichever runner picked the job up. Keyed on
+    the compiler alone, the first machine's answer was handed to every other
+    one: they all landed in its cache directory and loaded products built for
+    its instruction set, which is SIGILL on a CPU without (say) AVX-512.
+    """
+    model = flags = ""
+    try:
+        with open("/proc/cpuinfo", "r") as f:
+            for line in f:
+                if not model and line.startswith("model name"):
+                    model = line.split(":", 1)[-1].strip()
+                elif not flags and line.startswith("flags"):
+                    flags = line.split(":", 1)[-1].strip()
+                if model and flags:
+                    break
+    except OSError:
+        pass
+    import hashlib
+    text = (model or get_cpu_version()) + "\n" + flags
+    return hashlib.sha256(text.encode("utf8")).hexdigest()[:16]
+
+
 def target_arch_key(cc=None):
     """A short, stable directory component for this machine's instruction set.
 
@@ -966,7 +993,8 @@ def target_arch_key(cc=None):
         # on the same key.
         expansion = probe.cached("target_arch:c-locale:" + resolve_exe(cc),
                                  [resolve_exe(cc)],
-                                 lambda: _read_target_arch(cc))
+                                 lambda: _read_target_arch(cc),
+                                 extra=_cpu_fingerprint())
     except Exception as error:
         LOG.v(f"could not read the -march=native expansion: {error}")
         return short(get_cpu_version())

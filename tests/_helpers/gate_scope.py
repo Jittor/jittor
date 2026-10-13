@@ -93,10 +93,16 @@ ENVIRONMENT_SKIP_PATTERNS = (
     # files as unexplained and the whole selection exited non-zero with every
     # test passing.
     "tensordict", "mmcv", "mmengine",
+    # The safetensors format tests: the optional package is not installed.
+    "safetensors",
     # Facts about the *runner* rather than the machine's hardware: a case that
     # asserts directory permissions cannot hold when the suite runs as root,
     # because root bypasses them.
     "root ignores",
+    # A CPU without simultaneous multithreading: the OpenMP cases that limit a
+    # run to one thread per physical core have nothing to limit there
+    # (`tests/runtime/test_openmp_threads.py`).
+    "no smt",
     # A backend library the build has *switched off* -- `use_mkl=0`, or any other
     # policy that says no. The wording is jittor's own and templated over the
     # library (`python/jittor/_runtime/backend_libraries.py`: "%s has an
@@ -116,6 +122,11 @@ ENVIRONMENT_SKIP_PATTERNS = (
     # `tests/build/test_download_safety.py` loads the real MKL and skips when the
     # cache has none (`use_mkl=0` again).
     "mkl",
+    # Same shape, for the build stamps of custom op libraries
+    # (`tests/build/test_import_bootstrap_laziness.py`): on a CPU-only cache
+    # the only such library is MKL's, and a host without cmake (a fresh CI
+    # container, a compute node) cannot build oneDNN, so there is none.
+    "builds no custom op library",
     # The runner turns the crash handler's debugger off on purpose -- forking gdb
     # ptrace-stops the child, and a gdb that then dies leaves it stopped forever,
     # so `tests/_helpers/child_process.py` and `tools/run_test_suite.py` both

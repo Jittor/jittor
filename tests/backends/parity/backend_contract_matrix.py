@@ -478,6 +478,14 @@ PROBES = {
 #: ``test_backend_contract_matrix.py`` fails on a declared operator that is in
 #: neither. "Not probed" is then a decision somebody wrote down, not the
 #: default state of anything new.
+#: Not part of the build: custom ops that tests/backends/cuda/test_cuda.py and
+#: tests/backends/rocm/test_rocm.py compile with ``jt.compile_custom_op``. They
+#: stay registered for the rest of the process, and the CUDA gate runs those
+#: files before the matrix in one process, so they appear only in that order.
+#: Kept out of UNPROBED_REASONS on purpose: an excuse must name an operator the
+#: registry always declares (``test_no_probe_or_excuse_is_dead_weight``).
+TEST_COMPILED_OPS = frozenset({"my_cuda", "no_cuda"})
+
 UNPROBED_REASONS = {
     # Multi-rank: a single-process matrix cannot form a communicator, and the
     # collectives have their own launcher-based gate (`nox -s mpi` / `nccl`).

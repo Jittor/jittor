@@ -8,8 +8,6 @@ transpose -- the pure permute (loops over the output) and the form fused after
 an elementwise producer (loops over the input) -- and for the gradient.
 """
 
-import glob
-import os
 import unittest
 
 import numpy as np
@@ -21,8 +19,18 @@ from _helpers.common import JittorTestCase, get_all_device_types, use_cuda_for
 RANK = 9
 
 
-def compiled_kernels():
-    return len(glob.glob(os.path.join(jt.flags.cache_path, "jit", "*.so")))
+def kernels_compiled_by(fn):
+    """How many ops this process had to compile while running ``fn``.
+
+    Counted from the JIT compiler's own "Compile op" record rather than from
+    the ``*.so`` files in the cache: a gate shares one cache between its
+    workers, so another worker's compiles used to land in that directory
+    during the measured window and fail this file.
+    """
+    with jt.log_capture_scope(log_silent=1, log_v=0,
+                              log_vprefix="jit_compiler=100") as logs:
+        fn()
+    return sum(1 for record in logs if record["msg"].startswith("Compile op"))
 
 
 class TestTransposeRuntimePermutation(JittorTestCase):
@@ -55,10 +63,11 @@ class TestTransposeRuntimePermutation(JittorTestCase):
                 return perm, perm_last
             for _ in range(2):
                 self._run(a, *perms())
-            before = compiled_kernels()
-            for _ in range(4):
-                self._run(a, *perms())
-            self.assertEqual(compiled_kernels(), before)
+
+            def more():
+                for _ in range(4):
+                    self._run(a, *perms())
+            self.assertEqual(kernels_compiled_by(more), 0)
         self._devices(body)
 
     def test_non_square_shapes_and_complex(self):

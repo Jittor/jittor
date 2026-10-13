@@ -352,6 +352,33 @@ def _warm_the_notebook_cache(attempts=3):
     )
 
 
+#: Smokes that fail for a registered reason, as strict expected failures: the
+#: day one passes, the mark has to go with its ledger entry.
+_SMOKE_KNOWN_ISSUES = {
+    "resnet_training": "KI-TEST-014: the plain network no longer stalls for "
+                       "three epochs, which the notebook asserts",
+}
+
+
+def _cell_failures():
+    """A cell that raised -- and only that: a timeout or a dead kernel is not
+    the registered failure and must still fail the smoke."""
+    try:
+        from nbclient.exceptions import CellExecutionError
+    except ImportError:
+        return (AssertionError,)
+    return (CellExecutionError, AssertionError)
+
+
+def _smoke_params():
+    return [
+        pytest.param(topic, marks=pytest.mark.xfail(
+            strict=True, raises=_cell_failures(), reason=_SMOKE_KNOWN_ISSUES[topic]))
+        if topic in _SMOKE_KNOWN_ISSUES else topic
+        for topic in _SMOKE_TOPICS
+    ]
+
+
 @pytest.fixture(scope="module")
 def notebook_runtime_root(tmp_path_factory):
     root = tmp_path_factory.mktemp("notebook-runtime")
@@ -362,7 +389,7 @@ def notebook_runtime_root(tmp_path_factory):
 
 @pytest.mark.cpu
 @pytest.mark.timeout(1800)
-@pytest.mark.parametrize("topic", _SMOKE_TOPICS, ids=_SMOKE_TOPICS)
+@pytest.mark.parametrize("topic", _smoke_params(), ids=_SMOKE_TOPICS)
 def test_notebook_smokes_execute_offline_on_cpu(
     topic, tmp_path, monkeypatch, notebook_runtime_root
 ):

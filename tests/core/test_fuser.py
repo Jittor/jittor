@@ -229,6 +229,25 @@ class TestFuseIntoReduce(JittorTestCase):
         for a, b in zip(on, off):
             np.testing.assert_allclose(a, b, rtol=1e-5, atol=1e-3)
 
+    def test_a_slice_written_in_place_keeps_the_reduction_that_fills_it(self, device):
+        # The in-place setitem computes the value straight into the target's
+        # storage and orders it after the target's own fill with a control
+        # edge. That edge was read as a data input here, so the `zeros` fill
+        # joined the reduction's kernel and overwrote the slice's first
+        # element. Without MKL every CPU matmul gradient through `x[t]` (an
+        # RNN's backward) took this route.
+        rng = np.random.RandomState(3)
+        p = rng.randn(2, 4, 5).astype("float32")
+        q = rng.randn(2, 4, 5).astype("float32")
+        ref = (p * q).sum(-1)
+        for k in range(3):
+            with self.subTest(k=k), jt.flag_scope(fuse_into_reduce=1):
+                z = jt.zeros((3, 2, 4))
+                z[k] = (jt.array(p) * jt.array(q)).sum(-1)
+                got = z.numpy()
+                np.testing.assert_allclose(got[k], ref, rtol=1e-5, atol=1e-5)
+                np.testing.assert_array_equal(np.delete(got, k, 0), 0)
+
 
 instantiate_device_type_tests(TestFuseIntoReduce, globals())
 

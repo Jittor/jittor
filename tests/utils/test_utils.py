@@ -5,6 +5,8 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 import unittest
+
+import pytest
 import os
 from pathlib import Path
 
@@ -58,6 +60,10 @@ class TestUtils(unittest.TestCase):
         cmd = f"cd {cache_path} && g++ {core_path}/utils/log.cc {core_path}/utils/tracer.cc {core_path}/utils/str_utils.cc {core_path}/utils/cache_compile.cc -lpthread {cc_flags} -o cache_compile && cache_path={cache_path} jittor_path={jittor_path} ./cache_compile"
         self.assertEqual(os.system(cmd), 0)
         
+    # The program asserts `total_ns/n <= 6500` per log call
+    # (src/utils/log.cc `test_log_time`): a wall-clock bound, which a loaded
+    # machine fails in the same way as a real regression.
+    @pytest.mark.load_sensitive
     def test_log(self):
         cc_flags = (
             f" -g -O3 -DTEST_LOG -DLOG_ASYNC --std=c++14"

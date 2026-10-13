@@ -62,6 +62,8 @@
 # argument above); create_graph=True (higher-order jvp/vjp) likewise needs
 # no special-casing, since it only changes whether `.detach()`/
 # `.stop_grad()` are called at all in preprocessing, not what they do.
+import functools
+
 import numpy as np
 import jittor as jt
 from collections.abc import Sequence as _Sequence
@@ -435,6 +437,10 @@ def dispatch_linalg(rule, fn, *args, **kwargs):
     """
     if rule == "solve":
         return _apply_solve(fn, *args, **kwargs)
+    if rule == "einsum":
+        # The einsum rule rewrites the subscripts and recurses through
+        # `_ORIG_EINSUM` (the public function), so `fn` is not needed here.
+        return _apply_einsum(*args, **kwargs)
     return _apply_linalg(fn, *args, **kwargs)
 
 
@@ -1062,11 +1068,16 @@ def _make_unary_dunder(name):
 def _make_named_binary(name):
     def f(a, b):
         return _apply_binary(name, a, b)
+    # The patched entry keeps the public name: `jt.NanoString(jt.add)` reads
+    # the operator from `__name__`, and every patched function used to answer
+    # "f", so it stopped working in any process that had called jt.vmap.
+    f.__name__ = name
     return f
 
 def _make_named_unary(name):
     def f(a):
         return _apply_unary(name, a)
+    f.__name__ = name  # see _make_named_binary
     return f
 
 def _norm_reduce_args(args, kwargs):
@@ -1102,6 +1113,7 @@ def _make_named_reduce(name):
             return _ORIG_REDUCE[name](a, *args, **kwargs)
         dim, keepdims = _norm_reduce_args(args, kwargs)
         return _apply_reduce(name, a, dim, keepdims)
+    f.__name__ = name  # see _make_named_binary
     return f
 
 
@@ -1182,6 +1194,11 @@ def install_batching_patches():
             continue
         _ORIG_REDUCE[name] = orig
         patched = _make_named_reduce(name)
+        # Carry what the entry it wraps says about itself -- its name, its
+        # docs, and markers such as the full-reduce fast path's
+        # `_full_reduce_native` -- since a non-batched call still goes to it.
+        functools.update_wrapper(patched, orig, assigned=("__name__", "__doc__"),
+                                 updated=("__dict__",))
         _install(jt.Var, name, patched)
         _install(jt, name, patched)
 
@@ -1267,11 +1284,27 @@ def install_batching_patches():
         return _apply_matmul(a, b)
     _install(jt, "matmul", _matmul)
     _install(jt.Var, "matmul", _matmul)
-    _install(jt.Var, "__matmul__", _matmul)
+    # The operator keeps its own non-batched behaviour (nn/_bindings.py
+    # `_var_matmul`: an ndarray operand is converted, anything else returns
+    # NotImplemented so Python tries the reflected side). Routing `@` straight
+    # to `jt.matmul` changed what `x @ ndarray` means in every process that had
+    # called jt.vmap once.
+    original_matmul_operator = jt.Var.__matmul__
+    def _matmul_operator(a, b):
+        if _lvl(a) == -1 and _lvl(b) == -1:
+            return original_matmul_operator(a, b)
+        return _apply_matmul(a, b)
+    _install(jt.Var, "__matmul__", _matmul_operator)
 
     for name in ("qr", "svd", "svdvals", "eigh", "inv", "cholesky"):
         orig = getattr(jt.linalg, name, None)
         if orig is None:
+            continue
+        if getattr(orig, "__wrapped_linalg__", None) is not None:
+            # Already routes a BatchedVar to this same rule itself
+            # (linalg/_helpers.py `_batching_aware`). Replacing it changed the
+            # identity of the public function -- its owner module, pickling by
+            # name -- in every process that had called jt.vmap once.
             continue
         def make_linalg(orig=orig):
             def f(a, *args, **kwargs):
@@ -1282,7 +1315,11 @@ def install_batching_patches():
     _ORIG_SOLVE = jt.linalg.solve
     def _solve(a, b):
         return _apply_solve(_ORIG_SOLVE, a, b)
-    _install(jt.linalg, "solve", _solve)
+    # `solve` and `einsum` route a BatchedVar themselves when they carry
+    # `_batching_aware` (see the factorizations above); only an undecorated
+    # one is replaced.
+    if getattr(_ORIG_SOLVE, "__wrapped_linalg__", None) is None:
+        _install(jt.linalg, "solve", _solve)
 
     _ORIG_CUMSUM = jt.cumsum
     def _cumsum(a, dim=None):
@@ -1292,8 +1329,9 @@ def install_batching_patches():
     _ORIG_EINSUM = jt.linalg.einsum
     def _einsum(spec, *operands):
         return _apply_einsum(spec, *operands)
-    _install(jt.linalg, "einsum", _einsum)
-    _install(jt, "einsum", _einsum)
+    if getattr(_ORIG_EINSUM, "__wrapped_linalg__", None) is None:
+        _install(jt.linalg, "einsum", _einsum)
+        _install(jt, "einsum", _einsum)
 
     _ORIG_GRAD = jt.grad
     def _grad(loss, targets, retain_graph=True):
