@@ -30,9 +30,13 @@ def reference_numpy(x_np, eps=0.01):
 class TestLossSSL(unittest.TestCase):
 
     def setUp(self):
+        self._saved_use_cuda = jt.flags.use_cuda
         jt.flags.use_cuda = 0
         jt.set_global_seed(0)
         np.random.seed(0)
+
+    def tearDown(self):
+        jt.flags.use_cuda = self._saved_use_cuda
 
     def test_matches_literal_reference_transcription(self):
         x_np = np.random.randn(50, 20).astype(np.float32)
