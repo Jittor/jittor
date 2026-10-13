@@ -1919,6 +1919,33 @@ workaround.
 - Exit condition: the second collective in a rapid sequence returns correct data
   on all ranks and the native NCCL smoke passes on every rank.
 
+## KI-DIST-003: FSDP2 multi-rank with a reordered DeviceMesh and a torch-subclass optimizer runs an all_gather on the host
+
+- Severity: Medium (one multi-rank FSDP2 path; the common mesh/optimizer paths
+  are unaffected)
+- Status: Open; found 2026-10-13 on two CUDA ranks. Pre-existing on 2.0-refactor,
+  independent of PR #18031's FSDP2 fix-group import (the clean base fails it
+  identically).
+- Owner: distributed / fsdp2
+- Symptom: `compat/tests/fsdp2/test_fsdp2_nccl.py::TestFSDP2Nccl::`
+  `test_mesh_reordered_shards_custom_adam_and_lifetime` fails during
+  `loss.backward()`: `_globally_used_grads` issues `nccl_all_gather` on a
+  `float32[8]`->`[16]` input that is placed on the host, so
+  `JittorError: No kernel registered for nccl_all_gather on cpu`. The path is a
+  reversed-rank `DeviceMesh` combined with a `torch.optim.Adam` subclass; the
+  non-reordered mesh and the native optimizer paths gather on the device and pass.
+- Cause: not isolated. A Var in the FSDP2 shard / used-gradient path lands on the
+  host instead of the rank's CUDA device under the reordered-mesh + custom
+  (torch-subclass) optimizer combination, so a device-only collective is handed a
+  host input.
+- Workaround: use a non-reordered mesh, or the native optimizer step, until the
+  placement is fixed.
+- Evidence: 2 GPUs via `jtrun --nproc-per-node=2 --backend nccl` (or
+  `python -m jittor.distributed.launch -n 2`): the test fails deterministically on
+  both ranks, while the other eight `test_fsdp2_nccl` cases pass.
+- Exit condition: the collective input is placed on the rank's device and the test
+  passes on every rank.
+
 ## KI-LINT-001: mypy covers the build utilities and part of compat only
 
 - Severity: Limitation (static checking coverage)
