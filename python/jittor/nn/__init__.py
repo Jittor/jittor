@@ -20,6 +20,7 @@ from jittor_utils import LOG
 from . import backends as backends
 from . import functional as functional
 from . import modules as modules
+from . import parallel as parallel
 from .attention import (
     cumulative_sequence_lengths,
     sequence_lengths,
