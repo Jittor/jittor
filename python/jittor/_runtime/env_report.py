@@ -13,7 +13,7 @@ differently on this machine" was an unanswerable question, and
 ``export debug=1`` -- a word any CI system might export for its own reasons --
 changed the whole framework's build silently.
 
-Three things get reported here, once each, after every static initializer and
+Four things get reported here, once each, after every static initializer and
 every build variable has been read:
 
 * one summary line naming every setting the environment supplied, and which
@@ -22,19 +22,98 @@ every build variable has been read:
   the ``JT_``/``JT_BUILD_`` name to move to;
 * one ``DeprecationWarning`` for unprefixed names that were **ignored** because
   they are ordinary words (``debug``), so that a user who did mean the jittor
-  switch is told which name to use rather than silently getting the default.
+  switch is told which name to use rather than silently getting the default;
+* one ``UserWarning`` for ``JT_*`` variables jittor does not read at all --
+  ``JT_CACHE_NAME`` for ``JT_BUILD_CACHE_NAME`` used to do nothing, silently.
 
 Kept out of ``jittor/__init__.py`` so it can be tested without importing the
 core: :func:`format_report` and :func:`format_legacy_warning` are pure
 functions of the rows the core hands over.
 """
 
+import difflib
+import os
 import warnings
 from typing import Dict, Tuple
 
 from jittor_utils import env_config
 
 from .flag_policy import STARTUP_FLAGS
+
+
+#: ``JT_*`` variables read by name somewhere other than the native flag table
+#: and ``env_config``: backend rendezvous, lock tuning, build macros taken from
+#: the environment. Together with those two they are every ``JT_*`` name
+#: jittor reads; ``tests/structure/runtime/test_env_variable_registry.py``
+#: checks the source tree against this list.
+DIRECT_VARIABLES = frozenset((
+    "JT_BACKEND", "JT_CHECK_NAN", "JT_DEFAULT_PARA_OPT_LEVEL",
+    "JT_GRAPH_BUILD_PROFILE", "JT_HAS_HALF_SIMD",
+    "JT_HCCL", "JT_HCCL_COLLECTIVE_SYNC", "JT_HCCL_LOCAL_RANK", "JT_HCCL_NO_MPI",
+    "JT_HCCL_RANK", "JT_HCCL_ROOTINFO_FILE", "JT_HCCL_WORLD_SIZE",
+    "JT_LOCK_REPORT_AFTER", "JT_LOCK_TIMEOUT", "JT_MIN_FREE_SPACE_MB",
+    "JT_MPI", "JT_MPI_HALF_SIMD",
+    "JT_NCCL", "JT_NCCL_LOCAL_RANK", "JT_NCCL_NO_MPI", "JT_NCCL_RANK",
+    "JT_NCCL_ROOTINFO_FILE", "JT_NCCL_WATCHDOG_GRACE_S",
+    "JT_NCCL_WATCHDOG_INTERVAL_S", "JT_NCCL_WATCHDOG_STALE_S",
+    "JT_NCCL_WORLD_SIZE", "JT_NO_SIGNAL_HANDLER", "JT_ONEDNN_BUILD_JOBS",
+    "JT_PROBE_CACHE", "JT_RENDEZVOUS_TIMEOUT_S", "JT_SAVE_MEM", "JT_SYNC",
+    "JT_TRITON_DEBUG", "JT_TRITON_PTRTRACE",
+))
+
+#: Reserved for test harnesses handing parameters to child processes.
+TEST_PREFIX = "JT_TEST_"
+
+
+def known_variables(flag_names):
+    """Every ``JT_*`` variable jittor reads, given the native flag names.
+
+    A flag is listed under both prefixes: the core reads startup flags as
+    ``JT_BUILD_<NAME>`` and the rest as ``JT_<NAME>``, and which one a flag is
+    belongs to ``flag_policy``, not to this check.
+    """
+    known = set(DIRECT_VARIABLES)
+    for name in flag_names:
+        known.add(env_config.prefixed_name(name, "build"))
+        known.add(env_config.prefixed_name(name, "runtime"))
+    for name in env_config.PYTHON_BUILD_VARS:
+        known.add(env_config.prefixed_name(name, "build"))
+    for name in env_config.PYTHON_RUNTIME_VARS:
+        known.add(env_config.prefixed_name(name, "runtime"))
+    return known
+
+
+def unread_variables(known, environ=None):
+    """``[(variable, suggestion or None)]`` for ``JT_*`` variables nobody reads."""
+    environ = os.environ if environ is None else environ
+    found = []
+    for variable in sorted(environ):
+        if (not variable.startswith(env_config.RUNTIME_PREFIX)
+                or variable.startswith(TEST_PREFIX) or variable in known):
+            continue
+        # The wrong namespace is the common mistake: JT_CACHE_NAME for
+        # JT_BUILD_CACHE_NAME, or the other way round.
+        rest = variable[len(env_config.RUNTIME_PREFIX):]
+        if rest.startswith("BUILD_"):
+            swapped = env_config.RUNTIME_PREFIX + rest[len("BUILD_"):]
+        else:
+            swapped = env_config.BUILD_PREFIX + rest
+        if swapped in known:
+            found.append((variable, swapped))
+            continue
+        close = difflib.get_close_matches(variable, sorted(known), n=1, cutoff=0.8)
+        found.append((variable, close[0] if close else None))
+    return found
+
+
+def format_unread_warning(unread):
+    """The warning text for ``JT_*`` variables nobody reads, or ``""``."""
+    if not unread:
+        return ""
+    parts = ["%s (did you mean %s?)" % pair if pair[1] else pair[0]
+             for pair in unread]
+    return ("jittor does not read %d environment variable(s) that use its JT_ "
+            "prefix, so they have no effect: %s" % (len(unread), ", ".join(parts)))
 
 
 def canonical_variable(setting):
@@ -136,9 +215,18 @@ def report(core, log, environ=None):
     ignored = format_ignored_warning(env_config.ignored_bare_names(environ))
     if ignored:
         warnings.warn(ignored, DeprecationWarning, stacklevel=2)
+    flag_names = [name for name in dir(core.Flags) if not name.startswith("_")]
+    unread = format_unread_warning(
+        unread_variables(known_variables(flag_names), environ))
+    if unread:
+        # UserWarning, not DeprecationWarning: the default filters hide the
+        # latter unless it is attributed to __main__, and a setting that
+        # silently does nothing is exactly what has to be seen.
+        warnings.warn(unread, UserWarning, stacklevel=2)
     return summary
 
 
-__all__ = ["canonical_variable", "merge_rows", "format_report",
-           "format_legacy_warning", "format_ignored_warning",
-           "python_variable_rows", "report"]
+__all__ = ["DIRECT_VARIABLES", "TEST_PREFIX", "canonical_variable",
+           "merge_rows", "format_report", "format_legacy_warning",
+           "format_ignored_warning", "known_variables", "unread_variables",
+           "format_unread_warning", "python_variable_rows", "report"]

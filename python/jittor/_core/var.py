@@ -354,6 +354,45 @@ def _constant_scalar(value, dtype):
     return array(native)
 
 
+def _creation_shape(fn, shape, dtype):
+    '''(shape, dtype) from the ``*shape`` arguments of ones/zeros/empty, which
+    accept ``(2, 3)``, ``((2, 3),)`` and a trailing dtype.'''
+    # is_dtype accepts any str, so a lone string would become the dtype of a
+    # 0-d result instead of being reported as a bad shape.
+    if len(shape) == 1 and isinstance(shape[0], str):
+        raise TypeError(f"{fn}(): shape must be a sequence of ints, "
+                        f"but got str {shape[0]!r}")
+    if shape and _is_dtype(shape[-1]):
+        dtype = shape[-1]
+        shape = shape[:-1]
+    if len(shape) == 1 and isinstance(shape[0], (Sequence, NanoVector)):
+        shape = shape[0]
+    for dim in shape:
+        if isinstance(dim, str):
+            raise TypeError(f"{fn}(): shape must be a sequence of ints, "
+                            f"but found element of type str: {dim!r}")
+    if dtype.__class__ is str and dtype not in _KNOWN_DTYPE_STRINGS:
+        _check_dtype_string(fn, dtype)
+    return shape, dtype
+
+
+#: dtype strings already accepted by the native converter. Only valid names
+#: are added, so it stays as small as the set of dtypes.
+_KNOWN_DTYPE_STRINGS = set()
+
+
+def _check_dtype_string(fn, dtype):
+    '''Name ``fn`` when ``dtype`` is not a dtype. Otherwise the error came from
+    the internal op the value is built with, ``unary()``, listing its C++
+    signature.'''
+    import jittor_utils
+    try:
+        _dtype_for_compute(dtype)
+    except jittor_utils.cc.JittorTypeError:
+        raise TypeError(f"{fn}(): unknown dtype {dtype!r}; expected a jittor "
+                        f"dtype such as 'float32', 'int64' or 'bool'") from None
+    _KNOWN_DTYPE_STRINGS.add(dtype)
+
 def ones(*shape, dtype="float32"):
     ''' Constructs a jittor Var with all elements set to 1.
 
@@ -364,11 +403,7 @@ def ones(*shape, dtype="float32"):
     :return: The output Var.
     :rtype: jittor.Var
     '''
-    if isinstance(shape, tuple) and _is_dtype(shape[-1]):
-        dtype = shape[-1]
-        shape = shape[:-1]
-    if isinstance(shape, tuple) and isinstance(shape[0], (Sequence, NanoVector)):
-        shape = shape[0]
+    shape, dtype = _creation_shape("ones", shape, dtype)
     for dim in shape:
         if dim < 0:
             raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
@@ -472,11 +507,7 @@ def zeros(*shape, dtype="float32"):
     :return: The output Var.
     :rtype: jittor.Var
     '''
-    if isinstance(shape, tuple) and _is_dtype(shape[-1]):
-        dtype = shape[-1]
-        shape = shape[:-1]
-    if isinstance(shape, tuple) and isinstance(shape[0], (Sequence, NanoVector)):
-        shape = shape[0]
+    shape, dtype = _creation_shape("zeros", shape, dtype)
     for dim in shape:
         if dim < 0:
             raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
@@ -489,11 +520,7 @@ def new_zeros(x, size):
 Var.new_zeros = new_zeros
 
 def empty(*shape, dtype="float32"):
-    if isinstance(shape, tuple) and _is_dtype(shape[-1]):
-        dtype = shape[-1]
-        shape = shape[:-1]
-    if isinstance(shape, tuple) and isinstance(shape[0], (Sequence, NanoVector)):
-        shape = shape[0]
+    shape, dtype = _creation_shape("empty", shape, dtype)
     return ops.empty(shape, dtype)
 
 def new_empty(x, size):

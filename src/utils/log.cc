@@ -9,6 +9,7 @@
 #ifndef _WIN32
 #include <ucontext.h>
 #include <dlfcn.h>
+#include <sys/wait.h>
 #endif
 #include <iomanip>
 #include <thread>
@@ -366,6 +367,14 @@ string& get_thread_name() {
     return thread_name;
 }
 
+static std::atomic<UserWarningHook> user_warning_hook{nullptr};
+void set_user_warning_hook(UserWarningHook hook) { user_warning_hook.store(hook); }
+void user_warning(const string& message) {
+    auto hook = user_warning_hook.load();
+    if (hook && hook(message)) return;
+    LOGw << message;
+}
+
 #ifdef _WIN32
 void handle_signal(int signal) {
     std::cerr << "Caught SIGNAL " << signal << ", quick exit";
@@ -699,52 +708,22 @@ bool check_vlog(const char* fileline, int verbose) {
     return verbose <= log_v;
 }
 
-static inline void check_cuda_unsupport_version(const string& output) {
-    // check error like:
-    // /usr/include/crt/host_config.h:121:2: error: #error -- unsupported GNU version! gcc versions later than 6 are not supported!
-    // #error -- unsupported GNU version! gcc versions later than 6 are not supported!
-    string pat = "crt/host_config.h";
-    auto id = output.find(pat);
-    if (id == string::npos) return;
-    auto end = id + pat.size();
-    while (id>=0 && !(output[id]==' ' || output[id]=='\t' || output[id]=='\n'))
-        id--;
-    id ++;
-    auto fname = output.substr(id, end-id);
-    LOGw << R"(
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-Dear user, your nvcc and gcc version are not match, 
-but you can hot fix it by this command:
->>> sudo python3 -c 's=open(")" >> fname >> R"(","r").read().replace("#error", "//#error");open(")" >> fname >> R"(","w").write(s)'
-        )";
-}
-
-static inline void check_cuda_gcc_version(const string& output) {
-    /*  if such error occur: 
-    error: identifier "__is_assignable" is undefined
-    this means your gcc version is not match with nvcc,
-    for example, nvcc 10 support gcc<=7, nvcc 11 support gcc<=9,
-
-    https://gist.github.com/ax3l/9489132
-    */
-    string pat = "__is_assignable";
-    auto id = output.find(pat);
-    if (id == string::npos) return;
-    LOGf << output << R"(
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-Dear user, your nvcc and gcc version are still not match
-after dirty hack, your should install the correct version of g++
-or nvcc, for example, nvcc 10 support g++<=7, nvcc 11 support g++<=9,
-here is the NVCC Compatibility Matrix:
-    https://gist.github.com/ax3l/9489132
-Please install correct version of gcc, for example:
-    >>> sudo apt install g++-7
-After your g++ is installed, using enviroment variable `cc_path` to
-tell jittor use the correct version of g++, for example:
-    >>> cc_path='g++-7' python3.7 -m jittor.selftest
-If you still have problems, please contact us:
-    https://github.com/Jittor/jittor/issues
-    )";
+// What to do about a CUDA toolchain mismatch the compiler output shows, or ""
+// when it shows none. `output` has had its colour escapes removed.
+static string cuda_toolchain_hint(const string& output) {
+    if ((output.find("crt/host_config.h") != string::npos &&
+         output.find("unsupported") != string::npos) ||
+        output.find("__is_assignable") != string::npos)
+        return "nvcc does not support this host C++ compiler. Point Jittor at "
+               "a g++ that it supports with JT_BUILD_CC_PATH=/path/to/g++, or at "
+               "a newer nvcc with JT_BUILD_NVCC_PATH=/path/to/nvcc.";
+    if (output.find("crt/math_functions.h") != string::npos &&
+        output.find("exception specification is incompatible") != string::npos)
+        return "this nvcc's math headers conflict with the system C library's "
+               "(cospi/sinpi and friends). Use a newer nvcc with "
+               "JT_BUILD_NVCC_PATH=/path/to/nvcc, or install jittor[cuda12], "
+               "which brings one.";
+    return "";
 }
 
 #ifdef _WIN32
@@ -859,13 +838,9 @@ int system_popen(const char *cmd, const char* cwd, string* captured) {
     // of the child process, for example.
     CloseHandle(piProcInfo.hProcess);
     CloseHandle(piProcInfo.hThread);
-    if (ec && !log_v)
+    // A caller that captures the output reports it itself.
+    if (ec && !log_v && !captured)
         LOGe << output;
-
-    if (ec) {
-        check_cuda_unsupport_version(output);
-        check_cuda_gcc_version(output);
-    }
     if (captured) *captured = output;
     return ec;
 }
@@ -907,20 +882,12 @@ int system_popen(const char* cmd, const char* cwd, string* captured) {
             std::cerr << buf;
     }
     if (output.size()) std::cerr.flush();
+    // A wait status, not an exit code: see system_with_check.
     auto ret = pclose(ptr);
-    // Before every early return below: a failure whose output was too short to
-    // classify still has output, and it is the only thing that says why.
     if (captured) *captured = output;
-    if (ret && !log_v)
+    // A caller that captures the output reports it itself.
+    else if (ret && !log_v)
         std::cerr << output;
-    if (output.size()<10 && ret) {
-        // maybe overcommit
-        return -1;
-    }
-    if (ret) {
-        check_cuda_unsupport_version(output);
-        check_cuda_gcc_version(output);
-    }
     return ret;
 }
 
@@ -946,6 +913,41 @@ static string strip_ansi_escapes(const string& text) {
         i = j;  // the loop's ++ steps past the final byte
     }
     return out;
+}
+
+template <class Error>
+struct ExecutedError : Error, OperatorExecutionError {
+    using Error::Error;
+};
+
+template <class Error>
+[[noreturn]] static void throw_kind(const string& message, bool executed) {
+    if (executed) throw ExecutedError<Error>(message);
+    throw Error(message);
+}
+
+void throw_same_kind(const std::exception& like, const string& message, bool executed) {
+    // Most derived first.
+    if (dynamic_cast<const UserIndexError*>(&like)) throw_kind<UserIndexError>(message, executed);
+    if (dynamic_cast<const UserError*>(&like)) throw_kind<UserError>(message, executed);
+    if (dynamic_cast<const InternalInvariantError*>(&like))
+        throw_kind<InternalInvariantError>(message, executed);
+    throw_kind<std::runtime_error>(message, executed);
+}
+
+string user_error_message(const string& line, size_t body_start, const string& tail,
+                          const char* fileline) {
+    auto body = strip_ansi_escapes(line.substr(std::min(body_start, line.size())));
+    size_t begin = body.find_first_not_of(" \n");
+    if (begin == string::npos)
+        return message_without_log_prefix(line + tail);
+    size_t end = body.find_last_not_of(" \n");
+    body = body.substr(begin, end - begin + 1);
+    string where = string(" (") + fileline + ")";
+    if (log_v > 0) where += tail;
+    auto first_line_end = body.find('\n');
+    if (first_line_end == string::npos) return body + where;
+    return body.substr(0, first_line_end) + where + body.substr(first_line_end);
 }
 
 // See the declaration in log.h for why an exception must not carry the log
@@ -1055,21 +1057,33 @@ static string compile_failure_message(const char* cmd, const string& raw_output,
     string out = "compilation failed with exit code " + std::to_string(exit_code) + ".";
     for (auto& line : kept) { out += "\n  "; out += line; }
     if (elided) out += "\n  ... " + std::to_string(elided) + " further diagnostic(s) elided";
+    auto hint = cuda_toolchain_hint(text);
+    if (hint.size()) out += "\n\nhint: " + hint;
     out += "\n\ncompiler: " + program +
-           "\n(set the log_v flag to 1 to see the full command line and output)";
+           "\n(run with JT_LOG_V=1 to see the full command line and output)";
     return out;
 }
 
+static const char* out_of_memory_hint =
+    "This is usually the system running out of memory. Reduce the number of "
+    "parallel compile jobs (export DISABLE_MULTIPROCESSING=1), or allow "
+    "overcommit (sudo sysctl vm.overcommit_memory=1).";
+
 void system_with_check(const char* cmd, const char* cwd) {
     string output;
-    auto ret = system_popen(cmd, cwd, &output);
-    CHECK(ret>=0 && ret<=256) << "Run cmd failed:" << cmd <<
-            "\nreturn ">> ret >> ". This might be an overcommit issue or out of memory."
-            << "Try : sudo sysctl vm.overcommit_memory=1, or set enviroment variable `export DISABLE_MULTIPROCESSING=1`";
-    // `LOG_IF` rather than `CHECK`/`CHECKop`: those prepend
-    // `Check failed ret(256) == 0(0)`, which restates the exit code in a form
-    // nobody reads and pushes the diagnostic one line further down.
-    LOG_IF(f, ret != 0) >> compile_failure_message(cmd, output, ret);
+    auto status = system_popen(cmd, cwd, &output);
+    if (status == 0) return;
+    if (status < 0)
+        LOGf << "Could not start the command:" << cmd >> "\n" >> out_of_memory_hint;
+#ifndef _WIN32
+    if (WIFSIGNALED(status))
+        LOGf << "The compiler was killed by signal" << WTERMSIG(status)
+            >> ":" << cmd >> "\n" >> out_of_memory_hint;
+    int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : status;
+#else
+    int exit_code = status;
+#endif
+    LOGf >> compile_failure_message(cmd, output, exit_code);
 }
 
 #ifdef LOG_ASYNC

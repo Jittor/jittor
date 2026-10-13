@@ -282,19 +282,17 @@ def setup_cuda_extern():
         try:
             setup_cuda_lib(lib_name, extra_flags=link_cuda_extern)
         except Exception as e:
-            msg = f"CUDA found but {lib_name} is not loaded:\n"
+            msg = f"CUDA found but {lib_name} could not be loaded: {e}"
             if lib_name == "cudnn":
-                msg += """Develop version of CUDNN not found,
-please refer to CUDA offical tar file installation:
-https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html#installlinux-tar"""
-            if lib_name == "cusparse":
-                msg += """CUSPARSE library is not loaded,
-please ensure it is installed along with the CUDA toolkit."""
-            if platform.machine() in ["x86_64", "AMD64"]:
-                msg += f"""
-or you can let jittor install cuda and cudnn for you:
->>> python3.{sys.version_info.minor} -m jittor_utils.install_cuda
-"""
+                msg += ("\nThe cuDNN headers and library were not found. Install "
+                        "them with `pip install nvidia-cudnn-cu12` (included in "
+                        "`pip install jittor[cuda12]`), or follow "
+                        "https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html. "
+                        "To run without cuDNN, set JT_BUILD_CONV_OPT=1: convolutions "
+                        "then use Jittor's own kernels.")
+            else:
+                msg += (f"\n{lib_name} ships with the CUDA toolkit; check that "
+                        "the toolkit that nvcc belongs to is complete.")
             raise RuntimeError(msg) from e
 
 def _cuda_library_sources(lib_name):
@@ -374,7 +372,7 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
             try:
                 cublas_lt_lib_path = search_file(library_search_dirs, "libcublasLt.so", nvcc_version)
                 ctypes.CDLL(cublas_lt_lib_path, dlopen_flags)
-            except:
+            except (RuntimeError, OSError):
                 # some aarch64 os, such as uos with FT2000 cpu,
                 # it's cuda 10 doesn't have libcublasLt.so
                 pass
@@ -406,8 +404,8 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
             try:
                 cusparse_spmv_path = search_file(library_search_dirs, "libcusparse.so")
                 ctypes.CDLL(cusparse_spmv_path, dlopen_flags)
-            except:
-                LOG.w("Failed to load cusparse-specific shared libraries.")
+            except (RuntimeError, OSError) as error:
+                LOG.w(f"Failed to load cusparse-specific shared libraries: {error}")
 
     # find all source files
     culib_src_files = _cuda_library_sources(lib_name)

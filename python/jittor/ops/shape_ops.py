@@ -118,10 +118,7 @@ def repeat_interleave(x,repeats,dim=None,output_size=None):
     ):
         value = int(x.item())
         out = jt.full((index.shape[0],), value, x.dtype)
-        try:
-            out._jittor_constant_index_value = value
-        except Exception:
-            pass
+        out._jittor_constant_index_value = value
         return out
     return x.getitem(tuple(slice(None) if d != dim else index for d in range(x.ndim)))
 

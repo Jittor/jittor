@@ -25,6 +25,7 @@ void flush_log() {}
 // Reached from the throwing log macros in log.h, which are header-inline, so
 // every standalone snippet that includes a jittor header has to provide it.
 string message_without_log_prefix(const string& message) { return message; }
+string user_error_message(const string& line, size_t, const string&, const char*) { return line; }
 void send_log(std::ostringstream&&, char, int) {}
 bool check_vlog(const char*, int) { return false; }
 string Op::op_name_to_file_name(const string& name) { return name.substr(0, name.find('.')); }

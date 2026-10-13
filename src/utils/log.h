@@ -125,6 +125,16 @@ EXTERN_LIB void log_capture_stop();
 EXTERN_LIB std::vector<std::map<string,string>> log_capture_read();
 EXTERN_LIB string& get_thread_name();
 
+// A warning for whoever calls the Python API. Raised through Python's warnings
+// module when the calling thread holds the GIL -- so `warnings.filterwarnings`
+// and `pytest.warns` see it and `log_silent` does not swallow it -- and logged
+// as `LOGw` otherwise. Under an "error" filter it throws, with the Python
+// exception left set for the binding to report.
+EXTERN_LIB void user_warning(const string& message);
+// Installed by the Python bindings; returns false when it could not deliver.
+using UserWarningHook = bool (*)(const string& message);
+EXTERN_LIB void set_user_warning_hook(UserWarningHook hook);
+
 template <class T>
 inline void append_log_value(std::ostringstream& out, const T& value) {
     out << value;
@@ -146,12 +156,16 @@ struct Log {
     // because it names the exact comparison, but it is last.
     std::ostringstream tail;
     const char* color_end;
+    const char* fileline;
+    // Where the caller's own words begin, after the `[f ... file:line]` prefix.
+    size_t body_start;
     int verbose;
     char level;
 
     inline Log(const char* const fileline, char level, int verbose) {
         this->verbose = verbose;
         this->level = level;
+        this->fileline = fileline;
         const char* color_begin;
         get_color(level, verbose, color_begin, color_end);
         if (g_supports_color) out << color_begin;
@@ -159,6 +173,7 @@ struct Log {
         print_prefix(&out);
         if (verbose) out << 'v' << verbose << ' ';
         out << fileline << ']';
+        body_start = (size_t)out.tellp();
     }
 
     // The condition, recorded for the end of the message. Returns `*this` so
@@ -227,17 +242,49 @@ struct UserError : JittorError {
     using JittorError::JittorError;
 };
 
+// An index outside the tensor, or more indices than it has dimensions.
+// Python sees IndexError, which is also what ends `for x in var`.
+struct UserIndexError : UserError {
+    using UserError::UserError;
+};
+
 struct InternalInvariantError : JittorError {
     using JittorError::JittorError;
 };
 
+// Also derived from by an error the executor rethrew after adding where the
+// failing operator came from. The bindings report such an error as it is,
+// never as "wrong arguments" to whichever call happened to trigger execution.
+struct OperatorExecutionError {
+    virtual ~OperatorExecutionError() = default;
+};
+
+// Throw `message` as an exception of the same kind as `like`. For the layers
+// that add context to an error on its way up: rethrowing it as a plain
+// std::runtime_error is what made every error reach Python as RuntimeError.
+[[noreturn]] void throw_same_kind(const std::exception& like, const string& message,
+                                  bool executed=false);
+
+// A user error is the caller's sentence, then where the check is:
+// `index 10 is out of bounds ... (getitem_op.cc:458)`. The `[check failed:
+// ...]` condition is the code's spelling of that sentence (`!index_fault.bad()`)
+// and is added only at log_v>=1, or when the caller wrote no sentence at all.
+string user_error_message(const string& line, size_t body_start, const string& tail,
+                          const char* fileline);
+
 template <class Error>
 struct LogErrorVoidify {
-    inline void operator&&(Log& log) {
+    inline string text(Log& log, std::true_type /* user error */) {
+        return user_error_message(log.out.str(), log.body_start, log.tail.str(), log.fileline);
+    }
+    inline string text(Log& log, std::false_type) {
         log.seal();
-        log.flush();
         if (g_supports_color) log.out << log.color_end;
-        throw Error(message_without_log_prefix(log.out.str()));
+        return message_without_log_prefix(log.out.str());
+    }
+    inline void operator&&(Log& log) {
+        log.flush();
+        throw Error(text(log, std::is_base_of<UserError, Error>{}));
     }
 };
 
@@ -247,6 +294,16 @@ struct LogFatalVoidify {
         log.flush();
         if (g_supports_color) log.out << log.color_end;
         throw std::runtime_error(message_without_log_prefix(log.out.str()));
+    }
+};
+
+struct LogRethrowVoidify {
+    const std::exception& like;
+    inline void operator&&(Log& log) {
+        log.seal();
+        log.flush();
+        if (g_supports_color) log.out << log.color_end;
+        throw_same_kind(like, message_without_log_prefix(log.out.str()));
     }
 };
 
@@ -280,6 +337,9 @@ struct LogFatalVoidify {
 #define USER_CHECKop(a, op, b) \
     _TYPED_ERROR_TAIL(jittor::UserError, !((a) op (b)), \
         check_tail_op(#a, (a), #op, #b, (b)))
+#define USER_INDEX_CHECK(cond) \
+    _TYPED_ERROR_TAIL(jittor::UserIndexError, PREDICT_BRANCH_NOT_TAKEN(!(cond)), \
+        check_tail(#cond))
 
 // The framework reached a state its own implementation says is impossible.
 // This remains a distinct exception while the legacy call sites are migrated,

@@ -141,10 +141,7 @@ with _lock.lock_scope():
         numpy2cupy = None
         # CPU arrays default to the CUDA pinned-host allocator (cudaMallocHost),
         # which also fails with no device -- switch to the plain host allocator.
-        try:
-            core.flags.use_cuda_host_allocator = 0
-        except Exception:
-            pass
+        core.Flags().use_cuda_host_allocator = 0
 
 
 from ._core import api as _core_api
@@ -213,6 +210,12 @@ gradfunctional = autograd
 dtype = NanoString
 
 import jittor_utils
+# Created by jit_utils_core so that the bindings raise these very classes.
+JittorError = jittor_utils.cc.JittorError
+JittorInternalError = jittor_utils.cc.JittorInternalError
+JittorIndexError = jittor_utils.cc.JittorIndexError
+JittorTypeError = jittor_utils.cc.JittorTypeError
+JittorShapeError = jittor_utils.cc.JittorShapeError
 
 _ran_post_process = False
 for backend in compiler.backend_modules:
@@ -371,6 +374,8 @@ _ROOT_EXPORTS = (
     "amp",
     "world_size", "config", "capability", "introspection", "graph_replay", "capture_step",
     "profile", "profiling",
+    "JittorError", "JittorInternalError", "JittorIndexError", "JittorTypeError",
+    "JittorShapeError",
 )
 
 __all__ = tuple(sorted(set(

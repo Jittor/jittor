@@ -5,6 +5,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 from multiprocessing import Pool
+from multiprocessing.pool import RemoteTraceback
 import builtins
 import multiprocessing as mp
 import subprocess as sp
@@ -248,7 +249,9 @@ class Logwrapper:
         return cc.log_capture_read()
 
     def _log(self, level, verbose, *msg):
-        if self.log_silent or verbose > self.log_v:
+        # Same rule as send_log in log.cc: log_silent hides info and warnings,
+        # never an error -- some errors are followed by sys.exit.
+        if (self.log_silent and level in "iw") or verbose > self.log_v:
             return
         text = ""
         for m in msg:
@@ -391,7 +394,7 @@ def run_cmd(cmd, cwd=None, err_msg=None, print_error=True, env=None):
         r = sp.run(cmd, shell=True, stdout=sp.PIPE, stderr=sp.STDOUT, env=env)
     try:
         s = r.stdout.decode('utf8')
-    except:
+    except UnicodeDecodeError:
         s = r.stdout.decode('gbk')
     if r.returncode != 0:
         if print_error:
@@ -409,7 +412,14 @@ def do_compile(args):
     cmd, cache_path, jittor_path = args
     try_import_jit_utils_core(True)
     if cc:
-        return cc.cache_compile(cmd, cache_path, jittor_path)
+        try:
+            return cc.cache_compile(cmd, cache_path, jittor_path)
+        except RuntimeError as error:
+            # The pool pickles the exception back to the parent, and pickling
+            # jittor.JittorError looks it up as `jittor.JittorError`: in a
+            # worker that is half way through `import jittor`, or (forkserver)
+            # never imported it and would start to, under the parent's lock.
+            raise RuntimeError(str(error)) from None
     else:
         run_cmd(cmd)
         return True
@@ -538,6 +548,13 @@ def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
             dp = DelayProgress(msg, n)
             for i,_ in enumerate(p.imap_unordered(do_compile, cmds)):
                 dp.update(i)
+        except Exception as error:
+            # The pool chains the worker's traceback as the cause, and it ends
+            # in this same message: the compiler diagnostic was printed twice.
+            if isinstance(error.__cause__, RemoteTraceback):
+                error.__cause__ = None
+                error.__suppress_context__ = True
+            raise
         finally:
             mp.current_process()._config['daemon'] = bk
 
@@ -619,7 +636,7 @@ def get_cpu_version():
                     if cpu_line.startswith("model name"):
                         v = cpu_line.split(':')[-1].strip()
                         break
-    except:
+    except OSError:
         pass
     return v
 
@@ -1136,7 +1153,7 @@ def env_or_try_find(name, bname):
 def try_find_exe(*args):
     try:
         return find_exe(*args)
-    except:
+    except RuntimeError:
         LOG.v(f"{args[0]} not found.")
         return ""
 
@@ -1222,7 +1239,7 @@ def get_py3_config_path():
         else:
             raise RuntimeError(f"python3.{sys.version_info.minor}-config "
                 f"not found in {py3_config_paths}, please specify "
-                f"enviroment variable 'JT_BUILD_PYTHON_CONFIG_PATH',"
+                f"environment variable 'JT_BUILD_PYTHON_CONFIG_PATH',"
                 f" or install python3.{sys.version_info.minor}-dev")
         _py3_config_path = py3_config_path
         return py3_config_path
@@ -1365,7 +1382,8 @@ try:
     if os.name != 'nt':
         import resource
         resource.setrlimit(resource.RLIMIT_STACK, (2**29,-1))
-except:
+except (ValueError, OSError):
+    # A hard limit below the request; the default stack is used.
     pass
 
 if os.name == 'nt':

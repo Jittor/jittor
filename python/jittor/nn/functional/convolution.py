@@ -47,9 +47,9 @@ def _resolve_string_padding(x, padding, kernel_size, stride, dilation):
 def _check_conv2d_output_size(x, oh, ow, kernel_size, stride, padding, dilation):
     """Reject a geometry whose output has no elements, with the numbers in it."""
     if oh <= 0 or ow <= 0:
-        raise ValueError(
+        raise jt.JittorShapeError(
             f"Conv2d output size is non-positive (oh={oh}, ow={ow}): input "
-            f"{tuple(x.shape)} is too small for kernel {tuple(kernel_size)}, "
+            f"{list(x.shape)} is too small for kernel {tuple(kernel_size)}, "
             f"stride {tuple(stride)}, padding {tuple(padding)}, "
             f"dilation {tuple(dilation)}.")
 
@@ -101,7 +101,7 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1,
     stride = _pair(stride)
     dilation = _pair(dilation)
     if weight.ndim != 4:
-        raise ValueError("Conv2d expected a 4-D weight, got shape {}".format(tuple(weight.shape)))
+        raise jt.JittorShapeError("Conv2d expected a 4-D weight, got shape {}".format(list(weight.shape)))
     if isinstance(padding, str):
         x, padding = _resolve_string_padding(x, padding, weight.shape[-2:], stride, dilation)
     padding = _pair(padding)
@@ -119,14 +119,14 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1,
     # of an empty `AssertionError:` (channel mismatch) or a cryptic "not enough
     # values to unpack" (wrong ndim). These used to live only in the module.
     if x.ndim != 4:
-        raise ValueError(
+        raise jt.JittorShapeError(
             f"Conv2d expected a 4-D input (N, C, H, W), but got a {x.ndim}-D input "
-            f"of shape {tuple(x.shape)}.")
+            f"of shape {list(x.shape)}.")
     in_channels = weight.shape[1] * groups
     if x.shape[1] != in_channels:
-        raise ValueError(
+        raise jt.JittorShapeError(
             f"Conv2d expected input with {in_channels} channels (in_channels), "
-            f"but got {x.shape[1]} channels; input shape {tuple(x.shape)}.")
+            f"but got {x.shape[1]} channels; input shape {list(x.shape)}.")
     Kh, Kw = weight.shape[-2:]
     out_height = (x.shape[2]+padding[0]*2-Kh*dilation[0]+dilation[0]-1)//stride[0]+1
     out_width = (x.shape[3]+padding[1]*2-Kw*dilation[1]+dilation[1]-1)//stride[1]+1
@@ -330,9 +330,9 @@ def conv1d(input, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
         >>> y = nn.conv1d(x, w, stride=2, padding=1)
     '''
     if input.dim() != 3:
-        raise RuntimeError(f'Expected 3D input to conv1d, but got input of size: {input.shape}')
+        raise jt.JittorShapeError(f'Expected 3D input to conv1d, but got input of size: {list(input.shape)}')
     if weight.dim() != 3:
-        raise RuntimeError(f'Expected 3D weight to conv1d, but got weight of size: {weight.shape}')
+        raise jt.JittorShapeError(f'Expected 3D weight to conv1d, but got weight of size: {list(weight.shape)}')
     stride = stride[0] if isinstance(stride, (tuple, list)) else stride
     padding = padding[0] if isinstance(padding, (tuple, list)) else padding
     dilation = dilation[0] if isinstance(dilation, (tuple, list)) else dilation

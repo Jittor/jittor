@@ -109,6 +109,11 @@ struct VarFlags {
         // from a tensor anyone holds. Under torch's rule it never asks for a
         // gradient; see `is_constant_scalar` in op.cc.
         _python_number,
+        // The op producing this var threw after its output was allocated, so
+        // the memory may hold a partial or clamped result. A read must go
+        // back through the executor (and fail again) instead of returning it.
+        // Cleared by the next read that syncs without throwing.
+        _execution_failed,
         _end,
     };
 };

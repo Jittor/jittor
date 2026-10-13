@@ -396,8 +396,9 @@ def generate_error_code_from_func_header(func_head, target_scope_name, name, dfs
 
     LOG.vvv("gen err from func_head", func_head)
     args = func_head[1:].split(")")[0].split(",")
-    error_code = f" << \"Wrong inputs arguments, Please refer to examples({help_cmd}).\""
-    error_code += r' << "\n\nTypes of your inputs are:\n"'
+    error_code = (f" << \"{name}() got arguments that match none of its signatures "
+                  f"(see {help_cmd}).\"")
+    error_code += r' << "\n\nYour arguments:\n"'
     for arg in args:
         arg = arg.strip()
         if arg.startswith("PyObject* "):
@@ -416,6 +417,59 @@ def generate_error_code_from_func_header(func_head, target_scope_name, name, dfs
             LOG.vvv("Unhandled arg", arg)
     LOG.vvv("gen err from func_head", func_head, " -> ", error_code)
     return error_code
+
+_PYTHON_SPELLING = (
+    (r"\bvector\s*<\s*VarHolder\s*\*\s*>", "list[Var]"),
+    (r"\bVarHolder\s*\*", "Var"),
+    (r"\bvector\s*<\s*NanoVector\s*>", "list[shape]"),
+    (r"\bNanoVector\b", "shape"),
+    (r"\bNanoString\b", "dtype|str"),
+    (r"\b(?:std::)?string\b", "str"),
+    (r"\bu?int(?:8|16|32|64)?(?:_t)?\b", "int"),
+    (r"\b(?:float32|float64|double|float)\b", "float"),
+)
+
+
+def python_signature(dec):
+    """A C++ binding declaration as a Python caller reads it.
+
+    `VarHolder* unary(VarHolder* x, NanoString op)` -> `unary(x: Var, op: dtype|str)`.
+    Types without a Python spelling here are left as they are; a declaration
+    this does not parse is returned unchanged.
+    """
+    head, paren, rest = dec.partition("(")
+    if not paren or not rest.rstrip().endswith(")"):
+        return dec
+    name = head.split()[-1] if head.split() else ""
+    params = []
+    for param in shsplit_params(rest.rstrip()[:-1]):
+        param, eq, default = param.partition("=")
+        param = re.sub(r"\bconst\b|&", " ", param).split()
+        if not param:
+            continue
+        kind, pname = " ".join(param[:-1]), param[-1]
+        for pattern, spelled in _PYTHON_SPELLING:
+            kind = re.sub(pattern, spelled, kind)
+        text = "%s: %s" % (pname, kind) if kind else pname
+        params.append(text + ("=" + default.strip() if eq else ""))
+    return "%s(%s)" % (name, ", ".join(params))
+
+
+def shsplit_params(text):
+    """Split a parameter list on the commas that are not inside <>, () or {}."""
+    parts, depth, start = [], 0, 0
+    for i, c in enumerate(text):
+        if c in "<({":
+            depth += 1
+        elif c in ">)}":
+            depth -= 1
+        elif c == "," and depth == 0:
+            parts.append(text[start:i])
+            start = i + 1
+    if text[start:].strip():
+        parts.append(text[start:])
+    return [p.strip() for p in parts if p.strip()]
+
 
 def compile_src(src, h, basename):
     # `reg.finditer(src, re.S)` passed the flag where `pos` goes, so scanning
@@ -871,7 +925,7 @@ def compile_src(src, h, basename):
 
         arr_func_return = []
         doc_all = ""
-        decs = "The function declarations are:\n"
+        decs = "Signatures:\n"
         for did, has_return in enumerate(arr_has_return):
             df = dfs[did]
             func_call = arr_func_call[did]
@@ -880,7 +934,7 @@ def compile_src(src, h, basename):
                 doc_all += df["doc"]+'\n'
             doc_all += "Declaration:\n"
             doc_all += df["dec"]+'\n\n'
-            decs += " " + df["dec"]+'\n'
+            decs += "  " + python_signature(df["dec"]) + '\n'
             if has_return:
                 assert "-> int" not in func_head
                 if "-> PyObject*" in func_head:
@@ -962,6 +1016,7 @@ def compile_src(src, h, basename):
         {func_cast}[]{func_head} {{
             {gbp_entry_scope}
             bool matched_overload=false;
+            bool no_overload=false;
             try {{
                 {func_fill};
                 {frontend_scope}
@@ -986,28 +1041,29 @@ def compile_src(src, h, basename):
                 '''
                 for did in range(len(arr_func_return))
                 ])}
+                no_overload=true;
                 LOGf << "Not a valid call.";
             }} catch (const std::exception& e) {{
                 if (!PyErr_Occurred()) {{
                     std::stringstream ss;
                     if (check_async_executor_error(e, ss)) {{
-                        PyErr_Format(PyExc_RuntimeError,
-                            "%s",
-                            ss.str().c_str()
-                        );
+                        PyErr_SetString(python_error_class(e), ss.str().c_str());
                     }} else if (matched_overload) {{
                         // An overload matched the argument types and its body threw
                         // at runtime -> this is a real op error, NOT bad arguments.
                         // Surface jittor's actual message (carries [OP TYPE]/[Input]/
                         // [Reason]) instead of the misleading "Wrong inputs arguments".
-                        PyErr_Format(PyExc_RuntimeError, "%s", e.what());
+                        PyErr_SetString(python_error_class(e), e.what());
                     }} else {{
                         ss {error_log_code};
-                        PyErr_Format(PyExc_RuntimeError,
-                            "%s\\n%s\\nFailed reason:%s",
+                        // No overload took the types: the signatures are the
+                        // reason. Otherwise a conversion threw, and says why.
+                        PyErr_Format(python_type_error_class(),
+                            "%s\\n%s%s%s",
                             ss.str().c_str(),
                             R""({decs})"",
-                            e.what()
+                            no_overload ? "" : "\\nReason: ",
+                            no_overload ? "" : e.what()
                         );
                     }}
                 }}

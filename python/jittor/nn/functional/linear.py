@@ -15,7 +15,7 @@ def linear(x, weight, bias=None):
     fast = _lt_linear_train_cuda(x, weight, bias)
     if fast is not None:
         return fast
-    x = jt.nn.matmul_transpose(x, weight)
+    x = jt.nn.matmul_transpose(x, weight, _op="linear", _names=("input", "weight"))
     if bias is None:
         return x
     # Under the amp register the product is already the compute dtype. A bias

@@ -71,7 +71,7 @@ print("DONE")
 """)
         self.assertEqual(code, 0, output[-4000:])
         self.assertIn("DONE", output)
-        self.assertEqual(output.count("doesn't have gradient"), 3, output[-4000:])
+        self.assertEqual(output.count("does not depend on the loss"), 3, output[-4000:])
 
     def test_second_unnamed_var_is_reported(self):
         code, output = run("""
@@ -82,7 +82,7 @@ jt.grad(loss2, second)
 print("DONE")
 """)
         self.assertEqual(code, 0, output[-4000:])
-        self.assertEqual(output.count("doesn't have gradient"), 2, output[-4000:])
+        self.assertEqual(output.count("does not depend on the loss"), 2, output[-4000:])
 
     def test_present_gradient_is_never_reported(self):
         code, output = run("""
@@ -92,7 +92,7 @@ assert abs(float(g.numpy()[0]) - 2.0) < 1e-6
 print("DONE")
 """)
         self.assertEqual(code, 0, output[-4000:])
-        self.assertNotIn("doesn't have gradient", output)
+        self.assertNotIn("does not depend on the loss", output)
 
     def test_flag_on_raises(self):
         code, output = run("""
@@ -100,7 +100,7 @@ loss, target = unrelated_pair()
 try:
     jt.grad(loss, target)
 except Exception as error:
-    print("RAISED", "doesn't have gradient" in str(error))
+    print("RAISED", "does not depend on the loss" in str(error))
 else:
     print("NO ERROR")
 """, flag=1)
@@ -109,6 +109,28 @@ else:
 
 
 class TestMissingGradInProcess(unittest.TestCase):
+    def test_the_report_is_a_python_warning_at_the_users_line(self):
+        """`warnings` machinery, so it can be filtered, caught and turned into an error.
+
+        It was a C++ `LOGw` written straight to stderr: invisible to
+        `pytest.warns`, unfilterable, swallowed by `log_silent`, and phrased
+        with the internal `Var(13:2:1:1:...)` representation.
+        """
+        import numpy as np
+        import warnings
+        with jt.runtime.scope(missing_grad_error=0):
+            target = jt.array(np.array([1.0, 2.0], dtype="float32"))
+            source = jt.array(np.array([3.0, 4.0], dtype="float32"))
+            with self.assertWarns(UserWarning) as caught:
+                jt.grad((source * source).sum(), target)
+            self.assertIn("target 0 (float32[2,])", str(caught.warning))
+            self.assertNotIn("Var(", str(caught.warning))
+            self.assertEqual(caught.filename, __file__)
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")
+                with self.assertRaises(UserWarning):
+                    jt.grad((source * source).sum(), target)
+
     def test_flag_exists_and_round_trips(self):
         from contextlib import ExitStack as _TestPolicyStack
         with _TestPolicyStack() as _test_policy_stack:

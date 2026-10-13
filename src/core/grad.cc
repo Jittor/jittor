@@ -140,14 +140,17 @@ void warn_grad_break(int i, Var* v) {
     // -- any var, any later call -- was silent, and training converged to the
     // wrong thing with a clean log. There is no deduplication now: one report
     // per missing target per grad() call.
+    std::stringstream target;
+    target << "jt.grad: target " << i << " (" << v->dtype() << v->shape;
+    if (v->name.size()) target << ", named '" << v->name << "'";
+    target << ") does not depend on the loss through a differentiable path";
     if (missing_grad_error) {
-        USER_ERROR << "grads[">>i>>"] '">> v->name>>"' doesn't have gradient:" << v
-            << "\nThe target is not reachable from the loss through a"
-            << "differentiable path. Drop it from the target list, or clear"
+        USER_ERROR << target.str() >> ". Drop it from the target list, or clear"
             << "jt.flags.missing_grad_error to get a zero gradient and a"
             << "warning instead.";
     }
-    LOGw << "grads[">>i>>"] '">> v->name>>"' doesn't have gradient. It will be set to zero:" << v;
+    user_warning(target.str() + "; its gradient is zero. Set "
+                 "jt.flags.missing_grad_error=1 to raise instead.");
 }
 
 vector<VarPtr> grad(
