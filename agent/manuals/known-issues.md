@@ -1828,6 +1828,35 @@ workaround.
   next executor entry (`async_exec_run_python_releases`, which also checks it
   holds the GIL). Off the worker the deleter still drops them itself.
 
+## KI-EXEC-014: ACL worker intermittently segfaults in `release_forward_liveness` on `qwen3_decode`
+
+- Severity: High (a segfault), Open
+- Status: Open, seen once on 2026-10-14 on a 910B3 after rebasing onto
+  `659e6a47f`; not reproduced in nine subsequent full-size runs
+- Owner: executor / async execution
+- Symptom: one `qwen3_decode` process of a 12-workload bench on the
+  rebased tree died with `Caught segfault` on the worker thread. Resolved
+  frames: `worker_main` -> `run_exec_plan` ->
+  `Node::release_forward_liveness` / `Node::release_inputs` /
+  `LogFatalVoidify` (so a `CHECK_EXIST` on a freed node, then a secondary
+  crash in the fatal path). Not the GradCallback path of KI-EXEC-013:
+  decode runs under `no_grad` and builds no tapes.
+- Cause: not diagnosed. Appeared after rebasing the ACL async-worker work
+  onto upstream `659e6a47f` (352-file Refactor 2.0); the same decode had
+  completed cleanly in every pre-rebase run on this card. Nine follow-up
+  runs (three targeted, six back-to-back) all passed with the worker on
+  (median ~10.5 s/step vs 16.1 s with `async_execution=0`). Timing-sensitive
+  use-after-free in the shared liveness queue is the working hypothesis;
+  `run_liveness_queue` already documents that two threads draining at once
+  would corrupt each other's callbacks.
+- Workaround: `async_execution=0` (and loses the ~35% decode gain).
+- Evidence: the one crash report under
+  `$JITTOR_LAB_ROOT/_state/npu-perf/rbfull/rb_full/logs/qwen3_decode.jittor.log`;
+  the nine succeeding runs under `decrep/` and `decstress/`.
+- Exit condition: either a deterministic repro and a fix, or enough clean
+  runs across cards that the single observation is treated as a one-off
+  and this entry closed.
+
 ## KI-COMPAT-001: Torch namespaces publish native-only helpers and imported symbols
 
 - Severity: Medium
