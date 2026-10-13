@@ -233,7 +233,9 @@ def getitem_acl(x, slices, return_x=None):
 
     if slices is not None and (not isinstance(slices, Iterable) or isinstance(slices, str)):
         return _getitem_without_none(x, slices)
-    if isinstance(slices, int) or isinstance(slices, slice):
+    # `x[None]` is a bare None, which is neither Iterable nor a tuple; without
+    # this it reached the TypeError below instead of adding an axis.
+    if slices is None or isinstance(slices, (int, slice)):
         slices = (slices,)
     if not isinstance(slices, tuple):
         raise TypeError("ACL getitem slices must be a tuple, integer, slice, or tensor")
@@ -282,7 +284,8 @@ def _roll_acl(x, shifts, dims=None):
     if not (
         isinstance(x, jt.Var)
         and _jittor_dtype_name(x.dtype)
-        in ("bfloat16", "float16", "float32", "int8", "uint8", "int32", "uint32", "bool")
+        in ("bfloat16", "float16", "float32", "int8", "uint8",
+            "int32", "int64", "uint32", "bool")
     ):
         return None
     if dims is None:
