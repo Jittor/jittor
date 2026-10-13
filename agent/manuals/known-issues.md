@@ -1267,6 +1267,30 @@ workaround.
   investigation with a dead-code removal decision that deserves its own
   review.
 
+## KI-BACKEND-019: `argsort` has no registered constructor on ACL
+
+- Severity: Medium (a supported operation raises), Open
+- Status: Open, seen 2026-10-13 on a 910B3
+- Owner: ACL backend
+- Symptom: eight NPU-gate cases fail with
+  `JittorError: op_register.h:64: constructor argsort with requested
+  signature not found`, raised from
+  `tests/opinfo/definitions/ordering_ops.py`:
+  `test_acl.py::TestACL::test_argsort_values_indices_stay_on_acl` and, in
+  `tests/ops/test_ops.py::TestCommonNPU`, `test_reference_argsort_float32`
+  and `_float64`, `test_reference_sort_float32` and `_float64`,
+  `test_reference_topk_float32`, `test_reference_median_float32`,
+  `test_reference_kthvalue_float32`.
+- Cause: not investigated here. Arrived with the upstream merge; the
+  NPU-gate torch group went from 83 to 90 failures and the native group
+  from 0 to 1 across that merge, and all eight are this one signature.
+- Evidence: the eight cases fail identically on `659e6a47f` with no local
+  commits applied -- a worktree at that commit alone, same card, same gate
+  script -- so they are not from the ACL async-worker work that was being
+  verified when they appeared.
+- Exit condition: `argsort`'s ACL constructor is registered with the
+  signature `ordering_ops.py` asks for, and the eight cases pass.
+
 ## KI-OPS-002: integer floor-division ROCm verification incomplete
 
 - Severity: Critical (until verified on the backend)
