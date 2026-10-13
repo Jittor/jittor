@@ -1,6 +1,15 @@
 """Read-only status of native collective communicators."""
 
-from .._runtime.backend_libraries import get_library
+
+def get_library(name, *, load=False):
+    """The backend library registry, looked up when asked rather than imported.
+
+    A module-level import would put this module on jittor's import-time cycle
+    (`tools/lint/check_import_layering.py`) for a registry that a status query
+    only needs once it is called.
+    """
+    from .._runtime.backend_libraries import get_library as _get_library
+    return _get_library(name, load=load)
 
 
 def get_hccl_world_info():

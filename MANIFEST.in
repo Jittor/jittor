@@ -754,6 +754,8 @@ include src/runtime/random_generator.cc
 include src/runtime/random_generator.h
 include src/runtime/ring_buffer.cc
 include src/runtime/ring_buffer.h
+include src/runtime/rng_state.cc
+include src/runtime/rng_state.h
 include src/runtime/runtime.cc
 include src/runtime/runtime.h
 include src/runtime/submission_pipeline.h
