@@ -5,7 +5,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 from multiprocessing import Pool
-from multiprocessing.pool import RemoteTraceback
+from multiprocessing.pool import RemoteTraceback  # type: ignore[attr-defined]  # missing from typeshed
 import builtins
 import multiprocessing as mp
 import subprocess as sp
