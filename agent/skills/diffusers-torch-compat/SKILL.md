@@ -5,6 +5,15 @@ description: 把 diffusers 分别跑在 jittor 的 `import torch` shim 与原生
 
 # diffusers ⇄ jittor torch shim
 
+## 当前验收入口（2026-10-14）
+
+[CPU/CUDA oracle 与三步训练 scorecard](../../../docs/results/2026-10-14-downstream-oracle-scorecards.md)
+记录 Diffusers 0.35.1 的 `UNet2DModel` 组件：独立二进制 Torch 对拍、输入扰动、
+全部请求梯度及三步更新。该证据不计入 pipeline 注册覆盖，不证明完整生成 pipeline、
+真实尺寸性能或 NPU。计算基线为 `230ba7a0305091fb64ec81a679f32dcaefcea518`；
+平台、上游 SHA、注册分母与复验条件以报告为准。三步训练是手动验收，
+下文其他版本、环境与性能记录均保留原基线，不与本次结果合并授级。
+
 ## 用途
 
 回答四件事：diffusers 怎么在 shim 上跑、怎么在原生 torch 上跑、怎么对拍（数值 + 速度）、

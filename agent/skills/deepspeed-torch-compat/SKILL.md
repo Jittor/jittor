@@ -83,4 +83,6 @@ worker graph ID，也不通过 stale `.grad` 推断当前图。高级 reentrant/
 Review when: DeepSpeed 六个钉死源码文件、native autograd/holder、Module 注册/序列化、
 optimizer state、compat public `gradient_task.participating_tensors`、`owned_runtime_hook`、
 `transaction` 或 `module_patcher` 改变。详细的维护者结论在
-[`docs/results`](../../../docs/results/index.md)，原始日志不版本化。
+[单 rank FP32 Engine 验收报告](../../../docs/results/2026-10-15-deepspeed-zero-engine.md)。
+报告绑定原始计算基线、独立 CPU/CUDA oracle 与主线整合验证；不代表双 rank bf16
+验收已经完成。原始日志不版本化。
