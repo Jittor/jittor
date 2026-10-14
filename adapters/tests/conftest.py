@@ -4,6 +4,8 @@ import importlib
 from pathlib import Path
 import sys
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 _support = Path(__file__).resolve().parents[2] / "tests"
 _monorepo = (_support / "_helpers/pytest_policy.py").is_file()
 if _monorepo and str(_support) not in sys.path:

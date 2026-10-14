@@ -871,13 +871,14 @@ def _accepted_skip_patterns():
         from _helpers.gate_scope import ENVIRONMENT_SKIP_PATTERNS, REAL_TORCH_PATTERNS
     except Exception:
         return ()
-    if not _real_torch_is_required():
-        return ENVIRONMENT_SKIP_PATTERNS
+    required = set(REAL_TORCH_PATTERNS if _real_torch_is_required() else ())
+    if os.environ.get("JITTOR_REQUIRE_DEEPSPEED", "").strip().lower() in ("1", "true", "yes", "on"):
+        required.add("deepspeed")
     # The inversion: a session that declares it has real PyTorch cannot also
     # accept "no torch" as an explanation, or it reports success for the one
     # thing it exists to check.
     return tuple(
-        pattern for pattern in ENVIRONMENT_SKIP_PATTERNS if pattern not in REAL_TORCH_PATTERNS
+        pattern for pattern in ENVIRONMENT_SKIP_PATTERNS if pattern not in required
     )
 
 

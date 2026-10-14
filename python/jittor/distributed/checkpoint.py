@@ -283,6 +283,9 @@ def load_training_state(model, optimizer, checkpoint_id, *, process_group=None):
             source.stop_grad()
         else:
             source.start_grad()
+    validate_optimizer = getattr(optimizer, "validate_state_dict", None)
+    if validate_optimizer is not None:
+        validate_optimizer(saved_optimizer["state"])
     previous_rng = _rng_snapshot()
     try:
         _restore_rng(state["rng"])
@@ -290,6 +293,10 @@ def load_training_state(model, optimizer, checkpoint_id, *, process_group=None):
         _restore_rng(previous_rng)
         raise
     model.load_state_dict(state["model"])
+    # Updating an already-frozen target does not restart its gradient flag.
+    # Restore both directions explicitly on the existing parameter objects.
+    for name, target in current.items():
+        target.stop_grad() if state["model_stop_grad"][name] else target.start_grad()
     optimizer.load_state_dict(saved_optimizer["state"])
     optimizer.zero_grad()
     return state["extra"]

@@ -244,6 +244,11 @@ def _run(python, runtime, case, output, weights=None, device="cpu", repeats=None
         command += ["--repeats", str(repeats)]
     if weights is not None:
         command += ["--weights", str(weights)]
+    return _run_command(python, case, command)
+
+
+def _run_command(python, case, command):
+    """Launch an ecosystem probe with the shared oracle-isolation contract."""
     environment = os.environ.copy()
     package_site = _runner_package_site(python)
     if package_site:

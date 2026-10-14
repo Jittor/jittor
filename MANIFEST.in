@@ -349,6 +349,7 @@ include docs/notes/float32-precision-policy.md
 include docs/notes/index.md
 include docs/notes/mixed-precision.md
 include docs/notes/native-sharded-checkpoint.md
+include docs/notes/native-zero-optimizer.md
 include docs/notes/numerics-contract.md
 include docs/notes/pipelined-execution.md
 include docs/notes/profiling.md
@@ -392,11 +393,15 @@ include docs/results/2026-10-14-optimizer-checkpoint-continuation.md
 include docs/results/2026-10-15-bf16-fsdp2-checkpoint-continuation.md
 include docs/results/2026-10-15-checkpoint-state-options.md
 include docs/results/2026-10-15-cuda13-toolchain-packaging.md
+include docs/results/2026-10-15-deepspeed-engine-prerequisites.md
+include docs/results/2026-10-15-deepspeed-zero-engine.md
 include docs/results/2026-10-15-distribution-constraint-publication.md
 include docs/results/2026-10-15-integration-nccl-coverage.md
 include docs/results/2026-10-15-longformer-32768-context-oracles.md
 include docs/results/2026-10-15-metric-state-and-tensordict-oracles.md
 include docs/results/2026-10-15-native-sharded-checkpoint.md
+include docs/results/2026-10-15-native-zero-optimizer.md
+include docs/results/2026-10-15-openmmlab-training-oracles.md
 include docs/results/2026-10-15-training-registry-denominators.md
 include docs/results/2026-10-15-transformers-model-family-matrix.md
 include docs/results/2026-10-15-upstream-pr-disposition.md

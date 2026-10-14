@@ -131,6 +131,26 @@ inline static void assign_attrs(Var* a, Var* b) {
         a->set_flag(VarFlags::_stop_fuse);
 }
 
+static void apply_tensor_hook(Var* var, VarPtr& gradient) {
+    // Keep the callback alive if its Python hook removes itself or rebinds
+    // the parameter while running. A missing gradient never fires a hook.
+    auto callback = var->grad_hook;
+    if (!callback || !gradient) return;
+    if (gradient->dtype() != var->dtype())
+        gradient = make_unary(gradient, var->dtype());
+    Var* incoming = gradient.ptr;
+    VarPtr replacement;
+    callback->func(1, &incoming, 1, &replacement);
+    if (!replacement) return;
+    USER_CHECK(replacement->shape == gradient->shape)
+        << "Tensor gradient hook changed the gradient shape";
+    USER_CHECK(replacement->dtype() == gradient->dtype())
+        << "Tensor gradient hook changed the gradient dtype";
+    USER_CHECK(replacement->device_id == gradient->device_id)
+        << "Tensor gradient hook changed the gradient device";
+    gradient = move(replacement);
+}
+
 DEFINE_FLAG(int, missing_grad_error, 0, "Raise instead of warning when a target of grad receives no gradient at all and is filled with zeros.");
 
 void warn_grad_break(int i, Var* v) {
@@ -231,15 +251,22 @@ vector<VarPtr> grad(
     vector<VarPtr> grads(gvars.size());
     vector<VarPtr> results(targets.size());
     vector<int> target_id(targets.size());
+    vector<bool> is_target(gvars.size(), false);
+    unordered_map<Var*, VarPtr> observed_target_grads;
     for (int i=0; i<targets.size(); i++) {
         Var* var = targets[i];
         target_id[i] = gvar_index.has(var) ?
             gvar_index.get(var) : -1;
+        if (target_id[i] >= 0) is_target[target_id[i]] = true;
     }
 
     if (grads.size()) {
         grads[0] = make_number(1.f, loss);
         assign_attrs(grads[0].ptr, loss);
+        auto producer = backward_grad_fn(loss);
+        if (loss->grad_hook && is_target[0] && producer && grad_nodes.has(producer))
+            observed_target_grads[loss] = grads[0].ptr;
+        apply_tensor_hook(loss, grads[0]);
     }
 
     NodeIndex consumed_grouped_ops;
@@ -354,6 +381,16 @@ vector<VarPtr> grad(
         if (grad && auto_mixed_precision_level == 3 && grad->ns != var->ns) {
             grad = make_unary(grad, var->ns);
         }
+        // A non-leaf input's returned gradient is observed before its node
+        // executes (and before that node's Tensor hooks), if this traversal
+        // also differentiates upstream of it. At a terminal target the hooks
+        // still run, and the returned gradient includes their replacement.
+        if (grad && var->grad_hook && is_target[i]) {
+            auto producer = backward_grad_fn(var);
+            if (producer && grad_nodes.has(producer))
+                observed_target_grads[var] = grad.ptr;
+        }
+        apply_tensor_hook(var, grad);
     }
     trace_grad_op = nullptr;
     // set zero grad
@@ -361,8 +398,13 @@ vector<VarPtr> grad(
         Var* var = targets[i];
         VarPtr& grad = results[i];
         auto id = target_id[i];
-        if (id>=0)
-            grad = move(grads[id]);
+        if (id>=0) {
+            auto observed = observed_target_grads.find(var);
+            if (observed == observed_target_grads.end() || observed->second.ptr == grads[id].ptr)
+                grad = move(grads[id]);
+            else
+                grad = move(observed->second);
+        }
         if (!grad && materialize_grads) {
             // TODO: better warning message
             warn_grad_break(i, var);

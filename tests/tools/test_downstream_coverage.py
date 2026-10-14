@@ -63,6 +63,32 @@ class CoverageAuditTests(unittest.TestCase):
         self.serial = 0
         self.bind_measurements(self.row)
 
+    def test_deepspeed_engine_gate_is_separate_from_ordinary_model_cases(self):
+        row = next(item for item in audit.audit(ROOT)["repos"] if item["repo"] == "deepspeed")
+        self.assertEqual(row["registered_cases"], [])
+        self.assertEqual(row["gate_cases"], [])
+        self.assertEqual(row["dedicated_gates"], [{
+            "protocol": "deepspeed-engine", "session": "ecosystem_deepspeed",
+            "tests": ["compat/tests/torch/test_ecosystem_deepspeed.py::test_real_deepspeed_engine_training_and_resume"],
+        }])
+        self.assertIsNone(row["verified_level"])
+
+    def test_dedicated_gate_rejects_missing_test_or_session(self):
+        gate = self.root / "compat/tests/torch/test_ecosystem_deepspeed.py"
+        gate.parent.mkdir(parents=True)
+        test_source = "def test_real_deepspeed_engine_training_and_resume(): pass\n"
+        session_source = "def ecosystem_deepspeed(session): pass\n"
+        gate.write_text(test_source)
+        nox = self.root / "noxfile.py"
+        nox.write_text(session_source)
+        self.assertEqual(len(audit.dedicated_gates(self.root)["deepspeed"]), 1)
+        for target, source in ((gate, test_source), (nox, session_source)):
+            with self.subTest(path=target.name):
+                target.write_text("def unrelated(): pass\n")
+                with self.assertRaisesRegex(ValueError, "dedicated gate"):
+                    audit.dedicated_gates(self.root)
+                target.write_text(source)
+
     def artifact_json(self, row, role, value):
         self.serial += 1
         path = self.lab / ("artifact-%d.json" % self.serial)

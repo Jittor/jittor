@@ -34,6 +34,8 @@ def module_setattr(module, name, value):
     if name in attributes and isinstance(value, (owner.native_module, owner.Parameter)) \
             and not isinstance(attributes[name], (owner.native_module, owner.backend.Var)):
         del attributes[name]
+    if isinstance(value, owner.native_module) or value is None:
+        return owner.native_module.__setattr__(module, name, value)
     object.__setattr__(module, name, value)
 
 
@@ -105,6 +107,13 @@ class LayerInitializer:
                     # torch layers expose what they were built with.
                     object.__setattr__(module, "padding_mode", padding_mode)
                 adopt_owned_children(owner, module, external, frozen)
+                if issubclass(self.native, getattr(owner.backend.nn, "BatchNorm", ())):
+                    # Native Jittor keeps a non-persistent int32 vector for its
+                    # checkpoint format. Torch owns a persistent scalar int64
+                    # counter instead; change only this frontend instance.
+                    counter = (owner.backend.array(0, dtype="int64").stop_grad()
+                               if module.track_running_stats else None)
+                    module.register_buffer("num_batches_tracked", counter)
             finally:
                 if previous is None:
                     vars(module).pop("_native_parameter_construction", None)

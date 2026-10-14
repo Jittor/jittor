@@ -20,6 +20,7 @@ complex-dtype
 pipelined-execution
 profiling
 native-sharded-checkpoint
+native-zero-optimizer
 ```
 
 ## 按问题索引

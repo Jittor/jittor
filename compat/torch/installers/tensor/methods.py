@@ -33,6 +33,7 @@ from .method_api import (
     _api_data_ptr,
     _api_is_contiguous,
     _api_is_leaf,
+    _api_is_sparse,
     _api_retains_grad,
     _api_is_cpu,
     _api_is_mps,
@@ -93,6 +94,7 @@ from .method_api import (
     _numpy_data_value,
     _optimizer_maybe_has_fsdp_params,
     _register_leaf,
+    _register_post_accumulate_grad_hook,
     _resolve_size,
     _restore_trainable_state,
     _retain_grad,
@@ -406,6 +408,9 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # Keep the compatibility spelling on Var so it follows the graph instead
     # of silently calling every intermediate a leaf.
     Var.is_leaf = property(_api_is_leaf)
+    Var.is_sparse = property(_api_is_sparse)
+    register_api_bindings(Var, 'torch.Tensor', ('is_sparse',), Fidelity.EXACT,
+                          'Native Var has dense storage; sparse construction is unsupported.')
     # torch's nested-tensor flag; jittor has no nested tensors -> always False.
     if not hasattr(Var, "is_nested"):
         Var.is_nested = property(_api_is_nested)
@@ -420,6 +425,15 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # after backward (normally only leaves keep .grad). Registration follows
     # the holder's lifetime, including repeated or interleaved backward graphs.
     Var.retain_grad = _retain_grad
+    Var.register_post_accumulate_grad_hook = _register_post_accumulate_grad_hook
+    register_api_bindings(Var, 'torch.Tensor', ('register_hook',), Fidelity.APPROXIMATE,
+                          'Native complete-gradient hooks preserve leaf identity and propagate '
+                          'replacement gradients. Worker graph IDs and private Node APIs are unavailable.')
+    register_api_bindings(Var, 'torch.Tensor', ('register_post_accumulate_grad_hook',),
+                          Fidelity.APPROXIMATE,
+                          'Observers run after existing leaf/optimizer accumulation and before '
+                          'final callbacks. Native graph scheduling does not reproduce PyTorch '
+                          'interleaving between different leaves.')
     Var.retains_grad = property(_api_retains_grad)
 
     Var.to = _to

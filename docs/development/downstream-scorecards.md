@@ -48,6 +48,10 @@ python -S "$scripts/audit_coverage.py" scorecard \
 [适配流程](../../agent/skills/downstream-library-adaptation/SKILL.md) 执行；报告必须列每层
 场景数及未验证格，core 矩阵至少 L3。
 
+审计中的 `gate_cases` 记录共享模型 CASES；`dedicated_gates` 单独记录 DeepSpeed Engine
+这类专用协议入口及 nox session，不将其伪装为普通模型 case。两者只证明门禁已接入，
+`verified_level` 仍为空；L 级必须由当前 scorecard 的实际执行证据授予。
+
 ## 每行必填的平台块
 
 | 字段 | 固定内容 |

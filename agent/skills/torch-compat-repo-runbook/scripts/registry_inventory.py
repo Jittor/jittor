@@ -14,7 +14,7 @@ import re
 import subprocess
 
 
-REPOS = ("transformers", "peft", "diffusers", "ms-swift", "verl")
+REPOS = ("transformers", "peft", "diffusers", "ms-swift", "verl", "mmengine", "mmcv")
 ROOT = Path(__file__).resolve().parents[4]
 
 
@@ -107,7 +107,7 @@ def inventory(repo, checkout):
     remote = git(checkout, "remote", "get-url", "origin")
     files = git(checkout, "ls-files", "--", "*.py").splitlines()
     prefix = {"transformers": "src/transformers/", "peft": "src/peft/",
-              "diffusers": "src/diffusers/", "ms-swift": "swift/", "verl": "verl/"}[repo]
+              "diffusers": "src/diffusers/", "ms-swift": "swift/", "verl": "verl/", "mmengine": "mmengine/", "mmcv": "mmcv/"}[repo]
     files = [path for path in files if path.startswith(prefix)]
     if repo == "transformers":
         selected = [path for path in files if path.endswith("models/auto/modeling_auto.py")]
@@ -119,12 +119,15 @@ def inventory(repo, checkout):
         selected = [path for path in files if "/model/" in path or "/tuners/" in path
                     or path.endswith("model_type.py") or any(
                         part in path for part in ("/cli/", "/arguments/", "/trainers/", "/pipelines/train/"))]
+    elif repo in ("mmengine", "mmcv"):
+        selected = files
     else:
         selected = [path for path in files if path.startswith("verl/trainer/")
                     or ("/models/" in path and "registry" in path)]
     source = SourceRegistry(checkout, selected)
     axes = []
     used = set()
+    declaration_details = None
 
     def add(axis, name, members, sources):
         if any(row["axis"] == axis for row in axes):
@@ -240,7 +243,7 @@ def inventory(repo, checkout):
                     members.extend(source.value(value) for value in values)
                     paths.append(path)
             add(axis, "arguments Literal " + field, members, paths)
-    else:
+    elif repo == "verl":
         for function, axis in (("register_adv_est", "advantage_estimator"), ("register_policy_loss", "policy_loss")):
             members, paths = [], []
             for path, tree in source.trees.items():
@@ -282,6 +285,19 @@ def inventory(repo, checkout):
                         loss_paths.append(path)
         add("entrypoint", "Hydra trainer entrypoints", entrypoints, entry_paths)
         add("distillation_loss", "register_distillation_loss settings.names", losses, loss_paths)
+    if repo in ("mmengine", "mmcv"):
+        from _openmmlab_registry import AXES, declarations
+        declaration_details = declarations(checkout, repo, selected)
+        if declaration_details["unresolved"]:
+            raise ValueError("Unresolved bounded OpenMMLab registration: " +
+                             str(declaration_details["unresolved"][0]))
+        for registry, axis in AXES[repo].items():
+            rows = [row for row in declaration_details["declarations"] if row["registry"] == registry]
+            add(axis, registry + ".register_module (all source declarations)",
+                declaration_details["axes"][axis], [row["source"] for row in rows])
+        # Hash the full scanned package, including currently unselected/dynamic
+        # registries. Import conditions describe declarations, not availability.
+        used.update(selected)
     version = None
     for relative in files:
         if relative.endswith(("/__init__.py", "/version.py", "/_version.py")):
@@ -301,9 +317,15 @@ def inventory(repo, checkout):
     if repo == "verl" and (checkout / "verl/version/version").is_file():
         version = (checkout / "verl/version/version").read_text(encoding="utf-8").strip()
         used.add("verl/version/version")
-    return {"schema_version": 1, "repo": repo, "upstream": {"commit": commit, "remote": remote, "version": version},
+    result = {"schema_version": 1, "repo": repo, "upstream": {"commit": commit, "remote": remote, "version": version},
             "scope": "Source-declared registry members; no member is verified by enumeration.", "axes": axes,
             "sources": [{"path": path, "sha256": digest(checkout / path)} for path in sorted(used)]}
+    if declaration_details is not None:
+        result["declaration_details"] = declaration_details
+        result["scope"] = ("Bounded source-declared OpenMMLab registry axes; all branches and optional/compiled "
+                           "modules are retained. Other registries are listed separately and have no denominator. "
+                           "Not whole-library coverage or installed runtime availability.")
+    return result
 
 
 def main():

@@ -1206,10 +1206,12 @@ def compile_src(src, h, basename):
         tp.tp_flags |= Py_TPFLAGS_HAVE_GC;
         tp.tp_traverse = [](PyObject* self, visitproc visit, void* arg) -> int {{
             Py_VISIT({dict_slot});
+            {"if (GET_INITED_FLAG(VarHolder, 1, self)) { Py_VISIT(GET_RAW_PTR(VarHolder, self)->collectable_grad_hook()); }" if class_name == "VarHolder" else ""}
             {"if (Py_TYPE(self) != &PyjtVarHolder.ht_type) { Py_VISIT(Py_TYPE(self)); }" if class_name == "VarHolder" else ""}
             return 0;
         }};
         tp.tp_clear = [](PyObject* self) -> int {{
+            {"if (GET_INITED_FLAG(VarHolder, 1, self)) GET_RAW_PTR(VarHolder, self)->clear_collectable_grad_hook();" if class_name == "VarHolder" else ""}
             Py_CLEAR({dict_slot});
             return 0;
         }};

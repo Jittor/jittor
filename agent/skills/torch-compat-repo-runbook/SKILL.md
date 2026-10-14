@@ -179,6 +179,23 @@ CPython minor 版本不同时默认拒绝共享包站，确实只走稳定 ABI �
   不进主仓库。
 - 加新 runbook 时，同时在该库 skill 的 `## 证据` 里写清"实测"还是"报告推导"。
 
+## MMEngine / MMCV 的下游训练 owner
+
+OpenMMLab 的三步证据使用
+[`openmmlab_training_probe.py`](scripts/openmmlab_training_probe.py)，保留真实
+`BaseModel.train_step → OPTIM_WRAPPERS.build(OptimWrapper) → torch.optim.SGD`
+调用链；通用 `training_probe.py` 的手工 SGD 不能代替它。`RecordingSGD` 仅在真实 step
+前记录裁剪后的梯度，随后执行真实父实现；逐步检查 loss forward/optimizer update 次数、
+scalar/list loss 解析、输入与参数梯度、参数/buffer/momentum state。
+
+`nox -s ecosystem_openmmlab` 是预装 MMEngine 0.10.7 / MMCV 2.2.0 / NumPy 1.x 的独立
+CPU/CUDA opt-in 门禁。它要求独立 oracle、逐库 REQUIRE 与实际执行；缺包、设备不符、
+任何 fallback 或省略必要 tensor 都失败。这里只验证 tiny 训练规格，不授速度级别。
+
+`registry_inventory.py` 支持两个库的有界源码声明轴。MMCV 整包条件/扩展注册仍进分母，
+MMEngine 的动态优化器枚举则明确不在该声明轴内；每条保留源码位置与条件，未解析的
+有界注册直接报错。不要把声明轴写成全库分母或已验证的 backend 能力。
+
 ## 八、统一覆盖审计与 scorecard
 
 连续验证不同提交时，可显式设置 `JITTOR_ECOSYSTEM_CACHE_ROOT` 为当前任务专属的

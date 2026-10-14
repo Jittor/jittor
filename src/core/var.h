@@ -16,6 +16,7 @@ namespace jittor {
 
 constexpr size_t alignment = 32;
 struct VarHolder;
+struct GradCallback;
 
 struct Var : Node {
     NanoVector shape;
@@ -36,6 +37,9 @@ struct Var : Node {
     void set_storage_strides(const vector<int64>& strides);
     cstr name;
     fast_shared_ptr<loop_options_t> loop_options;
+    // Tensor hooks act on the complete gradient of this node, including
+    // when the node itself is a requested differentiation target.
+    std::shared_ptr<GradCallback> grad_hook;
     // Atomic: constructed and released from the compile workers too.
     static std::atomic<int64> number_of_lived_vars;
 

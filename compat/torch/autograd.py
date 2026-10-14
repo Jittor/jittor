@@ -4,6 +4,8 @@ Installation publishes these objects. Native delegates belong to InstallContext;
 Function input/output bookkeeping belongs to each native one-shot call context.
 """
 import contextlib
+import threading
+from collections import deque
 import jittor as jt
 import numpy as np
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
@@ -259,7 +261,8 @@ def grad(outputs, inputs, grad_outputs=None, retain_graph=None,
             "materialize_grads=True, but got: allow_unused=False.")
     allow_unused = bool(materialize_grads) if allow_unused is None \
         else bool(allow_unused)
-    gs = list(jt.core.grad_optional(loss, ins, rg))
+    with _backward_callbacks():
+        gs = list(jt.core.grad_optional(loss, ins, rg))
     missing = [i for i, value in enumerate(gs) if value is None]
     if missing and materialize_grads:
         for i in missing:
@@ -413,10 +416,35 @@ def kineto_available():
     return False
 
 
+_callback_tasks = threading.local()
+
+
+@contextlib.contextmanager
+def _backward_callbacks():
+    """Drain successful graph-task callbacks after gradients are published."""
+    stack = getattr(_callback_tasks, "stack", None)
+    if stack is None:
+        stack = _callback_tasks.stack = []
+    callbacks = deque()
+    stack.append(callbacks)
+    try:
+        yield
+        while callbacks:
+            callbacks.popleft()()
+    finally:
+        stack.pop()
+        callbacks.clear()
+
+
 class _Engine:
     @staticmethod
-    def queue_callback(*args, **kwargs):
-        return None
+    def queue_callback(callback):
+        stack = getattr(_callback_tasks, "stack", ())
+        if not stack:
+            raise RuntimeError("Final callbacks can only be installed during backward pass.")
+        if not callable(callback):
+            raise TypeError("backward callback must be callable")
+        stack[-1].append(callback)
 
 
 class Variable:

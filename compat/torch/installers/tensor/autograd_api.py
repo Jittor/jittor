@@ -56,6 +56,39 @@ def requires_grad_(self, v=True):
     return self
 
 
+def _register_post_accumulate_grad_hook(self, hook):
+    if not self.requires_grad:
+        raise RuntimeError("cannot register a hook on a tensor that does not require gradient")
+    if not self.is_backward_leaf:
+        raise RuntimeError("post accumulate grad hooks cannot be registered on non-leaf tensors")
+    if not callable(hook):
+        raise TypeError("post accumulate grad hook must be callable")
+    from jittor._core.hooks import _RemovableHandle
+    hooks = self.__dict__.setdefault("_torch_post_accumulate_hooks", {})
+    key = self.__dict__.get("_torch_post_accumulate_next_id", 0)
+    self.__dict__["_torch_post_accumulate_next_id"] = key + 1
+    hooks[key] = hook
+    _register_leaf(self)
+    return _RemovableHandle(lambda: hooks.pop(key, None))
+
+
+def _run_post_accumulate_hooks(leaves, grad_by_id):
+    # Differentiate once with the native engine, then notify observers of the
+    # accumulated storage. Optimizer slots are already published, so a hook's
+    # p.grad mutation/clearing writes through the existing gradient owner.
+    from ...gradient_task import _participation_scope
+    with _owner.jt.no_grad(), _participation_scope(leaves, grad_by_id):
+        for parameter in leaves:
+            if id(parameter) not in grad_by_id:
+                continue
+            hooks = parameter.__dict__.get("_torch_post_accumulate_hooks")
+            if not hooks:
+                continue
+            for key, hook in tuple(hooks.items()):
+                if key in hooks and hook(parameter) is not None:
+                    raise RuntimeError("Tensor post accumulate grad hook must return None")
+
+
 def _fill_opt_grads(opt, grad_by_id, filled_param_ids=None):
     # Replicate the grad-storage half of jittor's Optimizer.backward() but
     # from an already-computed {id(param): grad} map (so a SINGLE jt.grad
@@ -116,6 +149,12 @@ def _optimizer_maybe_has_fsdp_params(opt):
 
 
 def _backward(self, gradient=None, retain_graph=None, create_graph=False, **kw):
+    from ...autograd import _backward_callbacks
+    with _backward_callbacks():
+        return _backward_impl(self, gradient, retain_graph, create_graph, **kw)
+
+
+def _backward_impl(self, gradient=None, retain_graph=None, create_graph=False, **kw):
     # torch's signature is (gradient=None, retain_graph=None,
     # create_graph=False, inputs=None) and retain_graph defaults to
     # create_graph. The default here was False, not None, so the line below
@@ -287,6 +326,7 @@ def _backward(self, gradient=None, retain_graph=None, create_graph=False, **kw):
     # step() consumes together. Still before backward() returns, which is
     # what torch's autograd hooks guarantee: clipping and norm logging in
     # between must see the synchronised gradient.
+    _run_post_accumulate_hooks(leaves, grad_by_id)
     _owner._ddp_all_reduce_grads(leaves)
     # Independent retain_grad lasts as long as its weakly indexed holder.
     # Preserve bounded cleanup only for legacy non-weak-referenceable Vars.

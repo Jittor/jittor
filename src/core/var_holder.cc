@@ -696,6 +696,7 @@ VarHolder::~VarHolder() {
 
 // assign attributes of b to a
 static inline void assign_var(Var* a, Var* b) {
+    if (b->grad_hook) a->grad_hook = b->grad_hook;
     if (b->flag(VarFlags::_placement_published))
         a->set_flag(VarFlags::_placement_published);
     a->name = move(b->name);
@@ -794,6 +795,7 @@ VarHolder* VarHolder::start_grad() {
     AutogradPolicyOverride policy_guard({});
     no_grad = 0;
     auto dvar = jittor::detach(var);
+    dvar->grad_hook = var->grad_hook;
     std::swap(dvar.ptr, var);
     no_grad = no_grad_bk;
     var->set_flag(VarFlags::_explicit_requires_grad);
@@ -803,6 +805,29 @@ VarHolder* VarHolder::start_grad() {
 
 bool VarHolder::is_backward_leaf() {
     return jittor::is_backward_leaf(var);
+}
+
+void VarHolder::set_grad_hook(GradCallback&& callback) {
+    var->grad_hook = std::make_shared<GradCallback>(move(callback));
+}
+
+void VarHolder::clear_grad_hook() {
+    var->grad_hook.reset();
+}
+
+PyObject* VarHolder::collectable_grad_hook() {
+    if (!var->_outputs.empty() ||
+        !var->grad_hook || var->grad_hook.use_count() != 1)
+        return nullptr;
+    // `Var::holder` is the most recently constructed holder and temporary
+    // aliases clear it on destruction. Check the actual ownership registry.
+    for (auto holder : runtime_holder_state().holders())
+        if (holder != this && holder->var == var) return nullptr;
+    return reinterpret_cast<PyObject*>(var->grad_hook->python_callable);
+}
+
+void VarHolder::clear_collectable_grad_hook() {
+    if (collectable_grad_hook()) var->grad_hook.reset();
 }
 
 int64 VarHolder::grad_fn_node_id() {
@@ -858,6 +883,7 @@ VarHolder* VarHolder::_update(VarHolder* v) {
     // Python in-place wrappers call `_update` directly. A view must write the
     // replacement through its root instead of rebinding only the view holder.
     if (is_view()) return assign(v);
+    if (var->grad_hook) v->var->grad_hook = var->grad_hook;
     if (var->flag(VarFlags::_placement_published))
         v->var->set_flag(VarFlags::_placement_published);
     note_rebind(this);

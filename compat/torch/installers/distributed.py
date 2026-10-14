@@ -779,6 +779,14 @@ def _set_model_state_dict(model, state_dict, *a, options=None, **k):
     return set_model_state_dict(model, state_dict, options=options)
 
 
+class GradBucket:
+    """Importable DDP bucket type; native bucket communication is not exposed."""
+
+    def __init__(self, *args, **kwargs):
+        _stub_unimplemented("torch.distributed.GradBucket",
+                            "invent a gradient bucket with no native storage or reduction")
+
+
 class ShardedTensor:
     pass
 
@@ -1086,6 +1094,9 @@ def _install_distributed(g, registry=None):
     dist.DeviceMesh = getattr(dist, "DeviceMesh", _DeviceMesh)
     dist.init_device_mesh = getattr(dist, "init_device_mesh", _init_device_mesh)
     dist.ProcessGroup = _JittorProcessGroup
+    dist.GradBucket = GradBucket
+    _record_unimplemented("torch.distributed.GradBucket",
+                          "invent a gradient bucket with no native storage or reduction")
 
     c10d = _modules.get("torch.distributed.distributed_c10d")
     if c10d is None:
@@ -1265,6 +1276,8 @@ def _install_distributed(g, registry=None):
         Fidelity.APPROXIMATE,
         "Reuses native ProcessGroup, store and collective owners; group, reduction "
         "and backend capability limits and existing Work semantics apply")
+    register_api_bindings(dist, "torch.distributed", ("GradBucket",),
+        Fidelity.UNIMPLEMENTED, "Importable type; construction refuses unavailable native DDP buckets")
     register_api_bindings(dist, "torch.distributed",
         ("send", "recv", "isend", "irecv", "batch_isend_irecv"),
         Fidelity.UNIMPLEMENTED, "Point-to-point communication explicitly rejects nonempty work")

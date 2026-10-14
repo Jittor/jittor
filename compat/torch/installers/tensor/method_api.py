@@ -1666,6 +1666,12 @@ def _api_is_leaf(self):
     return bool(self.is_backward_leaf)
 
 
+def _api_is_sparse(self):
+    # Native Var storage is dense; unsupported sparse factories never produce
+    # a Var whose storage this capability query could misclassify.
+    return False
+
+
 def _api_retains_grad(self):
     return bool(getattr(self, '_torch_retains_grad', False))
 
@@ -1787,6 +1793,7 @@ from .autograd_api import (
     _grad_set,
     _optimizer_maybe_has_fsdp_params,
     _register_leaf,
+    _register_post_accumulate_grad_hook as _register_post_accumulate_grad_hook,
     _retain_grad,
     _rg_get,
     _rg_set,

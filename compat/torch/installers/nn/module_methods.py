@@ -322,7 +322,8 @@ def _named_buffers(self, prefix="", recurse=True, remove_duplicate=True):
 
 def _named_modules(self, memo=None, prefix="", remove_duplicate=True):
     """Torch's ``named_modules``, accepting memo/prefix/remove_duplicate."""
-    for item in self._iter_named_modules():
+    seen = set() if memo is None else memo
+    for item in self._iter_named_modules(memo=seen if remove_duplicate else None):
         # jittor yields (name, module) pairs
         if isinstance(item, tuple) and len(item) == 2:
             name, mod = item

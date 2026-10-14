@@ -20,6 +20,7 @@
 namespace jittor {
 
 struct VarHolder;
+struct GradCallback;
 // @pyjt(submit_pending_fetches)
 void submit_pending_fetches();
 VarPtr detach(Var* x);
@@ -467,6 +468,15 @@ struct VarHolder {
      */
     // @pyjt(__get__grad_fn_node_id)
     int64 grad_fn_node_id();
+
+    // @pyjt(_set_grad_hook)
+    void set_grad_hook(GradCallback&& callback);
+    // @pyjt(_clear_grad_hook)
+    void clear_grad_hook();
+    // GC may follow the native callback only when its single holder is also
+    // its sole graph owner. An active consumer must keep its callback alive.
+    PyObject* collectable_grad_hook();
+    void clear_collectable_grad_hook();
 
     /**
      * Which *kind* of op that is, as the registration-time operator id (see

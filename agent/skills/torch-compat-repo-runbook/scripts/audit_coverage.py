@@ -40,13 +40,35 @@ def ecosystem_cases(root):
     return result
 
 
+def dedicated_gates(root):
+    """Discover maintained non-model protocols without counting ordinary CASES."""
+    declarations = {
+        "deepspeed": ("deepspeed-engine", "ecosystem_deepspeed",
+                      "compat/tests/torch/test_ecosystem_deepspeed.py",
+                      "test_real_deepspeed_engine_training_and_resume"),
+    }
+    session_tree = ast.parse((root / "noxfile.py").read_text(encoding="utf-8"))
+    sessions = {node.name for node in session_tree.body if isinstance(node, ast.FunctionDef)}
+    result = {}
+    for repo, (protocol, session, relative, method) in declarations.items():
+        tree = ast.parse((root / relative).read_text(encoding="utf-8"))
+        methods = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
+        if session not in sessions or method not in methods:
+            raise ValueError("Maintained dedicated gate entry is missing: " + repo)
+        result[repo] = [{"protocol": protocol, "session": session,
+                         "tests": [relative + "::" + method]}]
+    return result
+
+
 def audit(root=ROOT):
     root = Path(root).resolve()
     cases = ecosystem_cases(root)
+    dedicated = dedicated_gates(root)
     gate_files = ("compat/tests/torch/test_ecosystem_parity.py",
                   "compat/tests/torch/test_ecosystem_speed.py",
                   "compat/tests/torch/test_ecosystem_verl.py",
-                  "compat/tests/torch/test_ecosystem_longformer.py")
+                  "compat/tests/torch/test_ecosystem_longformer.py",
+                  "compat/tests/torch/test_ecosystem_openmmlab.py")
     methods = {}
     for relative in gate_files:
         tree = ast.parse((root / relative).read_text(encoding="utf-8"))
@@ -65,6 +87,7 @@ def audit(root=ROOT):
         rows.append({
             "repo": repo, "skill": skill.relative_to(root).as_posix(),
             "registered_cases": direct,
+            "dedicated_gates": dedicated.get(repo, []),
             "gate_cases": [{"case": name, "tests": methods[name]} for name in direct if name in methods],
             "dependency_cases": [name for name, data in cases.items()
                                  if ("swift" if repo == "ms-swift" else repo) in data["requires"]],
@@ -77,7 +100,7 @@ def audit(root=ROOT):
             "note": "Registration/report discovery does not establish execution; validate a current scorecard.",
         })
     return {"schema_version": 1, "baseline": git(root, "rev-parse", "HEAD"),
-            "scope": "Shared ecosystem gate admission; separate adapter/unit gates are not claimed absent.",
+            "scope": "Shared model cases and dedicated protocol gate admission; separate adapter/unit gates are not claimed absent.",
             "repos": rows}
 
 

@@ -397,7 +397,9 @@ MIGRATED_ITEM_USER_BOUNDARIES = {
 # program did, and the message already tells them so. The same commit moved
 # two `LOGf` in this file to `USER_ERROR`, which this count does not see.
 MIGRATED_GRAD_DTYPE_USER_BOUNDARIES = {
-    "src/core/grad.cc": 3,
+    # Loss/target/higher-order checks plus caller-controlled hook replacement
+    # shape, dtype and device. Invalid hooks must raise catchable user errors.
+    "src/core/grad.cc": 6,
 }
 
 

@@ -232,6 +232,8 @@ def _install_optimizers(g, registry=None):
                 ("__init__", "step"), Fidelity.APPROXIMATE,
                 "Stable native-update adapter preserving per-parameter steps, "
                 "gradient retention and the registered FSDP provider boundary")
+    register_api_bindings(_optim.Adagrad, "torch.optim.Adagrad", ("__init__",),
+        Fidelity.UNIMPLEMENTED, "Importable optimizer type; missing native Adagrad mathematics is explicitly refused")
     register_api_bindings(_optim.LBFGS, "torch.optim.LBFGS", ("step",),
         Fidelity.UNIMPLEMENTED, "LBFGS updates explicitly raise NotImplementedError")
 
@@ -245,6 +247,7 @@ def install_module_keys(ctx):
         ("adam", "Adam", None),
         ("adamw", "AdamW", "Adam"),
         ("rmsprop", "RMSprop", None),
+        ("adagrad", "Adagrad", None),
     ):
         optim_module = registry.ensure("torch.optim." + suffix)
         value = getattr(optim, class_name, None)

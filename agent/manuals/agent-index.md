@@ -90,6 +90,7 @@ GitHub issue 与 PR 中。原始日志、缓存和大体积产物放在 `$JITTOR
 - [diffusers-torch-compat](../skills/diffusers-torch-compat/SKILL.md)：diffusers。
 - [peft-torch-compat](../skills/peft-torch-compat/SKILL.md)：PEFT（LoRA）。
 - [ms-swift-torch-compat](../skills/ms-swift-torch-compat/SKILL.md)：ms-swift 自带 LoRA tuner。
+- [deepspeed-torch-compat](../skills/deepspeed-torch-compat/SKILL.md)：固定上游版本的真实 Engine 训练与检查点门禁。
 - [mmcv-torch-compat](../skills/mmcv-torch-compat/SKILL.md)：mmcv（mmcv-lite 的 `mmcv.cnn`）。
 - [mmengine-torch-compat](../skills/mmengine-torch-compat/SKILL.md)：MMEngine 的模型基类。
 - [tensordict-torch-compat](../skills/tensordict-torch-compat/SKILL.md)：TensorDict。
