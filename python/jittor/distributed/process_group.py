@@ -599,6 +599,23 @@ def all_reduce(tensor, op="mean", group=None, async_op=False):
     return Work(value) if async_op else value
 
 
+def _optimizer_legacy_collectives():
+    """Preserve MPI methods; route MPI-free optimizer sync to native owners.
+
+    Bootstrap selection belongs to this communication domain, rather than
+    optimizer arithmetic. Resolve the facade at call time so DDP and legacy
+    callers observe the same public collective instrumentation.
+    """
+    native = bool(jt.compile_extern._jt_nccl_no_mpi
+                  or jt.compile_extern._jt_hccl_no_mpi)
+    if native:
+        from jittor import distributed
+        return (lambda value: distributed.all_reduce(value, op="mean"),
+                lambda value: distributed.broadcast(value, src=0))
+    return (lambda value: value.mpi_all_reduce("mean"),
+            lambda value: value.mpi_broadcast())
+
+
 def broadcast(tensor, src=0, group=None, async_op=False):
     group = get_default_group() if group is None else group
     value = group.broadcast(tensor, src)

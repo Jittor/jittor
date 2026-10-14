@@ -19,6 +19,7 @@ mixed-precision
 complex-dtype
 pipelined-execution
 profiling
+native-sharded-checkpoint
 ```
 
 ## 按问题索引

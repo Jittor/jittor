@@ -430,28 +430,39 @@ class Optimizer(object):
         )
         ddp_parameter_ids, dep = _sync_optimizer_gradients(entries)
 
-        # Legacy MPI synchronization remains available for optimizer
-        # parameters outside a DDP wrapper.
+        # Synchronize parameters outside a DDP wrapper. MPI-free backends
+        # load their operators lazily, so the historical Var.mpi_* aliases
+        # may not exist yet; use the native collective owner in that mode.
+        # Keep the original MPI protocol when MPI owns the communicator.
         if jt.in_mpi:
+            from jittor.distributed.process_group import _optimizer_legacy_collectives
+            collective_mean, collective_broadcast = _optimizer_legacy_collectives()
+
             def add_dep(value):
                 nonlocal dep
                 value._add_dependency(dep)
                 dep = [value]
 
+            def reduce_gradient(gradient):
+                reduced = collective_mean(gradient)
+                if reduced is not gradient:
+                    gradient.assign(reduced)
+                    add_dep(gradient._input(0))
+
             for parameter, gradient in entries:
                 if id(parameter) in ddp_parameter_ids:
                     continue
-                gradient.assign(gradient.mpi_all_reduce("mean"))
-                add_dep(gradient._input(0))
+                reduce_gradient(gradient)
             for gradient in grads[pid:]:
-                gradient.assign(gradient.mpi_all_reduce("mean"))
-                add_dep(gradient._input(0))
+                reduce_gradient(gradient)
             if self.n_step % self.param_sync_iter == 0:
                 for parameter in params:
                     if id(parameter) in ddp_parameter_ids:
                         continue
-                    parameter.assign(parameter.mpi_broadcast())
-                    add_dep(parameter)
+                    synchronized = collective_broadcast(parameter)
+                    if synchronized is not parameter:
+                        parameter.assign(synchronized)
+                        add_dep(parameter)
 
     def pre_step(self, loss, retain_graph=False):
         """ something should be done before step, such as calc gradients, mpi sync, and so on.

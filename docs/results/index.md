@@ -50,6 +50,7 @@
 2026-10-15-upstream-pr-disposition
 2026-10-15-verl-registered-component-oracles
 2026-10-15-transformers-model-family-matrix
+2026-10-15-native-sharded-checkpoint
 ```
 
 ## 按主题索引
