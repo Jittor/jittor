@@ -51,6 +51,7 @@
 2026-10-15-verl-registered-component-oracles
 2026-10-15-transformers-model-family-matrix
 2026-10-15-native-sharded-checkpoint
+2026-10-15-longformer-32768-context-oracles
 ```
 
 ## 按主题索引

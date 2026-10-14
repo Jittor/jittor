@@ -32,6 +32,14 @@ RoPE Llama；BERT/ViT 包含 pooler。固定初始权重分别执行 seed 7/19 �
 不以 import 成功作为覆盖。尚未证明完整训练、32K、generation 或 L4 性能。
 `JITTOR_ECOSYSTEM_CACHE_ROOT` 应指向当前任务独占缓存，首次编译串行，且与单测分离。
 
+独立 [32768-token Longformer 补证](../../../docs/results/2026-10-15-longformer-32768-context-oracles.md)
+绑定源码 `cbe154c3`，CPU/CUDA 均完成全参数/输入梯度、seed 7/19 扰动及三步训练。
+该项是 tiny-width encoder + pooler 的 L3，按独立基线计 1/374 模型族，不并入上述
+`8e388d108` 的分子。通过 `test_ecosystem_longformer.py` 单独运行，设置
+`JITTOR_ECOSYSTEM_LONGFORMER_32K=1`、单个 `JITTOR_TEST_DEVICES=cpu` 或 `cuda`、
+独立 `REAL_TORCH_PYTHON` 和空 `JITTOR_ECOSYSTEM_SPEED_RATIO`；缺 oracle/库或错误设备选择
+直接失败。该耗时门禁不加入默认快速生态矩阵。
+
 ## 历史 H3 两侧环境
 
 以下 Python 3.12 / Transformers 5.5.3 环境属于历史 H3 记录，不能用于解释上述

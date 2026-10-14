@@ -11,6 +11,7 @@ runner takes care of seeding, weight transfer and serialization, so a case
 never has to know which runtime it is running under.
 """
 
+from _ecosystem_longformer_cases import longformer_32768
 from _ecosystem_transformers_cases import (
     clip_multimodal, llama_rope_2048, mixtral_moe, with_pooler_output,
 )
@@ -353,6 +354,7 @@ CASES = {
     "transformers_clip_multimodal": (clip_multimodal, ("transformers",)),
     "transformers_mixtral_moe": (mixtral_moe, ("transformers",)),
     "transformers_llama_rope_2048": (llama_rope_2048, ("transformers",)),
+    "transformers_longformer_32768": (longformer_32768, ("transformers",)),
     "diffusers_unet2d": (_diffusers_unet, ("diffusers",)),
     "diffusers_dit": (_diffusers_transformer, ("diffusers",)),
     "peft_lora_llama": (_peft_lora_llama, ("transformers", "peft")),

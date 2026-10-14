@@ -45,7 +45,8 @@ def audit(root=ROOT):
     cases = ecosystem_cases(root)
     gate_files = ("compat/tests/torch/test_ecosystem_parity.py",
                   "compat/tests/torch/test_ecosystem_speed.py",
-                  "compat/tests/torch/test_ecosystem_verl.py")
+                  "compat/tests/torch/test_ecosystem_verl.py",
+                  "compat/tests/torch/test_ecosystem_longformer.py")
     methods = {}
     for relative in gate_files:
         tree = ast.parse((root / relative).read_text(encoding="utf-8"))
