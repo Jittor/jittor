@@ -334,6 +334,7 @@ include docs/guides/corex.md
 include docs/guides/cpp-console.md
 include docs/guides/debugging.md
 include docs/guides/distributed-mpi.md
+include docs/guides/distributed-training.md
 include docs/guides/index.md
 include docs/guides/known-limitations.md
 include docs/guides/memory-optimization.md
@@ -381,6 +382,7 @@ include docs/results/2026-10-09-downstream-p1-allocator-protocol-transpose.md
 include docs/results/index.md
 include docs/tutorials/index.md
 include examples/README.md
+include examples/distributed/native_ddp.py
 include examples/flash-attention/README.md
 include examples/gan/README.md
 include examples/gan/simple_cgan.py
