@@ -424,7 +424,9 @@ def _load_from_source_root(raw_root: str) -> Optional[ModuleType]:
 
 def _remember_error(message: str) -> None:
     global _LAST_ERROR
-    _LAST_ERROR = message
+    # A later optional-module miss must not erase a source build/load failure.
+    # Each load attempt resets this history; successful loads clear it too.
+    _LAST_ERROR = message if _LAST_ERROR is None else _LAST_ERROR + "\n" + message
     _log(message)
 
 
@@ -793,7 +795,7 @@ def _load_backend_locked(force: bool = False) -> Optional[ModuleType]:
         if _LAST_ERROR is None:
             _LAST_ERROR = "no flashattn_jittor source or module found"
         else:
-            _LAST_ERROR = "no flashattn_jittor source or module found; last error: " + _LAST_ERROR
+            _LAST_ERROR = "no flashattn_jittor source or module found; load errors:\n" + _LAST_ERROR
         load_completed = True
         return None
     finally:
