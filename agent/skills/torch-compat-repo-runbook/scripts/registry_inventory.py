@@ -14,7 +14,7 @@ import re
 import subprocess
 
 
-REPOS = ("transformers", "peft", "diffusers", "ms-swift", "verl", "mmengine", "mmcv")
+REPOS = ("transformers", "peft", "diffusers", "ms-swift", "verl", "mmengine", "mmcv", "flash-attention")
 ROOT = Path(__file__).resolve().parents[4]
 
 
@@ -107,7 +107,7 @@ def inventory(repo, checkout):
     remote = git(checkout, "remote", "get-url", "origin")
     files = git(checkout, "ls-files", "--", "*.py").splitlines()
     prefix = {"transformers": "src/transformers/", "peft": "src/peft/",
-              "diffusers": "src/diffusers/", "ms-swift": "swift/", "verl": "verl/", "mmengine": "mmengine/", "mmcv": "mmcv/"}[repo]
+              "diffusers": "src/diffusers/", "ms-swift": "swift/", "verl": "verl/", "mmengine": "mmengine/", "mmcv": "mmcv/", "flash-attention": "flash_attn/"}[repo]
     files = [path for path in files if path.startswith(prefix)]
     if repo == "transformers":
         selected = [path for path in files if path.endswith("models/auto/modeling_auto.py")]
@@ -119,6 +119,8 @@ def inventory(repo, checkout):
         selected = [path for path in files if "/model/" in path or "/tuners/" in path
                     or path.endswith("model_type.py") or any(
                         part in path for part in ("/cli/", "/arguments/", "/trainers/", "/pipelines/train/"))]
+    elif repo == "flash-attention":
+        selected = ["flash_attn/__init__.py", "flash_attn/flash_attn_interface.py"]
     elif repo in ("mmengine", "mmcv"):
         selected = files
     else:
@@ -285,6 +287,24 @@ def inventory(repo, checkout):
                         loss_paths.append(path)
         add("entrypoint", "Hydra trainer entrypoints", entrypoints, entry_paths)
         add("distillation_loss", "register_distillation_loss settings.names", losses, loss_paths)
+    if repo == "flash-attention":
+        package = "flash_attn/__init__.py"
+        interface = "flash_attn/flash_attn_interface.py"
+        functions = {node.name for node in source.trees[interface].body
+                     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+        exports = []
+        for node in source.trees[package].body:
+            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                continue
+            if isinstance(node, ast.Assign) and all(isinstance(t, ast.Name) and t.id == "__version__" for t in node.targets):
+                continue
+            if not isinstance(node, ast.ImportFrom) or node.level or node.module != "flash_attn.flash_attn_interface":
+                raise ValueError("Unresolved FlashAttention public export declaration")
+            for name in node.names:
+                if name.name not in functions or name.name.startswith("_"):
+                    raise ValueError("Unresolved FlashAttention public function: " + name.name)
+                exports.append(name.asname or name.name)
+        add("attention_api", "public package attention functions", exports, [package, interface])
     if repo in ("mmengine", "mmcv"):
         from _openmmlab_registry import AXES, declarations
         declaration_details = declarations(checkout, repo, selected)
@@ -320,6 +340,9 @@ def inventory(repo, checkout):
     result = {"schema_version": 1, "repo": repo, "upstream": {"commit": commit, "remote": remote, "version": version},
             "scope": "Source-declared registry members; no member is verified by enumeration.", "axes": axes,
             "sources": [{"path": path, "sha256": digest(checkout / path)} for path in sorted(used)]}
+    if repo == "flash-attention":
+        result["scope"] = ("All public top-level attention functions explicitly exported by flash_attn.__init__; "
+                           "not all internal APIs, features, shapes or dtypes. Enumeration verifies no member.")
     if declaration_details is not None:
         result["declaration_details"] = declaration_details
         result["scope"] = ("Bounded source-declared OpenMMLab registry axes; all branches and optional/compiled "

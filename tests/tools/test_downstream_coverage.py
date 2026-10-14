@@ -359,6 +359,19 @@ class RegistryTests(unittest.TestCase):
         self.run_git("add", path)
         self.run_git("commit", "-qm", "test registry")
 
+    def test_flash_public_function_inventory_rejects_dynamic_exports(self):
+        self.commit("flash_attn/flash_attn_interface.py", "def attention(): pass\ndef packed(): pass\n")
+        self.commit("flash_attn/__init__.py", '__version__ = "1.0"\nfrom flash_attn.flash_attn_interface import attention, packed as alias\n')
+        value = registry.inventory("flash-attention", self.root)
+        self.assertEqual(value["axes"][0]["members"], ["alias", "attention"])
+        self.assertEqual(value["upstream"]["version"], "1.0")
+        self.commit("flash_attn/__init__.py", "from flash_attn.flash_attn_interface import absent\n")
+        with self.assertRaisesRegex(ValueError, "public function"):
+            registry.inventory("flash-attention", self.root)
+        self.commit("flash_attn/__init__.py", "from flash_attn.flash_attn_interface import attention\nif enabled:\n    from elsewhere import packed\n")
+        with self.assertRaisesRegex(ValueError, "export declaration"):
+            registry.inventory("flash-attention", self.root)
+
     def test_registry_is_rederived_after_upstream_change(self):
         path = "src/transformers/models/auto/modeling_auto.py"
         self.commit(path, 'raise RuntimeError("must not execute")\nMODEL_MAPPING_NAMES = {"llama": "LlamaModel"}\n')
