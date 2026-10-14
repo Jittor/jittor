@@ -49,6 +49,7 @@
 2026-10-15-integration-nccl-coverage
 2026-10-15-upstream-pr-disposition
 2026-10-15-verl-registered-component-oracles
+2026-10-15-transformers-model-family-matrix
 ```
 
 ## 按主题索引
@@ -89,3 +90,4 @@
 | [整合回归与 NCCL 缺陷收口](2026-10-15-integration-nccl-coverage.md) | NCCL 2.18.3 双卡退出条件通过，KI-DIST-002/003 收口；限定定向范围 | 2026-10-15 |
 | [上游 PR 处置与 NumPy ABI](2026-10-15-upstream-pr-disposition.md) | 十个 PR 已核对；NumPy 1/2 真正复制与 shape 回归通过，Windows 待真机 | 2026-10-15 |
 | [VERL 注册算法组件对拍](2026-10-15-verl-registered-component-oracles.md) | GAE/vanilla PPO 与 k3 组件 CPU/CUDA 全梯度及三步轨迹通过；不计 rollout/Ray/Hydra | 2026-10-15 |
+| [Transformers 模型族矩阵](2026-10-15-transformers-model-family-matrix.md) | 九项 CPU/CUDA L3 场景；8/374 模型族、2/46 任务，含 CLIP/Mixtral/2048 token RoPE | 2026-10-15 |

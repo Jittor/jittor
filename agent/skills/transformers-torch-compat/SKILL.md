@@ -8,8 +8,9 @@ description: 在 Jittor torch shim 与独立 PyTorch 两侧跑通并对比 Huggi
 ## 用途
 
 回答三件事：Transformers 怎么在 shim 上跑、怎么在原生 torch 上跑、两侧怎么对拍
-（数值与速度）。覆盖 `_ecosystem_cases.py` 的 6 个 tiny case（`transformers_gpt2`、
-`_llama`、`_bert`、`_vit`、`_t5`、`_whisper`）与 `_ecosystem_speed.py` 的 5 个真实尺寸
+（数值与速度）。覆盖 `_ecosystem_cases.py` 的 9 个 tiny case（`transformers_gpt2`、
+`_llama`、`_bert`、`_vit`、`_t5`、`_whisper`、`_clip_multimodal`、
+`_mixtral_moe`、`_llama_rope_2048`）与 `_ecosystem_speed.py` 的 5 个真实尺寸
 case（`large_transformers_llama`、`_gpt2`、`_qwen3`、`_bert`、`_vit`）。
 
 **不覆盖**：`transformers` 的完整训练/微调、真实 checkpoint 与数据集、generation 采样；
@@ -18,7 +19,24 @@ NPU 专项（条目存在但未跑）。深度性能分析（SDPA 后端、算�
 [`jittor-transformers-perf`](../jittor-transformers-perf/SKILL.md)；两边的解释器约定相同
 （`<jittor-python>` / `<real-torch-python>`），环境以本文件「两侧环境」为准。
 
-## 两侧环境
+## 当前验证基线
+
+2026-10-15 的 [模型族矩阵](../../../docs/results/2026-10-15-transformers-model-family-matrix.md)
+在提交 `8e388d108` 上验证九项 CPU/CUDA 场景，最高 L3（三步 SGD），每个设备覆盖
+8/374 模型族、2/46 任务。使用 Python 3.11.16、NumPy 1.26.4、Jittor 2.0.0、
+Transformers 4.56.2（上游 `cd74917ffc3e8f84e4a886052c5ab32b7ac623cc`）与独立
+PyTorch 2.11.0+cu128。实际设备、精度、版本差异、阈值和完整证据见该报告。
+
+新增 CLIP 双塔全参数与 pixel 梯度、Mixtral 每个专家/路由梯度、实际 2048 token
+RoPE Llama；BERT/ViT 包含 pooler。固定初始权重分别执行 seed 7/19 输入扰动，
+不以 import 成功作为覆盖。尚未证明完整训练、32K、generation 或 L4 性能。
+`JITTOR_ECOSYSTEM_CACHE_ROOT` 应指向当前任务独占缓存，首次编译串行，且与单测分离。
+
+## 历史 H3 两侧环境
+
+以下 Python 3.12 / Transformers 5.5.3 环境属于历史 H3 记录，不能用于解释上述
+4.56.2 矩阵的数值或覆盖度。重新验证时，两侧必须固定同一 Transformers 版本。
+
 
 | 角色 | 解释器 | 环境脚本 |
 | --- | --- | --- |
