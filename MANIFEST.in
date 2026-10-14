@@ -382,6 +382,7 @@ include docs/results/2026-10-05-high-rank-and-downstream-core-gaps.md
 include docs/results/2026-10-09-downstream-p1-allocator-protocol-transpose.md
 include docs/results/2026-10-14-benchmark-coverage.md
 include docs/results/2026-10-14-downstream-coverage-audit.md
+include docs/results/2026-10-14-optimizer-checkpoint-continuation.md
 include docs/results/index.md
 include docs/tutorials/index.md
 include examples/README.md

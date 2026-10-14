@@ -15,6 +15,10 @@ import numpy as np
 import jittor as jt
 
 from ..context import registry_for
+from ..checkpoint_state import (
+    get_optimizer_state_dict, set_optimizer_state_dict,
+    get_model_state_dict, set_model_state_dict,
+)
 from ..fidelity import Fidelity, register_api_bindings
 from ...diagnostics import EXPECTED, swallowed
 from ...transaction import set_env, set_flag
@@ -765,22 +769,16 @@ class StateDictOptions:
         self.flatten_optimizer_state_dict = bool(flatten_optimizer_state_dict)
 
 
-def _get_model_state_dict(model, *a, options=None, **k):
-    return model.state_dict(*a, **k) if hasattr(model, "state_dict") else {}
+def _get_model_state_dict(model, submodules=None, *, options=None):
+    if submodules:
+        raise NotImplementedError("checkpoint model submodule selection is not supported")
+    return get_model_state_dict(model, options=options)
 
 
 def _set_model_state_dict(model, state_dict, *a, options=None, **k):
-    # `_is_fsdp_module` is set only by fsdp2, so a model carrying it proves
-    # fsdp2 was imported and has registered -- see jittor/compat/
-    # fsdp_hooks.py for why this file must not import fsdp2 directly.
-    if getattr(model, "_is_fsdp_module", False):
-        _fsdp = _fsdp_hooks.provider()
-        if _fsdp is not None:
-            _fsdp._load_full_state_dict(model, state_dict)
-            return None
-    if hasattr(model, "load_state_dict"):
-        return model.load_state_dict(state_dict, strict=getattr(options, "strict", True))
-    return None
+    if a or k:
+        raise NotImplementedError("checkpoint model submodule selection is not supported")
+    return set_model_state_dict(model, state_dict, options=options)
 
 
 class ShardedTensor:
@@ -914,11 +912,14 @@ def _api_symmetric_memory_is_symm_mem_enabled_for_group(*a, **k):
 
 
 def _api_checkpoint_sd_get_state_dict(model, optimizers=None, *a, **k):
-    return (_get_model_state_dict(model, *a, **k), optimizers.state_dict() if hasattr(optimizers, 'state_dict') else {})
+    return (_get_model_state_dict(model, *a, **k),
+            get_optimizer_state_dict(model, optimizers, **k))
 
 
 def _api_checkpoint_sd_set_state_dict(model, optimizers=None, model_state_dict=None, optim_state_dict=None, *a, **k):
-    return _set_model_state_dict(model, model_state_dict or {}, *a, **k)
+    incompatible = _set_model_state_dict(model, model_state_dict or {}, *a, **k)
+    set_optimizer_state_dict(model, optimizers, optim_state_dict or {}, **k)
+    return incompatible
 
 
 def _api_sharded_tensor_init_from_local_shards(shards, *a, **k):
@@ -1167,6 +1168,8 @@ def _install_distributed(g, registry=None):
     checkpoint_sd.StateDictOptions = StateDictOptions
     checkpoint_sd.get_model_state_dict = _get_model_state_dict
     checkpoint_sd.set_model_state_dict = _set_model_state_dict
+    checkpoint_sd.get_optimizer_state_dict = get_optimizer_state_dict
+    checkpoint_sd.set_optimizer_state_dict = set_optimizer_state_dict
     checkpoint_sd.get_state_dict = _api_checkpoint_sd_get_state_dict
     checkpoint_sd.set_state_dict = _api_checkpoint_sd_set_state_dict
     checkpoint_fs = _types.ModuleType("torch.distributed.checkpoint.filesystem")
@@ -1256,9 +1259,10 @@ def _install_distributed(g, registry=None):
         ("load_state_dict", "save_state_dict", "load", "save", "FileSystemReader", "FileSystemWriter"),
         Fidelity.UNIMPLEMENTED, "Checkpoint I/O follows the existing explicit unsupported policy")
     register_api_bindings(checkpoint_sd, "torch.distributed.checkpoint.state_dict",
-        ("StateDictOptions", "get_model_state_dict", "set_model_state_dict", "get_state_dict", "set_state_dict"),
-        Fidelity.APPROXIMATE, "Local module state and registered FSDP load provider; "
-        "full distributed checkpoint/options semantics are not implemented")
+        ("StateDictOptions", "get_model_state_dict", "set_model_state_dict", "get_state_dict", "set_state_dict",
+         "get_optimizer_state_dict", "set_optimizer_state_dict"),
+        Fidelity.APPROXIMATE, "FQN optimizer state and parameter groups, FULL FSDP provider transforms, "
+        "CPU offload, flatten and rank-zero broadcast; submodule selection is unsupported")
     register_api_bindings(rendezvous_mod, "torch.distributed.rendezvous", ("rendezvous",),
         Fidelity.APPROXIMATE, "Delegates supported URL, rank, world-size and timeout handling to native stores")
     register_api_bindings(c10d, "torch.distributed.distributed_c10d",

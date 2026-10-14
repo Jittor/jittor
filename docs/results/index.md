@@ -34,6 +34,7 @@
 2026-10-09-downstream-p1-allocator-protocol-transpose
 2026-10-14-benchmark-coverage
 2026-10-14-downstream-coverage-audit
+2026-10-14-optimizer-checkpoint-continuation
 ```
 
 ## 按主题索引
@@ -59,3 +60,4 @@
 | [下游 P1：分配器并存上限、数值协议与 transpose 的运行时置换](2026-10-09-downstream-p1-allocator-protocol-transpose.md) | 已修复，CPU 验证，transpose/协议另在 RTX 4090 验证 | 2026-10-09 |
 | [Benchmark 覆盖与比较协议补齐](2026-10-14-benchmark-coverage.md) | 卷积 CPU/CUDA、Accelerate CPU、模型 CPU harness 已验；其余设备与场景缺口保留 | 2026-10-14 |
 | [下游注册表、门禁与覆盖审计](2026-10-14-downstream-coverage-audit.md) | 已审计 13 个 runbook 与五个上游注册表；未授予新的设备验证级别 | 2026-10-14 |
+| [优化器 FQN checkpoint 与确定性续训](2026-10-14-optimizer-checkpoint-continuation.md) | CPU/CUDA 单进程数值续训已验；RNG、多卡与 ACL 仍待补齐 | 2026-10-14 |
