@@ -139,8 +139,9 @@ void SetitemOp::infer_shape() {
         int j = i - data_dim + out_shape.size();
         if (!(data_shape[i]==1 && out_shape[j]!=-1)) {
             USER_CHECK(data_shape[i]<0 || out_shape[j]<0 || data_shape[i]==out_shape[j])
-                << "Data shape not match" << data_shape << out_shape;
-            bmask |= 1<<j;
+                << "cannot assign a value of shape" << data_shape
+                << "to a slice of shape" << out_shape;
+            bmask |= (int)(1u<<j);
         }
     }
 
@@ -274,30 +275,30 @@ void SetitemOp::jit_prepare(JK& jk) {
     auto data = input(1);
     jk << "«OP:" << op
         << "«Td:" << data->dtype()
-        << "«BMASK=" << JK::hex(bmask);
+        << "«BMASK=" << JK::hex((uint)bmask);
     // TODO: merge code
     auto in = inputs().front();
     int idim = i_to_vs.size();
     jk << "«Ti:" << in->dtype();
-    jk << "«IDIM=" << JK::hex1(i_to_vs.size());
-    jk << "«ODIM=" << JK::hex1(o_shape.size());
+    jk << "«IDIM=" << JK::hex(i_to_vs.size());
+    jk << "«ODIM=" << JK::hex(o_shape.size());
     if (first_oid_of_var>=0) {
-        jk << "«FOV=" << JK::hex1(first_oid_of_var);
-        jk << "«VD=" << JK::hex1(var_dim);
+        jk << "«FOV=" << JK::hex(first_oid_of_var);
+        jk << "«VD=" << JK::hex(var_dim);
     }
     for (int i=0; i<idim; i++) {
         auto iv = i_to_vs[i];
         auto io = i_to_o[i];
-        jk << "«IV" << JK::hex1(i) << ':' << JK::shex1(iv);
-        jk << "«IO" << JK::hex1(i) << ':' << JK::shex1(io);
+        jk << "«IV" << JK::dec(i) << ':' << JK::sdec(iv);
+        jk << "«IO" << JK::dec(i) << ':' << JK::sdec(io);
         auto& v = vs.slices[iv];
         if (iv>=0 && io==-1) {
             if (v.is_int()) {
-                jk << "«VS" << JK::hex1(i) << ":-1";
+                jk << "«VS" << JK::dec(i) << ":-1";
             } else
             if (v.is_str()) {
-                jk << "«VS" << JK::hex1(i) << ":-5";
-                jk << "«VSS" << JK::hex1(i) << ":" << v.get_str();
+                jk << "«VS" << JK::dec(i) << ":-5";
+                jk << "«VSS" << JK::dec(i) << ":" << v.get_str();
             } else {
                 ASSERT(v.is_var());
                 auto var = v.var;
@@ -307,17 +308,17 @@ void SetitemOp::jit_prepare(JK& jk) {
                 for (int j=0; j<vdim; j++) {
                     int k = first_oid_of_var+j+var_dim-vdim;
                     if (vshape[j] == o_shape[k])
-                        vsmask |= 1<<(j+var_dim-vdim);
+                        vsmask |= (int)(1u<<(j+var_dim-vdim));
                 }
-                jk << "«VS" << JK::hex1(i) << '=' << JK::hex(vsmask);
-                jk << "«VST" << JK::hex1(i) << ':' << var->dtype();
+                jk << "«VS" << JK::dec(i) << '=' << JK::hex((uint)vsmask);
+                jk << "«VST" << JK::dec(i) << ':' << var->dtype();
             }
         } else
         if (iv>=0 && io>=0) {
             ASSERT(v.is_slice());
-            jk << "«VS" << JK::hex1(i) << ':';
+            jk << "«VS" << JK::dec(i) << ':';
             if (std::abs(v.slice.step) <= 1)
-                jk << JK::shex1(v.slice.step);
+                jk << JK::sdec(v.slice.step);
             else
                 jk << '0';
         }
@@ -406,7 +407,7 @@ void SetitemOp::jit_run() {
     // whatever the other dimensions do, including a var index. If no dimension
     // maps to it, every `i0` writes the same place and it must stay serial.
     // Compile-time decidable, hence a constant the compiler folds away.
-    @if(@is_def(JIT_cpu), IndexFault index_fault;)
+    @if(@is_def(JIT_cpu), IndexFault index_fault;, IndexFault* device_fault = device_index_fault();)
     @if(@is_def(JIT_cpu) && ODIM>0,
         bool jt_outer_is_injective = false;
         @for(d, 0, IDIM, @if(IO@d==0, jt_outer_is_injective = true;))
@@ -422,7 +423,7 @@ void SetitemOp::jit_run() {
             @if(VS@d==-1, vi@d,
             @if(VS@d==-5, VSS@d,
             @if(VS@d>=0,
-                index_t(bounded_index(int64(vp@d[0 @for(j,0,VD,@if((VS@d>>j)&1, + i@{j+FOV} * vs@d@@s@j,))]), ishape@d, @d, @if(@is_def(JIT_cpu), &index_fault, nullptr)))
+                index_t(bounded_index(int64(vp@d[0 @for(j,0,VD,@if((VS@d>>j)&1, + i@{j+FOV} * vs@d@@s@j,))]), ishape@d, @d, @if(@is_def(JIT_cpu), &index_fault, device_fault)))
             , ??? ))))));
         )
         // Normalize negative var/list (advanced) indices into the target, mirroring
@@ -454,10 +455,10 @@ void SetitemOp::jit_run() {
     // Host only. The CUDA indexing pass takes `func->children.back()` to be the
     // loop nest, so a statement emitted after the loop is moved into the kernel
     // in the loop's place and rewritten as one (indexing_codegen.cc, which now
-    // says so when it happens). The device does not need this: it is handed a
-    // null fault and traps where the bad index is, in `index_bounds.h`.
+    // says so when it happens). The device does not need this: it records the
+    // bad index in `device_fault` and traps there, in `index_bounds.h`.
     @if(@is_def(JIT_cpu),
-    USER_CHECK(!index_fault.bad()) << "index" << index_fault.index <<
+    USER_INDEX_CHECK(!index_fault.bad()) << "index" << index_fault.index <<
         "is out of bounds for dimension" << index_fault.dim <<
         "with size" << index_fault.size;
     )

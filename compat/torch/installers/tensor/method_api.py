@@ -496,6 +496,18 @@ def _is_basic_index(index):
 
 
 def _torch_getitem(self, slices):
+    # PyTorch accepts NumPy integer/bool arrays as advanced indices.
+    # Convert them before the native fast path or the dispatcher sees them.
+    def normalize(index):
+        if isinstance(index, _owner.np.ndarray) and index.ndim:
+            if index.dtype.kind not in ("b", "i", "u"):
+                return index
+            return _owner.jt.array(index, dtype=str(index.dtype))
+        if isinstance(index, tuple):
+            return tuple(normalize(item) for item in index)
+        return index
+
+    slices = normalize(slices)
     # A basic index, natively (`src/bindings/pyjt/py_compat_fast.h`).
     fast = _owner.jt.core._fast_getitem(self, slices)
     if fast is not NotImplemented:

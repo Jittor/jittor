@@ -9,11 +9,11 @@ Jittor 惰性执行、运行时编译算子。下面这些诊断手段都是**�
 
 ```bash
 export JT_CHECK_NAN=1
-export trace_py_var=3
+export JT_TRACE_PY_VAR=3
 python reproduce.py
 ```
 
-`JT_CHECK_NAN=1` 会在算子产生非法浮点值时停下；`trace_py_var=3` 记录生成算子对应的
+`JT_CHECK_NAN=1` 会在算子产生非法浮点值时停下；`JT_TRACE_PY_VAR=3` 记录生成算子对应的
 Python 调用位置。**两者都会触发重新编译并显著拖慢速度。**
 
 ## 让异步失败变成本地失败

@@ -31,20 +31,20 @@ import os
 import sys
 import time
 
-try:
-    import fcntl
-except ImportError:
+if sys.platform == "win32":
     fcntl = None
     try:
         import msvcrt
         import win32file
         import pywintypes
         _OVERLAPPED = pywintypes.OVERLAPPED()
-    except:
-        raise Exception("""pywin32 package not found, please install it.
+    except ImportError:
+        raise ImportError("""pywin32 package not found, please install it.
 >>> python3.x -m pip install pywin32
 If conda is used, please install with command:
 >>> conda install pywin32""")
+else:
+    import fcntl
 
 import jittor_utils
 from jittor_utils import cache_path, LOG
@@ -148,7 +148,7 @@ def _acquire(fd, path):
     things a blocking wait could never give: a message naming the holder, and
     an error instead of an unbounded hang.
     '''
-    if fcntl is None:
+    if sys.platform == "win32":
         hfile = win32file._get_osfhandle(fd)
         win32file.LockFileEx(hfile, 2, 0, -0x10000, _OVERLAPPED)
         return
@@ -177,7 +177,7 @@ def _acquire(fd, path):
 
 
 def _release(fd):
-    if fcntl is None:
+    if sys.platform == "win32":
         hfile = win32file._get_osfhandle(fd)
         win32file.UnlockFileEx(hfile, 0, -0x10000, _OVERLAPPED)
         return
@@ -210,7 +210,7 @@ class Lock:
         holder to disagree with.
         '''
         handle = self.fd
-        if fcntl is None:
+        if sys.platform == "win32":
             handle = msvcrt.get_osfhandle(self.fd)
         core.set_lock_fd(handle, self._py_is_locked)
         self.core = core

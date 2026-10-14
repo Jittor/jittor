@@ -68,6 +68,11 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
         FloatOutput{(double)mem_info.total_cpu_ram, " KMG", 1024, "B"};
     log << "total_device_ram:" << 
         FloatOutput{(double)mem_info.total_cuda_ram, " KMG", 1024, "B"} >> "\n";
+    // .load(): streaming a std::atomic<int64> directly is ambiguous under
+    // libstdc++ 11 -- atomic<T>'s implicit conversion to T (here, long long)
+    // ties between ostream's built-in operator<<(long) and operator<<(unsigned
+    // long) overloads (same width, neither a better match), so this needs the
+    // conversion to int64 spelled out rather than left to happen implicitly.
     log << "hold_vars:" << runtime_holder_state().holders().size()
         << "lived_vars:" << Var::number_of_lived_vars.load()
         << "lived_ops:" << Op::number_of_lived_ops.load() >> '\n';
@@ -158,7 +163,7 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
             if (a->large_blocks.blocks.size()) {
                 size_t largest_block = 0;
                 auto block = a->large_blocks.blocks.rbegin()->second;
-                largest_block = a->large_blocks.blocks.rbegin()->first.first;
+                largest_block = std::get<0>(a->large_blocks.blocks.rbegin()->first);
                 // unused largest block
                 log << "ULB:" << FloatOutput{(double)largest_block, " KMG", 1024, "B"};
                 log << "ULBO:" << FloatOutput{(double)block->origin_size, " KMG", 1024, "B"};
@@ -272,10 +277,12 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
             double used = gpu_overflow ? (double)gpu_total : (double)cpu_total;
             double total = gpu_overflow ? (double)mem_info.total_cuda_ram : (double)mem_info.total_cpu_ram;
             log.end();
-            LOGf << "\n*******************\n"
+            // LOGe, not LOGf: this runs while another error is being reported,
+            // and throwing here would replace it.
+            LOGe << "\n*******************\n"
                 >> (gpu_overflow?"GPU":"CPU") << "memory is overflow, please reduce your batch_size or data size!\nTotal:" << FloatOutput{(double)total, " KMG", 1024, "B"} << "Used:" << FloatOutput{(double)used, " KMG", 1024, "B"};
-        } else
-            return;
+        }
+        return;
     }
 
     log.end();

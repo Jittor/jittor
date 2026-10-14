@@ -84,6 +84,10 @@ def compile_backend_sources(config, common_flags):
             driver = source.compiler or config.kernel_compiler or config.nvcc_path
             if not driver:
                 raise RuntimeError("backend source requires a compiler: " + path)
+            if source.language == "cuda":
+                # The user's JT_BUILD_NVCC_FLAGS, as the core's .cu files get
+                # them (nvcc_flags below).
+                flags += " " + build_env("nvcc_flags", "")
             if config.convert_nvcc_flags is not None:
                 flags = config.convert_nvcc_flags(flags)
         if "nan_checker" in path:

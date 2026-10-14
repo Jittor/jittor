@@ -227,8 +227,9 @@ def _jittor_config():
     # Match torch cpp_extension's explicit arch override, otherwise compile for
     # the GPUs Jittor detected in this process. Do not inherit Jittor JIT math
     # flags: project extensions keep nvcc's default math policy unless their
-    # setup.py supplies extra_cuda_cflags.
-    arch_flags = _cuda_arch_flags(jittor, c)
+    # setup.py supplies extra_cuda_cflags. Resolved when a build needs it
+    # (`_arch_flags`), not here: asking for the include paths in a session with
+    # no GPU raised "cannot determine CUDA architecture".
 
     return {
         "cc_path": c.cc_path,
@@ -259,12 +260,22 @@ def _jittor_config():
         "ext_suffix": c.extension_suffix,
         "cores": cores,
         "core_dirs": sorted({os.path.dirname(p) for p in cores.values()}),
-        "arch_flags": arch_flags,
+        "arch_flags": None,
+        "_arch_inputs": (jittor, c),
         # jittor's own generated-header dir (cu<ver>) — include all dirs that hold a core lib
     }
 
 
 _CFG = None
+
+
+def _arch_flags(c):
+    """The CUDA arch flags of config ``c``, resolved on first use."""
+    flags = c.get("arch_flags")
+    if flags is None:
+        flags = _cuda_arch_flags(*c["_arch_inputs"])
+        c["arch_flags"] = flags
+    return flags
 
 
 def cfg():
@@ -357,7 +368,7 @@ def toolchain_signature():
         "cc_path": c["cc_path"],
         "nvcc_path": c["nvcc_path"],
         "ext_suffix": c["ext_suffix"],
-        "arch_flags": list(c["arch_flags"]),
+        "arch_flags": list(_arch_flags(c)),
         "cuda_libs": [os.path.realpath(path) for path in c["cuda_libs"]],
         "cudart_lib": os.path.realpath(c["cudart_lib"]) if c["cudart_lib"] else None,
         "cuda_wheel_fingerprint": c["cuda_wheel_fingerprint"],
@@ -578,7 +589,7 @@ def build(name, sources, build_dir, output_path=None,
                                   f"-std={std}", "-Xcompiler", "-fPIC", "-Xcompiler", "-fopenmp",
                                   "--expt-relaxed-constexpr", "--extended-lambda",
                                   "-O3", "-w", "--compiler-bindir", c["cc_path"]]
-            cmd_without_output += c["arch_flags"]
+            cmd_without_output += _arch_flags(c)
             if not is_shim:
                 cmd_without_output += (extra_cuda_cflags or [])
             cmd_without_output += incs + macros
@@ -624,7 +635,7 @@ def build(name, sources, build_dir, output_path=None,
     # link with nvcc (handles cuda device link + -l: cores)
     link = [c["nvcc_path"], "-shared", "-o", output_path] + objs
     link += ["-Xcompiler", "-fPIC", "--compiler-bindir", c["cc_path"]]
-    link += c["arch_flags"]
+    link += _arch_flags(c)
     link += _link_flags(c)
     link += list(extra_ldflags or [])
     stamp_payload = {

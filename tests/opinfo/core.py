@@ -288,7 +288,7 @@ def error_inputs_unary(op_info, device, dtype):
     return [ErrorInput(
         SampleInput(value, __opinfo_invalid_keyword__=True),
         error_type=RuntimeError if builtin_binding else TypeError,
-        error_regex=(r"Wrong inputs arguments" if builtin_binding
+        error_regex=(r"match none of its signatures" if builtin_binding
                      else r"unexpected keyword argument"),
     )]
 

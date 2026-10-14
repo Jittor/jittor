@@ -158,7 +158,7 @@ class TestInferenceAttentionInBlocks(unittest.TestCase):
         self._check(np.random.RandomState(6).rand(2, 1, 1, 9) > 0.2)
 
 
-@unittest.skipIf(not _has_cuda(), "the pools count device memory only")
+@unittest.skipIf(not _has_cuda(), "the pools count CUDA device memory only")
 class TestTrainingAttentionKeepsNoScores(unittest.TestCase):
     def test_the_forward_retains_far_less_than_one_score_matrix(self):
         tokens, heads, width = 2048, 8, 40
@@ -180,7 +180,7 @@ class TestTrainingAttentionKeepsNoScores(unittest.TestCase):
 
 
 
-@unittest.skipIf(not _has_cuda(), "the pools count device memory only")
+@unittest.skipIf(not _has_cuda(), "the pools count CUDA device memory only")
 class TestInferenceAttentionBuildsNoFullScores(unittest.TestCase):
     def test_the_peak_is_a_fraction_of_one_score_matrix(self):
         heads, tokens, width = 8, 4096, 40

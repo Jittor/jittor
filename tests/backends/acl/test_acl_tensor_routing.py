@@ -384,7 +384,7 @@ class DomainRouting(unittest.TestCase):
                             {"concat", "_concat", "_merge_dtypes", "_concat_after_kernel"},
                             jt=jt, _jt=lambda: jt, Sequence=(list, tuple),
                             select_kernel=select, _tracing=lambda: False,
-                            _concat_bounded=native_concat)
+                            _concat_bounded=native_concat, _jittor_dtype_name=str)
         inputs = (Var("int32"), Var("float32"))
         self.assertIs(owner.concat(inputs, -1), result)
         self.assertEqual([value.dtype for value in calls[0][0]], ["float32", "float32"])

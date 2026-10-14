@@ -90,7 +90,7 @@ def check_compiler(cc_path=None):
 
 def check_python_headers():
     """``Python.h``, which every compiled Jittor object includes."""
-    includes = []
+    includes: list = []
     configured = build_env("python_config_path")
     if configured and os.path.isfile(configured):
         try:
@@ -102,13 +102,10 @@ def check_python_headers():
                 if token.startswith("-I") and len(token) > 2)
         except (OSError, subprocess.CalledProcessError):
             pass
-    try:
-        import sysconfig
-        include = sysconfig.get_paths().get("include")
-        if include:
-            includes.append(include)
-    except Exception:
-        pass
+    import sysconfig
+    include = sysconfig.get_paths().get("include")
+    if include:
+        includes.append(include)
     candidates = list(dict.fromkeys(path for path in includes if path))
     for path in candidates:
         if os.path.isfile(os.path.join(path, "Python.h")):
@@ -251,10 +248,7 @@ def check_network(needed=True, host=None, timeout=5.0):
         return _ok("network", "not needed, every archive is already on disk")
     if host is None:
         from jittor_utils import manifest
-        try:
-            from urllib.parse import urlparse
-        except ImportError:
-            from urlparse import urlparse
+        from urllib.parse import urlparse
         host = urlparse(manifest.ASSET_BASE).hostname
     import socket
     try:

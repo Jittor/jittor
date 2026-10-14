@@ -140,10 +140,46 @@ from .onednn import (  # noqa: F401 - compatibility aliases are public here
 from . import onednn as _onednn_provider
 
 
+def _mkl_root():
+    return os.path.join(jit_utils.home(), ".cache", "jittor", "mkl")
+
+
 def install_mkl(root_folder):
     return _onednn_provider.install_source(
         root_folder, manifest.mkl_asset(), manifest.ONEDNN_VERSION, cc_path,
         download_url_to_local, safe_tar_extractall, allow_build=build_is_allowed())
+
+
+# Settled once per process: the policy is consulted on every library lookup
+# that misses the registry's memo, and a disabled library is never memoized.
+_mkl_obtainable_answer = None
+
+
+def _mkl_obtainable():
+    """Whether oneDNN can be had at all: given explicitly, built, or buildable.
+
+    ``use_mkl`` is on by default, and the default install builds oneDNN from
+    source on first use, which needs cmake. Without cmake (and without an
+    existing build or explicit paths) that build cannot even start, so the
+    library is reported as unavailable -- the CPU products then take the
+    generic kernels -- instead of failing every first CPU matmul. A build that
+    starts and fails still raises; ``JITTOR_NO_BUILD=1`` keeps its own error.
+    """
+    global _mkl_obtainable_answer
+    if _mkl_obtainable_answer is None:
+        _mkl_obtainable_answer = (
+            bool(build_env("mkl_include_path", environ=os.environ))
+            or bool(build_env("mkl_lib_path", environ=os.environ))
+            or not build_is_allowed()
+            or _onednn_provider.source_build_available(
+                _mkl_root(), manifest.mkl_asset(), manifest.ONEDNN_VERSION, cc_path))
+        if not _mkl_obtainable_answer:
+            LOG.w("use_mkl is on, but oneDNN v3 is not installed and cannot be built "
+                  "here: building it requires cmake, which is not on PATH. CPU matmul "
+                  "and convolution use Jittor's generic kernels. Install cmake, or set "
+                  "JT_BUILD_MKL_INCLUDE_PATH/JT_BUILD_MKL_LIB_PATH, to enable oneDNN; "
+                  "set use_mkl=0 to silence this warning.")
+    return _mkl_obtainable_answer
 
 
 def check_mkl_usable(dirname):
@@ -154,7 +190,7 @@ def check_mkl_usable(dirname):
 
 
 def _mkl_library_enabled():
-    return bool(use_mkl) and build_flag("use_mkl", True, os.environ)
+    return bool(use_mkl) and build_flag("use_mkl", True, os.environ) and _mkl_obtainable()
 
 
 def setup_mkl():
@@ -168,8 +204,7 @@ def setup_mkl():
         include = os.path.abspath(include)
         library_file, linker = _onednn_provider.explicit_library(library)
     else:
-        root = os.path.join(jit_utils.home(), ".cache", "jittor", "mkl")
-        prefix = install_mkl(root)
+        prefix = install_mkl(_mkl_root())
         include = os.path.join(prefix, "include")
         library_file, linker = mkl_library_layout(prefix)
     _onednn_provider.check_usable(library_file, include)
@@ -282,19 +317,17 @@ def setup_cuda_extern():
         try:
             setup_cuda_lib(lib_name, extra_flags=link_cuda_extern)
         except Exception as e:
-            msg = f"CUDA found but {lib_name} is not loaded:\n"
+            msg = f"CUDA found but {lib_name} could not be loaded: {e}"
             if lib_name == "cudnn":
-                msg += """Develop version of CUDNN not found,
-please refer to CUDA offical tar file installation:
-https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html#installlinux-tar"""
-            if lib_name == "cusparse":
-                msg += """CUSPARSE library is not loaded,
-please ensure it is installed along with the CUDA toolkit."""
-            if platform.machine() in ["x86_64", "AMD64"]:
-                msg += f"""
-or you can let jittor install cuda and cudnn for you:
->>> python3.{sys.version_info.minor} -m jittor_utils.install_cuda
-"""
+                msg += ("\nThe cuDNN headers and library were not found. Install "
+                        "them with `pip install nvidia-cudnn-cu12` (included in "
+                        "`pip install jittor[cuda12]`), or follow "
+                        "https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html. "
+                        "To run without cuDNN, set JT_BUILD_CONV_OPT=1: convolutions "
+                        "then use Jittor's own kernels.")
+            else:
+                msg += (f"\n{lib_name} ships with the CUDA toolkit; check that "
+                        "the toolkit that nvcc belongs to is complete.")
             raise RuntimeError(msg) from e
 
 def _cuda_library_sources(lib_name):
@@ -374,7 +407,7 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
             try:
                 cublas_lt_lib_path = search_file(library_search_dirs, "libcublasLt.so", nvcc_version)
                 ctypes.CDLL(cublas_lt_lib_path, dlopen_flags)
-            except:
+            except (RuntimeError, OSError):
                 # some aarch64 os, such as uos with FT2000 cpu,
                 # it's cuda 10 doesn't have libcublasLt.so
                 pass
@@ -406,8 +439,8 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
             try:
                 cusparse_spmv_path = search_file(library_search_dirs, "libcusparse.so")
                 ctypes.CDLL(cusparse_spmv_path, dlopen_flags)
-            except:
-                LOG.w("Failed to load cusparse-specific shared libraries.")
+            except (RuntimeError, OSError) as error:
+                LOG.w(f"Failed to load cusparse-specific shared libraries: {error}")
 
     # find all source files
     culib_src_files = _cuda_library_sources(lib_name)

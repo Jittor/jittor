@@ -410,7 +410,7 @@ python bench/torch_compat/run.py --device npu --gpu <分配到的设备> \
 
 ```bash
 export JT_SYNC=1
-export trace_py_var=3
+export JT_TRACE_PY_VAR=3
 ```
 
 这些开关是诊断用途且会拖慢执行，**定位到出错运算后就去掉**。通用的 JIT 与显存诊断见

@@ -5,7 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include "ops/composite/code_source.h"
-#include <regex>
+#include <cctype>
 #include <algorithm>
 #include <iomanip>
 #include <sstream>
@@ -89,6 +89,23 @@ static string annotate_jit_run_lines(const string& src, const string& path) {
         if (!mapped_line) line++;
     }
     return annotated;
+}
+
+// A `#line` that restores the numbering in force at `pos`, for text spliced in
+// there; empty when no directive precedes `pos` and the file's own numbering
+// is the right one anyway.
+static string line_directive_at(const string& src, size_t pos) {
+    if (!pos) return "";
+    size_t marker = src.rfind("#line ", pos-1);
+    if (marker == string::npos) return "";
+    size_t directive_end = src.find('\n', marker);
+    if (directive_end == string::npos || directive_end >= pos) return "";
+    std::istringstream directive(src.substr(marker + 6, directive_end - marker - 6));
+    size_t line = 0;
+    string path;
+    if (!(directive >> line) || !(directive >> std::quoted(path))) return "";
+    line += std::count(src.begin() + directive_end + 1, src.begin() + pos, '\n');
+    return "#line " + S(line) + " \"" + line_directive_path(path) + "\"\n";
 }
 
 DECLARE_FLAG(string, jittor_path);
@@ -914,7 +931,7 @@ string OpCompiler::get_jit_src(Op* op) {
     }
     
     string new_src = begin_src + src.substr(0, pos) +
-        after_include_src + src.substr(pos) + "\n" + end_src;
+        after_include_src + line_directive_at(src, pos) + src.substr(pos) + "\n" + end_src;
     return new_src;
 }
 
@@ -1091,8 +1108,24 @@ string OpCompiler::__get_fused_src(
                 return true;
         return (s.find("::") != string::npos) || (s.find("LOG") != string::npos);
     };
-    // regex find XxxXxxOp::jit_run
-    std::regex e(R"([^]*\s(\S*)Op::jit_run[^]*)");
+    // The XxxXxx of the last `XxxXxxOp::jit_run` in an op's source: the
+    // whitespace-delimited token in front of it. This was
+    // `std::regex_match(src, R"([^]*\s(\S*)Op::jit_run[^]*)")`, and
+    // libstdc++'s matcher recurses once per character it consumes, so the
+    // depth grew with the generated source: a rank-13 reduction (the generic
+    // CPU matmul of two rank-12 tensors) is ~17,800 frames, which overflows a
+    // compile thread's stack where threads get glibc's 2 MB default -- any
+    // host whose `ulimit -s` is unlimited. A segfault, with no backtrace.
+    auto jit_run_class_prefix = [](const string& src, string& name) {
+        static const string marker = "Op::jit_run";
+        auto end = src.rfind(marker);
+        if (end == string::npos) return false;
+        auto begin = end;
+        while (begin > 0 && !std::isspace((unsigned char)src[begin-1])) begin--;
+        if (begin == 0) return false;
+        name = src.substr(begin, end - begin);
+        return true;
+    };
     for (uint oi=0; oi<op_srcs.size(); oi++) {
         const string& src = op_srcs[oi];
         if (src.size()==0) continue;
@@ -1127,10 +1160,8 @@ string OpCompiler::__get_fused_src(
             // opi_outputp[0] = ((T*)(opi->buffer.get()))[0];
             continue;
         }
-        std::smatch cm;
-        std::regex_match(src, cm, e);
-        ASSERT(cm.size()>=2) << src;
-        string name3 = cm[1];
+        string name3;
+        ASSERT(jit_run_class_prefix(src, name3)) << src;
         const string& source_path = ops[oi]->codegen().source_path;
         // macros this op defines, and the last identifier we renamed, both used
         // by check_rename_conflict below

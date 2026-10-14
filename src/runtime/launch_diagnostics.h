@@ -71,6 +71,10 @@ struct LaunchErrorScope {
     ~LaunchErrorScope();
 };
 EXTERN_LIB string cuda_launch_error_context();
+// "\nindex 10 is out of bounds ..." if an indexing kernel recorded a fault in
+// `device_index_fault()` (ops/composite/index_bounds.h) since the last call,
+// otherwise "". Clears the record.
+EXTERN_LIB string take_device_index_fault();
 
 // Read-only diagnostics. A device-wide error cannot identify a guilty stream;
 // these are recent candidates, never a claim of exact fault attribution.

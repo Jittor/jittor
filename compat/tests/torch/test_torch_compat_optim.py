@@ -344,7 +344,13 @@ class TestAdam(Base):
             self.assertTrue(frozen.is_stop_grad(),
                             f"in-place ops keep frozen tensor frozen {dev}")
 
-        both_devices(body)
+        def on_device(dev):
+            # A tensor with no ``device=`` is built on the CPU, as in torch;
+            # the CUDA round asks for CUDA the way torch code does.
+            with torch.device(dev):
+                body(dev)
+
+        both_devices(on_device)
 
     def test_adamw_step_without_gradients_is_noop(self):
         def body(dev):

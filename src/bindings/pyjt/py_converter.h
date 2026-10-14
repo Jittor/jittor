@@ -431,6 +431,8 @@ DEF_IS(NanoVector, PyObject*) to_py_object(T a) {
     PyObjHolder obj(_PyObject_New(&PyjtNanoVector));
     auto ptr = GET_RAW_PTR(T, obj.obj);
     new (ptr) T(a);
+    // NanoVector declares __dealloc__ (a spilled vector owns heap storage).
+    GET_INITED_FLAG(T, 0, obj.obj) = 1;
     return obj.release();
 }
 
@@ -673,6 +675,30 @@ DEF_IS(VarHolder*, T) from_py_object(PyObject* obj, unique_ptr<VarHolder>& holde
     return holder.get();
 }
 
+// RandomGenerator: lets RandomOp/CurandRandomOp accept a `jt.Generator`
+// instance directly as a constructor argument, the same way ops already
+// accept Var*/VarHolder* -- mirrors the VarHolder* converter immediately
+// above (a PyHeapTypeObject-backed heaptype whose C++ payload sits right
+// after the PyObject header, per GET_RAW_PTR), minus the array-coercion
+// fallback VarHolder's second overload provides (a Generator argument is
+// never optional/coercible from other Python types: either the caller
+// passed a real jt.Generator or they didn't).
+struct RandomGenerator;
+EXTERN_LIB PyHeapTypeObject PyjtRandomGenerator;
+
+DEF_IS(RandomGenerator*, bool) is_type(PyObject* obj) {
+    // None is accepted (and converts to nullptr below) so `generator=None`,
+    // the default at every Python call site, can be passed through
+    // explicitly rather than requiring the caller to omit the argument.
+    return obj == Py_None || PyObject_TypeCheck(obj, &PyjtRandomGenerator.ht_type);
+}
+
+DEF_IS(RandomGenerator*, T) from_py_object(PyObject* obj) {
+    if (obj == Py_None) return nullptr;
+    CHECK(PyObject_TypeCheck(obj, &PyjtRandomGenerator.ht_type));
+    return GET_RAW_PTR(RandomGenerator, obj);
+}
+
 struct DataView;
 struct VarHolder;
 EXTERN_LIB PyObject* new_var_data_owner(VarHolder* vh);
@@ -729,6 +755,10 @@ DEF_IS(ItemData, PyObject*) to_py_object(T a) {
         return PyLong_FromLongLong(a.data);
     if (a.dtype == ns_float64)
         return PyFloat_FromDouble(*(float64*)&a.data);
+    if (a.dtype == ns_complex64) {
+        const float32* parts = (const float32*)&a.data;
+        return PyComplex_FromDoubles(parts[0], parts[1]);
+    }
     if (a.dtype == ns_int16)
         return PyLong_FromLongLong((int64)*(int16*)&a.data);
     if (a.dtype == ns_int8)
@@ -743,6 +773,17 @@ DEF_IS(ItemData, PyObject*) to_py_object(T a) {
         return PyLong_FromUnsignedLongLong((uint64)*(uint32*)&a.data);
     if (a.dtype == ns_uint64)
         return PyLong_FromUnsignedLongLong(*(uint64*)&a.data);
+    // complex64/complex128 are a (real, imag) float32/float64 pair (see
+    // type/complex_compute.h); read the raw bytes directly rather than
+    // pulling in that codegen-only header here.
+    if (a.dtype == ns_complex64) {
+        auto* p = (float32*)&a.data;
+        return PyComplex_FromDoubles((float64)p[0], (float64)p[1]);
+    }
+    if (a.dtype == ns_complex128) {
+        auto* p = (float64*)a.bytes;
+        return PyComplex_FromDoubles(p[0], p[1]);
+    }
     ASSERT(a.dtype == ns_int64) << "Unhandled dtype in item():" << a.dtype;
     return PyLong_FromLongLong(a.data);
 }
@@ -1200,5 +1241,10 @@ DEF_IS(VarSlices, T) from_py_object(PyObject* obj, vector<unique_ptr<VarHolder>>
 }
 
 EXTERN_LIB bool check_async_executor_error(const std::exception& e, std::ostream& os);
+// The Python exception class for a C++ exception, chosen by its type
+// (jittor.JittorIndexError for UserIndexError, ...). Defined in jit_utils.cc.
+EXTERN_LIB PyObject* python_error_class(const std::exception& e);
+// jittor.JittorTypeError: no overload accepts the arguments.
+EXTERN_LIB PyObject* python_type_error_class();
 
 } // jittor

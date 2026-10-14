@@ -18,7 +18,7 @@ _NATIVE_NAMES = (
     "cartesian_prod", "ceil", "chunk", "cos", "cosh", "cross", "ctc_loss",
     "cummax", "cummin", "deg2rad", "detach", "diag", "digamma",
     "einsum", "erf", "erfinv", "exp", "expm1", "flatten", "flip",
-    "floor", "floor_divide", "gather", "greater", "greater_equal", "histc",
+    "floor", "floor_divide", "fmod", "gather", "greater", "greater_equal", "histc",
     "hypot", "igamma", "index_add", "index_fill", "isfinite", "isinf",
     "isnan", "isneginf", "isposinf", "kthvalue", "less", "less_equal",
     "lgamma", "log", "log2", "logical_and", "logical_not", "logical_or",

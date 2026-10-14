@@ -58,8 +58,13 @@ changes: [2.0 migration notes](../../docs/releases/2.0.md).
   ROCm/NPU verification of shared semantics (KI-OPS-002, KI-SEMANTICS-003).
   Commands for hardware day are in [deferred-hardware.md](deferred-hardware.md).
 - **Silent numerics.** CUDA half max/min identity (KI-OPS-012), Python-float
-  narrowing against float64 (KI-DTYPE-003), cuDNN autotuning coupled to scheduling
-  (KI-EXEC-003), shared Vars after `load_state_dict` (KI-COMPAT-006).
+  narrowing against float64 (KI-DTYPE-003), factory tensors weak in promotion
+  (KI-DTYPE-004), cuDNN autotuning coupled to scheduling (KI-EXEC-003), shared
+  Vars after `load_state_dict` (KI-COMPAT-006), SDPA CUDA backward parity
+  (KI-OPS-015).
+- **Torch frontend gaps.** torchmetrics on CUDA (KI-COMPAT-010), RNN off cuDNN
+  (KI-COMPAT-011), in-process shim metadata (KI-COMPAT-012), autocast Conv2d bias
+  (KI-COMPAT-013), complex128 placeholder (KI-COMPAT-014).
 - **Executor and liveness.** Threaded writers to one parameter (KI-EXEC-005,
   KI-EXEC-007), liveness underflows (KI-EXEC-008, KI-EXEC-009), the op-level
   parallel compiler (KI-COMPILER-001).
@@ -68,7 +73,8 @@ changes: [2.0 migration notes](../../docs/releases/2.0.md).
   (KI-CODEGEN-003, KI-CODEGEN-004, KI-COMPAT-009), pipelined memory and backward
   submission (KI-EXEC-004, KI-EXEC-010).
 - **Gate trust.** Dead sessions (KI-TEST-002), test-order failures (KI-TEST-007,
-  KI-TEST-009, KI-TEST-010), gate cost (KI-TEST-012, KI-TEST-013).
+  KI-TEST-010), gate cost (KI-TEST-012, KI-TEST-013), a stale notebook trajectory
+  (KI-TEST-014).
 - **Research.** [Agent-operable optimization](../../docs/research/agentic-optimization.md)
   is a proposal only; no autonomous mutation path exists.
 

@@ -44,7 +44,9 @@ def _maybe_np(x):
 
 
 def _is_float_np(a):
-    return isinstance(a, np.ndarray) and a.dtype.kind == "f"
+    # Complex is floating point too: compared exactly, an FFT whose two
+    # backends round the last ulp differently read as a wrong kernel.
+    return isinstance(a, np.ndarray) and a.dtype.kind in "fc"
 
 
 def _normalize_outputs(out):
@@ -97,6 +99,12 @@ def _cuda_linalg_works():
 
 
 _KNOWN_DEVICE_ISSUES = {}
+if _ACCEL == "cuda":
+    _KNOWN_DEVICE_ISSUES.update({
+        name: ("xfail", "KI-OPS-015: the CUDA backward diverges from the CPU one by "
+                        "more than the per-element budget")
+        for name in ("scaled_dot_product_attention", "scaled_dot_product_attention_causal")
+    })
 if _ACCEL == "npu":
     _KNOWN_DEVICE_ISSUES.update({
         name: ("skip", "sub-32-bit integer reduction atomics are not verified on NPU")

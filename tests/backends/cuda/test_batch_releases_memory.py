@@ -52,7 +52,7 @@ def _peaks(layers, rows=4096, width=1024):
     return forward, backward, rows * width * 4
 
 
-@unittest.skipIf(not _has_cuda(), "the pools count device memory only")
+@unittest.skipIf(not _has_cuda(), "the pools count CUDA device memory only")
 class TestBatchReleasesMemory(unittest.TestCase):
     def test_the_backward_excess_does_not_grow_with_depth(self):
         with jt.flag_scope(use_cuda=1):

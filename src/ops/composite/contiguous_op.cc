@@ -14,7 +14,7 @@ ContiguousOp::ContiguousOp(Var* input) : x(input) {
 void ContiguousOp::infer_shape() { y->set_shape(x->shape); }
 VarPtr ContiguousOp::grad(Var*, Var* dout, Var*, int) { return dout; }
 void ContiguousOp::jit_prepare(JK& jk) {
-    jk << "«Tx:" << x->dtype() << "«DIM=" << JK::hex1(x->shape.size());
+    jk << "«Tx:" << x->dtype() << "«DIM=" << JK::hex(x->shape.size());
     // Which axes move the physical index at all. A view's zero-stride axes
     // contribute nothing to the offset, so saying so in the key lets the copy
     // skip them instead of dividing them away once per element; an all-zero

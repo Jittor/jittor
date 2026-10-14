@@ -221,6 +221,26 @@ struct LaunchOriginRegistration {
 };
 static LaunchOriginRegistration launch_origin_registration;
 
+// Attributed to the user's line, the one an operator's origin names, rather
+// than to whichever jittor frame called into C++.
+static bool warn_through_python(const string& message) {
+    if (!Py_IsInitialized() || !PyGILState_Check() || PyErr_Occurred()) return false;
+    LaunchOrigin where;
+    bool located = runtime_launch_history().origin(capture_python_launch_origin(), where);
+    int failed = located
+        ? PyErr_WarnExplicit(PyExc_UserWarning, message.c_str(), where.file, where.line,
+                             nullptr, nullptr)
+        : PyErr_WarnEx(PyExc_UserWarning, message.c_str(), 1);
+    if (failed) throw std::runtime_error(message);
+    return true;
+}
+
+struct UserWarningRegistration {
+    UserWarningRegistration() { set_user_warning_hook(warn_through_python); }
+    ~UserWarningRegistration() { set_user_warning_hook(nullptr); }
+};
+static UserWarningRegistration user_warning_registration;
+
 // New reference to an attribute of the frame's code object, or nullptr.
 static PyObject* code_attr(PyFrameObject* f, const char* name) {
     PyRef co(frame_code(f));

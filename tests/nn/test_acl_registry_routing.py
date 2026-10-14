@@ -52,6 +52,7 @@ def routing(monkeypatch):
         flags=SimpleNamespace(amp_reg=0),
         amp_flags=SimpleNamespace(keep_reduce=1, reduce16_no_fp32_acc=2,
                                   prefer16=4, prefer32=8),
+        JittorShapeError=type("JittorShapeError", (RuntimeError, ValueError), {}),
     )
     # `dispatch.py` imports `jittor._core.dtypes` at module scope. A
     # SimpleNamespace is not a package, so once "jittor" is replaced below the
@@ -233,7 +234,7 @@ def test_layer_norm_keeps_affine_parameters_and_validates_before_dispatch(routin
 
 
 def test_matmul_bmm_and_transpose_reuse_existing_keys(routing):
-    names = ["_check_matmul_shapes", "_transpose_base_last2", "_matmul_2d_cublas",
+    names = ["_operand", "_check_matmul_shapes", "_transpose_base_last2", "_matmul_2d_cublas",
              "_mixed_float_compute_dtype", "_matmul_kernel_dispatch",
              # The AMP scope the three generic contractions share. It is a
              # module-level helper rather than three copies of the same

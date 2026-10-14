@@ -114,14 +114,22 @@ static void setitem_inplace(SetitemOp* op) {
         inplace_size *= in_shape[i];
     }
     
-    VarSlice s = vs.slices[0];
-    if (!(s.is_int() || s.is_slice())) return;
-    
+    // No slices at all is the whole input -- `transpose_view_source` builds
+    // one to alias its root, and the gradient of that is this setitem. The
+    // first slice used to be read regardless, past the end of an empty array,
+    // and whatever lay there decided the offset or failed Slice::fill.
     int64 size = 0;
+    VarSlice s;
+    if (vs.n == 0) {
+        s.set_ellipsis();
+    } else {
+        s = vs.slices[0];
+        if (!(s.is_int() || s.is_slice())) return;
+    }
     if (s.is_int()) {
         if (s.i < 0 || s.i >= in_shape[0]) return;
         size = s.i * (input->size / in_shape[0]);
-    } else {
+    } else if (s.is_slice()) {
         Slice ss = s.slice;
         // we also need to check the first dim is continuous
         if (ss.step != 1)
@@ -163,10 +171,14 @@ static void getitem_inplace(GetitemOp* op) {
             return;
     }
     
-    VarSlice s = vs.slices[0];
-    if (s.is_var() || s.is_str()) return;
-    
+    // An empty index (see setitem_inplace) aliases the whole input.
     int64 size = 0;
+    VarSlice s;
+    if (vs.n == 0)
+        s.set_ellipsis();
+    else
+        s = vs.slices[0];
+    if (s.is_var() || s.is_str()) return;
     if (s.is_int())
         size = in_shape[0] == 0 ? 0 : s.i * (in->size / in_shape[0]);
     else if (s.is_slice()) {

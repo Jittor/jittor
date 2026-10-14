@@ -1,10 +1,12 @@
 #include "runtime/launch_diagnostics.h"
 #include "runtime/device_state.h"
+#include "ops/composite/index_bounds.h"
 #include <array>
 #include <atomic>
 #include <cstring>
 #include <map>
 #include <mutex>
+#include <new>
 #include <sstream>
 #include <algorithm>
 
@@ -18,6 +20,40 @@ thread_local Device error_device{BackendId::Cuda, -1};
 thread_local uintptr_t error_stream = 0;
 thread_local bool error_stream_known = false;
 std::atomic<LaunchOriginCapture> origin_capture{nullptr};
+std::atomic<DeviceIndexFaultAllocator> index_fault_allocator{nullptr};
+// Set once the record exists, so reporting an error never allocates one.
+std::atomic<IndexFault*> index_fault_host{nullptr};
+}
+
+void set_device_index_fault_allocator(DeviceIndexFaultAllocator allocator) {
+    index_fault_allocator.store(allocator);
+}
+
+IndexFault* device_index_fault() {
+    static IndexFault* device = [] () -> IndexFault* {
+        auto allocator = index_fault_allocator.load();
+        IndexFault* host = nullptr;
+        IndexFault* device = nullptr;
+        if (!allocator || !allocator(&host, &device)) return nullptr;
+        new (host) IndexFault();
+        index_fault_host.store(host);
+        return device;
+    }();
+    return device;
+}
+
+string take_device_index_fault() {
+    auto* host = index_fault_host.load();
+    if (!host) return "";
+    volatile IndexFault* record = host;
+    if (record->dim < 0) return "";
+    std::ostringstream out;
+    out << "\nindex " << record->index << " is out of bounds for dimension "
+        << record->dim << " with size " << record->size
+        << " (reported by the indexing kernel).";
+    record->dim = -1;
+    record->claimed = 0;
+    return out.str();
 }
 
 struct LaunchHistory::Impl {

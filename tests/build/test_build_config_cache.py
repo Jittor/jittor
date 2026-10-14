@@ -22,12 +22,31 @@ import jittor_utils as jit_utils
 from _helpers.child_process import run_python_child
 
 
+#: The cache slot, under its canonical and its legacy name.
+_CACHE_SLOT_VARIABLES = ("JT_BUILD_CACHE_NAME", "cache_name")
+
+
+def _without_cache_slot(env_overrides):
+    """The session's environment minus any cache slot, plus these variables.
+
+    Every nox session runs with ``cache_name=nox_<backend>`` (noxfile
+    ``_session_env``), and a child inherits it, so "a fresh interpreter" here
+    was really "a fresh interpreter in the session's slot": the default-slot
+    assertions below failed in every nox gate and passed everywhere else.
+    """
+    env = {key: value for key, value in os.environ.items()
+           if key not in _CACHE_SLOT_VARIABLES}
+    env.update({key: str(value) for key, value in env_overrides.items()})
+    return env
+
+
 def _cache_path_for(env_overrides):
     """cache_path as computed by a fresh interpreter with these variables set."""
     script = ("import jittor_utils, json, sys;"
               "sys.stdout.write(json.dumps(["
               "jittor_utils.cache_path, jittor_utils.lock_path]))")
-    out = run_python_child(["-c", script], env=env_overrides, text=False)
+    out = run_python_child(["-c", script], env=_without_cache_slot(env_overrides),
+                           inherit=False, text=False)
     assert out.returncode == 0, out.stderr.decode()
     return json.loads(out.stdout.decode())
 
@@ -114,6 +133,33 @@ class TestCachePathComponents(unittest.TestCase):
             other = "arch" + hashlib.sha256(b"different").hexdigest()[:10]
             self.assertNotEqual(key, other)
 
+    def test_a_remembered_instruction_set_is_not_reused_on_another_cpu(self):
+        """The `-march=native` expansion is memoised in the home, and homes are
+        shared between machines (a cluster filesystem, a restored CI cache).
+        Keyed on the compiler alone, every machine got the first one's
+        directory and its products: SIGILL on a CPU lacking its extensions."""
+        import sys
+        from unittest import mock
+        module = sys.modules[jit_utils.target_arch_key.__module__]
+        if not module.cc_path or module.cc_type == "cl":
+            raise unittest.SkipTest("the key is only probed through a gcc/clang")
+        probe = module.probe
+        with tempfile.TemporaryDirectory() as root, \
+                mock.patch.dict(os.environ, {"JT_PROBE_CACHE": "1"}), \
+                mock.patch.object(probe, "cache_file",
+                                  lambda: os.path.join(root, "probe.json")), \
+                mock.patch.object(probe, "_entries", None):
+            with mock.patch.object(module, "_cpu_fingerprint", lambda: "zen4"), \
+                    mock.patch.object(module, "_read_target_arch",
+                                      lambda cc: "-march=znver4 -mavx512f"):
+                first = module.target_arch_key()
+            with mock.patch.object(module, "_cpu_fingerprint", lambda: "zen3"), \
+                    mock.patch.object(module, "_read_target_arch",
+                                      lambda cc: "-march=znver3"):
+                second = module.target_arch_key()
+        self.assertTrue(first.startswith("arch"), first)
+        self.assertNotEqual(first, second)
+
     def test_the_instruction_set_key_does_not_depend_on_the_message_locale(self):
         """`-Q --help=target` prints its per-feature state through gettext.
 
@@ -172,7 +218,8 @@ class TestCachePathComponents(unittest.TestCase):
         script = ("import os, jittor_utils, sys;"
                   "jittor_utils.find_cache_path();"
                   "sys.stdout.write(repr(os.environ.get('cache_name')))")
-        out = run_python_child(["-c", script], env={}, text=False)
+        out = run_python_child(["-c", script], env=_without_cache_slot({}),
+                               inherit=False, text=False)
         self.assertEqual(out.returncode, 0, out.stderr.decode())
         # An import that mutates the environment changes every child process
         # the user starts afterwards.
@@ -223,8 +270,12 @@ class TestBuildConfigFingerprint(unittest.TestCase):
                                 {"nvcc_path": ""}))
 
     def test_a_cpu_only_run_gets_its_own_directory(self):
-        with_nvcc = _cache_path_for({"nvcc_path": "/usr/local/cuda/bin/nvcc"})
-        without = _cache_path_for({"nvcc_path": ""})
+        # Both spellings: the canonical name wins over the legacy one, and
+        # tools/run_test_suite.py exports it, so setting `nvcc_path` alone
+        # changed nothing under that runner and both paths came out equal.
+        nvcc = "/usr/local/cuda/bin/nvcc"
+        with_nvcc = _cache_path_for({"nvcc_path": nvcc, "JT_BUILD_NVCC_PATH": nvcc})
+        without = _cache_path_for({"nvcc_path": "", "JT_BUILD_NVCC_PATH": ""})
         self.assertNotEqual(with_nvcc[0], without[0])
         # ...but they still share one build lock, and so one download area.
         self.assertEqual(with_nvcc[1], without[1])

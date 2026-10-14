@@ -176,7 +176,7 @@ class TestSetitemShapeErrors(unittest.TestCase):
         expect_error(
             lambda: value.__setitem__(slice(None), jt.ones((2, 4))),
             exc_type=RuntimeError,
-            match="Data shape not match",
+            match=r"cannot assign a value of shape \[2,4,\] to a slice of shape \[2,3,\]",
         )
 
 

@@ -105,7 +105,7 @@ class TestBackwardTwice(unittest.TestCase):
                 _test_policy_stack.enter_context(jt.runtime.scope(missing_grad_error=1))
                 with self.assertRaises(Exception) as caught:
                     jt.grad(loss_b, weight, retain_graph=False)
-                self.assertIn("doesn't have gradient", str(caught.exception),
+                self.assertIn("does not depend on the loss", str(caught.exception),
                               str(caught.exception)[:2000])
             finally:
                 _test_policy_stack.enter_context(jt.runtime.scope(missing_grad_error=before))

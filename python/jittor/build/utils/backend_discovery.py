@@ -86,9 +86,9 @@ def requested_backend(environ=None, *, is_file=os.path.isfile):
 
 
 def backend_entry_point(name, *, entries=None):
-    try:
+    if sys.version_info >= (3, 8):
         from importlib import metadata
-    except ImportError:
+    else:
         import importlib_metadata as metadata
     if entries is None:
         entries = metadata.entry_points()

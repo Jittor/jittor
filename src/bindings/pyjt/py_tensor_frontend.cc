@@ -112,6 +112,29 @@ void reset_tensor_placement_context(PyObject* token) {
         throw std::runtime_error("cannot reset tensor placement context");
 }
 
+PyObject* set_construction_placement(int backend, int device) {
+    USER_CHECK(backend >= 0 && backend <= int(BackendId::Corex) && device >= 0)
+        << "construction placement requires a registered backend id and a non-negative device index";
+    TensorPlacement previous = current_tensor_placement();
+    PyObject* token = Py_BuildValue("(iii)", int(previous.explicit_backend),
+                                    int(previous.device.backend), previous.device.index);
+    if (!token) throw std::runtime_error("cannot create construction placement token");
+    set_tensor_placement(TensorPlacement({static_cast<BackendId>(backend), backend == 0 ? 0 : device}));
+    return token;
+}
+
+void restore_construction_placement(PyObject* previous) {
+    USER_CHECK(PyTuple_Check(previous) && PyTuple_GET_SIZE(previous) == 3)
+        << "_restore_construction_placement takes the token _set_construction_placement returned";
+    if (!PyLong_AsLong(PyTuple_GET_ITEM(previous, 0))) {
+        set_tensor_placement(TensorPlacement());
+        return;
+    }
+    set_tensor_placement(TensorPlacement({
+        static_cast<BackendId>(PyLong_AsLong(PyTuple_GET_ITEM(previous, 1))),
+        int(PyLong_AsLong(PyTuple_GET_ITEM(previous, 2)))}));
+}
+
 TensorPlacement frontend_placement_request() { return selected_placement(); }
 
 PyObject* current_tensor_placement_request() {

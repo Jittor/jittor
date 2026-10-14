@@ -7,9 +7,6 @@ its cube unit cannot run FP32 with ``KEEP_DTYPE`` at all. Kernel code asks
 into a composite implementation instead of an opaque async failure at launch.
 """
 
-import jittor as jt
-from jittor import compiler
-
 _soc_name_cache = None
 
 # Runner names (as registered in acl_op_registry) whose CANN kernel is absent
@@ -43,6 +40,9 @@ def soc_name():
     """CANN SoC name (e.g. ``"Ascend310P3"``), or "" when ACL is not active."""
     global _soc_name_cache
     if _soc_name_cache is None:
+        import jittor as jt
+        from jittor import compiler
+
         name = ""
         if getattr(compiler, "has_acl", False):
             try:
@@ -84,6 +84,8 @@ def ieee_comparisons():
 
 def allow_reduced_precision():
     """The FP32 cube opt-in, readable as a flag or the legacy module attr."""
+    import jittor as jt
+
     return bool(
         getattr(jt, "acl_allow_hf32", False)
         or getattr(jt.flags, "acl_allow_hf32", 0)

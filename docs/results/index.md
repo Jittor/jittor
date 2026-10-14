@@ -25,9 +25,14 @@
 2026-09-14-jittor-vs-pytorch
 2026-09-14-vllm-omni-h3-enablement
 2026-09-19-torch-compat-runbook-verification
+2026-09-21-flowey-merge-verification
+2026-09-22-complex-svd-grad-and-complex128
 2026-09-22-qwen3-ascend310p-fp16
+2026-09-22-sgd-dampening-and-native-vmap-gaps
 2026-09-24-torch-compat-real-models
 2026-09-25-profiling-tools
+2026-10-05-high-rank-and-downstream-core-gaps
+2026-10-09-downstream-p1-allocator-protocol-transpose
 2026-10-12-qwen3-ascend310p-performance
 ```
 
@@ -50,4 +55,6 @@
 | [Jittor vs 真 PyTorch 2.9.1：现在差在哪](2026-09-14-jittor-vs-pytorch.md) | 快照：对 eager 赢 6 平 5 输 1，对 `torch.compile` 赢 2 平 2 输 5 | 2026-09-14 |
 | [Torch 兼容层在真实模型上对 PyTorch：差距表、显存与性能修复](2026-09-24-torch-compat-real-models.md) | 11 项全部跑通，几何平均 1.26x，进程显存峰值为 PyTorch 的 0.87–1.45 倍；余下差距在主机侧 | 2026-09-24 |
 | [性能/显存分析工具：审计与重写](2026-09-25-profiling-tools.md) | 已实现，RTX 4090 上验证；未合入 | 2026-09-25 |
+| [张量维度上限 10 → 32 与下游评测的核心缺口](2026-10-05-high-rank-and-downstream-core-gaps.md) | 已修复，CPU 与 RTX 4090 验证 | 2026-10-05 |
+| [下游 P1：分配器并存上限、数值协议与 transpose 的运行时置换](2026-10-09-downstream-p1-allocator-protocol-transpose.md) | 已修复，CPU 验证，transpose/协议另在 RTX 4090 验证 | 2026-10-09 |
 | [Qwen3-0.6B：310P3 FP16 推理性能](2026-10-12-qwen3-ascend310p-performance.md) | 相同权重预转换条件下，502/1998-token decode 比原生 torch_npu 快约 6%/24%；逐 token 一致、Jittor 零回退 | 2026-10-12 |

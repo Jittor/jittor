@@ -124,20 +124,36 @@ jobs:
       image: ${{ needs.baseline.outputs.cpu_ci_image }}
     timeout-minutes: 90
     env:
-      ASV_RESULTS_DIR: ${{ runner.temp }}/jittor-asv/results
-      ASV_HTML_DIR: ${{ runner.temp }}/jittor-asv/html
       ASV_MACHINE: github-ubuntu-cpu
       ASV_COMPARE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
     steps:
+      # `runner` is not an allowed context in a job-level `env:` -- using it
+      # there made GitHub reject the whole workflow file, so no job ran.
+      - name: Locate ASV output
+        shell: bash
+        run: |
+          echo "ASV_RESULTS_DIR=${RUNNER_TEMP}/jittor-asv/results" >> "${GITHUB_ENV}"
+          echo "ASV_HTML_DIR=${RUNNER_TEMP}/jittor-asv/html" >> "${GITHUB_ENV}"
+      # Before the checkout: the CI image is a bare ubuntu with no git, and
+      # without one actions/checkout downloads a tarball instead -- no .git, so
+      # ASV could neither name the commit it measured nor compare it with the
+      # base ("No such file or directory: 'git'" in `_record_asv`).
+      - name: Install native CPU toolchain and git
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends build-essential libomp-dev git ca-certificates
       - name: Check out source
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Install native CPU toolchain
-        run: |
-          apt-get update
-          apt-get install --yes --no-install-recommends build-essential libomp-dev
+      # The job runs as root in the container and the workspace belongs to the
+      # runner user, so git refuses the repository as unsafe. System-wide, not
+      # --global: nox gives every session its own HOME (noxfile `_session_env`),
+      # so asv's own git calls never read a global config, and failed with
+      # `git rev-parse <sha>^{commit}` exit 128 while nox's had succeeded.
+      - name: Trust the checkout
+        run: git config --system --add safe.directory "${GITHUB_WORKSPACE}"
       - name: Set up Python
         uses: actions/setup-python@v6
         with:

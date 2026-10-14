@@ -1,7 +1,7 @@
 # Known-Issues Ledger
 
 - Status: Maintained
-- Last reviewed: 2026-10-06
+- Last reviewed: 2026-10-13
 - Baseline: `1a6e203fc`
 - Owner: Jittor core maintainers
 - Review when: an entry is fixed or narrowed, a strict expected failure
@@ -161,28 +161,11 @@ workaround.
 - Evidence: `pytest tests/runtime/test_profiler.py tests/codegen/test_jit_tests.py::TestJitTests::test_fused_op_relay_matmul`.
 - Exit condition: the case passes after each of the three files in one process.
 
-## KI-TEST-009: two `test_torch_compat_optim.py` cases fail on device placement
-
-- Severity: Medium
-- Status: Open; reproduced on `1a6e203fc` (CUDA)
-- Owner: torch compatibility / optimizers
-- Symptom: `compat/tests/torch/test_torch_compat_optim.py::TestSGD::test_native_backward_does_not_double_advance_step`
-  dies in `method_api.py` `_binary_native` with `device_copy_op.cc: Expected all
-  tensor inputs on the same backend and device`, and
-  `TestAdam::test_bound_initializers_inside_no_grad_keep_parameter_trainable`
-  fails `assert_stays_on_device` with `'cpu' != 'device'`. The other cases in the
-  file pass.
-- Cause: not isolated; suspected a tensor created on the host (an initializer or
-  a split optimizer's state) meeting a device-placed parameter.
-- Workaround: none in the tests; real training steps that keep one placement do
-  not reach it.
-- Evidence: `JITTOR_TORCH_SHIM=1 python -m pytest -q compat/tests/torch/test_torch_compat_optim.py -k "double_advance_step or keep_parameter_trainable"`.
-- Exit condition: both cases pass on CUDA.
-
 ## KI-TEST-010: three `test_torch_compat_norm.py` LayerNorm fast-path cases fail
 
 - Severity: Low (values elsewhere in the file pass)
-- Status: Open; reproduced on `1a6e203fc` (CUDA)
+- Status: Open; reproduced on `1a6e203fc` (CUDA); the three cases run as strict
+  expected failures
 - Owner: torch compatibility / normalization kernels
 - Symptom: `compat/tests/torch/test_torch_compat_norm.py::TestLayerNorm::test_ln_no_grad_cuda_fast_path_float32_and_float16`
   (`CUDA no-grad LayerNorm missed its fused path`),
@@ -252,6 +235,30 @@ workaround.
 - Exit condition: measure the nightly gate with a restored cache; if acceptable,
   delete the entry, otherwise reduce cold compilation.
 
+## KI-TEST-014: the `resnet_training` notebook asserts a training trajectory that no longer happens
+
+- Severity: Low (tutorial narrative; the training itself is correct)
+- Status: Open; reproduced 2026-10-13 with `use_mkl=0` (as the smoke runs it)
+  on AMD EPYC 9554 (Zen 4) and 7763 (Zen 3): identical numbers on both and
+  across runs, so neither the CPU nor nondeterminism. The smoke case is a
+  strict expected failure through `_SMOKE_KNOWN_ISSUES` in
+  `tests/integration/test_notebooks.py`, limited to a cell raising.
+- Owner: tutorial / examples maintainers
+- Symptom: `assert len(set(frozen)) == 1, "普通网络应当出现连续多个 epoch 停滞"` --
+  the plain network's validation accuracy over epochs 2-4 is 0.31, 0.56, 0.48,
+  not a constant 0.31. The table in the notebook (residual 0.80/0.72, plain
+  0.56/0.42) no longer matches either (0.84/0.73 and 0.59/0.48 now). The other
+  assertions -- residual beats chance and beats plain by more than 0.15 -- hold.
+- Cause: not isolated. The notebook pins an exact trajectory of a small
+  network, so any change in conv/BatchNorm/Adam numerics moves it; which change
+  did has not been bisected.
+- Workaround: none needed; the code is right, the narrative is stale.
+- Evidence: `tests/integration/test_notebooks.py::test_notebook_smokes_execute_offline_on_cpu[resnet_training]`
+  (`nox -s cpu`, the manual stage); `examples/notebooks/resnet_training.md`.
+- Exit condition: rewrite the notebook's stall claim and table for a
+  trajectory that is stable (or assert the property, not the exact numbers),
+  and drop the `_SMOKE_KNOWN_ISSUES` entry.
+
 ## KI-COMPILER-001: the op-level parallel compiler can corrupt process state
 
 - Severity: High
@@ -261,8 +268,15 @@ workaround.
 - Owner: compiler/executor maintainers
 - Symptom: with `use_parallel_op_compiler` on (the default), a process that
   compiles many operators can segfault or corrupt state.
-- Cause: not established. The op-level compiler is `src/core/parallel_compiler.cc`
-  (`std::thread`), unrelated to the file-level `multiprocessing.Pool`.
+- Cause: not established in general. The op-level compiler is
+  `src/core/parallel_compiler.cc` (`std::thread`), unrelated to the file-level
+  `multiprocessing.Pool`. One cause was found and fixed on 2026-10-13: fused
+  source generation (`OpCompiler::__get_fused_src`) ran a `std::regex_match`
+  whose recursion grew with the source, and a compile thread's stack is glibc's
+  2 MB default where `ulimit -s` is unlimited (Slurm nodes); a rank-13 kernel
+  overflowed it with SIGSEGV and no backtrace
+  (`tests/core/test_high_rank_tensors.py::TestCompileThreadStack`). Whether the
+  reports below were all this has not been checked.
 - Workaround: `jt.flags.use_parallel_op_compiler = 0` for deterministic
   validation workloads; it reaches only the op-level compiler. The maintained
   notebook gate stays serial: a complete notebook smoke also died with eight
@@ -337,7 +351,8 @@ workaround.
 ## KI-CODEGEN-001: fused elementwise kernels pay a division and a modulo per element for a broadcast operand
 
 - Severity: Medium (performance; results are correct)
-- Status: Open; a documented trade-off
+- Status: Open; a documented trade-off. Both `test3` cases run as strict expected
+  failures with their original assertion (a `KI-CODEGEN-001` note on the case)
 - Owner: codegen maintainers
 - Symptom: on CPU, `x + y` where `y` is an expand of a real tensor runs about
   5.2x its dense counterpart (`64x64x64x64 + 1x64x1x1`: 636.5 us against
@@ -436,7 +451,11 @@ workaround.
 
 - Severity: High (a supported operation runs orders of magnitude slower than the
   library kernel that exists for it, with no error and no log)
-- Status: Open for the hand-written form. `jt.nn.matmul`, `nn.Linear` and
+- Status: Open for the hand-written form; the evidence cases below run as strict
+  expected failures (each failing one carries a `KI-TUNER-001` note), so the day
+  the relay fires they XPASS and the gate turns red. `test_group_conv_tuner.py`
+  and the two `test_profiler.py` cases pass on the CPU gate (2026-10-12) and are
+  not marked. `jt.nn.matmul`, `nn.Linear` and
   `nn.Conv2d` reach the library kernels directly and are not affected.
 - Owner: compiler/tuner maintainers
 - Symptom: with `enable_tuner=1`, a product or convolution written out of
@@ -649,7 +668,8 @@ workaround.
 
 - Severity: Medium (two library self-test ops cannot run; the libraries
   themselves are fine)
-- Status: Open; two repair attempts refuted. Renumbered from `KI-BACKEND-006`,
+- Status: Open; two repair attempts refuted. `TestCublasTestOp` and
+  `TestCudnnTestOp` run as strict expected failures. Renumbered from `KI-BACKEND-006`,
   an id that had already been used.
 - Owner: CUDA backend maintainers
 - Symptom: `tests/backends/cuda/test_cublas_test_op.py` fails two of its three
@@ -1231,6 +1251,26 @@ workaround.
   to the maximum) so the backward never subtracts two equal huge numbers, and
   add the fully masked row to the test.
 
+## KI-OPS-015: the CUDA backward of `scaled_dot_product_attention` misses the device-parity per-element budget
+
+- Severity: Medium (a parity gate case cannot pass; the gradients agree to
+  about 0.7% per element)
+- Status: Open; reproduced 2026-10-12 on RTX 4090 / CUDA 12.2 in every CUDA run
+  (`nox -s cuda` included). Both cases run as strict expected failures through
+  `_KNOWN_DEVICE_ISSUES` in `tests/backends/parity/test_device_parity.py`.
+- Owner: attention / CUDA kernel maintainers
+- Symptom: `scaled_dot_product_attention BACKWARD (input 0) per-element divergence
+  cpu vs cuda (max rel 6.80e-03)` against `GRAD_PE_TOL` 5e-3 (6.49e-03 for the
+  causal variant). The forward and the net-scaled backward error pass.
+- Cause: not isolated. Suspected a different accumulation order in the softmax
+  backward; whether 0.7% on a sub-peak coordinate is legitimate reordering or a
+  real defect has not been decided.
+- Workaround: none needed for typical training.
+- Evidence: `tests/backends/parity/test_device_parity.py::TestDeviceParity::test_scaled_dot_product_attention`
+  and `::test_scaled_dot_product_attention_causal` (torch mode, CUDA).
+- Exit condition: both cases pass (a fixed kernel, or a budget justified for
+  this operator) and the `_KNOWN_DEVICE_ISSUES` entry is removed.
+
 ## KI-SEMANTICS-003: floating-comparison NaN semantics not verified on every backend
 
 - Severity: Critical (until verified on the backend)
@@ -1289,10 +1329,40 @@ workaround.
   (an expected failure; its companion `..._with_an_exact_python_float_is_exact`
   must keep passing); `TestHalfPythonScalar` in
   `tests/type/test_half_precision_parity.py` pins the four half-precision
-  expressions bit-identical to torch.
+  expressions bit-identical to torch (a strict expected failure until
+  KI-DTYPE-004 is fixed: its operand is built with `jt.ones`).
 - Exit condition: a Python float keeps its value against a float64 operand in
   both modes, the expected failure XPASSes (strict) and its decorator is
   dropped, and the half expressions stay bit-identical to torch.
+
+## KI-DTYPE-004: a `jt.ones`/`zeros`/`full` result is a weak scalar in dtype promotion
+
+- Severity: Medium (a promotion divergence from NumPy and PyTorch; the values
+  are what the chosen dtype holds)
+- Status: Open; reproduced 2026-10-12 on CPU and CUDA. Both evidence cases run
+  as strict expected failures.
+- Owner: dtype maintainers
+- Symptom: `jt.ones(4).float16() * 0.1` (also `* 2.0`, `+ 0.1`) is float32,
+  while `jt.array(np.ones(4, "float16")) * 0.1` and torch give float16.
+  The other direction too: `jt.zeros(3)` (float32) times a float16 tensor is
+  float16, where torch gives float32.
+- Cause: the factories build `array(<python number>).broadcast(shape)`
+  (`python/jittor/_core/var.py` `_constant_scalar`). The 0-d constant carries
+  `_is_scalar`, and `BroadcastToOp` and the cast in `UnaryOp` copy the flag to a
+  full-size result, so `binary_dtype_infer` treats that tensor as a Python
+  scalar: against a Python number both sides are "scalars" and the wider width
+  wins; against a tensor it adopts the tensor's width. The same flag lets an
+  unsynced constant follow its operand's device (`src/core/op.cc`
+  `is_pending_scalar`), so clearing it in the broadcast changes placement as
+  well as dtype.
+- Workaround: build half tensors from data (`jt.array(np.ones(..., "float16"))`)
+  or cast after the arithmetic.
+- Evidence: `tests/type/test_half_precision_parity.py::TestHalfPythonScalar::test_matches_torch`
+  (the constraint KI-DTYPE-003 names) and
+  `tests/nn/test_grad_scaler.py::TestGradScalerStep::test_scaling_a_float16_loss_directly_is_reported`.
+- Exit condition: a factory result promotes as the tensor it is, an unsynced
+  constant still follows its operand's device, and both cases XPASS and lose
+  their markers.
 
 ## KI-COMPLEX-001: native complex capability gaps
 
@@ -1714,6 +1784,93 @@ workaround.
   example widen only where FP64 is fast, or compute `x * (1/s)` with a
   correction), update the promotion tests with the decision, and delete the entry.
 
+## KI-COMPAT-010: torchmetrics' classification and regression metrics fail under the Torch frontend on CUDA
+
+- Severity: Medium (an ecosystem library's core metrics do not run)
+- Status: Open; reproduced 2026-10-12 on CUDA with torchmetrics installed (the
+  gates do not install it, so the cases skip there)
+- Owner: torch compatibility maintainers
+- Symptom: `test_classification_metrics` dies in `reduce_op.cc` with "Reduce
+  dim out of range: requested dims [0,] for a 0-D var"; `test_regression_metrics`
+  fails to compile a fused operator; `test_torchmetrics_required_torch_ops`
+  reports a required op as unsupported.
+- Cause: not isolated; the first is a `dim=0` reduction of a 0-d tensor, which
+  torch accepts.
+- Workaround: none.
+- Evidence: `JITTOR_TORCH_SHIM=1 python -m pytest -q compat/tests/torch/test_torchmetrics_compat.py`
+  on a CUDA machine with torchmetrics.
+- Exit condition: the three cases pass on CUDA.
+
+## KI-COMPAT-011: an RNN under the Torch frontend on CUDA does not run through cuDNN
+
+- Severity: Medium (the precision policy it is meant to follow is not exercised)
+- Status: Open; reproduced 2026-10-12 on CUDA, with CUPTI available
+- Owner: torch compatibility / RNN maintainers
+- Symptom: `test_precision_policy_isolation.py`'s two RNN cases find no
+  `rnn precision select:` line from `cudnn_rnn_descriptor` ("the RNN must execute
+  actual cuDNN descriptors"); the outputs are computed by another path.
+- Cause: not isolated.
+- Workaround: none needed for results.
+- Evidence: `compat/tests/torch/test_precision_policy_isolation.py::test_fp32_rnn_native_default_and_torch_cudnn_policy_match_cpu_recurrence`,
+  `::test_grouped_rnn_backward_retains_forward_precision_after_policy_switch`.
+- Exit condition: both cases pass on CUDA.
+
+## KI-COMPAT-012: in-process `JITTOR_TORCH_SHIM=1` publishes no `torch` distribution metadata
+
+- Severity: Medium (Transformers and Diffusers decide PyTorch is absent)
+- Status: Open; recorded on HEAD in the 2026-09-24 report, reproduced
+  2026-10-12 where those libraries are installed (the gates do not install them,
+  so the cases skip there)
+- Owner: torch compatibility maintainers
+- Symptom: `AutoModel ... requires the PyTorch library but it was not found in
+  your environment` / `UNet2DModel requires the PyTorch library` from
+  `importlib.metadata`: twelve cases in `test_torch_hf_models.py`,
+  `test_torch_hf_alias.py`, `test_torch_hf_cuda_device.py` and
+  `test_diffusers.py` raise `ImportError`, and `test_peft.py` fails collection.
+- Cause: the shim installs a `torch` module in the process but no `torch`
+  distribution, and those libraries ask `importlib.metadata` rather than
+  importing. A user who runs `import torch` with the deployed shim does not hit
+  it.
+- Workaround: deploy the shim (`jittor-torch-shim`, see
+  `docs/compatibility/torch-shim.md`) rather than enabling it in-process.
+- Evidence: the four test files above on a machine with transformers/diffusers.
+- Exit condition: the in-process shim answers `importlib.metadata.version("torch")`
+  and those cases run.
+
+## KI-COMPAT-013: under `torch.autocast` a `Conv2d` module with a bias returns float32
+
+- Severity: Medium (an autocast divergence from PyTorch: downstream half
+  kernels receive a float32 activation)
+- Status: Open; recorded on HEAD in the 2026-09-24 report, reproduced
+  2026-10-12 on CPU and CUDA. The case runs as a strict expected failure.
+- Owner: torch compatibility / AMP maintainers
+- Symptom: `with torch.autocast("cuda", dtype=torch.float16): torch.nn.Conv2d(4, 8, 3, padding=1, bias=True)(x)`
+  gives float32 for a float32 input; PyTorch gives float16.
+- Cause: not isolated; suspected that the module path adds its float32 bias
+  after the autocast cast and promotes back.
+- Workaround: cast the output, or keep the bias in the compute dtype.
+- Evidence: `compat/tests/torch/test_torch_compat_unimplemented.py::TestAutocast::test_autocast_conv2d_module_keeps_the_compute_dtype_through_a_bias`.
+- Exit condition: the case XPASSes and loses its marker.
+
+## KI-COMPAT-014: `torch.complex128` is still a frontend placeholder although the core has complex128
+
+- Severity: Medium (the frontend refuses a dtype the core computes with)
+- Status: Open; reproduced 2026-10-12 on CPU and CUDA. The boundary case runs as
+  a strict expected failure.
+- Owner: torch compatibility / dtype maintainers
+- Symptom: `torch.empty((2,), dtype=torch.complex128)` and the other frontend
+  constructors raise `NotImplementedError` naming complex128, while
+  `jt.core.ops.empty((2,), "complex128")` builds a complex128 Var. The frontend
+  `dtype` registry lists complex128 among its unsupported placeholders.
+- Cause: complex128 became a native core dtype (`tests/core/test_complex128_native.py`),
+  and the frontend's supported set was not widened with it.
+- Workaround: build complex128 values natively (`jt.array(..., dtype="complex128")`)
+  and hand them to the frontend.
+- Evidence: `compat/tests/torch/test_dtype_object_boundaries.py::test_placeholder_dtypes_are_metadata_only_at_every_boundary`
+  (the two core-op spellings by name do not raise for complex128).
+- Exit condition: complex128 is a supported frontend dtype end to end (or the
+  core refuses it again by design), and the case XPASSes and loses its marker.
+
 ## KI-DIST-001: FSDP2 flat sharding peaks above the unsharded model
 
 - Severity: Limitation (memory; numerics are correct)
@@ -1739,6 +1896,62 @@ workaround.
   the second fails today.
 - Exit condition: the reference-peak run passes. NPU/HCCL and multi-node have no
   evidence yet (see [deferred-hardware.md](deferred-hardware.md)).
+
+## KI-DIST-002: the second native collective in a rapid sequence returns stale data on a non-zero rank
+
+- Severity: Medium (wrong collective result on non-zero ranks in one pattern;
+  DDP training itself is unaffected)
+- Status: Open; found 2026-10-13 on two CUDA ranks (NCCL 2.18.3).
+- Owner: distributed / native collectives
+- Symptom: in a rapid sequence of `jittor.distributed` collectives on NCCL, the
+  collective at sequence position 1 (the second one issued) reads back stale or
+  wrong data on a non-zero rank -- observed as a bf16 `all_reduce`, and as a
+  `broadcast` when that is the second collective -- while positions 0 and 2+ are
+  correct on both ranks. bf16 `all_reduce` is correct in isolation on both ranks,
+  so this is not a bf16 or an all_reduce correctness bug. The `DistributedDataParallel`
+  wrapper, optimizer gradient sync, `all_gather`, `broadcast` at position >=2 and
+  the full DDP training step all produce correct results on both ranks.
+- Cause: not isolated. A buffer-reuse / readback-ordering hazard in the native
+  collective output path or the executor on non-zero ranks is the suspect (cf.
+  KI-BACKEND-016's in-batch buffer reuse). A throwaway warmup collective plus
+  `jt.sync_all(True)` before the measured checks did not change it. A minimal
+  two-collective isolation (first + second) did NOT reproduce it, so the exact
+  trigger (sequence length or op mix) is not yet pinned.
+- Workaround: insert `jt.sync_all(True)` between back-to-back collectives when a
+  specific second-collective result must be read on a non-zero rank. DDP
+  training does not need this.
+- Evidence: `tests/distributed/native_nccl_smoke.py` in PR #18031, run on two
+  GPUs with `python -m jittor.distributed.launch -n 2 --backend nccl`: rank 1
+  fails exactly the position-1 check while rank 0 passes all, deterministically.
+- Exit condition: the second collective in a rapid sequence returns correct data
+  on all ranks and the native NCCL smoke passes on every rank.
+
+## KI-DIST-003: FSDP2 multi-rank with a reordered DeviceMesh and a torch-subclass optimizer runs an all_gather on the host
+
+- Severity: Medium (one multi-rank FSDP2 path; the common mesh/optimizer paths
+  are unaffected)
+- Status: Open; found 2026-10-13 on two CUDA ranks. Pre-existing on 2.0-refactor,
+  independent of PR #18031's FSDP2 fix-group import (the clean base fails it
+  identically).
+- Owner: distributed / fsdp2
+- Symptom: `compat/tests/fsdp2/test_fsdp2_nccl.py::TestFSDP2Nccl::`
+  `test_mesh_reordered_shards_custom_adam_and_lifetime` fails during
+  `loss.backward()`: `_globally_used_grads` issues `nccl_all_gather` on a
+  `float32[8]`->`[16]` input that is placed on the host, so
+  `JittorError: No kernel registered for nccl_all_gather on cpu`. The path is a
+  reversed-rank `DeviceMesh` combined with a `torch.optim.Adam` subclass; the
+  non-reordered mesh and the native optimizer paths gather on the device and pass.
+- Cause: not isolated. A Var in the FSDP2 shard / used-gradient path lands on the
+  host instead of the rank's CUDA device under the reordered-mesh + custom
+  (torch-subclass) optimizer combination, so a device-only collective is handed a
+  host input.
+- Workaround: use a non-reordered mesh, or the native optimizer step, until the
+  placement is fixed.
+- Evidence: 2 GPUs via `jtrun --nproc-per-node=2 --backend nccl` (or
+  `python -m jittor.distributed.launch -n 2`): the test fails deterministically on
+  both ranks, while the other eight `test_fsdp2_nccl` cases pass.
+- Exit condition: the collective input is placed on the rank's device and the test
+  passes on every rank.
 
 ## KI-LINT-001: mypy covers the build utilities and part of compat only
 

@@ -41,10 +41,10 @@ def kron_ref(x, y):
 
 
 def tensordot_ref(x, y, dims=2):
-    # a FULL contraction (e.g. dims=2 over two 2-D operands) yields a numpy 0-d scalar;
-    # jittor has no 0-d scalar and returns shape (1,). atleast_1d reconciles that
-    # convention (the value is identical) -- same treatment as reduce_ref / trace.
-    return np.atleast_1d(np.tensordot(x, y, axes=dims))
+    # A FULL contraction (e.g. dims=2 over two 2-D operands) is 0-d in numpy,
+    # torch and jittor alike. This used to lift it to (1,) "because jittor has
+    # no 0-d scalar"; see reduce_ref for why that wrap only invents a mismatch.
+    return np.tensordot(x, y, axes=dims)
 
 
 def cummax_ref(x, dim=0):

@@ -106,9 +106,17 @@ def set_global_seed(seed, different_seed_for_mpi=True):
     np.random.seed(seed)
     try:
         import cupy
+    except ImportError:
+        return
+    try:
         cupy.random.seed(seed)
-    except:
-        pass
+    except Exception as error:
+        # Installed but unusable here, e.g. no CUDA device: the caller still
+        # gets every other RNG seeded, and is told this one was not.
+        import warnings
+        warnings.warn(f"set_global_seed: cupy is installed but could not be "
+                      f"seeded ({type(error).__name__}: {error}); its random "
+                      f"numbers will not be reproducible.", stacklevel=2)
 
 
 def _seed_jittor_at_import():

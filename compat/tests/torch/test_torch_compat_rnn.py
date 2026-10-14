@@ -10,14 +10,17 @@ from _helpers import capability as _test_capability
 import unittest
 import numpy as np
 import jittor as jt
+import torch
 from torch import nn
 
 _DEVICES = [("cpu", 0)] + ([("cuda", 1)] if _test_capability.any_accelerator_enabled(backend=jt) else [])
 
 
 def both_devices(fn):
+    # A module built with no ``device=`` lives on the CPU, as in torch, so the
+    # CUDA round builds it inside ``torch.device("cuda")``.
     for name, use_cuda in _DEVICES:
-        with jt.flag_scope(use_cuda=use_cuda):
+        with jt.flag_scope(use_cuda=use_cuda), torch.device(name):
             fn(name)
 
 

@@ -1,4 +1,5 @@
 """Stateful embedding modules exposed through :mod:`jittor.nn`."""
+
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
@@ -56,9 +57,7 @@ class Embedding(jt.Module):
         )
 
     def reset_parameters(self):
-        weight = jt.init.gauss(
-            [self.num_embeddings, self.embedding_dim], self.weight.dtype
-        )
+        weight = jt.init.gauss([self.num_embeddings, self.embedding_dim], self.weight.dtype)
         if self.padding_idx is not None:
             weight[self.padding_idx] = 0
         self.weight.update(weight)

@@ -38,15 +38,23 @@ def _supports_fused_sgd(tensors, *args, **kwargs):
     return True
 
 
-def _fused_sgd_cuda(entries, lr, momentum, weight_decay, dampening, nesterov):
+def _fused_sgd_cuda(entries, lr, momentum, weight_decay, dampening, nesterov, step=1):
     """`entries` is a list of (param, grad, velocity). Returns [(new_p, new_v)].
 
     `lr` may be a one-element float32 Var instead of a number: the kernel then
     reads the rate on the device (see `accepts_live_lr`).
 
     ``fused_sgd`` (src/ops/composite/fused_sgd_op.cc) updates the parameters
-    and velocities in place: its outputs share the inputs' storage. The
-    velocity is handed back as the same Var, so nothing rebinds it.
+    and velocities in place: its outputs share the inputs' storage. Without
+    momentum the kernel never touches the velocity, which is handed back as
+    the same Var so nothing rebinds it. With momentum the op's velocity output
+    is handed back: sharing storage does not make the old Var depend on the
+    op, so a read of the momentum buffer before anything read the parameter
+    would see the buffer as it was before the step.
+
+    ``step`` 1 marks every velocity in `entries` as on its first update: it is
+    seeded from the undampened gradient, as PyTorch does, rather than going
+    through the dampened recurrence. The caller groups the entries by that.
     """
     live = [lr] if isinstance(lr, jt.Var) else []
     params = [e[0] for e in entries]
@@ -54,8 +62,9 @@ def _fused_sgd_cuda(entries, lr, momentum, weight_decay, dampening, nesterov):
     vels = [e[2] for e in entries]
     outs = jt.fused_sgd(params, vels, grads, 0.0 if live else float(lr),
                         float(momentum), float(weight_decay), float(dampening),
-                        bool(nesterov), False, live)
-    return list(zip(outs[:len(entries)], vels))
+                        bool(nesterov), False, bool(step <= 1), live)
+    plain = momentum == 0 and dampening == 0 and not nesterov
+    return list(zip(outs[:len(entries)], vels if plain else outs[len(entries):]))
 
 
 #: Takes the learning rate as a device Var as well as a number.

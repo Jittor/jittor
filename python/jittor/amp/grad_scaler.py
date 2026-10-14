@@ -65,16 +65,9 @@ def _device_scalar(like, value):
     part of a step being captured.
     """
     jt = _jittor()
-    core = jt.core
-    token = None
-    backend = like.placement_backend
-    if backend >= 0:
-        token = core._set_tensor_placement(backend, max(int(like.device_id), 0))
-    try:
+    from jittor._core.var import placement_scope_like
+    with placement_scope_like(like):
         var = jt.array(np.array([value], np.float32))
-    finally:
-        if token is not None:
-            core._reset_tensor_placement(token)
     before = jt.flags.keep_graph
     jt.flags.keep_graph = 0
     try:
