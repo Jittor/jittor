@@ -392,6 +392,7 @@ include docs/results/2026-10-14-graph-replay-retain-budget.md
 include docs/results/2026-10-14-optimizer-checkpoint-continuation.md
 include docs/results/2026-10-15-bf16-fsdp2-checkpoint-continuation.md
 include docs/results/2026-10-15-checkpoint-state-options.md
+include docs/results/2026-10-15-cuda-extension-philox.md
 include docs/results/2026-10-15-cuda13-toolchain-packaging.md
 include docs/results/2026-10-15-deepspeed-engine-prerequisites.md
 include docs/results/2026-10-15-deepspeed-zero-engine.md

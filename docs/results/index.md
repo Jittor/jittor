@@ -57,6 +57,7 @@
 2026-10-15-native-zero-optimizer
 2026-10-15-openmmlab-training-oracles
 2026-10-15-tensor-detach-and-factory-leaf
+2026-10-15-cuda-extension-philox
 ```
 
 ## 按主题索引
@@ -103,3 +104,4 @@
 | [原生 ZeRO1 状态分片](2026-10-15-native-zero-optimizer.md) | CPU 与双卡 NCCL 训练恢复已验；限定 Stage 1，不含 FSDP/TP 或多机 | 2026-10-15 |
 | [OpenMMLab 真实训练对拍](2026-10-15-openmmlab-training-oracles.md) | MMEngine/MMCV 的 CPU、CUDA 四条 L3 证据；限定真实 train_step 场景 | 2026-10-15 |
 | [Tensor detach 与工厂梯度边界](2026-10-15-tensor-detach-and-factory-leaf.md) | CPU/CUDA 原地 detach、默认梯度发布和 bf16 新叶子契约通过；双卡 Engine 仍待验 | 2026-10-15 |
+| [CUDA 扩展 Philox 状态](2026-10-15-cuda-extension-philox.md) | 实际 CUDA RNG 重放与融合 FlashAttention 训练回归；独立 Torch 对拍仍待验 | 2026-10-15 |
