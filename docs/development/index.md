@@ -24,7 +24,6 @@ async-error-diagnostics
 test-system
 static-graph-replay
 npu-validation-templates
-acl-torch-npu-op-parity
 known-issues/parallel-compiler-segfault
 ```
 
@@ -41,5 +40,4 @@ known-issues/parallel-compiler-segfault
 | [异步错误诊断契约](async-error-diagnostics.md) | 有界发射记录环，与图元数据的区别 |
 | [测试体系](test-system.md) | 测试分层、门禁与验证口径；可选 fixture、手动脚本与维护者探针 |
 | [NPU 缺陷与性能记录模板](npu-validation-templates.md) | 昇腾验证结论要写进 `docs/results/` 的哪些字段 |
-| [ACL 对齐 torch_npu 单算子性能(迁移 TODO)](acl-torch-npu-op-parity.md) | 关闭 device-bound 单算子差距的逐项任务清单(KI-BACKEND-017) |
 | [并行编译器：文件级死锁与算子级段错误](known-issues/parallel-compiler-segfault.md) | `KI-COMPILER-001` 的调查记录：两个同名不同因的失败、复现协议与验收门槛 |
