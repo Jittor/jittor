@@ -43,7 +43,6 @@ def setUpModule():
 _REQUIRED_HEADERS = {
     "cuda_runtime": "cuda_runtime.h",
     "cuda_cccl": os.path.join("cub", "cub.cuh"),
-    "npp": "npp.h",
     "cublas": "cublas.h",
     "cudnn": "cudnn.h",
     "cufft": "cufft.h",
@@ -448,6 +447,65 @@ class TestCudaWheel(unittest.TestCase):
                 r"nvidia-cuda-cccl==13\.3\.4\.3\.1 is required, found 13\.0\.85"):
             cuda_wheel.find_pip_nvcc(self.fixture.registry)
 
+    def test_the_cuda_12_2_2_wheel_set_resolves_without_the_cccl_wheel(self):
+        """``cuda-toolkit[...]==12.2.2`` installs no CCCL 12.9 wheel.
+
+        Requiring it declined the whole stack, the build fell back to a
+        system CUDA that was only a compiler, and failed with "cublas.h not
+        found". An nvcc 12.x compiles CUB with its own CCCL instead.
+        """
+        self.fixture.distributions.pop("nvidia-cuda-cccl-cu12")
+        cccl_root = str(self.fixture.components["cuda_cccl"])
+
+        stack = self.fixture.discover()
+
+        self.assertNotIn("cuda_cccl", stack.components)
+        self.assertEqual(stack.nvcc_max_major, 12)
+        self.assertNotIn(os.path.join(cccl_root, "include"), stack.include_dirs())
+        self.assertEqual(stack.include_dirs("cuda_cccl"), [])
+        self.assertEqual(
+            stack.include_dirs("cublas"),
+            [str(self.fixture.components["cublas"] / "include")])
+        self.assertTrue(stack.fingerprint.startswith("pipcu122_"))
+        self.assertNotEqual(stack.fingerprint, _WheelStackFixture(
+            Path(self.temporary_directory.name) / "complete").discover().fingerprint)
+
+    def test_a_cccl_wheel_outside_its_pin_is_left_to_the_compiler(self):
+        """12.2.140's CCCL wheel lacks libcu++; putting it ahead of the
+        compiler's own CCCL breaks every CUB kernel, so it is not used."""
+        self.fixture.distributions["nvidia-cuda-cccl-cu12"].version = "12.2.140"
+
+        stack = self.fixture.discover()
+
+        self.assertNotIn("cuda_cccl", stack.components)
+        self.assertEqual(stack.nvcc_max_major, 12)
+
+    def test_nvcc_13_without_the_cccl_wheel_names_it(self):
+        """nvcc 13's own CCCL 3 does not build against CUDA 12 headers."""
+        self.fixture.distributions.pop("nvidia-cuda-cccl-cu12")
+
+        report = self.fixture.inspect(nvcc_version="13.4.92")
+
+        self.assertIsNone(report.stack)
+        self.assertIn("nvcc 13.4.92 needs nvidia-cuda-cccl-cu12==12.9.27",
+                      report.reason)
+        self.assertFalse(report.broken)
+        self.assertIsNotNone(self.fixture.discover(nvcc_version="12.9.86"))
+
+    def test_an_unusable_stack_without_the_cccl_wheel_is_not_fatal(self):
+        """Without the CCCL wheel the other wheels may be torch's, and the
+        system CUDA is a supported fallback; only a jittor[cuda12] install
+        that resolved and then failed validation is fatal by default."""
+        self.fixture.distributions.pop("nvidia-cuda-cccl-cu12")
+        self.fixture.library_paths["cudnn"].unlink()
+
+        report = self.fixture.inspect()
+
+        self.assertIsNone(report.stack)
+        self.assertIn("libcudnn", report.reason)
+        self.assertFalse(report.broken)
+        self.assertIsNone(self.fixture.discover(strict=None))
+
     def test_fingerprint_is_order_independent_and_version_sensitive(self):
         stack = self.fixture.discover()
         version_text = ";".join(
@@ -596,6 +654,16 @@ class TestLocalNvccSelection(unittest.TestCase):
         chosen, skipped = cuda_wheel.select_local_nvcc([pip], self._version_of)
         self.assertIsNone(chosen)
         self.assertEqual(skipped, [])
+
+    def test_a_stack_without_cccl_takes_nvcc_12_only(self):
+        later = self._nvcc("cuda-13.0", (13, 0, 88))
+        fitting = self._nvcc("cuda-12.2", (12, 2, 140))
+
+        chosen, skipped = cuda_wheel.select_local_nvcc(
+            [later, fitting], self._version_of, max_major=12)
+
+        self.assertEqual(chosen, fitting)
+        self.assertEqual(skipped, [(later, "nvcc 13.0.88 is outside 12.2 through 12.x")])
 
     def test_no_fitting_local_nvcc_returns_none(self):
         old = self._nvcc("cuda-12.1", (12, 1, 105))

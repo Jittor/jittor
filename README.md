@@ -283,8 +283,8 @@ Jittor 会从那里拷贝而不是下载。`python -m jittor_utils.preflight` �
 ### CUDA 12 component wheels / CUDA 12 组件包
 
 On Linux x86_64, the `cuda12` extra installs CUDA 12 runtime wheels (12.2
-or later), cuDNN 8.9.7 through 9.x, the NPP headers used by Jittor, and the
-CCCL 2 headers (CUB, Thrust) its kernels compile against, plus a pinned CUDA
+or later), cuDNN 8.9.7 through 9.x, and the CCCL 2 headers (CUB, Thrust) its
+kernels compile against, plus a pinned CUDA
 13.4 `nvcc` as a fallback compiler (the CUDA 12 compiler wheel has no `nvcc`
 driver). The host needs only the NVIDIA driver and the C++ compiler Jittor
 always needs; no system CUDA toolkit or cuDNN, and no `CUDA_HOME` or
@@ -306,9 +306,14 @@ CUDA library is loaded from the pip wheels, never from `/usr/local/cuda`, a
 distribution directory, or `LD_LIBRARY_PATH`; a missing or mismatched wheel
 fails the import and names the package.
 
+CUDA 12 wheels installed some other way (for example
+`cuda-toolkit[...]==12.2.2`) are used too, even without the CCCL 2 wheel: a
+local `nvcc` 12.x then compiles CUB and Thrust with its own CCCL. `nvcc` 13
+needs `nvidia-cuda-cccl-cu12`, because its own CCCL 3 does not build against
+CUDA 12 runtime headers.
+
 Linux x86_64 的 `cuda12` extra 安装 CUDA 12 运行时（12.2 及以上）、cuDNN
-8.9.7–9.x、Jittor 编译依赖的 NPP 头文件和 kernel 编译所用的 CCCL 2 头文件（CUB、
-Thrust），并附带 CUDA 13.4 `nvcc` 作为备用编译器（CUDA 12 的编译器 wheel 里没有
+8.9.7–9.x 和 kernel 编译所用的 CCCL 2 头文件（CUB、Thrust），并附带 CUDA 13.4 `nvcc` 作为备用编译器（CUDA 12 的编译器 wheel 里没有
 `nvcc`）。宿主机只需要 NVIDIA 驱动和 Jittor 本来就要的 C++ 编译器；不需要系统 CUDA
 或 cuDNN，也不需要设置 `CUDA_HOME` 或 `LD_LIBRARY_PATH`。
 
@@ -323,6 +328,10 @@ kernel 的 `nvcc`，用第一个合格的；都不合格时用 pip 的 `nvcc`。
 不接受 gcc 14，CUDA 12.x 的数学头文件与 glibc 2.41 冲突）。无论编译器来自哪里，
 CUDA 库一律从 pip 包加载，不会用 `/usr/local/cuda`、发行版目录或 `LD_LIBRARY_PATH`
 里的库；缺包或版本不符时 import 直接报错并指出是哪个包。
+
+用其他方式装好的 CUDA 12 包（例如 `cuda-toolkit[...]==12.2.2`）即使没有 CCCL 2 包
+也会被使用：此时由本机 `nvcc` 12.x 用自带的 CCCL 编译 CUB 和 Thrust。`nvcc` 13 需要
+`nvidia-cuda-cccl-cu12`，因为它自带的 CCCL 3 无法配合 CUDA 12 运行时头文件编译。
 
 ```bash
 python -m pip install "jittor[cuda12]"

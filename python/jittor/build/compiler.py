@@ -713,11 +713,16 @@ def _discover_cuda_compiler(requested_backend):
         return build_env("nvcc_path", configured_nvcc)
 
     cuda_wheel = install_cuda.cuda_wheel
-    if cuda_wheel.inspect_cuda_wheel_stack().stack is not None:
+    stack = cuda_wheel.inspect_cuda_wheel_stack().stack
+    if stack is not None:
         # jittor[cuda12] supplies every CUDA library; only the compiler may be
         # local, because the CUDA 12 pip compiler wheel has no nvcc driver.
+        # A stack without the CCCL wheel takes nvcc 12.x only. The pip nvcc
+        # 13 is still returned below, and get_cuda_wheel_stack then names the
+        # missing CCCL wheel.
         local_nvcc, skipped = cuda_wheel.select_local_nvcc(
-            _local_nvcc_candidates(), _local_nvcc_version)
+            _local_nvcc_candidates(), _local_nvcc_version,
+            stack.nvcc_max_major)
         for path, reason in skipped:
             LOG.i("Not using local nvcc ", path, ": ", reason)
         if local_nvcc:
@@ -729,12 +734,22 @@ def _discover_cuda_compiler(requested_backend):
             LOG.i("No local nvcc fits the CUDA 12 pip wheels; using ", pip_nvcc)
             return build_env("nvcc_path", pip_nvcc)
         low_major, low_minor = cuda_wheel.STACK_NVCC_MIN
-        raise cuda_wheel.CudaWheelError(
-            "CUDA 12 pip libraries are installed, but no local nvcc %d.%d "
-            "through %d.x was found and %s==%s is not installed; reinstall "
-            "jittor[cuda12]" % (
-                low_major, low_minor, cuda_wheel.STACK_NVCC_MAX_MAJOR,
-                cuda_wheel.CUDA_NVCC_DISTRIBUTION, cuda_wheel.CUDA_NVCC_VERSION))
+        if "cuda_cccl" not in stack.components:
+            # Not jittor[cuda12]: these are most likely torch's wheels, and a
+            # system nvcc 13 with its own toolkit has always been the way to
+            # build there. Search for it below; get_cuda_wheel_stack then
+            # says why the wheels are not used.
+            LOG.i("No local nvcc %d.%d through %d.x fits the CUDA 12 pip "
+                  "wheels, which lack %s; searching for the system CUDA" % (
+                      low_major, low_minor, stack.nvcc_max_major,
+                      cuda_wheel.component_requirement("cuda_cccl")[0]))
+        else:
+            raise cuda_wheel.CudaWheelError(
+                "CUDA 12 pip libraries are installed, but no local nvcc %d.%d "
+                "through %d.x was found and %s==%s is not installed; reinstall "
+                "jittor[cuda12]" % (
+                    low_major, low_minor, stack.nvcc_max_major,
+                    cuda_wheel.CUDA_NVCC_DISTRIBUTION, cuda_wheel.CUDA_NVCC_VERSION))
 
     if not cuda_wheel._truthy(os.environ.get("JITTOR_CUDA_WHEEL_DISABLE")):
         pip_nvcc = cuda_wheel.find_pip_nvcc()

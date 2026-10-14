@@ -230,6 +230,67 @@ def test_explicit_cpu_skips_every_cuda_discovery_and_installation_service():
     assert not calls
 
 
+def _cuda_compiler_discovery(monkeypatch, stack_components, local_version):
+    """`_discover_cuda_compiler` alone, with a resolved wheel stack and one
+    local nvcc of `local_version`; the system search finds `/system/nvcc`."""
+    monkeypatch.delenv("JT_BUILD_NVCC_PATH", raising=False)
+    monkeypatch.delenv("nvcc_path", raising=False)
+    monkeypatch.delenv("JITTOR_CUDA_WHEEL_DISABLE", raising=False)
+    cuda_wheel = _load("cuda_wheel")
+    stack = cuda_wheel.CudaWheelStack(
+        {name: "/wheels/" + name for name in stack_components},
+        {name: "1.0" for name in stack_components})
+    monkeypatch.setattr(cuda_wheel, "inspect_cuda_wheel_stack",
+                        lambda: cuda_wheel.CudaWheelReport(stack, None, 1, False))
+    monkeypatch.setattr(cuda_wheel, "find_pip_nvcc", lambda: None)
+    monkeypatch.setattr(cuda_wheel, "select_local_nvcc",
+                        lambda candidates, version_of, max_major: (
+                            candidates[0] if cuda_wheel.nvcc_fits_stack(
+                                ".".join(map(str, local_version)), max_major)
+                            else None, []))
+    path = ROOT / "python/jittor/build/compiler.py"
+    tree = ast.parse(path.read_text())
+    function = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                    and node.name == "_discover_cuda_compiler")
+    namespace = {
+        "os": os, "build_env": build_env,
+        "LOG": SimpleNamespace(i=lambda *args: None, w=lambda *args: None),
+        "install_cuda": SimpleNamespace(cuda_wheel=cuda_wheel,
+                                        has_installation=lambda: False,
+                                        install_cuda=lambda: None),
+        "_local_nvcc_candidates": lambda: ["/local/nvcc"],
+        "_local_nvcc_version": lambda path: local_version,
+        "env_or_try_find": lambda name, exe: "/system/nvcc",
+        "try_find_exe": lambda path: None,
+    }
+    exec(compile(ast.Module(body=[function], type_ignores=[]), str(path), "exec"), namespace)
+    return cuda_wheel, namespace["_discover_cuda_compiler"]
+
+
+_TORCH_LIKE_STACK = ("cuda_runtime", "cublas", "cuda_nvrtc", "cudnn", "cufft",
+                     "curand", "cusparse", "nvjitlink", "nvtx", "nccl")
+
+
+def test_cuda_wheels_without_cccl_and_a_system_nvcc_13_keep_the_system_cuda(monkeypatch):
+    """torch's CUDA 12 wheels resolve as a stack but have no CCCL wheel, so
+    nvcc 13 cannot build against them; the system CUDA it belongs to must
+    still be found, as before the CCCL wheel became optional."""
+    _, discover = _cuda_compiler_discovery(monkeypatch, _TORCH_LIKE_STACK, (13, 0, 88))
+    assert discover(None) == "/system/nvcc"
+
+
+def test_a_jittor_cuda12_stack_without_a_compiler_still_names_the_package(monkeypatch):
+    cuda_wheel, discover = _cuda_compiler_discovery(
+        monkeypatch, _TORCH_LIKE_STACK + ("cuda_cccl",), (11, 8, 89))
+    with pytest.raises(cuda_wheel.CudaWheelError, match="reinstall jittor\\[cuda12\\]"):
+        discover(None)
+
+
+def test_cuda_wheels_without_cccl_take_a_local_nvcc_12(monkeypatch):
+    _, discover = _cuda_compiler_discovery(monkeypatch, _TORCH_LIKE_STACK, (12, 2, 140))
+    assert discover(None) == "/local/nvcc"
+
+
 @pytest.mark.parametrize("name", ["setup_cuda_extern", "setup_cuda_lib", "setup_cub",
                                   "setup_cutt", "_load_cuda_library"])
 def test_compatible_library_loaders_keep_corex_but_not_acl_or_rocm(name):

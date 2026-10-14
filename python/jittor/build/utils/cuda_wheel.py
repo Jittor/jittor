@@ -55,9 +55,8 @@ CUDA12_COMPONENTS = (
     # rest: 12.2.140's wheel lacks most of libcu++ (no <cuda/std/utility>,
     # which CUB includes), and 12.9 is the last CCCL 2.x and works with every
     # compiler in STACK_NVCC_MIN..STACK_NVCC_MAX_MAJOR. Nothing else pins it.
+    # Optional: see OPTIONAL_COMPONENTS.
     ("cuda_cccl", "nvidia-cuda-cccl-cu12", "==12.9.27", "nvidia/cuda_cccl"),
-    # cuda_limits.h includes the NPP header for CUDA min/max constants.
-    ("npp", "nvidia-npp-cu12", ">=12.2.1.4,<13", "nvidia/npp"),
     ("cublas", "nvidia-cublas-cu12", ">=12.2.5.6,<13", "nvidia/cublas"),
     ("cuda_nvrtc", "nvidia-cuda-nvrtc-cu12", ">=12.2.140,<13", "nvidia/cuda_nvrtc"),
     ("cudnn", "nvidia-cudnn-cu12", ">=8.9.7,<10", "nvidia/cudnn"),
@@ -69,12 +68,24 @@ CUDA12_COMPONENTS = (
     ("nccl", "nvidia-nccl-cu12", ">=2.18.3,<3", "nvidia/nccl"),
 )
 
+#: Components a stack may lack. Without the CCCL wheel -- the CUDA 12.2.2
+#: wheel set has none, or only 12.2.140's, which lacks libcu++ -- an nvcc 12.x
+#: compiles CUB and Thrust with its own CCCL 2.x, as it always has. Only nvcc
+#: 13, whose own CCCL 3 does not build against CUDA 12 runtime headers, needs
+#: it; ``nvcc_fits_stack`` refuses that pairing. Requiring it here made every
+#: stack installed without jittor[cuda12] fall back to the system CUDA, and
+#: on a machine whose system CUDA is only a compiler the build then failed
+#: with "cublas.h not found".
+OPTIONAL_COMPONENTS = frozenset(("cuda_cccl",))
+
 # Compilers that build against the CUDA 12 runtime headers above, nvcc 12.2
 # against 12.9's included. Older ones predate the 12.2 headers; newer majors
 # are untested. CRT headers always come from the compiler's own toolkit,
-# since the runtime wheel ships none.
+# since the runtime wheel ships none. Without the CCCL wheel the newest
+# major is 12; see OPTIONAL_COMPONENTS.
 STACK_NVCC_MIN = (12, 2)
 STACK_NVCC_MAX_MAJOR = 13
+STACK_NVCC_MAX_MAJOR_WITHOUT_CCCL = 12
 
 # The CUDA 12 pip compiler component does not ship the ``nvcc`` driver. This
 # standalone compiler wheel does, and is the fallback when no local nvcc fits.
@@ -244,7 +255,7 @@ class CudaWheelStack:
         self.components = dict(components)
         self.versions = dict(versions)
         version_text = ";".join(
-            "%s=%s" % (name, self.versions[name])
+            "%s=%s" % (name, self.versions.get(name, "absent"))
             for name, _, _, _ in CUDA12_COMPONENTS
         )
         digest = hashlib.sha256(version_text.encode("ascii")).hexdigest()[:12]
@@ -256,6 +267,13 @@ class CudaWheelStack:
         """``major.minor`` of the CUDA runtime wheel, e.g. ``"12.8"``."""
         return ".".join(
             str(part) for part in _version_tuple(self.versions["cuda_runtime"])[:2])
+
+    @property
+    def nvcc_max_major(self):
+        """The newest nvcc major that builds against this stack."""
+        if "cuda_cccl" in self.components:
+            return STACK_NVCC_MAX_MAJOR
+        return STACK_NVCC_MAX_MAJOR_WITHOUT_CCCL
 
     @property
     def cudnn_major(self):
@@ -270,7 +288,7 @@ class CudaWheelStack:
         if component is not None:
             roots = [self.component_dir(component)]
         else:
-            roots = [self.components[name] for name, _, _, _ in CUDA12_COMPONENTS]
+            roots = [self.components.get(name) for name, _, _, _ in CUDA12_COMPONENTS]
         return _unique_existing(
             os.path.join(root, "include") for root in roots if root
         )
@@ -279,7 +297,7 @@ class CudaWheelStack:
         if component is not None:
             roots = [self.component_dir(component)]
         else:
-            roots = [self.components[name] for name, _, _, _ in CUDA12_COMPONENTS]
+            roots = [self.components.get(name) for name, _, _, _ in CUDA12_COMPONENTS]
         return _unique_existing(
             os.path.join(root, "lib") for root in roots if root
         )
@@ -348,7 +366,6 @@ def _validate_stack(stack):
     required_headers = {
         "cuda_runtime": "cuda_runtime.h",
         "cuda_cccl": os.path.join("cub", "cub.cuh"),
-        "npp": "npp.h",
         "cublas": "cublas.h",
         "cudnn": "cudnn.h",
         "cufft": "cufft.h",
@@ -357,6 +374,8 @@ def _validate_stack(stack):
         "nccl": "nccl.h",
     }
     for component, header in required_headers.items():
+        if component in OPTIONAL_COMPONENTS and component not in stack.components:
+            continue
         if not any(os.path.isfile(os.path.join(path, header))
                    for path in stack.include_dirs(component)):
             raise CudaWheelError(
@@ -391,10 +410,10 @@ def _validate_stack(stack):
 #:             all, at any version -- the signal for whether the user asked
 #:             for this stack or merely has some ``nvidia-*`` wheels because
 #:             something else (torch, most often) depends on them
-#: ``broken``  every component resolved inside its range and the set then
-#:             failed validation. That includes nvidia-cuda-cccl-cu12 and
-#:             nvidia-npp-cu12, which nothing but jittor[cuda12] installs, so
-#:             this is a broken ``jittor[cuda12]`` and nothing else
+#: ``broken``  every component resolved inside its range, nvidia-cuda-cccl-cu12
+#:             among them, and the set then failed validation. Nothing but
+#:             jittor[cuda12] installs that CCCL wheel, so this is a broken
+#:             ``jittor[cuda12]`` and nothing else
 #: ``requirers`` for a component outside its range, the installed packages
 #:             whose requirement the out-of-range version satisfies, as
 #:             ``"torch 2.4.1 requires nvidia-cuda-runtime-cu12==12.1.105"``
@@ -405,14 +424,17 @@ CudaWheelReport = collections.namedtuple(
     defaults=((),))
 
 
-def nvcc_fits_stack(nvcc_version):
-    """Whether an nvcc of this version can build against the CUDA 12 stack."""
+def nvcc_fits_stack(nvcc_version, max_major=STACK_NVCC_MAX_MAJOR):
+    """Whether an nvcc of this version can build against the CUDA 12 stack.
+
+    ``max_major`` is the stack's ``nvcc_max_major`` once one is resolved.
+    """
     version = _version_tuple(nvcc_version)
     return (len(version) >= 2 and version[:2] >= STACK_NVCC_MIN
-            and version[0] <= STACK_NVCC_MAX_MAJOR)
+            and version[0] <= max_major)
 
 
-def select_local_nvcc(candidates, version_of):
+def select_local_nvcc(candidates, version_of, max_major=STACK_NVCC_MAX_MAJOR):
     """The first local nvcc that fits the stack, and why the others did not.
 
     ``candidates`` are paths in preference order; ``version_of(path)`` returns
@@ -439,11 +461,10 @@ def select_local_nvcc(candidates, version_of):
             skipped.append((path, str(error)))
             continue
         version_text = ".".join(str(part) for part in _version_tuple(version))
-        if nvcc_fits_stack(version_text):
+        if nvcc_fits_stack(version_text, max_major):
             return path, skipped
         skipped.append((path, "nvcc %s is outside %d.%d through %d.x" % (
-            version_text, STACK_NVCC_MIN[0], STACK_NVCC_MIN[1],
-            STACK_NVCC_MAX_MAJOR)))
+            version_text, STACK_NVCC_MIN[0], STACK_NVCC_MIN[1], max_major)))
     return None, skipped
 
 
@@ -569,12 +590,18 @@ def inspect_cuda_wheel_stack(nvcc_version=None, distribution=None,
     reason = None
     requirers = ()
     for component, dist_name, specifier, relative_path in CUDA12_COMPONENTS:
+        optional = component in OPTIONAL_COMPONENTS
         try:
             dist = distribution(dist_name)
         except importlib_metadata.PackageNotFoundError:
-            reason = reason or "%s is not installed" % dist_name
+            if not optional:
+                reason = reason or "%s is not installed" % dist_name
             continue
         actual = str(dist.version)
+        if optional and not _specifier_matches(specifier, actual):
+            # Some other version (CUDA 12.2.2's set carries 12.2.140, which
+            # lacks libcu++) is left to the compiler's own CCCL, not used.
+            continue
         if not _specifier_matches(specifier, actual):
             if reason is None:
                 reason = "%s%s is required, found %s" % (
@@ -601,11 +628,28 @@ def inspect_cuda_wheel_stack(nvcc_version=None, distribution=None,
         _validate_stack(stack)
     except CudaWheelError as error:
         # Every component is installed inside its range and the set is still
-        # unusable. Nothing outside jittor[cuda12] installs the CCCL and NPP
-        # wheels, so this is that installation and it is broken.
+        # unusable. With the CCCL wheel, which nothing outside jittor[cuda12]
+        # installs, that installation is the one that is broken; without it
+        # the wheels may well be torch's, and the system CUDA still serves.
         return CudaWheelReport(
-            None, str(error), len(CUDA12_COMPONENTS), True)
-    return CudaWheelReport(stack, None, len(CUDA12_COMPONENTS), False)
+            None, str(error), len(components), "cuda_cccl" in components)
+    if nvcc_version and not nvcc_fits_stack(nvcc_version, stack.nvcc_max_major):
+        return CudaWheelReport(
+            None,
+            "nvcc %s needs %s%s, whose CCCL 2.x builds against the CUDA 12 "
+            "runtime headers; install it or use nvcc %d.%d through %d.x" % (
+                (nvcc_version,) + component_requirement("cuda_cccl")
+                + (STACK_NVCC_MIN[0], STACK_NVCC_MIN[1], stack.nvcc_max_major)),
+            len(components), False)
+    return CudaWheelReport(stack, None, len(components), False)
+
+
+def component_requirement(component):
+    """``(distribution, specifier)`` of one of CUDA12_COMPONENTS."""
+    for name, dist_name, specifier, _ in CUDA12_COMPONENTS:
+        if name == component:
+            return dist_name, specifier
+    raise KeyError(component)
 
 
 def _count_installed(distribution):

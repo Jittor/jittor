@@ -37,7 +37,6 @@ cuda12 = [
     # jittor[cuda12] and torch 2.5+ uninstallable together. Keep in sync with
     # CUDA12_COMPONENTS in python/jittor/build/utils/cuda_wheel.py.
     "nvidia-cuda-runtime-cu12>=12.2.140,<13; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
-    "nvidia-npp-cu12>=12.2.1.4,<13; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
     "nvidia-cublas-cu12>=12.2.5.6,<13; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
     "nvidia-cuda-nvrtc-cu12>=12.2.140,<13; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
     "nvidia-cufft-cu12>=11.0.8.103,<12; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
