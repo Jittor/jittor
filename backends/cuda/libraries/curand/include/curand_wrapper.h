@@ -35,6 +35,13 @@ int curand_generator_seed();
 // @pyjt(curand_restore_state)
 void curand_restore_state(int device, int seed, int64 offset);
 
+// Reserve Philox positions for a CUDA extension from the checkpointed device
+// cursor. The host cuRAND generator is moved to the same resulting cursor, so
+// mixed native/extension histories can be restored with the existing state.
+// Returns [seed, first_offset]. The increment is rounded up to four positions.
+// @pyjt(curand_reserve_philox)
+vector<int64> curand_reserve_philox(int64 increment);
+
 // Destroys the generator, reporting a failure instead of raising. Idempotent.
 void curand_shutdown();
 
