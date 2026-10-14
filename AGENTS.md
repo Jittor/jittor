@@ -83,7 +83,7 @@ JITTOR_TORCH_SHIM=1 PYTHONPATH=python python -m pytest -q tests/structure
 不带 `JITTOR_TORCH_SHIM=1` 会直接被 pytest 策略拒绝收集。
 
 顶层或文档结构有意调整时，同步更新结构门禁。只暂存当前任务涉及的文件，不使用
-`git add -A`；完成后提交，提交信息用简明中文。
+`git add -A`；完成后提交，提交信息用简明英文。
 
 ## Documentation Ownership
 
