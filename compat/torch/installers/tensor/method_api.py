@@ -1577,11 +1577,17 @@ def _api_nonzero(input, as_tuple=False, **kw):
 
 
 def _api_normal(self, mean=0.0, std=1.0, generator=None):
-    return _ip(self, _owner.jt.normal(float(mean), float(std), self.shape).cast(_jittor_dtype_name(self.dtype)))
+    # Native random factories are differentiable by default. Initialization
+    # supplies values, not a new autograd input to the in-place assignment.
+    with _owner.jt.no_grad():
+        value = _owner.jt.normal(float(mean), float(std), self.shape).cast(_jittor_dtype_name(self.dtype))
+    return _ip(self, value)
 
 
 def _api_uniform(self, a=0.0, b=1.0, generator=None):
-    return _ip(self, (_owner.jt.rand(self.shape) * (b - a) + a).cast(_jittor_dtype_name(self.dtype)))
+    with _owner.jt.no_grad():
+        value = (_owner.jt.rand(self.shape) * (b - a) + a).cast(_jittor_dtype_name(self.dtype))
+    return _ip(self, value)
 
 
 def _api_tolist(self):
