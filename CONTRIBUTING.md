@@ -67,8 +67,7 @@ CI requirements are documented in [`agent/manuals/environment.md`](agent/manuals
 ├── adapters/            # the optional `jittor-torch-adapters` distribution
 ├── tests/               # repository pytest suite; not shipped in wheels
 ├── examples/            # runnable examples and MyST notebook sources
-├── benchmarks/          # ASV performance suite, indexed by commit
-├── bench/               # manual Torch/torch_npu comparison runs, not collected by pytest
+├── benchmarks/          # ASV regressions, Torch comparisons, and ACL measurements
 ├── tools/               # build, docs, lint, release and maintenance commands
 ├── docs/                # the single user- and contributor-facing documentation tree
 ├── agent/               # operational manuals and skills (manuals/ and skills/ only)

@@ -79,8 +79,8 @@ class AccelerateTrainingBenchmarks:
         synchronize("jittor", self.jt, device)
         audit_directory = os.environ.get("JITTOR_ASV_AUDIT_DIR")
         if audit_directory:
-            repo = Path(__file__).resolve().parents[1]
-            sources = ("benchmarks/accelerate_training.py", "compat/torch/grad.py",
+            repo = Path(__file__).resolve().parents[2]
+            sources = ("benchmarks/asv/accelerate_training.py", "compat/torch/grad.py",
                        "compat/torch/installers/tensor/method_api.py",
                        "compat/torch/installers/data.py", "compat/torch/optimizer_api.py",
                        "python/jittor/optim/base.py", "src/runtime/init.cc",

@@ -238,9 +238,9 @@ class TestStage2Delivery(unittest.TestCase):
         self.assertIn("python -m nox -s py313", structure_workflow)
 
     def test_asv_teardown_tolerates_skipped_parameter_setup(self):
-        from benchmarks.operators import OperatorBenchmarks
-        from benchmarks.optimizer_step import OptimizerStepBenchmarks
-        from benchmarks.tiny_llama import TinyLlamaBenchmarks
+        from benchmarks.asv.operators import OperatorBenchmarks
+        from benchmarks.asv.optimizer_step import OptimizerStepBenchmarks
+        from benchmarks.asv.tiny_llama import TinyLlamaBenchmarks
 
         OperatorBenchmarks().teardown("torch", "cpu", "matmul")
         OptimizerStepBenchmarks().teardown("sgd", 32, "cuda")

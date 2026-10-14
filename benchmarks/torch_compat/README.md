@@ -7,7 +7,7 @@
 
 | 设施 | 回答什么 | 规模 |
 | --- | --- | --- |
-| `benchmarks/`（ASV） | 某个算子/小模型跨提交有没有回归 | 算子、tiny Llama |
+| `benchmarks/asv/`（ASV） | 某个算子/小模型跨提交有没有回归 | 算子、tiny Llama |
 | `compat/tests/torch/test_ecosystem_speed.py` | nightly 门禁：单步前向+反向不超过阈值 | 8 层随机配置，只测一步 |
 | **本目录** | 经典工作负载端到端的差距：推理、生成、采样、带优化器的训练 | 已发布模型的真实配置 |
 
@@ -86,10 +86,10 @@ pip install transformers==4.56.2 diffusers==0.35.1 nvidia-ml-py
 ## 运行
 
 ```bash
-python bench/torch_compat/run.py --list
-python bench/torch_compat/run.py --size tiny --torch-python $REF/bin/python   # harness 自检，几分钟
-python bench/torch_compat/run.py --torch-python $REF/bin/python --gpu 1       # 全部
-python bench/torch_compat/run.py --workloads qwen3,sd15_sample --torch-python $REF/bin/python
+python benchmarks/torch_compat/run.py --list
+python benchmarks/torch_compat/run.py --size tiny --torch-python $REF/bin/python   # harness 自检，几分钟
+python benchmarks/torch_compat/run.py --torch-python $REF/bin/python --gpu 1       # 全部
+python benchmarks/torch_compat/run.py --workloads qwen3,sd15_sample --torch-python $REF/bin/python
 ```
 
 `--torch-python` 也可以用环境变量 `REAL_TORCH_PYTHON`。`--workloads` 接受名字或家族前缀
@@ -106,7 +106,7 @@ CUDA 上的 NVML。ACL 上有算子会回退到主机（例如 float64），需�
 
 ```bash
 source $CANN_SET_ENV
-python bench/torch_compat/run.py --device npu --gpu 0 --torch-python $NPU_REF/bin/python
+python benchmarks/torch_compat/run.py --device npu --gpu 0 --torch-python $NPU_REF/bin/python
 ```
 
 每个（工作负载，运行时）都在**全新进程**里跑，显存和 JIT 状态不会串到下一次测量。结果写在
@@ -117,8 +117,8 @@ python bench/torch_compat/run.py --device npu --gpu 0 --torch-python $NPU_REF/bi
 对同机负载很敏感。
 
 ```bash
-python bench/torch_compat/report.py results.json            # 重新出表
-python bench/torch_compat/report.py old.json new.json       # 两次运行对比：Jittor 有没有变快
+python benchmarks/torch_compat/report.py results.json            # 重新出表
+python benchmarks/torch_compat/report.py old.json new.json       # 两次运行对比：Jittor 有没有变快
 ```
 
 ## 怎么读
@@ -151,7 +151,7 @@ python bench/torch_compat/report.py old.json new.json       # 两次运行对比
   fallback（`backend_fallback="error"`）：CUDA 测量里混进 CPU 回退，数字就不再是同一件
   事；`--allow-fallback` 只用于调查。
 
-测量纪律（与 [`bench/README.md`](../README.md)、
+测量纪律（与 [`ACL 测量说明`](../acl/README.md)、
 [`docs/performance/benchmarking.md`](../../docs/performance/benchmarking.md) 相同）：
 
 - 选一张空闲的卡（`--gpu`），不要和单元测试或另一个测速抢同一张卡；

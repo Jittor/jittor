@@ -4,7 +4,7 @@ Writes one ``<model>.npz`` per model holding the initial weights, the inputs,
 the step-0 loss and gradients, the loss trajectory of a short training run and
 the final parameters. ``compare_th.py`` replays all of it in torch.
 
-    python bench/xval/dump_jt.py OUT_DIR [--hf32] [--steps N]
+    python benchmarks/acl/xval/dump_jt.py OUT_DIR [--hf32] [--steps N]
 """
 import argparse
 import os

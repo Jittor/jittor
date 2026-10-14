@@ -2,7 +2,7 @@
   "version": 1,
   "project": "Jittor",
   "project_url": "https://cg.cs.tsinghua.edu.cn/jittor/",
-  "repo": "..",
+  "repo": "../..",
   "branches": [
     "2.0-refactor",
     "2.0"
@@ -12,7 +12,7 @@
   "pythons": [
     "same"
   ],
-  "benchmark_dir": "benchmarks",
+  "benchmark_dir": "benchmarks/asv",
   "env_dir": ".asv/env",
   "results_dir": ".asv/results",
   "html_dir": ".asv/html",

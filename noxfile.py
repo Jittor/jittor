@@ -935,19 +935,19 @@ def _asv_state_path(variable, fallback):
 
 
 def _write_asv_config(root, results_dir, html_dir):
-    config = json.loads((REPO_ROOT / "benchmarks" / "asv.conf.json").read_text(encoding="utf-8"))
+    config = json.loads((REPO_ROOT / "benchmarks" / "asv" / "asv.conf.json").read_text(encoding="utf-8"))
     config.update(
         {
             "repo": str(REPO_ROOT),
             # The checkout being measured, whatever it is called. `asv run`
             # resolves every configured branch before it looks at
-            # --set-commit-hash, and benchmarks/asv.conf.json names the
+            # --set-commit-hash, and benchmarks/asv/asv.conf.json names the
             # upstream branches -- which a fork's branch or a pull request's
             # detached HEAD does not have ("Unknown branch 2.0-refactor in
             # configuration"). `asv publish` then graphs HEAD's first-parent
             # line, which is the history the comparison is against.
             "branches": ["HEAD"],
-            "benchmark_dir": str(REPO_ROOT / "benchmarks"),
+            "benchmark_dir": str(REPO_ROOT / "benchmarks" / "asv"),
             "env_dir": str(root / "asv-env"),
             "results_dir": str(results_dir),
             "html_dir": str(html_dir),

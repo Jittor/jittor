@@ -30,7 +30,7 @@ REQUIRED_DOCUMENTS = (
     "docs/results/index.md",
     "agent/manuals/agent-index.md",
     "agent/manuals/deferred-hardware.md",
-    "benchmarks/asv.conf.json",
+    "benchmarks/asv/asv.conf.json",
     "docs/compatibility/principles.md",
     "docs/notes/complex-dtype.md",
     "docs/development/test-system.md",

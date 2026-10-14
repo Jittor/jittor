@@ -5,14 +5,14 @@ Each workload in ``workloads.py`` is plain PyTorch code. It runs twice, in two
 fresh interpreters: ``--torch-python`` (an independent binary PyTorch) and
 ``--jittor-python`` (whose ``torch`` is Jittor's shim, from this checkout).
 
-    python bench/torch_compat/run.py \\
+    python benchmarks/torch_compat/run.py \\
         --torch-python  /path/to/torch-env/bin/python \\
         --jittor-python /path/to/jittor-env/bin/python
 
-    python bench/torch_compat/run.py --workloads qwen3_decode,sd15_sample
-    python bench/torch_compat/run.py --size tiny          # harness self-check
-    python bench/torch_compat/run.py --compile none,reduce-overhead
-    python bench/torch_compat/run.py --list
+    python benchmarks/torch_compat/run.py --workloads qwen3_decode,sd15_sample
+    python benchmarks/torch_compat/run.py --size tiny          # harness self-check
+    python benchmarks/torch_compat/run.py --compile none,reduce-overhead
+    python benchmarks/torch_compat/run.py --list
 
 Ratio = Jittor time / PyTorch time; below 1 means Jittor is faster. Results go
 to ``$JITTOR_LAB_ROOT/_state/bench-torch-compat/<stamp>/`` as ``results.json``

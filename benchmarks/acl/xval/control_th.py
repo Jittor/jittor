@@ -8,7 +8,7 @@ float32 rounding step. Both networks are pure ReLU, so a difference that small
 eventually flips a ReLU sign, which is a discrete change that then amplifies;
 the transformer has no such branch and stays put.
 
-    python bench/xval/control_th.py DIR [--hf32] [--steps N]
+    python benchmarks/acl/xval/control_th.py DIR [--hf32] [--steps N]
 
 Compare the numbers here with `compare_th.py`'s. When they match, the drift is
 the model's, not the framework's.

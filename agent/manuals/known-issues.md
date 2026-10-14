@@ -731,7 +731,7 @@ workaround.
   507035) -- serialising execution avoids it, which is the key narrowing below.
   `jt.flags.auto_graph_replay=0` avoids the capture path for `sd15_unet_train`
   (losing the replay speedup); re-running sometimes succeeds for it.
-- Evidence: `bench/torch_compat --device npu --workloads sd15_unet_train,
+- Evidence: `benchmarks/torch_compat --device npu --workloads sd15_unet_train,
   resnet50_train`; peer Ascend runs 2026-10-06 and 2026-10-07 under
   `$JITTOR_LAB_ROOT/_state/npu-verify`. Narrowed 2026-10-07 and it is NOT the
   conv op or its tensor layout: (a) the exact repro shape run as a standalone
@@ -765,7 +765,7 @@ workaround.
   still individually trail and `sd15_unet_train`/`resnet50_train` are still
   blocked on KI-BACKEND-016.
 - Status: Limitation, narrowed six times, each against a real paired
-  `bench/torch_compat --device npu` run (same card, same seed), not an
+  `benchmarks/torch_compat --device npu` run (same card, same seed), not an
   isolated probe. (2026-10-06) the first full-suite run measured
   `vit_b16_train` at "~9.9x" from an isolated, unwarmed aclprof capture; the
   properly warmed-up paired run (2026-10-07, 14 workloads, geometric-mean
@@ -1161,7 +1161,7 @@ workaround.
   rather than a software defect, but this session had no CANN-side
   documentation of that engine's dispatch cost to confirm it, so it is
   recorded as observed, not diagnosed.
-- Evidence: `bench/torch_compat --device npu`; peer Ascend runs 2026-10-06
+- Evidence: `benchmarks/torch_compat --device npu`; peer Ascend runs 2026-10-06
   and 2026-10-07 under `$JITTOR_LAB_ROOT/_state/npu-verify`. The post-fix
   12-workload run (`--workloads qwen3_prefill,qwen3_decode_static,
   qwen3_train,resnet50_infer_b1,bert_base_infer,vit_b16_train,
@@ -1342,7 +1342,7 @@ workaround.
 - Workaround: none needed for correctness. Where throughput matters and the
   input cannot contain NaN, reduce on CUDA, or in an integer dtype (`a != a` is
   constant-false there and the compiler deletes it).
-- Evidence: `benchmarks/reductions.py`;
+- Evidence: `benchmarks/asv/reductions.py`;
   [`tests/codegen/test_blocked_reduction_pass.py`](../../tests/codegen/test_blocked_reduction_pass.py)
   guards the blocked max/min fold (combiner, seed, NaN, sign of the identity).
 - Exit condition: the innermost stride is a compile-time constant when it is one
@@ -1542,7 +1542,7 @@ workaround.
   element indexing on large device tensors in hot paths.
 - Evidence: `tests/core/test_var_residency_contract.py`;
   `tools/probes/side_effect_probe.py` (found the `tolist()` spelling);
-  `benchmarks/transfer.py`.
+  `benchmarks/asv/transfer.py`.
 - Exit condition: `numpy()`, `repr()` and element/slice reads leave the source
   Var's `location()` unchanged on real CUDA, a device operation right after such
   a read costs the same as one without it, and the residency contract covers all

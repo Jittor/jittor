@@ -114,14 +114,14 @@ CUDA 参数抛出显式的 ASV skip。真实 PyTorch 是**可选的 oracle**，�
 ## 昇腾 NPU 的手工对照
 
 ASV 套件不覆盖昇腾。ACL 后端与同机 `torch + torch_npu` 的速度和数值对照放在
-[`bench/`](https://github.com/Jittor/jittor/blob/master/bench/README.md)：`bench_jittor.py` / `bench_torch.py` 跑同一组网络
-（规格见 [`bench/models.md`](https://github.com/Jittor/jittor/blob/master/bench/models.md)），`bench/xval/` 把 Jittor 的权重和
-输入灌进 torch 逐步比对 loss 与梯度，`bench/aclprobe/` 是绕开 Jittor 直接调 aclnn 的
+[`benchmarks/acl/`](https://github.com/Jittor/jittor/blob/master/benchmarks/acl/README.md)：`bench_jittor.py` / `bench_torch.py` 跑同一组网络
+（规格见 [`benchmarks/acl/models.md`](https://github.com/Jittor/jittor/blob/master/benchmarks/acl/models.md)），`benchmarks/acl/xval/` 把 Jittor 的权重和
+输入灌进 torch 逐步比对 loss 与梯度，`benchmarks/acl/probes/` 是绕开 Jittor 直接调 aclnn 的
 探针。这些都需要真实设备，**手工运行**，不进 CI，并且要与 ASV 用不同的编译缓存。
 
 那份 README 记录了在这台机器上量出来的三条陷阱：逐次 `sync()` 会把发射和执行串起来、
 A/B 之间重新编译会让先跑的一方系统性占优、`jt.profiler` 的 `TotalTime` 对小算子不可
-相加。长轨迹的数值偏离要先跑 `bench/xval/control_th.py` 的对照再下结论。
+相加。长轨迹的数值偏离要先跑 `benchmarks/acl/xval/control_th.py` 的对照再下结论。
 
 ## CPU 线程绑核
 
@@ -152,15 +152,15 @@ export OMP_PLACES=cores
 
 ```bash
 commit=$(git rev-parse HEAD)
-asv --config benchmarks/asv.conf.json run --python=same --set-commit-hash "$commit"
+asv --config benchmarks/asv/asv.conf.json run --python=same --set-commit-hash "$commit"
 ```
 
 做对比时，建**一个专用的基准 worktree**，只把这个 worktree 切到那两三个被评审的修订，
 每次切换后运行上面的命令。保持相同的编译器、加速器、依赖版本、缓存预热策略和 ASV
 结果目录。**不要跑 `ALL` 或无界的修订区间。** 两个选定提交都有结果之后，用
-`asv --config benchmarks/asv.conf.json compare <base> <candidate>`。
+`asv --config benchmarks/asv/asv.conf.json compare <base> <candidate>`。
 
-这些直接命令要从仓库根目录运行。配置由 `benchmarks/` 拥有，其 `repo: ".."` 相对于
+这些直接命令要从仓库根目录运行。配置由 `benchmarks/asv/` 拥有，其 `repo: "../.."` 相对于
 配置文件解析，而 `benchmark_dir` 和输出目录相对于工作目录解析。维护中的
 `nox -s benchmark` 入口会生成一份使用绝对仓库、基准和外部状态路径的配置，因此移动
 源配置不会把 CI 产物重定向进 checkout。

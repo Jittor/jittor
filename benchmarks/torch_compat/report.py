@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 """Render or compare saved ``run.py`` results.
 
-    python bench/torch_compat/report.py results.json            # table
-    python bench/torch_compat/report.py --markdown results.json
-    python bench/torch_compat/report.py old.json new.json       # Jittor over time
+    python benchmarks/torch_compat/report.py results.json            # table
+    python benchmarks/torch_compat/report.py --markdown results.json
+    python benchmarks/torch_compat/report.py old.json new.json       # Jittor over time
 
 Ratio = Jittor time / PyTorch time. Below 1 means Jittor is faster.
 
