@@ -21,6 +21,7 @@ pipelined-execution
 profiling
 native-sharded-checkpoint
 native-zero-optimizer
+native-tensor-parallel
 ```
 
 ## 按问题索引

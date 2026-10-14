@@ -211,6 +211,16 @@ def _restore_rng(state):
     np.random.set_state(numpy_state)
 
 
+def _tensor_parallel_layout(model):
+    layout = {}
+    for name, parameter in model.named_parameters():
+        if getattr(parameter, "_jittor_tp_spec", None) is not None:
+            from .tensor_parallel import _validate_optimizer_parameter
+            _validate_optimizer_parameter(parameter)
+            layout[name] = dict(parameter._jittor_tp_spec)
+    return layout
+
+
 def save_training_state(model, optimizer, checkpoint_id, *, extra=None,
                         process_group=None, store=None, overwrite=False, timeout=60):
     """Save native owners and each rank's RNG at a completed-step boundary.
@@ -226,6 +236,28 @@ def save_training_state(model, optimizer, checkpoint_id, *, extra=None,
                                  for name, value in model_state.items()},
              "optimizer": _optimizer_state(model, optimizer),
              "rng": RankLocal(_rng_snapshot()), "extra": extra}
+    layout = _tensor_parallel_layout(model)
+    if layout:
+        # Only genuinely sharded leaves are rank-local. Replicated row bias,
+        # ordinary model parameters and optimizer metadata must still agree.
+        state["tensor_parallel"] = {
+            name: dict(spec, rank=RankLocal(spec["rank"]))
+            for name, spec in layout.items()}
+        sharded = {name for name, spec in layout.items() if spec["axis"] is not None}
+        for name in sharded:
+            state["model"][name] = RankLocal(state["model"][name])
+            state["model_stop_grad"][name] = RankLocal(state["model_stop_grad"][name])
+        saved_optimizer = state["optimizer"]
+        groups = saved_optimizer["state"]["defaults"]["param_groups"]
+        for names, group in zip(saved_optimizer["param_names"], groups):
+            for field, values in list(group.items()):
+                tensor_list = isinstance(values, (list, tuple)) and any(
+                    isinstance(value, jt.Var) for value in values)
+                if field == "grads" or tensor_list or field == "momentum_initialized":
+                    if not isinstance(values, (list, tuple)) or len(values) != len(names):
+                        raise ValueError("native checkpoint optimizer tensor-list length mismatch: " + field)
+                    group[field] = type(values)(RankLocal(value) if name in sharded else value
+                                                for name, value in zip(names, values))
     return save(state, checkpoint_id, process_group=process_group, store=store,
                 overwrite=overwrite, timeout=timeout)
 
@@ -244,6 +276,8 @@ def load_training_state(model, optimizer, checkpoint_id, *, process_group=None):
     state = restore_tree(checkpoint_id, manifest, ranks[rank])
     if state["training_version"] != 1:
         raise CheckpointError("unsupported native training checkpoint version")
+    if state.get("tensor_parallel", {}) != _tensor_parallel_layout(model):
+        raise ValueError("native checkpoint tensor-parallel ownership/layout mismatch")
     saved_optimizer = state["optimizer"]
     expected_class = type(optimizer).__module__ + "." + type(optimizer).__qualname__
     if saved_optimizer["class"] != expected_class:

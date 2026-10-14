@@ -397,6 +397,18 @@ class Optimizer(object):
             if _param_requires_grad(p):
                 params_has_grad.append(p)
 
+        # TP shards are different parameters on different ranks. Their
+        # communication adjoints already produce the correct local gradient;
+        # legacy data-parallel synchronization would mix unrelated shards.
+        tp_parameters = [p for p in params if getattr(p, "_jittor_tp_spec", None) is not None]
+        if tp_parameters:
+            from jittor.distributed.tensor_parallel import _validate_optimizer_parameter
+            if self.__input_params:
+                raise NotImplementedError("TP optimizers require explicit jt.grad for input gradients")
+            for parameter in tp_parameters:
+                _validate_optimizer_parameter(parameter)
+        tp_parameter_ids = {id(p) for p in tp_parameters}
+
         # sync prev params
         jt.sync(params_has_grad)
 
@@ -450,14 +462,14 @@ class Optimizer(object):
                     add_dep(gradient._input(0))
 
             for parameter, gradient in entries:
-                if id(parameter) in ddp_parameter_ids:
+                if id(parameter) in ddp_parameter_ids or id(parameter) in tp_parameter_ids:
                     continue
                 reduce_gradient(gradient)
             for gradient in grads[pid:]:
                 reduce_gradient(gradient)
             if self.n_step % self.param_sync_iter == 0:
                 for parameter in params:
-                    if id(parameter) in ddp_parameter_ids:
+                    if id(parameter) in ddp_parameter_ids or id(parameter) in tp_parameter_ids:
                         continue
                     synchronized = collective_broadcast(parameter)
                     if synchronized is not parameter:
