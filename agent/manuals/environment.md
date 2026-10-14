@@ -84,10 +84,38 @@ uv run --locked python -m jittor.selftest
 uv run --locked python tools/run_test_suite.py --tier core --backend cpu
 ```
 
-For a real CUDA run, verify `nvcc` and select the device explicitly:
+For the self-contained Linux x86_64 path, `jittor[cuda12]` installs CUDA 12
+runtime/cuDNN wheels and a pinned pip CUDA 13.4 `nvcc` plus CCCL headers.
+The CUDA 12 wheels are ranges from CUDA 12.2.2's versions to the end of CUDA 12
+(`CUDA12_COMPONENTS` in `python/jittor/build/utils/cuda_wheel.py`), so the
+exact pins of torch 2.5+ resolve inside them and both share one environment;
+`uv.lock` keeps the 12.2 set. Kernels that use CUB/Thrust compile against
+`nvidia-cuda-cccl-cu12` (CCCL 2.x), which sits ahead of the compiler's CUDA 13
+CCCL: CCCL 3 needs CUDA 13 runtime headers and C++17. The CCCL wheel is the
+one optional component: a CUDA 12 set installed without it (the
+`cuda-toolkit[...]==12.2.2` wheels, say) still resolves, takes nvcc 12.x only,
+and compiles CUB/Thrust with that compiler's own CCCL.
+Jittor compiles with the first local nvcc 12.2-13.x that passes a host-compiler
+test compile, else with the pip nvcc, and always links and loads the CUDA 12
+runtime libraries from the wheels. Do not set `CUDA_HOME`, `JT_BUILD_NVCC_PATH`,
+or `LD_LIBRARY_PATH` for this path; an explicit `JT_BUILD_NVCC_PATH` overrides
+the search. Skipped local compilers are logged with the reason. An unresolved
+pip stack is an import error, never a fallback to system CUDA libraries; when
+another installed package required the out-of-range wheel, the error names it.
 
 ```bash
-export nvcc_path="$(command -v nvcc)"
+python -m pip install "jittor[cuda12]"
+CUDA_VISIBLE_DEVICES=<gpu> JT_USE_CUDA=1 python -m jittor.selftest
+```
+
+A clean-environment uv/conda acceptance with a system CUDA visible (usable,
+unusable, too old, or library-only) is
+[`cuda12-pip-stack-acceptance`](../skills/cuda12-pip-stack-acceptance/SKILL.md).
+
+For a system toolkit run, set the compiler explicitly:
+
+```bash
+export JT_BUILD_NVCC_PATH="$(command -v nvcc)"
 CUDA_VISIBLE_DEVICES=<gpu> uv run --locked \
     python tools/run_test_suite.py --tier core --backend cuda
 ```
@@ -100,8 +128,8 @@ separate from that toolchain:
 ```bash
 export CUDA_COMPAT_ROOT=/path/to/cuda-compat
 export CUDA_VISIBLE_DEVICES=<gpu>
-export nvcc_path="$CUDA_COMPAT_ROOT/bin/nvcc"
-export cc_path="$CUDA_COMPAT_ROOT/bin/g++"
+export JT_BUILD_NVCC_PATH="$CUDA_COMPAT_ROOT/bin/nvcc"
+export JT_BUILD_CC_PATH="$CUDA_COMPAT_ROOT/bin/g++"
 export CUDA_HOME="$CUDA_COMPAT_ROOT"
 export PATH="$CUDA_COMPAT_ROOT/bin:$PATH"
 export LD_LIBRARY_PATH="$CUDA_COMPAT_ROOT/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"

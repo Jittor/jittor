@@ -157,9 +157,31 @@ class Worker:
         self.p.start()
 
     def take_error(self):
-        """The traceback this worker died with, or None."""
+        """``module:qualname`` of the exception this worker died with, a
+        newline, and its traceback; or None."""
         raw = self.error.value
         return raw.decode("utf-8", "replace") if raw else None
+
+
+def _worker_exception(worker_id, stored):
+    """The exception to raise in the parent for a worker's stored error.
+
+    The worker's own class when it is already loaded here and takes a single
+    message (as torch's DataLoader does), so ``except ValueError`` around the
+    loop catches a ValueError from ``__getitem__``; RuntimeError otherwise.
+    """
+    kind_name, _, text = stored.partition("\n")
+    message = "exception in dataset worker %d:\n%s" % (worker_id, text)
+    module, _, qualname = kind_name.partition(":")
+    kind = sys.modules.get(module)
+    for part in qualname.split("."):
+        kind = getattr(kind, part, None)
+    if isinstance(kind, type) and issubclass(kind, Exception):
+        try:
+            return kind(message)
+        except TypeError:
+            pass
+    return RuntimeError(message)
 
 class Dataset(object):
     '''
@@ -371,6 +393,11 @@ class Dataset(object):
     
     def _worker_main(self, worker_id, buffer, status, error):
         import jittor_utils
+        import signal
+        # Ctrl-C reaches the whole process group. It is the parent's to handle;
+        # a worker leaves only via os._exit, or dies with the parent
+        # (init_subprocess sets PDEATHSIG) or by terminate().
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
         jt.flags.use_cuda_host_allocator = 0
 
         jittor_utils.cc.init_subprocess()
@@ -459,18 +486,20 @@ class Dataset(object):
                     other_time + data_time + send_time, \
                     img_open_hook.duration
                 img_open_hook.duration = 0.0
-        except Exception:
+        except Exception as exc:
             # Do NOT signal the parent: SIGINT is indistinguishable from the
-            # user pressing Ctrl-C, and jittor's handler turns it into an
-            # immediate process exit, so a plain bug in __getitem__ surfaced as
-            # "Caught SIGINT, quick exit" with no exception the caller could
-            # catch. Hand the traceback to the parent and let it re-raise.
+            # user pressing Ctrl-C. Hand the exception's class and traceback to
+            # the parent and let it re-raise (see _worker_exception).
             import traceback
-            line = traceback.format_exc()
-            print(line, file=sys.stderr, flush=True)
+            text = traceback.format_exc()
+            kind = type(exc)
+            payload = ("%s:%s\n%s" % (kind.__module__, kind.__qualname__, text)
+                       ).encode("utf-8", "replace")
+            if len(payload) >= WORKER_ERROR_CAPACITY:
+                # The parent will only see the head of it.
+                print(text, file=sys.stderr, flush=True)
             try:
-                error.value = line.encode("utf-8", "replace")[
-                    :WORKER_ERROR_CAPACITY - 1]
+                error.value = payload[:WORKER_ERROR_CAPACITY - 1]
                 # Store first, wake second: whichever way the parent is
                 # waiting, it must find the message already there.
                 #
@@ -492,7 +521,7 @@ class Dataset(object):
             os._exit(1)
 
     def display_worker_status(self):
-        ''' Display dataset worker status, when dataset.num_workers > 0, it will display infomation blow:
+        ''' Display dataset worker status, when dataset.num_workers > 0, it will display information below:
 
 .. code-block:: console
 
@@ -556,8 +585,7 @@ Example::
         if message is None:
             return
         self._abort_workers()
-        raise RuntimeError(
-            "exception in dataset worker %d:\n%s" % (worker_id, message))
+        raise _worker_exception(worker_id, message)
 
     def _raise_worker_death(self, cause):
         """Explain a blocking read that came back stopped, and re-raise.
@@ -575,9 +603,7 @@ Example::
             message = worker.take_error()
             if message is not None:
                 self._abort_workers()
-                raise RuntimeError(
-                    "exception in dataset worker %d:\n%s"
-                    % (other_id, message))
+                raise _worker_exception(other_id, message)
             if worker.p.exitcode is not None:
                 deaths.append((other_id, worker.p.exitcode))
         if deaths:

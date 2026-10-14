@@ -41,6 +41,7 @@ GitHub issue 与 PR 中。原始日志、缓存和大体积产物放在 `$JITTOR
 - [jittor-core-cpp-edit-loop](../skills/jittor-core-cpp-edit-loop/SKILL.md)：改 `src/` 的编辑、重编、验证循环。
 - [jittor-build-change-verification](../skills/jittor-build-change-verification/SKILL.md)：构建系统改动的冷/热缓存、并发与切 flag 验证。
 - [jittor-build-time-capabilities](../skills/jittor-build-time-capabilities/SKILL.md)：同一源码为何编出能力不同的构建。
+- [cuda12-pip-stack-acceptance](../skills/cuda12-pip-stack-acceptance/SKILL.md)：系统 CUDA 作干扰项时验收 `jittor[cuda12]` 的干净环境安装。
 - [jittor-pyjt-bindings](../skills/jittor-pyjt-bindings/SKILL.md)：pyjt 绑定生成器与转换层的验证。
 - [jittor-single-kernel-cold-profile](../skills/jittor-single-kernel-cold-profile/SKILL.md)：单个生成 kernel 的冷编译分阶段计时。
 - [jit-compile-failure-attribution](../skills/jit-compile-failure-attribution/SKILL.md)：JIT 编译失败是否归因到闯祸的算子。

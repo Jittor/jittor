@@ -72,7 +72,7 @@ CUPTI 是可选依赖（extra `profile`），不装也能用 `jt.profile`，只�
 找不到时报告写明"device timing unavailable"和原因，不编数；`device=True` 则直接报错。
 
 ```bash
-pip install "jittor[profile]"   # nvidia-cuda-cupti-cu12==12.2.142，对应 jittor[cuda12] 的 CUDA 12.2
+pip install "jittor[profile]"   # nvidia-cuda-cupti-cu12>=12.2.142,<13，对应 jittor[cuda12] 的 CUDA 12
 ```
 
 用别的 CUDA runtime 时，装同版本的 `nvidia-cuda-cupti-cu12` 或把 `JITTOR_CUPTI_LIB` 指向

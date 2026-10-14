@@ -1166,10 +1166,28 @@ def find_exe(name, check_version=True, silent=False):
 _UNSET = object()
 
 
+def check_configured_exe(name, path, bname):
+    """Raise, naming the variable, when a configured tool path cannot run.
+
+    Running it anyway fails as ``Run cmd failed: "<path>" --version`` after a
+    shell's "not found", which names neither the variable nor the fix.
+    """
+    if shutil.which(path):
+        return
+    variable = env_config.resolved().get(
+        name, (env_config.prefixed_name(name, "build"),))[0]
+    problem = ("is not an executable file" if os.path.isfile(path)
+               else "does not exist")
+    raise RuntimeError(
+        f"{variable}={path} {problem}. Point it at {bname}, or unset it to let "
+        f"Jittor search for one.")
+
+
 def env_or_find(name, bname, silent=False):
     path = build_env(name, _UNSET)
     if path is not _UNSET:
         if path != "":
+            check_configured_exe(name, path, bname)
             version = get_version(path)
             if not silent:
                 LOG.i(f"Found {bname}{version} at {path}")
@@ -1180,6 +1198,7 @@ def env_or_try_find(name, bname):
     path = build_env(name, _UNSET)
     if path is not _UNSET:
         if path != "":
+            check_configured_exe(name, path, bname)
             version = get_version(path)
             LOG.i(f"Found {bname}{version} at {path}")
         return path

@@ -10,9 +10,13 @@
 import jittor as jt
 import os
 import ctypes
+from jittor_utils.cuda_wheel import NVTX_LIBRARIES
 
-nvtx_lib_path = jt.compiler.find_cuda_library("nvToolsExt")
-if not nvtx_lib_path:
+for _name in NVTX_LIBRARIES:
+    nvtx_lib_path = jt.compiler.find_cuda_library(_name)
+    if nvtx_lib_path:
+        break
+else:
     raise RuntimeError("NVTX library was not found in the active CUDA installation")
 nvtx_lib = ctypes.CDLL(nvtx_lib_path, jt.compiler.dlopen_flags)
 
