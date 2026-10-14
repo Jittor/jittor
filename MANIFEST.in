@@ -317,7 +317,6 @@ include docs/conf.py
 include docs/content-manifest.json
 include docs/contributing.md
 include docs/development/acl-backend-contracts.md
-include docs/development/acl-torch-npu-op-parity.md
 include docs/development/async-error-diagnostics.md
 include docs/development/error-categories.md
 include docs/development/index.md
