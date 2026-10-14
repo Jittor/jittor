@@ -381,6 +381,7 @@ include docs/results/2026-09-25-profiling-tools.md
 include docs/results/2026-10-05-high-rank-and-downstream-core-gaps.md
 include docs/results/2026-10-09-downstream-p1-allocator-protocol-transpose.md
 include docs/results/2026-10-12-qwen3-ascend310p-performance.md
+include docs/results/2026-10-13-qwen3-8b-ascend310p-performance.md
 include docs/results/index.md
 include docs/tutorials/index.md
 include examples/README.md

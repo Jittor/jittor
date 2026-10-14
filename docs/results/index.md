@@ -34,6 +34,7 @@
 2026-10-05-high-rank-and-downstream-core-gaps
 2026-10-09-downstream-p1-allocator-protocol-transpose
 2026-10-12-qwen3-ascend310p-performance
+2026-10-13-qwen3-8b-ascend310p-performance
 ```
 
 ## 按主题索引
@@ -58,3 +59,4 @@
 | [张量维度上限 10 → 32 与下游评测的核心缺口](2026-10-05-high-rank-and-downstream-core-gaps.md) | 已修复，CPU 与 RTX 4090 验证 | 2026-10-05 |
 | [下游 P1：分配器并存上限、数值协议与 transpose 的运行时置换](2026-10-09-downstream-p1-allocator-protocol-transpose.md) | 已修复，CPU 验证，transpose/协议另在 RTX 4090 验证 | 2026-10-09 |
 | [Qwen3-0.6B：310P3 FP16 推理性能](2026-10-12-qwen3-ascend310p-performance.md) | 相同权重预转换条件下，502/1998-token decode 比原生 torch_npu 快约 6%/24%；逐 token 一致、Jittor 零回退 | 2026-10-12 |
+| [Qwen3-8B：310P3 FP16 推理性能](2026-10-13-qwen3-8b-ascend310p-performance.md) | 502-token decode 接近持平，1998-token 比原生 torch_npu 快 20.1%；逐 token 一致、Jittor 零回退 | 2026-10-13 |
