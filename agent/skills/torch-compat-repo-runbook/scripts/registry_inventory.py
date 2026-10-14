@@ -87,8 +87,9 @@ class SourceRegistry:
         found = []
         for relative, tree in self.trees.items():
             for node in ast.walk(tree):
-                if isinstance(node, ast.Assign):
-                    for target in node.targets:
+                if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                    for target in targets:
                         if isinstance(target, ast.Name) and re.fullmatch(pattern, target.id):
                             found.append((relative, target.id, node.value))
         return found
@@ -116,18 +117,22 @@ def inventory(repo, checkout):
         selected = [path for path in files if path.endswith(("pipelines/auto_pipeline.py", "pipelines/__init__.py"))]
     elif repo == "ms-swift":
         selected = [path for path in files if "/model/" in path or "/tuners/" in path
-                    or path.endswith("model_type.py")]
+                    or path.endswith("model_type.py") or any(
+                        part in path for part in ("/cli/", "/arguments/", "/trainers/", "/pipelines/train/"))]
     else:
-        selected = [path for path in files if path.endswith("trainer/ppo/core_algos.py")
+        selected = [path for path in files if path.startswith("verl/trainer/")
                     or ("/models/" in path and "registry" in path)]
     source = SourceRegistry(checkout, selected)
     axes = []
     used = set()
 
     def add(axis, name, members, sources):
-        members = sorted(set(members))
+        if any(row["axis"] == axis for row in axes):
+            raise ValueError("Ambiguous registry axis %s for %s" % (axis, repo))
+        members = list(members)
         if not members or not all(isinstance(member, str) and member for member in members):
             raise ValueError("Empty or invalid %s registry %s" % (repo, name))
+        members = sorted(set(members))
         axes.append({"axis": axis, "registry": name, "count": len(members), "members": members,
                      "sources": sorted(set(sources))})
         used.update(sources)
@@ -202,6 +207,39 @@ def inventory(repo, checkout):
         mappings = source.assignments(r"SWIFT_MAPPING")
         add("method", "SWIFT_MAPPING", [member for _, _, node in mappings for member in source.mapping_keys(node)],
             [path for path, _, _ in mappings])
+        for symbol, axis in (("TRAINER_MAPPING", "trainer"), ("trainer_mapping", "megatron_trainer"),
+                             ("ROUTE_MAPPING", "entrypoint")):
+            mappings = source.assignments(symbol)
+            if not mappings:
+                raise ValueError("Missing ms-swift training registry: " + symbol)
+            identities = [(path, name) for path, name, _ in mappings]
+            if len(set(identities)) != len(identities):
+                raise ValueError("Ambiguous ms-swift training registry: " + symbol)
+            for path, name, node in mappings:
+                qualified_axis = ("megatron_entrypoint" if symbol == "ROUTE_MAPPING"
+                                  and any(part in ("megatron", "_megatron") for part in Path(path).parts)
+                                  else axis)
+                add(qualified_axis, path + ":" + name, source.mapping_keys(node), [path])
+        for field, axis in (("task_type", "task"), ("rlhf_type", "rlhf_method")):
+            members, paths = [], []
+            for path, tree in source.trees.items():
+                if "/arguments/" not in path:
+                    continue
+                for node in ast.walk(tree):
+                    if not (isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+                            and node.target.id == field):
+                        continue
+                    annotation = node.annotation
+                    if not (isinstance(annotation, ast.Subscript)
+                            and isinstance(annotation.value, ast.Name) and annotation.value.id == "Literal"):
+                        raise ValueError("Unsupported ms-swift Literal field %s in %s" % (field, path))
+                    values = annotation.slice
+                    if hasattr(ast, "Index") and isinstance(values, ast.Index):
+                        values = values.value
+                    values = values.elts if isinstance(values, ast.Tuple) else [values]
+                    members.extend(source.value(value) for value in values)
+                    paths.append(path)
+            add(axis, "arguments Literal " + field, members, paths)
     else:
         for function, axis in (("register_adv_est", "advantage_estimator"), ("register_policy_loss", "policy_loss")):
             members, paths = [], []
@@ -214,6 +252,36 @@ def inventory(repo, checkout):
                                 members.append(source.value(decorator.args[0]))
                                 paths.append(path)
             add(axis, function, members, paths)
+        entrypoints, entry_paths, losses, loss_paths = [], [], [], []
+        for path, tree in source.trees.items():
+            if not path.startswith("verl/trainer/"):
+                continue
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                for decorator in node.decorator_list:
+                    if not isinstance(decorator, ast.Call):
+                        continue
+                    if (isinstance(decorator.func, ast.Attribute) and decorator.func.attr == "main"
+                            and isinstance(decorator.func.value, ast.Name) and decorator.func.value.id == "hydra"):
+                        names = [source.value(item.value) for item in decorator.keywords if item.arg == "config_name"]
+                        if len(names) != 1 or not isinstance(names[0], str) or not names[0]:
+                            raise ValueError("Unsupported verl Hydra config in " + path)
+                        entrypoints.append(path + ":" + node.name + ":" + names[0])
+                        entry_paths.append(path)
+                    elif isinstance(decorator.func, ast.Name) and decorator.func.id == "register_distillation_loss":
+                        if len(decorator.args) != 1 or not isinstance(decorator.args[0], ast.Call):
+                            raise ValueError("Unsupported verl distillation settings in " + path)
+                        names = [source.value(item.value) for item in decorator.args[0].keywords if item.arg == "names"]
+                        if len(names) != 1:
+                            raise ValueError("Missing verl distillation names in " + path)
+                        values = [names[0]] if isinstance(names[0], str) else names[0]
+                        if not isinstance(values, (list, tuple)) or not values:
+                            raise ValueError("Empty or invalid verl distillation names in " + path)
+                        losses.extend(values)
+                        loss_paths.append(path)
+        add("entrypoint", "Hydra trainer entrypoints", entrypoints, entry_paths)
+        add("distillation_loss", "register_distillation_loss settings.names", losses, loss_paths)
     version = None
     for relative in files:
         if relative.endswith(("/__init__.py", "/version.py", "/_version.py")):

@@ -386,6 +386,7 @@ include docs/results/2026-10-14-checkpoint-rng-fsdp2-continuation.md
 include docs/results/2026-10-14-downstream-coverage-audit.md
 include docs/results/2026-10-14-optimizer-checkpoint-continuation.md
 include docs/results/2026-10-15-distribution-constraint-publication.md
+include docs/results/2026-10-15-training-registry-denominators.md
 include docs/results/index.md
 include docs/tutorials/index.md
 include examples/README.md

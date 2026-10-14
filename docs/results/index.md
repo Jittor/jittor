@@ -38,6 +38,7 @@
 2026-10-14-checkpoint-rng-fsdp2-continuation
 2026-10-14-amp-bfloat16-gradscaler
 2026-10-15-distribution-constraint-publication
+2026-10-15-training-registry-denominators
 ```
 
 ## 按主题索引
@@ -67,3 +68,4 @@
 | [完整 RNG 与 FSDP2 FULL checkpoint 续训](2026-10-14-checkpoint-rng-fsdp2-continuation.md) | CPU/CUDA 随机流与双卡 FULL 续训已验；分片 I/O 与 ACL 待验 | 2026-10-14 |
 | [bf16 autocast 与 GradScaler 边界](2026-10-14-amp-bfloat16-gradscaler.md) | CPU/CUDA 实际 dtype 与边界对拍通过；fidelity 保持 APPROXIMATE | 2026-10-14 |
 | [分布约束命名空间发布](2026-10-15-distribution-constraint-publication.md) | 原生属性与工厂发布已修；CPU/CUDA 边界检查对拍通过 | 2026-10-15 |
+| [训练注册表分母补齐](2026-10-15-training-registry-denominators.md) | 五库源码分母已重导；补 ms-swift/verl 训练轴，未授予数值覆盖 | 2026-10-15 |

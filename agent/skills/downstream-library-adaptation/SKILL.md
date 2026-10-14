@@ -56,9 +56,10 @@ L 级和验证规格。**登记、import、skill 自称和旧报告都不是分�
 源码版本和源文件 SHA256。不得提交手写模型清单替代注册表，也不得只挑 AutoPipeline 等
 较小子集却声称覆盖整库。当前入口：Transformers `MODEL_MAPPING_NAMES` 与 task mappings；
 PEFT `PeftType`/`TaskType`；Diffusers **全部条件分支**的 pipeline 模块族、导出 API 与
-AutoPipeline 子矩阵；ms-swift `register_model(ModelMeta)` 与 `SWIFT_MAPPING`；verl
-advantage-estimator/policy-loss 注册。各轴分开计数，**不能相加成一个“支持率”**。
-这些是源码声明的注册项，不保证可选依赖已安装。verl 两类算法注册也不代表完整 PPO
+AutoPipeline 子矩阵；ms-swift `register_model(ModelMeta)`、`SWIFT_MAPPING`、普通与
+Megatron trainer/CLI 注册及参数声明的 task/RLHF 方法；verl advantage-estimator、
+policy-loss、distillation-loss 注册与 Hydra 入口。各轴分开计数，**不能相加成一个“支持率”**。
+这些是源码声明的注册项，不保证可选依赖已安装。verl 算法注册与 Hydra 入口也不代表完整 PPO
 训练流水或全部模型；PEFT 的模型族需另挂 Transformers 的 registry reference。
 
 分子至少有相同权重/输入下的独立 oracle 数值证据，并绑定具体门禁 node、结果报告与
