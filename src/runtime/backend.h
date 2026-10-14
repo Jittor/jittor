@@ -63,7 +63,7 @@ struct BackendExecutionPolicy {
 // The registry copies this versioned table; callback code and allocator pools
 // must outlive the runtime. Published callbacks retain the serialized contract.
 struct BackendOps {
-    uint32 abi_version = 3;
+    uint32 abi_version = 4;
     uint32 struct_size = sizeof(BackendOps);
     BackendId id = BackendId::Cpu;
     const char* name = nullptr;
@@ -74,6 +74,9 @@ struct BackendOps {
     // `aclrtSetDevice` after a failed `aclrtGetDevice`) rather than failing:
     // the async-execution worker and any dataloader thread arrive there.
     void (*set_device)(int) = nullptr;
+    // Human-readable accelerator model (CANN SoC name, GPU marketing name,
+    // ...). Backends without one leave this null; the binding then reports "".
+    const char* (*device_name)(int) = nullptr;
     Allocator* (*allocator)(int, BackendMemoryKind) = nullptr;
     void (*copy)(void*, Device, const void*, Device, size_t, bool) = nullptr;
     void (*copy_async)(void*, Device, const void*, Device, size_t, BackendStream) = nullptr;
@@ -182,6 +185,10 @@ vector<string> registered_backends();
 vector<string> known_backends();
 // @pyjt(backend_device_count)
 int backend_device_count(const string& name);
+// The accelerator model behind a registered backend name, or "" when the
+// backend is absent or does not expose one (ACL: the CANN SoC name).
+// @pyjt(backend_device_name)
+string backend_device_name(const string& name);
 // @pyjt(initialize_backend_operators)
 void initialize_backend_operators();
 

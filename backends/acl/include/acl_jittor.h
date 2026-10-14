@@ -333,6 +333,12 @@ namespace jittor
         }
     };
 
+    struct PromptFlashAttentionAttr : AclOpAttr
+    {
+        double scale;
+        int64_t headNum;
+    };
+
     struct IncreFlashAttentionAttr : AclOpAttr
     {
         double scale;

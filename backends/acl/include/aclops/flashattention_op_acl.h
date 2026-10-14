@@ -24,6 +24,15 @@ namespace jittor
         FlashAttentionBackwardOpRunner();
     };
 
+    class PromptFlashAttentionOpRunner : public BaseOpRunner
+    {
+    protected:
+        void executeOp(AclOpRegistry::const_iterator &it) override;
+
+    public:
+        PromptFlashAttentionOpRunner();
+    };
+
     class IncreFlashAttentionOpRunner : public BaseOpRunner
     {
     protected:

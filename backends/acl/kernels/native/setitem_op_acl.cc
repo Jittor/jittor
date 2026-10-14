@@ -57,14 +57,28 @@ namespace jittor
 
     void IndexPutImplOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
+        // inputs: base(0), value(1), index0(2), index1(3), ...; output: out(0).
+        // Copy base -> out on aclstream first (base is a tracked input, so its
+        // data is materialized before this runs), then index-put in place on
+        // out. Previously the base was a write-only `x.clone()` output whose
+        // clone shares the base allocation, so the index-put mutated the base
+        // buffer out of order; on view write-through (`x[:] = result`) the
+        // native setitem planner then correctly rejects the self-overlapping
+        // copy.
+        CHECK(in_.size() >= 2);
+        CHECK(in_[0]->is_contiguous());
+        CHECK(in_[0]->size == out_[0]->size);
+        aclrtMemcpyAsync(out_[0]->mem_ptr, out_[0]->size,
+                         in_[0]->mem_ptr, in_[0]->size,
+                         ACL_MEMCPY_DEVICE_TO_DEVICE, aclstream);
         auto input_num = in_.size();
         std::vector<aclTensor *> indexTensorList = {};
-        for (int i = 1; i < input_num; i++)
+        for (int i = 2; i < input_num; i++)
         {
             indexTensorList.push_back(inputTensors[i]);
         }
-        auto indexTensorListInput = aclCreateTensorList(&indexTensorList[0], input_num - 1);
-        ret = aclnnIndexPutImplGetWorkspaceSize(outputTensors[0], indexTensorListInput, inputTensors[0], false, true, &workspaceSize, &executor);
+        auto indexTensorListInput = aclCreateTensorList(indexTensorList.data(), input_num - 2);
+        ret = aclnnIndexPutImplGetWorkspaceSize(outputTensors[0], indexTensorListInput, inputTensors[1], false, true, &workspaceSize, &executor);
 
         launch(ret, aclnnIndexPutImpl, true);
         return;

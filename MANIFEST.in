@@ -329,6 +329,7 @@ include docs/development/static-graph-replay.md
 include docs/development/storage-layout.md
 include docs/development/test-system.md
 include docs/development/torch-install-transactions.md
+include docs/guides/ascend-310p.md
 include docs/guides/ascend-910b.md
 include docs/guides/corex.md
 include docs/guides/cpp-console.md
@@ -374,11 +375,14 @@ include docs/results/2026-09-14-vllm-omni-h3-enablement.md
 include docs/results/2026-09-19-torch-compat-runbook-verification.md
 include docs/results/2026-09-21-flowey-merge-verification.md
 include docs/results/2026-09-22-complex-svd-grad-and-complex128.md
+include docs/results/2026-09-22-qwen3-ascend310p-fp16.md
 include docs/results/2026-09-22-sgd-dampening-and-native-vmap-gaps.md
 include docs/results/2026-09-24-torch-compat-real-models.md
 include docs/results/2026-09-25-profiling-tools.md
 include docs/results/2026-10-05-high-rank-and-downstream-core-gaps.md
 include docs/results/2026-10-09-downstream-p1-allocator-protocol-transpose.md
+include docs/results/2026-10-12-qwen3-ascend310p-performance.md
+include docs/results/2026-10-13-qwen3-8b-ascend310p-performance.md
 include docs/results/2026-10-14-benchmark-coverage.md
 include docs/results/index.md
 include docs/tutorials/index.md
@@ -655,8 +659,14 @@ include src/ops/composite/getitem_op.h
 include src/ops/composite/index_bounds.h
 include src/ops/composite/index_op.cc
 include src/ops/composite/index_op.h
+include src/ops/composite/mapped_concat_op.cc
+include src/ops/composite/mapped_concat_op.h
 include src/ops/composite/mapped_matmul_op.cc
 include src/ops/composite/mapped_matmul_op.h
+include src/ops/composite/mapped_packed_matmul_op.cc
+include src/ops/composite/mapped_packed_matmul_op.h
+include src/ops/composite/mapped_rms_norm_op.cc
+include src/ops/composite/mapped_rms_norm_op.h
 include src/ops/composite/numpy_code_op.cc
 include src/ops/composite/numpy_code_op.h
 include src/ops/composite/op_capability.cc

@@ -618,9 +618,9 @@ workaround.
   shape set; widen matmul through `dnnl::matmul` if fp64/fp16/bf16 are wanted;
   delete the entry when both are settled.
 
-## KI-BACKEND-012: the ACL descriptor cache is not wired into any runner, and the ACL launcher and attribute migration never ran on an Ascend device
+## KI-BACKEND-012: the ACL data-channel descriptor cache and full 910B3 launcher acceptance remain unverified
 
-- Severity: Medium (unvalidated backend paths; host-only evidence)
+- Severity: Medium (full backend hardware acceptance remains incomplete)
 - Status: Open
 - Owner: ACL backend maintainers
 - Symptom: every `executeOp` owner goes through the shared
@@ -630,8 +630,11 @@ workaround.
   through the versioned data channel instead of generated source. The descriptor
   identity/cache shell in `acl_data_channel.h`/`acl_data.py` is not used by any
   runner yet, so descriptors are still rebuilt per call; pool descriptors keep
-  their own lifetime. All of this has host-only evidence (stub-SDK syntax checks,
-  CPU-compiled contract probes); none of it has executed on a 910B3.
+  their own lifetime. The full acceptance run still needs 910B3 evidence.
+  The narrower 310P3 FP16 inference subset, shared launch path and attributes
+  have device evidence in the
+  [Qwen3 performance report](../../docs/results/2026-10-12-qwen3-ascend310p-performance.md);
+  this does not validate the data-channel cache or close the 910B3 requirement.
 - Workaround: validate on hardware with `backend_fallback=error` and the
   fallback-count check before relying on an ACL operator.
 - Evidence: [`docs/development/acl-backend-contracts.md`](../../docs/development/acl-backend-contracts.md)
@@ -1146,6 +1149,11 @@ workaround.
   and rejected: the composite's `DSARandomUniform` overlaps MatMul on the
   DSA side queue, while `aclnnDropout` serialises on the compute stream
   and made `bert_base_train` 8% slower (see that entry's follow-up).
+  The separate FP16
+  [310P3 Qwen3 report](../../docs/results/2026-10-12-qwen3-ascend310p-performance.md)
+  validates native frontend indexing/cat dispatch, explicit packed weights and
+  attention changes. That measured speedup does not close this entry's broader
+  910B3 workload gaps.
   `bert_base_train`'s gap is similarly not a dispatch bug: an aclprof
   capture shows `MatMulV2` at 42.4% of device time (the
   expected dominant cost for a transformer) and `DSARandomUniform` --
@@ -2275,3 +2283,82 @@ workaround.
 - Exit condition: extend `files` one package at a time with real fixes (no
   `# type: ignore`, no relaxed configuration); delete the entry when
   `python/jittor` and `backends/` are covered.
+
+## KI-BACKEND-021: Ascend310P3 is adapted to ACL, with declared hardware gaps
+
+- Severity: Medium (inference-only card; the gaps below are hardware, not bugs)
+- Status: Adapted on `2.0-refactor`; suite `tests/backends/acl/` reports
+  **214 passed / 11 skipped / 0 failed** on a real Ascend310P3
+  (CANN 9.1.0, `npu-smi` device 8, `davinci0`), with every skip reason
+  classified. Recorded at sync baseline `0140dbed`.
+- Owner: ACL backend maintainers
+- What was measured on the real chip, and what the tree now does about it:
+  1. **No BF16**: the installed CANN opp package ships no `DT_BFLOAT16`
+     kernels for `ascend310p`. `acl_check_dtype_supported` rejects BF16
+     tensors with a named error instead of an asynchronous CANN abort;
+     tests gate BF16 iterations via `_soc.supports_bfloat16()`.
+  2. **No FP32 cube**: the cube unit refuses `KEEP_DTYPE`/`USE_HF32` for
+     FP32 matmul/bmm/conv (`EZ1001`). `acl_allow_hf32` (flag, env
+     `acl_allow_hf32=1`, module attribute, or
+     `jt.flag_scope(acl_allow_hf32=1)`) opts into
+     `ALLOW_FP32_DOWN_PRECISION`, matching torch_npu's
+     `torch.npu.matmul.allow_hf32` semantics; default FP32 stays full
+     precision and errors early with a clear message. Verified ~1e-3 max
+     error under opt-in.
+  3. **Missing op kernels** (CANN never compiled them for this SoC;
+     `aclnn` returns 161002 "not implemented"): `StridedSliceAssignV2`,
+     `EmbeddingDenseBackward`, `RotaryPositionEmbeddingGrad`,
+     `FlashAttention(Score)`, `NanToNum`, `Maxpool`/`Avgpool` family,
+     `IndexPutImplAccumulate`. `backends/acl/kernels/_soc.py` carries the
+     verified gap table; each affected op now falls back to a device-side
+     composite (IndexPutImpl/scatter_add/window-stack/getitem) rather than
+     a CPU fallback, all verified with `backend_fallback=error`.
+  4. **Non-IEEE comparisons**: on 310P, `x == +inf` matches
+     `{nan, +inf}` and `x == -inf` matches `{nan, -inf}`; `isnan`-style
+     kernels and `x != x` both misreport. `isnan`/`isinf`/`isfinite`/
+     `isposinf`/`isneginf`/`nan_to_num` now compose from the invariant
+     "only NaN equals both signed infinities" plus `nonzero`+`IndexPutImpl`
+     (bool-mask `where`/`masked_fill` also silently fail on this chip).
+  5. **Adaptive average pool precision**: `aclnnAdaptiveAvgPool2d` is
+     implemented but accumulates in reduced precision (~4e-5 vs the
+     910B-class 2e-6); the test tolerance is SoC-scaled, matching what
+     torch_npu would observe through the same CANN kernel.
+  6. **RoPE single-token**: `RotaryPositionEmbedding` returns garbage for
+     `seq_len == 1` with wider head counts (tiling boundary); the wrapper
+     composites the `x*cos + R(x)*sin` forward for that case.
+- Also fixed along the way: `all_acl`/`any_acl` gained the `keepdims`
+  parameter the public API added (was a signature regression on every
+  NPU); `IndexPutImpl` runner now memcpys base->out itself so a
+  `share_with`-aliased output cannot be mistaken for already-copied.
+- Review/expiry condition: re-run `tests/backends/acl/` on the 310P3 when
+  the CANN version changes; a new opp package may close items 3-6.
+
+## KI-BACKEND-022: getitem integer-index backward can read uninitialized bytes when `setitem_inplace` packs the gradient
+
+- Severity: High on affected hardware (silently wrong gradient)
+- Status: Reproduced on Ascend310P3, declared `xfail` in the test
+  (`getbwd/int_index` in `tests/backends/acl/test_acl_indexing.py`); not
+  reproduced on CPU, not yet tested on 910B
+- Owner: scheduler/allocator maintainers
+- Mechanism, verified by tracing allocations on device: `getitem`'s
+  backward builds `setitem(zeros_base, vs, dout)`. The `setitem_inplace`
+  graph optimization then does `dout->share_with(zeros_base, offset)` so
+  the gradient producer writes straight into the zeroed region, and the
+  setitem degenerates to a no-op (`skip_base=1, skip_sel=1`). On the
+  310P3 the zeros base is only partially filled in the fused schedule --
+  e.g. `x[2]` on a `(4,6)` float tensor leaves row 3's first element
+  holding stale packed data (`8e-45` int bits, or `2*x[3][0:2]` when the
+  producer is `2*x`), so the returned gradient is uninitialized memory
+  outside the indexed row.
+- Why it is not an ACL-kernel bug: the same script is correct on CPU; the
+  zero-fill op is a plain `broadcast_to` that is correct standalone; the
+  corruption sits in how the shared allocation's regions get scheduled
+  and initialised.
+- Workaround: none required for correctness of public paths -- Python
+  `GetItemACL.grad` composites the index backward through
+  `scatter_add`, which does not use the packed-setitem shape. The xfail
+  covers the remaining native-op path the test exercises.
+- Review/expiry condition: run the `x[2]`-backward reproducer on other
+  SoCs/CPUs with `trace_py_var=3`; if the shared-block partial fill is
+  reproducible off-310P, promote this to a scheduler bug entry and fix
+  the dependency/fill ordering in `setitem_inplace`.

@@ -155,7 +155,7 @@ def cross_entropy_loss_acl(output, target, weight=None, ignore_index=None,
 
 
 def _silu_acl(x, inplace=False):
-    if isinstance(x, jt.Var) and _dtype_in(x, _F32_BF16):
+    if isinstance(x, jt.Var) and _dtype_in(x, _F16_F32_BF16):
         if _jittor_dtype_name(x.dtype) == "bfloat16":
             return SwishACL()(x)
         return SiLUACL()(x)

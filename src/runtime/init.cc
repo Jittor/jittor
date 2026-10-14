@@ -59,6 +59,16 @@ DEFINE_FLAG(int, cuda_allow_tf32, 0,
 DEFINE_FLAG(int, cuda_allow_cudnn_tf32, 0,
     "Deprecated, use float32_matmul_precision. Raises the float32 cuDNN "
     "convolution accumulate tier to high (tf32).");
+// Ascend ACL equivalent of torch.npu.matmul.allow_hf32: permits FP32
+// matmul/bmm/conv to run aclnn with ALLOW_FP32_DOWN_PRECISION (fp16 split
+// cube). Required on Ascend310P whose cube has no FP32 KEEP_DTYPE; on chips
+// that support full FP32 it still lowers precision, so it stays opt-in.
+// Defined here (src/) rather than backends/acl/ because the flags binding
+// generator only scans the core source tree.
+DEFINE_FLAG(int, acl_allow_hf32, 0,
+    "Ascend ACL only. Allows FP32 matmul/bmm/convolution to run with "
+    "ALLOW_FP32_DOWN_PRECISION (reduced precision, ~1e-3). Required on "
+    "Ascend310P whose cube unit cannot run FP32 KEEP_DTYPE.");
 
 vector<set_seed_callback> callbacks;
 

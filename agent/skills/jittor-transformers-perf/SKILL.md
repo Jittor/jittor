@@ -51,6 +51,7 @@ Jittor vs 真 PyTorch 数据，而不是把 JIT、H2D 或 lazy graph 漏执行�
 - 完整 SGD/AdamW step：`benchmark_optimizer_step.py`
 - SDPA layout/Flash 物化：`probe_sdpa_layout_materialization.py`
 - Ascend Qwen3 整模推理：`benchmark_qwen3_ascend.py`
+- Ascend Qwen3 两进程结果对拍：`compare_qwen3_ascend.py`
 
 ### 独立前端 NPU 最小基准
 
@@ -94,8 +95,9 @@ JITTOR_TORCH_SHIM=0 JITTOR_HOME="$perf_run/compat-cache" \
 不能外推到整个模型。此入口的代码审查/语法检查不代表真实 NPU 性能已经验证。
 
 Ascend 整模对拍必须为 Jittor 和原生 `torch_npu` 使用独立 Python 进程、相同
-Transformers 版本和相同本地 checkpoint。运行 Jittor 一侧前设置
-`JITTOR_TORCH_SHIM=1`，并在加载权重后显式迁移到 NPU；两侧都通过
+Transformers 版本和相同本地 checkpoint。Jittor 解释器安装独立 `jittor-torch`，或在
+已有 Torch 发行元数据的测试环境设置 `JITTOR_TORCH_SHIM=1`；工具检查 shim 标记，
+不再要求 `torch is jittor`。加载权重后显式迁移到 NPU；两侧都通过
 `ASCEND_RT_VISIBLE_DEVICES` 选择已分配设备。首次 JIT 单列，稳态 prefill 和
 generation 在每次样本后同步；单 token 与多 token decode 都要测，不能用一次
 generation 成功推断 KV-cache 后续步可用。Jittor 每次 prefill 和 generation 都在
@@ -109,6 +111,72 @@ generation，并保存聚合 profiler row；该次运行不进入稳态样本。
 `--python-profile-output /path/to/profile.prof` 在计时后额外执行一次 generation，
 保存可由 `python -m pstats` 读取的 cProfile 数据；profiler 会放大墙钟时间，只用它
 比较调用结构和热点，不把该次执行写入性能样本。
+
+`benchmark_qwen3_ascend.py` 保留默认短问答、eager attention、动态缓存与原有 JSON
+字段。310P 使用 `--dtype float16 --allow-hf32`：后者在两侧显式允许 RoPE FP32
+矩阵乘降精度，并记录实际设置。`--context-tokens 512` 或 `2048` 使用原 310P
+报告的固定基础设施段落及同一重复次数算法，最终长度记录为 `prompt_tokens`，
+不是强行截断到请求长度。`--fixed-length --new-tokens 32` 强制生成 32 个 token。
+
+原生 `torch_npu` 必须记录算子编译模式；310P 上默认模式与预编译二进制核的
+耗时可能不同。用 `--torch-jit-compile off` 显式选择二进制核，或 `on` 选择即时
+编译；默认 `auto` 保留环境设置。JSON 的 `torch_jit_compile` 记录实际状态。
+attention 的 `eager` 与 `sdpa` 应分别实测，采用可用的更快配置作为比较基线。
+比较权重预转换时，原生侧使用 `--torch-pack-linear`：对 exact `torch.nn.Linear`
+的权重创建 format 29 快照并单列耗时。仅重绑 Linear 的 Parameter，保持共享源
+权重的 Embedding 原有布局；计时仍调用原生 Linear。JSON 记录实际转换层数。
+
+Jittor FP16 可加 `--freeze-linear`，在计时前将 Linear 显式替换为 ACL NZ
+权重快照；JSON 分别记录转换耗时、转换层数和转换前后的 Parameter 数量。
+这项优化只适用于不再更新权重的无梯度推理，普通 checkpoint 应在转换前加载。
+`--validate-prompts` 此时引用的是同一个已转换模型，只能验证缓存和重放一致性；
+权重转换正确性需要独立参考，例如比较两侧 JSON 中每个验证 prompt 的完整 token
+序列以及 logits，不能把同模型自比较当作跨框架对拍。
+
+`--cache-implementation static --compile` 使用 Transformers 的
+`CompileConfig(fullgraph=False, dynamic=False, mode="reduce-overhead")`，只编译
+decode；也可指定 `--compile max-autotune`。显式 compile 只接受 static cache。
+每次预热都执行完整生成，compile 模式至少预热 6 次；两侧每个计时样本前后同步。
+结果中的 `compile_observed`/`compile_observed_final` 给出真实 `stats`、拒绝原因与
+device graph 拒绝原因，不能仅凭 `compile` 参数宣称发生重放。默认自动重放开关也
+记录为 `auto_graph_replay`；原生 Torch 不提供这些 Jittor 计数时相应字段为 null。
+
+原有 `prefill_*` 仍测直接 `model(...)` 前向（含全部位置 logits），不能与历史报告的
+`generate(1)` 耗时混用。多 token 模式额外报告 `generation_prefill_*`，并用
+`(generate(N) - generate(1)) / (实际生成长度 - 1)` 计算 `decode_seconds_per_token`
+及 `decode_tokens_per_second`。每次输出都在丢弃前同步；token 读回在计时外。
+
+`--validate-prompts` 在计时后对主 prompt 和两个附加问题比较优化配置与同模型
+dynamic cache、关闭显式 compile 的参考生成，要求逐 token 一致；也可重复传入
+`--validation-prompt "问题"` 指定问题。该检查守住缓存/重放一致性，跨框架正确性仍需
+比较两侧 JSON 的 token ids 和 `--logits-output`。`--output` 将完整 JSON 保存到 lab；
+所有验证和 profiling 完成后才检查 Jittor 回退计数并报告成功，原生 Torch 没有对应
+回退计数器，`fallback_count_available=false` 明确标识这一点。
+
+两侧都保存 validation 和 logits 后，用独立 NumPy 进程比较，避免加载任一框架：
+
+```bash
+python agent/skills/jittor-transformers-perf/scripts/compare_qwen3_ascend.py \
+  "$JITTOR_RESULT" "$TORCH_RESULT" --output "$PARITY_RESULT"
+```
+
+比较器要求 checkpoint、版本、精度、长度等相同，所有预热/计时/验证 token 序列
+逐位一致，且 Jittor 有真实的零回退计数。logits 要求 finite、argmax 一致和相对
+L2 误差不超过 1%；可显式设置 `--max-relative-l2`，结果会记录实际阈值与误差。
+attention、权重预转换和 compile 配置可不同，报告时仍需分别列出。
+
+```bash
+perf_script=agent/skills/jittor-transformers-perf/scripts/benchmark_qwen3_ascend.py
+python "$perf_script" --backend jittor --model "$QWEN_MODEL" \
+  --dtype float16 --allow-hf32 --context-tokens 512 --new-tokens 32 \
+  --fixed-length --attn-implementation eager --cache-implementation static \
+  --compile --warmups 6 --samples 5 --validate-prompts \
+  --output "$JITTOR_LAB_ROOT/_state/qwen3-310p/jittor-static-512.json"
+```
+
+切换到原生环境、`--backend torch` 后使用相同参数。原生 `torch_npu` 是否提供可用的
+compile backend 需在该环境验证；工具不吞编译异常。与未编译基线比较时明确标注双方
+模式，不把编译模式的优势归因于 eager 算子。
 
 `benchmark_training_hotspots.py` 的 SDPA 模式支持可配置 batch/head/sequence/head-dim、
 causal 与同步口径。Jittor `math` 显式绕过 native loader，`flash` 要求且校验 official

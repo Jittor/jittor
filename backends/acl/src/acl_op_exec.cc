@@ -31,6 +31,9 @@
 #include "ops/composite/fused_adamw_op.h"
 #include "ops/composite/fused_sgd_op.h"
 #include "ops/composite/mapped_matmul_op.h"
+#include "ops/composite/mapped_concat_op.h"
+#include "ops/composite/mapped_packed_matmul_op.h"
+#include "ops/composite/mapped_rms_norm_op.h"
 #include "ops/composite/write_back_op.h"
 #include "core/fused_op.h"
 #include "ops/unary_op.h"
@@ -50,6 +53,15 @@
 #include "acl_fused_ascendc.h"
 namespace jittor
 {
+    // FP32 cube ops (matmul/bmm/conv) down-convert through aclnn
+    // ALLOW_FP32_DOWN_PRECISION only when explicitly enabled. Inference SoCs
+    // (Ascend310P) have no FP32 cube path at all, so there KEEP_DTYPE fails;
+    // this flag is the opt-in, mirroring torch.npu.matmul.allow_hf32. The
+    // storage lives in src/runtime/init.cc: the flags binding generator only
+    // scans the core source tree, and a DEFINE here would leave
+    // `jt.flags.acl_allow_hf32` unbound.
+    DECLARE_FLAG(int, acl_allow_hf32);
+
     void free_var_mem(Var *v);
 
     class AclScalarHostCache
@@ -824,6 +836,61 @@ namespace jittor
                  runner.add(_op->c, false);
                  runner.run();
              }
+         }},
+        {"mapped_rms_norm", [](Op *op)
+         {
+             auto *_op = static_cast<MappedRmsNormOp *>(op);
+             AclExecutionRunner<RmsNormOpRunner, false> runner;
+             runner.jt_name = "rmsnorm";
+             auto attr = std::unique_ptr<RmsNormAttr>(new RmsNormAttr());
+             // Preserve the existing CodeOp bridge's float epsilon rounding.
+             attr->eps = _op->eps;
+             runner.op_attr = std::move(attr);
+             runner.add(_op->x, true);
+             runner.add(_op->weight, true);
+             runner.add(_op->y, false);
+             auto *scratch = _op->rstd_scratch.ptr;
+             scratch->device_id = _op->y->device_id;
+             scratch->placement = _op->y->placement;
+             // The op owns this allocation for its whole lifetime, including
+             // device-graph replay. It must not come from a per-launch pool.
+             INTERNAL_ASSERT(scratch->alloc(runtime_executor().allocator))
+                 << "Unable to allocate RMSNorm auxiliary scratch";
+             runner.add(scratch, false);
+             runner.run();
+         }},
+        {"mapped_packed_matmul", [](Op *op)
+         {
+             auto *_op = static_cast<MappedPackedMatmulOp *>(op);
+             // Empty leading dimensions still have a valid ND output shape,
+             // but CANN need not construct or launch a zero-row matrix product.
+             if (!_op->c->num) return;
+             AclExecutionRunner<PackedMatMulOpRunner, false> runner;
+             runner.jt_name = "mapped_packed_matmul";
+             runner.add(_op->a, true);
+             runner.add(_op->b, true);
+             runner.add(_op->c, false);
+             runner.run();
+         }},
+        {"mapped_concat", [](Op *op)
+         {
+             auto *_op = static_cast<MappedConcatOp *>(op);
+             if (!_op->y->num) return;
+             AclExecutionRunner<ConcatOpRunner, false> runner;
+             auto *attr = new ConcatAttr();
+             attr->dim = _op->dim;
+             attr->tensorNum = 0;
+             runner.jt_name = "mapped_concat";
+             runner.op_attr.reset(attr);
+             // Empty extents contribute no elements. Omitting them also keeps
+             // the vendor descriptor list valid when only one input is nonempty.
+             for (auto *value : _op->tensors) {
+                 if (!value->num) continue;
+                 runner.add(value, true);
+                 ++attr->tensorNum;
+             }
+             runner.add(_op->y, false);
+             runner.run();
          }},
         {"argsort", [](Op *op)
          {

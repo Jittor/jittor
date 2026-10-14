@@ -27,11 +27,14 @@
 2026-09-19-torch-compat-runbook-verification
 2026-09-21-flowey-merge-verification
 2026-09-22-complex-svd-grad-and-complex128
+2026-09-22-qwen3-ascend310p-fp16
 2026-09-22-sgd-dampening-and-native-vmap-gaps
 2026-09-24-torch-compat-real-models
 2026-09-25-profiling-tools
 2026-10-05-high-rank-and-downstream-core-gaps
 2026-10-09-downstream-p1-allocator-protocol-transpose
+2026-10-12-qwen3-ascend310p-performance
+2026-10-13-qwen3-8b-ascend310p-performance
 2026-10-14-benchmark-coverage
 ```
 
@@ -56,4 +59,6 @@
 | [性能/显存分析工具：审计与重写](2026-09-25-profiling-tools.md) | 已实现，RTX 4090 上验证；未合入 | 2026-09-25 |
 | [张量维度上限 10 → 32 与下游评测的核心缺口](2026-10-05-high-rank-and-downstream-core-gaps.md) | 已修复，CPU 与 RTX 4090 验证 | 2026-10-05 |
 | [下游 P1：分配器并存上限、数值协议与 transpose 的运行时置换](2026-10-09-downstream-p1-allocator-protocol-transpose.md) | 已修复，CPU 验证，transpose/协议另在 RTX 4090 验证 | 2026-10-09 |
+| [Qwen3-0.6B：310P3 FP16 推理性能](2026-10-12-qwen3-ascend310p-performance.md) | 相同权重预转换条件下，502/1998-token decode 比原生 torch_npu 快约 6%/26%；逐 token 一致、Jittor 零回退 | 2026-10-12 |
+| [Qwen3-8B：310P3 FP16 推理性能](2026-10-13-qwen3-8b-ascend310p-performance.md) | 502-token decode 接近持平，1998-token 比原生 torch_npu 快 20.1%；逐 token 一致、Jittor 零回退 | 2026-10-13 |
 | [Benchmark 覆盖与比较协议补齐](2026-10-14-benchmark-coverage.md) | 卷积 CPU/CUDA、Accelerate CPU、模型 CPU harness 已验；其余设备与场景缺口保留 | 2026-10-14 |

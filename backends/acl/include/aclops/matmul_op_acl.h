@@ -19,4 +19,16 @@ namespace jittor
         int cube_math_type = 0;
         MatMulOpRunner();
     };
+
+    // The right operand is an explicitly packed FP16 weight snapshot. Its
+    // physical NZ dimensions are distinct from the logical transposed matrix.
+    class PackedMatMulOpRunner : public BaseOpRunner
+    {
+    protected:
+        void setupInputDesc() override;
+        void setupOutputDesc() override;
+        void executeOp(AclOpRegistry::const_iterator &it) override;
+    public:
+        PackedMatMulOpRunner();
+    };
 }

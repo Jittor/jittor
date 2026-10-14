@@ -369,7 +369,12 @@ def test_runtime_float32_matmul_precision_is_a_live_writable_view_and_cpu_matmul
             assert jt.runtime.context.snapshot()["float32_matmul_precision"] == "high"
             lhs = jt.array(np.eye(2, dtype="float32"))
             rhs = jt.array(np.ones((2, 2), dtype="float32"))
-            np.testing.assert_allclose((lhs @ rhs).numpy(), np.ones((2, 2), dtype="float32"))
+            # The matmul is the "cpu survives" half of the contract; on an
+            # accelerator-default host it would dispatch to the device instead
+            # (Ascend310P cannot even keep FP32 dtype on its cube).
+            with jt.flag_scope(use_cuda=0):
+                np.testing.assert_allclose(
+                    (lhs @ rhs).numpy(), np.ones((2, 2), dtype="float32"))
         assert jt.runtime.float32_matmul_precision == original
         jt.runtime.float32_matmul_precision = "medium"
         assert jt.runtime.float32_matmul_precision == jt.flags.float32_matmul_precision == "medium"

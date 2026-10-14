@@ -58,6 +58,20 @@ def _is_basic_index(index):
     return _is_plain_int(index)
 
 
+def _is_static_positive_basic_index(index):
+    """The no-grad subset shared with the native frontend short path."""
+    for item in index if type(index) is tuple else (index,):
+        if item is None or item is Ellipsis or type(item) is _PYINT:
+            continue
+        if (isinstance(item, slice)
+                and all(part is None or type(part) is _PYINT
+                        for part in (item.start, item.stop, item.step))
+                and (item.step is None or item.step > 0)):
+            continue
+        return False
+    return True
+
+
 def _native_bool_coordinates(slices):
     jt = _jt if _jt is not None else _jittor()
     if isinstance(slices, jt.Var) and _jittor_dtype_name(slices.dtype) == "bool":
@@ -143,7 +157,9 @@ def getitem(x, slices):
     jt = _jt if _jt is not None else _jittor()
 
     out = _getitem_result(x, slices)
-    if isinstance(out, jt.Var) and _is_basic_index(slices):
+    if isinstance(out, jt.Var) and _is_basic_index(slices) and not out._is_view():
+        # A backend may return an already recorded view of a different base.
+        # Keep that owner, as the Torch wrapper does, for later writes.
         out._set_view_of(x, slices)
     return out
 
@@ -159,6 +175,10 @@ def _getitem_result(x, slices):
         result = try_dispatch("tensor.getitem", x, slices, None)
         if result is not None:
             return result
+        if jt.flags.no_grad and _is_static_positive_basic_index(slices):
+            # Selection has already happened. Calling x.getitem here retries
+            # a declining provider, including any callback side effects.
+            return _native_var_getitem(x, slices)
     if isinstance(slices, jt.Var) and _jittor_dtype_name(slices.dtype) == "bool":
         return getitem(x, slices.where())
     if isinstance(slices, range):
