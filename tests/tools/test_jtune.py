@@ -45,6 +45,13 @@ class TestJtune(unittest.TestCase):
     def test_cc_to_so(self):
         self.run_cmd("cc_to_so")
 
+    def test_unknown_command_reports_the_requested_name(self):
+        spec = importlib.util.spec_from_file_location("jittor_jtune_test", self.jtune_path)
+        jtune = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(jtune)
+        with self.assertRaisesRegex(AssertionError, "unknown cmd: unsupported_jtune_command"):
+            jtune.main([self.fname, "unsupported_jtune_command"])
+
     def test_cc_to_s(self):
         self.run_cmd("cc_to_s")
         sname = self.fname[:-2] + 's'

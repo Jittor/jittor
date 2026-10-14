@@ -4,11 +4,14 @@ import copy
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+import types
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -360,6 +363,157 @@ class RegistryTests(unittest.TestCase):
 
 
 class VerifyRunnerTests(unittest.TestCase):
+    def test_artifact_move_keeps_explicit_cache_and_isolates_devices(self):
+        sys.path.insert(0, str(SCRIPTS))
+        import verify_repo as verify
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            env = {"JITTOR_ECOSYSTEM_CACHE_ROOT": str(root / "cache")}
+            cpu = verify._runtime_environment(env, "jittor", "cpu", root / "run-one")
+            again = verify._runtime_environment(env, "jittor", "cpu", root / "run-two")
+            cuda = verify._runtime_environment(env, "jittor", "cuda", root / "run-two")
+            self.assertEqual(cpu["JITTOR_HOME"], again["JITTOR_HOME"])
+            self.assertEqual(cpu["JITTOR_TORCH_CACHE_ROOT"], again["JITTOR_TORCH_CACHE_ROOT"])
+            self.assertNotEqual(cpu["JITTOR_HOME"], cuda["JITTOR_HOME"])
+            self.assertNotEqual(cpu["JITTOR_TORCH_CACHE_ROOT"], cuda["JITTOR_TORCH_CACHE_ROOT"])
+            oracle = verify._runtime_environment(cpu, "torch", "cpu", root / "reference")
+            self.assertNotIn("JITTOR_HOME", oracle)
+            self.assertNotIn("JITTOR_ECOSYSTEM_CACHE_ROOT", oracle)
+            default = verify._runtime_environment({}, "jittor", "cpu", root / "ordinary")
+            self.assertEqual(default["JITTOR_HOME"], str(root / "ordinary/jittor-cache"))
+
+    def test_package_visibility_includes_explicit_site_and_interpreter_paths(self):
+        sys.path.insert(0, str(ROOT / "compat/tests/torch"))
+        import _ecosystem_harness as harness
+
+        with tempfile.TemporaryDirectory() as directory:
+            explicit = Path(directory) / "explicit"
+            installed = Path(directory) / "installed"
+            explicit.mkdir()
+            installed.mkdir()
+            (explicit / "explicit_probe_dependency.py").write_text("raise RuntimeError('must not import')\n")
+            (installed / "installed_probe_dependency.py").write_text("raise RuntimeError('must not import')\n")
+            with mock.patch.object(harness, "PACKAGE_SITE", str(explicit)), \
+                    mock.patch.object(sys, "path", [str(installed)] + sys.path):
+                self.assertTrue(harness._distributions_available(
+                    ("explicit_probe_dependency", "installed_probe_dependency")))
+                self.assertFalse(harness._distributions_available(("missing_probe_dependency",)))
+            self.assertNotIn("explicit_probe_dependency", sys.modules)
+            self.assertNotIn("installed_probe_dependency", sys.modules)
+
+    def test_only_the_missing_dependency_own_required_flag_can_fail(self):
+        sys.path.insert(0, str(ROOT / "compat/tests/torch"))
+        import _ecosystem_harness as harness
+
+        with mock.patch.object(harness, "_distributions_available",
+                               side_effect=lambda names: "peft" not in names), \
+                mock.patch.dict(os.environ, {"JITTOR_REQUIRE_TRANSFORMERS": "1",
+                                             "JITTOR_REQUIRE_PEFT": "0"}):
+            comparison = harness.EcosystemComparison()
+            with self.assertRaisesRegex(unittest.SkipTest, "missing peft"):
+                comparison._compare("peft_lora_llama")
+            with mock.patch.dict(os.environ, {"JITTOR_REQUIRE_PEFT": "1"}):
+                with self.assertRaisesRegex(AssertionError, "required ecosystem dependencies missing: peft"):
+                    comparison._compare("peft_lora_llama")
+
+    def test_runner_rejects_nonzero_exit_after_success_marker(self):
+        sys.path.insert(0, str(ROOT / "compat/tests/torch"))
+        import _ecosystem_harness as harness
+
+        completed = subprocess.CompletedProcess([], 7, 'ECOSYSTEM_RESULT {"case":"transformers_bert","device":"cpu"}\n')
+        for runtime, python in (("torch", "/independent/oracle/python"),
+                                ("jittor", harness.PYTHON)):
+            with self.subTest(runtime=runtime), \
+                    mock.patch.object(harness, "_runner_package_site", return_value=""), \
+                    mock.patch.object(harness, "run_python_child", return_value=completed), \
+                    mock.patch.object(harness.subprocess, "run", return_value=completed):
+                with self.assertRaisesRegex(AssertionError, "exit.*7"):
+                    harness._run(python, runtime, "transformers_bert", Path("unused.npz"))
+
+    def test_runner_rejects_success_marker_for_another_or_missing_case(self):
+        sys.path.insert(0, str(ROOT / "compat/tests/torch"))
+        import _ecosystem_harness as harness
+
+        for reported_case in ("another_case", None):
+            payload = {"case": reported_case, "device": "cpu"}
+            completed = subprocess.CompletedProcess([], 0, "ECOSYSTEM_RESULT " + json.dumps(payload))
+            for runtime, python in (("torch", "/independent/oracle/python"),
+                                    ("jittor", harness.PYTHON)):
+                with self.subTest(runtime=runtime, reported_case=reported_case), \
+                        mock.patch.object(harness, "_runner_package_site", return_value=""), \
+                        mock.patch.object(harness, "run_python_child", return_value=completed), \
+                        mock.patch.object(harness.subprocess, "run", return_value=completed):
+                    with self.assertRaisesRegex(AssertionError, "case mismatch"):
+                        harness._run(python, runtime, "transformers_bert", Path("unused.npz"))
+
+    def test_comparison_rejects_asymmetric_broadcast_or_nonfinite_arrays(self):
+        sys.path.insert(0, str(ROOT / "compat/tests/torch"))
+        import numpy as np
+        import _ecosystem_harness as harness
+
+        scenarios = [
+            ("candidate-extra-gradient", "jittor", "grad::extra", np.ones(1), "tensor keys"),
+            ("oracle-extra-gradient", "torch", "grad::extra", np.ones(1), "tensor keys"),
+            ("broadcast-output", "jittor", "__output__", np.ones((2, 1)), "shape"),
+            ("broadcast-gradient", "jittor", "grad::weight", np.ones((2, 1)), "shape"),
+            ("oracle-nan-gradient", "torch", "grad::weight", np.full(2, np.nan), "finite"),
+            ("candidate-nan-gradient", "jittor", "grad::weight", np.full(2, np.nan), "finite"),
+            ("oracle-inf-gradient", "torch", "grad::weight", np.full(2, np.inf), "finite"),
+            ("candidate-inf-gradient", "jittor", "grad::weight", np.full(2, np.inf), "finite"),
+            ("oracle-nan-output", "torch", "__output__", np.full(2, np.nan), "finite"),
+            ("candidate-inf-output", "jittor", "__output__", np.full(2, np.inf), "finite"),
+        ]
+        for label, changed_runtime, changed_key, changed_value, message in scenarios:
+            with self.subTest(scenario=label):
+                def run(_python, runtime, _case, output, **_kwargs):
+                    arrays = {"__output__": np.ones(2), "grad::weight": np.ones(2)}
+                    if runtime == changed_runtime:
+                        arrays[changed_key] = changed_value
+                    np.savez(output, **arrays)
+                    if runtime == "torch":
+                        np.savez(output.with_name("torch.weights.npz"), weight=np.ones(1))
+                    return {"device": "cpu", "seconds": 1.0,
+                            "tf32": {}, "runtime_conditions": {}, "dependencies": {},
+                            "fallback_policy": "error", "fallback_count": 0}, ""
+
+                with mock.patch.object(harness, "_run", side_effect=run), \
+                        mock.patch.object(harness, "_distributions_available", return_value=True), \
+                        mock.patch.object(harness, "_runner_package_site", return_value=""), \
+                        mock.patch.object(harness, "SPEED_RATIO", ""):
+                    with self.assertRaisesRegex(AssertionError, message):
+                        harness.EcosystemComparison()._compare("transformers_bert")
+
+    def test_required_gradient_cannot_disappear_from_both_runtimes(self):
+        sys.path.insert(0, str(ROOT / "compat/tests/torch"))
+        import numpy as np
+        import _ecosystem_harness as harness
+
+        required = "grad::encoder.pooler.dense.weight"
+        for absent in ({"torch"}, {"jittor"}, {"torch", "jittor"}, set()):
+            with self.subTest(absent=absent):
+                def run(_python, runtime, _case, output, **_kwargs):
+                    arrays = {"__output__": np.ones(1), "grad::other": np.ones(1)}
+                    if runtime not in absent:
+                        arrays[required] = np.ones(1)
+                    np.savez(output, **arrays)
+                    if runtime == "torch":
+                        np.savez(output.with_name("torch.weights.npz"), weight=np.ones(1))
+                    return {"device": "cpu", "seconds": 1.0,
+                            "tf32": {}, "runtime_conditions": {}, "dependencies": {},
+                            "fallback_policy": "error", "fallback_count": 0}, ""
+
+                with mock.patch.object(harness, "_run", side_effect=run), \
+                        mock.patch.object(harness, "_distributions_available", return_value=True), \
+                        mock.patch.object(harness, "_runner_package_site", return_value=""), \
+                        mock.patch.object(harness, "SPEED_RATIO", ""):
+                    comparison = harness.EcosystemComparison()
+                    if absent:
+                        with self.assertRaisesRegex(AssertionError, "omitted required gradients"):
+                            comparison._compare("transformers_bert", required_gradients=(required,))
+                    else:
+                        comparison._compare("transformers_bert", required_gradients=(required,))
+
     def test_metric_and_tensordict_cases_list_without_runtime_dependencies(self):
         for repo, case in (("torchmetrics", "torchmetrics_regression"),
                            ("tensordict", "tensordict_index_and_stack")):
@@ -369,6 +523,41 @@ class VerifyRunnerTests(unittest.TestCase):
                     without_torch_mode=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout.split(), ["CASE", case, "requires", repo])
+
+    def test_verl_selected_gate_cannot_skip_missing_dependency_sites(self):
+        fake = types.ModuleType("_ecosystem_harness")
+        fake.REAL_TORCH_PYTHON = "independent-oracle"
+        fake.EcosystemComparison = unittest.TestCase
+        fake._torch_shim_is_active = lambda: True
+        fake._distributions_available = lambda requirements: False
+        sys.path.insert(0, str(ROOT / "compat/tests/torch"))
+        path = ROOT / "compat/tests/torch/test_ecosystem_verl.py"
+        spec = importlib.util.spec_from_file_location("verl_gate_contract", path)
+        module = importlib.util.module_from_spec(spec)
+        with mock.patch.dict(sys.modules, {"_ecosystem_harness": fake}), \
+                mock.patch.dict(os.environ, {"JITTOR_TEST_DEVICES": "cpu"}):
+            spec.loader.exec_module(module)
+        comparison = module.EcosystemVERL()
+        with self.assertRaisesRegex(AssertionError, "requires available dependencies"):
+            comparison.setUp()
+        module._distributions_available = lambda requirements: True
+        comparison.setUp()
+
+    def test_verl_cases_and_separate_gate_are_discoverable_without_frameworks(self):
+        result = run_python_child(
+            ["-S", str(SCRIPTS / "verify_repo.py"), "--repo", "verl", "--list-only"],
+            without_torch_mode=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual({line.split()[1] for line in result.stdout.splitlines()},
+                         {"verl_ppo_gae_vanilla", "verl_distillation_k3"})
+        for line in result.stdout.splitlines():
+            self.assertIn("numpy", line)
+            self.assertIn("transformers", line)
+        rows = audit.audit(ROOT)["repos"]
+        row = next(item for item in rows if item["repo"] == "verl")
+        self.assertEqual({item["case"] for item in row["gate_cases"]},
+                         {"verl_ppo_gae_vanilla", "verl_distillation_k3"})
+        self.assertIsNone(row["verified_level"])
 
     def test_pair_device_precision_versions_and_threads_must_match(self):
         spec = importlib.util.spec_from_file_location("verify_repo_metadata", SCRIPTS / "verify_repo.py")

@@ -34,10 +34,13 @@ class EcosystemParity(EcosystemComparison):
         self._compare("transformers_llama")
 
     def test_transformers_bert(self):
-        self._compare("transformers_bert")
+        self._compare("transformers_bert", required_gradients=(
+            "grad::encoder.pooler.dense.weight", "grad::encoder.pooler.dense.bias"))
 
     def test_transformers_vit(self):
-        self._compare("transformers_vit")
+        self._compare("transformers_vit", required_gradients=(
+            "grad::encoder.pooler.dense.weight", "grad::encoder.pooler.dense.bias",
+            "ingrad::pixel_values"))
 
     def test_diffusers_unet2d(self):
         self._compare("diffusers_unet2d")
@@ -47,6 +50,26 @@ class EcosystemParity(EcosystemComparison):
 
     def test_transformers_whisper(self):
         self._compare("transformers_whisper")
+
+    def test_transformers_clip_multimodal(self):
+        self._compare("transformers_clip_multimodal", required_gradients=(
+            "grad::clip.visual_projection.weight",
+            "grad::clip.text_projection.weight",
+            "grad::clip.text_model.embeddings.token_embedding.weight",
+            "grad::clip.logit_scale", "ingrad::pixel_values"))
+
+    def test_transformers_mixtral_moe(self):
+        # Both sparse blocks must route to all four experts in this fixture;
+        # a gate with only a dense path or inactive experts is incomplete.
+        experts = tuple(
+            "grad::model.layers.%d.block_sparse_moe.experts.%d.%s.weight" % (layer, expert, weight)
+            for layer in range(2) for expert in range(4) for weight in ("w1", "w2", "w3"))
+        routers = tuple("grad::model.layers.%d.block_sparse_moe.gate.weight" % layer
+                        for layer in range(2))
+        self._compare("transformers_mixtral_moe", required_gradients=experts + routers)
+
+    def test_transformers_llama_rope_2048(self):
+        self._compare("transformers_llama_rope_2048")
 
     def test_diffusers_dit(self):
         self._compare("diffusers_dit")

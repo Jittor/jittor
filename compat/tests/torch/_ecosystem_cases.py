@@ -11,6 +11,12 @@ runner takes care of seeding, weight transfer and serialization, so a case
 never has to know which runtime it is running under.
 """
 
+from _ecosystem_transformers_cases import (
+    clip_multimodal, llama_rope_2048, mixtral_moe, with_pooler_output,
+)
+from _ecosystem_verl_cases import distillation_k3 as _verl_distillation_k3
+from _ecosystem_verl_cases import ppo_gae_vanilla as _verl_ppo_gae_vanilla
+
 
 def _tiny_gpt2(torch):
     from transformers import AutoConfig, AutoModelForCausalLM
@@ -66,7 +72,7 @@ def _tiny_bert(torch):
     )
     model = AutoModel.from_config(config)
     inputs = {"input_ids": ("int64", (2, 8), 128)}
-    return model, inputs
+    return with_pooler_output(torch, model), inputs
 
 
 def _tiny_vit(torch):
@@ -86,7 +92,7 @@ def _tiny_vit(torch):
     )
     model = AutoModel.from_config(config)
     inputs = {"pixel_values": ("float32", (2, 3, 32, 32), None)}
-    return model, inputs
+    return with_pooler_output(torch, model), inputs
 
 
 def _diffusers_unet(torch):
@@ -336,12 +342,17 @@ def _tensordict_index_and_stack(torch):
 #: ``_ecosystem_speed`` and are merged in below, so one runner serves both the
 #: parity gate and the speed measurement.
 CASES = {
+    "verl_ppo_gae_vanilla": (_verl_ppo_gae_vanilla, ("verl", "numpy", "transformers", "ray", "tensordict")),
+    "verl_distillation_k3": (_verl_distillation_k3, ("verl", "numpy", "transformers", "ray", "tensordict")),
     "transformers_gpt2": (_tiny_gpt2, ("transformers",)),
     "transformers_llama": (_tiny_llama, ("transformers",)),
     "transformers_bert": (_tiny_bert, ("transformers",)),
     "transformers_vit": (_tiny_vit, ("transformers",)),
     "transformers_t5": (_transformers_t5, ("transformers",)),
     "transformers_whisper": (_transformers_whisper, ("transformers",)),
+    "transformers_clip_multimodal": (clip_multimodal, ("transformers",)),
+    "transformers_mixtral_moe": (mixtral_moe, ("transformers",)),
+    "transformers_llama_rope_2048": (llama_rope_2048, ("transformers",)),
     "diffusers_unet2d": (_diffusers_unet, ("diffusers",)),
     "diffusers_dit": (_diffusers_transformer, ("diffusers",)),
     "peft_lora_llama": (_peft_lora_llama, ("transformers", "peft")),

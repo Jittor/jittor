@@ -181,6 +181,12 @@ CPython minor 版本不同时默认拒绝共享包站，确实只走稳定 ABI �
 
 ## 八、统一覆盖审计与 scorecard
 
+连续验证不同提交时，可显式设置 `JITTOR_ECOSYSTEM_CACHE_ROOT` 为当前任务专属的
+benchmark 缓存根目录。`verify_repo.py` 在其下分开 CPU/CUDA/NPU 编译缓存，
+结果仍写到每次独立的 `--out` 目录，避免仅移动结果目录就重编整个核心。
+不设置时沿用结果目录内的缓存。不要与 unittest 或并行验证任务共用此根目录；
+首轮编译仍串行预热。
+
 先运行无框架依赖的事实审计：
 
 ```bash

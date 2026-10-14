@@ -820,7 +820,14 @@ def _skip_reason(report):
 
 def _is_accelerator_case(report):
     """Recognize a test whose nodeid names an accelerator path or backend."""
-    nodeid = str(getattr(report, "nodeid", "")).lower()
+    original = str(getattr(report, "nodeid", ""))
+    # instantiate_device_type_tests emits classes such as TestNumericCUDA,
+    # whose suffix has neither of the legacy "_cuda" / "cuda_" separators.
+    # Restrict this convention to class components, not arbitrary method text.
+    if any(part.endswith(("CUDA", "ROCM", "NPU"))
+           for part in original.split("::")[1:-1]):
+        return True
+    nodeid = original.lower()
     # Backend-parametrized tests can live outside tests/backends/cuda and
     # carry IDs such as [cuda-float64] or [float64-cuda], not "_cuda".
     # Match whole parameter labels, not unrelated words containing "cuda".

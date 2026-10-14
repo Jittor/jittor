@@ -47,6 +47,8 @@
 2026-10-15-metric-state-and-tensordict-oracles
 2026-10-15-checkpoint-state-options
 2026-10-15-integration-nccl-coverage
+2026-10-15-upstream-pr-disposition
+2026-10-15-verl-registered-component-oracles
 ```
 
 ## 按主题索引
@@ -85,3 +87,5 @@
 | [TorchMetrics state 与 TensorDict 对拍](2026-10-15-metric-state-and-tensordict-oracles.md) | 两库 CPU/CUDA 全梯度通过；TensorDict 三步训练通过，限定组件范围 | 2026-10-15 |
 | [Checkpoint 选项与子模块契约](2026-10-15-checkpoint-state-options.md) | CPU/CUDA 单进程选项和实际 Torch checkpoint 互通已验；多 rank 选项与 ACL 待验 | 2026-10-15 |
 | [整合回归与 NCCL 缺陷收口](2026-10-15-integration-nccl-coverage.md) | NCCL 2.18.3 双卡退出条件通过，KI-DIST-002/003 收口；限定定向范围 | 2026-10-15 |
+| [上游 PR 处置与 NumPy ABI](2026-10-15-upstream-pr-disposition.md) | 十个 PR 已核对；NumPy 1/2 真正复制与 shape 回归通过，Windows 待真机 | 2026-10-15 |
+| [VERL 注册算法组件对拍](2026-10-15-verl-registered-component-oracles.md) | GAE/vanilla PPO 与 k3 组件 CPU/CUDA 全梯度及三步轨迹通过；不计 rollout/Ray/Hydra | 2026-10-15 |

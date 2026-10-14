@@ -262,3 +262,79 @@ def test_smoke_budget_log_reports_actual_and_configured_workers(
         "smoke budget: predicted 120s / 480s (headroom 360s; 1 actual/4 "
         "configured workers; 1 CPU quota; 1 threads/worker)"
     ]
+
+
+def test_verl_gate_keeps_cpu_explicit_and_uses_real_registered_test(monkeypatch, tmp_path):
+    oracle = tmp_path / "oracle-python"
+    oracle.touch()
+    monkeypatch.setenv("REAL_TORCH_PYTHON", str(oracle))
+    monkeypatch.setenv("JITTOR_CI_PYTHON", "/preprovisioned/shim-python")
+    monkeypatch.setenv("JITTOR_TEST_DEVICES", "cpu")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "allocated-but-not-for-cpu")
+    monkeypatch.setenv("nvcc_path", "/cuda/bin/nvcc")
+    monkeypatch.setenv("JITTOR_ECOSYSTEM_SPEED_RATIO", "1.01")
+    module = _load_noxfile(monkeypatch, tmp_path)
+    session = _FakeSession(tmp_path, "/usr/bin/python3-config")
+    session.python = False
+    module["ecosystem_verl"](session)
+    launches = [(args, kw) for args, kw in session.calls if "pytest" in args]
+    assert len(launches) == 1
+    args, kw = launches[0]
+    assert module["VERL_COMPONENT_TESTS"][0] in args
+    assert args[0] == "/preprovisioned/shim-python"
+    env = kw["env"]
+    assert env["JITTOR_TEST_DEVICES"] == "cpu"
+    assert env["CUDA_VISIBLE_DEVICES"] == env["nvcc_path"] == env["JT_BUILD_NVCC_PATH"] == ""
+    assert env["JT_USE_CUDA"] == env["use_cuda"] == "0"
+    assert env["JITTOR_REQUIRE_REAL_TORCH"] == env["JITTOR_TEST_REQUIRE_EXECUTION"] == "1"
+    assert env["backend_fallback"] == "error"
+    assert env["JITTOR_ECOSYSTEM_SPEED_RATIO"] == ""
+    assert env["JITTOR_REQUIRE_VERL"] == "1"
+    assert env["cache_name"] == "nox_ecosystem_verl_cpu"
+    assert "verl-jittor-cache" in env["JITTOR_HOME"]
+    oracle_calls = [(args, kw) for args, kw in session.calls if args[0] == str(oracle)]
+    assert len(oracle_calls) == 1
+    assert oracle_calls[0][1]["env"]["JITTOR_TORCH_SHIM"] == "0"
+    assert oracle_calls[0][1]["env"]["PYTHONPATH"] == ""
+    code = oracle_calls[0][0][-1]
+    assert "Version('2.0')" in code and "Version('5.5.3')" in code
+    assert "_torch_compat_install_context" in code
+
+
+def test_verl_gate_rejects_missing_oracle_and_implicit_cuda(monkeypatch, tmp_path):
+    import pytest
+
+    monkeypatch.delenv("REAL_TORCH_PYTHON", raising=False)
+    module = _load_noxfile(monkeypatch, tmp_path)
+    session = _FakeSession(tmp_path, "/usr/bin/python3-config")
+    with pytest.raises(AssertionError, match="independent PyTorch"):
+        module["ecosystem_verl"](session)
+    oracle = tmp_path / "oracle-python"
+    oracle.touch()
+    monkeypatch.setenv("REAL_TORCH_PYTHON", str(oracle))
+    monkeypatch.setenv("JITTOR_TEST_DEVICES", "cuda")
+    monkeypatch.setenv("nvcc_path", "/cuda/bin/nvcc")
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    with pytest.raises(AssertionError, match="explicitly allocated"):
+        module["ecosystem_verl"](session)
+    assert not any("pytest" in args for args, _kw in session.calls)
+
+
+def test_verl_gate_cuda_cannot_silently_select_cpu(monkeypatch, tmp_path):
+    oracle = tmp_path / "oracle-python"
+    oracle.touch()
+    monkeypatch.setenv("REAL_TORCH_PYTHON", str(oracle))
+    monkeypatch.setenv("JITTOR_TEST_DEVICES", "cuda")
+    monkeypatch.setenv("nvcc_path", "/cuda/bin/nvcc")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "allocated")
+    module = _load_noxfile(monkeypatch, tmp_path)
+    session = _FakeSession(tmp_path, "/usr/bin/python3-config")
+    module["ecosystem_verl"](session)
+    args, kw = next((args, kw) for args, kw in session.calls if "pytest" in args)
+    assert kw["env"]["JITTOR_TEST_DEVICES"] == "cuda"
+    assert kw["env"]["JT_USE_CUDA"] == kw["env"]["use_cuda"] == "1"
+    assert kw["env"]["CUDA_VISIBLE_DEVICES"] == "allocated"
+    assert kw["env"]["JT_BUILD_NVCC_PATH"] == "/cuda/bin/nvcc"
+    assert kw["env"]["cache_name"] == "nox_ecosystem_verl_cuda"
+    oracle_call = next(args for args, _kw in session.calls if args[0] == str(oracle))
+    assert "assert torch.cuda.is_available()" in oracle_call[-1]

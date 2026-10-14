@@ -32,6 +32,11 @@ Configuration
     modules use a compatible stable ABI; otherwise each interpreter must use
     its own packages.
 
+``JITTOR_REQUIRE_<IMPORT_NAME>``
+    Fail when that top-level dependency is missing from a selected case.
+    Missing optional dependencies still skip; a flag for an available library
+    does not make an unrelated missing dependency mandatory.
+
 ``JITTOR_ECOSYSTEM_SPEED_RATIO``
     Optional upper bound on ``jittor_seconds / torch_seconds``.  The wall-clock
     numbers are always reported; they are only asserted when this is set, since
@@ -48,6 +53,8 @@ Configuration
 """
 
 from _helpers import capability as _test_capability
+
+from contextlib import ExitStack
 
 import importlib.machinery
 import importlib.util
@@ -211,11 +218,15 @@ def _npu_is_available():
 def _distributions_available(names):
     for name in names:
         try:
+            spec = None
             if PACKAGE_SITE:
                 spec = importlib.machinery.PathFinder.find_spec(
                     name, [PACKAGE_SITE]
                 )
-            else:
+            if spec is None:
+                # A source checkout and its dependencies may occupy separate
+                # real sites. The runner prepends PACKAGE_SITE but retains its
+                # interpreter's path; discovery must inspect that same union.
                 spec = importlib.util.find_spec(name)
             if spec is None:
                 return False
@@ -269,6 +280,12 @@ def _run(python, runtime, case, output, weights=None, device="cpu", repeats=None
             errors="replace",
             timeout=1800,
         )
+    if completed.returncode:
+        raise AssertionError(
+            "runner exited with exit code {} for {} under {}:\n{}".format(
+                completed.returncode, case, python, completed.stdout[-4000:]
+            )
+        )
     return _result_from_stdout(completed.stdout, case, python), completed.stdout
 
 
@@ -287,7 +304,12 @@ def _result_from_stdout(stdout, case, python):
     for line in stdout.splitlines():
         position = line.find(marker)
         if position != -1:
-            return json.loads(line[position + len(marker):])
+            result = json.loads(line[position + len(marker):])
+            if not isinstance(result, dict) or result.get("case") != case:
+                raise AssertionError(
+                    "runner case mismatch for {} under {}: {}".format(case, python, result)
+                )
+            return result
     raise AssertionError(
         "runner failed for {} under {}:\n{}".format(case, python, stdout[-4000:])
     )
@@ -329,12 +351,18 @@ class EcosystemComparison(unittest.TestCase):
     device = "cpu"
     repeats = REPEATS
 
-    def _compare(self, case):
+    def _compare(self, case, required_gradients=()):
         _builder, requirements = _ecosystem_cases.CASES[case]
-        if not _distributions_available(requirements):
-            self.skipTest("missing {}".format(", ".join(requirements)))
+        missing = [name for name in requirements
+                   if not _distributions_available((name,))]
+        if missing:
+            required = [name for name in missing
+                        if _enabled("JITTOR_REQUIRE_" + name.upper().replace("-", "_"))]
+            if required:
+                self.fail("required ecosystem dependencies missing: " + ", ".join(required))
+            self.skipTest("missing {}".format(", ".join(missing)))
 
-        with tempfile.TemporaryDirectory(prefix="jittor-ecosystem-") as directory:
+        with tempfile.TemporaryDirectory(prefix="jittor-ecosystem-") as directory, ExitStack() as archives:
             root = Path(directory)
             torch_output = root / "torch.npz"
             jittor_output = root / "jittor.npz"
@@ -412,11 +440,29 @@ class EcosystemComparison(unittest.TestCase):
                 self.assertTrue(backend.get("use_acl"), "ACL dispatch was not enabled")
                 self.assertTrue(backend.get("use_cuda"), "device dispatch was not enabled")
 
-            reference = np.load(torch_output)
-            candidate = np.load(jittor_output)
+            reference = archives.enter_context(np.load(torch_output))
+            candidate = archives.enter_context(np.load(jittor_output))
 
-            missing = sorted(set(reference.files) - set(candidate.files))
-            self.assertEqual(missing, [], "{}: Jittor produced no {}".format(case, missing))
+            for label, arrays in (("oracle", reference), ("candidate", candidate)):
+                missing_required = sorted(set(required_gradients) - set(arrays.files))
+                self.assertEqual(missing_required, [],
+                                 "{}: {} omitted required gradients {}".format(
+                                     case, label, missing_required))
+
+            self.assertEqual(
+                set(reference.files), set(candidate.files),
+                "{}: oracle/candidate tensor keys differ".format(case),
+            )
+            for key in reference.files:
+                self.assertEqual(
+                    reference[key].shape, candidate[key].shape,
+                    "{}: {} shape differs".format(case, key),
+                )
+                for label, arrays in (("oracle", reference), ("candidate", candidate)):
+                    self.assertTrue(
+                        np.isfinite(arrays[key]).all(),
+                        "{}: {} {} must be finite".format(case, label, key),
+                    )
 
             forward_error = _divergence(
                 candidate["__output__"],

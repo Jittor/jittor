@@ -212,9 +212,12 @@ def _cases_module():
 def _runtime_environment(env, runtime, device, directory):
     run_env = dict(env)
     if runtime == "jittor":
+        cache_root = run_env.get("JITTOR_ECOSYSTEM_CACHE_ROOT", "").strip()
+        cache_directory = (Path(cache_root).expanduser().resolve() / device
+                           if cache_root else directory)
         run_env["PYTHONPATH"] = str(REPO / "python")
-        run_env["JITTOR_HOME"] = str(directory / "jittor-cache")
-        run_env["JITTOR_TORCH_CACHE_ROOT"] = str(directory / "shim-cache")
+        run_env["JITTOR_HOME"] = str(cache_directory / "jittor-cache")
+        run_env["JITTOR_TORCH_CACHE_ROOT"] = str(cache_directory / "shim-cache")
         run_env["cache_name"] = "downstream-verify-" + device
         if device == "cpu":
             run_env["nvcc_path"] = ""
@@ -223,6 +226,7 @@ def _runtime_environment(env, runtime, device, directory):
     else:
         run_env["PYTHONPATH"] = ""
         for name in ("JITTOR_SOURCE_ROOT", "JITTOR_HOME", "JITTOR_TORCH_SHIM",
+                     "JITTOR_ECOSYSTEM_CACHE_ROOT",
                      "JITTOR_TORCH_CACHE_ROOT", "JT_BACKEND", "JT_USE_CUDA",
                      "JT_BUILD_NVCC_PATH", "use_cuda", "nvcc_path"):
             run_env.pop(name, None)

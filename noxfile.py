@@ -2024,6 +2024,85 @@ def ecosystem(session):
     _run_pytest_once(session, ECOSYSTEM_TESTS, env, timeout=3600)
 
 
+VERL_COMPONENT_TESTS = ("compat/tests/torch/test_ecosystem_verl.py",)
+
+
+@nox.session(python=False)
+def ecosystem_verl(session):
+    """Opt-in real VERL components with pre-provisioned NumPy 2 / Transformers 5.
+
+    Keep this dependency-incompatible environment separate from ``ecosystem``.
+    Run CPU first, then CUDA with an explicitly allocated visible device.
+    """
+    root, env = _session_env(session, "ecosystem-verl")
+    python = _hardware_python()
+    _set_hardware_python_config(session, python, env)
+    oracle = os.environ.get("REAL_TORCH_PYTHON", "").strip()
+    if not oracle or not Path(oracle).is_file():
+        session.error("REAL_TORCH_PYTHON must name an independent PyTorch interpreter")
+    device = os.environ.get("JITTOR_TEST_DEVICES", "cpu")
+    if device not in ("cpu", "cuda"):
+        session.error("ecosystem_verl needs exactly JITTOR_TEST_DEVICES=cpu or cuda")
+    env.update({
+        "REAL_TORCH_PYTHON": oracle,
+        "JITTOR_REQUIRE_REAL_TORCH": "1",
+        "JITTOR_REQUIRE_VERL": "1",
+        "JITTOR_TEST_REQUIRE_EXECUTION": "1",
+        "JITTOR_TEST_DEVICES": device,
+        "JITTOR_TORCH_SHIM": "1",
+        "JITTOR_ECOSYSTEM_SPEED_RATIO": "",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "VERL_USE_EXTERNAL_PLUGINS": "none",
+        "JITTOR_HOME": str(root / "verl-jittor-cache"),
+        "JITTOR_TORCH_CACHE_ROOT": str(root / "verl-shim-cache"),
+        "cache_name": "nox_ecosystem_verl_" + device,
+        "DISABLE_MULTIPROCESSING": "1",
+        "JT_USE_PARALLEL_OP_COMPILER": "0",
+        "JT_BUILD_USE_MKL": "0",
+        "JT_BUILD_USE_NCCL": "0",
+        "JT_BUILD_USE_MPI": "0",
+        "JT_BUILD_USE_CUTT": "0",
+        "JT_USE_CUDA": "1" if device == "cuda" else "0",
+        "use_cuda": "1" if device == "cuda" else "0",
+    })
+    if device == "cpu":
+        env.update({"CUDA_VISIBLE_DEVICES": "", "nvcc_path": "", "JT_BUILD_NVCC_PATH": ""})
+    else:
+        nvcc = os.environ.get("nvcc_path") or shutil.which("nvcc")
+        if not nvcc or not os.environ.get("CUDA_VISIBLE_DEVICES", "").strip():
+            session.error("VERL CUDA needs nvcc_path and explicitly allocated CUDA_VISIBLE_DEVICES")
+        env.update({"nvcc_path": nvcc, "JT_BUILD_NVCC_PATH": nvcc})
+    for name in ("JITTOR_ECOSYSTEM_PACKAGE_SITE", "JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE"):
+        if os.environ.get(name):
+            env[name] = os.environ[name]
+    # Validate installed, real upstream dependencies instead of silently
+    # upgrading the ordinary ecosystem environment or downloading models.
+    versions = (
+        "import numpy, transformers, verl, ray, tensordict; "
+        "from packaging.version import Version; "
+        "assert Version(numpy.__version__) >= Version('2.0'); "
+        "v = Version(transformers.__version__); "
+        "assert Version('5.5.3') <= v < Version('5.13') and v != Version('5.6.0'); "
+        "print('VERL dependencies', verl.__version__, numpy.__version__, transformers.__version__)"
+    )
+    oracle_env = dict(env, PYTHONPATH="", JITTOR_TORCH_SHIM="0", REAL_TORCH_SITE="")
+    for name in ("JITTOR_SOURCE_ROOT", "JITTOR_HOME", "JITTOR_TORCH_CACHE_ROOT", "JT_BACKEND"):
+        oracle_env[name] = ""
+    oracle_check = (
+        "import torch; "
+        "assert hasattr(torch, '_C') and not hasattr(torch, '_torch_compat_install_context'); "
+        "assert torch.cuda.is_available(); " if device == "cuda" else
+        "import torch; assert hasattr(torch, '_C') and not hasattr(torch, '_torch_compat_install_context'); "
+    )
+    session.run(oracle, "-c", oracle_check + versions, external=True, env=oracle_env)
+    _install_compat_source(session, env, python)
+    session.run(python, "-c", "import jittor; import torch; "
+                "assert hasattr(torch, '_torch_compat_install_context'); " + versions,
+                external=True, env=env)
+    _run_pytest_once(session, VERL_COMPONENT_TESTS, env, python, timeout=3600)
+
+
 @nox.session(python=False)
 def optional(session):
     """Run fail-closed optional compatibility gates on real CUDA."""
