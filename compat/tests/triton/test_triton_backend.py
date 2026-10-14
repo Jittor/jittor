@@ -647,6 +647,11 @@ class TestLaunchFollowsItsProducers(unittest.TestCase):
             self.skipTest("real upstream triton + CUDA not available")
         if triton is None or tl is None:
             setUpModule()
+        # The operands are made here with `jt.array`, so they are only on the
+        # device if CUDA is on -- and a CUDA session does not turn it on for a
+        # test; `TestTritonBackend` enters the same scope in setUpClass.
+        from _helpers.runtime_policy import fixture_stack
+        fixture_stack(self).enter_context(jt.runtime.scope(use_cuda=1))
         if _shim is None or not _shim.activate_bridge():
             self.skipTest("jittor Triton bridge is unavailable")
 
@@ -706,6 +711,11 @@ class TestTheLaunchBarrierNamesItsOperands(unittest.TestCase):
             self.skipTest("real upstream triton + CUDA not available")
         if triton is None or tl is None:
             setUpModule()
+        # The operands are made here with `jt.array`, so they are only on the
+        # device if CUDA is on -- and a CUDA session does not turn it on for a
+        # test; `TestTritonBackend` enters the same scope in setUpClass.
+        from _helpers.runtime_policy import fixture_stack
+        fixture_stack(self).enter_context(jt.runtime.scope(use_cuda=1))
         if _shim is None or not _shim.activate_bridge():
             self.skipTest("jittor Triton bridge is unavailable")
 

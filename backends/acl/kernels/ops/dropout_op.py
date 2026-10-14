@@ -1,63 +1,72 @@
-from ._code import code_with_attributes
-from ._attributes import attribute_program, code_program, runner_for_alias
-import os
-from jittor_utils import env_or_try_find
-import jittor_utils
-import ctypes
-import glob
-import jittor.compiler as compiler
-import jittor as jt
-import math
-import numpy as np
+"""ACL dropout via ``aclnnDropout`` / ``aclnnDropoutBackward``.
 
-from typing import Union
-from collections.abc import Sequence, Iterable
+The previous shape was a ``jt.Function`` that taped the input activation for
+the backward even though the backward only reads the bit mask. That kept a
+full float copy of every dropout's input for the life of the step -- the
+cost ``_keep_scale`` in ``jittor.nn.functional.dropout`` exists to avoid.
+A CodeOp with a secondary mask output (the LayerNorm pattern) keeps only
+the mask, ``numel/8`` bytes, and needs no Python callable on the tape.
+"""
+
+from ._code import acl_emit, acl_program, check_acl_float_dtype, scalar_key
+from ._attributes import code_program
 
 
-from ._code import acl_code as dropout_cmd
+_DROPOUT_PROGRAMS = {}
+
+_GRAD_SRC = code_program(
+    [
+        "\n            // aclop\n"
+        "            DropoutBackwardOpRunner op;\n"
+        "            op.add(dout, true);\n"
+        "            op.add(pout1, true);\n"
+        "            op.add(out0, false);\n"
+        "            \n"
+        "            op.run();\n"
+        "            "
+    ]
+)
 
 
-class DropoutACL(jt.Function):
-    def __init__(self):
-        super(DropoutACL, self).__init__()
-
-    def execute(self, x, p=0.5, is_train=False):
-        self.input = x
-        self.p = p
-        self.is_train = bool(is_train)
-        num_elements = x.numel()
-        aligned_elements = (num_elements + 127) // 128 * 128
-        mask_shape = (aligned_elements // 8,)
-        attributes = {
-                "p": p,
+def _dropout_program(p, is_train):
+    scale = (1.0 / (1.0 - p)) if (is_train and p > 0.0) else 1.0
+    key = (scalar_key(p), bool(is_train), scalar_key(scale))
+    program = _DROPOUT_PROGRAMS.get(key)
+    if program is None:
+        # seed/offset are required by the DropoutAttr schema; the runner
+        # ignores them and draws from the per-device counter instead
+        # (`reserve_acl_random` in dropout_op_acl.cc).
+        program = acl_program(
+            "Dropout",
+            1,
+            2,
+            attributes={
+                "p": float(p),
                 "train": bool(is_train),
                 "seed": 0,
                 "offset": 0,
-            }
-        result = dropout_cmd(
-            "Dropout",
-            [x],
-            output_dtypes=[x.dtype, "uint8"],
-            output_shapes=[x.shape, mask_shape],
-            attributes=attributes,
+            },
+            multi_grad_src=_GRAD_SRC,
+            multi_grad_attributes={"scale": float(scale)},
         )
-        self.maskout = result[1]
-        return result[0]
+        _DROPOUT_PROGRAMS[key] = program
+    return program
 
-    def grad(self, grad_output):
-        # Inverted dropout divides surviving activations by (1 - p) in the
-        # forward pass (confirmed empirically: a tensor of ones comes back
-        # at 1/(1-p) on the elements the mask kept), so the chain rule needs
-        # the same factor here -- grad_input = grad_output * mask / (1 - p).
-        # A hardcoded scale=1.0 silently dropped that factor, under-scaling
-        # every gradient that flows back through a dropout call whenever it
-        # is actually active (is_train and p > 0).
-        scale = 1.0 / (1.0 - self.p) if (self.is_train and self.p > 0.0) else 1.0
-        grad_input = dropout_cmd(
-            "DropoutBackward",
-            [grad_output, self.maskout],
-            output_dtypes=[grad_output.dtype],
-            output_shapes=[grad_output.shape],
-            attributes={"scale": scale},
-        )[0]
-        return grad_input
+
+class DropoutACL:
+    """``aclnnDropout``; returns the scaled activation, keeps a bit mask."""
+
+    def __call__(self, x, p=0.5, is_train=False):
+        input_value = check_acl_float_dtype(x, "dropout")
+        num_elements = int(input_value.numel())
+        # aclnnDropout's mask is bit-packed, padded to a multiple of 128
+        # elements so the packing is 16-byte aligned.
+        aligned_elements = (num_elements + 127) // 128 * 128
+        mask_shape = (aligned_elements // 8,)
+        result = acl_emit(
+            _dropout_program(float(p), bool(is_train)),
+            [input_value],
+            output_dtypes=[input_value.dtype, "uint8"],
+            output_shapes=[input_value.shape, mask_shape],
+        )
+        return result[0]

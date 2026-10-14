@@ -2,7 +2,8 @@
 
 import jittor as jt
 from jittor.optim.algorithms.adam import adam_update
-from jittor.optim.algorithms.sgd import sgd_update
+from jittor.optim.algorithms.sgd import momentum_initialized_flags, sgd_update
+from jittor.optim.base import _realign_state_buffers
 
 from . import common, grad_sync, shard
 from .. import optimizer_kinds
@@ -82,13 +83,23 @@ def _sgd_hparams(opt, pg):
     )
 
 
-def _sgd_update_for_param(opt, pg, state, entry, param, grad, value):
+def _sgd_update_for_param(opt, pg, state, entry, param, grad, value, *, index):
+    """Update one shard; ``index`` is the parameter's slot in ``pg``.
+
+    Whether this is the momentum buffer's first update is the group's
+    per-buffer flag, not the parameter's step count: a parameter stepped
+    without momentum earlier still seeds its buffer when momentum starts.
+    """
     lr, momentum, weight_decay, dampening, nesterov = _sgd_hparams(opt, pg)
+    initialized = momentum_initialized_flags(pg)
     if not isinstance(value, jt.Var) or list(value.shape) != list(param.shape):
         value = jt.zeros_like(param).stop_grad()
     updated = sgd_update(
         param, grad, value, lr=lr, momentum=momentum, weight_decay=weight_decay,
-        dampening=dampening, nesterov=nesterov)
+        dampening=dampening, nesterov=nesterov,
+        momentum_initialized=initialized[index])
+    if momentum != 0 or nesterov:
+        initialized[index] = True
     return updated.stop_grad(), value
 
 
@@ -185,6 +196,11 @@ def optimizer_step(opt, loss=None, retain_graph=False, *, native_kind=None):
         raise ValueError("FSDP native optimizer adapter does not match its base algorithm")
     if kind not in _SHARDED_KINDS:
         raise NotImplementedError(_unsupported_optimizer_message(opt, kind))
+    # FSDP takes the native optimizer step path directly, so it bypasses the
+    # regular Optimizer.pre_step() hook that realigns lazily-created state
+    # buffers after a parameter moves between CPU and CUDA. Keep moment and
+    # variance buffers on the current local shard before mixed-precision math.
+    _realign_state_buffers(getattr(opt, "param_groups", ()))
     has_fsdp_grad = False
     for pg in getattr(opt, "param_groups", []):
         grads = pg.get("grads") or []
@@ -241,7 +257,8 @@ def optimizer_step(opt, loss=None, retain_graph=False, *, native_kind=None):
             param_steps[i] = int(param_steps[i]) + 1
             if kind == "sgd":
                 new_param, new_value = _sgd_update_for_param(
-                    opt, pg, state, entry, entry.shard, grad, values[i])
+                    opt, pg, state, entry, entry.shard, grad, values[i],
+                    index=i)
                 values[i] = new_value
             else:
                 new_param, new_value, new_momentum = _adam_update_for_param(

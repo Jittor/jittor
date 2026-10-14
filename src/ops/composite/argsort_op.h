@@ -23,6 +23,7 @@ struct ArgsortOp : Op {
     string cmp;
     int dim;
     bool descending;
+    bool stable;
     /** 
     Argsort Operator Perform an indirect sort by given key or compare function.
 
@@ -46,6 +47,9 @@ struct ArgsortOp : Op {
 
     * [in] dtype: type of return indexes
 
+    * [in] stable: preserve the input order of equal keys (default False).
+      CPU uses std::stable_sort; CUDA segmented radix sort is already stable.
+
     * [out] index: index have the same size with sorted dim
 
     * [out] value: sorted value
@@ -64,7 +68,7 @@ struct ArgsortOp : Op {
 
      */
     // @attrs(multiple_outputs)
-    ArgsortOp(Var* x, int dim=-1, bool descending=false, NanoString dtype=ns_int32);
+    ArgsortOp(Var* x, int dim=-1, bool descending=false, NanoString dtype=ns_int32, bool stable=false);
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;
     static VarPtr get_grad(Var* out, Var* dout, Var* v, int v_index, int dim, Var* y);
     void infer_shape() override;

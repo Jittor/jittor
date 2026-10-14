@@ -13,11 +13,16 @@ struct FusedSgdOp : Op {
     vector<Var*> new_parameters, new_velocities;
     float64 lr, momentum, weight_decay, dampening;
     bool nesterov, maximize;
+    // First real update of every velocity in the list: seed it from the raw
+    // gradient (PyTorch's `buf = dp.clone()`) instead of the dampened
+    // recurrence, which is only correct from the second update on. Buffers
+    // seeding and buffers continuing go in separate ops.
+    bool first_step;
     // Whether `order_after_readers` has run: once, at construction.
     bool ordered = false;
 
     // @attrs(multiple_outputs)
-    FusedSgdOp(vector<Var*>&& parameters, vector<Var*>&& velocities, vector<Var*>&& gradients, float64 lr, float64 momentum, float64 weight_decay, float64 dampening, bool nesterov, bool maximize, vector<Var*>&& rate={});
+    FusedSgdOp(vector<Var*>&& parameters, vector<Var*>&& velocities, vector<Var*>&& gradients, float64 lr, float64 momentum, float64 weight_decay, float64 dampening, bool nesterov, bool maximize, bool first_step, vector<Var*>&& rate={});
 
     const char* name() const override { return "fused_sgd"; }
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;

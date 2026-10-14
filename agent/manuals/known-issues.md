@@ -1,7 +1,7 @@
 # Known-Issues Ledger
 
 - Status: Maintained
-- Last reviewed: 2026-10-06
+- Last reviewed: 2026-10-13
 - Baseline: `1a6e203fc`
 - Owner: Jittor core maintainers
 - Review when: an entry is fixed or narrowed, a strict expected failure
@@ -161,28 +161,11 @@ workaround.
 - Evidence: `pytest tests/runtime/test_profiler.py tests/codegen/test_jit_tests.py::TestJitTests::test_fused_op_relay_matmul`.
 - Exit condition: the case passes after each of the three files in one process.
 
-## KI-TEST-009: two `test_torch_compat_optim.py` cases fail on device placement
-
-- Severity: Medium
-- Status: Open; reproduced on `1a6e203fc` (CUDA)
-- Owner: torch compatibility / optimizers
-- Symptom: `compat/tests/torch/test_torch_compat_optim.py::TestSGD::test_native_backward_does_not_double_advance_step`
-  dies in `method_api.py` `_binary_native` with `device_copy_op.cc: Expected all
-  tensor inputs on the same backend and device`, and
-  `TestAdam::test_bound_initializers_inside_no_grad_keep_parameter_trainable`
-  fails `assert_stays_on_device` with `'cpu' != 'device'`. The other cases in the
-  file pass.
-- Cause: not isolated; suspected a tensor created on the host (an initializer or
-  a split optimizer's state) meeting a device-placed parameter.
-- Workaround: none in the tests; real training steps that keep one placement do
-  not reach it.
-- Evidence: `JITTOR_TORCH_SHIM=1 python -m pytest -q compat/tests/torch/test_torch_compat_optim.py -k "double_advance_step or keep_parameter_trainable"`.
-- Exit condition: both cases pass on CUDA.
-
 ## KI-TEST-010: three `test_torch_compat_norm.py` LayerNorm fast-path cases fail
 
 - Severity: Low (values elsewhere in the file pass)
-- Status: Open; reproduced on `1a6e203fc` (CUDA)
+- Status: Open; reproduced on `1a6e203fc` (CUDA); the three cases run as strict
+  expected failures
 - Owner: torch compatibility / normalization kernels
 - Symptom: `compat/tests/torch/test_torch_compat_norm.py::TestLayerNorm::test_ln_no_grad_cuda_fast_path_float32_and_float16`
   (`CUDA no-grad LayerNorm missed its fused path`),
@@ -252,6 +235,30 @@ workaround.
 - Exit condition: measure the nightly gate with a restored cache; if acceptable,
   delete the entry, otherwise reduce cold compilation.
 
+## KI-TEST-014: the `resnet_training` notebook asserts a training trajectory that no longer happens
+
+- Severity: Low (tutorial narrative; the training itself is correct)
+- Status: Open; reproduced 2026-10-13 with `use_mkl=0` (as the smoke runs it)
+  on AMD EPYC 9554 (Zen 4) and 7763 (Zen 3): identical numbers on both and
+  across runs, so neither the CPU nor nondeterminism. The smoke case is a
+  strict expected failure through `_SMOKE_KNOWN_ISSUES` in
+  `tests/integration/test_notebooks.py`, limited to a cell raising.
+- Owner: tutorial / examples maintainers
+- Symptom: `assert len(set(frozen)) == 1, "普通网络应当出现连续多个 epoch 停滞"` --
+  the plain network's validation accuracy over epochs 2-4 is 0.31, 0.56, 0.48,
+  not a constant 0.31. The table in the notebook (residual 0.80/0.72, plain
+  0.56/0.42) no longer matches either (0.84/0.73 and 0.59/0.48 now). The other
+  assertions -- residual beats chance and beats plain by more than 0.15 -- hold.
+- Cause: not isolated. The notebook pins an exact trajectory of a small
+  network, so any change in conv/BatchNorm/Adam numerics moves it; which change
+  did has not been bisected.
+- Workaround: none needed; the code is right, the narrative is stale.
+- Evidence: `tests/integration/test_notebooks.py::test_notebook_smokes_execute_offline_on_cpu[resnet_training]`
+  (`nox -s cpu`, the manual stage); `examples/notebooks/resnet_training.md`.
+- Exit condition: rewrite the notebook's stall claim and table for a
+  trajectory that is stable (or assert the property, not the exact numbers),
+  and drop the `_SMOKE_KNOWN_ISSUES` entry.
+
 ## KI-COMPILER-001: the op-level parallel compiler can corrupt process state
 
 - Severity: High
@@ -261,8 +268,15 @@ workaround.
 - Owner: compiler/executor maintainers
 - Symptom: with `use_parallel_op_compiler` on (the default), a process that
   compiles many operators can segfault or corrupt state.
-- Cause: not established. The op-level compiler is `src/core/parallel_compiler.cc`
-  (`std::thread`), unrelated to the file-level `multiprocessing.Pool`.
+- Cause: not established in general. The op-level compiler is
+  `src/core/parallel_compiler.cc` (`std::thread`), unrelated to the file-level
+  `multiprocessing.Pool`. One cause was found and fixed on 2026-10-13: fused
+  source generation (`OpCompiler::__get_fused_src`) ran a `std::regex_match`
+  whose recursion grew with the source, and a compile thread's stack is glibc's
+  2 MB default where `ulimit -s` is unlimited (Slurm nodes); a rank-13 kernel
+  overflowed it with SIGSEGV and no backtrace
+  (`tests/core/test_high_rank_tensors.py::TestCompileThreadStack`). Whether the
+  reports below were all this has not been checked.
 - Workaround: `jt.flags.use_parallel_op_compiler = 0` for deterministic
   validation workloads; it reaches only the op-level compiler. The maintained
   notebook gate stays serial: a complete notebook smoke also died with eight
@@ -337,7 +351,8 @@ workaround.
 ## KI-CODEGEN-001: fused elementwise kernels pay a division and a modulo per element for a broadcast operand
 
 - Severity: Medium (performance; results are correct)
-- Status: Open; a documented trade-off
+- Status: Open; a documented trade-off. Both `test3` cases run as strict expected
+  failures with their original assertion (a `KI-CODEGEN-001` note on the case)
 - Owner: codegen maintainers
 - Symptom: on CPU, `x + y` where `y` is an expand of a real tensor runs about
   5.2x its dense counterpart (`64x64x64x64 + 1x64x1x1`: 636.5 us against
@@ -436,7 +451,11 @@ workaround.
 
 - Severity: High (a supported operation runs orders of magnitude slower than the
   library kernel that exists for it, with no error and no log)
-- Status: Open for the hand-written form. `jt.nn.matmul`, `nn.Linear` and
+- Status: Open for the hand-written form; the evidence cases below run as strict
+  expected failures (each failing one carries a `KI-TUNER-001` note), so the day
+  the relay fires they XPASS and the gate turns red. `test_group_conv_tuner.py`
+  and the two `test_profiler.py` cases pass on the CPU gate (2026-10-12) and are
+  not marked. `jt.nn.matmul`, `nn.Linear` and
   `nn.Conv2d` reach the library kernels directly and are not affected.
 - Owner: compiler/tuner maintainers
 - Symptom: with `enable_tuner=1`, a product or convolution written out of
@@ -646,7 +665,8 @@ workaround.
 
 - Severity: Medium (two library self-test ops cannot run; the libraries
   themselves are fine)
-- Status: Open; two repair attempts refuted. Renumbered from `KI-BACKEND-006`,
+- Status: Open; two repair attempts refuted. `TestCublasTestOp` and
+  `TestCudnnTestOp` run as strict expected failures. Renumbered from `KI-BACKEND-006`,
   an id that had already been used.
 - Owner: CUDA backend maintainers
 - Symptom: `tests/backends/cuda/test_cublas_test_op.py` fails two of its three
@@ -711,7 +731,7 @@ workaround.
   507035) -- serialising execution avoids it, which is the key narrowing below.
   `jt.flags.auto_graph_replay=0` avoids the capture path for `sd15_unet_train`
   (losing the replay speedup); re-running sometimes succeeds for it.
-- Evidence: `bench/torch_compat --device npu --workloads sd15_unet_train,
+- Evidence: `benchmarks/torch_compat --device npu --workloads sd15_unet_train,
   resnet50_train`; peer Ascend runs 2026-10-06 and 2026-10-07 under
   `$JITTOR_LAB_ROOT/_state/npu-verify`. Narrowed 2026-10-07 and it is NOT the
   conv op or its tensor layout: (a) the exact repro shape run as a standalone
@@ -745,7 +765,7 @@ workaround.
   still individually trail and `sd15_unet_train`/`resnet50_train` are still
   blocked on KI-BACKEND-016.
 - Status: Limitation, narrowed six times, each against a real paired
-  `bench/torch_compat --device npu` run (same card, same seed), not an
+  `benchmarks/torch_compat --device npu` run (same card, same seed), not an
   isolated probe. (2026-10-06) the first full-suite run measured
   `vit_b16_train` at "~9.9x" from an isolated, unwarmed aclprof capture; the
   properly warmed-up paired run (2026-10-07, 14 workloads, geometric-mean
@@ -1010,6 +1030,122 @@ workaround.
   this workload's plain dynamic cache never reaches. There is no
   ACL-scoped fix available for this cause; a fix would mean changing the
   core indexing path every backend shares.
+  (2026-10-08) That last sentence was only half right: part of the per-op
+  host cost was ACL-scoped. `basic_slice_acl` and `ConcatACL` rebuilt their
+  program (attribute dicts, two to three `code_program`/`attribute_program`
+  keys) on every call, the three grouped RMSNorm runners did the same
+  through `code_with_attributes`, and `getitem_acl` asked
+  `hasattr(np, "int128")` twice per index through numpy's module
+  `__getattr__`. Memoising each program on the scalars it derives from
+  (dtype/shape/bounds, split sizes/axis, kind/eps) halved the host cost of
+  `x[..., :64]` (72.5 -> 34.5 us) and `cat` (39.4 -> 22.0 us) with
+  byte-identical `jt.code` arguments (48 captured calls compared against
+  HEAD). Paired 12-workload run on npu 3 against the HEAD `7a18abf29`
+  baseline: `qwen3_decode` 2.22x -> 2.04x, geometric mean 0.944x ->
+  0.932x, no workload regressing beyond run-to-run noise. Pipelining the
+  executor instead was measured and rejected: enabling ACL
+  `supports_auto_flush` made a 24-token decode slower at every setting
+  (2979 ms off; 3271/3183/3093 ms at `auto_flush_ops` 128/64/256) because
+  each extra ACL executor batch costs more host time than the device time
+  it hides. What remains is generic Python dispatch above the kernels and
+  the executor running on the Python thread; the async worker
+  (`may_run_async`) is still CUDA-only and would need an ACL thread device
+  bind plus a thread-safe `AclCpuFallbackScope` before it can overlap them.
+  (2026-10-09) One piece of that generic dispatch was ACL-scoped after all:
+  ACL registers `tensor.concat`, so the native `_fast_cat` always declines
+  and every `torch.cat` walked the whole compat frontend
+  (`__torch_function__` scan, `None` filter, scalar squeeze, uint8 restore)
+  only to reach `jittor.concat`. For a list of plain Vars of one signed
+  dtype and one rank, none empty, every one of those steps is a no-op, and
+  the compat `cat` now goes straight to `jittor.concat` (147 -> 124 us per
+  call). Clean paired run on npu 3 against the same baseline: `qwen3_decode`
+  2.04x -> 1.91x, geometric mean 0.932x -> 0.917x, zero fallbacks, nothing
+  else moving beyond noise.
+  (2026-10-09) The core-level fix named above then landed too: the async
+  worker now runs on ACL, overlapping the step's ~1.1 s of device sync with
+  its ~2.1 s of graph construction. Both obstacles turned out to be
+  tractable and both were pre-existing bugs rather than design limits -- a
+  fresh thread's missing ACL device context (KI-EXEC-012) and a fork while a
+  batch is in flight (KI-EXEC-011). The `AclCpuFallbackScope` hazard is
+  excluded by policy instead of being made thread-safe: ACL takes the worker
+  only under `backend_fallback=error`, where no fallback runs at all
+  (`async_requires_strict_fallback`). ACL also auto-flushes only when the
+  worker takes the batch (`async_auto_flush_only`), which is what reconciles
+  this with the refutation above -- an inline flush pays the Python thread's
+  time for nothing, the same flush on the worker overlaps it.
+  Clean paired 12-workload run on npu 3, same baseline, zero fallbacks:
+  geometric mean 0.917x -> 0.880x. `qwen3_decode` 1.91x -> 1.27x and
+  `resnet50_infer` 1.65x -> 1.29x, the latter a surprise -- part of what had
+  been attributed to `TransData`/`BNInfer` device cost was the host building
+  the next step instead of the device running this one. The price is 2-5% on
+  the three shortest steps, where there is not enough device time to hide a
+  handover: `resnet50_infer_b1` (9 ms) 0.395x -> 0.416x, `bert_base_infer`
+  (15 ms) 0.629x -> 0.669x, `sd15_vae_decode` (22 ms) 1.202x -> 1.239x. All
+  three are real regressions, not noise, and no threshold is in place to
+  decline a batch too small to pay for the handover.
+  (2026-10-11) A size threshold cannot be that threshold: `qwen3_decode`
+  hands over ~200 KB per batch and gains the most, `resnet50_infer_b1`
+  hands over as little and loses. What separates them is whether the
+  Python thread has anything to build between submitting a batch and
+  waiting on it. ACL now measures exactly that (`async_min_caller_us`,
+  default 150 us, a running average with one in 64 declined batches let
+  through to notice a step that grows heavier) and stops both handing over
+  and auto-flushing while it is short (`async_handover_must_pay`). Paired
+  on npu 2, same tree with the gate off (`async_min_caller_us=0`) and on,
+  12 workloads, zero fallbacks: geometric mean 0.9005x -> 0.8961x.
+  `resnet50_infer_b1` is the one consistent gain (0.419x -> 0.405x, and
+  the same ~3% in two further pairs of a four-workload sweep); `qwen3_decode`
+  (1.273x -> 1.235x) and `resnet50_infer` (1.287x -> 1.260x) are not hurt.
+  `bert_base_infer` and `sd15_vae_decode` do not recover -- off and on are
+  inside their own run-to-run spread (`bert_base_infer` read 0.79x and
+  0.68x on two gate-off runs) -- so their 2-5% is not the handover the gate
+  declines, and remains open. Absolute ratios on npu 2 differ from npu 3
+  because the torch baseline does (`qwen3_prefill` 74.7 ms vs 84.8 ms);
+  compare within a card only.
+  (2026-10-13) The worker then stopped being an inference-only device, which
+  is where the four training workloads' remaining gap mostly was. `no_grad`
+  was never a correctness requirement in itself -- the backward's own
+  construction window is excluded separately (`grad_construction_depth`) --
+  but one thing did make a training forward unsafe to hand over, and it was a
+  real bug, not a design limit: a tape made from a `jt.Function` owns the
+  Python callable its backward calls, and the worker, which has no GIL, was
+  the thread that ran the `Py_DECREF` ending the batch. `ddpm_unet_train` and
+  `qwen3_train` segfaulted in `Tapes::~Tapes` inside `worker_main` on the
+  first attempt. That release now goes back to the Python thread
+  (`async_exec_defer_python_release`, drained at every executor entry), and a
+  backend whose policy sets `async_admits_grad` hands training forwards over.
+  ACL sets it because it fuses nothing: the cost an auto-flush has for a
+  training step is an intermediate written out instead of fused into its
+  readers, and there is no fusion there to lose.
+  Paired on npu 2, the four training workloads, same tree with and without
+  the handover, zero fallbacks: geometric mean 1.1743x -> 0.9851x.
+  `bert_base_train` 1.749x -> 1.336x, `qwen3_train` 0.860x -> 0.724x,
+  `ddpm_unet_train` 1.031x -> 0.860x, `vit_b16_train` 1.227x -> 1.131x.
+  Device peaks moved between -4.6% and +3.7%, which is what the no-fusion
+  argument predicts. Numerics are unchanged: eight SGD steps of a
+  convolutional stack differ from the serial run by exactly as much as the
+  serial run differs from itself (loss 2.4e-7, weights 7.6e-7 -- ACL
+  convolution is not bit-reproducible run to run).
+  The 12-workload geometric mean on npu 2 read 0.8588x after this, against
+  0.8941x for the previous tree on the same torch baseline. Its inference
+  rows read 1.5-4% worse than the earlier run, which is drift and not this
+  change: two repeats of one build on that card spread 5-7% on them
+  (`resnet50_infer_b1` 0.377x and 0.404x, `qwen3_decode` 1.298x and 1.236x),
+  and the torch baseline itself moved 12% on `sd15_sample` between runs. Only
+  the paired same-session A/B above is quoted as this change's effect.
+  `bert_base_train` is still the furthest behind at ~1.32x. Its dropout is a
+  second, independent lever, measured but not taken: the live path
+  (`_keep_scale`) draws a float32 uniform through `DSARandomUniform`, then
+  compares, casts and multiplies, where `aclnnDropout` does all of it in one
+  op and returns a mask of numel/8 bytes. On the BERT-base shapes, forward
+  plus backward, `aclnnDropout` costs 0.47-0.77x of the live path
+  (595.6 -> 459.9 us on (32,128,768) with 24 calls in flight) and is
+  numerically right (keeps 0.9011 of elements, scales by 1.1111, a fresh mask
+  per call).   An implementation already existed and was already correct --
+  `DropoutACL`, fixed under KI-BACKEND-018 -- and wiring it was measured
+  and rejected: the composite's `DSARandomUniform` overlaps MatMul on the
+  DSA side queue, while `aclnnDropout` serialises on the compute stream
+  and made `bert_base_train` 8% slower (see that entry's follow-up).
   `bert_base_train`'s gap is similarly not a dispatch bug: an aclprof
   capture shows `MatMulV2` at 42.4% of device time (the
   expected dominant cost for a transformer) and `DSARandomUniform` --
@@ -1025,7 +1161,7 @@ workaround.
   rather than a software defect, but this session had no CANN-side
   documentation of that engine's dispatch cost to confirm it, so it is
   recorded as observed, not diagnosed.
-- Evidence: `bench/torch_compat --device npu`; peer Ascend runs 2026-10-06
+- Evidence: `benchmarks/torch_compat --device npu`; peer Ascend runs 2026-10-06
   and 2026-10-07 under `$JITTOR_LAB_ROOT/_state/npu-verify`. The post-fix
   12-workload run (`--workloads qwen3_prefill,qwen3_decode_static,
   qwen3_train,resnet50_infer_b1,bert_base_infer,vit_b16_train,
@@ -1132,6 +1268,43 @@ workaround.
   first; this session did neither, to avoid conflating a benchmark-speed
   investigation with a dead-code removal decision that deserves its own
   review.
+- Follow-up (2026-10-14): the class was rewritten from a `jt.Function` to
+  an `acl_emit` CodeOp with a secondary uint8 mask output (the LayerNorm
+  pattern), so a future wire-up would keep `numel/8` bytes of mask and not
+  a taped float activation; seed/offset already come from the per-device
+  counter (`reserve_acl_random`). It was then wired through
+  `try_dispatch("nn.dropout")` and measured on a 910B3 against the
+  composite on the same tree: isolated, forward-plus-backward
+  `aclnnDropout` cost 0.47-0.77x of `_keep_scale`, but a full
+  `bert_base_train` step was 8% slower (96.4 vs 88.7 ms). The composite's
+  `DSARandomUniform` runs on the `DSA_SQE` side queue and overlaps MatMul;
+  `aclnnDropout` takes the main compute stream instead. The dispatch was
+  reverted; the CodeOp rewrite stays so the class is not a footgun if it
+  is ever reached again.
+
+## KI-BACKEND-019: `argsort` has no registered constructor on ACL
+
+- Severity: Medium (a supported operation raises), Open
+- Status: Open, seen 2026-10-13 on a 910B3
+- Owner: ACL backend
+- Symptom: eight NPU-gate cases fail with
+  `JittorError: op_register.h:64: constructor argsort with requested
+  signature not found`, raised from
+  `tests/opinfo/definitions/ordering_ops.py`:
+  `test_acl.py::TestACL::test_argsort_values_indices_stay_on_acl` and, in
+  `tests/ops/test_ops.py::TestCommonNPU`, `test_reference_argsort_float32`
+  and `_float64`, `test_reference_sort_float32` and `_float64`,
+  `test_reference_topk_float32`, `test_reference_median_float32`,
+  `test_reference_kthvalue_float32`.
+- Cause: not investigated here. Arrived with the upstream merge; the
+  NPU-gate torch group went from 83 to 90 failures and the native group
+  from 0 to 1 across that merge, and all eight are this one signature.
+- Evidence: the eight cases fail identically on `659e6a47f` with no local
+  commits applied -- a worktree at that commit alone, same card, same gate
+  script -- so they are not from the ACL async-worker work that was being
+  verified when they appeared.
+- Exit condition: `argsort`'s ACL constructor is registered with the
+  signature `ordering_ops.py` asks for, and the eight cases pass.
 
 ## KI-OPS-002: integer floor-division ROCm verification incomplete
 
@@ -1169,7 +1342,7 @@ workaround.
 - Workaround: none needed for correctness. Where throughput matters and the
   input cannot contain NaN, reduce on CUDA, or in an integer dtype (`a != a` is
   constant-false there and the compiler deletes it).
-- Evidence: `benchmarks/reductions.py`;
+- Evidence: `benchmarks/asv/reductions.py`;
   [`tests/codegen/test_blocked_reduction_pass.py`](../../tests/codegen/test_blocked_reduction_pass.py)
   guards the blocked max/min fold (combiner, seed, NaN, sign of the identity).
 - Exit condition: the innermost stride is a compile-time constant when it is one
@@ -1223,6 +1396,26 @@ workaround.
 - Exit condition: store the row maximum and `1/l` separately (or `lse` relative
   to the maximum) so the backward never subtracts two equal huge numbers, and
   add the fully masked row to the test.
+
+## KI-OPS-015: the CUDA backward of `scaled_dot_product_attention` misses the device-parity per-element budget
+
+- Severity: Medium (a parity gate case cannot pass; the gradients agree to
+  about 0.7% per element)
+- Status: Open; reproduced 2026-10-12 on RTX 4090 / CUDA 12.2 in every CUDA run
+  (`nox -s cuda` included). Both cases run as strict expected failures through
+  `_KNOWN_DEVICE_ISSUES` in `tests/backends/parity/test_device_parity.py`.
+- Owner: attention / CUDA kernel maintainers
+- Symptom: `scaled_dot_product_attention BACKWARD (input 0) per-element divergence
+  cpu vs cuda (max rel 6.80e-03)` against `GRAD_PE_TOL` 5e-3 (6.49e-03 for the
+  causal variant). The forward and the net-scaled backward error pass.
+- Cause: not isolated. Suspected a different accumulation order in the softmax
+  backward; whether 0.7% on a sub-peak coordinate is legitimate reordering or a
+  real defect has not been decided.
+- Workaround: none needed for typical training.
+- Evidence: `tests/backends/parity/test_device_parity.py::TestDeviceParity::test_scaled_dot_product_attention`
+  and `::test_scaled_dot_product_attention_causal` (torch mode, CUDA).
+- Exit condition: both cases pass (a fixed kernel, or a budget justified for
+  this operator) and the `_KNOWN_DEVICE_ISSUES` entry is removed.
 
 ## KI-SEMANTICS-003: floating-comparison NaN semantics not verified on every backend
 
@@ -1282,10 +1475,40 @@ workaround.
   (an expected failure; its companion `..._with_an_exact_python_float_is_exact`
   must keep passing); `TestHalfPythonScalar` in
   `tests/type/test_half_precision_parity.py` pins the four half-precision
-  expressions bit-identical to torch.
+  expressions bit-identical to torch (a strict expected failure until
+  KI-DTYPE-004 is fixed: its operand is built with `jt.ones`).
 - Exit condition: a Python float keeps its value against a float64 operand in
   both modes, the expected failure XPASSes (strict) and its decorator is
   dropped, and the half expressions stay bit-identical to torch.
+
+## KI-DTYPE-004: a `jt.ones`/`zeros`/`full` result is a weak scalar in dtype promotion
+
+- Severity: Medium (a promotion divergence from NumPy and PyTorch; the values
+  are what the chosen dtype holds)
+- Status: Open; reproduced 2026-10-12 on CPU and CUDA. Both evidence cases run
+  as strict expected failures.
+- Owner: dtype maintainers
+- Symptom: `jt.ones(4).float16() * 0.1` (also `* 2.0`, `+ 0.1`) is float32,
+  while `jt.array(np.ones(4, "float16")) * 0.1` and torch give float16.
+  The other direction too: `jt.zeros(3)` (float32) times a float16 tensor is
+  float16, where torch gives float32.
+- Cause: the factories build `array(<python number>).broadcast(shape)`
+  (`python/jittor/_core/var.py` `_constant_scalar`). The 0-d constant carries
+  `_is_scalar`, and `BroadcastToOp` and the cast in `UnaryOp` copy the flag to a
+  full-size result, so `binary_dtype_infer` treats that tensor as a Python
+  scalar: against a Python number both sides are "scalars" and the wider width
+  wins; against a tensor it adopts the tensor's width. The same flag lets an
+  unsynced constant follow its operand's device (`src/core/op.cc`
+  `is_pending_scalar`), so clearing it in the broadcast changes placement as
+  well as dtype.
+- Workaround: build half tensors from data (`jt.array(np.ones(..., "float16"))`)
+  or cast after the arithmetic.
+- Evidence: `tests/type/test_half_precision_parity.py::TestHalfPythonScalar::test_matches_torch`
+  (the constraint KI-DTYPE-003 names) and
+  `tests/nn/test_grad_scaler.py::TestGradScalerStep::test_scaling_a_float16_loss_directly_is_reported`.
+- Exit condition: a factory result promotes as the tensor it is, an unsynced
+  constant still follows its operand's device, and both cases XPASS and lose
+  their markers.
 
 ## KI-COMPLEX-001: native complex capability gaps
 
@@ -1319,7 +1542,7 @@ workaround.
   element indexing on large device tensors in hot paths.
 - Evidence: `tests/core/test_var_residency_contract.py`;
   `tools/probes/side_effect_probe.py` (found the `tolist()` spelling);
-  `benchmarks/transfer.py`.
+  `benchmarks/asv/transfer.py`.
 - Exit condition: `numpy()`, `repr()` and element/slice reads leave the source
   Var's `location()` unchanged on real CUDA, a device operation right after such
   a read costs the same as one without it, and the residency contract covers all
@@ -1540,6 +1763,115 @@ workaround.
   segments, and GPU idle time in the backward of a Llama and a UNet step drops
   without the step getting slower.
 
+## KI-EXEC-011: a fork while a batch is in flight deadlocked three ways
+
+- Severity: High (a hang, not a wrong answer), Fixed
+- Status: Fixed (2026-10-09)
+- Owner: executor / async execution
+- Symptom: a Qwen3 decode step on ACL hung with the device idle. Three
+  threads, in a cycle: the main Python thread held the graph lock and waited
+  for the GIL inside `GraphEntryScope`; a second thread held the GIL inside
+  `subprocess.Popen` -> `__libc_fork` -> the `pthread_atfork` prepare handler
+  `before_fork` -> `wait_for_worker`; and the worker spun for the graph lock
+  in `GraphLockSuspend`'s destructor between its segments.
+- Cause: `before_fork` (and `stop_worker`) called `wait_for_worker` bare,
+  holding both the GIL and whatever graph lock the calling thread had.
+  `async_exec_wait` already released both for the same wait and explained
+  why -- the worker takes the graph lock between segments, and compiling an
+  operator calls back into Python -- but the two other callers did not. Not
+  ACL-specific: the second thread only forks, which a dataloader or an
+  `nvidia-smi`/`npu-smi` sampler does, and CUDA was equally exposed. It had
+  simply never been exercised, because nothing forked mid-batch in the
+  CUDA benchmarks.
+- Workaround: none needed; `async_execution=0` avoided it before the fix.
+- Evidence: native backtraces of all 211 threads of the hung process
+  (`eu-stack`) showing the cycle. Regression test:
+  `tests/runtime/test_async_execution.py::...::test_a_second_thread_may_fork_while_a_batch_is_in_flight`,
+  which forks from a second thread with a batch in flight.
+- Fix: one `wait_for_worker_unlocked` -- graph lock and GIL released, no
+  error rethrown so a fork handler can use it -- for all three callers.
+
+## KI-EXEC-012: ACL failed every operator on a second Python thread
+
+- Severity: High (a supported operation aborts), Fixed
+- Status: Fixed (2026-10-09)
+- Owner: ACL backend
+- Symptom: `jt.array(...)` on any thread but the first raised `RuntimeError:
+  aclrtGetDevice failed with ACL status 107002` on a 910B3. A multi-threaded
+  weight loader, a dataloader thread, or the async-execution worker all hit
+  it on their first operator.
+- Cause: a thread that has never bound a device has no ACL context, and
+  `aclrtGetDevice` reports that as a failure rather than answering "none".
+  `acl_runtime_current_device()` and `set_device()` both treated it as an
+  error. CUDA never had the problem because `accelerator_current()` binds a
+  thread whose `tls_bound_device` does not match the process device.
+- Workaround: bind the device on the thread before using jittor from it.
+- Evidence:
+  `tests/runtime/test_async_execution.py::...::test_a_second_python_thread_may_build_meanwhile`,
+  which was CUDA-only-skipped before and now runs on ACL.
+- Fix: both ACL entry points treat the status as "unbound" and bind the
+  device the process is using, mirroring CUDA.
+
+## KI-EXEC-013: the worker dropped a `jt.Function`'s Python callable without the GIL
+
+- Severity: High (a segfault), Fixed
+- Status: Fixed (2026-10-13), verified on a 910B3
+- Owner: executor / async execution
+- Symptom: `ddpm_unet_train` and `qwen3_train` on ACL died with
+  `Caught segfault at address ...` the first time the async-execution worker
+  was allowed to take a training forward's batches. The backtrace was the
+  same in both: `worker_main` -> `Executor::run_sync`'s batch lambda ->
+  `run_exec_plan` -> `Tapes::~Tapes` ->
+  `from_py_object<GradCallback>`'s deleter lambda.
+- Cause: a tape built from a `jt.Function` owns the Python callable its
+  backward calls, and `GradCallback`'s deleter is a bare
+  `Py_DECREF(obj); Py_DECREF(frontend_type)`. When the last owner of such a
+  tape is a batch the worker is winding down, that runs on a thread with no
+  GIL, which is a memory corruption rather than a refcount. Not ACL-specific
+  in itself, but only ACL hands a training forward over
+  (`async_admits_grad`), and ACL reaches it constantly because its
+  convolutions and norms are `jt.Function`s. Latent before that: under
+  `no_grad` no tape exists, which is what had kept the worker safe.
+- Workaround: `async_execution=0`.
+- Evidence: the two crash reports with their resolved frames (`addr2line`
+  against the run's `jittor_core` build). Regression test:
+  `tests/runtime/test_async_execution.py::...::test_a_python_owned_tape_released_by_the_worker`,
+  which puts a `jt.Function` in a chain long enough to be handed over and
+  compares the gradient against the serial run.
+- Fix: `async_exec_defer_python_release` -- on the worker the two references
+  are queued instead of dropped, and the Python thread runs the queue at its
+  next executor entry (`async_exec_run_python_releases`, which also checks it
+  holds the GIL). Off the worker the deleter still drops them itself.
+
+## KI-EXEC-014: ACL worker intermittently segfaults in `release_forward_liveness` on `qwen3_decode`
+
+- Severity: High (a segfault), Open
+- Status: Open, seen once on 2026-10-14 on a 910B3 after rebasing onto
+  `659e6a47f`; not reproduced in nine subsequent full-size runs
+- Owner: executor / async execution
+- Symptom: one `qwen3_decode` process of a 12-workload bench on the
+  rebased tree died with `Caught segfault` on the worker thread. Resolved
+  frames: `worker_main` -> `run_exec_plan` ->
+  `Node::release_forward_liveness` / `Node::release_inputs` /
+  `LogFatalVoidify` (so a `CHECK_EXIST` on a freed node, then a secondary
+  crash in the fatal path). Not the GradCallback path of KI-EXEC-013:
+  decode runs under `no_grad` and builds no tapes.
+- Cause: not diagnosed. Appeared after rebasing the ACL async-worker work
+  onto upstream `659e6a47f` (352-file Refactor 2.0); the same decode had
+  completed cleanly in every pre-rebase run on this card. Nine follow-up
+  runs (three targeted, six back-to-back) all passed with the worker on
+  (median ~10.5 s/step vs 16.1 s with `async_execution=0`). Timing-sensitive
+  use-after-free in the shared liveness queue is the working hypothesis;
+  `run_liveness_queue` already documents that two threads draining at once
+  would corrupt each other's callbacks.
+- Workaround: `async_execution=0` (and loses the ~35% decode gain).
+- Evidence: the one crash report under
+  `$JITTOR_LAB_ROOT/_state/npu-perf/rbfull/rb_full/logs/qwen3_decode.jittor.log`;
+  the nine succeeding runs under `decrep/` and `decstress/`.
+- Exit condition: either a deterministic repro and a fix, or enough clean
+  runs across cards that the single observation is treated as a one-off
+  and this entry closed.
+
 ## KI-COMPAT-001: Torch namespaces publish native-only helpers and imported symbols
 
 - Severity: Medium
@@ -1707,6 +2039,93 @@ workaround.
   example widen only where FP64 is fast, or compute `x * (1/s)` with a
   correction), update the promotion tests with the decision, and delete the entry.
 
+## KI-COMPAT-010: torchmetrics' classification and regression metrics fail under the Torch frontend on CUDA
+
+- Severity: Medium (an ecosystem library's core metrics do not run)
+- Status: Open; reproduced 2026-10-12 on CUDA with torchmetrics installed (the
+  gates do not install it, so the cases skip there)
+- Owner: torch compatibility maintainers
+- Symptom: `test_classification_metrics` dies in `reduce_op.cc` with "Reduce
+  dim out of range: requested dims [0,] for a 0-D var"; `test_regression_metrics`
+  fails to compile a fused operator; `test_torchmetrics_required_torch_ops`
+  reports a required op as unsupported.
+- Cause: not isolated; the first is a `dim=0` reduction of a 0-d tensor, which
+  torch accepts.
+- Workaround: none.
+- Evidence: `JITTOR_TORCH_SHIM=1 python -m pytest -q compat/tests/torch/test_torchmetrics_compat.py`
+  on a CUDA machine with torchmetrics.
+- Exit condition: the three cases pass on CUDA.
+
+## KI-COMPAT-011: an RNN under the Torch frontend on CUDA does not run through cuDNN
+
+- Severity: Medium (the precision policy it is meant to follow is not exercised)
+- Status: Open; reproduced 2026-10-12 on CUDA, with CUPTI available
+- Owner: torch compatibility / RNN maintainers
+- Symptom: `test_precision_policy_isolation.py`'s two RNN cases find no
+  `rnn precision select:` line from `cudnn_rnn_descriptor` ("the RNN must execute
+  actual cuDNN descriptors"); the outputs are computed by another path.
+- Cause: not isolated.
+- Workaround: none needed for results.
+- Evidence: `compat/tests/torch/test_precision_policy_isolation.py::test_fp32_rnn_native_default_and_torch_cudnn_policy_match_cpu_recurrence`,
+  `::test_grouped_rnn_backward_retains_forward_precision_after_policy_switch`.
+- Exit condition: both cases pass on CUDA.
+
+## KI-COMPAT-012: in-process `JITTOR_TORCH_SHIM=1` publishes no `torch` distribution metadata
+
+- Severity: Medium (Transformers and Diffusers decide PyTorch is absent)
+- Status: Open; recorded on HEAD in the 2026-09-24 report, reproduced
+  2026-10-12 where those libraries are installed (the gates do not install them,
+  so the cases skip there)
+- Owner: torch compatibility maintainers
+- Symptom: `AutoModel ... requires the PyTorch library but it was not found in
+  your environment` / `UNet2DModel requires the PyTorch library` from
+  `importlib.metadata`: twelve cases in `test_torch_hf_models.py`,
+  `test_torch_hf_alias.py`, `test_torch_hf_cuda_device.py` and
+  `test_diffusers.py` raise `ImportError`, and `test_peft.py` fails collection.
+- Cause: the shim installs a `torch` module in the process but no `torch`
+  distribution, and those libraries ask `importlib.metadata` rather than
+  importing. A user who runs `import torch` with the deployed shim does not hit
+  it.
+- Workaround: deploy the shim (`jittor-torch-shim`, see
+  `docs/compatibility/torch-shim.md`) rather than enabling it in-process.
+- Evidence: the four test files above on a machine with transformers/diffusers.
+- Exit condition: the in-process shim answers `importlib.metadata.version("torch")`
+  and those cases run.
+
+## KI-COMPAT-013: under `torch.autocast` a `Conv2d` module with a bias returns float32
+
+- Severity: Medium (an autocast divergence from PyTorch: downstream half
+  kernels receive a float32 activation)
+- Status: Open; recorded on HEAD in the 2026-09-24 report, reproduced
+  2026-10-12 on CPU and CUDA. The case runs as a strict expected failure.
+- Owner: torch compatibility / AMP maintainers
+- Symptom: `with torch.autocast("cuda", dtype=torch.float16): torch.nn.Conv2d(4, 8, 3, padding=1, bias=True)(x)`
+  gives float32 for a float32 input; PyTorch gives float16.
+- Cause: not isolated; suspected that the module path adds its float32 bias
+  after the autocast cast and promotes back.
+- Workaround: cast the output, or keep the bias in the compute dtype.
+- Evidence: `compat/tests/torch/test_torch_compat_unimplemented.py::TestAutocast::test_autocast_conv2d_module_keeps_the_compute_dtype_through_a_bias`.
+- Exit condition: the case XPASSes and loses its marker.
+
+## KI-COMPAT-014: `torch.complex128` is still a frontend placeholder although the core has complex128
+
+- Severity: Medium (the frontend refuses a dtype the core computes with)
+- Status: Open; reproduced 2026-10-12 on CPU and CUDA. The boundary case runs as
+  a strict expected failure.
+- Owner: torch compatibility / dtype maintainers
+- Symptom: `torch.empty((2,), dtype=torch.complex128)` and the other frontend
+  constructors raise `NotImplementedError` naming complex128, while
+  `jt.core.ops.empty((2,), "complex128")` builds a complex128 Var. The frontend
+  `dtype` registry lists complex128 among its unsupported placeholders.
+- Cause: complex128 became a native core dtype (`tests/core/test_complex128_native.py`),
+  and the frontend's supported set was not widened with it.
+- Workaround: build complex128 values natively (`jt.array(..., dtype="complex128")`)
+  and hand them to the frontend.
+- Evidence: `compat/tests/torch/test_dtype_object_boundaries.py::test_placeholder_dtypes_are_metadata_only_at_every_boundary`
+  (the two core-op spellings by name do not raise for complex128).
+- Exit condition: complex128 is a supported frontend dtype end to end (or the
+  core refuses it again by design), and the case XPASSes and loses its marker.
+
 ## KI-DIST-001: FSDP2 flat sharding peaks above the unsharded model
 
 - Severity: Limitation (memory; numerics are correct)
@@ -1732,6 +2151,113 @@ workaround.
   the second fails today.
 - Exit condition: the reference-peak run passes. NPU/HCCL and multi-node have no
   evidence yet (see [deferred-hardware.md](deferred-hardware.md)).
+
+## KI-DIST-002: the second native collective in a rapid sequence returns stale data on a non-zero rank
+
+- Severity: Medium (wrong collective result on non-zero ranks in one pattern;
+  DDP training itself is unaffected)
+- Status: Open; found 2026-10-13 on two CUDA ranks (NCCL 2.18.3).
+- Owner: distributed / native collectives
+- Symptom: in a rapid sequence of `jittor.distributed` collectives on NCCL, the
+  collective at sequence position 1 (the second one issued) reads back stale or
+  wrong data on a non-zero rank -- observed as a bf16 `all_reduce`, and as a
+  `broadcast` when that is the second collective -- while positions 0 and 2+ are
+  correct on both ranks. bf16 `all_reduce` is correct in isolation on both ranks,
+  so this is not a bf16 or an all_reduce correctness bug. The `DistributedDataParallel`
+  wrapper, optimizer gradient sync, `all_gather`, `broadcast` at position >=2 and
+  the full DDP training step all produce correct results on both ranks.
+- Cause: not isolated. A buffer-reuse / readback-ordering hazard in the native
+  collective output path or the executor on non-zero ranks is the suspect (cf.
+  KI-BACKEND-016's in-batch buffer reuse). A throwaway warmup collective plus
+  `jt.sync_all(True)` before the measured checks did not change it. A minimal
+  two-collective isolation (first + second) did NOT reproduce it, so the exact
+  trigger (sequence length or op mix) is not yet pinned.
+- Workaround: insert `jt.sync_all(True)` between back-to-back collectives when a
+  specific second-collective result must be read on a non-zero rank. DDP
+  training does not need this.
+- Evidence: `tests/distributed/native_nccl_smoke.py` in PR #18031, run on two
+  GPUs with `python -m jittor.distributed.launch -n 2 --backend nccl`: rank 1
+  fails exactly the position-1 check while rank 0 passes all, deterministically.
+- Exit condition: the second collective in a rapid sequence returns correct data
+  on all ranks and the native NCCL smoke passes on every rank.
+
+## KI-DIST-003: FSDP2 multi-rank with a reordered DeviceMesh and a torch-subclass optimizer runs an all_gather on the host
+
+- Severity: Medium (one multi-rank FSDP2 path; the common mesh/optimizer paths
+  are unaffected)
+- Status: Open; found 2026-10-13 on two CUDA ranks. Pre-existing on 2.0-refactor,
+  independent of PR #18031's FSDP2 fix-group import (the clean base fails it
+  identically).
+- Owner: distributed / fsdp2
+- Symptom: `compat/tests/fsdp2/test_fsdp2_nccl.py::TestFSDP2Nccl::`
+  `test_mesh_reordered_shards_custom_adam_and_lifetime` fails during
+  `loss.backward()`: `_globally_used_grads` issues `nccl_all_gather` on a
+  `float32[8]`->`[16]` input that is placed on the host, so
+  `JittorError: No kernel registered for nccl_all_gather on cpu`. The path is a
+  reversed-rank `DeviceMesh` combined with a `torch.optim.Adam` subclass; the
+  non-reordered mesh and the native optimizer paths gather on the device and pass.
+- Cause: not isolated. A Var in the FSDP2 shard / used-gradient path lands on the
+  host instead of the rank's CUDA device under the reordered-mesh + custom
+  (torch-subclass) optimizer combination, so a device-only collective is handed a
+  host input.
+- Workaround: use a non-reordered mesh, or the native optimizer step, until the
+  placement is fixed.
+- Evidence: 2 GPUs via `jtrun --nproc-per-node=2 --backend nccl` (or
+  `python -m jittor.distributed.launch -n 2`): the test fails deterministically on
+  both ranks, while the other eight `test_fsdp2_nccl` cases pass.
+- Exit condition: the collective input is placed on the rank's device and the test
+  passes on every rank.
+
+## KI-BACKEND-020: the NPU work in #18036 and #18039 was only partly on this branch
+
+- Severity: Medium (supported operations failed or answered wrongly), Fixed
+- Status: Fixed (2026-10-14), verified on a 910B3
+- Owner: ACL backend / Torch compatibility
+- Symptom: the maintainer's cherry-picks from #18035, #18036, #18039 and
+  #18031 took their backend-agnostic parts, so the Ascend-specific halves
+  were missing. What that cost, each confirmed on hardware before the fix:
+  `labels[:, mask]` raised `NotImplementedError: ACL getitem does not support
+  Var slice indices`; a boolean slice assignment had no lowering because CANN
+  refuses a bool payload; `x[None]` raised a TypeError; `roll` declined int64;
+  `nonzero` counted with a bool sum, so more than one match shaped the output
+  for a single row, and an all-false mask reached a kernel that rejects a
+  zero-row output. `torch.npu.is_available()` answered False and
+  `device_count()` 0 on a machine with eight 910Bs, because `torch.npu` got
+  the same placeholders as `torch.mps` and `torch.xpu`; a downstream library
+  that asks before choosing a device believed it. `torch.use_deterministic_
+  algorithms` was a no-op setter and the query a constant False. A
+  device-to-device copy between two cards was refused outright. The ACL RNG
+  counter was one process-wide pair, not one per device, and could not be
+  checkpointed.
+- Cause: the cherry-picks were deliberately scoped to backend-agnostic
+  changes; nothing recorded which Ascend-specific parts were left, so they
+  were not picked up later either.
+- Workaround: none.
+- Evidence: six commits, each with its own hardware verification, from
+  `a48b4e828` to `1df5bef15`. New tests, all run on a 910B3: four ACL index
+  cases in `tests/backends/acl/test_acl_torch_compat.py`, five in
+  `compat/tests/torch/test_npu_device_protocol.py` (and its CPU half, which
+  asserts the facade still refuses rather than inventing a device), the
+  deterministic-policy case, ten in
+  `tests/backends/comm/hccl/test_hccl_backend_status.py`,
+  `compat/tests/torch/test_npu_peer_copy.py` on two visible cards, and four
+  per-device RNG cases including one that runs the draws on the
+  async-execution worker. Gates after the merge: core tier 322 passed; the
+  NPU gate's failure set byte-identical to the pre-merge baseline (91 both
+  ways, `comm` empty) with passes up from 466+241 to 471+245;
+  `tests/structure` green except the upstream ratchet below.
+- Not merged, and why: #18030's getitem stride fix and #18031's ACL changes
+  are already on this branch; #18028 shares #18031's head against a different
+  base. #18036's `truth_reduce` keepdims push-down duplicates the reshape
+  `_truth_reduce_keepdims` already does, and its `getitem_op.py` and
+  `tensor.py` are behind this branch's memoization work, which was kept.
+  `torch.npu`'s memory metrics were left refusing rather than answered,
+  because the memory-pool bindings they read (`device_pool_memory_used` and
+  the rest) are not on this branch; a zero peak reads as a measurement.
+- Open alongside this: ACL `all()`/`any()` with no dim returns shape (1,)
+  where torch returns a scalar -- `test_reference_all_*`/`test_reference_any_*`
+  in the NPU gate's baseline failures. Neither branch nor PR fixes it.
+
 
 ## KI-LINT-001: mypy covers the build utilities and part of compat only
 

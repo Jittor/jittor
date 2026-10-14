@@ -39,7 +39,7 @@
 | `graph_build_profile_*` | C++ 构图阶段自身时间 | 需要 `JT_GRAPH_BUILD_PROFILE=1` 重编核心；未开时正确地报空 | 保留（开发者工具），本轮没有用探针构建复核 |
 | `trace_py_var>=2` + `dump_trace_data` / `print_trace` | 追踪 | 执行器在每个算子后同步（`exec_runner.cc`），不能用来量时间 | 保留，文档注明 |
 | `profile_mark` | 给 `profile_scope` 分段 | 未复核 | 保留 |
-| `bench/torch_compat/worker.py` 的 NVML 采样器 | 跨框架进程显存峰值 | 20 ms 间隔采样，可能漏掉短峰；作为两侧同一把尺子仍合理 | 保留 |
+| `benchmarks/torch_compat/worker.py` 的 NVML 采样器 | 跨框架进程显存峰值 | 20 ms 间隔采样，可能漏掉短峰；作为两侧同一把尺子仍合理 | 保留 |
 
 ## 改了什么
 

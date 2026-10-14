@@ -76,8 +76,10 @@ wheel 内容基线迁入 `tools/release/baselines/`。
 
 `agent/` 只包含 `manuals/` 与 `skills/`；仓库检查脚本一律在 `tools/`。工作流入口是
 [`agent/manuals/agent-index.md`](https://github.com/Jittor/jittor/blob/master/agent/manuals/agent-index.md)。社区项目列表在
-`docs/community/`；ASV 源配置在 `benchmarks/asv.conf.json`——nox 从该配置推导绝对的输入
+`docs/community/`；ASV 源配置在 `benchmarks/asv/asv.conf.json`——nox 从该配置推导绝对的输入
 与外部输出路径，不把基准运行状态搬进工作树。
+所有基准统一归属 [`benchmarks/`](../../benchmarks/README.md)：`asv/` 保存性能回归套件，
+`torch_compat/` 保存真实模型对照，`acl/` 保存昇腾测量、数值交叉验证与 CANN 探针。
 
 ## 工具与包资源归属
 

@@ -19,6 +19,7 @@ the collective it would now wait for forever. The job never ended, no rank
 reported anything, and the launcher printed nothing until someone killed it by
 hand. Every extra rank makes this more likely, which is the wrong direction.
 """
+import ast
 import os
 from pathlib import Path
 import tempfile
@@ -65,6 +66,12 @@ print("rendezvous %d/%d" % (rank, world), flush=True)
 _PRINT_CACHE_NAME = """
 import os
 print("cache_name=%r" % os.environ.get("cache_name"), flush=True)
+"""
+
+_PRINT_TORCHRUN_RANKS = """
+import os
+keys = ("RANK", "LOCAL_RANK", "WORLD_SIZE", "JT_NCCL_RANK", "JT_NCCL_LOCAL_RANK", "JT_NCCL_WORLD_SIZE")
+print("ranks=" + repr({k: os.environ.get(k) for k in keys}), flush=True)
 """
 
 
@@ -138,6 +145,28 @@ class TestLaunchFailurePropagation(unittest.TestCase):
             names.add(text.strip().split("cache_name=", 1)[1])
         self.assertEqual(len(names), 1,
                          "ranks got different JIT caches: %s" % sorted(names))
+
+    def test_torchrun_rank_aliases_are_exported(self):
+        """Torch-compatible children see the same rank as Jittor children.
+
+        Downstream torch shims inspect the conventional variables before they
+        import their distributed module. The Jittor-specific variables remain
+        the launcher contract; these aliases make the launcher a drop-in
+        replacement for torchrun.
+        """
+        done, _ = _launch(2, _PRINT_TORCHRUN_RANKS, self.tmp.name, timeout=120)
+        self.assertEqual(done.returncode, 0, done.stdout[-3000:])
+        for rank in range(2):
+            text = Path(self.tmp.name, "rank%d.log" % rank).read_text()
+            ranks = ast.literal_eval(text.strip().split("ranks=", 1)[1])
+            self.assertEqual(ranks["RANK"], str(rank), text)
+            self.assertEqual(ranks["WORLD_SIZE"], "2", text)
+            self.assertEqual(ranks["JT_NCCL_RANK"], str(rank), text)
+            # The alias, not a fixed value: a rank pinned to one device by
+            # CUDA_VISIBLE_DEVICES has local rank 0, and one that is not (a
+            # CPU-only run) has its global rank, single node.
+            self.assertEqual(ranks["LOCAL_RANK"], ranks["JT_NCCL_LOCAL_RANK"], text)
+            self.assertIsNotNone(ranks["LOCAL_RANK"], text)
 
 
     def test_ranks_get_torchrun_variables(self):

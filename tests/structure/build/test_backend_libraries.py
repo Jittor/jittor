@@ -120,7 +120,11 @@ def _mkl_bootstrap(api):
     # The real resolver, not a stub: `use_mkl` in the environment is what this
     # test varies, and since 2.22 that lookup is `env_config`'s job (it also
     # accepts JT_BUILD_USE_MKL). Substituting a fake here would test the fake.
+    # Whether oneDNN can be obtained at all (installed, buildable, or given
+    # explicitly) is decided by `_mkl_obtainable`, which looks at the machine;
+    # it is a stub here and its own cases live in tests/build.
     namespace = {"os": os, "use_mkl": True, "build_flag": build_flag,
+                 "_mkl_obtainable": lambda: True,
                  "register_library_loader": api.register_library_loader}
     exec(compile(ast.Module(body=functions + [registration], type_ignores=[]),
                  str(EXTERN), "exec"), namespace)
@@ -167,6 +171,17 @@ def test_mkl_enabled_policy_applies_before_cache_or_load(api, monkeypatch, loade
     assert api.get_library("mkl", load=True) is library
     assert api.get_library_ops("mkl") is library.ops
     assert calls == ([] if loaded else ["load"])
+
+
+def test_unobtainable_onednn_disables_mkl_without_loading(api, monkeypatch):
+    # use_mkl on, but no cmake, no build and no explicit paths: the loader --
+    # which would try to build oneDNN and fail -- must not run.
+    monkeypatch.setenv("use_mkl", "1")
+    namespace = _mkl_bootstrap(api)
+    namespace["setup_mkl"] = lambda: pytest.fail("unobtainable oneDNN was loaded")
+    namespace["_mkl_obtainable"] = lambda: False
+    assert api.get_library("mkl", load=True) is None
+    assert api.get_library_ops("mkl", load=True) is None
 
 
 def test_bootstrap_publishes_libraries_instead_of_module_globals(api):

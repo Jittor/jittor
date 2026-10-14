@@ -10,7 +10,9 @@
 # ***************************************************************
 """Real and native-complex matrix factorizations."""
 from ._helpers import (
-    _cn_to_native, _is_native_complex, _matmul, _native_to_cn, _transpose,
+    _batching_aware, _conj_T, _diag_embed, _diag_of, _eye_like, _linalg_errors_raise,
+    _cn_to_native, _is_native_complex, _matmul, _native_to_cn, _reconnect,
+    _transpose,
 )
 from .results import SVD
 
@@ -19,8 +21,11 @@ def _svd_reduced(x):
     r'''
     Reduced (a.k.a. "thin"/"economy") SVD: A = U @ diag(S) @ Vh with
     U:(...,M,K), S:(...,K), Vh:(...,K,N), K=min(M,N). This is torch's
-    ``full_matrices=False`` form. Differentiable (numpy forward + analytic
-    backward); returns the raw ``(u, s, v)`` tuple.
+    ``full_matrices=False`` form. Real or native complex (S is then carried
+    as complex with a zero imaginary part). Differentiable to any order:
+    numpy forward, analytic backward written with differentiable ops and a
+    live recursive call (see `inv`/`_Inv` in solving.py). Returns the raw
+    ``(u, s, v)`` tuple.
     '''
     import jittor as jt
     def forward_code(np, data):
@@ -32,56 +37,7 @@ def _svd_reduced(x):
         np.copyto(s, ts)
         np.copyto(v, tv)
 
-    def backward_code(np, data):
-        T = _transpose
-        _dot = _matmul
-        dout = data["dout"]
-        out = data["outputs"][0]
-        inp = data["inputs"][0]
-        out_index = data["out_index"]
-        u, s, v = data["f_outputs"]
-        v = T(v)
-        m, n = inp.shape[-2:]
-        k = min(m, n)
-        i = np.reshape(np.eye(k), (1,) * (inp.ndim - 2) + (k, k))
-        if out_index == 0:
-            f = 1 / (s[..., np.newaxis, :] ** 2 - s[..., :, np.newaxis] ** 2 + i)
-            gu = dout
-            utgu = _dot(T(u), gu)
-            t = (f * (utgu - T(utgu))) * s[..., np.newaxis, :]
-            t = _dot(_dot(u, t), T(v))
-            if m > n:
-                i_minus_uut = (np.reshape(np.eye(m), (1,) * (inp.ndim - 2) + (m, m)) -
-                               _dot(u, np.conj(T(u))))
-                t = t + T(_dot(_dot(v / s[..., np.newaxis, :], T(gu)), i_minus_uut))
-            np.copyto(out, t)
-        elif out_index == 1:
-            gs = dout
-            t = i * gs[..., :, np.newaxis]
-            t = _dot(_dot(u, t), T(v))
-            np.copyto(out, t)
-        elif out_index == 2:
-            f = 1 / (s[..., np.newaxis, :] ** 2 - s[..., :, np.newaxis] ** 2 + i)
-            gv = dout
-            # `v` is the (...,n,k) form (transposed above); the upstream grad
-            # `gv` is wrt the (...,k,n) output, i.e. the (n,k)-form grad is T(gv).
-            # The antisymmetric inner term must contract the n (range) axis:
-            #   V^T (gV) = T(v) @ T(gv)   -- mirrors the U branch's T(u) @ gu.
-            # The old `_dot(T(v), gv)` contracted the wrong axis (only shape-
-            # conformable for square v, where it was silently wrong, not a crash).
-            vtgv = _dot(T(v), T(gv))
-            t = s[..., :, np.newaxis] * (f * (vtgv - T(vtgv)))
-            t = _dot(_dot(u, t), T(v))
-            if m < n:
-                i_minus_vvt = (np.reshape(np.eye(n), (1,) * (inp.ndim - 2) + (n, n)) -
-                               _dot(v, np.conj(T(v))))
-                # extra (range-complement) term, mirror of the m>n U branch:
-                #   U S^-1 (gV)^T (I - V V^T) = (u/s) @ gv @ (I - v v^T)
-                # old code used T(gv) and an outer T(), giving a (m,k)·(n,k)
-                # einsum that crashed for m<n.
-                t = t + _dot(_dot(u / s[..., np.newaxis, :], gv), i_minus_vvt)
-            np.copyto(out, t)
-
+    complex_input = _is_native_complex(x)
     m, n = x.shape[-2:]
     k = min(m, n)
     s1 = list(x.shape)
@@ -90,13 +46,62 @@ def _svd_reduced(x):
     s2[-2] = k
     s3 = list(x.shape)[:-2]
     s3.append(k)
-    u, s, v = jt.numpy_code(
-        [s1, s3, s2],
-        [x.dtype, x.dtype, x.dtype],
-        [x],
-        forward_code,
-        [backward_code],
-    )
+
+    class _SVD(jt.Function):
+        # The adjoint the numpy callbacks computed (real: `_svd_reduced`'s,
+        # complex: `complex_svd`'s), unchanged. With f_ij = 1/(s_j^2 - s_i^2)
+        # off the diagonal:
+        #   t  = (f * (U^H gU - h.c.)) S + S (f * (V^H gV - h.c.)) + diag(gS)
+        #   gA = U t Vh + (I - U U^H) gU S^-1 Vh [m > k]
+        #                + U S^-1 gVh (I - V V^H) [n > k]
+        # Complex input adds i*(Im diag(U^H gU) - Im diag(V^H gV))/(2S) to
+        # the diagonal of t: U^H dU is only skew-Hermitian, and the per-
+        # column phase leaves just that difference determined (derivation in
+        # complex.py::complex_svd).
+        def execute(self, xt):
+            self.u, self.s, self.v = jt.numpy_code(
+                [s1, s3, s2], [xt.dtype, xt.dtype, xt.dtype], [xt], forward_code)
+            return self.u, self.s, self.v
+
+        def grad(self, gu, gs, gvh):
+            u_live, s_live, vh_live = _svd_reduced(x)
+            u = _reconnect(self.u, u_live)
+            s = _reconnect(self.s, s_live)
+            vh = _reconnect(self.v, vh_live)
+            s = s.real if complex_input else s
+            v = _conj_T(vh)
+            eye = _eye_like(s, k)
+            s_i = s.unsqueeze(-1)
+            s_j = s.unsqueeze(-2)
+            f = (1 - eye) / (s_j * s_j - s_i * s_i + eye)
+            t = None
+            def add(term):
+                return term if t is None else t + term
+            if gu is not None:
+                utgu = jt.matmul(_conj_T(u), gu)
+                t = add((f * (utgu - _conj_T(utgu))) * s_j)
+                if complex_input:
+                    t = t + _diag_embed(_diag_of(utgu).imag / (2 * s), k) * 1j
+            if gs is not None:
+                t = add(_diag_embed(gs.real if complex_input else gs, k)
+                        * ((1 + 0j) if complex_input else 1))
+            if gvh is not None:
+                vtgv = jt.matmul(_conj_T(v), _conj_T(gvh))
+                t = add(s_i * (f * (vtgv - _conj_T(vtgv))))
+                if complex_input:
+                    t = t - _diag_embed(_diag_of(vtgv).imag / (2 * s), k) * 1j
+            if t is None:
+                return jt.zeros_like(x)
+            dA = jt.matmul(jt.matmul(u, t), vh)
+            if gu is not None and m > k:
+                projected = gu - jt.matmul(u, jt.matmul(_conj_T(u), gu))
+                dA = dA + jt.matmul(projected / s_j, vh)
+            if gvh is not None and n > k:
+                projected = gvh - jt.matmul(jt.matmul(gvh, v), vh)
+                dA = dA + jt.matmul(u / s_j, projected)
+            return dA
+
+    u, s, v = _SVD()(x)
     return u, s, v
 
 
@@ -134,6 +139,7 @@ def _svd_full(x):
     return u, s, v
 
 
+@_batching_aware("single")
 def svd(x, full_matrices=False, *, compute_uv=True, driver=None):
     r'''
     Singular Value Decomposition: ``A = U @ diag(S) @ Vh``. Returns the same
@@ -183,12 +189,11 @@ def svd(x, full_matrices=False, *, compute_uv=True, driver=None):
             "jittor.linalg.svd", "driver", driver,
             "the decomposition always goes through numpy/cupy's default driver")
     if _is_native_complex(x):
-        # native complex64 -> bridge to the ComplexNumber path, return native.
-        u, s, v = complex_svd(_native_to_cn(x))
-        # s is real (singular values) but complex_svd carries it as a
-        # ComplexNumber (imag=0); _cn_to_native keeps it complex64 for a
-        # uniform native-complex return (callers reconstruct via u@diag(s)@v).
-        return SVD(_cn_to_native(u), _cn_to_native(s), _cn_to_native(v))
+        # Reduced form only, as before (a complex full_matrices completion is
+        # not implemented). S is real but carried as the input's complex
+        # dtype for a uniform native-complex return.
+        u, s, v = _svd_reduced(x)
+        return SVD(u, s, v)
     if isinstance(x, ComplexNumber):
         # complex_svd is the reduced form; full_matrices for complex is not
         # supported (would need a complex orthogonal completion).
@@ -202,6 +207,7 @@ def svd(x, full_matrices=False, *, compute_uv=True, driver=None):
     return SVD(u, s, v)
 
 
+@_batching_aware("single")
 def svdvals(x, *, driver=None):
     r'''
     Singular values only, matching ``torch.linalg.svdvals``. Returns the
@@ -220,7 +226,7 @@ def svdvals(x, *, driver=None):
             "jittor.linalg.svdvals", "driver", driver,
             "the decomposition always goes through numpy/cupy's default driver")
     if _is_native_complex(x):
-        return _cn_to_native(complex_svd(_native_to_cn(x))[1])
+        return _svd_reduced(x)[1]
     if isinstance(x, ComplexNumber):
         return complex_svd(x)[1]
     return _svd_reduced(x)[1]
@@ -245,6 +251,7 @@ def eig(x):
     return complex_eig(ComplexNumber(x))
 
 
+@_batching_aware("single")
 def eigh(x):
     r"""
     calculate the eigenvalues and eigenvectors of x.
@@ -271,16 +278,12 @@ def eigh(x):
     import jittor as jt
     from ..nn import ComplexNumber
     from .complex import complex_eigh
-    if _is_native_complex(x):
-        # native complex64 Hermitian -> bridge to the ComplexNumber path. The
-        # eigenvalues are real (returned as complex64 with imag~0 for a uniform
-        # native-complex return); eigenvectors are native complex64.
-        w, v = complex_eigh(_native_to_cn(x))
-        return _cn_to_native(w), _cn_to_native(v)
     if isinstance(x, ComplexNumber):
         # Hermitian eigendecomposition on the legacy ComplexNumber type. (The
         # real path below cannot take a ComplexNumber — previously this raised.)
         return complex_eigh(x)
+    complex_input = _is_native_complex(x)
+
     def forward_code(np, data):
         a = data["inputs"][0]
         w, v = data["outputs"]
@@ -288,41 +291,49 @@ def eigh(x):
         np.copyto(w, tw)
         np.copyto(v, tv)
 
-    def backward_code(np, data):
-        T = _transpose
-        _dot = _matmul
-        dout = data["dout"]
-        out = data["outputs"][0]
-        inp = data["inputs"][0]
-        out_index = data["out_index"]
-        w, v = data["f_outputs"]
-        k = int(inp.shape[-1])
-        w_repeated = np.repeat(w[..., np.newaxis], k, axis=-1)
-        if out_index == 0:
-            t = _dot(v * dout[..., np.newaxis, :], T(v))
-            np.copyto(out, t)
-        elif out_index == 1:
-            if np.any(dout):
-                off_diag = np.ones((k, k)) - np.eye(k)
-                F = off_diag / (T(w_repeated) - w_repeated + np.eye(k))
-                t = _dot(_dot(v, F * _dot(T(v), dout)), T(v))
-                np.copyto(out, t)
-            else:
-                # ``out`` is a freshly allocated, *uninitialized* buffer: a
-                # zero eigenvector gradient still has to be written, otherwise
-                # recycled memory is returned as the gradient.  Same reason
-                # slogdet's out_index == 0 branch does an explicit copyto(0).
-                np.copyto(out, 0)
-
     sw = x.shape[:-2] + x.shape[-1:]
-    sv = x.shape
-    w, v = jt.numpy_code(
-        [sw, sv],
-        [x.dtype, x.dtype],
-        [x],
-        forward_code,
-        [backward_code],
-    )
+    k = x.shape[-1]
+
+    class _Eigh(jt.Function):
+        # First-order adjoints unchanged; written with differentiable ops and
+        # a live recursive eigh(x) so they differentiate again (see `inv`/
+        # `_Inv` in solving.py). With F_ij = 1/(w_j - w_i) off the diagonal:
+        #   t = V diag(gw) V^H + V (F * (V^H gV)) V^H.
+        # Real input returns t (it assumes a symmetric perturbation). Native
+        # complex input -- eigenvalues carried as complex with a zero
+        # imaginary part, only their real part is differentiated -- folds t
+        # onto the lower triangle UPLO='L' actually reads: each strict-lower
+        # entry also contributes through its conjugate mirror, the real
+        # diagonal once, the upper never (the ComplexNumber path's adjoint).
+        def execute(self, xt):
+            self.w, self.v = jt.numpy_code([sw, x.shape], [xt.dtype, xt.dtype], [xt], forward_code)
+            return self.w, self.v
+
+        def grad(self, gw, gv):
+            w_live, v_live = eigh(x)
+            w = _reconnect(self.w, w_live)
+            v = _reconnect(self.v, v_live)
+            vH = _conj_T(v)
+            w_r = w.real if complex_input else w
+            t = None
+            if gw is not None:
+                gw = gw.real if complex_input else gw
+                t = jt.matmul(v * gw.unsqueeze(-2), vH)
+            if gv is not None:
+                eye = _eye_like(w_r, k)
+                factors = (1 - eye) / (w_r.unsqueeze(-2) - w_r.unsqueeze(-1) + eye)
+                term = jt.matmul(jt.matmul(v, factors * jt.matmul(vH, gv)), vH)
+                t = term if t is None else t + term
+            if t is None:
+                return jt.zeros_like(x)
+            if not complex_input:
+                return t
+            lower = jt.tril(t + _conj_T(t), -1)
+            return lower + _diag_embed(_diag_of(t).real, k) * (1 + 0j)
+
+    # jt.Function returns a list for a multi-output execute(); keep the
+    # established (w, v) tuple contract.
+    w, v = _Eigh()(x)
     return w, v
 
 
@@ -358,6 +369,7 @@ def eigvalsh(x, UPLO='L'):
     return w
 
 
+@_batching_aware("single")
 def cholesky(x):
     r"""
     do Cholesky decomposition of x in the form of below formula:
@@ -370,52 +382,51 @@ def cholesky(x):
     def forward_code(np, data):
         a = data["inputs"][0]
         L = data["outputs"][0]
-        tL = np.linalg.cholesky(a)
+        with _linalg_errors_raise(np):
+            tL = np.linalg.cholesky(a)
         np.copyto(L, tL)
 
-    def backward_code(np, data):
-        T = _transpose
-        _dot = _matmul
-        dout = data["dout"]
-        out = data["outputs"][0]
-        f_out = data["f_outputs"][0]
-        solve_trans = lambda a, b: np.linalg.solve(T(a), b)
-        phi = lambda X: np.tril(X) / (1. + np.eye(X.shape[-1]))
+    k = x.shape[-1]
 
-        def conjugate_solve(L, X):
-            return solve_trans(L, T(solve_trans(L, T(X))))
+    class _Cholesky(jt.Function):
+        # gA = sym(L^-H phi(L^H gL) L^-1), phi = lower triangle with a halved
+        # diagonal, sym(X) = (X + X^H)/2 -- the Hermitian form of the adjoint
+        # (identical to the previous real formula; the real-only transposes it
+        # used gave native complex input a wrong gradient). Written with
+        # differentiable ops (triangular inverses via solve) and a live
+        # recursive cholesky(x), so it differentiates again (see `inv`).
+        def execute(self, xt):
+            self.L = jt.numpy_code([xt.shape], [xt.dtype], [xt], forward_code)[0]
+            return self.L
 
-        s = conjugate_solve(f_out, phi(np.einsum('...ki,...kj->...ij', f_out, dout)))
-        s = (s + T(s)) / 2.
-        np.copyto(out, s)
+        def grad(self, gL):
+            L = _reconnect(self.L, cholesky(x))
+            LH = _conj_T(L)
+            eye = _eye_like(L.real if _is_native_complex(L) else L, k)
+            phi = jt.tril(jt.matmul(LH, gL)) * (1 - 0.5 * eye)
+            left = jt.linalg.solve(LH, phi)                          # L^-H phi
+            gA = _conj_T(jt.linalg.solve(LH, _conj_T(left)))         # ... L^-1
+            return (gA + _conj_T(gA)) * 0.5
 
-    lL = jt.numpy_code(
-        [x.shape],
-        [x.dtype],
-        [x],
-        forward_code,
-        [backward_code],
-    )
-    L = lL[0]
-    return L
+    return _Cholesky()(x)
 
 
+@_batching_aware("single")
 def qr(x):
     r"""
     do the qr factorization of x in the below formula:
-    x = QR where Q is orthogonal matrix and R is upper-triangle matrix.
-    :param x (...,M,M):
-    :return:q,r as the result of qr factorization.They are both in the shape of (...,M,M).
+    x = QR where Q has orthonormal columns and R is upper-triangular.
+    :param x (...,M,N): forward and backward both work for any M, N (tall/square M>=N and wide M<N).
+    :return: q (...,M,K), r (...,K,N), K=min(M,N).
     """
     import jittor as jt
     from ..nn import ComplexNumber
     from .complex import complex_qr
-    if _is_native_complex(x):
-        # native complex64 -> bridge to the ComplexNumber path, return native.
-        q, r = complex_qr(_native_to_cn(x))
-        return _cn_to_native(q), _cn_to_native(r)
     if isinstance(x, ComplexNumber):
         return complex_qr(x)
+    # Native complex takes the real path below with conjugate transposes:
+    # its gradient then differentiates again, which the ComplexNumber callback
+    # bridge's could not.
     def forward_code(np, data):
         a = data["inputs"][0]
         q, r = data["outputs"]
@@ -423,48 +434,91 @@ def qr(x):
         np.copyto(q,Q)
         np.copyto(r,R)
 
-    def backward_code(np, data):
-        # Reduced-QR backward (m>=n). A=QR, Q:(...,m,k), R:(...,k,n), k=min(m,n).
-        # Standard form (mirrors torch): with M = R gR^T - gQ^T Q,
-        #   gA = (gQ + Q copyltu(M)) R^{-T},  copyltu(X)=tril(X)+tril(X,-1)^T.
-        # jittor calls this once per output, so out_index selects the gQ-only /
-        # gR-only contribution (the total is linear in (gQ,gR), summed by autodiff).
-        # The OLD code assumed square R (output shapes were both x.shape) and the
-        # Q term lived entirely in span(Q) — wrong/crash for tall m>n. R was even
-        # allocated (m,n) instead of (k,n).
-        T = _transpose
-        _dot = _matmul
-        dout = data["dout"]
-        out = data["outputs"][0]
-        q, r = data["f_outputs"]
-        out_index = data["out_index"]
-        m = q.shape[-2]; n = r.shape[-1]
-        if m < n:
-            raise NotImplementedError(
-                "qr backward is only implemented for tall/square inputs (m>=n); "
-                f"got m={m} < n={n}. Forward works for all shapes.")
-        def copyltu(X):
-            return np.tril(X) + T(np.tril(X, -1))
-        def rinvT(X):           # X @ R^{-T}
-            return T(np.linalg.solve(r, T(X)))
-        if out_index == 0:      # contribution from gQ (gR=0)
-            gQ = dout
-            M = -_dot(T(gQ), q)
-            np.copyto(out, rinvT(gQ + _dot(q, copyltu(M))))
-        else:                   # contribution from gR (gQ=0)
-            gR = dout
-            M = _dot(r, T(gR))
-            np.copyto(out, rinvT(_dot(q, copyltu(M))))
-
     m, n = x.shape[-2:]
     k = min(m, n)
     sq = list(x.shape[:-2]) + [m, k]
     sr = list(x.shape[:-2]) + [k, n]
-    q, r = jt.numpy_code(
-        [sq, sr],
-        [x.dtype, x.dtype],
-        [x],
-        forward_code,
-        [backward_code],
-    )
+
+    def _copyltu(X):
+        # tril(X) + tril(X,-1)^H with the real part of the diagonal: LAPACK's
+        # R has a real diagonal, so only Re(diag) is determined. For real X
+        # this is tril(X) + tril(X,-1)^T.
+        lower = jt.tril(X, -1)
+        diag = _diag_embed(_diag_of(X).real if _is_native_complex(X) else _diag_of(X), X.shape[-1])
+        return lower + _conj_T(lower) + (diag * (1 + 0j) if _is_native_complex(X) else diag)
+
+    def _rinvT(X, r_):
+        # X @ r_^{-H} (r_^{-T} for real), expressed via solve so it stays
+        # differentiable (this is what makes the whole backward below a real,
+        # further-differentiable op graph instead of an opaque numpy_code
+        # callback -- see `inv`/`_Inv` in solving.py for the general pattern
+        # this and det/solve/qr all share).
+        return _conj_T(jt.linalg.solve(r_, _conj_T(X)))
+
+    class _QR(jt.Function):
+        # Reduced-QR backward. A=QR, Q:(...,m,k), R:(...,k,n), k=min(m,n).
+        #
+        # Tall/square (m>=n, k=n, R square mxn->nxn): standard form (mirrors
+        # torch), with M = R gR^T - gQ^T Q:
+        #   gA = (gQ + Q copyltu(M)) R^{-T},  copyltu(X)=tril(X)+tril(X,-1)^T.
+        #
+        # Wide (m<n, k=m, Q is square mxm, R=[R1|R2] with R1 mxm upper
+        # triangular and R2 mx(n-m) the rest): A=[A1|A2], A1=Q@R1 is itself a
+        # square QR pair, A2=Q@R2. Deriving the adjoint from
+        # dR1 = Q^T dA1 - Q^T dQ R1, dR2 = Q^T dA2 - Q^T dQ R2 (and matching
+        # coefficients of dA1/dA2 in
+        #   dL = tr(gQ^T dQ) + tr(gR1^T dR1) + tr(gR2^T dR2)
+        #      = tr(gA1^T dA1) + tr(gA2^T dA2))
+        # gives gA2 = Q@gR2 directly, and gA1 = the SAME square-QR formula
+        # above applied to the pair (Q, R1) with an effective gQ of
+        #   G = gQ - Q @ gR2 @ R2^T
+        # (the gR1-only part of the coupling stays inside the square formula
+        # unchanged; only the R2/gR2 cross term needs folding into G). This
+        # reduces to the m>=n formula exactly when n==m (R2, gR2 are empty).
+        #
+        # Unlike the original numpy_code `backward_code` (which built a
+        # SEPARATE opaque, non-further-differentiable op per output,
+        # dispatched on `out_index`), a `jt.Function`'s `grad()` receives
+        # BOTH outputs' cotangents (gq, gr) at once, either of which may be
+        # None if that output wasn't used downstream -- so the two
+        # `out_index` branches collapse into ONE combined formula by
+        # linearity of the QR vjp (gQ-only and gR-only are just the special
+        # cases gr=0 / gq=0). Expressed with ordinary differentiable jittor
+        # ops (solve/matmul/transpose/tril) and a live recursive call to
+        # `qr(x)`, so `jt.grad(jt.grad(loss, x), x)` differentiates straight
+        # through it -- see `inv`/`_Inv` in solving.py for why the live
+        # recursive call (rather than the taped/stop-grad'd `self.q`/
+        # `self.r`) is what makes this work.
+        def execute(self, xt):
+            self.q, self.r = jt.numpy_code([sq, sr], [xt.dtype, xt.dtype], [xt], forward_code)
+            return self.q, self.r
+
+        def grad(self, gq, gr):
+            q_live, r_live = qr(x)
+            q = _reconnect(self.q, q_live)
+            r = _reconnect(self.r, r_live)
+            if gq is None:
+                gq = jt.zeros_like(q)
+            if gr is None:
+                gr = jt.zeros_like(r)
+            if m >= n:
+                M = jt.matmul(r, _conj_T(gr)) - jt.matmul(_conj_T(gq), q)
+                dA = _rinvT(gq + jt.matmul(q, _copyltu(M)), r)
+            else:
+                r1 = r[..., :, :m]
+                r2 = r[..., :, m:]
+                gr1 = gr[..., :, :m]
+                gr2 = gr[..., :, m:]
+                G = gq - jt.matmul(jt.matmul(q, gr2), _conj_T(r2))
+                M = jt.matmul(r1, _conj_T(gr1)) - jt.matmul(_conj_T(G), q)
+                a1 = _rinvT(G + jt.matmul(q, _copyltu(M)), r1)
+                a2 = jt.matmul(q, gr2)
+                dA = jt.concat([a1, a2], dim=-1)
+            return dA.reshape(x.shape)
+
+    # jt.Function returns a plain list (not a tuple) for a multi-output
+    # execute(); convert back to a tuple to preserve qr()'s established
+    # (q, r) return contract (e.g. `isinstance(..., tuple)` checks and
+    # code doing `q, r = qr(x)` both keep working identically).
+    q, r = _QR()(x)
     return q, r

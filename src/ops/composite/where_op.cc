@@ -51,7 +51,7 @@ void WhereOp::infer_shape() {
 void WhereOp::jit_prepare(JK& jk) {
     jk << "«Ti:" << cond->dtype();
     jk << "«To:" << outs[0]->dtype();
-    jk << "«NDIM=" << JK::hex1(cond->shape.size());
+    jk << "«NDIM=" << JK::hex(cond->shape.size());
 }
 
 #else // JIT

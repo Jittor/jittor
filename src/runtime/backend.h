@@ -39,6 +39,25 @@ struct BackendExecutionPolicy {
     bool requires_pinned_host_storage = false;
     bool preserve_reduction_dtype = false;
     bool native_low_precision_reduction = false;
+    // Auto-flush only a batch the async worker takes (see `may_run_async`).
+    // For a backend whose every extra batch costs the calling thread more than
+    // the device time it hides, a flush pays only once it is off that thread.
+    bool async_auto_flush_only = false;
+    // The async worker takes a batch only under `backend_fallback=error`. Set
+    // by a backend whose host fallback switches the process-wide `use_cuda`
+    // while it runs: on the worker that would switch it under the thread
+    // still building the graph. Under "error" no fallback ever runs.
+    bool async_requires_strict_fallback = false;
+    // Hand a batch to the worker only while the calling thread has something
+    // to do meanwhile (`async_exec_handover_pays`). For a backend where a
+    // handover the caller immediately waits on costs more than it saves.
+    bool async_handover_must_pay = false;
+    // Hand a training forward's batches to the worker too, not an inference
+    // graph's only. What an auto-flush costs a training step is that an
+    // intermediate the backward reads is written out instead of fusing into
+    // its readers, so this is for a backend that does not fuse generated
+    // kernels in the first place.
+    bool async_admits_grad = false;
 };
 
 // The registry copies this versioned table; callback code and allocator pools
@@ -50,6 +69,10 @@ struct BackendOps {
     const char* name = nullptr;
     int (*device_count)() = nullptr;
     int (*current_device)() = nullptr;
+    // `current_device` is asked on every thread that runs work, so it binds a
+    // thread that has none yet (CUDA's `tls_bound_device`, ACL's
+    // `aclrtSetDevice` after a failed `aclrtGetDevice`) rather than failing:
+    // the async-execution worker and any dataloader thread arrive there.
     void (*set_device)(int) = nullptr;
     Allocator* (*allocator)(int, BackendMemoryKind) = nullptr;
     void (*copy)(void*, Device, const void*, Device, size_t, bool) = nullptr;
@@ -60,6 +83,11 @@ struct BackendOps {
     void* (*memory_allocate)(int, BackendMemoryKind, size_t) = nullptr;
     void (*memory_free)(int, BackendMemoryKind, void*) = nullptr;
     void (*memory_info)(int, size_t&, size_t&) = nullptr;
+    // A process-wide deterministic-algorithm policy, where the runtime has
+    // one. Left null rather than defaulted: a backend that cannot promise
+    // determinism must say so, not report that it is already deterministic.
+    void (*set_deterministic_algorithms)(bool) = nullptr;
+    bool (*get_deterministic_algorithms)() = nullptr;
     void (*check_error)() = nullptr;
     void* (*compute_stream)(int) = nullptr;
     void* (*stream_create)(int, bool) = nullptr;
@@ -121,6 +149,15 @@ EXTERN_LIB void backend_copy_async(void* dst, Device dst_device, const void* src
 EXTERN_LIB void backend_synchronize(Device device);
 EXTERN_LIB BackendStream backend_stream(Device device, BackendStreamKind kind);
 EXTERN_LIB BackendEvent backend_event(Device device, bool timing = false);
+// The accelerator's deterministic-algorithm policy. Unlike graph capture
+// below, these throw where the backend has no such control: "deterministic"
+// is a promise about results, and a caller that asked for it has no fallback
+// that would still keep it.
+// @pyjt(backend_set_deterministic_algorithms)
+void backend_set_deterministic_algorithms(bool enabled);
+// @pyjt(backend_get_deterministic_algorithms)
+bool backend_get_deterministic_algorithms();
+
 // Graph capture on the accelerator's compute stream. `backend_graph_supported`
 // answers before anything is recorded; the rest return false/nullptr when the
 // backend cannot capture, so the caller never has to know which one it is.

@@ -1,0 +1,61 @@
+# Podman/Docker build for this local Jittor checkout, CUDA-enabled.
+#
+# This installs the project FROM THIS SOURCE TREE, not a published package.
+# Two distributions live in this repo -- core (`jittor`, pyproject.toml at the
+# repo root) and compat (`jittor-torch`, pyproject.toml under compat/) -- and
+# both get installed, plus the pytest tooling tools/run_test_suite.py needs.
+#
+# Build (from repo root):
+#   podman build -t jittor-cuda:local -f Containerfile.cuda .
+#
+# Run with GPU access (CDI device, see README/setup notes):
+#   podman run --rm -it --device nvidia.com/gpu=all jittor-cuda:local bash
+
+ARG FROM_IMAGE=nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
+FROM ${FROM_IMAGE}
+
+ENV PYTHONIOENCODING=utf8 \
+    DEBIAN_FRONTEND=noninteractive \
+    nvcc_path=/usr/local/cuda/bin/nvcc
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 python3-dev python3-pip \
+        g++ build-essential libomp-dev cmake \
+        openmpi-bin openmpi-common libopenmpi-dev \
+        ca-certificates git \
+    && rm -rf /var/lib/apt/lists/*
+# cmake: jittor's default CPU matmul backend builds oneDNN (MKL replacement)
+# from source on first use via jittor/build/onednn.py, which shells out to
+# cmake -- without it, any CPU jt.matmul (including everything that goes
+# through jt.linalg.{inv,det,solve,...}) fails at first call, not at import.
+
+RUN python3 -m pip install --no-cache-dir --upgrade pip && \
+    python3 -m pip install --no-cache-dir "setuptools==83.0.0" "wheel==0.45.1" \
+        numpy tqdm pillow astunparse scipy \
+        pytest==7.4.4 pytest-timeout==2.3.1 pytest-xdist==3.6.1 PyYAML==6.0.2
+# scipy: only a couple of test files actually exercise it at runtime, but
+# tests/structure/test_opinfo_dtype_declaration.py imports it at COLLECTION
+# time -- pytest's own strict-config collection of the whole tests/structure/
+# tree (the repo's own pre-commit gate, see AGENTS.md) fails outright without
+# it, not just that one file's cases.
+
+WORKDIR /usr/src/jittor
+COPY . .
+
+# Core + compat share the `jittor` import package (compat installs into
+# `jittor.compat` without owning `jittor`; see agent/manuals/environment.md
+# "Editable installs of core and compat"). Editable-installing core in
+# setuptools' *default* mode registers a sys.meta_path finder that a plain
+# `import jittor` never reaches, because compat's PathFinder-registered
+# namespace placeholder wins the race first -- `editable_mode=compat` makes
+# core's install a plain .pth path entry instead, which PathFinder resolves
+# before it ever gets to compat's placeholder.
+RUN python3 -m pip install --no-cache-dir --no-build-isolation \
+        --config-settings editable_mode=compat -e .
+
+# --no-deps: compat declares jittor==1.3.11.0, and we already installed core
+# from source above. --no-build-isolation: reuse the setuptools/wheel already
+# installed instead of fetching build deps offline.
+RUN python3 -m pip install --no-cache-dir --no-deps --no-build-isolation -e compat
+
+CMD ["bash"]

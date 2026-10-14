@@ -144,7 +144,7 @@ class TestNoCuda(unittest.TestCase):
         expect_error(
             lambda: setattr(jt.flags, "use_cuda",1),
             exc_type=RuntimeError,
-            match="No CUDA found",
+            match="This Jittor build has no accelerator support",
         )
 
 if __name__ == "__main__":

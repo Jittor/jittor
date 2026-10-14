@@ -333,13 +333,23 @@ class SetItemACL(jt.Function):
         )
         # A partial writer must depend on the entire initialized base. A
         # write-only clone output loses this dependency and may be zero-strided.
-        inputs = [value, x.contiguous()]
-        outputs = [jt.empty(x.shape, x.dtype)]
+        # CANN's StridedSliceAssignV2 takes int8 but refuses bool, so a boolean
+        # assignment goes through int8 and comes back. The value is normalized
+        # to bool first: narrowing 256 straight to int8 would store a 0.
+        bool_payload = _jittor_dtype_name(x.dtype) == "bool"
+        base = x
+        if bool_payload:
+            base = x.cast("int8")
+            value = value.cast("bool").cast("int8")
+        inputs = [value, base.contiguous()]
+        outputs = [jt.empty(base.shape, base.dtype)]
         result = setitem_forward(
             "StridedSliceAssignV2", inputs=inputs, outputs=outputs, attr_code=attr_code
         )[0]
         if expand_dim:
             result = result.squeeze(-1)
+        if bool_payload:
+            result = result.cast("bool")
         # result.sync()
         return result
 

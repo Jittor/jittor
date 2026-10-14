@@ -6,7 +6,7 @@ Jittor 异步执行，并在首次使用时编译算子。所以一次有意义�
 需要可复现、带提交号的测量时，优先用维护中的
 [ASV 基准套件](../performance/benchmarking.md)；要比的是**同一份 `import torch` 代码在
 兼容层与真 PyTorch 上的端到端差距**时，用
-[`bench/torch_compat/`](https://github.com/Jittor/jittor/blob/master/bench/torch_compat/README.md)
+[`benchmarks/torch_compat/`](https://github.com/Jittor/jittor/blob/master/benchmarks/torch_compat/README.md)
 ——它已经处理好两个解释器、预热到稳态、逐步数值对位和显存口径，当前的差距表见
 [下游库性能台账](../performance/library-standing.md)。下面这个写法适合本地做单模型对比：
 

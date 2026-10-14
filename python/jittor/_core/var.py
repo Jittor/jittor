@@ -7,7 +7,7 @@ from jittor._core.dtypes import is_dtype as _is_dtype
 import functools as _functools
 import numbers
 from collections.abc import Sequence
-from builtins import bool as ori_bool, float as ori_float, int as ori_int
+from builtins import bool as ori_bool, complex as ori_complex, float as ori_float, int as ori_int
 
 import numpy as np
 import jittor_core as core
@@ -139,7 +139,7 @@ def _amp_array_preference(ret):
         return ret if _jittor_dtype_name(ret.dtype) == "float16" else ret.float16()
     return ret
 
-def random(shape, dtype="float32", type="uniform"):
+def random(shape, dtype="float32", type="uniform", generator=None):
     ''' Constructs a random jittor Var.
 
     :param shape: The shape of the random Var.
@@ -148,6 +148,12 @@ def random(shape, dtype="float32", type="uniform"):
     :type dtype: str, jittor type-cast function, or None.
     :param type: The random distribution, can be 'uniform' or 'normal'.
     :type type: str
+    :param generator: an optional jt.Generator: when given, draws consume
+        (and advance) that generator's own independent, device-native RNG
+        state instead of the global one -- two generators seeded identically
+        produce identical sequences, and interleaved draws from different
+        generators never share state.
+    :type generator: jt.Generator, optional
 
     ----------------
 
@@ -163,9 +169,11 @@ def random(shape, dtype="float32", type="uniform"):
     dtype = _dtype_for_compute(dtype)
     name = _jittor_dtype_name(dtype)
     draw = "float32" if name in ("float16", "bfloat16") else name
-    ret = _captured_draw(shape, draw, type)
+    # A captured step replays its own Philox stream, which knows nothing of an
+    # explicit generator's state: only the global stream is captured.
+    ret = _captured_draw(shape, draw, type) if generator is None else None
     if ret is None:
-        ret = ops.random(shape, draw, type)
+        ret = ops.random(shape, draw, type, generator)
     if draw != name:
         # The CPU and accelerator random engines generate standard floating
         # types; low-precision outputs use their regular cast kernels.
@@ -432,10 +440,16 @@ def placement_scope_like(x):
     if backend < 0 or jt.core._current_tensor_placement() is not None:
         yield
         return
-    token = jt.core._set_tensor_placement(backend, max(ori_int(x.device_id), 0))
+    device = max(ori_int(x.device_id), 0)
+    token = jt.core._set_tensor_placement(backend, device)
+    # The request alone reaches only bindings inside a frontend scope; a
+    # native constructor (`zeros` is `array(0).broadcast`) stamps the
+    # construction placement, so set that too.
+    previous = jt.core._set_construction_placement(backend, device)
     try:
         yield
     finally:
+        jt.core._restore_construction_placement(previous)
         jt.core._reset_tensor_placement(token)
 
 
@@ -680,7 +694,10 @@ def norm(x, p=2, dim=-1, keepdims=False, eps=1e-30, keepdim=False):
     if p==1:
         return x.abs().sum(dim, keepdim)
     if p==2:
-        return (x.sqr()).sum(dim, keepdim).maximum(eps).sqrt()
+        # |x|**2, not x*x: for a complex x the square is complex and has no
+        # order to clamp with `maximum`. The norm is real either way.
+        sq = x.real.sqr() + x.imag.sqr() if x.dtype.is_complex() else x.sqr()
+        return sq.sum(dim, keepdim).maximum(eps).sqrt()
 
 Var.norm = norm
 
@@ -1677,6 +1694,12 @@ def to_int(v):
 def to_float(v):
     return ori_float(v.item())
 
+def to_complex(v):
+    # Without this `complex(v)` fell back to __float__, which rejects a
+    # complex value -- and NumPy builds an array from a list of 0-d complex
+    # Vars through exactly that call.
+    return ori_complex(v.item())
+
 def to_bool(v):
     if not (v.dtype.is_int() or v.dtype.is_bool()):
         raise TypeError("bool conversion requires an integer or boolean Var")
@@ -1685,6 +1708,8 @@ def to_bool(v):
 Var.__int__ = to_int
 
 Var.__float__ = to_float
+
+Var.__complex__ = to_complex
 
 Var.__bool__ = to_bool
 
@@ -1733,6 +1758,142 @@ Var.__module__ = "jittor"
 
 Var.__reduce__ = lambda self: (Var, (self.data,))
 
+# DLPack. Var.dlpack()/dlpack_device() are the real pyjt-bound C++ methods
+# (bindings/pyjt/dlpack.cc); aliased to the protocol's actual dunder names
+# here rather than binding them directly, because pyjt_compiler.py treats
+# any "__xxx__" @pyjt name as a CPython type slot and only recognizes a
+# fixed whitelist (__init__, __repr__, __len__, __getitem__, ...) -- an
+# unrecognized one is a hard compile error, not a fallback to a plain method.
+Var.__dlpack__ = Var.dlpack
+Var.__dlpack_device__ = Var.dlpack_device
+to_dlpack = core.to_dlpack
+
+
+def _dlpack_is_contiguous(shape, strides):
+    # Mirrors dlpack.cc::dl_tensor_is_contiguous() exactly (same algorithm,
+    # same "size-1 axes don't constrain their stride" rule), since this is
+    # the read-only Python-side half of the same contiguity decision -- the
+    # C++ side re-derives it independently from the same DLTensor as a
+    # defense-in-depth check, but the *choice* of which import path to take
+    # is made here, before the capsule is consumed.
+    if strides is None or 0 in shape:
+        # An empty tensor has no bytes, so its strides constrain nothing.
+        return True
+    expect = 1
+    for i in range(len(shape) - 1, -1, -1):
+        if shape[i] != 1 and strides[i] != expect:
+            return False
+        expect *= shape[i]
+    return True
+
+
+def _dlpack_flat_span(shape, strides):
+    # The minimum and maximum ELEMENT offset (relative to the DLTensor's own
+    # byte_offset) reachable by any legal index into `shape` under `strides`
+    # -- i.e. the inclusive [min_off, max_off] range of flat positions a
+    # producer's strided view can touch. Handles negative strides (a
+    # reversed/flipped view) correctly, not just the common "all strides >=
+    # 0" case. Zero-length axes are excluded from both min and max: an axis
+    # with shape[i]==0 contributes no actual index (0..shape[i]-1 is empty),
+    # so its stride must not be allowed to inflate/deflate the span -- a
+    # wholly empty tensor counts as contiguous (_dlpack_is_contiguous) and
+    # never reaches this function for exactly this reason.
+    min_off = 0
+    max_off = 0
+    for s, st in zip(shape, strides):
+        if s <= 1:
+            continue
+        term = st * (s - 1)
+        if term < 0:
+            min_off += term
+        else:
+            max_off += term
+    return min_off, max_off
+
+
+def from_dlpack(obj):
+    ''' Import a tensor from another array library via the DLPack protocol.
+    Accepts either a raw DLPack capsule (the legacy
+    torch.utils.dlpack.from_dlpack(capsule) style) or any object
+    implementing __dlpack__/__dlpack_device__ (numpy/cupy ndarrays, torch
+    tensors, ...), matching numpy.from_dlpack/torch.from_dlpack's own dual
+    calling convention, on CPU or an accelerator device.
+
+    A row-major contiguous source is imported zero-copy, aliasing the
+    producer's own memory directly (freed via the producer's DLPack deleter
+    once this Var's storage is no longer referenced).
+
+    A non-contiguous source (e.g. a transposed/permuted/sliced-with-a-step
+    PyTorch tensor, which PyTorch's own __dlpack__() happily exports with
+    real, non-default strides) is real, first-class supported here too:
+    since Jittor's Var has no stride concept at all (only ever row-major
+    contiguous storage), it cannot alias such a view zero-copy, but it CAN
+    and does correctly import its values, by (1) importing the minimal flat
+    span of raw elements the given strides can reach as a genuinely
+    contiguous 1-D buffer (still zero-copy at this stage -- an ordinary
+    foreign-memory import, same as the contiguous path), then (2) gathering
+    the producer's logical (strided) shape out of that flat buffer with one
+    ordinary, already-differentiable jittor advanced-index op (index()-built
+    offsets + a single getitem), which performs the actual element
+    reordering as a real device-side op -- never a host round-trip, and
+    never a silent misread of the data. The result is a new, independently-
+    owned contiguous Var with correct values; the "zero-copy aliasing"
+    property is the only thing not preserved, because it is fundamentally
+    impossible without giving Jittor a real stride model.
+
+    The returned Var is explicitly pinned to the source's physical device
+    (see Var.migrate_to_device) when that device is a GPU. '''
+    if hasattr(obj, "__dlpack__"):
+        # Advertise support for the DLPack>=0.8 versioned capsule (the
+        # "current standard" struct -- core.from_dlpack_capsule accepts
+        # either). NumPy/CuPy/PyTorch's own __dlpack__() all honor
+        # max_version and hand back a "dltensor_versioned" capsule once
+        # asked; a producer whose __dlpack__ doesn't accept the newer
+        # kwargs at all (pre-array API standard) falls back to the legacy
+        # no-argument call.
+        try:
+            capsule = obj.__dlpack__(max_version=(1, 0))
+        except TypeError:
+            capsule = obj.__dlpack__()
+    else:
+        capsule = obj
+
+    shape, strides = core.dlpack_peek(capsule)
+    if _dlpack_is_contiguous(shape, strides):
+        return core.from_dlpack_capsule(capsule)
+
+    # Strided producer: materialize a real, correctly-valued, independently
+    # owned contiguous copy instead of rejecting the tensor -- see the
+    # docstring above for the full design rationale.
+    min_off, max_off = _dlpack_flat_span(shape, strides)
+    flat_len = max_off - min_off + 1
+    flat = core.from_dlpack_capsule(capsule, flat_len, min_off)
+
+    idx = None
+    for d, st in enumerate(strides):
+        if st == 0:
+            continue
+        term = index(shape, d, dtype="int64") * st
+        idx = term if idx is None else idx + term
+    if idx is None:
+        # Every stride is 0 -- a fully broadcast/degenerate view where every
+        # logical element aliases the same single underlying element.
+        idx = zeros(shape, dtype="int64")
+    else:
+        idx = idx - min_off
+    result = flat[idx]
+    # Jittor's execution is lazy: without forcing this now, the gather above
+    # would only actually run (reading `flat`, which zero-copy aliases the
+    # producer's own memory) whenever the caller first materializes the
+    # result -- an arbitrarily later point at which the producer may already
+    # have mutated or reused that memory. That would make the "independent
+    # copy" semantics documented above a race rather than a guarantee, unlike
+    # copy=True's export path (also an immediate, eager memcpy). Sync here so
+    # the gather -- and therefore the real, owned copy -- happens NOW, before
+    # from_dlpack() returns, matching an eager copy's usual guarantee.
+    result.sync()
+    return result
+
 __all__ = (
     'abs_',
     'add_',
@@ -1757,6 +1918,7 @@ __all__ = (
     'float_auto',
     'floor_int',
     'format',
+    'from_dlpack',
     'full',
     'full_like',
     'get_len',
@@ -1798,6 +1960,7 @@ __all__ = (
     'std',
     'to_bool',
     'to_device',
+    'to_dlpack',
     'to_float',
     'to_int',
     'transpose',

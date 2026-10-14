@@ -99,7 +99,8 @@ from jittor.compat import fsdp_hooks as _fsdp_hooks
 # torch-facing API (fully_shard, DTensor, ...), pinned byte-for-byte in
 # tests/structure/test_torch_fsdp2_structure.py. The seam contract is
 # plumbing, so it stays underscore-prefixed and out of that surface.
-from ._state_dict import _load_full_state_dict
+from ._state_dict import (_get_full_state_dict, _load_full_state_dict,
+                         _gather_optimizer_state_dict, _shard_optimizer_state_dict)
 
 _fsdp_hooks.register(sys.modules[__name__])
 

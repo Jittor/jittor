@@ -13,6 +13,10 @@ native Var requires grad; ``torch.tensor`` does not).
 
 from _helpers import capability as _test_capability
 import numpy as np
+
+#: NumPy 2 renamed `trapz` to `trapezoid`; the dev pins NumPy 1.26.4, which
+#: has only the old name. Same function, same arguments.
+_np_trapezoid = getattr(np, "trapezoid", None) or np.trapz
 import torch
 import jittor as jt
 
@@ -714,7 +718,7 @@ _lx2 = np.random.randn(5).astype("float32")
 ok(np.abs(torch.logcumsumexp(jt.array(_lx2), 0).numpy() - np.log(np.cumsum(np.exp(_lx2)))).max() < 1e-4, "torch.logcumsumexp")
 _try = np.random.randn(3, 5).astype("float32")
 _trx = np.linspace(0.0, 1.0, 5).astype("float32")
-ok(np.abs(torch.trapz(jt.array(_try), jt.array(_trx), dim=1).numpy() - np.trapezoid(_try, _trx, axis=1)).max() < 1e-5,
+ok(np.abs(torch.trapz(jt.array(_try), jt.array(_trx), dim=1).numpy() - _np_trapezoid(_try, _trx, axis=1)).max() < 1e-5,
    "torch.trapz/trapezoid")
 _ta2 = np.random.randn(2, 3, 4).astype("float32"); _tb2 = np.random.randn(4, 5, 2).astype("float32")
 ok(np.abs(torch.tensordot(jt.array(_ta2), jt.array(_tb2), dims=1).numpy() - np.tensordot(_ta2, _tb2, axes=1)).max() < 1e-4, "torch.tensordot")
@@ -816,15 +820,18 @@ ok(torch.float32.is_floating_point() is True,
 # storage and aliases it, so this used to move the destination to the source's
 # device -- vLLM-Omni's PinnedModuleStager builds device storages and fills
 # them from CPU masters, and every parameter came back as a host tensor.
-_dst_dev = torch.zeros(4, device="cuda")
-_dst_dev.copy_(torch.ones(4, device="cpu"))
-ok(str(_dst_dev.device).startswith("cuda"),
-   "copy_ into a device tensor from a host tensor keeps the device")
-ok(_dst_dev.numpy().tolist() == [1, 1, 1, 1], "cross-device copy_ moves the values")
-_dst_host = torch.zeros(4, device="cpu")
-_dst_host.copy_(torch.ones(4, device="cuda"))
-ok(str(_dst_host.device).startswith("cpu"),
-   "copy_ into a host tensor from a device tensor keeps the host device")
+# Only where there is a device to copy to: a CPU-only gate has no cuda:0, and
+# asking for one raised out of the whole script.
+if torch.cuda.is_available():
+    _dst_dev = torch.zeros(4, device="cuda")
+    _dst_dev.copy_(torch.ones(4, device="cpu"))
+    ok(str(_dst_dev.device).startswith("cuda"),
+       "copy_ into a device tensor from a host tensor keeps the device")
+    ok(_dst_dev.numpy().tolist() == [1, 1, 1, 1], "cross-device copy_ moves the values")
+    _dst_host = torch.zeros(4, device="cpu")
+    _dst_host.copy_(torch.ones(4, device="cuda"))
+    ok(str(_dst_host.device).startswith("cpu"),
+       "copy_ into a host tensor from a device tensor keeps the host device")
 
 # `x.data = y` *replaces* x's storage, shape and dtype -- it is not an
 # element copy, unlike the `x.foo_()` in-place primitive. vLLM-Omni's

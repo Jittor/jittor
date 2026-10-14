@@ -111,10 +111,7 @@ def tensordot(a, b, dims=2):
         t1 = t1.permute(p1).reshape((size1, csize))
         t2 = t2.permute(p2).reshape((csize, size2))
         # multiply and reshape to target size
-        # Jittor represents a scalar result as a one-element Var rather than a
-        # zero-rank tensor; reshape accepts no empty shape, so preserve that
-        # established native convention when every dimension is contracted.
-        return jt.nn.matmul(t1, t2).reshape(rsizes if rsizes else (1,))
+        return jt.matmul(t1, t2).reshape(rsizes)
 
     return __tensordot_native(a, b, dims_a, dims_b)
 
@@ -181,9 +178,17 @@ def one_hot(x: jt.Var, num_classes: int = -1) -> jt.Var:
     """
 
     from jittor._core.dtypes import dtype_name
+
     assert dtype_name(x.dtype) in (
-        "bool", "int8", "int16", "int32", "int64",
-        "uint8", "uint16", "uint32", "uint64",
+        "bool",
+        "int8",
+        "int16",
+        "int32",
+        "int64",
+        "uint8",
+        "uint16",
+        "uint32",
+        "uint64",
     ), f"one_hot expects an integer or bool input, got {dtype_name(x.dtype)}"
     if num_classes == -1:
         num_classes = x.max().item() + 1

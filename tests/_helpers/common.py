@@ -340,6 +340,17 @@ def to_numpy(x):
     return np.asarray(x)
 
 
+def _as_wide(got, ref):
+    """Both operands at float64, or complex128 when either is complex.
+
+    ``astype(np.float64)`` on a complex array keeps the real part and warns, so
+    an error metric taken that way never saw the imaginary half.
+    """
+    g, r = to_numpy(got), to_numpy(ref)
+    wide = np.complex128 if (np.iscomplexobj(g) or np.iscomplexobj(r)) else np.float64
+    return g.astype(wide), r.astype(wide)
+
+
 def net_scaled_max_err(got, ref):
     """``max|got-ref| / (max|ref|+tiny)`` -- error normalized by the reference scale.
 
@@ -347,8 +358,7 @@ def net_scaled_max_err(got, ref):
     is many orders below the dominant one (pure float32 round-off there reads as a
     huge *relative* error while being numerically perfect).
     """
-    g = to_numpy(got).astype(np.float64)
-    r = to_numpy(ref).astype(np.float64)
+    g, r = _as_wide(got, ref)
     return float(np.max(np.abs(g - r))) / (float(np.max(np.abs(r))) + 1e-30)
 
 
@@ -369,8 +379,8 @@ def per_element_max_rel_err(got, ref, atol=1e-4):
     reorder, not a kernel bug. Callers pass an ``atol`` at the negligibility scale of the
     quantity (device_parity uses 1e-3) so that noise is absorbed while a drop/corruption
     of any coordinate above ``atol`` in magnitude still reads ~1."""
-    g = to_numpy(got).astype(np.float64).ravel()
-    r = to_numpy(ref).astype(np.float64).ravel()
+    g, r = _as_wide(got, ref)
+    g, r = g.ravel(), r.ravel()
     return float(np.max(np.abs(g - r) / (np.abs(r) + atol)))
 
 

@@ -119,6 +119,96 @@ class TestACLNativeRandom(unittest.TestCase):
         np.testing.assert_array_equal(after, expected_after)
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_multinomial_and_random_replay_from_acl_checkpoint_state(self):
+        """A saved device counter replays the exact same draws."""
+        device = jt.core.current_device()
+        with forbid_backend_fallbacks():
+            probabilities = jt.array([[0.2, 0.3, 0.5]], dtype="float32")
+            jt.set_seed(20261007)
+            saved = jt.core.rng_state("acl", device)
+            first = jt.multinomial(probabilities, 1)
+            following = jt.rand((16,))
+            self.assert_acl_resident(first)
+            self.assert_acl_resident(following)
+            first_values = first.numpy().copy()
+            following_values = following.numpy().copy()
+            self.assertNotEqual(jt.core.rng_state("acl", device), saved)
+            jt.core.set_rng_state("acl", saved, device)
+            replay = jt.multinomial(probabilities, 1)
+            replay_following = jt.rand((16,))
+            np.testing.assert_array_equal(replay.numpy(), first_values)
+            np.testing.assert_array_equal(replay_following.numpy(), following_values)
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_device_counter_is_per_device_and_seeded_independently(self):
+        device = jt.core.current_device()
+        with forbid_backend_fallbacks():
+            jt.set_seed(4242)
+            # Every visible device restarts from the global seed.
+            seeds = {jt.core.rng_initial_seed("acl", index)
+                     for index in range(jt.core.backend_device_count("acl"))}
+            self.assertEqual(seeds, {4242})
+            self.assertEqual(jt.core.rng_initial_seed("cpu"), 4242)
+
+            jt.core.rng_manual_seed("acl", 7, device)
+            self.assertEqual(jt.core.rng_initial_seed("acl", device), 7)
+            # Seeding a device stream leaves the host generator alone.
+            self.assertEqual(jt.core.rng_initial_seed("cpu"), 4242)
+            first = jt.rand((8,)).numpy().copy()
+            jt.core.rng_manual_seed("acl", 7, device)
+            np.testing.assert_array_equal(jt.rand((8,)).numpy(), first)
+
+            self.assertEqual(len(jt.core.rng_states("acl")),
+                             jt.core.backend_device_count("acl"))
+        with self.assertRaises(Exception):
+            jt.core.rng_state("acl", jt.core.backend_device_count("acl"))
+        with self.assertRaises(Exception):
+            jt.core.rng_state("rocm", 0)
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_a_saved_state_rejects_a_payload_from_elsewhere(self):
+        device = jt.core.current_device()
+        saved = jt.core.rng_state("acl", device)
+        host = jt.core.rng_state("cpu")
+        for payload in (host, saved[:-1], saved + " trailing", "",
+                        saved.replace("JITTOR_RNG_1", "JITTOR_RNG_9")):
+            with self.assertRaises(Exception):
+                jt.core.set_rng_state("acl", payload, device)
+        # Rejected without having disturbed the stream it refused to replace.
+        self.assertEqual(jt.core.rng_state("acl", device), saved)
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_counters_stay_consistent_when_the_worker_runs_the_batch(self):
+        """The worker reserves counters without the executor entry lock.
+
+        It holds no entry scope of its own -- the thread that handed the
+        batch over let go of one -- so a reservation there must neither
+        take that lock nor race the Python thread for the stream.
+        """
+        device = jt.core.current_device()
+        with forbid_backend_fallbacks():
+            def draw(async_on):
+                with jt.flag_scope(async_execution=async_on,
+                                   async_min_caller_us=0), jt.no_grad():
+                    jt.core.rng_manual_seed("acl", 31337, device)
+                    before = jt.core.async_exec_batches()
+                    value = None
+                    for _ in range(24):
+                        noise = jt.rand((256, 256))
+                        value = noise if value is None else value + noise
+                    out = value.numpy().copy()
+                    # Reading the state from the host while the worker owns
+                    # the stream is the part that has to be serialized.
+                    return out, jt.core.rng_state("acl", device), \
+                        jt.core.async_exec_batches() - before
+
+            serial, serial_state, serial_batches = draw(0)
+            worker, worker_state, worker_batches = draw(1)
+            self.assertEqual(serial_batches, 0)
+            np.testing.assert_array_equal(worker, serial)
+            self.assertEqual(worker_state, serial_state)
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_random_float64_declines_acl_with_explicit_fallback_error(self):
         result = run_child_script(
             """

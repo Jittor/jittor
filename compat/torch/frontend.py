@@ -4,13 +4,14 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from functools import update_wrapper
 from types import MethodType
 import weakref
+from typing import Any, Callable, Optional
 
 #: Resolved on first use, then reused. These two helpers sit on the per-op path
 #: (`torch.cat` alone re-imported them 91 times, ~110 us of its 340 us), and a
 #: function-local `import` pays the import machinery on every call. The import
 #: stays lazy so this module is still importable before the install context
 #: exists.
-_get_install_context = None
+_get_install_context: Optional[Callable[..., Any]] = None
 
 #: The two accumulation tiers, as the state object spells them.
 _TIERS = {"highest": 0, "high": 1, "medium": 2}
@@ -22,7 +23,7 @@ _TIERS = {"highest": 0, "high": 1, "medium": 2}
 #: The type is created by the installer, so a reinstallation makes a new type and
 #: a new entry rather than reusing an old one. Weak: subclasses made at run time
 #: (a Parameter subclass) ask too and must stay collectable.
-_precision_state = weakref.WeakKeyDictionary()
+_precision_state: "weakref.WeakKeyDictionary[Any, Any]" = weakref.WeakKeyDictionary()
 
 
 def _frontend_precision_policy(cls):
@@ -32,8 +33,8 @@ def _frontend_precision_policy(cls):
     if state is None:
         get_install_context = _get_install_context
         if get_install_context is None:
-            from .context import get_install_context as get_install_context
-            _get_install_context = get_install_context
+            from .context import get_install_context as _resolve
+            get_install_context = _get_install_context = _resolve
         state = get_install_context(cls._frontend_backend).state.get("cuda_runtime")
         if state is None:
             # Type creation precedes CUDA facade publication during installation.
@@ -108,6 +109,11 @@ def _placement_request(backend, device, like=None, default_placement=True):
             device = default_device()
     numeric_index = isinstance(device, int) and not isinstance(device, bool)
     name = "cuda" if numeric_index else (getattr(device, "type", None) or str(device).split(":", 1)[0])
+    # Jittor has no meta storage backend. Transformers uses ``device='meta'``
+    # while inspecting checkpoint shapes; materialize those temporary tensors
+    # on host so the subsequent real-weight load can proceed.
+    if name == "meta":
+        return 0, 0
     if name == "cpu":
         return 0, 0
     if name not in ("cuda", "npu"):
@@ -180,7 +186,10 @@ class tensor_frontend:
         return False
 
     def _restore(self):
-        core = self._backend.core
+        backend = self._backend
+        if backend is None:
+            return
+        core = backend.core
         bits = self._policy_bits
         if bits is not None:
             core._set_autograd_policy(bool(bits & 1), bool(bits & 2))

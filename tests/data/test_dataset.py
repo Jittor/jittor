@@ -258,8 +258,11 @@ if __name__ == "__main__":
         dataset.workers[0].p.kill()
         pass
 """
-        # The ring wait is bounded, so a killed worker must fail promptly.
-        r = run_child_script(src, timeout=20)
+        # The ring wait is bounded (5 s, `pop_for(5000)` in dataset.py), so a
+        # killed worker must fail promptly rather than hang. The child's own
+        # limit also pays for starting Python and importing jittor, which on a
+        # loaded gate machine took it past 20 s before the 5 s wait began.
+        r = run_child_script(src, timeout=120)
         s = r.stderr.decode()
         print(s)
         assert r.returncode != 0

@@ -96,15 +96,22 @@ class _OptimCoreBase(JittorTestCase):
 # ===========================================================================
 class TestSGDUpdate(_OptimCoreBase):
 
-    def _ref_sgd(self, p, g, v, lr, momentum, weight_decay, dampening, nesterov):
+    def _ref_sgd(self, p, g, v, lr, momentum, weight_decay, dampening, nesterov,
+                 first_step=False):
         """One analytic SGD step (numpy). Mirrors optim.SGD.step exactly:
             dp = p*wd + g
-            v  = momentum*v + dp*(1 - dampening)
+            v  = dp                         if first_step (momentum's first touch)
+                 momentum*v + dp*(1-damp)    otherwise
             nesterov: p -= (dp + momentum*v)*lr     # v is the UPDATED v
             else:     p -= v*lr
-        Returns (p_next, v_next)."""
+        Returns (p_next, v_next). `first_step` matches PyTorch: the momentum
+        buffer is seeded from the raw gradient on its first touch, not
+        folded via the dampened recurrence into a zero-initialized buffer."""
         dp = p * weight_decay + g
-        v_next = momentum * v + dp * (1.0 - dampening)
+        if first_step:
+            v_next = dp.copy()
+        else:
+            v_next = momentum * v + dp * (1.0 - dampening)
         if nesterov:
             p_next = p - (dp + momentum * v_next) * lr
         else:
@@ -150,7 +157,8 @@ class TestSGDUpdate(_OptimCoreBase):
             p = self._param(p0)
             opt = jt.optim.SGD([p], lr, momentum=mom)
             opt.step(self._linear_loss(p, g0))
-            p_ref, v_ref = self._ref_sgd(p0, g0, np.zeros_like(p0), lr, mom, 0.0, 0.0, False)
+            p_ref, v_ref = self._ref_sgd(p0, g0, np.zeros_like(p0), lr, mom, 0.0, 0.0, False,
+                                          first_step=True)
             self.assertEqual(p, p_ref, atol=self.TOL, rtol=self.TOL,
                              msg=f"SGD+momentum param [{dev}]")
             # the velocity buffer must have been updated to g (not still zero)
@@ -172,9 +180,10 @@ class TestSGDUpdate(_OptimCoreBase):
             opt = jt.optim.SGD([p], lr, momentum=mom)
             # analytic rollout over two identical-grad steps
             pr, vr = p0.copy(), np.zeros_like(p0)
-            for _ in range(2):
+            for step_idx in range(2):
                 opt.step(self._linear_loss(p, g0))
-                pr, vr = self._ref_sgd(pr, g0, vr, lr, mom, 0.0, 0.0, False)
+                pr, vr = self._ref_sgd(pr, g0, vr, lr, mom, 0.0, 0.0, False,
+                                        first_step=(step_idx == 0))
             self.assertEqual(p, pr, atol=self.TOL, rtol=self.TOL,
                              msg=f"SGD+momentum 2 steps param [{dev}]")
             self.assertEqual(opt.param_groups[0]["values"][0], vr,
@@ -192,13 +201,16 @@ class TestSGDUpdate(_OptimCoreBase):
             p = self._param(p0)
             opt = jt.optim.SGD([p], lr, momentum=mom, nesterov=True)
             opt.step(self._linear_loss(p, g0))
-            p_ref, _ = self._ref_sgd(p0, g0, np.zeros_like(p0), lr, mom, wd, 0.0, True)
+            p_ref, _ = self._ref_sgd(p0, g0, np.zeros_like(p0), lr, mom, wd, 0.0, True,
+                                      first_step=True)
             self.assertEqual(p, p_ref, atol=self.TOL, rtol=self.TOL,
                              msg=f"SGD nesterov step [{dev}]")
         self._devices(body)
 
     def test_sgd_dampening_one_step(self):
-        # v_0 = g*(1-dampening); p -= lr*v
+        # v_0 = g, UNDAMPENED: PyTorch seeds the momentum buffer from the raw
+        # gradient on its first touch -- dampening only applies to the
+        # recurrence from the second update onward (jittor-core-gaps.md §3.3).
         p0 = np.random.RandomState(10).randn(8).astype("float32")
         g0 = np.random.RandomState(11).randn(8).astype("float32")
         lr, mom, damp = 0.1, 0.9, 0.5
@@ -207,12 +219,55 @@ class TestSGDUpdate(_OptimCoreBase):
             p = self._param(p0)
             opt = jt.optim.SGD([p], lr, momentum=mom, dampening=damp)
             opt.step(self._linear_loss(p, g0))
-            p_ref, v_ref = self._ref_sgd(p0, g0, np.zeros_like(p0), lr, mom, 0.0, damp, False)
+            p_ref, v_ref = self._ref_sgd(p0, g0, np.zeros_like(p0), lr, mom, 0.0, damp, False,
+                                          first_step=True)
             self.assertEqual(p, p_ref, atol=self.TOL, rtol=self.TOL,
                              msg=f"SGD dampening param [{dev}]")
             self.assertEqual(opt.param_groups[0]["values"][0], v_ref,
                              atol=self.TOL, rtol=self.TOL,
                              msg=f"SGD dampening state [{dev}]")
+            np.testing.assert_allclose(_np(opt.param_groups[0]["values"][0]), g0,
+                                        atol=self.TOL, rtol=self.TOL,
+                                        err_msg=f"first-touch buffer must equal raw grad [{dev}]")
+        self._devices(body)
+
+    def test_sgd_dampening_two_steps(self):
+        # Dampening applies from the SECOND update onward: v_0 = g (raw),
+        # v_1 = mom*v_0 + g*(1-dampening).
+        p0 = np.random.RandomState(12).randn(8).astype("float32")
+        g0 = np.random.RandomState(13).randn(8).astype("float32")
+        lr, mom, damp = 0.1, 0.9, 0.5
+
+        def body(dev):
+            p = self._param(p0)
+            opt = jt.optim.SGD([p], lr, momentum=mom, dampening=damp)
+            pr, vr = p0.copy(), np.zeros_like(p0)
+            for step_idx in range(2):
+                opt.step(self._linear_loss(p, g0))
+                pr, vr = self._ref_sgd(pr, g0, vr, lr, mom, 0.0, damp, False,
+                                        first_step=(step_idx == 0))
+            self.assertEqual(p, pr, atol=self.TOL, rtol=self.TOL,
+                             msg=f"SGD dampening 2 steps param [{dev}]")
+            self.assertEqual(opt.param_groups[0]["values"][0], vr,
+                             atol=self.TOL, rtol=self.TOL,
+                             msg=f"SGD dampening 2 steps state [{dev}]")
+        self._devices(body)
+
+    def test_sgd_momentum_zero_ignores_dampening(self):
+        # dampening is documented as "dampening for momentum" -- with no
+        # momentum there is no buffer to dampen, so it must have zero effect:
+        # p -= lr*g regardless of dampening (jittor-core-gaps.md §3.3, the
+        # other named symptom: momentum==0 used to still apply (1-dampening)).
+        p0 = np.random.RandomState(14).randn(8).astype("float32")
+        g0 = np.random.RandomState(15).randn(8).astype("float32")
+        lr, damp = 0.1, 0.7
+
+        def body(dev):
+            p = self._param(p0)
+            opt = jt.optim.SGD([p], lr, momentum=0.0, dampening=damp)
+            opt.step(self._linear_loss(p, g0))
+            self.assertEqual(p, p0 - lr * g0, atol=self.TOL, rtol=self.TOL,
+                             msg=f"SGD momentum=0 must ignore dampening [{dev}]")
         self._devices(body)
 
 

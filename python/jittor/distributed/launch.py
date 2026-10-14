@@ -1,218 +1,410 @@
 #!/usr/bin/env python3
-"""Unified MPI-free multi-device launcher for Jittor (torchrun-style, NO mpirun).
+"""Single-node, MPI-free multi-device launcher for Jittor.
 
-Spawns one plain process per rank and bootstraps the collective communicator via a
-shared root-info file (rank 0 writes the unique id, others read it) -- NCCL on
-NVIDIA, HCCL on Ascend. This is the backend-agnostic replacement for the old
-``mpirun``-based multi-card path; the same data-parallel semantics work on both.
+The ``jtrun`` command starts one process per rank and assigns one visible device
+to each process. It exports the standard rendezvous environment and uses
+Jittor's shared root-info file to exchange the NCCL unique ID. The older
+``python -m jittor.distributed.launch`` entry point remains equivalent.
 
-Usage::
+Examples::
 
-    python -m jittor.distributed.launch -n 4 -- python train.py --lr 1e-4
-    # or force a backend / device list:
-    CUDA_VISIBLE_DEVICES=0,1 python -m jittor.distributed.launch -n 2 --backend nccl -- python train.py
-
-The part after ``--`` is the training command run on every rank. Per-rank logs go
-to ``<logdir>/rank<r>.log``. In the training script just use the normal jittor
-data-parallel API (``jt.rank``/``jt.world_size``/``var.mpi_all_reduce`` /
-``module.mpi_param_broadcast``); jittor activates the distributed path because the
-launcher sets the ``JT_{NCCL,HCCL}_*`` env vars.
+    CUDA_VISIBLE_DEVICES=0,1 jtrun --nproc-per-node=2 train.py --lr 1e-4
+    jtrun --standalone --nproc-per-node=2 --device-ids=0,1 -- train.py
 """
 import argparse
 import glob
 import os
+import shutil
 import signal
 import socket
 import subprocess
 import sys
 import time
 
-
-def _visible_devices_for_rank(rank):
-    visible = os.environ.get("CUDA_VISIBLE_DEVICES")
-    if not visible:
-        return None
-    devices = [x.strip() for x in visible.split(",") if x.strip()]
-    if rank < len(devices):
-        return devices[rank]
-    return None
+from jittor_utils.env_config import child_env
 
 
-def _free_port():
-    """A TCP port nothing listens on right now, for MASTER_PORT."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
-
-
-def _detect_backend():
-    try:
-        import jittor
-    except Exception as error:
-        # Guessing silently would launch every rank on the wrong collective
-        # library on an Ascend machine, and they fail far from here.
-        print(f"warning: could not import jittor to detect the backend "
-              f"({type(error).__name__}: {error}); assuming nccl. Pass --backend "
-              f"to choose.", file=sys.stderr)
-        return "nccl"
-    if getattr(jittor.compiler, "has_acl", 0):
-        return "hccl"
-    return "nccl"
-
-
-# How long each pass of the wait loop gives one rank before moving on. The
-# whole loop is a round-robin, so N ranks are checked every N * _POLL_S.
 _POLL_S = 0.2
-# After SIGTERM, how long a rank gets to flush its logs before SIGKILL.
 _TERM_GRACE_S = 5.0
 
 
+def _parse_device_ids(value, option_name="device ids"):
+    devices = [item.strip() for item in value.split(",")]
+    if not devices or any(not item for item in devices):
+        raise ValueError("{} must be a comma-separated, non-empty list".format(option_name))
+    if len(set(devices)) != len(devices):
+        raise ValueError("{} must not contain duplicates".format(option_name))
+    return devices
+
+
+def _device_env_name(backend):
+    return "CUDA_VISIBLE_DEVICES" if backend == "nccl" else "ASCEND_RT_VISIBLE_DEVICES"
+
+
+def _visible_device_ids(backend, explicit_ids):
+    env_name = _device_env_name(backend)
+    if explicit_ids is not None:
+        devices = _parse_device_ids(explicit_ids, "--device-ids")
+        os.environ[env_name] = ",".join(devices)
+        return devices
+
+    visible = os.environ.get(env_name)
+    if visible is not None and visible.strip():
+        return _parse_device_ids(visible, env_name)
+
+    # An empty visibility string ("" masks every device) or an unset one: ask
+    # the backend how many devices it actually sees. Import, build and driver
+    # errors propagate so a broken backend cannot be silently retargeted.
+    # Returns [] on a host that exposes none -- a CPU-only gate, or a dummy
+    # multi-rank launch that needs no accelerator -- which the caller treats as
+    # "run the ranks unmasked" rather than a hard error.
+    import jittor as jt
+
+    count = int(jt.get_device_count())
+    return [str(index) for index in range(count)]
+
+
+def _detect_backend():
+    requested = os.environ.get("JT_BACKEND", "").strip().lower()
+    if requested in ("npu", "acl"):
+        return "hccl"
+    if requested == "cuda":
+        return "nccl"
+    if requested in ("cpu", "rocm", "hip", "corex"):
+        raise ValueError(
+            "backend {!r} is not supported by jtrun; choose nccl or hccl".format(
+                requested)
+        )
+    if requested:
+        raise ValueError("unknown JT_BACKEND value {!r}".format(requested))
+
+    acl_hints = ("ASCEND_TOOLKIT_HOME", "ASCEND_HOME_PATH", "tikcc_path")
+    if any(os.environ.get(name) for name in acl_hints):
+        return "hccl"
+    ccec = "/usr/local/Ascend/ascend-toolkit/latest/compiler/ccec_compiler/bin/ccec"
+    if os.path.isfile(ccec):
+        return "hccl"
+    # Our tree's reliable signal is the built backend itself: import jittor and
+    # ask jittor.compiler.has_acl. The env/file hints above stay the fast path
+    # and the answer for when jittor cannot be imported from the launcher.
+    try:
+        import jittor
+    except Exception as error:
+        print("warning: could not import jittor to detect the backend "
+              "({}: {}); assuming nccl. Pass --backend to choose.".format(
+                  type(error).__name__, error), file=sys.stderr)
+        return "nccl"
+    return "hccl" if getattr(jittor.compiler, "has_acl", 0) else "nccl"
+
+
+def _find_free_port(address):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind((address, 0))
+        return sock.getsockname()[1]
+
+
+def _check_port_available(address, port):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        try:
+            sock.bind((address, port))
+        except OSError as error:
+            raise ValueError(
+                "master port {} is unavailable on {}: {}".format(port, address, error)
+            ) from error
+
+
+def _resolve_rendezvous(args):
+    if args.standalone:
+        address = args.master_addr or "127.0.0.1"
+        port = args.master_port if args.master_port is not None else 0
+    else:
+        address = args.master_addr or os.environ.get("MASTER_ADDR") or "127.0.0.1"
+        inherited_port = os.environ.get("MASTER_PORT")
+        port = args.master_port
+        if port is None and inherited_port:
+            try:
+                port = int(inherited_port)
+            except ValueError as error:
+                raise ValueError("MASTER_PORT must be an integer") from error
+        if port is None:
+            port = 0
+
+    if port < 0 or port > 65535:
+        raise ValueError("--master-port must be between 0 and 65535")
+    if port == 0:
+        port = _find_free_port(address)
+    else:
+        _check_port_available(address, port)
+    return address, port
+
+
+def _visible_devices_for_rank(rank, devices):
+    # No visible devices (CPU-only gate or dummy launch): run the rank unmasked,
+    # exactly as the pre-upgrade launcher did, instead of failing.
+    if not devices or rank < 0 or rank >= len(devices):
+        return None
+    return devices[rank]
+
+
+def _exit_code(returncode):
+    return 128 - returncode if returncode < 0 else returncode
+
+
 def _stop_all(procs, keep=()):
-    """Terminate every rank still running. SIGTERM first, so logs get flushed."""
+    """Terminate every rank still running. SIGTERM first, then SIGKILL."""
     alive = [(rank, p) for rank, (p, _) in enumerate(procs)
              if rank not in keep and p.poll() is None]
-    for _, p in alive:
-        p.terminate()
+    for _, process in alive:
+        process.terminate()
     deadline = time.time() + _TERM_GRACE_S
-    for _, p in alive:
+    for _, process in alive:
         try:
-            p.wait(timeout=max(0.0, deadline - time.time()))
+            process.wait(timeout=max(0.0, deadline - time.time()))
         except subprocess.TimeoutExpired:
-            p.kill()
-    for _, (p, logf) in enumerate(procs):
-        if p.poll() is None:
-            p.kill()
+            process.kill()
+            process.wait()
+    for process, logf in procs:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
         if not logf.closed:
             logf.close()
 
 
 def _cleanup(rootinfo):
-    """Remove the rendezvous file and the watchdog heartbeats beside it.
-
-    A heartbeat left behind (a rank that was killed rather than shut down)
-    would make the next job started on this path see a peer that is not there.
-    """
-    for path in [rootinfo] + glob.glob(rootinfo + ".hb*") + \
-            glob.glob(rootinfo + ".tmp") + glob.glob(rootinfo + ".pg*"):
+    """Remove the rendezvous file and watchdog state beside it."""
+    paths = [rootinfo] + glob.glob(rootinfo + ".hb*") + \
+        glob.glob(rootinfo + ".tmp") + glob.glob(rootinfo + ".pg*")
+    for path in paths:
         try:
             os.remove(path)
         except OSError:
             pass
 
 
-def main():
-    ap = argparse.ArgumentParser(prog="jittor.distributed.launch")
-    ap.add_argument("-n", "--nproc", type=int, required=True, help="ranks (one per device)")
-    ap.add_argument("--backend", choices=["nccl", "hccl", "auto"], default="auto")
-    ap.add_argument("--logdir", default="./jt_dist_logs")
-    ap.add_argument("cmd", nargs=argparse.REMAINDER, help="-- <command> run on each rank")
-    a = ap.parse_args()
-    cmd = a.cmd[1:] if a.cmd and a.cmd[0] == "--" else a.cmd
-    if not cmd:
-        print("error: no command given after --", file=sys.stderr)
-        sys.exit(2)
+def _build_parser():
+    parser = argparse.ArgumentParser(
+        prog="jtrun",
+        description="Launch one Jittor process per local device without mpirun.",
+    )
+    parser.add_argument(
+        "-n", "--nproc", "--nproc-per-node", dest="nproc", type=int,
+        required=True, help="number of local ranks (one process per device)",
+    )
+    parser.add_argument("--backend", choices=["nccl", "hccl", "auto"], default="auto")
+    parser.add_argument(
+        "--standalone", action="store_true",
+        help="use a local rendezvous address (the launcher is single-node by default)",
+    )
+    parser.add_argument(
+        "--device-ids", default=None,
+        help="comma-separated device IDs; overrides the backend visibility variable",
+    )
+    parser.add_argument("--master-addr", default=None, help="local rendezvous address")
+    parser.add_argument("--master-port", type=int, default=None,
+                        help="rendezvous port; 0 selects an available local port")
+    parser.add_argument("--timeout", type=float, default=120.0,
+                        help="communicator rendezvous timeout in seconds (default: 120)")
+    parser.add_argument("--log-dir", "--logdir", dest="logdir", default="./jt_dist_logs")
+    parser.add_argument("--log-level", choices=["debug", "info", "warning", "error"],
+                        default="info")
+    parser.add_argument("-m", "--module", dest="run_module", action="store_true",
+                        help="run the training target as a Python module; default is a script")
+    parser.add_argument("cmd", nargs=argparse.REMAINDER,
+                        help="Python script and arguments, or -- executable and arguments")
+    return parser
 
-    backend = a.backend if a.backend != "auto" else _detect_backend()
+
+def _parse_args(argv=None):
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    if args.nproc < 1:
+        parser.error("--nproc-per-node must be at least 1")
+    if args.timeout <= 0:
+        parser.error("--timeout must be positive")
+    explicit_executable = bool(args.cmd and args.cmd[0] == "--")
+    cmd = args.cmd[1:] if explicit_executable else args.cmd
+    if not cmd:
+        parser.error("no training command given")
+    if args.run_module and explicit_executable:
+        parser.error("--module cannot be combined with -- <executable>")
+    args.cmd = cmd if explicit_executable else [sys.executable] + (
+        ["-m"] if args.run_module else []) + cmd
+    return args
+
+
+def _rank_environment(args, rank, backend, devices, rootinfo, master_addr, master_port):
     prefix = "JT_HCCL" if backend == "hccl" else "JT_NCCL"
-    os.makedirs(a.logdir, exist_ok=True)
-    rootinfo = os.path.abspath(os.path.join(a.logdir, f"{backend}_rootinfo_{os.getpid()}.bin"))
+    env = dict(os.environ)
+    backend_local_rank = rank
+    if backend == "nccl":
+        device = _visible_devices_for_rank(rank, devices)
+        if device is not None:
+            env["CUDA_VISIBLE_DEVICES"] = device
+            # Each NCCL child sees exactly one logical device after masking.
+            backend_local_rank = 0
+    elif devices:
+        device = _visible_devices_for_rank(rank, devices)
+        env["ASCEND_RT_VISIBLE_DEVICES"] = device
+        backend_local_rank = 0
+    else:
+        device = str(rank)
+
+    env.update({
+        "RANK": str(rank),
+        # Each child is masked to one visible device, so its local device index
+        # is 0 whatever its global rank; a torch child does set_device(LOCAL_RANK)
+        # and would address a nonexistent card if this were the global rank.
+        "LOCAL_RANK": str(backend_local_rank),
+        "WORLD_SIZE": str(args.nproc),
+        "LOCAL_WORLD_SIZE": str(args.nproc),
+        "MASTER_ADDR": master_addr,
+        "MASTER_PORT": str(master_port),
+        "JT_RENDEZVOUS_TIMEOUT_S": str(args.timeout),
+        "JITTOR_DIST_RENDEZVOUS_DIR": os.path.abspath(args.logdir),
+        "{}_WORLD_SIZE".format(prefix): str(args.nproc),
+        "{}_RANK".format(prefix): str(rank),
+        "{}_LOCAL_RANK".format(prefix): str(backend_local_rank),
+        "{}_ROOTINFO_FILE".format(prefix): rootinfo,
+    })
+    return env, backend_local_rank, device
+
+
+def main(argv=None):
+    args = _parse_args(argv)
+    if shutil.which(args.cmd[0]) is None:
+        print("[jtrun] command not found: {}".format(args.cmd[0]),
+              file=sys.stderr, flush=True)
+        return 127
+
+    try:
+        backend = args.backend if args.backend != "auto" else _detect_backend()
+        if backend == "nccl":
+            # Set these before querying Jittor so its optional NCCL build is
+            # enabled for an explicit MPI-free launch.
+            os.environ.update(child_env(use_nccl=(1, "build"), use_mpi=(0, "build")))
+        devices = _visible_device_ids(backend, args.device_ids)
+        if devices and len(devices) < args.nproc:
+            # Fewer visible devices than ranks. The pre-upgrade launcher allowed
+            # this -- ranks past the device list run unmasked -- and the launcher
+            # mechanics tests oversubscribe on purpose (4 dummy ranks on 2 cards)
+            # to stay cheap, so warn rather than refuse. A real NCCL job that
+            # needs one card per rank still fails clearly at init; dummy and
+            # CPU-only ranks keep working.
+            print("[jtrun] warning: requested {} rank(s) but {} exposes only {} "
+                  "visible device(s); ranks past the list run unmasked".format(
+                      args.nproc, backend, len(devices)), file=sys.stderr, flush=True)
+        master_addr, master_port = _resolve_rendezvous(args)
+    except ValueError as error:
+        print("[jtrun] error: {}".format(error), file=sys.stderr, flush=True)
+        return 2
+
+    os.makedirs(args.logdir, exist_ok=True)
+    rootinfo = os.path.abspath(os.path.join(
+        args.logdir, "{}_rootinfo_{}.bin".format(backend, os.getpid())))
     if os.path.exists(rootinfo):
         os.remove(rootinfo)
 
     if backend == "nccl":
-        # Each rank below gets exactly one visible device, so a rank cannot tell
-        # whether this machine supports GPU-to-GPU peer access -- it sees a single
-        # GPU. Decide here, where the whole device list is still visible, and let
-        # the ranks inherit the answer through the environment.
+        # Decide NCCL peer-to-peer once in the launcher so every rank inherits
+        # one transport: enable it where the GPUs support peer access and
+        # disable it only where they do not, instead of a blanket
+        # NCCL_P2P_DISABLE that leaves throughput on the table.
         try:
             from jittor.compile_extern import _skip_nccl_p2p_without_peer_access
             _skip_nccl_p2p_without_peer_access()
         except Exception as error:
-            print(f"warning: could not check GPU peer access "
-                  f"({type(error).__name__}: {error}); NCCL will try "
-                  f"peer-to-peer transfers, which can hang on machines without "
-                  f"it. Set NCCL_P2P_DISABLE=1 if the ranks stall.",
-                  file=sys.stderr)
-
-    # Torch-style entry points (ms-swift, accelerate scripts) read torchrun's
-    # variables, and `init_process_group()` defaults to env://, which needs
-    # MASTER_ADDR/MASTER_PORT as soon as WORLD_SIZE > 1. Publish all of them;
-    # the JT_* variables stay the source of truth for jittor's own rendezvous.
-    master_addr = os.environ.get("MASTER_ADDR") or "127.0.0.1"
-    master_port = os.environ.get("MASTER_PORT") or str(_free_port())
+            print("warning: could not check GPU peer access ({}: {}); NCCL will "
+                  "try peer-to-peer, which can hang on hosts without it. Set "
+                  "NCCL_P2P_DISABLE=1 if the ranks stall.".format(
+                      type(error).__name__, error), file=sys.stderr)
 
     procs = []
-    for rank in range(a.nproc):
-        env = dict(os.environ)
-        env[f"{prefix}_WORLD_SIZE"] = str(a.nproc)
-        env[f"{prefix}_RANK"] = str(rank)
-        env["RANK"] = str(rank)
-        env["WORLD_SIZE"] = str(a.nproc)
-        env["MASTER_ADDR"] = master_addr
-        env["MASTER_PORT"] = master_port
-        visible_device = _visible_devices_for_rank(rank) if backend == "nccl" else None
-        if visible_device is not None:
-            env["CUDA_VISIBLE_DEVICES"] = visible_device
-            env[f"{prefix}_LOCAL_RANK"] = "0"
-        else:
-            env[f"{prefix}_LOCAL_RANK"] = str(rank)   # single node: local == global
-        env["LOCAL_RANK"] = env[f"{prefix}_LOCAL_RANK"]
-        env[f"{prefix}_ROOTINFO_FILE"] = rootinfo
-        # No per-rank cache_name. Every rank builds the same kernels from the
-        # same sources, so a cache each meant an N-card job compiled the whole
-        # tree N times and stored it N times -- minutes and gigabytes per extra
-        # card, for nothing. One shared cache is what the mpirun path has always
-        # used: jittor.lock serializes the builds, so rank 0 compiles and the
-        # others wait and then find it done. (8.09 made this safe by dropping
-        # that lock around the rendezvous; before it, a rank waiting for peers
-        # held the lock they needed.) 8.10.
-        logf = open(os.path.join(a.logdir, f"rank{rank}.log"), "w")
-        print(f"[jt.launch] {backend} rank {rank} -> {' '.join(cmd)}  (log: {logf.name})", flush=True)
-        procs.append((subprocess.Popen(cmd, env=env, stdout=logf, stderr=subprocess.STDOUT), logf))
-
-    def _sigint(signum, frame):
-        for p, _ in procs:
-            p.send_signal(signal.SIGINT)
-    signal.signal(signal.SIGINT, _sigint)
-
-    rc = 0
     first_failure = None
+    startup_error = None
+    stop_signal = None
+    rc = 0
+
+    def forward_signal(signum, _frame):
+        nonlocal stop_signal
+        if stop_signal is None:
+            stop_signal = signum
+        for process, _ in procs:
+            if process.poll() is None:
+                process.send_signal(signum)
+
+    old_handlers = {}
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        old_handlers[signum] = signal.signal(signum, forward_signal)
+
     try:
-        # Poll every rank, rather than wait() on them in order. Waiting in rank
-        # order means a launcher whose rank 3 has already crashed still sits on
-        # rank 0 -- and rank 0 is very likely hung *because* rank 3 died, so the
-        # job never ends and nothing says why. The first non-zero exit ends the
-        # loop, and the `finally` below takes the rest down with it. 8.10.
-        pending = list(range(len(procs)))
-        while pending and first_failure is None:
-            for rank in list(pending):
-                p, logf = procs[rank]
-                try:
-                    r = p.wait(timeout=_POLL_S)
-                except subprocess.TimeoutExpired:
-                    continue
-                pending.remove(rank)
+        for rank in range(args.nproc):
+            if stop_signal is not None:
+                break
+            env, backend_local_rank, device = _rank_environment(
+                args, rank, backend, devices, rootinfo, master_addr, master_port)
+            log_path = os.path.join(args.logdir, "rank{}.log".format(rank))
+            logf = open(log_path, "w")
+            try:
+                process = subprocess.Popen(
+                    args.cmd, env=env, stdout=logf, stderr=subprocess.STDOUT)
+            except OSError as error:
                 logf.close()
-                if r != 0:
-                    first_failure = (rank, r)
-                    rc = r
-                    print(f"[jt.launch] rank {rank} exited with code {r}; "
-                          f"stopping the other ranks", file=sys.stderr)
-                    break
+                startup_error = error
+                print("[jtrun] could not start rank {} command: {}".format(rank, error),
+                      file=sys.stderr, flush=True)
+                break
+            procs.append((process, logf))
+            if args.log_level in ("debug", "info"):
+                print(
+                    "[jtrun] backend={} rank={}/{} local_rank={} device={} "
+                    "backend_local_rank={} master={}:{} command={} log={}".format(
+                        backend, rank, args.nproc, rank, device, backend_local_rank,
+                        master_addr, master_port, " ".join(args.cmd), log_path),
+                    flush=True,
+                )
+
+        if startup_error is not None:
+            rc = 127
+        elif stop_signal is not None:
+            rc = 128 + stop_signal
+        else:
+            pending = list(range(len(procs)))
+            while pending and first_failure is None and stop_signal is None:
+                for rank in list(pending):
+                    process, logf = procs[rank]
+                    try:
+                        result = process.wait(timeout=_POLL_S)
+                    except subprocess.TimeoutExpired:
+                        continue
+                    pending.remove(rank)
+                    logf.close()
+                    if result != 0:
+                        first_failure = (rank, result)
+                        rc = _exit_code(result)
+                        print("[jtrun] rank {} exited with code {}; stopping other ranks".format(
+                            rank, rc), file=sys.stderr, flush=True)
+                        break
+            if stop_signal is not None:
+                rc = 128 + stop_signal
     finally:
-        _stop_all(procs, keep=() if first_failure is None
-                  else (first_failure[0],))
+        _stop_all(procs, keep=() if first_failure is None else (first_failure[0],))
         _cleanup(rootinfo)
-    if first_failure is None:
-        print(f"[jt.launch] all ranks done, rc={rc}")
-    else:
-        rank, r = first_failure
-        print(f"[jt.launch] rank {rank} failed with code {r}; "
-              f"see {os.path.join(a.logdir, f'rank{rank}.log')} for the cause "
-              f"-- the other ranks' logs usually only show them waiting for it",
-              file=sys.stderr)
-    sys.exit(rc)
+        for signum, handler in old_handlers.items():
+            signal.signal(signum, handler)
+
+    if stop_signal is not None:
+        print("[jtrun] received {}; ranks stopped".format(signal.Signals(stop_signal).name),
+              file=sys.stderr, flush=True)
+    elif first_failure is None and startup_error is None:
+        print("[jtrun] all ranks done, rc=0", flush=True)
+    elif first_failure is not None:
+        rank, result = first_failure
+        print("[jtrun] rank {} failed with code {}; see {} for its log".format(
+            rank, _exit_code(result), os.path.join(args.logdir, "rank{}.log".format(rank))),
+            file=sys.stderr, flush=True)
+    return rc
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

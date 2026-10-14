@@ -34,6 +34,7 @@ class TestStage2Delivery(unittest.TestCase):
         required = {
             "CI_HOST_RUNNER",
             "CI_PYTHON_VERSION",
+            "CI_PY37_RUNNER",
             "CI_CPU_CI_IMAGE",
             "CI_CUDA_VERSION",
             "CI_CUDA_RUNNER_LABELS",
@@ -79,7 +80,7 @@ class TestStage2Delivery(unittest.TestCase):
             "required_paths",
             "notebook product must stay outside",
             "module/package path collision",
-                "check_governance.py",
+            "check_governance.py",
         ):
             with self.subTest(contract=contract):
                 self.assertIn(contract, layout_gate)
@@ -104,12 +105,12 @@ class TestStage2Delivery(unittest.TestCase):
     @staticmethod
     def _cpu_gate_files():
         """Test files the CPU gate would collect, across both process modes."""
-        from _helpers.gate_scope import (
-            native_arguments, selected_files, torch_arguments)
+        from _helpers.gate_scope import native_arguments, selected_files, torch_arguments
 
         repo_root = Path(__file__).resolve().parents[2]
-        return (selected_files(repo_root, native_arguments())
-                | selected_files(repo_root, torch_arguments()))
+        return selected_files(repo_root, native_arguments()) | selected_files(
+            repo_root, torch_arguments()
+        )
 
     def test_nox_keeps_fast_structure_and_packaging_separate(self):
         path = self.repo_root / "noxfile.py"
@@ -128,8 +129,7 @@ class TestStage2Delivery(unittest.TestCase):
         # they are spread over three functions rather than one. Asserting only
         # `cpu` would have gone quietly green while `smoke` -- the tier a pull
         # request actually waits for -- inherited none of them.
-        cpu = (functions["cpu"] + functions["smoke"]
-               + functions["_cpu_gate_env"])
+        cpu = functions["cpu"] + functions["smoke"] + functions["_cpu_gate_env"]
         upper_python = functions["_upper_python_compatibility"]
         py312 = functions["py312"]
         py313 = functions["py313"]
@@ -238,13 +238,15 @@ class TestStage2Delivery(unittest.TestCase):
         self.assertIn("python -m nox -s py313", structure_workflow)
 
     def test_asv_teardown_tolerates_skipped_parameter_setup(self):
-        from benchmarks.operators import OperatorBenchmarks
-        from benchmarks.optimizer_step import OptimizerStepBenchmarks
-        from benchmarks.tiny_llama import TinyLlamaBenchmarks
+        from benchmarks.asv.accelerate_training import AccelerateTrainingBenchmarks
+        from benchmarks.asv.operators import OperatorBenchmarks
+        from benchmarks.asv.optimizer_step import OptimizerStepBenchmarks
+        from benchmarks.asv.tiny_llama import TinyLlamaBenchmarks
 
         OperatorBenchmarks().teardown("torch", "cpu", "matmul")
         OptimizerStepBenchmarks().teardown("sgd", 32, "cuda")
         TinyLlamaBenchmarks().teardown("torch", "forward")
+        AccelerateTrainingBenchmarks().teardown("direct", "sgd", "cuda")
 
     def test_cudnn_math_policy_is_guarded_for_rocm_and_old_cudnn(self):
         """The two guards must survive; 8.03 moved where they live.
@@ -281,7 +283,9 @@ class TestStage2Delivery(unittest.TestCase):
                 # into a POD struct; the two are now arguments to it.
                 self.assertIn("conv_compute_type, conv_math_key,", source)
 
-        wrapper = (cuda / "libraries" / "cudnn" / "include" / "cudnn_wrapper.h").read_text(encoding="utf-8")
+        wrapper = (cuda / "libraries" / "cudnn" / "include" / "cudnn_wrapper.h").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("cudnnMathType_t cudnn_conv_math_type(", wrapper)
         self.assertIn("#ifndef IS_ROCM", wrapper)
         self.assertIn("#if CUDNN_VERSION >= 8000", wrapper)

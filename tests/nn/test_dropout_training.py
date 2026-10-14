@@ -39,7 +39,7 @@ instantiate_device_type_tests(TestTrainingDropout, globals())
 
 
 @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled,
-                     "counts device kernels")
+                     "counts CUDA device kernels")
 class TestTrainingDropoutFuses(JittorTestCase):
 
     def test_bias_dropout_and_residual_run_as_one_kernel(self):

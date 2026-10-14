@@ -92,6 +92,17 @@ def _scan_2d(x, reverse):
     graph, ran a Python function per execution, and carried its own separate
     backward.
     '''
+    if x.dtype.is_complex():
+        import jittor as jt
+        # The real scan kernels do not implement complex compound addition.
+        # Reuse them component-wise, keeping nonfinite components independent
+        # (real + imag*1j would introduce Inf*0). Materialize before the
+        # reinterpret view, and before kernels that require dense components.
+        x = x.contiguous()
+        real = _scan_2d(x.real.contiguous(), reverse)
+        imag = _scan_2d(x.imag.contiguous(), reverse)
+        pair = jt.concat([real.unsqueeze(-1), imag.unsqueeze(-1)], dim=-1)
+        return jt.nn.view_as_complex(pair)
     kernel = select_kernel("misc.scan_2d", x, reverse)
     if kernel is None:
         raise NotImplementedError("cumsum has no scan kernel for this device")
@@ -144,13 +155,19 @@ class _Cumsum(Function):
     other.
     '''
 
+    def __init__(self, reverse=False):
+        self.reverse = reverse
+
     def execute(self, x):
         import jittor as jt
-        return jt.misc._scan_2d(x, False)
+        return jt.misc._scan_2d(x, self.reverse)
 
     def grad(self, g):
-        import jittor as jt
-        return jt.misc._scan_2d(g, True)
+        if g is None:
+            return None
+        # Keep the transpose scan differentiable at every AD level instead of
+        # exposing the backend's opaque code kernel as the backward graph.
+        return _Cumsum(not self.reverse)(g)
 
 
 def cumsum(x, dim=None):

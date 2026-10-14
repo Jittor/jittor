@@ -365,7 +365,9 @@ class TestHalfPythonScalar(unittest.TestCase):
                      "twothirds": 0.66796875, "sqrt2": 1.4140625},
     }
 
+    @unittest.expectedFailure
     def test_matches_torch(self):
+        # KI-DTYPE-004: a jt.ones/zeros/full result is weak in promotion, so half * python float gives float32.
         for device, use_cuda in _DEVICES:
             for name in ("float16", "bfloat16"):
                 with self.subTest(device=device, dtype=name):

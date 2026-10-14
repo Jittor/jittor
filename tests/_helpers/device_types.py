@@ -327,6 +327,22 @@ def instantiate_device_type_tests(generic_cls, scope, *, only_for=None, except_f
     scope.pop(generic_name, None)
 
 
+def _carry_expectations(fn, method):
+    """Keep an expected-failure declaration on the generated per-device method.
+
+    The template's function is wrapped, not reused, so the attribute
+    ``unittest.expectedFailure`` sets (and a ``pytest.mark`` list) stayed on
+    the template and the generated case ran as an ordinary test: a strict
+    expectation silently became a plain failure.
+    """
+    if getattr(fn, "__unittest_expecting_failure__", False):
+        method = unittest.expectedFailure(method)
+    marks = getattr(fn, "pytestmark", None)
+    if marks:
+        method.pytestmark = list(marks)
+    return method
+
+
 def _instantiate_plain_method(new_cls, name, fn, device_type):
     flags = cu.device_flags_for(device_type)
 
@@ -336,7 +352,7 @@ def _instantiate_plain_method(new_cls, name, fn, device_type):
     method.__name__ = name
     method.__doc__ = fn.__doc__
     method = _wrap_device_skips(fn, method, device_type)
-    setattr(new_cls, name, method)
+    setattr(new_cls, name, _carry_expectations(fn, method))
 
 
 def _instantiate_dtype_method(new_cls, name, fn, device_type):
@@ -350,7 +366,7 @@ def _instantiate_dtype_method(new_cls, name, fn, device_type):
         method.__name__ = mname
         method.__doc__ = fn.__doc__
         method = _wrap_device_skips(fn, method, device_type)
-        setattr(new_cls, mname, method)
+        setattr(new_cls, mname, _carry_expectations(fn, method))
 
 
 def _instantiate_op_method(new_cls, name, fn, device_type):

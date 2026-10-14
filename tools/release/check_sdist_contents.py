@@ -139,6 +139,7 @@ def _expected_source_paths(repo_root):
         and ((repo_root / item).exists() or (repo_root / item).is_symlink())
         and _generated_cache_reason(item) is None
         and not _is_egg_info_path(item)
+        and not _left_out_on_purpose(item)
     )
     missing_sentinels = sorted(set(REQUIRED_SOURCE_PATHS) - paths)
     if missing_sentinels:
@@ -146,6 +147,22 @@ def _expected_source_paths(repo_root):
             "source checkout is missing required paths: {}".format(", ".join(missing_sentinels))
         )
     return paths
+
+
+#: Tracked paths the sdist leaves out by design, as [tool.jittor.sdist].exclude
+#: in pyproject.toml does: the slide deck is a 24 MB binary.
+EXCLUDED_SOURCE_PREFIXES = ("docs/slides/",)
+
+
+def _left_out_on_purpose(relative):
+    """A tracked path the sdist must not carry, so it cannot also be required.
+
+    The inventory is every tracked path under the governed roots. Without this,
+    it required `docs/slides/*` (excluded from the sdist) and the
+    `python/jittor/compat` link to the separately distributed compat package --
+    which `_pollution_reason` itself rejects -- so no sdist could pass.
+    """
+    return relative.startswith(EXCLUDED_SOURCE_PREFIXES) or _pollution_reason(relative) is not None
 
 
 def _member_issues(name, source):

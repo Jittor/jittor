@@ -5,7 +5,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 from multiprocessing import Pool
-from multiprocessing.pool import RemoteTraceback
+from multiprocessing.pool import RemoteTraceback  # type: ignore[attr-defined]  # missing from typeshed
 import builtins
 import multiprocessing as mp
 import subprocess as sp
@@ -259,8 +259,12 @@ class Logwrapper:
                 m = m()
             text += str(m)
         f = inspect.currentframe()
-        fileline = inspect.getframeinfo(f.f_back.f_back)
-        fileline = f"{os.path.basename(fileline.filename)}:{fileline.lineno}"
+        caller = f.f_back.f_back if f is not None and f.f_back is not None else None
+        if caller is not None:
+            info = inspect.getframeinfo(caller)
+            fileline = f"{os.path.basename(info.filename)}:{info.lineno}"
+        else:
+            fileline = "?"
         if cc and hasattr(cc, "log"):
             cc.log(fileline, level, verbose, text)
         else:
@@ -524,8 +528,11 @@ def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
             do_compile([cmd, cache_path, jittor_path])
             dp.update(i)
         return
-    bk = mp.current_process()._config.get('daemon')
-    mp.current_process()._config['daemon'] = False
+    # `_config` is multiprocessing's private process state: the daemon flag is
+    # lifted so this (possibly daemonic) process may start the compile pool.
+    process: Any = mp.current_process()
+    bk = process._config.get('daemon')
+    process._config['daemon'] = False
     with _main_module_not_reexecuted():
         if pool_size == 0:
             try:
@@ -556,7 +563,7 @@ def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
                 error.__suppress_context__ = True
             raise
         finally:
-            mp.current_process()._config['daemon'] = bk
+            process._config['daemon'] = bk
 
 if os.name=='nt' and getattr(mp.current_process(), '_inheriting', False):
     # when windows spawn multiprocess, disable sub-subprocess
@@ -618,7 +625,7 @@ def get_str_hash(s):
 def get_cpu_version():
     v = platform.processor()
     try:
-        if os.name == 'nt':
+        if sys.platform == "win32":
             import winreg
             key_name = r"Hardware\Description\System\CentralProcessor\0"
             field_name = "ProcessorNameString"
@@ -957,6 +964,33 @@ def _read_target_arch(cc):
     raise RuntimeError("could not read the -march=native expansion from " + cc)
 
 
+def _cpu_fingerprint():
+    """What identifies this CPU cheaply enough to check on every import.
+
+    The ``-march=native`` expansion is memoised in the home's probe.json, and a
+    home is routinely shared between machines -- a cluster's shared filesystem,
+    a CI build cache restored onto whichever runner picked the job up. Keyed on
+    the compiler alone, the first machine's answer was handed to every other
+    one: they all landed in its cache directory and loaded products built for
+    its instruction set, which is SIGILL on a CPU without (say) AVX-512.
+    """
+    model = flags = ""
+    try:
+        with open("/proc/cpuinfo", "r") as f:
+            for line in f:
+                if not model and line.startswith("model name"):
+                    model = line.split(":", 1)[-1].strip()
+                elif not flags and line.startswith("flags"):
+                    flags = line.split(":", 1)[-1].strip()
+                if model and flags:
+                    break
+    except OSError:
+        pass
+    import hashlib
+    text = (model or get_cpu_version()) + "\n" + flags
+    return hashlib.sha256(text.encode("utf8")).hexdigest()[:16]
+
+
 def target_arch_key(cc=None):
     """A short, stable directory component for this machine's instruction set.
 
@@ -976,7 +1010,8 @@ def target_arch_key(cc=None):
         # on the same key.
         expansion = probe.cached("target_arch:c-locale:" + resolve_exe(cc),
                                  [resolve_exe(cc)],
-                                 lambda: _read_target_arch(cc))
+                                 lambda: _read_target_arch(cc),
+                                 extra=_cpu_fingerprint())
     except Exception as error:
         LOG.v(f"could not read the -march=native expansion: {error}")
         return short(get_cpu_version())
@@ -1316,7 +1351,7 @@ def get_py3_extension_suffix():
     return _py3_extension_suffix
 
 def get_total_mem():
-    if os.name == 'nt':
+    if sys.platform == "win32":
         from ctypes import Structure, c_int32, c_uint64, sizeof, byref, windll
         class MemoryStatusEx(Structure):
             _fields_ = [
@@ -1361,8 +1396,10 @@ def dirty_fix_pytorch_runtime_error():
 is_in_ipynb = in_ipynb()
 #: The compiled jit_utils_core extension, or None until it is imported.
 #: Any rather than ModuleType: callers reach for attributes that only exist
-#: on the compiled module.
-cc: Any = None
+#: on the compiled module. A type comment, not an annotation: Python 3.7
+#: rejects annotating a module name after a function above declared it
+#: ``global`` ("annotated name 'cc' can't be global").
+cc = None  # type: Any
 LOG = Logwrapper()
 
 check_msvc_install = False
@@ -1382,9 +1419,10 @@ else:
 cc_type = get_cc_type(cc_path)
 cache_path = find_cache_path()
 
-_py3_config_path: Optional[str] = None
-_py3_include_path: Optional[str] = None
-_py3_extension_suffix: Optional[str] = None
+# Type comments for the reason given at ``cc`` above.
+_py3_config_path = None  # type: Optional[str]
+_py3_include_path = None  # type: Optional[str]
+_py3_extension_suffix = None  # type: Optional[str]
 # NOTE: this used to be
 #     ssl._create_default_https_context = ssl._create_unverified_context
 # with no condition and no way to turn it off. That statement does not affect

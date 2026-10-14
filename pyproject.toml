@@ -113,6 +113,11 @@ default-groups = ["dev"]
 [project.urls]
 Homepage = "http://jittor.org"
 
+[project.scripts]
+# Native MPI-free multi-device launcher (torchrun-style). The module entry
+# point `python -m jittor.distributed.launch` stays equivalent.
+jtrun = "jittor.distributed.launch:main"
+
 [project.entry-points."jittor.backends"]
 acl = "jittor.backends.acl"
 rocm = "jittor.backends.rocm"

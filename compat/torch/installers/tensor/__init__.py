@@ -5,6 +5,7 @@ changing the compatibility semantics.
 """
 from ...fidelity import Fidelity, register_api_bindings
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
+from jittor._core.dtypes import var_dtype_name as _var_dtype_name
 
 import builtins as _builtins
 
@@ -753,6 +754,29 @@ def cat(tensors, dim=0, out=None, axis=None):
         fast = (_FAST_CAT or _bind_fast_cat())(tensors, dim)
         if fast is not NotImplemented:
             return fast
+        # The native fast path above declines whenever a backend registers its
+        # own concat kernel (ACL does), so on ACL every `cat` falls through the
+        # whole frontend below -- the `__torch_function__` scan, the `None`
+        # filter, the scalar-ndim squeeze and the uint8-restore setcomp -- only
+        # to reach that kernel. For plain Vars of one signed dtype and one rank,
+        # none empty, every one of those steps is a no-op and `jittor.concat`
+        # (which dispatches to the kernel) is exactly what the frontend ends up
+        # calling. A Qwen3 decode step pays this ~100 us a hundred times.
+        seq = tensors if tensors.__class__ in (list, tuple) else None
+        if seq is not None and len(seq) >= 2 and isinstance(seq[0], jt.Var):
+            ndim0 = seq[0].ndim
+            name0 = _var_dtype_name(seq[0])
+            # 'u' is every unsigned name (`uint8`..); jittor's concat downcasts a
+            # uniform uint8 input, which the slow path restores and this does not.
+            uniform = ndim0 >= 1 and name0[0] != 'u'
+            if uniform:
+                for t in seq:
+                    if (not isinstance(t, jt.Var) or t.ndim != ndim0
+                            or t.numel() <= 0 or _var_dtype_name(t) != name0):
+                        uniform = False
+                        break
+            if uniform:
+                return _jt_concat(list(seq), dim)
     g = compatibility_owner(jt)
     if axis is not None: dim = axis      # torch accepts axis= (mmrotate PSC head)
     # Honor the __torch_function__ protocol: tensordict (and other tensor-likes)

@@ -36,7 +36,7 @@ from ._runtime.composition import publish as _publish
 
 
 _NATIVE_CORE_EXPORTS = (
-    "DumpGraphs", "Flags", "MemInfo", "NanoString", "NanoVector",
+    "DumpGraphs", "Flags", "Generator", "MemInfo", "NanoString", "NanoVector",
     "RingBuffer", "Var", "ZipFile", "binary_dtype_infer", "clean_graph",
     "cleanup", "clear_trace_data", "current_device", "display_max_memory_info",
     "display_memory_info", "dump_all_graphs", "dump_trace_data", "fetch_sync",
@@ -61,7 +61,7 @@ _NATIVE_OP_EXPORTS = (
     "ceil_int", "clone", "code", "conj", "copy", "cos", "cosh",
     "device_copy", "div", "divide", "empty", "equal", "erf", "erfinv",
     "exp", "fetch", "float16", "float32", "float64", "floor",
-    "floor_divide", "floor_int", "fuse_transpose", "fused_adamw",
+    "floor_divide", "floor_int", "fmod", "fuse_transpose", "fused_adamw",
     "fused_sgd", "getitem",
     "greater", "greater_equal", "index", "index_var", "int16", "int32",
     "int64", "int8", "left_shift", "less", "less_equal", "log",
@@ -201,6 +201,14 @@ from . import amp
 from . import dataset
 from . import init
 from . import autograd
+
+# Native batching transform: builds one real batched op graph instead of
+# looping over the batch in Python (jt.grad/vjp/jvp differentiate through it
+# with no extra code, since the underlying graph is ordinary Jittor ops).
+# Independent of compat/torch's own approximate `torch.vmap` shim -- that one
+# lives in the separate jittor.compat.torch namespace, so there is no name
+# collision to order against here, unlike a same-process monkeypatch layer.
+from .vmap import vmap
 
 # The legacy ``jittor.gradfunctional`` spelling is published as a same-object
 # alias after compatibility composition. Keep the root attribute available
@@ -370,7 +378,7 @@ _ROOT_EXPORTS = (
     "dtype", "einsum", "fft", "gradfunctional", "has_cuda", "in_mpi",
     "init", "jittor_core", "kron", "linalg", "logsumexp", "lr_scheduler",
     "math_util", "matmul", "misc", "mkl_ops", "mpi", "mpi_ops", "nn",
-    "numpy2cupy", "optim", "ops", "rank", "sparse", "tensordot",
+    "numpy2cupy", "optim", "ops", "rank", "sparse", "tensordot", "vmap",
     "amp",
     "world_size", "config", "capability", "introspection", "graph_replay", "capture_step",
     "profile", "profiling",

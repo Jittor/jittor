@@ -1,7 +1,7 @@
 # Torch 兼容层在真实模型上对 PyTorch：差距表、显存与性能修复
 
 - 状态：第三版（显存、融合注意力、fused AdamW 与主机开销修复后）。套件
-  （[`bench/torch_compat/`](https://github.com/Jittor/jittor/blob/master/bench/torch_compat/README.md)）可复用。修复与本报告一同
+  （[`benchmarks/torch_compat/`](https://github.com/Jittor/jittor/blob/master/benchmarks/torch_compat/README.md)）可复用。修复与本报告一同
   提交；表中「修后」来自提交前 `f1e3dfa9` 加这些修改的工作区（结果文件标 dirty），与提交
   内容一致。
 - 日期：2026-09-24
@@ -27,8 +27,8 @@ Jittor 更快，与[下游库性能台账](../performance/library-standing.md)�
 （两侧同一把尺子，含 CUDA 上下文与分配器缓存）。
 
 ```bash
-python bench/torch_compat/run.py --torch-python $TORCH_REF/bin/python --gpu 1
-python bench/torch_compat/run.py --runtimes jittor --workloads qwen3_train,vit_b16_train
+python benchmarks/torch_compat/run.py --torch-python $TORCH_REF/bin/python --gpu 1
+python benchmarks/torch_compat/run.py --runtimes jittor --workloads qwen3_train,vit_b16_train
 ```
 
 ## 结果
@@ -219,7 +219,7 @@ cuDNN 卷积计划的主机侧执行，没有单一热点。
 | `ddpm_unet_train`（fp32，batch 16，AdamW） | 92 ms | 61 ms | 66.6 ms | 8 步 loss 与 eager 逐步一致到 1e-6，参数差 1.7e-4（eager 对 eager 2e-4） |
 
 口径与上表不同：单进程、每步 `sync_all(True)`、取稳定后的最小值，未经
-`bench/torch_compat/run.py`。显存是分配器计数（`device_memory_peak`），不是 NVML：
+`benchmarks/torch_compat/run.py`。显存是分配器计数（`device_memory_peak`），不是 NVML：
 SD 峰值 1.89 GB（eager 1.81），DDPM 峰值 4.68 GB（eager 3.70）。录制持有一步的工作集，
 临时工作区在录制内复用。
 
@@ -238,7 +238,7 @@ fused AdamW 以外的优化器（SGD 等在 Python 里记账）、CPU 上的 Ada
 
 ### 全尺寸套件（2026-09-26）
 
-`bench/torch_compat/run.py --compile none,reduce-overhead`，基于 `75aa9977` 加本节的修复
+`benchmarks/torch_compat/run.py --compile none,reduce-overhead`，基于 `75aa9977` 加本节的修复
 （结果标 dirty），与提交内容一致。只列编译行；「提速」是各自 eager 对编译的比值。
 
 | 任务 | PyTorch 编译 | Jittor 编译 | Jittor 提速 | Jittor 显存（eager） | 说明 |
