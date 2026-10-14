@@ -894,6 +894,7 @@ include tools/release/baselines/wheel-content-changes-final.txt
 include tools/release/baselines/wheel-contents-final.txt
 include tools/release/check_sdist_contents.py
 include tools/release/check_wheel_contents.py
+include tools/release/check_windows_msvc.py
 include tools/release/legacy/README.md
 include tools/release/legacy/polish.py
 include tools/release/legacy/polish_centos.py
