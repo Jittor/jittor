@@ -14,6 +14,7 @@ class _FakeOptions:
 
 class _FakeSession:
     python = "3.11"
+    posargs = ()
 
     def __init__(self, root, python_config):
         self.root = root
@@ -54,6 +55,47 @@ def test_session_env_uses_the_session_interpreters_python_config(monkeypatch, tm
 
     assert env["python_config_path"] == expected
     assert session.calls[0][0][:2] == ("python", "-c")
+
+
+def test_nccl_warms_serially_then_launches_native_and_torch_modes(monkeypatch, tmp_path):
+    monkeypatch.setenv("nvcc_path", "/opt/cuda/bin/nvcc")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "3,5")
+    monkeypatch.setenv("JITTOR_NCCL_WORLD_SIZE", "2")
+    module = _load_noxfile(monkeypatch, tmp_path)
+    session = _FakeSession(tmp_path, "/usr/bin/python3-config")
+    module["nccl"](session)
+    warm = [(i, args, kw) for i, (args, kw) in enumerate(session.calls)
+            if "-c" in args and "probe_library('nccl', load=True)" in str(args)]
+    launch = [(i, args, kw) for i, (args, kw) in enumerate(session.calls)
+              if any(str(arg).endswith("distributed/launch.py") for arg in args)]
+    assert len(warm) == len(launch) == 2
+    assert max(i for i, _, _ in warm) < min(i for i, _, _ in launch)
+    assert [kw["env"]["CUDA_VISIBLE_DEVICES"] for _, _, kw in warm] == ["3", "5"]
+    assert len({kw["env"]["cache_name"] for _, _, kw in warm}) == 2
+    assert all(kw["env"]["JITTOR_TORCH_SHIM"] == "0" for _, _, kw in warm)
+    assert [kw["env"]["JITTOR_TORCH_SHIM"] for _, _, kw in launch] == ["0", "1"]
+    assert module["NCCL_TESTS"][0] in launch[0][1]
+    assert module["NCCL_TESTS"][1] in launch[1][1]
+    assert module["NCCL_TESTS"][1] not in launch[0][1]
+    logs = [args[args.index("--logdir") + 1] for _, args, _ in launch]
+    assert len(set(logs)) == 2
+
+
+def test_nccl_target_overrides_preserve_pytest_flags_and_choose_their_mode(monkeypatch, tmp_path):
+    monkeypatch.setenv("nvcc_path", "/opt/cuda/bin/nvcc")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "3,5")
+    monkeypatch.setenv("JITTOR_NCCL_WORLD_SIZE", "2")
+    module = _load_noxfile(monkeypatch, tmp_path)
+    for mode, target in enumerate(module["NCCL_TESTS"]):
+        session = _FakeSession(tmp_path, "/usr/bin/python3-config")
+        session.posargs = (target + "::selected_case", "-k", "selection", "-q")
+        module["nccl"](session)
+        launch = [(args, kw) for args, kw in session.calls
+                  if any(str(arg).endswith("distributed/launch.py") for arg in args)]
+        assert len(launch) == 1
+        args, kw = launch[0]
+        assert args[-4:] == session.posargs
+        assert kw["env"]["JITTOR_TORCH_SHIM"] == str(mode)
 
 
 def test_sessions_share_one_jittor_cache(monkeypatch, tmp_path):

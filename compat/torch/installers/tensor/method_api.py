@@ -200,27 +200,27 @@ def _torch_setitem(self, slices, value):
 
 
 def _ip(self, value):
-    # In-place op x.OP_(...) -> x becomes `value` (which usually depends on x,
-    # e.g. div_/mul_/add_). assign() ALREADY keeps x grad-connected when `value`
-    # is grad-connected, so grad flows through the in-place op (torch parity).
-    # But start_grad() RESETS x's grad node and SEVERS that just-built graph
-    # (the same start_grad-severing bug behind the DPO/requires_grad fix), which
-    # silently zeroed grads through x.div_()/etc (GRPO temperature scaling).
-    # So only start_grad if assign actually left x stopped (a constant value like
-    # fill_/zero_ on a previously-trainable leaf) -- never on an already-connected x.
+    # Keep the RHS graph through an in-place operation. start_grad() on an
+    # already connected result would replace its graph with a fresh leaf.
     if _assign_data_owner(self, value):
         return self
     target = self
-    # As above: a frozen tensor stays frozen through an in-place write.
+    # A frozen tensor stays frozen unless the written value requires grad.
     was_trainable = bool(target.requires_grad)
-    # ...unless the written value itself requires grad: torch then makes the
-    # target a non-leaf of that graph (`out = zeros(); out.index_add_(0, i, h)`
+    # Torch then makes the target a non-leaf (`out = zeros(); out.index_add_(0, i, h)`
     # must backpropagate into `h`). A value built under no_grad is stop-grad,
     # so the frozen-under-no_grad case above is unaffected. Read before the
     # assignment, which hands the target's flags over to the value's Var.
     gains_grad = (not was_trainable and isinstance(value, _NativeVar)
                   and not value.is_stop_grad() and bool(value.requires_grad))
-    target.assign(value)
+    if gains_grad and target.is_stop_grad():
+        # A detached/clone reset has a permanent stop-grad bit. Native assign
+        # copies that old bit into the replacement and irreversibly releases
+        # the RHS graph before the descriptor below can clear disabled-grad.
+        # _update rebinds a non-view holder without copying that old policy.
+        target._update(value)
+    else:
+        target.assign(value)
     if was_trainable and target.is_stop_grad():
         target.start_grad()
     elif gains_grad and not target.is_stop_grad():

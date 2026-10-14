@@ -710,8 +710,8 @@ def _module_cast_var_if_needed(v, ds, copy=False):
 def _module_cast_float_dtype(self, ds):
     """Cast every floating parameter of this module in place."""
     if getattr(type(self), "_frontend_tensor_type", None) is not None:
-        return _module_replace_vars(
-            self, _functools.partial(_module_to_conversion, ds, None, False))
+        return self._apply(
+            _functools.partial(_module_to_conversion, ds, None, False))
     if ds is not None and ds in _MODULE_FLOAT_DTYPES:
         for p in self.parameters():
             if p.dtype.is_float() if hasattr(p.dtype, "is_float") else ("float" in _jittor_dtype_name(p.dtype)):
@@ -721,11 +721,26 @@ def _module_cast_float_dtype(self, ds):
     return self
 
 
-def _module_replace_vars(self, convert):
-    """Run ``convert`` over every parameter/buffer this module tree holds."""
+def _module_apply(self, convert, recurse=True):
+    """Convert registered tensors through each child's overridable protocol.
+
+    Subclasses can own non-buffer state in ``_apply`` (for example metric
+    accumulators). A flat modules() walk bypasses that state entirely.
+    """
+    if recurse:
+        seen = set()
+        for child in self.children():
+            if id(child) not in seen:
+                seen.add(id(child))
+                child._apply(convert)
+    return _module_replace_vars(self, convert, recurse=False)
+
+
+def _module_replace_vars(self, convert, recurse=True):
+    """Convert registered tensors, preserving parameter objects and gradients."""
     converted = {}
     try:
-        modules = list(self.modules()) if hasattr(self, "modules") else [self]
+        modules = list(self.modules()) if recurse and hasattr(self, "modules") else [self]
     except EXPECTED as exc:
         swallowed("torch/installers/nn.py _module_replace_vars: modules = list(self.modules()) if hasattr(self, 'module...", exc)
         modules = [self]
@@ -911,8 +926,8 @@ def _module_to(self, *args, **kwargs):
     if _device_is_cuda(dev):
         jt.flags.use_cuda = 1
     if dev is not None or ds is not None:
-        return _module_replace_vars(
-            self, _functools.partial(_module_to_conversion, ds, dev, copy))
+        return self._apply(
+            _functools.partial(_module_to_conversion, ds, dev, copy))
     return self
 
 
@@ -1170,6 +1185,11 @@ register_fidelity(
     "torch.nn.Module.eval", _eval, Fidelity.APPROXIMATE,
     "Equivalent to train(False); returns self. Same caveat as train().")
 register_fidelity(
+    "torch.nn.Module._apply", _module_apply, Fidelity.APPROXIMATE,
+    "Recursively invokes child _apply overrides and converts registered "
+    "parameters, their gradients and buffers while preserving parameter "
+    "identity. Does not implement Torch future swap/set-data policies.")
+register_fidelity(
     "torch.nn.Module.to", _module_to, Fidelity.APPROXIMATE,
     "In place like torch: casts only floating-point Vars (integer buffers "
     "survive to(float64)) and migrates residency for cpu/cuda/npu, keeping "
@@ -1287,6 +1307,7 @@ def _install_module_methods(nn, registry=None):
     M.parameters = _parameters
     M.train = _train
     M.eval = _eval
+    M._apply = _module_apply
     M.to = _module_to
     M.to_empty = _module_to_empty
     M.cuda = _module_cuda

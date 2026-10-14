@@ -90,6 +90,78 @@ def _number(value, label, positive=False):
     return value
 
 
+def _validate_measurements(record, level, artifacts):
+    """Bind the platform to hashed, actual measurement JSON, not a copied label."""
+    by_role = {}
+    for artifact in artifacts:
+        role = artifact["role"]
+        _require(role not in by_role, "Duplicate artifact role: " + role)
+        by_role[role] = artifact
+
+    def document(role):
+        _require(role in by_role, "Missing measurement artifact: " + role)
+        try:
+            value = json.loads(Path(by_role[role]["path"]).expanduser().read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, ValueError) as error:
+            raise ValueError("Invalid measurement JSON for " + role) from error
+        _require(isinstance(value, dict), "Measurement JSON must be an object: " + role)
+        return value
+
+    platform = record["platform"]
+    _require(document("platform") == platform, "Platform artifact does not match record")
+    expected = platform.get("precision")
+    _require(isinstance(expected, dict), "Missing platform measurement precision")
+    _require(all(type(expected.get(key)) is bool for key in ("matmul", "cudnn", "cudnn_benchmark"))
+             and expected.get("matmul_precision") in ("highest", "high", "medium"),
+             "Incomplete platform measurement precision")
+    _require(platform["jittor_flags"]["tf32"] == expected["matmul"],
+             "Platform flag/measurement TF32 precision mismatch")
+
+    def pair(reference, candidate):
+        for value in (reference, candidate):
+            _require(isinstance(value, dict) and value.get("case") == record["case"],
+                     "Measurement case mismatch")
+            _require(value.get("device") == record["device"], "Measurement actual device mismatch")
+            _require(value.get("tf32") == expected, "Platform/measurement precision mismatch")
+            _require(value.get("runtime_conditions", {}).get("precision") == expected,
+                     "Measurement runtime precision mismatch")
+        _require(reference["runtime_conditions"] == candidate["runtime_conditions"],
+                 "Oracle/candidate runtime conditions mismatch")
+        backend = candidate.get("backend", {})
+        _require(backend.get("use_cuda") == bool(platform["jittor_flags"]["use_cuda"])
+                 and backend.get("use_acl") == bool(platform["jittor_flags"]["use_acl"]),
+                 "Measurement backend flags mismatch")
+        _require(candidate.get("fallback_policy") == "error" and candidate.get("fallback_count") == 0,
+                 "Measurement zero-fallback guard missing")
+
+    base = document("base-comparison")
+    _require(base.get("baseline") == record["jittor_commit"], "Measurement baseline mismatch")
+    cases = [value for value in base.get("cases", []) if value.get("case") == record["case"]]
+    _require(len(cases) == 1 and cases[0].get("status") == "passed", "Missing passed base measurement")
+    pair(cases[0].get("oracle_result"), cases[0].get("jittor_result"))
+    perturb = document("perturb-comparison")
+    _require(perturb.get("case") == record["case"] and perturb.get("status") == "passed"
+             and perturb.get("input_perturbation_verified") is True, "Missing passed perturbation measurement")
+    pair(perturb.get("reference_result"), perturb.get("candidate_result"))
+    if level >= 3:
+        reference = document("training-reference-metadata")
+        candidate = document("training-candidate-metadata")
+        pair(reference, candidate)
+        _require(reference.get("runtime") == "torch" and candidate.get("runtime") == "jittor",
+                 "Training runtime identity mismatch")
+        training = record["training"]
+        for value in (reference, candidate):
+            _require(value.get("jittor_commit") == record["jittor_commit"], "Training measurement baseline mismatch")
+            _require(value.get("steps") == training["steps"], "Training measurement step mismatch")
+            for measured, declared, count in (("trainable_parameters", "trainable_parameters", "trainable"),
+                                               ("frozen_parameters", "frozen_parameters", "frozen")):
+                names = value.get(measured)
+                _require(isinstance(names, list) and all(isinstance(name, str) for name in names)
+                         and len(names) == len(set(names)), "Missing actual training parameter scope")
+                _require(training.get(declared) == names and training.get(count) == len(names),
+                         "Declared/measurement training parameter scope mismatch")
+
+
 def validate_record(record, inventories, baseline, root=ROOT):
     """Validate one actual oracle comparison. Unknown/missing metadata never passes."""
     _require(record.get("status") == "passed", "Only passed executions can claim a verified level")
@@ -205,6 +277,8 @@ def validate_record(record, inventories, baseline, root=ROOT):
         fallback = record.get("fallback", {})
         _require(device != "cpu" and fallback.get("policy") == "error" and fallback.get("count") == 0,
                  "L5 requires actual accelerator execution with zero fallback")
+    if level >= 2:
+        _validate_measurements(record, level, artifacts)
     return level
 
 
@@ -226,18 +300,27 @@ def scorecard(inventories, records, baseline, root=ROOT):
         for axis in source["axes"]:
             for device in ("cpu", "cuda", "npu", "rocm", "corex"):
                 verified = set()
+                scenarios = []
                 for row in accepted:
                     if row["device"] != device or row["verified_level"] < 2:
                         continue
                     if device != "cpu" and scenario(row) not in cpu:
                         continue
-                    for ref in row["registry_refs"]:
-                        if ref["repo"] == repo and ref["axis"] == axis["axis"]:
-                            verified.add(ref["member"])
+                    matching = [ref for ref in row["registry_refs"]
+                                if ref["repo"] == repo and ref["axis"] == axis["axis"]]
+                    verified.update(ref["member"] for ref in matching)
+                    if matching:
+                        training = row.get("training", {})
+                        scenarios.append({"case": row["case"], "repo": row["repo"], "level": row["verified_level"],
+                                          "registry_refs": row["registry_refs"], "shape_kind": row["inputs"]["shape_kind"],
+                                          "trainable_scope": {
+                                              "trainable": training.get("trainable"), "frozen": training.get("frozen"),
+                                              "trainable_parameters": training.get("trainable_parameters"),
+                                              "frozen_parameters": training.get("frozen_parameters")}})
                 coverage.append({"repo": repo, "axis": axis["axis"], "device": device,
-                                 "verified_members": sorted(verified), "numerator": len(verified),
+                                 "verified_members": sorted(verified), "verified_scenarios": scenarios, "numerator": len(verified),
                                  "denominator": axis["count"], "upstream_commit": source["upstream"]["commit"]})
-    return {"schema_version": 1, "baseline": baseline, "inventories": inventories,
+    return {"schema_version": 2, "baseline": baseline, "inventories": inventories,
             "coverage": coverage, "accepted": accepted, "rejected": rejected,
             "tiers": {tier: sum(row["tier"] == tier for row in accepted) for tier in ("core", "broad", "tail")},
             "note": "L1 is not counted. Accelerator breadth requires the matching independent CPU oracle comparison. A representative case never proves all checkpoints in its family."}
@@ -262,11 +345,18 @@ def main():
     scores.add_argument("--upstream", action="append", default=[], metavar="REPO=CHECKOUT", required=True)
     scores.add_argument("--evidence", action="append", default=[])
     scores.add_argument("--output", required=True)
+    scores.add_argument("--baseline", help="Full historical Jittor SHA; explicitly audits that commit, not current HEAD")
     options = parser.parse_args()
     if options.command == "audit":
         value = audit(Path(options.root))
         print(json.dumps(value, indent=2, ensure_ascii=False) if options.json else render_audit(value))
     elif options.command == "scorecard":
+        baseline = git(ROOT, "rev-parse", "HEAD")
+        if options.baseline:
+            _require(re.fullmatch(r"[0-9a-f]{40}", options.baseline) is not None, "Historical baseline requires a full SHA")
+            _require(git(ROOT, "rev-parse", options.baseline + "^{commit}") == options.baseline,
+                     "Unknown historical Jittor baseline")
+            baseline = options.baseline
         sources = {}
         for item in options.upstream:
             repo, path = item.split("=", 1)
@@ -276,9 +366,11 @@ def main():
         records = []
         for path in options.evidence:
             document = json.loads(Path(path).read_text(encoding="utf-8"))
-            _require(document.get("schema_version") == 1, "Unknown evidence schema")
+            _require(document.get("schema_version") == 2, "Unknown evidence schema; regenerate hashed measurement bindings for v2")
             records.extend(document["records"])
-        value = scorecard(sources, records, git(ROOT, "rev-parse", "HEAD"))
+        value = scorecard(sources, records, baseline)
+        value["auditor_commit"] = git(ROOT, "rev-parse", "HEAD")
+        value["baseline_policy"] = "explicit-historical" if options.baseline else "current-head"
         write_json(options.output, value)
         for row in value["coverage"]:
             if row["device"] == "cpu":

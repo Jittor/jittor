@@ -6,10 +6,10 @@
 
 """Discover a coherent NVIDIA CUDA component-wheel installation.
 
-CUDA 11/12 pip packages install each component below ``site-packages/nvidia``
-instead of a single CUDA toolkit root.  Jittor still needs a real ``nvcc``
-from the system or JTCUDA; this module only resolves the headers and shared
-libraries supplied by pip.
+CUDA 12 component wheels use separate prefixes; CUDA 13's compiler, runtime
+and CCCL wheels share ``nvidia/cu13``. CUDA 12 still needs an external nvcc;
+the pinned CUDA 13 toolchain includes its compiler. Math libraries for that
+minimal toolchain are supplied independently and are not a validated stack.
 """
 
 from __future__ import print_function
@@ -52,6 +52,17 @@ CUDA12_COMPONENTS = (
     ("nvjitlink", "nvidia-nvjitlink-cu12", "==12.2.140", "nvidia/nvjitlink"),
     ("nvtx", "nvidia-nvtx-cu12", "==12.2.140", "nvidia/nvtx"),
     ("nccl", "nvidia-nccl-cu12", "==2.18.3", "nvidia/nccl"),
+)
+
+# CUDA 13 wheels share a toolkit prefix, and nvcc's unconstrained dependencies
+# otherwise resolve to a newer, unvalidated minor release. This is a toolchain
+# stack: optional math/communication libraries are supplied independently.
+CUDA13_COMPONENTS = (
+    ("cuda_nvcc", "nvidia-cuda-nvcc", "==13.0.88", "nvidia/cu13"),
+    ("cuda_runtime", "nvidia-cuda-runtime", "==13.0.96", "nvidia/cu13"),
+    ("cuda_crt", "nvidia-cuda-crt", "==13.0.88", "nvidia/cu13"),
+    ("nvvm", "nvidia-nvvm", "==13.0.88", "nvidia/cu13"),
+    ("cccl", "nvidia-cuda-cccl", "==13.0.85", "nvidia/cu13"),
 )
 
 
@@ -200,16 +211,17 @@ class CudaWheelStack:
     """Resolved paths and versions for one supported CUDA wheel stack."""
 
     cuda_version = "12.2"
+    component_specs = CUDA12_COMPONENTS
 
     def __init__(self, components, versions):
         self.components = dict(components)
         self.versions = dict(versions)
         version_text = ";".join(
             "%s=%s" % (name, self.versions[name])
-            for name, _, _, _ in CUDA12_COMPONENTS
+            for name, _, _, _ in self.component_specs
         )
         digest = hashlib.sha256(version_text.encode("ascii")).hexdigest()[:12]
-        self.fingerprint = "pipcu122_" + digest
+        self.fingerprint = "pipcu" + self.cuda_version.replace(".", "") + "_" + digest
 
     @property
     def cudnn_major(self):
@@ -224,7 +236,7 @@ class CudaWheelStack:
         if component is not None:
             roots = [self.component_dir(component)]
         else:
-            roots = [self.components[name] for name, _, _, _ in CUDA12_COMPONENTS]
+            roots = [self.components[name] for name, _, _, _ in self.component_specs]
         return _unique_existing(
             os.path.join(root, "include") for root in roots if root
         )
@@ -233,7 +245,7 @@ class CudaWheelStack:
         if component is not None:
             roots = [self.component_dir(component)]
         else:
-            roots = [self.components[name] for name, _, _, _ in CUDA12_COMPONENTS]
+            roots = [self.components[name] for name, _, _, _ in self.component_specs]
         return _unique_existing(
             os.path.join(root, "lib") for root in roots if root
         )
@@ -298,7 +310,55 @@ class CudaWheelStack:
         return False
 
 
+class Cuda13WheelStack(CudaWheelStack):
+    cuda_version = "13.0"
+    component_specs = CUDA13_COMPONENTS
+
+    def include_dirs(self, component=None):
+        paths = super(Cuda13WheelStack, self).include_dirs(component)
+        if component is None or component == "cccl":
+            paths += _unique_existing([os.path.join(self.components["cccl"], "include", "cccl")])
+        return list(dict.fromkeys(paths))
+
+    def preload_order(self, name):
+        # Math libraries may be a separately installed toolkit. Do not pretend
+        # this minimal wheel stack owns their headers, ABI or dependencies.
+        return (name,)
+
+
+def discover_wheel_nvcc(distribution=None):
+    """Find the pinned pip compiler, without overriding an explicit compiler."""
+    if os.name != "posix":
+        return None
+    distribution = distribution or importlib_metadata.distribution
+    try:
+        dist = distribution("nvidia-cuda-nvcc")
+    except importlib_metadata.PackageNotFoundError:
+        return None
+    if str(dist.version) != "13.0.88":
+        raise CudaWheelError("jittor[cuda13] requires nvidia-cuda-nvcc==13.0.88, found %s" % dist.version)
+    path = os.path.abspath(os.fspath(dist.locate_file("nvidia/cu13/bin/nvcc")))
+    if not os.path.isfile(path) or not os.access(path, os.X_OK):
+        raise CudaWheelError("nvidia-cuda-nvcc does not contain an executable nvidia/cu13/bin/nvcc")
+    return path
+
+
 def _validate_stack(stack):
+    if stack.cuda_version == "13.0":
+        root = stack.components["cuda_nvcc"]
+        if any(os.path.realpath(path) != os.path.realpath(root)
+               for path in stack.components.values()):
+            raise CudaWheelError("CUDA 13 compiler/runtime/CCCL wheels must share one nvidia/cu13 prefix")
+        required = ("bin/nvcc", "include/cuda_runtime.h", "include/crt/host_config.h",
+                    "nvvm/libdevice/libdevice.10.bc", "nvvm/bin/cicc", "lib/libcudadevrt.a",
+                    "include/cccl/cub/cub.cuh", "include/cccl/thrust/version.h",
+                    "include/cccl/cuda/std/version")
+        for path in required:
+            if not os.path.isfile(os.path.join(root, path)):
+                raise CudaWheelError("CUDA 13 wheel toolchain is missing %s" % path)
+        if not stack.find_library("cudart"):
+            raise CudaWheelError("libcudart is missing from the CUDA 13 wheel toolchain")
+        return
     required_headers = {
         "cuda_runtime": "cuda_runtime.h",
         "cublas": "cublas.h",
@@ -342,12 +402,15 @@ def _validate_stack(stack):
 #: ``broken``  the stack resolved completely at the pinned versions and then
 #:             failed validation, which no third party's dependencies can
 #:             cause: this is a broken ``jittor[cuda12]`` and nothing else
+#:             For the CUDA 13 toolchain, any installed but incomplete or
+#:             mismatched set is also broken; mixing its shared prefix with a
+#:             different toolkit cannot supply the compiler's missing pieces.
 CudaWheelReport = collections.namedtuple(
     "CudaWheelReport", "stack reason present broken")
 
 
 def inspect_cuda_wheel_stack(nvcc_version=None, distribution=None):
-    """Resolve the CUDA 12.2 wheel stack and say why if it cannot be.
+    """Resolve the selected CUDA 12.2 or 13.0 wheels and explain failures.
 
     Every one of these failures used to be swallowed -- the diagnostic strings
     below were constructed and then dropped on the floor by a bare
@@ -365,16 +428,20 @@ def inspect_cuda_wheel_stack(nvcc_version=None, distribution=None):
     if _truthy(os.environ.get("JITTOR_CUDA_WHEEL_DISABLE")):
         return CudaWheelReport(
             None, "JITTOR_CUDA_WHEEL_DISABLE is set", 0, False)
-    if nvcc_version and _version_tuple(nvcc_version)[:2] != (12, 2):
+    family = _version_tuple(nvcc_version)[:2] if nvcc_version else (12, 2)
+    if family not in ((12, 2), (13, 0)):
         return CudaWheelReport(
-            None, "jittor[cuda12] requires nvcc 12.2, found %s" % nvcc_version,
+            None, "jittor CUDA wheels require nvcc 12.2 or 13.0, found %s" % nvcc_version,
             0, False)
+
+    stack_type = Cuda13WheelStack if family == (13, 0) else CudaWheelStack
+    specs = stack_type.component_specs
 
     distribution = distribution or importlib_metadata.distribution
     components = {}
     versions = {}
     reason = None
-    for component, dist_name, specifier, relative_path in CUDA12_COMPONENTS:
+    for component, dist_name, specifier, relative_path in specs:
         try:
             dist = distribution(dist_name)
         except importlib_metadata.PackageNotFoundError:
@@ -396,9 +463,9 @@ def inspect_cuda_wheel_stack(nvcc_version=None, distribution=None):
     if reason is not None:
         # Only now, and only on the failure path: the success path must not
         # read any distribution's metadata twice.
-        return CudaWheelReport(
-            None, reason, _count_installed(distribution), False)
-    stack = CudaWheelStack(components, versions)
+        present = _count_installed(distribution, specs)
+        return CudaWheelReport(None, reason, present, family == (13, 0) and present > 0)
+    stack = stack_type(components, versions)
     try:
         _validate_stack(stack)
     except CudaWheelError as error:
@@ -406,24 +473,24 @@ def inspect_cuda_wheel_stack(nvcc_version=None, distribution=None):
         # still unusable. Nothing outside jittor[cuda12] pins this exact
         # combination, so this is that installation and it is broken.
         return CudaWheelReport(
-            None, str(error), len(CUDA12_COMPONENTS), True)
-    return CudaWheelReport(stack, None, len(CUDA12_COMPONENTS), False)
+            None, str(error), len(specs), True)
+    return CudaWheelReport(stack, None, len(specs), False)
 
 
-def _count_installed(distribution):
+def _count_installed(distribution, specs=CUDA12_COMPONENTS):
     """How many of the pinned component distributions exist at any version."""
     present = 0
-    for _, dist_name, _, _ in CUDA12_COMPONENTS:
+    for _, dist_name, _, _ in specs:
         try:
             distribution(dist_name)
-        except Exception:
+        except importlib_metadata.PackageNotFoundError:
             continue
         present += 1
     return present
 
 
 def discover_cuda_wheel_stack(nvcc_version=None, distribution=None, strict=None):
-    """Return the supported CUDA 12.2 wheel stack, or ``None``.
+    """Return the selected supported wheel stack, or ``None``.
 
     ``strict`` unset means "raise for a failure that can only be a broken
     ``jittor[cuda12]``". That is strict by default for the case where strict

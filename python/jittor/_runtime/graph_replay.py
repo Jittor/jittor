@@ -1149,7 +1149,7 @@ _HOST_STATE_LIMIT = 4096
 
 class _AutoState:
     __slots__ = ("signature", "seen", "replay", "recaptures", "give_up",
-                 "entries", "unstable", "previous")
+                 "entries", "unstable", "previous", "retain_bytes")
 
     def __init__(self):
         self.signature = None
@@ -1162,6 +1162,7 @@ class _AutoState:
         self.unstable = 0
         # The signature of the last call that passed objects.
         self.previous = None
+        self.retain_bytes = None
 
 
 def _element_size(dtype):
@@ -1333,6 +1334,20 @@ def auto_replay_for(module, args, kw):
         state = module.__dict__["_auto_graph_replay"] = _AutoState()
     if state.give_up:
         return None
+    retain_bytes = flags.auto_graph_replay_retain_bytes
+    if state.retain_bytes != retain_bytes:
+        # A runtime scope must also constrain graphs captured before it.
+        # Release every signature's recording through its existing owner;
+        # replacing the budget on a wrapper would leave fixed buffers alive.
+        if state.replay is not None:
+            state.replay.invalidate()
+            state.replay = None
+        for entry in state.entries.values():
+            if entry.step is not None:
+                entry.step.invalidate()
+        state.entries.clear()
+        state.previous = None
+        state.retain_bytes = retain_bytes
     if nbytes > flags.auto_graph_replay_bytes:
         return None
     if objects:
@@ -1357,7 +1372,7 @@ def auto_replay_for(module, args, kw):
         # the shape of step where replay wins.
         state.replay = GraphReplay(
             module, measure=False, weak=True,
-            max_retained_bytes=flags.auto_graph_replay_retain_bytes)
+            max_retained_bytes=retain_bytes)
     if state.replay.refused is not None:
         state.give_up = True
         state.replay = None

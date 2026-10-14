@@ -347,7 +347,10 @@ MPI_TESTS = (
     "tests/backends/comm/mpi/test_mpi_op.py",
     "tests/distributed/test_single_process_scope.py",
 )
-NCCL_TESTS = ("compat/tests/fsdp2/test_fsdp2_nccl.py",)
+NCCL_TESTS = (
+    "tests/backends/comm/nccl/test_native_collectives.py",
+    "compat/tests/fsdp2/test_fsdp2_nccl.py",
+)
 
 NOX_STATE_ROOT.mkdir(parents=True, exist_ok=True)
 nox.options.envdir = str(NOX_STATE_ROOT / "envs")
@@ -2309,6 +2312,10 @@ def nccl(session):
     probe = (
         "import jittor as jt; "
         "assert jt.compiler.has_cuda; "
+        # A one-rank warmup does not request distributed import bootstrap.
+        # Load NCCL explicitly before checking the operators it publishes.
+        "from jittor._runtime.backend_libraries import probe_library; "
+        "assert probe_library('nccl', load=True)[0] == 'available'; "
         "assert jt.compile_extern.nccl_ops is not None; "
         "jt.flags.use_cuda = 1; "
         "x = (jt.array([1.0, 2.0]) * 2).sum(); x.sync(); "
@@ -2316,6 +2323,7 @@ def nccl(session):
     )
     for rank, device in enumerate(selected_devices):
         warm_env = env.copy()
+        warm_env["JITTOR_TORCH_SHIM"] = "0"
         warm_env["CUDA_VISIBLE_DEVICES"] = device
         warm_env["cache_name"] = "nccl%d" % rank
         warm_rootinfo = root / ("warm-rank%d-rootinfo.bin" % rank)
@@ -2331,24 +2339,18 @@ def nccl(session):
 
     launch_env = env.copy()
     launch_env["CUDA_VISIBLE_DEVICES"] = ",".join(selected_devices)
-    launch_env["JITTOR_TORCH_SHIM"] = "1"
     targets = tuple(session.posargs) if session.posargs else NCCL_TESTS
-    session.run(
-        python,
-        str(REPO_ROOT / "python" / "jittor" / "distributed" / "launch.py"),
-        "-n",
-        str(world_size),
-        "--backend",
-        "nccl",
-        "--logdir",
-        str(root / "logs"),
-        "--",
-        python,
-        "-m",
-        "pytest",
-        "-v",
-        "--timeout=600",
-        *targets,
-        env=launch_env,
-        external=True,
-    )
+    groups = (targets,) if session.posargs else _by_process_mode(targets)
+    for group in groups:
+        if not group:
+            continue
+        mode_env = _mode_env(launch_env, group)
+        mode = "torch" if mode_env["JITTOR_TORCH_SHIM"] == "1" else "native"
+        session.run(
+            python,
+            str(REPO_ROOT / "python" / "jittor" / "distributed" / "launch.py"),
+            "-n", str(world_size), "--backend", "nccl",
+            "--logdir", str(root / ("logs-" + mode)), "--",
+            python, "-m", "pytest", "-v", "--timeout=600", *group,
+            env=mode_env, external=True,
+        )

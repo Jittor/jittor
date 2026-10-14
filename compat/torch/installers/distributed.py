@@ -17,7 +17,7 @@ import jittor as jt
 from ..context import registry_for
 from ..checkpoint_state import (
     get_optimizer_state_dict, set_optimizer_state_dict,
-    get_model_state_dict, set_model_state_dict,
+    get_model_state_dict, set_model_state_dict, get_state_dict, set_state_dict,
 )
 from ..fidelity import Fidelity, register_api_bindings
 from ...diagnostics import EXPECTED, swallowed
@@ -770,9 +770,7 @@ class StateDictOptions:
 
 
 def _get_model_state_dict(model, submodules=None, *, options=None):
-    if submodules:
-        raise NotImplementedError("checkpoint model submodule selection is not supported")
-    return get_model_state_dict(model, options=options)
+    return get_model_state_dict(model, submodules=submodules, options=options)
 
 
 def _set_model_state_dict(model, state_dict, *a, options=None, **k):
@@ -912,14 +910,12 @@ def _api_symmetric_memory_is_symm_mem_enabled_for_group(*a, **k):
 
 
 def _api_checkpoint_sd_get_state_dict(model, optimizers=None, *a, **k):
-    return (_get_model_state_dict(model, *a, **k),
-            get_optimizer_state_dict(model, optimizers, **k))
+    return get_state_dict(model, optimizers, *a, **k)
 
 
 def _api_checkpoint_sd_set_state_dict(model, optimizers=None, model_state_dict=None, optim_state_dict=None, *a, **k):
-    incompatible = _set_model_state_dict(model, model_state_dict or {}, *a, **k)
-    set_optimizer_state_dict(model, optimizers, optim_state_dict or {}, **k)
-    return incompatible
+    return set_state_dict(model, optimizers, *a, model_state_dict=model_state_dict or {},
+                          optim_state_dict=optim_state_dict or {}, **k)
 
 
 def _api_sharded_tensor_init_from_local_shards(shards, *a, **k):
@@ -1289,7 +1285,8 @@ def _install_distributed(g, registry=None):
         ("StateDictOptions", "get_model_state_dict", "set_model_state_dict", "get_state_dict", "set_state_dict",
          "get_optimizer_state_dict", "set_optimizer_state_dict"),
         Fidelity.APPROXIMATE, "FQN optimizer state and parameter groups, FULL FSDP provider transforms, "
-        "CPU offload, flatten and rank-zero broadcast; submodule selection is unsupported")
+        "CPU offload, flatten, rank-zero broadcast, strict optimizer loading and submodule selection; "
+        "FULL plus flatten loading is explicitly unsupported")
     register_api_bindings(rendezvous_mod, "torch.distributed.rendezvous", ("rendezvous",),
         Fidelity.APPROXIMATE, "Delegates supported URL, rank, world-size and timeout handling to native stores")
     register_api_bindings(c10d, "torch.distributed.distributed_c10d",

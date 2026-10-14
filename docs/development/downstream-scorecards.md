@@ -82,7 +82,7 @@ PR 只报告时间；速度上限断言用于固定硬件的 nightly/验收。�
 
 ## 机器可检的证据结构
 
-`evidence.json` 为 `{"schema_version": 1, "records": [...]}`。以下是 L2 的**结构模板**，
+`evidence.json` 为 `{"schema_version": 2, "records": [...]}`。以下是 L2 的**结构模板**，
 尖括号必须由实际执行填写。输入扰动检查要在固定权重下改变输入并重新对拍，不能把
 “重复跑同一个输入”写成已验证。整数 token 不请求 input gradient 时明写 requested=0；
 所有被请求的参数与浮点输入梯度都必须检查。
@@ -99,6 +99,7 @@ PR 只报告时间；速度上限断言用于固定硬件的 nightly/验收。�
     "os": "<OS>", "cpu": "<型号>", "accelerator_model": "not-applicable", "card_count": 0, "card_indices": [],
     "driver": "not-applicable", "cuda": "not-applicable", "cann": "not-applicable", "nvcc": "not-applicable",
     "gcc": "<版本>", "nvidia_wheels": {},
+    "precision": {"matmul": false, "cudnn": false, "cudnn_benchmark": false, "matmul_precision": "highest"},
     "jittor_flags": {"use_cuda": 0, "use_acl": 0, "graph_replay": "eager", "tf32": false, "hf32": false},
     "oracle": {"is_shim": false, "torch_version": "<版本>", "torch_npu_version": "not-applicable", "binary_extension": "<真实_C.so>"}
   },
@@ -114,22 +115,37 @@ PR 只报告时间；速度上限断言用于固定硬件的 nightly/验收。�
       {"role": "reference", "path": "<checkout外原始输出>", "sha256": "<SHA256>"},
       {"role": "candidate", "path": "<checkout外原始输出>", "sha256": "<SHA256>"},
       {"role": "comparison", "path": "<checkout外数值比较>", "sha256": "<SHA256>"},
-      {"role": "platform", "path": "<checkout外平台快照>", "sha256": "<SHA256>"}
+      {"role": "platform", "path": "<checkout外平台快照>", "sha256": "<SHA256>"},
+      {"role": "base-comparison", "path": "<verify_repo的原始JSON报告>", "sha256": "<SHA256>"},
+      {"role": "perturb-comparison", "path": "<固定权重输入扰动比较JSON>", "sha256": "<SHA256>"}
     ]
   }
 }
 ```
 
-L3 追加 `training: {steps, loss_trajectory_passed, parameter_trajectory_passed}`；L4 追加
+L3 追加 `training: {steps, loss_trajectory_passed, parameter_trajectory_passed, trainable, frozen, trainable_parameters, frozen_parameters}`，后两项是实际参数名列表；artifacts 另需 `training-reference-metadata` 与 `training-candidate-metadata`，指向两侧 training probe 的原始 JSON。L4 追加
 `speed`（上一节字段，加 `model/batch/sequence/dtype/precision/phase`、`graph_regime`、
 `no_concurrent_work: true`、`memory: {source, jittor_peak_bytes, oracle_peak_bytes}`）；
 设备证据追加 `fallback: {policy: "error", count: 0}`。机器校验负责结构、SHA、成员、
 门禁节点存在性、数值/级别前置和采样口径，**不替代维护者检查原始结果是否真的来自该命令**。
 
+schema v2 逐阶段读取带哈希的真实测量 JSON：`base-comparison` 的 `cases[].oracle_result/jittor_result`、`perturb-comparison` 的 `reference_result/candidate_result`，以及 L3 两侧训练元数据。扰动 JSON 顶层必须含 `case`、`status=passed`、`input_perturbation_verified=true`；两侧结果沿用共享 runner 的字段，不能换成手工 precision 标签。所有阶段的 actual device、TF32 的 matmul/cuDNN 开关、`matmul_precision`、runtime conditions 与平台 `precision` 必须相同；平台 JSON 必须与记录平台块完全一致。L3 再核对实际 Git SHA、步骤数及 trainable/frozen 参数名与计数。每个 artifact role 唯一。只重写报告标签，或者给错误平台标签重新算 SHA，都无法通过这些校验。
+
+`coverage[].verified_scenarios` 保留 case、所属 repo、已验 L 级、完整的跨库 registry_refs、tiny/real 和实际 trainable/frozen 参数范围。家族分子必须连同场景阅读：Llama+LoRA 的 L3 不能写成 dense Llama 全参 L3；没有训练证明的 L2 场景，参数更新范围明确为 null。schema v1 不再用于新授级，须从原始测量重新生成 v2 绑定。
+
+默认仍将证据绑定当前 HEAD。审计历史报告可显式传 `--baseline <完整40位Jittor SHA>`，该 SHA 必须是本地 Git 中的真实 commit；输出记录 `baseline_policy=explicit-historical`、测量 baseline 与当前 `auditor_commit`。这只重新审计旧提交的证据，不能证明当前代码也通过。不得将旧测量中的 SHA 改成当前 HEAD；当前树的新验收须重新执行计算。
+
 现有 [`verify_repo.py`](../../agent/skills/torch-compat-repo-runbook/scripts/verify_repo.py)
 复用生态 runner，可快速生成双方原始元数据和数值诊断。它不执行输入扰动、多步优化器
 轨迹或完整平台/进程峰值采集，因此输出明确标 `scorecard_eligible=false`；不要把单 case
 的 `passed` 自动转换为完整 scorecard 行。
+
+多步补证可运行 [`training_probe.py`](../../agent/skills/torch-compat-repo-runbook/scripts/training_probe.py)：
+同一个已注册 builder，独立 oracle 保存完整初始权重，candidate 加载后运行相同 SGD。
+工具保留 upstream tuner 的 trainable/frozen 划分，输出每步 loss、参数/输入梯度与全部参数
+轨迹，冻结参数发生变化、缺请求梯度、非有限值、device 不一致都会直接失败。它对原始
+梯度与参数做 host 快照以固定 lazy update 的语义；没有性能结论。具体双解释器命令见
+[runbook](../../agent/skills/torch-compat-repo-runbook/SKILL.md#多步训练证据)。
 
 ## Results 报告模板
 

@@ -113,6 +113,31 @@ REAL_TORCH_PYTHON=<real-torch-python> <jittor-python> \
   整进程峰值时，保留 `scorecard_eligible=false`，不能从 `passed` 推出这些更高级别。
 - case 名用下划线而发行版用连字符（`ms-swift` → `ms_swift_lora_llama`），脚本已归一化。
 
+### 多步训练证据
+
+[`scripts/training_probe.py`](scripts/training_probe.py) 复用同一份已准入 ecosystem builder，
+在独立解释器中执行默认三步、固定学习率的 SGD；不是新模型清单。先运行 CPU①，再运行
+实际加速设备③。两侧用相同完整初始参数与 buffer，逐步保存输出、loss、全部请求的参数/
+输入梯度和更新后参数。它保留上游 tuner 的冻结状态，并逐步断言冻结参数未改动；LoRA
+训练不能因为单步数值探针打开了全部梯度而偷偷变成全参训练。
+
+```bash
+<oracle-python> agent/skills/torch-compat-repo-runbook/scripts/training_probe.py \
+  --case peft_lora_llama --runtime torch --device cpu \
+  --output "$JITTOR_LAB_ROOT/_state/<topic>/train/ref.npz"
+PYTHONPATH=python JITTOR_TORCH_SHIM=1 <jittor-python> \
+  agent/skills/torch-compat-repo-runbook/scripts/training_probe.py \
+  --case peft_lora_llama --runtime jittor --device cpu \
+  --weights "$JITTOR_LAB_ROOT/_state/<topic>/train/ref.weights.npz" \
+  --output "$JITTOR_LAB_ROOT/_state/<topic>/train/candidate.npz"
+```
+
+每个 `.npz` 附带 `.json`：实际 device、运行条件、依赖来源、训练/冻结参数清单、
+初始权重 SHA256、探针 SHA256、基线及零 fallback 计数。比较双方全部数组，不能只比最后
+一个 loss；固定权重的输入扰动还需另跑并核实输出确实改变。参数更新前会物化全部旧梯度，
+快照包含 host 传输，**不作为计时器**。这些训练产物连同独立 L2 数值证据可以支持精确
+规格的 L3；完整 scorecard 仍需平台块与注册项绑定，不能直接扩大到整库或 L4/L5。
+
 ## 五、验证环境没有该库时
 
 `pip` 可用的机器上，把下游依赖装到一个**独立目录**当包站，再让两侧都指过去

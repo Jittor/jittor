@@ -39,6 +39,14 @@
 2026-10-14-amp-bfloat16-gradscaler
 2026-10-15-distribution-constraint-publication
 2026-10-15-training-registry-denominators
+2026-10-14-cuda-sdpa-mask-coverage
+2026-10-14-graph-replay-retain-budget
+2026-10-14-downstream-oracle-scorecards
+2026-10-15-cuda13-toolchain-packaging
+2026-10-15-bf16-fsdp2-checkpoint-continuation
+2026-10-15-metric-state-and-tensordict-oracles
+2026-10-15-checkpoint-state-options
+2026-10-15-integration-nccl-coverage
 ```
 
 ## 按主题索引
@@ -69,3 +77,11 @@
 | [bf16 autocast 与 GradScaler 边界](2026-10-14-amp-bfloat16-gradscaler.md) | CPU/CUDA 实际 dtype 与边界对拍通过；fidelity 保持 APPROXIMATE | 2026-10-14 |
 | [分布约束命名空间发布](2026-10-15-distribution-constraint-publication.md) | 原生属性与工厂发布已修；CPU/CUDA 边界检查对拍通过 | 2026-10-15 |
 | [训练注册表分母补齐](2026-10-15-training-registry-denominators.md) | 五库源码分母已重导；补 ms-swift/verl 训练轴，未授予数值覆盖 | 2026-10-15 |
+| [CUDA SDPA 掩码覆盖](2026-10-14-cuda-sdpa-mask-coverage.md) | 180 个真实 CUDA 场景对拍；融合路径扩展，边界保持显式 | 2026-10-14 |
+| [图重放保留预算](2026-10-14-graph-replay-retain-budget.md) | 动态预算约束已缓存的 replay；默认预算保留，CPU/CUDA 实测 | 2026-10-14 |
+| [下游独立 oracle 与训练 scorecard](2026-10-14-downstream-oracle-scorecards.md) | 四库 CPU/CUDA 代表场景已验；LoRA/component 范围限定，未授予 L4/L5 | 2026-10-14 |
+| [CUDA 13 工具链与 uv 安装](2026-10-15-cuda13-toolchain-packaging.md) | Linux/SM89 工具链、CUB、矩阵乘与卷积实测；Cu122 回归通过 | 2026-10-15 |
+| [双卡 bf16 FSDP2 续训](2026-10-15-bf16-fsdp2-checkpoint-continuation.md) | bf16 真计算与 FULL/RNG 精确恢复已验；跨框架舍入差异保留 | 2026-10-15 |
+| [TorchMetrics state 与 TensorDict 对拍](2026-10-15-metric-state-and-tensordict-oracles.md) | 两库 CPU/CUDA 全梯度通过；TensorDict 三步训练通过，限定组件范围 | 2026-10-15 |
+| [Checkpoint 选项与子模块契约](2026-10-15-checkpoint-state-options.md) | CPU/CUDA 单进程选项和实际 Torch checkpoint 互通已验；多 rank 选项与 ACL 待验 | 2026-10-15 |
+| [整合回归与 NCCL 缺陷收口](2026-10-15-integration-nccl-coverage.md) | NCCL 2.18.3 双卡退出条件通过，KI-DIST-002/003 收口；限定定向范围 | 2026-10-15 |

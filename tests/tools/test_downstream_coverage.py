@@ -57,6 +57,39 @@ class CoverageAuditTests(unittest.TestCase):
                              {"role": role, "path": str(raw), "sha256": hashlib.sha256(raw.read_bytes()).hexdigest()}
                              for role in ("reference", "candidate", "comparison", "platform")]},
         }
+        self.serial = 0
+        self.bind_measurements(self.row)
+
+    def artifact_json(self, row, role, value):
+        self.serial += 1
+        path = self.lab / ("artifact-%d.json" % self.serial)
+        path.write_text(json.dumps(value), encoding="utf-8")
+        artifact = {"role": role, "path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+        row["evidence"]["artifacts"] = [item for item in row["evidence"]["artifacts"] if item["role"] != role] + [artifact]
+
+    def bind_measurements(self, row):
+        enabled = row["platform"]["jittor_flags"]["tf32"]
+        precision = {"matmul": enabled, "cudnn": enabled, "cudnn_benchmark": False,
+                     "matmul_precision": "high" if enabled else "highest"}
+        row["platform"]["precision"] = precision
+        self.artifact_json(row, "platform", row["platform"])
+        reference = {"case": row["case"], "device": row["device"], "runtime": "torch",
+                     "tf32": precision, "runtime_conditions": {"precision": precision, "runtime_threads": 2},
+                     "jittor_commit": row["jittor_commit"], "steps": 3,
+                     "trainable_parameters": ["weight", "bias"], "frozen_parameters": []}
+        candidate = dict(reference, runtime="jittor", fallback_policy="error", fallback_count=0,
+                         backend={"use_cuda": bool(row["platform"]["jittor_flags"]["use_cuda"]),
+                                  "use_acl": bool(row["platform"]["jittor_flags"]["use_acl"])})
+        self.artifact_json(row, "base-comparison", {"baseline": row["jittor_commit"], "cases": [
+            {"case": row["case"], "status": "passed", "oracle_result": reference, "jittor_result": candidate}]})
+        self.artifact_json(row, "perturb-comparison", {"case": row["case"], "status": "passed",
+                           "input_perturbation_verified": True, "reference_result": reference, "candidate_result": candidate})
+        self.artifact_json(row, "training-reference-metadata", reference)
+        self.artifact_json(row, "training-candidate-metadata", candidate)
+
+    def document(self, row, role):
+        artifact = next(item for item in row["evidence"]["artifacts"] if item["role"] == role)
+        return json.loads(Path(artifact["path"]).read_text())
 
     def validate(self, row):
         return audit.validate_record(row, self.sources, self.baseline, self.root)
@@ -122,6 +155,7 @@ class CoverageAuditTests(unittest.TestCase):
         row.update(device="cuda", observed_device="cuda", fallback={"count": 0, "policy": "error"})
         row["platform"].update(card_count=1, card_indices=["allocated"], accelerator_model="test GPU")
         row["platform"]["jittor_flags"]["use_cuda"] = 1
+        self.bind_measurements(row)
         return row
 
     def test_accelerator_needs_matching_cpu_and_zero_fallback(self):
@@ -138,7 +172,8 @@ class CoverageAuditTests(unittest.TestCase):
         row = self.accelerator_row()
         row["level"] = 5
         row["inputs"]["shape_kind"] = "real"
-        row["training"] = {"steps": 3, "loss_trajectory_passed": True, "parameter_trajectory_passed": True}
+        row["training"] = {"steps": 3, "loss_trajectory_passed": True, "parameter_trajectory_passed": True,
+                           "trainable": 2, "frozen": 0, "trainable_parameters": ["weight", "bias"], "frozen_parameters": []}
         row["speed"] = {"model": "llama", "batch": 2, "sequence": 128, "dtype": "float32", "precision": "strict",
                         "phase": "train", "jittor_seconds": 0.1, "oracle_seconds": 0.1,
                         "agreement": 1e-6, "agreement_tolerance": 1e-4,
@@ -157,6 +192,107 @@ class CoverageAuditTests(unittest.TestCase):
             alter(changed)
             with self.assertRaises(ValueError):
                 self.validate(changed)
+
+    def test_actual_hashed_precision_overrides_a_stale_platform_label(self):
+        row = self.accelerator_row()
+        actual = {"matmul": True, "cudnn": True, "cudnn_benchmark": False, "matmul_precision": "high"}
+        base = self.document(row, "base-comparison")
+        for key in ("oracle_result", "jittor_result"):
+            base["cases"][0][key]["tf32"] = actual
+            base["cases"][0][key]["runtime_conditions"]["precision"] = actual
+        self.artifact_json(row, "base-comparison", base)
+        with self.assertRaisesRegex(ValueError, "Platform/measurement precision"):
+            self.validate(row)
+        # Updating only the report/platform label must not bless the old raw run.
+        row = self.accelerator_row()
+        row["platform"]["jittor_flags"]["tf32"] = True
+        row["platform"]["precision"] = actual
+        self.artifact_json(row, "platform", row["platform"])
+        with self.assertRaisesRegex(ValueError, "Platform/measurement precision"):
+            self.validate(row)
+
+    def test_precision_is_checked_for_both_runtimes_and_every_phase(self):
+        for role, key in (("base-comparison", "oracle_result"), ("base-comparison", "jittor_result"),
+                          ("perturb-comparison", "reference_result"), ("perturb-comparison", "candidate_result"),
+                          ("training-reference-metadata", None), ("training-candidate-metadata", None)):
+            with self.subTest(role=role, runtime=key):
+                row = self.accelerator_row()
+                row["level"] = 3
+                row["training"] = {"steps": 3, "loss_trajectory_passed": True, "parameter_trajectory_passed": True,
+                                   "trainable": 2, "frozen": 0, "trainable_parameters": ["weight", "bias"], "frozen_parameters": []}
+                document = self.document(row, role)
+                value = document["cases"][0][key] if role == "base-comparison" else document[key] if key else document
+                value["tf32"]["matmul_precision"] = "medium"
+                self.artifact_json(row, role, document)
+                with self.assertRaisesRegex(ValueError, "precision"):
+                    self.validate(row)
+
+    def test_missing_ambiguous_or_stale_measurement_json_is_rejected(self):
+        for changed in ("missing", "duplicate", "platform", "case", "baseline", "device", "backend", "runtime"):
+            with self.subTest(changed=changed):
+                row = self.accelerator_row()
+                if changed == "missing":
+                    row["evidence"]["artifacts"] = [item for item in row["evidence"]["artifacts"] if item["role"] != "base-comparison"]
+                elif changed == "duplicate":
+                    row["evidence"]["artifacts"].append(dict(row["evidence"]["artifacts"][-1]))
+                elif changed == "platform":
+                    self.artifact_json(row, "platform", {"different": True})
+                else:
+                    base = self.document(row, "base-comparison")
+                    if changed == "baseline":
+                        base["baseline"] = "c" * 40
+                    else:
+                        candidate = base["cases"][0]["jittor_result"]
+                        if changed == "case":
+                            candidate["case"] = "other"
+                        if changed == "device":
+                            candidate["device"] = "cpu"
+                        if changed == "backend":
+                            candidate["backend"]["use_cuda"] = False
+                        if changed == "runtime":
+                            candidate["runtime_conditions"]["runtime_threads"] = 99
+                    self.artifact_json(row, "base-comparison", base)
+                with self.assertRaises(ValueError):
+                    self.validate(row)
+
+    def test_training_scope_must_match_the_actual_parameter_names(self):
+        row = self.accelerator_row()
+        row["level"] = 3
+        row["training"] = {"steps": 3, "loss_trajectory_passed": True, "parameter_trajectory_passed": True,
+                           "trainable": 2, "frozen": 0, "trainable_parameters": ["base.weight", "base.bias"],
+                           "frozen_parameters": []}
+        with self.assertRaisesRegex(ValueError, "parameter scope"):
+            self.validate(row)
+
+    def test_historical_cli_requires_an_explicit_full_commit(self):
+        result = run_python_child(["-S", str(SCRIPTS / "audit_coverage.py"), "scorecard",
+                                   "--baseline", "abcd", "--upstream", "transformers=missing",
+                                   "--output", str(self.lab / "output.json")])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Historical baseline requires a full SHA", result.stderr)
+        self.assertFalse((self.lab / "output.json").exists())
+
+    def test_coverage_preserves_method_shape_and_trainable_scope(self):
+        self.snapshot["axes"].append({"axis": "method", "count": 2, "members": ["LORA", "DENSE"]})
+        row = self.accelerator_row()
+        row["registry_refs"].append({"repo": "transformers", "axis": "method", "member": "LORA"})
+        row["level"] = 3
+        row["training"] = {"steps": 3, "loss_trajectory_passed": True, "parameter_trajectory_passed": True,
+                           "trainable": 2, "frozen": 0, "trainable_parameters": ["weight", "bias"], "frozen_parameters": []}
+        cpu = copy.deepcopy(row)
+        cpu.update(device="cpu", observed_device="cpu")
+        cpu["platform"].update(card_count=0, card_indices=[], accelerator_model="not-applicable")
+        cpu["platform"]["jittor_flags"]["use_cuda"] = 0
+        self.bind_measurements(cpu)
+        value = audit.scorecard(self.sources, [cpu, row], self.baseline, self.root)
+        self.assertEqual(value["schema_version"], 2)
+        self.assertFalse(value["rejected"])
+        family = next(item for item in value["coverage"] if item["axis"] == "model_family" and item["device"] == "cuda")
+        scenario = family["verified_scenarios"][0]
+        self.assertEqual(scenario["registry_refs"], row["registry_refs"])
+        self.assertEqual((scenario["repo"], scenario["case"], scenario["level"], scenario["shape_kind"]),
+                         (row["repo"], row["case"], 3, "tiny"))
+        self.assertEqual(scenario["trainable_scope"]["trainable_parameters"], ["weight", "bias"])
 
     def test_installed_dependency_versions_must_match_upstream(self):
         self.row["downstream_versions"]["oracle"] = "other"
@@ -224,6 +360,16 @@ class RegistryTests(unittest.TestCase):
 
 
 class VerifyRunnerTests(unittest.TestCase):
+    def test_metric_and_tensordict_cases_list_without_runtime_dependencies(self):
+        for repo, case in (("torchmetrics", "torchmetrics_regression"),
+                           ("tensordict", "tensordict_index_and_stack")):
+            with self.subTest(repo=repo):
+                result = run_python_child(
+                    ["-S", str(SCRIPTS / "verify_repo.py"), "--repo", repo, "--list-only"],
+                    without_torch_mode=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.split(), ["CASE", case, "requires", repo])
+
     def test_pair_device_precision_versions_and_threads_must_match(self):
         spec = importlib.util.spec_from_file_location("verify_repo_metadata", SCRIPTS / "verify_repo.py")
         verify = importlib.util.module_from_spec(spec)

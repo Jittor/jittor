@@ -10,6 +10,9 @@ def is_torch_mode_path(path):
 
 TORCH_MODE_PATHS = (
     "compat/tests/torch",
+    # This multi-rank suite exercises Torch collectives and optimizer subclasses.
+    # Pure native sequences live under tests/backends/comm/nccl instead.
+    "compat/tests/fsdp2/test_fsdp2_nccl.py",
     "compat/tests/structure",
     "adapters/tests/vllm",
     # The OpInfo runner exercises Torch-facing signatures for the shared

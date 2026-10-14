@@ -290,6 +290,46 @@ def _ms_swift_lora_llama(torch):
     return model, inputs
 
 
+def _torchmetrics_regression(torch):
+    """MSE/MAE batch outputs and both floating input gradients, no parameters."""
+    from torchmetrics import MeanAbsoluteError, MeanSquaredError
+
+    class Metrics(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.mse = MeanSquaredError()
+            self.mae = MeanAbsoluteError()
+
+        def forward(self, prediction, target):
+            return torch.stack([self.mse(prediction, target), self.mae(prediction, target)])
+
+    inputs = {"prediction": ("float32", (4, 8), None),
+              "target": ("float32", (4, 8), None)}
+    return Metrics(), inputs
+
+
+def _tensordict_index_and_stack(torch):
+    """TensorDict integer/bool/lazy indexing around a trainable Linear block."""
+    from tensordict import TensorDict, lazy_stack
+
+    class Nested(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.projection = torch.nn.Linear(4, 3)
+
+        def forward(self, sample):
+            data = TensorDict({"value": sample}, batch_size=[2, 3])
+            data["projected"] = self.projection(data["value"])
+            order = torch.tensor([1, 0], dtype=torch.int64, device=sample.device)
+            mask = torch.tensor([True, False], dtype=torch.bool, device=sample.device)
+            stacked = lazy_stack([data, data], dim=0)
+            indexed = data[order]["projected"]
+            masked = data[mask]["projected"]
+            return indexed + stacked[1]["projected"][order] + masked.expand(2, 3, 3)
+
+    return Nested(), {"sample": ("float32", (2, 3, 4), None)}
+
+
 #: name -> (builder, required top-level distributions)
 #:
 #: The realistic-size configurations used for wall-clock work live in
@@ -307,6 +347,8 @@ CASES = {
     "peft_lora_llama": (_peft_lora_llama, ("transformers", "peft")),
     "mmcv_conv_module": (_mmcv_conv_module, ("mmcv", "mmengine")),
     "mmengine_base_module": (_mmengine_base_model, ("mmengine",)),
+    "torchmetrics_regression": (_torchmetrics_regression, ("torchmetrics",)),
+    "tensordict_index_and_stack": (_tensordict_index_and_stack, ("tensordict",)),
     "ms_swift_lora_llama": (_ms_swift_lora_llama, ("transformers", "peft", "swift")),
 }
 

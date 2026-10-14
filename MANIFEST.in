@@ -383,9 +383,17 @@ include docs/results/2026-10-09-downstream-p1-allocator-protocol-transpose.md
 include docs/results/2026-10-14-amp-bfloat16-gradscaler.md
 include docs/results/2026-10-14-benchmark-coverage.md
 include docs/results/2026-10-14-checkpoint-rng-fsdp2-continuation.md
+include docs/results/2026-10-14-cuda-sdpa-mask-coverage.md
 include docs/results/2026-10-14-downstream-coverage-audit.md
+include docs/results/2026-10-14-downstream-oracle-scorecards.md
+include docs/results/2026-10-14-graph-replay-retain-budget.md
 include docs/results/2026-10-14-optimizer-checkpoint-continuation.md
+include docs/results/2026-10-15-bf16-fsdp2-checkpoint-continuation.md
+include docs/results/2026-10-15-checkpoint-state-options.md
+include docs/results/2026-10-15-cuda13-toolchain-packaging.md
 include docs/results/2026-10-15-distribution-constraint-publication.md
+include docs/results/2026-10-15-integration-nccl-coverage.md
+include docs/results/2026-10-15-metric-state-and-tensordict-oracles.md
 include docs/results/2026-10-15-training-registry-denominators.md
 include docs/results/index.md
 include docs/tutorials/index.md
