@@ -101,7 +101,7 @@ ACL、无梯度推理，训练调用会报错；普通 Linear 子类保持原样
 - `x[i]`（纯整数索引）的反向在 310P 上可能读到未初始化字节：这是
   `setitem_inplace` 图优化把梯度打包进零基座后的调度层缺陷，与 ACL 核
   无关。公开路径（`GetItemACL`）已绕行；原生 op 路径在测试中声明为
-  预期失败，详见 `agent/manuals/known-issues.md` KI-BACKEND-020。
+  预期失败，详见 `agent/manuals/known-issues.md` KI-BACKEND-022。
 - bool mask 的 `where`/`masked_fill` 在 310P 上静默无效；涉及非有限值
   的路径已改用 `nonzero`+`IndexPutImpl`。
 - 310P 不声明训练能力：缺少的反向算子由组合实现补齐并逐一对拍，

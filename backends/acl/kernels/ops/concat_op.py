@@ -13,6 +13,40 @@ from typing import Union
 from collections.abc import Sequence, Iterable
 
 from ._code import acl_code as concat_cmd
+from ._code import acl_emit, acl_program
+
+#: Training programs by their split sizes and axis. Inference uses the mapped
+#: native op above this cache lookup and never builds a SplitWithSize gradient.
+_CONCAT_PROGRAMS = {}
+_CONCAT_PROGRAM_LIMIT = 4096
+
+
+def _build_concat_program(split_sizes, dim):
+    grad_attr_code = code_program(
+        [
+            '\n        op.jt_name = "splitwithsize";\n        ',
+            attribute_program(
+                "SplitWithSize", {"splitSize": list(split_sizes), "dim": dim}, variable="op"
+            ),
+            "\n        ",
+        ]
+    )
+    grad_outputs = "\n".join(f"op.add(out{i}, false);" for i in range(len(split_sizes)))
+    return acl_program(
+        "Concat",
+        len(split_sizes),
+        1,
+        attributes={"tensorNum": len(split_sizes), "dim": dim},
+        multi_grad_src=code_program(
+            [
+                "\n            // aclop\n            SplitWithSizeOpRunner op;\n            op.add(dout, true);\n            ",
+                grad_outputs,
+                "\n            ",
+                grad_attr_code,
+                "\n            op.run();\n            ",
+            ]
+        ),
+    )
 
 
 def _validate_concat_inputs(input_tensors, dim):
@@ -54,34 +88,20 @@ class ConcatACL:
         dim = _validate_concat_inputs(input_tensors, dim)
         self.input = input_tensors
         self.dim = dim
-        split_sizes = [tensor.shape[dim] for tensor in input_tensors]
-        grad_attr_code = code_program(
-            [
-                '\n        op.jt_name = "splitwithsize";\n        ',
-                attribute_program(
-                    "SplitWithSize", {"splitSize": list(split_sizes), "dim": dim}, variable="op"
-                ),
-                "\n        ",
-            ]
-        )
-        grad_outputs = "\n".join(f"op.add(out{i}, false);" for i in range(len(input_tensors)))
-        result = concat_cmd(
-            "Concat",
+        split_sizes = tuple(int(tensor.shape[dim]) for tensor in input_tensors)
+        key = (split_sizes, dim)
+        program = _CONCAT_PROGRAMS.get(key)
+        if program is None:
+            program = _build_concat_program(split_sizes, dim)
+            if len(_CONCAT_PROGRAMS) >= _CONCAT_PROGRAM_LIMIT:
+                _CONCAT_PROGRAMS.clear()
+            _CONCAT_PROGRAMS[key] = program
+        return acl_emit(
+            program,
             input_tensors,
-            output_dtypes=[input_tensors[0].dtype],
-            output_shapes=[self.calculate_output_shape(input_tensors, dim)],
-            attributes={"tensorNum": len(input_tensors), "dim": dim},
-            multi_grad_src=code_program(
-                [
-                    "\n            // aclop\n            SplitWithSizeOpRunner op;\n            op.add(dout, true);\n            ",
-                    grad_outputs,
-                    "\n            ",
-                    grad_attr_code,
-                    "\n            op.run();\n            ",
-                ]
-            ),
+            [input_tensors[0].dtype],
+            [self.calculate_output_shape(input_tensors, dim)],
         )[0]
-        return result
 
     def calculate_output_shape(self, input_tensors, axis):
         shape = list(input_tensors[0].shape)

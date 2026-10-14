@@ -4,7 +4,7 @@ The torch models are loaded with jittor's initial weights and fed jittor's
 inputs, so any difference that shows up is the frameworks' arithmetic and not
 the initialisation or the data.
 
-    python bench/xval/compare_th.py DIR [--hf32] [--steps N]
+    python benchmarks/acl/xval/compare_th.py DIR [--hf32] [--steps N]
 
 Read the numbers this way: the step-0 loss and gradients isolate one forward
 and one backward, and are the tight check. A long trajectory is not -- see

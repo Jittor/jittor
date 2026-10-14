@@ -513,10 +513,14 @@ def test_complete_forward_backward_payloads_are_disjoint(pipeline):
     load("upsample_op").UpsampleNearest2dACL()(Tensor((1, 2, 3, 4)), (6, 8))
     assert "UpsampleNearest2dBackward_op" in " ".join(calls[-1]["data"])
     dropout = load("dropout_op").DropoutACL()
-    dropout.execute(x, 0.25, True)
-    dropout.execute(x, 0.5, False)
+    dropout(x, 0.25, True)
+    dropout(x, 0.5, False)
+    # Same runner source either way; p/train (and the backward scale) differ.
     assert calls[-1]["cuda_src"] == calls[-2]["cuda_src"]
     assert calls[-1]["data"] != calls[-2]["data"]
+    assert calls[-1]["data"]["multi_grad"] == 1
+    assert 'apply_acl_code_attributes(op, data, "acl_grad_attr.", "DropoutBackward")' in (
+        calls[-1]["cuda_grad_src"][0])
 
 
 def test_flash_attention_backward_attributes_precede_single_launch(pipeline):

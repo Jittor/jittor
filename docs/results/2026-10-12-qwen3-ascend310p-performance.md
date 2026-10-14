@@ -2,7 +2,7 @@
 
 - Status: 单卡、batch=1、动态 KV cache 的设备性能与对拍通过，范围见下
 - Last reviewed: 2026-10-12
-- Source baseline: `3cfaa92e9e121aa25a76523f5ba2b8302f55cb6b`（含远端 `7a18abf29`）；优化代码随本报告提交
+- Source baseline: `aad488adca252aeec92edd2edf21548cf3c321f9`；基于 `3cfaa92e9`（含远端 `7a18abf29`）的优化实现
 - Owner: ACL backend and Torch compatibility maintainers
 - Review when: CANN、驱动、Transformers、Torch、权重布局、SDPA 或图重放机制改变
 
@@ -132,7 +132,7 @@ JITTOR_TORCH_SHIM=1 PYTHONPATH=python backend_fallback=error \
 `jittor-accepted-*`、`torch-final-*` 和 `parity-accepted-*` JSON/NumPy 文件；
 CANN 原始 trace 与 CSV 位于
 `profile-static-api/`、`profile-torch-api/`。完整命令入口见
-[性能 skill](../../agent/skills/jittor-transformers-perf/SKILL.md)。
+[性能 skill](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/jittor-transformers-perf/SKILL.md)。
 
 ## 验证范围
 

@@ -104,6 +104,25 @@ BackendEvent backend_event(Device device, bool timing) {
 // total: a backend with no capture support, or no accelerator at all, gets a
 // false/nullptr rather than an error, because the caller's fallback (launch
 // the kernels one by one, as always) is always available and always correct.
+void backend_set_deterministic_algorithms(bool enabled) {
+    const auto& backend = backend_ops(accelerator_backend_id());
+    if (!backend.set_deterministic_algorithms || !backend.get_deterministic_algorithms)
+        throw std::runtime_error("Backend does not support deterministic algorithm policy");
+    backend.set_deterministic_algorithms(enabled);
+    // Read it back: the option is the runtime's, not a flag kept here, and a
+    // setter that reported success without taking effect would leave the
+    // caller believing it had determinism it does not have.
+    if (backend.get_deterministic_algorithms() != enabled)
+        throw std::runtime_error("Backend deterministic algorithm policy readback mismatch");
+}
+
+bool backend_get_deterministic_algorithms() {
+    const auto& backend = backend_ops(accelerator_backend_id());
+    if (!backend.get_deterministic_algorithms)
+        throw std::runtime_error("Backend does not support deterministic algorithm policy");
+    return backend.get_deterministic_algorithms();
+}
+
 static const BackendOps* graph_backend() {
     const auto id = accelerator_backend_id();
     if (id == BackendId::Cpu) return nullptr;

@@ -1,11 +1,11 @@
-# bench — Ascend NPU 的对照测量
+# ACL — Ascend NPU 的对照测量
 
 这里放的是**手工运行**的测量代码：把 Jittor 的 ACL 后端和同机的
 `torch + torch_npu` 放在同一组网络上比速度、比数值。它需要真实的昇腾设备和 CANN，
 不会被 pytest 收集，也不进 CI。
 
-按提交索引的留存性能结果属于 [`benchmarks/`](../benchmarks/)（ASV 套件，见
-[`docs/performance/benchmarking.md`](../docs/performance/benchmarking.md)）。两者不要
+按提交索引的留存性能结果属于 [`benchmarks/asv/`](../asv/)（ASV 套件，见
+[`docs/performance/benchmarking.md`](../../docs/performance/benchmarking.md)）。两者不要
 共用一个 Jittor 编译缓存。
 
 ## 网络
@@ -16,8 +16,8 @@
 ## 计时
 
 ```bash
-python bench/bench_jittor.py --hf32
-python bench/bench_torch.py  --hf32
+python benchmarks/acl/bench_jittor.py --hf32
+python benchmarks/acl/bench_torch.py  --hf32
 ```
 
 各自打印每个 `模型/模式` 的 ms/step，最后一行是一整行 `JSON`，方便脚本采集。
@@ -34,9 +34,9 @@ python bench/bench_torch.py  --hf32
 ## 数值交叉验证
 
 ```bash
-python bench/xval/dump_jt.py    /tmp/xval --steps 20        # jittor 侧录制
-python bench/xval/compare_th.py /tmp/xval --steps 20        # torch 侧回放并比对
-python bench/xval/control_th.py /tmp/xval --steps 100       # 对照实验
+python benchmarks/acl/xval/dump_jt.py    /tmp/xval --steps 20        # jittor 侧录制
+python benchmarks/acl/xval/compare_th.py /tmp/xval --steps 20        # torch 侧回放并比对
+python benchmarks/acl/xval/control_th.py /tmp/xval --steps 100       # 对照实验
 ```
 
 `dump_jt.py` 把初始权重、输入、第 0 步的 loss 与梯度、训练 loss 轨迹和最终参数存成
@@ -59,12 +59,12 @@ submodule 命名不同，映射由 [`xval/_canon.py`](xval/_canon.py) 给出，�
 
 ## CANN 探针
 
-`aclprobe/` 下是绕开 Jittor、直接调 aclnn 的小程序，用来把「是 CANN 的下限还是我们的
+`probes/` 下是绕开 Jittor、直接调 aclnn 的小程序，用来把「是 CANN 的下限还是我们的
 开销」这类问题钉死。用 `ccec` 编译：
 
 ```bash
 source /usr/local/Ascend/cann/set_env.sh
-bash bench/aclprobe/ascbuild.sh bench/aclprobe/binu_probe.cc /tmp/binu_probe
+bash benchmarks/acl/probes/ascbuild.sh benchmarks/acl/probes/binu_probe.cc /tmp/binu_probe
 /tmp/binu_probe
 ```
 

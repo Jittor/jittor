@@ -605,3 +605,83 @@ def test_acl_index_copy_declines_other_assignment_forms(case, monkeypatch):
                 assert setitem_op._single_axis_index_copy(base, slices, value) is None
         else:
             assert setitem_op._single_axis_index_copy(base, slices, value) is None
+
+
+def _integer_axis_assignment_case(case, dtype):
+    cases = {
+        "column": ((2, 3), (slice(None), 1), (2,)),
+        "middle": ((2, 3, 4), (slice(None), 1, slice(None)), (4,)),
+        "leading": ((2, 3, 4), (1, slice(None), slice(None)), (1, 4)),
+        "two_integer_axes": ((2, 3, 4, 5), (1, slice(None), 2, slice(None)), (1, 5)),
+    }
+    shape, index, value_shape = cases[case]
+    original = np.arange(np.prod(shape), dtype=np.int32).reshape(shape)
+    values = np.arange(np.prod(value_shape), dtype=np.int32).reshape(value_shape)
+    if dtype == "bool":
+        original, values = original % 2 == 0, values % 2 == 0
+    else:
+        original, values = original % 7 - 3, values % 5 + 4
+    return original.astype(dtype), index, values.astype(dtype)
+
+
+@pytest.mark.parametrize("case", ["column", "middle", "leading", "two_integer_axes"])
+@pytest.mark.parametrize("dtype", ["bool", "int8", "int32", "float32"])
+def test_acl_integer_axis_assignment_preserves_inputs(case, dtype):
+    if not _test_capability.check_accelerator("acl", backend=jt).enabled:
+        pytest.skip("ACL backend is unavailable")
+    from jittor._runtime.fallback import forbid_backend_fallbacks
+
+    original, index, values = _integer_axis_assignment_case(case, dtype)
+    expected = original.copy()
+    expected[index] = values
+    fallback_before = jt.core.backend_fallback_count()
+    with jt.runtime.scope(use_cuda=1), jt.no_grad(), forbid_backend_fallbacks():
+        base, value = jt.array(original), jt.array(values)
+        updated = jt.setitem(base, index, value)
+        jt.sync([updated, base, value])
+        assert tuple(updated.shape) == original.shape
+        assert str(updated.dtype) == dtype
+        assert updated._storage_address != base._storage_address
+        assert all(tensor.location() == "device" for tensor in (updated, base, value))
+        actual, unchanged_base, unchanged_value = jt.fetch_sync([updated, base, value])
+    assert jt.core.backend_fallback_count() == fallback_before
+    np.testing.assert_array_equal(actual, expected)
+    np.testing.assert_array_equal(unchanged_base, original)
+    np.testing.assert_array_equal(unchanged_value, values)
+
+
+@pytest.mark.parametrize("case", ["column", "middle", "leading", "two_integer_axes"])
+def test_acl_integer_axis_assignment_broadcast_gradients(case):
+    if not _test_capability.check_accelerator("acl", backend=jt).enabled:
+        pytest.skip("ACL backend is unavailable")
+    from jittor._runtime.fallback import forbid_backend_fallbacks
+
+    original, index, values = _integer_axis_assignment_case(case, "float32")
+    weights = np.arange(original.size, dtype=np.float32).reshape(original.shape) / 16 + 0.25
+    expected = original.copy()
+    expected[index] = values
+    expected_base_grad = weights.copy()
+    expected_base_grad[index] = 0
+    # The column assigns two distinct values. The other cases repeat one row
+    # across the leading selected axis, so each value receives that row sum.
+    if case == "column":
+        expected_value_grad = weights[index]
+    else:
+        expected_value_grad = weights[index].sum(axis=0, keepdims=case != "middle")
+    fallback_before = jt.core.backend_fallback_count()
+    with jt.runtime.scope(use_cuda=1), jt.enable_grad(), forbid_backend_fallbacks():
+        base, value = jt.array(original), jt.array(values)
+        updated = jt.setitem(base, index, value)
+        base_grad, value_grad = jt.grad((updated * jt.array(weights)).sum(), [base, value])
+        tensors = [updated, base, value, base_grad, value_grad]
+        jt.sync(tensors)
+        assert all(tensor.location() == "device" for tensor in tensors)
+        assert tuple(base_grad.shape) == original.shape
+        assert tuple(value_grad.shape) == values.shape
+        actual, unchanged_base, unchanged_value, dx, dv = jt.fetch_sync(tensors)
+    assert jt.core.backend_fallback_count() == fallback_before
+    np.testing.assert_array_equal(actual, expected)
+    np.testing.assert_array_equal(unchanged_base, original)
+    np.testing.assert_array_equal(unchanged_value, values)
+    np.testing.assert_allclose(dx, expected_base_grad, rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(dv, expected_value_grad, rtol=1e-6, atol=1e-6)

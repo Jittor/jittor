@@ -7,7 +7,7 @@
 
 | 设施 | 回答什么 | 规模 |
 | --- | --- | --- |
-| `benchmarks/`（ASV） | 某个算子/小模型跨提交有没有回归 | 算子、tiny Llama |
+| `benchmarks/asv/`（ASV） | 某个算子/小模型跨提交有没有回归 | 算子、tiny Llama |
 | `compat/tests/torch/test_ecosystem_speed.py` | nightly 门禁：单步前向+反向不超过阈值 | 8 层随机配置，只测一步 |
 | **本目录** | 经典工作负载端到端的差距：推理、生成、采样、带优化器的训练 | 已发布模型的真实配置 |
 
@@ -86,16 +86,31 @@ pip install transformers==4.56.2 diffusers==0.35.1 nvidia-ml-py
 ## 运行
 
 ```bash
-python bench/torch_compat/run.py --list
-python bench/torch_compat/run.py --size tiny --torch-python $REF/bin/python   # harness 自检，几分钟
-python bench/torch_compat/run.py --torch-python $REF/bin/python --gpu 1       # 全部
-python bench/torch_compat/run.py --workloads qwen3,sd15_sample --torch-python $REF/bin/python
+python benchmarks/torch_compat/run.py --list
+python benchmarks/torch_compat/run.py --list --json  # 无需模型依赖的机器可读清单
+python benchmarks/torch_compat/run.py --size tiny --torch-python $REF/bin/python   # harness 自检，几分钟
+python benchmarks/torch_compat/run.py --torch-python $REF/bin/python --gpu 1       # 全部
+python benchmarks/torch_compat/run.py --workloads qwen3,sd15_sample --torch-python $REF/bin/python
 ```
 
 `--torch-python` 也可以用环境变量 `REAL_TORCH_PYTHON`。`--workloads` 接受名字或家族前缀
 （`qwen3` 选中三个 Qwen3 任务）。`--runtimes jittor` 只跑一侧，适合改完代码后反复测。
 `--batch N` 把选中任务的 batch 在**两侧同时**改成 N——一侧装不下时用它拿到可比的数字，
 原规格的 OOM 本身仍是要报告的结果。
+
+**CPU**：显式选择 `--device cpu`，按需指定 dtype 与线程数，例如：
+
+```bash
+python benchmarks/torch_compat/run.py --device cpu --dtype float32 --threads 8 \
+    --workloads resnet50_infer_b1 --size tiny --torch-python $REF/bin/python
+```
+
+CPU 测量在模型初始化之前关闭 Jittor 的加速器模式；两侧默认设置
+`OMP_PROC_BIND=close`、`OMP_PLACES=cores`，保留调用者已设置的绑核策略。
+`--threads` 在启动子进程、导入框架之前同时设置 OpenMP、MKL、OpenBLAS 的线程数，
+因此不依赖 shim 的 `set_num_threads()`（该接口只记录请求，不调整原生线程池）。
+结果记录实际继承的 affinity、框架报告的线程数与线程环境变量。dtype 不会自动改写：
+CPU 不支持所选低精度计算时仍报 ERROR；CPU 的设备显存列为未知。
 
 **昇腾 NPU**：`--device npu`，参考侧是装了与 CANN 配套的 `torch_npu` 的 PyTorch 环境，
 两侧都先 `source` CANN 的 `set_env.sh`；`--gpu` 此时设置 `ASCEND_RT_VISIBLE_DEVICES`。
@@ -104,9 +119,13 @@ float32；**mem** 列取 `npu-smi info` 进程表里本进程的占用（约每 
 CUDA 上的 NVML。ACL 上有算子会回退到主机（例如 float64），需要时加 `--allow-fallback`，
 回退次数记在结果的 `fallbacks` 里。
 
+NPU 的 `precision_policy` 核对的是双方声明的完整 FP32 协议。Jittor 的 cube math
+目前没有公开的运行时读回接口，这个字段不能证明真机执行的精度；数学模式或后端配置
+变化后，必须在真实 NPU 上重新验证。
+
 ```bash
 source $CANN_SET_ENV
-python bench/torch_compat/run.py --device npu --gpu 0 --torch-python $NPU_REF/bin/python
+python benchmarks/torch_compat/run.py --device npu --gpu 0 --torch-python $NPU_REF/bin/python
 ```
 
 每个（工作负载，运行时）都在**全新进程**里跑，显存和 JIT 状态不会串到下一次测量。结果写在
@@ -117,8 +136,8 @@ python bench/torch_compat/run.py --device npu --gpu 0 --torch-python $NPU_REF/bi
 对同机负载很敏感。
 
 ```bash
-python bench/torch_compat/report.py results.json            # 重新出表
-python bench/torch_compat/report.py old.json new.json       # 两次运行对比：Jittor 有没有变快
+python benchmarks/torch_compat/report.py results.json            # 重新出表
+python benchmarks/torch_compat/report.py old.json new.json       # 两次运行对比：Jittor 有没有变快
 ```
 
 ## 怎么读
@@ -151,7 +170,15 @@ python bench/torch_compat/report.py old.json new.json       # 两次运行对比
   fallback（`backend_fallback="error"`）：CUDA 测量里混进 CPU 回退，数字就不再是同一件
   事；`--allow-fallback` 只用于调查。
 
-测量纪律（与 [`bench/README.md`](../README.md)、
+**可比性**：两个测量都成功还不够。生成比值前检查 device 与输出的实际 device、尺寸、
+dtype、batch/config、seed、精度策略、所需模型库与 NumPy 的版本。CUDA 还核对精度设置的
+实际读回值，CPU 核对 affinity、线程数、线程环境与绑核配置。不同或缺失的条件列在
+`comparison issues` 中，耗时仍保留，但比值与 agree 不发布；双运行时任务退出非零。
+旧 JSON 缺少验证字段时可以重新出表，但不会被补猜为有效对比。跨运行的 speedup 同样
+检查条件与设备名称；框架版本允许变化，模型依赖版本必须一致。发生 CPU fallback 的
+调查行也只展示测量，不能进入比值。`--runtimes jittor` 仍可单独测速。
+
+测量纪律（与 [`ACL 测量说明`](../acl/README.md)、
 [`docs/performance/benchmarking.md`](../../docs/performance/benchmarking.md) 相同）：
 
 - 选一张空闲的卡（`--gpu`），不要和单元测试或另一个测速抢同一张卡；

@@ -28,6 +28,7 @@ from .process_group import (
     new_group,
     reduce_scatter,
 )
+from .backend_status import get_hccl_world_info
 
 
 __all__ = ["FileStore", "PrefixStore", "Store", "TCPStore", "rendezvous",
@@ -37,4 +38,4 @@ __all__ = ["FileStore", "PrefixStore", "Store", "TCPStore", "rendezvous",
            "get_default_store", "get_local_rank", "get_local_world_size",
            "get_device", "all_reduce", "broadcast", "all_gather",
            "reduce_scatter", "barrier", "new_group", "get_global_rank",
-           "get_process_group_ranks"]
+           "get_process_group_ranks", "get_hccl_world_info"]

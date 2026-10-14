@@ -11,6 +11,7 @@
 #include <csignal>
 #include "runtime/init.h"
 #include "runtime/async_exec.h"
+#include "runtime/rng_state.h"
 #include "ops/op_register.h"
 #include "ops/composite/op_registration.h"
 #include "ops/composite/tape_op.h"
@@ -69,11 +70,7 @@ DEFINE_FLAG(int, acl_allow_hf32, 0,
     "ALLOW_FP32_DOWN_PRECISION (reduced precision, ~1e-3). Required on "
     "Ascend310P whose cube unit cannot run FP32 KEEP_DTYPE.");
 
-unique_ptr<std::default_random_engine> eng;
-
 vector<set_seed_callback> callbacks;
-int current_seed;
-int64 current_offset;
 
 // fron fetch_op.cc
 EXTERN_LIB list<VarPtr> fetcher;
@@ -134,23 +131,29 @@ void init() {
 void set_seed(int seed) {
     // Random operators of a batch on the worker read the generator.
     async_exec_wait();
-    current_seed = seed;
-    current_offset = 0;
-    eng.reset(new std::default_random_engine(seed));
+    auto& rng = runtime_rng_state();
+    rng.global_seed = static_cast<uint64>(seed);
+    rng.host_seed = rng.global_seed;
+    rng.host_engine.seed(seed);
+    // Each device stream restarts from the new global seed; one that was
+    // seeded on its own gets the global seed back, as torch's does.
+    rng.acl_streams.clear();
     for (auto cb : callbacks)
         cb(seed);
 }
 
 int get_seed() {
-    return current_seed;
+    return static_cast<int>(runtime_rng_state().host_seed);
 }
 
 void add_set_seed_callback(set_seed_callback callback) {
     callbacks.push_back(callback);
-    callback(current_seed);
+    callback(get_seed());
 }
 
-std::default_random_engine* get_random_engine() { return eng.get(); }
+std::default_random_engine* get_random_engine() {
+    return &runtime_rng_state().host_engine;
+}
 
 #ifdef HAS_ACCELERATOR
 bool no_device_error_when_free = 0;

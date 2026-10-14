@@ -1,4 +1,4 @@
-from ._code import acl_emit, acl_program, code_with_attributes, scalar_key
+from ._code import acl_emit, acl_program, scalar_key, structured_program
 from ._attributes import attribute_program, code_program, runner_for_alias
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import os
@@ -126,6 +126,28 @@ class RmsNormACL(jt.Function):
         return result[0], grad_weight
 
 
+_GROUPED_NORM_HEADER = """
+namespace jittor {}
+#include "aclops/aclops.h"
+"""
+
+
+def _grouped_norm_program(kind, eps, sources, attribute_sets):
+    """A grouped norm's program, assembled once per (kind, eps).
+
+    Every layer of a model shares one eps, so this is one entry per kind for
+    the life of the process; reassembling it -- the source fragments, the
+    payload encoding and their keys -- had cost more than the node it built.
+    """
+    key = (kind, scalar_key(eps))
+    program = _NORM_PROGRAMS.get(key)
+    if program is None:
+        program = structured_program(
+            _GROUPED_NORM_HEADER, code_program(sources()), attribute_sets)
+        _NORM_PROGRAMS[key] = program
+    return program
+
+
 class GroupedAddRmsNormACL:
     def __call__(self, x, residual, weight, eps):
         reduced_shape = list(x.shape[:-1]) + [1]
@@ -134,23 +156,16 @@ class GroupedAddRmsNormACL:
             jt.empty(x.shape, x.dtype),
             jt.empty(reduced_shape, "float32"),
         ]
-        result = code_with_attributes(
-            backend="acl",
-            outputs=outputs,
-            inputs=[x, residual, weight],
-            cuda_header="""
-namespace jittor {}
-#include "aclops/aclops.h"
-""",
-            cuda_src=code_program(
-                [
-                    '\n// aclop\nBinaryOpRunner add_op;\nadd_op.name = "Add";\nadd_op.add(in0, true);\nadd_op.add(in1, true);\nadd_op.add(out1, false);\nadd_op.jt_name = "grouped_add_rms_norm";\nadd_op.run();\n\nRmsNormOpRunner norm_op;\nnorm_op.add(out1, true);\nnorm_op.add(in2, true);\nnorm_op.add(out0, false);\nnorm_op.add(out2, false);\nnorm_op.jt_name = "grouped_add_rms_norm";\n',
-                    'apply_acl_code_attributes(norm_op, data, "acl_payload.norm.", "RmsNorm");\n',
-                    "\nnorm_op.run();\n",
-                ]
-            ),
-            attribute_sets={"norm": ("RmsNorm", {"eps": eps})},
+        program = _grouped_norm_program(
+            "GroupedAddRmsNorm", eps,
+            lambda: [
+                '\n// aclop\nBinaryOpRunner add_op;\nadd_op.name = "Add";\nadd_op.add(in0, true);\nadd_op.add(in1, true);\nadd_op.add(out1, false);\nadd_op.jt_name = "grouped_add_rms_norm";\nadd_op.run();\n\nRmsNormOpRunner norm_op;\nnorm_op.add(out1, true);\nnorm_op.add(in2, true);\nnorm_op.add(out0, false);\nnorm_op.add(out2, false);\nnorm_op.jt_name = "grouped_add_rms_norm";\n',
+                'apply_acl_code_attributes(norm_op, data, "acl_payload.norm.", "RmsNorm");\n',
+                "\nnorm_op.run();\n",
+            ],
+            {"norm": ("RmsNorm", {"eps": eps})},
         )
+        result = acl_emit(program, [x, residual, weight], outputs=outputs)
         return result[0], result[1]
 
 
@@ -162,24 +177,16 @@ class GroupedBFloat16RmsNormACL:
             jt.empty(x.shape, x.dtype),
             jt.empty(reduced_shape, "float32"),
         ]
-        result = code_with_attributes(
-            backend="acl",
-            outputs=outputs,
-            inputs=[x, unit_weight, weight],
-            cuda_header="""
-namespace jittor {}
-#include "aclops/aclops.h"
-""",
-            cuda_src=code_program(
-                [
-                    '\n// aclop\nRmsNormOpRunner norm_op;\nnorm_op.add(in0, true);\nnorm_op.add(in1, true);\nnorm_op.add(out1, false);\nnorm_op.add(out2, false);\nnorm_op.jt_name = "grouped_bfloat16_rms_norm";\n',
-                    'apply_acl_code_attributes(norm_op, data, "acl_payload.norm.", "RmsNorm");\n',
-                    '\nnorm_op.run();\n\nBinaryOpRunner multiply_op;\nmultiply_op.name = "Mul";\nmultiply_op.add(in2, true);\nmultiply_op.add(out1, true);\nmultiply_op.add(out0, false);\nmultiply_op.jt_name = "grouped_bfloat16_rms_norm";\nmultiply_op.run();\n',
-                ]
-            ),
-            attribute_sets={"norm": ("RmsNorm", {"eps": eps})},
+        program = _grouped_norm_program(
+            "GroupedBFloat16RmsNorm", eps,
+            lambda: [
+                '\n// aclop\nRmsNormOpRunner norm_op;\nnorm_op.add(in0, true);\nnorm_op.add(in1, true);\nnorm_op.add(out1, false);\nnorm_op.add(out2, false);\nnorm_op.jt_name = "grouped_bfloat16_rms_norm";\n',
+                'apply_acl_code_attributes(norm_op, data, "acl_payload.norm.", "RmsNorm");\n',
+                '\nnorm_op.run();\n\nBinaryOpRunner multiply_op;\nmultiply_op.name = "Mul";\nmultiply_op.add(in2, true);\nmultiply_op.add(out1, true);\nmultiply_op.add(out0, false);\nmultiply_op.jt_name = "grouped_bfloat16_rms_norm";\nmultiply_op.run();\n',
+            ],
+            {"norm": ("RmsNorm", {"eps": eps})},
         )
-        return result[0]
+        return acl_emit(program, [x, unit_weight, weight], outputs=outputs)[0]
 
 
 class GroupedDualBFloat16RmsNormACL:
@@ -194,31 +201,21 @@ class GroupedDualBFloat16RmsNormACL:
             jt.empty(first_rstd_shape, "float32"),
             jt.empty(second_rstd_shape, "float32"),
         ]
-        result = code_with_attributes(
-            backend="acl",
-            outputs=outputs,
-            inputs=[
-                first,
-                second,
-                first_unit,
-                second_unit,
-                first_weight,
-                second_weight,
+        program = _grouped_norm_program(
+            "GroupedDualBFloat16RmsNorm", eps,
+            lambda: [
+                '\n// aclop\nRmsNormOpRunner first_norm;\nfirst_norm.add(in0, true);\nfirst_norm.add(in2, true);\nfirst_norm.add(out2, false);\nfirst_norm.add(out4, false);\nfirst_norm.jt_name = "grouped_dual_bfloat16_rms_norm";\n',
+                'apply_acl_code_attributes(first_norm, data, "acl_payload.first_norm.", "RmsNorm");\n',
+                '\nfirst_norm.run();\n\nBinaryOpRunner first_multiply;\nfirst_multiply.name = "Mul";\nfirst_multiply.add(in4, true);\nfirst_multiply.add(out2, true);\nfirst_multiply.add(out0, false);\nfirst_multiply.jt_name = "grouped_dual_bfloat16_rms_norm";\nfirst_multiply.run();\n\nRmsNormOpRunner second_norm;\nsecond_norm.add(in1, true);\nsecond_norm.add(in3, true);\nsecond_norm.add(out3, false);\nsecond_norm.add(out5, false);\nsecond_norm.jt_name = "grouped_dual_bfloat16_rms_norm";\n',
+                'apply_acl_code_attributes(second_norm, data, "acl_payload.second_norm.", "RmsNorm");\n',
+                '\nsecond_norm.run();\n\nBinaryOpRunner second_multiply;\nsecond_multiply.name = "Mul";\nsecond_multiply.add(in5, true);\nsecond_multiply.add(out3, true);\nsecond_multiply.add(out1, false);\nsecond_multiply.jt_name = "grouped_dual_bfloat16_rms_norm";\nsecond_multiply.run();\n',
             ],
-            cuda_header="""
-namespace jittor {}
-#include "aclops/aclops.h"
-""",
-            cuda_src=code_program(
-                [
-                    '\n// aclop\nRmsNormOpRunner first_norm;\nfirst_norm.add(in0, true);\nfirst_norm.add(in2, true);\nfirst_norm.add(out2, false);\nfirst_norm.add(out4, false);\nfirst_norm.jt_name = "grouped_dual_bfloat16_rms_norm";\n',
-                    'apply_acl_code_attributes(first_norm, data, "acl_payload.first_norm.", "RmsNorm");\n',
-                    '\nfirst_norm.run();\n\nBinaryOpRunner first_multiply;\nfirst_multiply.name = "Mul";\nfirst_multiply.add(in4, true);\nfirst_multiply.add(out2, true);\nfirst_multiply.add(out0, false);\nfirst_multiply.jt_name = "grouped_dual_bfloat16_rms_norm";\nfirst_multiply.run();\n\nRmsNormOpRunner second_norm;\nsecond_norm.add(in1, true);\nsecond_norm.add(in3, true);\nsecond_norm.add(out3, false);\nsecond_norm.add(out5, false);\nsecond_norm.jt_name = "grouped_dual_bfloat16_rms_norm";\n',
-                    'apply_acl_code_attributes(second_norm, data, "acl_payload.second_norm.", "RmsNorm");\n',
-                    '\nsecond_norm.run();\n\nBinaryOpRunner second_multiply;\nsecond_multiply.name = "Mul";\nsecond_multiply.add(in5, true);\nsecond_multiply.add(out3, true);\nsecond_multiply.add(out1, false);\nsecond_multiply.jt_name = "grouped_dual_bfloat16_rms_norm";\nsecond_multiply.run();\n',
-                ]
-            ),
-            attribute_sets={"first_norm": ("RmsNorm", {"eps": eps}), "second_norm": ("RmsNorm", {"eps": eps})},
+            {"first_norm": ("RmsNorm", {"eps": eps}), "second_norm": ("RmsNorm", {"eps": eps})},
+        )
+        result = acl_emit(
+            program,
+            [first, second, first_unit, second_unit, first_weight, second_weight],
+            outputs=outputs,
         )
         return result[0], result[1]
 

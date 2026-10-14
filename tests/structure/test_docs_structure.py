@@ -52,6 +52,8 @@ class TestDocsStructure(unittest.TestCase):
             "agent/scripts",
             "agent/README.md",
             "asv.conf.json",
+            "bench",
+            "benchmarks/asv.conf.json",
             "AWESOME-JITTOR-LIST.md",
             "AWESOME-JITTOR-LIST.cn.md",
             "README.src.md",
@@ -113,11 +115,12 @@ class TestDocsStructure(unittest.TestCase):
         self.assertNotIn("eval-rst", adapter)
 
     def test_asv_config_preserves_repository_and_external_run_paths(self):
-        config_path = self.repo_root / "benchmarks" / "asv.conf.json"
+        config_path = self.repo_root / "benchmarks" / "asv" / "asv.conf.json"
         config = json.loads(config_path.read_text(encoding="utf-8"))
         self.assertEqual((config_path.parent / config["repo"]).resolve(), self.repo_root)
         self.assertEqual(
-            (self.repo_root / config["benchmark_dir"]).resolve(), self.repo_root / "benchmarks"
+            (config_path.parent / config["benchmark_dir"]).resolve(),
+            self.repo_root / "benchmarks" / "asv",
         )
         tree = ast.parse((self.repo_root / "noxfile.py").read_text())
         writer = next(
@@ -132,7 +135,7 @@ class TestDocsStructure(unittest.TestCase):
             generated = namespace["_write_asv_config"](state, state / "results", state / "html")
             runtime = json.loads(generated.read_text())
         self.assertEqual(runtime["repo"], str(self.repo_root))
-        self.assertEqual(runtime["benchmark_dir"], str(self.repo_root / "benchmarks"))
+        self.assertEqual(runtime["benchmark_dir"], str(self.repo_root / "benchmarks" / "asv"))
         self.assertEqual(runtime["results_dir"], str(state / "results"))
         self.assertEqual(runtime["html_dir"], str(state / "html"))
         self.assertEqual(runtime["env_dir"], str(state / "asv-env"))

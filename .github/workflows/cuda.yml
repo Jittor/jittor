@@ -153,11 +153,11 @@ jobs:
           key: asv-cuda-results-${{ github.sha }}
           restore-keys: |
             asv-cuda-results-
-      - name: Record Tiny Llama and optimizer CUDA results
+      - name: Record operator, model, training and transfer CUDA results
         shell: bash
         run: >-
           "${JITTOR_CI_PYTHON}" -m nox -s benchmark_cuda --
-          --bench '^(tiny_llama|optimizer_step)\.'
+          --bench '^(operators|optimizer_step|convolution|reductions|transfer|tiny_llama)\.'
       - name: Save the CUDA Jittor build cache
         if: always()
         uses: actions/cache/save@v4

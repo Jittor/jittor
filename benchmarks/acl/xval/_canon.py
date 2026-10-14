@@ -1,6 +1,6 @@
 """Canonical parameter names shared by the jittor and torch benchmark models.
 
-The two model files in ``bench/`` describe the same networks but name their
+The two model files in ``benchmarks/acl/`` describe the same networks but name their
 submodules differently, so a weight transfer needs one agreed spelling. Neither
 function imports a framework: both walk attributes and read ``type(...).__name__``,
 so this module can be imported from either side.

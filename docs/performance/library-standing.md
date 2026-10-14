@@ -169,7 +169,7 @@ backend）今天会让人白做。
 原生计图的下游库——[JSeg](https://github.com/Jittor/JSeg)、
 [JDet](https://github.com/Jittor/JDet)、
 [JittorGeometric](https://github.com/AlgRUC/JittorGeometric)——**目前一个性能用例都没有**，
-本仓的 `benchmarks/` 是框架级的（算子、优化器步、归约、主机↔设备传输、tiny_llama），
+本仓的 `benchmarks/asv/` 是框架级的（算子、优化器步、归约、主机↔设备传输、tiny_llama），
 不是库级的。
 
 这类库还有一个方法上的问题必须先解决，否则测出来的数字没有意义：**它们没有直接的

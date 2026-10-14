@@ -396,13 +396,23 @@ class SetItemACL(jt.Function):
         )
         # A partial writer must depend on the entire initialized base. A
         # write-only clone output loses this dependency and may be zero-strided.
-        inputs = [value, x.contiguous()]
-        outputs = [jt.empty(x.shape, x.dtype)]
+        # CANN's StridedSliceAssignV2 takes int8 but refuses bool, so a boolean
+        # assignment goes through int8 and comes back. The value is normalized
+        # to bool first: narrowing 256 straight to int8 would store a 0.
+        bool_payload = _jittor_dtype_name(x.dtype) == "bool"
+        base = x
+        if bool_payload:
+            base = x.cast("int8")
+            value = value.cast("bool").cast("int8")
+        inputs = [value, base.contiguous()]
+        outputs = [jt.empty(base.shape, base.dtype)]
         result = setitem_forward(
             "StridedSliceAssignV2", inputs=inputs, outputs=outputs, attr_code=attr_code
         )[0]
         if expand_dim:
             result = result.squeeze(-1)
+        if bool_payload:
+            result = result.cast("bool")
         # result.sync()
         return result
 
@@ -444,8 +454,12 @@ class SetItemACL(jt.Function):
             # Keep the pre-broadcast shape: grad must be reduced and reshaped
             # back to the caller's value shape, not the index lattice.
             self.value_shape = tuple(value.shape)
-            if tuple(value.shape) != tuple(value_shape):
-                value = value.broadcast(value_shape)
+            # Integer indices remove axes from the assignment's public shape.
+            # Broadcast there first, then restore the index lattice's singleton
+            # axes; [rows] -> [rows, 1] must not expand into [rows, rows].
+            logical_shape = tuple(size for dim, size in enumerate(value_shape)
+                                  if not isinstance(slices[dim], int))
+            value = value.broadcast(logical_shape).reshape(value_shape).contiguous()
         self.type_ = "index"
         self.indices = indices
         if not indices:
