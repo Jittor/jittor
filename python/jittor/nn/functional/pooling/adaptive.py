@@ -2,6 +2,7 @@
 
 import math
 import jittor as jt
+from ._checks import expect_rank
 from .core_3d import _triple
 from .entrypoints import max_pool2d, max_pool3d
 
@@ -18,6 +19,7 @@ def _legacy_adaptive_avg_pool2d(x, *, output_size):
         raise TypeError(f"AdaptiveAvgPool2d only support int, tuple or list input. Not support {type(output_size)} yet.")
     if oh == 1 and ow == 1:
         return x.reduce("mean", [2,3], keepdims=True)
+    expect_rank(x, 4, "adaptive_avg_pool2d")
     N,C,H,W = x.shape
     sh = math.floor(H / oh)
     sw = math.floor(W / ow)
@@ -55,6 +57,7 @@ def _adaptive_max_pool2d(x, *, output_size, return_indices):
         raise TypeError(f"AdaptiveMaxPool2d only support int, tuple or list input. Not support {type(output_size)} yet.")
     if oh == 1 and ow == 1:
         return x.reduce("maximum", [2,3], keepdims=True)
+    expect_rank(x, 4, "adaptive_max_pool2d")
     N,C,H,W = x.shape
     sh = math.floor(H / oh)
     sw = math.floor(W / ow)
@@ -86,6 +89,7 @@ def _adaptive_avg_pool3d(x, *, output_size):
     od, oh, ow = output_size
     if od == 1 and oh == 1 and ow == 1:
         return x.reduce("mean", [2,3,4], keepdims=True)
+    expect_rank(x, 5, "adaptive_avg_pool3d")
     N,C,D,H,W = x.shape
     sd = math.floor(D / od)
     sh = math.floor(H / oh)
@@ -119,6 +123,7 @@ def _adaptive_max_pool3d(x, *, output_size, return_indices):
     od, oh, ow = output_size
     if od == 1 and oh == 1 and ow == 1 and not return_indices:
         return x.reduce("maximum", [2,3,4], keepdims=True)
+    expect_rank(x, 5, "adaptive_max_pool3d")
     N,C,D,H,W = x.shape
     sd = math.floor(D / od)
     sh = math.floor(H / oh)

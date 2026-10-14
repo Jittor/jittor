@@ -5,6 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include <string.h>
+#include <atomic>
 #include <signal.h>
 #ifndef _WIN32
 #include <ucontext.h>
@@ -39,6 +40,10 @@ namespace jittor {
 //
 // A counter per (call site, error code) with power-of-two backoff keeps a hot
 // loop from flooding the log while a *new* failure always gets through.
+static std::atomic<bool> device_context_lost_flag{false};
+void note_device_context_lost() { device_context_lost_flag.store(true); }
+bool device_context_lost() { return device_context_lost_flag.load(); }
+
 bool peek_should_log(const char* file, int line, unsigned int code, int64_t* nth) {
     // Deliberately never destroyed. peek() runs during teardown, after static
     // destructors have begun; a destroyed table would be worse than a leak.

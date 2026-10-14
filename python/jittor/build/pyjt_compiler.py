@@ -377,6 +377,17 @@ reg = re.compile(
     #        attrs    args $5
 , re.DOTALL)
 
+def _unknown_name_hint(args):
+    """The PyUnknownNameHint for a wrapper whose parameters are `args`."""
+    names = [arg.strip().split(" ")[-1] for arg in args]
+    if "PyObject**" in " ".join(args):
+        fast = next(n for arg, n in zip(args, names) if arg.strip().startswith("PyObject** "))
+        return "PyUnknownNameHint{%s, n, kw, nullptr, nullptr}" % fast
+    tuple_arg = next((n for n in names if n in ("args", "_args")), "nullptr")
+    dict_arg = "kw" if "kw" in names else "nullptr"
+    return "PyUnknownNameHint{nullptr, 0, nullptr, %s, %s}" % (tuple_arg, dict_arg)
+
+
 def generate_error_code_from_func_header(func_head, target_scope_name, name, dfs, basename, h, class_info):
     # func_head is a string like:
     # (PyObject* self, PyObject** args, int64 n, PyObject* kw) -> PyObject*
@@ -398,6 +409,8 @@ def generate_error_code_from_func_header(func_head, target_scope_name, name, dfs
     args = func_head[1:].split(")")[0].split(",")
     error_code = (f" << \"{name}() got arguments that match none of its signatures "
                   f"(see {help_cmd}).\"")
+    if any("NanoString" in str(arg) for df in dfs for arg in df["args"]):
+        error_code += " << " + _unknown_name_hint(args)
     error_code += r' << "\n\nYour arguments:\n"'
     for arg in args:
         arg = arg.strip()

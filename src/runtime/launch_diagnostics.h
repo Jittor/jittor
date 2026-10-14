@@ -79,6 +79,10 @@ struct LaunchOperationScope {
     ~LaunchOperationScope();
 };
 EXTERN_LIB void record_active_launch(BackendStream stream);
+// Whether this process has launched anything on an accelerator. A device fault
+// only surfaces when something waits for the device, and only then is there a
+// device worth waiting for at exit; a CPU-only run must not create a context.
+EXTERN_LIB bool accelerator_work_launched();
 
 struct LaunchErrorScope {
     Device previous_device;

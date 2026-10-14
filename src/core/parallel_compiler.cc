@@ -215,10 +215,13 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
         // for an operator that needs compiling or failed: formatting it for
         // every operator of every batch was a fifth of this pass.
         op_kind = op->name();
+        // The operator's name is what the user can act on; its internal
+        // representation (`Op(1:0:1:1:i0:o1:s0:g1,code->2)`) only at log_v>=1.
         auto describe = [&]() {
             if (op_desc.empty()) {
                 std::stringstream desc_ss;
-                desc_ss << op;
+                if (log_v >= 1) desc_ss << op;
+                else desc_ss << op->name();
                 op_desc = desc_ss.str();
             }
             return op_desc;
@@ -277,14 +280,15 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
             if (op_desc.empty() && is_fused_op) {
                 // The local fused operator: see `describe` above.
                 std::stringstream desc_ss;
-                desc_ss << (Op*)&fused_op;
+                if (log_v >= 1) desc_ss << (Op*)&fused_op;
+                else desc_ss << fused_op.name();
                 op_desc = desc_ss.str();
             }
             const char* named = op_desc.size() ? op_desc.c_str()
                 : op_kind ? op_kind : "(operator not yet identified)";
-            LOGf << (is_fused_op ? "Compile fused operator(" : "Compile operator(")
-                >> rid >> '/' >> queue.size() >> ")"
-                << "failed:" << named << "\n\nReason: " >> e.what() >> source_note;
+            LOGf << "Compiling" << (is_fused_op ? "fused operator" : "operator")
+                << named << "(" >> rid+1 << "of" << queue.size() >> ") failed."
+                << "\n\nReason: " >> e.what() >> source_note;
         }
     }
     if (tasks.empty()) return;
@@ -395,9 +399,9 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
                 // `task.description`, not the Op pointers: see CompileTask.
                 // Dereferencing them here is what turned a reportable compile
                 // error into a segfault.
-                ss << (is_fused_op ? "Compile fused operator(" : "Compile operator(")
-                    << i << '/' << n << ")"
-                    << "failed:" << task.description << "\n\nReason: " << e.what();
+                ss << "Compiling " << (is_fused_op ? "fused operator " : "operator ")
+                    << task.description << " (" << i+1 << " of " << n << ") failed."
+                    << "\n\nReason: " << e.what();
                 if (prepared_key.size())
                     ss << "\n\ngenerated source: "
                         << Op::get_filename_from_jit_key(prepared_key, ".cc");
@@ -433,11 +437,10 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
     } // end GILReleaseScope: GIL reacquired on the main thread here
 
     if (worker_error) {
-        try {
-            std::rethrow_exception(worker_error);
-        } catch (const std::exception& e) {
-            LOGf << "Error happened during compilation:\n" << e.what();
-        }
+        // As thrown: it already says which operator failed and why, and a
+        // wrapper here only put "parallel_compiler.cc:410: Error happened
+        // during compilation:" in front of that.
+        std::rethrow_exception(worker_error);
     }
 
     // fill all op entry

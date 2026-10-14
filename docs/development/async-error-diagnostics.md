@@ -40,6 +40,19 @@ jt.introspection.diagnostics.launch_history(backend="cuda", device=0, stream=Non
 `None` 会选中原生的"全部流"哨兵值而**不查询设备**。它校验后端拼写和非负的设备/流值，
 过程中不初始化也不查询硬件后端（`-1` 是唯一的流哨兵值）。
 
+## 没有被读到的设备故障
+
+`Var.sync()` 与 `jt.sync_all()` 默认**不等设备**（`device_sync=False`），只把工作交出去。
+最后一次读回结果之后才出错的 kernel，此前会让进程以 0 退出，stderr 上只剩一行指向 cuDNN
+的 teardown 错误。现在正常退出时（无未捕获异常、退出码为 0），`jittor_exit` 调用
+`core._wait_for_devices()`：先等异步执行队列，再同步加速器设备，**只在本进程确实向加速器
+发射过工作时才同步**，纯 CPU 进程不会因此创建设备上下文。若这时抛出错误，打印完整诊断并以
+退出码 1 结束；sticky 错误之后的 teardown 句柄销毁失败不再逐条打印。程序已经捕获过的
+sticky 错误不会在退出时再报一次。需要在某处确认工作已完成时，用 `jt.sync_all(True)`。
+
+带越界下标记录的设备故障以 `JittorIndexError`（`IndexError` 子类）抛出，第一行就是
+`index ... is out of bounds ...`，CUDA 错误码随后。
+
 **不要用 `trace_py_var>=2` 来测这个**：旧的图追踪器会在每个 Op 之后刻意同步。新的历史
 与该追踪器无关，**不引入额外同步**。
 

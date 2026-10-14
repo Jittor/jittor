@@ -4,6 +4,7 @@ import jittor as jt
 from jittor import Module, init
 
 from ..functional.normalization import (
+    _check_batch_norm_input,
     _batch_norm_eval,
     _batch_norm_train,
     _unbiased,
@@ -83,6 +84,7 @@ class BatchNorm(Module):
         # differentiated by composite autodiff, without sync they came from the
         # two-pass formula and went through the stable closed-form backward.
         # Whether the job was distributed decided the numbers and the gradient.
+        _check_batch_norm_input(x, self.num_features, type(self).__name__)
         dims = [0] + list(range(2, x.ndim))
         if not self.is_train:
             return _batch_norm_eval(

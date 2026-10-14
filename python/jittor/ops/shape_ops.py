@@ -172,6 +172,14 @@ def stack(x, dim=0):
             x[i] = jt.array(x_)
     if len(x) < 2:
         return x[0].unsqueeze(dim)
+    first = list(x[0].shape)
+    for index, value in enumerate(x[1:], 1):
+        if list(value.shape) != first:
+            # Checked here: concat would compare the unsqueezed shapes and
+            # name a dim of those instead.
+            raise jt.JittorShapeError(
+                "stack expects each var to be equal size, but got %s at entry "
+                "0 and %s at entry %d" % (first, list(value.shape), index))
 
     fast = jt.misc._stack_no_grad_cuda_fast(x, dim, _stack_cpu_source)
     if fast is not None:
