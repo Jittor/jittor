@@ -18,6 +18,7 @@ launches or its refusal, PyTorch's graph breaks.
 
 import argparse
 import json
+import math
 import sys
 
 
@@ -34,9 +35,76 @@ def _ok(result):
     return result is not None and result.get("status") == "ok"
 
 
+def measurement_issues(a, b):
+    """Refuse ratios that compare different or unverified measurement contracts.
+
+    Saved runs predating these fields remain readable, but their ratios are
+    unverified. A framework version may change across commits; the workload's
+    dependencies, inputs, device, precision and CPU controls may not.
+    """
+    if not (_ok(a) and _ok(b)):
+        return ["both measurements must succeed"]
+    issues = []
+    for result in (a, b):
+        median = result.get("median_s")
+        if not isinstance(median, (int, float)) or not math.isfinite(median) or median <= 0:
+            issues.append("invalid median time")
+        fallbacks = result.get("fallbacks")
+        if result.get("runtime") == "jittor" and "fallbacks" not in result:
+            issues.append("missing Jittor fallback count")
+        elif result.get("runtime") == "jittor" and (type(fallbacks) is not int or fallbacks < 0):
+            issues.append("invalid Jittor fallback count")
+        elif fallbacks:
+            issues.append("CPU fallback occurred")
+    for key in ("device", "size", "dtype", "config", "seed", "precision_policy",
+                "requires", "observed_device", "items_per_step"):
+        if key not in a or key not in b:
+            issues.append("missing " + key)
+        elif a[key] != b[key]:
+            issues.append("different " + key)
+    for result in (a, b):
+        if result.get("observed_device") != result.get("device"):
+            issues.append("device placement not verified")
+            break
+    for key in ("versions", "runtime_conditions"):
+        if not isinstance(a.get(key), dict) or not isinstance(b.get(key), dict):
+            issues.append("missing " + key)
+    dependencies = set(a.get("requires") or ()) | set(b.get("requires") or ()) | {"numpy"}
+    for name in sorted(dependencies):
+        av = (a.get("versions") or {}).get(name)
+        bv = (b.get("versions") or {}).get(name)
+        if not av or not bv:
+            issues.append("missing " + name + " version")
+        elif av != bv:
+            issues.append("different " + name + " version")
+    if a.get("device") == b.get("device") == "cuda":
+        if not a.get("settings") or not b.get("settings"):
+            issues.append("missing CUDA precision readback")
+        elif a["settings"] != b["settings"]:
+            issues.append("different CUDA precision readback")
+    if a.get("device") == b.get("device") == "cpu":
+        ac, bc = a.get("runtime_conditions") or {}, b.get("runtime_conditions") or {}
+        for key in ("affinity", "runtime_threads", "thread_env"):
+            if key not in ac or key not in bc:
+                issues.append("missing CPU " + key)
+            elif ac[key] != bc[key]:
+                issues.append("different CPU " + key)
+        for conditions in (ac, bc):
+            env = conditions.get("thread_env") or {}
+            if not env.get("OMP_PROC_BIND") or env.get("OMP_PROC_BIND", "").lower() == "false" \
+                    or not env.get("OMP_PLACES"):
+                issues.append("CPU affinity binding not configured")
+                break
+    return issues
+
+
+def comparison_issues(pair):
+    return measurement_issues(pair.get("torch"), pair.get("jittor"))
+
+
 def _ratio(pair):
     torch, jittor = pair.get("torch"), pair.get("jittor")
-    if _ok(torch) and _ok(jittor):
+    if not comparison_issues(pair):
         return jittor["median_s"] / torch["median_s"]
     return None
 
@@ -114,6 +182,8 @@ def disagreement(a, b):
 
 
 def _agree(a, b):
+    if measurement_issues(a, b):
+        return "-"
     if (a or {}).get("stochastic") or (b or {}).get("stochastic"):
         return "stoch."
     value = disagreement(a, b)
@@ -155,6 +225,7 @@ def _rows(document):
             _agree(jittor, torch),
             _compiled(jittor) if mode != "none" else "-",
             _compiled(torch) if mode != "none" else "-",
+            "; ".join(comparison_issues(pair)) if _ok(torch) and _ok(jittor) else "-",
         ])
     return rows
 
@@ -162,7 +233,7 @@ def _rows(document):
 HEADER = ["workload", "compile", "mode", "dtype", "torch", "jittor", "ratio",
           "torch host", "jittor host", "torch mem", "jittor mem",
           "jittor steady", "jittor 1st step", "agree", "jittor compiled",
-          "torch compiled"]
+          "torch compiled", "comparison issues"]
 
 
 def _compile_rows(document):
@@ -176,7 +247,7 @@ def _compile_rows(document):
         row = [workload, mode]
         for runtime in ("torch", "jittor"):
             before, after = eager.get(runtime), pair.get(runtime)
-            if _ok(before) and _ok(after):
+            if not measurement_issues(before, after):
                 row.append("%.2fx" % (before["median_s"] / after["median_s"]))
             else:
                 row.append("-")
@@ -190,8 +261,6 @@ COMPILE_HEADER = ["workload", "compile", "torch speedup", "torch agree",
 
 
 def geomean(values):
-    import math
-
     values = [v for v in values if v]
     if not values:
         return None
@@ -285,21 +354,25 @@ def render_markdown(document):
 def compare(old, new):
     old_pairs, new_pairs = _pairs(old), _pairs(new)
     header = ["workload", "old ratio", "new ratio", "jittor old", "jittor new",
-              "jittor speedup"]
+              "jittor speedup", "comparison issues"]
     rows = [header]
     for key, pair in new_pairs.items():
         workload = key[0] if key[1] == "none" else "%s [%s]" % key
         before = old_pairs.get(key, {})
         old_ratio, new_ratio = _ratio(before), _ratio(pair)
         jo, jn = before.get("jittor"), pair.get("jittor")
-        speedup = (jo["median_s"] / jn["median_s"]
-                   if _ok(jo) and _ok(jn) else None)
+        issues = measurement_issues(jo, jn)
+        for field in ("gpu", "device", "size"):
+            if old["meta"].get(field) != new["meta"].get(field):
+                issues.append("different run " + field)
+        speedup = (jo["median_s"] / jn["median_s"] if not issues else None)
         rows.append([
             workload,
             "%.2fx" % old_ratio if old_ratio else "-",
             "%.2fx" % new_ratio if new_ratio else "-",
             _time(jo), _time(jn),
             "%.2fx" % speedup if speedup else "-",
+            "; ".join(issues) if _ok(jo) and _ok(jn) else "-",
         ])
     widths = [max(len(str(r[i])) for r in rows) for i in range(len(header))]
     lines = ["  ".join(str(c).ljust(widths[i]) for i, c in enumerate(r))

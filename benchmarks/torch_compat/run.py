@@ -31,7 +31,7 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
 sys.path.insert(0, str(HERE))
 
-from report import render_markdown, render_table  # noqa: E402
+from report import comparison_issues, render_markdown, render_table, _pairs  # noqa: E402
 
 MARKER = "BENCH_RESULT "
 
@@ -54,11 +54,14 @@ def list_workloads():
     import ast
 
     tree = ast.parse((HERE / "workloads.py").read_text())
-    rows = []
+    rows, classes = [], {}
     for node in tree.body:
         if not isinstance(node, ast.ClassDef):
             continue
         fields = {}
+        for base in node.bases:
+            if isinstance(base, ast.Name):
+                fields.update(classes.get(base.id, {}))
         for item in node.body:
             if (isinstance(item, ast.Assign) and len(item.targets) == 1
                     and isinstance(item.targets[0], ast.Name)):
@@ -66,7 +69,8 @@ def list_workloads():
                     fields[item.targets[0].id] = ast.literal_eval(item.value)
                 except ValueError:
                     pass
-        if fields.get("name"):
+        classes[node.name] = fields
+        if fields.get("name") and not node.name.startswith("_"):
             rows.append(fields)
     return rows
 
@@ -83,11 +87,21 @@ def environment_for(runtime, options, state):
         env["JITTOR_HOME"] = str(state / "jittor-home")
         env["JITTOR_TORCH_CACHE_ROOT"] = str(state / "torch-shim")
         env["cache_name"] = "bench-torch-compat"
+        if options.device == "cpu":
+            env["JT_BACKEND"] = "cpu"
+            env["JT_USE_CUDA"] = "0"
+            env["use_cuda"] = "0"
     if options.gpu is not None:
         visible = "ASCEND_RT_VISIBLE_DEVICES" if options.device == "npu" else "CUDA_VISIBLE_DEVICES"
         env[visible] = options.gpu
     env.setdefault("HF_HUB_OFFLINE", "1")
     env.setdefault("TRANSFORMERS_OFFLINE", "1")
+    if options.device == "cpu":
+        env.setdefault("OMP_PROC_BIND", "close")
+        env.setdefault("OMP_PLACES", "cores")
+    if options.threads is not None:
+        for name in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
+            env[name] = str(options.threads)
     env["TMPDIR"] = str(state / "tmp")
     return env
 
@@ -129,12 +143,21 @@ def run_one(workload, runtime, options, state, log_dir, mode="none"):
     result = None
     for line in reversed(output.splitlines()):
         if line.startswith(MARKER):
-            result = json.loads(line[len(MARKER):])
+            try:
+                result = json.loads(line[len(MARKER):])
+                if not isinstance(result, dict):
+                    result = None
+            except json.JSONDecodeError:
+                pass  # A malformed protocol line is a crash row below.
             break
     if result is None:
         result = {"workload": workload, "runtime": runtime, "compile": mode,
                   "status": "timeout" if code is None else "crash",
                   "error": "\n".join(output.splitlines()[-15:])}
+    if code is None or (code != 0 and result.get("status") == "ok"):
+        result["status"] = "timeout" if code is None else "crash"
+        result["error"] = "worker did not exit successfully (return code %s)" % code
+    result.setdefault("compile", mode)
     result["log"] = str(log)
     result["command"] = command
     status = result.get("status")
@@ -209,6 +232,8 @@ def main():
     parser.add_argument("--batch", type=int, default=None,
                         help="override every selected workload's batch size "
                              "(both runtimes), e.g. to fit a smaller card")
+    parser.add_argument("--threads", type=int, default=None,
+                        help="set OMP/MKL/OpenBLAS threads before importing either runtime")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--no-tf32", dest="tf32", action="store_false")
     parser.add_argument("--cudnn-benchmark", action="store_true")
@@ -225,15 +250,25 @@ def main():
                              "cache-<size>); give concurrent runs separate ones")
     parser.add_argument("--label", default=None)
     parser.add_argument("--list", action="store_true")
+    parser.add_argument("--json", action="store_true", help="machine-readable --list")
     options = parser.parse_args()
 
     catalogue = list_workloads()
     if options.list:
+        if options.json:
+            print(json.dumps(catalogue, indent=2))
+            return 0
         for row in catalogue:
             print("%-18s %-6s %-9s %s" % (row["name"], row.get("mode", ""),
                                           row.get("default_dtype", "float32"),
                                           row.get("description", "")))
         return 0
+    if options.json:
+        parser.error("--json requires --list")
+    for name in ("threads", "warmup", "repeats", "batch", "timeout"):
+        value = getattr(options, name)
+        if value is not None and value <= 0:
+            parser.error("--%s must be positive" % name)
 
     names = [row["name"] for row in catalogue]
     if options.workloads == "all":
@@ -246,7 +281,11 @@ def main():
             if not match:
                 parser.error("unknown workload %r; see --list" % token)
             selected += [n for n in match if n not in selected]
+    if not selected:
+        parser.error("at least one workload is required")
     runtimes = [r.strip() for r in options.runtimes.split(",") if r.strip()]
+    if not runtimes or any(r not in ("torch", "jittor") for r in runtimes):
+        parser.error("--runtimes must contain torch and/or jittor")
     if "torch" in runtimes and not options.torch_python:
         parser.error("--torch-python (or REAL_TORCH_PYTHON) is required")
 
@@ -267,6 +306,7 @@ def main():
         "gpu": gpu_name(options) if options.device in ("cuda", "npu") else None,
         "device": options.device, "size": options.size, "tf32": options.tf32,
         "batch": options.batch,
+        "threads": options.threads,
         "compile": options.compile,
         "cudnn_benchmark": options.cudnn_benchmark,
         "torch_python": options.torch_python,
@@ -277,6 +317,8 @@ def main():
         meta["gpu"], options.size, out))
 
     modes = [m.strip() for m in options.compile.split(",") if m.strip()]
+    if not modes:
+        parser.error("--compile must contain at least one mode")
     results = []
     for workload in selected:
         for mode in modes:
@@ -294,7 +336,9 @@ def main():
     print(render_table(document))
     print("\nsaved %s" % (out / "results.json"))
     failed = [r for r in results if r.get("status") != "ok"]
-    return 1 if failed else 0
+    invalid = [pair for pair in _pairs(document).values()
+               if set(pair) == {"torch", "jittor"} and comparison_issues(pair)]
+    return 1 if failed or invalid else 0
 
 
 if __name__ == "__main__":

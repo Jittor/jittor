@@ -126,6 +126,8 @@ jobs:
     env:
       ASV_MACHINE: github-ubuntu-cpu
       ASV_COMPARE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+      ASV_PR_BENCHMARKS: '^(operators|optimizer_step|convolution)\.'
+      ASV_SCHEDULED_BENCHMARKS: '^(operators|optimizer_step|convolution|reductions)\.'
     steps:
       # `runner` is not an allowed context in a job-level `env:` -- using it
       # there made GitHub reject the whole workflow file, so no job ran.
@@ -168,9 +170,15 @@ jobs:
           restore-keys: |
             asv-results-${{ runner.os }}-${{ runner.arch }}-
       - name: Record, compare, and publish ASV results
-        run: >-
-          python -m nox -s benchmark --
-          --bench '^(operators|optimizer_step)\.'
+        shell: bash
+        env:
+          BENCHMARK_EVENT: ${{ github.event_name }}
+        run: |
+          case "$BENCHMARK_EVENT" in
+            schedule|workflow_dispatch) benchmark_pattern="$ASV_SCHEDULED_BENCHMARKS" ;;
+            *) benchmark_pattern="$ASV_PR_BENCHMARKS" ;;
+          esac
+          python -m nox -s benchmark -- --bench "$benchmark_pattern"
       - name: Save ASV results for the next commit
         if: success()
         uses: actions/cache/save@v4

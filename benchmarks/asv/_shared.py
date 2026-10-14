@@ -62,35 +62,39 @@ def require_isolated_cache() -> pathlib.Path:
 def load_backend(name: str, device: str) -> Any:
     """Import and configure a benchmark backend, or explicitly skip it."""
 
+    if name not in ("jittor", "torch"):
+        raise ValueError("unknown benchmark backend: %s" % name)
+    if device not in ("cpu", "cuda"):
+        raise ValueError("unsupported ASV device: %s" % device)
     require_isolated_cache()
     if name == "jittor":
-        try:
-            backend = importlib.import_module("jittor")
-        except Exception as exc:
-            raise RuntimeError("the mandatory Jittor backend failed to import") from exc
+        backend = importlib.import_module("jittor")
         backend.flags.use_cuda = 0
         if device == "cuda":
             if not bool(getattr(backend.compiler, "has_cuda", False)):
                 raise NotImplementedError("Jittor was built without CUDA support")
-            try:
-                backend.flags.use_cuda = 1
-                backend.flags.cuda_allow_tf32 = 1
-                backend.ones((1,), dtype="float32").sync()
-            except Exception as exc:
-                backend.flags.use_cuda = 0
-                raise NotImplementedError("Jittor CUDA execution is unavailable: %s" % exc)
+            backend.flags.use_cuda = 1
+            backend.flags.cuda_allow_tf32 = 1
+            # An advertised device that fails compilation or execution is a
+            # failed measurement, not an unavailable optional parameter.
+            backend.ones((1,), dtype="float32").sync()
         return backend
 
     if name == "torch":
         try:
             backend = importlib.import_module("torch")
-        except Exception as exc:
+        except ModuleNotFoundError as exc:
+            if exc.name != "torch":
+                raise
             raise NotImplementedError(
                 "the optional real-PyTorch baseline is not installed"
             ) from exc
-        module_file = str(getattr(backend, "__file__", ""))
-        if "jittor" in module_file.lower():
+        if (hasattr(backend, "_torch_compat_install_context")
+                or backend is sys.modules.get("jittor")):
             raise RuntimeError("the PyTorch baseline resolved to the Jittor torch shim")
+        extension = str(getattr(getattr(backend, "_C", None), "__file__", ""))
+        if not extension.endswith((".so", ".pyd")):
+            raise RuntimeError("the PyTorch baseline has no independent binary _C extension")
         if device == "cuda" and not backend.cuda.is_available():
             raise NotImplementedError("real PyTorch CUDA execution is unavailable")
         if device == "cuda":

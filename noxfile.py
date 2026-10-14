@@ -941,11 +941,9 @@ def _write_asv_config(root, results_dir, html_dir):
             "repo": str(REPO_ROOT),
             # The checkout being measured, whatever it is called. `asv run`
             # resolves every configured branch before it looks at
-            # --set-commit-hash, and benchmarks/asv/asv.conf.json names the
-            # upstream branches -- which a fork's branch or a pull request's
-            # detached HEAD does not have ("Unknown branch 2.0-refactor in
-            # configuration"). `asv publish` then graphs HEAD's first-parent
-            # line, which is the history the comparison is against.
+            # --set-commit-hash. Keep the generated selection tied to HEAD
+            # even when the source config is customized with other branches.
+            # `asv publish` then graphs HEAD's first-parent line.
             "branches": ["HEAD"],
             "benchmark_dir": str(REPO_ROOT / "benchmarks" / "asv"),
             "env_dir": str(root / "asv-env"),
@@ -1386,7 +1384,19 @@ def tutorials(session):
     _run_pytest(session, ("tests/integration/test_notebooks.py",), env)
 
 
-def _record_asv(session, root, env, asv_command, default_machine, external=False):
+def _asv_run_arguments(arguments, default_pattern=None):
+    arguments = tuple(arguments)
+    selected = any(
+        argument in ("--bench", "-b") or argument.startswith(("--bench=", "-b"))
+        for argument in arguments
+    )
+    if default_pattern is not None and not selected:
+        return ("--bench", default_pattern) + arguments
+    return arguments
+
+
+def _record_asv(session, root, env, asv_command, default_machine, external=False,
+                default_pattern=None):
     asv_home = root / "jittor-asv-home"
     asv_home.mkdir(parents=True, exist_ok=True)
     env["JITTOR_HOME"] = str(asv_home)
@@ -1412,7 +1422,7 @@ def _record_asv(session, root, env, asv_command, default_machine, external=False
     dirty = _git_output("status", "--porcelain", "--untracked-files=all")
     if dirty and os.environ.get("ASV_ALLOW_DIRTY") != "1":
         session.error(
-            "ASV refuses to label a dirty checkout as %s; commit or stash changes first"
+            "ASV refuses to label a dirty checkout as %s; commit changes first"
             % current_commit
         )
     compare_base = _asv_compare_base(results_dir, current_commit)
@@ -1454,7 +1464,7 @@ def _record_asv(session, root, env, asv_command, default_machine, external=False
                     "--show-stderr",
                     "--no-pull",
                 )
-                + tuple(session.posargs)
+                + _asv_run_arguments(session.posargs, default_pattern)
             ),
             env=env,
             external=external,
@@ -1527,7 +1537,7 @@ def benchmark(session):
 
 @nox.session(python=False)
 def benchmark_cuda(session):
-    """Record scheduled Tiny Llama and optimizer ASV results on real CUDA."""
+    """Record scheduled operator, model, training and transfer results on CUDA."""
     root, env = _session_env(session, "asv-cuda")
     python = _hardware_python()
     _set_hardware_python_config(session, python, env)
@@ -1551,6 +1561,43 @@ def benchmark_cuda(session):
         (python, "-m", "asv"),
         "jittor-ci-rtx4090-cuda12-2",
         external=True,
+    )
+
+
+@nox.session(python=False)
+def benchmark_accelerate(session):
+    """Opt-in Accelerate training, in its own Torch frontend and JIT cache."""
+    device = os.environ.get("ASV_ACCELERATE_DEVICE", "cpu")
+    if device not in ("cpu", "cuda"):
+        session.error("ASV_ACCELERATE_DEVICE must be cpu or cuda")
+    root, env = _session_env(session, "asv-accelerate-" + device)
+    python = _hardware_python()
+    _set_hardware_python_config(session, python, env)
+    env["cache_name"] = "asv-accelerate"
+    env["JITTOR_TORCH_SHIM"] = "1"
+    if device == "cuda":
+        nvcc = os.environ.get("JT_BUILD_NVCC_PATH") or os.environ.get("nvcc_path") or shutil.which("nvcc")
+        if not nvcc:
+            session.error("Accelerate CUDA benchmark requires nvcc")
+        env["nvcc_path"] = nvcc
+        env["JT_BUILD_NVCC_PATH"] = nvcc
+        session.run("nvidia-smi", external=True, env=env)
+    else:
+        env["nvcc_path"] = ""
+        env["JT_BUILD_NVCC_PATH"] = ""
+    session.run(
+        python, "-c",
+        "from importlib.util import find_spec; "
+        "from importlib.metadata import version; "
+        "assert all(find_spec(name) is not None for name in ('asv', 'numpy', 'accelerate')), "
+        "'install ASV, NumPy and Accelerate in JITTOR_CI_PYTHON first'; "
+        "print('Accelerate benchmark dependencies:', version('accelerate'))",
+        external=True, env=env,
+    )
+    _record_asv(
+        session, root, env, (python, "-m", "asv"),
+        "jittor-accelerate-" + device, external=True,
+        default_pattern=r"^accelerate_training\.",
     )
 
 

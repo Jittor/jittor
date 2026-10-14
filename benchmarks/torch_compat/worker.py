@@ -11,6 +11,7 @@ workload is a row in the table rather than a missing one.
 """
 
 import argparse
+import importlib.metadata
 import json
 import os
 import platform
@@ -265,8 +266,8 @@ def versions(torch, runtime):
               "torch": getattr(torch, "__version__", None)}
     for name in ("transformers", "diffusers", "numpy"):
         try:
-            report[name] = __import__(name).__version__
-        except Exception:
+            report[name] = importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
             report[name] = None
     if runtime == "jittor":
         import jittor
@@ -280,6 +281,25 @@ def versions(torch, runtime):
         if "torch_npu" in sys.modules:
             report["torch_npu"] = getattr(sys.modules["torch_npu"], "__version__", None)
     return report
+
+
+def runtime_conditions(torch):
+    """Read the CPU controls actually inherited by this fresh worker."""
+    return {
+        "affinity": sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None,
+        "runtime_threads": int(torch.get_num_threads()),
+        "thread_env": {name: os.environ.get(name) for name in (
+            "OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
+            "OMP_PROC_BIND", "OMP_PLACES")},
+    }
+
+
+def output_device(outputs, requested):
+    """Check tensor placement after synchronising, outside the timing window."""
+    devices = {value.device.type for value in outputs}
+    if devices != {requested}:
+        raise RuntimeError("requested %s but step outputs are on %s" % (requested, sorted(devices)))
+    return requested
 
 
 def is_device_oom(error, text):
@@ -385,6 +405,10 @@ def measure(options, stack, result, sampler=None):
     if options.runtime == "jittor":
         import jittor as jt
 
+        if options.device == "cpu":
+            # Jittor otherwise inherits the accelerator mode on GPU hosts,
+            # including during model initialisation before model.to('cpu').
+            stack.enter_context(jt.runtime.scope(use_cuda=0))
         if not options.allow_fallback:
             # A CPU fallback inside a CUDA measurement makes the number mean
             # something else entirely; fail the row instead of reporting it.
@@ -397,6 +421,14 @@ def measure(options, stack, result, sampler=None):
     dtype = options.dtype or cls.default_dtype
     result.update(workload=cls.name, family=cls.family, mode=cls.mode,
                   unit=cls.unit, dtype=dtype, description=cls.description)
+    result["requires"] = list(cls.requires)
+    result["seed"] = options.seed
+    result["precision_policy"] = {
+        "tf32": options.tf32 if options.device == "cuda" else None,
+        "cudnn_benchmark": options.cudnn_benchmark if options.device == "cuda" else None,
+        "npu_math": "full_float32" if options.device == "npu" else None,
+    }
+    result["runtime_conditions"] = runtime_conditions(torch)
     warmup, repeats = cls.iterations
     if options.size == "tiny":
         warmup, repeats = 1, 2
@@ -443,6 +475,7 @@ def measure(options, stack, result, sampler=None):
         outputs = workload.step()
         sync(outputs)
         warm.append(time.perf_counter() - started)
+        result["observed_device"] = output_device(outputs, options.device)
         values.append(summary_value(outputs))
         if len(warm) == 1:
             result["first_value"] = scalar(outputs[0])
@@ -467,6 +500,7 @@ def measure(options, stack, result, sampler=None):
         host.append(time.perf_counter() - started)
         sync(outputs)
         samples.append(time.perf_counter() - started)
+        result["observed_device"] = output_device(outputs, options.device)
         values.append(summary_value(outputs))
         last = outputs
     result["last_value"] = scalar(last[0])

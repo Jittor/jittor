@@ -66,19 +66,32 @@ ASV 启动一个已有环境时会清掉普通的 `PYTHONPATH`，所以 `ASV_PYT
 ```bash
 python -m pip install -r requirements/dev-tools.txt
 python -m nox -s benchmark -- \
-  --bench '^(operators|optimizer_step)\.'
+  --bench '^(operators|optimizer_step|convolution)\.'
 ```
 
 在打了标签、装好钉住版本 CUDA 基准依赖的 CUDA 主机上：
 
 ```bash
 python -m nox -s benchmark_cuda -- \
-  --bench '^(tiny_llama|optimizer_step)\.'
+  --bench '^(operators|optimizer_step|convolution|reductions|transfer|tiny_llama)\.'
 ```
 
 两个会话都执行完整的 ASV 流程：`check`、注册机器、对**确切的当前提交** `run` 并采样、
 与最近的缓存祖先（或显式的 `ASV_COMPARE_BASE`）`compare`，然后 `publish` HTML 报告。
 `ASV_COMPARE_FACTOR` 控制回归倍数，必须大于 1。首次运行会以自身为基线自举。
+
+Accelerate 的包装开销使用独立进程与缓存，按需运行：
+
+```bash
+# JITTOR_CI_PYTHON 指向已安装 ASV、NumPy 和 Accelerate 的解释器
+python -m nox -s benchmark_accelerate
+# 使用 CUDA 编译环境时，额外要求真实设备及 nvcc
+ASV_ACCELERATE_DEVICE=cuda python -m nox -s benchmark_accelerate
+```
+
+此入口默认仅选择 `accelerate_training`，比较同一 Jittor Torch 前端的直接训练与
+`Accelerator.prepare/backward` 包装；它不是与真实 PyTorch 的速度对照，不进入默认 CI。
+未安装依赖、前端激活失败或实际计算失败会直接报错。
 **只有结果 JSON 与 `index.html` 都存在，这次运行才算成功。**
 
 ## 生态对比
@@ -161,7 +174,9 @@ asv --config benchmarks/asv/asv.conf.json run --python=same --set-commit-hash "$
 `asv --config benchmarks/asv/asv.conf.json compare <base> <candidate>`。
 
 这些直接命令要从仓库根目录运行。配置由 `benchmarks/asv/` 拥有，其 `repo: "../.."` 相对于
-配置文件解析，而 `benchmark_dir` 和输出目录相对于工作目录解析。维护中的
+配置文件解析；`benchmark_dir: "."` 与输出目录也相对于配置目录解析。源配置把默认
+输出放到仓库同级的 `jittor-lab/_state/asv/`；自定义 `JITTOR_LAB_ROOT` 时使用 nox 入口，
+由它生成相应的绝对状态路径。维护中的
 `nox -s benchmark` 入口会生成一份使用绝对仓库、基准和外部状态路径的配置，因此移动
 源配置不会把 CI 产物重定向进 checkout。
 
@@ -171,18 +186,31 @@ CPU 工作流在基线 CPU 容器里跑 `nox -s benchmark`：可用时恢复先�
 当前提交，比较并发布，然后保存更新后的结果缓存。原始 JSON 与生成的 HTML 作为留存的
 CI 产物一起上传。
 
+PR 与普通 push 选择 `operators`、`optimizer_step`、`convolution`；定时及手动运行还会选择
+`reductions`。大尺寸归约不增加每个 PR 的等待时间。
+
 **CUDA 基准刻意不作为 PR 门禁。** CUDA 工作流在其真实设备测试门禁之后，按周计划与
 手动触发运行 `nox -s benchmark_cuda`。它使用打了标签的 CUDA 12.2 RTX 4090 runner、
 独立的结果缓存，上传独立的 CUDA JSON/HTML 产物。这个节奏让加速器回归可见，又不必为
 每次源码推送占用专用硬件。
+CUDA 定时选择包括算子、卷积、优化器、归约、传输和 Tiny Llama。
 
-## 初始基准集
+## 当前基准集
 
 | ASV 模块 | 覆盖 | 参数 |
 | --- | --- | --- |
 | `operators` | matmul、softmax、LayerNorm、GELU | Jittor / 可选 torch；CPU/CUDA |
+| `convolution` | 标准 3×3、步长 2 的 1×1、depthwise 3×3；前向与前向+反向 | Jittor / 可选 torch；CPU/CUDA；严格 FP32 |
 | `tiny_llama` | LlamaModel 前向、前向+反向 | Jittor / 可选 torch；CUDA |
 | `optimizer_step` | 就绪梯度下 SGD 与 AdamW 步的规模伸缩 | 32/128/512 个张量；CPU/CUDA |
+| `reductions` | sum/max/min，含顺序敏感的输入模式 | 1M/16M/64M 元素；CPU/CUDA |
+| `transfer` | 主机↔设备拷贝、读取后的设备操作及峰值内存 | Jittor / 可选 torch；CUDA |
+| `accelerate_training` | 直接训练与 Accelerate 包装，8 步训练 | SGD/AdamW；CPU/CUDA；独立 opt-in 入口 |
+
+卷积 setup 在计时外，以独立 NumPy float64 参考验证整个前向张量，以及训练模式的输入、
+权重和 bias 梯度；计时包含实际计算与设备同步。卷积关闭 TF32，其他套件仍按其既有精度
+协议运行。设备不存在或可选 PyTorch 未安装可以 skip；已声明可用的设备发生编译、
+注册、执行错误，以及损坏的 PyTorch 安装，均属于失败，不能被转换成 skip。
 
 Tiny Llama 沿用既定配置：2 层、hidden 256、intermediate 768、8 个注意力头 / 4 个 KV
 头、batch 2、序列 128。它的 setup 会检查输出和每一个被请求的梯度是否有限且非零。

@@ -119,7 +119,7 @@ class TestDocsStructure(unittest.TestCase):
         config = json.loads(config_path.read_text(encoding="utf-8"))
         self.assertEqual((config_path.parent / config["repo"]).resolve(), self.repo_root)
         self.assertEqual(
-            (self.repo_root / config["benchmark_dir"]).resolve(),
+            (config_path.parent / config["benchmark_dir"]).resolve(),
             self.repo_root / "benchmarks" / "asv",
         )
         tree = ast.parse((self.repo_root / "noxfile.py").read_text())

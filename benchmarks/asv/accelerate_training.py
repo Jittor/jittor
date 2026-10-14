@@ -22,6 +22,19 @@ import numpy as np
 from ._shared import cleanup_backend, require_isolated_cache, synchronize
 
 
+def _configure_device(backend, device):
+    if device not in ("cpu", "cuda"):
+        raise ValueError("Accelerate benchmark device must be cpu or cuda")
+    if device == "cuda" and not backend.compiler.has_cuda:
+        raise NotImplementedError("Accelerate ASV CUDA requires a CUDA build")
+    backend.flags.use_cuda = int(device == "cuda")
+    if device == "cuda":
+        backend.flags.cuda_allow_tf32 = 0
+        backend.flags.cuda_allow_cudnn_tf32 = 0
+        backend.flags.use_tensorcore = 0
+        backend.flags.float32_matmul_precision = "highest"
+
+
 class AccelerateTrainingBenchmarks:
     params = (["direct", "full"], ["sgd", "adamw"], ["cpu", "cuda"])
     param_names = ["wrapping", "optimizer", "device"]
@@ -43,13 +56,7 @@ class AccelerateTrainingBenchmarks:
         self.torch = importlib.import_module("torch")
         if self.torch is self.jt or not hasattr(self.torch, "_torch_compat_install_context"):
             raise RuntimeError("Accelerate ASV did not resolve the independent Jittor frontend")
-        if device == "cuda" and not self.jt.compiler.has_cuda:
-            raise NotImplementedError("Accelerate ASV CUDA requires a CUDA build")
-        self.jt.flags.use_cuda = int(device == "cuda")
-        self.jt.flags.cuda_allow_tf32 = 0
-        self.jt.flags.cuda_allow_cudnn_tf32 = 0
-        self.jt.flags.use_tensorcore = 0
-        self.jt.flags.float32_matmul_precision = "highest"
+        _configure_device(self.jt, device)
         self.device = device
         from accelerate import Accelerator
         from accelerate.state import AcceleratorState, GradientState
@@ -60,6 +67,7 @@ class AccelerateTrainingBenchmarks:
         self.GradientState = GradientState
         self.fallback = forbid_backend_fallbacks()
         self.fallback.__enter__()
+        self._fallback_entered = True
         rng = np.random.default_rng(20260916)
         self.initial = [rng.normal(0, .02, shape).astype("float32") for shape in
                         ((2048, 1024), (2048,), (1024, 2048), (1024,))]
@@ -165,15 +173,24 @@ class AccelerateTrainingBenchmarks:
         self._train(self.steps)
 
     def _discard_training_objects(self):
-        if self.accelerator is not None:
-            self.accelerator.free_memory()
+        accelerator = getattr(self, "accelerator", None)
+        if accelerator is not None:
+            accelerator.free_memory()
         self.model = self.optimizer = self.loader = self.accelerator = None
         gc.collect()
 
     def teardown(self, wrapping, optimizer_name, device):
         self._discard_training_objects()
         self.dataset = None
-        self.AcceleratorState._reset_state(reset_partial_state=True)
-        self.GradientState._shared_state.clear()
-        self.fallback.__exit__(None, None, None)
-        cleanup_backend("jittor", self.jt)
+        accelerator_state = getattr(self, "AcceleratorState", None)
+        if accelerator_state is not None:
+            accelerator_state._reset_state(reset_partial_state=True)
+        gradient_state = getattr(self, "GradientState", None)
+        if gradient_state is not None:
+            gradient_state._shared_state.clear()
+        if getattr(self, "_fallback_entered", False):
+            self._fallback_entered = False
+            self.fallback.__exit__(None, None, None)
+        backend = getattr(self, "jt", None)
+        if backend is not None:
+            cleanup_backend("jittor", backend)
