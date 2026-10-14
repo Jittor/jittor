@@ -45,6 +45,41 @@ case，零适配代码。
 | L4 | 性能达标 | 真实尺寸，ratio 不超过门禁上限 |
 | L5 | 真机零 fallback | `fallback_count == 0` 加后端断言 |
 
+## 覆盖度：带分母的广度轴
+
+L1–L5 是单个场景的深度；覆盖度是另一根轴，不能从一个 tiny LoRA case 推出整库支持。
+每个结论必须写成 **`X / N @ upstream <完整 SHA>`**，同时列出模型族/方法、设备、实际
+L 级和验证规格。**登记、import、skill 自称和旧报告都不是分子**；L1 不计入数值覆盖率。
+
+分母由 [`registry_inventory.py`](../torch-compat-repo-runbook/scripts/registry_inventory.py)
+从干净的上游 checkout 自动派生，每次 scorecard 都重新枚举，记录 remote、完整 SHA、
+源码版本和源文件 SHA256。不得提交手写模型清单替代注册表，也不得只挑 AutoPipeline 等
+较小子集却声称覆盖整库。当前入口：Transformers `MODEL_MAPPING_NAMES` 与 task mappings；
+PEFT `PeftType`/`TaskType`；Diffusers **全部条件分支**的 pipeline 模块族、导出 API 与
+AutoPipeline 子矩阵；ms-swift `register_model(ModelMeta)` 与 `SWIFT_MAPPING`；verl
+advantage-estimator/policy-loss 注册。各轴分开计数，**不能相加成一个“支持率”**。
+这些是源码声明的注册项，不保证可选依赖已安装。verl 两类算法注册也不代表完整 PPO
+训练流水或全部模型；PEFT 的模型族需另挂 Transformers 的 registry reference。
+
+分子至少有相同权重/输入下的独立 oracle 数值证据，并绑定具体门禁 node、结果报告与
+原始产物哈希。CPU ①和加速卡③分别列；没有①对应场景或③只证明 host fallback，
+不能计入该卡覆盖。**代表模型只证明列出的 API/规格，不覆盖整个 checkpoint 家族。**
+
+抽样按三个层次显示**各自数量**，但总分母仍是完整注册表：
+
+| 层次 | 选择与验收 | 必须显示 |
+| --- | --- | --- |
+| core | 已承诺的模型族 × 方法 × 目标设备跑全矩阵，至少 L3 | 矩阵格数、通过/失败/阻塞/缺证据数 |
+| broad | 自动注册表按任务、架构、训练方法分层抽查 L1–L2 | L1 不计分子的事实、L2 的 X/N 与未抽查数 |
+| tail | 长尾按架构族选代表，保留 MoE/多模态/长上下文等差异 | 代表选择理由、规格和明确未覆盖的 API |
+
+`audit_coverage.py audit` 统一核对所有 `*-torch-compat` skill、共享生态 case、实际测试
+入口和被引用的现存报告。它只确认入口/材料存在，不自动授予 L 级；
+`audit_coverage.py scorecard --upstream ... --evidence ...` 才核查当前平台与证据并计算分子。
+反作弊负向测试位于 [`test_downstream_coverage.py`](../../../tests/tools/test_downstream_coverage.py)。
+固定平台/速度表头、完整命令、证据格式与报告模板见
+[统一下游 scorecard 协议](../../../docs/development/downstream-scorecards.md)。
+
 ## 2. 裸跑，收集断点
 
 **不要先写适配代码。** 把库直接架在 shim 上跑，逐条记录断点，按第 0 节分流。

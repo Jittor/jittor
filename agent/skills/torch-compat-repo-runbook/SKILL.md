@@ -1,6 +1,6 @@
 ---
 name: torch-compat-repo-runbook
-description: 为一个下游 Torch 生态库写"在 jittor shim 上跑 + 与原生 torch 对比"runbook 的模板，以及签收所需的四轴验收协议（支持的模型清单、精度、显存、速度）。用于新增一个库、复核已有 runbook、或判断一次对拍是否真的有证据。
+description: 为下游 Torch 生态库建立带上游 registry 分母的覆盖矩阵、独立 oracle 证据与固定平台/速度 scorecard，审计 skill、门禁和结果报告。用于新增一个库、复核已有 runbook、或判断一次对拍是否真的有证据。
 ---
 
 # 下游仓库 torch-compat Runbook 模板与四轴验收
@@ -53,10 +53,10 @@ oracle 产出权重和参考值，shim 从同一份权重重算。
 
 | 轴 | 怎么量 | 通过标准 | 记录 |
 | --- | --- | --- | --- |
-| **支持的模型清单** | `_ecosystem_cases.CASES` 里该库注册的 case | 每个 case 都能跑；跑不了的写明缺什么依赖 | case 名 + 依赖 |
+| **带分母的覆盖矩阵** | 从固定上游 SHA 的 registry 自动枚举模型族/方法/任务轴，再绑定数值证据 | L1/import/登记不算覆盖；设备③须有CPU①；核心矩阵至少L3 | X/N @ SHA、代表规格、门禁node、实际L级 |
 | **精度** | 同权重、同输入、同 device，两个解释器；逐输出/逐梯度比 | 误差不超过门禁容差；**相对误差用全场最大量级做 floor** | worst abs / worst rel |
-| **显存** | 两侧都问运行时自己的 per-device 计数器：live（torch `memory_allocated` / jittor `device_memory_used`）与 pool（`memory_reserved` / `device_memory_reserved`） | 两个口径分别比；**绝不把 reserved 对 allocated**；whole-run 峰值与稳态每步分开报 | live MiB、pool MiB |
-| **速度** | 重复交错采样，**取最小值** | 记录 ratio；**PR 门禁只报告不断言墙钟** | ratio |
+| **显存** | L4 两侧用整进程峰值：CUDA NVML、NPU npu-smi、CPU RSS；allocator live/pool 仅作独立诊断 | 不把进程峰值、allocated、reserved 混成一列；首步与稳态分开 | jPeak/tPeak、采样来源/间隔、live/pool 附列 |
+| **速度** | 同卡同规格、预热后至少10次采样；两侧使用同一已声明统计量 | 固定 eager/default 图重放模式，无并发；speed 旁必须有 agreement；PR 只报告 | 时间、ratio/上限、agreement、完整 regime |
 
 `verify_repo.py` 的 peak/pool 两列都取自运行时自己的 high-water（jittor 侧
 `get_peak_device_used_memory`，`f1a498c7` 起）。**不**是 python 线程采样出来的最大值：
@@ -67,7 +67,9 @@ oracle 产出权重和参考值，shim 从同一份权重重算。
 
 1. **精度的相对误差别按数组自己的量级除。** 一个接近 0 的梯度会报出 ~1 的相对误差，
    而绝对误差其实只有 1e-5——把正确结果读成失败。用整个场的最大量级做分母。
-2. **显存必须同口径比，两侧都问运行时自己。** 不外部采样：
+2. **allocator 诊断必须同口径比，两侧都问运行时自己。** 这不能替代 L4 的整进程峰值。
+   外部采样必须按进程与设备映射；做不到时 L4 缺证据，不能拿 allocator 代填。
+   例如
    `nvidia-smi --query-compute-apps` 在容器里不列出该进程（pid 映射），按 GPU 的
    `memory.used` 又含同租户。两侧都问运行时自己：torch 用 `max_memory_allocated` /
    `max_memory_reserved`；shim 侧 `torch.cuda.max_memory_allocated()` 恒为 0（实测），
@@ -104,7 +106,11 @@ REAL_TORCH_PYTHON=<real-torch-python> <jittor-python> \
 ```
 
 - 先 `--list-only` 看该库的 case 清单，不必起进程。
-- 输出 `verify-report.json`，每个 case 一行：精度、显存、速度、fallback、device 一致性。
+- 输出 `verify-report.json`，每个 case 一行：精度、allocator 显存、诊断时间、fallback、device 一致性。
+  非零退出（即使先打印成功 marker）、非有限张量、形状/依赖版本/设备/精度或线程配置不符均失败，
+  不生成可比较 ratio；失败会让命令返回非零。原始双方报告与日志保留供审计。
+- 这是单次前反向探针，**不是自动 L3/L4/L5 签收器**；缺平台块、输入扰动检查、多步轨迹或
+  整进程峰值时，保留 `scorecard_eligible=false`，不能从 `passed` 推出这些更高级别。
 - case 名用下划线而发行版用连字符（`ms-swift` → `ms_swift_lora_llama`），脚本已归一化。
 
 ## 五、验证环境没有该库时
@@ -147,3 +153,28 @@ CPython minor 版本不同时默认拒绝共享包站，确实只走稳定 ABI �
 - 原始日志、包站、缓存、`verify-report.json` 留在 `$JITTOR_LAB_ROOT/_state/<topic>/`，
   不进主仓库。
 - 加新 runbook 时，同时在该库 skill 的 `## 证据` 里写清"实测"还是"报告推导"。
+
+## 八、统一覆盖审计与 scorecard
+
+先运行无框架依赖的事实审计：
+
+```bash
+python -S agent/skills/torch-compat-repo-runbook/scripts/audit_coverage.py audit
+python -S agent/skills/torch-compat-repo-runbook/scripts/audit_coverage.py audit --json
+```
+
+审计展示 **有 skill / 注册 case / 实际共享门禁 / 存在与失效的报告链接 / 提及的 L 级**，
+不给存在性证据授予“通过”。完整上游分母的派生、core/broad/tail 抽样规则和反作弊项见
+[适配流程的覆盖度章节](../downstream-library-adaptation/SKILL.md)。
+
+平台与速度元数据是所有下游结论的固定表头，不再仅限 NPU。每行都记录设备型号/数量/映射、
+CUDA/driver 或 CANN、nvcc/gcc、nvidia wheel、Jittor SHA/flags、独立 oracle 身份和版本、
+上游 SHA/version/remote、离线种子及 tiny/real 规格。L4 另需同卡时间/ratio/验收上限、
+整进程峰值、warmup/iters、统计量、PURE eager/default 图重放模式、无并发声明与 agreement。
+具体 schema、可执行命令与可复制的结果报告模板以
+[统一下游 scorecard 协议](../../../docs/development/downstream-scorecards.md) 为唯一入口。
+
+`scorecard` 子命令每次重新读取 registry，不接受调用者提供小分母；版本/提交不符、
+丢失平台块、skip/xfail/全skip、缺CPU①、非零fallback、缺梯度、假gate节点、产物哈希不符、
+用tiny规格声称L4等均不计分，并使含被拒行的命令非零退出。旧 Markdown 报告需补齐并
+亲自复验后才能进入分子；没有新证据的格子写“未验证”，不能拿本库 CPU/device 自比补空。
