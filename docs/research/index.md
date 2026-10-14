@@ -7,8 +7,10 @@
 :maxdepth: 1
 
 agentic-optimization
+acl-torch-npu-op-parity
 ```
 
 | 提案 | 状态 |
 | --- | --- |
 | [可由 agent 操作的框架优化](agentic-optimization.md) | 研究提案，未实现 |
+| [ACL 单算子性能对齐 torch_npu](acl-torch-npu-op-parity.md) | 研究提案，未实现 |
