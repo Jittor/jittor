@@ -1141,9 +1141,11 @@ workaround.
   plus backward, `aclnnDropout` costs 0.47-0.77x of the live path
   (595.6 -> 459.9 us on (32,128,768) with 24 calls in flight) and is
   numerically right (keeps 0.9011 of elements, scales by 1.1111, a fresh mask
-  per call). An implementation already exists and is already correct --
-  `DropoutACL`, fixed under KI-BACKEND-018 -- and is reachable from no
-  dispatch path.
+  per call).   An implementation already existed and was already correct --
+  `DropoutACL`, fixed under KI-BACKEND-018 -- and wiring it was measured
+  and rejected: the composite's `DSARandomUniform` overlaps MatMul on the
+  DSA side queue, while `aclnnDropout` serialises on the compute stream
+  and made `bert_base_train` 8% slower (see that entry's follow-up).
   `bert_base_train`'s gap is similarly not a dispatch bug: an aclprof
   capture shows `MatMulV2` at 42.4% of device time (the
   expected dominant cost for a transformer) and `DSARandomUniform` --
@@ -1266,6 +1268,19 @@ workaround.
   first; this session did neither, to avoid conflating a benchmark-speed
   investigation with a dead-code removal decision that deserves its own
   review.
+- Follow-up (2026-10-14): the class was rewritten from a `jt.Function` to
+  an `acl_emit` CodeOp with a secondary uint8 mask output (the LayerNorm
+  pattern), so a future wire-up would keep `numel/8` bytes of mask and not
+  a taped float activation; seed/offset already come from the per-device
+  counter (`reserve_acl_random`). It was then wired through
+  `try_dispatch("nn.dropout")` and measured on a 910B3 against the
+  composite on the same tree: isolated, forward-plus-backward
+  `aclnnDropout` cost 0.47-0.77x of `_keep_scale`, but a full
+  `bert_base_train` step was 8% slower (96.4 vs 88.7 ms). The composite's
+  `DSARandomUniform` runs on the `DSA_SQE` side queue and overlaps MatMul;
+  `aclnnDropout` takes the main compute stream instead. The dispatch was
+  reverted; the CodeOp rewrite stays so the class is not a footgun if it
+  is ever reached again.
 
 ## KI-BACKEND-019: `argsort` has no registered constructor on ACL
 
