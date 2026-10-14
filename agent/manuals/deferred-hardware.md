@@ -214,10 +214,16 @@ launcher ABI 断言全过，反向对照见下）、以及不变量式静态合�
 
 ### 后端 `grad()` 的 CPU 参考对拍
 
-全树共 **60 个后端梯度实现**（C++ `::grad()` 28 个，Python `jt.Function.grad` 32 个），清单在
-`tests/structure/test_backend_grad_contract.py` 的 `BACKEND_GRAD_COVERAGE`，与源码树逐条相等，
-新增或删除任何一条都会报红。其中 **24 条在 CPU+CUDA 主机上能真跑**（CUDA 22 条 + oneDNN 1 条 + …），
-**36 条要等硬件**。清单里的 `kind` 字段就是下面这张表：
+后端梯度清单在 `tests/structure/test_backend_grad_contract.py` 的
+`BACKEND_GRAD_COVERAGE`，逐条匹配 C++ `::grad()`、Python `grad` 方法，以及
+类封装的 CodeOp 内联反向。扫描会沿同文件的 program helper 查找梯度源码，
+因此把 `jt.Function.grad` 迁移进 CodeOp 不会丢掉登记。
+
+新增的 GELU、bf16 Swish、cross entropy 和 nearest upsample 公式回归位于
+`tests/backends/acl/test_acl_codeop_gradients.py`；需要真实 ACL 设备执行。
+当前 CUDA 主机上未验收这些 NPU 数值，收集成功或跳过均不构成通过。
+其他 ACL CodeOp 的既有梯度用例也已逐个登记，仍需按 `nox -s npu` 上机验收。
+清单里的 `kind` 字段就是下面这张表：
 
 | kind | 含义 | 硬件到手那天跑什么 | 通过判据 |
 | --- | --- | --- | --- |

@@ -9,6 +9,7 @@ import copy
 import importlib.util
 import io
 import pickle
+import random
 import json
 import os
 from pathlib import Path
@@ -226,6 +227,9 @@ class TestOptimizerCheckpoint(unittest.TestCase):
             scheduler.step()
             with tempfile.TemporaryDirectory() as path:
                 accelerator.save_state(path, safe_serialization=False)
+                random_expected = (random.random(), np.random.random(4),
+                                   numbers(torch.rand(4, device="cpu")),
+                                   numbers(torch.rand(4, device=DEVICE)))
                 saved = snapshot(get_state_dict(accelerator.unwrap_model(model), optimizer))
                 expected_gradients = {}
                 expected_loss = update(model, optimizer, accelerator.backward, expected_gradients)
@@ -233,6 +237,10 @@ class TestOptimizerCheckpoint(unittest.TestCase):
                 expected = snapshot(get_state_dict(accelerator.unwrap_model(model), optimizer))
                 expected_lr = scheduler.get_last_lr()
                 accelerator.load_state(path)
+                self.assertEqual(random.random(), random_expected[0])
+                np.testing.assert_array_equal(np.random.random(4), random_expected[1])
+                self.assertEqual(numbers(torch.rand(4, device="cpu")), random_expected[2])
+                self.assertEqual(numbers(torch.rand(4, device=DEVICE)), random_expected[3])
                 self.assert_tree(get_state_dict(accelerator.unwrap_model(model), optimizer), saved)
                 actual_gradients = {}
                 actual_loss = update(model, optimizer, accelerator.backward, actual_gradients)

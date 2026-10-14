@@ -66,6 +66,7 @@ class TestAmpBitNames(unittest.TestCase):
         expected = {
             "amp_prefer32": jt.amp_flags.prefer32,
             "amp_prefer16": jt.amp_flags.prefer16,
+            "amp_prefer_bfloat16": jt.amp_flags.prefer_bfloat16,
             "amp_keep_reduce": jt.amp_flags.keep_reduce,
             "amp_keep_white": jt.amp_flags.keep_white,
             "amp_array_prefer": jt.amp_flags.array_prefer,

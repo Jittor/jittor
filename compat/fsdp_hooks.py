@@ -66,6 +66,7 @@ REQUIRED = (
     "_load_full_state_dict",
     "_get_full_state_dict",
     "_optimizer_checkpoint_parameter_names",
+    "refresh_optimizer_fsdp_params",
     "_gather_optimizer_state_dict",
     "_shard_optimizer_state_dict",
 )

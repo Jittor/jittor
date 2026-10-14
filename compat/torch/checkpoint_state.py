@@ -43,6 +43,15 @@ def _map_tree(value, function):
     return value
 
 
+def _offload_to_cpu(value):
+    result = value.cpu()
+    # Every rank must execute lazy FULL gathers before a nonzero rank drops
+    # its result. Otherwise rank-zero serialization and the next collective
+    # can execute different NCCL operations in the same stream position.
+    result.sync()
+    return result
+
+
 def _fsdp(model):
     provider = fsdp_hooks.provider()
     if provider is not None and any(getattr(child, "_is_fsdp_module", False)
@@ -148,7 +157,7 @@ def get_model_state_dict(model, *, options=None):
         frozen = {name for name, parameter in model.named_parameters() if not parameter.requires_grad}
         result = {name: value for name, value in result.items() if name not in frozen}
     if options.cpu_offload:
-        result = _map_tree(result, lambda value: value.cpu())
+        result = _map_tree(result, _offload_to_cpu)
         dist = _torch().distributed
         if options.full_state_dict and dist.is_initialized() and dist.get_rank() != 0:
             return {}
@@ -210,7 +219,7 @@ def get_optimizer_state_dict(model, optimizers, *, submodules=None, options=None
     if options.flatten_optimizer_state_dict:
         result = _flatten(result)
     if options.cpu_offload:
-        result = _map_tree(result, lambda value: value.cpu())
+        result = _map_tree(result, _offload_to_cpu)
         dist = _torch().distributed
         if options.full_state_dict and dist.is_initialized() and dist.get_rank() != 0:
             return {}
@@ -226,6 +235,11 @@ def set_optimizer_state_dict(model, optimizers, optim_state_dict, *, options=Non
     provider = _fsdp(model)
     if provider is not None and options.full_state_dict:
         state = provider._shard_optimizer_state_dict(model, state)
+    if provider is not None:
+        # FULL model loading can replace flat-entry shard views. Rebind the
+        # live optimizer through its existing owner before resolving FQNs.
+        for optimizer in optimizers:
+            provider.refresh_optimizer_fsdp_params(optimizer)
     names = _parameter_names(model)
     plans = []
     for optimizer in optimizers:

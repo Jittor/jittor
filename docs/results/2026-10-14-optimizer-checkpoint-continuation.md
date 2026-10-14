@@ -1,8 +1,9 @@
 # Optimizer checkpoint and deterministic Accelerate continuation
 
-Status: CPU and CUDA single-process numerical validation complete; complete
-Accelerate state restoration remains incomplete because CPU RNG stream positions
-are not restored. Multi-rank FSDP2 and ACL are not accepted by this report.
+Status: Historical single-process numerical acceptance. The later
+[RNG and FSDP2 FULL continuation report](2026-10-14-checkpoint-rng-fsdp2-continuation.md)
+supersedes the RNG and multi-rank limitations recorded below. ACL remains
+unverified; this report preserves the original baseline and evidence.
 
 Baseline: `cded3102037edc3663b8f2054a6ebc06da6ebfd2` (`origin/2.0-refactor`, fetched
 before implementation). Implementation: the commit containing this report.

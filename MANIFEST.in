@@ -380,7 +380,9 @@ include docs/results/2026-09-24-torch-compat-real-models.md
 include docs/results/2026-09-25-profiling-tools.md
 include docs/results/2026-10-05-high-rank-and-downstream-core-gaps.md
 include docs/results/2026-10-09-downstream-p1-allocator-protocol-transpose.md
+include docs/results/2026-10-14-amp-bfloat16-gradscaler.md
 include docs/results/2026-10-14-benchmark-coverage.md
+include docs/results/2026-10-14-checkpoint-rng-fsdp2-continuation.md
 include docs/results/2026-10-14-downstream-coverage-audit.md
 include docs/results/2026-10-14-optimizer-checkpoint-continuation.md
 include docs/results/index.md

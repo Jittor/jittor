@@ -424,23 +424,29 @@ def _seed(value=_seed_sentinel):
 
 
 def _get_rng_state():
-    return jt.array([initial_seed()], dtype="int64")
+    """A CPU ByteTensor holding the native host engine's complete state."""
+    g = _misc_context().target_namespace
+    payload = jt.core.rng_state("cpu").encode("ascii")
+    return g.tensor(_np.frombuffer(payload, dtype=_np.uint8).copy(),
+                    dtype=g.uint8, device="cpu")
 
 
 def _set_rng_state(state):
     ctx = _misc_context()
-    Var = ctx.state["Var"]
+    if not isinstance(state, jt.Var):
+        raise TypeError("RNG state must be a CPU ByteTensor")
+    if _jittor_dtype_name(state.dtype) != "uint8" or len(state.shape) != 1:
+        raise TypeError("RNG state must be a one-dimensional ByteTensor; legacy seed-only states cannot restore a stream")
+    if state.device.type != "cpu":
+        raise TypeError("RNG state must be a CPU ByteTensor")
     try:
-        if isinstance(state, Var):
-            state = int(state.reshape(-1)[0].item())
-        elif hasattr(state, "__len__"):
-            state = int(list(state)[0])
-        else:
-            state = int(state)
-    except EXPECTED as exc:
-        swallowed("torch/installers/core.py _set_rng_state: if isinstance(state, Var):", exc)
-        state = initial_seed()
-    _manual_seed(state)
+        payload = state.numpy().tobytes().decode("ascii")
+    except UnicodeDecodeError as error:
+        raise ValueError("RNG state is not a native CPU generator snapshot") from error
+    # Native validation is atomic and synchronizes pending random work before
+    # restoring the host engine. Reseeding here would reset CUDA streams too.
+    jt.core.set_rng_state("cpu", payload)
+    ctx.state["core_misc"]["seed"] = int(jt.core.rng_initial_seed("cpu"))
 
 
 class PyTorchFileReader:
@@ -1227,8 +1233,8 @@ _MISC_DETAILS = {
     "autocast_increment_nesting": "real thread-local nesting depth, as torch's counter",
     "autocast_decrement_nesting": "real thread-local nesting depth, as torch's counter",
     "use_deterministic_algorithms": "sets the accelerator runtime's own deterministic option; warn_only is refused",
-    "get_rng_state": "seed-only state, not a full generator snapshot or exact stream restoration",
-    "set_rng_state": "restores the recorded seed, not an exact generator stream snapshot",
+    "get_rng_state": "versioned native CPU generator snapshot in a CPU ByteTensor; bytes are not portable to PyTorch",
+    "set_rng_state": "restores the native CPU generator seed and exact stream position; foreign or legacy seed-only states are refused",
     "norm": "existing Torch norm adapter; out and extra keyword semantics are not implemented",
     "where": "existing one- or three-argument selection; out is not implemented",
     "bincount": "native scatter-add implementation; existing flatten/minlength behavior retained",

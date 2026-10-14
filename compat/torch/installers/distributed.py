@@ -965,6 +965,22 @@ def _api_checkpoint_save(*args, **kwargs):
     return _stub_unimplemented('torch.distributed.checkpoint.save', _dcp_save_effect, _dcp_hint, stub_result=None)
 
 
+class DefaultSavePlanner:
+    """Import boundary for callers using FULL, rather than sharded, files."""
+
+    def __init__(self, *args, **kwargs):
+        raise NotImplementedError(
+            "torch.distributed.checkpoint.default_planner.DefaultSavePlanner: "
+            "sharded checkpoint planning is not implemented; use FULL state dicts and torch.save")
+
+
+class DefaultLoadPlanner:
+    def __init__(self, *args, **kwargs):
+        raise NotImplementedError(
+            "torch.distributed.checkpoint.default_planner.DefaultLoadPlanner: "
+            "sharded checkpoint planning is not implemented; use FULL state dicts and torch.load")
+
+
 def _api_checkpoint_fs_write_item(*args, **kwargs):
     return _stub_unimplemented('torch.distributed.checkpoint.filesystem._write_item', _dcp_save_effect, _dcp_hint, stub_result=None)
 
@@ -1172,6 +1188,12 @@ def _install_distributed(g, registry=None):
     checkpoint_sd.set_optimizer_state_dict = set_optimizer_state_dict
     checkpoint_sd.get_state_dict = _api_checkpoint_sd_get_state_dict
     checkpoint_sd.set_state_dict = _api_checkpoint_sd_set_state_dict
+    checkpoint_planner = _types.ModuleType("torch.distributed.checkpoint.default_planner")
+    checkpoint_planner.DefaultSavePlanner = DefaultSavePlanner
+    checkpoint_planner.DefaultLoadPlanner = DefaultLoadPlanner
+    for name in ("DefaultSavePlanner", "DefaultLoadPlanner"):
+        _record_unimplemented("torch.distributed.checkpoint.default_planner." + name,
+                              "plan no sharded checkpoint reads or writes", _dcp_hint)
     checkpoint_fs = _types.ModuleType("torch.distributed.checkpoint.filesystem")
     checkpoint_fs.FileSystemReader = FileSystemReader
     checkpoint_fs.FileSystemWriter = FileSystemWriter
@@ -1181,6 +1203,8 @@ def _install_distributed(g, registry=None):
     _modules["torch.distributed.checkpoint"] = checkpoint
     _modules["torch.distributed.checkpoint.state_dict"] = checkpoint_sd
     _modules["torch.distributed.checkpoint.filesystem"] = checkpoint_fs
+    _modules["torch.distributed.checkpoint.default_planner"] = checkpoint_planner
+    checkpoint.default_planner = checkpoint_planner
     checkpoint.state_dict = checkpoint_sd
     checkpoint.filesystem = checkpoint_fs
 
@@ -1258,6 +1282,9 @@ def _install_distributed(g, registry=None):
     register_api_bindings(checkpoint, "torch.distributed.checkpoint",
         ("load_state_dict", "save_state_dict", "load", "save", "FileSystemReader", "FileSystemWriter"),
         Fidelity.UNIMPLEMENTED, "Checkpoint I/O follows the existing explicit unsupported policy")
+    register_api_bindings(checkpoint_planner, "torch.distributed.checkpoint.default_planner",
+        ("DefaultSavePlanner", "DefaultLoadPlanner"), Fidelity.UNIMPLEMENTED,
+        "Import-compatible names; construction refuses unavailable sharded checkpoint planning")
     register_api_bindings(checkpoint_sd, "torch.distributed.checkpoint.state_dict",
         ("StateDictOptions", "get_model_state_dict", "set_model_state_dict", "get_state_dict", "set_state_dict",
          "get_optimizer_state_dict", "set_optimizer_state_dict"),
