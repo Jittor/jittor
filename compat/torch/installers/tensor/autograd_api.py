@@ -290,6 +290,8 @@ def _backward_impl(self, gradient=None, retain_graph=None, create_graph=False, *
         # NaN on the next forward (test_torch_amp_training_loop.py).
         if gr.dtype != p.dtype:
             gr = gr.cast(p.dtype)
+        if not create_graph:
+            gr = gr.detach()
         grad_by_id[id(p)] = gr
         if id(p) not in opt_ids:
             # non-optimizer leaf (retain_grad screenspace etc.): accumulate

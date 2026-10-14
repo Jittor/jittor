@@ -863,6 +863,10 @@ struct VarHolder {
     // @pyjt(_is_view)
     inline bool is_view() { return view && view->base; }
 
+    // A view stays a view after its weak writeback owner has died.
+    // @pyjt(_has_view_provenance)
+    inline bool has_view_provenance() { return view != nullptr; }
+
     /**
      * ``id`` of the Var this view currently writes through to, or -1. For
      * tests and introspection; identity decisions belong upstream of this.

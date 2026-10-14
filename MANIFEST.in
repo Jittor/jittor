@@ -402,6 +402,7 @@ include docs/results/2026-10-15-metric-state-and-tensordict-oracles.md
 include docs/results/2026-10-15-native-sharded-checkpoint.md
 include docs/results/2026-10-15-native-zero-optimizer.md
 include docs/results/2026-10-15-openmmlab-training-oracles.md
+include docs/results/2026-10-15-tensor-detach-and-factory-leaf.md
 include docs/results/2026-10-15-training-registry-denominators.md
 include docs/results/2026-10-15-transformers-model-family-matrix.md
 include docs/results/2026-10-15-upstream-pr-disposition.md

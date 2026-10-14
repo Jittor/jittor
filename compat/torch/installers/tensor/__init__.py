@@ -563,6 +563,9 @@ def tensor(data, dtype=None, device=None, requires_grad=False, **kw):
         elif _device_is_cuda(device):
             v = _make_cuda_resident(v, force=True, device=device)
             v = _move_to_cuda_index(v, g.device(device))
+        # torch.tensor always creates a leaf, including dtype conversion from
+        # the float32 host representation needed for bfloat16 construction.
+        v = v.detach()
         v.requires_grad_(bool(requires_grad))
         if requires_grad:
             v.requires_grad_(True)

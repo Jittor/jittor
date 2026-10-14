@@ -114,6 +114,7 @@ from .method_api import (
     _var_cpu,
     _var_cuda,
     _var_detach,
+    _var_detach_inplace,
     _var_get_device,
     _var_norm,
     _var_numpy,
@@ -443,6 +444,11 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # then expose the scalar shape only at the Python/NumPy boundary.
     _native_detach = Var.detach
     Var.detach = _var_detach
+    Var.detach_ = _var_detach_inplace
+    register_api_bindings(Var, 'torch.Tensor', ('detach_',), Fidelity.APPROXIMATE,
+                          'Native leaf policy or storage-sharing detached rebinding preserves '
+                          'reverse-mode history for earlier consumers. Views are rejected; '
+                          'forward-mode AD is unsupported.')
 
     _native_numpy = Var.numpy
     Var.numpy = _var_numpy

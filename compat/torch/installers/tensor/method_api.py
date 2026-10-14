@@ -725,6 +725,22 @@ def _var_detach(self):
     return out
 
 
+def _var_detach_inplace(self):
+    if self._has_view_provenance():
+        raise RuntimeError("Can't detach views in-place. Use detach() instead.")
+    if self.is_backward_leaf:
+        # Keep earlier graph edges to this leaf usable after requires_grad_()
+        # is restored. A permanent stop_grad would sever those old edges.
+        context = get_install_context(_owner.jt)
+        context.state["tensor_native_api"]["_native_requires_grad"].__set__(self, False)
+    else:
+        # Rebind the holder to the native storage-sharing detached alias so
+        # consumers built before this call retain the original producer.
+        self.assign(_var_detach(self))
+        self.stop_grad()
+    return self
+
+
 def _var_numpy(self, *args, **kwargs):
     _context = get_install_context(_owner.jt)
     _native = _context.state["tensor_native_api"]
