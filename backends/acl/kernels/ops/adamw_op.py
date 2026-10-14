@@ -1,5 +1,5 @@
 """ACL fused AdamW TensorList update."""
-from jittor._core.dtypes import dtype_name as _jittor_dtype_name
+from jittor._core.dtypes import var_dtype_name as _var_dtype_name
 
 import jittor as jt
 
@@ -13,14 +13,16 @@ def fused_adamw_acl(parameters, moments, variances, gradients, step, lr,
         raise ValueError("fused AdamW TensorLists must have one or more entries")
     for parameter, moment, variance, gradient in zip(
             parameters, moments, variances, gradients):
-        tensors = (parameter, moment, variance, gradient)
-        if any(list(tensor.shape) != list(parameter.shape) for tensor in tensors):
+        tensors = (moment, variance, gradient)
+        shape = list(parameter.shape)
+        if any(list(tensor.shape) != shape for tensor in tensors):
             raise ValueError("fused AdamW tensors must have identical shapes")
-        if any(_jittor_dtype_name(tensor.dtype) != _jittor_dtype_name(parameter.dtype) for tensor in tensors):
+        dtype = _var_dtype_name(parameter)
+        if any(_var_dtype_name(tensor) != dtype for tensor in tensors):
             raise TypeError("fused AdamW tensors must have identical dtypes")
-        if _jittor_dtype_name(parameter.dtype) not in ("bfloat16", "float16", "float32"):
+        if dtype not in ("bfloat16", "float16", "float32"):
             raise TypeError("fused AdamW requires bfloat16, float16, or float32")
-    if step.numel() != 1 or _jittor_dtype_name(step.dtype) not in ("float32", "int64"):
+    if step.numel() != 1 or _var_dtype_name(step) not in ("float32", "int64"):
         raise TypeError("fused AdamW step must be one float32 or int64 value")
 
     if not jt.flags.use_acl:
