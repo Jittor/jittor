@@ -5,6 +5,32 @@ description: 把 diffusers 分别跑在 jittor 的 `import torch` shim 与原生
 
 # diffusers ⇄ jittor torch shim
 
+## Fresh installed-source evidence (2026-10-15)
+
+[Fresh CPU/CUDA UNet L3 evidence](../../../docs/results/2026-10-15-diffusers-installed-source.md)
+uses clean framework `1a92aae04f4c70fa44e251f8fafdc7e2cd77beda`, Diffusers
+0.35.1 at `0f252be0ed42006c125ef4429156cb13ae6c1d60`, and a wheel built
+from that exact clean source. All twelve real processes bind all 695 package
+Python sources and 697 installed payload files. Both devices pass the maintained
+required UNet parity node, seed-7 input perturbation and three SGD steps with
+144 parameter gradients and the sample-input gradient. Actual TF32 is OFF/highest;
+this fresh execution does not relabel the historical ON/high records below.
+
+Use existing `component_measure.py --repo diffusers --checkout <clean-upstream>
+--root <clean-framework> -- <maintained-runner-or-training-probe>`, followed by
+`collect_component_scorecard.py` and the shared `audit_coverage.py scorecard`
+with an explicit full measurement `--baseline`. Capture both interpreters'
+actual installation hashes during execution; do not reconstruct them later.
+Use separate unit/measurement caches, both explicit device selectors and the
+required real-Torch/Diffusers/execution flags described in the report. Collect
+into a fresh directory before sealing; the measured collector's derived-output
+write is not a safe operation on a sealed directory.
+
+Each platform counts only `UNet2DModel` on `model_api 1/87`; all four pipeline
+axes remain zero. This is a tiny FP32 component, with no complete generation
+pipeline, other dtype, performance, memory or L4 claim. Earlier environments and
+numerical records below retain their original provenance and limits.
+
 ## 当前验收入口（2026-10-14）
 
 [CPU/CUDA oracle 与三步训练 scorecard](../../../docs/results/2026-10-14-downstream-oracle-scorecards.md)
