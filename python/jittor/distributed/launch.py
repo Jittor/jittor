@@ -2,8 +2,9 @@
 """MPI-free multi-device launcher for Jittor.
 
 The ``jtrun`` command starts one process per rank and assigns one visible device
-to each process. It exports the standard rendezvous environment and uses
-Jittor's shared root-info file to exchange the NCCL unique ID. The older
+to each process. It exports the standard rendezvous environment. Multi-node
+agents use Jittor's TCPStore for NCCL world/subgroup identity and node liveness;
+single-node launches retain the existing root-info transport. The older
 ``python -m jittor.distributed.launch`` entry point remains equivalent.
 
 Examples::
@@ -397,7 +398,7 @@ def main(argv=None):
             except OSError as error:
                 logf.close()
                 startup_error = error
-                print("[jtrun] could not start rank {} command: {}".format(rank, error),
+                print("[jtrun] could not start rank {} command: {}".format(global_rank, error),
                       file=sys.stderr, flush=True)
                 break
             procs.append((process, logf))

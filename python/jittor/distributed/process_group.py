@@ -34,6 +34,8 @@ _STORE_GROUP_SEQUENCE = 0
 
 def _launcher_group_unique_id(module, ranks):
     """Exchange subgroup identity without a shared filesystem or worker server."""
+    if os.environ.get('JITTOR_LAUNCHER_EXTERNAL_STORE', '0') == '0':
+        return None
     from .store import external_launcher_store
     store = external_launcher_store(timeout=float(os.environ.get('JT_RENDEZVOUS_TIMEOUT_S', '120')))
     if store is None:
