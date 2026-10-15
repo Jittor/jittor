@@ -131,3 +131,28 @@ Unversioned evidence lives under `$JITTOR_LAB_ROOT/_state/ecosystem-verl-nightly
 The final `manifest.json` seals delivery evidence. Historical `73333a677` CPU/CUDA scorecards
 remain unchanged. This new CPU maintained run is not relabeled as a new common scorecard,
 CUDA run, whole-library support, performance result or an actual GitHub schedule execution.
+
+## Central integration review (2026-10-16)
+
+The integration owner reviewed the workflow, provisioner, maintained harness and
+strict per-prefix identity changes, then integrated them at `902e733ed`. Original
+setup and measurement remain `d80422c89` and `302900315`; this integration does not
+relabel those executions. Independent replay without importing Jittor rechecked
+**72 complete tensor pairs**, all eight phase seals and both actual installed
+source bindings. All **2882 original Git blobs**, including symlink target text,
+match the frozen measurement snapshot. The complete delivery seal matches all
+**149 files / 20273226 bytes**, manifest SHA256
+`284bab3ec2aafec0d5bfcfd82d86c50d3723385d11f8f106f464dcb84d19d0d7`.
+All three actual candidate, oracle and controller environments also passed an
+independent `pip check` after delivery.
+
+The integrated main tree passes **74 focused host contracts**, core **322 passed /
+42 skipped / one existing expected failure**, and complete structure plus compat
+structure **1622 passed / six skipped** (208.99 s). The six actual structure skips
+include two interpreter installation-resolution checks; they are not recast as
+successful installed-package checks. Changed-Python Ruff, layout, generated
+manifest and diff checks pass. Verification scripts, raw rechecks and terminal
+logs are unversioned under
+`$JITTOR_LAB_ROOT/_state/verl-nightly-root-integration-13a/20261016/`.
+No old numerical packet or delivery seal was modified. All full-trainer, hosted
+schedule, new-CUDA, shared-scorecard and performance boundaries above remain.
