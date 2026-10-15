@@ -1,11 +1,13 @@
 """Real-file negative contracts for the PEFT measurement/provenance gate."""
 
+import ast
 import hashlib
 import importlib.util
 import json
 import os
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import types
 import unittest
@@ -14,7 +16,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'agent/skills/torch-compat-repo-runbook/scripts'))
-from _peft_scorecard import compare_arrays, installed_payload  # noqa: E402
+from _peft_scorecard import compare_arrays, installed_payload, source_files  # noqa: E402
 
 spec = importlib.util.spec_from_file_location('peft_gate', ROOT / 'tools/run_peft_gate.py')
 gate = importlib.util.module_from_spec(spec)
@@ -123,6 +125,79 @@ class TestPEFTNumerics(unittest.TestCase):
                 self.assertNotEqual(cpu[name], '/parent-home')
             self.assertEqual(oracle['PYTHONPATH'], '')
             self.assertEqual(cpu['JITTOR_TORCH_KEEP_HOME'], '1')
+
+
+    def test_directory_symlink_and_real_owner_bytes_are_both_bound(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            link = root / 'python/jittor/compat'
+            target = root / 'compat/torch/runtime.py'
+            link.parent.mkdir(parents=True)
+            target.parent.mkdir(parents=True)
+            target.write_text('real owner version one')
+            try:
+                link.symlink_to('../../compat', target_is_directory=True)
+            except OSError as error:
+                self.skipTest('Host cannot create directory symlinks: ' + str(error))
+            names = ['noxfile.py', 'tools/run_peft_gate.py',
+                     'agent/skills/torch-compat-repo-runbook/scripts/_peft_scorecard.py',
+                     'agent/skills/torch-compat-repo-runbook/scripts/collect_peft_scorecards.py',
+                     'agent/skills/torch-compat-repo-runbook/scripts/training_probe.py',
+                     'compat/tests/torch/_ecosystem_runner.py', 'compat/tests/torch/_ecosystem_cases.py']
+            for name in names:
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('source fixture')
+            subprocess.run(['git', 'init', '-q', str(root)], check=True)
+            subprocess.run(['git', '-C', str(root), 'add', 'python', 'compat'], check=True)
+            first = source_files(root)
+            self.assertEqual(first['python/jittor/compat'], hashlib.sha256(b'../../compat').hexdigest())
+            self.assertEqual(first['compat/torch/runtime.py'], hashlib.sha256(target.read_bytes()).hexdigest())
+            target.write_text('real owner version two')
+            second = source_files(root)
+            self.assertNotEqual(first['compat/torch/runtime.py'], second['compat/torch/runtime.py'])
+            self.assertEqual(first['python/jittor/compat'], second['python/jittor/compat'])
+
+    def test_nox_runs_full_protocol_and_preserves_explicit_provider(self):
+        tree = ast.parse((ROOT / 'noxfile.py').read_text())
+        function = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                        and node.name == 'ecosystem_peft')
+        function.decorator_list = []
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            calls = []
+            class Session:
+                posargs = ['--output', str(root / 'new-output')]
+                def error(self, message):
+                    raise ValueError(message)
+                def run(self, *args, **kwargs):
+                    calls.append((args, kwargs))
+            namespace = {'os': os, 'Path': Path, 'REPO_ROOT': ROOT,
+                         '_session_env': lambda *args: (root, {}),
+                         '_hardware_python': lambda: sys.executable,
+                         '_set_hardware_python_config': lambda *args: None}
+            exec(compile(ast.Module(body=[function], type_ignores=[]), 'noxfile.py', 'exec'), namespace)
+            values = {'REAL_TORCH_PYTHON': sys.executable, 'JITTOR_TEST_DEVICES': 'cuda',
+                      'CUDA_VISIBLE_DEVICES': 'GPU-test', 'JT_BUILD_NVCC_PATH': '/real/user/nvcc',
+                      'JITTOR_CUDA_WHEEL_STRICT': '1'}
+            for repo in ('PEFT', 'TRANSFORMERS'):
+                values['JITTOR_' + repo + '_CHECKOUT'] = str(root)
+                wheel = root / (repo + '.whl')
+                wheel.touch()
+                values['JITTOR_' + repo + '_WHEEL'] = str(wheel)
+            with patch.dict(os.environ, values):
+                namespace['ecosystem_peft'](Session())
+                command, options = calls[-1]
+                self.assertIn(str(ROOT / 'tools/run_peft_gate.py'), command)
+                self.assertNotIn('--preflight', command)
+                self.assertNotIn('--worker', command)
+                self.assertEqual(options['env']['JITTOR_CUDA_WHEEL_STRICT'], '1')
+                self.assertEqual(options['env']['JT_BUILD_NVCC_PATH'], '/real/user/nvcc')
+                for flag in ('--preflight', '--worker', '--phase'):
+                    session = Session()
+                    session.posargs = [flag, 'base']
+                    with self.assertRaisesRegex(ValueError, 'all original L3 phases'):
+                        namespace['ecosystem_peft'](session)
 
 
 if __name__ == '__main__':

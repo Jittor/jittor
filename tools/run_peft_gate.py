@@ -203,6 +203,7 @@ def main():
     parser.add_argument('--device', choices=('cpu', 'cuda'), required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--cache-root', type=Path)
+    parser.add_argument('--preflight', action='store_true', help='Run only the two actual base workers; never an L3 gate')
     parser.add_argument('--worker', action='store_true')
     parser.add_argument('--runtime', choices=('torch', 'jittor'))
     parser.add_argument('--phase', choices=('base', 'perturb', 'train'))
@@ -221,12 +222,14 @@ def main():
     sources = source_descriptor({'peft': args.peft_checkout, 'transformers': args.transformers_checkout},
                                 {'peft': args.peft_wheel, 'transformers': args.transformers_wheel})
     baseline = git(ROOT, 'rev-parse', 'HEAD')
-    execution = {'baseline': baseline, 'device': args.device, 'sources': sources, 'results': []}
+    execution = {'baseline': baseline, 'device': args.device, 'sources': sources, 'results': [],
+                 'scope': 'preflight-base-only' if args.preflight else 'complete-original-L3'}
     common = []
     for repo in ('peft', 'transformers'):
         common.extend(('--' + repo + '-checkout', str(getattr(args, repo + '_checkout')),
                        '--' + repo + '-wheel', str(getattr(args, repo + '_wheel'))))
-    for phase, seed in (('base', 0), ('perturb', 7), ('train', 0)):
+    phases = (('base', 0),) if args.preflight else (('base', 0), ('perturb', 7), ('train', 0))
+    for phase, seed in phases:
         for runtime, python in (('torch', args.oracle_python), ('jittor', args.candidate_python)):
             output = args.output / (phase + '.' + runtime + '.npz')
             command = [str(python), str(Path(__file__).resolve()), '--worker', '--runtime', runtime,

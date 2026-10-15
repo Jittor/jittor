@@ -6,6 +6,7 @@ This adds no model/optimizer mathematics and never upgrades historical raw files
 from email.parser import BytesParser
 import hashlib
 import importlib.metadata as md
+import os
 from pathlib import Path
 import subprocess
 import zipfile
@@ -107,12 +108,14 @@ def installed_payload(source, module):
 
 def source_files(root):
     root = Path(root)
-    paths = git(root, 'ls-files', 'python', 'compat/torch', 'src', 'backends').splitlines()
-    paths += ['tools/run_peft_gate.py',
+    paths = git(root, 'ls-files', 'python', 'compat', 'src', 'backends').splitlines()
+    paths += ['noxfile.py', 'tools/run_peft_gate.py',
+              'agent/skills/torch-compat-repo-runbook/scripts/collect_peft_scorecards.py',
               'agent/skills/torch-compat-repo-runbook/scripts/_peft_scorecard.py',
               'agent/skills/torch-compat-repo-runbook/scripts/training_probe.py',
               'compat/tests/torch/_ecosystem_runner.py', 'compat/tests/torch/_ecosystem_cases.py']
-    return {p: digest(root / p) for p in sorted(set(paths))}
+    return {p: (hashlib.sha256(os.fsencode(os.readlink(root / p))).hexdigest()
+                if (root / p).is_symlink() else digest(root / p)) for p in sorted(set(paths))}
 
 
 def validate_binding(value, sources, baseline, runtime, device):
