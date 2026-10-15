@@ -99,3 +99,19 @@ def test_reservation_rounding_and_invalid_increment_are_atomic():
     with pytest.raises((ValueError, RuntimeError), match="Invalid CUDA Philox"):
         jt.compile_extern.curand.curand_reserve_philox(-1)
     np.testing.assert_array_equal(torch.cuda.get_rng_state().numpy(), before)
+
+
+@pytest.mark.parametrize("seed", [-1, 1 << 31, 1 << 63, (1 << 64) - 1])
+def test_extension_full_width_seed_and_checkpoint(seed):
+    with forbid_backend_fallbacks():
+        torch.manual_seed(seed)
+        normalized = seed & ((1 << 64) - 1)
+        assert _extension().reserve(5) == [normalized, 0]
+        assert _extension().reserve(0) == [normalized, 8]
+        _draw()
+        state = torch.cuda.get_rng_state()
+        expected = _draw()
+        torch.cuda.manual_seed(3)
+        torch.cuda.set_rng_state(state)
+        assert torch.cuda.initial_seed() == normalized
+        np.testing.assert_array_equal(_draw(), expected)

@@ -93,7 +93,7 @@ class TestCoreMiscOwner(unittest.TestCase):
         try:
             torch.set_default_dtype(torch.float64)
             self.assertIs(torch.get_default_dtype(), torch.float64)
-            self.assertIs(torch.manual_seed(1729), torch)
+            self.assertIs(torch.manual_seed(1729), torch.default_generator)
             self.assertEqual(torch.initial_seed(), 1729)
             saved = torch.get_rng_state()
             self.assertEqual(saved.dtype, torch.uint8)

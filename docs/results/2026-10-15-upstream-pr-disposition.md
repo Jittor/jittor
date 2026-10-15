@@ -97,11 +97,12 @@ NumPy PR 中的 `instance_norm`/`layer_norm` 中心化方差和低精度 FP32 �
 - cgq 已实现 `get_cpu_rng_state`/`set_cpu_rng_state` 的完整 CPU engine 快照，
   **不能根据其过期的 `_MISC_DETAILS`「seed-only」描述断言运行时只恢复 seed**。
   它新增的 `set_cpu_seed(uint64)`、64 位 seed 范围检查和 lazy work flush 应逐项
-  评估为待保留行为。当前 compat `_manual_seed` 仍调用 int 参数的 `jt.set_seed`，
-  并非已经接上 uint64 `rng_manual_seed`；本次只读源码核查未新增这个边界的运行时
-  复现或修复。显式 Generator 则已有 native CPU engine 与 CUDA Philox owner，但 compat
-  `_draw_from_generator` 的私有 stream 路径仍在 NumPy 中抽样；不能仅看输出被放到
-  CUDA 就授予该路径 device-native 支持。移植前需按入口验证并复用现有数学。最新树已有 `jt.core.rng_state/set_rng_state/rng_manual_seed`
+  评估为待保留行为。在本次原始只读审计的 `4a4a480e6` 基线上，compat
+  `_manual_seed` 仍调用 int 参数的 `jt.set_seed`，显式 Generator 的私有路径也仍在
+  NumPy 中抽样；这些是当时确实存在的缺口。后续独立复现并修复了完整位宽 seed、
+  native handle 工厂传递及双设备 checkpoint seed 所有权，见
+  [原生 RNG 验收](2026-10-15-rng-native-generator-contract.md)。重新整理时应保留该修复，
+  不再恢复 NumPy 抽样路径；不同 PRNG 不承诺跨框架样本逐位一致。最新树已有 `jt.core.rng_state/set_rng_state/rng_manual_seed`
   及统一 runtime owner，重新整理时将行为落到该 owner，避免恢复旧全局 `eng`
   和 `current_offset`。cgq 的 `JITTOR_CPU_RNG_V2` 与主树 `JITTOR_RNG_1` 是不同的
   opaque 格式，不能直接互读，也不能转为 seed-only 来消除格式冲突。

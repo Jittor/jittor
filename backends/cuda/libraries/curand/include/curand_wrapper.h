@@ -30,10 +30,10 @@ void curand_advance(int device, int64 cost);
 // @pyjt(curand_generator_offset)
 int64 curand_generator_offset(int device);
 // @pyjt(curand_generator_seed)
-int curand_generator_seed();
+uint64 curand_generator_seed(int device=-1);
 // Seed *and* position, which is what a resume needs: seeding alone rewinds.
 // @pyjt(curand_restore_state)
-void curand_restore_state(int device, int seed, int64 offset);
+void curand_restore_state(int device, uint64 seed, int64 offset);
 
 // Reserve Philox positions for a CUDA extension from the checkpointed device
 // cursor. The host cuRAND generator is moved to the same resulting cursor, so

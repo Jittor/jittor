@@ -68,6 +68,7 @@
 2026-10-15-tanh-fsdp-bfloat16
 2026-10-15-trellis-model-validation
 2026-10-15-pytree-transformers-513
+2026-10-15-rng-native-generator-contract
 ```
 
 ## 按主题索引
@@ -120,6 +121,7 @@
 | [tanh 反向与原生 FSDP BF16 对拍](2026-10-15-tanh-fsdp-bfloat16.md) | 修复低精度保存输出求导；固定双卡 BF16 的 80 个参数梯度逐位对齐，续训 368 数组逐位一致 | 2026-10-15 |
 | [TRELLIS.2 真实模型训练对拍](2026-10-15-trellis-model-validation.md) | 三个真实模型的 CPU/CUDA 三步训练、全部梯度和独立扰动通过；统一 models 广度各 3/9 | 2026-10-15 |
 | [自定义 pytree 与 Transformers 5.13.0](2026-10-15-pytree-transformers-513.md) | 自定义节点与键路径修复；固定 GPT2 的 CPU/CUDA 三步、全部参数和输入梯度通过 | 2026-10-15 |
+| [原生 RNG 与完整位宽 seed](2026-10-15-rng-native-generator-contract.md) | CPU/CUDA 原生流、64 位 seed、显式生成器及双设备 checkpoint 恢复通过；不承诺跨框架样本逐位一致 | 2026-10-15 |
 | [原生 TP 线性层训练与恢复](2026-10-15-native-tensor-parallel.md) | CPU 与双卡 NCCL 的 FP32 等分线性层、完整梯度和固定 world 续训已验；bf16 与多机待验 | 2026-10-15 |
 | [原生 FSDP 分片与新进程恢复](2026-10-15-native-fsdp.md) | 原生双卡训练与严格恢复已验；bf16 小梯度误差和旧兼容失败单列 | 2026-10-15 |
 | [CUDA BF16 Linear 偏置舍入](2026-10-15-bfloat16-linear-bias-accumulation.md) | 真实 BF16 GEMM 保留 FP32 累加到偏置之后；CPU 既有路径与二阶梯度回归已验 | 2026-10-15 |

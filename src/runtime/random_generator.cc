@@ -67,6 +67,8 @@ void RandomGeneratorState::set_state(const string& s) {
     USER_CHECK(!iss.fail() && new_offset >= 0)
         << "Generator.set_state(): malformed state string "
         "(expected the byte string previously returned by get_state()).";
+    iss >> std::ws;
+    USER_CHECK(iss.eof()) << "Generator.set_state(): unexpected trailing state bytes";
     USER_CHECK(new_device == device_id)
         << "Generator.set_state(): the state belongs to"
         << (new_device < 0 ? string("cpu") : "cuda:" + std::to_string(new_device))

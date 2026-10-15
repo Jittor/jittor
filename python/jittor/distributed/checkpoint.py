@@ -185,8 +185,8 @@ def _rng_snapshot():
               "cpu": jt.core.rng_state("cpu"), "cuda": []}
     if jt.flags.use_cuda:
         backend = jt.compile_extern.get_library("curand", load=True)
-        seed = int(backend.curand_generator_seed())
-        result["cuda"] = [(seed, int(backend.curand_generator_offset(device)))
+        result["cuda"] = [(int(backend.curand_generator_seed(device)),
+                           int(backend.curand_generator_offset(device)))
                           for device in range(int(jt.get_device_count()))]
     return result
 
@@ -203,7 +203,11 @@ def _restore_rng(state):
             raise ValueError("checkpoint CUDA RNG device count/backend mismatch")
         backend = jt.compile_extern.get_library("curand")
         for device, (seed, offset) in enumerate(state["cuda"]):
-            backend.curand_restore_state(device, seed, offset)
+            # Earlier checkpoints used the signed seed returned by the legacy
+            # int binding. Preserve those bits without accepting overflow.
+            if not -(1 << 63) <= seed < (1 << 64):
+                raise ValueError("checkpoint CUDA RNG seed is out of range")
+            backend.curand_restore_state(device, seed & ((1 << 64) - 1), offset)
     random.setstate(state["python"])
     numpy_state = state["numpy"]
     if isinstance(numpy_state[1], jt.Var):

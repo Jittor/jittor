@@ -12,6 +12,7 @@
 #include "runtime/init.h"
 #include "runtime/async_exec.h"
 #include "runtime/rng_state.h"
+#include "runtime/executor_entry.h"
 #include "ops/op_register.h"
 #include "ops/composite/op_registration.h"
 #include "ops/composite/tape_op.h"
@@ -118,18 +119,31 @@ void init() {
     LOGv << "sizeof(Op)" << sizeof(Op);
 }
 
-void set_seed(int seed) {
-    // Random operators of a batch on the worker read the generator.
-    async_exec_wait();
+static void apply_global_seed(uint64 seed) {
     auto& rng = runtime_rng_state();
-    rng.global_seed = static_cast<uint64>(seed);
-    rng.host_seed = rng.global_seed;
+    rng.global_seed = seed;
+    rng.host_seed = seed;
     rng.host_engine.seed(seed);
-    // Each device stream restarts from the new global seed; one that was
-    // seeded on its own gets the global seed back, as torch's does.
     rng.acl_streams.clear();
+    // Legacy callbacks retain their ABI. Seed-aware backends read the full
+    // value from the shared owner; callbacks such as dropout reset ignore it.
     for (auto cb : callbacks)
-        cb(seed);
+        cb(static_cast<int>(seed));
+}
+
+void set_seed(int seed) {
+    async_exec_wait();
+    apply_global_seed(static_cast<uint64>(seed));
+}
+
+EXTERN_LIB void sync_all(bool device_sync);
+
+void set_seed64(uint64 seed) {
+    async_exec_wait();
+    ExecutorEntryScope lock;
+    // A lazily issued draw belongs to the stream before this reseed.
+    sync_all(true);
+    apply_global_seed(seed);
 }
 
 int get_seed() {

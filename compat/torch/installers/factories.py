@@ -65,6 +65,10 @@ def _invoke_factory(name, args, kwargs):
         raise RuntimeError("torch.%s is not installed" % name)
     from ..frontend import tensor_frontend
     like = args[0] if args and (name.endswith("_like") or name in _TENSOR_FIRST_ARGUMENT) else None
+    if name == "normal":
+        mean = kwargs.get("mean", args[0] if args else None)
+        std = kwargs.get("std", args[1] if len(args) > 1 else None)
+        like = mean if isinstance(mean, jt.Var) else std if isinstance(std, jt.Var) else None
     with tensor_frontend(context.target_namespace.Var, device=kwargs.get("device"), like=like):
         return implementation(*args, **kwargs)
 
@@ -346,25 +350,6 @@ def _linspace_adapter(original, *args, dtype=None, **kwargs):
     return r
 
 
-def _seed_from(gen):
-    if gen is None:
-        return
-    s = None
-    for attr in ("initial_seed", "seed"):
-        fn = getattr(gen, attr, None)
-        if callable(fn):
-            try:
-                s = fn()
-                break
-            except EXPECTED as exc:
-                swallowed("torch/installers/factories.py _seed_from: s = fn()", exc)
-                s = None
-    if s is None:
-        s = getattr(gen, "_seed", None)
-    if s is not None and hasattr(jt, "set_global_seed"):
-        jt.set_global_seed(int(s))
-
-
 #: What a seeded draw of an integer factory must come back as. torch's own
 #: default is int64, but these have to match what the *same call without a
 #: generator* returns -- jittor's randint is int32 -- because a generator picks
@@ -400,63 +385,85 @@ def _shape_tuple(value):
     return None
 
 
-def _draw_from_generator(name, generator, args, kwargs):
-    """Draw from the generator's own stream, or None if this call is not covered.
-
-    `Generator.manual_seed` builds this stream, so a request's latents are
-    reproducible and -- the part that matters for TP -- identical in every rank
-    that seeds the same generator, no matter what that rank did before.
-
-    Covering a call is all-or-nothing: what comes back has to be the tensor the
-    same call returns *without* a generator -- same shape, same dtype, same
-    requires_grad -- because a generator chooses which stream a draw comes from
-    and nothing else. Arguments this cannot read that way return None, and the
-    original factory runs.
-    """
-    import numpy as _np
-    rng = getattr(generator, "_rng", None)
-    if rng is None:
+def _native_generator(generator):
+    """Validate placement before a native stream reserves or draws anything."""
+    if generator is None:
         return None
+    context = get_install_context(jt)
+    default = getattr(context.target_namespace, "default_generator", None)
+    native = getattr(generator, "_native", None)
+    if generator is not default and not isinstance(native, jt.Generator):
+        raise TypeError("generator must be a torch.Generator")
+    placement = jt.core._current_tensor_placement()
+    backend, ordinal = placement if placement is not None else (0, 0)
+    selected = str(getattr(native, "device", "cpu"))
+    kind = selected.split(":", 1)[0]
+    expected = "cpu" if backend == 0 else "cuda" if backend == 1 else "unsupported"
+    if kind != expected:
+        raise RuntimeError("Expected a '%s' device type for generator but found '%s'" % (expected, kind))
+    if kind == "cuda":
+        index = int(selected.split(":", 1)[1])
+        if index != ordinal:
+            raise RuntimeError("Generator and output must use the same CUDA device")
+    return native
+
+
+def _draw_from_generator(name, generator, args, kwargs):
+    """Adapt signatures to existing native samplers, retaining their PRNG owner."""
+    native = _native_generator(generator)
+    if native is None:
+        return None
+    if kwargs.get("out") is not None:
+        raise NotImplementedError("explicit-generator factories do not support out yet")
     src = None
     values_args = ()
     if name.endswith("_like"):
         src = args[0] if args else kwargs.get("input")
-        if src is None or not hasattr(src, "shape"):
-            return None
+        shape = tuple(int(s) for s in src.shape)
+    elif name in ("multinomial", "bernoulli"):
+        src = args[0] if args else kwargs.get("input")
         shape = tuple(int(s) for s in src.shape)
     elif name == "randperm":
         n = args[0] if args else kwargs.get("n")
         if not _is_dim(n):
-            return None
+            raise TypeError("randperm expects an integer n")
         shape = (int(n),)
     elif name in ("normal", "randint"):
-        # the value arguments come first -- normal(mean, std, size) and
-        # randint([low, ] high, size) -- and both also take size= by keyword.
         values_args = list(args)
         size = kwargs.get("size")
-        if size is None and values_args:
-            size = values_args.pop()
-        shape = _shape_tuple(size)
+        if name == "normal":
+            mean = kwargs.get("mean", values_args[0] if values_args else 0.0)
+            std = kwargs.get("std", values_args[1] if len(values_args) > 1 else 1.0)
+            src = mean if isinstance(mean, jt.Var) else std if isinstance(std, jt.Var) else None
+            if size is None and len(values_args) > 2:
+                size = values_args[2]
+            shape = tuple(int(s) for s in src.shape) if src is not None and size is None else _shape_tuple(size)
+        else:
+            if size is None and values_args:
+                size = values_args.pop()
+            shape = _shape_tuple(size)
     else:
-        shape = None
-        if len(args) == 1:
-            shape = _shape_tuple(args[0])
+        shape = _shape_tuple(args[0]) if len(args) == 1 else None
         if shape is None and args and all(_is_dim(a) for a in args):
             shape = tuple(int(a) for a in args)
         if shape is None and not args:
             shape = _shape_tuple(kwargs.get("size"))
     if shape is None:
-        return None
-    if name in ("randn", "randn_like"):
-        values = rng.standard_normal(shape)
-    elif name in ("rand", "rand_like"):
-        values = rng.random(shape)
+        raise TypeError("%s requires a valid size for an explicit generator" % name)
+    dtype = kwargs.get("dtype")
+    if dtype is not None:
+        cast_to = _dtype_to_str(dtype)
+    elif src is not None:
+        cast_to = _dtype_to_str(src.dtype)
+    elif name in _INTEGER_DRAWS:
+        cast_to = _INTEGER_DRAWS[name]
+    else:
+        cast_to = _dtype_to_str(get_install_context(jt).target_namespace.get_default_dtype())
+    if name in ("randn", "randn_like", "rand", "rand_like"):
+        distribution = "normal" if name.startswith("randn") else "uniform"
+        t = jt.random(shape, cast_to, distribution, generator=native)
     elif name == "normal":
-        mean = kwargs.get("mean", values_args[0] if len(values_args) > 0 else 0.0)
-        std = kwargs.get("std", values_args[1] if len(values_args) > 1 else 1.0)
-        if not (_is_number(mean) and _is_number(std)):
-            return None     # normal(mean_tensor, std_tensor) draws elementwise
-        values = rng.normal(float(mean), float(std), size=shape)
+        t = jt.normal(mean, std, size=shape, dtype=cast_to, generator=native)
     elif name == "randint":
         if "high" in kwargs:
             low = kwargs.get("low", values_args[0] if values_args else 0)
@@ -466,33 +473,18 @@ def _draw_from_generator(name, generator, args, kwargs):
         elif len(values_args) == 1:
             low, high = kwargs.get("low", 0), values_args[0]
         else:
-            return None
-        if not (_is_dim(low) and _is_dim(high)):
-            return None
-        values = rng.integers(int(low), int(high), size=shape)
+            raise TypeError("randint requires high")
+        t = jt.randint(low, high, shape, dtype=cast_to, generator=native)
     elif name == "randperm":
-        values = rng.permutation(int(shape[0]))
+        t = jt.randperm(shape[0], dtype=cast_to, generator=native)
+    elif name == "multinomial":
+        count = args[1] if len(args) > 1 else kwargs.get("num_samples")
+        replacement = args[2] if len(args) > 2 else kwargs.get("replacement", False)
+        t = jt.multinomial(src, count, replacement, generator=native)
+    elif name == "bernoulli":
+        t = jt.bernoulli(src, generator=native)
     else:
-        return None
-    # dtype: the caller's, else the one the plain call would have produced --
-    # the source's for *_like (jittor promotes a non-float source to float32),
-    # the integer width for randperm/randint, the default dtype otherwise.
-    dtype = kwargs.get("dtype")
-    if dtype is not None:
-        cast_to = _dtype_to_str(dtype)
-    elif name.endswith("_like"):
-        like = _dtype_to_str(src.dtype)
-        cast_to = like if "float" in str(like) else "float32"
-    elif name in _INTEGER_DRAWS:
-        cast_to = _INTEGER_DRAWS[name]
-    else:
-        cast_to = _dtype_to_str(get_install_context(jt).target_namespace.get_default_dtype())
-    integral = name in _INTEGER_DRAWS
-    t = jt.array(_np.ascontiguousarray(
-        values, dtype=_np.int64 if integral else _np.float32))
-    if tuple(t.shape) != tuple(shape):
-        t = t.reshape(shape)
-    t = t.cast(cast_to)
+        raise NotImplementedError("%s does not support an explicit native generator" % name)
     t._jittor_torch_ext_mutable = True
     requires_grad = bool(kwargs.get("requires_grad", False))
     t.requires_grad_(requires_grad)
@@ -502,11 +494,10 @@ def _draw_from_generator(name, generator, args, kwargs):
 
 
 def _random_adapter(original, *args, generator=None, _name=None, **kwargs):
-    drawn = _draw_from_generator(_name, generator, args, kwargs) if _name else None
-    if drawn is not None:
-        return drawn
-    _seed_from(generator)
-    return original(*args, **kwargs)
+    if generator is None:
+        return original(*args, **kwargs)
+    drawn = _draw_from_generator(_name, generator, args, kwargs)
+    return original(*args, **kwargs) if drawn is None else drawn
 
 
 def _install_random_and_linspace(g):

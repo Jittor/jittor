@@ -392,21 +392,32 @@ class _RandomModule(_types_random.ModuleType):
         raise TypeError("torch.random is not callable")
 
 
+def _normalize_seed(value, *, integer=False):
+    """Torch's signed-input/unsigned-state seed domain, before any mutation."""
+    if integer and (not isinstance(value, int) or isinstance(value, bool)):
+        if isinstance(value, (bool, float, str)):
+            raise RuntimeError("manual_seed expected a long, but got %s" % type(value).__name__)
+        raise TypeError("an integer is required")
+    value = int(value)
+    if value < -(1 << 63) or value >= (1 << 64):
+        raise ValueError("Overflow when unpacking long long")
+    return value & ((1 << 64) - 1)
+
+
 def _manual_seed(s):
     ctx = _misc_context()
-    g = ctx.jittor_module
-    s = int(s)
-    ctx.state["core_misc"]["seed"] = s
-    # torch.manual_seed sets the Torch RNG to the requested value in each
-    # process; it does not offset distributed ranks or reseed NumPy/Python.
-    jt.set_seed(s)
-    return g
+    value = _normalize_seed(s)
+    # One physical owner resets CPU, accelerator defaults and callbacks. This
+    # never calls the convenience API that also reseeds Python and NumPy.
+    jt.core._set_seed64(value)
+    ctx.state["core_misc"]["seed"] = value
+    return ctx.target_namespace.default_generator
 
 
 def _torch_seed():
     import secrets
 
-    value = secrets.randbits(31)
+    value = secrets.randbits(64)
     _manual_seed(value)
     return value
 
@@ -914,7 +925,7 @@ def _result_type_info(x):
 
 
 def initial_seed():
-    return int(_misc_context().state["core_misc"].get("seed", 0))
+    return int(jt.core.rng_initial_seed("cpu"))
 
 
 def is_tensor(value):

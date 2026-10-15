@@ -25,6 +25,10 @@ Sets the seed of jittor random number generator. Also see @jittor.set_global_see
 // @pyjt(set_seed, seed)
 void set_seed(int seed);
 
+// Full-width frontend entry; the legacy native int API retains its signature.
+// @pyjt(_set_seed64)
+void set_seed64(uint64 seed);
+
 /**
 Returns the seed of jittor random number generator.
  */

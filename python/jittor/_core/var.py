@@ -1516,7 +1516,7 @@ def randn_like(x, dtype=None) -> Var:
     with device_scope_like(x):
         return jt.random(x.shape, dtype, "normal")
 
-def randint(low, high=None, shape=(1,), dtype="int32") -> Var:
+def randint(low, high=None, shape=(1,), dtype="int32", generator=None) -> Var:
     ''' samples random integers from a uniform distribution on the interval [low, high).
 
     :param low: lowest intergers to be drawn from the distribution, defaults to 0.
@@ -1547,7 +1547,7 @@ def randint(low, high=None, shape=(1,), dtype="int32") -> Var:
     for dim in shape:
         if dim < 0:
             raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
-    v = (jt.random(shape) * (high - low) + low).clamp(low, high-0.5)
+    v = (jt.random(shape, generator=generator) * (high - low) + low).clamp(low, high-0.5)
     v = jt.floor_int(v)
     return v.astype(_jittor_dtype_name(dtype))
 
@@ -1577,7 +1577,7 @@ def randint_like(x, low, high=None) -> Var:
     with device_scope_like(x):
         return randint(low, high, x.shape, x.dtype)
 
-def normal(mean, std, size=None, dtype="float32") -> Var:
+def normal(mean, std, size=None, dtype="float32", generator=None) -> Var:
     ''' samples random values from a normal distribution.
 
     :param mean: means of the normal distributions.
@@ -1614,7 +1614,7 @@ def normal(mean, std, size=None, dtype="float32") -> Var:
         else:
             if isinstance(mean, Var): size = mean.shape
             if isinstance(std, Var): size = std.shape
-    return jt.init.gauss(size, dtype, mean, std)
+    return jt.init.gauss(size, dtype, mean, std, generator=generator)
 
 def attrs(var):
     return {
