@@ -172,19 +172,27 @@ def unpack_pinned_wheel(wheel, site):
         archive.extractall(site)
 
 
-def runtime_tools():
-    selected = {'pytest', 'pytest-timeout', 'pytest-xdist', 'scipy', 'wheel'}
+def canonical_tools(selected):
     pins = [line.strip() for line in (ROOT / 'requirements/dev-tools.txt').read_text().splitlines()
             if line.split('==')[0].strip().lower() in selected]
     require(len(pins) == len(selected), 'Missing canonical runtime test pins')
     return pins
 
 
-def provision(library, state, python, source_cache=None):
+def runtime_tools():
+    return canonical_tools({'pytest', 'pytest-timeout', 'pytest-xdist', 'scipy', 'wheel'})
+
+
+def controller_tools():
+    return canonical_tools({'nox', 'build', 'setuptools', 'wheel'})
+
+
+def provision(library, state, python, source_cache=None, wheel_cache=None):
     require(sys.version_info[:2] == (3, 11), 'Nightly provisioning requires Python 3.11')
     require(not (state / 'provision.json').exists(), 'Use a new state root after successful provisioning')
     env = environment(state)
     commands = Commands(state, env)
+    cached = ['--find-links', wheel_cache] if wheel_cache else []
     wheels = state / 'wheels'
     wheels.mkdir(exist_ok=True)
     candidate, oracle, controller = (state / side / 'bin/python' for side in ('candidate', 'oracle', 'controller'))
@@ -205,11 +213,11 @@ def provision(library, state, python, source_cache=None):
     # Both private runtimes receive complete real distribution metadata. Only
     # the candidate later activates the official Jittor Torch shim.
     commands.run(oracle, '-m', 'pip', 'download', '--index-url', 'https://download.pytorch.org/whl/cpu',
-                 '--only-binary=:all:', '--no-deps', '--dest', wheels, 'torch==' + TORCH)
+                 '--only-binary=:all:', '--no-deps', '--dest', wheels, *cached, 'torch==' + TORCH)
     tool_wheels = state / 'tool-wheels'
     tool_wheels.mkdir(exist_ok=True)
     commands.run(controller, '-m', 'pip', 'download', '--index-url', 'https://pypi.org/simple',
-                 '--only-binary=:all:', '--dest', tool_wheels, '-r', ROOT / 'requirements/dev-tools.txt')
+                 '--only-binary=:all:', '--dest', tool_wheels, *cached, *controller_tools())
     commands.run(controller, '-m', 'pip', 'install', '--no-index', '--no-deps', *sorted(tool_wheels.glob('*.whl')))
     swift_source, swift_wheel = None, None
     if library == 'swift':
@@ -232,10 +240,11 @@ def provision(library, state, python, source_cache=None):
     # participate in resolution; --no-deps is only used for the resulting
     # complete wheel closure, and pip check below must pass in every venv.
     commands.run(oracle, '-m', 'pip', 'install', '--index-url', 'https://pypi.org/simple',
-                 RUNTIME_SETUPTOOLS, 'wheel==0.45.1')
+                 *cached, RUNTIME_SETUPTOOLS, 'wheel==0.45.1')
     roots = list(COMMON) + (list(SWIFT_DEPS) if library == 'swift' else [])
     commands.run(oracle, '-m', 'pip', 'wheel', '--index-url', 'https://pypi.org/simple',
                  '--no-build-isolation', '--wheel-dir', wheels, '--find-links', wheels,
+                 *cached,
                  *pinned.values(), *([swift_wheel] if swift_wheel else []),
                  'torch==' + TORCH, RUNTIME_SETUPTOOLS, *runtime_tools(), *roots)
     install_wheels(commands, candidate, oracle, wheels, preserved=tuple(pinned.values()))
@@ -273,6 +282,7 @@ def provision(library, state, python, source_cache=None):
         'session': 'ecosystem_' + library, 'oracle_torch': TORCH,
         'upstream_transport': 'read-only-local-git-cache' if source_cache else 'official-remote',
         'source_cache': str(source_cache) if source_cache else None,
+        'wheel_cache': str(wheel_cache) if wheel_cache else None,
         'environment': {key: value for key, value in env.items() if key.startswith(('JITTOR_', 'JT_'))
                         or key in ('HOME', 'TMPDIR', 'CUDA_VISIBLE_DEVICES', 'REAL_TORCH_PYTHON')}}
     (state / 'provision.json').write_text(json.dumps(manifest, indent=2) + '\n')
@@ -287,11 +297,14 @@ def main():
     parser.add_argument('--python', default=sys.executable, help='Healthy Python 3.11 for new private venvs')
     parser.add_argument('--source-cache', type=Path,
                         help='Optional read-only exact clean official Git checkouts for local replay')
+    parser.add_argument('--wheel-cache', type=Path,
+                        help='Optional read-only wheelhouse for replay; dependency resolution and checks remain required')
     parser.add_argument('--run', action='store_true', help='Run the complete maintained nox gate after provisioning')
     args = parser.parse_args()
     state = external(args.state_root)
     state.mkdir(parents=True, exist_ok=True)
-    commands, python = provision(args.library, state, args.python, args.source_cache)
+    commands, python = provision(args.library, state, args.python, args.source_cache,
+                                 external(args.wheel_cache) if args.wheel_cache else None)
     if args.run:
         require(not subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT, text=True).strip(),
                 'Formal nightly execution requires clean measured source')

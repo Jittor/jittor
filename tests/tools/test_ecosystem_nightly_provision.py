@@ -174,3 +174,7 @@ def test_runtime_uses_canonical_test_pins_without_conflicting_build_setuptools(p
     assert 'pytest==7.4.4' in pins and 'scipy==1.13.1' in pins
     assert provision.RUNTIME_SETUPTOOLS == 'setuptools==80.9.0'
     assert 'setuptools==83.0.0' in canonical
+    controller = provision.controller_tools()
+    assert len(controller) == 4 and 'setuptools==83.0.0' in controller
+    assert all(pin in canonical for pin in controller)
+    assert not any(pin.startswith(('mypy==', 'ruff==', 'asv==')) for pin in controller)
