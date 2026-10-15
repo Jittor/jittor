@@ -45,6 +45,41 @@ python -c "import jittor as jt; print('has_mpi', jt.compile_extern.has_mpi)"
 
 ## MPI：多进程真跑（最有价值的一档）
 
+### 独立 Torch 的通信与 storage 对拍
+
+[`collective_oracle.py`](collective_oracle.py) 在两个真实 rank 上执行同一组公开
+Torch API：BF16 原始位 broadcast/gather、uint8/FP32/BF16 SUM/MAX/MIN/PRODUCT、
+BF16 舍入及可微 SUM，并检查 Parameter/data/detach/view 的原位写回关系。
+`--runtime jittor` 先导入 native，再启用 facade；`--runtime torch` 要求独立 binary
+Torch，拒绝 shim。CPU 候选使用真实 MPI，参考使用 Gloo；CUDA 两端均使用 NCCL。
+这些 transport 必须分别报告，MPI 对拍不能授予 native Gloo 能力。
+
+先按上述 worktree/cache 规则串行预热两个候选 rank，再由任务独占的 rank 环境包装器
+启动；包装器分别设置 HOME、JITTOR_HOME、TMPDIR，并固定本 worktree 的 PYTHONPATH。
+每个 runtime/device 使用新的仓外目录，同一组的两个 rank 共享该目录与 bootstrap
+控制面。脚本先独占创建每 rank claim 文件，失败记录也不能覆盖。CPU MPI 示例：
+
+```bash
+mpirun -n 2 <private-rank-environment> <jittor-python> \
+  agent/skills/jittor-distributed-verification/collective_oracle.py \
+  --runtime jittor --device cpu --root "$JITTOR_LAB_ROOT/_state/collectives/<new-mpi-run>"
+```
+
+参考环境通过真正的两 rank launcher 设置 RANK/WORLD_SIZE/LOCAL_RANK，执行同一脚本的
+`--runtime torch`；CUDA 用两张已分配设备及 `--device cuda`。每 rank 输出 NPZ
+及 JSON 身份记录；逐项比较全部数值字段，metadata 分开核对。真实 residency 与候选
+fallback 增量零必须通过。该脚本只证明列出的通信契约，不证明 DeepSpeed 训练数值。
+
+CUDA 候选的正式入口使用公开 `jtrun`（`python -m jittor.distributed.launch` 是同一
+owner 的等价入口）。任务的 rank 包装器只负责按 launcher 给出的 `RANK` 选择独立
+缓存，rank、设备和 rendezvous 由 `jtrun` 提供；预热缓存索引不得伪装成分布式 rank。
+当前 `jtrun` 仅支持 NCCL/HCCL，CPU 的 `mpirun` 结果只验证保留的 MPI 后端，不能
+写成 CPU `jtrun` 已验收。私有双进程 launcher 的旧记录也不得重标为 `jtrun` 运行。
+
+原生 MPI 的分组/梯度与 dtype 回归位于
+`tests/backends/comm/mpi/test_mpi_bfloat16_groups.py`，要求实际 CPU 两 rank，
+包括逆序 group root、独立 communicator、BF16 reduce/mean 及非 SUM 的 autograd 拒绝。
+
 仓库里已有的入口模式：测试文件里放两个类，一个 `@unittest.skipIf(not jt.in_mpi, ...)`
 装真正的断言，另一个调 `run_mpi_test(N, "<name>")` 负责用 mpirun 把自己再拉起来。
 新测试要在 `tests/_helpers/distributed.py` 的 `_MIGRATED_TEST_PATHS` 里注册，否则

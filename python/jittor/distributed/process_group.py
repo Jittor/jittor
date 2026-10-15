@@ -214,6 +214,8 @@ class ProcessGroup:
              getattr(compile_extern, "nccl_ops", None)),
             ("hccl", getattr(compile_extern, "hccl_mod", None),
              getattr(compile_extern, "hccl_ops", None)),
+            ("mpi", getattr(compile_extern, "mpi", None),
+             getattr(compile_extern, "mpi_ops", None)),
         )
         for kind, module, ops in choices:
             create = getattr(
@@ -231,7 +233,7 @@ class ProcessGroup:
             return
         if self.size() > 1:
             raise NotImplementedError(
-                "Jittor process-group subgroups require NCCL or HCCL"
+                "Jittor process-group subgroups require NCCL, HCCL or MPI"
             )
 
     def _collective_backend(self):
@@ -270,23 +272,7 @@ class ProcessGroup:
             if operation in ("sum", "mean"):
                 result = ops.nccl_all_reduce(tensor, handle or 0)
                 return result / self.size() if operation == "mean" else result
-            if tensor.requires_grad:
-                raise NotImplementedError(
-                    "NCCL non-sum process-group reductions do not support autograd")
-            # The existing provider has only a SUM all-reduce kernel. Reuse
-            # its real group all-gather plus native elementwise reductions;
-            # this is a composite, not a fused NCCL MAX/MIN/PRODUCT operation.
-            gathered = ops.nccl_all_gather(tensor.reshape((-1,)), handle or 0)
-            gathered = gathered.reshape((self.size(),) + tuple(tensor.shape))
-            result = gathered[0]
-            for rank in range(1, self.size()):
-                if operation == "max":
-                    result = jt.maximum(result, gathered[rank])
-                elif operation == "min":
-                    result = jt.minimum(result, gathered[rank])
-                else:
-                    result = result * gathered[rank]
-            return result
+            return self._all_reduce_from_gather(tensor, operation)
         if backend == "hccl":
             ops = getattr(jt.compile_extern, "hccl_ops", None)
             if ops is None:
@@ -295,10 +281,14 @@ class ProcessGroup:
                 operation, operation)
             result = ops.hccl_all_reduce(tensor, reduce_op, handle or 0)
             return result / self.size() if operation == "mean" else result
-        if backend == "mpi" and self.ranks is None:
+        if backend == "mpi":
             if operation not in ("sum", "mean"):
-                raise NotImplementedError(
-                    "MPI process-group all_reduce supports sum and mean only")
+                return self._all_reduce_from_gather(tensor, operation)
+            if self.ranks is not None:
+                ops = getattr(jt.compile_extern, "mpi_ops", None)
+                if ops is None:
+                    raise _jittor_error()("MPI process-group backend is unavailable")
+                return ops.mpi_all_reduce(tensor, operation, handle)
             reducer = getattr(tensor, "mpi_all_reduce", None)
             if not callable(reducer):
                 raise _jittor_error()("MPI all_reduce is unavailable for this tensor")
@@ -306,6 +296,25 @@ class ProcessGroup:
         raise _jittor_error()(
             "process group has no {} all_reduce implementation".format(
                 backend or "active backend"))
+
+    def _all_reduce_from_gather(self, tensor, operation):
+        if tensor.requires_grad:
+            raise NotImplementedError(
+                "{} non-sum process-group reductions do not support autograd".format(
+                    self._collective_backend().upper()))
+        # NCCL/MPI provide SUM here. Their real group gather plus native
+        # elementwise operators implement an explicit non-SUM composite.
+        gathered = self.all_gather(tensor.reshape((-1,)))
+        gathered = gathered.reshape((self.size(),) + tuple(tensor.shape))
+        result = gathered[0]
+        for rank in range(1, self.size()):
+            if operation == "max":
+                result = jt.maximum(result, gathered[rank])
+            elif operation == "min":
+                result = jt.minimum(result, gathered[rank])
+            else:
+                result = result * gathered[rank]
+        return result
 
     def _all_reduce(self, tensor, reduce_name):
         """Backward-compatible private spelling used by the Torch installer."""
@@ -335,7 +344,12 @@ class ProcessGroup:
             if ops is None:
                 raise _jittor_error()("HCCL process-group backend is unavailable")
             return ops.hccl_broadcast(tensor, root, handle or 0)
-        if backend == "mpi" and self.ranks is None:
+        if backend == "mpi":
+            if self.ranks is not None:
+                ops = getattr(jt.compile_extern, "mpi_ops", None)
+                if ops is None:
+                    raise _jittor_error()("MPI process-group backend is unavailable")
+                return ops.mpi_broadcast(tensor, root, handle)
             broadcaster = getattr(tensor, "mpi_broadcast", None)
             if not callable(broadcaster):
                 raise _jittor_error()("MPI broadcast is unavailable for this tensor")
@@ -362,10 +376,13 @@ class ProcessGroup:
             gather = getattr(ops, "hccl_all_gather", None)
             if callable(gather):
                 return gather(tensor, handle or 0)
-        elif backend == "mpi" and self.ranks is None:
-            gather = getattr(tensor, "mpi_all_gather", None)
-            if callable(gather):
-                return gather()
+        elif backend == "mpi":
+            if self.ranks is None:
+                gather = getattr(tensor, "mpi_all_gather", None)
+                if callable(gather):
+                    return gather()
+            ranks = (range(get_world_size()) if self.ranks is None else self.ranks)
+            return jt.concat([self.broadcast(tensor, src=rank) for rank in ranks], dim=0)
         raise NotImplementedError(
             "{} process-group all_gather is unavailable".format(
                 backend or "active backend"))

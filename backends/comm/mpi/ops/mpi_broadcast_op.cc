@@ -17,13 +17,15 @@
 namespace jittor {
 
 #ifndef JIT
-MpiBroadcastOp::MpiBroadcastOp(Var* x, int root) : x(x), root(root) {
+MpiBroadcastOp::MpiBroadcastOp(Var* x, int root, int group_id)
+    : x(x), root(root), group_id(group_id) {
     if (!mpi_enabled) {
         forward(x);
         return;
     }
     #ifdef HAS_CUDA
     if (use_device_mpi && runtime_use_cuda()) {
+        USER_CHECK(group_id == 0) << "MPI subgroup CUDA collectives are unsupported";
         static auto nccl_broadcast = has_op("nccl_broadcast")
             ? get_op_info("nccl_broadcast").get_constructor<VarPtr, Var*, int, int>()
             : nullptr;
@@ -50,8 +52,8 @@ void MpiBroadcastOp::infer_shape() {
 }
 
 VarPtr MpiBroadcastOp::grad(Var* out, Var* dout, Var* v, int v_index) {
-    static auto mpi_reduce = op_constructor<VarPtr, Var*, NanoString, int>("mpi_reduce");
-    return mpi_reduce(dout, ns_add, root);
+    static auto mpi_reduce = op_constructor<VarPtr, Var*, NanoString, int, int>("mpi_reduce");
+    return mpi_reduce(dout, ns_add, root, group_id);
 }
 
 void MpiBroadcastOp::jit_prepare(JK& jk) {
@@ -80,9 +82,9 @@ void MpiBroadcastOp::jit_run() {
     // the backward of mpi_reduce.
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
-    if (root == mpi_world_rank)
+    if (root == mpi_process_group_rank(group_id))
         std::memcpy(yp, xp, y->size);
-    MPI_CHECK(MPI_Bcast(yp, y->num, mpi_dtype(y->dtype()), root, MPI_COMM_WORLD));
+    MPI_CHECK(MPI_Bcast(yp, y->num, mpi_dtype(y->dtype()), root, mpi_process_group_comm(group_id)));
 }
 #endif // JIT_cpu
 #endif // JIT

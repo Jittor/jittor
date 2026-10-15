@@ -24,6 +24,7 @@
 #include "core/common.h"
 #include "ops/composite/array_op.h"
 #include "runtime/collective_dtype.h"
+#include "type/fp16_compute.h"
 
 char jt_mpi_err_buffer[MPI_MAX_ERROR_STRING];
 
@@ -47,6 +48,65 @@ namespace jittor {
 
 MPI_Datatype MPI_HALF;
 MPI_Op MPI_HALF_ADD;
+MPI_Op MPI_BFLOAT16_ADD;
+static vector<MPI_Comm> mpi_process_groups;
+
+MPI_Comm mpi_process_group_comm(int group_id) {
+    USER_CHECK(mpi_enabled) << "MPI communicator is not initialized";
+    if (group_id == 0) return MPI_COMM_WORLD;
+    USER_CHECK(group_id > 0 && group_id <= int(mpi_process_groups.size()))
+        << "Invalid MPI process-group handle" << group_id;
+    auto comm = mpi_process_groups[group_id-1];
+    USER_CHECK(comm != MPI_COMM_NULL) << "Rank is not a member of the MPI process group";
+    return comm;
+}
+
+int mpi_process_group_rank(int group_id) {
+    int rank;
+    MPI_CHECK(MPI_Comm_rank(mpi_process_group_comm(group_id), &rank));
+    return rank;
+}
+
+int mpi_process_group_size(int group_id) {
+    int size;
+    MPI_CHECK(MPI_Comm_size(mpi_process_group_comm(group_id), &size));
+    return size;
+}
+
+int mpi_create_process_group(vector<int> ranks) {
+    USER_CHECK(mpi_enabled) << "MPI communicator is not initialized";
+    USER_CHECK(!ranks.empty()) << "MPI process-group ranks cannot be empty";
+    int key = MPI_UNDEFINED;
+    vector<bool> seen(mpi_world_size, false);
+    for (int index=0; index<int(ranks.size()); index++) {
+        int rank = ranks[index];
+        USER_CHECK(rank >= 0 && rank < mpi_world_size && !seen[rank])
+            << "Invalid or repeated MPI process-group rank" << rank;
+        seen[rank] = true;
+        if (rank == mpi_world_rank) key = index;
+    }
+    MPI_Comm comm;
+    MPI_CHECK(MPI_Comm_split(MPI_COMM_WORLD,
+        key == MPI_UNDEFINED ? MPI_UNDEFINED : 1, key, &comm));
+    if (comm != MPI_COMM_NULL)
+        MPI_CHECK(MPI_Comm_set_errhandler(comm, MPI_ERRORS_RETURN));
+    mpi_process_groups.push_back(comm);
+    return int(mpi_process_groups.size());
+}
+
+// Reuse the core BF16 conversion and rounding policy. MPI_HALF is only the
+// opaque two-byte transport datatype; BF16 never uses fp16 arithmetic.
+static void Bfloat16Add(void* invec, void* inoutvec, int* len, MPI_Datatype*) {
+    auto* in = static_cast<uint16_t*>(invec);
+    auto* inout = static_cast<uint16_t*>(inoutvec);
+    for (int index=0; index<*len; index++) {
+        bfloat16 left, right;
+        left.x = in[index];
+        right.x = inout[index];
+        bfloat16 sum(float(left) + float(right));
+        inout[index] = sum.x;
+    }
+}
 
 // ---- fp16 <-> fp32 --------------------------------------------------------
 //
@@ -209,7 +269,7 @@ static MPI_Datatype mpi_dtype_unsupported(NanoString dtype) {
 }
 
 #define JT_MPI_DTYPE_float16  MPI_HALF
-#define JT_MPI_DTYPE_bfloat16 mpi_dtype_unsupported(dtype)
+#define JT_MPI_DTYPE_bfloat16 MPI_HALF
 #define JT_MPI_DTYPE_float32 MPI_FLOAT
 #define JT_MPI_DTYPE_float64 MPI_DOUBLE
 #define JT_MPI_DTYPE_int16   MPI_INT16_T
@@ -228,6 +288,7 @@ MPI_Op mpi_add_op(NanoString dtype) {
     // float16 is not an MPI predefined type, so MPI_SUM does not know how to
     // add it; MPI_HALF_ADD is our user-defined operator (see HalfAdd above).
     if (dtype == ns_float16) return MPI_HALF_ADD;
+    if (dtype == ns_bfloat16) return MPI_BFLOAT16_ADD;
     // Validate the dtype through the same table, so an unsupported dtype fails
     // here too rather than reaching MPI with a sum operator and no datatype.
     mpi_dtype(dtype);
@@ -315,8 +376,12 @@ static bool mpi_initialized_here = false;
 void mpi_shutdown() {
     if (!mpi_initialized_here) return;
     mpi_initialized_here = false;
+    for (auto& comm : mpi_process_groups)
+        if (comm != MPI_COMM_NULL) MPI_PEEK(MPI_Comm_free(&comm));
+    mpi_process_groups.clear();
     MPI_PEEK(MPI_Type_free(&MPI_HALF));
     MPI_PEEK(MPI_Op_free(&MPI_HALF_ADD));
+    MPI_PEEK(MPI_Op_free(&MPI_BFLOAT16_ADD));
     MPI_PEEK(MPI_Finalize());
 }
 
@@ -363,6 +428,7 @@ mpi_initer() {
     MPI_Type_contiguous(1, MPI_SHORT, &MPI_HALF);
     MPI_Type_commit(&MPI_HALF);
     MPI_Op_create(HalfAdd, /* commute= */1, &MPI_HALF_ADD);
+    MPI_CHECK(MPI_Op_create(Bfloat16Add, /* commute= */1, &MPI_BFLOAT16_ADD));
     mpi_initialized_here = true;
 }
 

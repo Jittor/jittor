@@ -37,6 +37,9 @@ class Group:
         self.reductions.append((tensor, operation))
         return Tensor(tensor.values + 100)
 
+    def broadcast(self, tensor, root):
+        return tensor.mpi_broadcast(root)
+
 
 class Tensor:
     def __init__(self, values):
@@ -128,8 +131,8 @@ def test_gather_and_broadcast_argument_routes(distributed_state, monkeypatch):
     _, group, _ = distributed_state
     source = Tensor([7, 8])
     calls = []
-    def gather(tensor):
-        calls.append(tensor)
+    def gather(tensor, group=None):
+        calls.append((tensor, group))
         return Tensor(np.arange(8))
     monkeypatch.setattr(owner, "_native_all_gather_flat", gather)
     output = [Tensor([0, 0]) for _ in range(4)]
@@ -139,11 +142,24 @@ def test_gather_and_broadcast_argument_routes(distributed_state, monkeypatch):
     combined = Tensor(np.zeros((4, 2)))
     owner._all_gather_into_tensor(combined, source, group)
     np.testing.assert_array_equal(combined.values, np.arange(8).reshape(4, 2))
-    assert calls == [source, source]
+    assert calls == [(source, group), (source, group)]
     owner._broadcast(source, src=3, group=group, group_src=1)
     assert source.roots == [1]
     with pytest.raises(ValueError, match="shorter"):
         owner._all_gather([], source, group)
+
+
+def test_flat_gather_consumes_the_explicit_native_group(distributed_state, monkeypatch):
+    _, group, _ = distributed_state
+    source = Tensor([[1., 2.]])
+    calls = []
+    def gather(value, group=None):
+        calls.append((value.shape, group))
+        return value
+    monkeypatch.setattr(owner._process_group, "all_gather", gather)
+    result = owner._native_all_gather_flat(source, group=group)
+    np.testing.assert_array_equal(result.values, [1., 2.])
+    assert calls == [((2,), group)]
 
 
 def test_init_destroy_store_and_backend_validation(distributed_state, monkeypatch):

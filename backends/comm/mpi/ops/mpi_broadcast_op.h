@@ -14,6 +14,7 @@ namespace jittor {
 struct MpiBroadcastOp : Op {
     Var* x, * y;
     int root;
+    int group_id;
 
     /**
 
@@ -24,7 +25,7 @@ struct MpiBroadcastOp : Op {
     * x: variable to be broadcasted.
     * root: ID of MPI node to be broadcasted. Default: 0.
      */
-    MpiBroadcastOp(Var* x, int root=0);
+    MpiBroadcastOp(Var* x, int root=0, int group_id=0);
     void infer_shape() override;
     
     const char* name() const override { return "mpi_broadcast"; }

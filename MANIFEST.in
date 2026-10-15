@@ -410,6 +410,7 @@ include docs/results/2026-10-15-like-factory-leaves.md
 include docs/results/2026-10-15-longformer-32768-context-oracles.md
 include docs/results/2026-10-15-metric-state-and-tensordict-oracles.md
 include docs/results/2026-10-15-metrics-tensordict-scorecards.md
+include docs/results/2026-10-15-mpi-bfloat16-process-groups.md
 include docs/results/2026-10-15-native-fsdp.md
 include docs/results/2026-10-15-native-sharded-checkpoint.md
 include docs/results/2026-10-15-native-tensor-parallel-adamw-bf16.md

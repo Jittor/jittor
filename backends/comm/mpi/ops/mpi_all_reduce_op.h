@@ -14,6 +14,7 @@ namespace jittor {
 struct MpiAllReduceOp : Op {
     Var* x, * y;
     NanoString op;
+    int group_id;
 
     /**
 
@@ -24,7 +25,7 @@ struct MpiAllReduceOp : Op {
     * x: variable to be all reduced.
     * op: 'sum' or 'add' means sum all [x], 'mean' means average all [x]. Default: 'add'.
      */
-    MpiAllReduceOp(Var* x, NanoString op=ns_add);
+    MpiAllReduceOp(Var* x, NanoString op=ns_add, int group_id=0);
     void infer_shape() override;
     
     const char* name() const override { return "mpi_all_reduce"; }
