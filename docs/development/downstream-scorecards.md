@@ -110,7 +110,8 @@ MMEngine/MMCV 的干净 `setup.py` 通过环境条件声明正式包和 lite 包
 
 此类来源证明必须提供实际 wheel。审计器独立核对唯一 METADATA Name 属于源码声明，
 每个 runtime/阶段的 `downstream_distribution` 或复数绑定还必须提供原样
-`distribution_name`，精确等于该实际 Name。包的 import 前缀、repo identity、版本和
+`distribution_name`，精确等于该实际 Name；此分支同时要求显式 `distribution_version`
+精确等于 wheel METADATA Version，即使模块版本的字面值相同。包的 import 前缀、repo identity、版本和
 全部 Python/非 Python payload 校验保持不变。缺该字段、仅写 repo 名、未声明名称或
 不完整 payload 均拒绝。`mmcv-lite` 的真实安装可证明对应纯 Python 场景，不证明
 `mmcv._ext`、`mmcv.ops` 或编译算子存在；不得修改 METADATA 或装空扩展冒充完整包。

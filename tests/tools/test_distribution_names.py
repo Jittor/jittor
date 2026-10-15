@@ -34,7 +34,7 @@ class DistributionNamesTests(unittest.TestCase):
                                               if name.endswith('.py')],
                           'package_files': [{'path': name, 'sha256': sha} for name, sha in source.items()]}
         self.write_wheel('mmcv-lite')
-        self.binding = {'repo': 'mmcv', 'version': '2.2.0', 'distribution_name': 'mmcv-lite',
+        self.binding = {'repo': 'mmcv', 'version': '2.2.0', 'distribution_name': 'mmcv-lite', 'distribution_version': '2.2.0',
                         'source_sha256': source, 'installed_files_sha256': {name: self.sha(data) for name, data in self.payload.items()},
                         'wheel_sha256': self.artifact['sha256']}
 
@@ -97,6 +97,17 @@ class DistributionNamesTests(unittest.TestCase):
         self.inventory['distribution_names']['cases'].pop()
         with self.assertRaisesRegex(ValueError, 'branches'):
             self.installation()
+
+    def test_actual_metadata_version_is_required_even_for_literal_module_versions(self):
+        proof = self.installation()
+        for version in (None, '2.2.1', '2.2', 'source@' + 'a' * 40):
+            binding = dict(self.binding)
+            if version is None:
+                binding.pop('distribution_version')
+            else:
+                binding['distribution_version'] = version
+            with self.subTest(version=version), self.assertRaisesRegex(ValueError, 'distribution version'):
+                self.proof.validate_installations({'downstream_distribution': binding}, proof)
 
     def test_source_hash_mismatch_missing_source_and_unrelated_wheel_fail(self):
         original = copy.deepcopy(self.inventory)

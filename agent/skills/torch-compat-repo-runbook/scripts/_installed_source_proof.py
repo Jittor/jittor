@@ -142,6 +142,7 @@ def installation_proofs(record, inventories, artifacts, *, skip_own=False):
         if declared_names is not None:
             require(wheels, 'Source-declared distribution variants require an actual upstream wheel')
             package['distribution_name'] = identity['distribution_name']
+            package['distribution_version'] = distribution_version
         result.append(package)
     return {"proof_kind": "installed-source", "packages": result}
 
