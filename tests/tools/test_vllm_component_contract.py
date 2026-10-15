@@ -297,6 +297,8 @@ def test_collector_revalidates_all_six_workers(pair, request, tmp_path, change):
     if change is None:
         record = collector.collect(*args)
         assert record['level'] == 2 and record['numerics']['checked_tensors'] == 15
+        assert record['training'] == {'steps': 0, 'trainable': 0, 'frozen': 0,
+                                      'trainable_parameters': [], 'frozen_parameters': []}
         roles = {artifact['role'] for artifact in record['evidence']['artifacts']}
         assert {'perturb-comparison', 'perturb19-comparison', 'base-comparison', 'comparison', 'upstream-wheel'} <= roles
     else:

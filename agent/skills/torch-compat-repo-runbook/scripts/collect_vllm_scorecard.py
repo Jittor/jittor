@@ -75,7 +75,7 @@ def collect(root, source, wheel, directory, platform_path, baseline, report, com
                          'max_scaled_relative': max(row['normalized_error'] for row in rows),
                          'atol': .002, 'rtol': .01, 'parameter_gradients': {'requested': 0, 'checked': 0},
                          'input_gradients': {'requested': 4, 'checked': 4}},
-            'training': {'steps': 0, 'trainable': [], 'frozen': [], 'trainable_parameters': 0, 'frozen_parameters': 0},
+            'training': {'steps': 0, 'trainable': 0, 'frozen': 0, 'trainable_parameters': [], 'frozen_parameters': []},
             'fallback': {'policy': 'error', 'count': 0},
             'evidence': {'command': command, 'report': report,
                          'gate_nodeid': 'compat/tests/torch/test_ecosystem_vllm.py::EcosystemVLLM::test_vllm_decoder_primitives',
