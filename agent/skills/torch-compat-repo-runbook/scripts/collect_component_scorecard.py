@@ -1,8 +1,8 @@
-"""Collect measured Metrics/TensorDict components into shared schema-v2 rows.
+"""Collect maintained library components into shared schema-v2 rows.
 
 Re-derives clean upstream inventories, checks complete installed-source bindings,
 all expected gradients, fixed seed-0 weights, seed-7 input perturbations, and (for
-TensorDict) every three-step SGD field. Does not infer whole-library coverage.
+trainable components) every three-step SGD field. Does not infer whole-library coverage.
 """
 import argparse
 import hashlib
@@ -17,6 +17,9 @@ SPECS = {
     'tensordict': {'case': 'tensordict_index_and_stack', 'level': 3,
                    'members': ['TensorDict', 'lazy_stack'],
                    'parameters': ['projection.bias', 'projection.weight'], 'inputs': ['sample']},
+    'diffusers': {'case': 'diffusers_unet2d', 'builder': '_diffusers_unet', 'level': 3,
+                  'members': ['UNet2DModel'], 'axis': 'model_api',
+                  'parameters': None, 'parameter_count': 144, 'inputs': ['sample']},
 }
 
 
@@ -44,6 +47,14 @@ def validate_binding(value, source, baseline):
     require(installed.get('source_sha256') == {r['path']: r['sha256'] for r in source['package_sources']},
             'Incomplete installed source binding')
     require(bool(installed.get('installed_files_sha256')), 'Missing full installed package hashes')
+    for name, expected in installed['source_sha256'].items():
+        parts = Path(name).parts
+        if parts[0] == 'src':
+            parts = parts[1:]
+        require(parts[0] == source['repo'], 'Unexpected upstream package prefix')
+        relative = Path(*parts[1:]).as_posix()
+        require(installed['installed_files_sha256'].get(relative) == expected,
+                'Full installed package hashes disagree with source binding: ' + name)
     require(bool(value.get('measurement_source_sha256')), 'Missing measurement source binding')
     require(value.get('hf_hub_offline') is True, 'Offline measurement guard missing')
 
@@ -75,11 +86,27 @@ def compare_arrays(reference, candidate, expected, atol, rtol):
     return rows
 
 
+def parameter_names(spec, weights):
+    """Keep a large model's actual full parameter names in its measured snapshot."""
+    if spec['parameters'] is not None:
+        return spec['parameters']
+    import numpy as np
+    with np.load(weights) as initial:
+        names = sorted(initial.files)
+        require(len(names) == len(set(names)) == spec['parameter_count'],
+                'Incomplete component parameter snapshot')
+    return names
+
+
 def collect(source, directory, platform_path, baseline, report, command, atol=2e-3, rtol=1e-2):
     import numpy as np
     repo = source['repo']
-    spec = SPECS[repo]
+    spec = dict(SPECS[repo])
     case, directory = spec['case'], Path(directory)
+    axis = spec.get('axis', 'public_api')
+    members = next((row['members'] for row in source['axes'] if row['axis'] == axis), [])
+    require(set(spec['members']).issubset(members), 'Component is absent from its own public export axis')
+    spec['parameters'] = parameter_names(spec, directory / (case + '.ref.weights.npz'))
     base_path = directory / 'verify-report.json'
     base = read(base_path)
     require(base.get('baseline') == baseline and base.get('repo') == repo, 'Stale base report')
@@ -161,7 +188,7 @@ def collect(source, directory, platform_path, baseline, report, command, atol=2e
     result = {'repo': repo, 'case': case, 'status': 'passed', 'level': spec['level'],
               'tier': 'broad', 'jittor_commit': baseline, 'upstream': source['upstream'],
               'downstream_versions': {'candidate': source['upstream']['version'], 'oracle': source['upstream']['version']},
-              'registry_refs': [{'repo': repo, 'axis': 'public_api', 'member': n} for n in spec['members']],
+              'registry_refs': [{'repo': repo, 'axis': axis, 'member': n} for n in spec['members']],
               'device': device, 'observed_device': device, 'platform': platform,
               'inputs': {'seed': 0, 'perturb_seed': 7, 'hf_hub_offline': True, 'shape_kind': 'tiny'},
               'numerics': {'passed': True, 'finite': True, 'checked_tensors': len(errors), 'missing_tensors': [],

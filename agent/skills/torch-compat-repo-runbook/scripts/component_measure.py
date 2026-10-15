@@ -51,7 +51,7 @@ def installed_distribution(source, module):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, required=True)
-    parser.add_argument('--repo', choices=('torchmetrics', 'tensordict'), required=True)
+    parser.add_argument('--repo', choices=('torchmetrics', 'tensordict', 'diffusers'), required=True)
     parser.add_argument('--checkout', type=Path, required=True)
     parser.add_argument('probe', nargs=argparse.REMAINDER)
     args = parser.parse_args()

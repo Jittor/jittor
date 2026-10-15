@@ -432,7 +432,7 @@ def inventory(repo, checkout):
                            "not a model-family or complete library denominator. Submodule-only APIs, class methods, "
                            "task variants and optional dependency availability are outside this axis. "
                            "A verified member covers only its recorded component scenario.")
-    if repo in ("vllm", "vllm-omni", "torchmetrics", "tensordict"):
+    if repo in ("vllm", "vllm-omni", "torchmetrics", "tensordict", "diffusers"):
         # Registry/target hashes alone do not identify an installed package:
         # imports outside the bounded registry still affect its computation.
         result["package_sources"] = [{"path": path, "sha256": digest(checkout / path)}

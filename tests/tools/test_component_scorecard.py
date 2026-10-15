@@ -116,7 +116,8 @@ def test_every_phase_retains_the_actual_baseline_weight_snapshot(tmp_path, colle
 def test_registry_members_are_actually_called_by_maintained_builders(collector):
     tree = ast.parse((ROOT / 'compat/tests/torch/_ecosystem_cases.py').read_text())
     for spec in collector.SPECS.values():
-        builder = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == '_' + spec['case'])
+        builder = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                       and n.name == spec.get('builder', '_' + spec['case']))
         calls = {n.func.id for n in ast.walk(builder) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
         assert set(spec['members']) <= calls
     assert collector.SPECS['torchmetrics']['level'] == 2
