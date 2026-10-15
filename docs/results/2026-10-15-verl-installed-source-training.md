@@ -1,7 +1,8 @@
 # Installed-source VERL component training on CPU and CUDA
 
 - Status: Both original tiny component protocols pass complete gradients, two input perturbations and three SGD steps on CPU and CUDA; bounded component L3.
-- Measurement source: `73333a677dae984a3f577afb7d1586aecac5f490`; version-proof schema prerequisite `dbea21762d2df71b7c67dcf2ba9abb4f642944da`. This report is a later documentation commit.
+- Date: 2026-10-15.
+- Baseline commit (measurement source): `73333a677dae984a3f577afb7d1586aecac5f490`; version-proof schema prerequisite `dbea21762d2df71b7c67dcf2ba9abb4f642944da`. This report is a later documentation commit.
 - Upstream: clean VERL `e5a627cf55c94d85406556854c2c1a22db4ff5e7`, module version `0.10.0.dev`, actual distribution version `0.10.0.dev0`.
 - Maintainers: Jittor Torch compatibility and downstream validation maintainers.
 - Recheck when: upstream registries, installed payload, interpreters/providers, precision, component builders, measurement tools or training protocol change.
@@ -141,3 +142,51 @@ bytes), SHA256 `ea4a86547d4f3f96a97d5010c746fc425ed6ad0dc016b777c057f09ec6b4b32e
 The final evidence manifest additionally binds the final scorecard and documentation identity.
 All original arrays, metadata, source proofs and preserved failure logs remain under their actual
 source and provider identities.
+
+
+## Main integration verification
+
+The integrator synchronized `1e98e127e406f1924f3c3729f7f58254637b4455`, replayed the three
+sealed changes and froze clean `6f25bcf5957414c78e6d45c4238626589d80b02a` for this verification.
+The nox conflict was resolved by preserving the entire existing mainline prefix and appending the
+original VERL session. All 71 existing function ASTs, including Swift/PEFT, remain identical;
+Swift's module-name mapping also remains intact. Central discovery now validates both actual
+`EcosystemVERLTraining` methods; missing either method or its class/session fails closed.
+Discovery does not assign an execution level or add synthetic CASES.
+
+The original final seal's 263 files (948,221,295 bytes) were independently rehashed, unchanged.
+The current auditor accepts the same four original records with zero rejections. An independent
+NumPy recomputation checks every one of the original 144 array pairs against the original strict
+base-relative and perturbation/training per-field budgets: maximum absolute error
+`7.152557373046875e-7`. Their producer remains `73333a677...`, including the original devices and
+providers. All 11,841 original official Torch wheel files in the private oracle prefix were also
+rehashed unchanged (1,624,262,090 bytes); this follows the original proof's exclusion of pip's
+rewritten RECORD, not an assertion that RECORD is unchanged.
+
+Mainline validation uses a new private candidate venv and new device-specific unit caches.
+The original candidate prefix, oracle/provider, installed VERL payload and upstream checkout are
+read-only inputs. CPU explicitly masks CUDA; CUDA uses a separate real allocated card. First
+CPU and CUDA core compilations run sequentially. New mainline results are separate from the
+original formal scorecard:
+
+| Mainline verification | Result |
+| --- | --- |
+| Focused version, VERL, central gate contracts | 83 passed |
+| Shared installed proof, component, Swift, Diffusers, PEFT contracts | 77 passed |
+| Real CPU `ecosystem_verl_training` | 2 passed / 0 skipped, 292.03 s pytest |
+| Real CUDA `ecosystem_verl_training` | 2 passed / 0 skipped, 504.48 s pytest |
+| Canonical CPU core | 322 passed / 42 skipped / 1 existing xfail, both modes exit 0 |
+| Full `tests/structure compat/tests/structure` | 1622 passed / 6 skipped, 206.81 s |
+
+The six structure skips are two accelerator cases, two declared cases and two installed-native
+resolution checks in an interpreter without that distribution; they confer no installation grade.
+Lint on new/modified Python files, repository layout, MANIFEST and whitespace checks pass.
+The maintained gates run both original complete protocols, seeds 0/7/19 and three real updates.
+Their temporary raw data is removed normally on success; this is a new maintained-gate run,
+not a persistent new scorecard or a relabeling of the original 733 arrays. Nightly provisioning
+remains a separate task; these opt-in runs alone do not establish scheduled execution.
+
+Unversioned integration logs, commands, clean source freeze, old/new gate-discovery proof,
+independent array recomputation and private-provider rehash are under
+`$JITTOR_LAB_ROOT/_state/verl-main-integration-1e98/`. All earlier boundaries above remain:
+only these components receive the stated grade, with no full trainer, Hydra or speed claim.
