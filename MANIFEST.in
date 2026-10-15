@@ -453,6 +453,7 @@ include docs/results/2026-10-15-verl-registered-component-oracles.md
 include docs/results/2026-10-15-vllm-component-scorecards.md
 include docs/results/2026-10-16-accelerate-installed-source-protocols.md
 include docs/results/2026-10-16-flash-attention-installed-source-training.md
+include docs/results/2026-10-16-metrics-tensordict-installed-source.md
 include docs/results/2026-10-16-omni-installed-source-diagnostics.md
 include docs/results/2026-10-16-recorded-grad-fn-freeze.md
 include docs/results/2026-10-16-transformers-main-source-training.md
