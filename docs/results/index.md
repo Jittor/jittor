@@ -11,6 +11,7 @@
 ```{toctree}
 :maxdepth: 1
 
+2026-10-16-recorded-grad-fn-freeze
 2026-10-16-transformers-main-source-training
 2026-10-15-maintained-ecosystem-nightly
 2026-10-15-openmmlab-installed-source-training

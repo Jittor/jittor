@@ -1974,7 +1974,8 @@ workaround.
 
 - Severity: Medium (autograd view semantics differ from Torch)
 - Status: Open; factory leaves, grad-enabled constructor linkage and no-grad
-  accumulator eligibility resolved in their verified ranges
+  accumulator eligibility resolved in their verified ranges; recorded producer
+  identity now survives a later source freeze (CPU/CUDA verified)
 - Owner: native autograd / torch compatibility Tensor constructors
 - Symptom: a no-grad-created `torch.Tensor(source)` alias remains usable for
   grad-mode arithmetic after the alias or source is modified with `fill_` or
@@ -1997,6 +1998,9 @@ workaround.
   `$JITTOR_LAB_ROOT/_state/tensor-alias-main-0fb/` and the independent
   `tensor-alias-independent-review` / `tensor-alias-unfreeze-review` states;
   see the [constructor follow-up](../../docs/results/2026-10-15-size-factory-leaves.md#tensor-source-constructor-follow-up).
+- Follow-up: [recorded producer identity](../../docs/results/2026-10-16-recorded-grad-fn-freeze.md)
+  fixes source-freeze grad_fn loss only; the independent lifecycle probe of 32 combinations
+  still finds 17 differing combinations. Mutation guards and inherited flags stay open.
 - Exit condition: native view creation/mutation metadata and source-state
   propagation agree with independent Torch on CPU and each claimed accelerator,
   including absence of unintended accumulator activation. Preserve the existing
