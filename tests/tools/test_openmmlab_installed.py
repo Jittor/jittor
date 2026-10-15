@@ -174,15 +174,21 @@ class OpenMMLabInstalledContracts(unittest.TestCase):
 
         test = unittest.TestCase()
         test.device = 'cpu'
+        retained = self.directory / 'retained'
         with mock.patch.object(self.harness, '_run_command', side_effect=worker), \
                 mock.patch.object(self.harness, 'REAL_TORCH_PYTHON', '/independent/oracle/python'), \
                 mock.patch.object(self.harness.subprocess, 'check_output', return_value='host-source'), \
                 mock.patch.object(self.registry, 'inventory', return_value={}), \
-                mock.patch.object(self.contract, 'compare_pair', side_effect=comparison), self.assertRaises((ValueError, AssertionError)):
+                mock.patch.object(self.contract, 'compare_pair', side_effect=comparison), \
+                mock.patch.dict('os.environ', {'JITTOR_OPENMMLAB_EVIDENCE_DIR': str(retained)}), \
+                self.assertRaises((ValueError, AssertionError)):
             self.harness.compare_training(test, case, {'mmengine': self.directory}, {'mmengine': self.directory / 'wheel.whl'})
         self.assertEqual(calls, [(False, 'torch', 0), (False, 'jittor', 0), (False, 'torch', 7),
                                  (False, 'jittor', 7), (False, 'torch', 19), (False, 'jittor', 19),
                                  (True, 'torch', 0), (True, 'jittor', 0)])
+        evidence = retained / 'cpu' / case
+        self.assertTrue((evidence / 'training-seed0-jittor.npz').is_file())
+        self.assertFalse((evidence / 'maintained-gate-result.json').exists())
 
     def test_nox_and_real_class_methods_are_maintained_and_not_filterable(self):
         tree = ast.parse((ROOT / 'noxfile.py').read_text())
@@ -192,6 +198,7 @@ class OpenMMLabInstalledContracts(unittest.TestCase):
         for key in ('JITTOR_REQUIRE_MMENGINE', 'JITTOR_REQUIRE_MMCV', 'JITTOR_REQUIRE_REAL_TORCH',
                     'JITTOR_ECOSYSTEM_OPENMMLAB_INSTALLED', 'JITTOR_TEST_REQUIRE_EXECUTION'):
             self.assertIn(key, constants)
+        self.assertIn('JITTOR_OPENMMLAB_EVIDENCE_DIR', constants)
         self.assertTrue(any(isinstance(node, ast.Attribute) and node.attr == 'posargs' for node in ast.walk(session)))
         test_tree = ast.parse((ROOT / 'compat/tests/torch/test_ecosystem_openmmlab_installed.py').read_text())
         methods = {node.name for node in ast.walk(test_tree) if isinstance(node, ast.FunctionDef)}

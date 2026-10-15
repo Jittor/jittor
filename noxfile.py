@@ -3041,7 +3041,8 @@ def ecosystem_openmmlab_installed(session):
         if not nvcc or not os.environ.get("CUDA_VISIBLE_DEVICES", "").strip():
             session.error("OpenMMLab CUDA needs real nvcc and explicitly allocated CUDA_VISIBLE_DEVICES")
         env.update({"nvcc_path": nvcc, "JT_BUILD_NVCC_PATH": nvcc})
-    for name in ("JITTOR_ECOSYSTEM_PACKAGE_SITE", "JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE"):
+    for name in ("JITTOR_ECOSYSTEM_PACKAGE_SITE", "JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE",
+                 "JITTOR_OPENMMLAB_EVIDENCE_DIR"):
         if os.environ.get(name):
             env[name] = os.environ[name]
     versions = (
