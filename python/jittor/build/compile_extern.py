@@ -716,6 +716,11 @@ def _init_nccl_from_store(nccl_module, store=None):
     description = "the provided Store"
     try:
         if store is None:
+            from jittor.distributed.store import external_launcher_store
+            store = external_launcher_store(timeout)
+            if store is not None:
+                description = 'the external launcher TCPStore'
+        if store is None:
             address = os.environ.get("MASTER_ADDR", "").strip()
             port = os.environ.get("MASTER_PORT", "").strip()
             rootinfo = os.environ.get("JT_NCCL_ROOTINFO_FILE", "").strip()

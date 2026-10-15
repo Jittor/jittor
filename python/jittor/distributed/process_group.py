@@ -29,6 +29,31 @@ _STATE = {
     "default_group": None,
     "pg_map": {},
 }
+_STORE_GROUP_SEQUENCE = 0
+
+
+def _launcher_group_unique_id(module, ranks):
+    """Exchange subgroup identity without a shared filesystem or worker server."""
+    from .store import external_launcher_store
+    store = external_launcher_store(timeout=float(os.environ.get('JT_RENDEZVOUS_TIMEOUT_S', '120')))
+    if store is None:
+        return None
+    global _STORE_GROUP_SEQUENCE
+    _STORE_GROUP_SEQUENCE += 1
+    prefix = 'jittor/nccl/groups/{}/'.format(_STORE_GROUP_SEQUENCE)
+    rank, world = _runtime_rank(), _runtime_world_size()
+    descriptor = ','.join(str(value) for value in ranks).encode('ascii')
+    try:
+        store.set(prefix + 'spec/{}'.format(rank), descriptor)
+        keys = [prefix + 'spec/{}'.format(peer) for peer in range(world)]
+        store.wait(keys)
+        if any(store.get(key) != descriptor for key in keys):
+            raise ValueError('NCCL subgroup rank order differs between WORLD participants')
+        if rank == ranks[0]:
+            store.set(prefix + 'unique_id', bytes(module.nccl_get_unique_id()))
+        return list(store.get(prefix + 'unique_id'))
+    finally:
+        store.close()
 
 
 def _ensure_nccl_rootinfo_env():
@@ -225,6 +250,16 @@ class ProcessGroup:
                 continue
             from jittor_utils import lock as _jit_lock
             if kind == "nccl":
+                with _jit_lock.unlock_scope():
+                    unique_id = _launcher_group_unique_id(module, self.ranks)
+                    if unique_id is not None:
+                        create_with_id = getattr(module, 'nccl_create_process_group_with_unique_id', None)
+                        if not callable(create_with_id):
+                            raise NotImplementedError('NCCL backend lacks launcher Store subgroup initialization')
+                        handle = create_with_id(list(self.ranks), unique_id)
+                        self._backend_kind = kind
+                        self._backend_handle = int(handle)
+                        return
                 _ensure_nccl_rootinfo_env()
             with _jit_lock.unlock_scope():
                 handle = create(list(self.ranks))

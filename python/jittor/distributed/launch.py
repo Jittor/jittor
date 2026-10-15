@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Single-node, MPI-free multi-device launcher for Jittor.
+"""MPI-free multi-device launcher for Jittor.
 
 The ``jtrun`` command starts one process per rank and assigns one visible device
 to each process. It exports the standard rendezvous environment and uses
@@ -13,6 +13,8 @@ Examples::
 """
 import argparse
 import glob
+import importlib.util
+import math
 import os
 import shutil
 import signal
@@ -131,6 +133,16 @@ def _resolve_rendezvous(args):
 
     if port < 0 or port > 65535:
         raise ValueError("--master-port must be between 0 and 65535")
+    if getattr(args, 'nnodes', 1) > 1:
+        if not address or address in ('127.0.0.1', 'localhost', '::1'):
+            # Explicit loopback is useful for host protocol tests; it is never
+            # evidence of actual multi-host connectivity.
+            if not args.master_addr:
+                raise ValueError('multi-node launch requires an explicit --master-addr')
+        if port == 0:
+            raise ValueError('multi-node launch requires a shared nonzero --master-port')
+        if args.node_rank != 0:
+            return address, port  # A client must never bind a remote host address.
     if port == 0:
         port = _find_free_port(address)
     else:
@@ -191,6 +203,9 @@ def _build_parser():
         "-n", "--nproc", "--nproc-per-node", dest="nproc", type=int,
         required=True, help="number of local ranks (one process per device)",
     )
+    parser.add_argument('--nnodes', type=int, default=1, help='fixed number of node agents')
+    parser.add_argument('--node-rank', type=int, default=0, help='this node agent rank')
+    parser.add_argument('--rdzv-id', help='shared job identity for a multi-node launch')
     parser.add_argument("--backend", choices=["nccl", "hccl", "auto"], default="auto")
     parser.add_argument(
         "--standalone", action="store_true",
@@ -220,8 +235,14 @@ def _parse_args(argv=None):
     args = parser.parse_args(argv)
     if args.nproc < 1:
         parser.error("--nproc-per-node must be at least 1")
-    if args.timeout <= 0:
+    if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error("--timeout must be positive")
+    if args.nnodes < 1 or not 0 <= args.node_rank < args.nnodes:
+        parser.error('--node-rank must be in [0, --nnodes)')
+    if args.nnodes > 1 and (args.standalone or not args.rdzv_id):
+        parser.error('multi-node launch requires --rdzv-id and cannot use --standalone')
+    if args.nnodes > 1 and sys.platform != 'linux':
+        parser.error('multi-node worker lifetime control currently requires Linux')
     explicit_executable = bool(args.cmd and args.cmd[0] == "--")
     cmd = args.cmd[1:] if explicit_executable else args.cmd
     if not cmd:
@@ -250,23 +271,34 @@ def _rank_environment(args, rank, backend, devices, rootinfo, master_addr, maste
     else:
         device = str(rank)
 
+    nodes, node = getattr(args, 'nnodes', 1), getattr(args, 'node_rank', 0)
+    global_rank = node * args.nproc + rank
+    world = nodes * args.nproc
     env.update({
-        "RANK": str(rank),
+        "RANK": str(global_rank),
         # Each child is masked to one visible device, so its local device index
         # is 0 whatever its global rank; a torch child does set_device(LOCAL_RANK)
         # and would address a nonexistent card if this were the global rank.
         "LOCAL_RANK": str(backend_local_rank),
-        "WORLD_SIZE": str(args.nproc),
+        "WORLD_SIZE": str(world),
         "LOCAL_WORLD_SIZE": str(args.nproc),
+        "GROUP_RANK": str(node),
+        "GROUP_WORLD_SIZE": str(nodes),
         "MASTER_ADDR": master_addr,
         "MASTER_PORT": str(master_port),
         "JT_RENDEZVOUS_TIMEOUT_S": str(args.timeout),
         "JITTOR_DIST_RENDEZVOUS_DIR": os.path.abspath(args.logdir),
-        "{}_WORLD_SIZE".format(prefix): str(args.nproc),
-        "{}_RANK".format(prefix): str(rank),
+        "{}_WORLD_SIZE".format(prefix): str(world),
+        "{}_RANK".format(prefix): str(global_rank),
+        "{}_LOCAL_WORLD_SIZE".format(prefix): str(args.nproc),
         "{}_LOCAL_RANK".format(prefix): str(backend_local_rank),
         "{}_ROOTINFO_FILE".format(prefix): rootinfo,
     })
+    for name in ('JITTOR_LAUNCHER_EXTERNAL_STORE', 'JITTOR_LAUNCHER_RUN_ID', 'JT_NCCL_LOCAL_WORLD_RANKS'):
+        env.pop(name, None)
+    if nodes > 1:
+        env.update({'JITTOR_LAUNCHER_EXTERNAL_STORE': '1', 'JITTOR_LAUNCHER_RUN_ID': args.rdzv_id,
+                    'JT_NCCL_LOCAL_WORLD_RANKS': ','.join(str(node * args.nproc + index) for index in range(args.nproc))})
     return env, backend_local_rank, device
 
 
@@ -279,6 +311,8 @@ def main(argv=None):
 
     try:
         backend = args.backend if args.backend != "auto" else _detect_backend()
+        if args.nnodes > 1 and backend != 'nccl':
+            raise ValueError('multi-node HCCL root-info transport needs real-device validation; only NCCL is enabled')
         if backend == "nccl":
             # Set these before querying Jittor so its optional NCCL build is
             # enabled for an explicit MPI-free launch.
@@ -320,6 +354,7 @@ def main(argv=None):
                       type(error).__name__, error), file=sys.stderr)
 
     procs = []
+    control = None
     first_failure = None
     startup_error = None
     stop_signal = None
@@ -338,16 +373,27 @@ def main(argv=None):
         old_handlers[signum] = signal.signal(signum, forward_signal)
 
     try:
+        if args.nnodes > 1:
+            spec = importlib.util.spec_from_file_location(
+                '_jittor_launcher_control', os.path.join(os.path.dirname(__file__), '_launcher_control.py'))
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            control = module.AgentControl(args, backend, master_addr, master_port, rootinfo)
         for rank in range(args.nproc):
             if stop_signal is not None:
                 break
             env, backend_local_rank, device = _rank_environment(
                 args, rank, backend, devices, rootinfo, master_addr, master_port)
-            log_path = os.path.join(args.logdir, "rank{}.log".format(rank))
+            global_rank = args.node_rank * args.nproc + rank
+            log_path = os.path.join(args.logdir, "rank{}.log".format(global_rank))
             logf = open(log_path, "w")
+            command = args.cmd
+            if args.nnodes > 1:
+                command = [sys.executable, os.path.join(os.path.dirname(__file__), '_launch_worker.py'),
+                           str(os.getpid()), *args.cmd]
             try:
                 process = subprocess.Popen(
-                    args.cmd, env=env, stdout=logf, stderr=subprocess.STDOUT)
+                    command, env=env, stdout=logf, stderr=subprocess.STDOUT)
             except OSError as error:
                 logf.close()
                 startup_error = error
@@ -359,7 +405,7 @@ def main(argv=None):
                 print(
                     "[jtrun] backend={} rank={}/{} local_rank={} device={} "
                     "backend_local_rank={} master={}:{} command={} log={}".format(
-                        backend, rank, args.nproc, rank, device, backend_local_rank,
+                        backend, global_rank, args.nnodes * args.nproc, rank, device, backend_local_rank,
                         master_addr, master_port, " ".join(args.cmd), log_path),
                     flush=True,
                 )
@@ -371,6 +417,8 @@ def main(argv=None):
         else:
             pending = list(range(len(procs)))
             while pending and first_failure is None and stop_signal is None:
+                if control is not None:
+                    control.tick(args.node_rank * args.nproc + rank for rank in pending)
                 for rank in list(pending):
                     process, logf = procs[rank]
                     try:
@@ -383,12 +431,28 @@ def main(argv=None):
                         first_failure = (rank, result)
                         rc = _exit_code(result)
                         print("[jtrun] rank {} exited with code {}; stopping other ranks".format(
-                            rank, rc), file=sys.stderr, flush=True)
+                            args.node_rank * args.nproc + rank, rc), file=sys.stderr, flush=True)
                         break
             if stop_signal is not None:
                 rc = 128 + stop_signal
+        if control is not None:
+            if rc:
+                control.fail('node {} worker/signal failure, exit {}'.format(args.node_rank, rc))
+            else:
+                control.finish()
+    except (OSError, RuntimeError, ValueError, TimeoutError) as error:
+        print('[jtrun] control plane failed: {}'.format(error), file=sys.stderr, flush=True)
+        if control is not None:
+            try:
+                control.fail(str(error))
+            except (OSError, RuntimeError) as publication_error:
+                print('[jtrun] could not publish control-plane failure: {}'.format(publication_error),
+                      file=sys.stderr, flush=True)
+        rc = 1
     finally:
         _stop_all(procs, keep=() if first_failure is None else (first_failure[0],))
+        if control is not None:
+            control.close()
         _cleanup(rootinfo)
         for signum, handler in old_handlers.items():
             signal.signal(signum, handler)
@@ -396,10 +460,11 @@ def main(argv=None):
     if stop_signal is not None:
         print("[jtrun] received {}; ranks stopped".format(signal.Signals(stop_signal).name),
               file=sys.stderr, flush=True)
-    elif first_failure is None and startup_error is None:
+    elif rc == 0 and first_failure is None and startup_error is None:
         print("[jtrun] all ranks done, rc=0", flush=True)
     elif first_failure is not None:
         rank, result = first_failure
+        rank += args.node_rank * args.nproc
         print("[jtrun] rank {} failed with code {}; see {} for its log".format(
             rank, _exit_code(result), os.path.join(args.logdir, "rank{}.log".format(rank))),
             file=sys.stderr, flush=True)
