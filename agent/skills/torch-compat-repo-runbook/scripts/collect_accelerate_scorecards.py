@@ -74,6 +74,8 @@ def collect(directory, source, baseline, report, command, output):
                         artifacts.extend(artifact(prefix + '-checkpoint-' + name, checkpoint / name)
                                          for name in value['result']['checkpoint_sha256'])
         reference, candidate = values[('torch', 0, 0)], values[('jittor', 0, 0)]
+        from _accelerate_installation import wheel_artifact
+        artifacts.append(wheel_artifact(reference['downstream_distribution'].get('wheel_path', '')))
         platform = dict(candidate['platform'], oracle={**reference['interpreter'], 'torch_npu_version': 'not-applicable'})
         platform_path = output / (artifact_scope + '-platform.json')
         write_json(platform_path, platform)
@@ -116,6 +118,7 @@ def main():
     if git(ROOT, 'rev-parse', args.baseline + '^{commit}') != args.baseline:
         parser.error('Expected an existing full measurement source commit')
     source = source_descriptor(args.upstream)
+    write_json(args.output / 'source.json', source)
     rows = []
     for index, directory in enumerate(args.run):
         rows.extend(collect(directory, source, args.baseline, args.report, args.command, args.output / ('run%d' % index)))

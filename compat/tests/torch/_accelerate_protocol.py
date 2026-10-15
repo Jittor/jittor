@@ -67,7 +67,7 @@ def source_descriptor(checkout):
         raise ValueError('Unresolved upstream Accelerate version')
     return {'repo': 'accelerate', 'upstream': {'remote': remote,
             'commit': command('git', '-C', str(checkout), 'rev-parse', 'HEAD'),
-            'version': versions[0]}, 'axes': [], 'package_sources': files}
+            'version': versions[0]}, 'axes': [], 'package_sources': files, 'package_files': files}
 
 
 def hyperparameters(optimizer):
@@ -149,6 +149,11 @@ class Capture:
         actual = {path: digest(package.joinpath(*Path(path).parts[2:])) for path in expected}
         if actual != expected or installed['version'] != self.source['upstream']['version']:
             raise ValueError('Actually imported Accelerate differs from clean pinned upstream')
+        sys.path.insert(0, str(ROOT / 'agent/skills/torch-compat-repo-runbook/scripts'))
+        from _accelerate_installation import capture
+
+        distribution = capture(importlib.import_module('accelerate'), self.source,
+                               os.environ['JITTOR_ACCELERATE_WHEEL'])
         jt = sys.modules.get('jittor') if shim else None
         if jt is not None and Path(jt.__file__).resolve() != ROOT / 'python/jittor/__init__.py':
             raise ValueError('Measured Jittor is from a different worktree')
@@ -188,11 +193,15 @@ class Capture:
                         'tools/run_accelerate_gate.py')
         if os.environ.get('JITTOR_ACCELERATE_CHECKPOINT_PHASE'):
             source_files += ('compat/tests/torch/_accelerate_fresh_process.py',)
+        source_files += ('agent/skills/torch-compat-repo-runbook/scripts/_accelerate_installation.py',
+                         'agent/skills/torch-compat-repo-runbook/scripts/_installed_source_proof.py',
+                         'agent/skills/torch-compat-repo-runbook/scripts/component_measure.py',
+                         'compat/tests/torch/_ecosystem_runner.py')
         metadata = {'schema_version': 1, 'case': self.case, 'runtime': 'jittor' if shim else 'torch',
                     'jittor_commit': command('git', '-C', str(ROOT), 'rev-parse', 'HEAD'),
                     'upstream': self.source['upstream'], 'source_descriptor': self.source,
                     'measurement_source_sha256': {path: digest(ROOT / path) for path in source_files},
-                    'downstream_distribution': {**installed, 'source_sha256': actual},
+                    'downstream_distribution': distribution,
                     'interpreter': {'executable': PYTHON, 'pid': os.getpid(), 'is_shim': shim,
                                     'torch_version': str(torch.__version__), 'binary_extension': binary,
                                     'binary_sha256': digest(binary) if binary else None},

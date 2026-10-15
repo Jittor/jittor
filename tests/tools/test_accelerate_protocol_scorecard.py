@@ -2,12 +2,14 @@
 
 import copy
 import ast
+import base64
 import hashlib
 import importlib.util
 import json
 from pathlib import Path
 import sys
 from types import SimpleNamespace
+import zipfile
 
 import numpy as np
 import pytest
@@ -19,6 +21,7 @@ import audit_coverage as audit  # noqa: E402
 import _accelerate_scorecard as accelerate  # noqa: E402
 from _accelerate_scorecard import measurements  # noqa: E402
 import _protocol_scorecards as protocols  # noqa: E402
+import _accelerate_installation as installation  # noqa: E402
 
 
 def digest(path):
@@ -34,10 +37,37 @@ def protocol(tmp_path, monkeypatch):
     (root / 'gate.py').write_text('def test_real():\n    pass\n')
     binary = tmp_path / 'torch_C.so'
     binary.write_bytes(b'binary identity fixture only')
-    source_hash = 'c' * 64
+    source_text = b'__version__ = "1.10.1"\n'
+    source_hash = hashlib.sha256(source_text).hexdigest()
     source = {'repo': 'accelerate', 'axes': [],
-              'upstream': {'commit': 'b' * 40, 'remote': 'https://github.com/huggingface/accelerate.git', 'version': '1.10.1'},
+              'upstream': {'commit': installation.SOURCE_SHA, 'remote': 'https://github.com/huggingface/accelerate.git', 'version': '1.10.1'},
               'package_sources': [{'path': 'src/accelerate/__init__.py', 'sha256': source_hash}]}
+    source['package_files'] = copy.deepcopy(source['package_sources'])
+    package = tmp_path / 'prefix/accelerate'
+    package.mkdir(parents=True)
+    (package / '__init__.py').write_bytes(source_text)
+    distinfo = package.parent / 'accelerate-1.10.1.dist-info'
+    distinfo.mkdir()
+    metadata = 'Name: accelerate\nVersion: 1.10.1\n'
+    encoded = base64.urlsafe_b64encode(bytes.fromhex(source_hash)).decode().rstrip('=')
+    record_text = 'accelerate/__init__.py,sha256=%s,%d\n' % (encoded, len(source_text))
+    (distinfo / 'METADATA').write_text(metadata)
+    (distinfo / 'RECORD').write_text(record_text)
+    wheel = tmp_path / 'synthetic-accelerate.whl'
+    with zipfile.ZipFile(wheel, 'w') as archive:
+        archive.writestr('accelerate/__init__.py', source_text)
+        archive.writestr('accelerate-1.10.1.dist-info/METADATA', metadata)
+        archive.writestr('accelerate-1.10.1.dist-info/RECORD', record_text)
+    monkeypatch.setattr(installation, 'WHEEL_SHA256', digest(wheel))
+    binding = {'repo': 'accelerate', 'version': '1.10.1',
+               'source_sha256': {'src/accelerate/__init__.py': source_hash},
+               'installed_files_sha256': {'__init__.py': source_hash},
+               'origin': str(package / '__init__.py'), 'package': str(package),
+               'distribution_name': 'accelerate', 'distribution_version': '1.10.1',
+               'wheel_path': str(wheel), 'wheel_sha256': digest(wheel),
+               'distribution_metadata': {name: {'path': str(distinfo / name),
+                   'sha256': digest(distinfo / name), 'text': (distinfo / name).read_text()}
+                   for name in ('METADATA', 'RECORD')}}
     precision = {'matmul': False, 'cudnn': False, 'cudnn_benchmark': False, 'matmul_precision': 'highest'}
     oracle = {'executable': 'independent-python', 'pid': 42, 'is_shim': False, 'torch_version': '2.11',
               'binary_extension': str(binary), 'binary_sha256': digest(binary)}
@@ -55,6 +85,7 @@ def protocol(tmp_path, monkeypatch):
     platform_path = tmp_path / 'platform.json'
     platform_path.write_text(json.dumps(platform))
     bind('platform', platform_path)
+    bind('upstream-wheel', wheel)
     row = {'record_kind': 'protocol', 'repo': 'accelerate', 'case': 'world1-no-checkpoint',
            'protocol': {'id': 'accelerate-checkpoint', 'world_size': 1, 'precision': 'no', 'ranks': [0]},
            'registry_refs': [], 'jittor_commit': 'a' * 40, 'upstream': source['upstream'],
@@ -90,8 +121,7 @@ def protocol(tmp_path, monkeypatch):
                      'world_size': 1, 'mixed_precision': 'no', 'jittor_commit': row['jittor_commit'],
                      'source_descriptor': source, 'upstream': source['upstream'], 'device': 'cpu', 'backend': 'none',
                      'measurement_source_sha256': {str(index): 'd' * 64 for index in range(4)},
-                     'downstream_distribution': {'version': '1.10.1', 'source_sha256': {'src/accelerate/__init__.py': source_hash},
-                                                 'installed_files_sha256': {'__init__.py': source_hash}},
+                     'downstream_distribution': copy.deepcopy(binding),
                      'interpreter': oracle if runtime == 'torch' else {**oracle, 'is_shim': True},
                      'native_runtime_flags': {'use_cuda': 0}, 'fallback_policy': 'error', 'fallback_count': 0,
                      'seed': seed, 'hf_hub_offline': True, 'tf32': precision,
@@ -268,7 +298,7 @@ def test_cpu_environment_overrides_inherited_cuda_and_pins_source(tmp_path, monk
 
 
 @pytest.mark.parametrize('producer_status', [0, 1])
-def test_fresh_checkpoint_consumer_follows_only_a_successful_terminated_producer(tmp_path, monkeypatch, producer_status):
+def test_fresh_checkpoint_consumer_follows_only_a_successful_terminated_producer(tmp_path, monkeypatch, producer_status, protocol):
     spec = importlib.util.spec_from_file_location('accelerate_fresh_gate', ROOT / 'tools/run_accelerate_gate.py')
     gate = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(gate)
@@ -293,7 +323,8 @@ def test_fresh_checkpoint_consumer_follows_only_a_successful_terminated_producer
     monkeypatch.setattr(gate, 'run', execute)
     args = SimpleNamespace(output=tmp_path / 'measurements', cache_root=tmp_path / 'cache',
                            device='cpu', devices='', upstream=tmp_path / 'upstream',
-                           oracle_python='oracle-fixture', jittor_python='candidate-fixture', fresh_process=True)
+                           oracle_python='oracle-fixture', jittor_python='candidate-fixture', fresh_process=True,
+                           wheel=next(x['path'] for x in protocol[0]['evidence']['artifacts'] if x['role'] == 'upstream-wheel'))
     assert gate.gate(args) == int(bool(producer_status))
     execution = json.loads((args.output / 'execution.json').read_text())
     assert len(execution['results']) == 4
@@ -369,7 +400,7 @@ def test_real_preflight_keeps_private_rank_homes_despite_inherited_nox_paths(tmp
     assert observed[0]['JITTOR_DIST_RENDEZVOUS_DIR'] == observed[1]['JITTOR_DIST_RENDEZVOUS_DIR']
 
 
-def test_gate_passes_each_serial_warm_its_explicit_cache_rank(tmp_path, monkeypatch):
+def test_gate_passes_each_serial_warm_its_explicit_cache_rank(tmp_path, monkeypatch, protocol):
     spec = importlib.util.spec_from_file_location('accelerate_gate_launcher', ROOT / 'tools/run_accelerate_gate.py')
     gate = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(gate)
@@ -398,7 +429,8 @@ def test_gate_passes_each_serial_warm_its_explicit_cache_rank(tmp_path, monkeypa
     monkeypatch.setattr(gate, 'run', execute)
     args = SimpleNamespace(output=tmp_path / 'measurements', cache_root=tmp_path / 'cache',
                            device='cuda', devices='first,second', upstream=tmp_path / 'upstream',
-                           oracle_python='oracle-fixture', jittor_python='candidate-fixture')
+                           oracle_python='oracle-fixture', jittor_python='candidate-fixture',
+                           wheel=next(x['path'] for x in protocol[0]['evidence']['artifacts'] if x['role'] == 'upstream-wheel'))
     assert gate.gate(args) == 0
     assert warmed == [('torch', 0), ('torch', 1), ('jittor', 0), ('jittor', 1)]
 
@@ -523,7 +555,7 @@ def fresh_protocol(protocol, tmp_path, monkeypatch):
     execution_path = tmp_path / 'execution.json'
     execution_path.write_text(json.dumps(execution))
     bind('execution', execution_path)
-    artifacts.extend(x for x in old if x['role'] == 'platform')
+    artifacts.extend(x for x in old if x['role'] in ('platform', 'upstream-wheel'))
     row['evidence']['artifacts'] = artifacts
     actual = measurements(row, artifacts, source)
     row.update(actual)
@@ -537,6 +569,48 @@ def test_separate_process_protocol_accepts_only_its_own_semantic_scope(fresh_pro
     value = result(fresh_protocol)
     assert not value['rejected'] and len(value['accepted']) == 1
     assert value['accepted'][0]['protocol']['restoration'] == 'fresh-process'
+
+
+@pytest.mark.parametrize('mutation', ('version', 'name', 'missing_metadata', 'extra_payload',
+    'wheel', 'metadata_text', 'record_text', 'origin', 'actual_extra_payload'))
+def test_matching_unbound_installation_changes_on_both_runtimes_are_rejected(fresh_protocol, mutation):
+    row = fresh_protocol[0]
+    roles = [artifact['role'] for artifact in row['evidence']['artifacts']
+             if artifact['role'].endswith('-metadata')]
+    assert len(roles) == 8
+
+    def change(value):
+        binding = value['downstream_distribution']
+        if mutation == 'version':
+            binding['distribution_version'] = '9.9.9'
+        elif mutation == 'name':
+            binding['distribution_name'] = 'another-package'
+        elif mutation == 'missing_metadata':
+            binding.pop('distribution_metadata')
+        elif mutation == 'extra_payload':
+            binding['installed_files_sha256']['untracked-payload.bin'] = '0' * 64
+        elif mutation == 'wheel':
+            binding['wheel_sha256'] = '0' * 64
+        elif mutation in ('metadata_text', 'record_text'):
+            name = 'METADATA' if mutation == 'metadata_text' else 'RECORD'
+            field = binding['distribution_metadata'][name]
+            field['text'] += 'unbound-content\n'
+            field['sha256'] = hashlib.sha256(field['text'].encode()).hexdigest()
+        elif mutation == 'origin':
+            binding['origin'] = str(Path(binding['origin']).with_name('unbound.py'))
+        else:
+            (Path(binding['package']) / 'untracked-payload.bin').write_bytes(b'unbound actual payload')
+
+    for role in roles:
+        mutate_metadata(fresh_protocol, role, change)
+    assert result(fresh_protocol)['rejected']
+
+
+def test_official_wheel_proof_is_required_even_when_all_numeric_fields_match(fresh_protocol):
+    artifacts = fresh_protocol[0]['evidence']['artifacts']
+    artifacts[:] = [row for row in artifacts if row['role'] != 'upstream-wheel']
+    value = result(fresh_protocol)
+    assert value['rejected'] and 'upstream-wheel' in value['rejected'][0]['reason']
     assert value['coverage'] == []
     old = copy.deepcopy(fresh_protocol[0])
     old['protocol']['id'] = 'accelerate-checkpoint'

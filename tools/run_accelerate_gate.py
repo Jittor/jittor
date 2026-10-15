@@ -24,7 +24,7 @@ SINGLE = 'test_optimizer_checkpoint_state.py::TestOptimizerCheckpoint::test_acce
 FSDP = 'test_accelerate_distributed_integration.py::test_fsdp2_full_model_optimizer_checkpoint_resume'
 
 
-def environment(runtime, device, state, rank, devices, upstream):
+def environment(runtime, device, state, rank, devices, upstream, wheel=None):
     """Set canonical and legacy flags before importing either tensor runtime."""
     env = dict(os.environ)
     for name in ('RANK', 'WORLD_SIZE', 'LOCAL_RANK', 'LOCAL_WORLD_SIZE', 'JT_NCCL_RANK', 'JT_NCCL_WORLD_SIZE',
@@ -33,6 +33,9 @@ def environment(runtime, device, state, rank, devices, upstream):
                  'MASTER_ADDR', 'MASTER_PORT', 'JITTOR_ACCELERATE_INTEGRATION_OUTPUT', 'CHECKPOINT_REPORT',
                  'JITTOR_ACCELERATE_CHECKPOINT_PHASE', 'JITTOR_ACCELERATE_CHECKPOINT_DIRECTORY'):
         env.pop(name, None)
+    env.pop('JITTOR_ACCELERATE_WHEEL', None)
+    if wheel is not None:
+        env['JITTOR_ACCELERATE_WHEEL'] = str(wheel)
     env.update({'JITTOR_TORCH_SHIM': '1' if runtime == 'jittor' else '0',
                 'JITTOR_SOURCE_ROOT': str(ROOT) if runtime == 'jittor' else '',
                 'PYTHONPATH': str(ROOT / 'python') if runtime == 'jittor' else '',
@@ -196,6 +199,12 @@ def gate(args):
         raise ValueError('Choose a fresh output directory; historical measurements are immutable')
     if getattr(args, 'fresh_process', False) and state.exists() and any(state.iterdir()):
         raise ValueError('Choose an empty output directory; failed phase artifacts are immutable too')
+    wheel = getattr(args, 'wheel', None) or os.environ.get('JITTOR_ACCELERATE_WHEEL')
+    if not wheel:
+        raise ValueError('Gate requires the actual pinned official Accelerate wheel')
+    sys.path.insert(0, str(ROOT / 'agent/skills/torch-compat-repo-runbook/scripts'))
+    from _accelerate_installation import wheel_artifact
+    wheel = Path(wheel_artifact(wheel)['path'])
     state.mkdir(parents=True, exist_ok=True)
     cache_state = (args.cache_root or state).resolve()
     if ROOT == cache_state or ROOT in cache_state.parents:
@@ -205,7 +214,7 @@ def gate(args):
         raise ValueError('CUDA gate requires exactly two explicit distinct devices')
     commands, results = [], []
     for runtime, python in (('torch', args.oracle_python), ('jittor', args.jittor_python)):
-        env = environment(runtime, args.device, cache_state, 0, devices, args.upstream.resolve())
+        env = environment(runtime, args.device, cache_state, 0, devices, args.upstream.resolve(), wheel)
         # First core/extension compilation is deliberately serial, including rank1.
         for rank in range(2 if args.device == 'cuda' else 1):
             warm_env = dict(env)
@@ -248,7 +257,7 @@ def gate(args):
                                    '--nproc-per-node=2', '--device-ids=' + ','.join(devices),
                                    '--log-dir=' + str(folder / 'launcher-logs'), *base]
                     scenario_env = environment(runtime, args.device, cache_state, 0,
-                                               devices[:1] if world == 1 else devices, args.upstream.resolve())
+                                               devices[:1] if world == 1 else devices, args.upstream.resolve(), wheel)
                     log = '%s-world%d-%s-seed%d%s.log' % (runtime, world, precision, seed, '-' + phase if phase else '')
                     # run() waits for the complete launcher/rank process tree.
                     # A consumer is never started while its producer is alive.
@@ -286,6 +295,7 @@ def main():
     parser.add_argument('--jittor-python')
     parser.add_argument('--oracle-python')
     parser.add_argument('--upstream', type=Path)
+    parser.add_argument('--wheel', type=Path, help='Pinned official Accelerate wheel; alternatively JITTOR_ACCELERATE_WHEEL')
     parser.add_argument('--devices', default='')
     parser.add_argument('--worker', action='store_true')
     parser.add_argument('--runtime', choices=('torch', 'jittor'))
