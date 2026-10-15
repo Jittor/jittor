@@ -139,17 +139,18 @@ def official_wheel(repo, version, expected_hash, folder):
     return wheel
 
 
-def install_wheels(commands, candidate, oracle, wheels, preserved=()):
+def install_wheels(commands, candidate, oracle, wheels, requirements):
     all_wheels = sorted(Path(wheels).glob('*.whl'))
     torch_wheels = [path for path in all_wheels if path.name.startswith('torch-')]
     require(len(torch_wheels) == 1 and torch_wheels[0].name.startswith('torch-' + TORCH),
             'Exactly one pinned official CPU Torch wheel required')
-    packages = [path for path in all_wheels if path not in preserved]
+    require('torch==' + TORCH in requirements, 'Pinned CPU Torch must remain an install root')
     # Real distribution metadata is required by downstream availability checks.
     # The candidate activates the official shim only at gate execution; the
     # oracle stays independent. Never synthesize Torch dist-info.
     for interpreter in (oracle, candidate):
-        commands.run(interpreter, '-m', 'pip', 'install', '--no-index', '--no-deps', *packages)
+        commands.run(interpreter, '-m', 'pip', 'install', '--no-index',
+                     '--find-links', wheels, *requirements)
 
 
 def unpack_pinned_wheel(wheel, site):
@@ -237,17 +238,18 @@ def provision(library, state, python, source_cache=None, wheel_cache=None):
         (state / 'swift-inventory.json').write_text(json.dumps(swift_inventory, indent=2) + '\n')
     # Build source-only dependency wheels using the compatible runtime build
     # tools. The complete selected distributions (including Swift METADATA)
-    # participate in resolution; --no-deps is only used for the resulting
-    # complete wheel closure, and pip check below must pass in every venv.
+    # participate in resolution. Installation resolves the same roots offline:
+    # a wheelhouse may also contain superseded versions from an earlier attempt.
+    # pip check below must pass in every venv.
     commands.run(oracle, '-m', 'pip', 'install', '--index-url', 'https://pypi.org/simple',
                  *cached, RUNTIME_SETUPTOOLS, 'wheel==0.45.1')
     roots = list(COMMON) + (list(SWIFT_DEPS) if library == 'swift' else [])
+    requirements = [*pinned.values(), *([swift_wheel] if swift_wheel else []),
+                    'torch==' + TORCH, RUNTIME_SETUPTOOLS, *runtime_tools(), *roots]
     commands.run(oracle, '-m', 'pip', 'wheel', '--index-url', 'https://pypi.org/simple',
                  '--no-build-isolation', '--wheel-dir', wheels, '--find-links', wheels,
-                 *cached,
-                 *pinned.values(), *([swift_wheel] if swift_wheel else []),
-                 'torch==' + TORCH, RUNTIME_SETUPTOOLS, *runtime_tools(), *roots)
-    install_wheels(commands, candidate, oracle, wheels, preserved=tuple(pinned.values()))
+                 *cached, *requirements)
+    install_wheels(commands, candidate, oracle, wheels, requirements)
     for side in ('candidate', 'oracle'):
         site = state / side / 'lib/python3.11/site-packages'
         for wheel in pinned.values():

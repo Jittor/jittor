@@ -71,15 +71,29 @@ def test_both_runtime_envs_receive_same_real_dependency_wheels(provision, tmp_pa
                  'peft-0.17.1-py3-none-any.whl', 'numpy-1.26.4-cp311-cp311-linux_x86_64.whl'):
         (tmp_path / name).touch()
     calls = []
+    roots = ['torch==' + provision.TORCH, 'peft==0.17.1', 'numpy==1.26.4']
     provision.install_wheels(SimpleNamespace(run=lambda *args: calls.append(args)),
-                             'candidate-python', 'oracle-python', tmp_path)
+                             'candidate-python', 'oracle-python', tmp_path, roots)
     assert len(calls) == 2
     oracle, candidate = calls
     assert oracle[0] == 'oracle-python' and candidate[0] == 'candidate-python'
-    assert '--no-index' in oracle and '--no-deps' in candidate
-    assert sum(Path(str(value)).name.startswith('torch-') for value in oracle) == 1
-    assert sum(Path(str(value)).name.startswith('torch-') for value in candidate) == 1
-    assert set(oracle[6:]) == set(candidate[6:])
+    assert '--no-index' in oracle and '--no-deps' not in candidate
+    assert oracle[5:7] == ('--find-links', tmp_path)
+    assert oracle[7:] == candidate[7:] == tuple(roots)
+
+
+def test_superseded_wheel_is_available_to_resolver_without_becoming_an_install_root(provision, tmp_path):
+    for name in ('torch-' + provision.TORCH + '-cp311-cp311-linux_x86_64.whl',
+                 'fsspec-2025.3.0-py3-none-any.whl', 'fsspec-2026.9.0-py3-none-any.whl'):
+        (tmp_path / name).touch()
+    calls = []
+    roots = ['torch==' + provision.TORCH, 'datasets==3.6.0']
+    provision.install_wheels(SimpleNamespace(run=lambda *args: calls.append(args)),
+                             'candidate', 'oracle', tmp_path, roots)
+    for command in calls:
+        assert command[-2:] == tuple(roots)
+        assert '--no-deps' not in command
+        assert not any(str(value).endswith('.whl') for value in command)
 
 
 @pytest.mark.parametrize('names', [[], ['torch-2.7.1+cpu-old.whl'],
@@ -89,7 +103,7 @@ def test_wrong_or_ambiguous_torch_wheel_refuses_before_install(provision, tmp_pa
         (tmp_path / name).touch()
     with pytest.raises(ValueError, match='Exactly one'):
         provision.install_wheels(SimpleNamespace(run=lambda *args: pytest.fail('must not install')),
-                                 'candidate', 'oracle', tmp_path)
+                                 'candidate', 'oracle', tmp_path, ['torch==' + provision.TORCH])
 
 
 def test_official_download_verifies_hash_before_wheel_becomes_available(provision, tmp_path, monkeypatch):
