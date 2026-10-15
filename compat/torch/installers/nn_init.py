@@ -58,32 +58,28 @@ def _initialization_dtype(tensor):
     return dtype, "float32" if dtype in ("float16", "bfloat16") else dtype
 
 
-def normal_(tensor, mean=0.0, std=1.0, generator=None):
-    if _not_var(tensor): return tensor
+def _normal_values(tensor, mean=0.0, std=1.0, generator=None):
+    """Shared draw/validation owner; callers retain their in-place policy."""
     mean, std = float(mean), float(std)
     if not std >= 0:
         raise RuntimeError("normal expects std >= 0.0")
     dtype, compute_dtype = _initialization_dtype(tensor)
     target = get_install_context(jt).target_namespace
     # Factories own generator validation, device placement and native draws.
-    # Tensor.normal_ is a separate consumer and must not substitute its stream.
     with jt.no_grad():
         draw = target.randn(tuple(tensor.shape), dtype=compute_dtype,
                             device=tensor.device, generator=generator)
         value = (draw * std + mean).cast(dtype)
-    return _assign(tensor, value)
+    return value
 
 
-def uniform_(tensor, a=0.0, b=1.0, generator=None, *, low=None, high=None):
-    if low is not None:
-        if a != 0.0 and a != low:
-            raise TypeError("uniform_ received conflicting values for a and low")
-        a = low
-    if high is not None:
-        if b != 1.0 and b != high:
-            raise TypeError("uniform_ received conflicting values for b and high")
-        b = high
+def normal_(tensor, mean=0.0, std=1.0, generator=None):
     if _not_var(tensor): return tensor
+    return _assign(tensor, _normal_values(tensor, mean, std, generator))
+
+
+def _uniform_values(tensor, a=0.0, b=1.0, generator=None):
+    """Sample with target dtype/device, before the caller writes any storage."""
     a, b = float(a), float(b)
     dtype, compute_dtype = _initialization_dtype(tensor)
     target = get_install_context(jt).target_namespace
@@ -96,7 +92,20 @@ def uniform_(tensor, a=0.0, b=1.0, generator=None, *, low=None, high=None):
         draw = target.rand(tuple(tensor.shape), dtype=compute_dtype,
                            device=tensor.device, generator=generator)
         value = (draw * (b - a) + a).cast(dtype)
-    return _assign(tensor, value)
+    return value
+
+
+def uniform_(tensor, a=0.0, b=1.0, generator=None, *, low=None, high=None):
+    if low is not None:
+        if a != 0.0 and a != low:
+            raise TypeError("uniform_ received conflicting values for a and low")
+        a = low
+    if high is not None:
+        if b != 1.0 and b != high:
+            raise TypeError("uniform_ received conflicting values for b and high")
+        b = high
+    if _not_var(tensor): return tensor
+    return _assign(tensor, _uniform_values(tensor, a, b, generator))
 
 
 def zeros_(tensor):

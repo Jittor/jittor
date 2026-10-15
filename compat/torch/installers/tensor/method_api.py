@@ -1640,18 +1640,32 @@ def _api_nonzero(input, as_tuple=False, **kw):
     return _nonzero(input, as_tuple=as_tuple)
 
 
+def _random_inplace(self, draw, *parameters, generator=None):
+    tracks_grad = bool(self.requires_grad and not _owner.jt.flags.no_grad)
+    # Validate before the sampler can reserve or advance a private/global RNG.
+    if tracks_grad:
+        if self.is_leaf:
+            raise RuntimeError("a leaf Variable that requires grad is being used in an in-place operation.")
+        if self._view_base_is_trainable_leaf():
+            raise RuntimeError("a view of a leaf Variable that requires grad is being used in an in-place operation.")
+    value = draw(self, *parameters, generator=generator)
+    if tracks_grad:
+        # Overwriting a non-leaf has a zero derivative through its old graph.
+        # As in zero_(), selection clears even NaN/Inf without multiplying by 0.
+        with _new_scope(self, None), _owner.jt.no_grad():
+            mask = _owner.jt.zeros(self.shape, "bool")
+        value = _owner.jt.ternary(mask, self, value)
+    return _ip(self, value, preserve_storage=True)
+
+
 def _api_normal(self, mean=0.0, std=1.0, generator=None):
-    # Native random factories are differentiable by default. Initialization
-    # supplies values, not a new autograd input to the in-place assignment.
-    with _owner.jt.no_grad():
-        value = _owner.jt.normal(float(mean), float(std), self.shape).cast(_jittor_dtype_name(self.dtype))
-    return _ip(self, value)
+    from ..nn_init import _normal_values
+    return _random_inplace(self, _normal_values, mean, std, generator=generator)
 
 
 def _api_uniform(self, a=0.0, b=1.0, generator=None):
-    with _owner.jt.no_grad():
-        value = (_owner.jt.rand(self.shape) * (b - a) + a).cast(_jittor_dtype_name(self.dtype))
-    return _ip(self, value)
+    from ..nn_init import _uniform_values
+    return _random_inplace(self, _uniform_values, a, b, generator=generator)
 
 
 def _api_tolist(self):
