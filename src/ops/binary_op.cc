@@ -481,8 +481,16 @@ BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
         NanoVector axes;
         vector<VarPtr> sources;
         if (storage_layout_operands({x, y}, axes, sources)) {
-            forward(storage_view_transpose(make_binary(sources[0], sources[1], op), axes));
-            return;
+            if (!storage_layout_records_grad({x, y})) {
+                forward(storage_view_transpose(make_binary(sources[0], sources[1], op), axes));
+                return;
+            }
+            // Keep the real logical input identities for grad(). Internal
+            // transpose aliases are forward implementation details: .data
+            // may replace x/y's allocation after forward has finished.
+            StorageLayoutForwardScope scope;
+            layout_value = storage_view_transpose(
+                make_binary(sources[0], sources[1], op), axes);
         }
     }
 
@@ -536,7 +544,7 @@ BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
 
     set_flag(OpFlags::_cpu);
     set_flag(OpFlags::_cuda);
-    set_type(OpType::element);
+    set_type(layout_value ? OpType::other : OpType::element);
     ns = op;
     USER_CHECK(ns.is_binary()) << "binary requires a binary operation, got" << ns;
     // Bitwise/shift ops are only defined for integer/boolean dtypes. On a float input the
@@ -624,6 +632,7 @@ VarPtr dirty_clone_broadcast(Var* v) {
 }
 
 VarPtr BinaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
+    if (layout_value && v_index >= 2) return nullptr;
     if (ns == ns_add) return dout;
     if (ns == ns_subtract) {
         if (v_index == 0) 
@@ -718,12 +727,26 @@ VarPtr BinaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 }
 
 void BinaryOp::infer_shape() {
+    if (layout_value) {
+        if (_inputs.size() == 2) add_inputs(vector<Var*>{layout_value.ptr});
+        z->set_shape(layout_value->shape);
+        z->storage_strides = layout_value->storage_strides;
+        z->share_with(layout_value);
+        return;
+    }
     // Construction inserts explicit broadcasts. Their data-dependent extent
     // may become concrete later, before this elementwise node is executed.
     z->set_shape(x->shape);
 }
 
+void BinaryOp::run() {
+    // The native entry is only the alias boundary. The forward dependency
+    // executed the real elementwise layout kernel on its declared device.
+    ASSERT(layout_value && z->mem_ptr == layout_value->mem_ptr);
+}
+
 void BinaryOp::jit_prepare(JK& jk) {
+    if (layout_value) return; // Forward math ran in the existing layout graph.
     bool xs = !x->is_contiguous(), ys = !y->is_contiguous();
     jk << "«Tx:" << x->dtype()
         << "«Ty:" << y->dtype()

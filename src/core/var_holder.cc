@@ -21,6 +21,7 @@
 #include "ops/composite/transpose_op.h"
 #include "ops/composite/fuse_transpose_op.h"
 #include "ops/composite/reshape_op.h"
+#include "ops/composite/clone_op.h"
 #include "type/fp16_compute.h"
 #include "mem/swap.h"
 #include "runtime/executor_entry.h"
@@ -263,12 +264,13 @@ void VarHolder::write_inplace(ArrayArgs&& array) {
 enum class StorageCopy { Direct, Snapshot, NoOp };
 
 static StorageCopy validate_storage_copy(Var* var, Var* source) {
-    USER_CHECK(source->mem_ptr) << "_copy_into needs an allocated source";
-    USER_CHECK(var->mem_ptr) << "_copy_into needs an allocated tensor";
     USER_CHECK(source->dtype() == var->dtype())
         << "_copy_into dtype mismatch:" << source->dtype() << "into" << var->dtype();
     USER_CHECK(source->size == var->size)
         << "_copy_into size mismatch:" << source->size << "bytes into" << var->size;
+    if (var->size == 0) return StorageCopy::NoOp;
+    USER_CHECK(source->mem_ptr) << "_copy_into needs an allocated source";
+    USER_CHECK(var->mem_ptr) << "_copy_into needs an allocated tensor";
     // Basic positive-stride slices and permutations have disjoint elements.
     // Validate that before issuing any write; expanded/overlapping targets
     // cannot be updated by scattering a dense source into their storage.
@@ -352,6 +354,7 @@ static void validate_logical_copy_alias(VarHolder* target, VarHolder* source) {
 }
 
 void VarHolder::copy_into(VarHolder* src, bool sync_src) {
+    check_inplace_autograd();
     ExecutorEntryScope entry;
     // Neither sync waits on the device; both only resolve what the Var is
     // still pending on. The copy itself is stream-ordered against the work
@@ -361,11 +364,12 @@ void VarHolder::copy_into(VarHolder* src, bool sync_src) {
     // that already has the bytes -- the caller of a replayed graph -- must be
     // able to say so instead of paying for the whole graph again.
     if (sync_src) src->sync(false, false);
-    USER_CHECK(src->var->mem_ptr)
+    USER_CHECK(src->var->mem_ptr || src->var->size == 0)
         << "_copy_into(sync_src=False) needs a source that already holds its "
            "bytes; this one has never been executed";
     validate_logical_copy_alias(this, src);
     auto plan = validate_storage_copy(var, src->var);
+    record_inplace_write();
     if (plan == StorageCopy::NoOp) return;
     // A strided source -- a channels-last activation read as NCHW, a
     // transposed view -- is made dense first; the copy below moves raw bytes.
@@ -557,13 +561,19 @@ VarHolder::VarHolder(PyObject* obj, NanoString dtype) {
 }
 
 
-void VarHolder::drop_view() {
-    if (!view) return;
+static void unlink_view_owner(VarView* view) {
     if (auto* base = view->base) {
         if (view->prev) view->prev->next = view->next;
         else base->views = view->next;
         if (view->next) view->next->prev = view->prev;
     }
+    view->base = nullptr;
+    view->prev = view->next = nullptr;
+}
+
+void VarHolder::drop_view() {
+    if (!view) return;
+    unlink_view_owner(view);
     delete view;
     view = nullptr;
 }
@@ -595,18 +605,28 @@ bool VarHolder::storage_view_is_physical() {
 
 bool VarHolder::view_base_is_trainable_leaf() {
     if (!view) return false;
-    Var* base = view->base ? view->base->var : var;
-    if (!view->base) {
+    auto* owner = this;
+    while (owner->view && owner->view->base)
+        owner = owner->view->base;
+    Var* base = owner->var;
+    if (owner->view) {
         // A Python owner may expire while the differentiable view still owns
         // its native graph. Follow only actual view producers to recover the
         // base; a clone/detach or an arithmetic producer is a real boundary.
         while (Op* producer = base->input()) {
+            // Tensor(source) has a CloneOp producer but is a real view only
+            // when native view metadata records that provenance. Ordinary
+            // clone/detach must remain independent boundaries.
+            bool constructor_view = dynamic_cast<CloneOp*>(producer)
+                && base->autograd_alias && base->autograd_alias->source
+                && base->autograd_alias->recorded_view_history;
             if (producer->is_stop_grad()
                     || !(producer->is_op(op_ids::getitem())
                         || dynamic_cast<ReshapeOp*>(producer)
                         || producer->is_op(op_ids::transpose())
                         || dynamic_cast<FuseTransposeOp*>(producer)
-                        || producer->is_op(op_ids::broadcast_to()))
+                        || producer->is_op(op_ids::broadcast_to())
+                        || constructor_view)
                     || producer->_inputs.empty())
                 break;
             Var* next = producer->_inputs.front().node->var();
@@ -642,13 +662,20 @@ VarHolder* VarHolder::set_view_of(VarHolder* base, VarSlices&& slices,
         // An advanced index gathers, so its result is a copy -- and the Var*
         // it indexes with would outlive nothing in particular.
         if (slices.slices[i].is_var()) return this;
-    attach_view(base, VarViewStep(move(slices)));
     if (inherit_requires_grad) {
         bool enabled = base->get_requires_grad();
-        set_requires_grad(enabled);
-        if (enabled && no_grad)
+        // A view whose creation recorded no edge can inherit a later source
+        // activation. Its public flag must not create an accumulator or turn
+        // an already constructed consumer into a recorded edge.
+        bool unrecorded = no_grad || !enabled;
+        if (unrecorded && var->is_stop_grad()
+                && (var->dtype().is_float() || var->dtype().is_complex()))
+            start_grad();
+        set_requires_grad_impl(enabled);
+        if (unrecorded)
             var->set_flag(VarFlags::_unrecorded_view);
     }
+    attach_view(base, VarViewStep(move(slices)));
     return this;
 }
 
@@ -665,6 +692,31 @@ void VarHolder::attach_view(VarHolder* base, VarViewStep final_step) {
         for (auto& step : base->view->steps) steps.push_back(step);
     }
     if (root == this) return;
+    if (autograd_policy.stop_outputs_when_inputs_stopped) {
+        auto source = base->ensure_autograd_alias();
+        auto state = std::make_shared<AutogradAliasState>();
+        state->source = source;
+        state->version = source->version;
+        state->creation_version = *state->version;
+        state->created_without_grad = no_grad;
+        state->recorded_view_history = !no_grad && backward_grad_fn(var);
+        state->source_edge_enabled = base->get_requires_grad();
+        state->inherit_requires_grad = no_grad || !base->get_requires_grad();
+        state->own_requires_grad = !state->inherit_requires_grad && get_requires_grad();
+        var->autograd_alias = move(state);
+        if (var->autograd_alias->inherit_requires_grad) {
+            if (var->is_stop_grad()
+                    && (var->dtype().is_float() || var->dtype().is_complex())) {
+                auto state = var->autograd_alias;
+                bool own_requires_grad = state->own_requires_grad;
+                start_grad();
+                state->own_requires_grad = own_requires_grad;
+                var->autograd_alias = move(state);
+            }
+            var->set_flag(VarFlags::_unrecorded_view);
+            var->refresh_alias_requires_grad();
+        }
+    }
     steps.push_back(move(final_step));
     view = new VarView{root, this, move(steps), nullptr, root->views, physical};
     if (root->views) root->views->prev = view;
@@ -807,10 +859,37 @@ static bool view_step_fits(Var* value, const VarViewStep& step) {
     return true;
 }
 
-void VarHolder::refresh_transpose_views(bool preserve_grad_policy) {
+void VarHolder::refresh_transpose_views(bool preserve_grad_policy, VarView* only) {
     for (auto* record = views; record; ) {
         // drop_view() below unlinks and frees `record`, so step off it first.
         auto* next = record->next;
+        if (only && record != only) {
+            record = next;
+            continue;
+        }
+        auto state = record->owner->var->autograd_alias;
+        bool rebase = state && !state->created_without_grad && state->source
+            && (state->recorded_view_history || state->source->requires_grad())
+            && state->creation_version != *state->version;
+        // Rebuilding a view after an unrecorded store is graph bookkeeping,
+        // not a new user operation under that store's no-grad scope. Views
+        // originally created with recording enabled keep a recorded producer.
+        struct RecordingScope {
+            bool previous;
+            Var* source;
+            bool disabled;
+            RecordingScope(bool record, Var* source, bool freeze_edge)
+                : previous(no_grad), source(source),
+                  disabled(source->flag(VarFlags::_requires_grad_disabled)) {
+                if (record) no_grad = false;
+                if (freeze_edge) source->set_flag(VarFlags::_requires_grad_disabled);
+            }
+            ~RecordingScope() {
+                source->set_flag(VarFlags::_requires_grad_disabled, disabled);
+                no_grad = previous;
+            }
+        } recording(rebase, var, rebase && state->recorded_view_history
+                    && !get_requires_grad());
         VarPtr value(var);
         bool fits = true;
         bool physical = !view || view->physical_storage;
@@ -824,7 +903,19 @@ void VarHolder::refresh_transpose_views(bool preserve_grad_policy) {
             value = move(next_value);
         }
         if (fits) {
+            if (state && !rebase
+                    && record->owner->var->flag(VarFlags::_unrecorded_view))
+                value = jittor::detach(value.ptr);
             record->owner->rebind_view_result(move(value), preserve_grad_policy);
+            if (rebase) {
+                state->source_edge_enabled = get_requires_grad();
+                state->recorded_view_history = true;
+                state->inherit_requires_grad = false;
+                state->own_requires_grad = true;
+                auto* current = record->owner->var;
+                current->set_flag(VarFlags::_unrecorded_view, 0);
+                current->set_flag(VarFlags::_requires_grad_disabled, 0);
+            }
             record->physical_storage = physical;
         } else if (record->owner) {
             // The view keeps the data it was taken from, which is what torch's
@@ -876,6 +967,7 @@ bool VarHolder::write_through_view(Var* value, bool preserve_grad_policy) {
 }
 
 bool VarHolder::copy_view_into(VarHolder* src) {
+    check_inplace_autograd();
     ExecutorEntryScope entry;
     auto* base = view && view->base ? view->base : this;
     bool materialized = false;
@@ -899,7 +991,10 @@ bool VarHolder::copy_view_into(VarHolder* src) {
     sync(false, false);
     src->sync(false, false);
     validate_logical_copy_alias(this, src);
-    if (validate_storage_copy(var, src->var) == StorageCopy::NoOp) return true;
+    if (validate_storage_copy(var, src->var) == StorageCopy::NoOp) {
+        record_inplace_write();
+        return true;
+    }
     static auto make_copy = op_constructor<VarPtr, Var*>("copy");
     VarPtr staged;
     if (!target_steps.empty()) {
@@ -986,6 +1081,15 @@ VarHolder::~VarHolder() {
 
 // assign attributes of b to a
 static inline void assign_var(Var* a, Var* b, bool preserve_grad_policy = true) {
+    a->autograd_alias = b->autograd_alias;
+    if (!preserve_grad_policy && a->autograd_alias) {
+        // A real RHS edge can activate a formerly frozen destination. Keep
+        // the shared write version, but publish the replacement's actual
+        // policy before rebuilding its sibling views.
+        a->autograd_alias->own_requires_grad = !a->is_stop_grad()
+            && !a->flag(VarFlags::_requires_grad_disabled);
+        a->autograd_alias->inherit_requires_grad = false;
+    }
     if (b->grad_hook) a->grad_hook = b->grad_hook;
     if (b->flag(VarFlags::_placement_published))
         a->set_flag(VarFlags::_placement_published);
@@ -999,6 +1103,9 @@ static inline void assign_var(Var* a, Var* b, bool preserve_grad_policy = true) 
     if (preserve_grad_policy)
         a->set_flag(VarFlags::_requires_grad_disabled,
             b->flag(VarFlags::_requires_grad_disabled));
+    if (preserve_grad_policy)
+        a->set_flag(VarFlags::_unrecorded_view,
+            b->flag(VarFlags::_unrecorded_view));
 }
 
 void VarHolder::operator=(VarPtr&& v) {
@@ -1025,10 +1132,31 @@ void VarHolder::rebind_view_result(VarPtr&& v, bool preserve_grad_policy) {
 
 extern bool no_grad;
 void VarHolder::set_requires_grad(bool flag) {
+    if (autograd_policy.stop_outputs_when_inputs_stopped
+            && !flag && get_requires_grad()) {
+        var->check_alias_history();
+        USER_CHECK(jittor::is_backward_leaf(var))
+            << "you can only change requires_grad flags of leaf variables.";
+    }
+    set_requires_grad_impl(flag);
+}
+
+void VarHolder::set_requires_grad_impl(bool flag) {
+    auto state = var->autograd_alias;
+    if (state) {
+        state->own_requires_grad = flag;
+    }
     // Explicit activation gives an unrecorded view its own gradient edge.
     // This must precede the equal-value fast path: requires_grad_(True) is
     // meaningful even when the inherited public flag is already true.
-    var->set_flag(VarFlags::_unrecorded_view, 0);
+    if (flag) var->set_flag(VarFlags::_unrecorded_view, 0);
+    // Turning off an inherited flag does not disable the source and does not
+    // give this otherwise unrecorded view an accumulator.
+    if (state && state->inherit_requires_grad) {
+        var->set_flag(VarFlags::_unrecorded_view, !flag);
+        var->refresh_alias_requires_grad();
+        return;
+    }
     if (flag == get_requires_grad()) return;
     if (flag) {
         if (var->is_stop_grad()) {
@@ -1044,6 +1172,80 @@ void VarHolder::set_requires_grad(bool flag) {
         // stay alive, while newly initialized Ops snapshot disabled input edges.
         var->set_flag(VarFlags::_requires_grad_disabled);
     }
+}
+
+std::shared_ptr<AutogradAliasState> VarHolder::ensure_autograd_alias() {
+    if (!var->autograd_alias) {
+        var->autograd_alias = std::make_shared<AutogradAliasState>();
+        var->autograd_alias->own_requires_grad = get_requires_grad();
+    }
+    return var->autograd_alias;
+}
+
+VarHolder* VarHolder::check_inplace_autograd() {
+    if (no_grad || !autograd_policy.stop_outputs_when_inputs_stopped) return this;
+    if (get_requires_grad() && var->autograd_alias
+            && var->autograd_alias->created_without_grad
+            && var->autograd_alias->source
+            && var->autograd_alias->source->requires_grad()) {
+        USER_CHECK(false) << "A view was created in no_grad mode and is being "
+            "modified inplace with grad mode enabled.";
+    }
+    if (get_requires_grad()) {
+        USER_CHECK(!jittor::is_backward_leaf(var))
+            << "a leaf Variable that requires grad is being used in an in-place operation.";
+        USER_CHECK(!view_base_is_trainable_leaf())
+            << "a view of a leaf Variable that requires grad is being used in an in-place operation.";
+    }
+    return this;
+}
+
+void VarHolder::record_inplace_write() {
+    if (!var->autograd_alias) return;
+    ++*var->autograd_alias->version;
+
+}
+
+// Physical view writeback can run eagerly, but consuming autograd history is
+// observable: Torch rebases a view using the source policy at its first real
+// history query or grad-mode use, not at requires_grad_ or storage inspection.
+void VarHolder::observe_alias_history() {
+    var->refresh_alias_requires_grad();
+    var->check_alias_history();
+    auto state = var->autograd_alias;
+    if (!state || state->created_without_grad || !state->source
+            || state->creation_version == *state->version) return;
+    // A view that has never recorded a producer still has nothing to query
+    // while its source is frozen. Preserve the pending epoch: activating the
+    // source later can then rebase this actual write, unlike an untouched view.
+    if (!state->recorded_view_history && !state->source->requires_grad()) return;
+    if (view && view->base
+            && (state->recorded_view_history || state->source->requires_grad()))
+        view->base->refresh_transpose_views(true, view);
+    state->creation_version = *state->version;
+}
+
+Var* VarHolder::grad_input() {
+    if (!no_grad) observe_alias_history();
+    return var;
+}
+
+VarHolder* VarHolder::storage_data_alias() {
+    auto* alias = new VarHolder(jittor::detach(var));
+    alias->stop_grad();
+    // Tensor.data shares bytes but has an independent version counter and
+    // trainability. Detach above shares the counter for its distinct contract.
+    alias->var->autograd_alias = std::make_shared<AutogradAliasState>();
+    return alias;
+}
+
+bool VarHolder::has_leaf_accumulator() {
+    if (!get_requires_grad() || var->flag(VarFlags::_unrecorded_view)) return false;
+    auto state = var->autograd_alias;
+    if (state && (state->stale_unrecorded_view()
+            || (state->recorded_view_history
+                && state->creation_version != *state->version))) return false;
+    return jittor::is_backward_leaf(var);
 }
 
 bool VarHolder::producer_is_view() {
@@ -1093,9 +1295,14 @@ VarHolder* VarHolder::start_grad() {
     bool no_grad_bk = no_grad;
     AutogradPolicyOverride policy_guard({});
     no_grad = 0;
+    auto alias_state = var->autograd_alias;
     auto dvar = jittor::detach(var);
     dvar->grad_hook = var->grad_hook;
     std::swap(dvar.ptr, var);
+    var->autograd_alias = move(alias_state);
+    if (var->autograd_alias) {
+        var->autograd_alias->own_requires_grad = true;
+    }
     no_grad = no_grad_bk;
     var->set_flag(VarFlags::_explicit_requires_grad);
     var->set_flag(VarFlags::_requires_grad_disabled, 0);
@@ -1103,6 +1310,7 @@ VarHolder* VarHolder::start_grad() {
 }
 
 bool VarHolder::is_backward_leaf() {
+    observe_alias_history();
     return jittor::is_backward_leaf(var);
 }
 
@@ -1130,11 +1338,13 @@ void VarHolder::clear_collectable_grad_hook() {
 }
 
 int64 VarHolder::grad_fn_node_id() {
+    observe_alias_history();
     Op* op = backward_grad_fn(var);
     return op ? op->id : -1;
 }
 
 int64 VarHolder::grad_fn_op_id() {
+    observe_alias_history();
     Op* op = backward_grad_fn(var);
     if (!op) return -1;
     // Op::type_id() resolves through get_op_info, which raises for a name that
@@ -1145,6 +1355,7 @@ int64 VarHolder::grad_fn_op_id() {
 }
 
 string VarHolder::grad_fn_name() {
+    observe_alias_history();
     Op* op = backward_grad_fn(var);
     return op ? op->name_ex() : string();
 }
@@ -1159,22 +1370,32 @@ VarHolder* VarHolder::assign(VarHolder* v) {
 
 VarHolder* VarHolder::assign_impl(VarHolder* v, bool preserve_grad_policy) {
     if (preserve_grad_policy && autograd_policy.preserve_requires_grad_on_assignment) {
-        v->set_requires_grad(get_requires_grad());
+        v->set_requires_grad_impl(get_requires_grad());
     }
+    VarPtr replacement(v->var);
+    if (preserve_grad_policy && autograd_policy.preserve_requires_grad_on_assignment
+            && !var->is_stop_grad() && replacement->is_stop_grad()) {
+        // A reversibly frozen destination must not become permanently stopped
+        // because its replacement was computed under no-grad. Use the same
+        // native storage alias normalization as rebind_view_result; the old
+        // disabled flag below still snapshots the frozen input edge.
+        replacement.set_stop_grad(false);
+    }
+    record_inplace_write();
     // `assign` is the in-place primitive every `x.foo_()` funnels through, so
     // this is the one place that has to know that an in-place write to a view
     // is a write to the thing it is a view of.
     // Rebinding the base already refreshes this holder from the updated base.
     // Keep that graph: replacing it again by the bare RHS would drop the old
     // base's zero-gradient edge for a slice copy (Torch's CopySlices rule).
-    if (write_through_view(v->var, preserve_grad_policy)) return this;
+    if (write_through_view(replacement.ptr, preserve_grad_policy)) return this;
     note_rebind(this);
     drop_capture_record(this);
-    assign_var(v->var, var, preserve_grad_policy);
+    assign_var(replacement.ptr, var, preserve_grad_policy);
     release_holder();
-    v->var->own_both_liveness();
+    replacement->own_both_liveness();
     var->release_both_liveness();
-    var = v->var;
+    var = replacement.ptr;
     own_holder();
     refresh_transpose_views(preserve_grad_policy);
     return this;
@@ -1185,7 +1406,38 @@ VarHolder* VarHolder::update(VarHolder* v) {
     return assign(v);
 }
 
-VarHolder* VarHolder::_update(VarHolder* v) {
+VarHolder* VarHolder::_update(VarHolder* v, bool logical_write) {
+    if (!logical_write) {
+        ExecutorEntryScope entry;
+        // Finish readers of the old storage before replacing it. The Var and
+        // its producer remain the same: recorded consumers and saved backward
+        // inputs still refer to this tensor, including on a nonleaf tensor.
+        // A detached storage owner also pins the RHS for self/overlap cases.
+        auto replacement = jittor::detach(v->var);
+        sync_all(false);
+        runtime_executor().run_sync({var, replacement.ptr}, false, false);
+        // Existing views retain their old allocation. Retain this tensor's
+        // view provenance for autograd guards, but detach its writeback owner.
+        if (view) unlink_view_owner(view);
+        orphan_views();
+        if (var->shape != replacement->shape && !var->recorded_gradient_shape) {
+            bool recorded = backward_grad_fn(var) != nullptr;
+            for (Op* consumer : var->outputs())
+                recorded = recorded || (!consumer->is_stop_grad()
+                    && !is_requires_grad_disabled_edge(var, consumer));
+            if (recorded)
+                var->recorded_gradient_shape = std::make_shared<const NanoVector>(var->shape);
+        }
+        if (var->allocator) free_var_mem(var);
+        var->dtype() = replacement->dtype();
+        var->set_shape(replacement->shape);
+        var->storage_strides = replacement->storage_strides;
+        var->device_id = replacement->device_id;
+        var->placement = replacement->placement;
+        var->share_with(replacement.ptr);
+        CHECK(var->alloc(replacement->allocator));
+        return this;
+    }
     // Python in-place wrappers call `_update` directly. A view must write the
     // replacement through its root instead of rebinding only the view holder.
     if (is_view()) {
@@ -1198,6 +1450,9 @@ VarHolder* VarHolder::_update(VarHolder* v) {
         }
         return assign(v);
     }
+    check_inplace_autograd();
+    record_inplace_write();
+    v->var->autograd_alias = var->autograd_alias;
     if (var->grad_hook) v->var->grad_hook = var->grad_hook;
     if (var->flag(VarFlags::_placement_published))
         v->var->set_flag(VarFlags::_placement_published);

@@ -9,6 +9,39 @@ def _register_leaf(v):
     _owner._torch_register_leaf(v)
 
 
+def _initial_leaf_gradient(parameter, gradient):
+    """Apply AccumulateGrad's dense layout contract without changing AD edges."""
+    sizes, strides = tuple(parameter.shape), parameter.stride()
+    extent = 1
+    dense = True
+    for axis in sorted(range(len(sizes)), key=lambda i: strides[i]):
+        if sizes[axis] > 1:
+            dense = dense and strides[axis] == extent
+            extent *= sizes[axis]
+    if not dense:
+        return gradient.contiguous()
+    grad_sizes, grad_strides = tuple(gradient.shape), gradient.stride()
+    # .data may have reduced the visible rank after this gradient's contract
+    # was recorded. Check only existing stride axes, never index beyond the
+    # current layout; the native graph separately validates recorded shape.
+    obeys = all(
+        (size == 1 and grad_strides[i] != 0)
+        or (size != 1 and (i >= len(strides) or grad_strides[i] == strides[i]))
+        for i, size in enumerate(grad_sizes)
+    )
+    if obeys:
+        return gradient
+    # Existing as_strided implements dense permutations as real native views.
+    # Avoid empty_strided's documented contiguous-only allocation restriction.
+    target = get_install_context(_owner.jt).target_namespace
+    result = target.empty(sizes, dtype=gradient.dtype, device=parameter.device)
+    with _owner.jt.flag_scope(transpose_storage_view=1):
+        if not parameter.is_contiguous():
+            result = result.reshape(-1).as_strided(sizes, strides)
+        result.copy_(gradient)
+    return result
+
+
 def _rg_get(self):
     _context = get_install_context(_owner.jt)
     Var = _context.state["Var"]
@@ -307,7 +340,7 @@ def _backward_impl(self, gradient=None, retain_graph=None, create_graph=False, *
             # is a memory regression against torch, not a rounding detail.
             prev = getattr(p, "_torch_grad", None)
             if prev is None:
-                object.__setattr__(p, "_torch_grad", gr)
+                object.__setattr__(p, "_torch_grad", _initial_leaf_gradient(p, gr))
             else:
                 prev.add_(gr)
     # fill each optimizer's pg["grads"] so its step(loss=None) consumes them

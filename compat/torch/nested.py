@@ -255,14 +255,16 @@ def _rebuild_var_from_numpy(np_arr, dtype_str=None):
 def _torch_register_leaf(v):
     """Track torch-facing leaves so Tensor.backward() can publish .grad.
 
-    The native graph query decides leaf identity. This index locates holders
+    The native non-consuming accumulator query decides eligibility. Registering
+    a flag change must not perform the public is_leaf/grad_fn history query.
+    This index locates holders
     on which Python can publish gradients; it does not keep independent
     Tensor holders alive.
     Constructors such as torch.rand(..., requires_grad=True) need to register
     their result immediately; Var.requires_grad_ also calls this helper later.
     """
     try:
-        if isinstance(v, jt.Var) and v.requires_grad and v.is_backward_leaf:
+        if isinstance(v, jt.Var) and v._has_leaf_accumulator():
             get_tensor_state(jt).leaf_params[id(v)] = v
     except EXPECTED as exc:
         swallowed("torch/nested.py _torch_register_leaf: if isinstance(v, jt.Var) and v.requires_grad:", exc)

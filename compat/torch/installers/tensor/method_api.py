@@ -219,11 +219,16 @@ def _copy_detached_storage(self, value):
             if self._copy_view_into(value):
                 return True
         self._copy_into(value)
+    else:
+        # A zero-byte store still advances the native shared write version.
+        with _owner.jt.no_grad():
+            self._copy_into(value)
     return True
 
 
 def _ip(self, value, preserve_storage=False):
-    if preserve_storage:
+    self._check_inplace_autograd()
+    if preserve_storage or getattr(self, "_torch_data_owner", None) is not None:
         if self.requires_grad and not _owner.jt.flags.no_grad:
             if self.is_leaf:
                 raise RuntimeError("a leaf Variable that requires grad is being used in an in-place operation.")
@@ -263,7 +268,11 @@ def _ip(self, value, preserve_storage=False):
         _context = get_install_context(_owner.jt)
         _context.state["tensor_native_api"]["_native_requires_grad"].__set__(target, True)
     elif not was_trainable and not target.is_stop_grad():
-        target.stop_grad()
+        # A no-grad store must preserve a reversible freeze, including the
+        # source from which a recorded view inherits its existing history.
+        # Permanent stop_grad would release that producer after execution.
+        _context = get_install_context(_owner.jt)
+        _context.state["tensor_native_api"]["_native_requires_grad"].__set__(target, False)
     return self
 
 
@@ -595,7 +604,9 @@ def _data_get(self):
         and not torch_mode
     ):
         return _native_data_descriptor.__get__(self, Var)
-    view = self.detach().stop_grad()
+    view = self._storage_data_alias()
+    if getattr(self, "_torch_0d", False):
+        view._torch_0d = True
     view._torch_data_owner = self
     view._torch_data_path = ()
     return view
@@ -603,7 +614,6 @@ def _data_get(self):
 
 def _data_set(self, value):
     src = value if isinstance(value, _NativeVar) else _owner.jt.array(value)
-    was_trainable = bool(self.requires_grad)
     # torch's `x.data = y` *replaces* x's data, shape and dtype; it does not
     # copy elements into x's existing buffer. `assign` is the in-place
     # primitive used by `x.foo_()`: it writes x's values into y's storage and
@@ -612,9 +622,10 @@ def _data_set(self, value):
     # depends on the replace semantics -- it swaps a parameter for a
     # zero-element placeholder -- and `assign` rejected that with
     # "reshape shape is invalid for input of size [x_items(0) == y_items(1152)]".
-    self._update(src)
-    if was_trainable:
-        self.start_grad()
+    # Native storage replacement preserves the Var, producer and gradient
+    # policy; .data neither activates an accumulator nor writes old views.
+    self._update(src, logical_write=False)
+    self._torch_0d = getattr(src, "_torch_0d", False)
 
 
 
@@ -1583,7 +1594,9 @@ def _fill_captured_state(self, val):
 def _api_fill(self, val):
     if _fill_captured_state(self, val):
         return self
-    return _ip(self, _owner.jt.ones(self.shape, self.dtype) * val)
+    with _new_scope(self, None):
+        value = _owner.jt.ones(self.shape, self.dtype).stop_grad() * val
+    return _ip(self, value, preserve_storage=True)
 
 
 def _api_zero(self):
@@ -1599,11 +1612,11 @@ def _api_zero(self):
 
 
 def _api_add(self, o, alpha=1):
-    return _ip(self, self + o * alpha)
+    return _ip(self, self + o * alpha, preserve_storage=True)
 
 
 def _api_sub(self, o, alpha=1):
-    return _ip(self, self - o * alpha)
+    return _ip(self, self - o * alpha, preserve_storage=True)
 
 
 def _api_mul(self, o):

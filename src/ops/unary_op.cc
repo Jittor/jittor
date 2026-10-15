@@ -901,9 +901,15 @@ UnaryOp::UnaryOp(Var* x, NanoString op) : x(x) {
         NanoVector axes;
         vector<VarPtr> sources;
         if (storage_layout_operands({x}, axes, sources)) {
-            auto result = make_unary(sources[0], ns == ns_cast ? dtype : ns);
-            forward(storage_view_transpose(result, axes));
-            return;
+            if (!storage_layout_records_grad({x})) {
+                auto result = make_unary(sources[0], ns == ns_cast ? dtype : ns);
+                forward(storage_view_transpose(result, axes));
+                return;
+            }
+            StorageLayoutForwardScope scope;
+            layout_value = storage_view_transpose(
+                make_unary(sources[0], ns == ns_cast ? dtype : ns), axes);
+            set_type(OpType::other);
         }
     }
     y = create_output(nullptr, dtype);
@@ -922,6 +928,7 @@ UnaryOp::UnaryOp(Var* x, NanoString op) : x(x) {
 }
 
 VarPtr UnaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
+    if (layout_value && v_index >= 1) return nullptr;
     if (x->dtype().is_complex()) {
         // Complex autograd (verified vs real torch 2.12): only the linear / conjugate
         // unaries are implemented. Others return nullptr (loud no-grad, never silent-wrong).
@@ -1112,10 +1119,22 @@ VarPtr UnaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 }
 
 void UnaryOp::infer_shape() {
+    if (layout_value) {
+        if (_inputs.size() == 1) add_inputs(vector<Var*>{layout_value.ptr});
+        y->set_shape(layout_value->shape);
+        y->storage_strides = layout_value->storage_strides;
+        y->share_with(layout_value);
+        return;
+    }
     y->set_shape(x->shape);
 }
 
+void UnaryOp::run() {
+    ASSERT(layout_value && y->mem_ptr == layout_value->mem_ptr);
+}
+
 void UnaryOp::jit_prepare(JK& jk) {
+    if (layout_value) return;
     bool strided = !x->is_contiguous();
     jk << "«Tx:" << x->dtype()
         << "«Ty:" << y->dtype()

@@ -184,7 +184,7 @@ struct VarHolder {
      */
     // @pyjt(_update)
     // @attrs(return_self)
-    VarHolder* _update(VarHolder* v);
+    VarHolder* _update(VarHolder* v, bool logical_write = true);
 
     /**
      * swap the data with another Var.
@@ -361,6 +361,9 @@ struct VarHolder {
     // @pyjt(stop_grad)
     // @attrs(return_self)
     inline VarHolder* stop_grad() {
+        if (var->autograd_alias) {
+            var->autograd_alias->own_requires_grad = false;
+        }
         var->set_stop_grad();
         var->set_flag(VarFlags::_requires_grad_disabled, 0);
         var->set_flag(VarFlags::_first_order_only, 0);
@@ -434,6 +437,7 @@ struct VarHolder {
      */
     // @pyjt(__get__requires_grad)
     inline bool get_requires_grad() {
+        var->refresh_alias_requires_grad();
         return !var->is_stop_grad()
             && !var->flag(VarFlags::_requires_grad_disabled);
     }
@@ -442,6 +446,10 @@ struct VarHolder {
     inline bool has_gradient_edge() {
         return get_requires_grad() && !var->flag(VarFlags::_unrecorded_view);
     }
+    // Registration is metadata-only; unlike the public history query it must
+    // not consume a pending view epoch merely because requires_grad_ ran.
+    // @pyjt(_has_leaf_accumulator)
+    bool has_leaf_accumulator();
 
     /**
      * enable or disable gradient calculation.
@@ -449,6 +457,16 @@ struct VarHolder {
      */ 
     // @pyjt(__set__requires_grad)
     void set_requires_grad(bool flag);
+    void set_requires_grad_impl(bool flag);
+    std::shared_ptr<AutogradAliasState> ensure_autograd_alias();
+    // @pyjt(_check_inplace_autograd)
+    // @attrs(return_self)
+    VarHolder* check_inplace_autograd();
+    void record_inplace_write();
+    void observe_alias_history();
+    Var* grad_input();
+    // @pyjt(_storage_data_alias)
+    VarHolder* storage_data_alias();
 
     /** 
      * enable the gradient calculation for the Var.
@@ -914,7 +932,7 @@ struct VarHolder {
     void drop_view();
     void orphan_views();
     void attach_view(VarHolder* base, VarViewStep step);
-    void refresh_transpose_views(bool preserve_grad_policy = true);
+    void refresh_transpose_views(bool preserve_grad_policy = true, VarView* only = nullptr);
 };
 
 /**
@@ -983,6 +1001,15 @@ inline vector<Var*> convert(const vector<VarHolder*>& vhs) {
     v.reserve(vhs.size());
     for (uint i=0; i<vhs.size(); i++) v.emplace_back(vhs[i]->var);
     return v;
+}
+
+// Operand conversion consumes view history only at a real differentiable
+// operation. The generic convert() above also serves metadata-only queries.
+inline vector<Var*> prepare_grad_inputs(const vector<VarHolder*>& vhs) {
+    vector<Var*> values;
+    values.reserve(vhs.size());
+    for (auto* holder : vhs) values.emplace_back(holder->grad_input());
+    return values;
 }
 
 inline vector<VarHolder*> make_vh_vector(vector<VarPtr>&& vps) {
