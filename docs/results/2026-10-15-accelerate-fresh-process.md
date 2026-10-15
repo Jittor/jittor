@@ -81,3 +81,34 @@ Recompute independent agreement in an isolated checkout containing this report a
 - v5 passed the bounded mathematics and restoration checks, but its package inventory comprehension let a later shadowed site overwrite the actually selected CUDA distribution version. The capture now records `importlib.metadata.version(name)` for each package, with real competing `dist-info` precedence tests. A six-process preflight checked both environments, real mapped libraries against wheel RECORD, private HOME/XDG paths and all RNG streams before freezing final v6. v5 metadata remains unchanged and is not evidence of consistent provider provenance.
 
 All earlier phases and failed setups retain their own source identities. Final evidence binds only the explicitly listed final clean source and terminal runs.
+
+## Follow-up: the pinned upstream CPU world-two FSDP2 selection
+
+This separate source-and-runtime probe does not change the v6 measurement SHA, raw metadata,
+array counts or admission results above. It examines the public CPU counterpart in clean official
+Accelerate 1.10.1 at `623cc0ba588d192c77758939a6e340adf07edd4f`, using genuine binary
+PyTorch `2.11.0+cu128` with CUDA visibility empty. Two real `torchrun`/Gloo processes per precision
+run `Accelerator(cpu=True, fsdp_plugin=FullyShardedDataParallelPlugin(fsdp_version=2,
+state_dict_type='FULL_STATE_DICT', auto_wrap_policy='NO_WRAP'))` and prepare a real Linear.
+
+The upstream `state.py` selects `MULTI_CPU` and Gloo at lines 795/808. Its FSDP promotion at
+lines 976–1005 is inside an accelerator-only distributed-type branch; `MULTI_CPU` instead enters
+the separate branch at line 1014. `is_fsdp2` at line 1098 requires `DistributedType.FSDP`.
+For both precision `no` and `bf16`, all four actual workers report `MULTI_CPU`,
+`is_fsdp2=False`, no state `fsdp_plugin`, and an actual
+`torch.nn.parallel.distributed.DistributedDataParallel` prepared model. Its CPU parameters retain
+full `(3, 4)` / `(3,)` shapes and have no `to_local`; real backward completes. Passing the FSDP2
+plugin therefore does not establish CPU FSDP2 through this pinned public selection path.
+
+The probe neither claims that all future Accelerate versions or direct Torch FSDP APIs lack CPU
+support, nor substitutes this DDP result for the maintained CUDA FSDP2 protocol. CPU world one and
+CPU world-two DDP cannot satisfy its same-semantic CPU world-two FSDP2 pairing; the two CUDA rows
+remain blocked. No candidate launcher, core implementation or auditor pairing rule was changed.
+No GPU or Jittor JIT was used.
+
+External evidence is under
+`$JITTOR_LAB_ROOT/_state/legacy-scorecard-source-audit/20261015/cpu-fsdp2/`.
+`manifest.json` SHA256 `4df33e8b247b5b6696fa0b948b23474fdaa1c71b0390ab1b357c9808fcddf279`
+binds all four PID/rank result JSON files, both terminal logs, the exact executable/environment
+commands, the probe, official upstream source files and the genuine Torch `_C` binary/import file.
+This is a provider-selection negative result, not a new training or fresh-restoration scorecard.
