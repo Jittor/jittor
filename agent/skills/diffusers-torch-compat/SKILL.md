@@ -16,8 +16,13 @@ wheel SHA256 `fe29ff10200970c7c5934c6488c213e2a77a03dad5e6fa00bbd8e1d04234cb0e`.
 This PyPI artifact differs from the old local source-built wheel. All 697 payload
 files match Git; only six explicit tracked README omissions are allowed. Every
 new worker binds its actual package, METADATA and real pip RECORD without
-restoring the archive receipt. Fresh CPU/CUDA numerical validation is pending;
-implementing this profile does not itself establish a new L grade.
+restoring the archive receipt. Clean `b2127fd6a4a0c080ea19c45fbeae4b0b3251b74f`
+CPU/CUDA actual runs pass the original full protocol: six independent workers
+and 1,165 pairs per device, all 144 parameter gradients, sample input gradient
+and three SGD steps. The current shared scorecard accepts both L3 rows with zero
+rejected/blocked rows. Each device counts `UNet2DModel` on `model_api 1/87`; the
+other four full axes remain zero. Old `1a92` rows stay historically identified
+and currently refused, rather than receiving new installation fields.
 
 ```bash
 python tools/run_diffusers_gate.py --candidate-python <private-shim-python> \
