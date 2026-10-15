@@ -251,8 +251,12 @@ def main():
         return
     if args.stage == 'warm':
         write_json(args.shared_output / ('source-node%d.json' % args.node_rank), snapshot)
-    elif not (args.shared_output / ('source-node%d.json' % args.node_rank)).is_file():
-        raise ValueError('run this node warm stage first to bind its source and initialize private caches')
+    else:
+        prior = json.loads((args.shared_output / ('source-node%d.json' % args.node_rank)).read_text())
+        warm = json.loads((args.shared_output / 'commands' / ('warm-node%d.json' % args.node_rank)).read_text())
+        if (prior['source_sha'] != args.source_sha or prior['files'] != snapshot['files']
+                or prior['git_modes'] != snapshot['git_modes'] or warm['returncode'] != 0):
+            raise ValueError('this node needs a successful warm with the same clean source tree')
     if args.stage == 'oracle':
         for kind in ('sgd', 'adamw'):
             for dtype in ('float32', 'bfloat16'):

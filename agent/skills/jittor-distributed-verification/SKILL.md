@@ -594,6 +594,58 @@ with scope: assertFalse(三份)                                                #
 
 ## Native FSDP: independent oracle and fresh-launch continuation
 
+### Two-host maintained entry
+
+[`run_native_multinode.py`](run_native_multinode.py) runs the existing protocol
+with **two nodes, exactly one allocated CUDA device per node**. It neither
+connects to hosts nor transfers files. Both hosts need the same clean Git SHA,
+native and independent binary Torch interpreters, and an actually shared output
+filesystem. Checkpoint transport and other world sizes are outside this entry.
+
+On each host, set its real local paths and device allocation. `NODE_RANK` is
+zero or one; `MASTER_ADDR` is the reachable node-zero address. `PRIVATE_STATE`
+is local cache storage, outside both the checkout and `SHARED_OUTPUT`. Identical
+local paths and device ordinal zero on different hosts are valid. Host identity
+is sampled by the worker, never supplied by a CLI flag.
+
+```bash
+<runner-python> agent/skills/jittor-distributed-verification/run_native_multinode.py \
+  --stage warm --source-root "$PWD" --source-sha "$SOURCE_SHA" \
+  --python "$NATIVE_PYTHON" --oracle-python "$REAL_TORCH_PYTHON" --nvcc "$NVCC" \
+  --node-rank "$NODE_RANK" --master-addr "$MASTER_ADDR" --master-port "$MASTER_PORT" \
+  --job-id "$JOB_ID" --device-id "$LOCAL_DEVICE" \
+  --state-root "$PRIVATE_STATE" --shared-output "$SHARED_OUTPUT"
+```
+
+Repeat this **same command on both hosts**, changing `--stage` in this order:
+`warm`, `collectives`, `parity`, `baseline`, `resume`. Before parity, node zero
+also runs `--stage oracle`; it generates all four unchanged dense references.
+Wait for both nodes to finish each distributed stage before starting the next.
+Warm uses public singleton jtrun with actual rank zero/world one, private local
+rendezvous, and the same cache as that node's later worker; serial JIT is not
+represented as distributed rank initialization. Do not overlap the two warm
+commands if the nodes are being simulated on one physical host.
+
+Each training stage creates a fresh public `python -m jittor.distributed.launch`
+agent and worker, invokes the maintained pytest node, requires actual execution,
+and retains the existing numerical budgets. Fresh resume requires new workers,
+models and optimizers. Failed/partial commands keep their claims and logs;
+rerunning into the same output is refused. Use new output and private state for
+a new source commit or run. Neither existing results nor failures are overwritten.
+
+After all stages finish on both nodes, node zero runs `--stage seal` with the
+same arguments. It requires all actual node/oracle records, binds raw bytes,
+then invokes the independent NumPy rechecker. `verification.json` is written
+only after that recheck succeeds. Source snapshots include every tracked regular
+file and Git symlink target text. Environment records use a strict allowlist;
+they never dump the full inherited process environment.
+
+`--stage plan` is a real host preflight with no CUDA/connectivity claim and no
+artifact creation. `nox -s native_multinode -- <the same runner arguments>` is
+the thin maintained session. Loopback or two different hostnames alone cannot
+prove physical multi-host execution: retain external topology/network evidence
+and the actual per-host commands before claiming that separate acceptance.
+
 Native FSDP owns actual local parameters; its shared storage/reduce-scatter
 implementation also serves the Torch frontend. Its initial acceptance scope is
 CUDA/NCCL WORLD with fixed world size, FP32 master parameters and optional BF16

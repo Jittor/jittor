@@ -10,6 +10,7 @@ import subprocess
 import pytest
 
 from _helpers.child_process import PYTHON, child_env, run_python_child
+from _helpers.nox_probe import _FakeSession, _load_noxfile
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -112,18 +113,29 @@ def test_missing_node_proof_cannot_seal(runner, source, tmp_path):
     assert not (args.shared_output / 'raw-bindings.json').exists()
 
 
+def test_nox_preserves_explicit_per_host_arguments(monkeypatch, tmp_path):
+    module = _load_noxfile(monkeypatch, tmp_path)
+    session = _FakeSession(tmp_path, '/usr/bin/python3-config')
+    session.posargs = ('--stage', 'plan', '--node-rank', '1')
+    module['native_multinode'](session)
+    command, options = session.calls[-1]
+    assert command[-4:] == session.posargs
+    assert command[1].endswith('run_native_multinode.py')
+    assert options['external'] is True
+
+
 def test_actual_child_record_excludes_unrelated_environment(runner, source, tmp_path, monkeypatch):
     monkeypatch.setenv('MULTINODE_TEST_PRIVATE_VALUE', 'do-not-record')
     args = arguments(source, tmp_path)
     runner.run_command(args, [PYTHON, '-c', 'print("child-completed")'],
-                       child_env(runner.environment(args)), 'host-child')
+                       child_env(runner.environment(args), inherit=False), 'host-child')
     record = json.loads((args.shared_output / 'commands/host-child.json').read_text())
     assert record['returncode'] == 0
     assert 'MULTINODE_TEST_PRIVATE_VALUE' not in record['env']
     assert record['env']['HOME'] == str(args.state_root / 'worker/home')
     with pytest.raises(FileExistsError):
         runner.run_command(args, [PYTHON, '-c', 'raise RuntimeError("must not execute")'],
-                           child_env(runner.environment(args)), 'host-child')
+                           child_env(runner.environment(args), inherit=False), 'host-child')
 
 
 def test_actual_host_identity_disambiguates_local_paths_and_devices():

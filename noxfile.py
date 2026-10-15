@@ -2761,3 +2761,15 @@ def ecosystem_vllm(session):
                 "assert hasattr(torch, '_torch_compat_install_context'); " + versions,
                 external=True, env=env)
     _run_pytest_once(session, ["compat/tests/torch/test_ecosystem_vllm.py"], env, python, timeout=3600)
+
+
+@nox.session(python=False)
+def native_multinode(session):
+    """Run one explicitly configured host of the maintained native world-two protocol."""
+    if not session.posargs:
+        session.error("native_multinode requires explicit runner arguments; use -- --help")
+    session.run(
+        _hardware_python(),
+        str(REPO_ROOT / "agent/skills/jittor-distributed-verification/run_native_multinode.py"),
+        *session.posargs, external=True,
+    )
