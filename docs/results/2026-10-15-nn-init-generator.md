@@ -82,5 +82,13 @@ trunc_normal_ 等既有 NumPy/近似路径未修改；也不授予完整 C-exten
 Tensor.uniform_ / normal_ 的同类独立消费者将另行修复与验收，不能以这两个 nn.init
 入口的通过替代；R33 原始 PR rebase/作者处置仍未执行。
 
-完整结构检查针对代码和测试冻结状态执行；本页随后独立提交。中央结果索引与
-MANIFEST 登记由集成维护者处理，最终文档树门禁需在登记后复验。
+完整结构检查针对代码和测试冻结状态执行；本页随后独立提交。
+
+主树在同步 `1ecea7d5879761ec487d2497a25ef07bad47ae17` 后独立复现上述缺口，
+整合代码为 `661e1851e`，报告为 `d8038c44b`；中央索引与 MANIFEST 随后登记。
+该冻结状态下 CPU 84 passed / 61 skipped，真实 CUDA（两卡可见）145 passed / 0 skipped，
+core 322 passed / 42 skipped / 1 existing xfail，完整 tests/structure 与 compat/tests/structure
+1622 passed / 6 skipped。结构跳过含两项缺目标加速器、两项声明跳过及两项该解释器未安装
+原生包而无法检查安装路径归属。主树已有后续默认 Generator 测试变化，节点数不与 b196
+历史结果合并。本表保留原测量身份；主树日志及独立重算 29 个原始证据文件的清单位于
+未版本化的 `$JITTOR_LAB_ROOT/_state/nn-init-main-integration-1ece/`。
