@@ -120,6 +120,25 @@ def framework_snapshot(root, *, baseline=None):
               'agent/skills/torch-compat-repo-runbook/scripts/training_probe.py',
               'agent/skills/torch-compat-repo-runbook/scripts/verify_repo.py',
               'agent/skills/torch-compat-repo-runbook/scripts/_runtime_platform.py']
+    # A historical measurement predating the maintained runner retains exactly
+    # its original closure. File existence on today's disk cannot choose it.
+    tools = ('tools/run_metric_td_gate.py', 'tools/run_transformers_gate.py')
+    selection = (['ls-files', '--', *tools] if baseline is None else
+                 ['ls-tree', '-r', '--name-only', baseline, '--', *tools])
+    tracked = set(subprocess.check_output(
+        ['git', '-C', str(root), *selection], text=True).splitlines())
+    if tools[0] in tracked:
+        require(set(tools) <= tracked, 'Incomplete maintained component runner closure')
+        if baseline is None:
+            committed = set(subprocess.check_output(
+                ['git', '-C', str(root), 'ls-tree', '-r', '--name-only', 'HEAD', '--', *tools],
+                text=True).splitlines())
+            require(set(tools) <= committed, 'Maintained component runner must be committed')
+            for name in tools:
+                require((root / name).is_file() and digest(root / name) == hashlib.sha256(
+                    subprocess.check_output(['git', '-C', str(root), 'show', 'HEAD:' + name])).hexdigest(),
+                    'Missing or changed committed maintained component tool: ' + name)
+        paths += list(tools)
     if baseline is not None:
         return dict(_committed_sources(str(root.resolve()), baseline, tuple(sorted(set(paths)))))
     return {name: (hashlib.sha256(os.fsencode(os.readlink(root / name))).hexdigest()
@@ -141,8 +160,8 @@ def validate_measurement_source(value, baseline):
             'Component measurement source differs from committed framework bytes')
 
 
-def validate_runtime_metadata(value, baseline, expected_platform=None):
-    validate_measurement_source(value, baseline)
+def validate_runtime_metadata(value, baseline, expected_platform=None, *, source_validator=None):
+    (validate_measurement_source if source_validator is None else source_validator)(value, baseline)
     runtime, device = value.get('runtime'), value.get('device')
     require(runtime in ('torch', 'jittor') and device in ('cpu', 'cuda'), 'Wrong component runtime/device')
     identity = value.get('interpreter', {})

@@ -102,6 +102,15 @@ def installed_distribution(source, module):
         wheel = Path(source['official_wheel']['path'])
         result = bind_official_wheel(source, module, wheel, result,
                                     expected_wheel_sha256=wheel_pin(source, wheel))
+    if source['repo'] == 'diffusers':
+        from _diffusers_installation import wheel_pin
+        from _installed_source_proof import bind_official_wheel
+
+        if 'official_wheel' not in source:
+            raise ValueError('Diffusers requires a fresh fixed official-wheel source descriptor')
+        wheel = Path(source['official_wheel']['path'])
+        result = bind_official_wheel(source, module, wheel, result,
+                                    expected_wheel_sha256=wheel_pin(source, wheel))
     if source['repo'] == 'verl':
         from importlib.metadata import distribution
 
@@ -142,7 +151,7 @@ def main():
     parser.add_argument('--repo', choices=('torchmetrics', 'tensordict', 'diffusers', 'verl', 'mmengine', 'mmcv', 'vllm'), required=True)
     parser.add_argument('--checkout', type=Path, required=True)
     parser.add_argument('--wheel', type=Path,
-                        help='Required fixed official wheel for Metrics/TensorDict source proof')
+                        help='Required fixed official wheel for Metrics/TensorDict/Diffusers source proof')
     parser.add_argument('--mmengine-checkout', type=Path)
     parser.add_argument('probe', nargs=argparse.REMAINDER)
     args = parser.parse_args()
@@ -157,8 +166,8 @@ def main():
         parser.error('--mmengine-checkout is only valid for the real MMCV training-owner dependency')
     if args.repo == 'mmcv' and args.mmengine_checkout is None:
         parser.error('MMCV measurements also require --mmengine-checkout')
-    if args.wheel is not None and args.repo not in ('torchmetrics', 'tensordict'):
-        parser.error('--wheel is only valid for Metrics/TensorDict official-wheel proof')
+    if args.wheel is not None and args.repo not in ('torchmetrics', 'tensordict', 'diffusers'):
+        parser.error('--wheel is only valid for Metrics/TensorDict/Diffusers official-wheel proof')
     if script not in allowed:
         parser.error('Only the maintained ecosystem runner or training probe is allowed')
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -170,6 +179,12 @@ def main():
         if args.wheel is None:
             parser.error('Metrics/TensorDict measurements require --wheel')
         source = source_descriptor(args.repo, args.checkout, args.wheel)
+    elif args.repo == 'diffusers':
+        from _diffusers_installation import source_descriptor
+
+        if args.wheel is None:
+            parser.error('Diffusers measurements require --wheel')
+        source = source_descriptor(args.checkout, args.wheel)
     sources = {args.repo: source}
     if args.repo == 'mmcv':
         sources['mmengine'] = inventory('mmengine', args.mmengine_checkout)
@@ -185,10 +200,14 @@ def main():
         from _metric_td_installation import framework_snapshot
 
         frozen_sources = framework_snapshot(root)
+    elif args.repo == 'diffusers':
+        from _diffusers_installation import framework_snapshot
+
+        frozen_sources = framework_snapshot(root)
     sys.path.insert(0, str(script.parent))
     runtime = command[command.index('--runtime') + 1]
     before_files, before_package = {}, {}
-    if args.repo in ('verl', 'mmengine', 'mmcv', 'vllm', 'torchmetrics', 'tensordict'):
+    if args.repo in ('verl', 'mmengine', 'mmcv', 'vllm', 'torchmetrics', 'tensordict', 'diffusers'):
         from importlib.machinery import PathFinder
 
         # Hash the real import target without importing VERL or Torch ahead of
@@ -203,8 +222,8 @@ def main():
     captured = io.StringIO()
     observer = (SnapshotObserver(runtime, command[command.index('--device') + 1], script,
                                  allow_scalar_counter=args.repo == 'mmcv',
-                                 verify_cuda_pointer=args.repo in ('vllm', 'torchmetrics', 'tensordict'))
-                if args.repo in ('verl', 'mmengine', 'mmcv', 'vllm', 'torchmetrics', 'tensordict') else None)
+                                 verify_cuda_pointer=args.repo in ('vllm', 'torchmetrics', 'tensordict', 'diffusers'))
+                if args.repo in ('verl', 'mmengine', 'mmcv', 'vllm', 'torchmetrics', 'tensordict', 'diffusers') else None)
     previous_profile = sys.getprofile()
     try:
         if observer is not None:
@@ -257,6 +276,14 @@ def main():
                 or subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip() != baseline
                 or subprocess.check_output(['git', '-C', str(root), 'status', '--porcelain'], text=True).strip()):
             raise ValueError('Metrics/TensorDict framework source changed during measurement')
+    elif args.repo == 'diffusers':
+        from _diffusers_installation import framework_snapshot
+
+        source_paths = [root / path for path in frozen_sources]
+        if (framework_snapshot(root) != frozen_sources
+                or subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip() != baseline
+                or subprocess.check_output(['git', '-C', str(root), 'status', '--porcelain'], text=True).strip()):
+            raise ValueError('Diffusers framework source changed during measurement')
     binding = {'jittor_commit': baseline, 'upstream': source['upstream'],
                'hf_hub_offline': os.environ.get('HF_HUB_OFFLINE') == '1',
                'downstream_distribution': distribution,
@@ -274,7 +301,7 @@ def main():
         binding['device_controls'] = device_controls(torch, command[command.index('--device') + 1])
         if is_shim:
             binding['adapter_distribution'] = adapter_installation(root)
-    elif args.repo in ('torchmetrics', 'tensordict'):
+    elif args.repo in ('torchmetrics', 'tensordict', 'diffusers'):
         from _vllm_installation import device_controls
 
         binding['runtime'] = runtime
@@ -300,7 +327,7 @@ def main():
             if line.startswith(marker):
                 value = json.loads(line[len(marker):])
                 value.update(binding)
-                if args.repo in ('torchmetrics', 'tensordict'):
+                if args.repo in ('torchmetrics', 'tensordict', 'diffusers'):
                     import shutil
                     from _runtime_platform import capture_platform
 

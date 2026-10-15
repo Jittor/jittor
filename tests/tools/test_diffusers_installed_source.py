@@ -60,7 +60,7 @@ def test_full_source_binding_includes_modules_outside_the_registry(tmp_path, mon
     assert source['package_sources'] != changed['package_sources']
 
 
-def test_modified_installed_nested_module_is_rejected(tmp_path, component_tools):
+def test_source_only_packet_and_changed_nested_module_are_rejected(tmp_path, component_tools):
     package = tmp_path / 'diffusers'
     package.mkdir()
     origin = package / '__init__.py'
@@ -74,8 +74,10 @@ def test_modified_installed_nested_module_is_rejected(tmp_path, component_tools)
                                   for p in (origin, nested)]}
     module = SimpleNamespace(__file__=str(origin), __version__='0.35.1')
     measurement = component_tools['component_measure']
-    binding = measurement.installed_distribution(source, module)
-    assert len(binding['source_sha256']) == 2
+    # A complete source-only fixture cannot establish the newly required
+    # official distribution/receipt authority. Keep that refusal explicit.
+    with pytest.raises(ValueError, match='fixed official-wheel source descriptor'):
+        measurement.installed_distribution(source, module)
     nested.write_text('class ChangedModel: pass\n')
     with pytest.raises(ValueError, match='differs from clean upstream'):
         measurement.installed_distribution(source, module)

@@ -80,6 +80,17 @@ def validate_binding(value, source, baseline):
                 and captured.get('installed_files_sha256') == installed['installed_files_sha256']
                 and Path(captured.get('origin', '')).parent == Path(installed['package']),
                 'Actual component dependency does not match its selected installation')
+    if source['repo'] == 'diffusers':
+        from _diffusers_installation import validate_captured, validate_runtime_metadata
+
+        require('official_wheel' in source, 'Diffusers requires a fresh fixed official-wheel source descriptor')
+        validate_captured(installed, source, source['official_wheel']['path'])
+        validate_runtime_metadata(value, baseline)
+        captured = value.get('dependencies', {}).get('diffusers', {})
+        require(captured.get('version') == installed['version']
+                and captured.get('installed_files_sha256') == installed['installed_files_sha256']
+                and Path(captured.get('origin', '')).parent == Path(installed['package']),
+                'Actual Diffusers dependency differs from its selected installation')
 
 
 def validate_initial_weights(values, original_sha):
@@ -202,7 +213,7 @@ def collect(source, directory, platform_path, baseline, report, command, atol=2e
         require(ref['downstream_distribution']['installed_files_sha256'] ==
                 cand['downstream_distribution']['installed_files_sha256'], 'Full installed package mismatch')
         require(ref['measurement_source_sha256'] == cand['measurement_source_sha256'], 'Measurement code mismatch')
-        if repo in ('torchmetrics', 'tensordict'):
+        if repo in ('torchmetrics', 'tensordict', 'diffusers'):
             require(ref['interpreter']['pid'] != cand['interpreter']['pid'], 'Oracle/candidate process reused')
             require(all(ref['runtime_environment'][name] != cand['runtime_environment'][name]
                         for name in ('HOME', 'JITTOR_HOME', 'TMPDIR', 'XDG_CACHE_HOME')),
@@ -211,7 +222,7 @@ def collect(source, directory, platform_path, baseline, report, command, atol=2e
                     'Supplied platform differs from actual component worker')
     for weight in sorted(directory.glob('*.weights.npz')):
         artifacts.append(artifact('weights/' + weight.name, weight))
-    if repo in ('torchmetrics', 'tensordict'):
+    if repo in ('torchmetrics', 'tensordict', 'diffusers'):
         require('official_wheel' in source, 'Components require a fresh fixed official-wheel source descriptor')
         artifacts.append(artifact('upstream-wheel', source['official_wheel']['path']))
     comparison_path = directory / 'complete-comparison.json'
@@ -244,7 +255,7 @@ def main():
     parser.add_argument('--root', type=Path, default=Path(__file__).resolve().parents[4])
     parser.add_argument('--upstream', action='append', required=True, metavar='REPO=CHECKOUT')
     parser.add_argument('--wheel', action='append', default=[], metavar='REPO=WHEEL',
-                        help='Required fixed official wheel for each Metrics/TensorDict entry')
+                        help='Required fixed official wheel for each Metrics/TensorDict/Diffusers entry')
     parser.add_argument('--run', action='append', required=True, metavar='REPO=DIR')
     parser.add_argument('--platform', action='append', required=True, metavar='DEVICE=JSON')
     parser.add_argument('--baseline', required=True)
@@ -264,6 +275,12 @@ def main():
             require(repo in wheels, 'Metrics/TensorDict scorecards require --wheel ' + repo + '=WHEEL')
             checkout = dict(v.split('=', 1) for v in args.upstream)[repo]
             sources[repo] = source_descriptor(repo, checkout, wheels[repo])
+        elif repo == 'diffusers':
+            from _diffusers_installation import source_descriptor
+
+            require(repo in wheels, 'Diffusers scorecards require --wheel diffusers=WHEEL')
+            checkout = dict(v.split('=', 1) for v in args.upstream)[repo]
+            sources[repo] = source_descriptor(checkout, wheels[repo])
     platforms = dict(v.split('=', 1) for v in args.platform)
     records = []
     for assignment in args.run:
