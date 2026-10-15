@@ -32,4 +32,13 @@ bool storage_layout_operands(const vector<Var*>& inputs, NanoVector& axes,
 // `v` permuted by `axes` as a view of its storage.
 VarPtr storage_view_transpose(Var* v, NanoVector axes);
 
+// A layout rewrite may move the forward calculation, but recorded gradients
+// still belong to the operator's actual logical inputs and saved output.
+bool storage_layout_records_grad(const vector<Var*>& inputs);
+struct StorageLayoutForwardScope {
+    bool previous;
+    StorageLayoutForwardScope();
+    ~StorageLayoutForwardScope();
+};
+
 } // jittor

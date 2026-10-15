@@ -14,8 +14,12 @@
 namespace jittor {
 
 static auto make_clone = op_constructor<VarPtr, Var*>("clone");
+static auto make_detached_clone = op_constructor<VarPtr, Var*, bool>("clone");
 
-CloneOp::CloneOp(Var* x) : x(x) {
+CloneOp::CloneOp(Var* x) : CloneOp(x, false) {}
+
+CloneOp::CloneOp(Var* x, bool detached) : x(x) {
+    if (detached) set_stop_grad();
     set_flag(OpFlags::_cpu);
     set_flag(OpFlags::_cuda);
     set_flag(OpFlags::_manual_set_vnbb);
@@ -35,8 +39,20 @@ void CloneOp::infer_shape() {
 }
 
 VarPtr detach(Var* x) {
-    auto y = make_clone(x);
-    y->input()->set_stop_grad();
+    // A stopped producer does not observe or reconnect its input's history.
+    // Mark it before Op::init, while ordinary clone keeps its recorded path.
+    auto y = make_detached_clone(x, true);
+    if (!x->autograd_alias) {
+        x->autograd_alias = std::make_shared<AutogradAliasState>();
+        x->autograd_alias->own_requires_grad = !x->is_stop_grad()
+            && !x->flag(VarFlags::_requires_grad_disabled);
+    }
+    // Detach shares physical storage and write versions, but neither the
+    // source's public trainability nor its gradient edge.
+    y->autograd_alias = std::make_shared<AutogradAliasState>();
+    y->autograd_alias->version = x->autograd_alias->version;
+    y->autograd_alias->own_requires_grad = !y->is_stop_grad()
+        && !y->flag(VarFlags::_requires_grad_disabled);
     return y;
 }
 

@@ -650,7 +650,10 @@ def _step_with_closure(self, loss, retain_graph, closure, kwargs, native_kind):
     replay_books_of_step(self)
     self.post_step = _torch_post_step
     try:
-        out = _orig_step(self, None, retain_graph=retain_graph)
+        # Torch optimizer updates do not record parameter writes. The closure
+        # has already run with its own grad mode before this native step.
+        with jt.no_grad():
+            out = _orig_step(self, None, retain_graph=retain_graph)
     finally:
         object.__setattr__(self, "_torch_backward_advanced_n_step", False)
         if had_post:

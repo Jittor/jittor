@@ -13,12 +13,14 @@ namespace jittor {
 struct UnaryOp : Op {
     static constexpr bool accepts_storage_strides = true;
     Var* x, * y;
+    VarPtr layout_value;
     // @pybind(unary,cast)
     UnaryOp(Var* x, NanoString op);
     
     const char* name() const override { return "unary"; }
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;
     void infer_shape() override;
+    void run() override;
     DECLARE_jit_run;
 };
 

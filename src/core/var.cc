@@ -20,6 +20,20 @@ namespace jittor {
 
 std::atomic<int64> Var::number_of_lived_vars{0};
 
+void Var::refresh_alias_requires_grad() {
+    if (autograd_alias && autograd_alias->inherit_requires_grad)
+        set_flag(VarFlags::_requires_grad_disabled,
+                 !autograd_alias->requires_grad());
+}
+
+void Var::check_alias_history() const {
+    USER_CHECK(!autograd_alias || !autograd_alias->stale_unrecorded_view())
+        << "A view was created in no_grad mode and its base or another view "
+           "of its base has been modified inplace. This use of the view is "
+           "ambiguous; create the view and perform the inplace operation "
+           "in the same grad mode.";
+}
+
 VarPtr contiguous_storage(Var* value) {
     if (value->is_contiguous()) return value;
     static auto make_contiguous = op_constructor<VarPtr, Var*>("contiguous");

@@ -18,6 +18,34 @@ constexpr size_t alignment = 32;
 struct VarHolder;
 struct GradCallback;
 
+// Autograd view provenance is independent of both graph-node liveness and the
+// weak storage writeback owner. Keeping only small policy objects here lets an
+// alias outlive its source's Python wrapper without keeping any Var alive.
+struct AutogradAliasState {
+    std::shared_ptr<AutogradAliasState> source;
+    std::shared_ptr<uint64> version = std::make_shared<uint64>(0);
+    // Creation epoch for unrecorded views; last observed history epoch for
+    // recorded views. Physical refresh never consumes this epoch.
+    uint64 creation_version = 0;
+    bool own_requires_grad = false;
+    bool inherit_requires_grad = false;
+    bool created_without_grad = false;
+    bool recorded_view_history = false;
+    // Source eligibility of the real producer built by the latest refresh.
+    bool source_edge_enabled = false;
+    bool requires_grad() const {
+        for (auto* state = this; state; state = state->source.get()) {
+            if (state->own_requires_grad) return true;
+            if (!state->inherit_requires_grad) return false;
+        }
+        return false;
+    }
+    bool stale_unrecorded_view() const {
+        return created_without_grad && source && source->requires_grad()
+            && *version != creation_version;
+    }
+};
+
 struct Var : Node {
     NanoVector shape;
     // Element strides; empty means the canonical dense layout. Offset remains
@@ -40,6 +68,13 @@ struct Var : Node {
     // Tensor hooks act on the complete gradient of this node, including
     // when the node itself is a requested differentiation target.
     std::shared_ptr<GradCallback> grad_hook;
+    std::shared_ptr<AutogradAliasState> autograd_alias;
+    // A .data storage replacement may change visible shape without changing
+    // the recorded producer/accumulator's gradient contract. Allocated only
+    // on that exceptional transition; ordinary Vars carry no shape copy.
+    std::shared_ptr<const NanoVector> recorded_gradient_shape;
+    void refresh_alias_requires_grad();
+    void check_alias_history() const;
     // Atomic: constructed and released from the compile workers too.
     static std::atomic<int64> number_of_lived_vars;
 

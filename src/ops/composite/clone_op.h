@@ -16,6 +16,8 @@ struct CloneOp : Op {
     bool is_storage_view() const override { return true; }
     Var* x, * y;
     CloneOp(Var* x);
+    // @pybind(None)
+    CloneOp(Var* x, bool detached);
     
     const char* name() const override { return "clone"; }
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;

@@ -21,6 +21,21 @@ DEFINE_FLAG(int, propagate_storage_layout, 1,
     "gradient on as a view (TransposeOp::grad). 0 disables it.");
 
 DECLARE_FLAG(int, transpose_storage_view);
+DECLARE_FLAG(bool, no_grad);
+
+bool storage_layout_records_grad(const vector<Var*>& inputs) {
+    if (no_grad) return false;
+    for (auto* value : inputs)
+        if (!value->is_stop_grad()
+                && !value->flag(VarFlags::_requires_grad_disabled))
+            return true;
+    return false;
+}
+
+StorageLayoutForwardScope::StorageLayoutForwardScope() : previous(no_grad) {
+    no_grad = true;
+}
+StorageLayoutForwardScope::~StorageLayoutForwardScope() { no_grad = previous; }
 
 static auto make_transpose = op_constructor<VarPtr, Var*, NanoVector>("transpose");
 static auto make_broadcast_to_shape =

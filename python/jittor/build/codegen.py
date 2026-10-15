@@ -280,9 +280,9 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags="", backend=None):
             pre_arg = arg.split()[-1].split('=')[0]
             op_arg = None
             if arg.startswith("VarHolder*"):
-                op_arg = pre_arg+"->var"
+                op_arg = pre_arg+"->grad_input()" if pre_arg not in ("outputs", "out") else pre_arg+"->var"
             elif arg.startswith("vector<VarHolder*>"):
-                op_arg = f"convert({pre_arg})"
+                op_arg = f"prepare_grad_inputs({pre_arg})" if pre_arg not in ("outputs", "out") else f"convert({pre_arg})"
             if "&&" in arg:
                 if op_arg is None:
                     op_arg = "move("+pre_arg+")"

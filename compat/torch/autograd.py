@@ -234,7 +234,7 @@ def grad(outputs, inputs, grad_outputs=None, retain_graph=None,
     # via sum(grad_outputs * output), matching torch's vector-Jacobian product.
     outs = _as_list(outputs)
     ins = _as_list(inputs)
-    if any(o.requires_grad and not o._has_gradient_edge() for o in outs):
+    if any(not o._has_gradient_edge() for o in outs):
         raise RuntimeError("Tensor does not require grad and does not have a grad_fn")
     if grad_outputs is None:
         # torch: "grad can be implicitly created only for scalar outputs".

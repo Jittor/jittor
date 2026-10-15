@@ -400,7 +400,10 @@ MIGRATED_ITEM_USER_BOUNDARIES = {
 MIGRATED_GRAD_DTYPE_USER_BOUNDARIES = {
     # Loss/target/higher-order checks plus caller-controlled hook replacement
     # shape, dtype and device. Invalid hooks must raise catchable user errors.
-    "src/core/grad.cc": 6,
+    # .data can replace storage shape while preserving a recorded producer:
+    # validate returned gradient rank and broadcast-compatible extents against
+    # that recorded contract. Both are caller-controlled shape boundaries.
+    "src/core/grad.cc": 8,
 }
 
 
