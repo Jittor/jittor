@@ -1,6 +1,7 @@
 """Real-file negative contracts for the PEFT measurement/provenance gate."""
 
 import ast
+import copy
 import hashlib
 import importlib.util
 import json
@@ -16,7 +17,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'agent/skills/torch-compat-repo-runbook/scripts'))
-from _peft_scorecard import compare_arrays, installed_payload, source_files  # noqa: E402
+from _peft_scorecard import compare_arrays, installed_payload, source_files, validate_binding  # noqa: E402
 
 spec = importlib.util.spec_from_file_location('peft_gate', ROOT / 'tools/run_peft_gate.py')
 gate = importlib.util.module_from_spec(spec)
@@ -92,6 +93,31 @@ class TestPEFTProvenance(unittest.TestCase):
             installed_payload(self.source, self.module)
 
 
+    def test_actual_package_proof_cannot_drop_record_or_tensor_roles(self):
+        actual = installed_payload(self.source, self.module)
+        value = {'case': 'peft_lora_llama', 'jittor_commit': 'fixture', 'runtime': 'jittor',
+                 'device': 'cpu', 'interpreter': {'is_shim': True, 'pid': 1},
+                 'downstream_distributions': {'provenance_sample': actual},
+                 'dependencies': {'provenance_sample': {'version': actual['version'],
+                    'origin': str(self.package / '__init__.py'),
+                    'installed_files_sha256': actual['installed_files_sha256']}},
+                 'hf_hub_offline': True, 'measurement_source_sha256': {'real.py': 'fixture'},
+                 'fallback_policy': 'error', 'fallback_count': 0,
+                 'model_scope': {'parameters': ['weight'], 'trainable_parameters': ['weight']},
+                 'device_observations': [{'label': label, 'device': 'cpu'} for label in
+                     ('input/input_ids', 'output', 'parameter/weight', 'gradient/weight')]}
+        validate_binding(value, {'provenance_sample': self.source}, 'fixture', 'jittor', 'cpu')
+        bad = copy.deepcopy(value)
+        del bad['downstream_distributions']['provenance_sample']['record_sha256']
+        with self.assertRaisesRegex(ValueError, 'METADATA/RECORD proof'):
+            validate_binding(bad, {'provenance_sample': self.source}, 'fixture', 'jittor', 'cpu')
+        bad = copy.deepcopy(value)
+        bad['device_observations'] = [row for row in bad['device_observations']
+                                      if row['label'].startswith('gradient/')]
+        with self.assertRaisesRegex(ValueError, 'input/output/parameter observations'):
+            validate_binding(bad, {'provenance_sample': self.source}, 'fixture', 'jittor', 'cpu')
+
+
 class TestPEFTNumerics(unittest.TestCase):
     def test_missing_gradient_broadcast_nonfinite_and_dtype_are_rejected(self):
         import numpy as np
@@ -126,6 +152,14 @@ class TestPEFTNumerics(unittest.TestCase):
             self.assertEqual(oracle['PYTHONPATH'], '')
             self.assertEqual(cpu['JITTOR_TORCH_KEEP_HOME'], '1')
 
+
+
+    def test_cache_cannot_be_created_in_checkout(self):
+        path = ROOT / '__should_never_create_peft_cache__'
+        self.assertFalse(path.exists())
+        with self.assertRaisesRegex(ValueError, 'outside the source checkout'):
+            gate.environment(path, 'jittor', 'cpu')
+        self.assertFalse(path.exists())
 
     def test_directory_symlink_and_real_owner_bytes_are_both_bound(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -15,15 +15,23 @@ import shutil
 import subprocess
 import sys
 import time
+import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / 'agent/skills/torch-compat-repo-runbook/scripts'
 sys.path.insert(0, str(SCRIPTS))
 
 
+def external_path(path):
+    resolved = Path(path).resolve()
+    if resolved == ROOT or ROOT in resolved.parents:
+        raise ValueError('Measurement/cache paths must be outside the source checkout')
+    return resolved
+
+
 def environment(cache, runtime, device):
     env = dict(os.environ)
-    folder = Path(cache).resolve() / ('candidate' if runtime == 'jittor' else 'oracle') / device
+    folder = external_path(cache) / ('candidate' if runtime == 'jittor' else 'oracle') / device
     for key, name in {'HOME': 'home', 'REAL_HOME': 'home', 'JITTOR_HOME': 'jittor-home',
                       'TMPDIR': 'tmp', 'XDG_CACHE_HOME': 'xdg-cache', 'TORCH_HOME': 'torch-home',
                       'JITTOR_TORCH_CACHE_ROOT': 'shim-cache', 'JITTOR_TORCH_RUNTIME_ROOT': 'shim-runtime',
@@ -143,6 +151,7 @@ def worker(args):
         with redirect_stdout(captured):
             runpy.run_path(str(script), run_name='__main__')
     finally:
+        output.with_suffix('.probe-stdout.log').write_text(captured.getvalue())
         cases.CASES[CASE] = (original, requirements)
         for handle in handles:
             handle.remove()
@@ -187,6 +196,28 @@ def worker(args):
              if '/' in line and any(s in line.split()[-1] for s in ('libcu', 'libnv', 'libnccl'))} if maps.is_file() else set()
     result['mapped_libraries'] = [{'path': str(Path(p).resolve()), 'sha256': digest(p)}
                                   for p in sorted(paths) if Path(p).is_file()]
+    if args.device == 'cuda':
+        driver = ctypes.CDLL('libcuda.so.1')
+        device, identifier = ctypes.c_int(), ctypes.create_string_buffer(16)
+        require(driver.cuDeviceGet(ctypes.byref(device), 0) == 0
+                and driver.cuDeviceGetUuid(identifier, device) == 0, 'Cannot query actual CUDA driver UUID')
+        observed_uuid = 'GPU-' + str(uuid.UUID(bytes=identifier.raw))
+        rows = [line.split(', ') for line in platform_helpers.command('nvidia-smi',
+                '--query-gpu=index,uuid,name,driver_version', '--format=csv,noheader').splitlines()]
+        selected = [row for row in rows if os.environ['CUDA_VISIBLE_DEVICES'] in row[:2]]
+        require(len(selected) == 1 and selected[0][1] == observed_uuid,
+                'Actual CUDA driver allocation differs from requested physical device')
+        result['cuda_device'] = {'logical_index': 0, 'physical_index': int(selected[0][0]), 'uuid': observed_uuid}
+        runtime_versions = {}
+        for item in result['mapped_libraries']:
+            if Path(item['path']).name.startswith('libcudart.so'):
+                version = ctypes.c_int()
+                require(ctypes.CDLL(item['path']).cudaRuntimeGetVersion(ctypes.byref(version)) == 0,
+                        'Cannot query actually mapped CUDA runtime version')
+                runtime_versions[item['path']] = version.value
+        require(runtime_versions, 'CUDA computation has no actually mapped CUDA runtime')
+        result['platform']['cuda'] = {'frontend': str(torch.version.cuda), 'mapped_runtime_api': runtime_versions}
+
     output.with_suffix('.json').write_text(json.dumps(result, indent=2) + '\n')
     print('PEFT_RESULT ' + json.dumps({'case': CASE, 'runtime': args.runtime, 'phase': args.phase,
                                       'device': args.device, 'output': str(output), 'pid': os.getpid()}))
@@ -218,6 +249,9 @@ def main():
             and args.oracle_python and args.oracle_python.is_file(), 'Two explicit interpreters are required')
     require(not args.output.exists() or not any(args.output.iterdir()), 'Refusing a nonempty measurement directory')
     require(ROOT not in args.output.resolve().parents, 'Measurements belong outside checkout')
+    external_path(args.output)
+    if args.cache_root:
+        external_path(args.cache_root)
     args.output.mkdir(parents=True, exist_ok=True)
     sources = source_descriptor({'peft': args.peft_checkout, 'transformers': args.transformers_checkout},
                                 {'peft': args.peft_wheel, 'transformers': args.transformers_wheel})
@@ -238,7 +272,7 @@ def main():
                 command.extend(('--weights', str(args.output / 'base.torch.weights.npz')))
             env = environment(args.cache_root or args.output / 'benchmark-cache', runtime, args.device)
             with output.with_suffix('.log').open('w') as stream:
-                process = subprocess.run(command, cwd=ROOT, env=env, stdout=stream, stderr=subprocess.STDOUT)
+                process = subprocess.run(command, cwd=ROOT, env=env, stdout=stream, stderr=subprocess.STDOUT, timeout=3600)
             execution['results'].append({'runtime': runtime, 'phase': phase, 'seed': seed,
                                          'returncode': process.returncode, 'command': command})
             (args.output / 'execution.json').write_text(json.dumps(execution, indent=2) + '\n')

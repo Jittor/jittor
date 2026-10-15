@@ -54,13 +54,24 @@ def collect(directory, sources, baseline, output, report):
     for (runtime, phase), value in values.items():
         require(value['model_scope'] == scope and value['weights_sha256'] == digest(weights)
                 and digest(value['weights']) == digest(weights), 'Changed model or complete original weights')
+        for observation in value['device_observations']:
+            label, shape = observation['label'], observation['shape']
+            if label.startswith(('parameter/', 'gradient/')):
+                name = label.split('/', 1)[1]
+                require(name in initial_values and shape == list(initial_values[name].shape),
+                        'Observed parameter/gradient shape differs from actual fixed weights')
+            else:
+                require(shape == ([2, 8] if label == 'input/input_ids' else [2, 8, 128]),
+                        'Observed input/output shape differs from original case')
+            require(observation['dtype'].replace('torch.', '') == ('int64' if label == 'input/input_ids' else 'float32'),
+                    'Observed original tensor dtype differs')
         require(value['runtime_conditions'] == base_ref['runtime_conditions'] and value['tf32'] == base_ref['tf32'],
                 'Different actual runtime conditions/precision')
         if phase == 'train':
             require(value['steps'] == 3 and value['learning_rate'] == .001
                     and value['trainable_parameters'] == trainable and value['frozen_parameters'] == frozen
                     and value['input_gradient_names'] == [], 'Changed original training contract')
-    base_keys = ['output'] + ['grad::' + name for name in parameters]
+    base_keys = ['__output__'] + ['grad::' + name for name in parameters]
     training_keys = [f'step/{step}/{key}' for step in range(3)
                      for key in ['output', 'loss'] + ['grad::' + n for n in trainable]
                      + ['parameter::' + n for n in parameters]]
@@ -71,8 +82,8 @@ def collect(directory, sources, baseline, output, report):
     for runtime in ('torch', 'jittor'):
         with np.load(directory / ('base.' + runtime + '.npz')) as base, np.load(
                 directory / ('perturb.' + runtime + '.npz')) as perturb:
-            require(base['output'].shape == (2, 8, 128)
-                    and not np.array_equal(base['output'], perturb['output']), 'Input perturbation was a no-op')
+            require(base['__output__'].shape == (2, 8, 128)
+                    and not np.array_equal(base['__output__'], perturb['__output__']), 'Input perturbation was a no-op')
         with np.load(directory / ('train.' + runtime + '.npz')) as trajectory:
             for name in frozen:
                 require(all(np.array_equal(trajectory[f'step/{step}/parameter::{name}'], initial_values[name])

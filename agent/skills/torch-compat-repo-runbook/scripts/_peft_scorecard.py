@@ -137,6 +137,11 @@ def validate_binding(value, sources, baseline, runtime, device):
                 and actual.get('wheel_sha256') == source['wheel']['sha256']
                 and actual.get('installed_files_sha256') == source['wheel']['package_files_sha256'],
                 'Missing full package/source/wheel binding: ' + repo)
+        with zipfile.ZipFile(source['wheel']['path']) as wheel:
+            prefix = next(n.rsplit('/', 1)[0] for n in wheel.namelist() if n.endswith('.dist-info/METADATA'))
+            require(all(actual.get(key + '_sha256') == hashlib.sha256(wheel.read(prefix + '/' + member)).hexdigest()
+                        for key, member in (('metadata', 'METADATA'), ('record', 'RECORD'))),
+                    'Missing official wheel METADATA/RECORD proof: ' + repo)
         captured = value.get('dependencies', {}).get(repo, {})
         require(captured.get('installed_files_sha256') == actual['installed_files_sha256']
                 and captured.get('version') == actual['version']
@@ -152,6 +157,9 @@ def validate_binding(value, sources, baseline, runtime, device):
             'Missing actual operand/output/gradient residency')
     if device == 'cuda':
         require(all(r.get('pointer_device') == 0 for r in observations), 'Not actual logical CUDA allocation zero')
+    labels = {r['label'] for r in observations}
+    require({'input/input_ids', 'output'} | {'parameter/' + n for n in value['model_scope']['parameters']}
+            <= labels, 'Missing actual input/output/parameter observations')
     requested = set(value['model_scope']['trainable_parameters'] if value.get('mode') == 'train'
                     else value['model_scope']['parameters'])
     require({r['label'][len('gradient/'): ] for r in observations if r['label'].startswith('gradient/')} == requested,
