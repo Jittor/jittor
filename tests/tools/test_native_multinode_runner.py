@@ -76,6 +76,15 @@ def test_state_output_and_checkout_must_be_disjoint(runner, source, tmp_path):
         runner.validate(arguments(source, tmp_path, shared_output=source[0] / 'output'))
 
 
+def test_explicit_venv_executable_is_not_replaced_with_its_base(runner, source, tmp_path):
+    alias = tmp_path / 'declared-environment-python'
+    alias.symlink_to(PYTHON)
+    args = arguments(source, tmp_path, python=alias, oracle_python=alias)
+    runner.validate(args)
+    assert args.python == alias and args.oracle_python == alias
+    assert runner.launcher_command(args)[0] == str(alias)
+
+
 def test_plan_is_an_actual_host_command_without_device_claim(source, tmp_path):
     root, sha = source
     result = run_python_child([str(DIRECTORY / 'run_native_multinode.py'), '--stage', 'plan',

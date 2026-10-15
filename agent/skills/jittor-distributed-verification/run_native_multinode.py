@@ -93,8 +93,12 @@ def parser():
 
 
 def validate(args):
-    for name in ('source_root', 'python', 'oracle_python', 'state_root', 'shared_output', 'nvcc'):
+    for name in ('source_root', 'state_root', 'shared_output'):
         setattr(args, name, getattr(args, name).resolve())
+    # Resolving a venv's bin/python symlink silently selects the base environment.
+    # Preserve executable spellings while making relative CLI paths absolute.
+    for name in ('python', 'oracle_python', 'nvcc'):
+        setattr(args, name, getattr(args, name).absolute())
     if (not re.fullmatch(r'[0-9a-f]{40}', args.source_sha)
             or not re.fullmatch(r'[A-Za-z0-9_.-]{1,96}', args.job_id)):
         raise ValueError('source SHA/job id has an invalid form')
@@ -243,6 +247,7 @@ def main():
     if args.stage == 'plan':
         print(json.dumps({'world_size': 2, 'local_world_size': 1, 'node_rank': args.node_rank,
                           'source_sha': args.source_sha, 'host_id': socket.gethostname(),
+                          'native_python': str(args.python), 'oracle_python': str(args.oracle_python),
                           'scope': 'plan only; no device or connectivity claim'}, sort_keys=True))
         return
     args.shared_output.mkdir(parents=True, exist_ok=True)

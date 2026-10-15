@@ -74,6 +74,7 @@ def main():
     identity = {
         'pid': os.getpid(), 'parent_pid': os.getppid(), 'start_ns': time.time_ns(),
         'host_id': socket.gethostname(), 'rank': rank, 'world_size': world,
+        'interpreter': sys.executable, 'interpreter_prefix': sys.prefix,
         'node_rank': args.node_rank, 'local_world_size': 1,
         'external_store': os.environ.get('JITTOR_LAUNCHER_EXTERNAL_STORE'),
         'home': os.environ['HOME'], 'jittor_home': os.environ['JITTOR_HOME'],
