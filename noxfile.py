@@ -2179,7 +2179,7 @@ def ecosystem_deepspeed(session):
 
 @nox.session(python=False)
 def ecosystem_deepspeed_multirank(session):
-    """Two real CUDA ranks: BF16 ZeRO1/2, full gradients and strict fresh resume."""
+    """Two real CPU/MPI or CUDA ranks: BF16 ZeRO1/2 and strict fresh resume."""
     _ecosystem_deepspeed_session(session, multirank=True)
 
 
@@ -2194,8 +2194,14 @@ def _ecosystem_deepspeed_session(session, multirank=False):
     if multirank:
         devices = [item.strip() for item in os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")]
         artifacts = os.environ.get("JITTOR_DEEPSPEED_MULTIRANK_ROOT", "").strip()
-        if device != "cuda" or len(devices) != 2 or not all(devices) or len(set(devices)) != 2 or not artifacts:
-            session.error("DeepSpeed multirank needs exactly two allocated CUDA devices and a new external JITTOR_DEEPSPEED_MULTIRANK_ROOT")
+        if not artifacts or (device == "cuda" and
+                             (len(devices) != 2 or not all(devices) or len(set(devices)) != 2)):
+            session.error("DeepSpeed multirank needs a new external JITTOR_DEEPSPEED_MULTIRANK_ROOT and two allocated devices for CUDA")
+        if device == "cpu":
+            mpirun = shutil.which(os.environ.get("JITTOR_MPIEXEC", "mpirun"))
+            if not mpirun or not shutil.which("mpicc"):
+                session.error("DeepSpeed CPU multirank needs real OpenMPI mpirun and mpicc")
+            env["JITTOR_MPIEXEC"] = mpirun
         env.update(JITTOR_REQUIRE_DEEPSPEED_MULTIRANK="1", JITTOR_DEEPSPEED_MULTIRANK_ROOT=artifacts)
         if os.environ.get("JITTOR_DEEPSPEED_MULTIRANK_CACHE_ROOT"):
             env["JITTOR_DEEPSPEED_MULTIRANK_CACHE_ROOT"] = os.environ["JITTOR_DEEPSPEED_MULTIRANK_CACHE_ROOT"]
@@ -2208,7 +2214,7 @@ def _ecosystem_deepspeed_session(session, multirank=False):
         "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
         "DS_ACCELERATOR": device,
         "DISABLE_MULTIPROCESSING": "1", "JT_USE_PARALLEL_OP_COMPILER": "0",
-        "JT_BUILD_USE_MPI": "0", "JT_BUILD_USE_CUTT": "0",
+        "JT_BUILD_USE_MPI": "1" if multirank and device == "cpu" else "0", "JT_BUILD_USE_CUTT": "0",
         "JT_USE_CUDA": "1" if device == "cuda" else "0",
         "cache_name": "nox_ecosystem_deepspeed_" + device,
     })
@@ -2217,6 +2223,9 @@ def _ecosystem_deepspeed_session(session, multirank=False):
     env["JITTOR_HOME"] = str(cache_home)
     if device == "cpu":
         env.update({"CUDA_VISIBLE_DEVICES": "", "JT_BUILD_NVCC_PATH": "", "nvcc_path": ""})
+        if multirank:
+            env["JT_BUILD_USE_NCCL"] = "0"
+            session.run(env["JITTOR_MPIEXEC"], "--version", external=True, env=env)
     else:
         nvcc = os.environ.get("JT_BUILD_NVCC_PATH") or os.environ.get("nvcc_path") or shutil.which("nvcc")
         if not nvcc or not os.environ.get("CUDA_VISIBLE_DEVICES", "").strip():

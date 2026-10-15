@@ -4,14 +4,20 @@ This protocol deliberately calls Engine.backward and Engine.step. Generic
 model runners that construct another optimizer cannot validate DeepSpeed.
 """
 import argparse
+import ctypes
 from contextlib import ExitStack
 from contextlib import nullcontext
+import hashlib
+import importlib.metadata
 import json
 import os
 import numbers
 from pathlib import Path
+import platform
+import shutil
 import subprocess
 import tempfile
+import uuid
 
 import numpy as np
 
@@ -19,6 +25,7 @@ from _ecosystem_runner import (
     _backend_report, _configure_tf32, _dependency_report, _import_torch,
     _numpy_snapshot, _runtime_conditions, _select_device, _synchronize,
 )
+from _helpers.child_process import PYTHON
 import _ecosystem_deepspeed_cases as cases
 from _ecosystem_deepspeed_multirank import file_rendezvous
 
@@ -29,6 +36,94 @@ def _snapshot(value):
     if str(value.dtype) in ("bfloat16", "torch.bfloat16"):
         value = value.float()
     return _numpy_snapshot(value)
+
+
+def _weights_digest(values):
+    digest = hashlib.sha256()
+    for name, value in sorted(values.items()):
+        value = np.ascontiguousarray(value)
+        digest.update(json.dumps([name, value.dtype.str, list(value.shape)],
+                                 separators=(",", ":")).encode())
+        digest.update(value.tobytes())
+    return digest.hexdigest()
+
+
+def _protocol_spec(args):
+    return {
+        "id": "deepspeed-zero-training", "world_size": args.world_size,
+        "precision": "bf16" if args.dtype == "bfloat16" else "fp32",
+        "ranks": list(range(args.world_size)), "zero_stage": args.zero_stage,
+        "optimizer": args.optimizer, "gradient_accumulation_steps": 2,
+        "updates": 3, "microsteps": 6, "checkpoint_after_microstep": 4,
+        "resume_microsteps": [4, 5], "seed": 0,
+        "input_perturbations": [0., .125],
+        "model": {"id": "residual-linear-gelu-layernorm-v1", "micro_batch": 2,
+                  "input_features": 8, "hidden_features": 16, "output_features": 4},
+    }
+
+
+def _measurement_sources():
+    directory = Path(__file__).resolve().parent
+    repository = directory.parents[2]
+    return {str(path.relative_to(repository)): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in (directory / name for name in (
+                "_ecosystem_deepspeed_runner.py", "_ecosystem_deepspeed_multirank.py",
+                "_ecosystem_deepspeed_cases.py", "_ecosystem_deepspeed_comparison.py"))}
+
+
+def _cuda_identity(torch, device):
+    if device != "cuda":
+        return {"cuda_visible_devices": "", "rank_device_uuid": None, "logical_device_index": None}
+    logical = int(torch.cuda.current_device())
+    driver = ctypes.CDLL("libcuda.so.1")
+    physical, identifier = ctypes.c_int(), ctypes.create_string_buffer(16)
+    if driver.cuDeviceGet(ctypes.byref(physical), logical) or driver.cuDeviceGetUuid(identifier, physical):
+        raise RuntimeError("Cannot bind the actual CUDA device UUID")
+    return {"cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
+            "rank_device_uuid": "GPU-" + str(uuid.UUID(bytes=identifier.raw)),
+            "logical_device_index": logical}
+
+
+def _measurement_platform(torch, args, precision):
+    """Observe the actual process, including its assigned physical devices."""
+    def command(*arguments):
+        return subprocess.check_output(list(arguments), text=True).strip()
+    cpu = platform.processor() or platform.machine()
+    if Path("/proc/cpuinfo").is_file():
+        cpu = next((line.split(":", 1)[1].strip() for line in Path("/proc/cpuinfo").read_text().splitlines()
+                    if line.startswith("model name")), cpu)
+    allocation = os.environ.get("JITTOR_DEEPSPEED_DEVICES", os.environ.get("CUDA_VISIBLE_DEVICES", "")).split(",") \
+        if args.device == "cuda" else []
+    selected = []
+    if args.device == "cuda":
+        rows = [line.split(", ") for line in command("nvidia-smi",
+                "--query-gpu=index,uuid,name,driver_version", "--format=csv,noheader").splitlines()]
+        for device in allocation:
+            matches = [row for row in rows if device in row[:2]]
+            if len(matches) != 1:
+                raise ValueError("Cannot bind the actual DeepSpeed CUDA allocation")
+            selected.append(matches[0])
+    native = None
+    if args.runtime == "jittor":
+        import jittor as jt
+        native = jt
+    gcc = native.compiler.cc_path if native else shutil.which("g++")
+    nvcc = native.compiler.nvcc_path if native else shutil.which("nvcc")
+    flags = {"use_cuda": int(native.flags.use_cuda) if native else int(args.device == "cuda"),
+             "use_acl": 0,
+             "graph_replay": "default" if native and native.flags.auto_graph_replay else "eager",
+             "tf32": precision["matmul"], "hf32": False}
+    return {"os": platform.platform(), "cpu": cpu,
+            "accelerator_model": [row[2] for row in selected] or "not-applicable",
+            "card_count": len(selected), "card_indices": allocation,
+            "physical_devices": [{"index": row[0], "uuid": row[1]} for row in selected],
+            "driver": selected[0][3] if selected else "not-applicable",
+            "cuda": str(torch.version.cuda) if args.device == "cuda" else "not-applicable",
+            "cann": "not-applicable", "nvcc": command(nvcc, "--version") if args.device == "cuda" else "not-applicable",
+            "gcc": command(gcc, "--version"),
+            "nvidia_wheels": {dist.metadata["Name"]: dist.version for dist in importlib.metadata.distributions()
+                              if dist.metadata.get("Name", "").lower().startswith("nvidia-")},
+            "jittor_flags": flags, "precision": precision}
 
 
 def _assert_device(value, device, runtime, dtype=None):
@@ -129,6 +224,7 @@ def _microstep(torch, deepspeed, engine, args, index, arrays, prefix, incoming, 
     arrays[prefix + "/output"] = _snapshot(output)
     arrays[prefix + "/loss"] = _snapshot(loss)
     for name, value in (("inputs", inputs), ("target", target)):
+        arrays[prefix + "/input/" + name] = _snapshot(value)
         if value.grad is None:
             raise AssertionError("Missing requested DeepSpeed input gradient: " + name)
         _assert_device(value.grad, args.device, args.runtime, value.dtype)
@@ -164,14 +260,13 @@ def _microstep(torch, deepspeed, engine, args, index, arrays, prefix, incoming, 
 
 
 def _execute(args):
-    if args.world_size > 1 and (args.device != "cuda" or not args.rendezvous or not args.checkpoint):
-        raise ValueError("Multi-rank Engine requires CUDA, shared rendezvous and checkpoint paths")
-    if args.dtype == "bfloat16" and args.device != "cuda":
-        raise ValueError("The bf16 Engine gate requires actual CUDA")
+    if args.world_size > 1 and (not args.rendezvous or not args.checkpoint):
+        raise ValueError("Multi-rank Engine requires shared rendezvous and checkpoint paths")
     if args.runtime == "jittor":
         os.environ["JITTOR_TORCH_SHIM"] = "1"
     os.environ["DS_ACCELERATOR"] = args.device
-    os.environ["LOCAL_RANK"] = "0"
+    os.environ["LOCAL_RANK"] = (os.environ.get("OMPI_COMM_WORLD_LOCAL_RANK", str(args.rank))
+                                if args.runtime == "jittor" and args.device == "cpu" else "0")
     torch = _import_torch(args.runtime)
     with ExitStack() as stack:
         _select_device(torch, args.runtime, args.device, policy_stack=stack)
@@ -186,6 +281,7 @@ def _execute(args):
             stack.enter_context(forbid_backend_fallbacks())
             initial_fallbacks = jt.core.backend_fallback_count()
         precision = _configure_tf32(torch, args.device)
+        torch.manual_seed(0)
         import deepspeed
         dependencies = _dependency_report(("deepspeed",))
         if dependencies["deepspeed"]["version"].split("+", 1)[0] != "0.19.7":
@@ -196,8 +292,10 @@ def _execute(args):
             directory = stack.enter_context(tempfile.TemporaryDirectory(
                 prefix="deepspeed-rendezvous-"))
             rendezvous = file_rendezvous(directory)
+        transport = ("nccl" if args.device == "cuda" else
+                     "mpi" if args.runtime == "jittor" and args.world_size > 1 else "gloo")
         deepspeed.init_distributed(
-            dist_backend="nccl" if args.device == "cuda" else "gloo",
+            dist_backend=transport,
             auto_mpi_discovery=False, init_method=rendezvous,
             rank=args.rank, world_size=args.world_size,
         )
@@ -219,6 +317,18 @@ def _execute(args):
             )
             if not isinstance(engine, deepspeed.DeepSpeedEngine):
                 raise AssertionError("Training did not use the real upstream DeepSpeedEngine")
+            # Observe the actual initial training weights, after upstream has
+            # performed its requested precision conversion and before step 0.
+            # The temporary FP32 fixture is not the BF16 model being trained.
+            expected = torch.bfloat16 if args.dtype == "bfloat16" else torch.float32
+            for name, parameter in engine.module.named_parameters():
+                _assert_device(parameter, args.device, args.runtime, expected)
+                key, value = "initial/parameter/" + name, _snapshot(parameter)
+                if key in arrays:
+                    np.testing.assert_array_equal(arrays[key], value,
+                                                  err_msg="Fresh Engine changed original weights: " + name)
+                else:
+                    arrays[key] = value
             incoming = {}
             for name, parameter in engine.module.named_parameters():
                 def observe(gradient, name=name, dtype=parameter.dtype):
@@ -275,6 +385,19 @@ def _execute(args):
                               if args.runtime == "jittor" else 0)
             metadata = {
                 "runtime": args.runtime, "device": args.device, "world_size": args.world_size,
+                "seed": 0, "hf_hub_offline": os.environ.get("HF_HUB_OFFLINE") == "1",
+                "protocol": _protocol_spec(args),
+                "process_group_backend": str(torch.distributed.get_backend()),
+                "launch_entrypoint": os.environ.get("JITTOR_DEEPSPEED_LAUNCHER", "independent-rank-process"),
+                "measurement_source_sha256": _measurement_sources(),
+                "initial_weights_sha256": _weights_digest({key[len("initial/parameter/"):]: value
+                    for key, value in arrays.items() if key.startswith("initial/parameter/")}),
+                "interpreter": {"executable": PYTHON, "pid": os.getpid(),
+                                "is_shim": hasattr(torch, "_torch_compat_install_context"),
+                                "torch_version": str(torch.__version__),
+                                "binary_extension": str(torch._C.__file__) if args.runtime == "torch" else None,
+                                "binary_sha256": hashlib.sha256(Path(torch._C.__file__).read_bytes()).hexdigest()
+                                    if args.runtime == "torch" else None},
                 "rank": args.rank, "dtype": args.dtype,
                 "optimizer_partition_sizes": partition_sizes,
                 "model_parameter_elements": sum(int(value.numel()) for value in engine.module.parameters()),
@@ -298,8 +421,18 @@ def _execute(args):
                     ["git", "-C", str(Path(__file__).resolve().parents[3]), "rev-parse", "HEAD"],
                     text=True).strip(),
             }
+            metadata.update(_cuda_identity(torch, args.device))
+            metadata["platform"] = _measurement_platform(torch, args, precision)
+            if args.runtime == "jittor":
+                metadata["native_runtime_flags"] = {name: int(getattr(jt.flags, name)) for name in
+                    ("use_cuda", "auto_graph_replay", "auto_graph_replay_retain_bytes")}
+                if args.device == "cpu":
+                    from jittor._runtime.backend_libraries import get_library_ops
+                    metadata["cpu_matmul_provider"] = (
+                        "oneDNN" if get_library_ops("mkl", load=False) is not None else "native_opmath")
             if args.runtime == "torch":
                 metadata["torch_binary"] = str(torch._C.__file__)
+                metadata["torch_binary_sha256"] = hashlib.sha256(Path(torch._C.__file__).read_bytes()).hexdigest()
             arrays["metadata"] = np.asarray(json.dumps(metadata, sort_keys=True))
             np.savez(args.output, **arrays)
             print(json.dumps(metadata, sort_keys=True))

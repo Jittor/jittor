@@ -70,6 +70,12 @@ python -m nox -s ecosystem_deepspeed_multirank
 或 benchmark 共用。任一 rank 失败或超时会终止并回收其同伴。
 同一 case 的两 rank 共享 communicator rendezvous/heartbeat 目录；它属于控制面，
 不能跟随 HOME/JITTOR_HOME/TMPDIR 按 rank 拆开。各 case 的控制面目录彼此隔离。
+CUDA 候选由公共 `jtrun` owner 启动（`python -m jittor.distributed.launch`，与 console
+入口等价），启动器分配 rank、单卡可见性和共享控制面；仓内包装器只选择独立缓存，
+在 `-S` 启动后再 exec 正常解释器，避免 site hook 提前加载错误缓存。
+CPU 双 rank 是专用 MPI backend 验证，独立 oracle 使用 Gloo，不能称为原生 Gloo 或
+CPU `jtrun` 支持。当前公共 `jtrun` 仍仅支持 NCCL/HCCL；CPU 统一训练入口尚未验收。
+此 backend 检查可由同一 nox session 在 CPU 配置下执行，但不作为另一套推荐训练入口。
 进程组使用每个 case/runtime 独占的 FileStore，单 rank 使用独占临时 FileStore；
 不先释放一个空闲 TCP 端口再尝试监听，避免与其他任务抢端口。显式 CLI rendezvous
 仍可供独立复现使用。FileStore 只负责 bootstrap，CUDA 归约仍须实际使用 NCCL。
@@ -78,7 +84,11 @@ python -m nox -s ecosystem_deepspeed_multirank
 incoming/full/input gradient，以及保存前后和新 Engine 续训后的 master、optimizer
 moments/steps、输出、loss、梯度与模型参数逐位一致；不能仅用恢复后的输出近似通过。
 源码 manifest 覆盖 native、compat、backends、adapters 与 nox，测量结束复核内容和
-commit 未变。独立 oracle 的二进制身份、实际 optimizer 类、dtype、world size、分区大小
+commit 未变，正式测量要求开始与结束均为 clean committed source。两端实际设置 seed 0；
+同时保留完整固定权重、每个 microstep 的实际输入与目标、平台信息和 CUDA driver UUID。
+初始权重快照取在 DeepSpeed 完成精度转换后、训练之前，BF16 权重跨运行时逐位一致；
+临时 FP32 fixture 的融合舍入不伪装成实际 BF16 训练权重。
+独立 oracle 的二进制身份、实际 optimizer 类、dtype、world size、分区大小
 均在两端元数据中复核，CUDA fallback 必须为零。
 逐个梯度字段记录实际 dtype 并跨运行时严格相等；`safe_get_full_grad` 在 ZeRO1
 BF16_Optimizer 存有 `param.grad` 时可能直接返回 BF16，而 ZeRO2 的分区 getter
@@ -124,3 +134,11 @@ optimizer state、compat public `gradient_task.participating_tensors`、`owned_r
 维护入口、CPU Adam 舍入边界、FileStore 控制面及最终 clean-source 四格复验见
 [维护门禁验收报告](../../../docs/results/2026-10-15-deepspeed-maintained-gate.md)。
 原始日志不版本化。
+
+同规格 CPU MPI backend 与 CUDA 公共 `jtrun` 的完整 paired BF16 协议、官方 wheel
+源码闭包/独立重建证明及统一 L3 审核见
+[配对协议验收报告](../../../docs/results/2026-10-15-deepspeed-paired-protocol.md)。
+`scripts/collect_deepspeed_scorecard.py`（位于 `torch-compat-repo-runbook` skill）重算
+两扰动、两 rank、两 runtime 的实际原始数据，再调用共享 protocol dispatcher；
+使用空 registry axes/references，不生成整库覆盖率。完整 protocol semantic dict 必须
+匹配才允许 CPU/CUDA 配对，实际 MPI/Gloo/NCCL 与 launcher 保留在平台元数据中。

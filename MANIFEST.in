@@ -402,6 +402,7 @@ include docs/results/2026-10-15-cuda13-toolchain-packaging.md
 include docs/results/2026-10-15-deepspeed-bfloat16-multirank.md
 include docs/results/2026-10-15-deepspeed-engine-prerequisites.md
 include docs/results/2026-10-15-deepspeed-maintained-gate.md
+include docs/results/2026-10-15-deepspeed-paired-protocol.md
 include docs/results/2026-10-15-deepspeed-zero-engine.md
 include docs/results/2026-10-15-diffusers-component-scorecards.md
 include docs/results/2026-10-15-distribution-constraint-publication.md

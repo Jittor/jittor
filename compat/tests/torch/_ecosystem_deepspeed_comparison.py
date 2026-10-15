@@ -21,7 +21,9 @@ def _compare_engine_outputs(actual, reference, *, device=None, world_size=1, ran
                 "engine_class", "parameter_gradients_per_microstep", "input_gradients_per_microstep",
                 "microsteps", "global_steps", "runtime_conditions", "optimizer_groups",
                 "optimizer_partition_sizes", "model_parameter_elements", "trainable_parameters",
-                "frozen_parameters", "strict_resume_fields", "gradient_dtypes", "jittor_commit"):
+                "frozen_parameters", "strict_resume_fields", "gradient_dtypes", "jittor_commit",
+                "seed", "hf_hub_offline", "protocol",
+                "measurement_source_sha256"):
         assert ours[key] == theirs[key], "DeepSpeed protocol differs: " + key
     if ours["zero_stage"] == 0:
         # Stage zero retains each runtime's actual public optimizer class.
@@ -39,10 +41,22 @@ def _compare_engine_outputs(actual, reference, *, device=None, world_size=1, ran
         if expected is not None:
             assert ours[key] == expected, "DeepSpeed requested protocol differs: " + key
     assert ours["strict_resume_fields"] > 0
+    assert ours["seed"] == 0 and ours["hf_hub_offline"] is True
+    if dtype == "bfloat16":
+        assert ours["initial_weights_sha256"] == theirs["initial_weights_sha256"]
+    expected_backend = "nccl" if device == "cuda" else "gloo"
+    assert theirs["process_group_backend"] == expected_backend
+    if world_size > 1:
+        # WORLD's legacy singleton backend label does not identify an active
+        # transport. Only real multi-rank observations establish a provider.
+        assert ours["process_group_backend"] == ("mpi" if device == "cpu" else expected_backend)
     assert ours["updated_master_elements"] > 0 and theirs["updated_master_elements"] > 0
     assert ours["fallback_policy"] == "error" and ours["fallback_count"] == 0
     assert bool(ours["backend"]["use_cuda"]) == (device == "cuda")
     keys = [key for key in actual.files if key != "metadata"]
+    for key in keys:
+        if dtype == "bfloat16" and key.startswith("initial/parameter/"):
+            np.testing.assert_array_equal(actual[key], reference[key], err_msg=key)
     gradient_keys = [key for key in keys if "_grad/" in key]
     assert set(ours["gradient_dtypes"]) == set(gradient_keys), "DeepSpeed gradient dtype observations incomplete"
     forward_keys = [key for key in keys if key not in gradient_keys]
