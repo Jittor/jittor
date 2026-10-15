@@ -1,0 +1,296 @@
+"""Actual public FlashAttention APIs, complete gradients and three SGD updates."""
+
+import argparse
+import contextlib
+import hashlib
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+import numpy as np
+
+APIS = (
+    "flash_attn_func",
+    "flash_attn_kvpacked_func",
+    "flash_attn_qkvpacked_func",
+    "flash_attn_varlen_func",
+    "flash_attn_varlen_kvpacked_func",
+    "flash_attn_varlen_qkvpacked_func",
+)
+UPSTREAM_COMMIT = "5231d95fe13733fb534c01895f7ea88c6a6c7793"
+
+
+def main(argv=None):
+    if not __debug__:
+        raise RuntimeError("Probe checks require Python without -O")
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--runtime", choices=("jittor", "torch"), required=True)
+    p.add_argument("--api", choices=APIS, required=True)
+    p.add_argument("--dtype", choices=("float16", "bfloat16"), required=True)
+    p.add_argument("--head-dim", type=int, choices=(32, 64), default=32)
+    p.add_argument("--causal", action="store_true")
+    p.add_argument("--perturbation", type=float, default=0.0)
+    p.add_argument("--output", type=Path, required=True)
+    p.add_argument("--jittor-root", type=Path, default=Path(__file__).resolve().parents[4])
+    p.add_argument("--upstream", type=Path, required=True)
+    p.add_argument(
+        "--allow-dirty",
+        action="store_true",
+        help="Diagnostic only; the comparator rejects dirty sources",
+    )
+    args = p.parse_args(argv)
+    checkout = args.jittor_root.resolve()
+    upstream = args.upstream.resolve()
+
+    def git_value(path, *arguments):
+        return subprocess.check_output(["git", "-C", str(path), *arguments], text=True).strip()
+
+    source_commit = git_value(checkout, "rev-parse", "HEAD")
+    source_status = git_value(checkout, "status", "--porcelain")
+    source_diff = hashlib.sha256(
+        subprocess.check_output(["git", "-C", str(checkout), "diff", "--binary", "HEAD"])
+    ).hexdigest()
+    if args.output.suffix != ".npz":
+        p.error("--output must end in .npz")
+    if checkout == args.output.resolve() or checkout in args.output.resolve().parents:
+        p.error("raw artifacts must be outside the Jittor checkout")
+    if not np.isfinite(args.perturbation):
+        p.error("--perturbation must be finite")
+    if git_value(checkout, "status", "--porcelain") and not args.allow_dirty:
+        p.error("commit the source before acceptance; --allow-dirty permits diagnostics only")
+    assert git_value(upstream, "rev-parse", "HEAD") == UPSTREAM_COMMIT
+    assert not git_value(upstream, "status", "--porcelain"), "upstream checkout must be clean"
+    # The runtime/cache namespace is project-specific. Match the selected source
+    # root rather than silently rebuilding under the caller's working directory.
+    os.chdir(checkout)
+
+    if args.runtime == "jittor":
+        import jittor as jt
+
+        assert Path(jt.__file__).resolve() == checkout / "python/jittor/__init__.py"
+        from jittor._runtime.fallback import forbid_backend_fallbacks
+
+        guard = forbid_backend_fallbacks()
+    else:
+        guard = contextlib.nullcontext()
+    import torch
+    import flash_attn
+
+    assert hasattr(torch, "_torch_compat_install_context") == (args.runtime == "jittor")
+    if args.runtime == "torch":
+        assert "jittor" not in sys.modules, "the oracle must run in an independent interpreter"
+        assert not getattr(flash_attn, "_jittor_flash_attn_stub", False)
+        assert flash_attn.__version__ == "2.7.4.post1"
+        assert Path(flash_attn.__file__).resolve().parent == upstream / "flash_attn"
+        import flash_attn_2_cuda as extension
+
+        assert Path(extension.__file__).suffix in (".so", ".pyd")
+    else:
+        assert os.environ["JITTOR_FLASH_ATTN_JITTOR_REQUIRED"] == "1"
+        from jittor.compat.shim.backends import flash_attention
+
+        facade_source = checkout / "compat/shim/resources/stubs/flash_attn"
+        facade_package = Path(flash_attn.__file__).resolve().parent
+        for source in facade_source.glob("*.py"):
+            assert (facade_package / source.name).read_bytes() == source.read_bytes(), source.name
+        backend = flash_attention.load_backend()
+        assert backend._flashattn_jittor_official
+        extension = backend._flashattn_jittor_low_level
+        assert Path(extension.__file__).suffix in (".so", ".pyd")
+    assert torch.cuda.is_available()
+    torch.set_num_threads(2)
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+    torch.set_float32_matmul_precision("highest")
+    rng = np.random.RandomState(20261015)
+    varlen = "varlen" in args.api
+    shape = (11, 2, args.head_dim) if varlen else (2, 11, 2, args.head_dim)
+    arrays = [(rng.randn(*shape) * 0.2).astype("float32") for _ in range(3)]
+    parameters = [torch.nn.Parameter(torch.tensor(a, device="cuda")) for a in arrays]
+    noise_array = (rng.randn(*shape) * 0.1).astype("float32")
+    noise_array.reshape(-1)[0] += args.perturbation
+    noise = torch.tensor(noise_array, device="cuda", requires_grad=True)
+    target = torch.tensor(rng.randn(*shape).astype("float32"), device="cuda")
+    cu = torch.tensor([0, 4, 11], device="cuda", dtype=torch.int32) if varlen else None
+    optimizer = torch.optim.SGD(parameters, lr=0.01)
+    result = {f"initial_{i}": a for i, a in enumerate(arrays)}
+
+    def capture(name, value):
+        assert value is not None, name
+        assert value.is_cuda, (name, str(value.device))
+        result[name] = value.detach().float().cpu().numpy().copy()
+        assert np.isfinite(result[name]).all(), name
+
+    with guard:
+        for step in range(3):
+            optimizer.zero_grad()
+            noise.grad = None
+            q = (parameters[0] + noise * 0.1).to(getattr(torch, args.dtype))
+            k = parameters[1].to(getattr(torch, args.dtype))
+            v = parameters[2].to(getattr(torch, args.dtype))
+            for value in (q, k, v):
+                assert value.is_cuda and value.dtype == getattr(torch, args.dtype)
+            kwargs = dict(dropout_p=0.0, causal=args.causal)
+            if args.api.endswith("varlen_qkvpacked_func"):
+                inputs = (torch.stack((q, k, v), dim=1), cu, 7)
+            elif args.api.endswith("varlen_kvpacked_func"):
+                inputs = (q, torch.stack((k, v), dim=1), cu, cu, 7, 7)
+            elif args.api.endswith("varlen_func"):
+                inputs = (q, k, v, cu, cu, 7, 7)
+            elif args.api.endswith("qkvpacked_func"):
+                inputs = (torch.stack((q, k, v), dim=2),)
+            elif args.api.endswith("kvpacked_func"):
+                inputs = (q, torch.stack((k, v), dim=2))
+            else:
+                assert args.api == "flash_attn_func"
+                inputs = (q, k, v)
+            output = getattr(flash_attn, args.api)(*inputs, **kwargs)
+            assert tuple(output.shape) == shape and output.dtype == getattr(torch, args.dtype)
+            loss = (output.float() * target).sum() / (
+                float(np.prod(shape)) ** 0.5
+            ) + 0.1 * output.float().square().mean()
+            loss.backward()
+            capture(f"step{step}_output", output)
+            capture(f"step{step}_loss", loss)
+            for i, value in enumerate(parameters):
+                capture(f"step{step}_grad{i}", value.grad)
+            capture(f"step{step}_input_grad", noise.grad)
+            assert noise.grad.dtype == noise.dtype == torch.float32
+            for value in parameters:
+                assert value.grad.dtype == value.dtype == torch.float32
+            optimizer.step()
+            for i, value in enumerate(parameters):
+                capture(f"step{step}_param{i}", value)
+        torch.cuda.synchronize()
+    for i, a in enumerate(arrays):
+        assert np.any(result[f"step2_param{i}"] != a), ("unchanged parameter", i)
+    record = dict(
+        runtime=args.runtime,
+        torch=torch.__version__,
+        flash_attn=flash_attn.__version__,
+        flash_package=flash_attn.__file__,
+        extension=getattr(extension, "__file__", None),
+        api=args.api,
+        dtype=args.dtype,
+        head_dim=args.head_dim,
+        causal=args.causal,
+        perturbation=args.perturbation,
+        device=torch.cuda.get_device_name(0),
+        tf32=False,
+        matmul_precision=torch.get_float32_matmul_precision(),
+        arrays=len(result),
+        fallback_count=jt.core.backend_fallback_count() if args.runtime == "jittor" else None,
+    )
+    if args.runtime == "jittor":
+        record["backend"] = flash_attention.backend_name()
+    import platform
+    import importlib.metadata
+
+    assert git_value(checkout, "rev-parse", "HEAD") == source_commit, (
+        "source commit changed during execution"
+    )
+    assert git_value(checkout, "status", "--porcelain") == source_status, (
+        "source status changed during execution"
+    )
+    assert (
+        hashlib.sha256(
+            subprocess.check_output(["git", "-C", str(checkout), "diff", "--binary", "HEAD"])
+        ).hexdigest()
+        == source_diff
+    ), "source changed during execution"
+    record["baseline"] = source_commit
+    record["extension_sha256"] = hashlib.sha256(Path(extension.__file__).read_bytes()).hexdigest()
+    record["jittor_source_clean"] = not bool(git_value(checkout, "status", "--porcelain"))
+    record["jittor_source_diff_sha256"] = hashlib.sha256(
+        subprocess.check_output(["git", "-C", str(checkout), "diff", "--binary", "HEAD"])
+    ).hexdigest()
+    record["upstream"] = {
+        "commit": git_value(upstream, "rev-parse", "HEAD"),
+        "version": flash_attn.__version__,
+        "remote": git_value(upstream, "remote", "get-url", "origin"),
+    }
+    record["inputs"] = {
+        "seed": 20261015,
+        "shape_kind": "tiny",
+        "shape": list(shape),
+        "batch": 2,
+        "heads": 2,
+        "sequence_lengths": [4, 7] if varlen else [11, 11],
+        "hf_hub_offline": os.environ.get("HF_HUB_OFFLINE") == "1",
+        "steps": 3,
+        "optimizer": "SGD",
+        "learning_rate": 0.01,
+        "dropout": 0.0,
+        "parameter_dtype": "float32",
+        "gradient_dtype": "float32",
+    }
+    record["platform"] = {
+        "os": platform.platform(),
+        "python": platform.python_version(),
+        "cpu": platform.processor(),
+        "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
+        "actual_device_count": torch.cuda.device_count(),
+        "actual_device": torch.cuda.get_device_name(0),
+        "torch_cuda": getattr(torch.version, "cuda", None),
+        "torch_file": torch.__file__,
+        "nvidia_wheels": {
+            dist.metadata["Name"]: dist.version
+            for dist in importlib.metadata.distributions()
+            if (dist.metadata.get("Name") or "").startswith("nvidia-")
+        },
+    }
+    record["runtime_threads"] = torch.get_num_threads()
+    cpu_info = Path("/proc/cpuinfo")
+    if cpu_info.is_file():
+        for line in cpu_info.read_text().splitlines():
+            if line.startswith("model name"):
+                record["platform"]["cpu"] = line.split(":", 1)[1].strip()
+                break
+    record["platform"]["cpu"] = record["platform"]["cpu"] or platform.machine()
+    record["platform"]["gpu_driver_inventory"] = (
+        subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=index,name,uuid,driver_version", "--format=csv,noheader"],
+            text=True,
+        )
+        .strip()
+        .splitlines()
+    )
+    if args.runtime == "jittor":
+        nvcc = jt.compiler.nvcc_path
+        cxx = jt.compiler.cc_path
+    else:
+        nvcc = str(Path(os.environ["CUDA_HOME"]) / "bin/nvcc")
+        cxx = os.environ["CXX"]
+    record["platform"]["compiler_environment"] = {
+        "nvcc": subprocess.check_output(
+            [nvcc, "--version"], text=True, stderr=subprocess.STDOUT
+        ).strip(),
+        "cxx": subprocess.check_output(
+            [cxx, "--version"], text=True, stderr=subprocess.STDOUT
+        ).strip(),
+    }
+
+    record["script_sha256"] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    record["mode"] = "correctness only; concurrent jobs prohibit performance acceptance"
+    if args.runtime == "jittor":
+        record["native_flags"] = {
+            name: getattr(jt.flags, name)
+            for name in ("use_cuda", "use_acl", "auto_graph_replay")
+            if hasattr(jt.flags, name)
+        }
+        record["native_flag_aliases"] = {
+            "use_acl": "legacy alias of use_cuda; does not identify the active backend"
+        }
+        record["actual_dispatch"] = list(jt.core.dispatch_context(parameters))
+    else:
+        record["binary_extension"] = torch._C.__file__
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    np.savez(args.output, **result)
+    record["artifact_sha256"] = hashlib.sha256(args.output.read_bytes()).hexdigest()
+    args.output.with_suffix(".json").write_text(json.dumps(record, indent=2) + "\n")
+    print(json.dumps(record, indent=2), flush=True)
+
+
+if __name__ == "__main__":
+    main()
