@@ -16,15 +16,21 @@ from unittest.mock import patch
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / 'tests'))
+from _helpers.child_process import PYTHON  # noqa: E402
+
 sys.path.insert(0, str(ROOT / 'agent/skills/torch-compat-repo-runbook/scripts'))
 from _peft_scorecard import compare_arrays, installed_payload, source_files, validate_binding  # noqa: E402
 
-spec = importlib.util.spec_from_file_location('peft_gate', ROOT / 'tools/run_peft_gate.py')
-gate = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(gate)
+class _GateTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location('peft_gate', ROOT / 'tools/run_peft_gate.py')
+        cls.gate = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.gate)
 
 
-class TestPEFTProvenance(unittest.TestCase):
+class TestPEFTProvenance(_GateTests):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
@@ -121,7 +127,7 @@ class TestPEFTProvenance(unittest.TestCase):
             validate_binding(bad, {'provenance_sample': self.source}, 'fixture', 'jittor', 'cpu')
 
 
-class TestPEFTNumerics(unittest.TestCase):
+class TestPEFTNumerics(_GateTests):
     def test_missing_gradient_broadcast_nonfinite_and_dtype_are_rejected(self):
         import numpy as np
         with tempfile.TemporaryDirectory() as directory:
@@ -143,9 +149,9 @@ class TestPEFTNumerics(unittest.TestCase):
     def test_cache_runtime_device_and_parent_home_are_isolated(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {'CUDA_VISIBLE_DEVICES': 'GPU-test',
                     'JT_BUILD_NVCC_PATH': '/not-executed/nvcc', 'HOME': '/parent-home'}, clear=False):
-            cpu = gate.environment(directory, 'jittor', 'cpu')
-            cuda = gate.environment(directory, 'jittor', 'cuda')
-            oracle = gate.environment(directory, 'torch', 'cpu')
+            cpu = self.gate.environment(directory, 'jittor', 'cpu')
+            cuda = self.gate.environment(directory, 'jittor', 'cuda')
+            oracle = self.gate.environment(directory, 'torch', 'cpu')
             self.assertEqual(cpu['CUDA_VISIBLE_DEVICES'], '')
             self.assertEqual(cpu['JT_BUILD_NVCC_PATH'], '')
             self.assertEqual(cuda['CUDA_VISIBLE_DEVICES'], 'GPU-test')
@@ -171,7 +177,7 @@ class TestPEFTNumerics(unittest.TestCase):
             import collect_peft_scorecards
             with patch.object(collect_peft_scorecards, 'collect', reject_actual_bad_gradient):
                 with self.assertRaisesRegex(ValueError, 'Original numerical budget failed'):
-                    gate.validate_completed_run(root, {}, 'fixture', execution)
+                    self.gate.validate_completed_run(root, {}, 'fixture', execution)
             saved = json.loads((root / 'execution.json').read_text())
             self.assertEqual(saved['validation']['status'], 'failed')
             self.assertTrue(all(row['returncode'] == 0 for row in saved['results']))
@@ -181,7 +187,7 @@ class TestPEFTNumerics(unittest.TestCase):
         path = ROOT / '__should_never_create_peft_cache__'
         self.assertFalse(path.exists())
         with self.assertRaisesRegex(ValueError, 'outside the source checkout'):
-            gate.environment(path, 'jittor', 'cpu')
+            self.gate.environment(path, 'jittor', 'cpu')
         self.assertFalse(path.exists())
 
     def test_directory_symlink_and_real_owner_bytes_are_both_bound(self):
@@ -231,10 +237,10 @@ class TestPEFTNumerics(unittest.TestCase):
                     calls.append((args, kwargs))
             namespace = {'os': os, 'Path': Path, 'REPO_ROOT': ROOT,
                          '_session_env': lambda *args: (root, {}),
-                         '_hardware_python': lambda: sys.executable,
+                         '_hardware_python': lambda: PYTHON,
                          '_set_hardware_python_config': lambda *args: None}
             exec(compile(ast.Module(body=[function], type_ignores=[]), 'noxfile.py', 'exec'), namespace)
-            values = {'REAL_TORCH_PYTHON': sys.executable, 'JITTOR_TEST_DEVICES': 'cuda',
+            values = {'REAL_TORCH_PYTHON': PYTHON, 'JITTOR_TEST_DEVICES': 'cuda',
                       'CUDA_VISIBLE_DEVICES': 'GPU-test', 'JT_BUILD_NVCC_PATH': '/real/user/nvcc',
                       'JITTOR_CUDA_WHEEL_STRICT': '1'}
             for repo in ('PEFT', 'TRANSFORMERS'):

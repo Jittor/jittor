@@ -429,6 +429,7 @@ include docs/results/2026-10-15-native-tensor-parallel.md
 include docs/results/2026-10-15-native-zero-optimizer.md
 include docs/results/2026-10-15-nn-init-generator.md
 include docs/results/2026-10-15-openmmlab-training-oracles.md
+include docs/results/2026-10-15-peft-installed-source-training.md
 include docs/results/2026-10-15-pytree-transformers-513.md
 include docs/results/2026-10-15-release-installed-source-proof.md
 include docs/results/2026-10-15-rmsnorm-triton-alias.md
@@ -943,6 +944,7 @@ include tools/release/pack_offline.py
 include tools/release/test_check_sdist_contents.py
 include tools/release/test_check_wheel_contents.py
 include tools/run_accelerate_gate.py
+include tools/run_peft_gate.py
 include tools/run_test_suite.py
 prune compat
 prune adapters

@@ -19,7 +19,9 @@
 没有增加 PRNG、全局 reseed、NumPy 抽样或跨设备 fallback。
 输出跟随目标 tensor 的实际 dtype/device；float64 用 float64 抽样，
 float16/bfloat16 的尺度与偏移先在 float32 计算，再写回目标 dtype。
-初始化保持同一 Python 对象、可训练/冻结状态与既有 retained-view 写回。
+本批验证同一 Python 对象、构造时可训练/停梯度状态与既有 retained-view 写回。
+可逆 `requires_grad_(False)` 和非叶张量旧图不在本批通过范围：后续独立探针发现共享
+写回仍可能解除可逆冻结、把非叶变为叶；该既有缺口由后续共享写回修复单独验收。
 无效 std、非浮点目标、反向/非有限/超 dtype 范围的 uniform bounds 在抽样前拒绝。
 
 ## 验证方法

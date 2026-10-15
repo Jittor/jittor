@@ -231,6 +231,19 @@ Release 版本的注册表 L2+ 也要求逐阶段、逐 runtime 的实际安装�
 每个库；绑定 wheel 时核对完整包内容而非仅 Python 文件。具体字段与历史记录处理遵循
 上述统一协议，不能用版本相同代替源码来源证据。
 
+## PEFT 完整 LoRA 训练门禁
+
+`nox -s ecosystem_peft` 调用 `tools/run_peft_gate.py`，复用现有完整 tiny Llama/LoRA
+case、runner 和三步训练 probe。它串行执行 base、seed 7 扰动及三步训练的双 runtime，
+自动独立检查全部 177 数组字段、冻结参数、实际设备与完整安装来源后才成功。
+`--preflight` 只验证 base，不授 L3；nox 不接受缩小阶段范围的参数。
+
+准备固定的 PEFT/Transformers clean checkout、官方 wheel、独立双解释器及私有状态目录；
+先显式 CPU，再执行真实 CUDA。完整环境变量、collector 命令及范围见
+[PEFT 来源与训练结果](../../../docs/results/2026-10-15-peft-installed-source-training.md)。
+普通 ecosystem pytest 的一步 parity 与这个完整 L3 gate 分开；nightly 未选择新 session
+时不能声称已有定期执行。历史 raw 缺来源字段时重新运行，不能反向补证。
+
 ## Accelerate checkpoint 协议
 
 Accelerate 没有与模型族同义的注册表。`tools/run_accelerate_gate.py` 直接调用维护中的

@@ -11,6 +11,7 @@
 ```{toctree}
 :maxdepth: 1
 
+2026-10-15-peft-installed-source-training
 2026-10-15-nn-init-generator
 2026-10-15-release-installed-source-proof
 2026-08-28-ascend-910b-validation

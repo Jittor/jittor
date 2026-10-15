@@ -135,3 +135,24 @@ formal-v3 CPU 六 worker 与外部数值验收通过，但当时 controller 尚�
 保存/恢复、Trainer、BF16、分布式训练、量化、生成、其他 tuner 或真实大模型能力；
 未验证 NPU/ROCm。依赖环境缺失、真实设备缺失和来源不符都应显式失败，不能用 import、
 host 契约或 CPU fallback 充当数值验收。
+
+## 主树整合复验
+
+同步 `9ba68263b267c78799ec254e2b71abd865f41094` 后，代码与本页整合为
+`508cdd07e67f0c5f1fbc6aa1411185a024a38068`。在该 clean 提交的独立冻结工作树、
+全新私有 benchmark 缓存中重跑 CPU/CUDA 完整维护 nox：12 个真实 worker 全部成功，
+每设备自动检查 177 数组；独立进程重算后仍为 2 accepted / 0 blocked / 0 rejected、
+354 array pairs。误差与上表一致，两侧实际已映射 CUDA runtime 仍分别为 12080/12020，
+候选全部阶段 fallback=0。每个 worker 绑定 1558 个运行源码，完整 Git 库存为 2838 文件。
+这组新测量保留 508c 身份，不重标原 1738 记录，也不重复增加覆盖分子。
+
+主树定向 77 项、core 322 passed / 42 skipped / 1 existing xfail 通过。
+首次完整结构检查发现新 host 测试在收集时加载模块、直接引用解释器的两项违规；
+修为共享延迟加载基类与标准 child-process helper。中间一次只给一个测试类延迟加载导致
+三项 fixture 失败，原日志保留；最终测试与结构契约 55 项通过，完整结构
+1622 passed / 6 skipped。六项跳过为两项加速器、两项声明与两项当前解释器未安装原生包。
+这些修正只涉及测试，冻结测量工作树的运行工具与计算源码始终未变。
+
+主树新测量、独立评分卡、完整源码与原始证据清单位于未版本化的
+`$JITTOR_LAB_ROOT/_state/peft-main-integration-9ba/`；原始 1738 的证据保持只读，
+另独立核对 235 原始/支撑文件、2375 实际安装文件/库及全部 2835 Git 文件的 mode/blob/哈希。
