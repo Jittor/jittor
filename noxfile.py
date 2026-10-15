@@ -2816,3 +2816,70 @@ def ecosystem_peft(session):
                 "--device", device, *args,
                 "--output", str(root / "measurements"), "--cache-root", str(root / "benchmark-cache"),
                 *session.posargs, external=True, env=env)
+
+
+@nox.session(python=False)
+def ecosystem_swift(session):
+    """Opt-in real Swift SFT loader/template/Trainer with a pinned installed wheel."""
+    _root, env = _session_env(session, "ecosystem-swift")
+    python = _hardware_python()
+    oracle = os.environ.get("REAL_TORCH_PYTHON", "").strip()
+    if not oracle or not Path(oracle).is_file():
+        session.error("Swift needs REAL_TORCH_PYTHON naming an independent PyTorch interpreter")
+    for name in ("JITTOR_SWIFT_UPSTREAM", "JITTOR_SWIFT_WHEEL"):
+        path = os.environ.get(name, "").strip()
+        if not path or not Path(path).exists():
+            session.error(name + " must identify the clean upstream checkout/actual installed wheel")
+        env[name] = str(Path(path).resolve())
+    device = os.environ.get("JITTOR_TEST_DEVICES", "cpu")
+    if device not in ("cpu", "cuda"):
+        session.error("Swift needs exactly JITTOR_TEST_DEVICES=cpu or cuda")
+    nvcc = os.environ.get("JT_BUILD_NVCC_PATH") or os.environ.get("nvcc_path") or shutil.which("nvcc")
+    if device == "cuda" and (not nvcc or not os.environ.get("CUDA_VISIBLE_DEVICES", "").strip()):
+        session.error("Swift CUDA needs nvcc and explicitly allocated CUDA_VISIBLE_DEVICES")
+    cache = NOX_STATE_ROOT / "cache" / "ecosystem-swift" / device
+    env.update({
+        "REAL_TORCH_PYTHON": oracle, "JITTOR_REQUIRE_REAL_TORCH": "1",
+        "JITTOR_REQUIRE_SWIFT": "1", "JITTOR_REQUIRE_TRANSFORMERS": "1",
+        "JITTOR_REQUIRE_PEFT": "1", "JITTOR_REQUIRE_ACCELERATE": "1",
+        "JITTOR_TEST_REQUIRE_EXECUTION": "1", "JITTOR_ECOSYSTEM_SWIFT": "1",
+        "JITTOR_TEST_DEVICES": device, "JITTOR_TEST_DEVICE": device,
+        "JITTOR_TORCH_SHIM": "1", "JITTOR_ECOSYSTEM_SPEED_RATIO": "",
+        "JITTOR_ECOSYSTEM_TF32": "0", "JITTOR_ECOSYSTEM_CUDNN_BENCHMARK": "0",
+        "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
+        "JITTOR_HOME": str(cache / "jittor"), "JITTOR_TORCH_CACHE_ROOT": str(cache / "shim"),
+        "cache_name": "nox_ecosystem_swift_" + device,
+        "JT_CUDA_KERNEL_MATH": "strict", "JT_BACKEND": device,
+        "JT_USE_CUDA": "1" if device == "cuda" else "0", "use_cuda": "1" if device == "cuda" else "0",
+        "DISABLE_MULTIPROCESSING": "1", "JT_USE_PARALLEL_OP_COMPILER": "0",
+        "JT_BUILD_USE_MKL": "0", "JT_BUILD_USE_NCCL": "0", "JT_BUILD_USE_MPI": "0", "JT_BUILD_USE_CUTT": "0",
+    })
+    env.update({name: "1" for name in THREAD_POOL_ENV_NAMES})
+    if device == "cpu":
+        env.update({"CUDA_VISIBLE_DEVICES": "", "nvcc_path": "", "JT_BUILD_NVCC_PATH": ""})
+    else:
+        env.update({"nvcc_path": nvcc, "JT_BUILD_NVCC_PATH": nvcc})
+    for name in ("JITTOR_ECOSYSTEM_PACKAGE_SITE", "JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE"):
+        if os.environ.get(name):
+            env[name] = os.environ[name]
+    versions = (
+        "import swift, transformers, peft, accelerate, numpy; "
+        "assert swift.__version__ == '4.5.2'; assert transformers.__version__ == '4.56.2'; "
+        "assert peft.__version__ == '0.17.1'; assert accelerate.__version__ == '1.10.1'; "
+        "assert numpy.__version__.startswith('1.'); "
+        "print('Swift dependencies', swift.__version__, transformers.__version__, peft.__version__)"
+    )
+    oracle_env = dict(env, PYTHONPATH="", JITTOR_TORCH_SHIM="0", REAL_TORCH_SITE="")
+    for name in ("JITTOR_SOURCE_ROOT", "JITTOR_HOME", "JITTOR_TORCH_CACHE_ROOT", "JT_BACKEND"):
+        oracle_env[name] = ""
+    oracle_check = (
+        "import torch; assert hasattr(torch, '_C') and not hasattr(torch, '_torch_compat_install_context'); "
+        + ("assert torch.cuda.is_available(); " if device == "cuda" else "assert not torch.cuda.is_available(); ")
+    )
+    session.run(oracle, "-c", oracle_check + versions, external=True, env=oracle_env)
+    _set_hardware_python_config(session, python, env)
+    _install_compat_source(session, env, python)
+    session.run(python, "-c", "import jittor; import torch; "
+                "assert hasattr(torch, '_torch_compat_install_context'); " + versions,
+                external=True, env=env)
+    _run_pytest_once(session, ["compat/tests/torch/test_ecosystem_swift.py"], env, python, timeout=3600)

@@ -86,6 +86,18 @@ class TrainingRegistryTests(unittest.TestCase):
         self.assertEqual(self.axis(first, "trainer"), self.axis(second, "trainer"))
         self.assertNotEqual(first["upstream"]["commit"], second["upstream"]["commit"])
 
+    def test_swift_installed_source_inventory_includes_nonregistry_training_dependencies(self):
+        self.swift()
+        self.write("swift/dataset/prepare.py", "import unavailable_tensor_runtime\nVALUE = 1\n")
+        first = registry.inventory("ms-swift", self.root)
+        full = {row["path"]: row["sha256"] for row in first["package_sources"]}
+        self.assertEqual(set(full), set(self.git("ls-files", "--", "swift/*.py").splitlines()))
+        self.assertIn("swift/dataset/prepare.py", full)
+        self.write("swift/dataset/prepare.py", "import unavailable_tensor_runtime\nVALUE = 2\n")
+        second = registry.inventory("ms-swift", self.root)
+        self.assertEqual(first["axes"], second["axes"])
+        self.assertNotEqual(first["package_sources"], second["package_sources"])
+
     def test_missing_and_ambiguous_swift_training_registry_fail_closed(self):
         self.swift()
         relative = "swift/trainers/factory.py"

@@ -24,13 +24,14 @@ def digest(path):
 
 def installed_distribution(source, module):
     package = Path(module.__file__).resolve().parent
+    import_name = {'ms-swift': 'swift'}.get(source['repo'], source['repo'])
     expected = {row['path']: row['sha256'] for row in source['package_sources']}
     actual = {}
     for name, wanted in expected.items():
         relative = Path(name)
         if relative.parts[0] == 'src':
             relative = Path(*relative.parts[1:])
-        if relative.parts[0] != source['repo']:
+        if relative.parts[0] != import_name:
             raise ValueError('Unexpected upstream package path: ' + name)
         path = package.joinpath(*relative.parts[1:])
         if not path.is_file() or digest(path) != wanted:
