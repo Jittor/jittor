@@ -417,6 +417,7 @@ include docs/results/2026-10-15-openmmlab-training-oracles.md
 include docs/results/2026-10-15-pytree-transformers-513.md
 include docs/results/2026-10-15-rmsnorm-triton-alias.md
 include docs/results/2026-10-15-rng-native-generator-contract.md
+include docs/results/2026-10-15-sdpa-opmath.md
 include docs/results/2026-10-15-tanh-fsdp-bfloat16.md
 include docs/results/2026-10-15-tensor-detach-and-factory-leaf.md
 include docs/results/2026-10-15-training-registry-denominators.md

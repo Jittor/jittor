@@ -295,6 +295,15 @@ def _mask_bias(attn_mask, query_dims, key_dims, dtype):
     return mask.float32()
 
 
+def _accuracy_admitted(query):
+    # Executable cuDNN graphs are not necessarily accurate enough: BF16
+    # small-head attention exceeded the public output/gradient budgets.
+    # Keep that whole head-width domain on FP32 opmath, including inference
+    # and GQA. This is an accuracy policy, not a cuDNN hardware limitation.
+    return not (_jittor_dtype_name(query.dtype) == "bfloat16"
+                and len(query.shape) == 4 and int(query.shape[-1]) < 32)
+
+
 def _cudnn_fused_attention(query, key, value, attn_mask=None, dropout_p=0.0,
                            is_causal=False, scale=None, *, grouped=False):
     """Run attention through cuDNN, or return None to decline.
@@ -317,6 +326,8 @@ def _cudnn_fused_attention(query, key, value, attn_mask=None, dropout_p=0.0,
     dtype = _jittor_dtype_name(query.dtype)
     if dtype not in _DTYPES or _jittor_dtype_name(key.dtype) != dtype \
             or _jittor_dtype_name(value.dtype) != dtype:
+        return None
+    if not _accuracy_admitted(query):
         return None
     if attn_mask is not None:
         if _output_requires_grad(attn_mask):
@@ -419,7 +430,7 @@ def _mask_terms(attn_mask, query_dims, key_dims, dtype, causal=False):
 
 
 def _supports(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None):
-    return _jittor_dtype_name(query.dtype) in _DTYPES
+    return _jittor_dtype_name(query.dtype) in _DTYPES and _accuracy_admitted(query)
 
 
 # Not `dtypes=`: the registry filters on every tensor argument, and a bool mask
