@@ -165,6 +165,17 @@ L3 追加 `training: {steps, loss_trajectory_passed, parameter_trajectory_passed
 
 schema v2 逐阶段读取带哈希的真实测量 JSON：`base-comparison` 的 `cases[].oracle_result/jittor_result`、`perturb-comparison` 的 `reference_result/candidate_result`，以及 L3 两侧训练元数据。扰动 JSON 顶层必须含 `case`、`status=passed`、`input_perturbation_verified=true`；两侧结果沿用共享 runner 的字段，不能换成手工 precision 标签。所有阶段的 actual device、TF32 的 matmul/cuDNN 开关、`matmul_precision`、runtime conditions 与平台 `precision` 必须相同；平台 JSON 必须与记录平台块完全一致。L3 再核对实际 Git SHA、步骤数及 trainable/frozen 参数名与计数。每个 artifact role 唯一。只重写报告标签，或者给错误平台标签重新算 SHA，都无法通过这些校验。
 
+新的共享 runner 与 training probe 还在每个实际测量进程中输出
+`dependencies.<module>.installed_files_sha256`，记录实际包目录的全部文件内容，包含
+源码、数据和扩展二进制，排除 `__pycache__`、`.pyc`、`.pyo`。单文件模块只记录该文件，
+不会遍历其相邻的其他发行包。缺实际模块文件、多根 namespace/search path 或包内链接目录
+会明确拒绝，避免把不完整枚举当成完整安装来源。该采集发生在计算计时区间之外。
+
+这些哈希证明本次实际安装内容；仍须与固定的上游源码或原始 wheel 核对才能证明来源，
+不能仅因字段存在授予 L 级。旧测量缺少该字段时保留原数学结果和原身份边界，不对今天的
+安装目录重新计算后回填历史测量。Metrics/TensorDict 的额外 canonical-source 绑定以及
+SCM wheel 的逐阶段严格绑定继续保留。
+
 `coverage[].verified_scenarios` 保留 case、所属 repo、已验 L 级、完整的跨库 registry_refs、tiny/real 和实际 trainable/frozen 参数范围。家族分子必须连同场景阅读：Llama+LoRA 的 L3 不能写成 dense Llama 全参 L3；没有训练证明的 L2 场景，参数更新范围明确为 null。schema v1 不再用于新授级，须从原始测量重新生成 v2 绑定。
 
 默认仍将证据绑定当前 HEAD。审计历史报告可显式传 `--baseline <完整40位Jittor SHA>`，该 SHA 必须是本地 Git 中的真实 commit；输出记录 `baseline_policy=explicit-historical`、测量 baseline 与当前 `auditor_commit`。这只重新审计旧提交的证据，不能证明当前代码也通过。不得将旧测量中的 SHA 改成当前 HEAD；当前树的新验收须重新执行计算。
