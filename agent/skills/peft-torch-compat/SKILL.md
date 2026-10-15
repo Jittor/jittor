@@ -5,7 +5,28 @@ description: 在 Jittor 的 torch shim 与原生 PyTorch 两侧运行并对比 P
 
 # peft × Jittor torch shim
 
-## 当前验收入口（2026-10-14）
+## 维护与 nightly 入口（2026-10-15）
+
+完整有界门禁为 `nox -s ecosystem_peft`，复用 `tools/run_peft_gate.py` 执行双解释器
+base、seed 7 输入扰动和三步 SGD，强校验全部 177 数值字段及完整安装来源。
+[安装来源与训练报告](../../../docs/results/2026-10-15-peft-installed-source-training.md)
+保留原 CPU/CUDA 证据与注册分母；不能从 tiny LoRA 外推其他 tuner 或整库支持。
+
+`.github/workflows/ecosystem.yml` 的独立 `maintained-cpu` job 已接入该完整 session。
+在健康 Linux Python 3.11 和 C++ 工具链下，用同一 provisioning 入口复放：
+
+```bash
+python3.11 tools/provision_ecosystem_nightly.py --library peft \
+  --state-root "$JITTOR_LAB_ROOT/_state/ecosystem-nightly/<run>/peft" --run
+```
+
+新 state 内创建 controller、候选和真实二进制 Torch oracle 三个独立环境，安装完整
+依赖并逐环境 `pip check`，显式隐藏 CUDA。固定 PEFT/TF 官方 Git/wheel 身份沿用
+`_peft_scorecard.PINS`；不依赖个人环境或伪造 Torch metadata。
+[nightly 接线与本地实际验收](../../../docs/results/2026-10-15-maintained-ecosystem-nightly.md)
+记录本次完整 CPU 通过；未触发或声称已完成 GitHub scheduled run。
+
+## 历史验收入口（2026-10-14）
 
 [CPU/CUDA oracle 与三步训练 scorecard](../../../docs/results/2026-10-14-downstream-oracle-scorecards.md)
 记录 PEFT 0.17.1 的 `peft_lora_llama`：独立二进制 Torch 对拍、固定权重输入扰动、

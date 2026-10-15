@@ -20,6 +20,21 @@ description: 在 Jittor torch shim 与独立原生 Torch 两侧验证 ms-swift�
 以 `JITTOR_TEST_DEVICES=cpu` 或 `cuda` 选择，CPU 显式关闭 CUDA，缺依赖/来源/设备即失败。
 完整命令与缓存隔离要求见报告。
 
+`.github/workflows/ecosystem.yml` 的独立 `maintained-cpu` job 已接入该完整 session。
+健康 Linux Python 3.11 和 C++ 工具链可用同一入口建立三个独立环境后实跑：
+
+```bash
+python3.11 tools/provision_ecosystem_nightly.py --library swift \
+  --state-root "$JITTOR_LAB_ROOT/_state/ecosystem-nightly/<run>/swift" --run
+```
+
+工具从固定干净 upstream 构建 Swift wheel，候选/oracle 分别安装完整真实依赖，
+逐环境 `pip check`，显式隐藏 CUDA；PyArrow 19.0.1/NumPy 1.26.4 的数据 ABI 在首次
+JIT 前真实执行检查。跨侧只排除绝对安装位置，每侧实际目录和完整内容哈希仍须绑定。
+[nightly 接线与独立安装验证](../../../docs/results/2026-10-15-maintained-ecosystem-nightly.md)
+记录新源码 CPU 节点实际通过及失败尝试；GitHub scheduled run 尚未触发或观察。
+下述历史 CPU/CUDA scorecard 保留原测量 SHA，不因新 workflow 重标。
+
 测量源码固定 `606b602e7e79b5bfa5573b9693144f8d224c6a07`；后续 collector 与共同 auditor
 独立复核 clean upstream SHA、517 个 Python 源文件和 532 个完整 wheel/安装 payload。
 该 wheel 从固定源码构建，不称为官方 PyPI wheel。
