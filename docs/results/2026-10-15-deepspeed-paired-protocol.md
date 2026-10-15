@@ -125,6 +125,16 @@ empty. Artifacts are in `paired-scorecard-v1/{evidence,scorecard}.json` under th
 external state root; the complete source/raw/checkpoint/log seal is
 `paired-protocol-v1-evidence.json`.
 
+The final common audit on clean `c93eb2c0690b9541063330685fb7ac6560eb8812`
+independently regenerates the same four accepted records, zero rejected/blocked,
+and empty registry coverage in `paired-scorecard-v2/{evidence,scorecard}.json`.
+The measured source remains `f787cc0b34b8b24e04d79cc55aacf746c01036b8`.
+The immutable final evidence seal has SHA256
+`f008faff4bfaa4cfd540b62067d69ec031b98749ac9ab04984bf52e3b6ae52cc`;
+it binds 829 raw files, 1574 measured runtime source hashes, all 32 formal NPZ files
+and 48 actual checkpoint files. It also retains the original diagnostics,
+independent wheel rebuild, both common audits and all eleven negative controls.
+
 Nine destructive tests on disposable copies of the actual NPZ/gate artifacts were
 rejected by the common auditor after hashes were rebound: a gradient dropped from
 both runtimes, one-ULP restored moment divergence, incorrect full-gradient dtype,
@@ -155,6 +165,17 @@ that assertion after executing training/strict continuation. The comparator now
 requires an actual matching native transport only for world size greater than one;
 the full two-rank rules and numerical budgets are unchanged. Singleton labels do
 not establish distributed capability. The original failure logs remain unmodified.
+
+On clean `c93eb2c0690b9541063330685fb7ac6560eb8812`, the repaired old Engine
+matrix passes all 12 CPU cases (118.99 seconds) and all 12 actual CUDA cases
+(140.47 seconds), with zero skips and unchanged source/HEAD. The corresponding
+`protocol-legacy-{cpu,cuda}-v2.log`, `legacy-regression-v2-source.json` and
+`legacy-regression-v2-result.json` are sealed separately from the original failures.
+The same clean source passes 78 host contracts, Ruff and layout. Retained direct
+singleton Engine artifacts in `singleton-engine-v1/` verify real train/save/new-Engine
+load on both devices, with 124 strict continuation fields per runtime and candidate
+fallback delta zero. Their native `mpi` label coexists with `JT_BUILD_USE_MPI=0`;
+that singleton metadata must not be read as evidence of an active MPI communicator.
 
 Stage3, optimizer/parameter offload, other optimizers, pipeline/MoE/elastic/DeepCompile,
 large models, arbitrary BF16 shapes, non-Linux platforms and CPU unified launching
