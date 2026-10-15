@@ -29,6 +29,24 @@ class OptionalWeightRMSNorm(torch.nn.Module):
         return normalized
 
 
+class DispatchedRMSNorm(torch.nn.Module):
+    """A third-party owner may multiply its weight before the final cast."""
+    def __init__(self, weight):
+        super().__init__()
+        self.weight = torch.nn.Parameter(weight)
+        self.variance_epsilon = 1e-6
+        self.forward_calls = 0
+
+    def forward_native(self, value):
+        self.forward_calls += 1
+        normalized = value.float() * torch.rsqrt(
+            value.float().pow(2).mean(-1, keepdim=True) + self.variance_epsilon)
+        return (normalized * self.weight.float()).to(value.dtype)
+
+    def forward(self, value):
+        return self.forward_native(value)
+
+
 class TestRMSNormOptionalWeight(unittest.TestCase):
     def _check(self, *, has_weight=True, pass_weight=True,
                variance_size_override=None, unused_weight_on_cpu=False, omit_options=False):
@@ -82,6 +100,64 @@ class TestRMSNormOptionalWeight(unittest.TestCase):
             self.assertTrue(str(inference.device).startswith(device))
             np.testing.assert_allclose(inference.detach().cpu().numpy(), expected,
                                        rtol=2e-5, atol=2e-6)
+
+    def _check_native_dispatch(self, dtype):
+        # Replay may execute a capture twice or reuse it without a Python call.
+        # This fixture observes dispatch itself, so every call must be eager.
+        if hasattr(torch, '_torch_compat_install_context'):
+            import jittor as jt
+            with jt.runtime.scope(auto_graph_replay=0):
+                return self._check_eager_native_dispatch(dtype)
+        return self._check_eager_native_dispatch(dtype)
+
+    def _check_eager_native_dispatch(self, dtype):
+        device = os.environ.get('JITTOR_TEST_DEVICE', 'cpu')
+        rng = np.random.RandomState(3)
+        source = rng.normal(0, 1, (7, 32)).astype('float32')
+        weights = rng.uniform(.6, 1.4, (32,)).astype('float32')
+        cotangent = torch.tensor(rng.normal(0, 1, (7, 32)).astype('float32'), device=device)
+        model = DispatchedRMSNorm(torch.tensor(weights, device=device, dtype=dtype))
+        value = torch.tensor(source, device=device, dtype=dtype, requires_grad=True)
+        # Evaluate the public formula outside Module dispatch on separate leaves.
+        reference_value = torch.tensor(source, device=device, dtype=dtype, requires_grad=True)
+        reference_weight = torch.tensor(weights, device=device, dtype=dtype, requires_grad=True)
+        reference = (reference_value.float() * torch.rsqrt(
+            reference_value.float().pow(2).mean(-1, keepdim=True) + 1e-6)
+            * reference_weight.float()).to(dtype)
+        actual = model(value)
+        self.assertGreater(model.forward_calls, 0)
+        (actual.float() * cotangent).sum().backward()
+        (reference.float() * cotangent).sum().backward()
+        for observed, expected in ((actual, reference), (value.grad, reference_value.grad),
+                                   (model.weight.grad, reference_weight.grad)):
+            self.assertIsNotNone(observed)
+            self.assertTrue(str(observed.device).startswith(device))
+            # Separate FP32 reduction graphs can accumulate in a different
+            # order; low-precision casting must still agree exactly.
+            observed_array = observed.detach().float().cpu().numpy()
+            expected_array = expected.detach().float().cpu().numpy()
+            if dtype == torch.float32:
+                tolerance = 16 * np.finfo(np.float32).eps
+                np.testing.assert_allclose(observed_array, expected_array,
+                                           rtol=tolerance, atol=tolerance)
+            else:
+                np.testing.assert_array_equal(observed_array, expected_array)
+        for _ in range(2):
+            before = model.forward_calls
+            with torch.no_grad():
+                repeated = model(torch.tensor(source, device=device, dtype=dtype))
+            self.assertEqual(model.forward_calls, before + 1)
+            np.testing.assert_array_equal(repeated.float().cpu().numpy(),
+                                          reference.detach().float().cpu().numpy())
+
+    def test_public_native_dispatch_float32(self):
+        self._check_native_dispatch(torch.float32)
+
+    def test_public_native_dispatch_float16(self):
+        self._check_native_dispatch(torch.float16)
+
+    def test_public_native_dispatch_bfloat16(self):
+        self._check_native_dispatch(torch.bfloat16)
 
     def test_has_weight_false_does_not_consume_nonunit_weight(self):
         self._check(has_weight=False)

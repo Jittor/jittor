@@ -104,3 +104,76 @@ No engine, Omni numerical acceptance, arbitrary RMSNorm dispatch-contract parity
 NPU or ROCm support follows from this batch. The separate BF16 multiplication
 ordering contract in Omni remains under investigation; these changes preserve
 the existing native RMSNorm mathematics.
+
+## Follow-up: owned forward and private RMS output storage
+
+Original numerical probes retain baseline `963566b462e645f81994e48aaf81a5cda8266899`
+plus the individually hashed owned changes. After freezing tests and retaining
+those changes, remote integration produced `1ae4a257511633eeeb745784d99c1792a5bbe49c`;
+the final core/structure regression uses that baseline plus the same owned source
+bytes. This preserves the preceding batch's raw files and source identity. The independent reference is the genuine vLLM 0.29.0 CUDA extension
+(tag commit `98dff2a81d747d1dba01a47f939f48c3526d4206`) with Torch
+2.13.0+cu130; candidate CUDA uses the same cu122/strict toolchain described above.
+No release version or old numerical record was relabeled.
+
+A module with a callable `forward_native` owns its dispatch and numerical
+contract. Both Python and repeated-inference C++ class-name RMS shortcuts now
+leave that module's real forward in charge. Three dtype regressions use
+nonunit affine weights and check its output, input and affine gradients, and
+two subsequent no-grad calls. Replay is disabled only while observing Python
+call counts; graph capture itself remains unchanged. The independent Torch
+interpreter passes all eight public-contract tests on CPU and CUDA. Saved
+final candidate arrays also agree with the independent oracle: FP16/BF16
+outputs, input/weight gradients and repeated outputs are bitwise equal. FP32
+maximum absolute difference is 7.1525574e-7 on CPU and 4.7683716e-7 on CUDA;
+maximum relative L2 error is below 8.7e-8.
+
+The private compiled vLLM RMS operator separately multiplies the affine weight
+in FP32 before the final low-precision cast. Its adapter now supplies FP32
+operands to the existing public `jt.nn.rms_norm`, then casts the result, without
+changing native/Hugging Face RMS mathematics. For the saved BF16 7-by-32 fixture,
+the old cast-before-weight result differed in 58/224 elements; all repeated
+corrected outputs match the genuine CUDA extension exactly. This is an operator
+fixture, not an assertion about every normalization variant.
+
+The same real extension exposed an independent output-buffer contract:
+`out.assign(...)` changed the output's physical pointer although its Python
+identity stayed stable. The adapter now calls public `out.copy_` within
+`jt.no_grad()`. FP32/FP16/BF16 oracle and candidate probes verify the return value,
+Python identity, physical pointer and existing-view values. FP16/BF16
+output and alias arrays are bitwise equal; FP32 maximum absolute difference
+is 2.3841858e-7. Regressions also check input/weight immutability, no new autograd history, real allocation on the
+selected device, and unchanged zero fallback counters. Candidate CPU tests use
+the independent NumPy formula; a compiled vLLM CPU kernel is not claimed.
+The adapter does not forcibly clear an output's pre-existing requires-grad flag.
+
+| Follow-up check | Result |
+| --- | --- |
+| Independent Torch public RMS contracts | CPU 8 / CUDA 8 passed |
+| Candidate CPU RMS/norm neighbors | 33 passed, 6 declared hardware skips |
+| Candidate CUDA RMS/norm neighbors | 36 passed, 3 existing xfails |
+| Native and Torch CPU core | 322 passed, 42 skipped, 1 existing xfail |
+| Full structure | 1501 passed, 4 declared/hardware skips |
+
+Reproduce the candidate neighbors with the selected device configured explicitly:
+
+```bash
+JITTOR_TORCH_SHIM=1 JITTOR_TEST_DEVICE=cuda PYTHONPATH=python:adapters \
+python -m pytest -q compat/tests/torch/test_rms_norm_optional_weight.py \
+  compat/tests/torch/test_torch_compat_norm.py \
+  adapters/tests/vllm/test_rms_norm_precision.py
+```
+
+Use the same fixture in an independent real-Torch interpreter by running the
+public test file directly, with the shim disabled. The private compiled oracle
+requires the genuine matching vLLM CUDA extension. Raw source snapshots, probes,
+before/after arrays and directed logs are bound by `rms-own-forward-validation-manifest-v1.json` under the
+unversioned evidence directory above, SHA256 `fc794439d203e39e98ae398f5ae0ca512bdd11df1f53f00388a0736538d3d333`.
+
+This repair does not admit MiniMaxH3DiT or an Omni engine. The real frozen-weight
+H3 fixture still fails the existing numerical criterion: seed-7 loss relative
+error is 1.7086% after the RMS repair. Saved intermediate Q/K/V are identical at
+the first subsequent SDPA mismatch; attention precision remains a separate
+shared-owner investigation. Upstream CPU platform selection also rejects this
+Omni path. No new model-family numerator, L3, performance, or CPU Omni support
+is granted by this follow-up.

@@ -142,6 +142,9 @@ def _standard_rms_norm(self, args, kwargs):
         or getattr(self, "has_weight", True) is False
         or getattr(self, "pass_weight", True) is False
         or getattr(self, "variance_size_override", None) is not None
+        # Public native/accelerator dispatch belongs to the module. A class
+        # name alone does not establish our weighted RMS precision contract.
+        or callable(getattr(self, "forward_native", None))
     ):
         return None
     value = args[0]

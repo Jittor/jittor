@@ -53,8 +53,8 @@ _FACTORY_FIDELITY_DETAIL = (
     "some Torch layout, pin-memory, out, or generator-state semantics"
 )
 _EMPTY_LIKE_FIDELITY_DETAIL = (
-    "preserves the input shape and dtype through Jittor allocation but omits "
-    "Torch layout, device, requires_grad, pin-memory, and memory-format semantics"
+    "preserves input shape, dtype, device and leaf-gradient options but "
+    "approximates or omits Torch layout, pin-memory and memory-format semantics"
 )
 
 
@@ -184,10 +184,13 @@ def _factory_implementation(value):
     return value
 
 
+def _allocate_empty_like(input):
+    return jt.empty(input.shape, dtype=input.dtype)
+
+
 def _empty_like_implementation(input, **kwargs):
-    """Preserve the historical compiler fallback for ``torch.empty_like``."""
-    selected = kwargs.get("dtype")
-    return jt.empty(input.shape, dtype=input.dtype if selected is None else _dtype_to_str(selected))
+    """Apply the shared factory options to the compiler's empty allocation."""
+    return _constructor_adapter("empty_like", _allocate_empty_like, False, input, **kwargs)
 
 
 def _install_empty_like(root):
@@ -244,6 +247,7 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
             return out
     # _invoke_factory already established native construction placement.
     _requires_grad = bool(kwargs.get("requires_grad", False))
+    fresh_like = name in ("empty_like", "zeros_like", "ones_like", "full_like")
     for k in _DROP:
         kwargs.pop(k, None)
     # Jittor shape conversion rejects numpy scalars; normalize them.
@@ -281,6 +285,9 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
                 kwargs["dtype"] = default_dtype
             else:
                 _cast_to = default_dtype
+    if fresh_like and kwargs.get("dtype", False) is None:
+        # Unlike size factories, explicit None follows the input dtype.
+        kwargs.pop("dtype")
     if "dtype" in kwargs:
         if kwargs["dtype"] is None:
             # torch.empty/zeros(..., dtype=None) -> the default dtype.
@@ -303,6 +310,10 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
     out = orig(*args, **kwargs)
     if _cast_to is not None:
         out = out.cast(_cast_to)
+    if fresh_like:
+        # Allocation helpers may use broadcast/cast internally. Those graph
+        # nodes are not the history of a newly created Torch leaf.
+        out = out.detach()
     out._jittor_torch_ext_mutable = True
     out.requires_grad_(_requires_grad)
     if _requires_grad:

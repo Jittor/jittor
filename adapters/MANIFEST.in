@@ -13,6 +13,7 @@ include tests/vllm/test_backend.py
 include tests/vllm/test_flash_attn.py
 include tests/vllm/test_layers.py
 include tests/vllm/test_plugin_lifecycle.py
+include tests/vllm/test_rms_norm_precision.py
 include tests/vllm/test_runtime_ownership.py
 include tests/vllm/test_structure.py
 prune build

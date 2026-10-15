@@ -727,6 +727,14 @@ PyObject* rms_norm_inference(PyObject* module, PyObject* dict, PyObject* x) {
             return nullptr;
         }
     }
+    PyObject* native_forward_value = PyObject_GetAttrString(module, "forward_native");
+    if (native_forward_value) {
+        PyObjHolder native_forward(native_forward_value);
+        if (PyCallable_Check(native_forward.obj)) return nullptr;
+    } else {
+        if (!PyErr_ExceptionMatches(PyExc_AttributeError)) return nullptr;
+        PyErr_Clear();
+    }
     PyObject* weight = PyDict_GetItemString(dict, "weight");
     PyObject* eps = PyDict_GetItemString(dict, "variance_epsilon");
     if (!weight || !is_var(weight) || !eps || !(PyFloat_Check(eps) || PyLong_Check(eps)))
