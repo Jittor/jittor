@@ -806,7 +806,8 @@ def _physical(t):
     return t, False
 
 
-def _supports(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None):
+def _supports(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False,
+              scale=None, allow_reduced_precision=False):
     return all(_jittor_dtype_name(t.dtype) == "float32" for t in (query, key, value))
 
 
