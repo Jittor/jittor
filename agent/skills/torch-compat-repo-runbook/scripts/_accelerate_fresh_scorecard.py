@@ -19,7 +19,8 @@ def protocol_spec(world, precision):
             'restoration': 'fresh-process', 'checkpoint': 'FULL_STATE_DICT' if world == 2 else 'Accelerator',
             'model': 'Linear(4,3)' if world == 2 else 'Linear(3,2)', 'optimizer': 'AdamW',
             'scheduler': 'none' if world == 2 else 'StepLR(step_size=1,gamma=0.8)',
-            'pre_save_steps': 3, 'resume_steps': 2, 'input_seeds': [0, 7]}
+            'pre_save_steps': 3, 'resume_steps': 2, 'input_seeds': [0, 7],
+            'rng_state': 'full-advanced-streams'}
 
 
 def validate_rng(value, device):
@@ -168,8 +169,12 @@ def observation(role, load, record, runtime, seed, rank):
                     '_step_count': 4, '_is_initial': False, '_get_lr_called_within_step': False,
                     '_last_lr': [float(observed['step/2/learning_rates/%d' % i]) for i in (0, 1)]}
         require(scheduler == expected, 'Saved complete StepLR state differs from observed learning rates')
-    for value in (p.get('rng_saved'), c.get('rng_restored'), c.get('rng_before')):
+    for value in (p.get('rng_initial'), p.get('rng_saved'), c.get('rng_restored'), c.get('rng_before')):
         validate_rng(value, record['device'])
+    require(all(p['rng_initial'][key] != p['rng_saved'][key] for key in p['rng_saved'])
+            and isinstance(p.get('advanced_random'), dict)
+            and set(p['advanced_random']) == set(p.get('expected_random', {})),
+            'Each saved RNG stream must actually advance before checkpointing')
     require(p['rng_saved'] == c['rng_restored'] and c['rng_before'] != c['rng_restored'],
             'Full generator state was not restored in the new process')
     require(p.get('expected_random') == c.get('resumed_random'), 'Fresh-process next random samples differ')

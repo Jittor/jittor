@@ -460,7 +460,12 @@ def fresh_protocol(protocol, tmp_path, monkeypatch):
                     environment[key] = str(directory)
                 value['result']['process_environment'] = environment
                 if phase == 'produce':
+                    initial_rng = copy.deepcopy(rng)
+                    initial_rng['python'][1][-1] = 623
+                    initial_rng['numpy'][2] = 0
+                    initial_rng['torch_cpu'][0] = 1
                     value['result'].update(before_save=[1, 2, 3], expected_resume=[4, 5], saved=saved,
+                                           rng_initial=initial_rng, advanced_random=metadata['result']['expected_random'],
                                            rng_saved=rng, expected_random=metadata['result']['expected_random'])
                 else:
                     value['result'].update(actual_resume=[4, 5], after_restore=saved, before_restore={},
@@ -529,6 +534,13 @@ def test_missing_adam_moment_in_both_phase_snapshots_is_not_hidden_by_equal_json
     for phase, field in (('produce', 'saved'), ('consume', 'after_restore')):
         mutate_metadata(fresh_protocol, 'candidate-base-rank0-' + phase + '-metadata',
                         lambda value: value['result'][field]['optimizer']['state']['weight'].pop('exp_avg_sq'))
+    assert result(fresh_protocol)['rejected']
+
+
+@pytest.mark.parametrize('stream', ['python', 'numpy', 'torch_cpu'])
+def test_fresh_rng_initial_seed_only_is_not_advanced_offset_proof(fresh_protocol, stream):
+    mutate_metadata(fresh_protocol, 'candidate-base-rank0-produce-metadata',
+                    lambda value: value['result']['rng_initial'].update({stream: value['result']['rng_saved'][stream]}))
     assert result(fresh_protocol)['rejected']
 
 

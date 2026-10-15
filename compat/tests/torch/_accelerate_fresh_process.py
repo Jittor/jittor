@@ -65,6 +65,8 @@ def run_fresh_phase(capture, accelerator, update, state, sample, extra=None):
     if phase == 'produce':
         if directory.exists() and any(directory.iterdir()):
             raise ValueError('Refusing to overwrite a persisted checkpoint')
+        result['rng_initial'] = rng_snapshot(torch, capture.device)
+        result['advanced_random'] = sample()
         result['before_save'] = [update() for _ in range(3)]
         accelerator.save_state(str(directory), safe_serialization=False)
         accelerator.wait_for_everyone()
