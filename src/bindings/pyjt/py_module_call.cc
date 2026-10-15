@@ -7,6 +7,7 @@
 #include "ops/op_register.h"
 #include "ops/composite/code_op.h"
 #include <cmath>
+#include <cstring>
 #include "core/grad.h"
 #include "core/var_holder.h"
 #include "runtime/float32_precision.h"
@@ -706,9 +707,26 @@ PyObject* linear_with_bias_inference(PyObject* dict, PyObject* x) {
 // `_standard_rms_norm` on an inference call, natively: no training kernel
 // takes it, the dispatcher picks `_rms_norm_cuda` for it, and that builds its
 // code operator from `_rms_norm_source`. nullptr for anything else.
-PyObject* rms_norm_inference(PyObject* dict, PyObject* x) {
+PyObject* rms_norm_inference(PyObject* module, PyObject* dict, PyObject* x) {
     if (!rms_inference_impl || !rms_source_fn || acl_possible || !dict || !is_var(x))
         return nullptr;
+    // Match the public contract guard in `_standard_rms_norm` before
+    // kernel selection sees even an intentionally unused affine tensor.
+    // Resolve attributes normally so class options/descriptors also agree.
+    for (const char* name : {"has_weight", "pass_weight", "variance_size_override"}) {
+        PyObject* option_value = PyObject_GetAttrString(module, name);
+        if (!option_value) {
+            if (!PyErr_ExceptionMatches(PyExc_AttributeError)) return nullptr;
+            PyErr_Clear();
+            continue;
+        }
+        PyObjHolder option(option_value);
+        if (std::strcmp(name, "variance_size_override") == 0) {
+            if (option.obj != Py_None) return nullptr;
+        } else if (option.obj == Py_False) {
+            return nullptr;
+        }
+    }
     PyObject* weight = PyDict_GetItemString(dict, "weight");
     PyObject* eps = PyDict_GetItemString(dict, "variance_epsilon");
     if (!weight || !is_var(weight) || !eps || !(PyFloat_Check(eps) || PyLong_Check(eps)))
@@ -814,7 +832,7 @@ PyObject* dispatch_native(PyObject* module, const TypeInfo& info, PyObject* args
     }
     if (info.rms_named) {
         if (!kwargs && PyTuple_GET_SIZE(args) == 1) {
-            PyObject* fast = rms_norm_inference(dict, PyTuple_GET_ITEM(args, 0));
+            PyObject* fast = rms_norm_inference(module, dict, PyTuple_GET_ITEM(args, 0));
             if (fast || PyErr_Occurred()) return fast;
         }
         PyObject* fused = PyObject_CallFunctionObjArgs(standard_rms_norm, module, args,

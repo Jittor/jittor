@@ -76,7 +76,8 @@ def audit(root=ROOT):
                   "compat/tests/torch/test_ecosystem_speed.py",
                   "compat/tests/torch/test_ecosystem_verl.py",
                   "compat/tests/torch/test_ecosystem_longformer.py",
-                  "compat/tests/torch/test_ecosystem_openmmlab.py")
+                  "compat/tests/torch/test_ecosystem_openmmlab.py",
+                  "compat/tests/torch/test_ecosystem_vllm.py")
     methods = {}
 
     def collect_methods(body, relative, parents=()):

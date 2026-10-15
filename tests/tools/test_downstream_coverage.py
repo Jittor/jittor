@@ -468,6 +468,17 @@ class CoverageAuditTests(unittest.TestCase):
                 self.assertIn("compat/tests/torch/test_ecosystem_parity.py::EcosystemParity::test_" + case,
                               gate["tests"])
 
+    def test_vllm_component_has_a_concrete_shared_oracle_node(self):
+        row = next(item for item in audit.audit(ROOT)["repos"] if item["repo"] == "vllm")
+        self.assertIn("vllm_decoder_primitives", row["registered_cases"])
+        gate = next((item for item in row["gate_cases"]
+                     if item["case"] == "vllm_decoder_primitives"), None)
+        self.assertIsNotNone(gate, "The component's real oracle node must be discoverable")
+        self.assertEqual(gate["tests"], [
+            "compat/tests/torch/test_ecosystem_vllm.py::EcosystemVLLM::test_vllm_decoder_primitives"
+        ])
+        self.assertIsNone(row["verified_level"], "Source discovery alone cannot grant an execution level")
+
 
 class RegistryTests(unittest.TestCase):
     def setUp(self):

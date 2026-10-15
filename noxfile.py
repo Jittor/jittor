@@ -2672,3 +2672,65 @@ def nccl(session):
             python, "-m", "pytest", "-v", "--timeout=600", *group,
             env=mode_env, external=True,
         )
+
+
+@nox.session(python=False)
+def ecosystem_vllm(session):
+    """Real pinned vLLM native-path primitives; no engine or performance claim."""
+    _root, env = _session_env(session, "ecosystem-vllm")
+    python = _hardware_python()
+    oracle = os.environ.get("REAL_TORCH_PYTHON", "").strip()
+    if not oracle or not Path(oracle).is_file():
+        session.error("vLLM needs REAL_TORCH_PYTHON naming an independent PyTorch interpreter")
+    device = os.environ.get("JITTOR_TEST_DEVICES", "cpu")
+    if device not in ("cpu", "cuda"):
+        session.error("vLLM needs exactly JITTOR_TEST_DEVICES=cpu or cuda")
+    nvcc = os.environ.get("JT_BUILD_NVCC_PATH") or os.environ.get("nvcc_path") or shutil.which("nvcc")
+    if device == "cuda" and (not nvcc or not os.environ.get("CUDA_VISIBLE_DEVICES", "").strip()):
+        session.error("vLLM CUDA needs nvcc and explicitly allocated CUDA_VISIBLE_DEVICES")
+    cache = NOX_STATE_ROOT / "cache" / "ecosystem-vllm" / device
+    env.update({
+        "REAL_TORCH_PYTHON": oracle, "JITTOR_REQUIRE_REAL_TORCH": "1",
+        "JITTOR_REQUIRE_VLLM": "1", "JITTOR_REQUIRE_TRANSFORMERS": "1",
+        "JITTOR_TEST_REQUIRE_EXECUTION": "1", "JITTOR_ECOSYSTEM_VLLM": "1",
+        "JITTOR_TEST_DEVICES": device, "JITTOR_TORCH_SHIM": "1",
+        "JITTOR_ECOSYSTEM_SPEED_RATIO": "", "JITTOR_ECOSYSTEM_TF32": "0",
+        "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
+        "JITTOR_HOME": str(cache / "jittor"), "JITTOR_TORCH_CACHE_ROOT": str(cache / "shim"),
+        "cache_name": "nox_ecosystem_vllm_" + device,
+        "JITTOR_CUDA_WHEEL_DISABLE": "1", "JT_CUDA_KERNEL_MATH": "strict",
+        "JT_USE_CUDA": "1" if device == "cuda" else "0",
+        "use_cuda": "1" if device == "cuda" else "0",
+        "JT_BACKEND": device, "DISABLE_MULTIPROCESSING": "1",
+        "JT_USE_PARALLEL_OP_COMPILER": "0", "JT_BUILD_USE_MKL": "0",
+        "JT_BUILD_USE_NCCL": "0", "JT_BUILD_USE_MPI": "0", "JT_BUILD_USE_CUTT": "0",
+    })
+    env.update({name: "1" for name in THREAD_POOL_ENV_NAMES})
+    if device == "cpu":
+        env.update({"CUDA_VISIBLE_DEVICES": "", "nvcc_path": "", "JT_BUILD_NVCC_PATH": ""})
+    else:
+        env.update({"nvcc_path": nvcc, "JT_BUILD_NVCC_PATH": nvcc})
+    for name in ("JITTOR_ECOSYSTEM_PACKAGE_SITE", "JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE"):
+        if os.environ.get(name):
+            env[name] = os.environ[name]
+    versions = (
+        "import vllm, transformers; "
+        "assert vllm.__version__ == '0.29.0'; "
+        "assert transformers.__version__ == '5.13.0'; "
+        "print('vLLM dependencies', vllm.__version__, transformers.__version__)"
+    )
+    oracle_env = dict(env, PYTHONPATH="", JITTOR_TORCH_SHIM="0", REAL_TORCH_SITE="")
+    for name in ("JITTOR_SOURCE_ROOT", "JITTOR_HOME", "JITTOR_TORCH_CACHE_ROOT", "JT_BACKEND"):
+        oracle_env[name] = ""
+    oracle_check = (
+        "import torch; assert hasattr(torch, '_C') and not hasattr(torch, '_torch_compat_install_context'); "
+        "assert torch.__version__.split('+')[0] == '2.13.0'; "
+        + ("assert torch.cuda.is_available(); " if device == "cuda" else "assert not torch.cuda.is_available(); ")
+    )
+    session.run(oracle, "-c", oracle_check + versions, external=True, env=oracle_env)
+    _set_hardware_python_config(session, python, env)
+    _install_compat_source(session, env, python)
+    session.run(python, "-c", "import jittor; import torch; "
+                "assert hasattr(torch, '_torch_compat_install_context'); " + versions,
+                external=True, env=env)
+    _run_pytest_once(session, ["compat/tests/torch/test_ecosystem_vllm.py"], env, python, timeout=3600)

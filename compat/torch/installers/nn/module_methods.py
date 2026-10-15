@@ -137,6 +137,11 @@ def _standard_rms_norm(self, args, kwargs):
         or len(args) != 1
         or kwargs
         or "variance_epsilon" not in self.__dict__
+        # Optional affine weights and partial variance are different public
+        # forward contracts. Leave their computation with the module owner.
+        or getattr(self, "has_weight", True) is False
+        or getattr(self, "pass_weight", True) is False
+        or getattr(self, "variance_size_override", None) is not None
     ):
         return None
     value = args[0]

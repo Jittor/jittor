@@ -7,7 +7,9 @@
 - Owner: Jittor core/compat maintainers.
 - Review when: native Adam state arithmetic, view/storage publication, autograd hooks,
   optimizer loading, native collectives/Store, the runner/launcher, or the pinned
-  DeepSpeed adapter/source changes.
+  DeepSpeed adapter/source changes. Adapter-facing public contracts include
+  `gradient_task.participating_tensors`, `owned_runtime_hook`, `transaction` and
+  `module_patcher`; changes to these also require revalidation.
 
 ## Scope and protocol
 

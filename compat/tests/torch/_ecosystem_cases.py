@@ -12,6 +12,7 @@ never has to know which runtime it is running under.
 """
 
 from _ecosystem_longformer_cases import longformer_32768
+from _ecosystem_vllm_cases import decoder_primitives as _vllm_decoder_primitives
 from _ecosystem_openmmlab_cases import mmengine_train_step, mmcv_convmodule_train_step
 from _ecosystem_transformers_cases import (
     clip_multimodal, llama_rope_2048, mixtral_moe, with_pooler_output,
@@ -348,6 +349,7 @@ CASES = {
     "mmcv_convmodule_train_step": (mmcv_convmodule_train_step, ("mmcv", "mmengine")),
     "verl_ppo_gae_vanilla": (_verl_ppo_gae_vanilla, ("verl", "numpy", "transformers", "ray", "tensordict")),
     "verl_distillation_k3": (_verl_distillation_k3, ("verl", "numpy", "transformers", "ray", "tensordict")),
+    "vllm_decoder_primitives": (_vllm_decoder_primitives, ("vllm", "transformers")),
     "transformers_gpt2": (_tiny_gpt2, ("transformers",)),
     "transformers_llama": (_tiny_llama, ("transformers",)),
     "transformers_bert": (_tiny_bert, ("transformers",)),
