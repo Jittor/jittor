@@ -62,9 +62,14 @@ force a MATH oracle, or count head-only SGD as the requested whole-model trainin
 维护入口 [`scripts/probe_h3.py`](scripts/probe_h3.py) 直接调用真实
 `MiniMaxH3DiTModel`：一层主干、一层 refiner、hidden=32、33268 个参数，固定权重
 seed=3、输入 seeds=7/19；不下载 checkpoint，不构造 engine，也不是训练准入工具。
-它核对上面两个 clean checkout SHA、实际执行的六个上游模块源码、两个实际安装版本，
-记录本仓源码 SHA/dirty 状态、device、精度、缺失梯度和原始数组。完整 wheel/安装树绑定
-仍由统一 scorecard auditor 负责，不能拿这里的六文件检查代替。
+它要求本仓与两个上游 checkout 干净，核对完整运行时源码快照、实际导入包和原始
+wheel 的全部载荷，以及真实安装的 METADATA / RECORD。固定 Omni 构建的载荷必须
+恰好为完整源码清单加生成的 `_version.py`，不能用同步改写的 wheel 隐藏增删文件。
+Omni 的 source@SHA 与
+实际 SCM 分发版本分别保存，不改版本号。模型导入前独占写出 `.installation.json`，
+因此 CPU 初始化失败也可核对安装来源；这个阶段不授予计算或数值通过。
+完整计算后再次验证安装和本仓源码，保存实际 device、精度、梯度与原始数组。
+这些诊断记录仍须经统一 scorecard auditor 准入，不能直接计入覆盖。
 
 使用独立解释器、匹配的实际 vLLM `0.29.0` 和 Omni SCM
 `0.29.0rc2.dev58+g446c2b547`。此固定 recipe 的真实 oracle 是 Torch
@@ -79,6 +84,8 @@ env -u JITTOR_TORCH_SHIM CUDA_VISIBLE_DEVICES=<gpu> \
   --runtime torch --device cuda \
   --vllm-checkout "$JITTOR_LAB_ROOT/vllm-evidence/upstream/vllm029" \
   --omni-checkout "$JITTOR_LAB_ROOT/vllm-evidence/upstream/vllm-omni" \
+  --vllm-wheel "<original-vllm-0.29.0-wheel>" \
+  --omni-wheel "<original-source-built-Omni-wheel>" \
   --output "$JITTOR_LAB_ROOT/_state/h3/run/oracle.npz"
 
 JITTOR_TORCH_SHIM=1 CUDA_VISIBLE_DEVICES=<gpu> JT_CUDA_KERNEL_MATH=strict \
@@ -88,8 +95,15 @@ JITTOR_TORCH_SHIM=1 CUDA_VISIBLE_DEVICES=<gpu> JT_CUDA_KERNEL_MATH=strict \
   --runtime jittor --device cuda \
   --vllm-checkout "$JITTOR_LAB_ROOT/vllm-evidence/upstream/vllm029" \
   --omni-checkout "$JITTOR_LAB_ROOT/vllm-evidence/upstream/vllm-omni" \
+  --vllm-wheel "<original-vllm-0.29.0-wheel>" \
+  --omni-wheel "<original-source-built-Omni-wheel>" \
   --output "$JITTOR_LAB_ROOT/_state/h3/run/candidate.npz"
 ```
+
+两侧均显式设置 `OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1`，
+candidate 使用真实安装的 core / compat / vLLM adapter carrier；不复制 JIT 二进制。
+CLI 的 `--vllm-wheel` 是共享校验器的 wheel 输入，不继承父进程的另一份 recipe。
+`.installation.json` 只证明模型导入前的安装阶段；非零退出、缺梯度或超预算仍为失败。
 
 `--mode grad-audit` 将全部参数和四个浮点输入设为 trainable，保存实际可见梯度与缺失清单，
 任一缺失就非零退出。固定源码两端实际都只有四个末端 head 参数有梯度，32/36 参数和

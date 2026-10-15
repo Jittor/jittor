@@ -110,6 +110,10 @@ class H3ProbeContracts(unittest.TestCase):
             "/nonexistent/vllm",
             "--omni-checkout",
             "/nonexistent/omni",
+            "--vllm-wheel",
+            "/nonexistent/vllm.whl",
+            "--omni-wheel",
+            "/nonexistent/omni.whl",
             "--output",
             str(output),
         ]
@@ -133,7 +137,7 @@ class H3ProbeContracts(unittest.TestCase):
         self.assertIn("outside the source tree", result.stderr)
 
     def test_refuses_to_overwrite_existing_evidence_before_imports(self):
-        for suffix in (".npz", ".json", ".weights.npz"):
+        for suffix in (".npz", ".json", ".weights.npz", ".installation.json"):
             with self.subTest(suffix=suffix), tempfile.TemporaryDirectory() as directory:
                 output = Path(directory) / "raw.npz"
                 saved = output.with_suffix(suffix)
@@ -142,6 +146,23 @@ class H3ProbeContracts(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("preserving existing evidence", result.stderr)
                 self.assertEqual(saved.read_bytes(), b"sealed")
+
+    def test_rejects_another_git_checkout_before_imports(self):
+        with tempfile.TemporaryDirectory() as directory:
+            other = Path(directory) / "other"
+            other.mkdir()
+            (other / ".git").write_text("gitdir: somewhere\n")
+            result = self.cli(*self.arguments(other / "raw.npz"))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("outside every Git checkout", result.stderr)
+
+    def test_executed_probe_cannot_claim_another_source_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            arguments = self.arguments(Path(directory) / "raw.npz")
+            arguments[arguments.index("--source-root") + 1] = directory
+            result = self.cli(*arguments)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("executed probe must belong", result.stderr)
 
 
 if __name__ == "__main__":
