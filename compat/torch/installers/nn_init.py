@@ -4,6 +4,7 @@ Its own module because it is its own family: a dozen in-place initialisers that
 share one assignment helper and nothing else with the rest of the nn surface.
 """
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
+from jittor._core.var import device_scope_like
 
 import jittor as jt
 
@@ -27,22 +28,28 @@ _NATIVE_INITIALIZERS = MappingProxyType({
 })
 
 def _native_initializer(name, tensor, *args, **kwargs):
-    was_trainable = hasattr(tensor, "is_stop_grad") and not tensor.is_stop_grad()
-    result = _NATIVE_INITIALIZERS[name](tensor, *args, **kwargs)
-    if was_trainable and hasattr(tensor, "start_grad"):
-        tensor.start_grad()
-    return result
+    # Native initializers assign a fresh Var. Run that existing mathematics on
+    # a temporary, so it cannot replace the destination's autograd identity.
+    target = get_install_context(jt).target_namespace
+    with jt.no_grad(), device_scope_like(tensor):
+        value = target.empty_like(tensor)
+        _NATIVE_INITIALIZERS[name](value, *args, **kwargs)
+        return _assign(tensor, value)
 
 def _assign(tensor, value):
-    # Preserve the tensor's grad-tracking: jittor's .assign() adopts the
-    # source var's stop_grad flag, and our `value` (jt.normal/zeros/...) is
-    # stop_grad, which would silently freeze the parameter. Re-enable grad
-    # unless the param was explicitly stop-grad before.
-    was_trainable = not tensor.is_stop_grad()
-    # Native assign owns retained-view writeback at every depth.
-    tensor.assign(value)
-    if was_trainable:
-        tensor.start_grad()
+    with jt.no_grad():
+        if hasattr(tensor, "copy_"):
+            # The Tensor writeback owner preserves storage, pending readers,
+            # reversible requires_grad and existing non-leaf graph edges.
+            return tensor.copy_(value)
+        # Keep the legacy native-Var entry point without installing Torch
+        # methods on the native class. Read the actual reversible flag.
+        was_trainable = bool(tensor.requires_grad)
+        tensor.assign(value)
+        if was_trainable:
+            tensor.start_grad()
+        else:
+            tensor.stop_grad()
     return tensor
 
 
@@ -295,13 +302,8 @@ def _install_init_aliases(registry=None):
                      ("zeros_", zeros_), ("ones_", ones_), ("constant_", constant_),
                      ("trunc_normal_", trunc_normal_)]:
         setattr(_init, name, fn)
-    # jittor's native kaiming/xavier/gauss initializers do `var.assign(src)` without
-    # re-enabling grad. Under transformers' @torch.no_grad() weight init, `src` is
-    # stop_grad, so .assign() silently FREEZES the parameter -- Conv2d/Linear inited
-    # with kaiming (resnet/regnet/...) end up stop_grad and get zero weight grads
-    # (forward stays exact, so it's invisible until you train/check gradients). Wrap
-    # them with the same grad-preserving guard used by _assign() above: a no-op for
-    # already-frozen params, so it can't regress anything.
+    # Reuse native kaiming/xavier/gauss mathematics, then the same no-grad
+    # destination writeback as the Torch-style initializers above.
     for _nm in ("kaiming_normal_", "kaiming_uniform_", "gauss_",
                 "xavier_uniform_", "xavier_gauss_", "xavier_normal_",
                 "relu_invariant_gauss_", "invariant_uniform_"):
