@@ -188,3 +188,28 @@ resolution failure; both targeted checks and subsequent complete structure runs 
 core-v1 launch omitted the task-local lab root and was stopped after partial native results; it is
 not counted as complete core. Core-v2 explicitly isolates the lab root and passes both modes.
 These setup/validation diagnostics do not relabel the formal measurements or repair shared packages.
+
+## Main integration verification
+
+The integrating maintainer synchronized published
+`cd7d45ab99e086f2b027be35bffa66d3b33efdd7` and retained the original measured
+source identities above. Clean integrated source
+`c4935e9061964f17fa7d8ac4fb9930e1b84f5bfd` adds the maintained gates, source
+contracts, discovery and central results/MANIFEST registration. All 73 existing
+nox function ASTs are unchanged; only `ecosystem_openmmlab_installed` is added.
+
+On this integrated source, host contracts for provisioning, Swift, distribution
+names, installed source/version proofs, OpenMMLab, shared coverage, VERL, PEFT and
+Transformers pass **228 / 0 skipped**. Canonical core passes **322 / 42 skipped /
+1 existing xfail**, with both native and Torch mode exits zero. Complete
+`tests/structure` plus `compat/tests/structure` passes **1622 / 6 skipped** in
+235.97 seconds. The six skips retain their accelerator/declared/uninstalled
+native-distribution boundaries; no installation or hardware claim is inferred.
+Layout, generated manifest, Ruff and whitespace checks pass.
+
+The maintainer independently rehashed all 313 nightly evidence files and all
+1033 OpenMMLab evidence files: no mismatches. Original failed attempts and
+measurement/source identities are preserved. New isolated maintained numerical
+runs at c4935 are in progress; these integration checks do not relabel the old
+numerical results as c4935 measurements. Unversioned integration records are in
+`$JITTOR_LAB_ROOT/_state/maintained-gates-main-integration-cd7/`.
