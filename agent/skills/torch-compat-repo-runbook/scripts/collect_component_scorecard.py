@@ -38,6 +38,19 @@ def require(condition, message):
         raise ValueError(message)
 
 
+def write_comparison(path, value):
+    """Create derived evidence once; identical re-audits leave its bytes intact."""
+    payload = (json.dumps(value, indent=2) + '\n').encode('utf-8')
+    try:
+        stream = path.open('xb')
+    except FileExistsError:
+        require(path.read_bytes() == payload,
+                'Existing comparison differs; use a fresh evidence directory: ' + str(path))
+    else:
+        with stream:
+            stream.write(payload)
+
+
 def validate_binding(value, source, baseline):
     require(value.get('jittor_commit') == baseline, 'Stale measurement baseline')
     require(value.get('upstream') == source['upstream'], 'Changed upstream identity')
@@ -182,8 +195,8 @@ def collect(source, directory, platform_path, baseline, report, command, atol=2e
     for weight in sorted(directory.glob('*.weights.npz')):
         artifacts.append(artifact('weights/' + weight.name, weight))
     comparison_path = directory / 'complete-comparison.json'
-    comparison_path.write_text(json.dumps({'case': case, 'status': 'passed', 'rows': errors,
-                                           'baseline': baseline, 'training': training}, indent=2) + '\n')
+    write_comparison(comparison_path, {'case': case, 'status': 'passed', 'rows': errors,
+                                      'baseline': baseline, 'training': training})
     artifacts.append(artifact('comparison', comparison_path))
     result = {'repo': repo, 'case': case, 'status': 'passed', 'level': spec['level'],
               'tier': 'broad', 'jittor_commit': baseline, 'upstream': source['upstream'],

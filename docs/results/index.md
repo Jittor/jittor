@@ -43,6 +43,7 @@
 2026-10-15-sdpa-opmath
 2026-10-15-like-factory-leaves
 2026-10-15-diffusers-component-scorecards
+2026-10-15-diffusers-installed-source
 2026-10-15-mpi-bfloat16-process-groups
 2026-10-15-cpu-bfloat16-accumulators
 2026-10-15-h3-silu-contracts

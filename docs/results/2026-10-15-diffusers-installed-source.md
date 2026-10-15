@@ -150,3 +150,45 @@ The measured collector writes its derived `complete-comparison.json` on each
 collection. Each platform was collected once before sealing. Do not rerun that
 version on a sealed directory; use the auditor on existing records or a fresh
 copy. The integrator's subsequent overwrite protection has a separate baseline.
+
+## Integration and independent review
+
+The integrator synchronized `2857a614b30d5315da74621c662a759e3f187ea4`, then
+replayed the two isolated source/report commits. An independent NumPy audit
+recomputed all 2,330 CPU/CUDA array pairs, including the complete gradient and
+three-step parameter trajectories. A separate comparison using the maintained
+harness's category floor and 0.002 forward/state versus 0.01 gradient budgets
+also passed; the largest category divergence was 1.3770578512896644e-5.
+All 144 initial CPU/CUDA parameter arrays match bitwise, and both runtimes'
+outputs change under the input perturbation on both devices.
+
+The review independently rehashed all 95 sealed raw files, checked all twelve
+actual package records against the wheel's 697 payload files and the 695 clean
+upstream sources, and checked the four measurement-source files against Git
+blobs at the original measurement SHA. It regenerated the common scorecard
+read-only, first with the historical report/auditor checkout and then with the
+integrated main tree. Both accept exactly two L3 component records; this adds
+no pipeline or whole-library claim.
+
+A reproduction using only a copy of actual CPU evidence confirmed that the
+measured collector overwrites an existing derived comparison. The integrated
+collector now creates that file exclusively, reuses identical bytes without
+changing its timestamp, and rejects a different existing comparison. The actual
+copy and a focused regression verify both outcomes. This audit-tool correction
+does not relabel or regenerate the original 1a92 measurements or sealed files.
+
+Unversioned integration logs and independent audits are retained under
+`$JITTOR_LAB_ROOT/_state/diffusers-integration-2857/`. The first host invocation
+named a nonexistent test file and collected no tests; the corrected selection
+passes 45. The first main CPU invocation failed before numerical execution
+because its interpreter needed the actual Conda libstdc++ for sqlite3; the
+unchanged test passed after selecting that library. Those failed invocations
+remain in the evidence directory and are not counted as numerical results.
+
+Main-tree required maintained nodes passed on actual CPU (1 passed, 70.04 s)
+and CUDA (1 passed, 295.63 s including first kernel compilation), with zero
+skips and independent binary Torch. Full Torch-mode structure gates passed
+1,506 cases with six declared skips. Ruff and repository layout checks passed.
+Unit caches remained separate from the original benchmark caches. No core math
+or adapter implementation changed in this batch; no performance claim follows
+from timings under concurrent external GPU use.
