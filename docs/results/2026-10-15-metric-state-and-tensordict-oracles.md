@@ -157,6 +157,10 @@ controlled performance protocol; this report quotes no speed or memory ratio.
 
 ## Maintained oracle admission and bounded API inventories
 
+The later [shared scorecard report](2026-10-15-metrics-tensordict-scorecards.md)
+binds fresh clean-`90ee18a` measurements to these bounded axes. This page's older
+component arrays retain their original baseline and are not relabeled.
+
 The follow-up based on `b2aeec10874136c1b4b16c1598241252a5f92c87` adds actual
 shared-oracle pytest methods for the two registered builders. They require both
 TorchMetrics input gradients and all TensorDict parameter/input gradients.

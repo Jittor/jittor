@@ -61,7 +61,29 @@ PYTHONPATH=python JITTOR_TORCH_SHIM=1 \
 调用两次并不自动验收。按公共 runbook 比较每个 NPZ key、两侧 metadata、初始权重哈希、
 完整 trainable/frozen 名单、实际 device 与零 fallback，确认参数发生更新且所有轨迹有限。
 该工具显式执行 SGD 更新，不证明 Adam、上游 Trainer 或分布式训练路径。
-本次 CUDA 实际 TF32 为开启/high，CPU 为关闭/highest。未做 L4/L5、整进程显存或速度排名。
+历史 `5ad` CUDA 实际 TF32 为开启/high，CPU 为关闭/highest。未做 L4/L5、整进程显存或速度排名。
+
+## 最新固定源码 scorecard
+
+2026-10-15 在干净测量源码 `90ee18a9916acda9b5e86ca665f09a231a41ced1`，
+重新运行真实 CPU→CUDA、seed=0 原始权重和 seed=7 固定权重扰动，TensorDict 两端均 L3，2/60 顶层 API，完整梯度和三步 SGD 轨迹通过。
+两侧实际 TF32 关闭、matmul precision highest、fallback error/count0；
+共享 auditor 真正接受四条 CPU/CUDA 记录。该结论仅限登记的组件场景，
+不扩展为整库支持，也不改标旧 `5ad` 数组。见
+[当前 scorecard 报告](../../../docs/results/2026-10-15-metrics-tensordict-scorecards.md)。
+
+## 可复用完整 scorecard 采集
+
+复用 TorchMetrics skill 描述的公共
+[`component_measure.py`](../torch-compat-repo-runbook/scripts/component_measure.py) 与
+[`collect_component_scorecard.py`](../torch-compat-repo-runbook/scripts/collect_component_scorecard.py)，
+将 repo 改为 `tensordict`。公共 base 输出 stem 为 `tensordict_index_and_stack`，
+固定初始权重的 seed=7 扰动 stem 为 `tensordict_index_and_stack.perturb`。
+还须通过同一个 measurement wrapper 执行 `training_probe.py`，保存
+`tensordict_index_and_stack.train.ref.npz/.json`、`.train.shim.npz/.json` 与原始权重。
+collector 实际比较三个步骤的全部 21 个字段，并核对两个 trainable 参数、零 frozen、
+sample 输入梯度、SGD 学习率 0.001 和真实参数更新。registry_refs 仅 TensorDict 与
+lazy_stack，表示该 tiny 组合场景的 L3，不扩大为全部容器方法或训练设施。
 
 ## 断点归属与旧门禁
 
