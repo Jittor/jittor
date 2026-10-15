@@ -122,6 +122,7 @@ class TestTrellisRegistry(unittest.TestCase):
                 ('status', '--porcelain', '--untracked-files=no'): '',
                 ('remote', 'get-url', 'origin'): 'https://example.invalid/trellis.git',
                 ('ls-files', '--', '*.py'): '\n'.join(files),
+            ('ls-files', '--', 'trellis2/'): '\n'.join(files),
             }[arguments]
 
         with mock.patch.object(self.inventory, 'git', side_effect=git_value), mock.patch.dict(

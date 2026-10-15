@@ -24,6 +24,10 @@ def artifact(role, path):
 
 
 def collect(inventory, runs, platforms, baseline, report, command):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'torch-compat-repo-runbook/scripts'))
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from _source_binding import validate_phase
+
     records = []
     seen = set()
     for run in runs:
@@ -61,6 +65,21 @@ def collect(inventory, runs, platforms, baseline, report, command):
                     raise ValueError('Changed TRELLIS artifact: ' + name)
             names = ours['trainable_parameters']
             inputs = ours['input_gradients']
+            for runtime, stem, expected in (('torch', 'reference', theirs), ('jittor', 'candidate', ours)):
+                validate_phase(expected, inventory)
+                for variant in (None, *inputs):
+                    metadata = read(directory / (stem + ('-' + variant if variant else '') + '.json'))
+                    validate_phase(metadata, inventory)
+                    if (metadata.get('runtime') != runtime or metadata.get('case') != case
+                            or metadata.get('device') != device or metadata.get('jittor_commit') != baseline
+                            or metadata.get('upstream') != inventory['upstream']
+                            or metadata.get('weights_sha256') != expected.get('weights_sha256')
+                            or metadata.get('perturb_input') != variant):
+                        raise ValueError('TRELLIS runtime/phase metadata mismatch')
+                    if variant is None and metadata != expected:
+                        raise ValueError('TRELLIS base summary/raw metadata mismatch')
+            if [row['input'] for row in value['input_perturbations']] != inputs:
+                raise ValueError('TRELLIS perturbation list differs from all requested inputs')
             errors = [value['errors'], *[row['errors'] for row in value['input_perturbations']]]
             scaled = max(row['max_scaled_relative'] for error in errors for row in error['fields'].values())
             absolute = max(error['max_absolute'] for error in errors)
@@ -72,9 +91,22 @@ def collect(inventory, runs, platforms, baseline, report, command):
                      'training-candidate-metadata': 'candidate.json',
                      'gate-artifact-manifest': 'artifacts.json'}
             artifacts = [artifact(role, directory / name) for role, name in roles.items()]
+            extra_roles = {}
+            for index, name in enumerate(inputs, 1):
+                role = 'perturb%d-comparison' % index
+                path = directory / (role + '.json')
+                measurement = read(path)
+                if (measurement.get('input') != name or measurement.get('case') != case
+                        or measurement.get('status') != 'passed'
+                        or measurement.get('input_perturbation_verified') is not True
+                        or measurement.get('reference_result') != read(directory / ('reference-' + name + '.json'))
+                        or measurement.get('candidate_result') != read(directory / ('candidate-' + name + '.json'))):
+                    raise ValueError('TRELLIS per-input comparison metadata mismatch')
+                extra_roles[role] = path.name
+                artifacts.append(artifact(role, path))
             artifacts += [artifact('platform', platform_path)]
             for name in sorted(hashes):
-                if name not in roles.values():
+                if name not in roles.values() and name not in extra_roles.values():
                     artifacts.append(artifact('raw/' + name, directory / name))
             count = ours['steps']
             records.append({

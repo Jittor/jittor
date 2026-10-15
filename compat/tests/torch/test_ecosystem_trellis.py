@@ -5,11 +5,12 @@ import json
 import os
 from pathlib import Path
 import subprocess
-import tempfile
+import sys
 
 import numpy as np
 import pytest
 
+from _helpers.artifacts import artifact_directory
 from _helpers.child_process import child_env, run_python_child
 from _ecosystem_harness import (
     REAL_TORCH_PYTHON, EcosystemComparison, _comparison_floor, _divergence, _enabled,
@@ -48,6 +49,11 @@ def _run(runtime, case, checkout, output, weights=None, perturb_input=None):
     with np.load(output, allow_pickle=False) as archive:
         arrays = {key: archive[key].copy() for key in archive}
     metadata = json.loads(output.with_suffix('.json').read_text())
+    sys.path.insert(0, str(ROOT / 'agent/skills/torch-compat-repo-runbook/scripts'))
+    sys.path.insert(0, str(ROOT / 'agent/skills/trellis-torch-compat/scripts'))
+    from registry_inventory import inventory
+    from _source_binding import validate_phase
+    validate_phase(metadata, inventory('trellis', checkout))
     return arrays, metadata
 
 
@@ -107,10 +113,8 @@ def test_real_trellis_models_training(case):
     checkout = Path(checkout).resolve()
     assert (checkout / 'trellis2/models/__init__.py').is_file()
     persistent = os.environ.get('JITTOR_TRELLIS_EVIDENCE_DIR', '')
-    with tempfile.TemporaryDirectory(prefix='trellis-training-') as temporary:
-        directory = Path(persistent) / DEVICE / case if persistent else Path(temporary)
-        if persistent:
-            directory.mkdir(parents=True, exist_ok=False)
+    output = Path(persistent) / DEVICE / case if persistent else None
+    with artifact_directory(ROOT, output=output, prefix='trellis-training-') as directory:
         reference, theirs = _run('torch', case, checkout, directory / 'reference.npz')
         candidate, ours = _run('jittor', case, checkout, directory / 'candidate.npz', theirs['weights'])
         errors = _compare(reference, candidate, theirs, ours)
@@ -132,6 +136,9 @@ def test_real_trellis_models_training(case):
                     if other != name:
                         np.testing.assert_array_equal(changed['0/input/' + other], original['0/input/' + other])
             perturbations.append({'input': name, 'errors': perturbed_errors})
+            (directory / ('perturb%d-comparison.json' % len(perturbations))).write_text(json.dumps({
+                'case': ours['case'], 'status': 'passed', 'input_perturbation_verified': True,
+                'input': name, 'reference_result': meta_ref, 'candidate_result': meta_actual}, indent=2) + '\n')
         summary['input_perturbation_verified'] = True
         summary['input_perturbations'] = perturbations
         (directory / 'comparison.json').write_text(json.dumps(summary, indent=2) + '\n')
