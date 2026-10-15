@@ -227,6 +227,10 @@ CUDA/driver 或 CANN、nvcc/gcc、nvidia wheel、Jittor SHA/flags、独立 oracl
 用tiny规格声称L4等均不计分，并使含被拒行的命令非零退出。旧 Markdown 报告需补齐并
 亲自复验后才能进入分子；没有新证据的格子写“未验证”，不能拿本库 CPU/device 自比补空。
 
+Release 版本的注册表 L2+ 也要求逐阶段、逐 runtime 的实际安装源码绑定，覆盖记录引用的
+每个库；绑定 wheel 时核对完整包内容而非仅 Python 文件。具体字段与历史记录处理遵循
+上述统一协议，不能用版本相同代替源码来源证据。
+
 ## Accelerate checkpoint 协议
 
 Accelerate 没有与模型族同义的注册表。`tools/run_accelerate_gate.py` 直接调用维护中的

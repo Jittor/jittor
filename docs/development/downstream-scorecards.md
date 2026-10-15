@@ -68,6 +68,28 @@ python -S "$scripts/audit_coverage.py" scorecard \
 设备③必须证明驻留与 `fallback_policy=error,count=0`。缺失、skip、xfail、环境阻塞与失败
 各自记录，全部 skip 不能作为通过。平台快照用于复核身份，**不能替代计算所在设备的断言**。
 
+### Release 版本的实际安装来源
+
+注册表型 L2 及以上记录不能只凭两端版本字符串一致进入分子。再生 inventory 为每个
+目标库提供全部包 Python 文件 `package_sources`，以及包含非 Python 文件的
+`package_files`；这些字段不改变注册表轴或分母。base、perturb 和 L3 training 的
+两端原始测量都必须包含 `downstream_distribution`，或按库名索引的
+`downstream_distributions`，覆盖记录自身及每个 `registry_refs.repo`。
+
+每个绑定包含 `repo`、`version`、`source_sha256`（库存源码路径）和
+`installed_files_sha256`（相对安装包根的路径）。全部必需 Python 源码必须匹配，
+额外声明的源码只能来自同一库存 `package_files`，对应安装文件也必须逐项匹配。
+同一库同时使用单数、复数字段时，两者必须相同。
+
+若 artifacts 绑定本库 `upstream-wheel` 或 `<repo>-official-wheel`，审计器独立读取
+wheel 的唯一 METADATA，核对包名、版本和全部库存源码，再要求实际安装文件清单精确
+等于该 wheel 的完整包内容，包括数据、C++、CUDA 文件及生成的 Python 文件；绑定还须
+包含该 artifact 的 `wheel_sha256`。角色名不代表 wheel 一定来自 PyPI，报告须如实说明
+是否由固定源码自行构建。没有 wheel 时，额外安装的 Python 文件也必须来自库存。
+
+旧测量缺少这些原始绑定时，当前审计拒绝授予覆盖分子；保留其原始数值结果和测量 SHA，
+不能从今天的安装目录回填历史证据。协议型记录继续使用各自的独立严格校验器。
+
 ### 没有发布版本的源码与 SCM wheel
 
 若再生 inventory 的版本为精确 `source@<上游完整 SHA>`，实际安装包可以具有从该提交

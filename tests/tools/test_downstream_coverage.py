@@ -39,6 +39,12 @@ class CoverageAuditTests(unittest.TestCase):
         self.snapshot = {"repo": "transformers", "upstream": {"commit": "b" * 40, "remote": "https://example.invalid/upstream.git", "version": "1.0"},
                          "axes": [{"axis": "model_family", "count": 2, "members": ["llama", "bert"]}]}
         self.sources = {"transformers": self.snapshot}
+        digest = hashlib.sha256(b"__version__ = '1.0'\n").hexdigest()
+        self.snapshot["package_sources"] = [{"path": "src/transformers/__init__.py", "sha256": digest}]
+        self.snapshot["package_files"] = copy.deepcopy(self.snapshot["package_sources"])
+        self.release_installation = {"repo": "transformers", "version": "1.0",
+                                     "source_sha256": {"src/transformers/__init__.py": digest},
+                                     "installed_files_sha256": {"__init__.py": digest}}
         raw = self.lab / "raw.json"
         raw.write_text('{"executed": true}', encoding="utf-8")
         self.row = {
@@ -112,6 +118,7 @@ class CoverageAuditTests(unittest.TestCase):
         row["platform"]["precision"] = precision
         self.artifact_json(row, "platform", row["platform"])
         reference = {"case": row["case"], "device": row["device"], "runtime": "torch",
+                     "downstream_distribution": copy.deepcopy(self.release_installation),
                      "tf32": precision, "runtime_conditions": {"precision": precision, "runtime_threads": 2},
                      "jittor_commit": row["jittor_commit"], "steps": 3,
                      "trainable_parameters": ["weight", "bias"], "frozen_parameters": []}
@@ -136,6 +143,50 @@ class CoverageAuditTests(unittest.TestCase):
         result = audit.scorecard(self.sources, [self.row], self.baseline, self.root)
         cpu = next(row for row in result["coverage"] if row["device"] == "cpu")
         self.assertEqual((cpu["numerator"], cpu["denominator"]), (1, 2))
+
+    def test_release_version_does_not_replace_actual_installation_proof(self):
+        for role, keys in (("base-comparison", ("oracle_result", "jittor_result")),
+                           ("perturb-comparison", ("reference_result", "candidate_result"))):
+            original = self.document(self.row, role)
+            for key in keys:
+                for change in ("missing", "source", "installed"):
+                    value = copy.deepcopy(original)
+                    pair = value["cases"][0] if role == "base-comparison" else value
+                    if change == "missing":
+                        pair[key].pop("downstream_distribution")
+                    else:
+                        field = "source_sha256" if change == "source" else "installed_files_sha256"
+                        mapping = pair[key]["downstream_distribution"][field]
+                        mapping[next(iter(mapping))] = "f" * 64
+                    self.artifact_json(self.row, role, value)
+                    with self.subTest(role=role, key=key, change=change), self.assertRaises(ValueError):
+                        self.validate(self.row)
+                self.artifact_json(self.row, role, original)
+
+    def test_release_inventory_is_required_and_paths_are_unambiguous(self):
+        original = copy.deepcopy(self.snapshot["package_sources"])
+        for rows in (None, [], original * 2,
+                     [{"path": [], "sha256": "f" * 64}],
+                     [{"path": path, "sha256": "f" * 64} for path in (".", "../bad.py")]):
+            self.snapshot["package_sources"] = rows
+            with self.subTest(rows=rows), self.assertRaises(ValueError):
+                self.validate(self.row)
+        self.snapshot["package_sources"] = original
+
+    def test_release_training_requires_each_runtime_installation(self):
+        self.row["level"] = 3
+        self.row["training"] = {"steps": 3, "loss_trajectory_passed": True, "parameter_trajectory_passed": True,
+                                "trainable": 2, "frozen": 0, "trainable_parameters": ["weight", "bias"],
+                                "frozen_parameters": []}
+        self.assertEqual(self.validate(self.row), 3)
+        for role in ("training-reference-metadata", "training-candidate-metadata"):
+            original = self.document(self.row, role)
+            changed = copy.deepcopy(original)
+            changed.pop("downstream_distribution")
+            self.artifact_json(self.row, role, changed)
+            with self.assertRaisesRegex(ValueError, "installed distribution/source"):
+                self.validate(self.row)
+            self.artifact_json(self.row, role, original)
 
     def test_l1_import_is_not_breadth(self):
         self.row["level"] = 1
@@ -521,6 +572,19 @@ class RegistryTests(unittest.TestCase):
         second = registry.inventory("transformers", self.root)
         self.assertEqual((first["axes"][0]["count"], second["axes"][0]["count"]), (1, 2))
         self.assertNotEqual(first["upstream"]["commit"], second["upstream"]["commit"])
+
+    def test_full_package_inventory_preserves_registry_denominator(self):
+        self.commit("src/transformers/models/auto/modeling_auto.py",
+                    'MODEL_MAPPING_NAMES = {"llama": "LlamaModel"}\n')
+        self.commit("src/transformers/unrelated.py", "# imported outside registry\n")
+        self.commit("src/transformers/kernels/data.cu", "// runtime asset\n")
+        self.commit("docs/extra.py", "# outside package\n")
+        result = registry.inventory("transformers", self.root)
+        self.assertEqual(result["axes"][0]["count"], 1)
+        self.assertEqual({row["path"] for row in result["package_sources"]}, {
+            "src/transformers/models/auto/modeling_auto.py", "src/transformers/unrelated.py"})
+        self.assertEqual({row["path"] for row in result["package_files"]}, {
+            row["path"] for row in result["package_sources"]} | {"src/transformers/kernels/data.cu"})
 
     def test_dirty_and_empty_registry_fail_closed(self):
         path = "src/transformers/models/auto/modeling_auto.py"

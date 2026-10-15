@@ -16,6 +16,7 @@ import re
 import zipfile
 
 from registry_inventory import ROOT, git, inventory, write_json
+from _installed_source_proof import installation_proofs, validate_installations
 
 
 PLATFORM_FIELDS = ("os", "cpu", "accelerator_model", "card_count", "card_indices", "driver",
@@ -173,7 +174,7 @@ def _validate_source_wheel(record, source, artifacts):
             "generated_source_sha256": generated}
 
 
-def _validate_measurements(record, level, artifacts, installation=None):
+def _validate_measurements(record, level, artifacts, installation=None, source_proof=None):
     """Bind the platform to hashed, actual measurement JSON, not a copied label."""
     by_role = {}
     for artifact in artifacts:
@@ -211,6 +212,8 @@ def _validate_measurements(record, level, artifacts, installation=None):
             if installation is not None:
                 _require(value.get("downstream_distribution") == installation,
                          "Measurement installed distribution/source binding mismatch")
+            if source_proof is not None:
+                validate_installations(value, source_proof)
         _require(reference["runtime_conditions"] == candidate["runtime_conditions"],
                  "Oracle/candidate runtime conditions mismatch")
         backend = candidate.get("backend", {})
@@ -381,7 +384,8 @@ def validate_record(record, inventories, baseline, root=ROOT):
             from _protocol_scorecards import validate_measurements
             validate_measurements(record, artifacts, inventories[repo])
         else:
-            _validate_measurements(record, level, artifacts, installation)
+            proof = installation_proofs(record, inventories, artifacts, skip_own=source_distribution)
+            _validate_measurements(record, level, artifacts, installation, proof)
     return level
 
 

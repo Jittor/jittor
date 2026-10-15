@@ -429,6 +429,7 @@ include docs/results/2026-10-15-native-tensor-parallel.md
 include docs/results/2026-10-15-native-zero-optimizer.md
 include docs/results/2026-10-15-openmmlab-training-oracles.md
 include docs/results/2026-10-15-pytree-transformers-513.md
+include docs/results/2026-10-15-release-installed-source-proof.md
 include docs/results/2026-10-15-rmsnorm-triton-alias.md
 include docs/results/2026-10-15-rng-native-generator-contract.md
 include docs/results/2026-10-15-sdpa-opmath.md

@@ -432,13 +432,15 @@ def inventory(repo, checkout):
                            "not a model-family or complete library denominator. Submodule-only APIs, class methods, "
                            "task variants and optional dependency availability are outside this axis. "
                            "A verified member covers only its recorded component scenario.")
-    if repo in ("vllm", "vllm-omni", "torchmetrics", "tensordict", "diffusers"):
-        # Registry/target hashes alone do not identify an installed package:
-        # imports outside the bounded registry still affect its computation.
-        result["package_sources"] = [{"path": path, "sha256": digest(checkout / path)}
-                                     for path in sorted(files)]
-        if version_source is not None:
-            result["upstream"]["version_source"] = version_source
+    # Registry/target hashes alone do not identify an installed package:
+    # imports outside the bounded registry still affect its computation.
+    result["package_sources"] = [{"path": path, "sha256": digest(checkout / path)}
+                                 for path in sorted(files)]
+    package_files = git(checkout, "ls-files", "--", prefix).splitlines()
+    result["package_files"] = [{"path": path, "sha256": digest(checkout / path)}
+                               for path in sorted(package_files)]
+    if version_source is not None:
+        result["upstream"]["version_source"] = version_source
     return result
 
 

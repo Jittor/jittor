@@ -11,6 +11,7 @@
 ```{toctree}
 :maxdepth: 1
 
+2026-10-15-release-installed-source-proof
 2026-08-28-ascend-910b-validation
 2026-08-30-qwen3-ascend-training
 2026-08-31-vllm-ascend-jittor-bootstrap
