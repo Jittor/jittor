@@ -45,6 +45,7 @@
 2026-10-15-diffusers-component-scorecards
 2026-10-15-mpi-bfloat16-process-groups
 2026-10-15-cpu-bfloat16-accumulators
+2026-10-15-h3-silu-contracts
 2026-10-14-graph-replay-retain-budget
 2026-10-14-downstream-oracle-scorecards
 2026-10-15-cuda13-toolchain-packaging

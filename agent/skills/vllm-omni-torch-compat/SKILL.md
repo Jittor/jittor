@@ -35,6 +35,50 @@ description: 在 Jittor torch shim 与原生 PyTorch 上运行/验证 vLLM-Omni 
 
 ## 两侧环境
 
+### 固定 tiny H3 诊断（2026-10-15）
+
+维护入口 [`scripts/probe_h3.py`](scripts/probe_h3.py) 直接调用真实
+`MiniMaxH3DiTModel`：一层主干、一层 refiner、hidden=32、33268 个参数，固定权重
+seed=3、输入 seeds=7/19；不下载 checkpoint，不构造 engine，也不是训练准入工具。
+它核对上面两个 clean checkout SHA、实际执行的六个上游模块源码、两个实际安装版本，
+记录本仓源码 SHA/dirty 状态、device、精度、缺失梯度和原始数组。完整 wheel/安装树绑定
+仍由统一 scorecard auditor 负责，不能拿这里的六文件检查代替。
+
+使用独立解释器、匹配的实际 vLLM `0.29.0` 和 Omni SCM
+`0.29.0rc2.dev58+g446c2b547`。此固定 recipe 的真实 oracle 是 Torch
+`2.13.0+cu130`，与下面历史 `cu129` 环境分开；不能沿用历史数字或改 `__version__`。
+先以隐藏 GPU 的 `--device cpu` 请求真实 CPU 路径并保留实际平台错误，再跑 CUDA。
+CPU/CUDA、oracle/candidate 分别使用独立输出文件；candidate 编译缓存也按 device 隔离。
+
+```bash
+# 从仓库根目录，实际匹配包和 toolchain 由各自解释器的环境提供。
+env -u JITTOR_TORCH_SHIM CUDA_VISIBLE_DEVICES=<gpu> \
+  <real-torch-python> agent/skills/vllm-omni-torch-compat/scripts/probe_h3.py \
+  --runtime torch --device cuda \
+  --vllm-checkout "$JITTOR_LAB_ROOT/vllm-evidence/upstream/vllm029" \
+  --omni-checkout "$JITTOR_LAB_ROOT/vllm-evidence/upstream/vllm-omni" \
+  --output "$JITTOR_LAB_ROOT/_state/h3/run/oracle.npz"
+
+JITTOR_TORCH_SHIM=1 CUDA_VISIBLE_DEVICES=<gpu> JT_CUDA_KERNEL_MATH=strict \
+  JITTOR_HOME="$JITTOR_LAB_ROOT/_state/h3/run/cuda-jittor" \
+  PYTHONPATH="$PWD/python:$PWD/adapters:<matched-package-sites>" \
+  <jittor-python> agent/skills/vllm-omni-torch-compat/scripts/probe_h3.py \
+  --runtime jittor --device cuda \
+  --vllm-checkout "$JITTOR_LAB_ROOT/vllm-evidence/upstream/vllm029" \
+  --omni-checkout "$JITTOR_LAB_ROOT/vllm-evidence/upstream/vllm-omni" \
+  --output "$JITTOR_LAB_ROOT/_state/h3/run/candidate.npz"
+```
+
+`--mode grad-audit` 将全部参数和四个浮点输入设为 trainable，保存实际可见梯度与缺失清单，
+任一缺失就非零退出。固定源码两端实际都只有四个末端 head 参数有梯度，32/36 参数和
+全部四个输入缺梯度，不能将只训练 head 当成整模型 L3。普通 `forward` 保持参数冻结、
+四输入可导，沿原测试路径执行，不冒充 `torch.no_grad()`。
+
+`--torch-math` 只允许 genuine Torch，作为独立算法归因；原默认路径和 MATH 原始文件
+必须分开。当前 candidate 六个最终数组与 genuine MATH 逐位一致，但原默认预算仍有
+4/6 项失败；不能切换 oracle 后宣布原门禁通过。该诊断不授模型、pipeline、engine、
+CPU 支持或性能等级；模型轴分子仍为零。输出拒绝覆盖既存证据或写入源码树。
+
 | 角色 | 解释器 / 入口 | 说明 |
 | --- | --- | --- |
 | shim | `<jittor-python>`（本地 env 脚本激活，不入库） | `JITTOR_TORCH_SHIM=1`；`JITTOR_HOME=$JITTOR_LAB_ROOT/_state/h3/run/jittor-home` |
