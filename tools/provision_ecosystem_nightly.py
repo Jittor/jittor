@@ -3,7 +3,8 @@
 
 All mutable files belong to --state-root, outside the checkout. The wheelhouse,
 resolved package lock and command logs are retained for replay and diagnosis.
-This provisions the bounded gate dependencies, not all optional Swift features.
+Selected distributions' base dependency closures are resolved and checked;
+optional Swift feature extras are not enabled.
 """
 
 import argparse
@@ -27,7 +28,10 @@ COMMON = ('numpy==1.26.4', 'accelerate==1.10.1', 'huggingface-hub==0.35.3',
           'pillow==11.0.0', 'tqdm==4.67.1')
 SWIFT_DEPS = ('datasets==3.6.0', 'modelscope==1.33.0', 'addict==2.4.0',
               'dacite==1.9.2', 'einops==0.8.1', 'pandas==2.2.3',
-              'simplejson==4.2.0', 'sentencepiece==0.2.1', 'rouge==1.0.1')
+              'simplejson==4.2.0', 'sentencepiece==0.2.1', 'rouge==1.0.1', 'trl==0.21.0')
+# The official Torch 2.11 CPU wheel requires setuptools<82. Canonical Stage 2
+# tools keep setuptools==83 in a separate controller/build environment.
+RUNTIME_SETUPTOOLS = 'setuptools==80.9.0'
 
 
 def digest(path):
@@ -140,8 +144,11 @@ def install_wheels(commands, candidate, oracle, wheels, preserved=()):
     torch_wheels = [path for path in all_wheels if path.name.startswith('torch-')]
     require(len(torch_wheels) == 1 and torch_wheels[0].name.startswith('torch-' + TORCH),
             'Exactly one pinned official CPU Torch wheel required')
-    common = [path for path in all_wheels if path not in torch_wheels and path not in preserved]
-    for interpreter, packages in ((oracle, common + torch_wheels), (candidate, common)):
+    packages = [path for path in all_wheels if path not in preserved]
+    # Real distribution metadata is required by downstream availability checks.
+    # The candidate activates the official shim only at gate execution; the
+    # oracle stays independent. Never synthesize Torch dist-info.
+    for interpreter in (oracle, candidate):
         commands.run(interpreter, '-m', 'pip', 'install', '--no-index', '--no-deps', *packages)
 
 
@@ -165,6 +172,14 @@ def unpack_pinned_wheel(wheel, site):
         archive.extractall(site)
 
 
+def runtime_tools():
+    selected = {'pytest', 'pytest-timeout', 'pytest-xdist', 'scipy', 'wheel'}
+    pins = [line.strip() for line in (ROOT / 'requirements/dev-tools.txt').read_text().splitlines()
+            if line.split('==')[0].strip().lower() in selected]
+    require(len(pins) == len(selected), 'Missing canonical runtime test pins')
+    return pins
+
+
 def provision(library, state, python, source_cache=None):
     require(sys.version_info[:2] == (3, 11), 'Nightly provisioning requires Python 3.11')
     require(not (state / 'provision.json').exists(), 'Use a new state root after successful provisioning')
@@ -172,8 +187,8 @@ def provision(library, state, python, source_cache=None):
     commands = Commands(state, env)
     wheels = state / 'wheels'
     wheels.mkdir(exist_ok=True)
-    candidate, oracle = (state / side / 'bin/python' for side in ('candidate', 'oracle'))
-    for interpreter in (candidate, oracle):
+    candidate, oracle, controller = (state / side / 'bin/python' for side in ('candidate', 'oracle', 'controller'))
+    for interpreter in (candidate, oracle, controller):
         if not interpreter.exists():
             commands.run(python, '-m', 'venv', interpreter.parents[1])
     sys.path.insert(0, str(SCRIPTS))
@@ -187,23 +202,15 @@ def provision(library, state, python, source_cache=None):
         pinned[repo] = official_wheel(repo, version, wheel_hash, wheels)
     sources = source_descriptor(checkouts, pinned)
     (state / 'upstream-proof.json').write_text(json.dumps(sources, indent=2) + '\n')
-    # Only the oracle receives genuine Torch. All shared dependency wheels
-    # are installed without dependency resolution into both private venvs.
+    # Both private runtimes receive complete real distribution metadata. Only
+    # the candidate later activates the official Jittor Torch shim.
     commands.run(oracle, '-m', 'pip', 'download', '--index-url', 'https://download.pytorch.org/whl/cpu',
                  '--only-binary=:all:', '--no-deps', '--dest', wheels, 'torch==' + TORCH)
-    roots = list(COMMON) + (list(SWIFT_DEPS) if library == 'swift' else [])
-    commands.run(oracle, '-m', 'pip', 'download', '--index-url', 'https://pypi.org/simple',
-                 '--only-binary=:all:', '--dest', wheels, '--find-links', wheels,
-                 '-r', ROOT / 'requirements/dev-tools.txt', *pinned.values(),
-                 'torch==' + TORCH, *roots)
-    install_wheels(commands, candidate, oracle, wheels, preserved=tuple(pinned.values()))
-    for side in ('candidate', 'oracle'):
-        site = state / side / 'lib/python3.11/site-packages'
-        for wheel in pinned.values():
-            unpack_pinned_wheel(wheel, site)
-    commands.run(candidate, '-m', 'pip', 'install', '--no-deps', '--no-build-isolation',
-                 '--config-settings', 'editable_mode=compat', '-e', ROOT)
-    commands.run(candidate, '-m', 'pip', 'install', '--no-deps', '--no-build-isolation', '-e', ROOT / 'compat')
+    tool_wheels = state / 'tool-wheels'
+    tool_wheels.mkdir(exist_ok=True)
+    commands.run(controller, '-m', 'pip', 'download', '--index-url', 'https://pypi.org/simple',
+                 '--only-binary=:all:', '--dest', tool_wheels, '-r', ROOT / 'requirements/dev-tools.txt')
+    commands.run(controller, '-m', 'pip', 'install', '--no-index', '--no-deps', *sorted(tool_wheels.glob('*.whl')))
     swift_source, swift_wheel = None, None
     if library == 'swift':
         swift_source = state / 'upstream/ms-swift'
@@ -212,22 +219,40 @@ def provision(library, state, python, source_cache=None):
         build = state / 'swift-build-source'
         if not build.exists():
             shutil.copytree(swift_source, build, ignore=shutil.ignore_patterns('.git'))
-        commands.run(oracle, '-m', 'pip', 'wheel', '--no-deps', '--no-build-isolation',
+        commands.run(controller, '-m', 'pip', 'wheel', '--no-deps', '--no-build-isolation',
                      '--wheel-dir', wheels, build)
         built = list(wheels.glob('ms_swift-4.5.2-*.whl'))
         require(len(built) == 1, 'Expected one Swift 4.5.2 source-built wheel')
         swift_wheel = built[0]
-        for interpreter in (oracle, candidate):
-            commands.run(interpreter, '-m', 'pip', 'install', '--no-deps', swift_wheel)
         from registry_inventory import inventory
         swift_inventory = inventory('ms-swift', swift_source)
         (state / 'swift-inventory.json').write_text(json.dumps(swift_inventory, indent=2) + '\n')
+    # Build source-only dependency wheels using the compatible runtime build
+    # tools. The complete selected distributions (including Swift METADATA)
+    # participate in resolution; --no-deps is only used for the resulting
+    # complete wheel closure, and pip check below must pass in every venv.
+    commands.run(oracle, '-m', 'pip', 'install', '--index-url', 'https://pypi.org/simple',
+                 RUNTIME_SETUPTOOLS, 'wheel==0.45.1')
+    roots = list(COMMON) + (list(SWIFT_DEPS) if library == 'swift' else [])
+    commands.run(oracle, '-m', 'pip', 'wheel', '--index-url', 'https://pypi.org/simple',
+                 '--no-build-isolation', '--wheel-dir', wheels, '--find-links', wheels,
+                 *pinned.values(), *([swift_wheel] if swift_wheel else []),
+                 'torch==' + TORCH, RUNTIME_SETUPTOOLS, *runtime_tools(), *roots)
+    install_wheels(commands, candidate, oracle, wheels, preserved=tuple(pinned.values()))
+    for side in ('candidate', 'oracle'):
+        site = state / side / 'lib/python3.11/site-packages'
+        for wheel in pinned.values():
+            unpack_pinned_wheel(wheel, site)
+    commands.run(candidate, '-m', 'pip', 'install', '--no-deps', '--no-build-isolation',
+                 '--config-settings', 'editable_mode=compat', '-e', ROOT)
+    commands.run(candidate, '-m', 'pip', 'install', '--no-deps', '--no-build-isolation', '-e', ROOT / 'compat')
+    for interpreter in (candidate, oracle, controller):
+        commands.run(interpreter, '-m', 'pip', 'check')
     commands.run(oracle, '-c', "import torch; assert not hasattr(torch, '_torch_compat_install_context'); "
                  "assert torch.__version__ == '" + TORCH + "'; assert not torch.cuda.is_available(); "
                  "assert torch._C.__file__; print(torch.__version__, torch._C.__file__)")
-    commands.run(candidate, '-c', "import importlib.metadata as m; "
-                 "assert 'torch' not in {d.metadata['Name'].lower() for d in m.distributions()}")
-    for side, interpreter in (('candidate', candidate), ('oracle', oracle)):
+    commands.run(candidate, '-c', "import importlib.metadata as m; assert m.version('torch') == '" + TORCH + "'")
+    for side, interpreter in (('candidate', candidate), ('oracle', oracle), ('controller', controller)):
         log = commands.run(interpreter, '-m', 'pip', 'list', '--format=freeze')
         (state / ('resolved-lock-' + side + '.txt')).write_bytes(log.read_bytes())
     env.update(JITTOR_CI_PYTHON=str(candidate), REAL_TORCH_PYTHON=str(oracle),
@@ -244,6 +269,7 @@ def provision(library, state, python, source_cache=None):
     manifest = {'library': library, 'source_commit': subprocess.check_output(
         ['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
         'wheels': {path.name: digest(path) for path in sorted(wheels.glob('*.whl'))},
+        'tool_wheels': {path.name: digest(path) for path in sorted(tool_wheels.glob('*.whl'))},
         'session': 'ecosystem_' + library, 'oracle_torch': TORCH,
         'upstream_transport': 'read-only-local-git-cache' if source_cache else 'official-remote',
         'source_cache': str(source_cache) if source_cache else None,
@@ -251,7 +277,7 @@ def provision(library, state, python, source_cache=None):
                         or key in ('HOME', 'TMPDIR', 'CUDA_VISIBLE_DEVICES', 'REAL_TORCH_PYTHON')}}
     (state / 'provision.json').write_text(json.dumps(manifest, indent=2) + '\n')
     commands.env = env
-    return commands, candidate
+    return commands, controller
 
 
 def main():

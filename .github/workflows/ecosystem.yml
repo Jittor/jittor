@@ -91,8 +91,8 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: ${{ needs.baseline.outputs.python_version }}
-      # Separate clean environments: the candidate has Jittor + jittor-torch;
-      # only the independent oracle receives the pinned official CPU Torch.
+      # Separate clean environments contain the complete real dependencies;
+      # only the candidate activates the official Jittor Torch shim.
       # The existing sessions enforce required nodes, full gradients/training,
       # clean upstream and complete actual installed wheel payload identities.
       - name: Provision pins and run complete maintained CPU gate

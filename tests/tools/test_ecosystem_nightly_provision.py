@@ -66,7 +66,7 @@ def test_state_refuses_checkout_and_symlink_into_checkout(provision, tmp_path):
         provision.external(link)
 
 
-def test_only_oracle_receives_real_torch_wheel(provision, tmp_path):
+def test_both_runtime_envs_receive_same_real_dependency_wheels(provision, tmp_path):
     for name in ('torch-' + provision.TORCH + '-cp311-cp311-manylinux_2_28_x86_64.whl',
                  'peft-0.17.1-py3-none-any.whl', 'numpy-1.26.4-cp311-cp311-linux_x86_64.whl'):
         (tmp_path / name).touch()
@@ -78,8 +78,8 @@ def test_only_oracle_receives_real_torch_wheel(provision, tmp_path):
     assert oracle[0] == 'oracle-python' and candidate[0] == 'candidate-python'
     assert '--no-index' in oracle and '--no-deps' in candidate
     assert sum(Path(str(value)).name.startswith('torch-') for value in oracle) == 1
-    assert not any(Path(str(value)).name.startswith('torch-') for value in candidate)
-    assert set(oracle[6:]) - set(candidate[6:]) == {next(tmp_path.glob('torch-*.whl'))}
+    assert sum(Path(str(value)).name.startswith('torch-') for value in candidate) == 1
+    assert set(oracle[6:]) == set(candidate[6:])
 
 
 @pytest.mark.parametrize('names', [[], ['torch-2.7.1+cpu-old.whl'],
@@ -165,3 +165,12 @@ def test_local_cache_with_wrong_official_remote_is_refused(provision, tmp_path, 
     with pytest.raises(ValueError, match='exact clean official'):
         provision.checkout(SimpleNamespace(run=lambda *a: pytest.fail('must not mutate')),
                            tmp_path / 'new', 'https://github.com/official/repo.git', 'a' * 40, tmp_path / 'cache')
+
+
+def test_runtime_uses_canonical_test_pins_without_conflicting_build_setuptools(provision):
+    canonical = (ROOT / 'requirements/dev-tools.txt').read_text().splitlines()
+    pins = provision.runtime_tools()
+    assert len(pins) == 5 and all(pin in canonical for pin in pins)
+    assert 'pytest==7.4.4' in pins and 'scipy==1.13.1' in pins
+    assert provision.RUNTIME_SETUPTOOLS == 'setuptools==80.9.0'
+    assert 'setuptools==83.0.0' in canonical
