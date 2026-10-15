@@ -148,7 +148,8 @@ def run(args, np, stack, identities):
         os.environ["JT_USE_CUDA"] = str(int(args.device == "cuda"))
         import jittor as jt
 
-        if Path(jt.__file__).resolve() != args.source_root / "python/jittor/__init__.py":
+        origin = getattr(jt, "__file__", None)
+        if not origin or Path(origin).resolve() != args.source_root / "python/jittor/__init__.py":
             raise RuntimeError("Candidate imported a different Jittor source tree")
         import jittor_adapters.vllm.layers as adapter_layers
 
@@ -172,16 +173,17 @@ def run(args, np, stack, identities):
     if args.runtime == "torch" and torch.__version__.split("+")[0] != "2.13.0":
         raise RuntimeError("The genuine oracle recipe is pinned to Torch 2.13.0")
 
-    def snapshot(value):
+    def snapshot(value, name):
         if args.runtime == "jittor":
             value.sync()
             if value.location() != ("device" if args.device == "cuda" else "cpu"):
                 raise RuntimeError("A measured tensor is on the wrong physical device")
         elif value.device.type != args.device:
             raise RuntimeError("The genuine oracle tensor is on the wrong device")
-        row = {"device": value.device.type, "dtype": str(value.dtype), "shape": list(value.shape)}
-        if str(value.dtype) not in ("float32", "torch.float32"):
-            raise RuntimeError("An observed H3 diagnostic tensor is not FP32")
+        row = {"name": name, "device": value.device.type,
+               "dtype": str(value.dtype), "shape": list(value.shape)}
+        if str(value.dtype).split(".")[-1] not in ("float32", "bfloat16"):
+            raise RuntimeError("An observed H3 tensor is outside its original BF16/FP32 recipe")
         if args.runtime == "jittor":
             row.update(location=value.location(), dispatch=jt.core.dispatch_context([value])[0])
             if row["dispatch"] != args.device:
@@ -356,7 +358,7 @@ def run(args, np, stack, identities):
                 if name == "rope.inv_freq":
                     array[:] = 1
                 tensor.copy_(torch.tensor(array, device=args.device, dtype=tensor.dtype))
-                initial[name] = snapshot(tensor)
+                initial[name] = snapshot(tensor, "initial/" + name)
         model.train(args.model_mode == "train")
         for parameter in model.parameters():
             parameter.requires_grad_(args.mode == "grad-audit")
@@ -414,7 +416,7 @@ def run(args, np, stack, identities):
                 audio_out * tensor(rng.uniform(0.2, 1.1, tuple(audio_out.shape)).astype("float32"))
             ).sum()
             for name, value in [("video", video), ("audio", audio_out), ("loss", loss)]:
-                arrays[f"seed{seed}/{name}"] = snapshot(value)
+                arrays[f"seed{seed}/{name}"] = snapshot(value, f"seed{seed}/{name}")
             if args.mode == "grad-audit":
                 loss.backward()
                 parameter_map = dict(model.named_parameters())
@@ -427,7 +429,7 @@ def run(args, np, stack, identities):
                     for name, value in mapping.items():
                         if value.grad is not None:
                             key = f"seed{seed}/{category}::{name}"
-                            arrays[key] = snapshot(value.grad)
+                            arrays[key] = snapshot(value.grad, key)
                             gradient_names.append(key)
                 gradient_audit.append(
                     dict(
