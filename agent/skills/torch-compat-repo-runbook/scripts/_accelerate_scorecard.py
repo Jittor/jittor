@@ -217,7 +217,10 @@ def measurements(record, artifacts, source):
                 if not fresh:
                     validate_restoration(result, spec['world_size'])
                 rng = result.get('expected_random', {})
-                require(isinstance(rng, dict) and set(rng) == {'python', 'numpy', 'torch_cpu', 'torch_device' if spec['world_size'] == 1 else 'torch_cuda'} and rng == result.get('resumed_random'),
+                rng_keys = {'python', 'numpy', 'torch_cpu', 'torch_device' if spec['world_size'] == 1 else 'torch_cuda'}
+                if fresh and record['device'] == 'cuda':
+                    rng_keys.add('torch_cuda_all')
+                require(isinstance(rng, dict) and set(rng) == rng_keys and rng == result.get('resumed_random'),
                         'Four-stream own-runtime RNG restoration differs')
                 steps = len(before) + len(expected)
                 names = sorted(key[len('initial/model/'):] for key in arrays if key.startswith('initial/model/'))
