@@ -11,6 +11,9 @@
 ```{toctree}
 :maxdepth: 1
 
+2026-10-16-native-alias-lifecycle
+2026-10-16-h3-sdpa-gradient-rounding
+2026-10-16-h3-default-sdpa-forward
 2026-10-16-openmmlab-maintained-cpu-nightly
 2026-10-16-transformers-maintained-cpu-nightly
 2026-10-16-diffusers-official-installation
