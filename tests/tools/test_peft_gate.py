@@ -103,9 +103,12 @@ class TestPEFTProvenance(unittest.TestCase):
                     'installed_files_sha256': actual['installed_files_sha256']}},
                  'hf_hub_offline': True, 'measurement_source_sha256': {'real.py': 'fixture'},
                  'fallback_policy': 'error', 'fallback_count': 0,
+                 'actual_paths': {key: str(self.root / key) for key in ('HOME', 'REAL_HOME', 'JITTOR_HOME',
+                    'TMPDIR', 'XDG_CACHE_HOME', 'JITTOR_TORCH_CACHE_ROOT')},
                  'model_scope': {'parameters': ['weight'], 'trainable_parameters': ['weight']},
                  'device_observations': [{'label': label, 'device': 'cpu'} for label in
                      ('input/input_ids', 'output', 'parameter/weight', 'gradient/weight')]}
+        value['requested_paths'] = dict(value['actual_paths'])
         validate_binding(value, {'provenance_sample': self.source}, 'fixture', 'jittor', 'cpu')
         bad = copy.deepcopy(value)
         del bad['downstream_distributions']['provenance_sample']['record_sha256']
@@ -153,6 +156,26 @@ class TestPEFTNumerics(unittest.TestCase):
             self.assertEqual(cpu['JITTOR_TORCH_KEEP_HOME'], '1')
 
 
+
+
+    def test_successful_workers_cannot_hide_numerical_gate_failure(self):
+        import numpy as np
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            reference, candidate = root / 'ref.npz', root / 'cand.npz'
+            np.savez(reference, gradient=np.array([1., 2.], dtype='float32'))
+            np.savez(candidate, gradient=np.array([1., 9.], dtype='float32'))
+            execution = {'results': [{'returncode': 0} for _ in range(6)]}
+            def reject_actual_bad_gradient(*args):
+                compare_arrays(reference, candidate, ['gradient'])
+            import collect_peft_scorecards
+            with patch.object(collect_peft_scorecards, 'collect', reject_actual_bad_gradient):
+                with self.assertRaisesRegex(ValueError, 'Original numerical budget failed'):
+                    gate.validate_completed_run(root, {}, 'fixture', execution)
+            saved = json.loads((root / 'execution.json').read_text())
+            self.assertEqual(saved['validation']['status'], 'failed')
+            self.assertTrue(all(row['returncode'] == 0 for row in saved['results']))
+            self.assertFalse((root / 'validation/summary.json').exists())
 
     def test_cache_cannot_be_created_in_checkout(self):
         path = ROOT / '__should_never_create_peft_cache__'

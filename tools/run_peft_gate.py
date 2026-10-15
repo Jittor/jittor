@@ -71,6 +71,9 @@ def worker(args):
                                 {'peft': args.peft_wheel, 'transformers': args.transformers_wheel})
     source_hashes = source_files(ROOT)
     started = time.time()
+    path_keys = ('HOME', 'REAL_HOME', 'JITTOR_HOME', 'TMPDIR', 'XDG_CACHE_HOME',
+                 'JITTOR_TORCH_CACHE_ROOT')
+    requested_paths = {key: os.environ[key] for key in path_keys}
     sys.path.insert(0, str(ROOT / 'compat/tests/torch'))
     import _ecosystem_runner as runner
     import _ecosystem_cases as cases
@@ -172,7 +175,8 @@ def worker(args):
                   interpreter={'executable': sys.executable, 'pid': os.getpid(), 'is_shim': shim,
                                'torch_version': str(torch.__version__), 'binary_extension': binary,
                                'binary_sha256': digest(binary) if binary else None},
-                  started_at=started, finished_at=time.time())
+                  started_at=started, finished_at=time.time(), arrays_sha256=digest(output),
+                  requested_paths=requested_paths, actual_paths={key: os.environ[key] for key in path_keys})
     import _accelerate_protocol as platform_helpers
     flags = {n: int(getattr(sys.modules['jittor'].flags, n)) for n in
              ('use_cuda', 'auto_graph_replay')} if shim else {}
@@ -194,6 +198,7 @@ def worker(args):
     maps = Path('/proc/self/maps')
     paths = {line.split()[-1] for line in maps.read_text().splitlines()
              if '/' in line and any(s in line.split()[-1] for s in ('libcu', 'libnv', 'libnccl'))} if maps.is_file() else set()
+    require(result['requested_paths'] == result['actual_paths'], 'Runtime changed requested private paths')
     result['mapped_libraries'] = [{'path': str(Path(p).resolve()), 'sha256': digest(p)}
                                   for p in sorted(paths) if Path(p).is_file()]
     if args.device == 'cuda':
@@ -222,6 +227,28 @@ def worker(args):
     print('PEFT_RESULT ' + json.dumps({'case': CASE, 'runtime': args.runtime, 'phase': args.phase,
                                       'device': args.device, 'output': str(output), 'pid': os.getpid()}))
     return 0
+
+
+def validate_completed_run(directory, sources, baseline, execution):
+    """A successful worker is not an independent numerical agreement result."""
+    from collect_peft_scorecards import collect
+    directory = Path(directory)
+    output = directory / 'validation'
+    output.mkdir()
+    try:
+        record = collect(directory, sources, baseline, output,
+                         'docs/results/2026-10-15-peft-installed-source-training.md')
+    except ValueError as error:
+        execution['validation'] = {'status': 'failed', 'error': str(error)}
+        (directory / 'execution.json').write_text(json.dumps(execution, indent=2) + '\n')
+        raise
+    (output / 'summary.json').write_text(json.dumps({
+        'baseline': baseline, 'numerics': record['numerics'], 'training': record['training']}, indent=2) + '\n')
+    execution['validation'] = {'status': 'passed', 'array_pairs': record['numerics']['checked_tensors'],
+                               'max_abs': record['numerics']['max_abs'],
+                               'max_scaled_relative': record['numerics']['max_scaled_relative']}
+    (directory / 'execution.json').write_text(json.dumps(execution, indent=2) + '\n')
+    return record
 
 
 def main():
@@ -278,6 +305,8 @@ def main():
             (args.output / 'execution.json').write_text(json.dumps(execution, indent=2) + '\n')
             if process.returncode:
                 raise RuntimeError('Real PEFT worker failed; see ' + str(output.with_suffix('.log')))
+    if not args.preflight:
+        validate_completed_run(args.output, sources, baseline, execution)
     return 0
 
 

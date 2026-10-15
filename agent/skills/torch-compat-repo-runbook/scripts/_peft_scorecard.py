@@ -155,7 +155,23 @@ def validate_binding(value, sources, baseline, runtime, device):
     observations = value.get('device_observations', [])
     require(observations and all(r.get('device') == device for r in observations),
             'Missing actual operand/output/gradient residency')
+    paths = value.get('actual_paths', {})
+    require(paths and paths == value.get('requested_paths')
+            and all(isinstance(paths.get(key), str) and Path(paths[key]).is_absolute()
+                    for key in ('HOME', 'REAL_HOME', 'JITTOR_HOME', 'TMPDIR', 'XDG_CACHE_HOME',
+                                'JITTOR_TORCH_CACHE_ROOT')), 'Runtime private path routing is unbound')
     if device == 'cuda':
+        allocation = value.get('cuda_device', {})
+        require(allocation.get('logical_index') == 0 and type(allocation.get('physical_index')) is int
+                and isinstance(allocation.get('uuid'), str) and allocation['uuid'].startswith('GPU-'),
+                'Missing actual CUDA driver device identity')
+        require(str(allocation['physical_index']) in value['platform']['card_indices']
+                or allocation['uuid'] in value['platform']['card_indices'], 'Requested/actual CUDA allocation mismatch')
+        runtimes = value['platform']['cuda'].get('mapped_runtime_api', {})
+        libraries = {r['path'] for r in value.get('mapped_libraries', [])}
+        require(runtimes and set(runtimes).issubset(libraries)
+                and all(type(version) is int and version > 0 for version in runtimes.values()),
+                'Missing actually mapped CUDA runtime API version')
         require(all(r.get('pointer_device') == 0 for r in observations), 'Not actual logical CUDA allocation zero')
     labels = {r['label'] for r in observations}
     require({'input/input_ids', 'output'} | {'parameter/' + n for n in value['model_scope']['parameters']}

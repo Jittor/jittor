@@ -35,10 +35,15 @@ def collect(directory, sources, baseline, output, report):
     source_hashes = source_files(ROOT)
     for (runtime, phase), value in values.items():
         validate_binding(value, sources, baseline, runtime, device)
+        require(value.get('arrays_sha256') == digest(directory / (phase + '.' + runtime + '.npz')),
+                'Actual measurement array bytes changed after the worker')
         require(value['measurement_source_sha256'] == source_hashes, 'Full measured runtime source differs')
         require(value['seed'] == (7 if phase == 'perturb' else 0), 'Wrong actual input seed')
     require(len({v['interpreter']['pid'] for v in values.values()}) == 6, 'Reused actual measurement PID')
     base_ref, base_cand = values[('torch', 'base')], values[('jittor', 'base')]
+    if device == 'cuda':
+        require(all(v['cuda_device'] == base_ref['cuda_device'] for v in values.values()),
+                'Oracle/candidate did not execute on the same physical CUDA device')
     scope = base_ref['model_scope']
     parameters, trainable, frozen = scope['parameters'], scope['trainable_parameters'], scope['frozen_parameters']
     require(len(parameters) == len(set(parameters)) == 29 and len(trainable) == 8 and len(frozen) == 21
