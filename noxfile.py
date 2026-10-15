@@ -2711,6 +2711,16 @@ def ecosystem_vllm(session):
     """Real pinned vLLM native-path primitives; no engine or performance claim."""
     _root, env = _session_env(session, "ecosystem-vllm")
     python = _hardware_python()
+    if session.posargs:
+        session.error("vLLM always runs all original seeds and all four input gradients")
+    for kind in ("CHECKOUT", "WHEEL"):
+        name = "JITTOR_VLLM_" + kind
+        value = os.environ.get(name, "").strip()
+        if not value or not Path(value).exists():
+            session.error("vLLM needs " + name + " naming the pinned actual source or wheel")
+        env[name] = str(Path(value).resolve())
+    if os.environ.get("JITTOR_VLLM_EVIDENCE_DIR"):
+        env["JITTOR_VLLM_EVIDENCE_DIR"] = os.environ["JITTOR_VLLM_EVIDENCE_DIR"]
     oracle = os.environ.get("REAL_TORCH_PYTHON", "").strip()
     if not oracle or not Path(oracle).is_file():
         session.error("vLLM needs REAL_TORCH_PYTHON naming an independent PyTorch interpreter")
@@ -2727,10 +2737,12 @@ def ecosystem_vllm(session):
         "JITTOR_TEST_REQUIRE_EXECUTION": "1", "JITTOR_ECOSYSTEM_VLLM": "1",
         "JITTOR_TEST_DEVICES": device, "JITTOR_TORCH_SHIM": "1",
         "JITTOR_ECOSYSTEM_SPEED_RATIO": "", "JITTOR_ECOSYSTEM_TF32": "0",
+        "PYTEST_ADDOPTS": "", "JITTOR_ECOSYSTEM_CUDNN_BENCHMARK": "0",
         "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
         "JITTOR_HOME": str(cache / "jittor"), "JITTOR_TORCH_CACHE_ROOT": str(cache / "shim"),
         "cache_name": "nox_ecosystem_vllm_" + device,
-        "JITTOR_CUDA_WHEEL_DISABLE": "1", "JT_CUDA_KERNEL_MATH": "strict",
+        "JITTOR_CUDA_WHEEL_DISABLE": os.environ.get("JITTOR_CUDA_WHEEL_DISABLE", "0"),
+        "JT_CUDA_KERNEL_MATH": "strict",
         "JT_USE_CUDA": "1" if device == "cuda" else "0",
         "use_cuda": "1" if device == "cuda" else "0",
         "JT_BACKEND": device, "DISABLE_MULTIPROCESSING": "1",
@@ -2762,6 +2774,8 @@ def ecosystem_vllm(session):
     session.run(oracle, "-c", oracle_check + versions, external=True, env=oracle_env)
     _set_hardware_python_config(session, python, env)
     _install_compat_source(session, env, python)
+    session.run(python, "-m", "pip", "install", "--no-deps", "--no-build-isolation",
+                "-e", str(REPO_ROOT / "adapters"), external=True, env=env)
     session.run(python, "-c", "import jittor; import torch; "
                 "assert hasattr(torch, '_torch_compat_install_context'); " + versions,
                 external=True, env=env)

@@ -9,7 +9,12 @@ from _helpers.nox_probe import _FakeSession, _load_noxfile
 
 
 @pytest.mark.parametrize('device', ('cpu', 'cuda'))
-def test_vllm_session_binds_gate_device_versions_and_oracle(monkeypatch, tmp_path, device):
+@pytest.mark.parametrize('disable_wheels', (None, '1'))
+def test_vllm_session_binds_gate_device_versions_and_oracle(monkeypatch, tmp_path, device, disable_wheels):
+    if disable_wheels is None:
+        monkeypatch.delenv('JITTOR_CUDA_WHEEL_DISABLE', raising=False)
+    else:
+        monkeypatch.setenv('JITTOR_CUDA_WHEEL_DISABLE', disable_wheels)
     oracle = tmp_path / 'oracle-python'
     oracle.touch()
     monkeypatch.setenv('REAL_TORCH_PYTHON', str(oracle))
@@ -19,6 +24,11 @@ def test_vllm_session_binds_gate_device_versions_and_oracle(monkeypatch, tmp_pat
     monkeypatch.setenv('JT_BUILD_NVCC_PATH', '/opt/cuda/bin/nvcc')
     monkeypatch.setenv('JITTOR_SOURCE_ROOT', '/foreign/source')
     monkeypatch.setenv('JITTOR_ECOSYSTEM_SPEED_RATIO', '1.01')
+    monkeypatch.setenv('JITTOR_VLLM_CHECKOUT', str(tmp_path))
+    wheel = tmp_path / 'actual-vllm.whl'
+    wheel.touch()
+    monkeypatch.setenv('JITTOR_VLLM_WHEEL', str(wheel))
+    monkeypatch.setenv('PYTEST_ADDOPTS', '-k nonexistent')
     module = _load_noxfile(monkeypatch, tmp_path)
     session = _FakeSession(tmp_path, '/opt/candidate/bin/python3-config')
     session.python = False
@@ -32,9 +42,13 @@ def test_vllm_session_binds_gate_device_versions_and_oracle(monkeypatch, tmp_pat
                  'JITTOR_REQUIRE_TRANSFORMERS', 'JITTOR_TEST_REQUIRE_EXECUTION',
                  'JITTOR_ECOSYSTEM_VLLM', 'JITTOR_TORCH_SHIM'):
         assert env[flag] == '1'
+    assert env['JITTOR_CUDA_WHEEL_DISABLE'] == (disable_wheels or '0')
     assert env['backend_fallback'] == 'error'
     assert env['JITTOR_ECOSYSTEM_SPEED_RATIO'] == ''
     assert env['JITTOR_ECOSYSTEM_TF32'] == '0'
+    assert env['JITTOR_VLLM_CHECKOUT'] == str(tmp_path)
+    assert env['JITTOR_VLLM_WHEEL'] == str(wheel)
+    assert env['PYTEST_ADDOPTS'] == ''
     assert env['JT_BACKEND'] == env['JITTOR_TEST_DEVICES'] == device
     assert env['JT_USE_CUDA'] == env['use_cuda'] == str(int(device == 'cuda'))
     assert {env[name] for name in module['THREAD_POOL_ENV_NAMES']} == {'1'}
@@ -53,9 +67,13 @@ def test_vllm_session_binds_gate_device_versions_and_oracle(monkeypatch, tmp_pat
     assert oracle_env['JITTOR_TORCH_SHIM'] == '0'
     assert ('assert torch.cuda.is_available()' if device == 'cuda' else
             'assert not torch.cuda.is_available()') in command[-1]
+    installs = [args for args, _kw in session.calls if 'pip' in args and 'install' in args]
+    assert any(args[-1] == str(Path(__file__).resolve().parents[2] / 'adapters')
+               and '--no-deps' in args and '--no-build-isolation' in args for args in installs)
 
 
-@pytest.mark.parametrize('missing', ('oracle', 'oracle-file', 'device', 'allocation', 'compiler'))
+@pytest.mark.parametrize('missing', ('oracle', 'oracle-file', 'device', 'allocation', 'compiler',
+                                     'checkout', 'wheel', 'subset'))
 def test_vllm_session_rejects_incomplete_configuration(monkeypatch, tmp_path, missing):
     oracle = tmp_path / 'oracle-python'
     oracle.touch()
@@ -63,6 +81,10 @@ def test_vllm_session_rejects_incomplete_configuration(monkeypatch, tmp_path, mi
     monkeypatch.setenv('JITTOR_TEST_DEVICES', 'cuda')
     monkeypatch.setenv('CUDA_VISIBLE_DEVICES', 'allocated')
     monkeypatch.setenv('JT_BUILD_NVCC_PATH', '/opt/cuda/bin/nvcc')
+    monkeypatch.setenv('JITTOR_VLLM_CHECKOUT', str(tmp_path))
+    wheel = tmp_path / 'actual-vllm.whl'
+    wheel.touch()
+    monkeypatch.setenv('JITTOR_VLLM_WHEEL', str(wheel))
     if missing == 'oracle':
         monkeypatch.delenv('REAL_TORCH_PYTHON')
     elif missing == 'oracle-file':
@@ -71,13 +93,17 @@ def test_vllm_session_rejects_incomplete_configuration(monkeypatch, tmp_path, mi
         monkeypatch.setenv('JITTOR_TEST_DEVICES', 'cpu,cuda')
     elif missing == 'allocation':
         monkeypatch.setenv('CUDA_VISIBLE_DEVICES', '')
-    else:
+    elif missing == 'compiler':
         monkeypatch.delenv('JT_BUILD_NVCC_PATH')
         monkeypatch.delenv('nvcc_path', raising=False)
         monkeypatch.setenv('PATH', '')
+    elif missing in ('checkout', 'wheel'):
+        monkeypatch.delenv('JITTOR_VLLM_' + missing.upper())
     module = _load_noxfile(monkeypatch, tmp_path)
     session = _FakeSession(tmp_path, '/opt/candidate/bin/python3-config')
     session.python = False
+    if missing == 'subset':
+        session.posargs = ['-k', 'unrelated']
     with pytest.raises(AssertionError, match='vLLM'):
         module['ecosystem_vllm'](session)
     assert not session.calls

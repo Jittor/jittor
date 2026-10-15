@@ -19,7 +19,11 @@ import sys
 
 
 def digest(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    result = hashlib.sha256()
+    with Path(path).open('rb') as stream:
+        for block in iter(lambda: stream.read(8 << 20), b''):
+            result.update(block)
+    return result.hexdigest()
 
 
 def package_files(package):
@@ -32,9 +36,10 @@ def package_files(package):
 class SnapshotObserver:
     """Inspect actual tensors at the maintained probe's serialization boundary."""
 
-    def __init__(self, runtime, device, script, *, allow_scalar_counter=False):
+    def __init__(self, runtime, device, script, *, allow_scalar_counter=False, verify_cuda_pointer=False):
         self.runtime, self.device, self.script = runtime, device, str(script)
         self.allow_scalar_counter = allow_scalar_counter
+        self.verify_cuda_pointer = verify_cuda_pointer
         self.records = []
 
     def __call__(self, frame, event, _argument):
@@ -54,6 +59,15 @@ class SnapshotObserver:
             row.update(location=value.location(), dispatch=sys.modules['jittor'].core.dispatch_context([value])[0])
             if row['location'] != ('device' if self.device == 'cuda' else 'cpu') or row['dispatch'] != self.device:
                 raise AssertionError('Physical VERL tensor residency/dispatch mismatch before serialization')
+        if self.verify_cuda_pointer and self.device == 'cuda':
+            import ctypes
+
+            ordinal = ctypes.c_int(-1)
+            status = ctypes.CDLL('libcuda.so.1').cuPointerGetAttribute(
+                ctypes.byref(ordinal), 9, ctypes.c_void_p(value.data_ptr()))
+            if status != 0 or ordinal.value != value.device.index:
+                raise AssertionError('Actual CUDA pointer belongs to another device')
+            row['pointer_device'] = ordinal.value
         self.records.append(row)
 
 
@@ -106,13 +120,17 @@ def installed_distribution(source, module):
         metadata = matches[0]
         result.update(distribution_name=metadata.metadata['Name'], distribution_version=metadata.version,
                       wheel_sha256=digest(Path(os.environ['JITTOR_' + source['repo'].upper() + '_WHEEL'])))
+    if source['repo'] == 'vllm':
+        from _vllm_installation import bind_installation
+
+        result = bind_installation(source, module, Path(os.environ['JITTOR_VLLM_WHEEL']), result)
     return result
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, required=True)
-    parser.add_argument('--repo', choices=('torchmetrics', 'tensordict', 'diffusers', 'verl', 'mmengine', 'mmcv'), required=True)
+    parser.add_argument('--repo', choices=('torchmetrics', 'tensordict', 'diffusers', 'verl', 'mmengine', 'mmcv', 'vllm'), required=True)
     parser.add_argument('--checkout', type=Path, required=True)
     parser.add_argument('--mmengine-checkout', type=Path)
     parser.add_argument('probe', nargs=argparse.REMAINDER)
@@ -139,10 +157,15 @@ def main():
     baseline = subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
     if subprocess.check_output(['git', '-C', str(root), 'status', '--porcelain'], text=True).strip():
         raise ValueError('Measurements require a clean source checkout')
+    frozen_sources = None
+    if args.repo == 'vllm':
+        from _vllm_installation import framework_snapshot
+
+        frozen_sources = framework_snapshot(root)
     sys.path.insert(0, str(script.parent))
     runtime = command[command.index('--runtime') + 1]
     before_files, before_package = {}, {}
-    if args.repo in ('verl', 'mmengine', 'mmcv'):
+    if args.repo in ('verl', 'mmengine', 'mmcv', 'vllm'):
         from importlib.machinery import PathFinder
 
         # Hash the real import target without importing VERL or Torch ahead of
@@ -156,8 +179,8 @@ def main():
     sys.argv = command
     captured = io.StringIO()
     observer = (SnapshotObserver(runtime, command[command.index('--device') + 1], script,
-                                 allow_scalar_counter=args.repo == 'mmcv')
-                if args.repo in ('verl', 'mmengine', 'mmcv') else None)
+                                 allow_scalar_counter=args.repo == 'mmcv', verify_cuda_pointer=args.repo == 'vllm')
+                if args.repo in ('verl', 'mmengine', 'mmcv', 'vllm') else None)
     previous_profile = sys.getprofile()
     try:
         if observer is not None:
@@ -194,14 +217,31 @@ def main():
         source_paths.append(root / 'compat/tests/torch/_ecosystem_openmmlab_cases.py')
         if root / 'compat/tests/torch/_ecosystem_runner.py' not in source_paths:
             source_paths.append(root / 'compat/tests/torch/_ecosystem_runner.py')
+    if args.repo == 'vllm':
+        from _vllm_installation import framework_sources
+
+        source_paths = [root / path for path in framework_sources(root)]
+        if (framework_snapshot(root) != frozen_sources
+                or subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip() != baseline
+                or subprocess.check_output(['git', '-C', str(root), 'status', '--porcelain'], text=True).strip()):
+            raise ValueError('vLLM framework source changed during measurement')
     binding = {'jittor_commit': baseline, 'upstream': source['upstream'],
                'hf_hub_offline': os.environ.get('HF_HUB_OFFLINE') == '1',
                'downstream_distribution': distribution,
-               'measurement_source_sha256': {str(path.relative_to(root)): digest(path) for path in source_paths},
+               'measurement_source_sha256': {
+                   str(path.relative_to(root)): (hashlib.sha256(os.fsencode(os.readlink(path))).hexdigest()
+                                                 if path.is_symlink() else digest(path))
+                   for path in source_paths},
                'interpreter': {'executable': sys.executable, 'pid': os.getpid(), 'is_shim': is_shim,
                                'torch_version': torch.__version__, 'binary_extension': binary,
                                'binary_sha256': digest(binary) if binary else None},
                'measurement_command': [sys.executable, *command]}
+    if args.repo == 'vllm':
+        from _vllm_installation import adapter_installation, device_controls
+
+        binding['device_controls'] = device_controls(torch, command[command.index('--device') + 1])
+        if is_shim:
+            binding['adapter_distribution'] = adapter_installation(root)
     if args.repo in ('mmengine', 'mmcv'):
         binding['upstreams'] = {repo: entry['upstream'] for repo, entry in sources.items()}
         binding['downstream_distributions'] = distributions

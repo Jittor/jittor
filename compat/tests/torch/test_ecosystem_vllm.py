@@ -5,6 +5,7 @@ no trainable parameters and does not validate model families or an engine.
 """
 import os
 import unittest
+from pathlib import Path
 
 from _ecosystem_harness import (
     REAL_TORCH_PYTHON, SPEED_RATIO, EcosystemComparison, _distributions_available,
@@ -28,9 +29,18 @@ class EcosystemVLLM(EcosystemComparison):
         # Identical conservative correctness thresholds on both devices.
         self.forward_tolerance = 2e-3
         self.backward_tolerance = 1e-2
+        self.checkout = Path(os.environ.get('JITTOR_VLLM_CHECKOUT', ''))
+        self.wheel = Path(os.environ.get('JITTOR_VLLM_WHEEL', ''))
+        self.assertTrue(os.environ.get('JITTOR_VLLM_CHECKOUT') and self.checkout.is_dir(),
+                        'vLLM requires its real clean upstream checkout')
+        self.assertTrue(os.environ.get('JITTOR_VLLM_WHEEL') and self.wheel.is_file(),
+                        'vLLM requires the pinned actual official wheel')
 
     def test_vllm_decoder_primitives(self):
-        self._compare("vllm_decoder_primitives", required_gradients=REQUIRED_GRADIENTS)
+        from _ecosystem_vllm_installed_harness import compare_primitives
+
+        self.assertEqual(len(REQUIRED_GRADIENTS), 4)
+        compare_primitives(self, self.checkout, self.wheel)
 
 
 if __name__ == "__main__":

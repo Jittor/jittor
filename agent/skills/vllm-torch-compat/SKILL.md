@@ -5,18 +5,36 @@ description: 在 Jittor torch shim 与独立 PyTorch 两套解释器上运行和
 
 # vLLM 的 shim ⇄ 原生 torch 对拍
 
-## 当前维护门禁（2026-10-15）
+## 当前维护门禁（2026-10-16）
 
 固定 clean source `72e12a9c662b46d5a5389f7e031c3997520d4562` 的真实 CPU/CUDA
 组件证据见 [vLLM component scorecards](../../../docs/results/2026-10-15-vllm-component-scorecards.md)。
 两侧实际安装 vLLM `0.29.0`、Transformers `5.13.0`，独立 oracle 是二进制
 PyTorch `2.13.0+cu130`。相同权重、base 与 seed 7/19 输入扰动均比较输出和全部四项
-输入梯度；无可训练参数，最高 L2。每设备仅计 `CustomOp 3/40`、`model_family 0/376`。
+输入梯度；无可训练参数，最高 L2。历史评分每设备为 `CustomOp 3/40`、`model_family 0/376`；旧记录缺少当前完整安装来源绑定，
+严格评分器会拒绝它们，不能回填旧 JSON 取得当前接受。
 
 维护入口为 `nox -s ecosystem_vllm`，通过 `JITTOR_TEST_DEVICES=cpu|cuda` 选择设备，
 需预置 `REAL_TORCH_PYTHON` 和 `JITTOR_CI_PYTHON`，不会安装框架。
 精确节点是 `test_ecosystem_vllm.py::EcosystemVLLM::test_vllm_decoder_primitives`；
 CPU 显式禁 CUDA，缺依赖、非独立 oracle、错误 device 均拒绝，fallback 策略为 error。
+维护门禁还必须显式给出 `JITTOR_VLLM_CHECKOUT` 和 `JITTOR_VLLM_WHEEL`：分别为干净
+官方 `98dff2a81d747d1dba01a47f939f48c3526d4206` checkout 和原始官方 0.29.0 wheel。
+维护入口会从当前源码安装既有 `jittor-torch-adapters`（不下载或改写上游 vLLM），
+并绑定实际加载的 vLLM bootstrap、entry point、METADATA/RECORD 与 editable source URL。
+会逐侧验证实际包的完整源码/payload、METADATA、pip 改写后的 RECORD 与原 wheel，
+并对三个种子的全部输出和四项输入梯度自动判定；不接受缩小范围的 posargs。
+CPU 必须显式隐藏 CUDA；CUDA 记录实际分配 UUID 和张量指针设备。
+
+可选 `JITTOR_VLLM_EVIDENCE_DIR` 把正常最终产物保存在仓外独占
+`<root>/<device>/vllm_decoder_primitives/`；路径必须为绝对路径，也必须在会被下次
+nox 清理的 scratch 之外。已有目录拒绝覆盖；失败保留原始文件，但不写成功记录。
+默认仍使用临时目录。独立重检入口为
+`agent/skills/torch-compat-repo-runbook/scripts/collect_vllm_scorecard.py`，需传实际
+`--checkout/--wheel/--baseline`、`--run DEVICE=DIRECTORY`、`--platform DEVICE=JSON`、
+`--report/--command/--output`；只有完整新测证据才能形成当前共同评分卡。
+这轮来源门禁的新 CPU/CUDA 验收尚在执行，不能由工具或 host 测试授予新通过。
+
 生产修复与邻接验证见 [RMSNorm / Triton alias](../../../docs/results/2026-10-15-rmsnorm-triton-alias.md)。
 组件 builder 走真实 native component 路径，不验证 `_C` kernel；candidate engine 仍在
 真实 `GraphPickler` 导入处阻塞。Omni 的 CPU 平台拒绝及 CUDA RMS 精度断点单独保留，
