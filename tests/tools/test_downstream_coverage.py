@@ -408,6 +408,51 @@ class RegistryTests(unittest.TestCase):
         result = registry.inventory("peft", self.root)
         self.assertEqual(result["axes"][0]["members"], ["DORA", "LORA"])
 
+    def vllm_fixture(self):
+        self.commit("vllm/model_executor/models/registry.py",
+                    "import unavailable_torch\n_VLLM_MODELS = {'Model': ('missing', 'Model')}\n"
+                    "def register_model(name, implementation): pass\n")
+        self.commit("vllm/model_executor/layers/activation.py",
+                    "@CustomOp.register('silu_and_mul')\nclass SiluAndMul: pass\n")
+
+    def test_vllm_central_inventory_preserves_missing_targets_and_dynamic_scope(self):
+        self.vllm_fixture()
+        self.commit("vllm/unrelated/__init__.py", '__version__ = "unrelated-package"\n')
+        result = registry.inventory("vllm", self.root)
+        self.assertEqual({row["axis"]: row["count"] for row in result["axes"]},
+                         {"model_family": 1, "custom_op": 1})
+        self.assertEqual(result["upstream"]["version"], "source@" + self.run_git("rev-parse", "HEAD"))
+        details = result["declaration_details"]
+        self.assertTrue(details["missing_targets"])
+        self.assertTrue(details["dynamic_sites"])
+        self.assertIn("not model or engine execution", result["scope"])
+        self.assertTrue(all(len(row["sha256"]) == 64 for row in result["sources"]))
+
+    def test_vllm_release_version_requires_exact_unambiguous_tag(self):
+        self.vllm_fixture()
+        self.run_git("tag", "v0.29.0rc1")
+        self.assertTrue(registry.inventory("vllm", self.root)["upstream"]["version"].startswith("source@"))
+        self.run_git("tag", "v0.29.0")
+        result = registry.inventory("vllm", self.root)
+        self.assertEqual(result["upstream"]["version"], "0.29.0")
+        self.assertEqual(result["upstream"]["version_source"]["kind"], "exact-release-tag")
+        self.run_git("tag", "v0.30.0")
+        with self.assertRaisesRegex(ValueError, "Ambiguous exact"):
+            registry.inventory("vllm", self.root)
+
+    def test_omni_central_inventory_does_not_count_inherited_vllm_as_owned(self):
+        self.commit("vllm_omni/model_executor/models/registry.py",
+                    "from vllm.model_executor.models.registry import _VLLM_MODELS\n"
+                    "_OMNI_MODELS = {'Owned': ('owned', 'model', 'Owned')}\n"
+                    "_VLLM_OMNI_MODELS = {**_VLLM_MODELS, **_OMNI_MODELS}\n")
+        self.commit("vllm_omni/diffusion/registry.py",
+                    "_DIFFUSION_MODELS = {'Video': ('video', 'pipeline', 'Video')}\n")
+        self.commit("vllm_omni/config/pipeline_registry.py", "OMNI_PIPELINES = {'video': VIDEO}\n")
+        result = registry.inventory("vllm-omni", self.root)
+        self.assertEqual({row["axis"]: row["count"] for row in result["axes"]},
+                         {"model_family": 1, "diffusion_model": 1, "pipeline_model_type": 1})
+        self.assertIn("separately pinned vllm", result["declaration_details"]["inherited_registry"])
+
 
 class VerifyRunnerTests(unittest.TestCase):
     def test_artifact_move_keeps_explicit_cache_and_isolates_devices(self):

@@ -14,7 +14,7 @@ import re
 import subprocess
 
 
-REPOS = ("transformers", "peft", "diffusers", "ms-swift", "verl", "mmengine", "mmcv", "flash-attention", "trellis")
+REPOS = ("transformers", "peft", "diffusers", "ms-swift", "verl", "mmengine", "mmcv", "flash-attention", "trellis", "vllm", "vllm-omni")
 ROOT = Path(__file__).resolve().parents[4]
 
 
@@ -107,7 +107,7 @@ def inventory(repo, checkout):
     remote = git(checkout, "remote", "get-url", "origin")
     files = git(checkout, "ls-files", "--", "*.py").splitlines()
     prefix = {"transformers": "src/transformers/", "peft": "src/peft/",
-              "diffusers": "src/diffusers/", "ms-swift": "swift/", "verl": "verl/", "mmengine": "mmengine/", "mmcv": "mmcv/", "flash-attention": "flash_attn/", "trellis": "trellis2/"}[repo]
+              "diffusers": "src/diffusers/", "ms-swift": "swift/", "verl": "verl/", "mmengine": "mmengine/", "mmcv": "mmcv/", "flash-attention": "flash_attn/", "trellis": "trellis2/", "vllm": "vllm/", "vllm-omni": "vllm_omni/"}[repo]
     files = [path for path in files if path.startswith(prefix)]
     if repo == "transformers":
         selected = [path for path in files if path.endswith("models/auto/modeling_auto.py")]
@@ -121,7 +121,7 @@ def inventory(repo, checkout):
                         part in path for part in ("/cli/", "/arguments/", "/trainers/", "/pipelines/train/"))]
     elif repo == "flash-attention":
         selected = ["flash_attn/__init__.py", "flash_attn/flash_attn_interface.py"]
-    elif repo in ("mmengine", "mmcv", "trellis"):
+    elif repo in ("mmengine", "mmcv", "trellis", "vllm", "vllm-omni"):
         selected = files
     else:
         selected = [path for path in files if path.startswith("verl/trainer/")
@@ -327,8 +327,20 @@ def inventory(repo, checkout):
             rows = [row for row in declaration_details["declarations"] if row["axis"] == axis]
             add(axis, "TRELLIS source-declared " + axis, members, [row["source"] for row in rows])
         used.update(declaration_details["sources"])
+    if repo in ("vllm", "vllm-omni"):
+        from _vllm_registry import declarations
+        declaration_details = declarations(checkout, selected, repo)
+        if declaration_details["unresolved"]:
+            raise ValueError("Unresolved vLLM declaration: " + str(declaration_details["unresolved"][0]))
+        for axis, members in declaration_details["axes"].items():
+            rows = [row for row in declaration_details["declarations"] if row["axis"] == axis]
+            add(axis, repo + " source-declared " + axis, members, [row["source"] for row in rows])
+        used.update(declaration_details["sources"])
     version = None
     for relative in files:
+        if repo in ("vllm", "vllm-omni") and relative not in (
+                prefix + "__init__.py", prefix + "version.py", prefix + "_version.py"):
+            continue
         if relative.endswith(("/__init__.py", "/version.py", "/_version.py")):
             tree = ast.parse((checkout / relative).read_text(encoding="utf-8"))
             for node in tree.body:
@@ -348,6 +360,17 @@ def inventory(repo, checkout):
         used.add("verl/version/version")
     if repo == "trellis" and version is None:
         version = "source@" + commit
+    version_source = None
+    if repo in ("vllm", "vllm-omni") and version is None:
+        # Generated wheel versions are often absent from a source checkout.
+        # Only an exact release tag may name a release; a nearby/dev tag cannot.
+        tags = git(checkout, "tag", "--points-at", commit).splitlines()
+        releases = {tag.lstrip("v") for tag in tags if re.fullmatch(r"v?\d+\.\d+\.\d+", tag)}
+        if len(releases) > 1:
+            raise ValueError("Ambiguous exact upstream release tags")
+        version = next(iter(releases)) if releases else "source@" + commit
+        version_source = {"kind": "exact-release-tag" if releases else "source-commit",
+                          "tags": sorted(tags), "commit": commit}
     result = {"schema_version": 1, "repo": repo, "upstream": {"commit": commit, "remote": remote, "version": version},
             "scope": "Source-declared registry members; no member is verified by enumeration.", "axes": axes,
             "sources": [{"path": path, "sha256": digest(checkout / path)} for path in sorted(used)]}
@@ -364,6 +387,11 @@ def inventory(repo, checkout):
         result["scope"] = (declaration_details["scope"] + " Missing upstream definitions remain in the denominator. "
                            "A source@SHA version identifies source without a published package version; "
                            "it is not a semantic release version.")
+    if repo in ("vllm", "vllm-omni"):
+        result["declaration_details"] = declaration_details
+        result["scope"] = declaration_details["scope"]
+        if version_source is not None:
+            result["upstream"]["version_source"] = version_source
     return result
 
 

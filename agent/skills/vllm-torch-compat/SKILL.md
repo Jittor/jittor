@@ -5,6 +5,26 @@ description: 在 Jittor torch shim 与独立 PyTorch 两套解释器上运行和
 
 # vLLM 的 shim ⇄ 原生 torch 对拍
 
+## 源码注册分母（2026-10-15）
+
+固定源码 `51a99565c398c8320de8131e07731c75c52eb87c` 的有界分母为 353 个模型架构和 39 个 `CustomOp` 声明。模型轴来自 `vllm/model_executor/models/registry.py::_VLLM_MODELS`，包含 embedding 对 text-generation 字典的过滤展开；CustomOp 轴仅扫描 `vllm/model_executor/layers/` 中的真实注册 decorator，保留条件分支。两个轴不能相加，层组件数值证据不能算作模型或引擎验收。
+
+下列 host-only 工具不导入 Torch/Jittor，不编译、不下载；输出上游 commit、remote、逐源文件 SHA256、注册行和动态注册入口。运行时插件是开放集合，工具只给源码 built-in 声明的有界分母，不声称当前安装环境已激活全部注册，也不授予任何设备或深度等级。上游新增未知动态构造、重复声明或模块级修改时显式报错，不将其略掉后声称完整。
+
+```bash
+<host-python> agent/skills/torch-compat-repo-runbook/scripts/_vllm_registry.py \
+  --repo vllm --checkout "$JITTOR_LAB_ROOT/vllm" \
+  --output "$JITTOR_LAB_ROOT/_state/vllm/registry.json"
+```
+
+官方 vLLM `0.29.0` release 另对应 `98dff2a81d747d1dba01a47f939f48c3526d4206`，
+同一工具得到 376 个模型和 40 个 CustomOp；不能沿用旧 SHA 的 353/39 分母。
+共享 scorecard 使用中央 `registry_inventory.py --repo vllm` 入口，参数与上例一致。
+中央版本字段只接受源码版本或该 commit 上的精确正式 release tag；没有这些时保留
+`source@<SHA>`，不把附近 tag 或 wheel 的版本号推定为源码 release。
+
+本页历史环境表中的 package version 不能替代 checkout SHA：上述 vLLM SHA 的 `git describe` 为 `v0.23.1rc0-522-g51a99565c`，Omni SHA 为 `v0.29.0rc1-58-g446c2b54`。复跑须逐侧记录实际源码与已安装分发包，不能因旧表写 `0.29.0` 就将这两个源码版本视作一致。历史路径中的脚本需先核对存在性。
+
 ## 用途
 
 回答 vLLM 在 shim 上怎么跑、原生 PyTorch 上怎么跑、两者怎么比数值和速度，以及每个
@@ -13,8 +33,8 @@ description: 在 Jittor torch shim 与独立 PyTorch 两套解释器上运行和
 **合法需要独立 adapter 的第三行**（库私有实现细节），本 skill 按那个框架执行。
 
 **不覆盖**：不新增 vLLM 版本支持声明（[`adapters/README.md`](../../../adapters/README.md)
-明确不为当前安装版本背书）；不做 serving/训练性能验收。验证环境没有 vLLM 源码 checkout，
-任何 engine 级结论都没有在验证环境复现，见「证据」。
+明确不为当前安装版本背书）；不做 serving/训练性能验收。2026-09-19 所述环境没有 vLLM 源码 checkout；2026-10-15
+已恢复上文固定源码并核对注册分母，尚不能据此授予 engine 级验收，见「证据」。
 
 ## 两侧环境
 

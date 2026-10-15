@@ -78,3 +78,36 @@ and the empty scorecard remain under
 `$JITTOR_LAB_ROOT/_state/refactor-goal/r21-registry-audit/`. Files are named
 `baseline-ms-swift.json`, `baseline-verl.json`, `final-<repo>.json` and
 `empty-scorecard.json`. These are registry evidence, not model benchmark data.
+
+## vLLM and Omni central inventory follow-up
+
+The follow-up based on `1eaf2678d` connects the host-only vLLM extractor to the
+same `registry_inventory.py` CLI and schema. Actual clean upstream checkouts
+were re-enumerated; no tensor runtime or downstream package was imported:
+
+| Repository | Source identity | Full upstream SHA | Separate denominator axes |
+| --- | --- | --- | --- |
+| vLLM | exact release tag `v0.29.0` | `98dff2a81d747d1dba01a47f939f48c3526d4206` | 376 model architectures; 40 CustomOp layer declarations |
+| vLLM Omni | `source@446c2b5474dabffccf9a0034836eeab77c62b4b8` | `446c2b5474dabffccf9a0034836eeab77c62b4b8` | 92 owned model architectures; 68 diffusion models; 64 pipeline model types |
+
+The inventories bind 589 and 172 scanned source hashes respectively and retain
+dynamic registration sites and missing implementation targets. Omni's inherited
+vLLM registry requires a separately pinned vLLM inventory; it is not silently
+added to the owned-model denominator. Each axis remains separate. CustomOp
+membership or a layer numerical result cannot certify an engine or model.
+
+When generated package-version files are absent, only an exact final-release
+tag at the selected commit supplies a release version. A nearby tag or release
+candidate is insufficient; source-only identity remains `source@<full SHA>`.
+Multiple distinct exact release versions fail closed. This source label does
+not replace independently recorded installed-distribution versions, and these
+enumerations grant no numerical scorecard rows or adapter version support.
+
+Reproduce with the existing CLI, using `--repo vllm` or `--repo vllm-omni` and
+the corresponding clean pinned checkout. The helper's 14 contracts and central
+coverage/identity/documentation checks passed together: 77 passed, no skips.
+They cover dirty source, unknown mutations, missing targets, inherited scope,
+release-tag ambiguity and upstream re-enumeration. Raw inventories and logs are
+unversioned under `$JITTOR_LAB_ROOT/_state/leaf-view-integration/`:
+`vllm029-inventory.json`, `omni-inventory.json` and
+`vllm-registry-contracts-corrected.log`.
