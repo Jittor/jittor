@@ -2965,3 +2965,33 @@ def ecosystem_verl_training(session):
                 "assert hasattr(torch, '_torch_compat_install_context'); " + versions,
                 external=True, env=env)
     _run_pytest_once(session, ["compat/tests/torch/test_ecosystem_verl_training.py"], env, python, timeout=3600)
+
+@nox.session(python=False)
+def ecosystem_transformers_source(session):
+    """Replay TF9 plus full 32K Longformer with automatic original L3 budgets."""
+    root, env = _session_env(session, "ecosystem-transformers-source")
+    python = _hardware_python()
+    _set_hardware_python_config(session, python, env)
+    oracle = os.environ.get("REAL_TORCH_PYTHON", "").strip()
+    device = os.environ.get("JITTOR_TEST_DEVICES", "cpu")
+    if not oracle or not Path(oracle).is_file() or device not in ("cpu", "cuda"):
+        session.error("Transformers source gate needs binary REAL_TORCH_PYTHON and exactly cpu or cuda")
+    if (len(session.posargs) % 2 or any(session.posargs[i] not in ("--output", "--cache-root")
+                                     for i in range(0, len(session.posargs), 2))):
+        session.error("All ten cases and four original phases are mandatory; only output/cache paths are configurable")
+    args = []
+    for kind in ("checkout", "wheel"):
+        value = os.environ.get("JITTOR_TRANSFORMERS_" + kind.upper(), "").strip()
+        if not value or not Path(value).exists():
+            session.error("Explicit real Transformers " + kind + " required")
+        args += ["--transformers-" + kind, value]
+    for name in ("CUDA_VISIBLE_DEVICES", "CUDA_HOME", "nvcc_path", "JT_BUILD_NVCC_PATH",
+                 "LD_PRELOAD", "LD_LIBRARY_PATH", "JITTOR_CUDA_WHEEL_STRICT", "JITTOR_CUDA_WHEEL_DISABLE"):
+        if name in os.environ:
+            env[name] = os.environ[name]
+    env.update({"JITTOR_REQUIRE_TRANSFORMERS": "1", "JITTOR_REQUIRE_REAL_TORCH": "1",
+                "JITTOR_TEST_REQUIRE_EXECUTION": "1", "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1"})
+    session.run(python, str(REPO_ROOT / "tools/run_transformers_gate.py"),
+                "--candidate-python", python, "--oracle-python", oracle, "--device", device,
+                *args, "--output", str(root / "measurements"), "--cache-root", str(root / "benchmark-cache"),
+                *session.posargs, external=True, env=env)
