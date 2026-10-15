@@ -84,16 +84,12 @@ ParsedState parse_state(const string& payload, const string& backend, int device
 
 string encode_state(const string& backend, int device) {
     auto& owner = runtime_rng_state();
+    if (backend == "cpu") return encode_cpu_rng_state(owner.host_seed, owner.host_engine);
     std::ostringstream output;
     output.imbue(std::locale::classic());
     output << "JITTOR_RNG_1 " << backend << ' ' << device << ' ';
-    if (backend == "cpu") {
-        output << owner.host_seed << " 0 " << std::default_random_engine::min()
-               << ' ' << std::default_random_engine::max() << ' ' << owner.host_engine;
-    } else {
-        const auto& stream = acl_stream(device);
-        output << stream.seed << ' ' << stream.offset << " ACL_COUNTER";
-    }
+    const auto& stream = acl_stream(device);
+    output << stream.seed << ' ' << stream.offset << " ACL_COUNTER";
     return output.str();
 }
 
@@ -122,6 +118,22 @@ void seed_stream(const string& backend, int device, uint64 seed) {
 }
 
 } // namespace
+
+string encode_cpu_rng_state(uint64 seed, const std::default_random_engine& engine) {
+    std::ostringstream output;
+    output.imbue(std::locale::classic());
+    output << "JITTOR_RNG_1 cpu 0 " << seed << " 0 "
+           << std::default_random_engine::min() << ' '
+           << std::default_random_engine::max() << ' ' << engine;
+    return output.str();
+}
+
+void decode_cpu_rng_state(const string& payload, uint64& seed,
+                          std::default_random_engine& engine) {
+    const auto parsed = parse_state(payload, "cpu", 0);
+    seed = parsed.seed;
+    engine = parsed.engine;
+}
 
 AclRngSpan reserve_acl_random(int device, int64 elements) {
     // Kernel launchers already own the executor. Compatibility generator

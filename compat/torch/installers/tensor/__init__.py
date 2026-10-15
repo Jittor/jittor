@@ -15,9 +15,10 @@ from jittor import nn
 
 import numbers
 
-import numpy as np
+import numpy as _numpy
 
 from ...functional import _diff, _torch_norm_impl, _torch_where_select, _trapz
+from ...generator import Generator
 
 from ...grad import _GradDecoratorCtx
 
@@ -42,6 +43,9 @@ from .... import fsdp_hooks as _fsdp_hooks
 from .... import collectives as _collectives
 
 from .reductions import corrcoef
+
+# Shared shape helpers import this module's NumPy binding.
+np = _numpy
 
 register_fidelity(
     "torch.corrcoef", corrcoef, Fidelity.APPROXIMATE,
@@ -635,79 +639,6 @@ def frombuffer(buffer, *, dtype, count=-1, offset=0, requires_grad=False):
             v.requires_grad_(True)
             _torch_register_leaf(v)
         return v
-
-
-class Generator:
-    """Torch API over the existing native CPU engine or CUDA Philox stream.
-
-    State bytes identify this native implementation, not PyTorch or the former
-    NumPy-backed shim. A foreign snapshot is refused rather than reseeded.
-    """
-
-    def __init__(self, device=None):
-        selected = globals()["device"](device or "cpu")
-        if selected.type not in ("cpu", "cuda"):
-            raise NotImplementedError("Generator supports native CPU and CUDA streams only")
-        if selected.type == "cpu":
-            self.device = globals()["device"]("cpu")
-            native_device = "cpu"
-        else:
-            index = selected.index
-            if index is None:
-                index = _builtins.max(int(jt.current_device()), 0)
-            if not jt.has_cuda or not 0 <= index < int(jt.get_device_count()):
-                raise RuntimeError("Generator requires an available CUDA device")
-            self.device = selected
-            native_device = "cuda:%d" % index
-        self._native = jt.Generator(native_device)
-        self.manual_seed(67280421310721)
-
-    def manual_seed(self, seed):
-        from ..core import _normalize_seed
-        seed = _normalize_seed(seed, integer=True)
-        # The native handle stores an int64 bit pattern; CUDA consumes uint64.
-        signed = seed if seed < (1 << 63) else seed - (1 << 64)
-        jt.sync_all(True)
-        self._native.manual_seed(signed)
-        return self
-
-    def get_state(self):
-        from ...context import get_install_context
-        # CPU draws advance on execution; include every lazily issued draw.
-        jt.sync_all(True)
-        payload = self._native.get_state().encode("ascii")
-        owner = get_install_context(jt).target_namespace
-        return owner.tensor(np.frombuffer(payload, dtype=np.uint8).copy(),
-                            dtype=owner.uint8, device="cpu")
-
-    def set_state(self, state):
-        if not isinstance(state, jt.Var) or _jittor_dtype_name(state.dtype) != "uint8":
-            raise TypeError("Generator state must be a CPU ByteTensor")
-        if len(state.shape) != 1 or state.device.type != "cpu":
-            raise TypeError("Generator state must be a one-dimensional CPU ByteTensor")
-        try:
-            payload = state.numpy().tobytes().decode("ascii")
-        except UnicodeDecodeError as error:
-            raise ValueError("Generator state is not a native stream snapshot") from error
-        jt.sync_all(True)
-        self._native.set_state(payload)
-        return self
-
-    def seed(self):
-        jt.sync_all(True)
-        return int(self._native.seed()) & ((1 << 64) - 1)
-
-    def initial_seed(self):
-        return int(self._native.initial_seed()) & ((1 << 64) - 1)
-
-    def __getstate__(self):
-        return self.get_state()
-
-    def __setstate__(self, state):
-        self.set_state(state)
-
-    def __reduce__(self):
-        return type(self), (str(self.device),), self.get_state()
 
 
 class layout:  # torch.layout placeholder

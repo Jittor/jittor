@@ -83,6 +83,7 @@
 2026-10-15-trellis-model-validation
 2026-10-15-pytree-transformers-513
 2026-10-15-rng-native-generator-contract
+2026-10-15-default-generator-state-contract
 2026-10-15-rmsnorm-triton-alias
 ```
 
@@ -148,3 +149,4 @@
 | [FSDP 兼容层优化器生命周期](2026-10-15-fsdp-compat-lifecycle.md) | 优化器参数替换与原生模块 checkpoint 分派修复，CPU/CUDA 与双 rank 定向复验 | 2026-10-15 |
 | [jtrun 固定节点控制面](2026-10-15-native-multinode-control-plane.md) | 单机双 agent 的真实 CUDA 通信、FSDP 新进程续训与故障退出通过；真实多 host 待验 | 2026-10-15 |
 | [H3 上游 CUDA 梯度边界](2026-10-15-h3-autograd-boundary.md) | 真 Torch 与候选端 eval/train 均缺完整梯度；定位上游推理内核，无完整模型 L2/L3 授级 | 2026-10-15 |
+| [默认生成器状态与设备隔离](2026-10-15-default-generator-state-contract.md) | CPU 状态互换、私有副本与实际 CUDA 流隔离通过；保留原生 frame 和旧快照读取 | 2026-10-15 |

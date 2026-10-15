@@ -20,6 +20,11 @@ struct RuntimeRngState {
 };
 
 EXTERN_LIB RuntimeRngState& runtime_rng_state();
+// Shared CPU state wire format for the global and explicitly owned engines.
+// Parsing is pure and commits neither engine until every field is validated.
+EXTERN_LIB string encode_cpu_rng_state(uint64 seed, const std::default_random_engine& engine);
+EXTERN_LIB void decode_cpu_rng_state(const string& payload, uint64& seed,
+                                     std::default_random_engine& engine);
 struct AclRngSpan { int64 seed; int64 offset; };
 // Atomically reserves counters from the selected device stream. Callers may
 // already own the executor (kernel launchers) or enter from a host generator.

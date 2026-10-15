@@ -33,6 +33,7 @@ from ..types import (
     SymBool, SymFloat, SymInt,
 )
 from ..core_install_api import bind_core_install_api
+from ..generator import Generator as _Generator
 from ..fidelity import Fidelity, register_fidelity
 from ...diagnostics import EXPECTED, swallowed
 from ...transaction import set_flag
@@ -412,6 +413,12 @@ def _manual_seed(s):
     jt.core._set_seed64(value)
     ctx.state["core_misc"]["seed"] = value
     return ctx.target_namespace.default_generator
+
+
+def _manual_seed_cpu(s):
+    value = _normalize_seed(s, integer=True)
+    jt.core.rng_manual_seed("cpu", value)
+    _misc_context().state["core_misc"]["seed"] = value
 
 
 def _torch_seed():
@@ -1051,46 +1058,6 @@ _STORAGE_TYPES = (
     ByteStorage,
     BoolStorage,
 )
-class _DefaultGenerator:
-    """`torch.default_generator`: a handle on the *global* CPU generator.
-
-    Deliberately not a `Generator` instance. That class owns a private stream
-    so that two generators seeded alike agree whatever the process has already
-    done -- which is exactly what the default generator must *not* do, because
-    `torch.manual_seed(n)` seeds this one and `torch.get_rng_state()` is its
-    state. So this delegates and holds nothing; anything else would let the two
-    drift apart.
-
-    Missing entirely before, and the shim's namespace reports a missing name by
-    raising `AttributeError(name)`, so MiniMax-H3's reference path failed with
-    a bare `default_generator` and nothing to say where it came from.
-    """
-
-    @property
-    def device(self):
-        return _torch_device_misc("cpu")
-
-    def manual_seed(self, value):
-        manual_seed(value)
-        return self
-
-    def initial_seed(self):
-        return initial_seed()
-
-    def seed(self):
-        return seed()
-
-    def get_state(self):
-        return get_rng_state()
-
-    def set_state(self, state):
-        set_rng_state(state)
-        return self
-
-    def __repr__(self):
-        return "<torch.Generator object (default, device=cpu)>"
-
-
 def _torch_device_misc(spelling):
     """A device object, taken from the install context, not the module registry.
 
@@ -1184,7 +1151,7 @@ _MISC_BINDINGS = {
     "get_rng_state": get_rng_state,
     "set_rng_state": set_rng_state,
     "fork_rng": fork_rng,
-    "default_generator": _DefaultGenerator(),
+    "default_generator": _Generator._from_global_cpu(),
     "is_tensor": is_tensor,
     "numel": numel,
     "PyTorchFileReader": PyTorchFileReader,
