@@ -11,6 +11,7 @@
 ```{toctree}
 :maxdepth: 1
 
+2026-10-15-transformers-installed-source-training
 2026-10-15-verl-installed-source-training
 2026-10-15-size-factory-leaves
 2026-10-15-tensor-rng-inplace

@@ -442,6 +442,7 @@ include docs/results/2026-10-15-tanh-fsdp-bfloat16.md
 include docs/results/2026-10-15-tensor-detach-and-factory-leaf.md
 include docs/results/2026-10-15-tensor-rng-inplace.md
 include docs/results/2026-10-15-training-registry-denominators.md
+include docs/results/2026-10-15-transformers-installed-source-training.md
 include docs/results/2026-10-15-transformers-model-family-matrix.md
 include docs/results/2026-10-15-trellis-model-validation.md
 include docs/results/2026-10-15-upstream-pr-disposition.md
@@ -951,6 +952,7 @@ include tools/release/test_check_wheel_contents.py
 include tools/run_accelerate_gate.py
 include tools/run_peft_gate.py
 include tools/run_test_suite.py
+include tools/run_transformers_gate.py
 prune compat
 prune adapters
 prune build
