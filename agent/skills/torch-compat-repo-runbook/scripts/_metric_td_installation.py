@@ -141,8 +141,8 @@ def validate_measurement_source(value, baseline):
             'Component measurement source differs from committed framework bytes')
 
 
-def validate_runtime_metadata(value, baseline, expected_platform=None):
-    validate_measurement_source(value, baseline)
+def validate_runtime_metadata(value, baseline, expected_platform=None, *, source_validator=None):
+    (validate_measurement_source if source_validator is None else source_validator)(value, baseline)
     runtime, device = value.get('runtime'), value.get('device')
     require(runtime in ('torch', 'jittor') and device in ('cpu', 'cuda'), 'Wrong component runtime/device')
     identity = value.get('interpreter', {})

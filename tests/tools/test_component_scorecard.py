@@ -90,17 +90,17 @@ def test_array_comparison_refuses_incomplete_or_invalid_gradients(tmp_path, fail
 
 
 def test_actual_installed_sources_are_hashed_and_corruption_refused(tmp_path, measurement):
-    # Metrics/TD now require official wheel proof; this checks the generic source
-    # hashing path, while test_metric_td_installation covers their stricter path.
-    package = tmp_path / 'diffusers'
+    # Test the generic hashing helper; real library installation profiles have
+    # separate fixed-wheel/source/receipt tests, including Diffusers.
+    package = tmp_path / 'fixture_component'
     package.mkdir()
     path = package / '__init__.py'
-    path.write_text('__version__ = "0.35.1"\n')
+    path.write_text('__version__ = "0.0.0"\n')
     (package / 'binary.so').write_bytes(b'actual installed bytes')
-    source = {'repo': 'diffusers', 'upstream': {'version': '0.35.1'},
-              'package_sources': [{'path': 'src/diffusers/__init__.py',
+    source = {'repo': 'fixture_component', 'upstream': {'version': '0.0.0'},
+              'package_sources': [{'path': 'src/fixture_component/__init__.py',
                                    'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}]}
-    module = SimpleNamespace(__file__=str(path), __version__='0.35.1')
+    module = SimpleNamespace(__file__=str(path), __version__='0.0.0')
     observed = measurement.installed_distribution(source, module)
     assert set(observed['installed_files_sha256']) == {'__init__.py', 'binary.so'}
     path.write_text('changed source\n')
