@@ -209,7 +209,92 @@ Layout, generated manifest, Ruff and whitespace checks pass.
 
 The maintainer independently rehashed all 313 nightly evidence files and all
 1033 OpenMMLab evidence files: no mismatches. Original failed attempts and
-measurement/source identities are preserved. New isolated maintained numerical
-runs at c4935 are in progress; these integration checks do not relabel the old
-numerical results as c4935 measurements. Unversioned integration records are in
+measurement/source identities are preserved. The isolated maintained numerical
+runs and their independently retained output are documented below; integration
+checks do not relabel the original numerical measurements. Unversioned integration records are in
 `$JITTOR_LAB_ROOT/_state/maintained-gates-main-integration-cd7/`.
+
+
+## Persistent maintained-output replay
+
+On 2026-10-16, clean `0ccc36c3c6075268f1ec7e22f57879436b42f55b` passed
+both complete maintained nodes on CPU (**2 passed / 0 skipped**, 103.62 s)
+and CUDA (**2 passed / 0 skipped**, 115.75 s). This source combines published
+`0f2f9481cd59072cc02a1edff4bc16bc12d1b071` with the exact helper and OpenMMLab
+production bytes in `cc86b8674f713b1924affb954aecfc6fad6bd57a` and
+`a486108543eda4f0985f3a69f80077df220a88de`. These runtimes are test durations,
+not performance evidence. The upstream pins, complete training scope, original
+budgets, independent Torch provider, precision and zero-fallback checks remain
+as described above. No additional coverage or L level is granted.
+
+The optional `JITTOR_OPENMMLAB_EVIDENCE_DIR` retains normal final producer output
+under `<root>/<device>/<case>`. The generic `artifact_directory` helper requires
+an absolute path outside every Git checkout and creates each leaf exclusively;
+an existing leaf is refused. Without the variable, temporary cleanup remains
+the default. Persistent output must also be outside nox session scratch because
+the next session clears that scratch. Failed comparisons retain their raw files
+without a successful completion record. Only after all seed-0/7/19 and training
+comparisons, perturbation gradients and initial-weight checks pass does the
+caller write `maintained-gate-result.json` containing the four actual final
+comparisons. Host negatives verify these boundaries, including successful worker
+exit with failed numerical comparison.
+
+Each device retained 36 final files directly, without polling: 16 metadata JSON,
+18 NPZ (including two initial-state archives), and two completion records. An
+independent host audit reread all final files through the unchanged comparator:
+**462 array pairs, 32 complete runtime metadata packets and 956 physical tensor
+observations** pass. Every completion record exactly matches its independently
+recomputed four comparisons. All 41 initial-state and training input/target
+fields are exactly equal between CPU and CUDA. All 36 CPU files retain their
+hashes after the subsequent CUDA nox session. A post-run provider check also
+verifies **11,842 / 11,842** original official wheel files, including RECORD;
+this fresh private extraction and its complete proof are distinct from the
+older 11,841-file installation above. Shared package installations were not
+modified and unit/benchmark caches remain separate.
+
+The earlier unchanged c4935 maintained executions also passed: initial CPU
+2/0 (178.61 s), warm CPU 2/0 (103.44 s), and CUDA 2/0 (422.53 s). Their attempted
+external temporary-file archive is preserved as diagnostic evidence: the CPU
+archives missed final files or captured pre-binding metadata, so they are not
+claimed as complete retained CPU source proof. The CUDA final archive passed
+its independent 231-pair audit. The explicit persistent-output replay above
+replaces polling for retained evidence; none of those earlier raw files or
+source identities was rewritten.
+
+The helper/OpenMMLab changes pass 25 focused host tests, Ruff and layout checks.
+Complete source structure validation passes **1624 / 4 skipped**; the fresh
+private core installation enables two native-distribution checks skipped in
+the integrating maintainer's earlier 1622 / 6 result. This change adds directory
+ownership and evidence retention, with no training mathematics or fixture change.
+
+Unversioned artifacts are under
+`$JITTOR_LAB_ROOT/_state/openmmlab-integration-c4935/20261016-persistent/`:
+`mm-nox-{cpu,cuda}-v2.command.json`, `maintained-output/`,
+`independent-{cpu,cuda}-audit-v1.json`,
+`cross-device-and-retention-proof-v1.json` and `frozen-source-v1.json` (493 files).
+The twice-reread final seal, `persistent-final-manifest-v1.json`, binds
+**88 files / 14,503,356 bytes**, including all 72 final raw files:
+SHA256 `2ddfd200da7c74e578b87fd2bd32bca7726a9a392b30449ea727b65b807b2821`.
+It also binds the complete provider proof and the previous stage's immutable
+630-file manifest, whose SHA256 remains
+`0f437f9bfe496efc4ee092257cd1fb760a5aac7e45b1d756d6827c473f5de174`.
+All 630 previous-stage files, all 493 measured source files and all provider
+files were rehashed successfully before sealing. The original four scorecard
+rows retain their measured 9345 identity.
+
+
+### Central persistent-output integration verification
+
+The integrating maintainer independently reread all 88 sealed files (14,503,356
+bytes), recomputed both unchanged complete CPU/CUDA protocols (231 array pairs,
+16 metadata packets and 478 observations per device), and rehashed the complete
+11,842-file genuine Torch provider and its original wheel: zero mismatches.
+This host recomputation used the actual clean measured source `0ccc36c3c`;
+it does not relabel those measurements as an integration run.
+
+On integrated `9bee3b603`, the 25 focused host tests pass, canonical core reports
+322 passed / 42 skipped / 1 existing xfail, and complete structure reports
+1622 passed / 6 skipped in 209.99 seconds. Layout, generated MANIFEST, Ruff
+0.15.22 and whitespace checks pass. These results are separate from the earlier
+1624/4 source-tree check above. Unversioned central evidence is under
+`$JITTOR_LAB_ROOT/_state/openmmlab-persistent-root-integration-ffbb/`.
