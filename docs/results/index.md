@@ -15,6 +15,7 @@
 2026-10-15-tensor-rng-inplace
 2026-10-15-swift-trainer-installed-source
 2026-10-15-peft-installed-source-training
+2026-10-15-nn-init-trainability-copy
 2026-10-15-nn-init-generator
 2026-10-15-release-installed-source-proof
 2026-08-28-ascend-910b-validation
