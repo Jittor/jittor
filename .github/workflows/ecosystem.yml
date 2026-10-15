@@ -66,3 +66,54 @@ jobs:
           # half skips itself and the gate would be green having measured nothing.
           JITTOR_ECOSYSTEM_LARGE: "1"
         run: python -m nox -s ecosystem
+
+  maintained-cpu:
+    needs: baseline
+    name: nox / ecosystem_${{ matrix.library }} / CPU
+    runs-on: ${{ needs.baseline.outputs.host_runner }}
+    container:
+      image: ${{ needs.baseline.outputs.cpu_ci_image }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        library: [peft, swift]
+    steps:
+      - name: Check out measured source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install native CPU and source-provenance toolchain
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends build-essential libomp-dev git ca-certificates
+      - name: Set up pinned gate Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ needs.baseline.outputs.python_version }}
+      # Separate clean environments: the candidate has Jittor + jittor-torch;
+      # only the independent oracle receives the pinned official CPU Torch.
+      # The existing sessions enforce required nodes, full gradients/training,
+      # clean upstream and complete actual installed wheel payload identities.
+      - name: Provision pins and run complete maintained CPU gate
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          python tools/provision_ecosystem_nightly.py \
+            --library "${{ matrix.library }}" \
+            --state-root "${RUNNER_TEMP}/maintained-${{ matrix.library }}" --run
+      - name: Retain provenance and failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: maintained-${{ matrix.library }}-cpu
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/maintained-${{ matrix.library }}/logs/
+            ${{ runner.temp }}/maintained-${{ matrix.library }}/commands.json
+            ${{ runner.temp }}/maintained-${{ matrix.library }}/provision.json
+            ${{ runner.temp }}/maintained-${{ matrix.library }}/upstream-proof.json
+            ${{ runner.temp }}/maintained-${{ matrix.library }}/swift-inventory.json
+            ${{ runner.temp }}/maintained-${{ matrix.library }}/resolved-lock-*.txt
+            ${{ runner.temp }}/maintained-${{ matrix.library }}/lab/_state/nox/**/measurements/**
