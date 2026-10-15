@@ -1,5 +1,4 @@
 """Dedicated real DeepSpeed Engine gate, separate from ordinary model cases."""
-import json
 import os
 from pathlib import Path
 import subprocess
@@ -9,10 +8,9 @@ import numpy as np
 import pytest
 
 from _helpers.child_process import PYTHON, run_python_child
+from _ecosystem_deepspeed_comparison import _compare_engine_outputs
 from _ecosystem_harness import (
-    REAL_TORCH_PYTHON, _comparison_floor, _distributions_available,
-    _divergence, _enabled, _runner_package_site, _versions,
-    EcosystemComparison,
+    REAL_TORCH_PYTHON, _distributions_available, _enabled, _runner_package_site,
 )
 
 _RUNNER = Path(__file__).with_name("_ecosystem_deepspeed_runner.py")
@@ -51,36 +49,6 @@ def _run_engine(python, runtime, output, optimizer, zero_stage, perturbation):
     assert output.is_file(), "DeepSpeed Engine runner did not write its observations"
 
 
-def _compare_engine_outputs(actual, reference):
-    assert set(actual.files) == set(reference.files), "DeepSpeed observation schema differs"
-    ours = json.loads(str(actual["metadata"]))
-    theirs = json.loads(str(reference["metadata"]))
-    assert ours["runtime"] == "jittor" and theirs["runtime"] == "torch"
-    assert theirs["torch_binary"].endswith((".so", ".pyd"))
-    assert _versions(ours) == _versions(theirs)
-    for key in ("device", "world_size", "optimizer", "zero_stage", "perturbation",
-                "engine_class", "parameter_gradients_per_microstep", "input_gradients_per_microstep",
-                "microsteps", "global_steps", "runtime_conditions", "optimizer_groups"):
-        assert ours[key] == theirs[key], "DeepSpeed protocol differs: " + key
-    assert ours["device"] == _DEVICE and ours["world_size"] == 1
-    assert ours["fallback_policy"] == "error" and ours["fallback_count"] == 0
-    assert bool(ours["backend"]["use_cuda"]) == (_DEVICE == "cuda")
-    keys = [key for key in actual.files if key != "metadata"]
-    gradient_keys = [key for key in keys if "_grad/" in key]
-    forward_keys = [key for key in keys if key not in gradient_keys]
-    errors = {}
-    for category, group, tolerance in (
-            ("forward_and_state", forward_keys, EcosystemComparison.forward_tolerance),
-            ("gradients", gradient_keys, EcosystemComparison.backward_tolerance)):
-        assert group, "DeepSpeed runner omitted " + category
-        floor = _comparison_floor(reference, group)
-        for key in group:
-            assert actual[key].shape == reference[key].shape, key
-            assert np.isfinite(actual[key]).all() and np.isfinite(reference[key]).all(), key
-            difference = _divergence(actual[key], reference[key], floor)
-            assert difference <= tolerance, (key, difference, tolerance)
-            errors[category] = max(errors.get(category, 0), difference)
-    return errors
 
 
 @pytest.mark.parametrize("zero_stage", (0, 1, 2))

@@ -67,3 +67,45 @@ def test_engine_session_rejects_incomplete_hardware_configuration(monkeypatch, t
     with pytest.raises(AssertionError, match="DeepSpeed"):
         module["ecosystem_deepspeed"](session)
     assert not session.calls, "Invalid configuration must fail before any interpreter or installer runs"
+
+
+@pytest.mark.parametrize("invalid", ("cpu", "single", "duplicate", "artifacts"))
+def test_multirank_session_rejects_incomplete_protocol_before_install(monkeypatch, tmp_path, invalid):
+    monkeypatch.setenv("REAL_TORCH_PYTHON", "/opt/oracle/bin/python")
+    monkeypatch.setenv("JITTOR_TEST_DEVICES", "cuda")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1")
+    monkeypatch.setenv("JITTOR_DEEPSPEED_MULTIRANK_ROOT", str(tmp_path / "artifacts"))
+    if invalid == "cpu":
+        monkeypatch.setenv("JITTOR_TEST_DEVICES", "cpu")
+    elif invalid == "single":
+        monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
+    elif invalid == "duplicate":
+        monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,0")
+    else:
+        monkeypatch.delenv("JITTOR_DEEPSPEED_MULTIRANK_ROOT")
+    module = _load_noxfile(monkeypatch, tmp_path)
+    session = _FakeSession(tmp_path, "/opt/native/bin/python3-config")
+    session.python = False
+    with pytest.raises(AssertionError, match="DeepSpeed"):
+        module["ecosystem_deepspeed_multirank"](session)
+    assert not session.calls
+
+
+def test_multirank_session_runs_dedicated_two_rank_protocol(monkeypatch, tmp_path):
+    monkeypatch.setenv("REAL_TORCH_PYTHON", "/opt/oracle/bin/python")
+    monkeypatch.setenv("JITTOR_CI_PYTHON", "/opt/native/bin/python")
+    monkeypatch.setenv("JITTOR_TEST_DEVICES", "cuda")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1")
+    monkeypatch.setenv("JT_BUILD_NVCC_PATH", "/opt/cuda/bin/nvcc")
+    artifacts = str(tmp_path / "artifacts")
+    monkeypatch.setenv("JITTOR_DEEPSPEED_MULTIRANK_ROOT", artifacts)
+    module = _load_noxfile(monkeypatch, tmp_path)
+    session = _FakeSession(tmp_path, "/opt/native/bin/python3-config")
+    session.python = False
+    module["ecosystem_deepspeed_multirank"](session)
+    execution = next((args, kw) for args, kw in session.calls if "pytest" in args)
+    args, env = execution[0], execution[1]["env"]
+    assert "compat/tests/torch/test_ecosystem_deepspeed_multirank.py" in args
+    assert env["CUDA_VISIBLE_DEVICES"] == "0,1"
+    assert env["JITTOR_REQUIRE_DEEPSPEED_MULTIRANK"] == "1"
+    assert env["JITTOR_DEEPSPEED_MULTIRANK_ROOT"] == artifacts

@@ -10,7 +10,7 @@ import json
 import os
 import numbers
 from pathlib import Path
-import socket
+import subprocess
 import tempfile
 
 import numpy as np
@@ -20,6 +20,7 @@ from _ecosystem_runner import (
     _numpy_snapshot, _runtime_conditions, _select_device, _synchronize,
 )
 import _ecosystem_deepspeed_cases as cases
+from _ecosystem_deepspeed_multirank import file_rendezvous
 
 
 def _snapshot(value):
@@ -30,9 +31,11 @@ def _snapshot(value):
     return _numpy_snapshot(value)
 
 
-def _assert_device(value, device, runtime):
+def _assert_device(value, device, runtime, dtype=None):
     if value.device.type != device:
         raise AssertionError("DeepSpeed tensor is on %s, requested %s" % (value.device, device))
+    if dtype is not None and value.dtype != dtype:
+        raise AssertionError("DeepSpeed gradient dtype %s differs from requested %s" % (value.dtype, dtype))
     if runtime == "jittor":
         value.sync()
         if value.location() != ("device" if device == "cuda" else "cpu"):
@@ -72,7 +75,41 @@ def _snapshot_partitions(torch, optimizer, model, args, arrays, prefix):
     return sizes
 
 
-def _microstep(torch, deepspeed, engine, args, index, arrays, prefix, incoming):
+def _full_gradient_dtype(torch, parameter):
+    # Upstream safe_get_full_grad returns an existing param.grad directly.
+    # BF16_Optimizer retains it in bf16; the partitioned ZeRO2 getter returns
+    # the configured fp32 accumulation storage when param.grad is absent.
+    gradient = parameter.grad
+    return gradient.dtype if gradient is not None else torch.float32
+
+
+def _assert_strict_resume(arrays, gradient_dtypes=None):
+    count = 0
+    for before, after in (("saved_optimizer/", "restored_optimizer/"),
+                          ("saved_master_partition/", "restored_master_partition/"),
+                          ("final_optimizer/", "resumed_optimizer/"),
+                          ("final_master_partition/", "resumed_master_partition/"),
+                          ("step4/", "resumed4/"), ("step5/", "resumed5/")):
+        left = {key[len(before):] for key in arrays if key.startswith(before)}
+        right = {key[len(after):] for key in arrays if key.startswith(after)}
+        if not left or left != right:
+            raise AssertionError("Incomplete strict resume schema: " + before)
+        for suffix in left:
+            np.testing.assert_array_equal(arrays[before + suffix], arrays[after + suffix],
+                                          err_msg=before + suffix)
+            if gradient_dtypes is not None and "_grad/" in suffix:
+                if gradient_dtypes[before + suffix] != gradient_dtypes[after + suffix]:
+                    raise AssertionError("Resumed gradient dtype differs: " + before + suffix)
+            count += 1
+    changed = sum(np.count_nonzero(arrays[key] != arrays[
+        "final_master_partition/" + key[len("saved_master_partition/"):]])
+                  for key in arrays if key.startswith("saved_master_partition/"))
+    if not changed:
+        raise AssertionError("DeepSpeed's final optimizer step did not update a master partition")
+    return count, int(changed)
+
+
+def _microstep(torch, deepspeed, engine, args, index, arrays, prefix, incoming, gradient_dtypes):
     incoming.clear()
     inputs = torch.arange(16, dtype=torch.float32, device=engine.device).reshape(2, 8)
     perturbation = args.perturbation + .125 * args.rank
@@ -94,12 +131,15 @@ def _microstep(torch, deepspeed, engine, args, index, arrays, prefix, incoming):
     for name, value in (("inputs", inputs), ("target", target)):
         if value.grad is None:
             raise AssertionError("Missing requested DeepSpeed input gradient: " + name)
-        _assert_device(value.grad, args.device, args.runtime)
-        arrays[prefix + "/input_grad/" + name] = _snapshot(value.grad)
+        _assert_device(value.grad, args.device, args.runtime, value.dtype)
+        key = prefix + "/input_grad/" + name
+        arrays[key] = _snapshot(value.grad)
+        gradient_dtypes[key] = str(value.grad.dtype).rsplit(".", 1)[-1]
     for name, parameter in engine.module.named_parameters():
         if name not in incoming:
             raise AssertionError("DeepSpeed did not compute the requested parameter gradient: " + name)
-        arrays[prefix + "/incoming_parameter_grad/" + name] = incoming[name]
+        key = prefix + "/incoming_parameter_grad/" + name
+        arrays[key], gradient_dtypes[key] = incoming[name]
         # ZeRO 2 exposes full accumulated gradients only at the GAS boundary.
         # Observe every microstep's incoming gradients through real public
         # Tensor hooks; request partitioned accumulated storage when upstream
@@ -109,8 +149,11 @@ def _microstep(torch, deepspeed, engine, args, index, arrays, prefix, incoming):
         gradient = deepspeed.utils.safe_get_full_grad(parameter)
         if gradient is None:
             raise AssertionError("Missing requested DeepSpeed parameter gradient: " + name)
-        _assert_device(gradient, args.device, args.runtime)
-        arrays[prefix + "/parameter_grad/" + name] = _snapshot(gradient)
+        expected = _full_gradient_dtype(torch, parameter)
+        _assert_device(gradient, args.device, args.runtime, expected)
+        key = prefix + "/parameter_grad/" + name
+        arrays[key] = _snapshot(gradient)
+        gradient_dtypes[key] = str(gradient.dtype).rsplit(".", 1)[-1]
     engine.step()
     for name, parameter in engine.module.named_parameters():
         arrays[prefix + "/parameter/" + name] = _snapshot(parameter)
@@ -150,16 +193,16 @@ def _execute(args):
         if args.rendezvous:
             rendezvous = args.rendezvous
         else:
-            with socket.socket() as listener:
-                listener.bind(("127.0.0.1", 0))
-                port = listener.getsockname()[1]
-            rendezvous = "tcp://127.0.0.1:%d" % port
+            directory = stack.enter_context(tempfile.TemporaryDirectory(
+                prefix="deepspeed-rendezvous-"))
+            rendezvous = file_rendezvous(directory)
         deepspeed.init_distributed(
             dist_backend="nccl" if args.device == "cuda" else "gloo",
             auto_mpi_discovery=False, init_method=rendezvous,
             rank=args.rank, world_size=args.world_size,
         )
         arrays = {}
+        gradient_dtypes = {}
         def initialize():
             original = cases.model(torch)
             configuration = cases.config(args.optimizer, args.zero_stage)
@@ -178,9 +221,9 @@ def _execute(args):
                 raise AssertionError("Training did not use the real upstream DeepSpeedEngine")
             incoming = {}
             for name, parameter in engine.module.named_parameters():
-                def observe(gradient, name=name):
-                    _assert_device(gradient, args.device, args.runtime)
-                    incoming[name] = _snapshot(gradient)
+                def observe(gradient, name=name, dtype=parameter.dtype):
+                    _assert_device(gradient, args.device, args.runtime, dtype)
+                    incoming[name] = (_snapshot(gradient), str(gradient.dtype).rsplit(".", 1)[-1])
                 stack.callback(parameter.register_hook(observe).remove)
             return engine, optimizer, incoming
         try:
@@ -189,7 +232,8 @@ def _execute(args):
                                   else tempfile.TemporaryDirectory(prefix="deepspeed-checkpoint-"))
             with checkpoint_context as checkpoint:
                 for index in range(6):
-                    _microstep(torch, deepspeed, engine, args, index, arrays, "step%d" % index, incoming)
+                    _microstep(torch, deepspeed, engine, args, index, arrays, "step%d" % index,
+                               incoming, gradient_dtypes)
                     if index == 3:
                         if engine.global_steps != 2:
                             raise AssertionError("Gradient accumulation did not produce two updates")
@@ -213,7 +257,8 @@ def _execute(args):
                         restored_key = "restored_" + key[len("saved_"): ]
                         np.testing.assert_array_equal(arrays[restored_key], arrays[key])
                 for index in (4, 5):
-                    _microstep(torch, deepspeed, resumed, args, index, arrays, "resumed%d" % index, resumed_incoming)
+                    _microstep(torch, deepspeed, resumed, args, index, arrays, "resumed%d" % index,
+                               resumed_incoming, gradient_dtypes)
                     for suffix in ("output", "loss"):
                         np.testing.assert_array_equal(arrays["resumed%d/" % index + suffix],
                                                       arrays["step%d/" % index + suffix])
@@ -224,6 +269,7 @@ def _execute(args):
                 _snapshot_partitions(torch, resumed_optimizer, resumed.module, args, arrays, "resumed_master_partition")
                 if resumed.global_steps != 3:
                     raise AssertionError("Resumed training did not advance its update count")
+                strict_fields, changed_elements = _assert_strict_resume(arrays, gradient_dtypes)
             _synchronize(torch, args.runtime, args.device)
             fallback_count = (jt.core.backend_fallback_count() - initial_fallbacks
                               if args.runtime == "jittor" else 0)
@@ -231,6 +277,7 @@ def _execute(args):
                 "runtime": args.runtime, "device": args.device, "world_size": args.world_size,
                 "rank": args.rank, "dtype": args.dtype,
                 "optimizer_partition_sizes": partition_sizes,
+                "model_parameter_elements": sum(int(value.numel()) for value in engine.module.parameters()),
                 "optimizer_class": type(optimizer).__module__ + "." + type(optimizer).__name__,
                 "optimizer": args.optimizer, "zero_stage": args.zero_stage,
                 "perturbation": args.perturbation, "engine_class": type(engine).__module__ + "." + type(engine).__name__,
@@ -241,6 +288,15 @@ def _execute(args):
                 "fallback_policy": "error", "fallback_count": fallback_count,
                 "optimizer_groups": groups, "torch_version": str(torch.__version__),
                 "torch_origin": str(torch.__file__),
+                "strict_resume_fields": strict_fields, "updated_master_elements": changed_elements,
+                "gradient_dtypes": gradient_dtypes,
+                "trainable_parameters": sorted(name for name, value in engine.module.named_parameters()
+                                                if value.requires_grad),
+                "frozen_parameters": sorted(name for name, value in engine.module.named_parameters()
+                                             if not value.requires_grad),
+                "jittor_commit": subprocess.check_output(
+                    ["git", "-C", str(Path(__file__).resolve().parents[3]), "rev-parse", "HEAD"],
+                    text=True).strip(),
             }
             if args.runtime == "torch":
                 metadata["torch_binary"] = str(torch._C.__file__)

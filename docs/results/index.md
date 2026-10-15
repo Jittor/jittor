@@ -65,6 +65,7 @@
 2026-10-15-cuda-extension-philox
 2026-10-15-flash-attention-training-oracles
 2026-10-15-deepspeed-bfloat16-multirank
+2026-10-15-deepspeed-maintained-gate
 2026-10-15-tanh-fsdp-bfloat16
 2026-10-15-trellis-model-validation
 2026-10-15-pytree-transformers-513
@@ -118,6 +119,7 @@
 | [CUDA 扩展 Philox 状态](2026-10-15-cuda-extension-philox.md) | 实际 CUDA RNG 重放与融合 FlashAttention 训练回归；独立 Torch 对拍仍待验 | 2026-10-15 |
 | [FlashAttention 公开训练 API 对拍](2026-10-15-flash-attention-training-oracles.md) | 六入口历史 48 轨迹及正式 12 CUDA 场景通过；统一 L3 记录已验，CPU 阶梯缺失使广度仍 0/7 | 2026-10-15 |
 | [DeepSpeed 双卡 BF16 训练与恢复](2026-10-15-deepspeed-bfloat16-multirank.md) | ZeRO1/2 的 AdamW 三步训练、完整梯度与严格续训已验；限定小模型与实际 CUDA 双卡 | 2026-10-15 |
+| [DeepSpeed 维护门禁与 CPU 状态舍入](2026-10-15-deepspeed-maintained-gate.md) | 双卡 BF16 四格及 CPU/CUDA 各 12 项训练续训通过；修复 CPU Adam 状态取值顺序差异 | 2026-10-15 |
 | [tanh 反向与原生 FSDP BF16 对拍](2026-10-15-tanh-fsdp-bfloat16.md) | 修复低精度保存输出求导；固定双卡 BF16 的 80 个参数梯度逐位对齐，续训 368 数组逐位一致 | 2026-10-15 |
 | [TRELLIS.2 真实模型训练对拍](2026-10-15-trellis-model-validation.md) | 三个真实模型的 CPU/CUDA 三步训练、全部梯度和独立扰动通过；统一 models 广度各 3/9 | 2026-10-15 |
 | [自定义 pytree 与 Transformers 5.13.0](2026-10-15-pytree-transformers-513.md) | 自定义节点与键路径修复；固定 GPT2 的 CPU/CUDA 三步、全部参数和输入梯度通过 | 2026-10-15 |

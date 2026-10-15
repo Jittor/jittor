@@ -11,6 +11,10 @@
 
 ## Scope and independent reference
 
+The later [maintained gate acceptance](2026-10-15-deepspeed-maintained-gate.md)
+adds the two-input-perturbation matrix, exclusive FileStore bootstrap and CPU
+Adam strict-resume correction. This earlier report keeps its measured source pin.
+
 The real upstream `DeepSpeedEngine` executed backward, optimizer steps, save,
 fresh-Engine load, and continued training on two CUDA devices. Both ranks used
 BF16 model/input tensors, FP32 communication and optimizer master partitions,

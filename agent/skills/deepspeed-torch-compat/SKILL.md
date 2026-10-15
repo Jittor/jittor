@@ -25,7 +25,12 @@ SHA256，未知版本、源码变更或导入后激活均拒绝。
 公开 full gradient getter 只在 GAS 边界使用。输出、loss、全部 input/parameter gradient、
 更新后的参数及优化器矩状态/step 必须与独立 oracle 对齐。
 
-**单 rank 不证明多 rank 分区或 NCCL 归约。** bf16、实际双 rank 训练/分区/恢复另行验收。
+**单 rank 不证明多 rank 分区或 NCCL 归约。** 双 rank BF16 使用独立入口
+`nox -s ecosystem_deepspeed_multirank`，对应
+`compat/tests/torch/test_ecosystem_deepspeed_multirank.py`：ZeRO 1/2 × AdamW ×
+输入扰动 0/.125，两个 rank 使用不同输入且实际分区 FP32 master optimizer storage。
+它复用原 Engine runner、数值判据与独立 oracle；不把 world-one FP32 CPU 记录
+充作 world-two BF16 的 CPU 阶梯，也不计入缺少同规格 CPU 场景的加速覆盖分子。
 该 tiny 模型不授予性能级别，也不代表全部 DeepSpeed optimizer/model API。
 
 ## 环境与执行
@@ -48,6 +53,36 @@ export CUDA_VISIBLE_DEVICES=<allocated-device>
 export JT_BUILD_NVCC_PATH=<real-nvcc>
 python -m nox -s ecosystem_deepspeed
 ```
+
+双卡独立矩阵要求明确分配两张卡和新的仓外产物目录：
+
+```bash
+export JITTOR_TEST_DEVICES=cuda
+export CUDA_VISIBLE_DEVICES=<allocated-device-a>,<allocated-device-b>
+export JITTOR_DEEPSPEED_MULTIRANK_ROOT="$JITTOR_LAB_ROOT/_state/deepspeed/<new-run>"
+python -m nox -s ecosystem_deepspeed_multirank
+```
+
+每格路径包含 stage、optimizer、precision、world size 和扰动；已有 case 目录直接
+拒绝，成功或失败后的原始证据都不能覆盖。每 rank 有独立 HOME/JITTOR_HOME/TMPDIR；
+首次 core/NCCL 扩展预热串行，之后同时启动真实训练 rank。可用
+`JITTOR_DEEPSPEED_MULTIRANK_CACHE_ROOT` 指定本任务独占缓存根，不能与其他活动任务
+或 benchmark 共用。任一 rank 失败或超时会终止并回收其同伴。
+同一 case 的两 rank 共享 communicator rendezvous/heartbeat 目录；它属于控制面，
+不能跟随 HOME/JITTOR_HOME/TMPDIR 按 rank 拆开。各 case 的控制面目录彼此隔离。
+进程组使用每个 case/runtime 独占的 FileStore，单 rank 使用独占临时 FileStore；
+不先释放一个空闲 TCP 端口再尝试监听，避免与其他任务抢端口。显式 CLI rendezvous
+仍可供独立复现使用。FileStore 只负责 bootstrap，CUDA 归约仍须实际使用 NCCL。
+
+`comparison.json` 记录原始 NPZ/log/protocol/source manifest 的哈希。门禁检查全量
+incoming/full/input gradient，以及保存前后和新 Engine 续训后的 master、optimizer
+moments/steps、输出、loss、梯度与模型参数逐位一致；不能仅用恢复后的输出近似通过。
+源码 manifest 覆盖 native、compat、backends、adapters 与 nox，测量结束复核内容和
+commit 未变。独立 oracle 的二进制身份、实际 optimizer 类、dtype、world size、分区大小
+均在两端元数据中复核，CUDA fallback 必须为零。
+逐个梯度字段记录实际 dtype 并跨运行时严格相等；`safe_get_full_grad` 在 ZeRO1
+BF16_Optimizer 存有 `param.grad` 时可能直接返回 BF16，而 ZeRO2 的分区 getter
+返回本规格的 FP32 accumulation storage，不能把两条上游路径都断言为 FP32。
 
 分离安装的下游包可通过 `JITTOR_ECOSYSTEM_PACKAGE_SITE` 和
 `JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE` 指定。独立 oracle 必须已经能导入 binary
@@ -84,5 +119,8 @@ Review when: DeepSpeed 六个钉死源码文件、native autograd/holder、Modul
 optimizer state、compat public `gradient_task.participating_tensors`、`owned_runtime_hook`、
 `transaction` 或 `module_patcher` 改变。详细的维护者结论在
 [单 rank FP32 Engine 验收报告](../../../docs/results/2026-10-15-deepspeed-zero-engine.md)。
-报告绑定原始计算基线、独立 CPU/CUDA oracle 与主线整合验证；不代表双 rank bf16
-验收已经完成。原始日志不版本化。
+报告绑定原始计算基线、独立 CPU/CUDA oracle 与主线整合验证。双 rank BF16 的独立
+源码及硬件边界见[多卡验证报告](../../../docs/results/2026-10-15-deepspeed-bfloat16-multirank.md)。
+维护入口、CPU Adam 舍入边界、FileStore 控制面及最终 clean-source 四格复验见
+[维护门禁验收报告](../../../docs/results/2026-10-15-deepspeed-maintained-gate.md)。
+原始日志不版本化。

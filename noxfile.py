@@ -2174,12 +2174,31 @@ def ecosystem_openmmlab(session):
 @nox.session(python=False)
 def ecosystem_deepspeed(session):
     """Real pinned DeepSpeed Engine training and checkpoint/resume, CPU or CUDA."""
-    _root, env = _session_env(session, "ecosystem-deepspeed")
+    _ecosystem_deepspeed_session(session)
+
+
+@nox.session(python=False)
+def ecosystem_deepspeed_multirank(session):
+    """Two real CUDA ranks: BF16 ZeRO1/2, full gradients and strict fresh resume."""
+    _ecosystem_deepspeed_session(session, multirank=True)
+
+
+def _ecosystem_deepspeed_session(session, multirank=False):
+    label = "ecosystem-deepspeed-multirank" if multirank else "ecosystem-deepspeed"
+    _root, env = _session_env(session, label)
     python = _hardware_python()
     oracle = os.environ.get("REAL_TORCH_PYTHON", "").strip()
     device = os.environ.get("JITTOR_TEST_DEVICES", "cpu").strip()
     if not oracle or device not in ("cpu", "cuda"):
         session.error("DeepSpeed needs REAL_TORCH_PYTHON and exactly cpu or cuda")
+    if multirank:
+        devices = [item.strip() for item in os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")]
+        artifacts = os.environ.get("JITTOR_DEEPSPEED_MULTIRANK_ROOT", "").strip()
+        if device != "cuda" or len(devices) != 2 or not all(devices) or len(set(devices)) != 2 or not artifacts:
+            session.error("DeepSpeed multirank needs exactly two allocated CUDA devices and a new external JITTOR_DEEPSPEED_MULTIRANK_ROOT")
+        env.update(JITTOR_REQUIRE_DEEPSPEED_MULTIRANK="1", JITTOR_DEEPSPEED_MULTIRANK_ROOT=artifacts)
+        if os.environ.get("JITTOR_DEEPSPEED_MULTIRANK_CACHE_ROOT"):
+            env["JITTOR_DEEPSPEED_MULTIRANK_CACHE_ROOT"] = os.environ["JITTOR_DEEPSPEED_MULTIRANK_CACHE_ROOT"]
     threads = os.environ.get("OMP_NUM_THREADS", "4")
     env.update({name: threads for name in THREAD_POOL_ENV_NAMES})
     env.update({
@@ -2204,7 +2223,8 @@ def ecosystem_deepspeed(session):
             session.error("DeepSpeed CUDA needs nvcc and explicitly allocated CUDA_VISIBLE_DEVICES")
         env.update({"JT_BUILD_NVCC_PATH": nvcc, "nvcc_path": nvcc})
     for name in ("JITTOR_ECOSYSTEM_PACKAGE_SITE", "JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE",
-                 "JT_BUILD_MKL_INCLUDE_PATH", "JT_BUILD_MKL_LIB_PATH"):
+                 "JT_BUILD_MKL_INCLUDE_PATH", "JT_BUILD_MKL_LIB_PATH",
+                 "JT_BUILD_NCCL_INCLUDE_PATH", "JT_BUILD_NCCL_LIB_PATH"):
         if os.environ.get(name):
             env[name] = os.environ[name]
     _set_hardware_python_config(session, python, env)
@@ -2220,8 +2240,9 @@ def ecosystem_deepspeed(session):
     _install_compat_source(session, env, python)
     session.run(python, "-m", "pip", "install", "--no-deps", "--no-build-isolation",
                 "-e", str(REPO_ROOT / "adapters"), external=True, env=env)
-    _run_pytest_once(session, ["compat/tests/torch/test_ecosystem_deepspeed.py"],
-                     env, python, timeout=3600)
+    test = ("test_ecosystem_deepspeed_multirank.py" if multirank else "test_ecosystem_deepspeed.py")
+    _run_pytest_once(session, ["compat/tests/torch/" + test],
+                     env, python, timeout=7200 if multirank else 3600)
 
 
 @nox.session(python=False)
