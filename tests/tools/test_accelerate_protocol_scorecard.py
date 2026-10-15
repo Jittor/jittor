@@ -579,6 +579,26 @@ def test_fresh_rng_initial_seed_only_is_not_advanced_offset_proof(fresh_protocol
     assert result(fresh_protocol)['rejected']
 
 
+def test_advancing_only_one_of_two_visible_cuda_generators_is_insufficient():
+    from _accelerate_fresh_scorecard import validate_rng_advancement
+
+    initial = {'python': [3, list(range(625)), None],
+               'numpy': ['MT19937', list(range(624)), 0, 0, 0.],
+               'torch_cpu': list(range(16)), 'torch_cuda': [list(range(16)), list(range(16))]}
+    saved = copy.deepcopy(initial)
+    saved['python'][1][-1] -= 1
+    saved['numpy'][2] += 1
+    saved['torch_cpu'][0] += 1
+    saved['torch_cuda'][0][0] += 1
+    with pytest.raises(ValueError, match='Every visible CUDA generator'):
+        validate_rng_advancement(initial, saved, 'cuda')
+    saved['torch_cuda'][1][0] += 1
+    validate_rng_advancement(initial, saved, 'cuda')
+    saved['torch_cuda'].pop()
+    with pytest.raises(ValueError, match='Every visible CUDA generator'):
+        validate_rng_advancement(initial, saved, 'cuda')
+
+
 def test_fresh_checkpoint_failed_partial_output_cannot_be_overwritten(tmp_path, monkeypatch):
     spec = importlib.util.spec_from_file_location('accelerate_partial_gate', ROOT / 'tools/run_accelerate_gate.py')
     gate = importlib.util.module_from_spec(spec)

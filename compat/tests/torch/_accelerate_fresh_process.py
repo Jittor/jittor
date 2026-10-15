@@ -56,6 +56,16 @@ def run_fresh_phase(capture, accelerator, update, state, sample, extra=None):
     if directory == output or output in directory.parents:
         raise ValueError('Checkpoint and phase observation directories must be separate')
     torch = capture.torch
+    def sample_checkpoint_streams():
+        values = sample()
+        if capture.device == 'cuda':
+            # torchrun exposes both allocated cards to each process; jtrun
+            # exposes that rank's card. Exercise every visible generator.
+            values = dict(values, torch_cuda_all=[
+                torch.rand(3, device='cuda:%d' % index).detach().cpu().numpy().tolist()
+                for index in range(torch.cuda.device_count())])
+        return values
+
     result = {'phase': phase, 'process_nonce': str(uuid.uuid4()), 'pid': os.getpid(),
               'parent_pid': os.getppid(), 'observed_monotonic_ns': time.monotonic_ns(),
               'checkpoint_directory': str(directory),
@@ -66,14 +76,14 @@ def run_fresh_phase(capture, accelerator, update, state, sample, extra=None):
         if directory.exists() and any(directory.iterdir()):
             raise ValueError('Refusing to overwrite a persisted checkpoint')
         result['rng_initial'] = rng_snapshot(torch, capture.device)
-        result['advanced_random'] = sample()
+        result['advanced_random'] = sample_checkpoint_streams()
         result['before_save'] = [update() for _ in range(3)]
         accelerator.save_state(str(directory), safe_serialization=False)
         accelerator.wait_for_everyone()
         result['checkpoint_sha256'] = checkpoint_files(directory)
         result['saved'] = state()
         result['rng_saved'] = rng_snapshot(torch, capture.device)
-        result['expected_random'] = sample()
+        result['expected_random'] = sample_checkpoint_streams()
         result['expected_resume'] = [update() for _ in range(2)]
     else:
         # A distinct stream makes failure to restore observable even when the
@@ -85,14 +95,14 @@ def run_fresh_phase(capture, accelerator, update, state, sample, extra=None):
         torch.manual_seed(seed)
         if capture.device == 'cuda':
             torch.cuda.manual_seed_all(seed)
-        sample()
+        sample_checkpoint_streams()
         result['before_restore'] = state()
         result['rng_before'] = rng_snapshot(torch, capture.device)
         result['checkpoint_sha256'] = checkpoint_files(directory)
         accelerator.load_state(str(directory))
         result['after_restore'] = state()
         result['rng_restored'] = rng_snapshot(torch, capture.device)
-        result['resumed_random'] = sample()
+        result['resumed_random'] = sample_checkpoint_streams()
         result['actual_resume'] = [update() for _ in range(2)]
     accelerator.wait_for_everyone()
     if checkpoint_files(directory) != result['checkpoint_sha256']:

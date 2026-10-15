@@ -20,7 +20,7 @@ def protocol_spec(world, precision):
             'model': 'Linear(4,3)' if world == 2 else 'Linear(3,2)', 'optimizer': 'AdamW',
             'scheduler': 'none' if world == 2 else 'StepLR(step_size=1,gamma=0.8)',
             'pre_save_steps': 3, 'resume_steps': 2, 'input_seeds': [0, 7],
-            'rng_state': 'full-advanced-streams'}
+            'rng_state': 'full-advanced-streams-every-visible-device'}
 
 
 def validate_rng(value, device):
@@ -38,6 +38,17 @@ def validate_rng(value, device):
                 'Missing actual opaque Torch generator state')
     if device == 'cuda':
         require(value['torch_cuda'], 'Missing actual CUDA generator states')
+
+
+def validate_rng_advancement(initial, saved, device):
+    for value in (initial, saved):
+        validate_rng(value, device)
+    require(all(initial[key] != saved[key] for key in saved),
+            'Each saved RNG stream must actually advance before checkpointing')
+    if device == 'cuda':
+        require(len(initial['torch_cuda']) == len(saved['torch_cuda'])
+                and all(before != after for before, after in zip(initial['torch_cuda'], saved['torch_cuda'])),
+                'Every visible CUDA generator must actually advance before checkpointing')
 
 
 def observation(role, load, record, runtime, seed, rank):
@@ -171,10 +182,16 @@ def observation(role, load, record, runtime, seed, rank):
         require(scheduler == expected, 'Saved complete StepLR state differs from observed learning rates')
     for value in (p.get('rng_initial'), p.get('rng_saved'), c.get('rng_restored'), c.get('rng_before')):
         validate_rng(value, record['device'])
-    require(all(p['rng_initial'][key] != p['rng_saved'][key] for key in p['rng_saved'])
-            and isinstance(p.get('advanced_random'), dict)
+    validate_rng_advancement(p['rng_initial'], p['rng_saved'], record['device'])
+    require(isinstance(p.get('advanced_random'), dict)
             and set(p['advanced_random']) == set(p.get('expected_random', {})),
             'Each saved RNG stream must actually advance before checkpointing')
+    if record['device'] == 'cuda':
+        for name in ('advanced_random', 'expected_random'):
+            samples = p[name].get('torch_cuda_all')
+            require(isinstance(samples, list) and len(samples) == len(p['rng_saved']['torch_cuda'])
+                    and all(isinstance(value, list) and len(value) == 3 for value in samples),
+                    'Missing actual next samples for every visible CUDA generator')
     require(p['rng_saved'] == c['rng_restored'] and c['rng_before'] != c['rng_restored'],
             'Full generator state was not restored in the new process')
     require(p.get('expected_random') == c.get('resumed_random'), 'Fresh-process next random samples differ')
