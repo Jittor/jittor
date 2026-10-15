@@ -1,13 +1,53 @@
 # FlashAttention public CUDA training against independent PyTorch
 
-- Status: 48 bounded three-step CUDA training comparisons passed. Ecosystem
-  session admission and unified scorecard publication remain pending.
+- Status: 48 historical CUDA comparisons and 12 maintained CUDA training cases
+  passed. Twelve L3 records pass the shared schema; breadth remains 0/7 because
+  matching independent upstream CPU execution is unavailable.
 - Measured Jittor source: clean `71c5be74ef6991b75fa79d73fe52eb04c0319d59`.
 - Owner: native CUDA and Torch compatibility maintainers. Reviewed: 2026-10-15.
 - Review when: the upstream pin, extension ABI, public facade, native backward,
   optimizer arithmetic, precision protocol or comparison tool changes.
 
-## Executed scope
+## Maintained training and controlled perturbation
+
+Clean `06ed62ad728fae399ccbdbadec7a2441a13eaed9` ran all 12 nodes in
+`compat/tests/torch/test_ecosystem_flash_attention.py`, without skips. The six
+public training APIs each executed FP16 and BF16 at head dimension 32 and fixed
+noncausal attention. Each node compared independent Torch and Jittor for both
+the base input and a `0.125` noise perturbation. Q/K/V, target, causality and
+shape stayed fixed; input hashes and actual changed outputs proved the
+perturbation independently on both runtimes.
+
+The 24 paired three-step trajectories contain 720 array comparisons and 216
+separate update comparisons. All passed the original predeclared per-dtype
+budgets. Maximum normalized error, including updates, was
+`0.002433830240340736`. Actual CUDA placement, zero fallback, all gradients,
+FP32 masters, precision readback and 58 tracked upstream Python file hashes
+were recorded. The upstream and independent binary Torch pins and platform
+remain as documented below. This is correctness evidence; concurrent jobs
+preclude speed acceptance.
+
+The reusable collector independently rechecks original arrays, immutable
+comparison metadata, source identities and input perturbation before invoking
+the shared scorecard auditor. Its measured schema admits 12 CUDA L3 records
+and rejects none. **Shared accelerator breadth is still 0/7**, since that
+metric requires a matching independent upstream CPU comparison. Upstream
+FlashAttention provides no CPU execution; no CPU evidence or exemption was
+invented. A separate independent binary-Torch probe explicitly hid CUDA,
+allocated CPU FP16 Q/K/V, and called the real pinned public function. Torch
+rejected `flash_attn::_flash_attn_forward` for the CPU backend; the full result
+is preserved as unversioned `official-cpu-boundary.json` in the same state root.
+Actual executed CUDA API scope is six of the seven pinned public
+APIs, with KV cache unmeasured.
+
+Raw `gate-schema-complete/` artifacts and generated scorecards stay unversioned
+under `$JITTOR_LAB_ROOT/_state/flash-attention-audit/`. The earlier clean
+`799af7118b352d5ac4621c5d657934dd2f6acc71` gate also passed 12 CUDA nodes;
+its raw files remain unchanged. Canonical training metadata and source hashes
+were then added and all 12 nodes rerun at `06ed62ad7`; old metadata was not
+patched. The historical 48-case protocol below retains its original source pin.
+
+## Historical executed scope
 
 Both independent interpreters imported the public FlashAttention API. The
 reference used binary Torch `2.11.0+cu128`, asserted its real `_C` extension,

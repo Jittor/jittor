@@ -48,12 +48,17 @@ def artifacts(tmp_path, request):
         "perturbation": 0.0,
         "device": "synthetic",
         "tf32": False,
+        "precision": {"matmul": False, "cudnn": False, "cudnn_benchmark": False,
+                      "matmul_precision": "highest"},
         "matmul_precision": "highest",
         "arrays": len(arrays),
         "baseline": "a" * 40,
         "upstream": {"commit": "b" * 40},
         "runtime_threads": 2,
         "script_sha256": "c" * 64,
+        "source_hashes": {name: "c" * 64 for name in
+                          ("flash_attn/__init__.py", "flash_attn/flash_attn_interface.py")},
+        "input_hashes": {name: "d" * 64 for name in ("q", "k", "v", "noise", "target")},
         "jittor_source_clean": True,
         "jittor_source_diff_sha256": hashlib.sha256(b"").hexdigest(),
         "inputs": {
@@ -106,6 +111,7 @@ def test_small_update_cannot_hide_behind_large_parameter(artifacts, comparison):
         ("fallback_count", 1),
         ("script_sha256", "d" * 64),
         ("tf32", True),
+        ("input_hashes", {name: "e" * 64 for name in ("q", "k", "v", "noise", "target")}),
     ],
 )
 def test_invalid_provenance_or_protocol_is_rejected(artifacts, key, value, comparison):
@@ -127,6 +133,26 @@ def test_incomplete_or_corrupted_arrays_are_rejected(artifacts, defect, comparis
         np.savez(candidate, **arrays)
     else:
         _write(candidate, arrays, metadata)
+    with pytest.raises(AssertionError):
+        comparison.compare(reference, candidate)
+
+
+def test_matched_but_invalid_precision_is_rejected(artifacts, comparison):
+    reference, candidate, arrays, _metadata = artifacts
+    for path in (reference, candidate):
+        metadata = json.loads(path.with_suffix(".json").read_text())
+        metadata["precision"]["matmul"] = True
+        _write(path, arrays, metadata)
+    with pytest.raises(AssertionError):
+        comparison.compare(reference, candidate)
+
+
+def test_both_sides_omitting_public_source_are_rejected(artifacts, comparison):
+    reference, candidate, arrays, _metadata = artifacts
+    for path in (reference, candidate):
+        metadata = json.loads(path.with_suffix(".json").read_text())
+        del metadata["source_hashes"]["flash_attn/__init__.py"]
+        _write(path, arrays, metadata)
     with pytest.raises(AssertionError):
         comparison.compare(reference, candidate)
 

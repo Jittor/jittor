@@ -412,9 +412,11 @@ include docs/results/2026-10-15-native-tensor-parallel-adamw-bf16.md
 include docs/results/2026-10-15-native-tensor-parallel.md
 include docs/results/2026-10-15-native-zero-optimizer.md
 include docs/results/2026-10-15-openmmlab-training-oracles.md
+include docs/results/2026-10-15-tanh-fsdp-bfloat16.md
 include docs/results/2026-10-15-tensor-detach-and-factory-leaf.md
 include docs/results/2026-10-15-training-registry-denominators.md
 include docs/results/2026-10-15-transformers-model-family-matrix.md
+include docs/results/2026-10-15-trellis-model-validation.md
 include docs/results/2026-10-15-upstream-pr-disposition.md
 include docs/results/2026-10-15-verl-registered-component-oracles.md
 include docs/results/index.md

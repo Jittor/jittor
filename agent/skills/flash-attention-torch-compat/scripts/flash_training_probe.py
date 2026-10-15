@@ -102,7 +102,16 @@ def main(argv=None):
     torch.set_num_threads(2)
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.backends.cudnn.allow_tf32 = False
+    torch.backends.cudnn.benchmark = False
     torch.set_float32_matmul_precision("highest")
+    precision = {
+        "matmul": bool(torch.backends.cuda.matmul.allow_tf32),
+        "cudnn": bool(torch.backends.cudnn.allow_tf32),
+        "cudnn_benchmark": bool(torch.backends.cudnn.benchmark),
+        "matmul_precision": torch.get_float32_matmul_precision(),
+    }
+    assert not precision["matmul"] and not precision["cudnn"]
+    assert precision["matmul_precision"] == "highest"
     rng = np.random.RandomState(20261015)
     varlen = "varlen" in args.api
     shape = (11, 2, args.head_dim) if varlen else (2, 11, 2, args.head_dim)
@@ -111,7 +120,8 @@ def main(argv=None):
     noise_array = (rng.randn(*shape) * 0.1).astype("float32")
     noise_array.reshape(-1)[0] += args.perturbation
     noise = torch.tensor(noise_array, device="cuda", requires_grad=True)
-    target = torch.tensor(rng.randn(*shape).astype("float32"), device="cuda")
+    target_array = rng.randn(*shape).astype("float32")
+    target = torch.tensor(target_array, device="cuda")
     cu = torch.tensor([0, 4, 11], device="cuda", dtype=torch.int32) if varlen else None
     optimizer = torch.optim.SGD(parameters, lr=0.01)
     result = {f"initial_{i}": a for i, a in enumerate(arrays)}
@@ -177,7 +187,8 @@ def main(argv=None):
         causal=args.causal,
         perturbation=args.perturbation,
         device=torch.cuda.get_device_name(0),
-        tf32=False,
+        tf32=precision["matmul"],
+        precision=precision,
         matmul_precision=torch.get_float32_matmul_precision(),
         arrays=len(result),
         fallback_count=jt.core.backend_fallback_count() if args.runtime == "jittor" else None,
@@ -224,6 +235,10 @@ def main(argv=None):
         "dropout": 0.0,
         "parameter_dtype": "float32",
         "gradient_dtype": "float32",
+    }
+    record["input_hashes"] = {
+        name: hashlib.sha256(value.tobytes()).hexdigest()
+        for name, value in zip(("q", "k", "v", "noise", "target"), [*arrays, noise_array, target_array])
     }
     record["platform"] = {
         "os": platform.platform(),
@@ -272,6 +287,11 @@ def main(argv=None):
     }
 
     record["script_sha256"] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    sources = subprocess.check_output(
+        ["git", "-C", str(upstream), "ls-files", "--", "flash_attn/"], text=True
+    ).splitlines()
+    record["source_hashes"] = {name: hashlib.sha256((upstream / name).read_bytes()).hexdigest()
+                               for name in sources if name.endswith(".py")}
     record["mode"] = "correctness only; concurrent jobs prohibit performance acceptance"
     if args.runtime == "jittor":
         record["native_flags"] = {
@@ -285,6 +305,23 @@ def main(argv=None):
         record["actual_dispatch"] = list(jt.core.dispatch_context(parameters))
     else:
         record["binary_extension"] = torch._C.__file__
+    if args.runtime == "jittor":
+        assert tuple(record["actual_dispatch"]) == ("cuda", 0)
+    names = ("q", "k", "v")
+    record["measurement"] = {
+        "case": f"{args.api}-{args.dtype}-d{args.head_dim}-causal{int(args.causal)}",
+        "runtime": args.runtime, "device": "cuda", "jittor_commit": source_commit,
+        "steps": 3, "tf32": precision,
+        "runtime_conditions": {"precision": precision, "num_threads": torch.get_num_threads()},
+        "backend": {"use_cuda": True, "use_acl": False},
+        "fallback_policy": "error" if args.runtime == "jittor" else "not-applicable",
+        "fallback_count": record["fallback_count"],
+        "trainable_parameters": [name for name, value in zip(names, parameters) if value.requires_grad],
+        "frozen_parameters": [name for name, value in zip(names, parameters) if not value.requires_grad],
+        "input_gradients": ["noise"] if noise.requires_grad else [],
+    }
+    assert record["measurement"]["trainable_parameters"] == list(names)
+    assert record["measurement"]["input_gradients"] == ["noise"]
     args.output.parent.mkdir(parents=True, exist_ok=True)
     np.savez(args.output, **result)
     record["artifact_sha256"] = hashlib.sha256(args.output.read_bytes()).hexdigest()

@@ -556,3 +556,23 @@ permit a large relative error on a tiny gradient: report that error explicitly
 instead of calling a passing BF16 comparison exact gradient agreement. Effective
 native matmul/cuDNN precision must both be `highest`, and the independent Torch
 reference disables TF32 with `highest` precision.
+
+For a low-precision residual, independently calibrate the same fixture with
+real Torch FSDP2 before assigning the difference to distributed rounding:
+
+```bash
+<real-torch-python> -m torch.distributed.run --standalone --nproc_per_node=2 \
+  agent/skills/jittor-distributed-verification/native_fsdp_torch_calibration.py \
+  --source-root "$PWD" \
+  --output-dir "$JITTOR_LAB_ROOT/_state/native-fsdp/calibration"
+```
+
+This tool uses actual Torch FSDP2/DTensor with BF16 parameters, FP32 reduction
+and FP32 outputs and records both real ranks' five-step tensors and source
+hashes. Keep this calibration beside the dense oracle. Identify the first
+layer/output/gradient difference with fixed oracle weights; preserve the
+original thresholds and earlier raw tensors. Check first and second derivatives
+on each real device when repairing a core differentiation rule. CPU and CUDA
+low-precision kernels can have different rounding boundaries. The
+[saved-output tanh verification](../../../docs/results/2026-10-15-tanh-fsdp-bfloat16.md)
+records this method and the fixed-input BF16 FSDP repair.

@@ -108,7 +108,33 @@ bf16 均 `3e-2`。这些判据在首次两侧比较前固定，禁止看结果�
   是已提交的 native CUDA 证据，明确没有将其等同于独立 PyTorch FlashAttention 对拍。
 - [公开训练 API 独立对拍](../../../docs/results/2026-10-15-flash-attention-training-oracles.md)
   记录干净 `71c5be74e` 的六入口、48 条真实 CUDA 三步轨迹，保留原阈值、完整梯度和
-  单独更新检查；统一 scorecard、固定 causality 的独立扰动门禁及 KV cache 仍待验。
+  单独更新检查；另记录 `06ed62ad7` 的 12 个正式 CUDA 门禁场景与固定 causality 输入扰动。
+
+## 维护门禁与统一 scorecard
+
+`compat/tests/torch/test_ecosystem_flash_attention.py` 对六入口和两种低精度运行 12 个
+场景。每个场景固定 head dimension 32、noncausal，分别在两个独立解释器执行原输入
+与单独扰动 noise 的三步训练；其他输入哈希必须不变，两侧输出都必须实际改变。
+要求 `JITTOR_TEST_DEVICES=cuda`、`JITTOR_REQUIRE_FLASH_ATTENTION=1`、
+`JITTOR_REQUIRE_REAL_TORCH=1`，并配置前述上游路径及 `REAL_TORCH_PYTHON`、
+`JITTOR_FLASH_ATTN_ORACLE_EXTENSION`、`JITTOR_FLASH_ATTN_ORACLE_CUDA_HOME`。
+`JITTOR_FLASH_ATTN_EVIDENCE_DIR` 指定全新仓外目录；已有场景目录会被拒绝。
+维护入口为 `nox -s ecosystem_flash_attention`；session 缺 CUDA、独立 oracle 或扩展路径
+时会在执行前失败，并隔离候选与参考端环境。
+
+[collect_scorecard.py](scripts/collect_scorecard.py) 重验原始比较、输入扰动、完整产物、
+真实平台和上游源文件身份，再调用共享 `audit_coverage.scorecard`，不另写准入判据：
+
+```bash
+<jittor-python> agent/skills/flash-attention-torch-compat/scripts/collect_scorecard.py \
+  --root "$PWD" --upstream <pinned-upstream-checkout> \
+  --evidence-dir <immutable-gate-evidence> --output-dir <fresh-scorecard-directory> \
+  --baseline <full-measured-jittor-sha>
+```
+
+`06ed62ad7` 的 12 条 CUDA L3 记录通过统一 schema，实际执行六项公开 API。
+上游 FlashAttention 没有对应 CPU 执行，因此共享广度仍为 **0 / 7**；这与六项 CUDA
+API 的实测执行范围分开报告，不放宽 CPU 阶梯要求。KV cache、速度及其他形状仍未验。
 
 Owner：native CUDA RNG/计算与 Torch 兼容维护者。上游版本、扩展 ABI、公开 facade、
 Tensor 类型/梯度边界、RNG owner 或验证协议变化时重新检查证据。

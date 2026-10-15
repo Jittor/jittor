@@ -49,6 +49,9 @@ def dedicated_gates(root):
         "trellis": ("trellis-models", "ecosystem_trellis",
                     "compat/tests/torch/test_ecosystem_trellis.py",
                     "test_real_trellis_models_training"),
+        "flash-attention": ("flash-attention-training", "ecosystem_flash_attention",
+                            "compat/tests/torch/test_ecosystem_flash_attention.py",
+                            "test_real_flash_attention_training"),
     }
     session_tree = ast.parse((root / "noxfile.py").read_text(encoding="utf-8"))
     sessions = {node.name for node in session_tree.body if isinstance(node, ast.FunctionDef)}

@@ -2275,6 +2275,53 @@ def ecosystem_trellis(session):
 
 
 @nox.session(python=False)
+def ecosystem_flash_attention(session):
+    """Independent upstream CUDA training with complete gradients and input perturbations."""
+    _root, env = _session_env(session, "ecosystem-flash-attention")
+    python = _hardware_python()
+    oracle = os.environ.get("REAL_TORCH_PYTHON", "").strip()
+    names = ("JITTOR_FLASH_ATTN_JITTOR_SRC", "JITTOR_FLASH_ATTN_ORACLE_EXTENSION",
+             "JITTOR_FLASH_ATTN_ORACLE_CUDA_HOME")
+    values = {name: os.environ.get(name, "").strip() for name in names}
+    if not oracle or any(not value or not Path(value).exists() for value in values.values()):
+        session.error("FlashAttention requires REAL_TORCH_PYTHON and existing source, oracle extension and CUDA_HOME")
+    if os.environ.get("JITTOR_TEST_DEVICES", "cuda").strip() != "cuda":
+        session.error("FlashAttention training requires exactly CUDA")
+    nvcc = os.environ.get("JT_BUILD_NVCC_PATH") or os.environ.get("nvcc_path") or shutil.which("nvcc")
+    if not nvcc or not os.environ.get("CUDA_VISIBLE_DEVICES", "").strip():
+        session.error("FlashAttention needs nvcc and explicitly allocated CUDA_VISIBLE_DEVICES")
+    env.update({name: os.environ.get("OMP_NUM_THREADS", "2") for name in THREAD_POOL_ENV_NAMES})
+    env.update(values)
+    env.update({"REAL_TORCH_PYTHON": oracle, "JITTOR_TEST_DEVICES": "cuda",
+                "JITTOR_REQUIRE_FLASH_ATTENTION": "1", "JITTOR_REQUIRE_REAL_TORCH": "1",
+                "JITTOR_TEST_REQUIRE_EXECUTION": "1", "JITTOR_TORCH_SHIM": "1",
+                "JITTOR_FLASH_ATTN_JITTOR_REQUIRED": "1", "JITTOR_FLASH_ATTN_MIN_SCORES": "0",
+                "JITTOR_FLASH_ATTN_TRAINING_MIN_SCORES": "0", "HF_HUB_OFFLINE": "1",
+                "TRANSFORMERS_OFFLINE": "1", "DISABLE_MULTIPROCESSING": "1",
+                "JT_USE_PARALLEL_OP_COMPILER": "0", "JT_BUILD_USE_MKL": "0", "JT_BUILD_USE_NCCL": "0",
+                "JT_BUILD_USE_MPI": "0", "JT_BUILD_USE_CUTT": "0", "JT_USE_CUDA": "1", "use_cuda": "1",
+                "JT_BUILD_NVCC_PATH": nvcc, "nvcc_path": nvcc, "cache_name": "nox_ecosystem_flash_attention"})
+    cache_home = NOX_STATE_ROOT / "ecosystem-flash-attention" / "jittor-home"
+    cache_home.mkdir(parents=True, exist_ok=True)
+    env["JITTOR_HOME"] = str(cache_home)
+    for name in ("JITTOR_ECOSYSTEM_PACKAGE_SITE", "JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE",
+                 "JITTOR_FLASH_ATTN_EVIDENCE_DIR"):
+        if os.environ.get(name):
+            env[name] = os.environ[name]
+    _set_hardware_python_config(session, python, env)
+    oracle_env = dict(env, PYTHONPATH="", JITTOR_TORCH_SHIM="0", REAL_TORCH_SITE="", LD_LIBRARY_PATH="",
+                      CUDA_HOME=values["JITTOR_FLASH_ATTN_ORACLE_CUDA_HOME"])
+    for name in ("JITTOR_SOURCE_ROOT", "JITTOR_HOME", "JITTOR_TORCH_CACHE_ROOT", "JT_BACKEND"):
+        oracle_env[name] = ""
+    session.run(oracle, "-c", "import torch; assert torch.cuda.is_available(); "
+                "assert not hasattr(torch, '_torch_compat_install_context'); "
+                "assert torch._C.__file__.endswith(('.so', '.pyd')); print(torch.__version__)",
+                external=True, env=oracle_env)
+    _install_compat_source(session, env, python)
+    _run_pytest_once(session, ["compat/tests/torch/test_ecosystem_flash_attention.py"], env, python, timeout=3600)
+
+
+@nox.session(python=False)
 def optional(session):
     """Run fail-closed optional compatibility gates on real CUDA."""
     _root, env = _session_env(session, "optional")

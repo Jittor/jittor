@@ -92,3 +92,103 @@ def test_fallback_or_nonbinary_oracle_rejected(gate, pair, change):
         theirs['torch_binary'] = '/synthetic/torch/__init__.py'
     with pytest.raises(AssertionError):
         gate._compare(reference, actual, theirs, ours)
+
+
+@pytest.fixture(scope='module')
+def collector():
+    path = ROOT / 'agent/skills/trellis-torch-compat/scripts/collect_scorecard.py'
+    spec = importlib.util.spec_from_file_location('trellis_scorecard_collector', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.fixture
+def gate_artifacts(tmp_path):
+    import hashlib
+    import json
+    upstream = {'commit': 'a' * 40, 'version': 'source@' + 'a' * 40, 'remote': 'synthetic'}
+    source = {'path': 'trellis2/models/public.py', 'sha256': 'b' * 64}
+    inventory = {'upstream': upstream, 'sources': [source]}
+    metadata = {'jittor_commit': 'c' * 40, 'upstream': upstream, 'probe_sha256': 'd' * 64,
+                'source_hashes': {source['path']: source['sha256']},
+                'trainable_parameters': ['weight'], 'input_gradients': ['x'],
+                'model': 'SyntheticDeclaredModel', 'device': 'cpu', 'steps': 3,
+                'source_version': upstream['version'], 'input_shapes': {'x': [1]},
+                'frozen_parameters': [], 'fallback_policy': 'error', 'fallback_count': 0}
+    errors = {'checked_tensors': 21, 'max_absolute': 0.,
+              'fields': {'output': {'max_scaled_relative': 0., 'tolerance': .002}}}
+    value = {'case': 'trellis_SyntheticDeclaredModel', 'device': 'cpu', 'status': 'passed',
+             'jittor_result': deepcopy(metadata), 'oracle_result': deepcopy(metadata),
+             'input_perturbation_verified': True, 'errors': errors,
+             'input_perturbations': [{'input': 'x', 'errors': errors}]}
+    directory = tmp_path / 'run/cpu/SyntheticDeclaredModel'
+    directory.mkdir(parents=True)
+    for name in ('reference.npz', 'candidate.npz', 'base-comparison.json',
+                 'perturb-comparison.json', 'reference.json', 'candidate.json'):
+        (directory / name).write_bytes(b'synthetic contract fixture; no runtime support')
+    comparison = directory / 'comparison.json'
+    comparison.write_text(json.dumps(value))
+    hashes = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in directory.iterdir()}
+    (directory / 'artifacts.json').write_text(json.dumps(hashes))
+    platform = tmp_path / 'platform.json'
+    platform.write_text('{}')
+    return inventory, tmp_path / 'run', {'cpu': platform}, comparison
+
+
+def _collect(collector, gate_artifacts):
+    inventory, run, platforms, _ = gate_artifacts
+    return collector.collect(inventory, [run], platforms, 'c' * 40,
+                             'docs/results/synthetic-contract-only.md', 'synthetic')
+
+
+def test_collector_only_awards_actual_named_model_axis(collector, gate_artifacts):
+    records = _collect(collector, gate_artifacts)
+    assert len(records) == 1 and records[0]['level'] == 3
+    assert records[0]['registry_refs'] == [
+        {'repo': 'trellis', 'axis': 'models', 'member': 'SyntheticDeclaredModel'}]
+    assert records[0]['numerics']['checked_tensors'] == 42
+
+
+@pytest.mark.parametrize('change', ('baseline', 'upstream', 'source_hashes', 'probe_sha256'))
+def test_collector_rejects_identity_mismatch(collector, gate_artifacts, change):
+    import json
+    path = gate_artifacts[3]
+    value = json.loads(path.read_text())
+    value['jittor_result']['jittor_commit' if change == 'baseline' else change] = 'changed'
+    path.write_text(json.dumps(value))
+    with pytest.raises(ValueError):
+        _collect(collector, gate_artifacts)
+
+
+def test_collector_rejects_tampered_raw_artifact(collector, gate_artifacts):
+    (gate_artifacts[3].parent / 'candidate.npz').write_bytes(b'changed')
+    with pytest.raises(ValueError, match='Changed TRELLIS artifact'):
+        _collect(collector, gate_artifacts)
+
+
+def test_collector_rejects_duplicate_case_device(collector, gate_artifacts):
+    inventory, run, platforms, _ = gate_artifacts
+    with pytest.raises(ValueError, match='Duplicate TRELLIS'):
+        collector.collect(inventory, [run, run], platforms, 'c' * 40, 'synthetic', 'synthetic')
+
+
+def test_collector_rejects_missing_source_file_hash(collector, gate_artifacts):
+    import json
+    path = gate_artifacts[3]
+    value = json.loads(path.read_text())
+    value['jittor_result']['source_hashes'] = {}
+    path.write_text(json.dumps(value))
+    with pytest.raises(ValueError, match='source file hash mismatch'):
+        _collect(collector, gate_artifacts)
+
+
+@pytest.mark.parametrize('omitted', ('candidate.npz', 'comparison.json'))
+def test_collector_rejects_incomplete_artifact_manifest(collector, gate_artifacts, omitted):
+    import json
+    path = gate_artifacts[3].parent / 'artifacts.json'
+    hashes = json.loads(path.read_text())
+    del hashes[omitted]
+    path.write_text(json.dumps(hashes))
+    with pytest.raises(ValueError, match='Incomplete TRELLIS artifact manifest'):
+        _collect(collector, gate_artifacts)

@@ -25,16 +25,26 @@ def compare(reference_path, candidate_path):
         "perturbation",
         "device",
         "tf32",
+        "precision",
         "matmul_precision",
         "arrays",
         "baseline",
         "upstream",
         "inputs",
+        "input_hashes",
         "runtime_threads",
         "script_sha256",
+        "source_hashes",
     ):
         assert r[key] == c[key], (key, r[key], c[key])
     assert c["fallback_count"] == 0
+    assert r["tf32"] is False and r["matmul_precision"] == "highest"
+    assert r["precision"] == {"matmul": False, "cudnn": False,
+                              "cudnn_benchmark": False, "matmul_precision": "highest"}
+    assert set(r["input_hashes"]) == {"q", "k", "v", "noise", "target"}
+    assert all(len(value) == 64 and all(letter in "0123456789abcdef" for letter in value)
+               for value in r["input_hashes"].values())
+    assert {"flash_attn/__init__.py", "flash_attn/flash_attn_interface.py"} <= set(r["source_hashes"])
     assert r["dtype"] in ("float16", "bfloat16")
     assert r["inputs"]["steps"] == 3
     assert r["inputs"]["optimizer"] == "SGD"
