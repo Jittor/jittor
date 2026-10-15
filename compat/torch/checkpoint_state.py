@@ -278,11 +278,12 @@ def get_optimizer_state_dict(model, optimizers, *, submodules=None, options=None
     optimizers = _optimizers(optimizers)
     if not optimizers:
         raise RuntimeError("Optimizers are not passed in but optim_only is set to True.")
-    names = _parameter_names(model)
     result = {"state": {}, "param_groups": []}
     for optimizer in optimizers:
         _initialize(optimizer)
         state = optimizer.state_dict()
+        # FSDP's initialization step may rotate its public shard views.
+        names = _parameter_names(model)
         pid_to_name = {}
         for group, saved_group in zip(optimizer.param_groups, state["param_groups"]):
             for parameter, pid in zip(group["params"], saved_group["params"]):

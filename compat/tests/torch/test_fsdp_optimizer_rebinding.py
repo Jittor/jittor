@@ -32,6 +32,44 @@ def _rotation(old):
 
 
 class TestFsdpOptimizerRebinding:
+    def test_empty_checkpoint_resolves_names_after_initialization_rotates_views(self, device):
+        from torch.distributed.checkpoint.state_dict import get_optimizer_state_dict
+
+        model = torch.nn.Linear(2, 1, bias=False).to(device)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=.1, foreach=False)
+        before = model.weight.detach().cpu().numpy().copy()
+        step = optimizer.step
+        rotations = []
+
+        def rotate_views():
+            result = step()
+            group = optimizer.param_groups[0]
+            old = group['params'][0]
+            new = torch.nn.Parameter(old.detach().clone(), requires_grad=True)
+            group['params'][0] = new
+            _sync_adam_group_params(group, replacements=((old, new),))
+            model.weight = new
+            rotations.append((id(old), id(new)))
+            return result
+
+        # Reproduce FSDP's real optimizer-owned public view rotation locally;
+        # the maintained two-rank fresh-process gate exercises actual FSDP.
+        optimizer.step = rotate_views
+        checkpoint = get_optimizer_state_dict(model, optimizer)
+        assert len(rotations) == 1 and rotations[0][0] != rotations[0][1]
+        assert checkpoint['param_groups'][0]['params'] == ['weight']
+        assert checkpoint['param_groups'][0]['lr'] == .1
+        assert set(checkpoint['state']) == {'weight'}
+        entry = checkpoint['state']['weight']
+        assert float(entry['step'].item()) == 1
+        for field in ('exp_avg', 'exp_avg_sq'):
+            np.testing.assert_array_equal(entry[field].detach().cpu().numpy(), np.zeros_like(before))
+        np.testing.assert_array_equal(model.weight.detach().cpu().numpy(), before)
+        assert model.weight.grad is None
+        assert optimizer.param_groups[0]['params'][0] is model.weight
+        get_optimizer_state_dict(model, optimizer)
+        assert len(rotations) == 1
+
     def test_refresh_releases_old_view_and_preserves_state(self, device):
         for algorithm in (torch.optim.Adam, torch.optim.AdamW):
             old = _parameter([1., 2.], device)
