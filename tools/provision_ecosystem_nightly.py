@@ -95,12 +95,20 @@ class Commands:
         return log
 
 
-def checkout(commands, directory, remote, sha):
+def checkout(commands, directory, remote, sha, cache=None):
     require(len(sha) == 40, 'Full upstream commit required')
+    if cache is not None:
+        def cached_git(*args):
+            return subprocess.check_output(['git', '-C', str(cache), *args], text=True).strip()
+        cached_remote = cached_git('remote', 'get-url', 'origin')
+        cached_remote = cached_remote.replace('git@github.com:', 'https://github.com/')
+        require(cached_remote == remote and cached_git('rev-parse', 'HEAD') == sha
+                and not cached_git('status', '--porcelain'),
+                'Read-only Git cache must have the exact clean official source')
     if not directory.exists():
         commands.run('git', 'init', directory)
         commands.run('git', '-C', directory, 'remote', 'add', 'origin', remote)
-        commands.run('git', '-C', directory, 'fetch', '--depth', '1', 'origin', sha)
+        commands.run('git', '-C', directory, 'fetch', '--depth', '1', cache or 'origin', sha)
         commands.run('git', '-C', directory, 'checkout', '--detach', 'FETCH_HEAD')
     def git(*args):
         return subprocess.check_output(['git', '-C', str(directory), *args], text=True).strip()
@@ -157,7 +165,7 @@ def unpack_pinned_wheel(wheel, site):
         archive.extractall(site)
 
 
-def provision(library, state, python):
+def provision(library, state, python, source_cache=None):
     require(sys.version_info[:2] == (3, 11), 'Nightly provisioning requires Python 3.11')
     require(not (state / 'provision.json').exists(), 'Use a new state root after successful provisioning')
     env = environment(state)
@@ -173,7 +181,8 @@ def provision(library, state, python):
     checkouts, pinned = {}, {}
     for repo, (version, sha, remote, wheel_hash) in PINS.items():
         path = state / 'upstream' / repo
-        checkout(commands, path, 'https://github.com/' + remote + '.git', sha)
+        checkout(commands, path, 'https://github.com/' + remote + '.git', sha,
+                 source_cache / repo if source_cache else None)
         checkouts[repo] = path
         pinned[repo] = official_wheel(repo, version, wheel_hash, wheels)
     sources = source_descriptor(checkouts, pinned)
@@ -198,7 +207,8 @@ def provision(library, state, python):
     swift_source, swift_wheel = None, None
     if library == 'swift':
         swift_source = state / 'upstream/ms-swift'
-        checkout(commands, swift_source, SWIFT_REMOTE, SWIFT_SHA)
+        checkout(commands, swift_source, SWIFT_REMOTE, SWIFT_SHA,
+                 source_cache / 'ms-swift' if source_cache else None)
         build = state / 'swift-build-source'
         if not build.exists():
             shutil.copytree(swift_source, build, ignore=shutil.ignore_patterns('.git'))
@@ -235,6 +245,8 @@ def provision(library, state, python):
         ['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
         'wheels': {path.name: digest(path) for path in sorted(wheels.glob('*.whl'))},
         'session': 'ecosystem_' + library, 'oracle_torch': TORCH,
+        'upstream_transport': 'read-only-local-git-cache' if source_cache else 'official-remote',
+        'source_cache': str(source_cache) if source_cache else None,
         'environment': {key: value for key, value in env.items() if key.startswith(('JITTOR_', 'JT_'))
                         or key in ('HOME', 'TMPDIR', 'CUDA_VISIBLE_DEVICES', 'REAL_TORCH_PYTHON')}}
     (state / 'provision.json').write_text(json.dumps(manifest, indent=2) + '\n')
@@ -247,11 +259,13 @@ def main():
     parser.add_argument('--library', choices=('peft', 'swift'), required=True)
     parser.add_argument('--state-root', type=Path, required=True)
     parser.add_argument('--python', default=sys.executable, help='Healthy Python 3.11 for new private venvs')
+    parser.add_argument('--source-cache', type=Path,
+                        help='Optional read-only exact clean official Git checkouts for local replay')
     parser.add_argument('--run', action='store_true', help='Run the complete maintained nox gate after provisioning')
     args = parser.parse_args()
     state = external(args.state_root)
     state.mkdir(parents=True, exist_ok=True)
-    commands, python = provision(args.library, state, args.python)
+    commands, python = provision(args.library, state, args.python, args.source_cache)
     if args.run:
         require(not subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT, text=True).strip(),
                 'Formal nightly execution requires clean measured source')

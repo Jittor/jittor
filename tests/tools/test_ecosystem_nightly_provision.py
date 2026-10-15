@@ -158,3 +158,10 @@ def test_successful_state_requires_fresh_destination(provision, tmp_path):
     (tmp_path / 'provision.json').write_text('{}')
     with pytest.raises(ValueError, match='new state root'):
         provision.provision('peft', tmp_path, 'must-not-launch')
+
+
+def test_local_cache_with_wrong_official_remote_is_refused(provision, tmp_path, monkeypatch):
+    monkeypatch.setattr(provision.subprocess, 'check_output', lambda *a, **kw: 'https://untrusted.invalid/repo.git')
+    with pytest.raises(ValueError, match='exact clean official'):
+        provision.checkout(SimpleNamespace(run=lambda *a: pytest.fail('must not mutate')),
+                           tmp_path / 'new', 'https://github.com/official/repo.git', 'a' * 40, tmp_path / 'cache')
