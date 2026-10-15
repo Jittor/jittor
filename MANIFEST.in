@@ -451,6 +451,7 @@ include docs/results/2026-10-15-upstream-pr-disposition.md
 include docs/results/2026-10-15-verl-installed-source-training.md
 include docs/results/2026-10-15-verl-registered-component-oracles.md
 include docs/results/2026-10-15-vllm-component-scorecards.md
+include docs/results/2026-10-16-transformers-main-source-training.md
 include docs/results/index.md
 include docs/tutorials/index.md
 include examples/README.md

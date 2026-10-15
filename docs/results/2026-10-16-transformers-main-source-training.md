@@ -86,3 +86,16 @@ TF工具的12项host契约通过（1.185s）；仓库布局与diff检查通过�
 不改计算预算或隐藏失败。6项跳过包括2项加速硬件、2项声明类别，以及2项source-only候选环境未安装
 Jittor发行metadata的包解析检查；真实源码导入与CPU/CUDA计算由完整维护门禁分别证明。
 原始日志为state的`unit-structure-v1.log`、`unit-execution-v1.json`及`host-tools-v1.log`。
+
+## 中央整合复核
+
+整合者在已发布 `0f2f9481cd59072cc02a1edff4bc16bc12d1b071` 上仅接入本报告与结果索引、
+生成的 MANIFEST，未改测量代码。独立重读1106份原始/辅助、17197个外部文件、922个实际
+编译二进制，以及2865个原测量 Git 文件，哈希全部匹配；原封存SHA256为
+`125c2ffecefacb94680981424908d433a3ab5397f698d4ddb4deaf264d26ff06`。
+源码symlink按Git保存的目标文本核验，编译二进制未复制或重标。
+
+登记后主树完整 `tests/structure + compat/tests/structure` 为1622通过、6跳过，211.12秒，
+布局与空白检查通过。原独立树两项登记失败保留原始日志，不追改成通过；上面的全部
+数值仍对应09e9，不能外推至本次报告提交。中央复核记录在未版本化的
+`$JITTOR_LAB_ROOT/_state/transformers-main-source-doc-integration-0f2/`。
