@@ -9,6 +9,50 @@ description: 在单机上验证 Jittor 分布式改动（MPI / NCCL 集合通信
 分布式验证全是多进程，每个 rank 各自 `import jittor`，PYTHONPATH 错了就是每个 rank 都在
 测主树。
 
+## 固定节点 launcher 控制面
+
+公开 `jtrun` / `python -m jittor.distributed.launch` 的固定节点参数与边界见
+[原生分布式指南](../../../docs/guides/distributed-training.md)。Linux/NCCL 多节点模式
+使用 launcher agent 持有的原生 TCPStore 交换 WORLD/subgroup unique id，并在节点间
+转发退出与心跳；root-info 心跳文件只属于本节点。各节点必须使用相同的节点数、本地进程数、
+job id 和 master endpoint。所有 WORLD rank 以相同顺序创建 subgroup。
+
+`tests/distributed/test_multinode_launch.py` 在 loopback 上实际启动多个公开 launcher，
+验证全局 rank、错误配置、worker/agent 退出、过期心跳及 Store 隔离；该 host 测试显式
+stub GPU discovery，不能证明任何 CUDA 或多主机执行。真实双卡通过相同入口运行
+`tests/backends/comm/nccl/test_launcher_store_groups.py` 和
+`tests/backends/comm/nccl/test_native_collectives.py`，多 agent 模式额外设置
+`JITTOR_REQUIRE_MULTINODE_CONTROL=1`。原有单 agent 路径运行同一数值节点，排除仅针对
+外部 Store 的 `test_group_order_mismatch_refuses_before_nccl_init`。先串行预热每个 rank 的
+独立 HOME/JITTOR_HOME/TMPDIR，再运行双 rank；单 rank import 不会自动加载 NCCL，
+须通过 `get_library('nccl', load=True)` 显式加载，并真正执行 `nccl_ops`，避免公共
+world-size-one 恒等捷径掩盖未加载的通信库。
+
+训练验收复用下文 Native FSDP 的独立 Torch oracle、固定预算与三次 fresh launcher，
+记录 producer/consumer 的实际 worker/agent PID、源码 SHA 和 rank 环境。两个 agent
+在同一主机上执行，仅证明协议与设备正确性；真实多主机的网络、故障、训练及恢复仍需另验。
+控制面不会传输 checkpoint 文件，也不改变其共享文件路径要求。
+
+[`recheck_native_fsdp.py`](recheck_native_fsdp.py) 只用 NumPy 重算原始证据：先验证完整
+raw 文件绑定及测量源码身份，再校验每步全部参数/input gradients/moments、原独立
+dense Torch 数值预算与 update 预算，以及新 worker 恢复后的两步完整数组（含四类 RNG
+后续抽样和 dropout）。它检查完整参数清单，拒绝漏梯度、错误 compute dtype、共用 rank
+缓存、同 PID 假恢复和未绑定的文件；不导入 Torch/Jittor，也不重新执行 GPU 计算。
+
+```bash
+RAW="$JITTOR_LAB_ROOT/_state/native-multihost/<run>"
+<numpy-python> agent/skills/jittor-distributed-verification/recheck_native_fsdp.py \
+  --bindings "$RAW/raw-bindings-<measurement>.json" \
+  --source-manifest "$RAW/source-<measurement>.json" \
+  --expected-source "<measured-full-SHA>" --source-root "$PWD" \
+  --results "$RAW/cuda-unit/fsdp-results" \
+  --oracle "$RAW/cuda-unit/oracle-results" \
+  --identities "$RAW/cuda-unit/worker-identities"
+```
+
+当前验证 checkout 的 fixture 必须与历史测量的源码哈希相同。保留历史 source SHA、原始
+文件与失败日志；不能用今天安装的依赖或代码为历史结果补写身份字段。
+
 ## 第 0 步：先确认能验证什么
 
 按顺序问三件事，别跳。
