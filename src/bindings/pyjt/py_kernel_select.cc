@@ -17,7 +17,7 @@ namespace {
 
 // A native stand-in for a `supports` predicate; see kernel_select_native_rule.
 struct NativeRule {
-    enum Kind { none, same_float, rms_inference, rms_training, ln_inference, depthwise_conv2d,
+    enum Kind { none, same_float, same_float_or_complex, rms_inference, rms_training, ln_inference, depthwise_conv2d,
                 group_norm } kind = none;
     string op;
 };
@@ -186,12 +186,13 @@ Verdict evaluate(const NativeRule& rule, PyObject* args, PyObject* kwargs) {
         return g == w->shape[0] && w->shape[0] == x->shape[1] && x->dtype() == w->dtype()
             ? accepts : declines;
     }
-    if (rule.kind == NativeRule::same_float) {
+    if (rule.kind == NativeRule::same_float || rule.kind == NativeRule::same_float_or_complex) {
         if (n < 2 || !is_var(PyTuple_GET_ITEM(args, 0)) || !is_var(PyTuple_GET_ITEM(args, 1)))
             return unknown;
         Var* a = GET_RAW_PTR(VarHolder, PyTuple_GET_ITEM(args, 0))->var;
         Var* b = GET_RAW_PTR(VarHolder, PyTuple_GET_ITEM(args, 1))->var;
-        if (a->dtype() != b->dtype() || !a->dtype().is_float()) return declines;
+        bool complex_ok = rule.kind == NativeRule::same_float_or_complex && a->dtype().is_complex();
+        if (a->dtype() != b->dtype() || !(a->dtype().is_float() || complex_ok)) return declines;
         // Not registered may only mean not loaded yet; Python loads it.
         return has_op(rule.op) ? accepts : unknown;
     }
@@ -256,6 +257,9 @@ void kernel_select_native_rule(PyObject* fn, const string& rule) {
     if (rule.compare(0, 11, "same_float:") == 0) {
         parsed.kind = NativeRule::same_float;
         parsed.op = rule.substr(11);
+    } else if (rule.compare(0, 22, "same_float_or_complex:") == 0) {
+        parsed.kind = NativeRule::same_float_or_complex;
+        parsed.op = rule.substr(22);
     } else if (rule == "rms_norm_inference") {
         parsed.kind = NativeRule::rms_inference;
     } else if (rule == "rms_norm_training") {

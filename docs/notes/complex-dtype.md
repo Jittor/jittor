@@ -23,6 +23,10 @@ CPU 与 CUDA 上有维护测试覆盖的部分（`complex64`、`complex128` 均�
 - **归约与线代**：`sum`、`mean`、`abs`、`conj`、二维与批量矩阵乘、
   `inv`/`svd`/`svdvals`/`qr`/`eigh`/`pinv`（经 `nn.ComplexNumber` 桥接，两种精度
   均验证）；
+  CUDA 上同 dtype 的二维与批量矩阵乘（含 `bmm`、`nn.tensordot`）走 cuBLAS 复数
+  GEMM（`CUDA_C_32F`/`CUDA_C_64F`），反向按 dA = G·op(B)ᴴ、dB = op(A)ᴴ·G；CPU 上
+  仍是通用的广播乘加 kernel，没有复数 BLAS
+  （[测试](../../tests/backends/cuda/test_cublas_complex_matmul.py)）；
 - **超越函数**：`exp`、`log`、`sin`、`cos`、`sqrt`；
 - **实部虚部视图**：`.real`、`.imag`、`.angle()`、`view_as_real`、
   `view_as_complex`、`polar`（按输入分量宽度选择 complex64/complex128）；
