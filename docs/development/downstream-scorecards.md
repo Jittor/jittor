@@ -100,6 +100,21 @@ wheel 的唯一 METADATA Version。例如 VERL 源码 `0.10.0.dev` 的真实构�
 旧测量缺少这些原始绑定时，当前审计拒绝授予覆盖分子；保留其原始数值结果和测量 SHA，
 不能从今天的安装目录回填历史证据。协议型记录继续使用各自的独立严格校验器。
 
+### 同源码的有限发行名称分支
+
+MMEngine/MMCV 的干净 `setup.py` 通过环境条件声明正式包和 lite 包名称。库存新增
+`distribution_names`，绑定已跟踪 `setup.py` 的 SHA256、实际 name 表达式及**全部**有限
+分支与条件；它不是手写的别名许可表。只解析字面名称和明确的 `os.getenv` 相等/不等
+条件，动态名称、未知条件、多 setup 或字典展开均拒绝。审计器重新解析表达式，缺失
+分支或不匹配的 setup 来源哈希会失败。
+
+此类来源证明必须提供实际 wheel。审计器独立核对唯一 METADATA Name 属于源码声明，
+每个 runtime/阶段的 `downstream_distribution` 或复数绑定还必须提供原样
+`distribution_name`，精确等于该实际 Name。包的 import 前缀、repo identity、版本和
+全部 Python/非 Python payload 校验保持不变。缺该字段、仅写 repo 名、未声明名称或
+不完整 payload 均拒绝。`mmcv-lite` 的真实安装可证明对应纯 Python 场景，不证明
+`mmcv._ext`、`mmcv.ops` 或编译算子存在；不得修改 METADATA 或装空扩展冒充完整包。
+
 ### 没有发布版本的源码与 SCM wheel
 
 若再生 inventory 的版本为精确 `source@<上游完整 SHA>`，实际安装包可以具有从该提交
