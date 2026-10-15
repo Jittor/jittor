@@ -19,10 +19,26 @@ from component_measure import installed_distribution  # noqa: E402
 from swift_training_probe import UPSTREAM_CALLS  # noqa: E402
 
 
+def installed_dependencies(site):
+    result = {}
+    for name, version in (('swift', '4.5.2'), ('transformers', '4.56.2'),
+                          ('peft', '0.17.1'), ('accelerate', '1.10.1')):
+        package = site / name
+        package.mkdir(parents=True, exist_ok=True)
+        origin = package / '__init__.py'
+        origin.write_text('__version__ = %r\n' % version)
+        result[name] = {'version': version, 'origin': str(origin), 'installed_files_sha256': {
+            path.relative_to(package).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in package.rglob('*') if path.is_file()}}
+    return result
+
+
 @pytest.fixture
 def protocol(tmp_path):
+    dependencies = installed_dependencies(tmp_path / 'installed')
+    swift_hashes = dependencies['swift']['installed_files_sha256']
     source = {'repo': 'ms-swift', 'upstream': {'version': '4.5.2', 'commit': 'a' * 40},
-        'package_sources': [{'path': 'swift/__init__.py', 'sha256': 'b' * 64}],
+        'package_sources': [{'path': 'swift/__init__.py', 'sha256': swift_hashes['__init__.py']}],
         'axes': [{'axis': key, 'members': [member]} for key, member in
                  [('model_family', 'llama'), ('trainer', 'causal_lm'), ('task', 'causal_lm')]]}
     names = ['parameter%d' % i for i in range(12)]
@@ -46,9 +62,9 @@ def protocol(tmp_path):
         'integer_inputs': ['attention_mask', 'input_ids', 'labels'], 'observed_inputs': inputs,
         'observed_intermediate_gradients': ['embedding_output'],
         'downstream_distribution': {'repo': 'ms-swift', 'version': '4.5.2',
-            'package': str(tmp_path / 'installed/swift'),
-            'source_sha256': {'swift/__init__.py': 'b' * 64},
-            'installed_files_sha256': {'__init__.py': 'b' * 64}, 'wheel_sha256': 'd' * 64},
+            'package': str(Path(dependencies['swift']['origin']).parent),
+            'source_sha256': {'swift/__init__.py': swift_hashes['__init__.py']},
+            'installed_files_sha256': swift_hashes, 'wheel_sha256': 'd' * 64},
         'registry_refs': [{'repo': 'ms-swift', 'axis': key, 'member': identity[key]}
                           for key in ('model_family', 'trainer', 'task')],
         'training_protocol': {'owner': 'swift.pipelines.train.sft.SwiftSft.main',
@@ -56,7 +72,7 @@ def protocol(tmp_path):
             'scheduler': 'constant', 'gradient_clipping': False, 'identity': identity,
             'upstream_calls': UPSTREAM_CALLS},
         'hf_hub_offline': True, 'device': 'cpu', 'tf32': {'matmul': False},
-        'runtime_conditions': {}, 'dependencies': {}, 'model_artifacts': {'weights': 'e' * 64},
+        'runtime_conditions': {}, 'dependencies': dependencies, 'model_artifacts': {'weights': 'e' * 64},
         'measurement_source_sha256': {'probe.py': 'f' * 64}}
     value['observed_tensor_devices'] = {name: 'cpu' for name in fields(value) + list(inputs)}
     arrays = {name: np.ones(2, dtype='float32') for name in fields(value)}
@@ -102,6 +118,7 @@ def independent_prefixes(protocol, tmp_path):
         site = tmp_path / side / 'site-packages'
         with zipfile.ZipFile(wheel) as archive:
             archive.extractall(site)
+        value['dependencies'] = installed_dependencies(site)
         package = site / 'swift'
         module = SimpleNamespace(__file__=str(package / '__init__.py'), __version__='4.5.2')
         binding = installed_distribution(source, module)
@@ -124,8 +141,20 @@ def test_real_independent_package_prefixes_keep_equal_content_and_raw_locations(
     assert locations[0] != locations[1]
 
 
+def test_corresponding_dependency_bindings_keep_each_runtime_root(independent_prefixes):
+    protocol, _packages, _wheel, _metadata = independent_prefixes
+    for value in protocol[2]:
+        value['downstream_distributions'] = {
+            name: {'package': str(Path(entry['origin']).parent), 'version': entry['version'],
+                   'installed_files_sha256': entry['installed_files_sha256']}
+            for name, entry in value['dependencies'].items() if name != 'swift'}
+    assert evaluate(protocol)['status'] == 'passed'
+
+
 @pytest.mark.parametrize('failure', ['source', 'payload', 'wheel', 'metadata',
-                                    'missing-location', 'both-missing-locations', 'another-path-field'])
+    'missing-location', 'both-missing-locations', 'another-path-field', 'dependency-version',
+    'dependency-payload', 'missing-origin', 'both-missing-origins', 'origin-root-mismatch', 'dependency-extra-identity',
+    'different-dependency-keys', 'bound-dependency-root-mismatch'])
 def test_independent_prefixes_still_reject_content_and_identity_changes(independent_prefixes, failure):
     protocol, packages, wheel, metadata_paths = independent_prefixes
     source, _paths, values, _arrays = protocol
@@ -151,11 +180,35 @@ def test_independent_prefixes_still_reject_content_and_identity_changes(independ
     elif failure == 'both-missing-locations':
         for value in values:
             value['downstream_distribution'].pop('package')
-    else:
+    elif failure == 'another-path-field':
         for value in values:
             value['downstream_distribution']['metadata_path'] = 'same additional identity field'
         candidate['metadata_path'] = 'different additional identity field'
-    with pytest.raises(ValueError, match='distribution|package location'):
+    elif failure == 'dependency-version':
+        values[1]['dependencies']['transformers']['version'] = 'different'
+    elif failure == 'dependency-payload':
+        Path(values[1]['dependencies']['peft']['origin']).write_text('changed actual installed source')
+    elif failure == 'missing-origin':
+        values[1]['dependencies']['accelerate'].pop('origin')
+    elif failure == 'both-missing-origins':
+        for value in values:
+            value['dependencies']['accelerate'].pop('origin')
+    elif failure == 'origin-root-mismatch':
+        values[1]['dependencies']['swift']['origin'] = values[0]['dependencies']['swift']['origin']
+    elif failure == 'dependency-extra-identity':
+        for value in values:
+            value['dependencies']['transformers']['manifest_path'] = 'same identity field'
+        values[1]['dependencies']['transformers']['manifest_path'] = 'different identity field'
+    elif failure == 'different-dependency-keys':
+        values[1]['dependencies'].pop('peft')
+    else:
+        for value in values:
+            entry = value['dependencies']['transformers']
+            value['downstream_distributions'] = {'transformers': {
+                'package': str(Path(entry['origin']).parent), 'version': entry['version'],
+                'installed_files_sha256': entry['installed_files_sha256']}}
+        values[1]['dependencies']['transformers']['origin'] = values[0]['dependencies']['transformers']['origin']
+    with pytest.raises(ValueError, match='distribution|package location|dependenc'):
         evaluate(protocol)
 
 

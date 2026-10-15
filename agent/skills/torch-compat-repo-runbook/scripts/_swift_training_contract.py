@@ -4,6 +4,7 @@ import hashlib
 import json
 
 from collect_component_scorecard import compare_arrays, require
+from component_measure import package_files
 from swift_training_probe import UPSTREAM_CALLS
 
 CASE = 'ms_swift_trainer_full_llama'
@@ -11,6 +12,34 @@ CASE = 'ms_swift_trainer_full_llama'
 
 def read(path):
     return json.loads(Path(path).read_text())
+
+
+def dependency_identity(value):
+    dependencies = value.get('dependencies')
+    require(isinstance(dependencies, dict)
+            and set(dependencies) == {'swift', 'transformers', 'peft', 'accelerate'},
+            'Incomplete actual Swift dependency scope')
+    bindings = dict(value.get('downstream_distributions', {}))
+    bindings['swift'] = value['downstream_distribution']
+    identities = {}
+    for name, entry in dependencies.items():
+        require(isinstance(entry, dict) and isinstance(entry.get('origin'), str) and entry['origin'],
+                'Missing actual dependency origin: ' + name)
+        origin = Path(entry['origin'])
+        require(origin.is_absolute() and origin.is_file(), 'Unbound actual dependency origin: ' + name)
+        require(isinstance(entry.get('version'), str) and bool(entry['version'])
+                and entry.get('installed_files_sha256')
+                and package_files(origin.parent) == entry['installed_files_sha256'],
+                'Actual installed dependency payload differs: ' + name)
+        binding = bindings.get(name)
+        if binding is not None:
+            require(isinstance(binding.get('package'), str) and bool(binding['package'])
+                    and origin.parent == Path(binding['package'])
+                    and entry['version'] == binding.get('version')
+                    and entry['installed_files_sha256'] == binding.get('installed_files_sha256'),
+                    'Actual dependency/distribution binding differs: ' + name)
+        identities[name] = {key: item for key, item in entry.items() if key != 'origin'}
+    return identities
 
 
 def fields(value):
@@ -29,6 +58,7 @@ def compare_pair(reference, candidate, source, baseline, *, seed):
     import numpy as np
     paths = [Path(reference), Path(candidate)]
     values = [read(path.with_suffix('.json')) for path in paths]
+    dependency_identities = []
     expected_sources = {row['path']: row['sha256'] for row in source['package_sources']}
     require(bool(expected_sources), 'Missing complete Swift source inventory')
     for runtime, value in zip(('torch', 'jittor'), values):
@@ -49,6 +79,7 @@ def compare_pair(reference, candidate, source, baseline, *, seed):
                 'Incomplete actual installed Swift source binding')
         require(distribution.get('installed_files_sha256') and distribution.get('wheel_sha256'),
                 'Missing installed payload/wheel identity')
+        dependency_identities.append(dependency_identity(value))
         identity = value.get('training_protocol', {}).get('identity', {})
         expected_identity = {
             'model_family': 'llama', 'trainer': 'causal_lm', 'task': 'causal_lm',
@@ -101,6 +132,8 @@ def compare_pair(reference, candidate, source, baseline, *, seed):
             # exact comparisons, and the raw locations remain in both reports.
             left, right = ({key: value for key, value in item.items() if key != 'package'}
                            for item in (left, right))
+        elif name == 'dependencies':
+            left, right = dependency_identities
         require(left == right, 'Runtime condition/source/protocol mismatch: ' + name)
     require(a['interpreter'].get('binary_sha256'), 'Oracle binary extension identity missing')
     require(b.get('fallback_policy') == 'error' and b.get('fallback_count') == 0,
