@@ -28,8 +28,13 @@ from jittor._runtime.backend_libraries import get_library_ops
 #:
 #: Dropping the bit costs a float32 buffer for the contracted operand. That is
 #: the already-slow fallback path; the accelerated relays never reach here.
-def _contraction_scope():
+def _contraction_scope(fp32_output=False):
     """``flag_scope`` for the generic contraction. One spelling, three callers."""
+    if fp32_output:
+        # Keep the BF16 operands in the native Binary graph. Widening them
+        # before multiplication also widens its backward and changes second
+        # derivatives. prefer32 widens the accumulator's result instead.
+        return jt.flag_scope(amp_reg=jt.amp_flags.prefer32)
     return jt.flag_scope(amp_reg=jt.flags.amp_reg | jt.amp_flags.keep_reduce)
 
 
@@ -320,12 +325,49 @@ def matmul_transpose(a, b, *, _op="matmul_transpose", _names=("a", "b")):
     if fast is not None:
         return fast if restore is None else fast.reshape(restore)
 
+    out = _matmul_transpose_contraction(a, b)
+    return out if restore is None else out.reshape(restore)
+
+
+def _matmul_transpose_contraction(a, b, fp32_output=False):
     shape = list(a.shape)[:-1] + list(b.shape)
-    with _contraction_scope():
+    with _contraction_scope(fp32_output):
         a = a.broadcast(shape, [len(shape) - 2])
         b = b.broadcast(shape)
-        out = (a * b).sum(len(shape) - 1)
-    return out if restore is None else out.reshape(restore)
+        return (a * b).sum(len(shape) - 1)
+
+
+class _BFloat16MatmulAccumulator(jt.Function):
+    """Keep the GEMM gradient's accumulation before its BF16 rounding."""
+
+    def _run_call(self, a, b):
+        # The default Function inputs are taped for first derivatives. Keep
+        # independent holders of the original graph for higher derivatives;
+        # caller assign must not change the values saved by this invocation.
+        self.a, self.b = (jt.ops.reshape(value, value.shape) for value in (a, b))
+        return super()._run_call(a, b)
+
+    def execute(self, a, b):
+        return _matmul_transpose_contraction(a, b, fp32_output=True)
+
+    def grad(self, g):
+        g = g.cast(self.a.dtype)
+        # A generic elementwise backward rounds each broadcast contribution
+        # before reducing it. A GEMM rounds its completed gradient instead.
+        # Reuse exactly the same contraction and retain this boundary at every
+        # derivative order, as the native GEMM providers do.
+        da = _BFloat16MatmulAccumulator.apply(g, self.b.transpose()).cast(self.a.dtype)
+        db = _BFloat16MatmulAccumulator.apply(g.transpose(), self.a.transpose()).cast(self.b.dtype)
+        return da, db
+
+
+def _bfloat16_matmul_accumulator(a, b):
+    """CPU BF16 operands with a FP32 result, before Linear's bias rounding."""
+    ops = get_library_ops("mkl", load=True)
+    if ops is not None:
+        return ops.mkl_matmul(a, b, False, True, True)
+    # use_mkl=0 is a real native opmath route, sharing the existing contraction.
+    return _BFloat16MatmulAccumulator.apply(a, b)
 
 
 def bmm_transpose(a, b):

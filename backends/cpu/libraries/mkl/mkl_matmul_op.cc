@@ -19,16 +19,19 @@ namespace jittor {
 
 #ifndef JIT
 
-static auto make_mkl_matmul = op_constructor<VarPtr, Var*, Var*, bool, bool>("mkl_matmul");
+static auto make_mkl_matmul = op_constructor<VarPtr, Var*, Var*, bool, bool, bool>("mkl_matmul");
 
-MklMatmulOp::MklMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b)
+MklMatmulOp::MklMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b, bool fp32_output)
     : a(a), b(b), trans_a(trans_a), trans_b(trans_b) {
     // TODO: support int8 * int8
     USER_CHECK(a->dtype().is_float() && b->dtype().is_float())
         << "mkl matmul requires floating-point inputs, but got a:" << a->dtype() << "b:" << b->dtype();
-    // TODO: support diffrent input type
-    USER_CHECK(a->dtype().dsize() == 4 && b->dtype().dsize() == 4) << "support float32 only now.";
-    c = create_output(nullptr, a->dtype());
+    USER_CHECK(a->dtype() == b->dtype()
+               && (a->dtype() == ns_float32 || a->dtype() == ns_bfloat16))
+        << "mkl matmul requires matching float32 or bfloat16 operands";
+    USER_CHECK(!fp32_output || a->dtype() == ns_bfloat16)
+        << "FP32 accumulator output requires BF16 compute operands";
+    c = create_output(nullptr, fp32_output ? ns_float32 : a->dtype());
     // Both flags used to be someone else's business: this op only ever entered
     // a graph as a relay inside a fused op, where autograd runs on the
     // meta-op subgraph the relay stands in for, so it needed neither a
@@ -43,16 +46,20 @@ MklMatmulOp::MklMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b)
 VarPtr MklMatmulOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     // a [n,m], b [m,k], c [n,k], c = op(a) * op(b). The gradients come back in
     // the operands' own pre-transpose layouts. Mirrors MklBatchedMatmulOp.
+    // A wide accumulator does not widen the incoming low-precision cotangent.
+    // Keep this cast in the native graph, including create_graph derivatives.
+    VarPtr cast = cast_operand_to_compute_dtype(dout, a->dtype());
+    if (cast) dout = cast.ptr;
     if (v_index == 0) {
         if (trans_a)
-            return make_mkl_matmul(b, dout, trans_b, 1);
+            return make_mkl_matmul(b, dout, trans_b, 1, false);
         // da = dc * b^T
-        return make_mkl_matmul(dout, b, 0, trans_b^1);
+        return make_mkl_matmul(dout, b, 0, trans_b^1, false);
     }
     if (trans_b)
-        return make_mkl_matmul(dout, a, 1, trans_a);
+        return make_mkl_matmul(dout, a, 1, trans_a, false);
     // db = a^T * dc
-    return make_mkl_matmul(a, dout, trans_a^1, 0);
+    return make_mkl_matmul(a, dout, trans_a^1, 0, false);
 }
 
 void MklMatmulOp::infer_shape() {
@@ -85,6 +92,7 @@ void MklMatmulOp::infer_shape() {
 
 void MklMatmulOp::jit_prepare(JK& jk) {
     jk << "«T:" << a->dtype();
+    jk << "«To:" << c->dtype();
     jk << "«Trans_a:" << (trans_a ? 'T' : 'N');
     jk << "«Trans_b:" << (trans_b ? 'T' : 'N');
 }
@@ -106,7 +114,8 @@ void MklMatmulOp::jit_run() {
         k = bs[0];
     }
     onednn_matmul_execute(1, n, m, k, '@Trans_a'=='T', '@Trans_b'=='T',
-                           a->mem_ptr, b->mem_ptr, c->mem_ptr);
+                           a->mem_ptr, b->mem_ptr, c->mem_ptr,
+                           a->dtype() == ns_bfloat16, c->dtype() == ns_float32);
 }
 #endif
 #endif // JIT

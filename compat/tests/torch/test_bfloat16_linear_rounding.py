@@ -1,7 +1,4 @@
-"""CUDA BF16 Linear adds bias before rounding its FP32 accumulator.
-
-The existing CPU contraction retains its separate product/bias rounding.
-"""
+"""BF16 Linear adds bias before rounding its FP32 accumulator."""
 
 import numpy as np
 import pytest
@@ -108,4 +105,4 @@ class TestBFloat16LinearRounding:
         np.testing.assert_array_equal(second.float().cpu().numpy(), [[4.0625]])
 
 
-instantiate_device_type_tests(TestBFloat16LinearRounding, globals(), only_for=("cuda",))
+instantiate_device_type_tests(TestBFloat16LinearRounding, globals(), only_for=("cpu", "cuda"))
