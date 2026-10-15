@@ -385,7 +385,7 @@ workaround.
 
 ## KI-CODEGEN-005: CUDA full sum materializes a pending expanded elementwise consumer
 
-- Severity: S2 (performance and an existing CUDA allocation contract failure).
+- Severity: Medium (performance and an existing CUDA allocation contract failure).
 - Status: Open, independently reproduced on clean `4a4a480e628dae634a9d660f320c3aa957341e99`
   and the leaf/view follow-up on 2026-10-15.
 - Owner: CUDA reduction and JIT fusion maintainers.

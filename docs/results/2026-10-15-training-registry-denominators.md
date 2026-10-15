@@ -111,3 +111,30 @@ release-tag ambiguity and upstream re-enumeration. Raw inventories and logs are
 unversioned under `$JITTOR_LAB_ROOT/_state/leaf-view-integration/`:
 `vllm029-inventory.json`, `omni-inventory.json` and
 `vllm-registry-contracts-corrected.log`.
+
+## SCM wheel identity follow-up
+
+Based on `a5932248f`, the shared auditor additionally supports proving a real
+SCM distribution against a `source@SHA` inventory. It preserves the source
+label and the actual installed version separately. A hashed raw wheel must
+have the correct distribution name/version and contain every regenerated
+`package_sources` file with its exact hash. Registry/target hashes alone are
+insufficient. Both runtimes' base, perturbation and
+training measurements must bind that wheel and their actual installed source
+hashes. This path does not relax matching published versions.
+
+The actual clean-source Omni wheel has version
+`0.29.0rc2.dev58+g446c2b547`, not release `0.29.0`. Its SHA256 is
+`c6a43c816c95f99f751dd9aa18c36ff94461d508da002a2a328c543e14b2c0de`.
+The 172 registry/target source hashes remain the bounded denominator evidence.
+The additional full-package inventory binds all 1474 tracked Python files;
+each matches the wheel and independently installed target. The wheel's one
+generated Python file, `_version.py`, is also bound to its installed hash.
+Distribution metadata matches. This is an
+identity check only: no Omni numerical, device or model coverage is admitted
+from these files. Raw proof is unversioned at
+`$JITTOR_LAB_ROOT/_state/scorecard-scm-identity/omni-full-wheel-source-installed-proof.json`;
+the earlier 172-file subset check remains separately preserved.
+Shared contracts also exercise wrong source/package/version, absent wheel,
+release-version bypass and missing per-runtime/per-training installation
+bindings; these reject without weakening the original numerical protocol.

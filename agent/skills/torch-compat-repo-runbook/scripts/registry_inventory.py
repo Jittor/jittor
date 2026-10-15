@@ -390,6 +390,10 @@ def inventory(repo, checkout):
     if repo in ("vllm", "vllm-omni"):
         result["declaration_details"] = declaration_details
         result["scope"] = declaration_details["scope"]
+        # Registry/target hashes alone do not identify an installed package:
+        # imports outside the bounded registry still affect its computation.
+        result["package_sources"] = [{"path": path, "sha256": digest(checkout / path)}
+                                     for path in sorted(files)]
         if version_source is not None:
             result["upstream"]["version_source"] = version_source
     return result

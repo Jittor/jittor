@@ -56,7 +56,7 @@ python -S "$scripts/audit_coverage.py" scorecard \
 
 | 字段 | 固定内容 |
 | --- | --- |
-| 身份 | Jittor 完整 commit；上游完整 commit/version/remote；两侧实际下游版本必须等于该源码版本 |
+| 身份 | Jittor 完整 commit；上游完整 commit/version/remote；两侧实际下游版本必须等于该源码版本；无发布版本的 `source@SHA` 可按下文用真实 wheel 和全部源码哈希证明实际 SCM 版本 |
 | 主机/设备 | OS、CPU、卡型号、卡数、可见 index 映射；CPU 明写零卡，并显式关闭 CUDA/ACL |
 | 软件栈 | driver、CUDA 或 CANN、nvcc、gcc、nvidia wheel 版本；不适用的字段明写 `not-applicable` |
 | 实际 flag | `use_cuda`、`use_acl`、graph replay、TF32、HF32；NPU/ROCm 等可能仍使用 Jittor 的 `use_cuda` 调度开关，须记录真实值 |
@@ -67,6 +67,36 @@ python -S "$scripts/audit_coverage.py" scorecard \
 同卡对拍用两个独立进程，不使用 Jittor CPU/device 自比补 oracle。CPU①必须显式禁 CUDA；
 设备③必须证明驻留与 `fallback_policy=error,count=0`。缺失、skip、xfail、环境阻塞与失败
 各自记录，全部 skip 不能作为通过。平台快照用于复核身份，**不能替代计算所在设备的断言**。
+
+### 没有发布版本的源码与 SCM wheel
+
+若再生 inventory 的版本为精确 `source@<上游完整 SHA>`，实际安装包可以具有从该提交
+构建出的 SCM 开发版本。两侧 `downstream_versions` 必须保持相同的真实安装版本，
+不得修改包的 `__version__`、把开发提交标成正式 release，或将 `source@SHA` 写成实际
+分发版本。已有发布版本仍要求原来的严格版本相等，不能用此分支放宽。
+
+这类记录额外绑定一个 `role=upstream-wheel` 的原始 `.whl` artifact。审计器先核对其
+外部路径与 SHA256，再读取唯一 METADATA，要求发行名与仓库名一致、Version 与双方
+实际版本一致，并逐字节核对 inventory 中 `package_sources` 的**全部包 Python 源码**哈希，
+不能只使用注册表/目标类的较小 `sources` 子集。源码路径的 `src/` 前缀
+映射到 wheel 包根；缺文件、重复 ZIP 成员、错误源码或版本都拒绝。源码 identity
+仍保留原始 SHA/remote，wheel 不替代上游提交。
+
+base、perturb 和 L3 training 的双方原始测量 metadata 都必须记录实际安装内容：
+
+```json
+"downstream_distribution": {
+  "repo": "<仓库名>",
+  "version": "<实际安装的 SCM 版本>",
+  "wheel_sha256": "<上面原始 wheel 的 SHA256>",
+  "source_sha256": {"<package_sources 源码路径>": "<实际安装文件的 SHA256，逐项完整记录>"},
+  "generated_source_sha256": {"<wheel 中额外生成的 Python 文件路径>": "<实际安装文件 SHA256>"}
+}
+```
+
+审计器要求该绑定与 wheel/再生源码完全一致。缺任一 runtime、任一训练测量或任一源文件
+都不能用 wheel 的存在代替实际安装证据。wheel 额外生成的 `_version.py` 等 Python 文件
+也要完整绑定；没有额外文件时该字段为 `{}`。版本/源码证明本身不授予数值、设备或 L 级。
 
 ## L4 的速度块
 

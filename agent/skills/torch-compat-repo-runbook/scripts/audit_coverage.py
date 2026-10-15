@@ -7,11 +7,13 @@ validated records with pinned source inventories and external raw-artifact hashe
 
 import argparse
 import ast
+from email.parser import BytesParser
 import hashlib
 import json
 import math
 from pathlib import Path
 import re
+import zipfile
 
 from registry_inventory import ROOT, git, inventory, write_json
 
@@ -122,7 +124,48 @@ def _number(value, label, positive=False):
     return value
 
 
-def _validate_measurements(record, level, artifacts):
+def _validate_source_wheel(record, source, artifacts):
+    """Prove an SCM distribution matches source without renaming its version."""
+    wheels = [item for item in artifacts if item.get("role") == "upstream-wheel"]
+    _require(len(wheels) == 1, "Source-only installed versions require one upstream-wheel artifact")
+    artifact = wheels[0]
+    path = Path(artifact["path"]).expanduser()
+    _require(path.suffix == ".whl", "Upstream distribution artifact must be a wheel")
+    sources = source.get("package_sources", [])
+    _require(sources and len({item["path"] for item in sources}) == len(sources),
+             "Source-only wheel proof requires unique regenerated full-package source hashes")
+    generated = {}
+    try:
+        with zipfile.ZipFile(path) as wheel:
+            names = wheel.namelist()
+            _require(len(names) == len(set(names)), "Duplicate upstream wheel members")
+            metadata = [name for name in names if name.endswith(".dist-info/METADATA")]
+            _require(len(metadata) == 1, "Expected exactly one upstream wheel METADATA")
+            package = BytesParser().parsebytes(wheel.read(metadata[0]))
+            def normalize(value):
+                return re.sub(r"[-_.]+", "-", value).lower()
+            _require(package.get("Name") and normalize(package["Name"]) == normalize(record["repo"]),
+                     "Upstream wheel distribution name mismatch")
+            version = record["downstream_versions"]["candidate"]
+            _require(package.get_all("Name") == [package["Name"]]
+                     and package.get_all("Version") == [version], "Upstream wheel version mismatch")
+            for item in sources:
+                relative = item["path"]
+                member = relative[4:] if relative.startswith("src/") else relative
+                _require(member in names and hashlib.sha256(wheel.read(member)).hexdigest() == item["sha256"],
+                         "Upstream wheel source mismatch: " + relative)
+            tracked = {item["path"][4:] if item["path"].startswith("src/") else item["path"]
+                       for item in sources}
+            generated = {name: hashlib.sha256(wheel.read(name)).hexdigest()
+                         for name in names if name.endswith(".py") and name not in tracked}
+    except (OSError, zipfile.BadZipFile) as error:
+        raise ValueError("Invalid upstream wheel artifact") from error
+    return {"repo": record["repo"], "version": version, "wheel_sha256": artifact["sha256"],
+            "source_sha256": {item["path"]: item["sha256"] for item in sources},
+            "generated_source_sha256": generated}
+
+
+def _validate_measurements(record, level, artifacts, installation=None):
     """Bind the platform to hashed, actual measurement JSON, not a copied label."""
     by_role = {}
     for artifact in artifacts:
@@ -157,6 +200,9 @@ def _validate_measurements(record, level, artifacts):
             _require(value.get("tf32") == expected, "Platform/measurement precision mismatch")
             _require(value.get("runtime_conditions", {}).get("precision") == expected,
                      "Measurement runtime precision mismatch")
+            if installation is not None:
+                _require(value.get("downstream_distribution") == installation,
+                         "Measurement installed distribution/source binding mismatch")
         _require(reference["runtime_conditions"] == candidate["runtime_conditions"],
                  "Oracle/candidate runtime conditions mismatch")
         backend = candidate.get("backend", {})
@@ -203,7 +249,12 @@ def validate_record(record, inventories, baseline, root=ROOT):
     _require(record.get("upstream") == inventories[repo]["upstream"], "Upstream SHA/version/remote mismatch")
     version = inventories[repo]["upstream"].get("version")
     versions = record.get("downstream_versions", {})
-    _require(version and versions.get("candidate") == version and versions.get("oracle") == version,
+    source_distribution = (version == "source@" + inventories[repo]["upstream"]["commit"]
+                           and isinstance(versions.get("candidate"), str)
+                           and bool(versions["candidate"]) and not versions["candidate"].startswith("source@")
+                           and versions.get("oracle") == versions["candidate"])
+    _require(version and ((versions.get("candidate") == version and versions.get("oracle") == version)
+                          or source_distribution),
              "Installed downstream versions do not match pinned upstream")
     level = record.get("level")
     _require(type(level) is int and 1 <= level <= 5, "Level must be L1..L5")
@@ -260,6 +311,8 @@ def validate_record(record, inventories, baseline, root=ROOT):
         _require(path.is_file() and root.resolve() not in path.parents,
                  "Raw artifact missing or inside checkout")
         _require(hashlib.sha256(path.read_bytes()).hexdigest() == artifact.get("sha256"), "Artifact SHA256 mismatch")
+    installation = (_validate_source_wheel(record, inventories[repo], artifacts)
+                    if source_distribution else None)
     if device != "cpu":
         fallback = record.get("fallback", {})
         _require(fallback.get("policy") == "error" and fallback.get("count") == 0,
@@ -310,7 +363,7 @@ def validate_record(record, inventories, baseline, root=ROOT):
         _require(device != "cpu" and fallback.get("policy") == "error" and fallback.get("count") == 0,
                  "L5 requires actual accelerator execution with zero fallback")
     if level >= 2:
-        _validate_measurements(record, level, artifacts)
+        _validate_measurements(record, level, artifacts, installation)
     return level
 
 

@@ -12,6 +12,7 @@ import tempfile
 import unittest
 import types
 from unittest import mock
+import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -334,6 +335,116 @@ class CoverageAuditTests(unittest.TestCase):
     def test_installed_dependency_versions_must_match_upstream(self):
         self.row["downstream_versions"]["oracle"] = "other"
         with self.assertRaisesRegex(ValueError, "versions"):
+            self.validate(self.row)
+
+    def bind_scm_wheel(self, *, source=b"# pinned upstream source\n", name="transformers",
+                       wheel_version="1.1.dev3+g1234567", generated=None):
+        self.snapshot["upstream"]["version"] = "source@" + self.snapshot["upstream"]["commit"]
+        self.snapshot["sources"] = [{"path": "src/transformers/__init__.py",
+                                     "sha256": hashlib.sha256(b"# pinned upstream source\n").hexdigest()}]
+        self.snapshot["package_sources"] = copy.deepcopy(self.snapshot["sources"])
+        self.row["downstream_versions"] = dict(candidate="1.1.dev3+g1234567", oracle="1.1.dev3+g1234567")
+        path = self.lab / "upstream.whl"
+        with zipfile.ZipFile(path, "w") as wheel:
+            wheel.writestr("transformers/__init__.py", source)
+            wheel.writestr("transformers-1.1.dist-info/METADATA",
+                           "Metadata-Version: 2.1\nName: %s\nVersion: %s\n" % (name, wheel_version))
+            if generated is not None:
+                wheel.writestr("transformers/_version.py", generated)
+        artifact = {"role": "upstream-wheel", "path": str(path),
+                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+        self.row["evidence"]["artifacts"].append(artifact)
+        binding = {"repo": "transformers", "version": "1.1.dev3+g1234567",
+                   "wheel_sha256": artifact["sha256"],
+                   "source_sha256": {s["path"]: s["sha256"] for s in self.snapshot["package_sources"]},
+                   "generated_source_sha256": {} if generated is None else {
+                       "transformers/_version.py": hashlib.sha256(generated).hexdigest()}}
+        for role in ("base-comparison", "perturb-comparison"):
+            value = self.document(self.row, role)
+            pair = value["cases"][0] if role == "base-comparison" else value
+            names = ("oracle_result", "jittor_result") if role == "base-comparison" else ("reference_result", "candidate_result")
+            for key in names:
+                pair[key]["downstream_distribution"] = copy.deepcopy(binding)
+            self.artifact_json(self.row, role, value)
+        return binding
+
+    def test_scm_version_needs_exact_wheel_source_and_actual_installation_bindings(self):
+        self.bind_scm_wheel()
+        self.assertEqual(self.validate(self.row), 2)
+        self.assertTrue(self.row["upstream"]["version"].startswith("source@"))
+        self.assertEqual(self.row["downstream_versions"]["candidate"], "1.1.dev3+g1234567")
+
+    def test_scm_version_cannot_bypass_wheel_or_published_release_version(self):
+        self.bind_scm_wheel()
+        self.snapshot["upstream"]["version"] = "1.0"
+        with self.assertRaisesRegex(ValueError, "versions"):
+            self.validate(self.row)
+        self.snapshot["upstream"]["version"] = "source@" + self.snapshot["upstream"]["commit"]
+        self.row["evidence"]["artifacts"] = [a for a in self.row["evidence"]["artifacts"]
+                                                if a["role"] != "upstream-wheel"]
+        with self.assertRaisesRegex(ValueError, "upstream-wheel"):
+            self.validate(self.row)
+
+    def test_scm_wheel_cannot_substitute_a_different_source_or_package(self):
+        self.bind_scm_wheel(source=b"# different source\n")
+        with self.assertRaisesRegex(ValueError, "wheel source mismatch"):
+            self.validate(self.row)
+        self.row["evidence"]["artifacts"] = [a for a in self.row["evidence"]["artifacts"]
+                                                if a["role"] != "upstream-wheel"]
+        self.bind_scm_wheel(name="other-package")
+        with self.assertRaisesRegex(ValueError, "distribution name mismatch"):
+            self.validate(self.row)
+
+    def test_scm_wheel_metadata_cannot_relabel_the_installed_version(self):
+        self.bind_scm_wheel(wheel_version="1.1")
+        with self.assertRaisesRegex(ValueError, "wheel version mismatch"):
+            self.validate(self.row)
+
+    def test_scm_measurements_must_bind_both_runtime_installations(self):
+        self.bind_scm_wheel()
+        for role, key in (("base-comparison", "oracle_result"),
+                          ("base-comparison", "jittor_result"),
+                          ("perturb-comparison", "reference_result"),
+                          ("perturb-comparison", "candidate_result")):
+            original = self.document(self.row, role)
+            changed = copy.deepcopy(original)
+            pair = changed["cases"][0] if role == "base-comparison" else changed
+            pair[key]["downstream_distribution"]["source_sha256"] = {}
+            self.artifact_json(self.row, role, changed)
+            with self.subTest(role=role, key=key), self.assertRaisesRegex(ValueError, "installed distribution/source"):
+                self.validate(self.row)
+            self.artifact_json(self.row, role, original)
+
+    def test_scm_training_requires_its_own_installed_source_bindings(self):
+        binding = self.bind_scm_wheel()
+        self.row["level"] = 3
+        self.row["training"] = {"steps": 3, "loss_trajectory_passed": True, "parameter_trajectory_passed": True,
+                                "trainable": 2, "frozen": 0, "trainable_parameters": ["weight", "bias"],
+                                "frozen_parameters": []}
+        with self.assertRaisesRegex(ValueError, "installed distribution/source"):
+            self.validate(self.row)
+        for role in ("training-reference-metadata", "training-candidate-metadata"):
+            value = self.document(self.row, role)
+            value["downstream_distribution"] = copy.deepcopy(binding)
+            self.artifact_json(self.row, role, value)
+        self.assertEqual(self.validate(self.row), 3)
+
+    def test_scm_proof_cannot_use_only_registry_hashes_or_omit_a_package_file(self):
+        self.bind_scm_wheel()
+        complete = self.snapshot.pop("package_sources")
+        with self.assertRaisesRegex(ValueError, "full-package"):
+            self.validate(self.row)
+        self.snapshot["package_sources"] = complete + [{"path": "src/transformers/other.py", "sha256": "f" * 64}]
+        with self.assertRaisesRegex(ValueError, "wheel source mismatch"):
+            self.validate(self.row)
+
+    def test_scm_generated_version_code_must_match_both_actual_installations(self):
+        self.bind_scm_wheel(generated=b"__version__ = '1.1.dev3+g1234567'\n")
+        self.assertEqual(self.validate(self.row), 2)
+        value = self.document(self.row, "base-comparison")
+        value["cases"][0]["jittor_result"]["downstream_distribution"]["generated_source_sha256"] = {}
+        self.artifact_json(self.row, "base-comparison", value)
+        with self.assertRaisesRegex(ValueError, "installed distribution/source"):
             self.validate(self.row)
 
     def test_real_audit_is_host_only_and_does_not_promote_registration(self):
