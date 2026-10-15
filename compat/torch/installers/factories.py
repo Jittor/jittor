@@ -201,6 +201,11 @@ def _install_empty_like(root):
 
 _DROP = ("device", "requires_grad", "layout", "pin_memory", "memory_format", "out", "non_blocking")
 _DEFAULT_FLOAT_FACTORIES = {"zeros", "ones", "empty", "rand", "randn", "eye", "linspace"}
+_FRESH_LEAF_FACTORIES = frozenset({
+    "empty", "zeros", "ones", "full", "arange", "linspace",
+    "empty_like", "zeros_like", "ones_like", "full_like",
+    "rand", "randn", "randint", "randperm", "rand_like", "randn_like",
+})
 _TENSOR_ARGUMENT = ("tril", "triu")
 #: Factories whose first positional argument is the tensor the result should
 #: follow, so it is the placement reference when no `device=` is given. The
@@ -209,6 +214,17 @@ _TENSOR_ARGUMENT = ("tril", "triu")
 #: device -- `torch.multinomial(weights_on_cuda1, 2)` died with "Expected all
 #: tensor inputs on the same backend and device" instead of sampling.
 _TENSOR_FIRST_ARGUMENT = _TENSOR_ARGUMENT + ("multinomial", "bernoulli")
+
+
+def _creates_fresh_leaf(name, args, kwargs):
+    if name in _FRESH_LEAF_FACTORIES:
+        return True
+    if name == "normal":
+        # Tensor mean/std have their own sampling/autograd contract. Only the
+        # scalar overload creates a leaf with no input tensor history.
+        values = args[:2] + (kwargs.get("mean"), kwargs.get("std"))
+        return not any(isinstance(value, jt.Var) for value in values)
+    return False
 
 
 def _shape_dim(v):
@@ -248,6 +264,7 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
     # _invoke_factory already established native construction placement.
     _requires_grad = bool(kwargs.get("requires_grad", False))
     fresh_like = name in ("empty_like", "zeros_like", "ones_like", "full_like")
+    fresh_leaf = _creates_fresh_leaf(name, args, kwargs)
     for k in _DROP:
         kwargs.pop(k, None)
     # Jittor shape conversion rejects numpy scalars; normalize them.
@@ -310,7 +327,7 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
     out = orig(*args, **kwargs)
     if _cast_to is not None:
         out = out.cast(_cast_to)
-    if fresh_like:
+    if fresh_leaf:
         # Allocation helpers may use broadcast/cast internally. Those graph
         # nodes are not the history of a newly created Torch leaf.
         out = out.detach()
@@ -355,10 +372,11 @@ def _linspace_adapter(original, *args, dtype=None, **kwargs):
     if len(args) >= 3 and not isinstance(args[2], int): args[2] = int(args[2])
     if "steps" in kwargs and not isinstance(kwargs["steps"], int):
         kwargs["steps"] = int(kwargs["steps"])
-    r = original(*args, **kwargs)
     if dtype is not None:
-        r = r.cast(_dtype_to_str(dtype))
-    return r
+        # The constructor casts before detaching/registering the fresh leaf.
+        # A cast here creates another holder after that registration.
+        kwargs["dtype"] = dtype
+    return original(*args, **kwargs)
 
 
 #: What a seeded draw of an integer factory must come back as. torch's own
@@ -496,6 +514,8 @@ def _draw_from_generator(name, generator, args, kwargs):
         t = jt.bernoulli(src, generator=native)
     else:
         raise NotImplementedError("%s does not support an explicit native generator" % name)
+    if _creates_fresh_leaf(name, args, kwargs):
+        t = t.detach()
     t._jittor_torch_ext_mutable = True
     requires_grad = bool(kwargs.get("requires_grad", False))
     t.requires_grad_(requires_grad)
