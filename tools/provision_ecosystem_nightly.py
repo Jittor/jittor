@@ -47,13 +47,14 @@ RUNTIME_SETUPTOOLS = 'setuptools==80.9.0'
 def runtime_roots(library):
     if library == 'verl':
         return list(VERL_DEPS)
-    require(library in ('peft', 'swift'), 'Unknown maintained library profile')
+    require(library in ('peft', 'swift', 'transformers'), 'Unknown maintained library profile')
     return list(COMMON) + (list(SWIFT_DEPS) if library == 'swift' else [])
 
 
 def session_name(library):
-    require(library in ('peft', 'swift', 'verl'), 'Unknown maintained library profile')
-    return 'ecosystem_verl_training' if library == 'verl' else 'ecosystem_' + library
+    require(library in ('peft', 'swift', 'verl', 'transformers'), 'Unknown maintained library profile')
+    return {'verl': 'ecosystem_verl_training',
+            'transformers': 'ecosystem_transformers_source'}.get(library, 'ecosystem_' + library)
 
 
 def digest(path):
@@ -235,13 +236,18 @@ def provision(library, state, python, source_cache=None, wheel_cache=None):
         sources = inventory('verl', path)
     else:
         from _peft_scorecard import PINS, source_descriptor
-        for repo, (version, sha, remote, wheel_hash) in PINS.items():
+        selected = {'transformers': PINS['transformers']} if library == 'transformers' else PINS
+        for repo, (version, sha, remote, wheel_hash) in selected.items():
             path = state / 'upstream' / repo
             checkout(commands, path, 'https://github.com/' + remote + '.git', sha,
                      source_cache / repo if source_cache else None)
             checkouts[repo] = path
             pinned[repo] = official_wheel(repo, version, wheel_hash, wheels)
-        sources = source_descriptor(checkouts, pinned)
+        if library == 'transformers':
+            from _transformers_scorecard import source_descriptor as transformers_source
+            sources = transformers_source(checkouts['transformers'], pinned['transformers'])
+        else:
+            sources = source_descriptor(checkouts, pinned)
     (state / 'upstream-proof.json').write_text(json.dumps(sources, indent=2) + '\n')
     # Both private runtimes receive complete real distribution metadata. Only
     # the candidate later activates the official Jittor Torch shim.
@@ -359,7 +365,7 @@ def provision(library, state, python, source_cache=None, wheel_cache=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--library', choices=('peft', 'swift', 'verl'), required=True)
+    parser.add_argument('--library', choices=('peft', 'swift', 'verl', 'transformers'), required=True)
     parser.add_argument('--state-root', type=Path, required=True)
     parser.add_argument('--python', default=sys.executable, help='Healthy Python 3.11 for new private venvs')
     parser.add_argument('--source-cache', type=Path,
