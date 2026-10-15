@@ -304,8 +304,27 @@ def _accuracy_admitted(query):
                 and len(query.shape) == 4 and int(query.shape[-1]) < 32)
 
 
+def _reduced_precision_admitted(query, key, value, attn_mask, dropout_p, is_causal):
+    # Match the native probability rounding of fused Torch SDPA for short,
+    # unmasked BF16 attention. Native callers retain FP32 opmath by default.
+    # A single key has exactly zero Q/K derivatives; keep that exact math
+    # path rather than introducing fused cancellation residuals.
+    shapes = [tuple(t.shape) for t in (query, key, value)]
+    return (
+        attn_mask is None and float(dropout_p or 0.0) == 0.0 and not is_causal
+        and all(len(shape) == 4 for shape in shapes)
+        and all(_jittor_dtype_name(t.dtype) == "bfloat16" for t in (query, key, value))
+        and shapes[0][:2] == shapes[1][:2] == shapes[2][:2]
+        and shapes[0][0] > 0 and shapes[0][1] > 0
+        and shapes[1] == shapes[2]
+        and shapes[0][-1] == shapes[1][-1] in (8, 16, 24)
+        and 0 < shapes[0][-2] <= 64 and 1 < shapes[1][-2] <= 64
+    )
+
+
 def _cudnn_fused_attention(query, key, value, attn_mask=None, dropout_p=0.0,
-                           is_causal=False, scale=None, *, grouped=False):
+                           is_causal=False, scale=None, *, grouped=False,
+                           allow_reduced_precision=False):
     """Run attention through cuDNN, or return None to decline.
 
     ``grouped``: `key` and `value` may have fewer heads than `query`, each
@@ -327,7 +346,9 @@ def _cudnn_fused_attention(query, key, value, attn_mask=None, dropout_p=0.0,
     if dtype not in _DTYPES or _jittor_dtype_name(key.dtype) != dtype \
             or _jittor_dtype_name(value.dtype) != dtype:
         return None
-    if not _accuracy_admitted(query):
+    if not (_accuracy_admitted(query) or (
+            allow_reduced_precision and _reduced_precision_admitted(
+                query, key, value, attn_mask, dropout_p, is_causal))):
         return None
     if attn_mask is not None:
         if _output_requires_grad(attn_mask):
@@ -429,8 +450,11 @@ def _mask_terms(attn_mask, query_dims, key_dims, dtype, causal=False):
     return bias, live
 
 
-def _supports(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None):
-    return _jittor_dtype_name(query.dtype) in _DTYPES and _accuracy_admitted(query)
+def _supports(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False,
+              scale=None, allow_reduced_precision=False):
+    return _jittor_dtype_name(query.dtype) in _DTYPES and (
+        _accuracy_admitted(query) or (allow_reduced_precision and _reduced_precision_admitted(
+            query, key, value, attn_mask, dropout_p, is_causal)))
 
 
 # Not `dtypes=`: the registry filters on every tensor argument, and a bool mask

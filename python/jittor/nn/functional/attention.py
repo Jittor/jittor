@@ -209,6 +209,8 @@ def scaled_dot_product_attention(
     is_causal=False,
     scale=None,
     enable_gqa=False,
+    *,
+    allow_reduced_precision=False,
 ):
     """Compute scaled dot-product attention with Torch-compatible masks.
 
@@ -217,7 +219,20 @@ def scaled_dot_product_attention(
     (``nn.fused_attention_gqa``) runs it as it is; otherwise the heads are
     repeated first -- a copy of every key and value head per query head, which
     the backward then keeps.
+
+    ``allow_reduced_precision`` permits a fused backend's low-precision
+    probability products on its admitted shapes. The default preserves the
+    stricter FP32-opmath policy for small BF16 heads. It does not change the
+    precision of the math fallback.
     """
+    if type(allow_reduced_precision) is not bool:
+        raise TypeError("allow_reduced_precision must be bool")
+    precision_options = (
+        {"allow_reduced_precision": True}
+        if allow_reduced_precision and not enable_gqa
+        and _jittor_dtype_name(query.dtype) == "bfloat16"
+        else {}
+    )
     if not enable_gqa and len(query.shape) == 4:
         repeated_key, repeated_value = _repeated_heads(key), _repeated_heads(value)
         if (
@@ -234,6 +249,7 @@ def scaled_dot_product_attention(
                 dropout_p=float(dropout_p or 0.0),
                 is_causal=is_causal,
                 scale=scale,
+                **precision_options,
             )
             if fused is not None:
                 return fused
@@ -249,6 +265,7 @@ def scaled_dot_product_attention(
             dropout_p=float(dropout_p or 0.0),
             is_causal=is_causal,
             scale=scale,
+            **precision_options,
         )
         if fused is not None:
             return fused
@@ -299,6 +316,7 @@ def scaled_dot_product_attention(
         dropout_p=probability,
         is_causal=is_causal,
         scale=scale,
+        **precision_options,
     )
     fused = (
         None
@@ -311,6 +329,7 @@ def scaled_dot_product_attention(
             dropout_p=probability,
             is_causal=is_causal,
             scale=scale,
+            **precision_options,
         )
     )
     if fused is not None:
