@@ -2,6 +2,8 @@
 
 import ast
 import importlib
+import hashlib
+import copy
 from pathlib import Path
 import sys
 import tempfile
@@ -25,6 +27,92 @@ class OpenMMLabInstalledContracts(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.directory = Path(self.temporary.name)
+
+    def installation_pair(self):
+        values = []
+        for side in ('reference', 'candidate'):
+            package = self.directory / side / 'mmengine'
+            package.mkdir(parents=True)
+            (package / '__init__.py').write_bytes(b"__version__ = '0.10.7'\n")
+            payload = {'__init__.py': hashlib.sha256((package / '__init__.py').read_bytes()).hexdigest()}
+            values.append({'dependencies': {'mmengine': {
+                'origin': str(package / '__init__.py'), 'version': '0.10.7',
+                'installed_files_sha256': payload}}, 'downstream_distributions': {'mmengine': {
+                'repo': 'mmengine', 'version': '0.10.7', 'package': str(package),
+                'installed_files_sha256': payload, 'source_sha256': {'mmengine/__init__.py': payload['__init__.py']}}}})
+        return values
+
+    def test_independent_actual_package_prefixes_have_the_same_installation_identity(self):
+        values = self.installation_pair()
+        self.assertNotEqual(values[0]['dependencies'], values[1]['dependencies'])
+        self.contract.validate_installation_pair(values, {'mmengine'})
+
+    def test_package_origin_and_current_files_are_verified_before_paths_are_excluded(self):
+        original = self.installation_pair()
+        for change in ('origin', 'package', 'payload', 'version', 'resource', 'missing', 'extra', 'unknown'):
+            values = copy.deepcopy(original)
+            dependency = values[1]['dependencies']['mmengine']
+            binding = values[1]['downstream_distributions']['mmengine']
+            package = Path(binding['package'])
+            if change == 'origin':
+                dependency['origin'] = values[0]['dependencies']['mmengine']['origin']
+            elif change == 'package':
+                binding['package'] = 'relative/package'
+            elif change == 'payload':
+                dependency['installed_files_sha256'] = {'__init__.py': '0' * 64}
+            elif change == 'version':
+                dependency['version'] = binding['version'] = '9.9'
+            elif change == 'resource':
+                (package / 'changed-resource.bin').write_bytes(b'unrecorded')
+            elif change == 'missing':
+                values[1]['dependencies'].clear()
+            elif change == 'extra':
+                values[1]['downstream_distributions']['unproved'] = {}
+            else:
+                binding['unknown_identity_field'] = 'different'
+            try:
+                with self.subTest(change=change), self.assertRaises(ValueError):
+                    self.contract.validate_installation_pair(values, {'mmengine'})
+            finally:
+                if change == 'resource':
+                    (package / 'changed-resource.bin').unlink()
+
+    def test_training_pair_compares_verified_identity_and_retains_original_packets(self):
+        # Exercise the real legacy trajectory helper after independent-prefix
+        # validation, without compiling or running a downstream framework.
+        spec = importlib.util.spec_from_file_location('mm_gate_fixture', ROOT / 'tests/tools/test_openmmlab_gate.py')
+        gate = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(gate)
+        case = 'mmengine_train_step'
+        values = self.installation_pair()
+        initial = self.directory / 'initial.npz'
+        np.savez(initial, **{name: np.full(shape, .1, dtype='float32')
+                            for name, shape in self.contract.SPECS[case]['parameters'].items()})
+        for value, runtime in zip(values, ('torch', 'jittor')):
+            value.update({key: item for key, item in gate.OpenMMLabGateTests.reports().items()
+                          if key != 'dependencies'})
+            value.update(runtime=runtime, weights=str(initial), runtime_conditions={'precision': {}})
+        original = copy.deepcopy(values)
+        paths = [self.directory / (side + '.npz') for side in ('reference', 'candidate')]
+        for path in paths:
+            np.savez(path, **self.arrays(case, training=True))
+        with mock.patch.object(self.contract, 'installation_proofs'), \
+             mock.patch.object(self.contract, 'validate_metadata'), \
+             mock.patch.object(self.contract, 'validate_initial_weights'), \
+             mock.patch.object(self.contract, 'read', side_effect=values):
+            result = self.contract.compare_pair(*paths, {}, 'baseline', case, 0, {}, ROOT, training=True)
+        self.assertEqual(values, original)
+        self.assertEqual(result['candidate_result'], original[1])
+        self.assertEqual(len(result['rows']), 75)
+        # Even internally consistent but unequal declared versions cannot reach
+        # the trajectory comparison merely because its origin is excluded.
+        values[1]['dependencies']['mmengine']['version'] = '9.9'
+        values[1]['downstream_distributions']['mmengine']['version'] = '9.9'
+        with mock.patch.object(self.contract, 'installation_proofs'), \
+             mock.patch.object(self.contract, 'validate_metadata'), \
+             mock.patch.object(self.contract, 'read', side_effect=values), \
+             self.assertRaises(ValueError):
+            self.contract.compare_pair(*paths, {}, 'baseline', case, 0, {}, ROOT, training=True)
 
     def arrays(self, case, training=False):
         values = {name: np.full(shape, .2, dtype=self.contract.dtype_name(name))

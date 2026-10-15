@@ -25,7 +25,9 @@ description: 验证真实 MMEngine CPU/CUDA 数值、完整梯度与下游拥有
 
 专用 `ecosystem_openmmlab` session 使用预装的 MMEngine **0.10.7**、MMCV **2.2.0**
 和 NumPy **1.x**，不升级已有生态环境。可直接使用干净的上游 release checkout；
-两侧实际 import 的版本与 origin 必须一致。`mmcv.cnn` 可由不含编译 `_ext` 的源码提供，
+两侧实际 import 的版本、来源与完整包内容必须一致；独立解释器可使用不同安装目录。
+逐侧核对真实 `origin` 与该侧 `package/__init__.py`、完整文件哈希，再比较安装身份，
+不要求两个 prefix 的绝对路径相同。`mmcv.cnn` 可由不含编译 `_ext` 的源码提供，
 这不建立任何 `mmcv.ops` 覆盖。所有环境、原始日志和缓存位于外置 lab state。
 
 ## 完整来源 CPU nightly
