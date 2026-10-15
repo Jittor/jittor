@@ -570,8 +570,18 @@ def test_maintained_nox_entry_launches_the_separate_process_protocol(tmp_path, m
     monkeypatch.setenv('REAL_TORCH_PYTHON', 'binary-oracle-python')
     monkeypatch.setenv('JITTOR_ACCELERATE_CHECKOUT', 'official-pinned-checkout')
     monkeypatch.setenv('JITTOR_TEST_DEVICES', 'cpu')
+    provider_inputs = {'JITTOR_CUDA_WHEEL_STRICT': '1', 'JT_BUILD_NVCC_PATH': '/private/toolchain/nvcc',
+                       'JT_BUILD_NCCL_INCLUDE_PATH': '/private/nccl/include',
+                       'JT_BUILD_NCCL_LIB_PATH': '/private/nccl/lib'}
+    for name, value in provider_inputs.items():
+        monkeypatch.setenv(name, value)
     commands = []
-    namespace['ecosystem_accelerate'](SimpleNamespace(posargs=[], run=lambda *args, **kwargs: commands.append(args)))
+    environments = []
+    def run(*args, **kwargs):
+        commands.append(args)
+        environments.append(kwargs['env'])
+    namespace['ecosystem_accelerate'](SimpleNamespace(posargs=[], run=run))
     assert len(commands) == 1
     assert commands[0][:2] == ('candidate-python', 'tools/run_accelerate_gate.py')
     assert '--fresh-process' in commands[0]
+    assert {name: environments[0].get(name) for name in provider_inputs} == provider_inputs

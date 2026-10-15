@@ -2258,6 +2258,11 @@ def _ecosystem_deepspeed_session(session, multirank=False):
 def ecosystem_accelerate(session):
     """Independent checkpoint correctness with terminated producers and new consumers."""
     _root, env = _session_env(session, "ecosystem-accelerate")
+    # Keep explicit provider choices when crossing the isolated nox boundary.
+    for name in ("JITTOR_CUDA_WHEEL_STRICT", "JT_BUILD_NVCC_PATH", "nvcc_path",
+                 "JT_BUILD_NCCL_INCLUDE_PATH", "JT_BUILD_NCCL_LIB_PATH"):
+        if name in os.environ:
+            env[name] = os.environ[name]
     python = _hardware_python()
     oracle = os.environ.get("REAL_TORCH_PYTHON", "").strip()
     checkout = os.environ.get("JITTOR_ACCELERATE_CHECKOUT", "").strip()
