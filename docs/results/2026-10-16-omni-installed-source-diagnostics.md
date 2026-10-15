@@ -5,6 +5,7 @@
 - Measured source: clean `57b5f57ae220d1d8af1e6880ffcde6e362969110`.
 - Owner: Downstream validation and vLLM adapter maintainers.
 - Review when: the pinned wheel/source, generated version module, model dispatch or gradient contract changes.
+- Platform-producer follow-up: clean `c18033fef8c44bfa4045a4108ba67128e7a5ee7e`; separate from the original diagnostic cohort.
 
 The maintained H3 probe now binds the complete actual Omni installation before
 importing the model, including non-Python resources, original source-built wheel,
@@ -107,3 +108,43 @@ every original Git tree entry, 145 historical genuine arrays/initial states,
 expanded structure 1628 passed / 6 skipped; layout, manifest and Ruff passed.
 All 74 nox function bodies remain unchanged. These checks validate the source
 proof and preserved failure diagnosis, not a passing full-model protocol.
+
+## Shared platform producer follow-up
+
+A separate clean `c18033fef8c44bfa4045a4108ba67128e7a5ee7e` execution checks
+that the maintained probe emits its shared platform block before model import
+and in final results. The original `57b5f57` packets remain unchanged and have
+no such block. The new genuine CPU run emits an installation/platform packet,
+then exits nonzero with the same upstream CUDA requirement. The new genuine
+CUDA run completes the original forward recipe: all six output arrays and all
+37 initial parameter/buffer arrays are byte-identical to the original genuine
+CUDA diagnostic. All 43 tensor observations have actual CUDA pointers on the
+allocated logical device; inventory alone is not used as placement proof.
+
+The new workers record actual OS/CPU, accelerator model and UUID allocation,
+driver, Torch CUDA build, available compiler versions, resolved NVIDIA
+distributions, precision and execution flags. The CUDA worker reports driver
+580.178.04, Torch 2.13.0+cu130, available NVCC 12.2 and GCC 11.5; the available
+NVCC is not claimed to be the compiler used to build Torch. TF32 and cuDNN
+benchmarking remain disabled, matmul precision highest and reference execution
+eager. This follow-up validates genuine producer metadata, not new candidate
+agreement, complete provider-wheel provenance or full-model admission. Original
+scaled-error failures and missing gradients remain open.
+
+Accelerate now uses the same field builder. Replaying all 48 original `c7c2d37`
+worker headers from their recorded observed inputs reproduces every field;
+the current common collector still accepts two single-rank records and blocks
+two unpaired CUDA FSDP2 records, with zero rejected. This is a format/semantic
+replay, not a new Accelerate numerical run or a retroactive source update.
+
+Follow-up validation: 121 targeted checks, CPU core 322 passed / 42 skipped /
+1 existing xfail, expanded structure 1628 passed / 6 skipped; layout, manifest
+and Ruff passed. All 74 nox function bodies are unchanged. Actual new records,
+the source-before/after check and independent array/platform/installation audit
+are unversioned at
+`$JITTOR_LAB_ROOT/_state/runtime-platform-main-53d/20261016/`.
+`integration-seal-v1.json`, SHA256
+`de15cc28fa35f49306ffac6a43ae57e1ce58a074cc277805b1c90ab8dcbf8671`,
+binds 2905 measured-source Git blobs and 1635 evidence/actual-Omni-installed
+files (33193538 bytes); every sealed file was rehashed independently. Compiler
+caches and full Torch/provider contents are outside this follow-up seal.

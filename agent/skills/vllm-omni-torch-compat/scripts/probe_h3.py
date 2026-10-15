@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 
@@ -20,6 +21,39 @@ PINS = {
     "vllm": "98dff2a81d747d1dba01a47f939f48c3526d4206",
     "vllm-omni": "446c2b5474dabffccf9a0034836eeab77c62b4b8",
 }
+
+
+def observed_platform(torch, args, controls, native=None):
+    """Use the shared header with this worker's verified allocation and flags."""
+    from _runtime_platform import capture_platform
+
+    precision = {"matmul": bool(torch.backends.cuda.matmul.allow_tf32),
+                 "cudnn": bool(torch.backends.cudnn.allow_tf32),
+                 "cudnn_benchmark": bool(torch.backends.cudnn.benchmark),
+                 "matmul_precision": torch.get_float32_matmul_precision()}
+    selected = []
+    allocation = []
+    if args.device == "cuda":
+        actual = controls["cuda_device"]
+        rows = [line.split(", ") for line in subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=index,uuid,name,driver_version", "--format=csv,noheader"],
+            text=True).splitlines()]
+        selected = [row for row in rows if len(row) == 4 and row[1] == actual["uuid"]
+                    and row[0] == str(actual["physical_index"])]
+        if len(selected) != 1:
+            raise RuntimeError("H3 platform inventory disagrees with actual CUDA driver UUID")
+        allocation = [controls["cuda_visible_devices"]]
+    cxx = native.compiler.cc_path if native is not None else shutil.which("g++")
+    nvcc = (native.compiler.nvcc_path if native is not None
+            else os.environ.get("JT_BUILD_NVCC_PATH") or shutil.which("nvcc"))
+    if not cxx or (args.device == "cuda" and not nvcc):
+        raise RuntimeError("H3 platform capture requires explicit available compiler executables")
+    flags = {"use_cuda": int(native.flags.use_cuda) if native is not None else int(args.device == "cuda"),
+             "use_acl": 0,
+             "graph_replay": "default" if native is not None and native.flags.auto_graph_replay else "eager",
+             "tf32": precision["matmul"], "hf32": False}
+    return capture_platform(torch, args.device, physical_devices=selected, card_indices=allocation,
+                            precision=precision, jittor_flags=flags, nvcc=nvcc, cxx=cxx)
 
 
 def operation_routes(model):
@@ -224,6 +258,7 @@ def run(args, np, stack, identities):
         "vllm-omni": capture_omni(sources["vllm-omni"], vllm_omni, args.omni_wheel),
     }
     controls = device_controls(torch, args.device)
+    platform_before = observed_platform(torch, args, controls, jt if args.runtime == "jittor" else None)
     carrier = adapter_installation(args.source_root) if args.runtime == "jittor" else None
     conditions = {"threads": torch.get_num_threads(),
                   "environment": {key: os.environ.get(key) for key in (
@@ -237,6 +272,7 @@ def run(args, np, stack, identities):
                  "device": args.device, "source": source_before,
                  "upstream": {repo: value["upstream"] for repo, value in sources.items()},
                  "downstream_distributions": bindings, "device_controls": controls,
+                 "platform": platform_before,
                  "runtime_conditions": conditions, "adapter_distribution": carrier,
                  "precision": {"matmul_tf32": bool(torch.backends.cuda.matmul.allow_tf32),
                                "cudnn_tf32": bool(torch.backends.cudnn.allow_tf32),
@@ -503,6 +539,7 @@ def run(args, np, stack, identities):
         executed_module_sources=executed_sources,
         identity_scope="Complete source/wheel, actual installed payload/METADATA/RECORD and framework source binding",
         downstream_distributions=bindings,
+        platform=observed_platform(torch, args, controls, jt if args.runtime == "jittor" else None),
         device_controls=controls,
         runtime_conditions=conditions,
         adapter_distribution=carrier,

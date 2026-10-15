@@ -75,6 +75,12 @@ Omni 的 source@SHA 与
 和物理设备，FP32 数组仅用于原诊断的序列化，不将整个模型强制转成 FP32。
 这些诊断记录仍须经统一 scorecard auditor 准入，不能直接计入覆盖。
 
+新运行还在 `.installation.json` 与最终 JSON 中调用公共 `_runtime_platform.py`
+采集 CPU/卡型号、实际 UUID 分配、driver/CUDA、可用编译器版本、NVIDIA 分发版本、
+精度与原生 graph/backend 标志。genuine CUDA 环境也须提供可用的 `g++` 和 `nvcc`
+供平台采集；CPU 不要求 nvcc。每个张量的物理 pointer 检查仍独立执行。
+历史诊断缺少该块时保留原样，不能回填为新格式或据此补授数值等级。
+
 使用独立解释器、匹配的实际 vLLM `0.29.0` 和 Omni SCM
 `0.29.0rc2.dev58+g446c2b547`。此固定 recipe 的真实 oracle 是 Torch
 `2.13.0+cu130`，与下面历史 `cu129` 环境分开；不能沿用历史数字或改 `__version__`。
