@@ -13,10 +13,8 @@ SCRIPTS = ROOT / 'agent/skills/torch-compat-repo-runbook/scripts'
 
 
 def compare_training(test, case, checkouts, wheels):
-    import numpy as np
-
     sys.path.insert(0, str(SCRIPTS))
-    from _openmmlab_component_contract import SPECS, compare_pair
+    from _openmmlab_component_contract import SPECS, compare_pair, validate_perturbation
     from registry_inventory import inventory
 
     sources = {repo: inventory(repo, path) for repo, path in checkouts.items()}
@@ -52,8 +50,7 @@ def compare_training(test, case, checkouts, wheels):
             pair = compare_pair(*paths, sources, baseline, case, seed, wheels, ROOT)
             test.assertEqual(pair['reference_result']['weights_sha256'], base['reference_result']['weights_sha256'])
             for original, changed in zip((reference, candidate), paths):
-                with np.load(original) as a, np.load(changed) as b:
-                    test.assertFalse(np.array_equal(a['__output__'], b['__output__']), 'Unchanged OpenMMLab perturbation output')
+                validate_perturbation(original, changed)
         paths = [run(runtime, 0, training=True, weights=weights) for runtime in ('torch', 'jittor')]
         pair = compare_pair(*paths, sources, baseline, case, 0, wheels, ROOT, training=True)
         test.assertEqual(pair['reference_result']['weights_sha256'], base['reference_result']['weights_sha256'])

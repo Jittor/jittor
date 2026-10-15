@@ -5,12 +5,10 @@ from pathlib import Path
 
 from collect_component_scorecard import artifact, read, require, write_comparison
 from registry_inventory import ROOT, git, inventory, write_json
-from _openmmlab_component_contract import SPECS, compare_pair, digest
+from _openmmlab_component_contract import SPECS, compare_pair, digest, validate_perturbation
 
 
 def collect(root, sources, wheels, directory, platform_path, baseline, report, command):
-    import numpy as np
-
     platform = read(platform_path)
     records = []
     for case, spec in SPECS.items():
@@ -32,12 +30,13 @@ def collect(root, sources, wheels, directory, platform_path, baseline, report, c
                 artifacts += [artifact('seed%d-%s' % (seed, runtime), path),
                               artifact('seed%d-%s-metadata' % (seed, runtime), path.with_suffix('.json'))]
             if seed:
+                changed_gradients = {}
                 for side, path in zip(('reference_result', 'candidate_result'), paths):
                     require(pair[side]['weights_sha256'] == pairs[0][side]['weights_sha256'], 'Changed OpenMMLab perturbation weights')
                     base = folder / ('seed0-%s.npz' % ('torch' if side == 'reference_result' else 'jittor'))
-                    with np.load(base) as a, np.load(path) as b:
-                        require(not np.array_equal(a['__output__'], b['__output__']), 'Unchanged OpenMMLab input perturbation')
+                    changed_gradients[side] = validate_perturbation(base, path)
                 pair['input_perturbation_verified'] = True
+                pair['perturbed_gradient_names'] = changed_gradients
                 path = folder / ('perturb%d-comparison.json' % seed)
                 write_comparison(path, pair)
                 artifacts.append(artifact('perturb-comparison' if seed == 7 else 'perturb2-comparison', path))

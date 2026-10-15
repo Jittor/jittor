@@ -57,6 +57,17 @@ def dtype_name(name):
     return 'int64' if name.endswith('num_batches_tracked') else 'float32'
 
 
+def validate_perturbation(original, perturbed):
+    import numpy as np
+
+    with np.load(original, allow_pickle=False) as a, np.load(perturbed, allow_pickle=False) as b:
+        require(set(a.files) == set(b.files), 'Changed OpenMMLab perturbation tensor scope')
+        require(not np.array_equal(a['__output__'], b['__output__']), 'Unchanged OpenMMLab perturbation output')
+        changed = sorted(name for name in a.files if 'grad::' in name and not np.array_equal(a[name], b[name]))
+        require(changed, 'Unchanged OpenMMLab perturbation gradients')
+    return changed
+
+
 def helpers(root):
     # All imports are host-only; the existing harness owns the original metric.
     for path in (root / 'tests', root / 'compat/tests/torch'):

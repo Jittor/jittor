@@ -109,6 +109,24 @@ class OpenMMLabInstalledContracts(unittest.TestCase):
             with self.subTest(dtype=dtype, shape=shape, value=value), self.assertRaises(ValueError):
                 self.save_compare(left, right, case, True)
 
+    def test_perturbation_requires_both_output_and_a_requested_gradient_change(self):
+        original = self.arrays('mmengine_train_step')
+        a, b = self.directory / 'base.npz', self.directory / 'perturbed.npz'
+        np.savez(a, **original)
+        for output_changes, gradient_changes in ((False, False), (True, False), (False, True), (True, True)):
+            changed = {name: value.copy() for name, value in original.items()}
+            if output_changes:
+                changed['__output__'] += .01
+            if gradient_changes:
+                changed['grad::fc1.weight'] += .01
+            np.savez(b, **changed)
+            with self.subTest(output=output_changes, gradient=gradient_changes):
+                if output_changes and gradient_changes:
+                    self.assertEqual(self.contract.validate_perturbation(a, b), ['grad::fc1.weight'])
+                else:
+                    with self.assertRaises(ValueError):
+                        self.contract.validate_perturbation(a, b)
+
     def test_observer_default_verl_fp32_stays_strict_and_mm_counter_is_scalar_only(self):
         def observe(dtype, shape, allow=False, physical='cpu'):
             tensor = SimpleNamespace(dtype=dtype, shape=shape, device=SimpleNamespace(type='cpu'),
@@ -143,6 +161,7 @@ class OpenMMLabInstalledContracts(unittest.TestCase):
             values = self.arrays(case, training)
             if not training:
                 values['__output__'] += seed * .01
+                values['ingrad::sample'] += seed * .001
             elif runtime == 'jittor':
                 values['step/0/grad::fc1.bias'] += 1
             np.savez(path, **values)
