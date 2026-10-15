@@ -262,7 +262,12 @@ def set_model_state_dict(model, state_dict, *, options=None):
     if provider is not None and options.full_state_dict:
         provider._load_full_state_dict(model, state, strict=options.strict)
         return None
-    return model.load_state_dict(state, strict=options.strict)
+    loader = model.load_state_dict
+    if getattr(loader, "__func__", None) is jt.Module.load_state_dict:
+        # Native Module lacks Torch's strict/copying contract. Use the
+        # installation's loader, retaining custom overrides on other modules.
+        return _torch().nn.Module.load_state_dict(model, state, strict=options.strict)
+    return loader(state, strict=options.strict)
 
 
 def get_optimizer_state_dict(model, optimizers, *, submodules=None, options=None):

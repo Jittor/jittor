@@ -31,9 +31,9 @@ def _world():
     assert 'torch' not in sys.modules
 
 
-def _device(value):
+def _device(value, dtype="float32"):
     value.sync()
-    assert str(value.dtype) == "float32"
+    assert str(value.dtype) == dtype
     assert jt.core.dispatch_context([value]) == ('cuda', 0)
     assert value.location() == 'device'
     ordinal = ctypes.c_int(-1)
@@ -153,3 +153,20 @@ def test_native_tp_checkpoint_rejects_different_global_layouts():
             checkpoint.save_training_state(model, opt, root)
         assert not (root / 'manifest.json').exists()
     assert jt.core.backend_fallback_count() == before == 0
+
+
+def test_native_tp_two_rank_bf16_bias_input_is_quantized():
+    before = jt.core.backend_fallback_count()
+    with forbid_backend_fallbacks():
+        case.assert_row_bf16_bias(_device)
+    assert jt.core.backend_fallback_count() == before == 0
+
+
+@pytest.mark.parametrize('gather', [False, True])
+@pytest.mark.parametrize('precision', ['fp32', 'bf16'])
+def test_native_tp_two_rank_adamw_full_torch_oracle_and_resume(gather, precision, monkeypatch):
+    from _helpers import native_tp_mixed
+    root = (Path(os.environ['JITTOR_TP_TEST_DIR']) /
+            'adamw-{}-{}'.format(precision, gather) / 'rank{}'.format(dist.get_rank()))
+    native_tp_mixed.exercise(root, gather, precision, monkeypatch, _device,
+                             checkpoint_root=root.parent / "checkpoint")

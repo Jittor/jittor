@@ -57,6 +57,9 @@
 2026-10-15-native-zero-optimizer
 2026-10-15-native-tensor-parallel
 2026-10-15-native-fsdp
+2026-10-15-bfloat16-linear-bias-accumulation
+2026-10-15-native-tensor-parallel-adamw-bf16
+2026-10-15-fsdp-compat-lifecycle
 2026-10-15-openmmlab-training-oracles
 2026-10-15-tensor-detach-and-factory-leaf
 2026-10-15-cuda-extension-philox
@@ -109,3 +112,6 @@
 | [CUDA 扩展 Philox 状态](2026-10-15-cuda-extension-philox.md) | 实际 CUDA RNG 重放与融合 FlashAttention 训练回归；独立 Torch 对拍仍待验 | 2026-10-15 |
 | [原生 TP 线性层训练与恢复](2026-10-15-native-tensor-parallel.md) | CPU 与双卡 NCCL 的 FP32 等分线性层、完整梯度和固定 world 续训已验；bf16 与多机待验 | 2026-10-15 |
 | [原生 FSDP 分片与新进程恢复](2026-10-15-native-fsdp.md) | 原生双卡训练与严格恢复已验；bf16 小梯度误差和旧兼容失败单列 | 2026-10-15 |
+| [CUDA BF16 Linear 偏置舍入](2026-10-15-bfloat16-linear-bias-accumulation.md) | 真实 BF16 GEMM 保留 FP32 累加到偏置之后；CPU 既有路径与二阶梯度回归已验 | 2026-10-15 |
+| [原生 TP AdamW 与 BF16 续训](2026-10-15-native-tensor-parallel-adamw-bf16.md) | 双卡 BF16 完整梯度、状态分片和新对象恢复通过固定误差预算；不含多机 | 2026-10-15 |
+| [FSDP 兼容层优化器生命周期](2026-10-15-fsdp-compat-lifecycle.md) | 优化器参数替换与原生模块 checkpoint 分派修复，CPU/CUDA 与双 rank 定向复验 | 2026-10-15 |

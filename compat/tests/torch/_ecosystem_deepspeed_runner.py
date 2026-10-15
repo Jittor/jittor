@@ -5,6 +5,7 @@ model runners that construct another optimizer cannot validate DeepSpeed.
 """
 import argparse
 from contextlib import ExitStack
+from contextlib import nullcontext
 import json
 import os
 import numbers
@@ -19,6 +20,14 @@ from _ecosystem_runner import (
     _numpy_snapshot, _runtime_conditions, _select_device, _synchronize,
 )
 import _ecosystem_deepspeed_cases as cases
+
+
+def _snapshot(value):
+    # NumPy has no Torch bf16 dtype. Observe values in fp32 while separately
+    # asserting the operands/output actually used the requested bf16 dtype.
+    if str(value.dtype) in ("bfloat16", "torch.bfloat16"):
+        value = value.float()
+    return _numpy_snapshot(value)
 
 
 def _assert_device(value, device, runtime):
@@ -39,7 +48,7 @@ def _snapshot_optimizer(optimizer, arrays, prefix):
     for key, fields in state["state"].items():
         for name, value in fields.items():
             if hasattr(value, "detach"):
-                arrays[prefix + "/%s/%s" % (key, name)] = _numpy_snapshot(value)
+                arrays[prefix + "/%s/%s" % (key, name)] = _snapshot(value)
             elif isinstance(value, numbers.Number):
                 arrays[prefix + "/%s/%s" % (key, name)] = np.asarray(value)
     return [{key: value for key, value in group.items() if key in (
@@ -47,24 +56,46 @@ def _snapshot_optimizer(optimizer, arrays, prefix):
             for group in state["param_groups"]]
 
 
+def _snapshot_partitions(torch, optimizer, model, args, arrays, prefix):
+    wrapped = getattr(optimizer, "optimizer", optimizer)
+    sizes = []
+    for index, group in enumerate(wrapped.param_groups):
+        for slot, parameter in enumerate(group["params"]):
+            _assert_device(parameter, args.device, args.runtime)
+            if args.dtype == "bfloat16" and parameter.dtype != torch.float32:
+                raise AssertionError("DeepSpeed master partition is not fp32")
+            arrays[prefix + "/%d/%d" % (index, slot)] = _snapshot(parameter)
+            sizes.append(int(parameter.numel()))
+    total = sum(int(parameter.numel()) for parameter in model.parameters())
+    if args.world_size > 1 and not 0 < sum(sizes) < total:
+        raise AssertionError("DeepSpeed optimizer did not actually partition model parameters")
+    return sizes
+
+
 def _microstep(torch, deepspeed, engine, args, index, arrays, prefix, incoming):
     incoming.clear()
     inputs = torch.arange(16, dtype=torch.float32, device=engine.device).reshape(2, 8)
-    inputs = (inputs * .03 + .01 * index + args.perturbation).requires_grad_(True)
+    perturbation = args.perturbation + .125 * args.rank
+    inputs = inputs * .03 + .01 * index + perturbation
     target = torch.arange(8, dtype=torch.float32, device=engine.device).reshape(2, 4)
-    target = (target * -.007 - args.perturbation).requires_grad_(True)
+    target = target * -.007 - perturbation
+    dtype = torch.bfloat16 if args.dtype == "bfloat16" else torch.float32
+    inputs = inputs.to(dtype).requires_grad_(True)
+    target = target.to(dtype).requires_grad_(True)
     output = engine(inputs)
     for value in (inputs, target, output, *engine.module.parameters()):
         _assert_device(value, args.device, args.runtime)
-    loss = (output - target).square().mean()
+        if value.dtype != dtype:
+            raise AssertionError("DeepSpeed did not execute the requested " + args.dtype)
+    loss = (output.float() - target.float()).square().mean()
     engine.backward(loss)
-    arrays[prefix + "/output"] = _numpy_snapshot(output)
-    arrays[prefix + "/loss"] = _numpy_snapshot(loss)
+    arrays[prefix + "/output"] = _snapshot(output)
+    arrays[prefix + "/loss"] = _snapshot(loss)
     for name, value in (("inputs", inputs), ("target", target)):
         if value.grad is None:
             raise AssertionError("Missing requested DeepSpeed input gradient: " + name)
         _assert_device(value.grad, args.device, args.runtime)
-        arrays[prefix + "/input_grad/" + name] = _numpy_snapshot(value.grad)
+        arrays[prefix + "/input_grad/" + name] = _snapshot(value.grad)
     for name, parameter in engine.module.named_parameters():
         if name not in incoming:
             raise AssertionError("DeepSpeed did not compute the requested parameter gradient: " + name)
@@ -79,10 +110,10 @@ def _microstep(torch, deepspeed, engine, args, index, arrays, prefix, incoming):
         if gradient is None:
             raise AssertionError("Missing requested DeepSpeed parameter gradient: " + name)
         _assert_device(gradient, args.device, args.runtime)
-        arrays[prefix + "/parameter_grad/" + name] = _numpy_snapshot(gradient)
+        arrays[prefix + "/parameter_grad/" + name] = _snapshot(gradient)
     engine.step()
     for name, parameter in engine.module.named_parameters():
-        arrays[prefix + "/parameter/" + name] = _numpy_snapshot(parameter)
+        arrays[prefix + "/parameter/" + name] = _snapshot(parameter)
     _synchronize(torch, args.runtime, args.device)
     from deepspeed.runtime.engine import _ENGINE_BACKWARD_GRAPH_TRACKER
     if _ENGINE_BACKWARD_GRAPH_TRACKER.active_registration_count():
@@ -90,6 +121,10 @@ def _microstep(torch, deepspeed, engine, args, index, arrays, prefix, incoming):
 
 
 def _execute(args):
+    if args.world_size > 1 and (args.device != "cuda" or not args.rendezvous or not args.checkpoint):
+        raise ValueError("Multi-rank Engine requires CUDA, shared rendezvous and checkpoint paths")
+    if args.dtype == "bfloat16" and args.device != "cuda":
+        raise ValueError("The bf16 Engine gate requires actual CUDA")
     if args.runtime == "jittor":
         os.environ["JITTOR_TORCH_SHIM"] = "1"
     os.environ["DS_ACCELERATOR"] = args.device
@@ -112,20 +147,32 @@ def _execute(args):
         dependencies = _dependency_report(("deepspeed",))
         if dependencies["deepspeed"]["version"].split("+", 1)[0] != "0.19.7":
             raise RuntimeError("DeepSpeed gate requires the verified 0.19.7 source")
-        with socket.socket() as listener:
-            listener.bind(("127.0.0.1", 0))
-            port = listener.getsockname()[1]
+        if args.rendezvous:
+            rendezvous = args.rendezvous
+        else:
+            with socket.socket() as listener:
+                listener.bind(("127.0.0.1", 0))
+                port = listener.getsockname()[1]
+            rendezvous = "tcp://127.0.0.1:%d" % port
         deepspeed.init_distributed(
             dist_backend="nccl" if args.device == "cuda" else "gloo",
-            auto_mpi_discovery=False, init_method="tcp://127.0.0.1:%d" % port,
-            rank=0, world_size=1,
+            auto_mpi_discovery=False, init_method=rendezvous,
+            rank=args.rank, world_size=args.world_size,
         )
         arrays = {}
         def initialize():
             original = cases.model(torch)
+            configuration = cases.config(args.optimizer, args.zero_stage)
+            configuration["train_batch_size"] *= args.world_size
+            if args.dtype == "bfloat16":
+                configuration["bf16"] = {"enabled": True}
+                configuration["communication_data_type"] = "fp32"
+                configuration["data_types"] = {"grad_accum_dtype": "fp32"}
+                configuration["zero_optimization"].update(
+                    reduce_bucket_size=100, allgather_bucket_size=100)
             engine, optimizer, _, _ = deepspeed.initialize(
                 model=original, model_parameters=original.parameters(),
-                config=cases.config(args.optimizer, args.zero_stage),
+                config=configuration,
             )
             if not isinstance(engine, deepspeed.DeepSpeedEngine):
                 raise AssertionError("Training did not use the real upstream DeepSpeedEngine")
@@ -133,12 +180,14 @@ def _execute(args):
             for name, parameter in engine.module.named_parameters():
                 def observe(gradient, name=name):
                     _assert_device(gradient, args.device, args.runtime)
-                    incoming[name] = _numpy_snapshot(gradient)
+                    incoming[name] = _snapshot(gradient)
                 stack.callback(parameter.register_hook(observe).remove)
             return engine, optimizer, incoming
         try:
             engine, optimizer, incoming = initialize()
-            with tempfile.TemporaryDirectory(prefix="deepspeed-checkpoint-") as checkpoint:
+            checkpoint_context = (nullcontext(str(args.checkpoint)) if args.checkpoint
+                                  else tempfile.TemporaryDirectory(prefix="deepspeed-checkpoint-"))
+            with checkpoint_context as checkpoint:
                 for index in range(6):
                     _microstep(torch, deepspeed, engine, args, index, arrays, "step%d" % index, incoming)
                     if index == 3:
@@ -147,7 +196,10 @@ def _execute(args):
                         if not engine.save_checkpoint(checkpoint, tag="resume", client_state={"microstep": 4}):
                             raise AssertionError("DeepSpeed failed to save the checkpoint")
                         _snapshot_optimizer(optimizer, arrays, "saved_optimizer")
+                        _snapshot_partitions(torch, optimizer, engine.module, args, arrays, "saved_master_partition")
                 groups = _snapshot_optimizer(optimizer, arrays, "final_optimizer")
+                partition_sizes = _snapshot_partitions(
+                    torch, optimizer, engine.module, args, arrays, "final_master_partition")
                 if engine.global_steps != 3:
                     raise AssertionError("Gradient accumulation did not produce three updates")
                 resumed, resumed_optimizer, resumed_incoming = initialize()
@@ -155,22 +207,31 @@ def _execute(args):
                 if path is None or client_state.get("microstep") != 4 or resumed.global_steps != 2:
                     raise AssertionError("DeepSpeed failed to restore checkpoint/client state")
                 _snapshot_optimizer(resumed_optimizer, arrays, "restored_optimizer")
+                _snapshot_partitions(torch, resumed_optimizer, resumed.module, args, arrays, "restored_master_partition")
+                for key in list(arrays):
+                    if key.startswith(("saved_optimizer/", "saved_master_partition/")):
+                        restored_key = "restored_" + key[len("saved_"): ]
+                        np.testing.assert_array_equal(arrays[restored_key], arrays[key])
                 for index in (4, 5):
                     _microstep(torch, deepspeed, resumed, args, index, arrays, "resumed%d" % index, resumed_incoming)
                     for suffix in ("output", "loss"):
-                        np.testing.assert_allclose(arrays["resumed%d/" % index + suffix],
-                                                   arrays["step%d/" % index + suffix], rtol=2e-6, atol=2e-7)
+                        np.testing.assert_array_equal(arrays["resumed%d/" % index + suffix],
+                                                      arrays["step%d/" % index + suffix])
                     for name, _ in resumed.module.named_parameters():
-                        np.testing.assert_allclose(arrays["resumed%d/parameter/" % index + name],
-                                                   arrays["step%d/parameter/" % index + name], rtol=2e-6, atol=2e-7)
+                        np.testing.assert_array_equal(arrays["resumed%d/parameter/" % index + name],
+                                                      arrays["step%d/parameter/" % index + name])
                 _snapshot_optimizer(resumed_optimizer, arrays, "resumed_optimizer")
+                _snapshot_partitions(torch, resumed_optimizer, resumed.module, args, arrays, "resumed_master_partition")
                 if resumed.global_steps != 3:
                     raise AssertionError("Resumed training did not advance its update count")
             _synchronize(torch, args.runtime, args.device)
             fallback_count = (jt.core.backend_fallback_count() - initial_fallbacks
                               if args.runtime == "jittor" else 0)
             metadata = {
-                "runtime": args.runtime, "device": args.device, "world_size": 1,
+                "runtime": args.runtime, "device": args.device, "world_size": args.world_size,
+                "rank": args.rank, "dtype": args.dtype,
+                "optimizer_partition_sizes": partition_sizes,
+                "optimizer_class": type(optimizer).__module__ + "." + type(optimizer).__name__,
                 "optimizer": args.optimizer, "zero_stage": args.zero_stage,
                 "perturbation": args.perturbation, "engine_class": type(engine).__module__ + "." + type(engine).__name__,
                 "parameter_gradients_per_microstep": len(list(engine.module.parameters())),
@@ -197,6 +258,11 @@ def main():
     parser.add_argument("--optimizer", choices=("Adam", "AdamW"), default="AdamW")
     parser.add_argument("--zero-stage", type=int, choices=(0, 1, 2, 3), default=0)
     parser.add_argument("--perturbation", type=float, default=0)
+    parser.add_argument("--dtype", choices=("float32", "bfloat16"), default="float32")
+    parser.add_argument("--world-size", type=int, choices=(1, 2), default=1)
+    parser.add_argument("--rank", type=int, choices=(0, 1), default=0)
+    parser.add_argument("--rendezvous")
+    parser.add_argument("--checkpoint", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     args.output.parent.mkdir(parents=True, exist_ok=True)

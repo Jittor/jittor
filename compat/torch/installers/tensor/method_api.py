@@ -1545,6 +1545,16 @@ def _api_fill(self, val):
 def _api_zero(self):
     if _fill_captured_state(self, 0):
         return self
+    if ((_owner.jt.flags.no_grad or self.is_stop_grad())
+            and self._storage_is_contiguous()
+            and not self._has_view_provenance()
+            and getattr(self, "_torch_data_owner", None) is None):
+        if self.numel():
+            _owner.jt.sync_all()
+            with _new_scope(self, None), _owner.jt.no_grad():
+                zeros = _owner.jt.zeros(self.shape, self.dtype)
+            self._copy_into(zeros)
+        return self
     return _ip(self, _owner.jt.zeros(self.shape, self.dtype))
 
 

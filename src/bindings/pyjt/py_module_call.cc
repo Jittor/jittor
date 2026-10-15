@@ -41,7 +41,7 @@ PyObject* linear_execute = nullptr;
 PyObject* matmul_kernel = nullptr;
 PyObject* empty_kwargs = nullptr;
 PyObject* matmul_name = nullptr;
-auto make_cublas_matmul = op_constructor<VarPtr, Var*, Var*, bool, bool>("cublas_matmul");
+auto make_cublas_matmul = op_constructor<VarPtr, Var*, Var*, bool, bool, bool>("cublas_matmul");
 // The fused RMS norm `_standard_rms_norm` reaches on an inference call.
 PyObject* rms_inference_impl = nullptr;
 PyObject* rms_source_fn = nullptr;
@@ -273,7 +273,7 @@ PyObject* linear_without_bias(PyObject* module, PyObject* dict, PyObject* x) {
     PyObjHolder kernel(kernel_select(matmul_name, call_args.obj, nullptr));
     if (kernel.obj != matmul_kernel) return nullptr;
     PyTensorFrontendScope scope(x, nullptr, 0, false);
-    return to_py_object<VarHolder*>(new VarHolder(make_cublas_matmul(a, w, false, true)));
+    return to_py_object<VarHolder*>(new VarHolder(make_cublas_matmul(a, w, false, true, false)));
 }
 
 bool pair_of_ints(PyObject* value, int& a, int& b) {

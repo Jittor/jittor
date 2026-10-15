@@ -239,7 +239,13 @@ def _require_supported_group(group, allow_subgroup=False):
 
 
 def _copy_tensor(dst, src):
-    if hasattr(dst, "update"):
+    # Collective output buffers are mutated, never rebound: Parameters and
+    # detached aliases may share their allocation (for example ZeRO's flat
+    # bf16 model buffer). Keep that allocation through the native copy owner.
+    if isinstance(dst, jt.Var) and dst._storage_is_contiguous():
+        jt.sync_all()
+        dst._copy_into(src)
+    elif hasattr(dst, "update"):
         dst.update(src)
     elif hasattr(dst, "assign"):
         dst.assign(src)

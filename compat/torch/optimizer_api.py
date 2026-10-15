@@ -48,7 +48,13 @@ def _torch_param_steps(pg):
     return steps
 
 
-def _sync_adam_group_params(pg):
+def _sync_adam_group_params(pg, *, replacements=()):
+    """Realign state by identity, including explicit same-parameter view changes.
+
+    FSDP supplies old/new views of the same logical parameter. Ordinary user
+    additions and reordering still pass through the identity-based mapping;
+    only those explicit substitutions inherit the preceding view's state.
+    """
     previous = pg.get("_torch_adam_params")
     if previous is None:
         return
@@ -56,13 +62,19 @@ def _sync_adam_group_params(pg):
     if len(current) == len(previous) and all(a is b for a, b in zip(current, previous)):
         return
     from jittor.optim.algorithms.adam import _state_buffer
-    positions = {id(parameter): index for index, parameter in enumerate(previous)}
+    rebound = {id(old): (old, new) for old, new in replacements}
+    identities = []
+    for parameter in previous:
+        replacement = rebound.get(id(parameter))
+        identities.append(replacement[1] if replacement is not None
+                          and replacement[0] is parameter else parameter)
+    positions = {id(parameter): index for index, parameter in enumerate(identities)}
     for key in ("m", "values", "_torch_steps"):
         old_values = pg.get(key, ())
         result = []
         for parameter in current:
             old_index = positions.get(id(parameter))
-            if old_index is not None and previous[old_index] is parameter and old_index < len(old_values):
+            if old_index is not None and identities[old_index] is parameter and old_index < len(old_values):
                 result.append(old_values[old_index])
             else:
                 result.append(0 if key == "_torch_steps" else _state_buffer(parameter))

@@ -9,7 +9,10 @@ from . import common, grad_sync, shard
 from .. import optimizer_kinds
 from ..diagnostics import EXPECTED, swallowed
 from ..torch.tensor_state import get_tensor_state
-from ..torch.optimizer_api import _torch_param_steps as _optimizer_param_steps
+from ..torch.optimizer_api import (
+    _sync_adam_group_params,
+    _torch_param_steps as _optimizer_param_steps,
+)
 
 
 _EXPORTS = (
@@ -53,11 +56,17 @@ def _assign_preserve_trainability(target, value, was_trainable=None):
 def refresh_optimizer_fsdp_params(opt, state_ids=None):
     for pg in getattr(opt, "param_groups", []):
         params = pg.get("params", [])
+        replacements = []
         for i, param in enumerate(list(params)):
             state, entry = shard._fsdp_param_entry(param)
             if state is None or state_ids is not None and id(state) not in state_ids:
                 continue
-            params[i] = entry.shard
+            if param is not entry.shard:
+                replacements.append((param, entry.shard))
+                params[i] = entry.shard
+        # A new shard view represents the same parameter, not a fresh Adam
+        # slot. Reuse ordinary reordering logic while releasing the old views.
+        _sync_adam_group_params(pg, replacements=replacements)
 
 
 def _refresh_all_optimizer_fsdp_params(states, current=None):

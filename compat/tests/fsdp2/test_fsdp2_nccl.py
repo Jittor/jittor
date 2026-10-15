@@ -86,7 +86,9 @@ class TestFSDP2Nccl(unittest.TestCase):
             full_state["output_bias"] = jt.ones((3,)) * 7
         state_dict_api = importlib.import_module(
             "torch.distributed.checkpoint.state_dict")
-        state_dict_api.set_model_state_dict(model, full_state)
+        state_dict_api.set_model_state_dict(
+            model, full_state, options=state_dict_api.StateDictOptions(
+                full_state_dict=True, broadcast_from_rank0=True))
         np.testing.assert_array_equal(
             model.output_bias.full_tensor().numpy(),
             np.full((3,), 7, dtype="float32"),

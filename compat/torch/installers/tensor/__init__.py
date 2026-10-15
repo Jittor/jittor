@@ -106,7 +106,13 @@ _LOGADDEXP_FIDELITY_DETAIL = (
     "layout, dtype, and out keyword semantics are not implemented"
 )
 
-from .arithmetic import nan_to_num
+from .arithmetic import foreach_zero_, nan_to_num
+
+register_fidelity(
+    "torch._foreach_zero_", foreach_zero_, Fidelity.APPROXIMATE,
+    "Existing Tensor.zero_ clears contiguous non-view detached or no-grad lists in place. "
+    "Differentiable non-leaf, view and non-contiguous lists are explicitly unsupported; fused batching is not provided.",
+)
 
 from .arithmetic import logaddexp
 
@@ -992,6 +998,8 @@ def install(ctx):
 
 
     g.tensor = tensor
+
+    g._foreach_zero_ = foreach_zero_
 
     g.as_tensor = as_tensor
 

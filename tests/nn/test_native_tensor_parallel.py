@@ -88,3 +88,16 @@ except AttributeError:
 else:
     raise AssertionError('unknown parallel export must raise AttributeError')
 """], check=True)
+
+
+def test_native_tp_cpu_bf16_bias_input_is_quantized():
+    from jittor._runtime.fallback import forbid_backend_fallbacks
+    with forbid_backend_fallbacks():
+        case.assert_row_bf16_bias()
+
+
+@pytest.mark.parametrize("gather", [False, True])
+@pytest.mark.parametrize("precision", ["fp32", "bf16"])
+def test_native_tp_cpu_adamw_full_torch_oracle_and_resume(tmp_path, gather, precision, monkeypatch):
+    from _helpers import native_tp_mixed
+    native_tp_mixed.exercise(tmp_path, gather, precision, monkeypatch)

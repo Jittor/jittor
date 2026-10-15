@@ -17,7 +17,10 @@ namespace jittor {
 struct CublasMatmulOp : Op {
     Var* a, * b, * c;
     bool trans_a, trans_b;
-    CublasMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b);
+    // Keep BF16 GEMM operands but expose the FP32 accumulator, allowing Linear
+    // to add its bias before the single output rounding. Ordinary matmul keeps
+    // its existing dtype and backward when this option is false.
+    CublasMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b, bool fp32_output=false);
     
     const char* name() const override { return "cublas_matmul"; }
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;

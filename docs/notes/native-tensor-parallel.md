@@ -8,7 +8,8 @@ collective adjoints, native optimizer synchronization or checkpoint changes.
 rank's output rows and local bias. `RowParallelLinear` stores only its input
 columns; its bias is replicated and added after summing partial outputs.
 Feature counts must divide the WORLD size. Native FP32 CPU singleton and
-two-rank CUDA/NCCL are the verification scope; these are not general DTensor,
+two-rank CUDA/NCCL, with the BF16 CUDA training protocol below, are the
+verification scope; these are not general DTensor,
 sequence parallelism, tensor-parallel attention or arbitrary distributed ops.
 
 ```python
@@ -49,7 +50,8 @@ In particular, replicated row outputs do not apply a second all-reduce in
 backward. Native optimizer synchronization recognizes TP parameters and skips
 legacy data-parallel reductions and periodic broadcasts for those shards.
 Optimizer arithmetic remains owned by existing native optimizers; the
-maintainer training validation uses native momentum SGD with weight decay. DDP managing
+maintainer training validation uses native momentum SGD and AdamW with weight
+decay. DDP managing
 the same TP parameters is explicitly unsupported; a separate data-parallel
 mesh axis and hybrid process groups require their own implementation.
 
@@ -69,6 +71,51 @@ group hyperparameters and step metadata remain replicated and validated.
 mutable storage metadata. Parameters must retain their partition shape and
 WORLD device during use. Uneven partitions, empty feature ranks, subgroup TP,
 DP+TP, ZeRO+TP or FSDP+TP composition, sharded-vocabulary loss, mixed
-precision, larger-world and multi-host acceptance remain unverified/outside
+precision policies beyond the verified BF16 protocol, larger-world and
+multi-host acceptance remain unverified/outside
 this bounded implementation.
 No whole-process memory peak or throughput improvement is claimed.
+
+## BF16 CUDA training with FP32 state
+
+The [AdamW/BF16 result](../results/2026-10-15-native-tensor-parallel-adamw-bf16.md)
+verifies actual BF16 input and weight operands of the CUDA linear products,
+FP32 master parameters, input/parameter gradients and both AdamW moments.
+Native mixed precision uses the existing flags; TP adds no autocast context
+or optimizer arithmetic:
+
+```python
+import jittor as jt
+
+optimizer = jt.optim.AdamW(model.parameters(), lr=0.003, fused=False)
+with jt.flag_scope(auto_mixed_precision_level=3):
+    with jt.flag_scope(amp_reg=jt.amp_flags.prefer_bfloat16):
+        prediction = model(inputs)
+    loss = ((prediction.float32() - targets.float32()) ** 2).mean()
+    optimizer.backward(loss)
+    optimizer.step()
+```
+
+Keep level 3 active across forward, backward and optimizer updates: core uses
+it to publish gradients in each original variable's dtype. A forward-only
+BF16 preference does not guarantee FP32 parameter gradients. Select the BF16
+preference only for forward; loss and optimizer arithmetic retain FP32.
+Replicated row bias is explicitly converted to the product's compute dtype
+before addition, using the same native helper as ordinary functional linear.
+The row reduction carries BF16 partial outputs; the column adjoint sums FP32
+input-gradient contributions.
+
+The maintained small-MLP acceptance compares all five training steps against
+an independent, unsharded real Torch model, then checks exact native
+continuation after saving at step three and restoring fresh objects.
+BF16 has a separately frozen, fixture-specific precision budget calibrated
+from real Torch full-model versus the same two-rank TP decomposition.
+The FP32 comparison keeps its strict tolerances. BF16 acceptance does not
+promise bitwise equality across frameworks or a universal error bound.
+
+CPU singleton tests cover the corresponding output, gradient/state and
+checkpoint semantics. Native CPU AMP's generic contraction can retain wider
+input operands; these tests do not certify actual BF16 CPU GEMM input casting.
+CUDA GEMM operand dtype and storage are checked before any NumPy readback.
+Other AMP policies, hybrid meshes and larger or multi-host WORLD remain
+outside this validation.

@@ -486,6 +486,22 @@ def _load_state_dict(self, state_dict, strict=True, assign=False):
         # here so a strict=False load stays quiet, exactly like torch.
         load_state = {k: v for k, v in load_state.items()
                       if str(k) not in set(unexpected)}
+    if not assign:
+        # Native loading rebinds each holder. Torch's copying form preserves
+        # allocations shared with flat optimizer buffers and detached aliases.
+        # Pending clones/reads must observe the pre-load bytes, just as eager
+        # Torch snapshots do. Synchronization orders execution without a host
+        # device wait before the subsequent native buffer writes.
+        jt.sync_all()
+        copied = dict(load_state)
+        for key, value in load_state.items():
+            target = _find_state_target(self, key)
+            if (isinstance(target, jt.Var) and isinstance(value, jt.Var)
+                    and target._storage_is_contiguous()):
+                if target.numel():
+                    target._copy_into(value)
+                copied[key] = target
+        load_state = copied
     _ORIG_MODULE_LOAD_STATE_DICT(self, load_state)
     try:
         for n, p in self.named_parameters():

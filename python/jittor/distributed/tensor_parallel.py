@@ -11,6 +11,7 @@ import jittor as jt
 from jittor import distributed as dist
 from jittor import init
 from jittor.nn.functional.linear import linear
+from jittor.nn.functional._amp import bias_for_compute_dtype
 
 
 __all__ = ["ColumnParallelLinear", "RowParallelLinear"]
@@ -185,4 +186,5 @@ class RowParallelLinear(_ParallelLinear):
                     if self.input_is_parallel else self.in_features)
         local = value if self.input_is_parallel else _Scatter(self._group)(value)
         result = _Reduce(self._group)(linear(local, self.weight))
-        return result + self.bias if self.bias is not None else result
+        return (result + bias_for_compute_dtype(result, self.bias)
+                if self.bias is not None else result)

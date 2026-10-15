@@ -237,7 +237,8 @@ MIGRATED_CUTT_TRANSPOSE_RANK_USER_BOUNDARIES = {
 # 2"). 2 dtype + 2 contiguity + the a-rank check + the inner-dimension check
 # = 6. Behaviour gate: tests/ops/test_matmul_higher_rank.py.
 MIGRATED_CUBLAS_MATMUL_DTYPE_USER_BOUNDARIES = {
-    "backends/cuda/kernels/cublas/cublas_matmul_op.cc": 6,
+    # Includes the BF16-only FP32 accumulator-output argument boundary.
+    "backends/cuda/kernels/cublas/cublas_matmul_op.cc": 7,
 }
 
 MIGRATED_CUBLAS_MATMUL_RANK_USER_BOUNDARIES = {
@@ -740,6 +741,9 @@ def test_cublas_matmul_dtype_user_boundary_migration_is_explicit_and_bounded():
     negative = (ROOT / "tests/backends/cuda/test_cublas_matmul_grad.py").read_text()
     assert "test_non_float_inputs_are_rejected_clearly" in negative
     assert "test_mixed_input_dtypes_are_rejected_clearly" in negative
+    accumulator_negative = (
+        ROOT / "tests/backends/cuda/test_cublas_matmul_amp_dtype.py").read_text()
+    assert "test_fp32_accumulator_option_rejects_other_compute_dtypes" in accumulator_negative
 
 
 def test_cublas_matmul_b_rank_is_a_catchable_user_error():

@@ -122,3 +122,32 @@ def assert_trace(actual, expected, model, exact=False):
             else:
                 np.testing.assert_allclose(actual[field][name], target, atol=2e-6, rtol=2e-5)
     assert actual["loss"] == expected["loss"] if exact else abs(actual["loss"] - expected["loss"]) < 2e-6
+
+
+def assert_row_bf16_bias(observer=None):
+    # Exact BF16 counterexample: round(a + bias) differs from
+    # round(a + round(bias)). Torch autocast quantizes the bias input.
+    row = RowParallelLinear(2, 2)
+    row.weight.update(jt.array(local(np.array([[1., 0.], [1., 0.]],
+                                             dtype=np.float32), row.weight)))
+    row.weight.start_grad()
+    row.bias.update(jt.array([-.0373, -.0369], dtype="float32"))
+    row.bias.start_grad()
+    value = jt.array([[.10009765625, 0.]], dtype="float32").start_grad()
+    with jt.flag_scope(auto_mixed_precision_level=3):
+        with jt.flag_scope(amp_reg=jt.amp_flags.prefer_bfloat16):
+            output = row(value)
+        gradients = jt.grad(output.float32().sum(), [value, row.weight, row.bias])
+        jt.sync([output] + gradients, True, False)
+    assert str(output.dtype) == "bfloat16"
+    if observer:
+        observer(output, "bfloat16")
+        for gradient in gradients:
+            observer(gradient, "float32")
+    np.testing.assert_array_equal(output.float32().numpy(), [[.0625, .0634765625]])
+    np.testing.assert_array_equal(gradients[0].numpy(), [[2., 0.]])
+    np.testing.assert_array_equal(gradients[1].numpy(), local(
+        np.array([[.10009765625, 0.], [.10009765625, 0.]], dtype=np.float32),
+        row.weight))
+    np.testing.assert_array_equal(gradients[-1].numpy(), [1., 1.])
+    assert all(str(gradient.dtype) == "float32" for gradient in gradients)
