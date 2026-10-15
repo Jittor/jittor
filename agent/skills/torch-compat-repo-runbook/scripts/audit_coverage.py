@@ -414,7 +414,7 @@ def validate_record(record, inventories, baseline, root=ROOT):
     if level >= 2:
         if kind == "protocol":
             from _protocol_scorecards import validate_measurements
-            validate_measurements(record, artifacts, inventories[repo])
+            validate_measurements(record, artifacts, inventories[repo], root=root)
         else:
             proof = installation_proofs(record, inventories, artifacts, skip_own=source_distribution)
             _validate_measurements(record, level, artifacts, installation, proof)

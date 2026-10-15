@@ -2271,6 +2271,9 @@ def ecosystem_accelerate(session):
         session.error("Accelerate needs REAL_TORCH_PYTHON, JITTOR_ACCELERATE_CHECKOUT and exactly cpu or cuda")
     arguments = ["--fresh-process", "--device", device, "--jittor-python", python, "--oracle-python", oracle,
                  "--upstream", checkout, "--output", str(NOX_STATE_ROOT / "ecosystem-accelerate" / device)]
+    wheel = os.environ.get("JITTOR_ACCELERATE_WHEEL", "").strip()
+    if wheel:
+        arguments += ["--wheel", wheel]
     if device == "cuda":
         arguments += ["--devices", os.environ.get("CUDA_VISIBLE_DEVICES", "")]
     _set_hardware_python_config(session, python, env)
@@ -2330,14 +2333,15 @@ def ecosystem_trellis(session):
 @nox.session(python=False)
 def ecosystem_flash_attention(session):
     """Independent upstream CUDA training with complete gradients and input perturbations."""
+    import tempfile
     _root, env = _session_env(session, "ecosystem-flash-attention")
     python = _hardware_python()
     oracle = os.environ.get("REAL_TORCH_PYTHON", "").strip()
     names = ("JITTOR_FLASH_ATTN_JITTOR_SRC", "JITTOR_FLASH_ATTN_ORACLE_EXTENSION",
-             "JITTOR_FLASH_ATTN_ORACLE_CUDA_HOME")
+             "JITTOR_FLASH_ATTN_ORACLE_CUDA_HOME", "JITTOR_FLASH_ATTN_SOURCE_PROOF")
     values = {name: os.environ.get(name, "").strip() for name in names}
     if not oracle or any(not value or not Path(value).exists() for value in values.values()):
-        session.error("FlashAttention requires REAL_TORCH_PYTHON and existing source, oracle extension and CUDA_HOME")
+        session.error("FlashAttention requires REAL_TORCH_PYTHON and existing source, oracle extension, CUDA_HOME and source proof")
     if os.environ.get("JITTOR_TEST_DEVICES", "cuda").strip() != "cuda":
         session.error("FlashAttention training requires exactly CUDA")
     nvcc = os.environ.get("JT_BUILD_NVCC_PATH") or os.environ.get("nvcc_path") or shutil.which("nvcc")
@@ -2345,6 +2349,10 @@ def ecosystem_flash_attention(session):
         session.error("FlashAttention needs nvcc and explicitly allocated CUDA_VISIBLE_DEVICES")
     env.update({name: os.environ.get("OMP_NUM_THREADS", "2") for name in THREAD_POOL_ENV_NAMES})
     env.update(values)
+    for name in ('CXX', 'LD_PRELOAD', 'JITTOR_CUDA_WHEEL_STRICT', 'JITTOR_CUDA_WHEEL_DISABLE',
+                 'JITTOR_FLASH_ATTN_HEAD_DIMS', 'JITTOR_FLASH_ATTN_DTYPES'):
+        if name in os.environ:
+            env[name] = os.environ[name]
     env.update({"REAL_TORCH_PYTHON": oracle, "JITTOR_TEST_DEVICES": "cuda",
                 "JITTOR_REQUIRE_FLASH_ATTENTION": "1", "JITTOR_REQUIRE_REAL_TORCH": "1",
                 "JITTOR_TEST_REQUIRE_EXECUTION": "1", "JITTOR_TORCH_SHIM": "1",
@@ -2357,6 +2365,17 @@ def ecosystem_flash_attention(session):
     cache_home = NOX_STATE_ROOT / "ecosystem-flash-attention" / "jittor-home"
     cache_home.mkdir(parents=True, exist_ok=True)
     env["JITTOR_HOME"] = str(cache_home)
+    env['JITTOR_TORCH_CACHE_ROOT'] = str(cache_home.parent / 'torch-cache')
+    proof_state = NOX_STATE_ROOT / "ecosystem-flash-attention-artifacts"
+    proof_state.mkdir(parents=True, exist_ok=True)
+    oracle_state = proof_state / 'oracle'
+    oracle_state.mkdir(parents=True, exist_ok=True)
+    env['JITTOR_FLASH_ATTN_ORACLE_STATE'] = str(oracle_state)
+    requested = os.environ.get('JITTOR_FLASH_ATTN_EVIDENCE_DIR')
+    if requested and not Path(requested).is_absolute():
+        session.error('FlashAttention persistent evidence must be an absolute external path')
+    evidence = Path(requested or tempfile.mkdtemp(prefix='run-', dir=proof_state))
+    env['JITTOR_FLASH_ATTN_EVIDENCE_DIR'] = str(evidence)
     for name in ("JITTOR_ECOSYSTEM_PACKAGE_SITE", "JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE",
                  "JITTOR_FLASH_ATTN_EVIDENCE_DIR"):
         if os.environ.get(name):
@@ -2371,7 +2390,18 @@ def ecosystem_flash_attention(session):
                 "assert torch._C.__file__.endswith(('.so', '.pyd')); print(torch.__version__)",
                 external=True, env=oracle_env)
     _install_compat_source(session, env, python)
+    facade_site = cache_home.parent / 'facade-site'
+    session.run(python, '-m', 'jittor.compat.shim.deploy', '--target', str(facade_site),
+                external=True, env=env)
+    session.run(python, '-m', 'jittor.compat.shim.deploy', '--target', str(facade_site), '--check',
+                external=True, env=env)
+    env['PYTHONPATH'] = os.pathsep.join((str(REPO_ROOT / 'python'), str(facade_site)))
     _run_pytest_once(session, ["compat/tests/torch/test_ecosystem_flash_attention.py"], env, python, timeout=3600)
+    session.run(python, str(REPO_ROOT / 'agent/skills/flash-attention-torch-compat/scripts/collect_scorecard.py'),
+                '--root', str(REPO_ROOT), '--upstream', values['JITTOR_FLASH_ATTN_JITTOR_SRC'],
+                '--source-proof', values['JITTOR_FLASH_ATTN_SOURCE_PROOF'],
+                '--evidence-dir', str(evidence), '--output-dir', str(evidence.parent / (evidence.name + '-scorecard')),
+                '--baseline', _git_output('rev-parse', 'HEAD'), external=True, env=env)
 
 
 @nox.session(python=False)

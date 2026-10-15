@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 from _helpers.child_process import child_env, run_python_child
+from _helpers.artifacts import artifact_directory
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -39,6 +40,9 @@ def _configured():
     names = ("REAL_TORCH_PYTHON", "JITTOR_FLASH_ATTN_JITTOR_SRC",
              "JITTOR_FLASH_ATTN_ORACLE_EXTENSION", "JITTOR_FLASH_ATTN_ORACLE_CUDA_HOME")
     values = {name: os.environ.get(name, "").strip() for name in names}
+    for name in ('JITTOR_FLASH_ATTN_SOURCE_PROOF', 'JITTOR_FLASH_ATTN_ORACLE_STATE'):
+        if os.environ.get(name):
+            values[name] = os.environ[name]
     missing = [name for name, value in values.items() if not value or not Path(value).exists()]
     if missing:
         required = any(os.environ.get(name, "").lower() in ("1", "true", "yes", "on")
@@ -54,6 +58,8 @@ def _run(runtime, values, api, dtype, perturbation, output):
     arguments = [str(SCRIPTS / "flash_training_probe.py"), "--runtime", runtime,
                  "--upstream", values["JITTOR_FLASH_ATTN_JITTOR_SRC"], "--api", api,
                  "--dtype", dtype, "--perturbation", str(perturbation), "--output", str(output)]
+    if values.get('JITTOR_FLASH_ATTN_SOURCE_PROOF'):
+        arguments.extend(('--source-proof', values['JITTOR_FLASH_ATTN_SOURCE_PROOF']))
     if runtime == "jittor":
         environment["JITTOR_FLASH_ATTN_JITTOR_REQUIRED"] = "1"
         completed = run_python_child(arguments, env=environment, inherit=False,
@@ -63,8 +69,14 @@ def _run(runtime, values, api, dtype, perturbation, output):
                        if not key.startswith(("JT_", "JITTOR_"))}
         environment.pop("LD_LIBRARY_PATH", None)
         extension = Path(values["JITTOR_FLASH_ATTN_ORACLE_EXTENSION"]).resolve()
-        environment["PYTHONPATH"] = os.pathsep.join((str(extension.parent),
-                                                   values["JITTOR_FLASH_ATTN_JITTOR_SRC"]))
+        environment["PYTHONPATH"] = ('' if values.get('JITTOR_FLASH_ATTN_SOURCE_PROOF') else
+                                     os.pathsep.join((str(extension.parent), values["JITTOR_FLASH_ATTN_JITTOR_SRC"])))
+        if values.get('JITTOR_FLASH_ATTN_ORACLE_STATE'):
+            state = Path(values['JITTOR_FLASH_ATTN_ORACLE_STATE'])
+            for name, leaf in (('HOME', 'home'), ('TMPDIR', 'tmp'), ('XDG_CACHE_HOME', 'xdg-cache')):
+                path = state / leaf
+                path.mkdir(parents=True, exist_ok=True)
+                environment[name] = str(path)
         environment["CUDA_HOME"] = values["JITTOR_FLASH_ATTN_ORACLE_CUDA_HOME"]
         completed = subprocess.run(
             [values["REAL_TORCH_PYTHON"], *arguments],
@@ -80,11 +92,12 @@ def _run(runtime, values, api, dtype, perturbation, output):
 def test_real_flash_attention_training(api, dtype, tmp_path, comparison):
     values = _configured()
     evidence = os.environ.get("JITTOR_FLASH_ATTN_EVIDENCE_DIR", "").strip()
-    if evidence:
-        directory = Path(evidence).resolve() / (api + "-" + dtype)
-        directory.mkdir(parents=True, exist_ok=False)
-    else:
-        directory = tmp_path
+    output = Path(evidence) / (api + '-' + dtype) if evidence else None
+    with artifact_directory(ROOT, output=output, prefix='flash-training-') as directory:
+        _exercise_training(api, dtype, values, directory, comparison)
+
+
+def _exercise_training(api, dtype, values, directory, comparison):
     metadata = {}
     for label, perturbation in (("base", 0.0), ("perturbed", 0.125)):
         paths = {}

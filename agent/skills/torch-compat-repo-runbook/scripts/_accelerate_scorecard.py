@@ -18,7 +18,11 @@ ATOL, RTOL = 2e-6, 2e-5
 MEASUREMENT_SOURCES = ('compat/tests/torch/_accelerate_protocol.py',
                        'compat/tests/torch/test_accelerate_distributed_integration.py',
                        'compat/tests/torch/test_optimizer_checkpoint_state.py',
-                       'tools/run_accelerate_gate.py')
+                       'tools/run_accelerate_gate.py',
+                       'agent/skills/torch-compat-repo-runbook/scripts/_accelerate_installation.py',
+                       'agent/skills/torch-compat-repo-runbook/scripts/_installed_source_proof.py',
+                       'agent/skills/torch-compat-repo-runbook/scripts/component_measure.py',
+                       'compat/tests/torch/_ecosystem_runner.py')
 
 
 def measurement_sources(baseline, fresh=False):
@@ -105,6 +109,8 @@ def measurements(record, artifacts, source):
     expected_sources = {row['path']: row['sha256'] for row in source.get('package_sources', [])}
     require(expected_sources and len(expected_sources) == len(source['package_sources']),
             'Missing full upstream package source hashes')
+    from _accelerate_installation import validate_binding, wheel_artifact
+    wheel = wheel_artifact(load('upstream-wheel'))
     platform = json.loads(load('platform').read_text())
     require(platform == record['platform'], 'Protocol platform artifact mismatch')
     require(platform['card_count'] == (0 if record['device'] == 'cpu' else spec['world_size']),
@@ -142,6 +148,7 @@ def measurements(record, artifacts, source):
                 hashes = value.get('measurement_source_sha256')
                 require(hashes == source_hashes, 'Measured protocol source hashes differ from committed maintained source')
                 distribution = value.get('downstream_distribution', {})
+                validate_binding(distribution, source, wheel)
                 require(distribution.get('source_sha256') == expected_sources
                         and distribution.get('version') == record['upstream']['version'],
                         'Actual installed Accelerate source/version mismatch')

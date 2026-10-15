@@ -249,17 +249,22 @@ case、runner 和三步训练 probe。它串行执行 base、seed 7 扰动及三
 Accelerate 没有与模型族同义的注册表。`tools/run_accelerate_gate.py` 直接调用维护中的
 单进程 checkpoint 与两 rank FSDP2 FULL 测试，`nox -s ecosystem_accelerate` 是正确性入口；
 `benchmark_accelerate` 仍只负责性能。使用预装且版本相同的私有双解释器，设置
-`REAL_TORCH_PYTHON`、`JITTOR_ACCELERATE_CHECKOUT`、`JITTOR_TEST_DEVICES=cpu|cuda`；
-CUDA 额外要求显式分配两张 `CUDA_VISIBLE_DEVICES`。工具不安装或升级包。
+`REAL_TORCH_PYTHON`、`JITTOR_ACCELERATE_CHECKOUT`、`JITTOR_TEST_DEVICES=cpu|cuda` 和
+`JITTOR_ACCELERATE_WHEEL`（官方 Accelerate 1.10.1 wheel）。CUDA 额外要求显式分配两张
+`CUDA_VISIBLE_DEVICES`。工具不安装或升级包，也不从版本字符串推断安装来源。
 
 ```bash
-python tools/run_accelerate_gate.py --device cpu \
+python tools/run_accelerate_gate.py --fresh-process --device cpu \
   --jittor-python <jittor-python> --oracle-python <real-torch-python> \
   --upstream "$JITTOR_LAB_ROOT/accelerate-validation/upstream" \
+  --wheel "$JITTOR_ACCELERATE_WHEEL" \
+  --cache-root "$JITTOR_LAB_ROOT/_state/accelerate-protocol/benchmark-cache" \
   --output "$JITTOR_LAB_ROOT/_state/accelerate-protocol/cpu"
-python tools/run_accelerate_gate.py --device cuda --devices <gpu0>,<gpu1> \
+python tools/run_accelerate_gate.py --fresh-process --device cuda --devices <gpu0>,<gpu1> \
   --jittor-python <jittor-python> --oracle-python <real-torch-python> \
   --upstream "$JITTOR_LAB_ROOT/accelerate-validation/upstream" \
+  --wheel "$JITTOR_ACCELERATE_WHEEL" \
+  --cache-root "$JITTOR_LAB_ROOT/_state/accelerate-protocol/benchmark-cache" \
   --output "$JITTOR_LAB_ROOT/_state/accelerate-protocol/cuda"
 python agent/skills/torch-compat-repo-runbook/scripts/collect_accelerate_scorecards.py \
   --run "$JITTOR_LAB_ROOT/_state/accelerate-protocol/cpu" \
@@ -274,6 +279,11 @@ python agent/skills/torch-compat-repo-runbook/scripts/collect_accelerate_scoreca
 launcher，rank 缓存逐个预热，benchmark 与单测缓存隔离。实际进程绑定完整上游包源码、
 实际安装包所有文件、二进制 Torch 身份、平台、精度开关、所有输入/参数梯度、Adam moments、
 逐步轨迹和四路 RNG。采集不覆盖旧产物。
+
+每个真实 producer/consumer 绑定官方 wheel 的固定 SHA、完整安装包文件、同侧实际
+METADATA/RECORD 原始字节和导入根；auditor 重读并逐项核验。保留原 wheel 和私有安装
+前缀以便复核。旧 raw 缺少这些实际字段时重新测量，不能补写、仅添加同名字段或改版本
+字符串冒充新的安装来源证明。
 
 共享 schema 用 `record_kind=protocol`、显式 `axes=[]/registry_refs=[]`，单独展示协议及
 world/precision/rank，不产生注册表分子或分母。CPU world1 只匹配 CUDA world1；两 rank

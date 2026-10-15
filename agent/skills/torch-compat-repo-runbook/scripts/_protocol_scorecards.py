@@ -11,6 +11,7 @@ VALIDATORS = {
     ('accelerate', 'accelerate-checkpoint-fresh-process'): '_accelerate_scorecard',
     ('accelerate', 'accelerate-fsdp2-full-fresh-process'): '_accelerate_scorecard',
     ('deepspeed', 'deepspeed-zero-training'): '_deepspeed_scorecard',
+    ('flash-attention', 'flash-attention-training'): '_flash_attention_scorecard',
 }
 
 
@@ -31,8 +32,11 @@ def validate_spec(record, source):
     return validator(record, source).validate_spec(record, source)
 
 
-def validate_measurements(record, artifacts, source):
-    return validator(record, source).validate_measurements(record, artifacts, source)
+def validate_measurements(record, artifacts, source, *, root=None):
+    module = validator(record, source)
+    if module.__name__ == '_flash_attention_scorecard':
+        return module.validate_measurements(record, artifacts, source, root=root)
+    return module.validate_measurements(record, artifacts, source)
 
 
 def pairing_key(record):
