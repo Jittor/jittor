@@ -167,6 +167,7 @@ struct VarHolder {
     // @pyjt(assign)
     // @attrs(return_self)
     VarHolder* assign(VarHolder* v);
+    VarHolder* assign_impl(VarHolder* v, bool preserve_grad_policy);
 
     /**
      * update parameter and global variable,
@@ -275,6 +276,7 @@ struct VarHolder {
     }
     
     void operator=(VarPtr&& v);
+    void rebind_view_result(VarPtr&& v, bool preserve_grad_policy);
 
 
     /** 
@@ -873,6 +875,10 @@ struct VarHolder {
     // @pyjt(_storage_view_is_physical)
     bool storage_view_is_physical();
 
+    // A readonly query of existing view provenance and backward identities.
+    // @pyjt(_view_base_is_trainable_leaf)
+    bool view_base_is_trainable_leaf();
+
     /**
      * ``id`` of the Var this view currently writes through to, or -1. For
      * tests and introspection; identity decisions belong upstream of this.
@@ -883,13 +889,13 @@ struct VarHolder {
     // Rebind the root this view was taken from to itself with `value` written
     // into the recorded slice. Returns false when there is nothing to write
     // through -- not a view, or a base that has since been destroyed.
-    bool write_through_view(Var* value);
+    bool write_through_view(Var* value, bool preserve_grad_policy = true);
     // Stop being a view; stop being a base. Both are needed at destruction, and
     // the first one alone when a holder is re-pointed.
     void drop_view();
     void orphan_views();
     void attach_view(VarHolder* base, VarViewStep step);
-    void refresh_transpose_views();
+    void refresh_transpose_views(bool preserve_grad_policy = true);
 };
 
 /**

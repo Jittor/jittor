@@ -206,7 +206,7 @@ def _copy_detached_storage(self, value):
     if not isinstance(value, _NativeVar):
         return False
     if not (_owner.jt.flags.no_grad
-            or (self.is_stop_grad() and value.is_stop_grad())):
+            or (not self.requires_grad and not value.requires_grad)):
         return False
     if (not self._storage_is_contiguous()
             or (self._has_view_provenance() and not self._storage_view_is_physical())
@@ -223,8 +223,11 @@ def _copy_detached_storage(self, value):
 
 def _ip(self, value, preserve_storage=False):
     if preserve_storage:
-        if self.requires_grad and self.is_leaf and not _owner.jt.flags.no_grad:
-            raise RuntimeError("a leaf Variable that requires grad is being used in an in-place operation.")
+        if self.requires_grad and not _owner.jt.flags.no_grad:
+            if self.is_leaf:
+                raise RuntimeError("a leaf Variable that requires grad is being used in an in-place operation.")
+            if self._view_base_is_trainable_leaf():
+                raise RuntimeError("a view of a leaf Variable that requires grad is being used in an in-place operation.")
         if _copy_detached_storage(self, value):
             return self
     # Keep the RHS graph through an in-place operation. start_grad() on an
@@ -240,11 +243,13 @@ def _ip(self, value, preserve_storage=False):
     # assignment, which hands the target's flags over to the value's Var.
     gains_grad = (not was_trainable and isinstance(value, _NativeVar)
                   and not value.is_stop_grad() and bool(value.requires_grad))
-    if gains_grad and target.is_stop_grad():
+    if gains_grad and (target.is_stop_grad() or target._is_view()):
         # A detached/clone reset has a permanent stop-grad bit. Native assign
         # copies that old bit into the replacement and irreversibly releases
         # the RHS graph before the descriptor below can clear disabled-grad.
-        # _update rebinds a non-view holder without copying that old policy.
+        # A live view must also propagate the RHS edge through its frozen
+        # base and sibling refresh, including reversible requires_grad_(False).
+        # _update selects that existing native writeback path explicitly.
         target._update(value)
     else:
         target.assign(value)

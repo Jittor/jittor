@@ -152,11 +152,85 @@ artifacts supersede the overwritten originals. Its current native artifacts are
 `formal-stage1-scalar-scope-strict-resume-v1.log` and
 `formal-stage2-scalar-scope-strict-resume-v2.log` in the same directory.
 
+## Leaf/view follow-up
+
+The leaf-view gap observed during this work is corrected separately at
+`489417b368640e724372d9b22b509d2ef42b00f3`, synchronized with origin
+`3ba5bb7714ad93a7a1cef6a67d2f85a234b412a6`. This does not relabel the earlier
+matrix's source. Illegal grad-enabled writes through live or orphan views of
+trainable leaves fail before mutation. Legal non-leaf writes retain the real
+input and RHS gradients, including the zero input edge of a slice copy.
+Frozen views can acquire a trainable RHS edge, both for initially frozen
+leaves and reversible `requires_grad_(False)`. No-grad leaf-view writes and
+frozen physical aliases retain their supported storage behavior.
+
+The correction uses the existing native view provenance, writeback and graph
+refresh owners. Native assignment keeps its default policy; only the existing
+Torch `_update` path acquiring an RHS edge bypasses inheritance of the frozen
+destination's old gradient flags. There is no replacement derivative algorithm
+or blanket rejection of differentiable views.
+
+| Check | Result |
+| --- | --- |
+| New view contracts plus inplace/foreach neighbors, CPU / CUDA-selected run | 26 / 26 passed |
+| Same six public contracts, independent binary Torch CPU / CUDA | 6 / 6 passed |
+| Native view/storage/setitem/step capture, CPU | 31 passed, 27 CUDA-only skipped |
+| Same native files, CUDA-enabled run with explicit per-test device scopes | 58 passed, no skip, fallback delta 0; unscoped nodes still use CPU |
+| Autograd/optimizer/storage/dtype owner neighbors, CPU / CUDA-selected run | 108 / 108 passed, one ACL-only skip each |
+| CPU core | 322 passed, 42 skipped, one existing xfail |
+| Structure and layout | 1478 passed, six skipped; layout passed |
+
+The CUDA-selected 26 includes one private host provenance check; the generated
+device cases execute on CUDA. CUDA owner checks also require fallback delta 0.
+The historical native 58-node run did not globally enable CUDA: nodes with
+explicit CUDA scopes ran on CUDA, while unscoped nodes, including the consumed
+expand allocation check, ran on CPU. It does not establish that allocation
+check on CUDA. During integration onto `4a4a480e6`, globally enabling CUDA gave
+57 passes and one failure in that existing allocation check: the numerical
+sum was correct, but allocated bytes grew by 68,157,440, exceeding 16,777,216.
+The same node failed in isolation and with strict kernel math. These failures
+are preserved under `_state/leaf-view-integration/`; no allocation threshold
+was relaxed. The integrated public view/inplace/foreach contracts passed all
+26 nodes on CPU and all 26 in the CUDA-selected run; native CPU gave 31 passes
+and 27 CUDA-only skips, and CPU core gave 322 passes, 42 skips and one existing
+xfail. An independent clean `4a4a480e628dae634a9d660f320c3aa957341e99`
+worktree with a separate CUDA compilation cache reproduced the same numerical
+result and 68,157,440-byte allocation failure. This is a pre-existing CUDA
+full-reduction fusion boundary, tracked as KI-CODEGEN-005, rather than a new
+leaf/view regression. Profile shows the default two-stage CUDA full sum
+materializes the multiply result; explicitly naming both reduction axes keeps
+the native fused consumer and allocates 1,048,576 bytes. The existing failing
+test and budget are unchanged. Root integration structure/tools verification
+also passed 1661 nodes with six environment skips. The source-bound ZeRO2
+oracle measurements below remain pinned to `489417b36`.
+The two reported structure skips about installed-package resolution are
+environment checks, rather than executed tensor contracts.
+
+After serial per-rank warmup, the real ZeRO2 BF16 case was rerun against the
+clean `489417b36` source, with unique `stage2-leaf-owner-v1` outputs and a new
+checkpoint directory. Both ranks again passed all 208 numeric fields against
+the independent binary Torch oracle, all 112 gradient fields were bitwise
+equal, and the largest normalized forward/state difference remained
+`1.5522042910257974e-7`. Each rank's 56 strict save/load/resume fields were
+bitwise equal within Jittor; all 166 master-partition elements changed on the
+third update, with L2 deltas `0.009065359830856323` and
+`0.02911890670657158`. Both ranks had fallback delta 0.
+
+Unversioned evidence remains under the same task state root:
+`multirank/leaf-owner-evidence-v1.json` binds 1531 source hashes and 28 evidence
+hashes, including the clean-source pin, raw rank NPZ/logs, independent oracle,
+comparison, strict resume and all unit/core/structure logs. It also retains
+the pre-fix leaf-view and frozen-RHS counterexamples. The earlier v2 matrix
+manifest remains unchanged. This is a source-bound dedicated CUDA result;
+there is no equivalent world-size-two BF16 CPU run, so it cannot satisfy the
+common scorecard's matching CPU ladder or count as accelerator breadth.
+
 ## Boundaries
 
 This tiny two-rank case does not establish ZeRO3, CPU/NVMe offload, compiled
 autograd, overlap modes, other optimizers in BF16, large models, throughput,
 ROCm or NPU behavior. The existing differentiable/non-contiguous foreach
-restrictions remain explicit. The pre-existing grad-enabled leaf-view inplace
-rejection gap requires its own shared-owner correction and is not represented
-as a passing contract by this result.
+restrictions remain explicit. The leaf/view correction and its separate
+verification scope are recorded above. A maintained two-GPU dedicated gate
+and the second explicit input perturbation remain follow-up work; the original
+single-rank FP32 gate is not a substitute for that protocol.
