@@ -81,6 +81,12 @@ class TestTransformersGate(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'finite array'):
             self.compare({'grad::weight': [1.]}, {'grad::weight': [float('nan')]})
 
+    def test_real_source_snapshot_binds_platform_capture(self):
+        snapshot = self.helper.source_files(ROOT)
+        provider = 'compat/tests/torch/_accelerate_protocol.py'
+        self.assertEqual(snapshot[provider], self.helper.digest(ROOT / provider))
+        self.assertIn('tools/run_transformers_gate.py', snapshot)
+
     def test_runtime_cache_and_cpu_device_routing(self):
         oracle = self.gate.environment(self.root / 'cache', 'torch', 'cpu')
         candidate = self.gate.environment(self.root / 'cache', 'jittor', 'cpu')

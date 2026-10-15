@@ -95,7 +95,7 @@ def source_files(root):
     for name in ('tools/run_transformers_gate.py',
                  'agent/skills/torch-compat-repo-runbook/scripts/_transformers_scorecard.py',
                  'agent/skills/torch-compat-repo-runbook/scripts/collect_transformers_scorecards.py',
-                 'agent/skills/torch-compat-repo-runbook/scripts/_accelerate_protocol.py',
+                 'compat/tests/torch/_accelerate_protocol.py',
                  'agent/skills/torch-compat-repo-runbook/scripts/_installed_source_proof.py'):
         values[name] = digest(root / name)
     return dict(sorted(values.items()))
