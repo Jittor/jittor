@@ -1,10 +1,10 @@
 """Offline full-profile/nox contracts; numerical acceptance needs real runtimes."""
 
 import ast
+import hashlib
 import importlib.util
 import os
 from pathlib import Path
-import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -12,7 +12,6 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / 'agent/skills/torch-compat-repo-runbook/scripts'
-BASE = 'd63976115fb6a31d94c4474871b07f2aba69d7e7'
 
 
 @pytest.fixture
@@ -24,19 +23,48 @@ def provision():
 
 
 def test_existing_six_profiles_keep_original_roots_sessions_and_nox_implementations(provision):
-    namespace = {'__name__': 'original_nightly', '__file__': str(ROOT / 'tools/provision_ecosystem_nightly.py')}
-    source = subprocess.check_output(['git', '-C', str(ROOT), 'show', BASE + ':tools/provision_ecosystem_nightly.py'], text=True)
-    exec(compile(source, 'original-nightly.py', 'exec'), namespace)
-    for library in ('peft', 'swift', 'verl', 'transformers', 'openmmlab', 'diffusers'):
-        assert provision.runtime_roots(library) == namespace['runtime_roots'](library)
-        assert provision.session_name(library) == namespace['session_name'](library)
-    original = ast.parse(subprocess.check_output(
-        ['git', '-C', str(ROOT), 'show', BASE + ':noxfile.py'], text=True))
-    current = ast.parse((ROOT / 'noxfile.py').read_text())
-    before = {node.name: ast.dump(node) for node in original.body if isinstance(node, ast.FunctionDef)}
-    after = {node.name: ast.dump(node) for node in current.body if isinstance(node, ast.FunctionDef)}
-    assert all(after[name] == value for name, value in before.items())
-    assert set(after) - set(before) == {'ecosystem_metric_tensordict_source'}
+    # Public pins from d639; this control also runs in depth-one CI checkouts.
+    common = ['numpy==1.26.4', 'accelerate==1.10.1', 'huggingface-hub==0.35.3',
+              'tokenizers==0.22.2', 'safetensors==0.8.0', 'astunparse==1.6.3',
+              'pillow==11.0.0', 'tqdm==4.67.1']
+    expected = {
+        'peft': (common, 'ecosystem_peft'),
+        'swift': (common + ['datasets==3.6.0', 'pyarrow==19.0.1', 'modelscope==1.33.0',
+                            'addict==2.4.0', 'dacite==1.9.2', 'einops==0.8.1', 'pandas==2.2.3',
+                            'simplejson==4.2.0', 'sentencepiece==0.2.1', 'rouge==1.0.1',
+                            'trl==0.21.0'], 'ecosystem_swift'),
+        'verl': (['numpy==2.2.6', 'transformers==5.5.3', 'ray[default]==2.54.1',
+                  'tensordict==0.10.0', 'huggingface-hub==1.5.0', 'tokenizers==0.22.2',
+                  'safetensors==0.8.0', 'peft==0.17.1', 'accelerate==1.10.1', 'datasets==3.6.0',
+                  'pandas==2.2.3', 'pyarrow==19.0.1', 'astunparse==1.6.3', 'pillow==11.0.0',
+                  'tqdm==4.67.1'], 'ecosystem_verl_training'),
+        'transformers': (common, 'ecosystem_transformers_source'),
+        'openmmlab': (['numpy==1.26.4', 'opencv-python==4.11.0.86', 'astunparse==1.6.3',
+                       'pillow==11.0.0', 'tqdm==4.67.1'], 'ecosystem_openmmlab_installed'),
+        'diffusers': (['numpy==1.26.4', 'huggingface-hub==0.35.3', 'astunparse==1.6.3',
+                      'pillow==11.0.0', 'tqdm==4.67.1'], 'ecosystem_diffusers_source'),
+    }
+    for library, (roots, session) in expected.items():
+        assert provision.runtime_roots(library) == roots
+        assert provision.session_name(library) == session
+    # Compare these six source owners without Python-version-specific AST fields.
+    originals = {
+        'ecosystem_peft': '6f1787088cf4538757b78c0712251ad2db0b31f9841a95a11cad950499d85441',
+        'ecosystem_swift': 'c0a5c78b88bd401ab88b4a4531e2cfbc053690eea073ab1cd4f924f674a0237e',
+        'ecosystem_verl_training': 'fe907b766ef1d6fa072f60b07cac3ce5172bef3be6daf49acee647f575a8dc50',
+        'ecosystem_transformers_source': 'fe9550ba11556e21a561cda20173e9ea6ad9b53cc3c5ff9eba65f2021abdc04d',
+        'ecosystem_diffusers_source': '764e59d48737f9f2b203333207e52235c2a14c58a3826cf3ba5e7e71d9ae682b',
+        'ecosystem_openmmlab_installed': 'bfcf5373d7ef04a7a10a072b1bd4522d00980c19241b3ff9f1b39932d53e520a',
+    }
+    source = (ROOT / 'noxfile.py').read_text()
+    lines = source.splitlines(keepends=True)
+    nodes = {node.name: node for node in ast.parse(source).body
+             if isinstance(node, ast.FunctionDef)}
+    for name, digest in originals.items():
+        node = nodes[name]
+        start = min([node.lineno, *[d.lineno for d in node.decorator_list]]) - 1
+        assert hashlib.sha256(''.join(lines[start:node.end_lineno]).encode()).hexdigest() == digest
+    assert 'ecosystem_metric_tensordict_source' in nodes
 
 
 def test_full_profile_keeps_original_numeric_dependencies_and_actual_pip_receipts(provision):
