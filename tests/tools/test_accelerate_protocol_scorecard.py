@@ -334,6 +334,41 @@ def test_cuda_warm_worker_keeps_its_assigned_cache_rank_without_bootstrap(tmp_pa
     assert gate.worker_rank(SimpleNamespace(warm_only=False, warm_rank=0), {'JT_NCCL_RANK': '1'}) == 1
 
 
+def test_real_preflight_keeps_private_rank_homes_despite_inherited_nox_paths(tmp_path, monkeypatch):
+    import sys
+    import types
+
+    # Load the actual stdlib-only preflight without importing a tensor runtime.
+    for name, path in (('rank_cache_contract', ROOT / 'compat'),
+                       ('rank_cache_contract.shim', ROOT / 'compat/shim')):
+        package = types.ModuleType(name)
+        package.__path__ = [str(path)]
+        monkeypatch.setitem(sys.modules, name, package)
+    for name, filename in (('rank_cache_contract.diagnostics', 'compat/diagnostics.py'),
+                           ('rank_cache_contract.shim.preflight', 'compat/shim/preflight.py'),
+                           ('rank_cache_gate', 'tools/run_accelerate_gate.py')):
+        spec = importlib.util.spec_from_file_location(name, ROOT / filename)
+        module = importlib.util.module_from_spec(spec)
+        monkeypatch.setitem(sys.modules, name, module)
+        spec.loader.exec_module(module)
+    preflight, gate = sys.modules['rank_cache_contract.shim.preflight'], sys.modules['rank_cache_gate']
+    observed = []
+    shared = str(tmp_path / 'shared-session')
+    for rank in (0, 1):
+        env = {'JITTOR_TORCH_SHIM': '1', 'XDG_CACHE_HOME': shared, 'REAL_HOME': shared,
+               'JITTOR_TORCH_RUNTIME_ROOT': shared, 'RANK': str(rank), 'WORLD_SIZE': '2',
+               'JITTOR_DIST_RENDEZVOUS_DIR': str(tmp_path / 'actual-control')}
+        gate.rank_environment(env, tmp_path, 'jittor', 'cpu', rank)
+        allocated = {key: env[key] for key in ('HOME', 'JITTOR_HOME', 'TMPDIR', 'XDG_CACHE_HOME')}
+        preflight.prepare_import_environment(environ=env, project_root=tmp_path / 'project', configure_cuda=False)
+        assert {key: env[key] for key in allocated} == allocated
+        assert all(Path(path).is_dir() for path in allocated.values())
+        assert env['RANK'] == str(rank) and env['WORLD_SIZE'] == '2'
+        observed.append(env)
+    assert all(observed[0][key] != observed[1][key] for key in allocated)
+    assert observed[0]['JITTOR_DIST_RENDEZVOUS_DIR'] == observed[1]['JITTOR_DIST_RENDEZVOUS_DIR']
+
+
 def test_gate_passes_each_serial_warm_its_explicit_cache_rank(tmp_path, monkeypatch):
     spec = importlib.util.spec_from_file_location('accelerate_gate_launcher', ROOT / 'tools/run_accelerate_gate.py')
     gate = importlib.util.module_from_spec(spec)

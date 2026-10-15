@@ -59,10 +59,16 @@ def environment(runtime, device, state, rank, devices, upstream):
 
 def rank_environment(env, state, runtime, device, rank):
     cache = Path(state) / 'benchmark-cache' / runtime / device / ('rank%d' % rank)
-    for name in ('home', 'jittor-home', 'tmp'):
-        (cache / name).mkdir(parents=True, exist_ok=True)
-    env.update({'HOME': str(cache / 'home'),
-                'JITTOR_HOME': str(cache / 'jittor-home'), 'TMPDIR': str(cache / 'tmp'),
+    directories = {'HOME': 'home', 'REAL_HOME': 'home', 'JITTOR_HOME': 'jittor-home', 'TMPDIR': 'tmp',
+                   'XDG_CACHE_HOME': 'xdg-cache', 'JITTOR_TORCH_RUNTIME_ROOT': 'shim-runtime',
+                   'JITTOR_TORCH_CACHE_ROOT': 'shim-cache', 'JITTOR_TORCH_HOME': 'home',
+                   'TORCH_HOME': 'torch-home', 'TORCH_EXTENSIONS_DIR': 'torch-extensions',
+                   'JITTOR_TORCH_EXTENSIONS_DIR': 'torch-extensions', 'CUDA_CACHE_PATH': 'cuda-cache'}
+    for name, subdirectory in directories.items():
+        path = cache / subdirectory
+        path.mkdir(parents=True, exist_ok=True)
+        env[name] = str(path)
+    env.update({'JITTOR_TORCH_KEEP_HOME': '1', 'JITTOR_TORCH_KEEP_TMPDIR': '1',
                 'JT_BUILD_CACHE_NAME': 'accelerate-protocol-' + device + '-rank%d' % rank,
                 'cache_name': 'accelerate-protocol-' + device + '-rank%d' % rank})
 
