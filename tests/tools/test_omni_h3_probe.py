@@ -4,6 +4,7 @@ import copy
 import importlib.util
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 
 from _helpers.child_process import run_python_child
@@ -34,6 +35,26 @@ class H3ProbeContracts(unittest.TestCase):
 
     def test_full_two_input_gradient_ledger_is_accepted(self):
         self.probe.require_complete_gradients(self.complete())
+
+    def test_selected_route_is_observed_without_calling_or_replacing_it(self):
+        class OwnOperation:
+            def forward_cuda(self):
+                raise AssertionError("Observation must not execute an operation")
+
+        module = OwnOperation()
+        module._forward_method = module.forward_cuda
+        original = module._forward_method
+        model = SimpleNamespace(named_modules=lambda: [("plain", object()), ("norm", module)])
+        rows = self.probe.operation_routes(model)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["module"], "norm")
+        self.assertTrue(rows[0]["method"].endswith("OwnOperation.forward_cuda"))
+        self.assertIs(module._forward_method, original)
+
+    def test_broken_selected_route_is_not_silently_omitted(self):
+        model = SimpleNamespace(named_modules=lambda: [("norm", SimpleNamespace(_forward_method=42))])
+        with self.assertRaisesRegex(RuntimeError, "not callable: norm"):
+            self.probe.operation_routes(model)
 
     def test_partial_head_gradients_cannot_accept_the_full_model(self):
         for field, name in (("missing_parameters", "body.weight"), ("missing_inputs", "x")):
@@ -98,6 +119,7 @@ class H3ProbeContracts(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--torch-math", result.stdout)
         self.assertIn("grad-audit", result.stdout)
+        self.assertIn("--model-mode", result.stdout)
 
     def test_candidate_cannot_relabel_itself_as_genuine_math_calibration(self):
         with tempfile.TemporaryDirectory() as directory:

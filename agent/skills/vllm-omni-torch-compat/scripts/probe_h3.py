@@ -13,12 +13,31 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 
 
 PINS = {
     "vllm": "98dff2a81d747d1dba01a47f939f48c3526d4206",
     "vllm-omni": "446c2b5474dabffccf9a0034836eeab77c62b4b8",
 }
+
+
+def operation_routes(model):
+    """Observe selected methods; a vLLM request does not control Omni dispatch."""
+    routes = []
+    for name, module in model.named_modules():
+        method = getattr(module, "_forward_method", None)
+        if method is None:
+            continue
+        if not callable(method):
+            raise RuntimeError("Selected operation route is not callable: " + name)
+        routes.append({
+            "module": name,
+            "class": type(module).__module__ + "." + type(module).__qualname__,
+            "method_module": method.__module__,
+            "method": method.__qualname__,
+        })
+    return routes
 
 
 def require_complete_gradients(records):
@@ -73,6 +92,10 @@ def main(argv=None):
     parser.add_argument("--runtime", choices=("torch", "jittor"), required=True)
     parser.add_argument("--device", choices=("cpu", "cuda"), required=True)
     parser.add_argument("--mode", choices=("forward", "grad-audit"), default="forward")
+    parser.add_argument(
+        "--model-mode", choices=("eval", "train"), default="eval",
+        help="Set the real Module training flag; does not replace inference kernels",
+    )
     parser.add_argument(
         "--torch-math", action="store_true", help="separate genuine-Torch MATH calibration"
     )
@@ -197,6 +220,8 @@ def run(args, np, stack, identities):
             "vllm_omni.diffusion.attention.ops.minimax_h3_modulation",
         ),
         ("vllm-omni", args.omni_checkout, "vllm_omni.diffusion.layers.norm"),
+        ("vllm-omni", args.omni_checkout, "vllm_omni.diffusion.layers.activation"),
+        ("vllm-omni", args.omni_checkout, "vllm_omni.diffusion.layers.custom_op"),
     )
     for repo, checkout, name in modules:
         loaded = Path(importlib.import_module(name).__file__)
@@ -253,6 +278,9 @@ def run(args, np, stack, identities):
         stack.callback(destroy_model_parallel)
         print("REAL_WORLD_INITIALIZED", args.device, flush=True)
         model = MiniMaxH3DiTModel(od).to(args.device)
+        constructed_parameter_requires_grad = {
+            name: bool(value.requires_grad) for name, value in model.named_parameters()
+        }
         rng = np.random.RandomState(3)
         initial = {}
         with torch.no_grad():
@@ -264,7 +292,7 @@ def run(args, np, stack, identities):
                     array[:] = 1
                 tensor.copy_(torch.tensor(array, device=args.device, dtype=tensor.dtype))
                 initial[name] = snapshot(tensor)
-        model.eval()
+        model.train(args.model_mode == "train")
         for parameter in model.parameters():
             parameter.requires_grad_(args.mode == "grad-audit")
         print("REAL_MODEL", sum(p.numel() for p in model.parameters()), len(initial), flush=True)
@@ -341,6 +369,12 @@ def run(args, np, stack, identities):
                         seed=seed,
                         expected_parameters=sorted(parameter_map),
                         expected_inputs=sorted(input_map),
+                        parameters_requiring_grad=sorted(
+                            name for name, value in parameter_map.items() if value.requires_grad
+                        ),
+                        inputs_requiring_grad=sorted(
+                            name for name, value in input_map.items() if value.requires_grad
+                        ),
                         missing_parameters=missing_parameters,
                         missing_inputs=missing_inputs,
                     )
@@ -381,7 +415,12 @@ def run(args, np, stack, identities):
         fixed_input_seeds=[7, 19],
         initial_weight_seed=3,
         model_training=bool(model.training),
+        constructed_parameter_requires_grad=constructed_parameter_requires_grad,
         custom_ops=["none"],
+        vllm_custom_ops_request=["none"],
+        operation_routes=operation_routes(model),
+        grad_enabled=bool(torch.is_grad_enabled()),
+        model_mode=args.model_mode,
         numerical_admission="not_evaluated_by_this_diagnostic",
         torch_attention_request="MATH" if args.torch_math else "default",
         precision={
@@ -395,6 +434,13 @@ def run(args, np, stack, identities):
         upstream_checkouts=identities,
         executed_module_sources=executed_sources,
         identity_scope="Listed executed modules; complete installed-tree/wheel identity requires the shared scorecard auditor",
+        interpreter={
+            "executable": sys.executable,
+            "is_shim": args.runtime == "jittor",
+            "binary_extension": str(torch._C.__file__) if args.runtime == "torch" else None,
+            "binary_sha256": hashlib.sha256(Path(torch._C.__file__).read_bytes()).hexdigest()
+            if args.runtime == "torch" else None,
+        },
     )
     if source_identity(args.source_root) != source_before:
         raise RuntimeError("Source changed during measurement")
