@@ -1168,18 +1168,27 @@ def _api_cuda_synchronize(device=None, *a, **k):
 
 
 def _api_cuda_manual_seed(s):
+    # Torch converts the argument before scheduling its lazy CUDA callback.
+    # With no visible device, that callback never touches a CUDA generator.
+    seed = int(s)
+    if not device_count():
+        return
     from ..core import _normalize_seed
-    seed = _normalize_seed(s)
+    seed = _normalize_seed(seed)
     jt.sync_all(True)
     _curand().curand_restore_state(_rng_device_index(None), seed, 0)
 
 
 def _api_cuda_manual_seed_all(s):
+    seed = int(s)
+    count = device_count()
+    if not count:
+        return
     from ..core import _normalize_seed
-    seed = _normalize_seed(s)
+    seed = _normalize_seed(seed)
     jt.sync_all(True)
     backend = _curand()
-    for index in range(int(jt.get_device_count())):
+    for index in range(count):
         backend.curand_restore_state(index, seed, 0)
 
 
