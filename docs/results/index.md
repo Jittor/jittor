@@ -13,6 +13,7 @@
 
 2026-10-16-openmmlab-maintained-cpu-nightly
 2026-10-16-transformers-maintained-cpu-nightly
+2026-10-16-diffusers-official-installation
 2026-10-16-metrics-tensordict-installed-source
 2026-10-16-verl-maintained-cpu-nightly
 2026-10-16-recorded-grad-fn-freeze

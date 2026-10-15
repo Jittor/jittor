@@ -452,6 +452,7 @@ include docs/results/2026-10-15-verl-installed-source-training.md
 include docs/results/2026-10-15-verl-registered-component-oracles.md
 include docs/results/2026-10-15-vllm-component-scorecards.md
 include docs/results/2026-10-16-accelerate-installed-source-protocols.md
+include docs/results/2026-10-16-diffusers-official-installation.md
 include docs/results/2026-10-16-flash-attention-installed-source-training.md
 include docs/results/2026-10-16-metrics-tensordict-installed-source.md
 include docs/results/2026-10-16-omni-installed-source-diagnostics.md
@@ -962,6 +963,7 @@ include tools/release/pack_offline.py
 include tools/release/test_check_sdist_contents.py
 include tools/release/test_check_wheel_contents.py
 include tools/run_accelerate_gate.py
+include tools/run_diffusers_gate.py
 include tools/run_peft_gate.py
 include tools/run_test_suite.py
 include tools/run_transformers_gate.py
