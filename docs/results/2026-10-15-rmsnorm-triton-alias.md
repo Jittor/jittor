@@ -72,7 +72,9 @@ floating input gradients, and passed one real CPU and one real CUDA component
 test during the child task's precommit validation. Its parameter-free composition
 executes SiluAndMul, weightless RMSNorm and RotaryEmbedding through public native
 paths. It does not exercise a model family or an engine and cannot establish L3.
-Fresh registry-bound component scorecard collection is separate work.
+The subsequent clean, registry-bound CPU/CUDA component evidence is recorded in
+[vLLM component scorecards](2026-10-15-vllm-component-scorecards.md); it preserves
+its own measurement baseline and grants no engine coverage.
 
 Reproduce the directed tests using the selected device's actual toolchain,
 independent cache and installed Triton:

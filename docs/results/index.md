@@ -46,6 +46,7 @@
 2026-10-15-bf16-fsdp2-checkpoint-continuation
 2026-10-15-metric-state-and-tensordict-oracles
 2026-10-15-metrics-tensordict-scorecards
+2026-10-15-vllm-component-scorecards
 2026-10-15-checkpoint-state-options
 2026-10-15-integration-nccl-coverage
 2026-10-15-upstream-pr-disposition
@@ -108,6 +109,7 @@
 | [CUDA 13 工具链与 uv 安装](2026-10-15-cuda13-toolchain-packaging.md) | Linux/SM89 工具链、CUB、矩阵乘与卷积实测；Cu122 回归通过 | 2026-10-15 |
 | [双卡 bf16 FSDP2 续训](2026-10-15-bf16-fsdp2-checkpoint-continuation.md) | bf16 真计算与 FULL/RNG 精确恢复已验；跨框架舍入差异保留 | 2026-10-15 |
 | [TorchMetrics state 与 TensorDict 对拍](2026-10-15-metric-state-and-tensordict-oracles.md) | 两库 CPU/CUDA 全梯度通过；TensorDict 三步训练通过，限定组件范围 | 2026-10-15 |
+| [vLLM 组件 CPU/CUDA 评分卡](2026-10-15-vllm-component-scorecards.md) | 三个参数无关组件 L2，各 3/40 CustomOp；模型 0/376，整引擎阻塞另列 | 2026-10-15 |
 | [TorchMetrics/TensorDict 统一 scorecard](2026-10-15-metrics-tensordict-scorecards.md) | 新 CPU/CUDA 原始证据接受 4 条；有界顶层 API 各 2/105 L2 与 2/60 L3 | 2026-10-15 |
 | [Checkpoint 选项与子模块契约](2026-10-15-checkpoint-state-options.md) | CPU/CUDA 单进程选项和实际 Torch checkpoint 互通已验；多 rank 选项与 ACL 待验 | 2026-10-15 |
 | [整合回归与 NCCL 缺陷收口](2026-10-15-integration-nccl-coverage.md) | NCCL 2.18.3 双卡退出条件通过，KI-DIST-002/003 收口；限定定向范围 | 2026-10-15 |

@@ -5,6 +5,23 @@ description: 在 Jittor torch shim 与独立 PyTorch 两套解释器上运行和
 
 # vLLM 的 shim ⇄ 原生 torch 对拍
 
+## 当前维护门禁（2026-10-15）
+
+固定 clean source `72e12a9c662b46d5a5389f7e031c3997520d4562` 的真实 CPU/CUDA
+组件证据见 [vLLM component scorecards](../../../docs/results/2026-10-15-vllm-component-scorecards.md)。
+两侧实际安装 vLLM `0.29.0`、Transformers `5.13.0`，独立 oracle 是二进制
+PyTorch `2.13.0+cu130`。相同权重、base 与 seed 7/19 输入扰动均比较输出和全部四项
+输入梯度；无可训练参数，最高 L2。每设备仅计 `CustomOp 3/40`、`model_family 0/376`。
+
+维护入口为 `nox -s ecosystem_vllm`，通过 `JITTOR_TEST_DEVICES=cpu|cuda` 选择设备，
+需预置 `REAL_TORCH_PYTHON` 和 `JITTOR_CI_PYTHON`，不会安装框架。
+精确节点是 `test_ecosystem_vllm.py::EcosystemVLLM::test_vllm_decoder_primitives`；
+CPU 显式禁 CUDA，缺依赖、非独立 oracle、错误 device 均拒绝，fallback 策略为 error。
+生产修复与邻接验证见 [RMSNorm / Triton alias](../../../docs/results/2026-10-15-rmsnorm-triton-alias.md)。
+组件 builder 走真实 native component 路径，不验证 `_C` kernel；candidate engine 仍在
+真实 `GraphPickler` 导入处阻塞。Omni 的 CPU 平台拒绝及 CUDA RMS 精度断点单独保留，
+不从组件成功外推模型、引擎、Omni、训练或速度支持。以下旧环境和历史速度只描述其日期。
+
 ## 源码注册分母（2026-10-15）
 
 固定源码 `51a99565c398c8320de8131e07731c75c52eb87c` 的有界分母为 353 个模型架构和 39 个 `CustomOp` 声明。模型轴来自 `vllm/model_executor/models/registry.py::_VLLM_MODELS`，包含 embedding 对 text-generation 字典的过滤展开；CustomOp 轴仅扫描 `vllm/model_executor/layers/` 中的真实注册 decorator，保留条件分支。两个轴不能相加，层组件数值证据不能算作模型或引擎验收。
@@ -103,15 +120,15 @@ JITTOR_VLLM_HOST_ONLY=1 JITTOR_TORCH_SHIM=1 PYTHONPATH=adapters \
   "import torch; assert not hasattr(torch, '_torch_compat_install_context'); print(torch.__version__)"
 ```
 
-vLLM 在 oracle 里也是 pip 安装的 0.29.0（实测），没有源码 checkout 可复验报告中的
-Qwen3 engine 协议。双解释器 runner 的 oracle 侧由 harness 拉起，会清掉 `PYTHONPATH`、
+2026-10-15 oracle 使用真实 0.29.0 wheel，源码身份与完整安装源码按上文报告核验；
+旧 engine 报告不能替代当前协议。双解释器 runner 的 oracle 侧由 harness 拉起，会清掉 `PYTHONPATH`、
 `JITTOR_TORCH_SHIM`、`JITTOR_HOME` 等变量，不会把本 checkout pin 上去。
 
 ## 对拍
 
-**本仓没有 `vllm` case**：`CASES`（[`_ecosystem_cases.py`](../../../compat/tests/torch/_ecosystem_cases.py)）
-只有 transformers/diffusers/peft/mmcv/mmengine/ms-swift。因此通用双解释器 harness
-**目前不覆盖 vLLM**；不要用生态门禁的绿灯声称 vLLM 数值通过。
+当前 literal `CASES`（[`_ecosystem_cases.py`](../../../compat/tests/torch/_ecosystem_cases.py)）
+包含 `vllm_decoder_primitives`，对应上述维护门禁。以下 token 和速度属于历史报告，
+不属于该组件场景，也不证明当前 engine 已验收。
 
 - 数值：只能引报告。Qwen3-0.6B 4-token greedy 为 `[12095, 13, 576, 6722]`
   （` Paris. The capital`），CUDA 报告与 Ascend 报告两端一致。
@@ -156,7 +173,7 @@ Qwen3 engine 协议。双解释器 runner 的 oracle 侧由 harness 拉起，会
   [`_common.py`](../../../adapters/jittor_adapters/_common.py)。
 - **已核实**：两侧 venv 的 vllm/transformers/torch 版本、oracle 断言、shim 身份、
   adapter 文件与 `jittor_vllm` entry point 存在、host-only 生命周期测试
-  `9 passed in 6.57s`；验证环境无 in-repo `vllm` case。
+  `9 passed in 6.57s`（历史）。当前组件 case 的新证据以上文 2026-10-15 报告为准。
 - **仅报告 / 未复验**：任何 vLLM engine 执行、Qwen3 token 与速度数字、MoE oracle、
   FlashAttention 路由、Ascend/NPU 结果。
 
@@ -166,7 +183,7 @@ Qwen3 engine 协议。双解释器 runner 的 oracle 侧由 harness 拉起，会
 `transformers 5.5.3`。
 
 **case 清单**：`verify_repo.py --repo vllm --list-only` **无任何输出**（`CASES` 无 vllm），
-与 skill 所述一致；不宣称 vLLM 进了双解释器生态门禁。
+这是 2026-09-19 的历史观察；2026-10-15 新增组件门禁，但仍不授予 engine 支持。
 
 **任务给的命令**（`JITTOR_VLLM_HOST_ONLY=1 JITTOR_TORCH_SHIM=1 PYTHONPATH=adapters`，
 跑整个 `adapters/tests/vllm/`）：
