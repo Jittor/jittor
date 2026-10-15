@@ -32,8 +32,9 @@ def package_files(package):
 class SnapshotObserver:
     """Inspect actual tensors at the maintained probe's serialization boundary."""
 
-    def __init__(self, runtime, device, script):
+    def __init__(self, runtime, device, script, *, allow_scalar_counter=False):
         self.runtime, self.device, self.script = runtime, device, str(script)
+        self.allow_scalar_counter = allow_scalar_counter
         self.records = []
 
     def __call__(self, frame, event, _argument):
@@ -44,7 +45,8 @@ class SnapshotObserver:
             raise AssertionError('Actual VERL tensor device mismatch before serialization')
         dtype = str(value.dtype)
         if dtype not in ('float32', 'torch.float32'):
-            raise AssertionError('Actual VERL tensor is not FP32 before serialization')
+            if not (self.allow_scalar_counter and dtype in ('int64', 'torch.int64') and tuple(value.shape) == ()):
+                raise AssertionError('Actual VERL tensor is not FP32 before serialization')
         row = {'device': value.device.type, 'dtype': dtype, 'shape': list(value.shape)}
         if self.runtime == 'jittor':
             # sync evaluates pending work; it does not request a device transfer.
@@ -86,14 +88,33 @@ def installed_distribution(source, module):
         result['distribution_version'] = metadata.version
         wheel = Path(os.environ['JITTOR_VERL_WHEEL'])
         result['wheel_sha256'] = digest(wheel)
+    if source['repo'] in ('mmengine', 'mmcv'):
+        from importlib.metadata import PackageNotFoundError, distribution
+        from _distribution_names import validate_name_declaration
+
+        names = validate_name_declaration(source['distribution_names'], source['sources'])
+        matches = []
+        for name in names:
+            try:
+                metadata = distribution(name)
+            except PackageNotFoundError:
+                continue
+            if Path(metadata.locate_file(source['repo'] + '/__init__.py')).resolve() == Path(module.__file__).resolve():
+                matches.append(metadata)
+        if len(matches) != 1:
+            raise ValueError('Missing or ambiguous actual OpenMMLab distribution metadata')
+        metadata = matches[0]
+        result.update(distribution_name=metadata.metadata['Name'], distribution_version=metadata.version,
+                      wheel_sha256=digest(Path(os.environ['JITTOR_' + source['repo'].upper() + '_WHEEL'])))
     return result
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, required=True)
-    parser.add_argument('--repo', choices=('torchmetrics', 'tensordict', 'diffusers', 'verl'), required=True)
+    parser.add_argument('--repo', choices=('torchmetrics', 'tensordict', 'diffusers', 'verl', 'mmengine', 'mmcv'), required=True)
     parser.add_argument('--checkout', type=Path, required=True)
+    parser.add_argument('--mmengine-checkout', type=Path)
     parser.add_argument('probe', nargs=argparse.REMAINDER)
     args = parser.parse_args()
     command = args.probe[1:] if args.probe[:1] == ['--'] else args.probe
@@ -101,30 +122,42 @@ def main():
     script = Path(command[0]).resolve() if command else None
     allowed = {root / 'compat/tests/torch/_ecosystem_runner.py',
                root / 'agent/skills/torch-compat-repo-runbook/scripts/training_probe.py'}
+    if args.repo in ('mmengine', 'mmcv'):
+        allowed.add(root / 'agent/skills/torch-compat-repo-runbook/scripts/openmmlab_training_probe.py')
+    if args.mmengine_checkout is not None and args.repo != 'mmcv':
+        parser.error('--mmengine-checkout is only valid for the real MMCV training-owner dependency')
+    if args.repo == 'mmcv' and args.mmengine_checkout is None:
+        parser.error('MMCV measurements also require --mmengine-checkout')
     if script not in allowed:
         parser.error('Only the maintained ecosystem runner or training probe is allowed')
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from registry_inventory import inventory
     source = inventory(args.repo, args.checkout)
+    sources = {args.repo: source}
+    if args.repo == 'mmcv':
+        sources['mmengine'] = inventory('mmengine', args.mmengine_checkout)
     baseline = subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
     if subprocess.check_output(['git', '-C', str(root), 'status', '--porcelain'], text=True).strip():
         raise ValueError('Measurements require a clean source checkout')
     sys.path.insert(0, str(script.parent))
     runtime = command[command.index('--runtime') + 1]
-    before_files, before_package = None, None
-    if args.repo == 'verl':
+    before_files, before_package = {}, {}
+    if args.repo in ('verl', 'mmengine', 'mmcv'):
         from importlib.machinery import PathFinder
 
         # Hash the real import target without importing VERL or Torch ahead of
         # the probe's original device/runtime initialization order.
-        spec = PathFinder.find_spec('verl', sys.path)
-        if spec is None or not spec.origin:
-            raise ValueError('Missing actual VERL installation')
-        before_package = Path(spec.origin).resolve().parent
-        before_files = package_files(before_package)
+        for repo in sources:
+            spec = PathFinder.find_spec(repo, sys.path)
+            if spec is None or not spec.origin:
+                raise ValueError('Missing actual component installation: ' + repo)
+            before_package[repo] = Path(spec.origin).resolve().parent
+            before_files[repo] = package_files(before_package[repo])
     sys.argv = command
     captured = io.StringIO()
-    observer = SnapshotObserver(runtime, command[command.index('--device') + 1], script) if args.repo == 'verl' else None
+    observer = (SnapshotObserver(runtime, command[command.index('--device') + 1], script,
+                                 allow_scalar_counter=args.repo == 'mmcv')
+                if args.repo in ('verl', 'mmengine', 'mmcv') else None)
     previous_profile = sys.getprofile()
     try:
         if observer is not None:
@@ -138,9 +171,13 @@ def main():
             sys.setprofile(previous_profile)
     module = importlib.import_module(args.repo)
     distribution = installed_distribution(source, module)
-    if before_files is not None and (distribution['installed_files_sha256'] != before_files
-                                     or Path(distribution['package']) != before_package):
-        raise ValueError('Actual VERL installation changed during measurement')
+    distributions = {args.repo: distribution}
+    for repo, entry in sources.items():
+        if repo != args.repo:
+            distributions[repo] = installed_distribution(entry, importlib.import_module(repo))
+        if repo in before_files and (distributions[repo]['installed_files_sha256'] != before_files[repo]
+                                     or Path(distributions[repo]['package']) != before_package[repo]):
+            raise ValueError('Actual component installation changed during measurement: ' + repo)
     torch = sys.modules['torch']
     is_shim = hasattr(torch, '_torch_compat_install_context')
     if is_shim != (runtime == 'jittor'):
@@ -153,6 +190,10 @@ def main():
         source_paths.append(root / 'compat/tests/torch/_ecosystem_verl_cases.py')
         if root / 'compat/tests/torch/_ecosystem_runner.py' not in source_paths:
             source_paths.append(root / 'compat/tests/torch/_ecosystem_runner.py')
+    if args.repo in ('mmengine', 'mmcv'):
+        source_paths.append(root / 'compat/tests/torch/_ecosystem_openmmlab_cases.py')
+        if root / 'compat/tests/torch/_ecosystem_runner.py' not in source_paths:
+            source_paths.append(root / 'compat/tests/torch/_ecosystem_runner.py')
     binding = {'jittor_commit': baseline, 'upstream': source['upstream'],
                'hf_hub_offline': os.environ.get('HF_HUB_OFFLINE') == '1',
                'downstream_distribution': distribution,
@@ -161,6 +202,9 @@ def main():
                                'torch_version': torch.__version__, 'binary_extension': binary,
                                'binary_sha256': digest(binary) if binary else None},
                'measurement_command': [sys.executable, *command]}
+    if args.repo in ('mmengine', 'mmcv'):
+        binding['upstreams'] = {repo: entry['upstream'] for repo, entry in sources.items()}
+        binding['downstream_distributions'] = distributions
     if observer is not None:
         binding['tensor_observations'] = observer.records
     if is_shim:

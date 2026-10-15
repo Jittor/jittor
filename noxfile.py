@@ -2995,3 +2995,70 @@ def ecosystem_transformers_source(session):
                 "--candidate-python", python, "--oracle-python", oracle, "--device", device,
                 *args, "--output", str(root / "measurements"), "--cache-root", str(root / "benchmark-cache"),
                 *session.posargs, external=True, env=env)
+
+
+@nox.session(python=False)
+def ecosystem_openmmlab_installed(session):
+    """Maintain original MM train_step scopes with actual installed-wheel proof."""
+    root, env = _session_env(session, "ecosystem-openmmlab-installed")
+    python = _hardware_python()
+    _set_hardware_python_config(session, python, env)
+    if session.posargs:
+        session.error("OpenMMLab installed gate always runs both complete original training protocols")
+    oracle = os.environ.get("REAL_TORCH_PYTHON", "").strip()
+    if not oracle or not Path(oracle).is_file():
+        session.error("REAL_TORCH_PYTHON must name an independent binary PyTorch interpreter")
+    for repo in ("MMENGINE", "MMCV"):
+        for kind in ("CHECKOUT", "WHEEL"):
+            name = "JITTOR_" + repo + "_" + kind
+            value = os.environ.get(name, "").strip()
+            if not value or not Path(value).exists():
+                session.error(name + " must name the actual clean pin or installed wheel")
+            env[name] = str(Path(value).resolve())
+    device = os.environ.get("JITTOR_TEST_DEVICES", "cpu")
+    if device not in ("cpu", "cuda"):
+        session.error("OpenMMLab installed gate needs exactly cpu or cuda")
+    cache = NOX_STATE_ROOT / "cache" / "ecosystem-openmmlab-installed" / device
+    env.update({
+        "REAL_TORCH_PYTHON": oracle, "JITTOR_REQUIRE_REAL_TORCH": "1",
+        "PYTEST_ADDOPTS": "",
+        "JITTOR_REQUIRE_MMENGINE": "1", "JITTOR_REQUIRE_MMCV": "1",
+        "JITTOR_ECOSYSTEM_OPENMMLAB_INSTALLED": "1", "JITTOR_TEST_REQUIRE_EXECUTION": "1",
+        "JITTOR_TEST_DEVICES": device, "JITTOR_TORCH_SHIM": "1", "JITTOR_ECOSYSTEM_SPEED_RATIO": "",
+        "JITTOR_ECOSYSTEM_TF32": "1", "JITTOR_ECOSYSTEM_CUDNN_BENCHMARK": "0",
+        "JT_CUDA_KERNEL_MATH": "strict", "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
+        "JITTOR_HOME": str(cache / "jittor"), "JITTOR_TORCH_CACHE_ROOT": str(cache / "shim"),
+        "cache_name": "nox_ecosystem_openmmlab_installed_" + device,
+        "DISABLE_MULTIPROCESSING": "1", "JT_USE_PARALLEL_OP_COMPILER": "0",
+        "JT_BUILD_USE_MKL": "0", "JT_BUILD_USE_NCCL": "0", "JT_BUILD_USE_MPI": "0", "JT_BUILD_USE_CUTT": "0",
+        "JT_USE_CUDA": "1" if device == "cuda" else "0", "use_cuda": "1" if device == "cuda" else "0",
+    })
+    env.update({name: "2" for name in THREAD_POOL_ENV_NAMES})
+    if device == "cpu":
+        env.update({"CUDA_VISIBLE_DEVICES": "", "nvcc_path": "", "JT_BUILD_NVCC_PATH": ""})
+    else:
+        nvcc = os.environ.get("JT_BUILD_NVCC_PATH") or os.environ.get("nvcc_path") or shutil.which("nvcc")
+        if not nvcc or not os.environ.get("CUDA_VISIBLE_DEVICES", "").strip():
+            session.error("OpenMMLab CUDA needs real nvcc and explicitly allocated CUDA_VISIBLE_DEVICES")
+        env.update({"nvcc_path": nvcc, "JT_BUILD_NVCC_PATH": nvcc})
+    for name in ("JITTOR_ECOSYSTEM_PACKAGE_SITE", "JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE"):
+        if os.environ.get(name):
+            env[name] = os.environ[name]
+    versions = (
+        "import numpy, mmengine, mmcv; "
+        "assert numpy.__version__.split('.')[0] == '1'; "
+        "assert mmengine.__version__ == '0.10.7' and mmcv.__version__ == '2.2.0'; "
+        "print('OpenMMLab actual dependencies', numpy.__version__, mmengine.__version__, mmcv.__version__)"
+    )
+    oracle_env = dict(env, PYTHONPATH="", JITTOR_TORCH_SHIM="0", REAL_TORCH_SITE="")
+    for name in ("JITTOR_SOURCE_ROOT", "JITTOR_HOME", "JITTOR_TORCH_CACHE_ROOT", "JT_BACKEND"):
+        oracle_env[name] = ""
+    oracle_check = (
+        "import torch; assert hasattr(torch, '_C') and not hasattr(torch, '_torch_compat_install_context'); "
+        + ("assert torch.cuda.is_available(); " if device == "cuda" else "assert not torch.cuda.is_available(); ")
+    )
+    session.run(oracle, "-c", oracle_check + versions, external=True, env=oracle_env)
+    _install_compat_source(session, env, python)
+    session.run(python, "-c", "import jittor; import torch; "
+                "assert hasattr(torch, '_torch_compat_install_context'); " + versions, external=True, env=env)
+    _run_pytest_once(session, ["compat/tests/torch/test_ecosystem_openmmlab_installed.py"], env, python, timeout=3600)
