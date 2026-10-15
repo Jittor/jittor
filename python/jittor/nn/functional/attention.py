@@ -71,6 +71,56 @@ def _opmath_scope(query):
             else nullcontext())
 
 
+def _attention_probabilities(query, key, attn_mask, is_causal, scale):
+    """Softmax over keys, in float32 or wider."""
+    query, key = _softmax_precision(query), _softmax_precision(key)
+    scores = _product(query * scale, key, trans_b=True)
+    scores = _attention_bias(_softmax_precision(scores), attn_mask, is_causal)
+    top = scores.max([-1], keepdims=True)
+    top = jt.ternary(jt.isinf(top), jt.zeros_like(top), top)
+    weights = (scores - top).exp()
+    total = weights.sum([-1], keepdims=True)
+    # A fully masked row is all zeros here; dividing by 1 keeps it so.
+    return weights / jt.ternary(total > 0, total, jt.ones_like(total))
+
+
+def _attention_gradients(query, key, value, probabilities, grad_out, scale,
+                         *, rounded_output=None):
+    """Native attention backward, optionally preserving fused BF16 rounding.
+
+    Short fused BF16 attention forms the softmax row term from its rounded
+    output and rounds dS before the Q/K products. Scaling those FP32 products
+    afterwards preserves the unscaled dS quantization boundary. This option
+    belongs only to the explicitly admitted reduced-precision provider;
+    ordinary opmath and its higher derivatives keep their original formula.
+    """
+    wide_query, wide_key, wide_value = (
+        _softmax_precision(tensor) for tensor in (query, key, value))
+    if rounded_output is not None:
+        grad_out = grad_out.cast(query.dtype)
+    grad_out = grad_out.cast(wide_value.dtype)
+    if rounded_output is None:
+        grad_value = _product(probabilities, grad_out, trans_a=True)
+    else:
+        grad_value = _product(_softmax_precision(probabilities.cast(query.dtype)),
+                              grad_out, trans_a=True)
+    grad_prob = _product(grad_out, wide_value, trans_b=True)
+    if rounded_output is None:
+        row = (probabilities * grad_prob).sum([-1], keepdims=True)
+    else:
+        row = (grad_out * _softmax_precision(rounded_output)).sum([-1], keepdims=True)
+    grad_scores = probabilities * (grad_prob - row)
+    if rounded_output is None:
+        grad_query = _product(grad_scores, wide_key) * scale
+        grad_key = _product(grad_scores, wide_query * scale, trans_a=True)
+    else:
+        grad_scores = _softmax_precision(grad_scores.cast(query.dtype))
+        grad_query = _product(grad_scores, wide_key) * scale
+        grad_key = _product(grad_scores, wide_query, trans_a=True) * scale
+    return (grad_query.cast(query.dtype), grad_key.cast(key.dtype),
+            grad_value.cast(value.dtype))
+
+
 class _MemoryEfficientAttention(jt.Function):
     """Attention whose backward recomputes the probabilities.
 
@@ -112,38 +162,14 @@ class _MemoryEfficientAttention(jt.Function):
             return out.cast(query.dtype)
 
     def _probabilities(self, query, key):
-        """Softmax over keys, in float32 or wider."""
-        query, key = _softmax_precision(query), _softmax_precision(key)
-        scores = _product(query * self.scale, key, trans_b=True)
-        scores = _attention_bias(_softmax_precision(scores), self.attn_mask, self.is_causal)
-        top = scores.max([-1], keepdims=True)
-        top = jt.ternary(jt.isinf(top), jt.zeros_like(top), top)
-        weights = (scores - top).exp()
-        total = weights.sum([-1], keepdims=True)
-        # A fully masked row is all zeros here; dividing by 1 keeps it so.
-        return weights / jt.ternary(total > 0, total, jt.ones_like(total))
+        return _attention_probabilities(query, key, self.attn_mask, self.is_causal, self.scale)
 
     def grad(self, grad_out):
         query, key, value = self.saved
         with _opmath_scope(query):
             probabilities = self._probabilities(query, key)
-            wide_query, wide_key, wide_value = (
-                _softmax_precision(tensor) for tensor in (query, key, value))
-            grad_out = grad_out.cast(wide_value.dtype)
-            grad_value = _product(probabilities, grad_out, trans_a=True)
-            grad_prob = _product(grad_out, wide_value, trans_b=True)
-            row = (probabilities * grad_prob).sum([-1], keepdims=True)
-            grad_scores = probabilities * (grad_prob - row)
-            grad_query = _product(grad_scores, wide_key) * self.scale
-            grad_key = _product(grad_scores, wide_query * self.scale, trans_a=True)
-            return (
-                grad_query.cast(query.dtype),
-                grad_key.cast(key.dtype),
-                grad_value.cast(value.dtype),
-                None,
-                None,
-                None,
-            )
+            return _attention_gradients(query, key, value, probabilities, grad_out,
+                                        self.scale) + (None, None, None)
 
 
 def _expand_heads(query, tensor, name):

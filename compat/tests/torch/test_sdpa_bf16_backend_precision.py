@@ -69,9 +69,69 @@ class TestBFloat16BackendPrecision(unittest.TestCase):
                             (output.float() * torch.tensor(cotangent, device="cuda")).sum(), tensors)
                         self._physical(gradients)
                         for name, value in zip(("dq", "dk", "dv"), gradients):
-                            # Preserve the existing cuDNN BF16 gradient budget;
-                            # native default opmath retains its stricter .01.
-                            self._close(value, data[name], .02)
+                            # The public default keeps its original .01 budget;
+                            # CuDNN forward uses the native rounded backward.
+                            self._close(value, data[name], .01)
+
+    def test_reduced_training_executes_cudnn_forward_and_native_backward(self):
+        from jittor.backends.cuda.kernels.nn import cudnn_attention_cuda as provider
+
+        _, cotangent_seed, data = list(cases())[2]
+        tensors = [torch.tensor(data[name], device="cuda", dtype=torch.bfloat16,
+                                requires_grad=True) for name in ("q", "k", "v")]
+        cotangent = np.random.RandomState(cotangent_seed).uniform(
+            .2, 1.1, data["out"].shape).astype("float32")
+        with mock.patch.object(provider, "_forward", wraps=provider._forward) as forward, \
+                mock.patch.object(provider, "_backward", wraps=provider._backward) as fused_grad, \
+                mock.patch.object(native, "_attention_gradients",
+                                  wraps=native._attention_gradients) as native_grad:
+            output = torch.nn.functional.scaled_dot_product_attention(*tensors)
+            gradients = torch.autograd.grad(
+                (output.float() * torch.tensor(cotangent, device="cuda")).sum(), tensors)
+            self._physical([output, *gradients])
+            self.assertEqual(forward.call_count, 1)
+            self.assertEqual(native_grad.call_count, 1)
+            self.assertEqual(fused_grad.call_count, 0)
+            self._physical([native_grad.call_args.kwargs["rounded_output"]])
+        for name, gradient in zip(("dq", "dk", "dv"), gradients):
+            self._close(gradient, data[name], .01)
+
+    def test_sequence_major_inputs_keep_all_gradient_layouts(self):
+        for seed, cotangent_seed, data in cases():
+            with self.subTest(seed=seed, shape=data["q"].shape):
+                leaves = [torch.tensor(data[name].transpose(0, 2, 1, 3).copy(), device="cuda",
+                                       dtype=torch.bfloat16, requires_grad=True)
+                          for name in ("q", "k", "v")]
+                inputs = [leaf.permute(0, 2, 1, 3) for leaf in leaves]
+                cotangent = np.random.RandomState(cotangent_seed).uniform(
+                    .2, 1.1, data["out"].shape).astype("float32")
+                output = torch.nn.functional.scaled_dot_product_attention(*inputs)
+                gradients = torch.autograd.grad(
+                    (output.float() * torch.tensor(cotangent, device="cuda")).sum(), leaves)
+                self._physical([output, *gradients])
+                self._close(output, data["out"], .002)
+                for name, gradient in zip(("dq", "dk", "dv"), gradients):
+                    self._close(gradient, data[name].transpose(0, 2, 1, 3), .01)
+
+    def test_rebinding_inputs_preserves_the_original_backward(self):
+        _, cotangent_seed, data = list(cases())[2]
+        cotangent = np.random.RandomState(cotangent_seed).uniform(
+            .2, 1.1, data["out"].shape).astype("float32")
+        for rebound in range(3):
+            with self.subTest(rebound=rebound):
+                leaves = [torch.tensor(data[name], device="cuda", dtype=torch.bfloat16,
+                                       requires_grad=True) for name in ("q", "k", "v")]
+                inputs = [leaf * 1. for leaf in leaves]
+                output = torch.nn.functional.scaled_dot_product_attention(*inputs)
+                output.sync()
+                inputs[rebound].assign(inputs[rebound] + .3)
+                inputs[rebound].sync()
+                gradients = torch.autograd.grad(
+                    (output.float() * torch.tensor(cotangent, device="cuda")).sum(), leaves)
+                self._physical([output, *gradients])
+                self._close(output, data["out"], .002)
+                for name, gradient in zip(("dq", "dk", "dv"), gradients):
+                    self._close(gradient, data[name], .01)
 
     def test_cached_route_preserves_its_precision_request(self):
         from jittor.backends.cuda.kernels.nn import cudnn_attention_cuda as provider

@@ -269,6 +269,41 @@ class _CudnnAttention(jt.Function):
         return grad_query, grad_key, grad_value, None, None, None, None
 
 
+class _CudnnRoundedAttention(_CudnnAttention):
+    """CuDNN forward with a native composite backward for short BF16 calls.
+
+    CuDNN rounds the scaled dS before its GEMMs; Torch Flash rounds dS first
+    and scales the FP32 GEMM results. Reuse the canonical native attention
+    gradient with that rounding boundary, rather than claiming the CuDNN
+    fused backward satisfies the stricter Torch gradient budget.
+    """
+
+    def _run_call(self, query, key, value, *args, **kw):
+        # Keep the original graph and values when a caller rebinds its holder.
+        self.inputs = tuple(jt.ops.reshape(tensor, tensor.shape)
+                            for tensor in (query, key, value))
+        return super()._run_call(query, key, value, *args, **kw)
+
+    def grad(self, grad_out):
+        from jittor.nn.functional.attention import (
+            _attention_gradients, _attention_probabilities,
+        )
+
+        def logical(tensor, flag):
+            return tensor.transpose(0, 2, 1, 3) if self.layout & flag else tensor
+
+        query, key, value = (logical(tensor, flag)
+                             for tensor, flag in zip(self.inputs, (_Q, _K, _V)))
+        out = logical(self.saved[3], _Q)
+        with jt.flag_scope(amp_reg=0):
+            probabilities = _attention_probabilities(query, key, None, False, self.scale)
+            gradients = _attention_gradients(
+                query, key, value, probabilities, logical(grad_out, _Q), self.scale,
+                rounded_output=out)
+        return tuple(logical(tensor, flag) for tensor, flag in
+                     zip(gradients, (_Q, _K, _V))) + (None, None, None, None)
+
+
 def _mask_bias(attn_mask, query_dims, key_dims, dtype):
     """The mask as a float32 [b or 1, h or 1, Lq, Lk] bias, or None to decline.
 
@@ -346,9 +381,9 @@ def _cudnn_fused_attention(query, key, value, attn_mask=None, dropout_p=0.0,
     if dtype not in _DTYPES or _jittor_dtype_name(key.dtype) != dtype \
             or _jittor_dtype_name(value.dtype) != dtype:
         return None
-    if not (_accuracy_admitted(query) or (
-            allow_reduced_precision and _reduced_precision_admitted(
-                query, key, value, attn_mask, dropout_p, is_causal))):
+    reduced_precision = (allow_reduced_precision and _reduced_precision_admitted(
+        query, key, value, attn_mask, dropout_p, is_causal))
+    if not (_accuracy_admitted(query) or reduced_precision):
         return None
     if attn_mask is not None:
         if _output_requires_grad(attn_mask):
@@ -375,7 +410,8 @@ def _cudnn_fused_attention(query, key, value, attn_mask=None, dropout_p=0.0,
         if not _supported(query, key, scale, is_causal, training, layout=layout):
             return None
         if training:
-            return logical(_CudnnAttention.apply(
+            implementation = _CudnnRoundedAttention if reduced_precision else _CudnnAttention
+            return logical(implementation.apply(
                 query, key, value, None, scale, bool(is_causal), layout))
         return logical(_forward(query, key, value, scale, bool(is_causal), False,
                                 layout=layout)[0])
