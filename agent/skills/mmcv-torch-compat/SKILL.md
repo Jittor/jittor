@@ -112,3 +112,29 @@ MMCV 扫描整个包，保留条件分支、alias、注册循环和依赖扩展�
 [OpenMMLab 结果报告](../../../docs/results/2026-10-15-openmmlab-training-oracles.md)。
 本场景两设备授 L3；具体 registry refs、全部可训练参数与未覆盖轴以该报告和
 原始 scorecard 为准，不外推完整 Runner、编译 ops 或性能级别。
+
+
+## 完整安装来源证明的维护入口
+
+更强来源协议的 fresh CPU/CUDA 证据见
+[完整安装来源训练报告](../../../docs/results/2026-10-15-openmmlab-installed-source-training.md)。
+测量源为 clean `9345f99aad2a67ec7c043427a1dfd661c53c4369`，显式扰动梯度门禁与实际
+nox 源为 `99120d4a5c1f1814833e15e16e90bc993cf5f1b8`。旧 `2aa27ffe...` 原始数据不补填
+来源字段；当前更强准入以新记录为准。两平台保留原三 seed、全部参数/输入梯度与真实
+`train_step` 三步协议及原归一化 `.002/.01` 预算；不是普通 SGD probe。
+
+新 opt-in session 为 `ecosystem_openmmlab_installed`，实际运行两个完整节点：
+`test_ecosystem_openmmlab_installed.py::EcosystemOpenMMLabInstalled::test_mmengine_train_step`
+及 `::test_mmcv_convmodule_train_step`。必须配置两侧实际安装 site、
+`JITTOR_MMENGINE_CHECKOUT/WHEEL` 与 `JITTOR_MMCV_CHECKOUT/WHEEL`，再按前述双解释器、
+CPU 明确禁 CUDA、CUDA 分配真实设备的规则执行。session 禁止 posargs 缩小范围，
+缺包、错来源、缺梯度、数值不符和非零退出均失败；不把可选手工 session 视作已进 nightly。
+
+`component_measure.py --repo mmengine|mmcv` 绑定各阶段实际安装文件，MMCV 还要求
+`--mmengine-checkout`。`collect_openmmlab_scorecard.py` 从两份干净 checkout 自动重建分母，
+复算全部原始数组，再调用共同 auditor。实际 METADATA Name 从同 pin 的 `setup.py` 有限
+条件声明派生：`mmcv-lite` 不能被误写成 `mmcv` 发行包，也不证明编译 `mmcv.ops`。
+每个 runtime/阶段均须提供实际 Name、Version、全部 Python 来源及完整 wheel payload；
+MMCV 同时证明真正训练 owner MMEngine。两份 wheel 都是干净源码自构建，并非官方 PyPI wheel。
+相同权重下的扰动必须使输出及至少一个请求梯度变化。具体 L3 分子、参数名、平台和未覆盖
+Runner/扩展/性能边界以新报告及原始 scorecard 为准。
