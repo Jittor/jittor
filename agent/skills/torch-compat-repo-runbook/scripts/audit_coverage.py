@@ -58,26 +58,33 @@ def dedicated_gates(root):
         "ms-swift": ("swift-trainer", "ecosystem_swift",
                      "compat/tests/torch/test_ecosystem_swift.py",
                      "EcosystemSwift::test_ms_swift_trainer_full_llama"),
+        "verl": ("verl-component-training", "ecosystem_verl_training",
+                 "compat/tests/torch/test_ecosystem_verl_training.py",
+                 ("EcosystemVERLTraining::test_verl_ppo_gae_vanilla",
+                  "EcosystemVERLTraining::test_verl_distillation_k3")),
     }
     session_tree = ast.parse((root / "noxfile.py").read_text(encoding="utf-8"))
     sessions = {node.name for node in session_tree.body if isinstance(node, ast.FunctionDef)}
     result = {}
     for repo, (protocol, session, relative, method) in declarations.items():
         tree = ast.parse((root / relative).read_text(encoding="utf-8"))
-        body, valid = tree.body, session in sessions
-        parts = method.split("::")
-        for index, name in enumerate(parts):
-            expected = ast.FunctionDef if index == len(parts) - 1 else ast.ClassDef
-            matches = [node for node in body if isinstance(node, (ast.ClassDef, ast.FunctionDef))
-                       and node.name == name]
-            if len(matches) != 1 or not isinstance(matches[0], expected):
-                valid = False
-                break
-            body = matches[0].body
+        methods = (method,) if isinstance(method, str) else method
+        valid = session in sessions
+        for selector in methods:
+            body = tree.body
+            parts = selector.split("::")
+            for index, name in enumerate(parts):
+                expected = ast.FunctionDef if index == len(parts) - 1 else ast.ClassDef
+                matches = [node for node in body if isinstance(node, (ast.ClassDef, ast.FunctionDef))
+                           and node.name == name]
+                if len(matches) != 1 or not isinstance(matches[0], expected):
+                    valid = False
+                    break
+                body = matches[0].body
         if not valid:
             raise ValueError("Maintained dedicated gate entry is missing: " + repo)
         result[repo] = [{"protocol": protocol, "session": session,
-                         "tests": [relative + "::" + method]}]
+                         "tests": [relative + "::" + selector for selector in methods]}]
     return result
 
 
