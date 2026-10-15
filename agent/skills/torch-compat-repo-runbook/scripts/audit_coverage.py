@@ -62,6 +62,12 @@ def dedicated_gates(root):
                  "compat/tests/torch/test_ecosystem_verl_training.py",
                  ("EcosystemVERLTraining::test_verl_ppo_gae_vanilla",
                   "EcosystemVERLTraining::test_verl_distillation_k3")),
+        "mmengine": ("openmmlab-installed-train-step", "ecosystem_openmmlab_installed",
+                     "compat/tests/torch/test_ecosystem_openmmlab_installed.py",
+                     "EcosystemOpenMMLabInstalled::test_mmengine_train_step"),
+        "mmcv": ("openmmlab-installed-train-step", "ecosystem_openmmlab_installed",
+                 "compat/tests/torch/test_ecosystem_openmmlab_installed.py",
+                 "EcosystemOpenMMLabInstalled::test_mmcv_convmodule_train_step"),
     }
     session_tree = ast.parse((root / "noxfile.py").read_text(encoding="utf-8"))
     sessions = {node.name for node in session_tree.body if isinstance(node, ast.FunctionDef)}
@@ -97,6 +103,7 @@ def audit(root=ROOT):
                   "compat/tests/torch/test_ecosystem_verl.py",
                   "compat/tests/torch/test_ecosystem_longformer.py",
                   "compat/tests/torch/test_ecosystem_openmmlab.py",
+                  "compat/tests/torch/test_ecosystem_openmmlab_installed.py",
                   "compat/tests/torch/test_ecosystem_vllm.py")
     methods = {}
 

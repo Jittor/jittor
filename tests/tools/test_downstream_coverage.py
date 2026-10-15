@@ -86,6 +86,7 @@ class CoverageAuditTests(unittest.TestCase):
         flash_gate = self.root / "compat/tests/torch/test_ecosystem_flash_attention.py"
         swift_gate = self.root / "compat/tests/torch/test_ecosystem_swift.py"
         verl_gate = self.root / "compat/tests/torch/test_ecosystem_verl_training.py"
+        mm_gate = self.root / "compat/tests/torch/test_ecosystem_openmmlab_installed.py"
         gate.parent.mkdir(parents=True)
         test_source = "def test_real_deepspeed_engine_training_and_resume(): pass\n"
         trellis_source = "def test_real_trellis_models_training(): pass\n"
@@ -94,19 +95,25 @@ class CoverageAuditTests(unittest.TestCase):
         verl_source = ("class EcosystemVERLTraining:\n"
                        "    def test_verl_ppo_gae_vanilla(self): pass\n"
                        "    def test_verl_distillation_k3(self): pass\n")
+        mm_source = ("class EcosystemOpenMMLabInstalled:\n"
+                     "    def test_mmengine_train_step(self): pass\n"
+                     "    def test_mmcv_convmodule_train_step(self): pass\n")
         session_source = ("def ecosystem_deepspeed(session): pass\ndef ecosystem_trellis(session): pass\n"
                           "def ecosystem_flash_attention(session): pass\ndef ecosystem_swift(session): pass\n"
-                          "def ecosystem_verl_training(session): pass\n")
+                          "def ecosystem_verl_training(session): pass\n"
+                          "def ecosystem_openmmlab_installed(session): pass\n")
         gate.write_text(test_source)
         trellis_gate.write_text(trellis_source)
         flash_gate.write_text(flash_source)
         swift_gate.write_text(swift_source)
         verl_gate.write_text(verl_source)
+        mm_gate.write_text(mm_source)
         nox = self.root / "noxfile.py"
         nox.write_text(session_source)
         self.assertEqual(len(audit.dedicated_gates(self.root)["deepspeed"]), 1)
         for target, source in ((gate, test_source), (trellis_gate, trellis_source), (swift_gate, swift_source),
-                               (flash_gate, flash_source), (verl_gate, verl_source), (nox, session_source)):
+                               (flash_gate, flash_source), (verl_gate, verl_source),
+                               (mm_gate, mm_source), (nox, session_source)):
             with self.subTest(path=target.name):
                 target.write_text("def unrelated(): pass\n")
                 with self.assertRaisesRegex(ValueError, "dedicated gate"):
@@ -129,6 +136,33 @@ class CoverageAuditTests(unittest.TestCase):
             verl_gate.write_text(invalid)
             with self.subTest(source=invalid), self.assertRaisesRegex(ValueError, "dedicated gate"):
                 audit.dedicated_gates(self.root)
+
+        verl_gate.write_text(verl_source)
+        for invalid in (
+                mm_source.replace("    def test_mmengine_train_step(self): pass\n", ""),
+                mm_source.replace("    def test_mmcv_convmodule_train_step(self): pass\n", ""),
+                mm_source.replace("EcosystemOpenMMLabInstalled", "WrongOwner")):
+            mm_gate.write_text(invalid)
+            with self.subTest(source=invalid), self.assertRaisesRegex(ValueError, "dedicated gate"):
+                audit.dedicated_gates(self.root)
+
+    def test_openmmlab_installed_discovers_actual_methods_without_claiming_execution(self):
+        rows = {item["repo"]: item for item in audit.audit(ROOT)["repos"]}
+        for repo, method in (("mmengine", "test_mmengine_train_step"),
+                             ("mmcv", "test_mmcv_convmodule_train_step")):
+            with self.subTest(repo=repo):
+                self.assertEqual(rows[repo]["dedicated_gates"], [{
+                    "protocol": "openmmlab-installed-train-step",
+                    "session": "ecosystem_openmmlab_installed",
+                    "tests": ["compat/tests/torch/test_ecosystem_openmmlab_installed.py::"
+                              "EcosystemOpenMMLabInstalled::" + method],
+                }])
+                self.assertIsNone(rows[repo]["verified_level"])
+                case = method[len("test_"):]
+                self.assertTrue(any(node.endswith("::" + method)
+                                    for item in rows[repo]["gate_cases"] if item["case"] == case
+                                    for node in item["tests"]))
+
 
     def test_swift_trainer_class_method_is_a_dedicated_gate_without_fake_case(self):
         row = next(item for item in audit.audit(ROOT)["repos"] if item["repo"] == "ms-swift")

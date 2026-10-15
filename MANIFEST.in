@@ -417,6 +417,7 @@ include docs/results/2026-10-15-h3-silu-contracts.md
 include docs/results/2026-10-15-integration-nccl-coverage.md
 include docs/results/2026-10-15-like-factory-leaves.md
 include docs/results/2026-10-15-longformer-32768-context-oracles.md
+include docs/results/2026-10-15-maintained-ecosystem-nightly.md
 include docs/results/2026-10-15-metric-state-and-tensordict-oracles.md
 include docs/results/2026-10-15-metrics-tensordict-scorecards.md
 include docs/results/2026-10-15-mpi-bfloat16-process-groups.md
@@ -429,6 +430,7 @@ include docs/results/2026-10-15-native-tensor-parallel.md
 include docs/results/2026-10-15-native-zero-optimizer.md
 include docs/results/2026-10-15-nn-init-generator.md
 include docs/results/2026-10-15-nn-init-trainability-copy.md
+include docs/results/2026-10-15-openmmlab-installed-source-training.md
 include docs/results/2026-10-15-openmmlab-training-oracles.md
 include docs/results/2026-10-15-peft-installed-source-training.md
 include docs/results/2026-10-15-pytree-transformers-513.md
@@ -935,6 +937,7 @@ include tools/probes/opinfo_dtype_gaps.py
 include tools/probes/roundtrip_consistency_sweep.py
 include tools/probes/semantic_divergence_probe.py
 include tools/probes/side_effect_probe.py
+include tools/provision_ecosystem_nightly.py
 include tools/release/README.md
 include tools/release/baselines/torch-shim-resources-stage7.txt
 include tools/release/baselines/wheel-additions-final.txt
