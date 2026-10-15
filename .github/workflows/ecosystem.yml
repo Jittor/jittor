@@ -77,7 +77,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        library: [peft, swift, verl, transformers]
+        library: [peft, swift, verl, transformers, openmmlab]
     steps:
       - name: Check out measured source
         uses: actions/checkout@v6
@@ -117,3 +117,4 @@ jobs:
             ${{ runner.temp }}/maintained-${{ matrix.library }}/swift-inventory.json
             ${{ runner.temp }}/maintained-${{ matrix.library }}/resolved-lock-*.txt
             ${{ runner.temp }}/maintained-${{ matrix.library }}/lab/_state/nox/**/measurements/**
+            ${{ runner.temp }}/maintained-${{ matrix.library }}/maintained-output/

@@ -28,6 +28,26 @@ description: 验证真实 MMEngine CPU/CUDA 数值、完整梯度与下游拥有
 两侧实际 import 的版本与 origin 必须一致。`mmcv.cnn` 可由不含编译 `_ext` 的源码提供，
 这不建立任何 `mmcv.ops` 覆盖。所有环境、原始日志和缓存位于外置 lab state。
 
+## 完整来源 CPU nightly
+
+生态 workflow 的 `maintained-cpu` 矩阵选择 `openmmlab` profile，复用
+`ecosystem_openmmlab_installed` 的两个完整原训练场景，不以普通 parity 或导入代替：
+
+```bash
+<healthy-python-3.11> tools/provision_ecosystem_nightly.py \
+  --library openmmlab --state-root "$JITTOR_LAB_ROOT/_state/openmmlab-nightly/run" --run
+```
+
+profile 从固定的干净官方源码分别构建 MMEngine 0.10.7 和 MMCV-lite 2.2.0，
+它们是本地源码构建 wheel，不冒称 PyPI artifact。显式 `MMENGINE_LITE=0`、
+`MMCV_WITH_OPS=0`，不生成 `_ext` stub。三个独立解释器完成依赖解析与
+`pip check`；真实 Torch 2.11.0+cpu 与候选都安装相同下游构建，NumPy 固定 1.26.4。
+CPU 隐藏 CUDA，完整 seed 0/7/19、参数/输入梯度及三步 `train_step` 沿用原预算。
+持久产物由 `JITTOR_OPENMMLAB_EVIDENCE_DIR` 保存至 state 的 `maintained-output/`，
+与 nox 临时目录分开，workflow 保留其内容和日志。源与实际安装证明仍由原门禁核对。
+接线或本地执行均不能证明 GitHub scheduled 已运行，也不增加 `mmcv.ops`、
+Runner、CUDA 或性能支持结论。
+
 ## 在 shim 上跑
 
 以下命令是实际下游训练入口；oracle 先保存完整初始权重，候选侧复用它们：

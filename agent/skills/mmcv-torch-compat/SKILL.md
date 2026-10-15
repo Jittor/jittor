@@ -17,6 +17,9 @@ description: 验证真实 MMCV CPU/CUDA 数值、完整梯度与下游拥有的�
 这里的 CPU/CUDA 小模型正确性不代表完整 Runner/hook/数据集训练、分布式训练、
 全库注册项支持或真实尺寸性能。`mmcv.ops` 的编译扩展没有被替换为 Python stub。
 
+CPU nightly 与独立源码构建环境使用配套 [MMEngine runbook](../mmengine-torch-compat/SKILL.md)
+的 `openmmlab` profile；它执行两个完整原训练场景，保留来源和原始数值产物。
+
 ## 两侧环境
 
 两个独立解释器分别承载二进制 PyTorch 与 Jittor shim。先断言 oracle 的
