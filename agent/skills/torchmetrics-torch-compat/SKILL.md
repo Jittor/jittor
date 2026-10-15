@@ -104,6 +104,14 @@ CPU 显式隐藏 CUDA，CUDA 两侧恢复实际 `JT_BUILD_NVCC_PATH`，不得猜
 
 ## 断点归属与 adapter 边界
 
+完整 CPU maintained 入口为 `nox -s ecosystem_metric_tensordict_source`，同时要求两库原协议，
+不能选择更少 case、梯度、步数或放宽预算。可用
+`python tools/provision_ecosystem_nightly.py --library metric_tensordict --state-root <new-external-state> --run`
+创建三个独立环境、完整解析依赖并执行该入口。新 profile 保留实际 pip RECORD，使用固定官方 wheel，
+CPU 显式隐藏 CUDA；两库共 10 个 worker、35 对数组须全部被公共 collector 验收。
+实现与实际执行状态见[专用报告](../../../docs/results/2026-10-16-metrics-tensordict-maintained-cpu-nightly.md)。
+工作流接线本身不证明 hosted schedule 已运行；历史 `912` CPU/CUDA 测量不重标。
+
 | 纯 API 断点 | owner 与回归 |
 | --- | --- |
 | `Module.to/float` 没调用子类 `_apply`，Metric 自有状态未迁移 | `compat/torch/installers/nn/module_methods.py`；`test_module_custom_state.py` 含递归、child alias 去重、整数 buffer 和参数 identity |

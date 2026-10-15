@@ -3084,6 +3084,43 @@ def ecosystem_diffusers_source(session):
 
 
 @nox.session(python=False)
+def ecosystem_metric_tensordict_source(session):
+    """Require both original component scopes, complete gradients and TD SGD."""
+    root, env = _session_env(session, "ecosystem-metric-tensordict-source")
+    python = _hardware_python()
+    _set_hardware_python_config(session, python, env)
+    oracle = os.environ.get("REAL_TORCH_PYTHON", "").strip()
+    device = os.environ.get("JITTOR_TEST_DEVICES", "cpu")
+    if not oracle or not Path(oracle).is_file() or device not in ("cpu", "cuda"):
+        session.error("Metrics/TensorDict needs binary REAL_TORCH_PYTHON and exactly cpu or cuda")
+    if (len(session.posargs) % 2 or any(session.posargs[i] not in ("--output", "--cache-root")
+                                     for i in range(0, len(session.posargs), 2))):
+        session.error("Both components and all ten workers are mandatory; only output/cache paths are configurable")
+    args = []
+    for repo in ("torchmetrics", "tensordict"):
+        for kind in ("checkout", "wheel"):
+            value = os.environ.get("JITTOR_" + repo.upper() + "_" + kind.upper(), "").strip()
+            if not value or not Path(value).exists():
+                session.error("Explicit real " + repo + " " + kind + " required")
+            args += ["--" + repo + "-" + kind, value]
+    for name in ("CUDA_VISIBLE_DEVICES", "CUDA_HOME", "nvcc_path", "JT_BUILD_NVCC_PATH",
+                 "LD_PRELOAD", "LD_LIBRARY_PATH", "JITTOR_CUDA_WHEEL_STRICT", "JITTOR_CUDA_WHEEL_DISABLE"):
+        if name in os.environ:
+            env[name] = os.environ[name]
+    # The control process only orchestrates workers. Each measured child sets
+    # its actual shim/native identity and private benchmark roots explicitly.
+    env.update({"JITTOR_TORCH_SHIM": "0", "PYTHONPATH": "",
+                "JITTOR_REQUIRE_TORCHMETRICS": "1", "JITTOR_REQUIRE_TENSORDICT": "1",
+                "JITTOR_REQUIRE_REAL_TORCH": "1", "JITTOR_TEST_REQUIRE_EXECUTION": "1",
+                "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1"})
+    output = os.environ.get("JITTOR_METRIC_TD_EVIDENCE_DIR", "").strip() or str(root / "measurements")
+    session.run(python, str(REPO_ROOT / "tools/run_metric_td_gate.py"),
+                "--candidate-python", python, "--oracle-python", oracle, "--device", device,
+                *args, "--output", output, "--cache-root", str(root / "benchmark-cache"),
+                *session.posargs, external=True, env=env)
+
+
+@nox.session(python=False)
 def ecosystem_openmmlab_installed(session):
     """Maintain original MM train_step scopes with actual installed-wheel proof."""
     root, env = _session_env(session, "ecosystem-openmmlab-installed")

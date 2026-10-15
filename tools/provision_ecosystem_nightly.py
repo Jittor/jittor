@@ -46,9 +46,13 @@ OPENMMLAB_DEPS = ('numpy==1.26.4', 'opencv-python==4.11.0.86',
                   'astunparse==1.6.3', 'pillow==11.0.0', 'tqdm==4.67.1')
 DIFFUSERS_DEPS = ('numpy==1.26.4', 'huggingface-hub==0.35.3',
                   'astunparse==1.6.3', 'pillow==11.0.0', 'tqdm==4.67.1')
+METRIC_TD_DEPS = ('numpy==1.26.4', 'astunparse==1.6.3',
+                  'pillow==11.0.0', 'tqdm==4.67.1')
 
 
 def runtime_roots(library):
+    if library == 'metric_tensordict':
+        return list(METRIC_TD_DEPS)
     if library == 'diffusers':
         return list(DIFFUSERS_DEPS)
     if library == 'verl':
@@ -60,8 +64,10 @@ def runtime_roots(library):
 
 
 def session_name(library):
-    require(library in ('peft', 'swift', 'verl', 'transformers', 'openmmlab', 'diffusers'), 'Unknown maintained library profile')
+    require(library in ('peft', 'swift', 'verl', 'transformers', 'openmmlab', 'diffusers',
+                        'metric_tensordict'), 'Unknown maintained library profile')
     return {'verl': 'ecosystem_verl_training',
+            'metric_tensordict': 'ecosystem_metric_tensordict_source',
             'diffusers': 'ecosystem_diffusers_source',
             'transformers': 'ecosystem_transformers_source',
             'openmmlab': 'ecosystem_openmmlab_installed'}.get(library, 'ecosystem_' + library)
@@ -227,6 +233,27 @@ def stage_build_source(source, build):
         shutil.copytree(source, build, symlinks=True, ignore=shutil.ignore_patterns('.git'))
 
 
+def metric_td_checkouts(commands, state, source_cache, wheels):
+    """Fetch real official source identities, including TensorDict's SCM tag."""
+    from _metric_td_installation import PINS, source_descriptor
+
+    checkouts, pinned, sources = {}, {}, {}
+    for repo, (version, sha, remote, wheel_hash) in PINS.items():
+        path = state / 'upstream' / repo
+        cache = source_cache / repo if source_cache else None
+        checkout(commands, path, 'https://github.com/' + remote + '.git', sha, cache)
+        if repo == 'tensordict':
+            tag = 'refs/tags/v' + version
+            commands.run('git', '-C', path, 'fetch', '--depth', '1', cache or 'origin', tag + ':' + tag)
+            peeled = subprocess.check_output(
+                ['git', '-C', str(path), 'rev-parse', tag + '^{}'], text=True).strip()
+            require(peeled == sha, 'Official TensorDict release tag differs from the pinned source')
+        checkouts[repo] = path
+        pinned[repo] = official_wheel(repo, version, wheel_hash, wheels)
+        sources[repo] = source_descriptor(repo, path, pinned[repo])
+    return checkouts, pinned, sources
+
+
 def provision(library, state, python, source_cache=None, wheel_cache=None):
     require(sys.version_info[:2] == (3, 11), 'Nightly provisioning requires Python 3.11')
     require(not (state / 'provision.json').exists(), 'Use a new state root after successful provisioning')
@@ -245,7 +272,9 @@ def provision(library, state, python, source_cache=None, wheel_cache=None):
             commands.run(python, '-m', 'venv', interpreter.parents[1])
     sys.path.insert(0, str(SCRIPTS))
     checkouts, pinned = {}, {}
-    if library == 'diffusers':
+    if library == 'metric_tensordict':
+        checkouts, pinned, sources = metric_td_checkouts(commands, state, source_cache, wheels)
+    elif library == 'diffusers':
         from _diffusers_installation import COMMIT, VERSION, WHEEL_SHA256, source_descriptor
         path = state / 'upstream/diffusers'
         checkout(commands, path, 'https://github.com/huggingface/diffusers.git', COMMIT,
@@ -343,9 +372,9 @@ def provision(library, state, python, source_cache=None, wheel_cache=None):
                  *cached, *requirements)
     install_wheels(commands, candidate, oracle, wheels, requirements)
     # The historical PEFT/TF producer requires archive RECORD bytes. The MM
-    # and Diffusers producers accept legitimate pip RECORD entries; retain
+    # Diffusers and Metrics/TensorDict accept legitimate pip RECORD entries; retain
     # their real receipts without extracting over the installed distributions.
-    if library not in ('openmmlab', 'diffusers'):
+    if library not in ('openmmlab', 'diffusers', 'metric_tensordict'):
         for side in ('candidate', 'oracle'):
             site = state / side / 'lib/python3.11/site-packages'
             for wheel in pinned.values():
@@ -400,7 +429,9 @@ def provision(library, state, python, source_cache=None, wheel_cache=None):
                    JITTOR_ECOSYSTEM_PACKAGE_SITE=str(state / 'candidate/lib/python3.11/site-packages'),
                    JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE=str(state / 'oracle/lib/python3.11/site-packages'),
                    VERL_USE_EXTERNAL_PLUGINS='none')
-    if library == 'diffusers':
+    if library == 'metric_tensordict':
+        env['JITTOR_METRIC_TD_EVIDENCE_DIR'] = str(state / 'maintained-output')
+    elif library == 'diffusers':
         env['JITTOR_DIFFUSERS_EVIDENCE_DIR'] = str(state / 'maintained-output')
     elif library == 'openmmlab':
         env.update(JITTOR_OPENMMLAB_EVIDENCE_DIR=str(state / 'maintained-output'),
@@ -427,7 +458,8 @@ def provision(library, state, python, source_cache=None, wheel_cache=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--library', choices=('peft', 'swift', 'verl', 'transformers', 'openmmlab', 'diffusers'), required=True)
+    parser.add_argument('--library', choices=('peft', 'swift', 'verl', 'transformers', 'openmmlab',
+                                             'diffusers', 'metric_tensordict'), required=True)
     parser.add_argument('--state-root', type=Path, required=True)
     parser.add_argument('--python', default=sys.executable, help='Healthy Python 3.11 for new private venvs')
     parser.add_argument('--source-cache', type=Path,

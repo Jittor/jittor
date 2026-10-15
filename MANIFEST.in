@@ -457,6 +457,7 @@ include docs/results/2026-10-16-flash-attention-installed-source-training.md
 include docs/results/2026-10-16-h3-default-sdpa-forward.md
 include docs/results/2026-10-16-h3-sdpa-gradient-rounding.md
 include docs/results/2026-10-16-metrics-tensordict-installed-source.md
+include docs/results/2026-10-16-metrics-tensordict-maintained-cpu-nightly.md
 include docs/results/2026-10-16-native-alias-lifecycle.md
 include docs/results/2026-10-16-omni-installed-source-diagnostics.md
 include docs/results/2026-10-16-openmmlab-maintained-cpu-nightly.md
@@ -967,6 +968,7 @@ include tools/release/test_check_sdist_contents.py
 include tools/release/test_check_wheel_contents.py
 include tools/run_accelerate_gate.py
 include tools/run_diffusers_gate.py
+include tools/run_metric_td_gate.py
 include tools/run_peft_gate.py
 include tools/run_test_suite.py
 include tools/run_transformers_gate.py
