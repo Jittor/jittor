@@ -114,6 +114,11 @@ struct VarFlags {
         // back through the executor (and fail again) instead of returning it.
         // Cleared by the next read that syncs without throwing.
         _execution_failed,
+        // A view created without recording may inherit requires_grad from its
+        // base without acquiring a gradient edge of its own. An explicit
+        // requires_grad setter activates that edge, even when the value is
+        // already true. Kept separate from reversible freezing/stop_grad.
+        _unrecorded_view,
         _end,
     };
 };

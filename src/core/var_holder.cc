@@ -633,7 +633,9 @@ void VarHolder::orphan_views() {
     views = nullptr;
 }
 
-VarHolder* VarHolder::set_view_of(VarHolder* base, VarSlices&& slices) {
+extern bool no_grad;
+VarHolder* VarHolder::set_view_of(VarHolder* base, VarSlices&& slices,
+                                bool inherit_requires_grad) {
     drop_view();
     if (!base) return this;
     for (int i=0; i<slices.n; i++)
@@ -641,6 +643,12 @@ VarHolder* VarHolder::set_view_of(VarHolder* base, VarSlices&& slices) {
         // it indexes with would outlive nothing in particular.
         if (slices.slices[i].is_var()) return this;
     attach_view(base, VarViewStep(move(slices)));
+    if (inherit_requires_grad) {
+        bool enabled = base->get_requires_grad();
+        set_requires_grad(enabled);
+        if (enabled && no_grad)
+            var->set_flag(VarFlags::_unrecorded_view);
+    }
     return this;
 }
 
@@ -1017,6 +1025,10 @@ void VarHolder::rebind_view_result(VarPtr&& v, bool preserve_grad_policy) {
 
 extern bool no_grad;
 void VarHolder::set_requires_grad(bool flag) {
+    // Explicit activation gives an unrecorded view its own gradient edge.
+    // This must precede the equal-value fast path: requires_grad_(True) is
+    // meaningful even when the inherited public flag is already true.
+    var->set_flag(VarFlags::_unrecorded_view, 0);
     if (flag == get_requires_grad()) return;
     if (flag) {
         if (var->is_stop_grad()) {

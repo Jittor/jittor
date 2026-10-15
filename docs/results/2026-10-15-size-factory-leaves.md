@@ -96,6 +96,75 @@ producer identity 检查，并按运行后端显式选择设备。
 **6 passed / 0 skipped**（7.25 秒），其中多输入 JVP 仍为 348。
 这些日志对应 `d9b2ae9c0` 加测试改动，未将其重标为此前工厂生产修复的测量。
 
-KI-COMPAT-004 仍保持打开，仅保留 `torch.Tensor(other)` 的图连接丢失；本轮未修复该
-constructor，也未把其已有缺陷断言改成通过声明。未版本化原始日志在
+该历史阶段的 KI-COMPAT-004 仍保留 `torch.Tensor(other)` 的图连接丢失；该阶段未修复
+constructor，也未把其已有缺陷断言改成通过声明。后续修复和仍存在的边界见下一节。未版本化原始日志在
 `$JITTOR_LAB_ROOT/_state/factory-ledger-followup-d9/`，包括修正前失败、两设备复验及原生 JVP/VJP。
+
+
+## Tensor source constructor follow-up
+
+This follow-up synchronized published `0fb3920d4a44f37fa6cea7fa856374f0bacf73b4`.
+The constructor previously overwrote its native clone's requires-grad state with
+false. `Tensor(source)` now inherits the source state through the native view
+owner, preserving shared storage and the source graph when grad mode is enabled.
+The independent-frontend regression expects this connected Torch answer.
+
+Native autograd separately represents a no-grad-created view's inherited public
+requires-grad flag and its lack of a backward edge/gradient accumulator. Operator
+input snapshots preserve this distinction when a later explicit
+`requires_grad_(True)` activates the alias: earlier graphs remain disconnected,
+while newly constructed graphs accumulate its gradient. Clone, detach, nested
+alias, retain-grad and invalid backward-root cases use the same native semantics;
+no compatibility registry suppression or fabricated gradients is used.
+
+The new file has 41 contracts per device: 32 combinations of float32/float64,
+trainable/frozen sources, leaves/intermediates, contiguous/transposed storage and
+grad/no-grad creation, plus seven lifecycle variants, activation timing and invalid
+backward roots. Checks include exact values/derivatives, strides/storage sharing,
+physical CUDA residency and CUDA driver pointer-device identity. Fallbacks are
+forbidden and pending execution is synchronized.
+
+| Verification | Actual result |
+| --- | --- |
+| Expanded five-file Torch-mode CPU regression | 235 passed / 193 CUDA skips, 9.29 s |
+| Expanded five-file CUDA-enabled regression | 428 passed / 0 skipped, 462.82 s including cold compilation |
+| Independent official binary Torch, identical 41 contracts | 41 passed on CPU and 41 on CUDA |
+| Shared native autograd five files, CPU | 30 passed / 1 CUDA skip, 22.34 s |
+| Shared native autograd five files, CUDA-enabled | 31 passed / 0 skipped, 129.40 s |
+| Canonical core, native and Torch modes | 322 passed / 42 skipped / 1 existing xfail; both mode exits zero |
+| Complete structure and compatibility structure | 1622 passed / 6 skipped, 277.77 s |
+
+CUDA-enabled runs include explicit CPU controls; their totals are not exclusively
+CUDA cases. Compilation-inclusive durations are validation evidence, not speed
+comparisons. The five Torch files are `test_tensor_constructor_alias.py`,
+`test_independent_frontend.py`, `test_torch_compat_autograd_semantics.py`,
+`test_size_factory_leaf_contract.py` and `test_tensor_state.py`. The five native
+files cover the engine, policy, backward-twice, missing gradients and functional
+seeds. Raw commands, source hashes, probes and logs are unversioned under
+`$JITTOR_LAB_ROOT/_state/tensor-alias-main-0fb/`.
+
+Historical stages remain distinct. The original grad-enabled-only candidate had
+226 CPU passes / 184 skips and 410 CUDA-enabled passes; its oracle covered 32
+contracts per device. The first oracle rejected the incorrect assumption that a
+no-grad alias should accumulate its own gradient. A subsequent real candidate
+probe exposed retroactive connection of old graphs after alias activation; native
+operator-input snapshots fixed that failure. These failed attempts and corrected
+contracts remain available under their original filenames and source snapshots.
+
+KI-COMPAT-004 remains open. Independent review additionally found Torch's
+creation-mode/mutation guard: modifying a no-grad-created alias or its base makes
+later grad-mode `is_leaf`, `grad_fn` and arithmetic reject the view. It also found
+that enabling a previously frozen source dynamically changes its alias's visible
+requires-grad flag without activating an accumulator. Candidate CPU probes confirm all 12 mutation variants accept the forbidden use
+and all eight unfreeze variants leave the alias flag false. These reproductions
+and remaining differences are recorded separately; the 41 passing contracts above do
+not establish either additional behavior. Full subclass/C-extension ABI and
+unexecuted consumers are outside this result and R33 remains open.
+
+The six structure skips comprise two accelerator cases, two declared skips and
+two installed-distribution resolution checks unavailable in this interpreter.
+They are not evidence of installation support. Layout, Ruff and whitespace
+checks also pass. The initial mutation probe completed its observations but failed
+while recording the shim’s nonexistent `torch._C.__file__`; its log is retained,
+and the corrected v2 probe records the actual frontend path without claiming an
+independent binary oracle.

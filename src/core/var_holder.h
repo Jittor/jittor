@@ -438,6 +438,11 @@ struct VarHolder {
             && !var->flag(VarFlags::_requires_grad_disabled);
     }
 
+    // @pyjt(_has_gradient_edge)
+    inline bool has_gradient_edge() {
+        return get_requires_grad() && !var->flag(VarFlags::_unrecorded_view);
+    }
+
     /**
      * enable or disable gradient calculation.
      * @see stop_grad
@@ -773,7 +778,8 @@ struct VarHolder {
      */
     // @pyjt(_set_view_of)
     // @attrs(return_self)
-    VarHolder* set_view_of(VarHolder* base, VarSlices&& slices);
+    VarHolder* set_view_of(VarHolder* base, VarSlices&& slices,
+                          bool inherit_requires_grad=false);
 
     // @pyjt(_set_transpose_view_of)
     // @attrs(return_self)

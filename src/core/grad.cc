@@ -120,7 +120,11 @@ Op* backward_grad_fn(Var* v) {
         if (e.reverse().index < 0) continue;
         Var* in = e.node->var();
         if (!requires_grad(in)) continue;
-        if (is_requires_grad_disabled_edge(in, op)) continue;
+        // An unrecorded view can require grad and create a producer even
+        // though this particular input has no backward edge. This differs
+        // from an input explicitly frozen when the op was constructed.
+        if (is_requires_grad_disabled_edge(in, op)
+                && !lookup_unrecorded_view_edge(in, op)) continue;
         return op;
     }
     return nullptr;
@@ -255,7 +259,7 @@ vector<VarPtr> grad(
     unordered_map<Var*, VarPtr> observed_target_grads;
     for (int i=0; i<targets.size(); i++) {
         Var* var = targets[i];
-        target_id[i] = gvar_index.has(var) ?
+        target_id[i] = !var->flag(VarFlags::_unrecorded_view) && gvar_index.has(var) ?
             gvar_index.get(var) : -1;
         if (target_id[i] >= 0) is_target[target_id[i]] = true;
     }
@@ -266,7 +270,8 @@ vector<VarPtr> grad(
         auto producer = backward_grad_fn(loss);
         if (loss->grad_hook && is_target[0] && producer && grad_nodes.has(producer))
             observed_target_grads[loss] = grads[0].ptr;
-        apply_tensor_hook(loss, grads[0]);
+        if (!loss->flag(VarFlags::_unrecorded_view))
+            apply_tensor_hook(loss, grads[0]);
     }
 
     NodeIndex consumed_grouped_ops;
@@ -284,6 +289,10 @@ vector<VarPtr> grad(
     // outputs to an upstream op that has not been visited yet.
     for (int i=1; i<gvars.size(); i++) {
         Var* var = gvars[i];
+        // Inherited requires_grad drives forward propagation, but this view
+        // has no recorded backward edge or gradient accumulator. Do not run
+        // its hooks or manufacture a gradient for an explicit target.
+        if (var->flag(VarFlags::_unrecorded_view)) continue;
         vector<GradOpSnapshot> outgoing;
         outgoing.reserve(var->outputs().size());
         for (auto it : var->outputs_with_index()) {

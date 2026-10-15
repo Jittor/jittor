@@ -1,7 +1,6 @@
 """Stable Tensor gradient APIs using the shared native Var/Op graph."""
 from importlib import import_module
 from ...context import get_install_context
-from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from jittor._runtime import step_capture as _step_capture
 _owner = import_module(__package__)
 _NativeVar = _owner.jt.Var
@@ -162,6 +161,8 @@ def _backward_impl(self, gradient=None, retain_graph=None, create_graph=False, *
     # graph anyway and the second-order backward it was asked for then
     # failed. In the common loss.backward() case both are false, so the
     # graph is still freed.
+    if self.requires_grad and not self._has_gradient_edge():
+        raise RuntimeError("Tensor does not require grad and does not have a grad_fn")
     retain_graph = bool(create_graph) if retain_graph is None else bool(retain_graph)
     # torch's `gradient` is the vector of the vector-Jacobian product:
     # y.backward(v) computes d(sum(y*v))/dx. It used to be accepted and

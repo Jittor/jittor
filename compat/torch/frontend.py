@@ -234,7 +234,8 @@ class _TensorMeta(type):
         # four still raises.
         requested_dtype = kwargs.pop("dtype", None)
         device = kwargs.pop("device", None)
-        requires_grad = bool(kwargs.pop("requires_grad", False))
+        requested_requires_grad = kwargs.pop("requires_grad", None)
+        requires_grad = bool(requested_requires_grad)
         kwargs.pop("pin_memory", None)
         if kwargs:
             raise TypeError(
@@ -254,8 +255,12 @@ class _TensorMeta(type):
                 result = backend.empty(tuple(args[0]), dtype=dtype)
             elif isinstance(args[0], backend.Var):
                 result = backend.Var.clone(args[0])
-                result._set_view_of(args[0], Ellipsis)
-                result.requires_grad = requires_grad
+                # The native view owner preserves both the storage and the
+                # creation-mode-dependent gradient edge. An inherited flag
+                # under no_grad does not explicitly activate an accumulator.
+                result._set_view_of(args[0], Ellipsis, requested_requires_grad is None)
+                if requested_requires_grad is not None:
+                    result.requires_grad = requires_grad
                 return result
             else:
                 result = backend.array(args[0], dtype=dtype)

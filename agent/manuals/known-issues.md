@@ -1970,24 +1970,37 @@ workaround.
 - Exit condition: nested tensors are Tensors with jagged storage, and the test is
   updated to the torch answer.
 
-## KI-COMPAT-004: `torch.Tensor(other)` loses the source graph connection
+## KI-COMPAT-004: Tensor aliases lack mutation guards and dynamic source trainability
 
-- Severity: Medium (silent loss of autograd linkage)
-- Status: Open; factory leaf subproblem resolved in `d51c2a48c`
-- Owner: torch compatibility / Tensor constructors
-- Symptom: `torch.Tensor(other)` aliases the source graph in Torch but creates
-  a fresh Var without requires-grad here, despite sharing the source storage.
-  Backward through the alias cannot propagate to the original tensor.
-- Cause: the Tensor constructor publishes a fresh native holder without
-  preserving the source's autograd connection.
-- Workaround: use the original tensor when graph connectivity is required.
-- Evidence: `compat/tests/torch/test_independent_frontend.py::test_independent_tensor_installation_preserves_native_type`
-  still pins this constructor gap. The separate factory leaf problem is resolved;
-  [CPU/CUDA factory results](../../docs/results/2026-10-15-size-factory-leaves.md)
-  include the updated leaf/grad-fn regression and unchanged native JVP/VJP.
-- Exit condition: `torch.Tensor(other)` preserves Torch's graph alias behavior,
-  with backward to the original tensor verified on CPU and the claimed devices;
-  update the constructor regression to the Torch answer.
+- Severity: Medium (autograd view semantics differ from Torch)
+- Status: Open; factory leaves, grad-enabled constructor linkage and no-grad
+  accumulator eligibility resolved in their verified ranges
+- Owner: native autograd / torch compatibility Tensor constructors
+- Symptom: a no-grad-created `torch.Tensor(source)` alias remains usable for
+  grad-mode arithmetic after the alias or source is modified with `fill_` or
+  `copy_`. Genuine Torch rejects this use and `is_leaf`/`grad_fn` inspection.
+  Separately, enabling a previously frozen source does not dynamically update
+  its alias's visible `requires_grad`; genuine Torch updates the flag without
+  activating an accumulator, in either creation mode.
+- Cause: native alias storage and gradient-edge eligibility are represented,
+  but creation-mode mutation guards and dynamic source trainability are not.
+- Workaround: avoid reusing no-grad-created aliases after writes; create the
+  intended alias after setting the source's requires-grad state. Use explicit
+  detach/activation only when an independent trainable leaf is intended.
+- Evidence: the 41 CPU/CUDA contracts in
+  `compat/tests/torch/test_tensor_constructor_alias.py` cover construction,
+  source/alias gradients, activation timing, clone/detach/retain and invalid
+  roots. Separate genuine Torch and candidate CPU probes confirm 12 mutation
+  variants lack the expected rejection, and eight frozen-source/unfreeze
+  variants lack dynamic flag propagation. These are remaining failures, not
+  covered by the passing constructor matrix. Raw probes are unversioned under
+  `$JITTOR_LAB_ROOT/_state/tensor-alias-main-0fb/` and the independent
+  `tensor-alias-independent-review` / `tensor-alias-unfreeze-review` states;
+  see the [constructor follow-up](../../docs/results/2026-10-15-size-factory-leaves.md#tensor-source-constructor-follow-up).
+- Exit condition: native view creation/mutation metadata and source-state
+  propagation agree with independent Torch on CPU and each claimed accelerator,
+  including absence of unintended accumulator activation. Preserve the existing
+  old/new graph snapshots and storage/gradient contracts when adding this support.
 
 ## KI-COMPAT-006: `load_state_dict` shares the source's Vars, and an in-place optimizer then moves both models
 
