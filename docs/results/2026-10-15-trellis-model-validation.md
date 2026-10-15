@@ -196,3 +196,33 @@ proof and the official Torch wheel. Its SHA256 is
 The subsequent documentation change does not relabel these b694 measurements.
 All full-pipeline, sparse-extension, pretrained, additional precision/backend,
 whole-process memory and performance boundaries above remain open.
+
+## Central integration review (2026-10-16)
+
+Owner: Jittor core maintainers. Integration source is clean
+`e05eaa4c0`; measured source remains the original full `b6947541b5bddfa87098d40c6f4e09ad0e704c54`
+above. Recheck when the producer, collector, source proof, upstream pin or shared
+admission rules change. The integration adds no new numerical measurement.
+
+The integration owner independently recomputed all **4752 array pairs and 32
+metadata packets**, without importing Jittor, using the original complete CPU/CUDA
+artifacts and original criteria. The integrated collector and common auditor again
+accept **six L3 records, zero rejected**, with CPU/CUDA models each **3 / 9** and
+trainer each **0 / 15**. All **2882 original Git blobs**, including tracked symlink
+target text, match the frozen measurement snapshot. All **11842 actual Torch
+provider files** match their original proof. Both the original 179-file raw seal
+and final **184 files / 842586487 bytes** seal were independently rehashed without
+mismatch; the latter SHA256 is
+`1451445897974e5e4339dcb159f271aae1216c5231902b30c1aa3dee9edffe47`.
+
+The integrated main tree passes 68 TRELLIS host contracts plus 15 persistent-output
+contracts, core **322 passed / 42 skipped / one existing expected failure**,
+`tests/structure` **1508 passed / 6 skipped**, and `compat/tests/structure`
+**114 passed / zero skipped**. Layout, generated manifest check, changed-Python
+Ruff and diff checks pass. The six structure skips retain their actual reasons,
+including two interpreter installation-resolution checks; import-path execution
+is not relabeled as a private editable installation. Root verification outputs,
+terminal logs and the fresh common scorecard are unversioned under
+`$JITTOR_LAB_ROOT/_state/trellis-main-source-integration-dfe/20261016/`.
+No old metadata or raw measurement was changed, and no broader pipeline,
+pretrained, trainer, backend or L4 conclusion is granted.
