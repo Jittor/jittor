@@ -69,3 +69,26 @@ The first channels-last invocation numerically passed its three CUDA-only tests 
 Earlier preserved failures include an existing duplicate random-state fixture contract, the exact ledger count for two new user-facing shape checks, and rejected intermediate layout-implementation attempts. The final fixture uses the existing helper, the ledger reflects the actual checks, and no allowlist or test-policy exemption was added. Original logs retain their source identities.
 
 This verifies the stated alias/storage/AD contracts only. It does not close R33 maintainer-PR disposition, certify full default view/ABI behavior, or claim untested accelerators or downstream libraries. The immutable raw inventory is `final-layout-evidence-seal-v1.json`; `final-layout-ready-source-binding-v1.json` binds measured bytes to the clean integration commit and `final-layout-ready-source-v1.tar` preserves its complete source tree.
+
+
+## Integration recheck
+
+Clean `66db6e44af90718fb732faab10c2f832854b9322` combines these exact 22 production
+files with the reviewed AA9 attention and Diffusers source gates. Independent byte
+comparison preserves all 22 alias owners and all four AA9 production owners.
+Core passes 322 / 42 skipped / one existing xfail; full structure passes
+1628 / six skipped. The eleven-file compatibility selection passes CPU
+524 / 400 accelerator skips and CUDA-enabled 932 / zero skips, including the eight
+new BF16 attention tests. Native alias/attention passes CPU 38; the CUDA-enabled
+native alias/attention/full channels-last selection passes 49 / zero skips and
+includes explicit CPU math checks. A separate whole-invocation fallback guard
+passes all eleven channels-last nodes with the actual counter unchanged at zero.
+Host source/nightly tests pass 182. Unit caches are separate from benchmark caches;
+first compilation executes locally, without copying JIT artifacts.
+
+Unversioned integration commands, raw logs, actual live CUDA environment/library
+observations and the complete 2923-file Git source archive are under
+`$JITTOR_LAB_ROOT/_state/refactor-remaining-main-00/20261016/`.
+These integration results retain source 66db; they do not relabel the earlier
+4f95/0458 evidence, repair the preserved expand-memory failure, or close default
+transpose/view and full ABI work.

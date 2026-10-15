@@ -11,6 +11,8 @@
 ```{toctree}
 :maxdepth: 1
 
+2026-10-16-diffusers-maintained-cpu-nightly
+2026-10-16-h3-upstream-gradient-components
 2026-10-16-native-alias-lifecycle
 2026-10-16-h3-sdpa-gradient-rounding
 2026-10-16-h3-default-sdpa-forward

@@ -44,7 +44,7 @@ changes: [2.0 migration notes](../../docs/releases/2.0.md).
 | Test system and gate tiers | [test system](../../docs/development/test-system.md) |
 | Mechanism notes (numerics, placement, profiling) | [notes index](../../docs/notes/index.md) |
 | Torch compatibility | [compatibility index](../../docs/compatibility/index.md) |
-| Backend guides (Ascend, Corex, MPI) | [guides index](../../docs/guides/index.md) |
+| Backend guides (Ascend, Corex, jtrun; legacy MPI) | [guides index](../../docs/guides/index.md) |
 | Performance method | [benchmarking](../../docs/performance/benchmarking.md) |
 | Reproducible verification results | [results index](../../docs/results/index.md) |
 | Reusable verification tools | `agent/skills/` (listed in [agent-index.md](agent-index.md)) |
