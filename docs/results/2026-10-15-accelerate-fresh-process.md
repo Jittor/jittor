@@ -112,3 +112,36 @@ External evidence is under
 binds all four PID/rank result JSON files, both terminal logs, the exact executable/environment
 commands, the probe, official upstream source files and the genuine Torch `_C` binary/import file.
 This is a provider-selection negative result, not a new training or fresh-restoration scorecard.
+
+## 主树整合与空 CUDA 状态集合
+
+主树同步 `8bb59861de5bbf98954728a331a4efe42ea8a389` 后整合上述代码，另以干净
+`0fe68129f09dea2f4b5585dde52dd149bb1db4b5` 运行完整维护 nox CPU→CUDA 协议。
+两个 rank 的首次核心/扩展 JIT 串行完成。CPU 四组、CUDA 十二组与全部 48 个真实
+阶段 worker 均成功；producer 全部退出后才启动 consumer。独立重算仍为 2,516
+数组、168 参数梯度和 84 输入梯度，原预算未变；两个单 rank L3 接受，两个双 rank
+CUDA 记录仍因上述 CPU FSDP2 限制而不授配对通过。所有 2,826 个 Git 文件（包含
+目录符号链接的目标文本）、64 个 checkpoint 文件与正式 CUDA worker 的真实库映射
+均另行绑定。历史 93d 测量保持原身份，不重标为主树结果。
+
+该运行完全终态后，另修复 CPU-only 的空 CUDA 状态集合：无可见 CUDA 设备的
+`torch.cuda.get_rng_state_all()` 返回 `[]`；`set_rng_state_all([])` 与空 tuple
+均正常返回，不初始化 CUDA，不修改 CPU/Python/NumPy 流。此前候选三个契约全部失败，
+同一测试在独立 binary Torch 上三个全部通过。修复只在零设备或空集合时提前返回，
+有状态的解析与 native 恢复继续由原 owner 执行。标量 CUDA state API 与无设备的
+非空集合不因此获得新的支持声明。
+
+修复后定向 CPU **43 passed / 19 skipped**，实际双 CUDA **59 passed / 3 skipped**；
+CUDA 运行的三个 skip 是明确只适用于无可见 CUDA 进程的空集合节点。现有真实设备状态、
+全位宽播种与默认 Generator 隔离回归均实际执行。此空集合改动未参与前述 0fe 正式测量，
+不把旧测量重新标为最终提交。
+
+主树未版本化证据目录：
+`$JITTOR_LAB_ROOT/_state/accelerate-fresh-integration-8bb/`。`formal/{cpu,cuda}`、
+`main-scorecards`、`measured-main-source.json`、`provider-watch.jsonl` 和
+`sealed-main-evidence.json` 保留完整测量身份；`integration-manifest.json` 另记录最终
+core/结构/工具检查、冻结文件与最终提交的 Git blob 映射。三个 `source-suite` 入口是
+维护 gate 指向真实测试文件的符号链接，绑定目标文本并逐字节匹配 0fe 的 Git 内容，
+不冒充独立复制的测量文件。旧 unit 解释器缺失完整 safetensors 的导入失败保留；
+依赖完整的私有解释器定向 72 项通过。首次封装工具拒绝这些源码链接及后续自身日志
+引用的问题已修正，旧草稿保留，不改变原始训练数组或数值准入。

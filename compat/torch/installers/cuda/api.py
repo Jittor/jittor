@@ -1366,10 +1366,13 @@ def _api_cuda_get_rng_state(device=None, *a, **k):
 
 
 def _api_cuda_get_rng_state_all(*a, **k):
+    count = device_count()
+    if not count:
+        return []
     jt.sync_all(True)
     backend = _curand()
     return [_rng_state_pack(backend.curand_generator_seed(i), backend.curand_generator_offset(i))
-            for i in range(int(jt.get_device_count()))]
+            for i in range(count)]
 
 
 def _api_cuda_set_rng_state(state, device=None, *a, **k):
@@ -1382,6 +1385,8 @@ def _api_cuda_set_rng_state(state, device=None, *a, **k):
 
 def _api_cuda_set_rng_state_all(states, *a, **k):
     parsed = [_rng_state_unpack(state) for state in states]
+    if not parsed:
+        return
     jt.sync_all(True)
     backend = _curand()
     for index, (seed, offset) in enumerate(parsed):
