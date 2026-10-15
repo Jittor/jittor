@@ -8,6 +8,8 @@ from pathlib import Path
 VALIDATORS = {
     ('accelerate', 'accelerate-checkpoint'): '_accelerate_scorecard',
     ('accelerate', 'accelerate-fsdp2-full'): '_accelerate_scorecard',
+    ('accelerate', 'accelerate-checkpoint-fresh-process'): '_accelerate_scorecard',
+    ('accelerate', 'accelerate-fsdp2-full-fresh-process'): '_accelerate_scorecard',
     ('deepspeed', 'deepspeed-zero-training'): '_deepspeed_scorecard',
 }
 

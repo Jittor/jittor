@@ -1,6 +1,7 @@
 """Negative protocol admission contracts; these fixtures make no hardware claim."""
 
 import copy
+import ast
 import hashlib
 import importlib.util
 import json
@@ -347,6 +348,10 @@ def test_gate_passes_each_serial_warm_its_explicit_cache_rank(tmp_path, monkeypa
             assert gate.worker_rank(worker_args, env) == rank
             assert env['CUDA_VISIBLE_DEVICES'] == ('first', 'second')[rank]
             assert env['JT_BUILD_CACHE_NAME'].endswith('rank%d' % rank)
+            if command[command.index('--runtime') + 1] == 'jittor':
+                assert command[1:3] == ['-m', 'jittor.distributed.launch']
+                assert '--nproc-per-node=1' in command
+                assert '--device-ids=' + ('first', 'second')[rank] in command
             warmed.append((command[command.index('--runtime') + 1], rank))
         else:
             measurement = Path(command[command.index('--measurement') + 1])
@@ -385,3 +390,176 @@ def test_protocol_pairing_keeps_all_semantic_dimensions(protocol):
     second = copy.deepcopy(first)
     second['protocol']['zero_stage'] = 2
     assert protocols.pairing_key(first) != protocols.pairing_key(second)
+
+
+@pytest.fixture
+def fresh_protocol(protocol, tmp_path, monkeypatch):
+    from _accelerate_fresh_scorecard import protocol_spec
+    import uuid
+
+    row, source, root = protocol
+    row['case'] = 'world1-no-fresh-process-checkpoint'
+    row['protocol'] = protocol_spec(1, 'no')
+    hashes = {str(i): 'd' * 64 for i in range(5)}
+    monkeypatch.setattr(accelerate, 'measurement_sources', lambda _baseline, fresh=False: hashes)
+    old = row['evidence']['artifacts']
+    artifacts = []
+    execution = {'results': []}
+
+    def bind(role, path):
+        artifacts.append({'role': role, 'path': str(path), 'sha256': digest(path)})
+
+    for label, runtime in (('reference', 'torch'), ('candidate', 'jittor')):
+        for scenario, seed in (('base', 0), ('perturb', 7)):
+            prefix = '%s-%s-rank0' % (label, scenario)
+            metadata = json.loads(Path(next(x['path'] for x in old if x['role'] == prefix + '-metadata')).read_text())
+            with np.load(next(x['path'] for x in old if x['role'] == prefix + '-arrays')) as archive:
+                arrays = {key: archive[key].copy() for key in archive.files}
+            saved = {'model': {name: arrays['step/2/model/' + name].tolist() for name in ('weight', 'bias')},
+                     'optimizer': {'state': {}, 'param_groups': []},
+                     'scheduler': {'step_size': 1, 'gamma': .8, 'base_lrs': [.01, .015], 'last_epoch': 3,
+                                   '_step_count': 4, '_is_initial': False, '_get_lr_called_within_step': False,
+                                   '_last_lr': [float(arrays['step/2/learning_rates/' + i]) for i in ('0', '1')]}}
+            for index, name in enumerate(('weight', 'bias')):
+                saved['optimizer']['state'][name] = {
+                    key: arrays['step/2/optimizer/' + name + '/' + key].tolist() for key in ('step', 'exp_avg', 'exp_avg_sq')}
+                group = {'params': [name], 'betas': [.7, .93]}
+                for key in ('lr', 'eps', 'weight_decay', 'amsgrad', 'maximize'):
+                    group[key] = arrays['step/2/hyperparameters/%d/%s' % (index, key)].tolist()
+                saved['optimizer']['param_groups'].append(group)
+            checkpoint = tmp_path / (prefix + '-checkpoint')
+            checkpoint.mkdir()
+            files = {}
+            for filename in ('pytorch_model.bin', 'optimizer.bin', 'scheduler.bin', 'random_states_0.pkl'):
+                path = checkpoint / filename
+                path.write_bytes(b'host identity fixture only')
+                files[filename] = digest(path)
+                bind(prefix + '-checkpoint-' + filename, path)
+            rng = {'python': [3, list(range(625)), None], 'numpy': ['MT19937', list(range(624)), 1, 0, 0.],
+                   'torch_cpu': list(range(16))}
+            phase_launches = []
+            for phase in ('produce', 'consume'):
+                value = copy.deepcopy(metadata)
+                selected = {key: array for key, array in arrays.items() if key.startswith('initial/')
+                            or int(key.split('/')[1]) in (range(5) if phase == 'produce' else range(5, 7))}
+                npz = tmp_path / (prefix + '-' + phase + '.npz')
+                np.savez(npz, **selected)
+                value.update(arrays=str(npz), arrays_sha256=digest(npz),
+                             array_manifest={key: value['array_manifest'][key] for key in selected},
+                             measurement_source_sha256=hashes)
+                if phase == 'consume':
+                    value['interpreter']['pid'] += 1000
+                value['result'] = {'phase': phase, 'pid': value['interpreter']['pid'],
+                                   'process_nonce': str(uuid.uuid5(uuid.NAMESPACE_URL, prefix + phase)),
+                                   'checkpoint_directory': str(checkpoint), 'checkpoint_sha256': files,
+                                   'observed_monotonic_ns': 15 if phase == 'produce' else 35}
+                environment = {}
+                for key in ('HOME', 'JITTOR_HOME', 'TMPDIR'):
+                    directory = tmp_path / prefix / key
+                    directory.mkdir(parents=True, exist_ok=True)
+                    environment[key] = str(directory)
+                value['result']['process_environment'] = environment
+                if phase == 'produce':
+                    value['result'].update(before_save=[1, 2, 3], expected_resume=[4, 5], saved=saved,
+                                           rng_saved=rng, expected_random=metadata['result']['expected_random'])
+                else:
+                    value['result'].update(actual_resume=[4, 5], after_restore=saved, before_restore={},
+                                           rng_restored=rng, rng_before={**rng, 'torch_cpu': list(range(1, 17))},
+                                           resumed_random=metadata['result']['expected_random'])
+                path = tmp_path / (prefix + '-' + phase + '.json')
+                path.write_text(json.dumps(value))
+                bind(prefix + '-' + phase + '-metadata', path)
+                bind(prefix + '-' + phase + '-arrays', npz)
+                if phase == 'produce' and seed == 0:
+                    bind(label, path)
+                phase_launches.append({'phase': phase, 'returncode': 0, 'producer_exited': phase == 'consume',
+                    'command': [value['interpreter']['executable'], 'gate.py', '--checkpoint-phase', phase,
+                                '--checkpoint-directory', str(checkpoint)],
+                    'started_monotonic_ns': 10 if phase == 'produce' else 30,
+                    'finished_monotonic_ns': 20 if phase == 'produce' else 40})
+            execution['results'].append({'runtime': runtime, 'seed': seed, 'world_size': 1, 'precision': 'no',
+                                        'checkpoint_mode': 'fresh-process', 'returncode': 0, 'status': 'passed',
+                                        'phase_launches': phase_launches})
+    execution_path = tmp_path / 'execution.json'
+    execution_path.write_text(json.dumps(execution))
+    bind('execution', execution_path)
+    artifacts.extend(x for x in old if x['role'] == 'platform')
+    row['evidence']['artifacts'] = artifacts
+    actual = measurements(row, artifacts, source)
+    row.update(actual)
+    path = tmp_path / 'fresh-comparison.json'
+    path.write_text(json.dumps(actual))
+    bind('comparison', path)
+    return row, source, root
+
+
+def test_separate_process_protocol_accepts_only_its_own_semantic_scope(fresh_protocol):
+    value = result(fresh_protocol)
+    assert not value['rejected'] and len(value['accepted']) == 1
+    assert value['accepted'][0]['protocol']['restoration'] == 'fresh-process'
+    assert value['coverage'] == []
+    old = copy.deepcopy(fresh_protocol[0])
+    old['protocol']['id'] = 'accelerate-checkpoint'
+    assert protocols.pairing_key(old) != protocols.pairing_key(fresh_protocol[0])
+
+
+@pytest.mark.parametrize('change', [
+    lambda value: value['interpreter'].update(pid=42),
+    lambda value: (value['interpreter'].update(pid=42), value['result'].update(pid=42)),
+    lambda value: value['result'].update(phase='produce'),
+    lambda value: value['result'].update(process_nonce='not-a-process-nonce'),
+    lambda value: value['result'].update(observed_monotonic_ns=19),
+    lambda value: value['result']['checkpoint_sha256'].update({'optimizer.bin': '0' * 64}),
+    lambda value: value['result']['after_restore']['optimizer']['state']['weight'].pop('exp_avg_sq'),
+    lambda value: value['result']['after_restore']['scheduler'].update(last_epoch=2),
+    lambda value: value['result']['rng_restored']['torch_cpu'].append(12),
+    lambda value: value['result'].update(rng_before=value['result']['rng_restored']),
+    lambda value: value['result']['resumed_random'].update(python=.2),
+    lambda value: value['result'].update(actual_resume=[4]),
+    lambda value: value.update(fallback_count=1),
+    lambda value: value['result']['process_environment'].update(HOME=''),
+    lambda value: value['result']['process_environment'].update(HOME=value['result']['process_environment']['TMPDIR']),
+])
+def test_fresh_process_contract_rejects_rebound_metadata_tampering(fresh_protocol, change):
+    mutate_metadata(fresh_protocol, 'candidate-base-rank0-consume-metadata', change)
+    assert result(fresh_protocol)['rejected']
+
+
+def test_missing_adam_moment_in_both_phase_snapshots_is_not_hidden_by_equal_json(fresh_protocol):
+    for phase, field in (('produce', 'saved'), ('consume', 'after_restore')):
+        mutate_metadata(fresh_protocol, 'candidate-base-rank0-' + phase + '-metadata',
+                        lambda value: value['result'][field]['optimizer']['state']['weight'].pop('exp_avg_sq'))
+    assert result(fresh_protocol)['rejected']
+
+
+def test_fresh_checkpoint_failed_partial_output_cannot_be_overwritten(tmp_path, monkeypatch):
+    spec = importlib.util.spec_from_file_location('accelerate_partial_gate', ROOT / 'tools/run_accelerate_gate.py')
+    gate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gate)
+    monkeypatch.setattr(gate.subprocess, 'check_output', lambda *_args, **_kwargs: '')
+    output = tmp_path / 'old-failed-output'
+    output.mkdir()
+    raw = output / 'producer.log'
+    raw.write_text('retained partial failure')
+    with pytest.raises(ValueError, match='empty output'):
+        gate.gate(SimpleNamespace(output=output, fresh_process=True))
+    assert raw.read_text() == 'retained partial failure'
+
+
+def test_maintained_nox_entry_launches_the_separate_process_protocol(tmp_path, monkeypatch):
+    import os
+    tree = ast.parse((ROOT / 'noxfile.py').read_text())
+    function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'ecosystem_accelerate')
+    function.decorator_list = []
+    namespace = {'os': os, 'NOX_STATE_ROOT': tmp_path,
+                 '_session_env': lambda *_args: (tmp_path, {}), '_hardware_python': lambda: 'candidate-python',
+                 '_set_hardware_python_config': lambda *_args: None}
+    exec(compile(ast.Module(body=[function], type_ignores=[]), str(ROOT / 'noxfile.py'), 'exec'), namespace)
+    monkeypatch.setenv('REAL_TORCH_PYTHON', 'binary-oracle-python')
+    monkeypatch.setenv('JITTOR_ACCELERATE_CHECKOUT', 'official-pinned-checkout')
+    monkeypatch.setenv('JITTOR_TEST_DEVICES', 'cpu')
+    commands = []
+    namespace['ecosystem_accelerate'](SimpleNamespace(posargs=[], run=lambda *args, **kwargs: commands.append(args)))
+    assert len(commands) == 1
+    assert commands[0][:2] == ('candidate-python', 'tools/run_accelerate_gate.py')
+    assert '--fresh-process' in commands[0]

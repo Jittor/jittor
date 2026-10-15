@@ -21,16 +21,19 @@ MEASUREMENT_SOURCES = ('compat/tests/torch/_accelerate_protocol.py',
                        'tools/run_accelerate_gate.py')
 
 
-def measurement_sources(baseline):
+def measurement_sources(baseline, fresh=False):
+    paths = MEASUREMENT_SOURCES + (('compat/tests/torch/_accelerate_fresh_process.py',) if fresh else ())
     try:
         return {path: hashlib.sha256(subprocess.check_output(
             ['git', '-C', str(ROOT), 'show', baseline + ':' + path], stderr=subprocess.PIPE)).hexdigest()
-                for path in MEASUREMENT_SOURCES}
+                for path in paths}
     except subprocess.CalledProcessError as error:
         raise ValueError('Unknown measured protocol source commit/files') from error
 
 
 PROTOCOLS = {'accelerate-checkpoint' : (1, ('no',)), 'accelerate-fsdp2-full': (2, ('no', 'bf16'))}
+FRESH_PROTOCOLS = {'accelerate-checkpoint-fresh-process': (1, ('no',)),
+                   'accelerate-fsdp2-full-fresh-process': (2, ('no', 'bf16'))}
 
 
 def require(condition, message):
@@ -56,6 +59,19 @@ def validate_spec(record, source):
     require(source.get('axes') == [] and record.get('registry_refs') == [],
             'Protocol rows require explicit empty axes and registry_refs')
     spec = record.get('protocol', {})
+    require(isinstance(spec, dict), 'Protocol descriptor must be an object')
+    if spec.get('id') in FRESH_PROTOCOLS:
+        from _accelerate_fresh_scorecard import protocol_spec
+        world, precisions = FRESH_PROTOCOLS[spec['id']]
+        require(spec == protocol_spec(world, spec.get('precision')) and spec['precision'] in precisions,
+                'Fresh-process semantic protocol differs')
+        require(all(type(spec[key]) is int for key in ('world_size', 'pre_save_steps', 'resume_steps'))
+                and all(type(item) is int for key in ('ranks', 'input_seeds') for item in spec[key]),
+                'Fresh-process dimensions must use actual integers')
+        require(record.get('case') == 'world%d-%s-fresh-process-checkpoint' % (world, spec['precision'])
+                and record.get('repo') == 'accelerate' and record.get('device') in ('cpu', 'cuda')
+                and (world == 1 or record['device'] == 'cuda'), 'Fresh-process device/world/case mismatch')
+        return spec
     require(isinstance(spec, dict) and set(spec) == {'id', 'world_size', 'precision', 'ranks'},
             'Unknown/missing Accelerate protocol semantic dimension')
     require(spec.get('id') in PROTOCOLS, 'Unknown maintained protocol')
@@ -74,6 +90,7 @@ def measurements(record, artifacts, source):
     import numpy as np
 
     spec = validate_spec(record, source)
+    fresh = spec['id'] in FRESH_PROTOCOLS
     roles = {row['role']: row for row in artifacts}
     require(len(roles) == len(artifacts), 'Duplicate protocol artifact role')
 
@@ -96,7 +113,7 @@ def measurements(record, artifacts, source):
     require(platform.get('precision') == expected_precision, 'Protocol requires the original full-FP32 precision switches')
     all_values = {}
     layouts = {}
-    source_hashes = measurement_sources(record["jittor_commit"])
+    source_hashes = measurement_sources(record["jittor_commit"], fresh=True) if fresh else measurement_sources(record["jittor_commit"])
     installed_hashes = None
     conditions = None
     parameter_count = input_count = checked = 0
@@ -107,7 +124,11 @@ def measurements(record, artifacts, source):
         for scenario, seed in (('base', 0), ('perturb', 7)):
             for rank in spec['ranks']:
                 role = '%s-%s-rank%d' % (label, scenario, rank)
-                value = json.loads(load(role + '-metadata').read_text())
+                if fresh:
+                    from _accelerate_fresh_scorecard import observation
+                    value, arrays = observation(role, load, record, runtime, seed, rank)
+                else:
+                    value = json.loads(load(role + '-metadata').read_text())
                 require(value.get('schema_version') == 1 and value.get('runtime') == runtime
                         and type(value.get('rank')) is int and value.get('rank') == rank
                         and type(value.get('world_size')) is int and value.get('world_size') == spec['world_size']
@@ -168,11 +189,12 @@ def measurements(record, artifacts, source):
                             'Actual CUDA UUID/rank allocation mismatch')
                 require(value.get('backend') == 'none'  if spec['world_size'] == 1
                         else 'nccl' in str(value.get('backend')), 'Missing actual collective backend')
-                array_path = load(role + '-arrays')
-                require(value.get('arrays_sha256') == roles[role + '-arrays']['sha256']
-                        and Path(value.get('arrays', '')).resolve() == array_path, 'Actual protocol NPZ binding mismatch')
-                with np.load(array_path, allow_pickle=False) as archive:
-                    arrays = {key: archive[key].copy() for key in archive.files}
+                if not fresh:
+                    array_path = load(role + '-arrays')
+                    require(value.get('arrays_sha256') == roles[role + '-arrays']['sha256']
+                            and Path(value.get('arrays', '')).resolve() == array_path, 'Actual protocol NPZ binding mismatch')
+                    with np.load(array_path, allow_pickle=False) as archive:
+                        arrays = {key: archive[key].copy() for key in archive.files}
                 manifest = value.get('array_manifest', {})
                 require(arrays and set(arrays) == set(manifest), 'Missing/extra protocol tensor observations')
                 for key, array in arrays.items():
@@ -192,7 +214,8 @@ def measurements(record, artifacts, source):
                 before, expected, actual = (result.get(name, []) for name in ('before_save', 'expected_resume', 'actual_resume'))
                 require(len(before) == 3 and len(expected) == len(actual) == 2 and expected == actual,
                         'Own-runtime checkpoint continuation is incomplete/not exact')
-                validate_restoration(result, spec['world_size'])
+                if not fresh:
+                    validate_restoration(result, spec['world_size'])
                 rng = result.get('expected_random', {})
                 require(isinstance(rng, dict) and set(rng) == {'python', 'numpy', 'torch_cpu', 'torch_device' if spec['world_size'] == 1 else 'torch_cuda'} and rng == result.get('resumed_random'),
                         'Four-stream own-runtime RNG restoration differs')
@@ -297,19 +320,25 @@ def measurements(record, artifacts, source):
                     'Protocol input perturbation did not change real outputs/gradients')
             require(all(np.array_equal(base[key], perturb[key]) for key in base if key.startswith('initial/')),
                     'Perturbation changed initial weights')
-    return {'numerics': {'passed': passed, 'finite': True, 'checked_tensors': checked,
+    result = {'numerics': {'passed': passed, 'finite': True, 'checked_tensors': checked,
                         'missing_tensors': [], 'input_perturbation_verified': True,
                         'max_abs': max_abs, 'max_scaled_relative': max_scaled, 'atol': ATOL, 'rtol': RTOL,
                         'parameter_gradients': {'requested': parameter_count, 'checked': parameter_count},
                         'input_gradients': {'requested': input_count, 'checked': input_count}},
             'training': {'steps': steps, 'loss_trajectory_passed': passed, 'parameter_trajectory_passed': passed},
             'own_continuation': {'model_optimizer_exact': True, 'rng_exact': True, 'trajectory_exact': True}}
+    if fresh:
+        result['fresh_process'] = {'distinct_producer_consumer': True, 'producer_terminated': True,
+                                   'checkpoint_files_immutable': True, 'full_rng_state_exact': True,
+                                   'scheduler_exact': True}
+    return result
 
 
 def validate_measurements(record, artifacts, source):
     actual = measurements(record, artifacts, source)
     require(actual['numerics']['passed'], 'Independent cross-runtime protocol numerics failed')
-    for key in ('numerics', 'training', 'own_continuation'):
+    keys = ('numerics', 'training', 'own_continuation') + (('fresh_process',) if 'fresh_process' in actual else ())
+    for key in keys:
         require(record.get(key) == actual[key], 'Declared/recomputed protocol ' + key + ' mismatch')
     comparison = next(row for row in artifacts if row['role'] == 'comparison')
     require(json.loads(Path(comparison['path']).read_text()) == actual, 'Protocol comparison artifact mismatch')

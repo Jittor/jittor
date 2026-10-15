@@ -58,7 +58,10 @@ def run_fresh_phase(capture, accelerator, update, state, sample, extra=None):
     torch = capture.torch
     result = {'phase': phase, 'process_nonce': str(uuid.uuid4()), 'pid': os.getpid(),
               'parent_pid': os.getppid(), 'observed_monotonic_ns': time.monotonic_ns(),
-              'checkpoint_directory': str(directory)}
+              'checkpoint_directory': str(directory),
+              'process_environment': {key: os.environ.get(key) for key in
+                  ('HOME', 'JITTOR_HOME', 'TMPDIR', 'RANK', 'WORLD_SIZE', 'LOCAL_RANK',
+                   'JITTOR_DIST_RENDEZVOUS_DIR', 'MASTER_ADDR', 'MASTER_PORT')}}
     if phase == 'produce':
         if directory.exists() and any(directory.iterdir()):
             raise ValueError('Refusing to overwrite a persisted checkpoint')
@@ -94,5 +97,5 @@ def run_fresh_phase(capture, accelerator, update, state, sample, extra=None):
         raise ValueError('Training or restoration modified the persisted checkpoint')
     if extra:
         result.update(extra())
-    capture.finish(result, backend='none' if capture.world == 1 else 'nccl')
+    capture.finish(result, backend='none' if capture.world == 1 else torch.distributed.get_backend())
     print(json.dumps({'checkpoint_phase': phase, 'rank': capture.rank, 'pid': os.getpid()}), flush=True)

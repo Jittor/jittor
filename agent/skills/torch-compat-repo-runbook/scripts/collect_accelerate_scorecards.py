@@ -31,41 +31,57 @@ def collect(directory, source, baseline, report, command, output):
     records = []
     for world, precision in groups:
         executions = [row for row in execution['results'] if (row['world_size'], row['precision']) == (world, precision)]
+        fresh = any(row.get('checkpoint_mode') == 'fresh-process' for row in executions)
+        scope = 'world%d-%s' % (world, precision)
+        artifact_scope = scope + ('-fresh-process' if fresh else '')
+        case_label = scope + ('-fresh-process-checkpoint' if fresh else '-checkpoint')
+        protocol = {'id': 'accelerate-checkpoint' if world == 1 else 'accelerate-fsdp2-full',
+                    'world_size': world, 'precision': precision, 'ranks': list(range(world))}
+        if fresh:
+            from _accelerate_fresh_scorecard import protocol_spec
+            protocol = protocol_spec(world, precision)
         expected = {(runtime, seed) for runtime in ('torch', 'jittor') for seed in (0, 7)}
         if (len(executions) != 4 or {(row['runtime'], row['seed']) for row in executions} != expected
                 or any(row['returncode'] != 0 or row['status'] != 'passed' for row in executions)):
             records.append({'record_kind': 'protocol', 'repo': 'accelerate', 'status': 'blocked', 'level': None,
-                            'case': 'world%d-%s-checkpoint' % (world, precision), 'registry_refs': [],
+                            'case': case_label, 'registry_refs': [],
                             'jittor_commit': baseline, 'upstream': source['upstream'],
-                            'protocol': {'id': 'accelerate-checkpoint' if world == 1 else 'accelerate-fsdp2-full',
-                                         'world_size': world, 'precision': precision, 'ranks': list(range(world))},
+                            'protocol': protocol,
                             'reason': 'Missing or failed fresh required launcher; see immutable execution logs',
                             'evidence': {'artifacts': [artifact('execution', directory / 'execution.json')]}})
             continue
-        artifacts = []
+        artifacts = [artifact('execution', directory / 'execution.json')] if fresh else []
         values = {}
+        metadata_paths = {}
         for runtime, label in (('torch', 'reference'), ('jittor', 'candidate')):
             for seed, scenario in ((0, 'base'), (7, 'perturb')):
                 folder = directory / 'measurements' / runtime / ('world%d-%s-seed%d' % (world, precision, seed))
                 case = 'single_checkpoint' if world == 1 else 'fsdp2_full'
                 for rank in range(world):
                     stem = '%s_rank%d' % (case, rank)
-                    path = folder / (stem + '.json')
+                    path = (folder / 'produce' if fresh else folder) / (stem + '.json')
                     value = json.loads(path.read_text())
                     values[(runtime, seed, rank)] = value
+                    metadata_paths[(runtime, seed, rank)] = path
                     prefix = '%s-%s-rank%d' % (label, scenario, rank)
-                    artifacts.extend((artifact(prefix + '-metadata', path), artifact(prefix + '-arrays', folder / (stem + '.npz'))))
+                    for phase in (('produce', 'consume') if fresh else (None,)):
+                        phase_folder = folder / phase if phase else folder
+                        phase_prefix = prefix + '-' + phase if phase else prefix
+                        artifacts.extend((artifact(phase_prefix + '-metadata', phase_folder / (stem + '.json')),
+                                          artifact(phase_prefix + '-arrays', phase_folder / (stem + '.npz'))))
+                    if fresh:
+                        checkpoint = Path(value['result']['checkpoint_directory'])
+                        artifacts.extend(artifact(prefix + '-checkpoint-' + name, checkpoint / name)
+                                         for name in value['result']['checkpoint_sha256'])
         reference, candidate = values[('torch', 0, 0)], values[('jittor', 0, 0)]
         platform = dict(candidate['platform'], oracle={**reference['interpreter'], 'torch_npu_version': 'not-applicable'})
-        scope = 'world%d-%s' % (world, precision)
-        platform_path = output / (scope + '-platform.json')
+        platform_path = output / (artifact_scope + '-platform.json')
         write_json(platform_path, platform)
-        artifacts.extend((artifact('reference', directory / 'measurements/torch' / ('world%d-%s-seed0' % (world, precision)) / (case + '_rank0.json')),
-                          artifact('candidate', directory / 'measurements/jittor' / ('world%d-%s-seed0' % (world, precision)) / (case + '_rank0.json')),
+        artifacts.extend((artifact('reference', metadata_paths[('torch', 0, 0)]),
+                          artifact('candidate', metadata_paths[('jittor', 0, 0)]),
                           artifact('platform', platform_path)))
-        row = {'record_kind': 'protocol', 'repo': 'accelerate', 'case': scope + '-checkpoint',
-               'protocol': {'id': 'accelerate-checkpoint' if world == 1 else 'accelerate-fsdp2-full',
-                            'world_size': world, 'precision': precision, 'ranks': list(range(world))},
+        row = {'record_kind': 'protocol', 'repo': 'accelerate', 'case': case_label,
+               'protocol': protocol,
                'status': 'passed', 'level': None, 'tier': 'core', 'registry_refs': [],
                'jittor_commit': baseline, 'upstream': source['upstream'],
                'downstream_versions': {'candidate': candidate['downstream_distribution']['version'],
@@ -78,7 +94,7 @@ def collect(directory, source, baseline, report, command, output):
                                            if world == 1 else 'compat/tests/torch/test_accelerate_distributed_integration.py::test_fsdp2_full_model_optimizer_checkpoint_resume[' + precision + ']'),
                             'artifacts': artifacts}}
         actual = measurements(row, artifacts, source)
-        comparison = output / (scope + '-comparison.json')
+        comparison = output / (artifact_scope + '-comparison.json')
         write_json(comparison, actual)
         artifacts.append(artifact('comparison', comparison))
         row.update(actual)

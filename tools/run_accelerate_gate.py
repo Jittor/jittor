@@ -28,6 +28,7 @@ def environment(runtime, device, state, rank, devices, upstream):
     """Set canonical and legacy flags before importing either tensor runtime."""
     env = dict(os.environ)
     for name in ('RANK', 'WORLD_SIZE', 'LOCAL_RANK', 'LOCAL_WORLD_SIZE', 'JT_NCCL_RANK', 'JT_NCCL_WORLD_SIZE',
+                 'JT_NCCL_LOCAL_RANK', 'JT_NCCL_LOCAL_WORLD_SIZE', 'JITTOR_DIST_RENDEZVOUS_DIR',
                  'REAL_TORCH_SITE', 'JITTOR_TORCH_PROJECT_ROOT', 'JITTOR_TORCH_RUNTIME_ROOT',
                  'MASTER_ADDR', 'MASTER_PORT', 'JITTOR_ACCELERATE_INTEGRATION_OUTPUT', 'CHECKPOINT_REPORT',
                  'JITTOR_ACCELERATE_CHECKPOINT_PHASE', 'JITTOR_ACCELERATE_CHECKPOINT_DIRECTORY'):
@@ -96,6 +97,14 @@ def worker(args):
     random.seed(0)
     np.random.seed(0)
     if args.warm_only:
+        if args.runtime == 'jittor' and args.device == 'cuda':
+            # The one-rank public launcher supplies a real singleton bootstrap.
+            # Compile the NCCL extension serially here, before either two-rank
+            # process can reach its first collective compilation.
+            from jittor.build import compile_extern
+            compile_extern.setup_nccl()
+            if compile_extern.get_library_ops('nccl') is None:
+                raise RuntimeError('Serial CUDA warm did not build the real NCCL provider')
         layer = torch.nn.Linear(4, 3).to(args.device)
         optimizer = torch.optim.AdamW(layer.parameters(), lr=.01)
         for dtype in ([torch.float32, torch.bfloat16] if args.device == 'cuda' else [torch.float32]):
@@ -179,6 +188,8 @@ def gate(args):
         raise ValueError('Freeze and commit gate sources before actual measurements')
     if (state / 'execution.json').exists():
         raise ValueError('Choose a fresh output directory; historical measurements are immutable')
+    if getattr(args, 'fresh_process', False) and state.exists() and any(state.iterdir()):
+        raise ValueError('Choose an empty output directory; failed phase artifacts are immutable too')
     state.mkdir(parents=True, exist_ok=True)
     cache_state = (args.cache_root or state).resolve()
     if ROOT == cache_state or ROOT in cache_state.parents:
@@ -198,6 +209,10 @@ def gate(args):
             warm = [python, str(Path(__file__).resolve()), '--worker', '--runtime', runtime,
                     '--device', args.device, '--output', str(state), '--cache-root', str(cache_state),
                     '--warm-only', '--warm-rank', str(rank)]
+            if runtime == 'jittor' and args.device == 'cuda':
+                warm = [python, '-m', 'jittor.distributed.launch', '--standalone', '--backend=nccl',
+                        '--nproc-per-node=1', '--device-ids=' + devices[rank],
+                        '--log-dir=' + str(state / 'warm-launcher-logs' / ('rank%d' % rank)), *warm[1:]]
             for attempt in range(3):
                 rc = run(warm, warm_env, state / 'logs' / ('warm-%s-rank%d-%d.log' % (runtime, rank, attempt)))
                 if rc != 3:  # Explicit jit_utils rebuild/restart protocol.

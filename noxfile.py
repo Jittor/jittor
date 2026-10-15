@@ -2256,7 +2256,7 @@ def _ecosystem_deepspeed_session(session, multirank=False):
 
 @nox.session(python=False)
 def ecosystem_accelerate(session):
-    """Independent checkpoint correctness; separate from ASV performance."""
+    """Independent checkpoint correctness with terminated producers and new consumers."""
     _root, env = _session_env(session, "ecosystem-accelerate")
     python = _hardware_python()
     oracle = os.environ.get("REAL_TORCH_PYTHON", "").strip()
@@ -2264,7 +2264,7 @@ def ecosystem_accelerate(session):
     device = os.environ.get("JITTOR_TEST_DEVICES", "cpu").strip()
     if not oracle or not checkout or device not in ("cpu", "cuda"):
         session.error("Accelerate needs REAL_TORCH_PYTHON, JITTOR_ACCELERATE_CHECKOUT and exactly cpu or cuda")
-    arguments = ["--device", device, "--jittor-python", python, "--oracle-python", oracle,
+    arguments = ["--fresh-process", "--device", device, "--jittor-python", python, "--oracle-python", oracle,
                  "--upstream", checkout, "--output", str(NOX_STATE_ROOT / "ecosystem-accelerate" / device)]
     if device == "cuda":
         arguments += ["--devices", os.environ.get("CUDA_VISIBLE_DEVICES", "")]
