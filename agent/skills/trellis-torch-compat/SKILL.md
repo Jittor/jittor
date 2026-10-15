@@ -7,7 +7,7 @@ description: 验证真实 pinned TRELLIS.2 导出模型的独立 CPU/CUDA 数值
 
 ## 当前实测范围
 
-2026-10-15，干净上游源码 `75fbf0183001ed9876c8dbb35de6b68552ee08bd` 上的
+2026-10-16，干净测量源码 `b6947541b5bddfa87098d40c6f4e09ad0e704c54`、上游源码 `75fbf0183001ed9876c8dbb35de6b68552ee08bd` 上的
 `SparseStructureFlowModel`、`SparseStructureEncoder` 和 `SparseStructureDecoder`
 已分别通过独立 CPU、CUDA 的 L3 对拍，候选 fallback 均为零。
 结果为 **models 3 / 9 @ upstream 75fbf0183001ed9876c8dbb35de6b68552ee08bd**，
@@ -87,24 +87,28 @@ JITTOR_CI_PYTHON=<jittor-python> nox -s ecosystem_trellis
 
 [`collect_scorecard.py`](scripts/collect_scorecard.py) 从正式 gate 产物、实际平台 JSON 和
 重新生成的上游 inventory 构造 L3 records，再调用现有 `audit_coverage.scorecard` 校验。
-它检查源身份、全部 93 个 Python 源文件哈希（含 package 根 __init__.py）、基线、
-完整原始产物 manifest 和重复场景；所有证据仍留在仓外。
-已接受 scorecard 为六个 L3 records、零拒绝；749 旧记录缺根文件身份，被拒后保留原样，
-正式矩阵在 6d397 修正后重跑，不能补写旧 JSON 冒充已验证。
+它检查源身份、全部 93 个 Python 源文件及 93 个实际安装文件（含根 __init__.py）、
+真实 `trellis2.__file__`、基线、完整原始产物 manifest 和重复场景。每个 runtime 的
+基线与每个输入扰动都必须独立通过完整来源证明；各 `perturbN-comparison` 都交共同
+auditor 重检。上游没有打包声明或发行版 version，`installation_kind=source-checkout`
+明确表示真实源码安装，不能冒称 PyPI/wheel，也不能伪造 METADATA 或 __version__。
+所有证据留在仓外。新 `scorecard-installed-source-v1.json` 为六个 L3 records、零拒绝。
+749 的根文件遗漏和 6d397 六行缺实际 installed binding 的历史拒绝均保留原样；
+当前准入重新执行完整 CPU/CUDA，而不向旧 JSON 回填来源字段。
 平台 JSON 须包含真实硬件、库/驱动/编译器、完整 flags、precision 和 binary oracle 身份，
 不能复制另一台机器的表头。
 
 ```bash
 <jittor-python> agent/skills/trellis-torch-compat/scripts/collect_scorecard.py \
   --checkout "$JITTOR_TRELLIS_CHECKOUT" \
-  --run "$JITTOR_LAB_ROOT/_state/trellis-validation/formal-source-complete-cpu" \
-  --run "$JITTOR_LAB_ROOT/_state/trellis-validation/formal-source-complete-cuda" \
-  --platform "cpu=$JITTOR_LAB_ROOT/_state/trellis-validation/cpu-platform.json" \
-  --platform "cuda=$JITTOR_LAB_ROOT/_state/trellis-validation/cuda-platform.json" \
-  --baseline 6d39728fffc37d4618c1cb91a9caa1d67beec311 \
+  --run "$JITTOR_LAB_ROOT/_state/trellis-installed-source-fresh/20261016/maintained-output" \
+  --platform "cpu=$JITTOR_LAB_ROOT/_state/trellis-installed-source-fresh/20261016/cpu-platform-v1.json" \
+  --platform "cuda=$JITTOR_LAB_ROOT/_state/trellis-installed-source-fresh/20261016/cuda-platform-v1.json" \
+  --baseline b6947541b5bddfa87098d40c6f4e09ad0e704c54 \
   --report docs/results/2026-10-15-trellis-model-validation.md \
   --command '<exact validation command and environment>' \
-  --output "$JITTOR_LAB_ROOT/_state/trellis-validation/scorecard-source-complete-final.json"
+  --output "$FRESH_SCORECARD_JSON"
 ```
 
+`FRESH_SCORECARD_JSON` 必须指向新的仓外输出文件，不向已封存的历史路径重跑 collector。
 更换基线后重新跑 gate，再传新 SHA；历史记录始终显式标成历史基线，不改原始 metadata。
