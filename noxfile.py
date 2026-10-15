@@ -2883,3 +2883,85 @@ def ecosystem_swift(session):
                 "assert hasattr(torch, '_torch_compat_install_context'); " + versions,
                 external=True, env=env)
     _run_pytest_once(session, ["compat/tests/torch/test_ecosystem_swift.py"], env, python, timeout=3600)
+
+@nox.session(python=False)
+def ecosystem_verl_training(session):
+    """Opt-in complete source-bound VERL component parity and training."""
+    root, env = _session_env(session, "ecosystem-verl-training")
+    python = _hardware_python()
+    _set_hardware_python_config(session, python, env)
+    oracle = os.environ.get("REAL_TORCH_PYTHON", "").strip()
+    if not oracle or not Path(oracle).is_file():
+        session.error("REAL_TORCH_PYTHON must name an independent PyTorch interpreter")
+    for name in ("JITTOR_VERL_UPSTREAM", "JITTOR_VERL_WHEEL"):
+        path = os.environ.get(name, "").strip()
+        if not path or not Path(path).exists():
+            session.error(name + " must name the clean pin or actual installed wheel")
+        env[name] = str(Path(path).resolve())
+    device = os.environ.get("JITTOR_TEST_DEVICES", "cpu")
+    if device not in ("cpu", "cuda"):
+        session.error("ecosystem_verl_training needs exactly JITTOR_TEST_DEVICES=cpu or cuda")
+    cache = NOX_STATE_ROOT / "cache" / "ecosystem-verl-training" / device
+    env.update({
+        "REAL_TORCH_PYTHON": oracle,
+        "JITTOR_REQUIRE_REAL_TORCH": "1",
+        "JITTOR_REQUIRE_VERL": "1",
+        "JITTOR_ECOSYSTEM_VERL_TRAINING": "1",
+        "JITTOR_ECOSYSTEM_TF32": "1",
+        "JITTOR_ECOSYSTEM_CUDNN_BENCHMARK": "0",
+        "JT_CUDA_KERNEL_MATH": "strict",
+        "JITTOR_TEST_REQUIRE_EXECUTION": "1",
+        "JITTOR_TEST_DEVICES": device,
+        "JITTOR_TORCH_SHIM": "1",
+        "JITTOR_ECOSYSTEM_SPEED_RATIO": "",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "VERL_USE_EXTERNAL_PLUGINS": "none",
+        "JITTOR_HOME": str(cache / "jittor"),
+        "JITTOR_TORCH_CACHE_ROOT": str(cache / "shim"),
+        "cache_name": "nox_ecosystem_verl_training_" + device,
+        "DISABLE_MULTIPROCESSING": "1",
+        "JT_USE_PARALLEL_OP_COMPILER": "0",
+        "JT_BUILD_USE_MKL": "0",
+        "JT_BUILD_USE_NCCL": "0",
+        "JT_BUILD_USE_MPI": "0",
+        "JT_BUILD_USE_CUTT": "0",
+        "JT_USE_CUDA": "1" if device == "cuda" else "0",
+        "use_cuda": "1" if device == "cuda" else "0",
+    })
+    env.update({name: "2" for name in THREAD_POOL_ENV_NAMES})
+    if device == "cpu":
+        env.update({"CUDA_VISIBLE_DEVICES": "", "nvcc_path": "", "JT_BUILD_NVCC_PATH": ""})
+    else:
+        nvcc = os.environ.get("JT_BUILD_NVCC_PATH") or os.environ.get("nvcc_path") or shutil.which("nvcc")
+        if not nvcc or not os.environ.get("CUDA_VISIBLE_DEVICES", "").strip():
+            session.error("VERL CUDA needs nvcc_path and explicitly allocated CUDA_VISIBLE_DEVICES")
+        env.update({"nvcc_path": nvcc, "JT_BUILD_NVCC_PATH": nvcc})
+    for name in ("JITTOR_ECOSYSTEM_PACKAGE_SITE", "JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE"):
+        if os.environ.get(name):
+            env[name] = os.environ[name]
+    # Validate installed, real upstream dependencies instead of silently
+    # upgrading the ordinary ecosystem environment or downloading models.
+    versions = (
+        "import numpy, transformers, verl, ray, tensordict; "
+        "from packaging.version import Version; "
+        "assert Version(numpy.__version__) >= Version('2.0'); "
+        "v = Version(transformers.__version__); "
+        "assert Version('5.5.3') <= v < Version('5.13') and v != Version('5.6.0'); "
+        "print('VERL dependencies', verl.__version__, numpy.__version__, transformers.__version__)"
+    )
+    oracle_env = dict(env, PYTHONPATH="", JITTOR_TORCH_SHIM="0", REAL_TORCH_SITE="")
+    for name in ("JITTOR_SOURCE_ROOT", "JITTOR_HOME", "JITTOR_TORCH_CACHE_ROOT", "JT_BACKEND"):
+        oracle_env[name] = ""
+    oracle_check = (
+        "import torch; "
+        "assert hasattr(torch, '_C') and not hasattr(torch, '_torch_compat_install_context'); "
+        "assert torch.cuda.is_available(); " if device == "cuda" else
+        "import torch; assert hasattr(torch, '_C') and not hasattr(torch, '_torch_compat_install_context'); assert not torch.cuda.is_available(); "
+    )
+    session.run(oracle, "-c", oracle_check + versions, external=True, env=oracle_env)
+    _install_compat_source(session, env, python)
+    session.run(python, "-c", "import jittor; import torch; "
+                "assert hasattr(torch, '_torch_compat_install_context'); " + versions,
+                external=True, env=env)
+    _run_pytest_once(session, ["compat/tests/torch/test_ecosystem_verl_training.py"], env, python, timeout=3600)

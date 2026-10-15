@@ -22,6 +22,39 @@ def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def package_files(package):
+    return {path.relative_to(package).as_posix(): digest(path)
+            for path in sorted(package.rglob('*'))
+            if path.is_file() and '__pycache__' not in path.parts
+            and path.suffix not in ('.pyc', '.pyo')}
+
+
+class SnapshotObserver:
+    """Inspect actual tensors at the maintained probe's serialization boundary."""
+
+    def __init__(self, runtime, device, script):
+        self.runtime, self.device, self.script = runtime, device, str(script)
+        self.records = []
+
+    def __call__(self, frame, event, _argument):
+        if event != 'call' or frame.f_code.co_filename != self.script or frame.f_code.co_name not in ('snapshot', '_numpy_snapshot'):
+            return
+        value = frame.f_locals['value']
+        if value.device.type != self.device:
+            raise AssertionError('Actual VERL tensor device mismatch before serialization')
+        dtype = str(value.dtype)
+        if dtype not in ('float32', 'torch.float32'):
+            raise AssertionError('Actual VERL tensor is not FP32 before serialization')
+        row = {'device': value.device.type, 'dtype': dtype, 'shape': list(value.shape)}
+        if self.runtime == 'jittor':
+            # sync evaluates pending work; it does not request a device transfer.
+            value.sync()
+            row.update(location=value.location(), dispatch=sys.modules['jittor'].core.dispatch_context([value])[0])
+            if row['location'] != ('device' if self.device == 'cuda' else 'cpu') or row['dispatch'] != self.device:
+                raise AssertionError('Physical VERL tensor residency/dispatch mismatch before serialization')
+        self.records.append(row)
+
+
 def installed_distribution(source, module):
     package = Path(module.__file__).resolve().parent
     import_name = {'ms-swift': 'swift'}.get(source['repo'], source['repo'])
@@ -40,19 +73,26 @@ def installed_distribution(source, module):
     version = str(module.__version__)
     if version != source['upstream']['version']:
         raise ValueError('Installed release version differs from upstream')
-    files = {path.relative_to(package).as_posix(): digest(path)
-             for path in sorted(package.rglob('*'))
-             if path.is_file() and '__pycache__' not in path.parts
-             and path.suffix not in ('.pyc', '.pyo')}
-    return {'repo': source['repo'], 'version': version,
-            'source_sha256': actual, 'installed_files_sha256': files,
-            'package': str(package)}
+    files = package_files(package)
+    result = {'repo': source['repo'], 'version': version,
+              'source_sha256': actual, 'installed_files_sha256': files,
+              'package': str(package)}
+    if source['repo'] == 'verl':
+        from importlib.metadata import distribution
+
+        metadata = distribution('verl')
+        if Path(metadata.locate_file('verl/__init__.py')).resolve() != Path(module.__file__).resolve():
+            raise ValueError('VERL distribution metadata belongs to another installation')
+        result['distribution_version'] = metadata.version
+        wheel = Path(os.environ['JITTOR_VERL_WHEEL'])
+        result['wheel_sha256'] = digest(wheel)
+    return result
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, required=True)
-    parser.add_argument('--repo', choices=('torchmetrics', 'tensordict', 'diffusers'), required=True)
+    parser.add_argument('--repo', choices=('torchmetrics', 'tensordict', 'diffusers', 'verl'), required=True)
     parser.add_argument('--checkout', type=Path, required=True)
     parser.add_argument('probe', nargs=argparse.REMAINDER)
     args = parser.parse_args()
@@ -70,29 +110,59 @@ def main():
     if subprocess.check_output(['git', '-C', str(root), 'status', '--porcelain'], text=True).strip():
         raise ValueError('Measurements require a clean source checkout')
     sys.path.insert(0, str(script.parent))
+    runtime = command[command.index('--runtime') + 1]
+    before_files, before_package = None, None
+    if args.repo == 'verl':
+        from importlib.machinery import PathFinder
+
+        # Hash the real import target without importing VERL or Torch ahead of
+        # the probe's original device/runtime initialization order.
+        spec = PathFinder.find_spec('verl', sys.path)
+        if spec is None or not spec.origin:
+            raise ValueError('Missing actual VERL installation')
+        before_package = Path(spec.origin).resolve().parent
+        before_files = package_files(before_package)
     sys.argv = command
     captured = io.StringIO()
-    with redirect_stdout(captured):
-        runpy.run_path(str(script), run_name='__main__')
+    observer = SnapshotObserver(runtime, command[command.index('--device') + 1], script) if args.repo == 'verl' else None
+    previous_profile = sys.getprofile()
+    try:
+        if observer is not None:
+            if previous_profile is not None:
+                raise ValueError('VERL snapshot observations need an unprofiled worker')
+            sys.setprofile(observer)
+        with redirect_stdout(captured):
+            runpy.run_path(str(script), run_name='__main__')
+    finally:
+        if observer is not None:
+            sys.setprofile(previous_profile)
     module = importlib.import_module(args.repo)
     distribution = installed_distribution(source, module)
+    if before_files is not None and (distribution['installed_files_sha256'] != before_files
+                                     or Path(distribution['package']) != before_package):
+        raise ValueError('Actual VERL installation changed during measurement')
     torch = sys.modules['torch']
-    runtime = command[command.index('--runtime') + 1]
     is_shim = hasattr(torch, '_torch_compat_install_context')
     if is_shim != (runtime == 'jittor'):
         raise ValueError('Actual interpreter is not the requested runtime')
     binary = getattr(getattr(torch, '_C', None), '__file__', None) if not is_shim else None
     if not is_shim and (not binary or not Path(binary).is_file()):
         raise ValueError('Oracle must load an actual binary PyTorch extension')
+    source_paths = [script, root / 'compat/tests/torch/_ecosystem_cases.py', Path(__file__).resolve()]
+    if args.repo == 'verl':
+        source_paths.append(root / 'compat/tests/torch/_ecosystem_verl_cases.py')
+        if root / 'compat/tests/torch/_ecosystem_runner.py' not in source_paths:
+            source_paths.append(root / 'compat/tests/torch/_ecosystem_runner.py')
     binding = {'jittor_commit': baseline, 'upstream': source['upstream'],
                'hf_hub_offline': os.environ.get('HF_HUB_OFFLINE') == '1',
                'downstream_distribution': distribution,
-               'measurement_source_sha256': {str(path.relative_to(root)): digest(path)
-                   for path in (script, root / 'compat/tests/torch/_ecosystem_cases.py', Path(__file__).resolve())},
+               'measurement_source_sha256': {str(path.relative_to(root)): digest(path) for path in source_paths},
                'interpreter': {'executable': sys.executable, 'pid': os.getpid(), 'is_shim': is_shim,
                                'torch_version': torch.__version__, 'binary_extension': binary,
                                'binary_sha256': digest(binary) if binary else None},
                'measurement_command': [sys.executable, *command]}
+    if observer is not None:
+        binding['tensor_observations'] = observer.records
     if is_shim:
         jt = sys.modules['jittor']
         if Path(jt.__file__).resolve() != root / 'python/jittor/__init__.py':
