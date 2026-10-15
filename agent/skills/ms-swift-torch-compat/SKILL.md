@@ -1,11 +1,34 @@
 ---
 name: ms-swift-torch-compat
-description: 在 Jittor 的 torch shim 与原生 PyTorch/torch_npu 两侧运行并对比 ms-swift 自带 LoRA tuner，用于复现 ms_swift_lora_llama 的数值/梯度对拍与真实设备性能结论；不覆盖 PEFT 的 LoRA、全量微调、优化器与分布式训练。
+description: 在 Jittor torch shim 与独立原生 Torch 两侧验证 ms-swift。维护 CPU/CUDA 注册 tiny Llama 的真实 FULL SFT Trainer 三步门禁、完整安装来源绑定及历史自带 LoRA tuner 对拍；不将有界场景外推为全库或分布式支持。
 ---
 
 # ms-swift × Jittor torch shim
 
-## 当前验收入口（2026-10-14）
+## 当前验收入口（2026-10-15）
+
+[注册 FULL SFT 与完整安装来源报告](../../../docs/results/2026-10-15-swift-trainer-installed-source.md)
+记录干净 Swift 4.5.2 的真实 `SwiftSft.main()`：注册 LlamaLoader、Llama template 和
+`Seq2SeqTrainer` 各自执行原始加载、编码、loss、backward、SGD 更新。CPU 后 CUDA，
+独立二进制 Torch oracle，同权重与三组实际 token 输入，三步训练、12 个全部可训练参数
+梯度/更新及额外 embedding 中间梯度。整数输入不请求输入梯度。
+
+维护入口为 `nox -s ecosystem_swift`，具体节点为
+`compat/tests/torch/test_ecosystem_swift.py::EcosystemSwift::test_ms_swift_trainer_full_llama`。
+两设备均实跑 **1 passed / 0 skipped**。必须提供独立的 `REAL_TORCH_PYTHON`、
+`JITTOR_CI_PYTHON`、干净 `JITTOR_SWIFT_UPSTREAM` 和真实 `JITTOR_SWIFT_WHEEL`；
+以 `JITTOR_TEST_DEVICES=cpu` 或 `cuda` 选择，CPU 显式关闭 CUDA，缺依赖/来源/设备即失败。
+完整命令与缓存隔离要求见报告。
+
+测量源码固定 `606b602e7e79b5bfa5573b9693144f8d224c6a07`；后续 collector 与共同 auditor
+独立复核 clean upstream SHA、517 个 Python 源文件和 532 个完整 wheel/安装 payload。
+该 wheel 从固定源码构建，不称为官方 PyPI wheel。
+`collect_swift_scorecard.py` 重验三组原始轨迹及共同 schema，授予 CPU/CUDA 各一条有界 L3：
+模型族 `llama` 1/222、Trainer `causal_lm` 1/13、任务 `causal_lm` 1/5。
+`full` 是真实训练参数，不计入另一个 `SWIFT_MAPPING` tuner 轴；无分布式、Megatron、
+RLHF、generation、大模型或性能授级，也没有新增 adapter。
+
+## 历史 LoRA 验收入口（2026-10-14）
 
 [CPU/CUDA oracle 与三步训练 scorecard](../../../docs/results/2026-10-14-downstream-oracle-scorecards.md)
 记录 ms-swift 4.5.2 的 `ms_swift_lora_llama`：独立二进制 Torch 对拍、输入扰动、
@@ -15,15 +38,19 @@ description: 在 Jittor 的 torch shim 与原生 PyTorch/torch_npu 两侧运行�
 复验条件以该报告为准。三步更新是手动 probe，不是现有一步 parity 门禁的 CI 授级；
 下文历史 NPU 与性能记录仍按各自基线解读。
 
-## 用途
+## 历史 tuner 对拍流程
+
+下文环境、一步 parity 与旧性能结论属于各自历史基线；新 FULL Trainer 协议以上节为准。
+
+### 用途
 
 回答「`ms-swift` 的 `Swift`/`swift.tuners.LoRAConfig` 架在 `import torch` → Jittor 上能否跑、
 和原生 torch/torch_npu 是否同数、加速卡上快不快」。上游用例：
 `../../../compat/tests/torch/_ecosystem_cases.py:_ms_swift_lora_llama`（case 名
 `ms_swift_lora_llama`，依赖 `transformers` + `peft` + `swift`）。
 
-**不覆盖**：PEFT 的 LoRA（见 `../peft-torch-compat/SKILL.md`）、真实 checkpoint 全量微调、
-优化器更新、分布式 ms-swift 训练。分流/定级/device 阶梯走
+**该历史 tuner case 不覆盖**：PEFT 的 LoRA（见 `../peft-torch-compat/SKILL.md`）、真实
+Swift Trainer、全参训练或分布式 ms-swift。新的有界 FULL Trainer 证据见上节。分流/定级/device 阶梯走
 `../downstream-library-adaptation/SKILL.md`。
 
 ## 两侧环境
@@ -114,7 +141,7 @@ runner CLI（`--help` 实测）：`python _ecosystem_runner.py <case> <output.np
 ## 在原生 torch 上跑
 
 原生侧入口是 harness 的 oracle 半边（上面的 `--runtime torch`，NPU 档是 `torch_npu` 解释器）。
-仓库里没有独立的 ms-swift 单测文件；契约就是 `_ms_swift_lora_llama` 这个 case 本身。
+历史 tuner 契约是 `_ms_swift_lora_llama` 这个 case 本身；新的独立 FULL Trainer 单测见上节。
 
 ## 对拍
 
