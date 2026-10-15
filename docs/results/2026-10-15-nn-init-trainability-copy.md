@@ -96,3 +96,44 @@ materialized view 写回需要 root 与 retained siblings 的临时值，不宣�
 `source-freeze-expanded.json` 精确绑定历史 dirty-source 的七个 owner 文件；正式结果不能重标为后续 clean commit 测量。
 独立 oracle metadata 绑定实际解释器 / Torch binary extension / 测试哈希；未修改共享 Torch 安装，也不以该单个 binary 哈希声明完整安装包来源。
 `manifest.json` 封存原始文件相对路径 / 字节数 / SHA256，`strided-copy/source-final-git-proof.json` 逐一验证七个最终文件等于上述实际测量哈希与 `61c67b67a` Git blobs。中央 index / MANIFEST 由集成维护者登记。
+
+
+## 主线整合复验
+
+同步远端 `bda0f82df2eb4322a3c81eee2c36d31597a9237d` 后，主线分别运行
+可逆冻结、非叶初始化、view no-grad copy 三个原始最小复现，均真实失败。
+三个交付提交按顺序重放为 `53ae4b44e`、`6d758252a`、`d07310011`，中央索引与
+MANIFEST 登记后冻结 clean `0e85bafad1df77d5b3c200b311db8888b256215c`。
+七个 owner 文件均与原封存测量及 `61c67b67a` Git blobs 逐字节相等；原有 122 份
+原始文件全部重新核哈希，合计 675,935 字节，未改写历史结果或将其改绑到主线。
+
+本轮主线先完成 CPU 新核心编译，再完成真实 CUDA 新核心编译，各运行使用独立 unit cache；
+真实 CUDA 使用一张 RTX 4090，候选 GCC 11.5.0 / NVCC 12.2.140 / cu122。
+以下结果是本轮 clean 主线测量，与上述子代理 dirty-source 测量分别保留。
+
+| 主线检查 | 实际结果 |
+| --- | --- |
+| 五文件初始化 / copy CPU | 197 passed / 192 CUDA skipped，34.99 秒 |
+| 同五文件真实 CUDA | 394 passed / 0 skipped，182.75 秒 |
+| 扩大工厂 / 原位 / autograd 八文件 CPU | 203 passed / 153 CUDA skipped，9.25 秒 |
+| 同八文件真实 CUDA | 379 passed / 0 skipped，20.62 秒 |
+| 原生 storage / view / graph capture 与 GraphReplay 精确节点 CPU | 17 passed / 14 CUDA skipped，12.13 秒 |
+| 同原生集合真实 CUDA | 30 passed / 1 既有 expand 内存预算失败，63.35 秒 |
+| Canonical CPU core | 322 passed / 42 skipped / 1 existing xfail，两个模式 exit 0 |
+| 完整结构门禁 | 1622 passed / 6 skipped，210.17 秒 |
+
+CPU 原生集合的 14 项跳过包括六个 storage CUDA fixture 与八个 CUDA-only graph capture 节点；
+不把它们记为 CPU capture 支持。GraphReplay 的原维护节点
+`TestGraphReplay::test_a_strided_result_is_replayed_once` 在两设备均通过，CUDA 原 kernel-count
+断言保留。
+
+原生 CUDA 唯一失败仍为
+[KI-CODEGEN-005](../../agent/manuals/known-issues.md#ki-codegen-005-cuda-full-sum-materializes-a-pending-expanded-elementwise-consumer)：
+该节点数值正确，实际增长 68,157,440 字节，原预算 16,777,216 字节；与子代理干净远端基线
+重现相同，不把整套原生 CUDA 记为全绿，也不修改或 xfail 该断言。
+布局、MANIFEST、空白检查和新增两测试文件 Ruff 通过。
+
+本轮未版本化记录位于 `$JITTOR_LAB_ROOT/_state/native-copy-main-integration-d9/`：
+三个 `baseline-*.log`、`source-freeze-main.json`、`agent-evidence-readonly-verification.json`、
+`cpu.log` / `cuda.log`、`shared-*.log`、`native-*.log`、`core.log`、`structure.log` 与
+精确测试选择 `run-unit.sh` / `run-shared.sh` / `run-native.sh`。
