@@ -98,6 +98,15 @@ collector 检查两个 trainable 参数、零 frozen、sample 梯度、完整轨
 
 ## 断点归属与旧门禁
 
+完整 CPU maintained 入口 `ecosystem_metric_tensordict_source` 同时执行 Metrics 与 TensorDict，
+保留本 case 全部 29 对数组、两个参数和 sample 梯度、seed 0/7 及三步 SGD，不接受缩减协议。
+使用 `python tools/provision_ecosystem_nightly.py --library metric_tensordict --state-root <new-external-state> --run`
+完整配置独立 controller/candidate/oracle 环境并通过各自 `pip check`。
+provisioner 获取真实 `v0.10.0` tag 并检查 peeled commit，不能给任意 SHA 合成版本。
+安装 proof 保留实际 pip RECORD；源码闭包必须包含已提交的维护 runner。
+实际执行状态见[专用报告](../../../docs/results/2026-10-16-metrics-tensordict-maintained-cpu-nightly.md)，
+不重标 `912` 记录，不将工作流接线声称为 hosted nightly 已执行。
+
 | 断点 | 实际 owner |
 | --- | --- |
 | `torch.distributions.constraints` 空 namespace，导入 TensorDict 失败 | `compat/torch/distribution_frontend.py`；ModuleType 子类上定义的 constraint 属性需和实例成员共同发布，保留 native owner；修复提交 `9d9310e3c9a4af737702e12d2d6d47062fa015cd` |

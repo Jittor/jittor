@@ -29,7 +29,8 @@ def test_nightly_keeps_existing_gate_and_runs_both_complete_maintained_sessions(
     assert workflow['on']['schedule'] and 'workflow_dispatch' in workflow['on']
     assert workflow['jobs']['ecosystem']['steps'][-1]['run'] == 'python -m nox -s ecosystem'
     job = workflow['jobs']['maintained-cpu']
-    assert job['strategy']['matrix']['library'] == ['peft', 'swift', 'verl', 'transformers', 'openmmlab', 'diffusers']
+    assert job['strategy']['matrix']['library'] == ['peft', 'swift', 'verl', 'transformers', 'openmmlab',
+                                                 'diffusers', 'metric_tensordict']
     assert job['strategy']['fail-fast'] == 'false'
     steps = job['steps']
     run = next(step for step in steps if 'tools/provision_ecosystem_nightly.py' in step.get('run', ''))
@@ -74,7 +75,8 @@ def test_verl_runtime_profile_preserves_original_numpy_two_component_pins(provis
                                             ('verl', 'ecosystem_verl_training'),
                                             ('transformers', 'ecosystem_transformers_source'),
                                             ('openmmlab', 'ecosystem_openmmlab_installed'),
-                                            ('diffusers', 'ecosystem_diffusers_source')])
+                                            ('diffusers', 'ecosystem_diffusers_source'),
+                                            ('metric_tensordict', 'ecosystem_metric_tensordict_source')])
 def test_profiles_invoke_the_actual_complete_maintained_session(provision, library, session):
     assert provision.session_name(library) == session
 
