@@ -102,6 +102,41 @@ class TestSGDMomentumState(unittest.TestCase):
                 _step(opt, p)                              # p = 0.8, grad 1.6
                 self.ac(_buffer(opt, p), [1.6], f"reseeded buffer [{dev}]")
 
+    def test_a_restored_optimizer_does_not_share_state_with_its_source(self):
+        # torch deep-copies a loaded state_dict. Adopting the source's Vars
+        # shared one momentum buffer between both optimizers, and the CUDA
+        # fused kernel updates it in place, so each stepped the other's.
+        def run(steps, p0, buf=None):
+            p = np.array(p0)
+            for _ in range(steps):
+                g = 2 * (p - 0.2)
+                buf = g if buf is None else 0.8 * buf + g
+                p = p - 0.06 * buf
+            return p, buf
+
+        def loss_step(opt, p):
+            opt.zero_grad()
+            ((p - 0.2) ** 2).sum().backward()
+            opt.step()
+
+        for dev, use_cuda in _DEVICES:
+            with jt.flag_scope(use_cuda=use_cuda):
+                a = torch.nn.Parameter(torch.tensor([1.0, -0.5], device=dev))
+                opt_a = torch.optim.SGD([a], lr=0.06, momentum=0.8)
+                for _ in range(2):
+                    loss_step(opt_a, a)
+                b = torch.nn.Parameter(torch.tensor([3.0, 2.0], device=dev))
+                opt_b = torch.optim.SGD([b], lr=0.06, momentum=0.8)
+                opt_b.load_state_dict(opt_a.state_dict())
+                for _ in range(2):
+                    loss_step(opt_a, a)
+                    loss_step(opt_b, b)
+                _, buf_a = run(2, [1.0, -0.5])
+                self.ac(a.detach().cpu().numpy(), run(4, [1.0, -0.5])[0],
+                        f"source optimizer [{dev}]")
+                self.ac(b.detach().cpu().numpy(), run(2, [3.0, 2.0], buf_a)[0],
+                        f"restored optimizer [{dev}]")
+
 
 if __name__ == "__main__":
     unittest.main()

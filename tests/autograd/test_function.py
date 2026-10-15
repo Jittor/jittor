@@ -377,6 +377,55 @@ class TestFunction(unittest.TestCase):
         self.assertEqual(jt.introspection.counters.live_vars, floor)
 
 
+class TestFunctionHigherOrder(unittest.TestCase):
+    """What ``grad`` builds from a saved input is differentiable again.
+
+    ``execute`` sees stop-grad tapes of its inputs; ``grad`` computing from
+    them returned a gradient with no path back to the input, so the second
+    derivative was 0 with only a "does not depend on the loss" warning.
+    """
+
+    class Cube(Function):
+        def execute(self, x):
+            self.x = x
+            return x * x * x
+
+        def grad(self, g):
+            return 3 * self.x * self.x * g
+
+    class Mul(Function):
+        def execute(self, a, b):
+            self.saved = a, b
+            return a * b
+
+        def grad(self, g):
+            a, b = self.saved
+            return g * b, g * a
+
+    def test_second_derivative_of_a_function(self):
+        x = jt.array([2.0])
+        first = jt.grad(self.Cube.apply(x).sum(), x)
+        with jt.flag_scope(missing_grad_error=1):
+            second = jt.grad(first.sum(), x)
+        np.testing.assert_allclose(first.numpy(), [12.0])
+        np.testing.assert_allclose(second.numpy(), [12.0])
+
+    def test_forward_executed_before_backward(self):
+        x = jt.array([2.0])
+        y = self.Cube.apply(x)
+        np.testing.assert_allclose(y.numpy(), [8.0])
+        first = jt.grad(y.sum(), x)
+        np.testing.assert_allclose(jt.grad(first.sum(), x).numpy(), [12.0])
+
+    def test_inputs_saved_in_a_tuple_give_mixed_partials(self):
+        a, b = jt.array([3.0]), jt.array([5.0])
+        ga, gb = jt.grad((self.Mul.apply(a, b) ** 2).sum(), [a, b])
+        np.testing.assert_allclose([ga.item(), gb.item()], [150.0, 90.0])
+        # d2/da2 (ab)^2 = 2 b^2, d2/dadb = 4ab
+        haa, hab = jt.grad(ga.sum(), [a, b])
+        np.testing.assert_allclose([haa.item(), hab.item()], [50.0, 60.0])
+
+
 class TestFunctionWithEagerExecution(TestFunction):
     @classmethod
     def setUpClass(self):

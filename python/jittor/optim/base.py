@@ -16,6 +16,7 @@ from jittor._runtime.dispatch import dispatch_context
 import jittor as jt
 import numpy as np
 import operator
+import warnings
 from copy import deepcopy
 from functools import partial
 
@@ -191,6 +192,9 @@ class Optimizer(object):
         # so we can omit 0+x
         self.__zero_grad = True
         self._grad_map = {}
+        # id() of the parameters no backward since the last zero_grad reached;
+        # see `backward`. Empty means "nothing known to be missing".
+        self._absent_grads = set()
         self.__input_params = []
 
     def add_param_group(self, group):
@@ -293,7 +297,12 @@ class Optimizer(object):
             if isinstance(x, np.ndarray):
                 return jt.array(x).stop_grad()
             if isinstance(x, jt.Var):
-                return x.clone().stop_grad()
+                # A copy with storage of its own, not `clone()`: a clone is a
+                # view sharing the source's storage, and the fused CUDA
+                # optimizer kernels update their state buffers in place. B
+                # restored from A's state_dict then wrote A's momentum buffer
+                # on every step, and A wrote B's. torch deep-copies here too.
+                return jt.copy(x.contiguous()).stop_grad()
             return x
 
         exclude = set(("param_groups", "params"))
@@ -350,6 +359,7 @@ class Optimizer(object):
                 if state is not None and id(state) not in seen_ddp_states:
                     state.has_unsynced_grads = False
                     seen_ddp_states.add(id(state))
+        self._absent_grads = set()
         self.__zero_grad = True
 
     def backward(self, loss, retain_graph=False):
@@ -400,8 +410,35 @@ class Optimizer(object):
         # sync prev params
         jt.sync(params_has_grad)
 
-        # get gradient
-        grads = jt.grad(loss, params_has_grad, retain_graph)
+        # get gradient. `grad_optional` says which parameters the loss does not
+        # reach at all (None) instead of handing back a zero indistinguishable
+        # from a real one: torch.optim skips such a parameter for the step
+        # (its .grad is None), and an algorithm with state has to know it to
+        # do the same -- SGD seeded a momentum buffer from the stand-in zero.
+        grads = list(jt.core.grad_optional(loss, params_has_grad, retain_graph))
+        n_param_grads = sum(
+            1 for pg in self.param_groups for p in pg['params']
+            if _param_requires_grad(p))
+        for k, g in enumerate(grads[:n_param_grads]):
+            if g is None:
+                p = params_has_grad[k]
+                message = (
+                    f"optimizer: parameter {k} ({p.dtype}{list(p.shape)}"
+                    + (f", named '{p.name()}'" if p.name() else "")
+                    + ") does not depend on the loss through a differentiable"
+                    " path and receives no gradient")
+                if jt.flags.missing_grad_error:
+                    raise RuntimeError(
+                        message + ". Drop it from the optimizer, or clear "
+                        "jt.flags.missing_grad_error to get a warning instead.")
+                warnings.warn(message + ". Set jt.flags.missing_grad_error=1 "
+                              "to raise instead.", stacklevel=2)
+
+        # A parameter whose gradient is missing from every backward since the
+        # last zero_grad. Only the collective-free path records it: under MPI
+        # or DDP another rank may have produced a gradient for it, and
+        # skipping it on this rank alone would desynchronize the replicas.
+        absent = set()
 
         # set up grads in param_groups
         pid = 0
@@ -413,8 +450,14 @@ class Optimizer(object):
             for i, p in enumerate(pg['params']):
                 if _param_requires_grad(p):
                     # accumulate grad and stop grad of grad
-                    g = grads[pid].stop_grad()
+                    g = grads[pid]
                     pid += 1
+                    if g is None:
+                        if (not jt.in_mpi
+                                and getattr(p, "_jittor_ddp_state", None) is None):
+                            absent.add(id(p))
+                        g = jt.zeros_like(p)
+                    g = g.stop_grad()
                     if (getattr(p, "_jittor_ddp_state", None) is not None
                             and not _grad_matches_param(p, g)):
                         g = jt.zeros_like(p).stop_grad()
@@ -422,6 +465,9 @@ class Optimizer(object):
                         g = g + pg_grads[i]
                     pg_grads[i].update(g)
                     entries.append((p, pg_grads[i]))
+        if not self.__zero_grad:
+            absent &= getattr(self, "_absent_grads", set())
+        self._absent_grads = absent
         self.__zero_grad = False
         self.n_step += 1
 
@@ -444,6 +490,8 @@ class Optimizer(object):
                 gradient.assign(gradient.mpi_all_reduce("mean"))
                 add_dep(gradient._input(0))
             for gradient in grads[pid:]:
+                if gradient is None:
+                    continue
                 gradient.assign(gradient.mpi_all_reduce("mean"))
                 add_dep(gradient._input(0))
             if self.n_step % self.param_sync_iter == 0:

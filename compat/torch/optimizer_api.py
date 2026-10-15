@@ -310,6 +310,21 @@ def _state_dict_torch(self):
     return {"state": state, "param_groups": param_groups}
 
 
+def _owned_state(value):
+    """A loaded state tensor as a buffer of the optimizer's own, as torch's
+    ``load_state_dict`` deep-copies the dict it is given.
+
+    Adopting the Var itself shared it with whoever else holds it -- typically
+    the optimizer whose ``state_dict()`` it came from -- and the fused CUDA
+    kernels update their state buffers in place, so each optimizer's step
+    rewrote the other's momentum. ``clone()`` would not do either: it is a
+    view of the same storage.
+    """
+    if isinstance(value, jt.Var):
+        return jt.copy(value.contiguous()).stop_grad()
+    return value
+
+
 def _load_state_dict_torch(self, state_dict):
     _context = get_install_context(jt)
     _native_load_state_dict = _context.state["optimizer_native_api"]['_native_load_state_dict']
@@ -392,22 +407,22 @@ def _load_state_dict_torch(self, state_dict):
         for i, (st, step) in enumerate(slots):
             if kind in ("adam", "adamw"):
                 if "m" in pg and i < len(pg["m"]) and "exp_avg" in st:
-                    pg["m"][i] = st["exp_avg"]
+                    pg["m"][i] = _owned_state(st["exp_avg"])
                 if "values" in pg and i < len(pg["values"]) \
                         and "exp_avg_sq" in st:
-                    pg["values"][i] = st["exp_avg_sq"]
+                    pg["values"][i] = _owned_state(st["exp_avg_sq"])
             elif kind == "sgd" and st.get("momentum_buffer") is not None:
-                pg["values"][i] = st["momentum_buffer"]
+                pg["values"][i] = _owned_state(st["momentum_buffer"])
                 _momentum_initialized_flags(pg)[i] = True
             elif kind == "rmsprop" and "square_avg" in st:
-                pg["values"][i] = st["square_avg"]
+                pg["values"][i] = _owned_state(st["square_avg"])
             elif kind == "adan":
                 for source, target in (
                         ("m", "exp_avg"), ("v", "exp_avg_sq"),
                         ("d", "exp_avg_diff"),
                         ("pre_grad", "pre_grad")):
                     if target in st and source in pg and i < len(pg[source]):
-                        pg[source][i] = st[target]
+                        pg[source][i] = _owned_state(st[target])
             steps[i] = step
     self.n_step = max_step
     return None
