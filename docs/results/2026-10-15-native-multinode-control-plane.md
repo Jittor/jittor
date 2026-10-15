@@ -119,3 +119,29 @@ agent 各一张卡。真实跨主机 TCP/NCCL 路由、防火墙、不同文件�
 多 host 训练及恢复仍需真实多机验收。控制面不传输 checkpoint；现有共享文件路径要求保留。
 多节点 HCCL、弹性成员/重启及任意 collective 的端到端 deadline 不在本轮已验收范围。
 R17 不能因这批单 host 软件与设备证据整体关闭。
+
+## 主树独立整合复验
+
+主树先同步远端 `bd17d080ee31c8cb84f3ac2617662f423c343fec`，整合生产改动后在
+干净的 `bce0f96f1adf42ae1eabd5ceabdb014ef1902839` 冻结源码完成全部计算。
+原历史测量仍绑定 `bc07df0c079fcaa6ffcefce7ede1423ca599305e`。
+主树另存原始证据于未版本化 `$JITTOR_LAB_ROOT/_state/jtrun-control-integration-bd17/`。
+
+两个 rank 各自串行完成实际 NCCL 的 FP32/BF16 预热；随后公开 jtrun 双 agent 各
+3 项通过，原单 agent 双卡各 2 项通过。SGD/AdamW × FP32/BF16 的 parity、
+baseline 与另起进程的 resume 各 4 项/rank 通过，fallback 增量均为 0。
+生产 worker 为 `849104/849100`，恢复 worker 为 `853567/853565`。
+实际 STEP 5 后终止本任务 rank 1，agent 返回 `[1,137]`，约 0.666 秒退出；
+全部 12 个正式 worker PID 均已不存在。耗时仅说明该次故障退出，不作性能结论。
+
+主树独立 NumPy 审计与维护重算工具分别复核 680 组 oracle 数组、368 组逐位恢复
+字段、160 项 update 预算、160 项 zero-gradient 拒绝，全部通过原预算。
+`raw-bindings-main-bce0.json` 封存 273 个原始/源码/日志文件；
+`source-main-bce0-complete.json` 的 2,811 个 Git blobs 已逐个匹配，包含目录符号
+链接的目标文本。初版常规文件快照单独保留，没有改写历史快照或原始数组。
+
+同一冻结生产源码上的 host 回归 46 passed/1 skipped，core 322 passed/42 skipped/
+1 xfailed，完整结构 1,508 passed/6 skipped。随后整合纯审计工具和报告的最终检查
+另记同目录 `integration-manifest.json` 与 `final-structure.log`。
+源码哈希在各阶段核实；既有 xfail/skip 不计实际 CUDA 执行。
+本次仍只有一台物理主机，R17 的真实跨主机验收继续保留。

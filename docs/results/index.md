@@ -62,6 +62,8 @@
 2026-10-15-verl-registered-component-oracles
 2026-10-15-transformers-model-family-matrix
 2026-10-15-native-sharded-checkpoint
+2026-10-15-native-multinode-control-plane
+2026-10-15-h3-autograd-boundary
 2026-10-15-longformer-32768-context-oracles
 2026-10-15-deepspeed-engine-prerequisites
 2026-10-15-deepspeed-zero-engine
@@ -144,3 +146,5 @@
 | [CUDA BF16 Linear 偏置舍入](2026-10-15-bfloat16-linear-bias-accumulation.md) | 真实 BF16 GEMM 保留 FP32 累加到偏置之后；CPU 既有路径与二阶梯度回归已验 | 2026-10-15 |
 | [原生 TP AdamW 与 BF16 续训](2026-10-15-native-tensor-parallel-adamw-bf16.md) | 双卡 BF16 完整梯度、状态分片和新对象恢复通过固定误差预算；不含多机 | 2026-10-15 |
 | [FSDP 兼容层优化器生命周期](2026-10-15-fsdp-compat-lifecycle.md) | 优化器参数替换与原生模块 checkpoint 分派修复，CPU/CUDA 与双 rank 定向复验 | 2026-10-15 |
+| [jtrun 固定节点控制面](2026-10-15-native-multinode-control-plane.md) | 单机双 agent 的真实 CUDA 通信、FSDP 新进程续训与故障退出通过；真实多 host 待验 | 2026-10-15 |
+| [H3 上游 CUDA 梯度边界](2026-10-15-h3-autograd-boundary.md) | 真 Torch 与候选端 eval/train 均缺完整梯度；定位上游推理内核，无完整模型 L2/L3 授级 | 2026-10-15 |
