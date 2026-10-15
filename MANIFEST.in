@@ -398,6 +398,7 @@ include docs/results/2026-10-15-bfloat16-linear-bias-accumulation.md
 include docs/results/2026-10-15-checkpoint-state-options.md
 include docs/results/2026-10-15-cpu-bfloat16-accumulators.md
 include docs/results/2026-10-15-cuda-extension-philox.md
+include docs/results/2026-10-15-cuda-seed-without-devices.md
 include docs/results/2026-10-15-cuda13-toolchain-packaging.md
 include docs/results/2026-10-15-deepspeed-bfloat16-multirank.md
 include docs/results/2026-10-15-deepspeed-engine-prerequisites.md
@@ -419,6 +420,7 @@ include docs/results/2026-10-15-metric-state-and-tensordict-oracles.md
 include docs/results/2026-10-15-metrics-tensordict-scorecards.md
 include docs/results/2026-10-15-mpi-bfloat16-process-groups.md
 include docs/results/2026-10-15-native-fsdp.md
+include docs/results/2026-10-15-native-multihost-runner.md
 include docs/results/2026-10-15-native-multinode-control-plane.md
 include docs/results/2026-10-15-native-sharded-checkpoint.md
 include docs/results/2026-10-15-native-tensor-parallel-adamw-bf16.md
