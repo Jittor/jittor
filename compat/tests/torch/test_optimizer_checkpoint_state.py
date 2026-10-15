@@ -251,14 +251,25 @@ class TestOptimizerCheckpoint(unittest.TestCase):
                 return {"loss": loss, "model": numbers(state[0]), "optimizer": numbers(state[1]),
                         "gradients": numbers(observed), "learning_rates": scheduler.get_last_lr()}
 
+            def random_sample():
+                return {"python": random.random(), "numpy": np.random.random(4).tolist(),
+                        "torch_cpu": numbers(torch.rand(4, device="cpu")),
+                        "torch_device": numbers(torch.rand(4, device=DEVICE))}
+
+            from _accelerate_fresh_process import fresh_phase, run_fresh_phase
+            if fresh_phase():
+                def full_state():
+                    state = get_state_dict(accelerator.unwrap_model(model), optimizer)
+                    return {"model": numbers(state[0]), "optimizer": numbers(state[1]),
+                            "scheduler": numbers(scheduler.state_dict())}
+
+                step_index[0] = 5 if fresh_phase() == "consume" else 0
+                run_fresh_phase(capture, accelerator, measured_update, full_state, random_sample)
+                return
+
             before_save = [measured_update() for _ in range(3 if capture.enabled else 1)]
             with tempfile.TemporaryDirectory() as path:
                 accelerator.save_state(path, safe_serialization=False)
-
-                def random_sample():
-                    return {"python": random.random(), "numpy": np.random.random(4).tolist(),
-                            "torch_cpu": numbers(torch.rand(4, device="cpu")),
-                            "torch_device": numbers(torch.rand(4, device=DEVICE))}
 
                 random_expected = random_sample()
                 saved = snapshot(get_state_dict(accelerator.unwrap_model(model), optimizer))

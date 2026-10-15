@@ -351,6 +351,21 @@ def test_fsdp2_full_model_optimizer_checkpoint_resume(distributed_scope, tmp_pat
     torch.manual_seed(1729 + accelerator.process_index)
     torch.cuda.manual_seed_all(1729 + accelerator.process_index)
     random_sample()  # Exercise an advanced stream, not just seed restoration.
+    from _accelerate_fresh_process import fresh_phase, run_fresh_phase
+    if fresh_phase():
+        def full_state():
+            state = get_state_dict(model, optimizer, options=options)
+            return {"model": _values(state[0]), "optimizer": _values(state[1]), "scheduler": None}
+
+        def phase_observations():
+            return {"compute_observations": raw.compute_observations if bf16 else [],
+                    "distributed_observation": _report(accelerator, "fresh_full_checkpoint", model,
+                        global_parameter_shapes={"weight": [3, 4], "bias": [3]})}
+
+        update_index[0] = 5 if fresh_phase() == "consume" else 0
+        run_fresh_phase(capture, accelerator, update, full_state, random_sample, phase_observations)
+        return
+
     before_save = [update() for _ in range(3 if bf16 or capture.enabled else 1)]
     saved = before_save[-1]
     for entry in saved["optimizer"]["state"].values():

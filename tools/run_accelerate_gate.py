@@ -14,6 +14,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import time
 import xml.etree.ElementTree as ET
 
 
@@ -28,7 +29,8 @@ def environment(runtime, device, state, rank, devices, upstream):
     env = dict(os.environ)
     for name in ('RANK', 'WORLD_SIZE', 'LOCAL_RANK', 'LOCAL_WORLD_SIZE', 'JT_NCCL_RANK', 'JT_NCCL_WORLD_SIZE',
                  'REAL_TORCH_SITE', 'JITTOR_TORCH_PROJECT_ROOT', 'JITTOR_TORCH_RUNTIME_ROOT',
-                 'MASTER_ADDR', 'MASTER_PORT', 'JITTOR_ACCELERATE_INTEGRATION_OUTPUT', 'CHECKPOINT_REPORT'):
+                 'MASTER_ADDR', 'MASTER_PORT', 'JITTOR_ACCELERATE_INTEGRATION_OUTPUT', 'CHECKPOINT_REPORT',
+                 'JITTOR_ACCELERATE_CHECKPOINT_PHASE', 'JITTOR_ACCELERATE_CHECKPOINT_DIRECTORY'):
         env.pop(name, None)
     env.update({'JITTOR_TORCH_SHIM': '1' if runtime == 'jittor' else '0',
                 'JITTOR_SOURCE_ROOT': str(ROOT) if runtime == 'jittor' else '',
@@ -135,6 +137,11 @@ def worker(args):
     os.environ['CHECKPOINT_DEVICE'] = args.device
     os.environ['JITTOR_ACCELERATE_PROTOCOL_OUTPUT'] = str(Path(args.measurement).resolve())
     os.environ['JITTOR_ACCELERATE_INPUT_SEED'] = str(args.seed)
+    if args.checkpoint_phase:
+        if not args.checkpoint_directory:
+            raise ValueError('Fresh process requires a persisted checkpoint directory')
+        os.environ['JITTOR_ACCELERATE_CHECKPOINT_PHASE'] = args.checkpoint_phase
+        os.environ['JITTOR_ACCELERATE_CHECKPOINT_DIRECTORY'] = str(Path(args.checkpoint_directory).resolve())
     os.environ['JITTOR_ACCELERATE_DISTRIBUTED_REQUIRED'] = '1' if args.world_size == 2 else '0'
     test = SINGLE if args.world_size == 1 else FSDP + '[' + args.precision + ']'
     filename, selector = test.split('::', 1)
@@ -172,6 +179,7 @@ def gate(args):
         raise ValueError('Freeze and commit gate sources before actual measurements')
     if (state / 'execution.json').exists():
         raise ValueError('Choose a fresh output directory; historical measurements are immutable')
+    state.mkdir(parents=True, exist_ok=True)
     cache_state = (args.cache_root or state).resolve()
     if ROOT == cache_state or ROOT in cache_state.parents:
         raise ValueError('Benchmark caches must be outside the source checkout')
@@ -200,29 +208,50 @@ def gate(args):
         for world, precision in scenarios:
             for seed in (0, 7):
                 measurement = state / 'measurements' / runtime / ('world%d-%s-seed%d' % (world, precision, seed))
-                base = [str(Path(__file__).resolve()), '--worker', '--runtime', runtime, '--device', args.device,
-                        '--output', str(state), '--cache-root', str(cache_state), '--world-size', str(world), '--precision', precision,
-                        '--seed', str(seed), '--measurement', str(measurement)]
-                if world == 1:
-                    command = [python, *base]
-                elif runtime == 'torch':
-                    command = [python, '-m', 'torch.distributed.run', '--standalone', '--nproc_per_node=2', *base]
-                else:
-                    command = [python, '-m', 'jittor.distributed.launch', '--standalone', '--backend=nccl',
-                               '--nproc-per-node=2', '--device-ids=' + ','.join(devices),
-                               '--log-dir=' + str(measurement / 'launcher-logs'), *base]
-                scenario_env = environment(runtime, args.device, cache_state, 0,
-                                           devices[:1] if world == 1 else devices, args.upstream.resolve())
-                rc = run(command, scenario_env, state / 'logs' / ('%s-world%d-%s-seed%d.log' % (runtime, world, precision, seed)))
-                commands.append({'command': command, 'runtime': runtime, 'returncode': rc})
-                result = {'runtime': runtime, 'world_size': world, 'precision': precision, 'seed': seed,
-                          'returncode': rc, 'measurement': str(measurement), 'status': 'failed' if rc else 'passed'}
-                if not rc:
+                phases = ('produce', 'consume') if getattr(args, 'fresh_process', False) else (None,)
+                checkpoint = state / 'checkpoints' / runtime / ('world%d-%s-seed%d' % (world, precision, seed))
+                phase_results = []
+                for phase in phases:
+                    folder = measurement / phase if phase else measurement
+                    base = [str(Path(__file__).resolve()), '--worker', '--runtime', runtime, '--device', args.device,
+                            '--output', str(state), '--cache-root', str(cache_state), '--world-size', str(world), '--precision', precision,
+                            '--seed', str(seed), '--measurement', str(folder)]
+                    if phase:
+                        base.extend(['--checkpoint-phase', phase, '--checkpoint-directory', str(checkpoint)])
+                    if world == 1:
+                        command = [python, *base]
+                    elif runtime == 'torch':
+                        command = [python, '-m', 'torch.distributed.run', '--standalone', '--nproc_per_node=2', *base]
+                    else:
+                        command = [python, '-m', 'jittor.distributed.launch', '--standalone', '--backend=nccl',
+                                   '--nproc-per-node=2', '--device-ids=' + ','.join(devices),
+                                   '--log-dir=' + str(folder / 'launcher-logs'), *base]
+                    scenario_env = environment(runtime, args.device, cache_state, 0,
+                                               devices[:1] if world == 1 else devices, args.upstream.resolve())
+                    log = '%s-world%d-%s-seed%d%s.log' % (runtime, world, precision, seed, '-' + phase if phase else '')
+                    # run() waits for the complete launcher/rank process tree.
+                    # A consumer is never started while its producer is alive.
+                    started = time.monotonic_ns()
+                    rc = run(command, scenario_env, state / 'logs' / log)
+                    finished = time.monotonic_ns()
+                    launch = {'command': command, 'runtime': runtime, 'returncode': rc}
+                    if phase:
+                        launch.update(phase=phase, world_size=world, precision=precision, seed=seed,
+                                      started_monotonic_ns=started, finished_monotonic_ns=finished,
+                                      producer_exited=(phase == 'consume' and phase_results[0]['returncode'] == 0))
+                    commands.append(launch)
+                    phase_results.append(launch)
+                    if rc:
+                        break
                     for rank in range(world):
-                        tree = ET.parse(measurement / ('junit-rank%d.xml' % rank))
+                        tree = ET.parse(folder / ('junit-rank%d.xml' % rank))
                         cases = list(tree.iter('testcase'))
                         if len(cases) != 1 or any(list(case) and any(node.tag in ('skipped', 'failure', 'error') for node in case) for case in cases):
                             raise ValueError('Required gate did not execute exactly one passed test per rank')
+                result = {'runtime': runtime, 'world_size': world, 'precision': precision, 'seed': seed,
+                          'returncode': rc, 'measurement': str(measurement), 'status': 'failed' if rc else 'passed'}
+                if getattr(args, 'fresh_process', False):
+                    result.update(checkpoint_mode='fresh-process', phase_launches=phase_results)
                 results.append(result)
                 (state / 'execution.json').write_text(json.dumps({'commands': commands, 'results': results}, indent=2))
     return int(any(row['status'] != 'passed' for row in results))
@@ -244,6 +273,9 @@ def main():
     parser.add_argument('--seed', type=int, choices=(0, 7), default=0)
     parser.add_argument('--measurement')
     parser.add_argument('--warm-only', action='store_true')
+    parser.add_argument('--fresh-process', action='store_true', help='Save, terminate producers, then launch new checkpoint consumers')
+    parser.add_argument('--checkpoint-phase', choices=('produce', 'consume'))
+    parser.add_argument('--checkpoint-directory', type=Path)
     parser.add_argument('--warm-rank', type=int, choices=(0, 1), default=0)
     parser.add_argument('--cpu-provider-probe', action='store_true')
     args = parser.parse_args()

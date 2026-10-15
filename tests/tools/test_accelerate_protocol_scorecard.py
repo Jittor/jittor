@@ -256,10 +256,53 @@ def test_cpu_environment_overrides_inherited_cuda_and_pins_source(tmp_path, monk
     monkeypatch.setenv('use_cuda', '1')
     monkeypatch.setenv('CUDA_VISIBLE_DEVICES', 'unallocated')
     monkeypatch.setenv('PYTHONPATH', 'different-tree')
+    monkeypatch.setenv('JITTOR_ACCELERATE_CHECKPOINT_PHASE', 'consume')
+    monkeypatch.setenv('JITTOR_ACCELERATE_CHECKPOINT_DIRECTORY', 'another-checkpoint')
     env = gate.environment('jittor', 'cpu', tmp_path, 0, [], tmp_path)
     assert env['JT_USE_CUDA'] == env['use_cuda'] == '0'
     assert env['CUDA_VISIBLE_DEVICES'] == env['JT_BUILD_NVCC_PATH'] == env['nvcc_path'] == ''
     assert env['PYTHONPATH'] == str(ROOT / 'python')
+    assert 'JITTOR_ACCELERATE_CHECKPOINT_PHASE' not in env
+    assert 'JITTOR_ACCELERATE_CHECKPOINT_DIRECTORY' not in env
+
+
+@pytest.mark.parametrize('producer_status', [0, 1])
+def test_fresh_checkpoint_consumer_follows_only_a_successful_terminated_producer(tmp_path, monkeypatch, producer_status):
+    spec = importlib.util.spec_from_file_location('accelerate_fresh_gate', ROOT / 'tools/run_accelerate_gate.py')
+    gate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gate)
+    monkeypatch.setattr(gate.subprocess, 'check_output', lambda *_args, **_kwargs: '')
+    launched = {}
+
+    def execute(command, env, _log):
+        if '--warm-only' in command:
+            return 0
+        phase = command[command.index('--checkpoint-phase') + 1]
+        checkpoint = command[command.index('--checkpoint-directory') + 1]
+        if phase == 'consume':
+            assert launched[checkpoint] == 'producer-returned-successfully'
+        elif producer_status:
+            return producer_status
+        folder = Path(command[command.index('--measurement') + 1])
+        folder.mkdir(parents=True)
+        (folder / 'junit-rank0.xml').write_text('<testsuite><testcase name="fixture"/></testsuite>')
+        launched[checkpoint] = 'producer-returned-successfully' if phase == 'produce' else 'consumer-returned'
+        return 0
+
+    monkeypatch.setattr(gate, 'run', execute)
+    args = SimpleNamespace(output=tmp_path / 'measurements', cache_root=tmp_path / 'cache',
+                           device='cpu', devices='', upstream=tmp_path / 'upstream',
+                           oracle_python='oracle-fixture', jittor_python='candidate-fixture', fresh_process=True)
+    assert gate.gate(args) == int(bool(producer_status))
+    execution = json.loads((args.output / 'execution.json').read_text())
+    assert len(execution['results']) == 4
+    for result in execution['results']:
+        phases = result['phase_launches']
+        assert [row['phase'] for row in phases] == (['produce'] if producer_status else ['produce', 'consume'])
+        if not producer_status:
+            assert phases[1]['producer_exited'] is True
+    if producer_status:
+        assert not launched
 
 
 def test_cuda_warm_preserves_launcher_nccl_configuration(tmp_path, monkeypatch):

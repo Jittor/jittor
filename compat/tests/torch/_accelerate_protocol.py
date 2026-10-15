@@ -179,6 +179,8 @@ class Capture:
                         'compat/tests/torch/test_accelerate_distributed_integration.py',
                         'compat/tests/torch/test_optimizer_checkpoint_state.py',
                         'tools/run_accelerate_gate.py')
+        if os.environ.get('JITTOR_ACCELERATE_CHECKPOINT_PHASE'):
+            source_files += ('compat/tests/torch/_accelerate_fresh_process.py',)
         metadata = {'schema_version': 1, 'case': self.case, 'runtime': 'jittor' if shim else 'torch',
                     'jittor_commit': command('git', '-C', str(ROOT), 'rev-parse', 'HEAD'),
                     'upstream': self.source['upstream'], 'source_descriptor': self.source,
