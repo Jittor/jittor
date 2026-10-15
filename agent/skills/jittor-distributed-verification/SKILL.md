@@ -512,3 +512,47 @@ with scope: assertFalse(三份)                                                #
   想同时验证 MPI 和 NCCL，必须分两次跑，不能塞进同一个进程。
 - **`mpirun` 会重置环境**：验证用的所有变量都要通过 `mpirun` 之前的 env 传进去，
   确认每个 rank 日志里的 `cache_path:` 指向自己的 `JITTOR_HOME`。
+
+## Native FSDP: independent oracle and fresh-launch continuation
+
+Native FSDP owns actual local parameters; its shared storage/reduce-scatter
+implementation also serves the Torch frontend. Its initial acceptance scope is
+CUDA/NCCL WORLD with fixed world size, FP32 master parameters and optional BF16
+forward computation with FP32 gradient reduction. This does not establish peak
+memory savings, throughput, another backend or world-size migration.
+
+Generate references with an independent binary Torch interpreter. The tool
+imports only the NumPy fixture before calling real Torch; it refuses the shim:
+
+```bash
+<real-torch-python> agent/skills/jittor-distributed-verification/native_fsdp_oracle.py \
+  --source-root "$PWD" --device cuda --kind sgd --dtype float32 \
+  --output-dir "$JITTOR_LAB_ROOT/_state/native-fsdp/oracle"
+```
+
+Generate both `sgd`/`adamw` and `float32`/`bfloat16` references. Run
+`tests/backends/comm/nccl/test_native_fsdp_nccl.py` through the native launcher
+on two actual GPUs, using separate prewarmed `JITTOR_HOME` values per rank.
+Set `JITTOR_REQUIRE_NATIVE_FSDP=1`, `JITTOR_NATIVE_FSDP_TEST_DIR` to a shared
+artifact directory, and `JITTOR_NATIVE_FSDP_ORACLE_DIR` to those references.
+Use three **separate launcher invocations**, with
+`JITTOR_NATIVE_FSDP_PHASE=parity`, then `baseline`, then `resume`. The baseline
+saves after step three and continues two steps with actual dropout; the fresh
+resume process must reproduce both subsequent steps and every rank's Python,
+NumPy, native CPU and CUDA RNG arrays exactly. All runs forbid backend fallback
+and prove device pointers and actual compute/collective dtypes. A host-resident
+collective input may be uploaded only if that same Var was explicitly read back
+by the trace beforehand; arithmetic and collective outputs must already reside
+on CUDA before any pointer request.
+
+The oracle protocol is fixed before measurement: exact shape and finite checks;
+elementwise FP32 `atol=2e-6, rtol=2e-5` or BF16 `atol=4e-4, rtol=3e-2`;
+per-parameter update L2 error at most `2e-6 + 2e-5 * oracle_norm` (FP32) or
+`1e-6 + 0.03 * oracle_norm` (BF16). Each update must exceed ten absolute
+floors to be informative. Every actual parameter/step also injects a zero
+gradient and zero update and requires rejection. Per-step norms, errors and
+budgets are saved beside the raw tensors. Elementwise absolute tolerance can
+permit a large relative error on a tiny gradient: report that error explicitly
+instead of calling a passing BF16 comparison exact gradient agreement. Effective
+native matmul/cuDNN precision must both be `highest`, and the independent Torch
+reference disables TF32 with `highest` precision.

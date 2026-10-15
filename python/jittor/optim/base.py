@@ -409,11 +409,17 @@ class Optimizer(object):
                 _validate_optimizer_parameter(parameter)
         tp_parameter_ids = {id(p) for p in tp_parameters}
 
-        # sync prev params
-        jt.sync(params_has_grad)
+        from jittor.distributed.fsdp.optimizer import _prepare_backward, _finish_backward
+        grad_targets, fsdp_parameter_ids = _prepare_backward(
+            self, params, params_has_grad, retain_graph)
+        if fsdp_parameter_ids and self.__input_params:
+            raise NotImplementedError("native FSDP does not support extra optimizer input parameters")
 
-        # get gradient
-        grads = jt.grad(loss, params_has_grad, retain_graph)
+        # Gathered parameters own this forward's graph; native optimizers still
+        # consume only the resulting rank-local gradient and master shards.
+        jt.sync(grad_targets)
+        grads = jt.grad(loss, grad_targets, retain_graph)
+        grads = _finish_backward(params, grad_targets, grads)
 
         # set up grads in param_groups
         pid = 0
@@ -461,15 +467,16 @@ class Optimizer(object):
                     gradient.assign(reduced)
                     add_dep(gradient._input(0))
 
+            managed_parameter_ids = ddp_parameter_ids | tp_parameter_ids | fsdp_parameter_ids
             for parameter, gradient in entries:
-                if id(parameter) in ddp_parameter_ids or id(parameter) in tp_parameter_ids:
+                if id(parameter) in managed_parameter_ids:
                     continue
                 reduce_gradient(gradient)
             for gradient in grads[pid:]:
                 reduce_gradient(gradient)
             if self.n_step % self.param_sync_iter == 0:
                 for parameter in params:
-                    if id(parameter) in ddp_parameter_ids or id(parameter) in tp_parameter_ids:
+                    if id(parameter) in managed_parameter_ids:
                         continue
                     synchronized = collective_broadcast(parameter)
                     if synchronized is not parameter:
@@ -494,6 +501,8 @@ class Optimizer(object):
             _assert_ddp_step_ready,
         )
         _assert_ddp_step_ready(self)
+        from jittor.distributed.fsdp.optimizer import _assert_step_ready
+        _assert_step_ready(self)
         jt.flags.node_order = 1
 
     def post_step(self):

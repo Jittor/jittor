@@ -56,6 +56,7 @@
 2026-10-15-deepspeed-zero-engine
 2026-10-15-native-zero-optimizer
 2026-10-15-native-tensor-parallel
+2026-10-15-native-fsdp
 2026-10-15-openmmlab-training-oracles
 2026-10-15-tensor-detach-and-factory-leaf
 2026-10-15-cuda-extension-philox
@@ -107,3 +108,4 @@
 | [Tensor detach 与工厂梯度边界](2026-10-15-tensor-detach-and-factory-leaf.md) | CPU/CUDA 原地 detach、默认梯度发布和 bf16 新叶子契约通过；双卡 Engine 仍待验 | 2026-10-15 |
 | [CUDA 扩展 Philox 状态](2026-10-15-cuda-extension-philox.md) | 实际 CUDA RNG 重放与融合 FlashAttention 训练回归；独立 Torch 对拍仍待验 | 2026-10-15 |
 | [原生 TP 线性层训练与恢复](2026-10-15-native-tensor-parallel.md) | CPU 与双卡 NCCL 的 FP32 等分线性层、完整梯度和固定 world 续训已验；bf16 与多机待验 | 2026-10-15 |
+| [原生 FSDP 分片与新进程恢复](2026-10-15-native-fsdp.md) | 原生双卡训练与严格恢复已验；bf16 小梯度误差和旧兼容失败单列 | 2026-10-15 |

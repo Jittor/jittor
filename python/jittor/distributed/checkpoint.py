@@ -258,6 +258,8 @@ def save_training_state(model, optimizer, checkpoint_id, *, extra=None,
                         raise ValueError("native checkpoint optimizer tensor-list length mismatch: " + field)
                     group[field] = type(values)(RankLocal(value) if name in sharded else value
                                                 for name, value in zip(names, values))
+    from .fsdp.checkpoint import _encode
+    _encode(state, model)
     return save(state, checkpoint_id, process_group=process_group, store=store,
                 overwrite=overwrite, timeout=timeout)
 
@@ -273,7 +275,9 @@ def load_training_state(model, optimizer, checkpoint_id, *, process_group=None):
     rank, world, ranks, _ = _context(process_group)
     if world != manifest["world_size"] or set(ranks) != set(manifest["ranks"]):
         raise ValueError("training checkpoint rank/world mismatch; RNG resharding is unsupported")
-    state = restore_tree(checkpoint_id, manifest, ranks[rank])
+    from .fsdp.checkpoint import _requests, _decode, _restore_trainability
+    requests = _requests(model, optimizer, manifest, rank, _parameter_names(model, optimizer))
+    state = restore_tree(checkpoint_id, manifest, ranks[rank], tensor_shards=requests)
     if state["training_version"] != 1:
         raise CheckpointError("unsupported native training checkpoint version")
     if state.get("tensor_parallel", {}) != _tensor_parallel_layout(model):
@@ -284,6 +288,9 @@ def load_training_state(model, optimizer, checkpoint_id, *, process_group=None):
         raise ValueError("native checkpoint optimizer type mismatch")
     if saved_optimizer["param_names"] != _parameter_names(model, optimizer):
         raise ValueError("native checkpoint optimizer FQN/group order mismatch")
+    if set(model.state_dict()) != set(state["model"]):
+        raise ValueError("native checkpoint model FQN mismatch")
+    _decode(state, model)
     saved_groups = saved_optimizer["state"]["defaults"]["param_groups"]
     if len(saved_groups) != len(optimizer.param_groups):
         raise ValueError("native checkpoint optimizer group count mismatch")
@@ -331,6 +338,7 @@ def load_training_state(model, optimizer, checkpoint_id, *, process_group=None):
     # Restore both directions explicitly on the existing parameter objects.
     for name, target in current.items():
         target.stop_grad() if state["model_stop_grad"][name] else target.start_grad()
+    _restore_trainability(model)
     optimizer.load_state_dict(saved_optimizer["state"])
     optimizer.zero_grad()
     return state["extra"]

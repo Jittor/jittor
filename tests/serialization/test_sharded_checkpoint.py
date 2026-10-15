@@ -177,6 +177,53 @@ def test_requested_local_interval_rejects_wrong_dtype_or_tensor_owner(tmp_path):
             checkpoint.load(tmp_path, tensor_shards={"/value": target})
 
 
+@pytest.mark.parametrize("sharded", [False, True])
+@pytest.mark.parametrize("field", ["grads", "m", "values"])
+def test_extra_optimizer_tensor_refuses_before_model_or_rng_mutation(tmp_path, sharded, field):
+    def fresh_model():
+        model = jt.nn.Linear(3, 2)
+        if sharded:
+            from jittor.distributed.fsdp import fully_shard
+            fully_shard(model)
+        return model, jt.optim.Adam(model.parameters(), lr=0.01)
+
+    model, optimizer = fresh_model()
+    training_step(model, optimizer)
+    checkpoint.save_training_state(model, optimizer, tmp_path / "good")
+    state = checkpoint.load(tmp_path / "good")
+    values = state["optimizer"]["state"]["defaults"]["param_groups"][0][field]
+    values.append(values[0])
+    from jittor.serialization.sharded import RankLocal
+    state["rng"] = RankLocal(state["rng"])
+    checkpoint.save(state, tmp_path / "extra")
+
+    fresh, resumed = fresh_model()
+    resumed.lr = 0.7
+    before = {name: value.numpy().copy() for name, value in fresh.state_dict().items()}
+    before_flags = [value.is_stop_grad() for value in fresh.parameters()]
+    before_rng = jt.core.rng_state("cpu")
+    with pytest.raises(ValueError, match="tensor-list length"):
+        checkpoint.load_training_state(fresh, resumed, tmp_path / "extra")
+    for name, value in fresh.state_dict().items():
+        np.testing.assert_array_equal(value.numpy(), before[name])
+    assert [value.is_stop_grad() for value in fresh.parameters()] == before_flags
+    assert resumed.lr == 0.7 and resumed.n_step == 0
+    assert jt.core.rng_state("cpu") == before_rng
+
+
+@pytest.mark.parametrize("field", ["grads", "m", "values"])
+def test_fsdp_extra_optimizer_tensor_is_not_silently_saved(tmp_path, field):
+    from jittor.distributed.fsdp import fully_shard
+    model = fully_shard(jt.nn.Linear(3, 2))
+    optimizer = jt.optim.Adam(model.parameters(), lr=0.01)
+    training_step(model, optimizer)
+    values = optimizer.param_groups[0][field]
+    values.append(values[0])
+    with pytest.raises(ValueError, match="tensor-list length"):
+        checkpoint.save_training_state(model, optimizer, tmp_path / "invalid")
+    assert not (tmp_path / "invalid/manifest.json").exists()
+
+
 def test_numpy_local_interval_preserves_non_native_byte_order(tmp_path):
     source = np.arange(6, dtype=">f4")
     checkpoint.save({"value": source}, tmp_path)
