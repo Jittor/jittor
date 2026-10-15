@@ -18,6 +18,9 @@ from component_measure import package_files
 COMMIT = "446c2b5474dabffccf9a0034836eeab77c62b4b8"
 VERSION = "0.29.0rc2.dev58+g446c2b547"
 PACKAGE = "vllm_omni"
+# The pinned SCM build generates _version.py outside the tracked payload.
+# A different legitimate build needs a reviewed artifact and fresh provenance.
+LOCAL_OMNI_WHEEL_SHA256 = "c6a43c816c95f99f751dd9aa18c36ff94461d508da002a2a328c543e14b2c0de"
 
 
 def validate(binding, source, wheel):
@@ -44,7 +47,8 @@ def validate(binding, source, wheel):
     require(set(binding["installed_files_sha256"]) == known | {"_version.py"},
             "Unexpected Omni source-built payload closure")
     wheel = Path(wheel)
-    require(digest_file(wheel) == binding.get("wheel_sha256"), "Changed Omni source-built wheel")
+    require(digest_file(wheel) == binding.get("wheel_sha256") == LOCAL_OMNI_WHEEL_SHA256,
+            "Local source-built Omni wheel differs from the fixed artifact")
     artifact = {"role": "upstream-wheel", "path": str(wheel), "sha256": binding["wheel_sha256"]}
     proof = installation_proofs({"repo": "vllm-omni"}, {"vllm-omni": source}, [artifact])
     validate_installations({"downstream_distribution": binding}, proof)

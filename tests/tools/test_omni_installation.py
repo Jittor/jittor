@@ -46,6 +46,7 @@ def installed(tmp_path, monkeypatch):
             archive.writestr("vllm_omni/" + name, data)
         archive.writestr(metadata_dir.name + "/METADATA", md)
         archive.writestr(metadata_dir.name + "/RECORD", out.getvalue())
+    monkeypatch.setattr(installation, "LOCAL_OMNI_WHEEL_SHA256", installation.digest_file(wheel))
     sources = [{"path": "vllm_omni/__init__.py",
                 "sha256": hashlib.sha256(payload["__init__.py"]).hexdigest()}]
     known = sources + [{"path": "vllm_omni/schema.json",
@@ -125,6 +126,32 @@ def test_legitimate_unhashed_generated_bytecode_record_is_preserved(installed):
         stream.write(b"vllm_omni/__pycache__/_version.cpython-311.pyc,,\r\n")
     binding = installation.capture(source, module, wheel)
     assert binding["record_sha256"] == installation.digest_file(md / "RECORD")
+
+
+def test_generated_version_payload_cannot_be_replaced_by_a_coherent_wheel(installed):
+    source, module, wheel, md, _payload = installed
+    with zipfile.ZipFile(wheel) as archive:
+        members = {name: archive.read(name) for name in archive.namelist()}
+    name = "vllm_omni/_version.py"
+    data = members[name] + b"UNBOUND_GENERATED_PAYLOAD = 1\n"
+    members[name] = data
+    (Path(module.__file__).parent / "_version.py").write_bytes(data)
+    rows = list(csv.reader(io.StringIO((md / "RECORD").read_bytes().decode())))
+    for row in rows:
+        if row[0] == name:
+            row[1] = "sha256=" + base64.urlsafe_b64encode(hashlib.sha256(data).digest()).decode().rstrip("=")
+            row[2] = str(len(data))
+    out = io.StringIO(newline="")
+    csv.writer(out).writerows(rows)
+    members[md.name + "/RECORD"] = out.getvalue().encode()
+    (md / "RECORD").write_bytes(out.getvalue().encode())
+    with zipfile.ZipFile(wheel, "w") as archive:
+        for path, payload in members.items():
+            archive.writestr(path, payload)
+    # The same version and complete, coherently rehashed payload cannot prove
+    # that a replacement generated module came from the reviewed source build.
+    with pytest.raises(ValueError, match="fixed artifact"):
+        installation.capture(source, module, wheel)
 
 
 @pytest.mark.parametrize("change", ("unbound.py", "unbound.json", "missing_schema"))
