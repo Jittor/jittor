@@ -1037,11 +1037,20 @@ VarPtr UnaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     // dcosh(x) = sinh(x)
     if (ns == ns_cosh)
         return make_binary(dout, make_unary(x, ns_sinh), ns_multiply);
-    // dtanh(x) = 1/cosh^2(x)
+    // Differentiate the saved, rounded output. Recomputing cosh(x) both
+    // changes the low-precision derivative and overflows for saturated FP16
+    // inputs. CPU low-precision kernels use FP32 opmath; CUDA follows the
+    // low-precision scalar arithmetic at each operation. The ordinary graph
+    // through out preserves higher-order derivatives on both backends.
     if (ns == ns_tanh) {
-        auto cosx = make_unary(x, ns_cosh);
-        auto cos2x = make_binary(cosx, cosx, ns_multiply);
-        return make_binary(dout, cos2x, ns_divide);
+        bool low_precision = x->dtype() == ns_float16 || x->dtype() == ns_bfloat16;
+        bool promote = low_precision && execution_backend() == BackendId::Cpu;
+        VarPtr value = promote ? make_unary(out, ns_float32) : VarPtr(out);
+        VarPtr incoming = promote ? make_unary(dout, ns_float32) : VarPtr(dout);
+        auto square = make_binary(value, value, ns_multiply);
+        auto factor = make_binary(make_number(1, value), square, ns_subtract);
+        auto result = make_binary(incoming, factor, ns_multiply);
+        return promote ? make_unary(result, x->dtype()) : result;
     }
 
     // dasinh(x) = 1/sqrt(x^2+1)

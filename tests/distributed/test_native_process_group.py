@@ -86,8 +86,12 @@ class TestNativeProcessGroup(unittest.TestCase):
                 self.assertEqual(calls[0], (0, 2))
                 self.assertEqual(calls[1], (6, 7) if kind == "nccl" else (6, "sum", 7))
                 if kind == "nccl":
-                    with self.assertRaisesRegex(NotImplementedError, "sum and mean"):
-                        group._all_reduce(6, "max")
+                    # Non-SUM composites must not masquerade as the SUM
+                    # provider's backward formula for differentiable inputs.
+                    differentiable = types.SimpleNamespace(requires_grad=True)
+                    with self.assertRaisesRegex(NotImplementedError, "autograd"):
+                        group._all_reduce(differentiable, "max")
+                    self.assertEqual(len(calls), 2)
 
     def test_work_retains_completion_value(self):
         value = object()

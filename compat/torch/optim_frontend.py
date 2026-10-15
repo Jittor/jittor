@@ -48,6 +48,10 @@ def initialize_adan(self, *args, **kwargs):
     return _initialize_algorithm("Adan", self, args, kwargs)
 
 
+def initialize_adagrad(self, *args, **kwargs):
+    raise NotImplementedError("torch.optim.Adagrad has no native Jittor update implementation")
+
+
 _ALGORITHM_INITIALIZERS = {
     "SGD": initialize_sgd, "Adam": initialize_adam, "AdamW": initialize_adamw,
     "RMSprop": initialize_rmsprop, "Adan": initialize_adan,
@@ -82,6 +86,11 @@ def make_optimizer_frontend(native, tensor_type):
             "__module__": "torch.optim",
             "__init__": _ALGORITHM_INITIALIZERS[name],
         }))
+    # Libraries inspect optimizer type lists at import time. A missing native
+    # algorithm remains explicitly unsupported when construction is requested.
+    setattr(module, "Adagrad", type("Adagrad", (base,), {
+        "__module__": "torch.optim", "__init__": initialize_adagrad,
+    }))
     for name in ("opt_grad", "LRScheduler", "LambdaLR"):
         if hasattr(native, name):
             setattr(module, name, getattr(native, name))

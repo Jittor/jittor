@@ -31,6 +31,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Compiler/runtime/CCCL only. Math libraries (cuBLAS, cuDNN, etc.) must also
+# be present in the selected toolkit. Exact transitive pins prevent nvcc's
+# unbounded dependencies from silently upgrading to an unvalidated minor.
+cuda13 = [
+    "nvidia-cuda-nvcc==13.0.88; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
+    "nvidia-cuda-runtime==13.0.96; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
+    "nvidia-cuda-crt==13.0.88; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
+    "nvidia-nvvm==13.0.88; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
+    "nvidia-cuda-cccl==13.0.85; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
+]
 cuda12 = [
     "cuda-toolkit[cublas,cudart,cufft,curand,cusparse,nvjitlink,nvrtc,nvtx]==12.2.2; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
     # A range, not a pin: every modern torch pins its own exact
@@ -42,7 +52,7 @@ cuda12 = [
     # Headers for cuDNN's fused attention (backends/cuda/kernels/nn/
     # cudnn_attention_cuda.py). Without them that kernel declines and
     # attention takes the matmul-and-softmax path.
-    "nvidia-cudnn-frontend>=1.30,<2; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.9'",
+    "nvidia-cudnn-frontend>=1.30,<2; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.10'",
 ]
 # Device time in `jt.profile` (python/jittor/profiling/_cupti.py): CUPTI for
 # the CUDA 12.2 runtime `cuda12` installs. Without it a profile reports device

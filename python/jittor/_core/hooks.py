@@ -1,5 +1,6 @@
 """Removable hooks and explicit taped-gradient attachment."""
 from jittor_core import Var
+import weakref
 
 
 class _RemovableHandle:
@@ -27,40 +28,51 @@ def grad_hooker(args, hook):
     return hooker(*args)
 
 
+class _TensorGradientHooks:
+    def __init__(self):
+        self.hooks = {}
+        self.next_id = 0
+
+    def __call__(self, gradient):
+        for key, hook in tuple(self.hooks.items()):
+            if key not in self.hooks:
+                continue
+            replacement = hook(gradient)
+            if replacement is not None:
+                if not isinstance(replacement, Var):
+                    raise TypeError("Tensor gradient hook must return a Var or None")
+                if tuple(replacement.shape) != tuple(gradient.shape):
+                    raise RuntimeError("Tensor gradient hook changed the gradient shape")
+                if replacement.dtype != gradient.dtype:
+                    raise RuntimeError("Tensor gradient hook changed the gradient dtype")
+                gradient = replacement
+        return gradient
+
+
 def register_hook(v, hook):
-    """ register hook of any jittor Variables, if hook return not None,
-the gradient of this variable will be alter,
+    """Run a hook on this node's complete gradient before propagating it.
 
-    Example::
-
-        x = jt.array([0.0, 0.0])
-        y = x * [1,2]
-        y.register_hook(lambda g: g*2)
-        dx = jt.grad(y, x)
-        print(dx)
-        # will be [2, 4]
-
-    Returns a handle whose ``.remove()`` detaches the hook, like torch's
-    ``Tensor.register_hook``. It used to return the Var and offer no way to
-    remove the hook at all -- while this same file already had
-    ``_RemovableHandle`` for exactly this, used by every Module hook.
-
-    The in-place ``swap`` stays: the hook has to BE a node in the graph, and
-    the Var the caller is holding has to be the hooked one. So what
-    ``remove()`` undoes is the hook *running*; the (now identity) node stays
-    where it is, which is what keeps a graph already built on it intact.
+    Registration leaves the graph and the tensor's leaf identity intact.
+    Hooks run in registration order and may return a replacement gradient.
+    The returned handle detaches its hook without retaining the tensor.
     """
-    from .function import GradHooker
-    live = [True]
-    def _hook(grads):
-        if not live[0]:
-            return None
-        g = hook(grads[0])
-        if g is not None:
-            return (g,)
-        return None
-    hooker = GradHooker(_hook)
-    v.swap(hooker(v)[0])
-    return _RemovableHandle(lambda: live.__setitem__(0, False))
+    if not callable(hook):
+        raise TypeError("Tensor gradient hook must be callable")
+    if not v.requires_grad:
+        raise RuntimeError("cannot register a hook on a tensor that does not require gradient")
+    state = getattr(v, "_jittor_gradient_hooks", None)
+    if state is None:
+        state = _TensorGradientHooks()
+        v._jittor_gradient_hooks = state
+        v._set_grad_hook(state)
+    key = state.next_id
+    state.next_id += 1
+    state.hooks[key] = hook
+    reference = weakref.ref(state)
+    def remove():
+        current = reference()
+        if current is not None:
+            current.hooks.pop(key, None)
+    return _RemovableHandle(remove)
 
 Var.register_hook = register_hook

@@ -7,6 +7,7 @@
 #include "ops/op_register.h"
 #include "ops/composite/code_op.h"
 #include <cmath>
+#include <cstring>
 #include "core/grad.h"
 #include "core/var_holder.h"
 #include "runtime/float32_precision.h"
@@ -42,7 +43,7 @@ PyObject* linear_execute = nullptr;
 PyObject* matmul_kernel = nullptr;
 PyObject* empty_kwargs = nullptr;
 PyObject* matmul_name = nullptr;
-auto make_cublas_matmul = op_constructor<VarPtr, Var*, Var*, bool, bool>("cublas_matmul");
+auto make_cublas_matmul = op_constructor<VarPtr, Var*, Var*, bool, bool, bool>("cublas_matmul");
 // The fused RMS norm `_standard_rms_norm` reaches on an inference call.
 PyObject* rms_inference_impl = nullptr;
 PyObject* rms_source_fn = nullptr;
@@ -274,7 +275,7 @@ PyObject* linear_without_bias(PyObject* module, PyObject* dict, PyObject* x) {
     PyObjHolder kernel(kernel_select(matmul_name, call_args.obj, nullptr));
     if (kernel.obj != matmul_kernel) return nullptr;
     PyTensorFrontendScope scope(x, nullptr, 0, false);
-    return to_py_object<VarHolder*>(new VarHolder(make_cublas_matmul(a, w, false, true)));
+    return to_py_object<VarHolder*>(new VarHolder(make_cublas_matmul(a, w, false, true, false)));
 }
 
 bool pair_of_ints(PyObject* value, int& a, int& b) {
@@ -765,10 +766,37 @@ PyObject* rms_norm_registered_inference(PyObject* module, PyObject* dict, PyObje
 // takes it, the dispatcher picks `_rms_norm_cuda` for it, and that builds its
 // code operator from `_rms_norm_source`. nullptr for anything else.
 PyObject* rms_norm_inference(PyObject* module, PyObject* dict, PyObject* x) {
+    if (!dict || !is_var(x)) return nullptr;
+    // Match the public contract guard in `_standard_rms_norm` before
+    // kernel selection sees even an intentionally unused affine tensor.
+    // Resolve attributes normally so class options/descriptors also agree.
+    for (const char* name : {"has_weight", "pass_weight", "variance_size_override"}) {
+        PyObject* option_value = PyObject_GetAttrString(module, name);
+        if (!option_value) {
+            if (!PyErr_ExceptionMatches(PyExc_AttributeError)) return nullptr;
+            PyErr_Clear();
+            continue;
+        }
+        PyObjHolder option(option_value);
+        if (std::strcmp(name, "variance_size_override") == 0) {
+            if (option.obj != Py_None) return nullptr;
+        } else if (option.obj == Py_False) {
+            return nullptr;
+        }
+    }
+    PyObject* native_forward_value = PyObject_GetAttrString(module, "forward_native");
+    if (native_forward_value) {
+        PyObjHolder native_forward(native_forward_value);
+        if (PyCallable_Check(native_forward.obj)) return nullptr;
+    } else {
+        if (!PyErr_ExceptionMatches(PyExc_AttributeError)) return nullptr;
+        PyErr_Clear();
+    }
+    // These public contract guards apply to backend providers too, before
+    // selection can inspect a weight the module has explicitly disabled.
     PyObject* registered = rms_norm_registered_inference(module, dict, x);
     if (registered || PyErr_Occurred()) return registered;
-    if (!rms_inference_impl || !rms_source_fn || acl_possible || !dict || !is_var(x))
-        return nullptr;
+    if (!rms_inference_impl || !rms_source_fn || acl_possible) return nullptr;
     PyObject* weight = PyDict_GetItemString(dict, "weight");
     PyObject* eps = PyDict_GetItemString(dict, "variance_epsilon");
     if (!weight || !is_var(weight) || !eps || !(PyFloat_Check(eps) || PyLong_Check(eps)))

@@ -338,11 +338,23 @@ class TestAdam(Base):
                     atol=0.0, rtol=0.0,
                     msg=f"deep chained view writes root parent {dev}")
 
-            frozen = torch.ones(2, 3).stop_grad()
-            frozen.normal_(0.0, 0.1)
-            frozen[0].add_(1.0)
-            self.assertTrue(frozen.is_stop_grad(),
-                            f"in-place ops keep frozen tensor frozen {dev}")
+            for name, initialize in operations[:2]:
+                for through_view in (False, True):
+                    frozen = torch.ones(2, 3).stop_grad()
+                    target = frozen[0] if through_view else frozen
+                    # Exercise the bound initializer itself, without a data
+                    # alias or no_grad masking an accidental random RHS edge.
+                    if name == "normal_":
+                        target.normal_(0.0, 0.1)
+                    else:
+                        target.uniform_(-0.2, 0.2)
+                    self.assertTrue(frozen.is_stop_grad(),
+                                    f"{name} keeps root frozen {dev}/{through_view}")
+                    self.assertFalse(target.requires_grad)
+                    frozen[0].add_(1.0)
+                    assert_stays_on_device(frozen, "frozen initializer")
+                    self.assertTrue(frozen.is_stop_grad(),
+                                    f"in-place ops keep frozen tensor frozen {dev}")
 
         def on_device(dev):
             # A tensor with no ``device=`` is built on the CPU, as in torch;

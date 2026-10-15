@@ -659,6 +659,10 @@ def _discover_cuda_compiler(requested_backend):
             try_find_exe('/usr/bin/nvcc') or \
             try_find_exe('/opt/cuda/bin/nvcc')
     if not nvcc:
+        wheel_nvcc = install_cuda.cuda_wheel.discover_wheel_nvcc()
+        if wheel_nvcc:
+            nvcc = try_find_exe(wheel_nvcc)
+    if not nvcc:
         nvcc = install_cuda.install_cuda()
         if nvcc:
             nvcc = try_find_exe(nvcc)
@@ -715,6 +719,9 @@ def check_clang_latest_supported_cpu():
 
 # cc_flags += " -Wall -Werror -Wno-unknown-pragmas -std=c++14 -fPIC "
 cc_flags += " -Wall -Wno-unknown-pragmas -std=c++14 -fPIC "
+if nvcc_path and nvcc_version[0] >= 13:
+    # CCCL 3 (CUDA 13) requires C++17, including host-compiled SDK users.
+    cc_flags = cc_flags.replace("-std=c++14", "-std=c++17")
 # 1. Arch/CPU specific optimization
 if platform.machine() in ["x86_64", "AMD64"]:
     cc_flags += " -march=native "
@@ -999,7 +1006,9 @@ if has_cuda:
                     return x
                 return f"-L\"{a}\" -l{b[:-4]}"
             nvcc_flags = map_flags(nvcc_flags, func)
-        if nvcc_version >= [11,4]:
+        if nvcc_version[0] >= 13:
+            pass  # CCCL 3 requires the C++17 dialect selected above.
+        elif nvcc_version >= [11,4]:
             nvcc_flags = nvcc_flags.replace("-std=c++17", "-std=c++14 -Xcompiler -std:c++14")
         else:
             nvcc_flags = nvcc_flags.replace("-std=c++17", "")
@@ -1018,7 +1027,14 @@ if has_cuda:
         nvcc_flags = nvcc_flags.replace("-fsanitize", "-Xcompiler -fsanitize")
         nvcc_flags = nvcc_flags.replace("-fno-omit-frame-pointer",
                                         "-Xcompiler -fno-omit-frame-pointer")
-        nvcc_flags += f" -x cu --cudart=shared -ccbin=\"{cc_path}\" --use_fast_math "
+        runtime_flags = "--cudart=shared"
+        if cuda_wheel_stack and cuda_wheel_stack.cuda_version == "13.0":
+            # The pip runtime ships lib/libcudart.so.13, whereas nvcc's
+            # default shared-runtime link requests lib64/libcudart.so.
+            # Explicit SONAME linking also supplies lib's cudadevrt search.
+            runtime_flags = ('--cudart=none --library-path="%s" -l:%s'
+                             % (os.path.dirname(cuda_runtime_lib), os.path.basename(cuda_runtime_lib)))
+        nvcc_flags += f" -x cu {runtime_flags} -ccbin=\"{cc_path}\" --use_fast_math "
         # The device half of the per-thread default stream; see cc_flags above.
         nvcc_flags += " --default-stream per-thread "
         # nvcc warning is noise

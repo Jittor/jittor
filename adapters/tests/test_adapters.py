@@ -149,6 +149,24 @@ del __version__
             finally:
                 sys.path.remove(root)
 
+    def test_transformers_513_probe_contract(self):
+        transformers.register(patcher.register_module_patch)
+        patcher.install_module_patches(load_entry_points=False)
+        with tempfile.TemporaryDirectory() as root:
+            self.fake_transformers(root, "5.13.0")
+            sys.path.insert(0, root)
+            try:
+                module = importlib.import_module("transformers")
+                probes = sys.modules["transformers.utils.import_utils"]
+                self.assertFalse(module.is_torch_npu_available(check_device=True))
+                self.assertIs(module.is_torch_npu_available, probes.is_torch_npu_available)
+                self.assertIs(
+                    probes.BACKENDS_MAPPING["torchvision"][0],
+                    probes.is_torchvision_available,
+                )
+            finally:
+                sys.path.remove(root)
+
     def test_transformers_recognizes_the_deployed_torchvision_facade(self):
         transformers.register(patcher.register_module_patch)
         patcher.install_module_patches(load_entry_points=False)

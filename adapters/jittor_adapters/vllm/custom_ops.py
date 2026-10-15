@@ -66,7 +66,18 @@ def _gelu_tanh_and_mul(out, x):
 
 
 def _rms_norm(out, x, weight, epsilon):
-    out.assign(jt.nn.rms_norm(x, weight, epsilon))
+    # The compiled vLLM operator multiplies the affine weight in FP32 before
+    # its final low-precision cast. The public native/HF RMS primitive keeps
+    # its own contract; express this private operator through FP32 operands.
+    # This private CUDA operator writes an existing output and has no
+    # autograd formula. copy_ preserves its allocation and existing aliases.
+    with jt.no_grad():
+        if str(x.dtype) in ("float16", "bfloat16", "torch.float16", "torch.bfloat16"):
+            normalized = jt.nn.rms_norm(x.cast("float32"), weight.cast("float32"), epsilon)
+            normalized = normalized.cast(x.dtype)
+        else:
+            normalized = jt.nn.rms_norm(x, weight, epsilon)
+        out.copy_(normalized)
 
 
 def _fused_add_rms_norm(x, residual, weight, epsilon):

@@ -383,6 +383,32 @@ workaround.
   `src/ops/reindex_reduce_op.cc` (`ystride`) the same contiguous-input gate the
   elementwise and reduce ops have.
 
+## KI-CODEGEN-005: CUDA full sum materializes a pending expanded elementwise consumer
+
+- Severity: Medium (performance and an existing CUDA allocation contract failure).
+- Status: Open, independently reproduced on clean `4a4a480e628dae634a9d660f320c3aa957341e99`
+  and the leaf/view follow-up on 2026-10-15.
+- Owner: CUDA reduction and JIT fusion maintainers.
+- Symptom: with CUDA globally enabled, `(jt.ones((4096, 1)).expand(4096, 4096) * 2).sum()`
+  returns the correct value but allocates 68,157,440 bytes after synchronizing
+  the source, exceeding the existing 16,777,216-byte budget.
+- Cause: the default public full sum selects the two-stage CUDA code kernel
+  in `backends/cuda/kernels/nn/full_reduce_cuda.py`. Its opaque input boundary
+  materializes the preceding multiply. The expand itself still shares storage;
+  disabling the tuner or selecting strict math does not remove this boundary.
+- Workaround: explicitly pass all reduction axes, e.g. `.sum((0, 1))` for this
+  two-dimensional expression. That selects the existing native fused reduction
+  and allocated 1,048,576 bytes in the same CUDA process. Reduction order and
+  last-bit numerics may differ from the default two-stage implementation.
+- Evidence: `tests/core/test_view_storage.py::test_expand_does_not_materialize_when_it_is_consumed`
+  with `JT_USE_CUDA=1 JITTOR_TORCH_SHIM=0`; baseline, isolated, strict-math,
+  profiler and route-control logs under the unversioned
+  `$JITTOR_LAB_ROOT/_state/leaf-view-integration/`. Historical mixed-device
+  58-node view runs executed this unscoped node on CPU, so are not CUDA proof.
+- Exit condition: the original allocation budget passes on actual CUDA without
+  hiding a full-size intermediate, and full-sum numerical, gradient and
+  deterministic-resume contracts still pass.
+
 ## KI-CODEGEN-002: the `split{i}` and `parallel` loop options cannot be combined
 
 - Severity: Limitation (a compile error, never a wrong result; blocks a tuner
@@ -2159,62 +2185,6 @@ workaround.
   the second fails today.
 - Exit condition: the reference-peak run passes. NPU/HCCL and multi-node have no
   evidence yet (see [deferred-hardware.md](deferred-hardware.md)).
-
-## KI-DIST-002: the second native collective in a rapid sequence returns stale data on a non-zero rank
-
-- Severity: Medium (wrong collective result on non-zero ranks in one pattern;
-  DDP training itself is unaffected)
-- Status: Open; found 2026-10-13 on two CUDA ranks (NCCL 2.18.3).
-- Owner: distributed / native collectives
-- Symptom: in a rapid sequence of `jittor.distributed` collectives on NCCL, the
-  collective at sequence position 1 (the second one issued) reads back stale or
-  wrong data on a non-zero rank -- observed as a bf16 `all_reduce`, and as a
-  `broadcast` when that is the second collective -- while positions 0 and 2+ are
-  correct on both ranks. bf16 `all_reduce` is correct in isolation on both ranks,
-  so this is not a bf16 or an all_reduce correctness bug. The `DistributedDataParallel`
-  wrapper, optimizer gradient sync, `all_gather`, `broadcast` at position >=2 and
-  the full DDP training step all produce correct results on both ranks.
-- Cause: not isolated. A buffer-reuse / readback-ordering hazard in the native
-  collective output path or the executor on non-zero ranks is the suspect (cf.
-  KI-BACKEND-016's in-batch buffer reuse). A throwaway warmup collective plus
-  `jt.sync_all(True)` before the measured checks did not change it. A minimal
-  two-collective isolation (first + second) did NOT reproduce it, so the exact
-  trigger (sequence length or op mix) is not yet pinned.
-- Workaround: insert `jt.sync_all(True)` between back-to-back collectives when a
-  specific second-collective result must be read on a non-zero rank. DDP
-  training does not need this.
-- Evidence: `tests/distributed/native_nccl_smoke.py` in PR #18031, run on two
-  GPUs with `python -m jittor.distributed.launch -n 2 --backend nccl`: rank 1
-  fails exactly the position-1 check while rank 0 passes all, deterministically.
-- Exit condition: the second collective in a rapid sequence returns correct data
-  on all ranks and the native NCCL smoke passes on every rank.
-
-## KI-DIST-003: FSDP2 multi-rank with a reordered DeviceMesh and a torch-subclass optimizer runs an all_gather on the host
-
-- Severity: Medium (one multi-rank FSDP2 path; the common mesh/optimizer paths
-  are unaffected)
-- Status: Open; found 2026-10-13 on two CUDA ranks. Pre-existing on 2.0-refactor,
-  independent of PR #18031's FSDP2 fix-group import (the clean base fails it
-  identically).
-- Owner: distributed / fsdp2
-- Symptom: `compat/tests/fsdp2/test_fsdp2_nccl.py::TestFSDP2Nccl::`
-  `test_mesh_reordered_shards_custom_adam_and_lifetime` fails during
-  `loss.backward()`: `_globally_used_grads` issues `nccl_all_gather` on a
-  `float32[8]`->`[16]` input that is placed on the host, so
-  `JittorError: No kernel registered for nccl_all_gather on cpu`. The path is a
-  reversed-rank `DeviceMesh` combined with a `torch.optim.Adam` subclass; the
-  non-reordered mesh and the native optimizer paths gather on the device and pass.
-- Cause: not isolated. A Var in the FSDP2 shard / used-gradient path lands on the
-  host instead of the rank's CUDA device under the reordered-mesh + custom
-  (torch-subclass) optimizer combination, so a device-only collective is handed a
-  host input.
-- Workaround: use a non-reordered mesh, or the native optimizer step, until the
-  placement is fixed.
-- Evidence: 2 GPUs via `jtrun --nproc-per-node=2 --backend nccl` (or
-  `python -m jittor.distributed.launch -n 2`): the test fails deterministically on
-  both ranks, while the other eight `test_fsdp2_nccl` cases pass.
-- Exit condition: the collective input is placed on the rank's device and the test
-  passes on every rank.
 
 ## KI-BACKEND-020: the NPU work in #18036 and #18039 was only partly on this branch
 

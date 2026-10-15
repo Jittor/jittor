@@ -198,7 +198,7 @@ def _try_cudnn_conv_transpose2d(x, weight, bias, stride, padding, output_padding
     y = get_library_ops("cudnn").cudnn_conv_backward_x(
         weight, x, oH, oW, sh, sw, ph, pw, dh, dw, groups)
     if isinstance(bias, jt.Var):
-        y = y + bias.broadcast(y.shape, [0, 2, 3])
+        y = y + bias_for_compute_dtype(y, bias).broadcast(y.shape, [0, 2, 3])
     return y
 
 # cuDNN 3D convolution needs fp32 accumulation and tensor-op math enabled for

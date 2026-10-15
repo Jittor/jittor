@@ -19,6 +19,16 @@ def _checkpoint_entries(module):
             yield name, state, entry
 
 
+def _optimizer_checkpoint_parameter_names(module):
+    names = {}
+    for name, state, entry in _checkpoint_entries(module):
+        if entry.full_param is not None:
+            names[id(entry.full_param)] = name
+        if entry.shard is not None:
+            names[id(entry.shard)] = name
+    return names
+
+
 def _checkpoint_tensor(value, reference, *, preserve_dtype=False):
     from ..torch.context import get_install_context
 

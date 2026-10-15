@@ -1,211 +1,114 @@
 ---
 name: mmcv-torch-compat
-description: 在 Jittor torch shim 与独立 PyTorch 两侧跑通并对比 OpenMMLab 的 mmcv（mmcv-lite 的 mmcv.cnn 层），给出可复现命令、对拍口径与断点分流。用于验证 mmcv 在 shim 上的数值/梯度/速度，或定位 mmcv 相关断点该修 jittor 核心、jittor.compat.torch 还是 adapter 时使用。
+description: 验证真实 MMCV CPU/CUDA 数值、完整梯度与下游拥有的多步训练；运行独立 PyTorch oracle、正式门禁和带固定上游 SHA 分母的覆盖审计。
 ---
 
-# mmcv 在 torch shim 上跑 + 与原生 torch 对拍
+# MMCV 与独立 PyTorch 对拍
 
-配套仓库：[`mmengine-torch-compat`](../mmengine-torch-compat/SKILL.md)。两者是同一
-OpenMMLab 栈，`mmcv_conv_module` 这个 case 同时需要 `mmcv` 与 `mmengine`，务必一起读。
+先按 [downstream-library-adaptation](../downstream-library-adaptation/SKILL.md) 分流，
+并阅读配套 [mmengine runbook](../mmengine-torch-compat/SKILL.md)。
 
 ## 用途
 
-回答三件事：mmcv 怎么在 shim 上跑、怎么在原生 torch 上跑、两侧怎么对拍（数值与速度）。
-维护的 mmcv 范围是 **`mmcv.cnn` 等纯 Python 模型层**。
+`mmcv_convmodule_train_step` 验证真实 `MODELS.build(ConvModule)` 的 BN/ReLU 与 GN/LeakyReLU 两块、Linear head，再由 MMEngine `BaseModel.train_step` 驱动优化。输入 `(2,3,8,8)`，全部 8 个参数、浮点输入、三个 BN buffers 和全部 momentum buffers 都参与对拍。
+另有原有 `mmcv_conv_module` 基础模型 case；
+它的普通 backward 或通用 SGD probe 不能证明 MMEngine 自己的 `train_step`。
 
-**不覆盖**：`mmcv.ops`（NMS / RoIAlign / DeformConv / MultiScaleDeformableAttention /
-CARAFE 等）——它是针对 PyTorch C++ ABI 单独编译的扩展，明确不在 Python shim 契约内。
-也不覆盖 mmdetection 的完整训练、真实 OpenMMLab 数据集与 checkpoint。
+这里的 CPU/CUDA 小模型正确性不代表完整 Runner/hook/数据集训练、分布式训练、
+全库注册项支持或真实尺寸性能。`mmcv.ops` 的编译扩展没有被替换为 Python stub。
 
 ## 两侧环境
 
-| 角色 | 解释器 | 环境脚本 |
-| --- | --- | --- |
-| shim | `<jittor-python>` | 本地 env 脚本（不入库） |
-| 原生 torch（oracle） | `<real-torch-python>` | 本地 env 脚本（不入库） |
+两个独立解释器分别承载二进制 PyTorch 与 Jittor shim。先断言 oracle 的
+`hasattr(torch, '_C')` 为真、`_torch_compat_install_context` 不存在。
+候选侧先 `import jittor` 再 `import torch`，必须具有 shim 标记。
 
-- shim 侧：Python 3.12.12，Jittor 1.3.11.0；激活 shim 侧 env 脚本（本地、不入库）后 `import jittor`
-  再 `import torch`，`torch` 带 `_torch_compat_install_context` 标记（已实测）。
-  `JITTOR_TORCH_SHIM=1`，`HF_HUB_OFFLINE=1`、`TRANSFORMERS_OFFLINE=1`，`JITTOR_HOME`
-  等缓存都在 lab 的 run root 下。
-- oracle 侧：Python 3.12.12，真 PyTorch 2.13.0+cu129。两侧 Python 主版本相同（都是
-  3.12），所以可共享同一个下游 site。
-- **验证环境里 mmcv / mmcv-lite / mmengine 两侧都未安装**（`importlib.metadata.version` 与
-  `find_spec` 均实测缺席，见「证据」）。因此**验证环境产不出任何 mmcv 数字**，下面命令只
-  给出规范形态，必须先在环境里出现 mmcv。
-
-任何数字之前先过 oracle 断言，`noxfile.py` 的 `ecosystem` session 起手就做：
-
-```bash
-<real-torch-python> -c \
-  "import torch, sys; assert not hasattr(torch, '_torch_compat_install_context'); print('oracle torch', torch.__version__)"
-# 实测输出：oracle torch 2.13.0+cu129
-```
-
-**规范门禁怎么得到环境**：`nox -s ecosystem`（需设 `REAL_TORCH_PYTHON`）只安装
-`numpy/pillow/pytest/pytest-timeout/scipy/setuptools/tqdm` 这些基础依赖，**不安装
-mmcv/mmengine**；下游库由 `JITTOR_ECOSYSTEM_PACKAGE_SITE`（Jittor 侧）和
-`JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE`（oracle 侧，ABI 不同 CPython 时必需）指定的
-下游 site 提供。契约见 [`_ecosystem_harness.py`](../../../compat/tests/torch/_ecosystem_harness.py)
-模块 docstring。另有一条硬件门禁 `nox -s optional`：它在预置的 CUDA python 上探测
-`OPTIONAL_COMPAT_PACKAGES`（含 `mmcv`、`mmengine`）并跑
-[`test_mmcv_compat.py`](../../../compat/tests/torch/test_mmcv_compat.py)。
-已验证报告用的是 `mmcv-lite 2.1.0` + `mmengine 0.10.7`。
+专用 `ecosystem_openmmlab` session 使用预装的 MMEngine **0.10.7**、MMCV **2.2.0**
+和 NumPy **1.x**，不升级已有生态环境。可直接使用干净的上游 release checkout；
+两侧实际 import 的版本与 origin 必须一致。`mmcv.cnn` 可由不含编译 `_ext` 的源码提供，
+这不建立任何 `mmcv.ops` 覆盖。所有环境、原始日志和缓存位于外置 lab state。
 
 ## 在 shim 上跑
 
-runner 是唯一入口（`--help` 已实测）：
+以下命令是实际下游训练入口；oracle 先保存完整初始权重，候选侧复用它们：
 
 ```bash
-# 已激活 shim 侧环境（本地 env 脚本，不入库）
-cd <repo-root>
-<jittor-python> compat/tests/torch/_ecosystem_runner.py \
-    mmcv_conv_module /tmp/mmcv_shim.npz --runtime jittor --device cpu
-```
-
-实测：上面的命令在构造模型时以 `ModuleNotFoundError: No module named 'mmcv'`
-退出（依赖缺席），**不是** shim 的失败。装上 `mmcv-lite`+`mmengine` 后才可能走出结果。
-
-库自带的 import/构造契约（验证环境因缺库会 skip）：
-
-```bash
-<jittor-python> -m pytest compat/tests/torch/test_mmcv_compat.py -q
+JITTOR_TORCH_SHIM=1 PYTHONPATH=python <jittor-python> \
+  agent/skills/torch-compat-repo-runbook/scripts/openmmlab_training_probe.py \
+  --case mmcv_convmodule_train_step --runtime jittor --device cpu \
+  --steps 3 --learning-rate 0.01 \
+  --weights "$JITTOR_LAB_ROOT/_state/openmmlab/ref.weights.npz" \
+  --output "$JITTOR_LAB_ROOT/_state/openmmlab/shim.npz"
 ```
 
 ## 在原生 torch 上跑
 
-同一个 runner，用 oracle 解释器、`--runtime torch`。harness 会清掉继承来的 Jittor
-变量，oracle 侧不得看到本 checkout 与 shim：
-
 ```bash
-cd <repo-root>
 <real-torch-python> \
-    compat/tests/torch/_ecosystem_runner.py \
-    mmcv_conv_module /tmp/mmcv_torch.npz --runtime torch --device cpu
+  agent/skills/torch-compat-repo-runbook/scripts/openmmlab_training_probe.py \
+  --case mmcv_convmodule_train_step --runtime torch --device cpu \
+  --steps 3 --learning-rate 0.01 \
+  --output "$JITTOR_LAB_ROOT/_state/openmmlab/ref.npz"
 ```
 
-验证环境同样因 `mmcv` 缺席而失败（已实测）。
+`--device cpu` 在导入框架前明确禁用 CUDA。CUDA 在 CPU 通过后另跑，显式分配可见设备、
+配置真实工具链；观察到的 device 必须与请求一致，候选侧禁止 backend fallback。
 
 ## 对拍
 
-**数值**：case 只写一次、吃 `torch` 吐 `(model, inputs)`，永远不知道自己跑在哪个
-runtime 上；seed、权重传递、序列化都归 runner。torch 侧把 `named_parameters` +
-`named_buffers` 存成 `<output>.weights.npz`，jittor 侧用 `--weights` 原样载入
-（`--weights` 存在时 runner 会校验两边参数/缓冲一一对应），所以"同权重同输入"是结构
-保证。gate 断言 forward 与**每一个参数梯度、每一个输入梯度**都一致；容差
-CPU `2e-3/1e-2`、加速卡 `5e-3/2e-2`（`_ecosystem_harness.py`）。
-
 ```bash
-# 已激活 shim 侧环境（本地 env 脚本，不入库）
-cd <repo-root>
-REAL_TORCH_PYTHON=<real-torch-python> \
-JITTOR_ECOSYSTEM_PACKAGE_SITE=<含 mmcv-lite 2.1.0 / mmengine 0.10.7 的 site> \
-JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE=<oracle 侧 site，可同上> \
-JITTOR_TORCH_SHIM=1 <jittor-python> -m pytest \
-    compat/tests/torch/test_ecosystem_parity.py -q -k 'mmcv or mmengine'
+REAL_TORCH_PYTHON=<real-torch-python> JITTOR_CI_PYTHON=<jittor-python> \
+  JITTOR_TEST_DEVICES=cpu <tools-python> -m nox -s ecosystem_openmmlab
+# 在已分配真实 CUDA 设备的独立缓存中，另执行 JITTOR_TEST_DEVICES=cuda。
 ```
 
-`JITTOR_ECOSYSTEM_PACKAGE_SITE` 必须指向真实存在的目录，否则 harness 直接抛错；两侧
-下游库版本必须一致（harness 断言）。
+专用 session 同时执行两个真实 MM case 和 BatchNorm counter 回归。门禁必须启用
+`JITTOR_ECOSYSTEM_OPENMMLAB=1`、逐库 `JITTOR_REQUIRE_MMENGINE/MMCV=1`、
+`JITTOR_REQUIRE_REAL_TORCH=1`、`JITTOR_TEST_REQUIRE_EXECUTION=1`，速度比例门限为空。
+手工只跑单库 test 时，该库缺失同样直接失败，不能把 skip 视作通过。
 
-**速度**：`_ecosystem_speed.py` 的 CASES 只有 transformers / diffusers / convnet，
-**没有 mmcv 也没有 mmengine 的大尺寸 case**——即这三个仓库在规范 harness 里没有
-真实尺寸速度条目。因此 mmcv 唯一能拿到的墙钟是 parity gate 的 tiny case 计时（最少
-3 次取最小值），那是 Python 派发与 kernel launch 主导的，**不能当性能结论**。合理的
-速度对比协议是同一 case 两侧交替多次采样、引用最小值；本仓库维护用例的 NPU 数字
-（MMCV `0.927x`、MMEngine `0.796x`）来自报告的 20 次训练步取最小值协议，不是本 gate
-的 3 次采样。**不要把墙钟写进 PR 门禁**：只在 nightly 由 `JITTOR_ECOSYSTEM_SPEED_RATIO`
-断言（nox 默认上限 `1.07`），报告永远输出。
+门禁先对比普通 forward/backward 的全部命名梯度，再逐张量检查真实 `train_step`
+三步的输出、scalar/list loss 解析、输入梯度、裁剪后/SGD 更新前的全部参数梯度、
+更新后参数、momentum state 和 buffers。每步必须恰有一次 loss forward 和优化器 step。
+两侧 tensor key 集合与 shape 必须完全相同、数值有限；固定输入和 targets 必须逐元素一致。
+浮点梯度按现有 harness 的场尺度 floor 判断，不能用广播或 reshape 隐藏形状差异。
 
-**device 规则**：两侧必须同 device，harness 会读回并断言 `report["device"]`。
-Jittor 没有 per-tensor device，有卡机器上 CUDA 默认就是开的，所以 CPU 必须显式关
-（runner 在 `--device cpu` 时进入 `jt.runtime.scope(use_cuda=0)`）；忘记关就会拿
-Jittor 加速卡对 PyTorch CPU。
+L3 scorecard 还须另绑定固定平台、初始权重、7/19 两次输入扰动、实际三步 raw/metadata、
+重新生成的上游 inventory 与执行门禁 node。CUDA TF32 状态按实测记录；tiny case 不授 L4/L5。
 
 ## 断点与分流
 
-| 断点 | 分流 | 说明 |
-| --- | --- | --- |
-| `import mmcv.cnn` / `ConvModule(...)` 读 `self.conv.transposed`、`output_padding` | **jittor.compat.torch** | ACL 会把 `nn.Conv2d`/`nn.Conv` 包成不同类，installer 需给 `Conv2d`/`ConvTranspose2d` 都补上这些 torch 属性（2026-08-30 NPU 报告） |
-| ACL 的 `ReLU`/`LeakyReLU` 丢掉 `inplace` 参数 | **jittor.compat.torch** | 模块与 functional 两个形态都要接受该参数 |
-| mmengine 的 `InstanceData` 读 `torch.cuda.BoolTensor/LongTensor` | **jittor.compat.torch**（在 mmengine 侧触发） | shim 需发布全部十个 `torch.cuda` 类型构造器，且它们按 dtype+实际驻留做 `isinstance`，不是顶层类型的别名（见 mmengine skill） |
-| `mmcv.ops` 的 NMS/RoIAlign/DeformConv 等 | **契约外 / 若必须支持才谈 adapter 或 jittor 核心** | 二进制扩展，Python shim 无法使其 ABI 兼容；`tests/models/_mmdet_ops_checks.py` 只覆盖 mmdet 用到的 torch 算子面，不覆盖这些 kernel |
+- `torch.nn.BatchNorm*.num_batches_tracked` 的 scalar/int64/persistent 契约归
+  **compat NN 构造前端**；保持原生 Jittor 的 checkpoint 格式。逐设备检查三步计数与
+  `state_dict` 保存、加载后的继续更新。
+- 真正计算/梯度问题先去掉 MM 依赖复现，再按 core/compat 归属修复。
+- 上游 registry、训练 owner 和编译扩展不能由 adapter、mock 或 no-op 替代。
 
 ## 坑与假绿
 
-1. **缺库 = skip = 看起来通过。** `_distributions_available` 找不到 `mmcv`/`mmengine`
-   时 `skipTest`。验证环境正是这种状态：门禁会绿，但什么都没证明。真机/nightly 用
-   `JITTOR_REQUIRE_REAL_TORCH=1`（和 `JITTOR_TEST_REQUIRE_EXECUTION=1`）把这类 skip
-   变成失败。
-2. **有卡机器上"跑 CPU"默认不是 CPU。** 见上；只"不请求 CUDA"不等于 CPU 对比。
-3. **装了完整 `mmcv` 而不是 `mmcv-lite`**：完整包会带编译 op，其 import 可能触发
-   `mmcv.ops`，而该扩展不在契约内。已验证报告用的是 `mmcv-lite 2.1.0`。
-4. **两侧 site 不同版本**：harness 会断言版本一致；用两份不同 wheel 对拍等于换了个参考物。
-5. **tiny case 通过 ≠ 库真正用到的 API 面是真的。** 参见
-   [`torch-shim-noop-audit`](../torch-shim-noop-audit/SKILL.md)。
-6. **NPU 上 CUDA 与 ACL 不是一回事**：`--device npu` 在 Jittor 侧要求
-   `use_cuda=1` 且 `use_acl=1`，oracle 侧要求 `torch_npu`；三者缺一就 `SystemExit`。
+源码注册分母由 `registry_inventory.py --repo mmcv --checkout <clean-release>`
+自动提取。MMEngine 显式声明轴为 MODELS / OPTIM_WRAPPERS / LOOPS /
+WEIGHT_INITIALIZERS；动态遍历 `torch.optim` 与可选优化器另行披露，不伪造完整优化器分母。
+MMCV 扫描整个包，保留条件分支、alias、注册循环和依赖扩展的声明，不能只取已能 import
+的 `cnn` 子集缩小分母。动态声明无法解析时必须拒绝该有界轴。
+这些是固定源码的**声明轴**，不是运行环境注册表或整个库的 API 完整性。
 
 ## 证据
 
-- 用例与配置：[`_ecosystem_cases.py`](../../../compat/tests/torch/_ecosystem_cases.py)
-  的 `_mmcv_conv_module`（`ConvModule(3,16,3,pad=1,BN,ReLU)` +
-  `ConvModule(16,16,3,pad=1,GN(4),LeakyReLU)` + `nn.Conv2d(16,3,1)`，输入
-  `float32 (2,3,16,16)`）。
-- 分流与契约：[`downstream-library-adaptation`](../downstream-library-adaptation/SKILL.md)、
-  [`jittor-torch-diff`](../jittor-torch-diff/SKILL.md)。
-- 结果文档：CI 上 CUDA typed tensor 兼容（`2026-08-21-mmcv-cuda-typed-tensors.md`）、
-  NPU 数值与性能（`2026-08-30-mmcv-mmengine-ascend-parity.md`），两份均为已退役报告，Git 历史 `e3c369acb` 可查；
-  [`project-context`](../../manuals/project-context.md) 引用 `0.927x/0.796x`。
+模型与完整命名梯度契约见
+[`_ecosystem_openmmlab_cases.py`](../../../compat/tests/torch/_ecosystem_openmmlab_cases.py)，
+真实训练 probe 见
+[`openmmlab_training_probe.py`](../torch-compat-repo-runbook/scripts/openmmlab_training_probe.py)，
+正式 node 见
+[`test_ecosystem_openmmlab.py`](../../../compat/tests/torch/test_ecosystem_openmmlab.py)。
+可复现覆盖与平台协议遵循
+[共享 runbook](../torch-compat-repo-runbook/SKILL.md) 与
+[scorecard 协议](../../../docs/development/downstream-scorecards.md)。
+具体通过级别只取带 source SHA、逐设备 raw hashes 的结果报告；环境缺库记录与旧 tiny
+速度不能转移到新版本、新平台或新训练路径。
 
-**实测**（2026-09-19）：两个 venv 存在；两侧 Python 3.12.12；shim venv 的
-`jittor 1.3.11.0`、`import jittor` 后 `torch` 带 shim 标记；oracle 断言通过
-（`torch 2.13.0+cu129`）；`find_spec` mmcv/mmengine 两侧均为 False；
-`_ecosystem_runner.py --help` 可用；runner 跑 `mmcv_conv_module --runtime jittor`
-以 `No module named 'mmcv'` 结束；`test_ecosystem_speed.py` 无 mmcv 条目。
-
-**未验证**（只来自报告，换机器须重跑）：任何 mmcv/mmengine 数值或速度；
-`0.927x/0.796x`、forward `3.842e-4`、最差梯度 `3.197e-4` 等均出自 Ascend 910B3 报告；
-`JITTOR_ECOSYSTEM_PACKAGE_SITE` 的实际路径未确认（报告记在
-`$JITTOR_LAB_ROOT/_state/npu-ecosystem/20260830/`）。
-
-## 实测（2026-09-19）
-
-上面「未验证」一节的缺库状态已补齐，以下为首次实跑。单卡 CUDA，oracle
-`torch 2.13.0+cu129`、shim `jittor 1.3.11.0`，`--device cuda --repeats 5`。
-
-**package site**：`$JITTOR_LAB_ROOT/_state/verify-ml/site`，`pip install --target site
-peft ms-swift mmcv-lite mmengine` 装出 **mmcv-lite 2.2.0 + mmengine 0.10.7**（及 peft
-0.20.0、ms-swift 4.5.3）。装的是 **mmcv-lite**，按约定避开完整 `mmcv` 的 CUDA 编译扩展
-（`mmcv.ops` 本就在契约外）；pip 顺带拉入的 torch 2.14.0 / transformers 5.16.1 /
-numpy 2.5.3 已从 site 删除，改用 venv 的 torch 2.13.0 / transformers 5.5.3 / numpy 2.3.5。
-`mmcv` 模块由 mmcv-lite 提供，`importlib.metadata` 报告 `2.2.0`。
-
-**命令**：
-
-```bash
-cd <repo-root>
-unset PYTHONPATH   # 已激活 shim 侧环境（本地 env 脚本，不入库）
-export JITTOR_HOME=$JITTOR_LAB_ROOT/_state/verify-ml/jittor-home
-export CUDA_VISIBLE_DEVICES=<gpu>
-export JITTOR_ECOSYSTEM_PACKAGE_SITE=$JITTOR_LAB_ROOT/_state/verify-ml/site
-export JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE=$JITTOR_LAB_ROOT/_state/verify-ml/site
-REAL_TORCH_PYTHON=<real-torch-python> \
-  <jittor-python> agent/skills/torch-compat-repo-runbook/scripts/verify_repo.py \
-  --repo mmcv --device cuda --repeats 5 --out $JITTOR_LAB_ROOT/_state/verify-ml/out/mmcv
-```
-
-**支持的 case 清单**：`--list-only` 收 1 条 `mmcv_conv_module`（requires mmcv,mmengine）；
-`_ecosystem_speed.py` 无 mmcv 大尺寸 case（这里已复核）。
-
-| case | 状态 | 精度（最差绝对 / 全场相对） | 速度 torch→jittor | 峰值显存 torch / jittor | fallback | device |
-| --- | --- | --- | --- | --- | --- | --- |
-| `mmcv_conv_module` | ran（10 张量，无缺失） | `1.812e-5` / `2.514e-7`（均 `grad::head.weight`，梯度容差 2e-2 内） | `2.500 → 2.495 ms`，`0.998x` | `320 KiB / 1 MiB` | 0 | 两侧 cuda |
-
-**显存口径警告**：torch 报自身分配器真实峰值，jittor 是 `profile_memory_enable` 下 sync
-后采样的 allocator 用量，不可直接比较，只并列原始值。tiny case 的 `0.998x` 由 Python
-派发主导，不是 kernel 性能结论；大尺寸速度仍需按第「对拍」节另立 case。
-
-**没跑到的**：`mmcv.ops`（NMS/RoIAlign/DeformConv 等）仍属编译扩展契约外，未测；完整
-`mmcv` 未安装（改用 mmcv-lite 2.2.0）；无 mmcv/mmengine 真实尺寸速度 case。原始报告见
-`$JITTOR_LAB_ROOT/_state/verify-ml/{mmcv.log,out/mmcv/verify-report.json}`。
+固定 clean `2aa27ffe1ce1699c888575f3b5fb3092b1fc6eff` 的 CPU/CUDA 实测、三步
+真实 owner 轨迹、源码分母及 precision 否定证据见
+[OpenMMLab 结果报告](../../../docs/results/2026-10-15-openmmlab-training-oracles.md)。
+本场景两设备授 L3；具体 registry refs、全部可训练参数与未覆盖轴以该报告和
+原始 scorecard 为准，不外推完整 Runner、编译 ops 或性能级别。

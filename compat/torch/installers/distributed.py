@@ -15,6 +15,10 @@ import numpy as np
 import jittor as jt
 
 from ..context import registry_for
+from ..checkpoint_state import (
+    get_optimizer_state_dict, set_optimizer_state_dict,
+    get_model_state_dict, set_model_state_dict, get_state_dict, set_state_dict,
+)
 from ..fidelity import Fidelity, register_api_bindings
 from ...diagnostics import EXPECTED, swallowed
 from ...transaction import set_env, set_flag
@@ -235,7 +239,13 @@ def _require_supported_group(group, allow_subgroup=False):
 
 
 def _copy_tensor(dst, src):
-    if hasattr(dst, "update"):
+    # Collective output buffers are mutated, never rebound: Parameters and
+    # detached aliases may share their allocation (for example ZeRO's flat
+    # bf16 model buffer). Keep that allocation through the native copy owner.
+    if isinstance(dst, jt.Var) and dst._storage_is_contiguous():
+        jt.sync_all()
+        dst._copy_into(src)
+    elif hasattr(dst, "update"):
         dst.update(src)
     elif hasattr(dst, "assign"):
         dst.assign(src)
@@ -765,22 +775,22 @@ class StateDictOptions:
         self.flatten_optimizer_state_dict = bool(flatten_optimizer_state_dict)
 
 
-def _get_model_state_dict(model, *a, options=None, **k):
-    return model.state_dict(*a, **k) if hasattr(model, "state_dict") else {}
+def _get_model_state_dict(model, submodules=None, *, options=None):
+    return get_model_state_dict(model, submodules=submodules, options=options)
 
 
 def _set_model_state_dict(model, state_dict, *a, options=None, **k):
-    # `_is_fsdp_module` is set only by fsdp2, so a model carrying it proves
-    # fsdp2 was imported and has registered -- see jittor/compat/
-    # fsdp_hooks.py for why this file must not import fsdp2 directly.
-    if getattr(model, "_is_fsdp_module", False):
-        _fsdp = _fsdp_hooks.provider()
-        if _fsdp is not None:
-            _fsdp._load_full_state_dict(model, state_dict)
-            return None
-    if hasattr(model, "load_state_dict"):
-        return model.load_state_dict(state_dict, strict=getattr(options, "strict", True))
-    return None
+    if a or k:
+        raise NotImplementedError("checkpoint model submodule selection is not supported")
+    return set_model_state_dict(model, state_dict, options=options)
+
+
+class GradBucket:
+    """Importable DDP bucket type; native bucket communication is not exposed."""
+
+    def __init__(self, *args, **kwargs):
+        _stub_unimplemented("torch.distributed.GradBucket",
+                            "invent a gradient bucket with no native storage or reduction")
 
 
 class ShardedTensor:
@@ -914,11 +924,12 @@ def _api_symmetric_memory_is_symm_mem_enabled_for_group(*a, **k):
 
 
 def _api_checkpoint_sd_get_state_dict(model, optimizers=None, *a, **k):
-    return (_get_model_state_dict(model, *a, **k), optimizers.state_dict() if hasattr(optimizers, 'state_dict') else {})
+    return get_state_dict(model, optimizers, *a, **k)
 
 
 def _api_checkpoint_sd_set_state_dict(model, optimizers=None, model_state_dict=None, optim_state_dict=None, *a, **k):
-    return _set_model_state_dict(model, model_state_dict or {}, *a, **k)
+    return set_state_dict(model, optimizers, *a, model_state_dict=model_state_dict or {},
+                          optim_state_dict=optim_state_dict or {}, **k)
 
 
 def _api_sharded_tensor_init_from_local_shards(shards, *a, **k):
@@ -962,6 +973,22 @@ def _api_checkpoint_load(*args, **kwargs):
 
 def _api_checkpoint_save(*args, **kwargs):
     return _stub_unimplemented('torch.distributed.checkpoint.save', _dcp_save_effect, _dcp_hint, stub_result=None)
+
+
+class DefaultSavePlanner:
+    """Import boundary for callers using FULL, rather than sharded, files."""
+
+    def __init__(self, *args, **kwargs):
+        raise NotImplementedError(
+            "torch.distributed.checkpoint.default_planner.DefaultSavePlanner: "
+            "sharded checkpoint planning is not implemented; use FULL state dicts and torch.save")
+
+
+class DefaultLoadPlanner:
+    def __init__(self, *args, **kwargs):
+        raise NotImplementedError(
+            "torch.distributed.checkpoint.default_planner.DefaultLoadPlanner: "
+            "sharded checkpoint planning is not implemented; use FULL state dicts and torch.load")
 
 
 def _api_checkpoint_fs_write_item(*args, **kwargs):
@@ -1073,6 +1100,9 @@ def _install_distributed(g, registry=None):
     dist.DeviceMesh = getattr(dist, "DeviceMesh", _DeviceMesh)
     dist.init_device_mesh = getattr(dist, "init_device_mesh", _init_device_mesh)
     dist.ProcessGroup = _JittorProcessGroup
+    dist.GradBucket = GradBucket
+    _record_unimplemented("torch.distributed.GradBucket",
+                          "invent a gradient bucket with no native storage or reduction")
 
     c10d = _modules.get("torch.distributed.distributed_c10d")
     if c10d is None:
@@ -1167,8 +1197,16 @@ def _install_distributed(g, registry=None):
     checkpoint_sd.StateDictOptions = StateDictOptions
     checkpoint_sd.get_model_state_dict = _get_model_state_dict
     checkpoint_sd.set_model_state_dict = _set_model_state_dict
+    checkpoint_sd.get_optimizer_state_dict = get_optimizer_state_dict
+    checkpoint_sd.set_optimizer_state_dict = set_optimizer_state_dict
     checkpoint_sd.get_state_dict = _api_checkpoint_sd_get_state_dict
     checkpoint_sd.set_state_dict = _api_checkpoint_sd_set_state_dict
+    checkpoint_planner = _types.ModuleType("torch.distributed.checkpoint.default_planner")
+    checkpoint_planner.DefaultSavePlanner = DefaultSavePlanner
+    checkpoint_planner.DefaultLoadPlanner = DefaultLoadPlanner
+    for name in ("DefaultSavePlanner", "DefaultLoadPlanner"):
+        _record_unimplemented("torch.distributed.checkpoint.default_planner." + name,
+                              "plan no sharded checkpoint reads or writes", _dcp_hint)
     checkpoint_fs = _types.ModuleType("torch.distributed.checkpoint.filesystem")
     checkpoint_fs.FileSystemReader = FileSystemReader
     checkpoint_fs.FileSystemWriter = FileSystemWriter
@@ -1178,6 +1216,8 @@ def _install_distributed(g, registry=None):
     _modules["torch.distributed.checkpoint"] = checkpoint
     _modules["torch.distributed.checkpoint.state_dict"] = checkpoint_sd
     _modules["torch.distributed.checkpoint.filesystem"] = checkpoint_fs
+    _modules["torch.distributed.checkpoint.default_planner"] = checkpoint_planner
+    checkpoint.default_planner = checkpoint_planner
     checkpoint.state_dict = checkpoint_sd
     checkpoint.filesystem = checkpoint_fs
 
@@ -1242,6 +1282,8 @@ def _install_distributed(g, registry=None):
         Fidelity.APPROXIMATE,
         "Reuses native ProcessGroup, store and collective owners; group, reduction "
         "and backend capability limits and existing Work semantics apply")
+    register_api_bindings(dist, "torch.distributed", ("GradBucket",),
+        Fidelity.UNIMPLEMENTED, "Importable type; construction refuses unavailable native DDP buckets")
     register_api_bindings(dist, "torch.distributed",
         ("send", "recv", "isend", "irecv", "batch_isend_irecv"),
         Fidelity.UNIMPLEMENTED, "Point-to-point communication explicitly rejects nonempty work")
@@ -1255,10 +1297,15 @@ def _install_distributed(g, registry=None):
     register_api_bindings(checkpoint, "torch.distributed.checkpoint",
         ("load_state_dict", "save_state_dict", "load", "save", "FileSystemReader", "FileSystemWriter"),
         Fidelity.UNIMPLEMENTED, "Checkpoint I/O follows the existing explicit unsupported policy")
+    register_api_bindings(checkpoint_planner, "torch.distributed.checkpoint.default_planner",
+        ("DefaultSavePlanner", "DefaultLoadPlanner"), Fidelity.UNIMPLEMENTED,
+        "Import-compatible names; construction refuses unavailable sharded checkpoint planning")
     register_api_bindings(checkpoint_sd, "torch.distributed.checkpoint.state_dict",
-        ("StateDictOptions", "get_model_state_dict", "set_model_state_dict", "get_state_dict", "set_state_dict"),
-        Fidelity.APPROXIMATE, "Local module state and registered FSDP load provider; "
-        "full distributed checkpoint/options semantics are not implemented")
+        ("StateDictOptions", "get_model_state_dict", "set_model_state_dict", "get_state_dict", "set_state_dict",
+         "get_optimizer_state_dict", "set_optimizer_state_dict"),
+        Fidelity.APPROXIMATE, "FQN optimizer state and parameter groups, FULL FSDP provider transforms, "
+        "CPU offload, flatten, rank-zero broadcast, strict optimizer loading and submodule selection; "
+        "FULL plus flatten loading is explicitly unsupported")
     register_api_bindings(rendezvous_mod, "torch.distributed.rendezvous", ("rendezvous",),
         Fidelity.APPROXIMATE, "Delegates supported URL, rank, world-size and timeout handling to native stores")
     register_api_bindings(c10d, "torch.distributed.distributed_c10d",

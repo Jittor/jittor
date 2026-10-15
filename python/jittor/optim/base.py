@@ -397,11 +397,29 @@ class Optimizer(object):
             if _param_requires_grad(p):
                 params_has_grad.append(p)
 
-        # sync prev params
-        jt.sync(params_has_grad)
+        # TP shards are different parameters on different ranks. Their
+        # communication adjoints already produce the correct local gradient;
+        # legacy data-parallel synchronization would mix unrelated shards.
+        tp_parameters = [p for p in params if getattr(p, "_jittor_tp_spec", None) is not None]
+        if tp_parameters:
+            from jittor.distributed.tensor_parallel import _validate_optimizer_parameter
+            if self.__input_params:
+                raise NotImplementedError("TP optimizers require explicit jt.grad for input gradients")
+            for parameter in tp_parameters:
+                _validate_optimizer_parameter(parameter)
+        tp_parameter_ids = {id(p) for p in tp_parameters}
 
-        # get gradient
-        grads = jt.grad(loss, params_has_grad, retain_graph)
+        from jittor.distributed.fsdp.optimizer import _prepare_backward, _finish_backward
+        grad_targets, fsdp_parameter_ids = _prepare_backward(
+            self, params, params_has_grad, retain_graph)
+        if fsdp_parameter_ids and self.__input_params:
+            raise NotImplementedError("native FSDP does not support extra optimizer input parameters")
+
+        # Gathered parameters own this forward's graph; native optimizers still
+        # consume only the resulting rank-local gradient and master shards.
+        jt.sync(grad_targets)
+        grads = jt.grad(loss, grad_targets, retain_graph)
+        grads = _finish_backward(params, grad_targets, grads)
 
         # set up grads in param_groups
         pid = 0
@@ -430,28 +448,40 @@ class Optimizer(object):
         )
         ddp_parameter_ids, dep = _sync_optimizer_gradients(entries)
 
-        # Legacy MPI synchronization remains available for optimizer
-        # parameters outside a DDP wrapper.
+        # Synchronize parameters outside a DDP wrapper. MPI-free backends
+        # load their operators lazily, so the historical Var.mpi_* aliases
+        # may not exist yet; use the native collective owner in that mode.
+        # Keep the original MPI protocol when MPI owns the communicator.
         if jt.in_mpi:
+            from jittor.distributed.process_group import _optimizer_legacy_collectives
+            collective_mean, collective_broadcast = _optimizer_legacy_collectives()
+
             def add_dep(value):
                 nonlocal dep
                 value._add_dependency(dep)
                 dep = [value]
 
+            def reduce_gradient(gradient):
+                reduced = collective_mean(gradient)
+                if reduced is not gradient:
+                    gradient.assign(reduced)
+                    add_dep(gradient._input(0))
+
+            managed_parameter_ids = ddp_parameter_ids | tp_parameter_ids | fsdp_parameter_ids
             for parameter, gradient in entries:
-                if id(parameter) in ddp_parameter_ids:
+                if id(parameter) in managed_parameter_ids:
                     continue
-                gradient.assign(gradient.mpi_all_reduce("mean"))
-                add_dep(gradient._input(0))
+                reduce_gradient(gradient)
             for gradient in grads[pid:]:
-                gradient.assign(gradient.mpi_all_reduce("mean"))
-                add_dep(gradient._input(0))
+                reduce_gradient(gradient)
             if self.n_step % self.param_sync_iter == 0:
                 for parameter in params:
-                    if id(parameter) in ddp_parameter_ids:
+                    if id(parameter) in managed_parameter_ids:
                         continue
-                    parameter.assign(parameter.mpi_broadcast())
-                    add_dep(parameter)
+                    synchronized = collective_broadcast(parameter)
+                    if synchronized is not parameter:
+                        parameter.assign(synchronized)
+                        add_dep(parameter)
 
     def pre_step(self, loss, retain_graph=False):
         """ something should be done before step, such as calc gradients, mpi sync, and so on.
@@ -471,6 +501,8 @@ class Optimizer(object):
             _assert_ddp_step_ready,
         )
         _assert_ddp_step_ready(self)
+        from jittor.distributed.fsdp.optimizer import _assert_step_ready
+        _assert_step_ready(self)
         jt.flags.node_order = 1
 
     def post_step(self):

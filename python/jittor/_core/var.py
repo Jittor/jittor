@@ -111,6 +111,8 @@ class amp_flags:
     #: a float16 sum/mean does NOT use a float32 intermediate accumulator
     #: (read directly as ``amp_reg & 32`` in src/ops/reduce_op.cc)
     reduce16_no_fp32_acc = 32
+    #: force bfloat16 even when every input is float32
+    prefer_bfloat16 = 64
 
 def _amp_array_preference(ret):
     """Apply the array-like AMP preference to a freshly produced Var.
@@ -135,6 +137,8 @@ def _amp_array_preference(ret):
         return ret
     if amp_reg & amp_flags.prefer32:
         return ret if _jittor_dtype_name(ret.dtype) == "float32" else ret.float32()
+    if amp_reg & amp_flags.prefer_bfloat16:
+        return ret if _jittor_dtype_name(ret.dtype) == "bfloat16" else ret.bfloat16()
     if amp_reg & amp_flags.prefer16:
         return ret if _jittor_dtype_name(ret.dtype) == "float16" else ret.float16()
     return ret
@@ -286,6 +290,10 @@ Var.device = property(_device)
 
 def float_auto(x):
     import jittor as jt
+    if jt.flags.amp_reg & amp_flags.prefer32:
+        return x.float32()
+    if jt.flags.amp_reg & amp_flags.prefer_bfloat16:
+        return x.bfloat16()
     if jt.flags.amp_reg & amp_flags.prefer16:
         return x.float16()
     return x.float32()
@@ -1508,7 +1516,7 @@ def randn_like(x, dtype=None) -> Var:
     with device_scope_like(x):
         return jt.random(x.shape, dtype, "normal")
 
-def randint(low, high=None, shape=(1,), dtype="int32") -> Var:
+def randint(low, high=None, shape=(1,), dtype="int32", generator=None) -> Var:
     ''' samples random integers from a uniform distribution on the interval [low, high).
 
     :param low: lowest intergers to be drawn from the distribution, defaults to 0.
@@ -1539,7 +1547,7 @@ def randint(low, high=None, shape=(1,), dtype="int32") -> Var:
     for dim in shape:
         if dim < 0:
             raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
-    v = (jt.random(shape) * (high - low) + low).clamp(low, high-0.5)
+    v = (jt.random(shape, generator=generator) * (high - low) + low).clamp(low, high-0.5)
     v = jt.floor_int(v)
     return v.astype(_jittor_dtype_name(dtype))
 
@@ -1569,7 +1577,7 @@ def randint_like(x, low, high=None) -> Var:
     with device_scope_like(x):
         return randint(low, high, x.shape, x.dtype)
 
-def normal(mean, std, size=None, dtype="float32") -> Var:
+def normal(mean, std, size=None, dtype="float32", generator=None) -> Var:
     ''' samples random values from a normal distribution.
 
     :param mean: means of the normal distributions.
@@ -1606,7 +1614,7 @@ def normal(mean, std, size=None, dtype="float32") -> Var:
         else:
             if isinstance(mean, Var): size = mean.shape
             if isinstance(std, Var): size = std.shape
-    return jt.init.gauss(size, dtype, mean, std)
+    return jt.init.gauss(size, dtype, mean, std, generator=generator)
 
 def attrs(var):
     return {

@@ -19,6 +19,7 @@
 #include "ops/op_register.h"
 #include "ops/composite/transpose_op.h"
 #include "ops/composite/fuse_transpose_op.h"
+#include "ops/composite/reshape_op.h"
 #include "type/fp16_compute.h"
 #include "mem/swap.h"
 #include "runtime/executor_entry.h"
@@ -288,6 +289,14 @@ void VarHolder::copy_into(VarHolder* src, bool sync_src) {
     // Already there: an in-place update wrote into this very buffer (a step
     // capture taking over its state, see `capture_owners`).
     if (src->var->mem_ptr == var->mem_ptr) return;
+    if (src->var->allocator == var->allocator
+            && src->var->allocation == var->allocation) {
+        auto dst_address = reinterpret_cast<uintptr_t>(var->mem_ptr);
+        auto src_address = reinterpret_cast<uintptr_t>(src->var->mem_ptr);
+        USER_CHECK(dst_address + var->size <= src_address
+                || src_address + src->var->size <= dst_address)
+            << "_copy_into source and destination partially overlap";
+    }
     auto device_of = [](Var* v) {
         Device d{};
         if (v->allocator && v->allocator->is_cuda())
@@ -435,11 +444,64 @@ void VarHolder::drop_view() {
     view = nullptr;
 }
 
+static bool shares_physical_storage(Var* value, Var* base) {
+    // A pending share_with link is positive evidence before allocation. Two
+    // null pointers are not; after execution allocation identity is decisive.
+    Var* slow = value;
+    Var* fast = value;
+    while (value) {
+        if (value == base) return true;
+        if (value->mem_ptr && base->mem_ptr && value->allocator
+                && value->allocator == base->allocator
+                && value->allocation == base->allocation)
+            return true;
+        value = value->share_src;
+        slow = slow ? slow->share_src : nullptr;
+        fast = fast && fast->share_src ? fast->share_src->share_src : nullptr;
+        // Malformed sharing cycles cannot establish a view relationship.
+        if (slow && slow == fast) return false;
+    }
+    return false;
+}
+
+bool VarHolder::storage_view_is_physical() {
+    if (!view || !view->physical_storage) return false;
+    return !view->base || shares_physical_storage(var, view->base->var);
+}
+
+bool VarHolder::view_base_is_trainable_leaf() {
+    if (!view) return false;
+    Var* base = view->base ? view->base->var : var;
+    if (!view->base) {
+        // A Python owner may expire while the differentiable view still owns
+        // its native graph. Follow only actual view producers to recover the
+        // base; a clone/detach or an arithmetic producer is a real boundary.
+        while (Op* producer = base->input()) {
+            if (producer->is_stop_grad()
+                    || !(producer->is_op(op_ids::getitem())
+                        || dynamic_cast<ReshapeOp*>(producer)
+                        || producer->is_op(op_ids::transpose())
+                        || dynamic_cast<FuseTransposeOp*>(producer)
+                        || producer->is_op(op_ids::broadcast_to()))
+                    || producer->_inputs.empty())
+                break;
+            Var* next = producer->_inputs.front().node->var();
+            if (next == base) return false;
+            base = next;
+        }
+    }
+    return !base->is_stop_grad()
+        && !base->flag(VarFlags::_requires_grad_disabled)
+        && jittor::is_backward_leaf(base);
+}
+
 void VarHolder::orphan_views() {
     for (auto* w = views; w; ) {
         auto* next = w->next;
         // The record belongs to the holder that is the view, not to us; all we
         // may do is tell it that its base is gone.
+        w->physical_storage = w->physical_storage
+            && shares_physical_storage(w->owner->var, var);
         w->base = nullptr;
         w->prev = w->next = nullptr;
         w = next;
@@ -461,6 +523,8 @@ VarHolder* VarHolder::set_view_of(VarHolder* base, VarSlices&& slices) {
 void VarHolder::attach_view(VarHolder* base, VarViewStep final_step) {
     // Flatten: a view of a view is recorded against the root, so that the
     // intermediates of `y[1][2]` are free to die with the expression.
+    bool physical = shares_physical_storage(var, base->var)
+        && (!base->view || base->view->physical_storage);
     VarHolder* root = base;
     vector<VarViewStep> steps;
     if (base->view && base->view->base) {
@@ -470,7 +534,7 @@ void VarHolder::attach_view(VarHolder* base, VarViewStep final_step) {
     }
     if (root == this) return;
     steps.push_back(move(final_step));
-    view = new VarView{root, this, move(steps), nullptr, root->views};
+    view = new VarView{root, this, move(steps), nullptr, root->views, physical};
     if (root->views) root->views->prev = view;
     root->views = view;
 }
@@ -559,7 +623,9 @@ VarHolder* VarHolder::transpose_view_source() {
     // whole-shape reshape away.
     if (steps.empty())
         steps.emplace_back(VarViewStep::Reshape, NanoVector(root->var->shape));
-    result->view = new VarView{root, result, move(steps), nullptr, root->views};
+    bool physical = shares_physical_storage(result->var, root->var)
+        && (!root->view || root->view->physical_storage);
+    result->view = new VarView{root, result, move(steps), nullptr, root->views, physical};
     if (root->views) root->views->prev = result->view;
     root->views = result->view;
     return result;
@@ -609,21 +675,25 @@ static bool view_step_fits(Var* value, const VarViewStep& step) {
     return true;
 }
 
-void VarHolder::refresh_transpose_views() {
+void VarHolder::refresh_transpose_views(bool preserve_grad_policy) {
     for (auto* record = views; record; ) {
         // drop_view() below unlinks and frees `record`, so step off it first.
         auto* next = record->next;
         VarPtr value(var);
         bool fits = true;
+        bool physical = !view || view->physical_storage;
         for (const auto& step : record->steps) {
             if (!view_step_fits(value.ptr, step)) {
                 fits = false;
                 break;
             }
-            value = apply_view_step(value.ptr, step);
+            VarPtr next_value = apply_view_step(value.ptr, step);
+            physical = physical && shares_physical_storage(next_value.ptr, value.ptr);
+            value = move(next_value);
         }
         if (fits) {
-            *record->owner = move(value);
+            record->owner->rebind_view_result(move(value), preserve_grad_policy);
+            record->physical_storage = physical;
         } else if (record->owner) {
             // The view keeps the data it was taken from, which is what torch's
             // views do after `x.data = y` replaces the storage under them.
@@ -633,7 +703,7 @@ void VarHolder::refresh_transpose_views() {
     }
 }
 
-bool VarHolder::write_through_view(Var* value) {
+bool VarHolder::write_through_view(Var* value, bool preserve_grad_policy) {
     if (!view || !view->base) return false;
     auto* base = view->base;
     auto& steps = view->steps;
@@ -666,7 +736,7 @@ bool VarHolder::write_through_view(Var* value) {
         }
         value = updated.ptr;
     }
-    *base = move(updated);
+    base->rebind_view_result(move(updated), preserve_grad_policy);
     return true;
 }
 
@@ -695,22 +765,28 @@ VarHolder::~VarHolder() {
 }
 
 // assign attributes of b to a
-static inline void assign_var(Var* a, Var* b) {
+static inline void assign_var(Var* a, Var* b, bool preserve_grad_policy = true) {
+    if (b->grad_hook) a->grad_hook = b->grad_hook;
     if (b->flag(VarFlags::_placement_published))
         a->set_flag(VarFlags::_placement_published);
     a->name = move(b->name);
-    if (b->is_stop_grad())
+    if (preserve_grad_policy && b->is_stop_grad())
         a->set_stop_grad();
     if (b->flag(VarFlags::_stop_fuse))
         a->set_flag(VarFlags::_stop_fuse);
-    if (b->flag(VarFlags::_explicit_requires_grad))
+    if (preserve_grad_policy && b->flag(VarFlags::_explicit_requires_grad))
         a->set_flag(VarFlags::_explicit_requires_grad);
-    a->set_flag(VarFlags::_requires_grad_disabled,
-        b->flag(VarFlags::_requires_grad_disabled));
+    if (preserve_grad_policy)
+        a->set_flag(VarFlags::_requires_grad_disabled,
+            b->flag(VarFlags::_requires_grad_disabled));
 }
 
 void VarHolder::operator=(VarPtr&& v) {
-    if (autograd_policy.preserve_requires_grad_on_assignment) {
+    rebind_view_result(move(v), true);
+}
+
+void VarHolder::rebind_view_result(VarPtr&& v, bool preserve_grad_policy) {
+    if (preserve_grad_policy && autograd_policy.preserve_requires_grad_on_assignment) {
         if (var->is_stop_grad() != v->is_stop_grad())
             v.set_stop_grad(var->is_stop_grad());
         if (var->flag(VarFlags::_explicit_requires_grad))
@@ -718,13 +794,13 @@ void VarHolder::operator=(VarPtr&& v) {
     }
     note_rebind(this);
     drop_capture_record(this);
-    assign_var(v.ptr, var);
+    assign_var(v.ptr, var, preserve_grad_policy);
     release_holder();
     var->release_both_liveness();
     var = v.ptr;
     own_holder();
     v.ptr = nullptr;
-    refresh_transpose_views();
+    refresh_transpose_views(preserve_grad_policy);
 }
 
 extern bool no_grad;
@@ -794,6 +870,7 @@ VarHolder* VarHolder::start_grad() {
     AutogradPolicyOverride policy_guard({});
     no_grad = 0;
     auto dvar = jittor::detach(var);
+    dvar->grad_hook = var->grad_hook;
     std::swap(dvar.ptr, var);
     no_grad = no_grad_bk;
     var->set_flag(VarFlags::_explicit_requires_grad);
@@ -803,6 +880,29 @@ VarHolder* VarHolder::start_grad() {
 
 bool VarHolder::is_backward_leaf() {
     return jittor::is_backward_leaf(var);
+}
+
+void VarHolder::set_grad_hook(GradCallback&& callback) {
+    var->grad_hook = std::make_shared<GradCallback>(move(callback));
+}
+
+void VarHolder::clear_grad_hook() {
+    var->grad_hook.reset();
+}
+
+PyObject* VarHolder::collectable_grad_hook() {
+    if (!var->_outputs.empty() ||
+        !var->grad_hook || var->grad_hook.use_count() != 1)
+        return nullptr;
+    // `Var::holder` is the most recently constructed holder and temporary
+    // aliases clear it on destruction. Check the actual ownership registry.
+    for (auto holder : runtime_holder_state().holders())
+        if (holder != this && holder->var == var) return nullptr;
+    return reinterpret_cast<PyObject*>(var->grad_hook->python_callable);
+}
+
+void VarHolder::clear_collectable_grad_hook() {
+    if (collectable_grad_hook()) var->grad_hook.reset();
 }
 
 int64 VarHolder::grad_fn_node_id() {
@@ -830,22 +930,29 @@ string VarHolder::to_string() {
 }
 
 VarHolder* VarHolder::assign(VarHolder* v) {
-    if (autograd_policy.preserve_requires_grad_on_assignment) {
+    return assign_impl(v, true);
+}
+
+VarHolder* VarHolder::assign_impl(VarHolder* v, bool preserve_grad_policy) {
+    if (preserve_grad_policy && autograd_policy.preserve_requires_grad_on_assignment) {
         v->set_requires_grad(get_requires_grad());
     }
     // `assign` is the in-place primitive every `x.foo_()` funnels through, so
     // this is the one place that has to know that an in-place write to a view
     // is a write to the thing it is a view of.
-    write_through_view(v->var);
+    // Rebinding the base already refreshes this holder from the updated base.
+    // Keep that graph: replacing it again by the bare RHS would drop the old
+    // base's zero-gradient edge for a slice copy (Torch's CopySlices rule).
+    if (write_through_view(v->var, preserve_grad_policy)) return this;
     note_rebind(this);
     drop_capture_record(this);
-    assign_var(v->var, var);
+    assign_var(v->var, var, preserve_grad_policy);
     release_holder();
     v->var->own_both_liveness();
     var->release_both_liveness();
     var = v->var;
     own_holder();
-    refresh_transpose_views();
+    refresh_transpose_views(preserve_grad_policy);
     return this;
 }
 
@@ -857,7 +964,17 @@ VarHolder* VarHolder::update(VarHolder* v) {
 VarHolder* VarHolder::_update(VarHolder* v) {
     // Python in-place wrappers call `_update` directly. A view must write the
     // replacement through its root instead of rebinding only the view holder.
-    if (is_view()) return assign(v);
+    if (is_view()) {
+        // A previously frozen destination can acquire an RHS autograd edge.
+        // Preserve that edge through both the base rebind and its view refresh
+        // instead of copying the destination's old stopped policy onto it.
+        if (autograd_policy.preserve_requires_grad_on_assignment
+                && !get_requires_grad() && v->get_requires_grad()) {
+            return assign_impl(v, false);
+        }
+        return assign(v);
+    }
+    if (var->grad_hook) v->var->grad_hook = var->grad_hook;
     if (var->flag(VarFlags::_placement_published))
         v->var->set_flag(VarFlags::_placement_published);
     note_rebind(this);

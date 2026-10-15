@@ -5,6 +5,15 @@ description: 在 Jittor 的 torch shim 与原生 PyTorch 两侧运行并对比 P
 
 # peft × Jittor torch shim
 
+## 当前验收入口（2026-10-14）
+
+[CPU/CUDA oracle 与三步训练 scorecard](../../../docs/results/2026-10-14-downstream-oracle-scorecards.md)
+记录 PEFT 0.17.1 的 `peft_lora_llama`：独立二进制 Torch 对拍、固定权重输入扰动、
+全部请求梯度及三步更新。验收限于 tiny Llama 的 LoRA 参数，不能外推 dense Llama、
+其他 tuner、真实尺寸性能或 NPU。计算基线为 `230ba7a0305091fb64ec81a679f32dcaefcea518`；
+平台、上游 SHA、覆盖分母及复验条件以该报告为准。三步训练为手动 probe，
+不将现有一步 parity 门禁计作每次 CI 的 L3 验证。下文旧环境记录不覆盖这份新证据。
+
 ## 用途
 
 回答「PEFT 架在 `import torch` → Jittor 上能否跑、和真 PyTorch 是否同数、快不快」。

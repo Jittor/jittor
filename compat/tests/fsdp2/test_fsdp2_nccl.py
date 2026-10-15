@@ -86,7 +86,9 @@ class TestFSDP2Nccl(unittest.TestCase):
             full_state["output_bias"] = jt.ones((3,)) * 7
         state_dict_api = importlib.import_module(
             "torch.distributed.checkpoint.state_dict")
-        state_dict_api.set_model_state_dict(model, full_state)
+        state_dict_api.set_model_state_dict(
+            model, full_state, options=state_dict_api.StateDictOptions(
+                full_state_dict=True, broadcast_from_rank0=True))
         np.testing.assert_array_equal(
             model.output_bias.full_tensor().numpy(),
             np.full((3,), 7, dtype="float32"),
@@ -94,6 +96,7 @@ class TestFSDP2Nccl(unittest.TestCase):
         output = model(jt.ones((2, 4)))
         self.assertEqual(tuple(output.shape), (2, 3))
         self.assertTrue(np.isfinite(output.numpy()).all())
+
 
     @jt.flag_scope(use_cuda=1, use_parallel_op_compiler=0)
     def test_torch_distributed_world_collectives(self):
@@ -244,7 +247,7 @@ class TestFSDP2Nccl(unittest.TestCase):
         zero_norm = _get_total_norm_device([replicated, sharded], 0, shard_reduce=True)
         self.assertEqual(float(zero_norm.item()), 2.0)
 
-    @jt.flag_scope(use_cuda=1, use_parallel_op_compiler=0)
+    @jt.flag_scope(use_cuda=1, use_parallel_op_compiler=0, backend_fallback="error")
     def test_mesh_reordered_shards_custom_adam_and_lifetime(self):
         import weakref
         import torch
@@ -263,6 +266,7 @@ class TestFSDP2Nccl(unittest.TestCase):
             object.__setattr__(tensor, "_fsdp_lifetime_probe", marker)
             return weakref.ref(marker)
 
+        fallback_before = jt.core.backend_fallback_count()
         jt.seed(1234)
         model = torch.nn.Linear(4, 3)
         initial = {name: np.array(param.numpy(), copy=True)
@@ -281,8 +285,9 @@ class TestFSDP2Nccl(unittest.TestCase):
         for step in range(1, 4):
             opt.zero_grad()
             x, target = _rank_data(int(jt.rank))
-            output = model(torch.tensor(x))
-            loss = ((output - torch.tensor(target)) ** 2).mean()
+            output = model(torch.tensor(x, device="cuda"))
+            self.assertEqual(output.device.type, "cuda")
+            loss = ((output - torch.tensor(target, device="cuda")) ** 2).mean()
             loss.backward()
             old_shards = [lifetime_ref(entry.shard) for entry in state.true_fsdp_params]
             opt.step()
@@ -303,6 +308,7 @@ class TestFSDP2Nccl(unittest.TestCase):
             # Superseded views must drop promptly, without forcing cyclic GC.
             self.assertTrue(all(ref() is None for ref in old_shards))
         self.assertEqual(opt.custom_calls, 3)
+        self.assertEqual(jt.core.backend_fallback_count(), fallback_before)
 
     @jt.flag_scope(use_cuda=1, use_parallel_op_compiler=0)
     def test_nccl_all_gather_autograd(self):

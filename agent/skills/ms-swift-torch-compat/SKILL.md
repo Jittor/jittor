@@ -5,6 +5,16 @@ description: 在 Jittor 的 torch shim 与原生 PyTorch/torch_npu 两侧运行�
 
 # ms-swift × Jittor torch shim
 
+## 当前验收入口（2026-10-14）
+
+[CPU/CUDA oracle 与三步训练 scorecard](../../../docs/results/2026-10-14-downstream-oracle-scorecards.md)
+记录 ms-swift 4.5.2 的 `ms_swift_lora_llama`：独立二进制 Torch 对拍、输入扰动、
+全部请求梯度及三步更新。覆盖 Swift 自带 LORA 方法，未调用 Swift 注册模型加载器，
+不能据此计入其模型家族覆盖，也不证明完整 Swift trainer 或分布式训练。
+计算基线为 `230ba7a0305091fb64ec81a679f32dcaefcea518`；平台、上游 SHA、分母与
+复验条件以该报告为准。三步更新是手动 probe，不是现有一步 parity 门禁的 CI 授级；
+下文历史 NPU 与性能记录仍按各自基线解读。
+
 ## 用途
 
 回答「`ms-swift` 的 `Swift`/`swift.tuners.LoRAConfig` 架在 `import torch` → Jittor 上能否跑、

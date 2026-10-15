@@ -199,28 +199,60 @@ def _torch_setitem(self, slices, value):
     return result
 
 
-def _ip(self, value):
-    # In-place op x.OP_(...) -> x becomes `value` (which usually depends on x,
-    # e.g. div_/mul_/add_). assign() ALREADY keeps x grad-connected when `value`
-    # is grad-connected, so grad flows through the in-place op (torch parity).
-    # But start_grad() RESETS x's grad node and SEVERS that just-built graph
-    # (the same start_grad-severing bug behind the DPO/requires_grad fix), which
-    # silently zeroed grads through x.div_()/etc (GRPO temperature scaling).
-    # So only start_grad if assign actually left x stopped (a constant value like
-    # fill_/zero_ on a previously-trainable leaf) -- never on an already-connected x.
+def _copy_detached_storage(self, value):
+    # Optimizer buckets retain detached aliases of dense slices. Rebinding a
+    # holder would leave those aliases reading the old allocation. Only use
+    # the native imperative store when no differentiable RHS edge is needed.
+    if not isinstance(value, _NativeVar):
+        return False
+    if not (_owner.jt.flags.no_grad
+            or (not self.requires_grad and not value.requires_grad)):
+        return False
+    if (not self._storage_is_contiguous()
+            or (self._has_view_provenance() and not self._storage_view_is_physical())
+            or tuple(self.shape) != tuple(value.shape)
+            or self.dtype != value.dtype):
+        return False
+    if self.numel():
+        # Resolve pending readers (including clone snapshots) before changing
+        # bytes. _copy_into owns placement, stream ordering and dense copies.
+        _owner.jt.sync_all()
+        self._copy_into(value)
+    return True
+
+
+def _ip(self, value, preserve_storage=False):
+    if preserve_storage:
+        if self.requires_grad and not _owner.jt.flags.no_grad:
+            if self.is_leaf:
+                raise RuntimeError("a leaf Variable that requires grad is being used in an in-place operation.")
+            if self._view_base_is_trainable_leaf():
+                raise RuntimeError("a view of a leaf Variable that requires grad is being used in an in-place operation.")
+        if _copy_detached_storage(self, value):
+            return self
+    # Keep the RHS graph through an in-place operation. start_grad() on an
+    # already connected result would replace its graph with a fresh leaf.
     if _assign_data_owner(self, value):
         return self
     target = self
-    # As above: a frozen tensor stays frozen through an in-place write.
+    # A frozen tensor stays frozen unless the written value requires grad.
     was_trainable = bool(target.requires_grad)
-    # ...unless the written value itself requires grad: torch then makes the
-    # target a non-leaf of that graph (`out = zeros(); out.index_add_(0, i, h)`
+    # Torch then makes the target a non-leaf (`out = zeros(); out.index_add_(0, i, h)`
     # must backpropagate into `h`). A value built under no_grad is stop-grad,
     # so the frozen-under-no_grad case above is unaffected. Read before the
     # assignment, which hands the target's flags over to the value's Var.
     gains_grad = (not was_trainable and isinstance(value, _NativeVar)
                   and not value.is_stop_grad() and bool(value.requires_grad))
-    target.assign(value)
+    if gains_grad and (target.is_stop_grad() or target._is_view()):
+        # A detached/clone reset has a permanent stop-grad bit. Native assign
+        # copies that old bit into the replacement and irreversibly releases
+        # the RHS graph before the descriptor below can clear disabled-grad.
+        # A live view must also propagate the RHS edge through its frozen
+        # base and sibling refresh, including reversible requires_grad_(False).
+        # _update selects that existing native writeback path explicitly.
+        target._update(value)
+    else:
+        target.assign(value)
     if was_trainable and target.is_stop_grad():
         target.start_grad()
     elif gains_grad and not target.is_stop_grad():
@@ -249,7 +281,13 @@ def _copy_(self, other, non_blocking=False):
     if destination is not None and str(destination).split(":")[0] in ("cpu", "cuda", "npu"):
         if src.device != destination:
             src = src.to(destination)
-    return _ip(self, src)
+    if tuple(src.shape) != tuple(self.shape):
+        if len(src.shape) > len(self.shape) or any(
+                source not in (1, target)
+                for source, target in zip(reversed(src.shape), reversed(self.shape))):
+            raise RuntimeError("copy_ source shape cannot broadcast to destination shape")
+        src = src.broadcast(self.shape)
+    return _ip(self, src, preserve_storage=True)
 
 
 def _norm_size(args):
@@ -728,6 +766,22 @@ def _var_detach(self):
     if getattr(self, "_torch_0d", False):
         out._torch_0d = True
     return out
+
+
+def _var_detach_inplace(self):
+    if self._has_view_provenance():
+        raise RuntimeError("Can't detach views in-place. Use detach() instead.")
+    if self.is_backward_leaf:
+        # Keep earlier graph edges to this leaf usable after requires_grad_()
+        # is restored. A permanent stop_grad would sever those old edges.
+        context = get_install_context(_owner.jt)
+        context.state["tensor_native_api"]["_native_requires_grad"].__set__(self, False)
+    else:
+        # Rebind the holder to the native storage-sharing detached alias so
+        # consumers built before this call retain the original producer.
+        self.assign(_var_detach(self))
+        self.stop_grad()
+    return self
 
 
 def _var_numpy(self, *args, **kwargs):
@@ -1374,7 +1428,11 @@ def _true_division(self, other, opname):
         use_wide = sd.startswith("float") and src_dt != "float64" and not acl_active
         calc_dt = wide if use_wide else tgt
         a = self if src_dt == calc_dt else self.cast(calc_dt)
-        b = _owner.jt.array(other, dtype=calc_dt) if use_wide else other
+        if use_wide or isinstance(other, _owner.np.generic):
+            with _owner.jt.no_grad():
+                b = _owner.jt.array(other, dtype=calc_dt)
+        else:
+            b = other
         out = _binary_native(opname, a, b)
         if isinstance(out, _NativeVar) and _jittor_dtype_name(out.dtype) != tgt:
             out = out.cast(tgt)
@@ -1534,7 +1592,13 @@ def _api_fill(self, val):
 def _api_zero(self):
     if _fill_captured_state(self, 0):
         return self
-    return _ip(self, _owner.jt.zeros(self.shape, self.dtype))
+    with _new_scope(self, None), _owner.jt.no_grad():
+        zeros = _owner.jt.zeros(self.shape, self.dtype)
+    if self.requires_grad and not _owner.jt.flags.no_grad and not self.is_leaf:
+        # Select rather than multiply by zero: NaN/Inf values must clear to
+        # exact zero while the old non-leaf graph receives a zero derivative.
+        zeros = _owner.jt.ternary(zeros.cast("bool"), self, zeros)
+    return _ip(self, zeros, preserve_storage=True)
 
 
 def _api_add(self, o, alpha=1):
@@ -1546,11 +1610,11 @@ def _api_sub(self, o, alpha=1):
 
 
 def _api_mul(self, o):
-    return _ip(self, self * o)
+    return _ip(self, self * o, preserve_storage=True)
 
 
 def _api_div(self, o):
-    return _ip(self, self / o)
+    return _ip(self, self / o, preserve_storage=True)
 
 
 def _api_clamp_min(input, v):
@@ -1582,11 +1646,17 @@ def _api_nonzero(input, as_tuple=False, **kw):
 
 
 def _api_normal(self, mean=0.0, std=1.0, generator=None):
-    return _ip(self, _owner.jt.normal(float(mean), float(std), self.shape).cast(_jittor_dtype_name(self.dtype)))
+    # Native random factories are differentiable by default. Initialization
+    # supplies values, not a new autograd input to the in-place assignment.
+    with _owner.jt.no_grad():
+        value = _owner.jt.normal(float(mean), float(std), self.shape).cast(_jittor_dtype_name(self.dtype))
+    return _ip(self, value)
 
 
 def _api_uniform(self, a=0.0, b=1.0, generator=None):
-    return _ip(self, (_owner.jt.rand(self.shape) * (b - a) + a).cast(_jittor_dtype_name(self.dtype)))
+    with _owner.jt.no_grad():
+        value = (_owner.jt.rand(self.shape) * (b - a) + a).cast(_jittor_dtype_name(self.dtype))
+    return _ip(self, value)
 
 
 def _api_tolist(self):
@@ -1663,6 +1733,12 @@ def _api_is_contiguous(self, *a, **k):
 
 def _api_is_leaf(self):
     return bool(self.is_backward_leaf)
+
+
+def _api_is_sparse(self):
+    # Native Var storage is dense; unsupported sparse factories never produce
+    # a Var whose storage this capability query could misclassify.
+    return False
 
 
 def _api_retains_grad(self):
@@ -1786,6 +1862,7 @@ from .autograd_api import (
     _grad_set,
     _optimizer_maybe_has_fsdp_params,
     _register_leaf,
+    _register_post_accumulate_grad_hook as _register_post_accumulate_grad_hook,
     _retain_grad,
     _rg_get,
     _rg_set,

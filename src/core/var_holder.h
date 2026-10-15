@@ -20,6 +20,7 @@
 namespace jittor {
 
 struct VarHolder;
+struct GradCallback;
 // @pyjt(submit_pending_fetches)
 void submit_pending_fetches();
 VarPtr detach(Var* x);
@@ -79,6 +80,9 @@ struct VarView {
     // Siblings in `base->views`, so that base's destructor can find us.
     VarView* prev = nullptr;
     VarView* next = nullptr;
+    // Logical transpose/writeback provenance need not share an allocation.
+    // Keep the actual physical relationship after a temporary base expires.
+    bool physical_storage = false;
 };
 
 struct DataView {
@@ -163,6 +167,7 @@ struct VarHolder {
     // @pyjt(assign)
     // @attrs(return_self)
     VarHolder* assign(VarHolder* v);
+    VarHolder* assign_impl(VarHolder* v, bool preserve_grad_policy);
 
     /**
      * update parameter and global variable,
@@ -271,6 +276,7 @@ struct VarHolder {
     }
     
     void operator=(VarPtr&& v);
+    void rebind_view_result(VarPtr&& v, bool preserve_grad_policy);
 
 
     /** 
@@ -467,6 +473,15 @@ struct VarHolder {
      */
     // @pyjt(__get__grad_fn_node_id)
     int64 grad_fn_node_id();
+
+    // @pyjt(_set_grad_hook)
+    void set_grad_hook(GradCallback&& callback);
+    // @pyjt(_clear_grad_hook)
+    void clear_grad_hook();
+    // GC may follow the native callback only when its single holder is also
+    // its sole graph owner. An active consumer must keep its callback alive.
+    PyObject* collectable_grad_hook();
+    void clear_collectable_grad_hook();
 
     /**
      * Which *kind* of op that is, as the registration-time operator id (see
@@ -853,6 +868,17 @@ struct VarHolder {
     // @pyjt(_is_view)
     inline bool is_view() { return view && view->base; }
 
+    // A view stays a view after its weak writeback owner has died.
+    // @pyjt(_has_view_provenance)
+    inline bool has_view_provenance() { return view != nullptr; }
+
+    // @pyjt(_storage_view_is_physical)
+    bool storage_view_is_physical();
+
+    // A readonly query of existing view provenance and backward identities.
+    // @pyjt(_view_base_is_trainable_leaf)
+    bool view_base_is_trainable_leaf();
+
     /**
      * ``id`` of the Var this view currently writes through to, or -1. For
      * tests and introspection; identity decisions belong upstream of this.
@@ -863,13 +889,13 @@ struct VarHolder {
     // Rebind the root this view was taken from to itself with `value` written
     // into the recorded slice. Returns false when there is nothing to write
     // through -- not a view, or a base that has since been destroyed.
-    bool write_through_view(Var* value);
+    bool write_through_view(Var* value, bool preserve_grad_policy = true);
     // Stop being a view; stop being a base. Both are needed at destruction, and
     // the first one alone when a holder is re-pointed.
     void drop_view();
     void orphan_views();
     void attach_view(VarHolder* base, VarViewStep step);
-    void refresh_transpose_views();
+    void refresh_transpose_views(bool preserve_grad_policy = true);
 };
 
 /**

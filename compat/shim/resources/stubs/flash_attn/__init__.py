@@ -120,7 +120,15 @@ def _call_native(name, *args, **kwargs):
     fn = _native_function(name)
     if fn is None:
         return None
-    out = fn(*args, **kwargs)
+    if args and isinstance(args[0], torch.Tensor):
+        from jittor.compat.torch.frontend import tensor_frontend
+
+        # Extension factories must publish Torch tensors at this public API
+        # boundary, including calls made outside a Module.forward scope.
+        with tensor_frontend(torch.Tensor, like=args[0], default_placement=False):
+            out = fn(*args, **kwargs)
+    else:
+        out = fn(*args, **kwargs)
     if out is None and _native_required():
         raise RuntimeError(
             "native flashattn_jittor backend %s returned no output for %s"

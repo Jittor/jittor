@@ -5,7 +5,7 @@ import inspect
 
 from ._common import require_version, required_patch, replace, replace_bound_aliases, UnsupportedAdapterVersion
 
-SUPPORTED_VERSIONS = frozenset(("4.56.2", "5.5.3"))
+SUPPORTED_VERSIONS = frozenset(("4.56.2", "5.5.3", "5.13.0"))
 
 
 @required_patch

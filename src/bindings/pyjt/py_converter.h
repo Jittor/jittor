@@ -1178,6 +1178,7 @@ DEF_IS(GradCallback, T) from_py_object(PyObject* obj) {
         }
     );
     frontend_owner.release();
+    func.python_callable = obj;
     return func;
 }
 

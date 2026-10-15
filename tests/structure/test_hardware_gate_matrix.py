@@ -165,6 +165,22 @@ def test_accelerator_execution_counter_recognizes_backend_parameters(
     assert policy._is_accelerator_case(report) is expected
 
 
+@pytest.mark.parametrize("class_name,expected", [
+    ("TestCustomModuleStateCUDA", True),
+    ("EcosystemParityCUDA", True),
+    ("TestNumericROCM", True),
+    ("TestNumericNPU", True),
+    ("TestNumericCPU", False),
+    ("TestNumericCUDAConfig", False),
+    ("TestCudagraph", False),
+])
+def test_accelerator_counter_recognizes_generated_class_suffix(class_name, expected):
+    from _helpers import pytest_policy as policy
+
+    report = SimpleNamespace(nodeid="tests/core/test_numeric.py::%s::test_value" % class_name)
+    assert policy._is_accelerator_case(report) is expected
+
+
 @pytest.mark.parametrize("name,variable", [("cuda", "JITTOR_TEST_REQUIRE_CUDA"), ("acl", "JITTOR_TEST_REQUIRE_ACL")])
 @pytest.mark.parametrize("state", ["available", "disabled", "failed", "unprobed"])
 def test_declared_gate_observes_the_requested_backend(monkeypatch, name, variable, state):

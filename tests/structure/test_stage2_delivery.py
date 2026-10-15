@@ -51,7 +51,7 @@ class TestStage2Delivery(unittest.TestCase):
         )
 
     def test_workflows_consume_the_reusable_baseline(self):
-        for name in ("containers", "cpu", "cuda", "docs", "npu", "release", "structure"):
+        for name in ("containers", "cpu", "cuda", "docs", "npu", "release", "structure", "windows"):
             with self.subTest(workflow=name):
                 source = (self.workflows / (name + ".yml")).read_text(encoding="utf-8")
                 self.assertIn("uses: ./.github/workflows/_ci-baseline.yml", source)

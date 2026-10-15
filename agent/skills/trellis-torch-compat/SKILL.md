@@ -1,148 +1,110 @@
 ---
 name: trellis-torch-compat
-description: 在 Jittor torch shim 与独立 PyTorch 上运行和验证 TRELLIS.2 3D 生成 pipeline（含 CuMesh/FlexGEMM/nvdiffrast/o-voxel/FlashAttention 四个真实 CUDA 扩展）的 runbook，含断点分流、PLY mesh 数值对拍、重复交错速度协议与假绿清单。用于复验 TRELLIS 接入或推进其尚未通过的性能门禁。本 skill 为报告派生，未复验。
+description: 验证真实 pinned TRELLIS.2 导出模型的独立 CPU/CUDA 数值、全梯度及三步训练轨迹，生成自动注册表分母的 L3 scorecard。完整预训练 3D pipeline、稀疏 CUDA 扩展和性能仍须单独验收。
 ---
 
-# TRELLIS.2 的 shim ⇄ 原生 torch 对拍
+# TRELLIS.2 真实模型对拍
 
-## 用途
+## 当前实测范围
 
-回答 TRELLIS.2 4B 在 shim 上怎么跑、原生 PyTorch 上怎么跑、怎么对拍几何输出与速度，以及
-断点归 jittor 核心 / `jittor.compat.torch` / `jittor-trellis` adapter 哪一层。
+2026-10-15，干净上游源码 `75fbf0183001ed9876c8dbb35de6b68552ee08bd` 上的
+`SparseStructureFlowModel`、`SparseStructureEncoder` 和 `SparseStructureDecoder`
+已分别通过独立 CPU、CUDA 的 L3 对拍，候选 fallback 均为零。
+结果为 **models 3 / 9 @ upstream 75fbf0183001ed9876c8dbb35de6b68552ee08bd**，
+两个 device 分别计数。它们是真实上游类的 tiny 配置，dense attention 选择上游支持的
+`sdpa`；全部 FP32，TF32 和 cuDNN benchmark 关闭。
 
-**不覆盖，也不夸大**：验证环境没有 TRELLIS checkout、`jittor-trellis` adapter 或 harness，
-两个 venv 都未安装 trellis（已实测）。本 skill **是报告派生的，未复验**。
-TRELLIS 的性能门禁**仍然开放**：报告里 Jittor 比真实 PyTorch 慢 `1.0926x`，不能声称达标；
-也不宣称反向数值一致（它是 inference pipeline）或 NPU/ROCm 支持。
+可复查结论、完整基线、误差、环境差异和原始证据入口见
+[`2026-10-15-trellis-model-validation.md`](../../../docs/results/2026-10-15-trellis-model-validation.md)。
+维护者：下游兼容性维护者。Review when：上游声明/模型源码、compat attention/Conv3d/
+normalization/autograd/optimizer、device/precision 检查、所选 CUDA 二进制或门禁协议变化。
 
-## 两侧环境
+没有验证完整 4B 生成 pipeline、预训练权重、mesh 数值、CuMesh/FlexGEMM/nvdiffrast/
+o-voxel/FlashAttention 扩展、FP16/BF16、NPU/ROCm 或速度/整进程峰值显存。
+历史报告派生的 pipeline 比值 `1.0926x` 未在这里复现，性能门禁仍开放。
+L3 加零 fallback 不能升级成 L4，不能外推整库支持。
 
-| 角色 | 解释器 / 入口 | 说明 |
-| --- | --- | --- |
-| shim | 验收机：Jittor `566d8087`，Python 3.11.15，CUDA 12.2.140，JIT compiler serial | RTX 4090（sm_89） |
-| oracle | 真实 PyTorch `2.12.1`，同机 | TRELLIS 参考 `transformers 4.56.2` |
+## 先确认环境和真实断点
 
-实测：`trellis` / `jittor_trellis` 在两个 venv 中均 **NOT INSTALLED**；
-`$JITTOR_LAB_ROOT/` 下无 `trellis*`，`_state/` 下无 `trellis-current`；
-`grep` 全仓无 trellis harness/case（只有报告与文档提及）。
-版本身份（报告）：TRELLIS.2 checkout `75fbf0183001ed9876c8dbb35de6b68552ee08bd`，
-`jittor-trellis` adapter `f2c23acdf2402abcf04222a4866fc87451efe959`；
-vLLM `51a99565c398c8320de8131e07731c75c52eb87c`（若复跑同报告的其他库）。
+按 [`downstream-library-adaptation`](../downstream-library-adaptation/SKILL.md)
+分流：缺能力到 core、Torch 签名/语义到 compat、库私有细节才考虑 adapter。
+本次三个模型路径直接通过，**无需 adapter 或 framework 修补**。
 
-**oracle 断言（任何数字之前必须过）**：
+- 两个进程使用同一干净的官方 Microsoft TRELLIS.2 checkout，钉完整 SHA。
+  本源码没有发布版 version 字段；`source@<SHA>` 仅表示源码身份。
+- oracle 必须是真实 binary Torch；门禁断言 `_C` 是共享库且未导入 Jittor。
+  本轮实际 Torch `2.11.0+cu128`、Python 3.11.16、NumPy 1.26.4、einops 0.8.2、
+  easydict 1.13。上游 setup 推荐 Torch 2.6.0，本轮不证明该另一个版本组合。
+- 默认 dense Flow 前向在独立 Torch 上因缺少 `flash_attn` 失败；上游 `sdpa`
+  选项使这三个 dense 模型可测。**不要给 sparse attention 伪造一个 CPU 实现**。
+- 实际 `SLatFlowModel.forward` 和 `SparseConv3d` 构造分别停在缺少 `flash_attn`、
+  `flex_gemm`；另有模型/完整 pipeline 导入停在 `cumesh`、`trimesh`。
+  这些是当前环境的首个依赖断点，不是整个库 CPU 不可能运行的结论。
+- CPU 在 import 前显式 `JT_USE_CUDA=0 use_cuda=0 JT_BUILD_NVCC_PATH='' nvcc_path=''`。
+  CUDA 只给显式分配的一张可见卡，用独立缓存并串行首次编译。
+- 核对**实际二进制**，不只看 wheel metadata。本轮 cuDNN metadata 9.26.0.51，
+  所选实际库 API 返回 9.24.0；平台证据同时保存两者和库哈希，不能把 metadata 写成实测版。
+
+## 运行已维护的门禁
 
 ```bash
-"$ORACLE_PY" -c \
-  "import torch; assert not hasattr(torch, '_torch_compat_install_context'); print(torch.__version__)"
+export JITTOR_TRELLIS_CHECKOUT="$JITTOR_LAB_ROOT/trellis-validation/TRELLIS.2"
+export REAL_TORCH_PYTHON=<binary-torch-python>
+export JITTOR_REQUIRE_TRELLIS=1 JITTOR_REQUIRE_REAL_TORCH=1
+export JITTOR_TORCH_SHIM=1 PYTHONPATH=python
+export JITTOR_TEST_DEVICES=cpu
+export JT_USE_CUDA=0 use_cuda=0 JT_BUILD_NVCC_PATH='' nvcc_path=''
+export JITTOR_TRELLIS_EVIDENCE_DIR="$JITTOR_LAB_ROOT/_state/trellis-validation/fresh-cpu"
+<jittor-python> -m pytest -q -s --timeout=1800 compat/tests/torch/test_ecosystem_trellis.py
 ```
 
-缓存隔离：一个 device 一套 `JITTOR_HOME`，一个进程一个 cache；报告明确每个独立进程、
-extension/JIT cache 相互隔离，只租用一张可见 GPU。离线：`HF_HUB_OFFLINE=1
-TRANSFORMERS_OFFLINE=1`。双解释器 harness 契约见
-[`_ecosystem_harness.py`](../../../compat/tests/torch/_ecosystem_harness.py) docstring；`CASES` 里没有 trellis。
+CUDA 设置 `JITTOR_TEST_DEVICES=cuda JT_BACKEND=cuda JT_USE_CUDA=1 use_cuda=1`，
+提供完整受支持的 CUDA 编译器/组件栈、显式 `CUDA_VISIBLE_DEVICES=<allocated-gpu>`、
+独立 `JITTOR_HOME` 和全新 evidence 目录。候选的 device location/ordinal 与 error/zero
+fallback 检查覆盖所有观测张量。原始输出目录拒绝复用，避免旧结果被当作新执行。
+缺 checkout/oracle 时普通环境诚实 skip；require 标志使其成为配置错误。
 
-## 在 shim 上跑
+中央 nox 入口为 `ecosystem_trellis`，通过 `JITTOR_CI_PYTHON` 选择候选解释器，
+并读取同样的 checkout/oracle/device 环境变量：
 
-验证环境**没有可运行入口**。报告里的运行方式（验收机、未版本化）：
+```bash
+JITTOR_CI_PYTHON=<jittor-python> nox -s ecosystem_trellis
+```
 
-- 用当前 source checkout + adapter `src/` + 本地 checkpoint + offline 模型资产 + 隔离的
-  extension/JIT cache + 一张可见 GPU。
-- 四个真实 CUDA 扩展从隔离的外部状态加载：**CuMesh、FlexGEMM、nvdiffrast、o-voxel**，
-  以及官方 FlashAttention 及其 packed forward adapter。
-- 运行时选择：`flash_attn`、`flex_gemm`、sm_89、no managed allocator、no low-vram、
-  tensorcore level 2。
-- 基准与 launcher 的 SHA-256（报告）：`0dbbdf0f206ee80ff946f7d804f294521a93411ead16c58efcd03bcc2de3a77c`
-  与 `2ac0260f502961d26b36aaba764741b2af303df9f1913c16bf2839d572366d76`。
+实际运行器为
+[`_ecosystem_trellis_runner.py`](../../../compat/tests/torch/_ecosystem_trellis_runner.py)，
+门禁节点为 `test_real_trellis_models_training[<public-model-name>]`。
+原始权重从 oracle 转给候选，绕开 Flow 默认全零输出的假绿。
+每个模型检查全部参数与输入梯度、三步 loss/参数/SGD momentum 轨迹，并逐一扰动每个输入。
+比较器沿用共享 forward `2e-3`、backward `1e-2` 判据，不按当前误差放宽。
 
-重建按 [`downstream-library-adaptation`](../downstream-library-adaptation/SKILL.md)：
-先裸跑收集断点。`jittor-trellis` 是第三行的 adapter，adapter 想动框架状态时应回 compat 开
-公开接口，不要写私有属性。
+## 自动分母与 scorecard
 
-## 在原生 torch 上跑
+`registry_inventory.py --repo trellis` 重新读取全部 literal lazy export maps、sampler
+导出、模块和 package loader，按 namespace 分轴。保留 abstract `Sampler` 和 8 个
+声明但无定义的导出项；没有安装某个扩展也不能删分母。动态/空注册表显式失败。
+本轮其它轴为零已验证成员，不能凭调用 trace 把模型通过拆成组件通过。
 
-报告用同机真实 PyTorch `2.12.1` 跑同一 pipeline，独立进程，每进程 1 次 warmup + 3 次测量。
-结果 JSON 的 SHA-256 为
-`a9e9a5d8d8f575d3e0c36e21e9d98957ed5011a4994dc83ec7d6f02adecd6154`。
-验证环境不可复现（无 checkout、无 GPU、无安装）。
+[`collect_scorecard.py`](scripts/collect_scorecard.py) 从正式 gate 产物、实际平台 JSON 和
+重新生成的上游 inventory 构造 L3 records，再调用现有 `audit_coverage.scorecard` 校验。
+它检查源身份、全部 93 个 Python 源文件哈希（含 package 根 __init__.py）、基线、
+完整原始产物 manifest 和重复场景；所有证据仍留在仓外。
+已接受 scorecard 为六个 L3 records、零拒绝；749 旧记录缺根文件身份，被拒后保留原样，
+正式矩阵在 6d397 修正后重跑，不能补写旧 JSON 冒充已验证。
+平台 JSON 须包含真实硬件、库/驱动/编译器、完整 flags、precision 和 binary oracle 身份，
+不能复制另一台机器的表头。
 
-## 对拍
+```bash
+<jittor-python> agent/skills/trellis-torch-compat/scripts/collect_scorecard.py \
+  --checkout "$JITTOR_TRELLIS_CHECKOUT" \
+  --run "$JITTOR_LAB_ROOT/_state/trellis-validation/formal-source-complete-cpu" \
+  --run "$JITTOR_LAB_ROOT/_state/trellis-validation/formal-source-complete-cuda" \
+  --platform "cpu=$JITTOR_LAB_ROOT/_state/trellis-validation/cpu-platform.json" \
+  --platform "cuda=$JITTOR_LAB_ROOT/_state/trellis-validation/cuda-platform.json" \
+  --baseline 6d39728fffc37d4618c1cb91a9caa1d67beec311 \
+  --report docs/results/2026-10-15-trellis-model-validation.md \
+  --command '<exact validation command and environment>' \
+  --output "$JITTOR_LAB_ROOT/_state/trellis-validation/scorecard-source-complete-final.json"
+```
 
-- 数值（几何）：两侧都输出有效 PLY，用 20,000 sampled vertices per direction 比较——
-  vertex 数差 `+3,368`（`0.226515%`）、face 数差 `+14,700`（`0.456760%`）、
-  bounding-box extent L2 `9.9765e-5`（bbox 对角线 `7.0852e-5`）、centroid L2 `6.3595e-4`
-  （`4.5164e-4`）、Jittor→Torch 最近点 mean `0.0058707`（`0.0041693`）、p95 `0.0104870`。
-  参考帧张量/共享 tape 为 3,540 coordinates。
-- 速度：报告用「3 个独立进程 ×（1 warmup + 3 measured），取 median-of-medians」。
-
-  | 运行时 | 进程中位数 | median-of-medians |
-  | --- | --- | ---: |
-  | Jittor | `7.6291 / 7.5149 / 7.4246 s` | **`7.5149 s`** |
-  | PyTorch | `6.7972 / 6.8778 / 6.8979 s` | **`6.8778 s`** |
-
-  比值 `1.0926x`：Jittor 从本轮起点 `8.2843 s` 改善 `9.3%`，但仍未达到"不慢于参考"，
-  所以性能**未接受**。project-context 记 TRELLIS.2 从约 `1.20x` 改善到 `1.093x`。
-  Cold build 与每进程首次 warmup 排除。墙钟上界只在 nightly 断言，PR 不 assert。
-- Device 规则：两侧同 device；Jittor 无 per-tensor device，CUDA 默认开，"CPU" 要显式请求；
-  使用同一张可见 GPU 串行跑两侧。
-
-## 断点与分流
-
-| 断点 | 层 |
-| --- | --- |
-| BF16 multi-head RMSNorm：head dim ≤256 每行一个 warp | **jittor core**（保留 BF16 rounding point） |
-| 单 packed self-attention kernel：合并 Q/K RMSNorm、pairwise-complex RoPE、V passthrough | **jittor core** |
-| fused non-affine LayerNorm + scale/shift（精确 sparse modulated block） | **jittor core** |
-| lazy-CUDA device fallback、稳定 `Var.id` cache 身份 | **`jittor-trellis` adapter**（第三行，外置/未版本化） |
-| FlashAttention packed forward 路由 | **adapter + 环境变量契约**（`JITTOR_FLASH_ATTN_*`） |
-
-被否决并已撤回、不要重做的 A/B：mixed-length Q/KV RMS、residual-plus-LayerNorm、默认
-cross-KV cache、C2S topology cache；历史 cublasLt/GELU/RoPE 实验在负结果后未重跑。
-
-## 坑与假绿
-
-1. **性能门禁开着**：`1.0926x` 不是通过；报告定位剩余 gap 集中在 BF16 linear epilogue /
-   fused elementwise（`4.2 it/s` 形状与 `7.4 it/s` texture 阶段），**不在** FlashAttention
-   或 GEMM kernel 本身。不要用"pipeline 跑通"替换性能结论。
-2. **只看"写出 PLY"会假绿**：两侧都写有效 mesh 也可能有结构性差异，必须做上面的几何容差
-   比较（vertex/face 数、bbox、centroid、最近点）。
-3. **单次计时不可用**：用重复独立进程取 median-of-medians；进程内首次样本含 JIT，排除。
-4. **扩展不是同一个来源**：CuMesh/FlexGEMM/nvdiffrast/o-voxel/FlashAttention 都是真实 CUDA
-   扩展，必须从隔离状态加载并记录运行时选择的 backend（`flash_attn`、`flex_gemm`、sm_89…），
-   否则是在比较不同后端。
-5. **adapter 未版本化**：报告里的 `jittor-trellis` 与脚本是验收机产物，SHA 只用于身份，
-   不要照抄路径当可运行命令。
-6. **本 skill 的所有数字都不可复现**——当复验指引读，不要当"已验证"。
-
-## 证据
-
-- 报告：`2026-08-23-verl-vllm-trellis-current-baseline.md`（已退役报告，Git 历史 `e3c369acb` 可查）。
-- 状态索引：[`project-context.md`](../../manuals/project-context.md)（TRELLIS.2 约 `1.20x` → `1.093x`，
-  性能门禁仍开放）。
-- **已核实**：`CASES` 无 trellis；`$JITTOR_LAB_ROOT/` 与 `_state/` 下无 trellis checkout；
-  两个 venv 均未安装 trellis。
-- **仅报告 / 未复验**：全部数值、速度、命令、扩展加载与 mesh 比较。
-
-## 实测（2026-09-19）
-
-仓库 HEAD `90fe0b9`。**验证环境缺席**：`find_spec('trellis')`/`find_spec('jittor_trellis')`
-在 shim 与 oracle 两个解释器里都为 False；`$JITTOR_LAB_ROOT/` 与 `_state/` 下无
-`trellis*` checkout；`CASES` 无 trellis；`verify_repo.py --repo trellis --list-only` 无输出。
-因此**未跑任何命令**，也未加载四个 CUDA 扩展。
-
-**能核对与不能核对的**：读到并核对了
-`2026-08-23-verl-vllm-trellis-current-baseline.md`（277 行，现已退役），
-skill 引用的数字都在：三进程中位数 Jittor `7.6291 / 7.5149 / 7.4246s`、
-median-of-medians `7.5149s`，PyTorch `6.7972 / 6.8778 / 6.8979s` → `6.8778s`，
-比值 `1.0926x`、从同轮起点 `8.2843s` 改善 `9.3%`；几何对照 `+3,368`（`0.226515%`）vertex、
-`+14,700`（`0.456760%`）face、bbox extent L2 `9.9765e-5`、centroid L2 `6.3595e-4`、
-最近点 mean `0.0058707`、p95 `0.0104870`；共享 tape `3,540` coordinates；
-checkout `75fbf018...`、adapter `f2c23acd...`。
-`agent/manuals/project-context.md:114` 确有「TRELLIS.2 从约 `1.20x` 改善到 `1.093x`」。
-**不能核对**：任何可运行命令、运行时后端选择（`flash_attn`/`flex_gemm`/sm_89）、PLY 比较、
-计时与两个 SHA-256 的产物。
-
-**四轴**：全部未测——支持的 case、精度、显存、速度在验证环境都没有可运行载体；性能门禁
-`1.0926x` 仍开放，验证环境不能声称达标或复现。
-
-**证据状态**：**报告派生**（report-derived）。报告存在且内容与 skill 一致这一点已核对；
-数值/速度本身未复现。
+更换基线后重新跑 gate，再传新 SHA；历史记录始终显式标成历史基线，不改原始 metadata。

@@ -14,6 +14,7 @@ dependencies = ["jittor-torch==2.0.0"]
 jittor_transformers = "jittor_adapters.transformers:register"
 jittor_torchmetrics = "jittor_adapters.torchmetrics:register"
 jittor_vllm = "jittor_adapters.vllm:register"
+jittor_deepspeed = "jittor_adapters.deepspeed:register"
 
 [tool.setuptools.packages.find]
 where = ["."]

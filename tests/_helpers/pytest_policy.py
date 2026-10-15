@@ -820,7 +820,14 @@ def _skip_reason(report):
 
 def _is_accelerator_case(report):
     """Recognize a test whose nodeid names an accelerator path or backend."""
-    nodeid = str(getattr(report, "nodeid", "")).lower()
+    original = str(getattr(report, "nodeid", ""))
+    # instantiate_device_type_tests emits classes such as TestNumericCUDA,
+    # whose suffix has neither of the legacy "_cuda" / "cuda_" separators.
+    # Restrict this convention to class components, not arbitrary method text.
+    if any(part.endswith(("CUDA", "ROCM", "NPU"))
+           for part in original.split("::")[1:-1]):
+        return True
+    nodeid = original.lower()
     # Backend-parametrized tests can live outside tests/backends/cuda and
     # carry IDs such as [cuda-float64] or [float64-cuda], not "_cuda".
     # Match whole parameter labels, not unrelated words containing "cuda".
@@ -864,13 +871,16 @@ def _accepted_skip_patterns():
         from _helpers.gate_scope import ENVIRONMENT_SKIP_PATTERNS, REAL_TORCH_PATTERNS
     except Exception:
         return ()
-    if not _real_torch_is_required():
-        return ENVIRONMENT_SKIP_PATTERNS
+    required = set(REAL_TORCH_PATTERNS if _real_torch_is_required() else ())
+    if os.environ.get("JITTOR_REQUIRE_DEEPSPEED", "").strip().lower() in ("1", "true", "yes", "on"):
+        required.add("deepspeed")
+    if os.environ.get("JITTOR_REQUIRE_TRELLIS", "").strip().lower() in ("1", "true", "yes", "on"):
+        required.add("trellis")
     # The inversion: a session that declares it has real PyTorch cannot also
     # accept "no torch" as an explanation, or it reports success for the one
     # thing it exists to check.
     return tuple(
-        pattern for pattern in ENVIRONMENT_SKIP_PATTERNS if pattern not in REAL_TORCH_PATTERNS
+        pattern for pattern in ENVIRONMENT_SKIP_PATTERNS if pattern not in required
     )
 
 

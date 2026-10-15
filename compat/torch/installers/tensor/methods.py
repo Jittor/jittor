@@ -33,6 +33,7 @@ from .method_api import (
     _api_data_ptr,
     _api_is_contiguous,
     _api_is_leaf,
+    _api_is_sparse,
     _api_retains_grad,
     _api_is_cpu,
     _api_is_mps,
@@ -93,6 +94,7 @@ from .method_api import (
     _numpy_data_value,
     _optimizer_maybe_has_fsdp_params,
     _register_leaf,
+    _register_post_accumulate_grad_hook,
     _resolve_size,
     _restore_trainable_state,
     _retain_grad,
@@ -112,6 +114,7 @@ from .method_api import (
     _var_cpu,
     _var_cuda,
     _var_detach,
+    _var_detach_inplace,
     _var_get_device,
     _var_norm,
     _var_numpy,
@@ -240,6 +243,13 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     Var.sub_ = _api_sub
     Var.mul_ = _api_mul
     Var.div_ = _api_div
+    # Native augmented assignment preserves a formerly frozen destination's
+    # stop-grad policy. Torch instead connects it to a differentiable RHS,
+    # just as add_/sub_/mul_/div_ already do through the shared _ip owner.
+    Var.__iadd__ = _api_add
+    Var.__isub__ = _api_sub
+    Var.__imul__ = _api_mul
+    Var.__itruediv__ = _api_div
     # in-place unary math ops (recurrent_gemma uses x.log_(); common torch idioms)
     for name, implementation in _UNARY_INPLACE_APIS.items():
         if not hasattr(Var, name):
@@ -412,6 +422,9 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # Keep the compatibility spelling on Var so it follows the graph instead
     # of silently calling every intermediate a leaf.
     Var.is_leaf = property(_api_is_leaf)
+    Var.is_sparse = property(_api_is_sparse)
+    register_api_bindings(Var, 'torch.Tensor', ('is_sparse',), Fidelity.EXACT,
+                          'Native Var has dense storage; sparse construction is unsupported.')
     # torch's nested-tensor flag; jittor has no nested tensors -> always False.
     if not hasattr(Var, "is_nested"):
         Var.is_nested = property(_api_is_nested)
@@ -426,6 +439,15 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # after backward (normally only leaves keep .grad). Registration follows
     # the holder's lifetime, including repeated or interleaved backward graphs.
     Var.retain_grad = _retain_grad
+    Var.register_post_accumulate_grad_hook = _register_post_accumulate_grad_hook
+    register_api_bindings(Var, 'torch.Tensor', ('register_hook',), Fidelity.APPROXIMATE,
+                          'Native complete-gradient hooks preserve leaf identity and propagate '
+                          'replacement gradients. Worker graph IDs and private Node APIs are unavailable.')
+    register_api_bindings(Var, 'torch.Tensor', ('register_post_accumulate_grad_hook',),
+                          Fidelity.APPROXIMATE,
+                          'Observers run after existing leaf/optimizer accumulation and before '
+                          'final callbacks. Native graph scheduling does not reproduce PyTorch '
+                          'interleaving between different leaves.')
     Var.retains_grad = property(_api_retains_grad)
 
     Var.to = _to
@@ -435,6 +457,11 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # then expose the scalar shape only at the Python/NumPy boundary.
     _native_detach = Var.detach
     Var.detach = _var_detach
+    Var.detach_ = _var_detach_inplace
+    register_api_bindings(Var, 'torch.Tensor', ('detach_',), Fidelity.APPROXIMATE,
+                          'Native leaf policy or storage-sharing detached rebinding preserves '
+                          'reverse-mode history for earlier consumers. Views are rejected; '
+                          'forward-mode AD is unsupported.')
 
     _native_numpy = Var.numpy
     Var.numpy = _var_numpy
@@ -640,5 +667,5 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             setattr(Var, name, implementation)
 
     register_api_bindings(Var, 'torch.Tensor',
-        ('T', '__deepcopy__', '__getitem__', '__hash__', '__invert__', '__ne__', '__reduce__', '__reduce_ex__', '__setitem__', 'add_', 'addmm', 'argwhere', 'as_strided', 'backward', 'baddbmm', 'clamp', 'clamp_', 'clip', 'clip_', 'contiguous', 'copy_', 'cpu', 'cuda', 'cumprod', 'cumsum', 'data', 'data_ptr', 'detach', 'device', 'div_', 'dtype', 'element_size', 'fill_', 'get_device', 'grad', 'grad_fn', 'is_complex', 'is_contiguous', 'is_cpu', 'is_cuda', 'is_floating_point', 'is_leaf', 'is_meta', 'is_mps', 'is_nested', 'is_pinned', 'is_signed', 'is_xpu', 'mT', 'mul_', 'narrow', 'ne', 'nelement', 'new_empty', 'new_full', 'new_ones', 'new_tensor', 'new_zeros', 'nonzero', 'norm', 'normal_', 'numpy', 'pin_memory', 'requires_grad', 'requires_grad_', 'retain_grad', 'retains_grad', 'set_', 'squeeze', 'storage', 'storage_offset', 'stride', 'sub_', 'tile', 'to', 'tolist', 'type', 'uniform_', 'untyped_storage', 'where', 'zero_') + tuple(_BINARY_APIS.keys() | _CAST_APIS.keys() | _UNARY_INPLACE_APIS.keys()),
+        ('T', '__iadd__', '__isub__', '__imul__', '__itruediv__', '__deepcopy__', '__getitem__', '__hash__', '__invert__', '__ne__', '__reduce__', '__reduce_ex__', '__setitem__', 'add_', 'addmm', 'argwhere', 'as_strided', 'backward', 'baddbmm', 'clamp', 'clamp_', 'clip', 'clip_', 'contiguous', 'copy_', 'cpu', 'cuda', 'cumprod', 'cumsum', 'data', 'data_ptr', 'detach', 'device', 'div_', 'dtype', 'element_size', 'fill_', 'get_device', 'grad', 'grad_fn', 'is_complex', 'is_contiguous', 'is_cpu', 'is_cuda', 'is_floating_point', 'is_leaf', 'is_meta', 'is_mps', 'is_nested', 'is_pinned', 'is_signed', 'is_xpu', 'mT', 'mul_', 'narrow', 'ne', 'nelement', 'new_empty', 'new_full', 'new_ones', 'new_tensor', 'new_zeros', 'nonzero', 'norm', 'normal_', 'numpy', 'pin_memory', 'requires_grad', 'requires_grad_', 'retain_grad', 'retains_grad', 'set_', 'squeeze', 'storage', 'storage_offset', 'stride', 'sub_', 'tile', 'to', 'tolist', 'type', 'uniform_', 'untyped_storage', 'where', 'zero_') + tuple(_BINARY_APIS.keys() | _CAST_APIS.keys() | _UNARY_INPLACE_APIS.keys()),
         Fidelity.APPROXIMATE, 'Tensor operations share the native Var/Op graph and explicit frontend state; unsupported layouts, device capabilities, and retained compatibility approximations remain restricted')

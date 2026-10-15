@@ -15,6 +15,24 @@ description: 在 Jittor torch shim 与原生 PyTorch 上运行/验证 vLLM-Omni 
 画面噪声与「非注意力 device 侧 gap」仍是开放项，不要据此接受性能；不覆盖 vLLM-Omni 的
 训练（它是 inference runtime）。
 
+
+## 源码注册分母（2026-10-15）
+
+固定源码 `446c2b5474dabffccf9a0034836eeab77c62b4b8` 的有界分母为 92 个 Omni 自有模型、68 个扩散模型和 64 个流水线 model-type 键，分别来自 `_OMNI_MODELS`、`_DIFFUSION_MODELS`、`OMNI_PIPELINES`。继承的 `vllm::_VLLM_MODELS` 必须另绑其自身上游 SHA，不混入 Omni 自有模型分母。三个轴不可相加；裸 Diffusers VAE 的执行不建立 Omni pipeline 或 engine 覆盖。
+
+下列 host-only 工具不导入 Torch/Jittor，不编译、不下载；输出上游 commit、remote、逐源文件 SHA256、注册行和动态注册入口。运行时插件是开放集合，工具只给源码 built-in 声明的有界分母，不声称当前安装环境已激活全部注册，也不授予任何设备或深度等级。上游新增未知动态构造、重复声明或模块级修改时显式报错，不将其略掉后声称完整。
+
+```bash
+<host-python> agent/skills/torch-compat-repo-runbook/scripts/_vllm_registry.py \
+  --repo vllm-omni --checkout "$JITTOR_LAB_ROOT/vllm-omni" \
+  --output "$JITTOR_LAB_ROOT/_state/vllm-omni/registry.json"
+```
+
+官方 vLLM `0.29.0` release 另对应 `98dff2a81d747d1dba01a47f939f48c3526d4206`，
+同一工具得到 376 个模型和 40 个 CustomOp；不能沿用旧 SHA 的 353/39 分母。
+
+本页历史环境表中的 package version 不能替代 checkout SHA：上述 vLLM SHA 的 `git describe` 为 `v0.23.1rc0-522-g51a99565c`，Omni SHA 为 `v0.29.0rc1-58-g446c2b54`。复跑须逐侧记录实际源码与已安装分发包，不能因旧表写 `0.29.0` 就将这两个源码版本视作一致。历史路径中的脚本需先核对存在性。
+
 ## 两侧环境
 
 | 角色 | 解释器 / 入口 | 说明 |

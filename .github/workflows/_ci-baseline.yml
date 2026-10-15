@@ -6,6 +6,9 @@ on:
       host_runner:
         description: GitHub-hosted Linux runner baseline
         value: ${{ jobs.read.outputs.host_runner }}
+      windows_runner:
+        description: Windows runner from the canonical release platform matrix
+        value: ${{ jobs.read.outputs.windows_runner }}
       python_version:
         description: Python version used by Stage 2 tooling
         value: ${{ jobs.read.outputs.python_version }}
@@ -39,6 +42,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       host_runner: ${{ steps.baseline.outputs.host_runner }}
+      windows_runner: ${{ steps.baseline.outputs.windows_runner }}
       python_version: ${{ steps.baseline.outputs.python_version }}
       py37_runner: ${{ steps.baseline.outputs.py37_runner }}
       cpu_ci_image: ${{ steps.baseline.outputs.cpu_ci_image }}
@@ -68,4 +72,5 @@ jobs:
             echo "npu_runner_labels=${CI_NPU_RUNNER_LABELS}"
             echo "container_matrix=${CI_CONTAINER_MATRIX}"
             echo "release_platform_matrix=${CI_RELEASE_PLATFORM_MATRIX}"
+            python -c 'import json, sys; rows = [r["os"] for r in json.loads(sys.argv[1])["include"] if r["os"].startswith("windows-")]; assert len(rows) == 1; print("windows_runner=" + rows[0])' "${CI_RELEASE_PLATFORM_MATRIX}"
           } >> "${GITHUB_OUTPUT}"

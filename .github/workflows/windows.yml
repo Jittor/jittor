@@ -1,0 +1,102 @@
+name: Windows MSVC
+
+on:
+  push:
+    branches: [master, 2.0-refactor]
+    paths:
+      - '.github/workflows/windows.yml'
+      - '.github/workflows/_ci-baseline.yml'
+      - '.github/ci-baseline.env'
+      - 'python/**'
+      - 'src/**'
+      - 'backends/**'
+      - 'tools/release/check_windows_msvc.py'
+      - 'pyproject.toml'
+      - 'setup.py'
+      - 'MANIFEST.in'
+      - 'requirements/release.txt'
+  pull_request:
+    paths:
+      - '.github/workflows/windows.yml'
+      - '.github/workflows/_ci-baseline.yml'
+      - '.github/ci-baseline.env'
+      - 'python/**'
+      - 'src/**'
+      - 'backends/**'
+      - 'tools/release/check_windows_msvc.py'
+      - 'pyproject.toml'
+      - 'setup.py'
+      - 'MANIFEST.in'
+      - 'requirements/release.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-msvc-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  baseline:
+    uses: ./.github/workflows/_ci-baseline.yml
+
+  installed-wheel:
+    needs: baseline
+    runs-on: ${{ needs.baseline.outputs.windows_runner }}
+    timeout-minutes: 45
+    env:
+      JITTOR_HOME: ${{ runner.temp }}/windows-msvc/home
+      JITTOR_TORCH_SHIM: '0'
+      JT_BACKEND: cpu
+      JT_USE_CUDA: '0'
+      JT_BUILD_NVCC_PATH: ''
+      nvcc_path: ''
+      JT_BUILD_USE_MKL: '0'
+      JT_BUILD_USE_MPI: '0'
+      JT_BUILD_USE_NCCL: '0'
+      JT_BUILD_USE_CUTT: '0'
+      DISABLE_MULTIPROCESSING: '1'
+      JT_USE_PARALLEL_OP_COMPILER: '0'
+      PYTHONPATH: ''
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ needs.baseline.outputs.python_version }}
+      - name: Install pinned build tools
+        run: python -m pip install -r requirements/release.txt
+      - name: Build the actual wheel
+        run: python -m build --no-isolation --wheel --outdir "${{ runner.temp }}/windows-msvc/wheel"
+      - name: Install the wheel and CPU dependencies
+        shell: pwsh
+        run: |
+          $wheels = @(Get-ChildItem "$env:RUNNER_TEMP/windows-msvc/wheel/jittor-*-py3-none-any.whl")
+          if ($wheels.Count -ne 1) { throw 'Expected exactly one canonical Jittor wheel' }
+          "JITTOR_WINDOWS_WHEEL=$($wheels[0].FullName)" >> $env:GITHUB_ENV
+          python -m pip install --force-reinstall $wheels[0].FullName 'numpy==1.26.4'
+      - name: Compile and train outside the checkout with real MSVC
+        shell: cmd
+        working-directory: ${{ runner.temp }}
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do call "%%i\Common7\Tools\VsDevCmd.bat" -no_logo -arch=x64 -host_arch=x64
+          if errorlevel 1 exit /b 1
+          where cl.exe
+          if errorlevel 1 exit /b 1
+          set "JT_BUILD_CC_PATH=cl.exe"
+          python "%GITHUB_WORKSPACE%\tools\release\check_windows_msvc.py" --wheel "%JITTOR_WINDOWS_WHEEL%" --checkout "%GITHUB_WORKSPACE%" --commit "%GITHUB_SHA%" --output "%RUNNER_TEMP%\windows-msvc\result.json" > "%RUNNER_TEMP%\windows-msvc\selftest.log" 2>&1
+          set "JITTOR_CHECK_EXIT=%ERRORLEVEL%"
+          type "%RUNNER_TEMP%\windows-msvc\selftest.log"
+          exit /b %JITTOR_CHECK_EXIT%
+      - name: Preserve compiler and numerical evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-msvc-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/windows-msvc/*.json
+            ${{ runner.temp }}/windows-msvc/*.log
+          if-no-files-found: warn
+          retention-days: 14

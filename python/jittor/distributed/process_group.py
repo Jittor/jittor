@@ -264,14 +264,29 @@ class ProcessGroup:
         backend = self._collective_backend()
         handle = self._collective_handle()
         if backend == "nccl":
-            if operation not in ("sum", "mean"):
-                raise NotImplementedError(
-                    "NCCL process-group all_reduce supports sum and mean only")
             ops = getattr(jt.compile_extern, "nccl_ops", None)
             if ops is None:
                 raise _jittor_error()("NCCL process-group backend is unavailable")
-            result = ops.nccl_all_reduce(tensor, handle or 0)
-            return result / self.size() if operation == "mean" else result
+            if operation in ("sum", "mean"):
+                result = ops.nccl_all_reduce(tensor, handle or 0)
+                return result / self.size() if operation == "mean" else result
+            if tensor.requires_grad:
+                raise NotImplementedError(
+                    "NCCL non-sum process-group reductions do not support autograd")
+            # The existing provider has only a SUM all-reduce kernel. Reuse
+            # its real group all-gather plus native elementwise reductions;
+            # this is a composite, not a fused NCCL MAX/MIN/PRODUCT operation.
+            gathered = ops.nccl_all_gather(tensor.reshape((-1,)), handle or 0)
+            gathered = gathered.reshape((self.size(),) + tuple(tensor.shape))
+            result = gathered[0]
+            for rank in range(1, self.size()):
+                if operation == "max":
+                    result = jt.maximum(result, gathered[rank])
+                elif operation == "min":
+                    result = jt.minimum(result, gathered[rank])
+                else:
+                    result = result * gathered[rank]
+            return result
         if backend == "hccl":
             ops = getattr(jt.compile_extern, "hccl_ops", None)
             if ops is None:
@@ -597,6 +612,23 @@ def all_reduce(tensor, op="mean", group=None, async_op=False):
     group = get_default_group() if group is None else group
     value = group.all_reduce(tensor, op)
     return Work(value) if async_op else value
+
+
+def _optimizer_legacy_collectives():
+    """Preserve MPI methods; route MPI-free optimizer sync to native owners.
+
+    Bootstrap selection belongs to this communication domain, rather than
+    optimizer arithmetic. Resolve the facade at call time so DDP and legacy
+    callers observe the same public collective instrumentation.
+    """
+    native = bool(jt.compile_extern._jt_nccl_no_mpi
+                  or jt.compile_extern._jt_hccl_no_mpi)
+    if native:
+        from jittor import distributed
+        return (lambda value: distributed.all_reduce(value, op="mean"),
+                lambda value: distributed.broadcast(value, src=0))
+    return (lambda value: value.mpi_all_reduce("mean"),
+            lambda value: value.mpi_broadcast())
 
 
 def broadcast(tensor, src=0, group=None, async_op=False):

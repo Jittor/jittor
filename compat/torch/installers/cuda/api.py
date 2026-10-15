@@ -1168,11 +1168,19 @@ def _api_cuda_synchronize(device=None, *a, **k):
 
 
 def _api_cuda_manual_seed(s):
-    return jt.set_global_seed(int(s))
+    from ..core import _normalize_seed
+    seed = _normalize_seed(s)
+    jt.sync_all(True)
+    _curand().curand_restore_state(_rng_device_index(None), seed, 0)
 
 
 def _api_cuda_manual_seed_all(s):
-    return jt.set_global_seed(int(s))
+    from ..core import _normalize_seed
+    seed = _normalize_seed(s)
+    jt.sync_all(True)
+    backend = _curand()
+    for index in range(int(jt.get_device_count())):
+        backend.curand_restore_state(index, seed, 0)
 
 
 def _api_cuda_is_bf16_supported():
@@ -1233,32 +1241,45 @@ def _api_cuda_memory__set_allocator_settings(*a, **k):
 #: The bytes are jittor's own format, not torch's CUDA state bytes: save them,
 #: hand them back, do not parse them, and do not feed torch's to this.
 _RNG_STATE_MAGIC = b"JTCURAND"
-_RNG_STATE_VERSION = 1
+_RNG_STATE_VERSION = 2
 
 
 def _rng_state_pack(seed, offset):
     import struct
     import numpy as _np
-    blob = _RNG_STATE_MAGIC + struct.pack("<Iqq", _RNG_STATE_VERSION,
+    blob = _RNG_STATE_MAGIC + struct.pack("<IQq", _RNG_STATE_VERSION,
                                           int(seed), int(offset))
-    return jt.array(_np.frombuffer(blob, dtype=_np.uint8).copy())
+    owner = get_install_context(jt).target_namespace
+    return owner.tensor(_np.frombuffer(blob, dtype=_np.uint8).copy(),
+                        dtype=owner.uint8, device="cpu")
 
 
 def _rng_state_unpack(state):
     import struct
-    import numpy as _np
-    raw = state
-    if hasattr(raw, "numpy"):
-        raw = raw.numpy()
-    raw = _np.asarray(raw, dtype=_np.uint8).reshape(-1).tobytes()
+    from jittor._core.dtypes import dtype_name
+    if not isinstance(state, jt.Var) or dtype_name(state.dtype) != "uint8":
+        raise TypeError("CUDA RNG state must be a CPU ByteTensor")
+    if len(state.shape) != 1 or state.device.type != "cpu":
+        raise TypeError("CUDA RNG state must be a one-dimensional CPU ByteTensor")
+    raw = state.numpy().tobytes()
+    if len(raw) != len(_RNG_STATE_MAGIC) + struct.calcsize("<IQq"):
+        raise ValueError("invalid jittor CUDA RNG state byte length")
     if not raw.startswith(_RNG_STATE_MAGIC):
         raise ValueError(
             "not a jittor CUDA RNG state. torch's own state bytes are a "
             "different format and a different algorithm; they cannot be "
             "restored into jittor's cuRAND generator.")
-    version, seed, offset = struct.unpack("<Iqq", raw[len(_RNG_STATE_MAGIC):])
-    if version != _RNG_STATE_VERSION:
+    payload = raw[len(_RNG_STATE_MAGIC):]
+    version = struct.unpack_from("<I", payload)[0]
+    if version == 1:
+        _, seed, offset = struct.unpack("<Iqq", payload)
+        seed &= (1 << 64) - 1
+    elif version == _RNG_STATE_VERSION:
+        _, seed, offset = struct.unpack("<IQq", payload)
+    else:
         raise ValueError("unsupported jittor CUDA RNG state version %d" % version)
+    if offset < 0:
+        raise ValueError("CUDA RNG offset must be nonnegative")
     return int(seed), int(offset)
 
 
@@ -1331,15 +1352,14 @@ def _api_cuda_get_rng_state(device=None, *a, **k):
     jt.sync_all(True)
     backend = _curand()
     index = _rng_device_index(device)
-    return _rng_state_pack(backend.curand_generator_seed(),
+    return _rng_state_pack(backend.curand_generator_seed(index),
                            backend.curand_generator_offset(index))
 
 
 def _api_cuda_get_rng_state_all(*a, **k):
     jt.sync_all(True)
     backend = _curand()
-    seed = backend.curand_generator_seed()
-    return [_rng_state_pack(seed, backend.curand_generator_offset(i))
+    return [_rng_state_pack(backend.curand_generator_seed(i), backend.curand_generator_offset(i))
             for i in range(int(jt.get_device_count()))]
 
 
@@ -1360,24 +1380,17 @@ def _api_cuda_set_rng_state_all(states, *a, **k):
 
 
 def _api_cuda_initial_seed(*a, **k):
-    # The seed jittor is actually running on, not 0. `set_seed` records it and
-    # the cuRAND wrapper replays it onto every device generator, so this is the
-    # one part of the state that *is* expressible.
-    return int(jt.get_seed())
+    return int(_curand().curand_generator_seed(_rng_device_index(None)))
 
 
 def _api_cuda_seed(*a, **k):
-    # torch reseeds from a fresh nondeterministic value and returns None; doing
-    # nothing instead left the caller on the old sequence while looking
-    # reseeded.
-    import random as _random
-    jt.set_seed(_random.SystemRandom().randrange(1 << 31))
+    import secrets
+    _api_cuda_manual_seed(secrets.randbits(64))
 
 
 def _api_cuda_seed_all(*a, **k):
-    # One generator per device, all replayed from the same seed by the cuRAND
-    # wrapper's set_seed callback, so seeding "all" is seeding.
-    _api_cuda_seed()
+    import secrets
+    _api_cuda_manual_seed_all(secrets.randbits(64))
 
 
 def _api_mp_reductions_reduce_tensor(tensor):

@@ -36,6 +36,7 @@ def _init(self, *a, **k):
 
 
 def _torch_param_steps(pg):
+    _sync_adam_group_params(pg)
     params = list(pg.get("params", []))
     steps = pg.get("_torch_steps")
     if not isinstance(steps, list):
@@ -45,6 +46,40 @@ def _torch_param_steps(pg):
     if len(steps) > len(params):
         del steps[len(params):]
     return steps
+
+
+def _sync_adam_group_params(pg, *, replacements=()):
+    """Realign state by identity, including explicit same-parameter view changes.
+
+    FSDP supplies old/new views of the same logical parameter. Ordinary user
+    additions and reordering still pass through the identity-based mapping;
+    only those explicit substitutions inherit the preceding view's state.
+    """
+    previous = pg.get("_torch_adam_params")
+    if previous is None:
+        return
+    current = tuple(pg.get("params", ()))
+    if len(current) == len(previous) and all(a is b for a, b in zip(current, previous)):
+        return
+    from jittor.optim.algorithms.adam import _state_buffer
+    rebound = {id(old): (old, new) for old, new in replacements}
+    identities = []
+    for parameter in previous:
+        replacement = rebound.get(id(parameter))
+        identities.append(replacement[1] if replacement is not None
+                          and replacement[0] is parameter else parameter)
+    positions = {id(parameter): index for index, parameter in enumerate(identities)}
+    for key in ("m", "values", "_torch_steps"):
+        old_values = pg.get(key, ())
+        result = []
+        for parameter in current:
+            old_index = positions.get(id(parameter))
+            if old_index is not None and identities[old_index] is parameter and old_index < len(old_values):
+                result.append(old_values[old_index])
+            else:
+                result.append(0 if key == "_torch_steps" else _state_buffer(parameter))
+        pg[key] = result
+    pg["_torch_adam_params"] = current
 
 
 def _torch_optimizer_kind(opt):
@@ -234,7 +269,7 @@ def _state_dict_torch(self):
             params.append(pid)
         for k, v in pg.items():
             if k in ("params", "grads", "m", "values", "v", "d",
-                     "pre_grad", "_torch_steps", _MOMENTUM_INITIALIZED):
+                     "pre_grad", "_torch_steps", "_torch_adam_params", _MOMENTUM_INITIALIZED):
                 continue
             group[k] = v
         group.setdefault("lr", pg.get("lr", getattr(self, "lr", 0.0)))
@@ -661,12 +696,23 @@ def adan_step(self, loss=None, retain_graph=False, closure=None, **kwargs):
 _STEP_APIS = {"sgd": sgd_step, "rmsprop": rmsprop_step, "adan": adan_step}
 
 def adam_init(self, params, lr=1e-3, *args, **kwargs):
-    return _initialize_default(self, params, lr, args, kwargs, 'Adam')
+    return _initialize_adam(self, params, lr, args, kwargs, 'Adam')
+
+
+def _initialize_adam(self, params, lr, args, kwargs, name):
+    # The update selector already consumes this execution option; the native
+    # initializer does not take Torch's spelling. Preserve group overrides.
+    foreach = kwargs.pop('foreach', None)
+    result = _initialize_default(self, params, lr, args, kwargs, name)
+    for group in self.param_groups:
+        group.setdefault('foreach', foreach)
+        group['_torch_adam_params'] = tuple(group['params'])
+    return result
 
 
 def adamw_init(self, params, lr=1e-3, *args, **kwargs):
     if len(args) < 3: kwargs.setdefault('weight_decay', 0.01)  # torch's; native (eps, betas, wd): 0
-    return _initialize_default(self, params, lr, args, kwargs, 'AdamW')
+    return _initialize_adam(self, params, lr, args, kwargs, 'AdamW')
 
 
 def rmsprop_init(self, params, lr=1e-3, *args, **kwargs):

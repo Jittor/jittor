@@ -137,6 +137,14 @@ def _standard_rms_norm(self, args, kwargs):
         or len(args) != 1
         or kwargs
         or "variance_epsilon" not in self.__dict__
+        # Optional affine weights and partial variance are different public
+        # forward contracts. Leave their computation with the module owner.
+        or getattr(self, "has_weight", True) is False
+        or getattr(self, "pass_weight", True) is False
+        or getattr(self, "variance_size_override", None) is not None
+        # Public native/accelerator dispatch belongs to the module. A class
+        # name alone does not establish our weighted RMS precision contract.
+        or callable(getattr(self, "forward_native", None))
     ):
         return None
     value = args[0]
@@ -322,7 +330,8 @@ def _named_buffers(self, prefix="", recurse=True, remove_duplicate=True):
 
 def _named_modules(self, memo=None, prefix="", remove_duplicate=True):
     """Torch's ``named_modules``, accepting memo/prefix/remove_duplicate."""
-    for item in self._iter_named_modules():
+    seen = set() if memo is None else memo
+    for item in self._iter_named_modules(memo=seen if remove_duplicate else None):
         # jittor yields (name, module) pairs
         if isinstance(item, tuple) and len(item) == 2:
             name, mod = item
@@ -485,6 +494,22 @@ def _load_state_dict(self, state_dict, strict=True, assign=False):
         # here so a strict=False load stays quiet, exactly like torch.
         load_state = {k: v for k, v in load_state.items()
                       if str(k) not in set(unexpected)}
+    if not assign:
+        # Native loading rebinds each holder. Torch's copying form preserves
+        # allocations shared with flat optimizer buffers and detached aliases.
+        # Pending clones/reads must observe the pre-load bytes, just as eager
+        # Torch snapshots do. Synchronization orders execution without a host
+        # device wait before the subsequent native buffer writes.
+        jt.sync_all()
+        copied = dict(load_state)
+        for key, value in load_state.items():
+            target = _find_state_target(self, key)
+            if (isinstance(target, jt.Var) and isinstance(value, jt.Var)
+                    and target._storage_is_contiguous()):
+                if target.numel():
+                    target._copy_into(value)
+                copied[key] = target
+        load_state = copied
     _ORIG_MODULE_LOAD_STATE_DICT(self, load_state)
     try:
         for n, p in self.named_parameters():
@@ -710,8 +735,8 @@ def _module_cast_var_if_needed(v, ds, copy=False):
 def _module_cast_float_dtype(self, ds):
     """Cast every floating parameter of this module in place."""
     if getattr(type(self), "_frontend_tensor_type", None) is not None:
-        return _module_replace_vars(
-            self, _functools.partial(_module_to_conversion, ds, None, False))
+        return self._apply(
+            _functools.partial(_module_to_conversion, ds, None, False))
     if ds is not None and ds in _MODULE_FLOAT_DTYPES:
         for p in self.parameters():
             if p.dtype.is_float() if hasattr(p.dtype, "is_float") else ("float" in _jittor_dtype_name(p.dtype)):
@@ -721,11 +746,26 @@ def _module_cast_float_dtype(self, ds):
     return self
 
 
-def _module_replace_vars(self, convert):
-    """Run ``convert`` over every parameter/buffer this module tree holds."""
+def _module_apply(self, convert, recurse=True):
+    """Convert registered tensors through each child's overridable protocol.
+
+    Subclasses can own non-buffer state in ``_apply`` (for example metric
+    accumulators). A flat modules() walk bypasses that state entirely.
+    """
+    if recurse:
+        seen = set()
+        for child in self.children():
+            if id(child) not in seen:
+                seen.add(id(child))
+                child._apply(convert)
+    return _module_replace_vars(self, convert, recurse=False)
+
+
+def _module_replace_vars(self, convert, recurse=True):
+    """Convert registered tensors, preserving parameter objects and gradients."""
     converted = {}
     try:
-        modules = list(self.modules()) if hasattr(self, "modules") else [self]
+        modules = list(self.modules()) if recurse and hasattr(self, "modules") else [self]
     except EXPECTED as exc:
         swallowed("torch/installers/nn.py _module_replace_vars: modules = list(self.modules()) if hasattr(self, 'module...", exc)
         modules = [self]
@@ -911,8 +951,8 @@ def _module_to(self, *args, **kwargs):
     if _device_is_cuda(dev):
         jt.flags.use_cuda = 1
     if dev is not None or ds is not None:
-        return _module_replace_vars(
-            self, _functools.partial(_module_to_conversion, ds, dev, copy))
+        return self._apply(
+            _functools.partial(_module_to_conversion, ds, dev, copy))
     return self
 
 
@@ -1170,6 +1210,11 @@ register_fidelity(
     "torch.nn.Module.eval", _eval, Fidelity.APPROXIMATE,
     "Equivalent to train(False); returns self. Same caveat as train().")
 register_fidelity(
+    "torch.nn.Module._apply", _module_apply, Fidelity.APPROXIMATE,
+    "Recursively invokes child _apply overrides and converts registered "
+    "parameters, their gradients and buffers while preserving parameter "
+    "identity. Does not implement Torch future swap/set-data policies.")
+register_fidelity(
     "torch.nn.Module.to", _module_to, Fidelity.APPROXIMATE,
     "In place like torch: casts only floating-point Vars (integer buffers "
     "survive to(float64)) and migrates residency for cpu/cuda/npu, keeping "
@@ -1299,6 +1344,7 @@ def _install_module_methods(nn, registry=None):
     M.parameters = _parameters
     M.train = _train
     M.eval = _eval
+    M._apply = _module_apply
     M.to = _module_to
     M.to_empty = _module_to_empty
     M.cuda = _module_cuda

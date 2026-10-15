@@ -133,11 +133,12 @@ def _amp_retypes_output_to_half():
     with ``mkl_matmul_op.cc:30: support float32 only now``, which is precisely
     the failure the comment in ``_supports_mkl`` predicts.
 
-    ``prefer16``, not "any non-zero register". Level 3 sets
+    The float16 or bfloat16 preference, rather than any non-zero register. Level 3 sets
     ``keep_reduce | keep_white``, which does not retype anything to a half, and
     declining oneDNN there was a 99x slowdown bought for nothing.
     """
-    return bool(int(jt.flags.amp_reg) & jt.amp_flags.prefer16)
+    return bool(int(jt.flags.amp_reg) & (jt.amp_flags.prefer16
+                                       | jt.amp_flags.prefer_bfloat16))
 
 
 def _supports_mkl(a, b, trans_a=False, trans_b=False):
@@ -407,8 +408,8 @@ def _mixed_float_compute_dtype(a, b):
     Which dtype to resolve to:
 
     * inside an autocast/AMP region, the precision that region asked for --
-      float16, or bfloat16 when an operand already is (that is what
-      ``amp_prefer16`` means in ``src/type/nano_string.h``). This reproduces
+      an explicit bfloat16 preference, or the legacy float16 preference
+      (which keeps bfloat16 operands). This reproduces
       torch: autocast casts a float32 activation to the autocast dtype before
       the product, so a float16 result is what the model expects to get back,
       and the H3 VAE's bit-exact residual kernel requires it;
@@ -425,10 +426,12 @@ def _mixed_float_compute_dtype(a, b):
         return None
     names = (_jittor_dtype_name(a.dtype), _jittor_dtype_name(b.dtype))
     amp_reg = int(jt.flags.amp_reg)
-    if amp_reg & jt.amp_flags.prefer16:
-        return "bfloat16" if "bfloat16" in names else "float16"
     if amp_reg & jt.amp_flags.prefer32:
         return "float32"
+    if amp_reg & jt.amp_flags.prefer_bfloat16:
+        return "bfloat16"
+    if amp_reg & jt.amp_flags.prefer16:
+        return "bfloat16" if "bfloat16" in names else "float16"
     for wider in ("float64", "float32"):
         if wider in names:
             return wider

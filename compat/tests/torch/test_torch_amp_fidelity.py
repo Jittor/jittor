@@ -648,7 +648,8 @@ class TestTorchAutocastNumerics(cu.JittorTestCase):
         torch.set_autocast_enabled(region, True)
         try:
             self.assertTrue(torch.is_autocast_enabled(region))
-            self.assertEqual(dtype_name(a * a), "float16")
+            self.assertEqual(dtype_name(a * a),
+                             "bfloat16" if device == "cpu" else "float16")
         finally:
             torch.set_autocast_enabled(region, False)
         self.assertFalse(torch.is_autocast_enabled(region))
@@ -662,6 +663,7 @@ class TestTorchAutocastNumerics(cu.JittorTestCase):
         scaler = torch.amp.GradScaler(device if device == "cpu" else "cuda",
                                       init_scale=128.0, growth_interval=1000)
 
+        scaler.scale(finite)
         infinite = jt.array(np.full(4, np.inf, dtype="float32"))
         optimizer.param_groups[0]["grads"] = [infinite]
         self.assertIsNone(scaler.step(optimizer))
@@ -679,6 +681,7 @@ class TestTorchAutocastNumerics(cu.JittorTestCase):
         scaler = torch.amp.GradScaler(device if device == "cpu" else "cuda",
                                       init_scale=128.0, growth_interval=2)
         optimizer = _FakeOptimizer([jt.ones((4,), dtype="float32")])
+        scaler.scale(jt.ones((1,), dtype="float32"))
         scaler.step(optimizer)
         scaler.update()
         self.assertEqual(scaler.get_scale(), 128.0)
@@ -694,6 +697,7 @@ class TestTorchAutocastNumerics(cu.JittorTestCase):
         optimizer = _FakeOptimizer([grad])
         scaler = torch.amp.GradScaler(device if device == "cpu" else "cuda",
                                       init_scale=4.0)
+        scaler.scale(jt.ones((1,), dtype="float32"))
         scaler.unscale_(optimizer)
         np.testing.assert_allclose(grad.numpy(), np.full(4, 2.0), rtol=1e-6)
 
