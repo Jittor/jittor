@@ -10,7 +10,6 @@ import importlib.metadata
 import json
 import os
 from pathlib import Path
-import platform
 import shutil
 import subprocess
 import sys
@@ -28,21 +27,19 @@ def command(*args):
     return subprocess.check_output(list(args), text=True).strip()
 
 
+def _platform_helpers():
+    scripts = str(ROOT / 'agent/skills/torch-compat-repo-runbook/scripts')
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    return importlib.import_module('_runtime_platform')
+
+
 def cpu_description():
-    info = Path('/proc/cpuinfo')
-    if info.is_file():
-        names = [line.split(':', 1)[1].strip() for line in info.read_text().splitlines()
-                 if line.startswith('model name')]
-        if names:
-            return names[0]
-    return platform.processor() or platform.machine()
+    return _platform_helpers().cpu_description()
 
 
 def selected_nvidia_wheels():
-    """Report the resolved distribution, including when sites shadow versions."""
-    names = {dist.metadata['Name'] for dist in importlib.metadata.distributions()
-             if dist.metadata.get('Name', '').lower().startswith('nvidia-')}
-    return {name: importlib.metadata.version(name) for name in sorted(names)}
+    return _platform_helpers().selected_nvidia_wheels()
 
 
 def source_descriptor(checkout):
@@ -196,7 +193,8 @@ class Capture:
         source_files += ('agent/skills/torch-compat-repo-runbook/scripts/_accelerate_installation.py',
                          'agent/skills/torch-compat-repo-runbook/scripts/_installed_source_proof.py',
                          'agent/skills/torch-compat-repo-runbook/scripts/component_measure.py',
-                         'compat/tests/torch/_ecosystem_runner.py')
+                         'compat/tests/torch/_ecosystem_runner.py',
+                        'agent/skills/torch-compat-repo-runbook/scripts/_runtime_platform.py')
         metadata = {'schema_version': 1, 'case': self.case, 'runtime': 'jittor' if shim else 'torch',
                     'jittor_commit': command('git', '-C', str(ROOT), 'rev-parse', 'HEAD'),
                     'upstream': self.source['upstream'], 'source_descriptor': self.source,
@@ -216,18 +214,12 @@ class Capture:
                     'array_manifest': self.manifest, 'arrays': str(npz), 'arrays_sha256': digest(npz),
                     'cuda_visible_devices': os.environ.get('CUDA_VISIBLE_DEVICES'),
                     'rank_device_uuid': rank_uuid, 'logical_device_index': logical_index,
-                    'platform': {'os': platform.platform(), 'cpu': cpu_description(),
-                        'accelerator_model': [row[2] for row in selected] or 'not-applicable',
-                        'card_count': len(selected), 'card_indices': allocation,
-                        'physical_devices': [{'index': row[0], 'uuid': row[1]} for row in selected],
-                        'driver': selected[0][3] if selected else 'not-applicable',
-                        'cuda': str(torch.version.cuda) if self.device == 'cuda' else 'not-applicable',
-                        'cann': 'not-applicable',
-                        'nvcc': command(os.environ['JT_BUILD_NVCC_PATH'], '--version') if self.device == 'cuda' else 'not-applicable',
-                        'gcc': command(shutil.which('g++') or 'g++', '--version'),
-                        'nvidia_wheels': selected_nvidia_wheels(),
-                        'jittor_flags': {'use_cuda': native_flags.get('use_cuda', int(self.device == 'cuda')),
+                    'platform': _platform_helpers().capture_platform(
+                        torch, self.device, physical_devices=selected, card_indices=allocation,
+                        precision=precision,
+                        jittor_flags={'use_cuda': native_flags.get('use_cuda', int(self.device == 'cuda')),
                             'use_acl': 0, 'graph_replay': 'default' if native_flags.get('auto_graph_replay') else 'eager',
                             'tf32': precision['matmul'], 'hf32': False},
-                        'precision': precision}, 'result': result}
+                        nvcc=os.environ['JT_BUILD_NVCC_PATH'] if self.device == 'cuda' else None,
+                        cxx=shutil.which('g++') or 'g++'), 'result': result}
         (output / (stem + '.json')).write_text(json.dumps(metadata, indent=2) + '\n')

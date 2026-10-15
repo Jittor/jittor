@@ -28,6 +28,10 @@ MEASUREMENT_SOURCES = ('compat/tests/torch/_accelerate_protocol.py',
 def measurement_sources(baseline, fresh=False):
     paths = MEASUREMENT_SOURCES + (('compat/tests/torch/_accelerate_fresh_process.py',) if fresh else ())
     try:
+        platform_helper = 'agent/skills/torch-compat-repo-runbook/scripts/_runtime_platform.py'
+        if subprocess.check_output(['git', '-C', str(ROOT), 'ls-tree', '--name-only', baseline,
+                                    '--', platform_helper], stderr=subprocess.PIPE).strip():
+            paths += (platform_helper,)
         return {path: hashlib.sha256(subprocess.check_output(
             ['git', '-C', str(ROOT), 'show', baseline + ':' + path], stderr=subprocess.PIPE)).hexdigest()
                 for path in paths}
