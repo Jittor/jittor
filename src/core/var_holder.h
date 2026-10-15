@@ -83,6 +83,10 @@ struct VarView {
     // Logical transpose/writeback provenance need not share an allocation.
     // Keep the actual physical relationship after a temporary base expires.
     bool physical_storage = false;
+    // Optional frontend ownership of the actual Python root. The native
+    // writeback pointer above remains weak and may be severed by .data.
+    PyObject* base_owner = nullptr;
+    ~VarView();
 };
 
 struct DataView {
@@ -130,6 +134,16 @@ typedef struct _object PyObject;
 // @attrs(heaptype)
 struct VarHolder {
     Var* var;
+    // Borrowed, set only once the holder really occupies a Python wrapper.
+    // C++ construction temporaries never pretend to have a PyObject header.
+    PyObject* python_owner = nullptr;
+    bool retain_view_base_owner = false;
+    void bind_python_owner(PyObject* owner, bool retain_view_base);
+    void retain_python_view_base();
+    PyObject* collectable_view_base();
+    void clear_collectable_view_base();
+    // @pyjt(_view_base_object)
+    PyObject* view_base_object();
     list<VarHolder*>::iterator iter;
     // Set when this holder is a view of another one; see VarView.
     VarView* view = nullptr;
@@ -902,11 +916,10 @@ struct VarHolder {
     // @pyjt(_producer_op)
     string producer_op();
 
-    // @pyjt(_is_view)
     inline bool is_view() { return view && view->base; }
 
     // A view stays a view after its weak writeback owner has died.
-    // @pyjt(_has_view_provenance)
+    // @pyjt(_is_view,_has_view_provenance)
     inline bool has_view_provenance() { return view != nullptr; }
 
     // @pyjt(_storage_view_is_physical)

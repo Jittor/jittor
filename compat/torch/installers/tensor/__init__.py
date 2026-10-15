@@ -1043,6 +1043,10 @@ from .shape_api import (
     _looks_like_dtype,
     _norm_reduce_kw,
     _torch_reshape,
+    _torch_permute,
+    _torch_transpose,
+    _torch_t,
+    _torch_view_base,
     _torch_size,
     _torch_sum,
     _torch_var_sum,
@@ -1059,6 +1063,10 @@ def install_methods(ctx):
     # which breaks torch idioms like `(n,) + data.size()[1:]` (mmdet's unmap()).
     _Size = getattr(g, "Size", tuple)
     Var.size = _torch_size
+    Var.permute = g.permute = _torch_permute
+    Var.transpose = g.transpose = _torch_transpose
+    Var.t = g.t = _torch_t
+    Var._base = property(_torch_view_base)
 
     # jittor's core reshape/view reject a torch.Size (a tuple SUBCLASS) -> normalize
     # a single Size/tuple-subclass arg to a plain tuple so `x.reshape(other.size())`
