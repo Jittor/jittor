@@ -11,6 +11,7 @@
 ```{toctree}
 :maxdepth: 1
 
+2026-10-15-size-factory-leaves
 2026-10-15-tensor-rng-inplace
 2026-10-15-swift-trainer-installed-source
 2026-10-15-peft-installed-source-training

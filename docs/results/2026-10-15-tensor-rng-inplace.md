@@ -110,3 +110,11 @@ source freeze、baseline/oracle/final 日志、oracle metadata 与最终 manifes
 仍可能解冻；首批测试只覆盖构造时停梯度态，不能扩大为所有冻结状态通过。
 该独立旧缺陷另行修复，本批 Tensor 方法的可逆冻结 CPU 对照已保持 False；
 不将其写成尚未完成的 nn.init CPU/CUDA 验收。
+
+## 主树集成复核
+
+同步远端 `14aeca5df0bf841e99d6241e06b076e34ef08c05` 后，三份原提交无冲突整合，五个生产/测试/公共工具文件与原 114 / 6afb 封存字节相等。中央索引及 MANIFEST 已登记。原 59 份产物逐项重算 SHA256 不变，不重标历史测量。
+
+在 clean 主树 `74e39acd1fd4b211c34cc5460e623f4499760f6e`，八文件 CPU 为 **147 passed / 105 CUDA skipped**；正确配置后的真实单 CUDA 为 **274 passed / 1 双设备 skipped**；core 为 **322 passed / 42 skipped / one existing xfail**。新旧测试增加的 no-grad 节点分开保留源身份。一次 CUDA 运行误把最低 accelerator 数设为 200，实际选中 122 个；虽 274 个断言均通过，进程仍 exit 1。该失败保留，修正配置后同集合、同源、同预算重新通过，不借修改断言或删用例过关。
+
+主树复核另发现尺寸工厂可能把需要梯度的创建结果标成非叶，随后独立修复并验证，见 [尺寸工厂叶身份](2026-10-15-size-factory-leaves.md)。不能把旧短 probe 中 `ones` 的非叶目标当作真实叶拒绝的证据；`torch.tensor` 创建的明确叶目标和维护测试确认本批 guard 生效。该工厂后续没有重写 native RNG，也不扩大本报告的后端或完整 Generator ABI 结论。
