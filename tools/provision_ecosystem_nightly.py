@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Provision isolated pinned CPU PEFT/Swift gates, then run the maintained nox session.
+"""Provision isolated pinned CPU downstream gates, then run the maintained nox session.
 
 All mutable files belong to --state-root, outside the checkout. The wheelhouse,
 resolved package lock and command logs are retained for replay and diagnosis.
 Selected distributions' base dependency closures are resolved and checked;
-optional Swift feature extras are not enabled.
+optional downstream feature or backend extras are not enabled.
 """
 
 import argparse
@@ -23,15 +23,37 @@ SCRIPTS = ROOT / 'agent/skills/torch-compat-repo-runbook/scripts'
 TORCH = '2.11.0+cpu'
 SWIFT_SHA = 'ff5128777dd3dc5538f1a95fbcc29442c327d7d2'
 SWIFT_REMOTE = 'https://github.com/modelscope/ms-swift.git'
+VERL_SHA = 'e5a627cf55c94d85406556854c2c1a22db4ff5e7'
+VERL_REMOTE = 'https://github.com/volcengine/verl.git'
 COMMON = ('numpy==1.26.4', 'accelerate==1.10.1', 'huggingface-hub==0.35.3',
           'tokenizers==0.22.2', 'safetensors==0.8.0', 'astunparse==1.6.3',
           'pillow==11.0.0', 'tqdm==4.67.1')
 SWIFT_DEPS = ('datasets==3.6.0', 'pyarrow==19.0.1', 'modelscope==1.33.0', 'addict==2.4.0',
               'dacite==1.9.2', 'einops==0.8.1', 'pandas==2.2.3',
               'simplejson==4.2.0', 'sentencepiece==0.2.1', 'rouge==1.0.1', 'trl==0.21.0')
+# The two registered VERL components use the base distribution's complete
+# Requires-Dist closure. Do not enable the separate CPU/backend extras, which
+# describe full trainers and a different Torch profile.
+VERL_DEPS = ('numpy==2.2.6', 'transformers==5.5.3', 'ray[default]==2.54.1',
+             'tensordict==0.10.0', 'huggingface-hub==1.5.0', 'tokenizers==0.22.2',
+             'safetensors==0.8.0', 'peft==0.17.1', 'accelerate==1.10.1', 'datasets==3.6.0',
+             'pandas==2.2.3', 'pyarrow==19.0.1', 'astunparse==1.6.3',
+             'pillow==11.0.0', 'tqdm==4.67.1')
 # The official Torch 2.11 CPU wheel requires setuptools<82. Canonical Stage 2
 # tools keep setuptools==83 in a separate controller/build environment.
 RUNTIME_SETUPTOOLS = 'setuptools==80.9.0'
+
+
+def runtime_roots(library):
+    if library == 'verl':
+        return list(VERL_DEPS)
+    require(library in ('peft', 'swift'), 'Unknown maintained library profile')
+    return list(COMMON) + (list(SWIFT_DEPS) if library == 'swift' else [])
+
+
+def session_name(library):
+    require(library in ('peft', 'swift', 'verl'), 'Unknown maintained library profile')
+    return 'ecosystem_verl_training' if library == 'verl' else 'ecosystem_' + library
 
 
 def digest(path):
@@ -54,7 +76,7 @@ def environment(state):
     # Do not inherit an editable source, package overlay, shim or selected GPU.
     env = dict(os.environ)
     for key in list(env):
-        if key.startswith(('JITTOR_', 'JT_')) or key in (
+        if key.startswith(('JITTOR_', 'JT_', 'VERL_')) or key in (
                 'PYTHONPATH', 'PYTHONHOME', 'REAL_TORCH_SITE', 'REAL_TORCH_PYTHON',
                 'cache_name', 'use_cuda', 'nvcc_path', 'backend_fallback', 'VIRTUAL_ENV',
                 'PYTEST_ADDOPTS', 'PIP_INDEX_URL', 'PIP_EXTRA_INDEX_URL', 'PIP_FIND_LINKS',
@@ -192,6 +214,8 @@ def provision(library, state, python, source_cache=None, wheel_cache=None):
     require(sys.version_info[:2] == (3, 11), 'Nightly provisioning requires Python 3.11')
     require(not (state / 'provision.json').exists(), 'Use a new state root after successful provisioning')
     env = environment(state)
+    if library == 'verl':
+        env['VERL_USE_EXTERNAL_PLUGINS'] = 'none'
     commands = Commands(state, env)
     cached = ['--find-links', wheel_cache] if wheel_cache else []
     wheels = state / 'wheels'
@@ -201,15 +225,23 @@ def provision(library, state, python, source_cache=None, wheel_cache=None):
         if not interpreter.exists():
             commands.run(python, '-m', 'venv', interpreter.parents[1])
     sys.path.insert(0, str(SCRIPTS))
-    from _peft_scorecard import PINS, source_descriptor
     checkouts, pinned = {}, {}
-    for repo, (version, sha, remote, wheel_hash) in PINS.items():
-        path = state / 'upstream' / repo
-        checkout(commands, path, 'https://github.com/' + remote + '.git', sha,
-                 source_cache / repo if source_cache else None)
-        checkouts[repo] = path
-        pinned[repo] = official_wheel(repo, version, wheel_hash, wheels)
-    sources = source_descriptor(checkouts, pinned)
+    if library == 'verl':
+        from registry_inventory import inventory
+        path = state / 'upstream/verl'
+        checkout(commands, path, VERL_REMOTE, VERL_SHA,
+                 source_cache / 'verl' if source_cache else None)
+        checkouts['verl'] = path
+        sources = inventory('verl', path)
+    else:
+        from _peft_scorecard import PINS, source_descriptor
+        for repo, (version, sha, remote, wheel_hash) in PINS.items():
+            path = state / 'upstream' / repo
+            checkout(commands, path, 'https://github.com/' + remote + '.git', sha,
+                     source_cache / repo if source_cache else None)
+            checkouts[repo] = path
+            pinned[repo] = official_wheel(repo, version, wheel_hash, wheels)
+        sources = source_descriptor(checkouts, pinned)
     (state / 'upstream-proof.json').write_text(json.dumps(sources, indent=2) + '\n')
     # Both private runtimes receive complete real distribution metadata. Only
     # the candidate later activates the official Jittor Torch shim.
@@ -220,22 +252,27 @@ def provision(library, state, python, source_cache=None, wheel_cache=None):
     commands.run(controller, '-m', 'pip', 'download', '--index-url', 'https://pypi.org/simple',
                  '--only-binary=:all:', '--dest', tool_wheels, *cached, *controller_tools())
     commands.run(controller, '-m', 'pip', 'install', '--no-index', '--no-deps', *sorted(tool_wheels.glob('*.whl')))
-    swift_source, swift_wheel = None, None
-    if library == 'swift':
-        swift_source = state / 'upstream/ms-swift'
-        checkout(commands, swift_source, SWIFT_REMOTE, SWIFT_SHA,
-                 source_cache / 'ms-swift' if source_cache else None)
-        build = state / 'swift-build-source'
+    built_source, built_wheel = None, None
+    if library in ('swift', 'verl'):
+        if library == 'swift':
+            built_source = state / 'upstream/ms-swift'
+            checkout(commands, built_source, SWIFT_REMOTE, SWIFT_SHA,
+                     source_cache / 'ms-swift' if source_cache else None)
+        else:
+            built_source = checkouts['verl']
+        build = state / (library + '-build-source')
         if not build.exists():
-            shutil.copytree(swift_source, build, ignore=shutil.ignore_patterns('.git'))
+            shutil.copytree(built_source, build, ignore=shutil.ignore_patterns('.git'))
         commands.run(controller, '-m', 'pip', 'wheel', '--no-deps', '--no-build-isolation',
                      '--wheel-dir', wheels, build)
-        built = list(wheels.glob('ms_swift-4.5.2-*.whl'))
-        require(len(built) == 1, 'Expected one Swift 4.5.2 source-built wheel')
-        swift_wheel = built[0]
-        from registry_inventory import inventory
-        swift_inventory = inventory('ms-swift', swift_source)
-        (state / 'swift-inventory.json').write_text(json.dumps(swift_inventory, indent=2) + '\n')
+        pattern = 'ms_swift-4.5.2-*.whl' if library == 'swift' else 'verl-0.10.0.dev0-*.whl'
+        built = list(wheels.glob(pattern))
+        require(len(built) == 1, 'Expected one pinned source-built wheel: ' + library)
+        built_wheel = built[0]
+        if library == 'swift':
+            from registry_inventory import inventory
+            swift_inventory = inventory('ms-swift', built_source)
+            (state / 'swift-inventory.json').write_text(json.dumps(swift_inventory, indent=2) + '\n')
     # Build source-only dependency wheels using the compatible runtime build
     # tools. The complete selected distributions (including Swift METADATA)
     # participate in resolution. Installation resolves the same roots offline:
@@ -243,8 +280,8 @@ def provision(library, state, python, source_cache=None, wheel_cache=None):
     # pip check below must pass in every venv.
     commands.run(oracle, '-m', 'pip', 'install', '--index-url', 'https://pypi.org/simple',
                  *cached, RUNTIME_SETUPTOOLS, 'wheel==0.45.1')
-    roots = list(COMMON) + (list(SWIFT_DEPS) if library == 'swift' else [])
-    requirements = [*pinned.values(), *([swift_wheel] if swift_wheel else []),
+    roots = runtime_roots(library)
+    requirements = [*pinned.values(), *([built_wheel] if built_wheel else []),
                     'torch==' + TORCH, RUNTIME_SETUPTOOLS, *runtime_tools(), *roots]
     commands.run(oracle, '-m', 'pip', 'wheel', '--index-url', 'https://pypi.org/simple',
                  '--no-build-isolation', '--wheel-dir', wheels, '--find-links', wheels,
@@ -271,6 +308,19 @@ def provision(library, state, python, source_cache=None, wheel_cache=None):
                      "x=np.arange(7, dtype=np.float32); np.testing.assert_array_equal(pa.array(x).to_numpy(), x); "
                      "assert len(datasets.Dataset.from_dict({'values': [1, 2]})) == 2; "
                      "print('Data ABI', np.__version__, pa.__version__, datasets.__version__)")
+    elif library == 'verl':
+        commands.run(oracle, '-c', "import importlib.metadata as m; "
+                     "import numpy, pyarrow, datasets, transformers, ray, tensordict, verl; "
+                     "from packaging.version import Version; "
+                     "assert numpy.__version__ == '2.2.6'; assert transformers.__version__ == '5.5.3'; "
+                     "assert ray.__version__ == '2.54.1'; assert tensordict.__version__ == '0.10.0'; "
+                     "assert verl.__version__ == '0.10.0.dev'; assert m.version('verl') == '0.10.0.dev0'; "
+                     "assert Version(verl.__version__) == Version(m.version('verl')); "
+                     "assert pyarrow.__version__ == '19.0.1'; "
+                     "x=numpy.arange(7, dtype=numpy.float32); "
+                     "numpy.testing.assert_array_equal(pyarrow.array(x).to_numpy(), x); "
+                     "assert len(datasets.Dataset.from_dict({'values': [1, 2]})) == 2; "
+                     "print('VERL base component profile', verl.__version__, m.version('verl'))")
     commands.run(candidate, '-c', "import importlib.metadata as m; assert m.version('torch') == '" + TORCH + "'")
     for side, interpreter in (('candidate', candidate), ('oracle', oracle), ('controller', controller)):
         log = commands.run(interpreter, '-m', 'pip', 'list', '--format=freeze')
@@ -279,23 +329,29 @@ def provision(library, state, python, source_cache=None, wheel_cache=None):
                JITTOR_LAB_ROOT=str(state / 'lab'), JITTOR_NOX_SHARED_CACHE='0',
                JITTOR_TEST_DEVICES='cpu', JITTOR_SOURCE_ROOT=str(ROOT),
                PYTEST_DISABLE_PLUGIN_AUTOLOAD='1', PYTEST_PLUGINS='pytest_timeout,xdist.plugin')
-    for repo in PINS:
+    for repo in pinned:
         env['JITTOR_' + repo.upper() + '_CHECKOUT'] = str(checkouts[repo])
         env['JITTOR_' + repo.upper() + '_WHEEL'] = str(pinned[repo])
     if library == 'swift':
-        env.update(JITTOR_SWIFT_UPSTREAM=str(swift_source), JITTOR_SWIFT_WHEEL=str(swift_wheel),
+        env.update(JITTOR_SWIFT_UPSTREAM=str(built_source), JITTOR_SWIFT_WHEEL=str(built_wheel),
                    JITTOR_ECOSYSTEM_PACKAGE_SITE=str(state / 'candidate/lib/python3.11/site-packages'),
                    JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE=str(state / 'oracle/lib/python3.11/site-packages'))
+    elif library == 'verl':
+        env.update(JITTOR_VERL_UPSTREAM=str(built_source), JITTOR_VERL_WHEEL=str(built_wheel),
+                   JITTOR_ECOSYSTEM_PACKAGE_SITE=str(state / 'candidate/lib/python3.11/site-packages'),
+                   JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE=str(state / 'oracle/lib/python3.11/site-packages'),
+                   VERL_USE_EXTERNAL_PLUGINS='none')
     manifest = {'library': library, 'source_commit': subprocess.check_output(
         ['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
         'wheels': {path.name: digest(path) for path in sorted(wheels.glob('*.whl'))},
         'tool_wheels': {path.name: digest(path) for path in sorted(tool_wheels.glob('*.whl'))},
-        'session': 'ecosystem_' + library, 'oracle_torch': TORCH,
+        'session': session_name(library), 'oracle_torch': TORCH,
         'upstream_transport': 'read-only-local-git-cache' if source_cache else 'official-remote',
         'source_cache': str(source_cache) if source_cache else None,
         'wheel_cache': str(wheel_cache) if wheel_cache else None,
         'environment': {key: value for key, value in env.items() if key.startswith(('JITTOR_', 'JT_'))
-                        or key in ('HOME', 'TMPDIR', 'CUDA_VISIBLE_DEVICES', 'REAL_TORCH_PYTHON')}}
+                        or key in ('HOME', 'TMPDIR', 'CUDA_VISIBLE_DEVICES', 'REAL_TORCH_PYTHON',
+                                   'VERL_USE_EXTERNAL_PLUGINS')}}
     (state / 'provision.json').write_text(json.dumps(manifest, indent=2) + '\n')
     commands.env = env
     return commands, controller
@@ -303,7 +359,7 @@ def provision(library, state, python, source_cache=None, wheel_cache=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--library', choices=('peft', 'swift'), required=True)
+    parser.add_argument('--library', choices=('peft', 'swift', 'verl'), required=True)
     parser.add_argument('--state-root', type=Path, required=True)
     parser.add_argument('--python', default=sys.executable, help='Healthy Python 3.11 for new private venvs')
     parser.add_argument('--source-cache', type=Path,
@@ -319,7 +375,7 @@ def main():
     if args.run:
         require(not subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT, text=True).strip(),
                 'Formal nightly execution requires clean measured source')
-        commands.run(python, '-m', 'nox', '-s', 'ecosystem_' + args.library)
+        commands.run(python, '-m', 'nox', '-s', session_name(args.library))
     return 0
 
 

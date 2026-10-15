@@ -11,6 +11,7 @@
 ```{toctree}
 :maxdepth: 1
 
+2026-10-16-verl-maintained-cpu-nightly
 2026-10-16-recorded-grad-fn-freeze
 2026-10-16-transformers-main-source-training
 2026-10-15-maintained-ecosystem-nightly

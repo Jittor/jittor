@@ -5,6 +5,27 @@ description: 在真实 VERL 注册算法组件上对拍 Jittor Torch shim 与独
 
 # VERL 组件的双解释器对拍
 
+## 独立 CPU nightly
+
+专用 CPU nightly 已接入 `.github/workflows/ecosystem.yml` 的 maintained matrix，保留原通用
+ecosystem job。入口是 `tools/provision_ecosystem_nightly.py --library verl --run`：新建独立
+candidate、真实 PyTorch oracle、controller 三环境，真实解析完整 base 依赖并分别 `pip check`。
+不启用上游另列的 CPU/backend extras，不代表完整 trainer。固定来源、两前缀校验和本地等价
+维护门禁的实际复验见[CPU nightly 结果](../../../docs/results/2026-10-16-verl-maintained-cpu-nightly.md)。
+尚未证明 GitHub hosted schedule 实际执行，也没有新增 CUDA 测量或共同 scorecard。
+
+```bash
+# 干净 Jittor checkout；健康 Python 3.11；STATE 必须在仓外。
+python tools/provision_ecosystem_nightly.py --library verl \
+  --state-root "$STATE/fresh-verl" --run
+```
+
+`ecosystem_verl_training` 默认永久保留每次调用的唯一证据目录，位于 session scratch 之外；
+也可显式设置 `JITTOR_VERL_EVIDENCE_DIR` 到仓外新目录。每个 case 只有全部来源与数值校验
+通过才写 `gate-complete.json`；失败目录保留原始文件，不产生成功标记。两侧实际 `origin`
+与 package 根都原样保留；先逐侧校验完整安装载荷及已有 distribution 绑定，再仅从跨侧
+身份比较中排除这两个路径字段，其余版本、源码、wheel 和未知字段仍精确比较。
+
 ## 完整安装来源复验
 
 最新来源绑定复验见[安装来源与完整组件训练](../../../docs/results/2026-10-15-verl-installed-source-training.md)。
@@ -14,8 +35,8 @@ description: 在真实 VERL 注册算法组件上对拍 Jittor Torch shim 与独
 均原样保留；仅通过严格 PEP440 相等和完整 wheel proof 处理规范化，不修改版本字符串。
 
 新的 opt-in `ecosystem_verl_training` 实际 CPU/CUDA 各 2 passed、0 skipped，包含下述两个
-组件的种子 0/7/19、全部参数/输入梯度与原三步 SGD。共同 scorecard 为四行 L3，144 对数组，
-没有 Ray/rollout/Hydra/full trainer 或性能授级。首次编译串行，unit/benchmark 缓存独立。
+组件的种子 0/7/19、全部参数/输入梯度与原三步 SGD。该历史共同 scorecard 为四行 L3，144
+对数组，没有 Ray/rollout/Hydra/full trainer 或性能授级。首次编译串行，unit/benchmark 缓存独立。
 
 ```bash
 JITTOR_CI_PYTHON="$SHIM_PY" REAL_TORCH_PYTHON="$ORACLE_PY" \
@@ -29,7 +50,7 @@ JITTOR_CI_PYTHON="$SHIM_PY" REAL_TORCH_PYTHON="$ORACLE_PY" \
 实际节点为 `test_ecosystem_verl_training.py::EcosystemVERLTraining` 两个 `test_verl_*` 方法，
 收集器为 runbook scripts 的 `collect_verl_scorecard.py`。它重新检查全部原始数组、实际
 物理设备、完整来源与原阶段预算；不能只凭进程退出码或基础 seed 授级。缺依赖/来源证明
-按 required 条件失败，不把 skip 当证据。新门禁不等于已经进入 nightly。
+按 required 条件失败，不把 skip 当证据。该历史测量当时尚未接入 nightly；新 CPU 接线见上节。
 
 ## 当前验收范围
 

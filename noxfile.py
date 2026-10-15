@@ -2887,7 +2887,9 @@ def ecosystem_swift(session):
 @nox.session(python=False)
 def ecosystem_verl_training(session):
     """Opt-in complete source-bound VERL component parity and training."""
-    root, env = _session_env(session, "ecosystem-verl-training")
+    import tempfile
+
+    _root, env = _session_env(session, "ecosystem-verl-training")
     python = _hardware_python()
     _set_hardware_python_config(session, python, env)
     oracle = os.environ.get("REAL_TORCH_PYTHON", "").strip()
@@ -2902,11 +2904,19 @@ def ecosystem_verl_training(session):
     if device not in ("cpu", "cuda"):
         session.error("ecosystem_verl_training needs exactly JITTOR_TEST_DEVICES=cpu or cuda")
     cache = NOX_STATE_ROOT / "cache" / "ecosystem-verl-training" / device
+    # Retain every actual NPZ and final per-side source binding. A new nox
+    # invocation receives a fresh directory rather than overwriting evidence.
+    evidence = os.environ.get("JITTOR_VERL_EVIDENCE_DIR", "").strip()
+    if not evidence:
+        evidence_root = NOX_STATE_ROOT / "ecosystem-verl-training" / "measurements"
+        evidence_root.mkdir(parents=True, exist_ok=True)
+        evidence = tempfile.mkdtemp(prefix=device + "-", dir=str(evidence_root))
     env.update({
         "REAL_TORCH_PYTHON": oracle,
         "JITTOR_REQUIRE_REAL_TORCH": "1",
         "JITTOR_REQUIRE_VERL": "1",
         "JITTOR_ECOSYSTEM_VERL_TRAINING": "1",
+        "JITTOR_VERL_EVIDENCE_DIR": evidence,
         "JITTOR_ECOSYSTEM_TF32": "1",
         "JITTOR_ECOSYSTEM_CUDNN_BENCHMARK": "0",
         "JT_CUDA_KERNEL_MATH": "strict",

@@ -29,7 +29,7 @@ def test_nightly_keeps_existing_gate_and_runs_both_complete_maintained_sessions(
     assert workflow['on']['schedule'] and 'workflow_dispatch' in workflow['on']
     assert workflow['jobs']['ecosystem']['steps'][-1]['run'] == 'python -m nox -s ecosystem'
     job = workflow['jobs']['maintained-cpu']
-    assert job['strategy']['matrix']['library'] == ['peft', 'swift']
+    assert job['strategy']['matrix']['library'] == ['peft', 'swift', 'verl']
     assert job['strategy']['fail-fast'] == 'false'
     steps = job['steps']
     run = next(step for step in steps if 'tools/provision_ecosystem_nightly.py' in step.get('run', ''))
@@ -42,7 +42,8 @@ def test_nightly_keeps_existing_gate_and_runs_both_complete_maintained_sessions(
 def test_environment_discards_shim_overlay_and_gpu_selection(provision, tmp_path, monkeypatch):
     for key in ('PYTHONPATH', 'PYTHONHOME', 'REAL_TORCH_SITE', 'REAL_TORCH_PYTHON',
                 'JITTOR_ECOSYSTEM_PACKAGE_SITE', 'JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE',
-                'JITTOR_SOURCE_ROOT', 'JITTOR_TORCH_RUNTIME_ROOT', 'JT_USE_CUDA', 'CUDA_VISIBLE_DEVICES'):
+                'JITTOR_SOURCE_ROOT', 'JITTOR_TORCH_RUNTIME_ROOT', 'JT_USE_CUDA', 'CUDA_VISIBLE_DEVICES',
+                'VERL_USE_EXTERNAL_MODULES', 'VERL_USE_EXTERNAL_PLUGINS'):
         monkeypatch.setenv(key, 'hostile-inherited-value')
     env = provision.environment(tmp_path)
     assert env['PYTHONPATH'] == '' and 'PYTHONHOME' not in env
@@ -55,6 +56,30 @@ def test_environment_discards_shim_overlay_and_gpu_selection(provision, tmp_path
     for name in ('HOME', 'JITTOR_HOME', 'TMPDIR', 'HF_HOME', 'TORCH_HOME', 'PIP_CACHE_DIR'):
         assert Path(env[name]).is_dir() and tmp_path in Path(env[name]).parents
     assert env['HF_HUB_OFFLINE'] == env['TRANSFORMERS_OFFLINE'] == '1'
+    assert 'VERL_USE_EXTERNAL_MODULES' not in env and 'VERL_USE_EXTERNAL_PLUGINS' not in env
+
+
+def test_verl_runtime_profile_preserves_original_numpy_two_component_pins(provision):
+    roots = provision.runtime_roots('verl')
+    assert set(roots) >= {'numpy==2.2.6', 'transformers==5.5.3', 'ray[default]==2.54.1',
+                          'tensordict==0.10.0', 'huggingface-hub==1.5.0', 'peft==0.17.1'}
+    assert not any(value.startswith(('numpy==1.', 'transformers==4.', 'verl[')) for value in roots)
+    assert 'numpy==1.26.4' in provision.runtime_roots('swift')
+    assert 'numpy==1.26.4' in provision.runtime_roots('peft')
+    assert set(provision.runtime_roots('swift')) == set(provision.COMMON + provision.SWIFT_DEPS)
+
+
+@pytest.mark.parametrize('library,session', [('peft', 'ecosystem_peft'),
+                                            ('swift', 'ecosystem_swift'),
+                                            ('verl', 'ecosystem_verl_training')])
+def test_profiles_invoke_the_actual_complete_maintained_session(provision, library, session):
+    assert provision.session_name(library) == session
+
+
+def test_unknown_profile_cannot_select_an_unmaintained_session(provision):
+    for function in (provision.session_name, provision.runtime_roots):
+        with pytest.raises(ValueError, match='Unknown maintained'):
+            function('verl-preflight')
 
 
 def test_state_refuses_checkout_and_symlink_into_checkout(provision, tmp_path):

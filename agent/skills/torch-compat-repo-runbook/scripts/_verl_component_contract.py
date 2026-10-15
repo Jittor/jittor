@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 
 from collect_component_scorecard import require, validate_initial_weights
+from component_measure import package_files
 from _installed_source_proof import installation_proofs, validate_installations
 
 SPECS = {
@@ -29,6 +30,53 @@ def read(path):
 
 def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def runtime_identity(value):
+    """Bind each actual prefix before comparing location-independent identity."""
+    dependencies = value.get('dependencies')
+    require(isinstance(dependencies, dict)
+            and set(dependencies) == {'verl', 'numpy', 'transformers', 'ray', 'tensordict'},
+            'Incomplete actual VERL dependency scope')
+    plural = value.get('downstream_distributions', {})
+    require(isinstance(plural, dict) and set(plural) <= set(dependencies),
+            'Malformed VERL dependency distribution bindings')
+    require(all(isinstance(binding, dict) for binding in plural.values()),
+            'Malformed VERL dependency distribution binding')
+    primary = value.get('downstream_distribution')
+    require(isinstance(primary, dict) and primary.get('repo') == 'verl',
+            'Missing actual VERL distribution binding')
+    require('verl' not in plural or plural['verl'] == primary, 'Ambiguous VERL distribution binding')
+    bindings = dict(plural, verl=primary)
+    identities = {}
+    for name, entry in dependencies.items():
+        require(isinstance(entry, dict) and isinstance(entry.get('origin'), str) and entry['origin'],
+                'Missing actual dependency origin: ' + name)
+        origin = Path(entry['origin'])
+        require(origin.is_absolute() and origin.is_file(), 'Unbound actual dependency origin: ' + name)
+        require(isinstance(entry.get('version'), str) and entry['version']
+                and entry.get('installed_files_sha256')
+                and package_files(origin.parent) == entry['installed_files_sha256'],
+                'Actual installed dependency payload differs: ' + name)
+        binding = bindings.get(name)
+        if binding is not None:
+            require(isinstance(binding, dict) and binding.get('repo') == name
+                    and isinstance(binding.get('package'), str) and binding['package']
+                    and origin.parent == Path(binding['package'])
+                    and entry['version'] == binding.get('version')
+                    and entry['installed_files_sha256'] == binding.get('installed_files_sha256'),
+                    'Actual dependency/distribution binding differs: ' + name)
+        identities[name] = {key: item for key, item in entry.items() if key != 'origin'}
+
+    def distribution_identity(binding):
+        return {key: item for key, item in binding.items() if key != 'package'}
+
+    result = {key: value.get(key) for key in ('device', 'tf32', 'runtime_conditions')}
+    result.update(dependencies=identities, downstream_distribution=distribution_identity(primary))
+    if 'downstream_distributions' in value:
+        result['downstream_distributions'] = {name: distribution_identity(binding)
+                                              for name, binding in plural.items()}
+    return result
 
 
 def expected_fields(case, training=False):
@@ -134,8 +182,9 @@ def compare_pair(reference, candidate, source, baseline, case, seed, wheel, root
         [{'role': 'upstream-wheel', 'path': str(wheel), 'sha256': digest(wheel)}])
     for value, runtime in zip(values, ('torch', 'jittor')):
         validate_metadata(value, source, baseline, case, runtime, seed, proof, root, training=training)
-    for key in ('device', 'dependencies', 'tf32', 'runtime_conditions', 'downstream_distribution'):
-        require(values[0].get(key) == values[1].get(key), 'VERL runtime pair disagrees: ' + key)
+    identities = [runtime_identity(value) for value in values]
+    for key in sorted(set(identities[0]) | set(identities[1])):
+        require(identities[0].get(key) == identities[1].get(key), 'VERL runtime pair disagrees: ' + key)
     require(values[0]['runtime_conditions'].get('precision') == values[0]['tf32'], 'Wrong actual VERL precision')
     original_sha = values[0].get('weights_sha256')
     validate_initial_weights(values, original_sha)
