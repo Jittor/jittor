@@ -5,9 +5,35 @@ description: 在真实 VERL 注册算法组件上对拍 Jittor Torch shim 与独
 
 # VERL 组件的双解释器对拍
 
+## 完整安装来源复验
+
+最新来源绑定复验见[安装来源与完整组件训练](../../../docs/results/2026-10-15-verl-installed-source-training.md)。
+真实测量固定 `73333a677dae984a3f577afb7d1586aecac5f490`；旧 `b367` 证据保持原身份。
+同一干净上游的自构 wheel（不是官方 PyPI wheel）安装到双解释器：完整 360 Python 源文件、
+413 wheel 包文件逐阶段绑定。源码/module `0.10.0.dev` 与实际 METADATA `0.10.0.dev0`
+均原样保留；仅通过严格 PEP440 相等和完整 wheel proof 处理规范化，不修改版本字符串。
+
+新的 opt-in `ecosystem_verl_training` 实际 CPU/CUDA 各 2 passed、0 skipped，包含下述两个
+组件的种子 0/7/19、全部参数/输入梯度与原三步 SGD。共同 scorecard 为四行 L3，144 对数组，
+没有 Ray/rollout/Hydra/full trainer 或性能授级。首次编译串行，unit/benchmark 缓存独立。
+
+```bash
+JITTOR_CI_PYTHON="$SHIM_PY" REAL_TORCH_PYTHON="$ORACLE_PY" \
+  JITTOR_VERL_UPSTREAM="$VERL_CHECKOUT" JITTOR_VERL_WHEEL="$VERL_WHEEL" \
+  JITTOR_ECOSYSTEM_PACKAGE_SITE="$VERL_SITE" \
+  JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE="$VERL_SITE" \
+  JITTOR_TEST_DEVICES=cpu python -m nox -s ecosystem_verl_training
+# CUDA 用独立缓存、显式分配 CUDA_VISIBLE_DEVICES 和真实 nvcc_path。
+```
+
+实际节点为 `test_ecosystem_verl_training.py::EcosystemVERLTraining` 两个 `test_verl_*` 方法，
+收集器为 runbook scripts 的 `collect_verl_scorecard.py`。它重新检查全部原始数组、实际
+物理设备、完整来源与原阶段预算；不能只凭进程退出码或基础 seed 授级。缺依赖/来源证明
+按 required 条件失败，不把 skip 当证据。新门禁不等于已经进入 nightly。
+
 ## 当前验收范围
 
-状态：CPU/CUDA 的两个 tiny 组件协议已复验；报告见
+历史协议：CPU/CUDA 的两个 tiny 组件协议已复验；报告见
 [真实 VERL 注册组件证据](../../../docs/results/2026-10-15-verl-registered-component-oracles.md)。
 上游固定 `e5a627cf55c94d85406556854c2c1a22db4ff5e7`（`0.10.0.dev`），
 测量基线 `b367a25ff89b2496d4c34c57fe0a4b129b781dcd`。重新运行或换上游版本后重新生成分母和证据。
