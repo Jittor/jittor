@@ -192,3 +192,9 @@ def test_runtime_uses_canonical_test_pins_without_conflicting_build_setuptools(p
     assert len(controller) == 4 and 'setuptools==83.0.0' in controller
     assert all(pin in canonical for pin in controller)
     assert not any(pin.startswith(('mypy==', 'ruff==', 'asv==')) for pin in controller)
+
+
+def test_swift_keeps_the_executed_numpy_one_data_abi(provision):
+    assert 'numpy==1.26.4' in provision.COMMON
+    assert 'datasets==3.6.0' in provision.SWIFT_DEPS
+    assert 'pyarrow==19.0.1' in provision.SWIFT_DEPS

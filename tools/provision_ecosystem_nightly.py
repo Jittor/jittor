@@ -26,7 +26,7 @@ SWIFT_REMOTE = 'https://github.com/modelscope/ms-swift.git'
 COMMON = ('numpy==1.26.4', 'accelerate==1.10.1', 'huggingface-hub==0.35.3',
           'tokenizers==0.22.2', 'safetensors==0.8.0', 'astunparse==1.6.3',
           'pillow==11.0.0', 'tqdm==4.67.1')
-SWIFT_DEPS = ('datasets==3.6.0', 'modelscope==1.33.0', 'addict==2.4.0',
+SWIFT_DEPS = ('datasets==3.6.0', 'pyarrow==19.0.1', 'modelscope==1.33.0', 'addict==2.4.0',
               'dacite==1.9.2', 'einops==0.8.1', 'pandas==2.2.3',
               'simplejson==4.2.0', 'sentencepiece==0.2.1', 'rouge==1.0.1', 'trl==0.21.0')
 # The official Torch 2.11 CPU wheel requires setuptools<82. Canonical Stage 2
@@ -262,6 +262,15 @@ def provision(library, state, python, source_cache=None, wheel_cache=None):
     commands.run(oracle, '-c', "import torch; assert not hasattr(torch, '_torch_compat_install_context'); "
                  "assert torch.__version__ == '" + TORCH + "'; assert not torch.cuda.is_available(); "
                  "assert torch._C.__file__; print(torch.__version__, torch._C.__file__)")
+    if library == 'swift':
+        # PyArrow 26's binary requires NumPy 2 despite its unconstrained wheel
+        # metadata. Exercise the pinned data ABI before paying for first JIT.
+        commands.run(oracle, '-c', "import numpy as np, pyarrow as pa, datasets; "
+                     "assert np.__version__ == '1.26.4'; assert pa.__version__ == '19.0.1'; "
+                     "assert datasets.__version__ == '3.6.0'; "
+                     "x=np.arange(7, dtype=np.float32); np.testing.assert_array_equal(pa.array(x).to_numpy(), x); "
+                     "assert len(datasets.Dataset.from_dict({'values': [1, 2]})) == 2; "
+                     "print('Data ABI', np.__version__, pa.__version__, datasets.__version__)")
     commands.run(candidate, '-c', "import importlib.metadata as m; assert m.version('torch') == '" + TORCH + "'")
     for side, interpreter in (('candidate', candidate), ('oracle', oracle), ('controller', controller)):
         log = commands.run(interpreter, '-m', 'pip', 'list', '--format=freeze')
