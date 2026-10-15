@@ -140,7 +140,8 @@ def collect_case(directory, sources, baseline, output, report):
     node = 'compat/tests/torch/test_ecosystem_longformer.py::EcosystemLongformer::test_' + case if family == 'longformer' else (
         'compat/tests/torch/test_ecosystem_parity.py::EcosystemParity::test_' + case)
     return {'repo': 'transformers', 'case': case, 'status': 'passed', 'level': 3,
-        'tier': 'tail' if family in ('clip', 'mixtral', 'longformer') or case.endswith('rope_2048') else 'core',
+        'tier': 'broad' if family == 'longformer' else (
+            'tail' if family in ('clip', 'mixtral') or case.endswith('rope_2048') else 'core'),
         'jittor_commit': baseline, 'upstream': sources['transformers']['upstream'],
         'downstream_versions': {'candidate': '4.56.2', 'oracle': '4.56.2'}, 'registry_refs': refs,
         'device': device, 'observed_device': device, 'platform': platform,

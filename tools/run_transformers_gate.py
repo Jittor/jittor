@@ -287,6 +287,7 @@ def main():
     overall = {'baseline': baseline, 'sources': sources, 'device': args.device,
                'scope': 'preflight-base-only' if args.preflight else 'complete-original-TF18-Longformer2',
                'cases': cases, 'results': []}
+    validated = []
     for case in cases:
         folder = args.output / case
         folder.mkdir()
@@ -318,10 +319,15 @@ def main():
                       ('case', 'phase', 'runtime', 'seed')}), flush=True)
         if not args.preflight:
             record = validate_completed_case(folder, sources, baseline, execution)
+            validated.append(record)
             print('TRANSFORMERS_CASE_VALIDATED ' + json.dumps({'case': case,
                   'array_pairs': record['numerics']['checked_tensors']}), flush=True)
     if not args.preflight:
-        overall['validation'] = {'status': 'passed', 'cases': 10, 'workers': 80, 'array_pairs': 3927}
+        pairs = sum(r['numerics']['checked_tensors'] for r in validated)
+        require(len(validated) == 10 and len(overall['results']) == 80 and pairs == 3927,
+                'The complete original numerical scope was reduced')
+        overall['validation'] = {'status': 'passed', 'cases': len(validated),
+                                 'workers': len(overall['results']), 'array_pairs': pairs}
         (args.output / 'execution.json').write_text(json.dumps(overall, indent=2) + '\n')
     return 0
 
