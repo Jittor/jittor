@@ -20,7 +20,7 @@ GitHub issue 和 PR 描述里；本页不记进度，只记硬件到手那天要
 | `10.19` | 每个带 `grad()` 的后端算子都有对 CPU 参考的梯度测试：60 条里 36 条要硬件，7 条连测试都还没有 | 多卡 CUDA/MPI、Ascend、ROCm | 后端 `grad()` 的 CPU 参考对拍；HCCL |
 | `8.14` | Corex 探测只读、路径可配置：`discover()` 在真实安装上给出正确结论 | Corex / 天数卡 | Corex / 天数 |
 | `8.15` | 多机 rendezvous：真实两机 collective 对拍 | 两台机器 | 两台机器 |
-| `8.16` | 多机启动器：`torchrun --nnodes=2` 跑通 transformers 训练 | 两台机器 | 两台机器 |
+| `8.16` | 多机启动器：`jtrun --nnodes=2` 跑通 transformers 训练 | 两台机器 | 两台机器 |
 | `8.17` | 跨机网络与诊断：带宽微基准、掉线在超时内退出 | 两台机器 | 两台机器 |
 | `8.18` | 多机 checkpoint：2 机保存、4 机加载的续训 | 两台机器（加载需 4 机） | 两台机器 |
 | `10.22` | 两节点 DDP/FSDP 冒烟与掉线门禁进 nightly | 两台机器 | 两台机器 |
@@ -205,12 +205,17 @@ launcher ABI 断言全过，反向对照见下）、以及不变量式静态合�
 
 | | |
 | --- | --- |
-| 命令 | **尚无 nox session** ← 这本身就是 `10.22` 的内容 |
-| 现有材料 | 已合入 TCP/SQLite Store 与 NCCL WORLD bootstrap，可在单机多进程下验 rendezvous、超时与失败传播（`8.15` 的单机前置） |
+| 命令 | `nox -s native_multinode -- <逐节点参数>`；完整参数与阶段顺序见[两机维护入口](../skills/jittor-distributed-verification/SKILL.md#two-host-maintained-entry) |
+| 启动与范围 | runner 使用公开 `jtrun` 的模块入口 `python -m jittor.distributed.launch`，每节点一张 CUDA 卡，NCCL 通信；两端须为相同 clean SHA，并提供共享产物目录和各自私有缓存 |
+| 验收 | 两个真实 host 分别执行 warm、collectives、parity、baseline、resume；节点 0 另执行 oracle 和最终 seal。保留实际主机/网络拓扑证据，不能将本机两个 agent 当作两机验收 |
 
-等它的项：**`8.15`**（真实两机 collective 对拍）、**`8.16`**（`torchrun --nnodes=2` 跑通 transformers
+等它的项：**`8.15`**（真实两机 collective 对拍）、**`8.16`**（`jtrun --nnodes=2` 跑通 transformers
 训练、两机 loss 轨迹一致）、**`8.17`**（跨机带宽微基准、掉线在超时内退出）、**`8.18`**（2 机保存、
 4 机加载的续训）、**`10.22`**（两节点 smoke 进 nightly）。
+
+上述 runner 验证固定双节点的原生 FSDP 协议；Transformers 训练、跨机带宽/网络掉线、
+2 机保存后 4 机加载及 scheduled nightly 仍须分别验收，不能由该 runner 的单次成功推断。
+旧 MPI collective 梯度测试继续使用下表的 `mpi_hardware` 入口，独立于 `jtrun` 多机验收。
 
 ### 后端 `grad()` 的 CPU 参考对拍
 

@@ -173,3 +173,26 @@ CPU→CUDA，未改 Torch wheel 文件，也未将旧 CPU 数字重标为 v5。
 
 本次只关闭原十场景 FP32 L3 的来源与完整维护门禁缺口，不授 Trainer、生成、optimizer 类、
 checkpoint/resume、完整预训练家族、BF16、多 rank、NPU/ROCm 或 L4 性能能力。
+
+
+## 主线整合与历史来源复核
+
+主线先同步远端 `593249c5f0e82febb931234aa35003d0d41c8b33`，再整合工具与报告；
+干净整合源码为 `09e9e8eb8f67f4b32e3b46e05174013c1216983f`。原有 Swift、VERL、PEFT
+等 72 个 nox 函数的 AST 保持一致，新增完整 Transformers session。
+此源码的 host 契约为 **91 passed、0 skipped**，CPU core 为 **322 passed、42 skipped、
+1 项既有 xfail**，完整结构检查为 **1622 passed、6 skipped**；Ruff、布局、MANIFEST 与
+差异检查通过。这些检查不代替该源码上的完整模型测量。
+
+独立只读复核原封存的 **1627 份原始/辅助文件、14100 份外部文件与 2842 个原 Git 文件**，
+哈希全部一致；在原测量工作树复算仍是 **20 accepted、0 blocked、0 rejected、7854 数组对**。
+封存 manifest SHA256 为
+`7545c8ed8d91462cc14fb061b5eededb5a3c256e72852cafff137e47d389d946`。
+另逐一读取原 B4 Git blob，核对每个 worker 捕获的 1562 个框架/工具源码哈希，零差异。
+
+上面的历史 collector 命令须在对应来源未变化的测量工作树执行。当前主线相对 B4 已有
+11 个捕获路径变化、9 个捕获路径新增；直接在当前主线复算原测量会按预期拒绝
+`Measured framework/tool bytes changed`。该失败已保留，未放宽校验或改写旧 metadata。
+当前源码的完整 CPU/CUDA 测量在新的隔离工作树中执行，结果须另记实际来源，不能借用
+上述历史数值。主线复核日志与路径差异在
+`$JITTOR_LAB_ROOT/_state/transformers-main-integration-593/`（未版本化）。
