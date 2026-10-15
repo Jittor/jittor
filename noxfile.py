@@ -3052,6 +3052,38 @@ def ecosystem_transformers_source(session):
 
 
 @nox.session(python=False)
+def ecosystem_diffusers_source(session):
+    """Run the original full UNet forward, gradients and three-step training."""
+    root, env = _session_env(session, "ecosystem-diffusers-source")
+    python = _hardware_python()
+    _set_hardware_python_config(session, python, env)
+    oracle = os.environ.get("REAL_TORCH_PYTHON", "").strip()
+    device = os.environ.get("JITTOR_TEST_DEVICES", "cpu")
+    if not oracle or not Path(oracle).is_file() or device not in ("cpu", "cuda"):
+        session.error("Diffusers source gate needs binary REAL_TORCH_PYTHON and exactly cpu or cuda")
+    if (len(session.posargs) % 2 or any(session.posargs[i] not in ("--output", "--cache-root")
+                                     for i in range(0, len(session.posargs), 2))):
+        session.error("All six workers and original training phases are mandatory; only output/cache paths are configurable")
+    args = []
+    for kind in ("checkout", "wheel"):
+        value = os.environ.get("JITTOR_DIFFUSERS_" + kind.upper(), "").strip()
+        if not value or not Path(value).exists():
+            session.error("Explicit real Diffusers " + kind + " required")
+        args += ["--" + kind, value]
+    for name in ("CUDA_VISIBLE_DEVICES", "CUDA_HOME", "nvcc_path", "JT_BUILD_NVCC_PATH",
+                 "LD_PRELOAD", "LD_LIBRARY_PATH", "JITTOR_CUDA_WHEEL_STRICT", "JITTOR_CUDA_WHEEL_DISABLE"):
+        if name in os.environ:
+            env[name] = os.environ[name]
+    env.update({"JITTOR_REQUIRE_DIFFUSERS": "1", "JITTOR_REQUIRE_REAL_TORCH": "1",
+                "JITTOR_TEST_REQUIRE_EXECUTION": "1", "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1"})
+    output = os.environ.get("JITTOR_DIFFUSERS_EVIDENCE_DIR", "").strip() or str(root / "measurements")
+    session.run(python, str(REPO_ROOT / "tools/run_diffusers_gate.py"),
+                "--candidate-python", python, "--oracle-python", oracle, "--device", device,
+                *args, "--output", output, "--cache-root", str(root / "benchmark-cache"),
+                *session.posargs, external=True, env=env)
+
+
+@nox.session(python=False)
 def ecosystem_openmmlab_installed(session):
     """Maintain original MM train_step scopes with actual installed-wheel proof."""
     root, env = _session_env(session, "ecosystem-openmmlab-installed")

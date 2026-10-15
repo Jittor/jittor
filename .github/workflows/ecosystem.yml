@@ -77,7 +77,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        library: [peft, swift, verl, transformers, openmmlab]
+        library: [peft, swift, verl, transformers, openmmlab, diffusers]
     steps:
       - name: Check out measured source
         uses: actions/checkout@v6
