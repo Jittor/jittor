@@ -42,19 +42,24 @@ VERL_DEPS = ('numpy==2.2.6', 'transformers==5.5.3', 'ray[default]==2.54.1',
 # The official Torch 2.11 CPU wheel requires setuptools<82. Canonical Stage 2
 # tools keep setuptools==83 in a separate controller/build environment.
 RUNTIME_SETUPTOOLS = 'setuptools==80.9.0'
+OPENMMLAB_DEPS = ('numpy==1.26.4', 'opencv-python==4.11.0.86',
+                  'astunparse==1.6.3', 'pillow==11.0.0', 'tqdm==4.67.1')
 
 
 def runtime_roots(library):
     if library == 'verl':
         return list(VERL_DEPS)
+    if library == 'openmmlab':
+        return list(OPENMMLAB_DEPS)
     require(library in ('peft', 'swift', 'transformers'), 'Unknown maintained library profile')
     return list(COMMON) + (list(SWIFT_DEPS) if library == 'swift' else [])
 
 
 def session_name(library):
-    require(library in ('peft', 'swift', 'verl', 'transformers'), 'Unknown maintained library profile')
+    require(library in ('peft', 'swift', 'verl', 'transformers', 'openmmlab'), 'Unknown maintained library profile')
     return {'verl': 'ecosystem_verl_training',
-            'transformers': 'ecosystem_transformers_source'}.get(library, 'ecosystem_' + library)
+            'transformers': 'ecosystem_transformers_source',
+            'openmmlab': 'ecosystem_openmmlab_installed'}.get(library, 'ecosystem_' + library)
 
 
 def digest(path):
@@ -211,12 +216,20 @@ def controller_tools():
     return canonical_tools({'nox', 'build', 'setuptools', 'wheel'})
 
 
+def stage_build_source(source, build):
+    """Preserve tracked symlink bytes, including upstream documentation links."""
+    if not build.exists():
+        shutil.copytree(source, build, symlinks=True, ignore=shutil.ignore_patterns('.git'))
+
+
 def provision(library, state, python, source_cache=None, wheel_cache=None):
     require(sys.version_info[:2] == (3, 11), 'Nightly provisioning requires Python 3.11')
     require(not (state / 'provision.json').exists(), 'Use a new state root after successful provisioning')
     env = environment(state)
     if library == 'verl':
         env['VERL_USE_EXTERNAL_PLUGINS'] = 'none'
+    elif library == 'openmmlab':
+        env.update(MMCV_WITH_OPS='0', MMENGINE_LITE='0')
     commands = Commands(state, env)
     cached = ['--find-links', wheel_cache] if wheel_cache else []
     wheels = state / 'wheels'
@@ -234,6 +247,15 @@ def provision(library, state, python, source_cache=None, wheel_cache=None):
                  source_cache / 'verl' if source_cache else None)
         checkouts['verl'] = path
         sources = inventory('verl', path)
+    elif library == 'openmmlab':
+        from _openmmlab_component_contract import UPSTREAM_COMMITS
+        from registry_inventory import inventory
+        for repo, sha in UPSTREAM_COMMITS.items():
+            path = state / 'upstream' / repo
+            checkout(commands, path, 'https://github.com/open-mmlab/' + repo + '.git', sha,
+                     source_cache / repo if source_cache else None)
+            checkouts[repo] = path
+        sources = {repo: inventory(repo, path) for repo, path in checkouts.items()}
     else:
         from _peft_scorecard import PINS, source_descriptor
         selected = {'transformers': PINS['transformers']} if library == 'transformers' else PINS
@@ -258,6 +280,20 @@ def provision(library, state, python, source_cache=None, wheel_cache=None):
     commands.run(controller, '-m', 'pip', 'download', '--index-url', 'https://pypi.org/simple',
                  '--only-binary=:all:', '--dest', tool_wheels, *cached, *controller_tools())
     commands.run(controller, '-m', 'pip', 'install', '--no-index', '--no-deps', *sorted(tool_wheels.glob('*.whl')))
+    if library == 'openmmlab':
+        # The original setup.py files import pkg_resources. Keep the canonical
+        # controller on setuptools 83; build in the pinned compatible runtime.
+        commands.run(oracle, '-m', 'pip', 'install', '--index-url', 'https://pypi.org/simple',
+                     *cached, RUNTIME_SETUPTOOLS, 'wheel==0.45.1')
+        for repo, source in checkouts.items():
+            build = state / (repo + '-build-source')
+            stage_build_source(source, build)
+            commands.run(oracle, '-m', 'pip', 'wheel', '--no-deps', '--no-build-isolation',
+                         '--wheel-dir', wheels, build)
+            pattern = 'mmengine-0.10.7-*.whl' if repo == 'mmengine' else 'mmcv_lite-2.2.0-*.whl'
+            built = list(wheels.glob(pattern))
+            require(len(built) == 1, 'Expected one source-built base wheel: ' + repo)
+            pinned[repo] = built[0]
     built_source, built_wheel = None, None
     if library in ('swift', 'verl'):
         if library == 'swift':
@@ -293,10 +329,13 @@ def provision(library, state, python, source_cache=None, wheel_cache=None):
                  '--no-build-isolation', '--wheel-dir', wheels, '--find-links', wheels,
                  *cached, *requirements)
     install_wheels(commands, candidate, oracle, wheels, requirements)
-    for side in ('candidate', 'oracle'):
-        site = state / side / 'lib/python3.11/site-packages'
-        for wheel in pinned.values():
-            unpack_pinned_wheel(wheel, site)
+    # The historical PEFT/TF producer requires archive RECORD bytes. The MM
+    # producer accepts legitimate pip RECORD entries; retain its real receipt.
+    if library != 'openmmlab':
+        for side in ('candidate', 'oracle'):
+            site = state / side / 'lib/python3.11/site-packages'
+            for wheel in pinned.values():
+                unpack_pinned_wheel(wheel, site)
     commands.run(candidate, '-m', 'pip', 'install', '--no-deps', '--no-build-isolation',
                  '--config-settings', 'editable_mode=compat', '-e', ROOT)
     commands.run(candidate, '-m', 'pip', 'install', '--no-deps', '--no-build-isolation', '-e', ROOT / 'compat')
@@ -347,10 +386,17 @@ def provision(library, state, python, source_cache=None, wheel_cache=None):
                    JITTOR_ECOSYSTEM_PACKAGE_SITE=str(state / 'candidate/lib/python3.11/site-packages'),
                    JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE=str(state / 'oracle/lib/python3.11/site-packages'),
                    VERL_USE_EXTERNAL_PLUGINS='none')
+    if library == 'openmmlab':
+        env.update(JITTOR_OPENMMLAB_EVIDENCE_DIR=str(state / 'maintained-output'),
+                   JITTOR_ECOSYSTEM_PACKAGE_SITE=str(state / 'candidate/lib/python3.11/site-packages'),
+                   JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE=str(state / 'oracle/lib/python3.11/site-packages'))
     manifest = {'library': library, 'source_commit': subprocess.check_output(
         ['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
         'wheels': {path.name: digest(path) for path in sorted(wheels.glob('*.whl'))},
         'tool_wheels': {path.name: digest(path) for path in sorted(tool_wheels.glob('*.whl'))},
+        'source_clean': not bool(subprocess.check_output(
+            ['git', 'status', '--porcelain'], cwd=ROOT, text=True).strip()),
+        'provisioner_sha256': digest(__file__),
         'session': session_name(library), 'oracle_torch': TORCH,
         'upstream_transport': 'read-only-local-git-cache' if source_cache else 'official-remote',
         'source_cache': str(source_cache) if source_cache else None,
@@ -365,7 +411,7 @@ def provision(library, state, python, source_cache=None, wheel_cache=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--library', choices=('peft', 'swift', 'verl', 'transformers'), required=True)
+    parser.add_argument('--library', choices=('peft', 'swift', 'verl', 'transformers', 'openmmlab'), required=True)
     parser.add_argument('--state-root', type=Path, required=True)
     parser.add_argument('--python', default=sys.executable, help='Healthy Python 3.11 for new private venvs')
     parser.add_argument('--source-cache', type=Path,

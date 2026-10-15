@@ -29,7 +29,7 @@ def test_nightly_keeps_existing_gate_and_runs_both_complete_maintained_sessions(
     assert workflow['on']['schedule'] and 'workflow_dispatch' in workflow['on']
     assert workflow['jobs']['ecosystem']['steps'][-1]['run'] == 'python -m nox -s ecosystem'
     job = workflow['jobs']['maintained-cpu']
-    assert job['strategy']['matrix']['library'] == ['peft', 'swift', 'verl', 'transformers']
+    assert job['strategy']['matrix']['library'] == ['peft', 'swift', 'verl', 'transformers', 'openmmlab']
     assert job['strategy']['fail-fast'] == 'false'
     steps = job['steps']
     run = next(step for step in steps if 'tools/provision_ecosystem_nightly.py' in step.get('run', ''))
@@ -72,7 +72,8 @@ def test_verl_runtime_profile_preserves_original_numpy_two_component_pins(provis
 @pytest.mark.parametrize('library,session', [('peft', 'ecosystem_peft'),
                                             ('swift', 'ecosystem_swift'),
                                             ('verl', 'ecosystem_verl_training'),
-                                            ('transformers', 'ecosystem_transformers_source')])
+                                            ('transformers', 'ecosystem_transformers_source'),
+                                            ('openmmlab', 'ecosystem_openmmlab_installed')])
 def test_profiles_invoke_the_actual_complete_maintained_session(provision, library, session):
     assert provision.session_name(library) == session
 
@@ -231,3 +232,23 @@ def test_transformers_uses_the_original_numpy_one_complete_runtime(provision):
     assert 'numpy==1.26.4' in provision.runtime_roots('transformers')
     assert not any(value.startswith(('transformers==5', 'peft==', 'datasets==', 'ray'))
                    for value in provision.runtime_roots('transformers'))
+
+
+def test_openmmlab_keeps_complete_base_dependencies_and_numpy_one(provision):
+    roots = provision.runtime_roots('openmmlab')
+    assert 'numpy==1.26.4' in roots and 'opencv-python==4.11.0.86' in roots
+    assert not any(value.startswith(('transformers==', 'peft==', 'mmcv==')) for value in roots)
+
+
+def test_source_build_preserves_original_broken_symlink_without_dereferencing(provision, tmp_path):
+    source, build = tmp_path / 'source', tmp_path / 'build'
+    source.mkdir()
+    (source / '.git').mkdir()
+    (source / '.git/config').write_text('source Git identity')
+    (source / 'version.py').write_bytes(b"__version__ = '2.2.0'\n")
+    (source / 'logo.png').symlink_to('../../missing-original-logo.png')
+    provision.stage_build_source(source, build)
+    assert (build / 'logo.png').is_symlink()
+    assert (build / 'logo.png').readlink() == (source / 'logo.png').readlink()
+    assert (build / 'version.py').read_bytes() == (source / 'version.py').read_bytes()
+    assert not (build / '.git').exists() and (source / '.git/config').is_file()

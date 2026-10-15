@@ -77,7 +77,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        library: [peft, swift, verl, transformers]
+        library: [peft, swift, verl, transformers, openmmlab]
     steps:
       - name: Check out measured source
         uses: actions/checkout@v6
@@ -87,6 +87,9 @@ jobs:
         run: |
           apt-get update
           apt-get install --yes --no-install-recommends build-essential libomp-dev git ca-certificates
+      - name: Install OpenCV runtime libraries
+        if: matrix.library == 'openmmlab'
+        run: apt-get install --yes --no-install-recommends libgl1 libglib2.0-0t64
       - name: Set up pinned gate Python
         uses: actions/setup-python@v6
         with:
@@ -117,3 +120,4 @@ jobs:
             ${{ runner.temp }}/maintained-${{ matrix.library }}/swift-inventory.json
             ${{ runner.temp }}/maintained-${{ matrix.library }}/resolved-lock-*.txt
             ${{ runner.temp }}/maintained-${{ matrix.library }}/lab/_state/nox/**/measurements/**
+            ${{ runner.temp }}/maintained-${{ matrix.library }}/maintained-output/
