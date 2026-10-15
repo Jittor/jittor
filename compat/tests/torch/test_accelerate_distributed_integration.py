@@ -25,9 +25,11 @@ for _source, _target in (("JT_NCCL_RANK", "RANK"),
 if "JT_NCCL_RANK" in os.environ:
     os.environ.setdefault("LOCAL_RANK", "0")
 
-import torch
-import torch.distributed as dist
-from torch.utils.data import DataLoader, TensorDataset
+import torch  # noqa: E402
+import torch.distributed as dist  # noqa: E402
+
+from _accelerate_protocol import Capture, hyperparameters  # noqa: E402
+from torch.utils.data import DataLoader, TensorDataset  # noqa: E402
 
 
 def _values(value):
@@ -274,17 +276,36 @@ def test_fsdp2_full_model_optimizer_checkpoint_resume(distributed_scope, tmp_pat
     model, optimizer = _model_optimizer(accelerator.device, observe_bf16=bf16)
     model, optimizer = accelerator.prepare(model, optimizer)
     raw = accelerator.unwrap_model(model)
-    x = torch.tensor(np.arange(16, dtype=np.float32).reshape(4, 4) / 100 + accelerator.process_index / 10, device=accelerator.device)
+    capture = Capture("fsdp2_full", torch, "cuda", accelerator.num_processes,
+                      accelerator.process_index, mixed_precision)
+    input_seed = int(os.environ.get("JITTOR_ACCELERATE_INPUT_SEED", "0"))
+    input_values = np.arange(16, dtype=np.float32).reshape(4, 4) / 100 + accelerator.process_index / 10
+    if input_seed:
+        input_values += np.random.RandomState(input_seed).normal(0, .01, input_values.shape).astype(np.float32)
+    x = torch.tensor(input_values, device=accelerator.device, requires_grad=True)
     y = torch.tensor(np.arange(12, dtype=np.float32).reshape(4, 3) / 80, device=accelerator.device)
     options = StateDictOptions(full_state_dict=True, cpu_offload=False)
 
+    capture.add("initial/model", dict(raw.named_parameters()))
+    update_index = [0]
+
     def update():
         optimizer.zero_grad()
+        x.grad = None
+        prefix = "step/%d" % update_index[0]
+        update_index[0] += 1
         output = model(x)
         assert output.dtype == (torch.bfloat16 if bf16 else torch.float32)
         loss = ((output.float() - y) ** 2).mean()
         assert loss.dtype == torch.float32
         accelerator.backward(loss)
+        assert x.grad is not None and x.grad.device.type == "cuda"
+        capture.add(prefix + "/input", x)
+        capture.add(prefix + "/target", y)
+        capture.add(prefix + "/output", output)
+        capture.add(prefix + "/loss", loss)
+        capture.add(prefix + "/input_gradient", x.grad)
+        capture.add(prefix + "/parameter_gradients", {name: parameter.grad for name, parameter in raw.named_parameters()})
         gradient_dtypes, gradients = {}, {}
         for name, parameter in raw.named_parameters():
             local = parameter.to_local() if callable(getattr(parameter, "to_local", None)) else parameter
@@ -304,13 +325,17 @@ def test_fsdp2_full_model_optimizer_checkpoint_resume(distributed_scope, tmp_pat
                    for value in entry.values())
         assert all(value.dtype == torch.float32 and value.device.type == "cuda"
                    for value in state[0].values())
+        capture.add(prefix + "/model", state[0])
+        capture.add(prefix + "/optimizer", state[1]["state"])
+        capture.add(prefix + "/hyperparameters", hyperparameters(optimizer))
         moment_dtypes = {}
         for name, entry in state[1]["state"].items():
             for key in ("exp_avg", "exp_avg_sq"):
                 assert entry[key].dtype == torch.float32 and entry[key].device.type == "cuda"
                 moment_dtypes[name + "." + key] = str(entry[key].dtype)
         return {"loss": _values(loss), "model": _values(state[0]), "optimizer": _values(state[1]),
-                "gradients": gradients, "gradient_dtypes": gradient_dtypes, "moment_dtypes": moment_dtypes}
+                "gradients": gradients, "input_gradient": _values(x.grad),
+                "gradient_dtypes": gradient_dtypes, "moment_dtypes": moment_dtypes}
 
     def random_sample():
         return {"python": random.random(), "numpy": np.random.rand(3).tolist(),
@@ -326,7 +351,7 @@ def test_fsdp2_full_model_optimizer_checkpoint_resume(distributed_scope, tmp_pat
     torch.manual_seed(1729 + accelerator.process_index)
     torch.cuda.manual_seed_all(1729 + accelerator.process_index)
     random_sample()  # Exercise an advanced stream, not just seed restoration.
-    before_save = [update() for _ in range(3 if bf16 else 1)]
+    before_save = [update() for _ in range(3 if bf16 or capture.enabled else 1)]
     saved = before_save[-1]
     for entry in saved["optimizer"]["state"].values():
         assert entry["step"] == len(before_save)
@@ -334,7 +359,7 @@ def test_fsdp2_full_model_optimizer_checkpoint_resume(distributed_scope, tmp_pat
     _progress(accelerator, "accelerator_save_state")
     accelerator.save_state(path[0], safe_serialization=False)
     expected_random = random_sample()
-    expected = [update() for _ in range(2 if bf16 else 1)]
+    expected = [update() for _ in range(2 if bf16 or capture.enabled else 1)]
     _progress(accelerator, "accelerator_load_state")
     accelerator.load_state(path[0])
     restored = get_state_dict(model, optimizer, options=options)
@@ -342,7 +367,7 @@ def test_fsdp2_full_model_optimizer_checkpoint_resume(distributed_scope, tmp_pat
     assert restored == {key: saved[key] for key in ("model", "optimizer")}
     resumed_random = random_sample()
     assert resumed_random == expected_random
-    resumed = [update() for _ in range(2 if bf16 else 1)]
+    resumed = [update() for _ in range(2 if bf16 or capture.enabled else 1)]
     # The fixed tiny model uses deterministic kernels in both runtimes. FULL
     # restoration must reproduce the same trajectory without a tolerance.
     assert resumed == expected
@@ -352,7 +377,7 @@ def test_fsdp2_full_model_optimizer_checkpoint_resume(distributed_scope, tmp_pat
     observations = raw.compute_observations if bf16 else []
     if bf16:
         assert len(observations) == 7
-    _report(accelerator, "full_checkpoint_bf16" if bf16 else "full_checkpoint", model,
+    observation = _report(accelerator, "full_checkpoint_bf16" if bf16 else "full_checkpoint", model,
             mixed_precision=mixed_precision, before_save=before_save,
             compute_observations=observations, fallback_count=0 if jt is not None else None,
             fallback_policy="error" if jt is not None else None,
@@ -364,3 +389,7 @@ def test_fsdp2_full_model_optimizer_checkpoint_resume(distributed_scope, tmp_pat
             saved=saved, after_restore=restored,
             expected_resume=expected, actual_resume=resumed,
             files=sorted(file.name for file in Path(path[0]).iterdir()))
+    capture.finish({"before_save": before_save, "expected_resume": expected, "actual_resume": resumed,
+                    "saved": saved, "after_restore": restored,
+                    "expected_random": expected_random, "resumed_random": resumed_random,
+                    "compute_observations": observations, "distributed_observation": observation}, backend=dist.get_backend())

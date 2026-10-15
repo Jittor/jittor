@@ -19,6 +19,8 @@ import unittest
 
 import numpy as np
 import torch
+
+from _accelerate_protocol import Capture, hyperparameters
 from torch.distributed.checkpoint.state_dict import (
     StateDictOptions, get_model_state_dict, get_optimizer_state_dict,
     get_state_dict, set_model_state_dict, set_optimizer_state_dict, set_state_dict,
@@ -70,11 +72,20 @@ def model_optimizer():
 
 def update(model, optimizer, backward=None, capture=None):
     optimizer.zero_grad()
-    x = torch.tensor(np.arange(12, dtype=np.float32).reshape(4, 3) / 10, device=DEVICE, requires_grad=True)
+    input_values = np.arange(12, dtype=np.float32).reshape(4, 3) / 10
+    input_seed = int(os.environ.get("JITTOR_ACCELERATE_INPUT_SEED", "0"))
+    if input_seed:
+        input_values += np.random.RandomState(input_seed).normal(0, .01, input_values.shape).astype(np.float32)
+    x = torch.tensor(input_values, device=DEVICE, requires_grad=True)
     y = torch.tensor(np.arange(8, dtype=np.float32).reshape(4, 2) / 20, device=DEVICE)
-    loss = ((model(x) - y) ** 2).mean()
+    output = model(x)
+    loss = ((output - y) ** 2).mean()
     (backward or (lambda value: value.backward()))(loss)
     if capture is not None:
+        capture["input"] = snapshot(x)
+        capture["target"] = snapshot(y)
+        capture["output"] = snapshot(output)
+        capture["loss"] = snapshot(loss)
         capture["input_gradient"] = snapshot(x.grad)
         capture["parameter_gradients"] = snapshot(dict((name, parameter.grad) for name, parameter in model.named_parameters()))
     optimizer.step()
@@ -223,32 +234,52 @@ class TestOptimizerCheckpoint(unittest.TestCase):
             scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=.8)
             model, optimizer, scheduler = accelerator.prepare(model, optimizer, scheduler)
             self.assertEqual(accelerator.device.type, DEVICE)
-            update(model, optimizer, accelerator.backward)
-            scheduler.step()
+            capture = Capture("single_checkpoint", torch, DEVICE)
+            capture.add("initial/model", dict(accelerator.unwrap_model(model).named_parameters()))
+            step_index = [0]
+
+            def measured_update():
+                observed = {}
+                loss = update(model, optimizer, accelerator.backward, observed)
+                scheduler.step()
+                state = snapshot(get_state_dict(accelerator.unwrap_model(model), optimizer))
+                capture.add("step/%d" % step_index[0], {**observed, "model": state[0],
+                                                        "optimizer": state[1]["state"],
+                                                        "hyperparameters": hyperparameters(optimizer),
+                                                        "learning_rates": scheduler.get_last_lr()})
+                step_index[0] += 1
+                return {"loss": loss, "model": numbers(state[0]), "optimizer": numbers(state[1]),
+                        "gradients": numbers(observed), "learning_rates": scheduler.get_last_lr()}
+
+            before_save = [measured_update() for _ in range(3 if capture.enabled else 1)]
             with tempfile.TemporaryDirectory() as path:
                 accelerator.save_state(path, safe_serialization=False)
-                random_expected = (random.random(), np.random.random(4),
-                                   numbers(torch.rand(4, device="cpu")),
-                                   numbers(torch.rand(4, device=DEVICE)))
+
+                def random_sample():
+                    return {"python": random.random(), "numpy": np.random.random(4).tolist(),
+                            "torch_cpu": numbers(torch.rand(4, device="cpu")),
+                            "torch_device": numbers(torch.rand(4, device=DEVICE))}
+
+                random_expected = random_sample()
                 saved = snapshot(get_state_dict(accelerator.unwrap_model(model), optimizer))
-                expected_gradients = {}
-                expected_loss = update(model, optimizer, accelerator.backward, expected_gradients)
-                scheduler.step()
+                expected_resume = [measured_update() for _ in range(2 if capture.enabled else 1)]
                 expected = snapshot(get_state_dict(accelerator.unwrap_model(model), optimizer))
                 expected_lr = scheduler.get_last_lr()
                 accelerator.load_state(path)
-                self.assertEqual(random.random(), random_expected[0])
-                np.testing.assert_array_equal(np.random.random(4), random_expected[1])
-                self.assertEqual(numbers(torch.rand(4, device="cpu")), random_expected[2])
-                self.assertEqual(numbers(torch.rand(4, device=DEVICE)), random_expected[3])
+                resumed_random = random_sample()
+                self.assertEqual(resumed_random, random_expected)
                 self.assert_tree(get_state_dict(accelerator.unwrap_model(model), optimizer), saved)
-                actual_gradients = {}
-                actual_loss = update(model, optimizer, accelerator.backward, actual_gradients)
-                scheduler.step()
-                self.assertAlmostEqual(actual_loss, expected_loss, places=6)
-                self.assert_tree(actual_gradients, expected_gradients)
+                restored = numbers(get_state_dict(accelerator.unwrap_model(model), optimizer))
+                actual_resume = [measured_update() for _ in range(2 if capture.enabled else 1)]
+                self.assertEqual(actual_resume, expected_resume)
                 self.assert_tree(get_state_dict(accelerator.unwrap_model(model), optimizer), expected)
                 self.assertEqual(scheduler.get_last_lr(), expected_lr)
+                expected_loss, actual_loss = expected_resume[-1]["loss"], actual_resume[-1]["loss"]
+                actual_gradients = actual_resume[-1]["gradients"]
+                capture.finish({"before_save": before_save, "expected_resume": expected_resume,
+                                "actual_resume": actual_resume, "saved": numbers(saved),
+                                "after_restore": restored, "expected_random": random_expected,
+                                "resumed_random": resumed_random})
                 report = {"device": DEVICE, "torch": torch.__version__,
                           "accelerate": __import__("accelerate").__version__,
                           "oracle": not hasattr(torch, "_torch_compat_install_context"),

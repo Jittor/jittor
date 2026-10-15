@@ -267,14 +267,20 @@ def validate_record(record, inventories, baseline, root=ROOT):
     level = record.get("level")
     _require(type(level) is int and 1 <= level <= 5, "Level must be L1..L5")
     _require(record.get("tier") in ("core", "broad", "tail"), "Missing sampling tier")
+    kind = record.get("record_kind", "registry")
+    _require(kind in ("registry", "protocol"), "Unknown scorecard record_kind")
+    if kind == "protocol":
+        from _protocol_scorecards import validate_spec
+        validate_spec(record, inventories[repo])
+        _require(level in (2, 3), "Protocol scorecards admit only independent L2/L3 evidence")
     references = record.get("registry_refs", [])
-    _require(references, "Missing registered denominator member")
+    _require(kind == "protocol" or references, "Missing registered denominator member")
     for ref in references:
         _require(ref.get("repo") in inventories, "Unknown registry reference repo")
         axes = inventories[ref["repo"]]["axes"]
         _require(any(axis["axis"] == ref.get("axis") and ref.get("member") in axis["members"] for axis in axes),
                  "Unregistered model/method member")
-    _require(any(ref.get("repo") == repo for ref in references), "Record has no member from its own repo")
+    _require(kind == "protocol" or any(ref.get("repo") == repo for ref in references), "Record has no member from its own repo")
     device = record.get("device")
     _require(device in ("cpu", "cuda", "npu", "rocm", "corex"), "Unknown requested device")
     _require(record.get("observed_device") == device, "Requested/observed device mismatch")
@@ -371,7 +377,11 @@ def validate_record(record, inventories, baseline, root=ROOT):
         _require(device != "cpu" and fallback.get("policy") == "error" and fallback.get("count") == 0,
                  "L5 requires actual accelerator execution with zero fallback")
     if level >= 2:
-        _validate_measurements(record, level, artifacts, installation)
+        if kind == "protocol":
+            from _protocol_scorecards import validate_measurements
+            validate_measurements(record, artifacts, inventories[repo])
+        else:
+            _validate_measurements(record, level, artifacts, installation)
     return level
 
 
@@ -385,16 +395,30 @@ def scorecard(inventories, records, baseline, root=ROOT):
             rejected.append({"index": index, "case": record.get("case"), "reason": str(error)})
             continue
         accepted.append(dict(record, verified_level=level))
+    protocol_rows = [row for row in accepted if row.get("record_kind") == "protocol"]
+    blocked = []
+    if protocol_rows:
+        from _protocol_scorecards import pairing_key as protocol_scenario
+        protocol_cpu = {protocol_scenario(row) for row in protocol_rows
+                        if row["device"] == "cpu" and row["verified_level"] >= 2}
+        for row in protocol_rows:
+            if row["device"] != "cpu" and protocol_scenario(row) not in protocol_cpu:
+                blocked.append(dict(row, reported_status=row["status"], status="blocked", level=None,
+                                    verified_level=None, independent_verified_level=row["verified_level"],
+                                    reason="Missing verified CPU counterpart for this exact protocol"))
+        accepted = [row for row in accepted if row.get("record_kind") != "protocol"
+                    or row["device"] == "cpu" or protocol_scenario(row) in protocol_cpu]
+    registry_accepted = [row for row in accepted if row.get("record_kind") != "protocol"]
     def scenario(row):
         return (row["repo"], row.get("case"), json.dumps(row["registry_refs"], sort_keys=True))
-    cpu = {scenario(row) for row in accepted if row["device"] == "cpu" and row["verified_level"] >= 2}
+    cpu = {scenario(row) for row in registry_accepted if row["device"] == "cpu" and row["verified_level"] >= 2}
     coverage = []
     for repo, source in inventories.items():
         for axis in source["axes"]:
             for device in ("cpu", "cuda", "npu", "rocm", "corex"):
                 verified = set()
                 scenarios = []
-                for row in accepted:
+                for row in registry_accepted:
                     if row["device"] != device or row["verified_level"] < 2:
                         continue
                     if device != "cpu" and scenario(row) not in cpu:
@@ -413,10 +437,31 @@ def scorecard(inventories, records, baseline, root=ROOT):
                 coverage.append({"repo": repo, "axis": axis["axis"], "device": device,
                                  "verified_members": sorted(verified), "verified_scenarios": scenarios, "numerator": len(verified),
                                  "denominator": axis["count"], "upstream_commit": source["upstream"]["commit"]})
-    return {"schema_version": 2, "baseline": baseline, "inventories": inventories,
+    value = {"schema_version": 2, "baseline": baseline, "inventories": inventories,
             "coverage": coverage, "accepted": accepted, "rejected": rejected,
             "tiers": {tier: sum(row["tier"] == tier for row in accepted) for tier in ("core", "broad", "tail")},
             "note": "L1 is not counted. Accelerator breadth requires the matching independent CPU oracle comparison. A representative case never proves all checkpoints in its family."}
+    if any(row.get("record_kind") == "protocol" for row in records):
+        from _protocol_scorecards import pairing_key as protocol_scenario
+        value["blocked"] = blocked
+        value["protocols"] = [{"repo": row["repo"], "case": row["case"], "device": row["device"],
+                               "protocol": row["protocol"],
+                               "level": row["verified_level"] if protocol_scenario(row) in protocol_cpu else None,
+                               "independent_verified_level": row["verified_level"],
+                               "status": "passed" if protocol_scenario(row) in protocol_cpu else "blocked",
+                               "reason": None if protocol_scenario(row) in protocol_cpu else "Missing verified CPU counterpart for this exact protocol",
+                               "matching_cpu_verified": protocol_scenario(row) in protocol_cpu,
+                               "registry_coverage": "not-applicable"}
+                              for row in protocol_rows]
+        for failure in rejected:
+            row = records[failure["index"]]
+            if row.get("record_kind") == "protocol":
+                value["protocols"].append({"repo": row.get("repo"), "case": row.get("case"), "device": row.get("device"),
+                                           "protocol": row.get("protocol"), "level": None, "status": "rejected",
+                                           "reported_status": row.get("status"), "reason": failure["reason"],
+                                           "reported_reason": row.get("reason"),
+                                           "matching_cpu_verified": False, "registry_coverage": "not-applicable"})
+    return value
 
 
 def render_audit(value):

@@ -226,3 +226,45 @@ CUDA/driver 或 CANN、nvcc/gcc、nvidia wheel、Jittor SHA/flags、独立 oracl
 丢失平台块、skip/xfail/全skip、缺CPU①、非零fallback、缺梯度、假gate节点、产物哈希不符、
 用tiny规格声称L4等均不计分，并使含被拒行的命令非零退出。旧 Markdown 报告需补齐并
 亲自复验后才能进入分子；没有新证据的格子写“未验证”，不能拿本库 CPU/device 自比补空。
+
+## Accelerate checkpoint 协议
+
+Accelerate 没有与模型族同义的注册表。`tools/run_accelerate_gate.py` 直接调用维护中的
+单进程 checkpoint 与两 rank FSDP2 FULL 测试，`nox -s ecosystem_accelerate` 是正确性入口；
+`benchmark_accelerate` 仍只负责性能。使用预装且版本相同的私有双解释器，设置
+`REAL_TORCH_PYTHON`、`JITTOR_ACCELERATE_CHECKOUT`、`JITTOR_TEST_DEVICES=cpu|cuda`；
+CUDA 额外要求显式分配两张 `CUDA_VISIBLE_DEVICES`。工具不安装或升级包。
+
+```bash
+python tools/run_accelerate_gate.py --device cpu \
+  --jittor-python <jittor-python> --oracle-python <real-torch-python> \
+  --upstream "$JITTOR_LAB_ROOT/accelerate-validation/upstream" \
+  --output "$JITTOR_LAB_ROOT/_state/accelerate-protocol/cpu"
+python tools/run_accelerate_gate.py --device cuda --devices <gpu0>,<gpu1> \
+  --jittor-python <jittor-python> --oracle-python <real-torch-python> \
+  --upstream "$JITTOR_LAB_ROOT/accelerate-validation/upstream" \
+  --output "$JITTOR_LAB_ROOT/_state/accelerate-protocol/cuda"
+python agent/skills/torch-compat-repo-runbook/scripts/collect_accelerate_scorecards.py \
+  --run "$JITTOR_LAB_ROOT/_state/accelerate-protocol/cpu" \
+  --run "$JITTOR_LAB_ROOT/_state/accelerate-protocol/cuda" \
+  --upstream "$JITTOR_LAB_ROOT/accelerate-validation/upstream" \
+  --baseline <full-measured-source-SHA> --report docs/results/<dated-report>.md \
+  --command '<exact measurement commands>' \
+  --output "$JITTOR_LAB_ROOT/_state/accelerate-protocol/scorecard"
+```
+
+先冻结并提交工具源码，再采集。CPU 显式隐藏 CUDA；两 rank CUDA 每种精度/输入种子独立
+launcher，rank 缓存逐个预热，benchmark 与单测缓存隔离。实际进程绑定完整上游包源码、
+实际安装包所有文件、二进制 Torch 身份、平台、精度开关、所有输入/参数梯度、Adam moments、
+逐步轨迹和四路 RNG。采集不覆盖旧产物。
+
+共享 schema 用 `record_kind=protocol`、显式 `axes=[]/registry_refs=[]`，单独展示协议及
+world/precision/rank，不产生注册表分子或分母。CPU world1 只匹配 CUDA world1；两 rank
+CUDA 缺 CPU world2 对应时保留独立数值结论，但进入 `blocked`，准入 `level=null`，
+不进入 `accepted`。own-runtime 精确恢复不能代替独立跨 runtime 数值
+一致；保留原 `atol=2e-6, rtol=2e-5`，失败行 `level=null`，不得靠放宽预算授级。
+
+多次采集使用不同 `--output`；可用 `--cache-root <external-benchmark-root>` 复用任务自己的
+设备/rank benchmark 缓存，不能指向单测缓存。协议 dispatcher 只允许明确的 repo/id；
+专用 validator 尚未存在或 scope 不匹配时拒绝。配对比较完整设备无关协议描述，不能将
+不同 world、precision、ZeRO stage 或训练规格配成一对；失败/阻塞不填 verified level。
