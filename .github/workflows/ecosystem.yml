@@ -87,6 +87,9 @@ jobs:
         run: |
           apt-get update
           apt-get install --yes --no-install-recommends build-essential libomp-dev git ca-certificates
+      - name: Install OpenCV runtime libraries
+        if: matrix.library == 'openmmlab'
+        run: apt-get install --yes --no-install-recommends libgl1 libglib2.0-0t64
       - name: Set up pinned gate Python
         uses: actions/setup-python@v6
         with:
