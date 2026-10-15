@@ -71,7 +71,8 @@ def wheel_payload(artifact, repo, version, prefix, known):
                     normalize(header["Name"]) == normalize(repo), "Upstream wheel distribution name mismatch")
             versions = header.get_all("Version", [])
             require(len(versions) == 1 and versions[0] and not versions[0].startswith("source@") and
-                    (version.startswith("source@") or versions == [version]),
+                    (version.startswith("source@") or versions == [version] or
+                     equivalent_release_versions(version, versions[0])),
                     "Upstream wheel version mismatch")
             payload = {name[len(prefix) + 1:]: digest_member(wheel, name)
                        for name in names if name.startswith(prefix + "/") and not name.endswith("/")}
@@ -83,6 +84,17 @@ def wheel_payload(artifact, repo, version, prefix, known):
             return versions[0], payload
     except (OSError, zipfile.BadZipFile) as error:
         raise ValueError("Invalid upstream wheel artifact") from error
+
+
+def equivalent_release_versions(module_version, distribution_version):
+    """Recognize PEP 440 spelling normalization, preserving both original values.
+
+    Import packaging only for this explicit, nonliteral wheel proof. Source-only
+    inventory/audit and existing literal or source@ identities do not need it.
+    """
+    from packaging.version import Version
+
+    return Version(module_version) == Version(distribution_version)
 
 
 def installation_proofs(record, inventories, artifacts, *, skip_own=False):
@@ -104,12 +116,20 @@ def installation_proofs(record, inventories, artifacts, *, skip_own=False):
         wheels = [item for item in artifacts if item.get("role") in roles]
         require(len(wheels) <= 1, "Ambiguous upstream wheel proof")
         version, payload = source["upstream"]["version"], None
+        normalized_distribution_version = None
         if wheels:
-            version, payload = wheel_payload(wheels[0], repo, version, prefix, known)
+            distribution_version, payload = wheel_payload(wheels[0], repo, version, prefix, known)
+            if version.startswith("source@"):
+                version = distribution_version
+            elif version != distribution_version:
+                normalized_distribution_version = distribution_version
             require(all(package_path(name)[1] in payload for name in required),
                     "Upstream wheel omits required package source")
-        result.append({"repo": repo, "version": version, "required": required, "known": known,
-                       "payload": payload, "wheel_sha256": wheels[0]["sha256"] if wheels else None})
+        package = {"repo": repo, "version": version, "required": required, "known": known,
+                   "payload": payload, "wheel_sha256": wheels[0]["sha256"] if wheels else None}
+        if normalized_distribution_version is not None:
+            package["distribution_version"] = normalized_distribution_version
+        result.append(package)
     return {"proof_kind": "installed-source", "packages": result}
 
 
@@ -125,6 +145,9 @@ def validate_installations(value, proof):
             binding = singular
         require(isinstance(binding, dict) and binding.get("repo") == repo and
                 binding.get("version") == package["version"], "Missing installed distribution/source binding: " + repo)
+        if "distribution_version" in package:
+            require(binding.get("distribution_version") == package["distribution_version"],
+                    "Missing or mismatched installed distribution version: " + repo)
         actual = hashes(binding.get("source_sha256"))
         require(package["required"].items() <= actual.items() <= package["known"].items(),
                 "Incomplete or mismatched installed distribution/source binding: " + repo)

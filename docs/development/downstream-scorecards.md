@@ -87,6 +87,16 @@ wheel 的唯一 METADATA，核对包名、版本和全部库存源码，再要�
 包含该 artifact 的 `wheel_sha256`。角色名不代表 wheel 一定来自 PyPI，报告须如实说明
 是否由固定源码自行构建。没有 wheel 时，额外安装的 Python 文件也必须来自库存。
 
+源码模块版本与 wheel METADATA 仅有 PEP 440 拼写规范化差异时，保留两个原始值：
+`version` 仍为实际模块/库存的字面版本，额外 `distribution_version` 必须等于原始
+wheel 的唯一 METADATA Version。例如 VERL 源码 `0.10.0.dev` 的真实构建产物声明
+`0.10.0.dev0`。只有独立读取的 wheel 版本与源码版本经 `packaging.version.Version`
+严格相等才允许该分支；base、两次 perturb 与 training 的每个 runtime 都必须显式
+绑定实际 `distribution_version` 和完整 wheel payload。缺字段、不同 dev/rc/local
+版本、错误元数据或缺安装文件都拒绝。原来的字面相等与 SCM 分支不变；不得改写
+`__version__` 或将开发版标为正式 release。`packaging` 仅在需要该非字面证明时加载，
+缺依赖直接失败，纯源码枚举入口仍可用 `python -S`。
+
 旧测量缺少这些原始绑定时，当前审计拒绝授予覆盖分子；保留其原始数值结果和测量 SHA，
 不能从今天的安装目录回填历史证据。协议型记录继续使用各自的独立严格校验器。
 
