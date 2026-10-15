@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Recheck bound native FSDP arrays using NumPy, without importing a runtime.
 
-This verifies the maintained dense-oracle/fresh-launch fixture on a single
-host. It grants no multi-host, throughput, memory or ecosystem coverage level.
+This verifies the maintained dense-oracle/fresh-launch fixture with two agents.
+Physical topology requires external evidence. It grants no multi-host,
+throughput, memory or ecosystem coverage level.
 """
 
 import argparse
@@ -133,7 +134,7 @@ def verify(args):
                     or identity.get('rank') != rank or identity.get('world_size') != 2
                     or identity.get('local_world_size') != 1 or identity.get('external_store') != '1'
                     or identity.get('phase') != mode):
-                raise ValueError('worker identity does not prove the declared loopback protocol')
+                raise ValueError('worker identity does not prove the declared two-agent protocol')
             identities[mode, rank] = identity
     _worker_isolation(identities)
 

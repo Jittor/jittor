@@ -21,7 +21,8 @@ import time
 
 STAGES = ('plan', 'oracle', 'warm', 'collectives', 'parity', 'baseline', 'resume', 'seal')
 ENV_KEYS = (
-    'HOME', 'JITTOR_HOME', 'TMPDIR', 'PYTHONPATH', 'JITTOR_TORCH_SHIM',
+    'HOME', 'JITTOR_HOME', 'TMPDIR', 'PYTHONPATH', 'JITTOR_SOURCE_ROOT', 'JITTOR_TORCH_SHIM',
+    'JITTOR_TEST_DEVICES',
     'JT_BACKEND', 'JT_USE_CUDA', 'use_cuda', 'CUDA_VISIBLE_DEVICES',
     'JT_BUILD_USE_MPI', 'JT_BUILD_USE_NCCL', 'JT_BUILD_USE_MKL', 'JT_BUILD_USE_CUTT',
     'JT_BUILD_NVCC_PATH', 'nvcc_path', 'JITTOR_CUDA_WHEEL_STRICT',
@@ -133,6 +134,8 @@ def environment(args, *, oracle=False):
         ('HOME', 'home'), ('JITTOR_HOME', 'jittor'), ('TMPDIR', 'tmp'))})
     env.update({
         'PYTHONPATH': '' if oracle else str(args.source_root / 'python'),
+        'JITTOR_SOURCE_ROOT': '' if oracle else str(args.source_root),
+        'JITTOR_TEST_DEVICES': 'cuda',
         'JITTOR_TORCH_SHIM': '0', 'JT_BACKEND': 'cuda', 'JT_USE_CUDA': '1', 'use_cuda': '1',
         'CUDA_VISIBLE_DEVICES': args.device_id,
         'JT_BUILD_USE_MPI': '0', 'JT_BUILD_USE_NCCL': '0' if oracle else '1',

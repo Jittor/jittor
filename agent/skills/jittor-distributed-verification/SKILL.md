@@ -630,8 +630,10 @@ Each training stage creates a fresh public `python -m jittor.distributed.launch`
 agent and worker, invokes the maintained pytest node, requires actual execution,
 and retains the existing numerical budgets. Fresh resume requires new workers,
 models and optimizers. Failed/partial commands keep their claims and logs;
-rerunning into the same output is refused. Use new output and private state for
-a new source commit or run. Neither existing results nor failures are overwritten.
+rerunning into the same output is refused. Use new output for a new source
+commit or run. A node's private unit cache can persist with normal compiler
+fingerprints, but must never be used concurrently or shared with a benchmark.
+Neither existing results nor failures are overwritten.
 
 After all stages finish on both nodes, node zero runs `--stage seal` with the
 same arguments. It requires all actual node/oracle records, binds raw bytes,

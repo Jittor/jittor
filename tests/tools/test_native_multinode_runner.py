@@ -115,6 +115,16 @@ def test_public_launcher_and_singleton_warm_rank_are_distinct(runner, source, tm
     assert 'RANK' not in env and 'JT_NCCL_RANK' not in env
 
 
+def test_explicit_source_and_cuda_override_inherited_test_routes(runner, source, tmp_path, monkeypatch):
+    monkeypatch.setenv('JITTOR_SOURCE_ROOT', '/intentionally-other-checkout')
+    monkeypatch.setenv('JITTOR_TEST_DEVICES', 'cpu')
+    args = arguments(source, tmp_path, stage='parity')
+    env = runner.environment(args)
+    assert env['JITTOR_SOURCE_ROOT'] == str(source[0])
+    assert env['JITTOR_TEST_DEVICES'] == 'cuda'
+    assert runner.environment(args, oracle=True)['JITTOR_SOURCE_ROOT'] == ''
+
+
 def test_missing_node_proof_cannot_seal(runner, source, tmp_path):
     args = arguments(source, tmp_path, stage='seal')
     with pytest.raises(FileNotFoundError):
