@@ -147,3 +147,28 @@ def test_unrecorded_alias_cannot_be_a_backward_root(device):
     with pytest.raises(RuntimeError, match='does not require grad.*does not have a grad_fn'):
         alias.backward(gradient)
 
+
+
+@pytest.mark.parametrize('device', ['cpu', 'cuda'])
+@pytest.mark.parametrize('dtype', [torch.float32, torch.float64])
+@pytest.mark.parametrize('kind', ['constructor', 'slice', 'arithmetic'])
+def test_recorded_grad_fn_survives_source_freeze(device, dtype, kind):
+    require_rng_device(device)
+    source = torch.tensor([1., 2.], dtype=dtype, device=device, requires_grad=True)
+    result = (torch.Tensor(source) if kind == 'constructor' else
+              source[:] if kind == 'slice' else source * 2)
+    original = result.grad_fn
+    assert original is not None and not result.is_leaf
+    source.requires_grad_(False)
+    assert not source.requires_grad and result.requires_grad
+    assert not result.is_leaf and result.grad_fn == original
+    gradient, = torch.autograd.grad((result * 3).sum(), result, retain_graph=True)
+    assert_physical_device(gradient, device)
+    np.testing.assert_array_equal(_array(gradient), [3., 3.])
+    assert source.grad is None
+    source.requires_grad_(True)
+    assert result.grad_fn == original and not result.is_leaf
+    gradient, = torch.autograd.grad((result * 5).sum(), source)
+    assert_physical_device(gradient, device)
+    scale = 2 if kind == 'arithmetic' else 1
+    np.testing.assert_array_equal(_array(gradient), [5. * scale, 5. * scale])

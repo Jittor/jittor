@@ -119,7 +119,10 @@ Op* backward_grad_fn(Var* v) {
         // exists for ordering only.
         if (e.reverse().index < 0) continue;
         Var* in = e.node->var();
-        if (!requires_grad(in)) continue;
+        // A later reversible freeze of an input does not erase the producer
+        // already recorded for this output. Edges disabled at construction
+        // are checked below; permanent stop-grad still ends the graph.
+        if (in->is_stop_grad()) continue;
         // An unrecorded view can require grad and create a producer even
         // though this particular input has no backward edge. This differs
         // from an input explicitly frozen when the op was constructed.

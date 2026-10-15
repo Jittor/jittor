@@ -22,9 +22,8 @@ ones that refute those constants, and they are marked as such.
 
 The rule (``jittor::backward_grad_fn`` in ``src/grad.h``) is the conjunction of
 the two things a gradient needs -- ``requires_grad`` on the var, and an edge
-into its producer that can carry a gradient -- using the same three edge filters
-``grad()``'s own ``bfs_backward`` applies. So "not a leaf" means ``grad()``
-really would walk through that op, and the two spellings (``is_backward_leaf``
+into its recorded producer that can carry a gradient. A later reversible freeze
+of an input changes target eligibility without erasing this producer. The two spellings (``is_backward_leaf``
 and ``grad_fn_node_id``) are one query and cannot drift apart.
 
 Where Jittor and torch differ, they differ on ``requires_grad``, not on this:
