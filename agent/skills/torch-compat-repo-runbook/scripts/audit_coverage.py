@@ -46,6 +46,9 @@ def dedicated_gates(root):
         "deepspeed": ("deepspeed-engine", "ecosystem_deepspeed",
                       "compat/tests/torch/test_ecosystem_deepspeed.py",
                       "test_real_deepspeed_engine_training_and_resume"),
+        "trellis": ("trellis-models", "ecosystem_trellis",
+                    "compat/tests/torch/test_ecosystem_trellis.py",
+                    "test_real_trellis_models_training"),
     }
     session_tree = ast.parse((root / "noxfile.py").read_text(encoding="utf-8"))
     sessions = {node.name for node in session_tree.body if isinstance(node, ast.FunctionDef)}

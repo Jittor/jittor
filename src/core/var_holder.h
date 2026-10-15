@@ -80,6 +80,9 @@ struct VarView {
     // Siblings in `base->views`, so that base's destructor can find us.
     VarView* prev = nullptr;
     VarView* next = nullptr;
+    // Logical transpose/writeback provenance need not share an allocation.
+    // Keep the actual physical relationship after a temporary base expires.
+    bool physical_storage = false;
 };
 
 struct DataView {
@@ -866,6 +869,9 @@ struct VarHolder {
     // A view stays a view after its weak writeback owner has died.
     // @pyjt(_has_view_provenance)
     inline bool has_view_provenance() { return view != nullptr; }
+
+    // @pyjt(_storage_view_is_physical)
+    bool storage_view_is_physical();
 
     /**
      * ``id`` of the Var this view currently writes through to, or -1. For

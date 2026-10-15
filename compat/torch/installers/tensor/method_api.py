@@ -199,7 +199,34 @@ def _torch_setitem(self, slices, value):
     return result
 
 
-def _ip(self, value):
+def _copy_detached_storage(self, value):
+    # Optimizer buckets retain detached aliases of dense slices. Rebinding a
+    # holder would leave those aliases reading the old allocation. Only use
+    # the native imperative store when no differentiable RHS edge is needed.
+    if not isinstance(value, _NativeVar):
+        return False
+    if not (_owner.jt.flags.no_grad
+            or (self.is_stop_grad() and value.is_stop_grad())):
+        return False
+    if (not self._storage_is_contiguous()
+            or (self._has_view_provenance() and not self._storage_view_is_physical())
+            or tuple(self.shape) != tuple(value.shape)
+            or self.dtype != value.dtype):
+        return False
+    if self.numel():
+        # Resolve pending readers (including clone snapshots) before changing
+        # bytes. _copy_into owns placement, stream ordering and dense copies.
+        _owner.jt.sync_all()
+        self._copy_into(value)
+    return True
+
+
+def _ip(self, value, preserve_storage=False):
+    if preserve_storage:
+        if self.requires_grad and self.is_leaf and not _owner.jt.flags.no_grad:
+            raise RuntimeError("a leaf Variable that requires grad is being used in an in-place operation.")
+        if _copy_detached_storage(self, value):
+            return self
     # Keep the RHS graph through an in-place operation. start_grad() on an
     # already connected result would replace its graph with a fresh leaf.
     if _assign_data_owner(self, value):
@@ -249,7 +276,13 @@ def _copy_(self, other, non_blocking=False):
     if destination is not None and str(destination).split(":")[0] in ("cpu", "cuda", "npu"):
         if src.device != destination:
             src = src.to(destination)
-    return _ip(self, src)
+    if tuple(src.shape) != tuple(self.shape):
+        if len(src.shape) > len(self.shape) or any(
+                source not in (1, target)
+                for source, target in zip(reversed(src.shape), reversed(self.shape))):
+            raise RuntimeError("copy_ source shape cannot broadcast to destination shape")
+        src = src.broadcast(self.shape)
+    return _ip(self, src, preserve_storage=True)
 
 
 def _norm_size(args):
@@ -1385,7 +1418,11 @@ def _true_division(self, other, opname):
         use_wide = sd.startswith("float") and src_dt != "float64" and not acl_active
         calc_dt = wide if use_wide else tgt
         a = self if src_dt == calc_dt else self.cast(calc_dt)
-        b = _owner.jt.array(other, dtype=calc_dt) if use_wide else other
+        if use_wide or isinstance(other, _owner.np.generic):
+            with _owner.jt.no_grad():
+                b = _owner.jt.array(other, dtype=calc_dt)
+        else:
+            b = other
         out = _binary_native(opname, a, b)
         if isinstance(out, _NativeVar) and _jittor_dtype_name(out.dtype) != tgt:
             out = out.cast(tgt)
@@ -1545,17 +1582,13 @@ def _api_fill(self, val):
 def _api_zero(self):
     if _fill_captured_state(self, 0):
         return self
-    if ((_owner.jt.flags.no_grad or self.is_stop_grad())
-            and self._storage_is_contiguous()
-            and not self._has_view_provenance()
-            and getattr(self, "_torch_data_owner", None) is None):
-        if self.numel():
-            _owner.jt.sync_all()
-            with _new_scope(self, None), _owner.jt.no_grad():
-                zeros = _owner.jt.zeros(self.shape, self.dtype)
-            self._copy_into(zeros)
-        return self
-    return _ip(self, _owner.jt.zeros(self.shape, self.dtype))
+    with _new_scope(self, None), _owner.jt.no_grad():
+        zeros = _owner.jt.zeros(self.shape, self.dtype)
+    if self.requires_grad and not _owner.jt.flags.no_grad and not self.is_leaf:
+        # Select rather than multiply by zero: NaN/Inf values must clear to
+        # exact zero while the old non-leaf graph receives a zero derivative.
+        zeros = _owner.jt.ternary(zeros.cast("bool"), self, zeros)
+    return _ip(self, zeros, preserve_storage=True)
 
 
 def _api_add(self, o, alpha=1):
@@ -1567,11 +1600,11 @@ def _api_sub(self, o, alpha=1):
 
 
 def _api_mul(self, o):
-    return _ip(self, self * o)
+    return _ip(self, self * o, preserve_storage=True)
 
 
 def _api_div(self, o):
-    return _ip(self, self / o)
+    return _ip(self, self / o, preserve_storage=True)
 
 
 def _api_clamp_min(input, v):

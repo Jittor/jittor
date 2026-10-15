@@ -110,8 +110,8 @@ from .arithmetic import foreach_zero_, nan_to_num
 
 register_fidelity(
     "torch._foreach_zero_", foreach_zero_, Fidelity.APPROXIMATE,
-    "Existing Tensor.zero_ clears contiguous non-view detached or no-grad lists in place. "
-    "Differentiable non-leaf, view and non-contiguous lists are explicitly unsupported; fused batching is not provided.",
+    "Existing Tensor.zero_ clears contiguous detached or no-grad lists in place, including physical storage views. "
+    "Differentiable non-leaf, materialized logical views and non-contiguous lists are explicitly unsupported; fused batching is not provided.",
 )
 
 from .arithmetic import logaddexp

@@ -13,7 +13,7 @@ def foreach_zero_(tensors):
     for index, tensor in enumerate(tensors):
         if not isinstance(tensor, owner.jt.Var):
             raise TypeError("expected Tensor as element %d" % index)
-        if tensor._has_view_provenance():
+        if tensor._has_view_provenance() and not tensor._storage_view_is_physical():
             raise NotImplementedError("_foreach_zero_ view tensor lists are unsupported")
         if not tensor._storage_is_contiguous():
             raise NotImplementedError("_foreach_zero_ non-contiguous tensor lists are unsupported")

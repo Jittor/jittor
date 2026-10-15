@@ -75,14 +75,17 @@ class CoverageAuditTests(unittest.TestCase):
 
     def test_dedicated_gate_rejects_missing_test_or_session(self):
         gate = self.root / "compat/tests/torch/test_ecosystem_deepspeed.py"
+        trellis_gate = self.root / "compat/tests/torch/test_ecosystem_trellis.py"
         gate.parent.mkdir(parents=True)
         test_source = "def test_real_deepspeed_engine_training_and_resume(): pass\n"
-        session_source = "def ecosystem_deepspeed(session): pass\n"
+        trellis_source = "def test_real_trellis_models_training(): pass\n"
+        session_source = "def ecosystem_deepspeed(session): pass\ndef ecosystem_trellis(session): pass\n"
         gate.write_text(test_source)
+        trellis_gate.write_text(trellis_source)
         nox = self.root / "noxfile.py"
         nox.write_text(session_source)
         self.assertEqual(len(audit.dedicated_gates(self.root)["deepspeed"]), 1)
-        for target, source in ((gate, test_source), (nox, session_source)):
+        for target, source in ((gate, test_source), (trellis_gate, trellis_source), (nox, session_source)):
             with self.subTest(path=target.name):
                 target.write_text("def unrelated(): pass\n")
                 with self.assertRaisesRegex(ValueError, "dedicated gate"):

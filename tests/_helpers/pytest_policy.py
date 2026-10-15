@@ -874,6 +874,8 @@ def _accepted_skip_patterns():
     required = set(REAL_TORCH_PATTERNS if _real_torch_is_required() else ())
     if os.environ.get("JITTOR_REQUIRE_DEEPSPEED", "").strip().lower() in ("1", "true", "yes", "on"):
         required.add("deepspeed")
+    if os.environ.get("JITTOR_REQUIRE_TRELLIS", "").strip().lower() in ("1", "true", "yes", "on"):
+        required.add("trellis")
     # The inversion: a session that declares it has real PyTorch cannot also
     # accept "no torch" as an explanation, or it reports success for the one
     # thing it exists to check.

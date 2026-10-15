@@ -2225,6 +2225,56 @@ def ecosystem_deepspeed(session):
 
 
 @nox.session(python=False)
+def ecosystem_trellis(session):
+    """Real pinned TRELLIS models with independent CPU or CUDA training evidence."""
+    _root, env = _session_env(session, "ecosystem-trellis")
+    python = _hardware_python()
+    oracle = os.environ.get("REAL_TORCH_PYTHON", "").strip()
+    checkout = os.environ.get("JITTOR_TRELLIS_CHECKOUT", "").strip()
+    device = os.environ.get("JITTOR_TEST_DEVICES", "cpu").strip()
+    if not oracle or not checkout or not Path(checkout).is_dir() or device not in ("cpu", "cuda"):
+        session.error("TRELLIS needs REAL_TORCH_PYTHON, JITTOR_TRELLIS_CHECKOUT and exactly cpu or cuda")
+    threads = os.environ.get("OMP_NUM_THREADS", "2")
+    env.update({name: threads for name in THREAD_POOL_ENV_NAMES})
+    env.update({
+        "REAL_TORCH_PYTHON": oracle, "JITTOR_TRELLIS_CHECKOUT": str(Path(checkout).resolve()),
+        "JITTOR_TEST_DEVICES": device, "JITTOR_REQUIRE_REAL_TORCH": "1", "JITTOR_REQUIRE_TRELLIS": "1",
+        "JITTOR_TEST_REQUIRE_EXECUTION": "1", "JITTOR_TORCH_SHIM": "1",
+        "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
+        "DISABLE_MULTIPROCESSING": "1", "JT_USE_PARALLEL_OP_COMPILER": "0",
+        "JT_BUILD_USE_MKL": "0", "JT_BUILD_USE_NCCL": "0", "JT_BUILD_USE_MPI": "0", "JT_BUILD_USE_CUTT": "0",
+        "JT_CUDA_KERNEL_MATH": "strict", "JT_USE_CUDA": "1" if device == "cuda" else "0",
+        "use_cuda": "1" if device == "cuda" else "0", "cache_name": "nox_ecosystem_trellis_" + device,
+    })
+    cache_home = NOX_STATE_ROOT / "ecosystem-trellis" / device / "jittor-home"
+    cache_home.mkdir(parents=True, exist_ok=True)
+    env["JITTOR_HOME"] = str(cache_home)
+    if device == "cpu":
+        env.update({"CUDA_VISIBLE_DEVICES": "", "JT_BUILD_NVCC_PATH": "", "nvcc_path": ""})
+    else:
+        nvcc = os.environ.get("JT_BUILD_NVCC_PATH") or os.environ.get("nvcc_path") or shutil.which("nvcc")
+        if not nvcc or not os.environ.get("CUDA_VISIBLE_DEVICES", "").strip():
+            session.error("TRELLIS CUDA needs nvcc and explicitly allocated CUDA_VISIBLE_DEVICES")
+        env.update({"JT_BUILD_NVCC_PATH": nvcc, "nvcc_path": nvcc})
+    for name in ("JITTOR_ECOSYSTEM_PACKAGE_SITE", "JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE",
+                 "JITTOR_TRELLIS_EVIDENCE_DIR"):
+        if os.environ.get(name):
+            env[name] = os.environ[name]
+    _set_hardware_python_config(session, python, env)
+    oracle_env = dict(env, PYTHONPATH="", JITTOR_TORCH_SHIM="0", REAL_TORCH_SITE="", LD_LIBRARY_PATH="")
+    for name in ("JITTOR_SOURCE_ROOT", "JITTOR_HOME", "JITTOR_TORCH_CACHE_ROOT", "JT_BACKEND"):
+        oracle_env[name] = ""
+    session.run(oracle, "-c", "import torch; "
+                "assert not hasattr(torch, '_torch_compat_install_context'); "
+                "assert torch._C.__file__.endswith(('.so', '.pyd')); "
+                + ("assert torch.cuda.is_available(); " if device == "cuda" else "")
+                + "print('TRELLIS oracle', torch.__version__, torch._C.__file__)",
+                external=True, env=oracle_env)
+    _install_compat_source(session, env, python)
+    _run_pytest_once(session, ["compat/tests/torch/test_ecosystem_trellis.py"], env, python, timeout=3600)
+
+
+@nox.session(python=False)
 def optional(session):
     """Run fail-closed optional compatibility gates on real CUDA."""
     _root, env = _session_env(session, "optional")

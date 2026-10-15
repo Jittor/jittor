@@ -281,6 +281,7 @@ namespace {
 // three install-context lookups, 21 us a call; every diffusers ResnetBlock2D
 // ends in one (`/ self.output_scale_factor`), 45 a DDPM UNet forward.
 PyObject* scalar_division(PyObject* self, PyObject* other, NanoString own) {
+    PyTensorFrontendScope scope(self, nullptr, 0, false);
     PyObject* out;
     if (own == ns_float64) {
         out = binary_slots[B_TRUEDIV](self, other);
@@ -292,6 +293,9 @@ PyObject* scalar_division(PyObject* self, PyObject* other, NanoString own) {
         PyObjHolder a(wrap_like(self, new VarHolder(make_unary(x, wide))));
         PyObjHolder b(wrap_like(self, new VarHolder(make_array(
             wide == ns_float64 ? (const void*)&value : (const void*)&narrow, {}, wide))));
+        // This is a Python literal, not a trainable tensor operand. Native
+        // floating ArrayOp defaults must not create a new autograd leaf.
+        GET_RAW_PTR(VarHolder, b.obj)->stop_grad();
         out = binary_slots[B_TRUEDIV](a.obj, b.obj);
     }
     if (!out || out == Py_NotImplemented || !is_var(out)) return out;

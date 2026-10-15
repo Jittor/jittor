@@ -288,6 +288,14 @@ void VarHolder::copy_into(VarHolder* src, bool sync_src) {
     // Already there: an in-place update wrote into this very buffer (a step
     // capture taking over its state, see `capture_owners`).
     if (src->var->mem_ptr == var->mem_ptr) return;
+    if (src->var->allocator == var->allocator
+            && src->var->allocation == var->allocation) {
+        auto dst_address = reinterpret_cast<uintptr_t>(var->mem_ptr);
+        auto src_address = reinterpret_cast<uintptr_t>(src->var->mem_ptr);
+        USER_CHECK(dst_address + var->size <= src_address
+                || src_address + src->var->size <= dst_address)
+            << "_copy_into source and destination partially overlap";
+    }
     auto device_of = [](Var* v) {
         Device d{};
         if (v->allocator && v->allocator->is_cuda())
@@ -435,11 +443,38 @@ void VarHolder::drop_view() {
     view = nullptr;
 }
 
+static bool shares_physical_storage(Var* value, Var* base) {
+    // A pending share_with link is positive evidence before allocation. Two
+    // null pointers are not; after execution allocation identity is decisive.
+    Var* slow = value;
+    Var* fast = value;
+    while (value) {
+        if (value == base) return true;
+        if (value->mem_ptr && base->mem_ptr && value->allocator
+                && value->allocator == base->allocator
+                && value->allocation == base->allocation)
+            return true;
+        value = value->share_src;
+        slow = slow ? slow->share_src : nullptr;
+        fast = fast && fast->share_src ? fast->share_src->share_src : nullptr;
+        // Malformed sharing cycles cannot establish a view relationship.
+        if (slow && slow == fast) return false;
+    }
+    return false;
+}
+
+bool VarHolder::storage_view_is_physical() {
+    if (!view || !view->physical_storage) return false;
+    return !view->base || shares_physical_storage(var, view->base->var);
+}
+
 void VarHolder::orphan_views() {
     for (auto* w = views; w; ) {
         auto* next = w->next;
         // The record belongs to the holder that is the view, not to us; all we
         // may do is tell it that its base is gone.
+        w->physical_storage = w->physical_storage
+            && shares_physical_storage(w->owner->var, var);
         w->base = nullptr;
         w->prev = w->next = nullptr;
         w = next;
@@ -461,6 +496,8 @@ VarHolder* VarHolder::set_view_of(VarHolder* base, VarSlices&& slices) {
 void VarHolder::attach_view(VarHolder* base, VarViewStep final_step) {
     // Flatten: a view of a view is recorded against the root, so that the
     // intermediates of `y[1][2]` are free to die with the expression.
+    bool physical = shares_physical_storage(var, base->var)
+        && (!base->view || base->view->physical_storage);
     VarHolder* root = base;
     vector<VarViewStep> steps;
     if (base->view && base->view->base) {
@@ -470,7 +507,7 @@ void VarHolder::attach_view(VarHolder* base, VarViewStep final_step) {
     }
     if (root == this) return;
     steps.push_back(move(final_step));
-    view = new VarView{root, this, move(steps), nullptr, root->views};
+    view = new VarView{root, this, move(steps), nullptr, root->views, physical};
     if (root->views) root->views->prev = view;
     root->views = view;
 }
@@ -559,7 +596,9 @@ VarHolder* VarHolder::transpose_view_source() {
     // whole-shape reshape away.
     if (steps.empty())
         steps.emplace_back(VarViewStep::Reshape, NanoVector(root->var->shape));
-    result->view = new VarView{root, result, move(steps), nullptr, root->views};
+    bool physical = shares_physical_storage(result->var, root->var)
+        && (!root->view || root->view->physical_storage);
+    result->view = new VarView{root, result, move(steps), nullptr, root->views, physical};
     if (root->views) root->views->prev = result->view;
     root->views = result->view;
     return result;
@@ -615,15 +654,19 @@ void VarHolder::refresh_transpose_views() {
         auto* next = record->next;
         VarPtr value(var);
         bool fits = true;
+        bool physical = !view || view->physical_storage;
         for (const auto& step : record->steps) {
             if (!view_step_fits(value.ptr, step)) {
                 fits = false;
                 break;
             }
-            value = apply_view_step(value.ptr, step);
+            VarPtr next_value = apply_view_step(value.ptr, step);
+            physical = physical && shares_physical_storage(next_value.ptr, value.ptr);
+            value = move(next_value);
         }
         if (fits) {
             *record->owner = move(value);
+            record->physical_storage = physical;
         } else if (record->owner) {
             // The view keeps the data it was taken from, which is what torch's
             // views do after `x.data = y` replaces the storage under them.

@@ -106,6 +106,9 @@ bf16 均 `3e-2`。这些判据在首次两侧比较前固定，禁止看结果�
   不同协议、脏源码、损坏产物和禁用断言不能假绿。
 - [CUDA 扩展 Philox 与融合训练回归](../../../docs/results/2026-10-15-cuda-extension-philox.md)
   是已提交的 native CUDA 证据，明确没有将其等同于独立 PyTorch FlashAttention 对拍。
+- [公开训练 API 独立对拍](../../../docs/results/2026-10-15-flash-attention-training-oracles.md)
+  记录干净 `71c5be74e` 的六入口、48 条真实 CUDA 三步轨迹，保留原阈值、完整梯度和
+  单独更新检查；统一 scorecard、固定 causality 的独立扰动门禁及 KV cache 仍待验。
 
 Owner：native CUDA RNG/计算与 Torch 兼容维护者。上游版本、扩展 ABI、公开 facade、
 Tensor 类型/梯度边界、RNG owner 或验证协议变化时重新检查证据。

@@ -63,6 +63,8 @@
 2026-10-15-openmmlab-training-oracles
 2026-10-15-tensor-detach-and-factory-leaf
 2026-10-15-cuda-extension-philox
+2026-10-15-flash-attention-training-oracles
+2026-10-15-deepspeed-bfloat16-multirank
 ```
 
 ## 按主题索引
@@ -110,6 +112,8 @@
 | [OpenMMLab 真实训练对拍](2026-10-15-openmmlab-training-oracles.md) | MMEngine/MMCV 的 CPU、CUDA 四条 L3 证据；限定真实 train_step 场景 | 2026-10-15 |
 | [Tensor detach 与工厂梯度边界](2026-10-15-tensor-detach-and-factory-leaf.md) | CPU/CUDA 原地 detach、默认梯度发布和 bf16 新叶子契约通过；双卡 Engine 仍待验 | 2026-10-15 |
 | [CUDA 扩展 Philox 状态](2026-10-15-cuda-extension-philox.md) | 实际 CUDA RNG 重放与融合 FlashAttention 训练回归；独立 Torch 对拍仍待验 | 2026-10-15 |
+| [FlashAttention 公开训练 API 对拍](2026-10-15-flash-attention-training-oracles.md) | 六个公开入口、48 条真实 CUDA 三步训练对拍通过；KV cache、统一 scorecard 与速度待验 | 2026-10-15 |
+| [DeepSpeed 双卡 BF16 训练与恢复](2026-10-15-deepspeed-bfloat16-multirank.md) | ZeRO1/2 的 AdamW 三步训练、完整梯度与严格续训已验；限定小模型与实际 CUDA 双卡 | 2026-10-15 |
 | [原生 TP 线性层训练与恢复](2026-10-15-native-tensor-parallel.md) | CPU 与双卡 NCCL 的 FP32 等分线性层、完整梯度和固定 world 续训已验；bf16 与多机待验 | 2026-10-15 |
 | [原生 FSDP 分片与新进程恢复](2026-10-15-native-fsdp.md) | 原生双卡训练与严格恢复已验；bf16 小梯度误差和旧兼容失败单列 | 2026-10-15 |
 | [CUDA BF16 Linear 偏置舍入](2026-10-15-bfloat16-linear-bias-accumulation.md) | 真实 BF16 GEMM 保留 FP32 累加到偏置之后；CPU 既有路径与二阶梯度回归已验 | 2026-10-15 |

@@ -83,7 +83,7 @@ def test_views_fail_before_other_inputs_are_mutated():
     source = torch.tensor([[1., 2., 3., 4.], [5., 6., 7., 8.]])
     view = source[:, ::2]
     assert not view.is_contiguous()
-    with pytest.raises(NotImplementedError, match="view tensor lists"):
+    with pytest.raises(NotImplementedError, match="non-contiguous tensor lists"):
         torch._foreach_zero_([ordinary, view])
     np.testing.assert_array_equal(ordinary.cpu().numpy(), [1., 2.])
     np.testing.assert_array_equal(source.cpu().numpy(), [[1., 2., 3., 4.], [5., 6., 7., 8.]])

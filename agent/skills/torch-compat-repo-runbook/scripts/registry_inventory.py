@@ -14,7 +14,7 @@ import re
 import subprocess
 
 
-REPOS = ("transformers", "peft", "diffusers", "ms-swift", "verl", "mmengine", "mmcv", "flash-attention")
+REPOS = ("transformers", "peft", "diffusers", "ms-swift", "verl", "mmengine", "mmcv", "flash-attention", "trellis")
 ROOT = Path(__file__).resolve().parents[4]
 
 
@@ -107,7 +107,7 @@ def inventory(repo, checkout):
     remote = git(checkout, "remote", "get-url", "origin")
     files = git(checkout, "ls-files", "--", "*.py").splitlines()
     prefix = {"transformers": "src/transformers/", "peft": "src/peft/",
-              "diffusers": "src/diffusers/", "ms-swift": "swift/", "verl": "verl/", "mmengine": "mmengine/", "mmcv": "mmcv/", "flash-attention": "flash_attn/"}[repo]
+              "diffusers": "src/diffusers/", "ms-swift": "swift/", "verl": "verl/", "mmengine": "mmengine/", "mmcv": "mmcv/", "flash-attention": "flash_attn/", "trellis": "trellis2/"}[repo]
     files = [path for path in files if path.startswith(prefix)]
     if repo == "transformers":
         selected = [path for path in files if path.endswith("models/auto/modeling_auto.py")]
@@ -121,7 +121,7 @@ def inventory(repo, checkout):
                         part in path for part in ("/cli/", "/arguments/", "/trainers/", "/pipelines/train/"))]
     elif repo == "flash-attention":
         selected = ["flash_attn/__init__.py", "flash_attn/flash_attn_interface.py"]
-    elif repo in ("mmengine", "mmcv"):
+    elif repo in ("mmengine", "mmcv", "trellis"):
         selected = files
     else:
         selected = [path for path in files if path.startswith("verl/trainer/")
@@ -318,6 +318,15 @@ def inventory(repo, checkout):
         # Hash the full scanned package, including currently unselected/dynamic
         # registries. Import conditions describe declarations, not availability.
         used.update(selected)
+    if repo == "trellis":
+        from _trellis_registry import declarations
+        declaration_details = declarations(checkout, selected)
+        if declaration_details["unresolved"]:
+            raise ValueError("Unresolved TRELLIS declaration: " + str(declaration_details["unresolved"][0]))
+        for axis, members in declaration_details["axes"].items():
+            rows = [row for row in declaration_details["declarations"] if row["axis"] == axis]
+            add(axis, "TRELLIS source-declared " + axis, members, [row["source"] for row in rows])
+        used.update(declaration_details["sources"])
     version = None
     for relative in files:
         if relative.endswith(("/__init__.py", "/version.py", "/_version.py")):
@@ -337,17 +346,24 @@ def inventory(repo, checkout):
     if repo == "verl" and (checkout / "verl/version/version").is_file():
         version = (checkout / "verl/version/version").read_text(encoding="utf-8").strip()
         used.add("verl/version/version")
+    if repo == "trellis" and version is None:
+        version = "source@" + commit
     result = {"schema_version": 1, "repo": repo, "upstream": {"commit": commit, "remote": remote, "version": version},
             "scope": "Source-declared registry members; no member is verified by enumeration.", "axes": axes,
             "sources": [{"path": path, "sha256": digest(checkout / path)} for path in sorted(used)]}
     if repo == "flash-attention":
         result["scope"] = ("All public top-level attention functions explicitly exported by flash_attn.__init__; "
                            "not all internal APIs, features, shapes or dtypes. Enumeration verifies no member.")
-    if declaration_details is not None:
+    if repo in ("mmengine", "mmcv") and declaration_details is not None:
         result["declaration_details"] = declaration_details
         result["scope"] = ("Bounded source-declared OpenMMLab registry axes; all branches and optional/compiled "
                            "modules are retained. Other registries are listed separately and have no denominator. "
                            "Not whole-library coverage or installed runtime availability.")
+    if repo == "trellis":
+        result["declaration_details"] = declaration_details
+        result["scope"] = (declaration_details["scope"] + " Missing upstream definitions remain in the denominator. "
+                           "A source@SHA version identifies source without a published package version; "
+                           "it is not a semantic release version.")
     return result
 
 
