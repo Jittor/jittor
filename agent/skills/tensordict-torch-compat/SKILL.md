@@ -22,9 +22,12 @@ TensorDict **0.10.0** 与独立 Torch **2.11.0+cu128** 的 CPU/CUDA 基线、固
 共 21 个轨迹数组；两个 trainable 参数、零 frozen 参数。本次没有启用额外 adapter。
 详见 [维护者报告](../../../docs/results/2026-10-15-metric-state-and-tensordict-oracles.md)。
 
-这是 **L3 组件协议证据**。TensorDict 尚无本工具自动生成的公共 registry 分母，不能计入
-registry scorecard 或推断其他容器、分布式、编译、持久化与 dtype 支持。CASES 注册提供手动
-公共入口；本轮没有新增 pytest 生态 CI 方法。
+这是绑定原测量基线的 **L3 组件协议证据**。后续加入
+`EcosystemParity::test_tensordict_index_and_stack` 与继承的 CUDA 节点，显式要求全部
+参数和输入梯度，真实 CPU/CUDA 各一项通过。中央 `registry_inventory.py --repo tensordict`
+从上游 `c34264a58b12471dc3e2913ea586b32431872d4c` 的顶层 `__all__` 自动枚举 60 个
+`public_api` 名称。该轴不是全部容器方法或整库分母；新增分母/节点不自动授予
+registry scorecard 分子，也不推断分布式、编译、持久化与其他 dtype 支持。
 
 ## 公共入口
 

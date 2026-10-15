@@ -78,11 +78,18 @@ def audit(root=ROOT):
                   "compat/tests/torch/test_ecosystem_longformer.py",
                   "compat/tests/torch/test_ecosystem_openmmlab.py")
     methods = {}
+
+    def collect_methods(body, relative, parents=()):
+        for node in body:
+            if isinstance(node, ast.ClassDef):
+                collect_methods(node.body, relative, parents + (node.name,))
+            elif isinstance(node, ast.FunctionDef) and node.name.startswith("test_"):
+                selector = "::".join((relative,) + parents + (node.name,))
+                methods.setdefault(node.name[5:], []).append(selector)
+
     for relative in gate_files:
         tree = ast.parse((root / relative).read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef) and node.name.startswith("test_"):
-                methods.setdefault(node.name[5:], []).append(relative + "::" + node.name)
+        collect_methods(tree.body, relative)
     rows = []
     for skill in sorted((root / "agent/skills").glob("*-torch-compat/SKILL.md")):
         repo = skill.parent.name[:-len("-torch-compat")]

@@ -14,7 +14,7 @@ import re
 import subprocess
 
 
-REPOS = ("transformers", "peft", "diffusers", "ms-swift", "verl", "mmengine", "mmcv", "flash-attention", "trellis", "vllm", "vllm-omni")
+REPOS = ("transformers", "peft", "diffusers", "ms-swift", "verl", "mmengine", "mmcv", "flash-attention", "trellis", "vllm", "vllm-omni", "torchmetrics", "tensordict")
 ROOT = Path(__file__).resolve().parents[4]
 
 
@@ -107,7 +107,7 @@ def inventory(repo, checkout):
     remote = git(checkout, "remote", "get-url", "origin")
     files = git(checkout, "ls-files", "--", "*.py").splitlines()
     prefix = {"transformers": "src/transformers/", "peft": "src/peft/",
-              "diffusers": "src/diffusers/", "ms-swift": "swift/", "verl": "verl/", "mmengine": "mmengine/", "mmcv": "mmcv/", "flash-attention": "flash_attn/", "trellis": "trellis2/", "vllm": "vllm/", "vllm-omni": "vllm_omni/"}[repo]
+              "diffusers": "src/diffusers/", "ms-swift": "swift/", "verl": "verl/", "mmengine": "mmengine/", "mmcv": "mmcv/", "flash-attention": "flash_attn/", "trellis": "trellis2/", "vllm": "vllm/", "vllm-omni": "vllm_omni/", "torchmetrics": "src/torchmetrics/", "tensordict": "tensordict/"}[repo]
     files = [path for path in files if path.startswith(prefix)]
     if repo == "transformers":
         selected = [path for path in files if path.endswith("models/auto/modeling_auto.py")]
@@ -121,6 +121,8 @@ def inventory(repo, checkout):
                         part in path for part in ("/cli/", "/arguments/", "/trainers/", "/pipelines/train/"))]
     elif repo == "flash-attention":
         selected = ["flash_attn/__init__.py", "flash_attn/flash_attn_interface.py"]
+    elif repo in ("torchmetrics", "tensordict"):
+        selected = [prefix + "__init__.py"]
     elif repo in ("mmengine", "mmcv", "trellis", "vllm", "vllm-omni"):
         selected = files
     else:
@@ -336,12 +338,34 @@ def inventory(repo, checkout):
             rows = [row for row in declaration_details["declarations"] if row["axis"] == axis]
             add(axis, repo + " source-declared " + axis, members, [row["source"] for row in rows])
         used.update(declaration_details["sources"])
+    if repo in ("torchmetrics", "tensordict"):
+        exports = source.assignments(r"__all__")
+        if len(exports) != 1:
+            raise ValueError("Expected exactly one top-level public export registry")
+        path, name, node = exports[0]
+        for item in ast.walk(source.trees[path]):
+            if ((isinstance(item, ast.AugAssign) and isinstance(item.target, ast.Name)
+                 and item.target.id == "__all__")
+                    or (isinstance(item, ast.Assign) and any(isinstance(target, ast.Subscript)
+                        and isinstance(target.value, ast.Name) and target.value.id == "__all__"
+                        for target in item.targets))
+                    or (isinstance(item, ast.Call) and isinstance(item.func, ast.Attribute)
+                        and isinstance(item.func.value, ast.Name) and item.func.value.id == "__all__")):
+                raise ValueError("Public export mutation needs an explicit extractor")
+            if (isinstance(item, ast.Assign) and isinstance(item.value, ast.Name)
+                    and item.value.id == "__all__"):
+                raise ValueError("Public export alias needs an explicit extractor")
+        members = source.value(node)
+        if not isinstance(members, (list, tuple)):
+            raise ValueError("Public exports must be a literal list or tuple")
+        add("public_api", "top-level package " + name, members, [path])
     version = None
     for relative in files:
-        if repo in ("vllm", "vllm-omni") and relative not in (
-                prefix + "__init__.py", prefix + "version.py", prefix + "_version.py"):
+        if repo in ("vllm", "vllm-omni", "torchmetrics", "tensordict") and relative not in (
+                prefix + "__init__.py", prefix + "version.py", prefix + "_version.py", prefix + "__about__.py"):
             continue
-        if relative.endswith(("/__init__.py", "/version.py", "/_version.py")):
+        if (relative.endswith(("/__init__.py", "/version.py", "/_version.py"))
+                or (repo == "torchmetrics" and relative == prefix + "__about__.py")):
             tree = ast.parse((checkout / relative).read_text(encoding="utf-8"))
             for node in tree.body:
                 if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "__version__" for t in node.targets):
@@ -361,7 +385,7 @@ def inventory(repo, checkout):
     if repo == "trellis" and version is None:
         version = "source@" + commit
     version_source = None
-    if repo in ("vllm", "vllm-omni") and version is None:
+    if repo in ("vllm", "vllm-omni", "torchmetrics", "tensordict") and version is None:
         # Generated wheel versions are often absent from a source checkout.
         # Only an exact release tag may name a release; a nearby/dev tag cannot.
         tags = git(checkout, "tag", "--points-at", commit).splitlines()
@@ -390,6 +414,12 @@ def inventory(repo, checkout):
     if repo in ("vllm", "vllm-omni"):
         result["declaration_details"] = declaration_details
         result["scope"] = declaration_details["scope"]
+    if repo in ("torchmetrics", "tensordict"):
+        result["scope"] = ("All names declared in the top-level package __all__; a bounded public-API export axis, "
+                           "not a model-family or complete library denominator. Submodule-only APIs, class methods, "
+                           "task variants and optional dependency availability are outside this axis. "
+                           "A verified member covers only its recorded component scenario.")
+    if repo in ("vllm", "vllm-omni", "torchmetrics", "tensordict"):
         # Registry/target hashes alone do not identify an installed package:
         # imports outside the bounded registry still affect its computation.
         result["package_sources"] = [{"path": path, "sha256": digest(checkout / path)}

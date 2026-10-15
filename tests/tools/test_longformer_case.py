@@ -42,7 +42,7 @@ class LongformerCaseTests(unittest.TestCase):
         row = next(row for row in audit_coverage.audit(ROOT)["repos"] if row["repo"] == "transformers")
         selected = next(case for case in row["gate_cases"] if case["case"] == "transformers_longformer_32768")
         self.assertEqual(selected["tests"], [
-            "compat/tests/torch/test_ecosystem_longformer.py::test_transformers_longformer_32768"
+            "compat/tests/torch/test_ecosystem_longformer.py::EcosystemLongformer::test_transformers_longformer_32768"
         ])
 
     def test_selected_gate_fails_missing_prerequisites_instead_of_skipping(self):

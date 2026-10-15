@@ -457,6 +457,17 @@ class CoverageAuditTests(unittest.TestCase):
         for row in value["repos"]:
             self.assertTrue({case["case"] for case in row["gate_cases"]}.issubset(row["registered_cases"]))
 
+    def test_metric_and_tensordict_cases_have_concrete_shared_oracle_nodes(self):
+        rows = {row["repo"]: row for row in audit.audit(ROOT)["repos"]}
+        for repo, case in (("torchmetrics", "torchmetrics_regression"),
+                           ("tensordict", "tensordict_index_and_stack")):
+            with self.subTest(repo=repo):
+                self.assertIn(case, rows[repo]["registered_cases"])
+                gate = next((item for item in rows[repo]["gate_cases"] if item["case"] == case), None)
+                self.assertIsNotNone(gate, "Registered components need an independent oracle CI node")
+                self.assertIn("compat/tests/torch/test_ecosystem_parity.py::EcosystemParity::test_" + case,
+                              gate["tests"])
+
 
 class RegistryTests(unittest.TestCase):
     def setUp(self):
@@ -563,6 +574,35 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual({row["axis"]: row["count"] for row in result["axes"]},
                          {"model_family": 1, "diffusion_model": 1, "pipeline_model_type": 1})
         self.assertIn("separately pinned vllm", result["declaration_details"]["inherited_registry"])
+
+    def test_metric_public_export_registry_includes_every_declared_top_level_name(self):
+        self.commit("src/torchmetrics/__about__.py", '__version__ = "1.7.4"\n')
+        path = "src/torchmetrics/__init__.py"
+        self.commit(path, "import unavailable_torch\n__all__ = ['MeanAbsoluteError', 'MeanSquaredError', 'Other']\n")
+        first = registry.inventory("torchmetrics", self.root)
+        self.assertEqual(first["axes"][0]["count"], 3)
+        self.assertEqual(first["upstream"]["version"], "1.7.4")
+        self.assertEqual(len(first["package_sources"]), 2)
+        self.assertIn("not a model-family", first["scope"])
+        self.commit(path, "__all__ = ['MeanAbsoluteError', 'MeanSquaredError', 'Other', 'New']\n")
+        second = registry.inventory("torchmetrics", self.root)
+        self.assertEqual(second["axes"][0]["count"], 4)
+        self.assertNotEqual(first["upstream"]["commit"], second["upstream"]["commit"])
+
+    def test_tensordict_public_exports_use_exact_tag_without_importing_package(self):
+        self.commit("tensordict/__init__.py", "import unavailable_torch\n__all__ = ('TensorDict', 'lazy_stack')\n")
+        self.run_git("tag", "v0.10.0")
+        value = registry.inventory("tensordict", self.root)
+        self.assertEqual(value["upstream"]["version"], "0.10.0")
+        self.assertEqual(value["axes"][0]["members"], ["TensorDict", "lazy_stack"])
+
+    def test_public_export_registry_rejects_dynamic_mutations_and_invalid_types(self):
+        for declaration in ("__all__ = discover_exports()", "__all__ = 'a'", "__all__ = ['a']; __all__ += extra",
+                            "__all__ = ['a']; __all__.extend(extra)", "__all__ = ['a']; alias = __all__"):
+            with self.subTest(declaration=declaration):
+                self.commit("tensordict/__init__.py", declaration + "\n")
+                with self.assertRaises(ValueError):
+                    registry.inventory("tensordict", self.root)
 
 
 class VerifyRunnerTests(unittest.TestCase):

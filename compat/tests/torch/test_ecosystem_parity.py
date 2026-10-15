@@ -86,6 +86,14 @@ class EcosystemParity(EcosystemComparison):
     def test_ms_swift_lora_llama(self):
         self._compare("ms_swift_lora_llama")
 
+    def test_torchmetrics_regression(self):
+        self._compare("torchmetrics_regression", required_gradients=(
+            "ingrad::prediction", "ingrad::target"))
+
+    def test_tensordict_index_and_stack(self):
+        self._compare("tensordict_index_and_stack", required_gradients=(
+            "grad::projection.weight", "grad::projection.bias", "ingrad::sample"))
+
 
 @unittest.skipUnless(REAL_TORCH_PYTHON, "REAL_TORCH_PYTHON is not configured")
 @unittest.skipUnless(_torch_shim_is_active(), "this interpreter does not run torch as Jittor")

@@ -58,8 +58,8 @@ do not validate Torch optimizer classes, Adam, an upstream Trainer, or distribut
 
 A real TorchMetrics request to the same three-step probe fails with
 `Training case has no trainable parameters` and creates no trajectory archive. Its
-input backward success is not L3 training. Neither library has an automatic official
-registry denominator in the current scorecard tool; these four records retain
+input backward success is not L3 training. At that measured baseline neither library
+had an automatic registry denominator in the scorecard tool; those four records retain
 `registry_verified_level=null` and `registry_coverage=null`. Registration of a manual
 CASES entry alone does not add a pytest ecosystem CI method or award registry coverage.
 
@@ -154,3 +154,60 @@ The installed-source parity JSON SHA-256 is
 Raw arrays, logs, wheels, caches and the local platform's physical device selection
 stay outside the repository. Diagnostic runner timings were collected without a
 controlled performance protocol; this report quotes no speed or memory ratio.
+
+## Maintained oracle admission and bounded API inventories
+
+The follow-up based on `b2aeec10874136c1b4b16c1598241252a5f92c87` adds actual
+shared-oracle pytest methods for the two registered builders. They require both
+TorchMetrics input gradients and all TensorDict parameter/input gradients.
+The existing CUDA subclass inherits both tests. The source-only admission audit
+now retains the enclosing class in selectors, so its reported paths identify
+executable pytest nodes rather than unqualified unittest method names.
+
+Both CPU nodes passed, followed by both actual CUDA nodes, with zero skips.
+The genuine oracle remained Torch 2.11.0+cu128; both sides used TorchMetrics
+1.7.4 and TensorDict 0.10.0. CPU explicitly hid CUDA. These new gate runs used
+TF32 disabled, cuDNN benchmark disabled and strict native kernel math; they do
+not relabel the earlier TF32-enabled CUDA artifacts. Each shared comparison
+checks actual device, equal precision conditions and zero fallback. An initial
+CPU attempt failed because the private interpreter exposed a SciPy stub;
+prefixing an existing real SciPy installation fixed the environment. Original
+failures remain in the external logs, and no package/math implementation was
+changed for this admission follow-up.
+
+`registry_inventory.py` also derives a `public_api` axis from every name in the
+top-level package's source `__all__`, without importing either library:
+
+| Repository | Full upstream SHA | Bounded public API denominator |
+| --- | --- | ---: |
+| TorchMetrics 1.7.4 | `986eb900b8bc660ff8174c95ec8f702e0e5cb6ca` | 105 |
+| TensorDict 0.10.0 | `c34264a58b12471dc3e2913ea586b32431872d4c` | 60 |
+
+The inventory retains the complete exported-name list, source hashes, real
+version provenance and full tracked Python package hashes. Unknown mutations,
+aliases or dynamic export construction fail closed. This axis covers the
+top-level declared namespace; nested APIs, class methods and task variants are
+outside it. It is not a model-family or whole-library denominator. The new
+inventories and gate logs alone award no registry numerator; the historical
+component records above keep their original source and scope until separately
+converted with complete shared-schema evidence.
+
+For the two CPU nodes, run the existing ecosystem pytest file selecting
+`EcosystemParity::test_torchmetrics_regression` and
+`EcosystemParity::test_tensordict_index_and_stack`, with an independent
+`REAL_TORCH_PYTHON`, the actual package sites, `JITTOR_REQUIRE_REAL_TORCH=1`,
+`JITTOR_REQUIRE_TORCHMETRICS=1` and `JITTOR_REQUIRE_TENSORDICT=1`. Explicitly hide
+CUDA and set `JT_USE_CUDA=0`. For CUDA, expose the allocated GPU, set
+`JT_USE_CUDA=1` and select the same methods on `EcosystemParityCUDA`. Use the
+existing inventory CLI with `--repo torchmetrics` or `--repo tensordict` and
+the corresponding clean upstream checkout. Fresh unversioned evidence is under
+`$JITTOR_LAB_ROOT/_state/metric-tensordict-gates/`; `oracle-cpu-real-scipy.log`
+and `oracle-cuda.log` contain the actual four executions, and the two
+`*-inventory.json` files bind the derived denominators.
+
+Follow-up regression verification: core 322 passed, 42 skipped and one existing
+expected failure; structure plus tools 1690 passed and six skipped. The latter
+includes the corrected class-qualified Longformer selector contract. Repository
+layout, changed-file Ruff and whitespace checks passed. The initial stale
+selector assertion failure is retained in `structure-tools.log`; the passing
+rerun is `structure-tools-corrected.log` in the same external evidence directory.

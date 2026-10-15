@@ -22,8 +22,11 @@ seed=7 输入扰动；所有输出和两组梯度均精确一致。该环境没�
 完整环境、上游 SHA、哈希及范围见
 [维护者报告](../../../docs/results/2026-10-15-metric-state-and-tensordict-oracles.md)。
 
-该组件尚无自动生成的 TorchMetrics 公共 registry 分母，未计入 registry scorecard。
-它在 `CASES` 中可由公共命令执行；本次没有新增 pytest 生态 CI 方法。
+后续接入 `EcosystemParity::test_torchmetrics_regression` 与继承的 CUDA 节点，
+两组输入梯度均为必需字段；真实 CPU/CUDA 各一项通过。中央 `registry_inventory.py`
+可用 `--repo torchmetrics` 从固定上游 `986eb900b8bc660ff8174c95ec8f702e0e5cb6ca`
+的顶层 `__all__` 自动枚举 105 个 `public_api` 名称。该轴只覆盖顶层声明的 API，
+不是全部指标变体或整库分母；新分母和节点本身不授予 registry scorecard 分子。
 分类、聚合、排名指标、MetricCollection、多进程同步和其他 dtype 需要各自证据。
 
 ## 复验命令
