@@ -21,7 +21,7 @@ remote、源码版本与注册源文件 SHA256；每次 scorecard 重新枚举�
 | --- | --- | --- |
 | Transformers | `MODEL_MAPPING_NAMES` 模型族；`MODEL_*_MAPPING_NAMES` 任务映射 | 一个配置/任务不证明该族所有 checkpoint、MoE、多模态或长上下文 |
 | PEFT | `PeftType` 方法；`TaskType` 任务 | 类型登记不证明实现；DoRA 等配置变体须另列具体规格，模型族另引用 Transformers 分母 |
-| Diffusers | `pipelines._import_structure` 的全部可选分支：pipeline 模块族与 API；AutoPipeline 家族/任务另列 | UNet 单模块不证明整 pipeline；AutoPipeline 子集不冒充全库 |
+| Diffusers | `pipelines._import_structure` 的全部可选分支：pipeline 模块族与 API；AutoPipeline 家族/任务另列；`models._import_structure` 全部公开导出另列 `model_api` | 模型导出轴包含 helper、mixin、enum、函数及 Flax，不是模型族数；UNet 单模块不证明整 pipeline；AutoPipeline 子集不冒充全库 |
 | ms-swift | `register_model(ModelMeta)` 模型族；`SWIFT_MAPPING` tuner；普通/Megatron trainer 与 CLI；参数 `task_type`/`rlhf_type` 的 Literal | 普通与 Megatron 轴分开；一个 tiny LoRA 不证明全量/分布式/所有 trainer 方法 |
 | verl | advantage-estimator、policy-loss、distillation-loss 注册；Hydra 入口 | 入口包括训练、评测与生成；登记不证明完整 PPO/GRPO 流水或全部模型 |
 

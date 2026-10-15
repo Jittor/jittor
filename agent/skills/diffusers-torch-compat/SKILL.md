@@ -14,6 +14,38 @@ description: 把 diffusers 分别跑在 jittor 的 `import torch` shim 与原生
 平台、上游 SHA、注册分母与复验条件以报告为准。三步训练是手动验收，
 下文其他版本、环境与性能记录均保留原基线，不与本次结果合并授级。
 
+## 组件 scorecard 的可复用迁移
+
+[组件迁移报告](../../../docs/results/2026-10-15-diffusers-component-scorecards.md)
+保留原 `230ba7a0` 数值基线，使用 clean `f61555a81` 工具复算并接受 CPU/CUDA 两条
+L3；`UNet2DModel` 在每个设备计 `model_api 1/87`，四个 pipeline 轴仍为零。
+这不是在新框架提交上重跑模型，原安装完整来源缺失也没有回填。
+
+中央 inventory 的独立 `model_api` 轴读取固定干净上游
+`src/diffusers/models/__init__.py` 中 `_import_structure` 的全部条件分支。
+不按当前依赖过滤，保留 Flax、helper、mixin、enum 和函数；它是公开导出分母，
+不是模型族或全库分母。pipeline 四轴保持独立，UNet 不获得 pipeline 分子。
+同名同 owner 的互斥条件分支保留两份声明、分母计一次；同分支重复/覆盖、
+跨 module 的歧义别名、动态或未知注册表达式显式拒绝。
+
+下面命令重新派生分母、先检查原始产物哈希，再独立复算完整基线、输入扰动及三步
+SGD 数组。它不运行模型，不修改历史 raw，不把今天的安装内容补成历史安装证明。
+Git 对象必须保留原测量提交及其 builder、training probe；缺少原对象时先恢复真实
+历史对象，不用当前源码代替。原版本/origin 证明与缺失的完整安装包哈希分别披露。
+
+```bash
+<numpy-python> agent/skills/torch-compat-repo-runbook/scripts/collect_diffusers_scorecard.py \
+  --root <jittor-checkout> --upstream <clean-pinned-diffusers-checkout> \
+  --evidence <original-component-evidence-v2.json> \
+  --baseline 230ba7a0305091fb64ec81a679f32dcaefcea518 \
+  --output-dir "$JITTOR_LAB_ROOT/_state/diffusers-scorecard/<fresh-migration>"
+```
+
+原 0.35.1 的 `UNet2DModel` 是 144 个参数梯度、`sample` 输入梯度、三步 873 个
+轨迹字段的 tiny FP32 场景。迁移只为实际执行的公开组件派生注册引用，不扩充完整
+pipeline、L4/L5、NPU 或任意版本结论。需要完整安装来源的新测量必须实际执行，
+不能修改旧 JSON 的版本号或来源字段来通过校验。
+
 ## 用途
 
 回答四件事：diffusers 怎么在 shim 上跑、怎么在原生 torch 上跑、怎么对拍（数值 + 速度）、

@@ -114,7 +114,8 @@ def inventory(repo, checkout):
     elif repo == "peft":
         selected = [path for path in files if path.endswith("utils/peft_types.py")]
     elif repo == "diffusers":
-        selected = [path for path in files if path.endswith(("pipelines/auto_pipeline.py", "pipelines/__init__.py"))]
+        selected = [path for path in files if path.endswith(("pipelines/auto_pipeline.py", "pipelines/__init__.py"))
+                    or path == "src/diffusers/models/__init__.py"]
     elif repo == "ms-swift":
         selected = [path for path in files if "/model/" in path or "/tuners/" in path
                     or path.endswith("model_type.py") or any(
@@ -165,6 +166,13 @@ def inventory(repo, checkout):
                         paths.append(path)
             add(axis, cls, values, paths)
     elif repo == "diffusers":
+        from _diffusers_registry import model_exports
+        model_path = "src/diffusers/models/__init__.py"
+        members, declarations = model_exports((checkout / model_path).read_text(encoding="utf-8"))
+        add("model_api", "models._import_structure public exports (all optional branches)", members, [model_path])
+        declaration_details = {"model_api": declarations,
+                               "scope": "All public names in models._import_structure, including helpers, mixins, "
+                                        "enums, functions and Flax; not model families, scheduler APIs or pipelines."}
         mappings = source.assignments(r"AUTO_.*PIPELINES_MAPPING")
         families, pipeline_classes, pipeline_paths = [], [], []
         for path, tree in source.trees.items():
@@ -401,6 +409,11 @@ def inventory(repo, checkout):
     if repo == "flash-attention":
         result["scope"] = ("All public top-level attention functions explicitly exported by flash_attn.__init__; "
                            "not all internal APIs, features, shapes or dtypes. Enumeration verifies no member.")
+    if repo == "diffusers":
+        result["declaration_details"] = declaration_details
+        result["scope"] = ("Pipeline declaration axes and the independent complete models public-export axis; "
+                           "all optional branches are retained. A model component is never a pipeline numerator. "
+                           "Model exports include helpers and Flax APIs, not only trainable model classes.")
     if repo in ("mmengine", "mmcv") and declaration_details is not None:
         result["declaration_details"] = declaration_details
         result["scope"] = ("Bounded source-declared OpenMMLab registry axes; all branches and optional/compiled "
