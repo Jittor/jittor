@@ -104,3 +104,13 @@ checkouts reproduces both complete inventories, including the generated TensorDi
 version authority. The common auditor still accepts four rows and rejects none.
 Raw measurements retain their original source SHA; the integration does not
 create new numerical or whole-library coverage.
+
+The clean integration commit `67e166018cd5ec1c05413d2daf1c7302b2461970`
+passes 260 targeted host tests, CPU core 322 passed / 42 skipped / one existing
+xfail, and the expanded structural gate 1,628 passed / six skipped. Layout,
+generated manifests, Ruff and diff checks pass; all 74 pre-existing nox function
+ASTs remain unchanged. The independent integration seal contains 28 files and
+52,728,692 bytes, SHA256
+`7ffc1a2416cbcab5707d8aac6cf7b3710bccd397e213c74e929e1c1076e440df`.
+A precommit source test correctly rejected the new helper's absence from the
+previous Git HEAD; the unchanged test passes against the actual committed source.

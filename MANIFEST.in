@@ -457,6 +457,7 @@ include docs/results/2026-10-16-metrics-tensordict-installed-source.md
 include docs/results/2026-10-16-omni-installed-source-diagnostics.md
 include docs/results/2026-10-16-recorded-grad-fn-freeze.md
 include docs/results/2026-10-16-transformers-main-source-training.md
+include docs/results/2026-10-16-transformers-maintained-cpu-nightly.md
 include docs/results/2026-10-16-verl-maintained-cpu-nightly.md
 include docs/results/index.md
 include docs/tutorials/index.md
