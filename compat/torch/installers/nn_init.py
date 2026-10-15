@@ -50,9 +50,28 @@ def _not_var(t):
     return not isinstance(t, _jt2.Var)
 
 
+def _initialization_dtype(tensor):
+    dtype = _jittor_dtype_name(tensor.dtype)
+    if dtype not in ("float16", "bfloat16", "float32", "float64"):
+        raise RuntimeError("random initialization requires a supported floating dtype")
+    # Apply the distribution's scale/offset before rounding to low precision.
+    return dtype, "float32" if dtype in ("float16", "bfloat16") else dtype
+
+
 def normal_(tensor, mean=0.0, std=1.0, generator=None):
     if _not_var(tensor): return tensor
-    return _assign(tensor, _jt2.normal(float(mean), float(std), tensor.shape).cast(_jittor_dtype_name(tensor.dtype)))
+    mean, std = float(mean), float(std)
+    if not std >= 0:
+        raise RuntimeError("normal expects std >= 0.0")
+    dtype, compute_dtype = _initialization_dtype(tensor)
+    target = get_install_context(jt).target_namespace
+    # Factories own generator validation, device placement and native draws.
+    # Tensor.normal_ is a separate consumer and must not substitute its stream.
+    with jt.no_grad():
+        draw = target.randn(tuple(tensor.shape), dtype=compute_dtype,
+                            device=tensor.device, generator=generator)
+        value = (draw * std + mean).cast(dtype)
+    return _assign(tensor, value)
 
 
 def uniform_(tensor, a=0.0, b=1.0, generator=None, *, low=None, high=None):
@@ -65,7 +84,19 @@ def uniform_(tensor, a=0.0, b=1.0, generator=None, *, low=None, high=None):
             raise TypeError("uniform_ received conflicting values for b and high")
         b = high
     if _not_var(tensor): return tensor
-    return _assign(tensor, (_jt2.rand(tensor.shape) * (b - a) + a).cast(_jittor_dtype_name(tensor.dtype)))
+    a, b = float(a), float(b)
+    dtype, compute_dtype = _initialization_dtype(tensor)
+    target = get_install_context(jt).target_namespace
+    limits = target.finfo(tensor.dtype)
+    if not (limits.min <= a <= limits.max and limits.min <= b <= limits.max):
+        raise RuntimeError("uniform_ bounds are out of range for the tensor dtype")
+    if a > b or b - a > limits.max:
+        raise RuntimeError("uniform_ requires an ordered range within the tensor dtype limit")
+    with jt.no_grad():
+        draw = target.rand(tuple(tensor.shape), dtype=compute_dtype,
+                           device=tensor.device, generator=generator)
+        value = (draw * (b - a) + a).cast(dtype)
+    return _assign(tensor, value)
 
 
 def zeros_(tensor):
@@ -242,8 +273,8 @@ def _install_init_aliases(registry=None):
         if not _name.startswith("__"):
             setattr(_init, _name, _value)
     from jittor.init.scaling import _kaiming_uniform_
-    # torch-style in-place initializers, tolerant of torch kwargs (e.g.
-    # `generator=`, which jittor ignores). Each writes into `tensor` in place.
+    # Torch-style in-place initializers. uniform_/normal_ use the factory RNG
+    # owner; remaining initializer limitations are registered below.
 
     # in-place inits are sometimes called on a NON-Var constant: jittor represents a
     # disabled affine term (e.g. LayerNorm(bias=False) -> self.bias = 0.0) as a Python
