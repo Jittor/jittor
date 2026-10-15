@@ -154,7 +154,46 @@ Layout, generated manifest, Ruff and whitespace checks pass.
 
 The maintainer independently rehashed all 313 nightly evidence files and all
 1033 OpenMMLab evidence files: no mismatches. Original failed attempts and
-measurement/source identities are preserved. New isolated maintained numerical
-runs at c4935 are in progress; these integration checks do not relabel the old
+measurement/source identities are preserved. Fresh isolated maintained runs at
+c4935 are documented below; integration checks do not relabel the original
 numerical results as c4935 measurements. Unversioned integration records are in
 `$JITTOR_LAB_ROOT/_state/maintained-gates-main-integration-cd7/`.
+
+
+## Fresh c4935 execution and independent review
+
+On 2026-10-16, the complete maintained sessions were rerun from clean
+`c4935e9061964f17fa7d8ac4fb9930e1b84f5bfd`, using six newly created environments
+(three per library), separate empty compilation caches and the unchanged public
+provisioner. Verified official wheel/source inputs were reused read-only;
+installed environments and JIT binaries were not copied. All six recorded
+`pip check` commands returned zero. CPU execution explicitly hid CUDA, and the
+oracle loaded the genuine Torch 2.11.0+cpu binary. The Swift environment also
+passed its actual Arrow/NumPy/Dataset ABI preflight.
+
+Swift's complete FULL SFT maintenance node passed **1 / 0 skipped**, 152.10 s.
+PEFT's full six-worker gate passed **177 array pairs** at the original budgets,
+with maximum absolute error `1.4543533325195312e-05` and scaled relative error
+`3.135175185365948e-07`. The integrating maintainer independently reran the
+complete original PEFT collector against the frozen c4935 source and actual
+new raw arrays: base/perturbation gradients, all three updates, eight trainable
+and 21 unchanged frozen parameters pass. These are test durations and numerical
+results, not performance measurements or whole-library support.
+
+The fresh seal is under the unversioned
+`$JITTOR_LAB_ROOT/_state/ecosystem-nightly-main-recheck/20261015/manifest.json`:
+**125 files / 22,361,671 bytes**, SHA256
+`3097d96ff54ba684f9690b048b9a62e36ee2c44ce219fd9fd5ee72f61cd210a7`.
+The integrating maintainer independently rehashed every sealed file without
+mismatch. PEFT's complete raw arrays, phase metadata and final validation are
+retained. Swift followed the unchanged harness's temporary-array cleanup; its
+fresh retained evidence is execution and complete source/installation logs,
+not an exported new shared scorecard. This limitation does not rewrite the
+older Swift CPU/CUDA numerical evidence.
+
+The original 08a3 measurement and 313-file seal remain unchanged. New source
+identity and the 2,877-file c4935 Git snapshot are separate. Independent central
+PEFT recomputation and seal checks are under
+`$JITTOR_LAB_ROOT/_state/ecosystem-nightly-main-recheck-root-ffbb/`. No GitHub
+scheduled run was triggered or observed; CUDA/NPU, full-library coverage and
+the remaining libraries' nightly gates are not granted by this CPU recheck.
