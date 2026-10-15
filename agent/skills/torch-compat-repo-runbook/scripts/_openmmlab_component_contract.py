@@ -163,6 +163,43 @@ def validate_metadata(value, inventories, baseline, case, runtime, seed, proof, 
         require(value.get('probe_sha256') == expected_sources[paths[-1]], 'Changed real train_step probe')
 
 
+def validate_installation_pair(values, used):
+    """Verify each real prefix before comparing its source/content identity."""
+    from component_measure import package_files
+
+    require(len(values) == 2, 'Expected two actual OpenMMLab installations')
+    identities = []
+    for value in values:
+        dependencies = value.get('dependencies')
+        bindings = value.get('downstream_distributions')
+        require(isinstance(dependencies, dict) and isinstance(bindings, dict)
+                and set(dependencies) == set(bindings) == used,
+                'Incomplete or extra OpenMMLab installation identities')
+        normalized_dependencies, normalized_bindings = {}, {}
+        for repo in sorted(used):
+            dependency, binding = dependencies[repo], bindings[repo]
+            require(isinstance(dependency, dict) and isinstance(binding, dict)
+                    and isinstance(binding.get('package'), str)
+                    and isinstance(dependency.get('origin'), str),
+                    'Invalid actual OpenMMLab package origin')
+            package, origin = Path(binding['package']), Path(dependency['origin'])
+            require(package.is_absolute() and package.is_dir() and package.name == repo
+                    and origin.is_absolute() and origin.is_file()
+                    and origin.resolve() == package.resolve() / '__init__.py',
+                    'OpenMMLab dependency origin disagrees with actual package')
+            package = package.resolve()
+            require(all(package in path.resolve().parents for path in package.rglob('*') if path.is_file()),
+                    'OpenMMLab package file escapes its actual prefix')
+            require(dependency.get('version') == binding.get('version')
+                    and dependency.get('installed_files_sha256') == binding.get('installed_files_sha256')
+                    == package_files(package), 'Changed actual OpenMMLab installation payload/identity')
+            normalized_dependencies[repo] = {key: item for key, item in dependency.items() if key != 'origin'}
+            normalized_bindings[repo] = {key: item for key, item in binding.items() if key != 'package'}
+        identities.append((normalized_dependencies, normalized_bindings))
+    require(identities[0] == identities[1], 'OpenMMLab runtime installation identities disagree')
+    return identities
+
+
 def compare_pair(reference, candidate, inventories, baseline, case, seed, wheels, root, *, training=False):
     import numpy as np
 
@@ -174,7 +211,8 @@ def compare_pair(reference, candidate, inventories, baseline, case, seed, wheels
     values = [read(path.with_suffix('.json')) for path in (reference, candidate)]
     for value, runtime in zip(values, ('torch', 'jittor')):
         validate_metadata(value, inventories, baseline, case, runtime, seed, proof, root, training=training)
-    for key in ('device', 'dependencies', 'tf32', 'runtime_conditions', 'downstream_distributions'):
+    identities = validate_installation_pair(values, {repo for repo, _, _ in spec['registry_refs']})
+    for key in ('device', 'tf32', 'runtime_conditions'):
         require(values[0].get(key) == values[1].get(key), 'OpenMMLab runtime pair disagrees: ' + key)
     require(values[0]['runtime_conditions'].get('precision') == values[0]['tf32'], 'Wrong actual OpenMMLab precision')
     validate_initial_weights(values, values[0].get('weights_sha256'))
@@ -184,7 +222,12 @@ def compare_pair(reference, candidate, inventories, baseline, case, seed, wheels
         test.device = values[0]['device']
         # Compare the two actual packets using the existing train_step owner,
         # update-count, clipping, momentum and log parsing contract.
-        assert_reports(test, case, *values)
+        # The legacy trajectory helper compares dependencies literally. Its
+        # inputs use the identities verified above; retain the actual packets
+        # unchanged for returned evidence and all source/installation checks.
+        reports = [dict(value, dependencies=identity[0])
+                   for value, identity in zip(values, identities)]
+        assert_reports(test, case, *reports)
     with np.load(values[0]['weights'], allow_pickle=False) as initial:
         expected = dict(spec['parameters'], **spec['buffers'])
         require(set(initial.files) == set(expected), 'Incomplete initial MM parameters/buffers')

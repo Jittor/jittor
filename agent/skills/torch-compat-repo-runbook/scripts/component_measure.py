@@ -93,6 +93,15 @@ def installed_distribution(source, module):
     result = {'repo': source['repo'], 'version': version,
               'source_sha256': actual, 'installed_files_sha256': files,
               'package': str(package)}
+    if source['repo'] in ('torchmetrics', 'tensordict'):
+        from _installed_source_proof import bind_official_wheel
+        from _metric_td_installation import wheel_pin
+
+        if 'official_wheel' not in source:
+            raise ValueError('Metrics/TensorDict require a fixed official-wheel source descriptor')
+        wheel = Path(source['official_wheel']['path'])
+        result = bind_official_wheel(source, module, wheel, result,
+                                    expected_wheel_sha256=wheel_pin(source, wheel))
     if source['repo'] == 'verl':
         from importlib.metadata import distribution
 
@@ -132,6 +141,8 @@ def main():
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--repo', choices=('torchmetrics', 'tensordict', 'diffusers', 'verl', 'mmengine', 'mmcv', 'vllm'), required=True)
     parser.add_argument('--checkout', type=Path, required=True)
+    parser.add_argument('--wheel', type=Path,
+                        help='Required fixed official wheel for Metrics/TensorDict source proof')
     parser.add_argument('--mmengine-checkout', type=Path)
     parser.add_argument('probe', nargs=argparse.REMAINDER)
     args = parser.parse_args()
@@ -146,11 +157,19 @@ def main():
         parser.error('--mmengine-checkout is only valid for the real MMCV training-owner dependency')
     if args.repo == 'mmcv' and args.mmengine_checkout is None:
         parser.error('MMCV measurements also require --mmengine-checkout')
+    if args.wheel is not None and args.repo not in ('torchmetrics', 'tensordict'):
+        parser.error('--wheel is only valid for Metrics/TensorDict official-wheel proof')
     if script not in allowed:
         parser.error('Only the maintained ecosystem runner or training probe is allowed')
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from registry_inventory import inventory
     source = inventory(args.repo, args.checkout)
+    if args.repo in ('torchmetrics', 'tensordict'):
+        from _metric_td_installation import source_descriptor
+
+        if args.wheel is None:
+            parser.error('Metrics/TensorDict measurements require --wheel')
+        source = source_descriptor(args.repo, args.checkout, args.wheel)
     sources = {args.repo: source}
     if args.repo == 'mmcv':
         sources['mmengine'] = inventory('mmengine', args.mmengine_checkout)
@@ -162,10 +181,14 @@ def main():
         from _vllm_installation import framework_snapshot
 
         frozen_sources = framework_snapshot(root)
+    elif args.repo in ('torchmetrics', 'tensordict'):
+        from _metric_td_installation import framework_snapshot
+
+        frozen_sources = framework_snapshot(root)
     sys.path.insert(0, str(script.parent))
     runtime = command[command.index('--runtime') + 1]
     before_files, before_package = {}, {}
-    if args.repo in ('verl', 'mmengine', 'mmcv', 'vllm'):
+    if args.repo in ('verl', 'mmengine', 'mmcv', 'vllm', 'torchmetrics', 'tensordict'):
         from importlib.machinery import PathFinder
 
         # Hash the real import target without importing VERL or Torch ahead of
@@ -179,8 +202,9 @@ def main():
     sys.argv = command
     captured = io.StringIO()
     observer = (SnapshotObserver(runtime, command[command.index('--device') + 1], script,
-                                 allow_scalar_counter=args.repo == 'mmcv', verify_cuda_pointer=args.repo == 'vllm')
-                if args.repo in ('verl', 'mmengine', 'mmcv', 'vllm') else None)
+                                 allow_scalar_counter=args.repo == 'mmcv',
+                                 verify_cuda_pointer=args.repo in ('vllm', 'torchmetrics', 'tensordict'))
+                if args.repo in ('verl', 'mmengine', 'mmcv', 'vllm', 'torchmetrics', 'tensordict') else None)
     previous_profile = sys.getprofile()
     try:
         if observer is not None:
@@ -225,6 +249,14 @@ def main():
                 or subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip() != baseline
                 or subprocess.check_output(['git', '-C', str(root), 'status', '--porcelain'], text=True).strip()):
             raise ValueError('vLLM framework source changed during measurement')
+    elif args.repo in ('torchmetrics', 'tensordict'):
+        from _metric_td_installation import framework_snapshot
+
+        source_paths = [root / path for path in frozen_sources]
+        if (framework_snapshot(root) != frozen_sources
+                or subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip() != baseline
+                or subprocess.check_output(['git', '-C', str(root), 'status', '--porcelain'], text=True).strip()):
+            raise ValueError('Metrics/TensorDict framework source changed during measurement')
     binding = {'jittor_commit': baseline, 'upstream': source['upstream'],
                'hf_hub_offline': os.environ.get('HF_HUB_OFFLINE') == '1',
                'downstream_distribution': distribution,
@@ -242,6 +274,13 @@ def main():
         binding['device_controls'] = device_controls(torch, command[command.index('--device') + 1])
         if is_shim:
             binding['adapter_distribution'] = adapter_installation(root)
+    elif args.repo in ('torchmetrics', 'tensordict'):
+        from _vllm_installation import device_controls
+
+        binding['runtime'] = runtime
+        binding['device_controls'] = device_controls(torch, command[command.index('--device') + 1])
+        binding['runtime_environment'] = {name: os.environ.get(name) for name in
+                                          ('HOME', 'JITTOR_HOME', 'TMPDIR', 'XDG_CACHE_HOME')}
     if args.repo in ('mmengine', 'mmcv'):
         binding['upstreams'] = {repo: entry['upstream'] for repo, entry in sources.items()}
         binding['downstream_distributions'] = distributions
@@ -261,6 +300,26 @@ def main():
             if line.startswith(marker):
                 value = json.loads(line[len(marker):])
                 value.update(binding)
+                if args.repo in ('torchmetrics', 'tensordict'):
+                    import shutil
+                    from _runtime_platform import capture_platform
+
+                    device = value['device']
+                    allocation = os.environ['CUDA_VISIBLE_DEVICES'].split(',') if device == 'cuda' else []
+                    rows = ([line.split(', ') for line in subprocess.check_output(
+                        ['nvidia-smi', '--query-gpu=index,uuid,name,driver_version', '--format=csv,noheader'],
+                        text=True).splitlines()] if device == 'cuda' else [])
+                    selected = [row for row in rows if row[0] in allocation or row[1] in allocation]
+                    flags = binding.get('native_runtime_flags', {})
+                    native = sys.modules.get('jittor') if is_shim else None
+                    value['platform'] = capture_platform(
+                        torch, device, physical_devices=selected, card_indices=allocation,
+                        precision=value['tf32'],
+                        jittor_flags={'use_cuda': flags.get('use_cuda', int(device == 'cuda')), 'use_acl': 0,
+                            'graph_replay': 'default' if flags.get('auto_graph_replay') else 'eager',
+                            'tf32': value['tf32']['matmul'], 'hf32': False},
+                        nvcc=(native.compiler.nvcc_path if native else os.environ.get('JT_BUILD_NVCC_PATH')),
+                        cxx=native.compiler.cc_path if native else shutil.which('g++') or 'g++')
                 value['seed'] = int(command[command.index('--seed') + 1]) if '--seed' in command else 0
                 weight = (Path(command[command.index('--weights') + 1]) if '--weights' in command
                           else output.with_name(output.stem + '.weights.npz'))

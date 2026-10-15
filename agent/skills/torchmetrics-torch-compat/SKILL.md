@@ -58,33 +58,49 @@ CUDA 的精度配置取实际 JSON 的 `tf32` 与 `runtime_conditions.precision`
 matmul/cuDNN TF32 **开启**、matmul precision **high**；CPU 为关闭/highest。
 公共命令的诊断计时没有形成速度排名、L4 或 L5 结论，`--no-memory` 不提供显存证据。
 
-## 最新固定源码 scorecard
+## 当前严格来源 scorecard
 
-2026-10-15 在干净测量源码 `90ee18a9916acda9b5e86ca665f09a231a41ced1`，
-重新运行真实 CPU→CUDA、seed=0 原始权重和 seed=7 固定权重扰动，Metrics 两端均 L2，2/105 顶层 API，零参数，输出与两组输入梯度精确一致。
-两侧实际 TF32 关闭、matmul precision highest、fallback error/count0；
-共享 auditor 真正接受四条 CPU/CUDA 记录。该结论仅限登记的组件场景，
-不扩展为整库支持，也不改标旧 `5ad` 数组。见
-[当前 scorecard 报告](../../../docs/results/2026-10-15-metrics-tensordict-scorecards.md)。
+2026-10-16 在干净测量源码 `91242395f555f3c24f60df665c3ea66e13d01caf`，
+以四个新私有计算环境重新完成 CPU→CUDA、seed 0 完整初始权重和 seed 7 固定权重扰动。
+Metrics 每设备 6 个完整数组精确相同，输出和两组输入梯度均检查，零参数，最高 **L2**；
+分子为 **2/105 @ upstream 986eb900b8bc660ff8174c95ec8f702e0e5cb6ca**。
+TensorDict 另有独立 L3 行；共享 auditor 实际接受共四条记录、零拒绝。
+两侧 TF32/benchmark 关闭、highest、fallback error/count0，CUDA 有实际指针/UUID/驻留证据。
+新报告：[固定官方安装来源与完整协议](../../../docs/results/2026-10-16-metrics-tensordict-installed-source.md)。
+
+`90ee` 的原始数组和当时结果保持不动；当前严格 guard 因缺固定官方 wheel/实际
+METADATA/RECORD 证明拒绝其四条记录，不能从今天的安装目录回填旧证据。
+新测量绑定全部 341 个上游 Python 文件、346 个完整官方 wheel 包文件和实际 pip
+METADATA/RECORD，包含非 Python 资源；不是仅版本字符串或 Python 子集相等。
+这仍不证明其余 103 个导出、其他变体或 hosted nightly 实际执行。
 
 ## 可复用完整 scorecard 采集
 
 公共 [`component_measure.py`](../torch-compat-repo-runbook/scripts/component_measure.py)
-可包装 `verify_repo.py` 启动的两个独立解释器，以及共享 runner 的 seed=7 扰动进程。
-每场测量从干净 upstream checkout 再生 inventory，核对实际包版本与全部
-`package_sources`，记录完整安装目录文件哈希、真实 Torch 二进制身份和初始权重哈希。
-使用任务专属 executable launcher 转发 `python component_measure.py --root <checkout>
---repo torchmetrics --checkout <clean-upstream> -- "$@"`，不要修改共享解释器。
+包装公共 runner 和 `training_probe.py`，不复制模型数学。先从干净 upstream 再生 inventory，
+用 [`_metric_td_installation.py`](../torch-compat-repo-runbook/scripts/_metric_td_installation.py)
+固定的官方 PyPI wheel；实际安装内容、METADATA、RECORD 和 wheel 的完整包载荷必须一致。
+任务专属 executable launcher 转发：
+
+```bash
+<runtime-python> agent/skills/torch-compat-repo-runbook/scripts/component_measure.py \
+  --root <measurement-checkout> --repo torchmetrics --checkout <clean-upstream> \
+  --wheel <fixed-official-torchmetrics-wheel> -- "$@"
+```
+
+launcher 在通用 runner 清理环境后恢复每侧独立 HOME/JITTOR_HOME/TMPDIR/XDG_CACHE_HOME；
+CPU 显式隐藏 CUDA，CUDA 两侧恢复实际 `JT_BUILD_NVCC_PATH`，不得猜测编译器或回填平台。
+`verify_repo.py` 用 seed 0；runner 的 seed 7 扰动加载同一完整初始权重，输出必须改变。
 
 [`collect_component_scorecard.py`](../torch-compat-repo-runbook/scripts/collect_component_scorecard.py)
-接受 `--upstream torchmetrics=<clean-upstream>`、每设备一个
-`--run torchmetrics=<measurement-directory>`、`--platform cpu=<platform-json>` /
-`--platform cuda=<platform-json>`、实际 `--baseline`、`--report`、完整 `--command` 与
-`--output`。目录包含公共 `verify-report.json`、`perturb-comparison.json` 以及
-runner 原始 NPZ/JSON；扰动文件 stem 为 `torchmetrics_regression.perturb`。
-collector 重新比较全部数组后调用共享 `audit_coverage.scorecard`，只引用实际调用的
-MeanAbsoluteError、MeanSquaredError 顶层 API，最高 L2；任何版本/源码、梯度、权重、
-precision/device/fallback 断点拒绝授级。原始数组不可从旧基线改标为新提交。
+需 `--upstream torchmetrics=<clean-upstream>`、`--wheel torchmetrics=<official-wheel>`、
+每设备的 `--run torchmetrics=<measurement-directory>`、`--platform cpu=<json>` /
+`--platform cuda=<json>`、实际测量 `--baseline`、`--report`、完整 `--command` 和 `--output`。
+目录含 `verify-report.json`、`perturb-comparison.json` 及原始 NPZ/JSON；扰动 stem 为
+`torchmetrics_regression.perturb`。collector 比较全部数组，再实际调用共享
+`audit_coverage.scorecard`；registry_refs 仅 MeanAbsoluteError、MeanSquaredError。
+完整命令、平台、负例与原始 seal 在新报告中。缺梯度、安装来源、平台、原始权重或零 fallback
+证明均不得授级；缺 CPU 配对不得计入加速卡覆盖分子。不重标旧数组，不授 L3/L4/L5。
 
 ## 断点归属与 adapter 边界
 

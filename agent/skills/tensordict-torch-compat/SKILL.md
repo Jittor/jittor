@@ -63,27 +63,38 @@ PYTHONPATH=python JITTOR_TORCH_SHIM=1 \
 该工具显式执行 SGD 更新，不证明 Adam、上游 Trainer 或分布式训练路径。
 历史 `5ad` CUDA 实际 TF32 为开启/high，CPU 为关闭/highest。未做 L4/L5、整进程显存或速度排名。
 
-## 最新固定源码 scorecard
+## 当前严格来源 scorecard
 
-2026-10-15 在干净测量源码 `90ee18a9916acda9b5e86ca665f09a231a41ced1`，
-重新运行真实 CPU→CUDA、seed=0 原始权重和 seed=7 固定权重扰动，TensorDict 两端均 L3，2/60 顶层 API，完整梯度和三步 SGD 轨迹通过。
-两侧实际 TF32 关闭、matmul precision highest、fallback error/count0；
-共享 auditor 真正接受四条 CPU/CUDA 记录。该结论仅限登记的组件场景，
-不扩展为整库支持，也不改标旧 `5ad` 数组。见
-[当前 scorecard 报告](../../../docs/results/2026-10-15-metrics-tensordict-scorecards.md)。
+2026-10-16 在干净测量源码 `91242395f555f3c24f60df665c3ea66e13d01caf`，
+真实 CPU→CUDA 双解释器原规格重新通过，TensorDict 每设备 **29 个数组、L3**，
+包括 seed 0/7 完整参数/输入梯度及三步 SGD 的全部 21 个字段；两参数均真实更新。
+分子为 **2/60 @ upstream c34264a58b12471dc3e2913ea586b32431872d4c**，仅 TensorDict 和实际
+lazy_stack 组合，不扩大为完整容器、分布式或训练设施。CPU 最大绝对误差 9.54e-7，
+CUDA 7.15e-7；原 .002/.01 预算不变，实际 TF32/benchmark 关闭、highest、F0。
+与 Metrics 共四行被共享 auditor 实际接受、零拒绝。见
+[严格官方来源报告](../../../docs/results/2026-10-16-metrics-tensordict-installed-source.md)。
+
+`90ee` 原数组保留；当前 guard 拒绝其缺少固定官方 wheel/METADATA/RECORD 的记录，
+不补造历史来源。新测量绑定 36 个上游 Python 文件及完整 42 个官方 wheel 包文件。
+生成 `_version.py` 的源码声明为 setuptools-scm `version_file`；官方产物的真实
+commit_id 为 **None**，不伪装成源码 SHA。固定 whole-wheel hash 同时保护生成文件与 `_C.so`；
+载荷存在不代表其全部 C++ kernel 已执行，也不证明 hosted nightly 实际执行。
 
 ## 可复用完整 scorecard 采集
 
-复用 TorchMetrics skill 描述的公共
-[`component_measure.py`](../torch-compat-repo-runbook/scripts/component_measure.py) 与
-[`collect_component_scorecard.py`](../torch-compat-repo-runbook/scripts/collect_component_scorecard.py)，
-将 repo 改为 `tensordict`。公共 base 输出 stem 为 `tensordict_index_and_stack`，
-固定初始权重的 seed=7 扰动 stem 为 `tensordict_index_and_stack.perturb`。
-还须通过同一个 measurement wrapper 执行 `training_probe.py`，保存
-`tensordict_index_and_stack.train.ref.npz/.json`、`.train.shim.npz/.json` 与原始权重。
-collector 实际比较三个步骤的全部 21 个字段，并核对两个 trainable 参数、零 frozen、
-sample 输入梯度、SGD 学习率 0.001 和真实参数更新。registry_refs 仅 TensorDict 与
-lazy_stack，表示该 tiny 组合场景的 L3，不扩大为全部容器方法或训练设施。
+复用 TorchMetrics skill 的公共 wrapper/collector 和原 `_ecosystem_runner.py`，
+repo 为 `tensordict`。wrapper 必须提供 `--wheel <fixed-official-tensordict-wheel>`；
+collector 对应 `--wheel tensordict=<wheel>`。先获取官方 `v0.10.0` tag 并核对其 peeled commit；
+只有 SHA、没有真实 release tag 的 checkout 如实枚举为 source@SHA，不能强行改成 release。
+
+每侧恢复独立 HOME/JITTOR_HOME/TMPDIR/XDG_CACHE_HOME，CPU 显式隐藏 CUDA；
+CUDA 两侧恢复真实 `JT_BUILD_NVCC_PATH`。base stem 为 `tensordict_index_and_stack`，
+固定初始权重的 seed 7 扰动 stem 为 `tensordict_index_and_stack.perturb`。
+再经同一 wrapper 执行 `training_probe.py --seed 0 --steps 3 --learning-rate .001`，
+加载原 seed 0 完整 weights，保存 `.train.ref.npz/.json` 和 `.train.shim.npz/.json`。
+collector 检查两个 trainable 参数、零 frozen、sample 梯度、完整轨迹和真实更新，再实际调用
+共享 auditor。平台、安装 payload、实际 METADATA/RECORD、源码、权重或梯度缺失均拒绝；
+原始命令、完整平台、负例和 seal 见新报告，不重标旧数组。
 
 ## 断点归属与旧门禁
 
