@@ -88,10 +88,20 @@ def compare_pair(reference, candidate, source, baseline, *, seed):
                 and set(value['observed_tensor_devices'].values()) == {value.get('device')},
                 'Incomplete actual tensor residency observations')
     a, b = values
+    distributions = [value['downstream_distribution'] for value in values]
+    require(all(isinstance(value.get('package'), str) and value['package'] for value in distributions),
+            'Missing actual installed package location')
     for name in ('registry_refs', 'trainable_parameters', 'training_protocol', 'downstream_distribution',
                  'tf32', 'runtime_conditions', 'dependencies', 'model_artifacts', 'device',
                  'measurement_source_sha256', 'observed_inputs', 'integer_inputs'):
-        require(a.get(name) == b.get(name), 'Runtime condition/source/protocol mismatch: ' + name)
+        left, right = a.get(name), b.get(name)
+        if name == 'downstream_distribution':
+            # Each worker already hashes its actual package. Independent venvs
+            # have different locations; all content and identity fields remain
+            # exact comparisons, and the raw locations remain in both reports.
+            left, right = ({key: value for key, value in item.items() if key != 'package'}
+                           for item in (left, right))
+        require(left == right, 'Runtime condition/source/protocol mismatch: ' + name)
     require(a['interpreter'].get('binary_sha256'), 'Oracle binary extension identity missing')
     require(b.get('fallback_policy') == 'error' and b.get('fallback_count') == 0,
             'Candidate zero-fallback guard missing')

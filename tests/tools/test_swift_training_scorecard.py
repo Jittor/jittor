@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import sys
 from types import SimpleNamespace
+import zipfile
 
 import numpy as np
 import pytest
@@ -45,6 +46,7 @@ def protocol(tmp_path):
         'integer_inputs': ['attention_mask', 'input_ids', 'labels'], 'observed_inputs': inputs,
         'observed_intermediate_gradients': ['embedding_output'],
         'downstream_distribution': {'repo': 'ms-swift', 'version': '4.5.2',
+            'package': str(tmp_path / 'installed/swift'),
             'source_sha256': {'swift/__init__.py': 'b' * 64},
             'installed_files_sha256': {'__init__.py': 'b' * 64}, 'wheel_sha256': 'd' * 64},
         'registry_refs': [{'repo': 'ms-swift', 'axis': key, 'member': identity[key]}
@@ -82,6 +84,79 @@ def test_complete_three_step_observation_passes(protocol):
     result = evaluate(protocol)
     assert result['status'] == 'passed'
     assert len(result['rows']) == 93
+
+
+@pytest.fixture
+def independent_prefixes(protocol, tmp_path):
+    source, _paths, values, _arrays = protocol
+    code = b"__version__ = '4.5.2'\n"
+    metadata = b'Name: ms-swift\nVersion: 4.5.2\n'
+    source['package_sources'] = [{'path': 'swift/__init__.py', 'sha256': hashlib.sha256(code).hexdigest()}]
+    wheel = tmp_path / 'swift.whl'
+    with zipfile.ZipFile(wheel, 'w') as archive:
+        archive.writestr('swift/__init__.py', code)
+        archive.writestr('swift/data/example.json', b'{"value": 1}\n')
+        archive.writestr('ms_swift-4.5.2.dist-info/METADATA', metadata)
+    packages, metadata_paths = [], []
+    for side, value in zip(('oracle', 'candidate'), values):
+        site = tmp_path / side / 'site-packages'
+        with zipfile.ZipFile(wheel) as archive:
+            archive.extractall(site)
+        package = site / 'swift'
+        module = SimpleNamespace(__file__=str(package / '__init__.py'), __version__='4.5.2')
+        binding = installed_distribution(source, module)
+        path = site / 'ms_swift-4.5.2.dist-info/METADATA'
+        binding.update(wheel_sha256=hashlib.sha256(wheel.read_bytes()).hexdigest(),
+                       metadata_sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+        value['downstream_distribution'] = binding
+        packages.append(package)
+        metadata_paths.append(path)
+    return protocol, packages, wheel, metadata_paths
+
+
+def test_real_independent_package_prefixes_keep_equal_content_and_raw_locations(independent_prefixes):
+    protocol, packages, _wheel, _metadata = independent_prefixes
+    result = evaluate(protocol)
+    assert result['status'] == 'passed'
+    locations = [result[key]['downstream_distribution']['package']
+                 for key in ('reference_result', 'candidate_result')]
+    assert locations == [str(package) for package in packages]
+    assert locations[0] != locations[1]
+
+
+@pytest.mark.parametrize('failure', ['source', 'payload', 'wheel', 'metadata',
+                                    'missing-location', 'both-missing-locations', 'another-path-field'])
+def test_independent_prefixes_still_reject_content_and_identity_changes(independent_prefixes, failure):
+    protocol, packages, wheel, metadata_paths = independent_prefixes
+    source, _paths, values, _arrays = protocol
+    candidate = values[1]['downstream_distribution']
+    if failure == 'source':
+        (packages[1] / '__init__.py').write_bytes(b'changed source\n')
+        module = SimpleNamespace(__file__=str(packages[1] / '__init__.py'), __version__='4.5.2')
+        with pytest.raises(ValueError, match='Installed source differs'):
+            installed_distribution(source, module)
+        return
+    if failure == 'payload':
+        (packages[1] / 'data/example.json').write_bytes(b'changed payload\n')
+        module = SimpleNamespace(__file__=str(packages[1] / '__init__.py'), __version__='4.5.2')
+        candidate.update(installed_distribution(source, module))
+    elif failure == 'wheel':
+        wheel.write_bytes(wheel.read_bytes() + b'changed wheel')
+        candidate['wheel_sha256'] = hashlib.sha256(wheel.read_bytes()).hexdigest()
+    elif failure == 'metadata':
+        metadata_paths[1].write_bytes(b'Name: different\nVersion: 4.5.2\n')
+        candidate['metadata_sha256'] = hashlib.sha256(metadata_paths[1].read_bytes()).hexdigest()
+    elif failure == 'missing-location':
+        candidate.pop('package')
+    elif failure == 'both-missing-locations':
+        for value in values:
+            value['downstream_distribution'].pop('package')
+    else:
+        for value in values:
+            value['downstream_distribution']['metadata_path'] = 'same additional identity field'
+        candidate['metadata_path'] = 'different additional identity field'
+    with pytest.raises(ValueError, match='distribution|package location'):
+        evaluate(protocol)
 
 
 @pytest.mark.parametrize('failure', ['missing-grad', 'extra', 'shape', 'nonfinite', 'numerical',
