@@ -181,3 +181,68 @@ def test_swift_maintained_gate_executes_actual_protocol_and_fails_closed():
     probe = (SCRIPTS / 'swift_training_probe.py').read_text()
     assert 'super().train(trainer)' in probe and 'ObservedSft(sft).main()' in probe
     assert 'torch.optim.SGD(' not in probe and 'loss.backward(' not in probe
+
+
+@pytest.fixture
+def wheel_proof(tmp_path):
+    import zipfile
+    checkout = tmp_path / 'checkout'
+    payload = {'__init__.py': b"__version__ = '4.5.2'\n",
+               'train/model.py': b'VALUE = 1\n', 'data/prompt.txt': b'actual template data\n'}
+    for name, data in payload.items():
+        path = checkout / 'swift' / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    wheel = tmp_path / 'ms_swift-4.5.2-py3-none-any.whl'
+    with zipfile.ZipFile(wheel, 'w') as archive:
+        for name, data in payload.items():
+            archive.writestr('swift/' + name, data)
+        archive.writestr('ms_swift-4.5.2.dist-info/METADATA', 'Name: ms-swift\nVersion: 4.5.2\n')
+    hashes = {name: hashlib.sha256(data).hexdigest() for name, data in payload.items()}
+    sources = {'swift/' + name: digest for name, digest in hashes.items() if name.endswith('.py')}
+    source = {'repo': 'ms-swift', 'upstream': {'version': '4.5.2'},
+              'package_sources': [{'path': name, 'sha256': digest} for name, digest in sources.items()]}
+    binding = {'repo': 'ms-swift', 'version': '4.5.2', 'source_sha256': sources,
+        'installed_files_sha256': hashes, 'payload_source_sha256': {'swift/' + k: v for k, v in hashes.items()},
+        'wheel_sha256': hashlib.sha256(wheel.read_bytes()).hexdigest()}
+    return source, checkout, wheel, binding
+
+
+def test_collector_independently_accepts_complete_real_wheel_payload(wheel_proof):
+    from collect_swift_scorecard import validate_installed_payload
+    validate_installed_payload(*wheel_proof)
+
+
+@pytest.mark.parametrize('failure', ['missing-installed', 'extra-installed', 'missing-source',
+    'missing-payload', 'wrong-wheel-sha', 'changed-source-file', 'missing-source-file',
+    'wrong-version', 'incomplete-inventory', 'changed-wheel', 'foreign-python'])
+def test_collector_rejects_unproven_installed_payload(wheel_proof, failure):
+    from collect_swift_scorecard import validate_installed_payload
+    source, checkout, wheel, binding = wheel_proof
+    if failure == 'missing-installed':
+        binding['installed_files_sha256'].pop('train/model.py')
+    elif failure == 'extra-installed':
+        binding['installed_files_sha256']['extra.py'] = 'f' * 64
+    elif failure == 'missing-source':
+        binding['source_sha256'].pop('swift/train/model.py')
+    elif failure == 'missing-payload':
+        binding['payload_source_sha256'].pop('swift/data/prompt.txt')
+    elif failure == 'wrong-wheel-sha':
+        binding['wheel_sha256'] = '0' * 64
+    elif failure == 'changed-source-file':
+        (checkout / 'swift/train/model.py').write_text('changed source\n')
+    elif failure == 'missing-source-file':
+        (checkout / 'swift/data/prompt.txt').unlink()
+    elif failure == 'wrong-version':
+        source['upstream']['version'] = binding['version'] = 'unverified'
+    elif failure == 'incomplete-inventory':
+        source['package_sources'].pop()
+        binding['source_sha256'] = {row['path']: row['sha256'] for row in source['package_sources']}
+    elif failure in ('changed-wheel', 'foreign-python'):
+        import zipfile
+        with zipfile.ZipFile(wheel, 'a') as archive:
+            archive.writestr('swift/extra.py' if failure == 'changed-wheel' else 'foreign.py',
+                             'unexpected generated source\n')
+        binding['wheel_sha256'] = hashlib.sha256(wheel.read_bytes()).hexdigest()
+    with pytest.raises(ValueError):
+        validate_installed_payload(source, checkout, wheel, binding)

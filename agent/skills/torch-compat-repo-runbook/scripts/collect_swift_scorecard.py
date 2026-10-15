@@ -6,12 +6,52 @@ This records a tiny registered Llama/full-SFT scenario, not all Swift trainers.
 """
 import argparse
 import hashlib
+from email.parser import BytesParser
 from pathlib import Path
 import subprocess
+import zipfile
 
 from collect_component_scorecard import artifact, require, write_comparison
 from registry_inventory import git, inventory, write_json
 from _swift_training_contract import CASE, compare_pair, read
+
+
+def validate_installed_payload(source, checkout, wheel_path, binding):
+    """Independently prove every installed package byte using the actual wheel."""
+    require(binding.get('repo') == source['repo'] == 'ms-swift'
+            and binding.get('version') == source['upstream']['version'], 'Installed Swift release mismatch')
+    rows = source.get('package_sources', [])
+    sources = {row['path']: row['sha256'] for row in rows}
+    require(sources and len(sources) == len(rows) and binding.get('source_sha256') == sources,
+            'Incomplete regenerated Swift source binding')
+    wheel_path = Path(wheel_path)
+    require(hashlib.sha256(wheel_path.read_bytes()).hexdigest() == binding.get('wheel_sha256'),
+            'Actual Swift wheel SHA256 mismatch')
+    with zipfile.ZipFile(wheel_path) as wheel:
+        names = wheel.namelist()
+        require(len(names) == len(set(names)), 'Duplicate Swift wheel members')
+        metadata = [name for name in names if name.endswith('.dist-info/METADATA')]
+        require(len(metadata) == 1, 'Expected exactly one Swift wheel METADATA')
+        header = BytesParser().parsebytes(wheel.read(metadata[0]))
+        require(header.get_all('Name') == [header.get('Name')]
+                and (header.get('Name') or '').lower().replace('_', '-') == 'ms-swift'
+                and header.get_all('Version') == [binding['version']], 'Swift wheel name/version mismatch')
+        require({name for name in names if name.endswith('.py')} == set(sources),
+                'Unexpected or missing Python files in the Swift wheel')
+        payload = {name[len('swift/'):]: hashlib.sha256(wheel.read(name)).hexdigest()
+                   for name in names if name.startswith('swift/') and not name.endswith('/')}
+    require(payload and binding.get('installed_files_sha256') == payload,
+            'Incomplete actual installed Swift wheel payload')
+    prefixed = {'swift/' + name: expected for name, expected in payload.items()}
+    require(binding.get('payload_source_sha256') == prefixed,
+            'Incomplete actual Swift payload/source binding')
+    require({name: value for name, value in prefixed.items() if name.endswith('.py')} == sources,
+            'Swift wheel Python files differ from the full source inventory')
+    for name, expected in prefixed.items():
+        require('..' not in Path(name).parts and '\\' not in name, 'Unsafe Swift wheel member')
+        original = Path(checkout) / name
+        require(original.is_file() and hashlib.sha256(original.read_bytes()).hexdigest() == expected,
+                'Actual Swift wheel payload differs from clean upstream: ' + name)
 
 
 def collect(root, source, checkout, directory, platform_path, baseline, report, command, wheel):
@@ -70,15 +110,7 @@ def collect(root, source, checkout, directory, platform_path, baseline, report, 
         require(entry['sha256'] == expected, 'Initial checkpoint/tokenizer changed: ' + name)
         artifacts.append(entry)
     distribution = reference['downstream_distribution']
-    payload = distribution.get('installed_files_sha256', {})
-    require(distribution.get('payload_source_sha256') == {'swift/' + name: value for name, value in payload.items()},
-            'Incomplete actual payload/upstream binding')
-    # The pinned inventory is regenerated now. Package data affects real Swift
-    # template/dataset behavior as well as Python code, so validate those bytes.
-    upstream = Path(checkout)
-    for name, expected in distribution['payload_source_sha256'].items():
-        require((upstream / name).is_file() and artifact('source', upstream / name)['sha256'] == expected,
-                'Actual installed payload differs from the clean upstream: ' + name)
+    validate_installed_payload(source, checkout, wheel, distribution)
     base_path = directory / 'base-comparison.json'
     write_comparison(base_path, {'baseline': baseline, 'cases': [{'case': CASE, 'status': 'passed',
         'oracle_result': reference, 'jittor_result': candidate}], 'rows': base['rows']})
