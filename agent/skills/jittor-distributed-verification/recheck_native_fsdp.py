@@ -87,6 +87,31 @@ def _expected_keys(names, kind, steps, *, random=False):
     return keys
 
 
+def _worker_isolation(identities):
+    present = ['host_id' in identity for identity in identities.values()]
+    if any(present) and not all(present):
+        raise ValueError('partial host identity cannot prove rank isolation')
+    with_hosts = all(present)
+    if with_hosts and any(not isinstance(value['host_id'], str) or not value['host_id']
+                          for value in identities.values()):
+        raise ValueError('actual host identity is missing')
+    for rank in (0, 1):
+        before, after = identities['baseline', rank], identities['resume', rank]
+        if (before['pid'] == after['pid'] or before['parent_pid'] == after['parent_pid']
+                or before['start_ns'] >= after['start_ns']
+                or (with_hosts and before['host_id'] != after['host_id'])):
+            raise ValueError('checkpoint continuation did not use a fresh launcher/worker on its node')
+    for mode in ('parity', 'baseline', 'resume'):
+        for key in ('home', 'jittor_home', 'tmpdir', 'visible_devices'):
+            left, right = identities[mode, 0], identities[mode, 1]
+            # Real hosts may use identical local paths and device ordinal zero.
+            # Historical records without host evidence retain the original rule.
+            a = (left['host_id'], left[key]) if with_hosts else left[key]
+            b = (right['host_id'], right[key]) if with_hosts else right[key]
+            if a == b:
+                raise ValueError('rank isolation missing: ' + key)
+
+
 def verify(args):
     bound = BoundFiles(args.bindings, args.expected_source)
     source = bound.json(args.source_manifest)
@@ -110,14 +135,7 @@ def verify(args):
                     or identity.get('phase') != mode):
                 raise ValueError('worker identity does not prove the declared loopback protocol')
             identities[mode, rank] = identity
-    for rank in (0, 1):
-        before, after = identities['baseline', rank], identities['resume', rank]
-        if (before['pid'] == after['pid'] or before['parent_pid'] == after['parent_pid']
-                or before['start_ns'] >= after['start_ns']):
-            raise ValueError('checkpoint continuation did not use a fresh launcher/worker')
-    for key in ('home', 'jittor_home', 'tmpdir', 'visible_devices'):
-        if identities['resume', 0][key] == identities['resume', 1][key]:
-            raise ValueError('rank isolation missing: ' + key)
+    _worker_isolation(identities)
 
     counts = {'parity_arrays': 0, 'resume_arrays': 0, 'update_budgets': 0,
               'zero_gradient_rejections': 0}
@@ -188,9 +206,12 @@ def verify(args):
                         np.testing.assert_array_equal(actual, phases['baseline'][key], err_msg=key)
                         counts['resume_arrays'] += 1
     assert 'jittor' not in sys.modules and 'torch' not in sys.modules
+    scope = ('two-agent CUDA correctness; physical topology requires external verification'
+             if any('host_id' in value for value in identities.values()) else
+             'single-host two-agent CUDA correctness; actual multi-host unverified')
     return dict(counts, measured_framework_source=args.expected_source,
                 fixture_sha256=fixture_hash, bound_files=len(bound.files),
-                scope='single-host two-agent CUDA correctness; actual multi-host unverified')
+                scope=scope)
 
 
 def main():
