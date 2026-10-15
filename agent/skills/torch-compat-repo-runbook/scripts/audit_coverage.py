@@ -240,10 +240,16 @@ def _validate_measurements(record, level, artifacts, installation=None, source_p
     cases = [value for value in base.get("cases", []) if value.get("case") == record["case"]]
     _require(len(cases) == 1 and cases[0].get("status") == "passed", "Missing passed base measurement")
     pair(cases[0].get("oracle_result"), cases[0].get("jittor_result"))
-    perturb = document("perturb-comparison")
-    _require(perturb.get("case") == record["case"] and perturb.get("status") == "passed"
-             and perturb.get("input_perturbation_verified") is True, "Missing passed perturbation measurement")
-    pair(perturb.get("reference_result"), perturb.get("candidate_result"))
+    additional_roles = sorted(role for role in by_role
+                              if isinstance(role, str) and re.fullmatch(r"perturb[0-9]+-comparison", role))
+    if "perturb_seed2" in record.get("inputs", {}) and not additional_roles:
+        document("perturb2-comparison")
+    perturb_roles = ["perturb-comparison", *additional_roles]
+    for role in perturb_roles:
+        perturb = document(role)
+        _require(perturb.get("case") == record["case"] and perturb.get("status") == "passed"
+                 and perturb.get("input_perturbation_verified") is True, "Missing passed perturbation measurement")
+        pair(perturb.get("reference_result"), perturb.get("candidate_result"))
     if level >= 3:
         reference = document("training-reference-metadata")
         candidate = document("training-candidate-metadata")

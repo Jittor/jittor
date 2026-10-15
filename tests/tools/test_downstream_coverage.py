@@ -338,6 +338,61 @@ class CoverageAuditTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "precision"):
                     self.validate(row)
 
+    def test_declared_second_perturbation_requires_its_actual_comparison(self):
+        row = copy.deepcopy(self.row)
+        row["inputs"]["perturb_seed2"] = 19
+        with self.assertRaisesRegex(ValueError, "Missing measurement artifact: perturb2-comparison"):
+            self.validate(row)
+
+    def test_second_perturbation_checks_both_runtime_sources_precision_and_devices(self):
+        for role in ("perturb2-comparison", "perturb19-comparison"):
+            self._check_second_perturbation_runtime_bindings(role)
+
+    def _check_second_perturbation_runtime_bindings(self, role):
+        for declared in (False, True):
+            for runtime in ("reference_result", "candidate_result"):
+                for change in ("precision", "source", "device"):
+                    with self.subTest(declared=declared, runtime=runtime, change=change):
+                        row = copy.deepcopy(self.row)
+                        if declared:
+                            row["inputs"]["perturb_seed2"] = 19
+                        document = self.document(row, "perturb-comparison")
+                        value = document[runtime]
+                        if change == "precision":
+                            value["tf32"]["matmul_precision"] = "medium"
+                        elif change == "source":
+                            value["downstream_distribution"]["version"] = "stale"
+                        else:
+                            value["device"] = "cuda"
+                        self.artifact_json(row, role, document)
+                        with self.assertRaises(ValueError):
+                            self.validate(row)
+
+    def test_second_perturbation_requires_a_passed_execution_and_zero_fallback(self):
+        for change in ("status", "observed", "fallback"):
+            with self.subTest(change=change):
+                row = copy.deepcopy(self.row)
+                document = self.document(row, "perturb-comparison")
+                if change == "status":
+                    document["status"] = "failed"
+                elif change == "observed":
+                    document["input_perturbation_verified"] = False
+                else:
+                    document["candidate_result"]["fallback_count"] = 1
+                self.artifact_json(row, "perturb2-comparison", document)
+                with self.assertRaises(ValueError):
+                    self.validate(row)
+
+    def test_second_perturbation_is_optional_and_accepts_valid_bound_evidence(self):
+        self.validate(self.row)
+        for role in ("perturb2-comparison", "perturb19-comparison"):
+            for declared in (False, True):
+                row = copy.deepcopy(self.row)
+                if declared:
+                    row["inputs"]["perturb_seed2"] = 19
+                self.artifact_json(row, role, self.document(row, "perturb-comparison"))
+                self.validate(row)
+
     def test_missing_ambiguous_or_stale_measurement_json_is_rejected(self):
         for changed in ("missing", "duplicate", "platform", "case", "baseline", "device", "backend", "runtime"):
             with self.subTest(changed=changed):
