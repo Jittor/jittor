@@ -44,9 +44,13 @@ VERL_DEPS = ('numpy==2.2.6', 'transformers==5.5.3', 'ray[default]==2.54.1',
 RUNTIME_SETUPTOOLS = 'setuptools==80.9.0'
 OPENMMLAB_DEPS = ('numpy==1.26.4', 'opencv-python==4.11.0.86',
                   'astunparse==1.6.3', 'pillow==11.0.0', 'tqdm==4.67.1')
+DIFFUSERS_DEPS = ('numpy==1.26.4', 'huggingface-hub==0.35.3',
+                  'astunparse==1.6.3', 'pillow==11.0.0', 'tqdm==4.67.1')
 
 
 def runtime_roots(library):
+    if library == 'diffusers':
+        return list(DIFFUSERS_DEPS)
     if library == 'verl':
         return list(VERL_DEPS)
     if library == 'openmmlab':
@@ -56,8 +60,9 @@ def runtime_roots(library):
 
 
 def session_name(library):
-    require(library in ('peft', 'swift', 'verl', 'transformers', 'openmmlab'), 'Unknown maintained library profile')
+    require(library in ('peft', 'swift', 'verl', 'transformers', 'openmmlab', 'diffusers'), 'Unknown maintained library profile')
     return {'verl': 'ecosystem_verl_training',
+            'diffusers': 'ecosystem_diffusers_source',
             'transformers': 'ecosystem_transformers_source',
             'openmmlab': 'ecosystem_openmmlab_installed'}.get(library, 'ecosystem_' + library)
 
@@ -240,7 +245,15 @@ def provision(library, state, python, source_cache=None, wheel_cache=None):
             commands.run(python, '-m', 'venv', interpreter.parents[1])
     sys.path.insert(0, str(SCRIPTS))
     checkouts, pinned = {}, {}
-    if library == 'verl':
+    if library == 'diffusers':
+        from _diffusers_installation import COMMIT, VERSION, WHEEL_SHA256, source_descriptor
+        path = state / 'upstream/diffusers'
+        checkout(commands, path, 'https://github.com/huggingface/diffusers.git', COMMIT,
+                 source_cache / 'diffusers' if source_cache else None)
+        checkouts['diffusers'] = path
+        pinned['diffusers'] = official_wheel('diffusers', VERSION, WHEEL_SHA256, wheels)
+        sources = source_descriptor(path, pinned['diffusers'])
+    elif library == 'verl':
         from registry_inventory import inventory
         path = state / 'upstream/verl'
         checkout(commands, path, VERL_REMOTE, VERL_SHA,
@@ -330,8 +343,9 @@ def provision(library, state, python, source_cache=None, wheel_cache=None):
                  *cached, *requirements)
     install_wheels(commands, candidate, oracle, wheels, requirements)
     # The historical PEFT/TF producer requires archive RECORD bytes. The MM
-    # producer accepts legitimate pip RECORD entries; retain its real receipt.
-    if library != 'openmmlab':
+    # and Diffusers producers accept legitimate pip RECORD entries; retain
+    # their real receipts without extracting over the installed distributions.
+    if library not in ('openmmlab', 'diffusers'):
         for side in ('candidate', 'oracle'):
             site = state / side / 'lib/python3.11/site-packages'
             for wheel in pinned.values():
@@ -386,7 +400,9 @@ def provision(library, state, python, source_cache=None, wheel_cache=None):
                    JITTOR_ECOSYSTEM_PACKAGE_SITE=str(state / 'candidate/lib/python3.11/site-packages'),
                    JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE=str(state / 'oracle/lib/python3.11/site-packages'),
                    VERL_USE_EXTERNAL_PLUGINS='none')
-    if library == 'openmmlab':
+    if library == 'diffusers':
+        env['JITTOR_DIFFUSERS_EVIDENCE_DIR'] = str(state / 'maintained-output')
+    elif library == 'openmmlab':
         env.update(JITTOR_OPENMMLAB_EVIDENCE_DIR=str(state / 'maintained-output'),
                    JITTOR_ECOSYSTEM_PACKAGE_SITE=str(state / 'candidate/lib/python3.11/site-packages'),
                    JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE=str(state / 'oracle/lib/python3.11/site-packages'))
@@ -411,7 +427,7 @@ def provision(library, state, python, source_cache=None, wheel_cache=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--library', choices=('peft', 'swift', 'verl', 'transformers', 'openmmlab'), required=True)
+    parser.add_argument('--library', choices=('peft', 'swift', 'verl', 'transformers', 'openmmlab', 'diffusers'), required=True)
     parser.add_argument('--state-root', type=Path, required=True)
     parser.add_argument('--python', default=sys.executable, help='Healthy Python 3.11 for new private venvs')
     parser.add_argument('--source-cache', type=Path,
