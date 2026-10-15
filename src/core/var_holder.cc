@@ -6,6 +6,7 @@
 // ***************************************************************
 #include <unordered_set>
 #include <unordered_map>
+#include <algorithm>
 #include <sstream>
 #include "core/var_holder.h"
 #include "ops/layout_propagation.h"
@@ -259,6 +260,97 @@ void VarHolder::write_inplace(ArrayArgs&& array) {
     backend_copy(var->mem_ptr, dst, array.ptr, {}, size, true);
 }
 
+enum class StorageCopy { Direct, Snapshot, NoOp };
+
+static StorageCopy validate_storage_copy(Var* var, Var* source) {
+    USER_CHECK(source->mem_ptr) << "_copy_into needs an allocated source";
+    USER_CHECK(var->mem_ptr) << "_copy_into needs an allocated tensor";
+    USER_CHECK(source->dtype() == var->dtype())
+        << "_copy_into dtype mismatch:" << source->dtype() << "into" << var->dtype();
+    USER_CHECK(source->size == var->size)
+        << "_copy_into size mismatch:" << source->size << "bytes into" << var->size;
+    // Basic positive-stride slices and permutations have disjoint elements.
+    // Validate that before issuing any write; expanded/overlapping targets
+    // cannot be updated by scattering a dense source into their storage.
+    auto ordered_dimensions = [](Var* value) {
+        vector<std::pair<int64, int64>> dimensions;
+        for (uint d=0; d<value->shape.size(); ++d)
+            if (value->shape[d] > 1)
+                dimensions.emplace_back(value->storage_stride(d), value->shape[d]);
+        std::sort(dimensions.begin(), dimensions.end());
+        return dimensions;
+    };
+    int64 span = 1;
+    bool target_dense = true;
+    if (!var->is_contiguous())
+        for (auto dimension : ordered_dimensions(var)) {
+            USER_CHECK(dimension.first >= span)
+                << "_copy_into needs non-overlapping storage; got strides"
+                << var->storage_strides << "for shape" << var->shape;
+            target_dense = target_dense && dimension.first == span;
+            span += (dimension.second-1) * dimension.first;
+        }
+    bool overlap = false;
+    if (source->allocator == var->allocator
+            && source->allocation == var->allocation) {
+        bool same_layout = source->shape == var->shape;
+        if (same_layout)
+            for (uint d=0; d<var->shape.size(); ++d)
+                if (var->shape[d] > 1
+                        && source->storage_stride(d) != var->storage_stride(d))
+                    same_layout = false;
+        // Identical storage/layout is a no-op, including a strided self-copy.
+        if (source->mem_ptr == var->mem_ptr && (same_layout
+                || (source->is_contiguous() && var->is_contiguous()))) return StorageCopy::NoOp;
+        auto dst_address = reinterpret_cast<uintptr_t>(var->mem_ptr);
+        auto src_address = reinterpret_cast<uintptr_t>(source->mem_ptr);
+        overlap = dst_address < src_address + source->storage_span_bytes()
+            && src_address < dst_address + var->storage_span_bytes();
+        int64 source_span = 1;
+        bool source_dense = true;
+        if (!source->is_contiguous())
+            for (auto dimension : ordered_dimensions(source)) {
+                source_dense = source_dense && dimension.first == source_span;
+                source_span *= dimension.second;
+            }
+        USER_CHECK(!overlap || !target_dense || !source_dense)
+            << "_copy_into source and destination partially overlap";
+        if (overlap) {
+            // Two gapped views can have overlapping address spans while
+            // selecting disjoint elements (even/odd columns, for example).
+            // Different residues modulo every stride's common divisor prove
+            // disjointness without walking tensor data or allocating an
+            // element-address set. Refuse aliases this cannot prove safe.
+            int64 divisor = 0;
+            for (Var* value : {var, source})
+                for (uint d=0; d<value->shape.size(); ++d)
+                    if (value->shape[d] > 1) {
+                        int64 stride = value->storage_stride(d);
+                        while (stride) {
+                            int64 remainder = divisor % stride;
+                            divisor = stride;
+                            stride = remainder;
+                        }
+                    }
+            auto separation = dst_address >= src_address
+                ? dst_address-src_address : src_address-dst_address;
+            USER_CHECK(divisor && separation % (divisor * var->dsize()))
+                << "_copy_into source and destination overlap or cannot be proven disjoint";
+        }
+    }
+    return overlap ? StorageCopy::Snapshot : StorageCopy::Direct;
+}
+
+static void validate_logical_copy_alias(VarHolder* target, VarHolder* source) {
+    if (target->var == source->var) return;
+    auto* target_root = target->view && target->view->base ? target->view->base : target;
+    auto* source_root = source->view && source->view->base ? source->view->base : source;
+    if (target_root != source_root) return;
+    USER_CHECK((!target->view || target->storage_view_is_physical())
+            && (!source->view || source->storage_view_is_physical()))
+        << "_copy_into source and destination have overlapping logical view storage";
+}
+
 void VarHolder::copy_into(VarHolder* src, bool sync_src) {
     ExecutorEntryScope entry;
     // Neither sync waits on the device; both only resolve what the Var is
@@ -272,20 +364,26 @@ void VarHolder::copy_into(VarHolder* src, bool sync_src) {
     USER_CHECK(src->var->mem_ptr)
         << "_copy_into(sync_src=False) needs a source that already holds its "
            "bytes; this one has never been executed";
-    check_inplace_target(var, "_copy_into");
+    validate_logical_copy_alias(this, src);
+    auto plan = validate_storage_copy(var, src->var);
+    if (plan == StorageCopy::NoOp) return;
     // A strided source -- a channels-last activation read as NCHW, a
     // transposed view -- is made dense first; the copy below moves raw bytes.
     unique_ptr<VarHolder> dense;
-    if (!src->var->is_contiguous()) {
+    if (plan == StorageCopy::Snapshot) {
+        // Proven disjoint gapped aliases may interleave within their spans.
+        // Snapshot via the existing device copy op before any destination
+        // write, rather than reading a source that earlier runs overwrite.
+        static auto make_copy = op_constructor<VarPtr, Var*>("copy");
+        dense.reset(new VarHolder(make_copy(src->var)));
+        dense->sync(false, false);
+        src = dense.get();
+    } else if (!src->var->is_contiguous()) {
         dense.reset(new VarHolder(contiguous_storage(src->var)));
         dense->sync(false, false);
         src = dense.get();
     }
     check_inplace_target(src->var, "_copy_into source");
-    USER_CHECK(src->var->dtype() == var->dtype())
-        << "_copy_into dtype mismatch:" << src->var->dtype() << "into" << var->dtype();
-    USER_CHECK(src->var->size == var->size)
-        << "_copy_into size mismatch:" << src->var->size << "bytes into" << var->size;
     // Already there: an in-place update wrote into this very buffer (a step
     // capture taking over its state, see `capture_owners`).
     if (src->var->mem_ptr == var->mem_ptr) return;
@@ -303,8 +401,34 @@ void VarHolder::copy_into(VarHolder* src, bool sync_src) {
             d = Device{accelerator_backend_id(), v->device_id < 0 ? 0 : v->device_id};
         return d;
     };
-    backend_copy(var->mem_ptr, device_of(var),
-                 src->var->mem_ptr, device_of(src->var), var->size, true);
+    auto destination_device = device_of(var);
+    auto source_device = device_of(src->var);
+    if (var->is_contiguous()) {
+        backend_copy(var->mem_ptr, destination_device,
+                     src->var->mem_ptr, source_device, var->size, true);
+        return;
+    }
+    // Coalesce the innermost contiguous dimensions. Each run uses the same
+    // backend/stream copy as the dense path, without rebinding either holder
+    // or reading accelerator data on the host.
+    int64 run = 1;
+    int leading = var->shape.size();
+    for (int d=int(var->shape.size())-1; d>=0; --d) {
+        if (var->shape[d] != 1 && var->storage_stride(d) != run) break;
+        run *= var->shape[d];
+        leading = d;
+    }
+    auto width = var->dsize();
+    for (int64 i=0; i<var->num; i+=run) {
+        int64 remainder = i/run, offset = 0;
+        for (int d=leading-1; d>=0; --d) {
+            offset += (remainder % var->shape[d]) * var->storage_stride(d);
+            remainder /= var->shape[d];
+        }
+        backend_copy(static_cast<char*>(var->mem_ptr)+offset*width, destination_device,
+                     static_cast<char*>(src->var->mem_ptr)+i*width, source_device,
+                     run*width, true);
+    }
 }
 
 void VarHolder::release_kept() {
@@ -703,15 +827,12 @@ void VarHolder::refresh_transpose_views(bool preserve_grad_policy) {
     }
 }
 
-bool VarHolder::write_through_view(Var* value, bool preserve_grad_policy) {
-    if (!view || !view->base) return false;
-    auto* base = view->base;
-    auto& steps = view->steps;
+static VarPtr view_assignment_value(Var* base, const vector<VarViewStep>& steps, Var* value) {
     const int n = steps.size();
     // What each step is applied to. The first is the base itself; the rest are
     // the intermediates, rebuilt rather than remembered.
     vector<VarPtr> targets(n);
-    Var* cur = base->var;
+    Var* cur = base;
     for (int i=0; i<n-1; i++) {
         targets[i] = apply_view_step(cur, steps[i]);
         cur = targets[i].ptr;
@@ -720,7 +841,7 @@ bool VarHolder::write_through_view(Var* value, bool preserve_grad_policy) {
     // level's result is what the level above writes into its own slice.
     VarPtr updated;
     for (int i=n-1; i>=0; i--) {
-        Var* target = i ? targets[i-1].ptr : base->var;
+        Var* target = i ? targets[i-1].ptr : base;
         if (steps[i].kind == VarViewStep::Transpose) {
             const auto& axes = steps[i].axes;
             vector<int64> inverse_values(axes.size());
@@ -736,7 +857,98 @@ bool VarHolder::write_through_view(Var* value, bool preserve_grad_policy) {
         }
         value = updated.ptr;
     }
-    base->rebind_view_result(move(updated), preserve_grad_policy);
+    return updated;
+}
+
+bool VarHolder::write_through_view(Var* value, bool preserve_grad_policy) {
+    if (!view || !view->base) return false;
+    auto updated = view_assignment_value(view->base->var, view->steps, value);
+    view->base->rebind_view_result(move(updated), preserve_grad_policy);
+    return true;
+}
+
+bool VarHolder::copy_view_into(VarHolder* src) {
+    ExecutorEntryScope entry;
+    auto* base = view && view->base ? view->base : this;
+    bool materialized = false;
+    for (auto* record=base->views; record; record=record->next)
+        materialized = materialized || !record->owner->storage_view_is_physical();
+    if (!materialized) return false;
+    // Backend copies may release the GIL. Pin the original Python holders
+    // and copy the weak view records before any synchronization can do so.
+    PyObjHolder owners(PyList_New(0));
+    CHECKop(PyList_Append(owners.obj, GET_OBJ_FROM_RAW_PTR(base)), ==, 0);
+    vector<std::pair<VarHolder*, vector<VarViewStep>>> records;
+    for (auto* record=base->views; record; record=record->next) {
+        CHECKop(PyList_Append(owners.obj, GET_OBJ_FROM_RAW_PTR(record->owner)), ==, 0);
+        if (!record->owner->storage_view_is_physical())
+            records.emplace_back(record->owner, record->steps);
+    }
+    vector<VarViewStep> target_steps;
+    if (view && view->base) target_steps = view->steps;
+    // The caller has drained pending readers. Keep every existing holder and
+    // graph node, preparing the complete write on independent device storage.
+    sync(false, false);
+    src->sync(false, false);
+    validate_logical_copy_alias(this, src);
+    if (validate_storage_copy(var, src->var) == StorageCopy::NoOp) return true;
+    static auto make_copy = op_constructor<VarPtr, Var*>("copy");
+    VarPtr staged;
+    if (!target_steps.empty()) {
+        auto snapshot = make_copy(base->var);
+        staged = view_assignment_value(snapshot.ptr, target_steps, src->var);
+    } else {
+        staged = make_copy(src->var);
+    }
+    unique_ptr<VarHolder> updated(new VarHolder(move(staged)));
+    updated->sync(false, false);
+    validate_storage_copy(base->var, updated->var);
+    vector<VarHolder*> destinations;
+    vector<unique_ptr<VarHolder>> unique_destinations;
+    vector<unique_ptr<VarHolder>> values;
+    for (auto& record : records) {
+        VarPtr value(updated->var);
+        for (const auto& step : record.second) {
+            USER_CHECK(view_step_fits(value.ptr, step))
+                << "_copy_view_into cannot refresh an incompatible retained view";
+            value = apply_view_step(value.ptr, step);
+        }
+        unique_ptr<VarHolder> prepared(new VarHolder(move(value)));
+        prepared->sync(false, false);
+        auto* destination = record.first;
+        // A read-only expanded sibling repeats the same backing elements;
+        // refreshing that backing storage is valid even though writing an
+        // arbitrary expanded destination above is refused. Select each
+        // repeated axis once, through the existing physical getitem owner.
+        VarSlices unique(destination->var->shape.size());
+        bool repeated = false;
+        for (int d=0; d<unique.n; ++d) {
+            if (destination->var->shape[d] > 1 && !destination->var->storage_stride(d)) {
+                unique.slices[d].set_int(0);
+                repeated = true;
+            } else {
+                unique.slices[d].slice = Slice{0, 0, 1, 3};
+            }
+        }
+        if (repeated) {
+            unique_ptr<VarHolder> backing(new VarHolder(
+                make_getitem(destination->var, VarSlices(unique))));
+            backing->sync(false, false);
+            USER_CHECK(shares_physical_storage(backing->var, destination->var))
+                << "_copy_view_into needs a physical expanded backing view";
+            prepared.reset(new VarHolder(make_getitem(prepared->var, move(unique))));
+            prepared->sync(false, false);
+            destination = backing.get();
+            unique_destinations.push_back(move(backing));
+        }
+        // Validate all destinations before changing the first original byte.
+        validate_storage_copy(destination->var, prepared->var);
+        destinations.push_back(destination);
+        values.push_back(move(prepared));
+    }
+    base->copy_into(updated.get());
+    for (size_t i=0; i<destinations.size(); ++i)
+        destinations[i]->copy_into(values[i].get());
     return true;
 }
 

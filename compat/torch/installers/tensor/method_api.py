@@ -208,15 +208,16 @@ def _copy_detached_storage(self, value):
     if not (_owner.jt.flags.no_grad
             or (not self.requires_grad and not value.requires_grad)):
         return False
-    if (not self._storage_is_contiguous()
-            or (self._has_view_provenance() and not self._storage_view_is_physical())
-            or tuple(self.shape) != tuple(value.shape)
+    if (tuple(self.shape) != tuple(value.shape)
             or self.dtype != value.dtype):
         return False
     if self.numel():
         # Resolve pending readers (including clone snapshots) before changing
         # bytes. _copy_into owns placement, stream ordering and dense copies.
         _owner.jt.sync_all()
+        with _owner.jt.no_grad():
+            if self._copy_view_into(value):
+                return True
         self._copy_into(value)
     return True
 
@@ -268,7 +269,8 @@ def _ip(self, value, preserve_storage=False):
 
 def _copy_(self, other, non_blocking=False):
     src = other if isinstance(other, _NativeVar) else _owner.jt.array(other)
-    src = src.cast(_jittor_dtype_name(self.dtype)) if hasattr(self, "dtype") else src
+    if hasattr(self, "dtype") and _jittor_dtype_name(src.dtype) != _jittor_dtype_name(self.dtype):
+        src = src.cast(_jittor_dtype_name(self.dtype))
     # torch's `copy_` is in place: the destination keeps its own device, and a
     # cross-device copy is a transfer. jittor's `assign` (what `_ip` uses for
     # every `x.foo_()`) writes x's values into *y's* storage and then aliases

@@ -77,3 +77,20 @@ def test_initialization_preserves_nonleaf_graph(name, rng_device):
     tensor.sum().backward()
     np.testing.assert_array_equal(_array(root.grad), np.full((3, 4), 3.))
 
+@pytest.mark.parametrize("name", ["uniform_", "normal_", "kaiming_normal_"])
+def test_initialization_preserves_leaf_view_owner(name, rng_device):
+    root = torch.tensor(np.full((3, 8), 99.), dtype=torch.float64,
+                        device=rng_device, requires_grad=True)
+    view = root[:, 1:5]
+    snapshot = root.clone()
+    assert _initialize(name, view) is view
+    assert root.is_leaf and root.requires_grad and view.requires_grad and not view.is_leaf
+    assert view.dtype == torch.float64 and view.device.type == rng_device
+    np.testing.assert_array_equal(_array(snapshot), np.full((3, 8), 99.))
+    _assert_initialized(name, view)
+    np.testing.assert_array_equal(_array(root)[:, :1], np.full((3, 1), 99.))
+    np.testing.assert_array_equal(_array(root)[:, 5:], np.full((3, 3), 99.))
+    view.sum().backward()
+    expected = np.zeros((3, 8))
+    expected[:, 1:5] = 1.
+    np.testing.assert_array_equal(_array(root.grad), expected)

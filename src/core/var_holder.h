@@ -649,7 +649,10 @@ struct VarHolder {
         from a Var that is already on the accelerator costs one ordered
         device-to-device copy rather than a round trip through the host.
 
-        Same refusals as `_write_inplace`, on both Vars.
+        The source is materialized densely when necessary. Positive-stride,
+        non-overlapping destinations are copied in contiguous runs without
+        replacing their graph or storage. Expanded destinations and partially
+        overlapping dense source/destination spans are refused before writing.
      */
     /**
         `sync_src=false` copies the source's bytes WITHOUT resolving it first.
@@ -664,6 +667,16 @@ struct VarHolder {
      */
     // @pyjt(_copy_into)
     void copy_into(VarHolder* src, bool sync_src=true);
+
+    /**
+        No-grad frontend writeback when retained views include materialized
+        permutations. Stage the existing view-assignment mathematics and all
+        materialized sibling values, then copy into the original storage.
+        Return false when the ordinary physical-storage fast path suffices.
+        The caller must resolve pending readers before invoking this helper.
+     */
+    // @pyjt(_copy_view_into)
+    bool copy_view_into(VarHolder* src);
 
     /**
         Give back a graph that was kept with `keep_graph`.
