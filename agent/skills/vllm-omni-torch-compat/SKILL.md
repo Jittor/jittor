@@ -31,7 +31,29 @@ description: 在 Jittor torch shim 与原生 PyTorch 上运行/验证 vLLM-Omni 
 官方 vLLM `0.29.0` release 另对应 `98dff2a81d747d1dba01a47f939f48c3526d4206`，
 同一工具得到 376 个模型和 40 个 CustomOp；不能沿用旧 SHA 的 353/39 分母。
 
-本页历史环境表中的 package version 不能替代 checkout SHA：上述 vLLM SHA 的 `git describe` 为 `v0.23.1rc0-522-g51a99565c`，Omni SHA 为 `v0.29.0rc1-58-g446c2b54`。复跑须逐侧记录实际源码与已安装分发包，不能因旧表写 `0.29.0` 就将这两个源码版本视作一致。历史路径中的脚本需先核对存在性。
+本页历史环境表中的 package version 不能替代 checkout SHA：历史 vLLM `51a99565c` 的 `git describe` 为 `v0.23.1rc0-522-g51a99565c`；当前 `98dff2a81` 是 exact tag `v0.29.0`，Omni SHA 为 `v0.29.0rc1-58-g446c2b54`。复跑须逐侧记录实际源码与已安装分发包，不能因旧表写 `0.29.0` 就将这两个源码版本视作一致。历史路径中的脚本需先核对存在性。
+
+## Full-gradient diagnosis (2026-10-15)
+
+[The pinned H3 autograd audit](../../../docs/results/2026-10-15-h3-autograd-boundary.md)
+uses clean diagnostic source `521314943b480517b6fb422c09359fc521081a8f`.
+Real Torch 2.13.0+cu130 and candidate each reject the complete gradient protocol
+in both eval and public `model.train(True)` modes: 32/36 parameter and all four
+requested input gradients are missing. Constructor flags are recorded separately
+(19 true, 17 false); the audit explicitly enables all 36 and four inputs.
+CPU setup failures remain visible. No full-model L2/L3, pipeline, or performance
+coverage is granted, and the earlier default-attention 0.2% failures remain intact.
+
+`custom_ops=['none']` is the **vLLM request**. Omni's independent CustomOp class
+still selects its real CUDA methods; it does not read that request. The probe
+now records actual `operation_routes`, constructor/requested trainability,
+global grad state, interpreter and genuine extension hash. `--model-mode train`
+changes the real Module flag, without replacing kernels or bypassing missing
+gradients. Its fourteen saved arrays only establish the stated partial observation
+and eval/train equivalence, not complete cross-runtime numerical agreement.
+The real CUDA RMS/SwiGLU outputs and bare Triton modulation calls lack the
+required autograd edges; do not substitute a CPU route, invent a backward,
+force a MATH oracle, or count head-only SGD as the requested whole-model training.
 
 ## 两侧环境
 
