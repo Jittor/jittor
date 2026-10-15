@@ -60,7 +60,7 @@ def test_full_source_binding_includes_modules_outside_the_registry(tmp_path, mon
     assert source['package_sources'] != changed['package_sources']
 
 
-def test_modified_installed_nested_module_is_rejected(tmp_path, component_tools):
+def test_source_only_packet_and_changed_nested_module_are_rejected(tmp_path, component_tools):
     package = tmp_path / 'diffusers'
     package.mkdir()
     origin = package / '__init__.py'

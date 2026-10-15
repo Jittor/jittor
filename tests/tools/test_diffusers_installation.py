@@ -37,9 +37,12 @@ def installation(tmp_path, monkeypatch):
     package = tmp_path / 'site/diffusers'
     package.mkdir(parents=True)
     payload = {'diffusers/__init__.py': b"__version__ = '0.35.1'\n",
+               'diffusers/models/unet.py': b'class UNet2DModel: pass\n',
                'diffusers/resource.bin': b'host fixture only; not an imported binary'}
     for name, data in payload.items():
-        (package.parent / name).write_bytes(data)
+        path = package.parent / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
     distribution = package.parent / 'diffusers-0.35.1.dist-info'
     distribution.mkdir()
     header = b'Metadata-Version: 2.1\nName: diffusers\nVersion: 0.35.1\n'
@@ -57,7 +60,8 @@ def installation(tmp_path, monkeypatch):
               for name in sorted(component.OMITTED_DOCUMENTATION)]
     source = {'repo': 'diffusers', 'upstream': {'version': '0.35.1', 'commit': component.COMMIT,
                'remote': 'https://github.com/huggingface/diffusers.git'},
-              'package_sources': known[:1], 'package_files': known,
+              'package_sources': [row for row in known if row['path'].endswith('.py')],
+              'package_files': known,
               'official_wheel': {'path': str(wheel), 'sha256': sha(wheel.read_bytes())}}
     module = SimpleNamespace(__file__=str(package / '__init__.py'), __path__=[str(package)],
                              __version__='0.35.1')
@@ -87,6 +91,19 @@ def test_actual_receipt_package_and_wheel_survive_common_proof(installation):
     shared.validate_installations({'downstream_distribution': value}, proof)
     assert value['distribution_name'] == 'diffusers'
     assert value['distribution_version'] == '0.35.1'
+
+
+def test_measurement_accepts_complete_source_then_rejects_changed_nested_module(installation):
+    import component_measure
+
+    component, _, source, module, wheel, _, _ = installation
+    binding = component_measure.installed_distribution(source, module)
+    assert len(binding['source_sha256']) == 2
+    component.validate_captured(binding, source, wheel)
+    nested = Path(module.__file__).parent / 'models/unet.py'
+    nested.write_text('class ChangedModel: pass\n')
+    with pytest.raises(ValueError, match='differs from clean upstream'):
+        component_measure.installed_distribution(source, module)
 
 
 @pytest.mark.parametrize('change', ('commit', 'version', 'remote', 'artifact'))
