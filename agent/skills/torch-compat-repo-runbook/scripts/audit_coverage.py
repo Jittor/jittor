@@ -55,14 +55,26 @@ def dedicated_gates(root):
         "flash-attention": ("flash-attention-training", "ecosystem_flash_attention",
                             "compat/tests/torch/test_ecosystem_flash_attention.py",
                             "test_real_flash_attention_training"),
+        "ms-swift": ("swift-trainer", "ecosystem_swift",
+                     "compat/tests/torch/test_ecosystem_swift.py",
+                     "EcosystemSwift::test_ms_swift_trainer_full_llama"),
     }
     session_tree = ast.parse((root / "noxfile.py").read_text(encoding="utf-8"))
     sessions = {node.name for node in session_tree.body if isinstance(node, ast.FunctionDef)}
     result = {}
     for repo, (protocol, session, relative, method) in declarations.items():
         tree = ast.parse((root / relative).read_text(encoding="utf-8"))
-        methods = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
-        if session not in sessions or method not in methods:
+        body, valid = tree.body, session in sessions
+        parts = method.split("::")
+        for index, name in enumerate(parts):
+            expected = ast.FunctionDef if index == len(parts) - 1 else ast.ClassDef
+            matches = [node for node in body if isinstance(node, (ast.ClassDef, ast.FunctionDef))
+                       and node.name == name]
+            if len(matches) != 1 or not isinstance(matches[0], expected):
+                valid = False
+                break
+            body = matches[0].body
+        if not valid:
             raise ValueError("Maintained dedicated gate entry is missing: " + repo)
         result[repo] = [{"protocol": protocol, "session": session,
                          "tests": [relative + "::" + method]}]
