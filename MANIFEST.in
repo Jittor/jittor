@@ -438,6 +438,7 @@ include docs/results/2026-10-15-sdpa-opmath.md
 include docs/results/2026-10-15-swift-trainer-installed-source.md
 include docs/results/2026-10-15-tanh-fsdp-bfloat16.md
 include docs/results/2026-10-15-tensor-detach-and-factory-leaf.md
+include docs/results/2026-10-15-tensor-rng-inplace.md
 include docs/results/2026-10-15-training-registry-denominators.md
 include docs/results/2026-10-15-transformers-model-family-matrix.md
 include docs/results/2026-10-15-trellis-model-validation.md
