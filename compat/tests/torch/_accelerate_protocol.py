@@ -38,6 +38,13 @@ def cpu_description():
     return platform.processor() or platform.machine()
 
 
+def selected_nvidia_wheels():
+    """Report the resolved distribution, including when sites shadow versions."""
+    names = {dist.metadata['Name'] for dist in importlib.metadata.distributions()
+             if dist.metadata.get('Name', '').lower().startswith('nvidia-')}
+    return {name: importlib.metadata.version(name) for name in sorted(names)}
+
+
 def source_descriptor(checkout):
     """Bind all tracked package sources, with no invented registry denominator."""
     checkout = Path(checkout).resolve()
@@ -209,8 +216,7 @@ class Capture:
                         'cann': 'not-applicable',
                         'nvcc': command(os.environ['JT_BUILD_NVCC_PATH'], '--version') if self.device == 'cuda' else 'not-applicable',
                         'gcc': command(shutil.which('g++') or 'g++', '--version'),
-                        'nvidia_wheels': {dist.metadata['Name']: dist.version for dist in importlib.metadata.distributions()
-                            if dist.metadata.get('Name', '').lower().startswith('nvidia-')},
+                        'nvidia_wheels': selected_nvidia_wheels(),
                         'jittor_flags': {'use_cuda': native_flags.get('use_cuda', int(self.device == 'cuda')),
                             'use_acl': 0, 'graph_replay': 'default' if native_flags.get('auto_graph_replay') else 'eager',
                             'tf32': precision['matmul'], 'hf32': False},

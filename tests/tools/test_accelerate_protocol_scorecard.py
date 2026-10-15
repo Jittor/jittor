@@ -599,6 +599,29 @@ def test_advancing_only_one_of_two_visible_cuda_generators_is_insufficient():
         validate_rng_advancement(initial, saved, 'cuda')
 
 
+@pytest.mark.parametrize('versions', [('12.2.140', '12.8.90'), ('12.8.90', '12.2.140')])
+def test_platform_wheel_versions_follow_actual_distribution_precedence(tmp_path, monkeypatch, versions):
+    import importlib.metadata
+
+    spec = importlib.util.spec_from_file_location('accelerate_platform_contract', ROOT / 'compat/tests/torch/_accelerate_protocol.py')
+    protocol = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(protocol)
+    name = 'nvidia-selected-provider-probe'
+    paths = []
+    for index, version in enumerate(versions):
+        site = tmp_path / ('site%d' % index)
+        info = site / ('nvidia_selected_provider_probe-%s.dist-info' % version)
+        info.mkdir(parents=True)
+        (info / 'METADATA').write_text('Metadata-Version: 2.1\nName: %s\nVersion: %s\n' % (name, version))
+        paths.append(str(site))
+    monkeypatch.setattr(sys, 'path', paths + sys.path)
+    assert importlib.metadata.distribution(name).version == versions[0]
+    assert protocol.selected_nvidia_wheels()[name] == versions[0]
+    monkeypatch.setattr(sys, 'path', list(reversed(paths)) + sys.path[2:])
+    assert importlib.metadata.distribution(name).version == versions[1]
+    assert protocol.selected_nvidia_wheels()[name] == versions[1]
+
+
 def test_fresh_checkpoint_failed_partial_output_cannot_be_overwritten(tmp_path, monkeypatch):
     spec = importlib.util.spec_from_file_location('accelerate_partial_gate', ROOT / 'tools/run_accelerate_gate.py')
     gate = importlib.util.module_from_spec(spec)
