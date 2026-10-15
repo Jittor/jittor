@@ -125,10 +125,16 @@ def installation_proofs(record, inventories, artifacts, *, skip_own=False):
         wheels = [item for item in artifacts if item.get("role") in roles]
         require(len(wheels) <= 1, "Ambiguous upstream wheel proof")
         strict_component = repo in ('torchmetrics', 'tensordict')
+        strict_diffusers = repo == 'diffusers'
         if strict_component:
             from _metric_td_installation import wheel_pin
 
             require(len(wheels) == 1, 'Component requires its fixed official wheel: ' + repo)
+            wheel_pin(source, wheels[0]['path'])
+        if strict_diffusers:
+            from _diffusers_installation import wheel_pin
+
+            require(len(wheels) == 1, 'Diffusers requires its fixed official wheel')
             wheel_pin(source, wheels[0]['path'])
         version, payload = source["upstream"]["version"], None
         normalized_distribution_version = None
@@ -152,6 +158,10 @@ def installation_proofs(record, inventories, artifacts, *, skip_own=False):
             package['strict_distribution'] = {'source': source, 'wheel': wheels[0]['path'],
                                               'baseline': record.get('jittor_commit'),
                                               'platform': record.get('platform')}
+        if strict_diffusers:
+            package['strict_diffusers'] = {'source': source, 'wheel': wheels[0]['path'],
+                                           'baseline': record.get('jittor_commit'),
+                                           'platform': record.get('platform')}
         if normalized_distribution_version is not None:
             package["distribution_version"] = normalized_distribution_version
         if declared_names is not None:
@@ -199,6 +209,13 @@ def validate_installations(value, proof):
             from _metric_td_installation import validate_captured, validate_runtime_metadata
 
             strict = package['strict_distribution']
+            validate_captured(binding, strict['source'], strict['wheel'])
+            if strict['baseline'] is not None:
+                validate_runtime_metadata(value, strict['baseline'], strict['platform'])
+        if 'strict_diffusers' in package:
+            from _diffusers_installation import validate_captured, validate_runtime_metadata
+
+            strict = package['strict_diffusers']
             validate_captured(binding, strict['source'], strict['wheel'])
             if strict['baseline'] is not None:
                 validate_runtime_metadata(value, strict['baseline'], strict['platform'])

@@ -5,7 +5,39 @@ description: 把 diffusers 分别跑在 jittor 的 `import torch` shim 与原生
 
 # diffusers ⇄ jittor torch shim
 
-## Fresh installed-source evidence (2026-10-15)
+## Official-wheel capture and maintained replay (2026-10-16)
+
+The current strict guard rejects both original `1a92` rows: their worker packets
+lack wheel SHA and actual METADATA/RECORD bindings. Keep their original numerical
+facts and earlier auditor outcomes; never reconstruct missing historical fields.
+[Current profile and validation status](../../../docs/results/2026-10-16-diffusers-official-installation.md)
+uses official Diffusers 0.35.1 at `0f252be0ed42006c125ef4429156cb13ae6c1d60`,
+wheel SHA256 `fe29ff10200970c7c5934c6488c213e2a77a03dad5e6fa00bbd8e1d04234cb0e`.
+This PyPI artifact differs from the old local source-built wheel. All 697 payload
+files match Git; only six explicit tracked README omissions are allowed. Every
+new worker binds its actual package, METADATA and real pip RECORD without
+restoring the archive receipt. Fresh CPU/CUDA numerical validation is pending;
+implementing this profile does not itself establish a new L grade.
+
+```bash
+python tools/run_diffusers_gate.py --candidate-python <private-shim-python> \
+  --oracle-python <private-binary-torch-python> --device cpu \
+  --checkout <clean-fixed-diffusers> --wheel <fixed-official-wheel> \
+  --output "$JITTOR_LAB_ROOT/_state/diffusers/<run>/cpu" \
+  --cache-root "$JITTOR_LAB_ROOT/_state/diffusers/<run>/benchmark-cpu"
+```
+
+The required full UNet protocol is 144 parameters plus the sample input gradient,
+seed 0/7 with the same complete weights, three SGD steps at lr .001, and all 873
+training fields. The gate reuses the maintained runner/training probe/collector,
+captures actual shared platform/device/pointer evidence, and checks six distinct
+worker PIDs and isolated runtime paths. Run CPU before CUDA, use separate unit
+and benchmark caches, serialize first JIT, and keep the same clean source frozen
+through both measurements. No pipeline, whole-library, performance or hosted
+nightly claim follows. Low-level `component_measure.py --repo diffusers` now
+requires `--wheel`; the common collector also requires `--wheel diffusers=WHEEL`.
+
+## Historical installed-source evidence (2026-10-15)
 
 [Fresh CPU/CUDA UNet L3 evidence](../../../docs/results/2026-10-15-diffusers-installed-source.md)
 uses clean framework `1a92aae04f4c70fa44e251f8fafdc7e2cd77beda`, Diffusers
@@ -16,22 +48,17 @@ required UNet parity node, seed-7 input perturbation and three SGD steps with
 144 parameter gradients and the sample-input gradient. Actual TF32 is OFF/highest;
 this fresh execution does not relabel the historical ON/high records below.
 
-Use existing `component_measure.py --repo diffusers --checkout <clean-upstream>
---root <clean-framework> -- <maintained-runner-or-training-probe>`, followed by
-`collect_component_scorecard.py` and the shared `audit_coverage.py scorecard`
-with an explicit full measurement `--baseline`. Capture both interpreters'
-actual installation hashes during execution; do not reconstruct them later.
-Use separate unit/measurement caches, both explicit device selectors and the
-required real-Torch/Diffusers/execution flags described in the report. Collect
-into a fresh directory before sealing; the measured collector's derived-output
-write is not a safe operation on a sealed directory.
+These rows keep the earlier report's original auditor outcome. Current strict
+admission requires the new official-wheel measurement protocol above. The old
+697-file hashes do not supply missing wheel/METADATA/RECORD fields. Do not run
+the old overwrite-capable collector on sealed directories.
 
 Each platform counts only `UNet2DModel` on `model_api 1/87`; all four pipeline
 axes remain zero. This is a tiny FP32 component, with no complete generation
 pipeline, other dtype, performance, memory or L4 claim. Earlier environments and
 numerical records below retain their original provenance and limits.
 
-## 当前验收入口（2026-10-14）
+## 历史验收入口（2026-10-14）
 
 [CPU/CUDA oracle 与三步训练 scorecard](../../../docs/results/2026-10-14-downstream-oracle-scorecards.md)
 记录 Diffusers 0.35.1 的 `UNet2DModel` 组件：独立二进制 Torch 对拍、输入扰动、
