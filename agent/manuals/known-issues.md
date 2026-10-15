@@ -1970,29 +1970,24 @@ workaround.
 - Exit condition: nested tensors are Tensors with jagged storage, and the test is
   updated to the torch answer.
 
-## KI-COMPAT-004: a factory result is not a backward leaf
+## KI-COMPAT-004: `torch.Tensor(other)` loses the source graph connection
 
-- Severity: Low (`is_leaf` / `grad_fn` are introspection; gradients are correct)
-- Status: Open
-- Owner: torch compatibility / core autograd
-- Symptom: `torch.ones(3, requires_grad=True).is_leaf` is False here and True in
-  torch, and `grad_fn` names `broadcast_to`; code that branches on "is this a
-  leaf" (parameter collection, gradient clipping helpers, some checkpointing
-  wrappers) takes the wrong branch. From the other side, `torch.Tensor(other)`
-  aliases the graph in torch but builds a fresh Var here, so the linkage is lost.
-- Cause: `jt.ones` broadcasts a scalar literal (`_constant_scalar` in
-  `python/jittor/_core/var.py`). Every float Var requires grad by default, the
-  literal included, and `backward_grad_fn` (`src/core/grad.cc`) calls a Var a
-  leaf only when no input of its producer requires grad. Making the literal
-  `stop_grad()` gives the torch answer but breaks the double-backward `jvp`
-  (`tests/autograd/test_autograd_functional_seeds.py::TestAutogradGradSeedAlignment::test_jvp_multi_input_is_unchanged`
-  reads a tangent of 0.0 instead of 348.0), so it was reverted.
-- Workaround: none.
-- Evidence: `compat/tests/torch/test_torch_compat_autograd_semantics.py::TestBackwardLeafAndGradFn::test_leaf_and_intermediate_report_torch_shape`
-  and `compat/tests/torch/test_independent_frontend.py::test_independent_tensor_installation_preserves_native_type`
-  pin the gap.
-- Exit condition: factory results are leaves without breaking `jvp`, and the two
-  tests are updated to the torch answer.
+- Severity: Medium (silent loss of autograd linkage)
+- Status: Open; factory leaf subproblem resolved in `d51c2a48c`
+- Owner: torch compatibility / Tensor constructors
+- Symptom: `torch.Tensor(other)` aliases the source graph in Torch but creates
+  a fresh Var without requires-grad here, despite sharing the source storage.
+  Backward through the alias cannot propagate to the original tensor.
+- Cause: the Tensor constructor publishes a fresh native holder without
+  preserving the source's autograd connection.
+- Workaround: use the original tensor when graph connectivity is required.
+- Evidence: `compat/tests/torch/test_independent_frontend.py::test_independent_tensor_installation_preserves_native_type`
+  still pins this constructor gap. The separate factory leaf problem is resolved;
+  [CPU/CUDA factory results](../../docs/results/2026-10-15-size-factory-leaves.md)
+  include the updated leaf/grad-fn regression and unchanged native JVP/VJP.
+- Exit condition: `torch.Tensor(other)` preserves Torch's graph alias behavior,
+  with backward to the original tensor verified on CPU and the claimed devices;
+  update the constructor regression to the Torch answer.
 
 ## KI-COMPAT-006: `load_state_dict` shares the source's Vars, and an in-place optimizer then moves both models
 

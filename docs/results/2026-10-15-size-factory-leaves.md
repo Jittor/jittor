@@ -81,3 +81,21 @@ CUDA_VISIBLE_DEVICES=<allocated-gpu> JT_USE_CUDA=1 JT_BUILD_NVCC_PATH=<nvcc> \
 独立 Torch 使用相同测试字节及 `_rng_init_support.py`，放在仓外目录、清理 shim/PYTHONPATH，运行前后断言真实 binary 和无 Jittor import。用 `--confcutdir=<copied-suite>` 避免加载候选专用 pytest 策略；只有 native-only observer 被排除，CPU 的 CUDA 分支诚实跳过。
 
 最终安装归属定向检查 **5 passed**；更新后的完整 `tests/structure + compat/tests/structure` 为 **1622 passed / 6 skipped**，230.84 秒。六项分别为两项 accelerator、两项 declared，以及当前结构验证解释器未安装 native distribution 的两项解析检查；没有把这些跳过授予安装验收。布局、MANIFEST、空白检查通过，新测试 Ruff 无诊断；修改的工厂文件原三条诊断与基线相同。
+
+
+## KI-COMPAT-004 工厂子项收尾
+
+在同步基线 `d9b2ae9c0b9f0a92102a619940273b3efd645be1` 上，既有
+`test_leaf_and_intermediate_report_torch_shape` 仍断言工厂结果为非叶，最小复验确实失败。
+该测试现改为正确的叶身份、无 grad-fn 与完整梯度 `[2, 2, 2]`，保留中间结果的
+producer identity 检查，并按运行后端显式选择设备。
+
+只修改该测试后的实测：CPU autograd semantics 全文件与独立 Tensor constructor 节点
+**23 passed / 0 skipped**（10.35 秒）；真实 CUDA autograd semantics 全文件
+**22 passed / 0 skipped**（23.85 秒）；原生模式 JVP/VJP seed 全文件
+**6 passed / 0 skipped**（7.25 秒），其中多输入 JVP 仍为 348。
+这些日志对应 `d9b2ae9c0` 加测试改动，未将其重标为此前工厂生产修复的测量。
+
+KI-COMPAT-004 仍保持打开，仅保留 `torch.Tensor(other)` 的图连接丢失；本轮未修复该
+constructor，也未把其已有缺陷断言改成通过声明。未版本化原始日志在
+`$JITTOR_LAB_ROOT/_state/factory-ledger-followup-d9/`，包括修正前失败、两设备复验及原生 JVP/VJP。
