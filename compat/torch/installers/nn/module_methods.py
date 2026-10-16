@@ -504,8 +504,7 @@ def _load_state_dict(self, state_dict, strict=True, assign=False):
         copied = dict(load_state)
         for key, value in load_state.items():
             target = _find_state_target(self, key)
-            if (isinstance(target, jt.Var) and isinstance(value, jt.Var)
-                    and target._storage_is_contiguous()):
+            if isinstance(target, jt.Var) and isinstance(value, jt.Var):
                 # Loading copies values, without recording a differentiable
                 # in-place update of this existing leaf. Keep the public copy
                 # owner's placement, alias/version and storage semantics.

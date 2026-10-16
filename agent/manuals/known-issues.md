@@ -2006,26 +2006,6 @@ workaround.
   including absence of unintended accumulator activation. Preserve the existing
   old/new graph snapshots and storage/gradient contracts when adding this support.
 
-## KI-COMPAT-006: `load_state_dict` shares the source's Vars, and an in-place optimizer then moves both models
-
-- Severity: High on CUDA (silent: a second model -- an EMA copy, a reference
-  model -- trains along with the first)
-- Status: Open; found 2026-09-25
-- Owner: torch compatibility / optimizers
-- Symptom: after `b.load_state_dict(a.state_dict())` on CUDA, one
-  `torch.optim.AdamW(a.parameters()).step()` changes `b`'s weights too; on CPU it
-  does not. PyTorch copies in `load_state_dict`.
-- Cause: loading binds `b`'s parameters to the Vars `a` holds, which is harmless
-  while every update produces a new Var. The fused CUDA AdamW
-  (`src/ops/composite/fused_adamw_op.cc`) writes into the parameters' own storage
-  (`share_with`), so every holder sees the write.
-- Workaround: copy through the host, e.g.
-  `p.copy_(torch.tensor(src.cpu().numpy(), device=src.device))`.
-- Evidence: two `nn.Linear(2, 2, device="cuda")`, `b.load_state_dict(a.state_dict())`,
-  a backward and an AdamW step on `a`: `(a.weight == b.weight).all()` is True.
-- Exit condition: `load_state_dict` copies (or the fused optimizer stops writing
-  shared storage), with a CUDA regression test for the repro.
-
 ## KI-COMPAT-007: `w.copy_(x)` under `no_grad` loses `w`'s gradient when `x` requires grad
 
 - Severity: Medium (silent: `w.grad` stays None after a backward)
