@@ -2,7 +2,8 @@
 
 import jittor as jt
 
-from ..._runtime.dispatch import register_kernel, select_kernel
+from ..._core.dtypes import dtype_name
+from ..._runtime.dispatch import dispatch_context, register_kernel, select_kernel
 
 from ..base import (
     Optimizer, _grad_matches_param, _param_requires_grad,
@@ -35,8 +36,26 @@ def momentum_initialized_flags(pg):
     return flags
 
 
+def _torch_scaled_product(value, alpha):
+    with jt.flag_scope(amp_reg=0):
+        coefficient = jt.array(alpha, dtype="float32").stop_grad()
+        return (value.float32() * coefficient).cast(value.dtype).stop_fuse()
+
+
+def _torch_scaled_add(value, other, alpha):
+    """CUDA low-precision scaled addition: float32 opmath, one output cast.
+
+    This policy is deliberately CUDA-only. Torch CPU vector blocks and scalar
+    tails round differently; native CPU arithmetic remains unchanged.
+    """
+    with jt.flag_scope(amp_reg=0):
+        coefficient = jt.array(alpha, dtype="float32").stop_grad()
+        return (value.float32() + other.float32() * coefficient).cast(value.dtype).stop_fuse()
+
+
 def sgd_update(param, grad, velocity, *, lr, momentum=0, weight_decay=0,
-               dampening=0, nesterov=False, momentum_initialized=False):
+               dampening=0, nesterov=False, momentum_initialized=False,
+               torch_math=False):
     """Native SGD arithmetic shared by full parameters and FSDP shards.
 
     ``momentum_initialized`` says whether ``velocity`` already holds a
@@ -47,14 +66,29 @@ def sgd_update(param, grad, velocity, *, lr, momentum=0, weight_decay=0,
     into the zero-initialized buffer via the dampened recurrence: that
     recurrence is only correct from the second update onward. The caller
     marks the buffer initialized after any update that used momentum.
+
+    ``torch_math`` selects single-rounding CUDA float16/bfloat16 updates. It
+    does not change native defaults, CPU arithmetic or float32 fused kernels.
     """
-    dp = grad if weight_decay == 0 else param * weight_decay + grad
+    low_precision = (torch_math and dtype_name(param.dtype) in ("float16", "bfloat16")
+                     and dispatch_context(param).backend == "cuda")
+    dp = (grad if weight_decay == 0 else
+          _torch_scaled_add(grad, param, weight_decay) if low_precision else
+          param * weight_decay + grad)
     if momentum == 0 and not nesterov:
-        return param - dp * lr
+        return (_torch_scaled_add(param, dp, -lr) if low_precision else
+                param - dp * lr)
     if not momentum_initialized:
         _update_preserve_dtype(velocity, dp)
     else:
-        _update_preserve_dtype(velocity, momentum * velocity + dp * (1 - dampening))
+        if low_precision:
+            previous = _torch_scaled_product(velocity, momentum)
+            _update_preserve_dtype(velocity, _torch_scaled_add(previous, dp, 1 - dampening))
+        else:
+            _update_preserve_dtype(velocity, momentum * velocity + dp * (1 - dampening))
+    if low_precision:
+        direction = _torch_scaled_add(dp, velocity, momentum) if nesterov else velocity
+        return _torch_scaled_add(param, direction, -lr)
     return param - (dp + momentum * velocity if nesterov else velocity) * lr
 
 
@@ -115,7 +149,7 @@ class SGD(Optimizer):
         optimizer.step(loss)
     """
     def __init__(self, params, lr, momentum=0, weight_decay=0, dampening=0, nesterov=False,
-                 fused=None):
+                 fused=None, torch_math=False):
         super().__init__(params, lr)
         # None means "wherever a backend publishes a fused update"; only ACL
         # does, and only for the dtypes its kernels cover, so everything else
@@ -125,6 +159,9 @@ class SGD(Optimizer):
         self.weight_decay = weight_decay
         self.dampening = dampening
         self.nesterov = nesterov
+        # Explicit frontend precision policy; native SGD keeps its historical
+        # expression and fused-kernel selection unless requested by a caller.
+        self.torch_math = torch_math
 
         # initialize required arguments
         for pg in self.param_groups:
@@ -264,13 +301,13 @@ class SGD(Optimizer):
                 step_capture.guard(lambda pg=pg: (pg.get("lr", self.lr), pg.get("momentum", self.momentum),
                                                   pg.get("weight_decay", self.weight_decay),
                                                   pg.get("dampening", self.dampening),
-                                                  pg.get("nesterov", self.nesterov)))
+                                                  pg.get("nesterov", self.nesterov), self.torch_math))
                 for i, (p, g, v) in zip(active_index, active):
                     # `p * 0 + g` is a whole extra pass over the parameter.
                     _update_preserve_dtype(p, sgd_update(
                         p, g, v, lr=lr, momentum=momentum, weight_decay=weight_decay,
                         dampening=dampening, nesterov=nesterov,
-                        momentum_initialized=initialized[i]))
+                        momentum_initialized=initialized[i], torch_math=self.torch_math))
             if uses_momentum:
                 # Whether a buffer seeds is baked into the step too (which
                 # launch it is in, or which formula): a captured seeding step

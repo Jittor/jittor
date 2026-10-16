@@ -106,7 +106,7 @@ def _sgd_update_for_param(opt, pg, state, entry, param, grad, value, *, index):
     updated = sgd_update(
         param, grad, value, lr=lr, momentum=momentum, weight_decay=weight_decay,
         dampening=dampening, nesterov=nesterov,
-        momentum_initialized=initialized[index])
+        momentum_initialized=initialized[index], torch_math=getattr(opt, "torch_math", False))
     if momentum != 0 or nesterov:
         initialized[index] = True
     return updated.stop_grad(), value
