@@ -44,6 +44,80 @@ guard, recognize a deployed torchvision facade, reject an unsupported version,
 check missing-adapter reports and retain TorchMetrics' original fallback. They
 do not establish new hardware or performance claims.
 
+## Explicit Trainer dataloader checkpoints
+
+`jittor_adapters.trainer_stateful.stateful_trainer_class()` returns an explicit
+Trainer subclass. Importing it does not register a patch or change the default
+Trainer. This entry point is separately validated for Transformers **4.56.2**
+and Accelerate **1.10.1**; other versions fail closed. Accelerate also requires
+installed `torchdata` metadata (the acceptance environments use **0.11.0**).
+Install that dependency without replacing the environment's Torch runtime.
+
+```python
+from jittor_adapters.trainer_stateful import stateful_trainer_class
+
+StatefulTrainer = stateful_trainer_class()  # optionally pass a custom Trainer class
+trainer = StatefulTrainer(
+    model=model,
+    args=training_args,
+    train_dataset=train_dataset,
+    data_collator=collator,
+    stateful_dataset_id="fixed-dataset-and-transform-config-v1",
+)
+trainer.train()
+# In a new process, recreate the same configuration and immutable dataset:
+trainer.train(resume_from_checkpoint="output/checkpoint-5")
+```
+
+The subclass enables `accelerator.dataloader_config.use_stateful_dataloader`,
+saves the **prepared** loader's public state in `stateful_dataloader.pt` beside
+each Trainer checkpoint, and restores it before the next training iterator.
+The prepared state accounts for Accelerate's one-batch lookahead. Explicit
+loader/sampler generators are saved too. `ignore_data_skip=True` prevents
+Trainer from advancing the restored cursor again; the callback corrects its
+public epoch fraction before saving. Missing state, changed configuration,
+inconsistent Trainer metadata, or unsupported versions raise an error.
+Checkpoint files contain Python/NumPy state; load trusted checkpoints only.
+
+For caller-owned loading, pass `stateful_dataloader_factory=lambda trainer: ...`.
+It must return an **unprepared** `torchdata.stateful_dataloader.StatefulDataLoader`
+using `trainer.train_dataset` and the intended collator, batches, workers and
+generators. The adapter passes it to the public `accelerator.prepare` method.
+Native PyTorch/torchdata requires checkpointable sampler/batch-sampler and
+dataset transform state: the acceptance fixture uses torchdata's `RandomSampler`
+and `BatchSampler`, and a dataset exposing its Python/NumPy RNG state through
+`state_dict`/`load_state_dict`. An arbitrary native dataset or ordinary random
+sampler does not acquire a complete state contract by enabling this flag.
+
+The current supported Trainer schedule is deliberately bounded: **one process,
+one device, an explicit positive `max_steps` within the first epoch, complete
+gradient-accumulation windows, and a checkpoint strictly before epoch end**.
+Multiple epochs, accumulation tails, HPO trials, automatic batch-size search,
+model-only checkpoints, distributed training and Seq2SeqTrainer are outside
+this entry point's acceptance. The factory and dataset identity are the caller's
+contract: use the same data, transform code and sampling configuration on resume.
+
+Jittor's explicit StatefulDataLoader snapshots a finite epoch batch plan, with
+a default limit of **100000 actual sample indices**; direct users can choose
+`max_stateful_indices`. Ordinary DataLoader keeps streaming without this history.
+Jittor workers remain threads: the supported worker RNG scope is Python `random`
+and NumPy's legacy global RNG under the loader's lock. Custom RNG objects,
+worker Torch RNG, mutable/stateful datasets, out-of-order loading and IterableDataset
+are not covered. This integration is a Transformers checkpoint concern and lives
+in the removable adapters package; generic loader state lives in Torch compat.
+
+Run the fast host contracts with:
+
+```bash
+PYTHONPATH=adapters python -m pytest -q adapters/tests/test_trainer_stateful.py
+```
+
+Real-library acceptance and the exact supported device scope are recorded in
+[the Stateful Trainer acceptance report](../refactor-wip/results/2026-10-17-trainer-stateful-resume.md).
+Revalidate when Trainer/Accelerate/torchdata versions, prepared-loader semantics,
+or the compat public runtime hooks (`owned_runtime_hook`, `transaction`,
+`module_patcher`) change. This entry point makes no performance claim.
+
 ## vLLM
 
 The vLLM implementation lives in this repository at `jittor_adapters/vllm` and

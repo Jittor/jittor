@@ -1941,6 +1941,27 @@ def ecosystem(session):
 
 
 @nox.session(python=False)
+def trainer_stateful(session):
+    """Fail-closed CPU Trainer fresh-process resume with two prepared runtimes."""
+    env = dict(os.environ)
+    for name in ("REAL_TORCH_PYTHON", "JITTOR_STATEFUL_PYTHON"):
+        value = env.get(name, "").strip()
+        if not value or not Path(value).is_file():
+            session.error("%s must name a separately prepared interpreter" % name)
+    env.update({
+        "JITTOR_REQUIRE_TRAINER_STATEFUL": "1",
+        "JITTOR_REQUIRE_REAL_TORCH": "1",
+        "JITTOR_TEST_REQUIRE_EXECUTION": "1",
+        "JITTOR_TORCH_SHIM": "0",
+    })
+    session.run(
+        sys.executable, "-m", "pytest", "-q", "-s",
+        "adapters/tests/test_trainer_stateful_integration.py",
+        external=True, env=env,
+    )
+
+
+@nox.session(python=False)
 def optional(session):
     """Run fail-closed optional compatibility gates on real CUDA."""
     _root, env = _session_env(session, "optional")

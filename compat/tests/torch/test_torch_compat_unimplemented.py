@@ -471,6 +471,418 @@ class TestDataLoaderWorkers(StubPolicyBase):
             list(loader)
         self.assertTrue(any("THREADS" in str(w.message) for w in caught))
 
+    def test_dataloader_generator_controls_worker_base_seed(self):
+        data = torch.utils.data
+
+        class _WorkerSeedDataset(data.Dataset):
+            def __len__(self):
+                return 8
+
+            def __getitem__(self, index):
+                info = data.get_worker_info()
+                return -1 if info is None else info.seed
+
+        def collect(generator_seed):
+            torch.manual_seed(31415)
+            generator = torch.Generator(device="cpu").manual_seed(generator_seed)
+            loader = data.DataLoader(
+                _WorkerSeedDataset(), batch_size=1, num_workers=1, generator=generator
+            )
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                return sorted(
+                    int(value)
+                    for batch in loader
+                    for value in batch.numpy().reshape(-1)
+                )
+
+        first = collect(100)
+        self.assertEqual(first, collect(100))
+        self.assertNotEqual(
+            first, collect(200),
+            "an explicit DataLoader generator must determine worker base seeds",
+        )
+
+    def _random_transform_loader(self, generator_seed, worker_init_fn=None):
+        import random
+        data = torch.utils.data
+
+        class _RandomDataset(data.Dataset):
+            def __len__(self):
+                return 8
+
+            def __getitem__(self, index):
+                info = data.get_worker_info()
+                return {
+                    "index": index,
+                    "worker_id": -1 if info is None else info.id,
+                    "python": random.random(),
+                    "numpy": float(np.random.random()),
+                }
+
+        generator = torch.Generator(device="cpu").manual_seed(generator_seed)
+        return data.DataLoader(
+            _RandomDataset(), batch_size=1, num_workers=2,
+            prefetch_factor=1, generator=generator,
+            worker_init_fn=worker_init_fn,
+            collate_fn=lambda batch: batch,
+        )
+
+    def _collect_random_worker_draws(self, generator_seed):
+        import random
+        random.seed(1234)
+        np.random.seed(5678)
+        loader = self._random_transform_loader(generator_seed)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            return [item for batch in loader for item in batch]
+
+    def test_worker_python_and_numpy_draws_repeat_with_explicit_generator(self):
+        first = self._collect_random_worker_draws(100)
+        second = self._collect_random_worker_draws(100)
+        self.assertEqual(first, second)
+
+    def test_worker_python_and_numpy_draws_follow_explicit_generator(self):
+        first = self._collect_random_worker_draws(100)
+        second = self._collect_random_worker_draws(200)
+        self.assertNotEqual(first, second)
+
+    def test_each_logical_worker_has_an_independent_random_stream(self):
+        draws = self._collect_random_worker_draws(100)
+        by_worker = {}
+        for item in draws:
+            by_worker.setdefault(item["worker_id"], []).append(
+                (item["python"], item["numpy"])
+            )
+        self.assertEqual(set(by_worker), {0, 1})
+        self.assertNotEqual(by_worker[0], by_worker[1])
+
+    def test_worker_random_draws_restore_main_thread_global_states(self):
+        import random
+        random.seed(4321)
+        np.random.seed(8765)
+        expected_python = random.random()
+        expected_numpy = float(np.random.random())
+
+        random.seed(4321)
+        np.random.seed(8765)
+        loader = self._random_transform_loader(100)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            list(loader)
+
+        self.assertEqual(random.random(), expected_python)
+        self.assertEqual(float(np.random.random()), expected_numpy)
+
+    def test_worker_exception_restores_main_thread_global_states(self):
+        import random
+        data = torch.utils.data
+        random.seed(2468)
+        np.random.seed(1357)
+        expected_python = random.random()
+        expected_numpy = float(np.random.random())
+
+        random.seed(2468)
+        np.random.seed(1357)
+
+        class _FailingDataset(data.Dataset):
+            def __len__(self):
+                return 2
+
+            def __getitem__(self, index):
+                random.random()
+                np.random.random()
+                raise ValueError("worker dataset failure")
+
+        generator = torch.Generator(device="cpu").manual_seed(100)
+        loader = data.DataLoader(
+            _FailingDataset(), batch_size=1, num_workers=1,
+            generator=generator, collate_fn=lambda batch: batch,
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with self.assertRaisesRegex(ValueError, "worker dataset failure"):
+                next(iter(loader))
+
+        self.assertEqual(random.random(), expected_python)
+        self.assertEqual(float(np.random.random()), expected_numpy)
+
+    def test_worker_init_fn_observes_initialized_random_state(self):
+        import random
+        seen = []
+
+        def init_fn(worker_id):
+            info = torch.utils.data.get_worker_info()
+            seen.append((
+                worker_id, info.id, info.seed,
+                random.random(), float(np.random.random()),
+            ))
+
+        random.seed(1234)
+        np.random.seed(5678)
+        loader = self._random_transform_loader(100, worker_init_fn=init_fn)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            list(loader)
+
+        self.assertEqual(len(seen), 2)
+        for worker_id, info_id, seed, python_draw, numpy_draw in seen:
+            self.assertEqual(worker_id, info_id)
+            self.assertAlmostEqual(
+                python_draw, random.Random(seed).random()
+            )
+            self.assertAlmostEqual(
+                numpy_draw,
+                np.random.RandomState(seed % (2 ** 32)).random(),
+            )
+
+    def test_stateful_loader_restores_serial_cursor_and_generator(self):
+        from torchdata.stateful_dataloader import StatefulDataLoader
+
+        data = torch.utils.data
+
+        class _Dataset(data.Dataset):
+            def __len__(self):
+                return 12
+
+            def __getitem__(self, index):
+                return index
+
+        def make_loader():
+            generator = torch.Generator(device="cpu").manual_seed(314)
+            return StatefulDataLoader(_Dataset(), batch_size=2, shuffle=True,
+                                      generator=generator, num_workers=0)
+
+        continuous = make_loader()
+        continuous_iter = iter(continuous)
+        first = next(continuous_iter).numpy().copy()
+        state = continuous.state_dict()
+        expected = [batch.numpy().copy() for batch in continuous_iter]
+
+        resumed = make_loader()
+        resumed.load_state_dict(state)
+        actual = [batch.numpy().copy() for batch in resumed]
+        np.testing.assert_array_equal(first, state["batches"][0])
+        self.assertEqual(len(actual), len(expected))
+        for left, right in zip(actual, expected):
+            np.testing.assert_array_equal(left, right)
+
+    def test_stateful_loader_restores_thread_worker_rng_and_prefetch_cursor(self):
+        from torchdata.stateful_dataloader import StatefulDataLoader
+        import random
+
+        data = torch.utils.data
+
+        class _Dataset(data.Dataset):
+            def __len__(self):
+                return 12
+
+            def __getitem__(self, index):
+                info = data.get_worker_info()
+                return {
+                    "index": index,
+                    "worker": -1 if info is None else info.id,
+                    "python": random.random(),
+                    "numpy": float(np.random.random()),
+                }
+
+        def make_loader():
+            generator = torch.Generator(device="cpu").manual_seed(2718)
+            return StatefulDataLoader(
+                _Dataset(), batch_size=1, num_workers=2, prefetch_factor=2,
+                generator=generator, collate_fn=lambda batch: batch,
+            )
+
+        continuous = make_loader()
+        continuous_iter = iter(continuous)
+        next(continuous_iter)
+        state = continuous.state_dict()
+        expected = [item for batch in continuous_iter for item in batch]
+
+        resumed = make_loader()
+        resumed.load_state_dict(state)
+        actual = [item for batch in resumed for item in batch]
+        self.assertEqual(actual, expected)
+
+    def test_stateful_loader_without_iterator_restores_generator_state(self):
+        from torchdata.stateful_dataloader import StatefulDataLoader
+
+        data = torch.utils.data
+
+        class _Dataset(data.Dataset):
+            def __len__(self):
+                return 10
+
+            def __getitem__(self, index):
+                return index
+
+        def make_loader(seed):
+            return StatefulDataLoader(
+                _Dataset(), batch_size=2, shuffle=True,
+                generator=torch.Generator(device="cpu").manual_seed(seed),
+                num_workers=0,
+            )
+
+        source = make_loader(314)
+        state = source.state_dict()
+        self.assertFalse(state["active"])
+        self.assertEqual(state["cursor"], 0)
+
+        expected = [batch.numpy().copy() for batch in make_loader(314)]
+        resumed = make_loader(999)
+        resumed.load_state_dict(state)
+        actual = [batch.numpy().copy() for batch in resumed]
+        self.assertEqual(len(actual), len(expected))
+        for left, right in zip(actual, expected):
+            np.testing.assert_array_equal(left, right)
+
+        def make_worker_loader(seed):
+            return StatefulDataLoader(
+                _Dataset(), batch_size=1, shuffle=True,
+                generator=torch.Generator(device="cpu").manual_seed(seed),
+                num_workers=2, collate_fn=lambda batch: batch,
+            )
+
+        worker_source = make_worker_loader(314)
+        worker_state = worker_source.state_dict()
+        self.assertFalse(worker_state["active"])
+        worker_expected = [
+            item for batch in make_worker_loader(314) for item in batch
+        ]
+        worker_resumed = make_worker_loader(999)
+        worker_resumed.load_state_dict(worker_state)
+        worker_actual = [
+            item for batch in worker_resumed for item in batch
+        ]
+        self.assertEqual(worker_actual, worker_expected)
+
+    def test_stateful_loader_restores_distinct_loader_and_sampler_generators(self):
+        from torchdata.stateful_dataloader import StatefulDataLoader
+
+        data = torch.utils.data
+
+        class _Dataset(data.Dataset):
+            def __len__(self):
+                return 10
+
+            def __getitem__(self, index):
+                return index
+
+        def make_loader(loader_seed, sampler_seed):
+            loader_generator = torch.Generator(device="cpu").manual_seed(loader_seed)
+            sampler_generator = torch.Generator(device="cpu").manual_seed(sampler_seed)
+            sampler = data.RandomSampler(_Dataset(), generator=sampler_generator)
+            return StatefulDataLoader(
+                _Dataset(), batch_size=2, sampler=sampler,
+                generator=loader_generator, num_workers=0,
+            )
+
+        source = make_loader(101, 202)
+        state = source.state_dict()
+        self.assertEqual(set(state["generators"]), {"loader", "sampler"})
+        expected = [batch.numpy().copy() for batch in make_loader(101, 202)]
+
+        resumed = make_loader(303, 404)
+        resumed.load_state_dict(state)
+        actual = [batch.numpy().copy() for batch in resumed]
+        for left, right in zip(actual, expected):
+            np.testing.assert_array_equal(left, right)
+
+    def test_stateful_loader_rejects_missing_generator_on_resume(self):
+        from torchdata.stateful_dataloader import StatefulDataLoader
+
+        data = torch.utils.data
+
+        class _Dataset(data.Dataset):
+            def __len__(self):
+                return 4
+
+            def __getitem__(self, index):
+                return index
+
+        source = StatefulDataLoader(
+            _Dataset(), batch_size=1, shuffle=True,
+            generator=torch.Generator(device="cpu").manual_seed(11),
+        )
+        state = source.state_dict()
+        resumed = StatefulDataLoader(_Dataset(), batch_size=1, shuffle=True)
+        resumed.load_state_dict(state)
+        with self.assertRaisesRegex(ValueError, "generator is missing"):
+            list(resumed)
+
+    def test_stateful_loader_rejects_invalid_state_and_worker_mismatch(self):
+        from torchdata.stateful_dataloader import StatefulDataLoader
+
+        data = torch.utils.data
+
+        class _Dataset(data.Dataset):
+            def __len__(self):
+                return 8
+
+            def __getitem__(self, index):
+                return index
+
+        def make_loader(num_workers):
+            return StatefulDataLoader(
+                _Dataset(), batch_size=1, num_workers=num_workers,
+                generator=torch.Generator(device="cpu").manual_seed(7),
+                collate_fn=lambda batch: batch,
+            )
+
+        serial = make_loader(0)
+        state = serial.state_dict()
+        for invalid in (
+            {**state, "version": 99},
+            {**state, "active": "yes"},
+            {**state, "batches": [[0]], "cursor": 2},
+            {**state, "active": False, "batches": [[0]], "cursor": 0},
+        ):
+            with self.assertRaises(ValueError):
+                serial.load_state_dict(invalid)
+
+        worker_loader = make_loader(2)
+        iterator = iter(worker_loader)
+        next(iterator)
+        worker_state = worker_loader.state_dict()
+        with self.assertRaisesRegex(ValueError, "worker count"):
+            serial.load_state_dict(worker_state)
+
+    def test_stateful_loader_restores_persistent_worker_prefetch(self):
+        from torchdata.stateful_dataloader import StatefulDataLoader
+        import random
+
+        data = torch.utils.data
+
+        class _Dataset(data.Dataset):
+            def __len__(self):
+                return 10
+
+            def __getitem__(self, index):
+                return {
+                    "index": index,
+                    "python": random.random(),
+                    "numpy": float(np.random.random()),
+                }
+
+        def make_loader():
+            return StatefulDataLoader(
+                _Dataset(), batch_size=1, num_workers=2, prefetch_factor=1,
+                persistent_workers=True,
+                generator=torch.Generator(device="cpu").manual_seed(29),
+                collate_fn=lambda batch: batch,
+            )
+
+        continuous = make_loader()
+        continuous_iter = iter(continuous)
+        next(continuous_iter)
+        state = continuous.state_dict()
+        expected = [item for batch in continuous_iter for item in batch]
+
+        resumed = make_loader()
+        resumed.load_state_dict(state)
+        actual = [item for batch in resumed for item in batch]
+        self.assertEqual(actual, expected)
+
 
 class TestDistributedDataParallel(StubPolicyBase):
     """DDP synchronises for real now (7.02); it is no longer a stub.

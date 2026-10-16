@@ -1,7 +1,9 @@
 """Stable optimizer/scheduler owners retain update and state trajectories."""
 import ast
+from functools import partial
 import importlib
 import inspect
+import os
 import pickle
 import textwrap
 
@@ -9,6 +11,10 @@ import numpy as np
 import pytest
 import jittor as jt
 from jittor.compat.torch.tensor_state import compatibility_owner
+
+
+def _linear_resume_factor(step, *, total_steps):
+    return max(0.0, float(total_steps - step) / float(total_steps))
 
 
 def test_optimizer_scheduler_installers_only_bind():
@@ -99,6 +105,38 @@ def test_update_scheduler_and_restore_trajectory(name):
     restored_parameter.requires_grad_(False)
     from jittor.compat.torch.nested import _torch_prune_leaf_registry
     _torch_prune_leaf_registry()
+
+
+def test_lambda_scheduler_state_round_trips_through_weights_only_checkpoint(tmp_path):
+    torch = compatibility_owner(jt)
+    factor = partial(_linear_resume_factor, total_steps=4)
+    parameter = torch.tensor([1.0], requires_grad=True)
+    optimizer = torch.optim.SGD([parameter], lr=0.2)
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, factor)
+    optimizer.step()
+    scheduler.step()
+
+    state = scheduler.state_dict()
+    assert state["lr_lambdas"] == [{}]
+    checkpoint = tmp_path / "scheduler.pt"
+    torch.save(state, os.fspath(checkpoint))
+    loaded = torch.load(os.fspath(checkpoint), map_location="cpu", weights_only=True)
+    assert loaded["lr_lambdas"] == [{}]
+
+    resumed_parameter = torch.tensor([1.0], requires_grad=True)
+    resumed_optimizer = torch.optim.SGD(
+        [resumed_parameter], lr=optimizer.param_groups[0]["lr"]
+    )
+    resumed_scheduler = torch.optim.lr_scheduler.LambdaLR(resumed_optimizer, factor)
+    resumed_scheduler.load_state_dict(loaded)
+    assert resumed_scheduler.lr_lambdas[0] is factor
+
+    optimizer.step()
+    scheduler.step()
+    resumed_optimizer.step()
+    resumed_scheduler.step()
+    assert scheduler.state_dict() == resumed_scheduler.state_dict()
+    assert optimizer.param_groups[0]["lr"] == resumed_optimizer.param_groups[0]["lr"]
 
 
 def test_swa_ema_average_factories_keep_state_and_importable_math():

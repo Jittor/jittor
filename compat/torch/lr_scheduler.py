@@ -8,6 +8,7 @@ from ..diagnostics import EXPECTED, swallowed
 
 
 import math as _math
+import types as _types
 from typing import Any, cast
 
 def _base_lrs(opt):
@@ -59,6 +60,23 @@ class LambdaLR(LRScheduler):
     def get_lr(self):
         e = max(self.last_epoch, 0)
         return [b * fn(e) for b, fn in zip(self.base_lrs, self.lr_lambdas)]
+
+    def state_dict(self):
+        state = super().state_dict()
+        state["lr_lambdas"] = [None] * len(self.lr_lambdas)
+        for index, function in enumerate(self.lr_lambdas):
+            if not isinstance(function, _types.FunctionType):
+                state["lr_lambdas"][index] = getattr(function, "__dict__", {}).copy()
+        return state
+
+    def load_state_dict(self, state_dict):
+        state = state_dict.copy()
+        lambda_states = state.pop("lr_lambdas")
+        super().load_state_dict(state)
+        state_dict["lr_lambdas"] = lambda_states
+        for function, function_state in zip(self.lr_lambdas, lambda_states):
+            if function_state is not None:
+                function.__dict__.update(function_state)
 
 
 class MultiplicativeLR(LRScheduler):

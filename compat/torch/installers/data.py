@@ -7,7 +7,9 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import collections as _collections_data
 import concurrent.futures as _futures_data
+import copy as _copy_data
 import itertools as _itertools_data
+import operator as _operator_data
 import threading as _threading_data
 
 import jittor as jt
@@ -21,9 +23,8 @@ from ...diagnostics import EXPECTED, swallowed
 def _install_torchdata_stateful_dataloader(g, registry=None):
     """Provide torchdata.stateful_dataloader for verl trainer imports.
 
-    Newer torchdata packages may omit the stateful_dataloader namespace while
-    verl still imports it.  A single-process fallback can use the installed
-    torch.utils.data.DataLoader and expose no-op state_dict hooks.
+    The opt-in loader saves a bounded map-style batch plan and supported RNG
+    state. It never publishes no-op checkpoint hooks.
     """
     _modules = registry_for(g, registry).module_map
     import types as _types
@@ -179,6 +180,106 @@ def _torch_ns():
     return torch
 
 
+def _loader_generators(loader):
+    """Return the explicit loader and sampler generators without duplicates."""
+    result = {}
+    loader_generator = getattr(loader, "generator", None)
+    if loader_generator is not None:
+        result["loader"] = loader_generator
+    sampler = getattr(loader, "sampler", None)
+    if sampler is None:
+        sampler = getattr(loader, "batch_sampler", None)
+    for _ in range(4):
+        if sampler is None:
+            break
+        generator = getattr(sampler, "generator", None)
+        if generator is not None:
+            result["sampler"] = generator
+            break
+        sampler = getattr(sampler, "sampler", None)
+    return result
+
+
+def _save_generator_states(loader):
+    return {
+        name: _copy_data.deepcopy(generator.get_state())
+        for name, generator in _loader_generators(loader).items()
+        if callable(getattr(generator, "get_state", None))
+    }
+
+
+def _restore_generator_states(loader, states):
+    for name, state in states.items():
+        generator = _loader_generators(loader).get(name)
+        if generator is None or not callable(getattr(generator, "set_state", None)):
+            raise ValueError("saved DataLoader generator is missing: %s" % name)
+        generator.set_state(_copy_data.deepcopy(state))
+
+
+def _stateful_configuration(loader):
+    """Portable shape/configuration guard; dataset contents remain immutable."""
+    sampler = loader.sampler
+    if sampler is None:
+        sampler = getattr(loader.batch_sampler, "sampler", None)
+    def type_name(value):
+        kind = type(value)
+        return kind.__module__ + "." + kind.__qualname__
+    return {
+        "dataset_type": type_name(loader.dataset),
+        "dataset_size": len(loader.dataset),
+        "batch_size": loader.batch_size,
+        "drop_last": bool(loader.drop_last),
+        "num_workers": int(loader.num_workers or 0),
+        "persistent_workers": bool(loader.persistent_workers),
+        "batch_sampler_type": type_name(loader.batch_sampler),
+        "batch_count": len(loader.batch_sampler),
+        "sampler_size": len(sampler) if sampler is not None else None,
+        "sampler_type": type_name(sampler),
+        "sampler_replacement": getattr(sampler, "replacement", None),
+        "batch_sampler_size": getattr(loader.batch_sampler, "batch_size", None),
+        "batch_sampler_drop_last": getattr(loader.batch_sampler, "drop_last", None),
+    }
+
+
+def _bounded_stateful_plan(loader):
+    """Bound both iteration count and batch size, even for dishonest samplers."""
+    limit = loader.max_stateful_indices
+    expected = len(loader.batch_sampler)
+    if expected > limit:
+        raise ValueError("DataLoader batch plan exceeds max_stateful_indices=%d" % limit)
+    if isinstance(loader.batch_sampler, _BatchSampler):
+        # Reject oversized standard samplers before RandomSampler.__iter__
+        # allocates a permutation or draws replacement indices.
+        planned = min(expected * loader.batch_sampler.batch_size,
+                      len(loader.batch_sampler.sampler))
+        if planned > limit:
+            raise ValueError("DataLoader batch plan exceeds max_stateful_indices=%d" % limit)
+    batches = []
+    count = 0
+    for batch in _itertools_data.islice(iter(loader.batch_sampler), expected + 1):
+        if len(batches) >= expected:
+            raise ValueError("DataLoader batch count exceeds its declared finite plan")
+        indices = list(_itertools_data.islice(iter(batch), limit - count + 1))
+        count += len(indices)
+        if count > limit:
+            raise ValueError("DataLoader batch plan exceeds max_stateful_indices=%d" % limit)
+        if not indices:
+            raise ValueError("DataLoader stateful batch plan cannot contain empty batches")
+        checked = []
+        for index in indices:
+            try:
+                integer = _operator_data.index(index)
+            except TypeError as exc:
+                raise ValueError("DataLoader stateful indices must be integers") from exc
+            if isinstance(index, bool) or not 0 <= integer < len(loader.dataset):
+                raise ValueError("DataLoader stateful index is outside the dataset")
+            checked.append(integer)
+        batches.append(checked)
+    if len(batches) != expected:
+        raise ValueError("DataLoader batch count does not match its declared finite plan")
+    return batches
+
+
 class _SubsetRandomSampler(_Sampler):
     def __init__(self, indices, generator=None):
         self.indices = list(indices)
@@ -287,22 +388,60 @@ class _BaseDataLoaderIter:
 class _SingleProcessDataLoaderIter(_BaseDataLoaderIter):
     def __init__(self, loader):
         self._loader = loader
-        self._batch_iter = iter(loader.batch_sampler)
+        self._configuration = _stateful_configuration(loader) if loader._stateful_enabled else None
+        state = loader._resume_state
+        self._generator_states = state.get("generators", {}) if state is not None else {}
+        if self._generator_states:
+            _restore_generator_states(loader, self._generator_states)
+        if state is not None and state.get("active"):
+            if int(state.get("num_workers", -1)) != 0:
+                raise ValueError("DataLoader state worker count does not match this loader")
+            self._batch_plan = list(state["batches"])
+            self._cursor = int(state["cursor"])
+            self._plan_complete = True
+            self._batch_iter = iter(self._batch_plan[self._cursor:])
+        else:
+            self._batch_plan = _bounded_stateful_plan(loader) if loader._stateful_enabled else []
+            self._cursor = 0
+            self._plan_complete = loader._stateful_enabled
+            self._batch_iter = iter(self._batch_plan) if self._plan_complete else iter(loader.batch_sampler)
+        loader._resume_state = None
 
     def __next__(self):
         batch_indices = next(self._batch_iter)
-        return self._loader.collate_fn([self._loader.dataset[i] for i in batch_indices])
+        batch = self._loader.collate_fn([self._loader.dataset[i] for i in batch_indices])
+        self._cursor += 1
+        return batch
+
+    def checkpoint_state(self):
+        if not self._loader._stateful_enabled:
+            raise RuntimeError("checkpoint state requires explicit StatefulDataLoader")
+        return {
+            "version": 1,
+            "active": True,
+            "num_workers": 0,
+            "batches": _copy_data.deepcopy(self._batch_plan),
+            "cursor": self._cursor,
+            "workers": [],
+            "worker_ids": [],
+            "generators": _save_generator_states(self._loader),
+        }
 
 
 class _WorkerInfo:
-    def __init__(self, id, num_workers, seed, dataset):
+    def __init__(self, id, num_workers, seed, dataset, worker_init_fn):
         self.id = id
         self.num_workers = num_workers
         self.seed = seed
         self.dataset = dataset
+        self.worker_init_fn = worker_init_fn
+        self.initialized = False
+        self.python_rng_state = None
+        self.numpy_rng_state = None
 
 
 _worker_state = _threading_data.local()
+_worker_rng_lock = _threading_data.RLock()
 
 
 def _get_worker_info():
@@ -322,55 +461,138 @@ class _MultiProcessingDataLoaderIter(_BaseDataLoaderIter):
     a bounded look-ahead of ``prefetch_factor`` batches each, delivered
     strictly in order.  The workers are threads, not processes (see the
     one-time warning): datasets here hold jittor Vars, which do not
-    survive a fork, and the win being bought -- overlapping file IO and
-    decode with compute -- is available to threads.
+    survive a fork.  Each submitted batch is assigned to a stable logical
+    worker, and batches for each worker are serialized so random transforms
+    advance that worker's stream in submission order.
     """
 
     def __init__(self, loader):
         self._loader = loader
-        self._batch_iter = iter(loader.batch_sampler)
+        self._configuration = _stateful_configuration(loader) if loader._stateful_enabled else None
         self._num_workers = max(1, int(loader.num_workers or 0))
         prefetch = loader.prefetch_factor
         self._prefetch = max(1, int(prefetch if prefetch else 2))
         self._timeout = float(loader.timeout or 0) or None
         self._pending = _collections_data.deque()
-        base_seed = 0
-        try:
-            base_seed = int(jt.get_seed())
-        except EXPECTED as exc:
-            swallowed("torch/installers/data.py __init__: base_seed = int(jt.get_seed())", exc)
-            base_seed = 0
-        self._pool = _futures_data.ThreadPoolExecutor(
-            max_workers=self._num_workers,
-            thread_name_prefix="jt-dataloader",
-            initializer=_init_worker,
-            initargs=(loader, base_seed))
+        state = loader._resume_state
+        self._generator_states = state.get("generators", {}) if state is not None else {}
+        if state is not None and state.get("active"):
+            if int(state.get("num_workers", -1)) != self._num_workers:
+                raise ValueError("DataLoader state worker count does not match this loader")
+            worker_states = state["workers"]
+            if len(worker_states) != self._num_workers:
+                raise ValueError("DataLoader state has an invalid worker-state count")
+            self._batch_plan = list(state["batches"])
+            self._worker_plan = list(state["worker_ids"])
+            if len(self._worker_plan) != len(self._batch_plan):
+                raise ValueError("DataLoader state has an invalid worker assignment plan")
+            self._cursor = int(state["cursor"])
+            self._submitted = self._cursor
+            self._plan_complete = True
+            self._worker_infos = []
+            for worker_id, saved in enumerate(worker_states):
+                info = _new_worker_info(loader, int(saved["seed"]), worker_id)
+                info.seed = int(saved["seed"])
+                info.initialized = bool(saved["initialized"])
+                info.python_rng_state = _copy_data.deepcopy(saved["python_rng_state"])
+                info.numpy_rng_state = _copy_data.deepcopy(saved["numpy_rng_state"])
+                self._worker_infos.append(info)
+            self._next_worker_id = self._submitted % self._num_workers
+            self._batch_iter = iter(self._batch_plan[self._submitted:])
+        else:
+            # Match PyTorch's DataLoader contract: the loader generator (or the
+            # default CPU stream when it is absent) owns the base seed draw.
+            if self._generator_states:
+                _restore_generator_states(loader, self._generator_states)
+            base_seed = int(_torch_ns().randint(
+                0, 2**63 - 1, (1,), dtype=_torch_ns().int64,
+                generator=loader.generator,
+            ).item())
+            self._worker_infos = [
+                _new_worker_info(loader, base_seed, worker_id)
+                for worker_id in range(self._num_workers)
+            ]
+            self._next_worker_id = 0
+            self._cursor = 0
+            self._submitted = 0
+            self._batch_plan = _bounded_stateful_plan(loader) if loader._stateful_enabled else []
+            self._worker_plan = [i % self._num_workers for i in range(len(self._batch_plan))]
+            self._plan_complete = loader._stateful_enabled
+            self._batch_iter = iter(()) if self._plan_complete else iter(loader.batch_sampler)
+        if state is not None and state.get("active") and self._generator_states:
+            _restore_generator_states(loader, self._generator_states)
+        loader._resume_state = None
+        # One single-thread executor per logical worker preserves that
+        # worker's task order while still overlapping separate workers.
+        self._pools = [
+            _futures_data.ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix="jt-dataloader-%d" % worker_id
+            )
+            for worker_id in range(self._num_workers)
+        ]
         _stub_policy_data.degraded(
             "torch.utils.data.DataLoader(num_workers>0)",
             "batches are prefetched by %d worker THREADS rather than "
             "worker processes" % self._num_workers,
             "Datasets holding jittor Vars cannot be forked; "
-            "pass num_workers=0 for strictly serial fetching.")
+            "legacy Python/NumPy RNG isolation serializes dataset/collate "
+            "calls; pass num_workers=0 for strictly serial fetching.")
         self._fill()
 
-    def _fetch(self, batch_indices):
+    def _fetch(self, batch_indices, worker_info, task_state):
         loader = self._loader
-        return loader.collate_fn([loader.dataset[i] for i in batch_indices])
+        previous_info = getattr(_worker_state, "info", None)
+        previous_task_state = getattr(_worker_state, "task_state", None)
+        _worker_state.info = worker_info
+        _worker_state.task_state = task_state
+        try:
+            return _run_with_worker_rng(
+                worker_info,
+                lambda: loader.collate_fn(
+                    [loader.dataset[i] for i in batch_indices]
+                ),
+            )
+        finally:
+            if previous_info is None:
+                if hasattr(_worker_state, "info"):
+                    del _worker_state.info
+            else:
+                _worker_state.info = previous_info
+            if previous_task_state is None:
+                if hasattr(_worker_state, "task_state"):
+                    del _worker_state.task_state
+            else:
+                _worker_state.task_state = previous_task_state
 
     def _fill(self):
         want = self._num_workers * self._prefetch
         while len(self._pending) < want:
-            try:
-                batch_indices = next(self._batch_iter)
-            except StopIteration:
-                return
-            self._pending.append(self._pool.submit(self._fetch, batch_indices))
+            if self._plan_complete:
+                if self._submitted >= len(self._batch_plan):
+                    return
+                batch_indices = self._batch_plan[self._submitted]
+                worker_id = self._worker_plan[self._submitted]
+            else:
+                try:
+                    batch_indices = next(self._batch_iter)
+                except StopIteration:
+                    return
+                worker_id = self._next_worker_id
+            worker_info = self._worker_infos[worker_id]
+            worker_pool = self._pools[worker_id]
+            self._next_worker_id = (self._next_worker_id + 1) % self._num_workers
+            self._submitted += 1
+            task_state = {}
+            future = worker_pool.submit(
+                self._fetch, batch_indices, worker_info, task_state
+            )
+            self._pending.append((future, worker_id, task_state))
 
     def __next__(self):
         if not self._pending:
             self._shutdown()
             raise StopIteration
-        future = self._pending.popleft()
+        future, _, _ = self._pending.popleft()
         try:
             batch = future.result(timeout=self._timeout)
         except _futures_data.TimeoutError:
@@ -379,36 +601,138 @@ class _MultiProcessingDataLoaderIter(_BaseDataLoaderIter):
                 "DataLoader timed out after %s seconds waiting for a "
                 "worker batch" % self._timeout)
         self._fill()
+        self._cursor += 1
         return batch
 
-    def _shutdown(self):
-        pool = getattr(self, "_pool", None)
-        if pool is not None and not self._loader.persistent_workers:
-            self._pool = None
-            pool.shutdown(wait=False)
+    def checkpoint_state(self):
+        """Capture the next unconsumed batch and each logical worker's RNG state."""
+        if not self._loader._stateful_enabled:
+            raise RuntimeError("checkpoint state requires explicit StatefulDataLoader")
+        pending = list(self._pending)
+        for future, _, _ in pending:
+            try:
+                future.result(timeout=self._timeout)
+            except _futures_data.TimeoutError:
+                raise RuntimeError("DataLoader timed out while capturing worker state")
+
+        self._batch_iter = iter(())
+        workers = [
+            {
+                "seed": int(info.seed),
+                "initialized": bool(info.initialized),
+                "python_rng_state": _copy_data.deepcopy(info.python_rng_state),
+                "numpy_rng_state": _copy_data.deepcopy(info.numpy_rng_state),
+            }
+            for info in self._worker_infos
+        ]
+        first_pending_worker = set()
+        for _, worker_id, task_state in pending:
+            if worker_id in first_pending_worker:
+                continue
+            first_pending_worker.add(worker_id)
+            if "worker_before" not in task_state:
+                raise RuntimeError("worker did not publish its checkpoint RNG boundary")
+            workers[worker_id] = _copy_data.deepcopy(task_state["worker_before"])
+        return {
+            "version": 1,
+            "active": True,
+            "num_workers": self._num_workers,
+            "batches": _copy_data.deepcopy(self._batch_plan),
+            "worker_ids": list(self._worker_plan),
+            "cursor": self._cursor,
+            "workers": workers,
+            "generators": _save_generator_states(self._loader),
+        }
+
+    def _reset(self):
+        # Persistent workers retain their streams and worker_init_fn lifecycle.
+        # Finish old prefetches before assigning the next epoch's batches.
+        for future, _, _ in self._pending:
+            future.result(timeout=self._timeout)
+        self._pending.clear()
+        self._batch_plan = _bounded_stateful_plan(self._loader) if self._loader._stateful_enabled else []
+        self._worker_plan = [i % self._num_workers for i in range(len(self._batch_plan))]
+        self._plan_complete = self._loader._stateful_enabled
+        self._batch_iter = iter(()) if self._plan_complete else iter(self._loader.batch_sampler)
+        self._cursor = self._submitted = self._next_worker_id = 0
+        self._configuration = _stateful_configuration(self._loader) if self._loader._stateful_enabled else None
+        self._fill()
+
+    def _shutdown(self, force=False, wait=False):
+        pools = getattr(self, "_pools", None)
+        if pools is not None and (force or not self._loader.persistent_workers):
+            self._pools = None
+            for pool in pools:
+                pool.shutdown(wait=wait)
 
     def __del__(self):
         try:
-            pool = getattr(self, "_pool", None)
-            if pool is not None:
-                pool.shutdown(wait=False)
+            pools = getattr(self, "_pools", None)
+            if pools is not None:
+                for pool in pools:
+                    pool.shutdown(wait=False)
         except EXPECTED as exc:
-            swallowed("torch/installers/data.py __del__: pool = getattr(self, '_pool', None)", exc)
+            swallowed("torch/installers/data.py __del__: pools = getattr(self, '_pools', None)", exc)
 
 
-_worker_ids = _itertools_data.count()
+def _new_worker_info(loader, base_seed, worker_id):
+    import random as _random_worker
+    import numpy as _np_worker
+
+    seed = int(base_seed) + int(worker_id)
+    info = _WorkerInfo(
+        worker_id, int(loader.num_workers or 0), seed, loader.dataset,
+        loader.worker_init_fn,
+    )
+    info.python_rng_state = _random_worker.Random(seed).getstate()
+    info.numpy_rng_state = _np_worker.random.RandomState(
+        seed % (2 ** 32)
+    ).get_state()
+    return info
 
 
-def _init_worker(loader, base_seed):
-    worker_id = next(_worker_ids) % max(1, int(loader.num_workers or 1))
-    _worker_state.info = _WorkerInfo(
-        worker_id, int(loader.num_workers or 0),
-        base_seed + worker_id, loader.dataset)
-    if loader.worker_init_fn is not None:
-        loader.worker_init_fn(worker_id)
+def _run_with_worker_rng(info, fn):
+    """Run one batch with the logical worker's process-global RNG states.
+
+    Jittor's compatibility workers are threads, so Python's ``random`` and
+    NumPy's legacy global RandomState cannot be isolated by thread-local
+    module state.  Swap both states under one process-wide lock, save the
+    updated worker states, and restore the caller's states before returning.
+    This covers the common dataset transform contract while keeping the
+    explicit warning that these are not PyTorch worker processes.
+    """
+    import random as _random_worker
+    import numpy as _np_worker
+
+    with _worker_rng_lock:
+        caller_python_state = _random_worker.getstate()
+        caller_numpy_state = _np_worker.random.get_state()
+        try:
+            _random_worker.setstate(info.python_rng_state)
+            _np_worker.random.set_state(info.numpy_rng_state)
+            task_state = getattr(_worker_state, "task_state", None)
+            if task_state is not None:
+                task_state["worker_before"] = {
+                    "seed": int(info.seed),
+                    "initialized": bool(info.initialized),
+                    "python_rng_state": _copy_data.deepcopy(info.python_rng_state),
+                    "numpy_rng_state": _copy_data.deepcopy(info.numpy_rng_state),
+                }
+            if not info.initialized:
+                if info.worker_init_fn is not None:
+                    info.worker_init_fn(info.id)
+                info.initialized = True
+            return fn()
+        finally:
+            info.python_rng_state = _random_worker.getstate()
+            info.numpy_rng_state = _np_worker.random.get_state()
+            _random_worker.setstate(caller_python_state)
+            _np_worker.random.set_state(caller_numpy_state)
 
 
 class _DataLoader:
+    _stateful_enabled = False
+
     def __init__(self, dataset, batch_size=1, shuffle=False, sampler=None,
                  batch_sampler=None, num_workers=0, collate_fn=None,
                  pin_memory=False, drop_last=False, timeout=0,
@@ -427,6 +751,7 @@ class _DataLoader:
         self.collate_fn = collate_fn if collate_fn is not None else _default_collate
         self.worker_init_fn = worker_init_fn
         self.generator = generator
+        self._resume_state = None
         if batch_sampler is not None:
             self.batch_sampler = batch_sampler
             self.sampler = None
@@ -438,12 +763,111 @@ class _DataLoader:
         self._iterator = None
     def __iter__(self):
         if int(self.num_workers or 0) > 0:
-            self._iterator = _MultiProcessingDataLoaderIter(self)
+            if self.persistent_workers and self._iterator is not None and self._resume_state is None:
+                self._iterator._reset()
+            else:
+                self._iterator = _MultiProcessingDataLoaderIter(self)
         else:
             self._iterator = _SingleProcessDataLoaderIter(self)
         return self._iterator
     def __len__(self):
         return len(self.batch_sampler)
+
+    def checkpoint_state(self):
+        if not self._stateful_enabled:
+            raise RuntimeError("checkpoint state requires explicit StatefulDataLoader")
+        configuration = _stateful_configuration(self)
+        if self._resume_state is not None:
+            if self._resume_state["configuration"] != configuration:
+                raise ValueError("DataLoader dataset or loader configuration changed after loading state")
+            return _copy_data.deepcopy(self._resume_state)
+        iterator = self._iterator
+        if iterator is None or not hasattr(iterator, "checkpoint_state"):
+            return {
+                "version": 1,
+                "active": False,
+                "num_workers": int(self.num_workers or 0),
+                "batches": [],
+                "cursor": 0,
+                "workers": [],
+                "worker_ids": [],
+                "generators": _save_generator_states(self),
+                "configuration": configuration,
+            }
+        if configuration != iterator._configuration:
+            raise ValueError("DataLoader dataset or loader configuration changed during iteration")
+        state = iterator.checkpoint_state()
+        state["configuration"] = configuration
+        return state
+
+    def load_checkpoint_state(self, state):
+        if not self._stateful_enabled:
+            raise RuntimeError("checkpoint state requires explicit StatefulDataLoader")
+        if not isinstance(state, dict) or type(state.get("version")) is not int or state["version"] != 1:
+            raise ValueError("unsupported DataLoader checkpoint state")
+        if not isinstance(state.get("active"), bool):
+            raise ValueError("DataLoader state has an invalid active flag")
+        if type(state.get("num_workers")) is not int or state["num_workers"] != int(self.num_workers or 0):
+            raise ValueError("DataLoader state worker count does not match this loader")
+        if state.get("configuration") != _stateful_configuration(self):
+            raise ValueError("DataLoader state dataset or loader configuration does not match")
+        if not isinstance(state.get("batches"), list) or type(state.get("cursor")) is not int:
+            raise ValueError("DataLoader state has invalid batch cursor data")
+        if state["cursor"] < 0 or state["cursor"] > len(state["batches"]):
+            raise ValueError("DataLoader state cursor is outside the saved batch plan")
+        if not isinstance(state.get("workers"), list):
+            raise ValueError("DataLoader state has invalid worker data")
+        if not isinstance(state.get("generators", {}), dict):
+            raise ValueError("DataLoader state has invalid generator data")
+        if any(name not in ("loader", "sampler") for name in state.get("generators", {})):
+            raise ValueError("DataLoader state has an invalid generator name")
+        total_indices = 0
+        for batch in state["batches"]:
+            if not isinstance(batch, list) or not batch:
+                raise ValueError("DataLoader state has an invalid batch plan")
+            total_indices += len(batch)
+            if total_indices > self.max_stateful_indices:
+                raise ValueError("DataLoader state exceeds max_stateful_indices")
+            if any(type(index) is not int or not 0 <= index < len(self.dataset) for index in batch):
+                raise ValueError("DataLoader state index is outside the dataset")
+        if state["active"] and len(state["batches"]) != len(self.batch_sampler):
+            raise ValueError("DataLoader state batch count does not match loader configuration")
+        if not state["active"]:
+            if state["batches"] or state["cursor"] or state["workers"]:
+                raise ValueError("inactive DataLoader state must not contain iterator data")
+            if state.get("worker_ids") not in (None, []):
+                raise ValueError("inactive DataLoader state cannot contain worker ids")
+        elif int(state.get("num_workers", 0)) > 0:
+            if not isinstance(state.get("worker_ids"), list) or len(state["worker_ids"]) != len(state["batches"]):
+                raise ValueError("DataLoader state has invalid worker assignment data")
+            if any(
+                type(worker_id) is not int or worker_id < 0
+                or worker_id >= int(state["num_workers"])
+                for worker_id in state["worker_ids"]
+            ):
+                raise ValueError("DataLoader state has an invalid worker id")
+            if len(state["workers"]) != int(state["num_workers"]):
+                raise ValueError("DataLoader state has an invalid worker-state count")
+            import random as _random_worker
+            import numpy as _np_worker
+            for worker in state["workers"]:
+                if not isinstance(worker, dict) or type(worker.get("seed")) is not int:
+                    raise ValueError("DataLoader state has an invalid worker seed")
+                if not isinstance(worker.get("initialized"), bool):
+                    raise ValueError("DataLoader state has an invalid worker initialized flag")
+                try:
+                    _random_worker.Random().setstate(worker.get("python_rng_state"))
+                    _np_worker.random.RandomState().set_state(worker.get("numpy_rng_state"))
+                except (TypeError, ValueError, IndexError, KeyError, OverflowError) as exc:
+                    raise ValueError("DataLoader state has invalid worker RNG data") from exc
+        elif state.get("worker_ids") not in (None, []) or state["workers"]:
+            raise ValueError("single-process DataLoader state cannot contain worker data")
+        iterator = self._iterator
+        if iterator is not None and hasattr(iterator, "_shutdown"):
+            iterator._shutdown(force=True, wait=True)
+        self._iterator = None
+        self._resume_state = _copy_data.deepcopy(state)
+        return None
 
 
 def _generate_state(base_seed, worker_id):
@@ -474,11 +898,40 @@ def _default_convert(value):
 
 
 class _StatefulLoaderState:
+    """Bounded immutable map-style data with Python/NumPy legacy worker RNG.
+
+    Dataset-local mutable state, custom RNG objects and worker Torch RNG are
+    outside this thread-worker contract. Dataset state hooks and iterable data
+    are rejected rather than silently pretending to checkpoint that state.
+    """
+    _stateful_enabled = True
+
+    def __init__(self, *args, snapshot_every_n_steps=1, in_order=True,
+                 max_stateful_indices=100000, **kwargs):
+        if in_order is not True:
+            raise NotImplementedError("StatefulDataLoader requires in_order=True")
+        if type(snapshot_every_n_steps) is not int or snapshot_every_n_steps != 1:
+            raise NotImplementedError("StatefulDataLoader requires snapshot_every_n_steps=1")
+        if type(max_stateful_indices) is not int or max_stateful_indices <= 0:
+            raise ValueError("max_stateful_indices must be a positive integer")
+        self.max_stateful_indices = max_stateful_indices
+        self.snapshot_every_n_steps = snapshot_every_n_steps
+        self.in_order = in_order
+        super().__init__(*args, **kwargs)
+        if isinstance(self.dataset, _IterableDataset):
+            raise NotImplementedError("StatefulDataLoader only supports finite map-style datasets")
+        if any(callable(getattr(self.dataset, name, None)) for name in ("state_dict", "load_state_dict")):
+            raise NotImplementedError("StatefulDataLoader does not checkpoint mutable dataset state")
+        try:
+            _stateful_configuration(self)
+        except TypeError as exc:
+            raise ValueError("StatefulDataLoader requires a sized finite map-style batch sampler") from exc
+
     def state_dict(self):
-        return {}
+        return _DataLoader.checkpoint_state(self)
 
     def load_state_dict(self, state_dict):
-        return None
+        return _DataLoader.load_checkpoint_state(self, state_dict)
 
 
 class StatefulDataLoader(_StatefulLoaderState, _DataLoader):
@@ -517,7 +970,11 @@ register_fidelity(
 )
 register_fidelity(
     "torchdata.stateful_dataloader.StatefulDataLoader", StatefulDataLoader,
-    Fidelity.APPROXIMATE, "ordered data loading; checkpoint state is empty and is not restored",
+    Fidelity.APPROXIMATE,
+    "ordered data loading; iterator cursor and supported RNG state are restored, "
+    "with at most 100000 indices by default and immutable map-style datasets; "
+    "worker Python/NumPy legacy RNG is supported, worker Torch/custom RNG and "
+    "mutable dataset state are unsupported; threads are not process-equivalent",
 )
 
 
