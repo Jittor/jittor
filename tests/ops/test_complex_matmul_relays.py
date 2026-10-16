@@ -1,18 +1,22 @@
-"""Complex matrix products on CUDA run on cuBLAS, with torch's autograd.
+"""Complex matrix products run on a GEMM library, with torch's autograd.
 
 They used to fall through the relay table to the generic
-``broadcast * mul + reduce`` kernel, because the cuBLAS row required
-``is_float()``: a complex64 2048-cube product took 60 ms against torch's
-1.4 ms. The rows now accept one shared complex dtype (``cublasGemmEx`` with
-``CUDA_C_32F``/``CUDA_C_64F``), so this file checks three things: the relay is
-what actually runs, it computes what numpy computes for every layout the
-callers hand it, and its gradient is torch's -- dA = G op(B)^H, dB = op(A)^H G
--- which the generic path also produces.
+``broadcast * mul + reduce`` kernel: on CUDA because the cuBLAS row required
+``is_float()`` (a complex64 2048-cube product took 60 ms against torch's
+1.4 ms), on CPU because no row took complex at all (6.1 s against torch's
+56 ms). CUDA now has ``cublasGemmEx`` with ``CUDA_C_32F``/``CUDA_C_64F``, CPU
+a CBLAS ``cgemm``/``zgemm`` (numpy's bundled OpenBLAS by default). For each
+device this file checks three things: the relay is what actually runs, it
+computes what numpy computes for every layout the callers hand it, and its
+gradient is torch's -- dA = G op(B)^H, dB = op(A)^H G -- which the generic path
+also produces.
 """
 from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
 
 from _helpers import capability as _test_capability
+import os
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -28,22 +32,24 @@ def _sample(rng, shape, dtype):
     return (rng.standard_normal(shape) + 1j * rng.standard_normal(shape)).astype(dtype)
 
 
-def _generic():
-    """Both cuBLAS rows switched off: the products take the generic path."""
-    off = lambda *args: False
-    return (override_kernel("matmul", "cuda", matrix._cublas_matmul, supports=off),
-            override_kernel("batched_matmul", "cuda", matrix._cublas_batched_matmul,
-                            supports=off))
+class _ComplexRelays:
 
+    use_cuda = 0
+    backend = "cpu"
+    matmul_kernel = staticmethod(matrix._blas_matmul)
+    batched_kernel = staticmethod(matrix._blas_batched_matmul)
+    matmul_name, batched_name = "blas_matmul", "blas_batched_matmul"
 
-@_test_preserve_policy(jt, 'cuda_allow_tf32')
-@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled,
-                 "CUDA is required")
-class TestCublasComplexMatmul(unittest.TestCase):
+    def _generic(self):
+        """Both complex rows switched off: the products take the generic path."""
+        off = lambda *args: False
+        return (override_kernel("matmul", self.backend, self.matmul_kernel, supports=off),
+                override_kernel("batched_matmul", self.backend, self.batched_kernel,
+                                supports=off))
 
     def setUp(self):
         self.rng = np.random.default_rng(20261015)
-        self.scope = jt.flag_scope(use_cuda=1, auto_mixed_precision_level=0)
+        self.scope = jt.flag_scope(use_cuda=self.use_cuda, auto_mixed_precision_level=0)
         self.scope.__enter__()
         self.addCleanup(self.scope.__exit__, None, None, None)
 
@@ -51,16 +57,15 @@ class TestCublasComplexMatmul(unittest.TestCase):
         raw = _sample(self.rng, shape, dtype)
         return raw, jt.array(raw, dtype=dtype)
 
-    def test_the_cublas_rows_take_one_shared_complex_dtype(self):
+    def test_the_rows_take_one_shared_complex_dtype(self):
         for dtype in _COMPLEX:
             with self.subTest(dtype=dtype):
                 a = jt.array(_sample(self.rng, (2, 3, 4), dtype), dtype=dtype)
                 b = jt.array(_sample(self.rng, (2, 4, 5), dtype), dtype=dtype)
                 self.assertIs(select_kernel("matmul", a[0], b[0], False, False),
-                              matrix._cublas_matmul)
+                              self.matmul_kernel)
                 self.assertIs(select_kernel("batched_matmul", a, b, False, False),
-                              matrix._cublas_batched_matmul)
-                self.assertTrue(matrix._cublas_can_take(a[0], b[0]))
+                              self.batched_kernel)
 
     def test_mixed_complex_pairs_stay_on_the_generic_path(self):
         """complex64 x float64 is as wide as complex64 x complex64; the relay
@@ -73,7 +78,7 @@ class TestCublasComplexMatmul(unittest.TestCase):
                     raw_b = _sample(self.rng, (4, 5), other)
                 b = jt.array(raw_b, dtype=other)
                 self.assertIsNot(select_kernel("matmul", a, b, False, False),
-                                 matrix._cublas_matmul)
+                                 self.matmul_kernel)
                 got = jt.matmul(a, b).numpy()
                 np.testing.assert_allclose(got, raw_a @ raw_b, rtol=1e-4, atol=1e-4)
 
@@ -89,8 +94,8 @@ class TestCublasComplexMatmul(unittest.TestCase):
                     jt.matmul(a, b).sync()
                     jt.matmul(ab, bb).sync()
                 names = " ".join(row[0] for row in report[1:])
-                self.assertIn("cublas_matmul", names)
-                self.assertIn("cublas_batched_matmul", names)
+                self.assertIn(self.matmul_name, names)
+                self.assertIn(self.batched_name, names)
 
     def test_forward_matches_numpy_for_every_caller_layout(self):
         for dtype in _COMPLEX:
@@ -125,6 +130,39 @@ class TestCublasComplexMatmul(unittest.TestCase):
                     self.assertEqual(got.dtype, np.dtype(dtype))
                     np.testing.assert_allclose(got, want, **tol)
 
+    def test_products_large_enough_to_be_split_across_threads(self):
+        """The CPU relay splits a product into row or column panels, or a
+        batch across threads, once it is past a small-work threshold; odd
+        extents leave a short last panel; tiny products bypass the library.
+        Every route must give numpy's answer, for every transpose combination."""
+        cases = [((37, 301), (301, 129)),   # columns are the longer side
+                 ((257, 65), (65, 33)),     # rows are the longer side
+                 ((3, 70, 50), (3, 50, 90)),  # fewer products than threads
+                 ((40, 33, 31), (40, 31, 35)),  # a product per thread
+                 # an inner dimension this short, or matrices this small,
+                 # take the direct loop rather than the library
+                 ((5, 8), (8, 3001)),
+                 ((301, 4), (4, 7)),
+                 ((500, 3, 4), (500, 4, 6))]
+        for dtype in _COMPLEX:
+            tol = _TOL[dtype]
+            for shape_a, shape_b in cases:
+                for ta in (False, True):
+                    for tb in (False, True):
+                        with self.subTest(dtype=dtype, a=shape_a, b=shape_b, ta=ta, tb=tb):
+                            raw_a = _sample(self.rng, shape_a, dtype)
+                            raw_b = _sample(self.rng, shape_b, dtype)
+                            # store the transposed layout and hand the view in
+                            sa = np.ascontiguousarray(np.swapaxes(raw_a, -1, -2)) if ta else raw_a
+                            sb = np.ascontiguousarray(np.swapaxes(raw_b, -1, -2)) if tb else raw_b
+                            a, b = jt.array(sa, dtype=dtype), jt.array(sb, dtype=dtype)
+                            if ta:
+                                a = a.transpose(*range(a.ndim - 2), a.ndim - 1, a.ndim - 2)
+                            if tb:
+                                b = b.transpose(*range(b.ndim - 2), b.ndim - 1, b.ndim - 2)
+                            np.testing.assert_allclose(jt.matmul(a, b).numpy(), raw_a @ raw_b,
+                                                       **tol)
+
     def _grads(self, a, b, g, ta, tb):
         lhs = a.transpose() if ta else a
         rhs = b.transpose() if tb else b
@@ -155,7 +193,7 @@ class TestCublasComplexMatmul(unittest.TestCase):
                         self.assertEqual(gb.dtype, np.dtype(dtype))
                         np.testing.assert_allclose(ga, want_a, **tol)
                         np.testing.assert_allclose(gb, want_b, **tol)
-                        first, second = _generic()
+                        first, second = self._generic()
                         with first, second:
                             gen_a, gen_b = self._grads(a, b, g, ta, tb)
                         np.testing.assert_allclose(ga, gen_a, **tol)
@@ -174,6 +212,64 @@ class TestCublasComplexMatmul(unittest.TestCase):
                     ga, raw_g @ np.swapaxes(raw_b.conj(), -1, -2), **tol)
                 np.testing.assert_allclose(
                     gb, np.swapaxes(raw_a.conj(), -1, -2) @ raw_g, **tol)
+
+
+class TestFindBlas(unittest.TestCase):
+    """Which CBLAS the CPU rows link, decided from the library's own symbols."""
+
+    def test_default_is_numpys_bundled_openblas(self):
+        from jittor.build import compile_extern
+        with mock.patch.dict(os.environ):
+            os.environ.pop("JT_BUILD_BLAS_LIB_PATH", None)
+            found, _ = compile_extern.find_blas()
+        self.assertIsNotNone(found)
+        path, cgemm, zgemm, ilp64, threads = found
+        self.assertTrue(cgemm.endswith("cblas_cgemm" + ("64_" if ilp64 else "")), found)
+        self.assertTrue(zgemm.endswith("cblas_zgemm" + ("64_" if ilp64 else "")), found)
+        # numpy's OpenBLAS has the thread controls the relays need to run it
+        # on Jittor's OpenMP team instead of a second pool.
+        self.assertIsNotNone(threads, found)
+
+    def test_an_explicit_library_without_cgemm_is_declined_with_a_reason(self):
+        from jittor.build import compile_extern
+        # A shared library that certainly loads and neither exports nor
+        # depends on a CBLAS (dependencies are searched too, which is what lets
+        # a wrapper such as conda's libcblas.so stand in for its backend).
+        import _ctypes
+        not_blas = _ctypes.__file__
+        with mock.patch.dict(os.environ, {"JT_BUILD_BLAS_LIB_PATH": not_blas}):
+            found, reasons = compile_extern.find_blas()
+        self.assertIsNone(found)
+        self.assertEqual(len(reasons), 1)
+        self.assertIn("exports no cblas_cgemm", reasons[0])
+
+
+class TestComplexRelaysCPU(_ComplexRelays, unittest.TestCase):
+    """CBLAS on CPU. Requires the library, which numpy's wheel provides."""
+
+    # Spelled out here, not only inherited: they are the reference routes
+    # `tests/structure/test_backend_grad_contract.py` names for BlasMatmulOp
+    # and BlasBatchedMatmulOp, and it finds a test by reading this class.
+    def test_gradients_are_torchs_and_agree_with_the_generic_path(self):
+        super().test_gradients_are_torchs_and_agree_with_the_generic_path()
+
+    def test_batched_gradients_are_torchs(self):
+        super().test_batched_gradients_are_torchs()
+
+
+@_test_preserve_policy(jt, 'cuda_allow_tf32')
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled,
+                 "CUDA is required")
+class TestComplexRelaysCUDA(_ComplexRelays, unittest.TestCase):
+    use_cuda = 1
+    backend = "cuda"
+    matmul_kernel = staticmethod(matrix._cublas_matmul)
+    batched_kernel = staticmethod(matrix._cublas_batched_matmul)
+    matmul_name, batched_name = "cublas_matmul", "cublas_batched_matmul"
+
+    def test_cublas_can_take_complex(self):
+        _, a = self._array((3, 4), "complex64")
+        self.assertTrue(matrix._cublas_can_take(a, a.transpose()))
 
 
 if __name__ == "__main__":

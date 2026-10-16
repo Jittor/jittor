@@ -171,6 +171,16 @@ BACKEND_GRAD_COVERAGE = (
     ("backends/cpu/libraries/mkl/mkl_matmul_op.cc", "MklMatmulOp",
      "tests/ops/test_matmul_higher_rank.py::TestMatmulHigherRankCpu::test_both_gradients",
      "cpu_formula"),
+    # The CBLAS complex rows (`setup_blas`): checked against the numpy
+    # formula dA = G op(B)^H, dB = op(A)^H G and against the generic path.
+    ("backends/cpu/libraries/blas/blas_matmul_op.cc", "BlasMatmulOp",
+     "tests/ops/test_complex_matmul_relays.py::TestComplexRelaysCPU::"
+     "test_gradients_are_torchs_and_agree_with_the_generic_path",
+     "cpu_formula"),
+    ("backends/cpu/libraries/blas/blas_batched_matmul_op.cc", "BlasBatchedMatmulOp",
+     "tests/ops/test_complex_matmul_relays.py::TestComplexRelaysCPU::"
+     "test_batched_gradients_are_torchs",
+     "cpu_formula"),
     ("backends/cpu/libraries/mkl/mkl_conv_op.cc", "MklConvOp",
      "tests/nn/test_onednn_conv_row.py::test_the_cpu_row_agrees_with_the_generic_path_gradients_included",
      "cpu_jittor"),

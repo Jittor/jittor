@@ -117,9 +117,9 @@ class TestComplex64Native(unittest.TestCase):
         both_devices(body)
 
     def test_matmul(self):
-        # On CPU complex matmul lowers to elementwise multiply + sum-reduce, both of
-        # which the native complex64 path implements; on CUDA it runs on cuBLAS's
-        # complex GEMM (tests/backends/cuda/test_cublas_complex_matmul.py). Lock both.
+        # Complex matmul runs on a GEMM library -- CBLAS on CPU, cuBLAS on CUDA
+        # (tests/ops/test_complex_matmul_relays.py) -- and falls back to multiply +
+        # sum-reduce without one. Lock the result on both devices.
         rng = np.random.RandomState(1)
         A = (rng.randn(3, 4) + 1j * rng.randn(3, 4)).astype("complex64")
         B = (rng.randn(4, 5) + 1j * rng.randn(4, 5)).astype("complex64")
@@ -133,8 +133,7 @@ class TestComplex64Native(unittest.TestCase):
             r = np.asarray(jt.matmul(jt.array(A), jt.array(B)).numpy())
             self.assertEqual(r.dtype.name, "complex64", f"matmul dtype {dev}")
             np.testing.assert_allclose(r, ref, atol=1e-4, rtol=1e-4, err_msg=f"matmul {dev}")
-            # Batched matmul (bmm) works on both devices: cublas_batched_matmul on CUDA,
-            # the reindex path (multiply + sum-reduce) on CPU.
+            # Batched matmul (bmm) works on both devices.
             rb = np.asarray(jt.matmul(jt.array(Ab), jt.array(Bb)).numpy())
             np.testing.assert_allclose(rb, refb, atol=1e-4, rtol=1e-4, err_msg=f"bmm {dev}")
         both_devices(body)

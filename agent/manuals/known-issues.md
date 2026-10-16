@@ -603,7 +603,9 @@ workaround.
   bounded per-shape plan cache, 32 plans / 64 MiB scratch).
 - Owner: CPU backend (oneDNN)
 - Symptom: convolution and matmul through oneDNN accept float32 only; other
-  dtypes take the generic kernels (declared, not silent). The plan cache replaced
+  dtypes take the generic kernels (declared, not silent), except complex64/
+  complex128 matmul, which has its own CBLAS row (`backends/cpu/libraries/blas`,
+  numpy's bundled OpenBLAS by default). The plan cache replaced
   the per-call engine/descriptor/primitive rebuild, but the lower per-call
   convolution overhead it was built for has never been measured against the old
   path. oneDNN no longer ships prebuilt v3 binaries, so verification needs a

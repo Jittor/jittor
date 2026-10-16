@@ -152,6 +152,12 @@ include backends/comm/nccl/ops/nccl_test_op.h
 include backends/comm/nccl/src/nccl_wrapper.cc
 include backends/corex/include/jittor_accelerator.h
 include backends/corex/runtime/corex_backend.cc
+include backends/cpu/libraries/blas/blas_batched_matmul_op.cc
+include backends/cpu/libraries/blas/blas_batched_matmul_op.h
+include backends/cpu/libraries/blas/blas_matmul_op.cc
+include backends/cpu/libraries/blas/blas_matmul_op.h
+include backends/cpu/libraries/blas/blas_runtime.cc
+include backends/cpu/libraries/blas/blas_runtime.h
 include backends/cpu/libraries/mkl/mkl_batched_matmul_op.cc
 include backends/cpu/libraries/mkl/mkl_batched_matmul_op.h
 include backends/cpu/libraries/mkl/mkl_capabilities.cc

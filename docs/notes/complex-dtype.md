@@ -23,10 +23,15 @@ CPU 与 CUDA 上有维护测试覆盖的部分（`complex64`、`complex128` 均�
 - **归约与线代**：`sum`、`mean`、`abs`、`conj`、二维与批量矩阵乘、
   `inv`/`svd`/`svdvals`/`qr`/`eigh`/`pinv`（经 `nn.ComplexNumber` 桥接，两种精度
   均验证）；
-  CUDA 上同 dtype 的二维与批量矩阵乘（含 `bmm`、`nn.tensordot`）走 cuBLAS 复数
-  GEMM（`CUDA_C_32F`/`CUDA_C_64F`），反向按 dA = G·op(B)ᴴ、dB = op(A)ᴴ·G；CPU 上
-  仍是通用的广播乘加 kernel，没有复数 BLAS
-  （[测试](../../tests/backends/cuda/test_cublas_complex_matmul.py)）；
+  同 dtype 的二维与批量矩阵乘（含 `bmm`、`nn.tensordot`）在 CUDA 上走 cuBLAS 复数
+  GEMM（`CUDA_C_32F`/`CUDA_C_64F`），在 CPU 上走 CBLAS `cgemm`/`zgemm`（默认链接
+  numpy wheel 自带的 OpenBLAS，可用 `JT_BUILD_BLAS_LIB_PATH` 指定其他库；找不到时
+  告警并退回通用广播乘加 kernel），反向按 dA = G·op(B)ᴴ、dB = op(A)ᴴ·G
+  （[测试](../../tests/ops/test_complex_matmul_relays.py)）。CPU 上 BLAS 在 Jittor
+  自己的 OpenMP 线程上运行，调用期间把 OpenBLAS 限为单线程，避免两个线程池互相
+  忙等抢核；内维 ≤ 16 或很小的乘积不调用 BLAS，直接在 OpenMP 上计算。进程内第一次
+  走 BLAS 的乘积会让 OpenBLAS 惰性创建线程池，新线程忙等约 0.1–0.15 s，这段时间内的
+  CPU kernel 会变慢，之后不再出现；
 - **超越函数**：`exp`、`log`、`sin`、`cos`、`sqrt`；
 - **实部虚部视图**：`.real`、`.imag`、`.angle()`、`view_as_real`、
   `view_as_complex`、`polar`（按输入分量宽度选择 complex64/complex128）；

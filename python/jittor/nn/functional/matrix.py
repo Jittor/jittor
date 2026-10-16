@@ -69,12 +69,17 @@ def _broadcast_batch_dims(a, b):
 #: | cublas_batched_matmul     | ROCm*  | both operands the same float dtype      |
 #: | mkl_matmul (2-D)          | CPU    | both operands float32, both dense       |
 #: | mkl_batched_matmul        | CPU    | both operands float32                   |
-#: | broadcast * mul + reduce  | any    | everything else (CPU complex included)  |
+#: | blas_matmul (2-D)         | CPU    | both operands the same complex dtype    |
+#: | blas_batched_matmul       | CPU    | both operands the same complex dtype    |
+#: | broadcast * mul + reduce  | any    | everything else                         |
 #:
 #: Complex on CUDA is ``cublasGemmEx`` with ``CUDA_C_32F``/``CUDA_C_64F``: the
 #: generic row it replaces ran a complex64 2048-cube product 43x slower than
 #: torch's cgemm. ``ROCm*`` is the ``rocm_legacy`` and ``corex_legacy`` rows,
-#: which keep float only until complex is verified on that hardware.
+#: which keep float only until complex is verified on that hardware. Complex on
+#: CPU is CBLAS ``cgemm``/``zgemm`` -- numpy's bundled OpenBLAS unless
+#: ``JT_BUILD_BLAS_LIB_PATH`` names another (``setup_blas`` in
+#: ``build/compile_extern.py``); the generic row was 110x slower than torch.
 #:
 #: Four call sites used to spell the cuBLAS row four different ways -- see
 #: ``_cublas_can_take``.
@@ -225,6 +230,37 @@ def _supports_mkl_batched(a, b, trans_a=False, trans_b=False):
 def _mkl_batched_matmul(a, b, trans_a=False, trans_b=False):
     a, b = _broadcast_batch_dims(a, b)
     return get_library_ops("mkl").mkl_batched_matmul(a, b, trans_a, trans_b)
+
+
+def _same_complex_dtype(a, b):
+    return a.dtype == b.dtype and a.dtype.is_complex()
+
+
+def _supports_blas(a, b, trans_a=False, trans_b=False):
+    """CBLAS's 2-D relay: one complex dtype, rank 2.
+
+    Rank is the relay's own requirement, as for oneDNN: ``BlasMatmulOp``
+    asserts rank 2, so a rank>2 operand is declined here and its caller takes
+    the reshape route back to a rank-2 product.
+    """
+    if not _same_complex_dtype(a, b) or len(a.shape) != 2 or len(b.shape) != 2:
+        return False
+    return get_library_ops("blas", load=True) is not None
+
+
+def _blas_matmul(a, b, trans_a=False, trans_b=False):
+    return get_library_ops("blas").blas_matmul(a, b, trans_a, trans_b)
+
+
+def _supports_blas_batched(a, b, trans_a=False, trans_b=False):
+    if not _same_complex_dtype(a, b):
+        return False
+    return get_library_ops("blas", load=True) is not None
+
+
+def _blas_batched_matmul(a, b, trans_a=False, trans_b=False):
+    a, b = _broadcast_batch_dims(a, b)
+    return get_library_ops("blas").blas_batched_matmul(a, b, trans_a, trans_b)
 
 
 def _operand(name, x):
@@ -492,8 +528,8 @@ def _transpose_base_last2(x):
 def _mkl_batched_matmul_is_available(a, b):
     """The CPU row of the table above: oneDNN's batched relay is float32-only.
 
-    Anything else on CPU -- float64, float16, and the complex dtypes the native
-    reindex kernels do support -- keeps the generic path.
+    float64 and float16 keep the generic path; the complex dtypes have their
+    own CBLAS row (``_blas_batched_matmul``).
     """
     return select_kernel("batched_matmul", a, b, False, False) is _mkl_batched_matmul
 
@@ -645,6 +681,11 @@ for _backend in ("cuda", "rocm_legacy", "corex_legacy"):
 register_kernel("matmul", "cpu", _mkl_matmul, dtypes={"float32"}, supports=_supports_mkl)
 register_kernel(
     "batched_matmul", "cpu", _mkl_batched_matmul, dtypes={"float32"}, supports=_supports_mkl_batched
+)
+register_kernel("matmul", "cpu", _blas_matmul, dtypes=_COMPLEX_DTYPES, supports=_supports_blas)
+register_kernel(
+    "batched_matmul", "cpu", _blas_batched_matmul, dtypes=_COMPLEX_DTYPES,
+    supports=_supports_blas_batched,
 )
 del _backend, _complex, _dtypes, _supports
 
