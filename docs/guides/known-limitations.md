@@ -6,8 +6,8 @@
 ——**总账才是唯一真源**，有复现命令、测量条件、已被推翻的猜想和当前进展；这里只给
 一句话和它的影响。
 
-只收**开口**项。已修的条目留在总账里（它们记着怎么被发现的）。纯测试基础设施、
-门禁耗时与静态检查覆盖这类条目不在这里。
+只收**开口**项。已修条目从总账移除，修复证据保存在结果报告和 Git 历史中。
+纯测试基础设施、门禁耗时与静态检查覆盖这类条目不在这里。
 
 ## 数值与语义
 
@@ -47,7 +47,6 @@
 | `KI-COMPAT-002` | `torch.ops.aten` 没有原生算子面 | `import vllm_omni` 到不了头 |
 | `KI-COMPAT-003` | nested tensor 不是 `Tensor` | `isinstance(torch.nested.as_nested_tensor(...), torch.Tensor)` 为假 |
 | `KI-COMPAT-004` | 工厂函数的结果不是反向叶子 | `torch.ones(3, requires_grad=True).is_leaf` 为假；梯度本身正确 |
-| `KI-COMPAT-006` | `load_state_dict` 共享源张量，原地优化器会同时改两个模型 | CUDA 上静默：EMA 副本一类的第二个模型会被一起更新 |
 | `KI-COMPAT-007` | `no_grad` 下 `w.copy_(x)` 且 `x` 需要梯度时，`w` 的梯度丢失 | 反向后 `w.grad` 仍是 `None` |
 | `KI-COMPAT-008` | `torch.optim.SGD` 不接受 `foreach=` / `fused=` | 构造时 `TypeError`，不是静默忽略 |
 | `KI-AUTOGRAD-003` | `register_hook` 让接收方误报自己的驻留设备 | 只影响自省，不影响计算 |
