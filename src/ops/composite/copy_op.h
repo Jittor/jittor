@@ -12,7 +12,10 @@
 namespace jittor {
 
 struct CopyOp : Op {
+    static constexpr bool accepts_storage_strides = true;
+    bool preserve_format = false;
     CopyOp(Var* x);
+    CopyOp(Var* x, bool preserve_format);
     
     const char* name() const override { return "copy"; }
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;

@@ -1043,6 +1043,11 @@ from .shape_api import (
     _looks_like_dtype,
     _norm_reduce_kw,
     _torch_reshape,
+    _torch_permute,
+    _torch_transpose,
+    _torch_t,
+    _torch_view,
+    _torch_view_base,
     _torch_size,
     _torch_sum,
     _torch_var_sum,
@@ -1059,6 +1064,10 @@ def install_methods(ctx):
     # which breaks torch idioms like `(n,) + data.size()[1:]` (mmdet's unmap()).
     _Size = getattr(g, "Size", tuple)
     Var.size = _torch_size
+    Var.permute = g.permute = _torch_permute
+    Var.transpose = g.transpose = _torch_transpose
+    Var.t = g.t = _torch_t
+    Var._base = property(_torch_view_base)
 
     # jittor's core reshape/view reject a torch.Size (a tuple SUBCLASS) -> normalize
     # a single Size/tuple-subclass arg to a plain tuple so `x.reshape(other.size())`
@@ -1067,13 +1076,17 @@ def install_methods(ctx):
     _orig_reshape = Var.reshape
     _np_view_of = None
     Var.reshape = _torch_reshape
-    Var.view = _torch_reshape
+    Var.view = _torch_view
     # The native view builds what jittor's own reshape does, so only while
     # that is what `_torch_reshape` would delegate to.
     from . import shape_api as _shape_api
     from jittor._core import var as _native_var
     _shape_api._FAST_VIEW = (getattr(jt.core, "_fast_view", None)
                              if _orig_reshape is _native_var.reshape else None)
+    if _orig_reshape is _native_var.reshape:
+        # Torch first tries a genuine strided view; the wrapper below copies
+        # only when the native view explicitly rejects this target shape.
+        _orig_reshape = _native_var.view
 
     # Keep the existing Torch-facing promotion for narrow integer sums
     # (yolox/rtmdet SimOTA assigners do mask.sum() on a uint8 match matrix).

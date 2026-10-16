@@ -276,6 +276,7 @@ def make_tensor_type(backend):
         "__slots__": ("__weakref__",),
         "_frontend_backend": backend,
         "_frontend_autograd_policy": 3,
+        "_frontend_view_base_ownership": True,
         "_frontend_precision_policy": classmethod(_frontend_precision_policy),
         "clone": clone,
         **tensor_object_properties(),
@@ -295,11 +296,11 @@ def clone(input, *, memory_format=None):
     with tensor_frontend(target.Var, like=input):
         if input.placement_backend < 0 and backend.flags.use_cuda and _var_is_cpu_resident(input):
             with backend.flag_scope(use_cuda=0):
-                result = backend.Var.copy(input)
+                result = backend.Var.copy(input, memory_format != "contiguous_format")
                 result.sync()
                 setattr(result, "_jittor_torch_force_cpu", True)
             return result
-        return backend.Var.copy(input)
+        return backend.Var.copy(input, memory_format != "contiguous_format")
 
 
 def parameter_new(cls, data=None, requires_grad=True):

@@ -540,13 +540,15 @@ static auto make_transpose_view = op_constructor<VarPtr, Var*, NanoVector>("tran
 
 static auto make_storage_reshape = op_constructor<VarPtr, Var*, NanoVector>("reshape");
 static auto make_storage_broadcast = op_constructor<VarPtr, Var*, NanoVector, NanoVector>("broadcast_to");
-static VarPtr apply_view_step(Var* value, const VarViewStep& step) {
+static VarPtr apply_view_step(Var* value, const VarViewStep& step,
+                             bool physical = false) {
     if (step.kind == VarViewStep::Expand)
         return make_storage_broadcast(value, NanoVector(step.axes), NanoVector());
     if (step.kind == VarViewStep::Reshape)
         return make_storage_reshape(value, NanoVector(step.axes));
     if (step.kind == VarViewStep::Transpose)
-        return make_transpose_view(value, NanoVector(step.axes));
+        return physical ? storage_view_transpose(value, NanoVector(step.axes))
+                        : make_transpose_view(value, NanoVector(step.axes));
     return make_getitem(value, VarSlices(step.slices));
 }
 
@@ -571,11 +573,51 @@ static void unlink_view_owner(VarView* view) {
     view->prev = view->next = nullptr;
 }
 
+VarView::~VarView() { Py_XDECREF(base_owner); }
+
+void VarHolder::bind_python_owner(PyObject* owner, bool retain_view_base) {
+    python_owner = owner;
+    retain_view_base_owner = retain_view_base;
+    retain_python_view_base();
+}
+
+void VarHolder::retain_python_view_base() {
+    if (!retain_view_base_owner || !view || view->base_owner || !view->base)
+        return;
+    auto* root = view->base;
+    // A .data replacement can orphan a root's writeback while its public
+    // provenance still names the original root object.
+    PyObject* owner = root->view && root->view->base_owner
+        ? root->view->base_owner : root->python_owner;
+    if (!owner || owner == python_owner) return;
+    Py_INCREF(owner);
+    view->base_owner = owner;
+}
+
+PyObject* VarHolder::collectable_view_base() {
+    return view ? view->base_owner : nullptr;
+}
+
+void VarHolder::clear_collectable_view_base() {
+    if (view) Py_CLEAR(view->base_owner);
+}
+
+PyObject* VarHolder::view_base_object() {
+    PyObject* owner = collectable_view_base();
+    if (!owner && view && view->base) owner = view->base->python_owner;
+    if (!owner) owner = Py_None;
+    Py_INCREF(owner);
+    return owner;
+}
+
 void VarHolder::drop_view() {
     if (!view) return;
-    unlink_view_owner(view);
-    delete view;
+    auto* previous = view;
     view = nullptr;
+    unlink_view_owner(previous);
+    // Releasing a retained Python root can run user finalizers. They must
+    // observe the detached record, never a record currently being destroyed.
+    delete previous;
 }
 
 static bool shares_physical_storage(Var* value, Var* base) {
@@ -721,6 +763,7 @@ void VarHolder::attach_view(VarHolder* base, VarViewStep final_step) {
     view = new VarView{root, this, move(steps), nullptr, root->views, physical};
     if (root->views) root->views->prev = view;
     root->views = view;
+    retain_python_view_base();
 }
 
 VarHolder* VarHolder::set_transpose_view_of(VarHolder* base, NanoVector axes) {
@@ -762,7 +805,7 @@ VarHolder* VarHolder::set_storage_view_of(VarHolder* base, bool expand) {
 }
 
 VarHolder* VarHolder::storage_permute(NanoVector axes) {
-    return new VarHolder(storage_view_transpose(var, axes));
+    return new VarHolder(storage_view_transpose(grad_input(), axes));
 }
 
 VarHolder* VarHolder::transpose_view_base() {
@@ -898,7 +941,8 @@ void VarHolder::refresh_transpose_views(bool preserve_grad_policy, VarView* only
                 fits = false;
                 break;
             }
-            VarPtr next_value = apply_view_step(value.ptr, step);
+            VarPtr next_value = apply_view_step(value.ptr, step,
+                                                record->physical_storage);
             physical = physical && shares_physical_storage(next_value.ptr, value.ptr);
             value = move(next_value);
         }
@@ -1219,6 +1263,17 @@ void VarHolder::observe_alias_history() {
     // while its source is frozen. Preserve the pending epoch: activating the
     // source later can then rebase this actual write, unlike an untouched view.
     if (!state->recorded_view_history && !state->source->requires_grad()) return;
+    if (view && view->base && view->physical_storage
+            && state->recorded_view_history
+            && state->source_edge_enabled == view->base->get_requires_grad()
+            && shares_physical_storage(var, view->base->var)) {
+        // An imperative store changed bytes and the shared version, not this
+        // physical view's allocation or recorded source policy. Keep its real
+        // producer and materialized buffer. Rebuilding it here would discard
+        // the original AD owner merely because somebody inspected is_leaf.
+        state->creation_version = *state->version;
+        return;
+    }
     if (view && view->base
             && (state->recorded_view_history || state->source->requires_grad()))
         view->base->refresh_transpose_views(true, view);

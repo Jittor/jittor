@@ -10,6 +10,26 @@ namespace jittor {
 
 extern PyHeapTypeObject PyjtVarHolder;
 
+void bind_python_tensor_owner(PyObject* object) {
+    bool retain = false;
+    if (Py_TYPE(object) != &PyjtVarHolder.ht_type) {
+        PyObjHolder requested;
+        requested.obj = PyObject_GetAttrString(
+            reinterpret_cast<PyObject*>(Py_TYPE(object)),
+            "_frontend_view_base_ownership");
+        if (!requested.obj) {
+            if (!PyErr_ExceptionMatches(PyExc_AttributeError))
+                throw std::runtime_error("cannot read frontend view ownership");
+            PyErr_Clear();
+        } else {
+            if (!PyBool_Check(requested.obj))
+                throw std::runtime_error("frontend view ownership must be a bool");
+            retain = requested.obj == Py_True;
+        }
+    }
+    GET_RAW_PTR(VarHolder, object)->bind_python_owner(object, retain);
+}
+
 namespace {
 // One shared symbol owner across the core and all loaded JIT extensions.
 // Access occurs with the GIL held, just like the Python conversion boundary.
