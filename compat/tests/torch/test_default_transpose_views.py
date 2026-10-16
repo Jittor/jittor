@@ -318,3 +318,109 @@ def test_fast_view_consumes_actual_history_at_operation_entry(
         assert gx is None
     np.testing.assert_array_equal(_array(physical(gy)), _array(weights).reshape(2, 3))
     np.testing.assert_array_equal(_array(physical(gz)), _array(weights))
+
+
+@pytest.mark.parametrize('device', ['cpu', 'cuda'])
+@pytest.mark.parametrize('shape_form', ['integer', 'tuple', 'list', 'named'])
+def test_incompatible_view_rejects_and_reshape_owns_its_actual_copy(device, shape_form):
+    x = source(device)
+    y = x.t()
+
+    def reshape(method):
+        if shape_form == 'named':
+            return getattr(y, method)(**{'size' if method == 'view' else 'shape': (6,)})
+        shape = 6 if shape_form == 'integer' else (6,) if shape_form == 'tuple' else [6]
+        return getattr(y, method)(shape)
+
+    with pytest.raises(RuntimeError, match='size.*stride|storage strides'):
+        reshape('view')
+    assert y._base is x and y.data_ptr() == x.data_ptr()
+    z = reshape('reshape')
+    assert not z._is_view() and z._base is None
+    assert z.data_ptr() != x.data_ptr() and not z.is_leaf
+    np.testing.assert_array_equal(_array(physical(z)), [1., 4., 2., 5., 3., 6.])
+    gradient, = torch.autograd.grad((z * z).sum(), (x,), create_graph=True)
+    np.testing.assert_array_equal(_array(physical(gradient)), _array(x) * 2)
+    second, = torch.autograd.grad(gradient.sum(), (x,))
+    np.testing.assert_array_equal(_array(physical(second)), np.full((2, 3), 2.))
+    with torch.no_grad():
+        source_alias = x.view(-1)
+    alias = z.view(2, 3)
+    assert alias._base is z
+    with torch.no_grad():
+        z.fill_(9)
+    # An unrelated copy write must not invalidate a no-grad source view.
+    assert source_alias.is_leaf and source_alias.grad_fn is None
+    np.testing.assert_array_equal(_array(physical(alias)), np.full((2, 3), 9.))
+    np.testing.assert_array_equal(_array(physical(x)), [[1., 2., 3.], [4., 5., 6.]])
+
+
+@pytest.mark.parametrize('device', ['cpu', 'cuda'])
+@pytest.mark.parametrize('reactivate_before_copy', [False, True])
+def test_reshape_copy_keeps_frozen_source_and_real_intermediate_gradient(
+        device, reactivate_before_copy):
+    x = source(device)
+    y = x.t()
+    x.requires_grad_(False)
+    with torch.no_grad():
+        x.fill_(7)
+    if reactivate_before_copy:
+        x.requires_grad_(True)
+    z = y.reshape(-1)
+    if not reactivate_before_copy:
+        x.requires_grad_(True)
+    assert not z._is_view() and z._base is None and z.data_ptr() != x.data_ptr()
+    weights = torch.arange(1, 7, device=device, dtype=torch.float32)
+    gx, gy, gz = torch.autograd.grad((z * weights).sum(), (x, y, z), allow_unused=True)
+    expected_y = _array(weights).reshape(3, 2)
+    if reactivate_before_copy:
+        np.testing.assert_array_equal(_array(physical(gx)), expected_y.T)
+    else:
+        assert gx is None
+    np.testing.assert_array_equal(_array(physical(gy)), expected_y)
+    np.testing.assert_array_equal(_array(physical(gz)), _array(weights))
+
+
+@pytest.mark.parametrize('device', ['cpu', 'cuda'])
+@pytest.mark.parametrize('creation_no_grad', [False, True])
+def test_reshape_copy_records_only_actual_grad_mode(device, creation_no_grad):
+    x = source(device)
+    y = x.t()
+    with torch.set_grad_enabled(not creation_no_grad):
+        z = y.reshape(-1)
+    assert not z._is_view() and z._base is None
+    assert z.requires_grad != creation_no_grad
+    assert z.is_leaf == creation_no_grad
+    if creation_no_grad:
+        z.requires_grad_(True)
+    gx, gz = torch.autograd.grad((z * 3).sum(), (x, z), allow_unused=True)
+    if creation_no_grad:
+        assert gx is None
+    else:
+        np.testing.assert_array_equal(_array(physical(gx)), np.full((2, 3), 3.))
+    np.testing.assert_array_equal(_array(physical(gz)), np.full((6,), 3.))
+
+
+@pytest.mark.parametrize('device', ['cpu', 'cuda'])
+@pytest.mark.parametrize('attempt_invalid_view', [False, True])
+@pytest.mark.parametrize('named_shape', [False, True])
+def test_invalid_view_observes_frozen_history_before_rejection(
+        device, attempt_invalid_view, named_shape):
+    x = source(device)
+    y = x.t()
+    x.requires_grad_(False)
+    with torch.no_grad():
+        x.fill_(7)
+    if attempt_invalid_view:
+        with pytest.raises(RuntimeError, match='size.*stride|storage strides'):
+            y.view(size=(6,)) if named_shape else y.view(-1)
+    x.requires_grad_(True)
+    weights = torch.arange(1, 7, device=device, dtype=torch.float32).reshape(y.shape)
+    gx, gy = torch.autograd.grad((y * weights).sum(), (x, y), allow_unused=True)
+    # Genuine Torch observes the frozen edge before rejecting the shape.
+    # Without an intervening real operation, reactivation preserves that edge.
+    if attempt_invalid_view:
+        assert gx is None
+    else:
+        np.testing.assert_array_equal(_array(physical(gx)), _array(weights).T)
+    np.testing.assert_array_equal(_array(physical(gy)), _array(weights))

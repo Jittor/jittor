@@ -116,6 +116,14 @@ _FAST_VIEW = None
 
 
 def _torch_reshape(self, *shape, **_kw):
+    return _reshape_or_view(self, shape, _kw, allow_copy=True)
+
+
+def _torch_view(self, *shape, **_kw):
+    return _reshape_or_view(self, shape, _kw, allow_copy=False)
+
+
+def _reshape_or_view(self, shape, _kw, *, allow_copy):
     if not _kw and _FAST_VIEW is not None:
         out = _FAST_VIEW(self, shape)
         if out is not None:
@@ -149,9 +157,16 @@ def _torch_reshape(self, *shape, **_kw):
         # native reshape implements only the view half, so a non-contiguous
         # input -- a permuted tensor, or the transposed layout `repeat` builds
         # -- has to be materialized before the view can be taken.
-        if "call contiguous() first" not in str(error):
+        if not allow_copy or "call contiguous() first" not in str(error):
             raise
-    return _orig_reshape(self.contiguous(), *shape)
+    # This allocation is a copy boundary, not a public view of a hidden
+    # Python temporary. Build the same native reshape producer directly;
+    # the graph owns the contiguous input and its real backward edge.
+    target = shape
+    if len(target) == 1 and isinstance(target[0], (tuple, list, jt.NanoVector)):
+        target = target[0]
+    target = tuple(int(s.item()) if isinstance(s, jt.Var) else int(s) for s in target)
+    return jt.ops.reshape(self.contiguous(), target)
 
 
 def _norm_reduce_kw(a, k):

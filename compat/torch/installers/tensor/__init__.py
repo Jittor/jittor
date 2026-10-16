@@ -1046,6 +1046,7 @@ from .shape_api import (
     _torch_permute,
     _torch_transpose,
     _torch_t,
+    _torch_view,
     _torch_view_base,
     _torch_size,
     _torch_sum,
@@ -1075,7 +1076,7 @@ def install_methods(ctx):
     _orig_reshape = Var.reshape
     _np_view_of = None
     Var.reshape = _torch_reshape
-    Var.view = _torch_reshape
+    Var.view = _torch_view
     # The native view builds what jittor's own reshape does, so only while
     # that is what `_torch_reshape` would delegate to.
     from . import shape_api as _shape_api
