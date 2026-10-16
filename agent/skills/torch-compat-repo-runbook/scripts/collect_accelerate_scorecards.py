@@ -106,6 +106,53 @@ def collect(directory, source, baseline, report, command, output):
     return records
 
 
+def require_complete_cpu(records, admission):
+    """Require the unchanged full fresh CPU protocol after common admission."""
+    from _accelerate_fresh_scorecard import protocol_spec
+    from _accelerate_scorecard import require
+
+    require(len(records) == 1 and len(admission.get('accepted', [])) == 1
+            and not admission.get('blocked') and not admission.get('rejected'),
+            'Complete CPU nightly needs exactly one accepted record, without blocked/rejected rows')
+    row = records[0]
+    require(row.get('repo') == 'accelerate' and row.get('device') == 'cpu'
+            and row.get('protocol') == protocol_spec(1, 'no')
+            and row.get('status') == 'passed' and row.get('level') == 3
+            and admission['accepted'][0].get('verified_level') == 3,
+            'Complete CPU nightly requires the original world-one fresh-process L3 protocol')
+    numeric = row.get('numerics', {})
+    require(numeric.get('passed') is True and numeric.get('finite') is True
+            and numeric.get('checked_tensors') == 438 and numeric.get('missing_tensors') == []
+            and numeric.get('parameter_gradients') == {'requested': 28, 'checked': 28}
+            and numeric.get('input_gradients') == {'requested': 14, 'checked': 14}
+            and numeric.get('atol') == 2e-6 and numeric.get('rtol') == 2e-5,
+            'Complete CPU nightly requires all 438 original arrays and full gradients/budget')
+    require(row.get('training') == {'steps': 5, 'loss_trajectory_passed': True,
+                                     'parameter_trajectory_passed': True}
+            and row.get('own_continuation') == {'model_optimizer_exact': True, 'rng_exact': True,
+                                              'trajectory_exact': True}
+            and row.get('fresh_process') == {'distinct_producer_consumer': True, 'producer_terminated': True,
+                                            'checkpoint_files_immutable': True, 'full_rng_state_exact': True,
+                                            'scheduler_exact': True},
+            'Complete CPU nightly requires full fresh-object trajectories, RNG and scheduler restoration')
+    roles = {item['role']: item for item in row['evidence']['artifacts']}
+    pids = set()
+    for runtime in ('reference', 'candidate'):
+        for scenario in ('base', 'perturb'):
+            for phase in ('produce', 'consume'):
+                role = '%s-%s-rank0-%s-metadata' % (runtime, scenario, phase)
+                require(role in roles, 'Missing complete CPU worker phase: ' + role)
+                artifact = roles[role]
+                path = Path(artifact['path'])
+                require(path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest() == artifact['sha256'],
+                        'Complete CPU phase artifact changed: ' + role)
+                value = json.loads(path.read_text())
+                pid = value.get('interpreter', {}).get('pid')
+                require(type(pid) is int and pid > 0 and pid not in pids,
+                        'Complete CPU nightly requires eight distinct actual worker PIDs')
+                pids.add(pid)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run', type=Path, action='append', required=True)
@@ -114,6 +161,8 @@ def main():
     parser.add_argument('--report', required=True)
     parser.add_argument('--command', required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--require-complete-cpu', action='store_true',
+                        help='Require the full unchanged CPU fresh-process nightly protocol')
     args = parser.parse_args()
     if git(ROOT, 'rev-parse', args.baseline + '^{commit}') != args.baseline:
         parser.error('Expected an existing full measurement source commit')
@@ -125,6 +174,8 @@ def main():
     write_json(args.output / 'records.json', {'schema_version': 2, 'records': rows})
     value = scorecard({'accelerate': source}, rows, args.baseline)
     write_json(args.output / 'scorecard.json', value)
+    if args.require_complete_cpu:
+        require_complete_cpu(rows, value)
     print(json.dumps({'accepted': len(value['accepted']), 'rejected': value['rejected'], 'protocols': value.get('protocols', [])}))
     return int(bool(value['rejected']))
 

@@ -5,6 +5,7 @@ successful own-runtime checkpoint assertion. Existing registry rows never use
 this path. Tolerances are the original checkpoint oracle budget.
 """
 
+import ast
 import hashlib
 import json
 import math
@@ -32,6 +33,21 @@ def measurement_sources(baseline, fresh=False):
         if subprocess.check_output(['git', '-C', str(ROOT), 'ls-tree', '--name-only', baseline,
                                     '--', platform_helper], stderr=subprocess.PIPE).strip():
             paths += (platform_helper,)
+        # The measured instrumentation declares its actual control closure.
+        # Older packets retain their exact original map without backfilling.
+        protocol = subprocess.check_output(['git', '-C', str(ROOT), 'show',
+                                            baseline + ':compat/tests/torch/_accelerate_protocol.py'],
+                                           stderr=subprocess.PIPE)
+        declarations = [node.value for node in ast.parse(protocol).body if isinstance(node, ast.Assign)
+                        and any(isinstance(target, ast.Name) and target.id == 'CONTROL_SOURCE_FILES'
+                                for target in node.targets)]
+        if declarations:
+            require(len(declarations) == 1, 'Ambiguous measured control source closure')
+            controls = ast.literal_eval(declarations[0])
+            require(isinstance(controls, tuple) and len(controls) == len(set(controls))
+                    and all(isinstance(path, str) and path for path in controls),
+                    'Invalid measured control source closure')
+            paths += controls
         return {path: hashlib.sha256(subprocess.check_output(
             ['git', '-C', str(ROOT), 'show', baseline + ':' + path], stderr=subprocess.PIPE)).hexdigest()
                 for path in paths}

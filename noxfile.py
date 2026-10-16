@@ -2269,15 +2269,33 @@ def ecosystem_accelerate(session):
     device = os.environ.get("JITTOR_TEST_DEVICES", "cpu").strip()
     if not oracle or not checkout or device not in ("cpu", "cuda"):
         session.error("Accelerate needs REAL_TORCH_PYTHON, JITTOR_ACCELERATE_CHECKOUT and exactly cpu or cuda")
+    complete_cpu = os.environ.get("JITTOR_ACCELERATE_COMPLETE_CPU") == "1"
+    if complete_cpu and (device != "cpu" or session.posargs):
+        session.error("Complete CPU nightly protocol is mandatory; no device or protocol overrides")
+    output = NOX_STATE_ROOT / "ecosystem-accelerate" / device
+    evidence_dir = os.environ.get("JITTOR_ACCELERATE_EVIDENCE_DIR", "").strip()
+    if evidence_dir:
+        output = Path(evidence_dir)
     arguments = ["--fresh-process", "--device", device, "--jittor-python", python, "--oracle-python", oracle,
-                 "--upstream", checkout, "--output", str(NOX_STATE_ROOT / "ecosystem-accelerate" / device)]
+                 "--upstream", checkout, "--output", str(output)]
+    if complete_cpu:
+        arguments += ["--cache-root", str(_root / "benchmark-cache")]
     wheel = os.environ.get("JITTOR_ACCELERATE_WHEEL", "").strip()
     if wheel:
         arguments += ["--wheel", wheel]
     if device == "cuda":
         arguments += ["--devices", os.environ.get("CUDA_VISIBLE_DEVICES", "")]
     _set_hardware_python_config(session, python, env)
+    if complete_cpu:
+        env.update(JITTOR_TORCH_SHIM="0", PYTHONPATH="")
     session.run(python, "tools/run_accelerate_gate.py", *arguments, *session.posargs, external=True, env=env)
+    if complete_cpu:
+        baseline = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True).strip()
+        session.run(python, "agent/skills/torch-compat-repo-runbook/scripts/collect_accelerate_scorecards.py",
+                    "--run", str(output), "--upstream", checkout, "--baseline", baseline,
+                    "--report", "docs/results/2026-10-16-accelerate-maintained-cpu-nightly.md",
+                    "--command", "nox -s ecosystem_accelerate (JITTOR_ACCELERATE_COMPLETE_CPU=1)",
+                    "--output", str(output / "scorecard"), "--require-complete-cpu", external=True, env=env)
 
 
 @nox.session(python=False)

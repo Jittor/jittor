@@ -61,7 +61,7 @@ def test_full_profile_keeps_original_numeric_dependencies_and_actual_pip_receipt
              and isinstance(condition.ops[0], ast.NotIn)]
     assert len(skips) == 1
     assert set(ast.literal_eval(skips[0].comparators[0])) == {
-        'openmmlab', 'diffusers', 'metric_tensordict'}
+        'openmmlab', 'diffusers', 'metric_tensordict', 'accelerate'}
 
 
 @pytest.mark.parametrize('valid', (True, False))

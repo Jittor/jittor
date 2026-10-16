@@ -17,6 +17,9 @@ import uuid
 
 
 ROOT = Path(__file__).resolve().parents[3]
+CONTROL_SOURCE_FILES = ('agent/skills/torch-compat-repo-runbook/scripts/collect_accelerate_scorecards.py',
+                        'noxfile.py', 'tools/provision_ecosystem_nightly.py',
+                        'compat/torch/installers/nn/module_methods.py')
 
 
 def digest(path):
@@ -195,6 +198,7 @@ class Capture:
                          'agent/skills/torch-compat-repo-runbook/scripts/component_measure.py',
                          'compat/tests/torch/_ecosystem_runner.py',
                         'agent/skills/torch-compat-repo-runbook/scripts/_runtime_platform.py')
+        source_files += CONTROL_SOURCE_FILES
         metadata = {'schema_version': 1, 'case': self.case, 'runtime': 'jittor' if shim else 'torch',
                     'jittor_commit': command('git', '-C', str(ROOT), 'rev-parse', 'HEAD'),
                     'upstream': self.source['upstream'], 'source_descriptor': self.source,

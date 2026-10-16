@@ -194,6 +194,8 @@ def test_protocol_does_not_bypass_registry_or_protocol_identity(protocol, change
     lambda value: value.update(jittor_commit='e' * 40),
     lambda value: value.update(fallback_count=1),
     lambda value: value['measurement_source_sha256'].update({'0': 'e' * 64}),
+    lambda value: value['measurement_source_sha256'].pop('0'),
+    lambda value: value['measurement_source_sha256'].update({'unbound-control': 'd' * 64}),
     lambda value: value['downstream_distribution'].pop('installed_files_sha256'),
     lambda value: value['downstream_distribution']['source_sha256'].update({'src/accelerate/__init__.py': 'e' * 64}),
     lambda value: value['result'].update(actual_resume=[4, 6]),
@@ -569,6 +571,30 @@ def test_separate_process_protocol_accepts_only_its_own_semantic_scope(fresh_pro
     value = result(fresh_protocol)
     assert not value['rejected'] and len(value['accepted']) == 1
     assert value['accepted'][0]['protocol']['restoration'] == 'fresh-process'
+
+
+@pytest.mark.parametrize('mutation', ('missing', 'changed', 'extra'))
+def test_measured_control_source_map_requires_every_committed_file(fresh_protocol, monkeypatch, mutation):
+    path = 'agent/skills/torch-compat-repo-runbook/scripts/collect_accelerate_scorecards.py'
+    expected = {str(i): 'd' * 64 for i in range(5)}
+    expected[path] = 'a' * 64
+    monkeypatch.setattr(accelerate, 'measurement_sources', lambda _baseline, fresh=False: expected)
+    for artifact in fresh_protocol[0]['evidence']['artifacts']:
+        if artifact['role'].endswith('-metadata'):
+            mutate_metadata(fresh_protocol, artifact['role'],
+                            lambda value: value['measurement_source_sha256'].update({path: 'a' * 64}))
+    assert len(result(fresh_protocol)['accepted']) == 1
+
+    def change(value):
+        captured = value['measurement_source_sha256']
+        if mutation == 'missing':
+            captured.pop(path)
+        elif mutation == 'changed':
+            captured[path] = 'b' * 64
+        else:
+            captured['unbound-control.py'] = 'a' * 64
+    mutate_metadata(fresh_protocol, 'candidate-base-rank0-consume-metadata', change)
+    assert result(fresh_protocol)['rejected']
 
 
 @pytest.mark.parametrize('mutation', ('version', 'name', 'missing_metadata', 'extra_payload',

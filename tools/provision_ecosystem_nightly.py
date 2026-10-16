@@ -48,9 +48,13 @@ DIFFUSERS_DEPS = ('numpy==1.26.4', 'huggingface-hub==0.35.3',
                   'astunparse==1.6.3', 'pillow==11.0.0', 'tqdm==4.67.1')
 METRIC_TD_DEPS = ('numpy==1.26.4', 'astunparse==1.6.3',
                   'pillow==11.0.0', 'tqdm==4.67.1')
+ACCELERATE_DEPS = ('numpy==1.26.4', 'huggingface-hub==0.35.3',
+                   'astunparse==1.6.3', 'pillow==11.0.0', 'tqdm==4.67.1')
 
 
 def runtime_roots(library):
+    if library == 'accelerate':
+        return list(ACCELERATE_DEPS)
     if library == 'metric_tensordict':
         return list(METRIC_TD_DEPS)
     if library == 'diffusers':
@@ -65,7 +69,7 @@ def runtime_roots(library):
 
 def session_name(library):
     require(library in ('peft', 'swift', 'verl', 'transformers', 'openmmlab', 'diffusers',
-                        'metric_tensordict'), 'Unknown maintained library profile')
+                        'metric_tensordict', 'accelerate'), 'Unknown maintained library profile')
     return {'verl': 'ecosystem_verl_training',
             'metric_tensordict': 'ecosystem_metric_tensordict_source',
             'diffusers': 'ecosystem_diffusers_source',
@@ -272,7 +276,18 @@ def provision(library, state, python, source_cache=None, wheel_cache=None):
             commands.run(python, '-m', 'venv', interpreter.parents[1])
     sys.path.insert(0, str(SCRIPTS))
     checkouts, pinned = {}, {}
-    if library == 'metric_tensordict':
+    if library == 'accelerate':
+        from _accelerate_installation import SOURCE_SHA, VERSION, WHEEL_SHA256, proof, wheel_artifact
+        sys.path.insert(0, str(ROOT / 'compat/tests/torch'))
+        from _accelerate_protocol import source_descriptor
+        path = state / 'upstream/accelerate'
+        checkout(commands, path, 'https://github.com/huggingface/accelerate.git', SOURCE_SHA,
+                 source_cache / 'accelerate' if source_cache else None)
+        checkouts['accelerate'] = path
+        pinned['accelerate'] = official_wheel('accelerate', VERSION, WHEEL_SHA256, wheels)
+        sources = source_descriptor(path)
+        proof(sources, wheel_artifact(pinned['accelerate']))
+    elif library == 'metric_tensordict':
         checkouts, pinned, sources = metric_td_checkouts(commands, state, source_cache, wheels)
     elif library == 'diffusers':
         from _diffusers_installation import COMMIT, VERSION, WHEEL_SHA256, source_descriptor
@@ -374,7 +389,7 @@ def provision(library, state, python, source_cache=None, wheel_cache=None):
     # The historical PEFT/TF producer requires archive RECORD bytes. The MM
     # Diffusers and Metrics/TensorDict accept legitimate pip RECORD entries; retain
     # their real receipts without extracting over the installed distributions.
-    if library not in ('openmmlab', 'diffusers', 'metric_tensordict'):
+    if library not in ('openmmlab', 'diffusers', 'metric_tensordict', 'accelerate'):
         for side in ('candidate', 'oracle'):
             site = state / side / 'lib/python3.11/site-packages'
             for wheel in pinned.values():
@@ -429,7 +444,10 @@ def provision(library, state, python, source_cache=None, wheel_cache=None):
                    JITTOR_ECOSYSTEM_PACKAGE_SITE=str(state / 'candidate/lib/python3.11/site-packages'),
                    JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE=str(state / 'oracle/lib/python3.11/site-packages'),
                    VERL_USE_EXTERNAL_PLUGINS='none')
-    if library == 'metric_tensordict':
+    if library == 'accelerate':
+        env.update(JITTOR_ACCELERATE_COMPLETE_CPU='1',
+                   JITTOR_ACCELERATE_EVIDENCE_DIR=str(state / 'maintained-output'))
+    elif library == 'metric_tensordict':
         env['JITTOR_METRIC_TD_EVIDENCE_DIR'] = str(state / 'maintained-output')
     elif library == 'diffusers':
         env['JITTOR_DIFFUSERS_EVIDENCE_DIR'] = str(state / 'maintained-output')
@@ -459,7 +477,7 @@ def provision(library, state, python, source_cache=None, wheel_cache=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--library', choices=('peft', 'swift', 'verl', 'transformers', 'openmmlab',
-                                             'diffusers', 'metric_tensordict'), required=True)
+                                             'diffusers', 'metric_tensordict', 'accelerate'), required=True)
     parser.add_argument('--state-root', type=Path, required=True)
     parser.add_argument('--python', default=sys.executable, help='Healthy Python 3.11 for new private venvs')
     parser.add_argument('--source-cache', type=Path,
