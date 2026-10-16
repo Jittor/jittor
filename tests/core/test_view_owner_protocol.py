@@ -109,7 +109,9 @@ class TestViewOwnerProtocol:
         source = FinalizingTensor(np.arange(6, dtype='float32').reshape(2, 3))
         alias = view(source)
         alias_ref = weakref.ref(alias)
-        physical(alias, device)
+        # Inspect residency before any numpy() call explicitly stages host data.
+        alias.sync()
+        assert alias.location() == ('cpu' if device == 'cpu' else 'device')
         del source
         # Replacing provenance with a self-view clears the old root first.
         alias._set_view_of(alias, Ellipsis)
