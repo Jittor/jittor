@@ -1263,6 +1263,17 @@ void VarHolder::observe_alias_history() {
     // while its source is frozen. Preserve the pending epoch: activating the
     // source later can then rebase this actual write, unlike an untouched view.
     if (!state->recorded_view_history && !state->source->requires_grad()) return;
+    if (view && view->base && view->physical_storage
+            && state->recorded_view_history
+            && state->source_edge_enabled == view->base->get_requires_grad()
+            && shares_physical_storage(var, view->base->var)) {
+        // An imperative store changed bytes and the shared version, not this
+        // physical view's allocation or recorded source policy. Keep its real
+        // producer and materialized buffer. Rebuilding it here would discard
+        // the original AD owner merely because somebody inspected is_leaf.
+        state->creation_version = *state->version;
+        return;
+    }
     if (view && view->base
             && (state->recorded_view_history || state->source->requires_grad()))
         view->base->refresh_transpose_views(true, view);

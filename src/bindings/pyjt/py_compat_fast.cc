@@ -452,7 +452,7 @@ bool exact_int(PyObject* value, int64& out) {
 PyObject* storage_view(PyObject* self, const NanoVector& shape) {
     auto* holder = GET_RAW_PTR(VarHolder, self);
     PyTensorFrontendScope scope(self, nullptr, 0, false);
-    unique_ptr<VarHolder> out(new VarHolder(make_reshape(holder->var, shape)));
+    unique_ptr<VarHolder> out(new VarHolder(make_reshape(holder->grad_input(), shape)));
     out->set_storage_view_of(holder, false);
     return to_py_object<VarHolder*>(out.release());
 }

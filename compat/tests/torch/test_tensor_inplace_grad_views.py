@@ -27,18 +27,20 @@ class TestInplaceGradViews:
                 mutation(view)
             np.testing.assert_array_equal(root.detach().cpu().numpy(), [1., 2., 3., 4.])
 
-    def test_orphan_leaf_views_reject_without_retaining_python_owner(self, device):
+    def test_leaf_views_retain_actual_root_until_the_view_is_released(self, device):
         for mutation, _expected in _mutations(device):
             root = torch.tensor([1., 2., 3., 4.], device=device, requires_grad=True)
             view = root.view(2, 2).narrow(0, 1, 1).view(2)
             reference = weakref.ref(root)
             del root
             gc.collect()
-            if hasattr(torch, "_torch_compat_install_context"):
-                assert reference() is None
+            assert reference() is not None and view._base is reference()
             with pytest.raises(RuntimeError, match="view.*leaf"):
                 mutation(view)
             np.testing.assert_array_equal(view.detach().cpu().numpy(), [3., 4.])
+            del view
+            gc.collect()
+            assert reference() is None
 
     def test_no_grad_leaf_view_writes_keep_storage_and_later_gradient(self, device):
         for mutation, expected in _mutations(device):

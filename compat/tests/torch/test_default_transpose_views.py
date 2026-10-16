@@ -275,3 +275,46 @@ def test_composed_multiaxis_view_keeps_root_and_second_order_graph(device):
     with torch.no_grad():
         z.fill_(9)
     np.testing.assert_array_equal(_array(physical(x)), np.full((2, 3, 4), 9.))
+
+
+@pytest.mark.parametrize('device', ['cpu', 'cuda'])
+@pytest.mark.parametrize('operation', ['unsqueeze', 'view', 'reshape'])
+def test_viewable_noncontiguous_reshape_keeps_root_and_expanded_readers(device, operation):
+    x = source(device)
+    t = x.t()
+    y = t.unsqueeze(0) if operation == 'unsqueeze' else getattr(t, operation)(1, 3, 2)
+    expanded = y.expand(2, 3, 2)
+    assert y._base is x and expanded._base is x
+    assert tuple(y.stride()) == (3, 1, 3)
+    assert x.data_ptr() == y.data_ptr() == expanded.data_ptr()
+    physical(expanded)
+    with torch.no_grad():
+        x.fill_(7)
+    np.testing.assert_array_equal(_array(physical(expanded)), np.full((2, 3, 2), 7.))
+    gradient, = torch.autograd.grad(expanded.sum(), (x,))
+    np.testing.assert_array_equal(_array(physical(gradient)), np.full((2, 3), 2.))
+
+
+@pytest.mark.parametrize('device', ['cpu', 'cuda'])
+@pytest.mark.parametrize('operation', ['unsqueeze', 'view', 'reshape'])
+@pytest.mark.parametrize('reactivate_before_view', [False, True])
+def test_fast_view_consumes_actual_history_at_operation_entry(
+        device, operation, reactivate_before_view):
+    x = source(device)
+    y = x.view(2, 3)
+    x.requires_grad_(False)
+    with torch.no_grad():
+        x.fill_(7)
+    if reactivate_before_view:
+        x.requires_grad_(True)
+    z = y.unsqueeze(0) if operation == 'unsqueeze' else getattr(y, operation)(2, 3)
+    if not reactivate_before_view:
+        x.requires_grad_(True)
+    weights = torch.arange(1, 7, device=device, dtype=torch.float32).reshape(z.shape)
+    gx, gy, gz = torch.autograd.grad((z * weights).sum(), (x, y, z), allow_unused=True)
+    if reactivate_before_view:
+        np.testing.assert_array_equal(_array(physical(gx)), _array(weights).reshape(2, 3))
+    else:
+        assert gx is None
+    np.testing.assert_array_equal(_array(physical(gy)), _array(weights).reshape(2, 3))
+    np.testing.assert_array_equal(_array(physical(gz)), _array(weights))
