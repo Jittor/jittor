@@ -1123,6 +1123,8 @@ void UnaryOp::infer_shape() {
         if (_inputs.size() == 1) add_inputs(vector<Var*>{layout_value.ptr});
         y->set_shape(layout_value->shape);
         y->storage_strides = layout_value->storage_strides;
+        ASSERT(y->dtype() == layout_value->dtype())
+            << "Layout propagation changed unary output dtype";
         y->share_with(layout_value);
         return;
     }

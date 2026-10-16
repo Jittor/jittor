@@ -52,6 +52,11 @@ VarPtr storage_view_transpose(Var* v, NanoVector axes) {
         throw;
     }
     transpose_storage_view = saved;
+    // This is an implementation alias of the same operand. In particular a
+    // broadcast scalar must stay weak in binary dtype promotion after its
+    // axes change; otherwise the layout kernel can produce float32 storage
+    // for a logical float16/bfloat16 result.
+    result->set_flag(VarFlags::_is_scalar, v->flag(VarFlags::_is_scalar));
     return result;
 }
 
@@ -153,6 +158,13 @@ bool storage_layout_operands(const vector<Var*>& inputs, NanoVector& axes,
             return false;
         }
     }
+    // A user-created transpose may have different scalar-promotion metadata
+    // from its dense producer. Replacing that operand would then change the
+    // arithmetic dtype. Keep the ordinary strided kernel for this case.
+    for (uint i=0; i<inputs.size(); i++)
+        if (found[i]->flag(VarFlags::_is_scalar)
+                != inputs[i]->flag(VarFlags::_is_scalar))
+            return false;
     sources = move(found);
     return true;
 }
