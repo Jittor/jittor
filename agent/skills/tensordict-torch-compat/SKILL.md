@@ -104,7 +104,11 @@ collector 检查两个 trainable 参数、零 frozen、sample 梯度、完整轨
 完整配置独立 controller/candidate/oracle 环境并通过各自 `pip check`。
 provisioner 获取真实 `v0.10.0` tag 并检查 peeled commit，不能给任意 SHA 合成版本。
 安装 proof 保留实际 pip RECORD；源码闭包必须包含已提交的维护 runner。
-实际执行状态见[专用报告](../../../docs/results/2026-10-16-metrics-tensordict-maintained-cpu-nightly.md)，
+实际 clean `c47033ed0a6bb692922efa98ecbbf7896bfe867f` fresh CPU profile 已完整通过：
+TensorDict 六 workers / 29 pairs、全部参数与 sample 梯度、三步 SGD 为 L3，分母仍为 2/60；
+两库共 35 pairs / 38 份非零梯度 / 12 次参数更新已独立重算，公共 auditor 两条 CPU 记录全部接受。
+三独立环境完整依赖解析、各侧 `pip check`、完整官方载荷与实际 METADATA/pip RECORD 均复核，
+原始 seal 和实际边界见[专用报告](../../../docs/results/2026-10-16-metrics-tensordict-maintained-cpu-nightly.md)。
 不重标 `912` 记录，不将工作流接线声称为 hosted nightly 已执行。
 
 | 断点 | 实际 owner |

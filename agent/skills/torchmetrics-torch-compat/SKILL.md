@@ -109,7 +109,11 @@ CPU 显式隐藏 CUDA，CUDA 两侧恢复实际 `JT_BUILD_NVCC_PATH`，不得猜
 `python tools/provision_ecosystem_nightly.py --library metric_tensordict --state-root <new-external-state> --run`
 创建三个独立环境、完整解析依赖并执行该入口。新 profile 保留实际 pip RECORD，使用固定官方 wheel，
 CPU 显式隐藏 CUDA；两库共 10 个 worker、35 对数组须全部被公共 collector 验收。
-实现与实际执行状态见[专用报告](../../../docs/results/2026-10-16-metrics-tensordict-maintained-cpu-nightly.md)。
+实际 clean `c47033ed0a6bb692922efa98ecbbf7896bfe867f` 完整 fresh CPU profile 已通过：
+两库共 10 workers / 35 pairs，三独立环境完整解析与 `pip check` 均通过，公共 auditor 两条 CPU
+记录全部接受；其中 Metrics 六对数组、完整输入梯度为 L2，分母仍为 2/105。
+完整官方 wheel 载荷和实际 METADATA/pip RECORD 已独立复核，原始 seal 与命令见
+[专用报告](../../../docs/results/2026-10-16-metrics-tensordict-maintained-cpu-nightly.md)。
 工作流接线本身不证明 hosted schedule 已运行；历史 `912` CPU/CUDA 测量不重标。
 
 | 纯 API 断点 | owner 与回归 |
