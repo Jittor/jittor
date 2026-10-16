@@ -164,3 +164,65 @@ exact-copy oracle binding, CPU/CUDA logs, whole-call fallback guard and core gat
 An initial probe passed RMSprop(weight_decay=0), an unsupported keyword on this
 frontend, and failed loudly; the corrected probe uses the default zero decay
 without that keyword. This change does not claim that separate keyword gap is fixed.
+
+## 2026-10-16: native RMSprop coupled weight decay
+
+Status: verified for the stated FP32/FP64 CPU/CUDA contracts. Baseline:
+`8333abbbb59776acde9fd622293353193a45c7eb`. Implementation: the commit containing
+this follow-up; its exact seven-owner Git binding is retained with the raw evidence.
+Owner: native optimizer / Torch compatibility maintainers. Review when: RMSprop
+arithmetic, group overrides, gradient ownership or checkpoint metadata changes.
+
+This closes the weight-decay keyword gap recorded above. The baseline rejected
+`weight_decay=0` as an unknown keyword and silently ignored decay supplied only
+through a parameter group. The final baseline selection had fifteen failing CPU
+contracts, including both FP32/FP64 group-only numerical failures. The update now
+adds the L2 term to the gradient before accumulating the square average and
+updating the parameter, in the existing native RMSprop owner. Published `.grad`
+objects and bytes remain intact. The Torch state export records the actual
+global/group decay, allowing a saved nonzero-decay optimizer to resume in an
+optimizer initially constructed with zero decay. Negative and NaN global decay
+raise ValueError, matching the independent binary Torch controls.
+
+Native positional argument order remains `(params, lr, eps, alpha, weight_decay)`;
+the first four arguments retain their old order. This is a keyword-decay acceptance,
+not a claim that every Torch RMSprop option or positional convention is supported.
+New contracts cover three successive updates and square-average states, global
+and per-group overrides including zero, absent versus zero gradients, exact
+checkpoint continuation, gradient identity, dtype and actual backend location.
+The portable optimizer contracts share one fallback guard rather than copying it.
+
+| Final scope | CPU | CUDA configuration |
+| --- | --- | --- |
+| Six neighboring Torch optimizer/gradient files | 73 passed / 33 CUDA skips | 106 passed / 0 skipped |
+| Native optimizer core plus explicit RMSprop device contracts | 39 passed / 7 skips | 46 passed / 0 skipped |
+| Independent Torch exact copies of both portable contract files | 35 passed / 33 CUDA skips | 68 passed / 0 skipped |
+
+The CUDA configuration includes explicitly selected CPU controls. The new RMSprop
+contracts contain fourteen public CUDA cases and six native CUDA cases, all
+checking actual allocation location. Both final CUDA invocations were wrapped
+in fallback-error scopes, with counters zero before and after. The initial native
+unittest-only invocation had 35 successful assertions but exited 1 because its
+internal device loops supplied no statically identifiable accelerator cases.
+The maintained native regression now parameterizes the device explicitly and
+checks actual parameter/state storage; the final 46-case gate passes unchanged.
+A separate first structure run rejected the intentionally extended native
+signature. Its exact signature contract now includes the appended default-zero
+argument while preserving legacy order; the gate is not bypassed.
+
+Core: 322 passed / 42 skips / one existing xfail. Final structure, layout and
+manifest results are recorded in the delivery packet. New test/support files
+pass Ruff; the edited production owners retain their baseline diagnostics with
+no additions. ACL and ROCm were not executed in this follow-up; this does not
+grant those devices or full optimizer ABI support.
+
+Reproduce by adding `compat/tests/torch/test_rmsprop_weight_decay.py` to the
+five-file command above and running native
+`tests/optim/test_optim_core.py tests/optim/test_rmsprop_device_contract.py`
+separately with the Torch shim disabled. Use isolated CPU/CUDA unit caches and
+an independent Torch interpreter for exact copies of the portable files and
+`_optimizer_contract_support.py`.
+
+Raw logs, rejected intermediate validation, source snapshots, exact-copy bindings,
+whole-call CUDA guards, native binary identities and the delivery packet are
+unversioned under `$JITTOR_LAB_ROOT/_state/rmsprop-weight-decay/20261016/`.

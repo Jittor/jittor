@@ -1,9 +1,9 @@
 """Tensor gradients survive creation of an optimizer that consumes them."""
-import sys
-
 import numpy as np
 import pytest
 import torch
+
+from _optimizer_contract_support import require_optimizer_backend as require_optimizer_backend
 
 
 DEVICE_CASES = [
@@ -12,17 +12,6 @@ DEVICE_CASES = [
         not torch.cuda.is_available(), reason='requires CUDA',
     )),
 ]
-
-
-@pytest.fixture(autouse=True)
-def actual_backend_only():
-    if not hasattr(torch, '_torch_compat_install_context'):
-        yield
-        return
-    from jittor._runtime.fallback import forbid_backend_fallbacks
-    with forbid_backend_fallbacks():
-        yield
-        sys.modules['jittor'].sync_all(True)
 
 
 def numbers(tensor, device):

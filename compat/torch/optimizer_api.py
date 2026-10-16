@@ -312,7 +312,8 @@ def _state_dict_torch(self):
                 "alpha", getattr(self, "alpha", 0.99)))
             group.setdefault("eps", pg.get(
                 "eps", getattr(self, "eps", 1e-8)))
-            group.setdefault("weight_decay", 0)
+            group.setdefault("weight_decay", pg.get(
+                "weight_decay", getattr(self, "weight_decay", 0)))
             group.setdefault("momentum", 0)
             group.setdefault("centered", False)
             group.setdefault("capturable", False)

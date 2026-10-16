@@ -89,14 +89,14 @@ class TestOptimStructure(unittest.TestCase):
                 )
                 self.assertIs(pickle.loads(legacy), implementation)
 
-    def test_core_signatures_are_unchanged(self):
+    def test_core_signatures_preserve_legacy_parameter_order(self):
         signatures = {
             "Optimizer": "(params, lr, param_sync_iter=10000)",
             "SGD": (
                 "(params, lr, momentum=0, weight_decay=0, dampening=0, "
                 "nesterov=False, fused=None)"
             ),
-            "RMSprop": "(params, lr=0.01, eps=1e-08, alpha=0.99)",
+            "RMSprop": "(params, lr=0.01, eps=1e-08, alpha=0.99, weight_decay=0)",
             "Adam": "(params, lr, eps=1e-08, betas=(0.9, 0.999), weight_decay=0)",
             "AdamW": "(params, lr, eps=1e-08, betas=(0.9, 0.999), weight_decay=0, fused=None)",
             "Adan": "(params, lr=0.001, betas=(0.98, 0.92, 0.99), eps=1e-08, weight_decay=0.0, max_grad_norm=0.0)",
