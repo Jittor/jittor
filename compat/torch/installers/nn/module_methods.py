@@ -1,4 +1,4 @@
-from ...fidelity import Fidelity, register_api_bindings
+from ...fidelity import register_api_bindings
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import collections as _collections
 from collections.abc import MutableMapping as _MutableMapping
