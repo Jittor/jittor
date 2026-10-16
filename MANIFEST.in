@@ -469,6 +469,7 @@ include docs/results/2026-10-16-openmmlab-maintained-cpu-nightly.md
 include docs/results/2026-10-16-recorded-grad-fn-freeze.md
 include docs/results/2026-10-16-sgd-checkpoint-continuation.md
 include docs/results/2026-10-16-sgd-cuda-opmath.md
+include docs/results/2026-10-16-sgd-execution-options.md
 include docs/results/2026-10-16-transformers-main-source-training.md
 include docs/results/2026-10-16-transformers-maintained-cpu-nightly.md
 include docs/results/2026-10-16-verl-maintained-cpu-nightly.md

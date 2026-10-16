@@ -2019,21 +2019,6 @@ workaround.
 - Evidence: the repro above.
 - Exit condition: `w.grad` is populated in both cases, with a regression test.
 
-## KI-COMPAT-008: `torch.optim.SGD` rejects `foreach=` and `fused=`
-
-- Severity: Low (an immediate `TypeError`, not a silent divergence)
-- Status: Open; found 2026-09-25
-- Owner: torch compatibility / optimizers
-- Symptom: `torch.optim.SGD(params, lr=..., foreach=False)` raises
-  `TypeError: initialize_sgd() got an unexpected keyword argument 'foreach'`, and
-  the same for `fused=`. Both are ordinary PyTorch arguments.
-- Cause: `initialize_sgd` in `compat/torch/optim_frontend.py` does not accept
-  them; the native SGD has a `fused` switch they could map onto.
-- Workaround: drop the two arguments.
-- Evidence: the call above.
-- Exit condition: both keywords are accepted (mapped or explicitly ignored with a
-  documented reason).
-
 ## KI-COMPAT-009: a float32 tensor divided by a Python float is computed in float64
 
 - Severity: Limitation (performance; the result is the float32 PyTorch gives)
@@ -2143,6 +2128,32 @@ workaround.
   (the two core-op spellings by name do not raise for complex128).
 - Exit condition: complex128 is a supported frontend dtype end to end (or the
   core refuses it again by design), and the case XPASSes and loses its marker.
+
+## KI-COMPAT-015: portable Torch SGD updates leave detached parameter aliases stale
+
+- Severity: High (silent stale values in retained parameter-storage aliases).
+- Status: Open; CPU reproduced 2026-10-16 on the SGD execution-option working tree.
+- Owner: native optimizers / Torch compatibility storage semantics.
+- Symptom: after `p = torch.tensor([1., 2.], requires_grad=True)` and
+  `alias = p.detach()`, backward through `(p * torch.tensor([.25, .5])).sum()`
+  followed by `torch.optim.SGD([p], lr=.125).step()` changes `p` to
+  `[.96875, 1.9375]` but leaves `alias` at `[1., 2.]`. The parameter's physical
+  allocation changes. Genuine Torch preserves the allocation and updates both.
+- Cause: the portable native update uses `_update_preserve_dtype`, which calls
+  `target.update(value)` and rebinds the holder instead of copying into its
+  existing allocation. This is separate from checkpoint loading and option parsing.
+- Workaround: avoid retaining parameter-storage aliases across portable SGD
+  updates; recreate detached aliases after each step.
+- Evidence: four CPU option combinations reproduce the stale alias; all four
+  corresponding independent Torch probes preserve it. Raw candidate/genuine
+  `*-alias-v2.json` and scripts are unversioned under
+  `$JITTOR_LAB_ROOT/_state/sgd-execution-options/20261016/`; see
+  [SGD execution options](../../docs/results/2026-10-16-sgd-execution-options.md).
+  CUDA portable updates and other optimizer algorithms are not yet verified.
+- Exit condition: a frontend-owned native storage write preserves actual
+  allocations and aliases across CPU/CUDA SGD updates, including plain,
+  momentum and Nesterov paths, with genuine Torch controls. Preserve legacy
+  native optimizer defaults and published gradients.
 
 ## KI-DIST-001: FSDP2 flat sharding peaks above the unsharded model
 

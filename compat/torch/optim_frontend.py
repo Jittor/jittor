@@ -27,9 +27,18 @@ def _initialize_algorithm(name, instance, args, kwargs):
         state["algorithms"][name](instance, *args, **kwargs)
 
 
-def initialize_sgd(self, params, lr, momentum=0, weight_decay=0, dampening=0, nesterov=False):
-    return _initialize_algorithm("SGD", self,
-        (params, lr, momentum, weight_decay, dampening, nesterov), {"torch_math": True})
+def initialize_sgd(self, params, lr, momentum=0, weight_decay=0, dampening=0, nesterov=False,
+                   *, foreach=None, fused=None):
+    if foreach and fused:
+        raise RuntimeError("`fused` and `foreach` cannot be `True` together.")
+    result = _initialize_algorithm("SGD", self,
+        (params, lr, momentum, weight_decay, dampening, nesterov),
+        {"torch_math": True, "fused": fused})
+    self.foreach = foreach
+    for group in self.param_groups:
+        group.setdefault("foreach", foreach)
+        group.setdefault("fused", fused)
+    return result
 
 
 def initialize_adam(self, *args, **kwargs):

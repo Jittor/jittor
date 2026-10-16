@@ -238,7 +238,12 @@ class SGD(Optimizer):
                 # kernel applied it to the plain update as well.
                 dampening = 0
             fused = None
-            if pg.get("fused", getattr(self, "fused", None)) is not False:
+            requested_fused = pg.get("fused", getattr(self, "fused", None))
+            requested_foreach = pg.get("foreach", getattr(self, "foreach", None))
+            if requested_fused and requested_foreach:
+                raise RuntimeError("`fused` and `foreach` cannot be `True` together.")
+            if (requested_fused is not False
+                    and (requested_fused is True or requested_foreach is not False)):
                 # Momentum-free is considered too. That shortcut is a single
                 # pass, but it is a single pass *per parameter*: two elementwise
                 # ops and a holder rebind, 96 times for an 8-layer transformer,

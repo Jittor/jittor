@@ -304,9 +304,9 @@ def _state_dict_torch(self):
                 group.setdefault(key, pg.get(
                     key, getattr(self, key, default)))
             group.setdefault("maximize", False)
-            group.setdefault("foreach", None)
+            group.setdefault("foreach", getattr(self, "foreach", None))
             group.setdefault("differentiable", False)
-            group.setdefault("fused", None)
+            group.setdefault("fused", getattr(self, "fused", None))
         elif kind == "rmsprop":
             group.setdefault("alpha", pg.get(
                 "alpha", getattr(self, "alpha", 0.99)))

@@ -17,6 +17,7 @@
 2026-10-16-default-torch-storage-views
 2026-10-16-sgd-cuda-opmath
 2026-10-16-sgd-checkpoint-continuation
+2026-10-16-sgd-execution-options
 2026-10-16-module-load-independent-storage
 2026-10-16-h3-sdpa-gradient-rounding
 2026-10-16-h3-default-sdpa-forward
