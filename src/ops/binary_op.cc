@@ -728,6 +728,8 @@ VarPtr BinaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 
 void BinaryOp::infer_shape() {
     if (layout_value) {
+        ASSERT(z->dtype() == layout_value->dtype())
+            << "Layout propagation changed binary output dtype";
         if (_inputs.size() == 2) add_inputs(vector<Var*>{layout_value.ptr});
         z->set_shape(layout_value->shape);
         z->storage_strides = layout_value->storage_strides;
