@@ -118,8 +118,11 @@ def restore(payload, dtype, configuration, device):
 
 @pytest.mark.parametrize("dtype", ("float16", "bfloat16", "float32"))
 @pytest.mark.parametrize("configuration", tuple(CONFIGURATIONS))
-def test_sgd_checkpoint_continuation(dtype, configuration):
-    device = os.environ.get("SGD_CHECKPOINT_DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
+@pytest.mark.parametrize("device", (
+    [os.environ["SGD_CHECKPOINT_DEVICE"]] if "SGD_CHECKPOINT_DEVICE" in os.environ
+    else ["cpu"] + (["cuda"] if torch.cuda.is_available() else [])
+))
+def test_sgd_checkpoint_continuation(dtype, configuration, device):
     parameters, optimizer = make_optimizer(dtype, configuration, device)
     advance(parameters, optimizer, 0, 3)
     before = capture(parameters, optimizer)
