@@ -62,6 +62,7 @@ def test_load_copies_without_recording_edges_or_changing_caller_mode(device, ena
         np.testing.assert_array_equal(buffer_alias.cpu().numpy(), [7, 8])
     with torch.enable_grad():
         weight.square().sum().backward()
+    allocated_on(weight.grad, device)
     np.testing.assert_array_equal(weight.grad.cpu().numpy(), np.full((2, 3), .5))
     assert bias.grad is None and incoming.grad is None and incoming_bias.grad is None
 
