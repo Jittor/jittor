@@ -33,6 +33,17 @@ def _init(self, *a, **k):
             pg.setdefault("lr", self.lr)
     except EXPECTED as exc:
         swallowed("torch/optimizers.py _init: for pg in self.param_groups:", exc)
+    # A gradient belongs to its Tensor, including when it was produced before
+    # this optimizer existed. Keep the published objects themselves: clipping,
+    # clearing and another optimizer must observe the same gradient storage.
+    published = [(pg, [getattr(parameter, "_torch_grad", None)
+                       for parameter in pg["params"]])
+                 for pg in self.param_groups]
+    if any(isinstance(gradient, jt.Var)
+           for _, gradients in published for gradient in gradients):
+        for pg, gradients in published:
+            pg["grads"] = gradients
+        object.__setattr__(self, "_Optimizer__zero_grad", False)
 
 
 def _torch_param_steps(pg):
