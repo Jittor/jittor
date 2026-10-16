@@ -104,7 +104,29 @@ static PyFrameObject* frame_back(PyFrameObject* f) {
     #endif
 }
 
-#if PY_VERSION_HEX >= 0x030B0000
+// A per-instruction key within a code object, for the origin cache only. On
+// 3.11+ it is the bytecode offset (PyFrame_GetLasti); before that there is no
+// such call, so the source line stands in -- and since an origin id is itself
+// keyed on (file, line), the line is exactly the granularity this cache needs.
+static int frame_lasti(PyFrameObject* f) {
+    #if PY_VERSION_HEX >= 0x030B0000
+    return PyFrame_GetLasti(f);
+    #else
+    return (int)PyFrame_GetLineNumber(f);
+    #endif
+}
+
+// New reference to the frame's globals. PyFrame_GetGlobals is 3.11+, so before
+// that the attribute does the same lookup (also a new reference).
+static PyObject* frame_globals(PyFrameObject* f) {
+    #if PY_VERSION_HEX >= 0x030B0000
+    return PyFrame_GetGlobals(f);
+    #else
+    return PyObject_GetAttrString((PyObject*)f, "f_globals");
+    #endif
+}
+
+#if PY_VERSION_HEX >= 0x03090000
 // Every Op construction lands here, so the walk has to be cheap. It used to
 // look each frame's globals up by attribute name and its `__name__` by a C
 // string -- a new str, a UTF-8 decode and a hash per frame -- and then compute
@@ -128,7 +150,7 @@ bool code_is_internal(OriginCaches& caches, PyFrameObject* frame, PyObject* code
     auto found = caches.internal.find(code);
     if (found != caches.internal.end()) return found->second;
     if (!caches.name_key) caches.name_key = PyUnicode_InternFromString("__name__");
-    PyObject* globals = PyFrame_GetGlobals(frame);
+    PyObject* globals = frame_globals(frame);
     PyObject* module = globals && PyDict_Check(globals) ? PyDict_GetItem(globals, caches.name_key) : nullptr;
     const char* name = module && PyUnicode_Check(module) ? PyUnicode_AsUTF8(module) : nullptr;
     bool internal = name && (!strcmp(name, "jittor") || !strncmp(name, "jittor.", 7)
@@ -145,7 +167,7 @@ bool code_is_internal(OriginCaches& caches, PyFrameObject* frame, PyObject* code
 // construction while the GIL is held; launch and error paths use native data.
 static uint64 capture_python_launch_origin() {
     if (!Py_IsInitialized() || !PyGILState_Check()) return 0;
-#if PY_VERSION_HEX >= 0x030B0000
+#if PY_VERSION_HEX >= 0x03090000
     {
         auto& caches = origin_caches();
         PyObject *error_type=nullptr, *error_value=nullptr, *error_traceback=nullptr;
@@ -158,7 +180,7 @@ static uint64 capture_python_launch_origin() {
             if (!code_is_internal(caches, frame, code)) {
                 auto& lines = caches.origin[code];
                 if (lines.empty()) Py_INCREF(code);
-                const int lasti = PyFrame_GetLasti(frame);
+                const int lasti = frame_lasti(frame);
                 auto found = lines.find(lasti);
                 if (found != lines.end()) {
                     result = found->second;
