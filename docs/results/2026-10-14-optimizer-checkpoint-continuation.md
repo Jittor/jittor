@@ -98,3 +98,69 @@ The failing probe and raw logs are retained under the external task state tree
 (`checkpoint-optimizer/rng_checkpoint_repro.py` and
 `checkpoint-optimizer/logs/targeted-rng-failure.log`). Claims here cover deterministic
 fixed-input numerical continuation only, not complete Accelerate state recovery.
+
+## 2026-10-16: gradients published before optimizer construction
+
+Status: CPU/CUDA behavior verified for the contracts below. Owner: Torch
+optimizer compatibility maintainers. Baseline: `4fd2a82951d2a5300774862685a0e661e364e93f`.
+Implementation: `dc6a178064c22bb5a31fc76bd55a879cc9497f5e`. Review when: Tensor gradient publication,
+optimizer initialization, parameter groups or native lazy gradient creation changes.
+
+A Parameter may already have `.grad` from a public assignment or `backward()`
+when an optimizer is constructed. On the baseline, all eight combinations of
+SGD/Adam/AdamW/RMSprop and these two gradient sources silently skipped the
+update; moving the same gradient creation after the constructor worked.
+Independent binary Torch 2.11 updated in all sixteen before/after controls.
+
+The constructor now connects existing published gradient objects to the native
+parameter groups, including missing gradients in other groups. It preserves
+object/storage identity so another optimizer, in-place gradient edits and
+`zero_grad(set_to_none=True)` observe the same state. When no gradient exists,
+the original native lazy initialization remains active. An intermediate attempt
+to prepopulate all groups with None caused nine native backward/step(loss)
+regressions; that attempt was rejected and its failed log retained.
+
+The new maintained file `compat/tests/torch/test_optimizer_preexisting_grad.py`
+has nineteen contracts per device: both gradient sources and constructor orders,
+two consecutive updates, Adam step state, two optimizers sharing a gradient,
+missing gradients across groups, zero gradients with weight decay, and no-gradient
+steps. Every inspected candidate tensor checks its actual backend location;
+fallback is forbidden. The exact file also runs in independent binary Torch.
+
+| Scope | CPU | CUDA configuration |
+| --- | --- | --- |
+| Candidate, new file plus four neighboring optimizer/gradient files | 57 passed / 19 CUDA skips | 76 passed / 0 skipped |
+| Independent Torch, exact copy of new file | 19 passed / 19 CUDA skips | 38 passed / 0 skipped |
+
+The CUDA configuration runs both CPU and CUDA parameters from the new file;
+its nineteen CUDA cases execute on the accelerator. Some neighboring tests
+explicitly exercise CPU, so the total 76 is not a count of CUDA-only tests.
+The full candidate CUDA invocation observed fallback counter 0 before and after.
+Independent Torch versions were 2.11.0+cpu and 2.11.0+cu128 respectively.
+The candidate native CUDA binary SHA-256 was
+`03b66666626c7fef5b1a2a9a645c5e80972cc9e8c8a316d106971db74c7d71ef`.
+
+Core validation: 322 passed / 42 skips / one existing xfail. The final production
+file is byte-identical to that core run; only the test device parametrization
+was subsequently simplified. Structure/layout/manifest results: `1628 passed / 6 skipped; layout and manifest checks passed`.
+The new test passes Ruff; the production file retains the same eight pre-existing
+Ruff diagnostics as the fetched baseline, with no new diagnostics.
+
+Reproduce the five-file selection in isolated CPU/CUDA environments:
+
+```bash
+JITTOR_TORCH_SHIM=1 PYTHONPATH=python python -m pytest -q \
+  compat/tests/torch/test_optimizer_preexisting_grad.py \
+  compat/tests/torch/test_torch_compat_grad_management.py \
+  compat/tests/torch/test_optimizer_parameter_rebinding.py \
+  compat/tests/torch/test_optimizer_scheduler_api_owners.py \
+  compat/tests/torch/test_torch_compat_optim.py
+```
+
+Raw evidence is unversioned under
+`$JITTOR_LAB_ROOT/_state/optimizer-existing-grad/20261016/`: baseline and fixed
+sixteen-row probes, rejected intermediate implementation, frozen measured source,
+exact-copy oracle binding, CPU/CUDA logs, whole-call fallback guard and core gates.
+An initial probe passed RMSprop(weight_decay=0), an unsupported keyword on this
+frontend, and failed loudly; the corrected probe uses the default zero decay
+without that keyword. This change does not claim that separate keyword gap is fixed.
