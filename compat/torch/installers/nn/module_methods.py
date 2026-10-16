@@ -506,8 +506,11 @@ def _load_state_dict(self, state_dict, strict=True, assign=False):
             target = _find_state_target(self, key)
             if (isinstance(target, jt.Var) and isinstance(value, jt.Var)
                     and target._storage_is_contiguous()):
-                if target.numel():
-                    target._copy_into(value)
+                # Loading copies values, without recording a differentiable
+                # in-place update of this existing leaf. Keep the public copy
+                # owner's placement, alias/version and storage semantics.
+                with jt.no_grad():
+                    target.copy_(value)
                 copied[key] = target
         load_state = copied
     _ORIG_MODULE_LOAD_STATE_DICT(self, load_state)

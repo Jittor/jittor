@@ -18,7 +18,8 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[3]
 CONTROL_SOURCE_FILES = ('agent/skills/torch-compat-repo-runbook/scripts/collect_accelerate_scorecards.py',
-                        'noxfile.py', 'tools/provision_ecosystem_nightly.py')
+                        'noxfile.py', 'tools/provision_ecosystem_nightly.py',
+                        'compat/torch/installers/nn/module_methods.py')
 
 
 def digest(path):
