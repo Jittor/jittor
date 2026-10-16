@@ -246,6 +246,13 @@ case、runner 和三步训练 probe。它串行执行 base、seed 7 扰动及三
 
 ## Accelerate checkpoint 协议
 
+完整单 rank CPU nightly 可用 `python tools/provision_ecosystem_nightly.py --library accelerate --state-root <new-external-state> --run`。
+它完整配置三个独立环境并执行原 438 数组/8 阶段 worker 协议，要求原参数/输入梯度、三步保存前训练及两步新进程续训，
+各 prefix 完整依赖解析与 `pip check`、实际官方 wheel/METADATA/pip RECORD 和公共 L3 准入均为必需。
+`JITTOR_ACCELERATE_COMPLETE_CPU=1` 才启用 fixed CPU 模式，不改变普通 CPU/CUDA 调用。
+实际执行状态和边界见[专用报告](../../../docs/results/2026-10-16-accelerate-maintained-cpu-nightly.md)，
+不将本地执行或工作流接线称为 hosted schedule 已运行，不用 CPU world1 配对 CUDA world2。
+
 Accelerate 没有与模型族同义的注册表。`tools/run_accelerate_gate.py` 直接调用维护中的
 单进程 checkpoint 与两 rank FSDP2 FULL 测试，`nox -s ecosystem_accelerate` 是正确性入口；
 `benchmark_accelerate` 仍只负责性能。使用预装且版本相同的私有双解释器，设置

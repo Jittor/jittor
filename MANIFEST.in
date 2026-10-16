@@ -452,6 +452,7 @@ include docs/results/2026-10-15-verl-installed-source-training.md
 include docs/results/2026-10-15-verl-registered-component-oracles.md
 include docs/results/2026-10-15-vllm-component-scorecards.md
 include docs/results/2026-10-16-accelerate-installed-source-protocols.md
+include docs/results/2026-10-16-accelerate-maintained-cpu-nightly.md
 include docs/results/2026-10-16-diffusers-maintained-cpu-nightly.md
 include docs/results/2026-10-16-diffusers-official-installation.md
 include docs/results/2026-10-16-flash-attention-installed-source-training.md

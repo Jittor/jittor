@@ -77,7 +77,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        library: [peft, swift, verl, transformers, openmmlab, diffusers, metric_tensordict]
+        library: [peft, swift, verl, transformers, openmmlab, diffusers, metric_tensordict, accelerate]
     steps:
       - name: Check out measured source
         uses: actions/checkout@v6
