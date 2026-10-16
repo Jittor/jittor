@@ -168,8 +168,9 @@ without that keyword. This change does not claim that separate keyword gap is fi
 ## 2026-10-16: native RMSprop coupled weight decay
 
 Status: verified for the stated FP32/FP64 CPU/CUDA contracts. Baseline:
-`8333abbbb59776acde9fd622293353193a45c7eb`. Implementation: the commit containing
-this follow-up; its exact seven-owner Git binding is retained with the raw evidence.
+`8333abbbb59776acde9fd622293353193a45c7eb`. Implementation:
+`b4b5b88e8bf3ed1c13b5c66c787d2fdcf4f0d8e7`; its exact seven-owner Git binding
+is retained with the raw evidence.
 Owner: native optimizer / Torch compatibility maintainers. Review when: RMSprop
 arithmetic, group overrides, gradient ownership or checkpoint metadata changes.
 

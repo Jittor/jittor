@@ -15,4 +15,3 @@ def require_optimizer_backend():
     with forbid_backend_fallbacks():
         yield
         sys.modules['jittor'].sync_all(True)
-
