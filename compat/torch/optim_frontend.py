@@ -29,7 +29,7 @@ def _initialize_algorithm(name, instance, args, kwargs):
 
 def initialize_sgd(self, params, lr, momentum=0, weight_decay=0, dampening=0, nesterov=False):
     return _initialize_algorithm("SGD", self,
-        (params, lr, momentum, weight_decay, dampening, nesterov), {})
+        (params, lr, momentum, weight_decay, dampening, nesterov), {"torch_math": True})
 
 
 def initialize_adam(self, *args, **kwargs):
