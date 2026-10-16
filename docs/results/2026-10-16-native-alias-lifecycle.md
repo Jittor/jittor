@@ -92,3 +92,56 @@ observations and the complete 2923-file Git source archive are under
 These integration results retain source 66db; they do not relabel the earlier
 4f95/0458 evidence, repair the preserved expand-memory failure, or close default
 transpose/view and full ABI work.
+
+## Low-precision layout dtype follow-up
+
+Reviewed 2026-10-16 by the native/autograd maintainers. Source is bound to
+`12a9a143d323b41115729d1e8aa1e79028627161`; recheck after changes to scalar
+promotion, physical views, layout propagation or binary/unary gradient storage.
+
+On c470, native `(root * 3)._storage_permute((1, 0)).sum()` gives incorrect
+FP16/BF16 gradients with layout propagation enabled, for both lazy and materialized
+views. The analytic gradient is uniformly 3. FP16 instead alternates 0/2.125;
+BF16 alternates 0/3. Disabling the optimization restores all four cases;
+the corresponding FP32/FP64 controls pass. Independent genuine Torch 2.11 CPU
+checks confirm all eight dtype/materialization gradients.
+
+An internal layout transpose lost the operand's weak-scalar promotion marker.
+Its arithmetic could allocate FP32 while the logical gradient exposed those bytes
+as FP16/BF16. The helper now preserves that marker. A second, nonconstant-input
+probe exposed the reverse mismatch for public, explicitly flagged transposes:
+the logical operand and dense producer can legitimately have different scalar
+metadata. That transformation now uses the ordinary kernel when those markers
+differ. Binary/unary storage sharing additionally requires identical dtypes.
+The physical-layout optimization and logical autograd owners remain in use.
+
+The new `tests/ops/test_storage_layout_dtype.py` contains 48 native cases covering
+four floating dtypes, lazy/materialized views, gradient/no-grad paths, broadcast
+scalars and nonconstant input through both transpose routes. Its last 16 cases
+each compare enabled/disabled optimization, exact forward values and analytic
+gradients; public transpose also retains its ordinary FP32 promotion.
+
+| Final verification | Result |
+| --- | --- |
+| Native dtype, alias, attention and channels-last, CPU | 86 passed / 11 CUDA-only skips |
+| Same selection, CUDA enabled | 97 passed / zero skips |
+| Combined core | 322 passed / 42 skipped / one existing xfail |
+| Full structure plus compatibility structure | 1628 passed / six skips |
+| Layout, generated manifest, Ruff and diff checks | Passed |
+
+Both full native invocations run under a fallback-error guard and directly record
+counter 0 before/after. New tests synchronize and assert actual CPU/device
+residency. The CUDA-enabled selection includes existing explicit CPU checks;
+all 48 new cases execute on CUDA in that invocation. First compilation is serial,
+unit and benchmark caches are separate, and no JIT artifact is copied as input.
+
+Unversioned commands, original failures, independent Torch controls, source bytes,
+committed-source archive and forensic native libraries are retained under
+`$JITTOR_LAB_ROOT/_state/native-layout-dtype-review/20261016/`.
+`code-binding-v2.json` proves the four frozen measured files were committed
+unchanged as source 12a9; the runs initially identified c470 plus that explicit
+four-file change. `evidence-seal-v1.json` inventories the closed measurement
+artifacts. The intermediate helper-only version passed the original gradient
+cases but failed the later public-transpose dtype invariant; that failure remains
+preserved separately. This scope is native CPU/CUDA layout correctness; default
+Torch view/ABI and PR disposition remain open.
