@@ -8,6 +8,56 @@ from contextlib import contextmanager
 from pathlib import Path
 
 
+def install_targeted_output_sync(worker_wrapper):
+    """Install the experimental output-copy wait after graph capture.
+
+    Installing during module import changes vLLM's memory-profiling and
+    capture dummy runs. The post-initialization RPC isolates the steady
+    request path so the candidate can be evaluated without that confounder.
+    """
+    import importlib
+    from jittor_adapters.vllm.buffers import (
+        patch_model_runner_targeted_output_sync)
+
+    module = importlib.import_module('vllm.v1.worker.gpu_model_runner')
+    return {'rank': worker_wrapper.worker.rank,
+            'installed': patch_model_runner_targeted_output_sync(module)}
+
+
+def install_legacy_async_output_fetch(worker_wrapper):
+    """Install the opt-in old-runner fetch experiment after graph capture."""
+    runner_module = type(worker_wrapper.worker.model_runner).__module__
+    if runner_module != 'vllm.v1.worker.gpu_model_runner':
+        # V2 uses vllm.v1.worker.gpu.async_utils.AsyncOutput instead. Merely
+        # patching an imported legacy class was incorrectly reported as an
+        # active experiment for Qwen3, even though no request used that class.
+        return {'rank': worker_wrapper.worker.rank, 'installed': False,
+                'runner_module': runner_module, 'reason': 'non-legacy-runner'}
+    import importlib
+    from jittor_adapters.vllm.buffers import (
+        patch_model_runner_async_output_fetch)
+
+    module = importlib.import_module('vllm.v1.worker.gpu_model_runner')
+    return {'rank': worker_wrapper.worker.rank,
+            'installed': patch_model_runner_async_output_fetch(module),
+            'runner_module': runner_module}
+
+
+def install_v2_async_output_fetch(worker_wrapper):
+    """Install the opt-in V2 output-fetch experiment after graph capture."""
+    runner_module = type(worker_wrapper.worker.model_runner).__module__
+    if runner_module != 'vllm.v1.worker.gpu.model_runner':
+        return {'rank': worker_wrapper.worker.rank, 'installed': False,
+                'runner_module': runner_module, 'reason': 'non-v2-runner'}
+    import importlib
+    from jittor_adapters.vllm.buffers import patch_v2_runner_async_output_fetch
+
+    module = importlib.import_module('vllm.v1.worker.gpu.async_utils')
+    return {'rank': worker_wrapper.worker.rank,
+            'installed': patch_v2_runner_async_output_fetch(module),
+            'runner_module': runner_module}
+
+
 def install_light_step_trace(worker_wrapper):
     """Measure host-side vLLM stages without per-stage CUDA syncs."""
     import torch
@@ -17,24 +67,44 @@ def install_light_step_trace(worker_wrapper):
         return {"rank": worker_wrapper.worker.rank, "installed": False}
     state = {name: [] for name in (
         "execute_model", "prepare_inputs", "_prepare_inputs", "prepare_attn",
-        "sample_tokens",
+        "sample_tokens", "model_forward",
         "async_output_init", "cuda_graph_replay")}
+    state["__inside_prepare"] = False
     profiles = {}
     if os.environ.get("JT_LIGHT_CPROFILE") == "1":
         import cProfile
-        profiles = {name: cProfile.Profile() for name in (
-            "_prepare_inputs", "prepare_inputs", "sample_tokens")
+        scope = os.environ.get(
+            "JT_LIGHT_CPROFILE_SCOPE",
+            "_prepare_inputs,prepare_inputs,sample_tokens",
+        )
+        profiles = {name: cProfile.Profile() for name in scope.split(",")
             if getattr(runner, name, None) is not None}
     state["_profiles"] = profiles
     runner._jt_light_step_trace = state
+    live_debug = os.environ.get("JT_LIGHT_LIVE_DEBUG") == "1"
+    rank = worker_wrapper.worker.rank
 
     def timed(name, fn):
         def wrapped(*args, **kwargs):
+            trace_this_call = live_debug and len(state[name]) < 12
+            if trace_this_call:
+                scheduled = (getattr(args[0], "num_scheduled_tokens", None)
+                             if name == "execute_model" and args else None)
+                print(f"JT_LIGHT_LIVE rank={rank} phase={name} enter "
+                      f"scheduled={scheduled}", flush=True)
             start = time.perf_counter_ns()
+            if name == "_prepare_inputs":
+                state["__inside_prepare"] = True
             try:
                 return fn(*args, **kwargs)
             finally:
-                state[name].append(time.perf_counter_ns() - start)
+                elapsed = time.perf_counter_ns() - start
+                state[name].append(elapsed)
+                if trace_this_call:
+                    print(f"JT_LIGHT_LIVE rank={rank} phase={name} exit "
+                          f"elapsed_ms={elapsed / 1e6:.3f}", flush=True)
+                if name == "_prepare_inputs":
+                    state["__inside_prepare"] = False
         return wrapped
 
     for name in ("execute_model", "prepare_inputs", "_prepare_inputs",
@@ -48,6 +118,121 @@ def install_light_step_trace(worker_wrapper):
                     return __profiler.runcall(__original, *args, **kwargs)
                 original = profiled
             setattr(runner, name, timed(name, original))
+    if live_debug:
+        runner.model.forward = timed("model_forward", runner.model.forward)
+        core_model = getattr(runner.model, "model", None)
+        layers = getattr(core_model, "layers", ())
+        for index, layer in enumerate(layers):
+            original_forward = layer.forward
+            calls = [0]
+
+            def traced_layer(*args, __original=original_forward,
+                             __index=index, __calls=calls, **kwargs):
+                __calls[0] += 1
+                trace_this_call = __calls[0] <= 2
+                if trace_this_call:
+                    print(f"JT_LIGHT_LIVE rank={rank} layer={__index} enter",
+                          flush=True)
+                try:
+                    return __original(*args, **kwargs)
+                finally:
+                    if trace_this_call:
+                        print(f"JT_LIGHT_LIVE rank={rank} layer={__index} exit",
+                              flush=True)
+
+            layer.forward = traced_layer
+        if len(layers):
+            first = layers[0]
+            attention = getattr(first, "self_attn", None)
+            probes = (
+                ("input_layernorm", getattr(first, "input_layernorm", None)),
+                ("self_attn", attention),
+                ("qkv_proj", getattr(attention, "qkv_proj", None)),
+                ("q_norm", getattr(attention, "q_norm", None)),
+                ("k_norm", getattr(attention, "k_norm", None)),
+                ("rotary_emb", getattr(attention, "rotary_emb", None)),
+                ("attention_op", getattr(attention, "attn", None)),
+                ("o_proj", getattr(attention, "o_proj", None)),
+                ("post_attention_layernorm",
+                 getattr(first, "post_attention_layernorm", None)),
+                ("mlp", getattr(first, "mlp", None)),
+            )
+            for label, module in probes:
+                if module is None or not hasattr(module, "forward"):
+                    continue
+                original_forward = module.forward
+                calls = [0]
+
+                def traced_submodule(*args, __original=original_forward,
+                                     __label=label, __calls=calls, **kwargs):
+                    __calls[0] += 1
+                    trace_this_call = __calls[0] <= 2
+                    if trace_this_call:
+                        print(f"JT_LIGHT_LIVE rank={rank} submodule={__label} enter",
+                              flush=True)
+                    try:
+                        return __original(*args, **kwargs)
+                    finally:
+                        if trace_this_call:
+                            print(f"JT_LIGHT_LIVE rank={rank} submodule={__label} exit",
+                                  flush=True)
+
+                module.forward = traced_submodule
+        import importlib
+        adapter_flash = importlib.import_module("jittor_adapters.vllm.flash_attn")
+        for label in ("_host_metadata", "reshape_and_cache_kv_v1",
+                      "_direct_full_prefill", "flash_attn_varlen_paged"):
+            original_fn = getattr(adapter_flash, label, None)
+            if original_fn is None:
+                continue
+            calls = [0]
+
+            def traced_attention_helper(*args, __original=original_fn,
+                                        __label=label, __calls=calls, **kwargs):
+                __calls[0] += 1
+                trace_this_call = __calls[0] <= 2
+                if trace_this_call:
+                    print(f"JT_LIGHT_LIVE rank={rank} helper={__label} enter",
+                          flush=True)
+                try:
+                    return __original(*args, **kwargs)
+                finally:
+                    if trace_this_call:
+                        print(f"JT_LIGHT_LIVE rank={rank} helper={__label} exit",
+                              flush=True)
+
+            setattr(adapter_flash, label, traced_attention_helper)
+        from jittor.compat.shim.backends import flash_attention
+        original_load_backend_for = flash_attention.load_backend_for
+
+        def traced_load_backend_for(head_dim, dtype):
+            print(f"JT_LIGHT_LIVE rank={rank} fa_backend_load enter "
+                  f"head_dim={head_dim} dtype={dtype}", flush=True)
+            backend, miss = original_load_backend_for(head_dim, dtype)
+            print(f"JT_LIGHT_LIVE rank={rank} fa_backend_load exit "
+                  f"available={backend is not None} miss={miss}", flush=True)
+            if backend is not None and not getattr(backend, "_jt_live_wrapped", False):
+                original_fa = backend.flash_attn_func
+                calls = [0]
+
+                def traced_fa(*args, **kwargs):
+                    calls[0] += 1
+                    trace_this_call = calls[0] <= 2
+                    if trace_this_call:
+                        print(f"JT_LIGHT_LIVE rank={rank} fa_kernel enter",
+                              flush=True)
+                    try:
+                        return original_fa(*args, **kwargs)
+                    finally:
+                        if trace_this_call:
+                            print(f"JT_LIGHT_LIVE rank={rank} fa_kernel exit",
+                                  flush=True)
+
+                backend.flash_attn_func = traced_fa
+                backend._jt_live_wrapped = True
+            return backend, miss
+
+        flash_attention.load_backend_for = traced_load_backend_for
     from vllm.v1.worker.gpu import async_utils
     cls = async_utils.AsyncOutput
     cls.__init__ = timed("async_output_init", cls.__init__)
@@ -57,6 +242,43 @@ def install_light_step_trace(worker_wrapper):
     except (AttributeError, TypeError):
         # Native PyTorch exposes an immutable C++ graph class.
         pass
+    if os.environ.get("JT_LIGHT_COPY_TRACE") == "1":
+        from vllm.v1.utils import CpuGpuBuffer
+
+        state["cpu_gpu_copy_in_prepare"] = []
+        original_copy = CpuGpuBuffer.copy_to_gpu
+
+        def traced_copy(self, *args, **kwargs):
+            if not state["__inside_prepare"]:
+                return original_copy(self, *args, **kwargs)
+            start = time.perf_counter_ns()
+            try:
+                return original_copy(self, *args, **kwargs)
+            finally:
+                state["cpu_gpu_copy_in_prepare"].append(
+                    time.perf_counter_ns() - start)
+
+        CpuGpuBuffer.copy_to_gpu = traced_copy
+        if hasattr(torch, "_torch_compat_install_context"):
+            import jittor as jt
+
+            state["native_copy_into_in_prepare"] = []
+            original_native_copy = jt.Var._copy_into
+
+            def traced_native_copy(self, *args, **kwargs):
+                if not state["__inside_prepare"]:
+                    return original_native_copy(self, *args, **kwargs)
+                start = time.perf_counter_ns()
+                try:
+                    return original_native_copy(self, *args, **kwargs)
+                finally:
+                    state["native_copy_into_in_prepare"].append(
+                        time.perf_counter_ns() - start)
+
+            try:
+                jt.Var._copy_into = traced_native_copy
+            except (AttributeError, TypeError):
+                state["native_copy_into_in_prepare"] = []
     return {"rank": worker_wrapper.worker.rank, "installed": True}
 
 
@@ -73,10 +295,16 @@ def light_step_trace(worker_wrapper):
             out = io.StringIO()
             pstats.Stats(profiler, stream=out).strip_dirs().sort_stats(
                 "cumulative").print_stats(35)
+            if os.environ.get("JT_LIGHT_CPROFILE_CALLERS") == "1":
+                pstats.Stats(profiler, stream=out).strip_dirs().sort_stats(
+                    "cumulative").print_callers("copy_to_uva")
+                pstats.Stats(profiler, stream=out).strip_dirs().sort_stats(
+                    "cumulative").print_callers("copy_readonly_sample_meta")
             reports[name] = out.getvalue()
     return {"rank": worker_wrapper.worker.rank,
             "timings_ns": {name: list(values) for name, values in
-                           state.items() if name != "_profiles"},
+                           state.items() if name != "_profiles"
+                           and not name.startswith("__")},
             "cprofile": reports}
 
 

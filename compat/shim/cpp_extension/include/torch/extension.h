@@ -177,6 +177,7 @@ namespace detail {
     void*    vh_device_ptr(jittor::VarHolder*);        // device ptr, no cpu-migrate
     int64_t  vh_ndim(jittor::VarHolder*);
     int64_t  vh_size(jittor::VarHolder*, int64_t d);
+    int64_t  vh_storage_stride(jittor::VarHolder*, int64_t d);
     void     vh_shape(jittor::VarHolder*, std::vector<int64_t>& out);
     int64_t  vh_numel(jittor::VarHolder*);
     int64_t  vh_dsize(jittor::VarHolder*);
@@ -199,10 +200,12 @@ namespace detail {
     // python bridge
     bool     is_jittor_var(void* pyobj);
     bool     pyvar_is_ext_mutable(void* pyobj);
+    bool     pyvar_is_ext_mutable_borrow(void* pyobj);
     bool     pyvar_ext_borrow_inputs_enabled();
     bool     pyvar_is_ext_readonly_borrow(void* pyobj);
     Tensor   tensor_from_pyvar(void* pyobj);           // default extension boundary
     Tensor   tensor_from_pyvar_readonly(void* pyobj);  // explicit readonly borrow
+    Tensor   tensor_from_pyvar_mutable_borrow(void* pyobj);  // explicit in-place borrow
     void     commit_tensor_to_pyvar(void* pyobj, const Tensor& t);
     void*    tensor_to_pyvar(const Tensor& t);         // +1 PyObject*
 
@@ -227,8 +230,7 @@ public:
     int64_t size(int64_t d) const { return detail::vh_size(vh_.get(), d); }
     IntArrayRef sizes() const { IntArrayRef r; detail::vh_shape(vh_.get(), r.v); return r; }
     int64_t stride(int64_t d) const {
-        int64_t nd = dim(); if (d < 0) d += nd; int64_t s = 1;
-        for (int64_t i = nd - 1; i > d; --i) s *= size(i); return s;
+        return detail::vh_storage_stride(vh_.get(), d);
     }
     ScalarType scalar_type() const { return detail::name_to_scalar(detail::vh_dtype_name(vh_.get())); }
     Dtype dtype() const { return Dtype(scalar_type()); }
@@ -268,9 +270,7 @@ public:
     Tensor view(IntArrayRef shape) const;
     Tensor view(ScalarType st) const;          // bit-reinterpret to same-width dtype
     Tensor reshape(IntArrayRef shape) const { return view(shape); }
-    Tensor transpose(int64_t, int64_t) const {
-        throw std::runtime_error("Tensor::transpose is not implemented in the Jittor torch shim");
-    }
+    Tensor transpose(int64_t dim0, int64_t dim1) const;
     Tensor clone() const;
     // in-place reallocation (diff-gaussian-rasterization's resizeFunctional grows
     // empty byte buffers to the size the rasterizer computes): swaps the underlying
@@ -459,14 +459,19 @@ template <> struct type_caster<jtorch::Tensor> {
     PYBIND11_TYPE_CASTER(jtorch::Tensor, _("Tensor"));
     object keepalive;
     bool readonly_arg = false;
+    bool mutable_borrow_arg = false;
     bool mutable_arg = false;
     bool load(handle src, bool) {
         if (!src || src.is_none()) return false;
         if (!jtorch::detail::is_jittor_var(src.ptr())) return false;
         readonly_arg = jtorch::detail::pyvar_is_ext_readonly_borrow(src.ptr());
-        mutable_arg = readonly_arg ? false : jtorch::detail::pyvar_is_ext_mutable(src.ptr());
+        mutable_borrow_arg = !readonly_arg &&
+            jtorch::detail::pyvar_is_ext_mutable_borrow(src.ptr());
+        mutable_arg = (readonly_arg || mutable_borrow_arg) ? false :
+            jtorch::detail::pyvar_is_ext_mutable(src.ptr());
         value = readonly_arg ? jtorch::detail::tensor_from_pyvar_readonly(src.ptr())
-                             : jtorch::detail::tensor_from_pyvar(src.ptr());
+              : mutable_borrow_arg ? jtorch::detail::tensor_from_pyvar_mutable_borrow(src.ptr())
+              : jtorch::detail::tensor_from_pyvar(src.ptr());
         keepalive = reinterpret_borrow<object>(src);
         return true;
     }

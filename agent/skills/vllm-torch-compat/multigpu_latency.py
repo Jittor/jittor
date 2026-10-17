@@ -135,6 +135,9 @@ def main():
                                      install_phase_trace, phase_trace,
                                      begin_device_profile, end_device_profile,
                                      install_light_step_trace, light_step_trace,
+                                     install_targeted_output_sync,
+                                     install_legacy_async_output_fetch,
+                                     install_v2_async_output_fetch,
                                      install_attention_trace, attention_trace,
                                      install_collective_trace, collective_trace,
                                      install_prefill_attention_bypass,
@@ -153,7 +156,9 @@ def main():
                        enforce_eager=not use_cuda_graph,
                        enable_prefix_caching=False, seed=0,
                        max_model_len=max(512, args.input_tokens + args.output_tokens),
-                       max_num_seqs=max(args.batches), gpu_memory_utilization=.35,
+                       max_num_seqs=max(args.batches),
+                       gpu_memory_utilization=float(
+                           os.environ.get('JT_GPU_MEMORY_UTILIZATION', '.35')),
                        attention_config={'backend': 'FLASH_ATTN'})
         if use_cuda_graph:
             graph_mode = os.environ.get(
@@ -182,6 +187,24 @@ def main():
         assert {row['rank'] for row in before} == expected_ranks
         assert {tuple(row['driver_devices']) for row in before} == expected_devices
         report['placement_before'] = before
+        if (args.backend == 'jittor' and sum(
+                os.environ.get(name) == '1' for name in (
+                    'JITTOR_VLLM_EXPERIMENTAL_LEGACY_ASYNC_FETCH',
+                    'JITTOR_VLLM_EXPERIMENTAL_V2_ASYNC_FETCH',
+                    'JITTOR_VLLM_EXPERIMENTAL_TARGETED_OUTPUT_SYNC')) > 1):
+            raise ValueError('choose only one output-copy experiment')
+        if (args.backend == 'jittor' and os.environ.get(
+                'JITTOR_VLLM_EXPERIMENTAL_LEGACY_ASYNC_FETCH') == '1'):
+            report['legacy_async_fetch_install'] = executor.collective_rpc(
+                install_legacy_async_output_fetch, timeout=120)
+        if (args.backend == 'jittor' and os.environ.get(
+                'JITTOR_VLLM_EXPERIMENTAL_V2_ASYNC_FETCH') == '1'):
+            report['v2_async_fetch_install'] = executor.collective_rpc(
+                install_v2_async_output_fetch, timeout=120)
+        if (args.backend == 'jittor' and os.environ.get(
+                'JITTOR_VLLM_EXPERIMENTAL_TARGETED_OUTPUT_SYNC') == '1'):
+            report['targeted_output_sync_install'] = executor.collective_rpc(
+                install_targeted_output_sync, timeout=120)
         if os.environ.get('JT_PHASE_TRACE') == '1':
             report['phase_trace_install'] = executor.collective_rpc(
                 install_phase_trace, timeout=120)

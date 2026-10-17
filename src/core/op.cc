@@ -5,6 +5,14 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include <limits>
+#include <cstdlib>
+#include <cstdio>
+#include <cstdint>
+#include <dlfcn.h>
+#include <functional>
+#include <mutex>
+#include <thread>
+#include <unordered_map>
 
 #include "core/node.h"
 #include "core/op.h"
@@ -47,6 +55,96 @@ jit_cache_map<string> jit_key_mapper;
 std::atomic<int64> Op::number_of_lived_ops{0};
 std::atomic<int64> Op::number_of_created_ops{0};
 
+namespace {
+
+struct OpDeathRecord {
+    int64 id = -1;
+    size_t thread = 0;
+    void* caller = nullptr;
+};
+
+struct OpLifetimeRegistry {
+    std::mutex mutex;
+    std::unordered_map<const Op*, int64> live;
+    std::unordered_map<const Op*, OpDeathRecord> last_death;
+};
+
+bool op_lifetime_check_enabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("JT_EXPERIMENTAL_OP_LIFETIME_CHECK");
+        return value && value[0] == '1' && value[1] == '\0';
+    }();
+    return enabled;
+}
+
+OpLifetimeRegistry& op_lifetime_registry() {
+    // Exit-time Jittor cleanup may still destroy operators.
+    static auto* registry = new OpLifetimeRegistry();
+    return *registry;
+}
+
+void note_op_created(const Op* op) {
+    if (!op_lifetime_check_enabled()) return;
+    auto& registry = op_lifetime_registry();
+    std::lock_guard<std::mutex> guard(registry.mutex);
+    registry.live[op] = op->id;
+}
+
+void note_op_destroyed(const Op* op, void* caller) {
+    if (!op_lifetime_check_enabled()) return;
+    OpDeathRecord record;
+    record.id = op->id;
+    record.thread = std::hash<std::thread::id>{}(std::this_thread::get_id());
+    // Capture the destructor's caller, not this helper's caller. The latter
+    // always resolves to Op::~Op and cannot identify the owning release path.
+    record.caller = caller;
+    auto& registry = op_lifetime_registry();
+    std::lock_guard<std::mutex> guard(registry.mutex);
+    registry.live.erase(op);
+    registry.last_death[op] = record;
+}
+
+} // namespace
+
+void debug_check_op_lifetime(const Op* op) {
+    if (!op_lifetime_check_enabled()) return;
+    auto& registry = op_lifetime_registry();
+    OpDeathRecord death;
+    bool has_death = false;
+    int64 live_id = -1;
+    {
+        std::lock_guard<std::mutex> guard(registry.mutex);
+        auto live = registry.live.find(op);
+        if (live != registry.live.end()) live_id = live->second;
+        auto dead = registry.last_death.find(op);
+        if (dead != registry.last_death.end()) {
+            death = dead->second;
+            has_death = true;
+        }
+        // The pointer may already name corrupted/freed storage. The
+        // registry's key is safe to compare; dereferencing op here is not.
+        if (live_id >= 0) return;
+    }
+    std::fprintf(stderr,
+        "JT_OP_LIFETIME_INVALID op=%p live_id=%lld last_dead_id=%lld last_dead_thread=%zu check_thread=%zu last_dead_caller=%p\n",
+        (const void*)op, (long long)live_id,
+        (long long)(has_death ? death.id : -1),
+        has_death ? death.thread : 0,
+        std::hash<std::thread::id>{}(std::this_thread::get_id()),
+        has_death ? death.caller : nullptr);
+    Dl_info symbol = {};
+    if (has_death && death.caller && dladdr(death.caller, &symbol)) {
+        std::fprintf(stderr,
+            "JT_OP_LIFETIME_DEATH_SITE library=%s symbol=%s library_offset=%zu\n",
+            symbol.dli_fname ? symbol.dli_fname : "?",
+            symbol.dli_sname ? symbol.dli_sname : "?",
+            static_cast<size_t>(reinterpret_cast<uintptr_t>(death.caller) -
+                                reinterpret_cast<uintptr_t>(symbol.dli_fbase)));
+    }
+    std::fflush(stderr);
+    std::abort();
+}
+
 // Only Ops with disabled inputs have an entry. Node flag bits record whether
 // an Op has already snapshotted and provide the common no-map-lookup fast path.
 static unordered_map<int64, vector<int64>>& requires_grad_disabled_edges() {
@@ -76,10 +174,16 @@ Op::Op() {
         OpFlags::_amp_nbits);
     number_of_lived_ops++;
     number_of_created_ops++;
+    note_op_created(this);
     notify_node_created(this);
 }
 
 Op::~Op() {
+    void* caller = nullptr;
+    #if defined(__GNUC__)
+    caller = __builtin_return_address(0);
+    #endif
+    note_op_destroyed(this, caller);
     if (flag(OpFlags::_requires_grad_disabled))
         requires_grad_disabled_edges().erase(id);
     number_of_lived_ops--;

@@ -1,4 +1,22 @@
 """Private CUDA inference kernels for paged KV caches."""
+import os
+
+# Experimental split-decode workspaces must outlive captured CUDA graphs.
+# Jittor's native Var cannot be weak-referenced; the vLLM runner releases these
+# entries explicitly after destroying its captured graphs.
+_split_decode_scratch = {}
+
+
+def release_split_decode_scratch(kv_caches):
+    """Release workspaces for KV caches whose graph executables are gone."""
+    cache_ids = {id(cache) for cache in kv_caches if cache is not None}
+    released = 0
+    for key in list(_split_decode_scratch):
+        if key[0] in cache_ids:
+            del _split_decode_scratch[key]
+            released += 1
+    return released
+
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
@@ -314,7 +332,19 @@ def _reshape_cache_and_paged_attention_decode_cuda(
             or not (scale > 0 and scale < float("inf"))):
         return None
 
-    warps = 8
+    split_setting = os.environ.get("JITTOR_VLLM_EXPERIMENTAL_SPLIT_DECODE", "0")
+    if split_setting != "0":
+        if split_setting not in ("4", "8", "16", "32", "64"):
+            raise ValueError("split decode must be 0, 4, 8, 16, 32, or 64")
+        return _split_reshape_cache_paged_attention_decode_cuda(
+            query, key, value, kv_cache, slot_mapping, seq_lens,
+            block_table, out, requests, query_heads, head_dim, kv_heads,
+            cache_shape, table_shape, scale, int(split_setting))
+
+    warp_setting = os.environ.get("JITTOR_VLLM_EXPERIMENTAL_FUSED_DECODE_WARPS", "8")
+    if warp_setting not in ("8", "16", "32"):
+        raise ValueError("fused decode warps must be 8, 16, or 32")
+    warps = int(warp_setting)
     threads = warps * 32
     cuda_src = cached_source(r"""
     __device__ __forceinline__ float warp_sum(float value) {
@@ -464,6 +494,224 @@ def _reshape_cache_and_paged_attention_decode_cuda(
     jt.code(
         [query, key, value, slot_mapping, seq_lens, block_table],
         [kv_cache, out], cuda_src=cuda_src)
+    return _stop_grad_outputs(out)
+
+
+def _split_reshape_cache_paged_attention_decode_cuda(
+    query, key, value, kv_cache, slot_mapping, seq_lens, block_table, out,
+    requests, query_heads, head_dim, kv_heads, cache_shape, table_shape,
+    scale, splits,
+):
+    """Parallelize long-context decode over independent KV segments.
+
+    Each CTA computes stable softmax statistics for one (head, segment).
+    A second launch merges them. The first launch also scatters current K/V;
+    attention reads that current token directly from ``key``/``value`` so the
+    scatter CTAs need no cross-CTA synchronization.
+    """
+    warp_setting = os.environ.get(
+        "JITTOR_VLLM_EXPERIMENTAL_SPLIT_DECODE_WARPS", "8")
+    if warp_setting not in ("4", "8", "16"):
+        raise ValueError("split decode warps must be 4, 8, or 16")
+    warps = int(warp_setting)
+    threads = warps * 32
+    scratch_key = (id(kv_cache), requests, query_heads, head_dim, splits)
+    entry = _split_decode_scratch.get(scratch_key)
+    if entry is None or entry[0] is not kv_cache:
+        scratch = jt.empty((requests * query_heads, splits, head_dim + 2),
+                           dtype=jt.float32)
+        _split_decode_scratch[scratch_key] = (kv_cache, scratch)
+    else:
+        scratch = entry[1]
+    cuda_src = cached_source(r"""
+    __device__ __forceinline__ float warp_sum(float value) {
+        for (int offset = 16; offset > 0; offset >>= 1)
+            value += __shfl_down_sync(0xffffffff, value, offset);
+        return value;
+    }
+    __global__ static void split_decode_partials(
+            const in0_type* query, const in1_type* key,
+            const in2_type* value, const in3_type* slot_mapping,
+            const in4_type* seq_lens, const in5_type* block_table,
+            out0_type* cache, float* partials) {
+        int tid = threadIdx.x;
+        if (blockIdx.x >= %(attention_blocks)d) {
+            int64_t index =
+                (int64_t)(blockIdx.x - %(attention_blocks)d) * blockDim.x + tid;
+            if (index < %(write_elements)d) {
+                int request = index / %(token_stride)d;
+                int within_token = index - (int64_t)request * %(token_stride)d;
+                int slot = (int)slot_mapping[request];
+                if (slot >= 0 && slot < %(slot_capacity)d) {
+                    int current_block = slot / %(block_size)d;
+                    int current_offset = slot %% %(block_size)d;
+                    int64_t key_base =
+                        (((int64_t)current_block * 2 * %(block_size)d
+                          + current_offset) * %(token_stride)d)
+                        + within_token;
+                    int64_t value_base = key_base
+                        + (int64_t)%(block_size)d * %(token_stride)d;
+                    cache[key_base] = out0_type(key[index]);
+                    cache[value_base] = out0_type(value[index]);
+                }
+            }
+            return;
+        }
+        int pair = blockIdx.x / %(splits)d;
+        int split = blockIdx.x %% %(splits)d;
+        int request = pair / %(query_heads)d;
+        int query_head = pair %% %(query_heads)d;
+        int kv_head = query_head / %(head_repeat)d;
+        int lane = tid & 31;
+        int warp = tid >> 5;
+        int seq_len = (int)seq_lens[request];
+        int64_t query_base =
+            ((int64_t)request * %(query_heads)d + query_head) * %(head_dim)d;
+        float local_max = -1.0e30f;
+        float local_denominator = 0.0f;
+        float accumulator[%(values_per_lane)d];
+        #pragma unroll
+        for (int item = 0; item < %(values_per_lane)d; ++item)
+            accumulator[item] = 0.0f;
+        for (int position = split * %(warps)d + warp;
+             position < seq_len; position += %(splits)d * %(warps)d) {
+            int logical_block = position / %(block_size)d;
+            int offset = position %% %(block_size)d;
+            int physical_block = (int)block_table[
+                request * %(max_blocks)d + logical_block];
+            int64_t key_base =
+                ((((int64_t)physical_block * 2) * %(block_size)d + offset)
+                 * %(kv_heads)d + kv_head) * %(head_dim)d;
+            bool is_current = position == seq_len - 1;
+            int64_t current_base =
+                ((int64_t)request * %(kv_heads)d + kv_head) * %(head_dim)d;
+            float partial = 0.0f;
+            for (int dim = lane; dim < %(head_dim)d; dim += 32) {
+                float key_value = is_current
+                    ? static_cast<float>(key[current_base + dim])
+                    : static_cast<float>(cache[key_base + dim]);
+                partial += static_cast<float>(query[query_base + dim])
+                         * key_value;
+            }
+            partial = warp_sum(partial);
+            float score = __shfl_sync(0xffffffff, partial, 0) * %(scale).9gf;
+            float next_max = fmaxf(local_max, score);
+            float alpha = expf(local_max - next_max);
+            float beta = expf(score - next_max);
+            local_denominator = local_denominator * alpha + beta;
+            int64_t value_base = key_base
+                + (int64_t)%(block_size)d * %(kv_heads)d * %(head_dim)d;
+            #pragma unroll
+            for (int item = 0; item < %(values_per_lane)d; ++item) {
+                int dim = lane + item * 32;
+                if (dim < %(head_dim)d) {
+                    float value_value = is_current
+                        ? static_cast<float>(value[current_base + dim])
+                        : static_cast<float>(cache[value_base + dim]);
+                    accumulator[item] = accumulator[item] * alpha
+                        + beta * value_value;
+                }
+            }
+            local_max = next_max;
+        }
+        __shared__ float warp_max[%(warps)d];
+        __shared__ float warp_denominator[%(warps)d];
+        __shared__ float warp_output[%(warps)d][%(head_dim)d];
+        if (lane == 0) {
+            warp_max[warp] = local_max;
+            warp_denominator[warp] = local_denominator;
+        }
+        #pragma unroll
+        for (int item = 0; item < %(values_per_lane)d; ++item) {
+            int dim = lane + item * 32;
+            if (dim < %(head_dim)d)
+                warp_output[warp][dim] = accumulator[item];
+        }
+        __syncthreads();
+        float group_max = warp_max[0];
+        #pragma unroll
+        for (int owner = 1; owner < %(warps)d; ++owner)
+            group_max = fmaxf(group_max, warp_max[owner]);
+        int64_t scratch_base =
+            ((int64_t)pair * %(splits)d + split) * (%(head_dim)d + 2);
+        if (tid == 0)
+            partials[scratch_base] = group_max;
+        if (tid < %(head_dim)d) {
+            float denominator = 0.0f;
+            float numerator = 0.0f;
+            #pragma unroll
+            for (int owner = 0; owner < %(warps)d; ++owner) {
+                float weight = expf(warp_max[owner] - group_max);
+                denominator += warp_denominator[owner] * weight;
+                numerator += warp_output[owner][tid] * weight;
+            }
+            if (tid == 0)
+                partials[scratch_base + 1] = denominator;
+            partials[scratch_base + 2 + tid] = numerator;
+        }
+    }
+    __global__ static void split_decode_merge(
+            const in4_type* seq_lens, const float* partials,
+            out1_type* output) {
+        int pair = blockIdx.x;
+        int tid = threadIdx.x;
+        int request = pair / %(query_heads)d;
+        int64_t output_base = (int64_t)pair * %(head_dim)d;
+        if ((int)seq_lens[request] <= 0) {
+            if (tid < %(head_dim)d)
+                output[output_base + tid] = out1_type(0.0f);
+            return;
+        }
+        float global_max = -1.0e30f;
+        #pragma unroll
+        for (int split = 0; split < %(splits)d; ++split) {
+            int64_t base =
+                ((int64_t)pair * %(splits)d + split) * (%(head_dim)d + 2);
+            global_max = fmaxf(global_max, partials[base]);
+        }
+        float denominator = 0.0f;
+        float numerator = 0.0f;
+        #pragma unroll
+        for (int split = 0; split < %(splits)d; ++split) {
+            int64_t base =
+                ((int64_t)pair * %(splits)d + split) * (%(head_dim)d + 2);
+            float weight = expf(partials[base] - global_max);
+            denominator += partials[base + 1] * weight;
+            if (tid < %(head_dim)d)
+                numerator += partials[base + 2 + tid] * weight;
+        }
+        if (tid < %(head_dim)d)
+            output[output_base + tid] = out1_type(numerator / denominator);
+    }
+    split_decode_partials<<<%(blocks)d, %(threads)d>>>(
+        in0_p, in1_p, in2_p, in3_p, in4_p, in5_p, out0_p,
+        reinterpret_cast<float*>(out2_p));
+    CHECK(0 == cudaGetLastError());
+    split_decode_merge<<<%(attention_pairs)d, %(threads)d>>>(
+        in4_p, reinterpret_cast<const float*>(out2_p), out1_p);
+    CHECK(0 == cudaGetLastError());
+    """, {
+        "attention_pairs": requests * query_heads,
+        "attention_blocks": requests * query_heads * splits,
+        "blocks": (requests * query_heads * splits
+                   + (requests * kv_heads * head_dim + threads - 1) // threads),
+        "block_size": cache_shape[2],
+        "head_dim": head_dim,
+        "head_repeat": query_heads // kv_heads,
+        "kv_heads": kv_heads,
+        "max_blocks": table_shape[1],
+        "query_heads": query_heads,
+        "scale": scale,
+        "slot_capacity": cache_shape[0] * cache_shape[2],
+        "threads": threads,
+        "token_stride": kv_heads * head_dim,
+        "values_per_lane": (head_dim + 31) // 32,
+        "warps": warps,
+        "splits": splits,
+        "write_elements": requests * kv_heads * head_dim,
+    })
+    jt.code([query, key, value, slot_mapping, seq_lens, block_table],
+            [kv_cache, out, scratch], cuda_src=cuda_src)
     return _stop_grad_outputs(out)
 
 

@@ -125,6 +125,10 @@ struct Op : Node {
     string get_hash_name();
 };
 
+// Default-off diagnostic for an operator pointer collected by the executor
+// but freed before fusion reads it. Not used by normal inference builds.
+EXTERN_LIB void debug_check_op_lifetime(const Op* op);
+
 std::ostream& operator<<(std::ostream& os, const Op* var);
 
 // For an op that writes some of its inputs in place -- outputs that share
