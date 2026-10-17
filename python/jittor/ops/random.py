@@ -226,8 +226,9 @@ class CounterGenerator:
     Each nonempty call reserves four counter positions; tensor elements occupy
     independent subsequences. Reserving at construction (not execution) makes
     lazy draws independent of evaluation order. The offset is in 32-bit words
-    and can be restored to replay a whole draw. CPU and CUDA are supported;
-    neither backend draws tensor values on the host for the other backend.
+    and can be restored to replay a whole draw. CPU and CUDA use a native code
+    kernel; ACL currently uses an independent host Philox stream copied to the
+    selected device because ACL cannot compile the CUDA code kernel.
 
     This is a Jittor stream, not PyTorch's launch-geometry-dependent RNG stream.
     """
@@ -275,15 +276,16 @@ class CounterGenerator:
         return self
 
     def uniform_like(self, like, dtype="float32"):
-        """Return device-native uniform samples with ``like``'s shape/device."""
+        """Return uniform samples with ``like``'s shape and device."""
         import jittor as jt
         from .._core.var import device_scope_like
         from .._core.dtypes import dtype_name
         dtype = dtype_name(dtype)
         if dtype not in ("float32", "float64"):
             raise ValueError("CounterGenerator uniform requires float32 or float64")
-        if int(like.placement_backend) not in (-1, 0, 1):
-            raise NotImplementedError("CounterGenerator supports CPU and CUDA")
+        backend = int(like.placement_backend)
+        if backend not in (-1, 0, 1, 2):
+            raise NotImplementedError("CounterGenerator supports CPU, CUDA and ACL")
         shape = tuple(int(v) for v in like.shape)
         count = int(np.prod(shape))
         if count > 2**31 - 1:
@@ -297,6 +299,19 @@ class CounterGenerator:
         with device_scope_like(like):
             if not count:
                 return jt.empty(shape, dtype=dtype)
+            if backend == 2:
+                # Keep the explicit stream reproducible and separate from
+                # jt.random. The ACL path currently requires one host-to-
+                # device transfer for each draw.
+                seed_words = [seed & 0xffffffff, seed >> 32,
+                              (offset // 4) & 0xffffffff, (offset // 4) >> 32]
+                rng = np.random.Generator(np.random.Philox(
+                    np.random.SeedSequence(seed_words)))
+                values = rng.random(count, dtype=np.float64).astype(dtype)
+                values = np.clip(values, np.finfo(values.dtype).tiny,
+                                 np.nextafter(values.dtype.type(1),
+                                              values.dtype.type(0)))
+                return jt.array(values.reshape(shape), dtype=dtype).stop_grad()
             # Only four scalar metadata words cross to the selected device.
             # Capturing them as an immutable input also prevents a later seed
             # reset from changing an already-queued lazy draw.

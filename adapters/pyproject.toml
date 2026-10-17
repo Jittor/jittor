@@ -15,6 +15,9 @@ jittor_transformers = "jittor_adapters.transformers:register"
 jittor_torchmetrics = "jittor_adapters.torchmetrics:register"
 jittor_vllm = "jittor_adapters.vllm:register"
 
+[project.entry-points."vllm.platform_plugins"]
+jittor_npu = "jittor_adapters.vllm.npu_platform:platform_plugin"
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["jittor_adapters*"]

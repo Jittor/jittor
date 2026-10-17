@@ -55,6 +55,90 @@ def patch_rms_norm(module):
     return True
 
 
+def patch_qwen2_prefill_norm_lifetime(module):
+    """Opt-in, bounded ownership for Qwen2's first prefill RMSNorm output.
+
+    The first decoder layer is the only one whose input norm receives no
+    residual.  The ACL prefill output has shown reference-lifetime-sensitive
+    numerics before QKV.  Keep only the latest multi-token result per model;
+    decode and the default path are unchanged.
+    """
+    model = getattr(module, "Qwen2Model", None)
+    if model is None or getattr(model, _PATCHED, False):
+        return False
+    if os.environ.get("JITTOR_VLLM_NPU_KEEP_PREFILL_ROOT_NORM") != "1":
+        return False
+    original_init = model.__init__
+
+    def __init__(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        if getattr(self, "start_layer", None) != 0:
+            return
+        norm = self.layers[0].input_layernorm
+        original_forward = norm.forward
+        original_forward_slot = norm.__dict__.get("forward")
+        had_forward_slot = "forward" in norm.__dict__
+
+        def retained_forward(*norm_args, **norm_kwargs):
+            output = original_forward(*norm_args, **norm_kwargs)
+            value = (norm_args[0] if norm_args else norm_kwargs.get("x"))
+            residual = (norm_args[1] if len(norm_args) > 1
+                        else norm_kwargs.get("residual"))
+            if (getattr(jt.compiler, "has_acl", 0)
+                    and getattr(jt.flags, "use_acl", 0)
+                    and value is not None
+                    and residual is None and len(value.shape) == 2
+                    and int(value.shape[0]) > 1):
+                norm.__dict__["_jittor_prefill_root_norm_output"] = output
+            return output
+
+        # Install the lifetime workaround only for a single-request prefill.
+        # A wrapped norm, even without keeping its output, changes Qwen2.5
+        # batch-4 numerics; multi-request calls must use the original method.
+        original_model_forward = self.forward
+
+        def selected_forward(*model_args, **model_kwargs):
+            single_prefill = False
+            if (getattr(jt.compiler, "has_acl", 0)
+                    and getattr(jt.flags, "use_acl", 0)):
+                from vllm.forward_context import (
+                    get_forward_context, is_forward_context_available,
+                )
+                if is_forward_context_available():
+                    all_metadata = get_forward_context().attn_metadata
+                    if isinstance(all_metadata, dict):
+                        metadata = next((item for item in all_metadata.values()
+                                         if item is not None), None)
+                        starts = getattr(metadata, "query_start_loc", None)
+                        single_prefill = (
+                            starts is not None and int(starts.numel()) == 2
+                            and int(metadata.num_actual_tokens) > 1)
+                        if (os.environ.get("JITTOR_VLLM_NPU_ROOT_NORM_TRACE") == "1"
+                                and not self.__dict__.get(
+                                    "_jittor_prefill_root_norm_trace")):
+                            print("root_norm_context", "starts_numel",
+                                  None if starts is None else int(starts.numel()),
+                                  "actual_tokens",
+                                  getattr(metadata, "num_actual_tokens", None),
+                                  flush=True)
+                            self.__dict__["_jittor_prefill_root_norm_trace"] = True
+            if single_prefill:
+                if norm.__dict__.get("forward") is not retained_forward:
+                    set_attr(norm, "forward", retained_forward)
+            elif norm.__dict__.get("forward") is retained_forward:
+                if had_forward_slot:
+                    set_attr(norm, "forward", original_forward_slot)
+                else:
+                    del norm.__dict__["forward"]
+            return original_model_forward(*model_args, **model_kwargs)
+
+        set_attr(self, "forward", selected_forward)
+
+    set_attr(model, "__init__", __init__)
+    set_attr(model, _PATCHED, True)
+    return True
+
+
 def patch_rotary_embedding(module):
     """Route rotary position embedding through jt.nn."""
 
@@ -258,11 +342,22 @@ def patch_unquantized_linear(module):
     original = method.apply
     enabled = os.environ.get("JITTOR_VLLM_DIRECT_CUBLAS", "1") != "0"
     cublas = get_library_ops("cublas") if enabled else None
+    fused_acl = os.environ.get("JITTOR_VLLM_NPU_EXPERIMENTAL_FUSED_LINEAR") == "1"
 
     def apply(self, layer, x, bias=None):
+        weight = getattr(layer, "weight", None)
+        if (fused_acl and getattr(jt.compiler, "has_acl", False)
+                and bias is not None and isinstance(x, jt.Var)
+                and isinstance(weight, jt.Var) and isinstance(bias, jt.Var)
+                and x.ndim >= 2 and weight.ndim == 2 and bias.ndim == 1
+                and x.shape[-1] == weight.shape[1]
+                and weight.shape[0] == bias.shape[0]
+                and str(x.dtype).rsplit(".", 1)[-1] in ("bfloat16", "float16")
+                and x.dtype == weight.dtype == bias.dtype):
+            from jittor.backends.acl.kernels.ops.fused_linear_op import fused_linear_acl
+            return fused_linear_acl(x, weight, bias)
         eligible = layer.__dict__.get("_jittor_direct_cublas", False)
         if not eligible and cublas is not None:
-            weight = getattr(layer, "weight", None)
             # Do not permanently cache a negative result: model construction,
             # loading, and warmup can reach this method before CUDA/no-grad is
             # active even though steady-state inference is eligible.
@@ -291,6 +386,7 @@ def patch_unquantized_linear(module):
 #: Module path -> the patch that runs once that module has defined its classes.
 PATCHES = {
     "vllm.model_executor.layers.layernorm": patch_rms_norm,
+    "vllm.model_executor.models.qwen2": patch_qwen2_prefill_norm_lifetime,
     "vllm.model_executor.layers.rotary_embedding.base": patch_rotary_embedding,
     "vllm.model_executor.layers.activation": patch_activations,
     "vllm.model_executor.layers.linear": patch_unquantized_linear,

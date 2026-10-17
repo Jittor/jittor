@@ -4,6 +4,10 @@
 #include <Python.h>
 #include <pystate.h>
 #include <algorithm>
+#include <atomic>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <queue>
 #include <set>
 #include "core/common.h"
@@ -130,13 +134,89 @@ namespace jittor
                 attr->actualSeqLengths.data(), attr->actualSeqLengths.size());
         }
         char *layout = const_cast<char *>(attr->inputLayout.data());
-        ret = aclnnIncreFlashAttentionV4GetWorkspaceSize(
-            inputTensors[0], key, value, nullptr, nullptr, actualSeqLengths,
-            nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
-            blockTable, nullptr, attr->headNum, attr->scale, layout,
-            attr->keyValueHeadNum, attr->blockSize, attr->innerPrecise, outputTensors[0],
-            &workspaceSize, &executor);
-        launch(ret, aclnnIncreFlashAttentionV4, true);
+        // The paged IncreFlashAttention kernel and vLLM-Ascend's fused infer
+        // kernel can round BF16 decode differently on real model inputs. Keep
+        // the old kernel as the default and as the fallback for other shapes.
+        const char *fusedDecode = std::getenv("JITTOR_NPU_PAGED_DECODE_FIA");
+        const bool useFusedDecode = fusedDecode != nullptr &&
+            std::strcmp(fusedDecode, "1") == 0 && attr->hasBlockTable &&
+            attr->inputLayout == "BNSD" &&
+            inputShapes.size() >= 3 && inputShapes[0].size() == 4 &&
+            inputShapes[1].size() == 5 && outputShapes.size() == 1 &&
+            outputShapes[0] == inputShapes[0] &&
+            inputShapes[0][0] == 1 && inputShapes[0][1] == attr->headNum &&
+            inputShapes[0][2] == 1 && inputShapes[0][3] == 128 &&
+            inputShapes[1][2] == 128 && inputShapes[1][4] == 128 &&
+            inputShapes[1][3] == attr->keyValueHeadNum &&
+            attr->blockSize == 128 && attr->actualSeqLengths.size() == 1 &&
+            get_dtype(in_[0]->dtype()) == ACL_BF16 &&
+            get_dtype(in_[1]->dtype()) == ACL_BF16;
+        if (std::getenv("JITTOR_NPU_PAGED_DECODE_FIA_DEBUG") != nullptr)
+        {
+            static std::atomic<int> debugCount{0};
+            if (debugCount.fetch_add(1) < 4)
+                std::fprintf(stderr,
+                    "paged decode FIA dispatch=%d q=[%lld,%lld,%lld,%lld] "
+                    "cache=[%lld,%lld,%lld,%lld,%lld] heads=%lld kvheads=%lld "
+                    "block=%lld seq_count=%zu layout=%s dtype=%d\n",
+                    static_cast<int>(useFusedDecode),
+                    static_cast<long long>(inputShapes[0].size() > 0 ? inputShapes[0][0] : -1),
+                    static_cast<long long>(inputShapes[0].size() > 1 ? inputShapes[0][1] : -1),
+                    static_cast<long long>(inputShapes[0].size() > 2 ? inputShapes[0][2] : -1),
+                    static_cast<long long>(inputShapes[0].size() > 3 ? inputShapes[0][3] : -1),
+                    static_cast<long long>(inputShapes[1].size() > 0 ? inputShapes[1][0] : -1),
+                    static_cast<long long>(inputShapes[1].size() > 1 ? inputShapes[1][1] : -1),
+                    static_cast<long long>(inputShapes[1].size() > 2 ? inputShapes[1][2] : -1),
+                    static_cast<long long>(inputShapes[1].size() > 3 ? inputShapes[1][3] : -1),
+                    static_cast<long long>(inputShapes[1].size() > 4 ? inputShapes[1][4] : -1),
+                    static_cast<long long>(attr->headNum),
+                    static_cast<long long>(attr->keyValueHeadNum),
+                    static_cast<long long>(attr->blockSize),
+                    attr->actualSeqLengths.size(), attr->inputLayout.c_str(),
+                    static_cast<int>(get_dtype(in_[0]->dtype())));
+        }
+        if (useFusedDecode)
+        {
+            // FIA expects TND for this single-token case. These are only
+            // descriptor views; query/output buffers retain their addresses.
+            const std::vector<int64_t> viewDims{1, attr->headNum, 128};
+            const std::vector<int64_t> viewStrides{attr->headNum * 128, 128, 1};
+            std::unique_ptr<aclTensor, decltype(&aclDestroyTensor)> queryView(
+                aclCreateTensor(viewDims.data(), viewDims.size(),
+                    get_dtype(in_[0]->dtype()), viewStrides.data(), 0,
+                    aclFormat::ACL_FORMAT_ND, inputShapes[0].data(),
+                    inputShapes[0].size(), in_[0]->mem_ptr), aclDestroyTensor);
+            std::unique_ptr<aclTensor, decltype(&aclDestroyTensor)> outputView(
+                aclCreateTensor(viewDims.data(), viewDims.size(),
+                    get_dtype(out_[0]->dtype()), viewStrides.data(), 0,
+                    aclFormat::ACL_FORMAT_ND, outputShapes[0].data(),
+                    outputShapes[0].size(), out_[0]->mem_ptr), aclDestroyTensor);
+            const int64_t one = 1;
+            std::unique_ptr<aclIntArray, decltype(&aclDestroyIntArray)> qLengths(
+                aclCreateIntArray(&one, 1), aclDestroyIntArray);
+            CHECK(queryView != nullptr && outputView != nullptr &&
+                  qLengths != nullptr && actualSeqLengths != nullptr);
+            char fusedLayout[] = "TND";
+            ret = aclnnFusedInferAttentionScoreGetWorkspaceSize(
+                queryView.get(), key, value, nullptr, nullptr,
+                qLengths.get(), actualSeqLengths,
+                nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                blockTable, nullptr, nullptr,
+                attr->headNum, attr->scale, 2147483647, 2147483647,
+                fusedLayout, attr->keyValueHeadNum, 0, 0, attr->blockSize,
+                0, false, outputView.get(), nullptr, &workspaceSize, &executor);
+            launch(ret, aclnnFusedInferAttentionScore, true);
+        }
+        else
+        {
+            ret = aclnnIncreFlashAttentionV4GetWorkspaceSize(
+                inputTensors[0], key, value, nullptr, nullptr, actualSeqLengths,
+                nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                blockTable, nullptr, attr->headNum, attr->scale, layout,
+                attr->keyValueHeadNum, attr->blockSize, attr->innerPrecise,
+                outputTensors[0], &workspaceSize, &executor);
+            launch(ret, aclnnIncreFlashAttentionV4, true);
+        }
         if (actualSeqLengths != nullptr)
             aclDestroyIntArray(actualSeqLengths);
         if (keyView != nullptr)
@@ -144,6 +224,65 @@ namespace jittor
         if (valueView != nullptr)
             aclDestroyTensor(valueView);
         return;
+    }
+
+    FusedInferPrefillOpRunner::FusedInferPrefillOpRunner()
+        : BaseOpRunner("FusedInferPrefill")
+    {
+    }
+
+    void FusedInferPrefillOpRunner::executeOp(AclOpRegistry::const_iterator &it)
+    {
+        auto attr = dynamic_cast<FusedInferPrefillAttr *>(op_attr.get());
+        CHECK(attr != nullptr);
+        CHECK(inputShapes.size() == 4);
+        CHECK(outputShapes.size() == 1);
+        CHECK(inputShapes[0].size() == 3);
+        CHECK(inputShapes[1].size() == 3);
+        CHECK(inputShapes[2].size() == 3);
+        CHECK(inputShapes[0][0] == inputShapes[1][0]);
+        CHECK(inputShapes[0][0] == inputShapes[2][0]);
+        CHECK(inputShapes[1] == inputShapes[2]);
+        CHECK(inputShapes[0][2] == inputShapes[1][2]);
+        CHECK(inputShapes[3].size() == 2);
+        CHECK(inputShapes[3][0] == 2048 && inputShapes[3][1] == 2048);
+        CHECK(outputShapes[0] == inputShapes[0]);
+        const int64_t tokens = inputShapes[0][0];
+        const int64_t num_heads = inputShapes[0][1];
+        const int64_t num_kv_heads = inputShapes[1][1];
+        CHECK(tokens > 1 && tokens <= 2048);
+        CHECK(num_kv_heads > 0 && num_heads % num_kv_heads == 0);
+        CHECK(!attr->actualSeqLengths.empty());
+        CHECK(attr->actualSeqLengths.back() == tokens);
+        int64_t previous = 0;
+        for (int64_t end : attr->actualSeqLengths)
+        {
+            CHECK(end > previous && end - previous > 1);
+            previous = end;
+        }
+
+        aclTensor *key_tensor = inputTensors[1];
+        aclTensor *value_tensor = inputTensors[2];
+        // Match the existing IncreFlashAttention list lifetime: CANN's
+        // executor holds these descriptors through launch, while BaseOpRunner
+        // retains and cleans the underlying input aclTensor descriptors.
+        auto key = aclCreateTensorList(&key_tensor, 1);
+        auto value = aclCreateTensorList(&value_tensor, 1);
+        std::unique_ptr<aclIntArray, decltype(&aclDestroyIntArray)> lengths(
+            aclCreateIntArray(attr->actualSeqLengths.data(),
+                              attr->actualSeqLengths.size()),
+            aclDestroyIntArray);
+        CHECK(key != nullptr && value != nullptr && lengths != nullptr);
+        char layout[] = "TND";
+        ret = aclnnFusedInferAttentionScoreGetWorkspaceSize(
+            inputTensors[0], key, value, nullptr, inputTensors[3],
+            lengths.get(), lengths.get(),
+            nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+            nullptr, nullptr, nullptr,
+            num_heads, attr->scale, 2147483647, 2147483647, layout,
+            num_kv_heads, 3, 0, 128, 0, false,
+            outputTensors[0], nullptr, &workspaceSize, &executor);
+        launch(ret, aclnnFusedInferAttentionScore, true);
     }
 
     KVCacheMemcpyOpRunner::KVCacheMemcpyOpRunner()

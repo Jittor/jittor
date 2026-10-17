@@ -33,6 +33,17 @@ namespace jittor
         IncreFlashAttentionOpRunner();
     };
 
+    // Experimental single-request, cache-free prefill parity with
+    // torch_npu.npu_fused_infer_attention_score (TND layout).
+    class FusedInferPrefillOpRunner : public BaseOpRunner
+    {
+    protected:
+        void executeOp(AclOpRegistry::const_iterator &it) override;
+
+    public:
+        FusedInferPrefillOpRunner();
+    };
+
     class KVCacheMemcpyOpRunner : public BaseOpRunner
     {
     protected:

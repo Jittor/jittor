@@ -130,6 +130,15 @@ def _acl_bfloat16_rms_norm(value, weight, epsilon):
 
 def _standard_rms_norm(self, args, kwargs):
     """A fused RMS norm for the standard single-argument shape, or None."""
+    # vLLM's adapter has already selected its own fused RMSNorm forward.
+    # Do not shadow it with the generic BF16 unit-weight -> multiply shortcut:
+    # that shortcut rounds twice and changes Qwen2.5's decoder numerics.
+    # Keep this opt-in until multi-model NPU regression is complete.
+    if (os.environ.get("JITTOR_VLLM_NPU_PATCHED_RMSNORM") == "1"
+            and getattr(jt.compiler, "has_acl", False)
+            and getattr(type(self), "_jittor_fused_forward", False)
+            and type(self).__module__.startswith("vllm.")):
+        return None
     cls_name = type(self).__name__
     if (
         not cls_name.endswith("RMSNorm")

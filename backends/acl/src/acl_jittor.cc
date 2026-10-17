@@ -137,6 +137,7 @@ const AclOpRegistry& acl_op_registry() {
         {"GroupNorm", AclOpFunctions::direct(aclnnGroupNorm)},
         {"GroupNormBackward", AclOpFunctions::direct(aclnnGroupNormBackward)},
         {"IncreFlashAttention", AclOpFunctions::direct(aclnnIncreFlashAttentionV4)},
+        {"FusedInferPrefill", AclOpFunctions::direct(aclnnFusedInferAttentionScore)},
         {"LayerNormBackward", AclOpFunctions::direct(aclnnLayerNormBackward)},
         {"RmsNorm", AclOpFunctions::direct(aclnnRmsNorm)},
         {"RmsNormGrad", AclOpFunctions::direct(aclnnRmsNormGrad)},

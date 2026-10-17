@@ -9,6 +9,8 @@ from _helpers import capability as _test_capability
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 import unittest
+import os
+from unittest.mock import patch
 import jittor as jt
 from _helpers.assertions import expect_error
 import numpy as np
@@ -1034,6 +1036,29 @@ class TestACL(unittest.TestCase):
         self.assertEqual(locations, ("device", "device"))
         np.testing.assert_array_equal(fetched[0], fetched[2])
         np.testing.assert_array_equal(fetched[1], fetched[3])
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_serving_fused_add_rms_norm_npu(self):
+        rng = np.random.RandomState(20261013)
+        hidden_np = rng.randn(4, 2048).astype("float32")
+        residual_np = rng.randn(4, 2048).astype("float32")
+        weight_np = (rng.rand(2048) * 0.2 + 0.9).astype("float32")
+
+        with jt.no_grad(), patch.dict(os.environ,
+                                      {"JITTOR_NPU_FUSED_ADD_RMS_NORM": "1"}):
+            hidden = jt.array(hidden_np).bfloat16()
+            residual = jt.array(residual_np).bfloat16()
+            weight = jt.array(weight_np).bfloat16()
+            actual, carried = jt.nn.fused_add_rms_norm(
+                hidden, residual, weight, 1e-6)
+            reference_carried = hidden + residual
+            reference = jt.nn.rms_norm(reference_carried, weight, 1e-6)
+            fetched = _fetch_acl(
+                self, [actual, carried, reference, reference_carried],
+                as_float=True)
+
+        np.testing.assert_array_equal(fetched[1], fetched[3])
+        np.testing.assert_allclose(fetched[0], fetched[2], atol=2e-2, rtol=2e-2)
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_inference_rotary_embedding(self):

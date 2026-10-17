@@ -1,6 +1,8 @@
 #pragma once
 #include <acl/acl.h>
 #include <acl/acl_op_compiler.h>
+#include "aclnnop/aclnn_add_rms_norm.h"
+#include "aclops/add_rms_norm_op_acl.h"
 #include <Python.h>
 #include <pystate.h>
 #include <algorithm>
@@ -200,6 +202,20 @@ namespace jittor
         launch(ret, aclnnRmsNorm, true);
 
         return;
+    }
+
+    AddRmsNormOpRunner::AddRmsNormOpRunner() : BaseOpRunner("RmsNorm")
+    {
+    }
+
+    void AddRmsNormOpRunner::executeOp(AclOpRegistry::const_iterator &it)
+    {
+        auto attr = dynamic_cast<RmsNormAttr *>(op_attr.get());
+        ret = aclnnAddRmsNormGetWorkspaceSize(
+            inputTensors[0], inputTensors[1], inputTensors[2], attr->eps,
+            outputTensors[0], outputTensors[2], outputTensors[1],
+            &workspaceSize, &executor);
+        launch(ret, aclnnAddRmsNorm, true);
     }
 
     RmsNormGradOpRunner::RmsNormGradOpRunner() : BaseOpRunner("RmsNormGrad")

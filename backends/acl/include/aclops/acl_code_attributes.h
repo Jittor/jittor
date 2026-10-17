@@ -79,6 +79,7 @@ inline acl_data::AclAttrSchema acl_code_attribute_schema(const string& name) {
     if (name == "FlashAttention") return {{"scale", required(Type::float64)}, {"keepProb", required(Type::float64)}, {"preToken", required(Type::int64)}, {"nextToken", required(Type::int64)}, {"headNum", required(Type::int64)}, {"inputLayout", required(Type::int64_vector)}, {"innerPrecise", required(Type::int64)}, {"sparseMode", required(Type::int64)}, {"psetype", required(Type::int64)}, {"prefix", required(Type::int64_vector)}, {"qStartIdx", required(Type::int64_vector)}, {"kvStartIdx", required(Type::int64_vector)}, {"hasRealshift", required(Type::boolean)}, {"hasDropmask", required(Type::boolean)}, {"hasPaddingmask", required(Type::boolean)}, {"hasAttentmask", required(Type::boolean)}};
     if (name == "FlashAttentionBackward") return {{"scale", required(Type::float64)}, {"keepProb", required(Type::float64)}, {"preToken", required(Type::int64)}, {"nextToken", required(Type::int64)}, {"headNum", required(Type::int64)}, {"inputLayout", required(Type::int64_vector)}, {"innerPrecise", required(Type::int64)}, {"sparseMode", required(Type::int64)}, {"psetype", required(Type::int64)}, {"prefix", required(Type::int64_vector)}, {"qStartIdx", required(Type::int64_vector)}, {"kvStartIdx", required(Type::int64_vector)}, {"hasRealshift", required(Type::boolean)}, {"hasDropmask", required(Type::boolean)}, {"hasPaddingmask", required(Type::boolean)}, {"hasAttentmask", required(Type::boolean)}};
     if (name == "IncreFlashAttention") return {{"scale", required(Type::float64)}, {"headNum", required(Type::int64)}, {"keyValueHeadNum", required(Type::int64)}, {"inputLayout", required(Type::int64_vector)}, {"innerPrecise", required(Type::int64)}, {"blockSize", defaulted(acl_data::AclDataValue::int64_value(0))}, {"hasBlockTable", defaulted(acl_data::AclDataValue::bool_value_of(false))}, {"actualSeqLengths", defaulted(acl_data::AclDataValue::int64_vector({}))}};
+    if (name == "FusedInferPrefill") return {{"scale", required(Type::float64)}, {"actualSeqLengths", required(Type::int64_vector)}};
     if (name == "KVCacheMemcpy") return {{"blockSize", required(Type::int64)}, {"slots", required(Type::int64_vector)}};
     if (name == "Roll") return {{"shifts", required(Type::int64_vector)}, {"dims", required(Type::int64_vector)}};
     if (name == "MatMul") return {{"mode", required(Type::int64)}, {"cube_math_type", required(Type::int64)}};
@@ -503,6 +504,14 @@ void assign_acl_code_attributes(Runner& op, const acl_data::AclDecodedData& deco
         op.op_attr=std::move(attr);
         op.jt_name="increflashattention";
         if (fields.at("hasBlockTable").bool_value) op.jt_name="paged_increflashattention";
+        return;
+    }
+    if (name == "FusedInferPrefill") {
+        auto attr=std::unique_ptr<FusedInferPrefillAttr>(new FusedInferPrefillAttr());
+        attr->scale = fields.at("scale").float_value;
+        attr->actualSeqLengths = fields.at("actualSeqLengths").int_values;
+        op.op_attr=std::move(attr);
+        op.jt_name="fused_infer_prefill";
         return;
     }
     if (name == "KVCacheMemcpy") {

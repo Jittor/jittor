@@ -2,6 +2,7 @@
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import math
+import os
 from numbers import Real
 import jittor as jt
 from .ops.norms_op import (
@@ -286,8 +287,19 @@ def _grouped_qk_rms_norm_rotary_acl(
     ):
         return None
 
-    selected = embedding_acl(positions.reshape((1,)), cos_sin_cache)
-    cos, sin = ExpandRotaryCacheACL()(selected)
+    if os.environ.get("JITTOR_NPU_STATIC_EXPANDED_ROPE") == "1":
+        # The packed cache is immutable in serving. Expand the position-
+        # independent halves once, not once per layer and generated token.
+        # Hold both Vars on their owning cache to preserve lazy-graph lifetime.
+        expanded = cos_sin_cache.__dict__.get("_jittor_npu_expanded_rope")
+        if expanded is None:
+            expanded = ExpandRotaryCacheACL()(cos_sin_cache)
+            cos_sin_cache.__dict__["_jittor_npu_expanded_rope"] = expanded
+        cos = embedding_acl(positions.reshape((1,)), expanded[0])
+        sin = embedding_acl(positions.reshape((1,)), expanded[1])
+    else:
+        selected = embedding_acl(positions.reshape((1,)), cos_sin_cache)
+        cos, sin = ExpandRotaryCacheACL()(selected)
     cos = cos.reshape((1, 1, 1, head_size))
     sin = sin.reshape((1, 1, 1, head_size))
     query_4d = query.reshape((1, query_shape[-1] // head_size, 1, head_size))

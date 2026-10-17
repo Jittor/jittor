@@ -46,7 +46,7 @@
 
 ```bash
 PYTHONPATH=<worktree>/python JITTOR_HOME=... TMPDIR=... \
-JT_HCCL_WORLD_SIZE=1 JT_HCCL_RANK=0 JT_HCCL_LOCAL_RANK=0 \
+JT_HCCL_WORLD_SIZE=2 JT_HCCL_RANK=0 JT_HCCL_LOCAL_RANK=0 \
 JT_HCCL_ROOTINFO_FILE=$TMPDIR/hccl_root.bin \
 python -c '
 import os, jittor as jt
@@ -63,8 +63,9 @@ print("device count", jt.get_device_count())
 2. `jt.compile_extern.hccl_ops is not None`。为 None 说明 HCCL 没编，后面所有集合通信
    测试会**整文件 skip 而以绿色退出**。
 3. `jt.flags.use_acl` 为 1。**不设它，算子走 CPU 分支**，你测的不是 HCCL。
-4. **反向确认**：故意把 `JT_HCCL_ROOTINFO_FILE` 指到一个不存在的目录，进程必须**报错退出**，
-   不允许打一条警告然后按单卡继续。若它继续了，先修那条静默退化，再谈同步。
+4. **反向确认**：在 `JT_HCCL_WORLD_SIZE=2` 下故意把 `JT_HCCL_ROOTINFO_FILE` 指到一个不存在的目录，进程必须**报错退出**，
+   不允许打一条警告然后按单卡继续。`distributed_requested()` 仅将 world size 大于 1 的启动视为分布式请求；
+   因此不能用 world size 为 1 的普通单进程导入来判断多卡 fail-closed 行为。
 
 `skipped` 不是 `passed`：每次跑完数清 `N passed` 里的 N 是不是你以为的那些用例。
 
@@ -84,7 +85,8 @@ done
 
 （`test_hccl_ops_on_device.py` 还不存在——写它是上机那次的第一件事。口径照
 `tests/backends/comm/nccl/test_nccl_comm_stream.py`：四个集合通信各一次 rank 相关数值对拍，
-期望值从 rank 推出来，非 root 初值填 `-1`，`reduce` 的非 root 断言「全尺寸 + 清零」。）
+期望值从 rank 推出来。`reduce` 只在 root rank 有定义良好的输出；非 root 只验证参与通信、输出形状和正常退出，
+不要把未初始化的非 root 输出当成零值契约。若项目需要非 root 清零，应先显式实现该语义，再增加对应断言。）
 
 **判据**：两种模式**逐元素完全相同**（`assert_array_equal`，不是 `allclose`），
 且都等于从 rank 推出来的期望值。

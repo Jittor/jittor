@@ -18,6 +18,52 @@ from ._code import acl_code as norms_cmd
 from ._code import check_acl_float_dtype
 
 
+_CUSTOM_ADD_RMS_NORM_BIAS_HEADER = r'''
+#include "acl_jittor.h"
+#include "aclops/aclops.h"
+#include <dlfcn.h>
+#include <cstdlib>
+namespace jittor {
+class CustomAddRmsNormBiasRunner : public BaseOpRunner {
+    using WorkspaceFn = aclnnStatus (*)(const aclTensor *, const aclTensor *,
+        const aclTensor *, const aclTensor *, double, const aclTensor *,
+        const aclTensor *, const aclTensor *, uint64_t *, aclOpExecutor **);
+    using ExecuteFn = aclnnStatus (*)(void *, uint64_t, aclOpExecutor *, aclrtStream);
+    struct Api {
+        void *library;
+        WorkspaceFn workspace;
+        ExecuteFn execute;
+        Api() : library(nullptr), workspace(nullptr), execute(nullptr) {
+            const char *path = std::getenv("JITTOR_NPU_ADD_RMS_NORM_BIAS_LIBRARY");
+            if (!path || !*path)
+                LOGf << "Set JITTOR_NPU_ADD_RMS_NORM_BIAS_LIBRARY to the custom op_api library";
+            library = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+            if (!library)
+                LOGf << "Could not load AddRmsNormBias library: " << dlerror();
+            workspace = reinterpret_cast<WorkspaceFn>(
+                dlsym(library, "aclnnAddRmsNormBiasGetWorkspaceSize"));
+            execute = reinterpret_cast<ExecuteFn>(
+                dlsym(library, "aclnnAddRmsNormBias"));
+            if (!workspace || !execute)
+                LOGf << "AddRmsNormBias symbols missing from " << path;
+        }
+    };
+public:
+    CustomAddRmsNormBiasRunner() : BaseOpRunner("RmsNorm") {}
+protected:
+    void executeOp(AclOpRegistry::const_iterator &it) override {
+        static Api api;
+        auto *attr = dynamic_cast<RmsNormAttr *>(op_attr.get());
+        ret = api.workspace(inputTensors[0], inputTensors[1], inputTensors[2],
+            nullptr, attr->eps, outputTensors[0], outputTensors[2],
+            outputTensors[1], &workspaceSize, &executor);
+        launch(ret, api.execute, true);
+    }
+};
+}
+'''
+
+
 class BatchNormACL:
     def __init__(self, eps=1e-5, momentum=0.1, is_train=False):
         self.eps = float(eps)
@@ -123,6 +169,54 @@ class GroupedAddRmsNormACL:
             jt.empty(x.shape, x.dtype),
             jt.empty(reduced_shape, "float32"),
         ]
+        if os.environ.get("JITTOR_NPU_EXPERIMENTAL_CUSTOM_ADD_RMS_NORM") == "1":
+            result = code_with_attributes(
+                backend="acl", outputs=outputs, inputs=[x, residual, weight],
+                cuda_header=_CUSTOM_ADD_RMS_NORM_BIAS_HEADER,
+                cuda_src=code_program([
+                    '\nCustomAddRmsNormBiasRunner add_norm;\n'
+                    'add_norm.add(in0, true);\n'
+                    'add_norm.add(in1, true);\n'
+                    'add_norm.add(in2, true);\n'
+                    'add_norm.add(out0, false);\n'
+                    'add_norm.add(out1, false);\n'
+                    'add_norm.add(out2, false);\n'
+                    'add_norm.jt_name = "grouped_add_rms_norm_custom";\n',
+                    'apply_acl_code_attributes(add_norm, data, '
+                    '"acl_payload.norm.", "RmsNorm");\n',
+                    '\nadd_norm.run();\n',
+                ]),
+                attribute_sets={"norm": ("RmsNorm", {"eps": eps})},
+            )
+            return result[0], result[1]
+        if os.environ.get("JITTOR_NPU_FUSED_ADD_RMS_NORM") == "1":
+            result = code_with_attributes(
+                backend="acl",
+                outputs=outputs,
+                inputs=[x, residual, weight],
+                cuda_header="""
+namespace jittor {}
+#include "aclops/aclops.h"
+#include "aclops/add_rms_norm_op_acl.h"
+""",
+                cuda_src=code_program(
+                    [
+                        '\n// aclop\nAddRmsNormOpRunner add_norm;\n'
+                        'add_norm.add(in0, true);\n'
+                        'add_norm.add(in1, true);\n'
+                        'add_norm.add(in2, true);\n'
+                        'add_norm.add(out0, false);\n'
+                        'add_norm.add(out1, false);\n'
+                        'add_norm.add(out2, false);\n'
+                        'add_norm.jt_name = "grouped_add_rms_norm_fused";\n',
+                        'apply_acl_code_attributes(add_norm, data, '
+                        '"acl_payload.norm.", "RmsNorm");\n',
+                        '\nadd_norm.run();\n',
+                    ]
+                ),
+                attribute_sets={"norm": ("RmsNorm", {"eps": eps})},
+            )
+            return result[0], result[1]
         result = code_with_attributes(
             backend="acl",
             outputs=outputs,

@@ -345,6 +345,12 @@ namespace jittor
         vector<int64_t> actualSeqLengths;
     };
 
+    struct FusedInferPrefillAttr : AclOpAttr
+    {
+        double scale;
+        vector<int64_t> actualSeqLengths;
+    };
+
     struct KVCacheMemcpyAttr : AclOpAttr
     {
         int64_t blockSize;

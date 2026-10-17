@@ -18,6 +18,7 @@ from collections.abc import Sequence, Iterable
 
 _causal_mask_cache = OrderedDict()
 _causal_mask_cache_limit = 16
+_fia_prefill_mask = [None]
 
 
 from ._code import acl_code as flashattention_cmd
@@ -259,6 +260,45 @@ def _causal_mask(query_length, source_length):
 def _compressed_causal_mask():
     # CANN sparse mode 2 consumes this fixed-size optimized causal mask.
     return _causal_mask(2048, 2048)
+
+
+def fused_infer_prefill_attention_acl(query, key, value, scale, causal=True,
+                                     query_lengths=None):
+    """Experimental BF16 FIA prefill with explicit packed-request boundaries.
+
+    This is deliberately a separate dispatch operation. The ordinary ACL SDPA
+    path and its training/backward behavior are not changed by this prototype.
+    """
+    if not (compiler.has_acl and jt.flags.use_cuda and jt.flags.use_acl
+            and getattr(jt.flags, "no_grad", 0) and causal):
+        return None
+    if not all(isinstance(tensor, jt.Var) for tensor in (query, key, value)):
+        return None
+    q_shape, k_shape, v_shape = tuple(query.shape), tuple(key.shape), tuple(value.shape)
+    if not (len(q_shape) == len(k_shape) == len(v_shape) == 3
+            and k_shape == v_shape and q_shape[0] == k_shape[0]
+            and 1 < q_shape[0] <= 2048 and q_shape[2] == k_shape[2]
+            and k_shape[1] > 0
+            and q_shape[1] % k_shape[1] == 0):
+        return None
+    if any(_jittor_dtype_name(tensor.dtype) != "bfloat16"
+           for tensor in (query, key, value)):
+        return None
+    ends = ([int(q_shape[0])] if query_lengths is None
+            else [int(end) for end in query_lengths])
+    if (not 1 <= len(ends) <= 4 or ends[-1] != int(q_shape[0])
+            or any(end - start <= 1
+                   for start, end in zip([0] + ends[:-1], ends))):
+        return None
+    if _fia_prefill_mask[0] is None:
+        _fia_prefill_mask[0] = jt.array(
+            np.triu(np.ones((2048, 2048), dtype=np.int8), 1))
+    output = flashattention_cmd(
+        "FusedInferPrefill", [query, key, value, _fia_prefill_mask[0]],
+        output_dtypes=[query.dtype], output_shapes=[q_shape],
+        attributes={"scale": float(scale), "actualSeqLengths": ends},
+    )
+    return output[0]
 
 
 def scaled_dot_product_attention_acl(

@@ -18,6 +18,7 @@ import sys
 import weakref
 
 import jittor as jt
+from jittor._runtime.dispatch import try_dispatch
 
 from jittor.compat.permissive import PermissiveModule, install_permissive_package
 from jittor.compat.diagnostics import EXPECTED, swallowed
@@ -29,6 +30,8 @@ from jittor.compat.transaction import owned_runtime_hook, active_transaction, se
 
 _BUNDLE = "vllm.vllm_flash_attn"
 _INTERFACE = _BUNDLE + ".flash_attn_interface"
+_F32_FUSED_PREFILL_MODE = os.environ.get(
+    "JITTOR_VLLM_F32_FUSED_PREFILL", "auto")
 
 
 def _cuda_graph_capture_active():
@@ -50,6 +53,31 @@ def _require_explicit_graph_ownership(capturing):
         raise RuntimeError(
             "vLLM CUDA Graph requires JT_AUTO_GRAPH_REPLAY=0; set it before "
             "importing Jittor so the outer graph is the only replay owner")
+
+
+def _graph_single_request_decode(attn_metadata, tokens):
+    """Prove a full one-token request from static Graph metadata only."""
+    return (
+        tokens == 1
+        and int(attn_metadata.max_query_len) == 1
+        and int(attn_metadata.block_table.shape[0]) == 1
+        and int(attn_metadata.query_start_loc.numel()) == 2
+        and int(attn_metadata.seq_lens.numel()) == 1
+    )
+
+
+def _f32_prefill_policy(tokens, dtype, head_dim, mode):
+    """Conservatively choose the tiled CUDA GQA kernel for full prefill.
+
+    The automatic path is validated on FP16 full prefill through 512 tokens.
+    Larger sequences and BF16 require an explicit experimental opt-in.
+    """
+    dtype_name = str(dtype).rsplit(".", 1)[-1]
+    if mode not in ("auto", "1") or int(head_dim) > 128:
+        return False
+    if mode == "1":
+        return dtype_name in ("float16", "bfloat16")
+    return dtype_name == "float16" and 1 < int(tokens) <= 512
 
 
 def host_lengths(tensor):
@@ -202,27 +230,102 @@ def reshape_and_cache_flash(key, value, key_cache, value_cache, slot_mapping,
 
 
 def _direct_full_prefill(query, key, value, starts, lengths, causal, scale):
-    """Use the fresh Q/K/V for a complete, single-request prefill.
+    """Use fresh Q/K/V for a complete prefill without re-reading paged KV.
 
     Chunked prefill and prefix-cache hits still need the paged cache.  This
     case does not: reading back the cache we just wrote adds a gather, dtype
     conversions, GQA expansion and a separate attention graph at every layer.
     """
-    if (starts is None or lengths is None or len(starts) != 2
-            or len(lengths) != 1 or starts[1] <= 1
-            or starts[0] != 0 or starts[1] != lengths[0]
-            or starts[1] != int(query.shape[0])
-            or starts[1] != int(key.shape[0])
-            or starts[1] != int(value.shape[0])):
+    if (starts is None or lengths is None or len(lengths) < 1
+            or len(starts) != len(lengths) + 1
+            or starts[0] != 0
+            or starts[-1] != int(query.shape[0])
+            or starts[-1] != int(key.shape[0])
+            or starts[-1] != int(value.shape[0])
+            or any(starts[index + 1] - starts[index] != lengths[index]
+                   or lengths[index] <= 1 for index in range(len(lengths)))):
         return None
-    tokens = starts[1]
+    tokens = starts[-1]
+    if len(lengths) > 1:
+        if (not getattr(jt.flags, "use_acl", 0)
+                or os.environ.get(
+                    "JITTOR_VLLM_NPU_EXPERIMENTAL_BATCHED_FIA_PREFILL") != "1"):
+            return None
+        fused = try_dispatch(
+            "nn.fused_infer_prefill_attention", query, key, value,
+            scale=float(scale), causal=bool(causal),
+            query_lengths=starts[1:])
+        return (None if fused is None else
+                fused.reshape((tokens, query.shape[1] * query.shape[2])))
+    if (getattr(jt.flags, "use_acl", 0)
+            and os.environ.get("JITTOR_VLLM_NPU_EXPERIMENTAL_FIA_PREFILL") == "1"):
+        fused = try_dispatch(
+            "nn.fused_infer_prefill_attention", query, key, value,
+            scale=float(scale), causal=bool(causal))
+        if fused is not None:
+            return fused.reshape((tokens, query.shape[1] * query.shape[2]))
     query = query.reshape((1, tokens, query.shape[1], query.shape[2])).transpose(1, 2)
     key = key.reshape((1, tokens, key.shape[1], key.shape[2])).transpose(1, 2)
     value = value.reshape((1, tokens, value.shape[1], value.shape[2])).transpose(1, 2)
+    output_dtype = query.dtype
+    # cuDNN 8 declines the FP16 GQA shape used by Qwen3, leaving SDPA as a
+    # multi-operator graph. Auto-select Jittor's tiled FP32 GQA kernel only
+    # for validated short FP16 full prefill; never redirect ACL or other dims.
+    use_f32_prefill = (
+        bool(jt.flags.use_cuda)
+        and not getattr(jt.compiler, "has_acl", False)
+        and _f32_prefill_policy(
+            tokens, output_dtype, query.shape[-1], _F32_FUSED_PREFILL_MODE))
+    # Probe whether higher-precision direct ACL attention can keep the
+    # correct BF16 TP2 greedy sequence without cache-backed prefill overhead.
+    # Off by default until complete-model oracle and A/B tests pass.
+    if (getattr(jt.flags, "use_acl", 0)
+            and os.environ.get("JITTOR_VLLM_ACL_F32_DIRECT_PREFILL") == "1"
+            and str(output_dtype).rsplit(".", 1)[-1] == "bfloat16"):
+        use_f32_prefill = True
+    if use_f32_prefill:
+        query, key, value = query.float32(), key.float32(), value.float32()
     result = jt.nn.scaled_dot_product_attention(
         query, key, value, is_causal=bool(causal), scale=float(scale),
         enable_gqa=True)
-    return result.transpose(1, 2).reshape((tokens, query.shape[1], query.shape[3]))
+    if use_f32_prefill:
+        result = result.cast(output_dtype)
+    return result.transpose(1, 2).reshape(
+        (tokens, query.shape[1], query.shape[3]))
+
+
+def _plain_decoder_prefill(impl, metadata):
+    """Whether fresh Q/K/V have the same attention semantics as the cache.
+
+    The direct path cannot implement sliding windows, soft caps, ALiBi,
+    attention sinks, prefix-LM or distributed context parallelism. Decline
+    those configurations rather than silently changing a model's output.
+    """
+    return (
+        getattr(getattr(impl, "attn_type", None), "name", None) == "DECODER"
+        and getattr(impl, "sliding_window", None) == (-1, -1)
+        and getattr(impl, "alibi_slopes", None) is None
+        and not getattr(impl, "logits_soft_cap", 0)
+        and getattr(impl, "sinks", None) is None
+        and getattr(impl, "kv_sharing_target_layer_name", None) is None
+        and getattr(impl, "kv_cache_dtype", None) == "auto"
+        and getattr(impl, "dcp_world_size", 1) == 1
+        and getattr(metadata, "causal", None) is True
+        and not getattr(metadata, "use_cascade", False)
+        and not getattr(metadata, "common_prefix_len", 0)
+        and getattr(metadata, "mm_prefix_range_tensor", None) is None
+    )
+
+
+def _allow_direct_full_prefill(mode, use_acl):
+    """Keep the fresh-QKV shortcut off by default on ACL.
+
+    On Qwen2.5-3B BF16 TP2 its SDPA arithmetic changes a near-tie into a
+    different greedy token from native vLLM-Ascend. The cache-backed path
+    matches the native 16-token regression; explicit opt-in remains available
+    for further kernel experiments.
+    """
+    return mode != "0" and (mode == "1" or not use_acl)
 
 
 def _no_scheduler_metadata(*args, **kwargs):
@@ -288,17 +391,25 @@ def patch_attention_impl(module):
     impl = getattr(module, "FlashAttentionImpl", None)
     if impl is None or getattr(impl, "_jittor_paged_attention", False):
         return False
+    from jittor._runtime.graph_replay import _TRACING, graph_replay_barrier
     layers_between_syncs = _layers_between_syncs()
     reuse_full_token_views = (
         os.environ.get("JITTOR_VLLM_REUSE_FULL_TOKEN_VIEWS", "1") != "0"
     )
-    fused_cache_decode = (
-        os.environ.get("JITTOR_VLLM_FUSED_CACHE_DECODE", "0") != "0"
+    fused_cache_decode_mode = os.environ.get(
+        "JITTOR_VLLM_FUSED_CACHE_DECODE", "auto")
+    direct_full_prefill_mode = os.environ.get(
+        "JITTOR_VLLM_DIRECT_FULL_PREFILL", "auto")
+    # Unlike the legacy explicit mode, this ACL opt-in always checks that
+    # fresh Q/K/V have the same attention semantics as the paged-cache path.
+    safe_acl_direct_prefill = (
+        os.environ.get("JITTOR_VLLM_NPU_SAFE_DIRECT_PREFILL") == "1"
     )
-    direct_full_prefill = (
-        os.environ.get("JITTOR_VLLM_DIRECT_FULL_PREFILL", "0") == "1"
+    batched_acl_direct_prefill = (
+        os.environ.get("JITTOR_VLLM_NPU_EXPERIMENTAL_BATCHED_FIA_PREFILL") == "1"
     )
     counter = [0]
+    rebind_hits = [0]
     metadata_cache = {}
 
     def forward(self, layer, query, key, value, kv_cache, attn_metadata,
@@ -306,6 +417,15 @@ def patch_attention_impl(module):
         if attn_metadata is None:      # the profiling pass has no cache yet
             return output.fill_(0)
         tokens = attn_metadata.num_actual_tokens
+        if (tokens == 1 and getattr(jt.flags, "use_acl", 0)
+                and _TRACING[0]):
+            # ACL decode still converts the per-step slot/sequence metadata to
+            # host lists and aclIntArray attributes. Executor replay would
+            # silently reuse the first step's values even if tensor arguments
+            # were copied into fixed buffers. Refuse this graph until the ACL
+            # serving op consumes mutable device-side metadata end to end.
+            graph_replay_barrier(
+                "ACL paged decode has dynamic host slot/sequence metadata")
         capturing = _cuda_graph_capture_active()
         _require_explicit_graph_ownership(capturing)
         if capturing:
@@ -336,17 +456,44 @@ def patch_attention_impl(module):
             value if full_kv else (value[:tokens] if value is not None else None)
         )
         direct_out = output if tokens == int(output.shape[0]) else None
-        one_token_decode = (
-            fused_cache_decode and has_cache_update and direct_out is not None
-            and tokens == int(query_tokens.shape[0])
-            and tokens == int(key_tokens.shape[0])
-            and tokens == int(value_tokens.shape[0])
-            and lengths is not None and starts is not None
-            and len(lengths) == tokens and len(starts) == tokens + 1
-            and starts[0] == 0 and starts[-1] == tokens
-            and all(starts[index + 1] == starts[index] + 1
-                    for index in range(tokens))
+        zero_mode = os.environ.get("JITTOR_VLLM_DIAG_ZERO_ATTENTION", "0")
+        if (getattr(jt.flags, "use_acl", 0)
+                and (zero_mode in ("1", "all")
+                     or (zero_mode == "prefill" and tokens > 1)
+                     or (zero_mode == "decode" and tokens == 1))):
+            if has_cache_update:
+                reshape_and_cache_kv_v1(
+                    key_tokens, value_tokens, kv_cache,
+                    attn_metadata.slot_mapping, slots=slots, no_sync=False)
+            output[:tokens] = jt.zeros_like(output[:tokens])
+            return output
+        # Auto-enable only for a full, single-request CUDA Graph decode.
+        # Batch 4 was slower in end-to-end A/B.  Keep the old explicit opt-in
+        # for eager decode, and avoid evaluating host metadata on the default
+        # eager path at every layer.
+        fused_requested = (
+            capturing if fused_cache_decode_mode == "auto"
+            else fused_cache_decode_mode != "0"
         )
+        one_token_decode = False
+        if (fused_requested and has_cache_update and direct_out is not None
+                and tokens == int(query_tokens.shape[0])
+                and tokens == int(key_tokens.shape[0])
+                and tokens == int(value_tokens.shape[0])):
+            if capturing:
+                # Capture cannot read starts/lengths back to the host.  The
+                # scalar max_query_len and static tensor sizes are sufficient
+                # for batch 1; the kernel reads varying lengths from GPU.
+                one_token_decode = _graph_single_request_decode(
+                    attn_metadata, tokens)
+            else:
+                one_token_decode = (
+                    lengths is not None and starts is not None
+                    and len(lengths) == tokens and len(starts) == tokens + 1
+                    and starts[0] == 0 and starts[-1] == tokens
+                    and all(starts[index + 1] == starts[index] + 1
+                            for index in range(tokens))
+                )
         attended = None
         if one_token_decode:
             attended = jt.nn.reshape_cache_and_paged_attention_decode(
@@ -358,6 +505,25 @@ def patch_attention_impl(module):
                 key_tokens, value_tokens,
                 kv_cache,
                 attn_metadata.slot_mapping, slots=slots, no_sync=True)
+        use_acl = bool(getattr(jt.flags, "use_acl", 0))
+        safe_acl_requested = (
+            safe_acl_direct_prefill and use_acl
+            and direct_full_prefill_mode != "0"
+        )
+        batched_acl_requested = (
+            batched_acl_direct_prefill and use_acl
+            and direct_full_prefill_mode != "0"
+            and starts is not None and len(starts) > 2
+        )
+        direct_full_prefill = (
+            (safe_acl_requested or batched_acl_requested
+             or _allow_direct_full_prefill(
+                direct_full_prefill_mode, use_acl))
+            and tokens > 1
+            and not capturing
+            and ((not safe_acl_requested and direct_full_prefill_mode == "1")
+                 or _plain_decoder_prefill(self, attn_metadata))
+        )
         if attended is None and has_cache_update and direct_full_prefill:
             attended = _direct_full_prefill(
                 query_tokens, key_tokens, value_tokens, starts, lengths,
@@ -368,8 +534,27 @@ def patch_attention_impl(module):
                 attn_metadata.seq_lens, attn_metadata.block_table, self.scale,
                 attn_metadata.causal, cq=starts, sk=lengths, out=direct_out)
         if attended is not direct_out:
-            output[:tokens] = attended.reshape(
-                (tokens,) + tuple(output.shape[1:]))
+            attended = attended.reshape((tokens,) + tuple(output.shape[1:]))
+            if (use_acl and not capturing and direct_out is not None
+                    and tokens == 1
+                    and starts is not None and len(starts) == 2
+                    and starts[0] == 0 and starts[1] == 1
+                    and lengths is not None and len(lengths) == 1
+                    and lengths[0] > 1
+                    and int(attn_metadata.max_query_len) == 1
+                    and os.environ.get("JITTOR_NPU_ATTENTION_OUTPUT_REBIND") == "1"):
+                # Eager single-request decode only. Do not change prefill,
+                # dynamic-batch, or graph buffer ownership semantics.
+                # Publish the result Var instead of launching a full-shape
+                # StridedSliceAssignV2 copy.
+                output.update(attended)
+                if (os.environ.get("JITTOR_NPU_ATTENTION_OUTPUT_REBIND_TRACE") == "1"
+                        and rebind_hits[0] == 0):
+                    print("npu_attention_output_rebind_hit",
+                          "seq_len", lengths[0], flush=True)
+                rebind_hits[0] += 1
+            else:
+                output[:tokens] = attended
         counter[0] += 1
         if (layers_between_syncs > 0
                 and counter[0] % layers_between_syncs == 0):
@@ -405,10 +590,30 @@ def _layers_between_syncs():
 
 
 def _host_metadata(attn_metadata, cache):
-    """Convert one forward pass's metadata to host lists, once."""
+    """Convert per-forward metadata once, with an ACL auto-replay safeguard.
+
+    With Jittor auto replay enabled, ACL V1 incremental decode diverged after
+    six tokens when these host lists were reused. A query-start readback at
+    each later layer prevented it. With auto replay disabled, TP1/TP2/TP4,
+    long-context page crossing and batch-4 decode passed without that fence.
+    Keep this small correctness fence ACL-only until the graph lifetime root
+    cause is fixed; CUDA retains the once-per-forward fast path.
+    """
 
     key = id(attn_metadata)
     entry = cache.get(key)
+    default_readback = ('1' if getattr(jt.flags, 'auto_graph_replay', 1)
+                        else '0')
+    if (entry is not None and getattr(jt.compiler, 'has_acl', False)
+            and getattr(jt.flags, 'use_acl', 0)
+            and os.environ.get('JITTOR_VLLM_NPU_SAFE_METADATA_READBACK',
+                               default_readback) != '0'):
+        if os.environ.get('JITTOR_VLLM_NPU_DIRECT_METADATA_READBACK', '1') != '0':
+            # numpy() synchronizes and transfers this tiny ACL tensor directly.
+            # Avoid constructing an extra lazy cpu() Var at every layer.
+            attn_metadata.query_start_loc.numpy()
+        else:
+            host_lengths(attn_metadata.query_start_loc)
     if entry is None:
         entry = (host_lengths(attn_metadata.slot_mapping),
                  host_lengths(attn_metadata.query_start_loc),

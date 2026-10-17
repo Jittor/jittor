@@ -174,6 +174,10 @@ SCHEMAS = {
         "hasPaddingmask": {"type": "bool"},
         "hasAttentmask": {"type": "bool"},
     },
+    "FusedInferPrefill": {
+        "scale": {"type": "float64"},
+        "actualSeqLengths": {"type": "int64[]"},
+    },
     "IncreFlashAttention": {
         "scale": {"type": "float64"},
         "headNum": {"type": "int64"},
