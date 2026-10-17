@@ -415,6 +415,12 @@ def select_kernel(op, *args, **kwargs):
 
 
 def try_dispatch(op, *args, **kwargs):
+    # Fast path: nothing is registered under this op on any backend, so no
+    # argument walk or placement query can change the answer. This spares the
+    # `select_kernel` frame on the hot path of every wrapped operator
+    # (`where`, `getitem`, `arg_reduce`, ...) in a pure-jittor run.
+    if op not in _registered_ops:
+        return None
     implementation = select_kernel(op, *args, **kwargs)
     return None if implementation is None else implementation(*args, **kwargs)
 
