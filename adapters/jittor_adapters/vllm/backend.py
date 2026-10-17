@@ -96,7 +96,46 @@ def declare_backend(module):
     """Declare both, so a caller reading either gets this implementation's."""
 
     layout = declare_cache_layout(module)
-    return declare_head_sizes(module) or layout
+    sizes = declare_head_sizes(module)
+    blocks = declare_acl_block_size(module)
+    return layout or sizes or blocks
+
+
+def declare_acl_block_size(module):
+    """Use CANN's validated 128-token page layout on ACL only.
+
+    The ACL paged-decode kernel consumes block-128 KV descriptors. CUDA keeps
+    upstream's full block-size policy; unsupported explicit NPU sizes fail at
+    validation instead of reaching a mismatched cache kernel.
+    """
+    backend = getattr(module, "FlashAttentionBackend", None)
+    marker = "_jittor_acl_block_size"
+    if backend is None or getattr(backend, marker, False):
+        return False
+    if not (hasattr(backend, "get_supported_kernel_block_sizes")
+            and hasattr(backend, "get_preferred_block_size")):
+        return False
+
+    supported = backend.get_supported_kernel_block_sizes
+    preferred = backend.get_preferred_block_size
+
+    def acl_active():
+        import jittor as jt
+        return bool(getattr(jt.compiler, "has_acl", 0)
+                    and getattr(jt.flags, "use_acl", 0))
+
+    def supported_block_sizes():
+        return [128] if acl_active() else supported()
+
+    @classmethod
+    def preferred_block_size(cls, default_block_size):
+        return 128 if acl_active() else preferred(default_block_size)
+
+    set_attr(backend, "get_supported_kernel_block_sizes",
+             staticmethod(supported_block_sizes))
+    set_attr(backend, "get_preferred_block_size", preferred_block_size)
+    set_attr(backend, marker, True)
+    return True
 
 
 _DIRECT_ALL_REDUCE = "_jittor_direct_all_reduce"

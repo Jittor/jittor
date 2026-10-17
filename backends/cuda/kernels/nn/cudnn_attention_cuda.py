@@ -77,6 +77,13 @@ def _build(frontend):
             raise RuntimeError("building cuDNN attention failed:\n%s\n%s"
                                % (" ".join(command), done.stderr[-4000:]))
         os.replace(partial, target)
+    # The frontend bridge has unresolved cuDNN/NVRTC symbols by design. cuDNN
+    # is loaded by the Jittor backend before this point, but its own dlopen
+    # does not publish NVRTC. Long prefill shapes can therefore fail at bridge
+    # load with ``undefined symbol: nvrtcGetCUBINSize``. Use the same toolkit
+    # as nvcc, not an arbitrary NVRTC from another CUDA installation.
+    nvrtc = os.path.join(compiler.cuda_lib, "libnvrtc.so")
+    _state["nvrtc"] = ctypes.CDLL(nvrtc, mode=ctypes.RTLD_GLOBAL)
     return ctypes.CDLL(target, mode=ctypes.RTLD_GLOBAL)
 
 

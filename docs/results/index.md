@@ -31,6 +31,7 @@
 2026-09-24-vllm-metadata-performance
 2026-09-27-vllm-multigpu
 2026-10-10-vllm-cudagraph-shape-switch
+2026-10-14-vllm-multimodel-ab
 ```
 
 ## 按主题索引
@@ -53,3 +54,4 @@
 | [vLLM 元数据查询优化](2026-09-24-vllm-metadata-performance.md) | 逐项减少重复配置查询；验证范围和计时限制见报告 | 2026-09-24 |
 | [vLLM 双卡验证](2026-09-27-vllm-multigpu.md) | CPU/GPU 通信通过；模型验收进展与配置边界见报告 | 2026-09-27 |
 | [vLLM CUDA Graph 形状切换修复](2026-10-10-vllm-cudagraph-shape-switch.md) | TP1 下 batch 1/4 双向切换通过 64-token 对拍；其他配置待验证 | 2026-10-10 |
+| [vLLM 0.24 CUDA/NPU 多模型对拍](2026-10-14-vllm-multimodel-ab.md) | 同版 NPU 诊断对拍与 CUDA 四模型基准；Qwen2 V2 受限优化仍属实验 | 2026-10-14 |

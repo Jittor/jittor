@@ -29,6 +29,11 @@ from jittor.compat.transaction import owned_runtime_hook, active_transaction, se
 
 _BUNDLE = "vllm.vllm_flash_attn"
 _INTERFACE = _BUNDLE + ".flash_attn_interface"
+_F32_FUSED_PREFILL_MODE = os.environ.get(
+    "JITTOR_VLLM_F32_FUSED_PREFILL", "auto")
+_FLASH_GQA_PREFILL_MODE = os.environ.get(
+    "JITTOR_VLLM_FLASH_GQA_PREFILL", "0")
+_FA2_PAGE_DECODE_BORROWS = {}
 
 
 def _cuda_graph_capture_active():
@@ -50,6 +55,46 @@ def _require_explicit_graph_ownership(capturing):
         raise RuntimeError(
             "vLLM CUDA Graph requires JT_AUTO_GRAPH_REPLAY=0; set it before "
             "importing Jittor so the outer graph is the only replay owner")
+
+
+def _graph_single_request_decode(attn_metadata, tokens):
+    """Prove a full one-token request from static Graph metadata only."""
+    return (
+        tokens == 1
+        and int(attn_metadata.max_query_len) == 1
+        and int(attn_metadata.block_table.shape[0]) == 1
+        and int(attn_metadata.query_start_loc.numel()) == 2
+        and int(attn_metadata.seq_lens.numel()) == 1
+    )
+
+
+def _graph_fixed_batch_decode(attn_metadata, tokens):
+    """Opt-in decode for an engine restricted to one full batch shape."""
+    fixed_batch = os.environ.get(
+        "JITTOR_VLLM_EXPERIMENTAL_FIXED_BATCH_FUSED_DECODE", "0")
+    return (
+        fixed_batch == str(tokens)
+        and tokens > 1
+        and int(attn_metadata.max_query_len) == 1
+        and int(attn_metadata.block_table.shape[0]) == tokens
+        and int(attn_metadata.query_start_loc.numel()) == tokens + 1
+        and int(attn_metadata.seq_lens.numel()) == tokens
+        and int(attn_metadata.slot_mapping.numel()) >= tokens
+    )
+
+
+def _f32_prefill_policy(tokens, dtype, head_dim, mode):
+    """Conservatively choose the tiled CUDA GQA kernel for full prefill.
+
+    The automatic path is validated on FP16 full prefill through 512 tokens.
+    Larger sequences and BF16 require an explicit experimental opt-in.
+    """
+    dtype_name = str(dtype).rsplit(".", 1)[-1]
+    if mode not in ("auto", "1") or int(head_dim) > 128:
+        return False
+    if mode == "1":
+        return dtype_name in ("float16", "bfloat16")
+    return dtype_name == "float16" and 1 < int(tokens) <= 512
 
 
 def host_lengths(tensor):
@@ -201,6 +246,108 @@ def reshape_and_cache_flash(key, value, key_cache, value_cache, slot_mapping,
         value_cache[block, offset] = value[token]
 
 
+def _experimental_fa2_paged_decode(query, key, value, kv_cache,
+                                   seq_lens, block_table, scale):
+    """Probe official FA2 append+decode with a deliberately 256-token KV page.
+
+    This is opt-in. Upstream FA2 rejects vLLM's usual page-16 cache. CUDA
+    Graph capture is a separate, explicit probe; its ownership is not proved.
+    """
+    capture = _cuda_graph_capture_active()
+    if (not jt.flags.use_cuda or getattr(jt.compiler, "has_acl", False)
+            or jt.flags.auto_graph_replay
+            or (capture and os.environ.get(
+                "JITTOR_VLLM_EXPERIMENTAL_FA2_PAGE_GRAPH") != "1")):
+        raise RuntimeError("experimental FA2 paged decode requires eager CUDA "
+                           "or explicit FA2 Graph probe with "
+                           "JT_AUTO_GRAPH_REPLAY=0")
+    if (int(query.shape[0]) != 1 or int(key.shape[0]) != 1
+            or int(value.shape[0]) != 1 or int(seq_lens.numel()) != 1):
+        raise RuntimeError("experimental FA2 paged decode supports batch=1 only")
+    page = int(kv_cache.shape[2])
+    if page % 256:
+        raise RuntimeError("official FA2 paged KV requires page size divisible "
+                           "by 256; configure an experimental 256-token cache")
+    dim = int(query.shape[-1])
+    if (dim not in (64, 128)
+            or any(str(t.dtype).rsplit(".", 1)[-1] != "float16"
+                   for t in (query, key, value, kv_cache))):
+        raise RuntimeError("experimental FA2 paged decode requires FP16 "
+                           "and head dimension 64 or 128")
+    from jittor.compat.shim.backends import flash_attention
+    backend, miss = flash_attention.load_backend_for(dim, "fp16")
+    if backend is None:
+        raise RuntimeError(f"experimental FA2 backend unavailable: {miss}")
+    cache_key = id(kv_cache)
+    entry = _FA2_PAGE_DECODE_BORROWS.get(cache_key)
+    if entry is None or entry[0] is not kv_cache:
+        kcache = kv_cache[:, 0]
+        vcache = kv_cache[:, 1]
+        kcache._jittor_torch_ext_mutable_borrow = True
+        vcache._jittor_torch_ext_mutable_borrow = True
+        entry = (kv_cache, kcache, vcache, [])
+        _FA2_PAGE_DECODE_BORROWS[cache_key] = entry
+    _, kcache, vcache, retained_lengths = entry
+    # vLLM seq_lens includes this token; FA2 appends K/V at the old length.
+    previous_lengths = seq_lens - 1
+    retained_lengths.append(previous_lengths)
+    q = query.reshape((1, 1, int(query.shape[1]), dim))
+    k = key.reshape((1, 1, int(key.shape[1]), dim))
+    v = value.reshape((1, 1, int(value.shape[1]), dim))
+    max_window = int(block_table.shape[1]) * page - 1
+    result = backend._flashattn_jittor_low_level.fwd_kvcache(
+        q, kcache, vcache, k, v, previous_lengths,
+        None, None, None, None, block_table, None, None,
+        float(scale), False, max_window, -1, 0.0, False, 0)
+    return result[0].reshape((1, int(query.shape[1]), dim))
+
+
+def _experimental_vllm_fa2_page16_decode(query, key, value, kv_cache,
+                                          seq_lens, block_table, scale):
+    """Probe vLLM-pinned FA2 append+decode against its native page-16 KV.
+
+    The first prototype only supports eager batch=1: Graph capture needs a
+    separate buffer-lifetime and replay gate before it can serve requests.
+    """
+    if (not jt.flags.use_cuda or getattr(jt.compiler, "has_acl", False)
+            or jt.flags.auto_graph_replay or _cuda_graph_capture_active()):
+        raise RuntimeError("experimental vLLM FA2 page-16 decode requires "
+                           "eager CUDA with JT_AUTO_GRAPH_REPLAY=0")
+    if (int(query.shape[0]) != 1 or int(key.shape[0]) != 1
+            or int(value.shape[0]) != 1 or int(seq_lens.numel()) != 1
+            or int(block_table.shape[0]) != 1):
+        raise RuntimeError("experimental vLLM FA2 page-16 decode is batch=1 only")
+    if int(kv_cache.shape[2]) != 16 or int(query.shape[-1]) != 64:
+        raise RuntimeError("experimental vLLM FA2 decode requires page=16, head=64")
+    if any(str(t.dtype).rsplit(".", 1)[-1] != "float16"
+           for t in (query, key, value, kv_cache)):
+        raise RuntimeError("experimental vLLM FA2 decode requires FP16")
+    from jittor.compat.shim.backends import flash_attention
+    backend, miss = flash_attention.load_backend_for(64, "fp16")
+    if backend is None:
+        raise RuntimeError(f"experimental vLLM FA2 backend unavailable: {miss}")
+    cache_key = id(kv_cache)
+    entry = _FA2_PAGE_DECODE_BORROWS.get(cache_key)
+    if entry is None or entry[0] is not kv_cache:
+        kcache = kv_cache[:, 0]
+        vcache = kv_cache[:, 1]
+        kcache._jittor_torch_ext_mutable_borrow = True
+        vcache._jittor_torch_ext_mutable_borrow = True
+        entry = (kv_cache, kcache, vcache, [])
+        _FA2_PAGE_DECODE_BORROWS[cache_key] = entry
+    _, kcache, vcache, retained_lengths = entry
+    previous_lengths = seq_lens - 1
+    retained_lengths.append(previous_lengths)
+    result = backend._flashattn_jittor_low_level.fwd_kvcache(
+        query.reshape((1, 1, int(query.shape[1]), 64)),
+        kcache, vcache,
+        key.reshape((1, 1, int(key.shape[1]), 64)),
+        value.reshape((1, 1, int(value.shape[1]), 64)),
+        previous_lengths, None, None, None, None, block_table, None, None,
+        float(scale), False, -1, -1, 0.0, False, 0)
+    return result[0].reshape((1, int(query.shape[1]), 64))
+
+
 def _direct_full_prefill(query, key, value, starts, lengths, causal, scale):
     """Use the fresh Q/K/V for a complete, single-request prefill.
 
@@ -216,13 +363,76 @@ def _direct_full_prefill(query, key, value, starts, lengths, causal, scale):
             or starts[1] != int(value.shape[0])):
         return None
     tokens = starts[1]
-    query = query.reshape((1, tokens, query.shape[1], query.shape[2])).transpose(1, 2)
-    key = key.reshape((1, tokens, key.shape[1], key.shape[2])).transpose(1, 2)
-    value = value.reshape((1, tokens, value.shape[1], value.shape[2])).transpose(1, 2)
+    query = query.reshape((1, tokens, query.shape[1], query.shape[2]))
+    key = key.reshape((1, tokens, key.shape[1], key.shape[2]))
+    value = value.reshape((1, tokens, value.shape[1], value.shape[2]))
+    # Experimental full-prefill route for FP16 GQA. The native bridge uses
+    # FlashAttention's grouped heads directly instead of expanding KV heads
+    # into Jittor's multi-op SDPA graph. Keep this opt-in until model-level
+    # output and latency are validated across shapes and GPU generations.
+    if (_FLASH_GQA_PREFILL_MODE == "1" and bool(jt.flags.use_cuda)
+            and not getattr(jt.compiler, "has_acl", False)
+            and tokens >= 256 and query.shape[-1] == 128
+            and query.shape[2] > key.shape[2]
+            and query.shape[2] % key.shape[2] == 0
+            and key.shape[2] == value.shape[2]
+            and all(str(t.dtype).rsplit(".", 1)[-1] == "float16"
+                    for t in (query, key, value))):
+        from jittor.compat.shim.backends import flash_attention
+        backend, miss = flash_attention.load_backend_for(128, "fp16")
+        if backend is None:
+            raise RuntimeError(
+                "JITTOR_VLLM_FLASH_GQA_PREFILL=1 requires the native "
+                f"FlashAttention backend: {miss}")
+        result = backend.flash_attn_func(
+            query, key, value, 0.0, float(scale), bool(causal))
+        if result is None:
+            raise RuntimeError("native FlashAttention declined FP16 GQA prefill")
+        return result.reshape((tokens, query.shape[2], query.shape[3]))
+    query = query.transpose(1, 2)
+    key = key.transpose(1, 2)
+    value = value.transpose(1, 2)
+    output_dtype = query.dtype
+    # cuDNN 8 declines the FP16 GQA shape used by Qwen3, leaving SDPA as a
+    # multi-operator graph. Auto-select Jittor's tiled FP32 GQA kernel only
+    # for validated short FP16 full prefill; never redirect ACL or other dims.
+    use_f32_prefill = (
+        bool(jt.flags.use_cuda)
+        and not getattr(jt.compiler, "has_acl", False)
+        and _f32_prefill_policy(
+            tokens, output_dtype, query.shape[-1], _F32_FUSED_PREFILL_MODE))
+    if use_f32_prefill:
+        query, key, value = query.float32(), key.float32(), value.float32()
     result = jt.nn.scaled_dot_product_attention(
         query, key, value, is_causal=bool(causal), scale=float(scale),
         enable_gqa=True)
-    return result.transpose(1, 2).reshape((tokens, query.shape[1], query.shape[3]))
+    if use_f32_prefill:
+        result = result.cast(output_dtype)
+    return result.transpose(1, 2).reshape(
+        (tokens, query.shape[1], query.shape[3]))
+
+
+def _plain_decoder_prefill(impl, metadata):
+    """Whether fresh Q/K/V have the same attention semantics as the cache.
+
+    The direct path cannot implement sliding windows, soft caps, ALiBi,
+    attention sinks, prefix-LM or distributed context parallelism. Decline
+    those configurations rather than silently changing a model's output.
+    """
+    return (
+        getattr(getattr(impl, "attn_type", None), "name", None) == "DECODER"
+        and getattr(impl, "sliding_window", None) == (-1, -1)
+        and getattr(impl, "alibi_slopes", None) is None
+        and not getattr(impl, "logits_soft_cap", 0)
+        and getattr(impl, "sinks", None) is None
+        and getattr(impl, "kv_sharing_target_layer_name", None) is None
+        and getattr(impl, "kv_cache_dtype", None) == "auto"
+        and getattr(impl, "dcp_world_size", 1) == 1
+        and getattr(metadata, "causal", None) is True
+        and not getattr(metadata, "use_cascade", False)
+        and not getattr(metadata, "common_prefix_len", 0)
+        and getattr(metadata, "mm_prefix_range_tensor", None) is None
+    )
 
 
 def _no_scheduler_metadata(*args, **kwargs):
@@ -292,12 +502,10 @@ def patch_attention_impl(module):
     reuse_full_token_views = (
         os.environ.get("JITTOR_VLLM_REUSE_FULL_TOKEN_VIEWS", "1") != "0"
     )
-    fused_cache_decode = (
-        os.environ.get("JITTOR_VLLM_FUSED_CACHE_DECODE", "0") != "0"
-    )
-    direct_full_prefill = (
-        os.environ.get("JITTOR_VLLM_DIRECT_FULL_PREFILL", "0") == "1"
-    )
+    fused_cache_decode_mode = os.environ.get(
+        "JITTOR_VLLM_FUSED_CACHE_DECODE", "auto")
+    direct_full_prefill_mode = os.environ.get(
+        "JITTOR_VLLM_DIRECT_FULL_PREFILL", "auto")
     counter = [0]
     metadata_cache = {}
 
@@ -336,28 +544,64 @@ def patch_attention_impl(module):
             value if full_kv else (value[:tokens] if value is not None else None)
         )
         direct_out = output if tokens == int(output.shape[0]) else None
-        one_token_decode = (
-            fused_cache_decode and has_cache_update and direct_out is not None
-            and tokens == int(query_tokens.shape[0])
-            and tokens == int(key_tokens.shape[0])
-            and tokens == int(value_tokens.shape[0])
-            and lengths is not None and starts is not None
-            and len(lengths) == tokens and len(starts) == tokens + 1
-            and starts[0] == 0 and starts[-1] == tokens
-            and all(starts[index + 1] == starts[index] + 1
-                    for index in range(tokens))
+        # Auto-enable only for a full, single-request CUDA Graph decode.
+        # Batch 4 was slower in end-to-end A/B.  Keep the old explicit opt-in
+        # for eager decode, and avoid evaluating host metadata on the default
+        # eager path at every layer.
+        fused_requested = (
+            capturing if fused_cache_decode_mode == "auto"
+            else fused_cache_decode_mode != "0"
         )
+        one_token_decode = False
+        if (fused_requested and has_cache_update and direct_out is not None
+                and tokens == int(query_tokens.shape[0])
+                and tokens == int(key_tokens.shape[0])
+                and tokens == int(value_tokens.shape[0])):
+            if capturing:
+                # Capture cannot read starts/lengths back to the host.  The
+                # scalar max_query_len and static tensor sizes are sufficient
+                # for batch 1; the kernel reads varying lengths from GPU.
+                one_token_decode = (
+                    _graph_single_request_decode(attn_metadata, tokens)
+                    or _graph_fixed_batch_decode(attn_metadata, tokens)
+                )
+            else:
+                one_token_decode = (
+                    lengths is not None and starts is not None
+                    and len(lengths) == tokens and len(starts) == tokens + 1
+                    and starts[0] == 0 and starts[-1] == tokens
+                    and all(starts[index + 1] == starts[index] + 1
+                            for index in range(tokens))
+                )
         attended = None
         if one_token_decode:
-            attended = jt.nn.reshape_cache_and_paged_attention_decode(
-                query_tokens, key_tokens, value_tokens, kv_cache,
-                attn_metadata.slot_mapping, attn_metadata.seq_lens,
-                attn_metadata.block_table, self.scale, direct_out)
+            if os.environ.get("JITTOR_VLLM_EXPERIMENTAL_VLLM_FA2_PAGE16_DECODE") == "1":
+                attended = _experimental_vllm_fa2_page16_decode(
+                    query_tokens, key_tokens, value_tokens, kv_cache,
+                    attn_metadata.seq_lens, attn_metadata.block_table,
+                    self.scale)
+            elif os.environ.get("JITTOR_VLLM_EXPERIMENTAL_FA2_PAGE_DECODE") == "1":
+                attended = _experimental_fa2_paged_decode(
+                    query_tokens, key_tokens, value_tokens, kv_cache,
+                    attn_metadata.seq_lens, attn_metadata.block_table,
+                    self.scale)
+            else:
+                attended = jt.nn.reshape_cache_and_paged_attention_decode(
+                    query_tokens, key_tokens, value_tokens, kv_cache,
+                    attn_metadata.slot_mapping, attn_metadata.seq_lens,
+                    attn_metadata.block_table, self.scale, direct_out)
         if has_cache_update and attended is None:
             reshape_and_cache_kv_v1(
                 key_tokens, value_tokens,
                 kv_cache,
                 attn_metadata.slot_mapping, slots=slots, no_sync=True)
+        direct_full_prefill = (
+            direct_full_prefill_mode != "0"
+            and tokens > 1
+            and not capturing
+            and (direct_full_prefill_mode == "1"
+                 or _plain_decoder_prefill(self, attn_metadata))
+        )
         if attended is None and has_cache_update and direct_full_prefill:
             attended = _direct_full_prefill(
                 query_tokens, key_tokens, value_tokens, starts, lengths,
@@ -405,10 +649,30 @@ def _layers_between_syncs():
 
 
 def _host_metadata(attn_metadata, cache):
-    """Convert one forward pass's metadata to host lists, once."""
+    """Convert per-forward metadata once, with an ACL auto-replay safeguard.
+
+    With Jittor auto replay enabled, ACL V1 incremental decode diverged after
+    six tokens when these host lists were reused. A query-start readback at
+    each later layer prevented it. With auto replay disabled, TP1/TP2/TP4,
+    long-context page crossing and batch-4 decode passed without that fence.
+    Keep this small correctness fence ACL-only until the graph lifetime root
+    cause is fixed; CUDA retains the once-per-forward fast path.
+    """
 
     key = id(attn_metadata)
     entry = cache.get(key)
+    default_readback = ('1' if getattr(jt.flags, 'auto_graph_replay', 1)
+                        else '0')
+    if (entry is not None and getattr(jt.compiler, 'has_acl', False)
+            and getattr(jt.flags, 'use_acl', 0)
+            and os.environ.get('JITTOR_VLLM_NPU_SAFE_METADATA_READBACK',
+                               default_readback) != '0'):
+        if os.environ.get('JITTOR_VLLM_NPU_DIRECT_METADATA_READBACK', '1') != '0':
+            # numpy() synchronizes and transfers this tiny ACL tensor directly.
+            # Avoid constructing an extra lazy cpu() Var at every layer.
+            attn_metadata.query_start_loc.numpy()
+        else:
+            host_lengths(attn_metadata.query_start_loc)
     if entry is None:
         entry = (host_lengths(attn_metadata.slot_mapping),
                  host_lengths(attn_metadata.query_start_loc),

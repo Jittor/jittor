@@ -1,6 +1,8 @@
 """The attention entry points vLLM imports, against a plain-numpy reference."""
 
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import numpy as np
 
@@ -8,6 +10,124 @@ import jittor as jt
 
 torch = jt
 from jittor_adapters.vllm import flash_attn
+
+
+class TestHostMetadataLifetime(unittest.TestCase):
+    def test_acl_default_skips_fence_when_auto_replay_disabled(self):
+        class QueryStarts(list):
+            reads = 0
+
+            def numpy(self):
+                self.reads += 1
+                return np.asarray(self)
+
+        query_starts = QueryStarts([0, 1])
+        metadata = SimpleNamespace(slot_mapping=[128],
+                                   query_start_loc=query_starts, seq_lens=[11])
+        fake_jt = SimpleNamespace(
+            compiler=SimpleNamespace(has_acl=True),
+            flags=SimpleNamespace(use_acl=1, auto_graph_replay=0))
+        with patch.object(flash_attn, 'jt', fake_jt), \
+                patch.dict('os.environ', {
+                    'JITTOR_VLLM_NPU_DIRECT_METADATA_READBACK': '1',
+                }, clear=True):
+            cache = {}
+            flash_attn._host_metadata(metadata, cache)
+            flash_attn._host_metadata(metadata, cache)
+        self.assertEqual(query_starts.reads, 0)
+
+    def test_acl_default_fences_when_auto_replay_enabled(self):
+        class QueryStarts(list):
+            reads = 0
+
+            def numpy(self):
+                self.reads += 1
+                return np.asarray(self)
+
+        query_starts = QueryStarts([0, 1])
+        metadata = SimpleNamespace(slot_mapping=[128],
+                                   query_start_loc=query_starts, seq_lens=[11])
+        fake_jt = SimpleNamespace(
+            compiler=SimpleNamespace(has_acl=True),
+            flags=SimpleNamespace(use_acl=1, auto_graph_replay=1))
+        with patch.object(flash_attn, 'jt', fake_jt), \
+                patch.dict('os.environ', {
+                    'JITTOR_VLLM_NPU_DIRECT_METADATA_READBACK': '1',
+                }, clear=True):
+            cache = {}
+            flash_attn._host_metadata(metadata, cache)
+            flash_attn._host_metadata(metadata, cache)
+        self.assertEqual(query_starts.reads, 1)
+
+    def test_acl_direct_readback_skips_extra_cpu_var(self):
+        class QueryStarts(list):
+            reads = 0
+
+            def numpy(self):
+                self.reads += 1
+                return np.asarray(self)
+
+        query_starts = QueryStarts([0, 1])
+        metadata = SimpleNamespace(slot_mapping=[128],
+                                   query_start_loc=query_starts, seq_lens=[11])
+        fake_jt = SimpleNamespace(
+            compiler=SimpleNamespace(has_acl=True),
+            flags=SimpleNamespace(use_acl=1))
+        host_reads = []
+        with patch.object(flash_attn, 'jt', fake_jt), \
+                patch.object(flash_attn, 'host_lengths',
+                             side_effect=lambda value: host_reads.append(id(value)) or list(value)), \
+                patch.dict('os.environ', {
+                    'JITTOR_VLLM_NPU_SAFE_METADATA_READBACK': '1',
+                    'JITTOR_VLLM_NPU_DIRECT_METADATA_READBACK': '1',
+                }):
+            cache = {}
+            first = flash_attn._host_metadata(metadata, cache)
+            second = flash_attn._host_metadata(metadata, cache)
+        self.assertIs(first, second)
+        self.assertEqual(query_starts.reads, 1)
+        self.assertEqual(host_reads.count(id(query_starts)), 1)
+
+    def test_acl_rechecks_query_starts_after_first_layer_only(self):
+        metadata = SimpleNamespace(slot_mapping=[128],
+                                   query_start_loc=[0, 1], seq_lens=[11])
+        reads = []
+
+        def read(value):
+            reads.append(id(value))
+            return list(value)
+
+        fake_jt = SimpleNamespace(
+            compiler=SimpleNamespace(has_acl=True),
+            flags=SimpleNamespace(use_acl=1))
+        with patch.object(flash_attn, 'jt', fake_jt), \
+                patch.object(flash_attn, 'host_lengths', side_effect=read), \
+                  patch.dict('os.environ', {
+                      'JITTOR_VLLM_NPU_SAFE_METADATA_READBACK': '1',
+                      'JITTOR_VLLM_NPU_DIRECT_METADATA_READBACK': '0',
+                  }):
+            cache = {}
+            first = flash_attn._host_metadata(metadata, cache)
+            second = flash_attn._host_metadata(metadata, cache)
+        self.assertIs(first, second)
+        self.assertEqual(reads.count(id(metadata.query_start_loc)), 2)
+        self.assertEqual(reads.count(id(metadata.slot_mapping)), 1)
+        self.assertEqual(reads.count(id(metadata.seq_lens)), 1)
+
+    def test_cuda_keeps_one_read_per_forward(self):
+        metadata = SimpleNamespace(slot_mapping=[128],
+                                   query_start_loc=[0, 1], seq_lens=[11])
+        reads = []
+        fake_jt = SimpleNamespace(
+            compiler=SimpleNamespace(has_acl=False),
+            flags=SimpleNamespace(use_acl=0))
+        with patch.object(flash_attn, 'jt', fake_jt), \
+                patch.object(flash_attn, 'host_lengths',
+                             side_effect=lambda value: reads.append(id(value)) or list(value)):
+            cache = {}
+            flash_attn._host_metadata(metadata, cache)
+            flash_attn._host_metadata(metadata, cache)
+        self.assertEqual(len(reads), 3)
 
 
 def _softmax(values, axis=-1):
@@ -30,6 +150,61 @@ def _attend(query, key, value, causal):
 
 
 class TestVarlenAttention(unittest.TestCase):
+    def test_f32_prefill_auto_policy_handles_torch_shim_dtype(self):
+        policy = flash_attn._f32_prefill_policy
+        self.assertTrue(policy(128, "torch.float16", 128, "auto"))
+        self.assertTrue(policy(32, "float16", 64, "auto"))
+        self.assertTrue(policy(512, "torch.float16", 128, "auto"))
+        self.assertFalse(policy(513, "torch.float16", 128, "auto"))
+        self.assertFalse(policy(128, "torch.bfloat16", 128, "auto"))
+        self.assertFalse(policy(128, "torch.float16", 129, "auto"))
+        self.assertFalse(policy(128, "torch.float16", 128, "0"))
+        self.assertFalse(policy(128, "torch.float16", 128, "unknown"))
+        self.assertTrue(policy(128, "torch.bfloat16", 128, "1"))
+
+    def test_direct_prefill_only_for_plain_decoder_semantics(self):
+        impl = SimpleNamespace(
+            attn_type=SimpleNamespace(name="DECODER"),
+            sliding_window=(-1, -1),
+            alibi_slopes=None,
+            logits_soft_cap=0,
+            sinks=None,
+            kv_sharing_target_layer_name=None,
+            kv_cache_dtype="auto",
+            dcp_world_size=1,
+        )
+        metadata = SimpleNamespace(
+            causal=True, use_cascade=False, common_prefix_len=0,
+            mm_prefix_range_tensor=None,
+        )
+        self.assertTrue(flash_attn._plain_decoder_prefill(impl, metadata))
+        for name, value in (
+            ("sliding_window", (127, 0)),
+            ("alibi_slopes", object()),
+            ("logits_soft_cap", 1.0),
+            ("sinks", object()),
+            ("kv_sharing_target_layer_name", "other"),
+            ("kv_cache_dtype", "fp8"),
+            ("dcp_world_size", 2),
+        ):
+            old = getattr(impl, name)
+            setattr(impl, name, value)
+            self.assertFalse(flash_attn._plain_decoder_prefill(impl, metadata))
+            setattr(impl, name, old)
+        impl.attn_type = SimpleNamespace(name="ENCODER")
+        self.assertFalse(flash_attn._plain_decoder_prefill(impl, metadata))
+        impl.attn_type.name = "DECODER"
+        for name, value in (
+            ("causal", False),
+            ("use_cascade", True),
+            ("common_prefix_len", 10),
+            ("mm_prefix_range_tensor", object()),
+        ):
+            old = getattr(metadata, name)
+            setattr(metadata, name, value)
+            self.assertFalse(flash_attn._plain_decoder_prefill(impl, metadata))
+            setattr(metadata, name, old)
+
     def test_direct_full_prefill_gqa_and_chunk_guard(self):
         rng = np.random.default_rng(17)
         tokens, heads, kv_heads, dim = 12, 4, 2, 8
@@ -148,6 +323,36 @@ class TestCacheWrites(unittest.TestCase):
             key_cache.numpy()[1, 2], key.numpy()[0], rtol=1e-6, atol=1e-6)
         self.assertEqual(float(jt.abs(value_cache).sum()),
                          float(jt.abs(value[0]).sum()))
+
+
+class TestGraphDecodeGuard(unittest.TestCase):
+    def test_only_full_single_request_one_token_shape_is_accepted(self):
+        class StaticTensor:
+            def __init__(self, shape):
+                self.shape = shape
+
+            def numel(self):
+                result = 1
+                for size in self.shape:
+                    result *= size
+                return result
+
+        metadata = SimpleNamespace(
+            max_query_len=1,
+            block_table=StaticTensor((1, 4)),
+            query_start_loc=StaticTensor((2,)),
+            seq_lens=StaticTensor((1,)),
+        )
+        self.assertTrue(flash_attn._graph_single_request_decode(metadata, 1))
+        self.assertFalse(flash_attn._graph_single_request_decode(metadata, 2))
+        metadata.max_query_len = 2
+        self.assertFalse(flash_attn._graph_single_request_decode(metadata, 1))
+        metadata.max_query_len = 1
+        metadata.block_table = StaticTensor((4, 4))
+        self.assertFalse(flash_attn._graph_single_request_decode(metadata, 1))
+        metadata.block_table = StaticTensor((1, 4))
+        metadata.query_start_loc = StaticTensor((3,))
+        self.assertFalse(flash_attn._graph_single_request_decode(metadata, 1))
 
 
 class TestTheBundleItPublishes(unittest.TestCase):

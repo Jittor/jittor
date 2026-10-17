@@ -1,4 +1,5 @@
 """Stable Torch Tensor method implementations; install only binds these objects."""
+import os
 from importlib import import_module
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from ...context import get_install_context
@@ -282,6 +283,23 @@ def _ip_or_copy_cuda_storage(self, value, constant=False):
 def _copy_(self, other, non_blocking=False):
     src = other if isinstance(other, _NativeVar) else _owner.jt.array(other)
     src = src.cast(_jittor_dtype_name(self.dtype)) if hasattr(self, "dtype") else src
+    # A fixed CUDA destination can copy directly from a CPU Var. Going via
+    # src.to(cuda) builds a transfer Var and a second device-to-device copy;
+    # vLLM updates many tiny persistent metadata buffers this way every step.
+    # The native copy_into path already performs an ordered H2D transfer and
+    # preserves the destination address required by CUDA Graph replay.
+    if (os.environ.get("JITTOR_TORCH_DIRECT_HOST_COPY") == "1"
+            and not _owner.jt.graph_capture_active()
+            and not getattr(_owner.jt.compiler, "has_acl", False)
+            and str(self.device).startswith("cuda")
+            and src.placement_backend == 0
+            and not self.requires_grad and not src.requires_grad
+            and getattr(self, "_torch_data_owner", None) is None
+            and self.is_contiguous() and src.is_contiguous()
+            and tuple(self.shape) == tuple(src.shape)
+            and _jittor_dtype_name(self.dtype) == _jittor_dtype_name(src.dtype)):
+        self._copy_into(src)
+        return self
     # torch's `copy_` is in place: the destination keeps its own device, and a
     # cross-device copy is a transfer. jittor's `assign` (what `_ip` uses for
     # every `x.foo_()`) writes x's values into *y's* storage and then aliases

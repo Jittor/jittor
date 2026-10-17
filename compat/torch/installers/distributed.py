@@ -67,18 +67,22 @@ def _backend_matches_active(requested_backend, active_backend):
 
 
 def _bootstrap_var_all_reduce(self, op="mean"):
-    ops = jt.compile_extern.nccl_ops
+    use_hccl = os.environ.get("JT_HCCL_WORLD_SIZE") is not None
+    ops = (jt.compile_extern.hccl_ops if use_hccl
+           else jt.compile_extern.nccl_ops)
     world_size = jt.compile_extern.world_size
     if op not in ("sum", "mean"):
         raise NotImplementedError(
-            "Jittor NCCL Var.mpi_all_reduce supports sum and mean only")
-    result = ops.nccl_all_reduce(self)
+            "Jittor Var.mpi_all_reduce supports sum and mean only")
+    result = (ops.hccl_all_reduce(self, "sum") if use_hccl
+              else ops.nccl_all_reduce(self))
     return result / world_size if op == "mean" else result
 
 
 def _bootstrap_var_broadcast(self, root=0):
-    ops = jt.compile_extern.nccl_ops
-    return ops.nccl_broadcast(self, int(root))
+    if os.environ.get("JT_HCCL_WORLD_SIZE") is not None:
+        return jt.compile_extern.hccl_ops.hccl_broadcast(self, int(root))
+    return jt.compile_extern.nccl_ops.nccl_broadcast(self, int(root))
 
 
 def _clear_stale_rendezvous(rootinfo, rank):
@@ -133,18 +137,23 @@ def _bootstrap_native_distributed(rank, world_size, backend=None, store=None):
     if not _is_truthy(os.environ.get("JITTOR_TORCH_DISTRIBUTED_AUTO_INIT")):
         return False
     backend_name = str(backend or "nccl").lower()
-    if "nccl" not in backend_name:
+    use_hccl = "hccl" in backend_name and "nccl" not in backend_name
+    if not use_hccl and "nccl" not in backend_name:
         raise NotImplementedError(
-            "Jittor dynamic torch.distributed bootstrap currently supports NCCL only"
+            "Jittor dynamic torch.distributed bootstrap supports NCCL or HCCL"
         )
-    if not getattr(jt, "has_cuda", False):
+    if use_hccl and not getattr(jt.compiler, "has_acl", False):
+        raise RuntimeError("Jittor dynamic HCCL bootstrap requires ACL")
+    if not use_hccl and not getattr(jt, "has_cuda", False):
         raise RuntimeError("Jittor dynamic NCCL bootstrap requires CUDA")
 
     rank = int(rank)
     world_size = int(world_size)
     local_world_size = int(os.environ.get(
         "LOCAL_WORLD_SIZE", os.environ.get("RAY_LOCAL_WORLD_SIZE", world_size)))
-    rootinfo = os.environ.get("JT_NCCL_ROOTINFO_FILE", "").strip()
+    backend_key = "HCCL" if use_hccl else "NCCL"
+    rootinfo_key = "JT_{}_ROOTINFO_FILE".format(backend_key)
+    rootinfo = os.environ.get(rootinfo_key, "").strip()
     # Derived even when a store is in hand. The store carries the *world*
     # communicator's unique id, but `nccl_create_process_group` exchanges every
     # sub-group's id through a file named after this path
@@ -158,8 +167,9 @@ def _bootstrap_native_distributed(rank, world_size, backend=None, store=None):
             "JITTOR_DIST_RENDEZVOUS_DIR", "").strip()
         if local_world_size != world_size and not explicit_rendezvous_dir:
             raise RuntimeError(
-                "multi-node Jittor NCCL requires JT_NCCL_ROOTINFO_FILE or "
-                "JITTOR_DIST_RENDEZVOUS_DIR on shared storage"
+                "multi-node Jittor {} requires {} or "
+                "JITTOR_DIST_RENDEZVOUS_DIR on shared storage".format(
+                    backend_key, rootinfo_key)
             )
         rendezvous_dir = explicit_rendezvous_dir or "/tmp"
         os.makedirs(rendezvous_dir, exist_ok=True)
@@ -169,7 +179,8 @@ def _bootstrap_native_distributed(rank, world_size, backend=None, store=None):
         key = "".join(char if char.isalnum() or char in "_.-" else "_"
                       for char in key)
         rootinfo = os.path.join(
-            rendezvous_dir, "jittor-nccl-{}.bin".format(key))
+            rendezvous_dir, "jittor-{}-{}.bin".format(
+                backend_key.lower(), key))
 
     # Outside the `if not rootinfo` above on purpose. It used to live inside,
     # so an explicitly set JT_NCCL_ROOTINFO_FILE got neither the startup clear
@@ -179,22 +190,29 @@ def _bootstrap_native_distributed(rank, world_size, backend=None, store=None):
     # artifact. Still rank 0 only, and still before rank 0 creates the store.
     _clear_stale_rendezvous(rootinfo, rank)
 
+    visible_key = ("ASCEND_RT_VISIBLE_DEVICES" if use_hccl
+                   else "CUDA_VISIBLE_DEVICES")
     visible = [item for item in os.environ.get(
-        "CUDA_VISIBLE_DEVICES", "").split(",") if item.strip()]
+        visible_key, "").split(",") if item.strip()]
     local_rank = 0 if len(visible) == 1 else int(os.environ.get("LOCAL_RANK", rank))
-    set_env("JT_NCCL_WORLD_SIZE", world_size)
-    set_env("JT_NCCL_RANK", rank)
-    set_env("JT_NCCL_LOCAL_RANK", local_rank)
+    set_env("JT_{}_WORLD_SIZE".format(backend_key), world_size)
+    set_env("JT_{}_RANK".format(backend_key), rank)
+    set_env("JT_{}_LOCAL_RANK".format(backend_key), local_rank)
     if rootinfo:
-        set_env("JT_NCCL_ROOTINFO_FILE", rootinfo)
-    set_env("use_nccl", "1")
+        set_env(rootinfo_key, rootinfo)
+    set_env("use_hccl" if use_hccl else "use_nccl", "1")
     set_env("use_mpi", "0")
 
-    set_flag(jt.flags, "use_cuda", 1)
-    jt.compile_extern.setup_nccl(store=store)
-    ops = getattr(jt.compile_extern, "nccl_ops", None)
+    set_flag(jt.flags, "use_acl" if use_hccl else "use_cuda", 1)
+    if use_hccl:
+        jt.compile_extern.setup_hccl(no_mpi=True)
+    else:
+        jt.compile_extern.setup_nccl(store=store)
+    ops = getattr(jt.compile_extern,
+                  "hccl_ops" if use_hccl else "nccl_ops", None)
     if ops is None:
-        raise RuntimeError("Jittor NCCL setup did not publish collective ops")
+        raise RuntimeError("Jittor {} setup did not publish collective ops".format(
+            backend_key))
 
     # compile_extern is the single owner; jt.rank / jt.world_size / jt.in_mpi
     # read through to it. Assigning them here as well used to create a second
@@ -711,6 +729,7 @@ def _new_group(ranks=None, *args, **kwargs):
 class Backend(str):
     GLOO = "gloo"
     NCCL = "nccl"
+    HCCL = "hccl"
     MPI = "mpi"
     UCC = "ucc"
     UNDEFINED = "undefined"
@@ -942,15 +961,27 @@ def _api_dist_is_available(*a, **k):
 def _api_dist_is_backend_available(backend):
     # Gloo's CPU control API is implemented by native Store collectives. This
     # advertises the shim backend, not binary interoperability with libgloo.
-    if str(backend).lower() == 'gloo':
+    name = str(backend).lower()
+    if name == 'gloo':
         return True
-    return bool(getattr(jt, 'has_cuda', False)) if str(backend).lower() == 'nccl' else bool(getattr(jt.compile_extern, 'has_mpi', False)) if str(backend).lower() == 'mpi' else False
+    if name == 'nccl':
+        return bool(getattr(jt, 'has_cuda', False))
+    if name == 'hccl':
+        return bool(getattr(jt.compiler, 'has_acl', False))
+    if name == 'mpi':
+        return bool(getattr(jt.compile_extern, 'has_mpi', False))
+    return False
 
 
 def _api_dist_is_nccl_available():
     _context = get_install_context(jt).state["distributed_api"]
     dist = _context['dist']
     return dist.is_backend_available('nccl')
+
+
+def _api_dist_is_hccl_available():
+    _context = get_install_context(jt).state["distributed_api"]
+    return _context['dist'].is_backend_available('hccl')
 
 
 def _api_dist_is_gloo_available():
@@ -1146,6 +1177,7 @@ def _install_distributed(g, registry=None):
     dist.is_available = _api_dist_is_available
     dist.is_backend_available = _api_dist_is_backend_available
     dist.is_nccl_available = _api_dist_is_nccl_available
+    dist.is_hccl_available = _api_dist_is_hccl_available
     dist.is_gloo_available = _api_dist_is_gloo_available
     dist.is_mpi_available = _api_dist_is_mpi_available
     dist.is_ucc_available = _api_dist_is_ucc_available
@@ -1221,6 +1253,9 @@ def _install_distributed(g, registry=None):
     dist.DeviceMesh = getattr(dist, "DeviceMesh", _DeviceMesh)
     dist.init_device_mesh = getattr(dist, "init_device_mesh", _init_device_mesh)
     dist.ProcessGroup = _JittorProcessGroup
+    # Give NPU integrations the corresponding backend-specific group alias,
+    # backed by the same Jittor process group as the NCCL alias below.
+    dist.ProcessGroupHCCL = _JittorProcessGroup
 
     c10d = _modules.get("torch.distributed.distributed_c10d")
     if c10d is None:
@@ -1249,6 +1284,7 @@ def _install_distributed(g, registry=None):
     c10d._resolve_process_group = _api_c10d_resolve_process_group
     c10d.ProcessGroupGloo = _JittorProcessGroup
     c10d.ProcessGroupNCCL = _JittorProcessGroup
+    c10d.ProcessGroupHCCL = _JittorProcessGroup
     c10d._world = _types.SimpleNamespace(
         default_pg=world_group,
         pg_map=pg_map,

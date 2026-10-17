@@ -7,6 +7,8 @@ takes a different route for each: a fused CUDA decode kernel, a batched path
 when every request has the same lengths, and a per-request loop when they differ.
 """
 
+import os
+
 import jittor as jt
 
 def _host_lengths(value):
@@ -102,7 +104,21 @@ def paged_attention(query, kv_cache, cu_seqlens_q, seq_lens, block_table,
             return decoded
 
     out_dtype = query.dtype
-    q = query.float32()
+    # Full prefill is handled before this function in the vLLM adapter.  A
+    # chunked prefill has fewer queries than cached keys; materializing its
+    # [heads, queries, keys] score/mask can exhaust memory at long context.
+    flash_chunked = (
+        os.environ.get("JITTOR_VLLM_FLASH_GQA_CHUNKED", "0") == "1"
+        and bool(jt.flags.use_cuda)
+        and not getattr(jt.compiler, "has_acl", False)
+        and causal
+        and head_dim in (64, 128)
+        and num_heads > num_kv_heads
+        and num_heads % num_kv_heads == 0
+        and str(query.dtype).rsplit(".", 1)[-1] == "float16"
+        and str(kv_cache.dtype).rsplit(".", 1)[-1] == "float16"
+    )
+    q = query if flash_chunked else query.float32()
     starts = (list(query_lengths) if query_lengths is not None
               else _host_lengths(cu_seqlens_q))
     lengths = (list(key_lengths) if key_lengths is not None
@@ -134,6 +150,14 @@ def paged_attention(query, kv_cache, cu_seqlens_q, seq_lens, block_table,
         values = _slice_dim(values.reshape(
             (requests, used * block_size, num_kv_heads, head_dim)),
             1, 0, span_k)
+        if flash_chunked and 1 < span_q <= span_k:
+            queries = _slice_dim(q, 0, 0, requests * span_q).reshape(
+                (requests, span_q, num_heads, head_dim))
+            return _flash_attention_batched(
+                queries, keys, values, scale).reshape(
+                    (requests * span_q, num_heads, head_dim))
+        if flash_chunked:
+            q = q.float32()
         keys, values = keys.float32(), values.float32()
         if repeats > 1:
             keys = _repeat_interleave_dim(keys, 2, repeats)
@@ -171,6 +195,12 @@ def paged_attention(query, kv_cache, cu_seqlens_q, seq_lens, block_table,
         if decoded is not None:
             outputs.append(decoded.cast(out_dtype))
             continue
+        if flash_chunked and 1 < span_q <= span_k:
+            outputs.append(_flash_chunked_attention(
+                query_tokens, keys, values, scale))
+            continue
+        if flash_chunked:
+            query_tokens = query_tokens.float32()
         keys, values = keys.float32(), values.float32()
         if repeats > 1:
             keys = _repeat_interleave_dim(keys, 1, repeats)
@@ -186,6 +216,34 @@ def paged_attention(query, kv_cache, cu_seqlens_q, seq_lens, block_table,
     if len(outputs) == 1:
         return outputs[0]
     return jt.concat(outputs, dim=0)
+
+
+def _flash_chunked_attention(query, key, value, scale):
+    """FA2 bottom-right causal attention for a chunk with cached prefix."""
+    q_len, heads, head_dim = query.shape
+    k_len, kv_heads, _ = key.shape
+    result = _flash_attention_batched(
+        query.reshape((1, q_len, heads, head_dim)),
+        key.reshape((1, k_len, kv_heads, head_dim)),
+        value.reshape((1, k_len, kv_heads, head_dim)), scale)
+    return result.reshape((q_len, heads, head_dim))
+
+
+def _flash_attention_batched(query, key, value, scale):
+    """Dispatch full/chunked causal GQA without dense score materialization."""
+    from jittor.compat.shim.backends import flash_attention
+
+    head_dim = int(query.shape[-1])
+    backend, miss = flash_attention.load_backend_for(head_dim, "fp16")
+    if backend is None:
+        raise RuntimeError(
+            "JITTOR_VLLM_FLASH_GQA_CHUNKED=1 requires native "
+            f"FlashAttention: {miss}")
+    result = backend.flash_attn_func(
+        query, key, value, 0.0, float(scale), True)
+    if result is None:
+        raise RuntimeError("native FlashAttention declined chunked GQA prefill")
+    return result
 
 
 def _causal_mask(span_q, span_k):

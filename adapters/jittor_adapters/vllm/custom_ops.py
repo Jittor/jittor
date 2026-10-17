@@ -18,6 +18,8 @@ can move out of the repository as a plugin without following any private
 detail with it.
 """
 
+import os
+
 import jittor as jt
 
 # vLLM's own schema text, kept verbatim so the registered signature says the
@@ -40,6 +42,7 @@ _OPERATORS = (
     ("apply_repetition_penalties_",
      "apply_repetition_penalties_(Tensor! logits, Tensor prompt_mask, "
      "Tensor output_mask, Tensor repetition_penalties) -> ()"),
+    ("weak_ref_tensor", "weak_ref_tensor(Tensor input) -> Tensor"),
 )
 
 # Asked once at start-up, before any quantised path is chosen. Stubbing the
@@ -143,6 +146,20 @@ def _apply_repetition_penalties_(logits, prompt_mask, output_mask,
     logits.assign(jt.where(seen, adjusted, logits))
 
 
+def _weak_ref_tensor(tensor):
+    """Experimental strong alias for vLLM V2 CUDA Graph output lifetimes.
+
+    vLLM's C++ op returns a non-owning alias. Returning the same Jittor Var
+    keeps storage alive longer, so this is safe for contents but may increase
+    graph-pool memory. Do not enable outside a measured fixed-shape test.
+    """
+    if os.environ.get("JITTOR_VLLM_EXPERIMENTAL_STRONG_GRAPH_ALIAS") == "1":
+        return tensor
+    raise NotImplementedError(
+        "vLLM V2 CUDA Graph needs weak_ref_tensor; Jittor's strong-alias "
+        "experiment is opt-in because its lifetime differs")
+
+
 _IMPLEMENTATIONS = {
     "silu_and_mul": _silu_and_mul,
     "gelu_and_mul": _gelu_and_mul,
@@ -152,6 +169,7 @@ _IMPLEMENTATIONS = {
     "rotary_embedding": _rotary_embedding,
     "get_cuda_view_from_cpu_tensor": _get_cuda_view_from_cpu_tensor,
     "apply_repetition_penalties_": _apply_repetition_penalties_,
+    "weak_ref_tensor": _weak_ref_tensor,
 }
 
 

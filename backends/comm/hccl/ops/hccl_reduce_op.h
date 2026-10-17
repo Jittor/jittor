@@ -12,8 +12,8 @@ struct HcclReduceOp : Op {
     int root;
     int group_id;
 
-    HcclReduceOp(Var* x, string reduce_op="sum", int root=0,
-                 int group_id=0);
+    // Jittor's op binding parser matches constructor arguments on one line.
+    HcclReduceOp(Var* x, string reduce_op="sum", int root=0, int group_id=0);
     void infer_shape() override;
     
     const char* name() const override { return "hccl_reduce"; }

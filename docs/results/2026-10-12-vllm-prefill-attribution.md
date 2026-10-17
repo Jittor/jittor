@@ -73,3 +73,109 @@ For **real, non-ablated** 128-prompt + 32-output TP1 eager generation on the sam
 A fresh fixed-batch-1 `FULL_DECODE_ONLY` CUDA Graph run on the same GPU, versions and shape found Jittor/PyTorch median TTFT 28.922/11.256 ms, median ITL 3.157/2.308 ms, and aggregate throughput 248.571/383.947 tok/s (64.7% of PyTorch), again with all 32 tokens identical. This is *not* 90% Graph throughput parity. Wrapping runner phases to attribute the Graph gap is too invasive: a light `JT_PHASE_TRACE_ASYNC=1` run increased Jittor ITL from 3.157 to 6.770 ms, while the analogous PyTorch trace was near its baseline. The Jittor subphase wrapper similarly gave 6.720 ms. Consequently the Graph phase spans cannot establish how much of the 0.849 ms uninstrumented ITL gap is replay, sampling or metadata. A lower-perturbation CUDA/CPU timeline or separate A/B interventions are required before changing replay internals. The present work does not reach 90% *TTFT* or Graph-throughput parity; no unverified sampling change is left enabled.
 
 Raw reports under `/home/chk/jittor-lab/_state/vllm-compare-20261012/`: `ablation-{j-fill,j-zero-code,o-fill}-gpu0.json`, `ablation-j-zero-code-phase-gpu0.json`, `residual-phase-o.json`, `plain-greedy-{baseline,candidate}-j-eager32.json`, `fast-sampling-copy-j-eager32.json`, `prefill-count-{baseline,candidate}-j.json`, `oracle-matched-gpu0-eager32.json`, `{jittor,oracle}-matched-gpu0-graph32.json`, `{jittor,oracle}-matched-gpu0-graph32-phase.json`, and `jittor-matched-gpu0-graph32-phaselight.json`. Only the diagnostic zero-code bypass and forward-profiler switch remain in the benchmark helper; the failed production candidates were rolled back.
+
+## Guarded prefill and Graph-decode follow-up
+
+The existing fused one-token cache-write/paged-decode CUDA kernel was previously
+unreachable during vLLM CUDA Graph capture: the adapter required host-side
+`starts` and `lengths`, which are deliberately absent while recording a graph.
+For a full batch-1 decode, `num_actual_tokens`, `max_query_len`, and static
+metadata tensor sizes establish the one-token condition without reading GPU
+metadata back to the CPU. The adapter now auto-selects this fused path only
+for that capture shape. The existing `JITTOR_VLLM_FUSED_CACHE_DECODE=0` disables
+it; `=1` retains the explicit eager opt-in. The guarded direct-Q/K/V full
+prefill path remains opt-in with `JITTOR_VLLM_DIRECT_FULL_PREFILL=1`, because
+its model-general correctness has not been established. Chunked,
+prefix-attending, multi-request, and one-token prefill decline its guard.
+
+Same GPU 0, Qwen3-0.6B FP16, TP1, vLLM 0.24.0, Transformers 5.5.3,
+128-prompt + 32-output, `FULL_DECODE_ONLY`, batch 1, 2 warmups and 7 measured
+requests per process. The baseline has both candidate paths disabled; the
+fused-only A/B was run in baseline/candidate/candidate/baseline order. Times
+below are medians in ms, except throughput.
+
+| Path | TTFT | ITL | Whole request | Output tok/s |
+| --- | ---: | ---: | ---: | ---: |
+| Baseline, first | 29.459 | 3.185 | 129.172 | 248.008 |
+| Fused decode, first | 29.742 | 3.125 | 126.759 | 251.156 |
+| Fused decode, reverse | 29.234 | 3.152 | 127.875 | 250.200 |
+| Baseline, reverse | 29.941 | 3.185 | 128.926 | 247.688 |
+| Final default (Graph batch-1 fusion only) | 28.494 | 3.129 | 126.235 | 253.271 |
+| Both guarded paths, Qwen3 prefill opt-in | 27.568 | 3.152 | 125.901 | 253.935 |
+
+All seven measured requests in each run produced the same 32 token IDs.
+Batch 4 did **not** benefit from the fused Graph path: its baseline/candidate
+ITL was 3.711/3.737 ms and whole-request time 145.700/147.587 ms, so the
+automatic Graph guard is restricted to batch 1. A separate 64-output-token
+run with fused Graph decode and the Qwen3 prefill opt-in matched native
+PyTorch on every token in all three
+measured requests. Its Jittor/PyTorch median whole-request time was
+228.149/157.729 ms, TTFT 28.883/11.246 ms, and ITL 3.151/2.319 ms.
+
+The ~2-3% batch-1 improvement is real in these fixed-shape A/B runs but far
+from 90% PyTorch throughput. This does not establish dynamic-batch Graph
+stability or isolate the remaining ~0.83 ms/token Graph decode deficit.
+The benchmark launcher used `JITTOR_VLLM_TEXT_ONLY_BENCH=1` to skip an
+unrelated torchvision/MiniMax import in the installed shim environment; it
+changes startup only and is off by default. No third-party package was edited.
+The adapter's 8 existing attention tests, a new shape-guard test, and the
+FP16/BF16 fused-cache kernel reference test passed; `git diff --check` passed.
+
+Raw JSON: `graph-fusion-{baseline-j-20261012-c,candidate-j-20261012-a,candidate-j-20261012-b,baseline-j-20261012-d,final-default-b1-20261012,default-b1-20261012,baseline-b4-20261012,candidate-b4-20261012,default-b1-64tok-20261012,oracle-b1-64tok-20261012}.json` under `/home/chk/jittor-lab/_state/vllm-compare-20261012/`.
+
+## Guarded plain-decoder prefill default (second follow-up)
+
+The previous direct-Q/K/V full-prefill path is now selected by default only
+when the vLLM attention implementation has ordinary causal decoder semantics:
+no sliding window, ALiBi, logit soft cap, attention sinks, KV sharing,
+quantized KV cache or distributed context parallelism. Metadata must also
+exclude cascade and prefix-LM cases. The existing full single-request guard
+still excludes chunked prefill and prefix-cache hits. An explicit
+`JITTOR_VLLM_DIRECT_FULL_PREFILL=0` restores the old paged prefill route;
+`=1` retains the original opt-in behavior for experiments. This is a
+Qwen3-0.6B validation, not proof for every vLLM model/configuration.
+
+On the same physical GPU 0 and 128+32 Graph-decode protocol above, two
+fresh-process baseline/candidate pairs were run in ABBA order. Baseline
+explicitly set `JITTOR_VLLM_DIRECT_FULL_PREFILL=0`; candidate used the new
+default. All 7 measured requests in every process emitted exactly the same
+32 token IDs.
+
+| Pass | Path | Median TTFT | Median request | Output tok/s |
+| --- | --- | ---: | ---: | ---: |
+| 1 | Baseline | 28.946 ms | 128.038 ms | 249.961 |
+| 1 | Guarded direct prefill | 28.177 ms | 125.030 ms | 255.917 |
+| 2 | Guarded direct prefill | 28.386 ms | 125.357 ms | 253.359 |
+| 2 | Baseline | 30.374 ms | 131.034 ms | 244.215 |
+
+The process-to-process spread means the exact gain is not a fixed constant;
+these pairs support roughly 0.8–2.0 ms lower TTFT and 2–4% higher output
+throughput, not anything near PyTorch parity. A separate 128+64 default-path
+run produced identical token IDs to both the earlier opt-in Jittor run and
+the version-matched native PyTorch run across all three measured requests.
+Its median request was 234.900 ms (272.375 tok/s); this was not a same-time
+PyTorch A/B and must not be used to claim a new cross-framework ratio.
+
+A fresh native PyTorch run immediately after the second Jittor candidate used
+the same GPU, prompt, model, Transformers 5.5.3, script and 2+7 protocol. Its
+median TTFT/ITL/request were 11.716/2.326/84.243 ms and throughput was
+379.026 tok/s, versus that Jittor candidate's 28.386/3.113/125.357 ms and
+253.359 tok/s. All 32 output tokens matched in all requests. Jittor reached
+66.8% of native PyTorch output throughput in this matched configuration;
+the remaining gap is ~16.67 ms TTFT and ~0.79 ms/token Graph decode. The
+native report is `prefill-auto-oracle-new.json` in the same state directory.
+
+An additional idea, skipping the host copy of CUDA slot mapping, was tested
+with the same model and a one-output-token request. Its 7-request TTFT median
+was 28.161 ms with the old copy and 28.063 ms without it, below reliable
+resolution of this experiment. The proposed code was removed, leaving no
+extra shape-dependent cache-write branch in the adapter.
+
+Unit coverage now checks both the direct full-prefill GQA math/shape guard
+and the plain-decoder feature guard. All 10 attention adapter tests pass with
+the Jittor torch shim; `git diff --check` passes. Raw reports are
+`prefill-auto-{baseline-new,candidate-new,candidate-new-r2,baseline-new-r2}.json`,
+`prefill-auto-default-64tok.json`, and `slot-host-{baseline,candidate}-1tok.json`
+in the same state directory. The current bottleneck remains the ~17 ms
+first-token gap and ~0.8 ms/token Graph-decode gap versus matched PyTorch;
+the guarded prefill route addresses only a small fraction of it.

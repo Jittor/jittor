@@ -2,10 +2,42 @@
 
 import sys
 import types
+import unittest
 import uuid
+from unittest.mock import patch
 
 from jittor.compat import transaction as tx
-from jittor_adapters.vllm.buffers import patch_block_table_metadata
+from jittor_adapters.vllm.buffers import (
+    _native_cuda_active, _native_metadata_batch_eligible,
+    patch_block_table_metadata)
+
+
+class NativeMetadataPolicyTests(unittest.TestCase):
+    def test_batch_four_is_opt_in(self):
+        with patch.dict("os.environ", {}, clear=False):
+            from os import environ
+            environ.pop("JITTOR_VLLM_NATIVE_METADATA_BATCH4", None)
+            self.assertTrue(_native_metadata_batch_eligible(1))
+            self.assertFalse(_native_metadata_batch_eligible(4))
+            environ["JITTOR_VLLM_NATIVE_METADATA_BATCH4"] = "1"
+            self.assertTrue(_native_metadata_batch_eligible(1))
+            self.assertTrue(_native_metadata_batch_eligible(4))
+            self.assertFalse(_native_metadata_batch_eligible(2))
+            self.assertFalse(_native_metadata_batch_eligible(8))
+
+
+def test_native_cuda_guard_rejects_acl_alias():
+    fake = types.SimpleNamespace(
+        flags=types.SimpleNamespace(use_cuda=1, use_acl=1),
+        compiler=types.SimpleNamespace(has_cuda=0, has_acl=1),
+    )
+    assert not _native_cuda_active(fake)
+    fake.compiler.has_cuda = 1
+    assert not _native_cuda_active(fake)
+    fake.flags.use_acl = 0
+    assert _native_cuda_active(fake)
+    fake.compiler = None
+    assert not _native_cuda_active(fake)
 
 
 def test_batch_four_fuses_but_padded_and_other_shapes_fall_back(monkeypatch):
@@ -22,6 +54,7 @@ def test_batch_four_fuses_but_padded_and_other_shapes_fall_back(monkeypatch):
     jt = types.ModuleType("jittor")
     jt.Var = Var
     jt.flags = types.SimpleNamespace(use_cuda=1)
+    jt.compiler = types.SimpleNamespace(has_cuda=1, has_acl=0)
 
     def code(*, inputs, outputs, cuda_src):
         assert len(inputs) >= 5

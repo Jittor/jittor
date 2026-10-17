@@ -101,6 +101,7 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
     vector<BackendId> op_backend(ops.size());
     for (uint i = 0; i < ops.size(); i++) {
         if (i + 8 < ops.size()) __builtin_prefetch(ops[i + 8]);
+        debug_check_op_lifetime(ops[i]);
         op_backend[i] = ops[i]->requested_backend();
     }
     auto edge_fusable = [&](Var* var, Op* op, Op* other, int relation) -> bool {
