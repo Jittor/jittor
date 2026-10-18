@@ -573,7 +573,11 @@ def get_total_mem():
         assert windll.kernel32.GlobalMemoryStatusEx(byref(m))
         return m.totalPhys
     else:
-        return os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
+        memory = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
+        if platform.system() == 'Linux':
+            from .cgroup import limit_memory
+            memory = limit_memory(memory)
+        return memory
 
 def dirty_fix_pytorch_runtime_error():
     ''' This funtion should be called before pytorch.
