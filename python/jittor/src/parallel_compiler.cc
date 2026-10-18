@@ -19,6 +19,9 @@
 #include "opt/jit_searcher.h"
 #include "fused_op.h"
 #include "mem/mem_info.h"
+#ifdef __linux__
+#include "utils/cgroup_memory.h"
+#endif
 
 
 namespace jittor {
@@ -190,8 +193,14 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
     // if (op_needs_compile.size() < 3) return;
     if (op_needs_compile.size() == 0) return;
     
-    static int thread_num = std::max(1, std::min(use_parallel_op_compiler,
-        int(mem_info.total_cpu_ram/(1024ll*1024*1024*3))));
+    static int thread_num = [] {
+        auto memory = mem_info.total_cpu_ram;
+        #ifdef __linux__
+        memory = cgroup_memory::limit_memory(memory);
+        #endif
+        return std::max(1, std::min(use_parallel_op_compiler,
+            int(memory/(1024ll*1024*1024*3))));
+    }();
     #ifdef NODE_MEMCHECK
     // only use one thread in debug mode
     // because global id map has no lock
