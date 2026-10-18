@@ -4,6 +4,7 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import numpy as np
 from jittor_core import Var
 
+from .._runtime import dispatch as _dispatch
 from .._runtime.dispatch import dispatch_context, try_dispatch
 
 
@@ -138,8 +139,78 @@ def _maybe_constant_index_gather(x, slices):
     return base.broadcast(output_shape)
 
 
+#: `_fast_getitem`'s answer when the index needs the full path.
+_SLOW = object()
+_NONE_TYPE = type(None)
+_ELLIPSIS_TYPE = type(Ellipsis)
+#: Index dtypes `_getitem_result` rewrites: a mask becomes its coordinates.
+_MASK_DTYPES = ("bool", "uint8")
+
+
+def _plain_slice(index):
+    # The `slice` arm of `_is_basic_index`, restricted to exact ints.
+    start, stop, step = index.start, index.stop, index.step
+    return ((start is None or start.__class__ is _PYINT)
+            and (stop is None or stop.__class__ is _PYINT)
+            and (step is None or step.__class__ is _PYINT))
+
+
+def _fast_getitem(x, slices):
+    """``x[slices]`` for the index forms the full path passes through
+    unchanged, or `_SLOW`.
+
+    While no backend registers ``tensor.getitem`` and ``Var.getitem`` is still
+    `var_getitem`, every rewrite in `_getitem_result` and `var_getitem` is a
+    no-op for an exact int, a slice of exact ints, None, Ellipsis, a tuple of
+    those and of index Vars, and a lone index Var; a lone bool mask becomes
+    its ``where()`` coordinates, as the full path does. Index Vars here are
+    neither bool nor uint8 and carry no constant-index value. Every other form
+    (uint8 masks, ranges, lists, numpy scalars) takes the full path, so the
+    result and the recorded view are the same either way. This matters
+    because ``x[...]`` is the commonest Var operation: the full path costs
+    several microseconds of Python per call on top of the native getitem.
+    """
+    if x.__class__.getitem is not var_getitem or "tensor.getitem" in _dispatch._registered_ops:
+        return _SLOW
+    cls = slices.__class__
+    if (cls is _PYINT or cls is _NONE_TYPE or cls is _ELLIPSIS_TYPE
+            or (cls is slice and _plain_slice(slices))):
+        basic = True
+    elif cls is tuple:
+        basic = True
+        for item in slices:
+            item_cls = item.__class__
+            if item_cls is _PYINT or item_cls is _NONE_TYPE or item_cls is _ELLIPSIS_TYPE:
+                continue
+            if item_cls is slice:
+                if _plain_slice(item):
+                    continue
+                return _SLOW
+            if isinstance(item, Var) and _jittor_dtype_name(item.dtype) not in _MASK_DTYPES:
+                basic = False
+                continue
+            return _SLOW
+    elif isinstance(slices, Var):
+        name = _jittor_dtype_name(slices.dtype)
+        if name == "bool":
+            return _native_var_getitem(x, slices.where())
+        if name == "uint8" or (slices.ndim == 1 and x.ndim >= 1 and getattr(
+                slices, "_jittor_constant_index_value", None) is not None):
+            return _SLOW
+        return _native_var_getitem(x, slices)
+    else:
+        return _SLOW
+    out = _native_var_getitem(x, slices)
+    if basic and isinstance(out, Var):
+        out._set_view_of(x, slices)
+    return out
+
+
 def getitem(x, slices):
     """Apply Jittor indexing, recording a view when the index is a basic one."""
+    out = _fast_getitem(x, slices)
+    if out is not _SLOW:
+        return out
     jt = _jt if _jt is not None else _jittor()
 
     out = _getitem_result(x, slices)
