@@ -104,15 +104,16 @@ static PyFrameObject* frame_back(PyFrameObject* f) {
     #endif
 }
 
-// A per-instruction key within a code object, for the origin cache only. On
-// 3.11+ it is the bytecode offset (PyFrame_GetLasti); before that there is no
-// such call, so the source line stands in -- and since an origin id is itself
-// keyed on (file, line), the line is exactly the granularity this cache needs.
+// A per-instruction key within a code object, for the origin cache only: the
+// bytecode offset, which PyFrame_GetLasti returns on 3.11+ and the public
+// f_lasti field holds before that. Not the source line: PyFrame_GetLineNumber
+// walks the line table on every call, and this runs once per Op. A miss still
+// interns the origin by (file, line), so ids are the same at either key.
 static int frame_lasti(PyFrameObject* f) {
     #if PY_VERSION_HEX >= 0x030B0000
     return PyFrame_GetLasti(f);
     #else
-    return (int)PyFrame_GetLineNumber(f);
+    return f->f_lasti;
     #endif
 }
 
