@@ -213,6 +213,8 @@ void NumpyCodeOp::run() {
         bind(outputs[i], _outputs[i]);
     result.varrays["inputs"] = move(inputs);
     result.varrays["outputs"] = move(outputs);
+    // The executor migrated the operands to the host only if this runs there.
+    result.on_accelerator = executes_on_accelerator();
     forward.callback(&result);
 }
 

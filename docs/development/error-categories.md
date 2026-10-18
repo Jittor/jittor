@@ -40,9 +40,9 @@ CUDA 后端里报告计划失败、CUDA/NCCL/CUDNN 状态或测试 harness 失�
 两者都**不能通过抛异常来报告**，而 `LOGf` 会抛。这条约束能否守住，取决于两件事，
 而 grep `LOGf` 只是其中第一件。
 
-**扫描范围。** 扫描必须覆盖每一个存放 C++ 的根目录——现在是 `python/jittor/src`、
-`python/jittor/extern` **以及 `backends/`**。CUDA、ACL 和 ROCm 的 kernel 已经迁进了
-最后那个目录，只点名前两个的扫描会**对它们保持沉默却仍报出一个健康的总数**。扫描还
+**扫描范围。** 扫描必须覆盖每一个存放 C++ 的根目录——现在是顶层 `src/` **以及
+`backends/`**（`SOURCE_ROOTS`）。CUDA、ACL 和 ROCm 的 kernel 住在后者，只点名核心那个
+根目录的扫描会**对它们保持沉默却仍报出一个健康的总数**。扫描还
 必须覆盖 `.cu` 和 `.cuh`，不只是 `.cc` 和 `.h`。这就是
 `test_destructor_and_handler_contract.py` 断言**每一个根目录都贡献了析构函数**、
 而不是断言一个总数的原因。

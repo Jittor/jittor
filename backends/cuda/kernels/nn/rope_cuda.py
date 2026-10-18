@@ -1,4 +1,6 @@
 """CUDA inference kernels for rotary position embeddings."""
+import math
+
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
@@ -138,6 +140,201 @@ def _rotary_embedding_cuda(
     return _stop_grad_outputs(jt.code(
         [q.shape, k.shape], [q.dtype, k.dtype],
         [positions, q, k, cos_sin_cache], cuda_src=cuda_src,
+    ))
+
+
+def _qk_rms_norm_rotary_contract(
+    positions,
+    q,
+    k,
+    q_weight,
+    k_weight,
+    cos_sin_cache,
+    *,
+    head_size,
+    rotary_dim,
+    is_neox_style,
+    epsilon,
+):
+    tensors = (positions, q, k, q_weight, k_weight, cos_sin_cache)
+    if not all(isinstance(value, jt.Var) for value in tensors):
+        return None
+    if _output_requires_grad(tensors) or not is_neox_style:
+        return None
+    try:
+        q_shape = tuple(int(size) for size in q.shape)
+        k_shape = tuple(int(size) for size in k.shape)
+        q_weight_shape = tuple(int(size) for size in q_weight.shape)
+        k_weight_shape = tuple(int(size) for size in k_weight.shape)
+        cache_shape = tuple(int(size) for size in cos_sin_cache.shape)
+        token_count = int(positions.numel())
+        head_size = int(head_size)
+        rotary_dim = int(rotary_dim)
+        epsilon = float(epsilon)
+    except Exception:
+        return None
+    if len(q_shape) != 2 or len(k_shape) != 2 or len(cache_shape) != 2:
+        return None
+    if q_shape[0] != token_count or k_shape[0] != token_count:
+        return None
+    if head_size <= 0 or head_size > 4096:
+        return None
+    if q_shape[1] % head_size or k_shape[1] % head_size:
+        return None
+    if q_weight_shape != (head_size,) or k_weight_shape != (head_size,):
+        return None
+    if rotary_dim <= 0 or rotary_dim > head_size or rotary_dim % 2:
+        return None
+    if cache_shape[0] <= 0 or cache_shape[1] != rotary_dim:
+        return None
+    value_dtypes = {
+        _jittor_dtype_name(value.dtype)
+        for value in (q, k, q_weight, k_weight, cos_sin_cache)
+    }
+    if len(value_dtypes) != 1 or value_dtypes.pop() not in (
+        "float16", "bfloat16", "float32"
+    ):
+        return None
+    if _jittor_dtype_name(positions.dtype) not in ("int32", "int64"):
+        return None
+    if not math.isfinite(epsilon) or epsilon <= 0:
+        return None
+    return q_shape, k_shape, cache_shape, head_size, rotary_dim, epsilon
+
+
+def _qk_rms_norm_rotary_supported(*args, **kwargs):
+    return _qk_rms_norm_rotary_contract(*args, **kwargs) is not None
+
+
+@optional_kernel(
+    "nn.qk_rms_norm_rotary.inference",
+    ("cuda", "rocm_legacy", "corex_legacy"),
+    supports=_qk_rms_norm_rotary_supported,
+)
+def _qk_rms_norm_rotary_cuda(
+    positions,
+    q,
+    k,
+    q_weight,
+    k_weight,
+    cos_sin_cache,
+    *,
+    head_size,
+    rotary_dim,
+    is_neox_style,
+    epsilon,
+):
+    """Fuse per-head Q/K RMSNorm and NeoX RoPE in one CUDA launch."""
+    q_shape, k_shape, cache_shape, head_size, rotary_dim, epsilon = (
+        _qk_rms_norm_rotary_contract(
+            positions,
+            q,
+            k,
+            q_weight,
+            k_weight,
+            cos_sin_cache,
+            head_size=head_size,
+            rotary_dim=rotary_dim,
+            is_neox_style=is_neox_style,
+            epsilon=epsilon,
+        )
+    )
+    threads = 32
+    while threads < min(head_size, 1024):
+        threads *= 2
+    warps = threads // 32
+    cuda_src = cached_source(r"""
+    __device__ __forceinline__ float qk_warp_sum(float value) {
+        for (int offset = 16; offset > 0; offset >>= 1)
+            value += __shfl_down_sync(0xffffffff, value, offset);
+        return value;
+    }
+    __global__ static void qk_rms_norm_rotary(
+            const in0_type* positions,
+            const in1_type* q, const in2_type* k,
+            const in3_type* q_weight, const in4_type* k_weight,
+            const in5_type* cache,
+            out0_type* out_q, out1_type* out_k,
+            int q_rows, int q_heads, int k_heads) {
+        int row = blockIdx.x;
+        bool use_q = row < q_rows;
+        int local_row = use_q ? row : row - q_rows;
+        int heads = use_q ? q_heads : k_heads;
+        int token = local_row / heads;
+        int tid = threadIdx.x;
+        int lane = tid & 31;
+        int warp = tid >> 5;
+        int64_t base = (int64_t)local_row * %(head_size)d;
+        __shared__ float warp_sums[%(warps)d];
+        __shared__ float inverse_rms;
+        float sum = 0.0f;
+        for (int dim = tid; dim < %(head_size)d; dim += blockDim.x) {
+            float value = use_q ? static_cast<float>(q[base + dim])
+                                : static_cast<float>(k[base + dim]);
+            sum += value * value;
+        }
+        sum = qk_warp_sum(sum);
+        if (lane == 0) warp_sums[warp] = sum;
+        __syncthreads();
+        if (warp == 0) {
+            float total = lane < %(warps)d ? warp_sums[lane] : 0.0f;
+            total = qk_warp_sum(total);
+            if (lane == 0)
+                inverse_rms = rsqrtf(
+                    total / %(head_size)d.0f + %(epsilon).9gf);
+        }
+        __syncthreads();
+        int position = (int)positions[token];
+        int half = %(rotary_dim)d / 2;
+        for (int dim = tid; dim < %(head_size)d; dim += blockDim.x) {
+            float value = use_q ? static_cast<float>(q[base + dim])
+                                : static_cast<float>(k[base + dim]);
+            float weight = use_q ? static_cast<float>(q_weight[dim])
+                                 : static_cast<float>(k_weight[dim]);
+            float result = value * inverse_rms * weight;
+            if (dim < %(rotary_dim)d) {
+                int other_dim = dim < half ? dim + half : dim - half;
+                float other_value = use_q
+                    ? static_cast<float>(q[base + other_dim])
+                    : static_cast<float>(k[base + other_dim]);
+                float other_weight = use_q
+                    ? static_cast<float>(q_weight[other_dim])
+                    : static_cast<float>(k_weight[other_dim]);
+                int frequency_dim = dim < half ? dim : dim - half;
+                float sign = dim < half ? -1.0f : 1.0f;
+                float cos_value = static_cast<float>(
+                    cache[position * %(cache_width)d + frequency_dim]);
+                float sin_value = static_cast<float>(
+                    cache[position * %(cache_width)d + half + frequency_dim]);
+                result = result * cos_value + sign
+                    * other_value * inverse_rms * other_weight * sin_value;
+            }
+            if (use_q) out_q[base + dim] = out0_type(result);
+            else out_k[base + dim] = out1_type(result);
+        }
+    }
+    int q_heads = %(q_width)d / %(head_size)d;
+    int k_heads = %(k_width)d / %(head_size)d;
+    int q_rows = in1->num / %(head_size)d;
+    int total_rows = q_rows + in2->num / %(head_size)d;
+    if (total_rows) qk_rms_norm_rotary<<<total_rows, %(threads)d>>>(
+        in0_p, in1_p, in2_p, in3_p, in4_p, in5_p,
+        out0_p, out1_p, q_rows, q_heads, k_heads);
+    CHECK(0 == cudaGetLastError());
+    """, {
+        "cache_width": cache_shape[1],
+        "epsilon": epsilon,
+        "head_size": head_size,
+        "k_width": k_shape[1],
+        "q_width": q_shape[1],
+        "rotary_dim": rotary_dim,
+        "threads": threads,
+        "warps": warps,
+    })
+    return _stop_grad_outputs(jt.code(
+        [q.shape, k.shape], [q.dtype, k.dtype],
+        [positions, q, k, q_weight, k_weight, cos_sin_cache],
+        cuda_src=cuda_src,
     ))
 
 

@@ -6,6 +6,8 @@
 #include "bindings/pyjt/gil.h"
 #include <mutex>
 #include "runtime/executor_entry.h"
+#include "runtime/async_exec.h"
+#include "runtime/profiler/step_trace.h"
 
 namespace jittor {
 
@@ -24,6 +26,10 @@ bool inside_executor() { return entry_depth > 0; }
 
 ExecutorEntryScope::ExecutorEntryScope() : owns(entry_depth == 0) {
     if (owns) {
+        // Let go of the graph lock as well while blocking: the thread inside
+        // the executor takes it (runtime/async_exec.h), and the order is the
+        // entry lock first, then the graph's.
+        GraphLockSuspend graph;
         // Drop the GIL before blocking, take it back with the lock held; see
         // the inversion in the header.
         GILReleaseScope gil_release;
@@ -38,6 +44,7 @@ ExecutorEntryScope::~ExecutorEntryScope() {
 }
 
 DeviceWaitScope::DeviceWaitScope() : saved(nullptr) {
+    step_trace_wait_begin();
     if (!inside_executor()) return;
     if (Py_IsInitialized() && PyGILState_Check())
         saved = (void*)PyEval_SaveThread();
@@ -45,6 +52,7 @@ DeviceWaitScope::DeviceWaitScope() : saved(nullptr) {
 
 DeviceWaitScope::~DeviceWaitScope() {
     if (saved) PyEval_RestoreThread((PyThreadState*)saved);
+    step_trace_wait_end();
 }
 
 } // jittor

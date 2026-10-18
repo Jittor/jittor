@@ -8,8 +8,10 @@ from jittor._runtime.core_api import _output_requires_grad
 
 from ... import _arg_policy
 from ..backends import hooks as _backend_hooks
+from jittor._runtime.dispatch import select_kernel as _select_kernel
 from jittor.backends.cuda.kernels.nn.batch_norm_training_cuda import (
     _batch_norm_cuda,
+    _batch_norm_cuda_statistics,
     _batch_norm_eval_cuda,
 )
 from jittor.backends.cuda.kernels.nn.group_norm_cuda import _group_norm_cuda
@@ -102,17 +104,28 @@ def _batch_norm_train(x, dims, weight, bias, eps, sync=False):
     with the statistics (the module updates its running buffers, the functional
     updates the buffers it was handed).
     """
-    xmean, xvar = _batch_statistics(x, dims, sync)
     if not sync:
         # Fused CUDA kernel for the local case. It computes its own statistics,
         # so it cannot serve the all-reduced ones; it is a backend accelerator
         # for this same function, pinned against it by
         # tests/nn/test_norm_unification.py. functional.batch_norm never
         # reached it before -- training=True went down the generic path only.
-        backend = _backend_hooks.batch_norm_cuda or _batch_norm_cuda
-        fast = backend(x, weight, bias, eps)
-        if fast is not None:
-            return fast, xmean, xvar
+        #
+        # It hands back the statistics it normalized with, for the running
+        # buffers. Computing them here as well ran two more reductions over
+        # the activation per layer, 6.7 ms of a ResNet-50 training step.
+        # A kernel registered over ours keeps the old contract: the output
+        # alone, with the statistics computed here.
+        selected = None
+        if _backend_hooks.batch_norm_cuda is not None:
+            selected = _select_kernel("nn.batch_norm.training", x, weight, bias, eps)
+        if selected is _batch_norm_cuda.__wrapped__:
+            fast = _batch_norm_cuda_statistics(x, weight, bias, eps)
+            if fast is not None:
+                return fast
+        elif selected is not None:
+            return (selected(x, weight, bias, eps),) + _batch_statistics(x, dims, sync)
+    xmean, xvar = _batch_statistics(x, dims, sync)
     xhat = _bn_normalize(x, xmean, xvar, dims, eps)
     return _affine(xhat, weight, bias, x.shape[1], x.ndim), xmean, xvar
 
@@ -124,9 +137,40 @@ def _batch_norm_eval(x, dims, running_mean, running_var, weight, bias, eps):
         x, weight, bias, running_mean, running_var, eps)
     if fast is not None:
         return fast
+    scale, shift = _batch_norm_eval_coefficients(running_mean, running_var, weight, bias, eps)
+    return x * scale.broadcast(x, dims) + shift.broadcast(x, dims)
+
+
+#: Where the tracked statistics keep the per-channel scale and shift an
+#: inference batch norm was last computed with, and what they were computed
+#: from.
+_EVAL_COEFFICIENTS = "_jittor_batch_norm_eval_coefficients"
+
+
+def _batch_norm_eval_coefficients(running_mean, running_var, weight, bias, eps):
+    """``(weight / sqrt(var + eps), bias - mean * scale)``, kept between calls.
+
+    They only change when a parameter or a statistic does, and every one of
+    those changes rebinds the holder to a new Var -- so the Vars' identities
+    are the key. Recomputing them was a kernel per batch norm per step: 53 of
+    a batch-1 ResNet-50's 212, and a tenth of its device time. Only when no
+    gradient flows through them: a kept Var must not carry one step's
+    graph into the next.
+    """
+    tracked = isinstance(running_var, jt.Var) and isinstance(running_mean, jt.Var)
+    inputs = (weight, bias, running_mean, running_var)
+    keep = tracked and (jt.flags.no_grad or all(
+        v.is_stop_grad() for v in inputs if isinstance(v, jt.Var)))
+    if keep:
+        key = tuple(v.var_ptr if isinstance(v, jt.Var) else v for v in inputs) + (float(eps),)
+        cached = getattr(running_var, _EVAL_COEFFICIENTS, None)
+        if cached is not None and cached[0] == key:
+            return cached[1], cached[2]
     scale = weight / jt.sqrt(running_var + eps)
     shift = bias - running_mean * scale
-    return x * scale.broadcast(x, dims) + shift.broadcast(x, dims)
+    if keep:
+        setattr(running_var, _EVAL_COEFFICIENTS, (key, scale, shift))
+    return scale, shift
 
 
 def _unbiased(var, x, dims, world_size=1):

@@ -15,9 +15,9 @@
 3. [`agent/manuals/project-context.md`](agent/manuals/project-context.md)：当前状态和主题索引。
 4. 与任务相关的架构文档、已知问题和既有结果报告。
 
-整改任务的唯一状态源是 [`refactor-wip/architecture/refactor-board.md`](refactor-wip/architecture/refactor-board.md)。
-按同目录的 [交接](refactor-wip/architecture/refactor-handoff.md)与
-[分工](refactor-wip/architecture/refactor-dispatch.md)协作，不在 agent/ 下另建看板或结果树。
+任务、状态与交接记录在 GitHub issue 与 PR 中，验证证据写进 PR 描述；等待硬件验收的事项记在
+[`agent/manuals/deferred-hardware.md`](agent/manuals/deferred-hardware.md)，缺陷与限制记在
+[问题总账](agent/manuals/known-issues.md)。不在 agent/ 下另建看板或结果树。
 
 ## Working Method
 
@@ -89,8 +89,8 @@ JITTOR_TORCH_SHIM=1 PYTHONPATH=python python -m pytest -q tests/structure
 
 - 根目录只保留一份双语 [`README.md`](README.md)。不要新增生成版或按语言复制的 README。
 - 长期机制说明放在 `docs/notes/`，仓库布局、源码架构、测试体系与已知问题放在
-  `docs/development/`，研究提案放在 `docs/research/`。整改期的过程文档在
-  `refactor-wip/`，收口后整个目录删除。
+  `docs/development/`，研究提案放在 `docs/research/`。仓库不保留任务看板、计划或交接
+  这类过程文档。
 - [`agent/manuals/project-context.md`](agent/manuals/project-context.md) 只做当前状态索引；
   环境规则与问题总账分别维护在
   [`agent/manuals/environment.md`](agent/manuals/environment.md) 和

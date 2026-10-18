@@ -269,12 +269,27 @@ def _run(python, runtime, case, output, weights=None, device="cpu", repeats=None
             errors="replace",
             timeout=1800,
         )
+    return _result_from_stdout(completed.stdout, case, python), completed.stdout
+
+
+def _result_from_stdout(stdout, case, python):
+    """The runner's JSON payload, wherever on its line the marker landed.
+
+    Searched with `find`, not `startswith`: anything the child prints without a
+    trailing newline pushes the marker into the middle of a line. On a 384-core
+    machine numexpr prints exactly such a warning -- it caps its pool at 64
+    threads and says so -- and a run that had produced its measurement was
+    reported as "runner failed". A false red on a measurement gate is worse
+    than a late true red: it teaches people to distrust the gate that also
+    checks the numbers.
+    """
     marker = "ECOSYSTEM_RESULT "
-    for line in completed.stdout.splitlines():
-        if line.startswith(marker):
-            return json.loads(line[len(marker):]), completed.stdout
+    for line in stdout.splitlines():
+        position = line.find(marker)
+        if position != -1:
+            return json.loads(line[position + len(marker):])
     raise AssertionError(
-        "runner failed for {} under {}:\n{}".format(case, python, completed.stdout[-4000:])
+        "runner failed for {} under {}:\n{}".format(case, python, stdout[-4000:])
     )
 
 

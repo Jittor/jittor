@@ -2,7 +2,10 @@
 
 from jittor._runtime.dispatch import register_kernel
 from . import neural, normalization, tensor
-from .ops.flashattention_op import scaled_dot_product_attention_acl
+from .ops.flashattention_op import (
+    fused_infer_prefill_attention_acl,
+    scaled_dot_product_attention_acl,
+)
 
 
 KERNELS = (
@@ -51,6 +54,8 @@ KERNELS = (
     ("nn.embedding", tensor.embedding_acl),
     ("nn.silu_and_mul", neural._silu_and_mul_acl),
     ("nn.scaled_dot_product_attention", scaled_dot_product_attention_acl),
+    ("nn.fused_infer_prefill_attention", fused_infer_prefill_attention_acl),
+    ("random.multinomial", tensor.multinomial_single_draw_acl),
 )
 
 

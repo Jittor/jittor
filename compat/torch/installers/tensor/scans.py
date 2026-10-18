@@ -5,6 +5,15 @@ def _assign_out(out, value):
     """Assign through the native view owner, including retained output views."""
     from importlib import import_module as _import_module
     _owner = _import_module(__package__)
+    if (not out.requires_grad and not value.requires_grad
+            and str(out.device).startswith("cuda")
+            and out.is_contiguous()
+            and tuple(out.shape) == tuple(value.shape)
+            and _jittor_dtype_name(out.dtype) == _jittor_dtype_name(value.dtype)):
+        # An out= view may point into CUDA graph metadata. Rebinding its
+        # holder also rebinds the parent and invalidates the graph's pointer.
+        out._copy_into(value)
+        return out
     out.assign(value)
     return out
 

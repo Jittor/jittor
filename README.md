@@ -101,6 +101,67 @@ python -m pip install jittor
 python -m jittor.selftest
 ```
 
+### uv development environment / 使用 uv 配置开发环境
+
+The repository includes a `uv.lock` and a pinned `dev` dependency group for
+the maintained Python 3.11 test environment. `uv sync` installs this checkout
+in editable mode. Keep the virtual environment in the repository's external
+lab state directory.
+
+仓库包含 `uv.lock`，以及面向当前维护的 Python 3.11 测试环境的 `dev` 依赖组。
+`uv sync` 会以可编辑方式安装当前源码；虚拟环境应放在仓库外的 lab 状态目录中。
+
+```bash
+export JITTOR_LAB_ROOT="${JITTOR_LAB_ROOT:-$(cd .. && pwd)/jittor-lab}"
+export UV_PROJECT_ENVIRONMENT="$JITTOR_LAB_ROOT/_state/uv/venv"
+uv python install 3.11
+uv venv --python 3.11
+uv sync --locked --group dev
+uv run --locked python -m jittor.selftest
+```
+
+Run the CPU and CUDA suites through the same fail-closed standalone runner used
+by the repository gates. The CUDA command requires a working CUDA toolkit with
+`nvcc` on `PATH`; an NVIDIA driver alone is not enough.
+
+使用仓库门禁使用的同一个 fail-closed 独立 runner 分别运行 CPU 和 CUDA 测试。
+CUDA 命令要求已安装 CUDA 工具链并能找到 `nvcc`，只有 NVIDIA 驱动还不够。
+
+```bash
+uv run --locked python tools/run_test_suite.py --tier core --backend cpu
+
+export nvcc_path="$(command -v nvcc)"
+CUDA_VISIBLE_DEVICES=0 uv run --locked \
+  python tools/run_test_suite.py --tier core --backend cuda
+```
+
+For a conda `targets/x86_64-linux` toolkit, point Jittor at a compatibility
+root that exposes `bin/nvcc`, `bin/g++`, `include/`, `lib64/`, and `nvvm/`:
+
+对于采用 conda `targets/x86_64-linux` 布局的工具链，请使用一个包含
+`bin/nvcc`、`bin/g++`、`include/`、`lib64/` 和 `nvvm/` 的兼容 CUDA 根目录：
+
+```bash
+export CUDA_COMPAT_ROOT=/path/to/cuda-compat
+export CUDA_VISIBLE_DEVICES=2
+export nvcc_path="$CUDA_COMPAT_ROOT/bin/nvcc"
+export cc_path="$CUDA_COMPAT_ROOT/bin/g++"
+export CUDA_HOME="$CUDA_COMPAT_ROOT"
+export PATH="$CUDA_COMPAT_ROOT/bin:$PATH"
+export LD_LIBRARY_PATH="$CUDA_COMPAT_ROOT/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+uv run --locked python tools/run_test_suite.py --tier core --backend cuda
+```
+
+For the complete trees, omit `--tier core` after the short tier is green:
+
+短 tier 通过后，去掉 `--tier core` 即可运行完整测试树：
+
+```bash
+uv run --locked python tools/run_test_suite.py --backend cpu
+CUDA_VISIBLE_DEVICES=0 uv run --locked \
+  python tools/run_test_suite.py --backend cuda
+```
+
 On Debian or Ubuntu, install the compiler dependencies first:
 
 Debian 或 Ubuntu 需要先安装编译依赖：
@@ -231,6 +292,14 @@ python -m pip install "jittor[cuda12]"
 use_cuda=1 python -m jittor.selftest
 ```
 
+The equivalent uv command for a runtime-only environment is:
+
+仅安装运行时依赖时，对应的 uv 命令为：
+
+```bash
+uv sync --locked --no-default-groups --extra cuda12
+```
+
 Set `JITTOR_CUDA_WHEEL_STRICT=1` to reject an incomplete or mismatched component
 stack. Set `JITTOR_CUDA_WHEEL_DISABLE=1` to use only the system/JTCUDA libraries.
 
@@ -243,10 +312,19 @@ python -m pip install -e .
 python -m jittor.selftest
 ```
 
-C++ and CUDA source changes under `python/jittor/src/` are rebuilt on their next
-use. To select CUDA explicitly:
+The C++ and CUDA sources live beside the Python package, not inside it: the
+core is [`src/`](src/) and each backend is `backends/<name>/` (for example
+[`backends/cuda/`](backends/cuda/)). In a checkout Jittor finds them by looking
+next to `python/jittor/` -- `src/core/common.h` identifies the core, and a
+backend is the directory with its `__init__.py`; a wheel ships the same trees as
+`jittor/src/` and `jittor/backends/<name>/`. Editing any of those sources
+rebuilds it on its next use. To select CUDA explicitly:
 
-`python/jittor/src/` 下的 C++、CUDA 源码会在下次使用时自动重编译。显式选择 CUDA：
+C++ 与 CUDA 源码与 Python 包并列，不在包内：内核是 [`src/`](src/)，每个后端是
+`backends/<名字>/`（例如 [`backends/cuda/`](backends/cuda/)）。源码 checkout 里
+Jittor 在 `python/jittor/` 的同级目录查找它们——用 `src/core/common.h` 认出内核，
+用带 `__init__.py` 的目录认出后端；wheel 把同样的目录装成 `jittor/src/` 与
+`jittor/backends/<名字>/`。改动其中任何源码都会在下次使用时重新编译。显式选择 CUDA：
 
 ```bash
 export JT_BUILD_NVCC_PATH=/usr/local/cuda/bin/nvcc

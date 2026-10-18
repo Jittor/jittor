@@ -94,6 +94,7 @@ constexpr int ns_max_len = 16;
     m(erf) \
     m(erfinv) \
     m(sigmoid) \
+    m(relu) \
     \
     m(uniform) \
     m(normal) \

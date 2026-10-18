@@ -405,18 +405,25 @@ class TestTorchAmpCustomFunction(_AutocastStateCase):
         With ``lambda f: f`` the float16 argument arrived unchanged and the body
         ran inside the enabled region, so an op that documents "I need float32"
         reduced in float16 and nothing said so.
+
+        The region has to name a device type the operand can be *on*: torch's
+        eligibility rule is "floating, not float64, and on the region's device"
+        (``_amp_cast``), and a CPU-only core cannot put a tensor on ``cuda``. So
+        the name follows availability -- asserting the cuda spelling on a CPU
+        core would be asserting a cast the rule correctly refuses.
         """
         seen = {}
+        device_type = "cuda" if jt.has_cuda else "cpu"
 
-        @torch.amp.custom_fwd(device_type="cuda", cast_inputs=torch.float32)
+        @torch.amp.custom_fwd(device_type=device_type, cast_inputs=torch.float32)
         def forward(ctx, value):
             seen["dtype"] = dtype_name(value)
-            seen["enabled"] = torch.is_autocast_enabled("cuda")
+            seen["enabled"] = torch.is_autocast_enabled(device_type)
             return value * 2
 
         with jt.flag_scope(use_cuda=1 if jt.has_cuda else 0):
             value = jt.random((4,), dtype="float32").cast("float16")
-            with torch.autocast("cuda", dtype=torch.float16):
+            with torch.autocast(device_type, dtype=torch.float16):
                 out = forward(_Ctx(), value)
             self.assertEqual(seen["dtype"], "float32")
             self.assertFalse(seen["enabled"])

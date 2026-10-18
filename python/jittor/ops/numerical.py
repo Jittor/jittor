@@ -14,7 +14,7 @@ def all(x, dim=(), keepdims=False, keepdim=None):
     result = try_dispatch("tensor.all", x, dim, keepdims)
     if result is not None:
         return result
-    return jt.ops.all_(x, dim, keepdims=keepdims).bool()
+    return jt.ops.all_(_as_truth(x), dim, keepdims=keepdims).bool()
 
 
 def any(x, dim=(), keepdims=False, keepdim=None):
@@ -25,7 +25,21 @@ def any(x, dim=(), keepdims=False, keepdim=None):
     result = try_dispatch("tensor.any", x, dim, keepdims)
     if result is not None:
         return result
-    return jt.ops.any_(x, dim, keepdims=keepdims).bool()
+    return jt.ops.any_(_as_truth(x), dim, keepdims=keepdims).bool()
+
+
+def _as_truth(x):
+    """``x != 0`` for a half-precision input, `x` itself otherwise.
+
+    The logical reductions run on their input's dtype, and CUDA has no atomic
+    OR or AND on bfloat16 or float16: ``any``/``all`` of a half tensor did not
+    compile on the device (``reduce_op.cc``: no ``atomicOr`` for the argument
+    list). Transformers' static KV cache asks exactly that of a bf16 model.
+    NaN counts as true, as in torch.
+    """
+    if isinstance(x, Var) and _jittor_dtype_name(x.dtype) in ("float16", "bfloat16"):
+        return x != 0
+    return x
 
 
 def normalize(input, p=2, dim=1, eps=1e-12):
@@ -137,8 +151,8 @@ def _simple_for(x, func):
 
     This started as a workaround: CPU kernels were built with ``-Ofast``, which
     implies that promise, so the predicate had to escape the fused kernel's
-    flags to work at all. KI-BACKEND-005 removed ``-Ofast`` (kernels build at
-    ``-O3``), which makes the escape **redundant on a default CPU build**.
+    flags to work at all. Kernels now build at ``-O3`` instead of ``-Ofast``,
+    which makes the escape **redundant on a default CPU build**.
 
     It is kept as defence in depth rather than deleted, for two reasons that
     are still true: the flags a kernel is compiled with are decided outside

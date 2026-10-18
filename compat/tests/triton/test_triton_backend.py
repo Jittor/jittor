@@ -48,6 +48,46 @@ triton = None
 tl = None
 
 
+class TestVllmGuardFastPath(unittest.TestCase):
+    """Only audited vLLM kernels may bypass allocator-padding guards."""
+
+    @staticmethod
+    def _jitfn(module, name):
+        def kernel():
+            pass
+
+        kernel.__module__ = module
+        kernel.__name__ = name
+        return mock.Mock(fn=kernel)
+
+    def test_audited_vllm_kernel_skips_guard(self):
+        from jittor.compat.triton import backend as tb
+
+        jitfn = self._jitfn("vllm.v1.worker.gpu.buffer_utils",
+                            "_apply_write_kernel")
+        with mock.patch.dict(os.environ,
+                             {"JITTOR_TRITON_GUARD_ENABLE": ""}):
+            self.assertFalse(tb._guard_enabled(jitfn, "_apply_write_kernel"))
+
+    def test_same_name_outside_vllm_keeps_guard(self):
+        from jittor.compat.triton import backend as tb
+
+        jitfn = self._jitfn("another_project.kernels",
+                            "_apply_write_kernel")
+        with mock.patch.dict(os.environ,
+                             {"JITTOR_TRITON_GUARD_ENABLE": ""}):
+            self.assertTrue(tb._guard_enabled(jitfn, "_apply_write_kernel"))
+
+    def test_explicit_enable_overrides_vllm_fast_path(self):
+        from jittor.compat.triton import backend as tb
+
+        jitfn = self._jitfn("vllm.v1.worker.gpu.buffer_utils",
+                            "_apply_write_kernel")
+        with mock.patch.dict(os.environ,
+                             {"JITTOR_TRITON_GUARD_ENABLE": "1"}):
+            self.assertTrue(tb._guard_enabled(jitfn, "_apply_write_kernel"))
+
+
 # --------------------------------------------------------------------------- #
 #  kernels (defined only when the test module starts executing)
 # --------------------------------------------------------------------------- #
@@ -262,6 +302,202 @@ class TestTritonBackend(unittest.TestCase):
             out = jt.zeros(n, dtype="float32")
             add_kernel[(triton.cdiv(n, BLOCK),)](x, y, out, n, BLOCK=BLOCK)
             self.ac(out.numpy(), xn + yn, atol=1e-6, msg=f"add n={n}")
+
+    def test_cuda_graph_replays_native_producer_and_triton_consumer(self):
+        """A graph owns one stable launch sequence across both backends."""
+        if not getattr(jt, "graph_capture_supported", lambda: False)():
+            self.skipTest("CUDA graph capture is unavailable")
+        import torch
+
+        n = 16
+        x = torch.arange(n, dtype=torch.float32, device="cuda")
+        one = torch.ones(n, dtype=torch.float32, device="cuda")
+        out = torch.empty_like(x)
+
+        def launch():
+            # The native lazy op must be submitted before the foreign launch,
+            # and both launches must land in the same captured stream graph.
+            add_kernel[(1,)](x * 2.0, one, out, n, BLOCK=n)
+
+        # Compile the Triton kernel and materialize its buffers before capture.
+        launch()
+        torch.cuda.synchronize()
+
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph, pool=torch.cuda.graph_pool_handle()):
+            launch()
+
+        for offset in (10, 20):
+            x.copy_(torch.arange(n, dtype=torch.float32, device="cuda") + offset)
+            torch.cuda.synchronize()
+            graph.replay()
+            torch.cuda.synchronize()
+            expected = [float((i + offset) * 2 + 1) for i in range(n)]
+            self.assertEqual(out.cpu().tolist(), expected)
+        graph.reset()
+
+    def test_multiple_shape_graphs_keep_private_temporaries(self):
+        """A later small capture must not recycle an earlier graph's buffers.
+
+        vLLM captures decode shapes from largest to smallest.  The shape-4
+        graph used to work when captured alone, but became an illegal-address
+        launch after shape 1 was captured in the same process.  Keep a native
+        temporary in each graph and alternate the two executions to exercise
+        allocator ownership independently of vLLM's scheduler and metadata.
+        """
+        if not getattr(jt, "graph_capture_supported", lambda: False)():
+            self.skipTest("CUDA graph capture is unavailable")
+        import torch
+
+        def make_case(n):
+            x = torch.arange(n * 16, dtype=torch.float32, device="cuda")
+            one = torch.ones(n * 16, dtype=torch.float32, device="cuda")
+            out = torch.empty_like(x)
+
+            def launch():
+                add_kernel[(n,)](x * 2.0, one, out, n * 16, BLOCK=16)
+
+            launch()
+            torch.cuda.synchronize()
+            graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(graph, pool=torch.cuda.graph_pool_handle()):
+                launch()
+            # Deliberately do not return ``one``.  The Triton bridge, unlike a
+            # native Op node, is the only owner that can transfer this foreign
+            # operand's lifetime to the captured executable.
+            return x, out, graph
+
+        x4, out4, graph4 = make_case(4)
+        x1, out1, graph1 = make_case(1)
+        try:
+            for graph, x, out in (
+                    (graph4, x4, out4), (graph1, x1, out1),
+                    (graph4, x4, out4), (graph1, x1, out1)):
+                graph.replay()
+                torch.cuda.synchronize()
+                expected = (x.cpu().numpy() * 2.0 + 1.0)
+                self.ac(out.cpu().numpy(), expected, atol=0, rtol=0)
+        finally:
+            graph1.reset()
+            graph4.reset()
+
+    def test_multiple_shape_graphs_isolate_cublas_state(self):
+        """Capturing a second GEMM graph must not invalidate the first."""
+        if not getattr(jt, "graph_capture_supported", lambda: False)():
+            self.skipTest("CUDA graph capture is unavailable")
+        import torch
+
+        # Match Qwen's decode GEMM regime: batch 4 selects a TN CUTLASS
+        # split-K kernel while batch 1 selects GEMV on current cuBLAS.
+        width, expanded = 1024, 4096
+        weight_up = torch.ones(
+            (expanded, width), dtype=torch.float16, device="cuda") * 0.001
+        weight_down = torch.ones(
+            (width, expanded), dtype=torch.float16, device="cuda") * 0.001
+
+        def make_case(n):
+            x = torch.arange(n * width, dtype=torch.float16, device="cuda").reshape(n, width)
+            out = torch.empty_like(x)
+
+            def launch():
+                value = x
+                for _ in range(2):
+                    value = torch.matmul(value, weight_up.t())
+                    value = torch.matmul(value, weight_down.t())
+                out.copy_(value)
+
+            launch()
+            torch.cuda.synchronize()
+            graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(graph, pool=torch.cuda.graph_pool_handle()):
+                launch()
+            return x, out, graph
+
+        x4, out4, graph4 = make_case(4)
+        x1, out1, graph1 = make_case(1)
+        try:
+            for graph, x, out in ((graph4, x4, out4), (graph1, x1, out1)):
+                graph.replay()
+                torch.cuda.synchronize()
+                self.assertTrue(np.isfinite(out.cpu().numpy()).all())
+        finally:
+            graph1.reset()
+            graph4.reset()
+
+    def test_multiple_shape_graphs_isolate_paged_decode_state(self):
+        """The vLLM cache-write/decode pair is safe across shape captures."""
+        if not getattr(jt, "graph_capture_supported", lambda: False)():
+            self.skipTest("CUDA graph capture is unavailable")
+        import torch
+        from jittor.backends.cuda.kernels.nn.kv_cache_cuda import (
+            _paged_attention_decode_cuda, _reshape_and_cache_cuda)
+
+        heads, kv_heads, head_dim, block_size = 16, 8, 128, 16
+        cache = jt.zeros(
+            (64, 2, block_size, kv_heads, head_dim), dtype="float16")
+        cache.stop_grad()
+
+        def make_case(n):
+            q = jt.ones((n, heads, head_dim), dtype="float16")
+            k = jt.ones((n, kv_heads, head_dim), dtype="float16")
+            v = jt.ones((n, kv_heads, head_dim), dtype="float16")
+            slots = jt.arange(n).int64()
+            lengths = jt.ones((n,), dtype="int32")
+            table = jt.zeros((n, 4), dtype="int32")
+            out = jt.empty(q.shape, q.dtype)
+            for value in (q, k, v, slots, lengths, table, out):
+                value.stop_grad()
+
+            def launch():
+                _reshape_and_cache_cuda(k, v, cache, slots)
+                result = _paged_attention_decode_cuda(
+                    q, cache, lengths, table, head_dim ** -0.5, out=out)
+                self.assertIs(result, out)
+
+            launch()
+            torch.cuda.synchronize()
+            graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(graph, pool=torch.cuda.graph_pool_handle()):
+                launch()
+            return (q, k, v, slots, lengths, table, out, graph)
+
+        case4 = make_case(4)
+        case1 = make_case(1)
+        try:
+            for case in (case4, case1, case4, case1):
+                case[-1].replay()
+                torch.cuda.synchronize()
+                self.assertTrue(np.isfinite(case[-2].cpu().numpy()).all())
+        finally:
+            case1[-1].reset()
+            case4[-1].reset()
+
+    def test_materialized_operands_skip_submission_barrier(self):
+        n, block = 1024, 256
+        xn = np.arange(n, dtype="float32")
+        x = jt.array(xn)
+        y = jt.array(xn + 1)
+        out = jt.zeros(n, dtype="float32")
+        jt.sync([x, y, out], True)
+        self.assertTrue(all(value.is_finished for value in (x, y, out)))
+
+        seen = []
+        real_sync = jt.sync
+
+        def recording_sync(*args, **kwargs):
+            seen.append((args, kwargs))
+            return real_sync(*args, **kwargs)
+
+        with mock.patch.dict(os.environ, {"JITTOR_TRITON_FAST_SYNC": "1"}):
+            jt.sync = recording_sync
+            try:
+                add_kernel[(triton.cdiv(n, block),)](
+                    x, y, out, n, BLOCK=block)
+            finally:
+                jt.sync = real_sync
+        jt.sync_all(True)
+        self.assertEqual(seen, [], "finished operands rebuilt a submission plan")
+        self.ac(out.numpy(), xn * 2 + 1, atol=1e-6)
 
     def test_fused_mul_add(self):
         n, BLOCK = 777, 128
@@ -695,9 +931,18 @@ class TestTheLaunchBarrierNamesItsOperands(unittest.TestCase):
 
     def _prepare(self):
         global triton, tl
+        if not _HAVE:
+            # Same guard as `TestLaunchFollowsItsProducers` above, and for the
+            # same reason: `_shim` is None until real triton imports, so asking
+            # it to activate the bridge raised `AttributeError: 'NoneType'
+            # object has no attribute 'activate_bridge'` on a box without a
+            # triton install instead of skipping. b2ea67cc added the guard to
+            # that class and left this one -- added in the same series -- with
+            # the defect.
+            self.skipTest("real upstream triton + CUDA not available")
         if triton is None or tl is None:
             setUpModule()
-        if not _shim.activate_bridge():
+        if _shim is None or not _shim.activate_bridge():
             self.skipTest("jittor Triton bridge is unavailable")
 
     def test_the_barrier_takes_operands_rather_than_the_whole_process(self):

@@ -1,3 +1,5 @@
+import os
+
 from jittor.compat.diagnostics import EXPECTED, swallowed
 from jittor.compat.transaction import set_attr
 """What this backend's substituted attention implementation actually does.
@@ -94,10 +96,138 @@ def declare_backend(module):
     """Declare both, so a caller reading either gets this implementation's."""
 
     layout = declare_cache_layout(module)
-    return declare_head_sizes(module) or layout
+    sizes = declare_head_sizes(module)
+    blocks = declare_acl_block_size(module)
+    return layout or sizes or blocks
+
+
+def declare_acl_block_size(module):
+    """Use CANN's validated 128-token page layout on ACL only.
+
+    The ACL paged-decode kernel consumes block-128 KV descriptors. CUDA keeps
+    upstream's full block-size policy; unsupported explicit NPU sizes fail at
+    validation instead of reaching a mismatched cache kernel.
+    """
+    backend = getattr(module, "FlashAttentionBackend", None)
+    marker = "_jittor_acl_block_size"
+    if backend is None or getattr(backend, marker, False):
+        return False
+    if not (hasattr(backend, "get_supported_kernel_block_sizes")
+            and hasattr(backend, "get_preferred_block_size")):
+        return False
+
+    supported = backend.get_supported_kernel_block_sizes
+    preferred = backend.get_preferred_block_size
+
+    def acl_active():
+        import jittor as jt
+        return bool(getattr(jt.compiler, "has_acl", 0)
+                    and getattr(jt.flags, "use_acl", 0))
+
+    def supported_block_sizes():
+        return [128] if acl_active() else supported()
+
+    @classmethod
+    def preferred_block_size(cls, default_block_size):
+        return 128 if acl_active() else preferred(default_block_size)
+
+    set_attr(backend, "get_supported_kernel_block_sizes",
+             staticmethod(supported_block_sizes))
+    set_attr(backend, "get_preferred_block_size", preferred_block_size)
+    set_attr(backend, marker, True)
+    return True
+
+
+_DIRECT_ALL_REDUCE = "_jittor_direct_all_reduce"
+_DIRECT_RESULT = "_jittor_direct_all_reduce_result"
+_NPU_LAZY_ALL_REDUCE = "_jittor_npu_lazy_all_reduce"
+
+
+def patch_cuda_all_reduce(module):
+    """Use Jittor's out-of-place NCCL result directly.
+
+    vLLM's PyTorch fallback clones the input before calling its in-place
+    collective.  Jittor's NCCL op is already out-of-place, so that device copy
+    is unnecessary.  For TP=2, mark the NCCL result itself as an output hint
+    to bound Jittor's lazy graph.  This keeps the lifetime boundary that a bare
+    return lacks without constructing a discarded clone holder on every
+    collective.  Larger groups retain the holder publication path: TP=4
+    batched decode regresses when that holder is removed because its graph
+    scheduling/overlap differs from TP=2.  The larger-group holder starts
+    empty: its old contents are overwritten by ``update``, so cloning the
+    input first only launched a discarded device copy.  Set
+    ``JITTOR_VLLM_EMPTY_ALL_REDUCE_HOLDER=0`` to restore that legacy clone.
+    """
+
+    communicator = getattr(module, "CudaCommunicator", None)
+    if communicator is None or getattr(communicator, _DIRECT_ALL_REDUCE, False):
+        return False
+    original = communicator.all_reduce
+
+    def all_reduce(self, input_):
+        pynccl = getattr(self, "pynccl_comm", None)
+        group = getattr(self, "device_group", None)
+        native = getattr(group, "_all_reduce", None)
+        pynccl_disabled = pynccl is None or getattr(pynccl, "disabled", False)
+        if pynccl_disabled and callable(native):
+            reduced = native(input_, "sum")
+            direct_result = self.__dict__.get(_DIRECT_RESULT)
+            if direct_result is None:
+                size = getattr(group, "size", None)
+                direct_result = callable(size) and int(size()) <= 2
+                self.__dict__[_DIRECT_RESULT] = direct_result
+            if direct_result:
+                return reduced.out_hint()
+            if os.environ.get(
+                    "JITTOR_VLLM_EMPTY_ALL_REDUCE_HOLDER", "1") != "0":
+                import jittor as jt
+                output = jt.empty(input_.shape, dtype=input_.dtype)
+            else:
+                output = input_.clone()
+            output.update(reduced)
+            return output
+        return original(self, input_)
+
+    set_attr(communicator, "all_reduce", all_reduce)
+    set_attr(communicator, _DIRECT_ALL_REDUCE, True)
+    return True
+
+
+def patch_npu_lazy_all_reduce(module):
+    """Opt-in vLLM-only HCCL graph trial; never change torch.distributed.
+
+    Torch's synchronous all-reduce compatibility path forces ``Var.sync()``
+    on every TP exchange. Returning Jittor's out-of-place result lets model
+    consumers establish the dependency instead. This is not the default:
+    cross-rank lazy issue order needs device race testing before promotion.
+    """
+    if os.environ.get("JITTOR_VLLM_NPU_LAZY_ALL_REDUCE") != "1":
+        return False
+    communicator = getattr(module, "DeviceCommunicatorBase", None)
+    if communicator is None or getattr(communicator, _NPU_LAZY_ALL_REDUCE, False):
+        return False
+    original = communicator.all_reduce
+
+    def all_reduce(self, input_):
+        import jittor as jt
+        group = getattr(self, "device_group", None)
+        native = getattr(group, "_all_reduce", None)
+        if (not getattr(jt.flags, "use_acl", 0)
+                or getattr(group, "_backend_kind", None) != "hccl"
+                or not callable(native) or int(self.world_size) <= 1):
+            return original(self, input_)
+        return native(input_, "sum").out_hint()
+
+    set_attr(communicator, "all_reduce", all_reduce)
+    set_attr(communicator, _NPU_LAZY_ALL_REDUCE, True)
+    return True
 
 
 #: Module path -> the patch that runs once that module has defined its classes.
 PATCHES = {
     "vllm.v1.attention.backends.flash_attn": declare_backend,
+    "vllm.distributed.device_communicators.cuda_communicator":
+        patch_cuda_all_reduce,
+    "vllm.distributed.device_communicators.base_device_communicator":
+        patch_npu_lazy_all_reduce,
 }

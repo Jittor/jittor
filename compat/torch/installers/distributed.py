@@ -4,7 +4,10 @@ This module contains source moved from the former monolithic installer without
 changing the compatibility semantics.
 """
 
+import atexit
+import glob
 import os
+import warnings
 import pickle
 
 import numpy as np
@@ -64,36 +67,93 @@ def _backend_matches_active(requested_backend, active_backend):
 
 
 def _bootstrap_var_all_reduce(self, op="mean"):
-    ops = jt.compile_extern.nccl_ops
+    use_hccl = os.environ.get("JT_HCCL_WORLD_SIZE") is not None
+    ops = (jt.compile_extern.hccl_ops if use_hccl
+           else jt.compile_extern.nccl_ops)
     world_size = jt.compile_extern.world_size
     if op not in ("sum", "mean"):
         raise NotImplementedError(
-            "Jittor NCCL Var.mpi_all_reduce supports sum and mean only")
-    result = ops.nccl_all_reduce(self)
+            "Jittor Var.mpi_all_reduce supports sum and mean only")
+    result = (ops.hccl_all_reduce(self, "sum") if use_hccl
+              else ops.nccl_all_reduce(self))
     return result / world_size if op == "mean" else result
 
 
 def _bootstrap_var_broadcast(self, root=0):
-    ops = jt.compile_extern.nccl_ops
-    return ops.nccl_broadcast(self, int(root))
+    if os.environ.get("JT_HCCL_WORLD_SIZE") is not None:
+        return jt.compile_extern.hccl_ops.hccl_broadcast(self, int(root))
+    return jt.compile_extern.nccl_ops.nccl_broadcast(self, int(root))
+
+
+def _clear_stale_rendezvous(rootinfo, rank):
+    """Remove a previous run's rendezvous files before rank 0 writes new ones.
+
+    The path is derived from MASTER_ADDR and MASTER_PORT alone, and the store
+    behind it is append-only, so a second run on the same port reads the *first*
+    run's NCCL unique ids and blocks inside `ncclCommInitRank` until the timeout
+    -- a hang, with nothing logged. The port is not always fresh: vLLM-Omni
+    picks a deterministic one, so every restart of a served model lands on the
+    same file.
+
+    `jittor/distributed/launch.py` already does this for the native launcher,
+    where the name carries the launcher's pid and `_cleanup` removes it on the
+    way out. This path had neither, which is why deployment scripts carry an
+    `rm -f /tmp/jittor-nccl-*` before every run.
+
+    Only rank 0 clears, and only before it creates the store. A rank that
+    reaches this before rank 0 does can still read a stale file; that window
+    was there before and is not what this closes. What it closes is the common
+    case -- a restart where the previous run's files are simply still on disk.
+    """
+    if int(rank) != 0:
+        return
+    stale = [rootinfo] + glob.glob(rootinfo + ".pg*") + \
+        glob.glob(rootinfo + ".hb*") + glob.glob(rootinfo + ".tmp")
+    for path in stale:
+        try:
+            os.remove(path)
+        except FileNotFoundError as exc:
+            swallowed("distributed.py clearing stale rendezvous file %s" % path,
+                      exc)
+        except OSError as error:
+            warnings.warn(
+                "could not remove the stale rendezvous file %s: %s; a rerun on "
+                "this port may hang inside distributed init" % (path, error))
+            return
+    atexit.register(_clear_stale_rendezvous_atexit, rootinfo)
+
+
+def _clear_stale_rendezvous_atexit(rootinfo):
+    for path in [rootinfo] + glob.glob(rootinfo + ".pg*") + \
+            glob.glob(rootinfo + ".hb*") + glob.glob(rootinfo + ".tmp"):
+        try:
+            os.remove(path)
+        except OSError as exc:
+            swallowed("distributed.py atexit clearing stale rendezvous file %s"
+                      % path, exc)
 
 
 def _bootstrap_native_distributed(rank, world_size, backend=None, store=None):
     if not _is_truthy(os.environ.get("JITTOR_TORCH_DISTRIBUTED_AUTO_INIT")):
         return False
     backend_name = str(backend or "nccl").lower()
-    if "nccl" not in backend_name:
+    use_hccl = "hccl" in backend_name and "nccl" not in backend_name
+    if not use_hccl and "nccl" not in backend_name:
         raise NotImplementedError(
-            "Jittor dynamic torch.distributed bootstrap currently supports NCCL only"
+            "Jittor dynamic torch.distributed bootstrap supports NCCL or HCCL"
         )
-    if not getattr(jt, "has_cuda", False):
+    if use_hccl and not getattr(jt.compiler, "has_acl", False):
+        raise RuntimeError("Jittor dynamic HCCL bootstrap requires ACL")
+    if not use_hccl and not getattr(jt, "has_cuda", False):
         raise RuntimeError("Jittor dynamic NCCL bootstrap requires CUDA")
 
     rank = int(rank)
     world_size = int(world_size)
     local_world_size = int(os.environ.get(
         "LOCAL_WORLD_SIZE", os.environ.get("RAY_LOCAL_WORLD_SIZE", world_size)))
-    rootinfo = os.environ.get("JT_NCCL_ROOTINFO_FILE", "").strip()
+    backend_key = "HCCL" if use_hccl else "NCCL"
+    rootinfo_key = "JT_{}_ROOTINFO_FILE".format(backend_key)
+    rootinfo = os.environ.get(rootinfo_key, "").strip()
     # Derived even when a store is in hand. The store carries the *world*
     # communicator's unique id, but `nccl_create_process_group` exchanges every
     # sub-group's id through a file named after this path
@@ -107,8 +167,9 @@ def _bootstrap_native_distributed(rank, world_size, backend=None, store=None):
             "JITTOR_DIST_RENDEZVOUS_DIR", "").strip()
         if local_world_size != world_size and not explicit_rendezvous_dir:
             raise RuntimeError(
-                "multi-node Jittor NCCL requires JT_NCCL_ROOTINFO_FILE or "
-                "JITTOR_DIST_RENDEZVOUS_DIR on shared storage"
+                "multi-node Jittor {} requires {} or "
+                "JITTOR_DIST_RENDEZVOUS_DIR on shared storage".format(
+                    backend_key, rootinfo_key)
             )
         rendezvous_dir = explicit_rendezvous_dir or "/tmp"
         os.makedirs(rendezvous_dir, exist_ok=True)
@@ -118,24 +179,47 @@ def _bootstrap_native_distributed(rank, world_size, backend=None, store=None):
         key = "".join(char if char.isalnum() or char in "_.-" else "_"
                       for char in key)
         rootinfo = os.path.join(
-            rendezvous_dir, "jittor-nccl-{}.bin".format(key))
+            rendezvous_dir, "jittor-{}-{}.bin".format(
+                backend_key.lower(), key))
 
+    # Outside the `if not rootinfo` above on purpose. It used to live inside,
+    # so an explicitly set JT_NCCL_ROOTINFO_FILE got neither the startup clear
+    # nor the atexit registration: even a clean shutdown left its rendezvous
+    # files on disk, and the next run read the previous run's NCCL ids. The
+    # path being operator-supplied does not make it less of a rendezvous
+    # artifact. Still rank 0 only, and still before rank 0 creates the store.
+    _clear_stale_rendezvous(rootinfo, rank)
+
+    visible_key = ("ASCEND_RT_VISIBLE_DEVICES" if use_hccl
+                   else "CUDA_VISIBLE_DEVICES")
     visible = [item for item in os.environ.get(
-        "CUDA_VISIBLE_DEVICES", "").split(",") if item.strip()]
+        visible_key, "").split(",") if item.strip()]
     local_rank = 0 if len(visible) == 1 else int(os.environ.get("LOCAL_RANK", rank))
-    set_env("JT_NCCL_WORLD_SIZE", world_size)
-    set_env("JT_NCCL_RANK", rank)
-    set_env("JT_NCCL_LOCAL_RANK", local_rank)
+    set_env("JT_{}_WORLD_SIZE".format(backend_key), world_size)
+    set_env("JT_{}_RANK".format(backend_key), rank)
+    set_env("JT_{}_LOCAL_RANK".format(backend_key), local_rank)
     if rootinfo:
-        set_env("JT_NCCL_ROOTINFO_FILE", rootinfo)
-    set_env("use_nccl", "1")
+        set_env(rootinfo_key, rootinfo)
+    set_env("use_hccl" if use_hccl else "use_nccl", "1")
     set_env("use_mpi", "0")
 
-    set_flag(jt.flags, "use_cuda", 1)
-    jt.compile_extern.setup_nccl(store=store)
-    ops = getattr(jt.compile_extern, "nccl_ops", None)
+    set_flag(jt.flags, "use_acl" if use_hccl else "use_cuda", 1)
+    if use_hccl:
+        jt.compile_extern.setup_hccl(no_mpi=True)
+        # setup_hccl only compiles and loads the extension. The import-time
+        # path calls hccl_init separately after releasing Jittor's build lock;
+        # dynamic torch.distributed startup must do the same before vLLM
+        # creates its first subgroup (often the WORLD group itself).
+        from jittor_utils import lock as _jit_lock
+        with _jit_lock.unlock_scope():
+            jt.compile_extern.hccl_mod.hccl_init()
+    else:
+        jt.compile_extern.setup_nccl(store=store)
+    ops = getattr(jt.compile_extern,
+                  "hccl_ops" if use_hccl else "nccl_ops", None)
     if ops is None:
-        raise RuntimeError("Jittor NCCL setup did not publish collective ops")
+        raise RuntimeError("Jittor {} setup did not publish collective ops".format(
+            backend_key))
 
     # compile_extern is the single owner; jt.rank / jt.world_size / jt.in_mpi
     # read through to it. Assigning them here as well used to create a second
@@ -196,8 +280,44 @@ def _copy_tensor(dst, src):
         dst[:] = src
 
 
-def _collective_result(value, async_op):
-    return _JittorWork(value) if async_op else None
+def _sync_collective(value):
+    """Force an already-expressed collective to actually run.
+
+    Jittor is lazy: `mpi_broadcast`/`mpi_all_reduce` express the operation and
+    the NCCL call happens whenever something later forces a flush. Inside one
+    process that is free; across a process group it is not, because the order
+    collectives are *issued* in is a contract between peers and no single
+    process's scheduler can see it.
+
+    Measured: MiniMax-H3 ref2va on four TP ranks deadlocked with three ranks
+    inside `_encode_visual_conditions` and one still inside `encode_prompt`,
+    both in `_broadcast_tensor`'s `.tolist()`. Rank 0 carries the real tensor
+    and so has a different op graph from its peers; its flush ran one
+    collective while theirs had already run that one and started the next, and
+    the two NCCL calls no longer matched. Twenty minutes apart the stacks were
+    identical. Under PyTorch the same code is safe because a synchronous
+    collective has been issued by the time it returns.
+
+    So a synchronous collective syncs here, which is what `async_op=False`
+    promises. `_barrier` already did this; nothing else did.
+    """
+    for item in (value if isinstance(value, (list, tuple)) else (value,)):
+        sync = getattr(item, "sync", None)
+        if callable(sync):
+            sync()
+
+
+def _collective_result(value, async_op, issued=False):
+    """`issued` says a collective was actually expressed and must be flushed.
+
+    Passed False on the paths that short-circuit -- a single-member group, an
+    out-of-group rank -- so those keep costing nothing.
+    """
+    if async_op:
+        return _JittorWork(value)
+    if issued:
+        _sync_collective(value)
+    return None
 
 
 def _reduce_name(op, reduce_op):
@@ -216,8 +336,18 @@ def _reduce_name(op, reduce_op):
     )
 
 
-def _native_all_gather_flat(tensor):
-    return _collectives._all_gather_shards(tensor.reshape((-1,)))
+def _native_all_gather_flat(tensor, group=None):
+    flat = tensor.reshape((-1,))
+    if os.environ.get("JT_HCCL_WORLD_SIZE") is not None:
+        ops = getattr(jt.compile_extern, "hccl_ops", None)
+        gather = getattr(ops, "hccl_all_gather", None)
+        if not callable(gather):
+            raise RuntimeError("Jittor HCCL all_gather is unavailable")
+        handle = 0 if group is None else getattr(group, "_backend_handle", None)
+        if handle is None:
+            raise RuntimeError("HCCL process group has no communicator")
+        return gather(flat, int(handle))
+    return _collectives._all_gather_shards(flat)
 
 
 def _native_all_gather_object(object_list, obj, group=None):
@@ -238,14 +368,14 @@ def _native_all_gather_object(object_list, obj, group=None):
     payload = pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL)
     local_length = jt.array(np.asarray([len(payload)], dtype=np.int32))
     lengths = np.asarray(
-        _native_all_gather_flat(local_length).numpy(), dtype=np.int32
+        _native_all_gather_flat(local_length, group).numpy(), dtype=np.int32
     ).reshape(-1)
     max_length = int(lengths.max()) if lengths.size else 0
     encoded = np.zeros((max_length,), dtype=np.int32)
     if payload:
         encoded[:len(payload)] = np.frombuffer(payload, dtype=np.uint8).astype(np.int32)
     gathered = np.asarray(
-        _native_all_gather_flat(jt.array(encoded)).numpy(), dtype=np.int32
+        _native_all_gather_flat(jt.array(encoded), group).numpy(), dtype=np.int32
     ).reshape(size, max_length)
     for rank, length in enumerate(lengths):
         raw = gathered[rank, :int(length)].astype(np.uint8).tobytes()
@@ -426,17 +556,20 @@ def _all_reduce(tensor, op=None, group=None, async_op=False):
         return _collective_result(tensor, async_op)
     size = _require_supported_group(group, allow_subgroup=True)
     if group is not None and getattr(group, "rank", lambda: 0)() < 0:
-        return _collective_result(tensor, async_op)
+        # This rank is not in the group, so it issues nothing and must not
+        # flush: syncing here would make a non-participant pay for -- and wait
+        # on -- work it is not part of.
+        return _collective_result(tensor, async_op, issued=False)
     reduce_name = _reduce_name(op, _ReduceOp)
     if group is not None and hasattr(group, "_all_reduce"):
         result = group._all_reduce(tensor, reduce_name)
         _copy_tensor(tensor, result)
-        return _collective_result(tensor, async_op)
+        return _collective_result(tensor, async_op, issued=True)
     if size > 1:
         if reduce_name in ("sum", "mean"):
             result = tensor.mpi_all_reduce(reduce_name)
         else:
-            gathered = _native_all_gather_flat(tensor).reshape(
+            gathered = _native_all_gather_flat(tensor, group).reshape(
                 (size,) + tuple(tensor.shape))
             result = gathered[0]
             for rank in range(1, size):
@@ -447,7 +580,7 @@ def _all_reduce(tensor, op=None, group=None, async_op=False):
                 else:
                     result = result * gathered[rank]
         _copy_tensor(tensor, result)
-    return _collective_result(tensor, async_op)
+    return _collective_result(tensor, async_op, issued=size > 1)
 
 
 def _all_gather(tensor_list, tensor, group=None, async_op=False):
@@ -464,13 +597,13 @@ def _all_gather(tensor_list, tensor, group=None, async_op=False):
     if size == 1:
         _copy_tensor(tensor_list[0], tensor)
     else:
-        gathered = _native_all_gather_flat(tensor)
+        gathered = _native_all_gather_flat(tensor, group)
         numel = int(np.prod(tuple(int(dim) for dim in tensor.shape)))
         for rank in range(size):
             part = gathered[rank * numel:(rank + 1) * numel].reshape(
                 tensor.shape)
             _copy_tensor(tensor_list[rank], part)
-    return _collective_result(tensor_list, async_op)
+    return _collective_result(tensor_list, async_op, issued=size > 1)
 
 
 def _all_gather_into_tensor(output_tensor, input_tensor, group=None,
@@ -483,10 +616,10 @@ def _all_gather_into_tensor(output_tensor, input_tensor, group=None,
     size = _require_supported_group(group)
     gathered = (
         input_tensor.reshape((-1,)) if size == 1
-        else _native_all_gather_flat(input_tensor)
+        else _native_all_gather_flat(input_tensor, group)
     )
     _copy_tensor(output_tensor, gathered.reshape(output_tensor.shape))
-    return _collective_result(output_tensor, async_op)
+    return _collective_result(output_tensor, async_op, issued=size > 1)
 
 
 def _broadcast(tensor, src=0, group=None, async_op=False, group_src=None):
@@ -500,7 +633,7 @@ def _broadcast(tensor, src=0, group=None, async_op=False, group_src=None):
     root = int(src if group_src is None else group_src)
     if size > 1:
         _copy_tensor(tensor, tensor.mpi_broadcast(root))
-    return _collective_result(tensor, async_op)
+    return _collective_result(tensor, async_op, issued=size > 1)
 
 
 def _barrier(group=None, async_op=False, device_ids=None):
@@ -514,7 +647,7 @@ def _barrier(group=None, async_op=False, device_ids=None):
         marker = jt.array(np.asarray([_distributed_rank()], dtype=np.int32))
         marker = marker.mpi_all_reduce("sum")
         marker.sync()
-    return _collective_result(marker, async_op)
+    return _collective_result(marker, async_op, issued=False)
 
 
 def _broadcast_object_list(object_list, src=0, group=None, device=None):
@@ -613,6 +746,7 @@ def _new_group(ranks=None, *args, **kwargs):
 class Backend(str):
     GLOO = "gloo"
     NCCL = "nccl"
+    HCCL = "hccl"
     MPI = "mpi"
     UCC = "ucc"
     UNDEFINED = "undefined"
@@ -844,15 +978,27 @@ def _api_dist_is_available(*a, **k):
 def _api_dist_is_backend_available(backend):
     # Gloo's CPU control API is implemented by native Store collectives. This
     # advertises the shim backend, not binary interoperability with libgloo.
-    if str(backend).lower() == 'gloo':
+    name = str(backend).lower()
+    if name == 'gloo':
         return True
-    return bool(getattr(jt, 'has_cuda', False)) if str(backend).lower() == 'nccl' else bool(getattr(jt.compile_extern, 'has_mpi', False)) if str(backend).lower() == 'mpi' else False
+    if name == 'nccl':
+        return bool(getattr(jt, 'has_cuda', False))
+    if name == 'hccl':
+        return bool(getattr(jt.compiler, 'has_acl', False))
+    if name == 'mpi':
+        return bool(getattr(jt.compile_extern, 'has_mpi', False))
+    return False
 
 
 def _api_dist_is_nccl_available():
     _context = get_install_context(jt).state["distributed_api"]
     dist = _context['dist']
     return dist.is_backend_available('nccl')
+
+
+def _api_dist_is_hccl_available():
+    _context = get_install_context(jt).state["distributed_api"]
+    return _context['dist'].is_backend_available('hccl')
 
 
 def _api_dist_is_gloo_available():
@@ -1048,6 +1194,7 @@ def _install_distributed(g, registry=None):
     dist.is_available = _api_dist_is_available
     dist.is_backend_available = _api_dist_is_backend_available
     dist.is_nccl_available = _api_dist_is_nccl_available
+    dist.is_hccl_available = _api_dist_is_hccl_available
     dist.is_gloo_available = _api_dist_is_gloo_available
     dist.is_mpi_available = _api_dist_is_mpi_available
     dist.is_ucc_available = _api_dist_is_ucc_available
@@ -1123,6 +1270,9 @@ def _install_distributed(g, registry=None):
     dist.DeviceMesh = getattr(dist, "DeviceMesh", _DeviceMesh)
     dist.init_device_mesh = getattr(dist, "init_device_mesh", _init_device_mesh)
     dist.ProcessGroup = _JittorProcessGroup
+    # Give NPU integrations the corresponding backend-specific group alias,
+    # backed by the same Jittor process group as the NCCL alias below.
+    dist.ProcessGroupHCCL = _JittorProcessGroup
 
     c10d = _modules.get("torch.distributed.distributed_c10d")
     if c10d is None:
@@ -1151,6 +1301,7 @@ def _install_distributed(g, registry=None):
     c10d._resolve_process_group = _api_c10d_resolve_process_group
     c10d.ProcessGroupGloo = _JittorProcessGroup
     c10d.ProcessGroupNCCL = _JittorProcessGroup
+    c10d.ProcessGroupHCCL = _JittorProcessGroup
     c10d._world = _types.SimpleNamespace(
         default_pg=world_group,
         pg_map=pg_map,

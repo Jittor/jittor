@@ -137,7 +137,8 @@ def test_acl_install_publishes_real_owners_idempotently_without_facade_writes(pr
     # A literal count is the canary that a new registration was deliberate.
     # The duplicate check above catches a name registered twice, but not a
     # kernel that appears because an import side effect grew the table.
-    assert len(operations) == 45, "ACL kernel count changed; update deliberately"
+    # 46: random.multinomial, CANN's single draw.
+    assert len(operations) == 46, "ACL kernel count changed; update deliberately"
     assert len(first) == len(operations)
     for operation, implementation in providers.install.KERNELS:
         assert providers.dispatch.registered_kernel(operation, "acl") is implementation
@@ -150,7 +151,7 @@ def test_acl_rejection_does_not_reenter_native_dispatch(providers):
     x = _Tensor()
     assert providers.tensor.getitem_acl(x, 0, return_x=True) is None
     assert providers.tensor.setitem_acl(x, 0, x, reduce="add") is None
-    assert providers.tensor.arg_reduce_acl(_Tensor(dtype="int64"), "max", 0) is None
+    assert providers.tensor.arg_reduce_acl(_Tensor(dtype="float64"), "max", 0) is None
     assert providers.tensor._roll_acl(_Tensor(dtype="float64"), 1) is None
     assert providers.tensor._split_acl(x, 0) is None
     assert providers.neural.resize_acl(x, (2, 2), mode="bilinear") is None

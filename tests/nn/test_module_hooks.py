@@ -282,6 +282,23 @@ class TestWithKwargs(unittest.TestCase):
         def execute(self, x, bias=0):
             return x + bias
 
+    def test_default_torch_pre_hook_receives_two_args_with_forward_kwargs(self):
+        seen = []
+        m = self.Adder()
+        m.register_forward_pre_hook(lambda mod, args: seen.append((mod, args)))
+        np.testing.assert_allclose(m(_x(), bias=1).numpy(), np.full(3, 2.0))
+        self.assertEqual(len(seen), 1)
+        self.assertIs(seen[0][0], m)
+        self.assertEqual(len(seen[0][1]), 1)
+
+    def test_legacy_pre_hook_keeps_kwargs_when_present(self):
+        seen = []
+        m = self.Adder()
+        m.register_pre_forward_hook(
+            lambda mod, args, kwargs: seen.append(kwargs["bias"]))
+        np.testing.assert_allclose(m(_x(), bias=1).numpy(), np.full(3, 2.0))
+        self.assertEqual(seen, [1])
+
     def test_a_with_kwargs_pre_hook_can_replace_the_kwargs(self):
         m = self.Adder()
         m.register_forward_pre_hook(

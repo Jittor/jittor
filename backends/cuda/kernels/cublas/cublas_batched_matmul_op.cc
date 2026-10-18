@@ -57,6 +57,10 @@ CublasBatchedMatmulOp::CublasBatchedMatmulOp(Var* a, Var* b, bool trans_a, bool 
 VarPtr CublasBatchedMatmulOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     // a [b,n,m] b [b,m,k], c[b,n,k]
     // c = a*b
+    // As in CublasMatmulOp::grad: a promoted consumer can hand back a float32
+    // cotangent for a half/bf16 product; match the saved operand's dtype.
+    VarPtr dout_cast = cast_operand_to_compute_dtype(dout, (v_index == 0 ? b : a)->dtype());
+    if (dout_cast) dout = dout_cast.ptr;
     if (v_index == 0) {
         if (trans_a)
             return make_cublas_batched_matmul(b, dout, trans_b, 1);

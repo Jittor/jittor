@@ -174,6 +174,10 @@ SCHEMAS = {
         "hasPaddingmask": {"type": "bool"},
         "hasAttentmask": {"type": "bool"},
     },
+    "FusedInferPrefill": {
+        "scale": {"type": "float64"},
+        "actualSeqLengths": {"type": "int64[]"},
+    },
     "IncreFlashAttention": {
         "scale": {"type": "float64"},
         "headNum": {"type": "int64"},
@@ -189,6 +193,8 @@ SCHEMAS = {
     "MatMul": {"mode": {"type": "int64"}, "cube_math_type": {"type": "int64"}},
     "BatchMatMul": {"mode": {"type": "int64"}, "cube_math_type": {"type": "int64"}},
     "Unary": {"operation": {"type": "int64[]", "encoding": "utf8"}},
+    "Sort": {"stable": {"type": "bool"}, "dim": {"type": "int64"}, "descending": {"type": "bool"}},
+    "Multinomial": {"num_samples": {"type": "int64"}, "replacement": {"type": "bool"}},
     "TruthReduce": {
         "axes": {"type": "int64[]"},
         "keepdims": {"type": "bool"},

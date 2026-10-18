@@ -463,6 +463,11 @@ int64_t vh_ndim(jittor::VarHolder* vh) { return vh->var->shape.size(); }
 int64_t vh_size(jittor::VarHolder* vh, int64_t d) {
     int64_t nd = vh->var->shape.size(); if (d < 0) d += nd; return vh->var->shape[d];
 }
+int64_t vh_storage_stride(jittor::VarHolder* vh, int64_t d) {
+    int64_t nd = vh->var->shape.size();
+    if (d < 0) d += nd;
+    return vh->var->storage_stride((uint)d);
+}
 void vh_shape(jittor::VarHolder* vh, std::vector<int64_t>& out) {
     auto& sh = vh->var->shape; for (int i = 0; i < (int)sh.size(); i++) out.push_back(sh[i]);
 }
@@ -572,6 +577,9 @@ static bool pyvar_flag(void* obj, const char* name) {
 bool pyvar_is_ext_readonly_borrow(void* obj) {
     return pyvar_flag(obj, "_jittor_torch_ext_readonly_borrow");
 }
+bool pyvar_is_ext_mutable_borrow(void* obj) {
+    return pyvar_flag(obj, "_jittor_torch_ext_mutable_borrow");
+}
 static bool pyvar_force_cpu(void* obj) {
     return pyvar_flag(obj, "_jittor_torch_force_cpu");
 }
@@ -635,6 +643,11 @@ Tensor tensor_from_pyvar(void* obj) {
             stat_add_if(collect_stats, torch_ext_stats().input_readonly_borrow_bytes, nbytes);
             return borrowed;
         }
+        if (pyvar_is_ext_mutable_borrow(obj)) {
+            stat_add_if(collect_stats, torch_ext_stats().input_mutable_borrow_count);
+            stat_add_if(collect_stats, torch_ext_stats().input_mutable_borrow_bytes, nbytes);
+            return borrowed;
+        }
         if (pyvar_is_ext_mutable(obj)) {
             stat_add_if(collect_stats, torch_ext_stats().input_mutable_borrow_count);
             stat_add_if(collect_stats, torch_ext_stats().input_mutable_borrow_bytes, nbytes);
@@ -655,6 +668,11 @@ Tensor tensor_from_pyvar(void* obj) {
     if (pyvar_is_ext_readonly_borrow(obj)) {
         stat_add_if(collect_stats, torch_ext_stats().input_readonly_borrow_count);
         stat_add_if(collect_stats, torch_ext_stats().input_readonly_borrow_bytes, nbytes);
+        return borrowed;
+    }
+    if (pyvar_is_ext_mutable_borrow(obj)) {
+        stat_add_if(collect_stats, torch_ext_stats().input_mutable_borrow_count);
+        stat_add_if(collect_stats, torch_ext_stats().input_mutable_borrow_bytes, nbytes);
         return borrowed;
     }
     if (pyvar_is_ext_mutable(obj)) {
@@ -695,6 +713,17 @@ Tensor tensor_from_pyvar_readonly(void* obj) {
                 collect_stats ? vh_nbytes_for_stats(vh) : 0);
     return adopt(vh, /*owns=*/false);
 }
+Tensor tensor_from_pyvar_mutable_borrow(void* obj) {
+    jittor::VarHolder* vh = jittor::from_py_object<jittor::VarHolder*>((PyObject*)obj);
+    bool collect_stats = torch_ext_stats_enabled();
+    stat_add_if(collect_stats, torch_ext_stats().input_mutable_borrow_count);
+    stat_add_if(collect_stats, torch_ext_stats().input_mutable_borrow_bytes,
+                collect_stats ? vh_nbytes_for_stats(vh) : 0);
+    // The caller promises stable storage and keeps the Var alive through any
+    // asynchronous kernel using this pointer. No clone or commit is possible:
+    // this path is for in-place extension writes (e.g. persistent KV caches).
+    return adopt(vh, /*owns=*/false);
+}
 void* tensor_to_pyvar(const Tensor& t) {
     // Ext kernels launch on stream 0 through the c10 stream shim. Returning
     // without a global device barrier lets the next Jittor stream-0 op consume
@@ -723,6 +752,21 @@ Tensor Tensor::view(IntArrayRef shape) const {
     static auto maker = jittor::get_op_info("reshape")
         .get_constructor<jittor::VarPtr, jittor::Var*, jittor::NanoVector>();
     jittor::VarPtr vp = maker(_vh()->var, to_nv(shape));
+    return detail::adopt(new jittor::VarHolder(std::move(vp)), true);
+}
+Tensor Tensor::transpose(int64_t dim0, int64_t dim1) const {
+    const int64_t rank = dim();
+    if (dim0 < 0) dim0 += rank;
+    if (dim1 < 0) dim1 += rank;
+    if (dim0 < 0 || dim0 >= rank || dim1 < 0 || dim1 >= rank)
+        throw std::out_of_range("Tensor::transpose dimension out of range");
+    if (dim0 == dim1) return *this;
+    std::vector<int64_t> axes(rank);
+    for (int64_t i = 0; i < rank; ++i) axes[i] = i;
+    std::swap(axes[dim0], axes[dim1]);
+    static auto maker = jittor::get_op_info("transpose")
+        .get_constructor<jittor::VarPtr, jittor::Var*, jittor::NanoVector>();
+    jittor::VarPtr vp = maker(_vh()->var, to_nv(IntArrayRef(axes)));
     return detail::adopt(new jittor::VarHolder(std::move(vp)), true);
 }
 Tensor Tensor::operator[](int64_t i) const {

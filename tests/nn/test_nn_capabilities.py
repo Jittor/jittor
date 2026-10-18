@@ -979,6 +979,267 @@ class TestCudaCapabilities(unittest.TestCase):
                     actual, reference(quantized_query, quantized_cache),
                     atol=atol, rtol=rtol)
 
+                with jt.flag_scope(use_cuda=1), jt.no_grad():
+                    query = jt.array(query_np).cast(dtype)
+                    cache = jt.array(cache_np).cast(dtype)
+                    output = jt.full(query.shape, -7, dtype=dtype)
+                    result = _paged_attention_decode_cuda(
+                        query,
+                        cache,
+                        jt.array(seq_lens_np),
+                        jt.array(block_table_np),
+                        scale,
+                        out=output,
+                    )
+                    self.assertIs(result, output)
+                    actual, quantized_query, quantized_cache = jt.fetch_sync(
+                        [output.float32(), query.float32(), cache.float32()])
+                np.testing.assert_allclose(
+                    actual, reference(quantized_query, quantized_cache),
+                    atol=atol, rtol=rtol)
+
+    def test_inference_fused_cache_paged_decode_cuda(self):
+        from jittor.backends.cuda.kernels.nn.kv_cache_cuda import (
+            _reshape_cache_and_paged_attention_decode_cuda)
+
+        rng = np.random.RandomState(232)
+        query_np = rng.randn(2, 4, 16).astype("float32")
+        key_np = rng.randn(2, 2, 16).astype("float32")
+        value_np = rng.randn(2, 2, 16).astype("float32")
+        cache_np = rng.randn(4, 2, 4, 2, 16).astype("float32")
+        seq_lens_np = np.array([5, 3], dtype="int32")
+        block_table_np = np.array([[2, 0], [1, 3]], dtype="int32")
+        slot_mapping_np = np.array([0, 6], dtype="int64")
+        scale = 16 ** -0.5
+
+        def reference(query, cache):
+            output = np.empty_like(query)
+            for request, seq_len in enumerate(seq_lens_np):
+                keys = []
+                values = []
+                for position in range(int(seq_len)):
+                    block = block_table_np[request, position // 4]
+                    offset = position % 4
+                    keys.append(cache[block, 0, offset])
+                    values.append(cache[block, 1, offset])
+                keys = np.stack(keys)
+                values = np.stack(values)
+                for head in range(4):
+                    kv_head = head // 2
+                    scores = query[request, head] @ keys[:, kv_head].T * scale
+                    scores = np.exp(scores - scores.max())
+                    scores /= scores.sum()
+                    output[request, head] = scores @ values[:, kv_head]
+            return output
+
+        for warps in (8, 16, 32):
+            for dtype, atol, rtol in (
+                ("float16", 0.004, 0.004),
+                ("bfloat16", 0.04, 0.02),
+            ):
+                with self.subTest(warps=warps, dtype=dtype):
+                    with patch.dict("os.environ", {
+                        "JITTOR_VLLM_EXPERIMENTAL_FUSED_DECODE_WARPS":
+                            str(warps),
+                    }), jt.flag_scope(use_cuda=1), jt.no_grad():
+                        query = jt.array(query_np).cast(dtype)
+                        key = jt.array(key_np).cast(dtype)
+                        value = jt.array(value_np).cast(dtype)
+                        cache = jt.array(cache_np).cast(dtype)
+                        output = jt.full(query.shape, -7, dtype=dtype)
+                        result = _reshape_cache_and_paged_attention_decode_cuda(
+                            query, key, value, cache,
+                            jt.array(slot_mapping_np), jt.array(seq_lens_np),
+                            jt.array(block_table_np), scale, output)
+                        self.assertIs(result, output)
+                        (actual, actual_cache, quantized_query,
+                         quantized_key, quantized_value) = jt.fetch_sync([
+                             output.float32(), cache.float32(),
+                             query.float32(), key.float32(), value.float32()])
+                    expected_cache = cache_np.copy()
+                    expected_cache[0, 0, 0] = quantized_key[0]
+                    expected_cache[0, 1, 0] = quantized_value[0]
+                    expected_cache[1, 0, 2] = quantized_key[1]
+                    expected_cache[1, 1, 2] = quantized_value[1]
+                    np.testing.assert_allclose(
+                        actual_cache, expected_cache, atol=atol, rtol=0)
+                    np.testing.assert_allclose(
+                        actual, reference(quantized_query, expected_cache),
+                        atol=atol, rtol=rtol)
+
+    def test_inference_flash_chunked_paged_attention_cuda(self):
+        from jittor.compat.shim.backends import flash_attention
+
+        rng = np.random.RandomState(125)
+        block_size, span_k, span_q = 16, 40, 16
+        heads, kv_heads = 4, 2
+        for head_dim in (64, 128):
+            backend, miss = flash_attention.load_backend_for(head_dim, "fp16")
+            if backend is None:
+                self.skipTest("native FlashAttention unavailable: " + str(miss))
+            scale = head_dim ** -0.5
+            for requests in (1, 2):
+                with self.subTest(head_dim=head_dim, requests=requests):
+                    query_np = rng.randn(
+                        requests * span_q, heads, head_dim).astype("float16")
+                    cache_np = rng.randn(
+                        requests * 3, 2, block_size, kv_heads,
+                        head_dim).astype("float16")
+                    table = np.arange(requests * 3, dtype="int32").reshape(
+                        requests, 3)
+                    query_offsets = [i * span_q for i in range(requests + 1)]
+                    key_lengths = [span_k] * requests
+                    with patch.dict("os.environ", {
+                        "JITTOR_VLLM_FLASH_GQA_CHUNKED": "1",
+                    }), jt.flag_scope(use_cuda=1), jt.no_grad():
+                        result = nn.paged_attention(
+                            jt.array(query_np), jt.array(cache_np),
+                            jt.array(query_offsets).int32(),
+                            jt.array(key_lengths).int32(), jt.array(table),
+                            scale=scale, query_lengths=query_offsets,
+                            key_lengths=key_lengths)
+                        actual = result.float32().numpy()
+                    expected = np.empty_like(actual)
+                    for request in range(requests):
+                        start = request * span_q
+                        end = start + span_q
+                        blocks = cache_np[table[request]]
+                        keys = blocks[:, 0].reshape(
+                            -1, kv_heads, head_dim)[:span_k]
+                        values = blocks[:, 1].reshape(
+                            -1, kv_heads, head_dim)[:span_k]
+                        for head in range(heads):
+                            kv_head = head // (heads // kv_heads)
+                            scores = query_np[start:end, head].astype(
+                                "float32") @ (
+                                keys[:, kv_head].astype("float32").T) * scale
+                            scores[np.arange(span_k)[None, :] > (
+                                span_k - span_q + np.arange(span_q)[:, None])
+                            ] = -1e30
+                            weights = np.exp(
+                                scores - scores.max(axis=1, keepdims=True))
+                            weights /= weights.sum(axis=1, keepdims=True)
+                            expected[start:end, head] = (
+                                weights @ values[:, kv_head].astype("float32"))
+                    np.testing.assert_allclose(
+                        actual, expected, atol=0.005, rtol=0.005)
+
+    def test_inference_flash_full_prefill_batch_cuda(self):
+        from jittor.compat.shim.backends import flash_attention
+
+        backend, miss = flash_attention.load_backend_for(128, "fp16")
+        if backend is None:
+            self.skipTest("native FlashAttention unavailable: " + str(miss))
+        rng = np.random.RandomState(126)
+        requests, length, heads, kv_heads, head_dim = 2, 32, 4, 2, 128
+        block_size = 16
+        query_np = rng.randn(requests * length, heads, head_dim).astype(
+            "float16")
+        cache_np = rng.randn(
+            requests * 2, 2, block_size, kv_heads, head_dim).astype(
+                "float16")
+        table = np.arange(requests * 2, dtype="int32").reshape(requests, 2)
+        offsets = [i * length for i in range(requests + 1)]
+        scale = head_dim ** -0.5
+        with patch.dict("os.environ", {
+            "JITTOR_VLLM_FLASH_GQA_CHUNKED": "1",
+        }), jt.flag_scope(use_cuda=1), jt.no_grad():
+            result = nn.paged_attention(
+                jt.array(query_np), jt.array(cache_np),
+                jt.array(offsets).int32(), jt.array([length] * requests).int32(),
+                jt.array(table), scale=scale, query_lengths=offsets,
+                key_lengths=[length] * requests)
+            actual = result.float32().numpy()
+        expected = np.empty_like(actual)
+        for request in range(requests):
+            start, end = request * length, (request + 1) * length
+            blocks = cache_np[table[request]]
+            keys = blocks[:, 0].reshape(length, kv_heads, head_dim)
+            values = blocks[:, 1].reshape(length, kv_heads, head_dim)
+            for head in range(heads):
+                kv_head = head // (heads // kv_heads)
+                scores = query_np[start:end, head].astype("float32") @ (
+                    keys[:, kv_head].astype("float32").T) * scale
+                scores[np.arange(length)[None, :] > np.arange(length)[:, None]
+                       ] = -1e30
+                weights = np.exp(scores - scores.max(axis=1, keepdims=True))
+                weights /= weights.sum(axis=1, keepdims=True)
+                expected[start:end, head] = (
+                    weights @ values[:, kv_head].astype("float32"))
+        np.testing.assert_allclose(actual, expected, atol=0.005, rtol=0.005)
+
+    def test_inference_split_decode_long_context_cuda(self):
+        from jittor.backends.cuda.kernels.nn.kv_cache_cuda import (
+            _reshape_cache_and_paged_attention_decode_cuda,
+            _split_decode_scratch, release_split_decode_scratch)
+
+        rng = np.random.RandomState(233)
+        block_size, heads, kv_heads, head_dim = 16, 4, 2, 128
+        seq_lens_np = np.array([17, 4096, 4097], dtype="int32")
+        max_blocks = (int(seq_lens_np.max()) + block_size - 1) // block_size
+        physical_blocks = len(seq_lens_np) * max_blocks
+        block_table_np = rng.permutation(physical_blocks).astype("int32").reshape(
+            len(seq_lens_np), max_blocks)
+        slot_mapping_np = np.array([
+            int(block_table_np[request, (int(length) - 1) // block_size])
+            * block_size + (int(length) - 1) % block_size
+            for request, length in enumerate(seq_lens_np)
+        ], dtype="int64")
+        query_np = rng.randn(3, heads, head_dim).astype("float32")
+        key_np = rng.randn(3, kv_heads, head_dim).astype("float32")
+        value_np = rng.randn(3, kv_heads, head_dim).astype("float32")
+        cache_np = rng.randn(
+            physical_blocks, 2, block_size, kv_heads, head_dim).astype(
+                "float32")
+        scale = head_dim ** -0.5
+
+        for splits in (4, 16, 32, 64):
+            with self.subTest(splits=splits):
+                with patch.dict("os.environ", {
+                    "JITTOR_VLLM_EXPERIMENTAL_SPLIT_DECODE": str(splits),
+                }), jt.flag_scope(use_cuda=1), jt.no_grad():
+                    query = jt.array(query_np).cast("float16")
+                    key = jt.array(key_np).cast("float16")
+                    value = jt.array(value_np).cast("float16")
+                    cache = jt.array(cache_np).cast("float16")
+                    output = jt.full(query.shape, -7, dtype="float16")
+                    result = _reshape_cache_and_paged_attention_decode_cuda(
+                        query, key, value, cache,
+                        jt.array(slot_mapping_np), jt.array(seq_lens_np),
+                        jt.array(block_table_np), scale, output)
+                    self.assertIs(result, output)
+                    actual, actual_cache, quantized_query = jt.fetch_sync([
+                        output.float32(), cache.float32(), query.float32()])
+                expected_cache = cache_np.astype("float16").astype("float32")
+                for request, slot in enumerate(slot_mapping_np):
+                    block, offset = divmod(int(slot), block_size)
+                    expected_cache[block, 0, offset] = key_np[request].astype(
+                        "float16").astype("float32")
+                    expected_cache[block, 1, offset] = value_np[request].astype(
+                        "float16").astype("float32")
+                np.testing.assert_array_equal(actual_cache, expected_cache)
+                for request, length in enumerate(seq_lens_np):
+                    blocks = block_table_np[request, :(
+                        int(length) + block_size - 1) // block_size]
+                    keys = expected_cache[blocks, 0].reshape(
+                        -1, kv_heads, head_dim)[:length]
+                    values = expected_cache[blocks, 1].reshape(
+                        -1, kv_heads, head_dim)[:length]
+                    for head in range(heads):
+                        kv_head = head // (heads // kv_heads)
+                        logits = (keys[:, kv_head] @ quantized_query[
+                            request, head]) * scale
+                        weights = np.exp(logits - logits.max())
+                        expected = (weights @ values[:, kv_head]) / weights.sum()
+                        np.testing.assert_allclose(
+                            actual[request, head], expected, atol=0.005,
+                            rtol=0.005)
+                self.assertTrue(any(key[0] == id(cache)
+                                    for key in _split_decode_scratch))
+                self.assertEqual(release_split_decode_scratch([cache]), 1)
+                self.assertFalse(any(key[0] == id(cache)
+                                     for key in _split_decode_scratch))
+
     def test_dual_grid_mesh_finalizer(self):
         coords_np = np.array(
             [

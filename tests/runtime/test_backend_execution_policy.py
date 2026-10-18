@@ -15,7 +15,15 @@ def test_native_reduction_policy_keeps_user_amp_and_parallel_controls():
         np.testing.assert_allclose(mean.numpy(), 2.5)
         np.testing.assert_allclose(product.numpy(), 24)
         assert str(total.dtype) == "float16" and str(mean.dtype) == "float16"
-        assert str(product.dtype) == "float32"
+        # A half *input* keeps its own dtype for every reduction. `sum`/`mean`
+        # never widened the graph (their kernel accumulates in float32 and casts
+        # back); `max`/`min`/`prod` used to come back float32 until 1c9bf349
+        # made `reduce_dtype_infer` preserve the half dtype, which is what
+        # torch 2.13 does on both devices -- `prod` in particular accumulates
+        # at the element dtype, so a float32 accumulator would not produce the
+        # `inf` that `torch.full((40,), 4.0, dtype=float16).prod()` does.
+        assert str(product.dtype) == "float16"
+        assert str(product.numpy().dtype) == "float16"
         assert jt.flags.amp_reg == 0
         assert jt.flags.use_parallel_op_compiler == 2
         assert jt.flags.use_cuda_host_allocator == 0

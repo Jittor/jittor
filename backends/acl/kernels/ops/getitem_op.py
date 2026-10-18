@@ -313,6 +313,13 @@ class GetItemACL(jt.Function):
         for i, s in enumerate(slices):
             if isinstance(s, int) and s < 0:
                 slices[i] = s + x.shape[i]
+            elif isinstance(s, list):
+                # A Python list inside a tuple is an advanced index, including
+                # x[[rows], ...]. Lower it through the same device-side Index
+                # path as a tensor index, rather than treating it as a slice.
+                if not all(isinstance(v, (int, np.integer)) for v in s):
+                    raise TypeError("ACL getitem list indices must contain integers")
+                slices[i] = jt.array(s, dtype="int32")
         slices = tuple(slices)
         expanded_indices = self.expand_single_tensor_index(x, slices)
         if expanded_indices is not None:

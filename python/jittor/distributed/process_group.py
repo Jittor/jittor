@@ -9,6 +9,7 @@ def is_initialized():
     """Whether the native runtime owns an active multi-rank communicator."""
     return int(getattr(jt, "world_size", 1)) > 1 and (
         os.environ.get("JT_NCCL_WORLD_SIZE") is not None
+        or os.environ.get("JT_HCCL_WORLD_SIZE") is not None
         or os.environ.get("OMPI_COMM_WORLD_SIZE") is not None
         or bool(getattr(jt, "in_mpi", False))
     )

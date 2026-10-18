@@ -54,13 +54,19 @@ class TestWhatLeftTheDrawer(unittest.TestCase):
         # post-process repository content and must not ship in the wheel.
         "gen_pyi.py": REPO_ROOT / "tools" / "build" / "gen_pyi.py",
         "local_doc_builder.py": REPO_ROOT / "tools" / "docs" / "local_doc_builder.py",
-        "bench_klo.py": REPO_ROOT / "tools" / "benchmarks" / "legacy" / "bench_klo.py",
     }
+
+    #: Left the drawer and then the repository: a one-off kernel-launch
+    #: benchmark that ran its measurement at import.
+    _DELETED = ("bench_klo.py",)
 
     def test_each_moved_file_is_at_its_new_address_and_not_the_old_one(self):
         for name, destination in sorted(self._MOVED.items()):
             with self.subTest(name=name):
                 self.assertTrue(destination.is_file(), destination)
+                self.assertFalse((DRAWER / name).exists())
+        for name in self._DELETED:
+            with self.subTest(name=name):
                 self.assertFalse((DRAWER / name).exists())
 
     def test_nothing_imports_the_old_paths(self):
@@ -69,7 +75,7 @@ class TestWhatLeftTheDrawer(unittest.TestCase):
         # itself and can never go green.
         self_path = Path(__file__).resolve()
         stale = tuple("jittor.utils." + name[:-len(".py")]
-                      for name in self._MOVED)
+                      for name in (*self._MOVED, *self._DELETED))
         offenders = []
         for base in (PACKAGE, REPO_ROOT / "tests", REPO_ROOT / "tools",
                      REPO_ROOT / "docs", REPO_ROOT / "examples"):
@@ -112,12 +118,12 @@ class TestWhatLeftTheDrawer(unittest.TestCase):
         self.assertNotIn("tools.build", packages)
 
     def test_the_repository_tools_only_run_from_main(self):
-        # bench_klo used to run a CUDA measurement at import, while the local
-        # documentation helper changed into one developer's home directory.
+        # A removed benchmark used to run a CUDA measurement at import, while
+        # the local documentation helper changed into one developer's home
+        # directory.
         # Standalone repository tools may define helpers at import, but their
         # work belongs behind an explicit __main__ guard.
         scripts = (
-            REPO_ROOT / "tools" / "benchmarks" / "legacy" / "bench_klo.py",
             REPO_ROOT / "tools" / "build" / "gen_pyi.py",
             REPO_ROOT / "tools" / "docs" / "local_doc_builder.py",
         )

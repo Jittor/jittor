@@ -11,6 +11,25 @@ import pytest
 import torch
 
 
+def test_acl_exponential_accepts_cuda_generator_alias():
+    import jittor as jt
+
+    if not getattr(jt.compiler, "has_acl", 0):
+        pytest.skip("requires ACL")
+    jt.flags.use_acl = 1
+    jt.flags.use_cuda = 1
+    tensor = torch.empty((32,), device="npu", dtype=torch.float32)
+    assert tensor.device.type == "npu"
+    generator = torch.Generator(device="cuda").manual_seed(17)
+    first = tensor.exponential_(generator=generator).cpu().numpy().copy()
+    generator.manual_seed(17)
+    repeated = tensor.exponential_(generator=generator).cpu().numpy().copy()
+    np.testing.assert_array_equal(first, repeated)
+    assert np.all(np.isfinite(first)) and np.all(first > 0)
+    with pytest.raises(RuntimeError, match="Generator device"):
+        tensor.exponential_(generator=torch.Generator(device="cpu"))
+
+
 @pytest.fixture
 def device():
     return os.environ.get("JITTOR_TEST_DEVICE", "cpu")

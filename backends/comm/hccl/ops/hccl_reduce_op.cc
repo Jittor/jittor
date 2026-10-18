@@ -38,10 +38,10 @@ void HcclReduceOp::jit_run() {
     // dtype -> HcclDataType goes through the single table in
     // hccl_wrapper.cc (see runtime/collective_dtype.h).
     @define(REDUCE_OP,
-        @if(@strcmp(@Op,sum)==0, HcclReduceOp::HCCL_REDUCE_SUM)
-        @if(@strcmp(@Op,prod)==0, HcclReduceOp::HCCL_REDUCE_PROD)
-        @if(@strcmp(@Op,max)==0, HcclReduceOp::HCCL_REDUCE_MAX)
-        @if(@strcmp(@Op,min)==0, HcclReduceOp::HCCL_REDUCE_MIN)
+        @if(@strcmp(@Op,sum)==0, HCCL_REDUCE_SUM)
+        @if(@strcmp(@Op,prod)==0, HCCL_REDUCE_PROD)
+        @if(@strcmp(@Op,max)==0, HCCL_REDUCE_MAX)
+        @if(@strcmp(@Op,min)==0, HCCL_REDUCE_MIN)
     )
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();

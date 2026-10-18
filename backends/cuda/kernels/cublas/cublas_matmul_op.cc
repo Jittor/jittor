@@ -56,6 +56,14 @@ CublasMatmulOp::CublasMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b)
 VarPtr CublasMatmulOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     // c = op(a) @ op(b). Return gradients in the original, pre-transpose
     // layouts so explicit cuBLAS fast paths remain differentiable.
+    //
+    // The cotangent need not have the GEMM's dtype: a consumer that promoted
+    // a half/bf16 product (`y + w_fp32`) hands back a float32 gradient, and a
+    // gradient GEMM of float32 with the half operand failed the same-dtype
+    // check. Bring it to the saved operand's dtype, which is also the dtype
+    // the input's gradient must have.
+    VarPtr dout_cast = cast_operand_to_compute_dtype(dout, (v_index == 0 ? b : a)->dtype());
+    if (dout_cast) dout = dout_cast.ptr;
     if (v_index == 0) {
         if (trans_a)
             return make_cublas_matmul(b, dout, trans_b, 1);

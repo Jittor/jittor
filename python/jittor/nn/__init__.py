@@ -26,7 +26,8 @@ from .attention import (
     varlen_scaled_dot_product_attention,
 )
 from .fused_moe import fused_moe
-from .paged_attention import paged_attention, reshape_and_cache
+from .paged_attention import (paged_attention, reshape_and_cache,
+                              reshape_cache_and_paged_attention_decode)
 from .serving_ops import (dual_rms_norm, fused_add_rms_norm,
                           has_qk_rms_norm_rotary, qk_rms_norm_rotary, rms_norm,
                           rotary_emb, rotary_embedding, silu_and_mul)

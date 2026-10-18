@@ -71,15 +71,22 @@ def repeat_interleave(x,repeats,dim=None,output_size=None):
         dim += x.ndim
 
     if isinstance(repeats, int):
+        # Built as expand + reshape rather than a `reindex` with a divided
+        # index expression (``i{dim}/{repeats}``): that specific reindex
+        # shape is a fused-kernel variant no backend registers natively (it
+        # surfaced on ACL running Qwen's GQA head repeat, "unregistered
+        # fused operator variant: reindex/void"), while expand + reshape is
+        # built from ops every backend already has. Same result on every
+        # backend, not an ACL-only branch: `x[..., k, ...]` repeated
+        # `repeats` times consecutively along `dim` is exactly what
+        # unsqueezing a size-1 axis right after `dim`, broadcasting it to
+        # `repeats`, and folding it back into `dim` produces.
+        if repeats == 1:
+            return x
         tar_shape = list(x.shape)
-        tar_shape[dim] = tar_shape[dim]*repeats
-        dims = []
-        for i in range(len(tar_shape)):
-            if dim==i:
-                dims.append(f"i{i}/{repeats}")
-            else:
-                dims.append(f"i{i}")
-        return x.reindex(tar_shape,dims)
+        tar_shape[dim] = tar_shape[dim] * repeats
+        broadcast_shape = [-1] * (dim + 1) + [repeats] + [-1] * (x.ndim - dim - 1)
+        return x.unsqueeze(dim + 1).expand(broadcast_shape).reshape(tar_shape)
 
     result = _repeat_interleave_dim0_cuda(x, repeats, dim, output_size, _repeat_interleave_cpu_source)
     if result is not None:

@@ -88,10 +88,10 @@ class TestFusedSgdCuda(unittest.TestCase):
                 np.testing.assert_array_equal(u, v)
 
     def test_a_parameter_list_longer_than_one_chunk(self):
-        # The argument struct bounds a launch, so a long list is split; the
+        # The argument table bounds a launch (`kTensors`, 48, in
+        # src/ops/composite/fused_sgd_op.cc), so a long list is split; the
         # split must not change the answer.
-        from jittor.backends.cuda.kernels.optim import fused_sgd_cuda
-        chunk = fused_sgd_cuda._CHUNK
+        chunk = 48
         model = nn.Sequential(*[nn.Linear(4, 4) for _ in range(chunk // 2 + 4)])
         self.assertGreater(len(list(model.parameters())), chunk)
         x = jt.array(np.ones((2, 4), dtype="float32"))

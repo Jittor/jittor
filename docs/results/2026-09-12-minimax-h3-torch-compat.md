@@ -1,13 +1,15 @@
 # MiniMax-H3 under the Torch compatibility layer
 
-- Status: Runs end to end on the released checkpoint at parity speed; the scoring
-  items in "Open items" (soundtrack parity, first-run JIT cost) remain
-- Date: 2026-09-12, re-verified 2026-09-14
-- Baseline commit: `89622bb3` (the original run; see "Changes" below).
-  Re-verification at `a6b2c9c6`, on top of `5a084737`
-- Owner: Jittor compatibility maintainers
-- Review when: the blocked items in "Open items" land, or the JIT op compiler's
-  per-shape cost changes
+- 状态：在发布的 33B checkpoint 上端到端跑通，`generate_seconds` 与真 PyTorch 持平（同一
+  时段 73.78 s 对 74.90 s）；「Open items」中的音轨对齐与首次运行的 JIT 代价仍开放
+- 日期：2026-09-12，2026-09-14 复验
+- 基线提交：`89622bb3`（首次运行，见「Changes」）；复验在 `a6b2c9c6`（基于 `5a084737`）
+- 验证范围：单卡 CUDA 12.9、sm_90；`transformers==5.5.3`、diffusers `0.41.0.dev0`
+  （`a71e62e`）、flash-attention `v2.7.4.post1`。缩减 checkpoint 在 CPU 上做数值对拍；发布的
+  `MiniMaxAI/MiniMax-H3`（`FL2VA`）在 CUDA 上 512x512、124 帧、6 步端到端；对照为同机真
+  PyTorch 2.9.1。同机其他租户占卡，只引用同一时段的比值
+- 维护者：Torch 兼容层维护者
+- 复查条件：「Open items」中受阻的条目落地，或 JIT 算子编译器的逐形状成本变化
 
 ## Question
 
@@ -17,7 +19,7 @@ native fused FlashAttention path, and produce a video?
 
 The upstream integration is a diffusers `ModularPipeline`
 (`MiniMaxH3Blocks`), so this is a downstream-library adaptation and follows
-[`agent/skills/downstream-library-adaptation`](../../agent/skills/downstream-library-adaptation/SKILL.md):
+[`agent/skills/downstream-library-adaptation`](https://github.com/Jittor/jittor/blob/master/agent/skills/downstream-library-adaptation/SKILL.md):
 the model is consumed unmodified, and every breakpoint is routed to jittor core,
 `jittor.compat.torch`, or the shim.
 
@@ -187,16 +189,16 @@ regression.
 ## Reproducing
 
 ```bash
-export JITTOR_LAB_ROOT=/root/jittor-lab
+export JITTOR_LAB_ROOT=<lab-root>
 source $JITTOR_LAB_ROOT/minimax-h3/env-jittor.sh
 export use_cuda=1
-export JITTOR_FLASH_ATTN_JITTOR_SRC=/root/jittor-lab/flash-attention
+export JITTOR_FLASH_ATTN_JITTOR_SRC=$JITTOR_LAB_ROOT/flash-attention
 export JITTOR_FLASH_ATTN_JITTOR_REQUIRED=1
 export JITTOR_FLASH_ATTN_HEAD_DIMS=128 JITTOR_FLASH_ATTN_DTYPES=bf16
 export JITTOR_FLASH_ATTN_CAST_FLOAT32=bf16
 $VENV/bin/python $JITTOR_LAB_ROOT/minimax-h3/infer_h3.py \
-  --model /root/jittor-lab/_state/h3/models/tiny-h3 \
-  --outdir /root/jittor-lab/_state/h3/runs/tiny-cuda --tag tiny-cuda \
+  --model $JITTOR_LAB_ROOT/_state/h3/models/tiny-h3 \
+  --outdir $JITTOR_LAB_ROOT/_state/h3/runs/tiny-cuda --tag tiny-cuda \
   --height 64 --width 64 --num-frames 124 --steps 2 \
   --device cuda --vae-dtype float16
 ```

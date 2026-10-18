@@ -154,3 +154,98 @@ class ReductionBenchmarks:
                 delattr(self, name)
         if backend is not None:
             cleanup_backend(backend_name, backend)
+
+
+#: The *order* of the input decides what the accumulator does, and the
+#: throughput follows it by 4.4x on the same kernel. Measured 2026-09-21 on
+#: 16.7M float32, jittor CPU, five interleaved repetitions: `randn` gave `max`
+#: 7.24 GB/s, ascending `arange` gave 1.64, descending swapped `max` and `min`
+#: exactly, and all-equal was 1.64 for both. `sum` was 25.4 on every row.
+#:
+#: The class above generates its input with `randn` and nothing else, so it
+#: reports the first of those rows and cannot see the others -- which is how
+#: the KI-OPS-006 table came to read 7.24 for both reductions and to look
+#: data-independent. Re-taking that entry's measurement is what this class is
+#: for; its review condition now says so.
+PATTERNS = ("random", "ascending", "descending", "all-equal")
+
+#: One size: this is an axis, not a cache sweep. The class above owns sizes.
+SHAPE_ELEMENTS = 1 << 24
+
+
+def _pattern_host(pattern, elements=SHAPE_ELEMENTS, seed=20260909):
+    if pattern == "random":
+        return np.random.default_rng(seed).standard_normal(elements).astype("float32")
+    ramp = np.arange(elements, dtype="float32")
+    if pattern == "ascending":
+        return ramp
+    if pattern == "descending":
+        return ramp[::-1].copy()
+    return np.ones(elements, dtype="float32")
+
+
+class ReductionInputOrderBenchmarks:
+    """Throughput as a function of the input's order, not of its size."""
+
+    params = (["jittor"], ["cpu", "cuda"], ["max", "min", "sum"], PATTERNS)
+    param_names = ["backend", "device", "reduction", "pattern"]
+    number = 1
+    repeat = (3, 7, 30.0)
+    rounds = 1
+    timeout = 300
+
+    def setup(self, backend_name, device, reduction, pattern):
+        self.backend_name = backend_name
+        self.device = device
+        self.reduction = reduction
+        self.nbytes = SHAPE_ELEMENTS * 4
+        self.backend = load_backend(backend_name, device)
+        host = _pattern_host(pattern)
+        self.x = backend_tensor(backend_name, self.backend, host, device)
+        synchronize(backend_name, self.backend, device)
+        # Same guard as the class above: a reduction that returned its identity
+        # element would time beautifully.
+        value = float(as_numpy(backend_name, self._run()))
+        expected = {"max": host.max(), "min": host.min(), "sum": host.sum()}[reduction]
+        tolerance = abs(float(expected)) * 1e-3 + 1e-2
+        if not np.isfinite(value) or abs(value - float(expected)) > tolerance:
+            raise RuntimeError(
+                "%s/%s returned %r, not the reduction of its input (%r)"
+                % (pattern, reduction, value, float(expected)))
+
+    def _run(self):
+        backend = self.backend
+        if self.backend_name == "torch":
+            with backend.no_grad():
+                return getattr(self.x, self.reduction)()
+        return getattr(backend, self.reduction)(self.x)
+
+    def time_reduce(self, backend_name, device, reduction, pattern):
+        self._keep = self._run()
+        synchronize(backend_name, self.backend, device)
+
+    def track_bytes_per_second(self, backend_name, device, reduction, pattern):
+        import time
+
+        rounds = 5
+        self._keep = self._run()
+        synchronize(backend_name, self.backend, device)
+        start = time.perf_counter()
+        for _ in range(rounds):
+            self._keep = self._run()
+            synchronize(backend_name, self.backend, device)
+        elapsed = time.perf_counter() - start
+        if elapsed <= 0:
+            raise RuntimeError("the reduction timed as instantaneous")
+        return float(self.nbytes * rounds) / elapsed
+
+    track_bytes_per_second.unit = "bytes/s"
+
+    def teardown(self, backend_name, device, reduction, pattern):
+        backend = getattr(self, "backend", None)
+        for name in ("x", "_keep"):
+            if hasattr(self, name):
+                delattr(self, name)
+        if backend is not None:
+            cleanup_backend(backend_name, backend)
+

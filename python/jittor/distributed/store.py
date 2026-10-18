@@ -272,6 +272,15 @@ class _TCPStoreServer:
 
     def close(self):
         self._closed = True
+        # `close` alone does not stop a listener another thread is blocked in
+        # `accept` on (Linux keeps the socket alive until that call returns),
+        # so the port kept accepting: a second store on the same
+        # MASTER_PORT -- `init_process_group` after NCCL's own rendezvous --
+        # had its peers connect to this dead one. `shutdown` wakes `accept`.
+        try:
+            self.socket.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass  # not connected: nothing to wake (non-Linux listeners)
         self.socket.close()
 
 

@@ -1,6 +1,8 @@
 """Private ACL tensor paths for paged key/value caches."""
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
+import os
+
 import jittor as jt
 from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
 from jittor._runtime.dispatch import optional_kernel
@@ -238,8 +240,24 @@ def _paged_attention_decode_acl(query, kv_cache, block_table, scale,
     table_shape = tuple(int(size) for size in block_table.shape)
     lengths = [int(length) for length in key_lengths]
     batch = len(lengths)
+    experimental_batched = (
+        1 < batch <= 4
+        # Qwen2.5-3B (16 query/2 KV heads) first diverges from the native
+        # oracle at decode token 12 on this route; keep its old fallback.
+        and len(cache_shape) == 5 and cache_shape[3] >= 4
+        and os.environ.get("JITTOR_NPU_EXPERIMENTAL_BATCHED_PAGED_DECODE") == "1"
+    )
+    # The native vLLM-Ascend Qwen2.5 path calls FIA on its whole decode
+    # batch. This bounded diagnostic instead calls the already validated
+    # one-request ACL/FIA kernel once per row, avoiding the generic FP32
+    # gather/matmul fallback without changing the serving default.
+    experimental_looped_fia = (
+        1 < batch <= 4
+        and os.environ.get("JITTOR_NPU_EXPERIMENTAL_LOOPED_FIA_DECODE") == "1"
+        and os.environ.get("JITTOR_NPU_PAGED_DECODE_FIA") == "1"
+    )
     if (
-        batch != 1
+        not (batch == 1 or experimental_batched or experimental_looped_fia)
         or len(query_shape) != 3
         or query_shape[0] != batch
         or len(cache_shape) != 5
@@ -267,9 +285,19 @@ def _paged_attention_decode_acl(query, kv_cache, block_table, scale,
     packed_query = query.cast(kv_cache.dtype).reshape(
         (batch, query_shape[1], 1, query_shape[2])
     )
-    output = PagedIncreFlashAttentionACL(
-        query_shape[1], cache_shape[3], cache_shape[2], scale, lengths
-    )(packed_query, kv_cache, block_table)
+    if experimental_looped_fia:
+        output = jt.concat(tuple(
+            PagedIncreFlashAttentionACL(
+                query_shape[1], cache_shape[3], cache_shape[2], scale,
+                [lengths[index]],
+            )(packed_query[index:index + 1], kv_cache,
+              block_table[index:index + 1])
+            for index in range(batch)
+        ), dim=0)
+    else:
+        output = PagedIncreFlashAttentionACL(
+            query_shape[1], cache_shape[3], cache_shape[2], scale, lengths
+        )(packed_query, kv_cache, block_table)
     _paged_attention_decode_acl.backend_name = \
         "acl_paged_incre_flash_attention_v4"
     return _stop_grad_outputs(output.reshape(query_shape).cast(output_dtype))

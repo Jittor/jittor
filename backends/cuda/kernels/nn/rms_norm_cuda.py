@@ -5,7 +5,7 @@ import math
 
 import jittor as jt
 from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
-from jittor._runtime.dispatch import optional_kernel
+from jittor._runtime.dispatch import native_rule, optional_kernel
 
 from ._inference import cached_source
 
@@ -65,19 +65,7 @@ def _rms_norm_contract(x, gamma, epsilon, residual=None):
     return hidden_size, threads, threads // 32, epsilon_value
 
 
-def _rms_norm_supported(x, gamma, epsilon=1e-6):
-    return _rms_norm_contract(x, gamma, epsilon) is not None
-
-
-@optional_kernel("nn.rms_norm.inference", ("cuda", "rocm_legacy", "corex_legacy"),
-                 supports=_rms_norm_supported)
-def _rms_norm_cuda(x, gamma, epsilon=1e-6):
-    """Inference-only fused CUDA RMSNorm, or ``None`` when unsupported."""
-    contract = _rms_norm_contract(x, gamma, epsilon)
-    if contract is None:
-        return None
-    hidden_size, threads, warps, epsilon_value = contract
-    cuda_src = cached_source(r"""
+_RMS_NORM_SOURCE = r"""
     __device__ __forceinline__ float warp_sum(float value) {
         for (int offset = 16; offset > 0; offset >>= 1)
             value += __shfl_down_sync(0xffffffff, value, offset);
@@ -108,19 +96,48 @@ def _rms_norm_cuda(x, gamma, epsilon=1e-6):
         __syncthreads();
         for (int dim = tid; dim < %(hidden_size)d; dim += blockDim.x) {
             int index = row * %(hidden_size)d + dim;
-            y[index] = out0_type(static_cast<float>(x[index]) * inverse_rms
+            // As ATen and HF's RMSNorm: the normalized value is rounded to the
+            // output type before the weight multiplies it -- one bf16/fp16
+            // quantum of difference otherwise.
+            out0_type normalized = out0_type(static_cast<float>(x[index]) * inverse_rms);
+            y[index] = out0_type(static_cast<float>(normalized)
                                  * static_cast<float>(gamma[dim]));
         }
     }
     int rows = in0->num / %(hidden_size)d;
     rms_norm<<<rows, %(threads)d>>>(in0_p, in1_p, out0_p);
     CHECK(0 == cudaGetLastError());
-    """, {
+    """
+
+
+def _rms_norm_source(hidden_size, threads, warps, epsilon_value):
+    """The CUDA source of the kernel below for one contract.
+
+    Also what the native module call (`src/bindings/pyjt/py_module_call.cc`)
+    builds the same operator from, so the two cannot drift apart.
+    """
+    return cached_source(_RMS_NORM_SOURCE, {
         "epsilon": epsilon_value,
         "hidden_size": hidden_size,
         "threads": threads,
         "warps": warps,
     })
+
+
+@native_rule("rms_norm_inference")
+def _rms_norm_supported(x, gamma, epsilon=1e-6):
+    return _rms_norm_contract(x, gamma, epsilon) is not None
+
+
+@optional_kernel("nn.rms_norm.inference", ("cuda", "rocm_legacy", "corex_legacy"),
+                 supports=_rms_norm_supported)
+def _rms_norm_cuda(x, gamma, epsilon=1e-6):
+    """Inference-only fused CUDA RMSNorm, or ``None`` when unsupported."""
+    contract = _rms_norm_contract(x, gamma, epsilon)
+    if contract is None:
+        return None
+    hidden_size, threads, warps, epsilon_value = contract
+    cuda_src = _rms_norm_source(hidden_size, threads, warps, epsilon_value)
     return _stop_grad_outputs(
         jt.code(x.shape, x.dtype, [x, gamma], cuda_src=cuda_src))
 
@@ -155,8 +172,9 @@ def _fused_add_rms_norm_cuda(x, residual, gamma, epsilon=1e-6):
         float sum = 0.0f;
         for (int dim = tid; dim < %(hidden_size)d; dim += blockDim.x) {
             int index = row * %(hidden_size)d + dim;
-            float value = static_cast<float>(x[index])
-                        + static_cast<float>(residual[index]);
+            // The residual sum in the input's type, as `x + residual` is.
+            float value = static_cast<float>(out1_type(static_cast<float>(x[index])
+                                                       + static_cast<float>(residual[index])));
             sum += value * value;
         }
         sum = warp_sum(sum);
@@ -171,10 +189,11 @@ def _fused_add_rms_norm_cuda(x, residual, gamma, epsilon=1e-6):
         __syncthreads();
         for (int dim = tid; dim < %(hidden_size)d; dim += blockDim.x) {
             int index = row * %(hidden_size)d + dim;
-            float value = static_cast<float>(x[index])
-                        + static_cast<float>(residual[index]);
+            float value = static_cast<float>(out1_type(static_cast<float>(x[index])
+                                                       + static_cast<float>(residual[index])));
             residual_out[index] = out1_type(value);
-            y[index] = out0_type(value * inverse_rms
+            out0_type normalized = out0_type(value * inverse_rms);
+            y[index] = out0_type(static_cast<float>(normalized)
                                  * static_cast<float>(gamma[dim]));
         }
     }
@@ -190,6 +209,118 @@ def _fused_add_rms_norm_cuda(x, residual, gamma, epsilon=1e-6):
     })
     return _stop_grad_outputs(jt.code(
         [x.shape, x.shape], [x.dtype, x.dtype], [x, residual, gamma],
+        cuda_src=cuda_src,
+    ))
+
+
+@optional_kernel("nn.dual_rms_norm.inference",
+                 ("cuda", "rocm_legacy", "corex_legacy"),
+                 dtypes={"float16", "bfloat16", "float32"})
+def _dual_rms_norm_cuda(first, second, first_gamma, second_gamma,
+                        epsilon=1e-6):
+    """Normalize two last-axis-compatible tensors in one CUDA launch."""
+    tensors = (first, second, first_gamma, second_gamma)
+    if not all(isinstance(value, jt.Var) for value in tensors):
+        return None
+    if _output_requires_grad(tensors) or _autocast_enabled():
+        return None
+    try:
+        first_shape = tuple(int(size) for size in first.shape)
+        second_shape = tuple(int(size) for size in second.shape)
+        first_gamma_shape = tuple(int(size) for size in first_gamma.shape)
+        second_gamma_shape = tuple(int(size) for size in second_gamma.shape)
+        epsilon_value = float(epsilon)
+    except Exception:
+        return None
+    if not first_shape or not second_shape:
+        return None
+    hidden_size = first_shape[-1]
+    if (
+        hidden_size <= 0
+        or hidden_size > 4096
+        or second_shape[-1] != hidden_size
+        or first_gamma_shape != (hidden_size,)
+        or second_gamma_shape != (hidden_size,)
+        or any(size <= 0 for size in first_shape[:-1])
+        or any(size <= 0 for size in second_shape[:-1])
+    ):
+        return None
+    if any(_jittor_dtype_name(value.dtype) not in
+           ("float16", "bfloat16", "float32") for value in tensors):
+        return None
+    if not math.isfinite(epsilon_value) or epsilon_value <= 0:
+        return None
+
+    threads = 32
+    while threads < min(hidden_size, 1024):
+        threads *= 2
+    warps = threads // 32
+    cuda_src = cached_source(r"""
+    __device__ __forceinline__ float warp_sum(float value) {
+        for (int offset = 16; offset > 0; offset >>= 1)
+            value += __shfl_down_sync(0xffffffff, value, offset);
+        return value;
+    }
+    __global__ static void dual_rms_norm(
+            const in0_type* first, const in1_type* second,
+            const in2_type* first_gamma, const in3_type* second_gamma,
+            out0_type* first_out, out1_type* second_out,
+            int first_rows, int total_rows) {
+        int row = blockIdx.x;
+        if (row >= total_rows) return;
+        int tid = threadIdx.x;
+        int lane = tid & 31;
+        int warp = tid >> 5;
+        bool use_first = row < first_rows;
+        int local_row = use_first ? row : row - first_rows;
+        __shared__ float warp_buf[%(warps)d];
+        __shared__ float inverse_rms;
+        float sum = 0.0f;
+        for (int dim = tid; dim < %(hidden_size)d; dim += blockDim.x) {
+            int index = local_row * %(hidden_size)d + dim;
+            float value = use_first
+                ? static_cast<float>(first[index])
+                : static_cast<float>(second[index]);
+            sum += value * value;
+        }
+        sum = warp_sum(sum);
+        if (lane == 0) warp_buf[warp] = sum;
+        __syncthreads();
+        if (warp == 0) {
+            float total = lane < %(warps)d ? warp_buf[lane] : 0.0f;
+            total = warp_sum(total);
+            if (lane == 0)
+                inverse_rms = rsqrtf(
+                    total / %(hidden_size)d.0f + %(epsilon).9gf);
+        }
+        __syncthreads();
+        for (int dim = tid; dim < %(hidden_size)d; dim += blockDim.x) {
+            int index = local_row * %(hidden_size)d + dim;
+            if (use_first) {
+                first_out[index] = out0_type(
+                    static_cast<float>(first[index]) * inverse_rms
+                    * static_cast<float>(first_gamma[dim]));
+            } else {
+                second_out[index] = out1_type(
+                    static_cast<float>(second[index]) * inverse_rms
+                    * static_cast<float>(second_gamma[dim]));
+            }
+        }
+    }
+    int first_rows = in0->num / %(hidden_size)d;
+    int total_rows = first_rows + in1->num / %(hidden_size)d;
+    dual_rms_norm<<<total_rows, %(threads)d>>>(
+        in0_p, in1_p, in2_p, in3_p, out0_p, out1_p,
+        first_rows, total_rows);
+    CHECK(0 == cudaGetLastError());
+    """, {
+        "epsilon": epsilon_value,
+        "hidden_size": hidden_size,
+        "threads": threads,
+        "warps": warps,
+    })
+    return _stop_grad_outputs(jt.code(
+        [first.shape, second.shape], [first.dtype, second.dtype], tensors,
         cuda_src=cuda_src,
     ))
 
@@ -353,4 +484,4 @@ def multihead_rms_norm_cuda(x, gamma, scale=None, min_norm=1e-12):
         jt.code(x.shape, x.dtype, [x, gamma], cuda_src=cuda_src))
 
 
-__all__ = ["multihead_rms_norm_cuda"]
+__all__ = ["_dual_rms_norm_cuda", "multihead_rms_norm_cuda"]

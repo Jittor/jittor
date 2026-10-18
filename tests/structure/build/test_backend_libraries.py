@@ -17,7 +17,10 @@ EXTERN = ROOT / "python/jittor/build/compile_extern.py"
 
 
 @pytest.fixture
-def api():
+def api(monkeypatch):
+    # These policy cases vary the legacy flag; isolate the canonical flag
+    # inherited from a test launcher without changing resolver precedence.
+    monkeypatch.delenv("JT_BUILD_USE_MKL", raising=False)
     spec = importlib.util.spec_from_file_location("library_registry_test", SOURCE)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

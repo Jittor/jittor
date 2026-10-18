@@ -102,7 +102,9 @@ def trunc_normal_(tensor, mean=0.0, std=1.0, a=-2.0, b=2.0, generator=None):
 
 
 def _fan(t):
-    sh = t.shape
+    # Python ints, as torch returns: callers compute ``math.sqrt(scale / fan)``
+    # and compare fans while building the model.
+    sh = tuple(int(dim) for dim in t.shape)
     if len(sh) < 2:
         return sh[0], sh[0]
     num_input_fmaps, num_output_fmaps = sh[1], sh[0]
@@ -273,10 +275,11 @@ def _install_init_aliases(registry=None):
         if not hasattr(_init, tname) and hasattr(_init, jname):
             setattr(_init, tname, getattr(_init, jname))
     # initializers torch has that jittor lacks -- best-effort implementations
-    if not hasattr(_init, "_calculate_fan_in_and_fan_out"):
-        _init._calculate_fan_in_and_fan_out = _fan
-    if not hasattr(_init, "_calculate_correct_fan"):
-        _init._calculate_correct_fan = _calculate_correct_fan
+    # jittor.init's own `_calculate_fan_in_and_fan_out` takes a *shape*; torch's
+    # takes the tensor. Handed a tensor, the native one indexes it and returns
+    # tensors, so bind the tensor adapter even though the name already exists.
+    _init._calculate_fan_in_and_fan_out = _fan
+    _init._calculate_correct_fan = _calculate_correct_fan
     if not hasattr(_init, "dirac_"):
         _init.dirac_ = _dirac
     if not hasattr(_init, "orthogonal_"):

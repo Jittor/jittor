@@ -1,9 +1,23 @@
 """The paged KV cache layout the attention patch declares to vLLM."""
 
+import os
 import types
 import unittest
+from unittest.mock import patch
 
 import pytest
+
+
+def test_vllm_cuda_graph_rejects_competing_auto_replay():
+    import jittor as jt
+    from jittor_adapters.vllm import flash_attn
+
+    with jt.flag_scope(auto_graph_replay=1):
+        with pytest.raises(RuntimeError, match="JT_AUTO_GRAPH_REPLAY=0"):
+            flash_attn._require_explicit_graph_ownership(True)
+        flash_attn._require_explicit_graph_ownership(False)
+    with jt.flag_scope(auto_graph_replay=0):
+        flash_attn._require_explicit_graph_ownership(True)
 
 
 @pytest.fixture(scope="module")
@@ -166,6 +180,109 @@ class TestHeadSizeDeclaration(unittest.TestCase):
             module.FlashAttentionBackend.get_kv_cache_shape(3, 16, 5, 7),
             (3, 2, 16, 5, 7))
         module.FlashAttentionBackend.validate_head_size(16)
+
+
+class TestDirectAllReduce(unittest.TestCase):
+    @staticmethod
+    def _module(calls, group_size=2):
+        module = types.ModuleType(
+            "vllm.distributed.device_communicators.cuda_communicator")
+
+        class Value:
+            def __init__(self, name):
+                self.name = name
+
+            def clone(self):
+                calls.append((self.name, "clone-holder"))
+                return Value(self.name + "-holder")
+
+            def update(self, value):
+                calls.append((self.name, "update", value.name))
+                self.name = value.name
+
+            def out_hint(self):
+                calls.append((self.name, "out-hint"))
+                return self
+
+        class Group:
+            def _all_reduce(self, value, operation):
+                calls.append((value.name, operation))
+                return Value("native-result")
+
+            def size(self):
+                return group_size
+
+        class CudaCommunicator:
+            def __init__(self, pynccl=None):
+                self.pynccl_comm = pynccl
+                self.device_group = Group()
+
+            def all_reduce(self, value):
+                return ("fallback", value)
+
+        module.CudaCommunicator = CudaCommunicator
+        module.Value = Value
+        return module
+
+    def test_native_out_of_place_result_is_returned_without_a_copy(self):
+        calls = []
+        module = self._module(calls)
+        self.assertTrue(backend.patch_cuda_all_reduce(module))
+        source = module.Value("input")
+        result = module.CudaCommunicator().all_reduce(source)
+        self.assertIsNot(result, source)
+        self.assertEqual(result.name, "native-result")
+        self.assertEqual(calls, [
+            ("input", "sum"),
+            ("native-result", "out-hint"),
+        ])
+        self.assertFalse(backend.patch_cuda_all_reduce(module))
+
+    def test_larger_group_retains_holder_publication(self):
+        calls = []
+        module = self._module(calls, group_size=4)
+        with patch.dict(os.environ,
+                        {"JITTOR_VLLM_EMPTY_ALL_REDUCE_HOLDER": "0"}):
+            self.assertTrue(backend.patch_cuda_all_reduce(module))
+            source = module.Value("input")
+            result = module.CudaCommunicator().all_reduce(source)
+        self.assertEqual(result.name, "native-result")
+        self.assertEqual(calls, [
+            ("input", "sum"),
+            ("input", "clone-holder"),
+            ("input-holder", "update", "native-result"),
+        ])
+
+    def test_larger_group_uses_empty_holder_without_copying_input(self):
+        import jittor as jt
+
+        calls = []
+        module = self._module(calls, group_size=4)
+        source = module.Value("input")
+        source.shape = (2, 3)
+        source.dtype = "float16"
+        empty = module.Value("empty-holder")
+        with patch.dict(os.environ,
+                        {"JITTOR_VLLM_EMPTY_ALL_REDUCE_HOLDER": "1"}), \
+                patch.object(jt, "empty", return_value=empty) as make_empty:
+            self.assertTrue(backend.patch_cuda_all_reduce(module))
+            result = module.CudaCommunicator().all_reduce(source)
+        make_empty.assert_called_once_with((2, 3), dtype="float16")
+        self.assertEqual(result.name, "native-result")
+        self.assertEqual(calls, [
+            ("input", "sum"),
+            ("empty-holder", "update", "native-result"),
+        ])
+
+    def test_an_enabled_pynccl_backend_keeps_vllms_dispatch(self):
+        calls = []
+        module = self._module(calls)
+        backend.patch_cuda_all_reduce(module)
+        pynccl = types.SimpleNamespace(disabled=False)
+        source = module.Value("input")
+        result = module.CudaCommunicator(pynccl).all_reduce(source)
+        self.assertEqual(result, ("fallback", source))
+        self.assertEqual(calls, [])
 
 
 if __name__ == "__main__":

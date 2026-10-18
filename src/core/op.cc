@@ -5,9 +5,19 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include <limits>
+#include <cstdlib>
+#include <cstdio>
+#include <cstdint>
+#include <dlfcn.h>
+#include <functional>
+#include <mutex>
+#include <thread>
+#include <unordered_map>
 
 #include "core/node.h"
 #include "core/op.h"
+#include <algorithm>
+#include <unordered_set>
 #include "core/var.h"
 #include "codegen/op_compiler.h"
 #include "runtime/profiler/profiler.h"
@@ -45,6 +55,96 @@ jit_cache_map<string> jit_key_mapper;
 std::atomic<int64> Op::number_of_lived_ops{0};
 std::atomic<int64> Op::number_of_created_ops{0};
 
+namespace {
+
+struct OpDeathRecord {
+    int64 id = -1;
+    size_t thread = 0;
+    void* caller = nullptr;
+};
+
+struct OpLifetimeRegistry {
+    std::mutex mutex;
+    std::unordered_map<const Op*, int64> live;
+    std::unordered_map<const Op*, OpDeathRecord> last_death;
+};
+
+bool op_lifetime_check_enabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("JT_EXPERIMENTAL_OP_LIFETIME_CHECK");
+        return value && value[0] == '1' && value[1] == '\0';
+    }();
+    return enabled;
+}
+
+OpLifetimeRegistry& op_lifetime_registry() {
+    // Exit-time Jittor cleanup may still destroy operators.
+    static auto* registry = new OpLifetimeRegistry();
+    return *registry;
+}
+
+void note_op_created(const Op* op) {
+    if (!op_lifetime_check_enabled()) return;
+    auto& registry = op_lifetime_registry();
+    std::lock_guard<std::mutex> guard(registry.mutex);
+    registry.live[op] = op->id;
+}
+
+void note_op_destroyed(const Op* op, void* caller) {
+    if (!op_lifetime_check_enabled()) return;
+    OpDeathRecord record;
+    record.id = op->id;
+    record.thread = std::hash<std::thread::id>{}(std::this_thread::get_id());
+    // Capture the destructor's caller, not this helper's caller. The latter
+    // always resolves to Op::~Op and cannot identify the owning release path.
+    record.caller = caller;
+    auto& registry = op_lifetime_registry();
+    std::lock_guard<std::mutex> guard(registry.mutex);
+    registry.live.erase(op);
+    registry.last_death[op] = record;
+}
+
+} // namespace
+
+void debug_check_op_lifetime(const Op* op) {
+    if (!op_lifetime_check_enabled()) return;
+    auto& registry = op_lifetime_registry();
+    OpDeathRecord death;
+    bool has_death = false;
+    int64 live_id = -1;
+    {
+        std::lock_guard<std::mutex> guard(registry.mutex);
+        auto live = registry.live.find(op);
+        if (live != registry.live.end()) live_id = live->second;
+        auto dead = registry.last_death.find(op);
+        if (dead != registry.last_death.end()) {
+            death = dead->second;
+            has_death = true;
+        }
+        // The pointer may already name corrupted/freed storage. The
+        // registry's key is safe to compare; dereferencing op here is not.
+        if (live_id >= 0) return;
+    }
+    std::fprintf(stderr,
+        "JT_OP_LIFETIME_INVALID op=%p live_id=%lld last_dead_id=%lld last_dead_thread=%zu check_thread=%zu last_dead_caller=%p\n",
+        (const void*)op, (long long)live_id,
+        (long long)(has_death ? death.id : -1),
+        has_death ? death.thread : 0,
+        std::hash<std::thread::id>{}(std::this_thread::get_id()),
+        has_death ? death.caller : nullptr);
+    Dl_info symbol = {};
+    if (has_death && death.caller && dladdr(death.caller, &symbol)) {
+        std::fprintf(stderr,
+            "JT_OP_LIFETIME_DEATH_SITE library=%s symbol=%s library_offset=%zu\n",
+            symbol.dli_fname ? symbol.dli_fname : "?",
+            symbol.dli_sname ? symbol.dli_sname : "?",
+            static_cast<size_t>(reinterpret_cast<uintptr_t>(death.caller) -
+                                reinterpret_cast<uintptr_t>(symbol.dli_fbase)));
+    }
+    std::fflush(stderr);
+    std::abort();
+}
+
 // Only Ops with disabled inputs have an entry. Node flag bits record whether
 // an Op has already snapshotted and provide the common no-map-lookup fast path.
 static unordered_map<int64, vector<int64>>& requires_grad_disabled_edges() {
@@ -74,10 +174,16 @@ Op::Op() {
         OpFlags::_amp_nbits);
     number_of_lived_ops++;
     number_of_created_ops++;
+    note_op_created(this);
     notify_node_created(this);
 }
 
 Op::~Op() {
+    void* caller = nullptr;
+    #if defined(__GNUC__)
+    caller = __builtin_return_address(0);
+    #endif
+    note_op_destroyed(this, caller);
     if (flag(OpFlags::_requires_grad_disabled))
         requires_grad_disabled_edges().erase(id);
     number_of_lived_ops--;
@@ -101,6 +207,7 @@ const OpDef& Op::definition() const {
 }
 
 static thread_local int execution_target_override = -1;
+static thread_local bool host_execution_forced = false;
 
 BackendId execution_target_backend() {
     return execution_target_override < 0
@@ -121,6 +228,12 @@ ExecutionBackendScope::ExecutionBackendScope(BackendId backend)
 
 ExecutionBackendScope::~ExecutionBackendScope() { execution_target_override = previous; }
 
+HostExecutionScope::HostExecutionScope() : previous(host_execution_forced) {
+    host_execution_forced = true;
+}
+
+HostExecutionScope::~HostExecutionScope() { host_execution_forced = previous; }
+
 TensorPlacement Op::graph_placement() const {
     for (const auto& edge : _outputs) {
         Var* output = edge.node->var();
@@ -136,6 +249,7 @@ BackendId Op::requested_backend() const {
 }
 
 BackendId Op::execution_backend() const {
+    if (PREDICT_BRANCH_NOT_TAKEN(host_execution_forced)) return BackendId::Cpu;
     const auto requested = requested_backend();
     return flag(OpFlags::_cuda) && requested != BackendId::Cpu
         ? requested : BackendId::Cpu;
@@ -210,6 +324,20 @@ Var* Op::create_output(NanoVector shape, NanoString dtype) {
 static inline bool is_pending_scalar(Var* v) {
     return !v->is_finished() && v->flag(VarFlags::_is_scalar)
         && !v->flag(VarFlags::_placement_published);
+}
+
+// A Python number an operator was handed -- the `1.0` in `1.0 - mask` --
+// possibly cast or broadcast since: a constant, which no gradient flows into.
+// Neither a scalar computed from a tensor (`x.sum()`) nor a 0-d tensor the
+// caller made (`torch.tensor(2.0, requires_grad=True)`) is one.
+static bool is_constant_scalar(Var* v) {
+    for (;;) {
+        if (v->flag(VarFlags::_python_number)) return true;
+        if (!v->flag(VarFlags::_is_scalar)) return false;
+        Op* op = v->input();
+        if (!op || op->inputs().size() != 1) return false;
+        v = op->inputs().front();
+    }
 }
 
 // Move a pending scalar, and the pending subgraph that produces it, onto
@@ -324,7 +452,14 @@ void Op::init() {
             has_disabled_input |= disabled;
             has_first_order_only_input |=
                 v->flag(VarFlags::_first_order_only);
-            all_inputs_stopped &= disabled || v->is_stop_grad();
+            // Under torch's rule a Python scalar never asks for a gradient,
+            // so `1.0 - mask` does not either. Counted as one, it made every
+            // float attention mask Transformers builds "require grad", and
+            // the fused attention kernels, which take no mask gradient,
+            // declined it for the O(L^2) math path.
+            all_inputs_stopped &= disabled || v->is_stop_grad()
+                || (autograd_policy.stop_outputs_when_inputs_stopped
+                    && is_constant_scalar(v));
         }
         if (has_disabled_input) {
             set_flag(OpFlags::_requires_grad_disabled);
@@ -365,6 +500,70 @@ void Op::init() {
                 v->set_stop_grad();
             }
         }
+    }
+}
+
+void order_after_readers(Op* op, const vector<Var*>& written) {
+    // A view of a written var reads it wherever its own readers do, so their
+    // readers count too: an output still asking to share its storage
+    // (`share_src`) or one already in its share ring -- a broadcast's expand
+    // that has run and left the graph, whose consumer has not.
+    vector<Var*> aliases;
+    auto alias = [&](Var* v) {
+        if (std::find(aliases.begin(), aliases.end(), v) == aliases.end())
+            aliases.push_back(v);
+    };
+    for (Var* v : written) alias(v);
+    vector<Node*> after;
+    for (size_t k = 0; k < aliases.size(); k++) {
+        Var* v = aliases[k];
+        if (v->share_next)
+            for (Var* member = v->share_next; member != v; member = member->share_next)
+                alias(member);
+        for (Op* reader : v->outputs()) {
+            if (reader == op) continue;
+            bool stands_for_reader = false;
+            for (Var* out : reader->outputs()) {
+                if (out->share_src == v) {
+                    alias(out);
+                    continue;
+                }
+                // A pending reader: its first unfinished output stands for it.
+                if (stands_for_reader || out->is_finished()) continue;
+                stands_for_reader = true;
+                if (std::find(after.begin(), after.end(), out) == after.end())
+                    after.push_back(out);
+            }
+        }
+    }
+    if (after.empty()) return;
+    // A reader upstream of the op -- the forward a gradient is computed
+    // from -- is ordered already by the data it feeds it, and an edge would
+    // only keep its output alive until the update: a captured step, whose
+    // whole forward is pending when the optimizer is built, held every
+    // activation to the end, half as much memory again.
+    std::unordered_set<Op*> upstream;
+    vector<Node*> stack;
+    for (auto& edge : op->_inputs) stack.push_back(edge.node);
+    while (!stack.empty()) {
+        Node* v = stack.back();
+        stack.pop_back();
+        if (v->is_finished()) continue;
+        Op* producer = ((Var*)v)->input();
+        if (!producer || !upstream.insert(producer).second) continue;
+        for (auto& edge : producer->_inputs) stack.push_back(edge.node);
+    }
+    size_t kept = 0;
+    for (Node* out : after)
+        if (!upstream.count(((Var*)out)->input())) after[kept++] = out;
+    after.resize(kept);
+    if (after.empty()) return;
+    op->add_inputs(after);
+    // Control edges: they order the two ops and carry no data.
+    auto edge = op->_inputs.end();
+    for (size_t i = 0; i < after.size(); i++) {
+        edge = std::prev(edge);
+        edge->reverse().index = -1;
     }
 }
 

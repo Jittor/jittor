@@ -18,6 +18,7 @@ from collections.abc import Sequence, Iterable
 
 _causal_mask_cache = OrderedDict()
 _causal_mask_cache_limit = 16
+_fia_prefill_mask = [None]
 
 
 from ._code import acl_code as flashattention_cmd
@@ -261,6 +262,45 @@ def _compressed_causal_mask():
     return _causal_mask(2048, 2048)
 
 
+def fused_infer_prefill_attention_acl(query, key, value, scale, causal=True,
+                                     query_lengths=None):
+    """Experimental BF16 FIA prefill with explicit packed-request boundaries.
+
+    This is deliberately a separate dispatch operation. The ordinary ACL SDPA
+    path and its training/backward behavior are not changed by this prototype.
+    """
+    if not (compiler.has_acl and jt.flags.use_cuda and jt.flags.use_acl
+            and getattr(jt.flags, "no_grad", 0) and causal):
+        return None
+    if not all(isinstance(tensor, jt.Var) for tensor in (query, key, value)):
+        return None
+    q_shape, k_shape, v_shape = tuple(query.shape), tuple(key.shape), tuple(value.shape)
+    if not (len(q_shape) == len(k_shape) == len(v_shape) == 3
+            and k_shape == v_shape and q_shape[0] == k_shape[0]
+            and 1 < q_shape[0] <= 2048 and q_shape[2] == k_shape[2]
+            and k_shape[1] > 0
+            and q_shape[1] % k_shape[1] == 0):
+        return None
+    if any(_jittor_dtype_name(tensor.dtype) != "bfloat16"
+           for tensor in (query, key, value)):
+        return None
+    ends = ([int(q_shape[0])] if query_lengths is None
+            else [int(end) for end in query_lengths])
+    if (not 1 <= len(ends) <= 4 or ends[-1] != int(q_shape[0])
+            or any(end - start <= 1
+                   for start, end in zip([0] + ends[:-1], ends))):
+        return None
+    if _fia_prefill_mask[0] is None:
+        _fia_prefill_mask[0] = jt.array(
+            np.triu(np.ones((2048, 2048), dtype=np.int8), 1))
+    output = flashattention_cmd(
+        "FusedInferPrefill", [query, key, value, _fia_prefill_mask[0]],
+        output_dtypes=[query.dtype], output_shapes=[q_shape],
+        attributes={"scale": float(scale), "actualSeqLengths": ends},
+    )
+    return output[0]
+
+
 def scaled_dot_product_attention_acl(
     query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, enable_gqa=False
 ):
@@ -288,7 +328,15 @@ def scaled_dot_product_attention_acl(
         query.dtype
     ) != _jittor_dtype_name(value.dtype):
         return None
-    if _jittor_dtype_name(query.dtype) not in ("float32", "bfloat16"):
+    # aclnnFlashAttentionScoreV2 forwards q's own dtype for its output
+    # (FlashAttentionACL.__call__ passes output_dtypes=[..., q.dtype]) and
+    # does not reject float16 itself -- verified directly against a numpy
+    # reference for both self-attention and cross-attention (mismatched
+    # query/key-value length) shapes, max_abs_diff ~2e-5, far inside fp16
+    # noise. SD1.5's UNet runs its attention in float16 and was rejected
+    # here, falling through to a decomposed BatchMatMul+Softmax+BatchMatMul
+    # that was 19%+22% of sd15_sample's device time in an aclprof capture.
+    if _jittor_dtype_name(query.dtype) not in ("float32", "bfloat16", "float16"):
         return None
 
     query_heads = int(q_shape[-3])
@@ -311,6 +359,7 @@ def scaled_dot_product_attention_acl(
         return None
 
     real_shift = None
+    bool_atten_mask = None
     if attn_mask is not None:
         if is_causal or not isinstance(attn_mask, jt.Var):
             return None
@@ -319,23 +368,45 @@ def scaled_dot_product_attention_acl(
         if training and attn_mask.requires_grad:
             return None
         mask_dtype = _jittor_dtype_name(attn_mask.dtype)
-        if _jittor_dtype_name(mask_dtype) != "float32":
+        if mask_dtype not in ("float32", "bool"):
+            return None
+        # A float (non-bool) mask is the additive "pse" slot, and aclnn
+        # requires its dtype to exactly equal the attention output's (the
+        # query's) dtype -- confirmed on a 910B3 with bfloat16 q/k/v and a
+        # float32 mask: AclNN_Parameter_Error(EZ1001), "The data type
+        # DT_FLOAT of pse is not equal to the data type DT_BFLOAT16 of
+        # attentionOut." This was already reachable before float16 was
+        # accepted below (any non-float32 query already hit it), just never
+        # exercised by a test; reject the mismatch instead of crashing.
+        if mask_dtype == "float32" and _jittor_dtype_name(query.dtype) != "float32":
             return None
         mask_shape = tuple(attn_mask.shape)
         if len(mask_shape) == 2:
             mask_shape = (1, 1) + mask_shape
-            real_shift = attn_mask.reshape(mask_shape)
+            reshaped = attn_mask.reshape(mask_shape)
         elif len(mask_shape) == 4:
-            real_shift = attn_mask
+            reshaped = attn_mask
         else:
             return None
         target_shape = (int(q_shape[0]), query_heads, query_length, source_length)
         if any(actual not in (1, expected) for actual, expected in zip(mask_shape, target_shape)):
             return None
         if mask_shape != target_shape:
-            real_shift = real_shift.broadcast(target_shape)
+            reshaped = reshaped.broadcast(target_shape)
+        if mask_dtype == "bool":
+            # Torch's SDPA boolean mask is True where attention is kept
+            # ("the element should take part in attention"). CANN's
+            # attenMask marks positions to drop instead -- _causal_mask
+            # below is True on the strictly-upper triangle, the future
+            # positions causal attention must drop. Invert once so a
+            # caller-supplied bool mask lands in the same convention as
+            # the causal mask this kernel already builds and passes
+            # through the identical attenMask slot.
+            bool_atten_mask = jt.logical_not(reshaped)
+        else:
+            real_shift = reshaped
 
-    causal_mask = None
+    causal_mask = bool_atten_mask
     sparse_mode = 0
     if is_causal:
         if query_length != source_length:

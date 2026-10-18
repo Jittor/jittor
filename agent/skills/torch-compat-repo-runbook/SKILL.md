@@ -26,7 +26,7 @@ description: 为一个下游 Torch 生态库写"在 jittor shim 上跑 + 与原�
 | `## 对拍` | 同权重同输入；精度口径；速度口径；device 规则 |
 | `## 断点与分流` | 已知断点，每条标注 core / `jittor.compat.torch` / adapter |
 | `## 坑与假绿` | 本库特有的坑，以及**看起来像成功**的失败 |
-| `## 证据` | 结果落在哪，以及**本机实测 vs 仅报告推导**的分界 |
+| `## 证据` | 结果落在哪，以及**实测 vs 仅报告推导**的分界 |
 
 ## 二、两个解释器
 
@@ -68,9 +68,9 @@ oracle 产出权重和参考值，shim 从同一份权重重算。
 1. **精度的相对误差别按数组自己的量级除。** 一个接近 0 的梯度会报出 ~1 的相对误差，
    而绝对误差其实只有 1e-5——把正确结果读成失败。用整个场的最大量级做分母。
 2. **显存必须同口径比，两侧都问运行时自己。** 不外部采样：
-   `nvidia-smi --query-compute-apps` 在本机不列出该进程（容器 pid 映射），按 GPU 的
+   `nvidia-smi --query-compute-apps` 在容器里不列出该进程（pid 映射），按 GPU 的
    `memory.used` 又含同租户。两侧都问运行时自己：torch 用 `max_memory_allocated` /
-   `max_memory_reserved`；shim 侧 `torch.cuda.max_memory_allocated()` 恒为 0（本机实测），
+   `max_memory_reserved`；shim 侧 `torch.cuda.max_memory_allocated()` 恒为 0（实测），
    要用 `jt.core.device_memory_used(N)` / `device_memory_reserved(N)`。
    **不要**用 `jt.get_mem_info().total_cuda_used`：它是 used+cached-free 且对所有设备求和
    （`mem_info.cc`），跟 `max_memory_allocated` 比是 reserved 对 allocated，会把 jittor
@@ -97,7 +97,7 @@ oracle 产出权重和参考值，shim 从同一份权重重算。
 
 ```bash
 source <lab>/env-jittor.sh
-REAL_TORCH_PYTHON=<oracle>/bin/python "$VENV/bin/python" \
+REAL_TORCH_PYTHON=<real-torch-python> <jittor-python> \
   agent/skills/torch-compat-repo-runbook/scripts/verify_repo.py \
   --repo transformers --device cuda --repeats 5 \
   --out "$JITTOR_LAB_ROOT/_state/<topic>/verify/transformers"
@@ -107,7 +107,7 @@ REAL_TORCH_PYTHON=<oracle>/bin/python "$VENV/bin/python" \
 - 输出 `verify-report.json`，每个 case 一行：精度、显存、速度、fallback、device 一致性。
 - case 名用下划线而发行版用连字符（`ms-swift` → `ms_swift_lora_llama`），脚本已归一化。
 
-## 五、本机没有该库时
+## 五、验证环境没有该库时
 
 `pip` 可用的机器上，把下游依赖装到一个**独立目录**当包站，再让两侧都指过去
 （`JITTOR_ECOSYSTEM_PACKAGE_SITE` / `JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE`）：
@@ -138,7 +138,7 @@ CPython minor 版本不同时默认拒绝共享包站，确实只走稳定 ABI �
    开的，必须显式关。
 3. **两侧版本不同**：比的是两个库，不是两个 runtime。
 4. **签名齐全的 no-op**：见 [`torch-shim-noop-audit`](../torch-shim-noop-audit/SKILL.md)。
-5. **只报告不测试**：runbook 里的命令没在本机跑过，就标"未验证"，别写成既成事实。
+5. **只报告不测试**：runbook 里的命令没实际跑过，就标"未验证"，别写成既成事实。
 
 ## 七、落盘
 
@@ -146,4 +146,4 @@ CPython minor 版本不同时默认拒绝共享包站，确实只走稳定 ABI �
   Owner / Review when，以及环境、命令、结果、边界。
 - 原始日志、包站、缓存、`verify-report.json` 留在 `$JITTOR_LAB_ROOT/_state/<topic>/`，
   不进主仓库。
-- 加新 runbook 时，同时在该库 skill 的 `## 证据` 里写清"本机实测"还是"报告推导"。
+- 加新 runbook 时，同时在该库 skill 的 `## 证据` 里写清"实测"还是"报告推导"。

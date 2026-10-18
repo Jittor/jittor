@@ -24,24 +24,57 @@ Jittor 用 pytest 作为仓库的测试运行器，同时保留兼容的 `unitte
 
 ## 目录布局
 
+仓库有三个测试根，共用一份 pytest 策略：
+
 ```text
-tests/
+tests/                    # 原生测试根
+├── conftest.py           # 薄适配层：注册 _helpers.pytest_policy
 ├── _fixtures/            # 版本化的测试数据
-├── _helpers/             # 显式的共享测试工具
+├── _helpers/             # 显式的共享测试工具（进程模式、门禁范围、子进程、能力探测等）
 ├── opinfo/               # 算子元数据、样本、参考、skip 策略
 ├── ops/                  # 通用 OpInfo 前向与梯度批测
-├── backends/             # CPU/CUDA/ROCm/NPU 与跨设备一致性
-├── compiler/             # JIT/编译器行为与 kernel 陷阱
-├── core/                 # 张量、dtype、图与自动微分契约
-├── nn/                   # 神经网络算子与模块
-├── optim/                # 优化器契约
-├── distributed/          # MPI 与分布式行为
-├── compat/               # 兼容接口与导入行为
-├── integration/          # notebook 与跨组件工作流
-├── structure/            # 仓库、打包与静态契约
-├── models/               # 维护中的模型级测试
-└── system/               # 进程/环境集成测试
+├── autograd/ core/ type/ mem/ runtime/ bindings/   # 原生图、dtype、内存、运行时与绑定
+├── codegen/              # 生成代码、pass 与 tuner
+├── build/                # Python 构建与编译工具
+├── nn/ optim/ init/ linalg/ distributions/ serialization/ data/ contrib/ models/
+├── backends/             # 镜像 backends/{cpu,cuda,acl,rocm,corex,comm}，外加 parity/ 跨设备一致性
+├── distributed/          # 原生启动模式下的分布式行为
+├── debug/ utils/ tools/  # 诊断、通用工具与仓库工具
+├── integration/          # 示例、notebook 与跨组件工作流
+└── structure/            # 仓库、打包与静态契约
+compat/tests/             # 可选 jittor-torch 项目的测试根
+├── torch/                # Torch 模式下真跑张量的行为测试
+├── structure/            # 名字归属与命名空间发布的结构契约
+├── fsdp2/                # FSDP2
+└── triton/               # Triton 桥
+adapters/tests/           # 第三方 adapter（含 vllm/）
 ```
+
+三个根都经由薄 conftest 加载 `tests/_helpers/pytest_policy.py`。helper 是 monorepo 的
+开发依赖：**Jittor 与 compat 的 wheel 都不安装任何测试包**，跑 `compat/tests` 需要带着
+`tests/_helpers` 的完整 checkout；独立的 adapter sdist 在缺少这个目录时仍能跑它自己的
+主机测试。
+
+结构契约按源码域放在 `tests/structure/<源码域>`，跨域的仓库治理留在 `tests/structure`
+根上；compat 拥有的结构测试在 `compat/tests/structure`。ACL dtype 记录器
+（`tests/structure/backends/acl/test_acl_dtype_preservation.py`）是 CPU mock 契约，带显式
+的原生进程例外，**不继承**真 ACL 硬件测试的 fallback fixture 与 `npu` marker。
+`tests/core/test_setitem.py` 有意保留在这个路径。
+
+**进程模式属于每个文件，不属于它所在的目录。** 权威选择在
+`tests/_helpers/process_modes.py`，完整 runner 经 `tests/_helpers/gate_scope.py` 从中推出
+原生与 Torch 两个选择集；没有按 argv 激活的机制。硬件 marker 由路径推出：路径含 `acl`
+的带 `npu`，含 `distributed`、`comm` 或 `fsdp2` 的带 `mpi`，`structure` 下的带
+`structure`。
+
+`nox -s full` 或 `tools/run_test_suite.py` 跑双进程完整套件；`nox -s structure` 包含各
+结构根与 adapter 的结构契约，并单独运行原生 CPU 记录器。直接选择用例时用物理路径。
+
+**生成输入的确定性跨越了布局搬迁。** `tests/_helpers/layout_seed_paths.json` 记录搬迁前的
+旧路径；`layout_seed.seed_nodeid` 只在输入生成器对键做哈希之前把新路径换回旧前缀（保留
+类、方法与参数化后缀），所以搬过家的用例生成与搬迁前相同的输入。新文件与新方法用新的
+规范路径；复用旧方法名的新类、以及名字恰好与旧生成器前缀相同的新显式方法，都算新用例。
+pytest nodeid、日志、选择器、失败报告与覆盖率**从不**被这张映射改写。
 
 测试模块可以经由为套件配置的 pytest Python 路径导入 `tests/_helpers` 和 `tests/opinfo`。
 **不得把另一个测试模块当作隐式的 helper API 导入。** 共享工具若含有非平凡的比较或设备
@@ -128,7 +161,7 @@ NumPy 或数学参考比对。
 | [`tests/structure/torch_api_manifest.json`](https://github.com/Jittor/jittor/blob/master/tests/structure/torch_api_manifest.json) 与其门禁 | Torch 面的 1295 个名字**还在不在** |
 | [`tests/_helpers/api_coverage.py`](https://github.com/Jittor/jittor/blob/master/tests/_helpers/api_coverage.py)（`JITTOR_API_COVERAGE=1`） | 一次运行**真的调用**了哪些入口 |
 | [`tools/api_coverage_ratchet.py`](https://github.com/Jittor/jittor/blob/master/tools/api_coverage_ratchet.py) 与两份基线 | 没被调用的那个集合**有没有变大** |
-| [`tools/opinfo_dtype_gaps.py`](https://github.com/Jittor/jittor/blob/master/tools/opinfo_dtype_gaps.py) | 哪些 (算子, dtype) **跑得通却没声明** |
+| [`tools/probes/opinfo_dtype_gaps.py`](https://github.com/Jittor/jittor/blob/master/tools/probes/opinfo_dtype_gaps.py) | 哪些 (算子, dtype) **跑得通却没声明** |
 
 覆盖测量默认关闭：包装每个公开入口是诊断，不是常态。它用开/关对照验证不改变被测
 系统——原生 `tests/ops/test_where_op.py` 开关两侧同为 18 passed，Torch 会话在排除
@@ -177,6 +210,29 @@ CUDA 卡，于是在单卡与 CPU 机器上整体跳过，报告里和四条通�
 "设备数量不够"由 `insufficient-devices` 单独计数并在汇总里点名，与"没有加速器"
 区分开——前者是硬件在场却仍丢掉的覆盖，不是环境事实。
 
+## 运行时内省：测试该读什么
+
+测试与共享 pytest 策略通过 [`jt.introspection`](../notes/runtime-introspection.md)
+观察能力、策略与计数，而不是直接读原生 flag 或编译器属性。迁移时保留的是**测试真正在问
+的那个问题**：
+
+| 旧读法 | 受支持的替代 | 边界 |
+| --- | --- | --- |
+| `jt.compiler.has_cuda`、按 `jt.flags.use_cuda` 跳过加速器用例 | `jt.introspection.capabilities.backend("cuda")` | 先检查 failed，再按 disabled/absent 跳过 |
+| 按后端名调 `core.get_device_count()` | `jt.introspection.capabilities.devices(name)` | 区分 FAILED/UNPROBED 与 0 |
+| `compile_extern.cudnn_ops is not None` 之类的库检查 | `jt.introspection.capabilities.library("cudnn")` | UNPROBED 不等于不可用 |
+| 当前的 `jt.flags.use_cuda`、`amp_reg`、`no_grad`、精度读取 | `jt.introspection.policy.runtime.<name>` | 保持生效策略的语义 |
+| `jt.flags.cache_path` 与编译器配置读取 | `jt.introspection.policy.startup.<name>` | 不可变的启动配置 |
+| `jt.flags.exec_called` | `jt.introspection.counters.exec_calls` | 不隐式执行图 |
+| `stat_allocator_total_alloc_byte` 及对应的调用/释放计数 | `jt.introspection.counters.allocator.*` | 插桩模式与重置语义要紧 |
+| `number_of_lived_vars/ops`、`number_of_hold_vars`、`liveness_info()` | `jt.introspection.counters.live_vars/live_ops/held_vars` | 不隐式 GC |
+| 给 flag 赋值 | 可逆时用 `jt.runtime.scope(...)` | 写入不属于内省 |
+
+**例外是显式登记的。** 那些本身就在验证原生 setter、注册内部或绑定生成的测试，保留对
+它们所测实现的直接访问；这些文件连同理由登记在
+`tests/_helpers/introspection_exceptions.json`。这份登记表目前没有门禁读取，新增例外时
+同步更新它，别让它成为又一份单向的清单。
+
 ## 测试分类与 marker
 
 Marker 在 [`pyproject.toml`](https://github.com/Jittor/jittor/blob/master/pyproject.toml)
@@ -196,6 +252,41 @@ Marker 在 [`pyproject.toml`](https://github.com/Jittor/jittor/blob/master/pypro
 
 **使用适用范围最窄的 marker。** 硬件测试要探测真实运算，**不得在 CPU 上静默通过**。
 network 与 manual 测试要在模块 docstring 里说明其外部要求。
+
+## 可选 fixture 与手动脚本
+
+有些覆盖需要机器上恰好有的东西——一份数据集、一份 checkpoint、一个独立的 PyTorch。
+这些入口**一律显式**：不设就按具体前置条件 skip，**绝不悄悄换成一个弱一点的检查**。
+
+| 变量 | 谁读它 | 不设时 |
+| --- | --- | --- |
+| `JITTOR_TEST_IMAGENET_TRAIN` | ImageNet 布局的训练目录（每类一个子目录）。`tests/data/test_dataset.py` 用它验证多 worker `Dataset` 与 `num_workers=0` 的逐 batch 一致；`tests/data/test_image_folder.py` 再加上可选的 `torch`/`torchvision`，把 Jittor 的 `ImageFolder` 与 `torchvision` 的对齐 | 整个用例类 skip，reason 指名该变量 |
+| `REAL_TORCH_SITE` | 进程内的独立 PyTorch oracle（见上文"进程模式隔离"） | 跳过可选的 PyTorch 对比；**已部署的 shim 不顶替它** |
+| `QWEN3_0_6B` | `tests/backends/acl/manual/xcheck/qwen_logits.py` 的 Qwen3-0.6B checkpoint 目录。该脚本在真实 torch 与 Jittor shim 下各 dump 一次下一个 token 的 logits，再由 `compare.py` 对位 | 脚本直接报 `KeyError` 退出——它是 `manual`，不由门禁调度 |
+
+`tests/backends/acl/manual/` 下的脚本（GPT-2 的前向/梯度对位、Qwen3 的 logits 对位）
+需要真实昇腾设备，**手动运行**，用法与已验证的结果见该目录的 README；设备侧的配置见
+[昇腾 910B 指南](../guides/ascend-910b.md)。
+
+## 维护者探针
+
+[`tools/probes/`](https://github.com/Jittor/jittor/blob/master/tools/README.md) 下是**扫描**，
+不是测试：它们不断言一条性质然后变红，而是把两个本应相等的东西放在一起、把不一致全部
+打出来，供人判断。输出是问题总账条目引用的证据，因此**不进门禁**，由维护者按需运行。
+
+| 探针 | 拿什么和什么比 |
+| --- | --- |
+| `adversarial_device_sweep.py` | 整个 OpInfo 数据库在 NaN、±inf、±0、ties、次正规数上的 CPU 与 CUDA 结果 |
+| `equivalent_form_sweep.py` | 同一个量的两种写法 |
+| `fusion_consistency_sweep.py` | 同一个表达式开融合与 `no_fuse` 两次求值 |
+| `roundtrip_consistency_sweep.py` | 保存-重载-重算的往返，以及 `no_grad` 与普通前向 |
+| `semantic_divergence_probe.py` | 两种合理实现真会分歧的那些 dtype 与边界语义 |
+| `side_effect_probe.py` | 只被要求"读"的操作改了什么（`a.numpy()` 迁走了 `a` 本身） |
+| `opinfo_dtype_gaps.py` | 哪些 (算子, dtype) 跑得通却没声明（见上文覆盖面一节） |
+| `error_message_probe.py` | 用户真会犯的错当前收到的**原文**；两次运行的 diff 就是该次改动的验收记录 |
+
+这些扫描**不需要外部参考值**——这正是它们能指向没有参考实现的表达式的原因。需要外部
+参考的那一类（把解析梯度比到差分商）已经试过并被放弃：它产出的每一条都是参考本身不对。
 
 ## Skip 与已知失败
 
@@ -274,7 +365,7 @@ collected/executed 计数，于是「完成了但悄悄收集得更少」也可�
 会解析到哪里"）也走 helper，写成 `child_env(..., repo_paths=False)`——一个读起来像
 疏忽的例外无法和疏忽区分开。
 
-**光传对树还不够，设备也要传，而且要自证。** `tools/roundtrip_consistency_sweep.py`
+**光传对树还不够，设备也要传，而且要自证。** `tools/probes/roundtrip_consistency_sweep.py`
 的子进程一直没设 `use_cuda`，靠默认值——而**全新进程里 `use_cuda` 默认是 0，即便机器上
 有八张卡**。于是 `--device cuda` 那一档比的是「CUDA 父进程」对「CPU 子进程」，把两个
 设备的差异当成了序列化缺陷。它一直报 OK，是因为在 `-Ofast` 下这个模型在两个设备上

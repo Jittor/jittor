@@ -7,6 +7,7 @@ import numpy as np
 
 import jittor as jt
 import jittor.nn.serving_ops as serving_ops
+from tests._helpers import capability as _test_capability
 from jittor._runtime.dispatch import dispatch_context, override_kernel
 
 
@@ -42,6 +43,16 @@ class TestSiluAndMul(unittest.TestCase):
 
 
 class TestRmsNorm(unittest.TestCase):
+    def test_dual_prefers_one_cuda_kernel(self):
+        marker = (object(), object())
+        arguments = tuple(object() for _ in range(4))
+        with mock.patch.object(
+            serving_ops, "_dual_rms_norm_cuda", return_value=marker
+        ) as cuda_backend:
+            self.assertIs(
+                jt.nn.dual_rms_norm(*arguments, eps=2e-6), marker)
+            cuda_backend.assert_called_once_with(*arguments, 2e-6)
+
     def test_dual_rms_norm_matches_independent_calls(self):
         rng = np.random.RandomState(20260902)
         first = jt.array(rng.randn(2, 3, 8).astype("float32"))
@@ -173,6 +184,55 @@ class TestQkRmsNormRotary(unittest.TestCase):
         self._with_hook(lambda *args: None)
         self.assertTrue(jt.nn.has_qk_rms_norm_rotary())
         self.assertIsNone(jt.nn.qk_rms_norm_rotary(*([None] * 10)))
+
+
+@unittest.skipIf(
+    not _test_capability.check_accelerator("cuda", backend=jt).enabled,
+    "no usable CUDA in this build",
+)
+class TestQkRmsNormRotaryCuda(unittest.TestCase):
+    def setUp(self):
+        self._use_cuda = jt.flags.use_cuda
+        jt.flags.use_cuda = 1
+
+    def tearDown(self):
+        jt.flags.use_cuda = self._use_cuda
+
+    def test_fused_cuda_matches_numpy_reference_for_gqa(self):
+        rng = np.random.RandomState(20261002)
+        tokens, q_heads, k_heads, head_size = 3, 4, 2, 64
+        positions_np = np.array([1, 3, 7], dtype="int32")
+        query = rng.randn(tokens, q_heads * head_size).astype("float16")
+        key = rng.randn(tokens, k_heads * head_size).astype("float16")
+        query_weight = (rng.rand(head_size) + 0.5).astype("float16")
+        key_weight = (rng.rand(head_size) + 0.5).astype("float16")
+        cache = _rope_cache(16, head_size, dtype="float16")
+
+        def reference(packed, weight, heads):
+            values = packed.astype("float32").reshape(tokens, heads, head_size)
+            scale = 1.0 / np.sqrt(np.mean(values * values, axis=-1, keepdims=True) + 1e-6)
+            values = values * scale * weight.astype("float32")[None, None, :]
+            half = head_size // 2
+            selected = cache[positions_np].astype("float32")
+            cos = selected[:, None, :half]
+            sin = selected[:, None, half:]
+            first, second = values[..., :half], values[..., half:]
+            return np.concatenate(
+                [first * cos - second * sin, second * cos + first * sin], axis=-1
+            ).reshape(packed.shape)
+
+        tensors = [
+            jt.array(value).stop_grad()
+            for value in (positions_np, query, key, query_weight, key_weight, cache)
+        ]
+        actual_q, actual_k = jt.nn.qk_rms_norm_rotary(
+            *tensors, head_size, head_size, True, 1e-6)
+        np.testing.assert_allclose(
+            actual_q.numpy(), reference(query, query_weight, q_heads),
+            rtol=3e-3, atol=3e-3)
+        np.testing.assert_allclose(
+            actual_k.numpy(), reference(key, key_weight, k_heads),
+            rtol=3e-3, atol=3e-3)
 
 
 if __name__ == "__main__":

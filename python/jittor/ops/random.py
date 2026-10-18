@@ -3,6 +3,7 @@
 import numpy as np
 import time
 from jittor_core import Var
+from .._core.dtypes import dtype_name as _dtype_name
 
 def bernoulli(input):
     import jittor as jt
@@ -20,6 +21,20 @@ def arange(start=0, end=None, step=1,dtype=None):
     if (l-1)*step+start>=end:
         l-=1
     x = jt.index((l,),0)
+    # A float bound or step makes a floating range (torch and numpy both): do
+    # the arithmetic in floating point before any requested cast. `index` is
+    # int32, and with only `end` fractional -- `arange(1.5)` -- the integer
+    # product made an int32 range; a fractional step that reached the integer
+    # path through a frontend's scalar conversion collapsed to zero.
+    if any(isinstance(value, (float, np.floating)) for value in (start, end, step)):
+        if dtype is not None and _dtype_name(dtype) == "float64":
+            # A Python scalar operand is folded as a float32 constant; keep
+            # start and step in double for a double range, as torch does.
+            x = x.float64()
+            step = jt.array(float(step), dtype="float64")
+            start = jt.array(float(start), dtype="float64")
+        else:
+            x = x.float32()
     x = x*step+start
     if dtype is not None:
         x= x.cast(dtype)
@@ -152,6 +167,14 @@ def multinomial(weights: Var, num_samples: int, replacement: bool=False) -> Var:
         index = one_hot.index(one_hot.ndim - 1) + 1
         return (one_hot * index).sum(-1)
     else:
+        # A backend's own sampler for a single draw -- CANN's on ACL, which
+        # keeps the device generator's stream as torch_npu does; None leaves
+        # it to the A-Res sampler below.
+        if num_samples == 1:
+            from .._runtime.dispatch import try_dispatch
+            drawn = try_dispatch("random.multinomial", weights, num_samples, replacement)
+            if drawn is not None:
+                return drawn
         # A-Res algorithm
         # Pavlos S. Efraimidis and Paul G. Spirakis, 2006, Weighted random sampling with a reservoir
         if num_samples > weights.shape[-1]:
@@ -203,8 +226,9 @@ class CounterGenerator:
     Each nonempty call reserves four counter positions; tensor elements occupy
     independent subsequences. Reserving at construction (not execution) makes
     lazy draws independent of evaluation order. The offset is in 32-bit words
-    and can be restored to replay a whole draw. CPU and CUDA are supported;
-    neither backend draws tensor values on the host for the other backend.
+    and can be restored to replay a whole draw. CPU and CUDA use a native code
+    kernel; ACL currently uses an independent host Philox stream copied to the
+    selected device because ACL cannot compile the CUDA code kernel.
 
     This is a Jittor stream, not PyTorch's launch-geometry-dependent RNG stream.
     """
@@ -252,15 +276,16 @@ class CounterGenerator:
         return self
 
     def uniform_like(self, like, dtype="float32"):
-        """Return device-native uniform samples with ``like``'s shape/device."""
+        """Return uniform samples with ``like``'s shape and device."""
         import jittor as jt
         from .._core.var import device_scope_like
         from .._core.dtypes import dtype_name
         dtype = dtype_name(dtype)
         if dtype not in ("float32", "float64"):
             raise ValueError("CounterGenerator uniform requires float32 or float64")
-        if int(like.placement_backend) not in (-1, 0, 1):
-            raise NotImplementedError("CounterGenerator supports CPU and CUDA")
+        backend = int(like.placement_backend)
+        if backend not in (-1, 0, 1, 2):
+            raise NotImplementedError("CounterGenerator supports CPU, CUDA and ACL")
         shape = tuple(int(v) for v in like.shape)
         count = int(np.prod(shape))
         if count > 2**31 - 1:
@@ -274,6 +299,19 @@ class CounterGenerator:
         with device_scope_like(like):
             if not count:
                 return jt.empty(shape, dtype=dtype)
+            if backend == 2:
+                # Keep the explicit stream reproducible and separate from
+                # jt.random. The ACL path currently requires one host-to-
+                # device transfer for each draw.
+                seed_words = [seed & 0xffffffff, seed >> 32,
+                              (offset // 4) & 0xffffffff, (offset // 4) >> 32]
+                rng = np.random.Generator(np.random.Philox(
+                    np.random.SeedSequence(seed_words)))
+                values = rng.random(count, dtype=np.float64).astype(dtype)
+                values = np.clip(values, np.finfo(values.dtype).tiny,
+                                 np.nextafter(values.dtype.type(1),
+                                              values.dtype.type(0)))
+                return jt.array(values.reshape(shape), dtype=dtype).stop_grad()
             # Only four scalar metadata words cross to the selected device.
             # Capturing them as an immutable input also prevents a later seed
             # reset from changing an already-queued lazy draw.

@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from _helpers.child_process import run_python_child
+from _helpers import pytest_policy
 from _helpers.paths import iter_test_files as all_test_files, relative_test_path
 
 
@@ -66,7 +67,19 @@ _PROHIBITED_COLLECTION_CALL_SUFFIXES = (".exec_module", ".mkdir")
 
 
 def _test_files():
-    return all_test_files()
+    """The files pytest will actually collect.
+
+    A ``test_*.py`` that carries no test at all is refused by
+    ``pytest_policy``, so the collection-time contracts below -- which are
+    statements about what a collected module is allowed to do while it is
+    imported -- are about what is left. Asserting them against a script that
+    is never collected is how one file parked under ``tests/`` turned three
+    gates red at once; the refused set is pinned by
+    ``test_test_named_scripts_are_refused_rather_than_collected`` so a second
+    one cannot appear quietly.
+    """
+    return [path for path in all_test_files()
+            if not pytest_policy._refuses_collection(path)]
 
 
 def _dotted_name(node):
@@ -488,6 +501,15 @@ def test_optional_dependency_probe_only_checks_top_level_packages(monkeypatch):
     from _helpers import torch_runtime
 
     monkeypatch.delenv("REAL_TORCH_SITE", raising=False)
+    # `modules_available` answers False for a `torchvision` that the *shim*
+    # provided, and by the time a whole Torch-session run reaches this file some
+    # other test may well have imported it -- this file is one of many in the
+    # same process, and the full tier does exactly that. (Measured 2026-09-22:
+    # it passed on its own and failed in the tier, and a plugin that merely
+    # imports torchvision reproduces it.) The question here is which names the
+    # probe *asks about*, so hide whatever this process happens to have loaded
+    # instead of assuming a clean interpreter.
+    monkeypatch.delitem(torch_runtime.sys.modules, "torchvision", raising=False)
     checked = []
     independent = SimpleNamespace(__name__="torch")
 
@@ -905,6 +927,68 @@ def _collection_side_effects(relative_text, tree):
                         )
                     )
     return violations
+
+
+#: Every ``test_*.py`` in the tree that defines no test, and is therefore
+#: refused by ``pytest_policy`` instead of being collected. Kept as a set so a
+#: new one is a decision somebody writes here with the file's story, rather
+#: than a name that quietly stops being collected. The last one, a reproduction
+#: script its author ran by path, moved out under the layout rule (standalone
+#: experiments live under ``$JITTOR_LAB_ROOT``).
+_REFUSED_TEST_SCRIPTS = set()
+
+
+def test_test_named_scripts_are_refused_rather_than_collected():
+    """A script named ``test_*.py`` must not be collected as a test.
+
+    The name is the whole collection instruction, so without this the file is
+    imported and whatever its body does becomes a gate failure: an H3
+    reproduction script read ``sys.argv``, opened a checkpoint and built a VAE
+    at module scope, which the native session reported as a collection error on
+    every run and which two scanners below also flagged. Refusing such a file
+    costs nothing -- it could not contribute a test.
+    """
+    refused = {
+        relative_test_path(path).as_posix()
+        for path in all_test_files()
+        if pytest_policy._refuses_collection(path)
+    }
+    assert refused == _REFUSED_TEST_SCRIPTS, (
+        "a test-named file that defines no test is refused instead of "
+        "collected; the difference is %s. Move a script to $JITTOR_LAB_ROOT, "
+        "or add it here with the reason it has to stay where it is."
+        % sorted(refused ^ _REFUSED_TEST_SCRIPTS)
+    )
+
+
+#: Shapes the refusal has to tell apart. Each is a thing pytest does or does
+#: not collect, not a guess: the first two are how a test is written, the third
+#: is a ``unittest.TestCase`` subclass or a project mixin reached through a
+#: base, and the last two have nothing collection could reach.
+_REFUSAL_SHAPES = {
+    "module-level test function": ("def test_x():\n    pass\n", False),
+    "Test-prefixed class": ("class TestX:\n    def test_y(self):\n        pass\n",
+                            False),
+    "class with a base": ("import unittest\n\n\n"
+                          "class Helper(unittest.TestCase):\n    pass\n", False),
+    "helper function only": ("def decode():\n    return 1\n", True),
+    "no definitions at all": ("import sys\nROUNDS = int(sys.argv[1])\n", True),
+}
+
+
+def test_the_script_refusal_only_covers_modules_collection_cannot_use():
+    """The refusal errs in the one direction that cannot hide a test.
+
+    It is the only rule here whose failure mode is *silent*: a file it refuses
+    stops being collected. So the shapes it must not touch are pinned next to
+    the ones it must.
+    """
+    wrong = [
+        name
+        for name, (source, refused) in _REFUSAL_SHAPES.items()
+        if pytest_policy._collects_nothing(ast.parse(source)) is not refused
+    ]
+    assert wrong == [], wrong
 
 
 def test_test_modules_avoid_collection_time_backend_side_effects():
