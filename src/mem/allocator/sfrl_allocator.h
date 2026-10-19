@@ -66,9 +66,11 @@ struct BlockIdSpace {
     // left unusable. With the key a tuple the limit only guards against a
     // corrupted counter; memory runs out long before it.
     static const size_t ID_LIMIT = size_t(1) << 40;
-    // One lock per id space, always taken *inside* the owning allocator's
-    // lock and never the other way round.
-    std::mutex mutex;
+    // Guarded by the owning allocator's lock, not a lock of its own: every way
+    // in -- SFRLAllocator::alloc, free, gc, fence_capture and share_with, and
+    // the pool helpers only they call -- already holds `SFRLAllocator::mutex`.
+    // A second lock here was taken and dropped up to five times per alloc and
+    // free, for nothing it could still exclude.
     // ids released by recycle_block_id, reused before the counter grows
     std::vector<size_t> free_ids;
     size_t tot_block_id = 0;
