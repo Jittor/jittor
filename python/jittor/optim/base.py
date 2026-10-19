@@ -297,11 +297,12 @@ class Optimizer(object):
             if isinstance(x, np.ndarray):
                 return jt.array(x).stop_grad()
             if isinstance(x, jt.Var):
-                # A copy with storage of its own, not `clone()`: a clone is a
-                # view sharing the source's storage, and the fused CUDA
+                # A copy with storage of its own, not the native `clone` op: that
+                # is a view sharing the source's storage, and the fused CUDA
                 # optimizer kernels update their state buffers in place. B
                 # restored from A's state_dict then wrote A's momentum buffer
                 # on every step, and A wrote B's. torch deep-copies here too.
+                # (`Var.clone()` itself copies since then; see tensor_protocol.)
                 return jt.copy(x.contiguous()).stop_grad()
             return x
 

@@ -67,7 +67,10 @@ def array(data, dtype=None):
         data = list(data)                       # NB: `int` is shadowed by the dtype here
     if isinstance(data, core.Var):
         if dtype is None:
-            ret = data.clone()
+            # A new Var over the same storage, as before `Var.clone()` started
+            # copying: `torch.as_tensor` in the compatibility layer aliases
+            # through here.
+            ret = ops.clone(data)
         else:
             ret = cast(data, dtype)
     elif dtype is not None:
@@ -1074,7 +1077,7 @@ def _clamp_cpu(x, min_v=None, max_v=None):
         keep = value >= bound if lower else value <= bound
         result = jt.ternary(keep, value, bound)
         if "float" in _jittor_dtype_name(value.dtype):
-            nan_value = value.clone().stop_grad()
+            nan_value = ops.clone(value).stop_grad()  # read-only: a view is enough
             result = jt.ternary(value != value, nan_value, result)
         return result
 

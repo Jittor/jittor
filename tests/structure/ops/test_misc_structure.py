@@ -27,7 +27,7 @@ _PUBLIC_NAMES = {
     "arange", "arctan2", "atan2", "atleast_1d", "atleast_2d", "atleast_3d",
     "amax", "amin",
     "auto_parallel", "bernoulli", "bfloat16_finfo", "block_diag",
-    "cartesian_prod", "cat", "chunk", "concat", "concatenation", "contiguous",
+    "cartesian_prod", "cat", "chunk", "clone", "concat", "concatenation", "contiguous",
     "cpu", "count_nonzero", "cross", "ctc_loss",
     "cub_cumsum", "cuda", "cummax", "cummin", "cumprod", "cumsum",
     "deg2rad", "diag", "diagonal", "expand", "expm1", "finfo", "flip",
