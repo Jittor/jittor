@@ -247,6 +247,22 @@ struct VarPtr {
     void set_stop_grad(bool stop_grad);
 };
 
+// Some constructors only decide to forward: from their arguments alone they
+// build another value and hand it on (`Op::forward`), and the op itself is
+// deleted unused -- one operator in seven in a DeepMill detect loop, each paying
+// for a full construction. An operator type that can make that decision first
+// declares `static VarPtr forward_before_construct(...)` taking its
+// constructor's arguments, returning the value it would forward to, or null
+// when it has to be constructed after all. Its op maker asks before `new`;
+// for any other operator type this is a null VarPtr and costs nothing.
+template<class OpT, class... Args>
+inline auto forward_before_construct(int, Args&&... args)
+    -> decltype(OpT::forward_before_construct(std::forward<Args>(args)...)) {
+    return OpT::forward_before_construct(std::forward<Args>(args)...);
+}
+template<class OpT, class... Args>
+inline VarPtr forward_before_construct(long, Args&&...) { return VarPtr(); }
+
 std::ostream& operator<<(std::ostream& os, const Var& var);
 std::ostream& operator<<(std::ostream& os, const Var* var);
 std::ostream& operator<<(std::ostream& os, const VarPtr& v);

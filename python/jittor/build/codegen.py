@@ -333,10 +333,19 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags="", backend=None):
         # 4. set op's output
         # 5. set op's input
         # 6. infer shape(op->init())
+        # Ask the operator type, before constructing it, whether its
+        # constructor would only forward (see `forward_before_construct` in
+        # core/var.h). Not for a constructor that takes an argument by move:
+        # the constructor still needs it when the answer is no.
+        pre_forward = "" if any("move(" in arg for arg in op_make_args) else (
+            "{ VarPtr _pre = forward_before_construct<" + op_name + ">(0"
+            + "".join(", " + arg for arg in op_make_args)
+            + "); if (_pre.ptr) return _pre; }")
         if "multiple_outputs" not in attrs:
             jit_cc_src.append(f"""
             VarPtr make_{cc_func_name}({", ".join(cc_make_args)}) {{
                 {storage_setup}
+                {pre_forward}
                 auto _op = new {op_name}({", ".join(op_make_args)});
                 if (_op->outputs_holder.size() != 1) {{
                     delete _op;

@@ -438,6 +438,47 @@ unordered_set<string> binary_ops = {
     "bitwise_xor",
 };
 
+// Only the side that is actually short of the result shape gets a
+// BroadcastToOp. `BroadcastToOp(x, y, {})` answers `need_broadcast` itself and
+// forwards its input when the answer is no -- and when the other operand's
+// shape is known, a dynamic one still needing the op. So building it for an
+// operand that already has the result shape constructs an op purely to throw
+// it away, and one operand is always in that position for the commonest
+// broadcasts there are: `x * 0.5`, `x + bias`, `x * mask`.
+static VarPtr broadcast_binary(Var* x, Var* y, NanoString op) {
+    VarPtr xh, yh;
+    Var* xp = x;
+    Var* yp = y;
+    if (y->num < 0 || BroadcastToOp::need_broadcast(x, y->shape)) {
+        xh = make_broadcast_to(x, y, {});
+        xp = xh;
+    }
+    if (x->num < 0 || BroadcastToOp::need_broadcast(y, x->shape)) {
+        yh = make_broadcast_to(y, x, {});
+        yp = yh;
+    }
+    return make_binary(xp, yp, op);
+}
+
+VarPtr BinaryOp::forward_before_construct(Var* x, Var* y, NanoString op) {
+    // The constructor's shape walk, deciding only whether it broadcasts. A
+    // mismatch is the constructor's to report, with its message.
+    auto xdim = x->shape.size();
+    auto ydim = y->shape.size();
+    bool need_broadcast = xdim != ydim;
+    for (size_t i=0; i<xdim && i<ydim; i++) {
+        auto xshape = x->shape[xdim-i-1];
+        auto yshape = y->shape[ydim-i-1];
+        if ((xshape == 1 || yshape == 1) && (xshape != yshape)) {
+            need_broadcast = true;
+            continue;
+        }
+        if (xshape != yshape) return VarPtr();
+    }
+    if (!need_broadcast) return VarPtr();
+    return broadcast_binary(x, y, op);
+}
+
 BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
     auto xdim = x->shape.size();
     auto ydim = y->shape.size();
@@ -454,27 +495,10 @@ BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
             << "(broadcasting requires matching dims or one of them to be 1).";
     }
     if (need_broadcast) {
-        // Only the side that is actually short of the result shape gets a
-        // BroadcastToOp. `BroadcastToOp(x, y, {})` answers `need_broadcast`
-        // itself and forwards its input when the answer is no -- and when the
-        // other operand's shape is known, a dynamic one still needing the op.
-        // So building it for an operand that already has the result shape
-        // constructs an op purely to throw it away, and one operand is always
-        // in that position for the commonest broadcasts there are: `x * 0.5`,
-        // `x + bias`, `x * mask`.
-        VarPtr xh, yh;
-        Var* xp = x;
-        Var* yp = y;
-        if (y->num < 0 || BroadcastToOp::need_broadcast(x, y->shape)) {
-            xh = make_broadcast_to(x, y, {});
-            xp = xh;
-        }
-        if (x->num < 0 || BroadcastToOp::need_broadcast(y, x->shape)) {
-            yh = make_broadcast_to(y, x, {});
-            yp = yh;
-        }
-        auto zp = make_binary(xp, yp, op);
-        forward(zp);
+        // Reached only when the op is constructed directly: the op maker asks
+        // `forward_before_construct` first, which takes this branch without
+        // building the op at all.
+        forward(broadcast_binary(x, y, op));
         return;
     }
     {
