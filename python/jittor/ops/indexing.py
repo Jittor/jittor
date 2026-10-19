@@ -93,9 +93,21 @@ def var_setitem(x, slices, value, reduce=None):
     return _native_var_setitem(x, slices, value, reduce)
 
 
+def _assignment_backend(x):
+    # `dispatch_context(x).backend`. Every assignment asks it -- twice, once
+    # from `setitem` and once from `var_setitem` -- and reads nothing else, so
+    # the native context answers it without building the dtype names and the
+    # tuple around it. A replaced `dispatch_context` is how a caller states the
+    # device; it has no such shortcut and is asked as before.
+    backend_of = getattr(dispatch_context, "_backend_of", None)
+    if backend_of is not None:
+        return backend_of(x)
+    return dispatch_context(x).backend
+
+
 def _acl_assignment_value(x, value, reduce=None):
     jt = _jt if _jt is not None else _jittor()
-    if reduce not in (None, "void") or dispatch_context(x).backend != "acl":
+    if reduce not in (None, "void") or _assignment_backend(x) != "acl":
         return value
     if not isinstance(value, jt.Var):
         return jt.array(value, dtype=x.dtype).stop_grad()
