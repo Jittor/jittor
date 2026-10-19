@@ -217,7 +217,7 @@ void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, i
     LOGvvv << "Prepare fused_op" << fused_op.ops;
     fused_op.update_ops();
     for (Op* op : fused_op.ops) {
-        uint fid1 = fused_op.op_index.at(op);
+        uint fid1 = fused_op.op_index.get(op);
         int iid = 0;
         for (auto& edge : fused_op.snapshot_inputs(op)) {
             Var* v = edge.first;
@@ -227,11 +227,13 @@ void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, i
             int iop_id;
             int iv_id;
             pair<Op*, int> producer = fused_op.snapshot_producer(v);
-            if (producer.first && fused_op.op_index.count(producer.first)) {
-                iop_id = fused_op.op_index.at(producer.first);
+            int producer_id = producer.first ? fused_op.op_index.get(producer.first) : -1;
+            if (producer_id >= 0) {
+                iop_id = producer_id;
                 iv_id = producer.second;
             } else {
-                iv_id = fused_op.var_index.at(v);
+                iv_id = fused_op.var_index.get(v);
+                ASSERT(iv_id >= 0) << "input var of a fused op was not indexed by update_ops";
                 // add iv_id, prevent iv_id jit key overflow
                 iop_id = fused_op.ops.size() + iv_id;
             }
