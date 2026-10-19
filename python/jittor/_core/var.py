@@ -1037,10 +1037,28 @@ def squeeze(x, dim=None):
 
 Var.squeeze = squeeze
 
+_CLAMP_INT_DTYPES = frozenset(("int8", "int16", "int32", "int64",
+                               "uint8", "uint16", "uint32", "uint64"))
+
 def _clamp_cpu(x, min_v=None, max_v=None):
     import jittor as jt
     if x.numel() == 0:
         return x
+    # An integer tensor between two Python ints in order -- index clamping,
+    # the common call -- needs none of the promotion below. The bounds still
+    # go through `jt.unary` at x's dtype exactly as `prepare_bound` sends
+    # them, and for an integer there is no NaN to carry, so the two selects
+    # are maximum and minimum: the same values and dtype from two ops fewer
+    # per bound. Anything else -- a bool or float tensor, a Var or numpy
+    # bound, reversed bounds -- takes the general path.
+    if type(min_v) is ori_int and type(max_v) is ori_int and min_v <= max_v \
+            and _jittor_dtype_name(x.dtype) in _CLAMP_INT_DTYPES:
+        min_v = jt.unary(min_v, x.dtype).stop_grad()
+        max_v = jt.unary(max_v, x.dtype).stop_grad()
+        result = dispatch_acl_clamp(x, min_v, max_v)
+        if result is not None:
+            return result
+        return jt.minimum(jt.maximum(x, min_v), max_v)
     # Torch allows tensor bounds and reversed scalar bounds. Applying the lower
     # then upper bound also gives Torch's all-max result when min_v > max_v.
 
