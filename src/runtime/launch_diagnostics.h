@@ -47,6 +47,18 @@ EXTERN_LIB LaunchHistory& runtime_launch_history();
 using LaunchOriginCapture = uint64 (*)();
 EXTERN_LIB void set_launch_origin_capture(LaunchOriginCapture capture);
 EXTERN_LIB uint64 capture_launch_origin();
+// One native entry from Python -- a `GraphEntryScope` -- captures its origin
+// once. Inside an entry the Python stack the capture walks cannot change: a
+// callback into Python returns to the same frame, and an op built from inside
+// such a callback goes through a binding, and so an entry, of its own. So every
+// op an entry builds (`x * 2.0` alone is three) has the origin of the first,
+// and the walk -- GIL check, error save/restore, frame chain, two table
+// lookups -- ran once per op for the same answer. `enter` saves the enclosing
+// entry's state into the two values the scope keeps; `leave` restores it. Only
+// a real id is kept: 0 means the table was full, and asking again is what
+// counts the unrecorded capture.
+EXTERN_LIB void enter_launch_origin_entry(bool& outer_active, uint64& outer_origin);
+EXTERN_LIB void leave_launch_origin_entry(bool outer_active, uint64 outer_origin);
 struct LaunchOriginScope {
     uint64 previous;
     explicit LaunchOriginScope(uint64 origin);

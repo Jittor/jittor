@@ -137,19 +137,26 @@ static PyObject* frame_globals(PyFrameObject* f) {
 // object, and the origin of a (code object, instruction) pair never changes.
 // The GIL guards both tables; the code objects are held so their addresses
 // cannot be reused by another.
+//
+// Both answers live in one record per code object, so a frame costs one table
+// lookup. A record is held (and its code object with it) from the first time
+// the code object is seen.
 namespace {
+struct CodeOrigin {
+    bool internal = false;
+    std::unordered_map<int, uint64> lines;
+};
 struct OriginCaches {
-    std::unordered_map<PyObject*, bool> internal;
-    std::unordered_map<PyObject*, std::unordered_map<int, uint64>> origin;
+    std::unordered_map<PyObject*, CodeOrigin> codes;
     PyObject* name_key = nullptr;
 };
 OriginCaches& origin_caches() {
     static OriginCaches* caches = new OriginCaches();  // never freed: outlives the interpreter
     return *caches;
 }
-bool code_is_internal(OriginCaches& caches, PyFrameObject* frame, PyObject* code) {
-    auto found = caches.internal.find(code);
-    if (found != caches.internal.end()) return found->second;
+CodeOrigin& code_origin(OriginCaches& caches, PyFrameObject* frame, PyObject* code) {
+    auto found = caches.codes.find(code);
+    if (found != caches.codes.end()) return found->second;
     if (!caches.name_key) caches.name_key = PyUnicode_InternFromString("__name__");
     PyObject* globals = frame_globals(frame);
     PyObject* module = globals && PyDict_Check(globals) ? PyDict_GetItem(globals, caches.name_key) : nullptr;
@@ -158,8 +165,38 @@ bool code_is_internal(OriginCaches& caches, PyFrameObject* frame, PyObject* code
                              || !strcmp(name, "torch") || !strncmp(name, "torch.", 6));
     Py_XDECREF(globals);
     Py_INCREF(code);
-    caches.internal.emplace(code, internal);
-    return internal;
+    auto& record = caches.codes[code];
+    record.internal = internal;
+    return record;
+}
+
+// The walk over frames the tables already know: it reads frames and looks
+// codes and instructions up, and none of that can raise, so unlike the full
+// walk below it has no error state to save around it. Gives up -- returns
+// false -- at the first code object or instruction not seen before, which the
+// full walk then answers and records.
+bool known_launch_origin(OriginCaches& caches, uint64& result) {
+    PyFrameObject* frame = PyEval_GetFrame(); // borrowed
+    Py_XINCREF(frame);
+    bool known = true;
+    result = 0;
+    for (int depth=0; frame && depth<64; ++depth) {
+        PyObject* code = (PyObject*)PyFrame_GetCode(frame);
+        auto found = caches.codes.find(code);
+        Py_DECREF(code);
+        if (found == caches.codes.end()) { known = false; break; }
+        if (!found->second.internal) {
+            auto line = found->second.lines.find(frame_lasti(frame));
+            if (line == found->second.lines.end()) known = false;
+            else result = line->second;
+            break;
+        }
+        auto* previous = frame;
+        frame = frame_back(frame);
+        Py_DECREF(previous);
+    }
+    Py_XDECREF(frame);
+    return known;
 }
 } // namespace
 #endif
@@ -171,16 +208,17 @@ static uint64 capture_python_launch_origin() {
 #if PY_VERSION_HEX >= 0x03090000
     {
         auto& caches = origin_caches();
+        uint64 result = 0;
+        if (known_launch_origin(caches, result)) return result;
         PyObject *error_type=nullptr, *error_value=nullptr, *error_traceback=nullptr;
         PyErr_Fetch(&error_type, &error_value, &error_traceback);
-        uint64 result = 0;
         PyFrameObject* frame = PyEval_GetFrame(); // borrowed
         Py_XINCREF(frame);
         for (int depth=0; frame && depth<64; ++depth) {
             PyObject* code = (PyObject*)PyFrame_GetCode(frame);
-            if (!code_is_internal(caches, frame, code)) {
-                auto& lines = caches.origin[code];
-                if (lines.empty()) Py_INCREF(code);
+            auto& record = code_origin(caches, frame, code);
+            if (!record.internal) {
+                auto& lines = record.lines;
                 const int lasti = frame_lasti(frame);
                 auto found = lines.find(lasti);
                 if (found != lines.end()) {
