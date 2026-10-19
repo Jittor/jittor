@@ -111,10 +111,38 @@ struct LivenessEntry {
     Node* node;
     LivenessStep step;
 };
-static vector<LivenessEntry>& liveness_queue = *new vector<LivenessEntry>();
+// A growable array with the push written out. Every graph edit pushes here,
+// and both spellings through `std::vector` cost more than the work queued:
+// `push_back({node, step})` builds the entry on the stack and copies it in as
+// one 16-byte load of two narrower stores -- the store-forwarding stall again
+// -- and `emplace_back` is not inlined, so each push was a call through the
+// PLT. Here a push is two stores and an increment; only growing is a call.
+class LivenessQueue {
+    LivenessEntry* data_ = nullptr;
+    size_t size_ = 0, capacity_ = 0;
+    __attribute__((noinline)) void grow() {
+        size_t capacity = capacity_ ? capacity_ * 2 : 256;
+        auto* data = (LivenessEntry*)realloc(data_, capacity * sizeof(LivenessEntry));
+        CHECK(data) << "out of memory growing the liveness queue";
+        data_ = data;
+        capacity_ = capacity;
+    }
+public:
+    inline void push(Node* node, LivenessStep step) {
+        if (PREDICT_BRANCH_NOT_TAKEN(size_ == capacity_)) grow();
+        data_[size_].node = node;
+        data_[size_].step = step;
+        ++size_;
+    }
+    size_t size() const { return size_; }
+    bool empty() const { return size_ == 0; }
+    const LivenessEntry& operator[](size_t i) const { return data_[i]; }
+    void clear() { size_ = 0; }
+};
+static LivenessQueue& liveness_queue = *new LivenessQueue();
 
 static inline void enqueue_liveness(Node* node, LivenessStep step) {
-    liveness_queue.push_back({node, step});
+    liveness_queue.push(node, step);
 }
 static size_t liveness_queue_front = 0;
 
@@ -429,6 +457,12 @@ void Node::own_backward_liveness() {
     }
 }
 
+// One acquisition: each entry point below takes the graph lock once, first,
+// and holds it to the end. The drain and `Node::free` take it again, which is
+// a depth count on a lock this thread already owns, and the steps are queued
+// under it rather than before it. A SetupFreeBuffer is declared after the
+// guard, so its delete round runs inside the same hold.
+//
 // Taking or dropping one more hold on a node that stays alive on all three
 // counts propagates nothing: each step below only moves its counter, and only
 // a move across zero reaches a neighbour. The executor's batch hold and every
@@ -438,17 +472,20 @@ void Node::own_backward_liveness() {
 // counters directly -- the state afterwards is the one the queue would leave.
 // An empty free buffer is part of the condition for the release: the queue
 // path's SetupFreeBuffer would otherwise delete what is waiting in it.
+//
+// Taking the first hold on a node with no edges at all -- every output an op
+// creates, before the op is wired to it -- is the same case: the steps that
+// would cross zero have no neighbour to reach.
 void Node::own_both_liveness() {
     CHECK_EXIST;
-    {
-        std::lock_guard<GraphMutationMutex> guard(graph_mutation_mutex());
-        if (liveness_queue.empty() && liveness.forward.active()
-                && liveness.backward.active() && liveness.pending.active()) {
-            liveness.forward.own();
-            liveness.backward.own();
-            liveness.pending.own();
-            return;
-        }
+    std::lock_guard<GraphMutationMutex> guard(graph_mutation_mutex());
+    if (liveness_queue.empty() && ((liveness.forward.active()
+            && liveness.backward.active() && liveness.pending.active())
+            || (_inputs.empty() && _outputs.empty()))) {
+        liveness.forward.own();
+        liveness.backward.own();
+        liveness.pending.own();
+        return;
     }
     enqueue_liveness(this, LivenessStep::own_forward);
     enqueue_liveness(this, LivenessStep::own_backward);
@@ -458,17 +495,15 @@ void Node::own_both_liveness() {
 
 void Node::release_both_liveness() {
     CHECK_EXIST;
-    {
-        std::lock_guard<GraphMutationMutex> guard(graph_mutation_mutex());
-        if (liveness_queue.empty() && free_buffer().empty()
-                && !flags.get(NodeFlags::_queued_for_free)
-                && liveness.forward.count() > 1 && liveness.backward.count() > 1
-                && liveness.pending.count() > 1) {
-            liveness.forward.release();
-            liveness.backward.release();
-            liveness.pending.release();
-            return;
-        }
+    std::lock_guard<GraphMutationMutex> guard(graph_mutation_mutex());
+    if (liveness_queue.empty() && free_buffer().empty()
+            && !flags.get(NodeFlags::_queued_for_free)
+            && liveness.forward.count() > 1 && liveness.backward.count() > 1
+            && liveness.pending.count() > 1) {
+        liveness.forward.release();
+        liveness.backward.release();
+        liveness.pending.release();
+        return;
     }
     SetupFreeBuffer setup_free_buffer;
     enqueue_liveness(this, LivenessStep::release_forward);
@@ -480,6 +515,7 @@ void Node::release_both_liveness() {
 void Node::finish_pending_liveness() {
     CHECK_EXIST;
     if (is_finished()) return;
+    std::lock_guard<GraphMutationMutex> guard(graph_mutation_mutex());
     SetupFreeBuffer setup_free_buffer;
     flags.set(NodeFlags::_finished);
     // p1 no longer holds once we are finished
@@ -521,6 +557,7 @@ void Node::finish_pending_liveness() {
 void Node::release_inputs() {
     CHECK_EXIST;
     if (!_inputs.size()) return;
+    std::lock_guard<GraphMutationMutex> guard(graph_mutation_mutex());
     SetupFreeBuffer setup_free_buffer;
     for (auto in : _inputs) {
         if (!in.node->is_stop_grad() && in.node->liveness.forward.active())
@@ -565,6 +602,7 @@ void Node::set_inputs(list<Node*> nodes) {
     CHECK_EXIST;
     LOGvvvv << "Set inputs of" << this << "to" << nodes;
     ASSERT(!is_finished());
+    std::lock_guard<GraphMutationMutex> guard(graph_mutation_mutex());
     // Take the new liveness before dropping the old edges, so that a node that
     // appears in both the old and the new input list never drops to zero.
     for (Node* node : nodes) {
@@ -595,6 +633,7 @@ void Node::add_inputs(const vector<Node*>& nodes) {
     CHECK_EXIST;
     LOGvvvv << "add inputs" << nodes << "to" << this;
     ASSERT(!is_finished());
+    std::lock_guard<GraphMutationMutex> guard(graph_mutation_mutex());
     for (Node* node : nodes) {
         if (!node->is_stop_grad() && node->liveness.forward.active())
             enqueue_liveness(this, LivenessStep::own_forward);
@@ -624,6 +663,7 @@ void Node::add_inputs(const vector<Var*>& nodes) {
 void Node::set_stop_grad() {
     CHECK_EXIST;
     if (is_stop_grad()) return;
+    std::lock_guard<GraphMutationMutex> guard(graph_mutation_mutex());
     SetupFreeBuffer setup_free_buffer;
     flags.set(NodeFlags::_stop_grad, 1);
     int had_backward_liveness = liveness.backward.count();
