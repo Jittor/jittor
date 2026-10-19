@@ -4,7 +4,6 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import numpy as np
 from jittor_core import Var
 
-from .._runtime import dispatch as _dispatch
 from .._runtime.dispatch import dispatch_context, try_dispatch
 
 
@@ -182,7 +181,7 @@ def _fast_getitem(x, slices):
     because ``x[...]`` is the commonest Var operation: the full path costs
     several microseconds of Python per call on top of the native getitem.
     """
-    if x.__class__.getitem is not var_getitem or "tensor.getitem" in _dispatch._registered_ops:
+    if x.__class__.getitem is not var_getitem:
         return _SLOW
     cls = slices.__class__
     if (cls is _PYINT or cls is _NONE_TYPE or cls is _ELLIPSIS_TYPE
@@ -220,9 +219,14 @@ def _fast_getitem(x, slices):
 
 def getitem(x, slices):
     """Apply Jittor indexing, recording a view when the index is a basic one."""
-    out = _fast_getitem(x, slices)
-    if out is not _SLOW:
-        return out
+    # The fast path answers only what `try_dispatch` would not have: with the
+    # native dispatcher and nothing registered for `tensor.getitem`. A
+    # replaced `try_dispatch` has no `_is_registered` and is always consulted.
+    is_registered = getattr(try_dispatch, "_is_registered", None)
+    if is_registered is not None and not is_registered("tensor.getitem"):
+        out = _fast_getitem(x, slices)
+        if out is not _SLOW:
+            return out
     jt = _jt if _jt is not None else _jittor()
 
     out = _getitem_result(x, slices)

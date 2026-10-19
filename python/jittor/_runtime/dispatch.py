@@ -447,6 +447,16 @@ def try_dispatch(op, *args, **kwargs):
     return None if implementation is None else implementation(*args, **kwargs)
 
 
+def _is_registered(op):
+    """Whether anything is registered under ``op`` on any backend."""
+    return op in _registered_ops
+
+
+# On the native `try_dispatch` only: a caller that replaces it -- to observe or
+# route calls -- has no shortcut to skip it with.
+try_dispatch._is_registered = _is_registered
+
+
 def optional_kernel(op, backend, *, dtypes=None, supports=None, priority=0,
                     runtime_modes=None):
     backends = (backend,) if isinstance(backend, str) else tuple(backend)
