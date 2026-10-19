@@ -238,9 +238,14 @@ shared_ptr<const OpDef> get_op_definition(const string& name, bool required) {
 
 // Every operator construction asks for its definition by name, and the
 // registry answers under its lock, after cutting the name at '.' into a fresh
-// string and hashing it. `Op::name()` is a literal per operator class, so a few
+// string and hashing it. `Op::name()` is a literal per operator class, so
 // entries keyed by that pointer -- the text compared too, and dropped whenever
 // the registry changes -- answer nearly all of them.
+//
+// Sized for a real graph's mix of operator kinds, not a handful: with 16 slots
+// indexed by the pointer's low bits, DeepMill's detect loop missed one lookup
+// in five -- names sharing a slot evicted each other -- and every miss took the
+// registry lock. The pointer is mixed before it is masked for the same reason.
 shared_ptr<const OpDef> get_op_definition(const char* name, bool required) {
     struct Entry {
         const char* pointer = nullptr;
@@ -248,9 +253,11 @@ shared_ptr<const OpDef> get_op_definition(const char* name, bool required) {
         uint64 generation = 0;
         shared_ptr<const OpDef> definition;
     };
-    static thread_local Entry cache[16];
+    static constexpr int slots = 128;
+    static thread_local Entry cache[slots];
     uint64 generation = op_definition_generation.load(std::memory_order_acquire);
-    Entry& entry = cache[(reinterpret_cast<uintptr_t>(name) >> 3) & 15];
+    uint64 mixed = (uint64)reinterpret_cast<uintptr_t>(name) * 0x9E3779B97F4A7C15ull;
+    Entry& entry = cache[mixed >> (64 - 7)];
     if (entry.pointer == name && entry.generation == generation && entry.definition
             && entry.text == name)
         return entry.definition;
