@@ -150,7 +150,7 @@ VarPtr device_copy(Var* x, int device) {
     return make_device_copy(x, device);
 }
 
-void adapt_cpu_scalar_operands(const vector<Var**>& inputs, vector<VarPtr>& owners) {
+void adapt_cpu_scalar_operands(const PlacementInputs& inputs, vector<VarPtr>& owners) {
     TensorPlacement target;
     for (auto* slot : inputs) {
         auto* value = *slot;

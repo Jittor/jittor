@@ -271,9 +271,14 @@ VarPtr contiguous_storage(Var* value);
  * it as an input -- the ``forward``ed-op pattern does this.
  */
 VarPtr cast_operand_to_compute_dtype(Var* value, NanoString dtype);
-void adapt_cpu_scalar_operands(const vector<Var**>& inputs, vector<VarPtr>& owners);
-inline void collect_placement_inputs(Var*& value, vector<Var**>& inputs) { inputs.push_back(&value); }
-inline void collect_placement_inputs(vector<Var*>& values, vector<Var**>& inputs) {
+// The constructor arguments a CPU-scalar adaptation may replace. Every
+// construction of an operator that accepts such operands builds one -- every
+// binary op does -- so its usual handful of slots stays inline rather than
+// costing a heap allocation and a free per op.
+using PlacementInputs = SmallVector<Var**, 4>;
+void adapt_cpu_scalar_operands(const PlacementInputs& inputs, vector<VarPtr>& owners);
+inline void collect_placement_inputs(Var*& value, PlacementInputs& inputs) { inputs.push_back(&value); }
+inline void collect_placement_inputs(vector<Var*>& values, PlacementInputs& inputs) {
     for (auto*& value : values) inputs.push_back(&value);
 }
 template<class Operator>

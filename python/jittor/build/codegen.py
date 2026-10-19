@@ -323,7 +323,7 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags="", backend=None):
                     storage_inputs.append(
                         f"adapt_storage_input<{op_name}>({argument_name}, _storage_owners);")
         placement_setup = (f"if ({op_name}::accepts_cpu_scalar_operands) {{\n"
-                           "vector<Var**> _placement_inputs;\n" + "\n".join(placement_inputs) +
+                           "PlacementInputs _placement_inputs;\n" + "\n".join(placement_inputs) +
                            "\nadapt_cpu_scalar_operands(_placement_inputs, _storage_owners);\n}")
         storage_setup = "vector<VarPtr> _storage_owners;\n" + placement_setup + "\n" + "\n".join(storage_inputs)
         # steps of Op creation:
