@@ -131,14 +131,28 @@ struct CompileResult {
 
 static int last_compiled_op_num = 0;
 static int not_compile_window = 0;
+// Queued segments in a row with no new kernel, after which the up-front check
+// is skipped. Every check loads each segment and builds its jit key only to
+// find it compiled -- in a warm loop, every segment of every batch. 100000 took
+// a DeepMill run about four shapes to reach. The skip no longer lasts for the
+// rest of the process, so it can come sooner: a kernel compiled meanwhile on
+// the execution path grows `jit_key_mapper`, and the next batch checks again.
+static const int quiet_window = 10000;
 
 void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, int64 tt, int force_compile) {
     if (!backend_ops(accelerator_backend_id()).execution.supports_parallel_compile)
         return;
     // jit_search_kernel require compile at runtime
-    if (!force_compile)
-        if (jit_search_kernel || !use_parallel_op_compiler || not_compile_window > 100000)
+    if (!force_compile) {
+        if (jit_search_kernel || !use_parallel_op_compiler)
             return;
+        if (not_compile_window > quiet_window) {
+            // Still quiet: nothing has been compiled since the window filled.
+            if (last_compiled_op_num == (int)jit_key_mapper.size())
+                return;
+            not_compile_window = 0;
+        }
+    }
 
     // try not use parallel compile if no op needs compile
     if (last_compiled_op_num != jit_key_mapper.size()) {
