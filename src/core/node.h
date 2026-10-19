@@ -292,17 +292,33 @@ public:
 
     // Return true exactly on the transition across zero; propagation belongs
     // at those boundaries, not at every additional owner.
-    bool own() {
-        ASSERT(value_ >= 0 && value_ < std::numeric_limits<int>::max())
-            << kind_name() << "liveness own overflow";
+    // Inlined: every liveness step moves a counter, and with the failure
+    // report written in place the steps were calls. The report -- the same
+    // assertion, condition and message -- runs out of line, only when the
+    // condition has already failed.
+    __attribute__((always_inline)) bool own() {
+        if (PREDICT_BRANCH_NOT_TAKEN(!(value_ >= 0 && value_ < std::numeric_limits<int>::max())))
+            report_own();
         return ++value_ == 1;
     }
 
-    bool release() {
-        ASSERT(value_ > 0) << kind_name()
-            << "liveness release without a matching owner";
+    __attribute__((always_inline)) bool release() {
+        if (PREDICT_BRANCH_NOT_TAKEN(!(value_ > 0))) report_release();
         return --value_ == 0;
     }
+
+private:
+    __attribute__((noinline, cold)) void report_own() const {
+        ASSERT(value_ >= 0 && value_ < std::numeric_limits<int>::max())
+            << kind_name() << "liveness own overflow";
+    }
+
+    __attribute__((noinline, cold)) void report_release() const {
+        ASSERT(value_ > 0) << kind_name()
+            << "liveness release without a matching owner";
+    }
+
+public:
 
     void assert_expected(int expected, const void* owner) const {
         ASSERTop(count(),==,expected) << kind_name()
