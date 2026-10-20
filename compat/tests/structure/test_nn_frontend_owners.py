@@ -69,7 +69,8 @@ class TestNNFrontendOwners(unittest.TestCase):
 
     def test_layer_initialization_preserves_native_types_and_parameter_aliases(self):
         class Layer(NativeModule):
-            def __init__(self):
+            def __init__(self, width=3):
+                self.width = width
                 self.weight = self.alias = Tensor()
                 self.buffer = Tensor()
                 self._buffer_names = {"buffer"}
@@ -79,11 +80,18 @@ class TestNNFrontendOwners(unittest.TestCase):
         original = dict(vars(Layer))
         adapted = self.owner.adapt_class(Layer)
         self.assertIs(self.owner.adapt_class(Layer), adapted)
-        self.assertIsInstance(vars(adapted)["__init__"], self.frontend.LayerInitializer)
+        initializer = vars(adapted)["__init__"]
+        self.assertIsInstance(initializer, self.frontend.LayerInitializer)
+        self.assertIs(initializer.__wrapped__, Layer.__init__)
+        self.assertIs(initializer.__code__, Layer.__init__.__code__)
+        self.assertIs(initializer.__defaults__, Layer.__init__.__defaults__)
         module = adapted()
+        self.assertEqual(module.width, 3)
+        self.assertEqual(adapted(5).width, 5)
         self.assertIsInstance(module.weight, Parameter)
         self.assertIs(module.weight, module.alias)
         self.assertNotIsInstance(module.buffer, Parameter)
+
         self.assertNotIn("_native_parameter_construction", vars(module))
         self.assertEqual(original, dict(vars(Layer)))
         self.assertIs(self.owner.Module.__setattr__, self.frontend.module_setattr)
@@ -95,6 +103,38 @@ class TestNNFrontendOwners(unittest.TestCase):
                 super().__init__()
                 self.tag = "derived"
         self.assertEqual(Derived().tag, "derived")
+
+    def test_linear_preserves_math_and_explicit_super_anchor_semantics(self):
+        class Linear(NativeModule):
+            def __init__(self, in_features, out_features):
+                self.shape = (in_features, out_features)
+
+            def execute(self, value):
+                return (self.shape, value)
+
+        self.backend.nn.Linear = Linear
+        adapted_linear = self.owner.adapt_class(Linear)
+        direct = adapted_linear(2, 3)
+        self.assertEqual(direct("input"), ((2, 3), "input"))
+
+        class Adapter(adapted_linear):
+            def __init__(self):
+                super(adapted_linear, self).__init__()
+                self.ready = True
+
+            def forward(self, value):
+                return ("forward", value)
+
+        module = Adapter()
+        self.assertTrue(module.ready)
+        self.assertNotIn("shape", vars(module))
+        self.assertEqual(
+            adapted_linear.__mro__[:3],
+            (adapted_linear, self.owner.Module, Linear),
+        )
+        self.assertIs(vars(adapted_linear)["execute"], Linear.execute)
+        self.assertIsInstance(module, Linear)
+        self.assertIsInstance(module, self.owner.Module)
 
     def test_external_and_global_children_keep_source_objects_unchanged(self):
         class Child(NativeModule):
