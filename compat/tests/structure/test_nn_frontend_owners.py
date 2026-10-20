@@ -54,6 +54,12 @@ class TestNNFrontendOwners(unittest.TestCase):
         frontend.tensor_frontend = lambda tensor_type, **scope: nullcontext()
         frontend.make_parameter_type = lambda backend, tensor_type: Parameter
         sys.modules[frontend.__name__] = frontend
+        # This fixture owns routing/aliasing with a fake backend. Real meta
+        # construction/materialization is covered by test_meta_factory_contracts.
+        meta = types.ModuleType("_nn_owner_probe.meta")
+        meta.requested = lambda: False
+        meta.mark_placeholder = lambda value: value
+        sys.modules[meta.__name__] = meta
         self.frontend = self.load("nn_frontend")
         self.containers = sys.modules["_nn_owner_probe.parameter_containers"]
         self.backend = types.SimpleNamespace(
@@ -83,8 +89,8 @@ class TestNNFrontendOwners(unittest.TestCase):
         initializer = vars(adapted)["__init__"]
         self.assertIsInstance(initializer, self.frontend.LayerInitializer)
         self.assertIs(initializer.__wrapped__, Layer.__init__)
-        self.assertIs(initializer.__code__, Layer.__init__.__code__)
-        self.assertIs(initializer.__defaults__, Layer.__init__.__defaults__)
+        self.assertIs(initializer.original.__code__, Layer.__init__.__code__)
+        self.assertIs(initializer.original.__defaults__, Layer.__init__.__defaults__)
         module = adapted()
         self.assertEqual(module.width, 3)
         self.assertEqual(adapted(5).width, 5)
@@ -128,11 +134,12 @@ class TestNNFrontendOwners(unittest.TestCase):
         module = Adapter()
         self.assertTrue(module.ready)
         self.assertNotIn("shape", vars(module))
-        self.assertEqual(
-            adapted_linear.__mro__[:3],
-            (adapted_linear, self.owner.Module, Linear),
-        )
-        self.assertIs(vars(adapted_linear)["execute"], Linear.execute)
+        bridge = adapted_linear.__mro__[1]
+        self.assertEqual(bridge.__name__, "_LinearModuleBase")
+        self.assertEqual(adapted_linear.__mro__[:4],
+                         (adapted_linear, bridge, Linear, self.owner.Module))
+        self.assertIs(vars(bridge)["__init__"], NativeModule.__init__)
+        self.assertIs(adapted_linear.execute, Linear.execute)
         self.assertIsInstance(module, Linear)
         self.assertIsInstance(module, self.owner.Module)
 
@@ -171,6 +178,59 @@ class TestNNFrontendOwners(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "constructor failure"):
             adapted.__init__(module)
         self.assertNotIn("_native_parameter_construction", vars(module))
+
+    def test_batchnorm_checkpoint_metadata_is_owned_and_does_not_mutate_native_children(self):
+        class Counter(Tensor):
+            def __init__(self, value=0, dtype="int32", shape=(1,)):
+                self.value, self.dtype, self.shape = value, dtype, shape
+
+            def cast(self, dtype):
+                return Counter(self.value, dtype, self.shape)
+
+            def reshape(self, shape):
+                return Counter(self.value, self.dtype, shape)
+
+            def stop_grad(self):
+                return self
+
+        class BatchNorm(NativeModule):
+            def __init__(self):
+                self.track_running_stats = True
+                self._buffer_names = {"num_batches_tracked"}
+                self._non_persistent_buffer_names = {"num_batches_tracked"}
+                self.num_batches_tracked = Counter()
+
+            def register_buffer(self, name, value, persistent=True):
+                self._buffer_names.add(name)
+                if persistent:
+                    self._non_persistent_buffer_names.discard(name)
+                setattr(self, name, value)
+
+        BatchNorm.__module__ = "jittor.nn.modules.fake"
+        self.backend.nn.BatchNorm = BatchNorm
+        direct = self.owner.adapt_class(BatchNorm)()
+        self.assertEqual((direct.num_batches_tracked.dtype, direct.num_batches_tracked.shape),
+                         ("int64", ()))
+        self.assertNotIn("num_batches_tracked", direct._non_persistent_buffer_names)
+        source, external = BatchNorm(), BatchNorm()
+        source.num_batches_tracked.value = 11
+        source_counter = source.num_batches_tracked
+
+        class Parent(NativeModule):
+            def __init__(self, supplied):
+                self.owned, self.supplied = source, supplied
+
+        adapted = self.owner.adapt_class(Parent)(external)
+        self.assertIs(adapted.supplied, external)
+        self.assertIsNot(adapted.owned, source)
+        self.assertEqual(adapted.owned.num_batches_tracked.value, 11)
+        self.assertEqual((adapted.owned.num_batches_tracked.dtype,
+                          adapted.owned.num_batches_tracked.shape), ("int64", ()))
+        self.assertNotIn("num_batches_tracked", adapted.owned._non_persistent_buffer_names)
+        self.assertIs(source.num_batches_tracked, source_counter)
+        self.assertEqual((source_counter.dtype, source_counter.shape), ("int32", (1,)))
+        self.assertIn("num_batches_tracked", source._non_persistent_buffer_names)
+        self.assertIn("num_batches_tracked", external._non_persistent_buffer_names)
 
     def test_parameter_containers_use_stable_methods_and_do_not_mutate_tensor(self):
         list_type, dict_type = self.containers.make_parameter_containers(

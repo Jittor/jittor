@@ -1,6 +1,7 @@
 """Execute installation adapters without importing or compiling native Jittor."""
 import ast
 import unittest
+from unittest.mock import Mock
 from collections import namedtuple
 from pathlib import Path
 from types import SimpleNamespace, MappingProxyType
@@ -68,11 +69,16 @@ class TestInstallationOwners(unittest.TestCase):
         definitions("installers/factories.py", ["_linspace_adapter", "_seed_from", "_random_adapter"], ns)
         ns["_linspace_adapter"](native, Scalar(), Scalar(), Scalar(), dtype="float64")
         self.assertEqual(calls, [((2.0, 2.0, 2), {}), ("cast", "float64")])
+        # Generator support is owned by the draw helper; its failure must
+        # propagate without reseeding or falling through to the native factory.
+        draw = ns["_draw_from_generator"] = Mock(
+            side_effect=NotImplementedError("explicit Generator unavailable"))
+        generator = SimpleNamespace(initial_seed=lambda: 17)
         with self.assertRaisesRegex(NotImplementedError, "explicit Generator"):
             ns["_random_adapter"](
-                "rand", native, 3,
-                generator=SimpleNamespace(initial_seed=lambda: 17),
+                native, 3, generator=generator, _name="rand",
             )
+        draw.assert_called_once_with("rand", generator, (3,), {})
         self.assertEqual(calls, [((2.0, 2.0, 2), {}), ("cast", "float64")])
 
     def test_removed_handle_cannot_remove_a_later_hook(self):

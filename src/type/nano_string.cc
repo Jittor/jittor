@@ -66,6 +66,7 @@ static unordered_set<string> unary_ops = {
     "log",
     "exp",
     "sqrt",
+    "rsqrt",
     "round",
     "floor",
     "ceil",
@@ -95,6 +96,7 @@ static unordered_set<string> float_ops = {
     "log",
     "exp",
     "sqrt",
+    "rsqrt",
     "mean",
     "divide",
     "sin",
@@ -175,6 +177,7 @@ static unordered_set<string> no_need_back_in = {
     "mean",
     "exp",
     "sqrt",
+    "rsqrt",
     "sigmoid",
     "relu",
 };

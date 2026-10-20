@@ -425,6 +425,10 @@ static unordered_set<string> unary_ops = {
      */
     "sqrt",
 
+    /** Return the reciprocal square root, evaluated in float32 for reduced
+        floating dtypes and float64 for float64. */
+    "rsqrt",
+
     /**
     Returns the closest integer of the input ``x``. 
 
@@ -876,6 +880,9 @@ UnaryOp::UnaryOp(Var* x, NanoString op) : x(x) {
     set_type(OpType::element);
     ns = op;
     USER_CHECK(ns.is_unary() | ns.is_dtype());
+    USER_CHECK(ns != ns_rsqrt || !x->dtype().is_complex())
+        << "unary(complex, 'rsqrt') is unsupported; use public jt.rsqrt(x),"
+           " which preserves the existing complex sqrt/divide composition.";
     // `bitwise_not` has no meaning for a float, and without this the mistake is
     // only noticed by g++: the generated kernel reaches a raw `~x` and answers
     // "wrong type argument to bit-complement", quoting a line of the template
@@ -982,6 +989,23 @@ VarPtr UnaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
         return make_binary(dout, x, ns_divide);
     if (ns == ns_exp)
         return make_binary(dout, y, ns_multiply);
+    if (ns == ns_rsqrt) {
+        // -0.5 * dout * y^3; saved output suffices. Do not round each
+        // multiplication to half/bfloat16 while constructing the derivative.
+        struct PrecisionScope {
+            int saved;
+            PrecisionScope() : saved(amp_reg) { amp_reg = 0; }
+            ~PrecisionScope() { amp_reg = saved; }
+        } precision_scope;
+        bool reduced = x->dtype() == ns_float16 || x->dtype() == ns_bfloat16;
+        VarPtr value = reduced ? make_unary(out, ns_float32) : VarPtr(out);
+        VarPtr upstream = reduced ? make_unary(dout, ns_float32) : VarPtr(dout);
+        auto square = make_binary(value, value, ns_multiply);
+        auto cube = make_binary(square, value, ns_multiply);
+        auto scaled = make_binary(make_number(-0.5f, upstream), upstream, ns_multiply);
+        auto result = make_binary(scaled, cube, ns_multiply);
+        return reduced ? make_unary(result, x->dtype()) : result;
+    }
     if (ns == ns_sqrt){
         auto two = make_number(2, x);
         auto twoy = make_binary(two, y, ns_multiply);

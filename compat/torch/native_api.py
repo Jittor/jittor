@@ -93,6 +93,8 @@ class NativeOperation:
         like = self._first_var(args, context.native_backend.Var)
         with tensor_frontend(context.state["Var"], device=device, like=like,
                              default_placement=False if like is not None else True):
+            if self._operation_key == "rsqrt":
+                return _torch_rsqrt(context, implementation, *args, **kwargs)
             if self._operation_key in ("div", "divide"):
                 return _torch_div(context, *args, **kwargs)
             if isinstance(implementation, type) and issubclass(implementation, context.native_backend.Function):
@@ -115,6 +117,19 @@ class NativeOperation:
 
     def __reduce__(self):
         return operation, (self._operation_key,)
+
+
+def _torch_rsqrt(context, implementation, input):
+    """CUDA autocast runs reciprocal square root in FP32 for reduced inputs."""
+    from jittor._core.dtypes import dtype_name
+    from .amp import autocast_is_enabled
+    native = context.native_backend
+    if (dtype_name(input.dtype) in ("float16", "bfloat16")
+            and native.core.dispatch_context([input])[0] == "cuda"
+            and autocast_is_enabled("cuda")):
+        input = input.float32()
+    with native.flag_scope(amp_reg=0):
+        return implementation(input)
 
 
 def _integral_operand(value, var_type):

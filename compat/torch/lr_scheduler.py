@@ -9,6 +9,7 @@ from ..diagnostics import EXPECTED, swallowed
 
 import math as _math
 import types as _types
+import warnings as _warnings
 from typing import Any, cast
 
 def _base_lrs(opt):
@@ -31,7 +32,9 @@ class LRScheduler:
         if not hasattr(self, "base_lrs"):
             self.base_lrs = _base_lrs(optimizer)
         self.last_epoch = last_epoch
+        self.verbose = False if verbose == "deprecated" else verbose
         self._step_count = 0
+        self._get_lr_called_within_step = False
         self._last_lr = list(self.base_lrs)
         self.step()                       # torch: apply epoch-0 lr at construction
     def get_lr(self):
@@ -46,7 +49,14 @@ class LRScheduler:
     def step(self, epoch=None):
         self.last_epoch = self.last_epoch + 1 if epoch is None else epoch
         self._step_count += 1
-        lrs = self.get_lr()
+        self._get_lr_called_within_step = True
+        try:
+            if epoch is not None and hasattr(self, "_get_closed_form_lr"):
+                lrs = self._get_closed_form_lr()
+            else:
+                lrs = self.get_lr()
+        finally:
+            self._get_lr_called_within_step = False
         self._last_lr = list(lrs)
         _set_lrs(self.optimizer, lrs)
 
@@ -103,15 +113,50 @@ class ConstantLR(LRScheduler):
 
 class LinearLR(LRScheduler):
     def __init__(self, optimizer, start_factor=1.0/3, end_factor=1.0, total_iters=5,
-                 last_epoch=-1, verbose=False):
+                 last_epoch=-1, verbose="deprecated"):
+        if start_factor > 1.0 or start_factor <= 0:
+            raise ValueError("Starting multiplicative factor expected to be greater than 0 and less or equal to 1.")
+        if end_factor > 1.0 or end_factor < 0:
+            raise ValueError("Ending multiplicative factor expected to be between 0 and 1.")
         self.start_factor = start_factor; self.end_factor = end_factor
-        self.total_iters = total_iters; self.base_lrs = _base_lrs(optimizer)
+        self.total_iters = total_iters
+        if last_epoch == -1:
+            for group in optimizer.param_groups:
+                initial_lr = group["lr"]
+                if isinstance(initial_lr, jt.Var):
+                    initial_lr = initial_lr.clone()
+                group.setdefault("initial_lr", initial_lr)
+        else:
+            for index, group in enumerate(optimizer.param_groups):
+                if "initial_lr" not in group:
+                    raise KeyError("param 'initial_lr' is not specified "
+                                   f"in param_groups[{index}] when resuming an optimizer")
+        self.base_lrs = [group["initial_lr"] for group in optimizer.param_groups]
+        if verbose != "deprecated":
+            _warnings.warn("The verbose parameter is deprecated. Please use get_last_lr() "
+                           "to access the learning rate.", UserWarning, stacklevel=2)
         super().__init__(optimizer, last_epoch, verbose)
+
     def get_lr(self):
-        t = min(max(self.last_epoch, 0), self.total_iters)
-        frac = t / self.total_iters if self.total_iters else 1.0
-        f = self.start_factor + (self.end_factor - self.start_factor) * frac
-        return [b * f for b in self.base_lrs]
+        if not self._get_lr_called_within_step:
+            _warnings.warn("To get the last learning rate computed by the scheduler, "
+                           "please use `get_last_lr()`.", UserWarning, stacklevel=2)
+        current_lrs = [group["lr"] for group in self.optimizer.param_groups]
+        if self.last_epoch == 0:
+            return [lr * self.start_factor for lr in current_lrs]
+        if self.last_epoch > self.total_iters:
+            return current_lrs
+        factor = 1.0 + (self.end_factor - self.start_factor) / (
+            self.total_iters * self.start_factor
+            + (self.last_epoch - 1) * (self.end_factor - self.start_factor)
+        )
+        return [lr * factor for lr in current_lrs]
+
+    def _get_closed_form_lr(self):
+        return [base_lr * (
+            self.start_factor + (self.end_factor - self.start_factor)
+            * min(self.total_iters, self.last_epoch) / self.total_iters
+        ) for base_lr in self.base_lrs]
 
 
 class StepLR(LRScheduler):

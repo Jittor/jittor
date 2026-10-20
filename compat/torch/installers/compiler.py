@@ -318,7 +318,8 @@ def onnx_export(*args, **kwargs):
 
 
 def _api_rsqrt(x):
-    return 1.0 / jt.sqrt(x)
+    from jittor.ops.numerical import rsqrt
+    return rsqrt(x)
 
 
 def _api_gt(a, b):

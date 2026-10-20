@@ -45,6 +45,7 @@ struct FP16OpType : OpByType {
             {"log", "::hlog(($1)($2))"},
             {"exp", "::hexp(($1)($2))"},
             {"sqrt", "::hsqrt(($1)($2))"},
+            {"rsqrt", "(($1)jittor::_rsqrtf((float)($2)))"},
             // half-to-even, matching numpy/torch and the float32/float64
             // tables. float16 and bfloat16 both widen losslessly to float,
             // so the float spelling is the right one here.
@@ -93,6 +94,7 @@ struct FP16OpType : OpByType {
             {"log", "std::log(($1)($2))"},
             {"exp", "std::exp(($1)($2))"},
             {"sqrt", "std::sqrt(($1)($2))"},
+            {"rsqrt", "(($1)(1.0f / std::sqrt((float)($2))))"},
             {"round", "(($1)std::nearbyint(($2)))"},
             {"floor", "(($1)std::floor(($2)))"},
             {"ceil", "(($1)std::ceil(($2)))"},
@@ -223,6 +225,12 @@ struct FP16OpType : OpByType {
 
     void post_pass(OpCompiler* oc) {
         string& src = oc->src;
+        if (src.find("jittor::_rsqrtf") != string::npos &&
+            src.find("type/rsqrt_compute.h") == string::npos) {
+            auto include = src.rfind("#include");
+            auto begin = include == string::npos ? 0 : src.find('\n', include) + 1;
+            src.insert(begin, "#include \"type/rsqrt_compute.h\"\n");
+        }
         if (src.find("float16") == string::npos)
             return;
         int i = src.rfind("#include");

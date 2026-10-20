@@ -22,6 +22,7 @@ class**:
 Run::  python -m pytest tests/nn/test_module_hooks.py
 """
 
+import os
 import unittest
 
 import numpy as np
@@ -281,6 +282,96 @@ class TestWithKwargs(unittest.TestCase):
     class Adder(nn.Module):
         def execute(self, x, bias=0):
             return x + bias
+
+    def setUp(self):
+        self.device = os.environ.get("JITTOR_TEST_DEVICES", "cpu").split(",")[0]
+        self.assertIn(self.device, ("cpu", "cuda"))
+        scope = jt.runtime.scope(use_cuda=int(self.device == "cuda"),
+                                 backend_fallback="error")
+        scope.__enter__()
+        self.addCleanup(scope.__exit__, None, None, None)
+        self.fallback_before = jt.core.backend_fallback_count()
+        self.addCleanup(self._assert_no_fallback)
+
+    def _assert_no_fallback(self):
+        self.assertEqual(jt.core.backend_fallback_count(), self.fallback_before)
+
+    def _assert_result(self, result, expected):
+        self.assertEqual(jt.core.dispatch_context([result])[0], self.device)
+        np.testing.assert_array_equal(result.numpy(), np.full(3, expected))
+        self.assertEqual(jt.core.backend_fallback_count(), self.fallback_before)
+
+    def test_default_pre_hook_ignores_call_kwargs(self):
+        m, seen, value = self.Adder(), [], _x()
+
+        def observe(module, args):
+            self.assertIs(module, m)
+            self.assertEqual(len(args), 1)
+            self.assertIs(args[0], value)
+            seen.append("called")
+
+        m.register_forward_pre_hook(observe)
+        self._assert_result(m(value, bias=3), 4)
+        self.assertEqual(seen, ["called"])
+
+    def test_default_pre_hook_sees_empty_args_for_keyword_only_call(self):
+        m, seen = self.Adder(), []
+
+        def observe(module, args):
+            self.assertIs(module, m)
+            self.assertEqual(args, ())
+            seen.append("called")
+
+        m.register_forward_pre_hook(observe)
+        self._assert_result(m(x=_x(), bias=3), 4)
+        self.assertEqual(seen, ["called"])
+
+    def test_default_pre_hook_replaces_args_and_preserves_call_kwargs(self):
+        for single in (False, True):
+            with self.subTest(single_return=single):
+                m = self.Adder()
+
+                def replace(module, args):
+                    replacement = args[0] * 2
+                    return replacement if single else (replacement,)
+
+                m.register_forward_pre_hook(replace)
+                self._assert_result(m(_x(), bias=3), 5)
+
+    def test_explicit_kwargs_pre_hook_receives_empty_dict_and_can_inject(self):
+        m, seen = self.Adder(), []
+
+        def inject(module, args, kwargs):
+            self.assertEqual(kwargs, {})
+            seen.append("called")
+            return args, {"bias": 5}
+
+        m.register_forward_pre_hook(inject, with_kwargs=True)
+        self._assert_result(m(_x()), 6)
+        self.assertEqual(seen, ["called"])
+
+    def test_legacy_pre_hook_keeps_two_argument_signature_without_kwargs(self):
+        m, seen = self.Adder(), []
+
+        def observe(module, args):
+            seen.append(module)
+            return args[0] * 2
+
+        m.register_pre_forward_hook(observe)
+        self._assert_result(m(_x()), 2)
+        self.assertEqual(seen, [m])
+
+    def test_legacy_pre_hook_keeps_three_arguments_and_args_only_return(self):
+        m, seen = self.Adder(), []
+
+        def replace(module, args, kwargs):
+            self.assertEqual(kwargs, {"bias": 3})
+            seen.append(module)
+            return (args[0] * 2,)
+
+        m.register_pre_forward_hook(replace)
+        self._assert_result(m(_x(), bias=3), 5)
+        self.assertEqual(seen, [m])
 
     def test_a_with_kwargs_pre_hook_can_replace_the_kwargs(self):
         m = self.Adder()

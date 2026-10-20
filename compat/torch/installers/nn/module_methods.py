@@ -140,6 +140,11 @@ def _standard_rms_norm(self, args, kwargs):
     weight = getattr(self, "weight", None)
     if not isinstance(value, jt.Var) or not isinstance(weight, jt.Var):
         return None
+    # A standard HF forward casts the normalized value back to input dtype
+    # before multiplying the weight. Mixed operands may therefore promote the
+    # output, while the native inference kernel returns the input dtype.
+    if _jittor_dtype_name(value.dtype) != _jittor_dtype_name(weight.dtype):
+        return None
     epsilon = self.__dict__["variance_epsilon"]
     pytorch_order = _acl_bfloat16_rms_norm(value, weight, epsilon)
     if pytorch_order is not None:
@@ -282,7 +287,7 @@ def _named_parameters(self, prefix="", recurse=True, remove_duplicate=True):
     """Torch's ``named_parameters``: an iterator, with prefix/dedup."""
     reg = get_tensor_state(jt).leaf_params
     seen = set()
-    for name, v in self._iter_named_vars("parameters", recurse):
+    for name, v in self._iter_named_vars("parameters", recurse, remove_duplicate):
         if remove_duplicate and id(v) in seen:
             continue
         seen.add(id(v))
@@ -299,7 +304,7 @@ def _named_parameters(self, prefix="", recurse=True, remove_duplicate=True):
 def _named_buffers(self, prefix="", recurse=True, remove_duplicate=True):
     """Torch's ``named_buffers``, which defaults ``recurse=True``."""
     seen = set()
-    for name, v in _ORIG_MODULE_NAMED_BUFFERS(self, recurse=recurse):
+    for name, v in self._iter_named_vars("buffers", recurse, remove_duplicate):
         if remove_duplicate and id(v) in seen:
             continue
         seen.add(id(v))
@@ -424,8 +429,8 @@ def _state_dict_key_diff(root, state_dict):
         if tuple(int(d) for d in src_shape) != tuple(int(d) for d in target.shape):
             mismatched.append((str(key), tuple(int(d) for d in src_shape),
                                tuple(int(d) for d in target.shape)))
-    # torch never reports num_batches_tracked as missing for modules that
-    # do not keep one; jittor's BatchNorm has no such buffer at all.
+    # Accept legacy checkpoints that predate the BatchNorm counter. The
+    # frontend exports its persistent counter in newly written checkpoints.
     missing = [k for k in missing if not k.endswith("num_batches_tracked")]
     return missing, unexpected, mismatched
 
@@ -469,6 +474,12 @@ def _load_state_dict(self, state_dict, strict=True, assign=False):
         load_state = {k: v for k, v in load_state.items()
                       if str(k) not in set(unexpected)}
     _ORIG_MODULE_LOAD_STATE_DICT(self, load_state)
+    if assign:
+        from ...meta import is_placeholder, mark_placeholder
+        for key, source in load_state.items():
+            target = _find_state_target(self, key)
+            if isinstance(target, jt.Var):
+                mark_placeholder(target, is_placeholder(source))
     try:
         for n, p in self.named_parameters():
             if n in trainable and p.is_stop_grad():
@@ -802,11 +813,14 @@ def _module_to_conversion(ds, dev, copy, v):
     Split out of ``_module_to`` so this file holds no closures; ``_module_to``
     hands the decoded (dtype, device, copy) triple over with a partial.
     """
+    from ...meta import mark_placeholder
     out = v
     if ds is not None and ds in _MODULE_FLOAT_DTYPES:
         is_float = v.dtype.is_float() if hasattr(v.dtype, "is_float") else ("float" in _jittor_dtype_name(v.dtype))
         if is_float:
             out = _module_cast_var_if_needed(out, ds, copy=copy)
+    if (getattr(dev, "type", None) or str(dev).split(":", 1)[0]) == "meta":
+        return mark_placeholder(out)
     if _device_is_cpu(dev):
         out = _make_cpu_resident(out, inplace=(out is v))
     elif _device_is_cuda(dev):
@@ -832,7 +846,7 @@ def _module_to_conversion(ds, dev, copy, v):
                     out = v
                 else:
                     out = moved
-    return out
+    return mark_placeholder(out, False) if dev is not None else out
 
 
 def _module_to(self, *args, **kwargs):
@@ -867,7 +881,7 @@ def _module_to(self, *args, **kwargs):
             bare = a.replace("torch.", "")
             if bare in dtype._registry:
                 ds = bare
-            elif bare.split(":")[0] in ("cpu", "cuda", "npu"):
+            elif bare.split(":")[0] in ("cpu", "cuda", "npu", "meta"):
                 dev = bare
             else:
                 # Same policy as Tensor.to: refuse rather than silently leave
@@ -1028,7 +1042,7 @@ def _get_parameter(self, target):
     # buffers from `get_parameter`, which torch answers with AttributeError.
     # The module's own parameter listing is the authority; buffers are tracked
     # separately, by name (see Module.register_buffer).
-    if isinstance(v, jt.Var) and target in {n for n, _ in self.named_parameters()}:
+    if isinstance(v, jt.Var) and target in {n for n, _ in self.named_parameters(remove_duplicate=False)}:
         return v
     raise AttributeError(f"`{target}` is not a parameter")
 
@@ -1044,7 +1058,7 @@ def _get_buffer(self, target):
     if not hasattr(mod, leaf):
         raise AttributeError(f"`{target}` is not a buffer")
     v = getattr(mod, leaf)
-    names = {n for n, _ in self.named_buffers()}
+    names = {n for n, _ in self.named_buffers(remove_duplicate=False)}
     if isinstance(v, jt.Var) and target in names:
         return v
     raise AttributeError(f"`{target}` is not a buffer")

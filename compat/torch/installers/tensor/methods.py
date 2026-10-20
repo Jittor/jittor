@@ -55,6 +55,7 @@ from .method_api import (
     _add,
     _mul,
     _sqrt,
+    _rsqrt,
     _addmm_method,
     _as_strided,
     _is_pinned,
@@ -287,6 +288,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     Var.mul = _mul
     Var.multiply = _mul
     Var.sqrt = _sqrt
+    Var.rsqrt = _rsqrt
 
     g.cumsum = _owner.cumsum
     Var.cumsum = _owner.cumsum

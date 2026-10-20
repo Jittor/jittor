@@ -4,11 +4,88 @@ from functools import lru_cache
 import math
 
 import jittor as jt
-from jittor._runtime.core_api import _output_requires_grad
+from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
 from jittor._runtime.backend_libraries import library_resource
-from jittor._runtime.dispatch import optional_kernel
+from jittor._runtime.dispatch import dispatch_context, optional_kernel
+from jittor._core.dtypes import dtype_name as _dtype_name
 
 from .rms_norm_cuda import _autocast_enabled
+
+
+def _supports_vector4_fp32(x, gamma, epsilon):
+    """CUDA FP32 width1024 only; all other contracts retain their providers."""
+    if not isinstance(x, jt.Var) or not isinstance(gamma, jt.Var):
+        return False
+    if _dtype_name(x.dtype) != "float32" or _dtype_name(gamma.dtype) != "float32":
+        return False
+    if dispatch_context(x, gamma).backend != "cuda":
+        return False
+    try:
+        shape = tuple(int(size) for size in x.shape)
+        weight_shape = tuple(int(size) for size in gamma.shape)
+        epsilon = float(epsilon)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return (bool(shape) and all(size > 0 for size in shape)
+            and shape[-1] == 1024 and weight_shape == (1024,)
+            and x._storage_is_contiguous() and gamma._storage_is_contiguous()
+            and math.isfinite(epsilon)
+            and 1.1754943508222875e-38 <= epsilon <= 3.4028234663852886e38)
+
+
+def _vector4_fp32_forward(x, gamma, epsilon):
+    """One shared forward used by inference and the existing training Function.
+
+    Four independent accumulators and ascending warp shuffle offsets match the
+    public square/mean equation's tested CUDA reduction order. Explicit rounded
+    arithmetic prevents the JIT's fast-math flags from contracting square+sum.
+    """
+    rows = int(x.numel()) // 1024
+    return jt.code([x.shape, (rows,)], ["float32", "float32"], [x, gamma],
+        cuda_src=f"""
+        __global__ static void rms_norm_vector4_fp32(
+                const in0_type* x, const in1_type* w,
+                out0_type* y, out1_type* rstd, int rows) {{
+            int row = blockIdx.x, lane = threadIdx.x;
+            if (row >= rows) return;
+            long long origin = (long long)row * 1024;
+            float a0 = 0.f, a1 = 0.f, a2 = 0.f, a3 = 0.f;
+            for (int base = lane * 4; base < 1024; base += 128) {{
+                float v0 = x[origin + base], v1 = x[origin + base + 1];
+                float v2 = x[origin + base + 2], v3 = x[origin + base + 3];
+                a0 = __fadd_rn(a0, __fmul_rn(v0, v0));
+                a1 = __fadd_rn(a1, __fmul_rn(v1, v1));
+                a2 = __fadd_rn(a2, __fmul_rn(v2, v2));
+                a3 = __fadd_rn(a3, __fmul_rn(v3, v3));
+            }}
+            float total = __fadd_rn(__fadd_rn(__fadd_rn(a0, a1), a2), a3);
+            for (int offset = 1; offset < 32; offset *= 2)
+                total = __fadd_rn(total, __shfl_down_sync(0xffffffff, total, offset));
+            total = __shfl_sync(0xffffffff, total, 0);
+            float mean = __fmul_rn(total, 1.f / 1024.f);
+            float inv = rsqrtf(__fadd_rn(mean, {epsilon:.9e}f));
+            if (lane == 0) rstd[row] = inv;
+            for (int column = lane; column < 1024; column += 32) {{
+                float normalized = __fmul_rn(x[origin + column], inv);
+                y[origin + column] = __fmul_rn(w[column], normalized);
+            }}
+        }}
+        int rows = in0->num / 1024;
+        rms_norm_vector4_fp32<<<rows, 32>>>(in0_p, in1_p, out0_p, out1_p, rows);
+        CHECK(0 == cudaGetLastError());
+        """)
+
+
+def _supports_vector4_fp32_inference(x, gamma, epsilon=1e-6):
+    return (_supports_vector4_fp32(x, gamma, epsilon)
+            and not _output_requires_grad(x, gamma))
+
+
+@optional_kernel("nn.rms_norm.inference", ("cuda",), dtypes=("float32",),
+                 priority=10, supports=_supports_vector4_fp32_inference)
+def _rms_norm_vector4_fp32_cuda(x, gamma, epsilon=1e-6):
+    output, _rstd = _vector4_fp32_forward(x, gamma, float(epsilon))
+    return _stop_grad_outputs(output)
 
 
 def _gamma_segments(hidden_size, rows):
@@ -27,6 +104,10 @@ def _rms_norm_training_cuda_cls(hidden_size, epsilon):
 
     class RMSNormTrainingCUDA(jt.Function):
         def execute(self, x, gamma):
+            if _supports_vector4_fp32(x, gamma, epsilon):
+                y, rstd = _vector4_fp32_forward(x, gamma, epsilon)
+                self.saved = x, rstd, gamma
+                return y
             rows = int(x.numel()) // hidden_size
             y, rstd = jt.code(
                 [x.shape, (rows,)],
@@ -177,7 +258,8 @@ def _supports_rms_norm_training(x, gamma, epsilon=1e-6):
         isinstance(x, jt.Var)
         and isinstance(gamma, jt.Var)
         and _output_requires_grad(x, gamma)
-        and not _autocast_enabled()
+        and (not _autocast_enabled()
+             or _supports_vector4_fp32(x, gamma, epsilon))
     ):
         return False
     try:

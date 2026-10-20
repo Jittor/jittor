@@ -188,6 +188,55 @@ framework defects.
   default/explicit-P2P analytic probes and four-rank large-model interactions
   with process cleanup. A fallback pass does not close this issue.
 
+## KI-HF-RESUME-001: default Trainer mid-epoch recovery has upstream boundaries
+
+- Status: Open upstream restriction; reviewed 2026-10-20 on the day23
+  candidate based on `9e0e187bb013e71d85111acfd668e46aeff9f9d2`.
+- Owner: Torch ecosystem maintainers; upstream Transformers 4.56.2 and
+  Accelerate 1.10.1. Severity: High for advertised arbitrary mid-epoch resume.
+- Evidence: the independent PyTorch negative fixtures and minimal loader
+  reproduction in the [day23 report](../../refactor-wip/results/2026-10-20-torch-compat-release-day23.md).
+  With N13/B2/G2, checkpoint5 recovery misses an incomplete accumulation
+  window. With N11/B2/G2, checkpoint4 in epoch2 loads model/optimizer state
+  exactly but reconstructs the skipped loader with iteration0, resetting the
+  seeded sampler to epoch0 and changing the sample cursor and final state.
+- Workaround: use the separately tested epoch-boundary or first-epoch
+  checkpoint protocols; do not claim arbitrary mid-epoch exact recovery.
+  `ignore_data_skip=True` changes data progression and is not an equivalent
+  repair. The opt-in Stateful Trainer has its own accepted scope and cannot
+  silently replace the default Trainer contract.
+- Exit condition: verify a public upstream fix or a separately reviewed
+  public integration with independent PyTorch/Jittor fresh-process cases for
+  epoch2 sampling and incomplete accumulation, without relaxing tolerances,
+  replacing the oracle, or copying Trainer's private loop.
+
+## KI-HF-CUDA-002: real-model numerical, task and recovery gates remain open
+
+- Status: Open release blocker; reviewed 2026-10-21. New modifications are paused
+  at the user's request; source snapshots do not establish acceptance.
+- Owner: Torch compatibility, native CUDA kernels, and autograd maintainers.
+- Evidence: the [Day 2–3 report](../../refactor-wip/results/2026-10-20-torch-compat-release-day23.md)
+  and [pause handoff](../../refactor-wip/results/2026-10-21-workspace-snapshot-handoff.md)
+  bind each result to its source/run. BERT BF16 dual-seed and default FP16
+  recovery pass real CUDA/fallback0; the BERT best-model task loss envelope
+  remains FAIL at15.425953905% versus15%, with lower JT observed loss. Default
+  FP16 raw-state finite/signature audit also passes. T5 seed821 full/resume
+  executes, but exact recovery fails771/2088 state signatures from step51;
+  original checkpoint arrays remain finite and match saved signatures. Qwen
+  rsqrt/RMSNorm eight CPU/CUDA oracles pass, but r18 complete unhooked BF16
+  logits still fail7015339/29171712 elements at the original tolerances. Vision
+  r11 five exact-recovery failures remain; r18 stops before model training due
+  to an external wrapper's invalid required torch.__file__ access. No new
+  Vision numerical verdict is inferred. Generic synthetic/65537 CUDA failure
+  remains unlocalized. Shared-card timings are not release performance proof.
+- Workaround: no accepted workaround for these ordinary workflow blockers.
+  Keep compact CPU, bounded stateful Trainer and individual kernel evidence
+  within their measured contracts. Do not waive fields, seed or tolerances.
+- Exit condition: after the user resumes work, diagnose earliest discrepancies,
+  verify repairs on real CPU/CUDA, then repeat affected complete workflows
+  against frozen independent references, including optimizer/scaler, cursor,
+  actual device and zero fallback.
+
 ## KI-TORCH-RNG-001: broader CUDA RNG recovery and stability gates remain open
 
 - Severity: Research (C5)

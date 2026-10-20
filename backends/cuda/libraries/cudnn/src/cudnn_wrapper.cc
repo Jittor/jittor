@@ -18,6 +18,7 @@ cudnnHandle_t cudnn_handle = nullptr;
 int max_cache_size = 100;
 float max_workspace_ratio = 0.25;
 int cudnn_benchmark = -1;
+int cudnn_deterministic = 0;
 
 struct CudnnDeviceState {
     int device;
@@ -151,6 +152,15 @@ void set_algorithm_cache_size(int size) {
 void set_max_workspace_ratio(float64 ratio) { max_workspace_ratio = ratio; }
 void set_benchmark(int enabled) { cudnn_benchmark = enabled < 0 ? -1 : (enabled ? 1 : 0); }
 int get_benchmark() { return cudnn_benchmark; }
+
+void set_deterministic(int enabled) {
+    ExecutorEntryScope entry;
+#ifdef IS_ROCM
+    USER_CHECK(!enabled) << "Deterministic cuDNN convolution policy is not supported on ROCm";
+#endif
+    cudnn_deterministic = enabled ? 1 : 0;
+}
+int get_deterministic() { return cudnn_deterministic; }
 
 void cudnn_shutdown() {
     cudnn_devices.clear();

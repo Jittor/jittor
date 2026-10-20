@@ -250,7 +250,7 @@ void CudnnConvBackwardWOp::jit_run() {
     int perf_count;
     STACK_ALLOC(cudnnConvolutionBwdFilterAlgoPerf_t,perf_results,num_algos);
     cudnnConvolutionBwdFilterAlgo_t algo;
-    bool benchmark=true;
+    bool benchmark = cudnn_benchmark != 0;
 
     // The key is a POD struct hashed as its bytes; see cudnn_conv_algo_key.h,
     // and tests/backends/cuda/test_cudnn_conv_algo_key.py for what keeps two
@@ -272,7 +272,7 @@ void CudnnConvBackwardWOp::jit_run() {
         conv_compute_type, conv_math_key,
         filterFormat_@WFORMAT, groups, max_workspace_ratio,
         dimX, strideX, dimW, dimY, strideY,
-        padA, convstrideA, dilationA);
+        padA, convstrideA, dilationA, benchmark, cudnn_deterministic);
     auto iter = bwdw_algo_cache.find(algo_key);
     
     if (iter!=bwdw_algo_cache.end()) algo = iter->second;
@@ -312,11 +312,13 @@ void CudnnConvBackwardWOp::jit_run() {
         }
         int best_algo_idx=-1;
         for (int i = 0; i < perf_count; i++) 
-            if (perf_results[i].status == CUDNN_STATUS_SUCCESS){
+            if (cudnn_conv_algorithm_allowed(perf_results[i])){
                 best_algo_idx=i;
                 break;
             }
-        ASSERT(best_algo_idx!=-1);
+        ASSERT(best_algo_idx!=-1)
+            << "No supported cuDNN convolution algorithm satisfies the requested policy;"
+            << "deterministic=" << cudnn_deterministic << "benchmark=" << benchmark;
         algo=perf_results[best_algo_idx].algo;
         // Cache the choice whether it was measured or merely predicted.
         // cudnnGet*Algorithm_v7 is deterministic for a descriptor set, so its

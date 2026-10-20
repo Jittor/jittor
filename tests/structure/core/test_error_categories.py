@@ -176,7 +176,9 @@ MIGRATED_UNARY_OP_USER_BOUNDARIES = {
     # 2 since 2026-09-11: `bitwise_not` on a float now says so instead of
     # reaching `~x` in the generated kernel and letting g++ answer "wrong type
     # argument to bit-complement". See tests/ops/test_bitwise_dtype_guard.py.
-    "src/ops/unary_op.cc": 2,
+    # 3 since 2026-10-21: native unary rsqrt rejects complex inputs;
+    # public jt.rsqrt preserves the existing complex sqrt/divide path.
+    "src/ops/unary_op.cc": 3,
 }
 
 MIGRATED_CURAND_USER_BOUNDARIES = {

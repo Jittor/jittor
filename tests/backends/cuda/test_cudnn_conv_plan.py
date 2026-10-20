@@ -95,6 +95,45 @@ class TestCudnnConvPlan(unittest.TestCase):
     def test_half(self):
         self._check(2, 8, 16, 8, 3, padding=1, dtype="float16")
 
+    def test_deterministic_cold_cache_repeated_forward_and_gradients(self):
+        native = jt.cudnn
+        before = (native.get_benchmark(), native.get_deterministic())
+        self.addCleanup(native.set_benchmark, before[0])
+        self.addCleanup(native.set_deterministic, before[1])
+        native.set_benchmark(0)
+        native.set_deterministic(1)
+        rng = np.random.RandomState(81)
+        x_np = rng.randn(2, 8, 8, 8).astype("float32")
+        w_np = rng.randn(8, 8, 3, 3).astype("float32")
+        dout_np = rng.randn(2, 8, 8, 8).astype("float32")
+        for dtype, nhwc in (("float32", False), ("float16", False),
+                            ("bfloat16", False), ("float16", True),
+                            ("bfloat16", True), ("float64", False)):
+            expected = None
+            for repeat in range(3):
+                native.cudnn_clear_plan_cache()
+                native.cudnn_clear_algorithm_cache()
+                x = jt.array(x_np).cast(dtype)
+                w = jt.array(w_np).cast(dtype)
+                if nhwc:
+                    x = x.transpose(0, 2, 3, 1)
+                    w = w.transpose(0, 2, 3, 1)
+                y = native.ops.cudnn_conv(
+                    x, w, 1, 1, 1, 1, 1, 1, 1,
+                    "acdb" if nhwc else "abcd",
+                    "ohwi" if nhwc else "oihw", "")
+                y_nchw = y.transpose(0, 3, 1, 2) if nhwc else y
+                seed = jt.array(dout_np).cast(dtype)
+                dx, dw = jt.grad((y_nchw * seed).sum(), [x, w])
+                got = tuple(value.float64().numpy() for value in (y, dx, dw))
+                if expected is None:
+                    expected = got
+                else:
+                    for name, actual, reference in zip(("y", "dx", "dw"), got, expected):
+                        np.testing.assert_array_equal(actual, reference,
+                            err_msg="dtype=%s nhwc=%s repeat=%s %s" %
+                            (dtype, nhwc, repeat, name))
+
     def test_repeated_shapes_reuse_plan(self):
         # The same configuration executed many times must stay correct and
         # not accumulate state; this is the cache hit path.
@@ -148,7 +187,7 @@ class TestConvPlanRequestHasOneBuilder(unittest.TestCase):
         self.assertIn("memset(&r, 0, sizeof(r));", text)
         for field in ("kind", "dtype_x", "dtype_w", "dtype_y", "xdim",
                       "xstride", "ydim", "ystride", "wdim", "wstride",
-                      "pad", "stride", "dilation", "allow_tf32", "benchmark"):
+                      "pad", "stride", "dilation", "allow_tf32", "benchmark", "deterministic"):
             self.assertIn("r.%s" % field, text,
                           "conv_plan_request leaves %s unset; it is part of "
                           "the cache key" % field)

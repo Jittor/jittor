@@ -61,6 +61,20 @@ def default_device():
     return _DEFAULT_DEVICE or "cpu"
 
 
+def data_constructor_device(device):
+    """tensor/as_tensor honor an explicit ambient device before data's device.
+
+    Keep unset separate from explicit CPU: meta input stays meta when no
+    device is chosen, but requesting real data from it must fail closed.
+    Like/new factories have their own source-first precedence.
+    """
+    if device is not None:
+        return device
+    from .types import active_device_context
+    contextual = active_device_context()
+    return contextual if contextual is not None else _DEFAULT_DEVICE
+
+
 def set_default_device_spelling(device):
     """Record what `torch.set_default_device` chose; None clears it to CPU."""
     global _DEFAULT_DEVICE
@@ -107,6 +121,10 @@ def _placement_request(backend, device, like=None, default_placement=True):
     numeric_index = isinstance(device, int) and not isinstance(device, bool)
     name = "cuda" if numeric_index else (getattr(device, "type", None) or str(device).split(":", 1)[0])
     if name == "cpu":
+        return 0, 0
+    if name == "meta":
+        # The bounded compatibility representation owns real CPU storage;
+        # its logical meta marker is applied by the constructor owner.
         return 0, 0
     if name not in ("cuda", "npu"):
         raise NotImplementedError("native Tensor placement does not support device %r" % str(device))
@@ -198,8 +216,9 @@ class FrontendFactory:
         update_wrapper(self, function)
 
     def __call__(self, *args, **kwargs):
+        from .meta import finish
         with tensor_frontend(self.tensor_type, device=kwargs.get("device")):
-            return self.function(*args, **kwargs)
+            return finish(self.function(*args, **kwargs), kwargs.get("device"))
 
     def __get__(self, instance, owner=None):
         return self if instance is None else MethodType(self, instance)
@@ -231,6 +250,7 @@ class _TensorMeta(type):
                 % ", ".join(sorted(kwargs))
             )
         from .nested import _TorchSize
+        from .meta import finish
         dtype = requested_dtype if requested_dtype is not None else _default_tensor_dtype(backend)
         with tensor_frontend(cls, like=args[0] if len(args) == 1 else None, device=device):
             if not args:
@@ -245,11 +265,11 @@ class _TensorMeta(type):
                 result = backend.Var.clone(args[0])
                 result._set_view_of(args[0], Ellipsis)
                 result.requires_grad = requires_grad
-                return result
+                return finish(result, device, args[0])
             else:
                 result = backend.array(args[0], dtype=dtype)
             result.requires_grad = requires_grad
-            return result
+            return finish(result, device)
 
 
 def make_tensor_type(backend):
@@ -271,6 +291,7 @@ def clone(input, *, memory_format=None):
     import jittor as backend
     from .tensor_state import compatibility_owner
     from .types import _var_is_cpu_resident
+    from .meta import finish
     if not isinstance(input, backend.Var):
         raise TypeError("clone expects a tensor")
     if memory_format not in (None, "preserve_format", "contiguous_format"):
@@ -282,11 +303,12 @@ def clone(input, *, memory_format=None):
                 result = backend.Var.copy(input)
                 result.sync()
                 setattr(result, "_jittor_torch_force_cpu", True)
-            return result
-        return backend.Var.copy(input)
+            return finish(result, like=input)
+        return finish(backend.Var.copy(input), like=input)
 
 
 def parameter_new(cls, data=None, requires_grad=True):
+    from .meta import finish
     backend = cls._parameter_backend
     with tensor_frontend(cls, like=data):
         if data is None:
@@ -295,7 +317,7 @@ def parameter_new(cls, data=None, requires_grad=True):
             source = data if isinstance(data, backend.Var) else backend.array(data)
             value = backend.Var.detach(source)
     value.requires_grad = bool(requires_grad)
-    return value
+    return finish(value, like=data)
 
 
 def parameter_init(self, data=None, requires_grad=True):

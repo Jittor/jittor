@@ -31,6 +31,7 @@ void cudnn_shutdown();
 EXTERN_LIB int max_cache_size;
 EXTERN_LIB float max_workspace_ratio;
 EXTERN_LIB int cudnn_benchmark;
+EXTERN_LIB int cudnn_deterministic;
 
 // @pyjt(set_algorithm_cache_size)
 void set_algorithm_cache_size(int size);
@@ -43,6 +44,24 @@ void set_benchmark(int enabled);
 
 // @pyjt(get_benchmark)
 int get_benchmark();
+
+// @pyjt(set_deterministic)
+void set_deterministic(int enabled);
+
+// @pyjt(get_deterministic)
+int get_deterministic();
+
+// Legacy 2-D/3-D results carry their own determinism annotation. On ROCm
+// set_deterministic rejects True because that annotation is unavailable here.
+template<class Perf>
+static inline bool cudnn_conv_algorithm_allowed(const Perf& perf) {
+    if (perf.status != CUDNN_STATUS_SUCCESS) return false;
+#ifndef IS_ROCM
+    if (cudnn_deterministic && perf.determinism != CUDNN_DETERMINISTIC)
+        return false;
+#endif
+    return true;
+}
 
 // Shared by 2-D/3-D kernels, but owned separately for each device.
 ConvAlgoCache<cudnnConvolutionFwdAlgo_t>& cudnn_fwd_algo_cache();

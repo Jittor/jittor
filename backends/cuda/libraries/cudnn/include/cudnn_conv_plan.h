@@ -41,6 +41,7 @@ struct ConvPlanRequest {
     int64 pad[2], stride[2], dilation[2];
     int64 allow_tf32;   // tensor-op numerics for fp32 operands
     int64 benchmark;    // time the candidate plans instead of trusting heuristic order
+    int64 deterministic; // reject engines marked as nondeterministic
 };
 
 struct ConvPlanRequestHash {
@@ -131,7 +132,8 @@ inline bool tensor(Desc& t, int64 uid, int64 dtype, const int64* dims, const int
 // Engines that need runtime compilation are never used; for fp32 operands
 // without tensor-op permission, engines that use tensor cores or down-convert
 // inputs are skipped so the numerics match the legacy FMA path.
-inline bool engine_allowed(cudnnBackendDescriptor_t cfg, bool fp32, bool allow_tf32) {
+inline bool engine_allowed(cudnnBackendDescriptor_t cfg, bool fp32, bool allow_tf32,
+                           bool deterministic) {
     Desc eng(CUDNN_BACKEND_ENGINE_DESCRIPTOR);
     int64_t n = 0;
     if (!eng.ok || cudnnBackendGetAttribute(cfg, CUDNN_ATTR_ENGINECFG_ENGINE,
@@ -142,13 +144,22 @@ inline bool engine_allowed(cudnnBackendDescriptor_t cfg, bool fp32, bool allow_t
             CUDNN_BEHAVIOR_NOTE_TYPE_COUNT, &n, behavior) == CUDNN_STATUS_SUCCESS)
         for (int64_t i = 0; i < n; i++)
             if (behavior[i] == CUDNN_BEHAVIOR_NOTE_RUNTIME_COMPILATION) return false;
-    if (fp32 && !allow_tf32) {
+    if (deterministic || (fp32 && !allow_tf32)) {
         cudnnBackendNumericalNote_t numerical[CUDNN_NUMERICAL_NOTE_TYPE_COUNT];
-        if (cudnnBackendGetAttribute(eng.d, CUDNN_ATTR_ENGINE_NUMERICAL_NOTE, CUDNN_TYPE_NUMERICAL_NOTE,
-                CUDNN_NUMERICAL_NOTE_TYPE_COUNT, &n, numerical) == CUDNN_STATUS_SUCCESS)
-            for (int64_t i = 0; i < n; i++)
-                if (numerical[i] == CUDNN_NUMERICAL_NOTE_TENSOR_CORE
-                    || numerical[i] == CUDNN_NUMERICAL_NOTE_DOWN_CONVERT_INPUTS) return false;
+        auto status = cudnnBackendGetAttribute(eng.d, CUDNN_ATTR_ENGINE_NUMERICAL_NOTE,
+            CUDNN_TYPE_NUMERICAL_NOTE, CUDNN_NUMERICAL_NOTE_TYPE_COUNT, &n, numerical);
+        // Without an annotation the engine cannot establish the requested
+        // deterministic contract. Declining it lets legacy cuDNN try its own
+        // annotated candidates; it never accepts an unclassified engine.
+        if (deterministic && status != CUDNN_STATUS_SUCCESS) return false;
+        if (status == CUDNN_STATUS_SUCCESS)
+            for (int64_t i = 0; i < n; i++) {
+                if (deterministic && numerical[i] == CUDNN_NUMERICAL_NOTE_NONDETERMINISTIC)
+                    return false;
+                if (fp32 && !allow_tf32 &&
+                    (numerical[i] == CUDNN_NUMERICAL_NOTE_TENSOR_CORE
+                     || numerical[i] == CUDNN_NUMERICAL_NOTE_DOWN_CONVERT_INPUTS)) return false;
+            }
     }
     return true;
 }
@@ -239,7 +250,7 @@ inline void build(const ConvPlanRequest& r, ConvPlanEntry& e, void* x, void* w, 
         cudnnBackendGetAttribute(heur.d, CUDNN_ATTR_ENGINEHEUR_RESULTS, CUDNN_TYPE_BACKEND_DESCRIPTOR,
             count, &got, cfgs.data());
         for (int64_t i = 0; i < got && (int)candidates.size() < max_candidates; i++) {
-            if (!engine_allowed(cfgs[i], fp32, r.allow_tf32)) continue;
+            if (!engine_allowed(cfgs[i], fp32, r.allow_tf32, r.deterministic)) continue;
             Desc plan(CUDNN_BACKEND_EXECUTION_PLAN_DESCRIPTOR);
             plan.set(CUDNN_ATTR_EXECUTION_PLAN_HANDLE, CUDNN_TYPE_HANDLE, 1, &cudnn_handle);
             plan.set(CUDNN_ATTR_EXECUTION_PLAN_ENGINE_CONFIG, CUDNN_TYPE_BACKEND_DESCRIPTOR, 1, &cfgs[i]);
@@ -329,14 +340,10 @@ inline ConvPlanRequest conv_plan_request(
     // candidates: both belong in the key, because both change which plan the
     // build picks.
     r.allow_tf32 = math_type == CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION;
-    // Channels-last half precision is timed whatever `cudnn_benchmark` says:
-    // there the heuristic's first plan is often not the fast one, and the
-    // difference is most of what the layout is for -- a ResNet-50 batch-64
-    // inference ran its NHWC convolutions in 6.6 ms on the first plan and in
-    // 5.0 ms on the fastest of six, the same as PyTorch's.
-    bool half = dtype_x == CUDNN_DATA_HALF || dtype_x == CUDNN_DATA_BFLOAT16;
-    bool channels_last = dimX[1] > 1 && strideX[1] == 1;
-    r.benchmark = cudnn_benchmark != 0 || (half && channels_last);
+    // The historical default (-1) still permits timing. Explicitly disabling
+    // benchmarking must also hold for reduced-precision channels-last inputs.
+    r.benchmark = cudnn_benchmark != 0;
+    r.deterministic = cudnn_deterministic;
     return r;
 }
 

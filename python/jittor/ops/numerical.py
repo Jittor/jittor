@@ -270,8 +270,19 @@ def isposinf(x):
 
 
 def rsqrt(x):
+    """Elementwise reciprocal square root with native real opmath.
+
+    Real half/bfloat16 inputs compute in float32 and round once. Complex64
+    retains its established compositional forward and conjugate-autograd path.
+    Other accelerators retain the existing composition until their native
+    rsqrt lowering is independently validated.
+    """
     import jittor as jt
-    return 1/jt.sqrt(x)
+    if (_jittor_dtype_name(x.dtype) == "complex64"
+            or jt.core.dispatch_context([x])[0] not in ("cpu", "cuda")):
+        # Keep established public behavior on unverified accelerator lowerings.
+        return 1 / jt.sqrt(x)
+    return jt.unary(x, "rsqrt")
 
 
 def sinc(x):

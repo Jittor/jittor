@@ -55,8 +55,8 @@ _FACTORY_FIDELITY_DETAIL = (
     "some Torch layout, pin-memory, out, or generator-state semantics"
 )
 _EMPTY_LIKE_FIDELITY_DETAIL = (
-    "preserves the input shape and dtype through Jittor allocation but omits "
-    "Torch layout, device, requires_grad, pin-memory, and memory-format semantics"
+    "preserves input shape/dtype and explicit device/requires_grad through "
+    "Jittor allocation but omits Torch layout, pin-memory, and memory-format semantics"
 )
 
 
@@ -66,9 +66,11 @@ def _invoke_factory(name, args, kwargs):
     if implementation is None:
         raise RuntimeError("torch.%s is not installed" % name)
     from ..frontend import tensor_frontend
-    like = args[0] if args and (name.endswith("_like") or name in _TENSOR_FIRST_ARGUMENT) else None
+    from ..meta import finish
+    follows_input = name.endswith("_like") or name in _TENSOR_FIRST_ARGUMENT
+    like = (args[0] if args else kwargs.get("input")) if follows_input else None
     with tensor_frontend(context.target_namespace.Var, device=kwargs.get("device"), like=like):
-        return implementation(*args, **kwargs)
+        return finish(implementation(*args, **kwargs), kwargs.get("device"), like)
 
 
 def arange(*args, **kwargs):
@@ -185,7 +187,17 @@ def _factory_implementation(value):
 def _empty_like_implementation(input, **kwargs):
     """Preserve the historical compiler fallback for ``torch.empty_like``."""
     selected = kwargs.get("dtype")
-    return jt.empty(input.shape, dtype=input.dtype if selected is None else _dtype_to_str(selected))
+    result = jt.empty(input.shape, dtype=input.dtype if selected is None else _dtype_to_str(selected))
+    return _apply_requires_grad(result, kwargs.get("requires_grad", False))
+
+
+def _apply_requires_grad(value, enabled):
+    """Factories own gradient recording independently of their inputs."""
+    value._jittor_torch_ext_mutable = True
+    value.requires_grad_(bool(enabled))
+    if enabled:
+        _torch_register_leaf(value)
+    return value
 
 
 def _install_empty_like(root):
@@ -244,9 +256,7 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
             native_shape = all(type(dim) is int for dim in shape)
         if native_shape:
             out = orig(*args)
-            out._jittor_torch_ext_mutable = True
-            out.requires_grad_(False)
-            return out
+            return _apply_requires_grad(out, False)
     # _invoke_factory already established native construction placement.
     _requires_grad = bool(kwargs.get("requires_grad", False))
     for k in _DROP:
@@ -314,11 +324,7 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
     out = orig(*args, **kwargs)
     if _cast_to is not None:
         out = out.cast(_cast_to)
-    out._jittor_torch_ext_mutable = True
-    out.requires_grad_(_requires_grad)
-    if _requires_grad:
-        _torch_register_leaf(out)
-    return out
+    return _apply_requires_grad(out, _requires_grad)
 
 
 def _wrap_constructors(g):

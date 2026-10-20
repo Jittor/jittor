@@ -95,6 +95,28 @@ class ParameterRewrite:
         return value
 
 
+def _adapt_batchnorm_counter(owner, module):
+    """Torch owns a persistent scalar int64 counter; native keeps its format.
+
+    Adapted children can be built without calling their initializer. Apply
+    this to every owned frontend module after graph adoption, while leaving
+    supplied native modules and the original native child objects untouched.
+    """
+    native = getattr(owner.backend.nn, "BatchNorm", None)
+    if (native is None or not isinstance(module, owner.Module)
+            or not isinstance(module, native)
+            or not getattr(module, "track_running_stats", False)):
+        return
+    counter = module.num_batches_tracked.cast("int64").reshape(()).stop_grad()
+    # ChildAdoption retains sets by identity. Role-name updates on the adapted
+    # copy must not change the source native module's checkpoint persistence.
+    for name in ("_buffer_names", "_non_persistent_buffer_names",
+                 "_parameter_names", "_non_parameter_names"):
+        if name in vars(module):
+            object.__setattr__(module, name, set(vars(module)[name]))
+    module.register_buffer("num_batches_tracked", counter, persistent=True)
+
+
 def adopt_owned_children(owner, module, external, frozen=False):
     adoption = ChildAdoption(owner, module, external)
     for name, value in tuple(vars(module).items()):
@@ -123,3 +145,5 @@ def adopt_owned_children(owner, module, external, frozen=False):
             replacement = rewrite.replace(value)
             if replacement is not value:
                 setattr(module, name, replacement)
+    for owned in tuple(adoption.memo.values()):
+        _adapt_batchnorm_counter(owner, owned)

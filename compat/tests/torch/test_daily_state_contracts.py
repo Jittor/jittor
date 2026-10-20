@@ -8,6 +8,8 @@ import numpy as np
 import pytest
 import torch
 
+from _release_test_helpers import on_device, public_device_scope, values
+
 
 _DEVICES = tuple(name for name in os.environ.get(
     "JITTOR_TEST_DEVICES", "cpu").split(",") if name in ("cpu", "cuda"))
@@ -15,40 +17,8 @@ _DEVICES = tuple(name for name in os.environ.get(
 
 @pytest.fixture(params=_DEVICES)
 def device(request):
-    name = request.param
-    previous = torch.get_default_device()
-    is_shim = hasattr(torch, "_torch_compat_install_context")
-    if is_shim:
-        import jittor as jt
-        from jittor._runtime.fallback import forbid_backend_fallbacks
-        scope = jt.flag_scope(use_cuda=int(name == "cuda"))
-        scope.__enter__()
-        guard = forbid_backend_fallbacks()
-        guard.__enter__()
-        before = jt.core.backend_fallback_count()
-    try:
-        torch.set_default_device(name)
+    with public_device_scope(request.param, set_default=True) as name:
         yield name
-        if name == "cuda":
-            torch.cuda.synchronize()
-        if is_shim:
-            assert jt.core.backend_fallback_count() == before
-    finally:
-        torch.set_default_device(previous)
-        if is_shim:
-            guard.__exit__(None, None, None)
-            scope.__exit__(None, None, None)
-
-
-def values(tensor):
-    return tensor.detach().cpu().numpy().copy()
-
-
-def on_device(tensor, device):
-    assert tensor.device.type == device
-    if hasattr(torch, "_torch_compat_install_context"):
-        import jittor as jt
-        assert jt.core.dispatch_context([tensor])[0] == device
 
 
 def test_empty_fast_path_defaults_to_a_frozen_leaf(device):

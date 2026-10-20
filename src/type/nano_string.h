@@ -98,6 +98,8 @@ constexpr int ns_max_len = 16;
     \
     m(uniform) \
     m(normal) \
+    /* Append new names: existing indices are serialized in native state. */ \
+    m(rsqrt) \
 
 struct NanoString;
 #define DECLEAR_NS(T) EXTERN_LIB NanoString ns_##T;
@@ -428,6 +430,11 @@ inline NanoString binary_dtype_infer(NanoString op, NanoString x, NanoString y, 
 }
 
 inline NanoString unary_dtype_infer(NanoString op, NanoString x) {
+    // Reciprocal square root is an elementwise floating operation. Like the
+    // public Torch operation, autocast must not narrow a float32/float64 input;
+    // reduced inputs retain their dtype, with float32 opmath in the type table.
+    if (op == ns_rsqrt && !x.is_complex())
+        return x.is_float() ? x : ns_float32;
     if (op.is_bool()) return ns_bool;
     if (x.is_complex()) return (op==ns_abs) ? ns_float32 : ns_complex64;  // |z|->float
     int dsize_ = x.dsize_();

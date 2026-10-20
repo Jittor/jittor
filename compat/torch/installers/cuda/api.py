@@ -1047,6 +1047,10 @@ class _CudnnBackendModule(_types.ModuleType):
     def __getattribute__(self, name):
         if name == "allow_tf32":
             return _tf32_get("cudnn")
+        if name == "deterministic":
+            native = getattr(jt, "cudnn", None)
+            if native is not None:
+                return bool(native.get_deterministic())
         return super().__getattribute__(name)
 
     def __setattr__(self, name, value):
@@ -1065,6 +1069,11 @@ class _CudnnBackendModule(_types.ModuleType):
                 swallowed("torch/installers/cuda/api.py cudnn.__setattr__: "
                           "jt.cudnn.set_benchmark(%r)" % (value,), exc,
                           "cuDNN autotuning stays as it was")
+        if name == "deterministic" and not getattr(self, "_jittor_cudnn_init", False):
+            native = getattr(jt, "cudnn", None)
+            if native is not None:
+                native.set_deterministic(int(bool(value)))
+            value = bool(value)
         if name == "allow_tf32":
             _tf32_set("cudnn", value)
             return None
@@ -1305,12 +1314,10 @@ class _CudnnFlags:
         with torch.backends.cudnn.flags(enabled=False, benchmark=True):
             ...
 
-    **It restores the attributes; it does not change which kernels run.** The
-    module's four switches are already settings nothing acts on -- convolution
-    here picks its own path -- and this does not make them act. What it buys is
-    that the attribute a caller reads back inside the block is the one it set,
-    and that the block is not an AttributeError. MiniMax-H3's reference path
-    wraps work in it, and a missing `flags` killed the request outright.
+    Benchmarking, deterministic convolution selection and TF32 permission
+    reach the native runtime through the module's setters. ``enabled`` remains
+    a stored compatibility attribute. Every changed setting is restored when
+    the context exits, including on exceptions.
 
     A class rather than `@contextlib.contextmanager` so the old values are read
     on `__enter__`, not when the object is built.
