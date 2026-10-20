@@ -9,7 +9,7 @@ from jittor import Module
 
 _DDP_SEQUENCE = itertools.count()
 _SIGNATURE_WORDS = 16
-_SIGNATURE_VARIANCE_TOLERANCE = 5e-2
+_SIGNATURE_TOLERANCE = 5e-2
 _BUCKET_BYTES = 25 * 1024 * 1024
 _BUCKET_INPUTS = 64
 
@@ -108,6 +108,25 @@ def _module_placements(parameters, buffers):
     return next(iter(placements), None)
 
 
+def _validate_storage_layout(parameters, buffers):
+    """Reject storage views that NCCL broadcast cannot safely flatten.
+
+    Gradient buckets are packed before reduction, but construction broadcasts
+    each parameter and buffer directly. NCCL treats those addresses as dense;
+    expanded/strided storage can therefore read beyond its allocation or
+    overwrite aliased elements. Until the constructor path packs these values,
+    fail before issuing any collective.
+    """
+    for name, value in list(parameters) + list(buffers):
+        is_contiguous = getattr(value, "_storage_is_contiguous", None)
+        if callable(is_contiguous) and not is_contiguous():
+            raise ValueError(
+                "native DistributedDataParallel requires contiguous parameter "
+                "and buffer storage; {!r} is a strided or overlapping view"
+                .format(name)
+            )
+
+
 def _gradient_buckets(parameters):
     """Bounded homogeneous buckets in the agreed module parameter order."""
     buckets = []
@@ -134,15 +153,70 @@ def _gradient_buckets(parameters):
     return tuple(buckets)
 
 
+class _GradientBucketReadiness:
+    """Drain ready gradients in a rank-stable reducer bucket order."""
+
+    def __init__(self, buckets, target_to_parameter, on_bucket_ready):
+        self.buckets = tuple(tuple(bucket) for bucket in buckets)
+        self.target_to_parameter = tuple(target_to_parameter)
+        self.on_bucket_ready = on_bucket_ready
+        self.seen_targets = set()
+        self.ready = {}
+        self.next_bucket = 0
+
+        bucket_parameters = [
+            parameter_index
+            for bucket in self.buckets
+            for parameter_index in bucket
+        ]
+        if len(bucket_parameters) != len(set(bucket_parameters)):
+            raise ValueError("gradient buckets contain duplicate parameters")
+        if set(bucket_parameters) != set(self.target_to_parameter):
+            raise ValueError(
+                "gradient bucket parameters must match backward targets"
+            )
+        if len(set(self.target_to_parameter)) != len(self.target_to_parameter):
+            raise ValueError("backward targets contain duplicate parameters")
+
+    def __call__(self, target_index, gradient):
+        target_index = int(target_index)
+        if target_index < 0 or target_index >= len(self.target_to_parameter):
+            raise IndexError("gradient callback target index is out of range")
+        if target_index in self.seen_targets:
+            raise RuntimeError(
+                "gradient callback target {} was reported more than once"
+                .format(target_index)
+            )
+        self.seen_targets.add(target_index)
+        self.ready[self.target_to_parameter[target_index]] = gradient
+
+        while self.next_bucket < len(self.buckets):
+            bucket = self.buckets[self.next_bucket]
+            if not all(index in self.ready for index in bucket):
+                break
+            gradients = tuple(self.ready.pop(index) for index in bucket)
+            self.on_bucket_ready(bucket, gradients)
+            self.next_bucket += 1
+
+    def finish(self):
+        missing = sorted(
+            set(range(len(self.target_to_parameter))) - self.seen_targets
+        )
+        if missing:
+            raise RuntimeError(
+                "gradient callbacks missing target indices {}".format(missing)
+            )
+        if self.next_bucket != len(self.buckets):
+            raise RuntimeError("gradient callbacks did not complete every bucket")
+
+
 def _signature_check(distributed, group, payload, description, reference):
     """Reject mismatched rank metadata before issuing per-parameter collectives."""
     digest = hashlib.sha256(repr(payload).encode("utf-8")).digest()
     words = []
     for byte in digest[:8]:
-        words.extend(((byte & 15) * 16, (byte >> 4) * 16))
-    values = jt.array(
-        words + [word * word for word in words], dtype="float32"
-    ).stop_grad()
+        words.extend((byte & 15, byte >> 4))
+    values = jt.array(words, dtype="float32").stop_grad()
     backend, device_id = _value_placement(reference)
     if backend == "cuda":
         values = values.cuda(device_id)
@@ -151,11 +225,11 @@ def _signature_check(distributed, group, payload, description, reference):
     reduced = distributed.all_reduce(values, op="mean", group=group)
     observed = reduced.numpy().reshape(-1)
     for index in range(_SIGNATURE_WORDS):
-        mean = float(observed[index])
-        variance = float(observed[index + _SIGNATURE_WORDS]) - mean * mean
-        if variance > _SIGNATURE_VARIANCE_TOLERANCE:
+        expected = float(words[index])
+        if abs(float(observed[index]) - expected) > _SIGNATURE_TOLERANCE:
             raise RuntimeError(
-                "DistributedDataParallel ranks have different " + description
+                "DistributedDataParallel could not verify the reduced "
+                + description + " signature"
             )
 
 
@@ -178,6 +252,22 @@ def _chain_dependency(value, dependency):
     producer = value._input(0)
     producer._add_dependency(dependency)
     return [producer]
+
+
+def _validate_reducer_state(state):
+    current_parameters = list(state.wrapper.module.named_parameters())
+    current_buffers = list(state.wrapper.module.named_buffers())
+    current_signature = _module_signature(
+        state.wrapper.module, current_parameters, current_buffers)
+    if (current_signature != state.initial_signature
+            or tuple(id(parameter) for _, parameter in current_parameters)
+            != state.parameter_ids
+            or _local_placements(current_parameters, current_buffers)
+            != state.local_placements):
+        raise RuntimeError(
+            "DistributedDataParallel module parameters or buffers changed "
+            "after construction"
+        )
 
 
 class DistributedDataParallel(Module):
@@ -233,6 +323,7 @@ class DistributedDataParallel(Module):
 
         parameters = list(module.named_parameters())
         buffers = list(module.named_buffers())
+        _validate_storage_layout(parameters, buffers)
         placement = _module_placements(parameters, buffers)
         metadata_reference = (
             _metadata_reference(parameters, buffers) if world_size > 1 else None
@@ -255,6 +346,12 @@ class DistributedDataParallel(Module):
                 )
 
         if world_size > 1:
+            # Materializing the metadata marker on the communication stream
+            # must follow any asynchronous model initialization work.  A
+            # pending CUDA update can otherwise leave NCCL's first P2P
+            # collective ordered against an unfinished default-stream
+            # operation; SHM fallback happens to hide that ordering hazard.
+            jt.sync_all(True)
             _signature_check(
                 distributed, process_group, state.initial_signature,
                 "module parameter/buffer metadata",
@@ -341,19 +438,7 @@ def _sync_optimizer_gradients(entries, optimizer=None):
         # This avoids a device-to-host metadata round trip on every update.
         # As with a rank's forward exception, the launcher must stop peers when
         # a local contract violation raises before their gradient collective.
-        current_parameters = list(state.wrapper.module.named_parameters())
-        current_buffers = list(state.wrapper.module.named_buffers())
-        current_signature = _module_signature(
-            state.wrapper.module, current_parameters, current_buffers)
-        if (current_signature != state.initial_signature
-                or tuple(id(parameter) for _, parameter in current_parameters)
-                != state.parameter_ids
-                or _local_placements(current_parameters, current_buffers)
-                != state.local_placements):
-            raise RuntimeError(
-                "DistributedDataParallel module parameters or buffers changed "
-                "after construction"
-            )
+        _validate_reducer_state(state)
         coverage = tuple(
             len(by_parameter.get(id(parameter), ()))
             if parameter.requires_grad else 0
@@ -387,7 +472,7 @@ def _sync_optimizer_gradients(entries, optimizer=None):
                    else getattr(state.group, "_backend_kind", None))
         use_bucket = backend == "nccl"
         if use_bucket and gradients:
-            from jittor.distributed.bucket import bucket_scope
+            from jittor.distributed.bucket import bucket_scope, comm_wait
             from jittor.backends.cuda.kernels.misc.ddp_bucket import (
                 pack_gradients, unpack_gradients,
             )
@@ -397,18 +482,29 @@ def _sync_optimizer_gradients(entries, optimizer=None):
                 if parameter.requires_grad
             }
             reduced_pairs = []
-            packed = []
-            for indices in state.buckets:
-                members = [gradient_map[index] for index in indices]
-                value = pack_gradients(members) if len(members) > 1 else members[0]
-                packed.append((members, value))
-            with bucket_scope(defer_join=False):
-                for members, value in packed:
-                    reduced = distributed.all_reduce(
-                        value, op="sum", group=state.group
-                    )
+            # The optimizer supplies complete backward results here. Reverse
+            # bucket order and leave every communication-stream join deferred
+            # until the final wait. This preserves the agreed collective
+            # sequence while allowing the communication stream to progress
+            # across bucket boundaries. Device profiling still has to
+            # establish backward/communication overlap separately.
+            try:
+                for indices in reversed(state.buckets):
+                    members = [gradient_map[index] for index in indices]
+                    value = (pack_gradients(members)
+                             if len(members) > 1 else members[0])
+                    jt.sync(members, weak_sync=False)
+                    with bucket_scope(defer_join=True):
+                        reduced = distributed.all_reduce(
+                            value, op="sum", group=state.group
+                        )
+                        jt.sync([reduced], weak_sync=False)
+                    # nccl_hold keeps the input allocation reserved until the
+                    # final join, so retaining the packed Var here is not
+                    # needed. The averaged result is consumed after comm_wait.
                     reduced_pairs.append((members, reduced))
-                jt.sync([reduced for _, reduced in reduced_pairs])
+            finally:
+                comm_wait()
             for members, reduced in reduced_pairs:
                 if len(members) == 1:
                     members[0].assign(reduced / state.world_size)

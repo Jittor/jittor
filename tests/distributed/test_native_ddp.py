@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 
 import jittor as jt
+import numpy as np
 from jittor import nn
 from jittor import distributed
 from jittor.nn.parallel import DistributedDataParallel
@@ -48,6 +49,8 @@ def _native_dist(world_size, all_reduce=None, broadcast=None, backend_name=None)
                       create=True), \
             patch.object(distributed, "get_world_size", return_value=world_size,
                          create=True), \
+            patch.object(distributed, "get_backend",
+                         return_value=backend_name or "mpi", create=True), \
             patch.object(distributed, "get_default_group", return_value=group,
                          create=True), \
             patch.object(distributed, "all_reduce", side_effect=reduce,
@@ -85,7 +88,208 @@ class _UnusedWeight(_OneWeight):
         return self.weight * x
 
 
+class _ExpandedWeight(nn.Module):
+    def __init__(self):
+        self.weight = jt.array([[2.0], [4.0]], dtype="float32").expand((2, 2))
+
+    def execute(self, x):
+        return jt.matmul(x, self.weight)
+
+
+class _ExpandedBuffer(nn.Module):
+    def __init__(self):
+        self.weight = jt.array([2.0], dtype="float32")
+        self.register_buffer(
+            "expanded", jt.array([[3.0]], dtype="float32").expand((1, 2)))
+
+    def execute(self, x):
+        return self.weight * x
+
+
 class TestNativeDistributedDataParallel(unittest.TestCase):
+    def test_clip_norm_broadcasts_coefficient_for_synced_nccl_gradients(self):
+        with _native_dist(
+                2, broadcast=lambda tensor, _src: tensor * 0 + 0.1,
+                backend_name="nccl") as (_group, calls):
+            wrapped = DistributedDataParallel(_TwoWeights())
+            optimizer = jt.optim.SGD(wrapped.parameters(), lr=0.1)
+            state = wrapped._jittor_ddp_state
+            state.has_unsynced_grads = False
+            optimizer.param_groups[0]["grads"] = [
+                jt.array([3.0], dtype="float32").stop_grad(),
+                jt.array([4.0], dtype="float32").stop_grad(),
+            ]
+            optimizer._Optimizer__zero_grad = False
+            calls["broadcast"].clear()
+
+            optimizer.clip_grad_norm(1.0)
+            observed = [
+                gradient.numpy().tolist()
+                for gradient in optimizer.param_groups[0]["grads"]
+            ]
+
+        self.assertAlmostEqual(observed[0][0], 0.3, places=6)
+        self.assertAlmostEqual(observed[1][0], 0.4, places=6)
+        self.assertEqual(calls["broadcast"], [((), 0)])
+
+    def test_optimizer_readiness_preflight_maps_targets_to_module_slots(self):
+        from jittor.optim.base import _native_ddp_readiness_plan
+
+        with _native_dist(2, backend_name="nccl") as (_group, _calls):
+            wrapped = DistributedDataParallel(_TwoWeights())
+            optimizer = jt.optim.SGD(wrapped.parameters(), lr=0.1)
+            targets = [
+                parameter for group in optimizer.param_groups
+                for parameter in group["params"] if parameter.requires_grad
+            ]
+            plan = _native_ddp_readiness_plan(optimizer, targets, [])
+
+        self.assertIsNotNone(plan)
+        self.assertEqual(
+            plan["target_to_parameter"],
+            tuple(range(len(targets))),
+        )
+        self.assertEqual(
+            set(plan["parameter_slots"]),
+            set(plan["target_to_parameter"]),
+        )
+
+    def test_readiness_signature_ignores_local_optimizer_parameter_order(self):
+        import jittor.nn.parallel.distributed_data_parallel as reducer
+        from jittor.optim.base import _native_ddp_readiness_plan
+
+        with _native_dist(2, backend_name="nccl"):
+            wrapped = DistributedDataParallel(_TwoWeights())
+            parameters = list(wrapped.parameters())
+            signatures = []
+            plans = []
+
+            def capture_signature(_distributed, _group, payload,
+                                  _description, _reference):
+                signatures.append(payload)
+
+            with patch.object(reducer, "_signature_check",
+                              side_effect=capture_signature):
+                for ordered_parameters in (
+                        parameters, list(reversed(parameters))):
+                    optimizer = jt.optim.SGD(ordered_parameters, lr=0.1)
+                    targets = [
+                        parameter for group in optimizer.param_groups
+                        for parameter in group["params"]
+                        if parameter.requires_grad
+                    ]
+                    plans.append(_native_ddp_readiness_plan(
+                        optimizer, targets, []))
+
+        self.assertEqual(signatures[0], signatures[1])
+        self.assertEqual(plans[0]["target_to_parameter"], (0, 1))
+        self.assertEqual(plans[1]["target_to_parameter"], (1, 0))
+        for plan in plans:
+            for parameter_index, (group, slot) in plan["parameter_slots"].items():
+                self.assertIs(group["params"][slot], parameters[parameter_index])
+
+    def test_gradient_readiness_drains_out_of_order_targets_in_bucket_order(self):
+        from jittor.nn.parallel.distributed_data_parallel import (
+            _GradientBucketReadiness,
+        )
+
+        launched = []
+        readiness = _GradientBucketReadiness(
+            buckets=((0, 1), (2,)),
+            target_to_parameter=(2, 0, 1),
+            on_bucket_ready=lambda indices, values: launched.append(
+                (indices, values)),
+        )
+        readiness(0, "gradient-2")
+        readiness(2, "gradient-1")
+        self.assertEqual(launched, [])
+        readiness(1, "gradient-0")
+        readiness.finish()
+        self.assertEqual(
+            launched,
+            [
+                ((0, 1), ("gradient-0", "gradient-1")),
+                ((2,), ("gradient-2",)),
+            ],
+        )
+
+    def test_gradient_readiness_rejects_duplicate_and_missing_targets(self):
+        from jittor.nn.parallel.distributed_data_parallel import (
+            _GradientBucketReadiness,
+        )
+
+        readiness = _GradientBucketReadiness(
+            buckets=((0, 1),),
+            target_to_parameter=(0, 1),
+            on_bucket_ready=lambda _indices, _values: None,
+        )
+        readiness(0, "first")
+        with self.assertRaisesRegex(RuntimeError, "reported more than once"):
+            readiness(0, "duplicate")
+        with self.assertRaisesRegex(RuntimeError, "missing target indices"):
+            readiness.finish()
+
+    def test_constructor_rejects_overlapping_storage_before_collectives(self):
+        cases = (
+            ("parameter", _ExpandedWeight,
+             lambda module: module.weight),
+            ("buffer", _ExpandedBuffer,
+             lambda module: module.expanded),
+        )
+        for kind, factory, get_view in cases:
+            for world_size in (1, 2):
+                with self.subTest(kind=kind, world_size=world_size), \
+                        _native_dist(world_size) as (_group, calls):
+                    module = factory()
+                    value = get_view(module)
+                    # Some CPU Var implementations materialize expand() before
+                    # reporting storage layout. Force the contract predicate in
+                    # this process-level test; CUDA evidence exercises the real
+                    # stride-zero view directly.
+                    with patch.object(value, "_storage_is_contiguous",
+                                      return_value=False):
+                        with self.assertRaisesRegex(
+                                ValueError,
+                                "requires contiguous parameter and buffer storage"):
+                            DistributedDataParallel(module)
+                    self.assertEqual(calls["all_reduce"], [])
+                    self.assertEqual(calls["broadcast"], [])
+
+    def test_constructor_signature_check_rejects_corrupted_collective_result(self):
+        from jittor.nn.parallel.distributed_data_parallel import _signature_check
+
+        class _CorruptedCollective:
+            @staticmethod
+            def all_reduce(tensor, op="sum", group=None):
+                return jt.zeros(tensor.shape, dtype=tensor.dtype)
+
+        reference = jt.array([1.0], dtype="float32").stop_grad()
+        with self.assertRaisesRegex(RuntimeError, "could not verify the reduced"):
+            _signature_check(
+                _CorruptedCollective(), _Group(),
+                (("weight", (1,), "float32", "cpu", True),),
+                "module parameter/buffer metadata", reference,
+            )
+
+    def test_signature_check_avoids_half_precision_collective_overflow(self):
+        from jittor.nn.parallel.distributed_data_parallel import _signature_check
+
+        class _HalfPrecisionCollective:
+            @staticmethod
+            def all_reduce(tensor, op="sum", group=None):
+                values = np.asarray(tensor.numpy(), dtype=np.float16)
+                reduced = (values * np.float16(2)).astype(np.float16)
+                if op == "mean":
+                    reduced = (reduced / np.float16(2)).astype(np.float16)
+                return jt.array(reduced.astype(np.float32)).stop_grad()
+
+        reference = jt.array([1.0], dtype="float32").stop_grad()
+        _signature_check(
+            _HalfPrecisionCollective(), _Group(size=2),
+            (("weight", (1,), "float32", "cpu", True),),
+            "module parameter/buffer metadata", reference,
+        )
+
     def test_world_one_is_identity_and_optimizer_stays_native(self):
         with _native_dist(1) as (_group, calls):
             model = DistributedDataParallel(_OneWeight())
@@ -102,6 +306,22 @@ class TestNativeDistributedDataParallel(unittest.TestCase):
             model = DistributedDataParallel(_OneWeight())
             self.assertEqual(calls["broadcast"], [((1,), 0), ((1,), 0)])
             self.assertEqual(model.buffers()[0].numpy().tolist(), [5.0])
+
+    def test_constructor_flushes_pending_work_before_signature_collective(self):
+        events = []
+
+        def reduce(tensor, op="sum", group=None):
+            events.append("all_reduce")
+            return tensor
+
+        with _native_dist(2, all_reduce=reduce) as (_group, _calls), \
+                patch.object(jt, "sync_all",
+                             side_effect=lambda *args, **kwargs: events.append(
+                                 "sync_all")):
+            DistributedDataParallel(_OneWeight())
+
+        self.assertGreaterEqual(len(events), 2)
+        self.assertEqual(events[0:2], ["sync_all", "all_reduce"])
 
     def test_no_sync_accumulates_then_means_once_before_step(self):
         # Pretend the remote rank's accumulated gradient is 4. Rank 0 has two
@@ -252,13 +472,26 @@ class TestNativeDistributedDataParallel(unittest.TestCase):
         with _native_dist(2) as (_group, calls):
             model = DistributedDataParallel(_OneWeight())
             optimizer = jt.optim.SGD(model.parameters(), lr=0.1)
-            self.assertEqual(calls["all_reduce"], [((32,), "mean")])
+            self.assertEqual(calls["all_reduce"], [((16,), "mean")])
             calls["all_reduce"].clear()
             for _ in range(3):
                 optimizer.step(model(jt.array([3.0])).sum())
             self.assertEqual(calls["all_reduce"], [((1,), "mean")] * 3)
             self.assertAlmostEqual(float(model.module.weight.numpy()[0]), 1.1,
                                    places=5)
+
+    def test_one_rank_launcher_does_not_use_legacy_mpi_collectives(self):
+        # jtrun sets jt.in_mpi for its MPI-free NCCL rendezvous path. A raw
+        # single-card job need not initialize a process group and must not call
+        # the legacy Var.mpi_all_reduce / Var.mpi_broadcast methods.
+        with _native_dist(1):
+            weight = jt.array([2.0], dtype="float32")
+            optimizer = jt.optim.SGD([weight], lr=0.1)
+            with patch.object(jt.compile_extern, "in_mpi", True):
+                optimizer.backward((weight * 3.0).sum())
+                optimizer.step()
+
+        np.testing.assert_allclose(weight.numpy(), [1.7], rtol=0, atol=1e-6)
 
     def test_update_and_load_keep_parameter_holder_valid(self):
         for world_size in (1, 2):
@@ -420,15 +653,27 @@ class TestNativeDistributedDataParallel(unittest.TestCase):
         from jittor.nn.parallel import distributed_data_parallel as reducer
 
         active = [False]
+        pending = [False]
+        constructing = [False]
         events = []
         raw_outputs = []
-        remote_gradients = iter((5.0, 10.0))
+        prepared_inputs = []
+        remote_gradients = iter((10.0, 5.0) if bucket_inputs == 1
+                                else (5.0, 10.0))
         sync = jt.sync
+        grad_with_callback = jt.core.grad_with_callback
         divide = jt.Var.__truediv__
+
+        def build_backward(*args):
+            constructing[0] = True
+            try:
+                return grad_with_callback(*args)
+            finally:
+                constructing[0] = False
 
         @contextmanager
         def scope(defer_join=True):
-            self.assertFalse(defer_join)
+            self.assertTrue(defer_join)
             self.assertFalse(active[0])
             active[0] = True
             events.append("enter")
@@ -437,14 +682,26 @@ class TestNativeDistributedDataParallel(unittest.TestCase):
             finally:
                 active[0] = False
                 events.append("exit")
+                pending[0] = True
+
+        def wait_for_communication():
+            self.assertFalse(active[0])
+            if not pending[0]:
+                events.append("wait_empty")
+                return False
+            pending[0] = False
+            events.append("wait")
+            return True
 
         def sum_with_remote(tensor, op):
-            if tuple(tensor.shape) == (32,):
+            if tuple(tensor.shape) == (16,):
                 self.assertEqual(op, "mean")
                 self.assertFalse(active[0])
                 return tensor
             self.assertTrue(active[0])
             self.assertEqual(op, "sum")
+            self.assertTrue(any(tensor is value for value in prepared_inputs),
+                            "collective input was not prepared before group entry")
             remote = jt.array([next(remote_gradients) for _ in
                                range(int(tensor.numel()))], dtype=tensor.dtype)
             output = tensor + remote.reshape(tensor.shape)
@@ -454,22 +711,43 @@ class TestNativeDistributedDataParallel(unittest.TestCase):
 
         def sync_sinks(values, *args, **kwargs):
             if active[0]:
-                self.assertEqual([id(value) for value in values],
-                                 [id(value) for value in raw_outputs])
+                self.assertEqual(len(values), 1)
+                self.assertIs(values[0], raw_outputs[-1])
                 events.append("sync_raw_outputs")
+            else:
+                # Readiness reduces temporary gradients and publishes the
+                # optimizer holders only after the communication join. Check
+                # preparation of the actual collective inputs, independently
+                # of those holders' identities.
+                parameters = model.parameters()
+                if (values and all(tuple(value.shape) == (1,) for value in values)
+                        and not any(value is parameter for value in values
+                                    for parameter in parameters)):
+                    self.assertFalse(
+                        constructing[0],
+                        "backward executed while autograd still owns intermediate roots")
+                    self.assertEqual(jt.flags.auto_flush_ops, 0)
+                    self.assertFalse(kwargs.get("weak_sync", True))
+                    prepared_inputs.extend(values)
+                    events.append("gradient_ready")
             return sync(values, *args, **kwargs)
 
         def scale_after_exit(value, divisor):
             if any(value is output for output in raw_outputs):
                 self.assertFalse(active[0], "mean consumed an open group's output")
+                self.assertFalse(pending[0], "mean consumed a pending collective")
                 self.assertEqual(divisor, 2)
                 events.append("mean")
             return divide(value, divisor)
 
         def pack_on_cpu(gradients):
             self.assertFalse(active[0])
+            self.assertTrue(all(any(gradient is value for value in prepared_inputs)
+                                for gradient in gradients))
             events.append("pack")
-            return jt.concat([gradient.reshape((-1,)) for gradient in gradients])
+            packed = jt.concat([gradient.reshape((-1,)) for gradient in gradients])
+            prepared_inputs.append(packed)
+            return packed
 
         def unpack_on_cpu(reduced, gradients, world_size):
             self.assertFalse(active[0])
@@ -493,21 +771,38 @@ class TestNativeDistributedDataParallel(unittest.TestCase):
             optimizer = jt.optim.SGD(model.parameters(), lr=0.1)
             calls["all_reduce"].clear()
             with patch.object(bucket, "bucket_scope", side_effect=scope), \
+                    patch.object(bucket, "comm_wait",
+                                 side_effect=wait_for_communication), \
                     patch.object(ddp_bucket, "pack_gradients", side_effect=pack_on_cpu), \
                     patch.object(ddp_bucket, "unpack_gradients", side_effect=unpack_on_cpu), \
+                    patch.object(jt.core, "grad_with_callback", side_effect=build_backward), \
                     patch.object(jt, "sync", side_effect=sync_sinks), \
                     patch.object(jt.Var, "__truediv__", scale_after_exit):
                 loss = (model.module.weight * 3.0
                         + model.module.second * 6.0).sum()
-                optimizer.backward(loss)
+                with jt.flag_scope(auto_flush_ops=37):
+                    optimizer.backward(loss, retain_graph=True)
+                    self.assertEqual(jt.flags.auto_flush_ops, 37)
+            # Retaining a graph must still permit an independent gradient
+            # request after readiness has consumed its temporary references.
+            retained = jt.grad(loss, model.parameters())
+            self.assertEqual([g.numpy().tolist() for g in retained], [[3.0], [6.0]])
             if bucket_inputs == 1:
-                self.assertEqual(events, ["enter", "sum", "sum", "sync_raw_outputs",
-                                          "exit", "mean", "mean"])
-                self.assertEqual(calls["all_reduce"], [((1,), "sum")] * 2)
+                self.assertEqual(events, [
+                    "gradient_ready", "enter", "sum", "sync_raw_outputs", "exit",
+                    "gradient_ready", "enter", "sum", "sync_raw_outputs", "exit",
+                    "wait", "mean", "mean",
+                ])
+                self.assertEqual(calls["all_reduce"],
+                                 [((16,), "mean"), ((1,), "sum"), ((1,), "sum")])
             else:
-                self.assertEqual(events, ["pack", "enter", "sum", "sync_raw_outputs",
-                                          "exit", "mean", "unpack"])
-                self.assertEqual(calls["all_reduce"], [((2,), "sum")])
+                self.assertEqual(events, [
+                    "gradient_ready", "pack", "enter", "sum", "sync_raw_outputs",
+                    "exit", "wait", "mean", "unpack",
+                ])
+                self.assertEqual(calls["all_reduce"],
+                                 [((16,), "mean"), ((2,), "sum")])
+            self.assertFalse(pending[0])
             self.assertEqual([gradient.numpy().tolist() for gradient in
                               optimizer.param_groups[0]["grads"]], [[4.0], [8.0]])
             optimizer.step()
@@ -515,6 +810,52 @@ class TestNativeDistributedDataParallel(unittest.TestCase):
                                    places=5)
             self.assertAlmostEqual(float(model.module.second.numpy()[0]), 3.2,
                                    places=5)
+
+    def test_nccl_readiness_replay_failure_joins_and_restores_auto_flush(self):
+        from jittor.distributed import bucket
+        from jittor.nn.parallel import distributed_data_parallel as reducer
+
+        collectives = []
+
+        def fail_second_bucket(tensor, op):
+            if tuple(tensor.shape) == (16,):
+                return tensor
+            self.assertEqual(jt.flags.auto_flush_ops, 0)
+            collectives.append(tensor)
+            if len(collectives) == 2:
+                raise RuntimeError("injected second bucket failure")
+            return tensor * 2
+
+        with _native_dist(2, all_reduce=fail_second_bucket,
+                          backend_name="nccl"), \
+                patch.object(reducer, "_BUCKET_INPUTS", 1):
+            model = DistributedDataParallel(_TwoWeights())
+            optimizer = jt.optim.SGD(model.parameters(), lr=0.1)
+            loss = (model.module.weight * 3.0 + model.module.second * 6.0).sum()
+            with patch.object(bucket, "bucket_scope"), \
+                    patch.object(bucket, "comm_wait") as wait, \
+                    jt.flag_scope(auto_flush_ops=37):
+                with self.assertRaisesRegex(RuntimeError, "injected second bucket failure"):
+                    optimizer.backward(loss)
+                self.assertEqual(jt.flags.auto_flush_ops, 37)
+                wait.assert_called_once_with()
+            # A failed replay must not publish partially reduced gradients.
+            self.assertEqual([g.numpy().tolist() for g in
+                              optimizer.param_groups[0]["grads"]], [[0.0], [0.0]])
+
+    def test_nccl_unpack_rejects_checkpoint_gradient_dtype_mismatch(self):
+        from jittor.backends.cuda.kernels.misc.ddp_bucket import unpack_gradients
+
+        # Old BF16 checkpoints could restore a gradient's raw bits as uint16.
+        # Copying the floating bucket bytes into that holder silently changes
+        # their interpretation; reject it before creating a memcpy operator.
+        reduced = jt.array([2.0, -4.0], dtype="float32")
+        templates = [jt.zeros((1,), dtype="uint16"),
+                     jt.zeros((1,), dtype="uint16")]
+        with patch.object(jt, "code") as code, \
+                self.assertRaisesRegex(ValueError, "bucket dtype"):
+            unpack_gradients(reduced, templates, 2)
+        code.assert_not_called()
 
 
 if __name__ == "__main__":

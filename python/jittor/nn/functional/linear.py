@@ -1,6 +1,7 @@
 """Functional linear transformation."""
 
 import jittor as jt
+from jittor._runtime.dispatch import try_dispatch
 
 from ._amp import bias_for_compute_dtype
 
@@ -16,7 +17,11 @@ def linear(x, weight, bias=None):
     # the rest of the linear operator, and a fused linear would keep one dtype
     # here. See `_amp.bias_for_compute_dtype` for why the shim needs it and
     # native jittor does not.
-    return x + bias_for_compute_dtype(x, bias)
+    bias = bias_for_compute_dtype(x, bias)
+    result = try_dispatch("nn.linear_bias", x, bias)
+    if result is not None:
+        return result
+    return x + bias
 
 
 __all__ = ["linear"]

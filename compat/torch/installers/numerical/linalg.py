@@ -185,12 +185,15 @@ def _addmm_impl(input, mat1, mat2, *, beta=1, alpha=1):
     from . import (
         jt,
     )
-    result = jt.matmul(mat1, mat2)
-    if alpha != 1:
-        result = result * alpha
-    if beta == 0:
-        return result
-    return beta * input + result
+    from ...amp import _autocast_cast_inputs, _autocast_scope_for_inputs
+    input, mat1, mat2 = _autocast_cast_inputs(input, mat1, mat2)
+    with _autocast_scope_for_inputs(input, mat1, mat2):
+        result = jt.matmul(mat1, mat2)
+        if alpha != 1:
+            result = result * alpha
+        if beta == 0:
+            return result
+        return beta * input + result
 
 
 def addmm(input, mat1, mat2, *, beta=1, alpha=1):
@@ -207,7 +210,9 @@ def _mm_impl(input, mat2, out=None):
     from . import (
         jt,
     )
-    return jt.matmul(input, mat2)
+    from ...amp import _autocast_scope_for_inputs
+    with _autocast_scope_for_inputs(input, mat2):
+        return jt.matmul(input, mat2)
 
 
 def mm(input, mat2, out=None):

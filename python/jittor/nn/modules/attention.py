@@ -126,7 +126,17 @@ class MultiheadAttention(jt.Module):
     ):
         is_batched = query.ndim == 3
         if self.batch_first and is_batched:
-            query, key, value = (tensor.transpose(0, 1) for tensor in (query, key, value))
+            if query is key and key is value:
+                query = query.transpose(0, 1)
+                key = value = query
+            elif key is value:
+                query = query.transpose(0, 1)
+                key = key.transpose(0, 1)
+                value = key
+            else:
+                query, key, value = (
+                    tensor.transpose(0, 1) for tensor in (query, key, value)
+                )
         output, weights = jt.nn.multi_head_attention_forward(
             query,
             key,

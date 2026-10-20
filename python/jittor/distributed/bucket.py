@@ -20,6 +20,11 @@ respect:
     other_compute()               # overlaps with the collectives
     comm_wait()                   # before anything reads `reduced`
 
+Several deferred bucket scopes may be submitted before ``comm_wait``. They
+share the communication stream's ordering, and all input/output allocations
+remain reserved until that final join. Call ``comm_wait`` before consuming any
+result or allowing those buffers to be reused.
+
 ``jt.sync`` has to be *inside* the scope because the group has to be open
 around the NCCL calls, and those happen when the graph executes, not when the
 scope object is built. And it has to sync exactly the collective outputs:
@@ -62,7 +67,8 @@ def bucket_scope(defer_join=True):
     """Group every collective executed inside into one NCCL submission.
 
     With ``defer_join`` (the default) the default stream is left free to run
-    ahead of the bucket; call :func:`comm_wait` before reading the results.
+    ahead of the bucket; one later :func:`comm_wait` joins this and any earlier
+    deferred buckets before their results are read.
     With ``defer_join=False`` the bucket is still submitted as one group but
     joins immediately, which is the useful setting for measuring what grouping
     alone buys.

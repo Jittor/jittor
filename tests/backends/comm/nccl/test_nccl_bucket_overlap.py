@@ -144,21 +144,29 @@ class TestNcclBucket(unittest.TestCase):
             np.testing.assert_allclose(y.numpy(), want, rtol=0, atol=0)
 
     @jt.flag_scope(use_cuda=1)
-    def test_a_second_bucket_before_the_wait_is_refused(self):
-        xs = self._inputs()
+    def test_multiple_deferred_buckets_share_a_final_join(self):
+        xs_first = self._inputs(0)
+        xs_second = self._inputs(7)
         jt.sync_all(True)
+        before = self._deps()
         with jd.bucket_scope(defer_join=True):
-            ys = [nccl_ops.nccl_all_reduce(x) for x in xs]
-            jt.sync(ys)
+            ys_first = [nccl_ops.nccl_all_reduce(x) for x in xs_first]
+            jt.sync(ys_first)
         self.assertTrue(jd.join_pending())
-        # Stacking buckets would keep growing the set of reserved blocks and
-        # leave it ambiguous which bucket a later wait covers. Refused loudly
-        # rather than allowed to accumulate.
-        with self.assertRaises(Exception):
-            with jd.bucket_scope(defer_join=True):
-                pass
-        jd.comm_wait()
-        for y, want in zip(ys, self._expected()):
+        with jd.bucket_scope(defer_join=True):
+            ys_second = [nccl_ops.nccl_all_reduce(x) for x in xs_second]
+            jt.sync(ys_second)
+        self.assertTrue(jd.join_pending())
+        # Every collective adds one compute->communication dependency. The
+        # final join must cover both groups without an intermediate wait.
+        self.assertEqual(self._deps() - before, 2 * NB)
+        self.assertTrue(jd.comm_wait())
+        self.assertFalse(jd.join_pending())
+        self.assertEqual(self._deps() - before, 2 * NB + 1)
+        self.assertFalse(jd.comm_wait())
+        for y, want in zip(ys_first, self._expected(0)):
+            np.testing.assert_allclose(y.numpy(), want, rtol=0, atol=0)
+        for y, want in zip(ys_second, self._expected(7)):
             np.testing.assert_allclose(y.numpy(), want, rtol=0, atol=0)
 
     @jt.flag_scope(use_cuda=1)
@@ -178,8 +186,8 @@ class TestNcclBucket(unittest.TestCase):
         for step in range(iterations):
             xs = self._inputs(step)
             with jd.bucket_scope(defer_join=True):
-                ys = [nccl_ops.nccl_all_reduce(x) for x in xs]
-                jt.sync(ys)
+                ys_first = [nccl_ops.nccl_all_reduce(x) for x in xs]
+                jt.sync(ys_first)
             self.assertTrue(jd.join_pending())
             # Drop every reference to the inputs; their blocks are now
             # reclaimable as far as the allocator is concerned.
@@ -188,10 +196,24 @@ class TestNcclBucket(unittest.TestCase):
                       for _ in range(2 * NB)]
             jt.sync(poison)
             del poison
+
+            xs = self._inputs(step + iterations)
+            with jd.bucket_scope(defer_join=True):
+                ys_second = [nccl_ops.nccl_all_reduce(x) for x in xs]
+                jt.sync(ys_second)
+            self.assertTrue(jd.join_pending())
+            del xs
+            poison = [jt.full((NUMEL,), POISON, dtype="float32")
+                      for _ in range(2 * NB)]
+            jt.sync(poison)
+            del poison
+
             jd.comm_wait()
-            for y, want in zip(ys, self._expected(step)):
+            for y, want in zip(ys_first, self._expected(step)):
                 errors.append((y - jt.array(want)).abs().max())
-            del ys
+            for y, want in zip(ys_second, self._expected(step + iterations)):
+                errors.append((y - jt.array(want)).abs().max())
+            del ys_first, ys_second
         jt.sync_all(True)
         worst = max(float(e.numpy()) for e in errors)
         self.assertEqual(worst, 0.0,

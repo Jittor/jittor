@@ -6,6 +6,7 @@
 // ***************************************************************
 #include "ops/composite/tape_op.h"
 #include "core/common.h"
+#include <functional>
 
 namespace jittor {
 
@@ -73,6 +74,28 @@ Op* backward_grad_fn(Var* v);
 /** Whether `v` is a leaf of the backward graph. See backward_grad_fn. */
 inline bool is_backward_leaf(Var* v) { return backward_grad_fn(v) == nullptr; }
 
+/** Receives each requested target gradient when the backward traversal finishes it. */
+struct GradReadyCallback {
+    typedef jittor::Var Var;
+    typedef jittor::VarHolder VarHolder;
+    std::function<void(int, Var*)> func;
+    std::function<void()> deleter;
+
+    GradReadyCallback() = default;
+    GradReadyCallback(const GradReadyCallback&) = delete;
+    GradReadyCallback& operator=(const GradReadyCallback&) = delete;
+    GradReadyCallback(GradReadyCallback&& other)
+        : func(move(other.func)), deleter(move(other.deleter)) {
+        other.func = nullptr;
+        other.deleter = nullptr;
+    }
+    GradReadyCallback(
+        std::function<void(int, Var*)>&& func,
+        std::function<void()>&& deleter
+    ) : func(move(func)), deleter(move(deleter)) {}
+    ~GradReadyCallback() { if (deleter) deleter(); }
+};
+
 vector<VarPtr> grad(
     Var* loss,
     vector<Var*> targets,
@@ -84,6 +107,14 @@ vector<VarPtr> grad(
     vector<Var*> targets,
     bool retain_graph,
     bool materialize_grads
+);
+
+// @pyjt(grad_with_callback)
+vector<VarHolder*> grad_with_callback(
+    VarHolder* loss,
+    vector<VarHolder*> targets,
+    bool retain_graph,
+    GradReadyCallback&& callback
 );
 
 // @pyjt(tape_together)

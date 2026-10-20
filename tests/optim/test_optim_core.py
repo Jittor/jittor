@@ -451,7 +451,7 @@ class TestRMSpropUpdate(_OptimCoreBase):
 class TestOptimizerPlumbing(_OptimCoreBase):
 
     @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
-    def test_low_precision_parameter_and_state_dtypes_are_preserved(self):
+    def test_low_precision_parameter_and_state_dtype_policy(self):
         factories = (
             ("base", lambda p: jt.optim.Optimizer([p], lr=1e-3)),
             ("sgd", lambda p: jt.optim.SGD([p], lr=1e-3, momentum=0.9)),
@@ -478,12 +478,118 @@ class TestOptimizerPlumbing(_OptimCoreBase):
                         for group in optimizer.param_groups:
                             for key in ("values", "m", "v", "d", "pre_grad"):
                                 state.extend(group.get(key, ()))
+                        expected_state_dtype = (
+                            "float32" if name in (
+                                "adam", "adamw", "rmsprop", "adan")
+                            else dtype)
                         self.assertTrue(
-                            all(str(value.dtype) == dtype for value in state),
+                            all(str(value.dtype) == expected_state_dtype
+                                for value in state),
                             [str(value.dtype) for value in state],
                         )
                         self.assertTrue(
                             np.isfinite(parameter.float32().numpy()).all())
+
+
+    def test_low_precision_adaptive_optimizers_keep_default_epsilon_finite(self):
+        factories = (
+            ("adam", lambda p: jt.optim.Adam([p], lr=2e-3)),
+            ("adamw", lambda p: jt.optim.AdamW([p], lr=2e-3)),
+            ("adamw_fused", lambda p: jt.optim.AdamW(
+                [p], lr=2e-3, fused=True)),
+            ("rmsprop", lambda p: jt.optim.RMSprop([p], lr=2e-3)),
+            ("adan", lambda p: jt.optim.Adan([p], lr=2e-3)),
+        )
+        for dtype in ("float16", "bfloat16"):
+            for name, factory in factories:
+                def body(dev):
+                    parameter = jt.array([0.25, -0.25]).cast(dtype)
+                    gradient = jt.array([1e-4, -2e-4], dtype="float32")
+                    initial = parameter.float32().numpy().copy()
+                    amp_reg = (jt.amp_flags.prefer_bfloat16
+                               if dtype == "bfloat16"
+                               else jt.amp_flags.prefer16)
+                    with jt.flag_scope(
+                            amp_reg=amp_reg | jt.amp_flags.array_prefer):
+                        optimizer = factory(parameter)
+                    for _ in range(4):
+                        loss = (parameter.float32() * gradient).sum()
+                        optimizer.step(loss)
+                        self.assertTrue(np.isfinite(
+                            parameter.float32().numpy()).all())
+
+                    states = [state for group in optimizer.param_groups
+                              for key in ("values", "m", "v", "d", "pre_grad")
+                              for state in group.get(key, ())]
+                    self.assertTrue(states)
+                    self.assertTrue(all(str(state.dtype) == "float32"
+                                        for state in states))
+                    self.assertTrue(all(np.isfinite(
+                        state.float32().numpy()).all() for state in states))
+
+                    # Old low-precision checkpoints are promoted on their next
+                    # update, even when that update is built inside AMP scope.
+                    for state in states:
+                        state.update(state.cast(dtype))
+                    with jt.flag_scope(
+                            amp_reg=amp_reg | jt.amp_flags.array_prefer):
+                        optimizer.step(
+                            (parameter.float32() * gradient).sum())
+                    self.assertTrue(all(str(state.dtype) == "float32"
+                                        for state in states))
+                    self.assertTrue(all(np.isfinite(
+                        state.float32().numpy()).all() for state in states))
+                    if "n_step" in optimizer.param_groups[0]:
+                        self.assertEqual(
+                            int(optimizer.param_groups[0]["n_step"]), 5)
+                    self.assertTrue(np.any(
+                        parameter.float32().numpy() != initial))
+
+                with self.subTest(dtype=dtype, optimizer=name):
+                    self._devices(body)
+
+    def test_low_precision_adam_fp32_moments_resume(self):
+        for dtype in ("float16", "bfloat16"):
+            def body(dev):
+                gradient = jt.array([1e-4, -2e-4], dtype="float32")
+                parameter = jt.array([0.25, -0.25]).cast(dtype)
+                optimizer = jt.optim.Adam([parameter], lr=2e-3)
+                for _ in range(4):
+                    optimizer.step((parameter.float32() * gradient).sum())
+
+                restored_parameter = jt.array(
+                    parameter.float32().numpy()).cast(dtype)
+                restored_optimizer = jt.optim.Adam(
+                    [restored_parameter], lr=2e-3)
+                restored_optimizer.load_state_dict(optimizer.state_dict())
+                self.assertEqual(
+                    int(restored_optimizer.param_groups[0]["n_step"]), 4)
+                for key in ("values", "m"):
+                    for original, restored in zip(
+                            optimizer.param_groups[0][key],
+                            restored_optimizer.param_groups[0][key]):
+                        self.assertEqual(str(restored.dtype), "float32")
+                        np.testing.assert_array_equal(
+                            restored.numpy(), original.numpy())
+
+                optimizer.step((parameter.float32() * gradient).sum())
+                restored_optimizer.step(
+                    (restored_parameter.float32() * gradient).sum())
+                self.assertEqual(
+                    int(restored_optimizer.param_groups[0]["n_step"]), 5)
+                np.testing.assert_allclose(
+                    restored_parameter.float32().numpy(),
+                    parameter.float32().numpy(), rtol=1e-6, atol=1e-7)
+                for key in ("values", "m"):
+                    for original, restored in zip(
+                            optimizer.param_groups[0][key],
+                            restored_optimizer.param_groups[0][key]):
+                        np.testing.assert_allclose(
+                            restored.numpy(), original.numpy(),
+                            rtol=1e-6, atol=1e-7)
+
+            with self.subTest(dtype=dtype):
+                self._devices(body)
 
     def test_backward_then_step_matches_step_loss(self):
         # opt.backward(loss); opt.step()  must equal  opt.step(loss).

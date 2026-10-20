@@ -53,6 +53,8 @@ from .method_api import (
     _TYPENAME_TO_DTYPE,
     _TorchGradFn,
     _add,
+    _mul,
+    _sqrt,
     _addmm_method,
     _as_strided,
     _is_pinned,
@@ -121,6 +123,7 @@ from .method_api import (
 )
 from ...context import get_install_context
 from types import MappingProxyType
+from .inplace_api import _INPLACE_BINARY_APIS
 
 def _type_attribute(Var, name):
     # A frontend subclass inherits C descriptors and numeric slots; reading
@@ -279,6 +282,11 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
 
     _native_add = g.add
     g.add = _add
+    g.mul = _mul
+    g.multiply = _mul
+    Var.mul = _mul
+    Var.multiply = _mul
+    Var.sqrt = _sqrt
 
     g.cumsum = _owner.cumsum
     Var.cumsum = _owner.cumsum
@@ -538,12 +546,10 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     #   out = beta * self + alpha * (batch1 @ batch2)   (batched matmul)
     # jittor exposes a module-level baddbmm but no Var method (bloom calls
     # the method form). Mirror torch's keyword-only beta/alpha here.
-    if not hasattr(Var, "baddbmm"):
-        Var.baddbmm = _baddbmm
+    Var.baddbmm = _baddbmm
     # torch's Tensor.addmm(mat1, mat2, *, beta=1, alpha=1):
     #   out = beta * self + alpha * (mat1 @ mat2)   (2-D matmul)
-    if not hasattr(Var, "addmm"):
-        Var.addmm = _addmm_method
+    Var.addmm = _addmm_method
 
     # torch's Tensor.T: reverse ALL dims (a deprecated-but-ubiquitous alias for
     # x.permute(reversed(range(ndim)))); a no-op for ndim < 2. jittor lacks it.
@@ -591,7 +597,13 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     for name, implementation in _BINARY_APIS.items():
         if _native_operators[name] is not None:
             setattr(Var, name, implementation)
+    for name, implementation in _INPLACE_BINARY_APIS.items():
+        setattr(Var, name, implementation)
 
     register_api_bindings(Var, 'torch.Tensor',
-        ('T', '__deepcopy__', '__getitem__', '__hash__', '__invert__', '__ne__', '__reduce__', '__reduce_ex__', '__setitem__', 'add_', 'addmm', 'argwhere', 'as_strided', 'backward', 'baddbmm', 'clamp', 'clamp_', 'clip', 'clip_', 'contiguous', 'copy_', 'cpu', 'cuda', 'cumprod', 'cumsum', 'data', 'data_ptr', 'detach', 'device', 'div_', 'dtype', 'element_size', 'fill_', 'get_device', 'grad', 'grad_fn', 'is_complex', 'is_contiguous', 'is_cpu', 'is_cuda', 'is_floating_point', 'is_leaf', 'is_meta', 'is_mps', 'is_nested', 'is_pinned', 'is_signed', 'is_xpu', 'mT', 'mul_', 'narrow', 'ne', 'nelement', 'new_empty', 'new_full', 'new_ones', 'new_tensor', 'new_zeros', 'nonzero', 'norm', 'normal_', 'numpy', 'pin_memory', 'requires_grad', 'requires_grad_', 'retain_grad', 'retains_grad', 'set_', 'squeeze', 'storage', 'storage_offset', 'stride', 'sub_', 'tile', 'to', 'tolist', 'type', 'uniform_', 'untyped_storage', 'where', 'zero_') + tuple(_BINARY_APIS.keys() | _CAST_APIS.keys() | _UNARY_INPLACE_APIS.keys()),
+        ('T', '__deepcopy__', '__getitem__', '__hash__', '__invert__', '__ne__', '__reduce__', '__reduce_ex__', '__setitem__', 'add_', 'addmm', 'argwhere', 'as_strided', 'backward', 'baddbmm', 'clamp', 'clamp_', 'clip', 'clip_', 'contiguous', 'copy_', 'cuda', 'cumprod', 'cumsum', 'data', 'data_ptr', 'detach', 'device', 'div_', 'dtype', 'element_size', 'fill_', 'get_device', 'grad', 'grad_fn', 'is_complex', 'is_contiguous', 'is_cpu', 'is_cuda', 'is_floating_point', 'is_leaf', 'is_meta', 'is_mps', 'is_nested', 'is_pinned', 'is_signed', 'is_xpu', 'mT', 'mul', 'multiply', 'mul_', 'narrow', 'ne', 'nelement', 'new_empty', 'new_full', 'new_tensor', 'new_zeros', 'nonzero', 'norm', 'normal_', 'numpy', 'pin_memory', 'requires_grad', 'requires_grad_', 'retain_grad', 'retains_grad', 'set_', 'squeeze', 'storage', 'storage_offset', 'stride', 'sub_', 'tile', 'to', 'tolist', 'type', 'uniform_', 'untyped_storage', 'where', 'zero_') + tuple(_BINARY_APIS.keys() | _CAST_APIS.keys() | _UNARY_INPLACE_APIS.keys() | _INPLACE_BINARY_APIS.keys()),
         Fidelity.APPROXIMATE, 'Tensor operations share the native Var/Op graph and explicit frontend state; unsupported layouts, device capabilities, and retained compatibility approximations remain restricted')
+    register_api_bindings(
+        Var, 'torch.Tensor', ('cpu', 'mul', 'multiply', 'new_ones'),
+        Fidelity.APPROXIMATE,
+        'Uses the Torch Tensor method owner with native Jittor storage and ops')

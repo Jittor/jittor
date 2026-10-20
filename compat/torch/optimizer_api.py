@@ -13,6 +13,7 @@ from .. import optimizer_kinds as _optimizer_kinds
 from .tensor_state import get_tensor_state
 from .installers.tensor.autograd_api import _optimizer_maybe_has_fsdp_params
 from jittor.optim.algorithms.adam import adam_update
+from .optim_frontend import _initialize_default, _validate_sgd_groups
 
 def _init(self, *a, **k):
     _context = get_install_context(jt)
@@ -758,11 +759,8 @@ def adamw_step(self, loss=None, retain_graph=False, closure=None, **kwargs):
     return _adam_step(self, loss, retain_graph, closure, kwargs, True)
 
 
-def _initialize_default(self, params, lr, args, kwargs, name):
-    initializer = get_install_context(jt).state["optimizer_native_api"]["initializers"][name]
-    return initializer(self, params, lr, *args, **kwargs)
-
 def sgd_step(self, loss=None, retain_graph=False, closure=None, **kwargs):
+    _validate_sgd_groups(self)
     return _step_with_closure(self, loss, retain_graph, closure, kwargs, 'sgd')
 
 

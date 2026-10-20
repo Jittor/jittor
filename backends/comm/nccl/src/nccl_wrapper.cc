@@ -144,9 +144,12 @@ void nccl_stream_end(Var* x, Var* y) {
 void nccl_bucket_begin(bool defer_join) {
     if (nccl_bucket_open)
         LOGf << "nccl_bucket_begin inside another bucket";
-    if (cuda_side_stream_any_join_pending(CUDA_COMMUNICATION_STREAM))
-        LOGf << "nccl_bucket_begin with a join still outstanding:"
-             << "call nccl_comm_wait() before opening the next bucket";
+    // More than one bucket may be in flight. Each bucket submits its NCCL
+    // group to the same per-device communication stream, so a done event
+    // recorded after a later bucket covers all earlier buckets on that
+    // stream. Keep every captured allocation held until the final
+    // nccl_comm_wait(); joining here would order backward compute behind the
+    // previous bucket and close the overlap window.
     nccl_bucket_open = true;
     nccl_bucket_defer = defer_join;
     nccl_bucket_device = -1;

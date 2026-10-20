@@ -355,7 +355,7 @@ def _state_source_to_var(value):
 
 
 def _preserve_target_dtypes_for_load(root, state_dict):
-    """Cast each source value to the dtype of the live destination."""
+    """Cast and move source values to the live destination metadata."""
     # torch.load_state_dict(assign=False), the default used by TRELLIS.2,
     # copies checkpoint values into existing parameters/buffers and keeps
     # the destination dtype.  Jittor's native load replaces through update(),
@@ -376,10 +376,19 @@ def _preserve_target_dtypes_for_load(root, state_dict):
             continue
         target_dtype = _jittor_dtype_name(target.dtype)
         if _jittor_dtype_name(src.dtype) == target_dtype:
-            continue
+            casted = src
+        else:
+            casted = src.cast(target_dtype)
+        target_device = target.device
+        if casted.device != target_device:
+            casted = casted.to(target_device)
+        # assign=False copies checkpoint values, including same-dtype/device
+        # tensors. Rebinding the source Var aliases CUDA optimizer storage and
+        # makes an EMA/reference model follow updates of the loaded model.
+        from ...frontend import clone
         if converted is None:
             converted = dict(state_dict)
-        converted[key] = src.cast(target_dtype)
+        converted[key] = clone(casted.detach())
     return state_dict if converted is None else converted
 
 

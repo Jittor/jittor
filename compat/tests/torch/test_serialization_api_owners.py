@@ -7,6 +7,7 @@ import inspect
 import io
 import pickle
 import pickletools
+import struct
 import textwrap
 import types
 import zipfile
@@ -201,6 +202,24 @@ def test_safetensors_dtype_bytes_reader_and_numpy_delegate(tmp_path):
     assert path.read_bytes() == before
     with pytest.raises(NotImplementedError, match="F8"):
         safe_owner._bytes_to_np(b"\x00", "F8_E4M3", [1])
+
+
+def test_safetensors_load_bytes_rejects_malformed_archives():
+    safetensors = pytest.importorskip("safetensors")
+    st = pytest.importorskip("safetensors.torch")
+    torch = compatibility_owner(jt)
+    assert safe_owner._SafetensorError is safetensors.SafetensorError
+    valid = st.save({"value": torch.tensor([1.0])})
+    malformed = (
+        b"\x01",
+        struct.pack("<Q", 100) + b"{}",
+        struct.pack("<Q", 1) + b"{",
+        struct.pack("<Q", 2) + b"[]",
+        valid[:-1],
+    )
+    for payload in malformed:
+        with pytest.raises(safetensors.SafetensorError):
+            st.load(payload)
 
 
 def test_optional_patch_failure_restores_all_owners(monkeypatch):

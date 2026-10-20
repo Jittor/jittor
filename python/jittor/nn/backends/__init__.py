@@ -8,6 +8,8 @@ from .cudnn import (
 from .onednn import _try_onednn_conv2d, _try_onednn_conv_transpose2d
 from jittor.backends.cuda.kernels.nn.batch_norm_training_cuda import _batch_norm_cuda, _batch_norm_eval_cuda
 from jittor.backends.cuda.kernels.nn.channel_bias_cuda import _channel_bias_add_cuda
+from jittor.backends.cuda.kernels.nn.embedding_cuda import _embedding_cuda
+from jittor.backends.cuda.kernels.nn.linear_bias_cuda import _linear_bias_cuda
 from jittor.backends.cuda.kernels.nn.layer_norm_cuda import _layer_norm_no_grad_cuda
 from jittor.backends.cuda.kernels.nn.layer_norm_training_cuda import _layer_norm_cuda
 from jittor.backends.cuda.kernels.nn.group_norm_cuda import _group_norm_cuda as _group_norm_cuda

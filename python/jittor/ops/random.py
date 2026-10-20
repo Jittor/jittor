@@ -9,28 +9,54 @@ def bernoulli(input):
     return (input>jt.rand_like(input)).cast(input.dtype)
 
 
-def arange(start=0, end=None, step=1,dtype=None):
+def arange(start=0, end=None, step=1, dtype=None):
+    import math
+    import numbers
     import jittor as jt
-    if isinstance(start, Var): start = start.item()
-    if isinstance(end, Var): end = end.item()
-    if isinstance(step, Var): step = step.item()
+    from jittor._core.dtypes import dtype_name
+    from jittor._core.var import _factory_scope_like
+
+    if isinstance(start, (Var, np.generic)): start = start.item()
+    if isinstance(end, (Var, np.generic)): end = end.item()
+    if isinstance(step, (Var, np.generic)): step = step.item()
     if end is None:
-        end,start = start,0
-    l = round((end-start)//step)+1
-    if (l-1)*step+start>=end:
-        l-=1
-    x = jt.index((l,),0)
-    # The Torch frontend preserves integer index construction, but a float
-    # step/start/end must perform floating-point arithmetic before any
-    # requested output cast; otherwise the frontend scalar promotion can
-    # truncate every fractional position to zero.
-    if any(isinstance(value, (float, np.floating))
-           for value in (start, end, step)):
-        x = x.float32()
-    x = x*step+start
-    if dtype is not None:
-        x= x.cast(dtype)
-    return x
+        end, start = start, 0
+    if step == 0:
+        raise ZeroDivisionError("arange step must be nonzero")
+    if (step > 0 and start > end) or (step < 0 and start < end):
+        raise RuntimeError("arange bounds are inconsistent with step sign")
+    values = (start, end, step)
+    floating = any(isinstance(value, (float, np.floating)) for value in values)
+    if all(isinstance(value, numbers.Integral) for value in values):
+        length = len(range(start, end, step))
+    else:
+        length = max(0, math.ceil((end - start) / step))
+
+    # Keep native inference (int32/float32), while a requested 64-bit dtype
+    # must participate in the arithmetic rather than only cast its result.
+    requested = dtype_name(dtype)
+    if requested == "float64":
+        compute_dtype = "float64"
+    elif floating or requested in ("float16", "bfloat16", "float32"):
+        compute_dtype = "float32"
+    elif requested in ("int64", "uint64"):
+        compute_dtype = requested
+    else:
+        compute_dtype = "int32"
+    x = jt.index((length,), 0, dtype=compute_dtype)
+    if compute_dtype in ("int64", "uint64", "float64"):
+        # Python constants otherwise enter ArrayOp as int32/float32, losing
+        # precision before promotion. Build only the two scalar constants on
+        # the index's device; the full range stays a native device operation.
+        with _factory_scope_like(x):
+            step_value = jt.array(step, dtype=compute_dtype)
+            start_value = jt.array(start, dtype=compute_dtype)
+        x = x * step_value + start_value
+    else:
+        if compute_dtype == "float32":
+            step, start = float(step), float(start)
+        x = x * step + start
+    return x if dtype is None else x.cast(dtype)
 
 
 def linspace(start, end, steps):

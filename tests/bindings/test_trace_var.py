@@ -61,6 +61,97 @@ class Linear(Module):
 
 
 class TestTraceVar(unittest.TestCase):
+    def test_gradient_ready_callback_nodes_keep_callback_trace_context(self):
+        jt.clear_trace_data()
+        with jt.flag_scope(trace_py_var=2):
+            x = jt.array(np.array([2.0, 3.0], dtype=np.float32)).stop_grad()
+            weight = jt.array(np.array([4.0, 5.0], dtype=np.float32))
+            loss = (x * weight).sum()
+            callback_values = []
+
+            def on_gradient_ready(index, gradient):
+                self.assertEqual(index, 0)
+                value = gradient + 1.0
+                value.sync()
+                callback_values.append(value)
+
+            gradients = jt.core.grad_with_callback(
+                loss, [weight], True, on_gradient_ready)
+            jt.sync_all()
+            trace = jt.dump_trace_data()
+
+        self.assertEqual(len(gradients), 1)
+        np.testing.assert_array_equal(gradients[0].numpy(), [2.0, 3.0])
+        np.testing.assert_array_equal(callback_values[0].numpy(), [3.0, 4.0])
+        callback_nodes = [
+            node for node in trace["node_data"].values()
+            if node.get("attrs", {}).get("name") == "binary.add"
+            and any("test_trace_var.py" in stack.get("file_path", "")
+                    for stack in node.get("stacks", []))
+        ]
+        self.assertTrue(callback_nodes)
+        self.assertNotIn("grad_op_id", callback_nodes[-1]["attrs"])
+        self.assertFalse(any(
+            stack.get("name") == "Grad"
+            for stack in callback_nodes[-1].get("stacks", [])))
+        jt.clear_trace_data()
+
+    def test_gradient_ready_callback_exception_restores_trace_context(self):
+        jt.clear_trace_data()
+        with jt.flag_scope(trace_py_var=2):
+            x = jt.array(np.array([2.0, 3.0], dtype=np.float32)).stop_grad()
+            weight = jt.array(np.array([4.0, 5.0], dtype=np.float32))
+            loss = (x * weight).sum()
+
+            def fail_callback(index, gradient):
+                raise ValueError("callback failure probe")
+
+            with self.assertRaises(ValueError):
+                jt.core.grad_with_callback(loss, [weight], True, fail_callback)
+
+            value = jt.array(np.array([7.0, 8.0], dtype=np.float32)) + 1.0
+            value.sync()
+            trace = jt.dump_trace_data()
+
+        forward_nodes = [
+            node for node in trace["node_data"].values()
+            if node.get("attrs", {}).get("name") == "binary.add"
+            and any("test_trace_var.py" in stack.get("file_path", "")
+                    for stack in node.get("stacks", []))
+        ]
+        self.assertTrue(forward_nodes)
+        self.assertNotIn("grad_op_id", forward_nodes[-1]["attrs"])
+        self.assertFalse(any(
+            stack.get("name") == "Grad"
+            for stack in forward_nodes[-1].get("stacks", [])))
+        jt.clear_trace_data()
+
+    def test_gradient_ready_callback_non_none_return_is_a_catchable_user_error(self):
+        x = jt.array(np.array([2.0, 3.0], dtype=np.float32)).stop_grad()
+        weight = jt.array(np.array([4.0, 5.0], dtype=np.float32))
+        loss = (x * weight).sum()
+
+        def invalid_callback(index, gradient):
+            return 1
+
+        with self.assertRaisesRegex(
+                RuntimeError, "gradient-ready callback must return None"):
+            jt.core.grad_with_callback(loss, [weight], True, invalid_callback)
+
+        # A rejected callback must leave the same runtime and weights usable.
+        callback_values = []
+
+        def valid_callback(index, gradient):
+            callback_values.append((index, gradient))
+
+        gradients = jt.core.grad_with_callback(
+            (x * weight).sum(), [weight], True, valid_callback)
+        self.assertEqual(len(gradients), 1)
+        self.assertEqual(len(callback_values), 1)
+        self.assertEqual(callback_values[0][0], 0)
+        np.testing.assert_array_equal(gradients[0].numpy(), [2.0, 3.0])
+        np.testing.assert_array_equal(callback_values[0][1].numpy(), [2.0, 3.0])
+
     def test_lifecycle_observer_is_registered_by_trace_flag(self):
         jt.clear_trace_data()
         with jt.flag_scope(trace_py_var=2):

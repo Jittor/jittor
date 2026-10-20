@@ -147,6 +147,30 @@ class TestSDPA(Base):
             self.ac(out, _sdpa_ref(q, k, v), msg=f"sdpa {dev}")
         both_devices(body)
 
+    def test_sdpa_bfloat16_autocast_accepts_mixed_qkv_and_backpropagates(self):
+        rng = np.random.RandomState(20261014)
+        q = rng.randn(2, 2, 4, 8).astype("float32")
+        k = rng.randn(2, 2, 4, 8).astype("float32")
+        v = rng.randn(2, 2, 4, 8).astype("float32")
+
+        def body(dev):
+            qv, kv, vv = jt.array(q), jt.array(k), jt.array(v).bfloat16()
+            with torch.autocast(dev, dtype=torch.bfloat16):
+                out = torch.nn.functional.scaled_dot_product_attention(
+                    qv, kv, vv, is_causal=True)
+            grads = jt.grad(out.float32().sum(), [qv, kv, vv])
+            fetched = jt.fetch_sync(
+                [out.float32()] + [grad.float32() for grad in grads]
+            )
+            self.assertEqual(str(out.dtype), "bfloat16", dev)
+            self.assertTrue(np.isfinite(fetched[0]).all(), dev)
+            for name, grad in zip(("query", "key", "value"), fetched[1:]):
+                self.assertTrue(np.isfinite(grad).all(), "%s %s" % (dev, name))
+                self.assertGreater(float(np.abs(grad).sum()), 0.0,
+                                   "%s %s" % (dev, name))
+
+        both_devices(body)
+
     def test_sdpa_causal(self):
         q, k, v = self.q, self.k, self.v
         seq = q.shape[-2]

@@ -27,5 +27,22 @@ class TestParamList(unittest.TestCase):
         net = Net()
         assert list(net.state_dict().keys()) == ['ps1.0', 'ps1.1', 'ps2.aaa', 'ps2.bbb']
 
+    def test_parameter_containers_load_state_dict(self):
+        class Net(jt.Module):
+            def __init__(self, values):
+                self.ps = jt.nn.ParameterList([
+                    jt.array(values[0]), jt.array(values[1])])
+                self.named = jt.nn.ParameterDict({
+                    "scale": jt.array(values[2])})
+
+        source = Net(([1, 2], [3, 4, 5], [6]))
+        target = Net(([-1, -2], [-3, -4, -5], [-6]))
+        target.load_state_dict(source.state_dict())
+
+        loaded = target.state_dict(to="numpy")
+        np.testing.assert_array_equal(loaded["ps.0"], [1, 2])
+        np.testing.assert_array_equal(loaded["ps.1"], [3, 4, 5])
+        np.testing.assert_array_equal(loaded["named.scale"], [6])
+
 if __name__ == "__main__":
     unittest.main()

@@ -37,6 +37,10 @@ def unpack_gradients(reduced, gradients, world_size):
     Outputs own their storage: optimizer updates and zero_grad can rebind their
     holders without modifying the collective output or another gradient.
     """
+    if any(gradient.dtype != reduced.dtype for gradient in gradients):
+        raise ValueError(
+            "DDP gradient holders must match the reduced bucket dtype; "
+            "check the dtype metadata of restored optimizer gradients")
     averaged = reduced / world_size
     copies = []
     offset = 0

@@ -13,6 +13,7 @@ module still re-exports every name.
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import collections.abc as _collections_abc
+import contextlib as _contextlib
 import functools as _functools
 
 import numpy as np
@@ -31,6 +32,7 @@ _AMP_PREFER16 = 2
 _AMP_KEEP_REDUCE = 4
 _AMP_KEEP_WHITE = 8
 _AMP_ARRAY_PREFER = 16
+_AMP_PREFER_BFLOAT16 = 64
 
 # ---------------------------------------------------------------------------
 # torch.amp state.
@@ -151,6 +153,17 @@ def autocast_is_enabled(device_type=None):
     return bool(_autocast_state.enabled.get(base, False))
 
 
+def autocast_any_enabled():
+    """Whether any device-specific autocast region is active.
+
+    Jittor has one process-wide AMP register. Torch pointwise operators still
+    preserve input dtype regardless of whether the active region is CPU or
+    CUDA, so compatibility wrappers use this predicate before suspending the
+    register around those operators.
+    """
+    return any(_autocast_state.enabled.values())
+
+
 def autocast_dtype(device_type=None):
     """dtype of the innermost enabled autocast region for that device, else None.
 
@@ -169,17 +182,40 @@ def autocast_dtype(device_type=None):
     return autocast_configured_dtype(base)
 
 
+def _autocast_dtype_for_inputs(*values):
+    tensors = [value for value in values if isinstance(value, jt.Var)]
+    if not tensors:
+        return None
+    from .types import _var_is_cpu_resident
+    device_type = ("cpu" if _var_is_cpu_resident(tensors[0])
+                   else _accelerator_device_type())
+    return autocast_dtype(device_type)
+
+
+def _autocast_cast_inputs(*values):
+    dtype = _autocast_dtype_for_inputs(*values)
+    if dtype not in ("float16", "bfloat16"):
+        return values
+    return tuple(
+        value.cast(dtype)
+        if isinstance(value, jt.Var)
+        and _jittor_dtype_name(value.dtype) in ("float16", "bfloat16", "float32")
+        else value
+        for value in values
+    )
+
+
+def _autocast_scope_for_inputs(*values):
+    if autocast_any_enabled() and _autocast_dtype_for_inputs(*values) is None:
+        return jt.flag_scope(amp_reg=0)
+    return _contextlib.nullcontext()
+
+
 def _amp_register_for(dtype_name):
     if dtype_name in ("float32", "float", "double", "float64"):
         return _AMP_PREFER32
     if dtype_name == "bfloat16":
-        from ..stub_policy import degraded
-        degraded(
-            "torch.autocast(dtype=torch.bfloat16)",
-            "jittor's amp register keeps bfloat16 only when an operand "
-            "already is bfloat16; an all-float32 region computes in "
-            "float16 instead",
-            "Cast the module with .to(torch.bfloat16) to stay in bfloat16.")
+        return _AMP_PREFER_BFLOAT16
     return _AMP_PREFER16
 
 

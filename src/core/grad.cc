@@ -77,6 +77,20 @@ struct AmpGradGuard {
     }
 };
 
+struct TraceGradOpRestore {
+    Op* previous;
+    TraceGradOpRestore() : previous(trace_grad_op) {}
+    ~TraceGradOpRestore() { trace_grad_op = previous; }
+};
+
+struct TraceGradOpCallbackScope {
+    Op* previous;
+    TraceGradOpCallbackScope() : previous(trace_grad_op) {
+        trace_grad_op = nullptr;
+    }
+    ~TraceGradOpCallbackScope() { trace_grad_op = previous; }
+};
+
 VarPtr make_grad(Op* op, Var* out, Var* dout, Var* x, int x_index) {
     if (dout == nullptr) return nullptr;
     if (x_index<0) return nullptr;
@@ -150,12 +164,17 @@ void warn_grad_break(int i, Var* v) {
     LOGw << "grads[">>i>>"] '">> v->name>>"' doesn't have gradient. It will be set to zero:" << v;
 }
 
-vector<VarPtr> grad(
+static vector<VarPtr> grad_impl(
     Var* loss,
     vector<Var*> targets,
     bool retain_graph,
-    bool materialize_grads
+    bool materialize_grads,
+    GradReadyCallback* callback
 ) {
+    // Gradient construction temporarily associates newly-created nodes with
+    // the backward op currently being differentiated. Restore the caller's
+    // tracing context on both normal and exceptional exits.
+    TraceGradOpRestore trace_grad_op_restore;
     // No auto-flush while the backward graph is half built; see
     // `SubmissionPipeline::grad_construction_depth`.
     GradConstructionScope construction(runtime_submission_pipeline());
@@ -228,10 +247,14 @@ vector<VarPtr> grad(
     vector<VarPtr> grads(gvars.size());
     vector<VarPtr> results(targets.size());
     vector<int> target_id(targets.size());
+    vector<vector<int>> callback_targets(gvars.size());
+    vector<bool> callback_called(targets.size(), false);
     for (int i=0; i<targets.size(); i++) {
         Var* var = targets[i];
         target_id[i] = gvar_index.has(var) ?
             gvar_index.get(var) : -1;
+        if (target_id[i] >= 0)
+            callback_targets[target_id[i]].push_back(i);
     }
 
     if (grads.size()) {
@@ -351,8 +374,19 @@ vector<VarPtr> grad(
         if (grad && auto_mixed_precision_level == 3 && grad->ns != var->ns) {
             grad = make_unary(grad, var->ns);
         }
+        if (callback && callback->func && grad) {
+            for (int target_index : callback_targets[i]) {
+                {
+                    // The callback may build its own Jittor graph. Those nodes
+                    // belong to the callback's Python call site, not to the
+                    // backward op that happened to produce this gradient.
+                    TraceGradOpCallbackScope callback_trace_scope;
+                    callback->func(target_index, grad.ptr);
+                }
+                callback_called[target_index] = true;
+            }
+        }
     }
-    trace_grad_op = nullptr;
     // set zero grad
     for (size_t i=0; i<results.size(); i++) {
         Var* var = targets[i];
@@ -365,6 +399,10 @@ vector<VarPtr> grad(
             warn_grad_break(i, var);
             grad = make_number(0.f, var);
             assign_attrs(grad.ptr, var);
+        }
+        if (callback && callback->func && !callback_called[i]) {
+            TraceGradOpCallbackScope callback_trace_scope;
+            callback->func(i, grad.ptr);
         }
     }
     if (!retain_graph) {
@@ -389,6 +427,34 @@ vector<VarPtr> grad(
                 grads[i]->set_stop_grad();
             }
     }
+    return results;
+}
+
+vector<VarPtr> grad(
+    Var* loss,
+    vector<Var*> targets,
+    bool retain_graph,
+    bool materialize_grads
+) {
+    return grad_impl(
+        loss, move(targets), retain_graph, materialize_grads, nullptr);
+}
+
+vector<VarHolder*> grad_with_callback(
+    VarHolder* loss,
+    vector<VarHolder*> targets,
+    bool retain_graph,
+    GradReadyCallback&& callback
+) {
+    vector<Var*> vars;
+    vars.reserve(targets.size());
+    for (VarHolder* target : targets)
+        vars.push_back(target->var);
+    auto gradients = grad_impl(loss->var, move(vars), retain_graph, true, &callback);
+    vector<VarHolder*> results;
+    results.reserve(gradients.size());
+    for (auto& gradient : gradients)
+        results.push_back(new VarHolder(move(gradient)));
     return results;
 }
 

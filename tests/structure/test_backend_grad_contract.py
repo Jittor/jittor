@@ -113,6 +113,18 @@ BACKEND_GRAD_COVERAGE = (
      "cuda_numpy"),
 
     # ---- CUDA, hand-written kernels as jt.Function. Real hardware here. ---
+    ("backends/cuda/kernels/nn/linear_bias_cuda.py", "_BiasSum",
+     "tests/nn/test_cuda_stable_gradients.py::TestCUDAStableGradients::test_bias_tile_boundaries_and_noncontiguous_cotangent",
+     "cuda_numpy"),
+    ("backends/cuda/kernels/nn/linear_bias_cuda.py", "_LinearBias",
+     "tests/nn/test_cuda_stable_gradients.py::TestCUDAStableGradients::test_public_linear_first_and_second_derivatives",
+     "cuda_numpy"),
+    ("backends/cuda/kernels/nn/embedding_cuda.py", "_EmbeddingSum",
+     "tests/nn/test_cuda_stable_gradients.py::TestCUDAStableGradients::test_embedding_chunk_boundaries_and_adjoint",
+     "cuda_numpy"),
+    ("backends/cuda/kernels/nn/embedding_cuda.py", "_Embedding",
+     "tests/nn/test_cuda_stable_gradients.py::TestCUDAStableGradients::test_embedding_repeated_signed_indices_and_second_derivatives",
+     "cuda_numpy"),
     ("backends/cuda/kernels/nn/batch_norm_training_cuda.py", "BatchNormCUDA",
      "tests/nn/test_norm.py::TestBatchNorm::test_cuda_fast_path_forward_and_all_gradients",
      "cuda_cpu_jittor"),

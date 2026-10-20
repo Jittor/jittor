@@ -221,7 +221,16 @@ class NNFrontendOwner:
             "_torch_native_layer": native,
         }
         namespace.update(self._conv_padding_members(native))
-        adapted = type(native.__name__, (native, self.Module), namespace)
+        # An explicit super(torch.nn.Linear, self).__init__() skips the
+        # layer initializer and must initialize only Module. Keep the native
+        # layer ahead of the frontend Module for execute() and native super()
+        # chains; an initializer-only bridge supplies that skip without
+        # changing the original native class or its constructor signature.
+        module_base = type("_" + native.__name__ + "ModuleBase", (native,), {
+            "__module__": "torch.nn", "__slots__": (),
+            "__init__": self.native_module.__init__,
+        })
+        adapted = type(native.__name__, (module_base, self.Module), namespace)
         self.adapters[native] = adapted
         return adapted
 
