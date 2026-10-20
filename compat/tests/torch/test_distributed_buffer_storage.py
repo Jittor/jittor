@@ -1,4 +1,4 @@
-"""Real singleton collectives retain output storage and its Parameter aliases."""
+"""Collective writes retain output storage and its Parameter aliases."""
 import socket
 
 import numpy as np
@@ -48,12 +48,25 @@ class TestCollectiveBufferStorage:
             buffer = torch.nn.Parameter(
                 torch.arange(1, 5, device=device, dtype=torch.float32))
             pointer = buffer.data_ptr()
-            assert torch.distributed.all_reduce(
-                buffer, group=torch.distributed.group.WORLD) is None
+
+            class ReductionGroup:
+                def size(self):
+                    return 1
+
+                def rank(self):
+                    return 0
+
+                def _all_reduce(self, value, operation):
+                    assert operation == "sum"
+                    return value + 1
+
+            # WORLD size one copies an unchanged value. A group result forces a
+            # nontrivial writeback through the same path as a multi-rank reduction.
+            assert torch.distributed.all_reduce(buffer, group=ReductionGroup()) is None
             assert buffer.data_ptr() == pointer
             assert buffer.requires_grad and buffer.is_leaf
             np.testing.assert_array_equal(
-                buffer.detach().cpu().numpy(), [1., 2., 3., 4.])
+                buffer.detach().cpu().numpy(), [2., 3., 4., 5.])
         finally:
             torch.distributed.destroy_process_group()
 
