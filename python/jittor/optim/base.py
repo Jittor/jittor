@@ -180,6 +180,11 @@ class Optimizer(object):
         for pg in params:
             if not isinstance(pg, dict):
                 raise TypeError("optimizer parameter groups must be dictionaries")
+            # A group is walked on every step and saved with the optimizer, so
+            # it holds a list, whatever iterable it was given -- a module's
+            # `parameters()` under the torch frontend produces as it is walked.
+            if not isinstance(pg.get('params'), (list, tuple)) and 'params' in pg:
+                pg['params'] = list(pg['params'])
             self.param_groups.append(pg)
         self.n_step = 0
         # __zero_grad is a value for fast determ the grad is zero or not
@@ -189,6 +194,8 @@ class Optimizer(object):
         self.__input_params = []
 
     def add_param_group(self, group):
+        if 'params' in group and not isinstance(group['params'], (list, tuple)):
+            group['params'] = list(group['params'])
         self.param_groups.append(group)
 
     def _advance_step_count(self, pg):

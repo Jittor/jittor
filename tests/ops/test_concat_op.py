@@ -239,5 +239,74 @@ class TestConcatOffTheAmbientDevice(unittest.TestCase):
             jt.flags.device_id = 0
 
 
+class TestConcatAsSelect(unittest.TestCase):
+    """`_concat_fused`: a concatenation of cheap inputs as one fusable select.
+
+    Taken while a graph is captured for replay. RoPE's `cat((-x2, x1), -1)`
+    was three kernels -- the negation into one slice, a copy into the other,
+    then the kernel that reads the result -- and is now part of that last one.
+    """
+
+    def setUp(self):
+        from jittor.ops import concatenation
+        self.fused = concatenation._concat_fused
+        self.rng = np.random.RandomState(0)
+
+    def test_rotate_half_values_and_gradient(self):
+        xn = self.rng.randn(2, 3, 5, 8).astype("float32")
+        cn = self.rng.randn(5, 8).astype("float32")
+        sn = self.rng.randn(5, 8).astype("float32")
+        x, c, s = jt.array(xn), jt.array(cn), jt.array(sn)
+        jt.sync([x, c, s])
+        rot = self.fused([-x[..., 4:], x[..., :4]], 3, "float32")
+        y = x * c + rot * s
+        np.testing.assert_allclose(
+            y.numpy(), xn * cn + np.concatenate([-xn[..., 4:], xn[..., :4]], -1) * sn,
+            rtol=1e-6, atol=1e-6)
+        want = np.broadcast_to(cn, xn.shape).copy()
+        sb = np.broadcast_to(sn, xn.shape)
+        want[..., :4] += sb[..., 4:]
+        want[..., 4:] -= sb[..., :4]
+        np.testing.assert_allclose(jt.grad(y.sum(), x).numpy(), want, rtol=1e-6, atol=1e-6)
+        if jt.flags.use_cuda:
+            jt.sync_all(True)
+            with jt.profile() as p:
+                y = x * c + self.fused([-x[..., 4:], x[..., :4]], 3, "float32") * s
+                y.sync()
+                jt.sync_all(True)
+            self.assertEqual(len(p.result.kernel_records), 1)
+
+    def test_mixed_dtypes_three_inputs_and_other_dims(self):
+        a = jt.array(self.rng.randn(3, 2).astype("float32"))
+        b = jt.array(self.rng.randn(3, 1).astype("float16"))
+        d = jt.array(self.rng.randn(3, 4).astype("float32"))
+        jt.sync([a, b, d])
+        out = self.fused([a, b.exp(), -d], 1, "float32")
+        np.testing.assert_allclose(
+            out.numpy(), np.concatenate([a.numpy(), np.exp(b.numpy().astype("float32")),
+                                         -d.numpy()], 1), rtol=1e-3, atol=1e-3)
+        np.testing.assert_array_equal(self.fused([a, d[:, :2]], 0, "float32").numpy(),
+                                      np.concatenate([a.numpy(), d.numpy()[:, :2]], 0))
+
+    def test_an_input_still_to_be_computed_declines(self):
+        a = jt.array(self.rng.randn(3, 4).astype("float32"))
+        a.sync()
+        self.assertIsNone(self.fused([a, jt.matmul(a, a.transpose())], 1, "float32"))
+
+    def test_a_captured_concatenation_answers_like_eager(self):
+        class Rotate(jt.nn.Module):
+            def execute(self, x):
+                return x * 2.0 + jt.concat([-x[..., 4:], x[..., :4]], -1)
+        model = Rotate()
+        xs = [jt.array(self.rng.randn(2, 8).astype("float32")) for _ in range(4)]
+        jt.sync(xs)
+        with jt.no_grad():
+            with jt.flag_scope(auto_graph_replay=0):
+                want = [model(x).numpy() for x in xs]
+            got = [model(x).numpy() for x in xs]   # the policy captures from the second call
+        for a, b in zip(got, want):
+            np.testing.assert_allclose(a, b, rtol=1e-6, atol=1e-6)
+
+
 if __name__ == "__main__":
     unittest.main()

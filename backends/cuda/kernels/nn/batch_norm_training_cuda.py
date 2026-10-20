@@ -21,6 +21,7 @@ from jittor._core.dtypes import dtype_name as _dtype_name
 from jittor._runtime.core_api import _output_requires_grad
 from jittor._runtime.backend_libraries import library_resource
 from jittor._runtime.dispatch import optional_kernel
+from jittor.nn.functional.activation import offer_activation
 
 #: Blocks a reduction aims for: a few per SM on current parts. More segments
 #: add partial results to combine; fewer leave SMs idle on narrow layers.
@@ -131,127 +132,173 @@ def _per_channel(channels):
     return f"{-(-channels // _THREADS)}, {_THREADS}"
 
 
+#: What the training batch norm can apply to its output in the same pass, as
+#: (forward of z, gradient given the output's gradient gs and z).
+_ACTIVATIONS = {
+    "": ("return z;", "return gs;"),
+    "relu": ("return z > 0.0f ? z : 0.0f;", "return z > 0.0f ? gs : 0.0f;"),
+}
+
+
 @lru_cache(maxsize=128)
-def _batch_norm_cuda_cls(batch, channels, spatial, eps, vector):
+def _batch_norm_cuda_cls(batch, channels, spatial, eps, vector, act=""):
     count = batch * spatial
     total = count * channels
     segments, per_segment = _segments(channels, count)
-    header = _header(_WELFORD, _PAIR)
+    forward_act, grad_act = _ACTIVATIONS[act]
+    header = _header(_WELFORD, _PAIR) + f"""
+    __device__ __forceinline__ float jt_bn_act(float z) {{ {forward_act} }}
+    __device__ __forceinline__ float jt_bn_act_grad(float gs, float z) {{ {grad_act} }}
+    """
     parts = segments * channels
     apply_v4 = """
         float4 v = reinterpret_cast<const float4*>(x)[i];
         float k = coef[c], b = coef[%d + c];
-        reinterpret_cast<float4*>(y)[i] =
-            make_float4(v.x * k + b, v.y * k + b, v.z * k + b, v.w * k + b);
+        reinterpret_cast<float4*>(y)[i] = make_float4(
+            jt_bn_act(v.x * k + b), jt_bn_act(v.y * k + b),
+            jt_bn_act(v.z * k + b), jt_bn_act(v.w * k + b));
     """ % channels
     apply_body = """
-        y[i] = out0_type(static_cast<float>(x[i]) * coef[c] + coef[%d + c]);
+        y[i] = out0_type(jt_bn_act(static_cast<float>(x[i]) * coef[c] + coef[%d + c]));
     """ % channels
+    # The backward takes the gradient through the activation from the value it
+    # had, recomputed from x and the forward's coefficients (`fcoef`).
     grad_v4 = """
-        float4 g = reinterpret_cast<const float4*>(grad_y)[i];
+        float4 gs = reinterpret_cast<const float4*>(grad_y)[i];
         float4 v = reinterpret_cast<const float4*>(x)[i];
+        float fk = fcoef[c], fb = fcoef[%d + c];
+        float4 g = make_float4(
+            jt_bn_act_grad(gs.x, v.x * fk + fb), jt_bn_act_grad(gs.y, v.y * fk + fb),
+            jt_bn_act_grad(gs.z, v.z * fk + fb), jt_bn_act_grad(gs.w, v.w * fk + fb));
         float k1 = coef[c], k2 = coef[%d + c], k3 = coef[%d + c];
         reinterpret_cast<float4*>(grad_x)[i] = make_float4(
             k1 * g.x + k2 * v.x + k3, k1 * g.y + k2 * v.y + k3,
             k1 * g.z + k2 * v.z + k3, k1 * g.w + k2 * v.w + k3);
-    """ % (channels, 2 * channels)
+    """ % (channels, channels, 2 * channels)
     grad_body = """
-        grad_x[i] = out0_type(coef[c] * static_cast<float>(grad_y[i])
-            + coef[%d + c] * static_cast<float>(x[i]) + coef[%d + c]);
-    """ % (channels, 2 * channels)
+        float v = static_cast<float>(x[i]);
+        float g = jt_bn_act_grad(static_cast<float>(grad_y[i]), v * fcoef[c] + fcoef[%d + c]);
+        grad_x[i] = out0_type(coef[c] * g + coef[%d + c] * v + coef[%d + c]);
+    """ % (channels, channels, 2 * channels)
+
+    def statistics(x, weight, bias):
+        """mean, var, rstd and the (scale, shift) the apply uses."""
+        mean, var, rstd, partial, coef = jt.code(
+            [(channels,), (channels,), (channels,), (3 * parts,), (2 * channels,)],
+            ["float32", "float32", "float32", "float32", "float32"],
+            [x, weight, bias],
+            cuda_header=header,
+            cuda_src=f"""
+            __global__ static void batch_norm_statistics(
+                    const in0_type* x, float* partial) {{
+                typedef cub::BlockReduce<JtBnWelford, {_THREADS}> BlockReduce;
+                __shared__ typename BlockReduce::TempStorage storage;
+                // Welford per element. Shifted sums and squares lost a
+                // factor of twenty against the two-pass variance over the
+                // 800 K elements of an early ResNet-50 channel.
+                JtBnWelford local{{0.0f, 0.0f, 0.0f}};
+                {_channel_loop(channels, spatial, count, per_segment, '''
+                    float value = static_cast<float>(x[index]);
+                    local.n += 1.0f;
+                    float delta = value - local.mean;
+                    local.mean += delta * __frcp_rn(local.n);
+                    local.m2 += delta * (value - local.mean);
+                ''')}
+                JtBnWelford total = BlockReduce(storage).Reduce(local, JtBnWelfordSum());
+                if (threadIdx.x == 0) {{
+                    int slot = blockIdx.y * {channels} + channel;
+                    partial[slot] = total.n;
+                    partial[{parts} + slot] = total.mean;
+                    partial[{2 * parts} + slot] = total.m2;
+                }}
+            }}
+            __global__ static void batch_norm_finish(
+                    const float* partial, const in1_type* weight,
+                    const in2_type* bias, float* mean, float* var,
+                    float* rstd, float* coef) {{
+                int c = blockIdx.x * blockDim.x + threadIdx.x;
+                if (c >= {channels}) return;
+                JtBnWelford total{{0.0f, 0.0f, 0.0f}};
+                for (int s = 0; s < {segments}; s++) {{
+                    int slot = s * {channels} + c;
+                    JtBnWelford part{{partial[slot], partial[{parts} + slot],
+                                      partial[{2 * parts} + slot]}};
+                    total = JtBnWelfordSum()(total, part);
+                }}
+                float variance = total.m2 / total.n;
+                float r = rsqrtf(variance + {eps:.9g}f);
+                float k = r * static_cast<float>(weight[c]);
+                mean[c] = total.mean;
+                var[c] = variance;
+                rstd[c] = r;
+                coef[c] = k;
+                coef[{channels} + c] = static_cast<float>(bias[c]) - total.mean * k;
+            }}
+            batch_norm_statistics<<<dim3({channels}, {segments}), {_THREADS}>>>(
+                in0_p, out3_p);
+            batch_norm_finish<<<{_per_channel(channels)}>>>(
+                out3_p, in1_p, in2_p, out0_p, out1_p, out2_p, out4_p);
+            CHECK(0 == cudaGetLastError());
+            """,
+        )
+        return mean, var, rstd, coef
+
+    def apply(x, coef):
+        return jt.code(
+            x.shape, x.dtype, [x, coef],
+            cuda_header=header,
+            cuda_src=f"""
+            {_elementwise("batch_norm_apply",
+                          "const in0_type* x, const in1_type* coef, out0_type* y",
+                          apply_body, apply_v4, total, spatial, channels, vector)}
+            {_launch("batch_norm_apply", "in0_p, in1_p, out0_p",
+                     ("in0_p", "out0_p"), total, vector)}
+            CHECK(0 == cudaGetLastError());
+            """,
+        )
 
     class BatchNormCUDA(jt.Function):
-        def execute(self, x, weight, bias):
-            y, mean, var, rstd, partial, coef = jt.code(
-                [x.shape, (channels,), (channels,), (channels,),
-                 (3 * parts,), (2 * channels,)],
-                [x.dtype, "float32", "float32", "float32", "float32", "float32"],
-                [x, weight, bias],
-                cuda_header=header,
-                cuda_src=f"""
-                __global__ static void batch_norm_statistics(
-                        const in0_type* x, float* partial) {{
-                    typedef cub::BlockReduce<JtBnWelford, {_THREADS}> BlockReduce;
-                    __shared__ typename BlockReduce::TempStorage storage;
-                    // Welford per element. Shifted sums and squares lost a
-                    // factor of twenty against the two-pass variance over the
-                    // 800 K elements of an early ResNet-50 channel.
-                    JtBnWelford local{{0.0f, 0.0f, 0.0f}};
-                    {_channel_loop(channels, spatial, count, per_segment, '''
-                        float value = static_cast<float>(x[index]);
-                        local.n += 1.0f;
-                        float delta = value - local.mean;
-                        local.mean += delta * __frcp_rn(local.n);
-                        local.m2 += delta * (value - local.mean);
-                    ''')}
-                    JtBnWelford total = BlockReduce(storage).Reduce(local, JtBnWelfordSum());
-                    if (threadIdx.x == 0) {{
-                        int slot = blockIdx.y * {channels} + channel;
-                        partial[slot] = total.n;
-                        partial[{parts} + slot] = total.mean;
-                        partial[{2 * parts} + slot] = total.m2;
-                    }}
-                }}
-                __global__ static void batch_norm_finish(
-                        const float* partial, const in1_type* weight,
-                        const in2_type* bias, float* mean, float* var,
-                        float* rstd, float* coef) {{
-                    int c = blockIdx.x * blockDim.x + threadIdx.x;
-                    if (c >= {channels}) return;
-                    JtBnWelford total{{0.0f, 0.0f, 0.0f}};
-                    for (int s = 0; s < {segments}; s++) {{
-                        int slot = s * {channels} + c;
-                        JtBnWelford part{{partial[slot], partial[{parts} + slot],
-                                          partial[{2 * parts} + slot]}};
-                        total = JtBnWelfordSum()(total, part);
-                    }}
-                    float variance = total.m2 / total.n;
-                    float r = rsqrtf(variance + {eps:.9g}f);
-                    float k = r * static_cast<float>(weight[c]);
-                    mean[c] = total.mean;
-                    var[c] = variance;
-                    rstd[c] = r;
-                    coef[c] = k;
-                    coef[{channels} + c] = static_cast<float>(bias[c]) - total.mean * k;
-                }}
-                {_elementwise("batch_norm_apply",
-                              "const in0_type* x, const float* coef, out0_type* y",
-                              apply_body, apply_v4, total, spatial, channels, vector)}
-                batch_norm_statistics<<<dim3({channels}, {segments}), {_THREADS}>>>(
-                    in0_p, out4_p);
-                batch_norm_finish<<<{_per_channel(channels)}>>>(
-                    out4_p, in1_p, in2_p, out1_p, out2_p, out3_p, out5_p);
-                {_launch("batch_norm_apply", "in0_p, out5_p, out0_p",
-                         ("in0_p", "out0_p"), total, vector)}
-                CHECK(0 == cudaGetLastError());
-                """,
-            )
-            self.saved = x, mean, rstd, weight
+        # The statistics and the output are separate operators so that an
+        # activation taken into the pass (`_batch_norm_cuda_statistics`) can
+        # reuse a call's statistics -- which the running buffers read -- and
+        # replace only its output.
+        def execute(self, x, weight, bias, *stats):
+            if stats:
+                mean, var, rstd, coef = stats
+            else:
+                mean, var, rstd, coef = statistics(x, weight, bias)
+            y = apply(x, coef)
+            self.stats_given = len(stats)
+            self.saved = x, mean, rstd, weight, coef
             # The statistics the step computed anyway, for the running
             # buffers; outside the tape, like the buffers themselves.
             self.statistics = mean.stop_grad(), var.stop_grad()
+            self.all_statistics = tuple(v.stop_grad() for v in (mean, var, rstd, coef))
             return y
 
         def grad(self, grad_y):
-            x, mean, rstd, weight = self.saved
+            x, mean, rstd, weight, fcoef = self.saved
             grad_x, grad_weight, grad_bias, partial, coef = jt.code(
                 [grad_y.shape, weight.shape, weight.shape,
                  (2 * parts,), (3 * channels,)],
                 [grad_y.dtype, weight.dtype, weight.dtype, "float32", "float32"],
-                [grad_y, x, mean, rstd, weight],
+                [grad_y, x, mean, rstd, weight, fcoef],
                 cuda_header=header,
                 cuda_src=f"""
                 __global__ static void batch_norm_backward_sums(
                         const in0_type* grad_y, const in1_type* x,
-                        const in2_type* mean, float* partial) {{
+                        const in2_type* mean, const in5_type* fcoef, float* partial) {{
                     typedef cub::BlockReduce<JtBnPair, {_THREADS}> BlockReduce;
                     __shared__ typename BlockReduce::TempStorage storage;
                     float center = static_cast<float>(mean[blockIdx.x]);
+                    float fk = fcoef[blockIdx.x], fb = fcoef[{channels} + blockIdx.x];
                     JtBnPair local{{0.0f, 0.0f}};
                     {_channel_loop(channels, spatial, count, per_segment, '''
-                        float dy = static_cast<float>(grad_y[index]);
+                        float v = static_cast<float>(x[index]);
+                        float dy = jt_bn_act_grad(static_cast<float>(grad_y[index]),
+                                                  v * fk + fb);
                         local.a += dy;
-                        local.b += dy * (static_cast<float>(x[index]) - center);
+                        local.b += dy * (v - center);
                     ''')}
                     JtBnPair total = BlockReduce(storage).Reduce(local, JtBnPairSum());
                     if (threadIdx.x == 0) {{
@@ -288,18 +335,18 @@ def _batch_norm_cuda_cls(batch, channels, spatial, eps, vector):
                 }}
                 {_elementwise("batch_norm_backward_apply",
                               "const in0_type* grad_y, const in1_type* x, "
-                              "const float* coef, out0_type* grad_x",
+                              "const float* fcoef, const float* coef, out0_type* grad_x",
                               grad_body, grad_v4, total, spatial, channels, vector)}
                 batch_norm_backward_sums<<<dim3({channels}, {segments}), {_THREADS}>>>(
-                    in0_p, in1_p, in2_p, out3_p);
+                    in0_p, in1_p, in2_p, in5_p, out3_p);
                 batch_norm_backward_finish<<<{_per_channel(channels)}>>>(
                     out3_p, in2_p, in3_p, in4_p, out1_p, out2_p, out4_p);
-                {_launch("batch_norm_backward_apply", "in0_p, in1_p, out4_p, out0_p",
+                {_launch("batch_norm_backward_apply", "in0_p, in1_p, in5_p, out4_p, out0_p",
                          ("in0_p", "in1_p", "out0_p"), total, vector)}
                 CHECK(0 == cudaGetLastError());
                 """,
             )
-            return grad_x, grad_weight, grad_bias
+            return (grad_x, grad_weight, grad_bias) + (None,) * self.stats_given
 
     return BatchNormCUDA
 
@@ -331,12 +378,24 @@ def _batch_norm_cuda_statistics(x, weight, bias, eps):
     """``(y, mean, var)``: the output and the biased batch statistics it used."""
     shape = tuple(int(size) for size in x.shape)
     spatial = shape[2] * shape[3]
-    cls = _batch_norm_cuda_cls(shape[0], shape[1], spatial, float(eps),
-                               _vector(x, spatial))
+    key = (shape[0], shape[1], spatial, float(eps), _vector(x, spatial))
+    cls = _batch_norm_cuda_cls(*key)
     # The call's own context, which `execute` writes the statistics onto.
     call = cls()._new_call_context()
     y = call._run_call(x, weight, bias)
     mean, var = call.statistics
+
+    def fuse_activation(act):
+        # `relu(y)` asks for this while y is still unexecuted: the same
+        # statistics, which the running buffers read and which therefore run
+        # anyway, and an output with the activation applied in the same pass
+        # -- and its gradient taken inside the backward's. y stays a graph node
+        # nobody runs unless something else reads it.
+        if act not in _ACTIVATIONS:
+            return None
+        fused = _batch_norm_cuda_cls(*key, act)()._new_call_context()
+        return fused._run_call(x, weight, bias, *call.all_statistics)
+    offer_activation(y, fuse_activation)
     return y, mean, var
 
 

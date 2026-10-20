@@ -83,6 +83,48 @@ _VIEW_ROLES = {
 }
 
 
+#: How the lazy walk below reads a module's children, keyed by the ``dfs`` its
+#: class uses. ``dfs`` is the definition of the traversal and a class may
+#: override it; only the implementations listed here are followed lazily, and
+#: any other override is left to walk its own subtree (see `_walk`).
+_WALK_CHILDREN = {}
+
+
+def _walk(module, recurse=True):
+    """``(prefix, module)`` in ``dfs`` pre-order, produced as it goes.
+
+    ``dfs`` fills a list through callbacks, so ``next(model.named_parameters())``
+    -- how Hugging Face and diffusers read ``model.dtype`` and ``model.device``,
+    several times per forward -- paid for every Var of every module in the
+    tree: 1.1 ms on the DDPM UNet, against 2 us in torch, whose views are
+    generators. The root's own key never appears in a prefix.
+    """
+    todo = [("", module, recurse)]
+    while todo:
+        prefix, current, descend = todo.pop()
+        children = _WALK_CHILDREN.get(type(current).dfs)
+        if children is None:
+            yield from _walk_by_dfs(current, prefix, descend)
+            continue
+        yield prefix, current
+        if descend:
+            dot = prefix + "." if prefix else ""
+            for key, child in reversed(children(current)):
+                todo.append((dot + str(key), child, True))
+
+
+def _walk_by_dfs(module, prefix, recurse):
+    """`_walk` for a subtree whose class overrides ``dfs`` in a way it does not know."""
+    visited = []
+    names = []
+    def callback(parents, k, v, n):
+        names.append(str(k))
+        visited.append((".".join(([prefix] if prefix else []) + names[1:]), v))
+    def callback_leave(parents, k, v, n):
+        names.pop()
+    module.dfs([], None, callback, callback_leave, recurse)
+    return visited
+
 class Module:
     def __init__(self, *args, **kw):
         pass
@@ -148,8 +190,7 @@ class Module:
         # named_modules() call -- the hottest Python in a training step, where a
         # module tree is walked more than once per iteration. ``ModuleList``
         # already overrides dfs in exactly this shape.
-        children = [(key, value) for key, value in self.__dict__.items()
-                    if isinstance(value, Module)]
+        children = _module_children(self)
         ret = callback(parents, k, self, len(children))
         if ret == False: return
         if recurse:
@@ -251,24 +292,20 @@ class Module:
         mutated the model and the resulting checkpoint keys depended on which level
         of the tree someone had called parameters() from first.
         '''
+        return list(self._iter_named_vars(kind, recurse, remove_duplicate))
+
+    def _iter_named_vars(self, kind="parameters", recurse=True, remove_duplicate=True):
+        ''' `_named_vars` as a generator, for a caller that may stop early. '''
         roles = _VIEW_ROLES[kind]
-        out = []
-        stack = []
         seen = set() if remove_duplicate else None
-        def callback(parents, k, v, n):
-            stack.append(str(k))
-            prefix = ".".join(stack[1:])
-            for key, var, role in v._var_roles():
+        for prefix, module in _walk(self, recurse):
+            for key, var, role in module._var_roles():
                 if role not in roles: continue
                 if seen is not None:
                     if id(var) in seen: continue
                     seen.add(id(var))
                 leaf = key if type(key) is str else str(key)
-                out.append((prefix + "." + leaf if prefix else leaf, var))
-        def callback_leave(parents, k, v, n):
-            stack.pop()
-        self.dfs([], None, callback, callback_leave, recurse)
-        return out
+                yield (prefix + "." + leaf if prefix else leaf, var)
 
     def parameters(self, recurse=True) -> List:
         ''' Returns a list of module parameters.
@@ -463,17 +500,13 @@ class Module:
                 2: Linear(10, 2, float32[2,], None)
             )), ('0', Linear(2, 10, float32[10,], None)), ('1', relu()), ('2', Linear(10, 2, float32[2,], None))]
         '''
-        ms = []
-        stack = []
-        def callback(parents, k, v, n):
-            if isinstance(v, Module):
-                stack.append(str(k))
-                name = ".".join(stack[1:])
-                ms.append((name, v))
-        def callback_leave(parents, k, v, n):
-            stack.pop()
-        self.dfs([], "", callback, callback_leave)
-        return ms
+        return list(self._iter_named_modules())
+
+    def _iter_named_modules(self):
+        ''' `named_modules` as a generator, for a caller that may stop early. '''
+        for name, module in _walk(self):
+            if isinstance(module, Module):
+                yield name, module
 
     def add_module(self, name, module):
         setattr(self, name ,module)
@@ -1153,6 +1186,15 @@ Returns a handle that removes both halves.
             if p.dtype.is_float():
                 p.assign(p.float_auto())
         return self
+
+
+def _module_children(module):
+    """The ``(key, submodule)`` pairs `Module.dfs` descends into."""
+    return [(key, value) for key, value in module.__dict__.items()
+            if isinstance(value, Module)]
+
+
+_WALK_CHILDREN[Module.dfs] = _module_children
 
 
 def make_module(func, exec_n_args=1):

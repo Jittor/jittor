@@ -124,6 +124,13 @@ def _try_cudnn_conv2d(x, weight, bias, stride, padding, dilation, groups,
     if (channels_last_activations and _jittor_dtype_name(x.dtype) in _HALF
             and (jt.flags.no_grad or not _output_requires_grad(x, weight, bias))):
         source = channels_last_source(x)
+        if source is None:
+            # A dense copy still to be made of a channels-last activation --
+            # Diffusers takes `.contiguous()` before every shortcut convolution
+            # -- read where it lies instead: the copy, a transpose of the whole
+            # activation (823 us for an SD1.5 VAE one), is then never made.
+            if x._is_pending_contiguous():
+                source = channels_last_source(x._input(0))
         y = get_library_ops("cudnn").cudnn_conv(
             x if source is None else source, filter_, sh, sw, ph, pw, dh, dw, groups,
             "abcd" if source is None else "acdb", layout, "acdb")

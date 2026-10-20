@@ -102,7 +102,7 @@ def routing(monkeypatch):
     ("silu", "nn.silu", {}),
 ])
 def test_activation_function_and_existing_class_share_registration(routing, name, key, kwargs):
-    ns = _definitions("nn/functional/activation.py", [name], routing.namespace)
+    ns = _definitions("nn/functional/activation.py", [name, "_fused_activation"], routing.namespace)
     routing.register(key)
     function = ns[name]
     setattr(routing.jt.nn, name, function)

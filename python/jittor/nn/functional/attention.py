@@ -99,6 +99,50 @@ class _MemoryEfficientAttention(jt.Function):
                 grad_value.cast(value.dtype), None, None, None)
 
 
+def _expand_heads(query, tensor, name):
+    """`tensor` with each head repeated to match `query`'s head count."""
+    query_heads, heads = int(query.shape[-3]), int(tensor.shape[-3])
+    if heads == query_heads:
+        return tensor
+    if heads <= 0 or query_heads % heads != 0:
+        raise RuntimeError("%s heads must divide query heads for GQA" % name)
+    return tensor.repeat_interleave(query_heads // heads, dim=-3)
+
+
+def _shape(tensor):
+    return tuple(int(size) for size in tensor.shape)
+
+
+def _repeated_heads(tensor):
+    """``(source, group)`` when `tensor` is a repeat of `source`'s heads still to run.
+
+    Transformers' ``repeat_kv`` -- ``x[:, :, None].expand(b, h, group, s, d)
+    .reshape(b, h * group, s, d)`` -- which it calls before attention whenever
+    it builds an explicit mask, as it does under ``torch.compile``. Read in
+    place, the copy of every key and value head `group` times is never made,
+    and the backward does not keep it.
+    """
+    producer_name = getattr(tensor, "_producer_name", None)
+    if producer_name is None or producer_name() != "reshape":
+        return None
+    expanded = tensor._input(0)
+    if expanded._producer_name() == "contiguous":
+        expanded = expanded._input(0)
+    if expanded._producer_name() != "broadcast_to":
+        return None
+    shape = _shape(expanded)
+    if len(shape) != 5 or _shape(tensor) != (shape[0], shape[1] * shape[2]) + shape[3:]:
+        return None
+    b, heads, group, length, dim = shape
+    unsqueezed = expanded._input(0)
+    if _shape(unsqueezed) != (b, heads, 1, length, dim):
+        return None
+    if unsqueezed._producer_name() == "getitem" \
+            and _shape(unsqueezed._input(0)) == (b, heads, length, dim):
+        return unsqueezed._input(0), group
+    return unsqueezed.reshape((b, heads, length, dim)), group
+
+
 def scaled_dot_product_attention(
     query,
     key,
@@ -107,8 +151,36 @@ def scaled_dot_product_attention(
     dropout_p=0.0,
     is_causal=False,
     scale=None,
+    enable_gqa=False,
 ):
-    """Compute scaled dot-product attention with Torch-compatible masks."""
+    """Compute scaled dot-product attention with Torch-compatible masks.
+
+    ``enable_gqa`` lets ``key`` and ``value`` have fewer heads than ``query``,
+    as PyTorch's does. A kernel that reads the shared heads in place
+    (``nn.fused_attention_gqa``) runs it as it is; otherwise the heads are
+    repeated first -- a copy of every key and value head per query head, which
+    the backward then keeps.
+    """
+    if not enable_gqa and len(query.shape) == 4:
+        repeated_key, repeated_value = _repeated_heads(key), _repeated_heads(value)
+        if (repeated_key is not None and repeated_value is not None
+                and repeated_key[1] == repeated_value[1]):
+            fused = try_dispatch(
+                "nn.fused_attention_gqa", query, repeated_key[0], repeated_value[0],
+                attn_mask=attn_mask, dropout_p=float(dropout_p or 0.0),
+                is_causal=is_causal, scale=scale)
+            if fused is not None:
+                return fused
+    if enable_gqa and (int(key.shape[-3]) != int(query.shape[-3])
+                       or int(value.shape[-3]) != int(query.shape[-3])):
+        fused = try_dispatch(
+            "nn.fused_attention_gqa", query, key, value,
+            attn_mask=attn_mask, dropout_p=float(dropout_p or 0.0),
+            is_causal=is_causal, scale=scale)
+        if fused is not None:
+            return fused
+        key = _expand_heads(query, key, "key")
+        value = _expand_heads(query, value, "value")
     query_dtype = _jittor_dtype_name(query.dtype)
     if _jittor_dtype_name(key.dtype) != query_dtype or _jittor_dtype_name(value.dtype) != query_dtype:
         raise RuntimeError("query, key and value must have the same dtype")

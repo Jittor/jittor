@@ -413,6 +413,14 @@ void ParallelPass::run() {
                         n_thread = std::max(n_thread / 4, 32);
                     else if ((int)op->ops.size() <= n_reduce * 3)
                         n_thread = std::max(n_thread / 2, 32);
+                } else if (is_cuda && new_loops.size() == 1) {
+                    // One flat loop over the elements: give it about a thread
+                    // per element rather than `block_num` blocks walking the
+                    // range. Measured on a 4090 over a 38.7 M-element GELU,
+                    // 2^19 threads (74 elements each) ran at 715 GB/s and
+                    // 2^25 at 813 GB/s; ViT-B/16 training lost 1.7 ms of
+                    // 148 in these kernels, Qwen3-0.6B training 0.6 of 186.
+                    n_thread = std::max(n_thread, 1 << 25);
                 }
                 call->find_define("thread_num")->attrs[kir::rvalue] = S(n_thread);
             } else {

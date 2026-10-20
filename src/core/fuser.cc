@@ -43,6 +43,10 @@ DEFINE_FLAG(int, fuse_op_limit, 16,
     "traffic; a very wide one has to keep every live intermediate in registers, "
     "and under autocast nothing breaks the chain. 0 is unbounded.");
 
+DEFINE_FLAG(int, fuse_into_reduce, 1,
+    "Let a reduction take in the elementwise group producing its input even "
+    "when that input is also read by an op that cannot fuse; the group then "
+    "writes the input and reduces it in one pass. 0 disables it.");
 // count_fuse decides, for one execution batch, which ops end up inside the
 // same fused op and which intermediate vars survive as real memory.
 //
@@ -418,6 +422,84 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
                 into.insert(into.end(), members[other_root].begin(), members[other_root].end());
                 vector<int>().swap(members[other_root]);
             });
+        }
+    }
+
+    // Stage 3c: a reduction takes in the elementwise group that produces its
+    // input when that group computes nothing else -- even though the input is
+    // also read by something that cannot fuse (a matmul, a custom kernel),
+    // which is what keeps them on different fuse levels. The group then writes
+    // the input out and reduces it in the same pass: a bias gradient, the
+    // column sum of a GELU backward whose result also feeds the weight
+    // gradient, took a second full read of it -- 72 kernels and 3.5 ms of a
+    // ViT-B/16 training step. Levels are what made pass 3 acyclic, so a merge
+    // across them checks it: no path may leave one of the two groups and
+    // reach the other through a third.
+    if (fuse_into_reduce) {
+        vector<vector<int>> gm(ops.size());
+        for (uint i = 0; i < ops.size(); i++) gm[find_father(i)].push_back(i);
+        auto consumers_of = [&](int op_index, auto&& func) {
+            for (auto e : ops[op_index]->_outputs) {
+                auto var = e.node->var();
+                if (!var || var->tflag != tt) continue;
+                for (auto o : var->_outputs) {
+                    Op* other = o.node->op();
+                    if (other && other->tflag == tt) func(other->batch_index_at(tt));
+                }
+            }
+        };
+        vector<int> seen(ops.size(), 0);
+        int stamp = 0;
+        vector<int> stack;
+        auto reaches_via_third = [&](int src, int dst) -> bool {
+            stamp++;
+            stack.clear();
+            auto visit = [&](int y) {
+                int r = find_father(y);
+                if (r == src || r == dst || seen[r] == stamp) return;
+                seen[r] = stamp;
+                stack.push_back(r);
+            };
+            for (int m : gm[src]) consumers_of(m, visit);
+            while (stack.size()) {
+                int g = stack.back();
+                stack.pop_back();
+                bool found = false;
+                for (int m : gm[g]) consumers_of(m, [&](int y) {
+                    if (find_father(y) == dst) found = true;
+                    else visit(y);
+                });
+                if (found) return true;
+            }
+            return false;
+        };
+        for (uint i = 0; i < ops.size(); i++) {
+            Op* reduce = ops[i];
+            if (reduce->type() != OpType::reduce) continue;
+            for (Var* var : reduce->inputs()) {
+                if (var->tflag != tt || var->batch_index_at(tt) < start_var_num) continue;
+                Op* producer = var->input();
+                if (!producer || producer->tflag != tt) continue;
+                int gp = find_father(producer->batch_index_at(tt)), gr = find_father(i);
+                if (gp == gr || !edge_fusable(var, reduce, producer, 1)) continue;
+                // Only a group that runs over the reduction's own input, so it
+                // shares the reduction's loop: elementwise work and the
+                // broadcasts that feed it constants.
+                bool shares_loop = true;
+                for (int m : gm[gp]) {
+                    Op* o = ops[m];
+                    if ((o->type() != OpType::element && o->type() != OpType::broadcast)
+                            || o->outputs().size() != 1) { shares_loop = false; break; }
+                    Var* out = o->outputs().front();
+                    if (out->num != 1 && out->shape != var->shape) { shares_loop = false; break; }
+                }
+                if (!shares_loop) continue;
+                if (reaches_via_third(gp, gr) || reaches_via_third(gr, gp)) continue;
+                father[gp] = gr;
+                group_size[gr] += group_size[gp];
+                gm[gr].insert(gm[gr].end(), gm[gp].begin(), gm[gp].end());
+                vector<int>().swap(gm[gp]);
+            }
         }
     }
 

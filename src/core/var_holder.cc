@@ -708,6 +708,33 @@ void VarHolder::set_requires_grad(bool flag) {
     }
 }
 
+bool VarHolder::producer_is_view() {
+    if (var->is_finished()) return true;
+    Op* op = var->input();
+    return op && op->is_storage_view();
+}
+
+string VarHolder::producer_unary() {
+    if (var->is_finished()) return "";
+    Op* op = var->input();
+    if (!op || !op->is_op(op_ids::unary()) || op->inputs().size() != 1) return "";
+    if (op->inputs().front()->shape != var->shape) return "";
+    if (op->ns == ns_cast) return var->dtype().to_cstring();
+    return op->ns.to_cstring();
+}
+
+string VarHolder::producer_name() {
+    if (var->is_finished()) return "";
+    Op* op = var->input();
+    return op ? string(op->name()) : "";
+}
+
+bool VarHolder::is_pending_contiguous() {
+    if (var->is_finished()) return false;
+    Op* op = var->input();
+    return op && op->is_op(op_ids::contiguous()) && op->inputs().size() == 1;
+}
+
 void mark_python_number(VarHolder* holder) {
     holder->var->set_flag(VarFlags::_python_number);
 }

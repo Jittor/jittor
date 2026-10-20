@@ -638,6 +638,7 @@ namespace op_ids {
 OpId array();
 OpId binary();
 OpId broadcast_to();
+OpId contiguous();
 OpId empty();
 OpId fused();
 OpId getitem();
@@ -648,6 +649,7 @@ OpId reindex_reduce();
 OpId safe_clip();
 OpId setitem();
 OpId transpose();
+OpId unary();
 }
 
 /** An op constructor resolved on first call instead of at load time.

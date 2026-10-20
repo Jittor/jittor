@@ -22,6 +22,7 @@ from jittor._core.dtypes import dtype_name as _dtype_name
 from jittor._runtime.backend_libraries import library_resource
 from jittor._runtime.dispatch import optional_kernel
 from jittor.nn.functional._layout import channels_last_source, channels_last_view, records_no_grad
+from jittor.nn.functional.activation import offer_activation
 
 from .batch_norm_training_cuda import (
     _PAIR, _THREADS, _WELFORD, _elementwise, _launch, _per_channel, _segments,
@@ -32,8 +33,17 @@ def _header():
     return f"#include <{library_resource('cub', 'home')}cub/cub.cuh>\n" + _WELFORD + _PAIR
 
 
+#: What `_group_norm_cuda_cls` can apply to its output in the same pass, as
+#: (forward of z, gradient given the output's gradient gs and z).
+_ACTIVATIONS = {
+    "": ("return z;", "return gs;"),
+    "silu": ("return z / (1.0f + __expf(-z));",
+             "float s = 1.0f / (1.0f + __expf(-z)); return gs * s * (1.0f + z * (1.0f - s));"),
+}
+
+
 @lru_cache(maxsize=128)
-def _group_norm_cuda_cls(shape, num_groups, eps, vector=1):
+def _group_norm_cuda_cls(shape, num_groups, eps, vector=1, act=""):
     batch, channels, height, width = shape
     spatial = height * width
     channels_per_group = channels // num_groups
@@ -45,7 +55,13 @@ def _group_norm_cuda_cls(shape, num_groups, eps, vector=1):
     per_sample = batch * spatial
     channel_segments, per_channel_segment = _segments(channels, per_sample)
     channel_parts = channel_segments * channels
-    header = _header()
+    forward_act, grad_act = _ACTIVATIONS[act]
+    # The activation, and its gradient from the normalized value, which the
+    # backward recomputes from x rather than store: xhat * w + b.
+    header = _header() + f"""
+    __device__ __forceinline__ float jt_gn_act(float z) {{ {forward_act} }}
+    __device__ __forceinline__ float jt_gn_act_grad(float gs, float z) {{ {grad_act} }}
+    """
     # For an item i of the tensor: its (sample, group) row and its channel.
     locate = f"""
         long long row = i * WIDTH / {group_size};
@@ -58,31 +74,36 @@ def _group_norm_cuda_cls(shape, num_groups, eps, vector=1):
     apply_scalar = body(1, """
         float k = static_cast<float>(rstd[row]) * static_cast<float>(weight[channel]);
         float b = static_cast<float>(bias[channel]) - static_cast<float>(mean[row]) * k;
-        y[i] = out0_type(static_cast<float>(x[i]) * k + b);
+        y[i] = out0_type(jt_gn_act(static_cast<float>(x[i]) * k + b));
     """)
     apply_v4 = body(4, """
         float k = rstd[row] * static_cast<float>(weight[channel]);
         float b = static_cast<float>(bias[channel]) - mean[row] * k;
         float4 v = reinterpret_cast<const float4*>(x)[i];
-        reinterpret_cast<float4*>(y)[i] =
-            make_float4(v.x * k + b, v.y * k + b, v.z * k + b, v.w * k + b);
+        reinterpret_cast<float4*>(y)[i] = make_float4(
+            jt_gn_act(v.x * k + b), jt_gn_act(v.y * k + b),
+            jt_gn_act(v.z * k + b), jt_gn_act(v.w * k + b));
     """)
     grad_scalar = body(1, """
-        float r = rstd[row];
-        float g = static_cast<float>(grad_y[i]) * static_cast<float>(weight[channel]);
+        float r = rstd[row], w = static_cast<float>(weight[channel]);
         float xhat = (static_cast<float>(x[i]) - mean[row]) * r;
+        float g = jt_gn_act_grad(static_cast<float>(grad_y[i]),
+                                 xhat * w + static_cast<float>(bias[channel])) * w;
         grad_x[i] = out0_type(r * (g - coef[row] - xhat * coef[%d + row]));
     """ % rows)
     grad_v4 = body(4, """
         float r = rstd[row], w = static_cast<float>(weight[channel]);
+        float shift = static_cast<float>(bias[channel]);
         float center = mean[row], mg = coef[row], mgx = coef[%d + row];
         float4 dy = reinterpret_cast<const float4*>(grad_y)[i];
         float4 v = reinterpret_cast<const float4*>(x)[i];
+        float hx = (v.x - center) * r, hy = (v.y - center) * r;
+        float hz = (v.z - center) * r, hw = (v.w - center) * r;
         float4 out;
-        out.x = r * (dy.x * w - mg - (v.x - center) * r * mgx);
-        out.y = r * (dy.y * w - mg - (v.y - center) * r * mgx);
-        out.z = r * (dy.z * w - mg - (v.z - center) * r * mgx);
-        out.w = r * (dy.w * w - mg - (v.w - center) * r * mgx);
+        out.x = r * (jt_gn_act_grad(dy.x, hx * w + shift) * w - mg - hx * mgx);
+        out.y = r * (jt_gn_act_grad(dy.y, hy * w + shift) * w - mg - hy * mgx);
+        out.z = r * (jt_gn_act_grad(dy.z, hz * w + shift) * w - mg - hz * mgx);
+        out.w = r * (jt_gn_act_grad(dy.w, hw * w + shift) * w - mg - hw * mgx);
         reinterpret_cast<float4*>(grad_x)[i] = out;
     """ % rows)
 
@@ -160,30 +181,33 @@ def _group_norm_cuda_cls(shape, num_groups, eps, vector=1):
                 CHECK(0 == cudaGetLastError());
                 """,
             )
-            self.saved = x, mean, rstd, weight
+            self.saved = x, mean, rstd, weight, bias
             return y
 
         def grad(self, grad_y):
-            x, mean, rstd, weight = self.saved
+            x, mean, rstd, weight, bias = self.saved
             grad_x, grad_weight, grad_bias, row_partial, channel_partial, coef = jt.code(
                 [grad_y.shape, weight.shape, weight.shape,
                  (2 * row_parts,), (2 * channel_parts,), (2 * rows,)],
                 [grad_y.dtype, weight.dtype, weight.dtype, "float32", "float32", "float32"],
-                [grad_y, x, mean, rstd, weight],
+                [grad_y, x, mean, rstd, weight, bias],
                 cuda_header=header,
                 cuda_src=f"""
                 __global__ static void group_norm_backward_row_sums(
                         const in0_type* grad_y, const in1_type* x, const float* mean,
-                        const float* rstd, const in4_type* weight, float* partial) {{
+                        const float* rstd, const in4_type* weight, const in5_type* bias,
+                        float* partial) {{
                     typedef cub::BlockReduce<JtBnPair, {_THREADS}> BlockReduce;
                     __shared__ typename BlockReduce::TempStorage storage;
                     float center = mean[blockIdx.x], r = rstd[blockIdx.x];
                     JtBnPair local{{0.0f, 0.0f}};
                     {row_loop('''
-                        float g = static_cast<float>(grad_y[base + j])
-                            * static_cast<float>(weight[channel]);
+                        float w = static_cast<float>(weight[channel]);
+                        float xhat = (static_cast<float>(x[base + j]) - center) * r;
+                        float g = jt_gn_act_grad(static_cast<float>(grad_y[base + j]),
+                            xhat * w + static_cast<float>(bias[channel])) * w;
                         local.a += g;
-                        local.b += g * (static_cast<float>(x[base + j]) - center) * r;
+                        local.b += g * xhat;
                     ''')}
                     JtBnPair total = BlockReduce(storage).Reduce(local, JtBnPairSum());
                     if (threadIdx.x == 0) {{
@@ -194,7 +218,8 @@ def _group_norm_cuda_cls(shape, num_groups, eps, vector=1):
                 }}
                 __global__ static void group_norm_backward_channel_sums(
                         const in0_type* grad_y, const in1_type* x, const float* mean,
-                        const float* rstd, float* partial) {{
+                        const float* rstd, const in4_type* weight, const in5_type* bias,
+                        float* partial) {{
                     typedef cub::BlockReduce<JtBnPair, {_THREADS}> BlockReduce;
                     __shared__ typename BlockReduce::TempStorage storage;
                     int channel = blockIdx.x;
@@ -208,8 +233,11 @@ def _group_norm_cuda_cls(shape, num_groups, eps, vector=1):
                         long long offset = item - sample * {spatial};
                         long long index = (sample * {channels} + channel) * {spatial} + offset;
                         long long row = sample * {num_groups} + group;
-                        float dy = static_cast<float>(grad_y[index]);
-                        local.a += dy * (static_cast<float>(x[index]) - mean[row]) * rstd[row];
+                        float xhat = (static_cast<float>(x[index]) - mean[row]) * rstd[row];
+                        float dy = jt_gn_act_grad(static_cast<float>(grad_y[index]),
+                            xhat * static_cast<float>(weight[channel])
+                            + static_cast<float>(bias[channel]));
+                        local.a += dy * xhat;
                         local.b += dy;
                     }}
                     JtBnPair total = BlockReduce(storage).Reduce(local, JtBnPairSum());
@@ -245,18 +273,18 @@ def _group_norm_cuda_cls(shape, num_groups, eps, vector=1):
                 {_elementwise("group_norm_backward_apply",
                               "const in0_type* grad_y, const in1_type* x, "
                               "const float* mean, const float* rstd, "
-                              "const in4_type* weight, const float* coef, "
-                              "out0_type* grad_x",
+                              "const in4_type* weight, const in5_type* bias, "
+                              "const float* coef, out0_type* grad_x",
                               grad_scalar, grad_v4, total, spatial, channels, vector)}
                 group_norm_backward_row_sums<<<dim3({rows}, {row_segments}), {_THREADS}>>>(
-                    in0_p, in1_p, in2_p, in3_p, in4_p, out3_p);
+                    in0_p, in1_p, in2_p, in3_p, in4_p, in5_p, out3_p);
                 group_norm_backward_channel_sums<<<dim3({channels}, {channel_segments}),
                                                    {_THREADS}>>>(
-                    in0_p, in1_p, in2_p, in3_p, out4_p);
+                    in0_p, in1_p, in2_p, in3_p, in4_p, in5_p, out4_p);
                 group_norm_backward_finish<<<{_per_channel(max(rows, channels))}>>>(
                     out3_p, out4_p, out1_p, out2_p, out5_p);
                 {_launch("group_norm_backward_apply",
-                         "in0_p, in1_p, in2_p, in3_p, in4_p, out5_p, out0_p",
+                         "in0_p, in1_p, in2_p, in3_p, in4_p, in5_p, out5_p, out0_p",
                          ("in0_p", "in1_p", "out0_p"), total, vector)}
                 CHECK(0 == cudaGetLastError());
                 """,
@@ -267,7 +295,7 @@ def _group_norm_cuda_cls(shape, num_groups, eps, vector=1):
 
 
 @lru_cache(maxsize=128)
-def _group_norm_nhwc_source(shape, num_groups, eps):
+def _group_norm_nhwc_source(shape, num_groups, eps, act=""):
     """Forward-only group norm over dense NHWC memory.
 
     What a channels-last activation -- an NCHW view of NHWC storage, which a
@@ -285,7 +313,9 @@ def _group_norm_nhwc_source(shape, num_groups, eps):
     total = rows * group_size
     row_segments, per_row_segment = _segments(rows, group_size)
     row_parts = row_segments * rows
-    header = _header()
+    header = _header() + f"""
+    __device__ __forceinline__ float jt_gn_act(float z) {{ {_ACTIVATIONS[act][0]} }}
+    """
     source = f"""
     __global__ static void group_norm_nhwc_statistics(const in0_type* x, float* partial) {{
         typedef cub::BlockReduce<JtBnWelford, {_THREADS}> BlockReduce;
@@ -340,7 +370,7 @@ def _group_norm_nhwc_source(shape, num_groups, eps):
                 + channel / {channels_per_group};
             float k = rstd[row] * static_cast<float>(weight[channel]);
             float b = static_cast<float>(bias[channel]) - mean[row] * k;
-            y[i] = out0_type(static_cast<float>(x[i]) * k + b);
+            y[i] = out0_type(jt_gn_act(static_cast<float>(x[i]) * k + b));
         }}
     }}
     group_norm_nhwc_statistics<<<dim3({rows}, {row_segments}), {_THREADS}>>>(in0_p, out3_p);
@@ -360,12 +390,19 @@ def _group_norm_nhwc(x, num_groups, weight, bias, eps):
     if source is None:
         return None
     shape = tuple(int(size) for size in source.shape)
-    header, cuda_src, rows, parts = _group_norm_nhwc_source(shape, int(num_groups), float(eps))
-    y, _, _, _ = jt.code(
-        [source.shape, (rows,), (rows,), (parts,)],
-        [source.dtype, "float32", "float32", "float32"],
-        [source, weight, bias], cuda_header=header, cuda_src=cuda_src)
-    return channels_last_view(y)
+
+    def build(act):
+        header, cuda_src, rows, parts = _group_norm_nhwc_source(
+            shape, int(num_groups), float(eps), act)
+        y, _, _, _ = jt.code(
+            [source.shape, (rows,), (rows,), (parts,)],
+            [source.dtype, "float32", "float32", "float32"],
+            [source, weight, bias], cuda_header=header, cuda_src=cuda_src)
+        return channels_last_view(y)
+    y = build("")
+    # As in `_group_norm_cuda`: `silu(y)` takes the activation into the pass.
+    offer_activation(y, lambda act: build(act) if act in _ACTIVATIONS else None)
+    return y
 
 
 def _supports_group_norm(x, num_groups, weight, bias, eps):
@@ -407,7 +444,19 @@ def _group_norm_cuda(x, num_groups, weight, bias, eps):
     spatial = shape[2] * shape[3]
     vector = 4 if spatial % 4 == 0 and _dtype_name(x.dtype) == "float32" else 1
     cls = _group_norm_cuda_cls(shape, num_groups, float(eps), vector)
-    return cls.apply(x, weight, bias)
+    y = cls.apply(x, weight, bias)
+
+    def fuse_activation(act):
+        # `silu(y)` asks for this while y is still unexecuted: the same group
+        # norm with the activation applied in its last pass, and its gradient
+        # taken inside the backward's. y itself stays a graph node nobody
+        # runs unless something else reads it.
+        if act not in _ACTIVATIONS:
+            return None
+        fused = _group_norm_cuda_cls(shape, num_groups, float(eps), vector, act)
+        return fused.apply(x, weight, bias)
+    offer_activation(y, fuse_activation)
+    return y
 
 
 __all__ = ["_group_norm_cuda"]

@@ -764,6 +764,39 @@ struct VarHolder {
     // @pyjt(_storage_permute)
     VarHolder* storage_permute(NanoVector axes);
 
+    /**
+     * Whether this tensor costs nothing to read where it is: already in
+     * memory, or a view of storage that is. For `concat`, which folds such
+     * inputs into the kernel that consumes its result.
+     */
+    // @pyjt(_producer_is_view)
+    bool producer_is_view();
+
+    /**
+     * The elementwise unary op that is still to compute this tensor from one
+     * of the same shape -- its name, or the dtype for a cast -- or "".
+     */
+    // @pyjt(_producer_unary)
+    string producer_unary();
+
+    /**
+     * Whether this tensor is a dense copy still to be made (a pending
+     * `contiguous`); `_input(0)` is then what it copies. A consumer that reads
+     * strided input can read that instead, and the copy is never made.
+     */
+    // @pyjt(_is_pending_contiguous)
+    bool is_pending_contiguous();
+
+    /**
+     * The name of the op still to compute this tensor ("reshape",
+     * "broadcast_to", "getitem", ...), or "" once it is computed. For a
+     * consumer that can read what a pending chain of views and copies would
+     * produce from its source, without the chain ever running; `_input(i)`
+     * walks it.
+     */
+    // @pyjt(_producer_name)
+    string producer_name();
+
     // @pyjt(_is_view)
     inline bool is_view() { return view && view->base; }
 

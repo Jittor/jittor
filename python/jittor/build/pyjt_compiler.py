@@ -923,9 +923,24 @@ def compile_src(src, h, basename):
         # A frontend subtype keeps the native VarHolder payload and graph.
         # Carry its Python allocation type across the complete conversion and
         # call, including tuple/vector results. Never enter a scope in dealloc.
+        #
+        # Only a call that can create a Var needs the scope: what it sets --
+        # the result's Python type, the autograd policy, the placement and
+        # float32 precision -- is read when an op or a VarHolder is made, and
+        # an op keeps its precision for execution. A method of VarHolder that
+        # takes and returns no Var (`shape`, `dtype`, `placement_backend`,
+        # `numel()`) made none, yet entered the scope on every call: 0.55 us
+        # of a torch.Tensor attribute read against 0.05 us on a native Var,
+        # several reads per operator of every frontend call.
         frontend_scope = ""
         frontend_arg_types = [arg[0] for df in dfs for arg in df["args"]]
-        if slot_name != "tp_dealloc" and (
+        makes_vars = (
+            slot_name in ("tp_init", "tp_call", "tp_sets")
+            or any("VarHolder" in df["return_t"] or "PyObject" in df["return_t"]
+                   or "return_self" in df["attrs"] for df in dfs)
+            or any("VarHolder" in kind or "PyObject" in kind or "GradCallback" in kind
+                   for kind in frontend_arg_types))
+        if slot_name != "tp_dealloc" and makes_vars and (
                 class_name == "VarHolder" or
                 any("VarHolder" in df["return_t"] for df in dfs) or
                 any("VarHolder" in kind for kind in frontend_arg_types)):
