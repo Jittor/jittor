@@ -224,6 +224,15 @@ def getitem(x, slices):
     # replaced `try_dispatch` has no `_is_registered` and is always consulted.
     is_registered = getattr(try_dispatch, "_is_registered", None)
     if is_registered is not None and not is_registered("tensor.getitem"):
+        # A basic index of a plain Var is answered natively in one call --
+        # the getitem op and the view record `_fast_getitem` would make --
+        # and declines (NotImplemented) for anything else, including a
+        # subclass, which may own `getitem` itself.
+        native = getattr(try_dispatch, "_native_basic_getitem", None)
+        if native is not None and x.__class__ is Var:
+            out = native(x, slices)
+            if out is not NotImplemented:
+                return out
         out = _fast_getitem(x, slices)
         if out is not _SLOW:
             return out

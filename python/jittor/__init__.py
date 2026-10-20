@@ -186,6 +186,9 @@ del _install_var_indexing
 _install_full_reduce()
 _record_install("nn.full_reduce_fast_path")
 del _install_full_reduce
+from ._runtime.dispatch import _bind_native_entries
+_bind_native_entries()
+del _bind_native_entries
 
 from . import contrib as contrib
 from . import misc as misc
