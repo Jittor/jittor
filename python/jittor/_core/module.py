@@ -645,7 +645,10 @@ class Module:
             # When the hook was registered with_kwargs it must ALWAYS get the kwargs
             # arg (even if empty) -- ms-swift's VL pre_forward_hook has a 3-arg
             # signature and injects inputs_embeds via the kwargs dict.
-            if info.get("with_kwargs") or len(kw):
+            # Only the legacy spelling infers its signature from the call.
+            # Torch's default hook always receives (module, args).
+            if (info.get("with_kwargs") or
+                    (info.get("legacy_kwargs") and len(kw))):
                 args_kw_result = func(self, args, kw)
             else:
                 args_kw_result = func(self, args)
@@ -753,7 +756,8 @@ class Module:
 
         Returns a removable handle, like ``register_forward_pre_hook``.
         '''
-        return self._add_hook("_forward_pre_hooks", func, with_kwargs=False)
+        return self._add_hook("_forward_pre_hooks", func, with_kwargs=False,
+                              legacy_kwargs=True)
 
     def register_forward_pre_hook(self, func, *, prepend=False, with_kwargs=False):
         ''' torch-compatible alias of the pre-forward hook.

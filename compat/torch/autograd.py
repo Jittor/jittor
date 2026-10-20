@@ -256,6 +256,15 @@ def grad(outputs, inputs, grad_outputs=None, retain_graph=None,
         raise RuntimeError(
             "One of the differentiated Tensors appears to not have been "
             "used in the graph. Set allow_unused=True if this is desired.")
+    # Torch returns each gradient in the dtype of its differentiated input.
+    # Native Jittor can propagate the promoted output dtype through structural
+    # ops such as cat, so a half input may otherwise receive a float32 grad.
+    # Keep the cast in the graph when create_graph=True.
+    for i, grad_value in enumerate(gs):
+        target = ins[i]
+        if (grad_value is not None and isinstance(target, jt.Var)
+                and grad_value.dtype != target.dtype):
+            gs[i] = grad_value.cast(target.dtype)
     if not create_graph:
         # detach() severs the graph edge but leaves jittor's requires_grad
         # flag set, and torch reports requires_grad=False here; clear it on

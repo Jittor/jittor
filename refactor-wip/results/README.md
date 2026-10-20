@@ -1,5 +1,7 @@
 # 验证结果索引
 
+- [2026-10-21 工作区快照与暂停交接](2026-10-21-workspace-snapshot-handoff.md)：远端独立快照、新机器入口及本机活跃进程。
+
 本目录只保存人工整理、可长期阅读的验证与性能报告。原始日志、JSONL、模型、
 图片、视频和编译缓存统一放在
 `$JITTOR_LAB_ROOT/_state/`，不纳入主仓库；环境未设置时遵循
@@ -10,6 +12,7 @@
 
 ## 兼容性与功能验证
 
+- [2026-10-20 兼容发布第二三天单设备真实工作流](2026-10-20-torch-compat-release-day23.md)
 - [2026-10-20 兼容发布首日候选与常用接口验收](2026-10-20-torch-compat-release-day1.md)
 - [2026-10-13 HF stack 组合验证进展](2026-10-13-hf-stack-validation-progress.md)
 - [2026-10-12 原生 DDP 真实 ResNet 与 Transformer 训练对比](2026-10-12-native-ddp-real-training-comparison.md)

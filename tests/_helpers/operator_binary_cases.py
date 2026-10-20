@@ -184,6 +184,46 @@ class BinaryOpCases:
         b = a**3
         b.sync()
 
+    def test_pow_fused_widening_preserves_output_rounding(self):
+        # Materializing an intermediate must not change the result. In
+        # particular, std::pow(int32, float32) returns double in C++, while
+        # the native operation declares float32. A fused consumer that
+        # widens the result must still observe that float32 rounding.
+        with jt.runtime.scope(amp_reg=0, backend_fallback="error"):
+            backend = "cuda" if jt.introspection.policy.runtime.use_cuda else "cpu"
+            before = jt.core.backend_fallback_count()
+            for base_dtype, exponent_dtype in (
+                ("int32", "float32"),
+                ("float32", "float32"),
+                ("int32", "float64"),
+                ("float64", "float64"),
+            ):
+                with self.subTest(base_dtype=base_dtype, exponent_dtype=exponent_dtype):
+                    exponent_data = np.arange(64, dtype=exponent_dtype) / 64
+                    base = jt.array([1000000], dtype=base_dtype)
+                    exponent = jt.array(exponent_data, dtype=exponent_dtype)
+                    power = base ** exponent
+                    self.assertEqual(str(power.dtype), exponent_dtype)
+                    fused = jt.array([1.0], dtype="float64") / power.float64()
+                    self.assertEqual(jt.core.dispatch_context([fused])[0], backend)
+                    fused_data = fused.numpy().copy()
+
+                    # A separate graph with an observable intermediate is
+                    # the semantic reference for the fusion boundary.
+                    staged_power = (jt.array([1000000], dtype=base_dtype)
+                                    ** jt.array(exponent_data, dtype=exponent_dtype))
+                    staged_data = staged_power.numpy().copy()
+                    materialized = jt.array(staged_data, dtype=exponent_dtype)
+                    staged = jt.array([1.0], dtype="float64") / materialized.float64()
+                    self.assertEqual(jt.core.dispatch_context([staged])[0], backend)
+                    np.testing.assert_array_equal(fused_data, staged.numpy())
+                    np.testing.assert_allclose(
+                        staged_data,
+                        np.power(1000000.0, exponent_data.astype("float64")),
+                        rtol=2e-7 if exponent_dtype == "float32" else 2e-15,
+                    )
+            self.assertEqual(jt.core.backend_fallback_count(), before)
+
     def test_binary_op_bool(self):
         a = np.array([0,1,0,1]).astype(bool)
         b = np.array([0,1,1,0]).astype(bool)

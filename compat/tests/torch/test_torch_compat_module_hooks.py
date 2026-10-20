@@ -1,5 +1,6 @@
-"""Global module-registration hook contracts."""
+"""Public module registration and forward pre-hook contracts."""
 
+import os
 import unittest
 
 import torch
@@ -97,6 +98,106 @@ class TestModuleRegistrationHooks(unittest.TestCase):
             with register_module_module_registration_hook(fail):
                 parent.child = torch.nn.Identity()
         self.assertFalse(hasattr(parent, "child"))
+
+
+class TestForwardPreHookKwargs(unittest.TestCase):
+    """Run this class unchanged against the shim and independent PyTorch."""
+
+    class Adder(torch.nn.Module):
+        def forward(self, x, bias=0):
+            return x + bias
+
+    def setUp(self):
+        self.device = os.environ.get("JITTOR_TEST_DEVICES", "cpu").split(",")[0]
+        self.assertIn(self.device, ("cpu", "cuda"))
+        self.shim = hasattr(torch, "_torch_compat_install_context")
+        if self.device == "cuda":
+            self.assertTrue(torch.cuda.is_available(), "requires a real CUDA device")
+        if self.shim:
+            import jittor as jt
+            from jittor._runtime.fallback import forbid_backend_fallbacks
+            self.jt = jt
+            scope = jt.runtime.scope(use_cuda=int(self.device == "cuda"),
+                                     backend_fallback="error")
+            scope.__enter__()
+            self.addCleanup(scope.__exit__, None, None, None)
+            guard = forbid_backend_fallbacks()
+            guard.__enter__()
+            self.addCleanup(guard.__exit__, None, None, None)
+            self.fallback_before = jt.core.backend_fallback_count()
+
+    def _x(self):
+        return torch.tensor([1.0, 1.0, 1.0], device=self.device)
+
+    def _assert_result(self, result, expected):
+        self.assertEqual(result.device.type, self.device)
+        if self.shim:
+            self.assertEqual(self.jt.core.dispatch_context([result])[0], self.device)
+            self.assertEqual(self.jt.core.backend_fallback_count(), self.fallback_before)
+        self.assertEqual(result.detach().cpu().numpy().tolist(), [expected] * 3)
+
+    def test_default_pre_hook_observes_only_positional_args(self):
+        m, seen, value = self.Adder(), [], self._x()
+
+        def observe(module, args):
+            self.assertIs(module, m)
+            self.assertEqual(len(args), 1)
+            self.assertIs(args[0], value)
+            seen.append("called")
+
+        m.register_forward_pre_hook(observe)
+        self._assert_result(m(value, bias=3), 4)
+        self.assertEqual(seen, ["called"])
+
+    def test_default_pre_hook_observes_empty_args_for_keyword_only_call(self):
+        m, seen = self.Adder(), []
+
+        def observe(module, args):
+            self.assertIs(module, m)
+            self.assertEqual(args, ())
+            seen.append("called")
+
+        m.register_forward_pre_hook(observe)
+        self._assert_result(m(x=self._x(), bias=3), 4)
+        self.assertEqual(seen, ["called"])
+
+    def test_default_pre_hook_replaces_args_preserving_kwargs(self):
+        for single in (False, True):
+            with self.subTest(single_return=single):
+                m = self.Adder()
+
+                def replace(module, args):
+                    replacement = args[0] * 2
+                    return replacement if single else (replacement,)
+
+                m.register_forward_pre_hook(replace)
+                self._assert_result(m(self._x(), bias=3), 5)
+
+    def test_explicit_kwargs_hook_receives_empty_kwargs(self):
+        m, seen = self.Adder(), []
+
+        def inject(module, args, kwargs):
+            self.assertIs(module, m)
+            self.assertEqual(kwargs, {})
+            seen.append("called")
+            return args, {"bias": 5}
+
+        m.register_forward_pre_hook(inject, with_kwargs=True)
+        self._assert_result(m(self._x()), 6)
+        self.assertEqual(seen, ["called"])
+
+    def test_explicit_kwargs_hook_replaces_args_and_kwargs(self):
+        m, seen = self.Adder(), []
+
+        def replace(module, args, kwargs):
+            self.assertIs(module, m)
+            self.assertEqual(kwargs, {"bias": 3})
+            seen.append("called")
+            return (args[0] * 2,), {"bias": 5}
+
+        m.register_forward_pre_hook(replace, with_kwargs=True)
+        self._assert_result(m(self._x(), bias=3), 7)
+        self.assertEqual(seen, ["called"])
 
 
 if __name__ == "__main__":

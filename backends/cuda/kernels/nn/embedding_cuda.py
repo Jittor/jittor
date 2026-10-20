@@ -1,6 +1,7 @@
 """Dense FP32 embedding gradients with stable, segmented CUDA accumulation."""
 
 import jittor as jt
+from jittor._core.dtypes import var_dtype_name
 from jittor._runtime.backend_libraries import get_library_ops
 from jittor._runtime.core_api import _output_requires_grad
 from jittor._runtime.dispatch import optional_kernel
@@ -142,11 +143,11 @@ def _supports_embedding(input, weight, padding_idx=None, max_norm=None,
     if not (isinstance(input, jt.Var) and isinstance(weight, jt.Var)):
         return False
     return (
-        str(weight.dtype) == "float32" and str(input.dtype) in ("int32", "int64")
+        var_dtype_name(weight) == "float32" and var_dtype_name(input) in ("int32", "int64")
         and _output_requires_grad(weight)
         and len(weight.shape) == 2 and all(int(d) > 0 for d in weight.shape)
         and 0 < int(input.numel()) <= 2147483647
-        and padding_idx is None and max_norm is None
+        and max_norm is None
         and not scale_grad_by_freq and not sparse
         and get_library_ops("cub") is not None
     )
@@ -156,4 +157,11 @@ def _supports_embedding(input, weight, padding_idx=None, max_norm=None,
                  supports=_supports_embedding)
 def _embedding_cuda(input, weight, padding_idx=None, max_norm=None,
                     norm_type=2.0, scale_grad_by_freq=False, sparse=False):
-    return _Embedding.apply(input, weight)
+    result = _Embedding.apply(input, weight)
+    if padding_idx is not None:
+        # Match the functional fallback: retain nonzero padding data in the
+        # forward result while excluding its contribution to weight gradients.
+        # Module construction owns padding-index normalization/validation.
+        keep = (input != padding_idx).unsqueeze(-1).float32()
+        result = result * keep + (result * (1.0 - keep)).stop_grad()
+    return result

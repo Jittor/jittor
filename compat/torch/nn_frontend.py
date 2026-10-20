@@ -128,6 +128,11 @@ class LayerInitializer:
             object.__setattr__(module, "_native_parameter_construction", True)
             try:
                 self.original(module, *args, **kwargs)
+                from .meta import requested, mark_placeholder
+                if requested():
+                    for _, value, _ in module._var_roles():
+                        if id(value) not in external:
+                            mark_placeholder(value)
                 if padding_mode is not None:
                     # torch layers expose what they were built with; the
                     # execute wrapper below reads it back.

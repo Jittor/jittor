@@ -286,7 +286,8 @@ class device:
     # it on a thread-local stack so Var.device reports "meta" inside it. Tensors
     # are still really allocated (harmless -- real weights get loaded over them),
     # but transformers correctly skips the eager init. A meta block therefore
-    # does not join the default-device stack.
+    # joins the default-device stack for correct nested real/meta precedence;
+    # the frontend routes its storage-backed placeholder to native CPU.
     # An *indexed* CUDA device context is not a no-op any more: torch's
     # `with torch.device("cuda:1"):` makes device 1 the default new tensors
     # are built on, and jittor now has a current device that means exactly
@@ -294,6 +295,7 @@ class device:
     def __enter__(self):
         if self.type == "meta":
             _DEVICE_CTX_STACK.append(self)
+            _default_device_stack().append(self)
             return self
         _default_device_stack().append(self)
         if self.type in ("cuda", "npu") and self.index is not None:
@@ -311,6 +313,9 @@ class device:
         if self.type == "meta":
             if _DEVICE_CTX_STACK and _DEVICE_CTX_STACK[-1] is self:
                 _DEVICE_CTX_STACK.pop()
+            stack = _default_device_stack()
+            if stack and stack[-1] is self:
+                stack.pop()
         else:
             stack = _default_device_stack()
             if stack and stack[-1] is self:
@@ -360,12 +365,8 @@ def active_device_context() -> typing.Optional[device]:
 
 def _set_meta_placeholder(v, enabled=True):
     """Track a real Jittor Var that stands in for a torch meta tensor."""
-    if isinstance(v, jt.Var):
-        try:
-            v._jittor_torch_meta = bool(enabled)
-        except EXPECTED as exc:
-            swallowed("torch/types.py _set_meta_placeholder: set marker", exc)
-    return v
+    from .meta import mark_placeholder
+    return mark_placeholder(v, enabled)
 
 
 Number = typing.Union[int, float, bool]

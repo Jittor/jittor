@@ -1,5 +1,9 @@
 # 整改看板
 
+2026-10-21 用户要求暂停新增修改与实验启动，先推送全部工作树独立快照；Day2–3仍未通过。当前交接及新机器推荐分支见[工作区快照交接](../results/2026-10-21-workspace-snapshot-handoff.md)。已运行T5 full允许正常结束，supervisor已暂停后续stage。
+
+2026-10-21 发布第二三天：**执行中，尚未达到退出条件**。Jittor BERT双seed与默认FP16的r10真实CUDA full/resume完成；BERT双seed任务loss包络仍FAIL（15.426% > 15%，本次JT loss更低），Vision r11五smoke通过但FP32 CNN/ViT exact恢复失败，Qwen原始BF16 logits仍FAIL；不以恢复通过覆盖独立数值/任务门槛。在首日候选 `9e0e187b` 上建立独立 `release/torch-compat-day23-20261020`，主树91个未提交路径保留；真实分类/LoRA/Seq2Seq/CNN、AMP和普通恢复沿固定协议执行。已复现并修复 frontend BatchNorm 非持久 counter，公开模型加载 meta 入口和工作流验收继续收口；独立 PyTorch 的上游尾累积恢复限制单列。实际结果与边界见[第二三天报告](../results/2026-10-20-torch-compat-release-day23.md)，不以已启动或 compact 通过替代真实 CUDA 完成。
+
 2026-10-20 发布目标：用户确认一周内（最迟 2026-10-27）发布 Linux CPU/CUDA、单卡与单机多卡，日常训练/微调/推理/保存恢复优先，速度与显存尽量接近 PyTorch，极端场景可明确不支持。当前为**发布前收口，尚未达到完整发布门槛**。规格及七天安排见[发布收口计划](../testing/2026-10-20-torch-compat-release-gate.md)，实际执行结论继续写 dated results，不扩展为全生态、全后端声明。
 
 2026-10-20 发布首日：**首日范围完成**。同步 `origin/cgq_transformers@e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`（已为基线祖先），开始时 70 个未提交路径全部保留；在独立分支 `release/torch-compat-day1-20261020` 冻结源码提交 `e007383133e49c819b54fbd3a876cbefa856a227` 与依赖快照，主树 HEAD/index 不变，未 push。修复加载后模型存储别名、no_grad/copy_ 梯度、常用 SGD 参数、Linear super anchor、索引与原位梯度、arange 精度和默认初始化等已复现问题。最终 CPU core **328 passed、46 skipped、1 xfailed、0 failed**，完整 structure **1398 passed、2 skipped、0 failed**，CPU 日常扩展 **57 passed**；独立 PyTorch daily CPU/CUDA 各 **24 passed**，Jittor daily 真 CUDA/零 fallback 守卫、CUDA optimizer/RNG/callback 定向检查通过。行为测试在主树完成，源码与测试按 SHA256 绑定候选，未直接验收候选 wheel。两树静态检查通过；详细日志口径和保留工作见[首日候选报告](../results/2026-10-20-torch-compat-release-day1.md)。显式 generator 的部分浮点流恢复与高级 SGD 选项仍有明确限制；真实多 epoch/尾批/AMP/生成、公开 Torch/HF DDP 2/4 rank、配对速度/峰值显存、clean wheel 和默认 CUDA 稳定性仍待后续验收，不能以本次门禁通过替代。

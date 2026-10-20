@@ -300,7 +300,8 @@ def _resolve_size(size, kw):
     return size
 
 
-def _new_finish(v, device=None, requires_grad=False):
+def _new_finish(v, device=None, requires_grad=False, like=None):
+    from ...meta import finish
     if _owner._device_is_cpu(device):
         v = _owner._make_cpu_resident(v)
     elif _owner._device_is_cuda(device):
@@ -310,7 +311,7 @@ def _new_finish(v, device=None, requires_grad=False):
     if requires_grad:
         v.requires_grad_(True)
         _owner._torch_register_leaf(v)
-    return v
+    return finish(v, device, like)
 
 
 def _new_scope(self, device):
@@ -322,13 +323,13 @@ def _new_scope(self, device):
 def _new_ones(self, *size, dtype=None, device=None, requires_grad=False, **kw):
     dt = _owner._dtype_to_str(dtype) if dtype is not None else _jittor_dtype_name(self.dtype)
     with _new_scope(self, device):
-        return _new_finish(_owner.jt.ones(_norm_size(_resolve_size(size, kw)), dt), device, requires_grad)
+        return _new_finish(_owner.jt.ones(_norm_size(_resolve_size(size, kw)), dt), device, requires_grad, self)
 
 
 def _new_zeros(self, *size, dtype=None, device=None, requires_grad=False, **kw):
     dt = _owner._dtype_to_str(dtype) if dtype is not None else _jittor_dtype_name(self.dtype)
     with _new_scope(self, device):
-        return _new_finish(_owner.jt.zeros(_norm_size(_resolve_size(size, kw)), dt), device, requires_grad)
+        return _new_finish(_owner.jt.zeros(_norm_size(_resolve_size(size, kw)), dt), device, requires_grad, self)
 
 
 def _new_full(self, size, fill_value, dtype=None, device=None, requires_grad=False, **kw):
@@ -337,13 +338,13 @@ def _new_full(self, size, fill_value, dtype=None, device=None, requires_grad=Fal
     # x.new_full(x.shape, v)); both are iterable with __len__.
     shp = tuple(int(s) for s in size) if hasattr(size, "__len__") else (int(size),)
     with _new_scope(self, device):
-        return _new_finish(_owner.jt.full(shp, fill_value).cast(dt), device, requires_grad)
+        return _new_finish(_owner.jt.full(shp, fill_value).cast(dt), device, requires_grad, self)
 
 
 def _new_empty(self, *size, dtype=None, device=None, requires_grad=False, **kw):
     dt = _owner._dtype_to_str(dtype) if dtype is not None else _jittor_dtype_name(self.dtype)
     with _new_scope(self, device):
-        return _new_finish(_owner.jt.empty(_norm_size(_resolve_size(size, kw)), dt), device, requires_grad)
+        return _new_finish(_owner.jt.empty(_norm_size(_resolve_size(size, kw)), dt), device, requires_grad, self)
 
 
 def _new_tensor(self, data, dtype=None, device=None, requires_grad=False, **kw):
@@ -363,7 +364,7 @@ def _new_tensor(self, data, dtype=None, device=None, requires_grad=False, **kw):
             return v
         data = [_coerce(v) for v in data]
     with _new_scope(self, device):
-        return _new_finish(_owner.jt.array(data).cast(dt), device, requires_grad)
+        return _new_finish(_owner.jt.array(data).cast(dt), device, requires_grad, self)
 
 
 def _clamp(input, min=None, max=None, min_v=None, max_v=None):
@@ -520,16 +521,13 @@ def _invert(self):
 
 
 def _device(self):
+    if getattr(self, "_jittor_torch_meta", False):
+        return _owner.device("meta")
     if self.placement_backend >= 0:
         if self.placement_backend == 0:
             return _owner.device("cpu")
         name = "npu" if self.placement_backend == 2 else "cuda"
         return _owner.device(name, int(self.device_id))
-    # Inside a `with torch.device("meta")` block (transformers'
-    # from_pretrained), report "meta" so its meta-context detection
-    # fires and eager weight init is skipped. See device.__enter__.
-    if _owner._DEVICE_CTX_STACK:
-        return _owner._DEVICE_CTX_STACK[-1]
     # Report the Var's ACTUAL memory residency (matches jtorch's C++
     # is_cpu()/device()): a Var built/migrated to host -- e.g. via
     # torch.zeros(device='cpu') or .cpu() -- is "cpu" even while the
@@ -656,6 +654,7 @@ def _data_set(self, value):
 
 
 def _to(self, *args, **kwargs):
+    from ...meta import is_placeholder, mark_placeholder
     ds = None
     dev = None
     copy = bool(kwargs.get("copy", False))
@@ -706,7 +705,7 @@ def _to(self, *args, **kwargs):
             bare = a.replace("torch.", "")
             if bare in _owner.dtype._registry:
                 ds = bare
-            elif bare.split(":")[0] in ("cpu", "cuda", "npu"):
+            elif bare.split(":")[0] in ("cpu", "cuda", "npu", "meta"):
                 dev = bare
             else:
                 # An unrecognised string used to fall off the end of this
@@ -732,13 +731,21 @@ def _to(self, *args, **kwargs):
     out = self.clone() if copy else self
     if ds is not None:
         out = _cast_if_needed(out, ds)
+    if (getattr(dev, "type", None) or str(dev).split(":", 1)[0]) == "meta":
+        if out is self and not is_placeholder(self):
+            out = self.clone()
+        return mark_placeholder(out)
+    if is_placeholder(self) and out is self:
+        # Existing metadata-only placeholders own real backing storage. An
+        # explicit real-device materialization must not relabel its source.
+        out = self.clone()
     # Honor an explicit device= target by migrating residency. device=None
     # (the common .to(dtype) call) leaves placement on the global default.
     if _owner._device_is_cpu(dev):
         out = _owner._make_cpu_resident(out)
     elif _owner._device_is_cuda(dev):
         if out.placement_backend >= 0:
-            return _owner._make_cuda_resident(out, force=True, device=dev)
+            return mark_placeholder(_owner._make_cuda_resident(out, force=True, device=dev), False)
         out = _owner._make_cuda_resident(out, force=True)
         # .to("cuda:N") copies across devices when N is not where the Var
         # already is; a bare .to("cuda") names the *current* device, as in
@@ -750,10 +757,11 @@ def _to(self, *args, **kwargs):
         out = moved
     if getattr(self, "_torch_0d", False):
         out._torch_0d = True
-    return out
+    return mark_placeholder(out, False)
 
 
 def _var_detach(self):
+    from ...meta import finish
     _context = get_install_context(_owner.jt)
     Var = _context.state["Var"]
     _native = _context.state["tensor_native_api"]
@@ -773,7 +781,7 @@ def _var_detach(self):
         out = out.stop_grad()
     if getattr(self, "_torch_0d", False):
         out._torch_0d = True
-    return out
+    return finish(out, like=self)
 
 
 def _var_numpy(self, *args, **kwargs):
@@ -787,6 +795,8 @@ def _var_numpy(self, *args, **kwargs):
 
 
 def _var_cpu(self, *a, **k):
+    if getattr(self, "_jittor_torch_meta", False):
+        return _to(self, device="cpu")
     out = _owner._make_cpu_resident(self)
     if out.placement_backend >= 0:
         return out
@@ -808,6 +818,8 @@ def _var_cuda(self, device=None, *a, **k):
     # cuda:0. See types.current_accelerator_index.
     if device is None:
         device = "cuda"
+    if getattr(self, "_jittor_torch_meta", False):
+        return _to(self, device=device)
     if self.placement_backend >= 0:
         return _owner._make_cuda_resident(self, force=True, device=device)
     _owner._set_use_cuda()

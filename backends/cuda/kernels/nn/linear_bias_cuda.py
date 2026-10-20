@@ -1,10 +1,11 @@
-"""FP32 linear bias with a fixed CUDA reduction order in backward.
+"""Linear bias with a fixed CUDA reduction order in backward.
 
 Each tile owns its partial sums, and each output channel has one final writer.
 There are no floating point atomics whose order depends on block scheduling.
 """
 
 import jittor as jt
+from jittor._core.dtypes import var_dtype_name
 from jittor._runtime.core_api import _output_requires_grad
 from jittor._runtime.dispatch import optional_kernel
 
@@ -12,6 +13,7 @@ from jittor._runtime.dispatch import optional_kernel
 class _BiasSum(jt.Function):
     def execute(self, gradient):
         self.shape = tuple(gradient.shape)
+        dtype = var_dtype_name(gradient)
         channels = int(gradient.shape[-1])
         rows = int(gradient.numel()) // channels
         chunks = (rows + 255) // 256
@@ -30,7 +32,7 @@ class _BiasSum(jt.Function):
                 if (c < {channels})
                     for (int r = begin + threadIdx.y;
                          r < begin + 256 && r < {rows}; r += 8)
-                        value += g[(int64_t)r * {channels} + c];
+                        value += (float)g[(int64_t)r * {channels} + c];
                 tile[threadIdx.y][threadIdx.x] = value;
                 __syncthreads();
                 for (int stride = 4; stride; stride /= 2) {{
@@ -48,8 +50,8 @@ class _BiasSum(jt.Function):
             """,
         )
         if chunks == 1:
-            return partial.reshape((channels,))
-        return jt.code(
+            return partial.reshape((channels,)).cast(dtype)
+        result = jt.code(
             (channels,), "float32", [partial],
             cuda_src=f"""
             __global__ static void linear_bias_finish(
@@ -65,6 +67,9 @@ class _BiasSum(jt.Function):
             CHECK(0 == cudaGetLastError());
             """,
         )
+        # Accumulate reduced precision cotangents in FP32, then return the
+        # input dtype. Autograd's outer cast restores FP32 master parameters.
+        return result.cast(dtype)
 
     def grad(self, gradient):
         # Keep the reduction differentiable, including mixed second derivatives.
@@ -87,6 +92,7 @@ def _supports_linear_bias(x, bias):
     # the portable implementation; no shape-dependent compiler flag is used.
     return (
         _output_requires_grad(x, bias)
+        and var_dtype_name(x) == var_dtype_name(bias)
         and len(shape) >= 2 and all(d > 0 for d in shape)
         and tuple(bias.shape) == (shape[-1],)
         and shape[-1] <= 2147483647
@@ -94,7 +100,7 @@ def _supports_linear_bias(x, bias):
     )
 
 
-@optional_kernel("nn.linear_bias", "cuda", dtypes=("float32",),
+@optional_kernel("nn.linear_bias", "cuda", dtypes=("float16", "bfloat16", "float32"),
                  supports=_supports_linear_bias)
 def _linear_bias_cuda(x, bias):
     return _LinearBias.apply(x, bias)
