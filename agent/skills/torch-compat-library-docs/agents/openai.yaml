@@ -1,0 +1,4 @@
+interface:
+  display_name: "Torch Compat Library Docs"
+  short_description: "Write Feishu-ready per-library torch compat records"
+  default_prompt: "Use $torch-compat-library-docs to turn my development notes into a concise Feishu-ready record for one adapted library."

@@ -8,6 +8,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
+#include <stdexcept>
 #include "bindings/pyjt/py_obj_holder.h"
 #include "bindings/pyjt/py_dtype.h"
 #include "bindings/pyjt/py_tensor_frontend.h"
@@ -1127,6 +1128,50 @@ DEF_IS(GradCallback, T) from_py_object(PyObject* obj) {
     );
     frontend_owner.release();
     return func;
+}
+
+struct GradReadyCallback;
+
+DEF_IS(GradReadyCallback, bool) is_type(PyObject* obj) {
+    return PyCallable_Check(obj);
+}
+
+DEF_IS(GradReadyCallback, T) from_py_object(PyObject* obj) {
+    PyObjHolder frontend_owner(current_tensor_frontend_type());
+    auto frontend_type = reinterpret_cast<PyTypeObject*>(frontend_owner.obj);
+    Py_INCREF(obj);
+    Py_INCREF(frontend_type);
+    T callback(
+        [obj, frontend_type](int target_index, typename T::Var* gradient) {
+            PyTensorFrontendScope frontend_scope(frontend_type);
+            PyObjHolder args(PyTuple_New(2));
+            PyObjHolder index(PyLong_FromLong(target_index));
+            PyObject* raw_gradient = gradient
+                ? to_py_object(new typename T::VarHolder(gradient))
+                : nullptr;
+            if (!gradient) {
+                Py_INCREF(Py_None);
+                raw_gradient = Py_None;
+            }
+            PyObjHolder gradient_holder(raw_gradient);
+            CHECK(args.obj && index.obj && gradient_holder.obj);
+            PyTuple_SET_ITEM(args.obj, 0, index.release());
+            PyTuple_SET_ITEM(args.obj, 1, gradient_holder.release());
+            PyObject* raw_result = PyObject_CallObject(obj, args.obj);
+            if (!raw_result)
+                throw std::runtime_error(
+                    "gradient-ready callback raised an exception");
+            PyObjHolder result(raw_result);
+            USER_CHECK(result.obj == Py_None)
+                << "gradient-ready callback must return None";
+        },
+        [obj, frontend_type]() {
+            Py_DECREF(obj);
+            Py_DECREF(frontend_type);
+        }
+    );
+    frontend_owner.release();
+    return callback;
 }
 
 struct VarSlices;

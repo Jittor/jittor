@@ -278,25 +278,28 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None,
                                  dropout_p=0.0, is_causal=False,
                                  scale=None, enable_gqa=False, **kw):
     del kw
-    dimension = int(query.shape[-1])
-    scale_factor = (
-        1.0 / _math.sqrt(dimension) if scale is None else scale
-    )
-    flash = _try_flash_scaled_dot_product_attention(
-        query, key, value, attn_mask, dropout_p, is_causal,
-        scale_factor, enable_gqa=enable_gqa)
-    if flash is not None:
-        return flash
-    return _native_scaled_dot_product_attention(
-        query,
-        key,
-        value,
-        attn_mask=attn_mask,
-        dropout_p=dropout_p,
-        is_causal=is_causal,
-        scale=scale,
-        enable_gqa=enable_gqa,
-    )
+    from ...amp import _autocast_cast_inputs, _autocast_scope_for_inputs
+    query, key, value = _autocast_cast_inputs(query, key, value)
+    with _autocast_scope_for_inputs(query, key, value):
+        dimension = int(query.shape[-1])
+        scale_factor = (
+            1.0 / _math.sqrt(dimension) if scale is None else scale
+        )
+        flash = _try_flash_scaled_dot_product_attention(
+            query, key, value, attn_mask, dropout_p, is_causal,
+            scale_factor, enable_gqa=enable_gqa)
+        if flash is not None:
+            return flash
+        return _native_scaled_dot_product_attention(
+            query,
+            key,
+            value,
+            attn_mask=attn_mask,
+            dropout_p=dropout_p,
+            is_causal=is_causal,
+            scale=scale,
+            enable_gqa=enable_gqa,
+        )
 
 
 register_fidelity("torch.nn.functional.scaled_dot_product_attention", scaled_dot_product_attention, Fidelity.APPROXIMATE, "native attention mathematics with backend selection and GQA expansion; backend capability and precision restrictions apply")

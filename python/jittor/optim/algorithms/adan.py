@@ -1,11 +1,40 @@
 """Adan optimizer."""
 
 import jittor as jt
+from ..._core.dtypes import dtype_name
 
 from ..base import (
     Optimizer, _grad_matches_param, _param_requires_grad,
-    _state_buffer, _update_preserve_dtype,
+    _adaptive_state_buffer, _update_preserve_dtype,
 )
+
+
+def _adan_update(param, param_value, grad, m, v, d, pre_grad, *,
+                 first_step, lr, betas, eps, weight_decay, step):
+    beta1, beta2, beta3 = betas
+    if first_step:
+        _update_preserve_dtype(pre_grad, jt.zeros_like(pre_grad))
+    else:
+        _update_preserve_dtype(pre_grad, grad - pre_grad)
+
+    _update_preserve_dtype(m, beta1 * m + (1 - beta1) * grad)
+    _update_preserve_dtype(d, beta2 * d + (1 - beta2) * pre_grad)
+    _update_preserve_dtype(pre_grad, jt.multiply(pre_grad, beta2) + grad)
+    _update_preserve_dtype(
+        v, beta3 * v + (1 - beta3) * pre_grad * pre_grad)
+
+    bias_correction1 = 1 - beta1 ** float(step)
+    bias_correction2 = 1 - beta2 ** float(step)
+    bias_correction3_sqrt = jt.sqrt(1 - beta3 ** float(step))
+    step_size_diff = lr * beta2 * bias_correction3_sqrt / bias_correction2
+    step_size = lr * bias_correction3_sqrt / bias_correction1
+    eps_bias_sqrt = eps * bias_correction3_sqrt
+
+    updated_param = param_value - (step_size * m + step_size_diff * d) / (
+        jt.sqrt(v) + eps_bias_sqrt)
+    _update_preserve_dtype(param, updated_param)
+    _update_preserve_dtype(param, updated_param / (1 + lr * weight_decay))
+    _update_preserve_dtype(pre_grad, grad)
 
 class Adan(Optimizer):
     """ Adan Optimizer.
@@ -45,10 +74,10 @@ class Adan(Optimizer):
             pg["d"] = []
             pg["pre_grad"] = []
             for p in pg["params"]:
-                pg["m"].append(_state_buffer(p))
-                pg["v"].append(_state_buffer(p))
-                pg["d"].append(_state_buffer(p))
-                pg["pre_grad"].append(_state_buffer(p))
+                pg["m"].append(_adaptive_state_buffer(p))
+                pg["v"].append(_adaptive_state_buffer(p))
+                pg["d"].append(_adaptive_state_buffer(p))
+                pg["pre_grad"].append(_adaptive_state_buffer(p))
 
 
     def add_param_group(self, group):
@@ -57,10 +86,10 @@ class Adan(Optimizer):
         group["d"] = []
         group["pre_grad"] = []
         for p in group["params"]:
-            group["m"].append(_state_buffer(p))
-            group["v"].append(_state_buffer(p))
-            group["d"].append(_state_buffer(p))
-            group["pre_grad"].append(_state_buffer(p))
+            group["m"].append(_adaptive_state_buffer(p))
+            group["v"].append(_adaptive_state_buffer(p))
+            group["d"].append(_adaptive_state_buffer(p))
+            group["pre_grad"].append(_adaptive_state_buffer(p))
         super().add_param_group(group)
 
     def _global_max_grad_norm(self):
@@ -97,17 +126,6 @@ class Adan(Optimizer):
             betas = pg.get("betas", self.betas)
             eps = pg.get("eps", self.eps)
             weight_decay = pg.get("weight_decay", self.weight_decay)
-            beta1, beta2, beta3 = betas
-
-            bias_correction1 = 1 - beta1 ** n
-            bias_correction2 = 1 - beta2 ** n
-            bias_correction3_sqrt = jt.sqrt(1 - beta3 ** n)
-
-
-            step_size_diff = lr * beta2 * bias_correction3_sqrt / bias_correction2
-            step_size = lr * bias_correction3_sqrt / bias_correction1
-            eps_bias_sqrt = eps * bias_correction3_sqrt
-
             for p, g, m, v, d, pre_g in zip(pg["params"],
                                             pg["grads"],
                                             pg["m"],
@@ -115,38 +133,18 @@ class Adan(Optimizer):
                                             pg["d"],
                                             pg["pre_grad"]):
                 if not _param_requires_grad(p) or not _grad_matches_param(p, g): continue
-
-                if first_step:
-                    # Official Adan seeds pre_grad with the FIRST gradient, so
-                    # grad_diff is 0 on step 1. jittor seeded pre_grad with
-                    # zeros and still took the difference, making grad_diff = g
-                    # and giving a first update no other Adan produces. The old
-                    # guard here (`if self.n_step > 0`) never excluded anything:
-                    # pre_step() runs backward(), so n_step is already 1 by the
-                    # time the first step reaches this line.
-                    _update_preserve_dtype(pre_g, jt.zeros_like(pre_g))
+                if dtype_name(p.dtype) in ("float16", "bfloat16"):
+                    with jt.flag_scope(amp_reg=0):
+                        for state in (m, v, d, pre_g):
+                            if dtype_name(state.dtype) != "float32":
+                                state.update(state.float32())
+                        _adan_update(
+                            p, p.float32(), g.float32(), m, v, d, pre_g,
+                            first_step=first_step, lr=lr, betas=betas,
+                            eps=eps, weight_decay=weight_decay, step=n)
                 else:
-                    _update_preserve_dtype(
-                        pre_g, g - pre_g)  # Update pre_g as grad_diff
-
-
-                _update_preserve_dtype(m, beta1 * m + (1 - beta1) * g)
-                _update_preserve_dtype(
-                    d, beta2 * d + (1 - beta2) * pre_g)
-
-                _update_preserve_dtype(
-                    pre_g, jt.multiply(pre_g, beta2) + g)
-
-                _update_preserve_dtype(
-                    v, beta3 * v + (1 - beta3) * pre_g * pre_g)
-
-                _update_preserve_dtype(
-                    p,
-                    p - (step_size * m + step_size_diff * d)
-                    / (jt.sqrt(v) + eps_bias_sqrt),
-                )
-                _update_preserve_dtype(p, p / (1 + lr * weight_decay))
-
-                _update_preserve_dtype(
-                    pre_g, g)  # Update pre_g for the next iteration
+                    _adan_update(
+                        p, p, g, m, v, d, pre_g, first_step=first_step,
+                        lr=lr, betas=betas, eps=eps,
+                        weight_decay=weight_decay, step=n)
         self.post_step()

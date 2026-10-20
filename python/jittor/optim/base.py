@@ -67,6 +67,119 @@ def _grad_matches_param(p, g):
 def _param_requires_grad(p):
     return bool(p.requires_grad)
 
+
+def _native_ddp_readiness_plan(optimizer, targets, input_params):
+    """Preflight the narrow NCCL path that can reduce ready backward buckets."""
+    from jittor import distributed
+    from jittor.nn.parallel.distributed_data_parallel import (
+        _signature_check,
+        _validate_reducer_state,
+    )
+
+    states = set(getattr(optimizer, "_jittor_ddp_states", ()))
+    for parameter in targets:
+        state = getattr(parameter, "_jittor_ddp_state", None)
+        if state is not None:
+            states.add(state)
+    if len(states) != 1 or not targets:
+        return None
+    state = next(iter(states))
+    if (state.world_size <= 1 or not state.sync_enabled
+            or any(_param_requires_grad(parameter) for parameter in input_params)):
+        return None
+    backend_query = getattr(state.group, "_get_backend_name", None)
+    backend = (backend_query() if callable(backend_query)
+               else getattr(state.group, "_backend_kind", None))
+    if backend != "nccl":
+        return None
+
+    parameter_index = {
+        id(parameter): index
+        for index, (_, parameter) in enumerate(state.parameters)
+        if parameter.requires_grad
+    }
+    slot_by_id = {}
+    duplicate = False
+    for group in optimizer.param_groups:
+        for slot_index, parameter in enumerate(group["params"]):
+            if not _param_requires_grad(parameter):
+                continue
+            parameter_id = id(parameter)
+            if parameter_id in slot_by_id:
+                duplicate = True
+            slot_by_id[parameter_id] = (group, slot_index)
+
+    target_ids = [id(parameter) for parameter in targets]
+    module_trainable_ids = set(parameter_index)
+    eligible = (
+        not duplicate
+        and len(target_ids) == len(set(target_ids))
+        and set(target_ids) == module_trainable_ids
+        and all(id(parameter) in parameter_index for parameter in targets)
+    )
+    validation_error = None
+    try:
+        _validate_reducer_state(state)
+    except RuntimeError as error:
+        eligible = False
+        validation_error = str(error)
+
+    target_parameter_indices = tuple(sorted(
+        parameter_index.get(id(parameter), -1) for parameter in targets
+    ))
+    payload = (
+        "gradient_bucket_readiness",
+        bool(eligible),
+        validation_error,
+        target_parameter_indices,
+        tuple(tuple(bucket) for bucket in reversed(state.buckets)),
+        bool(state.sync_enabled),
+    )
+    _signature_check(
+        distributed, state.group, payload,
+        "optimizer gradient bucket readiness plan", targets[0],
+    )
+    if not eligible:
+        return None
+    return {
+        "state": state,
+        "target_to_parameter": tuple(
+            parameter_index[id(parameter)] for parameter in targets),
+        "parameter_slots": {
+            parameter_index[parameter_id]: slot
+            for parameter_id, slot in slot_by_id.items()
+            if parameter_id in parameter_index
+        },
+    }
+
+
+def _synchronize_ddp_clip_coefficient(optimizer, coefficient):
+    """Share one coefficient so identical synchronized gradients stay identical."""
+    from jittor import distributed
+
+    states = set(getattr(optimizer, "_jittor_ddp_states", ()))
+    for group in optimizer.param_groups:
+        for parameter in group["params"]:
+            state = getattr(parameter, "_jittor_ddp_state", None)
+            if state is not None:
+                states.add(state)
+    if len(states) != 1:
+        return coefficient
+    state = next(iter(states))
+    if state.world_size <= 1 or state.has_unsynced_grads:
+        return coefficient
+    backend_query = getattr(state.group, "_get_backend_name", None)
+    backend = (backend_query() if callable(backend_query)
+               else getattr(state.group, "_backend_kind", None))
+    if backend != "nccl":
+        return coefficient
+    ranks = getattr(state.group, "ranks", None)
+    src = int(ranks[0]) if ranks else 0
+    shared = distributed.broadcast(
+        coefficient, src=src, group=state.group)
+    return coefficient if shared is None else shared
+
+
 #: Group-dict keys that are not per-parameter state buffers.
 _NON_STATE_KEYS = frozenset(("params", "grads"))
 
@@ -80,6 +193,15 @@ def _state_buffer(param):
     parameter, which is what every other ``*_like`` in jittor does.
     """
     return jt.zeros_like(param).stop_grad()
+
+
+def _adaptive_state_buffer(param):
+    """Keep adaptive optimizer moments in FP32 for half-precision params."""
+    state = _state_buffer(param)
+    if _jittor_dtype_name(param.dtype) in ("float16", "bfloat16"):
+        with jt.flag_scope(amp_reg=0):
+            state = state.float32().stop_grad()
+    return state
 
 
 def _realign_state_buffers(param_groups):
@@ -271,18 +393,28 @@ class Optimizer(object):
 
         """
         if self.__zero_grad: return
-        grads = []
-        for pg in self.param_groups:
-            for p, g in zip(pg["params"], pg["grads"]):
-                if not _param_requires_grad(p) or not _grad_matches_param(p, g): continue
-                grads.append(g.flatten())
-        if len(grads) == 0: return
-        total_norm = jt.norm(jt.concat(grads), norm_type)
-        clip_coef = jt.minimum(max_norm / (total_norm + 1e-6), 1.0)
-        for pg in self.param_groups:
-            for p, g in zip(pg["params"], pg["grads"]):
-                if not _param_requires_grad(p) or not _grad_matches_param(p, g): continue
-                g.update(g*clip_coef)
+        # Keep explicit FP32 norm inputs from being recast by an enclosing AMP scope.
+        with jt.flag_scope(amp_reg=0):
+            grads = []
+            for pg in self.param_groups:
+                for p, g in zip(pg["params"], pg["grads"]):
+                    if not _param_requires_grad(p) or not _grad_matches_param(p, g): continue
+                    dtype = _jittor_dtype_name(g.dtype)
+                    # Half-precision sum-of-squares can overflow or underflow.
+                    norm_grad = (g.float32() if dtype in ("float16", "bfloat16")
+                                 else g)
+                    grads.append(norm_grad.flatten())
+            if len(grads) == 0: return
+            total_norm = jt.norm(jt.concat(grads), norm_type)
+            clip_coef = jt.minimum(max_norm / (total_norm + 1e-6), 1.0)
+            clip_coef = _synchronize_ddp_clip_coefficient(self, clip_coef)
+            for pg in self.param_groups:
+                for p, g in zip(pg["params"], pg["grads"]):
+                    if not _param_requires_grad(p) or not _grad_matches_param(p, g): continue
+                    dtype = _jittor_dtype_name(g.dtype)
+                    grad = (g.float32() if dtype in ("float16", "bfloat16")
+                            else g)
+                    g.update((grad * clip_coef).cast(dtype))
 
     @property
     def defaults(self):
@@ -413,39 +545,160 @@ class Optimizer(object):
         # sync prev params
         jt.sync(params_has_grad)
 
-        # get gradient
-        grads = jt.grad(loss, params_has_grad, retain_graph)
+        readiness_plan = _native_ddp_readiness_plan(
+            self, params_has_grad, self.__input_params)
+        if readiness_plan is not None:
+            from jittor import distributed
+            from jittor.distributed.bucket import bucket_scope, comm_wait
+            from jittor.nn.parallel.distributed_data_parallel import (
+                _GradientBucketReadiness,
+            )
+            from jittor.backends.cuda.kernels.misc.ddp_bucket import (
+                pack_gradients, unpack_gradients,
+            )
 
-        # set up grads in param_groups
-        pid = 0
-        entries = []
-        for pg in self.param_groups:
-            if "grads" not in pg:
-                pg["grads"] = [ jt.zeros_like(p).stop_grad().stop_fuse() for p in pg['params'] ]
-            pg_grads = pg["grads"]
-            for i, p in enumerate(pg['params']):
-                if _param_requires_grad(p):
-                    # accumulate grad and stop grad of grad
-                    g = grads[pid].stop_grad()
-                    pid += 1
-                    if (getattr(p, "_jittor_ddp_state", None) is not None
-                            and not _grad_matches_param(p, g)):
-                        g = jt.zeros_like(p).stop_grad()
-                    if not self.__zero_grad:
-                        g = g + pg_grads[i]
-                    pg_grads[i].update(g)
-                    entries.append((p, pg_grads[i]))
+            for pg in self.param_groups:
+                if "grads" not in pg:
+                    pg["grads"] = [
+                        jt.zeros_like(p).stop_grad().stop_fuse()
+                        for p in pg["params"]
+                    ]
+
+            state = readiness_plan["state"]
+            parameter_slots = readiness_plan["parameter_slots"]
+            reduced_pairs = []
+            # Publish optimizer holders only after every bucket has joined;
+            # pending communication owns the exact accumulated inputs meanwhile.
+            pending_values = {}
+            comm_pending = False
+            ready_gradients = []
+
+            def record_gradient_ready(target_index, gradient):
+                ready_gradients.append((target_index, gradient))
+
+            def on_bucket_ready(parameter_indices, _gradients):
+                nonlocal comm_pending
+                members = [
+                    parameter_slots[index][0]["grads"][
+                        parameter_slots[index][1]
+                    ]
+                    for index in parameter_indices
+                ]
+                values = [pending_values[index] for index in parameter_indices]
+                jt.sync(values, weak_sync=False)
+                value = (pack_gradients(values)
+                         if len(values) > 1 else values[0])
+                with bucket_scope(defer_join=True):
+                    reduced = distributed.all_reduce(
+                        value, op="sum", group=state.group)
+                    comm_pending = True
+                    jt.sync([reduced], weak_sync=False)
+                reduced_pairs.append((members, reduced, value))
+
+            readiness = _GradientBucketReadiness(
+                buckets=tuple(reversed(state.buckets)),
+                target_to_parameter=readiness_plan["target_to_parameter"],
+                on_bucket_ready=on_bucket_ready,
+            )
+
+            def on_gradient_ready(target_index, gradient):
+                parameter_index = readiness_plan["target_to_parameter"][
+                    target_index]
+                group, slot = parameter_slots[parameter_index]
+                value = gradient.stop_grad()
+                if not self.__zero_grad:
+                    value = value + group["grads"][slot]
+                pending_values[parameter_index] = value
+                readiness(target_index, gradient)
+
+            try:
+                # Finish graph construction before evaluating any bucket. The
+                # autograd builder owns intermediate-gradient roots until it
+                # returns; executing inside its callback keeps those buffers
+                # alive across the entire backward pass. Replay the original
+                # readiness order after those temporary roots are released.
+                # Disable automatic submission through the return conversion
+                # and replay: otherwise it can execute all pending gradients
+                # before our explicit per-bucket sync, losing device overlap.
+                with jt.flag_scope(auto_flush_ops=0):
+                    jt.core.grad_with_callback(
+                        loss, params_has_grad, retain_graph,
+                        record_gradient_ready)
+                    for target_index, gradient in ready_gradients:
+                        on_gradient_ready(target_index, gradient)
+                    readiness.finish()
+            finally:
+                ready_gradients.clear()
+                if comm_pending:
+                    comm_wait()
+
+            for members, reduced, _value in reduced_pairs:
+                if len(members) == 1:
+                    members[0].update(reduced / state.world_size)
+                    continue
+                for gradient, averaged in zip(
+                        members,
+                        unpack_gradients(reduced, members, state.world_size)):
+                    gradient.update(averaged)
+
+            entries = []
+            for group in self.param_groups:
+                for parameter, gradient in zip(
+                        group["params"], group["grads"]):
+                    if _param_requires_grad(parameter):
+                        entries.append((parameter, gradient))
+            ddp_parameter_ids = {id(parameter) for parameter, _ in entries}
+            dep = []
+            state.has_unsynced_grads = False
+        else:
+            # Legacy path remains authoritative for no_sync, MPI, mixed
+            # optimizer/DDP groups, input gradients and non-NCCL backends.
+            grads = jt.grad(loss, params_has_grad, retain_graph)
+
+            pid = 0
+            entries = []
+            for pg in self.param_groups:
+                if "grads" not in pg:
+                    pg["grads"] = [
+                        jt.zeros_like(p).stop_grad().stop_fuse()
+                        for p in pg["params"]
+                    ]
+                pg_grads = pg["grads"]
+                for i, p in enumerate(pg["params"]):
+                    if _param_requires_grad(p):
+                        g = grads[pid].stop_grad()
+                        pid += 1
+                        if (getattr(p, "_jittor_ddp_state", None) is not None
+                                and not _grad_matches_param(p, g)):
+                            g = jt.zeros_like(p).stop_grad()
+                        if not self.__zero_grad:
+                            g = g + pg_grads[i]
+                        pg_grads[i].update(g)
+                        entries.append((p, pg_grads[i]))
+
+            from jittor.nn.parallel.distributed_data_parallel import (
+                _sync_optimizer_gradients,
+            )
+            ddp_parameter_ids, dep = _sync_optimizer_gradients(
+                entries, optimizer=self)
+
         self.__zero_grad = False
         self.n_step += 1
 
-        from jittor.nn.parallel.distributed_data_parallel import (
-            _sync_optimizer_gradients,
+        # jt.in_mpi means a distributed process is active for both MPI and
+        # the MPI-free NCCL launcher. Only the actual MPI backend uses the
+        # legacy Var.mpi_all_reduce path.
+        from jittor import distributed as _distributed
+        native_nccl = (
+            _distributed.is_initialized()
+            and _distributed.get_backend() == "nccl"
         )
-        ddp_parameter_ids, dep = _sync_optimizer_gradients(entries, optimizer=self)
-
-        # Legacy MPI synchronization remains available for optimizer
-        # parameters outside a DDP wrapper.
-        if jt.in_mpi:
+        # The MPI-free launcher also sets ``jt.in_mpi`` for a one-rank job.
+        # There is no peer to synchronize in that case, and its process group
+        # may not be initialized (for example, a raw single-card benchmark).
+        # Keep the legacy Var.mpi_* path limited to actual multi-rank jobs.
+        if (jt.in_mpi and not native_nccl
+                and _distributed.get_world_size() > 1):
             def add_dep(value):
                 nonlocal dep
                 value._add_dependency(dep)

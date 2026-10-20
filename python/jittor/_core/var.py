@@ -1754,7 +1754,19 @@ Var.__array_priority__ = 2000
 
 Var.__module__ = "jittor"
 
-Var.__reduce__ = lambda self: (Var, (self.data,))
+def _rebuild_var_with_dtype(data, dtype):
+    # Reconstruct the recorded dtype independently of the current AMP policy.
+    return ops.array(data).cast(dtype)
+
+def _var__reduce__(self):
+    dtype = _jittor_dtype_name(self.dtype)
+    if dtype == "bfloat16":
+        # NumPy has no native BF16 dtype: .data exposes raw uint16 storage,
+        # whereas .numpy() returns the numerical values as float32.
+        return (_rebuild_var_with_dtype, (self.numpy(), dtype))
+    return (Var, (self.data,))
+
+Var.__reduce__ = _var__reduce__
 
 __all__ = (
     'abs_',

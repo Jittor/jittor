@@ -27,6 +27,15 @@ class ParameterList(jt.Module):
     def __iter__(self):
         return self.params.values().__iter__()
 
+    def __getattr__(self, key):
+        params = self.__dict__.get("params")
+        if params is not None:
+            if key.isdigit() and int(key) in params:
+                return params[int(key)]
+            if key in params:
+                return params[key]
+        return super().__getattr__(key)
+
     def keys(self):
         return self.params.keys()
 

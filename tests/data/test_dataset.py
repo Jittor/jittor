@@ -552,6 +552,33 @@ if __name__ == "__main__":
         # and nothing pretends the user pressed Ctrl-C
         assert "Caught SIGINT" not in err, err[-2000:]
 
+    def test_worker_init_exception_reaches_the_caller(self):
+        src = self.SRC.replace(
+            "class Boom(Dataset):\n"
+            "    def __init__(self):\n"
+            "        super().__init__()\n"
+            "        self.set_attrs(total_len=64, batch_size=4, shuffle=False, num_workers=2)\n",
+            "def fail_worker_init(worker_id):\n"
+            "    raise ValueError('boom in worker_init_fn %d' % worker_id)\n\n"
+            "class Boom(Dataset):\n"
+            "    def __init__(self):\n"
+            "        super().__init__(worker_init_fn=fail_worker_init)\n"
+            "        self.set_attrs(total_len=64, batch_size=4, shuffle=False, num_workers=2)\n",
+        ).replace('"__getitem__" in str(e)', '"fail_worker_init" in str(e)')
+        r = run_child_script(src)
+        out = r.stdout.decode()
+        err = r.stderr.decode()
+        assert r.returncode == 0, (
+            "the parent must survive to raise, got returncode %s\n%s\n%s"
+            % (r.returncode, out[-2000:], err[-3000:]))
+        assert "STILL_ALIVE" in out, out[-2000:] + err[-2000:]
+        assert "NO_EXCEPTION" not in out, out[-2000:]
+        assert "RAISED=RuntimeError" in out, out[-2000:]
+        assert "HAS_MESSAGE=True" in out, out[-2000:]
+        assert "HAS_TRACEBACK=True" in out, out[-2000:]
+        assert "HAS_VALUEERROR=True" in out, out[-2000:]
+        assert "Caught SIGINT" not in err, err[-2000:]
+
 
 class TestWorkerDeathWakesTheParent(unittest.TestCase):
     """The wake-up must not depend on the parent being lucky.

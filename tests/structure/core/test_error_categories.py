@@ -128,8 +128,9 @@ MIGRATED_GETITEM_SHAPE_BOUNDARIES = {
 }
 
 MIGRATED_PY_CONVERTER_USER_BOUNDARIES = {
-    # 1 bool-slice input + 3 on the value Function.grad hands back.
-    "src/bindings/pyjt/py_converter.h": 4,
+    # 1 bool-slice input + 3 on the value Function.grad hands back
+    # + 1 requiring a gradient-ready callback to return None.
+    "src/bindings/pyjt/py_converter.h": 5,
 }
 
 MIGRATED_DEVICE_COPY_USER_BOUNDARIES = {
@@ -542,6 +543,10 @@ def test_py_converter_user_boundary_migration_is_explicit_and_bounded():
     negative = (ROOT / "tests/autograd/test_function.py").read_text()
     assert "test_returning_the_wrong_number_of_grads_is_a_catchable_user_error" in negative
     assert "test_returning_a_non_var_grad_is_a_catchable_user_error" in negative
+    assert source.count("USER_CHECK(result.obj == Py_None)") == 1
+    assert '"gradient-ready callback must return None"' in source
+    callback_negative = (ROOT / "tests/bindings/test_trace_var.py").read_text()
+    assert "test_gradient_ready_callback_non_none_return_is_a_catchable_user_error" in callback_negative
 
 
 def test_py_converter_conversion_checks_stay_internal_invariants():

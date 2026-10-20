@@ -348,8 +348,17 @@ def rebuild_tensor(tensor_type, array, dtype, requires_grad, device=None):
 
 def deepcopy_tensor(value, memo):
     from copy import deepcopy
+    from .tensor_object_state import get_tensor_object_state
     result = rebuild_tensor(type(value), value.numpy(), _jittor_dtype_name(value.dtype),
                             value.requires_grad, str(value.device))
     memo[id(value)] = result
     result.__dict__.update(deepcopy(_python_state(value), memo))
+    # Rebuilt storage is independent. View write-through metadata must not
+    # redirect mutations to the old view's owner, including legacy holders.
+    state = get_tensor_object_state(result)
+    if state is not None:
+        state.data_owner = None
+        state.data_path = ()
+    result.__dict__.pop("_torch_data_owner", None)
+    result.__dict__.pop("_torch_data_path", None)
     return result

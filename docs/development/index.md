@@ -13,6 +13,7 @@
 ```{toctree}
 :maxdepth: 1
 
+2.0-refactor-onboarding
 repository-layout
 source-architecture
 storage-layout
@@ -27,6 +28,7 @@ known-issues/parallel-compiler-segfault
 
 | 文档 | 内容 |
 | --- | --- |
+| [开发者导览](2.0-refactor-onboarding.md) | 项目组成、模块归属和开发验证入口 |
 | [仓库布局](repository-layout.md) | 顶层目录的职责与打包边界 |
 | [源码架构](source-architecture.md) | Python 侧的模块归属与依赖方向 |
 | [静态图回放](static-graph-replay.md) | 重复步长不再每次用 Python 重建图：设计与预算 |

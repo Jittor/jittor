@@ -13,6 +13,7 @@ Examples::
 """
 import argparse
 import glob
+import math
 import os
 import shutil
 import signal
@@ -135,23 +136,56 @@ def _exit_code(returncode):
     return 128 - returncode if returncode < 0 else returncode
 
 
-def _stop_all(procs, keep=()):
-    """Terminate every rank still running. SIGTERM first, then SIGKILL."""
-    alive = [(rank, p) for rank, (p, _) in enumerate(procs)
-             if rank not in keep and p.poll() is None]
-    for _, process in alive:
-        process.terminate()
-    deadline = time.time() + _TERM_GRACE_S
-    for _, process in alive:
+def _signal_rank_group(process, signum):
+    """Signal a rank and its workers, which share the rank's process group."""
+    if os.name == "posix":
         try:
-            process.wait(timeout=max(0.0, deadline - time.time()))
+            os.killpg(process.pid, signum)
+            return
+        except ProcessLookupError:
+            return
+    if process.poll() is None:
+        process.send_signal(signum)
+
+
+def _rank_group_alive(process):
+    if os.name != "posix":
+        return process.poll() is None
+    try:
+        os.killpg(process.pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+
+
+def _stop_all(procs):
+    """Stop each rank process group, including DataLoader worker children."""
+    for process, _ in procs:
+        _signal_rank_group(process, signal.SIGTERM)
+
+    deadline = time.monotonic() + _TERM_GRACE_S
+    while time.monotonic() < deadline:
+        for process, _ in procs:
+            if process.poll() is None:
+                try:
+                    process.wait(timeout=0)
+                except subprocess.TimeoutExpired:
+                    pass
+        if not any(_rank_group_alive(process) for process, _ in procs):
+            break
+        time.sleep(min(_POLL_S, max(0.0, deadline - time.monotonic())))
+
+    for process, _ in procs:
+        if _rank_group_alive(process):
+            _signal_rank_group(process, signal.SIGKILL)
+        if process.poll() is None:
+            process.kill()
+        try:
+            process.wait(timeout=_TERM_GRACE_S)
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait()
     for process, logf in procs:
-        if process.poll() is None:
-            process.kill()
-            process.wait()
         if not logf.closed:
             logf.close()
 
@@ -190,6 +224,9 @@ def _build_parser():
                         help="rendezvous port; 0 selects an available local port")
     parser.add_argument("--timeout", type=float, default=120.0,
                         help="communicator rendezvous timeout in seconds (default: 120)")
+    parser.add_argument("--job-timeout", type=float, default=None,
+                        help="stop all rank processes after this many seconds; "
+                             "default: no job deadline")
     parser.add_argument("--log-dir", "--logdir", dest="logdir", default="./jt_dist_logs")
     parser.add_argument("--log-level", choices=["debug", "info", "warning", "error"],
                         default="info")
@@ -207,6 +244,9 @@ def _parse_args(argv=None):
         parser.error("--nproc-per-node must be at least 1")
     if args.timeout <= 0:
         parser.error("--timeout must be positive")
+    if (args.job_timeout is not None and
+            (not math.isfinite(args.job_timeout) or args.job_timeout <= 0)):
+        parser.error("--job-timeout must be a finite positive number")
     explicit_executable = bool(args.cmd and args.cmd[0] == "--")
     cmd = args.cmd[1:] if explicit_executable else args.cmd
     if not cmd:
@@ -285,6 +325,9 @@ def main(argv=None):
     if os.path.exists(rootinfo):
         os.remove(rootinfo)
 
+    job_deadline = (time.monotonic() + args.job_timeout
+                    if args.job_timeout is not None else None)
+    job_timed_out = False
     procs = []
     first_failure = None
     startup_error = None
@@ -296,8 +339,7 @@ def main(argv=None):
         if stop_signal is None:
             stop_signal = signum
         for process, _ in procs:
-            if process.poll() is None:
-                process.send_signal(signum)
+            _signal_rank_group(process, signum)
 
     old_handlers = {}
     for signum in (signal.SIGINT, signal.SIGTERM):
@@ -313,7 +355,8 @@ def main(argv=None):
             logf = open(log_path, "w")
             try:
                 process = subprocess.Popen(
-                    args.cmd, env=env, stdout=logf, stderr=subprocess.STDOUT)
+                    args.cmd, env=env, stdout=logf, stderr=subprocess.STDOUT,
+                    start_new_session=(os.name == "posix"))
             except OSError as error:
                 logf.close()
                 startup_error = error
@@ -339,9 +382,8 @@ def main(argv=None):
             while pending and first_failure is None and stop_signal is None:
                 for rank in list(pending):
                     process, logf = procs[rank]
-                    try:
-                        result = process.wait(timeout=_POLL_S)
-                    except subprocess.TimeoutExpired:
+                    result = process.poll()
+                    if result is None:
                         continue
                     pending.remove(rank)
                     logf.close()
@@ -351,16 +393,32 @@ def main(argv=None):
                         print("[jtrun] rank {} exited with code {}; stopping other ranks".format(
                             rank, rc), file=sys.stderr, flush=True)
                         break
+                if (pending and first_failure is None and stop_signal is None
+                        and job_deadline is not None
+                        and time.monotonic() >= job_deadline):
+                    job_timed_out = True
+                    rc = 124
+                    print("[jtrun] job timed out after {}s; stopping all ranks".format(
+                        args.job_timeout), file=sys.stderr, flush=True)
+                    break
+                if pending and first_failure is None and stop_signal is None:
+                    delay = _POLL_S
+                    if job_deadline is not None:
+                        delay = min(delay, max(0.0, job_deadline - time.monotonic()))
+                    time.sleep(delay)
             if stop_signal is not None:
                 rc = 128 + stop_signal
     finally:
-        _stop_all(procs, keep=() if first_failure is None else (first_failure[0],))
+        _stop_all(procs)
         _cleanup(rootinfo)
         for signum, handler in old_handlers.items():
             signal.signal(signum, handler)
 
     if stop_signal is not None:
         print("[jtrun] received {}; ranks stopped".format(signal.Signals(stop_signal).name),
+              file=sys.stderr, flush=True)
+    elif job_timed_out:
+        print("[jtrun] job deadline reached; all rank process groups stopped",
               file=sys.stderr, flush=True)
     elif first_failure is None and startup_error is None:
         print("[jtrun] all ranks done, rc=0", flush=True)

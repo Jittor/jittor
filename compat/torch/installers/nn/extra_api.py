@@ -797,7 +797,12 @@ def _dropout_init(self, p=0.5, inplace=False, *a, **k):
     initializers = get_install_context(jt).state["nn_extra_native"]["dropout_initializers"]
     for base in type(self).__mro__:
         if base in initializers:
-            return initializers[base](self, p, *a, **k)
+            result = initializers[base](self, p, *a, **k)
+            # Torch modules start in training mode. Jittor's native Dropout
+            # defaults ``is_train`` to False, so preserve the Torch contract
+            # until the caller explicitly invokes eval().
+            self.is_train = True
+            return result
     raise RuntimeError("Dropout initializer has no native owner")
 
 

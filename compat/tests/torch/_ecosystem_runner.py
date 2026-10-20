@@ -161,7 +161,7 @@ def _select_device(torch, runtime, device, *, policy_stack=None):
     return lambda tensor: tensor
 
 
-def _device_in_use(torch, runtime, device):
+def _device_in_use(torch, runtime, device, output):
     """Where the work actually ran, read back from the runtime itself.
 
     Reported alongside the timings so the caller can assert it instead of
@@ -170,19 +170,22 @@ def _device_in_use(torch, runtime, device):
     if runtime == "jittor":
         import jittor as jt
 
-        if (
-            device == "npu"
-            and _test_capability.check_accelerator('acl', backend=jt).enabled
-            and jt.introspection.policy.runtime.use_cuda
-        ):
-            return "npu"
-        return "cuda" if jt.introspection.policy.runtime.use_cuda else "cpu"
-    if device == "cuda":
-        return "cuda" if torch.cuda.is_available() else "cpu"
-    if device == "npu":
-        npu = getattr(torch, "npu", None)
-        return "npu" if npu is not None and npu.is_available() else "cpu"
-    return "cpu"
+        return jt.core.dispatch_context([output])[0]
+    return output.device.type
+
+
+def _assert_jittor_cuda_placement(torch, values, label):
+    import jittor as jt
+
+    expected_index = int(torch.cuda.current_device())
+    for name, value in values:
+        backend, index = jt.core.dispatch_context([value])
+        if backend != "cuda" or index != expected_index:
+            raise RuntimeError(
+                "{} {} ran on {}:{}, expected cuda:{}".format(
+                    label, name, backend, index, expected_index
+                )
+            )
 
 
 def _backend_report(runtime):
@@ -325,9 +328,17 @@ def _run(policy_stack):
         builder, requirements = _ecosystem_cases.CASES[options.case]
         model, input_spec = builder(torch)
         dependencies = _dependency_report(requirements)
-        model.eval()
+        initial_trainability = {
+            name: bool(parameter.requires_grad)
+            for name, parameter in model.named_parameters()
+        }
         if options.runtime == "torch" and options.device != "cpu":
             model.to(options.device)
+        elif options.runtime == "jittor" and options.device == "cuda":
+            # Transformers initializers can create CPU parameters even while
+            # Jittor's default CUDA placement is enabled.
+            model.to("cuda")
+        model.eval()
 
         # ``state_dict`` is not always complete: ms-swift's tuner deliberately
         # reports only its adapter, so transferring it would leave the two runtimes
@@ -367,17 +378,41 @@ def _run(policy_stack):
                 },
             )
 
-        # ``eval()`` in Jittor also stops gradients on every parameter; PyTorch's
-        # does not.  Re-enable them so both runtimes differentiate the same graph.
-        for parameter in model.parameters():
-            start_grad = getattr(parameter, "start_grad", None)
-            if callable(start_grad):
-                start_grad()
+        # Jittor's ``eval()`` stops gradients on every parameter. Restore each
+        # parameter's original state so PEFT's frozen base remains frozen.
+        for name, parameter in model.named_parameters():
+            trainable = initial_trainability[name]
+            if options.runtime == "jittor":
+                transition = getattr(
+                    parameter, "start_grad" if trainable else "stop_grad", None
+                )
+                if callable(transition):
+                    transition()
+                elif trainable:
+                    parameter.requires_grad_(True)
+                else:
+                    parameter.requires_grad_(False)
             else:
-                parameter.requires_grad_(True)
+                parameter.requires_grad_(trainable)
+
+        actual_trainability = {
+            name: bool(parameter.requires_grad)
+            for name, parameter in model.named_parameters()
+        }
+        if actual_trainability != initial_trainability:
+            raise AssertionError(
+                "model.eval() changed the parameter trainability contract"
+            )
 
         inputs = _make_inputs(torch, input_spec, options.seed + 1, to_device)
+        if options.runtime == "jittor" and options.device == "cuda":
+            _assert_jittor_cuda_placement(
+                torch, list(model.named_parameters()), "parameter"
+            )
+            _assert_jittor_cuda_placement(torch, list(inputs.items()), "input")
         output = _primary_output(model(**inputs))
+        if options.runtime == "jittor" and options.device == "cuda":
+            _assert_jittor_cuda_placement(torch, [("output", output)], "output")
 
         weights = np.random.RandomState(options.seed + 2)
         loss_weights = weights.randn(*tuple(output.shape)).astype("float32")
@@ -386,10 +421,12 @@ def _run(policy_stack):
 
         _synchronize(torch, options.runtime, options.device)
         arrays = {"__output__": _numpy_snapshot(output)}
+        parameter_grads = []
         for name, parameter in model.named_parameters():
             grad = getattr(parameter, "grad", None)
             if grad is None:
                 continue
+            parameter_grads.append(name)
             arrays["grad::" + name] = _numpy_snapshot(grad)
         for name, tensor in inputs.items():
             grad = getattr(tensor, "grad", None)
@@ -469,7 +506,18 @@ def _run(policy_stack):
                 "tensors": len(arrays),
                 "seconds": min(durations),
                 "loss": float(loss.detach().cpu().numpy().reshape(-1)[0]),
-                "device": _device_in_use(torch, options.runtime, options.device),
+                "parameters": {
+                    "trainable": sorted(
+                        name for name, trainable in actual_trainability.items()
+                        if trainable
+                    ),
+                    "frozen": sorted(
+                        name for name, trainable in actual_trainability.items()
+                        if not trainable
+                    ),
+                },
+                "parameter_grads": sorted(parameter_grads),
+                "device": _device_in_use(torch, options.runtime, options.device, output),
                 "backend": _backend_report(options.runtime),
                 "fallback_count": fallback_count,
                 "fallback_policy": "error" if options.runtime == "jittor" else None,

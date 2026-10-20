@@ -134,6 +134,23 @@ assert isinstance(linear, jt.nn.Linear)
 assert isinstance(linear, torch.nn.Module)
 assert set(dict(linear.named_parameters())) == {"weight", "bias"}
 
+class LinearOrdinarySuper(torch.nn.Linear):
+    def __init__(self):
+        super().__init__(2, 3, bias=False)
+
+ordinary = LinearOrdinarySuper()
+assert isinstance(ordinary, jt.nn.Linear)
+assert isinstance(ordinary, torch.nn.Module)
+assert ordinary.bias is None
+assert set(dict(ordinary.named_parameters())) == {"weight"}
+with torch.no_grad():
+    ordinary.weight.fill_(2.0)
+ordinary_input = torch.ones(1, 2, device=ordinary.weight.device)
+ordinary_output = ordinary(ordinary_input)
+np.testing.assert_array_equal(ordinary_output.numpy(), [[4.0, 4.0, 4.0]])
+ordinary_output.sum().backward()
+np.testing.assert_array_equal(ordinary.weight.grad.numpy(), np.ones((3, 2)))
+
 class LinearForwardOverride(torch.nn.Linear):
     def forward(self, value):
         return torch.ones(value.shape[0], 4)
@@ -141,6 +158,18 @@ class LinearForwardOverride(torch.nn.Linear):
 override = LinearForwardOverride(2, 3)
 override_input = torch.ones(1, 2, device=override.weight.device)
 assert tuple(override(override_input).shape) == (1, 4)
+
+class LinearForwardViaSuper(torch.nn.Linear):
+    def forward(self, value):
+        return super().forward(value) + 1.0
+
+forward_super = LinearForwardViaSuper(2, 3)
+with torch.no_grad():
+    forward_super.weight.zero_()
+    forward_super.bias.zero_()
+forward_super_input = torch.ones(1, 2, device=forward_super.weight.device)
+np.testing.assert_array_equal(forward_super(forward_super_input).numpy(),
+                              [[1.0, 1.0, 1.0]])
 
 class LinearSuperAnchor(torch.nn.Linear):
     def __init__(self):
@@ -151,6 +180,24 @@ anchored = LinearSuperAnchor()
 assert anchored.ready
 assert isinstance(anchored, jt.nn.Linear)
 assert isinstance(anchored, torch.nn.Module)
+assert not any(name in vars(anchored)
+               for name in ("weight", "bias", "in_features", "out_features"))
+assert list(anchored.named_parameters()) == []
+try:
+    torch.nn.Linear()
+except TypeError:
+    pass
+else:
+    raise AssertionError("ordinary Linear construction accepted missing sizes")
+native_linear = jt.nn.Linear(2, 1)
+assert type(native_linear.weight) is jt.Var
+assert type(native_linear(jt.ones((1, 2)))) is jt.Var
+assert module_before.keys() == vars(jt.Module).keys()
+assert all(value is vars(jt.Module)[key]
+           for key, value in module_before.items())
+assert linear_before.keys() == vars(jt.nn.Linear).keys()
+assert all(value is vars(jt.nn.Linear)[key]
+           for key, value in linear_before.items())
 assert jt.autograd.get_policy() is policy_before
 # torch's default device is the CPU whatever `use_cuda` says, so a device run
 # has to ask for the device to exercise it.
@@ -430,6 +477,29 @@ with torch.no_grad():
     alias[0].fill_(3.)
 np.testing.assert_array_equal(original.numpy(), [3., 2.])
 from jittor.compat.torch.tensor_object_state import get_tensor_object_state
+stateless = torch.tensor([5., 6.])
+assert get_tensor_object_state(stateless) is None
+assert get_tensor_object_state(copy.deepcopy(stateless)) is None
+legacy = torch.tensor([5., 6.])
+vars(legacy)["_torch_data_owner"] = legacy
+vars(legacy)["_torch_data_path"] = (slice(None),)
+legacy_copy = copy.deepcopy(legacy)
+assert get_tensor_object_state(legacy_copy) is None
+assert legacy_copy._torch_data_owner is None
+assert legacy_copy._torch_data_path == ()
+view_source = torch.tensor([[1., 2.], [3., 4.]], requires_grad=True)
+data_view = view_source.data[:, 1:]
+data_copy = copy.deepcopy(data_view)
+assert data_copy._torch_data_owner is None
+assert data_copy._torch_data_path == ()
+assert data_copy.data_ptr() != data_view.data_ptr()
+data_copy.add_(10.)
+np.testing.assert_array_equal(data_copy.numpy(), [[12.], [14.]])
+np.testing.assert_array_equal(view_source.numpy(), [[1., 2.], [3., 4.]])
+with torch.no_grad():
+    view_source.data[0, 1] = 9.
+np.testing.assert_array_equal(view_source.numpy(), [[1., 9.], [3., 4.]])
+np.testing.assert_array_equal(data_copy.numpy(), [[12.], [14.]])
 assert not any(name in vars(jt) for name in (
     "_torch_compat_owner", "_torch_tensor_state", "_torch_leaf_params",
     "_torch_retained", "_active_optimizers",
@@ -456,6 +526,8 @@ assert copied_state._torch_data_owner is None
 assert copied_state._torch_data_path == ()
 assert copied_state._torch_acl_rms_norm_unit_weight is copied_state
 assert copied_state._jittor_torch_force_cpu
+assert copied_state.grad is not fresh.grad
+np.testing.assert_array_equal(copied_state.grad.numpy(), [1., 1.])
 restored_state = pickle.loads(pickle.dumps(fresh))
 assert restored_state._torch_data_owner is restored_state
 assert restored_state._torch_acl_rms_norm_unit_weight is restored_state

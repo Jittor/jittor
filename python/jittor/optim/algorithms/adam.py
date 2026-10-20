@@ -6,7 +6,8 @@ from ..._runtime.dispatch import register_kernel, select_kernel
 
 from ..base import (
     Optimizer, _grad_matches_param, _param_requires_grad,
-    _state_buffer, _update_preserve_dtype, _optimizer_arithmetic,
+    _adaptive_state_buffer, _update_preserve_dtype,
+    _optimizer_arithmetic,
 )
 
 
@@ -35,6 +36,17 @@ def _acl_fused_adamw_updates(entries, lr, beta1, beta2, weight_decay, eps):
     return results
 
 
+def _promote_adam_moments(param, value, momentum):
+    if dtype_name(param.dtype) not in ("float16", "bfloat16"):
+        return False
+    with jt.flag_scope(amp_reg=0):
+        if dtype_name(value.dtype) != "float32":
+            value.update(value.float32())
+        if dtype_name(momentum.dtype) != "float32":
+            momentum.update(momentum.float32())
+    return True
+
+
 register_kernel("optim.adamw_fused", "acl", _acl_fused_adamw_updates)
 # Publishes the CUDA `optim.adamw_fused` kernel by import, as sgd.py does for
 # fused SGD.
@@ -42,12 +54,39 @@ from jittor.backends.cuda.kernels.optim import fused_adamw_cuda as _fused_adamw_
 
 
 def adam_update(param, grad, value, momentum, *, lr, eps, weight_decay,
-                betas, step, decoupled_weight_decay=False, torch_math=False):
+                betas, step, decoupled_weight_decay=False, torch_math=False,
+                fp32_state=False):
     """Shared Adam arithmetic; callers own gradient sourcing and step counters.
 
     Native Adam historically puts epsilon before bias scaling. Torch and
     AdamW put it after scaling; keep that policy explicit at the call site.
     """
+    if fp32_state and dtype_name(param.dtype) in ("float16", "bfloat16"):
+        # Half-precision eps and second moments can both underflow to zero.
+        # Keep the state holders in place, but construct the update in FP32.
+        with jt.flag_scope(amp_reg=0):
+            _promote_adam_moments(param, value, momentum)
+            return _adam_update_impl(
+                param.float32(), grad.float32(), value, momentum, lr=lr,
+                eps=eps, weight_decay=weight_decay, betas=betas, step=step,
+                decoupled_weight_decay=decoupled_weight_decay,
+                torch_math=torch_math)
+    if torch_math and int(jt.flags.amp_reg) != 0:
+        with jt.flag_scope(amp_reg=0):
+            return _adam_update_impl(
+                param, grad, value, momentum, lr=lr, eps=eps,
+                weight_decay=weight_decay, betas=betas, step=step,
+                decoupled_weight_decay=decoupled_weight_decay,
+                torch_math=True)
+    return _adam_update_impl(
+        param, grad, value, momentum, lr=lr, eps=eps,
+        weight_decay=weight_decay, betas=betas, step=step,
+        decoupled_weight_decay=decoupled_weight_decay,
+        torch_math=torch_math)
+
+
+def _adam_update_impl(param, grad, value, momentum, *, lr, eps, weight_decay,
+                      betas, step, decoupled_weight_decay, torch_math):
     b0, b1 = betas
     add, multiply, divide, subtract = _optimizer_arithmetic(
         (param, grad, value, momentum), (lr, eps, weight_decay, b0, b1),
@@ -93,15 +132,15 @@ class Adam(Optimizer):
             values = pg["values"] = []
             m = pg["m"] = []
             for p in pg["params"]:
-                values.append(_state_buffer(p))
-                m.append(_state_buffer(p))
+                values.append(_adaptive_state_buffer(p))
+                m.append(_adaptive_state_buffer(p))
 
     def add_param_group(self, group):
         values = group["values"] = []
         m = group["m"] = []
         for p in group["params"]:
-            values.append(_state_buffer(p))
-            m.append(_state_buffer(p))
+            values.append(_adaptive_state_buffer(p))
+            m.append(_adaptive_state_buffer(p))
         super().add_param_group(group)
 
     def step(self, loss=None, retain_graph=False):
@@ -117,9 +156,10 @@ class Adam(Optimizer):
             b0, b1 = pg.get("betas", self.betas)
             for p, g, v, m in zip(pg["params"], pg["grads"], pg["values"], pg["m"]):
                 if not _param_requires_grad(p) or not _grad_matches_param(p, g): continue
+                _promote_adam_moments(p, v, m)
                 _update_preserve_dtype(p, adam_update(
                     p, g, v, m, lr=lr, eps=eps, weight_decay=weight_decay,
-                    betas=(b0, b1), step=n))
+                    betas=(b0, b1), step=n, fp32_state=True))
         self.post_step()
 
 
@@ -145,15 +185,15 @@ class AdamW(Optimizer):
             values = pg["values"] = []
             m = pg["m"] = []
             for p in pg["params"]:
-                values.append(_state_buffer(p))
-                m.append(_state_buffer(p))
+                values.append(_adaptive_state_buffer(p))
+                m.append(_adaptive_state_buffer(p))
 
     def add_param_group(self, group):
         values = group["values"] = []
         m = group["m"] = []
         for p in group["params"]:
-            values.append(_state_buffer(p))
-            m.append(_state_buffer(p))
+            values.append(_adaptive_state_buffer(p))
+            m.append(_adaptive_state_buffer(p))
         super().add_param_group(group)
 
     def step(self, loss=None, retain_graph=False):
@@ -168,9 +208,13 @@ class AdamW(Optimizer):
             b0, b1 = pg.get("betas", self.betas)
             fused = None
             if pg.get("fused", self.fused) is True:
-                active = [(p, m, v, g, n - 1) for p, g, v, m in zip(
-                    pg["params"], pg["grads"], pg["values"], pg["m"])
-                    if _param_requires_grad(p) and _grad_matches_param(p, g)]
+                active = []
+                for p, g, v, m in zip(
+                        pg["params"], pg["grads"], pg["values"], pg["m"]):
+                    if not _param_requires_grad(p) or not _grad_matches_param(p, g):
+                        continue
+                    _promote_adam_moments(p, v, m)
+                    active.append((p, m, v, g, n - 1))
                 if active:
                     fused = select_kernel("optim.adamw_fused", active)
             if fused is not None:
@@ -186,7 +230,9 @@ class AdamW(Optimizer):
                 continue
             for p, g, v, m in zip(pg["params"], pg["grads"], pg["values"], pg["m"]):
                 if not _param_requires_grad(p) or not _grad_matches_param(p, g): continue
+                _promote_adam_moments(p, v, m)
                 _update_preserve_dtype(p, adam_update(
                     p, g, v, m, lr=lr, eps=eps, weight_decay=weight_decay,
-                    betas=(b0, b1), step=n, decoupled_weight_decay=True))
+                    betas=(b0, b1), step=n, decoupled_weight_decay=True,
+                    fp32_state=True))
         self.post_step()

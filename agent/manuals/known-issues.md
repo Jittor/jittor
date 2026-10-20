@@ -169,31 +169,74 @@ framework defects.
 - **Research:** an intentionally unsupported capability requiring architectural
   work.
 
-## KI-TORCH-RNG-001: complete CUDA generator snapshots are not representable
+## KI-NCCL-P2P-001: sampled native and independent PyTorch P2P collectives stall
+
+- Status: Open, investigation deferred at the user's request; reviewed
+  2026-10-16 on the preserved native DDP working tree at
+  `48de31b4157fa128c5e1e19b052fefa3be7ed098`. Independent PyTorch reproduces
+  the sampled host's failure; a Jittor reducer defect has not been established.
+- Severity: High for default P2P transport; owner: native distributed maintainers
+  and host CUDA/NCCL administrators.
+- Evidence: board 8.27 `COMM-04`/`INT-07` and the
+  [independent legacy P2P/IPC control](../../refactor-wip/results/2026-10-14-native-ddp-overlap-followup.md#comm-04-independent-legacy-p2pipc-control).
+  Bounded native and independent PyTorch all-reduce probes stall after choosing
+  P2P; disabling CUMEM still reproduces the stall through `P2P/IPC`.
+- Workaround: explicitly set `NCCL_P2P_DISABLE=1`; the matched SHM controls and
+  large native DDP runs complete. Keep a launcher `--job-timeout` for bounded
+  diagnostic runs and inspect the actual NCCL channel logs.
+- Exit condition: identify and repair the transport fault, then pass the same
+  default/explicit-P2P analytic probes and four-rank large-model interactions
+  with process cleanup. A fallback pass does not close this issue.
+
+## KI-TORCH-RNG-001: broader CUDA RNG recovery and stability gates remain open
 
 - Severity: Research (C5)
-- Status: Explicit limitation; reviewed 2026-09-17 against large Host cuRAND
-  XORWOW/Philox continuation counterexamples
+- Status: Scoped Philox snapshot contract verified; broader release gates open.
+  Reviewed 2026-10-20 against the current source candidate.
 - Owner: native CUDA RNG and state-storage maintainers
-- Evidence: `${JITTOR_LAB_ROOT}/Accelerate/maturity_repair/` contains
-  `curand_large_offset_probe.py`, `curand_philox_offset_probe.py` and the
-  strict-uniform subset probe. The
-  [Accelerate capability report](../../refactor-wip/results/2026-09-17-accelerate-maturity-repair.md)
-  separates full CPU snapshots from the restricted CUDA format.
-- Symptom: interleaved normal/float64 calls cannot be captured by one Host
-  cuRAND seed/offset. Normal initialization or Gaussian/float64 sampling can
-  therefore make ordinary `Accelerator.save_state()` explicitly fail.
-  `JITTOR_CURAND_XORWOW_U32_V1` capture permits only FP32 uniform history since
-  seed or safe restore; an earlier safe snapshot remains restorable. Sampling
-  operations themselves still compute normally.
-- Workaround: use only the documented safe-uniform capture domain, or perform
-  checkpoint work without claiming exact CUDA RNG continuation. A small-seed
-  reset is not a general exact-resume workaround. Legacy native int seed
-  getters also explicitly reject uint64 seeds they cannot represent.
-- Review/expiry condition: a runtime-owned complete state representation or a
-  reviewed canonical RNG transition passes mixed normal/uniform/float64, odd
-  and large sizes, device isolation, pending work, malformed state and fresh
-  process continuation, followed by generation/checkpoint throughput checks.
+- Evidence: `compat/tests/torch/test_torch_rng_state.py` mixed-distribution
+  restore and legacy-state atomicity cases pass on real CUDA. The current
+  native kernel uses Philox4x32-10 and the snapshot version is
+  `JITTOR_CUDA_PHILOX4X32_10_V1`; the old XORWOW uniform-only restriction no
+  longer describes this implementation. See the
+  [HF progress report](../../refactor-wip/results/2026-10-13-hf-stack-validation-progress.md)
+  for the bounded mixed-RNG fresh-process recovery fixtures and the
+  [day1 candidate report](../../refactor-wip/results/2026-10-20-torch-compat-release-day1.md)
+  for the current-source recheck.
+- Remaining scope: those fixtures do not establish all random histories,
+  multi-device training, default compiler concurrency, or checkpoint and
+  generation throughput. The historical CUDA random SIGSEGV remains open;
+  a short successful restore test does not close its root cause.
+- Workaround: use the current versioned state with the documented tested
+  fixtures. Legacy XORWOW state is rejected without changing the current
+  stream; do not reinterpret an old state or reset a seed and call it exact
+  continuation.
+- Review/expiry condition: candidate-level mixed-history/device-isolation,
+  pending-work, invalid-state and fresh-process gates, plus normal default
+  compilation/stability and matched throughput checks. Changes to the native
+  random kernel or state format require revalidation.
+
+## KI-TORCH-GENERATOR-002: generic floating factories do not snapshot their private NumPy stream
+
+- Severity: Medium; explicit-generator recovery can diverge silently.
+- Status: Open; source path and a restore counterexample reviewed 2026-10-20.
+- Owner: native generator-aware floating sampling / Torch compatibility maintainers.
+- Evidence: `compat/torch/installers/factories.py::_draw_from_generator` draws
+  `rand/randn/normal` from `generator._rng`, while the public compat
+  `Generator.get_state/set_state` serializes only the native seed/counter.
+  The day1 `daily-cpu-expanded-r3.log` restore probe differs after set_state;
+  the [day1 report](../../refactor-wip/results/2026-10-20-torch-compat-release-day1.md)
+  separates this from supported Tensor CPU uniform initialization.
+- Symptom: same-seed draws can agree, but saving/restoring the public state
+  does not rewind the private floating stream. That path also samples on CPU
+  before constructing its output tensor; it is not real-device RNG evidence.
+- Workaround: use the scoped default CPU/CUDA RNG checkpoint contract or the
+  native-counter Tensor CPU `uniform_(generator=...)` path. Tensor `normal_`
+  and CUDA `uniform_` explicitly reject their unsupported generator combinations.
+- Review/expiry condition: one native floating stream owner must provide both
+  draws and versioned snapshots, with mixed distribution/precision, private vs
+  global isolation, fresh-process recovery and actual device checks. Otherwise
+  reject the unsupported combinations before drawing or changing state.
 
 ## KI-TORCH-SAMPLER-001: replacement sampling lacks an explicit-generator owner
 
@@ -3139,49 +3182,6 @@ about whether to take it.
 - Guard: the model-level outcome is what the suite pins
   (`test_torch_hf_models.py::test_forward_and_eval_determinism[longformer]`);
   the six-row probe lives in this entry's evidence rather than in the tree.
-
-## KI-COMPAT-006: `load_state_dict` shares the source's Vars, and an in-place optimizer then moves both models
-
-- Severity: High on CUDA (silent: a second model -- an EMA copy, a
-  reference model -- trains along with the first).
-- Status: Open. Found 2026-09-25 while comparing a captured training step
-  against an eager twin.
-- Owner: torch compatibility / optimizers
-- Symptom: after `b.load_state_dict(a.state_dict())` on CUDA, one
-  `torch.optim.AdamW(a.parameters()).step()` changes `b`'s weights too. On
-  CPU it does not. PyTorch copies in `load_state_dict`, so the two are
-  independent there.
-- Mechanism: loading binds `b`'s parameters to the very Vars `a` holds, which
-  is harmless while every update produces a new Var. The fused CUDA AdamW
-  (`src/ops/composite/fused_adamw_op.cc`) writes its results into the
-  parameters' own storage (`share_with`), so whatever else holds those Vars
-  sees the write. The per-parameter CPU path builds new Vars and does not.
-- Repro: `a, b = nn.Linear(2, 2, device="cuda"), nn.Linear(2, 2, device="cuda")`;
-  `b.load_state_dict(a.state_dict())`; a backward and an AdamW step on `a`;
-  `(a.weight == b.weight).all()` is True.
-- Workaround: copy through the host, e.g.
-  `p.copy_(torch.tensor(src.cpu().numpy(), device=src.device))`.
-
-## KI-COMPAT-007: `w.copy_(x)` under `no_grad` loses `w`'s gradient when `x` requires grad
-
-- Severity: Medium (silent: `w.grad` stays None after a backward).
-- Status: Open. Found 2026-09-25.
-- Owner: torch compatibility / autograd
-- Symptom: `w = torch.randn(4, 8, requires_grad=True)`; `with torch.no_grad():
-  w.copy_(x)` where `x` requires grad; a later backward through `w` leaves
-  `w.grad` None. With an `x` that does not require grad it works. PyTorch
-  keeps `w` a leaf that accumulates a gradient in both cases.
-- Workaround: `w = x.detach().clone().requires_grad_(True)`.
-
-## KI-COMPAT-008: `torch.optim.SGD` rejects `foreach=` and `fused=`
-
-- Severity: Low (an import-time `TypeError`, not a silent one).
-- Status: Open. Found 2026-09-25.
-- Owner: torch compatibility / optimizers
-- Symptom: `torch.optim.SGD(params, lr=..., foreach=False)` raises
-  `TypeError: initialize_sgd() got an unexpected keyword argument 'foreach'`,
-  and the same for `fused=`. Both are ordinary PyTorch arguments; the native
-  SGD already has a `fused` switch of its own that they could map onto.
 
 ## KI-TEST-007: `test_fused_op_relay_matmul` fails after profiler or graph-replay tests in the same process
 

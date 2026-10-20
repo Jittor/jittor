@@ -18,7 +18,12 @@ _DEVICES = [("cpu", 0)] + ([("cuda", 1)] if _test_capability.any_accelerator_ena
 def both_devices(fn):
     for name, use_cuda in _DEVICES:
         with jt.flag_scope(use_cuda=use_cuda):
-            fn(name)
+            previous = torch.get_default_device()
+            try:
+                torch.set_default_device(name)
+                fn(name)
+            finally:
+                torch.set_default_device(previous)
 
 
 class Base(unittest.TestCase):
@@ -28,6 +33,30 @@ class Base(unittest.TestCase):
 
 
 class TestSGD(Base):
+    def test_unsupported_sgd_options_reject_top_level_and_parameter_groups(self):
+        def body(dev):
+            for option, value in (("dampening", .5), ("maximize", True),
+                                  ("foreach", True), ("differentiable", True)):
+                parameter = torch.nn.Parameter(torch.tensor([1.]))
+                with self.assertRaisesRegex(NotImplementedError, option):
+                    torch.optim.SGD([parameter], **{option: value})
+                with self.assertRaisesRegex(NotImplementedError, option):
+                    torch.optim.SGD([{"params": [parameter], option: value}])
+        both_devices(body)
+
+    def test_sgd_revalidates_modified_groups_before_updating_parameters(self):
+        def body(dev):
+            for option, value in (("dampening", .5), ("maximize", True),
+                                  ("foreach", True), ("differentiable", True)):
+                parameter = torch.nn.Parameter(torch.tensor([1.]))
+                optimizer = torch.optim.SGD([parameter])
+                (parameter * parameter).sum().backward()
+                optimizer.param_groups[0][option] = value
+                with self.assertRaisesRegex(NotImplementedError, option):
+                    optimizer.step()
+                self.ac(parameter.numpy(), [1.], atol=0., rtol=0.)
+        both_devices(body)
+
     def test_sgd_plain(self):
         w0 = np.array([1., 2., 3.], "float32")
         def body(dev):
@@ -226,6 +255,27 @@ class TestAdam(Base):
         self.assertTrue(np.isfinite(value.numpy()).all())
         self.assertIs(
             optimizer.state_dict()["param_groups"][0]["fused"], True)
+
+    def test_adamw_foreach_false_uses_portable_update_and_serializes_option(self):
+        with jt.flag_scope(use_cuda=0):
+            value = jt.array(np.array([1.0, -2.0], dtype=np.float32))
+            initial = value.numpy().copy()
+            optimizer = torch.optim.AdamW(
+                [value], lr=0.01, weight_decay=0.01,
+                foreach=False, fused=False,
+            )
+            self.assertIs(optimizer.param_groups[0]["foreach"], False)
+            optimizer.step((value * value).sum())
+            self.assertTrue(np.isfinite(value.numpy()).all())
+            self.assertFalse(np.array_equal(value.numpy(), initial))
+            self.assertIs(
+                optimizer.state_dict()["param_groups"][0]["foreach"], False)
+
+    def test_adamw_foreach_true_is_explicitly_unsupported(self):
+        with jt.flag_scope(use_cuda=0):
+            value = jt.array(np.array([1.0, -2.0], dtype=np.float32))
+            with self.assertRaisesRegex(NotImplementedError, "foreach=True"):
+                torch.optim.AdamW([value], lr=0.01, foreach=True)
 
     def test_adam_step_inside_no_grad_keeps_param_trainable(self):
         def body(dev):

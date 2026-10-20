@@ -40,6 +40,14 @@ def _validate_shape(tensor, expected, name):
         raise AssertionError("{} shape {} does not match {}".format(name, actual, expected))
 
 
+def _packed_projection_parameters(weight, bias, start, stop):
+    selected_weight = weight[start:stop]
+    if bias is None:
+        return selected_weight, None
+    rows = jt.arange(start, stop, dtype="int32")
+    return selected_weight, jt.index_select(bias, 0, rows)
+
+
 def multi_head_attention_forward(
     query,
     key,
@@ -142,14 +150,27 @@ def multi_head_attention_forward(
             (3 * embed_dim, embed_dim),
             "packed projection weight",
         )
-        bias_q = bias_key = bias_value = None
-        if in_proj_bias is not None:
-            bias_q = in_proj_bias[:embed_dim]
-            bias_key = in_proj_bias[embed_dim : 2 * embed_dim]
-            bias_value = in_proj_bias[2 * embed_dim :]
-        q = jt.nn.linear(query, in_proj_weight[:embed_dim], bias_q)
-        k = jt.nn.linear(key, in_proj_weight[embed_dim : 2 * embed_dim], bias_key)
-        v = jt.nn.linear(value, in_proj_weight[2 * embed_dim :], bias_value)
+        if query is key and key is value:
+            projected = jt.nn.linear(query, in_proj_weight, in_proj_bias)
+            q, k, v = projected.split([embed_dim] * 3, dim=-1)
+        elif key is value:
+            q_weight, q_bias = _packed_projection_parameters(
+                in_proj_weight, in_proj_bias, 0, embed_dim)
+            kv_weight, kv_bias = _packed_projection_parameters(
+                in_proj_weight, in_proj_bias, embed_dim, 3 * embed_dim)
+            q = jt.nn.linear(query, q_weight, q_bias)
+            projected_kv = jt.nn.linear(key, kv_weight, kv_bias)
+            k, v = projected_kv.split([embed_dim] * 2, dim=-1)
+        else:
+            q_weight, q_bias = _packed_projection_parameters(
+                in_proj_weight, in_proj_bias, 0, embed_dim)
+            k_weight, k_bias = _packed_projection_parameters(
+                in_proj_weight, in_proj_bias, embed_dim, 2 * embed_dim)
+            v_weight, v_bias = _packed_projection_parameters(
+                in_proj_weight, in_proj_bias, 2 * embed_dim, 3 * embed_dim)
+            q = jt.nn.linear(query, q_weight, q_bias)
+            k = jt.nn.linear(key, k_weight, k_bias)
+            v = jt.nn.linear(value, v_weight, v_bias)
 
     if (bias_k is None) != (bias_v is None):
         raise AssertionError("bias_k and bias_v must be provided together")

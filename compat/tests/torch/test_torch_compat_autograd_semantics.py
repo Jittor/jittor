@@ -53,6 +53,32 @@ class TestPythonScalarsNeverRequireGrad(unittest.TestCase):
         self.assertEqual(float(leaf.grad), 3.0)
 
 
+class TestInPlaceCopyPreservesRequiresGrad(unittest.TestCase):
+    def test_copy_under_no_grad_preserves_frozen_and_trainable_parameters(self):
+        with jt.flag_scope(use_cuda=0):
+            frozen = torch.nn.Parameter(
+                torch.tensor(np.array([1.0, 2.0], dtype=np.float32)),
+                requires_grad=False,
+            )
+            trainable = torch.nn.Parameter(
+                torch.tensor(np.array([3.0, 4.0], dtype=np.float32)),
+                requires_grad=True,
+            )
+
+            with torch.no_grad():
+                frozen.copy_(torch.tensor(np.array([5.0, 6.0], dtype=np.float32)))
+                trainable.copy_(torch.tensor(np.array([7.0, 8.0], dtype=np.float32)))
+
+            self.assertFalse(frozen.requires_grad)
+            self.assertTrue(trainable.requires_grad)
+            np.testing.assert_array_equal(frozen.numpy(), [5.0, 6.0])
+            np.testing.assert_array_equal(trainable.numpy(), [7.0, 8.0])
+
+            (trainable * trainable).sum().backward()
+            self.assertIsNotNone(trainable.grad)
+            self.assertIsNone(frozen.grad)
+
+
 class TestNeedsInputGrad(unittest.TestCase):
     """ctx.needs_input_grad: one flag per argument PASSED, and no kwargs.
 

@@ -1,10 +1,14 @@
 """Stable Torch Tensor method implementations; install only binds these objects."""
 from importlib import import_module
+import math
+import numbers
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from ...context import get_install_context
+from ...frontend import tensor_frontend
 from ...types import _make_cpu_resident, _make_cuda_resident, _var_is_cpu_resident
 from ....stub_policy import degraded as _degraded, unimplemented as _unimplemented
 from ..core import _promote_pair
+from ..numerical.sparse import _SparseCOO
 
 _owner = import_module(__package__)
 _NativeVar = _owner.jt.Var
@@ -205,8 +209,23 @@ def _torch_setitem(self, slices, value):
                 value = value.squeeze(0)
     except _owner.EXPECTED as exc:
         _owner.swallowed("torch/installers/tensor.py _torch_setitem: mask = slices", exc)
-    result = _orig_setitem(self, slices, value)
-    return result
+    # Writing a differentiable RHS into a constant floating destination creates
+    # a non-leaf in Torch. Native assign preserves the destination's old flag,
+    # so promote it before building the setitem rather than cutting the new
+    # graph with start_grad afterwards. Integer destinations cannot acquire grad.
+    promote_grad = (not _owner.jt.flags.no_grad and not self.requires_grad
+                    and isinstance(value, _NativeVar) and value.requires_grad
+                    and (self.is_floating_point() or self.is_complex()))
+    if promote_grad:
+        self.requires_grad_(True)
+    completed = False
+    try:
+        result = _orig_setitem(self, slices, value)
+        completed = True
+        return result
+    finally:
+        if promote_grad and not completed:
+            self.requires_grad_(False)
 
 
 def _ip(self, value):
@@ -221,12 +240,20 @@ def _ip(self, value):
     if _assign_data_owner(self, value):
         return self
     target = self
+    if (not _owner.jt.flags.no_grad and not target.requires_grad
+            and isinstance(value, _NativeVar) and value.requires_grad
+            and (target.is_floating_point() or target.is_complex())):
+        target.requires_grad_(True)
     was_trainable = not target.is_stop_grad()
+    was_requires_grad = bool(target.requires_grad)
     target.assign(value)
-    if was_trainable and target.is_stop_grad():
-        target.start_grad()
-    elif not was_trainable and not target.is_stop_grad():
-        target.stop_grad()
+    _restore_trainable_state(target, was_trainable)
+    # Jittor's native stop-grad state and Torch's reversible requires_grad
+    # flag are distinct: a frozen Torch Parameter can still have live graph
+    # edges. `assign()` under no_grad changes the former, so restore both
+    # dimensions after the in-place write.
+    if bool(target.requires_grad) != was_requires_grad:
+        target.requires_grad_(was_requires_grad)
     return self
 
 
@@ -245,7 +272,13 @@ def _copy_(self, other, non_blocking=False):
     if destination is not None and str(destination).split(":")[0] in ("cpu", "cuda", "npu"):
         if src.device != destination:
             src = src.to(destination)
-    return _ip(self, src)
+    # copy_ writes values into independent destination storage. In no_grad
+    # the source's graph must not replace the destination's leaf identity.
+    # Native Var.clone aliases storage; the frontend clone owns a real copy.
+    from ...frontend import clone
+    if _owner.jt.flags.no_grad:
+        src = src.detach()
+    return _ip(self, clone(src))
 
 
 def _norm_size(args):
@@ -431,12 +464,53 @@ def _add(input, other, *, alpha=1, out=None):
     _context = get_install_context(_owner.jt)
     _native = _context.state["tensor_native_api"]
     _native_add = _native['_native_add']
-    if alpha != 1:
-        other = other * alpha
-    result = _native_add(input, other)
+    from ...amp import autocast_any_enabled
+    tensor_operands = [value for value in (input, other)
+                       if isinstance(value, _NativeVar)]
+    result_dtype = _owner._dtype_to_str(
+        _context.target_namespace.result_type(input, other))
+    if (alpha != 1 and isinstance(alpha, numbers.Real) and tensor_operands
+            and all(_var_is_cpu_resident(value) for value in tensor_operands)
+            and result_dtype == "float16"):
+        alpha_value = float(alpha)
+        if math.isfinite(alpha_value) and abs(alpha_value) > 65504.:
+            raise RuntimeError(
+                "value cannot be converted to type at::Half without overflow")
+    if isinstance(input, _NativeVar) and _jittor_dtype_name(input.dtype) != result_dtype:
+        input = input.cast(result_dtype)
+    if isinstance(other, _NativeVar) and _jittor_dtype_name(other.dtype) != result_dtype:
+        other = other.cast(result_dtype)
+    if autocast_any_enabled():
+        with _owner.jt.flag_scope(amp_reg=0):
+            if alpha != 1:
+                other = other * alpha
+            result = _native_add(input, other)
+    else:
+        if alpha != 1:
+            other = other * alpha
+        result = _native_add(input, other)
     if out is not None:
         return _owner._assign_out(out, result)
     return result
+
+
+def _mul(input, other, *, out=None):
+    context = get_install_context(_owner.jt)
+    if isinstance(input, _NativeVar):
+        result = _promoting_binary(input, other, "__mul__", False)
+    elif isinstance(other, _NativeVar):
+        result = _promoting_binary(other, input, "__rmul__", True)
+    else:
+        input = context.target_namespace.tensor(input)
+        result = _promoting_binary(input, other, "__mul__", False)
+    if out is not None:
+        return _owner._assign_out(out, result)
+    return result
+
+
+def _sqrt(self):
+    context = get_install_context(_owner.jt)
+    return context.target_namespace.sqrt(self)
 
 
 def _invert(self):
@@ -765,6 +839,16 @@ def _complex_scalar_var(value):
     # Var converter. Materialize the torch-default complex64 scalar first;
     # the actual arithmetic remains a normal device op.
     return _owner.jt.array(_owner.np.asarray([value], dtype=_owner.np.complex64))
+
+
+def _typed_float64_scalar(self, value):
+    if (isinstance(value, (float, _owner.np.floating))
+            and _jittor_dtype_name(self.dtype) == "float64"):
+        context = get_install_context(_owner.jt)
+        with tensor_frontend(context.state["Var"], like=self,
+                             default_placement=False):
+            return _owner.jt.array(float(value), dtype="float64")
+    return value
 
 
 def _truediv_target(da, db):
@@ -1172,21 +1256,27 @@ def _squeeze(self, dim=None):
 
 
 def _baddbmm(self, batch1, batch2, *, beta=1, alpha=1):
-    res = _owner.jt.matmul(batch1, batch2)
-    if alpha != 1:
-        res = res * alpha
-    if beta == 0:
-        return res
-    return beta * self + res
+    from ...amp import _autocast_cast_inputs, _autocast_scope_for_inputs
+    self, batch1, batch2 = _autocast_cast_inputs(self, batch1, batch2)
+    with _autocast_scope_for_inputs(self, batch1, batch2):
+        res = _owner.jt.matmul(batch1, batch2)
+        if alpha != 1:
+            res = res * alpha
+        if beta == 0:
+            return res
+        return beta * self + res
 
 
 def _addmm_method(self, mat1, mat2, *, beta=1, alpha=1):
-    res = _owner.jt.matmul(mat1, mat2)
-    if alpha != 1:
-        res = res * alpha
-    if beta == 0:
-        return res
-    return beta * self + res
+    from ...amp import _autocast_cast_inputs, _autocast_scope_for_inputs
+    self, mat1, mat2 = _autocast_cast_inputs(self, mat1, mat2)
+    with _autocast_scope_for_inputs(self, mat1, mat2):
+        res = _owner.jt.matmul(mat1, mat2)
+        if alpha != 1:
+            res = res * alpha
+        if beta == 0:
+            return res
+        return beta * self + res
 
 
 def _T(self):
@@ -1230,7 +1320,12 @@ def _var_norm(self, p="fro", dim=None, keepdims=None, *rest,
 def _binary_native(opname, left, right, native_api=None):
     if native_api is None:
         native_api = get_install_context(_owner.jt).state["tensor_native_api"]
-    result = native_api["operators"][opname](left, right)
+    from ...amp import autocast_any_enabled
+    if autocast_any_enabled():
+        with _owner.jt.flag_scope(amp_reg=0):
+            result = native_api["operators"][opname](left, right)
+    else:
+        result = native_api["operators"][opname](left, right)
     return _owner._mark_cpu_like(result, left, right)
 
 
@@ -1262,6 +1357,7 @@ def _promoting_binary(self, other, opname, reflected):
     context = get_install_context(_owner.jt)
     native_api = context.state["tensor_native_api"]
     g = context.target_namespace
+    other = _typed_float64_scalar(self, other)
     if isinstance(other, (complex, _owner.np.complexfloating)):
         other = _complex_scalar_var(other)
     if isinstance(other, _NativeVar):
@@ -1271,8 +1367,21 @@ def _promoting_binary(self, other, opname, reflected):
         # `result_type`, not `_promote_pair`: a 0-dim operand promotes only
         # from a higher category, so half_tensor * tensor(2.0) stays half.
         res = _owner._dtype_to_str(g.result_type(self, other))
-        a = self if da == res else self.cast(res)
-        b = other if db == res else other.cast(res)
+        low_precision = ("float16", "bfloat16")
+        scalar_opmath = (
+            res in low_precision
+            and ((da in low_precision and db == "float32" and other.ndim == 0)
+                 or (db in low_precision and da == "float32" and self.ndim == 0)))
+        if scalar_opmath:
+            low_tensor = self if da in low_precision else other
+            # CPU kernels widen a typed 0-d float32 operand for low-precision
+            # elementwise math. CUDA follows the tensor scalar-conversion
+            # path instead: e.g. fp16 * float32(65536) overflows, while the
+            # same Python weak scalar uses fp32 opmath and stays finite.
+            scalar_opmath = _var_is_cpu_resident(low_tensor)
+        compute_dtype = "float32" if scalar_opmath else res
+        a = self if da == compute_dtype else self.cast(compute_dtype)
+        b = other if db == compute_dtype else other.cast(compute_dtype)
         out = _binary_native(opname, a, b)
         # native may still mis-infer (unsigned -> signed); fix it up.
         if isinstance(out, _NativeVar) and _jittor_dtype_name(out.dtype) != res:
@@ -1286,9 +1395,20 @@ def _promoting_binary(self, other, opname, reflected):
     # `_extend_tokens` list concatenation). Match torch: defer to the sequence.
     if isinstance(other, (list, tuple)):
         return NotImplemented
+    own = _own_dtype_name(self, native_api)
+    if (opname in ('__mul__', '__rmul__')
+            and type(other) in (int, float)
+            and own in ('float16', 'bfloat16')):
+        # PyTorch uses float32 opmath for a low-precision tensor multiplied
+        # by a weak Python scalar, then rounds the result back to the tensor
+        # dtype. CUDA otherwise converts a large scalar such as 65536 to
+        # float16 before the multiply, producing inf where Torch returns a
+        # finite result. A typed 0-d tensor follows a different promotion
+        # path above and must retain its backend-specific behavior.
+        out = _binary_native(opname, self.cast('float32'), other, native_api)
+        return out.cast(own) if _own_dtype_name(out, native_api) != own else out
     out = _binary_native(opname, self, other, native_api)
     if isinstance(other, (bool, int, float)) and isinstance(out, _NativeVar):
-        own = _own_dtype_name(self, native_api)
         if own in _SCALAR_KEEPS_DTYPE.get(type(other), ()):
             expected = own
         else:
@@ -1299,6 +1419,7 @@ def _promoting_binary(self, other, opname, reflected):
 
 
 def _true_division(self, other, opname):
+    other = _typed_float64_scalar(self, other)
     if isinstance(other, (complex, _owner.np.complexfloating)):
         other = _complex_scalar_var(other)
     if isinstance(other, _NativeVar):
@@ -1355,6 +1476,8 @@ def _true_division(self, other, opname):
 
 
 def _tensor_add(self, other):
+    if isinstance(other, _SparseCOO):
+        other = other.to_dense()
     return _promoting_binary(self, other, '__add__', False)
 
 
@@ -1429,11 +1552,14 @@ _BINARY_APIS = {
 
 
 def _api_fill(self, val):
-    return _ip(self, _owner.jt.ones(self.shape, self.dtype) * val)
+    value = _owner.jt.ones(self.shape, self.dtype).stop_grad() * val
+    if not isinstance(val, _NativeVar):
+        value.stop_grad()
+    return _ip(self, value)
 
 
 def _api_zero(self):
-    return _ip(self, _owner.jt.zeros(self.shape, self.dtype))
+    return _ip(self, _owner.jt.zeros(self.shape, self.dtype).stop_grad())
 
 
 def _api_add(self, o, alpha=1):
@@ -1481,11 +1607,25 @@ def _api_nonzero(input, as_tuple=False, **kw):
 
 
 def _api_normal(self, mean=0.0, std=1.0, generator=None):
-    return _ip(self, _owner.jt.normal(float(mean), float(std), self.shape).cast(_jittor_dtype_name(self.dtype)))
+    if generator is not None:
+        raise NotImplementedError("normal_ with an explicit Generator is not implemented")
+    namespace = get_install_context(_owner.jt).target_namespace
+    value = namespace.randn(tuple(self.shape), dtype=self.dtype,
+                            device=self.device, generator=generator)
+    return _ip(self, (value * float(std) + float(mean)).stop_grad())
 
 
 def _api_uniform(self, a=0.0, b=1.0, generator=None):
-    return _ip(self, (_owner.jt.rand(self.shape) * (b - a) + a).cast(_jittor_dtype_name(self.dtype)))
+    namespace = get_install_context(_owner.jt).target_namespace
+    if generator is not None:
+        if self.device.type != "cpu" or generator.device.type != "cpu":
+            raise NotImplementedError("uniform_ with an explicit Generator supports CPU only")
+        with tensor_frontend(namespace.Var, like=self):
+            value = generator._uniform(float(a), float(b), tuple(self.shape), self.dtype)
+        return _ip(self, value.stop_grad())
+    value = namespace.rand(tuple(self.shape), dtype=self.dtype,
+                           device=self.device, generator=generator)
+    return _ip(self, (value * (b - a) + a).stop_grad())
 
 
 def _api_tolist(self):
