@@ -1,10 +1,11 @@
 # HF stack 组合验证进展
 
 - 状态：部分通过，按计划继续扩展
-- 更新日期：2026-10-17（Asia/Shanghai；实验产物目录按各 run 日期命名）
+- 更新日期：2026-10-20（Asia/Shanghai；实验产物目录按各 run 日期命名）
 - 维护者：cgq / Jittor Torch 兼容层维护者
 - 验证源码基线：`48de31b4157fa128c5e1e19b052fefa3be7ed098`（验证时 HEAD 加保留工作树；显式 stateful 子项的最终源码 hash 见 2026-10-17 验收 manifest）
 - 目标远端：`origin/cgq_transformers@e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，已确认是当前 `HEAD` 的祖先
+- 2026-10-20 worker=4/persistent CUDA 扩展：`bcf74436376b07740d45ad593b690d86ed344a9b` 加保留工作树；本轮重新 fetch，目标 SHA 未变且已整合，关键源码 hash 在新增 run 的 manifest。
 - 工作区：dirty；本报告不把其他优化器、看板和开发文档改动归入本轮实验提交
 - 环境脚本：`env_jittor.sh` SHA-256 `5c31abdf9f8921e66e331dc5b0c0ad1bfe44ce1ce80abc78c0cd9d20dac0daca`；`env_pytorch.sh` SHA-256 `a664bfed00a10840a1134f7e6f4778d9153022fdc4c959bd87f7ca4afbd34d33`
 - 工作树包含本轮兼容层、测试及其他并行整改改动；以下结论只归属于明确列出的 case，不把整个 dirty tree 当作单一发布版本
@@ -52,8 +53,9 @@
 | CPU RNG/Accelerate 回归 | RNG state contract、dropout default mode、Accelerate fresh-process resume | PASS：`9 tests`、`167.592s`、`OK`；日志 `$JITTOR_LAB_ROOT/_state/hf-stack-validation/targeted-regression-20261013/cpu-rng-state.log`。耗时主要含子进程 Jittor 初始化，不作为训练速度结果 |
 | Repository `core` gate（2026-10-17） | `python tools/run_test_suite.py --tier core`，native/Torch 独立 CPU tier | native `101 passed, 43 skipped, 1 xfailed`；Torch `217 passed, 3 skipped, 4 failed`。失败为独立 Tensor 的 Linear 构造、boolean RHS 梯度、arange 默认 dtype、types.py 行预算，与此前四项相同；未做干净 HEAD 归因对照。日志 `trainer-stateful-20261017/logs/core.log` |
 | Repository structure gate（2026-10-17） | 布局与完整 `tests/structure`，随后定向复验 | 布局通过。完整结构初跑 `1390 passed, 4 failed, 6 skipped`：其中 runner 的 `_named_tensors` 重复已抽取共享 helper，cleanup/nox/tier 定向复跑 `54 passed, 0 skipped`。其余失败为未跟踪 onboarding 的 toctree/MANIFEST 两项及其他 dirty `py_converter.h` 的 USER_CHECK 计数；没有再次跑完整结构，也不宣称全仓绿。日志 `trainer-stateful-20261017/logs/{structure,structure-focused-final,layout}.log` |
+| Repository structure gate（2026-10-20） | 本轮文档提交前完整 `tests/structure`，隔离 CPU cache；定向复验环境相关失败 | 完整 `1393 passed, 5 failed, 2 skipped`；其中两项 MKL 测试只修改 legacy `use_mkl`，被本轮 `JT_BUILD_USE_MKL=0` 覆盖，按 nox 环境移除新变量后原样 **2 passed, 0 skipped**。另三项仍为 onboarding toctree/MANIFEST 和 USER_CHECK 计数；未做干净 HEAD 归因，未重跑完整结构。布局、四份文档相对链接与 diff 格式检查通过；不宣称全仓绿。日志 `trainer-stateful-worker4-persistent-cuda-20261020-r1/logs/{structure,structure-mkl-recheck,layout,links}.log` |
 
-## 显式 Stateful Trainer 验收（2026-10-17）
+## 显式 Stateful Trainer 验收（2026-10-17，2026-10-18/20 扩展）
 
 用户已授权增加显式入口。`jittor_adapters.trainer_stateful.stateful_trainer_class()` 启用 Accelerate 的 stateful loader，并把 prepared loader 的公开状态保存为 `stateful_dataloader.pt`；恢复时验证配置和 Trainer step/epoch，避免二次 data skip。通用 loader 状态在 compat，Trainer 接线在可独立安装的 adapters 包，不改默认 Trainer。
 
@@ -61,10 +63,13 @@
 | --- | --- | --- |
 | `ACC-05-stateful` CPU | tiny BERT/LoRA FP32、64 samples、batch 2/G=2、RandomSampler、dropout=0.2、workers=2/prefetch=2、Python/NumPy worker transform、sampler/loader seeds 821/823；连续 12 updates vs 第 5 步退出后新进程恢复 7 updates | PyTorch、Jittor 各自 **800/800 exact**（atol=rtol=0）；恢复后 step=12、restored_step=5、14 个新 microbatches，Jittor 实际参数 device=cpu、fallback=0 |
 | `ACC-05-stateful` CUDA | 同一 fixture；先真实 CUDA 单步 smoke，再有界 12 vs 5+7 | PyTorch、Jittor 各自 **800/800 exact**；参数 device=cuda:0，Jittor fallback=0。共享 GPU 负载下只验正确性，不作性能结论 |
+| `ACC-05-stateful` fail-closed schedule 边界 | PyTorch/Jittor CPU；65 samples 验证 G=2 累积尾窗，64 samples + max_steps=17 验证跨 epoch | 四格均在训练 step 前按预期 `ValueError` 拒绝；这是拒绝契约证据，不表示跨 epoch 或尾窗恢复受支持。日志及 SHA256 见[验收报告](2026-10-17-trainer-stateful-resume.md) |
+| `ACC-05-stateful` CPU worker=4/persistent 扩展 | 同一 fixture，workers=4/prefetch=2、`persistent_workers=True`、随机增强和显式 generators；连续 12 updates vs 第 5 步退出后 fresh process 恢复 | PyTorch、Jittor 各自 **800/800 exact**（atol=rtol=0）；恢复段均为 step=5→12、14 个新 microbatches；参数实际 device=cpu，Jittor fallback=0。Jittor worker 是线程；结论仅覆盖 CPU fixture，不外推 CUDA 或 worker 实现等价 |
+| `ACC-05-stateful` CUDA worker=4/persistent 扩展（2026-10-20） | 同一 fixture 与 worker 配置；共享 A800 先单步 smoke，再串行执行 continuous / first / fresh-process resumed | PyTorch、Jittor 各自 **800/800 exact**（atol=rtol=0，最大绝对差 0）；两侧 smoke 均为 1 update/2 microbatches，恢复段均 restored_step=5、global_step=12、14 个新 microbatches；实际参数 device=cuda:0，Jittor fallback=0。开跑前所选卡空闲显存 50220 MiB，利用率 100%；正确性验收无需整卡空闲，不作性能结论。产物 `trainer-stateful-worker4-persistent-cuda-20261020-r1/` |
 | loader 回归 | 29 项新 stateful 加固测试 + 21 项 worker/状态回归 | **50 passed, 0 skipped**；普通 loader 不保留已消费 batch 历史，显式 loader 默认最多 100000 个实际样本索引，非法状态 fail-closed |
 | adapter 与集成门禁 | 新 adapter 35 项 + 原有 6 项；独立双解释器 CPU 4 vs 2+2 新进程恢复，附 5 项门禁自身契约 | host **41 passed**；真实集成 **6 passed, 0 skipped**，两 runtime 各 272/272 exact；nox 入口为 `trainer_stateful`（本轮直接执行其 pytest 命令） |
 
-支持范围限定为 Transformers 4.56.2 / Accelerate 1.10.1、单进程单设备、首 epoch 内正 max_steps、完整累积窗口、epoch 结束前恢复。Jittor worker 仍为线程，只捕获 Python random/NumPy legacy global RNG；native oracle 的 dataset transform 与 sampler/batch sampler 必须提供真正可 checkpoint 的状态。默认 Trainer 的历史 NOT_PASS、跨 epoch/worker=4/Trainer persistent/AMP/DDP/FSDP2 等边界仍保留。详情与复现命令见 [显式 Stateful Trainer 恢复报告](2026-10-17-trainer-stateful-resume.md)，未版本化产物 `trainer-stateful-20261017/manifest.json` 记录源码、环境、checkpoint、轨迹与日志 hash。旧 continuous run 的 `gen_ops_curand_random` SIGSEGV 根因仍未修复，这些有界通过不能证明其已解决。
+支持范围限定为 Transformers 4.56.2 / Accelerate 1.10.1、单进程单设备、首 epoch 内正 max_steps、完整累积窗口、epoch 结束前恢复。显式 Trainer worker=4/persistent 已完成 CPU/CUDA tiny fixture 验收。旧空闲设备队列于 10 月 18 日因防重复检测误匹配退出且未启动 smoke，检测已修正；10 月 20 日按用户要求直接使用共享卡完成新 run，未重启旧队列。Jittor worker 仍为线程，只捕获 Python random/NumPy legacy global RNG；native oracle 的 dataset transform 与 sampler/batch sampler 必须提供真正可 checkpoint 的状态。默认 Trainer 的历史 NOT_PASS、跨 epoch/尾窗/AMP/DDP/FSDP2 等边界仍保留。详情与复现命令见 [显式 Stateful Trainer 恢复报告](2026-10-17-trainer-stateful-resume.md)，未版本化产物 `trainer-stateful-20261017/manifest.json` 与本轮 run 的 `manifest.json` 记录各自源码、环境、checkpoint、轨迹与日志 hash。旧 continuous run 的 `gen_ops_curand_random` SIGSEGV 根因仍未修复，这些有界通过不能证明其已解决。
 
 ## 当前缺陷与边界
 
@@ -73,7 +78,7 @@
 - `TRN-01/02` 仍缺 SGD、多组参数、G=1/4、clip/scheduler 组合、尾窗，以及 CUDA global-token reduction；有效 token 结果仅是 tiny causal LM 轨迹；
 - `TRN-03/04` 仅完成 tiny Llama LoRA、单卡、G=1、AdamW 的 BF16/FP16 轨迹；纯低精度权重、G=4、clip、NaN、多 optimizer、scaler 增长周期与其它模型仍未验证。Inf 注入步骤的 scale 后梯度值不作跨 runtime 数值结论；
 - `PEF-02～06` 的 BERT token/QA、T5 Seq2Seq、GPT-2 Conv1D、Llama/Qwen GQA 多架构训练、DoRA/IA3、adapter 切换/merge、safe merge 和原生 PyTorch reload；本次 Trainer 只新增 BERT sequence classification 证据；
-- `E2E-01～04` 的真实 SST-2/MRPC 或指令数据、Trainer AMP、workers=4、Trainer persistent workers、多 epoch、Seq2SeqTrainer 和真实任务指标仍未覆盖。workers=2 随机增强的显式 Stateful Trainer 已在上述 CPU/CUDA 有界范围精确通过；默认 Trainer 不自动启用该入口，历史 NOT_PASS 仍成立。workers=0 随机恢复不外推完整 mixed RNG 矩阵；FP16 overflow/scaler 恢复仍走 Accelerate trajectory runner，并非 Trainer。batch plan 已有实际索引数上限；大数据集流式状态协议仍开放。
+- `E2E-01～04` 的真实 SST-2/MRPC 或指令数据、Trainer AMP、多 epoch、Seq2SeqTrainer 和真实任务指标仍未覆盖。worker=4/persistent 的显式 Stateful Trainer 已在 tiny CPU/CUDA fixture 精确通过，真实数据组合仍未覆盖；默认 Trainer 不自动启用该入口，历史 NOT_PASS 仍成立。workers=0 随机恢复不外推完整 mixed RNG 矩阵；FP16 overflow/scaler 恢复仍走 Accelerate trajectory runner，并非 Trainer。batch plan 已有实际索引数上限；大数据集流式状态协议仍开放。
 - `DST-01～04`、`E2E-05` 的当前源码双 rank/四 rank DDP、no-sync、尾批、恢复和独立 PyTorch DDP 对拍；
 - `FSD-01～08`、`E2E-06` 的 FSDP2 FULL/SHARDED、reshard、LoRA、AMP、真实峰值和通信收益；
 - `SER-02～06` 的 Transformers 分片模型 round-trip、完整 tied-storage/stride 错误矩阵、64 MiB～1 GiB 多 shard；
@@ -86,4 +91,4 @@
 
 ## 后续顺序
 
-本次显式入口、checkpoint 接线、索引数内存边界和 workers=2 CPU/CUDA fresh-process 恢复子项已收口。后续扩展先分别定义跨 epoch、尾窗及 Trainer persistent/worker=4 状态契约，再接固定版本 SST-2/MRPC 子集、Trainer AMP 与真实指标，补 G=4、clip、tail/scaler growth，并进入 tiny 双卡 DDP/FSDP2。间歇性 CUDA random SIGSEGV 继续单独定位。性能实验需独立 benchmark cache、稳定设备负载；大模型、长 soak 和 70B 不自动启动。
+本次显式入口、checkpoint 接线、索引数内存边界、workers=2 CPU/CUDA fresh-process 恢复和 worker=4/persistent CPU/CUDA 恢复子项已收口；跨 epoch 与累积尾窗的 fail-closed 拒绝也已在 PyTorch/Jittor CPU 验证，但这些能力仍不支持。后续进入固定版本 SST-2/MRPC 子集、Trainer AMP 与真实指标，补 G=4、clip、tail/scaler growth，并进入 tiny 双卡 DDP/FSDP2。间歇性 CUDA random SIGSEGV 继续单独定位。性能实验需独立 benchmark cache、稳定设备负载；大模型、长 soak 和 70B 不自动启动。
