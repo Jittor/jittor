@@ -178,11 +178,12 @@ def test_join_uneven_inputs_refuses_before_training_but_balanced_contexts_work(m
 
 
 @pytest.mark.skipif(not hasattr(torch, "_torch_compat_install_context"), reason="Jittor unsupported-boundary policy")
-def test_sharded_dcp_storage_remains_explicitly_unsupported(tmp_path):
+def test_sharded_dcp_storage_remains_explicitly_unsupported(tmp_path, monkeypatch):
     import torch.distributed.checkpoint as dcp
     from torch.distributed.checkpoint.default_planner import DefaultLoadPlanner, DefaultSavePlanner
     from torch.distributed._shard.sharded_tensor import ShardedTensor, empty, init_from_local_shards
     from jittor.compat import stub_policy
+    from jittor.compat.torch.installers import distributed as owner
 
     previous = stub_policy.set_allow_stub(False)
     try:
@@ -194,10 +195,21 @@ def test_sharded_dcp_storage_remains_explicitly_unsupported(tmp_path):
                 reader_or_writer(tmp_path / "sharded")
         with pytest.raises(NotImplementedError, match="DTensor chunk metadata"):
             ShardedTensor()
+        class ExplodingShards:
+            def __bool__(self):
+                raise AssertionError("default refusal inspected shard input")
+            def __getitem__(self, index):
+                raise AssertionError("default refusal indexed shard input")
+
         with pytest.raises(NotImplementedError, match="DTensor chunk metadata"):
-            init_from_local_shards([torch.ones(2, device=DEVICE)])
+            init_from_local_shards(ExplodingShards())
+        original_empty = owner.jt.empty
+        def fail_empty(*args, **kwargs):
+            raise AssertionError("default refusal allocated sharded storage")
+        monkeypatch.setattr(owner.jt, "empty", fail_empty)
         with pytest.raises(NotImplementedError, match="DTensor chunk metadata"):
             empty((2,), dtype=torch.float32)
+        monkeypatch.setattr(owner.jt, "empty", original_empty)
         with pytest.raises(NotImplementedError, match="DTensor chunk metadata"):
             dcp.save({"value": torch.ones(2, device=DEVICE)}, checkpoint_id=tmp_path / "sharded")
         assert not (tmp_path / "sharded").exists()
