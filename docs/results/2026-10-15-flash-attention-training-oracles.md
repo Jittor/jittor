@@ -142,7 +142,7 @@ protocol mismatches, corrupt arrays and Python `-O` disabling assertions.
 ## Reproduction and evidence
 
 Use the isolated interpreters and commands in the
-[FlashAttention skill](../../agent/skills/flash-attention-torch-compat/SKILL.md).
+[FlashAttention skill](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/flash-attention-torch-compat/SKILL.md).
 Run the committed `flash_training_probe.py` once per runtime with identical
 API/dtype/head-dimension/causal/perturbation arguments, then invoke
 `compare_training.py` on the two NPZ files. Preserve the measured checkout;

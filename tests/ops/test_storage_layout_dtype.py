@@ -1,18 +1,17 @@
 """Physical layout aliases preserve dtype promotion and gradient values."""
 
-import sys
 
 import numpy as np
 import pytest
 
 import jittor as jt
 from jittor._runtime.fallback import forbid_backend_fallbacks
+from jittor.autograd.policy import NATIVE, get_policy
 
 
 @pytest.fixture(autouse=True)
 def native_device_only():
-    assert 'torch' not in sys.modules
-    assert 'jittor.compat.torch' not in sys.modules
+    assert get_policy() is NATIVE
     with forbid_backend_fallbacks():
         yield
         jt.sync_all(True)

@@ -135,8 +135,8 @@ now initializes `scale` before `unscale_`, as genuine Torch requires, retaining 
 original item-count and Inf-skip assertions; the independent CPU/CUDA contract was
 also checked.
 
-Use the updated [TorchMetrics runbook](../../agent/skills/torchmetrics-torch-compat/SKILL.md)
-and [TensorDict runbook](../../agent/skills/tensordict-torch-compat/SKILL.md) from the
+Use the updated [TorchMetrics runbook](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/torchmetrics-torch-compat/SKILL.md)
+and [TensorDict runbook](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/tensordict-torch-compat/SKILL.md) from the
 repository's `agent/skills/` paths. Public entrypoints are:
 
 ```bash

@@ -824,8 +824,7 @@ def _is_accelerator_case(report):
     # instantiate_device_type_tests emits classes such as TestNumericCUDA,
     # whose suffix has neither of the legacy "_cuda" / "cuda_" separators.
     # Restrict this convention to class components, not arbitrary method text.
-    if any(part.endswith(("CUDA", "ROCM", "NPU"))
-           for part in original.split("::")[1:-1]):
+    if any(part.endswith(("CUDA", "ROCM", "NPU")) for part in original.split("::")[1:-1]):
         return True
     nodeid = original.lower()
     # Backend-parametrized tests can live outside tests/backends/cuda and
@@ -879,9 +878,7 @@ def _accepted_skip_patterns():
     # The inversion: a session that declares it has real PyTorch cannot also
     # accept "no torch" as an explanation, or it reports success for the one
     # thing it exists to check.
-    return tuple(
-        pattern for pattern in ENVIRONMENT_SKIP_PATTERNS if pattern not in required
-    )
+    return tuple(pattern for pattern in ENVIRONMENT_SKIP_PATTERNS if pattern not in required)
 
 
 def _environment_explains(reasons):

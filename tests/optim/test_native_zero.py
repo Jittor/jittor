@@ -1,11 +1,11 @@
 """Native ZeRO stage-one arithmetic, ownership and checkpoint preflight."""
 
-import sys
 
 import jittor as jt
 import numpy as np
 import pytest
 from jittor.distributed import ZeroRedundancyOptimizer, checkpoint
+from jittor.autograd.policy import NATIVE, get_policy
 from jittor.serialization.sharded import RankLocal
 from _helpers.native_zero import (model_optimizer, step, numpy_trajectory,
                                   assert_reference, assert_exact, check_bfloat16_resume)
@@ -14,7 +14,7 @@ from _helpers.native_zero import (model_optimizer, step, numpy_trajectory,
 @pytest.mark.parametrize("algorithm", ["Adam", "AdamW", "SGD"])
 @pytest.mark.parametrize("frozen", [False, True])
 def test_owned_math_accumulation_and_fresh_checkpoint(algorithm, frozen, tmp_path):
-    assert "torch" not in sys.modules
+    assert get_policy() is NATIVE
     model, optimizer = model_optimizer(algorithm, frozen=frozen)
     baseline, full = model_optimizer(algorithm, zero=False, frozen=frozen)
     references = numpy_trajectory(algorithm, frozen=frozen)

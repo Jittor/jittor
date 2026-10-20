@@ -10,6 +10,8 @@ def is_torch_mode_path(path):
 
 TORCH_MODE_PATHS = (
     "compat/tests/torch",
+    # Its module-level FSDP2 import loads the Torch compatibility frontend.
+    "compat/tests/fsdp2/test_fsdp2_flat_policy.py",
     # This multi-rank suite exercises Torch collectives and optimizer subclasses.
     # Pure native sequences live under tests/backends/comm/nccl instead.
     "compat/tests/fsdp2/test_fsdp2_nccl.py",

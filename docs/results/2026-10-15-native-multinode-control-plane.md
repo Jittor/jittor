@@ -77,13 +77,13 @@ FP32 reduce-scatter 均由原 fixture 检查。每 rank 持有 35 个存储元�
 原始执行器为 `cuda-unit/run.py`，worker 环境入口为 `cuda-unit/rank_entry.py`；其当前
 文件哈希在原始绑定中，历史 warm 失败只保留诊断身份、不授予通过。
 
-维护入口 [独立重算工具](../../agent/skills/jittor-distributed-verification/recheck_native_fsdp.py)
+维护入口 [独立重算工具](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/jittor-distributed-verification/recheck_native_fsdp.py)
 使用 NumPy 校验所有绑定、完整参数清单与 metadata，再复算 680 组 oracle 数组、
 368 组 fresh-resume 数组、160 项 update 预算和 160 项 zero-gradient 拒绝。
 四类 RNG 是 Python/NumPy/native CPU/native CUDA 的后续实际抽样，恢复后与生产端逐位一致。
 工具无 Torch/Jittor import，也没有以重算代替原始 GPU 执行。
 
-复算用法见 [distributed verification skill](../../agent/skills/jittor-distributed-verification/SKILL.md)。
+复算用法见 [distributed verification skill](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/jittor-distributed-verification/SKILL.md)。
 本轮结果为 `recheck-bc07.json`；维护者还用独立自写 NumPy 审计重新得到同样的 680/368/160
 结果，并将测量快照中 2,804 个常规文件与对应历史 Git blobs 逐一对照匹配。独立审计记录在
 `$JITTOR_LAB_ROOT/_state/jtrun-control-integration-bd17/independent-source-raw-audit.json`

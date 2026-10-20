@@ -11,9 +11,9 @@
 此前 skill 给出维护 fixture 与手工环境设置，实际编排脚本在仓外并写死本机路径/设备。
 它自行启动两个本地 agent，不能作为两台真实主机各自执行的维护命令。
 
-新增 [run_native_multinode.py](../../agent/skills/jittor-distributed-verification/run_native_multinode.py)
+新增 [run_native_multinode.py](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/jittor-distributed-verification/run_native_multinode.py)
 和 worker，另提供 `nox -s native_multinode -- <runner arguments>` 薄入口。
-完整命令见 [distributed verification skill](../../agent/skills/jittor-distributed-verification/SKILL.md#two-host-maintained-entry)。
+完整命令见 [distributed verification skill](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/jittor-distributed-verification/SKILL.md#two-host-maintained-entry)。
 显式参数绑定源码路径/SHA、候选与独立参考解释器、node rank、master 地址/端口、job id、
 本地分配设备、私有缓存与共享结果目录。当前协议限定两个节点、每节点一张 CUDA 卡。
 

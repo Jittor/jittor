@@ -199,6 +199,13 @@ class Conv2dBenchmarks:
             else:
                 self.gradients = self.backend.autograd.grad(loss, inputs)
 
+        if self.backend_name == "jittor":
+            # sync_all() can leave the forward result lazy after grad().
+            # Materialize every timed result before checking its residency.
+            self.output.sync()
+            for gradient in self.gradients:
+                gradient.sync()
+
     def time_convolution(self, backend_name, device, case, mode):
         self._run()
         # Every lazy iteration must execute, including all three gradients.

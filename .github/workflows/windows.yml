@@ -46,7 +46,6 @@ jobs:
     runs-on: ${{ needs.baseline.outputs.windows_runner }}
     timeout-minutes: 45
     env:
-      JITTOR_HOME: ${{ runner.temp }}/windows-msvc/home
       JITTOR_TORCH_SHIM: '0'
       JT_BACKEND: cpu
       JT_USE_CUDA: '0'
@@ -60,6 +59,9 @@ jobs:
       JT_USE_PARALLEL_OP_COMPILER: '0'
       PYTHONPATH: ''
     steps:
+      - name: Set Jittor cache path
+        shell: pwsh
+        run: '"JITTOR_HOME=$env:RUNNER_TEMP/windows-msvc/home" >> $env:GITHUB_ENV'
       - uses: actions/checkout@v6
         with:
           persist-credentials: false

@@ -53,7 +53,7 @@ outputs, losses, input/parameter gradients, parameters and optimizer state.
 Thus the earlier residual was an implementation difference for this fixture.
 
 The reusable
-[calibration tool](../../agent/skills/jittor-distributed-verification/native_fsdp_torch_calibration.py)
+[calibration tool](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/jittor-distributed-verification/native_fsdp_torch_calibration.py)
 was committed separately as `eca1d57cb`. It imports the same NumPy-only fixture
 and real Torch FSDP2; it introduces no second implementation of sharding or a
 new numerical budget. Run it with an independent binary Torch interpreter:

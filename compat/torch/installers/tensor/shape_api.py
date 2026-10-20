@@ -252,6 +252,12 @@ def _index_add_inplace(self, dim, index, source, *, alpha=1):
 def _plain_reduce(name, self, *a, **k):
     orig = get_install_context(jt).state["tensor_shape_api"]["reductions"][name]
     a, k = _norm_reduce_kw(a, k)
+    # CPU autocast leaves mean/sum in their input dtype. In particular, a
+    # float32 loss after an explicit .float() must stay float32.
+    if (name in ("mean", "sum") and jt.flags.amp_reg and not jt.flags.use_cuda
+            and str(self.dtype).replace("torch.", "") == "float32"):
+        with jt.flag_scope(amp_reg=0):
+            return orig(self, *a, **k)
     return orig(self, *a, **k)
 
 

@@ -26,7 +26,7 @@ non-SUM fused kernel claim. Compatibility flat gather and grouped broadcast
 forward to the native owner. Existing compat subgroup restrictions remain;
 full-world clones required by DeepSpeed are covered here.
 
-The reusable [collective oracle](../../agent/skills/jittor-distributed-verification/collective_oracle.py)
+The reusable [collective oracle](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/jittor-distributed-verification/collective_oracle.py)
 executes the same public API body in isolated runtimes. Each runtime/device has
 a fresh artifact directory; exclusive rank claim files reject repeated runs.
 It checks BF16 raw payloads (signed zero, subnormals, infinities and NaN payloads),
@@ -108,7 +108,7 @@ coverage numerator or wider DeepSpeed support is granted by this MPI batch.
 
 ## Reproduction and evidence
 
-Follow the [distributed verification skill](../../agent/skills/jittor-distributed-verification/SKILL.md)
+Follow the [distributed verification skill](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/jittor-distributed-verification/SKILL.md)
 for independent rank environments, serial first compilation and actual Torch
 identity checks. Run the oracle in fresh roots with `--runtime jittor|torch` and
 `--device cpu|cuda`; compare every numeric NPZ field exactly and audit metadata

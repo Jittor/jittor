@@ -85,7 +85,9 @@ class TestDocsStructure(unittest.TestCase):
         self.assertIs(ast.literal_eval(_assignment(tree, "autosummary_generate")), False)
         self.assertIs(ast.literal_eval(_assignment(tree, "nitpicky")), True)
         intersphinx = ast.literal_eval(_assignment(tree, "intersphinx_mapping"))
-        self.assertEqual(set(intersphinx), {"python", "numpy", "pytorch"})
+        # NumPy is mentioned as a type, not linked to an external inventory.
+        # The strict docs build should not depend on numpy.org being reachable.
+        self.assertEqual(set(intersphinx), {"python", "pytorch"})
 
         release = _assignment(tree, "release")
         self.assertIsInstance(release, ast.Call)

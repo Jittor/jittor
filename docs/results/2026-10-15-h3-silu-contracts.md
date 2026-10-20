@@ -126,7 +126,7 @@ with separate runtime/device, fixed clean upstream pins, overwrite protection,
 source identity, physical-device checks, and `--mode grad-audit` failure on any
 missing gradient. Genuine-only `--torch-math` creates a separate calibration.
 Use its commands and environment prerequisites in the
-[Omni skill](../../agent/skills/vllm-omni-torch-compat/SKILL.md).
+[Omni skill](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/vllm-omni-torch-compat/SKILL.md).
 
 Run public regressions with explicit device selection and the selected runtime:
 

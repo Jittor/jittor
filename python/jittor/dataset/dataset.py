@@ -157,9 +157,25 @@ class Worker:
         self.p.start()
 
     def take_error(self):
-        """The traceback this worker died with, or None."""
+        """The exception class and traceback this worker died with, or None."""
         raw = self.error.value
-        return raw.decode("utf-8", "replace") if raw else None
+        if not raw:
+            return None
+        name, traceback_text = raw.decode("utf-8", "replace").split("\n", 1)
+        return name, traceback_text
+
+
+def _worker_error_exception(worker_id, error):
+    """Preserve safe built-in exception classes across the worker boundary."""
+    import builtins
+
+    name, traceback_text = error
+    exception_class = getattr(builtins, name, RuntimeError)
+    if not isinstance(exception_class, type) or not issubclass(
+            exception_class, Exception):
+        exception_class = RuntimeError
+    return exception_class(
+        "exception in dataset worker %d:\n%s" % (worker_id, traceback_text))
 
 class Dataset(object):
     '''
@@ -459,7 +475,7 @@ class Dataset(object):
                     other_time + data_time + send_time, \
                     img_open_hook.duration
                 img_open_hook.duration = 0.0
-        except Exception:
+        except Exception as exc:
             # Do NOT signal the parent: SIGINT is indistinguishable from the
             # user pressing Ctrl-C, and jittor's handler turns it into an
             # immediate process exit, so a plain bug in __getitem__ surfaced as
@@ -467,9 +483,11 @@ class Dataset(object):
             # catch. Hand the traceback to the parent and let it re-raise.
             import traceback
             line = traceback.format_exc()
-            print(line, file=sys.stderr, flush=True)
+            # A named built-in class is safe to recreate in the parent.  For
+            # user-defined classes, retain the traceback with RuntimeError.
+            name = type(exc).__name__ if type(exc).__module__ == "builtins" else ""
             try:
-                error.value = line.encode("utf-8", "replace")[
+                error.value = (name + "\n" + line).encode("utf-8", "replace")[
                     :WORKER_ERROR_CAPACITY - 1]
                 # Store first, wake second: whichever way the parent is
                 # waiting, it must find the message already there.
@@ -556,8 +574,7 @@ Example::
         if message is None:
             return
         self._abort_workers()
-        raise RuntimeError(
-            "exception in dataset worker %d:\n%s" % (worker_id, message))
+        raise _worker_error_exception(worker_id, message)
 
     def _raise_worker_death(self, cause):
         """Explain a blocking read that came back stopped, and re-raise.
@@ -575,9 +592,7 @@ Example::
             message = worker.take_error()
             if message is not None:
                 self._abort_workers()
-                raise RuntimeError(
-                    "exception in dataset worker %d:\n%s"
-                    % (other_id, message))
+                raise _worker_error_exception(other_id, message)
             if worker.p.exitcode is not None:
                 deaths.append((other_id, worker.p.exitcode))
         if deaths:

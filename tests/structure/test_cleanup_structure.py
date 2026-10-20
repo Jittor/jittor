@@ -363,6 +363,8 @@ class TestCleanupStructure(unittest.TestCase):
             "complex_device": "the same fixture, named for the complex dtype tests",
             "scalar_device": "the same fixture, named for the scalar-contract tests",
             "scalar_promotion_device": "the same fixture, named for the promotion tests",
+            "native_only": "per-file native policy and fallback guard with cleanup sync",
+            "native_device_only": "the same guard for native device-layout tests",
         }
 
         def in_test_tree(group):

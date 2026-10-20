@@ -319,6 +319,19 @@ class TestAutocastTraining(unittest.TestCase):
             with self.subTest(device=device):
                 self._baseline(device)
 
+    def test_cpu_autocast_keeps_explicit_float32_loss(self):
+        prediction = torch.tensor([1.125, 2.125], dtype=torch.bfloat16)
+        target = torch.tensor([0.2, 0.3], dtype=torch.float32)
+        with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+            residual = prediction.float() - target
+            squared = residual ** 2
+            loss = squared.mean()
+        for value in (residual, squared, loss):
+            self.assertEqual(str(value.dtype), "torch.float32")
+        expected = np.mean((np.array([1.125, 2.125], dtype=np.float32)
+                            - np.array([0.2, 0.3], dtype=np.float32)) ** 2)
+        self.assertAlmostEqual(float(loss), float(expected), places=5)
+
     def test_bfloat16_autocast(self):
         for device in _DEVICES:
             with self.subTest(device=device):

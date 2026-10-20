@@ -29,6 +29,7 @@ Run::  python -m pytest tests/nn/test_mixed_precision_training.py
 
 from _helpers import capability as _test_capability
 import unittest
+from unittest import mock
 
 import numpy as np
 import jittor as jt
@@ -173,6 +174,30 @@ class TestMixedPrecisionTraining(unittest.TestCase):
                     "bfloat16 final loss %.5f against float32's %.5f on %s; "
                     "real torch 2.13's own bfloat16/float32 spread on this task "
                     "is 0.4%%" % (losses[-1], base[-1], device))
+
+    def test_bfloat16_generic_cpu_matmul_matches_float32(self):
+        # Exercise the fallback even when oneDNN is installed on the runner.
+        with mock.patch("jittor.nn.functional.matrix.get_library_ops", return_value=None) as lookup:
+            base = self._baseline(0)
+            losses, finite, dtypes = _train("bf16", 0)
+        lookup.assert_any_call("mkl", load=True)
+        self.assertTrue(finite)
+        self.assertEqual(dtypes, {"bfloat16"})
+        self.assertLess(abs(losses[-1] - base[-1]) / base[-1], self.TOLERANCE)
+
+    def test_bfloat16_generic_cpu_linear_keeps_cross_derivatives(self):
+        with mock.patch("jittor.nn.functional.matrix.get_library_ops", return_value=None):
+            x = jt.array([[1.5, 2.0], [-1.0, 0.5]]).bfloat16().start_grad()
+            weight = jt.array([[3.0, 4.0]]).bfloat16().start_grad()
+            bias = jt.array([0.5]).bfloat16().start_grad()
+            output = nn.linear(x, weight, bias)
+            gx, gw, gb = jt.grad(output.sum(), [x, weight, bias])
+            cross = jt.grad(gx.sum(), [weight])[0]
+        np.testing.assert_array_equal(output.numpy(), [[13.0], [-0.5]])
+        np.testing.assert_array_equal(gx.numpy(), [[3.0, 4.0], [3.0, 4.0]])
+        np.testing.assert_array_equal(gw.numpy(), [[0.5, 2.5]])
+        np.testing.assert_array_equal(gb.numpy(), [2.0])
+        np.testing.assert_array_equal(cross.numpy(), [[2.0, 2.0]])
 
     def test_float16_with_loss_scaling_matches_float32(self):
         for device, use_cuda in _DEVICES:
