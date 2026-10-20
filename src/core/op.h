@@ -8,6 +8,7 @@
 #include <atomic>
 #include "core/common.h"
 #include "core/node.h"
+#include "core/var.h"  // VarPtr held inline by outputs_holder
 #include "codegen/jit_key.h"
 #include "utils/jit_cache_map.h"
 #include "ops/composite/op_dispatch.h"
@@ -50,7 +51,9 @@ struct Op : Node {
     static constexpr bool accepts_cpu_scalar_operands = false;
     virtual bool is_storage_view() const { return false; }
     static constexpr uint32 backend_mask = OpBackendAny;
-    vector<VarPtr> outputs_holder;
+    // The outputs until the op maker takes them over. Inline: almost every op
+    // has exactly one, and a heap vector here was an allocation per operator.
+    SmallVector<VarPtr, 1> outputs_holder;
     // Atomic: the parallel compiler constructs and destroys ops on its
     // worker threads, and these are read from the main thread.
     static std::atomic<int64> number_of_lived_ops;

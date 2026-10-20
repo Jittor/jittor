@@ -149,6 +149,12 @@ struct CodeOrigin {
 struct OriginCaches {
     std::unordered_map<PyObject*, CodeOrigin> codes;
     PyObject* name_key = nullptr;
+    // The last answer for a caller that is itself user code: a loop building
+    // operators asks from the same instruction again and again. Code objects
+    // in `codes` are held, so the pointer cannot name a different code later.
+    PyObject* hot_code = nullptr;
+    int hot_lasti = -1;
+    uint64 hot_result = 0;
 };
 OriginCaches& origin_caches() {
     static OriginCaches* caches = new OriginCaches();  // never freed: outlives the interpreter
@@ -182,13 +188,25 @@ bool known_launch_origin(OriginCaches& caches, uint64& result) {
     result = 0;
     for (int depth=0; frame && depth<64; ++depth) {
         PyObject* code = (PyObject*)PyFrame_GetCode(frame);
-        auto found = caches.codes.find(code);
         Py_DECREF(code);
+        if (depth == 0 && code == caches.hot_code && frame_lasti(frame) == caches.hot_lasti) {
+            result = caches.hot_result;
+            break;
+        }
+        auto found = caches.codes.find(code);
         if (found == caches.codes.end()) { known = false; break; }
         if (!found->second.internal) {
-            auto line = found->second.lines.find(frame_lasti(frame));
+            const int lasti = frame_lasti(frame);
+            auto line = found->second.lines.find(lasti);
             if (line == found->second.lines.end()) known = false;
-            else result = line->second;
+            else {
+                result = line->second;
+                if (depth == 0) {
+                    caches.hot_code = code;
+                    caches.hot_lasti = lasti;
+                    caches.hot_result = result;
+                }
+            }
             break;
         }
         auto* previous = frame;

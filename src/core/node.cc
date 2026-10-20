@@ -598,14 +598,15 @@ void Node::erase_output(uint index) {
     }
 }
 
-void Node::set_inputs(list<Node*> nodes) {
+void Node::set_inputs(Node* const* nodes, size_t count) {
     CHECK_EXIST;
-    LOGvvvv << "Set inputs of" << this << "to" << nodes;
+    LOGvvvv << "Set inputs of" << this << "to" << vector<Node*>(nodes, nodes + count);
     ASSERT(!is_finished());
     std::lock_guard<GraphMutationMutex> guard(graph_mutation_mutex());
     // Take the new liveness before dropping the old edges, so that a node that
     // appears in both the old and the new input list never drops to zero.
-    for (Node* node : nodes) {
+    for (size_t i = 0; i < count; i++) {
+        Node* node = nodes[i];
         if (!node->is_stop_grad() && node->liveness.forward.active())
             enqueue_liveness(this, LivenessStep::own_forward);
         if (liveness.backward.active()) {
@@ -617,9 +618,8 @@ void Node::set_inputs(list<Node*> nodes) {
     run_liveness_queue("set_inputs");
     release_inputs();
     bool is_var = this->is_var();
-    auto iter = nodes.begin();
-    for (size_t i = 0; i < nodes.size(); i++, iter++) {
-        Node* node = *iter;
+    for (size_t i = 0; i < count; i++) {
+        Node* node = nodes[i];
         uint output_index = node->_outputs.size();
         _inputs.emplace_back(node, output_index);
         // For an op the output index is the argument position; for a var it is

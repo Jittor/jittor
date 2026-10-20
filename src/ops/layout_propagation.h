@@ -26,7 +26,12 @@ namespace jittor {
 // in that order for free. Any other operand declines: turning a lazily
 // computed dense tensor into a strided view of itself would force it to be
 // materialised.
-bool storage_layout_operands(const vector<Var*>& inputs, NanoVector& axes,
+//
+// Called by every unary, binary and ternary op as it is built, and almost
+// always declines: the operands are neither views nor permutations. So the
+// operands come as an initializer list and nothing is allocated until one of
+// them turns out to be a permuted view.
+bool storage_layout_operands(std::initializer_list<Var*> inputs, NanoVector& axes,
                              vector<VarPtr>& sources);
 
 // `v` permuted by `axes` as a view of its storage.
