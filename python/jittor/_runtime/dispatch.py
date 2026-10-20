@@ -495,7 +495,7 @@ def _bind_native_entries():
     query, which is what the frontend binds as well.
     """
     core = sys.modules["jittor"].core
-    if not hasattr(core, "_fast_getitem") or not hasattr(core, "_fast_cat"):
+    if not hasattr(core, "_jt_basic_getitem") or not hasattr(core, "_jt_concat"):
         return
     if _NATIVE_SELECT is None:
         _bind_native_select()
@@ -503,11 +503,11 @@ def _bind_native_entries():
         return
     from .step_capture import tracing
     core._compat_fast_bind(tracing)
-    try_dispatch._native_basic_getitem = core._fast_getitem
+    try_dispatch._native_basic_getitem = core._jt_basic_getitem
     if hasattr(core, "_fast_clamp"):
         try_dispatch._native_clamp = core._fast_clamp
         try_dispatch._sole_default = _sole_default
-    select_kernel._native_concat = core._fast_cat
+    select_kernel._native_concat = core._jt_concat
     select_kernel._is_registered = _is_registered
 
 

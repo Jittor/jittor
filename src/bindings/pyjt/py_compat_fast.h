@@ -95,4 +95,14 @@ PyObject* fast_permute(PyObject* self, PyObject* axes);
 // @pyjt(_fast_clamp)
 PyObject* fast_clamp(PyObject* self, PyObject* min_v, PyObject* max_v);
 
+// `_fast_getitem` and `_fast_cat` as jittor's own `getitem` and `concat`
+// reach them: each Var operand is first read the way a generated binding
+// reads it (`VarHolder::grad_input`, which brings an aliased view up to date
+// with its source's in-place writes while gradients are recorded), so the
+// native path sees what the Python path it stands in for would have built on.
+// @pyjt(_jt_basic_getitem)
+PyObject* jt_basic_getitem(PyObject* self, PyObject* index);
+// @pyjt(_jt_concat)
+PyObject* jt_concat(PyObject* tensors, int64 dim);
+
 } // namespace jittor

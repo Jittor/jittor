@@ -283,11 +283,29 @@ bool clamp_scalar(PyObject* value) {
 }
 } // namespace
 
+PyObject* jt_basic_getitem(PyObject* self, PyObject* index) {
+    if (!PyObject_TypeCheck(self, &PyjtVarHolder.ht_type)) return not_implemented();
+    GET_RAW_PTR(VarHolder, self)->grad_input();
+    return fast_getitem(self, index);
+}
+
+PyObject* jt_concat(PyObject* tensors, int64 dim) {
+    if (PyList_CheckExact(tensors) || PyTuple_CheckExact(tensors)) {
+        Py_ssize_t n = PySequence_Fast_GET_SIZE(tensors);
+        PyObject** items = PySequence_Fast_ITEMS(tensors);
+        for (Py_ssize_t i = 0; i < n; i++)
+            if (PyObject_TypeCheck(items[i], &PyjtVarHolder.ht_type))
+                GET_RAW_PTR(VarHolder, items[i])->grad_input();
+    }
+    return fast_cat(tensors, dim);
+}
+
 PyObject* fast_clamp(PyObject* self, PyObject* min_v, PyObject* max_v) {
     if (Py_TYPE(self) != &PyjtVarHolder.ht_type) return not_implemented();
     if (!clamp_scalar(min_v) || !clamp_scalar(max_v)) return not_implemented();
     if (min_v == Py_None && max_v == Py_None) return not_implemented();
-    Var* x = GET_RAW_PTR(VarHolder, self)->var;
+    // Read as the bindings `_clamp_cpu` calls would read it.
+    Var* x = GET_RAW_PTR(VarHolder, self)->grad_input();
     if (x->num <= 0) return not_implemented();
     NanoString dtype = x->dtype();
     bool is_float = clamp_float_dtype(dtype);

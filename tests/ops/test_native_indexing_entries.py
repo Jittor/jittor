@@ -128,6 +128,40 @@ class _Entries:
         np.testing.assert_allclose(gx.numpy(), gx2.numpy(), rtol=1e-6)
         np.testing.assert_allclose(gy.numpy(), gy2.numpy(), rtol=1e-6)
 
+    def test_views_written_in_place_while_recording_gradients(self):
+        """The native paths read operands as the bindings do (`grad_input`).
+
+        With gradients recorded, a view whose source was written in place is
+        brought up to date when a binding reads it; reading the raw Var instead
+        would build on what the view was before the write.
+        """
+        def scenario(op):
+            source = jt.array(np.arange(12, dtype="float32").reshape(3, 4))
+            source.start_grad()
+            s = source * 1.0
+            v = s[1:3]
+            s[1:2] = jt.array(np.full((1, 4), 100.0, "float32"))
+            out = op(v)
+            return out.numpy(), jt.grad(out.sum(), source).numpy()
+
+        ops = {
+            "getitem": lambda v: v[0] * 2,
+            "concat": lambda v: jt.concat([v, v * 3], 0),
+            "clamp": lambda v: v.clamp(2.0, 50.0),
+        }
+        for name, op in ops.items():
+            with self.subTest(op=name):
+                got = scenario(op)
+                with python_paths():
+                    saved = getattr(dispatch.try_dispatch, "_native_clamp", None)
+                    dispatch.try_dispatch._native_clamp = None
+                    try:
+                        want = scenario(op)
+                    finally:
+                        dispatch.try_dispatch._native_clamp = saved
+                np.testing.assert_array_equal(got[0], want[0])
+                np.testing.assert_array_equal(got[1], want[1])
+
     def test_concat_rejects_what_it_rejected(self):
         for args in (([jt.ones((2, 3)), jt.ones((2, 4))], 0), ([jt.ones((2, 3))], 5), ([], 0)):
             with self.subTest(args=len(args[0])):
