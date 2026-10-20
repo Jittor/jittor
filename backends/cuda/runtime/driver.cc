@@ -550,24 +550,20 @@ void copy(void* dst, Device target, const void* src, Device source, size_t size,
         } else if (target.backend == BackendId::Cpu && source.backend != BackendId::Cpu) {
             LaunchErrorScope error_scope(
                 source, true, reinterpret_cast<uintptr_t>(cudaStreamPerThread));
-            // Readback waits for its producer stream's event, not the device.
-            // This also serves data-dependent shape counts and scalar item().
-            cudaEvent_t done;
-            checkCudaErrors(cudaEventCreateWithFlags(&done, cudaEventDisableTiming));
-            try {
-                checkCudaErrors(cudaMemcpyAsync(dst, src, size, cudaMemcpyDeviceToHost,
-                                                cudaStreamPerThread));
-                checkCudaErrors(cudaEventRecord(done, cudaStreamPerThread));
-                checkCudaErrors(cudaEventSynchronize(done));
-            } catch (...) {
-                // A sticky error fails the cleanup too, and the exception
-                // being rethrown already says the context is gone.
-                const auto cleanup = cudaEventDestroy(done);
-                if (cleanup != cudaSuccess && !cuda_error_is_sticky(cleanup))
-                    LOGe << "Readback event cleanup failed:" << cudaGetErrorString(cleanup);
-                throw;
-            }
-            checkCudaErrors(cudaEventDestroy(done));
+            // Readback waits for its producer stream, not the device. This
+            // also serves data-dependent shape counts and scalar item(), some
+            // seven thousand times per shape in a sort/unique-heavy loop.
+            //
+            // It used to record an event and wait for that, from when the copy
+            // went to the legacy stream 0: synchronizing stream 0 itself would
+            // also have waited for every other blocking stream. The per-thread
+            // stream has no such implicit wait, so synchronizing it waits for
+            // exactly what the event did -- the copy and everything queued
+            // before it -- without creating, recording and destroying an event
+            // on every readback.
+            checkCudaErrors(cudaMemcpyAsync(dst, src, size, cudaMemcpyDeviceToHost,
+                                            cudaStreamPerThread));
+            checkCudaErrors(cudaStreamSynchronize(cudaStreamPerThread));
         } else if (capturing()) {
             // A blocking copy is impossible while the stream is being
             // recorded -- `cudaMemcpy` reports cudaErrorStreamCaptureImplicit
