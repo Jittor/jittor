@@ -301,6 +301,19 @@ def _copy_(self, other, non_blocking=False):
     return _ip(self, src, preserve_storage=True)
 
 
+def _record_stream(self, stream):
+    from ..cuda.api import _Stream
+    if not isinstance(stream, _Stream):
+        raise TypeError("record_stream expects a torch.cuda.Stream")
+    if self.device.type == "cuda":
+        if stream.device.index != self.device.index:
+            raise RuntimeError("record_stream stream and tensor devices differ")
+        # Logical streams share one native execution stream. Complete pending
+        # use before ZeRO can release or replace this tensor's storage.
+        _owner.jt.sync_all(True)
+    return None
+
+
 def _norm_size(args):
     # torch allows new_ones(2,3), new_ones((2,3)), or new_ones(<NanoVector/Size>)
     # -- unwrap any single iterable that isn't itself a scalar int/Var.

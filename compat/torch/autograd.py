@@ -375,6 +375,11 @@ class Function(jt.Function):
     """Torch-style callbacks with native per-call tape and context ownership."""
 
     def execute(self, *args, **kwargs):
+        setup_context = getattr(type(self), "setup_context", None)
+        if setup_context is not None:
+            result = type(self).forward(*args, **kwargs)
+            setup_context(self, args, result)
+            return result
         return type(self).forward(self, *args, **kwargs)
 
     __call__ = _call_record_inputs

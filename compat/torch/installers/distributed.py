@@ -452,6 +452,12 @@ def _get_world_size(group=None):
     return _group_size(group)
 
 
+def _current_graph_task_id():
+    # Jittor has no PyTorch reentrant graph-task identifier. DeepSpeed uses
+    # -1 to mean an ordinary forward, distinct from checkpoint recomputation.
+    return -1
+
+
 class _ReduceOp:
     SUM = 0
     MEAN = 1
@@ -519,6 +525,30 @@ def _all_gather_into_tensor(output_tensor, input_tensor, group=None,
     )
     _copy_tensor(output_tensor, gathered.reshape(output_tensor.shape))
     return _collective_result(output_tensor, async_op, issued=size > 1)
+
+
+def _reduce_scatter_tensor(output, input, op=None, group=None, async_op=False):
+    size = _require_supported_group(group, allow_subgroup=True)
+    if _reduce_name(op, _ReduceOp) != "sum":
+        raise NotImplementedError("reduce_scatter supports SUM only")
+    if int(input.numel()) != int(output.numel()) * size:
+        raise ValueError("reduce_scatter input size must match the output and group")
+    world = get_install_context(jt).state["distributed_api"]["world_group"]
+    active_group = world if group is None else group
+    flat = input.reshape((-1,))
+    result = (flat if size == 1 else active_group.reduce_scatter(flat))
+    _copy_tensor(output, result.reshape(output.shape))
+    return _collective_result(output, async_op, issued=size > 1)
+
+
+def _reduce_scatter(output, input_list, op=None, group=None, async_op=False):
+    size = _require_supported_group(group, allow_subgroup=True)
+    if len(input_list) != size:
+        raise ValueError("reduce_scatter needs one input tensor per group rank")
+    if any(int(value.numel()) != int(output.numel()) for value in input_list):
+        raise ValueError("reduce_scatter input tensors must match the output size")
+    flattened = jt.concat([value.reshape((-1,)) for value in input_list], dim=0)
+    return _reduce_scatter_tensor(output, flattened, op, group, async_op)
 
 
 def _broadcast(tensor, src=0, group=None, async_op=False, group_src=None):
@@ -1055,6 +1085,8 @@ def _install_distributed(g, registry=None):
     dist.all_reduce = _all_reduce
     dist.all_gather = _all_gather
     dist.all_gather_into_tensor = _all_gather_into_tensor
+    dist.reduce_scatter = _reduce_scatter
+    dist.reduce_scatter_tensor = _reduce_scatter_tensor
     dist.broadcast = _broadcast
     dist.all_gather_object = _native_all_gather_object
     dist.broadcast_object_list = _broadcast_object_list
@@ -1277,6 +1309,7 @@ def _install_distributed(g, registry=None):
 
     if not hasattr(g, "_C"):
         g._C = _CNS()
+    g._C._current_graph_task_id = _current_graph_task_id
     _install_fsdp2_distributed(dist, g, registry=registry)
     g.distributed = dist
     register_api_bindings(dist, "torch.distributed",
@@ -1284,7 +1317,8 @@ def _install_distributed(g, registry=None):
          "is_mpi_available", "is_ucc_available", "is_initialized", "get_rank",
          "get_world_size", "init_process_group", "destroy_process_group", "get_backend",
          "Backend", "P2POp", "ReduceOp", "ProcessGroup", "barrier", "all_reduce",
-         "all_gather", "all_gather_into_tensor", "broadcast", "all_gather_object",
+         "all_gather", "all_gather_into_tensor", "reduce_scatter",
+         "reduce_scatter_tensor", "broadcast", "all_gather_object",
          "broadcast_object_list", "gather_object", "new_group",
          "new_subgroups_by_enumeration", "get_global_rank", "get_process_group_ranks",
          "Store", "TCPStore", "FileStore", "PrefixStore"),
