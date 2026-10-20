@@ -168,11 +168,15 @@ BackendId Op::execution_backend() const {
 }
 
 const OpImplementation& Op::implementation() const {
-    const auto& owner = definition();
     const auto backend = execution_backend();
+    if (implementation_cache && implementation_cache_backend == backend)
+        return *implementation_cache;
+    const auto& owner = definition();
     auto found = owner.implementations.find(backend);
     USER_CHECK(found != owner.implementations.end())
         << "No kernel registered for" << owner.name << "on" << backend_ops(backend).name;
+    implementation_cache = &found->second;
+    implementation_cache_backend = backend;
     return found->second;
 }
 

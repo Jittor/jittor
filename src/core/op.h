@@ -62,6 +62,13 @@ struct Op : Node {
     static std::atomic<int64> number_of_created_ops;
     mutable OpId registered_op_id = 0;
     mutable shared_ptr<const OpDef> registered_definition;
+    // The last `implementation()` answer and the backend it was for. Asked
+    // for an op's key, kernel and codegen -- and for every sub-op of a fused
+    // op -- each time it runs; the entry lives in the bound definition, which
+    // this op holds, and a definition's table is complete before it is
+    // published.
+    mutable const OpImplementation* implementation_cache = nullptr;
+    mutable BackendId implementation_cache_backend = BackendId::Cpu;
     
     inline Caster<Var*, Node::input_t> inputs() { CHECK_EXIST; return &_inputs; }
     inline Caster<Var*, Node::output_t> outputs() { CHECK_EXIST; return &_outputs; }
