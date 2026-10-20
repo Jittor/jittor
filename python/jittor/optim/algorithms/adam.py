@@ -156,6 +156,8 @@ class AdamW(Optimizer):
             for p in pg["params"]:
                 values.append(_state_buffer(p))
                 m.append(_state_buffer(p))
+            from ._acl_flat import setup_group
+            setup_group(self, pg)
 
     def add_param_group(self, group):
         values = group["values"] = []
@@ -183,6 +185,12 @@ class AdamW(Optimizer):
                 if active:
                     fused = select_kernel("optim.adamw_fused", active)
             if fused is not None:
+                from ._acl_flat import flat_step
+                # The step count was advanced above, so flat_step must not
+                # advance it again.
+                if flat_step(self, pg, active, lr, b0, b1, weight_decay,
+                             eps, None):
+                    continue
                 updates = fused(
                     active, lr, b0, b1, weight_decay, eps)
                 for (p, m, v, _, _), (new_p, new_m, new_v) in zip(

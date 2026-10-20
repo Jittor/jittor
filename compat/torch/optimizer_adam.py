@@ -109,6 +109,10 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
                 from jittor._runtime.dispatch import select_kernel
                 fused_impl = select_kernel("optim.adamw_fused", active)
         if fused_impl is not None:
+            from jittor.optim.algorithms._acl_flat import flat_step
+            if flat_step(self, pg, active, lr, b0, b1, weight_decay, eps,
+                         param_steps):
+                continue
             stepped = []
             for i, (p, g, v, m) in enumerate(zip(
                     pg["params"], grads, pg["values"], pg["m"])):

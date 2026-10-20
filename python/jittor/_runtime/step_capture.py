@@ -138,6 +138,30 @@ def publish_gradients(leaves):
     if _ACTIVE is not None:
         _ACTIVE.published_gradients.extend(leaves)
 
+#: Work that has to happen before a step is recorded, outside its graph.
+#: The flat ACL optimizer layout is the first user: a parameter that shares
+#: one buffer with the rest of its group cannot be replayed as an independent
+#: leaf, so it goes back to its own storage before the capture starts.
+_PRE_CAPTURE = []
+
+
+def register_pre_capture(hook):
+    """Run ``hook()`` once, before the next captured step is recorded.
+
+    The hook runs after the pending graph is resolved and before recording
+    starts, so the ops it builds are not part of the captured graph.
+    """
+    _PRE_CAPTURE.append(hook)
+
+
+def _run_pre_capture():
+    if not _PRE_CAPTURE:
+        return
+    hooks = list(_PRE_CAPTURE)
+    _PRE_CAPTURE.clear()
+    for hook in hooks:
+        hook()
+
 
 def guard(read):
     """Re-capture whenever `read()` differs from its value now."""
@@ -586,6 +610,10 @@ class StepCapture:
         global _ACTIVE
         # Everything that exists now becomes a leaf of the graph: a replay
         # re-runs whatever is still pending, including a leaf's own producer.
+        jt.sync_all()
+        # Storage layouts that a replay cannot carry are undone here, so their
+        # copies are not recorded. The second sync materialises them.
+        _run_pre_capture()
         jt.sync_all()
 
         def private_copy(value):

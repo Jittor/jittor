@@ -490,17 +490,24 @@ void order_after_readers(Op* op, const vector<Var*>& written) {
     // (`share_src`) or one already in its share ring -- a broadcast's expand
     // that has run and left the graph, whose consumer has not.
     vector<Var*> aliases;
+    std::unordered_set<Var*> alias_set;
     auto alias = [&](Var* v) {
-        if (std::find(aliases.begin(), aliases.end(), v) == aliases.end())
-            aliases.push_back(v);
+        if (alias_set.insert(v).second) aliases.push_back(v);
     };
     for (Var* v : written) alias(v);
     vector<Node*> after;
+    std::unordered_set<Node*> after_set;
+    // Every member of a ring walks the same ring; expanding it once is
+    // enough, and a flat layout has one ring per written tensor with as
+    // many members as the model has parameters.
+    std::unordered_set<Var*> ring_done;
     for (size_t k = 0; k < aliases.size(); k++) {
         Var* v = aliases[k];
-        if (v->share_next)
-            for (Var* member = v->share_next; member != v; member = member->share_next)
+        if (v->share_next && ring_done.insert(v).second)
+            for (Var* member = v->share_next; member != v; member = member->share_next) {
                 alias(member);
+                ring_done.insert(member);
+            }
         for (Op* reader : v->outputs()) {
             if (reader == op) continue;
             bool stands_for_reader = false;
@@ -512,8 +519,7 @@ void order_after_readers(Op* op, const vector<Var*>& written) {
                 // A pending reader: its first unfinished output stands for it.
                 if (stands_for_reader || out->is_finished()) continue;
                 stands_for_reader = true;
-                if (std::find(after.begin(), after.end(), out) == after.end())
-                    after.push_back(out);
+                if (after_set.insert(out).second) after.push_back(out);
             }
         }
     }

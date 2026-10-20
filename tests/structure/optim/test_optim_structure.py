@@ -42,7 +42,8 @@ class TestOptimStructure(unittest.TestCase):
         )
         self.assertEqual(
             {path.name for path in (self.package / "algorithms").glob("*.py")},
-            {"__init__.py", "sgd.py", "rmsprop.py", "adam.py", "adan.py", "adagrad.py"},
+            {"__init__.py", "sgd.py", "rmsprop.py", "adam.py", "adan.py",
+             "adagrad.py", "_acl_flat.py"},
         )
 
     def test_facade_preserves_the_historical_public_surface(self):

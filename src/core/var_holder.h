@@ -787,6 +787,64 @@ struct VarHolder {
     }
 
     /**
+        Re-point an already allocated Var at a sub-range of another Var's
+        storage, releasing its own block first.
+
+        This is the allocation-time `share_with` applied after the fact: the
+        optimizer uses it to give every parameter and state one slice of a
+        flat buffer, so the whole update can run as a few large kernels
+        instead of one launch per tensor (KI-EXEC-016). The caller guarantees
+        that nothing is still scheduled to read the old storage and that
+        `other` outlives this Var; the offset is in bytes.
+     */
+    // @pyjt(_repoint_share)
+    // @attrs(return_self)
+    inline VarHolder* repoint_share(VarHolder* other, int64 offset_bytes) {
+        auto* v = var;
+        auto* src = other ? other->var : nullptr;
+        USER_CHECK(src != nullptr && src->mem_ptr != nullptr && src->allocator != nullptr)
+            << "repoint_share needs an allocated source";
+        USER_CHECK(!v->is_sharing())
+            << "repoint_share refuses a var that is already sharing";
+        USER_CHECK(offset_bytes >= 0) << "repoint_share offset must be >= 0";
+        if (v->allocator) free_var_mem(v);
+        v->share_with(src, (size_t) offset_bytes);
+        v->alloc(src->allocator);
+        // The child now owns storage on the source's device; leaving its
+        // placement unplaced made optimizer state realignment move a buffer
+        // that already pointed at the flat block.
+        v->placement = src->placement;
+        v->device_id = src->device_id;
+        if (src->flag(VarFlags::_placement_published))
+            v->set_flag(VarFlags::_placement_published);
+        USER_CHECK(v->allocator == src->allocator
+                && v->allocation == src->allocation
+                && v->mem_ptr == ((char*) src->mem_ptr) + offset_bytes)
+            << "repoint_share: the allocator refused the sub-range";
+        return this;
+    }
+
+    /** Whether this Var and ``other`` are members of one established share
+        ring. Used by the flat optimizer to verify that its parameters still
+        point at the flat buffer after a device move.
+     */
+    // @pyjt(_shares_storage_with)
+    inline bool shares_storage_with(VarHolder* other) {
+        return other != nullptr && var->shares_allocation_with(other->var);
+    }
+
+    // @pyjt(_check_inplace_saved_values)
+    inline void check_inplace_saved_values() {
+        auto* current = var;
+        do {
+            USER_CHECK(!current->flag(VarFlags::_needed_by_backward)
+                    || !current->liveness.backward.active())
+                << "in-place fill_ would modify a value needed by backward";
+            current = current->share_next;
+        } while (current && current != var);
+    }
+
+    /**
      * print the information of the Var to debug.
      */
     // @pyjt(debug_msg)
