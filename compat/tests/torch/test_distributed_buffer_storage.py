@@ -36,5 +36,26 @@ class TestCollectiveBufferStorage:
         finally:
             torch.distributed.destroy_process_group()
 
+    def test_all_reduce_updates_leaf_buffer_without_changing_storage(self, device):
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            port = listener.getsockname()[1]
+        torch.distributed.init_process_group(
+            "nccl" if device == "cuda" else "gloo", rank=0, world_size=1,
+            init_method="tcp://127.0.0.1:%d" % port,
+        )
+        try:
+            buffer = torch.nn.Parameter(
+                torch.arange(1, 5, device=device, dtype=torch.float32))
+            pointer = buffer.data_ptr()
+            assert torch.distributed.all_reduce(
+                buffer, group=torch.distributed.group.WORLD) is None
+            assert buffer.data_ptr() == pointer
+            assert buffer.requires_grad and buffer.is_leaf
+            np.testing.assert_array_equal(
+                buffer.detach().cpu().numpy(), [1., 2., 3., 4.])
+        finally:
+            torch.distributed.destroy_process_group()
+
 
 instantiate_device_type_tests(TestCollectiveBufferStorage, globals())
