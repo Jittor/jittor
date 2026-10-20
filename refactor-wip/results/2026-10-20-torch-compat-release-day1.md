@@ -1,10 +1,10 @@
 # Torch 兼容发布首日候选与常用接口验收
 
-- Status: 首日功能与维护门禁通过，候选正在按字节冻结；本报告不构成完整发布通过。
+- Status: 首日范围完成：功能与维护门禁通过，源码候选和依赖快照已冻结；本报告不构成完整发布通过。
 - Date: 2026-10-20
 - Baseline: `integrate/cgq-transformers-native-multicard-target@2690b03e3ff489134c093eaf5c4a8fd2af53fd5c` 加保留工作树。
 - Remote sync: 已 fetch `origin/cgq_transformers@e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，为 HEAD 祖先，无需 merge；未整合 `origin/2.0-refactor`。
-- Candidate: 待冻结；主工作树和原始未提交改动保持原位。
+- Candidate: `release/torch-compat-day1-20261020`，源码冻结提交 `e007383133e49c819b54fbd3a876cbefa856a227`；分支后续仅补本文与看板等验收后记，主工作树和原始未提交改动保持原位。
 - Owner: cgq / Jittor Torch 兼容层维护者。
 - Review when: 候选源码、依赖、device/RNG、Tensor assignment、加载或 optimizer 实现变化；扩展为真实训练、公开 HF DDP、性能或安装后的声明。
 
@@ -13,6 +13,12 @@
 本轮执行[一周发布计划](../testing/2026-10-20-torch-compat-release-gate.md)的第一天：盘点保留的本地修复、形成可复现源码候选，按 verify-then-fix 收口日常接口及现有 core/structure 失败。开始时的 70 个未提交路径全部保留，已保存原 binary diff、空 index、路径状态和 SHA256；没有 stash、clean 或删除旧工作。本次新增修复不能被解释为原有所有改动均获得重新验收。
 
 候选输入保留已有 native DDP readiness/NCCL/launcher 与 optimizer 依赖、低精度优化器、CUDA embedding/linear-bias kernel 及注册、AMP/GradScaler、HF 生命周期与 trajectory harness、BF16 参数序列化、Dataset 分片和 worker 异常传播等工作。保留的 `tests/optim/test_optimizer_save_load.py` 容差修改不是本轮新增；本轮没有用它证明旧实现与 PyTorch 的完整训练轨迹一致。原有四份根目录库开发文档和未跟踪的 library-docs skill 保留在主树，不属于运行候选输入。
+
+## 候选冻结与结果绑定
+
+源码冻结提交为 `e007383133e49c819b54fbd3a876cbefa856a227`，基于上述 `2690b03e`，独立 worktree 为 `$JITTOR_LAB_ROOT/worktrees/torch-compat-release-day1-20261020/`。按明确路径将 85 份改动文件冻结为候选，逐文件核对主树与候选 SHA256；已有运行依赖一并保留，四份本地开发记录及其文档 skill 留在主树。冻结前后主树 HEAD 与空 index 均保持原状，没有清理原工作区，也没有 push。
+
+下列行为测试实际运行在主工作树，受测实现与候选的源码、测试按字节一致；没有直接在候选 worktree 再跑一轮，也没有验证候选 wheel。原始 `run.sh` 指向主工作树，复用到其他 checkout 时必须重新配置源码路径。本报告、看板与计划的文字后记不改变受测源码。未版本化 `candidate.json` 记录首次冻结 tree、文件 hash、排除清单与同步 SHA，`candidate-final.json` 核对最终分支、两树差异和原工作保留情况，`SHA256SUMS` 固定本轮日志与证据文件。
 
 ## 环境与证据位置
 
@@ -49,7 +55,7 @@ CUDA 为共享 A800、sm_80、nvcc 12.2.140、GCC 11.4.0，显式选择一个 GP
 | CUDA mixed RNG / legacy 原子性 | 两个 node 通过；与首轮 17 项接口合跑 **19 passed** | `daily-rng-cuda-r1.log` |
 | Callback 用户错误与同进程恢复 | CPU 定向 **3 passed、7 deselected**；native CUDA probe 的负向与恢复均通过，实际 cuda:0、fallback=0 | `callback-cpu.log`、`callback-cuda.log` |
 | 日常三项修后最小 probe | CPU/CUDA 均 **3/3 pass**，实际 device 与声明一致，fallback=0；PyTorch 修前即均通过 | `after-jittor-{cpu,cuda}.json` |
-| 布局、MANIFEST 生成一致性、diff 格式与受影响相对链接 | 通过 | 最终静态检查记录 |
+| 布局、MANIFEST 生成一致性、diff 格式与受影响相对链接 | 两树均通过 | `static-before-freeze.log`、`static-final.log` |
 
 core 的 46 项 skip 中，native 为 2 insufficient-devices、34 accelerator、7 opt-in；Torch 为 3 accelerator。跳过项与既有 xfail 不计作通过。CUDA 扩展的 101 个 node 含仅在 CPU 执行的既有 autograd/serialization 用例，不将整个选择集冒称全部在 CUDA 运算；其中新 daily 24 项有显式设备与 fallback 守卫，arange 新用例也断言目标 device。各集合重叠，不把上述数字相加为唯一用例数。
 
