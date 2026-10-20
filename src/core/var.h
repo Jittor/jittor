@@ -194,6 +194,10 @@ struct Var : Node {
 // happens wherever a var stops pointing at that allocation.
 void share_group_link(Var* parent, Var* child);
 void share_group_unlink(Var* v);
+// Held by every change to and walk of a share ring (see var.cc).
+std::mutex& share_ring_mutex();
+// share_group_unlink for a caller that holds share_ring_mutex().
+void share_group_unlink_locked(Var* v);
 
 struct VarPtr {
     Var* ptr;

@@ -66,9 +66,25 @@ void (*_var_free_hook)(Var*);
 // A var joins its parent's ring the moment the allocator agrees to share, and
 // leaves it the moment it stops pointing into that allocation. A ring never
 // holds a single var: the last two leave together.
+// The rings are changed from two threads at once: the async worker allocates
+// a batch's outputs -- linking a child into its parent's ring -- without the
+// graph lock, while the Python thread frees vars, which unlinks them, under
+// it. A link and an unlink in one ring rewrite the same neighbours' pointers,
+// and the race left a dangling neighbour that a later unlink followed
+// (signal 11 in share_group_unlink, from DeferredGraphWork::apply on the
+// worker, about one pure-eager qwen3_decode_static run in three). Every ring
+// change and walk holds this lock. It is only taken for vars that share an
+// allocation, and is never held while taking another lock except the
+// allocator's, by migrate_group.
+std::mutex& share_ring_mutex() {
+    static std::mutex* mutex = new std::mutex();
+    return *mutex;
+}
+
 void share_group_link(Var* parent, Var* child) {
+    std::lock_guard<std::mutex> guard(share_ring_mutex());
     if (PREDICT_BRANCH_NOT_TAKEN(child->share_next != nullptr))
-        share_group_unlink(child);
+        share_group_unlink_locked(child);
     if (!parent->share_next)
         parent->share_next = parent->share_prev = parent;
     child->share_prev = parent;
@@ -78,6 +94,11 @@ void share_group_link(Var* parent, Var* child) {
 }
 
 void share_group_unlink(Var* v) {
+    std::lock_guard<std::mutex> guard(share_ring_mutex());
+    share_group_unlink_locked(v);
+}
+
+void share_group_unlink_locked(Var* v) {
     if (!v->share_next) return;
     Var* nxt = v->share_next;
     Var* prv = v->share_prev;
