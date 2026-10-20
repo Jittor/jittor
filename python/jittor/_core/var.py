@@ -1113,6 +1113,15 @@ def _clamp_cpu(x, min_v=None, max_v=None):
 _register_kernel("clamp", "*", _clamp_cpu)
 
 def clamp(x, min_v=None, max_v=None):
+    # `_clamp_cpu`'s graph built natively, when nothing but `_clamp_cpu` could
+    # be dispatched to. The native path declines (NotImplemented) for any
+    # input it does not render exactly -- a Var or numpy bound, a bool, an
+    # empty Var -- and a replaced `_try_dispatch` has no shortcut to skip.
+    native = getattr(_try_dispatch, "_native_clamp", None)
+    if native is not None and _try_dispatch._sole_default("clamp", _clamp_cpu):
+        out = native(x, min_v, max_v)
+        if out is not NotImplemented:
+            return out
     return _try_dispatch("clamp", x, min_v, max_v)
 
 Var.clamp = clamp

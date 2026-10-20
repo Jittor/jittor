@@ -870,6 +870,11 @@ static unordered_set<string> unary_ops = {
     "conj",
 };
 
+VarPtr UnaryOp::forward_before_construct(Var* x, NanoString op) {
+    if (op == x->dtype()) return VarPtr(x);
+    return VarPtr();
+}
+
 UnaryOp::UnaryOp(Var* x, NanoString op) : x(x) {
     set_flag(OpFlags::_cpu);
     set_flag(OpFlags::_cuda);
