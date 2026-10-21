@@ -31,15 +31,16 @@ def any(x, dim=(), keepdims=False, keepdim=None):
 
 
 def _as_truth(x):
-    """``x != 0`` for a half-precision input, `x` itself otherwise.
+    """``x != 0`` for a floating-point input, `x` itself otherwise.
 
     The logical reductions run on their input's dtype, and CUDA has no atomic
-    OR or AND on bfloat16 or float16: ``any``/``all`` of a half tensor did not
-    compile on the device (``reduce_op.cc``: no ``atomicOr`` for the argument
-    list). Transformers' static KV cache asks exactly that of a bf16 model.
+    OR or AND on a floating-point type: ``any``/``all`` of a float tensor did
+    not compile on the device (``reduce_op.cc``: no ``atomicOr`` for the
+    argument list). Transformers' static KV cache asks exactly that of a bf16
+    model, and ``any`` of a float32 mask-like tensor failed the same way.
     NaN counts as true, as in torch.
     """
-    if isinstance(x, Var) and _jittor_dtype_name(x.dtype) in ("float16", "bfloat16"):
+    if isinstance(x, Var) and x.dtype.is_float():
         return x != 0
     return x
 

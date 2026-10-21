@@ -612,7 +612,9 @@ workaround.
   where a bool is the defensible answer, so the CPU dtype should be decided with
   the CUDA fix. The `uint8` cases are well defined and CPU performs them.
 - Workaround: cast to `int32` or `bool` before a logical or bitwise reduction on
-  CUDA.
+  CUDA. The public `any()`/`all()` do this for every floating-point input
+  (`x != 0`, NaN true as in torch; `tests/ops/test_half_logical_reduce.py`);
+  the raw `any_`/`all_` and the bitwise reductions are still affected.
 - Evidence: every published reduction crossed with six dtypes, one fresh
   process each, with `location()` asserted so a CPU fallback cannot read as a
   pass; [`test_bitwise_dtype_guard.py`](../../tests/ops/test_bitwise_dtype_guard.py)
