@@ -504,6 +504,8 @@ def _bind_native_entries():
     from .step_capture import tracing
     core._compat_fast_bind(tracing)
     try_dispatch._native_basic_getitem = core._jt_basic_getitem
+    if hasattr(core, "_jt_setitem"):
+        try_dispatch._native_setitem = core._jt_setitem
     if hasattr(core, "_fast_clamp"):
         try_dispatch._native_clamp = core._fast_clamp
         try_dispatch._sole_default = _sole_default
