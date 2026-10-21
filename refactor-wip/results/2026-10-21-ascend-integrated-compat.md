@@ -439,3 +439,13 @@ R21 首次双 rank Jittor 启动时，两个 rank 同时从冷状态编译 jitto
 R22 使用 source manifest SHA256 aa56c083de1404dcfc744b31edc3dcb973f574d3dcb0d048c691d8ffa400d383、物理卡5/6及隔离 rank cache。启动前 fresh npu-smi 快照显示5/6均无进程；driver 再次准入后启动 Jittor full launcher，live monitor 在1.884秒后发现外部 PID 1443945 占卡6，按防护逻辑仅终止本 cohort 自己的 launcher 进程组，返回码125。launcher PID 1449813 及 PGID 已核验退出，rank0/rank1 日志均为0字节，没有 rank worker 进入训练，也没有 full/resume 报告。外部 PID 1443945 随后自然退出；约30秒后的 fresh 复查中，卡5仍空、卡6又出现外部 PID 1452009。没有向任何外部进程发送信号。完整记录在 distributed/r22/，包括 execution.json、foreign-npu-occupants.json、driver 输出、rank 空日志及启动前/运行中/事后快照。
 
 因此，本轮完成了串行 core import 预热，但没有得到 MAIN-r28 Jittor 双卡 FSDP2 full、prefix/resume 交叉或性能结果；卡5/6下一次 admission 仍须使用新 cohort 与新的即时空闲快照。
+
+### R23–R24：HCCL/DTensor 串行预热与双卡 admission
+
+R23 在5/6 fresh 空闲快照后启动双卡 Jittor full。约10.97秒时 live monitor 发现外部 PID 1476170 占物理卡5，driver 返回125并只终止本 cohort 的 launcher 进程组。rank0/rank1 日志分别有706和555字节：rank0 已开始 setup_hccl 的 MPI-free HCCL 算子编译，rank1 到达 Jittor import；没有进入模型训练或产生训练阶段报告。launcher PID 1476146 的进程组已核验为空，事后 fresh 快照显示卡5/6均无进程。该次暴露 HCCL 算子首次 JIT 也需要串行预热，R23 的短暂初始化不作为 FSDP 结果；记录在 distributed/r23/。
+
+R24 随后复用相同的冻结源清单，在物理卡5上按 rank role 0、1 顺序运行 R5 的单卡 HCCL/DTensor prewarm worker，并分别使用 R19 的 rank0/rank1 独立 Jittor cache。两份报告均为 PASS：world_size=1 的 FP32/BF16 HCCL collective 与 DTensor factory 检查通过，实际物理设备为5，fallback_after=0，source_unchanged=true；rank0/rank1 返回码均为0。prewarm-complete.json 记录报告 SHA256（rank0 018f6abdc1197191e372b1acef28328516a41186c1dd53bed0ae51c41b8cffbd；rank1 9eacf3d773b7169ca7c2228aee0b1554e1fd69b7ac7ec04c108e852d763ae140）。这仍是两个顺序单 rank 的 warmup，不是双 rank HCCL 或 FSDP2 证明。
+
+R24 双卡 driver 校验 current-source manifest 与 R5 Native baseline 后，在 runtime launcher 创建之前的 fresh admission 检查捕获物理卡6外部 PID 1493168，直接退出。没有创建 launcher、rank worker 或模型输出；admission 前后 npu-smi 快照与 driver traceback 保留于 distributed/r24/。不曾向外部进程发送信号。
+
+本节扩大了串行预热范围到 core、HCCL collective 与 DTensor factory，但 MAIN-r28 Jittor 双卡 FSDP2 full、prefix/resume 交叉仍没有运行通过；R23/R24 也没有性能数据。
