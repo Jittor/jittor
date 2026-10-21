@@ -454,20 +454,19 @@ PyObject* jt_setitem(PyObject* self, PyObject* index, PyObject* value) {
         Var* x = holder->var;
         Var* cond = GET_RAW_PTR(VarHolder, index)->var;
         if (cond->shape == x->shape) {
-            // `x.assign(mask.ternary(jt.array(value).broadcast(x.shape), x))`,
-            // and for a one-element Var value `jt.broadcast(value, x.shape)`.
-            VarPtr filled;
-            if (!value_var) {
-                unique_ptr<VarHolder> number(jit_op_maker::array__(value));
-                filled = make_broadcast_to_op(number->var, x->shape, NanoVector());
-            } else {
-                auto* v = GET_RAW_PTR(VarHolder, value);
-                if (v->var->shape.size() == 1 && v->var->shape[0] == 1)
-                    filled = make_broadcast_to_op(v->grad_input(), x->shape, NanoVector());
-            }
-            if (filled) {
+            // Python's scalar-mask branch creates its value with x.dtype and
+            // the active frontend scope. The binding cannot reproduce that
+            // construction for an exact Python number without changing dtype
+            // promotion, so let the Python path handle it.
+            if (!value_var) return not_implemented();
+            // A one-element Var uses the same broadcast and ternary path.
+            auto* v = GET_RAW_PTR(VarHolder, value);
+            if (v->var->shape.size() == 1 && v->var->shape[0] == 1) {
+                VarPtr filled = make_broadcast_to_op(
+                    v->grad_input(), x->shape, NanoVector());
                 Var* c = GET_RAW_PTR(VarHolder, index)->grad_input();
-                return assign_result(self, make_ternary_op(c, filled.ptr, holder->grad_input()));
+                return assign_result(self, make_ternary_op(
+                    c, filled.ptr, holder->grad_input()));
             }
         }
     }
