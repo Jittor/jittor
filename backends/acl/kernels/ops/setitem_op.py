@@ -375,8 +375,6 @@ class SetItemACL(jt.Function):
             result = result.cast("bool")
         if expand_dim:
             result = result.squeeze(-1)
-        if bool_payload:
-            result = result.cast("bool")
         # result.sync()
         return result
 

@@ -66,6 +66,19 @@ class TestBasicSlicing(Base):
             self.ac(tx[1:, ::2].numpy(), x[1:, ::2], msg=f"x[1:,::2] {dev}")
         both_devices(body)
 
+    def test_slice_assignment_preserves_base_dtype(self):
+        source = np.arange(6, dtype="float32").reshape(2, 3) + 1
+        expected = np.zeros((2, 5), dtype="float32")
+        expected[:, :3] = source
+
+        def body(dev):
+            value = torch.zeros((2, 5), dtype=torch.float32, device=dev)
+            value[:, :3] = t(source, device=dev)
+            self.assertEqual(str(value.dtype), "torch.float32")
+            self.ae(value.numpy(), expected, msg=f"basic slice assignment {dev}")
+
+        both_devices(body)
+
     def test_negative_index_and_slice(self):
         x = self.x2
         def body(dev):
