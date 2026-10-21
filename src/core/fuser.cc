@@ -7,6 +7,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#include <memory>
 #include "core/fuser.h"
 #include "core/var.h"
 #include "core/op.h"
@@ -73,8 +74,15 @@ DEFINE_FLAG(int, fuse_into_reduce, 1,
 //                  meaning of 2 and 3 is owned by the caller (executor.cc may
 //                  still promote 2 to 3 or demote it to 1).
 void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vector<Var*>& vars, vector<int>& father, vector<int>& var_fused, PlanScratch* scratch) {
-    PlanScratch local;
-    PlanScratch& work = scratch ? *scratch : local;
+    // Built only for a caller without scratch of its own: the planner passes
+    // its own, and constructing and destroying the unused one cost every
+    // batch as much as the small ones spend on a pass below.
+    std::unique_ptr<PlanScratch> local;
+    if (!scratch) {
+        local.reset(new PlanScratch());
+        scratch = local.get();
+    }
+    PlanScratch& work = *scratch;
     // fuse_level[i]: how many un-fusable edges lie between op i and the sinks
     // of this batch, along the worst path. Two neighbouring ops may only fuse
     // when their levels are equal.
