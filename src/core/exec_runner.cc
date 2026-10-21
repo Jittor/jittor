@@ -19,6 +19,7 @@
 #include "runtime/launch_diagnostics.h"
 #include "ops/op_register.h"
 #include "ops/composite/array_op.h"
+#include "ops/composite/fetch_op.h"
 #include "ops/composite/tape_op.h"
 #include "core/exec_runner.h"
 #include "core/executor.h"
@@ -1187,7 +1188,18 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
     if (device_sync && !runtime_use_cuda())
         backend_ops(BackendId::Cpu).synchronize(0);
     #ifdef HAS_ACCELERATOR
-    if (device_sync && (runtime_use_cuda() || touched_devices)) {
+    uint64 wait_devices = touched_devices;
+    if (device_sync) {
+        uint64 fetch_devices = pending_fetch_device_mask();
+        // Preserve the implicit current-device wait of an empty batch when
+        // adding fetch's copy device makes the mask nonempty. Compute handoff
+        // still records only devices this batch actually launched on.
+        if (fetch_devices && !wait_devices && runtime_use_cuda()
+                && entry_device >= 0 && entry_device < 64)
+            wait_devices |= 1ull << entry_device;
+        wait_devices |= fetch_devices;
+    }
+    if (device_sync && (runtime_use_cuda() || wait_devices)) {
         exe.last_is_cuda = false;
         sync_times++;
         try {
@@ -1198,7 +1210,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
             // entry lock (see run_sync) keeps every other thread out of the
             // executor for the duration.
             DeviceWaitScope wait;
-            sync_devices(touched_devices);
+            sync_devices(wait_devices);
         } catch (const std::exception& e) {
             // Not red_color, for the same reason as the op-level catch above.
             if (V_ON(1)) display_memory_info(__FILELINE__, false, false);
