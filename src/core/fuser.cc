@@ -103,10 +103,30 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
     // times over. Asked once per op instead.
     vector<BackendId>& op_backend = work.op_backend;
     op_backend.resize(ops.size());
+    // Whether every output of the op is one element; see edge_fusable.
+    vector<char>& op_scalar = work.op_scalar;
+    op_scalar.resize(ops.size());
     for (uint i = 0; i < ops.size(); i++) {
         if (i + 8 < ops.size()) __builtin_prefetch(ops[i + 8]);
         op_backend[i] = ops[i]->requested_backend();
+        char scalar = ops[i]->outputs().size() != 0;
+        for (Var* out : ops[i]->outputs())
+            if (out->num != 1) { scalar = 0; break; }
+        op_scalar[i] = scalar;
     }
+    // A Python number an operator was handed (`x.min() - r`), as it reaches
+    // `var`: the number itself, or the number broadcast to the operator's
+    // shape. Never a tensor anyone holds.
+    auto is_number_constant = [](Var* var) -> bool {
+        for (int depth = 0; depth < 2; depth++) {
+            if (var->flag(VarFlags::_python_number)) return true;
+            Op* producer = var->input();
+            if (!producer || producer->type() != OpType::broadcast
+                    || producer->inputs().size() != 1) return false;
+            var = producer->inputs().front();
+        }
+        return var->flag(VarFlags::_python_number);
+    };
     auto edge_fusable = [&](Var* var, Op* op, Op* other, int relation) -> bool {
         if (op->float32_precision != other->float32_precision) return false;
         if (op_backend[op->batch_index_at(tt)] != op_backend[other->batch_index_at(tt)]) return false;
@@ -116,8 +136,16 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
             // exist in memory and are never fused away
             if (var->batch_index_at(tt) < start_var_num) return false;
             if (op->type() == OpType::other || other->type() == OpType::other) return false;
-            // a single element only pays for a kernel if it feeds a broadcast
-            if (var->num <= 1 && op->type() != OpType::broadcast) return false;
+            // a single element only pays for a kernel if it feeds a broadcast.
+            // Except a Python number read by an op that is a single element
+            // too: that op reads it once, so fusing recomputes nothing, and
+            // `x.min() - r` stops running r as a kernel of its own that writes
+            // the constant out for the subtraction to read. Only a number:
+            // chaining scalar ops into one another would let `x += a[i]` in a
+            // loop grow one kernel per chain length.
+            if (var->num <= 1 && op->type() != OpType::broadcast
+                    && !(var->num == 1 && op_scalar[op->batch_index_at(tt)]
+                         && is_number_constant(var))) return false;
             if (var->flag(VarFlags::_force_fuse)) return true;
             // producer is a reduce: its output has to be written out
             if (other->type() == OpType::reduce) return false;
