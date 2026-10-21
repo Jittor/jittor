@@ -439,11 +439,11 @@ pool_size = min(16, max(int(mem_gib // 3), 1))
 ## 8. 环境
 
 ```
-JITTOR_HOME=/home/zy/jittor-lab/refactor/_home/pyops \
-TMPDIR=/home/zy/jittor-lab/refactor/_tmp/pyops \
+JITTOR_HOME=$JITTOR_LAB_ROOT/refactor/_home/pyops \
+TMPDIR=$JITTOR_LAB_ROOT/refactor/_tmp/pyops \
 CUDA_VISIBLE_DEVICES=6 nvcc_path=/usr/local/cuda/bin/nvcc \
 PATH=/usr/local/cuda/bin:$PATH \
-taskset -c 64-79 /home/zy/miniconda3/envs/jt311/bin/python -m pytest <路径> -q
+taskset -c 64-79 <jittor-python> -m pytest <路径> -q
 ```
 
 手写 python 命令必须显式加 `PYTHONPATH=.../pyops/python`（pytest 不需要）。

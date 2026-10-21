@@ -18,7 +18,7 @@ case（`large_transformers_llama`、`_gpt2`、`_qwen3`、`_bert`、`_vit`）。
 
 Ascend 的整模、训练与恢复结论按冻结源码批次和真实设备报告核对。深度性能分析（SDPA 后端、算子热点、allocator）走
 [`jittor-transformers-perf`](../jittor-transformers-perf/SKILL.md)，**注意它文档里的解释器
-路径**（`/home/zy/miniconda3/envs/jt311/bin/python`、`/home/zy/rt_venv/bin/python`）**来自旧机器，
+路径**（`<jittor-python>`、`<real-torch-python>`）**来自旧机器，
 不描述当前 lab**；当前 lab 以本文件「两侧环境」为准。
 
 
