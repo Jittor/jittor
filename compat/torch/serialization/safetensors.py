@@ -253,6 +253,7 @@ def _save_dict(tensors, metadata=None):
                     if ptr in seen:
                         raise RuntimeError("Some tensors share memory: {!r} and {!r}".format(seen[ptr], key))
                     seen[ptr] = key
+    snapshots = _snapshot_tensors(tensors)
     header = {}
     blobs = []
     offset = 0
