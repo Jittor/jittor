@@ -880,10 +880,15 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
                 var->set_flag(VarFlags::_kept);
             continue;
         }
-        const auto requested_backend = op->requested_backend();
-        const auto execution_backend = op->execution_backend();
+        // `requested_backend()` and `execution_backend()`, from one read of
+        // the placement: each would walk it again, and so would every lookup
+        // of the implementation below.
+        const auto placement = op->graph_placement();
+        const auto requested_backend = placement.explicit_backend
+            ? placement.device.backend : execution_target_backend();
+        const auto execution_backend = op->execution_backend_for(requested_backend);
         ExecutionBackendScope operation_backend_scope(requested_backend);
-        TensorPlacementScope placement_scope(op->graph_placement());
+        TensorPlacementScope placement_scope(placement);
         Float32PrecisionScope precision_scope(op->float32_precision);
         LaunchOriginScope origin_scope(op->launch_origin);
         int execution_device = 0;
@@ -986,9 +991,9 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
             memory_profiler.check();
         trace_op.allocated();
         LOGvvv << "Run" << op << "inputs:" << op->inputs() << "outputs:" << op->outputs();
-        op->prepare_execution(jkl);
+        op->prepare_execution_on(jkl, execution_backend);
         prepared_jit_key.assign(jkl.to_cstring(), jkl.size);
-        bool is_cuda = op->executes_on_accelerator();
+        bool is_cuda = execution_backend != BackendId::Cpu;
         if (PREDICT_BRANCH_NOT_TAKEN(graph_capture_recording) && !is_cuda
                 && !graph_capture_launches_nothing(op))
             graph_capture_saw_host_work = true;
@@ -1072,7 +1077,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         // _JT_SEH_START2;
         if (execution_backend != BackendId::Cpu)
             record_active_launch(backend_stream({execution_backend, execution_device}, BackendStreamKind::Compute));
-        op->execute_prepared(jkl);
+        op->execute_prepared_on(jkl, execution_backend);
         // _JT_SEH_END2;
         #ifdef HAS_ACCELERATOR
         // migrate to gpu

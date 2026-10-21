@@ -271,16 +271,25 @@ void FusedOp::statistics(uint64_t& in, uint64_t& out, uint64_t& compute) {
 void FusedOp::prepare_fused_key(JK& jk) {
     JT_GBP_SCOPE(gbp_jit_key);
     jk.clear();
+    // While no tensor has an explicit placement, every op's requested backend
+    // is this thread's execution target -- `graph_placement` has nothing to
+    // say -- so it is asked once here, not three calls deep in the fragment of
+    // every member and again for the segment.
+    const bool uniform = !explicit_tensor_placement_made.load(std::memory_order_relaxed);
+    const BackendId requested = uniform ? execution_target_backend() : BackendId::Cpu;
     for (uint i=0; i<ops.size(); i++) {
         Op* op = ops[i];
         jk << "«opkey" << i << JK::val;
         jk << op->name();
-        op->prepare_fragment(jk);
+        if (uniform) op->prepare_fragment_on(jk, op->execution_backend_for(requested));
+        else op->prepare_fragment(jk);
         const auto& identity = op->definition().compile_identity;
         if (!identity.empty()) add_jit_define(jk, "op_definition", i, identity);
     }
     jk << "«JIT:1";
-    if (!executes_on_accelerator()) {
+    const bool on_accelerator = uniform
+        ? execution_backend_for(requested) != BackendId::Cpu : executes_on_accelerator();
+    if (!on_accelerator) {
         // only cpu
         jk << "«JIT_cpu:1";
     } else {
