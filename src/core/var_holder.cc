@@ -1009,7 +1009,10 @@ static VarPtr view_assignment_value(Var* base, const vector<VarViewStep>& steps,
         } else if (steps[i].kind == VarViewStep::Expand || steps[i].kind == VarViewStep::Reshape) {
             USER_CHECK(value->num == target->num)
                 << "Cannot write to an expanded view with overlapping storage";
-            updated = make_storage_reshape(value, NanoVector(target->shape));
+            // Inverting a later transpose may leave logical values strided.
+            // A writeback reshape may copy; it is not a storage-view request.
+            auto dense = contiguous_storage(value);
+            updated = make_storage_reshape(dense.ptr, NanoVector(target->shape));
         } else {
             updated = make_setitem(target, VarSlices(steps[i].slices), value, ns_void);
         }

@@ -425,9 +425,23 @@ def _adopt(holder, old):
     if (tuple(holder.shape) != tuple(old.shape)
             or str(_native_dtype(holder)) != str(_native_dtype(old))):
         return False
-    old._copy_into(holder)
-    holder._update(old)
+    with jt.no_grad():
+        old._copy_into(holder)
+        holder._update(old)
     return True
+
+
+def _commit_captured_state(records):
+    """Commit graph writes into the storage read by the captured step."""
+    state = []
+    with jt.no_grad():
+        for holder, old, new in records:
+            inplace = old._mem_ptr_now == new._mem_ptr_now
+            if not inplace:
+                old._copy_into(new, False)
+            holder._update(old)
+            state.append((holder, old, new, inplace))
+    return state
 
 
 def _unique(vars_):
@@ -531,7 +545,8 @@ class StepCapture:
 
         def private_copy(value):
             copy = _empty_like(value)
-            copy._copy_into(value)
+            with jt.no_grad():
+                copy._copy_into(value)
             return copy
         private_args, private_kwargs = _map_inputs((args, kwargs), private_copy)
 
@@ -591,6 +606,7 @@ class StepCapture:
         if cap.refused is not None:
             self._refused = cap.refused
             _finish_normally(roots)
+            _commit_captured_state(records)
             return None, result
 
         # A step that synced its own results has run already; running the
@@ -605,14 +621,9 @@ class StepCapture:
         # Point every rebound holder back at its old Var, which the graph
         # reads, and give it the new value. The step has run once, so this is
         # its update; every replay repeats it.
-        state = []
-        for holder, old, new in records:
-            inplace = old._mem_ptr_now == new._mem_ptr_now
-            if not inplace:
-                old._copy_into(new, False)
-            holder._update(old)
-            state.append((holder, old, new, inplace))
-        state = _write_back_in_graph(state, roots)
+        state = _commit_captured_state(records)
+        with jt.no_grad():
+            state = _write_back_in_graph(state, roots)
 
         cap.inputs = _input_vars((private_args, private_kwargs), [])
         cap.host_inputs = any(int(v.device_id) < 0 for v in cap.inputs)
@@ -629,8 +640,9 @@ class StepCapture:
 
     def _results(self, cap, sources):
         outs = [_empty_like(o) for o in cap.outputs]
-        for out, src in zip(outs, sources):
-            out._copy_into(src, False)
+        with jt.no_grad():
+            for out, src in zip(outs, sources):
+                out._copy_into(src, False)
         return _rebuild(cap.template, outs)
 
     # -- guards --------------------------------------------------------
@@ -657,9 +669,10 @@ class StepCapture:
 
     # -- replay --------------------------------------------------------
     def _write_back(self, cap):
-        for _, old, new, inplace in cap.state:
-            if not inplace:
-                old._copy_into(new, False)
+        with jt.no_grad():
+            for _, old, new, inplace in cap.state:
+                if not inplace:
+                    old._copy_into(new, False)
 
     def _record_cuda_graph(self, cap):
         """Record one replay -- the step and its write-backs -- as a device graph."""
@@ -694,8 +707,9 @@ class StepCapture:
             try:
                 jt.sync(cap.roots, False, False)
                 self._write_back(cap)
-                for out, src in zip(outs, cap.outputs):
-                    out._copy_into(src, False)
+                with jt.no_grad():
+                    for out, src in zip(outs, cap.outputs):
+                        out._copy_into(src, False)
             finally:
                 handle = _core.graph_capture_end()
         except Exception as exc:            # a capture poisons its stream
@@ -717,8 +731,9 @@ class StepCapture:
             hook()
         if self._cuda_graph and cap.host_inputs:
             _core.graph_wait()
-        for captured, given in zip(cap.inputs, _input_vars((args, kwargs), [])):
-            captured._copy_into(given)
+        with jt.no_grad():
+            for captured, given in zip(cap.inputs, _input_vars((args, kwargs), [])):
+                captured._copy_into(given)
         if self._cuda_graph and not _core.graph_leaves_moved(self._cuda_graph):
             _core.graph_launch(self._cuda_graph)
             self.stats["graph"] += 1
