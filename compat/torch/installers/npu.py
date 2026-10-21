@@ -152,7 +152,12 @@ _SUPPORTED = ("is_available", "device_count", "current_device", "set_device",
 
 def install(ctx):
     target, registry = ctx.target_namespace, ctx.registry
-    npu = types.ModuleType("torch.npu")
+    # Keep the NPU namespace created by the CUDA installer: it owns the
+    # device-scoped RNG and random submodule APIs used by Transformers. This
+    # installer replaces only the discovery/device placeholders it owns.
+    npu = registry.get("torch.npu")
+    if npu is None:
+        npu = types.ModuleType("torch.npu")
     npu.__path__ = []
     for name in _SUPPORTED:
         setattr(npu, name, globals()[name])
