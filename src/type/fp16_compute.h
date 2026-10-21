@@ -15,6 +15,8 @@
 
 #if defined(JIT_cuda) && !defined(IS_ACL)
 
+// Half reduction identities also need infinity outside parallel_pass kernels.
+#include "type/cuda_limits.h"
 #include <driver_types.h>
 #include <cuda_fp16.h>
 #ifndef IS_ROCM
