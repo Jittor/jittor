@@ -1607,6 +1607,31 @@ def _api_fill(self, val):
     return _ip(self, value, preserve_storage=True)
 
 
+def _api_fill_diagonal(self, fill_value, wrap=False):
+    """Fill the shared diagonal in place on the tensor's own device."""
+    shape = tuple(self.shape)
+    if len(shape) < 2:
+        raise RuntimeError("dimensions must be at least 2")
+    if len(shape) > 2 and len(set(shape)) != 1:
+        raise RuntimeError("all dimensions of input must be of equal length")
+
+    from jittor._core.var import device_scope_like
+    with device_scope_like(self):
+        if len(shape) == 2 and wrap and shape[0] > shape[1] and shape[1]:
+            columns = shape[1]
+            step = columns + 1
+            length = (shape[0] * columns + step - 1) // step
+            linear = _owner.jt.arange(length, dtype="int64") * step
+            indices = (linear // columns, linear % columns)
+        else:
+            length = min(shape)
+            diagonal = _owner.jt.arange(length, dtype="int64")
+            indices = (diagonal,) * len(shape)
+        if length:
+            self[indices] = fill_value
+    return self
+
+
 def _api_zero(self):
     if _fill_captured_state(self, 0):
         return self

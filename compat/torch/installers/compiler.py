@@ -707,6 +707,11 @@ def install(ctx):
     _jit.script = script
     _jit.trace = trace
     _jit.trace_module = trace
+    # TorchScript's annotate() is an eager identity at runtime: it carries a
+    # static type hint for the compiler and must return the supplied value.
+    # The shim does not emit TorchScript, but downstream code still calls this
+    # public helper while defining eager-compatible functions.
+    _jit.annotate = lambda _type, value: value
     register_fidelity(
         "torch.compile", compile, Fidelity.APPROXIMATE,
         "Jittor executes eagerly and does not produce a single compiled graph.")
@@ -723,6 +728,10 @@ def install(ctx):
     _jit.is_scripting = _api_jit_is_scripting
     _jit.is_tracing = _api_jit_is_tracing
     _jit.ScriptModule = g.nn.Module
+    # Eager ``script`` returns the original Python callable; expose the
+    # callable type so libraries using ``isinstance(fn, torch.jit.ScriptFunction)``
+    # retain their structural check without fabricating a compiled artifact.
+    _jit.ScriptFunction = type(lambda: None)
     _jit.interface = _api_jit_interface
     _jit.Attribute = _api_jit_attribute
     try:

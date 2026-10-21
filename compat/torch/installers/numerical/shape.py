@@ -157,3 +157,33 @@ def tile(input, *dims):
         _tile_impl,
     )
     return _tile_impl(input, *dims)
+
+
+def triu_indices(row, col, offset=0, *, dtype=None, device=None, layout=None):
+    """Return row-major upper-triangular coordinates on the requested device."""
+    import operator
+    from . import jt
+    from ...context import get_install_context
+
+    g = get_install_context(jt).target_namespace
+    row, col, offset = operator.index(row), operator.index(col), operator.index(offset)
+    if row < 0 or col < 0:
+        raise RuntimeError("row and col must be non-negative")
+    dtype = g.int64 if dtype is None else dtype
+    if dtype not in (g.int32, g.int64):
+        raise RuntimeError("triu_indices supports only int32 and int64")
+    if layout is not None and layout != g.strided:
+        raise RuntimeError("triu_indices supports only strided layout")
+    if row == 0 or col == 0:
+        return g.empty((2, 0), dtype=dtype, device=device)
+    rows = g.arange(row, dtype=g.int64, device=device).reshape((-1, 1))
+    cols = g.arange(col, dtype=g.int64, device=device).reshape((1, -1))
+    return g.nonzero(cols - rows >= offset, as_tuple=False).transpose(0, 1).to(dtype=dtype)
+
+
+def fliplr(input):
+    """Reverse the columns of a dense tensor with at least two dimensions."""
+    from . import jt
+    if input.ndim < 2:
+        raise RuntimeError("Input must be >= 2-d.")
+    return jt.flip(input, 1)

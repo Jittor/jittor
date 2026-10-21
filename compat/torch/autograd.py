@@ -4,6 +4,8 @@ Installation publishes these objects. Native delegates belong to InstallContext;
 Function input/output bookkeeping belongs to each native one-shot call context.
 """
 import contextlib
+from contextvars import ContextVar
+from typing import Optional
 import threading
 from collections import deque
 import jittor as jt
@@ -13,6 +15,20 @@ from .context import get_install_context
 from ._placeholder_context import _PlaceholderContext
 from . import profiler as _profiler
 from ..diagnostics import EXPECTED, swallowed
+
+
+# Keep the Torch create_graph mode visible to custom Function backward calls.
+# Native jt.grad behavior remains unchanged outside a Torch autograd call.
+_backward_create_graph: ContextVar[Optional[bool]] = ContextVar("torch_backward_create_graph", default=None)
+
+
+@contextlib.contextmanager
+def _create_graph_scope(create_graph):
+    token = _backward_create_graph.set(bool(create_graph))
+    try:
+        yield
+    finally:
+        _backward_create_graph.reset(token)
 
 
 def _state():
@@ -207,7 +223,11 @@ def function_grad(self, *grad_outputs):
                     if not any(t in dt for t in ("int", "bool", "uint")):
                         go[i] = jt.zeros(shp, dtype=dt)
             grad_outputs = tuple(go)
-    ret = bw(self, *grad_outputs)
+    requested = _backward_create_graph.get()
+    grad_scope = (contextlib.nullcontext() if requested is None else
+                  (jt.enable_grad() if requested else jt.no_grad()))
+    with grad_scope:
+        ret = bw(self, *grad_outputs)
     shapes = getattr(self, "_fwd_input_shapes", None)
     if shapes is None:
         return ret
@@ -263,8 +283,9 @@ def grad(outputs, inputs, grad_outputs=None, retain_graph=None,
             "materialize_grads=True, but got: allow_unused=False.")
     allow_unused = bool(materialize_grads) if allow_unused is None \
         else bool(allow_unused)
-    with _backward_callbacks():
-        gs = list(jt.core.grad_optional(loss, ins, rg))
+    with _create_graph_scope(create_graph):
+        with _backward_callbacks():
+            gs = list(jt.core.grad_optional(loss, ins, rg))
     missing = [i for i, value in enumerate(gs) if value is None]
     if missing and materialize_grads:
         for i in missing:
@@ -301,7 +322,8 @@ def backward(tensors, grad_tensors=None, retain_graph=None,
     gts = None if grad_tensors is None else _as_list(grad_tensors)
     for i, t in enumerate(ts):
         gt = None if gts is None else gts[i]
-        t.backward(gradient=gt, retain_graph=retain_graph)
+        t.backward(gradient=gt, retain_graph=retain_graph,
+                    create_graph=create_graph)
     return None
 
 

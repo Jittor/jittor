@@ -142,7 +142,7 @@ def _shard_optimizer_state_dict(module, state_dict):
     return {"state": result, "param_groups": state_dict["param_groups"]}
 
 
-def _load_full_state_dict(module, state_dict, strict=True):
+def _load_full_state_dict(module, state_dict, strict=True, *, already_replicated=False):
     """Write a caller-broadcast FULL state dict to the existing local shards."""
     module_names = {id(child): name for name, child in module.named_modules()}
     current = module.state_dict()
@@ -171,7 +171,7 @@ def _load_full_state_dict(module, state_dict, strict=True):
             # pattern fills the full dict on rank 0 only. The caller here does
             # not broadcast, so without this a rank-divergent full dict leaves
             # non-zero ranks writing their stale local values into their shard.
-            if common._world_size() > 1:
+            if common._world_size() > 1 and not already_replicated:
                 full = full.mpi_broadcast(0)
             full_values.append(full)
             consumed.add(key)

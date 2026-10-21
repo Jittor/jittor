@@ -239,31 +239,48 @@ def _full_tensor(dtensor, *args, **kwargs):
         stub_result=local)
 
 
-def _mark_dtensor(tensor, device_mesh=None, placements=None):
+class _DTensorSizeMethod:
+    """Expose global DTensor dimensions while storage keeps its local shape."""
+
+    def __init__(self, shape):
+        self.shape = tuple(int(dim) for dim in shape)
+
+    def __call__(self, dim=None):
+        if dim is None:
+            return self.shape
+        dim = int(dim)
+        if dim < 0:
+            dim += len(self.shape)
+        if dim < 0 or dim >= len(self.shape):
+            raise IndexError("dimension out of range")
+        return self.shape[dim]
+
+
+def _mark_dtensor(tensor, device_mesh=None, placements=None, global_shape=None):
     mesh = device_mesh or DeviceMesh(
         "cuda" if getattr(jt, "has_cuda", 0) else "cpu", (0,))
     pls = tuple(placements or (Replicate(),))
-    try:
-        object.__setattr__(tensor, "_dtensor_device_mesh", mesh)
-        object.__setattr__(tensor, "_dtensor_placements", pls)
-        object.__setattr__(tensor, "device_mesh", mesh)
-        object.__setattr__(tensor, "placements", pls)
-        object.__setattr__(tensor, "_spec", types.SimpleNamespace(mesh=mesh, placements=pls))
-        if not callable(getattr(tensor, "to_local", None)):
-            object.__setattr__(tensor, "to_local", types.MethodType(lambda self, *a, **k: self, tensor))
-        if not callable(getattr(tensor, "full_tensor", None)):
-            object.__setattr__(tensor, "full_tensor",
-                               types.MethodType(_full_tensor, tensor))
-        if not callable(getattr(tensor, "redistribute", None)):
-            def _redistribute(self, device_mesh=None, placements=None, **kwargs):
-                return _mark_dtensor(
-                    self,
-                    device_mesh or getattr(self, "_dtensor_device_mesh", None),
-                    placements or getattr(self, "_dtensor_placements", None),
-                )
-            object.__setattr__(tensor, "redistribute", types.MethodType(_redistribute, tensor))
-    except EXPECTED as exc:
-        swallowed("fsdp2/dtensor.py _mark_dtensor: object.__setattr__(tensor, '_dtensor_device_mesh', mesh)", exc)
+    object.__setattr__(tensor, "_dtensor_device_mesh", mesh)
+    object.__setattr__(tensor, "_dtensor_placements", pls)
+    object.__setattr__(tensor, "device_mesh", mesh)
+    object.__setattr__(tensor, "placements", pls)
+    shape = tuple(tensor.shape) if global_shape is None else tuple(global_shape)
+    object.__setattr__(tensor, "_dtensor_global_shape", shape)
+    object.__setattr__(tensor, "size", _DTensorSizeMethod(shape))
+    object.__setattr__(tensor, "_spec", types.SimpleNamespace(mesh=mesh, placements=pls))
+    if not callable(getattr(tensor, "to_local", None)):
+        object.__setattr__(tensor, "to_local", types.MethodType(lambda self, *a, **k: self, tensor))
+    if not callable(getattr(tensor, "full_tensor", None)):
+        object.__setattr__(tensor, "full_tensor",
+                           types.MethodType(_full_tensor, tensor))
+    if not callable(getattr(tensor, "redistribute", None)):
+        def _redistribute(self, device_mesh=None, placements=None, **kwargs):
+            return _mark_dtensor(
+                self,
+                device_mesh or getattr(self, "_dtensor_device_mesh", None),
+                placements or getattr(self, "_dtensor_placements", None),
+            )
+        object.__setattr__(tensor, "redistribute", types.MethodType(_redistribute, tensor))
     return tensor
 
 
@@ -283,7 +300,7 @@ class DTensor(metaclass=_DTensorMeta):
     @staticmethod
     def from_local(local_tensor, device_mesh=None, placements=None, run_check=False,
                    shape=None, stride=None, grad_placements=None, **kwargs):
-        return _mark_dtensor(local_tensor, device_mesh, placements)
+        return _mark_dtensor(local_tensor, device_mesh, placements, global_shape=shape)
 
     def to_local(self, *args, **kwargs):
         return self._local_tensor
@@ -306,7 +323,53 @@ class DTensor(metaclass=_DTensorMeta):
 
 
 def distribute_tensor(tensor, device_mesh=None, placements=None, src_data_rank=0, **kwargs):
-    return _mark_dtensor(tensor, device_mesh, placements)
+    mesh = device_mesh or DeviceMesh(
+        "cuda" if getattr(jt, "has_cuda", 0) else "cpu", (0,))
+    placement_values = tuple(placements or (Replicate(),))
+    global_shape = tuple(int(dim) for dim in tensor.shape)
+    shard_placements = [value for value in placement_values if isinstance(value, Shard)]
+    if not shard_placements:
+        if any(isinstance(value, Partial) for value in placement_values):
+            raise NotImplementedError("DTensor Partial placement is not supported")
+        if mesh.ndim != 1 or len(placement_values) != 1 or not isinstance(
+                placement_values[0], Replicate):
+            raise NotImplementedError(
+                "DTensor replication currently supports one mesh axis")
+        mesh_ranks = np.asarray(mesh.mesh).reshape(-1)
+        if common._rank() not in mesh_ranks:
+            raise RuntimeError("current rank is not a member of the DTensor mesh")
+        if mesh_ranks.size > 1:
+            from jittor.distributed import broadcast
+            tensor = broadcast(
+                tensor, src=int(mesh_ranks[0]), group=mesh.get_group())
+        return _mark_dtensor(tensor, mesh, placement_values, global_shape)
+    if mesh.ndim != 1 or len(placement_values) != 1 or len(shard_placements) != 1:
+        raise NotImplementedError("DTensor sharding currently supports one mesh axis")
+    dim = shard_placements[0].dim
+    if dim < 0:
+        dim += len(global_shape)
+    if dim < 0 or dim >= len(global_shape):
+        raise IndexError("Shard dimension out of range")
+    mesh_ranks = np.asarray(mesh.mesh).reshape(-1)
+    rank_positions = np.flatnonzero(mesh_ranks == common._rank())
+    if not rank_positions.size:
+        raise RuntimeError("current rank is not a member of the DTensor mesh")
+    world_size = int(mesh_ranks.size)
+    local_rank = int(rank_positions[0])
+    if int(src_data_rank) not in set(int(rank) for rank in mesh_ranks):
+        raise ValueError("src_data_rank must belong to the DeviceMesh")
+    if world_size > 1:
+        from jittor.distributed import broadcast
+        tensor = broadcast(tensor, src=int(src_data_rank), group=mesh.get_group())
+    dim_size = global_shape[dim]
+    if dim_size % world_size:
+        raise NotImplementedError(
+            "DTensor Shard requires an evenly divisible dimension")
+    local_size = dim_size // world_size
+    slices = [slice(None)] * len(global_shape)
+    slices[dim] = slice(local_rank * local_size, (local_rank + 1) * local_size)
+    local_tensor = jt.Var.copy(tensor[tuple(slices)])
+    return _mark_dtensor(local_tensor, mesh, placement_values, global_shape)
 
 
 def distribute_module(module, device_mesh=None, partition_fn=None, input_fn=None,

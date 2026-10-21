@@ -418,6 +418,41 @@ def _preserve_target_dtypes_for_load(root, state_dict):
     return state_dict if converted is None else converted
 
 
+def _load_fsdp_assigned_dtensor_state(root, state_dict, strict):
+    """Gather DTensor values, then load them into FSDP's flat local shards."""
+    if not isinstance(state_dict, dict):
+        return None
+    from jittor.compat import fsdp_hooks
+    provider = fsdp_hooks.provider()
+    if provider is None:
+        return None
+    owns_fsdp_parameter = any(
+        getattr(_find_state_target(root, key), "_jittor_fsdp2_entry", None)
+        is not None for key in state_dict)
+    if not owns_fsdp_parameter or not any(
+            getattr(value, "_dtensor_global_shape", None) is not None
+            for value in state_dict.values()):
+        return None
+
+    full_state = dict(state_dict)
+    for key, value in state_dict.items():
+        global_shape = getattr(value, "_dtensor_global_shape", None)
+        if global_shape is None:
+            continue
+        mesh = getattr(value, "_dtensor_device_mesh")
+        local = value.to_local()
+        if mesh.size() > 1:
+            from jittor.distributed import all_gather
+            local = all_gather(local, group=mesh.get_group())
+        if tuple(local.shape) != tuple(global_shape):
+            local = local.reshape(global_shape)
+        full_state[key] = local
+
+    provider._load_full_state_dict(
+        root, full_state, strict=strict, already_replicated=True)
+    return _IncompatibleKeys([], [])
+
+
 def _state_dict_key_diff(root, state_dict):
     """(missing, unexpected, mismatched) between a module and a state dict.
 
@@ -458,6 +493,11 @@ def _state_dict_key_diff(root, state_dict):
 
 def _load_state_dict(self, state_dict, strict=True, assign=False):
     """Torch's ``load_state_dict``: honours ``strict`` and returns the keys."""
+    if assign:
+        fsdp_result = _load_fsdp_assigned_dtensor_state(
+            self, state_dict, strict)
+        if fsdp_result is not None:
+            return fsdp_result
     missing, unexpected, mismatched = _state_dict_key_diff(self, state_dict)
     # torch raises on a shape mismatch whatever `strict` says: the value
     # cannot be copied at all.  jittor's load_parameters only LOG.e'd it.
