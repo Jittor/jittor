@@ -316,7 +316,7 @@ def test_npu_trainer_accepts_only_the_registered_owned_adapter_callbacks():
     import _hf_trainer_e2e_runner as runner
 
     metadata, mock, registered, entries, modules = _npu_adapter_fixture()
-    with mock.patch.dict(sys.modules, modules), mock.patch.object(metadata, "version", return_value="1.3.11.0"):
+    with mock.patch.dict(sys.modules, modules), mock.patch.object(metadata, "version", return_value="2.0.0"):
         with mock.patch.object(metadata, "entry_points", return_value=entries):
             evidence = runner._require_npu_adapter_registration()
             assert evidence["registered_paths"] == sorted(registered)
@@ -335,7 +335,7 @@ def test_npu_trainer_rejects_missing_or_unexpected_adapter_entry_point():
     import _hf_trainer_e2e_runner as runner
 
     metadata, mock, registered, entries, modules = _npu_adapter_fixture()
-    with mock.patch.dict(sys.modules, modules), mock.patch.object(metadata, "version", return_value="1.3.11.0"):
+    with mock.patch.dict(sys.modules, modules), mock.patch.object(metadata, "version", return_value="2.0.0"):
         for values in ([], entries + entries):
             with mock.patch.object(metadata, "entry_points", return_value=values):
                 with unittest.TestCase().assertRaisesRegex(RuntimeError, "owned jittor_transformers"):
@@ -352,5 +352,5 @@ def test_npu_trainer_rejects_an_unverified_adapter_version():
     import _hf_trainer_e2e_runner as runner
 
     with mock.patch.object(metadata, "version", return_value="99.0.0"):
-        with unittest.TestCase().assertRaisesRegex(RuntimeError, "requires.*1.3.11.0"):
+        with unittest.TestCase().assertRaisesRegex(RuntimeError, "requires.*2.0.0"):
             runner._require_npu_adapter_registration()

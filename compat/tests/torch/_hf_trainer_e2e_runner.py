@@ -93,8 +93,8 @@ def _require_npu_adapter_registration():
             "NPU Trainer requires installed jittor-torch-adapters metadata; expose "
             "its installation site before importing Jittor (a source PYTHONPATH alone is insufficient)"
         ) from error
-    if version != "1.3.11.0":
-        raise RuntimeError("NPU Trainer requires jittor-torch-adapters==1.3.11.0, found " + version)
+    if version != "2.0.0":
+        raise RuntimeError("NPU Trainer requires jittor-torch-adapters==2.0.0, found " + version)
     entries = [entry for entry in metadata.entry_points(group="jittor.module_patches")
                if entry.name == "jittor_transformers"]
     if len(entries) != 1 or entries[0].value != "jittor_adapters.transformers:register":
