@@ -31,7 +31,19 @@ def any(x, dim=(), keepdims=False, keepdim=None):
 
 
 def _as_truth(x):
-    """Convert numeric values to bool before logical reduction on any device."""
+    """``x != 0`` for a floating-point input, `x` itself otherwise.
+
+    The logical reductions run on their input's dtype, and CUDA has no atomic
+    OR or AND on a floating-point type: ``any``/``all`` of a float tensor did
+    not compile on the device (``reduce_op.cc``: no ``atomicOr`` for the
+    argument list). Transformers' static KV cache asks exactly that of a bf16
+    model, and ``any`` of a float32 mask-like tensor failed the same way.
+    NaN counts as true, as in torch.
+    """
+    if isinstance(x, Var) and x.dtype.is_float():
+        return x != 0
+    # Preserve the existing numeric truth contract for non-floating inputs:
+    # logical all([2, 4, 8]) is true, independently of integer bit patterns.
     if isinstance(x, Var) and _jittor_dtype_name(x.dtype) != "bool":
         return x != 0
     return x
@@ -158,8 +170,11 @@ def _simple_for(x, func):
     silent, which is what makes it the wrong trade.
     """
     import jittor as jt
-    with jt.flag_scope(compile_options={"FLAGS: -O2 ":1}):
-        src = f'''
+    src = _SIMPLE_FOR_SOURCES.get(func)
+    if src is None:
+        if len(_SIMPLE_FOR_SOURCES) >= 64:
+            _SIMPLE_FOR_SOURCES.clear()
+        src = _SIMPLE_FOR_SOURCES[func] = f'''
         __inline_static__
         @python.jittor.auto_parallel(1)
         void kernel(int n0, int i0, in0_type* _x, out0_type* y) {{
@@ -169,7 +184,13 @@ def _simple_for(x, func):
         }}
         kernel(in0->num, 0, in0_p, out0_p);
         '''
+    with jt.flag_scope(compile_options={"FLAGS: -O2 ":1}):
         return jt.code(x.shape, "bool", [x], cpu_src=src, cuda_src=src)
+
+
+# expression -> kernel source of `_simple_for`; the predicates above use a
+# handful of expressions, and the source was rebuilt on every call.
+_SIMPLE_FOR_SOURCES = {}
 
 
 def _isnan_acl(x):

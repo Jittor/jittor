@@ -27,3 +27,15 @@ class TestLogicalNumeric(unittest.TestCase):
                 self.assertEqual(int(x.any(dim=-1).sum()), 2)
                 self.assertTrue(bool(torch.any(x)))
                 self.assertFalse(bool(torch.all(x)))
+
+
+class TestCudaIntegerTruth(unittest.TestCase):
+    @unittest.skipUnless(torch.cuda.is_available(), "requires CUDA")
+    def test_nonzero_integer_values_reduce_as_truth_values(self):
+        for dtype in (torch.int32, torch.int64):
+            with self.subTest(dtype=dtype):
+                x = torch.tensor([[2, 4, 8], [0, 2, 4]], dtype=dtype, device="cuda")
+                for result in (torch.all(x, dim=1), x.all(dim=1)):
+                    self.assertEqual(result.device.type, "cuda")
+                    self.assertEqual(result.dtype, torch.bool)
+                    self.assertEqual(result.cpu().tolist(), [True, False])
