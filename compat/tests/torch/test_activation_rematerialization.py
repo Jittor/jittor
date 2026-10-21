@@ -271,3 +271,73 @@ def test_ignored_provider_error_is_reported_when_backward_reads_it():
     }, timeout=240)
     assert child.returncode == 0, child.stdout[-2000:] + child.stderr[-2000:]
     assert "DEFERRED_ERROR_OK" in child.stdout
+
+
+@pytest.mark.parametrize("trigger", ["weak_sync", "auto_flush"])
+def test_failed_provider_is_not_retried_as_an_implicit_bystander(trigger):
+    import textwrap
+    from _helpers.child_process import run_python_child
+
+    # Keep the failed tensors alive in the child: dropping them would hide
+    # the recovery bug, while sharing their state would poison later tests.
+    script = textwrap.dedent(r'''
+        import jittor as jt
+        import numpy as np
+        import torch
+        from jittor._runtime.fallback import forbid_backend_fallbacks
+        jt.flags.use_cuda = 1
+        jt.flags.auto_flush_ops = 0
+        jt.flags.auto_graph_replay = 0
+        def snapshot(value):
+            return value.detach().cpu().numpy().copy()
+        def expect_failure(operation):
+            try:
+                operation()
+            except RuntimeError as error:
+                assert 'JT_FAILED_IMPLICIT_ROOT' in str(error), str(error)
+            else:
+                raise AssertionError('an explicitly requested failure was hidden')
+        with forbid_backend_fallbacks():
+            before = jt.core.backend_fallback_count()
+            good = torch.tensor([7., 9.], device='cuda')
+            np.testing.assert_array_equal(snapshot(good), [7., 9.])
+            bad = jt.code((1,), 'float32', [], cuda_src=r"""
+                fprintf(stderr, "JT_IMPLICIT_FAILED_PROVIDER_RUN\n");
+                fflush(stderr);
+                USER_CHECK(false) << "JT_FAILED_IMPLICIT_ROOT";
+            """)
+            expect_failure(lambda: bad.sync(True, False))
+            good.sync(True, False)
+            if '__TRIGGER__' == 'auto_flush':
+                with jt.flag_scope(auto_flush_ops=1, auto_flush_bytes=0):
+                    work = jt.array([4., 5.])
+                expected = [4., 5.]
+            else:
+                work = good * 3
+                expected = [21., 27.]
+            np.testing.assert_array_equal(snapshot(work), expected)
+            np.testing.assert_array_equal(snapshot(good * 2), [14., 18.])
+            assert not bad.is_finished
+            # Neither explicit retries, real dependencies nor sync_all may
+            # suppress the failed provider in order to make recovery pass.
+            expect_failure(lambda: bad.sync(True, False))
+            dependent = bad + 1
+            expect_failure(lambda: dependent.sync(True, False))
+            expect_failure(lambda: jt.sync_all(True))
+            assert not bad.is_finished
+            assert jt.core.backend_fallback_count() == before
+            peak = jt.core.device_pool_stats(0)[2]
+            assert peak > 0
+            print('IMPLICIT_ERROR_ISOLATION_OK',
+                  'native_allocated_peak_bytes=' + str(peak), 'fallback=0', flush=True)
+    ''').replace('__TRIGGER__', trigger)
+    child = run_python_child(["-c", script], env={
+        "JITTOR_TORCH_SHIM": "1",
+        "JITTOR_HOME": os.environ["JITTOR_HOME"],
+        "JITTOR_TORCH_PROJECT_ROOT": os.environ["JITTOR_TORCH_PROJECT_ROOT"],
+    }, timeout=240)
+    assert child.returncode == 0, child.stdout[-2000:] + child.stderr[-2000:]
+    assert 'IMPLICIT_ERROR_ISOLATION_OK' in child.stdout
+    assert child.stderr.splitlines().count('JT_IMPLICIT_FAILED_PROVIDER_RUN') == 4
+    print(trigger, next(line for line in child.stdout.splitlines()
+                        if line.startswith('IMPLICIT_ERROR_ISOLATION_OK')))

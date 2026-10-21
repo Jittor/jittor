@@ -124,6 +124,9 @@ void Executor::auto_flush() {
     for (auto holder : runtime_holder_state().holders()) {
         auto var = holder->var;
         if (var->_outputs.size() || var->is_finished()) continue;
+        // Recovery work must not implicitly retry a failed, unrelated graph.
+        // Explicit roots and their data dependencies still run normally.
+        if (var->flag(VarFlags::_execution_failed)) continue;
         // The third place a kept graph must not be picked up as a
         // bystander (see `top_weak_sync` and `sync_all`), and the easiest
         // to miss: this fires in the middle of the NEXT call's
@@ -280,6 +283,8 @@ static void top_weak_sync(vector<Var*>& vars) {
         if (epoch.marked(v)) continue;
         if (v->_outputs.size()) continue;
         if (v->is_finished()) continue;
+        // A failed root belongs to its explicit caller, not this batch.
+        if (v->flag(VarFlags::_execution_failed)) continue;
         // A kept graph is run on purpose, by whoever kept it, and never as a
         // bystander of somebody else's sync. Widening a batch with one costs a
         // full re-execution of a graph nobody asked for -- traced on a
