@@ -85,8 +85,8 @@ includes tokenizer, forward, cache, generation, state compatibility, and encoder
 Jittor-to-PyTorch round-trip; the GPT-NeoX top-p cutoff tie remains an explicit numerical
 boundary. See the [current refactor 17-model L4 report](../../refactor-wip/results/transformers/2026-09-11-transformers-refactor-17-model-l4-cuda.md), the [historical strict L4 report](../../refactor-wip/results/transformers/2026-09-06-transformers-text-core-l4-cuda.md), and the [earlier matrix](../../refactor-wip/results/transformers/2026-09-03-transformers-text-core-matrix-cuda.md).
 The same worktree retains the FSDP2 metadata-lifetime fix and the bounded six-A800 BF16 Llama 3.1 70B short-SFT evidence. The current 17-model report is FP32 correctness evidence, not a claim of L5 performance, low precision, long-context training, or broad downstream coverage. See the [FSDP2 memory-lifetime report](../../refactor-wip/results/transformers/2026-09-07-fsdp2-memory-lifetime-fix-cuda.md), [representative Llama 70B SFT report](../../refactor-wip/results/transformers/2026-09-07-transformers-llama31-70b-sft-cuda.md), and [formal No Robots resource report](../../refactor-wip/results/transformers/2026-09-07-transformers-llama31-no-robots-sft-cuda.md).
-Current Ascend/Qwen3, CPU, CUDA, and optional ecosystem conclusions are maintained in their dated
-reports under `refactor-wip/results/`; they are not duplicated in this index.
+Current Ascend: [session handoff](../../refactor-wip/results/2026-10-21-ascend-session-handoff.md); [ASC task status](../../refactor-wip/architecture/refactor-board.md).
+Other CPU/CUDA/optional conclusions remain in their dated reports under `refactor-wip/results/`.
 The current fail-closed optional CUDA base gate passes 16 TorchMetrics,
 MMCV/MMEngine, PEFT, TensorDict, and FlashAttention-adapter tests from one
 retained cache; TorchMetrics is split by domain so cold compilation does not
