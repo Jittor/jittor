@@ -1588,7 +1588,15 @@ ItemData VarHolder::item() {
         // A blocking backend host copy waits for its producer stream.
         sync(false, false);
         var->set_flag(VarFlags::_execution_failed, 0);
-        if (save_mem || _HAS_ACCELERATOR)
+        // An element that shares its storage is read where it lies, below.
+        // Moving it to the host moves its whole storage group -- for a view
+        // `x[0:1]`, all of `x` -- and the next kernel to read `x` moved it
+        // back, with a blocking copy either way: 18.9 us an `x[0:1].item()`
+        // against 7.7 on 1.3, whose managed memory made the move a no-op.
+        // A var of its own still moves: that is the element alone, and every
+        // later read of it is then a host copy rather than a readback.
+        bool in_place = var->share_next && var->mem_ptr && var->allocator->is_cuda();
+        if (save_mem || (_HAS_ACCELERATOR && !in_place))
             migrate_to_cpu(var, runtime_executor().allocator);
     }
     #ifdef HAS_ACCELERATOR

@@ -226,11 +226,13 @@ def getitem(x, slices):
     if is_registered is not None and not is_registered("tensor.getitem"):
         # A basic index of a plain Var is answered natively in one call --
         # the getitem op and the view record `_fast_getitem` would make --
-        # and declines (NotImplemented) for anything else, including a
-        # subclass, which may own `getitem` itself.
+        # and so, while `Var.getitem` is still `var_getitem`, are the index
+        # Var forms `_fast_getitem` passes through (a bool mask as its
+        # `where()` coordinates). It declines (NotImplemented) for anything
+        # else, including a subclass, which may own `getitem` itself.
         native = getattr(try_dispatch, "_native_basic_getitem", None)
         if native is not None and x.__class__ is Var:
-            out = native(x, slices)
+            out = native(x, slices, Var.getitem is var_getitem)
             if out is not NotImplemented:
                 return out
         out = _fast_getitem(x, slices)
@@ -281,6 +283,21 @@ def _getitem_result(x, slices):
 
 def setitem(x, slices, value):
     """Apply Jittor assignment with the established mask and complex rules."""
+    # The common assignments -- a plain Var, an index of ints, slices and
+    # index Vars or a bool mask, a Var or Python number value -- are built
+    # natively, op for op what the rest of this function and `var_setitem`
+    # build; it declines (NotImplemented) for everything else. Only with
+    # nothing registered for `tensor.setitem`, `Var.setitem` still
+    # `var_setitem`, and the native `dispatch_context` answering the ACL
+    # question below.
+    is_registered = getattr(try_dispatch, "_is_registered", None)
+    if is_registered is not None and not is_registered("tensor.setitem"):
+        native = getattr(try_dispatch, "_native_setitem", None)
+        if (native is not None and x.__class__ is Var and Var.setitem is var_setitem
+                and getattr(dispatch_context, "_backend_of", None) is not None):
+            out = native(x, slices, value)
+            if out is not NotImplemented:
+                return out
     jt = _jt if _jt is not None else _jittor()
 
     if _jittor_dtype_name(x.dtype) == "complex64" and isinstance(value, (complex, np.complexfloating)):

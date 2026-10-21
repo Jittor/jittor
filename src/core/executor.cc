@@ -7,6 +7,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#include <mutex>
 #include <algorithm>
 #include <functional>
 #include <queue>
@@ -404,7 +405,8 @@ static void resolve_dynamic_inputs(Executor& executor, const vector<Var*>& roots
 // to the end, as does anything no segment names.
 static void schedule_hold_release(ExecPlan& plan) {
     const int n = plan.queue.size();
-    vector<int> last_use(plan.all_vars.size(), -1);
+    vector<int>& last_use = plan.scratch.last_use;
+    last_use.assign(plan.all_vars.size(), -1);
     // A var's batch index is its position in `all_vars`; one that is not of
     // this batch, or among the vars the caller asked for, is not scheduled.
     auto index_of = [&](Var* v) {
@@ -428,19 +430,79 @@ static void schedule_hold_release(ExecPlan& plan) {
         int rr = plan.range[n - rid - 1];
         for (int k = ll; k < rr; k++) touch(plan.fuse_ops[k], rid);
     }
-    plan.release_after.assign(n, {});
+    // `ExecPlan::clear` emptied each segment's list and kept its storage.
+    plan.release_after.resize(n);
     for (int i = 0; i < (int)last_use.size(); i++)
         if (last_use[i] >= 0) plan.release_after[last_use[i]].push_back(i);
 }
 
 // Everything a batch is, kept together so that its execution can be handed
 // to the worker thread (runtime/async_exec.h) as one object.
+//
+// Recycled rather than freed (see `acquire_batch_state`): a plan is some
+// twenty vectors and its scratch twenty more, and a batch that reuses a
+// finished one's plans without allocating any of them. The fusion is not
+// recycled -- it is an op, built afresh for every batch as it always was.
 struct BatchState {
     ExecPlan plan;
     vector<VarPtr> batch_hold;
-    FusedOp fused_op;
+    unique_ptr<FusedOp> fused_op;
     vector<Var*> vars;
 };
+
+namespace {
+// Finished batches whose storage the next ones reuse. Returned from whichever
+// thread drops the last reference -- the worker, for a batch that ran there.
+// A batch past `pooled_ops_limit` operators goes back to the heap instead: a
+// backward pass would otherwise leave its megabytes of plan behind for the
+// rest of the process.
+struct BatchStatePool {
+    static constexpr size_t capacity = 4;
+    static constexpr size_t pooled_ops_limit = 16384;
+    std::mutex mutex;
+    vector<BatchState*> free;
+};
+
+BatchStatePool& batch_state_pool() {
+    // Never destroyed: a batch may still be finishing on the worker while the
+    // process exits.
+    static auto* pool = new BatchStatePool();
+    return *pool;
+}
+
+void recycle_batch_state(BatchState* state) {
+    state->fused_op.reset();
+    state->vars.clear();
+    state->batch_hold.clear();
+    bool keep = state->plan.ops.capacity() <= BatchStatePool::pooled_ops_limit
+        && state->plan.all_vars.capacity() <= 2 * BatchStatePool::pooled_ops_limit;
+    if (keep) {
+        state->plan.clear();
+        auto& pool = batch_state_pool();
+        std::lock_guard<std::mutex> lock(pool.mutex);
+        if (pool.free.size() < BatchStatePool::capacity) {
+            pool.free.push_back(state);
+            return;
+        }
+    }
+    delete state;
+}
+
+shared_ptr<BatchState> acquire_batch_state() {
+    BatchState* state = nullptr;
+    {
+        auto& pool = batch_state_pool();
+        std::lock_guard<std::mutex> lock(pool.mutex);
+        if (!pool.free.empty()) {
+            state = pool.free.back();
+            pool.free.pop_back();
+        }
+    }
+    if (!state) state = new BatchState();
+    state->fused_op.reset(new FusedOp());
+    return shared_ptr<BatchState>(state, recycle_batch_state);
+}
+} // namespace
 
 // Whether a planned batch may run on the worker: an auto-flushed batch of a
 // graph the worker is allowed to take (`worker_admits_grad`), every operator
@@ -505,7 +567,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync, boo
     entry_device = current_device();
     #endif
     // == phases 2-5: graph -> execution plan ==
-    auto state = std::make_shared<BatchState>();
+    auto state = acquire_batch_state();
     ExecPlan& plan = state->plan;
     build_exec_plan(vars, weak_sync, plan);
     trace_batch.mark(stb_planned);
@@ -543,7 +605,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync, boo
     // The fusion verdict goes to FusedOp as the vector it already is, instead
     // of being written into bit 0 of every var's custom_data for update_ops()
     // to read back out of the field it packs its own indices into.
-    FusedOp& fused_op = state->fused_op;
+    FusedOp& fused_op = *state->fused_op;
     fused_op.batch_var_fused = &plan.var_fused;
     fused_op.batch_stamp_wanted = plan.stamp;
     // The batch's own record of the edges it was collected from; see
@@ -571,7 +633,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync, boo
             if (entry_device >= 0 && entry_device != current_device())
                 set_current_device(entry_device);
             #endif
-            run_exec_plan(runtime_executor(), state->plan, state->fused_op, state->vars,
+            run_exec_plan(runtime_executor(), state->plan, *state->fused_op, state->vars,
                           false, entry_device);
             state.reset();
         });
