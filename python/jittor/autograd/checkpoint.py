@@ -8,12 +8,13 @@ Higher-order differentiation and non-reentrant early-stop replay are unsupported
 
 from contextlib import nullcontext
 
-import jittor as jt
 from jittor._core.function import Function
 from ._checkpoint_capture import Capture, flatten, unflatten, structure
 
 
 def _rng_snapshot():
+    import jittor as jt
+
     jt.sync_all(True)
     cpu = jt.core.rng_state("cpu")
     if jt.flags.use_cuda and jt.compiler.has_acl:
@@ -28,6 +29,8 @@ def _rng_snapshot():
 
 
 def _rng_restore(state):
+    import jittor as jt
+
     jt.sync_all(True)
     cpu, backend, device, payload = state
     jt.core.set_rng_state("cpu", cpu)
@@ -40,6 +43,8 @@ def _rng_restore(state):
 
 class _Rematerialize(Function):
     def execute(self, *values):
+        import jittor as jt
+
         args, kwargs = unflatten(self.capture.spec, values)
         # This is a training forward, despite no_grad. Automatic inference
         # replay would retain a second graph and can replay mutable buffers.
@@ -61,6 +66,8 @@ class _Rematerialize(Function):
         return tuple(boundary)
 
     def grad(self, *grad_outputs):
+        import jittor as jt
+
         if ([(value.id, value._autograd_version()) for value in self.capture.values]
                 != self.input_versions):
             raise RuntimeError("checkpoint input or captured parameter was modified before backward")
@@ -120,6 +127,8 @@ def checkpoint(function, *args, preserve_rng_state=True, context_fn=None, **kwar
     per unique tensor. ``context_fn`` optionally creates a fresh context manager
     for each backward replay (e.g. a frontend's autocast context).
     """
+    import jittor as jt
+
     if jt.flags.no_grad:
         return function(*args, **kwargs)
     capture = Capture(function, args, kwargs)

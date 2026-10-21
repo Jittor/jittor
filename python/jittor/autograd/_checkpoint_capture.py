@@ -5,12 +5,12 @@ import functools
 import types
 from contextlib import contextmanager
 
-import jittor as jt
+from jittor_core import Var
 from jittor._core.module import Module, _walk
 
 
 def flatten(value, tensors, memo):
-    if isinstance(value, jt.Var):
+    if isinstance(value, Var):
         key = value.id
         if key not in memo:
             memo[key] = len(tensors)
@@ -54,7 +54,7 @@ def structure(spec):
 def _contains_tensor(value, replacements, seen):
     # Keep recursion at module scope: a local recursive function closes over
     # itself and replacements, retaining replay tensors until cyclic GC.
-    if isinstance(value, jt.Var):
+    if isinstance(value, Var):
         return value.id in replacements
     if id(value) in seen:
         return False
@@ -85,7 +85,7 @@ class Capture:
         if id(value) in self._seen:
             return
         self._seen.add(id(value))
-        if isinstance(value, jt.Var):
+        if isinstance(value, Var):
             self._add(value)
         elif isinstance(value, Module):
             for _, owner in _walk(value):
@@ -113,7 +113,7 @@ class Capture:
                 self._visit(cell.cell_contents)
             for name in value.__code__.co_names:
                 candidate = value.__globals__.get(name)
-                if isinstance(candidate, (jt.Var, Module, tuple, list, dict)):
+                if isinstance(candidate, (Var, Module, tuple, list, dict)):
                     self._visit(candidate)
         elif isinstance(value, dict):
             for item in value.values():
@@ -123,6 +123,8 @@ class Capture:
                 self._visit(item)
 
     def prepare_buffers(self):
+        import jittor as jt
+
         # A materialized arithmetic copy owns storage even on native clone's
         # sharing path. The replay copy must not alias a mutable live buffer.
         self.buffers = {}
@@ -134,7 +136,7 @@ class Capture:
                     self.buffers[value.id] = copy
 
     def _rebind(self, value, replacements, memo):
-        if isinstance(value, jt.Var):
+        if isinstance(value, Var):
             return replacements.get(value.id, value)
         if id(value) in memo:
             return memo[id(value)]
@@ -153,7 +155,7 @@ class Capture:
             namespace = value.__globals__
             changed = {name: self._rebind(namespace[name], replacements, memo)
                        for name in value.__code__.co_names
-                       if name in namespace and isinstance(namespace[name], (jt.Var, tuple, list, dict))}
+                       if name in namespace and isinstance(namespace[name], (Var, tuple, list, dict))}
             if changed:
                 namespace = dict(namespace, **changed)
             def cell(item):
@@ -177,6 +179,8 @@ class Capture:
 
     @contextmanager
     def replay(self, values):
+        import jittor as jt
+
         replacements = {old.id: new for old, new in zip(self.values, values)}
         saved = []
         try:
