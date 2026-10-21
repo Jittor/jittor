@@ -99,10 +99,13 @@ struct DataView {
 
 /** The base object for the numpy array `Var.data` returns.
  *
- * It holds two claims, for two different reasons:
+ * It holds three claims, for different reasons:
  *
- *  - an extra liveness on the Var that was current when `.data` was taken, so
- *    the allocation the view points at cannot be freed.  The base used to be
+ *  - an allocator reference to the exact exported allocation. A later device
+ *    consumer can migrate the Var and replace its storage while the ndarray
+ *    still points at the old host block; Var liveness alone cannot pin it.
+ *  - extra liveness on the Var that was current when `.data` was taken, even
+ *    after the holder is rebound. The base used to be
  *    the VarHolder's PyObject, which pins the python wrapper but not the
  *    memory: `assign` keeps the wrapper and swaps a *different* Var into it,
  *    releasing the old one.  `a = v.data; v.assign(other); a[0]` then read
