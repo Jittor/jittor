@@ -389,3 +389,35 @@ R6遵守原11:45新阶段截止，未再启动独立prefix或Native，原stop记
 最终证据`real-model/qwen3-06b-training-npu-r7/closeout.json` SHA256 `69c34f256d848389f2e751bd3275c2cad072b399355fa2e06bcbc2cbabd9b7b3`，strict0比较SHA256 `f3b42f3423ac1c5a5caaa8264d172d32f9d8463d3f420b9a1922f04446b22234`。这是dropout0/顺序fixture的Jittor自身真实恢复结论；未运行原生PyTorch同模型BF16完整训练交叉，不声称双runtime full/prefix/resume六进程协议完成，也不声称随机dropout/通用确定性恢复。
 
 最后只读核验最终123文件与manifest全部相同，完整structure1430P2S/layoutP已结束；本任务进程扫描无存活工作进程，原生大模型对拍/最终双卡/NPU配对性能保留未完成项。私有安装和共享资产保持原范围，未杀外部进程或清理他人文件；交付索引和原始日志在仓外lab。本地中文提交只包含明确123源码/工具/测试/技能路径与3份报告文档，不push。
+
+## 2026-10-22 910B3 生态续验：真实模型交叉、输入梯度定位与 FSDP2 资源阻塞
+
+### Qwen3-0.6B BF16 LoRA 原生交叉对拍证据补齐
+
+LAB 中已有的 R37 cohort 完成了同一真实 Qwen3-0.6B BF16 LoRA 在 Native torch_npu 与 Jittor shim 两侧的 full、prefix、fresh-process resume 交叉验证。该结果绑定 2500 文件冻结源清单 `real-model/qwen3-06b-training-npu-cat-fix-r37/source-manifest-r1.json`，SHA256 `aa56c083de1404dcfc744b31edc3dcb973f574d3dcb0d048c691d8ffa400d383`；不是当前 MAIN 的隐式新验证。4 次 optimizer update、两边各自的 2+2 fresh-process 恢复均有终态，所有实际训练阶段都有 NPU witness；Jittor fallback_count=0。交叉比较共 2187 项，失败 0、超预算元素 0，其中精确比较 1360 项、forward 138 项、gradient 684 项、采样 RNG 标识 5 项。Forward 沿用 atol=0.005/rtol=0.03，gradient 沿用 atol=0.01/rtol=0.05，没有改预算。证据见 `real-model/qwen3-06b-training-npu-cat-fix-r37/cross-validation-summary.json` 和 R37 cohort 内两种 runtime 的原始阶段报告。
+
+这补上了同冻结源上的 Native 全流程对拍证据，但不把它外推为当前 MAIN-r28 源码的 Native 重跑，也不覆盖随机 dropout、通用确定性恢复或性能结论。MAIN-r28 已有的 Jittor 真实 LoRA 4-update 训练、保存和新进程恢复仍是独立证据，见本报告 11:54 记录。
+
+### 修复 HCCL 验证器的过时 facade 假设
+
+主树 `agent/skills/jittor-distributed-verification/scripts/verify_hccl_stack.py` 曾断言 shim 运行时 `torch_npu` 不得存在；实际兼容层会发布带 `__jittor_acl_facade__` 标记的 facade，因此 R5 的 Jittor FSDP2 在进入模型前被错误拦截。本轮将断言改为核对 facade 标记、provider `jittor.backends.acl` 和精确入口 `compat/torch/installers/npu.py`。独立 R10 smoke 使用实际 NPU 5、实际 ACL dispatch 和零回落，核验该 facade 与 Jittor 安装上下文，没有加载 Native oracle；结果在 `distributed/main-tree-fsdp2-cat-fix-r10-facade/facade-probe/`。该结果验证了守卫条件本身，不等同于完整双卡训练。
+
+### MAIN FSDP2 进度与资源记录
+
+R5 的 serial single-device Jittor/HCCL 预热（rank roles 0/1 顺序运行、物理卡 5，明确 not_two_rank_proof）、FP32/BF16 本地 collective 检查与 DTensor 设备工厂均通过；Native torch FSDP2 full 在物理卡 5/6 实际完成 8 updates，rank 报告为 PASS。Jittor 的 R5 首次尝试在模型前撞上上述过时 facade 断言，完整失败输出仍保存在 `distributed/main-tree-fsdp2-cat-fix-r5/jittor-full-logs/`。R10 修正后的 facade smoke 已过，但没有把它冒充为 FSDP2 全流程通过。
+
+R6 在卡 5/6 初始空闲后启动 Native full；运行 17.5 秒左右发现外部 PID 940643 进入卡 6，driver 只终止本 cohort 的进程组并以资源中止结束，未形成模型报告。R7 在启动 worker 前检查到卡 6 外部 PID 948533，未启动计算。新建的 R8 在 2026-10-22 的 fresh 快照中卡 5/6 均空，但首次 runtime admission 又观察到外部 PID 1125153 占卡 6；driver 在创建首个 runtime launcher 前退出，`compute_workers=0`。R8 快照及 admission 记录位于 `distributed/main-tree-fsdp2-cat-fix-r8/npu-smi-before-attempt.txt`、`npu-smi-before-torch-full.txt`、`npu-smi-after-block.txt` 和 `admission-blocked.txt`。R8 的预热材料与 Jittor 专用缓存从 R5 复制，Native oracle 缓存没有复用；因 admission 失败，R8 不作为验证 cohort 重跑。MAIN-r28 双卡 Jittor FSDP2 和恢复交叉仍待下一次全新、连续可用的双卡窗口。
+
+### FP32 输入梯度差异的分支诊断
+
+R6 输入梯度分支探针在 NPU 5、生产 shim、fallback_count=0 下记录了 74 个数组。72 个数组完全一致；只有 LoRA 两步的 `total_input_gradient` 不同，共 2784 个元素中的 77 个不同值，最大绝对差为 `2.74658203125e-4`。输出、分支梯度、各自的输入梯度贡献、参数梯度和参数更新数组都完全一致。逐项算术验证显示，在这个 fixture 中 Native 结果等于“先以 FP32 合并两支贡献，再舍入到 BF16”，而 Jittor 结果等于“两支各自先舍入到 BF16，再相加”。完整诊断见 `device-api/input-grad-branches-r6/comparison.json` 及两边的 `arrays.npz`。
+
+这是对既有 MAIN-r28 严格 FP32 输入 LoRA probe 失败位置的窄化解释，不是修复，也没有调整数值预算。本轮未改通用 autograd 累积逻辑：现有证据只覆盖该小型分支 fixture，尚未证明一个全局改动在其它 dtype、视图和多分支训练中的安全性。FP32 / 部分混合精度输入梯度差异仍开放，修复后需要原严格矩阵和真实模型梯度重跑。
+
+本轮未得到合格的主树双卡 Jittor FSDP2 完整训练、恢复交叉或 NPU 性能结果；共享卡资源变化期间未接触外部进程、驱动或公共环境。
+
+### FSDP2 后续 admission 复核（R11–R14）
+
+为避免覆盖 R8 失败结果，R9、R11、R12、R13、R14 均使用独立 LAB cohort 目录。R9 fresh 检查时卡 6 有外部 PID 1135400。R11/R12 的临时 shell admission 使用了错误的 GNU grep 扩展正则：R11 原始快照实际有卡 6 PID 1143642；R12 原始快照中的卡 3/5 当时为空，但 shell 仍误报阻断；两次均未运行 Python driver 或创建 worker。审计写入 `distributed/main-tree-fsdp2-cat-fix-r11-r12-guard-audit.txt`。从 R13 开始移除该外层 grep，直接让已审阅 driver 解析 fresh `npu-smi`，并保留其逐阶段检查及运行中外部进程守卫。
+
+R13 在首个 runtime launcher 建立前由 driver 捕获物理卡 3 外部 PID 1151694；R14 捕获物理卡 6 外部 PID 1157188；两者都在模型计算前退出，worker 数为 0，完整 admission 及退出后快照分别保存在各自 `distributed/main-tree-fsdp2-cat-fix-r13/` 与 `r14/`。截至 R14 后的快照，卡 3/6 仍有外部进程、卡 5 空闲。没有对这些 PID 发送信号或读取其环境。

@@ -107,7 +107,12 @@ def prepare_runtime(runtime):
         import jittor as jt
         from jittor._runtime.fallback import forbid_backend_fallbacks
         assert hasattr(torch, "_torch_compat_install_context"), torch
-        assert "torch_npu" not in sys.modules, "Jittor used native torch_npu"
+        torch_npu = sys.modules.get("torch_npu")
+        assert torch_npu is not None, "Jittor shim did not publish its torch_npu facade"
+        assert getattr(torch_npu, "__jittor_acl_facade__", False), "Jittor loaded native torch_npu"
+        assert getattr(torch_npu, "__jittor_provider__", None) == "jittor.backends.acl"
+        facade_path = Path(__file__).resolve().parents[4] / "compat/torch/installers/npu.py"
+        assert Path(torch_npu.__file__).resolve() == facade_path
         assert Path(jt.__file__).resolve().parent == Path(__file__).resolve().parents[4] / "python/jittor"
         assert int(jt.world_size) == 2 and jt.compile_extern.hccl_ops is not None
         jt.flags.use_acl = 1

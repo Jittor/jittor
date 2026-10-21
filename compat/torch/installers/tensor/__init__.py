@@ -764,7 +764,16 @@ def _bind_fast_cat():
 
 
 def cat(tensors, dim=0, out=None, axis=None):
-    if out is None and axis is None and type(dim) is int:
+    from ...amp import autocast_any_enabled
+    amp_active = autocast_any_enabled()
+
+    def _concat_native(values, axis):
+        if amp_active:
+            with jt.flag_scope(amp_reg=0):
+                return _jt_concat(values, axis)
+        return _jt_concat(values, axis)
+
+    if not amp_active and out is None and axis is None and type(dim) is int:
         fast = (_FAST_CAT or _bind_fast_cat())(tensors, dim)
         if fast is not NotImplemented:
             return fast
@@ -789,7 +798,7 @@ def cat(tensors, dim=0, out=None, axis=None):
                             or t.numel() <= 0 or _var_dtype_name(t) != name0):
                         uniform = False
                         break
-            if uniform:
+            if uniform and not amp_active:
                 return _jt_concat(list(seq), dim)
     g = compatibility_owner(jt)
     if axis is not None: dim = axis      # torch accepts axis= (mmrotate PSC head)
@@ -815,7 +824,7 @@ def cat(tensors, dim=0, out=None, axis=None):
                 )
             assert all(len(_t) == len(_seq[0]) for _t in _seq), "nested cat with dim!=0 requires same batch size"
             return _NestedTensor.from_tensors(
-                [_jt_concat([_t.unbind(0)[i] for _t in _seq], dim=dim - 1) for i in range(len(_seq[0]))],
+                [_concat_native([_t.unbind(0)[i] for _t in _seq], dim=dim - 1) for i in range(len(_seq[0]))],
                 ragged_idx=getattr(_seq[0], "_ragged_idx", _seq[0].dim() - 1),
             )
         for _t in _seq:
@@ -850,12 +859,7 @@ def cat(tensors, dim=0, out=None, axis=None):
     # the values (Qwen's float32 RoPE then contains BF16-rounded halves).
     # Torch autocast leaves cat at the promoted input precision. Suspend the
     # native register before inference and allocation, as for binary ops.
-    from ...amp import autocast_any_enabled
-    if autocast_any_enabled():
-        with jt.flag_scope(amp_reg=0):
-            out_var = _jt_concat(fixed, dim)
-    else:
-        out_var = _jt_concat(fixed, dim)
+    out_var = _concat_native(fixed, dim)
     # jittor's concat downcasts a uniform uint8 input to int8 (e.g. mask-rcnn-c4
     # builds a uint8 pos_inds mask via torch.cat of uint8 ones/zeros). torch keeps
     # the common input dtype; restore it so downstream byte-mask indexing works.

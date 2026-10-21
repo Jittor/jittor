@@ -9,6 +9,7 @@ import jittor as jt
 
 from _helpers import capability
 from jittor.compat.torch.installers.nn import module_methods
+from jittor.compat.torch.installers.tensor import method_api
 
 
 DEVICES = ["cpu"] + (["cuda"] if capability.check_accelerator("cuda", backend=jt).enabled else [])
@@ -30,6 +31,116 @@ class MixedRMSNorm(torch.nn.Module):
 
 def array(value):
     return value.detach().float().cpu().numpy().copy()
+
+
+@pytest.mark.parametrize("device", ["cpu", pytest.param("npu", marks=pytest.mark.npu)])
+def test_autocast_fast_binary_preserves_fp32_pointwise_values_and_gradients(device):
+    if device == "npu":
+        capability.require_accelerator("acl")
+    settings = {"use_cuda": int(device == "npu"), "backend_fallback": "error"}
+    if getattr(jt.compiler, "has_acl", 0):
+        settings["use_acl"] = int(device == "npu")
+
+    from jittor._runtime.fallback import forbid_backend_fallbacks
+    with jt.runtime.scope(**settings), forbid_backend_fallbacks(), jt.flag_scope(amp_reg=0):
+        left_values = np.linspace(-1.234567, 2.345678, 2 * 3 * 4 * 8,
+                                  dtype=np.float32).reshape(2, 3, 4, 8)
+        right_values = np.linspace(0.314159, 1.414213, 4 * 8,
+                                   dtype=np.float32).reshape(1, 4, 8)
+        numpy_expected = left_values * right_values + left_values / right_values
+        numpy_left_grad = np.broadcast_to(
+            right_values + 1.0 / right_values, left_values.shape)
+        numpy_right_grad = np.sum(
+            left_values - left_values / (right_values * right_values),
+            axis=(0, 1), keepdims=False)[None, ...]
+        reference_left = torch.tensor(left_values, dtype=torch.float32, device=device,
+                                      requires_grad=True)
+        reference_right = torch.tensor(right_values, dtype=torch.float32, device=device,
+                                       requires_grad=True)
+        expected = reference_left * reference_right + reference_left / reference_right
+        expected_grads = torch.autograd.grad(expected.sum(), (reference_left, reference_right))
+
+        observed_left = torch.tensor(left_values, dtype=torch.float32, device=device,
+                                     requires_grad=True)
+        observed_right = torch.tensor(right_values, dtype=torch.float32, device=device,
+                                      requires_grad=True)
+        fast_calls = []
+        native_fast = method_api._FAST_BINARY
+
+        def record_fast(left, right, code):
+            fast_calls.append(code)
+            return native_fast(left, right, code)
+
+        with patch.object(method_api, "_FAST_BINARY", record_fast):
+            with torch.autocast(device, dtype=torch.bfloat16):
+                observed = observed_left * observed_right + observed_left / observed_right
+            observed_grads = torch.autograd.grad(
+                observed.sum(), (observed_left, observed_right))
+
+        expected_context = ("acl", 0) if device == "npu" else ("cpu", -1)
+        jt.core.sync_all()
+        for tensor in (expected, *expected_grads, observed, *observed_grads):
+            assert tuple(jt.core.dispatch_context([tensor])) == expected_context
+        assert 4 in fast_calls and 6 in fast_calls
+        assert observed.dtype == expected.dtype == torch.float32
+        np.testing.assert_array_equal(array(observed), array(expected))
+        for actual, reference in zip(observed_grads, expected_grads):
+            assert actual.dtype == reference.dtype == torch.float32
+            np.testing.assert_array_equal(array(actual), array(reference))
+        np.testing.assert_allclose(array(observed), numpy_expected,
+                                   rtol=1e-6, atol=1e-7)
+        np.testing.assert_allclose(array(observed_grads[0]), numpy_left_grad,
+                                   rtol=1e-5, atol=1e-6)
+        np.testing.assert_allclose(array(observed_grads[1]), numpy_right_grad,
+                                   rtol=1e-5, atol=1e-6)
+
+
+@pytest.mark.parametrize("device", ["cpu", pytest.param("npu", marks=pytest.mark.npu)])
+def test_autocast_cat_preserves_fp32_rope_values_and_gradients(device):
+    if device == "npu":
+        capability.require_accelerator("acl")
+    settings = {"use_cuda": int(device == "npu"), "backend_fallback": "error"}
+    if getattr(jt.compiler, "has_acl", 0):
+        settings["use_acl"] = int(device == "npu")
+
+    from jittor._runtime.fallback import forbid_backend_fallbacks
+    with jt.runtime.scope(**settings), forbid_backend_fallbacks():
+        shape = (2, 16, 25, 128)
+        source = np.linspace(-1.234567, 2.345678, np.prod(shape),
+                             dtype=np.float32).reshape(shape)
+        coefficient = np.linspace(0.271828, 1.618034, np.prod(shape),
+                                  dtype=np.float32).reshape(shape)
+        half = shape[-1] // 2
+        numpy_expected = np.concatenate((-source[..., half:], source[..., :half]), axis=-1)
+        numpy_gradient = np.concatenate(
+            (coefficient[..., half:], -coefficient[..., :half]), axis=-1)
+
+        reference_input = torch.tensor(source, dtype=torch.float32, device=device,
+                                       requires_grad=True)
+        with jt.flag_scope(amp_reg=0):
+            reference = torch.cat(
+                (-reference_input[..., half:], reference_input[..., :half]), dim=-1)
+
+        observed_input = torch.tensor(source, dtype=torch.float32, device=device,
+                                      requires_grad=True)
+        with torch.autocast(device, dtype=torch.bfloat16):
+            observed = torch.cat(
+                (-observed_input[..., half:], observed_input[..., :half]), dim=-1)
+        coefficient_tensor = torch.tensor(coefficient, dtype=torch.float32, device=device)
+        expected_grad, = torch.autograd.grad((reference * coefficient_tensor).sum(),
+                                             (reference_input,))
+        observed_grad, = torch.autograd.grad((observed * coefficient_tensor).sum(),
+                                             (observed_input,))
+
+        expected_context = ("acl", 0) if device == "npu" else ("cpu", -1)
+        jt.core.sync_all()
+        for tensor in (reference, expected_grad, observed, observed_grad):
+            assert tuple(jt.core.dispatch_context([tensor])) == expected_context
+        assert observed.dtype == reference.dtype == torch.float32
+        np.testing.assert_array_equal(array(observed), numpy_expected)
+        np.testing.assert_array_equal(array(reference), numpy_expected)
+        np.testing.assert_array_equal(array(observed_grad), numpy_gradient)
+        np.testing.assert_array_equal(array(expected_grad), numpy_gradient)
 
 
 @pytest.mark.parametrize("input_dtype", [torch.float16, torch.bfloat16])

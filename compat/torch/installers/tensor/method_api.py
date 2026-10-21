@@ -1581,6 +1581,18 @@ _FAST_BINARY_OPERATORS = ('__add__', '__radd__', '__sub__', '__rsub__',
                           '__mul__', '__rmul__', '__truediv__', '__rtruediv__')
 
 
+def _call_fast_binary(fast, left, right, code):
+    from ...amp import autocast_any_enabled
+    if autocast_any_enabled():
+        # Torch autocast keeps pointwise operators in their input dtype. The
+        # native fast path creates its Var without passing through
+        # _binary_native, so suspend Jittor's process-wide AMP register here
+        # just as that path does for the promoting implementation.
+        with _owner.jt.flag_scope(amp_reg=0):
+            return fast(left, right, code)
+    return fast(left, right, code)
+
+
 def _tensor_add(self, other):
     if isinstance(other, _SparseCOO):
         other = other.to_dense()
@@ -1590,7 +1602,7 @@ def _tensor_add(self, other):
 def _tensor_radd(self, other):
     fast = _FAST_BINARY
     if fast is not None:
-        out = fast(self, other, 1)
+        out = _call_fast_binary(fast, self, other, 1)
         if out is not None:
             return out
     return _promoting_binary(self, other, '__radd__', True)
@@ -1599,7 +1611,7 @@ def _tensor_radd(self, other):
 def _tensor_sub(self, other):
     fast = _FAST_BINARY
     if fast is not None:
-        out = fast(self, other, 2)
+        out = _call_fast_binary(fast, self, other, 2)
         if out is not None:
             return out
     return _promoting_binary(self, other, '__sub__', False)
@@ -1608,7 +1620,7 @@ def _tensor_sub(self, other):
 def _tensor_rsub(self, other):
     fast = _FAST_BINARY
     if fast is not None:
-        out = fast(self, other, 3)
+        out = _call_fast_binary(fast, self, other, 3)
         if out is not None:
             return out
     return _promoting_binary(self, other, '__rsub__', True)
@@ -1617,7 +1629,7 @@ def _tensor_rsub(self, other):
 def _tensor_mul(self, other):
     fast = _FAST_BINARY
     if fast is not None:
-        out = fast(self, other, 4)
+        out = _call_fast_binary(fast, self, other, 4)
         if out is not None:
             return out
     return _promoting_binary(self, other, '__mul__', False)
@@ -1626,7 +1638,7 @@ def _tensor_mul(self, other):
 def _tensor_rmul(self, other):
     fast = _FAST_BINARY
     if fast is not None:
-        out = fast(self, other, 5)
+        out = _call_fast_binary(fast, self, other, 5)
         if out is not None:
             return out
     return _promoting_binary(self, other, '__rmul__', True)
@@ -1659,7 +1671,7 @@ def _tensor_rpow(self, other):
 def _tensor_truediv(self, other):
     fast = _FAST_BINARY
     if fast is not None:
-        out = fast(self, other, 6)
+        out = _call_fast_binary(fast, self, other, 6)
         if out is not None:
             return out
     return _true_division(self, other, '__truediv__')
@@ -1668,7 +1680,7 @@ def _tensor_truediv(self, other):
 def _tensor_rtruediv(self, other):
     fast = _FAST_BINARY
     if fast is not None:
-        out = fast(self, other, 7)
+        out = _call_fast_binary(fast, self, other, 7)
         if out is not None:
             return out
     return _true_division(self, other, '__rtruediv__')

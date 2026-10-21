@@ -7,8 +7,8 @@
 | ASC-01 | 独立环境、CPU/ACL 串行构建 | 最终MAIN123 structure1430P2S/layoutP；core压力超时保留 | coord | 最终123路径前后frozen exact，1432不同case与121逐node相同；97.py+1.pyi AST3.7P、configuredRuff新增0/减少12。raw core121实际46P9S1原压力测试300秒超时，未删除/改规模/放宽 |
 | ASC-02 | 双解释器小模型输出/全梯度 | CPU及真实NPU八模型完整对拍通过 | ecosystem | r10沿用规范overlay、source65复验八模型271参数+2输入全梯度；25新阶段及24份明确复用的不可变native参考共49验证阶段全部通过，零回落；见综合报告 |
 | ASC-03 | 多库训练和fresh-process恢复 | NPU Trainer完整训练/评估/保存/重载及fresh恢复通过 | ecosystem | r10真实ACL Trainer4updates/8micro/48全梯度、61跨runtime检查通过；连续与2+2恢复216完整状态/轨迹exact，跨runtime216通过；20份完整RNG结构审计通过，dropout0顺序fixture不外推随机训练恢复 |
-| ASC-04 | 共享真实模型推理和LoRA | 121源码4B/1.7B推理P；最终123真实BF16 LoRA全流程及fresh恢复P | coord | 4B/1.7B各58,343,424 logits bitexact（实际121）；123 actual AMP10P/目标84数组exact，whole168 strict F边界保留。0.6B LoRA4updates/8micro/448梯度finite，checkpoint2 fresh恢复2步后933完整状态及轨迹strict0、224梯度bitexact；Native同模型full交叉未运行 |
-| ASC-05 | HCCL/DDP/FSDP2两卡场景 | own88完整FSDP2通过；最终MAIN123双卡NOT_RUN_RESOURCE | distributed | own88六fresh worlds/12rank-phase，full8 cross及各自3+5 strict恢复P/fallback0/noMPI；MAIN CPU90实际r24/source115。最终123仅host核验，无NPUworld/0report；旧120恢复入口archived/source-bound，不授予123资格；最终索引及新增AMP owner边界已封存 |
+| ASC-04 | 共享真实模型推理和LoRA | MAIN-r28 Qwen3-0.6B BF16 LoRA训练/保存/fresh恢复P；R37同模型 Native/Jittor full+prefix+resume交叉P（独立冻结源） | coord | R37 2500文件manifest SHA aa56c083de1404dcfc744b31edc3dcb973f574d3dcb0d048c691d8ffa400d383，2187项比较、0失败/超预算；仅覆盖该冻结源，不能自动外推当前MAIN，详见综合报告 |
+| ASC-05 | HCCL/DDP/FSDP2两卡场景 | own88完整FSDP2通过；MAIN-r28 Native FSDP2 full 8updates通过；Jittor双卡仍待验证 | distributed | R5 serial单卡预热与Native两卡full通过；Jittor R5过时facade断言由R10真NPU探针确认；R6/R7/R8/R13/R14实际资源阻断，R11/12 shell误报无worker，详见报告 |
 | ASC-06 | 配对速度/峰值显存/稳定性 | 持久训练控制器CPU资格通过；NPU性能未验收 | coord | CPU735完整状态/252全梯度及736恢复state exact、20host合同P。1.7B实际18交替calls后依指令停止并清空自有进程，rc-2/acceptedfalse，generation steady/decode未完成；4Bperf未运行，不给速度/显存结论 |
 
 2026-10-21 用户要求暂停新增修改与实验启动，先推送全部工作树独立快照；Day2–3仍未通过。当前交接及新机器推荐分支见[工作区快照交接](../results/2026-10-21-workspace-snapshot-handoff.md)。已运行T5 full允许正常结束，supervisor已暂停后续stage。
