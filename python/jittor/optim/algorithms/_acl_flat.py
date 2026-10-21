@@ -10,9 +10,11 @@ one flat buffer, and each step concatenates the gradients and submits one
 fused update (KI-EXEC-016).
 
 The layout is worthwhile while the per-launch overhead dominates: ViT-B/16
-and BERT-base step ~3% faster, while the 860M-parameter SD15 UNet, whose
-optimizer is bandwidth-bound, measured slower and is left on the per-tensor
-path (``_MAX_FLAT_ELEMENTS``).
+and BERT-base step ~3% faster, and since the gradient buffer became one
+``FlatConcat`` op rather than one reshape per parameter, the 860M-parameter
+SD15 UNet is ~7 ms per step faster too (+5.4 GB steady, one more
+gradient-sized buffer). ``_MAX_FLAT_ELEMENTS`` is now only a memory guard for
+groups whose extra gradient buffer would not fit.
 
 Everything the fused op cannot represent -- a capture, a gradient scaler's
 overflow decision, a guarded learning rate, a device move, a replaced state
@@ -31,11 +33,13 @@ from ..._runtime.dispatch import dispatch_context
 
 _DTYPE_SIZE = {"float32": 4, "float16": 2, "bfloat16": 2}
 _OWNER = "_acl_flat_owner"
-# One flat gradient is built per step on top of the flat layout. Past this
-# size the optimizer is bandwidth-bound and the extra gradient copy costs
-# more than the launches it removes: SD15 UNet (860M parameters) measured
-# 3.5 ms slower, while ViT (86M) and BERT (110M) improved by 3%.
-_MAX_FLAT_ELEMENTS = 1 << 28
+# One flat gradient is built per step on top of the flat layout, so the group
+# costs one more gradient-sized device buffer: SD15 UNet (860M elements)
+# reads 23.97 GB steady against 18.5 on the per-tensor path. The gate is a
+# memory guard, not a performance cliff -- the copy is one op and SD15 is now
+# 7 ms per step faster with it, where a per-parameter reshape was 3.5 ms
+# slower.
+_MAX_FLAT_ELEMENTS = 1 << 31
 
 
 def _last_line(exc):
