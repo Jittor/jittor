@@ -429,3 +429,13 @@ R15 在 fresh admission 时卡 5/6 为空，使用与 R5 相同的 2500 文件�
 ### R16：部分 rank 启动后因外部占用中止
 
 R16 将物理卡 3/5 作为 fresh pair，Native torchrun full 启动后运行 45.34 秒；live monitor 在物理卡 3 发现外部 PID 1192793，driver 返回 125 并终止本 cohort 自己的进程组。两份 `torch/full/rank*-process-start.json` 已保留，但没有终态 `rank0.json/rank1.json`，torchrun 的 rank stdout/stderr 均为 0 字节，因此没有可接受的 Native full 结果。driver PID 1192335 与其 process group 在退出后核验为空；post-abort snapshot 显示 PID 1192793 仍在 NPU 3，未触碰。原 execution、foreign occupant 与完整快照保存在 `distributed/main-tree-fsdp2-cat-fix-r16/`。
+
+### R21–R22：串行 JIT 预热与双卡 admission
+
+R21 首次双 rank Jittor 启动时，两个 rank 同时从冷状态编译 jittor_core，约到 24/295；这不符合“首次 JIT 串行”的运行约束。我核验自有 launcher PID 1237382 的 start time 634440208 与 PGID 后，只向该进程组发 SIGTERM，并确认 PID 与组均退出。该段并行编译日志、执行记录和启动前缓存快照都保留在 distributed/r21/，不作为模型验证结果。
+
+随后按 rank 顺序做串行 core import。rank0 在单进程下完成 295/295，日志标记 SERIAL_JITTOR_CORE_IMPORT_COMPLETE True，返回码 0，has_acl=True。rank1 的第一次 import 返回 1，提示 jit_utils was rebuilt，原始日志保留；同命令重试后在 rank1 独立缓存目录中串行完成 295/295，返回码 0、has_acl=True。两次均只把空闲物理 NPU5 设为可见设备，并先后运行；rank1 原始缓存先做了 LAB 快照，再从 rank0 完成的 core 缓存复制，rank1 随后仍实际执行完整重编译。此项只证明两个 rank 的 Jittor core import 预热成功，不证明模型算子、HCCL 或双 rank 执行。日志、cache snapshot 与边界记录位于 distributed/r21/serial-jittor-import-rank0.log、serial-jittor-import-rank1.log、serial-jittor-import-rank1-retry1.log、rank1-cache-before-serial-copy/ 和 distributed/r22/prewarm/prewarm-complete.json。
+
+R22 使用 source manifest SHA256 aa56c083de1404dcfc744b31edc3dcb973f574d3dcb0d048c691d8ffa400d383、物理卡5/6及隔离 rank cache。启动前 fresh npu-smi 快照显示5/6均无进程；driver 再次准入后启动 Jittor full launcher，live monitor 在1.884秒后发现外部 PID 1443945 占卡6，按防护逻辑仅终止本 cohort 自己的 launcher 进程组，返回码125。launcher PID 1449813 及 PGID 已核验退出，rank0/rank1 日志均为0字节，没有 rank worker 进入训练，也没有 full/resume 报告。外部 PID 1443945 随后自然退出；约30秒后的 fresh 复查中，卡5仍空、卡6又出现外部 PID 1452009。没有向任何外部进程发送信号。完整记录在 distributed/r22/，包括 execution.json、foreign-npu-occupants.json、driver 输出、rank 空日志及启动前/运行中/事后快照。
+
+因此，本轮完成了串行 core import 预热，但没有得到 MAIN-r28 Jittor 双卡 FSDP2 full、prefix/resume 交叉或性能结果；卡5/6下一次 admission 仍须使用新 cohort 与新的即时空闲快照。
