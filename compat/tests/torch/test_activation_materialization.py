@@ -88,6 +88,65 @@ def queued_callback():
     ''', "compat_materialization_callback", warp=False)
 
 
+@pytest.fixture
+def inline_callback(tmp_path):
+    header = tmp_path / "compat_materialization_inline_op.h"
+    source = tmp_path / "compat_materialization_inline_op.cc"
+    header.write_text(textwrap.dedent('''
+        #pragma once
+        #include "core/op.h"
+        #include "ops/composite/fetch_op.h"
+        namespace jittor {
+        struct CompatMaterializationInlineOp : Op {
+            FetchFunc callback;
+            Var* output;
+            CompatMaterializationInlineOp(FetchFunc&& callback);
+            const char* name() const override { return "compat_materialization_inline"; }
+            void run() override;
+        };
+        }
+    '''))
+    source.write_text(textwrap.dedent('''
+        #include "compat_materialization_inline_op.h"
+        #include <cuda_runtime.h>
+        namespace jittor {
+        CompatMaterializationInlineOp::CompatMaterializationInlineOp(FetchFunc&& cb)
+            : callback(std::move(cb)) {
+            set_flag(OpFlags::_cuda);
+            output = create_output({1}, ns_float32);
+        }
+        void CompatMaterializationInlineOp::run() {
+            CHECK(cudaMemsetAsync(output->mem_ptr, 0, sizeof(float), cudaStreamPerThread)
+                == cudaSuccess);
+            FetchResult task;
+            callback.callback(&task);
+        }
+        }
+    '''))
+    includes = " ".join(f'-I"{path}"' for path in jt.compiler.cuda_include_dirs)
+    module = jt.compile_custom_ops([str(header), str(source)], extra_flags=includes)
+    return module.compat_materialization_inline
+
+
+@pytest.mark.parametrize("outer_policy,inner_policy", [(0, 1), (1, 0)])
+def test_nested_materialization_preserves_explicit_caller_policy(
+        queued_callback, inline_callback, outer_policy, inner_policy):
+    observed = []
+
+    def body():
+        with jt.flag_scope(keep_graph=inner_policy):
+            queued_callback(lambda: observed.append(int(jt.flags.keep_graph)))
+            materialize(torch.ones(1, device="cuda"))
+        assert jt.flags.keep_graph == 2
+
+    with jt.flag_scope(keep_graph=outer_policy):
+        ready, = materialize(inline_callback(body))
+        assert jt.flags.keep_graph == outer_policy
+    assert observed == [inner_policy]
+    assert jt.flags.keep_graph == 0
+    np.testing.assert_array_equal(snapshot(ready), [0.])
+
+
 def test_ready_read_preserves_original_graph_and_gradient(capfd):
     x = torch.tensor([.2, .4], device="cuda", requires_grad=True)
     x.sync()

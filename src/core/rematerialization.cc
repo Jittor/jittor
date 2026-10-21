@@ -66,7 +66,9 @@ RematerializationRetentionScope::RematerializationRetentionScope(const vector<Va
     if (!retention_state) retention_state = new RetentionState;
     auto& state = *retention_state;
     auto owned = std::make_unique<RetentionFrame>();
-    owned->caller_keep_graph = state.frames.size() > state.visible_from
+    // Inherit only our borrowed policy. An inline user function may have
+    // explicitly changed it before starting a nested materialization.
+    owned->caller_keep_graph = keep_graph == 2 && state.frames.size() > state.visible_from
         ? state.frames.back()->caller_keep_graph : keep_graph;
     vector<Var*> pending = roots;
     std::unordered_set<Var*> seen;
