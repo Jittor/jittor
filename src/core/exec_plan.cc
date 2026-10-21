@@ -4,7 +4,6 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include <algorithm>
-#include <queue>
 #include "core/exec_plan.h"
 #include "runtime/launch_diagnostics.h"
 #include "core/var.h"
@@ -28,12 +27,47 @@ static inline bool has_gopt(Node* node) {
     return !node->is_var() && node->op()->flag(OpFlags::_has_gopt);
 }
 
+void ExecPlan::clear() {
+    backend = BackendId::Cpu;
+    epoch.reset();
+    stamp = 0;
+    ops.clear();
+    all_vars.clear();
+    op_outputs.clear();
+    op_outputs_begin.clear();
+    op_inputs.clear();
+    op_inputs_begin.clear();
+    var_producer.clear();
+    batch_hold_per_var = 0;
+    batch_hold = nullptr;
+    // Kept as vectors: `schedule_hold_release` resizes this to the batch's
+    // segment count and clears each one it keeps.
+    for (auto& segment : release_after) segment.clear();
+    op_num = 0;
+    start_var_num = 0;
+    var_fused.clear();
+    queue.clear();
+    fuse_ops.clear();
+    range.clear();
+}
+
+// `v.assign(n, x)` on a scratch vector: the same contents, in the storage it
+// already has.
+template <class T>
+static inline vector<T>& refill(vector<T>& v, size_t n, const T& x) {
+    v.assign(n, x);
+    return v;
+}
+
 void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
+    plan.clear();
+    auto& scratch = plan.scratch;
     plan.backend = execution_target_backend();
     // == phase 2: collect the batch ==
     // bfs find all ops need to run
     int op_num = 0;
-    vector<Node*> bfs_q;
+    vector<Node*>& bfs_q = scratch.bfs_q;
+    bfs_q.clear();
     bfs_q.reserve(vars.size());
     int start_var_num = 0;
     auto& batch_epoch = plan.epoch;
@@ -137,7 +171,8 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
     plan.start_var_num = start_var_num;
 
     // father: father of union-find set
-    vector<int> father(op_num);
+    vector<int>& father = scratch.father;
+    father.resize(op_num);
     for (int i=0; i<op_num; i++) {
         father[i] = i;
     }
@@ -178,15 +213,33 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
         }
     }
 
+    // A batch of one operator -- `where` of a mask already computed, the
+    // reduction behind an `item()` -- is one segment of that op, whatever
+    // phases 3-5 would find: there is nothing to fuse it with and nothing to
+    // order. They would mark its outputs in the batch as staying in memory,
+    // as `count_fuse` marks a sink's, and leave every other var fusable;
+    // that is all it takes. Their setup is a microsecond of each such batch,
+    // and a mask-driven loop plans thousands of them a second.
+    if (op_num == 1) {
+        for (Var* out : ops[0]->outputs())
+            if (out->tflag == tt) var_fused[out->batch_index_at(tt)] = 1;
+        plan.queue.push_back(0);
+        plan.fuse_ops.push_back(0);
+        plan.range.push_back(1);
+        return;
+    }
+
     // == phase 3: partition into fused segments ==
-    count_fuse(tt, start_var_num, ops, all_vars, father, var_fused);
+    count_fuse(tt, start_var_num, ops, all_vars, father, var_fused, &scratch);
     // var_fused represents:
     // 0: can fused
     // 1: cannot fused
     // 2: weak shared(may turn into 1 or 3 by shared operator cutting)
     // 3: strong shared(force shared)
-    vector<int> roots, next(op_num, -1);
-    vector<int> deps(op_num, 0);
+    vector<int>& roots = scratch.roots;
+    roots.clear();
+    vector<int>& next = refill(scratch.next, op_num, -1);
+    vector<int>& deps = refill(scratch.deps, op_num, 0);
     roots.reserve(op_num);
     for (int i=0; i<op_num; i++) {
         int fa = find_fa(i);
@@ -212,24 +265,29 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
     //   consumers   per var, its consumers in the batch in `_outputs` order
     const auto& in_begin = plan.op_inputs_begin;
     const auto& out_begin = plan.op_outputs_begin;
-    vector<int> in_var(plan.op_inputs.size());
+    vector<int>& in_var = scratch.in_var;
+    in_var.resize(plan.op_inputs.size());
     for (size_t k = 0; k < plan.op_inputs.size(); k++) {
         if (k + 8 < plan.op_inputs.size()) __builtin_prefetch(plan.op_inputs[k + 8].first);
         Var* v = plan.op_inputs[k].first;
         in_var[k] = v->tflag == tt ? v->batch_index_at(tt) : -1;
     }
-    vector<int> producer(var_num);
+    vector<int>& producer = scratch.producer;
+    producer.resize(var_num);
     for (int i = 0; i < var_num; i++) {
         Op* p = plan.var_producer[i].first;
         producer[i] = p && p->tflag == tt ? p->batch_index_at(tt) : -1;
     }
-    vector<int> out_var(plan.op_outputs.size());
+    vector<int>& out_var = scratch.out_var;
+    out_var.resize(plan.op_outputs.size());
     for (size_t k = 0; k < plan.op_outputs.size(); k++) {
         Var* v = plan.op_outputs[k];
         out_var[k] = v->tflag == tt ? v->batch_index_at(tt) : -1;
     }
-    vector<int> consumers_begin(var_num + 1);
-    vector<int> consumers;
+    vector<int>& consumers_begin = scratch.consumers_begin;
+    consumers_begin.resize(var_num + 1);
+    vector<int>& consumers = scratch.consumers;
+    consumers.clear();
     consumers.reserve(plan.op_inputs.size());
     for (int i = 0; i < var_num; i++) {
         if (i + 8 < var_num) __builtin_prefetch(all_vars[i + 8]);
@@ -248,7 +306,22 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
     {
         // queue.clear();
         #ifndef JT_bfs_executor
-        std::priority_queue<pair<int64,int64>> p_queue;
+        // A max-heap of (-order, segment), on scratch storage: what a
+        // std::priority_queue of the same pairs would hold.
+        struct ReadyHeap {
+            vector<pair<int64,int64>>& heap;
+            size_t size() const { return heap.size(); }
+            const pair<int64,int64>& top() const { return heap.front(); }
+            void emplace(int64 order, int64 segment) {
+                heap.emplace_back(order, segment);
+                std::push_heap(heap.begin(), heap.end());
+            }
+            void pop() {
+                std::pop_heap(heap.begin(), heap.end());
+                heap.pop_back();
+            }
+        } p_queue{scratch.ready};
+        p_queue.heap.clear();
         #endif
         for (int root : roots) {
             for (int i=root; i>=0; i=next[i]) {
@@ -293,7 +366,8 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
         // every output gradient held until then -- and only a fused
         // elementwise one: a GEMM pulled forward would take the chain on to
         // its own readers, ahead of work that was ready before it.
-        vector<int> readers(all_vars.size(), 0), read_by(all_vars.size(), -1);
+        vector<int>& readers = refill(scratch.readers, all_vars.size(), 0);
+        vector<int>& read_by = refill(scratch.read_by, all_vars.size(), -1);
         auto for_each_read = [&](int root, auto&& func) {
             for (int i=root; i>=0; i=next[i])
                 for (int k = in_begin[i]; k < in_begin[i + 1]; k++) {
@@ -305,7 +379,8 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
         };
         for (int root : roots) for_each_read(root, [&](int vi) { readers[vi]++; });
         std::fill(read_by.begin(), read_by.end(), -1);
-        vector<char> done(op_num, 0), fusible(op_num, 1);
+        vector<char>& done = refill(scratch.done, op_num, (char)0);
+        vector<char>& fusible = refill(scratch.fusible, op_num, (char)1);
         for (int root : roots)
             for (int i=root; i>=0; i=next[i])
                 if (ops[i]->type() == OpType::other) fusible[root] = 0;
@@ -376,13 +451,13 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
     auto& range = plan.range;
     range.assign(queue.size(), 0);
     {
-        vector<int> subgraph;
+        vector<int>& subgraph = scratch.subgraph;
         subgraph.reserve(16);
-        vector<int> sharegraph;
+        vector<int>& sharegraph = scratch.sharegraph;
         sharegraph.reserve(16);
-        vector<int> sharegraph_q;
+        vector<int>& sharegraph_q = scratch.sharegraph_q;
         sharegraph_q.reserve(16);
-        vector<int> shared_id(op_num, -1);
+        vector<int>& shared_id = refill(scratch.shared_id, op_num, -1);
 
         // for fused op in reversed order
         for (uint rid=0; rid<queue.size(); rid++) {

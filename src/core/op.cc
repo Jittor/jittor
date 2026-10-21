@@ -147,6 +147,11 @@ HostExecutionScope::HostExecutionScope() : previous(host_execution_forced) {
 HostExecutionScope::~HostExecutionScope() { host_execution_forced = previous; }
 
 TensorPlacement Op::graph_placement() const {
+    // An op asks this several times per execution (requested and execution
+    // backend, the placement scope, the implementation lookup), and each walk
+    // reads every output var: a cache miss per output, for an answer that is
+    // "none" in any program that never placed a tensor explicitly.
+    if (!explicit_tensor_placement_made.load(std::memory_order_relaxed)) return {};
     for (const auto& edge : _outputs) {
         Var* output = edge.node->var();
         if (output->placement.explicit_backend)

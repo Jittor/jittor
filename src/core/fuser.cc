@@ -72,11 +72,14 @@ DEFINE_FLAG(int, fuse_into_reduce, 1,
 //                  fusable, 2 weakly shared, 3 strongly shared. The exact
 //                  meaning of 2 and 3 is owned by the caller (executor.cc may
 //                  still promote 2 to 3 or demote it to 1).
-void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vector<Var*>& vars, vector<int>& father, vector<int>& var_fused) {
+void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vector<Var*>& vars, vector<int>& father, vector<int>& var_fused, PlanScratch* scratch) {
+    PlanScratch local;
+    PlanScratch& work = scratch ? *scratch : local;
     // fuse_level[i]: how many un-fusable edges lie between op i and the sinks
     // of this batch, along the worst path. Two neighbouring ops may only fuse
     // when their levels are equal.
-    vector<int> fuse_level(ops.size(), -1);
+    vector<int>& fuse_level = work.fuse_level;
+    fuse_level.assign(ops.size(), -1);
 
     // union-find over op indices, with path compression
     auto find_father = [&](int i) -> int {
@@ -98,7 +101,8 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
     // `requested_backend()` walks an op's outputs for a placement, and the
     // passes below ask it of both ends of every edge they look at, several
     // times over. Asked once per op instead.
-    vector<BackendId> op_backend(ops.size());
+    vector<BackendId>& op_backend = work.op_backend;
+    op_backend.resize(ops.size());
     for (uint i = 0; i < ops.size(); i++) {
         if (i + 8 < ops.size()) __builtin_prefetch(ops[i + 8]);
         op_backend[i] = ops[i]->requested_backend();
@@ -194,8 +198,10 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
 
     // Pass 1: number of consumers inside the batch, and the seeds of the
     // reverse topological walk (the ops nothing in this batch consumes).
-    vector<int> queue;
-    vector<int> unvisited_consumers;
+    vector<int>& queue = work.fuse_queue;
+    queue.clear();
+    vector<int>& unvisited_consumers = work.unvisited_consumers;
+    unvisited_consumers.clear();
     unvisited_consumers.reserve(ops.size());
     queue.reserve(ops.size());
     for (uint i = 0; i < ops.size(); i++) {
@@ -281,9 +287,12 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
     //         refusals: the limit, and any merge that would put a path through
     //         a third group between the two groups being merged.
     // Every other component keeps exactly the grouping it had before.
-    vector<int> group_size(ops.size(), 1);
-    vector<char> forced_material(vars.size(), 0);
-    vector<char> half_union(ops.size(), 0);
+    vector<int>& group_size = work.group_size;
+    group_size.assign(ops.size(), 1);
+    vector<char>& forced_material = work.forced_material;
+    forced_material.assign(vars.size(), 0);
+    vector<char>& half_union = work.half_union;
+    half_union.assign(ops.size(), 0);
     auto is_half = [](Var* var) {
         return var->dtype() == ns_float16 || var->dtype() == ns_bfloat16;
     };
@@ -308,7 +317,8 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
         });
     }
 
-    vector<char> bounded(ops.size(), 0);
+    vector<char>& bounded = work.bounded;
+    bounded.assign(ops.size(), 0);
     int any_bounded = 0;
     if (fuse_op_limit > 0) {
         for (uint i = 0; i < ops.size(); i++) {
