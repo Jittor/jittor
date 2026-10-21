@@ -216,6 +216,10 @@ def _build_parser():
         "--device-ids", default=None,
         help="comma-separated device IDs; overrides the backend visibility variable",
     )
+    parser.add_argument(
+        "--keep-visible-devices", action="store_true",
+        help="keep all CUDA devices visible and select each rank's local device (NCCL only)",
+    )
     parser.add_argument("--master-addr", default=None, help="local rendezvous address")
     parser.add_argument("--master-port", type=int, default=None,
                         help="rendezvous port; 0 selects an available local port")
@@ -261,7 +265,7 @@ def _rank_environment(args, rank, backend, devices, rootinfo, master_addr, maste
     backend_local_rank = rank
     if backend == "nccl":
         device = _visible_devices_for_rank(rank, devices)
-        if device is not None:
+        if device is not None and not getattr(args, "keep_visible_devices", False):
             env["CUDA_VISIBLE_DEVICES"] = device
             # Each NCCL child sees exactly one logical device after masking.
             backend_local_rank = 0
@@ -312,6 +316,8 @@ def main(argv=None):
 
     try:
         backend = args.backend if args.backend != "auto" else _detect_backend()
+        if args.keep_visible_devices and backend != "nccl":
+            raise ValueError('--keep-visible-devices requires NCCL')
         if args.nnodes > 1 and backend != 'nccl':
             raise ValueError('multi-node HCCL root-info transport needs real-device validation; only NCCL is enabled')
         if backend == "nccl":

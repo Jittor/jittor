@@ -1054,6 +1054,9 @@ def _install_distributed(g, registry=None):
     if dist is None:
         dist = _types.ModuleType("torch.distributed")
         _modules["torch.distributed"] = dist
+    # Executable leaves need a filesystem spec for ``python -m``; publishing
+    # a synthetic module in sys.modules alone cannot provide that entry point.
+    dist.__path__ = [os.path.join(os.path.dirname(__file__), "..", "distributed_cli")]
     state = {"initialized": _native_distributed_active(), "store": None}
     world_group = _JittorProcessGroup(name="world")
     pg_map = {world_group: (world_group._get_backend_name(),)}
