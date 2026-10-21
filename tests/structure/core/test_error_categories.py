@@ -8,14 +8,16 @@ _LINE_COMMENT = re.compile(r"//.*")
 
 
 def _count_user_check_sites(source):
-    """``USER_CHECK``/``USER_CHECKop`` call sites in *source*, prose excluded.
+    """``USER_CHECK``/``USER_CHECKop``/``USER_INDEX_CHECK`` call sites in *source*, prose excluded.
 
     A ledger counts boundaries, and a comment that quotes a check by name is
     documentation of one, not another one: counting it would make every
     ledger grow the moment someone explains why a check is there.
+    ``USER_INDEX_CHECK`` raises a ``UserError`` too, of the index kind.
     """
     code = "\n".join(_LINE_COMMENT.sub("", line) for line in source.splitlines())
-    return code.count("USER_CHECK(") + code.count("USER_CHECKop(")
+    return (code.count("USER_CHECK(") + code.count("USER_CHECKop(")
+            + code.count("USER_INDEX_CHECK("))
 # 2026-09-11, two changes landing together. `0f5eab25e` had reclassified
 # `ASSERT(ns.is_binary())` to `USER_CHECK` in both `ReduceOp` constructors;
 # that is right for the public `ReduceOp(x, op, dims, keepdims)`, where `op` is
@@ -66,7 +68,10 @@ MIGRATED_SHAPE_CARDINALITY_BOUNDARIES = {
     # of them reading `jt.reindex`'s `indexes`/`shape` arguments. It also
     # reclassified `ASSERT(extras.size())` (reindex without an explicit shape
     # needs the caller to pass an overflow extras tensor).
-    "src/ops/reindex_op.cc": 8,
+    # 2026-10-05: 8 -> 7. The "at most ten dimensions" check is gone: tensors
+    # go up to 32 dimensions and the rank limit is checked once, where every
+    # Var's shape is set (`Var::set_shape`).
+    "src/ops/reindex_op.cc": 7,
     # 2026-09-11: 3 -> 4. `0f5eab25e` reclassified
     # `ASSERT((ns.is_binary() && ns!=ns_mean) || ns == ns_void)`: `op` is the
     # reduction name the caller passed to `jt.reindex_reduce`.
@@ -95,8 +100,15 @@ MIGRATED_BROADCAST_SHAPE_BOUNDARIES = {
 # caller handed in. The two `CHECK`s further down (`x->num >= 0`,
 # `ydsize > 0`) stay internal: they restate what `is_dtype()` and the Var
 # invariants already guarantee.
+#
+# 2026-09-22: 8 -> 10. Native complex128 dtype support (KI-COMPLEX-001)
+# extended `infer_shape`'s two complex<->real pairing checks
+# (`complex64 -> float32 requires [..., 2]` / vice versa) with the same
+# checks for `complex128 <-> float64` -- two more user-facing shape
+# boundaries on the same caller-supplied `(x, shape, dtype)` triple, not
+# internal invariants.
 MIGRATED_REINTERPRET_VIEW_BOUNDARIES = {
-    "src/ops/composite/reinterpret_view_op.cc": 8,
+    "src/ops/composite/reinterpret_view_op.cc": 10,
 }
 
 # 2026-09-11: 1 -> 3. Besides the shape check this entry was named for,
@@ -105,7 +117,9 @@ MIGRATED_REINTERPRET_VIEW_BOUNDARIES = {
 # passed to `jt.binary`) and `CHECK(x_ok && y_ok)` -> `USER_CHECK` (a bitwise
 # or shift op on float dtypes).
 MIGRATED_BINARY_SHAPE_BOUNDARIES = {
-    "src/ops/binary_op.cc": 3,
+    # 2026-10-05: 3 -> 4. `maximum`/`minimum` of a complex operand is a caller
+    # error (complex numbers have no order); it used to fail in the compiler.
+    "src/ops/binary_op.cc": 4,
 }
 
 # 2026-09-10: both counts were one short of the source before the index bounds
@@ -114,7 +128,7 @@ MIGRATED_BINARY_SHAPE_BOUNDARIES = {
 # -- a shape that does not match, an ellipsis with too many indices after it, a
 # `int` index outside the dimension, too many slices, a setitem operation that
 # is neither void nor binary, a data dimension larger than the target. The new
-# one is the Var index the kernel now range-checks (KI-OPS-010); it is
+# one is the Var index the kernel now range-checks; it is
 # `USER_CHECK` rather than `CHECK` because an out-of-range index is exactly the
 # case `USER_ERROR` in `src/utils/log.h` describes -- "a caller supplied an
 # unsupported value, shape, dtype, or index" -- and callers should be able to
@@ -226,7 +240,8 @@ MIGRATED_CUTT_TRANSPOSE_RANK_USER_BOUNDARIES = {
 # 2"). 2 dtype + 2 contiguity + the a-rank check + the inner-dimension check
 # = 6. Behaviour gate: tests/ops/test_matmul_higher_rank.py.
 MIGRATED_CUBLAS_MATMUL_DTYPE_USER_BOUNDARIES = {
-    "backends/cuda/kernels/cublas/cublas_matmul_op.cc": 6,
+    # Includes the BF16-only FP32 accumulator-output argument boundary.
+    "backends/cuda/kernels/cublas/cublas_matmul_op.cc": 7,
 }
 
 MIGRATED_CUBLAS_MATMUL_RANK_USER_BOUNDARIES = {
@@ -386,7 +401,12 @@ MIGRATED_ITEM_USER_BOUNDARIES = {
 # program did, and the message already tells them so. The same commit moved
 # two `LOGf` in this file to `USER_ERROR`, which this count does not see.
 MIGRATED_GRAD_DTYPE_USER_BOUNDARIES = {
-    "src/core/grad.cc": 3,
+    # Loss/target/higher-order checks plus caller-controlled hook replacement
+    # shape, dtype and device. Invalid hooks must raise catchable user errors.
+    # .data can replace storage shape while preserving a recorded producer:
+    # validate returned gradient rank and broadcast-compatible extents against
+    # that recorded contract. Both are caller-controlled shape boundaries.
+    "src/core/grad.cc": 8,
 }
 
 
@@ -433,6 +453,16 @@ def test_public_dimension_boundary_migration_is_explicit_and_bounded():
             actual = source.count('USER_CHECK(dim>=0 && dim<ydim)')
         else:
             actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+        if relative == "src/ops/composite/argsort_op.cc":
+            # Stable-sort backend support is not a dimension boundary. Pin
+            # that guard separately instead of enlarging the dimension ledger.
+            backend_guard = (
+                "USER_CHECK(!stable || backend == BackendId::Cpu || "
+                "backend == BackendId::Cuda)"
+            )
+            assert source.count(backend_guard) == 1
+            assert "stable argsort is only supported on CPU and CUDA" in source
+            actual -= 1
         counts[relative] = actual
     # Report every disagreement, not just the first. Three entries went stale
     # behind one that failed earlier in iteration order and stayed invisible
@@ -472,7 +502,7 @@ def test_public_shape_cardinality_migration_is_explicit_and_bounded():
     # behind one that failed earlier in iteration order and stayed invisible
     # until that earlier one was fixed (2026-09-11).
     assert counts == dict(_LEDGER), (counts, dict(_LEDGER))
-    assert sum(counts.values()) == 43
+    assert sum(counts.values()) == 42
 
 
 def test_public_view_shape_migration_is_explicit_and_bounded():
@@ -521,18 +551,19 @@ def test_binary_shape_migration_is_explicit_and_bounded():
     assert source.count("USER_CHECK(ns.is_binary())") == 1
     assert "ASSERT(ns.is_binary())" not in source
     assert source.count("USER_CHECK(x_ok && y_ok)") == 1
+    assert source.count("USER_CHECK(!x->dtype().is_complex() && !y->dtype().is_complex())") == 1
 
 
 def test_setitem_shape_migration_is_explicit_and_bounded():
     source = (ROOT / "src/ops/composite/setitem_op.cc").read_text()
-    actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+    actual = _count_user_check_sites(source)
     assert actual == MIGRATED_SETITEM_SHAPE_BOUNDARIES[
         "src/ops/composite/setitem_op.cc"]
 
 
 def test_getitem_shape_migration_is_explicit_and_bounded():
     source = (ROOT / "src/ops/composite/getitem_op.cc").read_text()
-    actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+    actual = _count_user_check_sites(source)
     assert actual == MIGRATED_GETITEM_SHAPE_BOUNDARIES[
         "src/ops/composite/getitem_op.cc"]
 
@@ -720,6 +751,9 @@ def test_cublas_matmul_dtype_user_boundary_migration_is_explicit_and_bounded():
     negative = (ROOT / "tests/backends/cuda/test_cublas_matmul_grad.py").read_text()
     assert "test_non_float_inputs_are_rejected_clearly" in negative
     assert "test_mixed_input_dtypes_are_rejected_clearly" in negative
+    accumulator_negative = (
+        ROOT / "tests/backends/cuda/test_cublas_matmul_amp_dtype.py").read_text()
+    assert "test_fp32_accumulator_option_rejects_other_compute_dtypes" in accumulator_negative
 
 
 def test_cublas_matmul_b_rank_is_a_catchable_user_error():

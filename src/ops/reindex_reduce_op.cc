@@ -72,17 +72,17 @@ void ReindexReduceOp::infer_shape() {
 void ReindexReduceOp::jit_prepare(JK& jk) {
     jk << "«Tx:" << x->dtype()
         << "«OP:" << ns
-        << "«YDIM=" << JK::hex1(y->shape.size())
-        << "«XDIM=" << JK::hex1(x->shape.size());
+        << "«YDIM=" << JK::hex(y->shape.size())
+        << "«XDIM=" << JK::hex(x->shape.size());
     for (uint i=0; i<indexes.size(); i++)
-        jk << "«INDEX" << JK::hex1(i) << ':' << indexes[i];
-    jk << "«OSIZE=" << JK::hex1(overflow_conditions.size());
+        jk << "«INDEX" << JK::dec(i) << ':' << indexes[i];
+    jk << "«OSIZE=" << JK::hex(overflow_conditions.size());
     for (uint i=0; i<overflow_conditions.size(); i++)
-        jk << "«OFD" << JK::hex1(i) << ':' << overflow_conditions[i];
-    jk << "«ESIZE=" << JK::hex1(extras.size());
+        jk << "«OFD" << JK::dec(i) << ':' << overflow_conditions[i];
+    jk << "«ESIZE=" << JK::hex(extras.size());
     for (uint i=0; i<extras.size(); i++) {
-        jk << "«EDIM" << JK::hex1(i) << '=' << JK::hex1(extras[i]->shape.size());
-        jk << "«Te" << JK::hex1(i) << ':' << extras[i]->dtype();
+        jk << "«EDIM" << JK::dec(i) << '=' << JK::hex(extras[i]->shape.size());
+        jk << "«Te" << JK::dec(i) << ':' << extras[i]->dtype();
     }
 }
 

@@ -20,6 +20,7 @@
 #include "ops/unary_op.h"
 #include "ops/ternary_op.h"
 #include "core/executor.h"
+#include "runtime/rng_state.h"
 #include "runtime/device.h"
 #include "mem/allocator.h"
 #include "codegen/op_compiler.h"
@@ -38,7 +39,14 @@ namespace jittor
     void DropoutOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         auto attr = dynamic_cast<DropoutAttr *>(op_attr.get());
-        ret = aclnnDropoutGetWorkspaceSize(inputTensors[0], attr->p, attr->train, attr->seed, attr->offset, outputTensors[0], outputTensors[1], &workspaceSize, &executor);
+        // Dropout draws from the same per-device counter stream as the
+        // other ACL random operators. Evaluation mode reads the position
+        // without consuming any of it.
+        const auto rng = reserve_acl_random(
+            in_[0]->device_id, attr->train ? in_[0]->numel() : 0);
+        const int64 seed = rng.seed;
+        const int64 offset = rng.offset;
+        ret = aclnnDropoutGetWorkspaceSize(inputTensors[0], attr->p, attr->train, seed, offset, outputTensors[0], outputTensors[1], &workspaceSize, &executor);
 
         launch(ret, aclnnDropout, true);
 

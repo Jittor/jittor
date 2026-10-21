@@ -98,6 +98,17 @@ def _probe_result(output, marker=_MARKER):
     raise AssertionError("import probe produced no result:\n" + output[-4000:])
 
 
+def _mkl_obtainable(jt):
+    """Answer "oneDNN can be had" for a test about *when* MKL is set up.
+
+    Whether it can is a property of the machine: a cache without a oneDNN
+    build, on a host without cmake (a fresh CI container, a compute node),
+    reports MKL unavailable whatever ``use_mkl`` says. These tests passed only
+    where an earlier run had already left a build in the cache.
+    """
+    return mock.patch.object(jt.compile_extern, "_mkl_obtainable", lambda: True)
+
+
 class TestImportBootstrapLaziness(unittest.TestCase):
 
     def test_plain_import_does_not_call_external_setups(self):
@@ -153,6 +164,7 @@ class TestImportBootstrapLaziness(unittest.TestCase):
         with jt.flag_scope(use_cuda=0), \
                 mock.patch.dict(os.environ, {"use_mkl": "1"}), \
                 mock.patch.object(jt.compile_extern, "use_mkl", True), \
+                _mkl_obtainable(jt), \
                 mock.patch.object(backend_libraries, "_libraries", libraries), \
                 mock.patch.object(jt.compile_extern, "setup_mkl",
                                   side_effect=setup) as setup_mock:
@@ -175,7 +187,11 @@ class TestImportBootstrapLaziness(unittest.TestCase):
         from jittor._core import var
 
         operand = jt.array([[1.0, 2.0], [3.0, 4.0]])
-        with mock.patch.object(var, "_load_accelerator_transpose") as load:
+        # As the first transpose of the process: once any transpose has asked
+        # for cuTT, the wrapper skips the load, so in a whole-tree run -- where
+        # something has always transposed already -- this saw no call at all.
+        with mock.patch.object(var, "_accelerator_transpose_tried", False), \
+                mock.patch.object(var, "_load_accelerator_transpose") as load:
             result = jt.transpose(operand, (1, 0))
         load.assert_called_once_with()
         # The bootstrap wrapper must not change what transpose returns.
@@ -221,6 +237,7 @@ class TestImportBootstrapLaziness(unittest.TestCase):
                 with jt.flag_scope(use_cuda=0), \
                         mock.patch.dict(os.environ, {"use_mkl": "1"}), \
                         mock.patch.object(jt.compile_extern, "use_mkl", False), \
+                        _mkl_obtainable(jt), \
                         mock.patch.object(backend_libraries, "_libraries", libraries), \
                         mock.patch.object(jt.compile_extern, "setup_mkl") as setup_mock:
                     operand = jt.array([[1.0]])

@@ -113,9 +113,21 @@ class TestFSDPPublicOwners(unittest.TestCase):
         names = {"_wrapped_execute", "_install_true_fsdp_execute", "_execute_with_true_fsdp"}
         functions = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]
         events = []
-        scope = {"types": types, "_EXECUTE_DEPTH_ATTR": "_depth",
-                 "_unshard_module_params": lambda module: events.append("unshard"),
-                 "_reshard_module_params": lambda module: events.append("reshard")}
+        storage_source = SOURCE.parents[1] / "python/jittor/distributed/fsdp/storage.py"
+        storage_tree = ast.parse(storage_source.read_text())
+        storage_function = next(node for node in storage_tree.body
+                                if isinstance(node, ast.FunctionDef)
+                                and node.name == "_execute_with_true_fsdp")
+        storage_scope = {}
+        exec(compile(ast.Module(body=[storage_function], type_ignores=[]),
+                     "native_fsdp/storage.py", "exec"), storage_scope)
+        adapter = types.SimpleNamespace(
+            common=types.SimpleNamespace(),
+            _unshard_module_params=lambda module: events.append("unshard"),
+            _reshard_module_params=lambda module: events.append("reshard"))
+        scope = {"types": types, "__name__": "_fsdp_adapter_probe",
+                 "sys": types.SimpleNamespace(modules={"_fsdp_adapter_probe": adapter}),
+                 "_storage": types.SimpleNamespace(**storage_scope)}
         exec(compile(ast.Module(body=functions, type_ignores=[]), "shard.py", "exec"), scope)
         class Module:
             def execute(self, value):
@@ -135,7 +147,7 @@ class TestFSDPPublicOwners(unittest.TestCase):
         self.assertEqual(module.execute(3), 3)
         with self.assertRaisesRegex(ValueError, "failure"):
             module.execute("failure")
-        self.assertEqual(module._fsdp_state._depth, 0)
+        self.assertEqual(module._fsdp_state.true_fsdp_execute_depth, 0)
         self.assertEqual(events, ["unshard", ("execute", 3), "reshard",
                                   "unshard", ("execute", "failure"), "reshard"])
 

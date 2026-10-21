@@ -53,7 +53,7 @@ pyother: stash pop                          -> 拿到 dist 的 5 个文件
 
 ## 最常见的一次性用途：证明「改前失败、改后通过」
 
-整改要求每条都有一个改前红、改后绿的用例。验证它需要**临时只回退源码、保留测试**——
+修复要求有一个改前红、改后绿的用例。验证它需要**临时只回退源码、保留测试**——
 这正是最容易顺手 `git stash` 的地方。不要。用这个：
 
 ```bash
@@ -80,7 +80,7 @@ cp $S/keep.py python/jittor/<改过的源文件>.py       # 原样放回
 判据不是「这两处改动有关系」，而是**「只提交前一半，仓库会不会退步」**。答是，就合并；
 答否，就拆开，无论它们看起来多像一件事。
 
-真实例子（8.09）：NCCL 的 rendezvous 超时后不检查就往下走，要改成失败即抛；同时
+真实例子：NCCL 的 rendezvous 超时后不检查就往下走，要改成失败即抛；同时
 NCCL 的通信器是在 dlopen 期的静态构造器里建的。只做前一半，抛出的异常要穿过动态
 链接器的 C 栈帧，找不到 handler，进程死于 `std::terminate`——而 jittor 自己的 SIGCHLD
 处理器会把父进程也 `_Exit(1)` 掉且不刷 stdio。于是「静默走错」被换成了「测试进程无声
@@ -88,28 +88,26 @@ NCCL 的通信器是在 dlopen 期的静态构造器里建的。只做前一半�
 
 合并时，提交说明里要**明写为什么不能拆**，否则下一个人只会看到一个超范围的提交。
 
-## 万一非用 stash 不可
+## 万一别人用 stash 拿走了你的改动
 
-不该有这种情况，但如果真的走到这一步：**一定带 `-m` 写上自己的任务编号**
-（`git stash push -m "6.P14 wip" <文件>`）。理由不是可读性，是可恢复性——
-stash 条目被别人 pop 走之后，那个 commit 只是变成悬垂对象，还在对象库里，
-可以按 message 找回来：
+本仓库不用 `git stash`，但如果有人用了、而你的改动被他 pop 走：stash 条目被 pop 之后，
+那个 commit 只是变成悬垂对象，还在对象库里，按时间和改动的文件找回来：
 
 ```bash
 git fsck --unreachable | awk '/commit/ {print $3}' \
-  | xargs -r git log --no-walk --format='%h %ci %s' 2>/dev/null | grep '<你的编号>'
-git show <找到的 hash>          # 看内容
-git stash apply <找到的 hash>   # 或者 git cherry-pick -n
+  | xargs -r git log --no-walk --format='%h %ci %s' 2>/dev/null   # 按时间认
+git show --stat <找到的 hash>       # 确认是你的文件
+git diff <找到的 hash>^ <找到的 hash> -- <你的文件> | git apply --3way
 ```
 
-没有 `-m` 的 stash 消息是自动生成的 `WIP on <分支>: ...`，多个 agent 的条目
-长得一模一样，找回时分不清哪条是自己的。
+自动生成的消息都是 `WIP on <分支>: ...`，多个 agent 的条目长得一模一样，
+所以要靠时间和 `--stat` 里的文件来认。
 
 ## 万一已经拿到了别人的东西
 
 按这个顺序做，先保存再清理，**不要直接 `git checkout --` 丢掉**：
 
-1. 存补丁：`git diff > <公共救援目录>/<对方分区>-<时间戳>.patch`
+1. 存补丁：`git diff > "$JITTOR_LAB_ROOT/_state/rescue/<对方任务>-<时间戳>.patch"`
 2. 原样放回（让对方能拿到），并**明确告诉对方用 `git apply` 而不是 `git stash pop`**，
    避免再错位一次。
 3. 通知协调者与对方 agent，说清哪些文件、存在哪里。

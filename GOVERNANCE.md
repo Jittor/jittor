@@ -66,13 +66,15 @@ Committers are contributors who have demonstrated sustained, high-quality contri
 Module Maintainers are responsible for specific modules or components of the Jittor project.
 
 **Modules include (but are not limited to):**
-- Core JIT Engine (`python/jittor/src/`)
+- Core JIT Engine (`src/`)
+- Operators (`src/ops/`)
+- Backends (`backends/`: `cpu/ cuda/ acl/ rocm/ corex/ comm/`)
 - Neural Network Modules (`python/jittor/nn/`)
-- Operators (`python/jittor/src/ops/`)
 - Model Library (`python/jittor/models/`)
+- Torch Compatibility (`compat/`) and optional adapters (`adapters/`)
 - Documentation (`docs/`)
 - Testing Infrastructure (`tests/`)
-- Build System and CI (`.github/workflows/`, `setup.py`)
+- Build System and CI (`.github/workflows/`, `noxfile.py`, `pyproject.toml`)
 
 **Responsibilities:**
 - Drive the technical direction of their module
@@ -246,13 +248,15 @@ Jittor 采用分层治理结构，包含以下角色：
 模块维护者负责 Jittor 项目的特定模块或组件。
 
 **模块包括（但不限于）：**
-- 核心 JIT 引擎（`python/jittor/src/`）
+- 核心 JIT 引擎（`src/`）
+- 算子（`src/ops/`）
+- 后端（`backends/`：`cpu/ cuda/ acl/ rocm/ corex/ comm/`）
 - 神经网络模块（`python/jittor/nn/`）
-- 算子（`python/jittor/src/ops/`）
 - 模型库（`python/jittor/models/`）
+- Torch 兼容层（`compat/`）与可选适配器（`adapters/`）
 - 文档（`docs/`）
 - 测试基础设施（`tests/`）
-- 构建系统和 CI（`.github/workflows/`、`setup.py`）
+- 构建系统和 CI（`.github/workflows/`、`noxfile.py`、`pyproject.toml`）
 
 **职责：**
 - 推动其模块的技术方向

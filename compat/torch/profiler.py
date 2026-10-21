@@ -19,6 +19,7 @@ What maps and what does not:
 * ``with_stack``/``with_flops``/``with_modules`` are accepted and ignored.
 """
 
+from enum import Enum as _Enum
 import os
 import socket
 import time
@@ -26,21 +27,20 @@ import time
 from jittor import profiling as _profiling
 
 
-class ProfilerActivity:
-    CPU = "cpu"
-    CUDA = "cuda"
-    XPU = "xpu"
-    HPU = "hpu"
-    MTIA = "mtia"
-    # vLLM's profiler wrapper indexes its activity table by this at import.
-    PrivateUse1 = "privateuse1"
+class ProfilerActivity(_Enum):
+    CPU = 0
+    XPU = 1
+    MTIA = 4
+    CUDA = 2
+    HPU = 3
+    PrivateUse1 = 5
 
 
-class ProfilerAction:
-    NONE = "none"
-    WARMUP = "warmup"
-    RECORD = "record"
-    RECORD_AND_SAVE = "record_and_save"
+class ProfilerAction(_Enum):
+    NONE = 0
+    WARMUP = 1
+    RECORD = 2
+    RECORD_AND_SAVE = 3
 
 
 _RECORDING = (ProfilerAction.RECORD, ProfilerAction.RECORD_AND_SAVE)

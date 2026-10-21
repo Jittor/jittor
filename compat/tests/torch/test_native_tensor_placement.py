@@ -1,6 +1,7 @@
 """Explicit Tensor placement survives global policy and mixed native graphs."""
 
 from _helpers import capability as _test_capability
+from _helpers.child_process import run_python_child
 import numpy as np
 import pytest
 
@@ -223,6 +224,28 @@ def test_published_scalar_operands_keep_backend_and_both_gradients():
         np.testing.assert_array_equal(db.numpy(), [7., 7.])
         np.testing.assert_array_equal(dv.numpy(), [3., 3.])
         np.testing.assert_array_equal(with_zero.numpy(), [3., 4.])
+
+
+
+def test_host_scalar_operands_queued_behind_device_work_keep_their_values():
+    # A 0-d host operand of a CUDA op is copied up through one reused pageable
+    # bounce buffer rather than waiting for the stream to drain
+    # (backends/cuda/runtime/driver.cc); each copy must be staged before the
+    # next one overwrites the buffer, while the matmuls still hold the stream.
+    import jittor as jt
+    import torch
+    with _cuda_runtime():
+        a = torch.full((1024, 1024), 1 / 1024, device="cuda")
+        y = a
+        for _ in range(16):
+            y = y @ a
+        scales = [torch.tensor(float(i), device="cpu") for i in range(64)]
+        outs = [y * scale for scale in scales]
+        del scales
+        jt.sync_all(True)
+        base = y.numpy()
+        for i, out in enumerate(outs):
+            np.testing.assert_allclose(out.numpy(), base * i, rtol=1e-6)
 
 
 def test_frequency_factories_use_native_placement_for_following_operations():

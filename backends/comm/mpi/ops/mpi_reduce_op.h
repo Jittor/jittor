@@ -15,6 +15,7 @@ struct MpiReduceOp : Op {
     Var* x, * y;
     NanoString op;
     int root;
+    int group_id;
 
     /**
 
@@ -35,7 +36,7 @@ struct MpiReduceOp : Op {
     a non-root output is a bug in the caller, and it is a bug that reproduces
     the same way every time rather than depending on the allocator.
      */
-    MpiReduceOp(Var* x, NanoString op=ns_add, int root=0);
+    MpiReduceOp(Var* x, NanoString op=ns_add, int root=0, int group_id=0);
     void infer_shape() override;
     
     const char* name() const override { return "mpi_reduce"; }

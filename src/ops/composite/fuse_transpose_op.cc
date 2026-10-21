@@ -85,7 +85,7 @@ void FuseTransposeOp::infer_shape() {
     } else {
         USER_CHECKop(axes.size(),==,xdim);
         int64_t mask=0;
-        for (auto i : axes) mask |= 1<<i;
+        for (auto i : axes) mask |= 1u<<i;
         USER_CHECK(mask==((1ll<<xdim)-1)) << "Invalid axes" << axes;
     }
     NanoVector shape;
@@ -98,14 +98,27 @@ VarPtr FuseTransposeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     return make_transpose(dout, get_reverse(axes));
 }
 
+int64 FuseTransposeOp::input_stride_of_output_axis(Op* op, int i) {
+    auto* self = (FuseTransposeOp*)op;
+    return self->x->storage_stride(self->axes[i]);
+}
+
+int64 FuseTransposeOp::output_stride_of_input_axis(Op* op, int i) {
+    auto* self = (FuseTransposeOp*)op;
+    for (int j=0; j<self->axes.size(); j++)
+        if (self->axes[j] == i) return self->y->storage_stride(j);
+    LOGf << "axis" << i << "is not in the permutation" << self->axes;
+    return 0;
+}
+
+// The permutation is read at run time, not written into the key; see
+// TransposeOp::jit_prepare. Here that also keeps a fused kernel's key from
+// changing with the permutation of a transpose fused into it.
 void FuseTransposeOp::jit_prepare(JK& jk) {
     auto bc = type()==OpType::broadcast;
-    auto ax = bc ? axes : get_reverse(axes);
     jk << "«Tx:" << x->dtype();
-    jk << "«DIM=" << JK::hex1(axes.size());
-    jk << "«BC:" << JK::hex1(bc);
-    for (uint i=0; i<ax.size(); i++)
-        jk << "«AXES" << JK::hex1(ax[i]) << '=' << JK::hex1(i);
+    jk << "«DIM=" << JK::hex(axes.size());
+    jk << "«BC:" << JK::hex(bc);
 }
 
 #else // JIT
@@ -114,27 +127,35 @@ void FuseTransposeOp::jit_run() {
     auto* __restrict__ yp = y->ptr<Tx>();
     
     @for(i, 0, DIM, index_t yshape@i = y->shape[@i];)
-    @for(i, 0, DIM, index_t xshape@i = yshape@{AXES@i};)
-    index_t xstride@{DIM-1} = 1;
-    @for(i, DIM-2, -1, -1, auto xstride@i = xstride@{i+1} * xshape@{i+1};)
+    @for(i, 0, DIM, index_t xshape@i = x->shape[@i];)
+    // The permutation is reached through `y->input()`: a fused kernel binds
+    // only the Var members of an op by name (jit_op_members in
+    // op_compiler.cc), and the `->` is also what makes LoopToFuncPass pass the
+    // strides to a CUDA kernel as arguments instead of evaluating them inside.
+    // BC loops over y; pxstride{i} is the stride in x of the axis output axis i
+    // reads. Otherwise it loops over x; pystride{i} is the stride in y of the
+    // axis input axis i moves to.
+    @if(BC,
     index_t ystride@{DIM-1} = 1;
     @for(i, DIM-2, -1, -1, auto ystride@i = ystride@{i+1} * yshape@{i+1};)
-    @if(BC,
+    @for(i, 0, DIM, index_t pxstride@i = jittor::FuseTransposeOp::input_stride_of_output_axis(y->input(), @i);)
     @for(d, 0, DIM, for (index_t i@d=0; i@d < yshape@d; i@d++)) {
         auto yid = @for(d, 0, DIM, + i@d * ystride@d);
-        @for(d, 0, DIM, auto xid@d = i@{AXES@d};)
-        auto xid = @for(d, 0, DIM, + xid@d * xstride@d);
+        auto xid = @for(d, 0, DIM, + i@d * pxstride@d);
         yp[yid] = xp[xid];
     },
+    index_t xstride@{DIM-1} = 1;
+    @for(i, DIM-2, -1, -1, auto xstride@i = xstride@{i+1} * xshape@{i+1};)
+    @for(i, 0, DIM, index_t pystride@i = jittor::FuseTransposeOp::output_stride_of_input_axis(y->input(), @i);)
     @for(d, 0, DIM, for (index_t i@d=0; i@d < xshape@d; i@d++)) {
         auto xid = @for(d, 0, DIM, + i@d * xstride@d);
-        @for(d, 0, DIM, auto yid@d = i@{AXES@d};)
-        auto yid = @for(d, 0, DIM, + yid@d * ystride@d);
+        auto yid = @for(d, 0, DIM, + i@d * pystride@d);
         yp[yid] = xp[xid];
     }
     )
     // unused var
     (void)xshape0;
+    (void)yshape0;
 }
 #endif // JIT
 

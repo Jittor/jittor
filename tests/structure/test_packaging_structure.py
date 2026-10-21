@@ -27,17 +27,21 @@ class TestPackagingStructure(unittest.TestCase):
         # follow it, and setup.py excludes it so the core wheel never ships
         # another distribution's packages, which `test_pyproject_uses_regular
         # _package_discovery` pins; discovery is asked the same question here.
-        discovered = set(find_packages(where=str(self.python_root),
-                                       exclude=("jittor.compat", "jittor.compat.*")))
+        discovered = set(
+            find_packages(where=str(self.python_root), exclude=("jittor.compat", "jittor.compat.*"))
+        )
         self.assertEqual(discovered, expected)
         backend_root = self.repo_root / "backends"
         backend_expected = {
             "jittor.backends." + path.parent.relative_to(backend_root).as_posix().replace("/", ".")
             for path in backend_root.rglob("__init__.py")
         }
-        backend_discovered = {"jittor.backends." + name
-                              for name in find_packages(where=str(backend_root))}
+        backend_discovered = {
+            "jittor.backends." + name for name in find_packages(where=str(backend_root))
+        }
         self.assertEqual(backend_discovered, backend_expected)
+        self.assertIn("jittor.backends.cuda.kernels.cublas", backend_discovered)
+        self.assertTrue((backend_root / "cuda/kernels/cublas/lt_linear_cuda.py").is_file())
 
     def test_pyproject_uses_regular_package_discovery(self):
         try:
@@ -55,16 +59,23 @@ class TestPackagingStructure(unittest.TestCase):
         for backend in ("cuda", "acl", "comm"):
             self.assertEqual(package_dirs["jittor.backends." + backend], "backends/" + backend)
         setup_tree = ast.parse((self.repo_root / "setup.py").read_text())
-        discovery_roots = {ast.literal_eval(node.args[0]) for node in ast.walk(setup_tree)
-                           if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                           and node.func.id == "find_packages"}
+        discovery_roots = {
+            ast.literal_eval(node.args[0])
+            for node in ast.walk(setup_tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "find_packages"
+        }
         self.assertEqual(discovery_roots, {"python", "backends"})
         compat_exclusions = {
             tuple(ast.literal_eval(keyword.value))
             for node in ast.walk(setup_tree)
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-            and node.func.id == "find_packages" and ast.literal_eval(node.args[0]) == "python"
-            for keyword in node.keywords if keyword.arg == "exclude"
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "find_packages"
+            and ast.literal_eval(node.args[0]) == "python"
+            for keyword in node.keywords
+            if keyword.arg == "exclude"
         }
         self.assertEqual(compat_exclusions, {("jittor.compat", "jittor.compat.*")})
         self.assertTrue(config["tool"]["setuptools"]["include-package-data"])
@@ -79,22 +90,28 @@ class TestPackagingStructure(unittest.TestCase):
 
     def test_manifest_covers_runtime_trees_without_cache_payloads(self):
         from importlib.util import module_from_spec, spec_from_file_location
+
         path = self.repo_root / "tools/build/generate_manifest.py"
         spec = spec_from_file_location("manifest_contract", path)
         generator = module_from_spec(spec)
         spec.loader.exec_module(generator)
         for project in (self.repo_root, self.repo_root / "compat"):
-            self.assertEqual((project / "MANIFEST.in").read_text(),
-                             generator.manifest_text(project))
+            self.assertEqual(
+                (project / "MANIFEST.in").read_text(), generator.manifest_text(project)
+            )
         resources = generator.runtime_resources(self.repo_root)
         self.assertEqual(resources["src/core/common.h"], "jittor/src/core/common.h")
-        self.assertEqual(resources["backends/cuda/include/helper_cuda.h"],
-                         "jittor/backends/cuda/include/helper_cuda.h")
+        self.assertEqual(
+            resources["backends/cuda/include/helper_cuda.h"],
+            "jittor/backends/cuda/include/helper_cuda.h",
+        )
         self.assertIn("python/jittor/contrib/math_util/src/igamma.h", resources)
         self.assertFalse(any(path.startswith("compat/") for path in resources))
         compat_resources = generator.runtime_resources(self.repo_root / "compat")
-        self.assertEqual(compat_resources["shim/cpp_extension/include/ATen/cuda/detail/UnpackRaw.cuh"],
-                         "jittor/compat/shim/cpp_extension/include/ATen/cuda/detail/UnpackRaw.cuh")
+        self.assertEqual(
+            compat_resources["shim/cpp_extension/include/ATen/cuda/detail/UnpackRaw.cuh"],
+            "jittor/compat/shim/cpp_extension/include/ATen/cuda/detail/UnpackRaw.cuh",
+        )
         self.assertTrue(set(resources.values()).isdisjoint(compat_resources.values()))
         for source in (self.repo_root / "backends").rglob("*"):
             if source.is_file() and source.suffix in {".h", ".cc", ".cpp", ".cu", ".cuh"}:
@@ -105,7 +122,9 @@ class TestPackagingStructure(unittest.TestCase):
         from tempfile import TemporaryDirectory
         from setuptools._distutils.filelist import FileList
 
-        spec = spec_from_file_location("manifest_fixture", self.repo_root / "tools/build/generate_manifest.py")
+        spec = spec_from_file_location(
+            "manifest_fixture", self.repo_root / "tools/build/generate_manifest.py"
+        )
         generator = module_from_spec(spec)
         spec.loader.exec_module(generator)
         with TemporaryDirectory() as directory:
@@ -113,10 +132,16 @@ class TestPackagingStructure(unittest.TestCase):
             (root / "pyproject.toml").write_text(
                 '[tool.setuptools]\npackage-dir={demo="pkg"}\n'
                 '[tool.setuptools.package-data]\ndemo=["assets/**/*"]\n'
-                '[tool.jittor.sdist]\ninclude=["examples/**"]\nexclude=[]\n')
-            files = ["setup.py", "MANIFEST.in", "pkg/assets/value.dat",
-                     "pkg/assets/__pycache__/leak.dat", "examples/tutorial 1.md",
-                     "examples/.pytest_cache/v/cache/data"]
+                '[tool.jittor.sdist]\ninclude=["examples/**"]\nexclude=[]\n'
+            )
+            files = [
+                "setup.py",
+                "MANIFEST.in",
+                "pkg/assets/value.dat",
+                "pkg/assets/__pycache__/leak.dat",
+                "examples/tutorial 1.md",
+                "examples/.pytest_cache/v/cache/data",
+            ]
             for relative in files:
                 path = root / relative
                 path.parent.mkdir(parents=True, exist_ok=True)

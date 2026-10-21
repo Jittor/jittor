@@ -7,6 +7,7 @@
 #include "runtime/jit_policy.h"
 #include "runtime/configuration.h"
 #include "runtime/backend.h"
+#include "runtime/rng_state.h"
 #include "runtime/backend_fallback.h"
 #include "runtime/launch_diagnostics.h"
 
@@ -30,6 +31,7 @@ public:
     BackendRegistry& backends() { return backends_; }
     BackendFallbackState& fallbacks() { return fallbacks_; }
     LaunchHistory& launches() { return launches_; }
+    RuntimeRngState& rng() { return rng_; }
 
 private:
     Executor executor_;
@@ -42,6 +44,7 @@ private:
     BackendRegistry backends_;
     BackendFallbackState fallbacks_;
     LaunchHistory launches_;
+    RuntimeRngState rng_;
 };
 
 EXTERN_LIB NativeRuntime& native_runtime();

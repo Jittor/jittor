@@ -28,3 +28,23 @@ def channels_last_view(y):
 def records_no_grad(*values):
     return jt.flags.no_grad or all(
         v.is_stop_grad() for v in values if isinstance(v, jt.Var))
+
+
+def offer_channels_last(y, build):
+    """Say that ``build()`` computes ``y`` as a channels-last view instead.
+
+    A convolution that records a gradient hands out NCHW: whether NHWC pays
+    depends on what reads it -- a batch norm with NHWC kernels keeps the whole
+    chain NHWC, a group norm or a reshape would convert it straight back. So
+    the reader decides (`take_channels_last`); `y` itself stays a graph node
+    nobody runs unless something else reads it.
+    """
+    y.__dict__["_channels_last_offer"] = (y.id, build)
+
+
+def take_channels_last(x):
+    """``x`` as a channels-last view, if the pass that makes it offered one."""
+    entry = getattr(x, "__dict__", {}).get("_channels_last_offer")
+    if entry is not None and entry[0] == x.id and not x.is_finished:
+        return entry[1]()
+    return None

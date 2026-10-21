@@ -6,6 +6,7 @@
 // ***************************************************************
 #pragma once
 #include "core/op.h"
+#include "runtime/random_generator.h"
 
 namespace jittor {
 
@@ -16,8 +17,14 @@ struct RandomOp : Op {
     static constexpr uint32 backend_mask = OpBackendAny;
     Var* output;
     NanoString type;
-    RandomOp(NanoVector shape, NanoString dtype=ns_float32, NanoString type=ns_uniform);
-    
+    // Non-null: draws consume (and advance) THIS generator's own
+    // independent, device-native RNG state instead of the process-global
+    // one -- captured as a shared_ptr (not the raw RandomGenerator* passed
+    // in) so the state stays alive for this op's lazy execution regardless
+    // of the Python-side Generator wrapper's own lifetime.
+    shared_ptr<RandomGeneratorState> gen;
+    RandomOp(NanoVector shape, NanoString dtype=ns_float32, NanoString type=ns_uniform, RandomGenerator* generator=nullptr);
+
     const char* name() const override { return "random"; }
     DECLARE_jit_run;
 };

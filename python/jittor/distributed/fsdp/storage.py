@@ -1,0 +1,373 @@
+"""Shared FSDP storage and forward lifecycle.
+
+The native and Torch frontends provide collective/metadata adapters; this module
+owns the actual partition, materialization and lifetime calculations.
+"""
+
+import jittor as jt
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
+
+
+def _parameter_requires_grad(param):
+    """Read torch-facing trainability without conflating it with graph stop."""
+    try:
+        return bool(param.requires_grad)
+    except (AttributeError, TypeError):
+        return not param.is_stop_grad()
+
+
+def _materialize_initial_shard(shard):
+    """Own only a rank-local copy, not the sliced full parameter storage."""
+    shard = jt.Var.copy(shard).stop_grad()
+    shard.sync()
+    return shard
+
+
+def _flat_local_overlap(state, entry):
+    rank_start = int(state.true_fsdp_rank) * int(state.true_fsdp_flat_shard_numel)
+    rank_end = rank_start + int(state.true_fsdp_flat_shard_numel)
+    param_start = int(entry.flat_offset)
+    param_end = param_start + int(entry.numel)
+    overlap_start = max(rank_start, param_start)
+    overlap_end = min(rank_end, param_end)
+    if overlap_end <= overlap_start:
+        return 0, 0
+    return overlap_start - rank_start, overlap_end - overlap_start
+
+
+def _compute_shard(state, master_shard):
+    """Cast a temporary collective input, preserving the optimizer's shard."""
+    policy = getattr(state, "mp_policy", None)
+    target = getattr(policy, "param_dtype", None)
+    if target is None:
+        return master_shard
+    name = _jittor_dtype_name(target)
+    return (
+        master_shard if _jittor_dtype_name(master_shard.dtype) == name else master_shard.cast(name)
+    )
+
+
+def _cast_floating_tree(value, target):
+    """Convert floating tensors inside forward inputs/outputs without detaching."""
+    if isinstance(value, jt.Var):
+        source = _jittor_dtype_name(value.dtype)
+        return value.cast(target) if "float" in source and source != target else value
+    if isinstance(value, tuple):
+        values = tuple(_cast_floating_tree(item, target) for item in value)
+        if hasattr(value, "_fields"):
+            return type(value)(*values)
+        return values if type(value) is tuple else type(value)(values)
+    if isinstance(value, list):
+        values = [_cast_floating_tree(item, target) for item in value]
+        return values if type(value) is list else type(value)(values)
+    if isinstance(value, dict):
+        values = {key: _cast_floating_tree(item, target) for key, item in value.items()}
+        return values if type(value) is dict else type(value)(values)
+    return value
+
+
+def _reshard_module_params(module):
+    state = getattr(module, "_fsdp_state", None)
+    if state is None or not getattr(state, "true_fsdp_initialized", False):
+        return module
+    if not getattr(state, "true_fsdp_unsharded", False):
+        return module
+    for entry in state.true_fsdp_params:
+        object.__setattr__(entry.owner, entry.attr, entry.shard)
+        if not getattr(entry, "requires_grad", True):
+            # A frozen parameter is not a sync_sharded_grads() target. Drop the
+            # state's explicit full reference after forward so an entirely
+            # frozen prefix can release each all-gather before the next layer.
+            # If an upstream trainable input needs this weight for its gradient,
+            # Jittor's forward graph retains the Var independently.
+            entry.full_param = None
+    if getattr(state, "true_fsdp_flat", False) and not any(
+        getattr(entry, "requires_grad", True) for entry in state.true_fsdp_params
+    ):
+        state.true_fsdp_flat_full_param = None
+    # Trainable full Vars stay alive for sync_sharded_grads(loss): Jittor's
+    # autograd needs the exact objects that participated in the forward graph.
+    state.true_fsdp_unsharded = False
+    return module
+
+
+def _release_full_params(state):
+    """Drop the gathered full parameters once their gradients are sharded.
+
+    This is what makes FSDP save memory. Three things each held a full-size
+    copy after every step, and none of them was ever cleared:
+
+    * ``entry.full_param`` -- the gathered parameter. ``_reshard_module_params``
+      deliberately keeps it, because the backward needs the exact Var that took
+      part in the forward graph. That is true *until the gradients have been
+      reduce-scattered into the shards*; after that nobody needs it, and the
+      next forward gathers a fresh one.
+    * ``entry.full_public_grad`` -- a full-size gradient that
+      ``refresh_visible_full_grads`` re-materialises on every ``zero_grad()``
+      so that ``.grad`` on a full parameter reads correctly. With the full
+      parameter gone it has nothing to attach to, and stops being made.
+    * ``state.true_fsdp_flat_full_param`` -- the flat gathered buffer, written
+      in ``_unshard_module_params`` and cleared nowhere in the tree.
+
+    Measured on 2 ranks, 64 MB of parameters (``nn.Linear(2048, 2048)`` x4):
+    sharding correctly halved the resident parameters (base 129 -> 97 MB) and
+    then drove the steady state to 513 MB, against 209 MB for the same model
+    not sharded. FSDP was not merely failing to save memory, it cost 2.5x.
+
+    Not called while the parameters are legitimately still gathered:
+    ``reshard_after_forward=False`` asks for exactly that, and the module
+    attributes point at the full Vars.
+    """
+    if getattr(state, "true_fsdp_unsharded", False):
+        return state
+    for entry in getattr(state, "true_fsdp_params", ()):
+        entry.full_param = None
+        entry.full_public_grad = None
+    state.true_fsdp_flat_full_param = None
+    return state
+
+
+def _flat_entry_slices(state, flat_var, *, api):
+    common = api.common
+    out = []
+    for entry in state.true_fsdp_params:
+        local_start, local_len = _flat_local_overlap(state, entry)
+        out.append(common._slice_flat(flat_var, local_start, local_len))
+    return out
+
+
+def _refresh_flat_entry_shards(state, *, api):
+    for entry, shard in zip(
+        state.true_fsdp_params, api._flat_entry_slices(state, state.true_fsdp_flat_shard)
+    ):
+        entry.shard = shard
+        entry.shard_numel = int(shard.shape[0]) if len(shard.shape) else int(entry.numel)
+        api._mark_fsdp_param_var(shard, state, entry, "shard")
+        if getattr(entry, "requires_grad", True):
+            if shard.is_stop_grad():
+                shard.start_grad()
+        elif not shard.is_stop_grad():
+            shard.stop_grad()
+
+
+def _unshard_module_params_impl(module, *, api):
+    common = api.common
+    state = getattr(module, "_fsdp_state", None)
+    if state is None or not getattr(state, "true_fsdp_initialized", False):
+        return module
+    if getattr(state, "true_fsdp_unsharded", False):
+        return module
+    if getattr(state, "true_fsdp_flat", False):
+        full_flat = common._all_gather_shards(
+            _compute_shard(state, state.true_fsdp_flat_shard), getattr(state, "shard_group", None)
+        )
+        state.true_fsdp_flat_full_param = full_flat
+        for entry in state.true_fsdp_params:
+            full = common._slice_flat(full_flat, entry.flat_offset, entry.numel).reshape(
+                entry.shape
+            )
+            entry.full_param = full
+            api._mark_fsdp_param_var(full, state, entry, "full")
+            if getattr(entry, "requires_grad", True):
+                if full.is_stop_grad():
+                    full.start_grad()
+            elif not full.is_stop_grad():
+                full.stop_grad()
+            object.__setattr__(entry.owner, entry.attr, full)
+    else:
+        for entry in state.true_fsdp_params:
+            gathered = common._all_gather_shards(
+                _compute_shard(state, entry.shard), getattr(state, "shard_group", None)
+            )
+            full_flat = (
+                gathered
+                if entry.padded_numel == entry.numel
+                else common._slice_flat(gathered, 0, entry.numel)
+            )
+            full = full_flat.reshape(entry.shape)
+            entry.full_param = full
+            api._mark_fsdp_param_var(full, state, entry, "full")
+            if getattr(entry, "requires_grad", True):
+                if full.is_stop_grad():
+                    full.start_grad()
+            elif not full.is_stop_grad():
+                full.stop_grad()
+            object.__setattr__(entry.owner, entry.attr, full)
+    state.true_fsdp_unsharded = True
+    return module
+
+
+def _execute_with_true_fsdp(module, orig_execute, *args, api, **kwargs):
+    """Run one forward with this module's parameters unsharded.
+
+    Two hooks call this for the same forward, and they are both needed because
+    they cover different dispatch paths:
+
+    * ``Module.__call__`` (installed once, in ``compat/torch/installers/nn.py``)
+      is the only one that sees a torch-style ``forward`` override, a
+      per-instance ``self.forward``, or the fused RMSNorm shortcut -- none of
+      which reach ``execute``;
+    * the per-instance ``execute`` wrapper (installed by ``fully_shard`` in
+      :func:`_install_true_fsdp_execute`) is the only one that sees a direct
+      ``module.execute(...)`` call that bypasses ``__call__``.
+
+    On the ordinary jittor-style path both fire, nested. Unsharding and
+    resharding are individually idempotent, so the answer was never wrong, but
+    the inner hook resharded on the way out and the outer one then re-entered
+    the whole guard sequence for a second time on every single forward.
+
+    The depth counter makes the pair behave as one hook: whichever fires first
+    owns the unshard/reshard for that forward, and any nested call is a plain
+    pass-through. That also fixes the case the idempotence was quietly
+    covering: with ``reshard_after_forward`` true, the inner hook used to put
+    the shards back before the outer hook's ``finally`` had run, so the window
+    in which the module's parameters were unsharded ended in the middle of the
+    outer hook rather than at its end.
+    """
+    common = api.common
+    state = getattr(module, "_fsdp_state", None)
+    if state is None or not getattr(state, "true_fsdp_initialized", False):
+        return orig_execute(*args, **kwargs)
+    depth = getattr(state, "true_fsdp_execute_depth", 0)
+    if depth:
+        return orig_execute(*args, **kwargs)
+    setattr(state, "true_fsdp_execute_depth", depth + 1)
+    frozen_forward_synced = False
+    try:
+        policy = getattr(state, "mp_policy", None)
+        param_dtype = getattr(policy, "param_dtype", None)
+        if param_dtype is not None and getattr(policy, "cast_forward_inputs", True):
+            target = _jittor_dtype_name(param_dtype)
+            args = _cast_floating_tree(args, target)
+            kwargs = _cast_floating_tree(kwargs, target)
+        api._unshard_module_params(module)
+        try:
+            out = orig_execute(*args, **kwargs)
+            entries = getattr(state, "true_fsdp_params", ())
+            output_dtype = getattr(policy, "output_dtype", None)
+            if output_dtype is not None:
+                out = _cast_floating_tree(out, _jittor_dtype_name(output_dtype))
+            module_parameters = getattr(module, "parameters", None)
+            has_trainable_module_param = bool(
+                module_parameters is not None
+                and any(param.requires_grad for param in module_parameters())
+            )
+            if (
+                entries
+                and not any(getattr(entry, "requires_grad", True) for entry in entries)
+                and not has_trainable_module_param
+                and getattr(state, "reshard_after_forward", True)
+            ):
+                if not common._primary_input_requires_grad(args, kwargs):
+                    out = common._materialize_frozen_output(out)
+                roots = common._tensor_values(out)
+                if roots:
+                    jt.submit_pending(*roots, device_sync=True)
+                frozen_forward_synced = True
+            return out
+        finally:
+            if getattr(state, "reshard_after_forward", True):
+                api._reshard_module_params(module)
+                if frozen_forward_synced:
+                    jt.gc()
+    finally:
+        setattr(state, "true_fsdp_execute_depth", depth)
+
+
+def _init_true_fsdp_state_impl(module, state, params, *, world_size, rank, flat, api):
+    common = api.common
+    if getattr(state, "true_fsdp_initialized", False):
+        return state
+    state.true_fsdp_module = module
+    ws = world_size
+    entries = []
+    total_numel = sum(common._param_numel(param) for _, _, _, param in params)
+    if flat and params and len({_jittor_dtype_name(param.dtype) for _, _, _, param in params}) == 1:
+        flat_shard_numel = common._ceil_div(total_numel, ws)
+        flat_padded_numel = flat_shard_numel * ws
+        flat_full = common._pad_flat(
+            jt.concat([common._flatten_var(param) for _, _, _, param in params], dim=0),
+            flat_padded_numel,
+        )
+        # A basic slice is a view: sync alone does not shrink its allocation
+        # or release the full parameter. Own only this rank's storage.
+        flat_shard = _materialize_initial_shard(
+            common._slice_flat(flat_full, rank * flat_shard_numel, flat_shard_numel)
+        )
+        offset = 0
+        for name, owner, attr, param in params:
+            numel = common._param_numel(param)
+            entries.append(
+                common.StateRecord(
+                    name=name,
+                    owner=owner,
+                    attr=attr,
+                    shape=tuple(int(x) for x in param.shape),
+                    dtype=param.dtype,
+                    numel=numel,
+                    padded_numel=numel,
+                    shard_numel=0,
+                    shard=None,
+                    full_param=None,
+                    flat_offset=offset,
+                    requires_grad=_parameter_requires_grad(param),
+                )
+            )
+            offset += numel
+        state.true_fsdp_initialized = True
+        state.true_fsdp_rank = rank
+        state.true_fsdp_world_size = ws
+        state.true_fsdp_params = entries
+        state.true_fsdp_flat = True
+        state.true_fsdp_flat_total_numel = total_numel
+        state.true_fsdp_flat_padded_numel = flat_padded_numel
+        state.true_fsdp_flat_shard_numel = flat_shard_numel
+        state.true_fsdp_flat_shard = api._mark_fsdp_param_var(flat_shard, state, None, "flat_shard")
+        if any(entry.requires_grad for entry in entries):
+            if state.true_fsdp_flat_shard.is_stop_grad():
+                state.true_fsdp_flat_shard.start_grad()
+        elif not state.true_fsdp_flat_shard.is_stop_grad():
+            state.true_fsdp_flat_shard.stop_grad()
+        api._refresh_flat_entry_shards(state)
+        for entry in entries:
+            object.__setattr__(entry.owner, entry.attr, entry.shard)
+        state.true_fsdp_unsharded = False
+        return state
+
+    state.true_fsdp_flat = False
+    for name, owner, attr, param in params:
+        numel = common._param_numel(param)
+        shard_numel = common._ceil_div(numel, ws)
+        padded_numel = shard_numel * ws
+        flat_full = common._pad_flat(common._flatten_var(param), padded_numel)
+        local = _materialize_initial_shard(
+            common._slice_flat(flat_full, rank * shard_numel, shard_numel)
+        )
+        entries.append(
+            common.StateRecord(
+                name=name,
+                owner=owner,
+                attr=attr,
+                shape=tuple(int(x) for x in param.shape),
+                dtype=param.dtype,
+                numel=numel,
+                padded_numel=padded_numel,
+                shard_numel=shard_numel,
+                shard=local,
+                full_param=None,
+                requires_grad=_parameter_requires_grad(param),
+            )
+        )
+        api._mark_fsdp_param_var(local, state, entries[-1], "shard")
+        if entries[-1].requires_grad:
+            if local.is_stop_grad():
+                local.start_grad()
+        elif not local.is_stop_grad():
+            local.stop_grad()
+        object.__setattr__(owner, attr, local)
+    state.true_fsdp_initialized = True
+    state.true_fsdp_rank = rank
+    state.true_fsdp_world_size = ws
+    state.true_fsdp_params = entries
+    state.true_fsdp_unsharded = False
+    return state

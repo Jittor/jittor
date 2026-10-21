@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.11.0'
+__version__ = '2.0.0'
 
 import os as _os
 import sys as _sys
@@ -36,7 +36,7 @@ from ._runtime.composition import publish as _publish
 
 
 _NATIVE_CORE_EXPORTS = (
-    "DumpGraphs", "Flags", "MemInfo", "NanoString", "NanoVector",
+    "DumpGraphs", "Flags", "Generator", "MemInfo", "NanoString", "NanoVector",
     "RingBuffer", "Var", "ZipFile", "binary_dtype_infer", "clean_graph",
     "cleanup", "clear_trace_data", "current_device", "display_max_memory_info",
     "display_memory_info", "dump_all_graphs", "dump_trace_data", "fetch_sync",
@@ -61,7 +61,7 @@ _NATIVE_OP_EXPORTS = (
     "ceil_int", "clone", "code", "conj", "copy", "cos", "cosh",
     "device_copy", "div", "divide", "empty", "equal", "erf", "erfinv",
     "exp", "fetch", "float16", "float32", "float64", "floor",
-    "floor_divide", "floor_int", "fuse_transpose", "fused_adamw",
+    "floor_divide", "floor_int", "fmod", "fuse_transpose", "fused_adamw",
     "fused_sgd", "getitem",
     "greater", "greater_equal", "index", "index_var", "int16", "int32",
     "int64", "int8", "left_shift", "less", "less_equal", "log",
@@ -75,7 +75,7 @@ _NATIVE_OP_EXPORTS = (
     "reindex_var", "reinterpret_view", "reshape", "right_shift", "round",
     "round_int", "safe_clip", "setitem", "sigmoid", "sin", "sinh", "sqrt",
     "sub", "subtract", "sum", "tan", "tanh", "tape", "ternary",
-    "transpose", "uint16", "uint32", "uint64", "uint8", "unary", "where",
+    "transpose", "uint16", "uint32", "uint64", "uint8", "unary", "where", "write_back",
 )
 
 
@@ -141,10 +141,7 @@ with _lock.lock_scope():
         numpy2cupy = None
         # CPU arrays default to the CUDA pinned-host allocator (cudaMallocHost),
         # which also fails with no device -- switch to the plain host allocator.
-        try:
-            core.flags.use_cuda_host_allocator = 0
-        except Exception:
-            pass
+        core.Flags().use_cuda_host_allocator = 0
 
 
 from ._core import api as _core_api
@@ -194,6 +191,9 @@ del _install_var_indexing
 _install_full_reduce()
 _record_install("nn.full_reduce_fast_path")
 del _install_full_reduce
+from ._runtime.dispatch import _bind_native_entries
+_bind_native_entries()
+del _bind_native_entries
 
 from . import contrib as contrib
 from . import misc as misc
@@ -210,6 +210,14 @@ from . import dataset
 from . import init
 from . import autograd
 
+# Native batching transform: builds one real batched op graph instead of
+# looping over the batch in Python (jt.grad/vjp/jvp differentiate through it
+# with no extra code, since the underlying graph is ordinary Jittor ops).
+# Independent of compat/torch's own approximate `torch.vmap` shim -- that one
+# lives in the separate jittor.compat.torch namespace, so there is no name
+# collision to order against here, unlike a same-process monkeypatch layer.
+from .vmap import vmap
+
 # The legacy ``jittor.gradfunctional`` spelling is published as a same-object
 # alias after compatibility composition. Keep the root attribute available
 # during composition as well.
@@ -218,6 +226,12 @@ gradfunctional = autograd
 dtype = NanoString
 
 import jittor_utils
+# Created by jit_utils_core so that the bindings raise these very classes.
+JittorError = jittor_utils.cc.JittorError
+JittorInternalError = jittor_utils.cc.JittorInternalError
+JittorIndexError = jittor_utils.cc.JittorIndexError
+JittorTypeError = jittor_utils.cc.JittorTypeError
+JittorShapeError = jittor_utils.cc.JittorShapeError
 
 _ran_post_process = False
 for backend in compiler.backend_modules:
@@ -372,7 +386,7 @@ _ROOT_EXPORTS = (
     "dtype", "einsum", "fft", "gradfunctional", "has_cuda", "in_mpi",
     "init", "jittor_core", "kron", "linalg", "logsumexp", "lr_scheduler",
     "math_util", "matmul", "misc", "mkl_ops", "mpi", "mpi_ops", "nn",
-    "numpy2cupy", "optim", "ops", "rank", "sparse", "tensordot",
+    "numpy2cupy", "optim", "ops", "rank", "sparse", "tensordot", "vmap",
     "amp",
     "world_size", "config", "capability", "introspection", "graph_replay", "capture_step",
     "profile", "profiling",

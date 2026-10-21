@@ -1,11 +1,13 @@
 # Exit-time "corrupted double-linked list" in the MiniMax-H3 run
 
-- Status: Fixed; verified over repeated real runs
-- Date: 2026-09-14
-- Baseline commit: `c6b56a61` (both fixes, on top of `7f7c8c0e`)
-- Owner: core runtime / compiler maintainers
-- Review when: the liveness queue, the free buffer, or the compiled-fused-op
-  cache lifetime changes
+- 状态：已修复，多次真实运行验证
+- 日期：2026-09-14
+- 基线提交：`c6b56a61`（两处修复 `f43b90d6`、`c6b56a61`，基于 `7f7c8c0e`）
+- 验证范围：MiniMax-H3 tiny 32x32 t2va（`run-tiny-parity.sh`，VAE 在 autocast 下为
+  float32）在 CUDA 上连跑四次、一次 ASAN 构建的全流程，以及 `tests/core` 中 fused op、
+  relay 与 node 相关文件在 CPU 上；卡型原文未记
+- 维护者：核心运行时与编译器维护者
+- 复查条件：liveness 队列、free buffer 或已编译融合算子缓存的生命周期变化
 
 ## Symptom
 

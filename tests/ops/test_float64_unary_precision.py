@@ -15,7 +15,7 @@ The CPU table uses the unsuffixed overloads and is exact.
 
 ``round`` used to be in that list and is now dispatched on width, which is what
 the exact assertions below cover; the strict expected failure covers the rows
-that were left alone (KI-OPS-007). Both halves live here so that fixing the
+that were left alone. Both halves live here so that fixing the
 rest of the table turns the xfail red against a file that already states what
 "fixed" looks like.
 
@@ -84,9 +84,8 @@ class TestFloat64UnaryPrecisionCuda(_Float64UnaryPrecision, unittest.TestCase):
     device_flag = 1
 
     def test_unary_family_keeps_float64_precision(self):
-        # KI-OPS-007 was fixed in 2d716db31 (the CUDA unary math table now
-        # dispatches on dtype); known-issues.md and the numerics contract both
-        # record it as closed. The xfail(strict=True) that outlived the fix is
+        # Fixed in 2d716db31 (the CUDA unary math table now dispatches on
+        # dtype); the numerics contract records it as closed. The xfail(strict=True) that outlived the fix is
         # what made this file report a failure -- a strict xfail that passes
         # counts as one.
         self._check_family()

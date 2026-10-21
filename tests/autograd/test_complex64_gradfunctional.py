@@ -10,21 +10,16 @@ What is checked (CPU + CUDA):
     seeded loss the implementation uses, L = Re(sum(out * conj(v))) over the (real,imag)
     representation. (This is torch's conjugate/Wirtinger input-grad convention.)
   - vjp result is numerically identical to the legacy ComplexNumber path (polymorphism).
-  - jvp on native complex64 raises NotImplementedError cleanly (native complex64 has no
-    second-order autograd yet, and jvp is the double-backward trick) -- "宁可响亮崩也不静默错".
+  - jvp on native complex64 agrees with analytic directional derivatives, including
+    real inputs producing complex outputs.
   - jvp on the legacy ComplexNumber path STILL works (regression guard).
-  - jvp on native REAL Vars still works (the guard only trips on native complex).
+  - jvp on native REAL Vars still works.
 
 No real torch in this env: numpy is the oracle.
 
-Scope notes (limitations of native complex64 itself, NOT of gradfunctional):
-  - jvp can't run on native complex64 because there is no second-order autograd for the
-    dtype yet (the double-backward needs a complex64->float32 cast-backward). gradfunctional
-    detects this and raises NotImplementedError instead of an opaque C++ compile error.
-  - vjp with a *real* input feeding a complex output (so the input grad must be cast from
-    complex64 back to float32) hits the same missing cast-backward in the op layer; that is
-    outside gradfunctional's control, so it is intentionally not exercised here. All-complex
-    and all-real input tuples work; those are what we lock.
+Scope: JVP uses double backward, so support still depends on differentiable
+backward implementations of the participating operators. This suite does not
+claim higher-order support for opaque complex linear-algebra callbacks.
 
 Run:  python -m pytest tests/autograd/test_complex64_gradfunctional.py
 """
@@ -195,8 +190,8 @@ class TestComplex64GradFunctional(unittest.TestCase):
                                        err_msg=f"two-complex grad y {dev}")
         both_devices(body)
 
-    # --------------------------------------------------- jvp: native complex -> raises
-    def test_jvp_native_complex_raises(self):
+    # --------------------------------------------------- jvp: native complex
+    def test_jvp_native_complex(self):
         rng = np.random.RandomState(3)
         s = (5, 6)
         a = _np_complex(rng, s)
@@ -206,8 +201,11 @@ class TestComplex64GradFunctional(unittest.TestCase):
             return x.exp().sum(1)
 
         def body(dev):
-            with self.assertRaises(NotImplementedError):
-                jvp(f, jt.array(a), jt.array(vin), create_graph=True)
+            out, tangent = jvp(f, jt.array(a), jt.array(vin), create_graph=True)
+            np.testing.assert_allclose(_to_complex(out), np.exp(a).sum(1),
+                                       atol=2e-3, rtol=2e-3)
+            np.testing.assert_allclose(_to_complex(tangent), (np.exp(a) * vin).sum(1),
+                                       atol=2e-3, rtol=2e-3)
             # also when complex appears only in the OUTPUT (real input -> complex out):
             # real Var * complex64 Var promotes to complex64.
             cone = jt.array(np.array(1.0 + 0.0j, dtype="complex64"))
@@ -215,8 +213,9 @@ class TestComplex64GradFunctional(unittest.TestCase):
                 return (x * cone).sum(1)
             xr = rng.randn(*s).astype("float32")
             vr = rng.randn(*s).astype("float32")
-            with self.assertRaises(NotImplementedError):
-                jvp(g, jt.array(xr), jt.array(vr), create_graph=True)
+            out, tangent = jvp(g, jt.array(xr), jt.array(vr), create_graph=True)
+            np.testing.assert_allclose(_to_complex(out), xr.sum(1), atol=2e-3, rtol=2e-3)
+            np.testing.assert_allclose(_to_complex(tangent), vr.sum(1), atol=2e-3, rtol=2e-3)
         both_devices(body)
 
     # ----------------------------------------------- jvp: native REAL still works

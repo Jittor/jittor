@@ -33,6 +33,7 @@ from .method_api import (
     _api_data_ptr,
     _api_is_contiguous,
     _api_is_leaf,
+    _api_is_sparse,
     _api_retains_grad,
     _api_is_cpu,
     _api_is_mps,
@@ -96,6 +97,7 @@ from .method_api import (
     _numpy_data_value,
     _optimizer_maybe_has_fsdp_params,
     _register_leaf,
+    _register_post_accumulate_grad_hook,
     _resolve_size,
     _restore_trainable_state,
     _retain_grad,
@@ -115,6 +117,7 @@ from .method_api import (
     _var_cpu,
     _var_cuda,
     _var_detach,
+    _var_detach_inplace,
     _var_get_device,
     _var_norm,
     _var_numpy,
@@ -135,14 +138,47 @@ def _type_attribute(Var, name):
     return None
 
 
+def _bind_native_fast_paths(jt):
+    """Hand the native fast paths what they ask Python about.
+
+    `src/bindings/pyjt/py_compat_fast.h`: whether a step is being captured,
+    and -- through the kernel registry the native selector keeps -- whether
+    a backend registered its own kernel for an op they build.
+    """
+    from jittor._runtime import dispatch
+    from jittor._runtime.step_capture import tracing
+    if dispatch._NATIVE_SELECT is None:
+        dispatch._bind_native_select()
+    jt.core._compat_fast_bind(tracing)
+
+
+def _bind_native_binary(jt, natives, mark_cpu_like):
+    """Hand `_fast_binary` the native operators the frontend replaces.
+
+    `natives` are the Var's own operators, captured before the frontend
+    installs its promoting ones over them; see `method_api._FAST_BINARY`.
+    """
+    from . import method_api
+    bind = getattr(jt.core, "_compat_fast_bind_binary", None)
+    if bind is None:
+        return
+    # ACL keeps a Python float divisor in the tensor's dtype (see
+    # `_true_division`); everywhere else the native path widens it the same way.
+    bind(tuple(natives[name] for name in method_api._FAST_BINARY_OPERATORS), mark_cpu_like,
+         not bool(getattr(jt.compiler, "has_acl", 0)))
+    method_api._FAST_BINARY = jt.core._fast_binary
+
+
 def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # Var.dtype natively returns jittor's NanoString, which is unhashable and
     # not == to torch dtype objects. Return the canonical immutable frontend
     # dtype so `t.dtype in {torch.float16, ...}` and dictionary keys work.
     from importlib import import_module as _import_module
     _owner = _import_module(__package__)
+    _bind_native_fast_paths(_owner.jt)
     _NativeVar = _owner.jt.Var
     _native_operators = {name: getattr(Var, name, None) for name in _BINARY_APIS}
+    _bind_native_binary(_owner.jt, _native_operators, _owner._mark_cpu_like)
 
     if _jittor_dtype_name(_DTYPE_OBJS) is not None and not getattr(Var, "_dtype_wrapped", False):
         try:
@@ -152,7 +188,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                 # native descriptor and this installation's dtype objects.
                 Var._frontend_native_dtype = _native_desc
                 Var._frontend_dtype_objects = _DTYPE_OBJS
-                Var.dtype = property(_dtype_get)
+                # `_dtype_get`, natively: every operator reads it.
+                Var.dtype = property(_owner.jt.core._frontend_dtype)
                 Var._dtype_wrapped = True
         except _owner.EXPECTED as exc:
             _owner.swallowed("torch/installers/tensor.py _install_tensor_methods: _native_desc = Var.__dict__.get('dtype') # C getset_des...", exc)
@@ -197,6 +234,13 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     Var.sub_ = _api_sub
     Var.mul_ = _api_mul
     Var.div_ = _api_div
+    # Native augmented assignment preserves a formerly frozen destination's
+    # stop-grad policy. Torch instead connects it to a differentiable RHS,
+    # just as add_/sub_/mul_/div_ already do through the shared _ip owner.
+    Var.__iadd__ = _api_add
+    Var.__isub__ = _api_sub
+    Var.__imul__ = _api_mul
+    Var.__itruediv__ = _api_div
     # in-place unary math ops (recurrent_gemma uses x.log_(); common torch idioms)
     for name, implementation in _UNARY_INPLACE_APIS.items():
         if not hasattr(Var, name):
@@ -375,6 +419,9 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # Keep the compatibility spelling on Var so it follows the graph instead
     # of silently calling every intermediate a leaf.
     Var.is_leaf = property(_api_is_leaf)
+    Var.is_sparse = property(_api_is_sparse)
+    register_api_bindings(Var, 'torch.Tensor', ('is_sparse',), Fidelity.EXACT,
+                          'Native Var has dense storage; sparse construction is unsupported.')
     # torch's nested-tensor flag; jittor has no nested tensors -> always False.
     if not hasattr(Var, "is_nested"):
         Var.is_nested = property(_api_is_nested)
@@ -389,6 +436,15 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # after backward (normally only leaves keep .grad). Registration follows
     # the holder's lifetime, including repeated or interleaved backward graphs.
     Var.retain_grad = _retain_grad
+    Var.register_post_accumulate_grad_hook = _register_post_accumulate_grad_hook
+    register_api_bindings(Var, 'torch.Tensor', ('register_hook',), Fidelity.APPROXIMATE,
+                          'Native complete-gradient hooks preserve leaf identity and propagate '
+                          'replacement gradients. Worker graph IDs and private Node APIs are unavailable.')
+    register_api_bindings(Var, 'torch.Tensor', ('register_post_accumulate_grad_hook',),
+                          Fidelity.APPROXIMATE,
+                          'Observers run after existing leaf/optimizer accumulation and before '
+                          'final callbacks. Native graph scheduling does not reproduce PyTorch '
+                          'interleaving between different leaves.')
     Var.retains_grad = property(_api_retains_grad)
 
     Var.to = _to
@@ -398,6 +454,11 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # then expose the scalar shape only at the Python/NumPy boundary.
     _native_detach = Var.detach
     Var.detach = _var_detach
+    Var.detach_ = _var_detach_inplace
+    register_api_bindings(Var, 'torch.Tensor', ('detach_',), Fidelity.APPROXIMATE,
+                          'Native leaf policy or storage-sharing detached rebinding preserves '
+                          'reverse-mode history for earlier consumers. Views are rejected; '
+                          'forward-mode AD is unsupported.')
 
     _native_numpy = Var.numpy
     Var.numpy = _var_numpy

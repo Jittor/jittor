@@ -76,6 +76,25 @@ def code_with_attributes(*args, **kwargs):
     return jt.code(*args, **kwargs)
 
 
+def structured_program(cuda_header, cuda_src, attribute_sets=None):
+    """What :func:`code_with_attributes` builds for a gradient-free ACL
+    program, as an :class:`AclProgram` the caller can keep and emit again.
+
+    The header, source and data come out byte for byte as that function
+    passes them to ``jt.code``, so a memoised program reaches the same
+    compiled kernel.
+    """
+    data = {}
+    if isinstance(cuda_src, AttributeCode):
+        data.update(code_program([cuda_src]).data)
+        cuda_header += _ATTRIBUTE_INCLUDE
+        cuda_src = cuda_src.source
+    if attribute_sets:
+        data.update(attribute_payloads(attribute_sets))
+        cuda_header += _ATTRIBUTE_INCLUDE
+    return AclProgram(cuda_header, cuda_src, [], data)
+
+
 #: Canonical names by the raw dtype name ``dtype_name`` would read. That
 #: function is a pure function of that one string and rebuilds its alias table
 #: from a literal on every call, while this check runs once per activation,

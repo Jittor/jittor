@@ -100,6 +100,8 @@ def is_initialized():
     return bool(_STATE["initialized"] or _runtime_distributed())
 
 
+
+
 def get_rank(group=None):
     """Return this process's rank, optionally translated to a subgroup rank."""
     if group is None or getattr(group, "ranks", None) is None:
@@ -113,16 +115,6 @@ def get_rank(group=None):
     except ValueError:
         return -1
 
-
-def get_world_size(group=None):
-    """Return the process-group size, defaulting to WORLD."""
-    if group is not None and getattr(group, "ranks", None) is not None:
-        return len(group.ranks)
-    if _runtime_distributed():
-        return _runtime_world_size()
-    return int(_STATE["world_size"]) if _STATE["initialized"] else 1
-
-
 def get_local_rank():
     if _STATE["initialized"]:
         return int(_STATE["local_rank"])
@@ -134,6 +126,13 @@ def get_local_rank():
         return _mpi_local_identity("local_rank", _runtime_rank())
     return 0
 
+def get_world_size(group=None):
+    """Return the process-group size, defaulting to WORLD."""
+    if group is not None and getattr(group, "ranks", None) is not None:
+        return len(group.ranks)
+    if _runtime_distributed():
+        return _runtime_world_size()
+    return int(_STATE["world_size"]) if _STATE["initialized"] else 1
 
 def get_local_world_size():
     if _STATE["initialized"]:
@@ -204,6 +203,8 @@ class ProcessGroup:
              getattr(compile_extern, "nccl_ops", None)),
             ("hccl", getattr(compile_extern, "hccl_mod", None),
              getattr(compile_extern, "hccl_ops", None)),
+            ("mpi", getattr(compile_extern, "mpi", None),
+             getattr(compile_extern, "mpi_ops", None)),
         )
         for kind, module, ops in choices:
             create = getattr(
@@ -221,7 +222,7 @@ class ProcessGroup:
             return
         if self.size() > 1:
             raise NotImplementedError(
-                "Jittor process-group subgroups require NCCL or HCCL"
+                "Jittor process-group subgroups require NCCL, HCCL or MPI"
             )
 
     def _collective_backend(self):

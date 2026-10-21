@@ -13,6 +13,7 @@ for parity *and* for no speed regression.
 
 import argparse
 from contextlib import ExitStack, nullcontext
+import hashlib
 import importlib
 import json
 import os
@@ -58,8 +59,39 @@ def _dependency_report(requirements):
         report[name] = {
             "version": str(getattr(module, "__version__", "unknown")),
             "origin": str(Path(getattr(module, "__file__", "")).resolve()),
+            "installed_files_sha256": _installed_package_files(module),
         }
     return report
+
+
+def _installed_package_files(module):
+    """Bind installed package bytes, without claiming an upstream identity.
+
+    Hash data and compiled extensions as well as Python sources. A single-file
+    dependency must not accidentally enumerate its entire site-packages parent.
+    Namespace packages need an explicit multi-root protocol before acceptance.
+    """
+    filename = getattr(module, "__file__", None)
+    if not filename or not Path(filename).is_file():
+        raise ValueError("Dependency has no actual installed module file")
+    origin = Path(filename).resolve()
+    package = origin.parent
+    if hasattr(module, "__path__"):
+        roots = {Path(path).resolve() for path in module.__path__}
+        if roots != {package}:
+            raise ValueError("Dependency package has unbound additional search roots")
+        paths = sorted(package.rglob("*"))
+    else:
+        paths = [origin]
+    result = {}
+    for path in paths:
+        if "__pycache__" in path.parts or path.suffix in (".pyc", ".pyo"):
+            continue
+        if path.is_symlink() and path.is_dir():
+            raise ValueError("Dependency has an unbound linked package directory")
+        if path.is_file():
+            result[path.relative_to(package).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return result
 
 
 def _import_torch(runtime):

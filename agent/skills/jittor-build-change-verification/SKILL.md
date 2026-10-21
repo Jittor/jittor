@@ -1,6 +1,6 @@
 ---
 name: jittor-build-change-verification
-description: 改了 Jittor 构建系统（jittor_utils、compiler.py、compile_extern.py、cache_compile.cc、lock.cc、pyproject 的 pytest 配置）之后，怎么确认没把别人的构建弄坏。给出冷缓存 / 热缓存 / 并发 / 切 flag 四种情形各自的验证命令与判据，以及多 worktree 并行时哪些状态是全局共享的。另含 §2.5「怎么可复现地量 import jittor 的耗时并归因到具体一步」（三种造冷缓存的办法、为什么不能用 profiler 得结论、配套脚本 measure_import_cost.py）、§2.6「给构建产物加构建戳」（判错两个方向代价不对称、戳里必须记什么才不会静默算错、为什么同进程内验不出来）、§2.7「JITTOR_NO_BUILD=1 把『这次 import 不许编译』变成可断言的」。凡是会改变缓存路径、锁、编译命令行、探测流程或 import 耗时的改动都要按这个走一遍再推。
+description: 改了 Jittor 构建系统（python/jittor/build/ 下的 utils/（导入名 jittor_utils）、compiler.py、compile_extern.py，src/utils/cache_compile.cc、src/runtime/lock.cc，pyproject 的 pytest 配置）之后，怎么确认没把别人的构建弄坏。给出冷缓存 / 热缓存 / 并发 / 切 flag 四种情形各自的验证命令与判据，以及多 worktree 并行时哪些状态是全局共享的。另含 §2.5「怎么可复现地量 import jittor 的耗时并归因到具体一步」（三种造冷缓存的办法、为什么不能用 profiler 得结论、配套脚本 measure_import_cost.py）、§2.6「给构建产物加构建戳」（判错两个方向代价不对称、戳里必须记什么才不会静默算错、为什么同进程内验不出来）、§2.7「JITTOR_NO_BUILD=1 把『这次 import 不许编译』变成可断言的」。凡是会改变缓存路径、锁、编译命令行、探测流程或 import 耗时的改动都要按这个走一遍再推。
 ---
 
 # 改了构建系统之后怎么确认没弄坏别人
@@ -24,8 +24,8 @@ version"、莫名其妙的 40 分钟卡死）。所以推之前必须自己先�
 `jittor-worktree-verification`：
 
 ```bash
-WT=<你的 worktree>            # 例如 .../refactor/<分区>
-JH=<你的 JITTOR_HOME>          # 例如 .../refactor/_home/<分区>
+WT=<你的 worktree>            # 例如 $JITTOR_LAB_ROOT/worktrees/<topic>
+JH=<你的 JITTOR_HOME>          # 例如 $JITTOR_LAB_ROOT/_state/<topic>/<run>/jittor-home
 TD=<你的 TMPDIR>
 E="JITTOR_HOME=$JH TMPDIR=$TD PYTHONPATH=$WT/python nvcc_path=/usr/local/cuda/bin/nvcc"
 ```
@@ -40,7 +40,7 @@ E="JITTOR_HOME=$JH TMPDIR=$TD PYTHONPATH=$WT/python nvcc_path=/usr/local/cuda/bi
 而是**看日志第一行**：
 
 ```
-[i ...] Jittor(1.3.11.0) src: /path/to/some/tree/python/jittor
+[i ...] Jittor(2.0.0) src: /path/to/some/tree/python/jittor
 ```
 
 这个路径不是你的 worktree，后面的一切结论全部作废——而且它会安安静静地把**别人那棵树**
@@ -88,9 +88,10 @@ print('HAS_CUDA', jittor.has_cuda)"
 - 退出码 0，`HAS_CUDA` 与你预期一致（有 nvcc 就该是 1；变成 0 通常是缓存路径改动
   让 CUDA 版 `jittor_core` 被 CPU 版遮蔽）。
 - `CACHE` 打出的路径**逐段**看一遍。这里最容易出的事故是把日志文本拼进了目录名：
-  `compiler.py` 用子进程查 GPU 算力，**子进程的任何一行输出都会被当成 arch 号**切进
-  cuda key（历史上真发生过，目录名里出现 `..._sm_0902_215850..._Create_[i_file...`）。
-  凡是目录里出现日期、方括号、路径片段，就是有子进程往 stdout/stderr 写了东西。
+  `python/jittor/build/compiler.py` 用子进程（`jittor_utils.query_cuda_cc`）查 GPU 算力。
+  现在它只读 stdout、丢弃非数字 token，但历史上 stderr 也被合进来过，日志行被当成 arch
+  号切进了 cuda key（目录名里出现 `..._sm_0902_215850..._Create_[i_file...`）。
+  凡是目录里出现日期、方括号、路径片段，就是有子进程的输出被拼进了路径。
 - 冷启动耗时记下来（本机整核心约 85 s），后面对比用。
 
 ## 2. 热缓存
@@ -105,7 +106,8 @@ env $E python -c "import time;t=time.time();import jittor;print('WARM_OK',round(
 
 - 秒级（本机约 3 s）。如果热缓存也要几十秒，说明你把某个**每次都变的东西**放进了
   缓存键（时间戳、pid、随机数、`os.environ` 里被自己写回去的值）。
-- 连跑三次都不再出现 `jit_utils updated, please rerun your command.`。
+- 连跑三次都不再出现 `jit_utils was rebuilt and cannot be reloaded in this process.
+  Nothing else has run: rerun the same command.`（进程以退出码 3 结束）。
   改了 `src/utils/{cache_compile,log,tracer,jit_utils,str_utils}.cc` 之后第一次必然出现
   一次（这是设计如此，见 `jittor-core-cpp-edit-loop`），但**第二次还出现就是 bug**：
   说明缓存键不收敛。
@@ -155,7 +157,7 @@ EXPECT_JITTOR_SRC=$WT/python env $E \
 | --- | --- | --- | --- |
 | 全新缓存 | `rm -rf $JH.cold` 再用它做 `JITTOR_HOME` | jit_utils_core + 核心 + 全部 extern op | 首次安装体验；探测失败有没有兜底 |
 | 换配置 | 同一个 `JITTOR_HOME`，把 `nvcc_path` 在 `""` 与真路径之间切 | 核心（另一个 `cfg*` 目录）| **切门禁的真实代价**；这是最容易被忽略的一种 |
-| 碰源文件 | `touch python/jittor/src/executor.cc` | 该 TU + 链接 | 依赖跟踪对不对 |
+| 碰源文件 | `touch src/core/executor.cc` | 该 TU + 链接 | 依赖跟踪对不对 |
 
 第二种是本机实测 40 s 的那一种，注意它**不是空缓存**：CUDA 配置与 CPU-only 配置的
 `cfg*` 指纹不同，各自要一份完整核心，所以在三套门禁之间来回切每次都付一次全量
@@ -255,7 +257,7 @@ compile_if_stale(what, cc, flags, sources, output)    # 裸 compile() 的带戳�
 env $E JITTOR_NO_BUILD=1 python -c "import jittor"
 ```
 
-要编译的动作会抛 `jittor.compiler.BuildNotAllowed` 并指名
+要编译的动作会抛 `jittor.build.compiler.BuildNotAllowed` 并指名
 `python -m jittor_utils.bootstrap`（那是允许编译的显式入口，`--check` 则是只检查不建）。
 用途有两个：
 
@@ -266,7 +268,7 @@ env $E JITTOR_NO_BUILD=1 python -c "import jittor"
 两个坑：
 
 - **`jit_utils_core` 不在这道闸门之内。** 它在 `jittor` 里任何代码跑起来之前就建好，
-  所以一个全新的构建配置的**第一条**命令仍然是 0.11 那个「重跑同一条命令」。测试里要
+  所以一个全新的构建配置的**第一条**命令仍然是 §2 那个「重跑同一条命令」（退出码 3）。测试里要
   容忍这一次重试（`_run_gate_probe` 就是这么写的）。
 - **`except Exception` 会把它降级成警告。** `setup_cub` 那个 handler 的本意是「缺 cub
   不该挡住 import」，但拒绝编译不是缺 cub；不显式 re-raise 的话，结果正是这个开关要防的

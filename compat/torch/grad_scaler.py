@@ -11,6 +11,11 @@ import warnings as _warnings
 
 import numpy as _np
 
+import numpy as np
+
+import jittor as jt
+from jittor._core.dtypes import dtype_name
+
 from jittor.amp import GradScaler as _NativeGradScaler
 from jittor._core.dtypes import dtype_name as _dtype_name
 

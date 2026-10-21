@@ -51,14 +51,23 @@ jobs:
       image: ${{ needs.baseline.outputs.cpu_ci_image }}
     timeout-minutes: 30
     steps:
+      # Before the checkout, for the reason given on the benchmark job in
+      # cpu.yml: the CI image has no git, without one actions/checkout leaves
+      # no .git, and check_sdist_contents.py inventories the source tree with
+      # `git ls-files` ("cannot inventory source checkout").
+      - name: Install native packaging toolchain and git
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends build-essential libomp-dev git ca-certificates
       - name: Check out source
         uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - name: Install native packaging toolchain
-        run: |
-          apt-get update
-          apt-get install --yes --no-install-recommends build-essential libomp-dev
+      # Root in the container, a workspace owned by the runner user, and a
+      # per-session HOME under nox: only a system-wide entry reaches the git
+      # that check_sdist_contents.py runs.
+      - name: Trust the checkout
+        run: git config --system --add safe.directory "${GITHUB_WORKSPACE}"
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -71,7 +80,7 @@ jobs:
   python37:
     needs: baseline
     name: nox / py37
-    runs-on: ${{ needs.baseline.outputs.host_runner }}
+    runs-on: ${{ needs.baseline.outputs.py37_runner }}
     timeout-minutes: 20
     steps:
       - name: Check out source

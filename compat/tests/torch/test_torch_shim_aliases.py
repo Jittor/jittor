@@ -310,7 +310,7 @@ assert torch.Tensor is not jittor.Var
 assert torch.nn.Module is not jittor.Module
 assert "_torch_compat_install_context" not in vars(jittor)
 assert torch is sys.modules['torch'] and torch is not jittor
-assert jittor.__version__ == '1.3.11.0'
+assert jittor.__version__ == '2.0.0'
 assert torch.__torch_version__ == '2.11.0'
 assert torch.version.__version__ == '2.11.0'
 assert sum(r.step == 'core' for r in torch._torch_compat_install_context.reports) == 1

@@ -25,7 +25,7 @@ if jittor_offline_path is None:
     try:
         import jittor_offline
         jittor_offline_path = os.path.dirname(jittor_offline.__file__)
-    except Exception:
+    except ImportError:
         pass
 
 

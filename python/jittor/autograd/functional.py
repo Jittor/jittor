@@ -37,9 +37,11 @@ def _reject_strict(api, strict):
 
 # Utility functions
 def _is_native_complex(x):
+    from ..vmap import BatchedVar
+
     # A native complex64/complex128 jt.Var (the new first-class complex dtype), as
     # opposed to the legacy jt.nn.ComplexNumber real/imag-pair simulation (not a Var).
-    return isinstance(x, jt.Var) and "complex" in _jittor_dtype_name(x.dtype)
+    return isinstance(x, (jt.Var, BatchedVar)) and "complex" in _jittor_dtype_name(x.dtype)
 
 
 def _zeros_seed_like(out):
@@ -60,6 +62,8 @@ def _as_tuple_nocheck(x):
         return (x,)
 
 def _as_tuple(inp, arg_name=None, fn_name=None):
+    from ..vmap import BatchedVar
+
     # Ensures that inp is a tuple of Tensors
     # Returns whether or not the original inp was a tuple and the tupled version of the input
     if arg_name is None and fn_name is None:
@@ -71,7 +75,7 @@ def _as_tuple(inp, arg_name=None, fn_name=None):
         is_inp_tuple = False
 
     for i, el in enumerate(inp):
-        if not isinstance(el, (jt.Var, jt.nn.ComplexNumber)):
+        if not isinstance(el, (jt.Var, jt.nn.ComplexNumber, BatchedVar)):
             if is_inp_tuple:
                 raise TypeError(
                     f"The {arg_name} given to {fn_name} must be either a Tensor or a tuple of Tensors but the"
@@ -129,9 +133,11 @@ def _grad_preprocess(inputs, create_graph, need_graph):
 
 
 def _grad_postprocess(inputs, create_graph):
+    from ..vmap import BatchedVar
+
     # Postprocess the generated Tensors to avoid returning Tensors with history when the user did not
     # request it.
-    if isinstance(inputs[0], (jt.Var, jt.nn.ComplexNumber)):
+    if isinstance(inputs[0], (jt.Var, jt.nn.ComplexNumber, BatchedVar)):
         if not create_graph:
             return tuple(inp.detach() for inp in inputs)
         else:
@@ -464,24 +470,9 @@ def jvp(func, inputs, v=None, create_graph=False, strict=False):
         )
         _check_requires_grad(outputs, "outputs", strict=strict)
 
-        # jvp is implemented with the "double backward trick" (there is no forward-mode
-        # AD in jittor): it differentiates a *first* backward graph a second time. Native
-        # complex64 Vars do not yet support second-order autograd -- the second backward
-        # needs a complex64->float32 cast-backward that the native complex machinery does
-        # not implement, which otherwise surfaces as an opaque C++ compile error deep in
-        # _autograd_grad. Fail loudly and early instead ("宁可响亮崩也不静默错"). The legacy
-        # jt.nn.ComplexNumber path keeps working (its double backward is over the all-real
-        # (real, imag) representation), and native complex64 fully works through vjp.
-        if any(_is_native_complex(x) for x in inputs) or any(
-            _is_native_complex(o) for o in outputs
-        ):
-            raise NotImplementedError(
-                "jvp does not support native complex64 Vars: it relies on the double "
-                "backward trick, and native complex64 has no second-order autograd yet. "
-                "Use vjp (which supports native complex64), or wrap complex tensors in "
-                "jt.nn.ComplexNumber for the legacy real/imag-pair jvp path."
-            )
-
+        # The double-backward trick also works for native complex64 operators
+        # whose backward is differentiable. Individual opaque callbacks still
+        # need their own higher-order implementation; do not reject the dtype.
         # The backward is linear so the value of grad_outputs is not important as
         # it won't appear in the double backward graph. We only need to ensure that
         # it does not contain inf or nan.

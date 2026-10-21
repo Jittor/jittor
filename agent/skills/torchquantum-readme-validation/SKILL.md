@@ -18,7 +18,7 @@ keeps the operations from the upstream README and adds only:
 Download the official repository from the network and pin the audited commit:
 
 ```bash
-export JITTOR_LAB_ROOT=${JITTOR_LAB_ROOT:-/home/zy/projects/jittor-lab}
+export JITTOR_LAB_ROOT="${JITTOR_LAB_ROOT:-$(cd .. && pwd)/jittor-lab}"   # from the repository root
 mkdir -p "$JITTOR_LAB_ROOT/torchquantum-validation"
 git clone --depth 1 https://github.com/mit-han-lab/torchquantum.git \
   "$JITTOR_LAB_ROOT/torchquantum-validation/upstream"
@@ -36,21 +36,24 @@ those dependencies in an isolated directory and add it to `PYTHONPATH`; do not
 install TorchQuantum with dependencies into the Jittor environment because pip
 can replace the Jittor torch shim with real PyTorch.
 
-Jittor's CUDA toolchain and cache must also be explicit. Example:
+Jittor's CUDA toolchain and cache must also be explicit. Example (`<cuda-root>` is a
+CUDA toolkit root exposing `bin/nvcc` and `lib64`, for example the one Jittor's
+auto-installer unpacks under `$JITTOR_HOME`; `<jittor-python>` is the interpreter that
+runs Jittor):
 
 ```bash
-export JT_ROOT=/home/zy/projects/jittor
-export JITTOR_LAB_ROOT=${JITTOR_LAB_ROOT:-/home/zy/projects/jittor-lab}
+export JT_ROOT="$PWD"                       # the Jittor repository root
+export JITTOR_LAB_ROOT="${JITTOR_LAB_ROOT:-$(cd .. && pwd)/jittor-lab}"
 export TQ_ROOT="$JITTOR_LAB_ROOT/torchquantum-validation/upstream"
 export TQ_DEPS="$JITTOR_LAB_ROOT/torchquantum-validation/deps"
-export JTCUDA=/home/zy/.cache/jittor/jtcuda/cuda12.2_cudnn8_linux
+export JTCUDA=<cuda-root>
 export PYTHONPATH="$JT_ROOT/python:$TQ_DEPS:$TQ_ROOT"
 export JITTOR_HOME="$JITTOR_LAB_ROOT/_state/torchquantum-readme-validation/torchquantum_20260712"
-export PATH="$JTCUDA/bin:/home/zy/miniconda3/envs/jt311/bin:/usr/local/bin:/usr/bin:/bin"
+export PATH="$JTCUDA/bin:$PATH"
 export LD_LIBRARY_PATH="$JTCUDA/lib64"
 export CUDA_HOME="$JTCUDA"
 export nvcc_path="$JTCUDA/bin/nvcc"
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=<gpu>
 export use_cuda=1
 export use_parallel_op_compiler=0
 ```
@@ -58,11 +61,11 @@ export use_parallel_op_compiler=0
 Run the first compilation serially:
 
 ```bash
-/home/zy/miniconda3/envs/jt311/bin/python \
+<jittor-python> \
   agent/skills/torchquantum-readme-validation/run_readme_examples.py \
   --case basic --device cuda
 
-/home/zy/miniconda3/envs/jt311/bin/python \
+<jittor-python> \
   agent/skills/torchquantum-readme-validation/run_readme_examples.py \
   --case usage --device cuda
 ```

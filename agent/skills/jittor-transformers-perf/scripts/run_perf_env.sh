@@ -7,13 +7,13 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 JITTOR_LAB_ROOT="${JITTOR_LAB_ROOT:-$(cd "$REPO_ROOT/.." && pwd)/jittor-lab}"
 WORK="${JITTOR_TRANSFORMERS_PERF_WORKDIR:-$JITTOR_LAB_ROOT/jittor_transformers_perf}"
 RUNTIME="$WORK/runtime"
-JTCUDA_DEFAULT="/home/zy/.cache/jittor/jtcuda/cuda12.2_cudnn8_linux"
 CACHE_NAME="${cache_name:-jittor_transformers_perf}"
 CACHE_DIR_NAME="${CACHE_NAME//\//_}"
 
 mkdir -p "$RUNTIME" "$WORK/results" "$WORK/logs"
 
-export REAL_HOME="${REAL_HOME:-/home/zy}"
+# The caller's own home, captured before HOME is redirected below.
+export REAL_HOME="${REAL_HOME:-$HOME}"
 export JITTOR_TORCH_PROJECT_ROOT="$WORK"
 export JITTOR_TORCH_RUNTIME_ROOT="$RUNTIME/$CACHE_DIR_NAME/jittor"
 export JITTOR_HOME="$RUNTIME/$CACHE_DIR_NAME/jittor_home"
@@ -30,8 +30,13 @@ export TRANSFORMERS_OFFLINE=1
 export DISABLE_VERSION_CHECK=1
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-8}"
 
-if [[ -d "$JTCUDA_DEFAULT" ]]; then
-  export JTCUDA="${JTCUDA:-$JTCUDA_DEFAULT}"
+# Optional CUDA toolkit override (a root with bin/nvcc and lib64). There is no
+# default: unset means Jittor discovers nvcc itself; a wrong value is an error.
+if [[ -n "${JTCUDA:-}" ]]; then
+  if [[ ! -x "$JTCUDA/bin/nvcc" ]]; then
+    echo "run_perf_env.sh: JTCUDA=$JTCUDA has no bin/nvcc; point it at a CUDA toolkit root or unset it" >&2
+    exit 2
+  fi
   export CUDA_HOME="${CUDA_HOME:-$JTCUDA}"
   export nvcc_path="${nvcc_path:-$JTCUDA/bin/nvcc}"
   export PATH="$JTCUDA/bin:$PATH"

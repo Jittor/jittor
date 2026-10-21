@@ -212,6 +212,9 @@ from .packed import (
     _direct_packed_enabled,
 )
 
+from jittor._runtime.environment import getenv as _getenv
+
+
 def _truthy(value: Optional[str]) -> bool:
     return str(value or "").strip().lower() in _TRUTHY
 
@@ -221,16 +224,16 @@ def _falsey(value: Optional[str]) -> bool:
 
 
 def enabled() -> bool:
-    value = os.environ.get("JITTOR_FLASH_ATTN_JITTOR")
+    value = _getenv("JITTOR_FLASH_ATTN_JITTOR")
     if value is None:
-        value = os.environ.get("JITTOR_FLASHATTN_JITTOR")
+        value = _getenv("JITTOR_FLASHATTN_JITTOR")
     return not _falsey(value)
 
 
 def required() -> bool:
     return (
-        _truthy(os.environ.get("JITTOR_FLASH_ATTN_JITTOR_REQUIRED"))
-        or _truthy(os.environ.get("JITTOR_FLASHATTN_JITTOR_REQUIRED"))
+        _truthy(_getenv("JITTOR_FLASH_ATTN_JITTOR_REQUIRED"))
+        or _truthy(_getenv("JITTOR_FLASHATTN_JITTOR_REQUIRED"))
     )
 
 
@@ -241,7 +244,7 @@ def training_min_scores() -> int:
     flash. ``JITTOR_FLASH_ATTN_TRAINING_MIN_SCORES`` sets the threshold
     (default ``2**24``; 0 sends every training call to flash).
     """
-    raw = os.environ.get("JITTOR_FLASH_ATTN_TRAINING_MIN_SCORES", str(1 << 24))
+    raw = _getenv("JITTOR_FLASH_ATTN_TRAINING_MIN_SCORES", str(1 << 24))
     try:
         return max(0, int(raw))
     except ValueError:
@@ -249,7 +252,7 @@ def training_min_scores() -> int:
 
 
 def _verbose() -> bool:
-    return _truthy(os.environ.get("JITTOR_FLASH_ATTN_JITTOR_VERBOSE"))
+    return _truthy(_getenv("JITTOR_FLASH_ATTN_JITTOR_VERBOSE"))
 
 
 def _log(message: str) -> None:
@@ -421,7 +424,9 @@ def _load_from_source_root(raw_root: str) -> Optional[ModuleType]:
 
 def _remember_error(message: str) -> None:
     global _LAST_ERROR
-    _LAST_ERROR = message
+    # A later optional-module miss must not erase a source build/load failure.
+    # Each load attempt resets this history; successful loads clear it too.
+    _LAST_ERROR = message if _LAST_ERROR is None else _LAST_ERROR + "\n" + message
     _log(message)
 
 
@@ -650,6 +655,23 @@ def _ensure_capability_compile_env(head_dim: int, dtype: str) -> None:
 _LOOKUPS = {}
 
 
+def known_unavailable(head_dim: int, dtype: str) -> bool:
+    """Whether `load_backend_for(head_dim, dtype)` has already answered that
+    there is no backend at all, under the token that still holds.
+
+    For the attention callers, which reach the loader only after a dozen
+    environment reads and checks whose answers cannot matter once there is
+    nothing to load: they ask this first and decline as the loader would have
+    made them. A token that moved, or a lookup never made, answers False and
+    the caller takes its usual way.
+    """
+    known = _LOOKUPS.get((head_dim, dtype))
+    if known is None or known[1][0] is not None or known[1][1] != "no_backend":
+        return False
+    token = backend_cache_token()
+    return token is not None and known[0] == token
+
+
 def load_backend_for(head_dim: int, dtype: str) -> Tuple[Optional[ModuleType], Optional[str]]:
     """Load a backend containing the requested official kernel capability.
 
@@ -773,7 +795,7 @@ def _load_backend_locked(force: bool = False) -> Optional[ModuleType]:
         if _LAST_ERROR is None:
             _LAST_ERROR = "no flashattn_jittor source or module found"
         else:
-            _LAST_ERROR = "no flashattn_jittor source or module found; last error: " + _LAST_ERROR
+            _LAST_ERROR = "no flashattn_jittor source or module found; load errors:\n" + _LAST_ERROR
         load_completed = True
         return None
     finally:

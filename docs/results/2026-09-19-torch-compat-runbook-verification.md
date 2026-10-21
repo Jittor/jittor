@@ -1,17 +1,20 @@
 # 下游仓库 torch-compat runbook 与四轴实测
 
-- Status: Accepted for the measured scope; several repos remain report-derived
-- Date: 2026-09-19
-- Baseline commit: `90fe0b9d`
-- Owner: Jittor maintainers
-- Review when: 任一 `agent/skills/<lib>-torch-compat/` 的目标库换大版本、`_ecosystem_runner`
+- 状态：在实测范围内接受；若干仓库的结论仍是报告推导
+- 日期：2026-09-19
+- 基线提交：`90fe0b9d`（合并远端后只做了部分复验，见「合并远端后的复验」）
+- 验证范围：CUDA，两侧同 device；13 个下游仓库的支持清单/精度/显存/速度四轴，执行工具
+  `verify_repo.py` 委托 `compat/tests/torch/_ecosystem_runner.py`；对照为真 torch
+  2.13.0+cu129。verl、trellis 本机无环境，结论为报告推导；四轴未在合并后的树上重跑
+- 维护者：Jittor 维护者
+- 复查条件：任一 `agent/skills/<lib>-torch-compat/` 的目标库换大版本、`_ecosystem_runner`
   的 device 分支再改动、或 `verify_repo.py` 的口径变化
 
 ## 这次做了什么
 
 为 13 个下游仓库各写了一份"在 jittor shim 上跑 + 与原生 torch 对比"的 runbook
 （`agent/skills/<lib>-torch-compat/`），并把**模板与四轴验收协议**独立成
-[`torch-compat-repo-runbook`](../../agent/skills/torch-compat-repo-runbook/SKILL.md)。
+[`torch-compat-repo-runbook`](https://github.com/Jittor/jittor/blob/master/agent/skills/torch-compat-repo-runbook/SKILL.md)。
 runbook 不是文档草稿：每条都跑过，结果写回各自的 `## 实测（2026-09-19）` 一节。
 
 四轴 = **支持清单 / 精度 / 显存 / 速度**。执行工具
@@ -80,7 +83,7 @@ nightly；它解锁的是 CUDA 上的四轴实测。
 （54 条未分类的进程级写入全部来自残渣；非 `compat/build/` 的条目只有 pytest 自己的节点名）。
 连同 `python/jittor/extern` 造成的
 `tests/structure/backends/comm/test_comm_resource_layout.py::test_legacy_runtime_resource_trees_are_absent`
-（本机保留的目录，fresh checkout 通过，见 `2026-09-14-vllm-omni-h3-enablement.md` §Gates）。
+（本机保留的目录，fresh checkout 通过，见 [vLLM-Omni 报告](2026-09-14-vllm-omni-h3-enablement.md)的「Gates and reproducing」一节）。
 这三处红项都由 **git 不跟踪**的本地产物引起（`build/` 在 `.gitignore`，`extern/` 被忽略），
 在 pristine checkout 上不存在，故为绿；与源码改动无关。
 
@@ -205,9 +208,9 @@ pool，四轴工具报的 whole-run 峰值也就一直带着它。
 
 ```bash
 cd <repo>
-source /root/jittor-lab/minimax-h3/env-jittor.sh
+source $JITTOR_LAB_ROOT/minimax-h3/env-jittor.sh
 export JITTOR_HOME=<本任务独占的缓存目录>
-REAL_TORCH_PYTHON=/root/jittor-lab/_state/h3/venv-oracle-cu129/bin/python \
+REAL_TORCH_PYTHON=$JITTOR_LAB_ROOT/_state/h3/venv-oracle-cu129/bin/python \
 "$VENV/bin/python" agent/skills/torch-compat-repo-runbook/scripts/verify_repo.py \
   --repo <lib> --device cuda --repeats 5 --out <lab>/_state/<topic>/verify/<lib>
 ```
@@ -216,9 +219,9 @@ REAL_TORCH_PYTHON=/root/jittor-lab/_state/h3/venv-oracle-cu129/bin/python \
 `pip install --target <site>` 建包站，再把 `JITTOR_ECOSYSTEM_PACKAGE_SITE` /
 `JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE` 指过去；**不要装进 shim 解释器本身**。
 
-本次用到的包站：`/root/jittor-lab/_state/verify-ml/site`（peft 0.20.0、ms-swift 4.5.3、
+本次用到的包站：`$JITTOR_LAB_ROOT/_state/verify-ml/site`（peft 0.20.0、ms-swift 4.5.3、
 mmcv-lite 2.2.0、mmengine 0.10.7）与 `site-peft17`（transformers 4.56.2、peft 0.17.1、
-ms-swift 4.5.2）；`/root/jittor-lab/_state/verify-misc/site`（torchmetrics、tensordict）。
+ms-swift 4.5.2）；`$JITTOR_LAB_ROOT/_state/verify-misc/site`（torchmetrics、tensordict）。
 原始 `verify-report.json` 在各 lab 输出目录，不进主仓库。
 
 ## 合并远端后的复验

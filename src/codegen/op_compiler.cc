@@ -4,7 +4,8 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#include <regex>
+#include "ops/composite/code_source.h"
+#include <cctype>
 #include <algorithm>
 #include <iomanip>
 #include <sstream>
@@ -88,6 +89,23 @@ static string annotate_jit_run_lines(const string& src, const string& path) {
         if (!mapped_line) line++;
     }
     return annotated;
+}
+
+// A `#line` that restores the numbering in force at `pos`, for text spliced in
+// there; empty when no directive precedes `pos` and the file's own numbering
+// is the right one anyway.
+static string line_directive_at(const string& src, size_t pos) {
+    if (!pos) return "";
+    size_t marker = src.rfind("#line ", pos-1);
+    if (marker == string::npos) return "";
+    size_t directive_end = src.find('\n', marker);
+    if (directive_end == string::npos || directive_end >= pos) return "";
+    std::istringstream directive(src.substr(marker + 6, directive_end - marker - 6));
+    size_t line = 0;
+    string path;
+    if (!(directive >> line) || !(directive >> std::quoted(path))) return "";
+    line += std::count(src.begin() + directive_end + 1, src.begin() + pos, '\n');
+    return "#line " + S(line) + " \"" + line_directive_path(path) + "\"\n";
 }
 
 DECLARE_FLAG(string, jittor_path);
@@ -861,6 +879,19 @@ string OpCompiler::get_jit_src(Op* op) {
     // source that need to be added after the last #include statement
     string after_include_src = "";
     auto jit_define = op->get_jit_define();
+    // An interned code source: the key names it by token, the source is the
+    // header and code it stands for (see ops/composite/code_source.h).
+    for (size_t k = 0; k < jit_define.size(); k++) {
+        if (jit_define[k].first != "HEADER" || !is_code_source_token(jit_define[k].second))
+            continue;
+        const string* tail = code_source_tail(jit_define[k].second);
+        ASSERT(tail) << "code source token not interned in this process:" << jit_define[k].second;
+        auto cut = tail->find("«CODE:");
+        ASSERT(cut != string::npos) << "malformed interned code source";
+        jit_define[k].second = tail->substr(0, cut);
+        jit_define.emplace_back("CODE", tail->substr(cut + string("«CODE:").size()));
+        break;
+    }
     for (auto &t : jit_define) {
         // don't add CODE in define
         // this allowed comment exsit in CODE
@@ -900,7 +931,7 @@ string OpCompiler::get_jit_src(Op* op) {
     }
     
     string new_src = begin_src + src.substr(0, pos) +
-        after_include_src + src.substr(pos) + "\n" + end_src;
+        after_include_src + line_directive_at(src, pos) + src.substr(pos) + "\n" + end_src;
     return new_src;
 }
 
@@ -958,7 +989,7 @@ static void fix_op_member(
                 << "vars in its jit source but has" << op->inputs().size()
                 << "inputs and" << op->outputs().size() << "outputs."
                 << "An op cannot be kept with only some of its outputs;"
-                << "see KI-EXEC-006. members:" << member;
+                << "members:" << member;
         while (member.size() < var_num) {
             member.insert(member.end() - op->outputs().size(), "__fill__");
         }
@@ -1077,8 +1108,24 @@ string OpCompiler::__get_fused_src(
                 return true;
         return (s.find("::") != string::npos) || (s.find("LOG") != string::npos);
     };
-    // regex find XxxXxxOp::jit_run
-    std::regex e(R"([^]*\s(\S*)Op::jit_run[^]*)");
+    // The XxxXxx of the last `XxxXxxOp::jit_run` in an op's source: the
+    // whitespace-delimited token in front of it. This was
+    // `std::regex_match(src, R"([^]*\s(\S*)Op::jit_run[^]*)")`, and
+    // libstdc++'s matcher recurses once per character it consumes, so the
+    // depth grew with the generated source: a rank-13 reduction (the generic
+    // CPU matmul of two rank-12 tensors) is ~17,800 frames, which overflows a
+    // compile thread's stack where threads get glibc's 2 MB default -- any
+    // host whose `ulimit -s` is unlimited. A segfault, with no backtrace.
+    auto jit_run_class_prefix = [](const string& src, string& name) {
+        static const string marker = "Op::jit_run";
+        auto end = src.rfind(marker);
+        if (end == string::npos) return false;
+        auto begin = end;
+        while (begin > 0 && !std::isspace((unsigned char)src[begin-1])) begin--;
+        if (begin == 0) return false;
+        name = src.substr(begin, end - begin);
+        return true;
+    };
     for (uint oi=0; oi<op_srcs.size(); oi++) {
         const string& src = op_srcs[oi];
         if (src.size()==0) continue;
@@ -1113,10 +1160,8 @@ string OpCompiler::__get_fused_src(
             // opi_outputp[0] = ((T*)(opi->buffer.get()))[0];
             continue;
         }
-        std::smatch cm;
-        std::regex_match(src, cm, e);
-        ASSERT(cm.size()>=2) << src;
-        string name3 = cm[1];
+        string name3;
+        ASSERT(jit_run_class_prefix(src, name3)) << src;
         const string& source_path = ops[oi]->codegen().source_path;
         // macros this op defines, and the last identifier we renamed, both used
         // by check_rename_conflict below

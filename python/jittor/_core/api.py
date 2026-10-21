@@ -1,13 +1,9 @@
 """Explicit composition of the native Python API after core bootstrap."""
 
 import atexit
-import os
 
 from jittor._runtime.state import RuntimeContext, RuntimeState
 from . import diagnostics as _diagnostics
-
-if "SKEY" in os.environ:
-    import jittor_utils.student_queue
 
 from .flags import (
     enable_grad,
@@ -45,6 +41,7 @@ from .var import (
     float_auto,
     floor_int,
     format,
+    from_dlpack,
     full,
     full_like,
     get_len,
@@ -86,6 +83,7 @@ from .var import (
     std,
     to_bool,
     to_device,
+    to_dlpack,
     to_float,
     to_int,
     transpose,
@@ -192,6 +190,7 @@ __all__ = (
     "float_auto",
     "floor_int",
     "format",
+    "from_dlpack",
     "full",
     "full_like",
     "get_len",
@@ -249,6 +248,7 @@ __all__ = (
     "std",
     "to_bool",
     "to_device",
+    "to_dlpack",
     "to_float",
     "to_int",
     "transpose",

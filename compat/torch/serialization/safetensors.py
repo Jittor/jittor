@@ -1,5 +1,6 @@
 """SafeTensor codecs, readers and transactional optional frontend bindings."""
 import json
+import os
 import struct
 import os
 from types import MappingProxyType
@@ -15,6 +16,7 @@ except ImportError:
             pass
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from ..context import get_install_context, registry_for
+from .portable import _snapshot_tensors
 from ..fidelity import Fidelity, register_api_bindings
 from ...diagnostics import EXPECTED, swallowed
 from ...transaction import runtime_hook, set_attr, _MISSING
@@ -79,6 +81,52 @@ class _PySafeSlice:
         if idx is not Ellipsis:
             arr = arr[idx]
         return _to_tensor(arr, self._dtype, self._device)
+
+
+def _header_error(message):
+    """The error safetensors' own reader raises for an unusable header."""
+    try:
+        from safetensors import SafetensorError as error_type
+    except ImportError:
+        error_type = ValueError
+    return error_type("Error while deserializing header: " + message)
+
+
+def _parse_header(prefix, read_header, total_size):
+    """Decode and validate a header the way ``safe_open`` does before any read.
+
+    A truncated or corrupt file used to surface as a ``struct.error``,
+    ``UnicodeDecodeError``, ``JSONDecodeError`` or -- for a short payload -- a
+    reshape error inside whichever tensor happened to be read first. Every one
+    of those is reported up front now, as safetensors' ``SafetensorError``.
+    Returns ``(header, header_length)``.
+    """
+    if len(prefix) != 8:
+        raise _header_error("header too small")
+    n = struct.unpack("<Q", prefix)[0]
+    if n > total_size - 8:
+        raise _header_error("header too large")
+    try:
+        header = json.loads(read_header(n).decode("utf-8"))
+    except UnicodeDecodeError as exc:
+        raise _header_error("invalid UTF-8 in header: %s" % exc) from None
+    except json.JSONDecodeError as exc:
+        raise _header_error("invalid JSON in header: %s" % exc) from None
+    if not isinstance(header, dict):
+        raise _header_error("invalid JSON in header: expected an object, got %s"
+                            % type(header).__name__)
+    data_size = total_size - 8 - n
+    for key, entry in header.items():
+        if key == "__metadata__":
+            continue
+        offsets = entry.get("data_offsets") if isinstance(entry, dict) else None
+        if (not isinstance(offsets, list) or len(offsets) != 2
+                or not all(type(value) is int for value in offsets)
+                or not 0 <= offsets[0] <= offsets[1]):
+            raise _header_error("invalid tensor info for %r" % (key,))
+        if offsets[1] > data_size:
+            raise _header_error("incomplete metadata, file not fully covered")
+    return header, n
 
 
 class _PySafeOpen:
@@ -160,6 +208,31 @@ def _load_file(filename, device="cpu"):
         return {key: safe.get_tensor(key) for key in safe.keys()}
 
 
+def _reject_shared_storage(tensors):
+    """Refuse tensors that share storage, as ``safetensors.torch`` does.
+
+    The format has no aliasing: two names for one storage would be written as
+    two copies and come back as two independent tensors, silently untying
+    weights. safetensors raises instead and points at ``save_model``, and
+    Transformers/PEFT remove the aliases before saving for exactly that reason.
+    Storage identity is the frontend's ``untyped_storage().data_ptr()``, the
+    same key those libraries deduplicate on.
+    """
+    names = {}
+    for key, value in tensors.items():
+        storage = getattr(value, "untyped_storage", None)
+        if storage is not None:
+            names.setdefault(storage().data_ptr(), []).append(key)
+    shared = [group for group in names.values() if len(group) > 1]
+    if shared:
+        raise RuntimeError(
+            "Some tensors share memory, this will lead to duplicate memory on disk "
+            "and potential differences when loading them again: %s.\n"
+            "A potential way to correctly save your model is to use `save_model`.\n"
+            "More information at https://huggingface.co/docs/safetensors/torch_shared_tensors"
+            % [set(group) for group in shared])
+
+
 def _save_dict(tensors, metadata=None):
     # Match safetensors.torch's dense/unique storage contract before flattening
     # Jittor variables to NumPy (which would otherwise erase stride/alias data).
@@ -185,7 +258,8 @@ def _save_dict(tensors, metadata=None):
     offset = 0
     for key, value in tensors.items():
         tensor_dtype = _jittor_dtype_name(value.dtype) if isinstance(value, jt.Var) else None
-        arr = value.numpy() if hasattr(value, "numpy") else np.asarray(value)
+        arr = (snapshots[id(value)] if isinstance(value, jt.Var) else
+               value.numpy() if hasattr(value, "numpy") else np.asarray(value))
         arr = np.asarray(arr)
         shape = list(arr.shape)
         dtype = tensor_dtype or arr.dtype.name

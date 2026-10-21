@@ -34,10 +34,24 @@ def module_setattr(module, name, value):
     if name in attributes and isinstance(value, (owner.native_module, owner.Parameter)) \
             and not isinstance(attributes[name], (owner.native_module, owner.backend.Var)):
         del attributes[name]
+    if isinstance(value, owner.native_module) or value is None:
+        return owner.native_module.__setattr__(module, name, value)
     object.__setattr__(module, name, value)
 
 
+#: The native module call (`src/bindings/pyjt/py_module_call.h`), once the
+#: nn installer has bound it: the same scope and dispatch, without the frames.
+_NATIVE_CALL = None
+
+
 def module_call(module, *args, **kwargs):
+    native = _NATIVE_CALL
+    if native is not None:
+        return native(module, args, kwargs)
+    return python_module_call(module, *args, **kwargs)
+
+
+def python_module_call(module, *args, **kwargs):
     owner = type(module)._nn_frontend_owner
     # A forward follows its inputs' device; only constructors use the default.
     # The first tensor argument is the reference, as `*_like` uses its source:
@@ -134,10 +148,16 @@ class LayerInitializer:
                         if id(value) not in external:
                             mark_placeholder(value)
                 if padding_mode is not None:
-                    # torch layers expose what they were built with; the
-                    # execute wrapper below reads it back.
+                    # torch layers expose what they were built with.
                     object.__setattr__(module, "padding_mode", padding_mode)
                 adopt_owned_children(owner, module, external, frozen)
+                if issubclass(self.native, getattr(owner.backend.nn, "BatchNorm", ())):
+                    # Native Jittor keeps a non-persistent int32 vector for its
+                    # checkpoint format. Torch owns a persistent scalar int64
+                    # counter instead; change only this frontend instance.
+                    counter = (owner.backend.array(0, dtype="int64").stop_grad()
+                               if module.track_running_stats else None)
+                    module.register_buffer("num_batches_tracked", counter)
             finally:
                 if previous is None:
                     vars(module).pop("_native_parameter_construction", None)

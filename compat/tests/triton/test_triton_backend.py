@@ -621,6 +621,40 @@ class TestGuardedBounceRequiresContiguous(unittest.TestCase):
                 self.assertEqual(tb._tensor_is_contiguous(candidate), expected)
 
 
+
+class TestPointerRangeAliasing(unittest.TestCase):
+    """Unknown or overlapping storage must not be copied as independent args."""
+
+    def test_aliases_include_offsets_but_not_adjacent_or_empty_ranges(self):
+        from jittor.compat.triton import backend as bridge
+        ranges = {"input": (100, 164), "same": (100, 164), "offset": (160, 200),
+                  "neighbor": (200, 216), "empty": (150, 150)}
+        self.assertEqual(bridge._overlapping_argument_names(ranges),
+                         {"input", "same", "offset"})
+
+    def test_unknown_layout_disables_independent_bounces(self):
+        from jittor.compat.triton import backend as bridge
+        self.assertEqual(bridge._overlapping_argument_names({"known": (100, 164), "unknown": None}),
+                         {"known", "unknown"})
+
+    def test_byte_range_includes_strided_holes_and_negative_strides(self):
+        from jittor.compat.triton import backend as bridge
+
+        class View:
+            shape = (2, 4)
+
+            def stride(self):
+                return (12, 2)
+
+        self.assertEqual(bridge._tensor_byte_range(View(), 100, "*fp32"), (100, 176))
+
+        class Reversed(View):
+            def stride(self):
+                return (-12, 2)
+
+        self.assertEqual(bridge._tensor_byte_range(Reversed(), 148, "*fp32"), (100, 176))
+
+
 class TestLaunchFollowsItsProducers(unittest.TestCase):
     """Operands produced immediately before a launch must be the ones it reads.
 
@@ -647,6 +681,11 @@ class TestLaunchFollowsItsProducers(unittest.TestCase):
             self.skipTest("real upstream triton + CUDA not available")
         if triton is None or tl is None:
             setUpModule()
+        # The operands are made here with `jt.array`, so they are only on the
+        # device if CUDA is on -- and a CUDA session does not turn it on for a
+        # test; `TestTritonBackend` enters the same scope in setUpClass.
+        from _helpers.runtime_policy import fixture_stack
+        fixture_stack(self).enter_context(jt.runtime.scope(use_cuda=1))
         if _shim is None or not _shim.activate_bridge():
             self.skipTest("jittor Triton bridge is unavailable")
 
@@ -706,6 +745,11 @@ class TestTheLaunchBarrierNamesItsOperands(unittest.TestCase):
             self.skipTest("real upstream triton + CUDA not available")
         if triton is None or tl is None:
             setUpModule()
+        # The operands are made here with `jt.array`, so they are only on the
+        # device if CUDA is on -- and a CUDA session does not turn it on for a
+        # test; `TestTritonBackend` enters the same scope in setUpClass.
+        from _helpers.runtime_policy import fixture_stack
+        fixture_stack(self).enter_context(jt.runtime.scope(use_cuda=1))
         if _shim is None or not _shim.activate_bridge():
             self.skipTest("jittor Triton bridge is unavailable")
 

@@ -276,6 +276,21 @@ class TestBinaryOpPromotion(Base):
                              "int16", dev)
         both_devices(body)
 
+    def test_integer_modulo_scalar_follows_divisor_sign(self):
+        def body(dev):
+            for dtype in ("int32", "int64"):
+                values = np.array([-7, -5, -1, 0, 1, 5, 7],
+                                  dtype=_NPDT[dtype])
+                for divisor in (3, -3):
+                    result = torch.tensor(values) % divisor
+                    self.ae(result.numpy(), np.mod(values, divisor),
+                            f"{dtype} % {divisor} {dev}")
+                    self.assertEqual(dts(result), dtype)
+            large = np.array([2**40 + 7, -(2**40 + 7)], dtype="int64")
+            self.ae((torch.tensor(large) % 151936).numpy(),
+                    np.mod(large, 151936), f"large int64 modulo {dev}")
+        both_devices(body)
+
     def test_truediv_is_float(self):
         # torch '/' ALWAYS yields float (the documented special case). For an
         # integral result_type it lands on the DEFAULT float (float32) regardless of
@@ -324,6 +339,28 @@ class TestBinaryOpPromotion(Base):
             # The integral case still lands on the default float.
             self.assertEqual(dts(mk("int64", (2, 4)) / 2.0), "float32", dev)
             self.assertEqual(dts(mk("int64", (2, 4)) / 2), "float32", dev)
+        both_devices(body)
+
+    def test_python_float_truediv_is_native_and_bit_identical(self):
+        # `_fast_binary` builds the widened division `_true_division` builds
+        # -- float32 math for half precision, float64 for float32 -- without
+        # its Python; the answer has to be the same to the bit.
+        from jittor.compat.torch.installers.tensor import method_api
+        if getattr(jt.compiler, "has_acl", 0):
+            self.skipTest("ACL keeps the divisor in the tensor dtype, on the Python path")
+        values = np.random.RandomState(7).randn(257).astype("float32") * 100
+
+        def body(dev):
+            for name in ("float16", "bfloat16", "float32", "float64"):
+                t = torch.tensor(values, dtype=getattr(torch, name))
+                for scale in (1.0, 0.28209479177387814, 3.0, -7.5e-3):
+                    fast = jt.core._fast_binary(t, scale, 6)
+                    self.assertIsNotNone(fast, f"{name} / {scale} {dev}")
+                    slow = method_api._true_division(t, scale, "__truediv__")
+                    self.assertEqual(dts(fast), name, f"{name} {dev}")
+                    np.testing.assert_array_equal(
+                        fast.double().numpy(), slow.double().numpy(),
+                        err_msg=f"{name} / {scale} {dev}")
         both_devices(body)
 
     def test_python_float_truediv_preserves_torch_rounding_on_cpu(self):

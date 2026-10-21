@@ -1,7 +1,5 @@
 """Functional tensor padding."""
 
-import jittor as jt
-
 from ..backends import hooks as _backend_hooks
 
 

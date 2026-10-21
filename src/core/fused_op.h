@@ -6,7 +6,9 @@
 // ***************************************************************
 #pragma once
 #include "core/op.h"
+#include "core/exec_plan.h"
 #include "codegen/opt/var_relay.h"
+#include "runtime/node_index.h"
 
 namespace jittor {
 
@@ -45,8 +47,11 @@ struct FusedOp final : Op {
     vector<Op*> ops;
     // Stable numbering owned by this fusion across load/update, relay and
     // code-generation stages. This replaces Node::custom_data bit-packing.
-    unordered_map<Op*, uint> op_index;
-    unordered_map<Var*, uint> var_index;
+    // A `NodeIndex` rather than an `unordered_map`: both are rebuilt for every
+    // segment of every batch, and the node-per-entry hash map was half of
+    // `update_ops`; this one is reset in O(1) and allocates only when it grows.
+    NodeIndex op_index;
+    NodeIndex var_index;
     // edges: [[i,j,k,l], ...] represents opi.output(j) == opk.input(l)
     vector<std::tuple<uint,uint,uint,uint>> edges;
     vector<VarInfo> vars;
@@ -60,6 +65,11 @@ struct FusedOp final : Op {
     // src/tests/test_op_relay.cc puts one on the stack.
     FusedOpContext* context;
     shared_ptr<FusedOpContext> context_owner;
+    // Bit k: this run reads `vars[k]` for the last time, so its CUDA kernel
+    // loads it evict-first (StreamLoadPass) and it does not push out of the
+    // cache the lines that are about to be read. An argument of the kernel,
+    // not part of the jit key: one compiled kernel serves every run.
+    uint64 streamed_inputs = 0;
 
     // The batch's fusion verdict, borrowed from the run_sync frame that built
     // this group: 1 the var has to stay in memory, 0 it may be fused away,
@@ -77,14 +87,21 @@ struct FusedOp final : Op {
     // the results doc): `update_ops` then saw a segment with no outputs, and
     // `load_fused_op` would have built incomplete `edges`. Reading the batch's
     // own snapshot makes both independent of that.
-    const vector<vector<Var*>>* batch_op_outputs = nullptr;
-    const vector<vector<pair<Var*, int>>>* batch_op_inputs = nullptr;
-    const unordered_map<Var*, pair<Op*, int>>* batch_var_producer = nullptr;
+    const ExecPlan* batch_plan = nullptr;
 
-    // The snapshot if there is one, otherwise the live lists -- a `FusedOp`
-    // built outside `run_sync` (the relay test) has no batch to borrow from.
-    vector<Var*> snapshot_outputs(Op* op) const;
-    vector<pair<Var*, int>> snapshot_inputs(Op* op) const;
+    // A run of the snapshot, or of a copy of the live list when there is no
+    // batch to borrow from -- a `FusedOp` built outside `run_sync` (the relay
+    // test). Iterating one allocates nothing in the first case.
+    template <class T>
+    struct Snapshot {
+        const T* first = nullptr;
+        const T* last = nullptr;
+        vector<T> own;
+        const T* begin() const { return first; }
+        const T* end() const { return last; }
+    };
+    Snapshot<Var*> snapshot_outputs(Op* op) const;
+    Snapshot<pair<Var*, int>> snapshot_inputs(Op* op) const;
     // {producing op, slot in its output list}
     pair<Op*, int> snapshot_producer(Var* v) const;
 

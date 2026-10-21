@@ -33,6 +33,43 @@ struct TailTestAllocator : Allocator {
     }
 };
 
+// Hands out distinct, never-dereferenced addresses: SFRL only does pointer
+// arithmetic on them, so millions of blocks cost no real memory.
+struct AddressOnlyAllocator : Allocator {
+    size_t next = 1 << 20, live = 0;
+    const char* name() const override { return "address_only"; }
+    void* alloc(size_t size, size_t& allocation) override {
+        allocation = ++live;
+        void* ptr = (void*)next;
+        next += size;
+        return ptr;
+    }
+    void free(void* ptr, size_t size, const size_t& allocation) override { --live; }
+};
+
+// Ids bound the allocations live at once. That bound used to be 1 << 21, low
+// enough for a lazily built graph to reach (a large tensor-network sampling
+// run holds about eight million small buffers at its peak).
+JIT_TEST(sfrl_holds_more_than_two_million_live_allocations) {
+    AddressOnlyAllocator underlying;
+    SFRLAllocator pool(&underlying);
+    const size_t n = (size_t(1) << 21) + 1000;
+    std::vector<size_t> ids(n);
+    for (size_t i=0; i<n; i++)
+        pool.alloc(512, ids[i]);
+    ASSERT(pool.id_space.tot_block_id >= n);
+    for (size_t i=0; i<n; i++)
+        pool.free(nullptr, 512, ids[i]);
+    ASSERTop(pool.used_memory,==,0);
+    // freed ids are reused before new ones are issued
+    size_t before = pool.id_space.tot_block_id, again = 0;
+    pool.alloc(512, again);
+    ASSERTop(pool.id_space.tot_block_id,==,before);
+    pool.free(nullptr, 512, again);
+    pool.gc();
+    ASSERTop(underlying.live,==,0);
+}
+
 JIT_TEST(sfrl_reuses_small_tail_of_large_segment) {
     TailTestAllocator underlying;
     SFRLAllocator pool(&underlying);

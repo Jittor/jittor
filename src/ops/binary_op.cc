@@ -193,6 +193,31 @@ unordered_set<string> binary_ops = {
     "mod",
 
     /**
+    Returns the element-wise truncated remainder of division (C ``fmod``).
+
+    The result has the sign of ``x`` and magnitude below ``|y|``: it is
+    ``x - trunc(x / y) * y`` computed exactly, where :func:`mod` (``%``) uses
+    the floored quotient and takes the sign of ``y``. A finite ``x`` over an
+    infinite ``y`` is ``x``; ``y == 0`` gives NaN for floats.
+
+    ----------------
+
+    * [in] x: the first input,  a python number or jt.Var.
+
+    * [in] y: the second input, a python number or jt.Var.
+
+    ----------------
+
+    Example-1::
+        >>> jt.fmod(jt.array([-3.0, 3.0]), 2.0)
+        jt.Var([-1.  1.], dtype=float32)
+        >>> jt.array([-3.0, 3.0]) % 2.0
+        jt.Var([1. 1.], dtype=float32)
+     */
+    // @pybind(fmod)
+    "fmod",
+
+    /**
     Returns ``x < y`` element-wise.
 
     This operation is equivalent to ``x < y``.
@@ -413,6 +438,47 @@ unordered_set<string> binary_ops = {
     "bitwise_xor",
 };
 
+// Only the side that is actually short of the result shape gets a
+// BroadcastToOp. `BroadcastToOp(x, y, {})` answers `need_broadcast` itself and
+// forwards its input when the answer is no -- and when the other operand's
+// shape is known, a dynamic one still needing the op. So building it for an
+// operand that already has the result shape constructs an op purely to throw
+// it away, and one operand is always in that position for the commonest
+// broadcasts there are: `x * 0.5`, `x + bias`, `x * mask`.
+static VarPtr broadcast_binary(Var* x, Var* y, NanoString op) {
+    VarPtr xh, yh;
+    Var* xp = x;
+    Var* yp = y;
+    if (y->num < 0 || BroadcastToOp::need_broadcast(x, y->shape)) {
+        xh = make_broadcast_to(x, y, {});
+        xp = xh;
+    }
+    if (x->num < 0 || BroadcastToOp::need_broadcast(y, x->shape)) {
+        yh = make_broadcast_to(y, x, {});
+        yp = yh;
+    }
+    return make_binary(xp, yp, op);
+}
+
+VarPtr BinaryOp::forward_before_construct(Var* x, Var* y, NanoString op) {
+    // The constructor's shape walk, deciding only whether it broadcasts. A
+    // mismatch is the constructor's to report, with its message.
+    auto xdim = x->shape.size();
+    auto ydim = y->shape.size();
+    bool need_broadcast = xdim != ydim;
+    for (size_t i=0; i<xdim && i<ydim; i++) {
+        auto xshape = x->shape[xdim-i-1];
+        auto yshape = y->shape[ydim-i-1];
+        if ((xshape == 1 || yshape == 1) && (xshape != yshape)) {
+            need_broadcast = true;
+            continue;
+        }
+        if (xshape != yshape) return VarPtr();
+    }
+    if (!need_broadcast) return VarPtr();
+    return broadcast_binary(x, y, op);
+}
+
 BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
     auto xdim = x->shape.size();
     auto ydim = y->shape.size();
@@ -425,40 +491,47 @@ BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
             continue;
         }
         USER_CHECKop(xshape,==,yshape) << "Shape not match for binary op '" >> op.to_cstring()
-            >> "', x:" >> x->to_string() << " y:" >> y->to_string()
+            >> "', x:" >> x->to_string() >> ", y:" >> y->to_string()
             << "(broadcasting requires matching dims or one of them to be 1).";
     }
     if (need_broadcast) {
-        // Only the side that is actually short of the result shape gets a
-        // BroadcastToOp. `BroadcastToOp(x, y, {})` answers `need_broadcast`
-        // itself and forwards its input when the answer is no -- and when the
-        // other operand's shape is known, a dynamic one still needing the op.
-        // So building it for an operand that already has the result shape
-        // constructs an op purely to throw it away, and one operand is always
-        // in that position for the commonest broadcasts there are: `x * 0.5`,
-        // `x + bias`, `x * mask`.
-        VarPtr xh, yh;
-        Var* xp = x;
-        Var* yp = y;
-        if (y->num < 0 || BroadcastToOp::need_broadcast(x, y->shape)) {
-            xh = make_broadcast_to(x, y, {});
-            xp = xh;
-        }
-        if (x->num < 0 || BroadcastToOp::need_broadcast(y, x->shape)) {
-            yh = make_broadcast_to(y, x, {});
-            yp = yh;
-        }
-        auto zp = make_binary(xp, yp, op);
-        forward(zp);
+        // Reached only when the op is constructed directly: the op maker asks
+        // `forward_before_construct` first, which takes this branch without
+        // building the op at all.
+        forward(broadcast_binary(x, y, op));
         return;
     }
     {
         NanoVector axes;
         vector<VarPtr> sources;
         if (storage_layout_operands({x, y}, axes, sources)) {
-            forward(storage_view_transpose(make_binary(sources[0], sources[1], op), axes));
-            return;
+            if (!storage_layout_records_grad({x, y})) {
+                forward(storage_view_transpose(make_binary(sources[0], sources[1], op), axes));
+                return;
+            }
+            // Keep the real logical input identities for grad(). Internal
+            // transpose aliases are forward implementation details: .data
+            // may replace x/y's allocation after forward has finished.
+            StorageLayoutForwardScope scope;
+            layout_value = storage_view_transpose(
+                make_binary(sources[0], sources[1], op), axes);
         }
+    }
+
+    // Complex C++ operators are width-specific. Promoting only the output
+    // leaves c64*f64 computing in c64 (and c64+c128 cannot compile at all).
+    // Cast operands through the differentiable unary path before arithmetic.
+    // Use add's promotion for comparisons too: their output dtype is bool,
+    // but their operands must still be compared at the common complex width.
+    if (x->dtype() != y->dtype() &&
+        (x->dtype().is_complex() || y->dtype().is_complex())) {
+        auto dtype = binary_dtype_infer(ns_add, x->ns, y->ns,
+            x->flag(VarFlags::_is_scalar), y->flag(VarFlags::_is_scalar));
+        auto xp = make_unary(x, dtype);
+        auto yp = make_unary(y, dtype);
+        auto zp = make_binary(xp, yp, op);
+        forward(zp);
+        return;
     }
 
     #ifdef IS_ACL
@@ -495,7 +568,7 @@ BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
 
     set_flag(OpFlags::_cpu);
     set_flag(OpFlags::_cuda);
-    set_type(OpType::element);
+    set_type(layout_value ? OpType::other : OpType::element);
     ns = op;
     USER_CHECK(ns.is_binary()) << "binary requires a binary operation, got" << ns;
     // Bitwise/shift ops are only defined for integer/boolean dtypes. On a float input the
@@ -509,6 +582,15 @@ BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
             "' requires integer or boolean dtypes, but got x:" >> x->dtype().to_cstring() <<
             "y:" >> y->dtype().to_cstring() <<
             "(bitwise/shift ops are not defined for floating-point or complex types).";
+    }
+    // Complex numbers have no order, so there is no kernel to generate: the
+    // build used to fail inside the compiler. torch.maximum/minimum reject
+    // complex inputs the same way.
+    if (ns==ns_maximum || ns==ns_minimum) {
+        USER_CHECK(!x->dtype().is_complex() && !y->dtype().is_complex())
+            << "Binary op '" >> op.to_cstring() >> "' is not defined for complex dtypes, but got x:"
+            >> x->dtype().to_cstring() << "y:" >> y->dtype().to_cstring()
+            << "(complex numbers have no order; compare abs() or the real part instead).";
     }
     z = create_output(x->shape, binary_dtype_infer(op, x->ns, y->ns, x->flag(VarFlags::_is_scalar), y->flag(VarFlags::_is_scalar)));
     bool is_comparison = ns==ns_less || ns==ns_less_equal ||
@@ -524,7 +606,7 @@ BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
         // Comparisons must keep IEEE semantics whatever level the kernel is
         // built at. CPU kernel flags used to end in -Ofast, whose
         // -ffinite-math-only permits folding x==x to true even when x is NaN;
-        // since KI-BACKEND-005 they end in -O3, so on a default build this
+        // now they end in -O3, so on a default build this
         // option no longer changes the command. It stays because the flags are
         // decided elsewhere -- a cc_flags or kernel_flags carrying -Ofast
         // reaches here -- and an ordinary level appended last was measured to
@@ -574,6 +656,7 @@ VarPtr dirty_clone_broadcast(Var* v) {
 }
 
 VarPtr BinaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
+    if (layout_value && v_index >= 2) return nullptr;
     if (ns == ns_add) return dout;
     if (ns == ns_subtract) {
         if (v_index == 0) 
@@ -620,11 +703,23 @@ VarPtr BinaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
         }
     }
     if (ns == ns_mod) {
+        // x - floor_divide(x, y) * y: the quotient is the same corrected one
+        // the forward uses, not floor(x / y) of the rounded quotient.
         if (v_index == 0)
             return dout;
         else {
-            auto a = make_unary(make_binary(x, y, ns_divide), ns_floor);
-            return make_unary(a, ns_negative);
+            auto a = make_binary(x, y, ns_floor_divide);
+            return make_binary(dout, make_unary(a, ns_negative), ns_multiply);
+        }
+    }
+    if (ns == ns_fmod) {
+        // x - trunc(x / y) * y, with the exact truncated quotient
+        // (x - fmod(x, y)) / y.
+        if (v_index == 0)
+            return dout;
+        else {
+            auto q = make_binary(make_binary(x, z, ns_subtract), y, ns_divide);
+            return make_binary(dout, make_unary(q, ns_negative), ns_multiply);
         }
     }
     if (ns == ns_maximum || ns == ns_minimum) {
@@ -656,20 +751,36 @@ VarPtr BinaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 }
 
 void BinaryOp::infer_shape() {
+    if (layout_value) {
+        ASSERT(z->dtype() == layout_value->dtype())
+            << "Layout propagation changed binary output dtype";
+        if (_inputs.size() == 2) add_inputs(vector<Var*>{layout_value.ptr});
+        z->set_shape(layout_value->shape);
+        z->storage_strides = layout_value->storage_strides;
+        z->share_with(layout_value);
+        return;
+    }
     // Construction inserts explicit broadcasts. Their data-dependent extent
     // may become concrete later, before this elementwise node is executed.
     z->set_shape(x->shape);
 }
 
+void BinaryOp::run() {
+    // The native entry is only the alias boundary. The forward dependency
+    // executed the real elementwise layout kernel on its declared device.
+    ASSERT(layout_value && z->mem_ptr == layout_value->mem_ptr);
+}
+
 void BinaryOp::jit_prepare(JK& jk) {
+    if (layout_value) return; // Forward math ran in the existing layout graph.
     bool xs = !x->is_contiguous(), ys = !y->is_contiguous();
     jk << "«Tx:" << x->dtype()
         << "«Ty:" << y->dtype()
         << "«Tz:" << z->dtype()
         << "«OP:" << ns
-        << "«DIM=" << JK::hex1(z->shape.size())
-        << "«XSTRIDED=" << JK::hex1(xs)
-        << "«YSTRIDED=" << JK::hex1(ys);
+        << "«DIM=" << JK::hex(z->shape.size())
+        << "«XSTRIDED=" << JK::hex(xs)
+        << "«YSTRIDED=" << JK::hex(ys);
     // Only when read, so a contiguous operand keeps the key it had.
     if (xs) jk << "«XSMASK=" << JK::hex(x->stride_pattern());
     if (ys) jk << "«YSMASK=" << JK::hex(y->stride_pattern());

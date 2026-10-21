@@ -20,6 +20,7 @@
 namespace jittor {
 
 struct VarHolder;
+struct GradCallback;
 // @pyjt(submit_pending_fetches)
 void submit_pending_fetches();
 VarPtr detach(Var* x);
@@ -79,6 +80,13 @@ struct VarView {
     // Siblings in `base->views`, so that base's destructor can find us.
     VarView* prev = nullptr;
     VarView* next = nullptr;
+    // Logical transpose/writeback provenance need not share an allocation.
+    // Keep the actual physical relationship after a temporary base expires.
+    bool physical_storage = false;
+    // Optional frontend ownership of the actual Python root. The native
+    // writeback pointer above remains weak and may be severed by .data.
+    PyObject* base_owner = nullptr;
+    ~VarView();
 };
 
 struct DataView {
@@ -109,7 +117,14 @@ struct DataView {
 PyObject* new_var_data_owner(VarHolder* vh);
 
 struct ItemData {
-    int64 data;
+    // Widened from a flat int64 (8 bytes) to fit complex128 (16 bytes)
+    // without the memcpy in VarHolder::item() overflowing into `dtype`.
+    // `data` keeps its old name/type for every existing 8-byte-or-narrower
+    // dtype's read sites; `bytes` is only for the complex128 (16-byte) path.
+    union {
+        int64 data;
+        char bytes[16];
+    };
     NanoString dtype;
 };
 
@@ -119,12 +134,25 @@ typedef struct _object PyObject;
 // @attrs(heaptype)
 struct VarHolder {
     Var* var;
+    // Borrowed, set only once the holder really occupies a Python wrapper.
+    // C++ construction temporaries never pretend to have a PyObject header.
+    PyObject* python_owner = nullptr;
+    bool retain_view_base_owner = false;
+    void bind_python_owner(PyObject* owner, bool retain_view_base);
+    void retain_python_view_base();
+    PyObject* collectable_view_base();
+    void clear_collectable_view_base();
+    // @pyjt(_view_base_object)
+    PyObject* view_base_object();
     list<VarHolder*>::iterator iter;
     // Set when this holder is a view of another one; see VarView.
     VarView* view = nullptr;
     // Head of the list of views onto this holder, so that destruction can tell
     // them their base is gone.
     VarView* views = nullptr;
+    // This holder is a step capture's record of `var` as state, counted in
+    // `var->capture_owners` until it lets go of the Var.
+    bool capture_record = false;
     VarHolder(Var* v);
     VarHolder(VarPtr&& v);
     // will move and delete v
@@ -153,6 +181,7 @@ struct VarHolder {
     // @pyjt(assign)
     // @attrs(return_self)
     VarHolder* assign(VarHolder* v);
+    VarHolder* assign_impl(VarHolder* v, bool preserve_grad_policy);
 
     /**
      * update parameter and global variable,
@@ -169,7 +198,7 @@ struct VarHolder {
      */
     // @pyjt(_update)
     // @attrs(return_self)
-    VarHolder* _update(VarHolder* v);
+    VarHolder* _update(VarHolder* v, bool logical_write = true);
 
     /**
      * swap the data with another Var.
@@ -223,6 +252,29 @@ struct VarHolder {
         return "cpu";
     }
 
+    // DLPack export (this Var -> a foreign framework's capsule). Implemented
+    // in bindings/pyjt/dlpack.cc, not inline here, since the implementation
+    // needs the vendored DLPack ABI structs (bindings/pyjt/dlpack.h) and
+    // CPython capsule APIs this header does not otherwise pull in.
+    //
+    // Bound under a plain name, not __dlpack__/__dlpack_device__ directly:
+    // pyjt_compiler.py treats any "__xxx__" @pyjt name as a CPython type slot
+    // and only recognizes a fixed whitelist -- an unrecognized one is a hard
+    // compile error, not a fallback to a plain method. python/jittor/__init__.py
+    // aliases Var.__dlpack__ = Var.dlpack (same pattern already used for the
+    // other dunder-shaped @pyjt methods in this codebase).
+    //
+    // `stream`/`max_version`/`dl_device`/`copy` mirror the modern
+    // __dlpack__(self, *, stream=None, max_version=None, dl_device=None,
+    // copy=None) protocol signature so this is a real drop-in any DLPack
+    // consumer can call with (not just the legacy DLPack 0.x `stream`-only
+    // form) -- see dlpack.cc for what each parameter actually does.
+    // @pyjt(dlpack)
+    PyObject* dlpack(PyObject* stream=nullptr, PyObject* max_version=nullptr,
+                      PyObject* dl_device=nullptr, PyObject* copy=nullptr);
+    // @pyjt(dlpack_device)
+    PyObject* dlpack_device();
+
     // @pyjt(migrate_to_cpu)
     // @attrs(return_self)
     VarHolder* migrate_to_cpu_();
@@ -238,6 +290,7 @@ struct VarHolder {
     }
     
     void operator=(VarPtr&& v);
+    void rebind_view_result(VarPtr&& v, bool preserve_grad_policy);
 
 
     /** 
@@ -322,6 +375,9 @@ struct VarHolder {
     // @pyjt(stop_grad)
     // @attrs(return_self)
     inline VarHolder* stop_grad() {
+        if (var->autograd_alias) {
+            var->autograd_alias->own_requires_grad = false;
+        }
         var->set_stop_grad();
         var->set_flag(VarFlags::_requires_grad_disabled, 0);
         var->set_flag(VarFlags::_first_order_only, 0);
@@ -395,9 +451,19 @@ struct VarHolder {
      */
     // @pyjt(__get__requires_grad)
     inline bool get_requires_grad() {
+        var->refresh_alias_requires_grad();
         return !var->is_stop_grad()
             && !var->flag(VarFlags::_requires_grad_disabled);
     }
+
+    // @pyjt(_has_gradient_edge)
+    inline bool has_gradient_edge() {
+        return get_requires_grad() && !var->flag(VarFlags::_unrecorded_view);
+    }
+    // Registration is metadata-only; unlike the public history query it must
+    // not consume a pending view epoch merely because requires_grad_ ran.
+    // @pyjt(_has_leaf_accumulator)
+    bool has_leaf_accumulator();
 
     /**
      * enable or disable gradient calculation.
@@ -405,6 +471,16 @@ struct VarHolder {
      */ 
     // @pyjt(__set__requires_grad)
     void set_requires_grad(bool flag);
+    void set_requires_grad_impl(bool flag);
+    std::shared_ptr<AutogradAliasState> ensure_autograd_alias();
+    // @pyjt(_check_inplace_autograd)
+    // @attrs(return_self)
+    VarHolder* check_inplace_autograd();
+    void record_inplace_write();
+    void observe_alias_history();
+    Var* grad_input();
+    // @pyjt(_storage_data_alias)
+    VarHolder* storage_data_alias();
 
     /** 
      * enable the gradient calculation for the Var.
@@ -434,6 +510,15 @@ struct VarHolder {
      */
     // @pyjt(__get__grad_fn_node_id)
     int64 grad_fn_node_id();
+
+    // @pyjt(_set_grad_hook)
+    void set_grad_hook(GradCallback&& callback);
+    // @pyjt(_clear_grad_hook)
+    void clear_grad_hook();
+    // GC may follow the native callback only when its single holder is also
+    // its sole graph owner. An active consumer must keep its callback alive.
+    PyObject* collectable_grad_hook();
+    void clear_collectable_grad_hook();
 
     /**
      * Which *kind* of op that is, as the registration-time operator id (see
@@ -601,7 +686,10 @@ struct VarHolder {
         from a Var that is already on the accelerator costs one ordered
         device-to-device copy rather than a round trip through the host.
 
-        Same refusals as `_write_inplace`, on both Vars.
+        The source is materialized densely when necessary. Positive-stride,
+        non-overlapping destinations are copied in contiguous runs without
+        replacing their graph or storage. Expanded destinations and partially
+        overlapping dense source/destination spans are refused before writing.
      */
     /**
         `sync_src=false` copies the source's bytes WITHOUT resolving it first.
@@ -618,6 +706,16 @@ struct VarHolder {
     void copy_into(VarHolder* src, bool sync_src=true);
 
     /**
+        No-grad frontend writeback when retained views include materialized
+        permutations. Stage the existing view-assignment mathematics and all
+        materialized sibling values, then copy into the original storage.
+        Return false when the ordinary physical-storage fast path suffices.
+        The caller must resolve pending readers before invoking this helper.
+     */
+    // @pyjt(_copy_view_into)
+    bool copy_view_into(VarHolder* src);
+
+    /**
         Give back a graph that was kept with `keep_graph`.
 
         `keep_graph` marks every node it leaves unfinished, and a marked node
@@ -631,6 +729,15 @@ struct VarHolder {
      */
     // @pyjt(_release_kept)
     void release_kept();
+
+    /**
+     * Mark this pending Var as part of a kept graph, which only its owner
+     * runs (see `keep_graph`): a node added to a graph that has already run
+     * kept, and so was not marked by that run. Unmarked, a bystander's sync
+     * -- `sync_all` -- ran it on its own and finished it.
+     */
+    // @pyjt(_mark_kept)
+    inline void mark_kept() { var->set_flag(VarFlags::_kept); }
 
     // @pyjt(share_with)
     // @attrs(return_self)
@@ -703,7 +810,8 @@ struct VarHolder {
      */
     // @pyjt(_set_view_of)
     // @attrs(return_self)
-    VarHolder* set_view_of(VarHolder* base, VarSlices&& slices);
+    VarHolder* set_view_of(VarHolder* base, VarSlices&& slices,
+                          bool inherit_requires_grad=false);
 
     // @pyjt(_set_transpose_view_of)
     // @attrs(return_self)
@@ -713,6 +821,10 @@ struct VarHolder {
     VarHolder* set_storage_view_of(VarHolder* base, bool expand);
     // @pyjt(_storage_is_contiguous)
     bool storage_is_contiguous() { return var->is_contiguous(); }
+    // Whether a step capture holds this Var as the state it replays; an
+    // in-place update then writes into it rather than beside it.
+    // @pyjt(_capture_owned)
+    bool capture_owned() { return var->capture_owners != 0; }
     // @pyjt(_storage_offset)
     int64 storage_offset() { return var->storage_offset_bytes / var->dsize(); }
     // @pyjt(_storage_strides)
@@ -797,8 +909,25 @@ struct VarHolder {
     // @pyjt(_producer_name)
     string producer_name();
 
-    // @pyjt(_is_view)
+    /**
+     * The same, with the operation spelled out ("binary.add", "unary.relu"),
+     * or "" once the tensor is computed.
+     */
+    // @pyjt(_producer_op)
+    string producer_op();
+
     inline bool is_view() { return view && view->base; }
+
+    // A view stays a view after its weak writeback owner has died.
+    // @pyjt(_is_view,_has_view_provenance)
+    inline bool has_view_provenance() { return view != nullptr; }
+
+    // @pyjt(_storage_view_is_physical)
+    bool storage_view_is_physical();
+
+    // A readonly query of existing view provenance and backward identities.
+    // @pyjt(_view_base_is_trainable_leaf)
+    bool view_base_is_trainable_leaf();
 
     /**
      * ``id`` of the Var this view currently writes through to, or -1. For
@@ -810,13 +939,13 @@ struct VarHolder {
     // Rebind the root this view was taken from to itself with `value` written
     // into the recorded slice. Returns false when there is nothing to write
     // through -- not a view, or a base that has since been destroyed.
-    bool write_through_view(Var* value);
+    bool write_through_view(Var* value, bool preserve_grad_policy = true);
     // Stop being a view; stop being a base. Both are needed at destruction, and
     // the first one alone when a holder is re-pointed.
     void drop_view();
     void orphan_views();
     void attach_view(VarHolder* base, VarViewStep step);
-    void refresh_transpose_views();
+    void refresh_transpose_views(bool preserve_grad_policy = true, VarView* only = nullptr);
 };
 
 /**
@@ -885,6 +1014,15 @@ inline vector<Var*> convert(const vector<VarHolder*>& vhs) {
     v.reserve(vhs.size());
     for (uint i=0; i<vhs.size(); i++) v.emplace_back(vhs[i]->var);
     return v;
+}
+
+// Operand conversion consumes view history only at a real differentiable
+// operation. The generic convert() above also serves metadata-only queries.
+inline vector<Var*> prepare_grad_inputs(const vector<VarHolder*>& vhs) {
+    vector<Var*> values;
+    values.reserve(vhs.size());
+    for (auto* holder : vhs) values.emplace_back(holder->grad_input());
+    return values;
 }
 
 inline vector<VarHolder*> make_vh_vector(vector<VarPtr>&& vps) {

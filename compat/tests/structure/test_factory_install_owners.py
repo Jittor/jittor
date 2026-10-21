@@ -59,7 +59,7 @@ class TestInstallationOwners(unittest.TestCase):
                 return self
         def native(*args, **kwargs):
             calls.append((args, kwargs))
-            return Result()
+            return result
         class Scalar:
             def item(self): return 2
             def __int__(self): return 2

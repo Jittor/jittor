@@ -25,8 +25,12 @@ ReinterpretViewOp::ReinterpretViewOp(Var* x, NanoVector shape, NanoString dtype)
 }
 
 VarPtr ReinterpretViewOp::grad(Var* out, Var* dout, Var* v, int v_index) {
-    if (!((x->dtype() == ns_complex64 && dtype == ns_float32) ||
-          (x->dtype() == ns_float32 && dtype == ns_complex64)))
+    bool is_complex_pair =
+        (x->dtype() == ns_complex64 && dtype == ns_float32) ||
+        (x->dtype() == ns_float32 && dtype == ns_complex64) ||
+        (x->dtype() == ns_complex128 && dtype == ns_float64) ||
+        (x->dtype() == ns_float64 && dtype == ns_complex128);
+    if (!is_complex_pair)
         return nullptr;
     auto dense = contiguous_storage(dout);
     return make_reinterpret_view(dense.ptr, x->shape, x->dtype());
@@ -61,9 +65,15 @@ void ReinterpretViewOp::infer_shape() {
     if (x->dtype() == ns_complex64) {
         USER_CHECK(dtype == ns_float32 && yshape.size() && yshape[yshape.size()-1] == 2)
             << "complex64 -> float32 reinterpret_view requires target shape [..., 2]";
+    } else if (x->dtype() == ns_complex128) {
+        USER_CHECK(dtype == ns_float64 && yshape.size() && yshape[yshape.size()-1] == 2)
+            << "complex128 -> float64 reinterpret_view requires target shape [..., 2]";
     } else if (dtype == ns_complex64) {
         USER_CHECK(x->dtype() == ns_float32 && x->shape.size() && x->shape[x->shape.size()-1] == 2)
             << "float32 -> complex64 reinterpret_view requires input shape [..., 2]";
+    } else if (dtype == ns_complex128) {
+        USER_CHECK(x->dtype() == ns_float64 && x->shape.size() && x->shape[x->shape.size()-1] == 2)
+            << "float64 -> complex128 reinterpret_view requires input shape [..., 2]";
     }
     y->share_with(x);
 }

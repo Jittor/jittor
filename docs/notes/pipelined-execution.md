@@ -65,7 +65,9 @@ loss 一位不差**。要可复现的训练数值，先 `jt.cudnn.set_benchmark(
 **流水能把设备时间藏到 CPU 时间背后，藏不掉 CPU 时间本身。** 一个 diffusers UNet2D
 步需要 22 ms GPU 工作、却要 42 ms CPU 工作——执行器里 16 ms（约 1500 个 kernel 的
 融合、调度、key 构造与发射）、建反向图 16 ms、建前向图 9 ms——它的墙钟时间不会因为
-流水而改变。这种情形需要把执行器的每步工作在相同步之间缓存，那是这套设计的下一步。
+流水而改变。这种情形需要把每步的工作在相同的步之间复用，而不是每步重建——那就是
+[静态图回放](../development/static-graph-replay.md)（`jt.graph_replay` 与
+`jt.capture_step`，以及默认开启的自动策略）做的事。
 
 ## 它要花多少显存
 

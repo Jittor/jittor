@@ -25,6 +25,8 @@ accepts it, and dropout drawn inside the kernels (the backward draws it
 again). A mask that needs a gradient declines.
 """
 
+import weakref
+
 import jittor as jt
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from jittor._core.flags import _output_requires_grad
@@ -112,6 +114,23 @@ __device__ __forceinline__ float masked(float s, const Mask& mask, long long at)
     if (MASK == 1) return static_cast<const bool*>(mask.data)[at] ? s : -INFINITY;
     if (MASK == 2) return s + static_cast<const float*>(mask.data)[at];
     return s;
+}
+
+// An additive mask's values for four consecutive keys of one row, fetched
+// before the scores they are added to are computed: one 16-byte load where the
+// row is dense and aligned, as a [b, 1, l, l] or [b, 1, 1, l] mask is. Read an
+// element at a time inside the score loop, BERT-base's mask added 53 us to
+// each 264 us backward call and 11 to each 122 us forward one.
+__device__ __forceinline__ void bias4(const Mask& mask, long long row_at, int col, int lk,
+                                      float (&out)[4]) {
+    const float* p = static_cast<const float*>(mask.data) + row_at + col * mask.col_stride;
+    if (mask.col_stride == 1 && col + 3 < lk && (reinterpret_cast<size_t>(p) & 15) == 0) {
+        const float4 v = *reinterpret_cast<const float4*>(p);
+        out[0] = v.x; out[1] = v.y; out[2] = v.z; out[3] = v.w;
+        return;
+    }
+    #pragma unroll
+    for (int c = 0; c < 4; c++) out[c] = col + c < lk ? p[c * mask.col_stride] : 0.f;
 }
 
 } // namespace mea
@@ -217,11 +236,15 @@ __global__ void __launch_bounds__(THREADS) forward(
             skv[c * KP + r] = k0 + r < lk ? kb[k0 + r][c] : 0.f;
         }
         __syncthreads();
-        float s[RPT][4];
+        float s[RPT][4], bias[RPT][4];
         #pragma unroll
-        for (int r = 0; r < RPT; r++)
+        for (int r = 0; r < RPT; r++) {
             #pragma unroll
             for (int c = 0; c < 4; c++) s[r][c] = 0.f;
+            if (MASK == 2 && q0 + ty * RPT + r < lq)
+                mea::bias4(mask, mask_base + (q0 + ty * RPT + r) * mask.row_stride,
+                           k0 + tx * 4, lk, bias[r]);
+        }
         #pragma unroll 4
         for (int d = 0; d < D; d++) {
             float qv[RPT];
@@ -243,7 +266,8 @@ __global__ void __launch_bounds__(THREADS) forward(
             for (int c = 0; c < 4; c++) {
                 const int col = k0 + tx * 4 + c;
                 if (col >= lk || (CAUSAL && col > row)) s[r][c] = -INFINITY;
-                else if (MASK && shown == 1 && row < lq)
+                else if (MASK == 2 && row < lq) s[r][c] += bias[r][c];
+                else if (MASK == 1 && shown == 1 && row < lq)
                     s[r][c] = mea::masked<MASK>(s[r][c], mask, mask_base
                         + row * mask.row_stride + col * mask.col_stride);
                 top = fmaxf(top, s[r][c]);
@@ -390,8 +414,10 @@ __global__ void __launch_bounds__(THREADS) backward(
     // Query tiles wholly above the diagonal see none of these keys.
     const int qstart = CAUSAL ? (k0 / BQ) * BQ : 0;
     for (int q0 = qstart; q0 < lq; q0 += BQ) {
-        const int shown = MASK ? tile_visibility<MASK, CAUSAL>(
-            mask, mask_base, q0, k0, lq, lk) : 2;
+        // A boolean mask may hide a tile whole; an additive one, as the
+        // forward reads it, is added element by element.
+        const int shown = MASK == 1 ? tile_visibility<MASK, CAUSAL>(
+            mask, mask_base, q0, k0, lq, lk) : (MASK ? 1 : 2);
         if (!shown) continue;
         __syncthreads();
         for (int i = tid; i < BQ * D; i += THREADS) {
@@ -401,11 +427,15 @@ __global__ void __launch_bounds__(THREADS) backward(
             sdo[c * QP + r] = in ? dob[q0 + r][c] : 0.f;
         }
         __syncthreads();
-        float s[2][4], dp[2][4];
+        float s[2][4], dp[2][4], bias[2][4];
         #pragma unroll
-        for (int r = 0; r < 2; r++)
+        for (int r = 0; r < 2; r++) {
             #pragma unroll
             for (int c = 0; c < 4; c++) s[r][c] = dp[r][c] = 0.f;
+            if (MASK == 2 && q0 + ay * 2 + r < lq)
+                mea::bias4(mask, mask_base + (q0 + ay * 2 + r) * mask.row_stride,
+                           k0 + ax * 4, lk, bias[r]);
+        }
         #pragma unroll 4
         for (int d = 0; d < D; d++) {
             const float2 qv = *reinterpret_cast<const float2*>(sq + d * QP + ay * 2);
@@ -435,7 +465,8 @@ __global__ void __launch_bounds__(THREADS) backward(
                 const bool dead = row >= lq || col >= lk || (CAUSAL && col > row)
                                   || row_lse == -INFINITY;
                 float score = s[r][c] * scale;
-                if (MASK && shown == 1 && !dead)
+                if (MASK == 2 && !dead) score += bias[r][c];
+                if (MASK == 1 && shown == 1 && !dead)
                     score = mea::masked<MASK>(score, mask, mask_base
                         + row * mask.row_stride + col * mask.col_stride);
                 const float p = dead || score == -INFINITY ? 0.f : __expf(score - row_lse);
@@ -525,6 +556,12 @@ def _launch(kernel, grid, smem, args, threads):
     """
 
 
+#: The layout `_mask_layout` last gave, with the mask, the Var it held then and
+#: the shape it was for. Transformers builds one mask a forward and hands it
+#: to every layer; the entry holds the mask, so its id is not reused.
+_LAST_MASK = [None, None, None, None]
+
+
 def _mask_layout(mask, shape):
     """(kind, contiguous mask, strides) for an `attn_mask`, or None to decline.
 
@@ -534,6 +571,31 @@ def _mask_layout(mask, shape):
     """
     if mask is None:
         return 0, None, (0, 0, 0, 0)
+    last = _LAST_MASK
+    if last[0] is not None and last[0]() is mask and last[1] == mask.var_ptr \
+            and last[2] == shape and not _output_requires_grad(mask):
+        return last[3]
+    layout = _new_mask_layout(mask, shape)
+    # Only a small mask is kept past its forward: a long sequence's is tens of
+    # megabytes. And only for as long as the mask itself lives -- a weak
+    # reference, so a mask the caller has let go does not keep its layout
+    # (and a Var) alive; a native Var takes none and is not kept.
+    if layout is not None and int(mask.numel()) <= (1 << 20):
+        try:
+            ref = weakref.ref(mask, _forget_mask)
+        except TypeError:
+            ref = None
+        if ref is not None:
+            last[:] = [ref, mask.var_ptr, shape, layout]
+    return layout
+
+
+def _forget_mask(ref):
+    if _LAST_MASK[0] is ref:
+        _LAST_MASK[:] = [None, None, None, None]
+
+
+def _new_mask_layout(mask, shape):
     dtype = _jittor_dtype_name(mask.dtype)
     if dtype == "bool":
         kind = 1
@@ -643,6 +705,12 @@ def _rows_args(t, seq, heads, group):
             f"(long long){t}->shape[3], {group}}}")
 
 
+#: The forward's launch source by everything it is formatted from: a model
+#: calls attention with the same settings in every layer, and formatting it
+#: was half of what building the operator cost in Python.
+_FORWARD_SOURCES = {}
+
+
 def _forward(query, key, value, call):
     if call.seq[0]:
         b, lq, h, d = (int(size) for size in query.shape)
@@ -651,18 +719,22 @@ def _forward(query, key, value, call):
     # Four query rows a thread; one where that leaves the grid smaller than
     # the device, which is what BERT at batch 1 (24 tiles of 64) did.
     rpt = 4 if -(-lq // 64) * b * h >= _SM_BLOCKS else 1
-    bq = 16 * rpt
-    smem = _smem_register_forward(d, rpt)
-    kernel = f"mea_fwd::forward<{d}, {rpt}, {call.template()}>"
-    lq_expr, lk_expr = call.lengths()
+    key_ = (d, rpt, call.causal, call.mask[0], call.mask[2], call.seq, call.group,
+            float(call.scale), call.seed is not None, call.keep)
+    src = _FORWARD_SOURCES.get(key_)
+    if src is None:
+        bq = 16 * rpt
+        smem = _smem_register_forward(d, rpt)
+        kernel = f"mea_fwd::forward<{d}, {rpt}, {call.template()}>"
+        lq_expr, lk_expr = call.lengths()
+        src = _FORWARD_SOURCES[key_] = _launch(
+            kernel, f"({lq_expr} + {bq} - 1) / {bq}, in0->shape[0] * {call.heads_expr()}",
+            smem, f"in0_p, in1_p, in2_p, out0_p, out1_p, {lq_expr}, {lk_expr}, "
+                  f"{float(call.scale)!r}f, {call.args(3)}",
+            threads="mea_fwd::THREADS")
     return jt.code(
         [query.shape, (b, h, lq)], ["float32", "float32"], [query, key, value] + call.extras(),
-        cuda_header=_KERNELS,
-        cuda_src=_launch(kernel, f"({lq_expr} + {bq} - 1) / {bq}, in0->shape[0] * "
-                                 f"{call.heads_expr()}",
-                         smem, f"in0_p, in1_p, in2_p, out0_p, out1_p, {lq_expr}, {lk_expr}, "
-                               f"{float(call.scale)!r}f, {call.args(3)}",
-                         threads="mea_fwd::THREADS"))
+        cuda_header=_KERNELS, cuda_src=src)
 
 
 def _backward(query, key, value, grad_out, lse, delta, call):
@@ -734,7 +806,8 @@ def _physical(t):
     return t, False
 
 
-def _supports(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None):
+def _supports(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False,
+              scale=None, allow_reduced_precision=False):
     return all(_jittor_dtype_name(t.dtype) == "float32" for t in (query, key, value))
 
 

@@ -637,6 +637,41 @@ def _tensor_nbytes(v, ptr_sig):
         return 0
 
 
+def _tensor_byte_range(value, pointer, signature):
+    """Conservative addressed bytes, including holes in a strided view."""
+    itemsize = _TCODE_BYTES.get(signature[1:], 0)
+    if not itemsize:
+        return None
+    shape = tuple(int(size) for size in value.shape)
+    if any(size == 0 for size in shape):
+        return pointer, pointer
+    accessor = getattr(value, "_storage_strides" if _is_var(value) else "stride", None)
+    if not callable(accessor):
+        if _tensor_is_contiguous(value):
+            return pointer, pointer + _tensor_nbytes(value, signature)
+        return None
+    strides = tuple(int(stride) for stride in accessor())
+    if len(strides) != len(shape):
+        return None
+    extents = [(size - 1) * stride * itemsize for size, stride in zip(shape, strides)]
+    return (pointer + sum(min(0, extent) for extent in extents),
+            pointer + sum(max(0, extent) for extent in extents) + itemsize)
+
+
+def _overlapping_argument_names(ranges):
+    """Bouncing overlapping arguments independently changes pointer semantics."""
+    if any(bounds is None for bounds in ranges.values()):
+        # Unknown layouts cannot establish that another argument is disjoint.
+        return set(ranges)
+    overlaps = set()
+    entries = list(ranges.items())
+    for index, (name, (start, end)) in enumerate(entries):
+        for other, (other_start, other_end) in entries[index + 1:]:
+            if start < end and other_start < other_end and start < other_end and other_start < end:
+                overlaps.update((name, other))
+    return overlaps
+
+
 def _tensor_is_cuda(v):
     ic = getattr(v, "is_cuda", None)
     if ic is not None:
@@ -1395,19 +1430,29 @@ def _run(jitfn, args, kwargs, grid):
     # bounced tensors to copy back + guard buffers to recycle after the launch:
     #   (orig_ptr, bounce_ptr, payload_bytes, bounce_cap)
     bounced = []
+    pointers = {name: _tensor_ptr(value) for name, signature, value in runtime_vals
+                if signature.startswith("*") and value is not None}
+    guard_enabled = _guard_enabled()
+    overlapping = _overlapping_argument_names({
+        name: _tensor_byte_range(value, pointers[name], signature)
+        for name, signature, value in runtime_vals if name in pointers
+    }) if guard_enabled else set()
     for (name, sig, val) in runtime_vals:
         if sig.startswith("*"):
             if val is None:
                 cv = ctypes.c_uint64(0)
             else:
-                ptr = _tensor_ptr(val)
-                nbytes = _tensor_nbytes(val, sig) if _guard_enabled() else 0
+                ptr = pointers[name]
+                nbytes = _tensor_nbytes(val, sig) if guard_enabled else 0
                 # Only a contiguous operand can be bounced: the copy is a flat
                 # memcpy of the payload and the kernel keeps the caller's
                 # strides, so a strided view would be copied wrongly and then
                 # read out of the copied buffer (see `_tensor_is_contiguous`).
-                if (not _looks_like_output_arg(name)) and 0 < nbytes <= _guard_max_payload() \
-                        and _tensor_is_contiguous(val):
+                # Shared storage must retain its actual pointer relationship.
+                # Otherwise a bounced input's copy-back can overwrite an in-place
+                # output with its pre-launch value, even after a correct kernel.
+                if name not in overlapping and (not _looks_like_output_arg(name)) \
+                        and 0 < nbytes <= _guard_max_payload() and _tensor_is_contiguous(val):
                     # bounce through a guarded buffer so a masked over-read past the
                     # operand's end hits zeroed slack instead of an unmapped page.
                     try:

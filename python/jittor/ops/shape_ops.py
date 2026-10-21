@@ -75,14 +75,9 @@ def repeat_interleave(x,repeats,dim=None,output_size=None):
         if result is not None:
             return result
         tar_shape = list(x.shape)
-        tar_shape[dim] = tar_shape[dim]*repeats
-        dims = []
-        for i in range(len(tar_shape)):
-            if dim==i:
-                dims.append(f"i{i}/{repeats}")
-            else:
-                dims.append(f"i{i}")
-        return x.reindex(tar_shape,dims)
+        tar_shape[dim] = tar_shape[dim] * repeats
+        broadcast_shape = [-1] * (dim + 1) + [repeats] + [-1] * (x.ndim - dim - 1)
+        return x.unsqueeze(dim + 1).expand(broadcast_shape).reshape(tar_shape)
 
     result = _repeat_interleave_dim0_cuda(x, repeats, dim, output_size, _repeat_interleave_cpu_source)
     if result is not None:
@@ -114,10 +109,7 @@ def repeat_interleave(x,repeats,dim=None,output_size=None):
     ):
         value = int(x.item())
         out = jt.full((index.shape[0],), value, x.dtype)
-        try:
-            out._jittor_constant_index_value = value
-        except Exception:
-            pass
+        out._jittor_constant_index_value = value
         return out
     return x.getitem(tuple(slice(None) if d != dim else index for d in range(x.ndim)))
 

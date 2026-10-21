@@ -1,7 +1,7 @@
 """Finite-difference checker for jittor.linalg backward passes.
 
 Catches silent-wrong / crashing gradients in svd/eigh/qr/solve/cholesky/inv/...
-Ran on a CUDA box (cscg104) it found 3 distinct bugs in one sweep:
+Run on a CUDA host, it found 3 distinct bugs in one sweep:
   - svd  V-gradient: wrong-axis contraction (silent) + m<n crash   (2c85c570)
   - solve d/db: gradient wrt RHS was a stub writing 0 (silent)     (52d71415)
   - qr: hardcoded square; non-square forward shape + tall backward (52d71415)

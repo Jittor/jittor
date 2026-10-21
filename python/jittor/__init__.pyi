@@ -46,6 +46,11 @@ __all__ = ['CTCLoss', 'DumpGraphs', 'ExitHooks', 'Finfo', 'Flags', 'Function', '
 __version__: str
 gradfunctional = autograd
 dtype = NanoString
+class JittorError(_builtins.RuntimeError): ...
+class JittorInternalError(JittorError): ...
+class JittorIndexError(JittorError, _builtins.IndexError): ...
+class JittorTypeError(JittorError, _builtins.TypeError): ...
+class JittorShapeError(JittorError, _builtins.ValueError): ...
 
 # Names in __all__ with no definition:
 #   CTCLoss
@@ -54,6 +59,7 @@ dtype = NanoString
 #   Finfo
 #   Flags
 #   Function
+#   Generator
 #   GradHooker
 #   MemInfo
 #   Module
@@ -393,6 +399,7 @@ dtype = NanoString
 #   to
 #   to_bool
 #   to_device
+#   to_dlpack
 #   to_float
 #   to_int
 #   tolist
@@ -637,6 +644,30 @@ def mod(x: Var, y: Var)-> Var:
 	        >>> a % b
 	        jt.Var([0.19774088 0.20159635 0.22973768], dtype=float32)'''
 	...
+def fmod(x: Var, y: Var)-> Var:
+	'''Document:
+	*
+	    Returns the element-wise truncated remainder of division (C ``fmod``).
+
+	    The result has the sign of ``x`` and magnitude below ``|y|``: it is
+	    ``x - trunc(x / y) * y`` computed exactly, where :func:`mod` (``%``) uses
+	    the floored quotient and takes the sign of ``y``. A finite ``x`` over an
+	    infinite ``y`` is ``x``; ``y == 0`` gives NaN for floats.
+
+	    ----------------
+
+	    * [in] x: the first input,  a python number or jt.Var.
+
+	    * [in] y: the second input, a python number or jt.Var.
+
+	    ----------------
+
+	    Example-1::
+	        >>> jt.fmod(jt.array([-3.0, 3.0]), 2.0)
+	        jt.Var([-1.  1.], dtype=float32)
+	        >>> jt.array([-3.0, 3.0]) % 2.0
+	        jt.Var([1. 1.], dtype=float32)'''
+	...
 def less(x: Var, y: Var)-> Var:
 	'''Document:
 	*
@@ -834,7 +865,7 @@ def bitwise_xor(x: Var, y: Var)-> Var:
 
 	    * [in] y: the second input, jt.Var (integal or boolean).'''
 	...
-def argsort(x: Var, dim: _builtins.int=-1, descending: _builtins.bool=False, dtype: str="int32")-> Tuple[Var, ...]:
+def argsort(x: Var, dim: _builtins.int=-1, descending: _builtins.bool=False, dtype: str="int32", stable: _builtins.bool=False)-> Tuple[Var, ...]:
 	'''Document:
 	*
 	    Argsort Operator Perform an indirect sort by given key or compare function.
@@ -858,6 +889,9 @@ def argsort(x: Var, dim: _builtins.int=-1, descending: _builtins.bool=False, dty
 	    * [in] descending:  the elements are sorted in descending order or not(default False).
 
 	    * [in] dtype: type of return indexes
+
+	    * [in] stable: preserve the input order of equal keys (default False).
+	      CPU uses std::stable_sort; CUDA segmented radix sort is already stable.
 
 	    * [out] index: index have the same size with sorted dim
 
@@ -4713,6 +4747,8 @@ def graph_capture_begin()-> _builtins.bool: ...
 def graph_capture_end()-> _builtins.int: ...
 def graph_launch(graph: _builtins.int)-> None: ...
 def graph_release(graph: _builtins.int)-> None: ...
+def write_back(targets: List[Var], values: List[Var])-> Tuple[Var, ...]: ...
+
 def fused_sgd(parameters: List[Var], velocities: List[Var], gradients: List[Var], lr: _builtins.float, momentum: _builtins.float, weight_decay: _builtins.float, dampening: _builtins.float, nesterov: _builtins.bool, maximize: _builtins.bool)-> Tuple[Var, ...]: ...
 class Var:
 	'''Variable that stores multi-dimensional data.'''
@@ -4944,6 +4980,30 @@ class Var:
 		        >>> a % b
 		        jt.Var([0.19774088 0.20159635 0.22973768], dtype=float32)'''
 		...
+	def fmod(self, y: Var)-> Var:
+		'''Document:
+		*
+		    Returns the element-wise truncated remainder of division (C ``fmod``).
+
+		    The result has the sign of ``x`` and magnitude below ``|y|``: it is
+		    ``x - trunc(x / y) * y`` computed exactly, where :func:`mod` (``%``) uses
+		    the floored quotient and takes the sign of ``y``. A finite ``x`` over an
+		    infinite ``y`` is ``x``; ``y == 0`` gives NaN for floats.
+
+		    ----------------
+
+		    * [in] x: the first input,  a python number or jt.Var.
+
+		    * [in] y: the second input, a python number or jt.Var.
+
+		    ----------------
+
+		    Example-1::
+		        >>> jt.fmod(jt.array([-3.0, 3.0]), 2.0)
+		        jt.Var([-1.  1.], dtype=float32)
+		        >>> jt.array([-3.0, 3.0]) % 2.0
+		        jt.Var([1. 1.], dtype=float32)'''
+		...
 	def less(self, y: Var)-> Var:
 		'''Document:
 		*
@@ -5141,7 +5201,7 @@ class Var:
 
 		    * [in] y: the second input, jt.Var (integal or boolean).'''
 		...
-	def argsort(self, dim: _builtins.int=-1, descending: _builtins.bool=False, dtype: str="int32")-> Tuple[Var, ...]:
+	def argsort(self, dim: _builtins.int=-1, descending: _builtins.bool=False, dtype: str="int32", stable: _builtins.bool=False)-> Tuple[Var, ...]:
 		'''Document:
 		*
 		    Argsort Operator Perform an indirect sort by given key or compare function.
@@ -5165,6 +5225,9 @@ class Var:
 		    * [in] descending:  the elements are sorted in descending order or not(default False).
 
 		    * [in] dtype: type of return indexes
+
+		    * [in] stable: preserve the input order of equal keys (default False).
+		      CPU uses std::stable_sort; CUDA segmented radix sort is already stable.
 
 		    * [out] index: index have the same size with sorted dim
 
@@ -8586,7 +8649,7 @@ class Flags:
 	l1_cache_size: _builtins.int
 	'''size of level 1 cache (byte). Default: 32768): size of level 1 cache (byte'''
 	lazy_execution: _builtins.int
-	'''Default enabled, if disable, use immediately eager execution rather than lazy execution, This flag makes error message and traceback infomation better. But this flag will raise memory consumption and lower the performance. Default: 1'''
+	'''Default enabled, if disable, use immediately eager execution rather than lazy execution, This flag makes error message and traceback information better. But this flag will raise memory consumption and lower the performance. Default: 1'''
 	log_file: str
 	'''log to file, mpi env will add $OMPI_COMM_WORLD_RANK suffix. Default: ""'''
 	log_op_hash: str
@@ -8983,6 +9046,7 @@ DumpGraphs: Any
 ExitHooks: Any
 Finfo: Any
 Function: Any
+Generator: Any
 GradHooker: Any
 MemInfo: Any
 Module: Any
@@ -9200,6 +9264,7 @@ tests: Any
 to: Any
 to_bool: Any
 to_device: Any
+to_dlpack: Any
 to_float: Any
 to_int: Any
 tolist: Any

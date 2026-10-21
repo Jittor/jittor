@@ -43,6 +43,7 @@ int aclrtSynchronizeStream(aclrtStream);
 namespace jittor {
 aclrtStream acl_current_stream();
 int acl_runtime_current_device();
+int acl_live_graphs();
 }
 ''',
         "mem/allocator.h": r'''
@@ -114,7 +115,7 @@ struct Pool : Allocator {
     }
     void free(void* ptr, size_t size, const size_t& allocation) override {
         assert(current == id);
-        assert(acl_workspace_address() == nullptr);
+        assert(acl_workspace_address() != ptr);
         assert(blocks.at(ptr) == std::make_pair(size, allocation));
         events.push_back("free" + std::to_string(id));
         blocks.erase(ptr);
@@ -136,6 +137,8 @@ aclrtStream acl_current_stream() {
     return reinterpret_cast<void*>(intptr_t(current + 1));
 }
 int acl_runtime_current_device() { return current; }
+int live_graphs = 0;
+int acl_live_graphs() { return live_graphs; }
 }
 void expect_error(const std::function<void()>& call, const std::string& message) {
     bool caught = false;
@@ -181,6 +184,20 @@ int main() {
     expect_error([] { releaseWorkSpace(); }, "gc failure");
     assert(acl_workspace_address() == nullptr && first.blocks.empty());
     first.fail_gc = false;
+    // A recorded graph reads the workspace it saw: growing while one lives
+    // keeps the old block and waits on nothing; after the last graph, the
+    // kept block is synchronized and freed.
+    auto* kept = mallocWorkSpace(40);
+    live_graphs = 1;
+    events.clear();
+    auto* grown = mallocWorkSpace(400);
+    assert(grown != kept && first.blocks.count(kept) && acl_workspace_address() == grown);
+    assert(events.empty());
+    live_graphs = 0;
+    acl_workspace_release_retired();
+    assert(!first.blocks.count(kept) && first.blocks.count(grown));
+    assert((events == std::vector<std::string>{"sync0", "free0", "gc0"}));
+    releaseWorkSpace();
     expect_error([] { mallocWorkSpace(std::numeric_limits<uint64_t>::max()); }, "overflow");
     mallocWorkSpace(80);
     sync_failure = 0;

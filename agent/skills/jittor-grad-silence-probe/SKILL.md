@@ -33,7 +33,7 @@ var（`hold_vars`）是豁免的——所以"参数不受影响、中间量受�
 
 ## 2. 告警不等于没被吞
 
-`grad.cc` 的缺失梯度告警一度以 **var 的名字**为键做进程级去重，而绝大多数 var 名字是空串：
+`src/core/grad.cc` 的缺失梯度告警一度以 **var 的名字**为键做进程级去重，而绝大多数 var 名字是空串：
 第一条告警之后所有缺失梯度**完全无声**。所以：
 
 - **不要用"日志里没有 warning"当作"没有缺失梯度"的证据。**
@@ -53,7 +53,7 @@ JITTOR_TEST_DEVICES=cpu nvcc_path="" pytest tests/core tests/nn tests/optim test
 - 红的不多 → 默认报错，给一个 flag 让用户显式降级为警告。
 - 面太大 → 保留补零，但**去掉去重**让每一次缺失都报出来，另加 flag 让用户升级为报错。
 
-**本仓库量过的结果**（2.0 整改 6.C07）：默认报错会红 16 条，分布在
+**本仓库量过的结果**（2026-09）：默认报错会红 16 条，分布在
 `test_grad.py`、`test_function.py`、`test_rootcause_semantics.py`、`test_setitem.py`、
 `test_reindex_op.py`、`test_misc_issue.py`。其中两条是**有文档的语义**，不是疏忽：
 
@@ -84,7 +84,7 @@ session 猝死而不是一条断言失败。这类用例一律 `subprocess.run` 
 | 过滤器 | 为什么必须有 | 漏掉它的症状 |
 | --- | --- | --- |
 | var 自己的 requires_grad：`!is_stop_grad() && !flag(_requires_grad_disabled)`，**两个标志都要读** | `stop_grad` 是永久的，`requires_grad_(False)` 是可逆的，两者都让梯度进不来 | 只读 `_stop_grad`：`x.requires_grad = False` 之后仍然报「非叶子」，而且把它打开再关上答案不回来 |
-| 生产者算子**自己**的 `stop_grad` | **`detach()` 把 stop_grad 标在 clone 算子上，不标在它产出的 var 上**（`ops/clone_op.cc`）。所以 `x.detach().requires_grad` 在 Jittor 里是 `True` | 只看 var 的标志：detach 出来的 var 被报成非叶子 |
+| 生产者算子**自己**的 `stop_grad` | **`detach()` 把 stop_grad 标在 clone 算子上，不标在它产出的 var 上**（`src/ops/composite/clone_op.cc`）。所以 `x.detach().requires_grad` 在 Jittor 里是 `True` | 只看 var 的标志：detach 出来的 var 被报成非叶子 |
 | 入边的 `index < 0`，即控制依赖边（`VarHolder::_add_dependency` 打的标记） | `make_grad` 对负下标直接返回 nullptr，这条边只排执行顺序 | 加一条 `_add_dependency` 就把叶子变成非叶子 |
 | 冻结的 requires-grad-disabled 边（`is_requires_grad_disabled_edge`） | `Op::init` 在算子构造时快照了当时被禁用的输入边；之后把那个 var 的 requires_grad 打开，这条边仍然不导梯度 | 把 requires_grad 往回打开就能凭空穿过一条冻结的边 |
 
@@ -92,7 +92,7 @@ session 猝死而不是一条断言失败。这类用例一律 `subprocess.run` 
 两件事——查询的答案，以及 `jt.grad(loss, [v])` 有没有拿到非零梯度。只断言查询自己，
 证明的只是查询和自己一致。
 
-本仓库的实现是 `jittor::backward_grad_fn`（`src/grad.h`）；用例在
+本仓库的实现是 `jittor::backward_grad_fn`（`src/core/grad.h`）；用例在
 `tests/core/test_backward_leaf_query.py` 与 `src/tests/test_backward_leaf.cc`，一条一条
 对应上表。
 
@@ -107,12 +107,12 @@ Jittor 与 torch 在 autograd 上的差异**几乎全部集中在 `requires_grad
 
 | 构造 | torch 的 requires_grad | Jittor 的 | 为什么 |
 | --- | --- | --- | --- |
-| 新建一个 float 张量 | `False` | `True` | Jittor 的 float var 默认可导（`var.cc` 只对非 float 与 `no_grad` 设 `_stop_grad`） |
+| 新建一个 float 张量 | `False` | `True` | Jittor 的 float var 默认可导（`src/core/var.cc` 只对非 float 与 `no_grad` 设 `_stop_grad`） |
 | `t.detach()` | `False` | `True` | detach 停的是算子（见上一节） |
 | 对一个 `stop_grad` 的 var 做算子 | `False` | native 策略下 `True` | `stop_outputs_when_inputs_stopped` 默认关；`EXPLICIT_REQUIRES_GRAD` 策略才打开 |
 
 **判据**：先按三元组分类，只在 `requires_grad` 一致的用例上追究 `is_leaf`/`grad_fn`；
-`requires_grad` 本身不一致的用例单独列成一张「归属别的任务」的表，并写清是哪一条。
+`requires_grad` 本身不一致的用例单独列成一张「归属别的问题」的表，并写清是哪一条。
 **不要把 requires_grad 的差异改成 `is_leaf` 的补丁**——「`is_leaf` 恒 `True`」那种修法
 就是这么来的。
 
@@ -124,7 +124,7 @@ Jittor 与 torch 在 autograd 上的差异**几乎全部集中在 `requires_grad
 
 属性访问触发的查询（`is_leaf`、`grad_fn`、`requires_grad`），"会不会每次都全图遍历"
 不能靠读代码保证。这棵树里每一次图遍历都要取一个 `TraversalEpoch`，而每个 epoch 都会
-推进全局 `tflag_count`（`misc/traversal_epoch.h`）。于是有一条不依赖计时的判据：
+推进全局 `tflag_count`（`src/runtime/traversal_epoch.h`）。于是有一条不依赖计时的判据：
 
 ```cpp
 int64 before = tflag_count;
@@ -138,4 +138,4 @@ CHECKop(tflag_count,==,before);      // 计数器没动 == 没开过遍历
 `run_sync` 的算子循环里走全图的）。
 
 反过来也成立：**只有能通过这条判据的查询才不需要缓存。** 一旦需要缓存，下一个问题必然是
-「什么时候失效」，而陈旧标记（`5.03` 的转置隐藏标记）是这棵树已经付过一次代价的坑。
+「什么时候失效」，而陈旧标记（曾经的转置隐藏标记）是这棵树已经付过一次代价的坑。

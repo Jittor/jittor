@@ -131,6 +131,57 @@ class _Mixin:
         np.testing.assert_allclose(qhq, np.broadcast_to(np.eye(4), (2, 4, 4)),
                                    atol=1e-3, rtol=1e-3)
 
+    def test_qr_wide_forward_and_backward(self):
+        # complex_qr (linalg/complex.py) used to require a square input
+        # (`only square matrix is supported for linalg_qr`); forward AND
+        # backward now both work for a wide (M<N) matrix too, matching the
+        # non-complex `qr()` in linalg/decompositions.py, whose forward
+        # already handled every shape.
+        rng = np.random.RandomState(13)
+        a = rng.randn(2, 5) + 1j * rng.randn(2, 5)
+        z = _to_complex64_var(a)
+        q, r = linalg.qr(z)
+        self.assertEqual(tuple(q.shape), (2, 2))
+        self.assertEqual(tuple(r.shape), (2, 5))
+        qn, rn = _np(q), _np(r)
+        np.testing.assert_allclose(_dot(qn, rn), a, atol=1e-3, rtol=1e-3)
+        np.testing.assert_allclose(
+            _dot(np.conj(np.swapaxes(qn, -1, -2)), qn), np.eye(2),
+            atol=1e-3, rtol=1e-3)
+
+        # Backward: gradcheck against a numpy finite-difference oracle. Uses a
+        # random-linear (Re<q,p_q> + Re<r,p_r>) loss rather than abs().sum() --
+        # abs() is non-holomorphic and its gradient blows up (NaN) for any
+        # near-zero entry, which a random Q/R can and does have.
+        m, n = a.shape[-2:]
+        k = min(m, n)
+        rng2 = np.random.RandomState(14)
+        p_q = (rng2.randn(m, k) + 1j * rng2.randn(m, k)) * 0.1
+        p_r = (rng2.randn(k, n) + 1j * rng2.randn(k, n)) * 0.1
+
+        def loss_np(qr):
+            qv, rv = qr
+            return float(np.real(np.sum(qv * np.conj(p_q)) + np.sum(rv * np.conj(p_r))))
+
+        eps = 1e-3
+        g_np = np.zeros_like(a)
+        for idx in np.ndindex(a.shape):
+            ar = a.copy(); ar[idx] += eps
+            am = a.copy(); am[idx] -= eps
+            dr = (loss_np(np.linalg.qr(ar)) - loss_np(np.linalg.qr(am))) / (2 * eps)
+            ai = a.copy(); ai[idx] += eps * 1j
+            aim = a.copy(); aim[idx] -= eps * 1j
+            di = (loss_np(np.linalg.qr(ai)) - loss_np(np.linalg.qr(aim))) / (2 * eps)
+            g_np[idx] = dr + 1j * di
+
+        z2 = _to_complex64_var(a)
+        z2.requires_grad = True
+        q2, r2 = linalg.qr(z2)
+        loss = ((q2 * _to_complex64_var(p_q).conj()).real.sum() +
+                (r2 * _to_complex64_var(p_r).conj()).real.sum())
+        g = jt.grad(loss, [z2])[0]
+        np.testing.assert_allclose(_np(g), g_np, atol=3e-2, rtol=3e-2)
+
     # -------------------------------------------------------------------- eig
     def test_eig(self):
         if self.use_cuda:

@@ -1,8 +1,8 @@
 # 源码架构与模块边界
 
 - 状态：已接受
-- 上次复查：2026-09-09
-- 基线：[架构整合记录](../../refactor-wip/results/2026-09-08-architecture-integration.md)
+- 上次复查：2026-10-05（并入整改期的后端构建、动态形状、dtype 与前端运行时状态契约）
+- 基线：`e3c369acb`
 - Owner：Jittor 核心维护者
 - 复查触发：公开模块搬动、新增实现域、或运行时资源路径变化时
 
@@ -511,14 +511,227 @@ platform 与 worker 源码，**也不声称完整的 NPU serving 或硬件验证
 4. 核心发行物之外的项目专属集成。
 
 行为层面的判定规则见
-[Torch 兼容原则](../../refactor-wip/architecture/torch-compatibility-principles.md)。
+[Torch 兼容原则](../compatibility/principles.md)。安装与延迟钩子写了哪些进程状态、哪些
+可以回滚，见 [Torch 安装事务](torch-install-transactions.md)。
+
+### Torch 前端的运行时状态与 API 归属
+
+独立前端拥有自己的 Tensor、Module 与安装状态，**不建第二张执行图**；能委托给原生数学实现
+的 API，以原生实现为准。
+
+- **实现有可导入的标识。** 安装器发布的是已有的模块级函数和类，真正的实现放在它所属的
+  族模块里；改嵌套函数的 `__qualname__` 不算。每次调用的算法回调可以闭包住输入，但安装
+  **不得**在每次尝试时创建新的公开实现。类型工厂只配置类并绑定模块拥有的行为：
+  `nn_frontend.py` 的 `NNFrontendOwner` 拥有层类缓存，`LayerInitializer` 与 `nn_adoption.py`
+  负责原生构造与参数认领，不改外部/共享模块；分布对象的构造、方法与属性用
+  `distribution_adapters.py` 里的描述符，每个前端各有一份状态。
+- **调用时解析 owner。** `get_install_context(native_backend)` 在调用时解析显式绑定的前端
+  owner：它是只读操作，**不激活 Torch，也不创建安装**；owner 缺失或不一致时拒绝。正在
+  安装的代码直接用自己手里的 `InstallContext`。被捕获的原生实现先放进 context 拥有的状态
+  再发布包装器，后来的查找因此不会递归调到包装器自己。CUDA facade 的可变状态
+  （`installers/cuda/api.py` 的 `CudaRuntimeState`：逻辑流、NVTX、显存查询缓存与精度档位）
+  也属于 `InstallContext.state`；API 标识稳定，可变状态归当前前端。
+- **保真度如实登记。** 最终发布的对象用 `register_fidelity` 登记：`approximate` 表示仍有
+  限制，`unimplemented` 也覆盖已有的注解或 no-op 占位，不只是会抛异常的函数。登记按 API
+  拼写为准，别名可以共享对象但声明不同的支持行为；`api_manifest.py` 记录家族安装之后的
+  最终组合路径，`fidelity_report()` 返回排好序的不可变记录，`fidelity_table()` 渲染覆盖表。
+  **登记与命名空间封闭都不证明完整的 Torch 语义**：CUDA 逻辑流是串行化的，事件计时用同步
+  后的主机时间戳，显存峰值在查询时采样，这些都是登记在案的限制。
+- **根命名空间发布后封闭。** 独立根命名空间只在 bootstrap 期间允许原生回退；发布之后未
+  声明的名字抛 `AttributeError`，删除一个局部名字也不会露出原生实现。`native_api.py` 为
+  共享的数学运算声明稳定的 `NativeOperation` 对象，它们解析一张只读、归事务所有的委托表，
+  并进入前端的结果类型/autograd 作用域。原生专属的 `flags`、`core`、`runtime` 不是公开的
+  Torch 属性。FFT/linalg facade 复制公开导出（不含被导入的实现模块），保留自己的命名空间
+  标识。
+
+运行时服务与激活：
+
+- `jt.runtime.service_state(namespace, factory=...)` 拥有扩展状态，**不往 `jittor` 上加私有
+  属性**。不带 factory 的读取不创建状态；成功的 factory 每个 Runtime 只运行一次，失败的
+  可以重试，同一服务的递归构造被拒绝；服务自己决定其字段的同步与事务语义。
+- shim 激活使用 `jittor.torch.activation` 服务。**安装锁同时覆盖激活状态检查、状态转换和
+  安装本身**：并发调用者等待，同一线程的重入激活被拒绝；回滚冲突必须释放锁并留下可查询
+  的失败状态（`jittor.compat.shim.activation_status()`）。
+- 张量记账使用 `jittor.torch.tensor_states`，一张 Runtime 拥有的弱 owner 表。
+  `get_tensor_state()` 解析显式的前端绑定，`latest_optimizer()` 解析弱优化器引用。历史的
+  leaf/retained/optimizer 根别名被认领一次后移除，安装失败时回滚恢复它们原来的归属。
+- vmap 的 getitem 下沉提示是上下文局部、按 owner 划分的：用
+  `TransformGetItemToIndex(owner)` 与 `getitem_transform_active(owner)`，不用模块属性。
+  同一作用域的嵌套与异常退出都恢复进入时的状态，另一个执行上下文不继承活动的改动。
+- `compat.torch.install` 在创建安装 context 之前就拒绝原生模块目标；`activate` 与导入期
+  组合总是选择独立命名空间。旧的 false 模式参数和环境变量是显式错误。
+
+### dtype 边界
+
+`torch.dtype` 是**不可变对象，不是 Python 字符串**。`torch.long` 与 `torch.int64` 是同一个
+对象；`str`、`repr` 与格式化都得到 `torch.int64`；与 `"int64"` 或 `"torch.int64"` 比较为假。
+pickle 返回规范对象，并接受旧的字符串子类 pickle 状态。dtype 对象不可调用：转换用
+`tensor.to(dtype=...)`，原生 Jittor 代码用 `jt.float32(...)`。
+
+边界上是两种不同的操作，外加两处注册：
+
+| 操作 | 归属 | 契约 |
+| --- | --- | --- |
+| 为元数据、分派、源码生成或持久化读取 dtype 名 | `jittor._core.dtypes.dtype_name(value)` | 返回裸的规范名；**不授予计算支持** |
+| 在 Python/NumPy 分配之前消费 dtype | `jittor._core.dtypes.dtype_for_compute(value)` | 走原生带检查的 NanoString 转换器，拒绝不支持的占位符 |
+| 注册前端 dtype 类 | `jittor._core.dtypes.register_dtype_type(type)` | 在 Python 位置 dtype 参数与 C++ 实参边界注册同一个确切的类 |
+| 原生 dtype 实参消费对象 | `src/bindings/pyjt/py_dtype.{h,cc}` 与 `py_converter.h` | 除原生与 NumPy 拼写之外，只接受显式注册的前端类型；带 `name` 或 `type` 属性的任意对象**不被接受** |
+
+原生注册表由核心与它的 JIT 扩展共享。带检查的转换器保留 Python 异常：占位符在算子构造
+之前抛 `NotImplementedError`。规范的裸字符串继续走原生快路径；带 `torch.` 前缀的字符串与
+注册过的占位符名字经由注册的 dtype 对象解析。`ones`、`zeros`、`empty` 也认得出最后一个
+位置参数里的注册 dtype——把它当成形状分量会静默退回默认的 float32。
+
+前端定义了 34 个不同的 dtype 对象，其中 14 个有原生分配/计算表示：bool、四种有符号整数、
+四种无符号整数、float16、bfloat16、float32、float64 与 complex64。其余 20 个只供导入期的
+字典与元数据使用，**不能**传给工厂函数、cast、随机数生成或原生算子的 dtype 参数。各后端
+实际支持的集合比这个框架级集合更窄。
+
+原生 Python 代码**不得**把 `str(tensor.dtype)` 当 kernel 类型名，也不得拿前端 dtype 对象
+和字符串比较，这两件事都用 `dtype_name`。把 dtype 对象直接交给原生算子，或在交给 NumPy
+之前用 `dtype_for_compute`。保留 NumPy 输入的 dtype；float64 直接构造，而不是先建
+float32 再在精度丢掉之后 cast。BF16 的 NumPy 输入先显式暂存为 float32，再走原生 BF16
+cast。新增序列化状态名或 dtype 比较时同样用 `dtype_name`；不得往原生规范化器里重新引入
+兼容层导入，也不得为了让过期调用点工作而恢复字符串继承。
+
+## 后端构建配置
+
+### 配置值与 provider 钩子
+
+`jittor_utils.build_config.BuildConfig`（实现在 `python/jittor/build/utils/build_config.py`）
+是一个**冻结的值**：编译器路径与 flag、缓存/源码根、后端能力、额外的核心源码、环境覆盖
+和后端资源。源码清单是 tuple；资源与环境映射复制输入并且只读；加载进来的模块与驱动句柄
+算作资源，不是编译器状态的副本。`evolve(...)` 返回一份新配置，不修改输入。
+
+后端 provider 实现 `configure(context) -> BuildConfig`。`BuildContext` 提供显式的编译、
+动态加载与库发布服务，**不提供源码改写服务**：需要不同代码的后端注册自己的实现、贡献自己
+的翻译单元，没有 provider 会拿到共享源码树去改写。`config.jittor_path` 指向被编译的
+checkout，由 bootstrap 设定一次，之后不会被改指到派生副本。provider 不得 import
+`jittor.compiler`、给编译器属性赋值、往它的源码列表追加，也不得修改进程环境；bootstrap
+应用返回的环境变化，并一次性发布兼容用的编译器属性。`compiler.build_config` 是最终发布的
+值，`compiler.make_backend_context()` 把同一份配置交给 `install_extern(context)` 与
+`post_process(context)`。
+
+`jittor_utils.backend_discovery` 用 Protocol 描述被选中的 SDK provider（Python 3.7 从条件
+依赖 `typing_extensions` 取 `Protocol`）：
+
+| 入口 | 输入 | 结果与归属 |
+| --- | --- | --- |
+| `configure` | 不可变的 `BuildContext` | 一份新的 `BuildConfig`；不改编译器全局，也不改输入配置 |
+| `install_extern` | 带库发布服务的 context | 布尔值：该 provider 是否处理了外部库的安装 |
+| 可选的 `post_process` | 核心构造完成之后的 context | 绑定运行时算子；协调者忽略返回值 |
+
+可选钩子单独建模为 `BackendPostProcess`。发现过程只导入被选中的 entry point，并在
+`configure` 编译任何东西之前校验所有必需钩子和每个提供了的可选钩子；缺钩子或签名不对时
+`TypeError` 指名 provider 与方法。缺 SDK 与运行时失败仍是被选 provider 的显式失败，
+**不是隐式的 CPU 回退**。ACL 把额外源码文件放在返回值里，并把编译出的注册初始化器与加载的
+运行时库作为资源保留；Corex 在发布前把 OpenMP 从通用与 kernel flag 中去掉；ROCm 把自己的
+HIP 运行时翻译单元声明为后端源码，SDK 根作为资源，库经注入的注册回调发布。三者都不再改写
+共享源码。
+
+Python 构建协议**不替代** `src/runtime/backend.h` 带版本的 `BackendOps` 表。那张表拥有
+设备、内存、流、事件回调与执行能力；原生注册表校验 ABI 与必需回调并复制该表，代码与分配器
+池必须活得比它的 Runtime 长，流/事件句柄属于其声明的设备。当前是 **ABI 3**：复制描述符或
+读取其策略尾部之前先检查版本与结构体大小，按旧版本构建的扩展必须重建。ACL 对锁页主机内存、
+编译器并发和归约的要求就写在这张描述符里（见上文"ACL kernel 注册"），并按实际的加速器
+目标选用：ACL 构建运行 CPU 作用域时用普通的 CPU 策略。分配才是驻留的权威；前端放置是另一个
+图约束，见[设备与放置](../notes/device-placement.md)。
+
+### 发现与选择
+
+- provider 注册在 `jittor.backends` 包的 entry-point 组里（`acl`、`rocm`、`corex`）。有已安装
+  元数据时用元数据；源码 checkout 对这三个内置 provider 有匹配的惰性回退条目。
+- `JT_BACKEND=cpu|cuda|acl|rocm|corex` 显式选择 provider，`npu` 是 `acl` 的别名、`hip` 是
+  `rocm` 的别名，其它名字选择第三方 entry point。没有显式选择时，由 SDK 环境变量或惯常的 SDK
+  编译器路径识别可选后端；**配置了多个 SDK 时要求显式选择**，而不是看哪个模块先被导入。
+- 未选中的 provider 不被导入，它们的 `check()` 不运行，发现过程既不调用其编译器也不初始化
+  其设备。被选 provider 的配置失败向上传播，不会静默换成另一个后端。
+- 显式选择 CPU 时，在任何 CUDA 安装检查、可执行文件查找、驱动查询或下载之前就返回，即使
+  设了冲突的 `nvcc_path`。
+- 历史的 `has_cuda` 构建字段描述"是否编译了 `HAS_CUDA` 加速器支持"，**不证明有 NVIDIA
+  驱动**：配置成功的 ACL/ROCm/Corex provider 也会设它，`is_cuda` 单独标识 NVIDIA 编译。
+  Corex 自己提供该宏并移除继承的 `IS_CUDA`。
+- 普通 CPU/CUDA 的缓存指纹保留原有字段与值；显式的后端选择与配置的可选 SDK 路径只在存在
+  时才加入指纹字段。
+
+### 工具层与资源
+
+- `jittor_utils.compile_module` 接收 `ModuleBuildServices`（绑定生成回调、命令格式化器、编译器
+  路径与缓存/源码根）。编译器 bootstrap 安装默认服务，独立使用者可以显式传入；两者都没有时
+  它在写任何构建产物之前报错，提示先 import jittor——**它从不为了找服务而 import Jittor**。
+  不存在把 checkout 复制进每后端缓存再改写的整树源码转换器。
+- 张量序列化实现在 `jittor.serialization`，不在构建工具包里。历史的
+  `jittor_utils.load_pytorch`、`load_pytorch_old`、`save_pytorch` 查询 runtime bootstrap 注入
+  的加载器：访问得到的函数与类是规范对象，模块对象本身不是别名；历史 pickle 的 `GLOBAL`
+  名字在 bootstrap 之后照常解析。单独导入旧工具模块无害，但在 `import jittor` 之前访问其运行
+  时 API 会显式报错。
+- CUDA 实现只有一个物理归属 `backends/cuda`：`kernels/` 放算子 kernel 与 Python 实现，
+  `libraries/<name>/{include,src}` 放库支持代码，`include/` 与 `src/` 放公共支持资源；Python
+  模块名是 `jittor.backends.cuda.kernels.*` 与 `jittor.backends.acl.kernels.*`。源码包
+  `python/jittor/backends` 只是路径桥，不复制后端实现；setuptools 把各后端包映射进 wheel 的
+  `jittor/backends/`，sdist 保留顶层布局与包映射。
+- `jittor_utils.backend_resources.backend_root(jittor_path, name)` 在不导入 Jittor 的前提下
+  解析源码、已安装或转换布局下的资源根：源码 checkout 优先顶层后端；已安装候选要求真实的
+  包标记，因此只剩 `__pycache__` 的残留目录不能把编译重定向走。没有任何东西再产生转换布局，
+  识别它只是为了让已安装的旧树继续可解析。
+- 纯主机的索引调度器保留在 CPU 构建中；加速器代码生成翻译单元与 NaN 检查 CUDA 源码只进入
+  加速器构建。
+
+### 验证边界
+
+离线测试覆盖不可变输入、entry-point 选择、未选 provider 的隔离、注入的编译服务，以及伪造
+的 ACL/ROCm/Corex 配置；`tests/structure/test_core_source_is_not_ported.py` 拒绝
+`BuildContext` 上的改写服务、任何"镜像整树并改写原生源码"的产品函数，以及 bootstrap 之外对
+`jittor_path` 的重新绑定。`tests/build/test_compile_module_dependencies.py`、
+`tests/serialization/test_native_serialization_ownership.py` 与
+`tests/bindings/test_load_pytorch_strides.py` 含 JIT 依赖的检查，与其它原生验证一样串行跑在
+受支持的缓存策略下。**这些都不证明 CANN/ROCm/Corex 的 ABI 或设备正确性**：在目标机器上配置
+SDK、设 `JT_BACKEND`，在支持该断言的套件里禁用 CPU 回退，先测普通计算、扩展加载与失败传播，
+再声称硬件支持。各后端上机要跑什么见
+[`agent/manuals/deferred-hardware.md`](https://github.com/Jittor/jittor/blob/master/agent/manuals/deferred-hardware.md)。
+
+## 动态形状与提交边界
+
+算子构造函数与 `Op::init()` 建立边、推断形状元数据并捕获 autograd 策略，**不提交工作，
+也不调用回调**。负的维度记录数据相关输出的分配上界，由算子执行时替换为实际的非负形状。
+
+- `schedule_pending_from_python()` 在一个完整的 Python holder 创建之后运行；
+  `Executor::submit_pending()` 在那里解析动态结果所需的子图，保持现有的"Python 看到具体形状"
+  契约。普通静态结果沿用配置好的惰性/即时提交策略。
+- 原生 C++ 组合不需要中间 Python holder。`Executor::run_sync()` 在构造执行计划之前按依赖顺序
+  解析内部的动态输入，再刷新下游的 `infer_shape()` 元数据——这是执行期操作，**绝不是构造
+  期的递归**。显式提交后仍未解析的动态输出报错，而不是发布一个负的具体形状。
+- `VarHolder::item()` 用 `sync(false, false)`：提交所请求的依赖图，不做扩散到兄弟分支的弱
+  同步。CUDA 设备到主机的拷贝使用生产者流上的事件；原生 where、candidate 与 CUB where 的
+  计数读回走同一个 `backend_copy()` 网关，分配器与 GIL 策略仍归该网关与执行器入口作用域。
+- fetch 的构造只创建 fetch 节点。公开的 Python `fetch()` 在构造之后调用
+  `core.submit_pending_fetches()`，执行就绪的输入并施加有界的挂起 fetch 反压；原生调用方可以
+  用同一个显式边界，也可以正常提交自己的 fetch 图。关闭期的设备等待属于清理，不受此契约影响。
+
+`jt.submit_pending(*vars, device_sync=False)` 是**显式提交选定挂起根**的边界：每个参数必须是
+`Var`，它的挂起生产者图经已有的 `Var.submit_pending` 绑定提交；其它 holder 根保持挂起，正常
+的惰性/自动 flush 策略不变。`device_sync=True` 时再同步这些根以便主机立即消费。返回唯一的根
+或根的 tuple，保持对象标识；空输入与非 Var 参数抛清晰的 Python 错误。它面向确切知道自己
+输出根的 Function 回调、fetch 桥与执行适配器；**不做隐式全局 flush、不调 GC，也不让无关的
+挂起图变得可执行**。实现委托给已有的执行器部分提交路径，不拥有第二张图、队列、liveness
+计数或调度策略，CPU 与加速器用同一个边界。
+
+并行开发时守住这些归属：
+
+- 新的动态算子实现上界输出元数据、纯的 `infer_shape()` 与执行期的最终形状发布；**不要**
+  恢复构造期调用 `run_sync()` 的变通写法。
+- 前端只在其语言对象与图边都存在之后才提交，不复制执行器的形状依赖遍历。
+- 后端 provider 在运行时回调背后实现有序拷贝与事件等待；算子族不引入整设备的读回等待。
+- 构造、`submit_pending`、形状解析与 fetch 反压的改动是**一次核心接口改动**，要一起协调；
+  普通的算子或前端新增只消费这些接口。
+
+定向回归：`tests/core/test_dynamic_shape_submission.py`、`tests/core/test_partial_graph_submit.py`、
+`tests/ops/test_where_op.py`、`tests/data/test_fetcher.py`，以及
+`tests/structure/core/test_var_holder_submission.py`。
 
 ## 导入与初始化规则
 
-Torch 的 dtype 对象及其原生/NumPy 消费点遵循
-[dtype 边界契约](../../refactor-wip/architecture/torch-dtype-boundary.md)。前端 dtype 是
-不可变对象；原生代码用核心拥有的名字规范化器处理元数据、用带检查的原生转换器处理计算，
-**包括对占位符的拒绝**。
+Torch 的 dtype 对象及其原生/NumPy 消费点遵循上文的"dtype 边界"一节。
 
 - 模块导入**不得**编译 kernel、下载资源、修改源码 checkout，或静默安装外部包。
 - **注册必须幂等。** 重新导入一个兼容模块不得把同一个可调用对象包两次，也不得创建第二个

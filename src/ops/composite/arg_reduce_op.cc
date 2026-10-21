@@ -118,19 +118,17 @@ VarPtr ArgReduceOp::get_grad(Var* out, Var* dout, Var* v, int v_index, int dim, 
         indexes_.push_back(indexes.back());
     }
 
-    string temp;
-    temp.reserve(6+3*shape.size()); // @e0(i0,i1)
-    temp += "@e0(";
+    // "(i0,i1,...)": the argument list of every @e{i}(...) below.
+    string args = "(";
     for (uint i=0; i<shape.size(); i++) {
-        if (i) temp += ',';
-        temp += 'i';
-        temp += '0'+i;
-    };
-    temp += ')';
+        if (i) args += ',';
+        args += 'i';
+        args += S(i);
+    }
+    args += ')';
     indexes__.reserve(indexes.size());
     for (uint i=0; i<indexes.size(); i++) {
-        temp[2] = '0'+i; // @ei
-        indexes__.emplace_back(temp);
+        indexes__.emplace_back("@e"+S(i)+args);
     }
     
     return make_reindex_reduce(reshape1, ns_add, v->shape, move(indexes__), {}, move(indexes_));
@@ -167,10 +165,10 @@ void ArgReduceOp::infer_shape() {
 void ArgReduceOp::jit_prepare(JK& jk) {
     jk << "«Tx:" << x->dtype();
     jk << "«Ty:" << y->dtype();
-    jk << "«XDIM=" << JK::hex1(x->shape.size());
-    jk << "«YDIM=" << JK::hex1(y->shape.size());
+    jk << "«XDIM=" << JK::hex(x->shape.size());
+    jk << "«YDIM=" << JK::hex(y->shape.size());
     jk << "«KEEPDIMS:" << (keepdims ? '1' : '0');
-    jk << "«DIM=" << JK::hex1(dim);
+    jk << "«DIM=" << JK::hex(dim);
     jk << "«CMP:" << (op==ns_minimum ? "<" : ">");
 }
 

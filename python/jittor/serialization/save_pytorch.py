@@ -6,16 +6,33 @@ from jittor import nn
 import io
 import pickle
 import sys
+from contextlib import contextmanager
+from types import ModuleType
 import torch
 
-class HalfStorage: pass
-class BFloat16Storage: pass
-class FloatStorage: pass
-class LongStorage: pass
-class IntStorage: pass
-class ShortStorage: pass
-class CharStorage: pass
-class BoolStorage: pass
+class HalfStorage:
+    pass
+
+class BFloat16Storage:
+    pass
+
+class FloatStorage:
+    pass
+
+class LongStorage:
+    pass
+
+class IntStorage:
+    pass
+
+class ShortStorage:
+    pass
+
+class CharStorage:
+    pass
+
+class BoolStorage:
+    pass
 HalfStorage.__module__ = "torch"
 BFloat16Storage.__module__ = "torch"
 FloatStorage.__module__ = "torch"
@@ -29,12 +46,34 @@ _rebuild_tensor_v2.__module__ = "torch._utils"
 
 targets = [HalfStorage, BFloat16Storage, FloatStorage, LongStorage, IntStorage, ShortStorage, CharStorage, BoolStorage, _rebuild_tensor_v2]
 
-def swap_targets(targets):
-    original_targets = []
-    for target in targets:
-        original_targets.append(sys.modules[target.__module__].__dict__.get(target.__name__, target))
-        sys.modules[target.__module__].__dict__[target.__name__] = target
-    return original_targets
+_MISSING = object()
+
+
+@contextmanager
+def _pickle_targets():
+    """Expose archive globals only while pickle resolves their module names."""
+    originals = []
+    created_modules = []
+    try:
+        for target in targets:
+            module_name = target.__module__
+            module = sys.modules.get(module_name)
+            if module is None:
+                module = ModuleType(module_name)
+                sys.modules[module_name] = module
+                created_modules.append(module_name)
+            original = module.__dict__.get(target.__name__, _MISSING)
+            originals.append((module, target.__name__, original))
+            module.__dict__[target.__name__] = target
+        yield
+    finally:
+        for module, name, original in reversed(originals):
+            if original is _MISSING:
+                module.__dict__.pop(name, None)
+            else:
+                module.__dict__[name] = original
+        for module_name in reversed(created_modules):
+            sys.modules.pop(module_name, None)
 
 class TensorStorage:
     def __init__(self, data):
@@ -106,10 +145,8 @@ def save_pytorch(path, obj):
     pickle_protocol = 2
     pickler = pickle.Pickler(data_buf, protocol=pickle_protocol)
     pickler.persistent_id = persistent_id
-    global targets
-    targets = swap_targets(targets)
-    pickler.dump(obj)
-    targets = swap_targets(targets)
+    with _pickle_targets():
+        pickler.dump(obj)
     data_value = data_buf.getvalue()
 
     # use previous pytorch code to save data
@@ -125,22 +162,22 @@ def save_pytorch(path, obj):
     import os
     path_base_name = os.path.basename(path).split(".")[0]
     contents = jt.ZipFile(path, "w")
-    def write(name, data):
+    def write(name, data, archive):
         if isinstance(data, str):
-            write(name, data.encode())
+            write(name, data.encode(), archive)
         elif isinstance(data, bytes):
             import ctypes
             pointer = ctypes.cast(data, ctypes.c_void_p).value
-            contents.write(path_base_name+'/'+name, pointer, len(data))
+            archive.write(path_base_name+'/'+name, pointer, len(data))
         elif isinstance(data, jt.Var):
-            contents.write(path_base_name+'/'+name, data.raw_ptr, data.nbytes)
+            archive.write(path_base_name+'/'+name, data.raw_ptr, data.nbytes)
         else:
             raise TypeError(f"unsupported type {type(data)}")
-    write("data.pkl", data_value)
-    write("byteorder", sys.byteorder)
+    write("data.pkl", data_value, contents)
+    write("byteorder", sys.byteorder, contents)
     for i, v in enumerate(serialized_storages):
-        write(f"data/{i}", v)
-    write("version", "3")
+        write(f"data/{i}", v, contents)
+    write("version", "3", contents)
     del contents
 
 

@@ -1,6 +1,6 @@
 ---
 name: torch-checkpoint-stride-oracle
-description: 验证 Jittor 读 PyTorch checkpoint（.pt/.pth）读得对不对。用于改 compat/torch/serialization.py、jittor_utils/load_pytorch.py，或排查「权重加载了但数值不对/有零」的场合。核心是 torch 存的是整块 storage 加 (offset,size,stride)，非连续视图会被读错；本 skill 给出真 torch 对拍口径与不依赖 torch 的手工构造 checkpoint 方法。
+description: 验证 Jittor 读 PyTorch checkpoint（.pt/.pth）读得对不对。用于改 compat/torch/serialization/torch_archive.py、python/jittor/serialization/load_pytorch.py，或排查「权重加载了但数值不对/有零」的场合。核心是 torch 存的是整块 storage 加 (offset,size,stride)，非连续视图会被读错；本 skill 给出真 torch 对拍口径与不依赖 torch 的手工构造 checkpoint 方法。
 ---
 
 # 读 PyTorch checkpoint 读得对不对
@@ -17,7 +17,7 @@ description: 验证 Jittor 读 PyTorch checkpoint（.pt/.pth）读得对不对�
 判断一个 reader 有没有这个毛病，看它对 `stride` 做了什么：
 
 ```bash
-grep -n "stride" compat/torch/serialization.py python/jittor_utils/load_pytorch.py
+grep -n "stride" compat/torch/serialization/torch_archive.py python/jittor/serialization/load_pytorch.py
 ```
 
 两种典型错法：
@@ -29,11 +29,11 @@ grep -n "stride" compat/torch/serialization.py python/jittor_utils/load_pytorch.
 
 ## 2. 对拍口径：真 torch 生成，Jittor 读
 
-真 PyTorch 在 `jt312b` 环境里（`jt311` 里的 `torch` 是 shim，不是 torch）。
+真 PyTorch 用独立解释器 `<real-torch-python>`（shim 解释器里的 `torch` 是 shim，不是 torch）。
 
 ```bash
 # 1) 用真 torch 造样本，同时把期望值存成 npz
-taskset -c <核段> /home/zy/miniconda3/envs/jt312b/bin/python - <<'PY'
+taskset -c <核段> <real-torch-python> - <<'PY'
 import torch, numpy as np
 base = torch.arange(24., dtype=torch.float32).reshape(4, 6)
 obj = {
@@ -73,8 +73,9 @@ for k in exp.files:
 ### 两条会让对拍白做的坑
 
 - **两个 reader，走哪个取决于是否处于 torch 模式。** 裸 `python x.py` 走
-  `jittor_utils/load_pytorch.py`（原生 `jt.load`）；`JITTOR_TORCH_SHIM=1` 才走
-  compat 的 `serialization.py`。**两条路都要跑**，它们是各自独立实现的，可以一个对一个错。
+  `python/jittor/serialization/load_pytorch.py`（原生 `jt.load`；旧名
+  `jittor_utils.load_pytorch` 仍可导入，经 `python/jittor/build/utils/load_pytorch.py` 转过去）；
+  `JITTOR_TORCH_SHIM=1` 才走 compat 的 `compat/torch/serialization/torch_archive.py`。**两条路都要跑**，它们是各自独立实现的，可以一个对一个错。
   确认走了哪条：在 rebuild 函数里临时 `print(..., file=sys.stderr)`，没打印就是没走。
 - **torch 模式在 import 期改写 `TMPDIR`/`HOME`。** 脚本里 `os.environ["TMPDIR"]` 在
   `import jittor` 之后会变成 shim 的 runtime 目录，用它拼路径会 FileNotFoundError。

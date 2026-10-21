@@ -39,25 +39,21 @@ ReindexOp::ReindexOp(Var* x, vector<Var*>&& indexes, float64 overflow_value, vec
     USER_CHECKop(indexes.size(),==,x->shape.size()) << "reindex_var needs one index tensor per input dimension";
     USER_CHECK(!indexes.empty()) << "reindex_var requires at least one index tensor to determine the output shape";
     auto& shape = indexes[0]->shape;
-    USER_CHECK(indexes.size()<=10 && shape.size()<=10) << "reindex_var supports at most ten dimensions";
-
-    string temp;
-    temp.reserve(6+3*shape.size()); // @e0(i0,i1)
-    temp += "@e0(";
+    // "(i0,i1,...)": the argument list of every @e{i}(...) below.
+    string args = "(";
     for (uint i=0; i<shape.size(); i++) {
-        if (i) temp += ',';
-        temp += 'i';
-        temp += '0'+i;
-    };
-    temp += ')';
+        if (i) args += ',';
+        args += 'i';
+        args += S(i);
+    }
+    args += ')';
     this->indexes.reserve(indexes.size());
     for (uint i=0; i<indexes.size(); i++) {
         auto& ns = indexes[i]->shape;
         USER_CHECKop(ns.size(),==,shape.size()) << "reindex_var index tensor ranks must match";
         for (uint j=0; j<ns.size(); j++)
             USER_CHECKop(ns[j],==,shape[j]) << "reindex_var index tensor shapes must match";
-        temp[2] = '0'+i; // @ei
-        this->indexes.emplace_back(temp);
+        this->indexes.emplace_back("@e"+S(i)+args);
     }
     // TODO: fix it, we can't move indexes now,
     //     because we need it to add_inputs outside
@@ -92,18 +88,18 @@ void ReindexOp::infer_shape() {
 
 void ReindexOp::jit_prepare(JK& jk) {
     jk << "«Tx:" << x->dtype()
-        << "«XDIM=" << JK::hex1(x->shape.size())
-        << "«YDIM=" << JK::hex1(y->shape.size())
+        << "«XDIM=" << JK::hex(x->shape.size())
+        << "«YDIM=" << JK::hex(y->shape.size())
         << "«OVERFLOW:" << overflow_value;
     for (uint i=0; i<indexes.size(); i++)
-        jk << "«INDEX" << JK::hex1(i) << ':' << indexes[i];
-    jk << "«OSIZE=" << JK::hex1(overflow_conditions.size());
+        jk << "«INDEX" << JK::dec(i) << ':' << indexes[i];
+    jk << "«OSIZE=" << JK::hex(overflow_conditions.size());
     for (uint i=0; i<overflow_conditions.size(); i++)
-        jk << "«OFD" << JK::hex1(i) << ':' << overflow_conditions[i];
-    jk << "«ESIZE=" << JK::hex1(extras.size());
+        jk << "«OFD" << JK::dec(i) << ':' << overflow_conditions[i];
+    jk << "«ESIZE=" << JK::hex(extras.size());
     for (uint i=0; i<extras.size(); i++) {
-        jk << "«EDIM" << JK::hex1(i) << '=' << JK::hex1(extras[i]->shape.size());
-        jk << "«Te" << JK::hex1(i) << ':' << extras[i]->dtype();
+        jk << "«EDIM" << JK::dec(i) << '=' << JK::hex(extras[i]->shape.size());
+        jk << "«Te" << JK::dec(i) << ':' << extras[i]->dtype();
     }
 }
 

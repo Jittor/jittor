@@ -11,14 +11,16 @@ description: Jittor 开发任务的上下文路由入口。用于定位当前状
 ## 必读
 
 开工前**必须阅读** [`agent/manuals/project-context.md`](../../manuals/project-context.md)。
-它是短索引，不是完整历史。再按任务选择：
+它是短索引，不是完整历史；manuals 与 skills 的完整目录在
+[`agent/manuals/agent-index.md`](../../manuals/agent-index.md)。再按任务选择：
 
 - 环境、缓存和后端前置：[`agent/manuals/environment.md`](../../manuals/environment.md)
-- 活跃缺陷与 workaround：[`agent/manuals/known-issues.md`](../../manuals/known-issues.md)
+- 未关闭缺陷、限制与 workaround：[`agent/manuals/known-issues.md`](../../manuals/known-issues.md)
+- 等硬件验收的事项：[`agent/manuals/deferred-hardware.md`](../../manuals/deferred-hardware.md)
 - 架构与模块边界：[`docs/development/source-architecture.md`](../../../docs/development/source-architecture.md)
-- Torch 兼容验收：[`refactor-wip/architecture/torch-compatibility-principles.md`](../../../refactor-wip/architecture/torch-compatibility-principles.md)
+- Torch 兼容验收：[`docs/compatibility/principles.md`](../../../docs/compatibility/principles.md)
 - 测试体系：[`docs/development/test-system.md`](../../../docs/development/test-system.md)
-- 已有验证报告：[`refactor-wip/results/README.md`](../../../refactor-wip/results/README.md)
+- 已有验证报告：[`docs/results/index.md`](../../../docs/results/index.md)
 
 ## 工作纪律速记
 
@@ -26,7 +28,7 @@ description: Jittor 开发任务的上下文路由入口。用于定位当前状
 2. **verify-then-fix**（~75% 审计是误报，先复现再修）
 3. 改动必须验证所有声明支持的后端；无目标硬件时明确报告未验证
 4. 对拍/调试工具沉淀到 `agent/skills/`
-5. 提交信息结尾可选加 `Co-Authored-By: ...`（非必须）
+5. 提交信息用简明中文，只暂存本任务涉及的文件，不用 `git add -A` 或 stash
 6. 只在用户要求时 push
 7. **效率优先**：先跑最小复现和定向测试，再逐层扩大门禁
 8. **计算跑在 device 上**：torch_compat 里新加的计算要考虑效率，至少能跑在 device（GPU/NPU）上，不能只在 CPU
@@ -36,8 +38,8 @@ description: Jittor 开发任务的上下文路由入口。用于定位当前状
 
 ## 快速开工
 
-1. 读 `agent/manuals/project-context.md` 并打开任务相关链接
-2. 确认分支、提交和 dirty state：`git status --short --branch`
+1. 按 `AGENTS.md` 同步目标远端分支并记录 SHA；确认分支、提交和 dirty state：`git status --short --branch`
+2. 读 `agent/manuals/project-context.md` 并打开任务相关链接
 3. 按 `agent/manuals/environment.md` 隔离缓存和运行状态
 4. 搜索 `agent/manuals/known-issues.md` 与 `docs/results/` 中的既有证据
 5. 最小复现后再修改，按变更风险逐层扩大测试

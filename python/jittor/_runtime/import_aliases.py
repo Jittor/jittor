@@ -66,10 +66,6 @@ ALIASES = {
     "jittor.build.utils.ring_buffer": "jittor_utils.ring_buffer",
     "jittor.build.utils.runtime_services": "jittor_utils.runtime_services",
     "jittor.build.utils.save_pytorch": "jittor_utils.save_pytorch",
-    "jittor.build.utils.student_queue": "jittor_utils.student_queue",
-    "jittor.build.utils.class": "jittor_utils.class",
-    "jittor.build.utils.class.setup": "jittor_utils.class.setup",
-    "jittor.build.utils.class.setup_env": "jittor_utils.class.setup_env",
     "jittor.extern.acl.aclops": "jittor.backends.acl.kernels.ops",
     "jittor.extern.acl.aclops._code": "jittor.backends.acl.kernels.ops._code",
     "jittor.extern.acl.aclops.acl_data": "jittor.backends.acl.kernels.ops.acl_data",
@@ -130,7 +126,7 @@ ALIASES = {
     "jittor.depthwise_conv": "jittor.nn.modules.depthwise",
 }
 
-_PACKAGE_TARGETS = set(["jittor_utils","jittor_utils.class","jittor.contrib","jittor.contrib.ccl","jittor.contrib.loss3d","jittor.contrib.math_util","jittor.contrib.einops","jittor.contrib.einops.experimental","jittor.contrib.einops.layers","jittor.backends.acl.kernels.ops","jittor.autograd","jittor.nn.backends","jittor.sparse"])
+_PACKAGE_TARGETS = set(["jittor_utils","jittor.contrib","jittor.contrib.ccl","jittor.contrib.loss3d","jittor.contrib.math_util","jittor.contrib.einops","jittor.contrib.einops.experimental","jittor.contrib.einops.layers","jittor.backends.acl.kernels.ops","jittor.autograd","jittor.nn.backends","jittor.sparse"])
 _LAZY_PARENT_BINDINGS = set()
 _IMPORT_CALLBACKS = {}
 _ALIAS_PROVIDERS = {}

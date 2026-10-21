@@ -116,7 +116,13 @@ namespace jittor
         pads = aclCreateIntArray(attr->convPads.data(), 2);
         outPads = aclCreateIntArray(attr->convOutPads.data(), 2);
         dilations = aclCreateIntArray(attr->convDilations.data(), 2);
-        bool outputMask[3] = {true, true, true};
+        // out_[0] is grad_input. A conv backward asked for the weight
+        // gradient alone (the common case for a first layer whose input
+        // nothing reads, e.g. ViT's patch-embedding conv on the raw image)
+        // still ran this merged op in full; is_result_needed() lets it skip
+        // the grad_input branch instead of computing and discarding it.
+        // grad_weight (out_[1]) is why the op runs at all, so it stays true.
+        bool outputMask[3] = {out_[0]->is_result_needed(), true, true};
         auto input_num = in_.size();
         if (input_num == 3)
         {

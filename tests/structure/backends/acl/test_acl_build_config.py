@@ -122,7 +122,7 @@ def test_configure_returns_complete_value_without_global_writes(acl, setup):
         (SOURCE.parent / "kernels/native").glob("*.cc")))
     converter_sources = [str(SOURCE.parent / "src" / name) for name in (
         "acl_error_code.cc", "acl_jittor.cc", "aclnn.cc")]
-    assert len(expected_extra) == 48
+    assert len(expected_extra) == 50
     assert str(SOURCE.parent / "kernels/native/argsort_op_acl.cc") in expected_extra
     assert len(converter_sources) == 3
     assert len(config.extra_core_files) == len(expected_extra) + 1
@@ -276,7 +276,7 @@ def test_backend_has_no_mutable_configuration_or_compiler_imports(acl):
 
 def test_provider_source_inventory_is_explicit_and_complete(acl):
     sources = acl.REGISTRATION_SOURCES + acl.CORE_SOURCES
-    assert len(sources) == len(set(sources)) == 51
+    assert len(sources) == len(set(sources)) == 53
     assert "kernels/native/argsort_op_acl.cc" in sources
     assert all((SOURCE.parent / name).is_file() for name in sources)
     actual = {str(path.relative_to(SOURCE.parent))

@@ -20,7 +20,7 @@ pins the two implementations to each other without an NPU.
 Why the kernel is not simply replaced by those comparisons: the optimisation
 level a fused kernel is built at is decided elsewhere, and under
 ``-ffinite-math-only`` -- implied by ``-ffast-math``, implied in turn by the
-``-Ofast`` this project shipped until KI-BACKEND-005 -- ``x != x`` and
+``-Ofast`` this project used to ship -- ``x != x`` and
 ``x >= 0`` are free to be folded to a constant. CPU kernels build at ``-O3``
 now, so that licence is gone from the default build; ``_simple_for`` still
 pins this one kernel to ``-O2``, because a predicate that answers "is this a
@@ -94,7 +94,7 @@ class _Predicates:
         * **nan and the infinities are left out**: a fused kernel built
           under ``-ffinite-math-only`` may assume they do not occur and fold
           the comparisons away. The CPU flags that granted that (``-Ofast``)
-          are gone since KI-BACKEND-005, but the flags are still decided
+          are gone, but the flags are still decided
           outside this expression, which is why the CPU/CUDA path keeps its
           own ``-O2`` kernel rather than reusing these three lines.
 

@@ -1,6 +1,6 @@
 ---
 name: jittor-worktree-verification
-description: 在 git worktree 里验证 Jittor 改动时，确认跑的确实是本 worktree 的代码。用于任何在 worktree（而非主树）中改 python/jittor 或 python/jittor/src 后要跑脚本、python -c、mpirun、benchmark 或子进程验证的场合。裸 python 命令会静默导入主树，测出来的绿是别人的绿。
+description: 在 git worktree 里验证 Jittor 改动时，确认跑的确实是本 worktree 的代码。用于任何在 worktree（而非主树）中改 python/jittor、src/、backends/ 或 compat/ 后要跑脚本、python -c、mpirun、benchmark 或子进程验证的场合。裸 python 命令会静默导入主树，测出来的绿是别人的绿。
 ---
 
 # 在 worktree 里验证 Jittor 改动
@@ -91,7 +91,7 @@ r = run_mpi_python(2, [script_path])                 # mpirun -np 2 python scrip
   jittor 装了一个进程级 SIGCHLD 处理器（`src/utils/log.cc`）：直接子进程**非正常退出**
   时它让父进程 quick-exit。于是「把会崩的用例放子进程里跑」这个标准做法**反过来生效**——
   子进程 abort，处理器在 pytest 里触发，pytest 中途消失、`-q` 缓冲里的输出全丢。
-  看起来是「runner 坏了」，不是「某条测试失败了」（6.C31，两个分区各栽过一次）。
+  看起来是「runner 坏了」，不是「某条测试失败了」（这个坑已经有两个人各栽过一次）。
   `crash_isolated=True` 在中间隔一层 `sh`：pytest 的直接子进程永远正常退出
   （`128+signo`，属 `CLD_EXITED`，处理器不理），`returncode` 仍是 134/139，崩溃照样可断言；
   同时把 `gdb_path` 清空，免得崩溃处理器 fork 出的 gdb 把子进程 ptrace-stop 在那里。
@@ -102,8 +102,8 @@ r = run_mpi_python(2, [script_path])                 # mpirun -np 2 python scrip
 `tests/` 下不许出现 `sys.executable`（改用 `child_process.PYTHON`）；任何起进程的调用
 只要碰到解释器或 `mpirun`，就必须走 helper 或显式 `env=child_env(...)`。
 
-这不是洁癖：`[0.08]` 把 core 的 `set_lock_path` 改名成 `set_lock_fd` 之后，
-`test_tracer` 的子进程加载的是**分支编的 core**、导入的是**主树的 `compiler.py`**，
+这不是洁癖：一次把 core 的 `set_lock_path` 改名成 `set_lock_fd` 的改动之后，
+`test_tracer` 的子进程加载的是**分支编的 core**、导入的是**主树的 `python/jittor/build/compiler.py`**，
 `AttributeError` 指向的两棵树都不是问题所在。安静的那一半更贵——子进程照样跑通，
 测试照样绿，只是它验证的是另一棵树。
 
@@ -121,7 +121,7 @@ r = run_mpi_python(2, [script_path])                 # mpirun -np 2 python scrip
 
 第 4 条最容易被跳过，因为前三条答对之后「新测试全绿」感觉已经够了。它不够：
 新测试只覆盖你**已经理解**的那半契约，你改错的往往是你没意识到存在的另一半。
-2026-09-03 的 6.C27 就是这样——为它新写的三条测试全绿，抓到回归的是既有的
+2026-09-03 的一次改动就是这样——为它新写的三条测试全绿，抓到回归的是既有的
 `tests/core/test_array.py::TestArray::test_data`，它断言的是同一个契约里
 作者没想到的那一半（`Var.data` 的视图要让**整个 Var 对象**活着，不只是那块内存）。
 少跑那一组，回归会带着「三条新测试全绿」的提交说明进主干。
@@ -170,15 +170,15 @@ stash 的 message 形如 `On <分支>: <你写的 -m 文本>` 或 `WIP on <分�
 认出自己那条之后 `git stash apply <commit>`（先把误 pop 进来的别人的文件
 `git checkout --` 还原掉，别提交它们；还原前先 `git diff > 一份patch` 存起来还给对方）。
 
-**所以万一非要 stash，也一定要 `-m "<任务编号>"`**——没有 message 的话事后分不清哪条是自己的。
+本仓库禁止 `git stash`（见 `AGENTS.md`）；上面的找回办法只用于别人已经 stash 过、你的改动被串走的情况。
 
 ## 跑套件期间不要改源码
 
-pytest 是**边跑边 import** 的：模块在第一次被用到时才加载。整套 `tests/compat/torch`
+pytest 是**边跑边 import** 的：模块在第一次被用到时才加载。整套 `compat/tests/torch`
 要 15–25 分钟，这期间你对 `python/jittor/**` 的任何一次写入，都会被后面才 import 的
 测试读到——包括你用来做「修前失败」验证的 `git checkout --` 与 `git apply`。
 
-实测：一次 `tests/compat/torch` 在后台跑着，我在中途改了两个 shim 文件、又
+实测：一次 `compat/tests/torch` 在后台跑着，我在中途改了两个 shim 文件、又
 checkout 回去、再 apply 回来，结果是 **373 failed / 563 passed**；同一棵树静止不动
 重跑是 **1 failed / 943 passed**。那 373 条与改动毫无关系，全是半截源码造成的假失败。
 
@@ -192,7 +192,7 @@ checkout 回去、再 apply 回来，结果是 **373 failed / 563 passed**；同
 
 ## 改了 C++ 之后
 
-改 `python/jittor/src/**` 或 `python/jittor/extern/**` 之后，**每个新进程**都要重编，
+改 `src/**` 或 `backends/**` 的 C++ 之后，**每个新进程**都要重编，
 第一次约 10 分钟（核心约 156 个 TU）。所以：
 
 - C++ 改动攒着一次验证，不要改一行跑一次。

@@ -228,15 +228,53 @@ def _torch_setitem(self, slices, value):
             self.requires_grad_(False)
 
 
-def _ip(self, value):
-    # In-place op x.OP_(...) -> x becomes `value` (which usually depends on x,
-    # e.g. div_/mul_/add_). assign() ALREADY keeps x grad-connected when `value`
-    # is grad-connected, so grad flows through the in-place op (torch parity).
-    # But start_grad() RESETS x's grad node and SEVERS that just-built graph
-    # (the same start_grad-severing bug behind the DPO/requires_grad fix), which
-    # silently zeroed grads through x.div_()/etc (GRPO temperature scaling).
-    # So only start_grad if assign actually left x stopped (a constant value like
-    # fill_/zero_ on a previously-trainable leaf) -- never on an already-connected x.
+def _copy_detached_storage(self, value):
+    # Optimizer buckets retain detached aliases of dense slices. Rebinding a
+    # holder would leave those aliases reading the old allocation. Only use
+    # the native imperative store when no differentiable RHS edge is needed.
+    if not isinstance(value, _NativeVar):
+        return False
+    if not (_owner.jt.flags.no_grad
+            or (not self.requires_grad and not value.requires_grad)):
+        return False
+    if (tuple(self.shape) != tuple(value.shape)
+            or self.dtype != value.dtype):
+        return False
+    if self.numel():
+        # Resolve pending readers (including clone snapshots) before changing
+        # bytes. _copy_into owns placement, stream ordering and dense copies.
+        _owner.jt.sync_all()
+        if not self._mem_ptr_now or not value._mem_ptr_now:
+            # Still unbuilt after the sync: a call being captured for replay,
+            # where the sync runs nothing. Such a tensor has no storage an
+            # alias could be reading, so rebinding it loses nothing -- and
+            # writing into it is impossible (`_copy_into needs an allocated
+            # tensor`), which is what every `embeddings += ...` of a captured
+            # BERT call raised.
+            return False
+        with _owner.jt.no_grad():
+            if self._copy_view_into(value):
+                return True
+        self._copy_into(value)
+    else:
+        # A zero-byte store still advances the native shared write version.
+        with _owner.jt.no_grad():
+            self._copy_into(value)
+    return True
+
+
+def _ip(self, value, preserve_storage=False):
+    self._check_inplace_autograd()
+    if preserve_storage or getattr(self, "_torch_data_owner", None) is not None:
+        if self.requires_grad and not _owner.jt.flags.no_grad:
+            if self.is_leaf:
+                raise RuntimeError("a leaf Variable that requires grad is being used in an in-place operation.")
+            if self._view_base_is_trainable_leaf():
+                raise RuntimeError("a view of a leaf Variable that requires grad is being used in an in-place operation.")
+        if _copy_detached_storage(self, value):
+            return self
+    # Keep the RHS graph through an in-place operation. start_grad() on an
+    # already connected result would replace its graph with a fresh leaf.
     if _assign_data_owner(self, value):
         return self
     target = self
@@ -259,7 +297,8 @@ def _ip(self, value):
 
 def _copy_(self, other, non_blocking=False):
     src = other if isinstance(other, _NativeVar) else _owner.jt.array(other)
-    src = src.cast(_jittor_dtype_name(self.dtype)) if hasattr(self, "dtype") else src
+    if hasattr(self, "dtype") and _jittor_dtype_name(src.dtype) != _jittor_dtype_name(self.dtype):
+        src = src.cast(_jittor_dtype_name(self.dtype))
     # torch's `copy_` is in place: the destination keeps its own device, and a
     # cross-device copy is a transfer. jittor's `assign` (what `_ip` uses for
     # every `x.foo_()`) writes x's values into *y's* storage and then aliases
@@ -564,6 +603,22 @@ def _is_basic_index(index):
 
 
 def _torch_getitem(self, slices):
+    # PyTorch accepts NumPy integer/bool arrays as advanced indices.
+    # Convert them before the native fast path or the dispatcher sees them.
+    def normalize(index):
+        if isinstance(index, _owner.np.ndarray) and index.ndim:
+            if index.dtype.kind not in ("b", "i", "u"):
+                return index
+            return _owner.jt.array(index, dtype=str(index.dtype))
+        if isinstance(index, tuple):
+            return tuple(normalize(item) for item in index)
+        return index
+
+    slices = normalize(slices)
+    # A basic index, natively (`src/bindings/pyjt/py_compat_fast.h`).
+    fast = _owner.jt.core._fast_getitem(self, slices)
+    if fast is not NotImplemented:
+        return fast
     _context = get_install_context(_owner.jt)
     _native = _context.state["tensor_native_api"]
     _orig_getitem = _native['_orig_getitem']
@@ -612,7 +667,9 @@ def _data_get(self):
         and not torch_mode
     ):
         return _native_data_descriptor.__get__(self, Var)
-    view = self.detach().stop_grad()
+    view = self._storage_data_alias()
+    if getattr(self, "_torch_0d", False):
+        view._torch_0d = True
     view._torch_data_owner = self
     view._torch_data_path = ()
     return view
@@ -620,7 +677,6 @@ def _data_get(self):
 
 def _data_set(self, value):
     src = value if isinstance(value, _NativeVar) else _owner.jt.array(value)
-    was_trainable = not self.is_stop_grad()
     # torch's `x.data = y` *replaces* x's data, shape and dtype; it does not
     # copy elements into x's existing buffer. `assign` is the in-place
     # primitive used by `x.foo_()`: it writes x's values into y's storage and
@@ -629,9 +685,10 @@ def _data_set(self, value):
     # depends on the replace semantics -- it swaps a parameter for a
     # zero-element placeholder -- and `assign` rejected that with
     # "reshape shape is invalid for input of size [x_items(0) == y_items(1152)]".
-    self._update(src)
-    if was_trainable:
-        self.start_grad()
+    # Native storage replacement preserves the Var, producer and gradient
+    # policy; .data neither activates an accumulator nor writes old views.
+    self._update(src, logical_write=False)
+    self._torch_0d = getattr(src, "_torch_0d", False)
 
 
 
@@ -690,6 +747,9 @@ def _to(self, *args, **kwargs):
             # .to(other) copies other's dtype AND device.
             ds = _jittor_dtype_name(a.dtype)
             dev = a.device
+        elif type(a) is type and a in _PYTHON_SCALAR_DTYPES:
+            # `.to(int)` is torch's int64; it used to match no branch and be dropped.
+            ds = _PYTHON_SCALAR_DTYPES[a]
         elif _owner._is_index(a):
             # A bare int can only mean a device index, and it used to match none
             # of these branches and be **dropped**: `.to(1)` returned the tensor
@@ -787,6 +847,22 @@ def _var_detach(self):
     if getattr(self, "_torch_0d", False):
         out._torch_0d = True
     return finish(out, like=self)
+
+
+def _var_detach_inplace(self):
+    if self._has_view_provenance():
+        raise RuntimeError("Can't detach views in-place. Use detach() instead.")
+    if self.is_backward_leaf:
+        # Keep earlier graph edges to this leaf usable after requires_grad_()
+        # is restored. A permanent stop_grad would sever those old edges.
+        context = get_install_context(_owner.jt)
+        context.state["tensor_native_api"]["_native_requires_grad"].__set__(self, False)
+    else:
+        # Rebind the holder to the native storage-sharing detached alias so
+        # consumers built before this call retain the original producer.
+        self.assign(_var_detach(self))
+        self.stop_grad()
+    return self
 
 
 def _var_numpy(self, *args, **kwargs):
@@ -1484,12 +1560,25 @@ def _true_division(self, other, opname):
         use_wide = sd.startswith("float") and src_dt != "float64" and not acl_active
         calc_dt = wide if use_wide else tgt
         a = self if src_dt == calc_dt else self.cast(calc_dt)
-        b = _owner.jt.array(other, dtype=calc_dt) if use_wide else other
+        if use_wide or isinstance(other, _owner.np.generic):
+            with _owner.jt.no_grad():
+                b = _owner.jt.array(other, dtype=calc_dt)
+        else:
+            b = other
         out = _binary_native(opname, a, b)
         if isinstance(out, _NativeVar) and _jittor_dtype_name(out.dtype) != tgt:
             out = out.cast(tgt)
         return out
     return _binary_native(opname, self, other)
+
+
+#: `src/bindings/pyjt/py_compat_fast.h`'s `_fast_binary`, once the tensor
+#: installer has bound it: the common operand pairs below, built without the
+#: frames. It answers None for everything else, which takes the Python path.
+#: The order of `_FAST_BINARY_OPERATORS` is the code each operator passes.
+_FAST_BINARY = None
+_FAST_BINARY_OPERATORS = ('__add__', '__radd__', '__sub__', '__rsub__',
+                          '__mul__', '__rmul__', '__truediv__', '__rtruediv__')
 
 
 def _tensor_add(self, other):
@@ -1499,22 +1588,47 @@ def _tensor_add(self, other):
 
 
 def _tensor_radd(self, other):
+    fast = _FAST_BINARY
+    if fast is not None:
+        out = fast(self, other, 1)
+        if out is not None:
+            return out
     return _promoting_binary(self, other, '__radd__', True)
 
 
 def _tensor_sub(self, other):
+    fast = _FAST_BINARY
+    if fast is not None:
+        out = fast(self, other, 2)
+        if out is not None:
+            return out
     return _promoting_binary(self, other, '__sub__', False)
 
 
 def _tensor_rsub(self, other):
+    fast = _FAST_BINARY
+    if fast is not None:
+        out = fast(self, other, 3)
+        if out is not None:
+            return out
     return _promoting_binary(self, other, '__rsub__', True)
 
 
 def _tensor_mul(self, other):
+    fast = _FAST_BINARY
+    if fast is not None:
+        out = fast(self, other, 4)
+        if out is not None:
+            return out
     return _promoting_binary(self, other, '__mul__', False)
 
 
 def _tensor_rmul(self, other):
+    fast = _FAST_BINARY
+    if fast is not None:
+        out = fast(self, other, 5)
+        if out is not None:
+            return out
     return _promoting_binary(self, other, '__rmul__', True)
 
 
@@ -1543,10 +1657,20 @@ def _tensor_rpow(self, other):
 
 
 def _tensor_truediv(self, other):
+    fast = _FAST_BINARY
+    if fast is not None:
+        out = fast(self, other, 6)
+        if out is not None:
+            return out
     return _true_division(self, other, '__truediv__')
 
 
 def _tensor_rtruediv(self, other):
+    fast = _FAST_BINARY
+    if fast is not None:
+        out = fast(self, other, 7)
+        if out is not None:
+            return out
     return _true_division(self, other, '__rtruediv__')
 
 
@@ -1568,6 +1692,26 @@ _BINARY_APIS = {
 }
 
 
+def _fill_captured_state(self, val):
+    """Fill state a step capture replays in its own buffer; True if done.
+
+    `_ip` rebinds the tensor to a newly computed one. For state a capture
+    keeps (`_capture_owned`), the capture still holds the old buffer, so the
+    new one is a second copy for as long as the capture lives: a static KV
+    cache reset before every `generate` held two caches through the prompt.
+    A setitem over the whole tensor fills the old buffer in place instead.
+    Only a constant fill without a gradient: one that read the tensor itself
+    could read what it is overwriting.
+    """
+    if (not self._capture_owned() or not self.shape
+            or not (_owner.jt.flags.no_grad or self.is_stop_grad())
+            or getattr(self, "_torch_data_owner", None) is not None):
+        return False
+    value = _owner.jt.array(val).cast(self.dtype)
+    self.assign(self.setitem((slice(None),) * len(self.shape), value))
+    return True
+
+
 def _api_fill(self, val):
     value = _owner.jt.ones(self.shape, self.dtype).stop_grad() * val
     if not isinstance(val, _NativeVar):
@@ -1580,19 +1724,19 @@ def _api_zero(self):
 
 
 def _api_add(self, o, alpha=1):
-    return _ip(self, self + o * alpha)
+    return _ip(self, self + o * alpha, preserve_storage=True)
 
 
 def _api_sub(self, o, alpha=1):
-    return _ip(self, self - o * alpha)
+    return _ip(self, self - o * alpha, preserve_storage=True)
 
 
 def _api_mul(self, o):
-    return _ip(self, self * o)
+    return _ip(self, self * o, preserve_storage=True)
 
 
 def _api_div(self, o):
-    return _ip(self, self / o)
+    return _ip(self, self / o, preserve_storage=True)
 
 
 def _api_clamp_min(input, v):
@@ -1621,6 +1765,24 @@ def _api_ne_alias(self, other):
 
 def _api_nonzero(input, as_tuple=False, **kw):
     return _nonzero(input, as_tuple=as_tuple)
+
+
+def _random_inplace(self, draw, *parameters, generator=None):
+    tracks_grad = bool(self.requires_grad and not _owner.jt.flags.no_grad)
+    # Validate before the sampler can reserve or advance a private/global RNG.
+    if tracks_grad:
+        if self.is_leaf:
+            raise RuntimeError("a leaf Variable that requires grad is being used in an in-place operation.")
+        if self._view_base_is_trainable_leaf():
+            raise RuntimeError("a view of a leaf Variable that requires grad is being used in an in-place operation.")
+    value = draw(self, *parameters, generator=generator)
+    if tracks_grad:
+        # Overwriting a non-leaf has a zero derivative through its old graph.
+        # As in zero_(), selection clears even NaN/Inf without multiplying by 0.
+        with _new_scope(self, None), _owner.jt.no_grad():
+            mask = _owner.jt.zeros(self.shape, "bool")
+        value = _owner.jt.ternary(mask, self, value)
+    return _ip(self, value, preserve_storage=True)
 
 
 def _api_normal(self, mean=0.0, std=1.0, generator=None):
@@ -1719,6 +1881,12 @@ def _api_is_contiguous(self, *a, **k):
 
 def _api_is_leaf(self):
     return bool(self.is_backward_leaf)
+
+
+def _api_is_sparse(self):
+    # Native Var storage is dense; unsupported sparse factories never produce
+    # a Var whose storage this capability query could misclassify.
+    return False
 
 
 def _api_retains_grad(self):
@@ -1842,6 +2010,7 @@ from .autograd_api import (
     _grad_set,
     _optimizer_maybe_has_fsdp_params,
     _register_leaf,
+    _register_post_accumulate_grad_hook as _register_post_accumulate_grad_hook,
     _retain_grad,
     _rg_get,
     _rg_set,

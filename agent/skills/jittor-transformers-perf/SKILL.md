@@ -16,8 +16,9 @@ Jittor vs 真 PyTorch 数据，而不是把 JIT、H2D 或 lazy graph 漏执行�
 - PyTorch oracle：显式设置的 `REAL_TORCH_PYTHON`。运行前必须断言 `torch.__file__`
   不含 Jittor shim。
 - 所有命令通过 `agent/skills/jittor-transformers-perf/scripts/run_perf_env.sh`，
-  并为并行任务设置唯一 `cache_name` 与 `CUDA_VISIBLE_DEVICES`。缓存、日志和
-  结果必须留在 lab 工作区，不得写入 Jittor 主仓库。
+  并为并行任务设置唯一 `cache_name` 与 `CUDA_VISIBLE_DEVICES=<gpu>`。缓存、日志和
+  结果必须留在 lab 工作区，不得写入 Jittor 主仓库。需要指定 CUDA toolkit 时设
+  `JTCUDA=<cuda-root>`（含 `bin/nvcc` 与 `lib64`）；不设则由 Jittor 自行发现 nvcc，设错直接退出。
 
 ## 不可省略的计时规则
 
@@ -31,8 +32,10 @@ Jittor vs 真 PyTorch 数据，而不是把 JIT、H2D 或 lazy graph 漏执行�
    fallback 不能直接与 PyTorch default fused kernel 归因成“softmax 慢”。
 5. 训练结果必须检查每个目标梯度 finite 且非零。显式 cuBLAS op 若缺反向，会产生看似
    很快的静默零梯度。
-6. HF 对比必须使用同一 Transformers 版本。`benchmark_hf_tiny_models.py` 会把真
-   PyTorch/torchvision 固定在 `rt_venv`，再加载 jt311 的 Transformers 4.56.2。
+6. HF 对比必须使用同一 Transformers 版本。`benchmark_hf_tiny_models.py` 从
+   `JITTOR_PERF_RT_SITE`（真 PyTorch/torchvision 的 site-packages）固定 torch，再从
+   `JITTOR_PERF_JT_SITE`（装 Transformers 4.56.2 的 site-packages）加载 Transformers；
+   两个变量都没有默认值，未设置时脚本直接退出。
 7. allocator 指标只能作为 harness 工作集方向性数据；严格峰值需另用 NVML/进程级采样。
 8. SDPA 同时报告 `--sync-mode per_call` 延迟与 `queued` 吞吐。前者每步同步，后者保留
    全部输出/梯度后统一同步；二者不可互相替代。per-call 结果还分别记录 graph/build
@@ -184,7 +187,9 @@ CUDA_VISIBLE_DEVICES="${ASSIGNED_CUDA_MASK:?external allocation required}" cache
   --task softmax-case --length 50257 --rows 2 --dtype float32
 ```
 
-详细结果优先查 `docs/results/transformers/`；数值精度对拍仍使用
+详细结果查 `docs/results/index.md`（昇腾 Qwen3 训练见
+`docs/results/2026-08-30-qwen3-ascend-training.md`；早期按算子的 transformers 报告已退役，
+Git 历史 `e3c369acb` 可查）；数值精度对拍仍使用
 `agent/skills/jittor-torch-diff/`。
 
 

@@ -5,6 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include "ops/composite/transpose_op.h"
+#include "ops/layout_propagation.h"
 #include "core/var.h"
 #include "ops/op_register.h"
 #include "ops/composite/op_capability.h"
@@ -31,6 +32,7 @@ DEFINE_FLAG(int, transpose_storage_view, 0,
     "feed elementwise work, and measure.");
 
 TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
+    const bool as_view = transpose_storage_view != 0;
     // A rank-0 var has no axes to permute, and the empty permutation of
     // nothing is itself. Both references agree: NumPy's `transpose` returns
     // shape `()`, and torch's `.T` says so outright -- "This function is the
@@ -41,7 +43,7 @@ TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
     //
     // Only the *empty* permutation forwards: torch rejects `permute((0,))` on
     // a rank-0 tensor, and so should the rank check further down.
-    if (!x->shape.size() && !axes.size()) {
+    if (!as_view && !x->shape.size() && !axes.size()) {
         forward(x);
         return;
     }
@@ -53,7 +55,7 @@ TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
     // identity: `axes=[0]` on a 2-D var, or `[0,1,2]` on a 2-D var, returned x
     // unchanged and never reached infer_shape, so the axes checks there could
     // not fire and a wrong `axes` silently did nothing.
-    if (i==axes.size() && axes.size() && axes.size()==x->shape.size()) {
+    if (!as_view && i==axes.size() && axes.size() && axes.size()==x->shape.size()) {
         forward(x);
         return;
     }
@@ -67,7 +69,7 @@ TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
     // bytes under another shape. Decoding one token transposes [b, 1, h, d]
     // into [b, h, 1, d] three times a layer; each was a copy kernel -- 10 ms of
     // device time and 10k launches over a 128-token Qwen3 decode.
-    if (x->num >= 0 && axes.size() == xdim && x->is_contiguous()) {
+    if (!as_view && x->num >= 0 && axes.size() == xdim && x->is_contiguous()) {
         int64 seen = 0;
         int last = -1;
         bool kept = true;
@@ -88,7 +90,6 @@ TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
         }
     }
     // A view is asked for: nothing below may turn it into a copy.
-    const bool as_view = transpose_storage_view != 0;
     // The copying kernels below read a dense input. Before strided inputs
     // were accepted this copy was made for every transpose by the op
     // constructor -- including a view's, which then permuted a fresh dense
@@ -106,7 +107,15 @@ TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
     }
     #ifdef HAS_ACCELERATOR
     const auto backend = construction_target_backend(x);
-    if (backend != BackendId::Cpu && !as_view) {
+    // cuTT (the accelerated transpose library behind OpCapability::Transpose)
+    // plans its permutation kernels for fixed element sizes and does not
+    // cover 16-byte elements -- `cuttPlan` fails outright for complex128
+    // ("cuttPlan failed ... dsize 16"), which is a *device* error and would
+    // otherwise be a hard, un-recoverable crash on the very first `.transpose`
+    // of a complex128 CUDA Var (used pervasively, e.g. every `_conj_transpose`
+    // call in the linalg bridge). Route those dtypes straight to the generic
+    // Tx-templated kernel below instead, which has no such size assumption.
+    if (backend != BackendId::Cpu && !as_view && x->dtype().dsize() <= 8) {
         auto accelerated_transpose = find_op_capability<VarPtr, Var*, NanoVector>(
             backend, OpCapability::Transpose, x, axes);
         if (accelerated_transpose) {
@@ -126,14 +135,14 @@ TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
 
 void TransposeOp::infer_shape() {
     auto xdim = x->shape.size();
-    USER_CHECK(xdim);
+    USER_CHECK(xdim || (storage_view && !axes.size()));
     if (!axes.size()) {
         for (int i=0; i<(int)xdim; i++)
             axes.push_back(xdim-1-i);
     } else {
         USER_CHECKop(axes.size(),==,xdim);
         int64_t mask=0;
-        for (auto i : axes) mask |= 1<<i;
+        for (auto i : axes) mask |= 1u<<i;
         USER_CHECK(mask==((1ll<<xdim)-1)) << "Invalid axes" << axes;
     }
     NanoVector shape;
@@ -162,14 +171,23 @@ VarPtr TransposeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     reverse.reserve(axes.size(), axes.size());
     for (uint i=0; i<axes.size(); i++)
         reverse.set_data(axes[i], i);
+    // A view's gradient is a view too. The storage view a channels-last
+    // activation is read through (NCHW over NHWC memory) used to hand back a
+    // materialised NCHW copy of every gradient reaching it, which the next
+    // convolution's backward then converted back to NHWC.
+    if (storage_view) return storage_view_transpose(dout, reverse);
     return make_transpose(dout, reverse);
 }
 
+// The permutation is read at run time, not written into the key: only the
+// rank is. A tensor-network contraction meets a new permutation of a 12-D
+// tensor on nearly every call, and each one used to compile a kernel of its own
+// (~730 ms of g++ for a 400 us computation). The strides were always runtime
+// values; the permutation only decided which stride goes with which loop, and
+// that choice is now made on the host before the loops.
 void TransposeOp::jit_prepare(JK& jk) {
     jk << "«Tx:" << x->dtype();
-    jk << "«DIM=" << JK::hex1(axes.size());
-    for (uint i=0; i<axes.size(); i++)
-        jk << "«AXES" << JK::hex1(axes[i]) << '=' << JK::hex1(i);
+    jk << "«DIM=" << JK::hex(axes.size());
 }
 
 #else // JIT
@@ -178,9 +196,8 @@ void TransposeOp::jit_run() {
     auto* __restrict__ yp = y->ptr<Tx>();
     
     @for(i, 0, DIM, index_t yshape@i = y->shape[@i];)
-    @for(i, 0, DIM, index_t xshape@i = yshape@{AXES@i};)
-    index_t xstride@{DIM-1} = 1;
-    @for(i, DIM-2, -1, -1, auto xstride@i = xstride@{i+1} * xshape@{i+1};)
+    // xstride{i}: the stride in x of the axis that output axis i reads.
+    @for(i, 0, DIM, index_t xstride@i = x->storage_stride(axes[@i]);)
     index_t ystride@{DIM-1} = 1;
     @for(i, DIM-2, -1, -1, auto ystride@i = ystride@{i+1} * yshape@{i+1};)
     // `yid` is the output's linear index, so every iteration writes its own
@@ -197,12 +214,9 @@ void TransposeOp::jit_run() {
     @if(@is_def(JIT_cpu) && DIM>=4, #pragma omp parallel for collapse(4) if(num >= 65536))
     @for(d, 0, DIM, for (index_t yi@d=0; yi@d < yshape@d; yi@d++)) {
         auto yid = @for(d, 0, DIM, + yi@d * ystride@d);
-        @for(d, 0, DIM, auto xi@d = yi@{AXES@d};)
-        auto xid = @for(d, 0, DIM, + xi@d * xstride@d);
+        auto xid = @for(d, 0, DIM, + yi@d * xstride@d);
         yp[yid] = xp[xid];
     }
-    // unused var
-    (void)xshape0;
 }
 #endif // JIT
 

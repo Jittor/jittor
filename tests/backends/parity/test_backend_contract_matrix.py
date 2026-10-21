@@ -38,6 +38,8 @@ from _helpers import capability as _test_capability
 import numpy as np
 import pytest
 
+from _helpers.cupy_bridge import cuda_numpy_code_available
+
 import jittor as jt
 
 from _helpers.common import net_scaled_max_err, per_element_max_rel_err
@@ -136,6 +138,13 @@ class Snapshot:
             if reference.dtype.kind == "f" and not np.isfinite(reference).all():
                 return False, "CPU probe produced non-finite values"
             return True, ""
+        if op == "numpy_code" and row.name == "cuda" and not cuda_numpy_code_available():
+            # On CUDA the callback is handed CuPy arrays, and the operator
+            # reports the missing package as a RuntimeError out of execution
+            # rather than a ModuleNotFoundError, so the branch below cannot
+            # tell it from a wrong answer.
+            return (contract.MISSING_DEPENDENCY,
+                    "%s needs the optional package cupy" % row.name)
         try:
             actual = _run_probe(contract.PROBES[op], use_cuda=1)
         except ModuleNotFoundError as missing:
@@ -187,6 +196,7 @@ def test_every_declared_operator_is_probed_or_excused(snapshot):
     unaccounted = sorted(
         op for op in snapshot.ops
         if op not in contract.PROBES and op not in contract.UNPROBED_REASONS
+        and op not in contract.TEST_COMPILED_OPS
     )
     assert not unaccounted, (
         "these implementations are declared by a registered backend but are "

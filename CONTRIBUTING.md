@@ -452,15 +452,32 @@ session。
 ```bash
 python -m nox
 python -m nox -s structure
+python -m nox -s smoke        # the pull-request CPU tier
 python -m nox -s cpu
 python -m nox -s cuda
 python -m nox -s npu
 python -m nox -s rocm
 python -m nox -s mpi
+python -m nox -s ecosystem    # nightly: downstream libraries against real PyTorch
 python -m nox -s benchmark
 python -m nox -s docs
 python -m nox -s docs_links
 python -m nox -s tutorials
+```
+
+Between edits, [`tools/run_test_suite.py`](tools/run_test_suite.py) is cheaper
+than a gate. It runs native and Torch-compatibility tests in separate processes
+with separate JIT caches, because Torch mode is process-global, and reports one
+combined result:
+
+两次编辑之间用 [`tools/run_test_suite.py`](tools/run_test_suite.py) 比跑门禁便宜。
+Torch 模式是进程级的，所以它把原生测试与 Torch 兼容测试分进程、分编译缓存执行，
+最后给一个合并结论：
+
+```bash
+python tools/run_test_suite.py --tier core    # after an edit
+python tools/run_test_suite.py --tier smoke   # before opening a pull request
+python tools/run_test_suite.py                # the whole tree, on demand
 ```
 
 The `structure` session checks repository layout, source and wheel contents, a
@@ -496,6 +513,30 @@ values for concurrent jobs; do not run benchmarks and tests against one cache.
   directories. Keep raw logs and generated artifacts outside the checkout.
 - Use relative links for repository files and run the structure gate after moves.
 
+| Section | Contents |
+| --- | --- |
+| [`docs/guides/`](docs/guides/) | task guides: hardware, debugging, memory, platform support and limitations |
+| [`docs/notes/`](docs/notes/) | long-lived framework mechanisms (precision, placement, async execution) |
+| [`docs/compatibility/`](docs/compatibility/) | the Torch compatibility layer and its acceptance rules |
+| [`docs/development/`](docs/development/) | repository layout, source architecture, test system, known-issue write-ups |
+| [`docs/research/`](docs/research/) | proposals that are not yet decided |
+| [`docs/results/`](docs/results/) | reproducible maintainer conclusions, each with status, commit, scope, maintainer and recheck condition |
+| [`docs/releases/`](docs/releases/) | release notes |
+
+- Update [`README.md`](README.md) for installation or first-use changes. It is
+  the single authoritative root README and keeps English and Chinese together;
+  do not add a second, per-language or generated README.
+- Keep raw logs, caches and benchmark artifacts out of the documentation tree.
+- Use relative links between documentation pages, and a
+  `https://github.com/Jittor/jittor/blob/master/<path>` URL for a repository
+  file outside `docs/`; both forms are checked.
+- Run `python -m nox -s docs` and `python -m nox -s docs_links` after any
+  documentation change, and the structure gate after moves.
+
+- `docs/` 是唯一的文档树，源语言是中文，每一页只属于一个栏目：使用指南
+  (`docs/guides/`)、机制说明 (`docs/notes/`)、Torch 兼容 (`docs/compatibility/`)、
+  开发文档 (`docs/development/`)、研究提案 (`docs/research/`)、验证结论
+  (`docs/results/`)、发布说明 (`docs/releases/`)。
 - 安装和首次使用发生变化时更新 [`README.md`](README.md)；它是唯一权威的根 README，
   中英文共同维护。
 - 面向用户和贡献者的长期文档放入 `docs/` 现有语义目录，例如 `docs/notes/`、

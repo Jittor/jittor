@@ -19,8 +19,9 @@ void jt_free(void* p, size_t len, size_t& allocation);
 namespace jittor {
 
 // The transpose op describes shapes with StackVector<int>, whose capacity is
-// 10; a rank beyond that cannot reach here.
-#define CUTT_PLAN_MAX_RANK 10
+// the maximum tensor rank (NanoVector::max_tensor_rank); a rank beyond that
+// cannot reach here.
+#define CUTT_PLAN_MAX_RANK 32
 
 /** Cache key of a cuTT transpose plan.
 

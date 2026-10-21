@@ -4,6 +4,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#include "core/var.h"
 #include "runtime/device.h"
 #include "runtime/backend.h"
 
@@ -48,7 +49,8 @@ void setter_use_cuda(const int& old_value, const int& requested) {
 #ifdef HAS_ACCELERATOR
     if (value) {
         if (backend_ops(accelerator_backend_id()).device_count() == 0) {
-            LOGw << "No CUDA device available; falling back to CPU (use_cuda=0).";
+            user_warning("use_cuda=1 was requested, but no CUDA device is "
+                         "available; running on the CPU (use_cuda=0).");
             value = 0;
         } else {
             LOGi << "CUDA enabled.";
@@ -58,9 +60,16 @@ void setter_use_cuda(const int& old_value, const int& requested) {
         LOGv << "CUDA disabled.";
     }
 #else
-    USER_CHECK(value == 0) << "No CUDA found.";
+    USER_CHECK(value == 0) << "This Jittor build has no accelerator support: nvcc "
+        "was not found when the core was compiled, so it was built for CPU only. "
+        "Install the CUDA toolchain (pip install jittor[cuda12]) or point "
+        "JT_BUILD_NVCC_PATH at an nvcc, then restart Python so the core is rebuilt.";
 #endif
-    if (old_value != value) {
+    // Only with something to sync: the flag is also set from the environment
+    // while the library is being loaded, before the executor's own globals
+    // (the fetch list) are constructed, and a sweep then walked one of them
+    // unconstructed -- which object files come first decides whether it does.
+    if (old_value != value && Var::number_of_lived_vars > 0) {
         // Pending graphs were prepared for the old backend. The generated
         // setter rolls back to this value if submission throws.
         runtime_device_state().use_cuda = old_value;

@@ -13,6 +13,7 @@ import numpy as np
 #: the owner's object rather than wrapping it, and "one owner" still holds --
 #: this map only says which module that owner is.
 _FOREIGN_OWNERS = {
+    "default_generator": "jittor.compat.torch.generator",
     "clear_autocast_cache": "jittor.compat.torch.amp",
     "autocast_increment_nesting": "jittor.compat.torch.amp",
     "autocast_decrement_nesting": "jittor.compat.torch.amp",
@@ -32,7 +33,14 @@ class TestCoreMiscOwner(unittest.TestCase):
                 self.assertIs(fidelity_of("torch." + name).implementation, implementation)
                 self.assertEqual(implementation.__module__,
                                  _FOREIGN_OWNERS.get(name, core.__name__))
-                self.assertIs(pickle.loads(pickle.dumps(implementation)), implementation)
+                restored = pickle.loads(pickle.dumps(implementation))
+                if name == "default_generator":
+                    # Real PyTorch pickles generator state into a new object.
+                    self.assertIsNot(restored, implementation)
+                    self.assertEqual(restored.initial_seed(),
+                                     implementation.initial_seed())
+                else:
+                    self.assertIs(restored, implementation)
         for storage in core._STORAGE_TYPES:
             self.assertIs(getattr(torch, storage.__name__), storage)
             self.assertIs(getattr(torch.storage, storage.__name__), storage)
@@ -86,7 +94,7 @@ class TestCoreMiscOwner(unittest.TestCase):
         try:
             torch.set_default_dtype(torch.float64)
             self.assertIs(torch.get_default_dtype(), torch.float64)
-            self.assertIs(torch.manual_seed(1729), torch)
+            self.assertIs(torch.manual_seed(1729), torch.default_generator)
             self.assertEqual(torch.initial_seed(), 1729)
             state = torch.get_rng_state()
             self.assertIs(state.dtype, torch.uint8)
@@ -108,6 +116,30 @@ class TestCoreMiscOwner(unittest.TestCase):
         finally:
             torch.set_default_dtype(dtype)
             torch.manual_seed(seed)
+
+    def test_manual_seed_preserves_non_torch_rng_streams(self):
+        import random
+        import torch
+
+        numpy_state = np.random.get_state()
+        python_state = random.getstate()
+        torch_seed = torch.initial_seed()
+        try:
+            np.random.seed(111)
+            random.seed(222)
+            expected_numpy = np.random.RandomState(111).rand()
+            expected_python = random.Random(222).random()
+            torch.manual_seed(1729)
+            self.assertEqual(np.random.rand(), expected_numpy)
+            self.assertEqual(random.random(), expected_python)
+            torch.manual_seed(5)
+            first = torch.rand(3).numpy()
+            torch.manual_seed(5)
+            np.testing.assert_array_equal(torch.rand(3).numpy(), first)
+        finally:
+            np.random.set_state(numpy_state)
+            random.setstate(python_state)
+            torch.manual_seed(torch_seed)
 
     def test_d_rebinding_retains_objects_and_owned_policy(self):
         import jittor as jt

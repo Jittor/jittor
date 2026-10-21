@@ -33,6 +33,7 @@
 #include "codegen/opt/pass/reduce_accumulator_pass.h"
 #include "codegen/opt/pass/cpu_parallel_pass.h"
 #include "codegen/opt/pass/blocked_reduction_pass.h"
+#include "codegen/opt/pass/stream_load_pass.h"
 #include "codegen/opt/pass/insert_profile_loop_pass.h"
 #include "codegen/opt/pass/fake_main_pass.h"
 #include "codegen/opt/pass/check_cache_pass.h"
@@ -162,6 +163,8 @@ void PassManager::run_passes() {
     // one opaque block, so everything that reshapes, clones or renames loops
     // has already run against the ordinary single-accumulator form.
     run_pass<BlockedReductionPass>();
+    // After everything that reads the kernels' statements by their text.
+    run_pass<StreamLoadPass>();
 
     run_pass<FakeMainPass>();
 }

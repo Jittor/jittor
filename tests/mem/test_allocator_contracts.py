@@ -227,5 +227,67 @@ class TestDeviceSegmentSizes(unittest.TestCase):
         self.assertEqual(reserved, {6.0: 20, 12.0: 12, 12.5: 14, 30.0: 30})
 
 
+_TRIM_PROBE = """
+import jittor as jt
+jt.flags.use_cuda = 1
+jt.flags.sfrl_trim_before_grow = %d
+def reserved():
+    jt.sync_all(True)
+    return jt.core.device_pool_stats(0)[1] // 2**20
+def churn():
+    # Allocations elsewhere in the pool, one small segment's worth, so that a
+    # free segment ages without anything else moving.
+    for _ in range(32):
+        y = jt.zeros((256,), "float32")
+        y.sync()
+        del y
+churn()
+base = reserved()
+held = []
+for step in %r:
+    if step == "churn":
+        churn()
+        continue
+    x = jt.zeros((step * 2**20 // 4,), "float32")
+    x.sync()
+    held.append(reserved() - base)
+    del x
+print("TRIM", *held)
+"""
+
+
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
+class TestDeviceSegmentTrim(unittest.TestCase):
+    """A device pool about to hold more than it ever has hands back segments
+    it holds entirely free and has not used for a while
+    (`sfrl_trim_before_grow`, `SFRLAllocator::trim_before_growing`).
+
+    A 30 MB segment, free, cannot serve 40 MB: kept, it is 30 MB the pool
+    holds past its peak. The trim hands it back and the 40 MB segment takes
+    its place; the next 30 MB is cut from that one. A ResNet-50 training step
+    reserved 6.40 GB for a 5.51 GB peak without it, 5.73 with it.
+    """
+
+    def _held(self, trim, plan):
+        result = run_child_script(_TRIM_PROBE % (trim, plan), text=True, name="trim")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        line = [l for l in result.stdout.splitlines() if l.startswith("TRIM ")][0]
+        return [int(v) for v in line.split()[1:]]
+
+    def test_an_idle_segment_of_the_wrong_size_is_replaced_not_kept(self):
+        self.assertEqual(self._held(1, [30, "churn", 40, 30]), [30, 40, 40])
+
+    def test_without_the_trim_the_pool_keeps_both(self):
+        self.assertEqual(self._held(0, [30, "churn", 40, 30]), [30, 70, 70])
+
+    def test_a_segment_freed_a_moment_ago_is_kept(self):
+        # Most likely the next layer's, of the same size.
+        self.assertEqual(self._held(1, [30, 40]), [30, 70])
+
+    def test_a_segment_far_smaller_than_the_request_is_kept(self):
+        # Under an eighth of it: one of many a large request would shred.
+        self.assertEqual(self._held(1, [30, "churn", 300]), [30, 330])
+
+
 if __name__ == "__main__":
     unittest.main()

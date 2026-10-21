@@ -8,6 +8,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
+#include <tuple>
 #include <mutex>
 #include <thread>
 #include <unordered_map>
@@ -31,6 +32,9 @@ struct CachingBlock {
     CachingBlock* prev;
     CachingBlock* next;
     bool occupied;
+    // The owning allocator's allocation count when this block last became
+    // free: how long a free segment has sat unused (see trim_before_growing).
+    uint64 freed_at = 0;
     
     CachingBlock(size_t size, size_t origin_size);
     CachingBlock(size_t size, size_t origin_size, CachingBlockPool* blocks, void* memory_ptr);
@@ -52,10 +56,21 @@ struct CachingBlock {
 struct BlockIdSpace {
     // Ids start at 1: slot 0 is never a live allocation, so a zero
     // `allocation` handle is always a caller error rather than a hit.
-    static const size_t ID_LIMIT = 1 << 21;
-    // One lock per id space, always taken *inside* the owning allocator's
-    // lock and never the other way round.
-    std::mutex mutex;
+    //
+    // Ids are recycled, so this bounds the allocations live *at once*, not
+    // the allocations ever made. It used to be 1 << 21 because the pool key
+    // packed `origin_size * ID_LIMIT + id` into one word; a lazily built graph
+    // can legitimately hold more than two million small buffers at its peak
+    // (1024 tensor-network samples of a 30-qubit circuit hold about eight
+    // million, ~28 GB), and the run then failed with the process's allocator
+    // left unusable. With the key a tuple the limit only guards against a
+    // corrupted counter; memory runs out long before it.
+    static const size_t ID_LIMIT = size_t(1) << 40;
+    // Guarded by the owning allocator's lock, not a lock of its own: every way
+    // in -- SFRLAllocator::alloc, free, gc, fence_capture and share_with, and
+    // the pool helpers only they call -- already holds `SFRLAllocator::mutex`.
+    // A second lock here was taken and dropped up to five times per alloc and
+    // free, for nothing it could still exclude.
     // ids released by recycle_block_id, reused before the counter grows
     std::vector<size_t> free_ids;
     size_t tot_block_id = 0;
@@ -78,14 +93,17 @@ struct BlockIdSpace {
 };
 
 struct CachingBlockPool {
-    std::map<pair<size_t,size_t>, CachingBlock*> blocks;
+    // (size, origin_size, id): ordered by size first, so lower_bound on a
+    // size finds the smallest block that fits.
+    typedef std::tuple<size_t, size_t, size_t> Key;
+    std::map<Key, CachingBlock*> blocks;
     // The id space of the allocator that owns this pool. Both of an
     // allocator's pools (small and large) share one space, because `free`
     // only gets an id and has to find the block in either.
     BlockIdSpace* ids = nullptr;
     static const size_t ID_LIMIT = BlockIdSpace::ID_LIMIT;
 
-    pair<size_t,size_t> get_key(CachingBlock* block);
+    Key get_key(CachingBlock* block);
 
     CachingBlockPool();
     ~CachingBlockPool();
@@ -139,6 +157,12 @@ struct SFRLAllocator : Allocator {
     // release of cached memory goes through here, so the reserved high-water
     // below cannot drift from what the pools actually hold.
     size_t release_cached(CachingBlockPool& pool, long long free_size = -1);
+    // The most this allocator has held from the underlying one, and the trim
+    // that keeps a new segment from raising it (see `sfrl_trim_before_grow`).
+    int64 held_high = 0;
+    // Allocations served so far, the clock `CachingBlock::freed_at` reads.
+    uint64 alloc_count = 0;
+    void trim_before_growing(size_t need);
 
     inline SFRLAllocator(float free_ratio = 1, float min_free_size=0) : free_ratio(free_ratio), min_free_size(min_free_size) {
         small_blocks.ids = &id_space;
@@ -172,6 +196,7 @@ struct SFRLAllocator : Allocator {
 };
 
 DECLARE_FLAG(int, use_sfrl_allocator);
+DECLARE_FLAG(int, sfrl_trim_before_grow);
 // Hand every range the recording ending now touched, free in a pool, to `held`.
 void sfrl_fence_capture(vector<Allocation>& held);
 
@@ -187,6 +212,10 @@ int64 sfrl_device_peak_bytes(int device);
 void sfrl_reset_device_peak(int device);
 // Every byte handed out so far; it never decreases. Device -1 is the host.
 int64 sfrl_device_allocated_bytes(int device);
+// A high-water mark of its own: restart it at the live bytes (returned), read
+// it later. One measurement at a time.
+int64 sfrl_device_window_start(int device);
+int64 sfrl_device_window_peak(int device);
 // Bytes the pools of one device hold from the underlying allocator (live plus
 // cached), and their high-water mark -- torch's `max_memory_reserved`. The
 // peak restarts with `sfrl_reset_device_peak`, like the allocated one.

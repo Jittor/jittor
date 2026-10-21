@@ -1,17 +1,22 @@
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
+import math as _math
 import jittor as jt
-from jittor import nn
+from jittor._runtime import dispatch as _dispatch_module
 from jittor.nn.backends import hooks as _backend_hooks
+from jittor.nn.functional.attention import (
+    scaled_dot_product_attention as _native_scaled_dot_product_attention,
+    LAST_FUSED_KERNEL as _NATIVE_LAST_FUSED,
+)
 from ....diagnostics import EXPECTED, swallowed, sdpa_flash_stats
 
 from ...context import get_install_context
 from ...fidelity import Fidelity, register_fidelity
 
-import os as _os
+from jittor._runtime.environment import getenv as _getenv
 
 
 def _sdpa_static_backend_cache_enabled():
-    return (_os.environ.get("JITTOR_TORCH_INFERENCE") or "").strip().lower() \
+    return (_getenv("JITTOR_TORCH_INFERENCE") or "").strip().lower() \
         in ("1", "true", "yes", "on")
 
 
@@ -22,6 +27,10 @@ def _sdpa_flash_stats():
 def _sdpa_flash_miss(reason):
     misses = _sdpa_flash_stats()["misses"]
     misses[reason] = misses.get(reason, 0) + 1
+    _LAST_MISS[0] = reason
+
+
+_LAST_MISS = [None]
 
 
 def _sdpa_flash_cast(reason):
@@ -53,7 +62,7 @@ def _sdpa_flash_template_dim(dim):
 
 
 def _sdpa_flash_float32_cast_target():
-    raw = (_os.environ.get("JITTOR_FLASH_ATTN_CAST_FLOAT32") or "").strip().lower()
+    raw = (_getenv("JITTOR_FLASH_ATTN_CAST_FLOAT32") or "").strip().lower()
     if raw in ("1", "true", "yes", "on", "fp16", "float16", "half"):
         return "float16"
     if raw in ("bf16", "bfloat16"):
@@ -122,16 +131,18 @@ def _try_flash_scaled_dot_product_attention(query, key, value, attn_mask,
     # required by the separate-QKV FlashAttention wrapper. Keep this
     # inference-only and narrowly shaped so decoding, GQA and training keep
     # their existing backend choice.
+    # The environment last: every other test is cheaper, and almost no call
+    # passes them.
     short_square_math = (
-        _sdpa_static_backend_cache_enabled()
-        and not enable_gqa and not is_causal
+        not enable_gqa and not is_causal
         and len(q_shape) == 4 and 0 < int(q_shape[0]) <= 8
         and query_heads == key_heads == value_heads == 12
         and int(q_shape[-1]) == 64
         and int(q_shape[-2]) == int(k_shape[-2]) == int(v_shape[-2])
         and int(q_shape[-2]) <= 64
         and _jittor_dtype_name(query.dtype) == _jittor_dtype_name(key.dtype) == _jittor_dtype_name(value.dtype)
-        and _jittor_dtype_name(query.dtype) == "float16")
+        and _jittor_dtype_name(query.dtype) == "float16"
+        and _sdpa_static_backend_cache_enabled())
     if short_square_math:
         _sdpa_flash_miss("short_square_math")
         return None
@@ -158,6 +169,15 @@ def _try_flash_scaled_dot_product_attention(query, key, value, attn_mask,
     except EXPECTED as exc:
         swallowed("torch/installers/nn.py _try_flash_scaled_dot_product_attention: from jittor.compat.shim.backends import flash_attention...", exc)
         _sdpa_flash_miss("no_loader")
+        return None
+    # Nothing to load: the miss everything below would end in, without the
+    # environment reads on the way. A training call keeps the full walk, which
+    # can decline it for the score count first, and so does the static
+    # backend cache, which keeps its own per-token answers.
+    if (not training_requested and not _sdpa_static_backend_cache_enabled()
+            and _fa_jittor.known_unavailable(template_dim, q_dtype)
+            and not _fa_jittor.required()):
+        _sdpa_flash_miss("no_backend")
         return None
     if training_requested and dropout == 0.0 and not _fa_jittor.required():
         min_scores = _fa_jittor.training_min_scores()
@@ -266,12 +286,61 @@ def _try_flash_scaled_dot_product_attention(query, key, value, attn_mask,
     return out
 
 
-import math as _math
+#: Inference calls already walked: their signature -> (the flash miss, the
+#: fused kernel that answered). See `_route_key`.
+_ROUTES = {}
 
 
-from jittor.nn.functional.attention import (
-    scaled_dot_product_attention as _native_scaled_dot_product_attention,
-)
+def _route_key(query, key, value, attn_mask, dropout_p, is_causal, scale, enable_gqa):
+    """What decides where an inference call goes, or None if it is not one
+    to remember.
+
+    The walk -- the flash attempt here, the native function's flash kernel,
+    then `nn.fused_attention`'s selection -- reads only these: shapes, dtypes,
+    the mask's shape and dtype, the switches, grad mode, the kernel registry
+    and the flash loader's token. 17-27 us of Python a call, where the kernel
+    it ends in builds its operator in a third of that. Whether key and value
+    are grouped heads still in the making (`_repeated_heads`) depends on how
+    they were built, so a key whose producer is a reshape is not remembered.
+    """
+    if not jt.flags.no_grad or not jt.flags.use_cuda or jt.flags.amp_reg \
+            or enable_gqa or dropout_p or not isinstance(query, jt.Var) \
+            or not isinstance(key, jt.Var) or not isinstance(value, jt.Var):
+        return None
+    if scale is not None and type(scale) not in (int, float):
+        return None
+    if key._producer_name() == "reshape" or value._producer_name() == "reshape":
+        return None
+    if attn_mask is None:
+        mask = None
+    elif isinstance(attn_mask, jt.Var):
+        mask = (tuple(attn_mask.shape), str(attn_mask.dtype))
+    else:
+        return None
+    # The static backend cache keeps its own answers per token; leave its
+    # calls to it.
+    if _sdpa_static_backend_cache_enabled():
+        return None
+    loader = _flash_loader[0]
+    if loader is None:
+        from jittor.compat.shim.backends import flash_attention as _fa_jittor
+        loader = _flash_loader[0] = _fa_jittor
+    token = loader.backend_cache_token()
+    if token is None:
+        return None
+    # Whether flash may take float32 as half precision, which decides a
+    # "dtype" miss as much as the dtypes do.
+    # Where the query lives, too: a route found for device tensors is a device
+    # kernel, and the same shapes on the host took it and failed.
+    return (tuple(query.shape), tuple(key.shape), tuple(value.shape),
+            str(query.dtype), str(key.dtype), str(value.dtype), mask, bool(is_causal),
+            None if scale is None else float(scale), jt.flags.device_id,
+            int(query.placement_backend), int(query.device_id),
+            _dispatch_state[0].generation, token, _sdpa_flash_float32_cast_target())
+
+
+_flash_loader = [None]
+_dispatch_state = [_dispatch_module]
 
 
 def scaled_dot_product_attention(query, key, value, attn_mask=None,

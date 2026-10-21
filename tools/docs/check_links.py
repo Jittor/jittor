@@ -40,7 +40,7 @@ def _tracked_markdown(repo_root):
         if not (repo_root / relative).is_file():
             continue
         parts = Path(relative).parts
-        if len(parts) == 1 or parts[0] in ("agent", "docs", "examples", "refactor-wip"):
+        if len(parts) == 1 or parts[0] in ("agent", "docs", "examples"):
             selected.append(repo_root / relative)
     return sorted(selected)
 
@@ -117,8 +117,7 @@ def _markdown_targets(path):
 #: ``tests/core/test_complex*.py`` long after those files moved to
 #: ``tests/type`` and ``tests/autograd``; nothing noticed, because a link with a
 #: scheme was skipped whether or not it named something local.
-_REPOSITORY_BLOB = re.compile(
-    r"^/Jittor/jittor/(?P<kind>blob|tree)/(?P<ref>[^/]+)/(?P<path>.+)$")
+_REPOSITORY_BLOB = re.compile(r"^/Jittor/jittor/(?P<kind>blob|tree)/(?P<ref>[^/]+)/(?P<path>.+)$")
 
 
 def _resolve_repository_url(repo_root, split, raw_target):
@@ -143,8 +142,7 @@ def _resolve_repository_url(repo_root, split, raw_target):
     except ValueError:
         return "repository URL escapes repository: {}".format(raw_target)
     if not candidate.exists():
-        return ("missing repository URL target: {} (from {})"
-                .format(clean, raw_target))
+        return "missing repository URL target: {} (from {})".format(clean, raw_target)
     if match.group("kind") == "tree" and not candidate.is_dir():
         return "tree URL names a file: {}".format(raw_target)
     if match.group("kind") == "blob" and candidate.is_dir():

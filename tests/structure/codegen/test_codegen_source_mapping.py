@@ -12,6 +12,7 @@ def test_jit_annotation_respects_existing_source_line_directives(tmp_path):
     helpers = source[source.index("static string line_directive_path("):
                      source.index("DECLARE_FLAG(string, jittor_path);")]
     harness = r'''
+#include <algorithm>
 #include <cassert>
 #include <iomanip>
 #include <sstream>
@@ -31,6 +32,11 @@ int main() {
     assert(composed.find("#line 11 \"/core/shared op.cc\"") != string::npos);
     assert(composed.find("#line 7 \"/backend/helper.cc\"\nvoid Y::jit_run") != string::npos);
     assert(composed.find("/cache/composed.cc") == string::npos);
+    // Defines spliced in after the last #include must not shift what follows.
+    string header = "#line 1 \"jt.code header\"\n#include <cmath>\nint broken = ;\n";
+    size_t after_include = header.find("int broken");
+    assert(line_directive_at(header, after_include) == "#line 2 \"jt.code header\"\n");
+    assert(line_directive_at("#include <cmath>\nint x;\n", 17) == "");
 }
 '''.replace("HELPERS", helpers)
     path = tmp_path / "source_mapping.cc"

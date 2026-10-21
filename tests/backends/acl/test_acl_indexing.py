@@ -4,7 +4,7 @@ getitem / setitem correctness suite for the ACL (Ascend) backend.
 Each case computes a reference on CPU (use_acl=0 path / numpy) and compares the
 ACL result for BOTH forward and backward. Run on a free NPU:
 
-    ASCEND_RT_VISIBLE_DEVICES=6 python test_indexing.py
+    python tests/backends/acl/test_acl_indexing.py
 
 Exit code 0 = all pass. Failures are printed with the max abs error.
 """
@@ -219,6 +219,31 @@ def test_acl_full_slice_uses_identity_forward_and_backward():
     messages = [entry["msg"].lower() for entry in logs]
     assert not any("slicev2" in message for message in messages)
     assert not any("stridedsliceassignv2_grad" in message for message in messages)
+
+
+def test_acl_flat_unit_stride_slices_are_storage_views():
+    if not _test_capability.check_accelerator('acl', backend=jt).enabled:
+        pytest.skip("ACL backend is unavailable")
+
+    # ZeRO unflattens one dense model buffer into many parameter views.  The
+    # slices must not materialize copies, otherwise total live memory grows by
+    # the sum of every suffix-sized slice and real models OOM during init.
+    elements = 16 * 1024 * 1024
+    with jt.flag_scope(use_acl=1, use_cuda=1), jt.log_capture_scope(
+            log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
+        flat = jt.ones((elements,), dtype="float32")
+        flat.sync()
+        before = jt.core.device_memory_used(0)
+        pieces = [flat[i * elements // 16:(i + 1) * elements // 16]
+                  for i in range(16)]
+        jt.sync(pieces)
+        after = jt.core.device_memory_used(0)
+        actual = pieces[-1][:4].numpy()
+
+    assert after == before
+    np.testing.assert_array_equal(actual, np.ones(4, dtype=np.float32))
+    messages = [entry["msg"].lower() for entry in logs]
+    assert not any("slicev2" in message for message in messages)
 
 
 def test_disabling_device_execution_disables_acl_dispatch():

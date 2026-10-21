@@ -17,6 +17,28 @@ def _draw(n=4):
 
 
 class TestForkRng(unittest.TestCase):
+    def setUp(self):
+        self.cpu_scope = jt.flag_scope(use_cuda=0)
+        self.cpu_scope.__enter__()
+
+    def tearDown(self):
+        self.cpu_scope.__exit__(None, None, None)
+
+    def test_state_is_cpu_bytes_and_invalid_load_preserves_position(self):
+        torch.manual_seed(123)
+        _draw(5)
+        state = torch.get_rng_state()
+        self.assertEqual(state.device.type, "cpu")
+        self.assertEqual(state.dtype, torch.uint8)
+        expected = _draw(7)
+        torch.set_rng_state(state)
+        with self.assertRaises(TypeError):
+            torch.set_rng_state(torch.tensor([123], dtype=torch.int64))
+        damaged = torch.zeros_like(state)
+        with self.assertRaises((ValueError, RuntimeError)):
+            torch.set_rng_state(damaged)
+        np.testing.assert_array_equal(_draw(7), expected)
+
     def _baseline(self):
         torch.manual_seed(7)
         return _draw()

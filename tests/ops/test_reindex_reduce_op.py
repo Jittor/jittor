@@ -113,8 +113,8 @@ class TestReindexReduceOp(unittest.TestCase):
         )
         expect_error(
             lambda: jt.random([3]).reindex_reduce("???", [3], ["i0"]),
-            exc_type=RuntimeError,
-            match="Not a valid call",
+            exc_type=TypeError,
+            match=r"reindex_reduce\(\) got arguments that match none of its signatures",
         )
         expect_error(
             lambda: jt.random([3]).reindex_reduce("add", [-1], ["i0"]),

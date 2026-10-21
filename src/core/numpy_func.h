@@ -48,6 +48,11 @@ struct NumpyResult {
     map<string, vector<DataView>> varrays;
     map<string, int> ints;
     map<string, DataView> arrays;
+    // Whether the operator executes on the accelerator, and so whether the
+    // arrays it hands over are device memory. The callback picks its array
+    // module by this, not by `use_cuda`: an operator on explicitly placed
+    // CUDA inputs runs on CUDA under `use_cuda=0` as well.
+    bool on_accelerator = false;
 };
 
 } // jittor

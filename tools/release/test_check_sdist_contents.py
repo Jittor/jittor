@@ -81,6 +81,25 @@ class TestSourceDistributionContents(unittest.TestCase):
         self.assertNotIn("python/jittor/__pycache__/runtime_source.cpython-311.pyc", paths)
         self.assertNotIn("python/jittor.egg-info/PKG-INFO", paths)
 
+    def test_checkout_inventory_skips_paths_the_sdist_leaves_out(self):
+        tracked = set(checker.REQUIRED_SOURCE_PATHS)
+        tracked.update(("docs/slides/deck.pptx", "python/jittor/compat"))
+        for relative in tracked:
+            path = self.root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"tracked\n")
+        result = mock.Mock(
+            returncode=0,
+            stdout=("\0".join(sorted(tracked)) + "\0").encode("utf-8"),
+            stderr=b"",
+        )
+        with mock.patch.object(checker.subprocess, "run", return_value=result):
+            paths = checker._expected_source_paths(self.root)
+
+        self.assertIn("docs/conf.py", paths)
+        self.assertNotIn("docs/slides/deck.pptx", paths)
+        self.assertNotIn("python/jittor/compat", paths)
+
     def test_canonical_generated_egg_info_members_pass(self):
         members = dict(self.members)
         members.update(

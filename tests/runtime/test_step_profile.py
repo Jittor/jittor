@@ -230,7 +230,13 @@ class TestMemory(unittest.TestCase):
             with jt.flag_scope(profile_memory_enable=1):
                 (jt.randn(256, 256) * 2).sync()
                 second = jt.core.get_peak_device_used_memory(0)
-        self.assertGreaterEqual(first - second, 256 * MiB, (first, second))
+        # The first session holds one 8192x8192 float32 (256 MiB); the second
+        # must report its own ~256 KiB peak, not inherit the first one. Asked
+        # as two bounds: `first - second >= 256 MiB` fell short by exactly the
+        # second session's own allocation whenever the first peaked at one
+        # buffer.
+        self.assertGreaterEqual(first, 256 * MiB, (first, second))
+        self.assertLess(second, 16 * MiB, (first, second))
 
 
 @unittest.skipIf(not HAS_CUDA, NO_CUDA)

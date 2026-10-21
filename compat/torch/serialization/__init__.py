@@ -4,6 +4,7 @@ from contextlib import ContextDecorator
 from .portable import load, save
 from .safetensors import _install_safetensors_shim as _install_safetensors_shim
 from ..fidelity import Fidelity, register_api_bindings
+from .security import add_safe_globals, get_safe_globals, clear_safe_globals, safe_globals
 
 
 # PyTorch 2.6 exposes a process-local allow-list used by its restricted

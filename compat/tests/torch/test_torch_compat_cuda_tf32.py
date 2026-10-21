@@ -6,8 +6,7 @@ deliberately *not* views of the deprecated native overrides
 ``cuda_allow_tf32`` / ``cuda_allow_cudnn_tf32``: an independent Torch frontend
 carries its own (matmul, cuDNN) pair into the ops it builds, and native
 Runtime-following calls keep following the native policy. See
-``docs/notes/float32-precision-policy.md`` and
-``refactor-wip/results/2026-09-08-frontend-precision-isolation.md``.
+``docs/notes/float32-precision-policy.md``.
 
 That makes "did this write take effect?" a question about the library call, not
 about a flag. These tests answer it the only way a stored value cannot fake:

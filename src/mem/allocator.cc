@@ -17,8 +17,10 @@
 #include "mem/allocator/nfef_allocator.h"
 #include "mem/allocator/temp_allocator.h"
 #include "mem/swap.h"
+#include "runtime/async_exec.h"
 #include "runtime/traversal_epoch.h"
 #include <mutex>
+#include <algorithm>
 
 #include "core/var.h"
 
@@ -66,7 +68,7 @@ Allocator* setup_allocator(Allocator* underlying) {
 Allocator* cpu_allocator = setup_allocator<SFRLAllocator>(
     backend_raw_allocator({BackendId::Cpu, 0}, BackendMemoryKind::Device));
 
-DECLARE_FLAG(int, use_cuda_managed_allocator);
+DEFINE_FLAG(int, use_cuda_managed_allocator, 0, "Enable cuda_managed_allocator");
 
 DEFINE_FLAG_WITH_SETTER(int, use_cuda_host_allocator, 1, "use cuda host allocator for cpu memory globally");
 
@@ -173,12 +175,13 @@ Allocator* get_allocator(int device, bool temp_allocator) {
     return get_allocator(target, temp_allocator);
 }
 
-Allocator* get_allocator(Device device, bool temp_allocator) {
+// The allocator a device's memory comes from before any policy layer: the
+// backend's own, device or managed or pinned as the flags say.
+static Allocator* raw_allocator(Device device, bool& temp_allocator) {
 #ifndef HAS_ACCELERATOR
     USER_CHECK(device.backend == BackendId::Cpu)
         << "Accelerator tensor placement requires a registered accelerator backend";
 #endif
-    Allocator* allocator = nullptr;
     if (device.backend != BackendId::Cpu) {
         // A device workspace -- cuDNN's, cuBLASLt's, a sort's -- comes out of
         // the same pool as the tensors, as PyTorch's does. A separate caching
@@ -189,16 +192,18 @@ Allocator* get_allocator(Device device, bool temp_allocator) {
         temp_allocator = false;
     }
 #ifdef HAS_ACCELERATOR
-    if (device.backend != BackendId::Cpu && !allocator) {
+    if (device.backend != BackendId::Cpu) {
         LOGvv << "Using accelerator allocator of device" << device.index;
-        allocator = backend_raw_allocator(device,
+        return backend_raw_allocator(device,
             use_cuda_managed_allocator ? BackendMemoryKind::Managed : BackendMemoryKind::Device);
-    } else
-#endif
-    {
-        allocator = backend_raw_allocator({BackendId::Cpu, 0},
-            use_pinned_host_memory() ? BackendMemoryKind::Pinned : BackendMemoryKind::Device);
     }
+#endif
+    return backend_raw_allocator({BackendId::Cpu, 0},
+        use_pinned_host_memory() ? BackendMemoryKind::Pinned : BackendMemoryKind::Device);
+}
+
+// The policy layers the flags ask for, on top of `allocator`.
+static Allocator* layered_allocator(Allocator* allocator, bool temp_allocator) {
     if (use_stat_allocator==1) {
         LOGvv << "Using stat_allocator";
         allocator = setup_allocator<StatAllocator>(allocator);
@@ -226,7 +231,42 @@ Allocator* get_allocator(Device device, bool temp_allocator) {
     return allocator;
 }
 
+// The executor asks this twice per operator. The layers on top of the
+// backend's allocator depend only on it, the kind and the allocator flags,
+// and a chain once built is never torn down, so the last few chains are kept
+// per thread, each with the flag values it was built under. Building one took
+// a lock and a lookup keyed by a string for every layer. The backend's own
+// allocator is asked every time: a backend table can be replaced (the
+// registry tests install a probe), and that has to take effect at once.
+Allocator* get_allocator(Device device, bool temp_allocator) {
+    Allocator* raw = raw_allocator(device, temp_allocator);
+    struct Entry {
+        Allocator* raw = nullptr;
+        Allocator* allocator = nullptr;
+        int temp = 0, flags[4];
+    };
+    thread_local Entry cache[4];
+    thread_local int next = 0;
+    int flags[4] = {use_stat_allocator, use_nfef_allocator, use_temp_allocator,
+                    use_sfrl_allocator};
+    for (auto& e : cache)
+        if (e.allocator && e.raw == raw && e.temp == (int)temp_allocator
+                && std::equal(flags, flags + 4, e.flags))
+            return e.allocator;
+    Allocator* allocator = layered_allocator(raw, temp_allocator);
+    auto& e = cache[next];
+    next = (next + 1) % 4;
+    e.raw = raw;
+    e.allocator = allocator;
+    e.temp = temp_allocator;
+    std::copy(flags, flags + 4, e.flags);
+    return allocator;
+}
+
 void gc_all() {
+    // After the batch on the worker thread, if any (runtime/async_exec.h): it
+    // allocates and frees as it goes.
+    async_exec_wait();
     // Copy under the lock, collect outside it: `gc()` walks and releases memory
     // and must not hold up every other thread's allocations while it does.
     vector<Allocator*> all;
@@ -262,6 +302,9 @@ static void migrate_empty_var(Var* var, Allocator* allocator) {
 // other. The ring built in var.cc is what makes the group visible here; the
 // group moves into one new block that keeps every member's relative offset.
 static bool migrate_group(Var* var, Allocator* allocator, bool to_gpu) {
+    // The whole move: no member may join, leave or be freed half-way through.
+    std::lock_guard<std::mutex> ring_guard(share_ring_mutex());
+    if (!var->share_next) return false;
     auto* old_allocator = var->allocator;
     auto old_allocation = var->allocation;
     vector<Var*> members;
@@ -281,12 +324,12 @@ static bool migrate_group(Var* var, Allocator* allocator, bool to_gpu) {
             // left the group when that happened; only the ring still says
             // otherwise. It is not an alias any more, so drop it.
             LOGvvvv << "share ring: dropping stale member" << v;
-            share_group_unlink(v);
+            share_group_unlink_locked(v);
         }
     }
     if (members.size() < 2) {
         // nothing is actually aliased: let the caller take the plain path
-        share_group_unlink(var);
+        share_group_unlink_locked(var);
         return false;
     }
     if (!allocator->can_share()) {
@@ -305,7 +348,7 @@ static bool migrate_group(Var* var, Allocator* allocator, bool to_gpu) {
                 << "Var::share_with. Writes through one alias will not be"
                 << "visible through the other.";
         }
-        share_group_unlink(var);
+        share_group_unlink_locked(var);
         return false;
     }
     char* base = (char*)var->mem_ptr;

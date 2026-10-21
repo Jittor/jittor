@@ -78,6 +78,28 @@ class flag_scope(_call_no_record_scope):
         sync_all()
 
     def __enter__(self):
+        jt_flags = self.jt_flags
+        if "use_cuda" not in jt_flags and "use_acl" not in jt_flags:
+            # Most scopes set no device flag -- `no_grad`, `compile_options`
+            # around a `jt.code` -- and for them the device steps below are
+            # no-ops: nothing to push, nothing to flush. This is the same
+            # sequence without them; it runs around every such op.
+            flags_bk = {}
+            self._flags_bk_stack.append([flags_bk, None])
+            try:
+                originals = {key: getattr(flags, key) for key in jt_flags}
+                for k, v in jt_flags.items():
+                    origin = originals[k]
+                    flags_bk[k] = origin
+                    if isinstance(origin, dict):
+                        for ok, ov in origin.items():
+                            if ok not in v:
+                                v[ok] = ov
+                    setattr(flags, k, v)
+            except BaseException:
+                self.__exit__(*_sys.exc_info())
+                raise
+            return
         flags_bk = {}
         # push BEFORE setting anything, so the __exit__ in the except branch
         # below pops this entry and not an enclosing scope's

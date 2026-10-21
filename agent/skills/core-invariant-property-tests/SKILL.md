@@ -29,18 +29,18 @@ description: 给核心 C++（图、liveness 记账、执行器计划）写属性
 
 脚本还报一个下界：179 个核心头文件里有多少个在整个 `tests/` 加 `src/tests` 里
 **没有被任何文件点到名**（当时 14 个）。反过来读不成立——点到名字不等于有断言，
-所以那 14 个是「肯定没测」，剩下的不是「已测」。本波抓到的真缺陷正好落在这 14 个
-里的 `src/ops/tape_op.h`，这不是巧合。
+所以那 14 个是「肯定没测」，剩下的不是「已测」。属性测试抓到的真缺陷正好落在这 14 个
+里的 `src/ops/composite/tape_op.h`，这不是巧合。
 
 ## 1. 最便宜的位置：`src/tests/*.cc` 里的 `JIT_TEST`
 
-**这个位置存在，而且大多数人不知道。** `compiler.py` 的 `gen_jit_tests()` 扫
+**这个位置存在，而且大多数人不知道。** `python/jittor/build/codegen.py` 的 `gen_jit_tests()` 扫
 `src/**/*.cc` 里的 `JIT_TEST(name)`，生成 `// @pyjt(name)` 绑定，于是
 
 - C++ 里写 `JIT_TEST(foo) { ... }`
 - 自动变成 `jt.tests.foo`
 - 自动变成 pytest 节点 `tests/codegen/test_jit_tests.py::TestJitTests::test_foo`
-- `tests/compiler` 已在原生 CPU 门禁里（0.04 之后门禁可达全树），所以**不用改任何
+- `tests/codegen` 在原生 CPU 门禁里（门禁跑整棵 `tests/` 减显式排除），所以**不用改任何
   门禁配置**
 
 成本实测：新增 9 个执行器属性 + 5 个 liveness 属性共 14 条，`--durations=0` 全部
@@ -50,7 +50,7 @@ description: 给核心 C++（图、liveness 记账、执行器计划）写属性
 对比：同一批性质如果从 Python 走真实算子去测，要编 kernel、要缓存、要设备，
 一条就是秒级，而且**排序 bug 会和算术 bug 长得一样**。
 
-代价只有一个：加 `src/` 文件会重编核心（本波 201 → 202 个 TU，约 2 分钟一次）。
+代价只有一个：加 `src/` 文件会重编核心（实测 201 → 202 个 TU，约 2 分钟一次）。
 所以别为了一条断言新建文件，按主题合并。
 
 ### 1.1 合成图：不要用真实算子
@@ -103,7 +103,7 @@ struct PlanProbeOp final : Op {
 
 ## 2. 绝对计数不能断言，要扫增量
 
-`tests/core` 里那几条「存活 Var 数等于 N」在并发下不是稳定量：3.01 实测同一份源码
+`tests/core` 里那几条「存活 Var 数等于 N」在并发下不是稳定量：实测同一份源码
 两次并发跑一次 9 一次 7，串行四轮才 md5 一致。**任何对绝对计数的断言都会变成抖动源。**
 
 改成对**增量**断言，前序状态自动抵消：
@@ -138,7 +138,7 @@ assert after == before
 属性测试的真正价值在这里——**把同一条性质扫过一组只差一个因素的形状**，
 不泄漏的那些就是对照组。
 
-本波实测的定位过程（每步都只改一个因素）：
+一次实测的定位过程（每步都只改一个因素）：
 
 | 形状 | 结果 |
 | --- | --- |
@@ -158,7 +158,7 @@ assert after == before
 **报机制之前先找到那条日志。** 这个泄漏的机制在 stderr 上是明写的：
 
 ```
-[f] node.h:263 Check failed: value_ > 0   backward liveness release without a matching owner
+[f] node.h Check failed: value_ > 0   backward liveness release without a matching owner
 ```
 
 即 `LivenessCounter<backward>::release()` 比 `own()` 多调了一次；抛出的异常被
@@ -171,7 +171,7 @@ assert after == before
 ### 3.1 让悬垂扫描说出它扫了多少
 
 `jt.graph_check()` 会把这两个 Var 直接点名（`ERROR dnode ... Var(...:0:1:0:i0:o0...)`）。
-但注意 6.C21 那个坑：`check_graph=1` 曾经在 release 构建下扫一张空表然后报成功。
+但注意一个坑：`check_graph=1` 曾经在 release 构建下扫一张空表然后报成功。
 修法留下的接口是**返回值**——`graph_check()` 返回扫过的节点数。
 
 于是属性测试必须**同时**断两件事，否则区分不了「校验通过」和「跳过了」：
@@ -201,8 +201,8 @@ def test_dropping_a_graph_leaks_nothing_new(self):
                  if d != KNOWN_LEAKING_SHAPES.get(n, 0)}
     assert offenders == {}
 
-@pytest.mark.xfail(strict=True, reason="2.10: ... 修好之后这条会 XPASS 变红，
-                                        强制回来更新记账")
+@pytest.mark.xfail(strict=True, reason="backward liveness over-release ... 修好之后这条会
+                                        XPASS 变红，强制回来更新记账")
 def test_dropping_a_graph_leaks_nothing_at_all(self):
     """性质本身，不挖任何例外。"""
     assert {n: d for n, d in deltas.items() if d} == {}
@@ -213,8 +213,14 @@ def test_dropping_a_graph_leaks_nothing_at_all(self):
 - 第一条是**门禁的防退化**：新形状开始泄漏、或者泄漏变多，红。它是绿的，所以没人
   需要学会忽略它。
 - 第二条是**性质的真身**，`strict=True`。现在是 xfail；**owner 修好那天它 XPASS，
-  strict 让 XPASS 算失败**，于是记账和那几条点用例被强制一起更新。这比在看板上留
-  一行「待修」可靠，因为它不依赖谁记得。
+  strict 让 XPASS 算失败**，于是记账和那几条点用例被强制一起更新。这比在 issue 里留
+  一句「待修」可靠，因为它不依赖谁记得。缺陷本身同时进问题总账，退出条件写成
+  「这条 xfail 通过、`KNOWN_LEAKING_SHAPES` 清空」。
+- 例外只有一种：缺陷**依赖环境**（例如取决于解释器的 teardown 顺序）时，strict 会在
+  不复现的环境里把一次「没触发」误报成「修好了」。树上的实例就是这样：
+  `tests/core/test_core_invariant_properties.py` 的 `test_dropping_a_graph_leaks_nothing_at_all`
+  是非 strict 的 xfail，泄漏记在 `KNOWN_LEAKING_SHAPES`，缺陷是问题总账的 KI-EXEC-009；
+  这时由第一条和下面那条「钉住机制」的用例守门。
 
 再加一条**钉住机制**的：泄漏量必须恰好是每次 2（一次未匹配的 backward release
 连带它已传播到的那一条出边）。这个数一动，说明机制不是原来那个，
@@ -225,7 +231,7 @@ def test_dropping_a_graph_leaks_nothing_at_all(self):
 `tools/gate_conclusion_diff.py compare` 默认把新增 nodeid 也当差异报，于是
 **加测试的人只能用眼睛扫差异列表**——正是这个工具本来要替掉的习惯。
 
-用 `--expect-new`（本波加的）把它变回退出码：
+用 `--expect-new` 把它变回退出码：
 
 ```bash
 python tools/gate_conclusion_diff.py record --out base.json -- \
@@ -271,7 +277,7 @@ xdist 会等它，花了 300 s 才超时**。要造「丢了一个结论」的�
 
 ## 6. 第一次把一层测试接进门禁时，先假定它有红
 
-把 `src/tests/*.cc` 接进 CPU 门禁，第一次跑就有 4 条红，全是别的分区新写的
+把 `src/tests/*.cc` 接进 CPU 门禁，第一次跑就有 4 条红，全是别人新写的
 native provider registry 用例。这不是意外，是**「零执行」这个审计结论的必然推论**：
 一批测试从没被任何门禁跑过，就没有任何机制保证它们现在是绿的。所以接线之前
 先把这件事排进计划，别把它当成「我的改动搞坏了什么」。
@@ -299,5 +305,5 @@ native provider registry 用例。这不是意外，是**「零执行」这个�
 
 **隔离条目要写清失败的那一句，不是「坏了」。** 每条记下断言位置与失败的表达式
 （例如「`test_op_register.cc:267`，观察者收到的事件过不了自己的 `event.valid()`」），
-并注明为什么不在本波修（比如那个文件属别人的工作集）。修的人拿到的
+并注明为什么不在这次修（比如那个文件属别人的工作集）。修的人拿到的
 是一个坐标，而不是一次重新调查。

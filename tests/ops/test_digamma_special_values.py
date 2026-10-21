@@ -11,13 +11,13 @@ signed zero gives the infinity of the opposite sign, and a NaN propagates.
 Every one of those is a branch, and two of the three used to be compiled away.
 
 Under ``-Ofast`` the CPU kernel answered ``-inf`` for both ``nan`` and ``-0.0``
-(KI-OPS-011, recorded 2026-09-10 against ``scipy.special.digamma``). The cause
+(recorded 2026-09-10 against ``scipy.special.digamma``). The cause
 was not in this function at all: ``-ffast-math`` implies
 ``-ffinite-math-only``, under which ``x == 0`` folds so that ``-0.0`` takes the
 ``copysign(INFINITY, -x)`` path with the wrong sign, and the NaN branch --
 reached only through comparisons that the same promise lets the compiler
 decide statically -- was dropped. Building CPU kernels at ``-O3``
-(KI-BACKEND-005, commit 1e50d76c5) removed the promise and both answers came
+(commit 1e50d76c5) removed the promise and both answers came
 back, which is why this file exists on the other side of that change rather
 than as part of it.
 

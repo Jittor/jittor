@@ -98,6 +98,12 @@ def _flash_scaled_dot_product_attention(query, key, value, attn_mask=None,
     bridge = _bridge()
     if not bridge.enabled():
         return None
+    # Known to have nothing to load: decline as the loader would have, without
+    # the environment reads on the way to it.
+    known_unavailable = getattr(bridge, "known_unavailable", None)
+    if known_unavailable is not None and known_unavailable(template, dtype) \
+            and not bridge.required():
+        return None
     # A short attention trains faster on the math path. The Torch frontend
     # declines those calls itself, and its math fallback dispatches here, so
     # without the same check they reached flash anyway.

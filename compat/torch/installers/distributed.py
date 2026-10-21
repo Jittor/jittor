@@ -15,6 +15,10 @@ import numpy as np
 import jittor as jt
 
 from ..context import registry_for
+from ..checkpoint_state import (
+    get_optimizer_state_dict, set_optimizer_state_dict,
+    get_model_state_dict, set_model_state_dict, get_state_dict, set_state_dict,
+)
 from ..fidelity import Fidelity, register_api_bindings
 from ...diagnostics import EXPECTED, swallowed
 from ...transaction import set_env, set_flag
@@ -235,7 +239,13 @@ def _require_supported_group(group, allow_subgroup=False):
 
 
 def _copy_tensor(dst, src):
-    if hasattr(dst, "update"):
+    # Collective output buffers are mutated, never rebound: Parameters and
+    # detached aliases may share their allocation (for example ZeRO's flat
+    # bf16 model buffer). Keep that allocation through the native copy owner.
+    if isinstance(dst, jt.Var) and dst._storage_is_contiguous():
+        jt.sync_all()
+        dst._copy_into(src)
+    elif hasattr(dst, "update"):
         dst.update(src)
     elif hasattr(dst, "assign"):
         dst.assign(src)
@@ -299,8 +309,11 @@ def _reduce_name(op, reduce_op):
     )
 
 
-def _native_all_gather_flat(tensor):
-    return _collectives._all_gather_shards(tensor.reshape((-1,)))
+def _native_all_gather_flat(tensor, group=None):
+    flat = tensor.reshape((-1,))
+    if group is not None:
+        return _process_group.all_gather(flat, group=group)
+    return _collectives._all_gather_shards(flat)
 
 
 def _native_all_gather_object(object_list, obj, group=None):
@@ -315,14 +328,14 @@ def _native_all_gather_object(object_list, obj, group=None):
     payload = pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL)
     local_length = jt.array(np.asarray([len(payload)], dtype=np.int32))
     lengths = np.asarray(
-        _native_all_gather_flat(local_length).numpy(), dtype=np.int32
+        _native_all_gather_flat(local_length, group=group).numpy(), dtype=np.int32
     ).reshape(-1)
     max_length = int(lengths.max()) if lengths.size else 0
     encoded = np.zeros((max_length,), dtype=np.int32)
     if payload:
         encoded[:len(payload)] = np.frombuffer(payload, dtype=np.uint8).astype(np.int32)
     gathered = np.asarray(
-        _native_all_gather_flat(jt.array(encoded)).numpy(), dtype=np.int32
+        _native_all_gather_flat(jt.array(encoded), group=group).numpy(), dtype=np.int32
     ).reshape(size, max_length)
     for rank, length in enumerate(lengths):
         raw = gathered[rank, :int(length)].astype(np.uint8).tobytes()
@@ -485,7 +498,7 @@ def _all_gather(tensor_list, tensor, group=None, async_op=False):
     if size == 1:
         _copy_tensor(tensor_list[0], tensor)
     else:
-        gathered = _native_all_gather_flat(tensor)
+        gathered = _native_all_gather_flat(tensor, group=group)
         numel = int(np.prod(tuple(int(dim) for dim in tensor.shape)))
         for rank in range(size):
             part = gathered[rank * numel:(rank + 1) * numel].reshape(
@@ -499,7 +512,7 @@ def _all_gather_into_tensor(output_tensor, input_tensor, group=None,
     size = _require_supported_group(group)
     gathered = (
         input_tensor.reshape((-1,)) if size == 1
-        else _native_all_gather_flat(input_tensor)
+        else _native_all_gather_flat(input_tensor, group=group)
     )
     _copy_tensor(output_tensor, gathered.reshape(output_tensor.shape))
     return _collective_result(output_tensor, async_op, issued=size > 1)
@@ -507,7 +520,8 @@ def _all_gather_into_tensor(output_tensor, input_tensor, group=None,
 
 def _broadcast(tensor, src=0, group=None, async_op=False, group_src=None):
     size = _require_supported_group(group)
-    root = int(src if group_src is None else group_src)
+    root = int(src if group_src is None else
+               _api_dist_get_global_rank(group, group_src))
     if size > 1:
         _copy_tensor(tensor, _process_group.get_default_group().broadcast(tensor, root))
     return _collective_result(tensor, async_op, issued=size > 1)
@@ -768,17 +782,6 @@ class FileSystemWriter:
         self.path = path
 
 
-class DefaultSavePlanner:
-    def __init__(self, *a, **k):
-        _checkpoint_sharded_unavailable(
-            "torch.distributed.checkpoint.default_planner.DefaultSavePlanner")
-
-
-class DefaultLoadPlanner:
-    def __init__(self, *a, **k):
-        _checkpoint_sharded_unavailable(
-            "torch.distributed.checkpoint.default_planner.DefaultLoadPlanner")
-
 
 class StateDictOptions:
     def __init__(self, *, full_state_dict=False, cpu_offload=False,
@@ -1014,6 +1017,14 @@ def _set_optimizer_state_dict(model, optimizers, state_dict, *, options=None):
         optimizer.load_state_dict(raw)
 
 
+class GradBucket:
+    """Importable DDP bucket type; native bucket communication is not exposed."""
+
+    def __init__(self, *args, **kwargs):
+        _stub_unimplemented("torch.distributed.GradBucket",
+                            "invent a gradient bucket with no native storage or reduction")
+
+
 class ShardedTensor:
     def __init__(self, *a, **k):
         _checkpoint_sharded_unavailable("torch.distributed._shard.sharded_tensor.ShardedTensor")
@@ -1210,6 +1221,22 @@ def _api_checkpoint_save(*args, **kwargs):
     return _stub_unimplemented('torch.distributed.checkpoint.save', _dcp_save_effect, _dcp_hint, stub_result=None)
 
 
+class DefaultSavePlanner:
+    """Import boundary for callers using FULL, rather than sharded, files."""
+
+    def __init__(self, *args, **kwargs):
+        raise NotImplementedError(
+            "torch.distributed.checkpoint.default_planner.DefaultSavePlanner: "
+            "sharded checkpoint planning is not implemented; use FULL state dicts and torch.save")
+
+
+class DefaultLoadPlanner:
+    def __init__(self, *args, **kwargs):
+        raise NotImplementedError(
+            "torch.distributed.checkpoint.default_planner.DefaultLoadPlanner: "
+            "sharded checkpoint planning is not implemented; use FULL state dicts and torch.load")
+
+
 def _api_checkpoint_fs_write_item(*args, **kwargs):
     return _stub_unimplemented('torch.distributed.checkpoint.filesystem._write_item', _dcp_save_effect, _dcp_hint, stub_result=None)
 
@@ -1319,6 +1346,9 @@ def _install_distributed(g, registry=None):
     dist.DeviceMesh = getattr(dist, "DeviceMesh", _DeviceMesh)
     dist.init_device_mesh = getattr(dist, "init_device_mesh", _init_device_mesh)
     dist.ProcessGroup = _JittorProcessGroup
+    dist.GradBucket = GradBucket
+    _record_unimplemented("torch.distributed.GradBucket",
+                          "invent a gradient bucket with no native storage or reduction")
 
     c10d = _modules.get("torch.distributed.distributed_c10d")
     if c10d is None:
@@ -1495,6 +1525,8 @@ def _install_distributed(g, registry=None):
         Fidelity.APPROXIMATE,
         "Reuses native ProcessGroup, store and collective owners; group, reduction "
         "and backend capability limits and existing Work semantics apply")
+    register_api_bindings(dist, "torch.distributed", ("GradBucket",),
+        Fidelity.UNIMPLEMENTED, "Importable type; construction refuses unavailable native DDP buckets")
     register_api_bindings(dist, "torch.distributed",
         ("send", "recv", "isend", "irecv", "batch_isend_irecv"),
         Fidelity.UNIMPLEMENTED, "Point-to-point communication explicitly rejects nonempty work")

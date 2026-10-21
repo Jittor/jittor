@@ -9,7 +9,7 @@ machine.
 ``Var.squeeze`` itself still takes one axis. Widening it to torch's tuple form
 is a separate change and not a safe drop-in: torch's ``squeeze`` leaves rank 0
 when every axis goes, while Jittor's falls back to ``[1]``, and callers that
-then permute the result behave differently. See KI-SHAPE-001.
+then permute the result behave differently.
 """
 import numpy as np
 import pytest

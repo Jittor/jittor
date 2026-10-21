@@ -25,7 +25,7 @@ void CandidateOp::jit_prepare(JK& jk) {
     jk << "«Tx:" << x->dtype();
     jk << "«Ty:" << y->dtype();
     jk << "«FUNC:" << fail_cond;
-    jk << "«XDIM=" << JK::hex1(x->shape.size());
+    jk << "«XDIM=" << JK::hex(x->shape.size());
 }
 
 #else // JIT

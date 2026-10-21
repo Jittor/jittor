@@ -2,6 +2,9 @@
 
 import numpy as np
 
+from jittor.distributed.fsdp.gradients import (
+    _sync_sharded_grads_from_full_grads as _native_sync_sharded_grads)
+
 import jittor as jt
 
 from . import common, shard

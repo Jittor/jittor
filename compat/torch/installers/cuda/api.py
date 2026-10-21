@@ -235,12 +235,11 @@ class _DeviceProps:
 #: of ``cuda_allow_tf32`` / ``cuda_allow_cudnn_tf32``: those are deprecated
 #: native overrides that can only raise the tier of a native
 #: Runtime-following call, and an independent frontend does not reach into the
-#: native policy in either direction (7.19/7.20; before that these two names
-#: were where a torch write landed). Because the tiers are stored rather than
+#: native policy in either direction (before that ownership change these two
+#: names were where a torch write landed). Because the tiers are stored rather than
 #: pushed to a flag, "the write was accepted and reads back" is not evidence
 #: that it took effect -- what pins that is the compute type the library call
-#: logs. See docs/notes/float32-precision-policy.md and
-#: refactor-wip/results/2026-09-08-frontend-precision-isolation.md.
+#: logs. See docs/notes/float32-precision-policy.md.
 #:
 #: compat/tests/torch/test_torch_backends_tf32.py drives this table;
 #: compat/tests/torch/test_torch_compat_cuda_tf32.py pins each spelling to the

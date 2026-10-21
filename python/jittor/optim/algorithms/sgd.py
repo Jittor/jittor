@@ -2,12 +2,56 @@
 
 import jittor as jt
 
-from ..._runtime.dispatch import register_kernel, select_kernel
+from ..._core.dtypes import dtype_name
+from ..._runtime.dispatch import dispatch_context, register_kernel, select_kernel
 
 from ..base import (
     Optimizer, _grad_matches_param, _param_requires_grad,
     _state_buffer, _update_preserve_dtype, _optimizer_arithmetic,
 )
+
+#: Per-parameter list, parallel to ``params``: whether that parameter's
+#: momentum buffer has had its first real update. It rides along in the
+#: param-group dict, so native ``state_dict``/``load_state_dict`` carry it.
+MOMENTUM_INITIALIZED = "momentum_initialized"
+
+
+def momentum_initialized_flags(pg):
+    """The group's first-touch flags, created (all False) and kept aligned.
+
+    The first momentum update of a buffer is a property of that buffer, not
+    of the optimizer or the param group: a parameter unfrozen late, one that
+    had no gradient in earlier steps, or any parameter when momentum is
+    switched on mid-training all reach their first momentum update after the
+    group has already stepped. Keying the seeding on the group's step count
+    sent those buffers through the dampened recurrence from zero.
+    """
+    params = pg.get("params", [])
+    flags = pg.get(MOMENTUM_INITIALIZED)
+    if not isinstance(flags, list):
+        flags = pg[MOMENTUM_INITIALIZED] = [False] * len(params)
+    while len(flags) < len(params):
+        flags.append(False)
+    del flags[len(params):]
+    return flags
+
+
+def _torch_scaled_product(value, alpha):
+    with jt.flag_scope(amp_reg=0):
+        coefficient = jt.array(alpha, dtype="float32").stop_grad()
+        return (value.float32() * coefficient).cast(value.dtype).stop_fuse()
+
+
+def _torch_scaled_add(value, other, alpha):
+    """CUDA low-precision scaled addition: float32 opmath, one output cast.
+
+    This policy is deliberately CUDA-only. Torch CPU vector blocks and scalar
+    tails round differently; native CPU arithmetic remains unchanged.
+    """
+    with jt.flag_scope(amp_reg=0):
+        coefficient = jt.array(alpha, dtype="float32").stop_grad()
+        return (value.float32() + other.float32() * coefficient).cast(value.dtype).stop_fuse()
+
 
 def sgd_update(param, grad, velocity, *, lr, momentum=0, weight_decay=0,
                dampening=0, nesterov=False):
@@ -41,7 +85,7 @@ def _momentum_buffer(param):
     return _state_buffer(param).contiguous().stop_grad()
 
 
-def _acl_fused_sgd_updates(entries, lr, momentum, weight_decay, dampening, nesterov):
+def _acl_fused_sgd_updates(entries, lr, momentum, weight_decay, dampening, nesterov, step=1):
     """One op for the whole parameter list.
 
     The portable update is five elementwise passes per parameter, and on ACL
@@ -55,7 +99,7 @@ def _acl_fused_sgd_updates(entries, lr, momentum, weight_decay, dampening, neste
     velocities = [entry[2] for entry in entries]
     new_parameters, new_velocities = fused_sgd_acl(
         parameters, velocities, gradients, lr, momentum, weight_decay,
-        dampening, nesterov)
+        dampening, nesterov, step)
     return list(zip(new_parameters, new_velocities))
 
 
@@ -82,7 +126,7 @@ class SGD(Optimizer):
         optimizer.step(loss)
     """
     def __init__(self, params, lr, momentum=0, weight_decay=0, dampening=0, nesterov=False,
-                 fused=None):
+                 fused=None, torch_math=False):
         super().__init__(params, lr)
         # None means "wherever a backend publishes a fused update"; only ACL
         # does, and only for the dtypes its kernels cover, so everything else
@@ -92,12 +136,16 @@ class SGD(Optimizer):
         self.weight_decay = weight_decay
         self.dampening = dampening
         self.nesterov = nesterov
+        # Explicit frontend precision policy; native SGD keeps its historical
+        # expression and fused-kernel selection unless requested by a caller.
+        self.torch_math = torch_math
 
         # initialize required arguments
         for pg in self.param_groups:
             values = pg["values"] = []
             for p in pg["params"]:
                 values.append(_momentum_buffer(p))
+            pg[MOMENTUM_INITIALIZED] = [False] * len(pg["params"])
 
     def add_param_group(self, group):
         values = group["values"] = []
@@ -105,11 +153,40 @@ class SGD(Optimizer):
             values.append(_momentum_buffer(p))
         super().add_param_group(group)
 
+    def load_state_dict(self, state):
+        super().load_state_dict(state)
+        defaults = state.get("defaults") if isinstance(state, dict) else None
+        if not isinstance(defaults, dict):
+            # Not the native layout (e.g. a torch-format dict under the
+            # compatibility layer, which sets the flags from its own state).
+            return
+        saved_groups = defaults.get("param_groups") or []
+        for pg, saved in zip(self.param_groups, saved_groups):
+            if MOMENTUM_INITIALIZED in saved:
+                momentum_initialized_flags(pg)
+                continue
+            # A state written before the per-buffer flags existed. It cannot
+            # say which buffers were ever touched (a zero buffer may be
+            # untouched or a legitimate result), so resume exactly as the
+            # writing version would have: it seeded only when the group's
+            # own step counter was about to reach 1 (``n_step`` saved as 0),
+            # and before ``n_step`` existed it never seeded at all.
+            legacy = int(saved.get("n_step", 1)) >= 1
+            pg[MOMENTUM_INITIALIZED] = [legacy] * len(pg.get("params", []))
+
     def step(self, loss=None, retain_graph=False):
         from jittor._runtime import step_capture
         self.pre_step(loss, retain_graph=retain_graph)
         jt.flags.node_order = 1
         for pg in self.param_groups:
+            # Counts optimizer steps (not backward calls), like Adam's own
+            # bias-correction counter (Optimizer._advance_step_count). Kept for
+            # state compatibility; whether a buffer's update is its first is
+            # decided per parameter by `initialized` below, not by this count.
+            # Nothing reads it into the update, so unlike
+            # `_advance_step_count` it does not refuse step capture.
+            pg["n_step"] = int(pg.get("n_step", 0)) + 1
+            initialized = momentum_initialized_flags(pg)
             # get arguments from each param_groups
             lr = pg.get("lr", self.lr)
             momentum = pg.get("momentum", self.momentum)
@@ -123,18 +200,26 @@ class SGD(Optimizer):
             # lr. Keeping it costs a full write and read of every parameter, and
             # this is the default configuration -- on a ViT training step the
             # fused update kernel was 17% of the whole step, against 6% for the
-            # same update in PyTorch. `dampening` still scales the update here
-            # even at momentum 0 (unlike torch, where it only applies inside the
-            # momentum branch), so the shortcut is limited to dampening 0 rather
-            # than quietly changing that. `v` is then left at whatever it held;
+            # same update in PyTorch. `v` is then left at whatever it held;
             # turning momentum on later resumes from zeros, which is what this
             # optimizer has always started from.
-            active = [(p, g, v) for p, g, v in zip(pg["params"], pg["grads"], pg["values"])
-                      if _param_requires_grad(p) and _grad_matches_param(p, g)]
-            if not active:
+            active_index = [i for i, (p, g) in enumerate(zip(pg["params"], pg["grads"]))
+                            if _param_requires_grad(p) and _grad_matches_param(p, g)]
+            if not active_index:
                 continue
+            active = [(pg["params"][i], pg["grads"][i], pg["values"][i]) for i in active_index]
+            uses_momentum = not (momentum == 0 and not nesterov)
+            if not uses_momentum:
+                # Dampening only scales momentum's recurrence. The fused ACL
+                # kernel applied it to the plain update as well.
+                dampening = 0
             fused = None
-            if pg.get("fused", getattr(self, "fused", None)) is not False:
+            requested_fused = pg.get("fused", getattr(self, "fused", None))
+            requested_foreach = pg.get("foreach", getattr(self, "foreach", None))
+            if requested_fused and requested_foreach:
+                raise RuntimeError("`fused` and `foreach` cannot be `True` together.")
+            if (requested_fused is not False
+                    and (requested_fused is True or requested_foreach is not False)):
                 # Momentum-free is considered too. That shortcut is a single
                 # pass, but it is a single pass *per parameter*: two elementwise
                 # ops and a holder rebind, 96 times for an 8-layer transformer,
@@ -169,25 +254,47 @@ class SGD(Optimizer):
                                        pg.get("weight_decay", self.weight_decay),
                                        pg.get("dampening", self.dampening),
                                        pg.get("nesterov", self.nesterov)))
-                updates = fused(active, rate, momentum, weight_decay, dampening, nesterov)
-                for (p, _, v), (new_p, new_v) in zip(active, updates):
-                    # Without momentum the velocity buffer holds nothing the
-                    # step needs, and a kernel that keeps it updates it in
-                    # place, so it is handed back as the same Var: rebinding it
-                    # would be a holder write per parameter for no reason.
-                    if new_v is not v:
-                        _update_preserve_dtype(v, new_v)
-                    _update_preserve_dtype(p, new_p)
-                continue
-            # Baked into the graph as numbers; a captured step re-captures
-            # when they change.
-            step_capture.guard(lambda pg=pg: (pg.get("lr", self.lr), pg.get("momentum", self.momentum),
-                                              pg.get("weight_decay", self.weight_decay),
-                                              pg.get("dampening", self.dampening),
-                                              pg.get("nesterov", self.nesterov)))
-            for p, g, v in active:
-                # `p * 0 + g` is a whole extra pass over the parameter.
-                _update_preserve_dtype(p, sgd_update(
-                    p, g, v, lr=lr, momentum=momentum, weight_decay=weight_decay,
-                    dampening=dampening, nesterov=nesterov))
+                # The fused kernels take one first-step switch per launch, so
+                # buffers seeding now and buffers continuing their recurrence
+                # go in separate launches (`step` 1 and 2). Without momentum
+                # the switch is unused and the list stays one launch.
+                batches = [active_index]
+                if uses_momentum:
+                    batches = [[i for i in active_index if not initialized[i]],
+                               [i for i in active_index if initialized[i]]]
+                for step, batch in zip((1, 2), batches):
+                    if not batch:
+                        continue
+                    entries = [(pg["params"][i], pg["grads"][i], pg["values"][i]) for i in batch]
+                    updates = fused(entries, rate, momentum, weight_decay, dampening, nesterov, step)
+                    for (p, _, v), (new_p, new_v) in zip(entries, updates):
+                        # Without momentum the velocity buffer holds nothing
+                        # the step needs, and a kernel that keeps it updates it
+                        # in place, so it is handed back as the same Var:
+                        # rebinding it would be a holder write per parameter
+                        # for no reason.
+                        if new_v is not v:
+                            _update_preserve_dtype(v, new_v)
+                        _update_preserve_dtype(p, new_p)
+            else:
+                # Baked into the graph as numbers; a captured step re-captures
+                # when they change.
+                step_capture.guard(lambda pg=pg: (pg.get("lr", self.lr), pg.get("momentum", self.momentum),
+                                                  pg.get("weight_decay", self.weight_decay),
+                                                  pg.get("dampening", self.dampening),
+                                                  pg.get("nesterov", self.nesterov), self.torch_math))
+                for i, (p, g, v) in zip(active_index, active):
+                    # `p * 0 + g` is a whole extra pass over the parameter.
+                    _update_preserve_dtype(p, sgd_update(
+                        p, g, v, lr=lr, momentum=momentum, weight_decay=weight_decay,
+                        dampening=dampening, nesterov=nesterov,
+                        momentum_initialized=initialized[i], torch_math=self.torch_math))
+            if uses_momentum:
+                # Whether a buffer seeds is baked into the step too (which
+                # launch it is in, or which formula): a captured seeding step
+                # must not be replayed once the buffers are initialized. Read
+                # before the flags flip, so the next step re-captures.
+                step_capture.guard(lambda pg=pg: tuple(momentum_initialized_flags(pg)))
+                for i in active_index:
+                    initialized[i] = True
         self.post_step()

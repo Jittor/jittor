@@ -17,11 +17,25 @@ import numpy as np
 
 
 from _paths import REPO_ROOT as ROOT, RUNTIME_ROOT as RUNTIME, WORK_ROOT as WORKDIR
-JT_SITE = pathlib.Path(
-    "/home/zy/miniconda3/envs/jt311/lib/python3.11/site-packages"
-).resolve()
-RT_SITE = pathlib.Path("/home/zy/rt_venv/lib/python3.11/site-packages").resolve()
 EXPECTED_TRANSFORMERS_VERSION = "4.56.2"
+
+
+def _required_site(name: str, meaning: str) -> pathlib.Path:
+    """A site-packages directory the caller must name; there is no default."""
+    value = os.environ.get(name)
+    if not value:
+        raise SystemExit("set %s to %s" % (name, meaning))
+    path = pathlib.Path(value).resolve()
+    if not path.is_dir():
+        raise SystemExit("%s=%s is not a directory" % (name, value))
+    return path
+
+
+#: site-packages holding Transformers 4.56.2 and its Python dependencies (the
+#: shim interpreter's site); both backends load Transformers from here.
+JT_SITE_ENV = "JITTOR_PERF_JT_SITE"
+#: site-packages of the independent real PyTorch + torchvision (the oracle).
+RT_SITE_ENV = "JITTOR_PERF_RT_SITE"
 
 
 def _setup_env() -> None:
@@ -45,7 +59,12 @@ def _prepend_path(path: pathlib.Path) -> None:
 
 
 def _import_stack(backend: str):
+    JT_SITE = _required_site(
+        JT_SITE_ENV, "the site-packages directory holding Transformers %s"
+        % EXPECTED_TRANSFORMERS_VERSION)
     if backend == "torch":
+        RT_SITE = _required_site(
+            RT_SITE_ENV, "the site-packages directory of the real PyTorch and torchvision")
         _prepend_path(RT_SITE)
         import torch  # type: ignore
         import torchvision  # type: ignore
@@ -58,7 +77,7 @@ def _import_stack(backend: str):
             raise RuntimeError(
                 f"expected real torchvision from {RT_SITE}, got {torchvision_file}"
             )
-        # torch is now pinned in sys.modules. Put jt311 first only for Transformers
+        # torch is now pinned in sys.modules. Put JT_SITE first only for Transformers
         # and its Python dependencies; this cannot replace the already-loaded
         # torch/torchvision modules.
         _prepend_path(JT_SITE)

@@ -874,6 +874,17 @@ static unordered_set<string> unary_ops = {
     "conj",
 };
 
+VarPtr UnaryOp::forward_before_construct(Var* x, NanoString op) {
+    if (op != x->dtype()) return VarPtr();
+    // Counted as the op the constructor used to build and discard: automatic
+    // flushes and module-boundary cuts are placed by this count, and they have
+    // to fall where they fell. Without it every identity cast moved the later
+    // cuts by one -- a DDPM UNet training step batched differently and ran
+    // 3.6% slower at 32 MiB more peak memory.
+    Op::number_of_created_ops++;
+    return VarPtr(x);
+}
+
 UnaryOp::UnaryOp(Var* x, NanoString op) : x(x) {
     set_flag(OpFlags::_cpu);
     set_flag(OpFlags::_cuda);
@@ -908,9 +919,15 @@ UnaryOp::UnaryOp(Var* x, NanoString op) : x(x) {
         NanoVector axes;
         vector<VarPtr> sources;
         if (storage_layout_operands({x}, axes, sources)) {
-            auto result = make_unary(sources[0], ns == ns_cast ? dtype : ns);
-            forward(storage_view_transpose(result, axes));
-            return;
+            if (!storage_layout_records_grad({x})) {
+                auto result = make_unary(sources[0], ns == ns_cast ? dtype : ns);
+                forward(storage_view_transpose(result, axes));
+                return;
+            }
+            StorageLayoutForwardScope scope;
+            layout_value = storage_view_transpose(
+                make_unary(sources[0], ns == ns_cast ? dtype : ns), axes);
+            set_type(OpType::other);
         }
     }
     y = create_output(nullptr, dtype);
@@ -929,11 +946,19 @@ UnaryOp::UnaryOp(Var* x, NanoString op) : x(x) {
 }
 
 VarPtr UnaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
+    if (layout_value && v_index >= 1) return nullptr;
     if (x->dtype().is_complex()) {
         // Complex autograd (verified vs real torch 2.12): only the linear / conjugate
         // unaries are implemented. Others return nullptr (loud no-grad, never silent-wrong).
         if (ns == ns_cast && y->dtype().is_float())
             return make_unary(dout, x->dtype());  // d(real-cast z) -> real dout + 0j
+        if (ns == ns_cast && y->dtype().is_complex())
+            // complex64<->complex128 precision cast: linear (a coordinate-wise
+            // real/imag width change), so the adjoint is just casting the
+            // incoming cotangent back to x's own width -- same shape as the
+            // real float32<->float64 cast backward below (ns_cast, !is_complex
+            // branch), generalized to complex.
+            return make_unary(dout, x->dtype());
         if (ns == ns_negative) return make_unary(dout, ns_negative);  // d(-z) -> -dout
         if (ns == ns_conj) return make_unary(dout, ns_conj);          // d(conj z) -> conj(dout)
         if (ns == ns_abs) {
@@ -1054,11 +1079,20 @@ VarPtr UnaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     // dcosh(x) = sinh(x)
     if (ns == ns_cosh)
         return make_binary(dout, make_unary(x, ns_sinh), ns_multiply);
-    // dtanh(x) = 1/cosh^2(x)
+    // Differentiate the saved, rounded output. Recomputing cosh(x) both
+    // changes the low-precision derivative and overflows for saturated FP16
+    // inputs. CPU low-precision kernels use FP32 opmath; CUDA follows the
+    // low-precision scalar arithmetic at each operation. The ordinary graph
+    // through out preserves higher-order derivatives on both backends.
     if (ns == ns_tanh) {
-        auto cosx = make_unary(x, ns_cosh);
-        auto cos2x = make_binary(cosx, cosx, ns_multiply);
-        return make_binary(dout, cos2x, ns_divide);
+        bool low_precision = x->dtype() == ns_float16 || x->dtype() == ns_bfloat16;
+        bool promote = low_precision && execution_backend() == BackendId::Cpu;
+        VarPtr value = promote ? make_unary(out, ns_float32) : VarPtr(out);
+        VarPtr incoming = promote ? make_unary(dout, ns_float32) : VarPtr(dout);
+        auto square = make_binary(value, value, ns_multiply);
+        auto factor = make_binary(make_number(1, value), square, ns_subtract);
+        auto result = make_binary(incoming, factor, ns_multiply);
+        return promote ? make_unary(result, x->dtype()) : result;
     }
 
     // dasinh(x) = 1/sqrt(x^2+1)
@@ -1120,16 +1154,30 @@ VarPtr UnaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 }
 
 void UnaryOp::infer_shape() {
+    if (layout_value) {
+        if (_inputs.size() == 1) add_inputs(vector<Var*>{layout_value.ptr});
+        y->set_shape(layout_value->shape);
+        y->storage_strides = layout_value->storage_strides;
+        ASSERT(y->dtype() == layout_value->dtype())
+            << "Layout propagation changed unary output dtype";
+        y->share_with(layout_value);
+        return;
+    }
     y->set_shape(x->shape);
 }
 
+void UnaryOp::run() {
+    ASSERT(layout_value && y->mem_ptr == layout_value->mem_ptr);
+}
+
 void UnaryOp::jit_prepare(JK& jk) {
+    if (layout_value) return;
     bool strided = !x->is_contiguous();
     jk << "«Tx:" << x->dtype()
         << "«Ty:" << y->dtype()
         << "«OP:" << ns
-        << "«DIM=" << JK::hex1(x->shape.size())
-        << "«XSTRIDED=" << JK::hex1(strided);
+        << "«DIM=" << JK::hex(x->shape.size())
+        << "«XSTRIDED=" << JK::hex(strided);
     // Only when it is read, so a contiguous operand keeps the key it had.
     if (strided) jk << "«XSMASK=" << JK::hex(x->stride_pattern());
 }

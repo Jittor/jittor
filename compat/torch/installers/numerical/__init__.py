@@ -1103,9 +1103,9 @@ register_fidelity(
     "torch.stft",
     stft,
     Fidelity.APPROXIMATE,
-    "matches Torch CPU NumPy STFT values for supported real waveforms; "
-    "gradient, device, window dtype, and return_complex=False semantics are "
-    "not implemented",
+    "native STFT on the input's device with waveform/window gradients and "
+    "complex64 or real/imag output; CPU and CUDA verified; float16, bfloat16 "
+    "and float64 inputs are transformed in float32 and return complex64",
 )
 
 def _bind_missing(target, name, implementation):
@@ -1350,6 +1350,9 @@ def install_parity(ctx):
     import jittor.linalg as linalg
     from ...namespace import native_module_facade
     linalg = native_module_facade(linalg, "torch.linalg")
+    # torch's solve takes `left=`/`out=`; the native one is the left solve.
+    from .linalg import solve
+    linalg.solve = solve
     registry.publish("torch.linalg", linalg)
     g.linalg = linalg
 

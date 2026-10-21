@@ -62,6 +62,10 @@ class TestOutOfMemoryMessage(unittest.TestCase):
         self.assertIn("MiB", message, "the refused size is not reported")
         self.assertIn("free of", message, "what the device had is not reported")
         self.assertIn("device", message, "the device is not named")
+        self.assertIn("4.0 TiB", message)
+        # 4 TiB is more than any card has: no batch size or flag makes it fit.
+        self.assertIn("larger than the whole device", message)
+        self.assertNotIn("reduce the batch size", message)
         self.assertNotEqual(
             "cudaMalloc failed", message.strip(),
             "the message regressed to the bare form")

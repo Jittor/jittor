@@ -1,6 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2023 Jittor. All Rights Reserved. 
-// Maintainers: Dun Liang <randonlang@gmail.com>. 
+// Copyright (c) 2023 Jittor. All Rights Reserved.
+// Maintainers: Dun Liang <randonlang@gmail.com>.
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -16,7 +16,7 @@ namespace jittor {
 static auto make_reduce = op_constructor<VarPtr, Var*, NanoString, uint, uint>("reduce");
 static auto make_broadcast = op_constructor<VarPtr, Var*, Var*, uint, uint>("broadcast_to");
 static auto make_broadcast2 = op_constructor<VarPtr, Var*, NanoVector, uint, uint>("broadcast_to");
-    
+
 BroadcastToOp::BroadcastToOp(Var* x, Var* y, NanoVector dims) : x(x), y(y) {
     auto count = dims.size();
     // forward x if don't need broadcast
@@ -35,7 +35,7 @@ BroadcastToOp::BroadcastToOp(Var* x, Var* y, NanoVector dims) : x(x), y(y) {
     for (auto dim : dims) {
         if (dim<0) dim += ydim;
         USER_CHECK(dim>=0 && dim<ydim) << "Wrong dims number:" << dims;
-        bcast_mask |= 1 << dim; 
+        bcast_mask |= 1u << dim;
     }
 }
 
@@ -88,7 +88,7 @@ BroadcastToOp::BroadcastToOp(Var* x, NanoVector shape, NanoVector dims) : x(x), 
     for (auto dim : dims) {
         if (dim<0) dim += ydim;
         USER_CHECK(dim>=0 && dim<ydim) << "Wrong dims number:" << dims;
-        bcast_mask |= 1 << dim;
+        bcast_mask |= 1u << dim;
     }
 }
 
@@ -126,9 +126,9 @@ void BroadcastToOp::infer_shape() {
     auto ydim = yshapes.size();
     auto count = __builtin_popcount(bcast_mask&~keepdims_mask);
     auto zdim = std::max(uint64(xdim), uint64(ydim-count)) + count;
-    
+
     #ifdef _WIN32
-    int64 zz[10];
+    int64 zz[NanoVector::max_tensor_rank];
     #else
     int64 zz[zdim];
     #endif
@@ -197,7 +197,7 @@ void BroadcastToOp::infer_shape() {
         set_type(OpType::broadcast);
     }
     z->set_flag(VarFlags::_is_scalar, x->flag(VarFlags::_is_scalar));
-    LOGvvv << "Broadcast x(" >> x >> ") shape" << yshapes << "-> z(" >> z >> ")"; 
+    LOGvvv << "Broadcast x(" >> x >> ") shape" << yshapes << "-> z(" >> z >> ")";
 }
 
 void BroadcastToOp::jit_prepare(JK& jk) {
@@ -206,7 +206,7 @@ void BroadcastToOp::jit_prepare(JK& jk) {
     // one-element form does generate code, and needs its key.
     if (!expand_is_view)
         jk << "«Tx:" << x->dtype()
-            << "«DIM=" << JK::hex1(z->shape.size())
+            << "«DIM=" << JK::hex(z->shape.size())
             << "«BCAST=" << JK::hex(bcast_mask);
 }
 

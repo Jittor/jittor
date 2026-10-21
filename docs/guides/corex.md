@@ -6,18 +6,25 @@
 
 ## 配置安装路径
 
-把 `COREX_HOME` 指向厂商 SDK 根目录。探测代码只查找 `$COREX_HOME/bin/clang++`，
-**不创建目录、不加载库、不修改编译选项**。
+把 `COREX_HOME` 指向厂商 SDK 根目录（不设时按 `/usr/local/corex`）。探测代码只查找
+`$COREX_HOME/bin/clang++`，**不创建目录、不加载库、不修改编译选项**。
+
+provider 住在后端包的 `__init__` 里（checkout 中的 `backends/corex/`，安装后是
+`jittor.backends.corex`）。探测本身不依赖 Jittor 运行时，所以在 checkout 里可以直接
+加载那个模块，连核心都不必编译：
 
 ```bash
 export COREX_HOME=/opt/corex
-PYTHONPATH="$PWD/python" python - <<'PY'
-from jittor.extern.corex.corex_compiler import discover
+PYTHONPATH="$PWD/python:$PWD/backends" python - <<'PY'
+from corex import discover
 result = discover()
 print(result)
 raise SystemExit(0 if result.available else 1)
 PY
 ```
+
+已安装的环境里对应 `from jittor.backends.corex import discover`——那条路径会先导入
+Jittor 本体。
 
 做离线契约测试时，建一个只含 `bin/clang++` 的临时目录即可（假的可执行文件就够）。
 返回的结果对象会报告解析出的 home、编译器路径、可用性和一个稳定的原因字符串。
@@ -31,8 +38,10 @@ PY
 
 ```bash
 export COREX_HOME=/path/to/corex
-export JITTOR_HOME=/tmp/jittor-corex-home
-export TMPDIR=/tmp/jittor-corex-tmp
+export JITTOR_LAB_ROOT="${JITTOR_LAB_ROOT:-$(cd .. && pwd)/jittor-lab}"
+export JITTOR_HOME="$JITTOR_LAB_ROOT/_state/corex/jittor-home"
+export TMPDIR="$JITTOR_LAB_ROOT/_state/corex/tmp"
+mkdir -p "$JITTOR_HOME" "$TMPDIR"
 export CUDA_VISIBLE_DEVICES=<分配到的设备>
 PYTHONPATH="$PWD/python" python -m pytest -q \
   tests/backends/corex/test_corex_discovery.py

@@ -4,6 +4,8 @@ Installation publishes these objects. Native delegates belong to InstallContext;
 Function input/output bookkeeping belongs to each native one-shot call context.
 """
 import contextlib
+import threading
+from collections import deque
 import jittor as jt
 import numpy as np
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
@@ -148,6 +150,22 @@ def _call_record_inputs(self, *args, **kw):
     except EXPECTED as exc:
         swallowed("torch/installers/autograd.py _call_record_inputs: ctx.needs_input_grad = tuple(", exc)
         ctx.needs_input_grad = tuple(isinstance(v, jt.Var) for v in args)
+    # Torch custom Functions own their backward edge even when forward()
+    # returns input.detach(). Clear the stop-grad bit before Jittor tapes the
+    # output, or DeepSpeed ZeRO-3's backward-hook wrapper loses that edge.
+    if any(ctx.needs_input_grad) and not jt.flags.no_grad:
+        execute = ctx.execute
+
+        def execute_with_grad(*forward_args, **forward_kw):
+            result = execute(*forward_args, **forward_kw)
+            values = result if isinstance(result, (tuple, list)) else (result,)
+            for value in values:
+                if isinstance(value, jt.Var) and _jittor_dtype_name(
+                        value.dtype).startswith(("float", "bfloat", "complex")):
+                    value.start_grad()
+            return result
+
+        ctx.execute = execute_with_grad
     out = ctx._run_call(*args, **kw)
     # Capture each forward OUTPUT's (shape, dtype) so the grad bridge can
     # materialize a zeros grad for outputs that don't reach the backward'd
@@ -216,6 +234,8 @@ def grad(outputs, inputs, grad_outputs=None, retain_graph=None,
     # via sum(grad_outputs * output), matching torch's vector-Jacobian product.
     outs = _as_list(outputs)
     ins = _as_list(inputs)
+    if any(not o._has_gradient_edge() for o in outs):
+        raise RuntimeError("Tensor does not require grad and does not have a grad_fn")
     if grad_outputs is None:
         # torch: "grad can be implicitly created only for scalar outputs".
         # This used to sum every output element, i.e. silently assume a
@@ -243,7 +263,8 @@ def grad(outputs, inputs, grad_outputs=None, retain_graph=None,
             "materialize_grads=True, but got: allow_unused=False.")
     allow_unused = bool(materialize_grads) if allow_unused is None \
         else bool(allow_unused)
-    gs = list(jt.core.grad_optional(loss, ins, rg))
+    with _backward_callbacks():
+        gs = list(jt.core.grad_optional(loss, ins, rg))
     missing = [i for i, value in enumerate(gs) if value is None]
     if missing and materialize_grads:
         for i in missing:
@@ -406,10 +427,35 @@ def kineto_available():
     return False
 
 
+_callback_tasks = threading.local()
+
+
+@contextlib.contextmanager
+def _backward_callbacks():
+    """Drain successful graph-task callbacks after gradients are published."""
+    stack = getattr(_callback_tasks, "stack", None)
+    if stack is None:
+        stack = _callback_tasks.stack = []
+    callbacks = deque()
+    stack.append(callbacks)
+    try:
+        yield
+        while callbacks:
+            callbacks.popleft()()
+    finally:
+        stack.pop()
+        callbacks.clear()
+
+
 class _Engine:
     @staticmethod
-    def queue_callback(*args, **kwargs):
-        return None
+    def queue_callback(callback):
+        stack = getattr(_callback_tasks, "stack", ())
+        if not stack:
+            raise RuntimeError("Final callbacks can only be installed during backward pass.")
+        if not callable(callback):
+            raise TypeError("backward callback must be callable")
+        stack[-1].append(callback)
 
 
 class Variable:

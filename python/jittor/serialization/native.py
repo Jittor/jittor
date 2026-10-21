@@ -100,7 +100,7 @@ def save(params_dict, path: str):
     ''' saves the parameter dictionary to a file.
 
     :param params_dict: parameters to be saved
-    :type params_dict: list or dictionary
+    :type params_dict: list or dict
     :param path: file path
     :type path: str
     '''

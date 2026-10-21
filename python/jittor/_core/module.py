@@ -1,6 +1,8 @@
 """Native Module ownership, parameter roles and module traversal."""
 from typing import List, Tuple
 from collections import OrderedDict
+from collections.abc import MutableMapping
+import weakref
 import itertools
 import numpy as np
 from builtins import int as ori_int
@@ -90,7 +92,7 @@ _VIEW_ROLES = {
 _WALK_CHILDREN = {}
 
 
-def _walk(module, recurse=True):
+def _walk(module, recurse=True, memo=None):
     """``(prefix, module)`` in ``dfs`` pre-order, produced as it goes.
 
     ``dfs`` fills a list through callbacks, so ``next(model.named_parameters())``
@@ -100,8 +102,18 @@ def _walk(module, recurse=True):
     generators. The root's own key never appears in a prefix.
     """
     todo = [("", module, recurse)]
+    ancestors = set()
     while todo:
         prefix, current, descend = todo.pop()
+        if descend is None:
+            ancestors.remove(id(current))
+            continue
+        if id(current) in ancestors:
+            continue
+        if memo is not None:
+            if current in memo:
+                continue
+            memo.add(current)
         children = _WALK_CHILDREN.get(type(current).dfs)
         if children is None:
             yield from _walk_by_dfs(current, prefix, descend)
@@ -109,6 +121,8 @@ def _walk(module, recurse=True):
         yield prefix, current
         if descend:
             dot = prefix + "." if prefix else ""
+            ancestors.add(id(current))
+            todo.append(("", current, None))
             for key, child in reversed(children(current)):
                 todo.append((dot + str(key), child, True))
 
@@ -125,9 +139,89 @@ def _walk_by_dfs(module, prefix, recurse):
     module.dfs([], None, callback, callback_leave, recurse)
     return visited
 
+class _ModuleChildren(MutableMapping):
+    """Live child registration view; attributes remain the sole value owner."""
+    def __init__(self, owner):
+        self._owner = weakref.ref(owner)
+
+    def _module(self):
+        owner = self._owner()
+        if owner is None:
+            raise ReferenceError("module registration view has lost its owner")
+        return owner
+
+    def __iter__(self):
+        attributes = vars(self._module())
+        placeholders = attributes.get("_module_none_names", ())
+        return iter(tuple(name for name, value in attributes.items()
+                          if isinstance(value, Module)
+                          or (value is None and name in placeholders)))
+
+    def __len__(self):
+        return sum(1 for _ in self)
+
+    def __getitem__(self, name):
+        owner = self._module()
+        attributes = vars(owner)
+        if name not in attributes:
+            raise KeyError(name)
+        value = attributes[name]
+        if isinstance(value, Module) or (value is None and name in
+                                        attributes.get("_module_none_names", ())):
+            return value
+        raise KeyError(name)
+
+    def __setitem__(self, name, value):
+        if not isinstance(name, str):
+            raise TypeError("module name must be a string")
+        if not name or "." in name:
+            raise KeyError("module name must be nonempty and cannot contain '.'")
+        if value is not None and not isinstance(value, Module):
+            raise TypeError("registered child must be a Module or None")
+        owner = self._module()
+        if value is None:
+            vars(owner).setdefault("_module_none_names", set()).add(name)
+        setattr(owner, name, value)
+
+    def __delitem__(self, name):
+        self[name]
+        owner = self._module()
+        delattr(owner, name)
+        vars(owner).get("_module_none_names", set()).discard(name)
+
+    def __reduce__(self):
+        # Detached serialization is a snapshot, not a weak view of a temporary
+        # unpickled owner. Module.__setstate__ creates its own live view.
+        return dict, (dict(self),)
+
+    def __copy__(self):
+        return dict(self)
+
+    def __deepcopy__(self, memo):
+        from copy import deepcopy
+        result = {}
+        memo[id(self)] = result
+        for name, value in self.items():
+            result[name] = deepcopy(value, memo)
+        return result
+
+
 class Module:
     def __init__(self, *args, **kw):
-        pass
+        # Some consumers access __dict__ directly after super().__init__.
+        self._modules
+
+    def __getstate__(self):
+        state = vars(self).copy()
+        if "_modules" in state:
+            state["_modules"] = None
+        return state
+
+    def __setstate__(self, state):
+        vars(self).update(state)
+        if "_modules" in state:
+            vars(self).pop("_modules", None)
+            self._modules
     def execute(self, *args, **kw):
         ''' Executes the module computation.
 
@@ -155,9 +249,13 @@ class Module:
             flags = globals()["_FLAGS"] = jittor.flags
             globals()["_auto_replay_for"] = \
                 __import__("jittor._runtime.graph_replay", fromlist=["x"]).auto_replay_for
-        if not flags.auto_graph_replay:
-            return self._dispatch_call(*args, **kw)
-        replay = _auto_replay_for(self, args, kw)
+        # The depth is kept with the policy off too: submodules at depth 1
+        # are what the native module call takes without the Python dispatch
+        # (see `shortcut` in py_module_call.cc), and with the depth left at 0
+        # every one of BERT-base's 218 module calls went through it: its
+        # inference graph took 4.1 ms of host time to build, 3.6 with the
+        # depth kept.
+        replay = _auto_replay_for(self, args, kw) if flags.auto_graph_replay else None
         Module._call_depth = 1
         try:
             if replay is not None:
@@ -502,9 +600,9 @@ class Module:
         '''
         return list(self._iter_named_modules())
 
-    def _iter_named_modules(self):
+    def _iter_named_modules(self, memo=None):
         ''' `named_modules` as a generator, for a caller that may stop early. '''
-        for name, module in _walk(self):
+        for name, module in _walk(self, memo=memo):
             if isinstance(module, Module):
                 yield name, module
 
@@ -514,7 +612,11 @@ class Module:
 
     @property
     def _modules(self):
-        return { k:v for k,v in self.__dict__.items() if isinstance(v, Module) }
+        attributes = vars(self)
+        view = attributes.get("_modules")
+        if not isinstance(view, _ModuleChildren) or view._owner() is not self:
+            view = attributes["_modules"] = _ModuleChildren(self)
+        return view
 
     @property
     def _parameters(self):
@@ -523,7 +625,8 @@ class Module:
         # so accelerate's `is_buffer = name in module._buffers` was True for the
         # weights too. write-through: accelerate's `module._parameters[name] = value`
         # has to reach the attribute (see _WriteThroughDict).
-        return _WriteThroughDict(self, self._named_vars("parameters", recurse=False))
+        return _WriteThroughDict(
+            self, self._named_vars("parameters", recurse=False, remove_duplicate=False))
 
     def requires_grad_(self, requires_grad=True):
         ''' Sets requires_grad for all parameters and sub-modules.
@@ -543,10 +646,7 @@ class Module:
         # propagate to every parameter leaf (recurse through sub-modules), matching
         # torch.nn.Module.requires_grad_.
         for p in self.parameters():
-            try:
-                p.requires_grad = requires_grad
-            except Exception:
-                pass
+            p.requires_grad = requires_grad
         return self
 
     #: Hook ids come from one counter, so a handle names exactly one hook even
@@ -834,9 +934,12 @@ Returns a handle that removes both halves.
     def children(self) -> List:
         ''' Returns an List of the children modules. '''
         cd = []
+        seen = set()
         def callback(parents, k, v, n):
             if len(parents) == 1 and isinstance(v, Module):
-                cd.append(v)
+                if id(v) not in seen:
+                    cd.append(v)
+                    seen.add(id(v))
                 return False
         self.dfs([], None, callback, None)
         return cd
@@ -880,6 +983,7 @@ Returns a handle that removes both halves.
         from jittor.compiler import LOG
         from .var import array
         n_failed = 0
+        mismatched = []
         for key in params.keys():
             v = self
             key_ = key.split('.')
@@ -922,8 +1026,16 @@ Returns a handle that removes both halves.
                     v.update(param)
                     v.sync(False, False)
                 else:
-                    n_failed += 1
-                    LOG.e(f'load parameter {key} failed: expect the shape of {key} to be {v.shape}, but got {param.shape}')
+                    mismatched.append(
+                        f"size mismatch for {key}: copying a param with shape "
+                        f"{list(param.shape)} from checkpoint, the shape in "
+                        f"current model is {list(v.shape)}.")
+        # A value of the wrong shape cannot be loaded at all; carrying on would
+        # leave that parameter at its initialisation without anyone noticing.
+        if mismatched:
+            raise RuntimeError(
+                f"Error(s) in loading state_dict for {type(self).__name__}:\n\t"
+                + "\n\t".join(mismatched))
         if n_failed:
             LOG.w(f"load total {len(params)} params, {n_failed} failed")
 
@@ -967,18 +1079,15 @@ Returns a handle that removes both halves.
         This method also supports loading a state dict from a pytorch .pth file.
 
         .. note::
-            当载入的参数与模型定义不一致时, jittor 会输出错误信息, 但是不会抛出异常.
-            若载入参数出现模型定义中没有的参数名, 则会输出如下信息, 并忽略此参数:
+            若载入参数出现模型定义中没有的参数名, jittor 会输出如下警告, 并忽略此参数:
 
             >>> [w 0205 21:49:39.962762 96 __init__.py:723] load parameter w failed ...
+            >>> [w 0205 21:49:39.962906 96 __init__.py:741] load total 100 params, 1 failed
 
-            若载入参数的 shape 与模型定义不一致, 则会输出如下信息, 并忽略此参数:
+            若载入参数的 shape 与模型定义不一致, 则抛出 RuntimeError, 列出所有不一致的参数:
 
-            >>> [e 0205 21:49:39.962822 96 __init__.py:739] load parameter w failed: expect the shape of w to be [1000,100,], but got [3,100,100,]
-
-            如载入过程中出现错误, jittor 会输出概要信息, 您需要仔细核对错误信息
-
-            >>> [w 0205 21:49:39.962906 96 __init__.py:741] load total 100 params, 3 failed
+            >>> RuntimeError: Error(s) in loading state_dict for Net:
+            >>>     size mismatch for w: copying a param with shape [3, 100, 100] from checkpoint, the shape in current model is [1000, 100].
         '''
         from jittor.serialization.native import load
         self.load_parameters(load(path))
@@ -1068,6 +1177,11 @@ Returns a handle that removes both halves.
             p.update(p.mpi_broadcast(root))
 
     def __setattr__(self, key, value):
+        attributes = self.__dict__
+        if value is None and isinstance(attributes.get(key), Module):
+            attributes.setdefault("_module_none_names", set()).add(key)
+        elif value is not None:
+            attributes.get("_module_none_names", set()).discard(key)
         if isinstance(value, Var) and not key.startswith("_"):
             attrs = self.__dict__
             buffers = attrs.get("_buffer_names", ())
@@ -1107,17 +1221,14 @@ Returns a handle that removes both halves.
         # parameters()/named_parameters() can no longer tell it's a buffer and it
         # leaks into the optimizer (then weight-decay corrupts e.g. rope inv_freq).
         # Name-based tracking survives any Var replacement -- the torch invariant.
-        try:
-            self.__dict__.setdefault("_buffer_names", set()).add(key)
-            non_persistent = self.__dict__.setdefault(
-                "_non_persistent_buffer_names", set()
-            )
-            if persistent:
-                non_persistent.discard(key)
-            else:
-                non_persistent.add(key)
-        except Exception:
-            pass
+        self.__dict__.setdefault("_buffer_names", set()).add(key)
+        non_persistent = self.__dict__.setdefault(
+            "_non_persistent_buffer_names", set()
+        )
+        if persistent:
+            non_persistent.discard(key)
+        else:
+            non_persistent.add(key)
         self.__dict__.setdefault("_parameter_names", set()).discard(key)
         self.__dict__.setdefault("_non_parameter_names", set()).discard(key)
         object.__setattr__(self, key, value)
@@ -1129,7 +1240,8 @@ Returns a handle that removes both halves.
         # torch's ``_buffers``. write-through so accelerate's
         # `module._buffers[name] = value` (the is_buffer branch of
         # set_module_tensor_to_device) persists to the module attribute.
-        return _WriteThroughDict(self, self._named_vars("buffers", recurse=False))
+        return _WriteThroughDict(
+            self, self._named_vars("buffers", recurse=False, remove_duplicate=False))
 
     def named_buffers(self, recurse=True):
         ''' Returns a list of (name, buffer) for all registered buffers.

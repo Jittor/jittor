@@ -18,7 +18,7 @@
 namespace jittor {
 
 #ifndef JIT
-CurandRandomOp::CurandRandomOp(NanoVector shape, NanoString dtype, NanoString type) {
+CurandRandomOp::CurandRandomOp(NanoVector shape, NanoString dtype, NanoString type, RandomGenerator* generator) {
     set_flag(OpFlags::_cuda, 1);
     // The CUDA RNG kernel generates float and double only. jt.random() lowers
     // float16 and bfloat16 to a float32 draw followed by a cast.
@@ -28,6 +28,24 @@ CurandRandomOp::CurandRandomOp(NanoVector shape, NanoString dtype, NanoString ty
     output = create_output(shape, dtype);
     this->type = type;
     USER_CHECK(type == ns_normal || type == ns_uniform);
+    if (generator) {
+        // Raw 32-bit values per output value: a double takes two. Normal
+        // values (Box-Muller) and doubles are produced in pairs, and an odd
+        // count still consumes the whole last pair. Must match
+        // philox_random_kernel below. Reserving here makes the stream
+        // position a property of issue order, so get_state() between two
+        // draws covers the first even while it has not executed yet.
+        int64 num = output->num;
+        int64 per_value = dtype == ns_float64 ? 2 : 1;
+        bool pairs = type == ns_normal || dtype == ns_float64;
+        int64 values = pairs ? num + (num & 1) : num;
+        int64 raw;
+        // Unreachable for any allocatable output (more than 2^62 values).
+        ASSERT(!__builtin_mul_overflow(values, per_value, &raw));
+        from_generator = true;
+        philox_seed = (uint64)generator->state->seed_;
+        philox_offset = (uint64)generator->state->reserve_cuda(raw);
+    }
 }
 
 void CurandRandomOp::jit_prepare(JK& jk) {

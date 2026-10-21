@@ -2,7 +2,7 @@
 
 import jittor as jt
 from ..._core.dtypes import dtype_name
-from ..._runtime.dispatch import register_kernel, select_kernel
+from ..._runtime.dispatch import dispatch_context, register_kernel, select_kernel
 
 from ..base import (
     Optimizer, _grad_matches_param, _param_requires_grad,

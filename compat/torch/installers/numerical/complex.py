@@ -42,18 +42,29 @@ def is_complex(input):
     return _is_complex_value(input)
 
 
+def _real_imag_types():
+    # jittor-core-gaps.md §3.4: a BatchedVar (native jt.vmap's wrapper,
+    # python/jittor/vmap.py) is neither a ComplexNumber nor a jt.Var, so it
+    # fell through to the "not complex" branch below -- `real(bv)` silently
+    # returned `bv` itself unchanged (mislabeled as "the real part") and
+    # `imag(bv)` silently returned an all-zero result even for a genuinely
+    # complex bv. BatchedVar.real/.imag already delegate correctly
+    # (vmap.py's _apply_real/_apply_imag); this was purely a recognition
+    # gap in this compat alias, not a missing native batching rule.
+    from . import jt
+    from jittor.vmap import BatchedVar
+    return (jt.nn.ComplexNumber, jt.Var, BatchedVar)
+
+
 def real(input):
-    from . import (
-        jt,
-    )
-    return input.real if isinstance(input, (jt.nn.ComplexNumber, jt.Var)) else input
+    return input.real if isinstance(input, _real_imag_types()) else input
 
 
 def imag(input):
     from . import (
         jt,
     )
-    return input.imag if isinstance(input, (jt.nn.ComplexNumber, jt.Var)) else jt.zeros_like(input)
+    return input.imag if isinstance(input, _real_imag_types()) else jt.zeros_like(input)
 
 
 def conj(input):

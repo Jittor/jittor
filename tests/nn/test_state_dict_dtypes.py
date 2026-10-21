@@ -16,12 +16,12 @@ side ``load_state_dict`` then either refuses the entry or keeps the float copy.
 conversions have to describe the same tensors.
 """
 
-import importlib.util
 import unittest
 
 import numpy as np
 
 import jittor as jt
+from _helpers import torch_runtime
 
 
 def _torch_name_is_importable():
@@ -34,12 +34,12 @@ def _torch_name_is_importable():
     shim is a perfectly good subject for these assertions, and skipping on it
     would leave the conversion untested in exactly the environment that has it.
     """
-    if "torch" in __import__("sys").modules:
-        return True
-    try:
-        return importlib.util.find_spec("torch") is not None
-    except (ImportError, ValueError):
-        return False
+    module = __import__("sys").modules.get("torch")
+    if module is not None:
+        # A module imported from a same-named directory (a namespace package)
+        # is not an owner of the name; see `torch_runtime.installed_spec`.
+        return not torch_runtime._is_namespace_spec(getattr(module, "__spec__", None))
+    return torch_runtime.installed_spec("torch") is not None
 
 
 def _as_numpy(t):

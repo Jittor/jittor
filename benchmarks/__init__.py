@@ -1,1 +1,1 @@
-"""ASV performance regression benchmarks for Jittor."""
+"""Repository benchmark suites; each suite owns its execution protocol."""

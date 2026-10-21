@@ -9,9 +9,8 @@ Op sources end their JIT body with statements like
 
     (void)count, (void)rcount, (void)yshape0, (void)ystride0;
 
-(``ops/reduce_op.cc``; ``ops/transpose_op.cc`` and ``ops/fuse_transpose_op.cc``
-do the same). They exist to silence an unused-variable warning when the file is
-compiled normally. In the generated kernel they must not count as uses -- every
+(``ops/reduce_op.cc``; ``ops/fuse_transpose_op.cc`` does the same). They exist
+to silence an unused-variable warning when the file is compiled normally. In the generated kernel they must not count as uses -- every
 variable named there would otherwise survive dead-code elimination -- and they
 must not be emitted.
 
@@ -63,10 +62,12 @@ class TestVoidDiscardElimination(unittest.TestCase):
         """Only fused ops run the pass pipeline, so only they strip the marker.
 
         ``transpose`` is compiled on its own -- ``OpCompiler`` runs PassManager
-        only when the op is a fused op -- so its ``(void)xshape0;`` reaches the
-        C++ compiler, where it means what it says and costs nothing. Pinned so
-        that the difference reads as a fact about where the pass runs rather
-        than as an inconsistency.
+        only when the op is a fused op -- so its statements reach the C++
+        compiler exactly as the template expanded them. Its body has no
+        discard marker any more (the strides are read at run time, so no
+        shape variable goes unused); an untouched statement stands in for it.
+        Pinned so that the difference reads as a fact about where the pass
+        runs rather than as an inconsistency.
         """
         a = jt.random([32, 48])
         a.sync()
@@ -74,7 +75,8 @@ class TestVoidDiscardElimination(unittest.TestCase):
         got, source = self._fused_source(
             lambda: jt.transpose(a, [1, 0]).data, 3)
         np.testing.assert_allclose(got, expected, rtol=1e-5)
-        self.assertIn("(void)xshape0;", source)
+        self.assertIn(
+            "index_t xstride0 = x->storage_stride(axes[0]);", source)
 
 
 if __name__ == "__main__":

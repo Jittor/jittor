@@ -37,9 +37,12 @@ class TestErrorMsg(unittest.TestCase):
         assert "???" in msg, msg
         assert "in:  int32[3,]" in msg, msg
         assert "op: code" in msg, msg
-        assert "[Async Backtrace]:" in msg, msg
+        # Without tracing, the line that built the operator still comes from
+        # the origin every op records at construction.
+        assert "The failing operator was created at: " + __file__ + ":" in msg, msg
         # The reason now precedes the machinery rather than following it.
         assert msg.index("???") < msg.index("op: code"), msg
+        assert msg.startswith("???"), msg
 
     @jt.flag_scope(trace_py_var=3)
     def test_error_msg_trace_py_var(self):

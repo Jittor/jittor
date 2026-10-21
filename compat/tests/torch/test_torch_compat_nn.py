@@ -136,6 +136,28 @@ class TestActivations(Base):
 
         both_devices(body)
 
+    def test_log_softmax_dtype_argument_and_module(self):
+        # F.log_softmax(..., dtype=) casts before the op, like F.softmax; the
+        # native function has no dtype parameter and rejected the keyword.
+        x = self.x.astype("float16")
+        upcast = x.astype("float32")
+        ref = upcast - np.log(np.exp(upcast).sum(-1, keepdims=True))
+        def body(dev):
+            half = torch.tensor(x, device=dev)
+            for name, out in (
+                    ("F", F.log_softmax(half, dim=-1, dtype=torch.float32)),
+                    ("F positional", F.log_softmax(half, -1, 3, torch.float32)),
+                    ("torch", torch.log_softmax(half, -1, dtype=torch.float32)),
+                    ("Tensor", half.log_softmax(-1, dtype=torch.float32))):
+                self.assertEqual(out.dtype, torch.float32, f"{name} dtype {dev}")
+                self.assertEqual(out.device.type, dev, f"{name} device {dev}")
+                self.ac(out.numpy(), ref, atol=1e-5, msg=f"{name} log_softmax {dev}")
+            module = nn.LogSoftmax(dim=-1)
+            self.ac(module(half.float()).numpy(), ref, atol=1e-5,
+                    msg=f"LogSoftmax module {dev}")
+            self.assertEqual(F.log_softmax(half, dim=-1).dtype, torch.float16, dev)
+        both_devices(body)
+
     @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_large_last_dim_softmax_and_log_softmax(self):
         rng = np.random.RandomState(17)

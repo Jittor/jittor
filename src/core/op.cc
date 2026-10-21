@@ -8,6 +8,8 @@
 
 #include "core/node.h"
 #include "core/op.h"
+#include <algorithm>
+#include <unordered_set>
 #include "core/var.h"
 #include "codegen/op_compiler.h"
 #include "runtime/profiler/profiler.h"
@@ -25,6 +27,8 @@
 #include "utils/graph_build_profile.h"
 
 namespace jittor {
+
+DECLARE_FLAG(bool, no_grad);
 
 DECLARE_FLAG(string, cache_path);
 
@@ -47,8 +51,13 @@ std::atomic<int64> Op::number_of_created_ops{0};
 
 // Only Ops with disabled inputs have an entry. Node flag bits record whether
 // an Op has already snapshotted and provide the common no-map-lookup fast path.
-static unordered_map<int64, vector<int64>>& requires_grad_disabled_edges() {
-    static auto* edges = new unordered_map<int64, vector<int64>>();
+struct DisabledGradientEdge {
+    int64 source_id;
+    bool unrecorded_view;
+};
+
+static unordered_map<int64, vector<DisabledGradientEdge>>& requires_grad_disabled_edges() {
+    static auto* edges = new unordered_map<int64, vector<DisabledGradientEdge>>();
     return *edges;
 }
 
@@ -56,8 +65,17 @@ bool lookup_requires_grad_disabled_edge(Node* source, Node* target) {
     auto& edges = requires_grad_disabled_edges();
     auto found = edges.find(target->id);
     if (found == edges.end()) return false;
-    for (int64 source_id : found->second)
-        if (source_id == source->id) return true;
+    for (const auto& edge : found->second)
+        if (edge.source_id == source->id) return true;
+    return false;
+}
+
+bool lookup_unrecorded_view_edge(Node* source, Node* target) {
+    auto& edges = requires_grad_disabled_edges();
+    auto found = edges.find(target->id);
+    if (found == edges.end()) return false;
+    for (const auto& edge : found->second)
+        if (edge.source_id == source->id && edge.unrecorded_view) return true;
     return false;
 }
 
@@ -101,6 +119,7 @@ const OpDef& Op::definition() const {
 }
 
 static thread_local int execution_target_override = -1;
+static thread_local bool host_execution_forced = false;
 
 BackendId execution_target_backend() {
     return execution_target_override < 0
@@ -121,6 +140,12 @@ ExecutionBackendScope::ExecutionBackendScope(BackendId backend)
 
 ExecutionBackendScope::~ExecutionBackendScope() { execution_target_override = previous; }
 
+HostExecutionScope::HostExecutionScope() : previous(host_execution_forced) {
+    host_execution_forced = true;
+}
+
+HostExecutionScope::~HostExecutionScope() { host_execution_forced = previous; }
+
 TensorPlacement Op::graph_placement() const {
     for (const auto& edge : _outputs) {
         Var* output = edge.node->var();
@@ -136,17 +161,25 @@ BackendId Op::requested_backend() const {
 }
 
 BackendId Op::execution_backend() const {
+    if (PREDICT_BRANCH_NOT_TAKEN(host_execution_forced)) return BackendId::Cpu;
     const auto requested = requested_backend();
     return flag(OpFlags::_cuda) && requested != BackendId::Cpu
         ? requested : BackendId::Cpu;
 }
 
 const OpImplementation& Op::implementation() const {
-    const auto& owner = definition();
     const auto backend = execution_backend();
+    static_assert(alignof(OpImplementation) >= 8, "the backend id is kept in the low bits");
+    const uintptr_t cached = implementation_cache.load(std::memory_order_relaxed);
+    if (cached && (cached & 7) == (uintptr_t)backend)
+        return *reinterpret_cast<const OpImplementation*>(cached & ~uintptr_t(7));
+    const auto& owner = definition();
     auto found = owner.implementations.find(backend);
     USER_CHECK(found != owner.implementations.end())
         << "No kernel registered for" << owner.name << "on" << backend_ops(backend).name;
+    static_assert((uintptr_t)BackendId::Corex < 8, "backend ids fit the low three bits");
+    implementation_cache.store(reinterpret_cast<uintptr_t>(&found->second) | (uintptr_t)backend,
+                               std::memory_order_relaxed);
     return found->second;
 }
 
@@ -329,13 +362,17 @@ void Op::init() {
     bind_definition(false);
     bool first_init = !flag(OpFlags::_requires_grad_snapshot);
     bool has_disabled_input = false;
+    bool has_unrecorded_view_input = false;
     bool has_first_order_only_input = false;
     bool all_inputs_stopped = _inputs.size() != 0;
     if (first_init) {
         set_flag(OpFlags::_requires_grad_snapshot);
         for (Var* v : inputs()) {
+            v->refresh_alias_requires_grad();
+            if (!no_grad && !is_stop_grad()) v->check_alias_history();
             bool disabled = v->flag(VarFlags::_requires_grad_disabled);
             has_disabled_input |= disabled;
+            has_unrecorded_view_input |= v->flag(VarFlags::_unrecorded_view);
             has_first_order_only_input |=
                 v->flag(VarFlags::_first_order_only);
             // Under torch's rule a Python scalar never asks for a gradient,
@@ -347,12 +384,13 @@ void Op::init() {
                 || (autograd_policy.stop_outputs_when_inputs_stopped
                     && is_constant_scalar(v));
         }
-        if (has_disabled_input) {
+        if (has_disabled_input || has_unrecorded_view_input) {
             set_flag(OpFlags::_requires_grad_disabled);
             auto& sources = requires_grad_disabled_edges()[id];
             for (Var* v : inputs())
-                if (v->flag(VarFlags::_requires_grad_disabled))
-                    sources.push_back(v->id);
+                if (v->flag(VarFlags::_requires_grad_disabled)
+                        || v->flag(VarFlags::_unrecorded_view))
+                    sources.push_back({v->id, bool(v->flag(VarFlags::_unrecorded_view))});
         }
     }
     infer_shape();
@@ -386,6 +424,70 @@ void Op::init() {
                 v->set_stop_grad();
             }
         }
+    }
+}
+
+void order_after_readers(Op* op, const vector<Var*>& written) {
+    // A view of a written var reads it wherever its own readers do, so their
+    // readers count too: an output still asking to share its storage
+    // (`share_src`) or one already in its share ring -- a broadcast's expand
+    // that has run and left the graph, whose consumer has not.
+    vector<Var*> aliases;
+    auto alias = [&](Var* v) {
+        if (std::find(aliases.begin(), aliases.end(), v) == aliases.end())
+            aliases.push_back(v);
+    };
+    for (Var* v : written) alias(v);
+    vector<Node*> after;
+    for (size_t k = 0; k < aliases.size(); k++) {
+        Var* v = aliases[k];
+        if (v->share_next)
+            for (Var* member = v->share_next; member != v; member = member->share_next)
+                alias(member);
+        for (Op* reader : v->outputs()) {
+            if (reader == op) continue;
+            bool stands_for_reader = false;
+            for (Var* out : reader->outputs()) {
+                if (out->share_src == v) {
+                    alias(out);
+                    continue;
+                }
+                // A pending reader: its first unfinished output stands for it.
+                if (stands_for_reader || out->is_finished()) continue;
+                stands_for_reader = true;
+                if (std::find(after.begin(), after.end(), out) == after.end())
+                    after.push_back(out);
+            }
+        }
+    }
+    if (after.empty()) return;
+    // A reader upstream of the op -- the forward a gradient is computed
+    // from -- is ordered already by the data it feeds it, and an edge would
+    // only keep its output alive until the update: a captured step, whose
+    // whole forward is pending when the optimizer is built, held every
+    // activation to the end, half as much memory again.
+    std::unordered_set<Op*> upstream;
+    vector<Node*> stack;
+    for (auto& edge : op->_inputs) stack.push_back(edge.node);
+    while (!stack.empty()) {
+        Node* v = stack.back();
+        stack.pop_back();
+        if (v->is_finished()) continue;
+        Op* producer = ((Var*)v)->input();
+        if (!producer || !upstream.insert(producer).second) continue;
+        for (auto& edge : producer->_inputs) stack.push_back(edge.node);
+    }
+    size_t kept = 0;
+    for (Node* out : after)
+        if (!upstream.count(((Var*)out)->input())) after[kept++] = out;
+    after.resize(kept);
+    if (after.empty()) return;
+    op->add_inputs(after);
+    // Control edges: they order the two ops and carry no data.
+    auto edge = op->_inputs.end();
+    for (size_t i = 0; i < after.size(); i++) {
+        edge = std::prev(edge);
+        edge->reverse().index = -1;
     }
 }
 

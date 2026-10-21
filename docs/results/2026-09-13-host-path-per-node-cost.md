@@ -1,10 +1,15 @@
 # 主机受限步长：把每算子的 Python 开销从图构建里拿掉
 
-- Status: Done（Python 路径）；C++ 侧的每节点成本与 `perf/matmul-rank` 仍在查
-- Date: 2026-09-13
-- Baseline commit: `48055a75`（分支 `perf/host-path`），其下的基线是 `d40a2e97`
-- Owner: 元算子/计算图性能
-- Review when: 前端再加一层派发，或 `auto_flush_ops` 的默认值变化
+- 状态：Python 路径已完成；C++ 侧的每节点成本与 `perf/matmul-rank` 仍在查；这一叠改动在
+  冷 reference cache 下的设备级故障（见文末「未解决」）未修
+- 日期：2026-09-13
+- 基线提交：`48055a75`（分支 `perf/host-path`），其下的基线是 `d40a2e97`
+- 验证范围：单张 CUDA 卡，卡型原文未记（同一基线的[元算子报告](2026-09-12-cuda-metaop-launch-index-scalar.md)记为 H20）；
+  构图微基准在 `auto_flush_ops=0` 下测，端到端 decode/prefill/b8s256 在默认
+  `auto_flush_ops=128` 下测；`tests/runtime`、`tests/ops`、`tests/nn` 的选定文件与
+  `tests/autograd` 全量与分支起点逐 nodeid 对比
+- 维护者：Jittor 核心维护者（元算子/计算图性能）
+- 复查条件：前端再加一层派发，或 `auto_flush_ops` 的默认值变化
 
 ## 问题
 
@@ -256,9 +261,9 @@ cache 热了之后 CPU 那一半根本不跑。而 **`source_fingerprint()` 覆�
 
 | 树 | 卡 | 第 6 号 `test_affine_grid` |
 | --- | --- | --- |
-| `d40a2e97` 未改基线 | GPU 7 | 通过（整份文件 11 failed，是已知红灯） |
-| `d40a2e97` 未改基线 | GPU 1 | 通过（`......FF..FFFF` 正是基线花样） |
-| 带这一叠的任意树（`perf/host-path`、`perf/metaop-broadcast`） | GPU 1 / GPU 7 | **失败**，其后全部连带 |
+| `d40a2e97` 未改基线 | 卡 A | 通过（整份文件 11 failed，是已知红灯） |
+| `d40a2e97` 未改基线 | 卡 B | 通过（`......FF..FFFF` 正是基线花样） |
+| 带这一叠的任意树（`perf/host-path`、`perf/metaop-broadcast`） | 卡 A / 卡 B | **失败**，其后全部连带 |
 
 所以既不是卡，也不是门禁框架，**是树**。而且它早于今晚的工作：今晚的两个提交
 各自相对自己的分支起点都是逐 nodeid 干净的，但**分支起点本身不干净**。

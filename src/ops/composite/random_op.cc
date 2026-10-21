@@ -16,14 +16,14 @@
 namespace jittor {
 
 #ifndef JIT
-RandomOp::RandomOp(NanoVector shape, NanoString dtype, NanoString type) {
+RandomOp::RandomOp(NanoVector shape, NanoString dtype, NanoString type, RandomGenerator* generator) {
     #ifdef HAS_ACCELERATOR
     const auto backend = construction_target_backend();
     if (backend != BackendId::Cpu) {
-        auto accelerated_random = find_op_capability<VarPtr, NanoVector, NanoString, NanoString>(
-            backend, OpCapability::Random, shape, dtype, type);
+        auto accelerated_random = find_op_capability<VarPtr, NanoVector, NanoString, NanoString, RandomGenerator*>(
+            backend, OpCapability::Random, shape, dtype, type, generator);
         if (accelerated_random) {
-            auto var = accelerated_random(shape, dtype, type);
+            auto var = accelerated_random(shape, dtype, type, generator);
             forward(var);
             return;
         }
@@ -31,6 +31,7 @@ RandomOp::RandomOp(NanoVector shape, NanoString dtype, NanoString type) {
     #endif
     output = create_output(shape, dtype);
     this->type = type;
+    if (generator) this->gen = generator->state;
     USER_CHECK(type == ns_normal || type == ns_uniform);
     #ifdef HAS_ACCELERATOR
     // No capability op, but the backend may run `random` itself -- ACL does,
@@ -50,7 +51,7 @@ void RandomOp::jit_prepare(JK& jk) {
 #else // JIT
 #ifdef JIT_cpu
 void RandomOp::jit_run() {
-    auto* generator = get_random_engine();
+    auto* generator = gen ? &gen->cpu_engine : get_random_engine();
     @if(@strcmp(@R,uniform)==0,
         std::uniform_real_distribution<T> distribution(0.0,1.0);,
         std::normal_distribution<T> distribution(0.0,1.0);

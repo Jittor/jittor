@@ -60,14 +60,20 @@ def compile(model=None, *args, **kwargs):
         return lambda value: compile(value, *args, **kwargs)
     if not _wants_replay(kwargs.get("mode"), kwargs.get("options")):
         return model
+    from jittor._runtime.graph_replay import release_auto_replay
     if isinstance(model, jt.nn.Module):
         if isinstance(model, OptimizedModule):
             return model
+        release_auto_replay(model)
         cls = _compiler_context().state.get("nn_class_adapter", _identity)(OptimizedModule)
         return cls(model)
     from jittor._runtime.step_capture import StepCapture
     if isinstance(model, StepCapture) or not callable(model):
         return model
+    owner = getattr(model, "__self__", None)
+    if isinstance(owner, jt.nn.Module):
+        # A method of a module -- Transformers compiles `model.__call__`.
+        release_auto_replay(owner)
     # A function -- typically a whole training step, forward, backward and
     # optimizer update -- is captured and replayed as one graph.
     return StepCapture(model)
@@ -167,6 +173,66 @@ class OptimizedModule(jt.nn.Module):
         if orig is None or name.startswith("__"):
             raise AttributeError(name)
         return getattr(orig, name)
+
+
+class QuantStub(jt.nn.Module):
+    """``torch.ao.quantization.QuantStub``: identity until a model is converted.
+
+    Eager models (and remote Transformers code) build these stubs whether or
+    not quantization is requested. Jittor ships no AO observers, fake-quant or
+    convert pass, so the stubs stay what torch's are before ``convert``: the
+    identity. Nothing here pretends to quantize.
+    """
+
+    def __init__(self, qconfig=None):
+        super().__init__()
+        self.qconfig = qconfig
+
+    def execute(self, x):
+        return x
+
+    def forward(self, x):
+        return self.execute(x)
+
+
+class DeQuantStub(QuantStub):
+    """``torch.ao.quantization.DeQuantStub``: identity until converted."""
+
+
+class FloatFunctional(jt.nn.Module):
+    """``torch.ao.nn.quantized.FloatFunctional``: float ops behind named methods.
+
+    Used in place of operators so a quantization pass can attach observers;
+    before any such pass the methods are the plain float operations.
+    """
+
+    def forward(self, x):
+        raise RuntimeError("FloatFunctional is not intended to use the 'forward'. "
+                           "Please use the underlying operation")
+
+    def execute(self, x):
+        return self.forward(x)
+
+    def add(self, x, y):
+        return x + y
+
+    def add_scalar(self, x, y):
+        return x + y
+
+    def mul(self, x, y):
+        return x * y
+
+    def mul_scalar(self, x, y):
+        return x * y
+
+    def cat(self, x, dim=0):
+        return jt.concat(list(x), dim=dim)
+
+    def add_relu(self, x, y):
+        return jt.nn.relu(x + y)
+
+    def matmul(self, x, y):
+        return jt.matmul(x, y)
 
 
 class OperatorExportTypes:
@@ -395,6 +461,11 @@ def _api_jit_is_tracing():
 
 def _api_jit_interface(c):
     return c
+
+
+def _api_jit_attribute(value, type=None):
+    # TorchScript's attribute annotation; outside scripting it is the value.
+    return value
 
 
 def _api_fx_wrap(f=None, *a, **k):
@@ -657,6 +728,7 @@ def install(ctx):
     # in eager execution; Jittor has no separate scripting compiler.
     _jit.Attribute = lambda value, _type: value
     _jit.interface = _api_jit_interface
+    _jit.Attribute = _api_jit_attribute
     try:
         from typing import Final as _Final
     except ImportError:  # Python 3.7

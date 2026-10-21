@@ -1,6 +1,6 @@
 """Count nested def/class/lambda inside each Torch-compat installer.
 
-The 7.03 task is "one module-level first-class object per Torch API", and the
+The target shape is "one module-level first-class object per Torch API", and the
 measurable form of that is this count: an installer that still defines its APIs
 inline cannot have module-level identity for them, and the objects cannot be
 imported or unit-tested without running a full install first. Zero means the
@@ -9,7 +9,7 @@ installer only binds.
 Run from the repo root:
 
     python agent/skills/torch-api-cohort-promotion/count_installer_closures.py
-    python agent/skills/torch-api-cohort-promotion/count_installer_closures.py --only nn.py tensor.py
+    python agent/skills/torch-api-cohort-promotion/count_installer_closures.py --only module_methods.py methods.py
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ def main(argv=None):
         help="directory to scan (default: the compat tree)")
     parser.add_argument(
         "--only", nargs="*", default=None,
-        help="restrict to these file names, e.g. nn.py tensor.py")
+        help="restrict to these file names, e.g. module_methods.py methods.py")
     parser.add_argument(
         "--min", type=int, default=0,
         help="only report installers with at least this many nested defs")

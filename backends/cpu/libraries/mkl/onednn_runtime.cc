@@ -133,9 +133,11 @@ std::unique_ptr<Plan> make_matmul(const Key& key, Runtime& state) {
     auto& d = key.dimensions;
     int64 batch=d[0], n=d[1], m=d[2], k=d[3];
     bool ta=d[4], tb=d[5];
-    memory::desc a({batch,n,m}, memory::data_type::f32, Dims{n*m, ta ? 1 : m, ta ? n : 1});
-    memory::desc b({batch,m,k}, memory::data_type::f32, Dims{m*k, tb ? 1 : k, tb ? m : 1});
-    memory::desc c({batch,n,k}, memory::data_type::f32, Dims{n*k,k,1});
+    auto operand_type = d[6] ? memory::data_type::bf16 : memory::data_type::f32;
+    auto output_type = d[7] ? memory::data_type::f32 : memory::data_type::bf16;
+    memory::desc a({batch,n,m}, operand_type, Dims{n*m, ta ? 1 : m, ta ? n : 1});
+    memory::desc b({batch,m,k}, operand_type, Dims{m*k, tb ? 1 : k, tb ? m : 1});
+    memory::desc c({batch,n,k}, output_type, Dims{n*k,k,1});
     auto pd = matmul::primitive_desc(state.eng, a, b, c);
     plan->descriptor = pd;
     plan->user = {memory(a, state.eng, DNNL_MEMORY_NONE), memory(b, state.eng, DNNL_MEMORY_NONE),
@@ -228,12 +230,16 @@ void onednn_conv_execute(const OneDnnConvSpec& spec, void* x, void* w, void* y) 
     execute(key, x, w, y, [&](Runtime& state) { return make_conv(spec, state); });
 }
 void onednn_matmul_execute(int64 batch, int64 n, int64 m, int64 k,
-                           bool ta, bool tb, void* a, void* b, void* c) {
+                           bool ta, bool tb, void* a, void* b, void* c,
+                           bool bf16_inputs, bool fp32_output) {
     if (!batch || !n || !k) return;
-    if (!m) { std::memset(c, 0, size_t(batch*n*k)*sizeof(float)); return; }
+    if (!m) {
+        std::memset(c, 0, size_t(batch*n*k)*(fp32_output ? sizeof(float) : sizeof(uint16_t)));
+        return;
+    }
     Key key;
     key.kind = 3;
-    key.dimensions = {batch,n,m,k,int64(ta),int64(tb)};
+    key.dimensions = {batch,n,m,k,int64(ta),int64(tb),int64(bf16_inputs),int64(fp32_output)};
     execute(key, a, b, c, [&](Runtime& state) { return make_matmul(key, state); });
 }
 vector<int64> onednn_cache_info() {

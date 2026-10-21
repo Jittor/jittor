@@ -6,32 +6,44 @@ from jittor._runtime.dispatch import try_dispatch
 from jittor.backends.cuda.kernels.pooling.pool2d import pool2d_cuda_options
 from .average import avg_pool2d
 from . import _state
-from .._layout import channels_last_source, channels_last_view, records_no_grad
+from .._layout import channels_last_source, channels_last_view
 
 
 def _max_pool2d_nhwc(source, op, kernel_size, stride, padding, h, w):
     """Max/min pooling of dense NHWC storage, answered in NHWC.
 
     Channels are the fastest axis of both tensors, so a warp reads and
-    writes consecutive channels of one window position.
+    writes consecutive channels of one window position. The backward, as the
+    NCHW one: the gradient goes to the first position of the window that
+    holds the pooled value.
     """
     N, H, W, C = source.shape
-    body = f'''
+    window = f'''
         int k1 = i1*{stride[0]}-{padding[0]};
         int k2 = i2*{stride[1]}-{padding[1]};
         int k1_ = min(k1 + {kernel_size[0]}, in0_shape1);
         int k2_ = min(k2 + {kernel_size[1]}, in0_shape2);
         k1 = max(0, k1);
         k2 = max(0, k2);
+    '''
+    backward_body = window + '''
+        int bo=1;
+        for (int p = k1; p < k1_ && bo; ++p)
+            for (int q = k2; q < k2_ && bo; ++q) {
+                if (@pout(i0,i1,i2,i3) == @in0(i0,p,q,i3)) {
+                    atomicAdd(&@out(i0,p,q,i3), @dout(i0,i1,i2,i3)),
+                    bo=0;
+                }
+            }
+    '''
+    body = window + f'''
         @out(i0, i1, i2, i3) = @expand_op(init_{op}, @out_type);
         for (int p = k1; p < k1_; ++p)
             for (int q = k2; q < k2_; ++q)
                 @out(i0, i1, i2, i3) = @expand_op({op}, @out_type, @out(i0, i1, i2, i3), @out_type, @in0(i0, p, q, i3), @in0_type);
     '''
-    options = pool2d_cuda_options(body, "")
-    options.pop("cuda_grad_src", None)  # nothing records a gradient here
-    out = jt.code([N, h, w, C], source.dtype, [source],
-                  cuda_header=options["cuda_header"], cuda_src=options["cuda_src"])
+    options = pool2d_cuda_options(body, backward_body)
+    out = jt.code([N, h, w, C], source.dtype, [source], **options)
     return channels_last_view(out)
 
 
@@ -105,8 +117,7 @@ def _pool2d(x, *, ceil_mode, count_include_pad, kernel_size, op, padding, return
         None, return_indices, ceil_mode, count_include_pad, op)
     if fast is not None:
         return fast
-    if use_code_op and _state.pool_use_code_op and not return_indices \
-            and records_no_grad(x):
+    if use_code_op and _state.pool_use_code_op and not return_indices:
         source = channels_last_source(x)
         if source is not None:
             return _max_pool2d_nhwc(source, op, kernel_size, stride, padding, h, w)

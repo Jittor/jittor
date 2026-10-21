@@ -10,10 +10,10 @@ class TestReinterpretViewErrors(unittest.TestCase):
     def test_invalid_dtype_is_a_catchable_error(self):
         expect_error(
             lambda: jt.reinterpret_view(jt.array([1, 2]), [2], "not_a_dtype"),
-            exc_type=RuntimeError,
-            # pyjt rejects an unknown NanoString before the op constructor;
-            # the public call remains a normal, catchable RuntimeError.
-            match="Not a valid call",
+            exc_type=TypeError,
+            # pyjt rejects an unknown NanoString before the op constructor, as
+            # a TypeError that is still a catchable RuntimeError.
+            match=r"reinterpret_view\(\) got arguments that match none of its signatures",
         )
 
     def test_multiple_inferred_dimensions_is_a_catchable_user_error(self):

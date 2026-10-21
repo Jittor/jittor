@@ -18,6 +18,7 @@ struct ComplexOpType : OpByType {
     ComplexOpType() {
         types = {
             "complex64",
+            "complex128",
         };
     }
 
@@ -27,13 +28,24 @@ struct ComplexOpType : OpByType {
         for (int i=1; i<args.size(); i+=2)
             if (types.count(args[i])) found = 1;
         if (!found) return "";
-        if (args.size() >= 4 && args[0] == "cast" &&
-            args[3] == "complex64" && args[1] != "complex64") {
-            // Casting complex to real discards the imaginary component. This is
-            // also the adjoint needed by real->complex cast backward.
-            if (args[1] == "bool")
-                return format("((($2).real != 0) || (($2).imag != 0))", args);
-            return format("(($1)(jittor::jt_creal($2)))", args);
+        if (args.size() >= 4 && args[0] == "cast") {
+            bool src_is_complex = args[3] == "complex64" || args[3] == "complex128";
+            bool dst_is_complex = args[1] == "complex64" || args[1] == "complex128";
+            if (src_is_complex && !dst_is_complex) {
+                // Casting complex to real discards the imaginary component.
+                // This is also the adjoint needed by real->complex cast
+                // backward.
+                if (args[1] == "bool")
+                    return format("((($2).real != 0) || (($2).imag != 0))", args);
+                return format("(($1)(jittor::jt_creal($2)))", args);
+            }
+            if (args[3] == "complex64" && args[1] == "complex128")
+                return format("jittor::jt_c64_to_c128($2)", args);
+            if (args[3] == "complex128" && args[1] == "complex64")
+                return format("jittor::jt_c128_to_c64($2)", args);
+            // else: real->complex (uses the target struct's single-arg
+            // converting constructor) or same-width cast fall through to the
+            // generic "cast" entry below.
         }
         static unordered_map<string,string> m = {
             {"void", "($4)"},
@@ -66,7 +78,7 @@ struct ComplexOpType : OpByType {
 
     void post_pass(OpCompiler* oc) {
         string& src = oc->src;
-        if (src.find("complex64") == string::npos)
+        if (src.find("complex64") == string::npos && src.find("complex128") == string::npos)
             return;
         int i = src.rfind("#include");
         if (i<0) i=0;

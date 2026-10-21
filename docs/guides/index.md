@@ -5,11 +5,14 @@
 ```{toctree}
 :maxdepth: 1
 
+platform-support
+known-limitations
 debugging
 memory-optimization
 performance-comparison
 distributed-training
 distributed-mpi
+distributed-training
 ascend-910b
 corex
 cpp-console
@@ -17,11 +20,14 @@ cpp-console
 
 | 指南 | 适用场景 |
 | --- | --- |
+| [平台与后端支持](platform-support.md) | 这套组合（系统、Python、CUDA/CANN、torch 版本）支持到什么程度、在哪里验证过 |
+| [已知限制](known-limitations.md) | 动手之前先看看要踩的坑有没有已经记录在案 |
 | [调试](debugging.md) | 报错定位、梯度异常、编译失败 |
 | [显存优化](memory-optimization.md) | 显存不足、想跑更大的批次 |
 | [性能对比](performance-comparison.md) | 与其他框架做可复现的速度对比 |
 | [原生单机多卡](distributed-training.md) | 使用 `jtrun` 与原生 NCCL/DDP 进行单机多卡训练 |
 | [MPI 分布式](distributed-mpi.md) | 多进程、多卡训练 |
+| [原生多卡训练](distributed-training.md) | `jtrun` 启动的原生 NCCL 数据并行（不经 compat.torch） |
 | [昇腾 910B](ascend-910b.md) | 在华为昇腾 NPU 上运行 |
 | [天数 Corex](corex.md) | 在天数智芯 GPU 上运行 |
 | [C++ 控制台](cpp-console.md) | 直接调用 C++ 接口、嵌入部署 |

@@ -10,6 +10,7 @@
 #include "curand_wrapper.h"
 #include "core/var_holder.h"
 #include "runtime/init.h"
+#include "runtime/rng_state.h"
 #include "runtime/device.h"
 #include <limits>
 #include <mutex>
@@ -144,6 +145,28 @@ uint64 curand_initial_seed(int device) {
     return curand_seeds[device];
 }
 
+vector<int64> curand_reserve_philox(int64 increment) {
+    if (!inside_executor() && !on_async_worker()) {
+        async_exec_wait();
+        ExecutorEntryScope lock;
+        return curand_reserve_philox(increment);
+    }
+    if (increment < 0 || increment > std::numeric_limits<int64>::max() - 3)
+        throw std::invalid_argument("Invalid CUDA Philox reservation");
+    increment = (increment + 3) / 4 * 4;
+    const int device = current_device();
+    if (device < 0) throw std::invalid_argument("CUDA Philox needs a device");
+    const int64 offset = curand_generator_offset(device);
+    if (increment > std::numeric_limits<int64>::max() - offset)
+        throw std::overflow_error("CUDA RNG offset exhausted");
+    const uint64 seed = curand_generator_seed(device);
+    // Advance the physical generator as well as its recorded cursor. Merely
+    // adding to curand_offsets would make a subsequent checkpoint lie about
+    // the next native random draw.
+    curand_restore_state(device, seed, offset + increment);
+    return {static_cast<int64>(seed), offset};
+}
+
 // See cublas_shutdown: report, never raise, and idempotent.
 void curand_shutdown() {
     std::lock_guard<std::mutex> lock(curand_state_mutex);
@@ -156,6 +179,7 @@ struct curand_initer {
 
 inline curand_initer() {
     if (!get_device_count()) return;
+    curand_last_seed = runtime_rng_state().global_seed;
     add_device_switch_hook(curand_switch_device);
     add_set_seed_callback([](int seed) {
         std::lock_guard<std::mutex> lock(curand_state_mutex);

@@ -141,8 +141,14 @@ class TestParallelPass3(unittest.TestCase):
                 # lines afterwards by a regex over the finished source
                 # (op_compiler.cc), which is why it used to be asserted in a
                 # different form here.
+                # except a CUDA kernel over one flat loop, whose grid is
+                # sized to the elements (see the test below)
+                flat = jt.flags.use_cuda and tdim == 1
                 for i in range(tdim):
-                    assert f"int tn{i} = get_thread_range_log" in src, src
+                    if flat:
+                        assert "int tn0 = std::min(NanoVector::get_nbits(" in src, src
+                    else:
+                        assert f"int tn{i} = get_thread_range_log" in src, src
                 for i in range(tdim-1):
                     assert f"tn{i}=tn{i}+tn{i+1};" in src, src
                 assert "thread_num /= thread_num_left;" not in src
@@ -173,12 +179,12 @@ class TestParallelPass3(unittest.TestCase):
     @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled,
                          "the thread count is a CUDA launch shape")
     def test_a_flat_elementwise_kernel_gets_a_thread_per_element(self):
-        """One flat loop is sized to its elements; a nest keeps block_num blocks.
+        """One flat loop gets a grid sized to its elements; a nest keeps block_num blocks.
 
-        2^19 threads walking a 38.7 M-element GELU ran at 715 GB/s on a 4090,
-        2^25 at 813 GB/s.
+        Over a 12.6 M-element GELU backward on a 4090, 2^23 threads walking
+        the range took 168 us, 2^25 (mostly idle) 189, a thread per element 153.
         """
-        def thread_num(shape, **options):
+        def launch(shape, **options):
             a = jt.random(shape)
             a.sync()
             with jt.flag_scope(use_cuda=1), jt.profile_scope(
@@ -186,10 +192,71 @@ class TestParallelPass3(unittest.TestCase):
                 b = (a + a).data
             np.testing.assert_allclose(b, a.data * 2)
             with open(rep[1][1]) as f:
-                src = f.read()
-            return int(re.search(r"int thread_num\s*=\s*(\d+);", src).group(1))
-        self.assertEqual(thread_num([64, 1024]), 1 << 25)
-        self.assertLess(thread_num([64, 1024], merge_loop_var=0, max_parallel_depth=2), 1 << 25)
+                return f.read()
+        src = launch([64, 1024])
+        self.assertRegex(src, r"int tn0 = std::min\(NanoVector::get_nbits\(")
+        self.assertRegex(src, r"int p1 = \(int\)std::max\(std::min\(")
+        nest = launch([64, 1024], merge_loop_var=0, max_parallel_depth=2)
+        self.assertNotRegex(nest, r"int p1 = \(int\)std::max\(std::min\(")
+        # Every element exactly once, around the powers of two the grid is
+        # rounded against.
+        for n in (1, 31, 256, 257, 4095, 65537, (1 << 20) + 3):
+            with self.subTest(n=n), jt.flag_scope(use_cuda=1):
+                a = np.arange(n, dtype="float32")
+                np.testing.assert_array_equal((jt.array(a) * 2 + 1).numpy(), a * 2 + 1)
+
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled,
+                         "the vector loads are a CUDA kernel's")
+    def test_a_flat_kernel_moves_its_tensors_in_vectors(self):
+        """Tensors read or written at the loop index move 16 bytes at a time.
+
+        A per-channel operand read through a broadcast stays per element; a
+        view that is not aligned for the vectors takes the scalar loop, as
+        does whatever is left past the last whole vector.
+        """
+        rng = np.random.RandomState(3)
+        for dtype, lanes in (("float16", 8), ("float32", 4)):
+            x_np = rng.rand(4, 7, 5, 64).astype(dtype)
+            s_np = rng.rand(64).astype(dtype)
+            with self.subTest(dtype=dtype), jt.flag_scope(use_cuda=1):
+                x, sc = jt.array(x_np), jt.array(s_np)
+                jt.sync([x, sc])
+                with jt.profile_scope() as rep:
+                    y = (x * sc + 1).maximum(0)
+                    y.sync()
+                with open(rep[1][1]) as f:
+                    src = f.read()
+                self.assertIn("jt_vecs", src)
+                self.assertIn("for (int jt_k = 0; jt_k < %d; jt_k++)" % lanes, src)
+                ref = np.maximum(x_np.astype("float32") * s_np.astype("float32") + 1, 0)
+                np.testing.assert_allclose(y.numpy().astype("float32"), ref, rtol=1e-2, atol=1e-2)
+                flat = x_np.reshape(-1)
+                for start, n in ((1, 1001), (0, 1001), (3, 5), (0, lanes), (2, 2 * lanes + 1)):
+                    got = (jt.array(flat)[start:start + n] * 2 + 1).numpy().astype("float32")
+                    np.testing.assert_allclose(got, flat[start:start + n].astype("float32") * 2 + 1,
+                                               rtol=1e-2, atol=1e-2)
+
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled,
+                         "the vector loads are a CUDA kernel's")
+    def test_a_reduction_target_is_initialised_as_its_atomics_expect(self):
+        """The kernel filling a reduction's target is not vectorised.
+
+        A float max or min is reduced by integer atomics over an ordered
+        encoding of its target, and FloatAtomicFixPass rewrites the stores
+        that fill it into that encoding by their spelling. Vector stores do
+        not have it: vectorised, the fill left plain floats under the integer
+        atomics, and a pooling written as a reduction came out wrong.
+        """
+        rng = np.random.RandomState(4)
+        x_np = rng.randn(10, 6, 28, 28).astype("float32")
+        folded = x_np.reshape(10, 6, 14, 2, 14, 2)
+        with jt.flag_scope(use_cuda=1, vectorize_flat_loops=1):
+            x = jt.array(x_np)
+            viewed = x.reshape(10, 6, 14, 2, 14, 2)
+            np.testing.assert_array_equal(viewed.max(dims=(3, 5)).numpy(), folded.max(axis=(3, 5)))
+            np.testing.assert_array_equal(viewed.min(dims=(3, 5)).numpy(), folded.min(axis=(3, 5)))
+            np.testing.assert_allclose(viewed.sum(dims=(3, 5)).numpy(), folded.sum(axis=(3, 5)),
+                                       rtol=1e-5, atol=1e-5)
 
     def reduce_check(self, ndim, depth, tdim, rdim, has_atomic, order=[], split=[], **args):
         shape = [8]*ndim

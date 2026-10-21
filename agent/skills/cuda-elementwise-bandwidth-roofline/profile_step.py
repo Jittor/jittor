@@ -26,9 +26,9 @@ import time
 
 import numpy as np
 
-REPO = os.environ.get("JITTOR_REFACTOR_REPO") or os.path.abspath(
+REPO = os.environ.get("JITTOR_REPO") or os.path.abspath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))
-sys.path.insert(0, os.path.join(REPO, "tests", "compat", "torch"))
+sys.path.insert(0, os.path.join(REPO, "compat", "tests", "torch"))
 
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
@@ -116,8 +116,8 @@ def main():
             loss_weights[0] = torch.from_numpy(
                 weights.randn(*tuple(output.shape)).astype("float32"))
         loss = (output * loss_weights[0]).sum()
-        # The shim's Tensor.backward() aborts on this graph (see the board
-        # entry on backward liveness); jt.grad submits the same backward
+        # The shim's Tensor.backward() aborts on this graph (a backward
+        # liveness underflow in node.h); jt.grad submits the same backward
         # operators without going through it.
         grads = jt.grad(loss, parameters)
         jt.sync([loss] + list(grads), device_sync=True)

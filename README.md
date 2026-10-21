@@ -312,10 +312,19 @@ python -m pip install -e .
 python -m jittor.selftest
 ```
 
-C++ and CUDA source changes under `python/jittor/src/` are rebuilt on their next
-use. To select CUDA explicitly:
+The C++ and CUDA sources live beside the Python package, not inside it: the
+core is [`src/`](src/) and each backend is `backends/<name>/` (for example
+[`backends/cuda/`](backends/cuda/)). In a checkout Jittor finds them by looking
+next to `python/jittor/` -- `src/core/common.h` identifies the core, and a
+backend is the directory with its `__init__.py`; a wheel ships the same trees as
+`jittor/src/` and `jittor/backends/<name>/`. Editing any of those sources
+rebuilds it on its next use. To select CUDA explicitly:
 
-`python/jittor/src/` 下的 C++、CUDA 源码会在下次使用时自动重编译。显式选择 CUDA：
+C++ 与 CUDA 源码与 Python 包并列，不在包内：内核是 [`src/`](src/)，每个后端是
+`backends/<名字>/`（例如 [`backends/cuda/`](backends/cuda/)）。源码 checkout 里
+Jittor 在 `python/jittor/` 的同级目录查找它们——用 `src/core/common.h` 认出内核，
+用带 `__init__.py` 的目录认出后端；wheel 把同样的目录装成 `jittor/src/` 与
+`jittor/backends/<名字>/`。改动其中任何源码都会在下次使用时重新编译。显式选择 CUDA：
 
 ```bash
 export JT_BUILD_NVCC_PATH=/usr/local/cuda/bin/nvcc

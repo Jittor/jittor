@@ -31,7 +31,9 @@ Complex output and the float64 gradcheck harness
 ``fft``/``ifft``/``rfft`` are differentiable and therefore enter the generic
 gradient batteries. They currently fail before the complex-output limitation is
 reached: gradcheck supplies float64 inputs, while the FFT path always assembles a
-complex64 result, so ``reinterpret_view`` rejects the doubled byte size. The six
+complex64 result, so ``reinterpret_view`` rejects the doubled byte size. That is
+still where the second-order nodes stop; the first-order ones now get a complex128
+spectrum and stop at the harness, which has no real output to differentiate. The six
 CPU gradcheck/gradgradcheck nodes are strict xfails below. They keep executing and
 will become gate-failing XPASS results when the dtype path is corrected.
 
@@ -173,11 +175,15 @@ def sample_irfft(op_info, device, dtype, requires_grad):
 def _complex_fft_grad_xfails(name):
     root = "tests/ops/test_ops.py::TestGradientsCPU::"
     failure = "float64 FFT output cannot reinterpret_view as complex64"
+    # The first-order battery no longer reaches that: a float64 input now gives
+    # a complex128 spectrum, and the generic gradcheck stops at "func produced
+    # no floating-point output" (an AssertionError through the battery's fail).
+    complex_output = "gradcheck has no real output to differentiate"
     return (
         xfail(
             "test_gradcheck",
-            reason="{}test_gradcheck_{}: {}".format(root, name, failure),
-            raises=RuntimeError,
+            reason="{}test_gradcheck_{}: {}".format(root, name, complex_output),
+            raises=AssertionError,
         ),
         xfail(
             "test_gradgradcheck",

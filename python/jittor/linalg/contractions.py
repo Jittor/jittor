@@ -10,7 +10,10 @@
 # ***************************************************************
 """Einstein summation planning and tensor contractions."""
 
+from ._helpers import _batching_aware
 
+
+@_batching_aware("einsum")
 def einsum(equation, *operands):
     r"""Evaluate the Einstein summation convention on the operands.
 

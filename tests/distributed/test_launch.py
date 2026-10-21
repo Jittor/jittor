@@ -45,6 +45,27 @@ if rank == 1:
 time.sleep(600)
 """
 
+_PRINT_TORCH_ENV = """
+import os
+print("env=" + ",".join(os.environ.get(k, "-") for k in
+      ("RANK", "WORLD_SIZE", "LOCAL_RANK", "MASTER_ADDR", "MASTER_PORT")), flush=True)
+"""
+
+# The store env:// rendezvous a Torch-style `init_process_group()` performs:
+# with WORLD_SIZE > 1 it needs MASTER_ADDR/MASTER_PORT, and every rank must
+# reach rank 0's store. `store.py` is loaded straight off disk: importing
+# jittor in a rank would start NCCL, which needs a GPU per rank.
+_ENV_RENDEZVOUS = """
+import importlib.util
+spec = importlib.util.spec_from_file_location("store", STORE_PATH)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+store, rank, world = next(module.rendezvous("env://"))
+store.set("rank%d" % rank, str(rank))
+store.wait(["rank%d" % r for r in range(world)])
+print("rendezvous %d/%d" % (rank, world), flush=True)
+"""
+
 _PRINT_CACHE_NAME = """
 import os
 print("cache_name=%r" % os.environ.get("cache_name"), flush=True)

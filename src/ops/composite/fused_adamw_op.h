@@ -11,6 +11,8 @@ struct FusedAdamwOp : Op {
     vector<Var*> new_parameters, new_moments, new_variances;
     Var* step;
     float64 lr, beta1, beta2, weight_decay, eps;
+    // Whether `order_after_readers` has run: once, at construction.
+    bool ordered = false;
 
     // @attrs(multiple_outputs)
     FusedAdamwOp(vector<Var*>&& parameters, vector<Var*>&& moments, vector<Var*>&& variances, vector<Var*>&& gradients, Var* step, float64 lr, float64 beta1, float64 beta2, float64 weight_decay, float64 eps);

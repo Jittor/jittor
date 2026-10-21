@@ -380,7 +380,10 @@ JIT_TEST(exec_plan_building_executes_nothing) {
         CHECK(var->mem_ptr == nullptr);
         CHECK(!var->is_finished());
     }
-    CHECKop(Op::number_of_lived_ops,==,ops_before);
+    // .load(): CHECKop streams both operands on failure, and streaming a
+    // std::atomic<int64> directly is ambiguous under libstdc++ 11 (see
+    // mem_info.cc's display_memory_info for the same fix).
+    CHECKop(Op::number_of_lived_ops.load(),==,ops_before);
     plan.epoch.reset();
 }
 

@@ -183,6 +183,61 @@ class TestConcatOp(unittest.TestCase):
         '''
 
 
+class TestConcatGradient(unittest.TestCase):
+    """A concatenation's gradient: each piece's, the slice of the output's.
+
+    A concatenation is a chain of setitems, and the backward of each setitem
+    hands the earlier pieces a copy of the gradient with its own region
+    zeroed. Read through that copy, every earlier piece's gradient cost a
+    full copy of the output's; read from the gradient itself, it is a view.
+    """
+
+    def _pieces(self):
+        rng = np.random.RandomState(0)
+        shapes = ((2, 3, 4, 5), (2, 1, 4, 5), (2, 4, 4, 5))
+        return [rng.randn(*s).astype("float32") for s in shapes]
+
+    def test_each_piece_gets_its_slice(self):
+        arrays = self._pieces()
+        cot = np.random.RandomState(1).randn(2, 8, 4, 5).astype("float32")
+        xs = [jt.array(a) for a in arrays]
+        out = jt.concat([x * 2.0 for x in xs], dim=1)
+        grads = jt.grad((out * jt.array(cot)).sum(), xs)
+        start = 0
+        for a, g in zip(arrays, grads):
+            stop = start + a.shape[1]
+            np.testing.assert_allclose(g.numpy(), 2.0 * cot[:, start:stop], rtol=1e-6)
+            start = stop
+
+    def test_no_piece_reads_through_a_zeroed_copy(self):
+        arrays = self._pieces()
+        xs = [jt.array(a) for a in arrays]
+        out = jt.concat(xs, dim=1)
+        dout = jt.array(np.ones((2, 8, 4, 5), "float32"))
+        grads = jt.grad((out * dout).sum(), xs)
+        for g in grads:
+            # Up the first inputs to the gradient of the concatenation.
+            v, seen = g, []
+            while v._producer_name() and v._producer_name() not in ("array", "empty") \
+                    and len(seen) < 16:
+                seen.append(v._producer_name())
+                if v._producer_name() == "setitem":
+                    break
+                v = v._input(0)
+            self.assertNotIn("setitem", seen, seen)
+
+    def test_an_overlapping_write_is_still_read_through(self):
+        # Writes that touch the region read keep their place in the chain.
+        a = jt.array(np.arange(12, dtype="float32").reshape(3, 4))
+        b = jt.array(np.full((2, 4), 7, "float32"))
+        out = jt.zeros((3, 4)).setitem((slice(0, 3),), a).setitem((slice(1, 3),), b)
+        ga, gb = jt.grad((out * jt.array(np.arange(12, dtype="float32").reshape(3, 4))).sum(), [a, b])
+        want = np.arange(12, dtype="float32").reshape(3, 4)
+        want[1:] = 0
+        np.testing.assert_allclose(ga.numpy(), want)
+        np.testing.assert_allclose(gb.numpy(), np.arange(12, dtype="float32").reshape(3, 4)[1:])
+
+
 class TestConcatOffTheAmbientDevice(unittest.TestCase):
     """The destination must be allocated where the inputs are, not where we are.
 

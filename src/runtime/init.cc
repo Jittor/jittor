@@ -15,6 +15,9 @@
 
 #include <csignal>
 #include "runtime/init.h"
+#include "runtime/async_exec.h"
+#include "runtime/rng_state.h"
+#include "runtime/executor_entry.h"
 #include "ops/op_register.h"
 #include "ops/composite/op_registration.h"
 #include "ops/composite/tape_op.h"
@@ -63,8 +66,6 @@ DEFINE_FLAG(int, cuda_allow_tf32, 0,
 DEFINE_FLAG(int, cuda_allow_cudnn_tf32, 0,
     "Deprecated, use float32_matmul_precision. Raises the float32 cuDNN "
     "convolution accumulate tier to high (tf32).");
-
-unique_ptr<std::default_random_engine> eng;
 
 vector<set_seed_callback> callbacks;
 int current_seed;
@@ -125,14 +126,39 @@ void init() {
     LOGv << "sizeof(Op)" << sizeof(Op);
 }
 
+static void apply_global_seed(uint64 seed) {
+    auto& rng = runtime_rng_state();
+    rng.global_seed = seed;
+    rng.host_seed = seed;
+    rng.host_engine.seed(seed);
+    rng.acl_streams.clear();
+    // Legacy callbacks retain their ABI. Seed-aware backends read the full
+    // value from the shared owner; reset-only callbacks ignore it.
+    for (auto cb : callbacks)
+        cb(static_cast<int>(seed));
+}
+
 void set_seed(int seed) {
     current_seed = seed;
-    cpu_initial_seed = uint64(seed);
+    cpu_initial_seed = static_cast<uint64>(seed);
     legacy_seed_valid = true;
     current_offset = 0;
-    eng.reset(new std::default_random_engine(seed));
-    for (auto cb : callbacks)
-        cb(seed);
+    async_exec_wait();
+    apply_global_seed(static_cast<uint64>(seed));
+}
+
+EXTERN_LIB void sync_all(bool device_sync);
+
+void set_seed64(uint64 seed) {
+    cpu_initial_seed = seed;
+    legacy_seed_valid = seed <= uint64(std::numeric_limits<int>::max());
+    current_seed = legacy_seed_valid ? static_cast<int>(seed) : 0;
+    current_offset = 0;
+    async_exec_wait();
+    ExecutorEntryScope lock;
+    // A lazily issued draw belongs to the stream before this reseed.
+    sync_all(true);
+    apply_global_seed(seed);
 }
 
 int get_seed() {
@@ -143,7 +169,8 @@ int get_seed() {
 
 void set_cpu_seed(uint64 seed) {
     sync_all(true);
-    eng.reset(new std::default_random_engine(seed));
+    runtime_rng_state().host_engine.seed(seed);
+    runtime_rng_state().host_seed = seed;
     cpu_initial_seed = seed;
     legacy_seed_valid = seed <= uint64(std::numeric_limits<int>::max());
     current_seed = legacy_seed_valid ? int(seed) : 0;
@@ -159,7 +186,7 @@ string get_cpu_rng_state() {
     std::ostringstream output;
     output << "JITTOR_CPU_RNG_V2\n" << cpu_initial_seed << ' ' << current_seed << ' '
            << int(legacy_seed_valid) << ' ' << current_offset
-           << '\n' << *eng << '\n';
+           << '\n' << runtime_rng_state().host_engine << '\n';
     return output.str();
 }
 
@@ -193,7 +220,8 @@ void set_cpu_rng_state(const string& state) {
     // Resolve graphs under their original stream before replacing the engine.
     // Calling set_seed here would also rewind every accelerator generator.
     sync_all(true);
-    eng.reset(new std::default_random_engine(replacement));
+    runtime_rng_state().host_engine = replacement;
+    runtime_rng_state().host_seed = full_seed;
     current_seed = seed;
     cpu_initial_seed = full_seed;
     legacy_seed_valid = bool(legacy_valid);
@@ -274,10 +302,12 @@ uint64 get_device_initial_seed(const string& name, int device) {
 
 void add_set_seed_callback(set_seed_callback callback) {
     callbacks.push_back(callback);
-    callback(current_seed);
+    callback(get_seed());
 }
 
-std::default_random_engine* get_random_engine() { return eng.get(); }
+std::default_random_engine* get_random_engine() {
+    return &runtime_rng_state().host_engine;
+}
 
 #ifdef HAS_ACCELERATOR
 bool no_device_error_when_free = 0;

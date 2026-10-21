@@ -48,7 +48,7 @@ T cpu_atomic_sub(T* a, T b) {
 
 // _min / _max rather than std::min / std::max: this is where the per-thread
 // partials of a parallel reduction meet, so a NaN that survived one thread's
-// loop would be dropped here instead (KI-BACKEND-004).
+// loop would be dropped here instead.
 template<class T>
 T cpu_atomic_min(T* a, T b) {
     spin_lock_guard _;

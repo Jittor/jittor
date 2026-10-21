@@ -10,7 +10,31 @@ from .functional.matrix import matmul
 from .functional.softmax import log_sigmoid, log_softmax, logsumexp, softmax
 
 
+def _matmul_operand(value):
+    # The right operand of ``Var @ value``, as torch reads it: a Var as is, a
+    # NumPy array converted (``Tensor @ ndarray`` is a Tensor), anything else
+    # None -- handed back to Python so its ``__rmatmul__`` runs, or the usual
+    # TypeError is raised. `matmul` used to be called with it regardless and
+    # failed inside on ``b.shape``/``b.broadcast`` with an AttributeError.
+    # ``ndarray @ Var`` stays a TypeError, as it is for a torch Tensor.
+    if isinstance(value, jt.Var):
+        return value
+    if isinstance(value, np.ndarray):
+        return jt.array(value)
+    return None
+
+
+def _var_matmul(left, right):
+    right = _matmul_operand(right)
+    if right is None:
+        return NotImplemented
+    return matmul(left, right)
+
+
 def _imatmul(left, right):
+    right = _matmul_operand(right)
+    if right is None:
+        return NotImplemented
     return left.assign(matmul(left, right))
 
 
@@ -35,7 +59,7 @@ _IMAG_PROPERTY = property(_var_imag)
 def install_var_bindings():
     """Install the stable public method bindings; repeated calls are harmless."""
     jt.Var.matmul = matmul
-    jt.Var.__matmul__ = matmul
+    jt.Var.__matmul__ = _var_matmul
     jt.Var.__imatmul__ = _imatmul
     jt.Var.prelu = prelu
     jt.Var.hardswish = hardswish

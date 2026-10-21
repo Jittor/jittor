@@ -21,16 +21,22 @@ CPU) pins the analytic derivative against finite differences. ``lgamma``/``digam
 the +/-1 poles; ``lgamma``/``digamma`` strictly positive, off the non-positive-integer
 poles).
 """
-import scipy.special as _sp
 
 from ._refs import *  # noqa: F401,F403  (make_tensor, SampleInput, np, jt, nn, F, cu)
 from ..core import UnaryUfuncInfo, skip
 
 
 # ----------------------------------------------------------------- numpy/scipy refs
-def erfinv_ref(x):   return _sp.erfinv(x)
-def lgamma_ref(x):   return _sp.gammaln(x)
-def digamma_ref(x):  return _sp.digamma(x)
+def _sp():
+    # Imported when a reference is computed, not when the database is built:
+    # the structure gate collects every definition without installing SciPy.
+    import scipy.special
+    return scipy.special
+
+
+def erfinv_ref(x):   return _sp().erfinv(x)
+def lgamma_ref(x):   return _sp().gammaln(x)
+def digamma_ref(x):  return _sp().digamma(x)
 def deg2rad_ref(x):  return np.deg2rad(x)
 def rad2deg_ref(x):  return np.rad2deg(x)
 

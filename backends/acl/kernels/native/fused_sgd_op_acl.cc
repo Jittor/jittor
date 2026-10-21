@@ -37,20 +37,31 @@ namespace jittor
 
         // The portable update is
         //     dp = sign * grad + weight_decay * param
-        //     v  = momentum * v + (1 - dampening) * dp
+        //     v  = first_step ? dp : momentum * v + (1 - dampening) * dp
         //     p  = p - lr * (nesterov ? dp + momentum * v : v)
         // and every coefficient below is one term of it folded so that no
         // temporary the size of the parameter list is needed: `dp` never
         // materialises, its two halves are accumulated into `v` (and, for
         // Nesterov, into `p`) separately.
+        //
+        // On the velocity buffer's first real touch (jittor-core-gaps.md
+        // §3.3) it must be SEEDED from the raw, undampened dp rather than
+        // folded via the recurrence into whatever the zero-initialized
+        // buffer already held -- expressed here by zeroing only the v <-
+        // momentum*v term's own coefficient and un-damping dp's own
+        // contribution to v. The Nesterov correction (`-lr*momentum` below)
+        // always uses the REAL momentum, first step or not: PyTorch's own
+        // `d_p.add(buf, alpha=momentum)` does not special-case it, since by
+        // that point `buf` already holds the correct (seeded-or-recurred) v.
         const float sign = attr->maximize ? -1.0f : 1.0f;
-        const float retained = float(1.0 - attr->dampening);
+        const float retained = attr->isFirstStep ? 1.0f : float(1.0 - attr->dampening);
         const float lr = float(attr->lr);
         const float momentum = float(attr->momentum);
+        const float momentum_for_v = attr->isFirstStep ? 0.0f : momentum;
         const bool decays = attr->weightDecay != 0;
 
         std::vector<float> coefficients;
-        coefficients.push_back(momentum);                              // v <- momentum * v
+        coefficients.push_back(momentum_for_v);                         // v <- momentum * v
         coefficients.push_back(retained * sign);                       // v += . * grad
         if (decays)
             coefficients.push_back(retained * float(attr->weightDecay)); // v += . * param

@@ -79,8 +79,9 @@ def _drain(value):
     """Force materialisation without adding a reduction of our own.
 
     Several operations already return a rank-0 result, and reducing one of
-    those currently fails (KI-OPS-004), so an unconditional ``.sum()`` here
-    would measure that defect instead of memory.
+    those used to fail (a rank-0 reduction defect, since fixed), so an
+    unconditional ``.sum()`` here would have measured that defect instead of
+    memory.
     """
     return float(value.item() if value.ndim == 0 else value.sum().item())
 

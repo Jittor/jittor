@@ -131,14 +131,28 @@ struct CompileResult {
 
 static int last_compiled_op_num = 0;
 static int not_compile_window = 0;
+// Queued segments in a row with no new kernel, after which the up-front check
+// is skipped. Every check loads each segment and builds its jit key only to
+// find it compiled -- in a warm loop, every segment of every batch. 100000 took
+// a DeepMill run about four shapes to reach. The skip no longer lasts for the
+// rest of the process, so it can come sooner: a kernel compiled meanwhile on
+// the execution path grows `jit_key_mapper`, and the next batch checks again.
+static const int quiet_window = 10000;
 
 void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, int64 tt, int force_compile) {
     if (!backend_ops(accelerator_backend_id()).execution.supports_parallel_compile)
         return;
     // jit_search_kernel require compile at runtime
-    if (!force_compile)
-        if (jit_search_kernel || !use_parallel_op_compiler || not_compile_window > 100000)
+    if (!force_compile) {
+        if (jit_search_kernel || !use_parallel_op_compiler)
             return;
+        if (not_compile_window > quiet_window) {
+            // Still quiet: nothing has been compiled since the window filled.
+            if (last_compiled_op_num == (int)jit_key_mapper.size())
+                return;
+            not_compile_window = 0;
+        }
+    }
 
     // try not use parallel compile if no op needs compile
     if (last_compiled_op_num != jit_key_mapper.size()) {
@@ -165,6 +179,9 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
         // inside the try -- empty means we failed before there was anything to
         // name, which the handler says rather than guesses.
         string op_desc;
+        // Its kind, which costs nothing to take: what the handler names when
+        // the full description was never formatted.
+        const char* op_kind = nullptr;
         try {
         if (op->type() != OpType::other) {
             op = &fused_op;
@@ -173,24 +190,29 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
             root = fuse_ops[rr-1];
             load_fused_op(fused_op, fuse_ops, ops, ll, rr, tt);
         }
-        {
-            // `op`, never `fused_op.ops`. Printing the sub-operator list walks
-            // every `Op*` in it, and that is exactly what was crashing in both
-            // failure handlers. Hoisting the walk to here did not make it safe:
-            // with the handlers fixed the crash moved to this line -- normal
-            // path, no exception in sight -- which is the finding rather than a
-            // setback. The sub-Op pointers are already dead by the time
-            // `load_fused_op` has filled the batch, so *no* placement of this
-            // walk is safe while their liveness is not guaranteed.
-            //
-            // The fused operator itself is a local and always valid, so its own
-            // name costs nothing and cannot fault. It is less detail than the
-            // sub-operator list; it is also a description that survives being
-            // printed.
-            std::stringstream desc_ss;
-            desc_ss << op;
-            op_desc = desc_ss.str();
-        }
+        // `op`, never `fused_op.ops`. Printing the sub-operator list walks
+        // every `Op*` in it, and that is exactly what was crashing in both
+        // failure handlers. Hoisting the walk to here did not make it safe:
+        // with the handlers fixed the crash moved to this line -- normal
+        // path, no exception in sight -- which is the finding rather than a
+        // setback. The sub-Op pointers are already dead by the time
+        // `load_fused_op` has filled the batch, so *no* placement of this
+        // walk is safe while their liveness is not guaranteed.
+        //
+        // The fused operator itself is a local and always valid, so its own
+        // name cannot fault. It is less detail than the sub-operator list; it
+        // is also a description that survives being printed. Formatted only
+        // for an operator that needs compiling or failed: formatting it for
+        // every operator of every batch was a fifth of this pass.
+        op_kind = op->name();
+        auto describe = [&]() {
+            if (op_desc.empty()) {
+                std::stringstream desc_ss;
+                desc_ss << op;
+                op_desc = desc_ss.str();
+            }
+            return op_desc;
+        };
         LOGvvv << "Check op needs compile:" << op;
         ExecutionBackendScope operation_backend_scope(op->requested_backend());
         TensorPlacementScope placement_scope(op->graph_placement());
@@ -213,7 +235,7 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
         } else {
             task_rid = rid;
         }
-        tasks.push_back({task_rid, string(jit_key), op_desc});
+        tasks.push_back({task_rid, string(jit_key), describe()});
 
 
         LOGvv << "Op needs compile:" << op;
@@ -237,8 +259,14 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
             // Op::name_ex (op.cc:379). prepare_execution can release the GIL,
             // so another Python thread gets to free nodes between the load and
             // the throw.
+            if (op_desc.empty() && is_fused_op) {
+                // The local fused operator: see `describe` above.
+                std::stringstream desc_ss;
+                desc_ss << (Op*)&fused_op;
+                op_desc = desc_ss.str();
+            }
             const char* named = op_desc.size() ? op_desc.c_str()
-                                               : "(operator not yet identified)";
+                : op_kind ? op_kind : "(operator not yet identified)";
             LOGf << (is_fused_op ? "Compile fused operator(" : "Compile operator(")
                 >> rid >> '/' >> queue.size() >> ")"
                 << "failed:" << named << "\n\nReason: " >> e.what() >> source_note;

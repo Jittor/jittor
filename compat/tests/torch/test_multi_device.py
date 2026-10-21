@@ -94,7 +94,14 @@ class TestDeviceApi(_Case):
             torch.cuda.set_device(_device_count() + 3)
 
     def test_default_device_reports_the_current_one(self):
-        self.assertEqual(torch.get_default_device(), torch.device("cuda", 0))
+        # CPU until `set_default_device` names the accelerator, as in torch
+        # (test_default_device_is_cpu.py); then the current one, with its index.
+        self.assertEqual(torch.get_default_device(), torch.device("cpu"))
+        torch.set_default_device("cuda")
+        try:
+            self.assertEqual(torch.get_default_device(), torch.device("cuda", 0))
+        finally:
+            torch.set_default_device("cpu")
 
     def test_host_resident_pow_compiles_while_cuda_is_enabled(self):
         """A host-side op must not be handed a CUDA-only code fragment.
@@ -198,7 +205,7 @@ class TestDeviceObject(_Case):
             torch.device("cuda:-1")
 
     def test_to_refuses_a_device_string_that_is_not_a_device(self):
-        x = torch.ones(2)
+        x = torch.ones(2, device="cuda")
         with self.assertRaises(RuntimeError):
             x.to("cuda1")
         # ...and the tensor was not moved by the attempt

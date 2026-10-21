@@ -426,7 +426,12 @@ class ModuleDict(nn.Module):
         if key not in self._keys:
             self._keys.append(key)
     def __getitem__(self, key):
-        return getattr(self, key)
+        try:
+            return getattr(self, key)
+        except AttributeError:
+            # torch's ModuleDict is a mapping: a missing key is a KeyError,
+            # which is also what ItemsView membership expects.
+            raise KeyError(key) from None
     def __delitem__(self, key):
         delattr(self, key)
         if key in self._keys:
@@ -437,6 +442,8 @@ class ModuleDict(nn.Module):
         return len(self._keys)
     def __iter__(self):
         return iter(self._keys)
+    # torch returns the live dict views of ``_modules``: they support set
+    # operations (``keys() & other``) and follow later insertions/deletions.
     def keys(self):
         return _collections_abc.KeysView(self)
     def values(self):

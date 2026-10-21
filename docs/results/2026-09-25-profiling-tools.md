@@ -3,10 +3,10 @@
 - 状态：已实现并在真实 CUDA 设备上验证；未合入 `2.0-refactor`
 - 日期：2026-09-25
 - 基线提交：`cb93ba04`（分支 `wip/profiler-rework`）
-- 硬件：RTX 4090 24 GB（驱动 580.178.04），nvcc 12.2.140，CUPTI 12.2.142
+- 验证范围：RTX 4090 24 GB（驱动 580.178.04），nvcc 12.2.140，CUPTI 12.2.142
   （`nvidia-cuda-cupti-cu12` wheel，经 `JITTOR_CUPTI_LIB` 指向；jittor 环境默认不带 CUPTI）
-- Owner：Jittor 核心维护者
-- 复查触发：执行器发射路径、SFRL/Temp 分配器记账、图重放、CUPTI 版本变化
+- 维护者：Jittor 核心维护者
+- 复查条件：执行器发射路径、SFRL/Temp 分配器记账、图重放、CUPTI 版本变化
 - 机制说明：[性能与显存画像](../notes/profiling.md)
 
 ## 结论
@@ -39,7 +39,7 @@
 | `graph_build_profile_*` | C++ 构图阶段自身时间 | 需要 `JT_GRAPH_BUILD_PROFILE=1` 重编核心；未开时正确地报空 | 保留（开发者工具），本轮没有用探针构建复核 |
 | `trace_py_var>=2` + `dump_trace_data` / `print_trace` | 追踪 | 执行器在每个算子后同步（`exec_runner.cc`），不能用来量时间 | 保留，文档注明 |
 | `profile_mark` | 给 `profile_scope` 分段 | 未复核 | 保留 |
-| `bench/torch_compat/worker.py` 的 NVML 采样器 | 跨框架进程显存峰值 | 20 ms 间隔采样，可能漏掉短峰；作为两侧同一把尺子仍合理 | 保留 |
+| `benchmarks/torch_compat/worker.py` 的 NVML 采样器 | 跨框架进程显存峰值 | 20 ms 间隔采样，可能漏掉短峰；作为两侧同一把尺子仍合理 | 保留 |
 
 ## 改了什么
 

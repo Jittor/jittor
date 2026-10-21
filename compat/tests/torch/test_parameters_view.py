@@ -62,6 +62,12 @@ class TestParametersView(unittest.TestCase):
 
     def test_an_optimizer_keeps_a_list(self):
         model = _deep(depth=2)
+        # Every unit active for the input below. A random init switches all
+        # of one layer's ReLUs off often enough (measured 10 runs in 56) that
+        # no gradient reaches the first layer and the step leaves it as it was.
+        with torch.no_grad():
+            for param in model.parameters():
+                param.fill_(0.1)
         opt = torch.optim.SGD(model.parameters(), lr=0.1)
         group = opt.param_groups[0]["params"]
         self.assertIsInstance(group, list)

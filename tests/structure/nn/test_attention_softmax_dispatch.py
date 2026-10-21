@@ -61,6 +61,32 @@ def _softmax(value, dim=-1, zero_all_neg_inf=False):
     return _Tensor(result)
 
 
+@pytest.mark.parametrize("width", [8, 16, 24])
+@pytest.mark.parametrize("grouped", [False, True])
+def test_small_bfloat16_heads_decline_before_loading_or_probing_cudnn(width, grouped):
+    source = ROOT / "backends/cuda/kernels/nn/cudnn_attention_cuda.py"
+    names = {"_accuracy_admitted", "_supports", "_cudnn_fused_attention", "_cudnn_fused_attention_gqa"}
+    tree = ast.parse(source.read_text())
+    functions = ast.Module(body=[node for node in tree.body
+                                if isinstance(node, ast.FunctionDef) and node.name in names],
+                           type_ignores=[])
+
+    def forbidden():
+        raise AssertionError("Rejected accuracy domain must not load/probe cuDNN")
+
+    namespace = {"_jittor_dtype_name": str, "_DTYPES": {"float16": 0, "bfloat16": 1},
+                 "_library": forbidden}
+    exec(compile(functions, str(source), "exec"), namespace)
+    query = SimpleNamespace(dtype="bfloat16", shape=(1, 4, 7, width))
+    key = SimpleNamespace(dtype="bfloat16", shape=(1, 2 if grouped else 4, 9, width))
+    assert namespace["_supports"](query, key, key) is False
+    function = namespace["_cudnn_fused_attention_gqa" if grouped else "_cudnn_fused_attention"]
+    assert function(query, key, key) is None
+    assert function(query, key, key, attn_mask=object(), is_causal=True) is None
+    assert namespace["_supports"](SimpleNamespace(dtype="bfloat16", shape=(1, 4, 7, 32)), key, key)
+    assert namespace["_supports"](SimpleNamespace(dtype="float16", shape=query.shape), key, key)
+
+
 @pytest.mark.parametrize("mask_kind", ["bool", "float", "none"])
 @pytest.mark.parametrize("is_causal", [False, True])
 @pytest.mark.parametrize("zero_kernel", [False, True])

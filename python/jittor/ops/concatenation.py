@@ -218,6 +218,25 @@ def concat(arr, dim=0):
     # `empty` plus a chain of `setitem`. It is OR-ed in rather than dropped so
     # that this commit changes exactly one thing, the clobbering; and the scope
     # is entered only when the bit is not already set.
+    # `_concat_direct` built natively (`_fast_cat`): same empty and setitems,
+    # without the frames. It declines (NotImplemented) for anything that path
+    # would treat differently -- mixed dtypes, an empty or unsigned input, a
+    # foreign device, a capture in progress, a registered concat kernel -- and
+    # is only asked when nothing reroutes the setitems either: no registered
+    # setitem kernel and no explicit placement on the first input, which
+    # `_empty_where_the_inputs_are` would follow. Nor under a mixed-precision
+    # policy: the destination below is created under it and may take another
+    # dtype than the inputs', where the native one keeps theirs; with none set,
+    # the bit the scope below adds only concerns reductions, and there are none.
+    native = getattr(select_kernel, "_native_concat", None)
+    if native is not None and type(dim) is int and (type(arr) is list or type(arr) is tuple) \
+            and 2 <= len(arr) <= _MAX_DIRECT_INPUTS and not jt.flags.amp_reg:
+        first = arr[0]
+        if first.__class__ is jt.Var and int(first.placement_backend) < 0 \
+                and not select_kernel._is_registered("tensor.setitem"):
+            out = native(arr, dim)
+            if out is not NotImplemented:
+                return out
     amp_reg = jt.flags.amp_reg
     keep_reduce = jt.amp_flags.keep_reduce
     if amp_reg & keep_reduce:

@@ -27,6 +27,9 @@ def _set_lrs(opt, lrs):
 
 
 class LRScheduler:
+    _get_lr_called_within_step = False
+    _is_initial = False
+
     def __init__(self, optimizer, last_epoch=-1, verbose=False):
         self.optimizer = optimizer
         if last_epoch == -1:
@@ -52,12 +55,10 @@ class LRScheduler:
     def get_last_lr(self):
         return list(self._last_lr)
     def state_dict(self):
-        return {k: v for k, v in self.__dict__.items()
-                if k not in ("optimizer",) and not callable(v)}
+        return {k: v for k, v in self.__dict__.items() if k != "optimizer"}
     def load_state_dict(self, sd):
         self.__dict__.update(sd)
     def step(self, epoch=None):
-        self.last_epoch = self.last_epoch + 1 if epoch is None else epoch
         self._step_count += 1
         self._get_lr_called_within_step = True
         try:
@@ -69,19 +70,46 @@ class LRScheduler:
             self._get_lr_called_within_step = False
         self._last_lr = list(lrs)
         _set_lrs(self.optimizer, lrs)
+        self._last_lr = _base_lrs(self.optimizer)
+
+
+def _lambda_state_dict(scheduler):
+    from types import FunctionType
+    state = {k: v for k, v in scheduler.__dict__.items()
+             if k not in ("optimizer", "lr_lambdas")}
+    state["lr_lambdas"] = [
+        None if isinstance(fn, FunctionType) else fn.__dict__.copy()
+        for fn in scheduler.lr_lambdas
+    ]
+    return state
+
+
+def _load_lambda_state_dict(scheduler, state):
+    # Keep the receiving callables and the caller's checkpoint dictionary intact.
+    lambda_states = state["lr_lambdas"]
+    scheduler.__dict__.update({k: v for k, v in state.items() if k != "lr_lambdas"})
+    for index, attrs in enumerate(lambda_states):
+        if attrs is not None:
+            scheduler.lr_lambdas[index].__dict__.update(attrs)
+
+
+def _lr_lambdas(optimizer, lr_lambda):
+    n = len(optimizer.param_groups)
+    if isinstance(lr_lambda, (list, tuple)):
+        if len(lr_lambda) != n:
+            raise ValueError(f"Expected {n} lr_lambdas, but got {len(lr_lambda)}")
+        return list(lr_lambda)
+    return [lr_lambda] * n
 
 
 class LambdaLR(LRScheduler):
     def __init__(self, optimizer, lr_lambda, last_epoch=-1, verbose=False):
-        self.base_lrs = _base_lrs(optimizer)
-        n = len(self.base_lrs)
-        self.lr_lambdas = list(lr_lambda) if isinstance(lr_lambda, (list, tuple)) else [lr_lambda]*n
+        self.lr_lambdas = _lr_lambdas(optimizer, lr_lambda)
         super().__init__(optimizer, last_epoch, verbose)
         # LambdaLR checkpoints use the pinned Torch 2.7 public schema.
         del self.verbose
     def get_lr(self):
-        e = max(self.last_epoch, 0)
-        return [b * fn(e) for b, fn in zip(self.base_lrs, self.lr_lambdas)]
+        return [b * fn(self.last_epoch) for b, fn in zip(self.base_lrs, self.lr_lambdas)]
 
     def state_dict(self):
         state = super().state_dict()
@@ -103,14 +131,20 @@ class LambdaLR(LRScheduler):
 
 class MultiplicativeLR(LRScheduler):
     def __init__(self, optimizer, lr_lambda, last_epoch=-1, verbose=False):
-        self.base_lrs = _base_lrs(optimizer)
-        n = len(self.base_lrs)
-        self.lr_lambdas = list(lr_lambda) if isinstance(lr_lambda, (list, tuple)) else [lr_lambda]*n
+        self.lr_lambdas = _lr_lambdas(optimizer, lr_lambda)
+        for fn in self.lr_lambdas:
+            if not callable(fn):
+                raise TypeError(f"lr_lambda should be a function, but got {type(fn).__name__}")
         super().__init__(optimizer, last_epoch, verbose)
+    def state_dict(self):
+        return _lambda_state_dict(self)
+    def load_state_dict(self, sd):
+        _load_lambda_state_dict(self, sd)
     def get_lr(self):
-        if self.last_epoch <= 0:
-            return list(self.base_lrs)
-        return [lr * fn(self.last_epoch) for lr, fn in zip(self._last_lr, self.lr_lambdas)]
+        current_lrs = _base_lrs(self.optimizer)
+        if self._is_initial:
+            return current_lrs
+        return [lr * fn(self.last_epoch) for lr, fn in zip(current_lrs, self.lr_lambdas)]
 
 
 class ConstantLR(LRScheduler):

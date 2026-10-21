@@ -1,6 +1,6 @@
 ---
 name: jittor-pyjt-bindings
-description: 改动 pyjt 绑定层（python/jittor/pyjt_compiler.py 代码生成器、src/pyjt/py_converter.h、任何带 @pyjt 注释的头文件）时的验证方法。用于确认「生成的 C++ 真的变了」、定位当前生效的 gen/ 目录、把会段错误的用例写成不会带走 pytest 的测试，以及避免在 worktree 里误测另一棵源码树。
+description: 改动 pyjt 绑定层（python/jittor/build/pyjt_compiler.py 代码生成器、src/bindings/pyjt/py_converter.h、任何带 @pyjt 注释的头文件）时的验证方法。用于确认「生成的 C++ 真的变了」、定位当前生效的 gen/ 目录、把会段错误的用例写成不会带走 pytest 的测试，以及避免在 worktree 里误测另一棵源码树。
 ---
 
 # 改 pyjt 绑定层怎么验证
@@ -76,7 +76,7 @@ env["PYTHONPATH"] = os.pathsep.join(
 ## 2. 找到当前生效的 gen/ 目录
 
 `pyjt_compiler.compile()` 会重写 `gen/*.cc`，所以改了带 `@pyjt` 的头之后不用手工删缓存
-——**但从 9.01 起它不再是每次 import 都跑**：`compiler.build_core()` 先看构建戳
+——**但它不是每次 import 都跑**：`python/jittor/build/compiler.py` 的 `build_core()` 先看构建戳
 （`<jittor_core...>.build_stamp.json`），源码树的 mtime/size 与编译要素都没变就整步跳过，
 包括 pyjt 生成。改了源码它必然重跑（戳会失配）；**手工删掉 `gen/` 里的文件却不动源码，
 它不会重新生成**——戳只看源码与产物，不看中间产物。这种情况下用
@@ -85,13 +85,15 @@ env["PYTHONPATH"] = os.pathsep.join(
 真正的坑是缓存里同时存在多个 `gen/`，很容易 grep 到过期的那个。路径形如：
 
 ```
-$JITTOR_HOME/.cache/jittor/jt<ver>/<gcc>/<py>/<os>/<cpu>/<源码哈希>/<git 分支>/<cuda key>/gen
+$JITTOR_HOME/.cache/jittor/jt<ver>/<gcc>/<py>/<os>/<cpu>/<checkout 哈希>/<cache_name>/cfg<构建配置指纹>/<cuda key>/gen
 ```
 
-- **源码哈希**变了会换一整棵目录：改完源码后旧目录仍在，别再去看它。
-- **git 分支**是路径的一段：换分支 = 换目录。
-- **cuda key 只在带 nvcc 时才有**：`nvcc_path=""`（CPU-only）生成到 `<分支>/gen`，
-  带 nvcc 生成到 `<分支>/<cuda key>/gen`。两者是不同的两份，都要各自确认。
+- **checkout 哈希**按源码树所在路径算（`jittor_path_key`）：两个 worktree 共用一个
+  `JITTOR_HOME` 也各有一棵目录，别去看另一棵的。
+- **`cache_name`** 默认是 `default`；**`cfg*`** 是构建配置（编译旗标、`has_mpi` 等）的指纹，
+  切 flag = 换目录。
+- **cuda key 只在带 nvcc 时才有**：`nvcc_path=""`（CPU-only）生成到 `cfg*/gen`，
+  带 nvcc 生成到 `cfg*/<cuda key>/gen`。两者是不同的两份，都要各自确认。
 
 取「最近写入的那个」最可靠：
 
@@ -111,7 +113,7 @@ grep -n 'YOUR_NEW_MARKER' "$GEN/pyjt_jit_op_maker.cc"   # 没有就是在测旧�
 
 ## 3. 改生成器：先在沙箱里 diff 生成结果，再重编
 
-`pyjt_compiler.py` 只依赖 `jittor_utils`，不依赖编译好的核心，所以生成器可以单独跑。
+`python/jittor/build/pyjt_compiler.py` 只依赖 `jittor_utils`（即 `python/jittor/build/utils`），不依赖编译好的核心，所以生成器可以单独跑。
 用本目录的 `render_bindings.py` 把两份源码（或同一份改动前后）各渲染一遍再 diff，
 几秒钟就能看清改动对生成的 C++ 做了什么，不用等重编：
 
@@ -203,35 +205,35 @@ Caught SIGCHLD. Maybe out of memory, please reduce your worker size. ... quick e
 坏了而不是测试失败。
 
 解法是让 pytest 的**直接子进程**永远正常退出，把崩溃留给中间那层 shell 去收：
-`run_python_child(..., expect_crash=True)`（`tests/_helpers/child_process.py` 的
-`shield_signal_death`）。`sh` 自己以 128+signo 正常退出，SIGCHLD action 看到的是
+`run_python_child(..., crash_isolated=True)`（`tests/_helpers/child_process.py` 的
+`_crash_isolated`）。`sh` 自己以 128+signo 正常退出，SIGCHLD action 看到的是
 `CLD_EXITED` 就不管了，而 `proc.returncode` 仍然是 134/139，崩溃照样能断言。
 它同时把 `gdb_path` 清空：jittor 的崩溃处理器会 fork 一个 gdb 抓 backtrace，
 在套件里跑就是灾难（gdb 先把进程 ptrace-stop 住，gdb 自己再死掉的话进程就永远停在那）。
 
-`expect_crash` 是可选项而不是默认：`subprocess.run` 超时只杀直接子进程（SIGKILL，
+`crash_isolated` 是可选项而不是默认：`subprocess.run` 超时只杀直接子进程（SIGKILL，
 拦不住），套了 shell 之后超时会留下一个孤儿孙子进程。只有真的预期崩溃的用例才付这个代价。
 
 
 ## 6. C++ 改动的重编成本
 
-改 `python/jittor/src/**` 或 `pyjt_compiler.py` 之后，**每个新进程**都要重编一次
+改 `src/**` 或 `python/jittor/build/pyjt_compiler.py` 之后，**每个新进程**都要重编一次
 `jittor_core`（分钟级）。所以：把一批改动攒起来一次验证，不要改一行跑一次。
 CPU 与 CUDA 是两份缓存，两边都要跑一次；CPU-only 用
 `JITTOR_TEST_DEVICES=cpu nvcc_path=""`，快很多。
 
 ## 7. 选测试文件时别把整个进程翻成 torch 模式
 
-`tests/conftest.py` 会看你在命令行上点了哪些文件：只要其中任何一个属于
-`tests/_helpers/process_modes.py` 的 `TORCH_MODE_PATHS`（`tests/type/test_type_system.py`、
-`tests/core/test_regression.py`、`tests/ops/test_ops.py`、`compat/tests/torch/…` 等），
-它就给**整个 pytest 进程**设上 `JITTOR_TORCH_SHIM=1`。torch 模式改的是全局语义
-（惰性执行、归约默认值、梯度语义、`finfo`/`iinfo` 的形状），于是同一条命令里的原生
-用例会成片地假失败——症状是 `TypeError: all() got ...`、`'finfo' object has no attribute`、
-`number_of_hold_vars` 对不上这类与你的改动毫无关系的错。
+进程模式只由 `JITTOR_TORCH_SHIM` 决定。`tests/_helpers/process_modes.py` 的
+`TORCH_MODE_PATHS`（`tests/type/test_type_system.py`、`tests/core/test_regression.py`、
+`tests/ops/test_ops.py`、`tests/structure`、`compat/tests/torch/…` 等）在原生会话里被点名时，
+`tests/_helpers/pytest_policy.py` 直接以 `UsageError` 拒绝收集。torch 模式改的是全局语义
+（惰性执行、归约默认值、梯度语义、`finfo`/`iinfo` 的形状），所以两种文件要分两条命令跑：
+原生的不带 `JITTOR_TORCH_SHIM`，torch 模式的带 `JITTOR_TORCH_SHIM=1`。
 
-判据：**同一个文件单独跑通、和别的文件一起跑就挂**，先查是不是混进了 torch 模式路径。
-把 torch 模式的文件单独起一条命令跑。
+判据：**同一个文件单独跑通、和别的文件一起跑就挂**，先查两条命令是不是混了模式；
+torch 模式下的原生用例会成片地假失败，症状是 `TypeError: all() got ...`、
+`'finfo' object has no attribute`、`number_of_hold_vars` 对不上这类与你的改动毫无关系的错。
 
 ## 8. 类型对象改了布局时要额外确认的事
 
@@ -241,6 +243,6 @@ CPU 与 CUDA 是两份缓存，两边都要跑一次；CPU-only 用
 - `tests/build/test_ring_buffer.py`、`tests/build/test_ring_buffer2.py`
 - `tests/bindings/test_pyjt_binding_protocol.py`（本层的协议用例都在这里）
 
-`VarHolder` 的 PyObject 不只从 `tp_new` 来：`py_converter.h` 里的 `to_py_object`
+`VarHolder` 的 PyObject 不只从 `tp_new` 来：`src/bindings/pyjt/py_converter.h` 里的 `to_py_object`
 用 `_PyObject_New` 直接建，**那块内存不清零**。任何依赖「新对象字段为 0」的设计
 都必须同时改这条手写路径。
