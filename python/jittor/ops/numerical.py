@@ -199,8 +199,18 @@ def _simple_for(x, func):
         }}
         kernel(in0->num, 0, in0_p, out0_p);
         '''
-    with jt.flag_scope(compile_options={"FLAGS: -O2 ":1}):
+    # `flag_scope(compile_options={"FLAGS: -O2 ": 1})`, written out: the
+    # caller's options with this one added, restored afterwards. The scope
+    # object cost more than the code op it wrapped.
+    flags = jt.flags
+    previous = flags.compile_options
+    options = dict(previous)
+    options["FLAGS: -O2 "] = 1
+    flags.compile_options = options
+    try:
         return jt.code(x.shape, "bool", [x], cpu_src=src, cuda_src=src)
+    finally:
+        flags.compile_options = previous
 
 
 # expression -> kernel source of `_simple_for`; the predicates above use a
