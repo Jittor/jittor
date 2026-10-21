@@ -374,12 +374,13 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags="", backend=None):
             vector<VarPtr> make_{cc_func_name}({", ".join(cc_make_args)}) {{
                 {storage_setup}
                 auto _op = new {op_name}({", ".join(op_make_args)});
+                vector<VarPtr> _outs;
+                _outs.reserve(_op->outputs_holder.size());
+                for (auto& _held : _op->outputs_holder) _outs.push_back(move(_held));
                 if (_op->flag(OpFlags::_forwarded)) {{
-                    vector<VarPtr> _outs = move(_op->outputs_holder);
                     delete _op;
                     return _outs;
                 }}
-                vector<VarPtr> _outs = move(_op->outputs_holder);
                 {{
                     JT_GBP_SCOPE(gbp_edge_table);
                     for (uint i=0; i<_outs.size(); i++)

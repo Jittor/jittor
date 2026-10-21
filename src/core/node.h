@@ -498,7 +498,21 @@ struct Node {
     void release_inputs();
     void erase_input(uint index);
     void erase_output(uint index);
-    void set_inputs(list<Node*> nodes);
+    // Replaces this node's input edges with `nodes`, in order. The core takes
+    // a pointer range: the parameter used to be a std::list taken by value, so
+    // every op maker's `set_inputs({a, b})` -- and every output var's
+    // `set_inputs({op})` -- built and freed one heap node per input, on every
+    // operator constructed.
+    void set_inputs(Node* const* nodes, size_t count);
+    inline void set_inputs(std::initializer_list<Node*> nodes) {
+        set_inputs(nodes.begin(), nodes.size());
+    }
+    template <class Nodes>
+    inline void set_inputs(const Nodes& nodes) {
+        SmallVector<Node*, 4> flat;
+        for (Node* node : nodes) flat.emplace_back(node);
+        set_inputs(flat.begin(), flat.size());
+    }
     void add_inputs(const vector<Node*>& nodes);
     void add_inputs(const vector<Var*>& nodes);
     void release_forward_liveness();

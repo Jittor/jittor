@@ -116,13 +116,16 @@ static bool permuted_source(Var* v, NanoVector& axes, VarPtr& source) {
     return true;
 }
 
-bool storage_layout_operands(const vector<Var*>& inputs, NanoVector& axes,
+bool storage_layout_operands(std::initializer_list<Var*> operands, NanoVector& axes,
                              vector<VarPtr>& sources) {
     if (!propagate_storage_layout) return false;
-    vector<VarPtr> found(inputs.size());
+    Var* const* inputs = operands.begin();
+    const uint count = operands.size();
+    SmallVector<VarPtr, 4> found;
+    for (uint i=0; i<count; i++) found.emplace_back();
     NanoVector shape;
     bool any = false;
-    for (uint i=0; i<inputs.size(); i++) {
+    for (uint i=0; i<count; i++) {
         NanoVector a;
         VarPtr s;
         if (!permuted_source(inputs[i], a, s)) continue;
@@ -134,7 +137,7 @@ bool storage_layout_operands(const vector<Var*>& inputs, NanoVector& axes,
     }
     if (!any) return false;
     NanoVector back = inverse(axes);
-    for (uint i=0; i<inputs.size(); i++) {
+    for (uint i=0; i<count; i++) {
         if (found[i]) continue;
         Var* v = inputs[i];
         Op* op = v->input();
@@ -161,11 +164,12 @@ bool storage_layout_operands(const vector<Var*>& inputs, NanoVector& axes,
     // A user-created transpose may have different scalar-promotion metadata
     // from its dense producer. Replacing that operand would then change the
     // arithmetic dtype. Keep the ordinary strided kernel for this case.
-    for (uint i=0; i<inputs.size(); i++)
+    for (uint i=0; i<count; i++)
         if (found[i]->flag(VarFlags::_is_scalar)
                 != inputs[i]->flag(VarFlags::_is_scalar))
             return false;
-    sources = move(found);
+    sources.clear();
+    for (auto& source : found) sources.push_back(move(source));
     return true;
 }
 

@@ -870,6 +870,17 @@ static unordered_set<string> unary_ops = {
     "conj",
 };
 
+VarPtr UnaryOp::forward_before_construct(Var* x, NanoString op) {
+    if (op != x->dtype()) return VarPtr();
+    // Counted as the op the constructor used to build and discard: automatic
+    // flushes and module-boundary cuts are placed by this count, and they have
+    // to fall where they fell. Without it every identity cast moved the later
+    // cuts by one -- a DDPM UNet training step batched differently and ran
+    // 3.6% slower at 32 MiB more peak memory.
+    Op::number_of_created_ops++;
+    return VarPtr(x);
+}
+
 UnaryOp::UnaryOp(Var* x, NanoString op) : x(x) {
     set_flag(OpFlags::_cpu);
     set_flag(OpFlags::_cuda);

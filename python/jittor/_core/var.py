@@ -12,7 +12,7 @@ from builtins import bool as ori_bool, complex as ori_complex, float as ori_floa
 import numpy as np
 import jittor_core as core
 from jittor_core import NanoString, NanoVector, Var, ops
-from jittor_core import _fast_permute, _fast_transpose, _fast_unsqueeze
+from jittor_core import _fast_permute, _fast_transpose, _fast_unsqueeze, _fast_view
 from .flags import flag_scope, flags as _runtime_flags
 from .._runtime.acl_clamp import dispatch_acl_clamp
 from .._runtime.backend_libraries import get_library as _get_library
@@ -719,6 +719,15 @@ _pyint = (0).__class__
 
 
 def view(x, *shape):
+    # A contiguous plain Var to a shape of exact ints is built natively
+    # (`_fast_view`, src/bindings/pyjt/py_compat_fast.h): the reshape below and
+    # its storage-view record, without these frames. It answers None for
+    # anything else -- a strided Var, a coerced or empty shape -- which the
+    # code below handles.
+    if x.__class__ is Var:
+        out = _fast_view(x, shape)
+        if out is not None:
+            return out
     # `type(...) is tuple or list` before the abstract check: `Sequence` is an
     # ABC, and an `isinstance` against an ABC goes through `_abc_instancecheck`
     # -- an order of magnitude dearer than an identity test, on a path every
@@ -1113,6 +1122,15 @@ def _clamp_cpu(x, min_v=None, max_v=None):
 _register_kernel("clamp", "*", _clamp_cpu)
 
 def clamp(x, min_v=None, max_v=None):
+    # `_clamp_cpu`'s graph built natively, when nothing but `_clamp_cpu` could
+    # be dispatched to. The native path declines (NotImplemented) for any
+    # input it does not render exactly -- a Var or numpy bound, a bool, an
+    # empty Var -- and a replaced `_try_dispatch` has no shortcut to skip.
+    native = getattr(_try_dispatch, "_native_clamp", None)
+    if native is not None and _try_dispatch._sole_default("clamp", _clamp_cpu):
+        out = native(x, min_v, max_v)
+        if out is not NotImplemented:
+            return out
     return _try_dispatch("clamp", x, min_v, max_v)
 
 Var.clamp = clamp

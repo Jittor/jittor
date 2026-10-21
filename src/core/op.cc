@@ -168,11 +168,18 @@ BackendId Op::execution_backend() const {
 }
 
 const OpImplementation& Op::implementation() const {
-    const auto& owner = definition();
     const auto backend = execution_backend();
+    static_assert(alignof(OpImplementation) >= 8, "the backend id is kept in the low bits");
+    const uintptr_t cached = implementation_cache.load(std::memory_order_relaxed);
+    if (cached && (cached & 7) == (uintptr_t)backend)
+        return *reinterpret_cast<const OpImplementation*>(cached & ~uintptr_t(7));
+    const auto& owner = definition();
     auto found = owner.implementations.find(backend);
     USER_CHECK(found != owner.implementations.end())
         << "No kernel registered for" << owner.name << "on" << backend_ops(backend).name;
+    static_assert((uintptr_t)BackendId::Corex < 8, "backend ids fit the low three bits");
+    implementation_cache.store(reinterpret_cast<uintptr_t>(&found->second) | (uintptr_t)backend,
+                               std::memory_order_relaxed);
     return found->second;
 }
 

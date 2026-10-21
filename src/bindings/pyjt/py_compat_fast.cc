@@ -207,6 +207,134 @@ PyObject* fast_getitem(PyObject* self, PyObject* index) {
 }
 
 namespace {
+auto make_clamp_unary = op_constructor<VarPtr, Var*, NanoString>("unary");
+auto make_clamp_binary = op_constructor<VarPtr, Var*, Var*, NanoString>("binary");
+auto make_clamp_ternary = op_constructor<VarPtr, Var*, Var*, Var*>("ternary");
+auto make_clamp_clone = op_constructor<VarPtr, Var*>("clone");
+
+bool clamp_float_dtype(NanoString dtype) {
+    return dtype == ns_float16 || dtype == ns_bfloat16 || dtype == ns_float32
+        || dtype == ns_float64;
+}
+
+bool clamp_int_dtype(NanoString dtype) {
+    return dtype == ns_int8 || dtype == ns_int16 || dtype == ns_int32 || dtype == ns_int64
+        || dtype == ns_uint8 || dtype == ns_uint16 || dtype == ns_uint32 || dtype == ns_uint64;
+}
+
+// A Python number as the generated bindings receive one for a Var argument
+// (`from_py_object<VarHolder*>(obj, holder)`): the scalar array, marked as a
+// Python number.
+VarPtr clamp_number(PyObject* value) {
+    unique_ptr<VarHolder> holder(jit_op_maker::array__(value));
+    mark_python_number(holder.get());
+    return VarPtr(holder->var);
+}
+
+// `VarHolder::stop_grad`, on a Var no holder owns yet.
+void clamp_stop_grad(Var* var) {
+    if (var->autograd_alias) var->autograd_alias->own_requires_grad = false;
+    var->set_stop_grad();
+    var->set_flag(VarFlags::_requires_grad_disabled, 0);
+    var->set_flag(VarFlags::_first_order_only, 0);
+}
+
+// `jt.unary(bound, dtype).stop_grad()`.
+VarPtr clamp_bound(PyObject* bound, NanoString dtype) {
+    VarPtr number = clamp_number(bound);
+    VarPtr result = make_clamp_unary(number.ptr, dtype);
+    clamp_stop_grad(result.ptr);
+    return result;
+}
+
+// `prepare_bound` in `_clamp_cpu`, for a Python int or float bound.
+VarPtr clamp_prepare(VarPtr& value, PyObject* bound) {
+    if (clamp_float_dtype(value->dtype()))
+        return clamp_bound(bound, value->dtype());
+    if (PyFloat_CheckExact(bound)) {
+        value = make_clamp_unary(value.ptr, ns_float32);
+        return clamp_bound(bound, ns_float32);
+    }
+    return clamp_bound(bound, value->dtype());
+}
+
+// `select_bound` in `_clamp_cpu`.
+VarPtr clamp_select(Var* value, Var* bound, bool lower) {
+    VarPtr keep = make_clamp_binary(value, bound, lower ? ns_greater_equal : ns_less_equal);
+    VarPtr result = make_clamp_ternary(keep.ptr, value, bound);
+    if (clamp_float_dtype(value->dtype())) {
+        VarPtr nan_value = make_clamp_clone(value);
+        clamp_stop_grad(nan_value.ptr);
+        VarPtr is_nan = make_clamp_binary(value, value, ns_not_equal);
+        result = make_clamp_ternary(is_nan.ptr, nan_value.ptr, result.ptr);
+    }
+    return result;
+}
+
+bool clamp_scalar(PyObject* value) {
+    if (value == Py_None || PyFloat_CheckExact(value)) return true;
+    if (!PyLong_CheckExact(value)) return false;
+    // The bindings read an int into an int32 (`ArrayOp(PyObject*)`); one that
+    // does not fit is the Python path's to convert and report.
+    int overflow = 0;
+    long long v = PyLong_AsLongLongAndOverflow(value, &overflow);
+    if (overflow || (v == -1 && PyErr_Occurred())) { PyErr_Clear(); return false; }
+    return v >= std::numeric_limits<int32>::min() && v <= std::numeric_limits<int32>::max();
+}
+} // namespace
+
+PyObject* jt_basic_getitem(PyObject* self, PyObject* index) {
+    if (!PyObject_TypeCheck(self, &PyjtVarHolder.ht_type)) return not_implemented();
+    GET_RAW_PTR(VarHolder, self)->grad_input();
+    return fast_getitem(self, index);
+}
+
+PyObject* jt_concat(PyObject* tensors, int64 dim) {
+    if (PyList_CheckExact(tensors) || PyTuple_CheckExact(tensors)) {
+        Py_ssize_t n = PySequence_Fast_GET_SIZE(tensors);
+        PyObject** items = PySequence_Fast_ITEMS(tensors);
+        for (Py_ssize_t i = 0; i < n; i++)
+            if (PyObject_TypeCheck(items[i], &PyjtVarHolder.ht_type))
+                GET_RAW_PTR(VarHolder, items[i])->grad_input();
+    }
+    return fast_cat(tensors, dim);
+}
+
+PyObject* fast_clamp(PyObject* self, PyObject* min_v, PyObject* max_v) {
+    if (Py_TYPE(self) != &PyjtVarHolder.ht_type) return not_implemented();
+    if (!clamp_scalar(min_v) || !clamp_scalar(max_v)) return not_implemented();
+    if (min_v == Py_None && max_v == Py_None) return not_implemented();
+    // Read as the bindings `_clamp_cpu` calls would read it.
+    Var* x = GET_RAW_PTR(VarHolder, self)->grad_input();
+    if (x->num <= 0) return not_implemented();
+    NanoString dtype = x->dtype();
+    bool is_float = clamp_float_dtype(dtype);
+    if (!is_float && !clamp_int_dtype(dtype)) return not_implemented();
+    if (kernel_op_registered("clamp.scalar")) return not_implemented();
+
+    PyTensorFrontendScope scope(self, nullptr, 0, false);
+    if (!is_float && PyLong_CheckExact(min_v) && PyLong_CheckExact(max_v)) {
+        int ordered = PyObject_RichCompareBool(min_v, max_v, Py_LE);
+        if (ordered < 0) { PyErr_Clear(); return not_implemented(); }
+        if (ordered) {
+            // The integer fast path: maximum then minimum at x's dtype.
+            VarPtr low = clamp_bound(min_v, dtype);
+            VarPtr high = clamp_bound(max_v, dtype);
+            VarPtr result = make_clamp_binary(x, low.ptr, ns_maximum);
+            result = make_clamp_binary(result.ptr, high.ptr, ns_minimum);
+            return to_py_object<VarHolder*>(new VarHolder(move(result)));
+        }
+    }
+    VarPtr value(x);
+    VarPtr low, high;
+    if (min_v != Py_None) low = clamp_prepare(value, min_v);
+    if (max_v != Py_None) high = clamp_prepare(value, max_v);
+    if (low) value = clamp_select(value.ptr, low.ptr, true);
+    if (high) value = clamp_select(value.ptr, high.ptr, false);
+    return to_py_object<VarHolder*>(new VarHolder(move(value)));
+}
+
+namespace {
 enum BinaryCode { B_ADD, B_RADD, B_SUB, B_RSUB, B_MUL, B_RMUL, B_TRUEDIV, B_RTRUEDIV, B_COUNT };
 binaryfunc binary_slots[B_COUNT] = {};
 bool binary_reflected[B_COUNT] = {};

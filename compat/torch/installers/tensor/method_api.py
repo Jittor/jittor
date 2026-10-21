@@ -215,6 +215,14 @@ def _copy_detached_storage(self, value):
         # Resolve pending readers (including clone snapshots) before changing
         # bytes. _copy_into owns placement, stream ordering and dense copies.
         _owner.jt.sync_all()
+        if not self._mem_ptr_now or not value._mem_ptr_now:
+            # Still unbuilt after the sync: a call being captured for replay,
+            # where the sync runs nothing. Such a tensor has no storage an
+            # alias could be reading, so rebinding it loses nothing -- and
+            # writing into it is impossible (`_copy_into needs an allocated
+            # tensor`), which is what every `embeddings += ...` of a captured
+            # BERT call raised.
+            return False
         with _owner.jt.no_grad():
             if self._copy_view_into(value):
                 return True
