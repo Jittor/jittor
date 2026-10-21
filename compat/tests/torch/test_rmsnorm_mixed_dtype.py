@@ -123,3 +123,35 @@ def test_acl_standard_hf_norm_keeps_original_forward_and_full_gradients(device, 
         for dispatched, original in zip(observed["module"], observed["forward"]):
             np.testing.assert_array_equal(dispatched, original)
             assert np.isfinite(dispatched).all()
+
+
+@pytest.mark.npu
+@pytest.mark.parametrize("input_dtype", [torch.float32, torch.bfloat16])
+def test_acl_standard_rmsnorm_bf16_autocast_preserves_hf_fp32_math_and_gradients(input_dtype):
+    capability.require_accelerator("acl")
+    source = np.arange(1, 17, dtype=np.float32).reshape(2, 8) * np.float32(.125)
+    weight = np.arange(4, 12, dtype=np.float32) * np.float32(.125)
+    coefficient = np.arange(16, 0, -1, dtype=np.float32).reshape(2, 8) * np.float32(.125)
+    from jittor._runtime.fallback import forbid_backend_fallbacks
+    with jt.runtime.scope(use_cuda=1, use_acl=1, backend_fallback="error"), forbid_backend_fallbacks():
+        reference = SourceOrderRMSNorm(weight, torch.float32, "npu")
+        reference_value = torch.tensor(source, dtype=input_dtype, device="npu", requires_grad=True)
+        with jt.flag_scope(amp_reg=0):
+            expected = reference.forward(reference_value)
+            expected_loss = (expected * torch.tensor(coefficient, device="npu")).sum()
+            expected_grads = torch.autograd.grad(expected_loss, (reference_value, reference.weight))
+
+        observed_module = SourceOrderRMSNorm(weight, torch.float32, "npu")
+        observed_value = torch.tensor(source, dtype=input_dtype, device="npu", requires_grad=True)
+        with torch.autocast("npu", dtype=torch.bfloat16):
+            observed = observed_module(observed_value)
+        observed_loss = (observed * torch.tensor(coefficient, device="npu")).sum()
+        observed_grads = torch.autograd.grad(observed_loss, (observed_value, observed_module.weight))
+
+        assert observed_module.forward_calls == 1
+        assert observed.dtype == torch.float32
+        assert observed_value.dtype == expected_grads[0].dtype == input_dtype
+        assert observed_module.weight.dtype == expected_grads[1].dtype == torch.float32
+        np.testing.assert_array_equal(array(observed), array(expected))
+        for actual, expected_grad in zip(observed_grads, expected_grads):
+            np.testing.assert_array_equal(array(actual), array(expected_grad))

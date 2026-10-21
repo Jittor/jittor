@@ -151,14 +151,20 @@ def _standard_rms_norm(self, args, kwargs):
     weight = getattr(self, "weight", None)
     if not isinstance(value, jt.Var) or not isinstance(weight, jt.Var):
         return None
+    # On ACL, Torch autocast only lowers selected operators. A HF RMSNorm
+    # explicitly widens its reduction, casts the normalized value back to the
+    # input dtype, then multiplies by the parameter. Jittor's process-wide AMP
+    # register would otherwise lower those explicit FP32 operations too. Run
+    # the module's own forward with that register suspended; this also keeps
+    # mixed input/weight promotion and the module's input-dtype cast order.
+    # Tensor dispatch covers explicit NPU tensors under CPU default flags.
+    if jt.core.dispatch_context([value, weight])[0] == "acl":
+        with jt.flag_scope(amp_reg=0):
+            return type(self).forward(self, value)
     # A standard HF forward casts the normalized value back to input dtype
     # before multiplying the weight. Mixed operands may therefore promote the
     # output, while the native inference kernel returns the input dtype.
     if _jittor_dtype_name(value.dtype) != _jittor_dtype_name(weight.dtype):
-        return None
-    # Preserve the HF FP32 reduction and input-dtype cast order on ACL.
-    # Tensor dispatch also covers explicit NPU tensors under CPU default flags.
-    if jt.core.dispatch_context([value, weight])[0] == "acl":
         return None
     epsilon = self.__dict__["variance_epsilon"]
     pytorch_order = _acl_bfloat16_rms_norm(value, weight, epsilon)
