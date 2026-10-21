@@ -4,12 +4,21 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import numpy as np
 import math
 from jittor_core import Var
+import jittor_core as _jittor_core
 from jittor_core import ops as _native_ops
 from .._runtime.dispatch import select_kernel, try_dispatch
 
 # `jittor.ops.any_` and `all_` are the native ops (jittor/ops/__init__.py
 # resolves every name it does not define there); asked for directly, without
 # the import and the module `__getattr__` on every truth test.
+#
+# `_logical_reduce` reduces a bool Var straight into a bool result on CPU and
+# CUDA (`any_`/`all_` give int32 there, which the `.bool()` below then casts:
+# a second kernel per truth test). It answers NotImplemented for everything
+# else.
+_logical_reduce = getattr(_jittor_core, "_logical_reduce", None)
+
+
 def all(x, dim=(), keepdims=False, keepdim=None):
     """Reduce with logical AND. Takes `keepdims` or torch's `keepdim`."""
     if keepdim is not None:
@@ -17,7 +26,12 @@ def all(x, dim=(), keepdims=False, keepdim=None):
     result = try_dispatch("tensor.all", x, dim, keepdims)
     if result is not None:
         return result
-    return _native_ops.all_(_as_truth(x), dim, keepdims=keepdims).bool()
+    x = _as_truth(x)
+    if _logical_reduce is not None:
+        result = _logical_reduce(x, dim, keepdims, True)
+        if result is not NotImplemented:
+            return result
+    return _native_ops.all_(x, dim, keepdims=keepdims).bool()
 
 
 def any(x, dim=(), keepdims=False, keepdim=None):
@@ -27,7 +41,12 @@ def any(x, dim=(), keepdims=False, keepdim=None):
     result = try_dispatch("tensor.any", x, dim, keepdims)
     if result is not None:
         return result
-    return _native_ops.any_(_as_truth(x), dim, keepdims=keepdims).bool()
+    x = _as_truth(x)
+    if _logical_reduce is not None:
+        result = _logical_reduce(x, dim, keepdims, False)
+        if result is not NotImplemented:
+            return result
+    return _native_ops.any_(x, dim, keepdims=keepdims).bool()
 
 
 def _as_truth(x):

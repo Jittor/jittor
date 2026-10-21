@@ -6,6 +6,7 @@
 #include "bindings/pyjt/py_tensor_frontend.h"
 #include "bindings/pyjt/py_type_lifetime.h"
 #include "ops/op_register.h"
+#include "core/op.h"
 #include "ops/composite/code_op.h"
 #include <cstring>
 #include "runtime/device.h"
@@ -537,6 +538,62 @@ PyObject* fast_clamp(PyObject* self, PyObject* min_v, PyObject* max_v) {
     if (low) value = clamp_select(value.ptr, low.ptr, true);
     if (high) value = clamp_select(value.ptr, high.ptr, false);
     return to_py_object<VarHolder*>(new VarHolder(move(value)));
+}
+
+namespace {
+// The (dims_mask, keepdims_mask) constructor: unlike `reduce(x, op, dims,
+// keepdims)` it keeps a bool input's dtype for the logical reductions.
+auto make_reduce_mask = op_constructor<VarPtr, Var*, NanoString, uint, uint>("reduce");
+} // namespace
+
+PyObject* logical_reduce(PyObject* self, PyObject* dims_obj, bool keepdims, bool is_and) {
+    if (Py_TYPE(self) != &PyjtVarHolder.ht_type) return not_implemented();
+    // Read as the generated `any_` binding would read it.
+    Var* x = GET_RAW_PTR(VarHolder, self)->grad_input();
+    if (x->dtype() != ns_bool) return not_implemented();
+    // The placement and precision the generated binding would build under.
+    PyTensorFrontendScope scope(self, nullptr, 0, false);
+    // ROCm has no narrow atomics (cuda_atomic.h), and the other backends
+    // have not been asked to reduce into a bool.
+    BackendId backend = construction_target_backend(x);
+    if (backend != BackendId::Cpu && backend != BackendId::Cuda) return not_implemented();
+    // `any_` takes one int or a sequence of them; anything else is left to its
+    // overload resolution, and an out-of-range dim to its error.
+    NanoVector dims;
+    if (PyLong_CheckExact(dims_obj)) {
+        int overflow = 0;
+        long long dim = PyLong_AsLongLongAndOverflow(dims_obj, &overflow);
+        if (overflow || (dim == -1 && PyErr_Occurred())) {
+            PyErr_Clear();
+            return not_implemented();
+        }
+        dims.push_back(dim);
+    } else if (Py_TYPE(dims_obj) == &PyjtNanoVector) {
+        dims = from_py_object<NanoVector>(dims_obj);
+    } else if (PyTuple_CheckExact(dims_obj) || PyList_CheckExact(dims_obj)) {
+        Py_ssize_t n = PySequence_Fast_GET_SIZE(dims_obj);
+        PyObject** items = PySequence_Fast_ITEMS(dims_obj);
+        for (Py_ssize_t i = 0; i < n; i++)
+            if (!PyLong_CheckExact(items[i])) return not_implemented();
+        dims = from_py_object<NanoVector>(dims_obj);
+    } else {
+        return not_implemented();
+    }
+    // The mask `ReduceOp(x, op, dims, keepdims)` derives.
+    int64 xdim = x->shape.size();
+    uint reduce_mask = 0;
+    if (!dims.size()) {
+        reduce_mask = xdim >= 32 ? ~0u : (1u << xdim) - 1;
+    } else {
+        for (auto dim : dims) {
+            if (dim < 0) dim += xdim;
+            if (dim < 0 || dim >= xdim) return not_implemented();
+            reduce_mask |= 1u << dim;
+        }
+    }
+    VarPtr y = make_reduce_mask(x, is_and ? ns_logical_and : ns_logical_or,
+                                reduce_mask, keepdims ? ~0u : 0u);
+    return to_py_object<VarHolder*>(new VarHolder(move(y)));
 }
 
 namespace {
