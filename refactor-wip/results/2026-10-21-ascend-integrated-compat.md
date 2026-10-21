@@ -421,3 +421,7 @@ R6 输入梯度分支探针在 NPU 5、生产 shim、fallback_count=0 下记录�
 为避免覆盖 R8 失败结果，R9、R11、R12、R13、R14 均使用独立 LAB cohort 目录。R9 fresh 检查时卡 6 有外部 PID 1135400。R11/R12 的临时 shell admission 使用了错误的 GNU grep 扩展正则：R11 原始快照实际有卡 6 PID 1143642；R12 原始快照中的卡 3/5 当时为空，但 shell 仍误报阻断；两次均未运行 Python driver 或创建 worker。审计写入 `distributed/main-tree-fsdp2-cat-fix-r11-r12-guard-audit.txt`。从 R13 开始移除该外层 grep，直接让已审阅 driver 解析 fresh `npu-smi`，并保留其逐阶段检查及运行中外部进程守卫。
 
 R13 在首个 runtime launcher 建立前由 driver 捕获物理卡 3 外部 PID 1151694；R14 捕获物理卡 6 外部 PID 1157188；两者都在模型计算前退出，worker 数为 0，完整 admission 及退出后快照分别保存在各自 `distributed/main-tree-fsdp2-cat-fix-r13/` 与 `r14/`。截至 R14 后的快照，卡 3/6 仍有外部进程、卡 5 空闲。没有对这些 PID 发送信号或读取其环境。
+
+### R15：runtime-entry 外部占用中止
+
+R15 在 fresh admission 时卡 5/6 为空，使用与 R5 相同的 2500 文件清单（SHA256 aa56c083de1404dcfc744b31edc3dcb973f574d3dcb0d048c691d8ffa400d383）启动 Native torchrun full。运行期间 4.36 秒后，live monitor 在物理卡 6 发现外部 PID 1177475，向本 cohort 自己的 process group 发送终止信号，driver 返回 125。该次已有 torchrun launcher，因此只记录为 runtime-entry 资源中止；stdout 为空、没有 rank 训练报告或可接受的 FSDP full 结果。R15 的 execution.json、foreign-npu-occupants.json、空 stdout 和 before/during/after npu-smi 快照均保存在 `distributed/main-tree-fsdp2-cat-fix-r15/`。中止后核验 PID 1177542 已退出、该进程组为空；外部 PID 1177475 仍在卡 6，未向它发送信号或读取其环境。
