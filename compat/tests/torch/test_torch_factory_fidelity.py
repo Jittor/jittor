@@ -149,6 +149,18 @@ class TestTorchFactoryFidelity(unittest.TestCase):
         replay = torch.rand(8)
         np.testing.assert_array_equal(pending.numpy(), replay.numpy())
 
+    def test_multinomial_without_generator_uses_seeded_global_stream(self):
+        weights = torch.tensor([0.1, 0.2, 0.3, 0.4], dtype=torch.float32)
+        torch.manual_seed(1729)
+        first = torch.multinomial(weights, 32, replacement=True).numpy()
+        second = torch.multinomial(weights, 32, replacement=True).numpy()
+
+        torch.manual_seed(1729)
+        replay = torch.multinomial(weights, 32, replacement=True).numpy()
+
+        np.testing.assert_array_equal(first, replay)
+        self.assertFalse(np.array_equal(first, second))
+
     def test_factory_objects_are_module_level_and_keep_public_identity(self):
         factories = importlib.import_module(
             "jittor.compat.torch.installers.factories")

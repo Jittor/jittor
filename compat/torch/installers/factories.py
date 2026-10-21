@@ -633,7 +633,6 @@ def _random_adapter(original, *args, generator=None, _name=None, **kwargs):
     drawn = _draw_from_generator(name, generator, args, kwargs) if generator is not None else None
     if drawn is not None:
         return drawn
-    _seed_from(generator)
     return original(*args, **kwargs)
 
 
