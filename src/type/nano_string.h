@@ -456,7 +456,10 @@ inline NanoString reduce_dtype_infer(NanoString op, NanoString x, bool preserve_
     bool is_float = x.is_float() || op.is_float();
     int dsize_ = x.dsize_();
     if (is_float) {
-        if ((amp_reg & amp_keep_reduce) || preserve_type)
+        // A backend that promises dtype-preserving reductions must retain an
+        // explicit float32/float64 cast even inside a reduced-precision region.
+        if (preserve_type && x.is_float()) return x;
+        if (amp_reg & amp_keep_reduce)
             return float_dtype(dsize_, false, x==ns_bfloat16);
         // A float16/bfloat16 *input* keeps its own dtype. The widening below
         // is the identity for every other float width -- float32 gives

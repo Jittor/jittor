@@ -17,7 +17,9 @@ import time
 
 import numpy as np
 
-from _hf_trainer_e2e_runner import _runtime
+from _hf_trainer_e2e_runner import (
+    _cpu_runtime_evidence, _runtime, _select_runtime_device, _synchronize_device,
+)
 from _release_hf_data import (
     TASKS, build_data, digest_file, initialize, load_model, metrics_for,
     resolve_initial,
@@ -73,13 +75,11 @@ def _training_arguments(args, expected_updates):
 def _run(args):
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
-    jt, torch = _runtime(args.runtime)
+    jt, torch = _runtime(args.runtime, device=args.device)
     from transformers import AutoTokenizer, Seq2SeqTrainer, Trainer, TrainerCallback
 
-    if args.device == "cuda" and not torch.cuda.is_available():
-        raise RuntimeError("requested CUDA runtime is unavailable")
     if args.device == "cpu" and args.mixed_precision != "no":
-        raise ValueError("release AMP fixtures require actual CUDA")
+        raise ValueError("release AMP fixtures require an accelerator")
     if args.mixed_precision == "fp16" and args.max_grad_norm <= 0:
         raise ValueError("FP16 health fixture requires positive gradient clipping for pre-step unscale observation")
     output = Path(args.output_dir)
@@ -87,9 +87,9 @@ def _run(args):
         raise FileExistsError("workflow output destination already exists: %s" % output)
     output.mkdir(parents=True)
     with ExitStack() as stack:
+        _select_runtime_device(jt, torch, args.device, stack)
         if jt is not None:
-            stack.enter_context(jt.runtime.scope(use_cuda=int(args.device == "cuda"),
-                                                backend_fallback="error"))
+            stack.enter_context(jt.runtime.scope(backend_fallback="error"))
             from jittor._runtime.fallback import forbid_backend_fallbacks
 
             stack.enter_context(forbid_backend_fallbacks())
@@ -123,7 +123,7 @@ def _run(args):
                 raise ValueError("resume checkpoint has already completed the training budget")
         train_args = _training_arguments(args, args.expected_updates)
         trainer_base = Seq2SeqTrainer if args.task == "t5" else Trainer
-        RecordingTrainer, CaptureCallback = observer_classes(torch, trainer_base, TrainerCallback, args)
+        RecordingTrainer, CaptureCallback = observer_classes(torch, trainer_base, TrainerCallback, args, jt=jt)
         callback = CaptureCallback()
         keywords = dict(
             model=model, args=train_args, train_dataset=train_dataset,
@@ -135,20 +135,18 @@ def _run(args):
         trainer = RecordingTrainer(**keywords)
         callback.owner = trainer
         actual_devices = on_device(torch, trainer.model, args.device, jt)
-        hook = register_projection_observer(torch, trainer.model, trainer, args.device)
+        hook = register_projection_observer(torch, trainer.model, trainer, args.device, jt=jt)
         stack.callback(hook.remove)
         frozen_before = frozen_signature(trainer.model)
         initial, initial_metadata = evaluation_probe(
             trainer.model, collator, eval_dataset, args.device,
-            autocast=trainer.accelerator.autocast())
+            autocast=trainer.accelerator.autocast(), jt=jt)
         np.savez(output / "initial-probe.npz", **initial)
         del initial
-        if args.device == "cuda":
-            torch.cuda.synchronize()
+        _synchronize_device(jt, torch, args.device)
         started = time.perf_counter()
         train_output = trainer.train(resume_from_checkpoint=args.resume_checkpoint)
-        if args.device == "cuda":
-            torch.cuda.synchronize()
+        _synchronize_device(jt, torch, args.device)
         train_elapsed = time.perf_counter() - started
         expected_end = args.stop_after or args.expected_updates
         if int(trainer.state.global_step) != expected_end:
@@ -194,8 +192,11 @@ def _run(args):
                                    for value in state.values() if hasattr(value, "dtype")})
         report = {
             "runtime": args.runtime, "task": args.task, "device": args.device,
+            "cpu_accelerator_state": (_cpu_runtime_evidence(torch)
+                                      if args.device == "cpu" else None),
             "seed": args.seed, "versions": _versions(), "initialization": initialization,
             "gradient_norm_algorithm": _GRADIENT_NORM_ALGORITHM,
+            "gradient_norm_device": "cpu",
             "max_grad_norm": float(args.max_grad_norm),
             "optimizer_gradient_phase": ("postclip_unscaled" if args.max_grad_norm > 0
                                          else "pre_optimizer_unscaled"),
@@ -218,7 +219,11 @@ def _run(args):
             "fixed_order": args.fixed_order, "sampler": "sequential fixture" if args.fixed_order else "default Trainer sampler",
             "num_workers": args.num_workers, "mixed_precision": args.mixed_precision,
             "gradient_checkpointing": args.gradient_checkpointing,
-            "actual_parameter_devices": actual_devices, "fallback_count": fallback_count,
+            "actual_parameter_devices": actual_devices,
+            "fallback_count": fallback_count if jt is not None else None,
+            "fallback_measurement": ("jittor_core_attempt_counter" if jt is not None else
+                                     "not_available_in_native_torch_npu" if args.device == "npu" else
+                                     "not_available_in_native_torch"),
             "initial_probe": initial_metadata, "projection_dtypes": sorted(trainer.projection_dtypes),
             "observed_autocast": sorted(trainer.observed_autocast),
             "master_parameter_dtypes": sorted(expected_dtype), "optimizer_state_dtypes": optimizer_dtypes,
@@ -231,6 +236,7 @@ def _run(args):
             "train_metrics": train_output.metrics, "eval_metrics": evaluation,
             "predict_metrics": prediction.metrics, "microbatches": trainer.microbatches,
             "updates": trainer.updates, "unscaled_gradients": trainer.unscaled_gradients,
+            "gradient_archives": trainer.gradient_archives,
             "tail_microbatch_observed": any(item["batch_size"] < args.batch_size for item in trainer.microbatches),
             "tail_accumulation_observed": any(item["microbatches"] < args.gradient_accumulation_steps
                                                for item in trainer.updates),
@@ -256,7 +262,7 @@ def parser():
     run = commands.add_parser("run")
     run.add_argument("--task", choices=TASKS, required=True)
     run.add_argument("--runtime", choices=("torch", "jittor"), required=True)
-    run.add_argument("--device", choices=("cpu", "cuda"), required=True)
+    run.add_argument("--device", choices=("cpu", "cuda", "npu"), required=True)
     run.add_argument("--initialization-dir")
     run.add_argument("--initial-model-dir")
     run.add_argument("--initial-adapter-dir")
@@ -283,6 +289,8 @@ def parser():
     run.add_argument("--resume-checkpoint")
     run.add_argument("--fixed-order", action="store_true")
     run.add_argument("--gradient-checkpointing", action="store_true")
+    run.add_argument("--capture-gradients", action="store_true",
+                     help="save complete unscaled pre-optimizer gradients for each attempted update")
     run.add_argument("--skip-merge", action="store_true")
     run.add_argument("--state-format", choices=("full", "hashes"), default="full")
     run.add_argument("--reload-atol", type=float, default=2e-5)
@@ -308,7 +316,7 @@ def main():
     if args.command == "initialize":
         os.environ["HF_HUB_OFFLINE"] = "1"
         os.environ["TRANSFORMERS_OFFLINE"] = "1"
-        _, torch = _runtime("torch")
+        _, torch = _runtime("torch", device="cpu")
         print(json.dumps(initialize(args, torch), sort_keys=True))
     elif args.command == "run":
         for name in ("epochs", "batch_size", "eval_batch_size", "gradient_accumulation_steps",

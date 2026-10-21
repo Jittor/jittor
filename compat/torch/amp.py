@@ -476,6 +476,11 @@ class _CudaAutocast(_DeviceAutocast):
     _device_default_dtype = "float16"
 
 
+class _NpuAutocast(_DeviceAutocast):
+    _device = "npu"
+    _device_default_dtype = "float16"
+
+
 class _CpuAutocast(_DeviceAutocast):
     _device = "cpu"
     _device_default_dtype = "bfloat16"
@@ -602,6 +607,9 @@ _AMP_FIDELITY = (
     (("torch.cuda.amp.autocast",), _CudaAutocast, Fidelity.APPROXIMATE,
      "Legacy cuda-pinned subclass of torch.autocast with the same register "
      "behaviour and limitations"),
+    (("torch.npu.amp.autocast", "torch.npu.amp.autocast_mode.autocast"),
+     _NpuAutocast, Fidelity.APPROXIMATE,
+     "NPU-pinned subclass of the shared autocast owner; dtype policy uses the ACL backend"),
     (("torch.cpu.amp.autocast",), _CpuAutocast, Fidelity.APPROXIMATE,
      "Legacy cpu-pinned subclass of torch.autocast; jittor's register keeps "
      "bfloat16 only when an operand already is bfloat16, so the CPU default "

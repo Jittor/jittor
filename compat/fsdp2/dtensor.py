@@ -1,12 +1,22 @@
 """DeviceMesh and DTensor compatibility types and factories."""
 import types
+from contextlib import nullcontext
 
 import numpy as np
 
 import jittor as jt
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 from . import common
 from ..diagnostics import EXPECTED, swallowed
+
+
+def _default_device_type():
+    # The ACL provider also exposes CUDA-compatible internals. Ask for its
+    # native device spelling first instead of advertising CUDA on an NPU.
+    if getattr(getattr(jt, "compiler", None), "has_acl", False):
+        return "npu"
+    return "cuda" if getattr(jt, "has_cuda", 0) else "cpu"
 
 
 class DeviceMesh:
@@ -14,7 +24,7 @@ class DeviceMesh:
 
     def __init__(self, device_type=None, mesh=None, *, mesh_dim_names=None,
                  _init_backend=True, **kwargs):
-        self.device_type = device_type or ("cuda" if getattr(jt, "has_cuda", 0) else "cpu")
+        self.device_type = device_type or _default_device_type()
         if not isinstance(self.device_type, str):
             self.device_type = getattr(self.device_type, "type", "cpu")
         if hasattr(mesh, "numpy"):
@@ -354,18 +364,28 @@ def _np_dtype(dtype=None):
 
 
 def _dtensor_from_array(array, device_mesh=None, placements=None, dtype=None):
-    tensor = jt.array(array)
-    if dtype is not None:
-        try:
-            tensor = tensor.astype(_jittor_dtype_name(dtype))
-        except EXPECTED as exc:
-            swallowed("fsdp2/dtensor.py _dtensor_from_array: tensor = tensor.astype(dtype)", exc)
+    # Reuse the installed independent TorchTensor type and mesh placement.
+    # Native callers have no frontend binding and retain native Var factories.
+    from ..torch.tensor_state import compatibility_owner
+    owner = compatibility_owner(jt)
+    scope = nullcontext()
+    if owner is not jt:
+        from ..torch.frontend import tensor_frontend
+        scope = tensor_frontend(
+            owner.Var, device=getattr(device_mesh, "device_type", None))
+    with scope:
+        tensor = jt.array(array)
+        if dtype is not None:
             try:
-                tensor = tensor.astype(_jittor_dtype_name(dtype).split(".")[-1])
+                tensor = tensor.astype(_jittor_dtype_name(dtype))
             except EXPECTED as exc:
-                swallowed("fsdp2/dtensor.py _dtensor_from_array: restore the saved dtype", exc,
-                          "the DTensor keeps its source dtype, so a later op may promote "
-                          "or truncate where torch would not")
+                swallowed("fsdp2/dtensor.py _dtensor_from_array: tensor = tensor.astype(dtype)", exc)
+                try:
+                    tensor = tensor.astype(_jittor_dtype_name(dtype).split(".")[-1])
+                except EXPECTED as exc:
+                    swallowed("fsdp2/dtensor.py _dtensor_from_array: restore the saved dtype", exc,
+                              "the DTensor keeps its source dtype, so a later op may promote "
+                              "or truncate where torch would not")
     return _mark_dtensor(tensor, device_mesh, placements)
 
 

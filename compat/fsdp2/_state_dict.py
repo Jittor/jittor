@@ -24,7 +24,10 @@ def _checkpoint_tensor(value, reference, *, preserve_dtype=False):
 
     g = get_install_context(jt).target_namespace
     backend, device = jt.core.dispatch_context([reference])
-    target = "{}:{}".format(backend, device) if backend == "cuda" else backend
+    if backend == "acl":
+        target = "npu:{}".format(device)
+    else:
+        target = "{}:{}".format(backend, device) if backend == "cuda" else backend
     return g.tensor(value, dtype=value.dtype if preserve_dtype else reference.dtype, device=target).detach()
 
 

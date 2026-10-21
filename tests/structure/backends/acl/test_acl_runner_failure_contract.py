@@ -337,6 +337,14 @@ def test_all_runner_constructors_have_a_valid_registry_or_direct_owner():
                 assert "AclExecutionRunner<ArgReduceOpRunner, false>" in dispatch
                 assert not uses_registry
                 continue
+            if owner == "ArgsortOpRunner":
+                # Sort uses the native typed-query route rather than the generic
+                # registry; require its dispatcher and complete launch owner.
+                assert "AclExecutionRunner<ArgsortOpRunner, false>" in dispatch
+                assert "aclnnSortGetWorkspaceSize(" in bodies[owner]
+                assert "launch(ret, aclnnSort, true)" in bodies[owner]
+                assert not uses_registry
+                continue
             if owner in dynamic_names:
                 # Fused execution assigns the preflight-checked public name
                 # before run; these constructor labels are placeholders.

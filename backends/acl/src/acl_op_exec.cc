@@ -18,9 +18,11 @@
 #include "core/common.h"
 #include "core/op.h"
 #include "acl_jittor.h"
+#include "acl_runtime.h"
 #include "ops/composite/random_op.h"
 #include "ops/reduce_op.h"
 #include "ops/composite/arg_reduce_op.h"
+#include "ops/composite/argsort_op.h"
 #include "ops/binary_op.h"
 #include "ops/broadcast_to_op.h"
 #include "ops/composite/transpose_op.h"
@@ -42,6 +44,7 @@
 #include "utils/str_utils.h"
 #include "aclnn/aclnn.h"
 #include "aclops/aclops.h"
+#include "aclops/argsort_op_acl.h"
 #include "aclops/native_indexing_op_acl.h"
 #include "acl_fused_ascendc.h"
 namespace jittor
@@ -647,9 +650,6 @@ namespace jittor
         exec_acl_sequence(op, {op});
     }
 
-    extern int current_seed;
-    extern int64 current_offset;
-
     static void exec_acl_random(Op *op)
     {
         auto _op = (RandomOp *)op;
@@ -657,14 +657,18 @@ namespace jittor
             _op->type == ns_uniform ? "RandomUniform" : "RandomNormal");
         auto out = op->output(0);
         RandomAttr *attr = new RandomAttr();
-        attr->seed = current_seed;
-        attr->offset = current_offset;
+        uint64 seed, offset;
+        reserve_acl_random(acl_runtime_current_device(), out->numel(), seed, offset);
+        // CANN takes int64 arguments; preserve every seed bit without a
+        // narrowing numeric conversion of the public uint64 seed.
+        static_assert(sizeof(seed) == sizeof(attr->seed), "ACL seed width");
+        std::memcpy(&attr->seed, &seed, sizeof(seed));
+        attr->offset = static_cast<int64>(offset);
         runner.jt_name = "random";
         runner.op_attr.reset(attr);
 
         runner.add(out, false);
         runner.run();
-        current_offset += out->numel();
     }
 
     static unordered_map<string, std::function<void(Op *)>> acl_ops = {
@@ -774,6 +778,16 @@ namespace jittor
                  runner.run();
              }
          }},
+        {"argsort", [](Op *op)
+         {
+             auto *sort = static_cast<ArgsortOp *>(op);
+             AclExecutionRunner<ArgsortOpRunner, false> runner(sort->dim, sort->descending);
+             runner.jt_name = "argsort";
+             runner.add(sort->x, true);
+             runner.add(sort->y, false);
+             runner.add(sort->y_key, false);
+             runner.run();
+         }},
         {"arg_reduce", [](Op *op)
          {
              auto _op = (ArgReduceOp *)op;
@@ -816,6 +830,16 @@ namespace jittor
                 unsupported = acl_getitem_unsupported_reason(op);
             if (unsupported.empty() && op->name() == string("setitem"))
                 unsupported = acl_setitem_unsupported_reason(op);
+            if (op->name() == string("argsort"))
+            {
+                auto *sort = static_cast<ArgsortOp *>(op);
+                const auto dtype = sort->x->dtype();
+                if (dtype != ns_float16 && dtype != ns_float32)
+                    unsupported = "raw ACL argsort requires float16 or float32 keys; "
+                        "the public wrapper preserves bfloat16 through exact float32 keys";
+                if (sort->y->dtype() != ns_int32 && sort->y->dtype() != ns_int64)
+                    unsupported = "ACL argsort indices require int32 or int64";
+            }
             if (op->name() == string("arg_reduce"))
             {
                 auto *reduce = static_cast<ArgReduceOp *>(op);
@@ -948,6 +972,14 @@ namespace jittor
         implementation.kernel.fallback_only = false;
         register_op_implementation("random", BackendId::Acl, implementation,
             "acl-native-random-v1");
+        // Argsort's core definition advertises CPU only. Publish the existing
+        // constructor on ACL with the canonical provider's native forward.
+        auto sort = get_op_definition("argsort")->implementations.at(BackendId::Cpu);
+        sort.kernel.native = exec_mapped_acl_ops;
+        sort.kernel.compile = compile_acl_mapped;
+        sort.kernel.fallback_only = false;
+        register_op_implementation("argsort", BackendId::Acl, sort,
+            "acl-native-argsort-v1");
     }
 
 } // jittor

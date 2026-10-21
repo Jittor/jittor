@@ -29,8 +29,18 @@ def _set_lrs(opt, lrs):
 class LRScheduler:
     def __init__(self, optimizer, last_epoch=-1, verbose=False):
         self.optimizer = optimizer
-        if not hasattr(self, "base_lrs"):
-            self.base_lrs = _base_lrs(optimizer)
+        if last_epoch == -1:
+            for group in optimizer.param_groups:
+                initial_lr = group["lr"]
+                if isinstance(initial_lr, jt.Var):
+                    initial_lr = initial_lr.clone()
+                group.setdefault("initial_lr", initial_lr)
+        else:
+            for index, group in enumerate(optimizer.param_groups):
+                if "initial_lr" not in group:
+                    raise KeyError("param 'initial_lr' is not specified "
+                                   f"in param_groups[{index}] when resuming an optimizer")
+        self.base_lrs = [group["initial_lr"] for group in optimizer.param_groups]
         self.last_epoch = last_epoch
         self.verbose = False if verbose == "deprecated" else verbose
         self._step_count = 0
@@ -67,6 +77,8 @@ class LambdaLR(LRScheduler):
         n = len(self.base_lrs)
         self.lr_lambdas = list(lr_lambda) if isinstance(lr_lambda, (list, tuple)) else [lr_lambda]*n
         super().__init__(optimizer, last_epoch, verbose)
+        # LambdaLR checkpoints use the pinned Torch 2.7 public schema.
+        del self.verbose
     def get_lr(self):
         e = max(self.last_epoch, 0)
         return [b * fn(e) for b, fn in zip(self.base_lrs, self.lr_lambdas)]
@@ -162,10 +174,21 @@ class LinearLR(LRScheduler):
 class StepLR(LRScheduler):
     def __init__(self, optimizer, step_size, gamma=0.1, last_epoch=-1, verbose=False):
         self.step_size = step_size; self.gamma = gamma
-        self.base_lrs = _base_lrs(optimizer)
         super().__init__(optimizer, last_epoch, verbose)
+        # StepLR checkpoints follow the pinned Torch 2.7 schema. Other
+        # schedulers retain their existing legacy verbose contract.
+        del self.verbose
     def get_lr(self):
-        return [b * self.gamma ** (max(self.last_epoch, 0) // self.step_size) for b in self.base_lrs]
+        if not self._get_lr_called_within_step:
+            _warnings.warn("To get the last learning rate computed by the scheduler, "
+                           "please use get_last_lr().", UserWarning, stacklevel=2)
+        current_lrs = [group["lr"] for group in self.optimizer.param_groups]
+        if self.last_epoch == 0 or self.last_epoch % self.step_size != 0:
+            return current_lrs
+        return [rate * self.gamma for rate in current_lrs]
+    def _get_closed_form_lr(self):
+        return [base_lr * self.gamma ** (self.last_epoch // self.step_size)
+                for base_lr in self.base_lrs]
 
 
 class MultiStepLR(LRScheduler):

@@ -74,6 +74,14 @@ ArgsortOp::ArgsortOp(Var* x, int dim, bool descending, NanoString dtype)
         }
     }
     #endif
+    #ifdef HAS_ACCELERATOR
+    // A provider-native sort does not take the CUDA segmented capability path.
+    // Publish its execution flag only when that backend owns a real kernel.
+    if (backend == BackendId::Acl &&
+        (x->dtype() == ns_float16 || x->dtype() == ns_float32) &&
+        backend_runs_op_natively(backend, "argsort"))
+        set_flag(OpFlags::_cuda);
+    #endif
     y = create_output(nullptr, dtype);
     y_key = create_output(nullptr, x->dtype());
     set_flag(OpFlags::_manual_set_vnbb);

@@ -145,6 +145,10 @@ def _standard_rms_norm(self, args, kwargs):
     # output, while the native inference kernel returns the input dtype.
     if _jittor_dtype_name(value.dtype) != _jittor_dtype_name(weight.dtype):
         return None
+    # Preserve the HF FP32 reduction and input-dtype cast order on ACL.
+    # Tensor dispatch also covers explicit NPU tensors under CPU default flags.
+    if jt.core.dispatch_context([value, weight])[0] == "acl":
+        return None
     epsilon = self.__dict__["variance_epsilon"]
     pytorch_order = _acl_bfloat16_rms_norm(value, weight, epsilon)
     if pytorch_order is not None:

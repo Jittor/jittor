@@ -17,7 +17,9 @@ Transformers and TorchMetrics versions are explicit:
 
 | Adapter | Versions | Behavior |
 | --- | --- | --- |
-| Transformers | 4.56.2, 5.5.3 | Its native `torch_npu` availability probe returns false in the Jittor frontend; an installed Jittor `torchvision` facade is reported as available so public image/video `AutoProcessor` paths can initialize. |
+| Transformers | 4.56.2, 5.5.3 | Its NPU availability probe reads the Jittor frontend's public `torch.npu` capability without importing native `torch_npu`; an installed Jittor `torchvision` facade is reported as available so public image/video `AutoProcessor` paths can initialize. |
+| Accelerate (registered with Transformers) | 1.10.1 | Native-extension import probes remain false during package construction; after import every bound NPU availability alias reads public `torch.npu`. No `torch_npu` module is created. |
+| Transformers private native FlashAttention discovery | 4.56.2 | Its module-local native-provider probe remains false, and mask alignment preserves upstream FA2/FA3 discovery without importing `torch_npu`. Public device probes keep reading real `torch.npu`; unsupported explicit native FlashAttention requests still raise. This private provider hook does not alter the existing 5.5.3 adapter boundary. |
 | TorchMetrics | 1.7.4 | Private bounded bincount, concatenation and safe-divide helpers retain the established Jittor behavior. |
 
 These versions come from the maintained integration evidence and local
@@ -32,6 +34,22 @@ adapter entry points appear as `unavailable` in
 patches. Patches use the shared method-patching API and its runtime lifetime
 ledger, so supported cleanup preserves external replacements and reports
 ownership conflicts.
+
+NPU Trainer startup requires the installed `jittor-torch-adapters==1.3.11.0`
+distribution metadata before Jittor is imported. A source-only `PYTHONPATH`
+does not expose the `jittor_transformers` entry point. For a read-only shared
+environment, build a wheel from a staged copy of the current adapter source and
+install it with `pip install --no-deps --no-compile --target <lab-site> <wheel>`.
+Put the task's source and this private installation site on `PYTHONPATH`, and
+verify every installed Python file matches the intended adapter source before
+execution. The native PyTorch oracle uses its own environment without this site.
+
+The NPU Trainer preflight checks the distribution version, the owned entry point,
+and all four callback identities: `transformers.utils.import_utils`,
+`transformers.modeling_flash_attention_utils`, `accelerate.utils.imports`, and
+`accelerate`. This registration check complements actual model/input/output and
+full-gradient placement and zero-fallback checks; it does not establish numerical
+or hardware acceptance by itself.
 
 Run the light source tests without initializing Jittor:
 

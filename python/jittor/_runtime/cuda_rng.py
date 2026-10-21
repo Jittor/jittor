@@ -1,6 +1,7 @@
 """Native CUDA RNG state entry points exposed on :mod:`jittor`.
 
-The state owner lives in the CUDA cuRAND backend.  This module only resolves
+CUDA state is owned by cuRAND; the ACL provider owns separate per-device
+seed/counter state. These legacy accelerator entry points resolve
 the backend and normalizes device arguments so callers do not need to reach
 through ``jt.curand``.  The returned value is Jittor's versioned text state;
 Torch compatibility converts it to the opaque CPU ``uint8`` tensor expected
@@ -26,6 +27,27 @@ def _device_index(device, current_device):
     return int(current_device() if parsed_index is None else parsed_index)
 
 
+class _RegisteredRngBackend:
+    """Stateless adapter to the native provider; never stores Python RNG state."""
+    def __init__(self, core, name):
+        self.core, self.name = core, name
+
+    def get_rng_state(self, device):
+        return self.core.get_device_rng_state(self.name, device)
+
+    def validate_rng_state(self, state):
+        return self.core.validate_device_rng_state(self.name, state)
+
+    def set_rng_state(self, device, state):
+        return self.core.set_device_rng_state(self.name, device, state)
+
+    def manual_seed(self, device, seed):
+        return self.core.set_device_seed(self.name, device, seed)
+
+    def initial_seed(self, device):
+        return self.core.get_device_initial_seed(self.name, device)
+
+
 def _backend(device=None):
     import jittor as jt
     from .backend_libraries import get_library
@@ -35,6 +57,8 @@ def _backend(device=None):
     index = _device_index(device, jt.current_device)
     if index < 0 or index >= jt.get_device_count():
         raise ValueError("CUDA RNG device index is out of range")
+    if "acl" in jt.core.registered_backends():
+        return _RegisteredRngBackend(jt.core, "acl"), index
     library = get_library("curand", load=True)
     if library is None:
         raise RuntimeError("CUDA RNG state requires the native cuRAND backend")

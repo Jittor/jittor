@@ -33,6 +33,11 @@ EXTERN_LIB MemInfo mem_info;
 // @pyjt(get_mem_info)
 inline MemInfo get_mem_info() { return MemInfo(); }
 
+// Driver free/total bytes for one accelerator, including other processes.
+// This is separate from Jittor's per-device allocator-pool counters.
+// @pyjt(device_memory_info)
+vector<int64> device_memory_info(int device);
+
 /**
  * Live bytes held by Vars on one accelerator device, or on the host for
  * ``device == -1``.

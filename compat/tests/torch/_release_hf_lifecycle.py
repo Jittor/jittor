@@ -13,35 +13,30 @@ MERGE_BUDGET = {"logits_max_abs": 1e-3, "logits_max_global_relative": 5e-5,
 
 
 def on_device(torch, model, device, jt=None):
+    from _hf_trainer_e2e_runner import _assert_model_device
+
+    _assert_model_device(jt, torch, model, device)
     values = list(model.named_parameters()) + list(model.named_buffers())
-    devices = sorted({str(value.device) for _, value in values})
-    misplaced = [(name, str(value.device)) for name, value in values
-                 if value.device.type != device]
-    if misplaced:
-        raise AssertionError("model parameters/buffers are not all on %s: %s" % (device, misplaced))
-    if jt is not None:
-        for name, value in values:
-            backend, _ = jt.core.dispatch_context([value])
-            if backend != device:
-                raise AssertionError("native tensor %s backend %s differs from %s" %
-                                     (name, backend, device))
-    return devices
+    return sorted({str(value.device) for _, value in values})
 
 
 def batch_on_device(batch, device):
     return {key: value.to(device) for key, value in batch.items() if key != "sample_id"}
 
 
-def evaluation_probe(model, collator, dataset, device, count=2, autocast=None):
+def evaluation_probe(model, collator, dataset, device, count=2, autocast=None, jt=None):
     from contextlib import nullcontext
     import torch
 
     batch = batch_on_device(collator([dataset[index] for index in range(min(count, len(dataset)))]), device)
+    from _hf_trainer_e2e_runner import _assert_values_device
+
+    _assert_values_device(jt, torch, list(batch.items()), device, "evaluation input")
     model.eval()
     with torch.no_grad(), autocast if autocast is not None else nullcontext():
         output = model(**batch)
-    if output.logits.device.type != device or output.loss.device.type != device:
-        raise AssertionError("evaluation outputs are not on the requested device")
+    _assert_values_device(jt, torch, [("logits", output.logits), ("loss", output.loss)],
+                          device, "evaluation output")
     logits, loss = array(output.logits), array(output.loss)
     if not np.isfinite(logits).all() or not np.isfinite(loss).all():
         raise AssertionError("nonfinite evaluation logits or loss")
@@ -104,7 +99,7 @@ def unwrap_fp32_model(torch, trainer):
     return model
 
 
-def generation(model, tokenizer, task, device, seed, max_new_tokens):
+def generation(model, tokenizer, task, device, seed, max_new_tokens, jt=None):
     import torch
 
     prompts = (["Hi.", "Please write a friendly greeting and describe a quiet village where "
@@ -120,6 +115,9 @@ def generation(model, tokenizer, task, device, seed, max_new_tokens):
     tokenizer.padding_side = "left" if task == "qwen-lora" else "right"
     batch = tokenizer(prompts, padding=True, truncation=True, max_length=64,
                       return_tensors="pt").to(device)
+    from _hf_trainer_e2e_runner import _assert_values_device
+
+    _assert_values_device(jt, torch, list(batch.items()), device, "generation input")
     lengths = array(batch["attention_mask"]).sum(-1).tolist()
     if len(set(lengths)) < 2:
         raise AssertionError("generation fixture did not produce a variable-length batch")
@@ -129,8 +127,8 @@ def generation(model, tokenizer, task, device, seed, max_new_tokens):
     with torch.no_grad():
         cached = model.generate(**batch, use_cache=True, **options)
         uncached = model.generate(**batch, use_cache=False, **options)
-        if cached.device.type != device or uncached.device.type != device:
-            raise AssertionError("generated token IDs landed on the wrong device")
+        _assert_values_device(jt, torch, [("cached", cached), ("uncached", uncached)],
+                              device, "greedy output")
         cached_array, uncached_array = array(cached), array(uncached)
         if not np.array_equal(cached_array, uncached_array):
             raise AssertionError("cached and uncached greedy generation disagree")
@@ -138,15 +136,22 @@ def generation(model, tokenizer, task, device, seed, max_new_tokens):
         sampled = model.generate(**batch, use_cache=True, max_new_tokens=max_new_tokens,
                                  do_sample=True, top_k=10, top_p=0.9, temperature=0.8,
                                  pad_token_id=tokenizer.pad_token_id)
-        if sampled.device.type != device:
-            raise AssertionError("sampled token IDs landed on the wrong device")
+        _assert_values_device(jt, torch, [("sampled", sampled)], device, "sampling output")
     tokenizer.padding_side = old_padding
-    return {"greedy": cached_array, "sampled": array(sampled)}, {
+    return {"greedy": cached_array, "sampled": array(sampled),
+            "input_ids": array(batch["input_ids"]),
+            "attention_mask": array(batch["attention_mask"])}, {
         "input_lengths": lengths, "greedy_cache_exact": True,
         "sampling": {"top_k": 10, "top_p": 0.9, "temperature": 0.8},
         "compute_policy": "FP32 model without autocast", "actual_device": str(cached.device),
-        "max_new_tokens": max_new_tokens,
+        "max_new_tokens": max_new_tokens, "vocab_size": int(model.config.vocab_size),
+        "is_encoder_decoder": bool(model.config.is_encoder_decoder),
+        "decoder_start_token_id": getattr(model.config, "decoder_start_token_id", None),
     }
+
+
+def _archive_probe(arrays, prefix, values):
+    arrays.update({prefix + "/" + key: value for key, value in values.items()})
 
 
 def lifecycle(args, torch, trainer, tokenizer, eval_dataset, collator, base_dir, jt):
@@ -156,17 +161,19 @@ def lifecycle(args, torch, trainer, tokenizer, eval_dataset, collator, base_dir,
     final_dir = Path(args.output_dir) / "final"
     trainer.save_model(str(final_dir))
     tokenizer.save_pretrained(str(final_dir))
-    original, _ = evaluation_probe(model, collator, eval_dataset, args.device)
+    original, _ = evaluation_probe(model, collator, eval_dataset, args.device, jt=jt)
     arrays = {"logits_sample": original["logits"][:, :4, :64]
               if original["logits"].ndim == 3 else original["logits"],
               "loss": original["loss"]}
+    _archive_probe(arrays, "original", original)
     result = {"final_dir": str(final_dir),
               "compute_policy": "FP32 master parameters; Accelerate AMP forward wrapper removed"}
     original_generation = None
     if args.task != "bert":
         original_generation, result["generation"] = generation(
-            model, tokenizer, args.task, args.device, args.seed, args.max_new_tokens)
-        arrays.update({"generation/" + key: value for key, value in original_generation.items()})
+            model, tokenizer, args.task, args.device, args.seed, args.max_new_tokens, jt=jt)
+        _archive_probe(arrays, "generation", original_generation)
+        _archive_probe(arrays, "original/generation", original_generation)
     reloaded_tokenizer = AutoTokenizer.from_pretrained(str(final_dir), local_files_only=True)
     probe_text = ["A short useful sentence.", "Another sentence with a few more words."]
     if tokenizer(probe_text) != reloaded_tokenizer(probe_text):
@@ -184,33 +191,37 @@ def lifecycle(args, torch, trainer, tokenizer, eval_dataset, collator, base_dir,
             str(final_dir), local_files_only=True, attn_implementation="eager")
     reloaded.to(args.device)
     result["reloaded_devices"] = on_device(torch, reloaded, args.device, jt)
-    observed, _ = evaluation_probe(reloaded, collator, eval_dataset, args.device)
+    observed, _ = evaluation_probe(reloaded, collator, eval_dataset, args.device, jt=jt)
+    _archive_probe(arrays, "reloaded", observed)
     result["reload_logits_max_abs"] = assert_logits_equal(
         original["logits"], observed["logits"], args.reload_atol, args.reload_rtol, "public reload")
     if original_generation is not None:
-        reloaded_generation, _ = generation(reloaded, reloaded_tokenizer, args.task,
-                                            args.device, args.seed, args.max_new_tokens)
+        reloaded_generation, result["reloaded_generation"] = generation(reloaded, reloaded_tokenizer, args.task,
+                                            args.device, args.seed, args.max_new_tokens, jt=jt)
+        _archive_probe(arrays, "reloaded/generation", reloaded_generation)
         result["reload_generation_exact"] = np.array_equal(
             original_generation["greedy"], reloaded_generation["greedy"])
         if not result["reload_generation_exact"]:
             raise AssertionError("public reload changed greedy generation")
     del reloaded, observed
     gc.collect()
-    if args.device == "cuda":
-        torch.cuda.empty_cache()
+    if args.device in ("cuda", "npu"):
+        getattr(torch, args.device).empty_cache()
     if args.task == "qwen-lora" and not args.skip_merge:
         merged = model.merge_and_unload(safe_merge=True)
         merged_dir = Path(args.output_dir) / "merged"
         merged.save_pretrained(str(merged_dir), safe_serialization=True)
         tokenizer.save_pretrained(str(merged_dir))
-        merged_probe, _ = evaluation_probe(merged, collator, eval_dataset, args.device)
+        merged_probe, _ = evaluation_probe(merged, collator, eval_dataset, args.device, jt=jt)
+        _archive_probe(arrays, "merged", merged_probe)
         result["merge_numerics"] = assert_merge_equal(
             original["logits"], merged_probe["logits"], original["loss"],
             merged_probe["loss"], "LoRA merge")
         result["merge_logits_max_abs"] = result["merge_numerics"]["logits_max_abs"]
         result["merged_devices"] = on_device(torch, merged, args.device, jt)
-        immediate_generation, _ = generation(merged, tokenizer, args.task, args.device,
-                                              args.seed, args.max_new_tokens)
+        immediate_generation, result["merged_generation"] = generation(merged, tokenizer, args.task, args.device,
+                                              args.seed, args.max_new_tokens, jt=jt)
+        _archive_probe(arrays, "merged/generation", immediate_generation)
         result["merge_generation_exact"] = np.array_equal(
             original_generation["greedy"], immediate_generation["greedy"])
         if not result["merge_generation_exact"]:
@@ -219,7 +230,8 @@ def lifecycle(args, torch, trainer, tokenizer, eval_dataset, collator, base_dir,
             str(merged_dir), local_files_only=True, torch_dtype=torch.float32,
             attn_implementation="eager").to(args.device)
         result["merged_reload_devices"] = on_device(torch, merged_reload, args.device, jt)
-        reload_probe, _ = evaluation_probe(merged_reload, collator, eval_dataset, args.device)
+        reload_probe, _ = evaluation_probe(merged_reload, collator, eval_dataset, args.device, jt=jt)
+        _archive_probe(arrays, "merged_reload", reload_probe)
         result["merged_reload_numerics"] = assert_merge_equal(
             original["logits"], reload_probe["logits"], original["loss"],
             reload_probe["loss"], "merged public reload")
@@ -227,8 +239,9 @@ def lifecycle(args, torch, trainer, tokenizer, eval_dataset, collator, base_dir,
         result["merged_artifact_reload_logits_max_abs"] = assert_logits_equal(
             merged_probe["logits"], reload_probe["logits"], args.reload_atol, args.reload_rtol,
             "merged artifact public reload")
-        merged_generation, _ = generation(merged_reload, tokenizer, args.task, args.device,
-                                          args.seed, args.max_new_tokens)
+        merged_generation, result["merged_reload_generation"] = generation(merged_reload, tokenizer, args.task, args.device,
+                                          args.seed, args.max_new_tokens, jt=jt)
+        _archive_probe(arrays, "merged_reload/generation", merged_generation)
         result["merged_generation_exact"] = np.array_equal(
             original_generation["greedy"], merged_generation["greedy"])
         if not result["merged_generation_exact"]:

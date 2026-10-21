@@ -144,11 +144,27 @@ def _validate_run_report(report):
             "global_step", "resume_checkpoint", "resume_loaded_state_exact"):
         if field not in report:
             raise AssertionError("workflow report is missing %s" % field)
-    if type(report["fallback_count"]) is not int or report["fallback_count"] != 0:
-        raise AssertionError("workflow report has nonzero or invalid fallback_count")
+    measurement = report.get("fallback_measurement")
+    if measurement is None:
+        # Retain old CPU/CUDA artifact readability; new NPU reports need measured provenance.
+        if report["device"] == "npu":
+            raise AssertionError("NPU workflow report is missing fallback_measurement")
+        if type(report["fallback_count"]) is not int or report["fallback_count"] != 0:
+            raise AssertionError("workflow report has nonzero or invalid fallback_count")
+    elif report["runtime"] == "jittor":
+        if (measurement != "jittor_core_attempt_counter" or
+                type(report["fallback_count"]) is not int or report["fallback_count"] != 0):
+            raise AssertionError("workflow report has invalid Jittor fallback_count evidence")
+    elif report["runtime"] == "torch":
+        expected = ("not_available_in_native_torch_npu" if report["device"] == "npu"
+                    else "not_available_in_native_torch")
+        if measurement != expected or report["fallback_count"] is not None:
+            raise AssertionError("native workflow fallback_count must be unavailable")
+    else:
+        raise AssertionError("workflow report has invalid runtime")
     device = report["device"]
     devices = report["actual_parameter_devices"]
-    if device not in ("cpu", "cuda") or not isinstance(devices, list) or not devices:
+    if device not in ("cpu", "cuda", "npu") or not isinstance(devices, list) or not devices:
         raise AssertionError("workflow report has invalid actual_parameter_devices")
     for actual in devices:
         if not isinstance(actual, str) or not (

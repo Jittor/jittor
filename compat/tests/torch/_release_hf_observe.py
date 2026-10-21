@@ -13,11 +13,16 @@ from _release_hf_precision import validate_optimizer_attempt
 # Diagnostic measurement only; clipping and optimizer updates never use this.
 # Elementwise additions define every reduction edge without floating atomics.
 _GRADIENT_NORM_GROUP = 256
-_GRADIENT_NORM_ALGORITHM = "fp64_pairwise_256_v1"
+_GRADIENT_NORM_ALGORITHM = "host_fp64_pairwise_256_v1"
 
 
 def diagnostic_squared_l2(torch, gradient):
-    values = gradient.detach().to(dtype=torch.float64).reshape(-1).square()
+    # Ascend casts float64 device requests down to float32; measure on CPU.
+    # This detached diagnostic never supplies clipping or optimizer values.
+    values = gradient.detach().cpu().to(dtype=torch.float64)
+    if values.device.type != "cpu" or values.dtype != torch.float64:
+        raise AssertionError("gradient diagnostic requires actual CPU float64")
+    values = values.reshape(-1).square()
     count = int(values.numel())
     if count == 0:
         return 0.0
@@ -37,7 +42,8 @@ def diagnostic_squared_l2(torch, gradient):
     return float(values.item())
 
 
-def gradient_health(torch, model, require_all=True, allow_nonfinite=False):
+def gradient_health(torch, model, require_all=True, allow_nonfinite=False,
+                    device=None, jt=None):
     missing, nonfinite, dtypes, squared_norm = [], [], set(), 0.0
     for name, parameter in model.named_parameters():
         if not bool(parameter.requires_grad):
@@ -46,6 +52,10 @@ def gradient_health(torch, model, require_all=True, allow_nonfinite=False):
         if gradient is None:
             missing.append(name)
             continue
+        if device is not None:
+            from _hf_trainer_e2e_runner import _assert_values_device
+
+            _assert_values_device(jt, torch, [(name, gradient)], device, "training gradient")
         dtypes.add(str(gradient.dtype))
         if not bool(torch.isfinite(gradient).all().item()):
             nonfinite.append(name)
@@ -58,15 +68,48 @@ def gradient_health(torch, model, require_all=True, allow_nonfinite=False):
     return {"missing_count": len(missing), "nonfinite_count": len(nonfinite),
             "nonfinite_names": nonfinite[:12], "dtypes": sorted(dtypes),
             "l2_norm": None if nonfinite else float(np.sqrt(squared_norm)),
-            "l2_norm_algorithm": _GRADIENT_NORM_ALGORITHM}
+            "l2_norm_algorithm": _GRADIENT_NORM_ALGORITHM,
+            "l2_norm_device": "cpu"}
 
 
-def observer_classes(torch, trainer_base, callback_base, args):
+def capture_gradient_archive(model, output_dir, step, microbatches, phase):
+    # Explicit host snapshots never modify the live gradient tensors.
+    values = {}
+    nonfinite = []
+    for name, parameter in model.named_parameters():
+        if not bool(parameter.requires_grad):
+            continue
+        gradient = getattr(parameter, "grad", None)
+        if gradient is None:
+            raise AssertionError("gradient archive is missing trainable parameter %s" % name)
+        value = array(gradient)
+        values["gradient/" + name] = value
+        values["dtype/" + name] = np.asarray(str(gradient.dtype))
+        if not np.isfinite(value).all():
+            nonfinite.append(name)
+    if not values:
+        raise AssertionError("gradient archive has no trainable tensor evidence")
+    directory = Path(output_dir) / "gradients"
+    directory.mkdir(exist_ok=True)
+    path = directory / ("step-%06d.npz" % step)
+    if path.exists():
+        raise FileExistsError("gradient archive already exists: %s" % path)
+    np.savez(path, **values)
+    metadata = {"step": int(step), "path": str(path), "phase": phase,
+                "trainable_gradient_count": len(values) // 2,
+                "microbatches": [dict(item) for item in microbatches],
+                "finite": not nonfinite, "nonfinite_names": nonfinite}
+    path.with_suffix(".json").write_text(json.dumps(metadata, indent=2) + "\n")
+    return metadata
+
+
+def observer_classes(torch, trainer_base, callback_base, args, jt=None):
     class RecordingTrainer(trainer_base):
         def __init__(self, *positional, **keywords):
             self.microbatches = []
             self.updates = []
             self.unscaled_gradients = []
+            self.gradient_archives = []
             self.projection_dtypes = set()
             self.observed_autocast = set()
             self.resume_state_exact = None
@@ -86,10 +129,9 @@ def observer_classes(torch, trainer_base, callback_base, args):
 
         def training_step(self, model, inputs, num_items_in_batch=None):
             sample_ids = array(inputs.pop("sample_id")).reshape(-1).tolist()
-            if inputs["input_ids"].device.type != args.device:
-                raise AssertionError("Trainer input_ids are on the wrong device")
-            if inputs["labels"].device.type != args.device:
-                raise AssertionError("Trainer labels are on the wrong device")
+            from _hf_trainer_e2e_runner import _assert_values_device
+
+            _assert_values_device(jt, torch, list(inputs.items()), args.device, "Trainer input")
             labels = array(inputs["labels"])
             record = {
                 "step": int(self.state.global_step) + 1, "sample_ids": sample_ids,
@@ -104,7 +146,8 @@ def observer_classes(torch, trainer_base, callback_base, args):
             record["loss"] = loss_value
             scaler = self.accelerator.scaler
             scaled = args.mixed_precision == "fp16" and scaler is not None
-            record["gradient_health"] = gradient_health(torch, model, allow_nonfinite=scaled)
+            record["gradient_health"] = gradient_health(torch, model, allow_nonfinite=scaled,
+                                                        device=args.device, jt=jt)
             record["gradient_phase"] = "scaled_backward" if scaled else "backward"
             record["gradient_scale"] = float(scaler.get_scale()) if scaled else None
             self.microbatches.append(record)
@@ -138,11 +181,16 @@ def observer_classes(torch, trainer_base, callback_base, args):
         def on_pre_optimizer_step(self, callback_args, state, control, **kwargs):
             owner = self.owner
             fp16 = args.mixed_precision == "fp16"
-            health = gradient_health(torch, kwargs["model"], allow_nonfinite=fp16)
+            health = gradient_health(torch, kwargs["model"], allow_nonfinite=fp16,
+                                     device=args.device, jt=jt)
             health["step"] = int(state.global_step) + 1
             health["gradient_phase"] = ("postclip_unscaled" if args.max_grad_norm > 0
                                         else "pre_optimizer_unscaled")
             owner.unscaled_gradients.append(health)
+            if getattr(args, "capture_gradients", False):
+                owner.gradient_archives.append(capture_gradient_archive(
+                    kwargs["model"], args.output_dir, int(state.global_step) + 1,
+                    owner._pending_batches, health["gradient_phase"]))
             scaled_nonfinite = any(item["gradient_health"]["nonfinite_count"]
                                    for item in owner._pending_batches)
             overflow = scaled_nonfinite or bool(health["nonfinite_count"])
@@ -216,11 +264,12 @@ def observer_classes(torch, trainer_base, callback_base, args):
     return RecordingTrainer, CaptureCallback
 
 
-def register_projection_observer(torch, model, owner, device):
+def register_projection_observer(torch, model, owner, device, jt=None):
     def observe(_module, _inputs, output):
         value = output[0] if isinstance(output, (list, tuple)) else output
-        if value.device.type != device:
-            raise AssertionError("projection output is on the wrong device")
+        from _hf_trainer_e2e_runner import _assert_values_device
+
+        _assert_values_device(jt, torch, [("projection", value)], device, "AMP projection")
         owner.projection_dtypes.add(str(value.dtype))
         owner.observed_autocast.add(bool(torch.is_autocast_enabled(device)))
 

@@ -245,3 +245,27 @@ def test_sharded_tensor_stub_opt_in_keeps_legacy_local_results(monkeypatch):
         assert owner._api_sharded_tensor_empty((2,), dtype=np.float32) is sentinel
     finally:
         stub_policy.set_allow_stub(previous)
+
+
+@pytest.mark.skipif(not hasattr(torch, "_torch_compat_install_context"), reason="Jittor singleton FSDP checkpoint route")
+def test_fsdp_singleton_full_checkpoint_uses_public_object_collective():
+    from torch.distributed.device_mesh import init_device_mesh
+    from torch.distributed.fsdp import fully_shard
+
+    model, optimizer = model_and_optimizer()
+    update(model, optimizer)
+    fully_shard(model, mesh=init_device_mesh("cpu", (1,)))
+    options = StateDictOptions(full_state_dict=True)
+    saved_model, saved_optimizer = clone_tree(get_state_dict(model, optimizer, options=options))
+    assert set(saved_model) == set(saved_optimizer["state"]) == {"weight", "bias"}
+    assert [group["params"] for group in saved_optimizer["param_groups"]] == [["weight"], ["bias"]]
+    restored, restored_optimizer = model_and_optimizer()
+    fully_shard(restored, mesh=init_device_mesh("cpu", (1,)))
+    set_state_dict(restored, restored_optimizer, model_state_dict=saved_model,
+                   optim_state_dict=saved_optimizer, options=options)
+    actual_model, actual_optimizer = get_state_dict(restored, restored_optimizer, options=options)
+    for name in saved_model:
+        np.testing.assert_array_equal(array(actual_model[name]), array(saved_model[name]))
+        for field in ("step", "exp_avg", "exp_avg_sq"):
+            np.testing.assert_array_equal(array(actual_optimizer["state"][name][field]),
+                                          array(saved_optimizer["state"][name][field]))

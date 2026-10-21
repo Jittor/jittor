@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 import tempfile
 from types import SimpleNamespace
+from unittest import mock
 import unittest
 
 import numpy as np
@@ -14,9 +15,11 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _release_hf_data import EncodedDataset, resolve_initial
 from _release_hf_observe import observer_classes
-from _release_hf_lifecycle import assert_logits_equal, assert_merge_equal
+from _release_hf_lifecycle import assert_logits_equal, assert_merge_equal, on_device
 from _release_hf_precision import validate_optimizer_attempt
-from _release_hf_state import compare_array, compare_runs, signature, state_items
+from _release_hf_state import (
+    compare_array, compare_runs, signature, state_items, _validate_run_report,
+)
 from _release_hf_workflow_runner import parser
 
 
@@ -58,6 +61,36 @@ def _write_run(path, report):
 
 
 class TestReleaseHFWorkflowContracts(unittest.TestCase):
+    def test_npu_resume_accepts_explicit_actual_devices_and_honest_fallback_evidence(self):
+        for runtime in ("torch", "jittor"):
+            full, first, resume = _report(), _report(end=5), _report(start=5)
+            for report in (full, first, resume):
+                report.update(device="npu", actual_parameter_devices=["npu:0"], runtime=runtime,
+                              fallback_count=0 if runtime == "jittor" else None,
+                              fallback_measurement=("jittor_core_attempt_counter" if runtime == "jittor"
+                                                    else "not_available_in_native_torch_npu"))
+            with tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                for name, report in (("full", full), ("first", first), ("resume", resume)):
+                    _write_run(root / name, report)
+                with redirect_stdout(io.StringIO()):
+                    compare_runs(SimpleNamespace(left=str(root / "full"), right=str(root / "resume"),
+                        first=str(root / "first"), atol=0, rtol=0, report=None))
+
+    def test_npu_report_rejects_missing_fake_fallback_or_wrong_tensor_device(self):
+        import copy
+        valid = _report()
+        valid.update(device="npu", actual_parameter_devices=["npu:0"], fallback_count=None,
+                     fallback_measurement="not_available_in_native_torch_npu")
+        for change in ({"fallback_count": 0}, {"actual_parameter_devices": ["cpu"]},
+                       {"fallback_measurement": "jittor_core_attempt_counter"},
+                       {"runtime": "jittor", "fallback_count": None},
+                       {"fallback_measurement": None}):
+            report = copy.deepcopy(valid)
+            report.update(change)
+            with self.subTest(change=change), self.assertRaises(AssertionError):
+                _validate_run_report(report)
+
     def test_state_items_rejects_group_count_mismatch_in_both_directions(self):
         model = SimpleNamespace(named_parameters=lambda: iter(()),
                                 named_buffers=lambda: iter(()))
@@ -433,6 +466,33 @@ class TestReleaseHFWorkflowContracts(unittest.TestCase):
         self.assertEqual(item["labels"], [7, 8])
         self.assertEqual(item["input_ids"], [1, 2, 3])
         self.assertEqual(item["sample_id"], 0)
+
+    def test_npu_parser_and_native_model_placement_are_checked(self):
+        args = parser().parse_args(["run", "--runtime", "jittor", "--task", "qwen-lora",
+                                    "--device", "npu", "--train-file", "train.jsonl",
+                                    "--eval-file", "eval.jsonl", "--output-dir", "run"])
+        self.assertEqual(args.device, "npu")
+        torch = SimpleNamespace(npu=SimpleNamespace(current_device=lambda: 1))
+        value = SimpleNamespace(device=SimpleNamespace(type="npu"))
+        model = SimpleNamespace(named_parameters=lambda: [("weight", value)],
+                                named_buffers=lambda: [("buffer", value)])
+        observed = []
+        def dispatch(values):
+            observed.extend(values)
+            return ("acl", 1)
+        jt = SimpleNamespace(core=SimpleNamespace(dispatch_context=dispatch))
+        with mock.patch.dict(sys.modules, {"jittor": jt}):
+            on_device(torch, model, "npu", jt)
+            self.assertEqual(len(observed), 2)
+            jt.core.dispatch_context = lambda values: ("acl", 0)
+            with self.assertRaisesRegex(RuntimeError, "expected acl:1"):
+                on_device(torch, model, "npu", jt)
+            jt.core.dispatch_context = lambda values: ("npu", 1)
+            with self.assertRaisesRegex(RuntimeError, "expected acl:1"):
+                on_device(torch, model, "npu", jt)
+            value.device.type = "cpu"
+            with self.assertRaisesRegex(AssertionError, "wrong device"):
+                on_device(torch, model, "npu", jt)
 
     def test_parser_defaults_keep_public_sampler_and_exact_compare(self):
         args = parser().parse_args(["compare", "--left", "full", "--right", "resumed"])

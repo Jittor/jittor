@@ -6,7 +6,6 @@ import jittor as _jt
 import jittor as _jtm
 import copy as _copy
 import copy as _copy2
-import types as _types_nn_private
 from ...context import get_install_context
 from ...types import _dtype_to_str
 from ...tensor_state import latest_optimizer
@@ -50,6 +49,14 @@ class _DataParallel(nn.Module):
         return self.module(*args, **kwargs)
 
 
+class _DDPState:
+    """Mutable DDP metadata with the identity keys used by native optimizers."""
+
+    def __init__(self, *, sync_enabled, world_size):
+        self.sync_enabled = sync_enabled
+        self.world_size = world_size
+
+
 class _DistributedDataParallel(_DataParallel):
     """DDP that really synchronises: broadcast at construction, all-reduce
     at the backward completion point.
@@ -86,7 +93,7 @@ class _DistributedDataParallel(_DataParallel):
 
     def __init__(self, module, *args, **kwargs):
         super().__init__(module, *args, **kwargs)
-        state = _types_nn_private.SimpleNamespace(
+        state = _DDPState(
             sync_enabled=True, world_size=_ddp_world_size())
         object.__setattr__(self, "_jittor_ddp_state", state)
         self._jittor_ddp_broadcast_parameters()

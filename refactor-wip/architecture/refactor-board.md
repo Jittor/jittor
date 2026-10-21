@@ -1,5 +1,16 @@
 # 整改看板
 
+2026-10-21 新 910B3 主机综合适配：按用户最新授权独立建立工作区并同步指定快照 `305c2f0866f163b0549d47b2e4264c5d41a86385`，在 `codex/ascend-integrated-compat-20261021` 开发；历史暂停保留为原机器事实。已建立[综合计划](../testing/2026-10-21-ascend-integrated-compat-plan.md)，本机 CPU selftest 与 sync_run=1 原生 ACL 矩阵正反向已通过；Torch 前端、多库与通信仍需各自实测，不能继承历史 PASS。运行状态只维护在下表，原始日志与环境在仓外 lab。
+
+| 编号 | 本轮范围 | 状态 | 负责 | 证据/下一步 |
+| --- | --- | --- | --- | --- |
+| ASC-01 | 独立环境、CPU/ACL 串行构建 | 最终MAIN123 structure1430P2S/layoutP；core压力超时保留 | coord | 最终123路径前后frozen exact，1432不同case与121逐node相同；97.py+1.pyi AST3.7P、configuredRuff新增0/减少12。raw core121实际46P9S1原压力测试300秒超时，未删除/改规模/放宽 |
+| ASC-02 | 双解释器小模型输出/全梯度 | CPU及真实NPU八模型完整对拍通过 | ecosystem | r10沿用规范overlay、source65复验八模型271参数+2输入全梯度；25新阶段及24份明确复用的不可变native参考共49验证阶段全部通过，零回落；见综合报告 |
+| ASC-03 | 多库训练和fresh-process恢复 | NPU Trainer完整训练/评估/保存/重载及fresh恢复通过 | ecosystem | r10真实ACL Trainer4updates/8micro/48全梯度、61跨runtime检查通过；连续与2+2恢复216完整状态/轨迹exact，跨runtime216通过；20份完整RNG结构审计通过，dropout0顺序fixture不外推随机训练恢复 |
+| ASC-04 | 共享真实模型推理和LoRA | 121源码4B/1.7B推理P；最终123真实BF16 LoRA全流程及fresh恢复P | coord | 4B/1.7B各58,343,424 logits bitexact（实际121）；123 actual AMP10P/目标84数组exact，whole168 strict F边界保留。0.6B LoRA4updates/8micro/448梯度finite，checkpoint2 fresh恢复2步后933完整状态及轨迹strict0、224梯度bitexact；Native同模型full交叉未运行 |
+| ASC-05 | HCCL/DDP/FSDP2两卡场景 | own88完整FSDP2通过；最终MAIN123双卡NOT_RUN_RESOURCE | distributed | own88六fresh worlds/12rank-phase，full8 cross及各自3+5 strict恢复P/fallback0/noMPI；MAIN CPU90实际r24/source115。最终123仅host核验，无NPUworld/0report；旧120恢复入口archived/source-bound，不授予123资格；最终索引及新增AMP owner边界已封存 |
+| ASC-06 | 配对速度/峰值显存/稳定性 | 持久训练控制器CPU资格通过；NPU性能未验收 | coord | CPU735完整状态/252全梯度及736恢复state exact、20host合同P。1.7B实际18交替calls后依指令停止并清空自有进程，rc-2/acceptedfalse，generation steady/decode未完成；4Bperf未运行，不给速度/显存结论 |
+
 2026-10-21 用户要求暂停新增修改与实验启动，先推送全部工作树独立快照；Day2–3仍未通过。当前交接及新机器推荐分支见[工作区快照交接](../results/2026-10-21-workspace-snapshot-handoff.md)。已运行T5 full允许正常结束，supervisor已暂停后续stage。
 
 2026-10-21 发布第二三天：**执行中，尚未达到退出条件**。Jittor BERT双seed与默认FP16的r10真实CUDA full/resume完成；BERT双seed任务loss包络仍FAIL（15.426% > 15%，本次JT loss更低），Vision r11五smoke通过但FP32 CNN/ViT exact恢复失败，Qwen原始BF16 logits仍FAIL；不以恢复通过覆盖独立数值/任务门槛。在首日候选 `9e0e187b` 上建立独立 `release/torch-compat-day23-20261020`，主树91个未提交路径保留；真实分类/LoRA/Seq2Seq/CNN、AMP和普通恢复沿固定协议执行。已复现并修复 frontend BatchNorm 非持久 counter，公开模型加载 meta 入口和工作流验收继续收口；独立 PyTorch 的上游尾累积恢复限制单列。实际结果与边界见[第二三天报告](../results/2026-10-20-torch-compat-release-day23.md)，不以已启动或 compact 通过替代真实 CUDA 完成。

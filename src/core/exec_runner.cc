@@ -4,6 +4,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include <algorithm>
+#include "ops/composite/fetch_op.h"
 #include <cstring>
 #include <unordered_set>
 #ifdef HAS_ACCELERATOR
@@ -39,8 +40,6 @@ namespace jittor {
 EXTERN_LIB MemoryProfiler memory_profiler;
 DECLARE_FLAG(int, profile_memory_enable);
 
-// from fetch_op.cc
-EXTERN_LIB list<VarPtr> fetcher_to_free;
 // from cuda_managed_allocator
 #ifdef HAS_ACCELERATOR
 DECLARE_FLAG(int, use_cuda_managed_allocator);
@@ -735,7 +734,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
                || v->liveness.backward.count() <= held
                || released_here.holds(v)) << v;
     // clean fetcher free buffer
-    fetcher_to_free.clear();
+    fetcher_to_free().clear();
     if (device_sync && !runtime_use_cuda())
         backend_ops(BackendId::Cpu).synchronize(0);
     #ifdef HAS_ACCELERATOR

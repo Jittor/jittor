@@ -12,7 +12,8 @@ import numpy as np
 import torch
 import jittor as jt
 
-_DEVICES = [("cpu", 0)] + ([("cuda", 1)] if _test_capability.any_accelerator_enabled(backend=jt) else [])
+_ACCELERATOR = "npu" if getattr(jt.compiler, "has_acl", False) else "cuda"
+_DEVICES = [("cpu", 0)] + ([(_ACCELERATOR, 1)] if _test_capability.any_accelerator_enabled(backend=jt) else [])
 
 
 def both_devices(fn):
@@ -196,6 +197,74 @@ class TestSGD(Base):
 
 
 class TestAdam(Base):
+    def test_adamw_capturable_false_cpu_npu_matches_default(self):
+        def body(dev):
+            parameters = [torch.nn.Parameter(torch.tensor([1., -2.], device=dev))
+                          for _ in range(2)]
+            optimizers = [torch.optim.AdamW([parameters[0]], lr=.01, foreach=False, fused=False),
+                          torch.optim.AdamW([parameters[1]], lr=.01, foreach=False,
+                                            fused=False, capturable=False)]
+            for _ in range(2):
+                for parameter, optimizer in zip(parameters, optimizers):
+                    optimizer.zero_grad()
+                    parameter.square().sum().backward()
+                    optimizer.step()
+                self.ac(parameters[0].numpy(), parameters[1].numpy(), atol=0., rtol=0.)
+                left, right = [optimizer.state[parameter]
+                               for parameter, optimizer in zip(parameters, optimizers)]
+                for key in ("exp_avg", "exp_avg_sq"):
+                    self.ac(left[key].numpy(), right[key].numpy(), atol=0., rtol=0.)
+            self.assertIs(optimizers[1].param_groups[0]["capturable"], False)
+            self.assertIs(optimizers[1].state_dict()["param_groups"][0]["capturable"], False)
+        both_devices(body)
+
+    def test_adamw_capturable_true_rejects_before_parameter_update(self):
+        def body(dev):
+            parameter = torch.nn.Parameter(torch.tensor([1.], device=dev))
+            with self.assertRaisesRegex(NotImplementedError, "capturable=True"):
+                torch.optim.AdamW([parameter], capturable=True)
+            with self.assertRaisesRegex(NotImplementedError, "capturable=True"):
+                torch.optim.AdamW([{"params": [parameter], "capturable": True}])
+            with self.assertRaisesRegex(TypeError, "capturable"):
+                torch.optim.AdamW([parameter], capturable="false")
+            optimizer = torch.optim.AdamW([parameter], capturable=False)
+            parameter.square().sum().backward()
+            optimizer.param_groups[0]["capturable"] = True
+            with self.assertRaisesRegex(NotImplementedError, "capturable=True"):
+                optimizer.step()
+            self.ac(parameter.numpy(), [1.], atol=0., rtol=0.)
+            self.assertFalse(optimizer.state_dict()["state"])
+        both_devices(body)
+
+    def test_low_precision_moments_follow_torch_parameter_dtype(self):
+        def body(dev):
+            for dtype in (torch.float16, torch.bfloat16):
+                for constructor in (torch.optim.Adam, torch.optim.AdamW):
+                    with self.subTest(device=dev, dtype=str(dtype), optimizer=constructor.__name__):
+                        first = torch.tensor([1., -2.], device=dev, dtype=dtype, requires_grad=True)
+                        late = torch.tensor([.5, -1.], device=dev, dtype=dtype, requires_grad=True)
+                        optimizer = constructor([first], lr=.01)
+                        first.grad = torch.tensor([.25, -.5], device=dev, dtype=dtype)
+                        optimizer.step()
+                        optimizer.add_param_group({"params": [late]})
+                        late.grad = torch.tensor([.125, -.25], device=dev, dtype=dtype)
+                        optimizer.step()
+                        for parameter in (first, late):
+                            state = optimizer.state[parameter]
+                            for key in ("exp_avg", "exp_avg_sq"):
+                                self.assertEqual(state[key].dtype, dtype)
+                                self.assertEqual(state[key].device, parameter.device)
+                                self.assertTrue(np.isfinite(state[key].float().cpu().numpy()).all())
+        both_devices(body)
+
+    def test_native_low_precision_moments_keep_fp32_policy(self):
+        for dtype in ("float16", "bfloat16"):
+            parameter = jt.array([1., -2.], dtype=dtype)
+            for constructor in (jt.optim.Adam, jt.optim.AdamW):
+                optimizer = constructor([parameter], lr=.01)
+                for key in ("m", "values"):
+                    self.assertEqual(str(optimizer.param_groups[0][key][0].dtype), "float32")
+
     def test_adam_first_step(self):
         w0 = np.array([1., 2., 3.], "float32")
         lr, eps = 0.1, 1e-8

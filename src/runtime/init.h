@@ -50,6 +50,27 @@ int get_cpu_num_threads();
 // @pyjt(set_cpu_num_threads, threads)
 void set_cpu_num_threads(int threads);
 
+// Optional native device RNG owner, independent of CPU and of BackendOps ABI.
+struct DeviceRngOps {
+    string (*get_state)(int) = nullptr;
+    void (*validate_state)(const string&) = nullptr;
+    void (*set_state)(int, const string&) = nullptr;
+    void (*manual_seed)(int, uint64) = nullptr;
+    uint64 (*initial_seed)(int) = nullptr;
+};
+EXTERN_LIB void register_device_rng_backend(const string& backend, const DeviceRngOps& ops);
+// Snapshots flush lazy work before observing or replacing a device stream.
+// @pyjt(get_device_rng_state)
+string get_device_rng_state(const string& backend, int device);
+// @pyjt(validate_device_rng_state)
+void validate_device_rng_state(const string& backend, const string& state);
+// @pyjt(set_device_rng_state)
+void set_device_rng_state(const string& backend, int device, const string& state);
+// @pyjt(set_device_seed)
+void set_device_seed(const string& backend, int device, uint64 seed);
+// @pyjt(get_device_initial_seed)
+uint64 get_device_initial_seed(const string& backend, int device);
+
 void add_set_seed_callback(set_seed_callback callback);
 
 extern

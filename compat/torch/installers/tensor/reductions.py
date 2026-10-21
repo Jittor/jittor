@@ -123,13 +123,8 @@ def _maxmin(which, x, *args, **kwargs):
         return _owner._NATIVE_MIN_METHOD(x)
     index_of = _owner.argmax if which == "max" else _owner.argmin
     idx = index_of(x, dim=dim, keepdim=keepdim)
-    if getattr(_owner.jt.compiler, "has_acl", 0):
-        native = _owner._NATIVE_MAX if which == "max" else _owner._NATIVE_MIN
-        val = native(x, dim, keepdims=keepdim)
-    elif keepdim:
+    if keepdim:
         val = _owner._NATIVE_GATHER(x, dim, idx)
-    elif x.ndim == 1:
-        val = x[idx]
     else:
         val = _owner._NATIVE_GATHER(x, dim, idx.unsqueeze(dim)).squeeze(dim)
     return _owner._MinMax(val, idx.int64())

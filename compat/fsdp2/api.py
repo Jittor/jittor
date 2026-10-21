@@ -225,7 +225,7 @@ def fully_shard(module, *, mesh=None, reshard_after_forward=True,
         st = common.StateRecord()
         object.__setattr__(module, "_fsdp_state", st)
     st.mesh = mesh or getattr(st, "mesh", None) or dtensor.init_device_mesh(
-        "cuda" if getattr(jt, "has_cuda", 0) else "cpu", (common._world_size(),))
+        mesh_shape=(common._world_size(),))
     shard_group, replicate_group = _mesh_groups(st.mesh, dp_mesh_dims)
     if getattr(st, "true_fsdp_initialized", False):
         previous_shard = st.shard_group

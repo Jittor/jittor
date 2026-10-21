@@ -42,7 +42,10 @@ def test_shared_step_context_is_active_only_during_get_lr(shared_lr_device, name
     scheduler = Observed(optimizer, **options)
     assert scheduler.observed == [True]
     assert scheduler.state_dict()["_get_lr_called_within_step"] is False
-    assert scheduler.state_dict()["verbose"] is False
+    if name in ("StepLR", "LambdaLR"):
+        assert "verbose" not in scheduler.state_dict()  # pinned Torch 2.7 schema
+    else:
+        assert scheduler.state_dict()["verbose"] is False
     step(optimizer, scheduler)
     assert scheduler.observed == [True, True]
     assert scheduler.state_dict()["_get_lr_called_within_step"] is False
@@ -64,13 +67,13 @@ def test_shared_step_resets_context_after_exception(shared_lr_device):
     assert scheduler.state_dict()["_get_lr_called_within_step"] is False
 
 
-def test_loading_legacy_scheduler_state_keeps_new_constructor_defaults(shared_lr_device):
+def test_loading_legacy_linear_scheduler_state_keeps_new_constructor_defaults(shared_lr_device):
     optimizer, _ = make_schedule(shared_lr_device)
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda epoch: 0.5 ** epoch)
+    scheduler = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.5, total_iters=3)
     legacy = scheduler.state_dict()
     legacy.pop("verbose")
     legacy.pop("_get_lr_called_within_step")
-    restored = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda epoch: 0.5 ** epoch)
+    restored = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.5, total_iters=3)
     restored.load_state_dict(legacy)
     assert restored.state_dict()["verbose"] is False
     assert restored.state_dict()["_get_lr_called_within_step"] is False

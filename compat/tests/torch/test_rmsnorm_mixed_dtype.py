@@ -74,3 +74,52 @@ def test_mixed_dtype_eval_and_training_match_original_forward(device, input_dtyp
             for dispatched, original in zip(observed["module"], observed["forward"]):
                 np.testing.assert_array_equal(dispatched, original)
                 assert np.isfinite(dispatched).all()
+
+
+class SourceOrderRMSNorm(MixedRMSNorm):
+    def __init__(self, weight, dtype, device):
+        torch.nn.Module.__init__(self)
+        self.weight = torch.nn.Parameter(torch.tensor(weight, dtype=dtype, device=device))
+        self.variance_epsilon = 1e-6
+        self.forward_calls = 0
+
+    def forward(self, value):
+        self.forward_calls += 1
+        return super().forward(value)
+
+
+@pytest.mark.parametrize("device", ["cpu", pytest.param("npu", marks=pytest.mark.npu)])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_acl_standard_hf_norm_keeps_original_forward_and_full_gradients(device, dtype):
+    if device == "npu":
+        capability.require_accelerator("acl")
+    source = np.arange(1, 17, dtype=np.float32).reshape(2, 8) * np.float32(.125)
+    weight = np.arange(4, 12, dtype=np.float32) * np.float32(.125)
+    coefficient = np.arange(16, 0, -1, dtype=np.float32).reshape(2, 8) * np.float32(.125)
+    settings = {"use_cuda": int(device == "npu"), "backend_fallback": "error"}
+    if getattr(jt.compiler, "has_acl", 0):
+        settings["use_acl"] = int(device == "npu")
+    observed = {}
+    from jittor._runtime.fallback import forbid_backend_fallbacks
+    with jt.runtime.scope(**settings), forbid_backend_fallbacks():
+        for route in ("module", "forward"):
+            module = SourceOrderRMSNorm(weight, dtype, device)
+            value = torch.tensor(source, dtype=dtype, device=device, requires_grad=True)
+            module.eval()
+            with torch.no_grad():
+                output = module(value) if route == "module" else module.forward(value)
+            assert module.forward_calls == 1
+            module.train()
+            trained = module(value) if route == "module" else module.forward(value)
+            assert module.forward_calls == 2
+            loss = (trained * torch.tensor(coefficient, dtype=dtype, device=device)).float().sum()
+            input_grad, weight_grad = torch.autograd.grad(loss, (value, module.weight))
+            for tensor in (output, trained, input_grad, weight_grad):
+                assert tensor.dtype == dtype
+                assert tensor.device.type == device
+                expected = ("acl", 0) if device == "npu" else ("cpu", -1)
+                assert tuple(jt.core.dispatch_context([tensor])) == expected
+            observed[route] = [array(tensor) for tensor in (output, trained, input_grad, weight_grad)]
+        for dispatched, original in zip(observed["module"], observed["forward"]):
+            np.testing.assert_array_equal(dispatched, original)
+            assert np.isfinite(dispatched).all()

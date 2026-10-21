@@ -49,6 +49,7 @@ CORE_SOURCES = (
     "src/acl_fused_ascendc.cc",
     "kernels/native/adamw_op_acl.cc",
     "kernels/native/arg_reduce_op_acl.cc",
+    "kernels/native/argsort_op_acl.cc",
     "kernels/native/base_op_acl.cc",
     "kernels/native/binary_op_acl.cc",
     "kernels/native/bmm_op_acl.cc",
@@ -141,9 +142,28 @@ def configure(context: BuildContext) -> BuildConfig:
     mod = context.compile_module(
         '''
 #include "core/common.h"
+#include <acl/acl.h>
 namespace jittor {
 // @pyjt(init_acl_ops)
 void init_acl_ops();
+// @pyjt(acl_device_name)
+string acl_device_name() {
+    const char* name = aclrtGetSocName();
+    USER_CHECK(name && *name) << "aclrtGetSocName returned no device name";
+    return name;
+}
+// @pyjt(acl_bfloat16_supported)
+bool acl_bfloat16_supported() {
+    // CANN defines this as current-environment availability, not a blanket
+    // claim for every ACL device. Do not cache it across device/environment changes.
+    int32_t supported = 0;
+    aclError status = aclGetCannAttribute(ACL_CANN_ATTR_BF16, &supported);
+    USER_CHECK(status == ACL_SUCCESS)
+        << "aclGetCannAttribute(BF16) failed, ACL status: " << status;
+    USER_CHECK(supported == 0 || supported == 1)
+        << "aclGetCannAttribute(BF16) returned invalid availability: " << supported;
+    return supported == 1;
+}
 }''', config.cc_flags + " " + " ".join(cc_files) + cc_flags)
     final_flags = config.cc_flags + cc_flags
     provider_sources = tuple(
@@ -186,4 +206,8 @@ def install_extern(context: BuildContext) -> bool:
 
 def post_process(context: BuildContext) -> None:
     if context.config.has_acl:
-        context.config.resources["acl_initializer"].init_acl_ops()
+        from jittor._runtime.dispatch import register_kernel
+        runtime = context.config.resources["acl_initializer"]
+        runtime.init_acl_ops()
+        register_kernel("runtime.supports_bfloat16", "acl", runtime.acl_bfloat16_supported)
+        register_kernel("runtime.device_name", "acl", runtime.acl_device_name)

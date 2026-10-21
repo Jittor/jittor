@@ -1116,6 +1116,8 @@ _native_index = index
 
 _native_arg_reduce = arg_reduce
 
+_native_argsort = ops.argsort
+
 _native_where = where
 
 _native_floor_int = floor_int
@@ -1137,6 +1139,13 @@ def index(inshape=None, dim=None, dtype="int32", **kwargs):
     if dim is None:
         return _native_index(inshape, dtype=dtype)
     return _native_index(inshape, dim, dtype)
+
+def argsort(x, dim=-1, descending=False, dtype="int32"):
+    result = _try_dispatch("tensor.argsort", x, dim, descending, dtype)
+    if result is not None:
+        return result
+    return _native_argsort(x, dim, descending, dtype)
+
 
 def arg_reduce(x, op, dim, keepdims=False):
     result = _try_dispatch("tensor.arg_reduce", x, op, dim, keepdims)
@@ -1177,6 +1186,8 @@ def sigmoid(x):
 
 index.__doc__ = _native_index.__doc__
 
+argsort.__doc__ = _native_argsort.__doc__
+
 arg_reduce.__doc__ = _native_arg_reduce.__doc__
 
 where.__doc__ = _native_where.__doc__
@@ -1186,6 +1197,8 @@ floor_int.__doc__ = _native_floor_int.__doc__
 sigmoid.__doc__ = _native_sigmoid.__doc__
 
 Var.index = index
+
+Var.argsort = argsort
 
 Var.arg_reduce = arg_reduce
 

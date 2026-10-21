@@ -63,9 +63,18 @@ using namespace fetcher_local;
 
 #endif
 
-list<VarPtr> fetcher;
-// this list will be free at each execution
-list<VarPtr> fetcher_to_free;
+list<VarPtr>& fetcher() {
+    // use_cuda's startup setter can sync before this translation unit's
+    // dynamic initialization. Late cleanup also needs a live, empty queue.
+    static auto* queue = new list<VarPtr>();
+    return *queue;
+}
+
+// Entries are released after each execution and explicitly during cleanup.
+list<VarPtr>& fetcher_to_free() {
+    static auto* queue = new list<VarPtr>();
+    return *queue;
+}
 
 FetchOp::FetchOp(vector<Var*>&& inputs, FetchFunc&& func) 
 : fetch_vars(inputs), func(move(func)) {
@@ -75,8 +84,8 @@ FetchOp::FetchOp(vector<Var*>&& inputs, FetchFunc&& func)
     #endif
     VarPtr vp(0, ns_int32);
     outputs_holder.emplace_back(vp);
-    fetcher.emplace_front(move(vp));
-    fetcher_iter = fetcher.begin();
+    fetcher().emplace_front(move(vp));
+    fetcher_iter = fetcher().begin();
     for (auto v : fetch_vars)
         if (!v->is_finished()) {
             v->set_flag(VarFlags::_stop_fuse);
@@ -93,18 +102,18 @@ FetchOp::FetchOp(vector<Var*>&& inputs, FetchFunc&& func)
 // Called only after the Python fetch constructor has returned and the graph
 // edges are installed. Callback execution never observes a half-built Op.
 void submit_pending_fetches() {
-    if (!fetcher.empty()) {
-        auto target = fetcher.front();
+    if (!fetcher().empty()) {
+        auto target = fetcher().front();
         auto* op = target->input();
         bool ready = op != nullptr;
         if (op)
             for (auto* v : op->inputs()) ready &= v->is_finished();
         if (ready) runtime_executor().run_sync({target.ptr}, false, false);
     }
-    while (fetcher.size() > 20) {
-        LOGvvvv << "too many fetchers(">>fetcher.size() >> 
+    while (fetcher().size() > 20) {
+        LOGvvvv << "too many fetchers(">>fetcher().size() >>
             ") are bufferd, force flush";
-        runtime_executor().run_sync({fetcher.back().ptr}, false, false);
+        runtime_executor().run_sync({fetcher().back().ptr}, false, false);
     }
 }
 
@@ -221,8 +230,8 @@ void FetchOp::run() {
         FetchResult fr{move(func), move(allocations), move(arrays)};
         fr.call();
     }
-    fetcher_to_free.emplace_front(move(*fetcher_iter));
-    fetcher.erase(fetcher_iter);
+    fetcher_to_free().emplace_front(move(*fetcher_iter));
+    fetcher().erase(fetcher_iter);
 }
 
 } // jittor

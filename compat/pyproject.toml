@@ -32,3 +32,4 @@ testpaths = ["tests"]
 norecursedirs = ["*.egg", ".*", "_darcs", "CVS", "dist", "node_modules", "venv", "{arch}"]
 addopts = "--strict-markers --strict-config -p no:cacheprovider"
 xfail_strict = true
+markers = ["npu: tests requiring an Ascend NPU backend"]

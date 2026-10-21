@@ -531,3 +531,147 @@ with scope: assertFalse(三份)                                                #
   想同时验证 MPI 和 NCCL，必须分两次跑，不能塞进同一个进程。
 - **`mpirun` 会重置环境**：验证用的所有变量都要通过 `mpirun` 之前的 env 传进去，
   确认每个 rank 日志里的 `cache_path:` 指向自己的 `JITTOR_HOME`。
+
+## Ascend two-rank collective prerequisite
+
+`scripts/verify_hccl_stack.py` runs the same public Torch API checks under the
+Jittor shim or an independent native `torch_npu` interpreter. This is a
+required two-rank gate: it has no CPU fallback or optional skip. It checks
+rank-specific all-reduce, broadcast, all-gather and object gathering, records
+actual NPU residency and the Jittor fallback delta, and emits one JSON per rank.
+Passing this prerequisite does not establish FSDP2/DDP, BF16 or resume support.
+
+Before card execution, the routing contracts can run without importing real
+Jittor or starting JIT:
+
+```bash
+python -B compat/tests/fsdp2/test_hccl_collective_routing.py
+python -B compat/tests/fsdp2/test_fsdp_mesh.py
+python agent/skills/jittor-distributed-verification/scripts/verify_hccl_stack.py --help
+```
+
+For Jittor, first complete a single-rank ACL operation and HCCL build serially,
+then prewarm a distinct cache for each rank. Keep all HOME/JITTOR_HOME/TMPDIR,
+root-info, logs and results under the lab. Use an external rank wrapper to map
+each RANK to its prewarmed JITTOR_HOME; do not start two first builds against a
+shared cache. Launch with the maintained `jtrun --backend hccl`, explicit
+assigned device IDs, an output/log directory and a bounded job timeout. Source
+the user's CANN environment first. Keep `JT_HCCL_COLLECTIVE_SYNC=full` until
+the separate on-device synchronization protocol has passed. Do not use mpirun
+or load libmpi in this env/file HCCL route.
+
+For the independent oracle, remove Jittor/shim/adapters paths and
+JITTOR_TORCH_SHIM, keep the chosen native Torch/torch_npu pins, and expose the
+two assigned devices to
+`torch.distributed.run --standalone --nproc-per-node=2`, and pass
+`--runtime torch`. The harness rejects a shim-resolved oracle. Both sides
+must select identical dtype and run from the same source snapshot.
+
+For CANN, start with an empty PYTHONPATH before sourcing the approved toolkit
+`set_env.sh`, then keep only its official Python directories in the oracle.
+Do not delete that resulting PYTHONPATH: it contains `tbe`, which GE may need
+even when configuring precision before the first tensor operation. Before
+card execution, check `importlib.util.find_spec("tbe")` resolves inside that
+toolkit and native `torch.__file__` resolves inside the chosen oracle, with no
+Jittor imported. Record these paths alongside the pinned environment freeze.
+
+CANN can create multiprocessing Manager Unix sockets. Give each rank a short,
+private TMPDIR below the lab and check the final socket path stays below the
+platform's 108-byte limit; HOME, caches and logs can remain deeper. If
+`--state-root` would replace that short TMPDIR with a long nested path, use
+an external rank wrapper to set all five lab state variables and omit
+`--state-root`. Reset Python's cached temporary directory before runtime
+imports if the wrapper changes TMPDIR.
+
+Invoke `--runtime jittor --output <lab/new-run>` or
+`--runtime torch --output <lab/new-oracle>` as the worker arguments. After
+both rank processes exit successfully, check the complete evidence without
+loading either runtime:
+
+```bash
+python agent/skills/jittor-distributed-verification/scripts/verify_hccl_stack.py \
+  --check-reports <lab/new-run>
+python agent/skills/jittor-distributed-verification/scripts/verify_hccl_stack.py \
+  --check-oracle <lab/new-jittor-run> <lab/new-native-oracle-run>
+```
+
+`--check-oracle` compares complete tensor payloads and gathered objects from
+both independent runtimes after checking each rank report.
+
+The default dtype is float32. `--dtype bfloat16` and `--dtype float16` are
+separate gates; a float32 PASS does not authorize a low-precision claim.
+General HCCL all-gather autograd and sharded DCP remain distinct capabilities.
+
+## Ascend DDP/FSDP2 training and fresh-process FULL resume
+
+`scripts/verify_hccl_training.py` reuses the maintained Accelerate integration
+fixture's `_model_optimizer` and `_values`. It exercises the same fixed
+Linear weights and AdamW groups in two runtimes, with rank-dependent resident
+inputs, two microbatches per update, DDP `no_sync` or FSDP2
+`set_requires_gradient_sync(False/True)`, active gradient clipping and
+StepLR. The default is eight updates, with a checkpoint after update three.
+Every update records both microbatch losses, every full parameter gradient
+before/after clipping, complete named FULL model and optimizer states, and
+scheduler state. This tiny deterministic fixture is a prerequisite; it does
+not claim Transformers/PEFT, stochastic dropout/RNG recovery, performance,
+low precision, HSDP or sharded DCP support.
+
+Native Torch 2.7.1 exports `torch.distributed.fsdp.fully_shard` publicly.
+The installed torch_npu 2.7.1.post2 package imports and calls its FSDP patch
+from `torch_npu.__init__`; the fixture uses the public entry after importing
+torch_npu. Do not inject those patches into the Jittor side.
+
+All workers require `JITTOR_LAB_ROOT` and `JITTOR_SOURCE_ROOT` naming the
+chosen worktree. For Jittor set
+`PYTHONPATH="$TREE/python:$TREE/adapters"` and enable the deployed shim.
+Keep the shared dev and native oracle environments read-only.
+`--state-root "$RUN/state"` creates per-rank `home`, `jittor-home`,
+`tmp` and `xdg-cache` below that run; HF_HOME may point to an existing lab
+model cache. Without --state-root, all five state environment variables must
+already point below the lab. PYTHONDONTWRITEBYTECODE is required. Prewarm the
+exact rank cache paths serially before authorizing a two-rank Jittor run.
+
+For each wrapping mode `ddp` and `fsdp2`, launch three separate rank worlds
+sequentially with the same isolated state root and immutable source:
+
+```text
+verify_hccl_training.py --runtime jittor --wrapping MODE --phase full
+  --updates 8 --split 3 --state-root RUN/state --output RUN/full
+verify_hccl_training.py --runtime jittor --wrapping MODE --phase prefix
+  --updates 8 --split 3 --state-root RUN/state --output RUN/prefix
+  --checkpoint RUN/checkpoint
+verify_hccl_training.py --runtime jittor --wrapping MODE --phase resume
+  --updates 8 --split 3 --state-root RUN/state --output RUN/resume
+  --checkpoint RUN/checkpoint
+```
+
+The worker command belongs behind
+`jtrun --backend hccl --nproc-per-node=2 --device-ids="$ASSIGNED_DEVICES"`
+with explicit lab `--log-dir` and bounded `--job-timeout`. A prefix writes
+one small FULL checkpoint per rank and refuses to overwrite an existing file.
+A resume must load those bytes in a fresh process, pass exact restored-state
+checks, and complete updates 4–8. Process identity includes PID and Linux
+start-time ticks.
+
+For the native oracle, remove shim PYTHONPATH/JITTOR_TORCH_SHIM, preserve the
+exact source metadata and lab state variables, expose only the two assigned
+devices, and use the oracle interpreter's
+`-m torch.distributed.run --standalone --nproc-per-node=2` with
+`--runtime torch`. Run the same full/prefix/resume protocol into a different
+oracle run directory. Do not change the Torch/torch_npu versions to satisfy a
+downstream dependency.
+
+The following checks are host-only and require no Torch/Jittor import:
+
+```bash
+python scripts/verify_hccl_training.py --check-training RUN/full RUN/prefix RUN/resume
+python scripts/verify_hccl_training.py --check-training ORACLE/full ORACLE/prefix ORACLE/resume
+python scripts/verify_hccl_training.py --check-oracle RUN/full ORACLE/full
+```
+
+Use the script's actual path below this skill in those commands.
+The resume gate requires exact arrays and complete update sequences, complete
+gradients and replica consistency. The independent-oracle gate defaults to
+atol=2e-6/rtol=2e-5. A missing rank, missing state, incorrect device, nonzero
+fallback, different source fingerprint or partial trajectory fails the gate.
+Do not replace failed numeric evidence by widening those tolerances.

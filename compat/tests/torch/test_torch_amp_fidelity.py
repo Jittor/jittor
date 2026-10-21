@@ -217,7 +217,8 @@ class TestTorchAmpNamespace(unittest.TestCase):
         self.assertIs(record.implementation, torch.amp.GradScaler)
         self.assertEqual(record.level, Fidelity.APPROXIMATE)
         self.assertIn("state_dict", record.detail)
-        self.assertIn("_check_inf_per_device", record.detail)
+        self.assertIn("flat host-visible reduction per optimizer", record.detail)
+        self.assertIn("per-device _found_inf tensors", record.detail)
 
     def test_custom_fwd_fidelity_names_the_cast_rule(self):
         record = fidelity_of("torch.amp.custom_fwd")
@@ -648,7 +649,8 @@ class TestTorchAutocastNumerics(cu.JittorTestCase):
         torch.set_autocast_enabled(region, True)
         try:
             self.assertTrue(torch.is_autocast_enabled(region))
-            self.assertEqual(dtype_name(a * a), "float16")
+            self.assertEqual(dtype_name(a * a),
+                             str(torch.get_autocast_dtype(region)).rsplit(".", 1)[-1])
         finally:
             torch.set_autocast_enabled(region, False)
         self.assertFalse(torch.is_autocast_enabled(region))
@@ -662,6 +664,9 @@ class TestTorchAutocastNumerics(cu.JittorTestCase):
         scaler = torch.amp.GradScaler(device if device == "cpu" else "cuda",
                                       init_scale=128.0, growth_interval=1000)
 
+        # The injected grads represent an already-scaled backward; initialise
+        # the public scale lifecycle as a real training iteration does.
+        scaler.scale(finite.sum())
         infinite = jt.array(np.full(4, np.inf, dtype="float32"))
         optimizer.param_groups[0]["grads"] = [infinite]
         self.assertIsNone(scaler.step(optimizer))
@@ -669,6 +674,7 @@ class TestTorchAutocastNumerics(cu.JittorTestCase):
         self.assertEqual(optimizer.steps, 0)
         self.assertEqual(scaler.get_scale(), 64.0)
 
+        scaler.scale(finite.sum())
         optimizer.param_groups[0]["grads"] = [jt.ones((4,), dtype="float32")]
         self.assertEqual(scaler.step(optimizer), 1)
         scaler.update()
@@ -679,10 +685,12 @@ class TestTorchAutocastNumerics(cu.JittorTestCase):
         scaler = torch.amp.GradScaler(device if device == "cpu" else "cuda",
                                       init_scale=128.0, growth_interval=2)
         optimizer = _FakeOptimizer([jt.ones((4,), dtype="float32")])
+        scaler.scale(jt.ones((1,), dtype="float32"))
         scaler.step(optimizer)
         scaler.update()
         self.assertEqual(scaler.get_scale(), 128.0)
         self.assertEqual(scaler.state_dict()["_growth_tracker"], 1)
+        scaler.scale(jt.ones((1,), dtype="float32"))
         optimizer.param_groups[0]["grads"] = [jt.ones((4,), dtype="float32")]
         scaler.step(optimizer)
         scaler.update()
@@ -694,6 +702,7 @@ class TestTorchAutocastNumerics(cu.JittorTestCase):
         optimizer = _FakeOptimizer([grad])
         scaler = torch.amp.GradScaler(device if device == "cpu" else "cuda",
                                       init_scale=4.0)
+        scaler.scale(jt.ones((1,), dtype="float32"))
         scaler.unscale_(optimizer)
         np.testing.assert_allclose(grad.numpy(), np.full(4, 2.0), rtol=1e-6)
 

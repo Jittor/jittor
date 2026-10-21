@@ -93,59 +93,47 @@ def _slice_flat(flat, start, length):
     return flat[start:start + length]
 
 
+def _world_process_group():
+    # Native ProcessGroup owns backend selection, communicator identity and
+    # device collectives. In particular, MPI-free HCCL must not depend on a
+    # historical Var.mpi_* alias that may not exist.
+    from jittor.distributed.process_group import get_default_group
+    group = get_default_group()
+    expected = _world_size()
+    if group.size() != expected:
+        raise RuntimeError(
+            "collectives were requested for %d ranks but native WORLD has %d"
+            % (expected, group.size()))
+    return group
+
+
 def _all_gather_shards(local_shard):
-    # On one rank the gather is the local shard itself. Say so before reaching
-    # for a collective: ``fully_shard`` on a single process is a supported
-    # configuration -- it is how the FSDP2 paths in ms-swift and verl run on
-    # CPU -- and demanding NCCL there turns a no-op into a hard failure.
     if _world_size() <= 1:
         return local_shard
-    ops = _nccl_ops()
-    if ops is not None and callable(getattr(ops, "nccl_all_gather", None)):
-        return ops.nccl_all_gather(local_shard)
-    if callable(getattr(local_shard, "mpi_all_gather", None)):
-        return local_shard.mpi_all_gather()
-    raise RuntimeError("Jittor NCCL all_gather is not available; launch with jittor.distributed.launch and use_nccl=1")
+    return _world_process_group().all_gather(local_shard)
 
 
 def _reduce_scatter_padded(full_grad):
-    # Likewise the identity on one rank: nothing to reduce against, and rank 0's
-    # shard is the whole padded gradient.
     if _world_size() <= 1:
         return full_grad
-    ops = _nccl_ops()
-    if ops is not None and callable(getattr(ops, "nccl_reduce_scatter", None)):
-        return ops.nccl_reduce_scatter(full_grad)
-    # Correct fallback for environments with all_reduce but without native
-    # reduce_scatter.  It communicates more than needed, but preserves semantics.
-    reduced = full_grad.mpi_all_reduce("sum")
-    shard = int(reduced.shape[0]) // max(_world_size(), 1)
-    return _slice_flat(reduced, _rank() * shard, shard)
+    return _world_process_group().reduce_scatter(full_grad)
 
 
 def _all_reduce_mean(var):
     """Average ``var`` across every rank. The identity on one rank."""
     if _world_size() <= 1:
         return var
-    if not callable(getattr(var, "mpi_all_reduce", None)):
-        raise RuntimeError(
-            "this Jittor build has no mpi_all_reduce, so gradients cannot be "
-            "synchronised across the %d ranks it was launched with. Build "
-            "with MPI (mpicc on PATH at build time) or launch with NCCL."
-            % _world_size())
-    return var.mpi_all_reduce("mean")
+    return _world_process_group().all_reduce(var, "mean")
 
 
 def _broadcast_from_rank0(var):
-    """Replace ``var`` with rank 0's copy in place. The identity on one rank."""
+    """Replace ``var`` with rank 0's copy in place."""
     if _world_size() <= 1:
         return var
-    if not callable(getattr(var, "mpi_broadcast", None)):
-        raise RuntimeError(
-            "this Jittor build has no mpi_broadcast, so parameters cannot be "
-            "broadcast to the %d ranks it was launched with." % _world_size())
-    var.assign(var.mpi_broadcast())
+    result = _world_process_group().broadcast(var, 0)
+    var.assign(result)
     return var
+
 
 def _reduce_scalar(var, how):
     """Combine a 0-d/1-element Var across ranks. The identity on one rank.

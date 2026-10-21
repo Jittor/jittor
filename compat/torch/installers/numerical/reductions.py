@@ -5,7 +5,7 @@ def _reduce_alias(native, input, dim=None, keepdim=False, *, axis=None,
     d = axis if axis is not None else dim
     kd = keepdims if keepdims is not None else keepdim
     if d is None or d == ():
-        return native(input)
+        return native(input, keepdims=kd)
     result = native(input, d)
     if kd:
         dims = (d,) if isinstance(d, int) else tuple(d)

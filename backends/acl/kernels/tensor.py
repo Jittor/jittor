@@ -15,6 +15,7 @@ from .ops.truth_reduce_op import truth_reduce
 from .ops.cumsum_op import CumsumACL
 from .ops.index_op import IndexACL
 from .ops.arg_reduce_op import ArgReduceACL
+from .ops.argsort_op import ArgsortACL
 from .ops.where_op import WhereACL, NonzeroACL
 from .ops.floor_op import FloorIntACL
 from .ops.getitem_op import GetItemACL, basic_slice_acl
@@ -77,6 +78,22 @@ def constant_pad_acl(x, amounts, value):
     return result
 
 
+def repeat_interleave_acl(value, repeats, dim):
+    """Lower uniform repetition to ACL-native broadcast and its sum gradient."""
+    if not isinstance(value, jt.Var) or repeats <= 0 or not 0 <= dim < value.ndim:
+        return None
+    if repeats == 1:
+        # Uniform repetition returns independent storage, including this case.
+        return jt.ops.copy(value)
+    shape = list(value.shape)
+    reshaped = shape[: dim + 1] + [1] + shape[dim + 1 :]
+    expanded = list(reshaped)
+    expanded[dim + 1] = repeats
+    output = list(shape)
+    output[dim] *= repeats
+    return value.reshape(reshaped).broadcast(expanded).reshape(output)
+
+
 def gather_acl(input, dim, index):
     return GatherACL()(input, dim, index)
 
@@ -119,12 +136,12 @@ def embedding_acl(
     return EmbeddingACL(padding_idx, scale_grad_by_freq)(input, weight)
 
 
-def any_acl(input, dim=None):
-    return truth_reduce(input, dim, reduce_all=False)
+def any_acl(input, dim=None, keepdims=False):
+    return truth_reduce(input, dim, reduce_all=False, keepdims=keepdims)
 
 
-def all_acl(input, dim=()):
-    return truth_reduce(input, dim, reduce_all=True)
+def all_acl(input, dim=(), keepdims=False):
+    return truth_reduce(input, dim, reduce_all=True, keepdims=keepdims)
 
 
 def cumsum_acl(input, dim=-1):
@@ -143,8 +160,14 @@ def scatter_acl(input, dim, index, src, reduce="void"):
     return ScatterACL()(input, dim, index, src, reduce)
 
 
+def argsort_acl(input, dim=-1, descending=False, dtype="int32"):
+    if _jittor_dtype_name(input.dtype) not in ("float16", "bfloat16", "float32"):
+        return None
+    return ArgsortACL(jt.ops.argsort)(input, dim, descending, dtype)
+
+
 def arg_reduce_acl(input, op, dim, keepdims=False):
-    if _jittor_dtype_name(input.dtype) not in ("float16", "float32"):
+    if _jittor_dtype_name(input.dtype) not in ("float16", "bfloat16", "float32"):
         return None
     return ArgReduceACL(jt.ops.arg_reduce)(input, op, dim, keepdims)
 
@@ -177,7 +200,7 @@ def getitem_acl(x, slices, return_x=None):
 
     if slices is not None and (not isinstance(slices, Iterable) or isinstance(slices, str)):
         return _getitem_without_none(x, slices)
-    if isinstance(slices, int) or isinstance(slices, slice):
+    if slices is None or isinstance(slices, int) or isinstance(slices, slice):
         slices = (slices,)
     if not isinstance(slices, tuple):
         raise TypeError("ACL getitem slices must be a tuple, integer, slice, or tensor")

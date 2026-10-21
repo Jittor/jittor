@@ -51,8 +51,12 @@ def setup(acl, monkeypatch, tmp_path):
     monkeypatch.setattr(acl.shutil, "which", lambda name: "/cann/bin/" + name)
     calls = []
     library = object()
-    converter = SimpleNamespace(process=lambda *args: "converted",
-                                init_acl_ops=lambda: calls.append(("init",)))
+    converter = SimpleNamespace(
+        process=lambda *args: "converted",
+        init_acl_ops=lambda: calls.append(("init",)),
+        acl_bfloat16_supported=lambda: True,
+        acl_device_name=lambda: "FAKE_ONLY_SOC",
+    )
     base = api.BuildConfig(
         cc_path="/host/bin/c++", kernel_flags=" -O2 ",
         cc_flags="-std=c++14 -I/source/src", jittor_path="/source",
@@ -118,7 +122,8 @@ def test_configure_returns_complete_value_without_global_writes(acl, setup):
         (SOURCE.parent / "kernels/native").glob("*.cc")))
     converter_sources = [str(SOURCE.parent / "src" / name) for name in (
         "acl_error_code.cc", "acl_jittor.cc", "aclnn.cc")]
-    assert len(expected_extra) == 47
+    assert len(expected_extra) == 48
+    assert str(SOURCE.parent / "kernels/native/argsort_op_acl.cc") in expected_extra
     assert len(converter_sources) == 3
     assert len(config.extra_core_files) == len(expected_extra) + 1
     assert set(config.extra_core_files) == {"existing.cc", *expected_extra}
@@ -227,6 +232,12 @@ def test_post_process_uses_returned_converter(acl, setup, monkeypatch):
         pool=pool, flags=flags,
         amp_flags=SimpleNamespace(reduce16_no_fp32_acc=2, keep_reduce=4),
     )
+    published = []
+    def register_kernel(*args):
+        setup.calls.append(("register", args[0]))
+        published.append(args)
+    dispatch = SimpleNamespace(register_kernel=register_kernel)
+    monkeypatch.setitem(sys.modules, "jittor._runtime.dispatch", dispatch)
     monkeypatch.setitem(sys.modules, "jittor", fake_jittor)
     acl.post_process(setup.context.with_config(config))
     # These defaults are native BackendOps.execution policies now, not
@@ -235,10 +246,20 @@ def test_post_process_uses_returned_converter(acl, setup, monkeypatch):
     assert flags.use_cuda_host_allocator == 0
     assert flags.use_parallel_op_compiler == 1
     assert flags.amp_reg == 8
-    assert setup.calls[-1] == ("init",)
+    assert setup.calls[-3:] == [
+        ("init",),
+        ("register", "runtime.supports_bfloat16"),
+        ("register", "runtime.device_name"),
+    ]
+    assert published == [
+        ("runtime.supports_bfloat16", "acl", setup.converter.acl_bfloat16_supported),
+        ("runtime.device_name", "acl", setup.converter.acl_device_name),
+    ]
     before = list(setup.calls)
+    before_published = list(published)
     acl.post_process(setup.context)
     assert setup.calls == before
+    assert published == before_published
 
 
 def test_backend_has_no_mutable_configuration_or_compiler_imports(acl):
@@ -255,7 +276,8 @@ def test_backend_has_no_mutable_configuration_or_compiler_imports(acl):
 
 def test_provider_source_inventory_is_explicit_and_complete(acl):
     sources = acl.REGISTRATION_SOURCES + acl.CORE_SOURCES
-    assert len(sources) == len(set(sources)) == 50
+    assert len(sources) == len(set(sources)) == 51
+    assert "kernels/native/argsort_op_acl.cc" in sources
     assert all((SOURCE.parent / name).is_file() for name in sources)
     actual = {str(path.relative_to(SOURCE.parent))
               for path in SOURCE.parent.rglob("*.cc")}

@@ -137,7 +137,13 @@ def test_acl_install_publishes_real_owners_idempotently_without_facade_writes(pr
     # A literal count is the canary that a new registration was deliberate.
     # The duplicate check above catches a name registered twice, but not a
     # kernel that appears because an import side effect grew the table.
-    assert len(operations) == 45, "ACL kernel count changed; update deliberately"
+    assert len(operations) == 47, "ACL kernel count changed; update deliberately"
+    assert providers.dispatch.registered_kernel(
+        "tensor.repeat_interleave", "acl"
+    ) is providers.tensor.repeat_interleave_acl
+    assert providers.dispatch.registered_kernel(
+        "tensor.argsort", "acl"
+    ) is providers.tensor.argsort_acl
     assert len(first) == len(operations)
     for operation, implementation in providers.install.KERNELS:
         assert providers.dispatch.registered_kernel(operation, "acl") is implementation
@@ -376,3 +382,14 @@ def test_acl_compiler_no_longer_contains_python_replacement_installer():
                 assert not any(
                     isinstance(child, (ast.FunctionDef, ast.ClassDef)) for child in node.body
                 ), node.name
+
+
+def test_acl_argsort_constructor_marks_only_native_supported_acl_keys():
+    source = (ROOT / "src/ops/composite/argsort_op.cc").read_text(encoding="utf-8")
+    guard = source[source.index("// A provider-native sort"):source.index("    y = create_output(nullptr, dtype);")]
+    assert "backend == BackendId::Acl" in guard
+    assert "x->dtype() == ns_float16 || x->dtype() == ns_float32" in guard
+    assert 'backend_runs_op_natively(backend, "argsort")' in guard
+    assert "set_flag(OpFlags::_cuda)" in guard
+    # Keep optional CUDA segmented sorting ahead of this ACL-only fallback.
+    assert source.index("OpCapability::SegmentedArgsort") < source.index("// A provider-native sort")

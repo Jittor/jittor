@@ -13,7 +13,9 @@ from .. import optimizer_kinds as _optimizer_kinds
 from .tensor_state import get_tensor_state
 from .installers.tensor.autograd_api import _optimizer_maybe_has_fsdp_params
 from jittor.optim.algorithms.adam import adam_update
-from .optim_frontend import _initialize_default, _validate_sgd_groups
+from .optim_frontend import (
+    _initialize_default, _validate_sgd_groups, _validate_adamw_capturable_groups,
+)
 
 def _init(self, *a, **k):
     _context = get_install_context(jt)
@@ -63,34 +65,105 @@ def _torch_optimizer_kind(opt):
 
 
 class _ParamState(dict):
+    """A stable public dictionary reflecting the canonical native state lists."""
     def __init__(self, owner, param, values):
         dict.__init__(self, values)
         self._owner = owner
         self._param = param
+    def _refresh(self):
+        if self._owner is not None:
+            if self._owner._opt is None:
+                self._owner = None
+            else:
+                values = self._owner._native_values(self._param)
+                if values is not None:
+                    dict.update(self, values)
+        return self
+    def _detach(self):
+        self._refresh()
+        self._owner = None
+    def __getitem__(self, key):
+        self._refresh()
+        return dict.__getitem__(self, key)
+    def get(self, key, default=None):
+        self._refresh()
+        return dict.get(self, key, default)
+    def __contains__(self, key):
+        self._refresh()
+        return dict.__contains__(self, key)
+    def __iter__(self):
+        self._refresh()
+        return dict.__iter__(self)
+    def __len__(self):
+        self._refresh()
+        return dict.__len__(self)
+    def keys(self):
+        self._refresh()
+        return dict.keys(self)
+    def values(self):
+        self._refresh()
+        return dict.values(self)
+    def items(self):
+        self._refresh()
+        return dict.items(self)
+    def copy(self):
+        self._refresh()
+        return dict.copy(self)
+    def __repr__(self):
+        self._refresh()
+        return dict.__repr__(self)
+    def __eq__(self, other):
+        self._refresh()
+        if isinstance(other, _ParamState):
+            other._refresh()
+        return dict.__eq__(self, other)
+    def __ne__(self, other):
+        result = self.__eq__(other)
+        return NotImplemented if result is NotImplemented else not result
     def __setitem__(self, key, value):
-        self._owner._set_field(self._param, key, value)
+        self._refresh()
+        if self._owner is not None:
+            self._owner._set_field(self._param, key, value)
         dict.__setitem__(self, key, value)
     def update(self, *args, **kwargs):
-        values = dict(*args, **kwargs)
-        for key, value in values.items():
+        for key, value in dict(*args, **kwargs).items():
             self[key] = value
+    def setdefault(self, key, default=None):
+        if key not in self:
+            self[key] = default
+        return self[key]
+    def clear(self):
+        if self._owner is not None:
+            pg, index = self._owner._find(self._param)
+            if pg is not None:
+                self._owner._reset_slot(pg, index)
+                self._owner._sync_n_step()
+        dict.clear(self)
 
 
 class _OptState:
     def __init__(self, opt):
-        self._opt = opt
+        # The optimizer caches this view. Avoid making that cache a strong cycle.
+        self._opt_ref = _weakref.ref(opt)
+        self._entries = {}
+    @property
+    def _opt(self):
+        return self._opt_ref()
     def _find(self, param):
-        for pg in self._opt.param_groups:
-            for i, p in enumerate(pg.get("params", [])):
-                if p is param:
-                    return pg, i
+        opt = self._opt
+        if opt is not None:
+            for pg in opt.param_groups:
+                for i, p in enumerate(pg.get("params", [])):
+                    if p is param:
+                        return pg, i
         return None, None
     def _params(self):
-        for pg in self._opt.param_groups:
-            for p in pg.get("params", []):
-                marker = object()
-                if self.get(p, marker) is not marker:
-                    yield p
+        opt = self._opt
+        if opt is not None:
+            for pg in opt.param_groups:
+                for p in pg.get("params", []):
+                    if self.get(p, None) is not None:
+                        yield p
     def _reset_slot(self, pg, i):
         _torch_param_steps(pg)[i] = 0
         for key in ("m", "values", "v", "d", "pre_grad"):
@@ -127,27 +200,27 @@ class _OptState:
         buffers = pg.get(target) if target is not None else None
         if isinstance(buffers, list) and i < len(buffers):
             buffers[i] = value
-    def get(self, param, default=None):
+    def _native_values(self, param):
         pg, i = self._find(param)
         if pg is None:
-            return default
+            return None
         steps = _torch_param_steps(pg)
         if int(steps[i]) <= 0:
-            return default
+            return None
         kind = _torch_optimizer_kind(self._opt)
         if kind in ("adam", "adamw") and "m" in pg and "values" in pg:
-            return _ParamState(self, param, {
+            return {
                 "exp_avg": pg["m"][i],
                 "exp_avg_sq": pg["values"][i],
-                "step": float(steps[i])})
+                "step": float(steps[i])}
         if kind == "sgd" and "values" in pg and pg.get(
                 "momentum", getattr(self._opt, "momentum", 0)):
-            return _ParamState(self, param, {
-                "momentum_buffer": pg["values"][i]})
+            return {
+                "momentum_buffer": pg["values"][i]}
         if kind == "rmsprop" and "values" in pg:
-            return _ParamState(self, param, {
+            return {
                 "square_avg": pg["values"][i],
-                "step": float(steps[i])})
+                "step": float(steps[i])}
         if kind == "adan":
             out = {"step": float(steps[i])}
             for source, target in (
@@ -156,35 +229,64 @@ class _OptState:
                     ("pre_grad", "pre_grad")):
                 if source in pg and i < len(pg[source]):
                     out[target] = pg[source][i]
-            return _ParamState(self, param, out)
-        return default
+            return out
+        return None
+    def _record(self, param, values):
+        entry = _ParamState(self, param, values)
+        self._entries[id(param)] = entry
+        return entry
+    def _entry(self, param, create=False):
+        pg, _ = self._find(param)
+        if pg is None:
+            return None
+        entry = self._entries.get(id(param))
+        if entry is None:
+            values = self._native_values(param)
+            if values is not None or create:
+                entry = self._record(param, values or {})
+        return entry
+    def get(self, param, default=None):
+        entry = self._entry(param)
+        return default if entry is None else entry
     def __getitem__(self, param):
-        r = self.get(param, None)
-        if r is None:
+        entry = self._entry(param, create=True)
+        if entry is None:
             raise KeyError(param)
-        return r
-    def __setitem__(self, param, d):
+        return entry
+    def __setitem__(self, param, values):
         pg, i = self._find(param)
         if pg is None:
             raise KeyError(param)
-        if not isinstance(d, Mapping):
+        if not isinstance(values, Mapping):
             raise TypeError("optimizer state must be a mapping")
-        values = dict(d)
+        values = dict(values)
+        previous = self._entries.pop(id(param), None)
+        if previous is not None:
+            previous._detach()
         self._reset_slot(pg, i)
-        for key, value in values.items():
-            if key != "step":
-                self._set_field(param, key, value)
-        self._set_field(param, "step", values.get("step", 1 if values else 0))
+        entry = self._record(param, {})
+        entry.update(values)
+        if values and "step" not in values:
+            self._set_field(param, "step", 1)
+        self._sync_n_step()
     def __delitem__(self, param):
         pg, i = self._find(param)
-        marker = object()
-        if pg is None or self.get(param, marker) is marker:
+        entry = self._entry(param)
+        if pg is None or entry is None:
             raise KeyError(param)
+        entry._detach()
+        self._entries.pop(id(param), None)
         self._reset_slot(pg, i)
         self._sync_n_step()
+    def clear(self):
+        for param in list(self._params()):
+            del self[param]
+    def _detach_all(self):
+        for entry in self._entries.values():
+            entry._detach()
+        self._entries.clear()
     def __contains__(self, param):
-        marker = object()
-        return self.get(param, marker) is not marker
+        return self._entry(param) is not None
     def __iter__(self):
         return self._params()
     def __len__(self):
@@ -192,9 +294,9 @@ class _OptState:
     def keys(self):
         return list(self._params())
     def values(self):
-        return [self.get(p, {}) for p in self._params()]
+        return [self[p] for p in self._params()]
     def items(self):
-        return [(p, self.get(p, {})) for p in self._params()]
+        return [(p, self[p]) for p in self._params()]
     def get_state_dict_key(self, param):
         return self._find(param)
 
@@ -235,6 +337,7 @@ def _state_dict_torch(self):
             group.setdefault("capturable", False)
             group.setdefault("differentiable", False)
             group.setdefault("fused", getattr(self, "fused", None))
+            group.setdefault("decoupled_weight_decay", kind == "adamw")
         elif kind == "sgd":
             for key, default in (
                     ("momentum", 0), ("dampening", 0),
@@ -260,38 +363,12 @@ def _state_dict_torch(self):
         group["params"] = params
         param_groups.append(group)
     state = {}
-    for pg in self.param_groups:
-        steps = _torch_param_steps(pg)
-        for i, p in enumerate(pg.get("params", [])):
-            pid = param_ids.get(id(p))
-            if pid is None or int(steps[i]) <= 0:
-                continue
-            entry = {}
-            if kind in ("adam", "adamw"):
-                if "m" in pg and i < len(pg["m"]):
-                    entry["exp_avg"] = pg["m"][i]
-                if "values" in pg and i < len(pg["values"]):
-                    entry["exp_avg_sq"] = pg["values"][i]
-            elif kind == "sgd":
-                momentum = pg.get(
-                    "momentum", getattr(self, "momentum", 0))
-                if momentum and "values" in pg and i < len(pg["values"]):
-                    entry["momentum_buffer"] = pg["values"][i]
-            elif kind == "rmsprop":
-                if "values" in pg and i < len(pg["values"]):
-                    entry["square_avg"] = pg["values"][i]
-            elif kind == "adan":
-                for source, target in (
-                        ("m", "exp_avg"), ("v", "exp_avg_sq"),
-                        ("d", "exp_avg_diff"),
-                        ("pre_grad", "pre_grad")):
-                    values = pg.get(source)
-                    if values is not None and i < len(values):
-                        entry[target] = values[i]
-            if entry:
-                if kind != "sgd":
-                    entry["step"] = g.tensor(float(steps[i]), dtype=g.float32)
-                state[pid] = entry
+    for parameter, entry in self.state.items():
+        pid = param_ids[id(parameter)]
+        values = dict(entry)
+        if "step" in values and not isinstance(values["step"], jt.Var):
+            values["step"] = g.tensor(float(values["step"]), dtype=g.float32)
+        state[pid] = values
     return {"state": state, "param_groups": param_groups}
 
 
@@ -328,7 +405,10 @@ def _load_state_dict_torch(self, state_dict):
             try:
                 st = saved_state.get(pid, missing)
                 if st is missing:
-                    st = saved_state.get(str(pid), {})
+                    st = saved_state.get(str(pid), missing)
+                present = st is not missing
+                if not present:
+                    st = {}
             except (TypeError, ValueError) as error:
                 raise TypeError("loaded optimizer state key is invalid") from error
             if not isinstance(st, Mapping):
@@ -348,10 +428,12 @@ def _load_state_dict_torch(self, state_dict):
                         "loaded optimizer step must be a non-negative integer")
                 step = int(numeric)
             max_step = max(max_step, step)
-            slots.append((st, step))
+            slots.append((st, step, present))
         load_plan.append((dict(saved_pg), slots))
     # Apply only after the complete input has been validated. This keeps
     # malformed loads atomic instead of leaving half-reset moments.
+    public_state = self.state
+    public_state._detach_all()
     for pg in self.param_groups:
         steps = _torch_param_steps(pg)
         for i in range(len(steps)):
@@ -370,7 +452,7 @@ def _load_state_dict_torch(self, state_dict):
             if k == "params":
                 continue
             pg[k] = v
-        for i, (st, step) in enumerate(slots):
+        for i, (st, step, present) in enumerate(slots):
             if kind in ("adam", "adamw"):
                 if "m" in pg and i < len(pg["m"]) and "exp_avg" in st:
                     pg["m"][i] = st["exp_avg"]
@@ -389,6 +471,8 @@ def _load_state_dict_torch(self, state_dict):
                     if target in st and source in pg and i < len(pg[source]):
                         pg[source][i] = st[target]
             steps[i] = step
+            if present:
+                public_state._record(pg["params"][i], st)
     self.n_step = max_step
     return None
 
@@ -523,7 +607,11 @@ def _lsd(self, state):
 
 
 def _state_getter(self):
-    return get_install_context(jt).target_namespace.optim.Optimizer._OptState(self)
+    view = self.__dict__.get("_torch_state_view")
+    if view is None:
+        view = get_install_context(jt).target_namespace.optim.Optimizer._OptState(self)
+        object.__setattr__(self, "_torch_state_view", view)
+    return view
 
 
 def _lbfgs_type(base):
@@ -612,6 +700,8 @@ def _update_in_target_dtype(target, value):
 
 
 def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay):
+    if decoupled_weight_decay:
+        _validate_adamw_capturable_groups(self)
     native_fsdp_loss = None
     if closure is None and callable(loss):
         closure = loss
@@ -665,6 +755,20 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
         # unused parameters. loss.backward() then leaves the group
         # without gradients and step() must be a no-op, not KeyError.
         grads = pg.get("grads") or [None] * len(pg["params"])
+        # Native adaptive optimizers intentionally retain FP32 master state for
+        # half parameters. Torch initializes moments with zeros_like(parameter).
+        # Adapt only fresh public Torch slots, including a group added later;
+        # leave initialized or user-restored state and native policy unchanged.
+        with jt.flag_scope(amp_reg=0):
+            for i, (parameter, gradient) in enumerate(zip(pg["params"], grads)):
+                if (int(param_steps[i]) != 0 or not parameter.requires_grad
+                        or not isinstance(gradient, jt.Var)
+                        or list(gradient.shape) != list(parameter.shape)):
+                    continue
+                for key in ("m", "values"):
+                    buffer = pg[key][i]
+                    if _jittor_dtype_name(buffer.dtype) != _jittor_dtype_name(parameter.dtype):
+                        pg[key][i] = buffer.cast(parameter.dtype).stop_grad()
         # `use_acl` is an alias of `use_cuda` (see FLAG_ALIASES), so it is true
         # on a CUDA build as well and cannot say which backend is actually in
         # use. Asking the dispatcher does: `optim.adamw_fused` is registered

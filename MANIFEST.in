@@ -15,6 +15,7 @@ include backends/acl/include/aclops/acl_data_channel.h
 include backends/acl/include/aclops/aclops.h
 include backends/acl/include/aclops/adamw_op_acl.h
 include backends/acl/include/aclops/arg_reduce_op_acl.h
+include backends/acl/include/aclops/argsort_op_acl.h
 include backends/acl/include/aclops/base_op.h
 include backends/acl/include/aclops/binary_op_acl.h
 include backends/acl/include/aclops/bmm_op_acl.h
@@ -60,6 +61,7 @@ include backends/acl/include/aclops/utils.h
 include backends/acl/include/aclops/where_op_acl.h
 include backends/acl/kernels/native/adamw_op_acl.cc
 include backends/acl/kernels/native/arg_reduce_op_acl.cc
+include backends/acl/kernels/native/argsort_op_acl.cc
 include backends/acl/kernels/native/base_op_acl.cc
 include backends/acl/kernels/native/binary_op_acl.cc
 include backends/acl/kernels/native/bmm_op_acl.cc

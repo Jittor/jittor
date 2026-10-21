@@ -71,6 +71,9 @@ def repeat_interleave(x,repeats,dim=None,output_size=None):
         dim += x.ndim
 
     if isinstance(repeats, int):
+        result = try_dispatch("tensor.repeat_interleave", x, repeats, dim)
+        if result is not None:
+            return result
         tar_shape = list(x.shape)
         tar_shape[dim] = tar_shape[dim]*repeats
         dims = []

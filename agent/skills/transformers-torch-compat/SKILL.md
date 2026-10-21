@@ -13,13 +13,55 @@ description: 在 Jittor torch shim 与独立 PyTorch 两侧跑通并对比 Huggi
 case（`large_transformers_llama`、`_gpt2`、`_qwen3`、`_bert`、`_vit`）。
 
 **不覆盖**：`transformers` 的完整训练/微调、真实 checkpoint 与数据集、generation 采样；
-任何 `_C` 编译扩展（flash-attn、bitsandbytes、torchvision.ops）；vLLM 等推理引擎；
-NPU 专项（条目存在但本机未跑）。深度性能分析（SDPA 后端、算子热点、allocator）走
+任何 `_C` 编译扩展（flash-attn、bitsandbytes、torchvision.ops）；vLLM 等推理引擎。
+
+Ascend 的整模、训练与恢复结论按冻结源码批次和真实设备报告核对。深度性能分析（SDPA 后端、算子热点、allocator）走
 [`jittor-transformers-perf`](../jittor-transformers-perf/SKILL.md)，**注意它文档里的解释器
 路径**（`/home/zy/miniconda3/envs/jt311/bin/python`、`/home/zy/rt_venv/bin/python`）**来自旧机器，
 不描述当前 lab**；当前 lab 以本文件「两侧环境」为准。
 
 ## 两侧环境
+
+### Ascend 迁移的当前 oracle 选择
+
+CPU 与 NPU 使用独立的参考环境，路径相对于本机新建的 `$JITTOR_LAB_ROOT`。
+不要将含 `torch_npu` 的 NPU oracle 用作 CPU Trainer 参考：该扩展会注册原生 optimizer
+探测，而 Trainer 4.56.2 会按硬件能力抓取 NPU RNG，即使 `use_cpu=True` 也可能初始化卡。
+单独设置空可见设备列表不能替代不含该扩展的 CPU 环境。
+
+CPU 进程使用不含 `torch_npu`、不含 shim 的独立 PyTorch 2.7.1 环境，不加载 CANN：
+
+```bash
+export REAL_TORCH_PYTHON="$JITTOR_LAB_ROOT/_state/ascend-compat/envs/oracle-cpu/bin/python"
+export JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE="$JITTOR_LAB_ROOT/_state/ascend-compat/envs/oracle-cpu/lib/python3.11/site-packages"
+export JT_BACKEND=cpu ASCEND_RT_VISIBLE_DEVICES= CUDA_VISIBLE_DEVICES=
+```
+
+NPU 进程另开环境，加载本机 CANN，并先按实际分配设置可见设备，然后使用保留
+`torch_npu 2.7.1.post2` 的独立 PyTorch 2.7.1 环境：
+
+```bash
+: "${ASCEND_RT_VISIBLE_DEVICES:?set the assigned devices before NPU verification}"
+export REAL_TORCH_PYTHON="$JITTOR_LAB_ROOT/_state/ascend-compat/envs/oracle-npu-cann/bin/python"
+export JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE="$JITTOR_LAB_ROOT/_state/ascend-compat/envs/oracle-npu-cann/lib/python3.11/site-packages"
+export JT_BACKEND=acl
+```
+
+当前 NPU SDK 补充环境 `oracle-npu-cann` 保留原生 Torch、`torch_npu` 与全部生态库的
+冻结版本，另按本机用户 CANN SDK 的 requirements/metadata 安装缺失依赖，并记录完整
+freeze、安装来源与包哈希；原 `oracle` 和 `oracle-cpu` 保持只读。CANN SDK 初始化可能把
+`OPENBLAS_NUM_THREADS` 改成 1，须在 SDK 初始化后恢复已分配的线程预算，并读回
+Torch 及已加载 BLAS 线程池的实际线程数。
+
+两种环境都必须验证真实 PyTorch 没有 shim 标记、下游库版本与 shim 侧相等。
+显式设置 reference site 可避免同 ABI 自动共享 dev site 时，让 shim 的 Torch 元数据
+进入原生 oracle。两个 device 使用不同的 `JITTOR_HOME`，所有 HOME、临时目录和缓存
+仍按环境手册放在 lab。CPU Trainer 的启动与结束证据还须包含零可见 NPU、未初始化状态，
+并检查 checkpoint 不包含加速器 RNG。上面的环境选择不是数值或硬件验收结论。
+
+### 历史 CUDA 环境（2026-09-19）
+
+以下解释器与后续历史实测来自旧机器，不替代上面的 Ascend oracle 选择。
 
 | 角色 | 解释器 | 环境脚本 |
 | --- | --- | --- |
@@ -61,11 +103,39 @@ source /root/jittor-lab/minimax-h3/env-jittor.sh
 # 本机实测输出：shim jittor 1.3.11.0
 ```
 
-Transformer 专用 adapter 只做一件事：把 `transformers.utils.import_utils.is_torch_npu_available`
-钉成返回 `False`，避免原生 `torch_npu` 探测进入独立 Jittor 前端
-（[`adapters/jittor_adapters/transformers.py`](../../../adapters/jittor_adapters/transformers.py)，
-`SUPPORTED_VERSIONS = {4.56.2, 5.5.3}`）。本机实测该 guard 已生效
-（`_jittor_transformers_npu_guard is True`，`is_torch_npu_available() is False`）。
+当前 Transformers adapter 将原生 `torch_npu` 包探测转换为独立前端公开的
+`torch.npu.is_available()`；`check_device=True` 同时读取 `device_count()`，不会导入
+原生 PyTorch 扩展，也不构造 `torch_npu` 假模块。版本门仍为
+`SUPPORTED_VERSIONS = {4.56.2, 5.5.3}`，见
+[`adapters/jittor_adapters/transformers.py`](../../../adapters/jittor_adapters/transformers.py)。
+设备能力失败会传播，不以 `False` 隐藏后端错误。这个探测转换不承诺原生
+`torch_npu` fused optimizer 或扩展 ABI 可用。
+
+同一 registrar 对 **Accelerate 1.10.1** 做两阶段的私有探测适配：包构建期间保持探测
+为 false，避免 `state`、`accelerator`、`utils.modeling` 的模块顶层导入原生扩展；
+根包构建完成后，同一个 probe 及其全部已绑定别名读取前端的真实 NPU 能力。
+版本、签名或已知消费者结构变化会显式拒绝。两个阶段沿用公开 module-patcher 与
+所有权回滚机制；没有改写框架全局设备状态。
+
+Transformers **4.56.2** 的 `modeling_flash_attention_utils` 还有一个独立的原生
+FlashAttention provider 边界。该模块局部的 NPU provider 探测保持 false，掩码对齐
+保留上游 FA2/FA3 判断，避免完整 `from transformers import Trainer` 时无条件导入
+`npu_flash_attention`/`torch_npu`；公开设备探测仍读取真实 `torch.npu`。没有原生
+provider 时显式 FlashAttention 请求继续由上游拒绝，注意力数学不在这个 hook 中替换。
+这个私有 hook 仅在已审计的 4.56.2 启用，5.5.3 保留既有适配行为与历史实测范围。
+
+NPU Trainer 入口必须在 `import jittor` 前暴露正规 `jittor-torch-adapters==1.3.11.0`
+分发的元数据。仅加入源码 `PYTHONPATH` 不会产生 entry point。共享环境只读时，可从
+当前适配器源码的独立 lab 副本构建 wheel，`--no-deps --no-compile --target` 安装到新的
+lab site；逐文件核对安装 `.py` 与任务源码一致，然后将该 site 与任务的 `python`、
+`adapters` 源码路径一并传给 shim 进程。原生 oracle 不注入这些路径。入口前置检查要求
+owned entry point 及四个回调身份：`transformers.utils.import_utils`、
+`transformers.modeling_flash_attention_utils`、`accelerate.utils.imports`、`accelerate`。
+真实设备验收仍须逐张量检查原生 ACL/index、完整梯度和 fallback0。
+
+下文 **2026-09-19** 实测中的 `is_torch_npu_available() is False` 属于当时的 guard
+行为与机器范围，保留为历史证据；它不描述新版探测机制。当前 Ascend 数值、训练、
+速度与显存结论必须来自对应提交的真实设备报告，不能由探测返回 true 推断。
 
 ## 在 shim 上跑
 

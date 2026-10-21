@@ -192,6 +192,9 @@ BACKEND_GRAD_COVERAGE = (
      "rocm_hardware_no_grad_test"),
 
     # ---- ACL / Ascend. No NPU on this machine. ----------------------------
+    ("backends/acl/kernels/ops/argsort_op.py", "ArgsortACL",
+     "tests/backends/acl/test_acl_argsort.py::test_argsort_full_values_indices_and_gradient",
+     "npu_hardware"),
     ("backends/acl/kernels/ops/arg_reduce_op.py", "ArgReduceACL",
      "tests/backends/acl/test_acl.py::TestACL::test_float_arg_reduce_backward_runs_on_acl",
      "npu_hardware"),

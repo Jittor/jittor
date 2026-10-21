@@ -13,6 +13,11 @@
 
 namespace jittor {
 
+// These queues may be touched by runtime flag initialization and by late
+// cleanup. Their containers live for the process; cleanup() releases entries.
+EXTERN_LIB list<VarPtr>& fetcher();
+EXTERN_LIB list<VarPtr>& fetcher_to_free();
+
 struct FetchResult;
 
 struct FetchFunc {

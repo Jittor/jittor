@@ -179,6 +179,8 @@ def _anyall_reduce(name, self, *a, **k):
         a = a[1:]
     keep = k.pop("keepdim", k.pop("keepdims", None))
     if d is None:
+        if keep is not None:
+            k["keepdims"] = keep
         return orig(self, *a, **k)
     dims = [int(x) for x in d] if isinstance(d, (tuple, list)) else [int(d)]
     ndim = self.ndim
