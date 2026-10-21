@@ -54,17 +54,22 @@ def _torch_scaled_add(value, other, alpha):
 
 
 def sgd_update(param, grad, velocity, *, lr, momentum=0, weight_decay=0,
-               dampening=0, nesterov=False):
+               dampening=0, nesterov=False, momentum_initialized=True,
+               torch_math=False):
     """Native SGD arithmetic shared by full parameters and FSDP shards."""
     without_velocity = momentum == 0 and dampening == 0 and not nesterov
     tensors = (param, grad) if without_velocity else (param, grad, velocity)
     add, multiply, _, subtract = _optimizer_arithmetic(
-        tensors, (lr, momentum, weight_decay, dampening))
+        tensors, (lr, momentum, weight_decay, dampening), enabled=torch_math)
     dp = grad if weight_decay == 0 else add(multiply(param, weight_decay), grad)
     if without_velocity:
         return subtract(param, multiply(dp, lr))
-    _update_preserve_dtype(velocity, add(
-        multiply(momentum, velocity), multiply(dp, (1 - dampening))))
+    if momentum_initialized:
+        velocity_value = add(multiply(momentum, velocity),
+                             multiply(dp, (1 - dampening)))
+    else:
+        velocity_value = dp
+    _update_preserve_dtype(velocity, velocity_value)
     update = add(dp, multiply(momentum, velocity)) if nesterov else velocity
     return subtract(param, multiply(update, lr))
 
