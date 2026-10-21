@@ -4,28 +4,30 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import numpy as np
 import math
 from jittor_core import Var
+from jittor_core import ops as _native_ops
 from .._runtime.dispatch import select_kernel, try_dispatch
 
+# `jittor.ops.any_` and `all_` are the native ops (jittor/ops/__init__.py
+# resolves every name it does not define there); asked for directly, without
+# the import and the module `__getattr__` on every truth test.
 def all(x, dim=(), keepdims=False, keepdim=None):
     """Reduce with logical AND. Takes `keepdims` or torch's `keepdim`."""
-    import jittor as jt
     if keepdim is not None:
         keepdims = keepdim
     result = try_dispatch("tensor.all", x, dim, keepdims)
     if result is not None:
         return result
-    return jt.ops.all_(_as_truth(x), dim, keepdims=keepdims).bool()
+    return _native_ops.all_(_as_truth(x), dim, keepdims=keepdims).bool()
 
 
 def any(x, dim=(), keepdims=False, keepdim=None):
     """Reduce with logical OR. Takes `keepdims` or torch's `keepdim`."""
-    import jittor as jt
     if keepdim is not None:
         keepdims = keepdim
     result = try_dispatch("tensor.any", x, dim, keepdims)
     if result is not None:
         return result
-    return jt.ops.any_(_as_truth(x), dim, keepdims=keepdims).bool()
+    return _native_ops.any_(_as_truth(x), dim, keepdims=keepdims).bool()
 
 
 def _as_truth(x):
