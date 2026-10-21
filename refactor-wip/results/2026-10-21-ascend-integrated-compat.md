@@ -449,3 +449,15 @@ R24 随后复用相同的冻结源清单，在物理卡5上按 rank role 0、1 �
 R24 双卡 driver 校验 current-source manifest 与 R5 Native baseline 后，在 runtime launcher 创建之前的 fresh admission 检查捕获物理卡6外部 PID 1493168，直接退出。没有创建 launcher、rank worker 或模型输出；admission 前后 npu-smi 快照与 driver traceback 保留于 distributed/r24/。不曾向外部进程发送信号。
 
 本节扩大了串行预热范围到 core、HCCL collective 与 DTensor factory，但 MAIN-r28 Jittor 双卡 FSDP2 full、prefix/resume 交叉仍没有运行通过；R23/R24 也没有性能数据。
+
+### R25–R29：多物理卡尝试与资源抢占复核
+
+R25 使用 fresh 空闲的物理卡3/5启动双卡 Jittor full，约10.64秒时 live monitor 发现外部 PID 1524441 占卡5，driver 返回125。两份 worker 均写出 process-start.json，但没有训练终态；rank0 的 HCCL ops 已加载并开始 communicator 初始化，rank1 到达 Jittor import。自有 launcher PID 1524412 的组已退出；外部 PID 随后不在事后卡表中，没有对其发送信号。R25 日志和 before/during/after 卡表保存在 distributed/r25/。
+
+R26 建立新根目录，fresh 快照发现卡3已有进程，卡5空闲；因此没有启动 Python driver、launcher 或 worker。随后 R27 用 fresh 空闲卡5/6再次进入 driver，但 driver 在创建 runtime launcher 前捕获卡6外部 PID 1532400 并退出，rank worker 数为0。两次快照分别保存在 distributed/r26/、distributed/r27/。
+
+R28 再用 fresh 空闲卡3/5进入双卡 Jittor full，约11.61秒时发现外部 PID 1610224 占卡5并返回125。两 rank 都有 process-start.json，rank1 到达 HCCL communicator 初始化；无训练终态或完整参数报告。自有 launcher 进程组已空，事后卡表中3/5/6为空，外部进程未被触碰，证据在 distributed/r28/。
+
+R29 用 fresh 空闲卡3/6启动后约2.14秒，live monitor 捕获外部 PID 1992911 占卡6，driver 返回125；rank日志均为0字节。自有 launcher PID 2013322 及进程组已核验退出；事后卡表仍显示卡6有外部进程，未向其发送信号。完整记录在 distributed/r29/。
+
+这些 cohort 均复用 source manifest SHA256 aa56c083de1404dcfc744b31edc3dcb973f574d3dcb0d048c691d8ffa400d383 与 R24 串行单 rank prewarm 证据，但都没有得到 Jittor FSDP2 full 的训练终态；R25/R28 虽启动到 worker setup，也没有可接受的模型更新或恢复比较。MAIN-r28 双卡 Jittor FSDP2、prefix/resume 与配对性能仍未验收。
