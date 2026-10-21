@@ -1,4 +1,4 @@
-"""LinearLR public checkpoint and warning contracts from PyTorch 2.6."""
+"""LinearLR public checkpoint and warning contracts from PyTorch 2.7."""
 
 import copy
 import warnings
@@ -22,18 +22,18 @@ def test_default_public_state_has_reference_checkpoint_schema(checkpoint_lr_devi
     _, scheduler = make_schedule(checkpoint_lr_device)
     assert scheduler.state_dict() == {
         "start_factor": 0.5, "end_factor": 1.0, "total_iters": 4,
-        "base_lrs": [0.2, 0.4], "last_epoch": 0, "verbose": False,
+        "base_lrs": [0.2, 0.4], "last_epoch": 0,
         "_step_count": 1, "_get_lr_called_within_step": False,
         "_last_lr": [0.1, 0.2],
     }
 
 
 @pytest.mark.parametrize("verbose", [False, True])
-def test_explicit_verbose_warns_and_is_saved(checkpoint_lr_device, verbose):
+def test_explicit_verbose_warns_but_is_not_saved(checkpoint_lr_device, verbose):
     optimizer, _ = make_schedule(checkpoint_lr_device)
     with pytest.warns(UserWarning, match="verbose parameter is deprecated"):
         scheduler = torch.optim.lr_scheduler.LinearLR(optimizer, verbose=verbose)
-    assert scheduler.state_dict()["verbose"] is verbose
+    assert "verbose" not in scheduler.state_dict()
 
 
 def test_default_verbose_and_normal_step_do_not_warn(checkpoint_lr_device):
@@ -129,7 +129,7 @@ def test_weights_only_checkpoint_keeps_reference_metadata_and_next_lr(checkpoint
     target = tmp_path / "linear-lr.pt"
     torch.save(checkpoint, target)
     loaded = torch.load(target, weights_only=True)
-    assert loaded["scheduler"]["verbose"] is False
+    assert "verbose" not in loaded["scheduler"]
     assert loaded["scheduler"]["_get_lr_called_within_step"] is False
     assert [group["initial_lr"] for group in loaded["optimizer"]["param_groups"]] == [0.2, 0.4]
     restored_optimizer, restored_scheduler = make_schedule(checkpoint_lr_device)

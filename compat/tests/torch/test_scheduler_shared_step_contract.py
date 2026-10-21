@@ -42,10 +42,9 @@ def test_shared_step_context_is_active_only_during_get_lr(shared_lr_device, name
     scheduler = Observed(optimizer, **options)
     assert scheduler.observed == [True]
     assert scheduler.state_dict()["_get_lr_called_within_step"] is False
-    if name in ("StepLR", "LambdaLR"):
-        assert "verbose" not in scheduler.state_dict()  # pinned Torch 2.7 schema
-    else:
-        assert scheduler.state_dict()["verbose"] is False
+    # Torch 2.7.1 scheduler checkpoints do not serialize verbose for any of
+    # these scheduler classes.
+    assert "verbose" not in scheduler.state_dict()
     step(optimizer, scheduler)
     assert scheduler.observed == [True, True]
     assert scheduler.state_dict()["_get_lr_called_within_step"] is False
@@ -71,12 +70,12 @@ def test_loading_legacy_linear_scheduler_state_keeps_new_constructor_defaults(sh
     optimizer, _ = make_schedule(shared_lr_device)
     scheduler = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.5, total_iters=3)
     legacy = scheduler.state_dict()
-    legacy.pop("verbose")
+    legacy.pop("verbose", None)
     legacy.pop("_get_lr_called_within_step")
     restored = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.5, total_iters=3)
     restored.load_state_dict(legacy)
-    assert restored.state_dict()["verbose"] is False
+    assert "verbose" not in restored.state_dict()
     assert restored.state_dict()["_get_lr_called_within_step"] is False
     # Loading remains allowed; a strict external old/new snapshot comparison
     # must still report the schema change and establish a fresh run baseline.
-    assert set(restored.state_dict()) == set(legacy) | {"verbose", "_get_lr_called_within_step"}
+    assert set(restored.state_dict()) == set(legacy) | {"_get_lr_called_within_step"}

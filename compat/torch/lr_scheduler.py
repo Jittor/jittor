@@ -28,7 +28,6 @@ def _set_lrs(opt, lrs):
 
 class LRScheduler:
     _get_lr_called_within_step = False
-    _is_initial = False
 
     def __init__(self, optimizer, last_epoch=-1, verbose=False):
         self.optimizer = optimizer
@@ -45,7 +44,6 @@ class LRScheduler:
                                    f"in param_groups[{index}] when resuming an optimizer")
         self.base_lrs = [group["initial_lr"] for group in optimizer.param_groups]
         self.last_epoch = last_epoch
-        self.verbose = False if verbose == "deprecated" else verbose
         self._step_count = 0
         self._get_lr_called_within_step = False
         self._last_lr = list(self.base_lrs)
@@ -62,10 +60,15 @@ class LRScheduler:
         self._step_count += 1
         self._get_lr_called_within_step = True
         try:
-            if epoch is not None and hasattr(self, "_get_closed_form_lr"):
-                lrs = self._get_closed_form_lr()
-            else:
+            if epoch is None:
+                self.last_epoch += 1
                 lrs = self.get_lr()
+            else:
+                self.last_epoch = epoch
+                if hasattr(self, "_get_closed_form_lr"):
+                    lrs = self._get_closed_form_lr()
+                else:
+                    lrs = self.get_lr()
         finally:
             self._get_lr_called_within_step = False
         self._last_lr = list(lrs)
@@ -106,8 +109,6 @@ class LambdaLR(LRScheduler):
     def __init__(self, optimizer, lr_lambda, last_epoch=-1, verbose=False):
         self.lr_lambdas = _lr_lambdas(optimizer, lr_lambda)
         super().__init__(optimizer, last_epoch, verbose)
-        # LambdaLR checkpoints use the pinned Torch 2.7 public schema.
-        del self.verbose
     def get_lr(self):
         return [b * fn(self.last_epoch) for b, fn in zip(self.base_lrs, self.lr_lambdas)]
 
@@ -142,7 +143,7 @@ class MultiplicativeLR(LRScheduler):
         _load_lambda_state_dict(self, sd)
     def get_lr(self):
         current_lrs = _base_lrs(self.optimizer)
-        if self._is_initial:
+        if self.last_epoch <= 0:
             return current_lrs
         return [lr * fn(self.last_epoch) for lr, fn in zip(current_lrs, self.lr_lambdas)]
 
@@ -209,9 +210,6 @@ class StepLR(LRScheduler):
     def __init__(self, optimizer, step_size, gamma=0.1, last_epoch=-1, verbose=False):
         self.step_size = step_size; self.gamma = gamma
         super().__init__(optimizer, last_epoch, verbose)
-        # StepLR checkpoints follow the pinned Torch 2.7 schema. Other
-        # schedulers retain their existing legacy verbose contract.
-        del self.verbose
     def get_lr(self):
         if not self._get_lr_called_within_step:
             _warnings.warn("To get the last learning rate computed by the scheduler, "
