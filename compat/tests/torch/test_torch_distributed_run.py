@@ -14,6 +14,7 @@ class TestDistributedRun(unittest.TestCase):
         from torch.distributed.run import _native_arguments
         from jittor.distributed.launch import _parse_args, _rank_environment
 
+        self.assertIs(torch.distributed.run._native_arguments, _native_arguments)
         args = _parse_args(_native_arguments([
             '--nproc_per_node', '2', '--master_port', '29601', '--nnodes', '1',
             '--node_rank', '0', '--master_addr', '127.0.0.1',

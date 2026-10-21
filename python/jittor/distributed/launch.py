@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """MPI-free multi-device launcher for Jittor.
 
-The ``jtrun`` command starts one process per rank and assigns one visible device
-to each process. It exports the standard rendezvous environment. Multi-node
+The ``jtrun`` command starts one process per rank and by default assigns one
+visible device to each process. It exports the standard rendezvous environment. Multi-node
 agents use Jittor's TCPStore for NCCL world/subgroup identity and node liveness;
 single-node launches retain the existing root-info transport. The older
 ``python -m jittor.distributed.launch`` entry point remains equivalent.
