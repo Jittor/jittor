@@ -1018,6 +1018,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
                 sync_times++;
             }
             for (auto& edge : op->_inputs) {
+                if (op->flag(OpFlags::_no_input_storage)) break;
                 // A control edge orders two ops and carries no data: what it
                 // comes from may have no memory of its own (fused away).
                 if (edge.reverse().index < 0) continue;

@@ -297,6 +297,11 @@ static void top_weak_sync(vector<Var*>& vars) {
         // still collects any unfinished input of what was actually requested,
         // kept or not.
         if (v->flag(VarFlags::_kept)) continue;
+        // A custom backward can hold an input tape only for its gradient.
+        // Like auto_flush, weak sync must not turn that saved holder into a
+        // forward data request. Explicit roots and real input edges still run.
+        Op* producer = v->input();
+        if (producer && producer->flag(OpFlags::_must_stay_pending)) continue;
         vars.push_back(v);
     }
 }
@@ -348,6 +353,7 @@ static bool has_dynamic_inputs(const vector<Var*>& roots) {
     while (!stack.empty()) {
         Op* op = stack.back();
         stack.pop_back();
+        if (op->flag(OpFlags::_no_input_storage)) continue;
         for (auto* input : op->inputs()) {
             if (input->num < 0) return true;
             if (!input->is_finished() && input->input() && !epoch.marked(input->input())) {
@@ -379,12 +385,14 @@ static void resolve_dynamic_inputs(Executor& executor, const vector<Var*>& roots
         }
         if (!seen.insert(op).second) continue;
         pending.emplace_back(op, true);
+        if (op->flag(OpFlags::_no_input_storage)) continue;
         for (auto* input : op->inputs())
             if (!input->is_finished() && input->input())
                 pending.emplace_back(input->input(), false);
     }
     bool changed = false;
     for (auto* op : ordered) {
+        if (op->flag(OpFlags::_no_input_storage)) continue;
         for (auto* input : op->inputs()) {
             if (input->num >= 0) continue;
             executor.run_sync({input}, false, false);
