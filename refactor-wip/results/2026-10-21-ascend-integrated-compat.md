@@ -425,3 +425,7 @@ R13 在首个 runtime launcher 建立前由 driver 捕获物理卡 3 外部 PID 
 ### R15：runtime-entry 外部占用中止
 
 R15 在 fresh admission 时卡 5/6 为空，使用与 R5 相同的 2500 文件清单（SHA256 aa56c083de1404dcfc744b31edc3dcb973f574d3dcb0d048c691d8ffa400d383）启动 Native torchrun full。运行期间 4.36 秒后，live monitor 在物理卡 6 发现外部 PID 1177475，向本 cohort 自己的 process group 发送终止信号，driver 返回 125。该次已有 torchrun launcher，因此只记录为 runtime-entry 资源中止；stdout 为空、没有 rank 训练报告或可接受的 FSDP full 结果。R15 的 execution.json、foreign-npu-occupants.json、空 stdout 和 before/during/after npu-smi 快照均保存在 `distributed/main-tree-fsdp2-cat-fix-r15/`。中止后核验 PID 1177542 已退出、该进程组为空；外部 PID 1177475 仍在卡 6，未向它发送信号或读取其环境。
+
+### R16：部分 rank 启动后因外部占用中止
+
+R16 将物理卡 3/5 作为 fresh pair，Native torchrun full 启动后运行 45.34 秒；live monitor 在物理卡 3 发现外部 PID 1192793，driver 返回 125 并终止本 cohort 自己的进程组。两份 `torch/full/rank*-process-start.json` 已保留，但没有终态 `rank0.json/rank1.json`，torchrun 的 rank stdout/stderr 均为 0 字节，因此没有可接受的 Native full 结果。driver PID 1192335 与其 process group 在退出后核验为空；post-abort snapshot 显示 PID 1192793 仍在 NPU 3，未触碰。原 execution、foreign occupant 与完整快照保存在 `distributed/main-tree-fsdp2-cat-fix-r16/`。
