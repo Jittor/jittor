@@ -493,8 +493,39 @@ class Module:
             ps = {prefix + k: v for k, v in ps.items()}
         if destination is not None:
             destination.update(ps)
-            return destination
-        return ps
+            ps = destination
+        from .state_dict_hooks import apply_post
+        return apply_post(self, ps, prefix, recurse)
+
+    def _register_state_dict_hook(self, hook):
+        """Register an export post-hook that may return a replacement mapping."""
+        from .state_dict_hooks import register
+        return register(self, "_state_dict_hooks", hook, allow_return=True)
+
+    def register_state_dict_post_hook(self, hook):
+        """Register a child-before-parent export hook; it must return None."""
+        from .state_dict_hooks import register
+        return register(self, "_state_dict_hooks", hook, allow_return=False)
+
+    def _register_load_state_dict_pre_hook(self, hook, with_module=False):
+        """Register a load pre-hook, optionally passing the owning module."""
+        from .state_dict_hooks import register
+        return register(self, "_load_state_dict_pre_hooks", hook,
+                        with_module=with_module)
+
+    def register_load_state_dict_pre_hook(self, hook):
+        """Register a hook that edits copied checkpoint state before loading."""
+        return self._register_load_state_dict_pre_hook(hook, with_module=True)
+
+    @staticmethod
+    def _state_dict_hook_scope(enabled):
+        """Scope hook execution for internal namespace checks and native loads."""
+        from .state_dict_hooks import scope
+        return scope(enabled)
+
+    def _prepare_load_state_dict(self, state, strict=True):
+        from .state_dict_hooks import prepare_load
+        return prepare_load(self, state, strict)
 
     def named_parameters(self, recurse=True) -> List[Tuple[str, Var]]:
         ''' Returns a list of module parameters and their names.
@@ -525,6 +556,9 @@ class Module:
         '''
         Loads the module's parameters from a dictionary.
         '''
+        params, _, _, errors = self._prepare_load_state_dict(params)
+        if errors:
+            raise RuntimeError("\n".join(errors))
         self.load_parameters(params)
 
     def _load_from_state_dict(self, state, prefix="", *args, **kw):

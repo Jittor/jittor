@@ -464,8 +464,11 @@ def _state_dict_key_diff(root, state_dict):
     """
     own = {}
     try:
-        for name, value in root.state_dict().items():
-            own[str(name)] = value
+        # Loading validates the registered namespace after pre-hooks. Export
+        # hooks may intentionally present different, portable checkpoint keys.
+        with root._state_dict_hook_scope(False):
+            for name, value in root.state_dict().items():
+                own[str(name)] = value
     except EXPECTED as exc:
         swallowed("torch/installers/nn.py _state_dict_key_diff: for name, value in root.state_dict().items():", exc)
         return [], [], []
@@ -498,7 +501,14 @@ def _load_state_dict(self, state_dict, strict=True, assign=False):
             self, state_dict, strict)
         if fsdp_result is not None:
             return fsdp_result
+    state_dict, hook_missing, hook_unexpected, hook_errors = (
+        self._prepare_load_state_dict(state_dict, strict))
+    if hook_errors:
+        raise RuntimeError("Error(s) in loading state_dict:\n\t" +
+                           "\n\t".join(hook_errors))
     missing, unexpected, mismatched = _state_dict_key_diff(self, state_dict)
+    missing = hook_missing + missing
+    unexpected = hook_unexpected + unexpected
     # torch raises on a shape mismatch whatever `strict` says: the value
     # cannot be copied at all.  jittor's load_parameters only LOG.e'd it.
     if mismatched:
@@ -552,7 +562,10 @@ def _load_state_dict(self, state_dict, strict=True, assign=False):
                     target.copy_(value)
                 copied[key] = target
         load_state = copied
-    _ORIG_MODULE_LOAD_STATE_DICT(self, load_state)
+    # Pre-hooks have already run, before validation and storage-preserving
+    # copies. The native loader must not invoke them a second time.
+    with self._state_dict_hook_scope(False):
+        _ORIG_MODULE_LOAD_STATE_DICT(self, load_state)
     try:
         for n, p in self.named_parameters():
             if n in trainable and p.is_stop_grad():
@@ -1409,3 +1422,6 @@ def _install_module_methods(nn, registry=None):
         Fidelity.APPROXIMATE, 'Module state and parameter management over native holders; Torch lazy iterator, meta, and layout semantics are approximate')
     register_api_bindings(M, 'torch.nn.Module', ('extra_repr',),
         Fidelity.EXACT, 'Torch Module default extra_repr is empty; explicit subclass overrides retain normal MRO precedence')
+    register_api_bindings(M, 'torch.nn.Module',
+        ('register_state_dict_post_hook', 'register_load_state_dict_pre_hook'),
+        Fidelity.APPROXIMATE, 'State export hooks and load pre-hooks over native module traversal; metadata is limited to available module versions')
