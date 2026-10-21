@@ -86,6 +86,8 @@ const AclOpRegistry& acl_op_registry() {
         {"AvgpoolBackward", AclOpFunctions::direct(aclnnAvgPool2dBackward)},
         {"Flip", AclOpFunctions::direct(aclnnFlip)},
         {"Concat", AclOpFunctions::direct(aclnnCat)},
+        // Launcher unused: FlatConcatOpRunner copies into its output itself.
+        {"FlatConcat", AclOpFunctions::direct(aclnnCat)},
         {"Gather", AclOpFunctions::direct(aclnnGather)},
         {"IndexCopy", AclOpFunctions::direct(aclnnInplaceIndexCopy)},
         {"Cumsum", AclOpFunctions::direct(aclnnCumsum)},

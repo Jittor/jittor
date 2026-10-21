@@ -3,6 +3,8 @@ from jittor._core.dtypes import var_dtype_name as _var_dtype_name
 
 import jittor as jt
 
+from ._code import acl_emit, acl_program
+
 
 def fused_adamw_acl(parameters, moments, variances, gradients, step, lr,
                     beta1, beta2, weight_decay, eps):
@@ -35,4 +37,29 @@ def fused_adamw_acl(parameters, moments, variances, gradients, step, lr,
     return result[:count], result[count:2 * count], result[2 * count:]
 
 
-__all__ = ["fused_adamw_acl"]
+def flat_concat_acl(tensors, dtype):
+    """Copy contiguous tensors back to back into one flat buffer.
+
+    The flat AdamW needs the step's gradients in one dense tensor. Concatenating
+    them one-dimensionally in the frontend costs one graph op per tensor (201
+    of them on a BERT-base step, ~10 ms of host); this is one op whose runner
+    issues one device-to-device copy per input.
+    """
+    if not jt.flags.use_acl:
+        raise RuntimeError("flat gradient concat requires the ACL backend")
+    tensors = list(tensors)
+    if not tensors:
+        raise ValueError("flat gradient concat needs at least one tensor")
+    total = 0
+    for tensor in tensors:
+        if _var_dtype_name(tensor) != dtype:
+            raise TypeError("flat gradient concat needs one dtype")
+        if not tensor._storage_is_contiguous():
+            raise ValueError("flat gradient concat needs contiguous inputs")
+        total += int(tensor.numel())
+    program = acl_program("FlatConcat", len(tensors), 1)
+    return acl_emit(program, tensors, output_dtypes=[dtype],
+                    output_shapes=[(total,)])[0]
+
+
+__all__ = ["fused_adamw_acl", "flat_concat_acl"]

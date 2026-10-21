@@ -266,15 +266,22 @@ def flat_step(optimizer, group, active, lr, beta1, beta2, weight_decay, eps,
                                  % (name, index))
 
     try:
-        from jittor.backends.acl.kernels.ops.adamw_op import fused_adamw_acl
+        from jittor.backends.acl.kernels.ops.adamw_op import (
+            flat_concat_acl, fused_adamw_acl)
     except Exception as exc:
         return fall_back("import: %s" % (_last_line(exc),))
 
     try:
-        # One concat per group instead of one small copy per parameter; the
-        # CANN update reads a single dense gradient tensor.
-        gradient = jt.concat(
-            [entry[3].reshape((-1,)) for entry in active], dim=0)
+        # One gradient tensor for the CANN update. The dedicated op copies
+        # each gradient into the flat buffer as it is; concatenating
+        # one-dimensional views instead builds one graph op per parameter,
+        # which is 201 op constructions -- ~10 ms of host -- on BERT-base.
+        if all(entry[3]._storage_is_contiguous() for entry in active):
+            gradient = flat_concat_acl([entry[3] for entry in active],
+                                       var_dtype_name(active[0][3]))
+        else:
+            gradient = jt.concat(
+                [entry[3].reshape((-1,)) for entry in active], dim=0)
         step = jt.array(float(next(iter(step_values))),
                         dtype="float32").stop_grad()
         updates = fused_adamw_acl(

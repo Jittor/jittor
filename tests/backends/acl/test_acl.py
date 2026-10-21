@@ -455,6 +455,136 @@ class TestACL(unittest.TestCase):
                             for message in messages))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_grad_of_a_lazy_forward_keeps_running_outputs(self):
+        """Differentiating an unsynced forward must not release its outputs.
+
+        KI-EXEC-017: the end of `grad(retain_graph=False)` released forward
+        vars whose producer had not run yet; the async executor then wrote a
+        destroyed output and faulted on a null function pointer. Twenty
+        build-then-grad rounds without an intervening sync.
+        """
+        rng = np.random.RandomState(19)
+        x = jt.array(rng.standard_normal((2, 3, 8, 8)).astype("float32"))
+        w = jt.array(rng.standard_normal((4, 3, 3, 3)).astype("float32"))
+        for _ in range(20):
+            y = jt.nn.conv2d(x, w, stride=1, padding=1)
+            loss = (y * y).sum()
+            gx, gw = jt.grad(loss, [x, w])
+            gx.sync()
+            gw.sync()
+            self.assertTrue(np.isfinite(gx.numpy()).all())
+            self.assertTrue(np.isfinite(gw.numpy()).all())
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_group_norm_silu_fuses_in_inference(self):
+        """`silu(group_norm(x))` is one aclnnGroupNormSilu in no_grad.
+
+        The fused output must match the two-step path, and the unfused path
+        here is the same normalization with its fusion offer dropped.
+        """
+        rng = np.random.RandomState(17)
+        x = jt.array(rng.standard_normal((2, 8, 4, 4)).astype("float32")).cast("float16")
+        w = jt.array((rng.standard_normal(8) * .1 + 1).astype("float32")).cast("float16")
+        b = jt.array((rng.standard_normal(8) * .1).astype("float32")).cast("float16")
+        with jt.no_grad():
+            fused = jt.nn.silu(jt.nn.group_norm(x, 4, w, b, 1e-5))
+            norm = jt.nn.group_norm(x, 4, w, b, 1e-5)
+            norm.__dict__.pop("_acl_group_norm_silu", None)
+            plain = jt.nn.silu(norm)
+        fused.sync()
+        plain.sync()
+        self.assertEqual(fused.location(), "device")
+        np.testing.assert_allclose(fused.numpy(), plain.numpy(),
+                                   rtol=5e-3, atol=5e-3)
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_mapped_linear_forward_and_gradients(self):
+        """`MappedLinearOp`: one aclnnAddmm and its C++ gradients.
+
+        Forward against float64 NumPy, then d_x, d_w and d_b. The shapes are
+        the 2-D and batched ones `nn.Linear` sends; the batched case goes
+        through `nn.linear`, which selects the op via
+        `linear_bias_accumulator`.
+        """
+        rng = np.random.RandomState(13)
+        for label, shape, out_features, via_linear, dtype, tol in (
+                ("2-D", (3, 4), 5, False, "float32", 2e-5),
+                ("3-D", (2, 3, 4), 5, True, "float32", 2e-5),
+                ("4-D", (2, 3, 2, 4), 5, True, "float32", 2e-5),
+                ("3-D fp16", (2, 3, 4), 5, True, "float16", 2e-2),
+                ("3-D bf16", (2, 3, 4), 5, True, "bfloat16", 4e-2)):
+            x_np = rng.randn(*shape).astype(np.float32)
+            w_np = rng.randn(out_features, shape[-1]).astype(np.float32)
+            b_np = rng.randn(out_features).astype(np.float32)
+            seed_np = rng.randn(*(shape[:-1] + (out_features,))).astype(np.float32)
+            x = jt.array(x_np).cast(dtype)
+            w = jt.array(w_np).cast(dtype)
+            b = jt.array(b_np).cast(dtype)
+            if via_linear:
+                y = jt.nn.linear(x, w, b)
+            else:
+                rows = int(np.prod(shape[:-1]))
+                y = jt.core.ops.mapped_linear(
+                    x.reshape((rows, shape[-1])), w, b).reshape(
+                        list(shape[:-1]) + [out_features])
+            seed = jt.array(seed_np).cast(dtype)
+            dx, dw, db = jt.grad((y * seed).sum(), [x, w, b])
+            for value in (y, dx, dw, db):
+                value.sync()
+            self.assertEqual((y.location(), dx.location(), dw.location(),
+                              db.location()), ("device",) * 4, label)
+            rows = int(np.prod(shape[:-1]))
+            # The reference reads the operands the device actually saw, so a
+            # low-precision cast is not charged to the kernel.
+            x64 = x.numpy().reshape(rows, -1).astype(np.float64)
+            w64 = w.numpy().astype(np.float64)
+            b64 = b.numpy().astype(np.float64)
+            seed64 = seed.numpy().reshape(rows, out_features).astype(np.float64)
+            np.testing.assert_allclose(
+                y.numpy().reshape(rows, out_features), x64 @ w64.T + b64,
+                rtol=tol, atol=tol, err_msg=label)
+            np.testing.assert_allclose(dx.numpy().reshape(rows, -1),
+                                       seed64 @ w64, rtol=tol, atol=tol,
+                                       err_msg=label)
+            np.testing.assert_allclose(dw.numpy(), seed64.T @ x64,
+                                       rtol=tol, atol=tol, err_msg=label)
+            np.testing.assert_allclose(db.numpy(), seed64.sum(0),
+                                       rtol=tol, atol=tol, err_msg=label)
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_flat_concat_matches_reshaped_concat(self):
+        """`flat_concat_acl`: one op copies the gradients into one buffer.
+
+        The inputs are what a parameter group's gradients look like -- one
+        contiguous tensor per parameter, ranks from 1 to 4, sizes that do not
+        divide the buffer evenly. Compared with the frontend
+        ``concat([g.reshape((-1,))])`` it replaces, and asserted to be a
+        single graph op.
+        """
+        from jittor.backends.acl.kernels.ops.adamw_op import flat_concat_acl
+        rng = np.random.RandomState(17)
+        shapes = ((7,), (3, 5), (2, 3, 4), (2, 2, 2, 3), (1,), (11, 2))
+        for dtype, tol in (("float32", 0.0), ("bfloat16", 0.0)):
+            tensors = [jt.array(rng.randn(*shape).astype(np.float32)).cast(dtype)
+                       for shape in shapes]
+            before = jt.core._number_of_created_ops()
+            flat = flat_concat_acl(tensors, dtype)
+            # Before the sync: the executor builds a temporary op while it
+            # compiles the code op, which is not this operator's cost.
+            created = jt.core._number_of_created_ops() - before
+            flat.sync()
+            self.assertEqual(created, 1,
+                             "flat gradient concat must build one graph op")
+            _assert_acl_device(self, flat)
+            expected = np.concatenate(
+                [tensor.numpy().reshape(-1) for tensor in tensors])
+            np.testing.assert_allclose(flat.numpy(), expected, rtol=tol,
+                                       atol=tol, err_msg=dtype)
+            self.assertEqual(flat.dtype, tensors[0].dtype, dtype)
+            self.assertEqual(int(flat.numel()),
+                             sum(int(t.numel()) for t in tensors), dtype)
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_mapped_matmul_forward_and_gradients(self):
         """The device route for `MappedMatmulOp` and both of its gradients.
 

@@ -7,6 +7,37 @@
 
 namespace jittor
 {
+    FlatConcatOpRunner::FlatConcatOpRunner() : BaseOpRunner("FlatConcat")
+    {
+    }
+
+    void FlatConcatOpRunner::executeOp(AclOpRegistry::const_iterator &it)
+    {
+        CHECK(out_.size() == 1);
+        Var *out = out_[0];
+        int64 offset = 0;
+        for (Var *in : in_)
+        {
+            if (!in->size) continue;
+            if (!in->is_contiguous())
+                LOGf << "FlatConcat: input " << in << " is not contiguous";
+            if (offset + in->size > out->size)
+                LOGf << "FlatConcat: inputs overrun the flat output";
+            ret = aclrtMemcpyAsync(
+                (char *) out->mem_ptr + offset, in->size,
+                in->mem_ptr, in->size,
+                ACL_MEMCPY_DEVICE_TO_DEVICE, aclstream);
+            if (ret != ACL_SUCCESS)
+                throw std::runtime_error(
+                    "FlatConcat D2D copy failed: " +
+                    acl_error_to_string(ret));
+            offset += in->size;
+        }
+        if (offset != out->size)
+            LOGf << "FlatConcat: inputs fill " << offset << " of "
+                 << out->size << " bytes";
+    }
+
     AdamWListOpRunner::AdamWListOpRunner() : BaseOpRunner("AdamWList")
     {
     }
