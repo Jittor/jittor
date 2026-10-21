@@ -113,6 +113,9 @@ class TestFusedAttentionF32(unittest.TestCase):
         mask = (np.random.RandomState(4).randn(2, 1, 64, 64) * 0.5).astype("float32")
         mask[0, ..., 40:] = np.finfo(np.float32).min
         mask[1, ..., :9] = np.finfo(np.float32).min
+        # The forward remains uniform here; backward must retain 1 / key_count
+        # even when adding log(key_count) to finfo.min would round it away.
+        mask[1, :, 7, :] = np.finfo(np.float32).min
         self._check(2, 3, 64, 64, 64, False, mask)
 
     def test_an_additive_mask_per_head(self):

@@ -198,7 +198,7 @@ __device__ __forceinline__ void load_rows(const float* p, float (&out)[RPT]) {
 template <int D, int RPT, bool CAUSAL, int MASK, bool DROPOUT>
 __global__ void __launch_bounds__(THREADS) forward(
         const float* __restrict__ q, const float* __restrict__ k,
-        const float* __restrict__ v, float* __restrict__ o, float* __restrict__ lse,
+        const float* __restrict__ v, float* __restrict__ o, float* __restrict__ normalizer,
         int lq, int lk, float scale, mea::Mask mask, mea::Rows ql, mea::Rows kl,
         mea::Rows vl, mea::Dropout dropout) {
     constexpr int BQ = 16 * RPT, BK = 64;
@@ -330,7 +330,13 @@ __global__ void __launch_bounds__(THREADS) forward(
             const int col = tx + c * 16;
             if (col < D) ob[col] = acc[r][c] * inv;
         }
-        if (tx == 0) lse[(size_t)bh * lq + row] = l[r] > 0.f ? m[r] + __logf(l[r]) : -INFINITY;
+        // Keep the maximum and normalization separate: at finfo.min,
+        // adding log(l) loses it, and exp(score - lse) would return 1.
+        if (tx == 0) {
+            const size_t index = ((size_t)bh * lq + row) * 2;
+            normalizer[index] = m[r];
+            normalizer[index + 1] = inv;
+        }
     }
 }
 
@@ -373,7 +379,7 @@ template <int D, bool CAUSAL, int MASK, bool DROPOUT>
 __global__ void __launch_bounds__(THREADS) backward(
         const float* __restrict__ q, const float* __restrict__ k,
         const float* __restrict__ v, const float* __restrict__ dout,
-        const float* __restrict__ lse, const float* __restrict__ delta,
+        const float* __restrict__ normalizer, const float* __restrict__ delta,
         float* __restrict__ dq, float* __restrict__ dk, float* __restrict__ dv,
         int lq, int lk, float scale, mea::Mask mask, mea::Rows ql, mea::Rows kl,
         mea::Rows vl, mea::Rows dkl, mea::Rows dvl, mea::Dropout dropout) {
@@ -455,7 +461,9 @@ __global__ void __launch_bounds__(THREADS) backward(
         #pragma unroll
         for (int r = 0; r < 2; r++) {
             const int row = q0 + ay * 2 + r;
-            const float row_lse = row < lq ? lse[(size_t)bh * lq + row] : -INFINITY;
+            const size_t index = ((size_t)bh * lq + row) * 2;
+            const float row_max = row < lq ? normalizer[index] : -INFINITY;
+            const float row_inv_sum = row < lq ? normalizer[index + 1] : 0.f;
             const float row_delta = row < lq ? delta[(size_t)bh * lq + row] : 0.f;
             float pr[4], dsr[4], z[4] = {1.f, 1.f, 1.f, 1.f};
             if (DROPOUT && row < lq) dropout.mask(bh, row, (k0 >> 2) + ax, z);
@@ -463,13 +471,14 @@ __global__ void __launch_bounds__(THREADS) backward(
             for (int c = 0; c < 4; c++) {
                 const int col = k0 + ax * 4 + c;
                 const bool dead = row >= lq || col >= lk || (CAUSAL && col > row)
-                                  || row_lse == -INFINITY;
+                                  || row_inv_sum == 0.f;
                 float score = s[r][c] * scale;
                 if (MASK == 2 && !dead) score += bias[r][c];
                 if (MASK == 1 && shown == 1 && !dead)
                     score = mea::masked<MASK>(score, mask, mask_base
                         + row * mask.row_stride + col * mask.col_stride);
-                const float p = dead || score == -INFINITY ? 0.f : __expf(score - row_lse);
+                const float p = dead || score == -INFINITY ? 0.f
+                    : __expf(score - row_max) * row_inv_sum;
                 // dV takes the dropped probability; dS the undropped one,
                 // against the gradient that reached it through the mask.
                 pr[c] = p * z[c];
@@ -733,11 +742,11 @@ def _forward(query, key, value, call):
                   f"{float(call.scale)!r}f, {call.args(3)}",
             threads="mea_fwd::THREADS")
     return jt.code(
-        [query.shape, (b, h, lq)], ["float32", "float32"], [query, key, value] + call.extras(),
+        [query.shape, (b, h, lq, 2)], ["float32", "float32"], [query, key, value] + call.extras(),
         cuda_header=_KERNELS, cuda_src=src)
 
 
-def _backward(query, key, value, grad_out, lse, delta, call):
+def _backward(query, key, value, grad_out, normalizer, delta, call):
     d = int(query.shape[3])
     smem = _smem_register_backward(d)
     kernel = f"mea_bwd::backward<{d}, {call.template()}>"
@@ -751,7 +760,7 @@ def _backward(query, key, value, grad_out, lse, delta, call):
                        for t, seq in ((key, call.seq[1]), (value, call.seq[2]))]
     return jt.code(
         [query.shape] + grad_shapes, ["float32"] * 3,
-        [query, key, value, grad_out, lse, delta] + call.extras(),
+        [query, key, value, grad_out, normalizer, delta] + call.extras(),
         cuda_header=_KERNELS,
         cuda_src="cudaMemsetAsync(out0_p, 0, out0->size, 0);\n" + _launch(
             kernel, f"({lk_expr} + 31) / 32, in0->shape[0] * {call.heads_expr()}",
@@ -772,19 +781,19 @@ class _FusedAttentionF32(jt.Function):
     # gradient comes back in its tensor's own layout, the output in q's.
     def execute(self, query, key, value, call):
         self.call = call
-        out, lse = _forward(query, key, value, call)
-        self.saved = (query, key, value, out, lse)
+        out, normalizer = _forward(query, key, value, call)
+        self.saved = (query, key, value, out, normalizer)
         return out
 
     def grad(self, grad_out):
-        query, key, value, out, lse = self.saved
+        query, key, value, out, normalizer = self.saved
         grad_out = grad_out.float32()
         delta = (grad_out * out).sum(-1)
         if self.call.seq[0]:
             delta = delta.transpose(0, 2, 1)
         call = self.call
         grad_query, grad_key, grad_value = _backward(
-            query, key, value, grad_out, lse, delta, call)
+            query, key, value, grad_out, normalizer, delta, call)
         if call.group > 1:
             grad_key = _sum_groups(grad_key, key, call.seq[1], call.group)
             grad_value = _sum_groups(grad_value, value, call.seq[2], call.group)
