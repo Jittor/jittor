@@ -35,6 +35,13 @@ class Upsample(jt.Module):
     def execute(self, x):
         if self.scale_factor is None:
             raise ValueError("scale_factor should be defined")
+        if self.mode == "nearest-exact":
+            # Retain explicit scale semantics; the functional admits exact
+            # integer factors and rejects fractional ones instead of silently
+            # substituting the rounded output-size ratio.
+            from jittor.nn.functional.interpolation import interpolate
+            return interpolate(x, scale_factor=self.scale_factor, mode=self.mode,
+                               align_corners=self.align_corners)
         if isinstance(self.scale_factor, float):
             return jt.nn.upsample(
                 x,

@@ -1,6 +1,6 @@
 ---
 name: jittor-transformers-perf
-description: Reproducible CUDA and Ascend performance analysis for Transformers on import-jittor-as-torch versus real PyTorch. Use for operator, Transformer-block, HF-model, SDPA, gradient-management, or optimizer-step benchmarks where Jittor lazy execution and backend/version isolation must be handled correctly.
+description: Reproducible CUDA and Ascend performance analysis for Transformers, Diffusers, and vision inference on Jittor's Torch frontend versus real PyTorch. Use for operator, Transformer-block, HF-model, full diffusion generation, SAM masks, SDPA, gradient-management, or optimizer-step benchmarks where Jittor lazy execution and backend/version isolation must be handled correctly.
 ---
 
 # Jittor Transformers 性能基准
@@ -52,6 +52,112 @@ Jittor vs 真 PyTorch 数据，而不是把 JIT、H2D 或 lazy graph 漏执行�
 - SDPA layout/Flash 物化：`probe_sdpa_layout_materialization.py`
 - Ascend Qwen3 整模推理：`benchmark_qwen3_ascend.py`
 - Ascend Qwen3 两进程结果对拍：`compare_qwen3_ascend.py`
+- Ascend SDXL / Wan 完整生成与图像、视频对拍：`benchmark_diffusion_ascend.py`
+- Ascend SAM2 真实图像、点提示与掩码对拍：`benchmark_sam2_ascend.py`
+
+### 生成与视觉效果验收
+
+两个入口均要求先完成同版本、同 checkpoint、同输入的小模型 CPU 对拍，再在真实
+NPU 验收。CPU fixture 只证明对应路径的兼容性；不能用其时间替代完整预训练模型
+的速度，也不能由一次真实图像成功推断整套视觉任务质量。当前实验使用
+Diffusers 0.35.1 / Transformers 4.56.2；比较进程必须固定相同版本。首次 JIT 串行，
+原生 Torch 与 Jittor 分进程、分缓存顺序运行，设备由外部
+`ASCEND_RT_VISIBLE_DEVICES` 指定，运行前保留驱动、CANN 和设备负载快照。
+
+工具不自动下载模型或图片。显式传入 `--model <local-checkpoint>`，或
+`--models-manifest <json>`；manifest 按 `sdxl`、`wan`、`sam2` 映射到
+`{"path": "...", "repo": "...", "sha": "..."}`，相对路径相对 manifest 所在目录。
+`JITTOR_LAB_ROOT` 必须设置，输出和 SAM 共享输入必须在该 lab 下且位于 checkout
+外。提交元数据默认取脚本所在 checkout；复制脚本运行时用 `--source-root` 指定。
+
+```bash
+SCRIPT_ROOT=agent/skills/jittor-transformers-perf/scripts
+perf_run="$JITTOR_LAB_ROOT/_state/generative-vision/<run>"
+JITTOR_TORCH_SHIM=0 <real-torch-python> "$SCRIPT_ROOT/benchmark_diffusion_ascend.py" \
+  --backend torch --case sdxl --models-manifest "$MODEL_MANIFEST" \
+  --height 1024 --width 1024 --steps 20 --guidance 5 --warmups 3 --samples 5 \
+  --output "$perf_run/sdxl-torch.json"
+JITTOR_TORCH_SHIM=1 JITTOR_HOME="$perf_run/jittor-cache" cache_name=diffusion \
+  <jittor-python> "$SCRIPT_ROOT/benchmark_diffusion_ascend.py" \
+  --backend jittor --case sdxl --models-manifest "$MODEL_MANIFEST" \
+  --height 1024 --width 1024 --steps 20 --guidance 5 --warmups 3 --samples 5 \
+  --output "$perf_run/sdxl-jittor.json"
+python "$SCRIPT_ROOT/benchmark_diffusion_ascend.py" \
+  --compare "$perf_run/sdxl-torch.json" "$perf_run/sdxl-jittor.json" \
+  --output "$perf_run/sdxl-parity.json"
+```
+
+Diffusion 入口使用同一 NumPy 初始噪声和实际 pipeline，保存最终 latent、像素、PNG，
+Wan 另存逐帧 NumPy 和 GIF。默认单次无预热明确标为 cold；稳态须显式指定完整生成
+预热和样本数，不能把首次 JIT 算入稳态。计时包括文本编码、完整去噪循环、VAE 解码
+与 NumPy 后处理，排除加载和文件写入；公开 hook 与每步 callback 均同步，阶段数值
+属于带同步插桩的完整生成耗时。默认 SDXL 为 1024²、20 Euler 步、CFG 5；
+Wan 为 320×512×17 帧、20 FlowMatchEuler 步、CFG 5，较低分辨率结果不能标为
+704×1280。单 prompt / seed 的数值误差与 PSNR 衡量实现间一致性，没有真值质量评分。
+`--scheduler euler` 为默认值，Wan 显式将 checkpoint 的 `flow_shift` 映射到
+FlowMatchEuler 的 `shift`，两侧记录实际类与配置。`--scheduler native` 保留 checkpoint
+调度器；例如 UniPC 的线性求解可能触发原生 torch_npu CPU 回退，必须单列限制，
+不能与完整 NPU 的 Euler 耗时混比。
+
+310P 路径使用 FP16 主体，保留 Wan 官方 FP32 timestep / norm / scale-shift 模块，
+RoPE 显式 FP32；Wan VAE 为 FP32，SDXL 按官方 `force_upcast` 解码。
+`--pack` 只快照 FP16 exact Linear，保留 FP32 例外并排除会升精度的 VAE；
+必须用独立原生结果验证快照前后数值。`--vae-tiling` 单列配置；
+Wan 可用 `--vae-tile-size` 指定内部 sample tile，默认 256、stride 192，
+128 对应 stride 96。工具记录实际 sample / latent / 输出 tile 几何及当前 shape 是否
+触发 tiling；Wan2.2 的 patch 空间可能使输出 tile 大于该参数，不能只凭开关判断生效。
+公开 tiling 路径仍须检查实际输出通道数、尺寸和帧数。
+固定的 Diffusers 0.35.1 中，Wan2.2 `patch_size=2` 的 tiled decode 绕过
+`unpatchify`，入口明确拒绝该组合。显存受限时可先独立准备原生条件：
+
+```bash
+JITTOR_TORCH_SHIM=0 <real-torch-python> "$SCRIPT_ROOT/benchmark_diffusion_ascend.py" \
+  --backend torch --case wan --models-manifest "$MODEL_MANIFEST" \
+  --prepare-prompt-embeddings --output "$perf_run/wan-prompts.npz"
+```
+
+此模式只在 NPU 加载 FP32 UMT5 与 tokenizer，通过公开 `WanPipeline.encode_prompt`
+保存正负条件及 `.npz.json` 元数据，不加载去噪器或 VAE。之后两侧生成均加
+`--prompt-embeddings "$perf_run/wan-prompts.npz"`，不启用 tiling，pipeline 显式不加载
+文本编码器和 tokenizer。工具核对 prompt、checkpoint、archive SHA 和 finite，并将
+共享条件预先传到设备。此时报告只覆盖 scheduler / 去噪 / VAE 解码与像素后处理，
+明确排除文本编码、archive 加载和初始条件传输；不能称为端到端文生视频耗时，也
+不能证明 Jittor 文本编码器已经验收。两侧对拍必须使用同一个条件 archive。
+
+`--text-device cpu` 仅供 Wan 显式选择 CPU 文本编码，编码和传输仍计入每次总耗时，
+该混合配置不能称为全 NPU 推理。两侧都检查 NPU 驻留，Jittor 使用零回退守卫。
+
+SAM 先用 Pillow/NumPy 生成一次共享输入，显式传入原图像素坐标的正点提示；预处理
+按 checkpoint 的 square resize / rescale / normalization 设置，使用一致的 Pillow
+bilinear，而非可选 torchvision fast processor。之后两进程读取同一 NPZ：
+
+```bash
+python "$SCRIPT_ROOT/benchmark_sam2_ascend.py" --prepare \
+  --models-manifest "$MODEL_MANIFEST" --image "$SAM_IMAGE" --point 266 216 \
+  --inputs "$perf_run/sam-inputs.npz"
+JITTOR_TORCH_SHIM=0 <real-torch-python> "$SCRIPT_ROOT/benchmark_sam2_ascend.py" \
+  --backend torch --device cpu --dtype float32 --models-manifest "$MODEL_MANIFEST" \
+  --inputs "$perf_run/sam-inputs.npz" --warmups 3 --samples 5 \
+  --output "$perf_run/sam-torch-cpu.json"
+JITTOR_TORCH_SHIM=1 JITTOR_HOME="$perf_run/sam-jittor-cache" cache_name=sam_effects \
+  <jittor-python> "$SCRIPT_ROOT/benchmark_sam2_ascend.py" \
+  --backend jittor --device npu --dtype float32 --models-manifest "$MODEL_MANIFEST" \
+  --inputs "$perf_run/sam-inputs.npz" --warmups 3 --samples 5 \
+  --output "$perf_run/sam-jittor-npu.json"
+python "$SCRIPT_ROOT/benchmark_sam2_ascend.py" \
+  --compare "$perf_run/sam-torch-cpu.json" "$perf_run/sam-jittor-npu.json" \
+  --output "$perf_run/sam-effect-parity.json"
+```
+
+当前 310P 实测原生 Torch 的 FP16 MaxPool、FP32 非连续 GELU 路径不可用，因此示例
+使用独立 Torch CPU FP32 参考。当前 Jittor NPU 仅图像编码器已通过；完整掩码解码仍
+被 ConvTranspose 路径阻塞，上述完整模型命令用于复现与后续验收，尚不能产出成功的
+完整掩码对拍。图像编码器可用下文组件工具的 `--case sam2 --dtype float32` 单独验证。
+跨设备输出参考不能称为原生 NPU oracle，不能将两者耗时相除形成速度比。
+SAM 计时覆盖图像编码器、点提示编码器和多掩码解码器；CPU 预处理、掩码插值和叠加图
+写入均在计时外，cold 单列。`--compare <torch.json> <jittor.json> --output <lab.json>`
+保存 logits / 分数误差、逐候选二值掩码一致性 IoU 与并排图。模型预测 IoU 是置信度，
+实现间掩码 IoU 是对拍指标；二者均不是对标注真值的质量评估。
 
 ### 独立前端 NPU 最小基准
 
@@ -223,3 +329,30 @@ CUDA_VISIBLE_DEVICES=<gpu> cache_name=softmax_boundary \
 `docs/results/2026-08-30-qwen3-ascend-training.md`；早期按算子的 transformers 报告已退役，
 Git 历史 `e3c369acb` 可查）；数值精度对拍仍使用
 `agent/skills/jittor-torch-diff/`。
+
+### Ascend 生成与视觉模型组件
+
+`benchmark_generative_vision_ascend.py` 与 `_generative_vision_cases.py` 使用同一套
+离线 checkpoint 和 NumPy 输入，支持 Wan2.2 denoiser、SDXL UNet、SigLIP2 vision tower、
+DINOv2 及 SAM2 image model。先用 `--tiny --prepare --backend torch --device cpu`
+保存 CPU fixture，再由 Jittor 加载同一目录并对拍；完整尺寸测速必须另传真实 `--model`。
+两侧独立进程、相同 Transformers/Diffusers 版本，NPU 首次编译串行，至少 3 次预热与
+5 次逐次同步样本。运行前加载 CANN、选择设备，并设置外部 `JITTOR_LAB_ROOT`。
+
+```bash
+python agent/skills/jittor-transformers-perf/scripts/benchmark_generative_vision_ascend.py \
+  --backend jittor --device npu --case wan --model "$WAN_CHECKPOINT" \
+  --attention sdpa --warmups 3 --samples 5 \
+  --output "$JITTOR_LAB_ROOT/_state/model-bench/jittor-wan.json"
+python agent/skills/jittor-transformers-perf/scripts/compare_generative_vision_ascend.py \
+  "$TORCH_RESULT" "$JITTOR_RESULT" --max-relative-l2 0.02 \
+  --output "$JITTOR_LAB_ROOT/_state/model-bench/parity.json"
+```
+
+比较器核对模型、规格、版本、参数数量和零回退，再计算逐字段误差。默认 Wan 组件
+为 320×512×17 的一次条件前向（800 self-attention tokens），`--profile large` 为
+704×1280×17（4400 tokens）；包含逐 token 时间条件和官方 FP32 islands。
+SDXL 为 1024² 的单次条件前向，均不能当作完整 CFG 采样耗时。SAM2 为单图和
+一个正点提示，不能外推视频记忆模块。只有通过输出对拍的数据才能作为性能结论。
+组件比较器无论输入顺序如何均核对每个 Jittor 报告的零回退计数。组件报告与比较 JSON
+必须写入外部 lab；`--prepare` 创建的 fixture 目录也必须在 lab 下且位于 checkout 外。

@@ -10,12 +10,13 @@ from .ops.bmm_op import BmmACL
 from .ops.cross_entropy_loss_op import CrossEntropyLossACL
 from .ops.gelu_op import GeluACL
 from .ops.matmul_op import MatmulACL
-from .ops.upsample_op import UpsampleNearest2dACL
+from .ops.upsample_op import UpsampleNearest2dACL, UpsampleBicubic2dACL
 from .ops.relu_op import ReLUACL, LeakyReLUACL
 from .ops.silu_op import SiLUACL, SwishACL, SwiGluACL
 from .ops.softmax_op import SoftmaxACL
 from .ops.pool_op import PoolACL, AdaptiveAvgPool2dACL
 from .ops.rope_op import RotaryPositionEmbeddingACL
+from ._soc import soc_name
 
 
 #: Dtype sets the decline guards below test membership in. A Var's dtype is a
@@ -41,6 +42,23 @@ def conv_acl(
     x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1, *, _depthwise_fast_path=True
 ):
     return ConvACL()(x, weight, bias, stride, padding, dilation, groups)
+
+
+def conv3d_acl(x, weight, stride=1, padding=0, dilation=1, groups=1):
+    # nn.functional.conv3d owns its separately rounded bias addition, and its
+    # selected kernel receives no bias argument. Both dimensions use the same
+    # aclnnConvolution runner with rank-sized spatial attributes.
+    if (not jt.flags.no_grad
+            and (not x.is_stop_grad() or not weight.is_stop_grad())
+            and soc_name().startswith("Ascend310P")):
+        # On 310P the forward is supported, but this SDK's 3-D
+        # aclnnConvolutionBackward rejects the architecture with error 161002.
+        # The 2-D backward and a separately added bias are unaffected.
+        raise NotImplementedError(
+            "ACL Conv3d gradients are unavailable on Ascend310P via "
+            "aclnnConvolutionBackward; this path supports inference only "
+            "(use no_grad or stop gradients on both input and weight)")
+    return ConvACL()(x, weight, None, stride, padding, dilation, groups)
 
 
 def bmm_acl(x1, x2, trans_a=False, trans_b=False):
@@ -75,6 +93,26 @@ def _transpose_last_two(x):
 
 
 def resize_acl(input, size, mode="nearest", align_corners=False, tf_mode=False):
+    if mode == "nearest-exact":
+        if (input.ndim != 4 or not getattr(jt.flags, "no_grad", 0)
+                or not _dtype_in(input, ("float16", "float32"))):
+            return None
+        if isinstance(size, int):
+            size = (size, size)
+        if len(size) != 2 or any(int(source) <= 0 or int(target) % int(source)
+                                 for source, target in zip(input.shape[-2:], size)):
+            return None
+        # For integer upsampling, floor((i+0.5)/scale)==floor(i/scale),
+        # so the existing nearest SDK runner implements nearest-exact too.
+        mode = "nearest"
+    if (mode == "bicubic" and input.ndim == 4
+            and _dtype_in(input, ("float16", "float32"))
+            and getattr(jt.flags, "no_grad", 0)
+            and not align_corners and not tf_mode
+            and all(int(value) > 0 for value in input.shape)):
+        if isinstance(size, int):
+            size = (size, size)
+        return UpsampleBicubic2dACL()(input, size)
     if (
         mode == "nearest"
         and input.ndim == 4

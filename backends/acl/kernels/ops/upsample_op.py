@@ -53,3 +53,24 @@ class UpsampleNearest2dACL:
                 "inputSize": list(self.input_shape),
             },
         )
+
+
+
+class UpsampleBicubic2dACL(UpsampleNearest2dACL):
+    """Half-pixel bicubic resize for the explicitly admitted inference subset."""
+
+    def __call__(self, input, output_size):
+        if not getattr(jt.flags, "no_grad", 0):
+            raise RuntimeError("ACL bicubic resize currently requires no_grad")
+        if input.ndim != 4:
+            raise ValueError("bicubic 2-D upsample expects a 4-D input")
+        output_size = tuple(int(size) for size in output_size)
+        if len(output_size) != 2 or any(size <= 0 for size in output_size):
+            raise ValueError("output_size must contain two positive dimensions")
+        self.input_shape = tuple(int(size) for size in input.shape)
+        self.output_size = output_size
+        return _upsample_cmd(
+            "UpsampleBicubic2d", [input], input.dtype,
+            self.input_shape[:2] + output_size,
+            self._attr_code("UpsampleBicubic2d"),
+        )

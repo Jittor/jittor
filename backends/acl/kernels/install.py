@@ -25,6 +25,7 @@ KERNELS = (
     ("tensor.roll", tensor._roll_acl),
     ("tensor.split", tensor._split_acl),
     ("conv2d", neural.conv_acl),
+    ("conv3d", neural.conv3d_acl),
     ("matmul", neural.matmul_acl),
     ("batched_matmul", neural.bmm_acl),
     ("nn.resize", neural.resize_acl),

@@ -9,6 +9,7 @@
 #include <aclnnop/aclnn_adaptive_avg_pool2d.h>
 #include <aclnnop/aclnn_adaptive_avg_pool2d_backward.h>
 #include <aclnnop/aclnn_index_copy.h>
+#include <aclnnop/aclnn_upsample_bicubic_2d.h>
 #include <aclnnop/aclnn_prompt_flash_attention_v3.h>
 #include <aclnnop/level2/aclnn_sort.h>
 #include <aclnnop/level2/aclnn_multinomial.h>
@@ -152,6 +153,7 @@ const AclOpRegistry& acl_op_registry() {
         {"Swish", AclOpFunctions::direct(aclnnSwish)},
         {"SwishBackward", AclOpFunctions::direct(aclnnSwishBackward)},
         {"UpsampleNearest2d", AclOpFunctions::direct(aclnnUpsampleNearest2d)},
+        {"UpsampleBicubic2d", AclOpFunctions::direct(aclnnUpsampleBicubic2d)},
         {"UpsampleNearest2dBackward", AclOpFunctions::direct(aclnnUpsampleNearest2dBackward)},
     };
     return entries;

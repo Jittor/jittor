@@ -19,6 +19,7 @@ from collections.abc import Sequence, Iterable
 _causal_mask_cache = OrderedDict()
 _causal_mask_cache_limit = 16
 _prompt_causal_mask_cache = OrderedDict()
+_prompt_full_mask_cache = OrderedDict()
 _prompt_attention_programs = {}
 
 
@@ -139,19 +140,20 @@ class FlashAttentionACL:
 class PromptFlashAttentionACL:
     """CANN V3 forward for padded BNSD FP16 inputs and a boolean drop-mask."""
 
-    def __init__(self, headnum, scale):
+    def __init__(self, headnum, scale, is_causal=True):
         self.headnum = int(headnum)
         self.scale = float(scale)
+        self.is_causal = bool(is_causal)
 
     def __call__(self, query, key, value, drop_mask):
         if not getattr(jt.flags, "no_grad", 0):
             raise RuntimeError("PromptFlashAttentionACL requires no_grad")
-        cache_key = (self.headnum, scalar_key(self.scale))
+        cache_key = (self.headnum, scalar_key(self.scale), self.is_causal)
         program = _prompt_attention_programs.get(cache_key)
         if program is None:
             program = acl_program("PromptFlashAttention", 4, 1, attributes={
-                "headNum": self.headnum, "scale": self.scale,
-            })
+                "headNum": self.headnum, "scale": self.scale, "causal": self.is_causal,
+            }, attr_header="\n// PFA mode attributes v2: causal controls nextTokens.\n")
             if len(_prompt_attention_programs) >= 128:
                 _prompt_attention_programs.clear()
             _prompt_attention_programs[cache_key] = program
@@ -332,7 +334,10 @@ def _supports_prompt_prefill(q_shape, k_shape, dtype_name, training, is_causal, 
     """The documented and real-device-tested 310P PFA subset."""
     padded_length = (int(q_shape[-2]) + 127) // 128 * 128
     return (
-        not training and dtype_name == "float16" and is_causal and attn_mask is None
+        not training and dtype_name == "float16" and attn_mask is None
+        # Keep the existing causal/GQA contract. The newly verified noncausal
+        # subset has equal Q/K heads and 64- or 128-wide FP16 self-attention.
+        and (is_causal or (q_shape[1] == k_shape[1] and int(q_shape[-1]) in (64, 128)))
         and 1 < int(q_shape[-2]) == int(k_shape[-2])
         and padded_length <= 65535
         and 0 < int(q_shape[0]) <= 128
@@ -344,14 +349,20 @@ def _supports_prompt_prefill(q_shape, k_shape, dtype_name, training, is_causal, 
 
 
 def _prompt_causal_mask(query, query_length, padded_length):
+    return _prompt_mask(query, query_length, padded_length, True)
+
+
+def _prompt_mask(query, query_length, padded_length, is_causal):
     # These are shape constants, independent of tensor values. Keep a separate
     # device key and restore residency if someone inspected a cached mask on
     # the host; a host read must not leave the next call mixing placements.
     device = int(jt.core.dispatch_context([query])[1])
     key = (device, int(query_length), int(padded_length))
-    mask = _prompt_causal_mask_cache.get(key)
+    cache = _prompt_causal_mask_cache if is_causal else _prompt_full_mask_cache
+    mask = cache.get(key)
     if mask is None:
-        drop = np.triu(np.ones((padded_length, padded_length), dtype=np.bool_), 1)
+        drop = (np.triu(np.ones((padded_length, padded_length), dtype=np.bool_), 1)
+                if is_causal else np.zeros((padded_length, padded_length), dtype=np.bool_))
         drop[:, query_length:] = True
         # Padded query rows retain the real key prefix, so no row is entirely
         # masked. Only the first query_length output rows are returned below.
@@ -363,18 +374,18 @@ def _prompt_causal_mask(query, query_length, padded_length):
         # repeated layers see an unfinished copy and append another to_device
         # node before the first prefill has reached its final synchronization.
         mask.sync(False, False)
-    _prompt_causal_mask_cache[key] = mask
-    _prompt_causal_mask_cache.move_to_end(key)
-    if len(_prompt_causal_mask_cache) > _causal_mask_cache_limit:
-        _prompt_causal_mask_cache.popitem(last=False)
+    cache[key] = mask
+    cache.move_to_end(key)
+    if len(cache) > _causal_mask_cache_limit:
+        cache.popitem(last=False)
     return mask
 
 
-def _prompt_prefill_310p(query, key, value, scale_factor):
+def _prompt_prefill_310p(query, key, value, scale_factor, is_causal=True):
     batch, query_heads, length, head_dim = map(int, query.shape)
     key_heads = int(key.shape[1])
     padded_length = (length + 127) // 128 * 128
-    mask = _prompt_causal_mask(query, length, padded_length)
+    mask = _prompt_mask(query, length, padded_length, is_causal)
     padding = padded_length - length
     if padding:
         query, key, value = (
@@ -386,7 +397,7 @@ def _prompt_prefill_310p(query, key, value, scale_factor):
         expanded = (batch, key_heads, group, padded_length, head_dim)
         key = key.unsqueeze(2).broadcast(expanded).reshape(batch, query_heads, padded_length, head_dim)
         value = value.unsqueeze(2).broadcast(expanded).reshape(batch, query_heads, padded_length, head_dim)
-    output = PromptFlashAttentionACL(query_heads, scale_factor)(query, key, value, mask)
+    output = PromptFlashAttentionACL(query_heads, scale_factor, is_causal=is_causal)(query, key, value, mask)
     return output[:, :, :length, :] if padding else output
 
 
@@ -481,7 +492,7 @@ def scaled_dot_product_attention_acl(
     if _supports_prompt_prefill(q_shape, k_shape, dtype_name, training, is_causal, attn_mask):
         scale_factor = 1.0 / math.sqrt(head_dim) if scale is None else float(scale)
         scaled_dot_product_attention_acl.backend_name = "acl_prompt_flash_attention_v3"
-        return _prompt_prefill_310p(query, key, value, scale_factor)
+        return _prompt_prefill_310p(query, key, value, scale_factor, is_causal=is_causal)
 
     # 310P has incremental attention even though FlashAttentionScore is absent.
     # Static KV caches carry a head-shared boolean mask on each decode step.

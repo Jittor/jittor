@@ -337,6 +337,7 @@ namespace jittor
     {
         double scale;
         int64_t headNum;
+        bool causal = true;
     };
 
     struct IncreFlashAttentionAttr : AclOpAttr

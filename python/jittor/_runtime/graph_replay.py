@@ -881,10 +881,18 @@ class GraphReplay:
             # One eager call first: it materializes the parameters and any
             # buffer the module builds lazily, so the capture that follows has
             # nothing pending underneath it.
+            argument_state = (_signature(args, kwargs), _host_state((args, kwargs)))
             working = _WorkingSet()
             with _no_auto(), jt.no_grad():
                 result = self._module(*args, **kwargs)
                 _sync_result(result)
+            if argument_state != (_signature(args, kwargs), _host_state((args, kwargs))):
+                # Plain list/dict inputs may be mutable caches or cursors.
+                # Running Python again would apply their side effects twice,
+                # and a later graph replay would omit those effects entirely.
+                self._refused = "the warm-up modified Python argument state, which graph replay cannot reproduce"
+                self.stats["rebuilt"] += 1
+                return result
             # What a device recording of this graph would hold.
             self._graph_bytes = working.bytes()
             cap = self._capture = self._capture_now(args, kwargs)

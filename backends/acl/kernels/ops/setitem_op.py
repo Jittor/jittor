@@ -22,7 +22,7 @@ from ._code import acl_code as setitem_forward
 from .gather_scatter_op import IndexCopyACL
 
 
-from .._soc import kernel_available
+from .._soc import kernel_available, soc_name
 
 
 def caculate_shape(tensors):
@@ -120,6 +120,46 @@ def _single_axis_index_copy(x, slices, value):
     # counterparts. Keep normalization on the device and preserve int64.
     index = index + (index < 0).cast(index.dtype) * int(x.shape[indexed_axis])
     return IndexCopyACL()(x, indexed_axis, index, value)
+
+
+def _positive_slice_index_copy(x, slices, value):
+    """Avoid coordinate grids for exact-shape 310P inference slices.
+
+    IndexCopy has no gradient contract here. Keep training, broadcasting,
+    empty selections and general indexing on the established IndexPut path.
+    """
+    if not (
+        soc_name().startswith("Ascend310P")
+        and getattr(jt.flags, "no_grad", 0)
+        and isinstance(value, jt.Var)
+        and _jittor_dtype_name(x.dtype) in ("float16", "float32")
+        and _jittor_dtype_name(value.dtype) == _jittor_dtype_name(x.dtype)
+        and len(slices) == x.ndim
+        and all(size > 0 for size in x.shape)
+        and x._storage_is_contiguous() and value._storage_is_contiguous()
+    ):
+        return None
+    axis = None
+    bounds = None
+    for dim, item in enumerate(slices):
+        if not isinstance(item, slice):
+            return None
+        start, stop, step = item.indices(x.shape[dim])
+        if step <= 0:
+            return None
+        if (start, stop, step) != (0, x.shape[dim], 1):
+            if axis is not None:
+                return None
+            axis, bounds = dim, (start, stop, step)
+    if axis is None or x.shape[axis] > 2147483647:
+        return None
+    count = len(range(*bounds))
+    shape = list(x.shape)
+    shape[axis] = count
+    if count == 0 or list(value.shape) != shape:
+        return None
+    index = jt.array(np.arange(*bounds, dtype=np.int32))
+    return IndexCopyACL()(x, axis, index, value)
 
 
 class SetItemACL(jt.Function):
@@ -421,6 +461,9 @@ class SetItemACL(jt.Function):
         a strided-slice-assign kernel (Ascend310P). The slice lattice becomes
         broadcast integer index grids; trailing all-range dims stay implicit
         so IndexPutImpl leaves them to the value broadcast."""
+        direct = _positive_slice_index_copy(x, slices, value)
+        if direct is not None:
+            return direct
         # Only dims before the last non-trivial one need index tensors.
         last = -1
         for dim, s in enumerate(slices):

@@ -405,7 +405,20 @@ def _clamp(input, min=None, max=None, min_v=None, max_v=None):
                          max if max is not None else max_v)
 
 
+def _comparison_operand(other):
+    return isinstance(other, (_NativeVar, bool, int, float, complex,
+                              _owner.np.number, _owner.np.bool_))
+
+
+def _torch_eq(input, other):
+    if not _comparison_operand(other):
+        raise TypeError("eq(): other must be a Tensor or Number, not " + type(other).__name__)
+    return _binary_native('__eq__', input, other)
+
+
 def _torch_ne(input, other):
+    if not _comparison_operand(other):
+        raise TypeError("ne(): other must be a Tensor or Number, not " + type(other).__name__)
     a = input if isinstance(input, _NativeVar) else _owner.jt.array(input)
     b = other if isinstance(other, _NativeVar) else _owner.jt.array(other)
     if _jittor_dtype_name(a.dtype) == "bool":
@@ -1566,7 +1579,17 @@ def _tensor_rtruediv(self, other):
     return _true_division(self, other, '__rtruediv__')
 
 
+def _tensor_eq(self, other):
+    # Python comparisons must allow the reflected operand's implementation,
+    # including sentinel objects used in ordinary cache/control-flow checks.
+    # The explicit Tensor.eq / torch.eq APIs retain their argument errors.
+    if not _comparison_operand(other):
+        return NotImplemented
+    return _binary_native('__eq__', self, other)
+
+
 _BINARY_APIS = {
+    '__eq__': _tensor_eq,
     '__add__': _tensor_add,
     '__radd__': _tensor_radd,
     '__sub__': _tensor_sub,
@@ -1661,6 +1684,8 @@ def _api_ne(self, other):
 
 
 def _api_ne_alias(self, other):
+    if not _comparison_operand(other):
+        return NotImplemented
     return _torch_ne(self, other)
 
 

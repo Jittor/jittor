@@ -43,7 +43,27 @@ def _max_pool2d_nhwc(source, op, kernel_size, stride, padding, h, w):
                 @out(i0, i1, i2, i3) = @expand_op({op}, @out_type, @out(i0, i1, i2, i3), @out_type, @in0(i0, p, q, i3), @in0_type);
     '''
     options = pool2d_cuda_options(body, backward_body)
-    out = jt.code([N, h, w, C], source.dtype, [source], **options)
+    out = jt.code(
+        [N, h, w, C], source.dtype, [source], **options,
+        cpu_src=f'''
+            using namespace std;
+            for (int i0=0; i0<out_shape0; i0++)
+            for (int i1=0; i1<out_shape1; i1++)
+            for (int i2=0; i2<out_shape2; i2++)
+            for (int i3=0; i3<out_shape3; i3++)
+                {{ {body} }}
+        ''',
+        cpu_grad_src=[f'''
+            using namespace std;
+            std::memset(out_p, 0, out->size);
+            #define atomicAdd(a,b) (*a) += b
+            for (int i0=0; i0<pout_shape0; i0++)
+            for (int i1=0; i1<pout_shape1; i1++)
+            for (int i2=0; i2<pout_shape2; i2++)
+            for (int i3=0; i3<pout_shape3; i3++)
+                {{ {backward_body} }}
+        '''],
+    )
     return channels_last_view(out)
 
 
@@ -51,11 +71,11 @@ def _pool2d_parameters(kernel_size, stride=None, padding=0, dilation=None, retur
     assert dilation == None
     assert return_indices == None or op == "maximum"
     p_return_indices = return_indices
-    p_kernel_size = kernel_size if isinstance(kernel_size, tuple) else (kernel_size, kernel_size)
+    p_kernel_size = tuple(kernel_size) if isinstance(kernel_size, (tuple, list)) else (kernel_size, kernel_size)
     p_op = op
     stride = stride if stride else kernel_size
-    p_stride = stride if isinstance(stride, tuple) else (stride, stride)
-    p_padding = padding if isinstance(padding, tuple) else (padding, padding)
+    p_stride = tuple(stride) if isinstance(stride, (tuple, list)) else (stride, stride)
+    p_padding = tuple(padding) if isinstance(padding, (tuple, list)) else (padding, padding)
     p_ceil_mode = ceil_mode
     # torch's count_include_pad selects the averaging *divisor*; it is not
     # conditional on the padding being non-zero. The old

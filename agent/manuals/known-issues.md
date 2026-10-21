@@ -2299,12 +2299,20 @@ workaround.
   6. **RoPE single-token**: `RotaryPositionEmbedding` returns garbage for
      `seq_len == 1` with wider head counts (tiling boundary); the wrapper
      composites the `x*cos + R(x)*sin` forward for that case.
+  7. **Conv3d gradients through aclnnConvolutionBackward**: the 5-D forward
+     works, but this SDK backward route rejects the 310P architecture with
+     error 161002 (confirmed 2026-10-21). The Conv3d entry rejects requests
+     for input or weight gradients before dispatch; use `no_grad()` or stop
+     both gradients for inference. Conv2d and separately added bias gradients
+     are unaffected. `tests/backends/acl/test_acl_conv3d.py` checks the
+     rejection and inference boundaries; this does not rule out other SDK
+     gradient implementations.
 - Also fixed along the way: `all_acl`/`any_acl` gained the `keepdims`
   parameter the public API added (was a signature regression on every
   NPU); `IndexPutImpl` runner now memcpys base->out itself so a
   `share_with`-aliased output cannot be mistaken for already-copied.
 - Review/expiry condition: re-run `tests/backends/acl/` on the 310P3 when
-  the CANN version changes; a new opp package may close items 3-6.
+  the CANN version changes; a new opp package may close items 3-7.
 
 ## KI-BACKEND-022: getitem integer-index backward can read uninitialized bytes when `setitem_inplace` packs the gradient
 

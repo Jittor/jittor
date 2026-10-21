@@ -94,6 +94,7 @@ SCHEMAS = {
         "countIncludePad": {"type": "bool"},
     },
     "UpsampleNearest2d": {"outputSize": {"type": "int64[]"}, "inputSize": {"type": "int64[]"}},
+    "UpsampleBicubic2d": {"outputSize": {"type": "int64[]"}, "inputSize": {"type": "int64[]"}},
     "UpsampleNearest2dBackward": {
         "outputSize": {"type": "int64[]"},
         "inputSize": {"type": "int64[]"},
@@ -175,7 +176,10 @@ SCHEMAS = {
         "hasPaddingmask": {"type": "bool"},
         "hasAttentmask": {"type": "bool"},
     },
-    "PromptFlashAttention": {"scale": {"type": "float64"}, "headNum": {"type": "int64"}},
+    "PromptFlashAttention": {
+        "scale": {"type": "float64"}, "headNum": {"type": "int64"},
+        "causal": {"type": "bool", "default": True},
+    },
     "IncreFlashAttention": {
         "scale": {"type": "float64"},
         "headNum": {"type": "int64"},
@@ -420,6 +424,7 @@ _RUNNER_ALIASES = {
     "maxpoolbackward": "MaxpoolBackward",
     "avgpoolbackward": "AvgpoolBackward",
     "upsample_nearest2d": "UpsampleNearest2d",
+    "upsample_bicubic2d": "UpsampleBicubic2d",
     "concat": "Concat",
     "stack": "Stack",
     "splitwithsize": "SplitWithSize",

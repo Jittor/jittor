@@ -100,7 +100,8 @@ namespace jittor
         ret = aclnnPromptFlashAttentionV3GetWorkspaceSize(
             inputTensors[0], inputTensors[1], inputTensors[2], nullptr, inputTensors[3],
             nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
-            attr->headNum, attr->scale, 2147483647LL, 0LL, layout, 0LL, 0LL, 0LL,
+            attr->headNum, attr->scale, 2147483647LL,
+            attr->causal ? 0LL : 2147483647LL, layout, 0LL, 0LL, 0LL,
             outputTensors[0], &workspaceSize, &executor);
         launch(ret, aclnnPromptFlashAttentionV3, true);
     }

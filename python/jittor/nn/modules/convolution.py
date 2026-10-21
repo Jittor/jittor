@@ -93,14 +93,14 @@ class Conv(jt.Module):
             raise ValueError(f"groups must must be greater than zero, got {groups}")
         assert in_channels % groups == 0, 'in_channels must be divisible by groups'
         assert out_channels % groups == 0, 'out_channels must be divisible by groups'
-        if isinstance(kernel_size, tuple):
+        if isinstance(kernel_size, (tuple, list)):
             for size in kernel_size:
                 if size <= 0:
                     raise ValueError(f"kernel_size must be greater than zero, got {kernel_size}")
         else:
             if kernel_size <= 0:
                 raise ValueError(f"kernel_size must be greater than zero, got {kernel_size}")
-        if isinstance(stride, tuple):
+        if isinstance(stride, (tuple, list)):
             for size in stride:
                 if size <= 0:
                     raise ValueError(f"stride must be greater than zero, got {stride}")

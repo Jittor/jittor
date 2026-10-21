@@ -172,6 +172,9 @@ BACKEND_GRAD_COVERAGE = (
     ("backends/acl/kernels/ops/cross_entropy_loss_op.py", "CrossEntropyLossACL",
      "tests/backends/acl/test_acl_codeop_gradients.py::TestACLCodeOpGradients::test_cross_entropy_forward_and_gradient",
      "npu_hardware"),
+    ("backends/acl/kernels/ops/dropout_op.py", "DropoutACL",
+     "tests/backends/acl/test_aclop.py::TestACL::test_dropout_grad",
+     "npu_hardware"),
     ("backends/acl/kernels/ops/flashattention_op.py", "FlashAttentionACL",
      "tests/backends/acl/test_aclop.py::TestACL::test_flashattention_grad",
      "npu_hardware"),
@@ -251,8 +254,6 @@ BACKEND_GRAD_COVERAGE = (
     ("backends/acl/kernels/ops/cumsum_op.py", "CumsumACL",
      "tests/backends/acl/test_aclop.py::TestACL::test_cumsum_grad",
      "npu_hardware"),
-    # DropoutACL now supplies CodeOp gradient source rather than a Python grad
-    # method; test_aclop.py::TestACL::test_dropout_grad still checks its math.
     ("backends/acl/kernels/ops/embedding_op.py", "EmbeddingACL",
      "tests/backends/acl/test_acl.py::TestACL::test_training_embedding",
      "npu_hardware"),

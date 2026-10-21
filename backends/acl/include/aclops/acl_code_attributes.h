@@ -63,6 +63,7 @@ inline acl_data::AclAttrSchema acl_code_attribute_schema(const string& name) {
     if (name == "MaxpoolBackward") return {{"kernel_size", required(Type::int64_vector)}, {"poolStrides", required(Type::int64_vector)}, {"poolPads", required(Type::int64_vector)}, {"poolDilations", required(Type::int64_vector)}, {"poolCeil", required(Type::boolean)}, {"countIncludePad", required(Type::boolean)}};
     if (name == "AvgpoolBackward") return {{"kernel_size", required(Type::int64_vector)}, {"poolStrides", required(Type::int64_vector)}, {"poolPads", required(Type::int64_vector)}, {"poolDilations", required(Type::int64_vector)}, {"poolCeil", required(Type::boolean)}, {"countIncludePad", required(Type::boolean)}};
     if (name == "UpsampleNearest2d") return {{"outputSize", required(Type::int64_vector)}, {"inputSize", required(Type::int64_vector)}};
+    if (name == "UpsampleBicubic2d") return {{"outputSize", required(Type::int64_vector)}, {"inputSize", required(Type::int64_vector)}};
     if (name == "UpsampleNearest2dBackward") return {{"outputSize", required(Type::int64_vector)}, {"inputSize", required(Type::int64_vector)}};
     if (name == "Concat") return {{"tensorNum", required(Type::int64)}, {"dim", required(Type::int64)}};
     if (name == "Stack") return {{"tensorNum", required(Type::int64)}, {"dim", required(Type::int64)}};
@@ -79,7 +80,7 @@ inline acl_data::AclAttrSchema acl_code_attribute_schema(const string& name) {
     if (name == "NanToNum") return {{"nan", required(Type::float64)}, {"posinf", required(Type::float64)}, {"neginf", required(Type::float64)}};
     if (name == "FlashAttention") return {{"scale", required(Type::float64)}, {"keepProb", required(Type::float64)}, {"preToken", required(Type::int64)}, {"nextToken", required(Type::int64)}, {"headNum", required(Type::int64)}, {"inputLayout", required(Type::int64_vector)}, {"innerPrecise", required(Type::int64)}, {"sparseMode", required(Type::int64)}, {"psetype", required(Type::int64)}, {"prefix", required(Type::int64_vector)}, {"qStartIdx", required(Type::int64_vector)}, {"kvStartIdx", required(Type::int64_vector)}, {"hasRealshift", required(Type::boolean)}, {"hasDropmask", required(Type::boolean)}, {"hasPaddingmask", required(Type::boolean)}, {"hasAttentmask", required(Type::boolean)}};
     if (name == "FlashAttentionBackward") return {{"scale", required(Type::float64)}, {"keepProb", required(Type::float64)}, {"preToken", required(Type::int64)}, {"nextToken", required(Type::int64)}, {"headNum", required(Type::int64)}, {"inputLayout", required(Type::int64_vector)}, {"innerPrecise", required(Type::int64)}, {"sparseMode", required(Type::int64)}, {"psetype", required(Type::int64)}, {"prefix", required(Type::int64_vector)}, {"qStartIdx", required(Type::int64_vector)}, {"kvStartIdx", required(Type::int64_vector)}, {"hasRealshift", required(Type::boolean)}, {"hasDropmask", required(Type::boolean)}, {"hasPaddingmask", required(Type::boolean)}, {"hasAttentmask", required(Type::boolean)}};
-    if (name == "PromptFlashAttention") return {{"scale", required(Type::float64)}, {"headNum", required(Type::int64)}};
+    if (name == "PromptFlashAttention") return {{"scale", required(Type::float64)}, {"headNum", required(Type::int64)}, {"causal", defaulted(acl_data::AclDataValue::bool_value_of(true))}};
     if (name == "IncreFlashAttention") return {{"scale", required(Type::float64)}, {"headNum", required(Type::int64)}, {"keyValueHeadNum", required(Type::int64)}, {"inputLayout", required(Type::int64_vector)}, {"innerPrecise", required(Type::int64)}, {"blockSize", defaulted(acl_data::AclDataValue::int64_value(0))}, {"hasBlockTable", defaulted(acl_data::AclDataValue::bool_value_of(false))}, {"actualSeqLengths", defaulted(acl_data::AclDataValue::int64_vector({}))}};
     if (name == "KVCacheMemcpy") return {{"blockSize", required(Type::int64)}, {"slots", required(Type::int64_vector)}};
     if (name == "Roll") return {{"shifts", required(Type::int64_vector)}, {"dims", required(Type::int64_vector)}};
@@ -330,6 +331,14 @@ void assign_acl_code_attributes(Runner& op, const acl_data::AclDecodedData& deco
         op.jt_name="upsample_nearest2d";
         return;
     }
+    if (name == "UpsampleBicubic2d") {
+        auto attr=std::unique_ptr<UpsampleNearest2dAttr>(new UpsampleNearest2dAttr());
+        attr->outputSize = fields.at("outputSize").int_values;
+        attr->inputSize = fields.at("inputSize").int_values;
+        op.op_attr=std::move(attr);
+        op.jt_name="upsample_bicubic2d";
+        return;
+    }
     if (name == "UpsampleNearest2dBackward") {
         auto attr=std::unique_ptr<UpsampleNearest2dAttr>(new UpsampleNearest2dAttr());
         attr->outputSize = fields.at("outputSize").int_values;
@@ -503,6 +512,7 @@ void assign_acl_code_attributes(Runner& op, const acl_data::AclDecodedData& deco
         auto attr=std::unique_ptr<PromptFlashAttentionAttr>(new PromptFlashAttentionAttr());
         attr->scale = fields.at("scale").float_value;
         attr->headNum = fields.at("headNum").int_value;
+        attr->causal = fields.at("causal").bool_value;
         op.op_attr=std::move(attr);
         op.jt_name="promptflashattention";
         return;

@@ -14,6 +14,7 @@ from .method_api import (
     _api_clamp_max,
     _api_clamp,
     _api_clamp_alias,
+    _torch_eq,
     _api_ne,
     _api_ne_alias,
     _api_nonzero,
@@ -272,6 +273,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     Var.clip_ = Var.clamp_
 
 
+    g.eq = _torch_eq
+    Var.eq = _torch_eq
     g.ne = _torch_ne
     g.not_equal = _torch_ne
     Var.ne = _api_ne
