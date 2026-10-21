@@ -84,6 +84,56 @@ class TestFusedAttentionF32(unittest.TestCase):
             self.kernel._LAST_MASK = cache
             cache[:] = saved
 
+    def test_nearly_saturated_probabilities_backward(self):
+        # These original parity samples have tiny Q/K gradients. Reconstructing
+        # scores with a different scale/dot order breaks their normalization.
+        for causal, seeds in ((False, (821, 831, 841)),
+                              (True, (861, 871, 881))):
+            with self.subTest(causal=causal):
+                shape = (1, 1, 4, 6)
+                q, k, v = (np.random.RandomState(seed).uniform(
+                    -9, 9, size=shape).astype("float32") for seed in seeds)
+                dout = np.random.RandomState(1234).standard_normal(shape).astype("float32")
+                expected = _reference(q, k, v, causal, dout)
+                jq, jk, jv = (jt.array(a) for a in (q, k, v))
+                calls = []
+                original = self.kernel._forward
+
+                def counted(*args):
+                    calls.append(1)
+                    return original(*args)
+
+                self.kernel._forward = counted
+                try:
+                    out = scaled_dot_product_attention(jq, jk, jv, is_causal=causal)
+                    grads = jt.grad((out * jt.array(dout)).sum(), [jq, jk, jv])
+                    actual = [a.numpy().copy() for a in [out] + list(grads)]
+                finally:
+                    self.kernel._forward = original
+                self.assertEqual(calls, [1])
+                for index, (got, want) in enumerate(zip(actual, expected)):
+                    self.assertTrue(np.isfinite(got).all())
+                    error = np.abs(got.astype("float64") - want)
+                    # The existing device-parity budgets, without relaxation.
+                    net_tol, pe_tol = (2e-4, 2e-3) if index == 0 else (2e-3, 5e-3)
+                    self.assertLess(float(error.max() / (np.abs(want).max() + 1e-30)), net_tol)
+                    self.assertLess(float((error / (np.abs(want) + 1e-3)).max()), pe_tol)
+
+    def test_constant_values_have_zero_query_and_key_gradients(self):
+        rng = np.random.RandomState(913)
+        shape = (1, 1, 7, 6)
+        q, k = (rng.uniform(-9, 9, size=shape).astype("float32") for _ in range(2))
+        v = np.broadcast_to(rng.randn(1, 1, 1, 6), shape).astype("float32")
+        dout = rng.randn(*shape).astype("float32")
+        for causal in (False, True):
+            with self.subTest(causal=causal):
+                jq, jk, jv = (jt.array(a) for a in (q, k, v))
+                out = scaled_dot_product_attention(jq, jk, jv, is_causal=causal)
+                dq, dk = jt.grad((out * jt.array(dout)).sum(), [jq, jk])
+                # With identical values the result is independent of Q and K.
+                np.testing.assert_allclose(dq.numpy(), 0., atol=1e-10, rtol=0.)
+                np.testing.assert_allclose(dk.numpy(), 0., atol=1e-10, rtol=0.)
+
     def _check(self, b, h, lq, lk, d, causal, mask=None):
         rng = np.random.RandomState(d + lq)
         q, dout = (rng.randn(b, h, lq, d).astype("float32") for _ in range(2))

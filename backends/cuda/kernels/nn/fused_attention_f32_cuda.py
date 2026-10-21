@@ -10,11 +10,11 @@ time and never stores the scores. This is that algorithm (FlashAttention-2):
 forward
     A block owns 64 queries. It walks the keys a tile at a time, keeping for
     each query a running maximum, a running sum and the weighted values, all
-    rescaled whenever the maximum moves. It writes the output and one
-    log-sum-exp per query, which is all the backward needs.
+    rescaled whenever the maximum moves. It writes the output, row maximum
+    and inverse exponential sum per query.
 backward
     A block owns a tile of keys. It walks the queries a tile at a time,
-    rebuilds the probabilities from the log-sum-exp, accumulates the key and
+    rebuilds the probabilities from those row statistics, accumulates the key and
     value gradients in registers, and adds its share of each query gradient
     into global memory.
 
@@ -131,6 +131,56 @@ __device__ __forceinline__ void bias4(const Mask& mask, long long row_at, int co
     }
     #pragma unroll
     for (int c = 0; c < 4; c++) out[c] = col + c < lk ? p[c * mask.col_stride] : 0.f;
+}
+
+// Recompute the softmax row term from dP, rather than its rounded output.
+// When a row is nearly one-hot, dot(dO, float32(output)) can lose the entire
+// small Q/K gradient. Only one double per query is stored, never a score matrix.
+template <int D, bool CAUSAL, int MASK, bool DROPOUT>
+__global__ void row_delta(const float* q, const float* k, const float* v,
+        const float* dout, const float* normalizer, double* delta,
+        int lq, int lk, float scale, Mask mask, Rows ql, Rows kl, Rows vl,
+        Dropout dropout) {
+    const int row = blockIdx.x, bh = blockIdx.y, tid = threadIdx.x;
+    const RowPtr<const float> qb(q, ql, bh), kb(k, kl, bh), vb(v, vl, bh),
+        dob(dout, ql, bh);
+    const size_t index = ((size_t)bh * lq + row) * 2;
+    const float top = normalizer[index], inv = normalizer[index + 1];
+    const long long mask_base = MASK ? mask.base(bh) : 0;
+    double weighted = 0., total = 0.;
+    for (int col = tid; col < lk; col += blockDim.x) {
+        if ((CAUSAL && col > row) || inv == 0.f) continue;
+        float score = 0.f, dp = 0.f;
+        #pragma unroll 4
+        for (int d = 0; d < D; d++) {
+            score += __fmul_rn(qb[row][d], scale) * kb[col][d];
+            dp += dob[row][d] * vb[col][d];
+        }
+        if (MASK) score = masked<MASK>(score, mask, mask_base
+            + row * mask.row_stride + col * mask.col_stride);
+        const float p = score == -INFINITY ? 0.f : __expf(score - top) * inv;
+        if (DROPOUT) {
+            float z[4];
+            dropout.mask(bh, row, col >> 2, z);
+            dp *= z[col & 3];
+        }
+        weighted += (double)p * (double)dp;
+        total += (double)p;
+    }
+    __shared__ double sums[2][256];
+    sums[0][tid] = weighted;
+    sums[1][tid] = total;
+    __syncthreads();
+    for (int step = 128; step; step >>= 1) {
+        if (tid < step) {
+            sums[0][tid] += sums[0][tid + step];
+            sums[1][tid] += sums[1][tid + step];
+        }
+        __syncthreads();
+    }
+    // Normalize the reconstructed probabilities' small float32 rounding error.
+    if (tid == 0) delta[(size_t)bh * lq + row] = sums[1][0] > 0.
+        ? sums[0][0] / sums[1][0] : 0.;
 }
 
 } // namespace mea
@@ -379,7 +429,7 @@ template <int D, bool CAUSAL, int MASK, bool DROPOUT>
 __global__ void __launch_bounds__(THREADS) backward(
         const float* __restrict__ q, const float* __restrict__ k,
         const float* __restrict__ v, const float* __restrict__ dout,
-        const float* __restrict__ normalizer, const float* __restrict__ delta,
+        const float* __restrict__ normalizer, const double* __restrict__ delta,
         float* __restrict__ dq, float* __restrict__ dk, float* __restrict__ dv,
         int lq, int lk, float scale, mea::Mask mask, mea::Rows ql, mea::Rows kl,
         mea::Rows vl, mea::Rows dkl, mea::Rows dvl, mea::Dropout dropout) {
@@ -454,7 +504,9 @@ __global__ void __launch_bounds__(THREADS) backward(
             for (int r = 0; r < 2; r++)
                 #pragma unroll
                 for (int c = 0; c < 4; c++) {
-                    s[r][c] += qr[r] * kc[c];
+                    // Match forward's rounded Q scaling without changing the
+                    // unscaled shared Q used by the key-gradient product.
+                    s[r][c] += __fmul_rn(qr[r], scale) * kc[c];
                     dp[r][c] += orr[r] * vc[c];
                 }
         }
@@ -464,7 +516,7 @@ __global__ void __launch_bounds__(THREADS) backward(
             const size_t index = ((size_t)bh * lq + row) * 2;
             const float row_max = row < lq ? normalizer[index] : -INFINITY;
             const float row_inv_sum = row < lq ? normalizer[index + 1] : 0.f;
-            const float row_delta = row < lq ? delta[(size_t)bh * lq + row] : 0.f;
+            const double row_delta = row < lq ? delta[(size_t)bh * lq + row] : 0.;
             float pr[4], dsr[4], z[4] = {1.f, 1.f, 1.f, 1.f};
             if (DROPOUT && row < lq) dropout.mask(bh, row, (k0 >> 2) + ax, z);
             #pragma unroll
@@ -472,7 +524,7 @@ __global__ void __launch_bounds__(THREADS) backward(
                 const int col = k0 + ax * 4 + c;
                 const bool dead = row >= lq || col >= lk || (CAUSAL && col > row)
                                   || row_inv_sum == 0.f;
-                float score = s[r][c] * scale;
+                float score = s[r][c];
                 if (MASK == 2 && !dead) score += bias[r][c];
                 if (MASK == 1 && shown == 1 && !dead)
                     score = mea::masked<MASK>(score, mask, mask_base
@@ -482,7 +534,7 @@ __global__ void __launch_bounds__(THREADS) backward(
                 // dV takes the dropped probability; dS the undropped one,
                 // against the gradient that reached it through the mask.
                 pr[c] = p * z[c];
-                dsr[c] = p * (dp[r][c] * z[c] - row_delta);
+                dsr[c] = (float)((double)p * ((double)(dp[r][c] * z[c]) - row_delta));
             }
             const int at = (ay * 2 + r) * PP + ax * 4;
             *reinterpret_cast<float4*>(sp + at) = make_float4(pr[0], pr[1], pr[2], pr[3]);
@@ -748,6 +800,24 @@ def _forward(query, key, value, call):
         cuda_header=_KERNELS, cuda_src=src)
 
 
+def _row_delta(query, key, value, grad_out, normalizer, call):
+    b = int(query.shape[0])
+    h = int(query.shape[2] if call.seq[0] else query.shape[1])
+    lq = int(query.shape[1] if call.seq[0] else query.shape[2])
+    d = int(query.shape[3])
+    lq_expr, lk_expr = call.lengths()
+    return jt.code(
+        (b, h, lq), "float64",
+        [query, key, value, grad_out, normalizer] + call.extras(),
+        cuda_header=_KERNELS,
+        cuda_src=_launch(
+            f"mea::row_delta<{d}, {call.template()}>",
+            f"{lq_expr}, in0->shape[0] * {call.heads_expr()}", 0,
+            f"in0_p, in1_p, in2_p, in3_p, in4_p, out0_p, "
+            f"{lq_expr}, {lk_expr}, {float(call.scale)!r}f, {call.args(5)}",
+            threads="256"))
+
+
 def _backward(query, key, value, grad_out, normalizer, delta, call):
     d = int(query.shape[3])
     smem = _smem_register_backward(d)
@@ -790,9 +860,7 @@ class _FusedAttentionF32(jt.Function):
     def grad(self, grad_out):
         query, key, value, out, normalizer = self.saved
         grad_out = grad_out.float32()
-        delta = (grad_out * out).sum(-1)
-        if self.call.seq[0]:
-            delta = delta.transpose(0, 2, 1)
+        delta = _row_delta(query, key, value, grad_out, normalizer, self.call)
         call = self.call
         grad_query, grad_key, grad_value = _backward(
             query, key, value, grad_out, normalizer, delta, call)
