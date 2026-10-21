@@ -68,6 +68,7 @@ from .method_api import (
     _clamp,
     _complex_scalar_var,
     _copy_,
+    _optimizer_update,
     _data_get,
     _data_owner_uses_device,
     _data_set,
@@ -207,6 +208,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     if not getattr(_orig_setitem, "_torch_mask_bcast", False):
         _torch_setitem._torch_mask_bcast = True
         Var.__setitem__ = _torch_setitem
+
+    Var._optimizer_update = _optimizer_update
 
     # in-place tensor ops torch code uses heavily (jittor exposes assign()).
     # _ip() preserves grad-tracking: jittor's assign() adopts the source's

@@ -284,6 +284,18 @@ def _ip(self, value, preserve_storage=False):
     return self
 
 
+def _optimizer_update(self, value):
+    # Optimizers write values without building an autograd edge. Reuse the
+    # same storage, pending-reader and version rules as public in-place ops.
+    with _owner.jt.no_grad():
+        # Newly relocated state buffers can still be lazy. Establish their
+        # destination storage before copying: rebinding a momentum expression
+        # would let it reread the parameter after its in-place update.
+        if self.numel() and not self._mem_ptr_now:
+            self.sync(False, False)
+        return _ip(self, value, preserve_storage=True)
+
+
 def _copy_(self, other, non_blocking=False):
     src = other if isinstance(other, _NativeVar) else _owner.jt.array(other)
     if hasattr(self, "dtype") and _jittor_dtype_name(src.dtype) != _jittor_dtype_name(self.dtype):
