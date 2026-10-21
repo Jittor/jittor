@@ -14,7 +14,10 @@ The reference is float64 numpy.
 """
 
 from _helpers import capability as _test_capability
+import gc
+import sys
 import unittest
+import weakref
 
 import numpy as np
 
@@ -50,6 +53,36 @@ class TestFusedAttentionF32(unittest.TestCase):
         self.scope = jt.flag_scope(use_cuda=1)
         self.scope.__enter__()
         self.addCleanup(self.scope.__exit__, None, None, None)
+
+    def test_mask_callback_handles_retired_owner_and_stale_reference(self):
+        cache = self.kernel._LAST_MASK
+        saved = cache[:]
+        previous_hook = sys.unraisablehook
+        errors = []
+
+        class Owner:
+            pass
+
+        owner = Owner()
+        ref = weakref.ref(owner, self.kernel._forget_mask)
+        try:
+            self.kernel._LAST_MASK = None
+            sys.unraisablehook = errors.append
+            del owner
+            gc.collect()
+            self.assertEqual(errors, [])
+            self.assertIsNone(ref())
+            self.kernel._LAST_MASK = cache
+            first, second = object(), object()
+            cache[:] = [second, None, None, "marker"]
+            self.kernel._forget_mask(first)
+            self.assertIs(cache[0], second)
+            self.kernel._forget_mask(second)
+            self.assertEqual(cache, [None, None, None, None])
+        finally:
+            sys.unraisablehook = previous_hook
+            self.kernel._LAST_MASK = cache
+            cache[:] = saved
 
     def _check(self, b, h, lq, lk, d, causal, mask=None):
         rng = np.random.RandomState(d + lq)

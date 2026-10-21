@@ -600,8 +600,10 @@ def _mask_layout(mask, shape):
 
 
 def _forget_mask(ref):
-    if _LAST_MASK[0] is ref:
-        _LAST_MASK[:] = [None, None, None, None]
+    # A late weakref callback can run after module teardown retired the cache.
+    last = _LAST_MASK
+    if last is not None and last[0] is ref:
+        last[:] = [None, None, None, None]
 
 
 def _new_mask_layout(mask, shape):
