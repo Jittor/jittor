@@ -674,6 +674,8 @@ include src/core/op.cc
 include src/core/op.h
 include src/core/parallel_compiler.cc
 include src/core/parallel_compiler.h
+include src/core/rematerialization.cc
+include src/core/rematerialization.h
 include src/core/types.h
 include src/core/var.cc
 include src/core/var.h
