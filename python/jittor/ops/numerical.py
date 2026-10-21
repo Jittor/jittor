@@ -31,7 +31,7 @@ def any(x, dim=(), keepdims=False, keepdim=None):
 
 
 def _as_truth(x):
-    """``x != 0`` for a floating-point input, `x` itself otherwise.
+    """Convert numeric inputs to truth values before logical reduction.
 
     The logical reductions run on their input's dtype, and CUDA has no atomic
     OR or AND on a floating-point type: ``any``/``all`` of a float tensor did
