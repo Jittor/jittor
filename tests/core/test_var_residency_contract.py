@@ -112,16 +112,19 @@ class TestHostReadMovesStorage(unittest.TestCase):
 class TestReadingDoesNotRelocate(unittest.TestCase):
     """A read is a query. These say what it currently does instead.
 
-    ``numpy()``, ``repr()`` and an element read all move a device Var's storage
-    to the host; the next device operation then migrates it back, measured at
-    215x the cost of the same operation without the read, with both copies live
-    in device memory meanwhile. Filed as KI-MEM-002 and pinned here as strict
-    xfail so the fix produces XPASS and forces the ledger entry closed.
+    ``numpy()`` and ``repr()`` move a device Var's storage to the host; the
+    next device operation then migrates it back, measured at 215x the cost of
+    the same operation without the read, with both copies live in device
+    memory meanwhile. Filed as KI-MEM-002 and pinned here as strict xfail so
+    the fix produces XPASS and forces the ledger entry closed.
 
-    The reduction case is *not* xfail: ``u.sum().item()`` leaves ``u`` alone,
-    because the scalar is a new Var rather than a view. It is asserted
-    positively so a future fix cannot regress the one spelling that already
-    behaves, and so the defect is never restated as "reading anything moves it".
+    An element read is not xfail any more: ``item()`` reads the element where
+    it lies, so ``a[0][0].item()`` leaves ``a`` -- whose storage the element
+    view shares -- on the device. Neither is the reduction case:
+    ``u.sum().item()`` leaves ``u`` alone, because the scalar is a new Var
+    rather than a view. Both are asserted positively so a future change cannot
+    regress them, and so the defect is never restated as "reading anything
+    moves it".
     """
 
     def setUp(self):
@@ -143,13 +146,17 @@ class TestReadingDoesNotRelocate(unittest.TestCase):
             repr(a)
             self.assertEqual(a.location(), "device")
 
-    @unittest.expectedFailure
     def test_reading_one_element_does_not_move_the_whole_tensor(self):
         with jt.flag_scope(use_cuda=1):
             a = jt.ones((256, 256)).cuda()
             a.sync()
-            a[0][0].item()
+            self.assertEqual(a[0][0].item(), 1.0)
             self.assertEqual(a.location(), "device")
+            # A slice view's element too, and the base keeps working on the
+            # device afterwards.
+            self.assertEqual(a[3, 4:5].item(), 1.0)
+            self.assertEqual(a.location(), "device")
+            self.assertEqual((a * 2).sum().item(), 2 * 256 * 256)
 
     def test_a_reduction_read_leaves_the_source_alone(self):
         # The spelling every training loop uses. Not broken, and asserted so it
