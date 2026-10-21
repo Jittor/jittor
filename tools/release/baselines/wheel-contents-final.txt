@@ -1,10 +1,10 @@
 # Jittor wheel contents baseline (SHA-256 and exact archive member paths)
 # source-wheel: jittor-2.0.0-py3-none-any.whl
-# source-wheel-sha256: 0b90334fb9e5b3bb1d8408a9de658e5f9e9a4d481679f126f85e3421936bc410
+# source-wheel-sha256: 6b5bf29e85ab7842c293ab3b7fc247e678b7f7a19624aacd571374272df96215
 # entries: 1132
 # Regenerate only after reviewing every path and content change.
 fb0d15cb73dc519400967b63b0091df66a8c4388e3cb7dd107b8fc40fcc5054f  jittor-2.0.0.dist-info/METADATA
-52c8b30f0fbaa22f5bb177e422561aae1e842ab55ecd7cfeab30c496303cc43c  jittor-2.0.0.dist-info/RECORD
+bec516e7b3b9bbe4f8b62f3481b936623ba0f4e60f1368164c6726a053e006a9  jittor-2.0.0.dist-info/RECORD
 2b6eb4118ce7cd7b09601406aa623c553c4476265836f0d9c16f5c061f7efcc0  jittor-2.0.0.dist-info/WHEEL
 435a22ada7651633d681246096725d6b8a5d15b729df61706c5637cbc58c39c7  jittor-2.0.0.dist-info/entry_points.txt
 8b18f18c9c43b17e6e2bcdefc8df9d423c12e6769d5d13cf6a46fed31e7e1666  jittor-2.0.0.dist-info/licenses/LICENSE.txt
@@ -351,7 +351,7 @@ f89cab7ed614e4eff43c66f66471002617683b42c8d2ff3a008e516b57b9537b  jittor/backend
 cd3ead75f54849dcb04632de898e88ea780191bc5c703e113967bbea44e38d7c  jittor/backends/cuda/kernels/misc/__init__.py
 05b55f9daf49099143dabc534580d0609016775c2e429738ae89cc369db5061e  jittor/backends/cuda/kernels/misc/codegen.py
 25c0caedffd1854f0ec93c6b0b6e393bed2ff7e3acb79922d873222ffeddf096  jittor/backends/cuda/kernels/misc/ctc.py
-1dbeb820792a412e6fe03713f7db07885f54c14e195647252a6a5585342a159d  jittor/backends/cuda/kernels/misc/tensor_ops.py
+9d955dc77b015e600155aa5cf41232205f9341ae2b760bc7229b6aacc7acfea2  jittor/backends/cuda/kernels/misc/tensor_ops.py
 cc44b5a7bcbfb6eb1bb083becc939f736521db490e922218d362bdc41101cbdd  jittor/backends/cuda/kernels/nn/__init__.py
 60e9970ea8eea5afdb904f91c64ed8308cc22561f36247f60b958191253ebfc5  jittor/backends/cuda/kernels/nn/_inference.py
 f057179c06b3bd98f5d5861d1dacbf3d1c6d97d709d901c08723a7a466d65441  jittor/backends/cuda/kernels/nn/batch_norm_training_cuda.py
@@ -412,7 +412,7 @@ f9bb777c2d8d4bf3892524b7dcc85cfccb012f1b01581c69d263bed38579f7b6  jittor/backend
 57fac325f73cd737ee404de7a9846d43a6ff0cc8234182e6cb4ccadf918c020a  jittor/backends/cuda/libraries/cusparse/src/helper_cusparse.cc
 359af46d0a182badde6753fd72fc01818e39b11af8194b1dd7c21b70b4235641  jittor/backends/cuda/libraries/cutt/include/cutt_wrapper.h
 0fa75e0fca1ec786dc4cebcac7517172d19f7a12689f5ae6dff206e3fa0f9c3f  jittor/backends/cuda/libraries/cutt/src/cutt_wrapper.cc
-c35f15c99ae3df6253ffbbc4896b02758637e59d8629343cf764c0a0e70228cb  jittor/backends/cuda/runtime/driver.cc
+a2b5adbfbfc3045208976aab6cff16d59c5c7243815b324a361784a913ba383c  jittor/backends/cuda/runtime/driver.cc
 d27392ec26d59acce3f0e09b05d315b88650f6fc4e8dec72a81d8a15a6e4f1a1  jittor/backends/cuda/runtime/nan_checker.cc
 3abce728d587e0fa1a905f81db46cf03ca403c5d44353439fe226c722f7d1f9f  jittor/backends/cuda/src/fp16_emu.cc
 5ad86d60073c38cef2bd639c900208cc006f8c2eac0cb72864714936f5c36165  jittor/backends/cuda/src/helper_cuda.cc
@@ -496,7 +496,7 @@ b24db5e7cfc079c6d051f8942cf8e78ee8a6c52c269e01364be4cd22b0da0c42  jittor/contrib
 f7747c36855f3adbbc51d652e8aa6ad3ddd8ab031ae16d51aadca42670ae65d8  jittor/contrib/math_util/src/igamma.h
 2f7dc6f037353e2b69bdff02639ec63aa387666d5be7312db05ba5de73cf6a9d  jittor/dataset/__init__.py
 51d896b0383a8a4ef747e39cdee5db745913026c9f5e9f593debc4172e0edc45  jittor/dataset/cifar.py
-d0a13111b51f9bef3f22861e15845d323eb26f930502bcd704970d6747681c81  jittor/dataset/dataset.py
+5bb6a34d679a31c4ce283bd26d1aff7fe6b8fb3a160e481f40eeee65d4570f23  jittor/dataset/dataset.py
 4baa85edb5003f71f4b3b5b9e66306cf19c92c4bdad1e61f3627e3d25adad065  jittor/dataset/mnist.py
 f6d831846a083985f92232caf63ac6064f1fc6434aacedad2ac8610ac4bfc4f2  jittor/dataset/sampler.py
 fa9908f6bec2d5b4370f83e70bc7b1ab3f0b6e1fdb092c5c6a3045783860fa49  jittor/dataset/utils.py
@@ -678,7 +678,7 @@ d7df579c38b8d902328d863d7d298a4509cbb5cad1d2804bff38d59f42ca33a0  jittor/ops/sca
 3f9b99841a96ab5b54b98017846d0389ad56aad65956b8dd72e01b6b11436d8f  jittor/ops/shape_composition.py
 8e31e948c1e8ee4e05e8b07b7ee2f0de3be972ad655cfcc5c0b4c5e609178b4c  jittor/ops/shape_ops.py
 2c5130035888e5427a96633e7b66c859fb0de11bc06d5fa6895e02932e6ec9a5  jittor/ops/shape_transforms.py
-41fd6aa8956d9d7aa4728b0b37ffbf47eee147f7f6ce9868bc0e3265cf2b3b8d  jittor/ops/sorting.py
+589163a948cfc4faa2e78fec68042dd78a92f2acb26e41f2999dac05159cc3f4  jittor/ops/sorting.py
 0d4f559dd7d813742d1deab8d7f1fda6707e1b2e6df3d9f49866e446208da127  jittor/ops/tensor_ops.py
 39135a37ada82ac01ff0524b6cfc7cbd645209f4955c83fb1aeffd4e2c097f77  jittor/ops/tensor_protocol.py
 70c7cf0d5acc81852e0bb1c442786f6b9e49e5d7623a192d8536462b06eefb56  jittor/ops/tuples.py

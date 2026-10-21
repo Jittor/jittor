@@ -23,6 +23,9 @@ jobs:
   smoke:
     needs: baseline
     name: nox / smoke
+    # Four xdist workers share a four-CPU container.
+    env:
+      use_parallel_op_compiler: "1"
     runs-on: ${{ needs.baseline.outputs.host_runner }}
     container:
       image: ${{ needs.baseline.outputs.cpu_ci_image }}
@@ -72,6 +75,8 @@ jobs:
   cpu:
     needs: baseline
     name: nox / cpu
+    env:
+      use_parallel_op_compiler: "1"
     runs-on: ${{ needs.baseline.outputs.host_runner }}
     container:
       image: ${{ needs.baseline.outputs.cpu_ci_image }}

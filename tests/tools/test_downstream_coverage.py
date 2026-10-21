@@ -1040,7 +1040,10 @@ class VerifyRunnerTests(unittest.TestCase):
             runner.write_text('print(\'ECOSYSTEM_RESULT {"seconds":1}\')\nraise SystemExit(3)\n', encoding="utf-8")
             verify.RUNNER = runner
             with self.assertRaisesRegex(SystemExit, "exit 3"):
-                verify._run_case(PYTHON, "case", Path(directory) / "out.npz", {}, "cpu", 1, 0)
+                verify._run_case(
+                    PYTHON, "case", Path(directory) / "out.npz",
+                    dict(os.environ), "cpu", 1, 0
+                )
 
 
 if __name__ == "__main__":

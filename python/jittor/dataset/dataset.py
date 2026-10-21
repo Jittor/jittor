@@ -59,7 +59,8 @@ _PERSISTENT_WORKERS_UNSET = object()
 def _dataset_worker_seed(seed, epoch, rank, worker_id):
     sequence = np.random.SeedSequence(
         (int(seed), int(epoch), int(rank), int(worker_id)))
-    return int(sequence.generate_state(1, dtype=np.uint32)[0])
+    # The native set_seed binding accepts a signed C int32.
+    return int(sequence.generate_state(1, dtype=np.uint32)[0]) & 0x7fffffff
 
 dataset_root = os.path.join(jit_utils.home(), ".cache", "jittor", "dataset")
 # int() like the CHECK_MEMORY line below: os.environ.get returns a *string*,
