@@ -480,21 +480,29 @@ def _generate_state(base_seed, worker_id):
     return [rng.randrange(0, 2**32) for _ in range(4)]
 
 
-def _checkpoint(fn, *args, use_reentrant=None, **kwargs):
-    """Run fn directly: correct values, but no activation recompute.
+def _checkpoint(fn, *args, use_reentrant=None, preserve_rng_state=True,
+                context_fn=None, determinism_check="default", debug=False, **kwargs):
+    """Adapt Torch's reentrant checkpoint to native activation replay.
 
-    jittor has no gradient-checkpointing primitive, so the activation
-    memory this API exists to save is NOT saved and `use_reentrant`
-    has no meaning here. The result is numerically identical, which is
-    why this stays a pass-through rather than an error -- but the
-    memory guarantee the caller asked for is absent.
+    Nested tensors and keyword arguments are supported. Non-reentrant replay,
+    custom context_fn and debug tracing are deliberately rejected until their
+    distinct contracts have native implementations.
     """
-    _stub_policy_data.degraded(
-        "torch.utils.checkpoint.checkpoint",
-        "the wrapped function is run directly, so activations are kept "
-        "and no memory is saved",
-        "use_reentrant has no effect on jittor.")
-    return fn(*args, **kwargs)
+    if use_reentrant is False:
+        raise NotImplementedError("non-reentrant activation checkpointing is not implemented")
+    if context_fn is not None or debug or determinism_check != "default":
+        raise NotImplementedError("checkpoint supports only default replay contexts and determinism checks")
+    from ..amp import autocast, autocast_is_enabled, autocast_configured_dtype, autocast_cache_enabled
+    device = "npu" if jt.flags.use_cuda and jt.compiler.has_acl else "cuda" if jt.flags.use_cuda else "cpu"
+    enabled = autocast_is_enabled(device)
+    dtype = autocast_configured_dtype(device)
+    cache_enabled = autocast_cache_enabled()
+
+    def replay_context():
+        return autocast(device_type=device, enabled=enabled, dtype=dtype, cache_enabled=cache_enabled)
+
+    return jt.autograd.checkpoint(fn, *args, preserve_rng_state=preserve_rng_state,
+                                  context_fn=replay_context, **kwargs)
 
 
 def _default_convert(value):
@@ -541,7 +549,8 @@ for _name, _implementation in _DATA_APIS.items():
     )
 register_fidelity(
     "torch.utils.checkpoint.checkpoint", _checkpoint, Fidelity.APPROXIMATE,
-    "evaluates the function directly; no activation recomputation or memory saving",
+    "native first-order reentrant activation replay with RNG and captured parameter gradients; "
+    "non-reentrant and debug/context_fn variants are not implemented",
 )
 register_fidelity(
     "torchdata.stateful_dataloader.StatefulDataLoader", StatefulDataLoader,
@@ -598,7 +607,9 @@ def install(ctx):
         g.utils.data = _modules["torch.utils.data"]
     if "torch.utils.checkpoint" not in _modules:
         _ckpt = _types2.ModuleType("torch.utils.checkpoint")
-        _ckpt.checkpoint = _checkpoint
         _modules["torch.utils.checkpoint"] = _ckpt
-        g.utils.checkpoint = _ckpt
+    else:
+        _ckpt = _modules["torch.utils.checkpoint"]
+    _ckpt.checkpoint = _checkpoint
+    g.utils.checkpoint = _ckpt
     _install_torchdata_stateful_dataloader(g, ctx.registry)

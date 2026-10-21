@@ -683,6 +683,7 @@
  ],
  "jt.autograd": [
   "AutogradPolicy",
+  "checkpoint",
   "get_policy",
   "jvp",
   "policy_scope",

@@ -338,6 +338,13 @@ struct VarHolder {
         return var->id;
     }
 
+    // Tracked in-place aliases share this epoch. Reading it does not create
+    // alias state or execute a graph. Raw external pointer writes are untracked.
+    // @pyjt(_autograd_version)
+    inline uint64 autograd_version() {
+        return var->autograd_alias ? *var->autograd_alias->version : 0;
+    }
+
     // @pyjt(__get__var_ptr)
     inline int64 var_ptr() {
         return (int64)var;
