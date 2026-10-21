@@ -16,6 +16,7 @@ import re
 import zipfile
 
 from registry_inventory import ROOT, git, inventory, write_json
+from _installed_source_proof import installation_proofs, validate_installations
 
 
 PLATFORM_FIELDS = ("os", "cpu", "accelerator_model", "card_count", "card_indices", "driver",
@@ -54,17 +55,42 @@ def dedicated_gates(root):
         "flash-attention": ("flash-attention-training", "ecosystem_flash_attention",
                             "compat/tests/torch/test_ecosystem_flash_attention.py",
                             "test_real_flash_attention_training"),
+        "ms-swift": ("swift-trainer", "ecosystem_swift",
+                     "compat/tests/torch/test_ecosystem_swift.py",
+                     "EcosystemSwift::test_ms_swift_trainer_full_llama"),
+        "verl": ("verl-component-training", "ecosystem_verl_training",
+                 "compat/tests/torch/test_ecosystem_verl_training.py",
+                 ("EcosystemVERLTraining::test_verl_ppo_gae_vanilla",
+                  "EcosystemVERLTraining::test_verl_distillation_k3")),
+        "mmengine": ("openmmlab-installed-train-step", "ecosystem_openmmlab_installed",
+                     "compat/tests/torch/test_ecosystem_openmmlab_installed.py",
+                     "EcosystemOpenMMLabInstalled::test_mmengine_train_step"),
+        "mmcv": ("openmmlab-installed-train-step", "ecosystem_openmmlab_installed",
+                 "compat/tests/torch/test_ecosystem_openmmlab_installed.py",
+                 "EcosystemOpenMMLabInstalled::test_mmcv_convmodule_train_step"),
     }
     session_tree = ast.parse((root / "noxfile.py").read_text(encoding="utf-8"))
     sessions = {node.name for node in session_tree.body if isinstance(node, ast.FunctionDef)}
     result = {}
     for repo, (protocol, session, relative, method) in declarations.items():
         tree = ast.parse((root / relative).read_text(encoding="utf-8"))
-        methods = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
-        if session not in sessions or method not in methods:
+        methods = (method,) if isinstance(method, str) else method
+        valid = session in sessions
+        for selector in methods:
+            body = tree.body
+            parts = selector.split("::")
+            for index, name in enumerate(parts):
+                expected = ast.FunctionDef if index == len(parts) - 1 else ast.ClassDef
+                matches = [node for node in body if isinstance(node, (ast.ClassDef, ast.FunctionDef))
+                           and node.name == name]
+                if len(matches) != 1 or not isinstance(matches[0], expected):
+                    valid = False
+                    break
+                body = matches[0].body
+        if not valid:
             raise ValueError("Maintained dedicated gate entry is missing: " + repo)
         result[repo] = [{"protocol": protocol, "session": session,
-                         "tests": [relative + "::" + method]}]
+                         "tests": [relative + "::" + selector for selector in methods]}]
     return result
 
 
@@ -77,6 +103,7 @@ def audit(root=ROOT):
                   "compat/tests/torch/test_ecosystem_verl.py",
                   "compat/tests/torch/test_ecosystem_longformer.py",
                   "compat/tests/torch/test_ecosystem_openmmlab.py",
+                  "compat/tests/torch/test_ecosystem_openmmlab_installed.py",
                   "compat/tests/torch/test_ecosystem_vllm.py")
     methods = {}
 
@@ -173,7 +200,7 @@ def _validate_source_wheel(record, source, artifacts):
             "generated_source_sha256": generated}
 
 
-def _validate_measurements(record, level, artifacts, installation=None):
+def _validate_measurements(record, level, artifacts, installation=None, source_proof=None):
     """Bind the platform to hashed, actual measurement JSON, not a copied label."""
     by_role = {}
     for artifact in artifacts:
@@ -211,6 +238,8 @@ def _validate_measurements(record, level, artifacts, installation=None):
             if installation is not None:
                 _require(value.get("downstream_distribution") == installation,
                          "Measurement installed distribution/source binding mismatch")
+            if source_proof is not None:
+                validate_installations(value, source_proof)
         _require(reference["runtime_conditions"] == candidate["runtime_conditions"],
                  "Oracle/candidate runtime conditions mismatch")
         backend = candidate.get("backend", {})
@@ -225,10 +254,16 @@ def _validate_measurements(record, level, artifacts, installation=None):
     cases = [value for value in base.get("cases", []) if value.get("case") == record["case"]]
     _require(len(cases) == 1 and cases[0].get("status") == "passed", "Missing passed base measurement")
     pair(cases[0].get("oracle_result"), cases[0].get("jittor_result"))
-    perturb = document("perturb-comparison")
-    _require(perturb.get("case") == record["case"] and perturb.get("status") == "passed"
-             and perturb.get("input_perturbation_verified") is True, "Missing passed perturbation measurement")
-    pair(perturb.get("reference_result"), perturb.get("candidate_result"))
+    additional_roles = sorted(role for role in by_role
+                              if isinstance(role, str) and re.fullmatch(r"perturb[0-9]+-comparison", role))
+    if "perturb_seed2" in record.get("inputs", {}) and not additional_roles:
+        document("perturb2-comparison")
+    perturb_roles = ["perturb-comparison", *additional_roles]
+    for role in perturb_roles:
+        perturb = document(role)
+        _require(perturb.get("case") == record["case"] and perturb.get("status") == "passed"
+                 and perturb.get("input_perturbation_verified") is True, "Missing passed perturbation measurement")
+        pair(perturb.get("reference_result"), perturb.get("candidate_result"))
     if level >= 3:
         reference = document("training-reference-metadata")
         candidate = document("training-candidate-metadata")
@@ -267,14 +302,20 @@ def validate_record(record, inventories, baseline, root=ROOT):
     level = record.get("level")
     _require(type(level) is int and 1 <= level <= 5, "Level must be L1..L5")
     _require(record.get("tier") in ("core", "broad", "tail"), "Missing sampling tier")
+    kind = record.get("record_kind", "registry")
+    _require(kind in ("registry", "protocol"), "Unknown scorecard record_kind")
+    if kind == "protocol":
+        from _protocol_scorecards import validate_spec
+        validate_spec(record, inventories[repo])
+        _require(level in (2, 3), "Protocol scorecards admit only independent L2/L3 evidence")
     references = record.get("registry_refs", [])
-    _require(references, "Missing registered denominator member")
+    _require(kind == "protocol" or references, "Missing registered denominator member")
     for ref in references:
         _require(ref.get("repo") in inventories, "Unknown registry reference repo")
         axes = inventories[ref["repo"]]["axes"]
         _require(any(axis["axis"] == ref.get("axis") and ref.get("member") in axis["members"] for axis in axes),
                  "Unregistered model/method member")
-    _require(any(ref.get("repo") == repo for ref in references), "Record has no member from its own repo")
+    _require(kind == "protocol" or any(ref.get("repo") == repo for ref in references), "Record has no member from its own repo")
     device = record.get("device")
     _require(device in ("cpu", "cuda", "npu", "rocm", "corex"), "Unknown requested device")
     _require(record.get("observed_device") == device, "Requested/observed device mismatch")
@@ -371,7 +412,12 @@ def validate_record(record, inventories, baseline, root=ROOT):
         _require(device != "cpu" and fallback.get("policy") == "error" and fallback.get("count") == 0,
                  "L5 requires actual accelerator execution with zero fallback")
     if level >= 2:
-        _validate_measurements(record, level, artifacts, installation)
+        if kind == "protocol":
+            from _protocol_scorecards import validate_measurements
+            validate_measurements(record, artifacts, inventories[repo], root=root)
+        else:
+            proof = installation_proofs(record, inventories, artifacts, skip_own=source_distribution)
+            _validate_measurements(record, level, artifacts, installation, proof)
     return level
 
 
@@ -385,16 +431,30 @@ def scorecard(inventories, records, baseline, root=ROOT):
             rejected.append({"index": index, "case": record.get("case"), "reason": str(error)})
             continue
         accepted.append(dict(record, verified_level=level))
+    protocol_rows = [row for row in accepted if row.get("record_kind") == "protocol"]
+    blocked = []
+    if protocol_rows:
+        from _protocol_scorecards import pairing_key as protocol_scenario
+        protocol_cpu = {protocol_scenario(row) for row in protocol_rows
+                        if row["device"] == "cpu" and row["verified_level"] >= 2}
+        for row in protocol_rows:
+            if row["device"] != "cpu" and protocol_scenario(row) not in protocol_cpu:
+                blocked.append(dict(row, reported_status=row["status"], status="blocked", level=None,
+                                    verified_level=None, independent_verified_level=row["verified_level"],
+                                    reason="Missing verified CPU counterpart for this exact protocol"))
+        accepted = [row for row in accepted if row.get("record_kind") != "protocol"
+                    or row["device"] == "cpu" or protocol_scenario(row) in protocol_cpu]
+    registry_accepted = [row for row in accepted if row.get("record_kind") != "protocol"]
     def scenario(row):
         return (row["repo"], row.get("case"), json.dumps(row["registry_refs"], sort_keys=True))
-    cpu = {scenario(row) for row in accepted if row["device"] == "cpu" and row["verified_level"] >= 2}
+    cpu = {scenario(row) for row in registry_accepted if row["device"] == "cpu" and row["verified_level"] >= 2}
     coverage = []
     for repo, source in inventories.items():
         for axis in source["axes"]:
             for device in ("cpu", "cuda", "npu", "rocm", "corex"):
                 verified = set()
                 scenarios = []
-                for row in accepted:
+                for row in registry_accepted:
                     if row["device"] != device or row["verified_level"] < 2:
                         continue
                     if device != "cpu" and scenario(row) not in cpu:
@@ -413,10 +473,31 @@ def scorecard(inventories, records, baseline, root=ROOT):
                 coverage.append({"repo": repo, "axis": axis["axis"], "device": device,
                                  "verified_members": sorted(verified), "verified_scenarios": scenarios, "numerator": len(verified),
                                  "denominator": axis["count"], "upstream_commit": source["upstream"]["commit"]})
-    return {"schema_version": 2, "baseline": baseline, "inventories": inventories,
+    value = {"schema_version": 2, "baseline": baseline, "inventories": inventories,
             "coverage": coverage, "accepted": accepted, "rejected": rejected,
             "tiers": {tier: sum(row["tier"] == tier for row in accepted) for tier in ("core", "broad", "tail")},
             "note": "L1 is not counted. Accelerator breadth requires the matching independent CPU oracle comparison. A representative case never proves all checkpoints in its family."}
+    if any(row.get("record_kind") == "protocol" for row in records):
+        from _protocol_scorecards import pairing_key as protocol_scenario
+        value["blocked"] = blocked
+        value["protocols"] = [{"repo": row["repo"], "case": row["case"], "device": row["device"],
+                               "protocol": row["protocol"],
+                               "level": row["verified_level"] if protocol_scenario(row) in protocol_cpu else None,
+                               "independent_verified_level": row["verified_level"],
+                               "status": "passed" if protocol_scenario(row) in protocol_cpu else "blocked",
+                               "reason": None if protocol_scenario(row) in protocol_cpu else "Missing verified CPU counterpart for this exact protocol",
+                               "matching_cpu_verified": protocol_scenario(row) in protocol_cpu,
+                               "registry_coverage": "not-applicable"}
+                              for row in protocol_rows]
+        for failure in rejected:
+            row = records[failure["index"]]
+            if row.get("record_kind") == "protocol":
+                value["protocols"].append({"repo": row.get("repo"), "case": row.get("case"), "device": row.get("device"),
+                                           "protocol": row.get("protocol"), "level": None, "status": "rejected",
+                                           "reported_status": row.get("status"), "reason": failure["reason"],
+                                           "reported_reason": row.get("reason"),
+                                           "matching_cpu_verified": False, "registry_coverage": "not-applicable"})
+    return value
 
 
 def render_audit(value):

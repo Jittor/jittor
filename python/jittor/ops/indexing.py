@@ -106,9 +106,21 @@ def var_setitem(x, slices, value, reduce=None):
     return _native_var_setitem(x, slices, value, reduce)
 
 
+def _assignment_backend(x):
+    # `dispatch_context(x).backend`. Every assignment asks it -- twice, once
+    # from `setitem` and once from `var_setitem` -- and reads nothing else, so
+    # the native context answers it without building the dtype names and the
+    # tuple around it. A replaced `dispatch_context` is how a caller states the
+    # device; it has no such shortcut and is asked as before.
+    backend_of = getattr(dispatch_context, "_backend_of", None)
+    if backend_of is not None:
+        return backend_of(x)
+    return dispatch_context(x).backend
+
+
 def _acl_assignment_value(x, value, reduce=None):
     jt = _jt if _jt is not None else _jittor()
-    if reduce not in (None, "void") or dispatch_context(x).backend != "acl":
+    if reduce not in (None, "void") or _assignment_backend(x) != "acl":
         return value
     if not isinstance(value, jt.Var):
         return jt.array(value, dtype=x.dtype).stop_grad()
@@ -152,8 +164,92 @@ def _maybe_constant_index_gather(x, slices):
     return base.broadcast(output_shape)
 
 
+#: `_fast_getitem`'s answer when the index needs the full path.
+_SLOW = object()
+_NONE_TYPE = type(None)
+_ELLIPSIS_TYPE = type(Ellipsis)
+#: Index dtypes `_getitem_result` rewrites: a mask becomes its coordinates.
+_MASK_DTYPES = ("bool", "uint8")
+
+
+def _plain_slice(index):
+    # The `slice` arm of `_is_basic_index`, restricted to exact ints.
+    start, stop, step = index.start, index.stop, index.step
+    return ((start is None or start.__class__ is _PYINT)
+            and (stop is None or stop.__class__ is _PYINT)
+            and (step is None or step.__class__ is _PYINT))
+
+
+def _fast_getitem(x, slices):
+    """``x[slices]`` for the index forms the full path passes through
+    unchanged, or `_SLOW`.
+
+    While no backend registers ``tensor.getitem`` and ``Var.getitem`` is still
+    `var_getitem`, every rewrite in `_getitem_result` and `var_getitem` is a
+    no-op for an exact int, a slice of exact ints, None, Ellipsis, a tuple of
+    those and of index Vars, and a lone index Var; a lone bool mask becomes
+    its ``where()`` coordinates, as the full path does. Index Vars here are
+    neither bool nor uint8 and carry no constant-index value. Every other form
+    (uint8 masks, ranges, lists, numpy scalars) takes the full path, so the
+    result and the recorded view are the same either way. This matters
+    because ``x[...]`` is the commonest Var operation: the full path costs
+    several microseconds of Python per call on top of the native getitem.
+    """
+    if x.__class__.getitem is not var_getitem:
+        return _SLOW
+    cls = slices.__class__
+    if (cls is _PYINT or cls is _NONE_TYPE or cls is _ELLIPSIS_TYPE
+            or (cls is slice and _plain_slice(slices))):
+        basic = True
+    elif cls is tuple:
+        basic = True
+        for item in slices:
+            item_cls = item.__class__
+            if item_cls is _PYINT or item_cls is _NONE_TYPE or item_cls is _ELLIPSIS_TYPE:
+                continue
+            if item_cls is slice:
+                if _plain_slice(item):
+                    continue
+                return _SLOW
+            if isinstance(item, Var) and _jittor_dtype_name(item.dtype) not in _MASK_DTYPES:
+                basic = False
+                continue
+            return _SLOW
+    elif isinstance(slices, Var):
+        name = _jittor_dtype_name(slices.dtype)
+        if name == "bool":
+            return _native_var_getitem(x, slices.where())
+        if name == "uint8" or (slices.ndim == 1 and x.ndim >= 1 and getattr(
+                slices, "_jittor_constant_index_value", None) is not None):
+            return _SLOW
+        return _native_var_getitem(x, slices)
+    else:
+        return _SLOW
+    out = _native_var_getitem(x, slices)
+    if basic and isinstance(out, Var):
+        out._set_view_of(x, slices)
+    return out
+
+
 def getitem(x, slices):
     """Apply Jittor indexing, recording a view when the index is a basic one."""
+    # The fast path answers only what `try_dispatch` would not have: with the
+    # native dispatcher and nothing registered for `tensor.getitem`. A
+    # replaced `try_dispatch` has no `_is_registered` and is always consulted.
+    is_registered = getattr(try_dispatch, "_is_registered", None)
+    if is_registered is not None and not is_registered("tensor.getitem"):
+        # A basic index of a plain Var is answered natively in one call --
+        # the getitem op and the view record `_fast_getitem` would make --
+        # and declines (NotImplemented) for anything else, including a
+        # subclass, which may own `getitem` itself.
+        native = getattr(try_dispatch, "_native_basic_getitem", None)
+        if native is not None and x.__class__ is Var:
+            out = native(x, slices)
+            if out is not NotImplemented:
+                return out
+        out = _fast_getitem(x, slices)
+        if out is not _SLOW:
+            return out
     jt = _jt if _jt is not None else _jittor()
 
     out = _getitem_result(x, slices)

@@ -302,6 +302,9 @@ static void migrate_empty_var(Var* var, Allocator* allocator) {
 // other. The ring built in var.cc is what makes the group visible here; the
 // group moves into one new block that keeps every member's relative offset.
 static bool migrate_group(Var* var, Allocator* allocator, bool to_gpu) {
+    // The whole move: no member may join, leave or be freed half-way through.
+    std::lock_guard<std::mutex> ring_guard(share_ring_mutex());
+    if (!var->share_next) return false;
     auto* old_allocator = var->allocator;
     auto old_allocation = var->allocation;
     vector<Var*> members;
@@ -321,12 +324,12 @@ static bool migrate_group(Var* var, Allocator* allocator, bool to_gpu) {
             // left the group when that happened; only the ring still says
             // otherwise. It is not an alias any more, so drop it.
             LOGvvvv << "share ring: dropping stale member" << v;
-            share_group_unlink(v);
+            share_group_unlink_locked(v);
         }
     }
     if (members.size() < 2) {
         // nothing is actually aliased: let the caller take the plain path
-        share_group_unlink(var);
+        share_group_unlink_locked(var);
         return false;
     }
     if (!allocator->can_share()) {
@@ -345,7 +348,7 @@ static bool migrate_group(Var* var, Allocator* allocator, bool to_gpu) {
                 << "Var::share_with. Writes through one alias will not be"
                 << "visible through the other.";
         }
-        share_group_unlink(var);
+        share_group_unlink_locked(var);
         return false;
     }
     char* base = (char*)var->mem_ptr;

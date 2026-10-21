@@ -40,6 +40,27 @@ RoPE Llama；BERT/ViT 包含 pooler。固定初始权重分别执行 seed 7/19 �
 独立 `REAL_TORCH_PYTHON` 和空 `JITTOR_ECOSYSTEM_SPEED_RATIO`；缺 oracle/库或错误设备选择
 直接失败。该耗时门禁不加入默认快速生态矩阵。
 
+## 完整 CPU 维护门禁与 nightly
+
+`ecosystem_transformers_source` 保留全部十场景（原九模型场景及 32768-token
+Longformer）、base、seed 7/19 扰动和三步 SGD；禁止通过 preflight 或场景子集替代。
+固定 Transformers 4.56.2 的完整官方源码/wheel、实际安装 METADATA/RECORD，
+两侧完整梯度与原数值预算沿用
+[完整来源重测](../../../docs/results/2026-10-16-transformers-main-source-training.md)。
+
+生态 workflow 的 `maintained-cpu` 矩阵通过下列入口准备三个全新解释器，
+为候选与独立 oracle 安装完整依赖并分别执行 `pip check`，再调用该完整 nox session：
+
+```bash
+<healthy-python-3.11> tools/provision_ecosystem_nightly.py \
+  --library transformers --state-root "$JITTOR_LAB_ROOT/_state/transformers-nightly/run" --run
+```
+
+CPU 轨显式隐藏 CUDA、固定真实 Torch 2.11.0+cpu；安装包/编译缓存和原始阶段产物
+都在独立 state 下，单测不复用该编译缓存。保留 command、失败日志、完整安装锁及
+数值产物。本地运行和 workflow 配置不能证明 GitHub scheduled 作业已实际执行；
+不新增 CUDA、性能等级、完整 Trainer 或任意 checkpoint 的支持结论。
+
 ## 历史 H3 两侧环境
 
 以下 Python 3.12 / Transformers 5.5.3 环境属于历史 H3 记录，不能用于解释上述

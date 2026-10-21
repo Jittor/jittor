@@ -226,3 +226,79 @@ CUDA/driver 或 CANN、nvcc/gcc、nvidia wheel、Jittor SHA/flags、独立 oracl
 丢失平台块、skip/xfail/全skip、缺CPU①、非零fallback、缺梯度、假gate节点、产物哈希不符、
 用tiny规格声称L4等均不计分，并使含被拒行的命令非零退出。旧 Markdown 报告需补齐并
 亲自复验后才能进入分子；没有新证据的格子写“未验证”，不能拿本库 CPU/device 自比补空。
+
+Release 版本的注册表 L2+ 也要求逐阶段、逐 runtime 的实际安装源码绑定，覆盖记录引用的
+每个库；绑定 wheel 时核对完整包内容而非仅 Python 文件。具体字段与历史记录处理遵循
+上述统一协议，不能用版本相同代替源码来源证据。
+
+## PEFT 完整 LoRA 训练门禁
+
+`nox -s ecosystem_peft` 调用 `tools/run_peft_gate.py`，复用现有完整 tiny Llama/LoRA
+case、runner 和三步训练 probe。它串行执行 base、seed 7 扰动及三步训练的双 runtime，
+自动独立检查全部 177 数组字段、冻结参数、实际设备与完整安装来源后才成功。
+`--preflight` 只验证 base，不授 L3；nox 不接受缩小阶段范围的参数。
+
+准备固定的 PEFT/Transformers clean checkout、官方 wheel、独立双解释器及私有状态目录；
+先显式 CPU，再执行真实 CUDA。完整环境变量、collector 命令及范围见
+[PEFT 来源与训练结果](../../../docs/results/2026-10-15-peft-installed-source-training.md)。
+普通 ecosystem pytest 的一步 parity 与这个完整 L3 gate 分开；nightly 未选择新 session
+时不能声称已有定期执行。历史 raw 缺来源字段时重新运行，不能反向补证。
+
+## Accelerate checkpoint 协议
+
+完整单 rank CPU nightly 可用 `python tools/provision_ecosystem_nightly.py --library accelerate --state-root <new-external-state> --run`。
+它完整配置三个独立环境并执行原 438 数组/8 阶段 worker 协议，要求原参数/输入梯度、三步保存前训练及两步新进程续训，
+各 prefix 完整依赖解析与 `pip check`、实际官方 wheel/METADATA/pip RECORD 和公共 L3 准入均为必需。
+`JITTOR_ACCELERATE_COMPLETE_CPU=1` 才启用 fixed CPU 模式，不改变普通 CPU/CUDA 调用。
+实际执行状态和边界见[专用报告](../../../docs/results/2026-10-16-accelerate-maintained-cpu-nightly.md)，
+不将本地执行或工作流接线称为 hosted schedule 已运行，不用 CPU world1 配对 CUDA world2。
+
+Accelerate 没有与模型族同义的注册表。`tools/run_accelerate_gate.py` 直接调用维护中的
+单进程 checkpoint 与两 rank FSDP2 FULL 测试，`nox -s ecosystem_accelerate` 是正确性入口；
+`benchmark_accelerate` 仍只负责性能。使用预装且版本相同的私有双解释器，设置
+`REAL_TORCH_PYTHON`、`JITTOR_ACCELERATE_CHECKOUT`、`JITTOR_TEST_DEVICES=cpu|cuda` 和
+`JITTOR_ACCELERATE_WHEEL`（官方 Accelerate 1.10.1 wheel）。CUDA 额外要求显式分配两张
+`CUDA_VISIBLE_DEVICES`。工具不安装或升级包，也不从版本字符串推断安装来源。
+
+```bash
+python tools/run_accelerate_gate.py --fresh-process --device cpu \
+  --jittor-python <jittor-python> --oracle-python <real-torch-python> \
+  --upstream "$JITTOR_LAB_ROOT/accelerate-validation/upstream" \
+  --wheel "$JITTOR_ACCELERATE_WHEEL" \
+  --cache-root "$JITTOR_LAB_ROOT/_state/accelerate-protocol/benchmark-cache" \
+  --output "$JITTOR_LAB_ROOT/_state/accelerate-protocol/cpu"
+python tools/run_accelerate_gate.py --fresh-process --device cuda --devices <gpu0>,<gpu1> \
+  --jittor-python <jittor-python> --oracle-python <real-torch-python> \
+  --upstream "$JITTOR_LAB_ROOT/accelerate-validation/upstream" \
+  --wheel "$JITTOR_ACCELERATE_WHEEL" \
+  --cache-root "$JITTOR_LAB_ROOT/_state/accelerate-protocol/benchmark-cache" \
+  --output "$JITTOR_LAB_ROOT/_state/accelerate-protocol/cuda"
+python agent/skills/torch-compat-repo-runbook/scripts/collect_accelerate_scorecards.py \
+  --run "$JITTOR_LAB_ROOT/_state/accelerate-protocol/cpu" \
+  --run "$JITTOR_LAB_ROOT/_state/accelerate-protocol/cuda" \
+  --upstream "$JITTOR_LAB_ROOT/accelerate-validation/upstream" \
+  --baseline <full-measured-source-SHA> --report docs/results/<dated-report>.md \
+  --command '<exact measurement commands>' \
+  --output "$JITTOR_LAB_ROOT/_state/accelerate-protocol/scorecard"
+```
+
+先冻结并提交工具源码，再采集。CPU 显式隐藏 CUDA；两 rank CUDA 每种精度/输入种子独立
+launcher，rank 缓存逐个预热，benchmark 与单测缓存隔离。实际进程绑定完整上游包源码、
+实际安装包所有文件、二进制 Torch 身份、平台、精度开关、所有输入/参数梯度、Adam moments、
+逐步轨迹和四路 RNG。采集不覆盖旧产物。
+
+每个真实 producer/consumer 绑定官方 wheel 的固定 SHA、完整安装包文件、同侧实际
+METADATA/RECORD 原始字节和导入根；auditor 重读并逐项核验。保留原 wheel 和私有安装
+前缀以便复核。旧 raw 缺少这些实际字段时重新测量，不能补写、仅添加同名字段或改版本
+字符串冒充新的安装来源证明。
+
+共享 schema 用 `record_kind=protocol`、显式 `axes=[]/registry_refs=[]`，单独展示协议及
+world/precision/rank，不产生注册表分子或分母。CPU world1 只匹配 CUDA world1；两 rank
+CUDA 缺 CPU world2 对应时保留独立数值结论，但进入 `blocked`，准入 `level=null`，
+不进入 `accepted`。own-runtime 精确恢复不能代替独立跨 runtime 数值
+一致；保留原 `atol=2e-6, rtol=2e-5`，失败行 `level=null`，不得靠放宽预算授级。
+
+多次采集使用不同 `--output`；可用 `--cache-root <external-benchmark-root>` 复用任务自己的
+设备/rank benchmark 缓存，不能指向单测缓存。协议 dispatcher 只允许明确的 repo/id；
+专用 validator 尚未存在或 scope 不匹配时拒绝。配对比较完整设备无关协议描述，不能将
+不同 world、precision、ZeRO stage 或训练规格配成一对；失败/阻塞不填 verified level。

@@ -148,6 +148,10 @@ torch.distributed.new_group's collective contract.
 */
 // @pyjt(nccl_create_process_group)
 int nccl_create_process_group(vector<int> ranks);
+// Store transport supplies the same opaque id to every participant. The
+// existing owner still validates ranks and creates the communicator.
+// @pyjt(nccl_create_process_group_with_unique_id)
+int nccl_create_process_group_with_unique_id(vector<int> ranks, vector<int> unique_id);
 // @pyjt(nccl_process_group_size)
 int nccl_process_group_size(int group_id=0);
 // @pyjt(nccl_process_group_rank)

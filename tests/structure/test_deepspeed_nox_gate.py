@@ -69,14 +69,15 @@ def test_engine_session_rejects_incomplete_hardware_configuration(monkeypatch, t
     assert not session.calls, "Invalid configuration must fail before any interpreter or installer runs"
 
 
-@pytest.mark.parametrize("invalid", ("cpu", "single", "duplicate", "artifacts"))
+@pytest.mark.parametrize("invalid", ("mpi", "single", "duplicate", "artifacts"))
 def test_multirank_session_rejects_incomplete_protocol_before_install(monkeypatch, tmp_path, invalid):
     monkeypatch.setenv("REAL_TORCH_PYTHON", "/opt/oracle/bin/python")
     monkeypatch.setenv("JITTOR_TEST_DEVICES", "cuda")
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1")
     monkeypatch.setenv("JITTOR_DEEPSPEED_MULTIRANK_ROOT", str(tmp_path / "artifacts"))
-    if invalid == "cpu":
+    if invalid == "mpi":
         monkeypatch.setenv("JITTOR_TEST_DEVICES", "cpu")
+        monkeypatch.setenv("PATH", "")
     elif invalid == "single":
         monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
     elif invalid == "duplicate":
@@ -91,12 +92,21 @@ def test_multirank_session_rejects_incomplete_protocol_before_install(monkeypatc
     assert not session.calls
 
 
-def test_multirank_session_runs_dedicated_two_rank_protocol(monkeypatch, tmp_path):
+@pytest.mark.parametrize("device", ("cpu", "cuda"))
+def test_multirank_session_runs_dedicated_two_rank_protocol(monkeypatch, tmp_path, device):
     monkeypatch.setenv("REAL_TORCH_PYTHON", "/opt/oracle/bin/python")
     monkeypatch.setenv("JITTOR_CI_PYTHON", "/opt/native/bin/python")
-    monkeypatch.setenv("JITTOR_TEST_DEVICES", "cuda")
+    monkeypatch.setenv("JITTOR_TEST_DEVICES", device)
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1")
     monkeypatch.setenv("JT_BUILD_NVCC_PATH", "/opt/cuda/bin/nvcc")
+    if device == "cpu":
+        mpi = tmp_path / "mpi-bin"
+        mpi.mkdir()
+        for name in ("mpicc", "mpirun"):
+            executable = mpi / name
+            executable.write_text("#!/bin/sh\nexit 0\n")
+            executable.chmod(0o755)
+        monkeypatch.setenv("PATH", str(mpi))
     artifacts = str(tmp_path / "artifacts")
     monkeypatch.setenv("JITTOR_DEEPSPEED_MULTIRANK_ROOT", artifacts)
     module = _load_noxfile(monkeypatch, tmp_path)
@@ -106,6 +116,11 @@ def test_multirank_session_runs_dedicated_two_rank_protocol(monkeypatch, tmp_pat
     execution = next((args, kw) for args, kw in session.calls if "pytest" in args)
     args, env = execution[0], execution[1]["env"]
     assert "compat/tests/torch/test_ecosystem_deepspeed_multirank.py" in args
-    assert env["CUDA_VISIBLE_DEVICES"] == "0,1"
+    assert env["CUDA_VISIBLE_DEVICES"] == ("0,1" if device == "cuda" else "")
+    assert env["JT_BUILD_USE_MPI"] == ("0" if device == "cuda" else "1")
+    if device == "cpu":
+        assert env["JT_BUILD_NVCC_PATH"] == env["nvcc_path"] == ""
+        assert env["JT_BUILD_USE_NCCL"] == "0"
+        assert env["JITTOR_MPIEXEC"] == str(mpi / "mpirun")
     assert env["JITTOR_REQUIRE_DEEPSPEED_MULTIRANK"] == "1"
     assert env["JITTOR_DEEPSPEED_MULTIRANK_ROOT"] == artifacts

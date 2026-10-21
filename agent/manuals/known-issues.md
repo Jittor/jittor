@@ -1978,49 +1978,41 @@ workaround.
 - Exit condition: nested tensors are Tensors with jagged storage, and the test is
   updated to the torch answer.
 
-## KI-COMPAT-004: a factory result is not a backward leaf
+## KI-COMPAT-004: Tensor aliases lack mutation guards and dynamic source trainability
 
-- Severity: Low (`is_leaf` / `grad_fn` are introspection; gradients are correct)
-- Status: Open
-- Owner: torch compatibility / core autograd
-- Symptom: `torch.ones(3, requires_grad=True).is_leaf` is False here and True in
-  torch, and `grad_fn` names `broadcast_to`; code that branches on "is this a
-  leaf" (parameter collection, gradient clipping helpers, some checkpointing
-  wrappers) takes the wrong branch. From the other side, `torch.Tensor(other)`
-  aliases the graph in torch but builds a fresh Var here, so the linkage is lost.
-- Cause: `jt.ones` broadcasts a scalar literal (`_constant_scalar` in
-  `python/jittor/_core/var.py`). Every float Var requires grad by default, the
-  literal included, and `backward_grad_fn` (`src/core/grad.cc`) calls a Var a
-  leaf only when no input of its producer requires grad. Making the literal
-  `stop_grad()` gives the torch answer but breaks the double-backward `jvp`
-  (`tests/autograd/test_autograd_functional_seeds.py::TestAutogradGradSeedAlignment::test_jvp_multi_input_is_unchanged`
-  reads a tangent of 0.0 instead of 348.0), so it was reverted.
-- Workaround: none.
-- Evidence: `compat/tests/torch/test_torch_compat_autograd_semantics.py::TestBackwardLeafAndGradFn::test_leaf_and_intermediate_report_torch_shape`
-  and `compat/tests/torch/test_independent_frontend.py::test_independent_tensor_installation_preserves_native_type`
-  pin the gap.
-- Exit condition: factory results are leaves without breaking `jvp`, and the two
-  tests are updated to the torch answer.
-
-## KI-COMPAT-006: `load_state_dict` shares the source's Vars, and an in-place optimizer then moves both models
-
-- Severity: High on CUDA (silent: a second model -- an EMA copy, a reference
-  model -- trains along with the first)
-- Status: Open; found 2026-09-25
-- Owner: torch compatibility / optimizers
-- Symptom: after `b.load_state_dict(a.state_dict())` on CUDA, one
-  `torch.optim.AdamW(a.parameters()).step()` changes `b`'s weights too; on CPU it
-  does not. PyTorch copies in `load_state_dict`.
-- Cause: loading binds `b`'s parameters to the Vars `a` holds, which is harmless
-  while every update produces a new Var. The fused CUDA AdamW
-  (`src/ops/composite/fused_adamw_op.cc`) writes into the parameters' own storage
-  (`share_with`), so every holder sees the write.
-- Workaround: copy through the host, e.g.
-  `p.copy_(torch.tensor(src.cpu().numpy(), device=src.device))`.
-- Evidence: two `nn.Linear(2, 2, device="cuda")`, `b.load_state_dict(a.state_dict())`,
-  a backward and an AdamW step on `a`: `(a.weight == b.weight).all()` is True.
-- Exit condition: `load_state_dict` copies (or the fused optimizer stops writing
-  shared storage), with a CUDA regression test for the repro.
+- Severity: Medium (autograd view semantics differ from Torch)
+- Status: Open; factory leaves, grad-enabled constructor linkage and no-grad
+  accumulator eligibility resolved in their verified ranges; recorded producer
+  identity now survives a later source freeze (CPU/CUDA verified)
+- Owner: native autograd / torch compatibility Tensor constructors
+- Symptom: a no-grad-created `torch.Tensor(source)` alias remains usable for
+  grad-mode arithmetic after the alias or source is modified with `fill_` or
+  `copy_`. Genuine Torch rejects this use and `is_leaf`/`grad_fn` inspection.
+  Separately, enabling a previously frozen source does not dynamically update
+  its alias's visible `requires_grad`; genuine Torch updates the flag without
+  activating an accumulator, in either creation mode.
+- Cause: native alias storage and gradient-edge eligibility are represented,
+  but creation-mode mutation guards and dynamic source trainability are not.
+- Workaround: avoid reusing no-grad-created aliases after writes; create the
+  intended alias after setting the source's requires-grad state. Use explicit
+  detach/activation only when an independent trainable leaf is intended.
+- Evidence: the 41 CPU/CUDA contracts in
+  `compat/tests/torch/test_tensor_constructor_alias.py` cover construction,
+  source/alias gradients, activation timing, clone/detach/retain and invalid
+  roots. Separate genuine Torch and candidate CPU probes confirm 12 mutation
+  variants lack the expected rejection, and eight frozen-source/unfreeze
+  variants lack dynamic flag propagation. These are remaining failures, not
+  covered by the passing constructor matrix. Raw probes are unversioned under
+  `$JITTOR_LAB_ROOT/_state/tensor-alias-main-0fb/` and the independent
+  `tensor-alias-independent-review` / `tensor-alias-unfreeze-review` states;
+  see the [constructor follow-up](../../docs/results/2026-10-15-size-factory-leaves.md#tensor-source-constructor-follow-up).
+- Follow-up: [recorded producer identity](../../docs/results/2026-10-16-recorded-grad-fn-freeze.md)
+  fixes source-freeze grad_fn loss only; the independent lifecycle probe of 32 combinations
+  still finds 17 differing combinations. Mutation guards and inherited flags stay open.
+- Exit condition: native view creation/mutation metadata and source-state
+  propagation agree with independent Torch on CPU and each claimed accelerator,
+  including absence of unintended accumulator activation. Preserve the existing
+  old/new graph snapshots and storage/gradient contracts when adding this support.
 
 ## KI-COMPAT-007: `w.copy_(x)` under `no_grad` loses `w`'s gradient when `x` requires grad
 
@@ -2034,21 +2026,6 @@ workaround.
 - Workaround: `w = x.detach().clone().requires_grad_(True)`.
 - Evidence: the repro above.
 - Exit condition: `w.grad` is populated in both cases, with a regression test.
-
-## KI-COMPAT-008: `torch.optim.SGD` rejects `foreach=` and `fused=`
-
-- Severity: Low (an immediate `TypeError`, not a silent divergence)
-- Status: Open; found 2026-09-25
-- Owner: torch compatibility / optimizers
-- Symptom: `torch.optim.SGD(params, lr=..., foreach=False)` raises
-  `TypeError: initialize_sgd() got an unexpected keyword argument 'foreach'`, and
-  the same for `fused=`. Both are ordinary PyTorch arguments.
-- Cause: `initialize_sgd` in `compat/torch/optim_frontend.py` does not accept
-  them; the native SGD has a `fused` switch they could map onto.
-- Workaround: drop the two arguments.
-- Evidence: the call above.
-- Exit condition: both keywords are accepted (mapped or explicitly ignored with a
-  documented reason).
 
 ## KI-COMPAT-009: a float32 tensor divided by a Python float is computed in float64
 
@@ -2159,6 +2136,32 @@ workaround.
   (the two core-op spellings by name do not raise for complex128).
 - Exit condition: complex128 is a supported frontend dtype end to end (or the
   core refuses it again by design), and the case XPASSes and loses its marker.
+
+## KI-COMPAT-015: portable Torch SGD updates leave detached parameter aliases stale
+
+- Severity: High (silent stale values in retained parameter-storage aliases).
+- Status: Open; CPU reproduced 2026-10-16 on the SGD execution-option working tree.
+- Owner: native optimizers / Torch compatibility storage semantics.
+- Symptom: after `p = torch.tensor([1., 2.], requires_grad=True)` and
+  `alias = p.detach()`, backward through `(p * torch.tensor([.25, .5])).sum()`
+  followed by `torch.optim.SGD([p], lr=.125).step()` changes `p` to
+  `[.96875, 1.9375]` but leaves `alias` at `[1., 2.]`. The parameter's physical
+  allocation changes. Genuine Torch preserves the allocation and updates both.
+- Cause: the portable native update uses `_update_preserve_dtype`, which calls
+  `target.update(value)` and rebinds the holder instead of copying into its
+  existing allocation. This is separate from checkpoint loading and option parsing.
+- Workaround: avoid retaining parameter-storage aliases across portable SGD
+  updates; recreate detached aliases after each step.
+- Evidence: four CPU option combinations reproduce the stale alias; all four
+  corresponding independent Torch probes preserve it. Raw candidate/genuine
+  `*-alias-v2.json` and scripts are unversioned under
+  `$JITTOR_LAB_ROOT/_state/sgd-execution-options/20261016/`; see
+  [SGD execution options](../../docs/results/2026-10-16-sgd-execution-options.md).
+  CUDA portable updates and other optimizer algorithms are not yet verified.
+- Exit condition: a frontend-owned native storage write preserves actual
+  allocations and aliases across CPU/CUDA SGD updates, including plain,
+  momentum and Nesterov paths, with genuine Torch controls. Preserve legacy
+  native optimizer defaults and published gradients.
 
 ## KI-DIST-001: FSDP2 flat sharding peaks above the unsharded model
 

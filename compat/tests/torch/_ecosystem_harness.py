@@ -247,7 +247,7 @@ def _run(python, runtime, case, output, weights=None, device="cpu", repeats=None
     return _run_command(python, case, command)
 
 
-def _run_command(python, case, command):
+def _run_command(python, case, command, result_marker="ECOSYSTEM_RESULT "):
     """Launch an ecosystem probe with the shared oracle-isolation contract."""
     environment = os.environ.copy()
     package_site = _runner_package_site(python)
@@ -291,10 +291,10 @@ def _run_command(python, case, command):
                 completed.returncode, case, python, completed.stdout[-4000:]
             )
         )
-    return _result_from_stdout(completed.stdout, case, python), completed.stdout
+    return _result_from_stdout(completed.stdout, case, python, result_marker=result_marker), completed.stdout
 
 
-def _result_from_stdout(stdout, case, python):
+def _result_from_stdout(stdout, case, python, result_marker="ECOSYSTEM_RESULT "):
     """The runner's JSON payload, wherever on its line the marker landed.
 
     Searched with `find`, not `startswith`: anything the child prints without a
@@ -305,7 +305,9 @@ def _result_from_stdout(stdout, case, python):
     than a late true red: it teaches people to distrust the gate that also
     checks the numbers.
     """
-    marker = "ECOSYSTEM_RESULT "
+    if result_marker not in ("ECOSYSTEM_RESULT ", "TRAINING_RESULT "):
+        raise ValueError("Unknown ecosystem result marker: " + result_marker)
+    marker = result_marker
     for line in stdout.splitlines():
         position = line.find(marker)
         if position != -1:

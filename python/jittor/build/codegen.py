@@ -280,9 +280,9 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags="", backend=None):
             pre_arg = arg.split()[-1].split('=')[0]
             op_arg = None
             if arg.startswith("VarHolder*"):
-                op_arg = pre_arg+"->var"
+                op_arg = pre_arg+"->grad_input()" if pre_arg not in ("outputs", "out") else pre_arg+"->var"
             elif arg.startswith("vector<VarHolder*>"):
-                op_arg = f"convert({pre_arg})"
+                op_arg = f"prepare_grad_inputs({pre_arg})" if pre_arg not in ("outputs", "out") else f"convert({pre_arg})"
             if "&&" in arg:
                 if op_arg is None:
                     op_arg = "move("+pre_arg+")"
@@ -323,7 +323,7 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags="", backend=None):
                     storage_inputs.append(
                         f"adapt_storage_input<{op_name}>({argument_name}, _storage_owners);")
         placement_setup = (f"if ({op_name}::accepts_cpu_scalar_operands) {{\n"
-                           "vector<Var**> _placement_inputs;\n" + "\n".join(placement_inputs) +
+                           "PlacementInputs _placement_inputs;\n" + "\n".join(placement_inputs) +
                            "\nadapt_cpu_scalar_operands(_placement_inputs, _storage_owners);\n}")
         storage_setup = "vector<VarPtr> _storage_owners;\n" + placement_setup + "\n" + "\n".join(storage_inputs)
         # steps of Op creation:
@@ -333,10 +333,19 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags="", backend=None):
         # 4. set op's output
         # 5. set op's input
         # 6. infer shape(op->init())
+        # Ask the operator type, before constructing it, whether its
+        # constructor would only forward (see `forward_before_construct` in
+        # core/var.h). Not for a constructor that takes an argument by move:
+        # the constructor still needs it when the answer is no.
+        pre_forward = "" if any("move(" in arg for arg in op_make_args) else (
+            "{ VarPtr _pre = forward_before_construct<" + op_name + ">(0"
+            + "".join(", " + arg for arg in op_make_args)
+            + "); if (_pre.ptr) return _pre; }")
         if "multiple_outputs" not in attrs:
             jit_cc_src.append(f"""
             VarPtr make_{cc_func_name}({", ".join(cc_make_args)}) {{
                 {storage_setup}
+                {pre_forward}
                 auto _op = new {op_name}({", ".join(op_make_args)});
                 if (_op->outputs_holder.size() != 1) {{
                     delete _op;
@@ -365,12 +374,13 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags="", backend=None):
             vector<VarPtr> make_{cc_func_name}({", ".join(cc_make_args)}) {{
                 {storage_setup}
                 auto _op = new {op_name}({", ".join(op_make_args)});
+                vector<VarPtr> _outs;
+                _outs.reserve(_op->outputs_holder.size());
+                for (auto& _held : _op->outputs_holder) _outs.push_back(move(_held));
                 if (_op->flag(OpFlags::_forwarded)) {{
-                    vector<VarPtr> _outs = move(_op->outputs_holder);
                     delete _op;
                     return _outs;
                 }}
-                vector<VarPtr> _outs = move(_op->outputs_holder);
                 {{
                     JT_GBP_SCOPE(gbp_edge_table);
                     for (uint i=0; i<_outs.size(); i++)

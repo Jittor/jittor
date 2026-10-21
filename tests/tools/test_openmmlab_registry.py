@@ -37,6 +37,7 @@ class OpenMMLabRegistries(unittest.TestCase):
         self.git("commit", "--allow-empty", "-qm", "source fixture")
 
     def mmengine(self, extra=""):
+        self.write("setup.py", "setup(name='mmengine' if os.getenv('MMENGINE_LITE', '0') == '0' else 'mmengine-lite')\n")
         self.write("mmengine/version.py", '__version__="0.10.7"\n')
         self.write(
             "mmengine/registrations.py",
@@ -54,6 +55,7 @@ class Initializer: pass
         )
 
     def mmcv(self, extra=""):
+        self.write("setup.py", "setup(name='mmcv' if os.getenv('MMCV_WITH_OPS', '1') == '1' else 'mmcv-lite')\n")
         self.write("mmcv/version.py", '__version__="2.2.0"\n')
         self.write(
             "mmcv/registrations.py",
@@ -86,6 +88,8 @@ else:
     class Alternative: pass
 """)
         result = registry.inventory("mmcv", self.root)
+        self.assertEqual([row['name'] for row in result['distribution_names']['cases']], ['mmcv', 'mmcv-lite'])
+        self.assertIn(result['distribution_names']['source'], result['sources'])
         self.assertEqual(
             self.members(result, "model_component"),
             [
@@ -202,3 +206,10 @@ else:
         value = json.loads(result.stdout)
         self.assertEqual(self.members(value, "optim_wrapper"), ["OptimWrapper"])
         self.assertEqual(value["upstream"]["version"], "0.10.7")
+
+    def test_untracked_build_name_cannot_claim_the_pinned_source_identity(self):
+        self.mmcv()
+        self.git('rm', '--cached', 'setup.py')
+        self.git('commit', '-qm', 'untracked local setup cannot bind upstream')
+        with self.assertRaisesRegex(ValueError, 'must be tracked'):
+            registry.inventory('mmcv', self.root)

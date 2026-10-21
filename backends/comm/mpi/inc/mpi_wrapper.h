@@ -67,6 +67,15 @@ MPI cannot carry, instead of expanding to nothing.
 MPI_Datatype mpi_dtype(NanoString dtype);
 MPI_Op mpi_add_op(NanoString dtype);
 
+// Every WORLD rank calls this in the same order. Members receive a distinct
+// communicator in the requested rank order; nonmembers retain a null handle.
+// @pyjt(mpi_create_process_group)
+int mpi_create_process_group(vector<int> ranks);
+
+MPI_Comm mpi_process_group_comm(int group_id=0);
+int mpi_process_group_rank(int group_id=0);
+int mpi_process_group_size(int group_id=0);
+
 /**
 Return number of MPI nodes.
 */

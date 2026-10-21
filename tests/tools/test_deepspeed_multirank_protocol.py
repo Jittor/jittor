@@ -75,6 +75,166 @@ def test_same_case_has_shared_control_plane_and_private_rank_caches(tmp_path, mo
                for name in ("MASTER_ADDR", "MASTER_PORT"))
 
 
+def test_cpu_protocol_has_independent_artifacts_and_real_mpi_launch_controls(tmp_path, monkeypatch):
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "foreign-gpu")
+    monkeypatch.setenv("JT_BUILD_NVCC_PATH", "/foreign/nvcc")
+    launch = _launcher()
+    cpu = launch.reserve_case(tmp_path / "evidence", 1, "AdamW", "bfloat16", 2, 0., device="cpu")
+    cuda = launch.reserve_case(tmp_path / "evidence", 1, "AdamW", "bfloat16", 2, 0., device="cuda")
+    assert cpu != cuda and json.loads((cpu / "protocol.json").read_text())["device"] == "cpu"
+    native = cpu / "jittor"
+    native.mkdir()
+    first, second = launch.pair_environments("jittor", (), tmp_path / "cache", "", native, device="cpu")
+    assert first["JITTOR_DIST_RENDEZVOUS_DIR"] == second["JITTOR_DIST_RENDEZVOUS_DIR"]
+    for name in ("HOME", "TMPDIR", "JITTOR_HOME"):
+        assert first[name] != second[name]
+    for rank, environment in enumerate((first, second)):
+        assert environment["JT_BUILD_USE_MPI"] == "1" and environment["JT_BUILD_USE_NCCL"] == "0"
+        assert environment["CUDA_VISIBLE_DEVICES"] == environment["JT_BUILD_NVCC_PATH"] == ""
+        assert environment["LOCAL_RANK"] == str(rank)
+        assert environment["JITTOR_TORCH_DISTRIBUTED_AUTO_INIT"] == "0"
+    oracle = launch._rank_environment("torch", 1, "", tmp_path / "cache", "", device="cpu")
+    assert oracle["DS_ACCELERATOR"] == "cpu" and oracle["CUDA_VISIBLE_DEVICES"] == ""
+    assert all(not key.startswith(("JITTOR_", "JT_")) for key in oracle)
+
+
+@pytest.mark.parametrize("world,rank,local", ((None, None, None), ("1", "0", "0"),
+                                            ("2", "2", "2"), ("2", "1", "0")))
+def test_mpi_entry_rejects_missing_or_inconsistent_actual_launcher_identity(
+        tmp_path, monkeypatch, world, rank, local):
+    for name, value in (("OMPI_COMM_WORLD_SIZE", world), ("OMPI_COMM_WORLD_RANK", rank),
+                        ("OMPI_COMM_WORLD_LOCAL_RANK", local)):
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+    with pytest.raises(ValueError, match="OpenMPI"):
+        _launcher()._mpi_rank_main(["--mpi-case", str(tmp_path / "missing"), "--cache-root", str(tmp_path),
+                                   "--rendezvous", "file:///unused"])
+
+
+def test_mpi_entry_routes_rank_output_and_exclusively_claims_it(tmp_path, monkeypatch):
+    launch = _launcher()
+    case = launch.reserve_case(tmp_path / "evidence", 2, "AdamW", "bfloat16", 2, .125, device="cpu")
+    directory = case / "jittor"
+    directory.mkdir()
+    (directory / "rendezvous").mkdir()
+    for name, value in (("OMPI_COMM_WORLD_SIZE", "2"), ("OMPI_COMM_WORLD_RANK", "1"),
+                        ("OMPI_COMM_WORLD_LOCAL_RANK", "1"), ("EXAMPLE_SECRET", "not-for-artifacts")):
+        monkeypatch.setenv(name, value)
+    observed = {}
+    class Executed(Exception):
+        pass
+    def execute(python, command, environment):
+        observed.update(command=command, environment=environment)
+        raise Executed
+    monkeypatch.setattr(launch.os, "execve", execute)
+    monkeypatch.setattr(launch.os, "dup2", lambda *args: None)
+    arguments = ["--mpi-case", str(directory), "--cache-root", str(tmp_path / "cache"),
+                 "--rendezvous", launch.file_rendezvous(directory)]
+    with pytest.raises(Executed):
+        launch._mpi_rank_main(arguments)
+    command = observed["command"]
+    assert command[command.index("--rank") + 1] == "1"
+    assert command[command.index("--device") + 1] == "cpu"
+    assert command[command.index("--output") + 1] == str(directory / "rank1.npz")
+    assert observed["environment"]["LOCAL_RANK"] == "1"
+    claim = (directory / "rank1-launch.json").read_text()
+    assert "EXAMPLE_SECRET" not in claim and "not-for-artifacts" not in claim
+    assert json.loads(claim)["environment"]["JITTOR_DIST_RENDEZVOUS_DIR"] == str(directory / "rendezvous")
+    with pytest.raises(FileExistsError):
+        launch._mpi_rank_main(arguments)
+
+
+def test_cpu_warm_does_not_select_nccl_mode_and_launch_keeps_parent_affinity(tmp_path, monkeypatch):
+    launch = _launcher()
+    monkeypatch.setenv("JT_NCCL_WORLD_SIZE", "99")
+    case = launch.reserve_case(tmp_path / "case", 1, "AdamW", "bfloat16", 2, 0., device="cpu")
+    warm, started = [], []
+    monkeypatch.setattr(launch.shutil, "which", lambda name: "/private/mpi/bin/mpirun")
+    def run(command, **kwargs):
+        warm.append(kwargs["env"])
+    def start(command, **kwargs):
+        started.append(command)
+        for rank in (0, 1):
+            (case / "jittor" / ("rank%d.npz" % rank)).write_bytes(b"control-only-placeholder")
+        return SimpleNamespace(poll=lambda: 0)
+    monkeypatch.setattr(launch.subprocess, "run", run)
+    monkeypatch.setattr(launch.subprocess, "Popen", start)
+    launch.run_pair(PYTHON, "jittor", case, tmp_path / "cache", (), "")
+    assert len(warm) == 2
+    for environment in warm:
+        assert environment["JT_BUILD_USE_MPI"] == "1"
+        assert environment["WORLD_SIZE"] == "1"
+        assert not any(name.startswith("JT_NCCL_") for name in environment)
+    assert len(started) == 1
+    command = started[0]
+    assert command[command.index("--bind-to") + 1] == "none"
+    assert command[command.index("-n") + 1] == "2"
+
+
+@pytest.mark.parametrize("bad", ("rank", "world", "local", "devices", "control"))
+def test_jtrun_wrapper_preserves_public_launcher_identity_and_rejects_inconsistency(
+        tmp_path, monkeypatch, bad):
+    launch = _launcher()
+    case = launch.reserve_case(tmp_path / "case", 2, "AdamW", "bfloat16", 2, 0.)
+    directory = case / "jittor"
+    directory.mkdir()
+    control = directory / "rendezvous"
+    control.mkdir()
+    environment = {"RANK": "1", "WORLD_SIZE": "2", "LOCAL_RANK": "0",
+                   "JT_NCCL_RANK": "1", "JT_NCCL_WORLD_SIZE": "2", "JT_NCCL_LOCAL_RANK": "0",
+                   "JT_NCCL_ROOTINFO_FILE": str(control / "nccl-rootinfo.bin"),
+                   "CUDA_VISIBLE_DEVICES": "GPU-example", "JITTOR_DIST_RENDEZVOUS_DIR": str(control)}
+    for key, value in environment.items():
+        monkeypatch.setenv(key, value)
+    observed = {}
+    class Executed(Exception):
+        pass
+    def execute(python, command, env):
+        observed.update(command=command, environment=env)
+        raise Executed
+    monkeypatch.setattr(launch.os, "execve", execute)
+    monkeypatch.setattr(launch.os, "dup2", lambda *args: None)
+    arguments = ["--jtrun-case", str(directory), "--cache-root", str(tmp_path / "cache"),
+                 "--rendezvous", launch.file_rendezvous(directory)]
+    with pytest.raises(Executed):
+        launch._jtrun_rank_main(arguments)
+    result = observed["environment"]
+    assert all(result[key] == value for key, value in environment.items())
+    assert result["JITTOR_TORCH_DISTRIBUTED_AUTO_INIT"] == "0"
+    assert result["JITTOR_DEEPSPEED_LAUNCHER"] == "jtrun-module"
+    assert str(tmp_path / "cache" / "jittor" / "rank1") in result["JITTOR_HOME"]
+    (directory / "rank1-launch.json").unlink()
+    (directory / "rank1.log").unlink()
+    key, value = {"rank": ("JT_NCCL_RANK", "0"), "world": ("WORLD_SIZE", "1"),
+                  "local": ("LOCAL_RANK", "1"), "devices": ("CUDA_VISIBLE_DEVICES", "0,1"),
+                  "control": ("JITTOR_DIST_RENDEZVOUS_DIR", "/other-case")}[bad]
+    monkeypatch.setenv(key, value)
+    with pytest.raises(ValueError, match="jtrun"):
+        launch._jtrun_rank_main(arguments)
+
+
+def test_cuda_candidate_uses_public_jtrun_with_cache_wrapper_before_site_hooks(tmp_path, monkeypatch):
+    launch = _launcher()
+    case = launch.reserve_case(tmp_path / "case", 1, "AdamW", "bfloat16", 2, 0.)
+    observed = []
+    monkeypatch.setattr(launch.subprocess, "run", lambda *args, **kwargs: None)
+    def start(command, **kwargs):
+        observed.append(command)
+        for rank in (0, 1):
+            (case / "jittor" / ("rank%d.npz" % rank)).write_bytes(b"control-only-placeholder")
+        return SimpleNamespace(poll=lambda: 0)
+    monkeypatch.setattr(launch.subprocess, "Popen", start)
+    launch.run_pair(PYTHON, "jittor", case, tmp_path / "cache", ("allocated-a", "allocated-b"), "")
+    assert len(observed) == 1
+    command = observed[0]
+    assert command[:3] == [PYTHON, "-m", "jittor.distributed.launch"]
+    assert command[command.index("--device-ids") + 1] == "allocated-a,allocated-b"
+    assert command[command.index("--log-dir") + 1] == str(case / "jittor" / "rendezvous")
+    assert command[command.index("--") + 1:command.index("--") + 3] == [PYTHON, "-S"]
+
+
 def test_file_rendezvous_is_per_runtime_and_rejects_stale_stores(tmp_path):
     launch = _launcher()
     native = tmp_path / "jittor"
@@ -138,6 +298,49 @@ def test_full_gradient_dtype_preserves_the_upstream_stage1_shortcut_and_stage2_p
     stage2 = SimpleNamespace(grad=None)
     assert dtype(torch, stage1) == "bfloat16"
     assert dtype(torch, stage2) == "float32"
+
+
+@pytest.mark.parametrize("device", ("cpu", "cuda"))
+def test_backend_label_does_not_promote_a_singleton_to_a_transport_claim(device):
+    # Controlled NumPy observations test the comparison's metadata boundary;
+    # these are not framework execution evidence or a DeepSpeed scorecard.
+    directory = Path(__file__).resolve().parents[2] / "compat/tests/torch"
+    namespace = {"np": np, "json": json, "EcosystemComparison": SimpleNamespace(
+        forward_tolerance=.002, backward_tolerance=.01)}
+    for filename, names in (("_ecosystem_harness.py", ("_versions", "_divergence", "_comparison_floor")),
+                            ("_ecosystem_deepspeed_comparison.py", ("_compare_engine_outputs",))):
+        nodes = [node for node in ast.parse((directory / filename).read_text()).body
+                 if isinstance(node, ast.FunctionDef) and node.name in names]
+        assert len(nodes) == len(names)
+        exec(compile(ast.Module(body=nodes, type_ignores=[]), filename, "exec"), namespace)
+    class Archive(dict):
+        @property
+        def files(self):
+            return list(self)
+    compare = namespace["_compare_engine_outputs"]
+    for world in (1, 2):
+        common = dict(device=device, world_size=world, rank=0, dtype="float32", optimizer="AdamW",
+            zero_stage=1, perturbation=0., engine_class="controlled", parameter_gradients_per_microstep=0,
+            input_gradients_per_microstep=1, microsteps=1, global_steps=1, runtime_conditions={},
+            optimizer_groups=[], optimizer_partition_sizes=[], model_parameter_elements=0,
+            trainable_parameters=[], frozen_parameters=[], strict_resume_fields=1,
+            gradient_dtypes={"step0/input_grad/x": "float32"}, jittor_commit="controlled-host-fixture",
+            seed=0, hf_hub_offline=True, protocol={"controlled": True}, measurement_source_sha256={},
+            optimizer_class="controlled.Optimizer", updated_master_elements=1)
+        ours = dict(common, runtime="jittor", process_group_backend="mpi" if world == 1 or device == "cpu" else "nccl",
+                    fallback_policy="error", fallback_count=0, backend={"use_cuda": device == "cuda"})
+        theirs = dict(common, runtime="torch", torch_binary="controlled-oracle.so",
+                      process_group_backend="nccl" if device == "cuda" else "gloo")
+        values = {"output": np.array([1.], dtype="float32"),
+                  "step0/input_grad/x": np.array([.25], dtype="float32")}
+        actual, reference = Archive(values, metadata=np.asarray(json.dumps(ours))), Archive(
+            values, metadata=np.asarray(json.dumps(theirs)))
+        compare(actual, reference, device=device, world_size=world)
+        if world == 2:
+            ours["process_group_backend"] = "gloo" if device == "cpu" else "mpi"
+            actual["metadata"] = np.asarray(json.dumps(ours))
+            with pytest.raises(AssertionError):
+                compare(actual, reference, device=device, world_size=world)
 
 
 @pytest.mark.parametrize("tamper", ("gradient", "moment", "missing", "dtype"))

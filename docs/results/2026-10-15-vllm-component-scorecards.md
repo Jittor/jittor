@@ -1,8 +1,8 @@
 # vLLM 0.29.0 primitive CPU and CUDA scorecards
 
-- Status: verified L2 for the listed parameter-free component scenario; engine blocked.
-- Date: 2026-10-15.
-- Measured source: `72e12a9c662b46d5a5389f7e031c3997520d4562`, clean throughout capture.
+- Status: current installed-source L2 replay verified below; historical 72e rows fail current strict source admission. No engine acceptance.
+- Date: 2026-10-16; original 72e measurement sections retain their 2026-10-15 identity.
+- Original measured source (sections before the fresh replay): `72e12a9c662b46d5a5389f7e031c3997520d4562`, clean throughout capture.
 - Owner: Jittor compatibility maintainers.
 - Review when: the pinned upstream, builder, runtime, adapter, precision policy or gate changes.
 
@@ -83,13 +83,17 @@ The corresponding shared-owner fix and its wider regression results are in
 [RMSNorm contracts and Triton pointer aliases](2026-10-15-rmsnorm-triton-alias.md).
 
 ```bash
-# Provision oracle/candidate environments first; nox does not install frameworks.
+# Provision real oracle/candidate dependencies and set verified source/wheel inputs.
+export JITTOR_VLLM_CHECKOUT="$VLLM_CHECKOUT"
+export JITTOR_VLLM_WHEEL="$OFFICIAL_VLLM_WHEEL"
+export JITTOR_VLLM_EVIDENCE_DIR="$FRESH_EXTERNAL_EVIDENCE_DIR"
 REAL_TORCH_PYTHON=<oracle-python> JITTOR_CI_PYTHON=<candidate-python> \
   JITTOR_TEST_DEVICES=cpu nox -s ecosystem_vllm
 # Select the allocated GPU externally; keep an independent cache for each device.
 REAL_TORCH_PYTHON=<oracle-python> JITTOR_CI_PYTHON=<candidate-python> \
   JITTOR_TEST_DEVICES=cuda nox -s ecosystem_vllm
 
+# Historical generic diagnostic; strict admission uses the maintained source-bound gate.
 <host-python> agent/skills/torch-compat-repo-runbook/scripts/verify_repo.py \
   --repo vllm --cases vllm_decoder_primitives --device <cpu-or-cuda> \
   --oracle-python <oracle-python> --shim-python <candidate-python> \
@@ -160,3 +164,102 @@ by this integration. Independent checks and logs are unversioned under
 `$JITTOR_LAB_ROOT/_state/vllm-scorecard-integration-824/`.
 Later Omni precision and storage-contract investigations remain separate work;
 no subsequent model acceptance is implied by this component report.
+
+## Fresh complete installed-source replay (2026-10-16)
+
+Measured source is clean `c9978992512024a4951a139e4c3d221aaa2584b1`.
+Owner: Jittor compatibility maintainers. Recheck when the source/wheel pin,
+producer, adapter carrier, nox session, collector, precision or admission rules
+change. The original 72e records remain unchanged: the current common auditor
+independently rejects both for missing actual distribution/source binding.
+The new result below comes from complete new CPU and CUDA execution.
+
+The clean official upstream remains `98dff2a81d747d1dba01a47f939f48c3526d4206`,
+with the original official vLLM wheel SHA256 above. Every worker binds the actual
+`vllm.__file__`, real distribution METADATA/version and legitimate installed
+RECORD to the full original wheel and **2312 Python / 4904 package payload files**.
+Actual Transformers 5.13.0 payloads must also match between the two runtimes.
+The existing candidate `jittor-torch-adapters` 2.0.0 carrier is installed normally
+and bound to its actual bootstrap, entry point, METADATA, RECORD and editable
+source URL. No new adapter or mathematical implementation is added. The probe
+hashes all **1604** relevant framework, adapter and maintained gate source files
+before and after execution, requiring a clean unchanged measured HEAD.
+
+The original scenario and budgets remain unchanged: FP32, fixed `[32,8]` rotary
+cache, output `[320]`, all four requested input gradients, seeds 0/7/19, output
+normalized maximum `<= .002` and gradient `<= .01`, oracle scale floor `1e-8`.
+Each perturbation changes output and at least one gradient on both sides, with
+unchanged initial weights and distinct worker PIDs. CPU/CUDA oracle initial cache
+arrays are also exactly equal. There are zero trainable parameters or updates.
+
+Actual public nox execution passes **one test / zero skipped** on each device:
+CPU **246.02 s**, CUDA **353.91 s** pytest time. Independent host replay without
+importing Jittor rechecks all **30 array pairs**, **12 distinct workers**, **60
+physical tensor observations** and every runtime source/installation packet.
+CPU explicitly hides CUDA and reports CUDA unavailable; CUDA actual pointer
+attributes resolve to its explicitly allocated device. Candidate fallback remains
+`error`, count zero. Matching actual precision and runtime conditions require
+TF32 and cuDNN benchmark OFF, highest matmul precision and one thread.
+
+| Device | Seed 0 maximum normalized error | Seed 7 | Seed 19 | Largest absolute error |
+| --- | ---: | ---: | ---: | ---: |
+| CPU | `1.0609394e-7` | `9.7602168e-8` | `1.9150882e-7` | `4.7683716e-7` |
+| CUDA | `6.7617129e-8` | `9.7602168e-8` | `1.1146150e-7` | `4.7683716e-7` |
+
+The corrected collector and ordinary common auditor accept **two L2 records,
+zero rejected, zero blocked**. Each device remains **CustomOp 3/40, model 0/376**.
+The postprocessor's zero-parameter count/list fields were initially reversed;
+a new positive-case schema assertion reproduced the failure before correcting
+only those output fields at `ffff94ee2`. Its final 77 focused contracts pass.
+This postprocessing change retains the original c997 source capture and uses the
+frozen measured checkout for validation; it does not rewrite worker metadata,
+retag measurements, change criteria or grant a training grade.
+
+The actual platform is an EPYC 9554 and one RTX 4090, driver 580.178.04,
+GCC 11.5.0, candidate NVCC 12.2.140 and genuine Torch 2.13.0+cu130. Private fresh
+interpreters use the existing read-only genuine provider. The full official Torch
+wheel SHA256 is `60fcdcb2f3876e21146cb4524ef06397d727ca9ad5f020818547e25075fe3cb7`;
+all **12117 original installed files**, the legitimate pip-rewritten RECORD and
+original wheel are rehashed after execution. No shared package was repaired.
+Candidate NVIDIA metadata is separately recorded: cuDNN metadata says 9.26.0.51,
+while an explicit real provider API probe reports **9.24.0**; CUDA runtime reports
+**12.2**. The ten inherited NVIDIA provider metadata directories lack RECORD;
+that fact is preserved, with no invented RECORD or full NVIDIA wheel-integrity
+claim. These explicit provider probes do not assert every library was loaded by
+every component worker. Complete platform files retain the original oracle
+capture and add these candidate facts in new files.
+
+The first fresh CPU attempt stopped before numerics because the existing adapter
+entry point was absent. Two subsequent CUDA launches stopped before numerics
+because the old nox session forced CUDA wheels OFF and the system toolkit lacked
+`cublas.h`. The maintained session now honors the explicit option with default
+wheel discovery ON. All failed logs remain. Private unit and per-device nox
+caches are separate; task-owned caches are reused normally, without copying JIT
+binaries or calling a later run another cold build. The CUDA wheel fingerprint's
+first compilation ran serially. Full-engine dependency `pip check` remains
+unsatisfied for unused engine extras/pins; this component result does not certify
+an installable full-engine dependency closure.
+
+All **2890 original Git blobs and post-run working-tree files**, including symlink
+target text, match the frozen source snapshot. The later CUDA run leaves the
+20 original CPU raw files unchanged. Forty original c997 raw files and eight
+fresh derived comparison files are retained. The complete seal covers **199 files /
+1035348925 bytes**, SHA256
+`4b67d5ebc7a1fdd1fd871fa5271b46a31535429babb94495ac41eddb8a95cc7a`.
+Unversioned commands, actual platform files, raw arrays, independent rechecks,
+failed attempts, official wheel inputs and `scorecard-installed-source-v4.json`
+are under `$JITTOR_LAB_ROOT/_state/vllm-installed-source/20261015/`.
+Reproduce through the updated [vLLM skill](../../agent/skills/vllm-torch-compat/SKILL.md)
+with real source/wheel inputs, fresh independent interpreters and new external
+output paths. This result grants no whole model, engine, Omni, training,
+pretrained, additional backend or performance support.
+
+Main integration at `2c9b2176d` preserves the other **73 nox functions** exactly
+and matches all 11 other delivered task files to c997. After the postprocessing
+fix at `ffff94ee2`, focused host checks pass **77 / zero skipped**, core passes
+**322 / 42 skipped / one existing expected failure**, and complete structure plus
+compat structure passes **1627 / six skipped** (206.34 s). Two structure skips
+are interpreter installation-resolution checks; no editable installation is
+inferred from source-path imports. Central terminal logs and integration source
+checks are unversioned under
+`$JITTOR_LAB_ROOT/_state/vllm-main-integration-5def/20261016/`.

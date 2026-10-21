@@ -10,11 +10,38 @@ namespace jittor {
 
 extern PyHeapTypeObject PyjtVarHolder;
 
+void bind_python_tensor_owner(PyObject* object) {
+    bool retain = false;
+    if (Py_TYPE(object) != &PyjtVarHolder.ht_type) {
+        PyObjHolder requested;
+        requested.obj = PyObject_GetAttrString(
+            reinterpret_cast<PyObject*>(Py_TYPE(object)),
+            "_frontend_view_base_ownership");
+        if (!requested.obj) {
+            if (!PyErr_ExceptionMatches(PyExc_AttributeError))
+                throw std::runtime_error("cannot read frontend view ownership");
+            PyErr_Clear();
+        } else {
+            if (!PyBool_Check(requested.obj))
+                throw std::runtime_error("frontend view ownership must be a bool");
+            retain = requested.obj == Py_True;
+        }
+    }
+    GET_RAW_PTR(VarHolder, object)->bind_python_owner(object, retain);
+}
+
 namespace {
 // One shared symbol owner across the core and all loaded JIT extensions.
 // Access occurs with the GIL held, just like the Python conversion boundary.
 PyObject* frontend_context = nullptr;
 PyObject* placement_context = nullptr;
+// Whether either variable has ever been given a value in this process. Every
+// binding call reads both -- the result type, the construction placement --
+// and a program that never selects a frontend or a placement (plain Jittor)
+// paid two context lookups per operator for an answer that cannot be anything
+// but "unset": until one of the setters below runs, no context holds a value.
+bool frontend_context_set = false;
+bool placement_context_set = false;
 
 PyObject* placement_variable() {
     if (!placement_context) {
@@ -26,6 +53,7 @@ PyObject* placement_variable() {
 }
 
 TensorPlacement selected_placement() {
+    if (!placement_context_set) return {};
     PyObject* value = nullptr;
     if (PyContextVar_Get(placement_variable(), nullptr, &value) < 0)
         throw std::runtime_error("cannot read tensor placement context");
@@ -46,6 +74,7 @@ PyObject* context_variable() {
 }
 
 PyObject* selected_type() {
+    if (!frontend_context_set) return nullptr;
     PyObject* value = nullptr;
     if (PyContextVar_Get(context_variable(), nullptr, &value) < 0)
         throw std::runtime_error("cannot read tensor frontend context");
@@ -85,6 +114,7 @@ PyObject* set_tensor_frontend_type(PyObject* type) {
         && PyType_IsSubtype(reinterpret_cast<PyTypeObject*>(type),
                             &PyjtVarHolder.ht_type))
         << "tensor frontend must be a real Var type or subtype";
+    frontend_context_set = true;
     PyObject* token = PyContextVar_Set(context_variable(), type);
     if (!token)
         throw std::runtime_error("cannot set tensor frontend context");
@@ -101,6 +131,7 @@ PyObject* set_tensor_placement_context(int backend, int device) {
         << "tensor placement requires a registered backend id and a non-negative device index";
     PyObject* value = Py_BuildValue("(ii)", backend, backend == 0 ? 0 : device);
     if (!value) throw std::runtime_error("cannot create tensor placement value");
+    placement_context_set = true;
     PyObject* token = PyContextVar_Set(placement_variable(), value);
     Py_DECREF(value);
     if (!token) throw std::runtime_error("cannot set tensor placement context");

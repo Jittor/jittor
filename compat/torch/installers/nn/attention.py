@@ -1,7 +1,12 @@
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
+import math as _math
 import jittor as jt
-from jittor import nn
+from jittor._runtime import dispatch as _dispatch_module
 from jittor.nn.backends import hooks as _backend_hooks
+from jittor.nn.functional.attention import (
+    scaled_dot_product_attention as _native_scaled_dot_product_attention,
+    LAST_FUSED_KERNEL as _NATIVE_LAST_FUSED,
+)
 from ....diagnostics import EXPECTED, swallowed, sdpa_flash_stats
 
 from ...context import get_install_context
@@ -281,15 +286,6 @@ def _try_flash_scaled_dot_product_attention(query, key, value, attn_mask,
     return out
 
 
-import math as _math
-
-
-from jittor.nn.functional.attention import (
-    scaled_dot_product_attention as _native_scaled_dot_product_attention,
-    LAST_FUSED_KERNEL as _NATIVE_LAST_FUSED,
-)
-
-
 #: Inference calls already walked: their signature -> (the flash miss, the
 #: fused kernel that answered). See `_route_key`.
 _ROUTES = {}
@@ -344,7 +340,6 @@ def _route_key(query, key, value, attn_mask, dropout_p, is_causal, scale, enable
 
 
 _flash_loader = [None]
-from jittor._runtime import dispatch as _dispatch_module
 _dispatch_state = [_dispatch_module]
 
 
@@ -352,6 +347,13 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None,
                                  dropout_p=0.0, is_causal=False,
                                  scale=None, enable_gqa=False, **kw):
     del kw
+    # Torch's default fused attention rounds probability products in BF16.
+    # Ask the native owner for its admitted backend-precision path; its math
+    # fallback and the native public default keep FP32 intermediates.
+    precision_options = (
+        {"allow_reduced_precision": True}
+        if _jittor_dtype_name(query.dtype) == "bfloat16" else {}
+    )
     route_key = _route_key(query, key, value, attn_mask, dropout_p, is_causal,
                            scale, enable_gqa)
     if route_key is not None:
@@ -359,7 +361,7 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None,
         if route is not None:
             miss, kernel = route
             out = kernel(query, key, value, attn_mask=attn_mask, dropout_p=0.0,
-                         is_causal=is_causal, scale=scale)
+                         is_causal=is_causal, scale=scale, **precision_options)
             if out is not None:
                 _sdpa_flash_miss(miss)
                 return out
@@ -385,6 +387,7 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None,
         is_causal=is_causal,
         scale=scale,
         enable_gqa=enable_gqa,
+        **precision_options,
     )
     # Remember the walk only where it ended in a fused kernel and flash had
     # declined for a reason the key holds: a mask, nothing to load, a dtype

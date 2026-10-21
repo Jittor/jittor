@@ -1,8 +1,8 @@
-"""Collect measured Metrics/TensorDict components into shared schema-v2 rows.
+"""Collect maintained library components into shared schema-v2 rows.
 
 Re-derives clean upstream inventories, checks complete installed-source bindings,
 all expected gradients, fixed seed-0 weights, seed-7 input perturbations, and (for
-TensorDict) every three-step SGD field. Does not infer whole-library coverage.
+trainable components) every three-step SGD field. Does not infer whole-library coverage.
 """
 import argparse
 import hashlib
@@ -17,6 +17,9 @@ SPECS = {
     'tensordict': {'case': 'tensordict_index_and_stack', 'level': 3,
                    'members': ['TensorDict', 'lazy_stack'],
                    'parameters': ['projection.bias', 'projection.weight'], 'inputs': ['sample']},
+    'diffusers': {'case': 'diffusers_unet2d', 'builder': '_diffusers_unet', 'level': 3,
+                  'members': ['UNet2DModel'], 'axis': 'model_api',
+                  'parameters': None, 'parameter_count': 144, 'inputs': ['sample']},
 }
 
 
@@ -35,6 +38,19 @@ def require(condition, message):
         raise ValueError(message)
 
 
+def write_comparison(path, value):
+    """Create derived evidence once; identical re-audits leave its bytes intact."""
+    payload = (json.dumps(value, indent=2) + '\n').encode('utf-8')
+    try:
+        stream = path.open('xb')
+    except FileExistsError:
+        require(path.read_bytes() == payload,
+                'Existing comparison differs; use a fresh evidence directory: ' + str(path))
+    else:
+        with stream:
+            stream.write(payload)
+
+
 def validate_binding(value, source, baseline):
     require(value.get('jittor_commit') == baseline, 'Stale measurement baseline')
     require(value.get('upstream') == source['upstream'], 'Changed upstream identity')
@@ -44,8 +60,37 @@ def validate_binding(value, source, baseline):
     require(installed.get('source_sha256') == {r['path']: r['sha256'] for r in source['package_sources']},
             'Incomplete installed source binding')
     require(bool(installed.get('installed_files_sha256')), 'Missing full installed package hashes')
+    for name, expected in installed['source_sha256'].items():
+        parts = Path(name).parts
+        if parts[0] == 'src':
+            parts = parts[1:]
+        require(parts[0] == source['repo'], 'Unexpected upstream package prefix')
+        relative = Path(*parts[1:]).as_posix()
+        require(installed['installed_files_sha256'].get(relative) == expected,
+                'Full installed package hashes disagree with source binding: ' + name)
     require(bool(value.get('measurement_source_sha256')), 'Missing measurement source binding')
     require(value.get('hf_hub_offline') is True, 'Offline measurement guard missing')
+    if source['repo'] in ('torchmetrics', 'tensordict') and 'official_wheel' in source:
+        from _metric_td_installation import validate_captured, validate_runtime_metadata
+
+        validate_captured(installed, source, source['official_wheel']['path'])
+        validate_runtime_metadata(value, baseline)
+        captured = value.get('dependencies', {}).get(source['repo'], {})
+        require(captured.get('version') == installed['version']
+                and captured.get('installed_files_sha256') == installed['installed_files_sha256']
+                and Path(captured.get('origin', '')).parent == Path(installed['package']),
+                'Actual component dependency does not match its selected installation')
+    if source['repo'] == 'diffusers':
+        from _diffusers_installation import validate_captured, validate_runtime_metadata
+
+        require('official_wheel' in source, 'Diffusers requires a fresh fixed official-wheel source descriptor')
+        validate_captured(installed, source, source['official_wheel']['path'])
+        validate_runtime_metadata(value, baseline)
+        captured = value.get('dependencies', {}).get('diffusers', {})
+        require(captured.get('version') == installed['version']
+                and captured.get('installed_files_sha256') == installed['installed_files_sha256']
+                and Path(captured.get('origin', '')).parent == Path(installed['package']),
+                'Actual Diffusers dependency differs from its selected installation')
 
 
 def validate_initial_weights(values, original_sha):
@@ -75,11 +120,27 @@ def compare_arrays(reference, candidate, expected, atol, rtol):
     return rows
 
 
+def parameter_names(spec, weights):
+    """Keep a large model's actual full parameter names in its measured snapshot."""
+    if spec['parameters'] is not None:
+        return spec['parameters']
+    import numpy as np
+    with np.load(weights) as initial:
+        names = sorted(initial.files)
+        require(len(names) == len(set(names)) == spec['parameter_count'],
+                'Incomplete component parameter snapshot')
+    return names
+
+
 def collect(source, directory, platform_path, baseline, report, command, atol=2e-3, rtol=1e-2):
     import numpy as np
     repo = source['repo']
-    spec = SPECS[repo]
+    spec = dict(SPECS[repo])
     case, directory = spec['case'], Path(directory)
+    axis = spec.get('axis', 'public_api')
+    members = next((row['members'] for row in source['axes'] if row['axis'] == axis), [])
+    require(set(spec['members']).issubset(members), 'Component is absent from its own public export axis')
+    spec['parameters'] = parameter_names(spec, directory / (case + '.ref.weights.npz'))
     base_path = directory / 'verify-report.json'
     base = read(base_path)
     require(base.get('baseline') == baseline and base.get('repo') == repo, 'Stale base report')
@@ -152,16 +213,26 @@ def collect(source, directory, platform_path, baseline, report, command, atol=2e
         require(ref['downstream_distribution']['installed_files_sha256'] ==
                 cand['downstream_distribution']['installed_files_sha256'], 'Full installed package mismatch')
         require(ref['measurement_source_sha256'] == cand['measurement_source_sha256'], 'Measurement code mismatch')
+        if repo in ('torchmetrics', 'tensordict', 'diffusers'):
+            require(ref['interpreter']['pid'] != cand['interpreter']['pid'], 'Oracle/candidate process reused')
+            require(all(ref['runtime_environment'][name] != cand['runtime_environment'][name]
+                        for name in ('HOME', 'JITTOR_HOME', 'TMPDIR', 'XDG_CACHE_HOME')),
+                    'Oracle/candidate runtime paths are not isolated')
+            require({key: item for key, item in platform.items() if key != 'oracle'} == cand['platform'],
+                    'Supplied platform differs from actual component worker')
     for weight in sorted(directory.glob('*.weights.npz')):
         artifacts.append(artifact('weights/' + weight.name, weight))
+    if repo in ('torchmetrics', 'tensordict', 'diffusers'):
+        require('official_wheel' in source, 'Components require a fresh fixed official-wheel source descriptor')
+        artifacts.append(artifact('upstream-wheel', source['official_wheel']['path']))
     comparison_path = directory / 'complete-comparison.json'
-    comparison_path.write_text(json.dumps({'case': case, 'status': 'passed', 'rows': errors,
-                                           'baseline': baseline, 'training': training}, indent=2) + '\n')
+    write_comparison(comparison_path, {'case': case, 'status': 'passed', 'rows': errors,
+                                      'baseline': baseline, 'training': training})
     artifacts.append(artifact('comparison', comparison_path))
     result = {'repo': repo, 'case': case, 'status': 'passed', 'level': spec['level'],
               'tier': 'broad', 'jittor_commit': baseline, 'upstream': source['upstream'],
               'downstream_versions': {'candidate': source['upstream']['version'], 'oracle': source['upstream']['version']},
-              'registry_refs': [{'repo': repo, 'axis': 'public_api', 'member': n} for n in spec['members']],
+              'registry_refs': [{'repo': repo, 'axis': axis, 'member': n} for n in spec['members']],
               'device': device, 'observed_device': device, 'platform': platform,
               'inputs': {'seed': 0, 'perturb_seed': 7, 'hf_hub_offline': True, 'shape_kind': 'tiny'},
               'numerics': {'passed': True, 'finite': True, 'checked_tensors': len(errors), 'missing_tensors': [],
@@ -183,6 +254,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, default=Path(__file__).resolve().parents[4])
     parser.add_argument('--upstream', action='append', required=True, metavar='REPO=CHECKOUT')
+    parser.add_argument('--wheel', action='append', default=[], metavar='REPO=WHEEL',
+                        help='Required fixed official wheel for each Metrics/TensorDict/Diffusers entry')
     parser.add_argument('--run', action='append', required=True, metavar='REPO=DIR')
     parser.add_argument('--platform', action='append', required=True, metavar='DEVICE=JSON')
     parser.add_argument('--baseline', required=True)
@@ -194,6 +267,20 @@ def main():
     from registry_inventory import git, inventory, write_json
     from audit_coverage import scorecard
     sources = {repo: inventory(repo, Path(path)) for repo, path in (v.split('=', 1) for v in args.upstream)}
+    wheels = dict(v.split('=', 1) for v in args.wheel)
+    for repo in sources:
+        if repo in ('torchmetrics', 'tensordict'):
+            from _metric_td_installation import source_descriptor
+
+            require(repo in wheels, 'Metrics/TensorDict scorecards require --wheel ' + repo + '=WHEEL')
+            checkout = dict(v.split('=', 1) for v in args.upstream)[repo]
+            sources[repo] = source_descriptor(repo, checkout, wheels[repo])
+        elif repo == 'diffusers':
+            from _diffusers_installation import source_descriptor
+
+            require(repo in wheels, 'Diffusers scorecards require --wheel diffusers=WHEEL')
+            checkout = dict(v.split('=', 1) for v in args.upstream)[repo]
+            sources[repo] = source_descriptor(checkout, wheels[repo])
     platforms = dict(v.split('=', 1) for v in args.platform)
     records = []
     for assignment in args.run:

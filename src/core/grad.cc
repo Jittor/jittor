@@ -41,6 +41,30 @@ DECLARE_FLAG(int, auto_mixed_precision_level);
 static auto make_binary = op_constructor<VarPtr, Var*, Var*, NanoString>("binary");
 static auto make_unary = op_constructor<VarPtr, Var*, NanoString>("unary");
 static auto make_number = op_constructor<VarPtr, float, Var*>("number");
+static auto make_reduce = op_constructor<VarPtr, Var*, NanoString, uint, uint>("reduce");
+
+static VarPtr normalize_recorded_gradient(Var* target, VarPtr value) {
+    if (!value || !target->recorded_gradient_shape) return value;
+    const auto& expected = *target->recorded_gradient_shape;
+    const auto& actual = value->shape;
+    USER_CHECK(actual.size() >= expected.size())
+        << "invalid gradient shape" << actual << "; expected shape compatible with" << expected;
+    uint reduce = 0, keep = 0;
+    uint leading = actual.size() - expected.size();
+    for (uint axis=0; axis<actual.size(); ++axis) {
+        if (axis < leading) reduce |= 1u << axis;
+        else {
+            auto dimension = expected[axis-leading];
+            USER_CHECK(actual[axis] == dimension || dimension == 1)
+                << "invalid gradient shape" << actual << "; expected shape compatible with" << expected;
+            if (actual[axis] != dimension) {
+                reduce |= 1u << axis;
+                keep |= 1u << axis;
+            }
+        }
+    }
+    return reduce ? make_reduce(value.ptr, ns_add, reduce, keep) : move(value);
+}
 
 #ifdef _WIN32
 template<class T> struct StackIniter {
@@ -119,9 +143,30 @@ Op* backward_grad_fn(Var* v) {
         // exists for ordering only.
         if (e.reverse().index < 0) continue;
         Var* in = e.node->var();
-        if (!requires_grad(in)) continue;
-        if (is_requires_grad_disabled_edge(in, op)) continue;
+        // A later reversible freeze of an input does not erase the producer
+        // already recorded for this output. Edges disabled at construction
+        // are checked below; permanent stop-grad still ends the graph.
+        if (in->is_stop_grad()) continue;
+        // An unrecorded view can require grad and create a producer even
+        // though this particular input has no backward edge. This differs
+        // from an input explicitly frozen when the op was constructed.
+        if (is_requires_grad_disabled_edge(in, op)
+                && !lookup_unrecorded_view_edge(in, op)) continue;
         return op;
+    }
+    // A recorded view can rebase over a store made while its source was
+    // frozen. It still has a producer and accepts its own gradient, although
+    // the rebased producer's input-edge snapshot deliberately carries no
+    // gradient back to that source, even after the source is enabled again.
+    if (v->autograd_alias && v->autograd_alias->recorded_view_history
+            && !v->autograd_alias->created_without_grad
+            && !v->autograd_alias->source_edge_enabled
+            && v->autograd_alias->creation_version == *v->autograd_alias->version) {
+        // Reversible edge snapshots may be disabled, but a permanent stop on
+        // every real input still terminates this producer's native history.
+        for (auto& e : op->_inputs)
+            if (e.reverse().index >= 0 && !e.node->var()->is_stop_grad())
+                return op;
     }
     return nullptr;
 }
@@ -255,7 +300,12 @@ vector<VarPtr> grad(
     unordered_map<Var*, VarPtr> observed_target_grads;
     for (int i=0; i<targets.size(); i++) {
         Var* var = targets[i];
-        target_id[i] = gvar_index.has(var) ?
+        // Traversal follows the input-edge snapshot taken by each consumer.
+        // Disabling an alias's own accumulator after an old consumer was
+        // recorded must not erase that consumer's existing edge. A direct
+        // unrecorded backward root still has no accumulator to seed.
+        target_id[i] = (var != loss || !var->flag(VarFlags::_unrecorded_view))
+            && gvar_index.has(var) ?
             gvar_index.get(var) : -1;
         if (target_id[i] >= 0) is_target[target_id[i]] = true;
     }
@@ -266,7 +316,8 @@ vector<VarPtr> grad(
         auto producer = backward_grad_fn(loss);
         if (loss->grad_hook && is_target[0] && producer && grad_nodes.has(producer))
             observed_target_grads[loss] = grads[0].ptr;
-        apply_tensor_hook(loss, grads[0]);
+        if (!loss->flag(VarFlags::_unrecorded_view))
+            apply_tensor_hook(loss, grads[0]);
     }
 
     NodeIndex consumed_grouped_ops;
@@ -289,6 +340,7 @@ vector<VarPtr> grad(
         for (auto it : var->outputs_with_index()) {
             Op* op = it.op;
             if (!grad_nodes.has(op)) continue;
+            if (is_requires_grad_disabled_edge(var, op)) continue;
             if (op->flag(OpFlags::_grads) && consumed_grouped_ops.has(op))
                 continue;
 
@@ -303,7 +355,8 @@ vector<VarPtr> grad(
                 snapshot.input_grad_ids.reserve(op->inputs().size());
                 for (Var* in : op->inputs())
                     snapshot.input_grad_ids.push_back(
-                        gvar_index.has(in) ? gvar_index.get(in) : -1);
+                        !is_requires_grad_disabled_edge(in, op)
+                            && gvar_index.has(in) ? gvar_index.get(in) : -1);
             }
             outgoing.push_back(move(snapshot));
         }
@@ -337,7 +390,7 @@ vector<VarPtr> grad(
                 for (int i=0; i<n_i; i++) {
                     int id = snapshot.input_grad_ids[i];
                     if (id>=0) {
-                        auto& din = dins[i];
+                        auto din = normalize_recorded_gradient(gvars[id], move(dins[i]));
                         auto& grad = grads[id];
                         if (din && grad) {
                             grad = make_binary(grad, din, ns_add);
@@ -354,7 +407,8 @@ vector<VarPtr> grad(
                     trace_grad_op = op;
                     VarPtr dvar = make_grad(
                         op, out, dout, var, snapshot.input_index);
-                    if (dvar && dvar->num>=0 && var->num>0)
+                    dvar = normalize_recorded_gradient(var, move(dvar));
+                    if (dvar && dvar->num>=0 && var->num>0 && !var->recorded_gradient_shape)
                         // var->num == 0 represents a any match var
                         ASSERT(dvar->num==var->num && dvar->shape.size()==var->shape.size())
                         << "dvar" << dvar << "var" << var;

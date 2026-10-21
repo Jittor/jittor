@@ -3,6 +3,7 @@ import ast
 import copy
 import hashlib
 import importlib.util
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -28,6 +29,22 @@ def collector():
 @pytest.fixture
 def measurement():
     return load('component_measure')
+
+
+def test_comparison_reaudit_preserves_existing_evidence(tmp_path, collector):
+    path = tmp_path / 'complete-comparison.json'
+    value = {'case': 'component', 'status': 'passed', 'rows': []}
+    collector.write_comparison(path, value)
+    original = path.read_bytes()
+    # A fixed timestamp distinguishes reuse from rewriting identical content.
+    os.utime(path, ns=(1_000_000_000, 1_000_000_000))
+    collector.write_comparison(path, value)
+    assert path.read_bytes() == original
+    assert path.stat().st_mtime_ns == 1_000_000_000
+    with pytest.raises(ValueError, match='Existing comparison differs'):
+        collector.write_comparison(path, dict(value, status='changed'))
+    assert path.read_bytes() == original
+    assert path.stat().st_mtime_ns == 1_000_000_000
 
 
 def test_binding_rejects_missing_file_stale_baseline_and_changed_version(collector):
@@ -73,15 +90,17 @@ def test_array_comparison_refuses_incomplete_or_invalid_gradients(tmp_path, fail
 
 
 def test_actual_installed_sources_are_hashed_and_corruption_refused(tmp_path, measurement):
-    package = tmp_path / 'torchmetrics'
+    # Test the generic hashing helper; real library installation profiles have
+    # separate fixed-wheel/source/receipt tests, including Diffusers.
+    package = tmp_path / 'fixture_component'
     package.mkdir()
     path = package / '__init__.py'
-    path.write_text('__version__ = "1.7.4"\n')
+    path.write_text('__version__ = "0.0.0"\n')
     (package / 'binary.so').write_bytes(b'actual installed bytes')
-    source = {'repo': 'torchmetrics', 'upstream': {'version': '1.7.4'},
-              'package_sources': [{'path': 'src/torchmetrics/__init__.py',
+    source = {'repo': 'fixture_component', 'upstream': {'version': '0.0.0'},
+              'package_sources': [{'path': 'src/fixture_component/__init__.py',
                                    'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}]}
-    module = SimpleNamespace(__file__=str(path), __version__='1.7.4')
+    module = SimpleNamespace(__file__=str(path), __version__='0.0.0')
     observed = measurement.installed_distribution(source, module)
     assert set(observed['installed_files_sha256']) == {'__init__.py', 'binary.so'}
     path.write_text('changed source\n')
@@ -116,7 +135,8 @@ def test_every_phase_retains_the_actual_baseline_weight_snapshot(tmp_path, colle
 def test_registry_members_are_actually_called_by_maintained_builders(collector):
     tree = ast.parse((ROOT / 'compat/tests/torch/_ecosystem_cases.py').read_text())
     for spec in collector.SPECS.values():
-        builder = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == '_' + spec['case'])
+        builder = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                       and n.name == spec.get('builder', '_' + spec['case']))
         calls = {n.func.id for n in ast.walk(builder) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
         assert set(spec['members']) <= calls
     assert collector.SPECS['torchmetrics']['level'] == 2

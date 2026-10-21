@@ -2,6 +2,7 @@
 
 import argparse
 import contextlib
+import ctypes
 import hashlib
 import json
 import os
@@ -34,6 +35,8 @@ def main(argv=None):
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--jittor-root", type=Path, default=Path(__file__).resolve().parents[4])
     p.add_argument("--upstream", type=Path, required=True)
+    p.add_argument("--source-proof", type=Path,
+                   help="Actual local-wheel/build/Torch provenance configuration for protocol admission")
     p.add_argument(
         "--allow-dirty",
         action="store_true",
@@ -64,6 +67,14 @@ def main(argv=None):
     # The runtime/cache namespace is project-specific. Match the selected source
     # root rather than silently rebuilding under the caller's working directory.
     os.chdir(checkout)
+    source_proof = None
+    if args.source_proof:
+        sys.path.insert(0, str(checkout / "agent/skills/torch-compat-repo-runbook/scripts"))
+        from _flash_attention_scorecard import capture_implementation, source_descriptor, source_files
+
+        source_proof = source_descriptor(args.source_proof)
+        assert upstream == Path(json.loads(args.source_proof.read_text())['upstream']).resolve()
+        framework_files = source_files(checkout)
 
     if args.runtime == "jittor":
         import jittor as jt
@@ -82,7 +93,8 @@ def main(argv=None):
         assert "jittor" not in sys.modules, "the oracle must run in an independent interpreter"
         assert not getattr(flash_attn, "_jittor_flash_attn_stub", False)
         assert flash_attn.__version__ == "2.7.4.post1"
-        assert Path(flash_attn.__file__).resolve().parent == upstream / "flash_attn"
+        if source_proof is None:
+            assert Path(flash_attn.__file__).resolve().parent == upstream / "flash_attn"
         import flash_attn_2_cuda as extension
 
         assert Path(extension.__file__).suffix in (".so", ".pyd")
@@ -92,13 +104,19 @@ def main(argv=None):
 
         facade_source = checkout / "compat/shim/resources/stubs/flash_attn"
         facade_package = Path(flash_attn.__file__).resolve().parent
-        for source in facade_source.glob("*.py"):
-            assert (facade_package / source.name).read_bytes() == source.read_bytes(), source.name
+        for source in facade_source.rglob("*.py"):
+            assert (facade_package / source.relative_to(facade_source)).read_bytes() == source.read_bytes(), source.name
         backend = flash_attention.load_backend()
+        if backend is None:
+            raise RuntimeError('Required native FlashAttention backend failed: ' + str(flash_attention.last_error()))
         assert backend._flashattn_jittor_official
         extension = backend._flashattn_jittor_low_level
         assert Path(extension.__file__).suffix in (".so", ".pyd")
     assert torch.cuda.is_available()
+    implementation = None
+    if source_proof is not None:
+        implementation = capture_implementation(checkout, source_proof, args.runtime, torch,
+                                               flash_attn, extension, backend if args.runtime == "jittor" else None)
     torch.set_num_threads(2)
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.backends.cudnn.allow_tf32 = False
@@ -125,10 +143,23 @@ def main(argv=None):
     cu = torch.tensor([0, 4, 11], device="cuda", dtype=torch.int32) if varlen else None
     optimizer = torch.optim.SGD(parameters, lr=0.01)
     result = {f"initial_{i}": a for i, a in enumerate(arrays)}
+    observations = []
+
+    def observe(name, value):
+        assert value.is_cuda, name
+        ordinal = ctypes.c_int(-1)
+        rc = ctypes.CDLL('libcuda.so.1').cuPointerGetAttribute(
+            ctypes.byref(ordinal), 9, ctypes.c_void_p(value.data_ptr()))
+        assert rc == 0 and ordinal.value == 0, (name, rc, ordinal.value)
+        observations.append({'label': name, 'device': 'cuda', 'pointer_device': ordinal.value,
+                             'dtype': str(value.dtype), 'shape': list(value.shape)})
 
     def capture(name, value):
         assert value is not None, name
         assert value.is_cuda, (name, str(value.device))
+        if source_proof is not None:
+            step, field = name.split('_', 1)
+            observe(step + '/' + field, value)
         result[name] = value.detach().float().cpu().numpy().copy()
         assert np.isfinite(result[name]).all(), name
 
@@ -141,6 +172,9 @@ def main(argv=None):
             v = parameters[2].to(getattr(torch, args.dtype))
             for value in (q, k, v):
                 assert value.is_cuda and value.dtype == getattr(torch, args.dtype)
+            if source_proof is not None:
+                for name, value in zip(('q', 'k', 'v'), (q, k, v)):
+                    observe(f'step{step}/' + name, value)
             kwargs = dict(dropout_p=0.0, causal=args.causal)
             if args.api.endswith("varlen_qkvpacked_func"):
                 inputs = (torch.stack((q, k, v), dim=1), cu, 7)
@@ -196,7 +230,6 @@ def main(argv=None):
     if args.runtime == "jittor":
         record["backend"] = flash_attention.backend_name()
     import platform
-    import importlib.metadata
 
     assert git_value(checkout, "rev-parse", "HEAD") == source_commit, (
         "source commit changed during execution"
@@ -249,13 +282,12 @@ def main(argv=None):
         "actual_device": torch.cuda.get_device_name(0),
         "torch_cuda": getattr(torch.version, "cuda", None),
         "torch_file": torch.__file__,
-        "nvidia_wheels": {
-            dist.metadata["Name"]: dist.version
-            for dist in importlib.metadata.distributions()
-            if (dist.metadata.get("Name") or "").startswith("nvidia-")
-        },
+        "nvidia_wheels": {},
     }
     record["runtime_threads"] = torch.get_num_threads()
+    sys.path.insert(0, str(checkout / "agent/skills/torch-compat-repo-runbook/scripts"))
+    from _flash_attention_scorecard import selected_nvidia_wheels
+    record['platform']['nvidia_wheels'] = selected_nvidia_wheels()
     cpu_info = Path("/proc/cpuinfo")
     if cpu_info.is_file():
         for line in cpu_info.read_text().splitlines():
@@ -285,6 +317,8 @@ def main(argv=None):
             [cxx, "--version"], text=True, stderr=subprocess.STDOUT
         ).strip(),
     }
+    from _flash_attention_scorecard import bound
+    record['platform']['compiler_executables'] = {'nvcc': bound(nvcc), 'cxx': bound(cxx)}
 
     record["script_sha256"] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     sources = subprocess.check_output(
@@ -322,6 +356,50 @@ def main(argv=None):
     }
     assert record["measurement"]["trainable_parameters"] == list(names)
     assert record["measurement"]["input_gradients"] == ["noise"]
+    if source_proof is not None:
+        from _flash_attention_scorecard import digest, recheck, selected_nvidia_metadata
+
+        assert source_files(checkout) == framework_files, "framework/tool source changed during execution"
+        recheck(implementation['external_files'])
+        maps = Path('/proc/self/maps')
+        libraries = {line.split()[-1] for line in maps.read_text().splitlines()
+                     if '/' in line and any(name in line.split()[-1] for name in
+                                             ('libcu', 'libnv', 'libnccl', 'libtorch', 'libc10'))}
+        runtimes = {str(Path(p).resolve()) for p in libraries if Path(p).name.startswith('libcudart.so')}
+        assert len(runtimes) == 1, runtimes
+        runtime_path = runtimes.pop()
+        runtime_version = ctypes.c_int(-1)
+        assert ctypes.CDLL(runtime_path).cudaRuntimeGetVersion(ctypes.byref(runtime_version)) == 0
+        record.update(source_descriptor=source_proof, source_files=framework_files,
+                      implementation=implementation, runtime_pid=os.getpid(),
+                      runtime_interpreter={'python': sys.executable, 'prefix': sys.prefix, 'argv': sys.argv},
+                      device_observations=observations,
+                      environment={name: os.environ.get(name) for name in ('HOME', 'JITTOR_HOME', 'TMPDIR', 'XDG_CACHE_HOME')},
+                      cuda_runtime={'path': runtime_path, 'version': runtime_version.value},
+                      mapped_libraries={str(Path(p).resolve()): digest(p) for p in sorted(libraries)})
+        record['platform']['nvidia_metadata'] = selected_nvidia_metadata()
+        if args.runtime == 'jittor':
+            native_binaries = {line.split()[-1] for line in maps.read_text().splitlines()
+                               if '/' in line and line.split()[-1].endswith('.so')
+                               and any(str(Path(os.environ[name]).resolve()) in line.split()[-1]
+                                       for name in ('JITTOR_HOME', 'JITTOR_TORCH_CACHE_ROOT'))}
+            assert any('jittor_core' in p for p in native_binaries), native_binaries
+            implementation['external_files'].update({str(Path(p).resolve()): digest(p) for p in native_binaries})
+        driver = ctypes.CDLL('libcuda.so.1')
+        native_device = ctypes.c_int(-1)
+        assert driver.cuDeviceGet(ctypes.byref(native_device), 0) == 0
+        uuid = (ctypes.c_ubyte * 16)()
+        assert driver.cuDeviceGetUuid_v2(ctypes.byref(uuid), native_device) == 0
+        hex_uuid = bytes(uuid).hex()
+        uuid_string = 'GPU-' + '-'.join((hex_uuid[:8], hex_uuid[8:12], hex_uuid[12:16],
+                                        hex_uuid[16:20], hex_uuid[20:]))
+        visible = os.environ['CUDA_VISIBLE_DEVICES']
+        rows = [r.split(', ') for r in record['platform']['gpu_driver_inventory']]
+        allocated = [r for r in rows if visible in (r[0], r[2])]
+        assert len(allocated) == 1 and allocated[0][2] == uuid_string
+        record['physical_device_uuid'] = uuid_string
+        from _flash_attention_scorecard import validate_implementation
+        validate_implementation(record, source_proof, checkout, args.runtime)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     np.savez(args.output, **result)
     record["artifact_sha256"] = hashlib.sha256(args.output.read_bytes()).hexdigest()

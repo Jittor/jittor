@@ -20,6 +20,12 @@
 #include "utils/hash.h"
 #include "utils/cache_compile.h"
 #include "utils/str_utils.h"
+#include <mutex>
+#include <unordered_map>
+#include <tuple>
+#ifndef _WIN32
+#include <sys/stat.h>
+#endif
 
 namespace jittor {
 namespace jit_compiler {
@@ -270,6 +276,42 @@ static string add_dependency_flags(const string& cmd, const string& output_name,
         "\"" + cmd.substr(flag_pos);
 }
 
+// The per-dependency fragment of the cache key -- "missing", or the content
+// hash. build_cache_key runs once per kernel, and a batch builds many distinct
+// kernels that share the same runtime headers, so without memoization each
+// shared header is stat'd, existence-checked (file_exist) and SHA256'd once per
+// kernel. Memoize the whole fragment keyed on (size, mtime) from one stat(); on
+// a miss file_exist stays the authority on existence, so the fragment is
+// byte-identical to the un-memoized one and build/no-build decisions are
+// unchanged. Measured on a DeepMill++ detect step: ~22% of host self-time was
+// the hashing and ~3.5% the per-kernel file_exist.
+static string dep_key(const string& name) {
+#ifndef _WIN32
+    struct stat st;
+    if (stat(name.c_str(), &st) == 0) {
+        static std::mutex mtx;
+        static std::unordered_map<string, std::tuple<int64, int64, int64, string>> memo;
+        const int64 sz = (int64)st.st_size;
+        const int64 sec = (int64)st.st_mtim.tv_sec;
+        const int64 nsec = (int64)st.st_mtim.tv_nsec;
+        {
+            std::lock_guard<std::mutex> g(mtx);
+            auto it = memo.find(name);
+            if (it != memo.end() && std::get<0>(it->second) == sz
+                && std::get<1>(it->second) == sec && std::get<2>(it->second) == nsec)
+                return std::get<3>(it->second);
+        }
+        string frag = file_exist(name) ? content_hash(read_all(name)) : string("missing");
+        {
+            std::lock_guard<std::mutex> g(mtx);
+            memo[name] = std::make_tuple(sz, sec, nsec, frag);
+        }
+        return frag;
+    }
+#endif
+    return file_exist(name) ? content_hash(read_all(name)) : string("missing");
+}
+
 static vector<string> read_dependencies(const string& dependency_name) {
     auto source = read_all(dependency_name);
     if (source.empty()) return {};
@@ -309,11 +351,7 @@ static string build_cache_key(const string& cmd, vector<string> input_names,
             cache_key += content_hash(in_memory_content) + "\n";
             continue;
         }
-        if (!file_exist(name)) {
-            cache_key += "missing\n";
-            continue;
-        }
-        cache_key += content_hash(read_all(name)) + "\n";
+        cache_key += dep_key(name) + "\n";
     }
     return cache_key;
 }

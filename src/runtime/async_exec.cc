@@ -21,6 +21,7 @@
 #include <Python.h>
 #include "core/node.h"
 #include "runtime/async_exec.h"
+#include "runtime/launch_diagnostics.h"
 
 namespace jittor {
 
@@ -325,6 +326,7 @@ bool async_exec_placed() {
 
 GraphEntryScope::GraphEntryScope(bool may_release_gil) : outer(top_scope), locked(false) {
     top_scope = this;
+    enter_launch_origin_entry(outer_origin_active, outer_origin);
     // The worker reaches a binding only from the compiler's Python callbacks,
     // in the middle of its own batch: not a second user.
     const void* me = binding_thread_token();
@@ -343,6 +345,7 @@ GraphEntryScope::GraphEntryScope(bool may_release_gil) : outer(top_scope), locke
 }
 
 GraphEntryScope::~GraphEntryScope() {
+    leave_launch_origin_entry(outer_origin_active, outer_origin);
     if (locked) graph_mutation_mutex().unlock();
     top_scope = outer;
 }

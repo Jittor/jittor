@@ -55,7 +55,9 @@ unordered_map<string,string> common_op_type_cuda_map = {
     {"atan", "@if(@strcmp($1,float32)==0,(($1) ::atanf(($2))),(($1) ::atan(($2))))"},
     {"tanh", "@if(@strcmp($1,float32)==0,(($1) ::tanhf(($2))),(($1) ::tanh(($2))))"},
     {"atanh", "@if(@strcmp($1,float32)==0,(($1) ::atanhf(($2))),(($1) ::atanh(($2))))"},
-    {"sigmoid", "(($1) (1.0f/(1.0f+::expf((::min($1(-($2)), $1(@if(@strcmp($1,float32)==0,30,300))))))))"},
+    // Double inputs must reach double exp; expf silently narrows their
+    // forward values and every derivative that reuses the sigmoid output.
+    {"sigmoid", "(($1) (1.0f/(1.0f+@if(@strcmp($1,float64)==0,::exp,::expf)((::min($1(-($2)), $1(@if(@strcmp($1,float32)==0,30,300))))))))"},
     {"relu", "((($1)($2)>($1)(0.0f))?($1)($2):($1)(0.0f))"},
     {"erf", "@if(@strcmp($1,float32)==0,(($1) ::erff(($2))),(($1) ::erf(($2))))"},
     {"erfinv", "@if(@strcmp($1,float32)==0,(($1) ::erfinvf(($1)($2))),(($1) ::erfinv(($1)($2))))"},

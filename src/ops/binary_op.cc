@@ -438,6 +438,47 @@ unordered_set<string> binary_ops = {
     "bitwise_xor",
 };
 
+// Only the side that is actually short of the result shape gets a
+// BroadcastToOp. `BroadcastToOp(x, y, {})` answers `need_broadcast` itself and
+// forwards its input when the answer is no -- and when the other operand's
+// shape is known, a dynamic one still needing the op. So building it for an
+// operand that already has the result shape constructs an op purely to throw
+// it away, and one operand is always in that position for the commonest
+// broadcasts there are: `x * 0.5`, `x + bias`, `x * mask`.
+static VarPtr broadcast_binary(Var* x, Var* y, NanoString op) {
+    VarPtr xh, yh;
+    Var* xp = x;
+    Var* yp = y;
+    if (y->num < 0 || BroadcastToOp::need_broadcast(x, y->shape)) {
+        xh = make_broadcast_to(x, y, {});
+        xp = xh;
+    }
+    if (x->num < 0 || BroadcastToOp::need_broadcast(y, x->shape)) {
+        yh = make_broadcast_to(y, x, {});
+        yp = yh;
+    }
+    return make_binary(xp, yp, op);
+}
+
+VarPtr BinaryOp::forward_before_construct(Var* x, Var* y, NanoString op) {
+    // The constructor's shape walk, deciding only whether it broadcasts. A
+    // mismatch is the constructor's to report, with its message.
+    auto xdim = x->shape.size();
+    auto ydim = y->shape.size();
+    bool need_broadcast = xdim != ydim;
+    for (size_t i=0; i<xdim && i<ydim; i++) {
+        auto xshape = x->shape[xdim-i-1];
+        auto yshape = y->shape[ydim-i-1];
+        if ((xshape == 1 || yshape == 1) && (xshape != yshape)) {
+            need_broadcast = true;
+            continue;
+        }
+        if (xshape != yshape) return VarPtr();
+    }
+    if (!need_broadcast) return VarPtr();
+    return broadcast_binary(x, y, op);
+}
+
 BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
     auto xdim = x->shape.size();
     auto ydim = y->shape.size();
@@ -454,35 +495,26 @@ BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
             << "(broadcasting requires matching dims or one of them to be 1).";
     }
     if (need_broadcast) {
-        // Only the side that is actually short of the result shape gets a
-        // BroadcastToOp. `BroadcastToOp(x, y, {})` answers `need_broadcast`
-        // itself and forwards its input when the answer is no -- and when the
-        // other operand's shape is known, a dynamic one still needing the op.
-        // So building it for an operand that already has the result shape
-        // constructs an op purely to throw it away, and one operand is always
-        // in that position for the commonest broadcasts there are: `x * 0.5`,
-        // `x + bias`, `x * mask`.
-        VarPtr xh, yh;
-        Var* xp = x;
-        Var* yp = y;
-        if (y->num < 0 || BroadcastToOp::need_broadcast(x, y->shape)) {
-            xh = make_broadcast_to(x, y, {});
-            xp = xh;
-        }
-        if (x->num < 0 || BroadcastToOp::need_broadcast(y, x->shape)) {
-            yh = make_broadcast_to(y, x, {});
-            yp = yh;
-        }
-        auto zp = make_binary(xp, yp, op);
-        forward(zp);
+        // Reached only when the op is constructed directly: the op maker asks
+        // `forward_before_construct` first, which takes this branch without
+        // building the op at all.
+        forward(broadcast_binary(x, y, op));
         return;
     }
     {
         NanoVector axes;
         vector<VarPtr> sources;
         if (storage_layout_operands({x, y}, axes, sources)) {
-            forward(storage_view_transpose(make_binary(sources[0], sources[1], op), axes));
-            return;
+            if (!storage_layout_records_grad({x, y})) {
+                forward(storage_view_transpose(make_binary(sources[0], sources[1], op), axes));
+                return;
+            }
+            // Keep the real logical input identities for grad(). Internal
+            // transpose aliases are forward implementation details: .data
+            // may replace x/y's allocation after forward has finished.
+            StorageLayoutForwardScope scope;
+            layout_value = storage_view_transpose(
+                make_binary(sources[0], sources[1], op), axes);
         }
     }
 
@@ -536,7 +568,7 @@ BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
 
     set_flag(OpFlags::_cpu);
     set_flag(OpFlags::_cuda);
-    set_type(OpType::element);
+    set_type(layout_value ? OpType::other : OpType::element);
     ns = op;
     USER_CHECK(ns.is_binary()) << "binary requires a binary operation, got" << ns;
     // Bitwise/shift ops are only defined for integer/boolean dtypes. On a float input the
@@ -624,6 +656,7 @@ VarPtr dirty_clone_broadcast(Var* v) {
 }
 
 VarPtr BinaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
+    if (layout_value && v_index >= 2) return nullptr;
     if (ns == ns_add) return dout;
     if (ns == ns_subtract) {
         if (v_index == 0) 
@@ -718,12 +751,28 @@ VarPtr BinaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 }
 
 void BinaryOp::infer_shape() {
+    if (layout_value) {
+        ASSERT(z->dtype() == layout_value->dtype())
+            << "Layout propagation changed binary output dtype";
+        if (_inputs.size() == 2) add_inputs(vector<Var*>{layout_value.ptr});
+        z->set_shape(layout_value->shape);
+        z->storage_strides = layout_value->storage_strides;
+        z->share_with(layout_value);
+        return;
+    }
     // Construction inserts explicit broadcasts. Their data-dependent extent
     // may become concrete later, before this elementwise node is executed.
     z->set_shape(x->shape);
 }
 
+void BinaryOp::run() {
+    // The native entry is only the alias boundary. The forward dependency
+    // executed the real elementwise layout kernel on its declared device.
+    ASSERT(layout_value && z->mem_ptr == layout_value->mem_ptr);
+}
+
 void BinaryOp::jit_prepare(JK& jk) {
+    if (layout_value) return; // Forward math ran in the existing layout graph.
     bool xs = !x->is_contiguous(), ys = !y->is_contiguous();
     jk << "«Tx:" << x->dtype()
         << "«Ty:" << y->dtype()

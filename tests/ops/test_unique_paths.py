@@ -26,7 +26,10 @@ contract (sorted uniques, plus inverse and counts).
 """
 
 from _helpers import capability as _test_capability
+from _helpers.child_process import run_child_script
 
+import json
+import textwrap
 import unittest
 
 import numpy as np
@@ -100,6 +103,39 @@ class _Unique:
                     got = jt.unique(jt.array(raw.astype(dtype),
                                              dtype=dtype)).numpy()
                 np.testing.assert_array_equal(got, np.array([1, 2, 3], dtype))
+
+    def test_nan_in_the_first_sorted_row(self):
+        """A NaN sorted to the front used to shift every CUDA inverse index.
+
+        Row 0's "starts a new value" flag was computed as
+        ``not all(x[0:1] == x[0:1])``, which is True for a NaN, and the CUDA
+        kernel's scan reads that flag: three NaNs came back with inverse
+        [1, 2, 3], and ``return_counts`` then scattered past the end of
+        ``counts`` -- a sticky launch failure that ends the CUDA context, hence
+        the child process. An all-NaN input puts a NaN first on every path.
+        Each NaN is its own value, as in torch and in the CPU kernel; the order
+        among NaNs is not specified, so the inverse is checked as a permutation.
+        """
+        for shape in ((3,), (1,), (2, 2)):
+            with self.subTest(shape=shape):
+                n = int(np.prod(shape))
+                source = textwrap.dedent(f"""
+                    import json, jittor as jt
+                    with jt.flag_scope(use_cuda={self.use_cuda}):
+                        x = jt.full({shape!r}, float("nan"), "float32")
+                        v, i, c = jt.unique(x, True, True, True)
+                        print("RESULT", json.dumps([v.numpy().tolist(),
+                                                    i.numpy().reshape(-1).tolist(),
+                                                    c.numpy().tolist()]))
+                """)
+                result = run_child_script(source, text=True, timeout=300)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                line = [l for l in result.stdout.splitlines() if l.startswith("RESULT ")][-1]
+                values, inverse, counts = json.loads(line[len("RESULT "):])
+                self.assertEqual(len(values), n)
+                self.assertTrue(np.isnan(np.array(values, dtype="float32")).all(), values)
+                self.assertEqual(sorted(inverse), list(range(n)))
+                self.assertEqual(counts, [1] * n)
 
     def test_empty_and_single(self):
         for raw in (np.array([], dtype="float32"),

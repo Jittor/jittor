@@ -652,6 +652,7 @@ DEF_IS(VarHolder*, PyObject*) to_py_object(T a) {
     // will move and delete a
     new (ptr) typename std::remove_pointer<T>::type (a);
     GET_INITED_FLAG(typename std::remove_pointer<T>::type, 1, obj.obj) = 1;
+    bind_python_tensor_owner(obj.obj);
     schedule_pending_from_python(
         reinterpret_cast<typename std::remove_pointer<T>::type*>(ptr));
     return obj.release();

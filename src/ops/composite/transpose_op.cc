@@ -32,6 +32,7 @@ DEFINE_FLAG(int, transpose_storage_view, 0,
     "feed elementwise work, and measure.");
 
 TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
+    const bool as_view = transpose_storage_view != 0;
     // A rank-0 var has no axes to permute, and the empty permutation of
     // nothing is itself. Both references agree: NumPy's `transpose` returns
     // shape `()`, and torch's `.T` says so outright -- "This function is the
@@ -42,7 +43,7 @@ TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
     //
     // Only the *empty* permutation forwards: torch rejects `permute((0,))` on
     // a rank-0 tensor, and so should the rank check further down.
-    if (!x->shape.size() && !axes.size()) {
+    if (!as_view && !x->shape.size() && !axes.size()) {
         forward(x);
         return;
     }
@@ -54,7 +55,7 @@ TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
     // identity: `axes=[0]` on a 2-D var, or `[0,1,2]` on a 2-D var, returned x
     // unchanged and never reached infer_shape, so the axes checks there could
     // not fire and a wrong `axes` silently did nothing.
-    if (i==axes.size() && axes.size() && axes.size()==x->shape.size()) {
+    if (!as_view && i==axes.size() && axes.size() && axes.size()==x->shape.size()) {
         forward(x);
         return;
     }
@@ -68,7 +69,7 @@ TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
     // bytes under another shape. Decoding one token transposes [b, 1, h, d]
     // into [b, h, 1, d] three times a layer; each was a copy kernel -- 10 ms of
     // device time and 10k launches over a 128-token Qwen3 decode.
-    if (x->num >= 0 && axes.size() == xdim && x->is_contiguous()) {
+    if (!as_view && x->num >= 0 && axes.size() == xdim && x->is_contiguous()) {
         int64 seen = 0;
         int last = -1;
         bool kept = true;
@@ -89,7 +90,6 @@ TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
         }
     }
     // A view is asked for: nothing below may turn it into a copy.
-    const bool as_view = transpose_storage_view != 0;
     // The copying kernels below read a dense input. Before strided inputs
     // were accepted this copy was made for every transpose by the op
     // constructor -- including a view's, which then permuted a fresh dense
@@ -135,7 +135,7 @@ TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
 
 void TransposeOp::infer_shape() {
     auto xdim = x->shape.size();
-    USER_CHECK(xdim);
+    USER_CHECK(xdim || (storage_view && !axes.size()));
     if (!axes.size()) {
         for (int i=0; i<(int)xdim; i++)
             axes.push_back(xdim-1-i);

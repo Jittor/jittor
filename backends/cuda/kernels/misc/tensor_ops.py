@@ -322,6 +322,7 @@ def unique_compact_header():
             #include <thrust/sort.h>
 
             #include <thrust/scan.h>
+            #include <thrust/fill.h>
             #include <core/executor.h>
 
             @alias(input_sorted, in0)
@@ -348,8 +349,11 @@ def unique_compact_source(need_inverse):
                                         indice_ptr = thrust::device_pointer_cast(indice_p);
             thrust::device_ptr<input_sorted_type> input_ptr = thrust::device_pointer_cast(input_sorted_p);
 
-            if (return_inverse) {
-                thrust::inclusive_scan(diff_ptr, diff_ptr + dimlen, sum_ptr);
+            // diff has dimlen - 1 entries: diff[i] is whether row i + 1 starts
+            // a new value. Row 0 is value 0.
+            if (return_inverse && dimlen) {
+                thrust::fill_n(sum_ptr, 1, 0);
+                thrust::inclusive_scan(diff_ptr, diff_ptr + dimlen - 1, sum_ptr + 1);
                 thrust::scatter(sum_ptr, sum_ptr + dimlen, indice_ptr, inverse_ptr);
             }
 

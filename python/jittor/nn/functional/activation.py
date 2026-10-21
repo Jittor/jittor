@@ -334,6 +334,14 @@ def silu(x, inplace=False):     # inplace: accepted for torch/mmcv compat, ignor
     fast = try_dispatch("nn.silu", x, inplace=inplace)
     if fast is not None:
         return fast
+    if _jittor_dtype_name(x.dtype) in ("float16", "bfloat16"):
+        # SiLU rounds once at its public boundary. A narrow sigmoid followed
+        # by a narrow multiply adds a rounding step absent from the opmath
+        # implementation. Keep native AD connected through the widening cast.
+        dtype = x.dtype
+        with jt.flag_scope(amp_reg=0):
+            wide = x.float32()
+            return (wide * wide.sigmoid()).cast(dtype)
     return x * x.sigmoid()
 
 

@@ -17,6 +17,20 @@ def read(path):
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
+def measured_probe_hash(root, baseline):
+    """Bind a frozen measured checkout separately from the current auditor."""
+    root = Path(root).resolve()
+    if re.fullmatch(r"[0-9a-f]{40}", baseline) is None:
+        raise ValueError("Measured baseline must be a full commit SHA")
+    head = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
+    if head != baseline:
+        raise ValueError("Measured root HEAD does not match baseline")
+    if subprocess.check_output(["git", "-C", str(root), "status", "--porcelain", "--untracked-files=no"]):
+        raise ValueError("Measured root has tracked changes")
+    script = "agent/skills/flash-attention-torch-compat/scripts/flash_training_probe.py"
+    return hashlib.sha256(subprocess.check_output(["git", "-C", str(root), "show", baseline + ":" + script])).hexdigest()
+
+
 def artifact(role, path):
     path = Path(path).resolve()
     return {"role": role, "path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
@@ -55,7 +69,8 @@ def platform_from_metadata(candidate, reference):
             "native_aliases": candidate["native_flag_aliases"]}
 
 
-def collect_case(directory, inventory, baseline, probe_hash, comparison, report, command, output):
+def collect_case(directory, inventory, baseline, probe_hash, comparison, report, command, output, *, root=None):
+    root = Path(root).resolve() if root is not None else Path(__file__).resolve().parents[4]
     directory = Path(directory)
     metadata = {}
     results = []
@@ -84,6 +99,9 @@ def collect_case(directory, inventory, baseline, probe_hash, comparison, report,
                 if meta["source_hashes"].get(source["path"]) != source["sha256"]:
                     raise ValueError("Unbound upstream source: " + source["path"])
             metadata[runtime, label] = meta
+            if 'configuration' in inventory:
+                from _flash_attention_scorecard import validate_implementation
+                validate_implementation(meta, inventory, root, runtime)
             with np.load(directory / (runtime + "-" + label + ".npz"), allow_pickle=False) as arrays:
                 for name in arrays.files:
                     if not np.isfinite(arrays[name]).all():
@@ -104,19 +122,25 @@ def collect_case(directory, inventory, baseline, probe_hash, comparison, report,
             if not any(not np.array_equal(before[f"step{step}_output"], after[f"step{step}_output"]) for step in range(3)):
                 raise ValueError("Perturbation did not affect actual attention outputs")
     candidate, reference = metadata["jittor", "base"], metadata["torch", "base"]
+    if 'configuration' in inventory:
+        pids = {meta['runtime_pid'] for meta in metadata.values()}
+        if len(pids) != 4 or len({m['physical_device_uuid'] for m in metadata.values()}) != 1:
+            raise ValueError('Runtime workers must be independent and use the same physical device')
     measured = candidate["measurement"]
     platform = platform_from_metadata(candidate, reference)
-    platform_path = output / (directory.name + "-platform.json")
-    platform_path.write_text(json.dumps(platform, indent=2) + "\n")
+    platform_path = Path(output) / (directory.name + "-platform.json") if output is not None else None
+    if platform_path is not None:
+        platform_path.write_text(json.dumps(platform, indent=2) + "\n")
     roles = {"reference": "torch-base.npz", "candidate": "jittor-base.npz", "comparison": "base-comparison.json",
              "base-comparison": "base-comparison.json", "perturb-comparison": "perturb-comparison.json",
              "training-reference-metadata": "training-reference-metadata.json",
              "training-candidate-metadata": "training-candidate-metadata.json"}
     bindings = [artifact(role, directory / name) for role, name in roles.items()]
     bindings.extend(artifact("raw/" + name, directory / name) for name in sorted(expected - set(roles.values())))
-    bindings.append(artifact("platform", platform_path))
+    if platform_path is not None:
+        bindings.append(artifact("platform", platform_path))
     limit = max(row["limit"] for row in results)
-    return {"repo": "flash-attention", "case": measured["case"], "status": "passed", "level": 3, "tier": "core",
+    record = {"repo": "flash-attention", "case": measured["case"], "status": "passed", "level": 3, "tier": "core",
             "jittor_commit": baseline, "upstream": inventory["upstream"],
             "downstream_versions": {"candidate": candidate["flash_attn"], "oracle": reference["flash_attn"]},
             "registry_refs": [{"repo": "flash-attention", "axis": "attention_api", "member": candidate["api"]}],
@@ -135,6 +159,10 @@ def collect_case(directory, inventory, baseline, probe_hash, comparison, report,
             "evidence": {"command": command, "report": report,
                          "gate_nodeid": "compat/tests/torch/test_ecosystem_flash_attention.py::test_real_flash_attention_training",
                          "artifacts": bindings}}
+    if 'configuration' in inventory:
+        from _flash_attention_scorecard import protocol
+        record.update(record_kind='protocol', registry_refs=[], protocol=protocol(candidate['api'], candidate['dtype']))
+    return record
 
 
 def main():
@@ -142,6 +170,8 @@ def main():
     for name in ("root", "upstream", "evidence-dir", "output-dir"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--baseline", required=True)
+    parser.add_argument("--source-proof", type=Path,
+                        help="Fresh independent implementation proof; historical registry records remain unchanged")
     parser.add_argument("--report", default="docs/results/2026-10-15-flash-attention-training-oracles.md")
     args = parser.parse_args()
     root = args.root.resolve()
@@ -149,14 +179,17 @@ def main():
     output = args.output_dir.resolve()
     if output == root or root in output.parents or output == evidence or evidence in output.parents:
         parser.error("scorecard products must stay outside source and immutable runtime evidence")
-    tools = root / "agent/skills/torch-compat-repo-runbook/scripts"
+    auditor_root = Path(__file__).resolve().parents[4]
+    tools = auditor_root / "agent/skills/torch-compat-repo-runbook/scripts"
     sys.path.insert(0, str(tools))
     import registry_inventory
     import audit_coverage
     inventory = registry_inventory.inventory("flash-attention", args.upstream.resolve())
-    script = "agent/skills/flash-attention-torch-compat/scripts/flash_training_probe.py"
-    probe_hash = hashlib.sha256(subprocess.check_output(["git", "-C", str(root), "show", args.baseline + ":" + script])).hexdigest()
-    path = root / "agent/skills/flash-attention-torch-compat/scripts/compare_training.py"
+    if args.source_proof:
+        from _flash_attention_scorecard import source_descriptor
+        inventory = source_descriptor(args.source_proof)
+    probe_hash = measured_probe_hash(root, args.baseline)
+    path = auditor_root / "agent/skills/flash-attention-torch-compat/scripts/compare_training.py"
     spec = importlib.util.spec_from_file_location("flash_training_comparison", path)
     comparison = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(comparison)
@@ -165,16 +198,20 @@ def main():
     if len(directories) != 12:
         raise ValueError("Expected the complete twelve-case FlashAttention CUDA training gate")
     command = "JITTOR_TEST_DEVICES=cuda JITTOR_REQUIRE_FLASH_ATTENTION=1 JITTOR_REQUIRE_REAL_TORCH=1 <jittor-python> -m pytest -q compat/tests/torch/test_ecosystem_flash_attention.py"
-    records = [collect_case(path, inventory, args.baseline, probe_hash, comparison, args.report, command, output) for path in directories]
+    records = [collect_case(path, inventory, args.baseline, probe_hash, comparison, args.report, command, output,
+                            root=root) for path in directories]
     if len({row["case"] for row in records}) != 12:
         raise ValueError("Duplicate FlashAttention training cases")
     result = audit_coverage.scorecard({"flash-attention": inventory}, records, args.baseline, root=root)
-    result["auditor_commit"] = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
+    result["auditor_commit"] = subprocess.check_output(["git", "-C", str(auditor_root), "rev-parse", "HEAD"], text=True).strip()
     result["scope"] = "Independent CUDA L3 executions. CPU upstream execution is unavailable, so shared accelerator breadth remains zero; no CPU prerequisite is waived."
     (output / "scorecard.json").write_text(json.dumps(result, indent=2) + "\n")
     print(len(result["accepted"]), "accepted;", len(result["rejected"]), "rejected; CPU prerequisite preserved")
     if result["rejected"]:
         raise ValueError(result["rejected"])
+    if args.source_proof and (result['accepted'] or len(result['blocked']) != 12
+                             or any(r.get('independent_verified_level') != 3 for r in result['blocked'])):
+        raise ValueError('Expected twelve independently verified L3 protocols blocked by the missing CPU counterpart')
 
 
 if __name__ == "__main__":

@@ -208,21 +208,35 @@ def _copy_detached_storage(self, value):
     if not (_owner.jt.flags.no_grad
             or (not self.requires_grad and not value.requires_grad)):
         return False
-    if (not self._storage_is_contiguous()
-            or (self._has_view_provenance() and not self._storage_view_is_physical())
-            or tuple(self.shape) != tuple(value.shape)
+    if (tuple(self.shape) != tuple(value.shape)
             or self.dtype != value.dtype):
         return False
     if self.numel():
         # Resolve pending readers (including clone snapshots) before changing
         # bytes. _copy_into owns placement, stream ordering and dense copies.
         _owner.jt.sync_all()
+        if not self._mem_ptr_now or not value._mem_ptr_now:
+            # Still unbuilt after the sync: a call being captured for replay,
+            # where the sync runs nothing. Such a tensor has no storage an
+            # alias could be reading, so rebinding it loses nothing -- and
+            # writing into it is impossible (`_copy_into needs an allocated
+            # tensor`), which is what every `embeddings += ...` of a captured
+            # BERT call raised.
+            return False
+        with _owner.jt.no_grad():
+            if self._copy_view_into(value):
+                return True
         self._copy_into(value)
+    else:
+        # A zero-byte store still advances the native shared write version.
+        with _owner.jt.no_grad():
+            self._copy_into(value)
     return True
 
 
 def _ip(self, value, preserve_storage=False):
-    if preserve_storage:
+    self._check_inplace_autograd()
+    if preserve_storage or getattr(self, "_torch_data_owner", None) is not None:
         if self.requires_grad and not _owner.jt.flags.no_grad:
             if self.is_leaf:
                 raise RuntimeError("a leaf Variable that requires grad is being used in an in-place operation.")
@@ -262,13 +276,18 @@ def _ip(self, value, preserve_storage=False):
         _context = get_install_context(_owner.jt)
         _context.state["tensor_native_api"]["_native_requires_grad"].__set__(target, True)
     elif not was_trainable and not target.is_stop_grad():
-        target.stop_grad()
+        # A no-grad store must preserve a reversible freeze, including the
+        # source from which a recorded view inherits its existing history.
+        # Permanent stop_grad would release that producer after execution.
+        _context = get_install_context(_owner.jt)
+        _context.state["tensor_native_api"]["_native_requires_grad"].__set__(target, False)
     return self
 
 
 def _copy_(self, other, non_blocking=False):
     src = other if isinstance(other, _NativeVar) else _owner.jt.array(other)
-    src = src.cast(_jittor_dtype_name(self.dtype)) if hasattr(self, "dtype") else src
+    if hasattr(self, "dtype") and _jittor_dtype_name(src.dtype) != _jittor_dtype_name(self.dtype):
+        src = src.cast(_jittor_dtype_name(self.dtype))
     # torch's `copy_` is in place: the destination keeps its own device, and a
     # cross-device copy is a transfer. jittor's `assign` (what `_ip` uses for
     # every `x.foo_()`) writes x's values into *y's* storage and then aliases
@@ -598,7 +617,9 @@ def _data_get(self):
         and not torch_mode
     ):
         return _native_data_descriptor.__get__(self, Var)
-    view = self.detach().stop_grad()
+    view = self._storage_data_alias()
+    if getattr(self, "_torch_0d", False):
+        view._torch_0d = True
     view._torch_data_owner = self
     view._torch_data_path = ()
     return view
@@ -606,7 +627,6 @@ def _data_get(self):
 
 def _data_set(self, value):
     src = value if isinstance(value, _NativeVar) else _owner.jt.array(value)
-    was_trainable = bool(self.requires_grad)
     # torch's `x.data = y` *replaces* x's data, shape and dtype; it does not
     # copy elements into x's existing buffer. `assign` is the in-place
     # primitive used by `x.foo_()`: it writes x's values into y's storage and
@@ -615,9 +635,10 @@ def _data_set(self, value):
     # depends on the replace semantics -- it swaps a parameter for a
     # zero-element placeholder -- and `assign` rejected that with
     # "reshape shape is invalid for input of size [x_items(0) == y_items(1152)]".
-    self._update(src)
-    if was_trainable:
-        self.start_grad()
+    # Native storage replacement preserves the Var, producer and gradient
+    # policy; .data neither activates an accumulator nor writes old views.
+    self._update(src, logical_write=False)
+    self._torch_0d = getattr(src, "_torch_0d", False)
 
 
 
@@ -1586,7 +1607,9 @@ def _fill_captured_state(self, val):
 def _api_fill(self, val):
     if _fill_captured_state(self, val):
         return self
-    return _ip(self, _owner.jt.ones(self.shape, self.dtype) * val)
+    with _new_scope(self, None):
+        value = _owner.jt.ones(self.shape, self.dtype).stop_grad() * val
+    return _ip(self, value, preserve_storage=True)
 
 
 def _api_zero(self):
@@ -1602,11 +1625,11 @@ def _api_zero(self):
 
 
 def _api_add(self, o, alpha=1):
-    return _ip(self, self + o * alpha)
+    return _ip(self, self + o * alpha, preserve_storage=True)
 
 
 def _api_sub(self, o, alpha=1):
-    return _ip(self, self - o * alpha)
+    return _ip(self, self - o * alpha, preserve_storage=True)
 
 
 def _api_mul(self, o):
@@ -1645,18 +1668,32 @@ def _api_nonzero(input, as_tuple=False, **kw):
     return _nonzero(input, as_tuple=as_tuple)
 
 
+def _random_inplace(self, draw, *parameters, generator=None):
+    tracks_grad = bool(self.requires_grad and not _owner.jt.flags.no_grad)
+    # Validate before the sampler can reserve or advance a private/global RNG.
+    if tracks_grad:
+        if self.is_leaf:
+            raise RuntimeError("a leaf Variable that requires grad is being used in an in-place operation.")
+        if self._view_base_is_trainable_leaf():
+            raise RuntimeError("a view of a leaf Variable that requires grad is being used in an in-place operation.")
+    value = draw(self, *parameters, generator=generator)
+    if tracks_grad:
+        # Overwriting a non-leaf has a zero derivative through its old graph.
+        # As in zero_(), selection clears even NaN/Inf without multiplying by 0.
+        with _new_scope(self, None), _owner.jt.no_grad():
+            mask = _owner.jt.zeros(self.shape, "bool")
+        value = _owner.jt.ternary(mask, self, value)
+    return _ip(self, value, preserve_storage=True)
+
+
 def _api_normal(self, mean=0.0, std=1.0, generator=None):
-    # Native random factories are differentiable by default. Initialization
-    # supplies values, not a new autograd input to the in-place assignment.
-    with _owner.jt.no_grad():
-        value = _owner.jt.normal(float(mean), float(std), self.shape).cast(_jittor_dtype_name(self.dtype))
-    return _ip(self, value)
+    from ..nn_init import _normal_values
+    return _random_inplace(self, _normal_values, mean, std, generator=generator)
 
 
 def _api_uniform(self, a=0.0, b=1.0, generator=None):
-    with _owner.jt.no_grad():
-        value = (_owner.jt.rand(self.shape) * (b - a) + a).cast(_jittor_dtype_name(self.dtype))
-    return _ip(self, value)
+    from ..nn_init import _uniform_values
+    return _random_inplace(self, _uniform_values, a, b, generator=generator)
 
 
 def _api_tolist(self):

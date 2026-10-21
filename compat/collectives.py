@@ -100,6 +100,10 @@ def _all_gather_shards(local_shard):
     # CPU -- and demanding NCCL there turns a no-op into a hard failure.
     if _world_size() <= 1:
         return local_shard
+    if not jt.flags.use_cuda:
+        from jittor import distributed
+        if distributed.get_backend() == "mpi":
+            return distributed.all_gather(local_shard)
     ops = _nccl_ops()
     if ops is not None and callable(getattr(ops, "nccl_all_gather", None)):
         return ops.nccl_all_gather(local_shard)

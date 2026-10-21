@@ -114,6 +114,11 @@ struct VarFlags {
         // back through the executor (and fail again) instead of returning it.
         // Cleared by the next read that syncs without throwing.
         _execution_failed,
+        // A view created without recording may inherit requires_grad from its
+        // base without acquiring a gradient edge of its own. An explicit
+        // requires_grad setter activates that edge, even when the value is
+        // already true. Kept separate from reversible freezing/stop_grad.
+        _unrecorded_view,
         _end,
     };
 };
@@ -287,17 +292,33 @@ public:
 
     // Return true exactly on the transition across zero; propagation belongs
     // at those boundaries, not at every additional owner.
-    bool own() {
-        ASSERT(value_ >= 0 && value_ < std::numeric_limits<int>::max())
-            << kind_name() << "liveness own overflow";
+    // Inlined: every liveness step moves a counter, and with the failure
+    // report written in place the steps were calls. The report -- the same
+    // assertion, condition and message -- runs out of line, only when the
+    // condition has already failed.
+    __attribute__((always_inline)) bool own() {
+        if (PREDICT_BRANCH_NOT_TAKEN(!(value_ >= 0 && value_ < std::numeric_limits<int>::max())))
+            report_own();
         return ++value_ == 1;
     }
 
-    bool release() {
-        ASSERT(value_ > 0) << kind_name()
-            << "liveness release without a matching owner";
+    __attribute__((always_inline)) bool release() {
+        if (PREDICT_BRANCH_NOT_TAKEN(!(value_ > 0))) report_release();
         return --value_ == 0;
     }
+
+private:
+    __attribute__((noinline, cold)) void report_own() const {
+        ASSERT(value_ >= 0 && value_ < std::numeric_limits<int>::max())
+            << kind_name() << "liveness own overflow";
+    }
+
+    __attribute__((noinline, cold)) void report_release() const {
+        ASSERT(value_ > 0) << kind_name()
+            << "liveness release without a matching owner";
+    }
+
+public:
 
     void assert_expected(int expected, const void* owner) const {
         ASSERTop(count(),==,expected) << kind_name()
@@ -477,7 +498,21 @@ struct Node {
     void release_inputs();
     void erase_input(uint index);
     void erase_output(uint index);
-    void set_inputs(list<Node*> nodes);
+    // Replaces this node's input edges with `nodes`, in order. The core takes
+    // a pointer range: the parameter used to be a std::list taken by value, so
+    // every op maker's `set_inputs({a, b})` -- and every output var's
+    // `set_inputs({op})` -- built and freed one heap node per input, on every
+    // operator constructed.
+    void set_inputs(Node* const* nodes, size_t count);
+    inline void set_inputs(std::initializer_list<Node*> nodes) {
+        set_inputs(nodes.begin(), nodes.size());
+    }
+    template <class Nodes>
+    inline void set_inputs(const Nodes& nodes) {
+        SmallVector<Node*, 4> flat;
+        for (Node* node : nodes) flat.emplace_back(node);
+        set_inputs(flat.begin(), flat.size());
+    }
     void add_inputs(const vector<Node*>& nodes);
     void add_inputs(const vector<Var*>& nodes);
     void release_forward_liveness();

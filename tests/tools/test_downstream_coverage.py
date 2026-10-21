@@ -39,6 +39,12 @@ class CoverageAuditTests(unittest.TestCase):
         self.snapshot = {"repo": "transformers", "upstream": {"commit": "b" * 40, "remote": "https://example.invalid/upstream.git", "version": "1.0"},
                          "axes": [{"axis": "model_family", "count": 2, "members": ["llama", "bert"]}]}
         self.sources = {"transformers": self.snapshot}
+        digest = hashlib.sha256(b"__version__ = '1.0'\n").hexdigest()
+        self.snapshot["package_sources"] = [{"path": "src/transformers/__init__.py", "sha256": digest}]
+        self.snapshot["package_files"] = copy.deepcopy(self.snapshot["package_sources"])
+        self.release_installation = {"repo": "transformers", "version": "1.0",
+                                     "source_sha256": {"src/transformers/__init__.py": digest},
+                                     "installed_files_sha256": {"__init__.py": digest}}
         raw = self.lab / "raw.json"
         raw.write_text('{"executed": true}', encoding="utf-8")
         self.row = {
@@ -78,25 +84,107 @@ class CoverageAuditTests(unittest.TestCase):
         gate = self.root / "compat/tests/torch/test_ecosystem_deepspeed.py"
         trellis_gate = self.root / "compat/tests/torch/test_ecosystem_trellis.py"
         flash_gate = self.root / "compat/tests/torch/test_ecosystem_flash_attention.py"
+        swift_gate = self.root / "compat/tests/torch/test_ecosystem_swift.py"
+        verl_gate = self.root / "compat/tests/torch/test_ecosystem_verl_training.py"
+        mm_gate = self.root / "compat/tests/torch/test_ecosystem_openmmlab_installed.py"
         gate.parent.mkdir(parents=True)
         test_source = "def test_real_deepspeed_engine_training_and_resume(): pass\n"
         trellis_source = "def test_real_trellis_models_training(): pass\n"
         flash_source = "def test_real_flash_attention_training(): pass\n"
+        swift_source = "class EcosystemSwift:\n    def test_ms_swift_trainer_full_llama(self): pass\n"
+        verl_source = ("class EcosystemVERLTraining:\n"
+                       "    def test_verl_ppo_gae_vanilla(self): pass\n"
+                       "    def test_verl_distillation_k3(self): pass\n")
+        mm_source = ("class EcosystemOpenMMLabInstalled:\n"
+                     "    def test_mmengine_train_step(self): pass\n"
+                     "    def test_mmcv_convmodule_train_step(self): pass\n")
         session_source = ("def ecosystem_deepspeed(session): pass\ndef ecosystem_trellis(session): pass\n"
-                          "def ecosystem_flash_attention(session): pass\n")
+                          "def ecosystem_flash_attention(session): pass\ndef ecosystem_swift(session): pass\n"
+                          "def ecosystem_verl_training(session): pass\n"
+                          "def ecosystem_openmmlab_installed(session): pass\n")
         gate.write_text(test_source)
         trellis_gate.write_text(trellis_source)
         flash_gate.write_text(flash_source)
+        swift_gate.write_text(swift_source)
+        verl_gate.write_text(verl_source)
+        mm_gate.write_text(mm_source)
         nox = self.root / "noxfile.py"
         nox.write_text(session_source)
         self.assertEqual(len(audit.dedicated_gates(self.root)["deepspeed"]), 1)
-        for target, source in ((gate, test_source), (trellis_gate, trellis_source),
-                               (flash_gate, flash_source), (nox, session_source)):
+        for target, source in ((gate, test_source), (trellis_gate, trellis_source), (swift_gate, swift_source),
+                               (flash_gate, flash_source), (verl_gate, verl_source),
+                               (mm_gate, mm_source), (nox, session_source)):
             with self.subTest(path=target.name):
                 target.write_text("def unrelated(): pass\n")
                 with self.assertRaisesRegex(ValueError, "dedicated gate"):
                     audit.dedicated_gates(self.root)
                 target.write_text(source)
+
+        for invalid in ("def test_ms_swift_trainer_full_llama(): pass\n",
+                        "class WrongOwner:\n    def test_ms_swift_trainer_full_llama(self): pass\n",
+                        "class EcosystemSwift:\n    pass\n"
+                        "def unrelated():\n    def test_ms_swift_trainer_full_llama(): pass\n"):
+            swift_gate.write_text(invalid)
+            with self.subTest(source=invalid), self.assertRaisesRegex(ValueError, "dedicated gate"):
+                audit.dedicated_gates(self.root)
+
+        swift_gate.write_text(swift_source)
+        for invalid in (
+                verl_source.replace("    def test_verl_distillation_k3(self): pass\n", ""),
+                verl_source.replace("    def test_verl_ppo_gae_vanilla(self): pass\n", ""),
+                verl_source.replace("EcosystemVERLTraining", "WrongOwner")):
+            verl_gate.write_text(invalid)
+            with self.subTest(source=invalid), self.assertRaisesRegex(ValueError, "dedicated gate"):
+                audit.dedicated_gates(self.root)
+
+        verl_gate.write_text(verl_source)
+        for invalid in (
+                mm_source.replace("    def test_mmengine_train_step(self): pass\n", ""),
+                mm_source.replace("    def test_mmcv_convmodule_train_step(self): pass\n", ""),
+                mm_source.replace("EcosystemOpenMMLabInstalled", "WrongOwner")):
+            mm_gate.write_text(invalid)
+            with self.subTest(source=invalid), self.assertRaisesRegex(ValueError, "dedicated gate"):
+                audit.dedicated_gates(self.root)
+
+    def test_openmmlab_installed_discovers_actual_methods_without_claiming_execution(self):
+        rows = {item["repo"]: item for item in audit.audit(ROOT)["repos"]}
+        for repo, method in (("mmengine", "test_mmengine_train_step"),
+                             ("mmcv", "test_mmcv_convmodule_train_step")):
+            with self.subTest(repo=repo):
+                self.assertEqual(rows[repo]["dedicated_gates"], [{
+                    "protocol": "openmmlab-installed-train-step",
+                    "session": "ecosystem_openmmlab_installed",
+                    "tests": ["compat/tests/torch/test_ecosystem_openmmlab_installed.py::"
+                              "EcosystemOpenMMLabInstalled::" + method],
+                }])
+                self.assertIsNone(rows[repo]["verified_level"])
+                case = method[len("test_"):]
+                self.assertTrue(any(node.endswith("::" + method)
+                                    for item in rows[repo]["gate_cases"] if item["case"] == case
+                                    for node in item["tests"]))
+
+
+    def test_swift_trainer_class_method_is_a_dedicated_gate_without_fake_case(self):
+        row = next(item for item in audit.audit(ROOT)["repos"] if item["repo"] == "ms-swift")
+        case = "ms_swift_trainer_full_llama"
+        self.assertNotIn(case, row["registered_cases"])
+        self.assertNotIn(case, [item["case"] for item in row["gate_cases"]])
+        self.assertEqual(row["dedicated_gates"], [{
+            "protocol": "swift-trainer", "session": "ecosystem_swift",
+            "tests": ["compat/tests/torch/test_ecosystem_swift.py::EcosystemSwift::test_ms_swift_trainer_full_llama"],
+        }])
+        self.assertIsNone(row["verified_level"])
+
+    def test_verl_training_discovers_both_actual_class_methods_without_claiming_execution(self):
+        row = next(item for item in audit.audit(ROOT)["repos"] if item["repo"] == "verl")
+        self.assertEqual(set(row["registered_cases"]),
+                         {"verl_ppo_gae_vanilla", "verl_distillation_k3"})
+        self.assertEqual(row["dedicated_gates"], [{
+            "protocol": "verl-component-training", "session": "ecosystem_verl_training",
+            "tests": ["compat/tests/torch/test_ecosystem_verl_training.py::EcosystemVERLTraining::" + name
+                      for name in ("test_verl_ppo_gae_vanilla", "test_verl_distillation_k3")],
+        }])
+        self.assertIsNone(row["verified_level"])
 
     def artifact_json(self, row, role, value):
         self.serial += 1
@@ -112,6 +200,7 @@ class CoverageAuditTests(unittest.TestCase):
         row["platform"]["precision"] = precision
         self.artifact_json(row, "platform", row["platform"])
         reference = {"case": row["case"], "device": row["device"], "runtime": "torch",
+                     "downstream_distribution": copy.deepcopy(self.release_installation),
                      "tf32": precision, "runtime_conditions": {"precision": precision, "runtime_threads": 2},
                      "jittor_commit": row["jittor_commit"], "steps": 3,
                      "trainable_parameters": ["weight", "bias"], "frozen_parameters": []}
@@ -136,6 +225,50 @@ class CoverageAuditTests(unittest.TestCase):
         result = audit.scorecard(self.sources, [self.row], self.baseline, self.root)
         cpu = next(row for row in result["coverage"] if row["device"] == "cpu")
         self.assertEqual((cpu["numerator"], cpu["denominator"]), (1, 2))
+
+    def test_release_version_does_not_replace_actual_installation_proof(self):
+        for role, keys in (("base-comparison", ("oracle_result", "jittor_result")),
+                           ("perturb-comparison", ("reference_result", "candidate_result"))):
+            original = self.document(self.row, role)
+            for key in keys:
+                for change in ("missing", "source", "installed"):
+                    value = copy.deepcopy(original)
+                    pair = value["cases"][0] if role == "base-comparison" else value
+                    if change == "missing":
+                        pair[key].pop("downstream_distribution")
+                    else:
+                        field = "source_sha256" if change == "source" else "installed_files_sha256"
+                        mapping = pair[key]["downstream_distribution"][field]
+                        mapping[next(iter(mapping))] = "f" * 64
+                    self.artifact_json(self.row, role, value)
+                    with self.subTest(role=role, key=key, change=change), self.assertRaises(ValueError):
+                        self.validate(self.row)
+                self.artifact_json(self.row, role, original)
+
+    def test_release_inventory_is_required_and_paths_are_unambiguous(self):
+        original = copy.deepcopy(self.snapshot["package_sources"])
+        for rows in (None, [], original * 2,
+                     [{"path": [], "sha256": "f" * 64}],
+                     [{"path": path, "sha256": "f" * 64} for path in (".", "../bad.py")]):
+            self.snapshot["package_sources"] = rows
+            with self.subTest(rows=rows), self.assertRaises(ValueError):
+                self.validate(self.row)
+        self.snapshot["package_sources"] = original
+
+    def test_release_training_requires_each_runtime_installation(self):
+        self.row["level"] = 3
+        self.row["training"] = {"steps": 3, "loss_trajectory_passed": True, "parameter_trajectory_passed": True,
+                                "trainable": 2, "frozen": 0, "trainable_parameters": ["weight", "bias"],
+                                "frozen_parameters": []}
+        self.assertEqual(self.validate(self.row), 3)
+        for role in ("training-reference-metadata", "training-candidate-metadata"):
+            original = self.document(self.row, role)
+            changed = copy.deepcopy(original)
+            changed.pop("downstream_distribution")
+            self.artifact_json(self.row, role, changed)
+            with self.assertRaisesRegex(ValueError, "installed distribution/source"):
+                self.validate(self.row)
+            self.artifact_json(self.row, role, original)
 
     def test_l1_import_is_not_breadth(self):
         self.row["level"] = 1
@@ -264,6 +397,61 @@ class CoverageAuditTests(unittest.TestCase):
                 self.artifact_json(row, role, document)
                 with self.assertRaisesRegex(ValueError, "precision"):
                     self.validate(row)
+
+    def test_declared_second_perturbation_requires_its_actual_comparison(self):
+        row = copy.deepcopy(self.row)
+        row["inputs"]["perturb_seed2"] = 19
+        with self.assertRaisesRegex(ValueError, "Missing measurement artifact: perturb2-comparison"):
+            self.validate(row)
+
+    def test_second_perturbation_checks_both_runtime_sources_precision_and_devices(self):
+        for role in ("perturb2-comparison", "perturb19-comparison"):
+            self._check_second_perturbation_runtime_bindings(role)
+
+    def _check_second_perturbation_runtime_bindings(self, role):
+        for declared in (False, True):
+            for runtime in ("reference_result", "candidate_result"):
+                for change in ("precision", "source", "device"):
+                    with self.subTest(declared=declared, runtime=runtime, change=change):
+                        row = copy.deepcopy(self.row)
+                        if declared:
+                            row["inputs"]["perturb_seed2"] = 19
+                        document = self.document(row, "perturb-comparison")
+                        value = document[runtime]
+                        if change == "precision":
+                            value["tf32"]["matmul_precision"] = "medium"
+                        elif change == "source":
+                            value["downstream_distribution"]["version"] = "stale"
+                        else:
+                            value["device"] = "cuda"
+                        self.artifact_json(row, role, document)
+                        with self.assertRaises(ValueError):
+                            self.validate(row)
+
+    def test_second_perturbation_requires_a_passed_execution_and_zero_fallback(self):
+        for change in ("status", "observed", "fallback"):
+            with self.subTest(change=change):
+                row = copy.deepcopy(self.row)
+                document = self.document(row, "perturb-comparison")
+                if change == "status":
+                    document["status"] = "failed"
+                elif change == "observed":
+                    document["input_perturbation_verified"] = False
+                else:
+                    document["candidate_result"]["fallback_count"] = 1
+                self.artifact_json(row, "perturb2-comparison", document)
+                with self.assertRaises(ValueError):
+                    self.validate(row)
+
+    def test_second_perturbation_is_optional_and_accepts_valid_bound_evidence(self):
+        self.validate(self.row)
+        for role in ("perturb2-comparison", "perturb19-comparison"):
+            for declared in (False, True):
+                row = copy.deepcopy(self.row)
+                if declared:
+                    row["inputs"]["perturb_seed2"] = 19
+                self.artifact_json(row, role, self.document(row, "perturb-comparison"))
+                self.validate(row)
 
     def test_missing_ambiguous_or_stale_measurement_json_is_rejected(self):
         for changed in ("missing", "duplicate", "platform", "case", "baseline", "device", "backend", "runtime"):
@@ -521,6 +709,19 @@ class RegistryTests(unittest.TestCase):
         second = registry.inventory("transformers", self.root)
         self.assertEqual((first["axes"][0]["count"], second["axes"][0]["count"]), (1, 2))
         self.assertNotEqual(first["upstream"]["commit"], second["upstream"]["commit"])
+
+    def test_full_package_inventory_preserves_registry_denominator(self):
+        self.commit("src/transformers/models/auto/modeling_auto.py",
+                    'MODEL_MAPPING_NAMES = {"llama": "LlamaModel"}\n')
+        self.commit("src/transformers/unrelated.py", "# imported outside registry\n")
+        self.commit("src/transformers/kernels/data.cu", "// runtime asset\n")
+        self.commit("docs/extra.py", "# outside package\n")
+        result = registry.inventory("transformers", self.root)
+        self.assertEqual(result["axes"][0]["count"], 1)
+        self.assertEqual({row["path"] for row in result["package_sources"]}, {
+            "src/transformers/models/auto/modeling_auto.py", "src/transformers/unrelated.py"})
+        self.assertEqual({row["path"] for row in result["package_files"]}, {
+            row["path"] for row in result["package_sources"]} | {"src/transformers/kernels/data.cu"})
 
     def test_dirty_and_empty_registry_fail_closed(self):
         path = "src/transformers/models/auto/modeling_auto.py"

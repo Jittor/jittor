@@ -100,12 +100,18 @@ void FusedOp::update_ops() {
     _inputs.clear();
     _outputs.clear();
     vars.clear();
-    op_index.clear();
-    var_index.clear();
+    op_index.reset(ops.size());
     for (uint i=0; i<ops.size(); i++)
         op_index[ops[i]] = i;
+    // Every var indexed below is an edge of one of these ops, so the edge
+    // count bounds them.
+    size_t var_bound = 0;
     for (Op* op : ops) {
-        for (Var* o : snapshot_outputs(op)) {
+        auto ins = snapshot_inputs(op);
+        var_bound += ins.end() - ins.begin();
+        auto outs = snapshot_outputs(op);
+        var_bound += outs.end() - outs.begin();
+        for (Var* o : outs) {
             if (o->loop_options) {
                 if (loop_options_origin == nullptr)
                     loop_options_origin = &o->loop_options.data();
@@ -186,17 +192,18 @@ void FusedOp::update_ops() {
     ASSERT(outputs().size());
     LOGvvvv << "set fused output" << outputs();
     
+    var_index.reset(var_bound);
     for (Op* opi : ops) {
         for (auto& in : snapshot_inputs(opi)) {
             Var* i = in.first;
-            if (!var_index.count(i)) {
+            if (!var_index.has(i)) {
                 var_index[i] = vars.size();
                 vars.push_back({i, 0});
                 _inputs.emplace_back((Node*)i);
             }
         }
         for (Var* o : snapshot_outputs(opi)) {
-            if (!var_index.count(o)) {
+            if (!var_index.has(o)) {
                 var_index[o] = vars.size();
                 // intermediate(can fuse) or output
                 vars.push_back({o, var_stays_in_memory((Node*)o) ? 2 : 1});

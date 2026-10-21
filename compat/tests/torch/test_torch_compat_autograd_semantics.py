@@ -116,17 +116,16 @@ class TestBackwardLeafAndGradFn(unittest.TestCase):
     """The shim forwards leaf and producer identity to the core graph query."""
 
     def test_leaf_and_intermediate_report_torch_shape(self):
-        # A factory result is not a leaf here: ``jt.ones`` broadcasts a
-        # literal, that literal requires grad like every float Var, and
-        # ``backward_grad_fn`` calls a var a leaf only when no input of its
-        # producer does. Torch calls it a leaf. See KI-COMPAT-004 -- asserted
-        # as it stands so closing the gap turns this red.
-        x = torch.ones(3)
+        # Torch factories cut their internal creation graph before publishing
+        # the fresh leaf. Native scalar/JVP semantics remain independent.
+        device = "cuda" if jt.introspection.policy.runtime.use_cuda else "cpu"
+        x = torch.ones(3, device=device)
+        self.assertEqual(x.device.type, device)
         x.requires_grad = True
         y = x * 2
 
-        self.assertFalse(x.is_leaf)
-        self.assertIsNotNone(x.grad_fn)
+        self.assertTrue(x.is_leaf)
+        self.assertIsNone(x.grad_fn)
         # What the distinction is for still holds: an op output is not a leaf
         # and carries the producer identity.
         self.assertFalse(y.is_leaf)
@@ -135,6 +134,8 @@ class TestBackwardLeafAndGradFn(unittest.TestCase):
         self.assertEqual(y.grad_fn.op_id, y.grad_fn_op_id)
         self.assertEqual(y.grad_fn.name, y.grad_fn_name)
         self.assertEqual(y.grad_fn, y.grad_fn)
+        y.sum().backward()
+        np.testing.assert_array_equal(x.grad.detach().cpu().numpy(), [2., 2., 2.])
 
 
 class TestCreateGraphVersusRetainGraph(unittest.TestCase):

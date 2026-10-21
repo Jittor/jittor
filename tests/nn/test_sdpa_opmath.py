@@ -95,6 +95,35 @@ class TestAttentionOpmath(unittest.TestCase):
             for training in (False, True):
                 self._check("bfloat16", training, head_dim=head_dim, public=True)
 
+    def test_reduced_precision_opt_in_keeps_cpu_opmath(self):
+        rng = np.random.RandomState(19)
+        arrays = [rng.randn(1, 2, 3, 8).astype("float32") for _ in range(3)]
+        cotangent = rng.uniform(.2, 1.1, arrays[0].shape).astype("float32")
+        with jt.flag_scope(use_cuda=0, amp_reg=0), forbid_backend_fallbacks():
+            tensors = [jt.array(value).bfloat16() for value in arrays]
+            expected = _reference(*(value.float32().numpy() for value in tensors),
+                                  None, False, _round_reference(cotangent, "bfloat16"))
+            attention.LAST_FUSED_KERNEL[0] = None
+            output = attention.scaled_dot_product_attention(
+                *tensors, allow_reduced_precision=True)
+            gradients = jt.grad((output.float32() * jt.array(cotangent)).sum(), tensors)
+            self.assertIsNone(attention.LAST_FUSED_KERNEL[0])
+            for index, (value, reference) in enumerate(zip([output, *gradients], expected)):
+                value.sync()
+                self.assertEqual(value.location(), "cpu")
+                self.assertEqual(str(value.dtype), "bfloat16")
+                reference = _round_reference(reference, "bfloat16")
+                error = np.max(abs(value.float32().numpy() - reference))
+                error /= max(1e-8, float(np.max(abs(reference))))
+                self.assertLessEqual(error, .002 if index == 0 else .01)
+
+    def test_reduced_precision_request_requires_a_bool(self):
+        with jt.flag_scope(use_cuda=0):
+            q = jt.ones((1, 1, 2, 8), dtype="bfloat16")
+            for invalid in (None, 1, "backend"):
+                with self.subTest(invalid=invalid), self.assertRaisesRegex(TypeError, "must be bool"):
+                    attention.scaled_dot_product_attention(q, q, q, allow_reduced_precision=invalid)
+
     def test_float64_first_and_second_derivatives(self):
         rng = np.random.RandomState(19)
         # Exactly representable scale isolates attention precision from the

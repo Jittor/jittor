@@ -432,13 +432,23 @@ def inventory(repo, checkout):
                            "not a model-family or complete library denominator. Submodule-only APIs, class methods, "
                            "task variants and optional dependency availability are outside this axis. "
                            "A verified member covers only its recorded component scenario.")
-    if repo in ("vllm", "vllm-omni", "torchmetrics", "tensordict"):
-        # Registry/target hashes alone do not identify an installed package:
-        # imports outside the bounded registry still affect its computation.
-        result["package_sources"] = [{"path": path, "sha256": digest(checkout / path)}
-                                     for path in sorted(files)]
-        if version_source is not None:
-            result["upstream"]["version_source"] = version_source
+    # Registry/target hashes alone do not identify an installed package:
+    # imports outside the bounded registry still affect its computation.
+    result["package_sources"] = [{"path": path, "sha256": digest(checkout / path)}
+                                 for path in sorted(files)]
+    package_files = git(checkout, "ls-files", "--", prefix).splitlines()
+    result["package_files"] = [{"path": path, "sha256": digest(checkout / path)}
+                               for path in sorted(package_files)]
+    if repo in ("mmengine", "mmcv"):
+        from _distribution_names import setup_distribution_names
+        if git(checkout, 'ls-files', '--', 'setup.py').splitlines() != ['setup.py']:
+            raise ValueError('Distribution-name declaration must be tracked in the pinned source')
+        declaration = setup_distribution_names(checkout)
+        result["distribution_names"] = declaration
+        result["sources"].append(declaration["source"])
+        result["sources"].sort(key=lambda row: row["path"])
+    if version_source is not None:
+        result["upstream"]["version_source"] = version_source
     return result
 
 

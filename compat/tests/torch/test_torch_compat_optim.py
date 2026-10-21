@@ -311,7 +311,8 @@ class TestAdam(Base):
             self.ac(retained_data.numpy(), setitem_parent.numpy(), atol=0.0, rtol=0.0,
                     msg=f"retained data alias observes mutation {dev}")
 
-            parent[1].add_(2.0)
+            with torch.no_grad():
+                parent[1].add_(2.0)
             self.ac(parent.numpy()[1], np.full(3, 3.0, dtype=np.float32),
                     atol=0.0, rtol=0.0, msg=f"view add_ writes parent {dev}")
 

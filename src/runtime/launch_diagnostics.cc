@@ -15,6 +15,10 @@ namespace {
 // All-ones means no override. Zero is an explicit unavailable source and must
 // not be replaced with a later synchronization/backward caller's location.
 thread_local uint64 active_origin = ~uint64(0);
+// The origin captured in the innermost native entry, 0 until its first
+// capture; see enter_launch_origin_entry.
+thread_local bool entry_active = false;
+thread_local uint64 entry_origin = 0;
 thread_local const LaunchRecord* active_launch = nullptr;
 thread_local Device error_device{BackendId::Cuda, -1};
 thread_local uintptr_t error_stream = 0;
@@ -200,8 +204,21 @@ string LaunchHistory::report(Device device, bool exact_stream, uintptr_t stream)
 void set_launch_origin_capture(LaunchOriginCapture capture) { origin_capture.store(capture); }
 uint64 capture_launch_origin() {
     if (active_origin != ~uint64(0)) return active_origin;
+    if (entry_origin) return entry_origin;
     auto capture = origin_capture.load();
-    return capture ? capture() : 0;
+    uint64 origin = capture ? capture() : 0;
+    if (entry_active) entry_origin = origin;
+    return origin;
+}
+void enter_launch_origin_entry(bool& outer_active, uint64& outer_origin) {
+    outer_active = entry_active;
+    outer_origin = entry_origin;
+    entry_active = true;
+    entry_origin = 0;
+}
+void leave_launch_origin_entry(bool outer_active, uint64 outer_origin) {
+    entry_active = outer_active;
+    entry_origin = outer_origin;
 }
 LaunchOriginScope::LaunchOriginScope(uint64 origin) : previous(active_origin) { active_origin = origin; }
 LaunchOriginScope::~LaunchOriginScope() { active_origin = previous; }

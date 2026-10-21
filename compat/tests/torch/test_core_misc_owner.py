@@ -13,6 +13,7 @@ import numpy as np
 #: the owner's object rather than wrapping it, and "one owner" still holds --
 #: this map only says which module that owner is.
 _FOREIGN_OWNERS = {
+    "default_generator": "jittor.compat.torch.generator",
     "clear_autocast_cache": "jittor.compat.torch.amp",
     "autocast_increment_nesting": "jittor.compat.torch.amp",
     "autocast_decrement_nesting": "jittor.compat.torch.amp",

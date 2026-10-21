@@ -202,3 +202,46 @@ def test_physical_provenance_distinguishes_pending_and_materialized_transpose():
     assert not transpose._storage_view_is_physical()
     transpose.copy_(torch.tensor([[5., 6.], [7., 8.]]))
     np.testing.assert_array_equal(root.cpu().numpy(), [[5., 7.], [6., 8.]])
+
+
+class _EmbeddingSum(torch.nn.Module):
+    """BERT's embedding sum: an out-of-place add, then an in-place one."""
+
+    def __init__(self):
+        super().__init__()
+        self.position = torch.nn.Parameter(torch.arange(12, dtype=torch.float32).reshape(3, 4) / 10)
+
+    def forward(self, words, types):
+        embeddings = words + types
+        embeddings += self.position
+        return embeddings * 2
+
+
+def test_an_inplace_add_inside_a_captured_module_call():
+    """`embeddings += position_embeddings` while the call is being captured.
+
+    The in-place add writes into the tensor's existing storage when it can, so
+    that detached aliases see the write; inside a capture the tensor is still
+    being built and has no storage yet, and the write raised `_copy_into needs
+    an allocated tensor` -- every `bert_base_infer` step of the torch_compat
+    benchmark, on its first captured call. Such a tensor has nothing an alias
+    could read, so the add rebinds it as it did before the storage path.
+    """
+    import jittor as jt
+
+    rng = np.random.RandomState(0)
+    feeds = [(rng.rand(3, 4).astype("float32"), rng.rand(3, 4).astype("float32")) for _ in range(5)]
+    model = _EmbeddingSum().eval()
+    position = model.position.detach().cpu().numpy()
+    flag = jt.flags.auto_graph_replay
+    jt.flags.auto_graph_replay = 1
+    try:
+        with torch.no_grad():
+            got = [model(torch.tensor(w), torch.tensor(t)).cpu().numpy() for w, t in feeds]
+        state = model.__dict__.get("_auto_graph_replay")
+    finally:
+        jt.flags.auto_graph_replay = flag
+    for (w, t), out in zip(feeds, got):
+        np.testing.assert_allclose(out, (w + t + position) * 2, rtol=1e-6)
+    assert state is not None and state.replay is not None, "the call was never captured"
+    assert state.replay.refused is None

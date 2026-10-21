@@ -68,6 +68,54 @@ python -S "$scripts/audit_coverage.py" scorecard \
 设备③必须证明驻留与 `fallback_policy=error,count=0`。缺失、skip、xfail、环境阻塞与失败
 各自记录，全部 skip 不能作为通过。平台快照用于复核身份，**不能替代计算所在设备的断言**。
 
+### Release 版本的实际安装来源
+
+注册表型 L2 及以上记录不能只凭两端版本字符串一致进入分子。再生 inventory 为每个
+目标库提供全部包 Python 文件 `package_sources`，以及包含非 Python 文件的
+`package_files`；这些字段不改变注册表轴或分母。base、perturb 和 L3 training 的
+两端原始测量都必须包含 `downstream_distribution`，或按库名索引的
+`downstream_distributions`，覆盖记录自身及每个 `registry_refs.repo`。
+
+每个绑定包含 `repo`、`version`、`source_sha256`（库存源码路径）和
+`installed_files_sha256`（相对安装包根的路径）。全部必需 Python 源码必须匹配，
+额外声明的源码只能来自同一库存 `package_files`，对应安装文件也必须逐项匹配。
+同一库同时使用单数、复数字段时，两者必须相同。
+
+若 artifacts 绑定本库 `upstream-wheel` 或 `<repo>-official-wheel`，审计器独立读取
+wheel 的唯一 METADATA，核对包名、版本和全部库存源码，再要求实际安装文件清单精确
+等于该 wheel 的完整包内容，包括数据、C++、CUDA 文件及生成的 Python 文件；绑定还须
+包含该 artifact 的 `wheel_sha256`。角色名不代表 wheel 一定来自 PyPI，报告须如实说明
+是否由固定源码自行构建。没有 wheel 时，额外安装的 Python 文件也必须来自库存。
+
+源码模块版本与 wheel METADATA 仅有 PEP 440 拼写规范化差异时，保留两个原始值：
+`version` 仍为实际模块/库存的字面版本，额外 `distribution_version` 必须等于原始
+wheel 的唯一 METADATA Version。例如 VERL 源码 `0.10.0.dev` 的真实构建产物声明
+`0.10.0.dev0`。只有独立读取的 wheel 版本与源码版本经 `packaging.version.Version`
+严格相等才允许该分支；base、两次 perturb 与 training 的每个 runtime 都必须显式
+绑定实际 `distribution_version` 和完整 wheel payload。缺字段、不同 dev/rc/local
+版本、错误元数据或缺安装文件都拒绝。原来的字面相等与 SCM 分支不变；不得改写
+`__version__` 或将开发版标为正式 release。`packaging` 仅在需要该非字面证明时加载，
+缺依赖直接失败，纯源码枚举入口仍可用 `python -S`。
+
+旧测量缺少这些原始绑定时，当前审计拒绝授予覆盖分子；保留其原始数值结果和测量 SHA，
+不能从今天的安装目录回填历史证据。协议型记录继续使用各自的独立严格校验器。
+
+### 同源码的有限发行名称分支
+
+MMEngine/MMCV 的干净 `setup.py` 通过环境条件声明正式包和 lite 包名称。库存新增
+`distribution_names`，绑定已跟踪 `setup.py` 的 SHA256、实际 name 表达式及**全部**有限
+分支与条件；它不是手写的别名许可表。只解析字面名称和明确的 `os.getenv` 相等/不等
+条件，动态名称、未知条件、多 setup 或字典展开均拒绝。审计器重新解析表达式，缺失
+分支或不匹配的 setup 来源哈希会失败。
+
+此类来源证明必须提供实际 wheel。审计器独立核对唯一 METADATA Name 属于源码声明，
+每个 runtime/阶段的 `downstream_distribution` 或复数绑定还必须提供原样
+`distribution_name`，精确等于该实际 Name；此分支同时要求显式 `distribution_version`
+精确等于 wheel METADATA Version，即使模块版本的字面值相同。包的 import 前缀、repo identity、版本和
+全部 Python/非 Python payload 校验保持不变。缺该字段、仅写 repo 名、未声明名称或
+不完整 payload 均拒绝。`mmcv-lite` 的真实安装可证明对应纯 Python 场景，不证明
+`mmcv._ext`、`mmcv.ops` 或编译算子存在；不得修改 METADATA 或装空扩展冒充完整包。
+
 ### 没有发布版本的源码与 SCM wheel
 
 若再生 inventory 的版本为精确 `source@<上游完整 SHA>`，实际安装包可以具有从该提交

@@ -102,5 +102,40 @@ class TestQwen3AttentionPatch(unittest.TestCase):
         np.testing.assert_array_equal(output.numpy(), np.ones((2, 8)))
 
 
+class TestGatedActivationPatch(unittest.TestCase):
+    @staticmethod
+    def _module():
+        module = types.ModuleType("vllm.model_executor.layers.activation")
+
+        class SiluAndMul:
+            @staticmethod
+            def forward_native(x):
+                return x + 7.
+
+        module.SiluAndMul = SiluAndMul
+        return module
+
+    def test_native_forward_and_its_gradients_remain_owned_by_upstream(self):
+        module = self._module()
+        original = module.SiluAndMul.forward_native
+        self.assertTrue(layers.patch_activations(module))
+        self.assertIs(module.SiluAndMul.forward_native, original)
+        self.assertFalse(layers.patch_activations(module))
+        x = jt.array([1., 2., 3.]).start_grad()
+        output = module.SiluAndMul.forward_native(x)
+        np.testing.assert_array_equal(output.numpy(), [8., 9., 10.])
+        np.testing.assert_array_equal(jt.grad(output.sum(), x).numpy(), [1., 1., 1.])
+
+    def test_private_cuda_forward_has_the_real_operators_no_autograd_contract(self):
+        module = self._module()
+        layers.patch_activations(module)
+        raw = np.array([[.5, -1., 1.5, .3, 1.7, -.9]], dtype="float32")
+        x = jt.array(raw).start_grad()
+        output = module.SiluAndMul.forward_cuda(x)
+        self.assertTrue(output.is_stop_grad())
+        expected = raw[:, :3] / (1. + np.exp(-raw[:, :3])) * raw[:, 3:]
+        np.testing.assert_allclose(output.numpy(), expected, rtol=1e-6, atol=1e-7)
+
+
 if __name__ == "__main__":
     unittest.main()

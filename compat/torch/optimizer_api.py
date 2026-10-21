@@ -33,6 +33,17 @@ def _init(self, *a, **k):
             pg.setdefault("lr", self.lr)
     except EXPECTED as exc:
         swallowed("torch/optimizers.py _init: for pg in self.param_groups:", exc)
+    # A gradient belongs to its Tensor, including when it was produced before
+    # this optimizer existed. Keep the published objects themselves: clipping,
+    # clearing and another optimizer must observe the same gradient storage.
+    published = [(pg, [getattr(parameter, "_torch_grad", None)
+                       for parameter in pg["params"]])
+                 for pg in self.param_groups]
+    if any(isinstance(gradient, jt.Var)
+           for _, gradients in published for gradient in gradients):
+        for pg, gradients in published:
+            pg["grads"] = gradients
+        object.__setattr__(self, "_Optimizer__zero_grad", False)
 
 
 def _torch_param_steps(pg):
@@ -293,15 +304,16 @@ def _state_dict_torch(self):
                 group.setdefault(key, pg.get(
                     key, getattr(self, key, default)))
             group.setdefault("maximize", False)
-            group.setdefault("foreach", None)
+            group.setdefault("foreach", getattr(self, "foreach", None))
             group.setdefault("differentiable", False)
-            group.setdefault("fused", None)
+            group.setdefault("fused", getattr(self, "fused", None))
         elif kind == "rmsprop":
             group.setdefault("alpha", pg.get(
                 "alpha", getattr(self, "alpha", 0.99)))
             group.setdefault("eps", pg.get(
                 "eps", getattr(self, "eps", 1e-8)))
-            group.setdefault("weight_decay", 0)
+            group.setdefault("weight_decay", pg.get(
+                "weight_decay", getattr(self, "weight_decay", 0)))
             group.setdefault("momentum", 0)
             group.setdefault("centered", False)
             group.setdefault("capturable", False)
@@ -650,7 +662,10 @@ def _step_with_closure(self, loss, retain_graph, closure, kwargs, native_kind):
     replay_books_of_step(self)
     self.post_step = _torch_post_step
     try:
-        out = _orig_step(self, None, retain_graph=retain_graph)
+        # Torch optimizer updates do not record parameter writes. The closure
+        # has already run with its own grad mode before this native step.
+        with jt.no_grad():
+            out = _orig_step(self, None, retain_graph=retain_graph)
     finally:
         object.__setattr__(self, "_torch_backward_advanced_n_step", False)
         if had_post:

@@ -146,7 +146,6 @@ static bool ki007_trace_on() {
 
 //BlockIdSpace
 size_t BlockIdSpace::new_block_id() {
-    std::lock_guard<std::mutex> lock(mutex);
     if (!free_ids.empty()) {
         size_t id = free_ids.back();
         free_ids.pop_back();
@@ -160,7 +159,6 @@ size_t BlockIdSpace::new_block_id() {
 }
 
 void BlockIdSpace::recycle_block_id(size_t id) {
-    std::lock_guard<std::mutex> lock(mutex);
     if (PREDICT_BRANCH_NOT_TAKEN(ki007_trace_on())) note(id, "recycle", 0);
     free_ids.push_back(id);
 }
@@ -169,7 +167,6 @@ void BlockIdSpace::recycle_block_id(size_t id) {
 // largest id this instance has handed out. New slots are value-initialized to
 // nullptr so an id that was never used reads as "not found".
 void BlockIdSpace::set_occupied(size_t id, CachingBlock* block) {
-    std::lock_guard<std::mutex> lock(mutex);
     ASSERT(id > 0 && id < ID_LIMIT) << "allocation id out of range:" << id;
     if (PREDICT_BRANCH_NOT_TAKEN(ki007_trace_on()))
         note(id, "set_occupied", block->size);
@@ -178,7 +175,7 @@ void BlockIdSpace::set_occupied(size_t id, CachingBlock* block) {
     occupied_id_mapper[id] = block;
 }
 
-// Caller holds `mutex`.
+// Caller holds the owning allocator's lock, as for every member here.
 void BlockIdSpace::note(size_t id, const char* what, size_t size) {
     std::stringstream line;
     line << what << "(size=" << size << ", thread=" << std::this_thread::get_id() << ")";
@@ -192,7 +189,6 @@ void BlockIdSpace::note(size_t id, const char* what, size_t size) {
 // share_with, say, or an id handed out by a *different* allocator's id space)
 // from reading past the end of the table.
 CachingBlock* BlockIdSpace::get_occupied(size_t allocation) {
-    std::lock_guard<std::mutex> lock(mutex);
     ASSERT(allocation > 0 && allocation < ID_LIMIT)
         << "allocation id out of range:" << allocation;
     CachingBlock* block = allocation < occupied_id_mapper.size()
@@ -224,12 +220,9 @@ CachingBlock* BlockIdSpace::get_occupied(size_t allocation) {
 
 CachingBlock* BlockIdSpace::erase_occupied(size_t allocation) {
     CachingBlock* block = get_occupied(allocation);
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        occupied_id_mapper[allocation] = nullptr;
-        if (PREDICT_BRANCH_NOT_TAKEN(ki007_trace_on()))
-            note(allocation, "erase_occupied", block->size);
-    }
+    occupied_id_mapper[allocation] = nullptr;
+    if (PREDICT_BRANCH_NOT_TAKEN(ki007_trace_on()))
+        note(allocation, "erase_occupied", block->size);
     recycle_block_id(allocation);
     return block;
 }

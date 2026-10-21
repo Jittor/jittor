@@ -3,7 +3,7 @@
 import sys
 from types import MappingProxyType, ModuleType
 
-from jittor._runtime.dispatch import dispatch_context, registered_kernel, try_dispatch
+from jittor._runtime.dispatch import _is_registered, dispatch_context, registered_kernel, try_dispatch
 
 
 _OPERATIONS = MappingProxyType({
@@ -48,9 +48,16 @@ _CALLS = MappingProxyType({name: _HookCall(operation)
 
 
 def __getattr__(name):
-    if name not in _OPERATIONS:
+    operation = _OPERATIONS.get(name)
+    if operation is None:
         raise AttributeError(name)
-    if registered_kernel(_OPERATIONS[name], dispatch_context().backend) is None:
+    # Not registered on any backend: nothing the context could select. Asked
+    # on every call of the functions that consult a hook -- `pad` reads
+    # `acl_constant_pad` each time -- and building the dispatch context and
+    # taking the registry lock to learn "none" was most of what they cost.
+    if not _is_registered(operation):
+        return None
+    if registered_kernel(operation, dispatch_context().backend) is None:
         return None
     return _CALLS[name]
 

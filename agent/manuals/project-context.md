@@ -44,7 +44,7 @@ changes: [2.0 migration notes](../../docs/releases/2.0.md).
 | Test system and gate tiers | [test system](../../docs/development/test-system.md) |
 | Mechanism notes (numerics, placement, profiling) | [notes index](../../docs/notes/index.md) |
 | Torch compatibility | [compatibility index](../../docs/compatibility/index.md) |
-| Backend guides (Ascend, Corex, MPI) | [guides index](../../docs/guides/index.md) |
+| Backend guides (Ascend, Corex, jtrun; legacy MPI) | [guides index](../../docs/guides/index.md) |
 | Performance method | [benchmarking](../../docs/performance/benchmarking.md) |
 | Reproducible verification results | [results index](../../docs/results/index.md) |
 | Reusable verification tools | `agent/skills/` (listed in [agent-index.md](agent-index.md)) |
@@ -59,9 +59,8 @@ changes: [2.0 migration notes](../../docs/releases/2.0.md).
   Commands for hardware day are in [deferred-hardware.md](deferred-hardware.md).
 - **Silent numerics.** CUDA half max/min identity (KI-OPS-012), Python-float
   narrowing against float64 (KI-DTYPE-003), factory tensors weak in promotion
-  (KI-DTYPE-004), cuDNN autotuning coupled to scheduling (KI-EXEC-003), shared
-  Vars after `load_state_dict` (KI-COMPAT-006), SDPA CUDA backward parity
-  (KI-OPS-015).
+  (KI-DTYPE-004), cuDNN autotuning coupled to scheduling (KI-EXEC-003), SDPA CUDA
+  backward parity (KI-OPS-015).
 - **Torch frontend gaps.** torchmetrics on CUDA (KI-COMPAT-010), RNN off cuDNN
   (KI-COMPAT-011), in-process shim metadata (KI-COMPAT-012), autocast Conv2d bias
   (KI-COMPAT-013), complex128 placeholder (KI-COMPAT-014).

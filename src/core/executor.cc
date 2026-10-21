@@ -217,7 +217,7 @@ void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, i
     LOGvvv << "Prepare fused_op" << fused_op.ops;
     fused_op.update_ops();
     for (Op* op : fused_op.ops) {
-        uint fid1 = fused_op.op_index.at(op);
+        uint fid1 = fused_op.op_index.get(op);
         int iid = 0;
         for (auto& edge : fused_op.snapshot_inputs(op)) {
             Var* v = edge.first;
@@ -227,11 +227,13 @@ void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, i
             int iop_id;
             int iv_id;
             pair<Op*, int> producer = fused_op.snapshot_producer(v);
-            if (producer.first && fused_op.op_index.count(producer.first)) {
-                iop_id = fused_op.op_index.at(producer.first);
+            int producer_id = producer.first ? fused_op.op_index.get(producer.first) : -1;
+            if (producer_id >= 0) {
+                iop_id = producer_id;
                 iv_id = producer.second;
             } else {
-                iv_id = fused_op.var_index.at(v);
+                iv_id = fused_op.var_index.get(v);
+                ASSERT(iv_id >= 0) << "input var of a fused op was not indexed by update_ops";
                 // add iv_id, prevent iv_id jit key overflow
                 iop_id = fused_op.ops.size() + iv_id;
             }
@@ -327,10 +329,40 @@ static void top_weak_sync(vector<Var*>& vars) {
 //               launch, then release the liveness the batch held.
 //   7 finish    assert the requested Vars are backed, wait for every device
 //               the batch launched on if asked, restore the entry device.
+// Whether the walk below would find anything to resolve: an op it visits that
+// reads a var of unknown shape. Same ops, same test, but no order and no
+// containers of its own -- a stamp on each node and a stack reused across
+// calls. Almost no batch has such an input, and building the ordered walk's
+// hash set and vectors for every one of them was a cost on every sync. The
+// stack can be shared because nothing here re-enters the executor.
+static bool has_dynamic_inputs(const vector<Var*>& roots) {
+    thread_local vector<Op*> stack;
+    TraversalEpoch epoch("resolve_dynamic_inputs");
+    stack.clear();
+    for (auto* var : roots)
+        if (!var->is_finished() && var->input() && !epoch.marked(var->input())) {
+            epoch.mark(var->input());
+            stack.push_back(var->input());
+        }
+    while (!stack.empty()) {
+        Op* op = stack.back();
+        stack.pop_back();
+        for (auto* input : op->inputs()) {
+            if (input->num < 0) return true;
+            if (!input->is_finished() && input->input() && !epoch.marked(input->input())) {
+                epoch.mark(input->input());
+                stack.push_back(input->input());
+            }
+        }
+    }
+    return false;
+}
+
 static void resolve_dynamic_inputs(Executor& executor, const vector<Var*>& roots) {
     // Native C++ callers can compose operators before any Python conversion.
     // Resolve their internal data-dependent extents at this explicit execution
     // boundary, in dependency order, before fusion or kernel compilation.
+    if (!has_dynamic_inputs(roots)) return;
     vector<std::pair<Op*, bool>> pending;
     unordered_set<Op*> seen;
     vector<Op*> ordered;

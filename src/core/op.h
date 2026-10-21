@@ -8,6 +8,7 @@
 #include <atomic>
 #include "core/common.h"
 #include "core/node.h"
+#include "core/var.h"  // VarPtr held inline by outputs_holder
 #include "codegen/jit_key.h"
 #include "utils/jit_cache_map.h"
 #include "ops/composite/op_dispatch.h"
@@ -50,7 +51,9 @@ struct Op : Node {
     static constexpr bool accepts_cpu_scalar_operands = false;
     virtual bool is_storage_view() const { return false; }
     static constexpr uint32 backend_mask = OpBackendAny;
-    vector<VarPtr> outputs_holder;
+    // The outputs until the op maker takes them over. Inline: almost every op
+    // has exactly one, and a heap vector here was an allocation per operator.
+    SmallVector<VarPtr, 1> outputs_holder;
     // Atomic: the parallel compiler constructs and destroys ops on its
     // worker threads, and these are read from the main thread.
     static std::atomic<int64> number_of_lived_ops;
@@ -59,6 +62,15 @@ struct Op : Node {
     static std::atomic<int64> number_of_created_ops;
     mutable OpId registered_op_id = 0;
     mutable shared_ptr<const OpDef> registered_definition;
+    // The last `implementation()` answer and the backend it was for, packed in
+    // one word (the entry's address, whose low three bits are zero, or-ed with
+    // the backend id) so that the planner and the async worker -- both of
+    // which ask, and may ask for different backends -- can never read an
+    // address with another call's backend. Asked for an op's key, kernel and
+    // codegen, and for every sub-op of a fused op, each time it runs; the
+    // entry lives in the bound definition, which this op holds, and a
+    // definition's table is complete before it is published.
+    mutable std::atomic<uintptr_t> implementation_cache{0};
     
     inline Caster<Var*, Node::input_t> inputs() { CHECK_EXIST; return &_inputs; }
     inline Caster<Var*, Node::output_t> outputs() { CHECK_EXIST; return &_outputs; }

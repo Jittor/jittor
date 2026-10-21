@@ -21,12 +21,16 @@ def test_two_rank_bfloat16_engine_training_and_resume(zero_stage, perturbation):
     if not required:
         pytest.skip("manual two-rank DeepSpeed gate: run nox -s ecosystem_deepspeed_multirank")
     assert REAL_TORCH_PYTHON, "DeepSpeed multirank requires an independent Torch interpreter"
-    assert os.environ.get("JITTOR_TEST_DEVICES") == "cuda"
-    devices = [item.strip() for item in os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")]
-    assert len(devices) == 2 and all(devices) and len(set(devices)) == 2
+    device = os.environ.get("JITTOR_TEST_DEVICES", "cpu")
+    assert device in ("cpu", "cuda")
+    devices = tuple(item.strip() for item in os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",") if item.strip())
+    if device == "cuda":
+        assert len(devices) == 2 and len(set(devices)) == 2
+    else:
+        assert not devices, "CPU Engine ranks require an empty CUDA allocation"
     root = os.environ.get("JITTOR_DEEPSPEED_MULTIRANK_ROOT", "").strip()
     assert root, "Set a new external JITTOR_DEEPSPEED_MULTIRANK_ROOT for this run"
-    case = reserve_case(root, zero_stage, "AdamW", "bfloat16", 2, perturbation)
+    case = reserve_case(root, zero_stage, "AdamW", "bfloat16", 2, perturbation, device=device)
     cache = os.environ.get("JITTOR_DEEPSPEED_MULTIRANK_CACHE_ROOT") or str(Path(root) / "_caches")
     repository = Path(__file__).resolve().parents[3]
     sources = subprocess.check_output(
@@ -35,6 +39,8 @@ def test_two_rank_bfloat16_engine_training_and_resume(zero_stage, perturbation):
         text=True).splitlines()
     source_hashes = {name: hashlib.sha256((repository / name).read_bytes()).hexdigest()
                      for name in sources if (repository / name).is_file()}
+    assert not subprocess.check_output(["git", "-C", str(repository), "status", "--porcelain"], text=True), \
+        "Formal Engine measurements require a clean committed source tree"
     commit = subprocess.check_output(["git", "-C", str(repository), "rev-parse", "HEAD"], text=True).strip()
     (case / "source.json").write_text(json.dumps({"commit": commit, "sha256": source_hashes},
                                                 indent=2, sort_keys=True) + "\n")
@@ -45,7 +51,7 @@ def test_two_rank_bfloat16_engine_training_and_resume(zero_stage, perturbation):
     for rank, (actual_path, reference_path) in enumerate(zip(actual_paths, reference_paths)):
         with np.load(actual_path) as actual, np.load(reference_path) as reference:
             errors.append(_compare_engine_outputs(
-                actual, reference, device="cuda", world_size=2, rank=rank, dtype="bfloat16",
+                actual, reference, device=device, world_size=2, rank=rank, dtype="bfloat16",
                 optimizer="AdamW", zero_stage=zero_stage, perturbation=perturbation))
             metadata = json.loads(str(actual["metadata"]))
             assert metadata["jittor_commit"] == commit
@@ -57,10 +63,14 @@ def test_two_rank_bfloat16_engine_training_and_resume(zero_stage, perturbation):
                for name, digest in source_hashes.items()), "Source changed during DeepSpeed measurement"
     assert subprocess.check_output(["git", "-C", str(repository), "rev-parse", "HEAD"],
                                    text=True).strip() == commit, "Commit changed during DeepSpeed measurement"
+    assert not subprocess.check_output(["git", "-C", str(repository), "status", "--porcelain"], text=True), \
+        "Source tree became dirty during Engine measurement"
     raw = [*actual_paths, *reference_paths]
     raw.extend(case.rglob("*.log"))
+    raw.extend(case.rglob("*-launch.json"))
+    raw.extend(case.rglob("launcher.json"))
     raw.extend((case / "protocol.json", case / "source.json"))
-    result = {"status": "passed", "device": "cuda", "world_size": 2, "dtype": "bfloat16",
+    result = {"status": "passed", "device": device, "world_size": 2, "dtype": "bfloat16",
               "optimizer": "AdamW", "zero_stage": zero_stage, "perturbation": perturbation,
               "commit": commit, "errors": errors,
               "raw_sha256": {str(path.relative_to(case)): hashlib.sha256(path.read_bytes()).hexdigest()

@@ -76,6 +76,13 @@ def patch_rotary_embedding(module):
     return True
 
 
+def _silu_and_mul_forward_cuda(x):
+    # vLLM's private CUDA operator writes an inference output without an
+    # autograd formula. Keep its native forward's differentiable route intact.
+    with jt.no_grad():
+        return jt.nn.silu_and_mul(x)
+
+
 def patch_activations(module):
     """Route the gated activation through jt.nn, and the rest to plain torch.
 
@@ -88,8 +95,7 @@ def patch_activations(module):
     changed = False
     gated = getattr(module, "SiluAndMul", None)
     if gated is not None and not getattr(gated, _PATCHED, False):
-        set_attr(gated, "forward_native", staticmethod(jt.nn.silu_and_mul))
-        set_attr(gated, "forward_cuda", staticmethod(jt.nn.silu_and_mul))
+        set_attr(gated, "forward_cuda", staticmethod(_silu_and_mul_forward_cuda))
         set_attr(gated, _PATCHED, True)
         changed = True
     for activation in vars(module).values():

@@ -47,6 +47,12 @@ def main():
     if subprocess.check_output(['git', '-C', str(a.checkout), 'status', '--porcelain', '--untracked-files=no'], text=True):
         raise ValueError('dirty upstream')
     source_hashes = _source_hashes(a.checkout)
+    sys.path.insert(0, str(a.root / 'agent/skills/torch-compat-repo-runbook/scripts'))
+    sys.path.insert(0, str(a.root / 'agent/skills/trellis-torch-compat/scripts'))
+    from registry_inventory import inventory
+    from _source_binding import source_installation, validate_phase
+    source = inventory('trellis', a.checkout)
+    installation = source_installation(source, a.checkout / 'trellis2/__init__.py')
     arrays = {}
     with ExitStack() as stack:
         torch = runner._import_torch(a.runtime)
@@ -67,6 +73,9 @@ def main():
             guard = forbid_backend_fallbacks()
         sys.path.insert(0, str(a.checkout))
         import trellis2
+        actual_installation = source_installation(source, trellis2.__file__)
+        if actual_installation != installation:
+            raise ValueError('TRELLIS import did not resolve to the checked source installation')
         with guard:
             torch.manual_seed(0)
             if a.case == 'SparseStructureFlowModel':
@@ -153,6 +162,10 @@ def main():
             count = jt.core.backend_fallback_count() - before if a.runtime == 'jittor' else None
             assert count in (0, None)
             meta = {'case': 'trellis_' + a.case, 'model': a.case, 'runtime': a.runtime, 'device': a.device, 'steps': 3, 'perturbation': a.perturbation, 'perturb_input': a.perturb_input, 'upstream': {'commit': commit, 'remote': subprocess.check_output(['git', '-C', str(a.checkout), 'remote', 'get-url', 'origin'], text=True).strip(), 'version': 'source@' + commit}, 'torch_binary': torch._C.__file__ if a.runtime == 'torch' else None, 'torch_version': str(torch.__version__), 'trainable_parameters': sorted(params), 'frozen_parameters': [], 'input_gradients': sorted(specs), 'tf32': tf32, 'runtime_conditions': conditions, 'backend': runner._backend_report(a.runtime), 'fallback_policy': 'error' if a.runtime == 'jittor' else None, 'fallback_count': count, 'jittor_commit': subprocess.check_output(['git', '-C', str(a.root), 'rev-parse', 'HEAD'], text=True).strip(), 'weights': str(weights), 'weights_sha256': hashlib.sha256(weights.read_bytes()).hexdigest(), 'probe_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(), 'source_version': 'source@' + commit, 'source_hashes': source_hashes, 'trellis_origin': str(Path(trellis2.__file__).resolve()), 'model_class': type(model).__module__ + '.' + type(model).__qualname__, 'parameter_elements': sum((int(np.prod(value.shape)) for value in params.values())), 'input_shapes': {name: list(shape) for name, shape in specs.items()}, 'loss_history': losses}
+            if source_installation(source, trellis2.__file__) != installation:
+                raise ValueError('TRELLIS installation changed during the actual training measurement')
+            meta['downstream_distribution'] = installation
+            validate_phase(meta, source)
             np.savez(a.output, **arrays)
             a.output.with_suffix('.json').write_text(json.dumps(meta, indent=2) + '\n')
             print('TRELLIS_TRAINING', json.dumps(meta), flush=True)

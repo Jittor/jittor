@@ -234,7 +234,8 @@ class _TensorMeta(type):
         # four still raises.
         requested_dtype = kwargs.pop("dtype", None)
         device = kwargs.pop("device", None)
-        requires_grad = bool(kwargs.pop("requires_grad", False))
+        requested_requires_grad = kwargs.pop("requires_grad", None)
+        requires_grad = bool(requested_requires_grad)
         kwargs.pop("pin_memory", None)
         if kwargs:
             raise TypeError(
@@ -254,8 +255,12 @@ class _TensorMeta(type):
                 result = backend.empty(tuple(args[0]), dtype=dtype)
             elif isinstance(args[0], backend.Var):
                 result = backend.Var.clone(args[0])
-                result._set_view_of(args[0], Ellipsis)
-                result.requires_grad = requires_grad
+                # The native view owner preserves both the storage and the
+                # creation-mode-dependent gradient edge. An inherited flag
+                # under no_grad does not explicitly activate an accumulator.
+                result._set_view_of(args[0], Ellipsis, requested_requires_grad is None)
+                if requested_requires_grad is not None:
+                    result.requires_grad = requires_grad
                 return result
             else:
                 result = backend.array(args[0], dtype=dtype)
@@ -271,6 +276,7 @@ def make_tensor_type(backend):
         "__slots__": ("__weakref__",),
         "_frontend_backend": backend,
         "_frontend_autograd_policy": 3,
+        "_frontend_view_base_ownership": True,
         "_frontend_precision_policy": classmethod(_frontend_precision_policy),
         "clone": clone,
         **tensor_object_properties(),
@@ -290,11 +296,11 @@ def clone(input, *, memory_format=None):
     with tensor_frontend(target.Var, like=input):
         if input.placement_backend < 0 and backend.flags.use_cuda and _var_is_cpu_resident(input):
             with backend.flag_scope(use_cuda=0):
-                result = backend.Var.copy(input)
+                result = backend.Var.copy(input, memory_format != "contiguous_format")
                 result.sync()
                 setattr(result, "_jittor_torch_force_cpu", True)
             return result
-        return backend.Var.copy(input)
+        return backend.Var.copy(input, memory_format != "contiguous_format")
 
 
 def parameter_new(cls, data=None, requires_grad=True):

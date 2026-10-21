@@ -109,9 +109,18 @@ def gate_artifacts(tmp_path):
     import json
     upstream = {'commit': 'a' * 40, 'version': 'source@' + 'a' * 40, 'remote': 'synthetic'}
     source = {'path': 'trellis2/models/public.py', 'sha256': 'b' * 64}
-    inventory = {'upstream': upstream, 'sources': [source]}
+    inventory = {'repo': 'trellis', 'upstream': upstream, 'sources': [source],
+                 'package_sources': [source], 'package_files': [source]}
+    installation = {'repo': 'trellis', 'version': upstream['version'],
+                    'installation_kind': 'source-checkout', 'package': '/synthetic/trellis2',
+                    'origin': '/synthetic/trellis2/__init__.py',
+                    'source_sha256': {source['path']: source['sha256']},
+                    'installed_files_sha256': {'models/public.py': source['sha256']}}
     metadata = {'jittor_commit': 'c' * 40, 'upstream': upstream, 'probe_sha256': 'd' * 64,
                 'source_hashes': {source['path']: source['sha256']},
+                'downstream_distribution': installation, 'trellis_origin': installation['origin'],
+                'case': 'trellis_SyntheticDeclaredModel', 'weights_sha256': 'e' * 64,
+                'perturb_input': None,
                 'trainable_parameters': ['weight'], 'input_gradients': ['x'],
                 'model': 'SyntheticDeclaredModel', 'device': 'cpu', 'steps': 3,
                 'source_version': upstream['version'], 'input_shapes': {'x': [1]},
@@ -119,14 +128,22 @@ def gate_artifacts(tmp_path):
     errors = {'checked_tensors': 21, 'max_absolute': 0.,
               'fields': {'output': {'max_scaled_relative': 0., 'tolerance': .002}}}
     value = {'case': 'trellis_SyntheticDeclaredModel', 'device': 'cpu', 'status': 'passed',
-             'jittor_result': deepcopy(metadata), 'oracle_result': deepcopy(metadata),
+             'jittor_result': dict(deepcopy(metadata), runtime='jittor'),
+             'oracle_result': dict(deepcopy(metadata), runtime='torch'),
              'input_perturbation_verified': True, 'errors': errors,
              'input_perturbations': [{'input': 'x', 'errors': errors}]}
     directory = tmp_path / 'run/cpu/SyntheticDeclaredModel'
     directory.mkdir(parents=True)
-    for name in ('reference.npz', 'candidate.npz', 'base-comparison.json',
-                 'perturb-comparison.json', 'reference.json', 'candidate.json'):
+    for name in ('reference.npz', 'candidate.npz', 'base-comparison.json', 'perturb-comparison.json'):
         (directory / name).write_bytes(b'synthetic contract fixture; no runtime support')
+    changed = {}
+    for stem, key in (('reference', 'oracle_result'), ('candidate', 'jittor_result')):
+        (directory / (stem + '.json')).write_text(json.dumps(value[key]))
+        changed[stem] = dict(deepcopy(value[key]), perturb_input='x')
+        (directory / (stem + '-x.json')).write_text(json.dumps(changed[stem]))
+    (directory / 'perturb1-comparison.json').write_text(json.dumps({
+        'case': value['case'], 'status': 'passed', 'input_perturbation_verified': True,
+        'input': 'x', 'reference_result': changed['reference'], 'candidate_result': changed['candidate']}))
     comparison = directory / 'comparison.json'
     comparison.write_text(json.dumps(value))
     hashes = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in directory.iterdir()}
@@ -192,3 +209,57 @@ def test_collector_rejects_incomplete_artifact_manifest(collector, gate_artifact
     path.write_text(json.dumps(hashes))
     with pytest.raises(ValueError, match='Incomplete TRELLIS artifact manifest'):
         _collect(collector, gate_artifacts)
+
+
+@pytest.mark.parametrize('stem', ('reference', 'candidate'))
+@pytest.mark.parametrize('phase', ('', '-x'))
+@pytest.mark.parametrize('change', ('missing', 'source', 'payload', 'version'))
+def test_collector_rechecks_every_runtime_phase_despite_honest_rehash(
+        collector, gate_artifacts, stem, phase, change):
+    import hashlib
+    import json
+
+    directory = gate_artifacts[3].parent
+    path = directory / (stem + phase + '.json')
+    value = json.loads(path.read_text())
+    binding = value['downstream_distribution']
+    if change == 'missing':
+        value.pop('downstream_distribution')
+    elif change == 'source':
+        binding['source_sha256'] = {}
+    elif change == 'payload':
+        binding['installed_files_sha256'] = {}
+    else:
+        binding['version'] = 'a-false-release'
+    path.write_text(json.dumps(value))
+    manifest = {item.name: hashlib.sha256(item.read_bytes()).hexdigest()
+                for item in directory.iterdir() if item.name != 'artifacts.json'}
+    (directory / 'artifacts.json').write_text(json.dumps(manifest))
+    with pytest.raises(ValueError):
+        _collect(collector, gate_artifacts)
+
+
+def test_maintained_gate_retains_failed_numerics_without_success(gate, pair, tmp_path, monkeypatch):
+    checkout = tmp_path / 'upstream'
+    (checkout / 'trellis2/models').mkdir(parents=True)
+    (checkout / 'trellis2/models/__init__.py').write_text('# synthetic host contract\n')
+    output = tmp_path / 'evidence'
+    monkeypatch.setenv('JITTOR_TRELLIS_CHECKOUT', str(checkout))
+    monkeypatch.setenv('JITTOR_TRELLIS_EVIDENCE_DIR', str(output))
+    monkeypatch.setattr(gate, 'REAL_TORCH_PYTHON', '/synthetic/binary-torch-python')
+    reference, actual, theirs, ours = pair
+    actual['0/output'] = np.array([9.], dtype=np.float32)
+    theirs['weights'] = str(tmp_path / 'weights.npz')
+
+    def completed_worker(runtime, case, checkout, target, weights=None, perturb_input=None):
+        target.write_bytes(b'raw files from successful synthetic worker')
+        return (reference, theirs) if runtime == 'torch' else (actual, ours)
+
+    monkeypatch.setattr(gate, '_run', completed_worker)
+    with pytest.raises(AssertionError):
+        gate.test_real_trellis_models_training('SyntheticDeclaredModel')
+    directory = output / gate.DEVICE / 'SyntheticDeclaredModel'
+    assert (directory / 'reference.npz').is_file()
+    assert (directory / 'candidate.npz').is_file()
+    assert not (directory / 'comparison.json').exists()
+    assert not (directory / 'artifacts.json').exists()

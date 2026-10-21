@@ -28,6 +28,8 @@
 
 namespace jittor {
 
+DECLARE_FLAG(bool, no_grad);
+
 DECLARE_FLAG(string, cache_path);
 
 DEFINE_FLAG(int, try_use_32bit_index, 0,
@@ -49,8 +51,13 @@ std::atomic<int64> Op::number_of_created_ops{0};
 
 // Only Ops with disabled inputs have an entry. Node flag bits record whether
 // an Op has already snapshotted and provide the common no-map-lookup fast path.
-static unordered_map<int64, vector<int64>>& requires_grad_disabled_edges() {
-    static auto* edges = new unordered_map<int64, vector<int64>>();
+struct DisabledGradientEdge {
+    int64 source_id;
+    bool unrecorded_view;
+};
+
+static unordered_map<int64, vector<DisabledGradientEdge>>& requires_grad_disabled_edges() {
+    static auto* edges = new unordered_map<int64, vector<DisabledGradientEdge>>();
     return *edges;
 }
 
@@ -58,8 +65,17 @@ bool lookup_requires_grad_disabled_edge(Node* source, Node* target) {
     auto& edges = requires_grad_disabled_edges();
     auto found = edges.find(target->id);
     if (found == edges.end()) return false;
-    for (int64 source_id : found->second)
-        if (source_id == source->id) return true;
+    for (const auto& edge : found->second)
+        if (edge.source_id == source->id) return true;
+    return false;
+}
+
+bool lookup_unrecorded_view_edge(Node* source, Node* target) {
+    auto& edges = requires_grad_disabled_edges();
+    auto found = edges.find(target->id);
+    if (found == edges.end()) return false;
+    for (const auto& edge : found->second)
+        if (edge.source_id == source->id && edge.unrecorded_view) return true;
     return false;
 }
 
@@ -152,11 +168,18 @@ BackendId Op::execution_backend() const {
 }
 
 const OpImplementation& Op::implementation() const {
-    const auto& owner = definition();
     const auto backend = execution_backend();
+    static_assert(alignof(OpImplementation) >= 8, "the backend id is kept in the low bits");
+    const uintptr_t cached = implementation_cache.load(std::memory_order_relaxed);
+    if (cached && (cached & 7) == (uintptr_t)backend)
+        return *reinterpret_cast<const OpImplementation*>(cached & ~uintptr_t(7));
+    const auto& owner = definition();
     auto found = owner.implementations.find(backend);
     USER_CHECK(found != owner.implementations.end())
         << "No kernel registered for" << owner.name << "on" << backend_ops(backend).name;
+    static_assert((uintptr_t)BackendId::Corex < 8, "backend ids fit the low three bits");
+    implementation_cache.store(reinterpret_cast<uintptr_t>(&found->second) | (uintptr_t)backend,
+                               std::memory_order_relaxed);
     return found->second;
 }
 
@@ -339,13 +362,17 @@ void Op::init() {
     bind_definition(false);
     bool first_init = !flag(OpFlags::_requires_grad_snapshot);
     bool has_disabled_input = false;
+    bool has_unrecorded_view_input = false;
     bool has_first_order_only_input = false;
     bool all_inputs_stopped = _inputs.size() != 0;
     if (first_init) {
         set_flag(OpFlags::_requires_grad_snapshot);
         for (Var* v : inputs()) {
+            v->refresh_alias_requires_grad();
+            if (!no_grad && !is_stop_grad()) v->check_alias_history();
             bool disabled = v->flag(VarFlags::_requires_grad_disabled);
             has_disabled_input |= disabled;
+            has_unrecorded_view_input |= v->flag(VarFlags::_unrecorded_view);
             has_first_order_only_input |=
                 v->flag(VarFlags::_first_order_only);
             // Under torch's rule a Python scalar never asks for a gradient,
@@ -357,12 +384,13 @@ void Op::init() {
                 || (autograd_policy.stop_outputs_when_inputs_stopped
                     && is_constant_scalar(v));
         }
-        if (has_disabled_input) {
+        if (has_disabled_input || has_unrecorded_view_input) {
             set_flag(OpFlags::_requires_grad_disabled);
             auto& sources = requires_grad_disabled_edges()[id];
             for (Var* v : inputs())
-                if (v->flag(VarFlags::_requires_grad_disabled))
-                    sources.push_back(v->id);
+                if (v->flag(VarFlags::_requires_grad_disabled)
+                        || v->flag(VarFlags::_unrecorded_view))
+                    sources.push_back({v->id, bool(v->flag(VarFlags::_unrecorded_view))});
         }
     }
     infer_shape();

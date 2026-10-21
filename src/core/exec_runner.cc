@@ -449,14 +449,14 @@ static bool releases_pending(Op* op, FusedOp& fused, const vector<Var*>& last_us
     memo[op] = 0;
     bool releases = true;
     for (Var* out : op->outputs()) {
-        auto index = fused.var_index.find(out);
-        if (index == fused.var_index.end()) { releases = false; break; }
-        int type = fused.vars[index->second].type;
+        int index = fused.var_index.get(out);
+        if (index < 0) { releases = false; break; }
+        int type = fused.vars[index].type;
         if (type == 2) continue;
         if (type != 1 || out->holder) { releases = false; break; }
         int edges = 0;
         for (Op* consumer : out->outputs()) {
-            if (!fused.op_index.count(consumer) || !releases_pending(consumer, fused, last_used, memo)) {
+            if (!fused.op_index.has(consumer) || !releases_pending(consumer, fused, last_used, memo)) {
                 releases = false;
                 break;
             }
@@ -505,7 +505,7 @@ static bool dies_after(Var* v, FusedOp& fused, const vector<Var*>& last_used,
 // store would see the new value, a read at another index another thread's.
 static bool reads_before_writing(Var* v, Var* out, FusedOp& fused) {
     Op* producer = out->input();
-    if (!producer || producer->type() != OpType::element || fused.op_index.count(producer) == 0)
+    if (!producer || producer->type() != OpType::element || !fused.op_index.has(producer))
         return false;
     unordered_set<Op*> feeds;
     vector<Op*> stack = {producer};
@@ -515,7 +515,7 @@ static bool reads_before_writing(Var* v, Var* out, FusedOp& fused) {
         if (!feeds.insert(op).second) continue;
         for (Var* in : op->inputs()) {
             Op* p = in->input();
-            if (p && fused.op_index.count(p)) stack.push_back(p);
+            if (p && fused.op_index.has(p)) stack.push_back(p);
         }
     }
     for (Op* op : fused.ops) {
