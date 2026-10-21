@@ -104,9 +104,15 @@ def _snapshot_tensors(obj):
     snapshot = _TensorSnapshots()
     snapshot.collect(obj)
     if snapshot.tensors:
+        # Saving an object must not execute unrelated live graphs. Materialize
+        # only its tensors before submitting the host copies; a global sync
+        # would also retry unrelated failed providers, even for metadata saves.
+        jt.sync(snapshot.tensors, device_sync=False, weak_sync=False)
         # Fetch copies to host without moving the source sharing group.
         jt.fetch(*snapshot.tensors, snapshot.capture)
-    jt.sync_all(True)
+        # Wait for pending fetch copies (including Copy0 for a nondefault GPU)
+        # without adding any other graph roots to the batch.
+        jt.sync([], device_sync=True, weak_sync=False)
     if len(snapshot.values) != len(snapshot.tensors):
         raise RuntimeError("checkpoint tensor fetch did not complete")
     return snapshot.values
