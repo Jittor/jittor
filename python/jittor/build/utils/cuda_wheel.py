@@ -18,6 +18,7 @@ import collections
 import hashlib
 import os
 import re
+from typing import Tuple
 
 try:
     from importlib import metadata as importlib_metadata
@@ -211,7 +212,7 @@ class CudaWheelStack:
     """Resolved paths and versions for one supported CUDA wheel stack."""
 
     cuda_version = "12.2"
-    component_specs = CUDA12_COMPONENTS
+    component_specs: Tuple[Tuple[str, str, str, str], ...] = CUDA12_COMPONENTS
 
     def __init__(self, components, versions):
         self.components = dict(components)
