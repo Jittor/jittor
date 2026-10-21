@@ -55,6 +55,27 @@ class _StackInputs:
                 for x in xs:
                     np.testing.assert_array_equal(x.numpy(), np.full((2, 3), -5, "float32"))
 
+    def test_one_dimensional_views(self):
+        # Two or three 1-D inputs go to the stack kernel as they are, without
+        # the reshape every other rank gets; views of a larger tensor must
+        # still be read element by element.
+        base = np.arange(40, dtype="float32").reshape(5, 8)
+        b = jt.array(base)
+        views = {
+            "strided": (lambda: b.reshape([-1])[::3], base.reshape(-1)[::3]),
+            "row": (lambda: b[2], base[2]),
+            "column": (lambda: b[:, 3], base[:, 3]),
+            "offset": (lambda: b.reshape([-1])[5:13], base.reshape(-1)[5:13]),
+            "transposed": (lambda: b.transpose()[1], base.T[1]),
+        }
+        for name, (make, ref) in views.items():
+            for n in (2, 3):
+                for dim in (0, 1, -1):
+                    with self.subTest(view=name, n=n, dim=dim), jt.no_grad():
+                        x = make()
+                        got = jt.stack([x, x * 2, x][:n], dim).numpy()
+                        np.testing.assert_array_equal(got, np.stack([ref, ref * 2, ref][:n], dim))
+
     def test_mixed_inputs(self):
         out = jt.stack([jt.array([1.0, 2.0]), np.array([3.0, 4.0], "float32"), [5.0, 6.0]])
         np.testing.assert_array_equal(out.numpy(), np.array([[1, 2], [3, 4], [5, 6]], "float32"))
