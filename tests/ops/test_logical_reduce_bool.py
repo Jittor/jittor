@@ -16,18 +16,8 @@ import unittest
 import numpy as np
 
 import jittor as jt
-from _helpers.common import JittorTestCase
+from _helpers.common import JittorTestCase, kernel_launches
 from _helpers.device_types import instantiate_device_type_tests
-
-
-def _kernels(build):
-    build()
-    jt.sync_all(True)
-    with jt.profile_scope() as rep:
-        value = build()
-        jt.sync_all(True)
-    # One row per distinct kernel; the third column counts its launches.
-    return sum(int(row[2]) for row in rep[1:]), value
 
 
 class TestLogicalReduceBool(JittorTestCase):
@@ -70,10 +60,10 @@ class TestLogicalReduceBool(JittorTestCase):
     def test_a_truth_test_is_one_reduction(self, device):
         m = jt.array(np.arange(240) % 7 == 0)
         m.sync()
-        count, value = _kernels(lambda: bool(m.any()))
+        count, value = kernel_launches(lambda: bool(m.any()))
         self.assertTrue(value)
         self.assertEqual(count, 1)
-        count, value = _kernels(lambda: bool(m.all()))
+        count, value = kernel_launches(lambda: bool(m.all()))
         self.assertFalse(value)
         self.assertEqual(count, 1)
 

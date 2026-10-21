@@ -8,7 +8,7 @@ import unittest
 import jittor as jt
 import numpy as np
 
-from _helpers.common import JittorTestCase
+from _helpers.common import JittorTestCase, kernel_launches
 from _helpers.device_types import instantiate_device_type_tests
 
 
@@ -251,16 +251,6 @@ class TestFuseIntoReduce(JittorTestCase):
 
 instantiate_device_type_tests(TestFuseIntoReduce, globals())
 
-def _kernels(build):
-    build()
-    jt.sync_all(True)
-    with jt.profile_scope() as rep:
-        value = build()
-        jt.sync_all(True)
-    # One row per distinct kernel; the third column counts its launches.
-    return sum(int(row[2]) for row in rep[1:]), value
-
-
 class TestScalarChainsFuse(JittorTestCase):
     """A Python number fuses into a consumer that is one element too.
 
@@ -274,10 +264,10 @@ class TestScalarChainsFuse(JittorTestCase):
         s = jt.array(np.array([3.0], "float32"))
         s.sync()
         # `s * 2` and `> 1`, each with its number; four kernels before.
-        count, value = _kernels(lambda: bool(s * 2 > 1))
+        count, value = kernel_launches(lambda: bool(s * 2 > 1))
         self.assertTrue(value)
         self.assertEqual(count, 2)
-        count, value = _kernels(lambda: (s - 1).item())
+        count, value = kernel_launches(lambda: (s - 1).item())
         self.assertEqual(value, 2.0)
         self.assertEqual(count, 1)
 
@@ -288,7 +278,7 @@ class TestScalarChainsFuse(JittorTestCase):
         s = jt.array(np.array([3.0], "float32"))
         t = jt.array(np.array([4.0], "float32"))
         jt.sync([s, t])
-        count, value = _kernels(lambda: ((s * t) * t).item())
+        count, value = kernel_launches(lambda: ((s * t) * t).item())
         self.assertEqual(value, 48.0)
         self.assertEqual(count, 2)
 
@@ -296,7 +286,7 @@ class TestScalarChainsFuse(JittorTestCase):
         u = jt.array(np.arange(240).astype("int32"))
         u.sync()
         # The reduction is one kernel, the constant and the subtraction one.
-        count, value = _kernels(lambda: (u.min() - 5).item())
+        count, value = kernel_launches(lambda: (u.min() - 5).item())
         self.assertEqual(value, -5)
         self.assertEqual(count, 2)
 
@@ -306,7 +296,7 @@ class TestScalarChainsFuse(JittorTestCase):
         jt.sync([s, x])
         # `s * 2` is one element and its consumer a thousand: it stays a
         # kernel of its own rather than being recomputed per element.
-        count, value = _kernels(lambda: (x + s * 2).numpy())
+        count, value = kernel_launches(lambda: (x + s * 2).numpy())
         np.testing.assert_array_equal(value, np.arange(1000, dtype="float32") + 6)
         self.assertEqual(count, 2)
 
