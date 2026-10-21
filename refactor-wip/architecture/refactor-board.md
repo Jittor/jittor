@@ -7,7 +7,7 @@
 | ASC-01 | 独立环境、CPU/ACL 串行构建 | 最终MAIN123 structure1430P2S/layoutP；core压力超时保留 | coord | 最终123路径前后frozen exact，1432不同case与121逐node相同；97.py+1.pyi AST3.7P、configuredRuff新增0/减少12。raw core121实际46P9S1原压力测试300秒超时，未删除/改规模/放宽 |
 | ASC-02 | 双解释器小模型输出/全梯度 | CPU及真实NPU八模型完整对拍通过 | ecosystem | r10沿用规范overlay、source65复验八模型271参数+2输入全梯度；25新阶段及24份明确复用的不可变native参考共49验证阶段全部通过，零回落；见综合报告 |
 | ASC-03 | 多库训练和fresh-process恢复 | NPU Trainer完整训练/评估/保存/重载及fresh恢复通过 | ecosystem | r10真实ACL Trainer4updates/8micro/48全梯度、61跨runtime检查通过；连续与2+2恢复216完整状态/轨迹exact，跨runtime216通过；20份完整RNG结构审计通过，dropout0顺序fixture不外推随机训练恢复 |
-| ASC-04 | 共享真实模型推理和LoRA | MAIN-r28 Qwen3-0.6B BF16 LoRA训练/保存/fresh恢复P；R37同模型 Native/Jittor full+prefix+resume交叉P（独立冻结源） | coord | R37 2500文件manifest SHA aa56c083de1404dcfc744b31edc3dcb973f574d3dcb0d048c691d8ffa400d383，2187项比较、0失败/超预算；仅覆盖该冻结源，不能自动外推当前MAIN，详见综合报告 |
+| ASC-04 | 共享真实模型推理和LoRA | MAIN-r28 Qwen3-0.6B BF16 LoRA训练/保存/fresh恢复P；R37 Native/Jittor full+prefix+resume交叉P，2500文件源码清单与当前树逐项同hash | coord | R37比较2187项、0失败/超预算；R22逐项重算当前树与R37 manifest SHA aa56，2500/2500相同、0 mismatch；适用于该清单覆盖的源码，不代表当前HEAD新执行或清单外结论，详见综合报告 |
 | ASC-05 | HCCL/DDP/FSDP2两卡场景 | own88完整FSDP2通过；MAIN-r28 Native FSDP2 full 8updates通过；Jittor双卡仍待验证 | distributed | R5 Native两卡full通过；R10修正facade守卫；R21完成两rank串行core import预热但不构成模型/collective证明；R22启动1.88秒后监测到外部PID1443945占卡6并仅中止自有组，rank日志为空；R6/R15/R16运行期外部占用中止，R7/R8/R13/R14 admission阻断，R11/R12 shell误报无worker，详见报告 |
 | ASC-06 | 配对速度/峰值显存/稳定性 | 持久训练控制器CPU资格通过；NPU性能未验收 | coord | CPU735完整状态/252全梯度及736恢复state exact、20host合同P。1.7B实际18交替calls后依指令停止并清空自有进程，rc-2/acceptedfalse，generation steady/decode未完成；4Bperf未运行，不给速度/显存结论 |
 

@@ -396,7 +396,7 @@ R6遵守原11:45新阶段截止，未再启动独立prefix或Native，原stop记
 
 LAB 中已有的 R37 cohort 完成了同一真实 Qwen3-0.6B BF16 LoRA 在 Native torch_npu 与 Jittor shim 两侧的 full、prefix、fresh-process resume 交叉验证。该结果绑定 2500 文件冻结源清单 `real-model/qwen3-06b-training-npu-cat-fix-r37/source-manifest-r1.json`，SHA256 `aa56c083de1404dcfc744b31edc3dcb973f574d3dcb0d048c691d8ffa400d383`；不是当前 MAIN 的隐式新验证。4 次 optimizer update、两边各自的 2+2 fresh-process 恢复均有终态，所有实际训练阶段都有 NPU witness；Jittor fallback_count=0。交叉比较共 2187 项，失败 0、超预算元素 0，其中精确比较 1360 项、forward 138 项、gradient 684 项、采样 RNG 标识 5 项。Forward 沿用 atol=0.005/rtol=0.03，gradient 沿用 atol=0.01/rtol=0.05，没有改预算。证据见 `real-model/qwen3-06b-training-npu-cat-fix-r37/cross-validation-summary.json` 和 R37 cohort 内两种 runtime 的原始阶段报告。
 
-这补上了同冻结源上的 Native 全流程对拍证据，但不把它外推为当前 MAIN-r28 源码的 Native 重跑，也不覆盖随机 dropout、通用确定性恢复或性能结论。MAIN-r28 已有的 Jittor 真实 LoRA 4-update 训练、保存和新进程恢复仍是独立证据，见本报告 11:54 记录。
+R22 在当前工作树逐项核验该清单的2500个文件，全部 SHA256 与 R37 manifest 一致（0 mismatch；证据为 LAB 的 distributed/r22/current-source-manifest-check.json）。因此 R37 的 Native/Jittor 对拍对应当前树中这2500个清单覆盖文件的相同源码内容，不是跨不同冻结源码外推；这仍是 R37 的冻结执行记录，不是当前 HEAD 新启动的一次模型运行，也不覆盖清单外文件、清单外环境差异、随机 dropout、通用确定性恢复或性能结论。MAIN-r28 已有的 Jittor 真实 LoRA 4-update 训练、保存和新进程恢复仍是独立证据，见本报告 11:54 记录。
 
 ### 修复 HCCL 验证器的过时 facade 假设
 
