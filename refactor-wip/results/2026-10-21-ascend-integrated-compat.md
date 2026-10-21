@@ -461,3 +461,7 @@ R28 再用 fresh 空闲卡3/5进入双卡 Jittor full，约11.61秒时发现外�
 R29 用 fresh 空闲卡3/6启动后约2.14秒，live monitor 捕获外部 PID 1992911 占卡6，driver 返回125；rank日志均为0字节。自有 launcher PID 2013322 及进程组已核验退出；事后卡表仍显示卡6有外部进程，未向其发送信号。完整记录在 distributed/r29/。
 
 这些 cohort 均复用 source manifest SHA256 aa56c083de1404dcfc744b31edc3dcb973f574d3dcb0d048c691d8ffa400d383 与 R24 串行单 rank prewarm 证据，但都没有得到 Jittor FSDP2 full 的训练终态；R25/R28 虽启动到 worker setup，也没有可接受的模型更新或恢复比较。MAIN-r28 双卡 Jittor FSDP2、prefix/resume 与配对性能仍未验收。
+
+### R30：3/5 runtime admission 抢占
+
+R30 在 fresh 快照确认物理卡3/5为空后启动 Jittor full launcher；运行中1.80秒，live monitor 在卡3发现外部 PID 2267027，driver 返回125并终止本 cohort 自己的进程组。rank0/rank1 stdout 均为0字节，没有 rank worker 或训练状态；launcher PID 2268069 及 PGID 已核验退出。事后 fresh 快照仍显示外部 PID 2267027 在卡3，未向其发送信号；记录保存在 distributed/r30/。
