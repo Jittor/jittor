@@ -50,6 +50,44 @@ def lazy_exp(value):
     '''])
 
 
+@pytest.fixture
+def queued_callback():
+    # Use the actual native FetchFunc conversion and EventQueue dispatch. Empty
+    # payloads isolate callback reentry without a stream delay or D2H timing.
+    return jt.compile_custom_op(r'''
+        #pragma once
+        #include "core/op.h"
+        #include "ops/composite/fetch_op.h"
+        namespace jittor {
+        struct CompatMaterializationCallbackOp : Op {
+            CompatMaterializationCallbackOp(FetchFunc&& callback);
+            const char* name() const override { return "compat_materialization_callback"; }
+        };
+        }
+    ''', r'''
+        #include "compat_materialization_callback_op.h"
+        #include "core/event_queue.h"
+        namespace jittor {
+        namespace {
+        std::list<FetchResult> queued;
+        void dispatch() {
+            auto task = std::move(queued.front());
+            queued.pop_front();
+            task.call();
+        }
+        }
+        CompatMaterializationCallbackOp::CompatMaterializationCallbackOp(FetchFunc&& callback) {
+            VarPtr sentinel(NanoVector{0}, ns_int32);
+            sentinel->set_stop_grad();
+            sentinel->finish_pending_liveness();
+            queued.emplace_back(FetchResult{std::move(callback), {}, {}});
+            event_queue.push(&dispatch);
+            forward(sentinel);
+        }
+        }
+    ''', "compat_materialization_callback", warp=False)
+
+
 def test_ready_read_preserves_original_graph_and_gradient(capfd):
     x = torch.tensor([.2, .4], device="cuda", requires_grad=True)
     x.sync()
@@ -126,6 +164,162 @@ def test_strong_materialization_does_not_submit_unrelated_graph(capfd):
     assert not unrelated.is_finished
     del unrelated
     np.testing.assert_allclose(snapshot(ready), [.4, .8], rtol=1e-5)
+
+
+def test_fetch_callback_new_graph_keeps_caller_policy(queued_callback):
+    x = torch.tensor([.2, .4], device="cuda", requires_grad=True)
+    x.sync(True, False)
+    requested = (x * 2).sum()
+    delivered, foreign = [], []
+
+    def callback():
+        value = x.square().sum()
+        foreign.append(value)
+        jt.sync([value], True, False)
+        delivered.append(int(jt.flags.keep_graph))
+
+    queued_callback(callback)
+    assert not delivered
+    ready, = materialize(requested)
+    assert delivered == [0]
+    assert foreign[0].is_finished, "MATERIALIZER_CAPTURED_FOREIGN_FETCH_CALLBACK_WORK"
+    np.testing.assert_allclose(snapshot(ready), 1.2, rtol=1e-6)
+    gradient = jt.grad(foreign[0], x, retain_graph=True)
+    np.testing.assert_allclose(snapshot(gradient), [.4, .8], rtol=1e-6)
+
+
+def test_fetch_callback_preserves_explicit_keep_one(queued_callback):
+    x = torch.tensor([.2, .4], device="cuda")
+    x.sync(True, False)
+    requested = x * 2
+    delivered, foreign = [], []
+
+    def callback():
+        value = x * 3
+        foreign.append(value)
+        jt.sync([value], True, False)
+        delivered.append(int(jt.flags.keep_graph))
+
+    with jt.flag_scope(keep_graph=1):
+        queued_callback(callback)
+        materialize(requested)
+        assert jt.flags.keep_graph == 1
+        assert delivered == [1]
+        assert not foreign[0].is_finished
+    foreign[0]._release_kept()
+
+
+def test_fetch_callback_nested_materializer_restores_policy(queued_callback):
+    x = torch.tensor([.2, .4], device="cuda")
+    x.sync(True, False)
+    requested = x * 2
+    policies, foreign = [], []
+
+    def inner_callback():
+        value = x * 4
+        foreign.append(value)
+        jt.sync([value], True, False)
+        policies.append(int(jt.flags.keep_graph))
+
+    def outer_callback():
+        policies.append(int(jt.flags.keep_graph))
+        inner_request = x * 3
+        queued_callback(inner_callback)
+        inner_ready, = materialize(inner_request)
+        np.testing.assert_allclose(snapshot(inner_ready), [.6, 1.2], rtol=1e-6)
+        policies.append(int(jt.flags.keep_graph))
+
+    queued_callback(outer_callback)
+    ready, = materialize(requested)
+    assert policies == [0, 0, 0]
+    assert jt.flags.keep_graph == 0 and foreign[0].is_finished
+    np.testing.assert_allclose(snapshot(ready), [.4, .8], rtol=1e-6)
+
+
+def test_fetch_callback_exception_restores_caller_policy(queued_callback):
+    x = torch.tensor([.2, .4], device="cuda")
+    x.sync(True, False)
+    requested = x * 2
+    policies = []
+
+    def callback():
+        policies.append(int(jt.flags.keep_graph))
+        raise RuntimeError("MATERIALIZATION_CALLBACK_EXPECTED_ERROR")
+
+    with jt.flag_scope(keep_graph=1):
+        queued_callback(callback)
+        with pytest.raises(RuntimeError, match="MATERIALIZATION_CALLBACK_EXPECTED_ERROR"):
+            materialize(requested)
+        assert jt.flags.keep_graph == 1
+    assert policies == [1]
+    requested._release_kept()
+
+
+@pytest.mark.parametrize("with_view", [False, True])
+def test_materialization_preserves_foreign_kept_storage(with_view):
+    x = torch.tensor([.2, .4], device="cuda", requires_grad=True)
+    x.sync(True, False)
+    foreign = (x.square() + 1) * 3
+    with jt.flag_scope(keep_graph=1):
+        jt.sync([foreign], True, False)
+    address = foreign._mem_ptr_now
+    assert address and not foreign.is_finished
+    if with_view:
+        # Keep the view as a distinct storage-sharing node, so the release
+        # candidate's ring really contains the protected foreign member.
+        with jt.flag_scope(no_fuse=1):
+            value = foreign.view(1, 2)
+    else:
+        value = foreign
+    ready, = materialize((value * 2).sum())
+    assert foreign._mem_ptr_now == address, "MATERIALIZER_RELEASED_FOREIGN_KEEP1_STORAGE"
+    if with_view:
+        assert value._mem_ptr_now == address
+    # Read via an independent destination: never migrate or reexecute foreign.
+    destination = torch.empty_like(foreign)
+    destination.sync(True, False)
+    destination._copy_into(foreign, False)
+    np.testing.assert_allclose(snapshot(destination), [3.12, 3.48], rtol=1e-6)
+    np.testing.assert_allclose(snapshot(ready), 13.2, rtol=1e-6)
+    foreign._release_kept()
+
+
+def test_materialization_preserves_recorded_cuda_graph_buffers():
+    assert jt.core.graph_capture_supported()
+    x = torch.tensor([.2, .4], device="cuda")
+    x.sync(True, False)
+    foreign = (x.square() + 1) * 3
+    handle = 0
+    try:
+        with jt.flag_scope(keep_graph=1):
+            jt.sync([foreign], True, False)
+            assert jt.core.graph_capture_begin()
+            try:
+                jt.sync([foreign], False, False)
+            finally:
+                handle = jt.core.graph_capture_end()
+        assert handle, "simple warmed CUDA arithmetic must produce a recorded graph"
+        jt.core.graph_bind_leaves(handle, [foreign])
+        address = foreign._mem_ptr_now
+        launches = jt.core.graph_launch_count()
+        jt.core.graph_launch(handle)
+        jt.core.graph_wait()
+        materialize((foreign * 2).sum())
+        assert foreign._mem_ptr_now == address
+        assert not jt.core.graph_leaves_moved(handle)
+        updated = np.array([.3, .5], dtype=np.float32)
+        x._write_inplace(updated)
+        jt.core.graph_launch(handle)
+        jt.core.graph_wait()
+        destination = torch.empty_like(foreign)
+        destination.sync(True, False)
+        destination._copy_into(foreign, False)
+        np.testing.assert_allclose(snapshot(destination), [3.27, 3.75], rtol=1e-6)
+        assert jt.core.graph_launch_count() >= launches + 2
+    finally:
+        if handle:
+            jt.core.graph_release(handle)
+        foreign._release_kept()
 
 
 def test_failed_producer_returns_no_alias_and_restores_scope():

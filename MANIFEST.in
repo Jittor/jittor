@@ -848,6 +848,7 @@ include src/runtime/profiler/step_trace.h
 include src/runtime/profiler/vtop.cc
 include src/runtime/random_generator.cc
 include src/runtime/random_generator.h
+include src/runtime/rematerialization_scope.h
 include src/runtime/ring_buffer.cc
 include src/runtime/ring_buffer.h
 include src/runtime/rng_state.cc

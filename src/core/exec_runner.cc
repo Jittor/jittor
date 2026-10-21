@@ -33,6 +33,7 @@
 #include "debug/nan_checker.h"
 #include "utils/cache_compile.h"
 #include "core/var_holder.h"
+#include "runtime/rematerialization_scope.h"
 #include "mem/swap.h"
 #include "bindings/pybind/py_var_tracer.h"
 #include "mem/mem_info.h"
@@ -334,6 +335,7 @@ static Var* aliased_input(Var* v) {
 
 static bool may_release_kept(Var* v, const std::unordered_set<Var*>& pinned) {
     if (!v->flag(VarFlags::_kept) || v->is_finished() || !v->mem_ptr) return false;
+    if (!rematerialization_allows_release(v)) return false;
     if (v->flag(VarFlags::_host_resident)) return false;
     Op* producer = v->input();
     if (!producer) return false;

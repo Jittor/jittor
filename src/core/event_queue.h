@@ -9,6 +9,7 @@
 #include <mutex>
 #include <condition_variable>
 #include "core/common.h"
+#include "runtime/rematerialization_scope.h"
 
 namespace jittor {
 
@@ -46,8 +47,10 @@ struct EventQueue {
             std::lock_guard<std::mutex> g(mtx);
             ts = move(tasks);
         }
-        for (auto func : ts)
+        for (auto func : ts) {
+            RematerializationCallbackScope scope;
             func();
+        }
     }
 
     inline void push(Func func) {
