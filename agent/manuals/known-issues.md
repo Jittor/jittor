@@ -2356,3 +2356,32 @@ workaround.
   SoCs/CPUs with `trace_py_var=3`; if the shared-block partial fill is
   reproducible off-310P, promote this to a scheduler bug entry and fix
   the dependency/fill ordering in `setitem_inplace`.
+
+## KI-BACKEND-023: SDXL automatic device recording can exhaust 310P event resources
+
+- Severity: High (inference aborts under the affected recording configuration)
+- Status: Open; confirmed on Ascend310P3 / CANN 9.1.0, 2026-10-22,
+  at `0e0c28bc0e193103e34760a279e932b0b5e1fcbd`.
+- Owner: ACL backend and graph-replay maintainers
+- Symptom: SDXL 1024-square, 20-step Euler generation with `--timing total`,
+  packed FP16 Linear weights, SDPA and the default 256 MiB recording budget
+  fails during its first warm-up with `207007 ACL_ERROR_RT_NO_EVENT_RESOURCE`.
+  The reported operator is FP32 GroupNorm on `[1,256,512,512]` in VAE decode.
+  The earlier component benchmark and generation with internal timing hooks
+  do not establish that this unhooked configuration works.
+- Cause: The SDK reports event-resource exhaustion. The precise recording
+  interaction is not isolated; the existing byte-retention budget does not
+  establish an event-resource bound. No specific event leak is proven.
+- Workaround: Run the same workload under
+  `jt.runtime.scope(auto_graph_replay_retain_bytes=1 << 20)`. A fresh process
+  completed one full warm-up and one timed generation with zero fallback.
+  Both text encoders and UNet retained executor replay while device recording
+  was refused by the tighter 1 MiB budget; precision and model math were
+  unchanged. This is a measured configuration, not a default-path fix.
+- Evidence: The failed default run and successful scoped run are preserved
+  separately in the [310P optimization report](../../docs/results/2026-10-22-generative-vision-ascend310p-optimization.md),
+  including source identity, actual policy flags and the unversioned logs.
+- Exit condition: The original unhooked SDXL reproduction completes repeated
+  fresh-process warm-up / timed generations under the default recording
+  budget, with zero fallback and equivalent paired outputs, after a verified
+  runtime or SDK fix. Recheck when CANN, the driver or recording policy changes.

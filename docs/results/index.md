@@ -11,6 +11,7 @@
 ```{toctree}
 :maxdepth: 1
 
+2026-10-22-generative-vision-ascend310p-optimization
 2026-10-21-generative-vision-ascend310p-performance
 2026-10-16-diffusers-maintained-cpu-nightly
 2026-10-16-h3-upstream-gradient-components
