@@ -2,7 +2,7 @@
 
 import jittor as jt
 from jittor.optim.algorithms.adam import adam_update
-from jittor.optim.algorithms.sgd import sgd_update
+from jittor.optim.algorithms.sgd import momentum_initialized_flags, sgd_update
 from jittor.optim.base import _realign_state_buffers
 
 from . import common, grad_sync, shard

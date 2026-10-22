@@ -30,7 +30,12 @@ from torch.utils.data import DataLoader, TensorDataset
 
 def _values(value):
     if isinstance(value, torch.Tensor):
-        return value.detach().clone().cpu().numpy().tolist()
+        tensor = value.detach().clone()
+        # NumPy does not support torch.bfloat16; converting to float32 keeps
+        # every BF16 value exact while making it serializable for comparisons.
+        if tensor.dtype is torch.bfloat16:
+            tensor = tensor.to(dtype=torch.float32)
+        return tensor.cpu().numpy().tolist()
     if isinstance(value, dict):
         return {str(key): _values(item) for key, item in value.items()}
     if isinstance(value, (tuple, list)):

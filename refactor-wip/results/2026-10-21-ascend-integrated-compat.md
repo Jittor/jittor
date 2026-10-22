@@ -566,10 +566,23 @@ Native torch_npu 与 Jittor shim 在物理NPU3/6完成full 8 updates、prefix 3 
 
 R57仅封闭当前最终HEAD上的FP32 direct HCCL FSDP2双卡复验，不把固定FP32 linear fixture外推至真实模型、BF16 Accelerate包装、activation checkpoint、FSDP2输入梯度差异或性能/显存。该运行耗时不是受控性能测量。
 
+### 2026-10-23 R58–R63：当前树 FSDP2 输入梯度三精度对拍与 SGD 修复
+
+R58–R63 均为独立 LAB cohort，旧输出没有覆盖。R58 的 Native harness 在模型计算前把 mp_policy=None 显式传入 fully_shard，违反当前 API 的默认策略路径；该轮没有计算或数值输出。R59 改为 FP32 完全省略 mp_policy 后，Native 已完成 FP32/FP32 输入用例，并进入 BF16 compute/FP32 input 的 backward；保存 x.grad 时共享测试 helper 直接调用 BF16 .numpy() 而抛 TypeError，未落盘数组且没有启动 Jittor。仓库 _values helper 随后改为将 BF16 精确转成 FP32 再序列化，CPU smoke 对样例值逐项相等；此转换不改变 BF16 数值，也未调整比较预算。
+
+R60 的 Native 双 rank 三精度 full 阶段通过并保存完整报告。Jittor 在首个 FP32 用例完成前向/反向、进入 SGD optimizer.step() 时因 compat/fsdp2/optimizer.py 漏导入 momentum_initialized_flags 而 NameError，数值比较未执行。对照 origin/2.0-refactor 文件确认其已有该导入；本分支将其补到现有 SGD import，并在 compat/tests/fsdp2/test_fsdp_optimizer_math.py 增加分片 SGD 首次 momentum buffer seed 的回归用例。该定向回归在隔离 CPU Jittor 环境 1 passed，日志在 LAB distributed/fsdp2-sgd-cpu-regression-r1/pytest.log。
+
+R61 使用 source commit 571afb2bda09672d1c179654fc12e76091f1848e 加三项明确工作树 overlay（共享 BF16 serializer、FSDP2 SGD import、回归测试），2620 个跟踪文件哈希 mismatch 为0，manifest SHA256 ac37ddd68e126a3e59f97024e13172a56f3f8bb1fed67fe70ac295a95cffdbac。Native 与 Jittor 分别在物理 NPU3/6 完成 FP32 compute/FP32 input、BF16 compute/FP32 input、BF16 compute/BF16 input 三个 case 的输出、输入叶梯度、全参数梯度和一步 SGD 更新；两边4份 rank报告均 PASS，Jittor fallback为0，MPI未加载，设备进程退出后NPU3/6为空。R61 首次总驱动没有完成 cross-runtime gate，因为比较器把报告中的 torch.float32 与预期标签 float32 直接比较；全部运行时数组与报告已保留。
+
+R62 修正 dtype 标签后离线比较又暴露比较器没有递归处理 initial_parameters、parameter_gradients、updated_parameters 字典；R62以 TypeError 停止，仍未作数值比较。R63 在独立副本中补齐 dtype 标签归一化和嵌套字典叶比较，只读取 R61 两侧 rank 报告，事前/事后报告 SHA256一致，没有重新启动模型或使用 NPU。比较覆盖90个数组/标量，失败0、mismatch0；沿用 atol=2e-6, rtol=2e-5。所有三种输入梯度 dtype 在 Native 与 Jittor 两个 rank 上均匹配；各自 rank 间参数梯度和更新一致，rank-local 输入梯度随输入不同。R63 是对实际 R61 双卡输出的离线比较 cohort，不把 R61 原始驱动的 checker 异常覆盖成成功。
+
+完整执行、原始失败、源清单、设备及进程日志位于 LAB distributed/fsdp2-input-gradient-r58/ 至 r63-compare/。当前分支后续提交的源码内容逐项包含 R61 三个 overlay；R63 不提供更复杂 FSDP2 拓扑、真实模型或 checkpoint 恢复的外推证据。
+
 ### 按原计划仍需完成
 
-1. R50 的混合精度输入梯度矩阵已在当前2620文件树上做到 Native/Jittor 168数组逐位一致；继续扩展视图、梯度拓扑与输入形状，并专门核对FSDP2分片及FP32/部分混合精度输入梯度，现有合成fixture不外推所有布局。
-2. R47 BF16 Accelerate FSDP2、R50 FP32 direct HCCL FSDP2及R57当前最终HEAD复验的双卡full/prefix/fresh-resume合成fixture已通过；仍需真实或更复杂模型布局、更多参数/输入梯度路径，以及FSDP2 activation checkpoint 重计算验证。
-3. R51/R56已通过tiny BERT LoRA dropout=0.15的Native/Jittor各自随机状态恢复；仍需按需求验证真实Qwen随机训练、随机Sampler/数据增强、多worker或显式generator恢复，并解决两侧deterministic policy不匹配。不要将各自恢复通过写成跨runtime随机流相同。
-4. 将较早冻结源码的通用 Trainer、Accelerate、Tokenizers、PEFT、safetensors 数据加载与保存/重载场景逐项映射到当前清单；R49覆盖真实Qwen/PEFT/Trainer/checkpoint主链，不替代所有通用组合。
-5. 仅对正确性已通过的对应工作负载配对测吞吐、延迟、峰值显存和稳定性，拆分JIT、首步与稳态，分别报告训练和推理；当前没有合格NPU性能/显存结果。
+1. **把真实 Qwen3-0.6B BF16 LoRA 对拍重绑到当前源码。** R49 在较早 source commit 2aa5191c 上已完成 Native/Jittor full、prefix、fresh-process resume、全梯度和参数更新交叉检查；按不同冻结源码不外推的约定，需在纳入当前修复的干净提交树上重跑同一共享权重/数据，并核实输出、梯度、更新及恢复状态。
+2. **扩展 FSDP2 正确性场景。** R61/R63 已通过小型 Linear fixture 的三种 compute/input dtype 及 SGD 更新，但仍需真实模型或更复杂参数/视图/梯度拓扑、不同分片布局和优化器状态路径；R47 BF16 Accelerate 与 R57 FP32恢复各自保持独立证据，不相互外推。
+3. **验证 activation checkpoint 重计算。** 检查前向与梯度对拍、重算行为和峰值显存；当前 torch.utils.checkpoint 路径仍是已标注的近似直通实现，不能据此声称支持重计算或节省激活显存。
+4. **补充随机训练恢复与确定性策略。** R51/R56 只证明 tiny BERT LoRA dropout=0.15 下两个 backend 各自 fresh-process 恢复 exact；仍需按需求覆盖真实 Qwen、随机 sampler/增强、多 worker 预取、显式 generator，并处理 Native/Jittor deterministic policy 不匹配。不能宣称跨 runtime 随机流相同。
+5. **把生态常用组合逐项映射到当前清单。** 核实 Transformers、Tokenizers、PEFT、Accelerate、safetensors 的数据加载、训练包装、保存/重载和错误路径；已有 R49 真实 Qwen 主链不替代所有通用组合。
+6. **只对相同且正确性通过的场景做配对性能验收。** 报告训练/推理吞吐、延迟、峰值显存及稳定性，拆分首次 JIT、首步和稳态；当前没有合格的 NPU 速度/显存结果。
