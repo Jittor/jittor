@@ -526,8 +526,8 @@ R49中Native在首个NPU kernel前启用 deterministic algorithms，而Jittor de
 
 ### 按原计划仍需完成
 
-1. 在R43基础矩阵和R49真实Qwen对拍之上扩展视图、更多梯度拓扑与输入形状；定位FSDP2分片/混合输入精度下的FP32与部分混合精度梯度差异，现有合成fixture不外推所有布局。
-2. R42（2500文件源码）FP32 FSDP2及R47（当前2620文件源码）BF16 Accelerate FSDP2双卡合成fixture已通过；继续覆盖真实/更复杂模型布局、更多参数和输入梯度路径及FSDP2激活重计算。
+1. R50已在当前2620文件树重跑R43输入梯度矩阵，Native/Jittor 168数组逐位一致；下一步扩展视图、更多梯度拓扑与输入形状，继续定位真实FSDP2分片/混合输入精度梯度差异，现有合成fixture不外推所有布局。
+2. R50（当前2620文件树）FP32 direct HCCL FSDP2及R47（当前2620文件树）BF16 Accelerate FSDP2双卡合成fixture已通过；继续覆盖真实/更复杂模型布局、更多参数和输入梯度路径及FSDP2激活重计算。
 3. 验证 activation checkpoint 重计算语义、两侧确定性策略及随机/dropout训练状态恢复，并做同源 Native/Jittor fresh-process 对拍。R49固定样本顺序通过不证明随机恢复或确定性策略匹配。
 4. 将较早冻结源码上的通用 Trainer/Accelerate/safetensors 综合工作流逐项映射至当前清单；R49覆盖真实Qwen/PEFT/Trainer/checkpoint主链，但不替代其余通用数据加载、保存重载场景。
 5. 对已通过正确性门槛的相同工作负载配对测吞吐、延迟、峰值显存和稳定性；拆分JIT、首步和稳态，分别报告训练与推理。当前没有合格NPU性能/显存结果。
@@ -542,3 +542,19 @@ R49中Native在首个NPU kernel前启用 deterministic algorithms，而Jittor de
 - `JITTOR_TORCH_SHIM=1 PYTHONPATH=python python -m pytest -q tests/structure` 使用隔离 CPU backend 缓存完成，1558 项收集并执行，1556 passed、2 skipped，588.26s；没有结构测试失败。完整输出为 LAB `_tmp/validate-ascend-20261023/structure-final-cpu.log`。
 
 另有一次显式 ACL 环境的冷缓存 native 收集探测在导入 `jittor_core` 时 SIGABRT，未进入 checkpoint 回归断言，也未执行 NPU 算子；完整堆栈保存在 LAB `_tmp/validate-ascend-20261023/structure-cpu-warm-collect.log`。该尝试不计为 ACL 通过或测试失败，最终结构套件在无 ACL、无 NPU 可见性的 CPU-only 配置下通过。
+
+### R50：当前2620文件树输入梯度矩阵与 FP32 FSDP2
+
+R50 分为 LAB device-api/input-grad-current-r50/ 和 distributed/fsdp2-f32-r50/ 两个独立 cohort。两者使用 R47 的 2620 文件 source manifest（SHA256 5e9ff90b92603dadf8145b91c57468d62edece5d8f5ede3e5e51272d56f7fcf5）；该 manifest 的 source_commit 元数据仍写着较早的 2aa5191c1943c06168d67263e53bc7dad5c1a3d2，但本次独立对当前 HEAD f9578ed95d9b0102c55701b6d2c79a1c19561939 做了2620个文件逐项核验，hash mismatch为0。每个训练worker还在运行前后复核自身清单。
+
+#### 当前源码 FP32/部分混合精度输入梯度矩阵
+
+Native torch_npu 与 Jittor shim 在物理NPU3先后运行同一个 BF16/FP16 compute矩阵，覆盖 FP32/compute-dtype 输入、Linear-chain/LoRA、两次 SGD 更新及完整输出/梯度/参数快照。Native 正式回归为8 passed、2 skipped（仅Native没有Jittor raw mapped_matmul API）；Jittor正式回归10 passed，backend fallback=0。两侧归档经原协议完整比较为168个数组、5760个元素，168/168数组逐位一致，最大绝对/相对差为0；低精度输入子集为84个数组、2880个元素，同样84/84逐位一致。没有调整原比较预算。具体运行、完整 arrays 与报告在 LAB device-api/input-grad-current-r50/，汇总比较为 full-array-comparison-r50.json。
+
+首次 Jittor 启动时，规范环境中的 JT_BUILD_CACHE_NAME 覆盖了legacy cache_name，日志显示进程误入 foundation-frontend-npu-r1 命名空间并开始编译。该任务在NPU计算前由本任务停止，return code -15、设备witness未通过，不计为验证；启动日志与部分缓存保留在R50 LAB cohort。修正后的运行显式设置 JT_BUILD_CACHE_NAME=main_tree_fsdp2_cat_fix_r1，复用R47在同一2620文件哈希上实际通过的构建缓存；rank0/rank1的build_config、jittor_core、build stamp、jit_utils_core四项哨兵哈希前后完全一致。
+
+#### 当前源码 FP32 direct HCCL FSDP2 双卡 full/resume
+
+Native torch_npu 与 Jittor shim 在物理NPU3/6分别完成 FP32 FSDP2 full 8 updates、prefix 3 updates及fresh-process resume到8 updates，六个 phase return code 全为0，12份rank-phase终态均为PASS。Native/Jittor full轨迹交叉 oracle 按固定 atol=2e-6、rtol=2e-5 通过；两侧各自full与prefix/resume的状态、梯度和训练轨迹比较均按exact通过。每个rank的实际物理卡映射均被核实，Jittor fallback_delta=0、MPI未加载、源码未变化。R50结束时的NPU3/6快照均无进程。完整phase、rank、跨runtime、恢复和缓存证据在 LAB distributed/fsdp2-f32-r50/，摘要为 result-summary.json。
+
+R50使用固定FP32合成linear fixture；本次结果补上当前源码FP32 direct HCCL/FSDP2双卡证据，但不代表真实Qwen FSDP2、Accelerate混合包装、更多分片/视图拓扑、activation checkpoint、随机dropout恢复或性能/显存资格已通过。R47的BF16 Accelerate FSDP2证据仍单独保留，不与R50互相外推。
