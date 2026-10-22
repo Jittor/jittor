@@ -39,7 +39,9 @@ def compile(model=None, *args, **kwargs):
     instead of rebuilding it every call, and a function in a
     `jittor._runtime.step_capture.StepCapture`, which replays the whole call
     -- a training step's forward, backward and optimizer update included.
-    Any other mode runs as written.
+    Calls needing an external backward keep the original CUDA autograd graph;
+    function replay requires no_grad inference or a complete backward inside
+    the call, with no differentiable caller inputs. Any other mode runs as written.
     """
     from ...stub_policy import unimplemented
     if kwargs.get("fullgraph"):
@@ -76,7 +78,7 @@ def compile(model=None, *args, **kwargs):
         release_auto_replay(owner)
     # A function -- typically a whole training step, forward, backward and
     # optimizer update -- is captured and replayed as one graph.
-    return StepCapture(model)
+    return StepCapture(model, _guard_external_backward=True)
 
 
 def script(obj=None, **kwargs):

@@ -14,10 +14,38 @@
 #include "ops/op_register.h"
 #include "core/var_holder.h"
 #include "runtime/submission_pipeline.h"
+#include <atomic>
+#include <algorithm>
 
 namespace jittor {
 
 #define PREVENT_LARGE_FUSED_OP 16
+
+namespace {
+struct StepBackwardProbe {
+    uint64 token;
+    unordered_set<int64> variables;
+    explicit StepBackwardProbe(uint64 token) : token(token) {}
+};
+thread_local vector<StepBackwardProbe> step_backward_probes;
+std::atomic<uint64> next_step_backward_probe{0};
+}
+
+uint64 begin_step_backward_probe() {
+    uint64 token = next_step_backward_probe.fetch_add(1, std::memory_order_relaxed) + 1;
+    step_backward_probes.emplace_back(token);
+    return token;
+}
+
+vector<int64> end_step_backward_probe(uint64 token) {
+    USER_CHECK(!step_backward_probes.empty() && step_backward_probes.back().token == token)
+        << "step backward probes must end on their creating thread in LIFO order";
+    auto variables = move(step_backward_probes.back().variables);
+    step_backward_probes.pop_back();
+    vector<int64> result(variables.begin(), variables.end());
+    std::sort(result.begin(), result.end());
+    return result;
+}
 
 AutogradPolicyState autograd_policy;
 
@@ -466,6 +494,17 @@ vector<VarPtr> grad(
             assign_attrs(grad.ptr, var);
         }
     }
+    // Record only producers this backward actually differentiated. Boundary
+    // inputs of a partial grad are not proof that their own graph was consumed.
+    // Snapshot ids before the non-retained graph can release these nodes.
+    vector<int64> completed_backward_vars;
+    if (!retain_graph && !step_backward_probes.empty()) {
+        for (Var* v : gvars) {
+            Op* producer = backward_grad_fn(v);
+            if (producer && grad_nodes.has(producer))
+                completed_backward_vars.push_back(v->id);
+        }
+    }
     if (!retain_graph) {
         unordered_set<Var*> held_vars;
         held_vars.reserve(runtime_holder_state().holders().size());
@@ -488,6 +527,8 @@ vector<VarPtr> grad(
                 grads[i]->set_stop_grad();
             }
     }
+    for (auto& probe : step_backward_probes)
+        probe.variables.insert(completed_backward_vars.begin(), completed_backward_vars.end());
     return results;
 }
 

@@ -495,12 +495,14 @@ def _write_back_in_graph(state, roots):
 class StepCapture:
     """A callable that replays `fn`'s captured step. See the module docstring."""
 
-    def __init__(self, fn, *, record=True, exact_random=False, max_retained_bytes=None):
+    def __init__(self, fn, *, record=True, exact_random=False, max_retained_bytes=None,
+                 _guard_external_backward=False):
         """`exact_random` refuses a step that draws random numbers rather than
         drawing them from a capture's own stream; `max_retained_bytes` bounds
         what a device recording may keep allocated (see `_record_cuda_graph`).
         """
         self._fn = fn
+        self._guard_external_backward = _guard_external_backward
         self._exact_random = exact_random
         self._max_retained_bytes = max_retained_bytes
         self._capture = None
@@ -530,10 +532,44 @@ class StepCapture:
         """Why the step is not replayed, or None."""
         return self._refused
 
+    def _call_signature(self, args, kwargs):
+        signature = _signature(args, kwargs)
+        if self._guard_external_backward:
+            return signature, bool(jt.flags.no_grad)
+        return signature
+
     def _eager(self, args, kwargs):
         self.stats["eager"] += 1
         with _no_auto():
-            return self._fn(*args, **kwargs)
+            if not self._guard_external_backward or self._refused is not None:
+                return self._fn(*args, **kwargs)
+            grad_enabled = not bool(jt.flags.no_grad)
+            token = _core._begin_step_backward_probe()
+            completed = False
+            try:
+                result = self._fn(*args, **kwargs)
+                completed = True
+            finally:
+                consumed = set(_core._end_step_backward_probe(token))
+                if not completed:
+                    # The failed warmup cannot establish capture eligibility.
+                    self._seen = None
+            outputs = []
+            try:
+                _output_template(result, outputs, {}, _object_ids((args, kwargs)))
+            except _Unreplayable as exc:
+                self._refused = str(exc)
+            if grad_enabled and not consumed:
+                # Frozen or detached outputs do not establish a permanent
+                # no-autograd contract: closure parameters may be unfrozen.
+                self._refused = (
+                    "a grad-enabled call must complete backward for whole-step replay; "
+                    "inference replay requires a no_grad scope")
+            if any(v.requires_grad and int(v.id) not in consumed for v in outputs):
+                self._refused = (
+                    "the call returns differentiable outputs for an external backward; "
+                    "whole-step replay has no external autograd boundary")
+            return result
 
     # -- capture -------------------------------------------------------
     def _capture_now(self, args, kwargs):
@@ -633,7 +669,7 @@ class StepCapture:
         cap.state = state
         cap.state_lists = ([holder for holder, _, _, _ in state],
                            [old for _, old, _, _ in state])
-        cap.signature = _signature(args, kwargs)
+        cap.signature = self._call_signature(args, kwargs)
         # What a device recording of this step would hold.
         cap.graph_bytes = working.bytes()
         return cap, self._results(cap, outputs)
@@ -649,8 +685,8 @@ class StepCapture:
     def _stale(self, cap, args, kwargs):
         if _core._first_finished(cap.roots) >= 0:
             return "the captured graph was finished, most likely by a read"
-        if _signature(args, kwargs) != cap.signature:
-            return "the inputs changed shape or dtype"
+        if self._call_signature(args, kwargs) != cap.signature:
+            return "the inputs changed shape or dtype, or the gradient mode changed"
         # One native pass over the holders; `_adopt` only for those rebound.
         holders, olds = cap.state_lists
         start = 0
@@ -760,6 +796,12 @@ class StepCapture:
         return self._results(cap, cap.outputs)
 
     def __call__(self, *args, **kwargs):
+        if self._guard_external_backward and any(
+                v.requires_grad for v in _input_vars((args, kwargs), [])):
+            # A private byte copy is not an autograd edge to the caller's input.
+            # Keep the original CUDA graph rather than publishing missing grads.
+            self.invalidate()
+            self._refused = "whole-step replay cannot preserve differentiable input gradients"
         if self._refused is not None:
             return self._eager(args, kwargs)
         cap = self._capture
@@ -773,7 +815,7 @@ class StepCapture:
                 self._refused = "the step kept changing, so it was re-captured too often"
                 return self._eager(args, kwargs)
         if cap is None:
-            signature = _signature(args, kwargs)
+            signature = self._call_signature(args, kwargs)
             if signature != self._seen:
                 # The first call of a signature runs as written: it builds
                 # whatever the step creates lazily, which must exist -- and

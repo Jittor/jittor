@@ -38,6 +38,13 @@ void set_autograd_policy(
 // @pyjt(_get_autograd_policy)
 int get_autograd_policy();
 
+// Private, scoped metadata used to admit complete Torch training steps for
+// replay. No graph objects or tensor allocations are retained by a probe.
+// @pyjt(_begin_step_backward_probe)
+uint64 begin_step_backward_probe();
+// @pyjt(_end_step_backward_probe)
+vector<int64> end_step_backward_probe(uint64 token);
+
 /** The recorded differentiable producer of `v`, or null for a backward leaf.
  *
  * This is the graph question `is_leaf` and `grad_fn` are asking, answered from
