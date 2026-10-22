@@ -8,12 +8,12 @@
 | 最终主树回归 | source123 完整 structure 1430P/2 CUDA skips、layout P；1432 不同 case 与 source121 逐 node 相同；97.py+1.pyi AST3.7 P，既定 Ruff 相对 HEAD 新增0、减少12 |
 | 八模型及综合 Trainer | 各自 source65 等冻结证据上，八模型完整输出/271 参数+2输入全梯度；Trainer4updates/8micro、61跨runtime检查；连续与2+2恢复216完整状态及轨迹 exact，dropout0顺序fixture |
 | 共享真实权重推理 | 0.6B既有冻结源码BF16完整推理P；source121的1.7B与4B各3输入/15完整数组/58,343,424 logits bitexact、cached/uncached greedy8 exact、actual NPU/fallback0；不是123重跑 |
-| 最终主树 AMP | source123 原始 no-loader 10P/0skip；其 whole168 严格探针曾有45个 BF16+FP32输入 LoRA input_grad 元素超预算。2026-10-22 叶子梯度修复后，74数组窄探针 bitexact，当前源 Qwen 交叉通过；完整 FP32/混合输入梯度矩阵尚未重跑 |
+| 最终主树 AMP | source123 原始 no-loader 10P/0skip；source ee0146… 上 R43 完成 BF16/FP16 × FP32/低精度输入 × Linear/LoRA × 2步共168阵列/5760元素 Native/Jittor 对拍：168/168 bit-exact、最大差0、strict失败0，预算未改。形式化单测在两runtime共有同两项FP32输入LoRA输入梯度参考不一致，不能记作全套P；详见R43 |
 | 真实0.6B BF16 LoRA | source123 的 R6/R7 完整训练与恢复通过；2026-10-22 当前2500文件源清单 R39 又完成 Native/Jittor full、prefix、fresh-resume 与全梯度交叉：2187 项、失败0、超预算0；实际 NPU、fallback0 |
 | FSDP2 | own88/r7历史源码通过；当前2500文件源清单 ee0146… 上 R42 Native/Jittor FP32 FSDP2 双 rank full、prefix、fresh-resume均通过；12份rank-phase PASS，full跨runtime atol=2e-6/rtol=2e-5、两侧fresh-resume状态/梯度/轨迹exact通过；物理NPU3/6、Jittor fallback_delta=0、源码未变、MPI-free。仅覆盖当前FP32 fixture；BF16 FSDP2、Accelerate包装待验收，无性能结论 |
 | 速度/显存 | NPU未验收。1.7B配对流程仅18交替calls后停止，generation steady/decode未完成、rc-2/acceptedfalse；4Bperf未运行，CPU控制器资格不能替代NPU性能 |
 
-尚未达到全部适配退出条件。当前源 Qwen3-0.6B BF16 LoRA 的 Native/Jittor 完整训练、prefix、fresh-process resume 与全梯度交叉已通过；R42 又在当前2500文件源清单上完成 FP32 FSDP2 双卡 full/prefix/resume，关闭了该 fixture 的训练和恢复缺口。尚需补齐更广 FP32/部分混合精度输入梯度矩阵、BF16/Accelerate包装的 FSDP2，以及 activation checkpoint、确定性策略和随机/dropout 恢复的同源交叉。ASC-03 的 Trainer/Accelerate/safetensors 等综合通过证据来自较早冻结源码，当前源 Qwen 只覆盖真实 LoRA 组合，因此若要对当前主树作完整生态声明，还需按计划将未绑定当前清单的组合补验。正确性门槛通过后再做对应场景的 NPU 吞吐、延迟、峰值显存与稳定性配对测量；当前没有合格 NPU 性能/显存结果。raw CPU core 四文件另有46P/9S/1个原样 test_concat_random 的300秒超时，未删case、缩规模或放宽超时，不称全部core通过。模型和fixture、性能与功能、旧源与最终源均不混用。后文按时间保留各阶段事实，最新验收见文末。
+尚未达到全部适配退出条件。当前源 Qwen3-0.6B BF16 LoRA 的 Native/Jittor 完整训练、prefix、fresh-process resume 与全梯度交叉已通过；R42 当前源 FP32 FSDP2 双卡 full/prefix/resume 也通过。R43 又在当前源完成严格168阵列的 Native/Jittor 逐项 bit-exact 对拍，但正式单测中两项 FP32 输入 LoRA 输入梯度与显式低精度 cast 参考逐位不等，且 Native 同样失败；应修正/澄清参考语义后重跑，不把它记成 Jittor 单边回归，也不改数值预算。其余待验收包括更多视图/梯度拓扑、当前源 BF16/Accelerate FSDP2、activation checkpoint、确定性策略和随机/dropout 恢复，以及把较早冻结源码上的 Trainer/Accelerate/safetensors 组合映射到当前清单。只对正确性通过的对应场景测吞吐、延迟、峰值显存与稳定性；当前没有合格 NPU 性能/显存结果。raw CPU core 四文件另有46P/9S/1个原样 test_concat_random 的300秒超时，未删case、缩规模或放宽超时，不称全部core通过。模型和fixture、性能与功能、旧源与最终源均不混用。
 
 ## 源码与环境
 
@@ -500,9 +500,15 @@ R42绑定当前2500文件 source manifest，SHA256 ee0146a457c1c8df09a277797c04b
 
 复核证据位于 LAB distributed/fsdp2-r42/：torch/full/、torch/prefix/、torch/resume/ 与对应 jittor/ 下的rank报告，跨runtime检查为 cross-runtime-check.stdout.log，两侧fresh-process恢复检查为 torch-resume-check.stdout.log 和 jittor-resume-check.stdout.log。完成后物理NPU3/6均已释放。该cohort使用固定FP32合成fixture；不覆盖BF16 FSDP2、Accelerate包装路径、真实模型FSDP2、激活重计算或NPU性能与显存测试。
 
+### R43：FP32/部分混合精度输入梯度全矩阵对拍
+
+R43 使用当前 2500 文件 source manifest（SHA256 `ee0146a457c1c8df09a277797c04be3044a0cffdcd8ffdbf93fa6aeb083fd419`），固定 cohort 位于 LAB `device-api/input-grad-fullscope-r43/`。BF16/FP16 compute、FP32/对应低精度输入、Linear-chain/LoRA、SGD 两次更新共输出168阵列、5760元素，包含输入/损失 cotangent、输出、输入梯度、FP32 master 参数梯度、参数更新及 frozen base。Native 和 Jittor 均在物理 NPU3 有实际 PID witness，源码前后不变；Jittor backend fallback=0。两侧 arrays.npz SHA256 都是 `432aee32ef71c7316000c285252578b11668676ada6f432a38ade768eafd5bbb`；严格比较168/168 bit-exact、最大绝对/相对差均为0、strict failed arrays为空，低精度输入子集84/84 bit-exact，协议中的 FP32 数值预算保持未变。结果在 `device-api/input-grad-fullscope-r43/full-array-comparison-r5.json`。
+
+R43 的 production Jittor runner 随后执行10项正式单测，8通过、2失败；为判定失败归属，另用隔离 Native oracle 在同一空闲物理卡、同一测试源码复跑，结果为6通过、2失败、2因 Native 无 Jittor raw API 跳过。两侧失败节点完全相同：`test_npu_autocast_linear_chain_fp32_master_full_grad[True-False-float16]` 与 `[True-False-bfloat16]`。失败值是 FP32 输入、LoRA 分支的输入叶子梯度；测试用 `assert_array_equal` 将实际 autocast backward 与显式 `reference_x.to(dtype)` 路径逐位比较，Native 和 Jittor 都不满足该内部参考等式。它是共同的 Native 基线/测试参考语义问题，不是跨runtime差异；不改测试阈值、不据此宣称正式单测全通过。应修正该参考计算或明确其适用范围后重跑。完整失败输出、JUnit、设备见证与前序入口/preflight失败均保留在同一 LAB cohort；NPU3 已释放。
+
 ### 按原计划仍需完成
 
-1. 扩展FP32与部分混合精度输入梯度矩阵，覆盖leaf/intermediate、多分支、视图及真实训练路径；R11窄探针和Qwen场景通过不代替完整矩阵，保持原有数值预算。
+1. 扩展FP32与部分混合精度输入梯度矩阵的视图、更多梯度拓扑及真实工作流关联；R43已覆盖leaf输入、线性中间激活、LoRA双分支及两步参数更新，并在严格预算下168阵列跨runtime bit-exact。先厘清正式测试中Native/Jittor共同失败的显式cast参考断言，再以不放宽预算的方式完成原矩阵余项。
 2. 补当前源 BF16 FSDP2 与 Accelerate包装的FSDP2场景，沿用双卡 admission、完整状态/梯度/参数更新比较和 fresh-process 恢复协议。R42只关闭当前源 FP32合成fixture。
 3. 验证 activation checkpoint 重计算语义、确定性算法策略及随机/dropout训练状态恢复，并做同源 Native/Jittor fresh-process 对拍。Qwen R39的固定采样对拍不证明策略一致或随机恢复。
 4. 将较早冻结源码上的 ASC-03 Trainer/Accelerate/safetensors综合工作流证据与当前源清单对应起来；复用已验证部分并明确只需重跑的缺口，不能跨冻结源码外推。
