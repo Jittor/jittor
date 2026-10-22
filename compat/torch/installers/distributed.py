@@ -802,10 +802,8 @@ def _checkpoint_options(options):
         raise NotImplementedError("flatten_optimizer_state_dict is unsupported")
     if not options.keep_submodule_prefixes:
         raise NotImplementedError("checkpoint prefix removal is unsupported")
-    if options.broadcast_from_rank0:
-        if not options.full_state_dict:
-            raise ValueError("broadcast_from_rank0 requires full_state_dict=True")
-        raise NotImplementedError("broadcast_from_rank0 requires caller-broadcast FULL state")
+    if options.broadcast_from_rank0 and not options.full_state_dict:
+        raise ValueError("broadcast_from_rank0 requires full_state_dict=True")
     return options
 
 
@@ -849,6 +847,32 @@ def _checkpoint_cpu_tree(value):
     if isinstance(value, tuple):
         return tuple(_checkpoint_cpu_tree(item) for item in value)
     return value
+
+
+def _checkpoint_numpy_tree(value):
+    if isinstance(value, jt.Var):
+        return np.array(value.detach().clone().cpu().numpy(), copy=True)
+    if isinstance(value, np.ndarray):
+        return np.array(value, copy=True)
+    if isinstance(value, dict):
+        return {key: _checkpoint_numpy_tree(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_checkpoint_numpy_tree(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_checkpoint_numpy_tree(item) for item in value)
+    return value
+
+
+def _checkpoint_broadcast_from_rank0(state_dict):
+    if _distributed_world_size() <= 1:
+        return state_dict
+    payload = (_checkpoint_numpy_tree(state_dict)
+               if _distributed_rank() == 0 else None)
+    objects = [payload]
+    _broadcast_object_list(objects, src=0)
+    if not isinstance(objects[0], dict):
+        raise TypeError("rank 0 FULL state dict broadcast did not produce a mapping")
+    return objects[0]
 
 
 def _checkpoint_offload(value, options):
@@ -920,6 +944,13 @@ def _get_model_state_dict(model, *a, options=None, **k):
     model = _checkpoint_model(model)
     provider = _checkpoint_fsdp_provider(model, options)
     result = provider._get_full_state_dict(model) if provider else model.state_dict(*a, **k)
+    if (provider is not None and options.full_state_dict and options.cpu_offload
+            and _distributed_world_size() > 1):
+        # HCCL-backed Jittor gathers are lazy. Every rank must execute the full
+        # state-dict gather before CPU offload drops nonzero-rank values;
+        # otherwise rank 0's later serialization can issue a hidden collective
+        # after peers have advanced to optimizer-state collectives.
+        jt.sync_all(True)
     if options.ignore_frozen_params:
         _, parameters = _checkpoint_parameter_names(model)
         result = {name: value for name, value in result.items()
@@ -960,6 +991,11 @@ def _get_optimizer_state_dict(model, optimizers, *, options=None):
         ranks = [None] * _distributed_world_size()
         _native_all_gather_object(ranks, metadata)
         result = provider._gather_optimizer_state_dict(model, result, ranks)
+    if (provider is not None and options.full_state_dict and options.cpu_offload
+            and _distributed_world_size() > 1):
+        # FULL optimizer-state gathers are lazy too. Execute them on every rank
+        # before CPU offload returns an empty state to nonzero ranks.
+        jt.sync_all(True)
     return _checkpoint_offload(result, options)
 
 
@@ -967,6 +1003,11 @@ def _set_model_state_dict(model, state_dict, *a, options=None, **k):
     options = _checkpoint_options(options)
     model = _checkpoint_model(model)
     provider = _checkpoint_fsdp_provider(model, options)
+    if options.broadcast_from_rank0:
+        if provider is None:
+            raise NotImplementedError(
+                "broadcast_from_rank0 is implemented for registered FULL FSDP state")
+        state_dict = _checkpoint_broadcast_from_rank0(state_dict)
     if provider:
         return provider._load_full_state_dict(model, state_dict, strict=options.strict)
     return model.load_state_dict(state_dict, strict=options.strict)
@@ -976,6 +1017,11 @@ def _set_optimizer_state_dict(model, optimizers, state_dict, *, options=None):
     options = _checkpoint_options(options)
     model = _checkpoint_model(model)
     provider = _checkpoint_fsdp_provider(model, options)
+    if options.broadcast_from_rank0:
+        if provider is None:
+            raise NotImplementedError(
+                "broadcast_from_rank0 is implemented for registered FULL FSDP state")
+        state_dict = _checkpoint_broadcast_from_rank0(state_dict)
     optimizers = _checkpoint_optimizers(optimizers)
     parameter_names, _ = _checkpoint_parameter_names(model)
     layouts = []

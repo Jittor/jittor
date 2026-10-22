@@ -7,6 +7,7 @@ from jittor.distributed.fsdp import storage as _storage
 import weakref
 
 import jittor as jt
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from jittor import nn
 
 from . import common, dtensor

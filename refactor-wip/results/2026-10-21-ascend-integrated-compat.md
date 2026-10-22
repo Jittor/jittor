@@ -1,6 +1,6 @@
 # 新 910B3 多库综合适配记录
 
-本记录对应[综合计划](../testing/2026-10-21-ascend-integrated-compat-plan.md)，唯一活动状态源为[整改看板](../architecture/refactor-board.md)的 ASC 任务。前半部分保留 2026-10-21 的 MAIN-r28/123 历史验收；2026-10-22 的续验单独绑定 2500 文件源清单 SHA256 ee0146a457c1c8df09a277797c04be3044a0cffdcd8ffdbf93fa6aeb083fd419，包含 src/core/grad.cc 的叶子梯度累加修复。下文按实际冻结源码区分结果，保留原始失败和未运行项。
+本记录对应[综合计划](../testing/2026-10-21-ascend-integrated-compat-plan.md)，唯一活动状态源为[整改看板](../architecture/refactor-board.md)的 ASC 任务。前半部分保留 2026-10-21 的 MAIN-r28/123 历史验收；2026-10-22 的续验绑定2500文件源清单 SHA256 ee0146a457c1c8df09a277797c04be3044a0cffdcd8ffdbf93fa6aeb083fd419；2026-10-23 的 R47/R49 续验绑定当前2620文件源清单 SHA256 `5e9ff90b92603dadf8145b91c57468d62edece5d8f5ede3e5e51272d56f7fcf5`（source commit `2aa5191c1943c06168d67263e53bc7dad5c1a3d2`，含精确工作区文件内容）。下文按实际冻结源码区分结果，保留原始失败和未运行项。
 
 | 本轮验收 | 实际结论与源码范围 |
 | --- | --- |
@@ -9,11 +9,11 @@
 | 八模型及综合 Trainer | 各自 source65 等冻结证据上，八模型完整输出/271 参数+2输入全梯度；Trainer4updates/8micro、61跨runtime检查；连续与2+2恢复216完整状态及轨迹 exact，dropout0顺序fixture |
 | 共享真实权重推理 | 0.6B既有冻结源码BF16完整推理P；source121的1.7B与4B各3输入/15完整数组/58,343,424 logits bitexact、cached/uncached greedy8 exact、actual NPU/fallback0；不是123重跑 |
 | 最终主树 AMP | source123 no-loader baseline 10P/0skip；source ee0146… 上 R43 完成 BF16/FP16 × FP32/低精度输入 × Linear/LoRA × 2步共168阵列/5760元素 Native/Jittor 对拍：168/168 bit-exact、最大差0、预算未改。修正共同显式cast参考后，source manifest r2 正式单测 Jittor 10/10通过、Native 8通过/2项Jittor-only跳过 |
-| 真实0.6B BF16 LoRA | source123 的 R6/R7 完整训练与恢复通过；2026-10-22 当前2500文件源清单 R39 又完成 Native/Jittor full、prefix、fresh-resume 与全梯度交叉：2187 项、失败0、超预算0；实际 NPU、fallback0 |
-| FSDP2 | own88/r7历史源码通过；当前2500文件源清单 ee0146… 上 R42 Native/Jittor FP32 FSDP2 双 rank full、prefix、fresh-resume均通过；12份rank-phase PASS，full跨runtime atol=2e-6/rtol=2e-5、两侧fresh-resume状态/梯度/轨迹exact通过；物理NPU3/6、Jittor fallback_delta=0、源码未变、MPI-free。仅覆盖当前FP32 fixture；BF16 FSDP2、Accelerate包装待验收，无性能结论 |
+| 真实0.6B BF16 LoRA | 2026-10-23 当前2620文件源清单 R49 完成 Native/Jittor full、prefix、fresh-resume与全梯度交叉：2187项、失败0、超预算0；同运行时状态933项与梯度1136项恢复对拍exact；实际NPU、fallback0 |
+| FSDP2 | R42在2500文件清单上通过FP32双rank full/prefix/resume；R47在当前2620文件清单上通过BF16 Accelerate FSDP2双rank full及Jittor prefix/fresh-resume；跨runtime full atol=2e-6/rtol=2e-5，Jittor恢复状态/梯度/轨迹exact；NPU3/6、fallback0、MPI-free。仅合成linear fixture，不含真实模型/重计算/性能结论 |
 | 速度/显存 | NPU未验收。1.7B配对流程仅18交替calls后停止，generation steady/decode未完成、rc-2/acceptedfalse；4Bperf未运行，CPU控制器资格不能替代NPU性能 |
 
-尚未达到全部适配退出条件。当前源 Qwen3-0.6B BF16 LoRA 的 Native/Jittor 完整训练、prefix、fresh-process resume 与全梯度交叉已通过；R42 当前源 FP32 FSDP2 双卡 full/prefix/resume 也通过。R43 的168阵列混合精度梯度矩阵与修正后的正式单测均通过，原数值预算未改；其余仍需补更多视图/梯度拓扑、当前源 BF16/Accelerate FSDP2、activation checkpoint、确定性策略和随机/dropout 恢复，并把较早冻结源码上的 Trainer/Accelerate/safetensors 组合映射到当前清单。只对正确性通过的对应场景测吞吐、延迟、峰值显存与稳定性；当前没有合格 NPU 性能/显存结果。raw CPU core 四文件另有46P/9S/1个原样 test_concat_random 的300秒超时，未删case、缩规模或放宽超时，不称全部core通过。模型和fixture、性能与功能、旧源与最终源均不混用。
+尚未达到全部适配退出条件。当前2620文件清单上的 Qwen3-0.6B BF16 LoRA Native/Jittor full、prefix、fresh-process resume 与全梯度交叉已通过；R47 也通过当前清单的 BF16 Accelerate FSDP2 双卡合成fixture，R42 的 FP32 FSDP2 结论仍绑定此前2500文件清单。R43 基础混合精度输入梯度矩阵与正式单测通过，原数值预算未改。仍需扩展视图/梯度拓扑，并验证 FSDP2 下不同输入精度梯度、真实/更复杂模型布局与激活重计算；还需验证 deterministic policy 与随机/dropout 状态恢复，并把更早源码上的通用 Trainer/Accelerate/safetensors 场景逐项映射到当前清单。R49 的 Native 开启确定性、Jittor策略仍未实现，不能宣称两侧确定性策略兼容。只对正确性通过的相同工作负载测吞吐、延迟、峰值显存与稳定性；当前没有合格 NPU 性能/显存结果。raw CPU core 四文件另有46P/9S/1个原样 test_concat_random 的300秒超时，未删case、缩规模或放宽超时，不称全部core通过。模型和fixture、性能与功能、旧源与最终源均不混用。
 
 ## 源码与环境
 
@@ -506,10 +506,39 @@ R43 使用当前 2500 文件 source manifest（SHA256 `ee0146a457c1c8df09a277797
 
 原始 formal reference 的失败完整保留：Jittor 为8通过/2失败，隔离 Native 为6通过/2失败/2项 Native 不提供 Jittor raw API 而跳过，双方失败节点完全相同，都是 FP32 输入 LoRA 的输入叶子梯度与显式 `reference_x.to(dtype)` 路径逐位不一致。按 fixtures-r1/protocol.json 的既定 FP32 gradient budget 复核，FP16差异全部在预算内，但 BF16有23/48个元素超预算，因此没有把 exact 改成更宽的 allclose。根因是显式 cast 图把两支贡献分别舍入，不等于 autocast FP32 leaf 的 Native 累加顺序。修正后的参考按计算 dtype 权重量化，分别算LoRA base与线性链输入梯度贡献，以FP32合并后按compute dtype舍入，再恢复输入梯度dtype；输出和参数梯度仍保持原 exact 断言。该公式先在隔离 Native 与 Jittor 各自2个失败节点上均逐位通过，再绑定只更新测试文件哈希的新 source manifest r2（SHA256 `4ccba929463e1b829abb360adfba6e649bbb88ea15117899c2c0dc3e9e565da0`）复跑完整套件：Jittor 10/10通过、fallback=0；Native 8通过、2项Jittor-only raw API检查跳过；两侧退出码均为0，源前后不变，所有比较阈值未改。
 
+### 2026-10-23续验：当前2620文件清单 R47/R49
+
+#### R46/R47：Accelerate FSDP2 checkpoint语义与惰性HCCL gather
+
+R46 的 Native/Jittor full 训练和 `native-torch-npu-oracle` 全轨迹对拍先通过；prefix 也把模型、优化器、调度器和rank RNG写出，但 fresh resume 在 rank1读取 `rank1/scheduler.bin` 时失败。原因是当时的验证夹具把 checkpoint 根目录拆成 `rank0/`、`rank1/`，而 Accelerate 的 shared-filesystem `save_state` 将模型/优化器/调度器写在主进程的共享目录、只把 RNG 按进程编号分开。该失败属于夹具目录语义错误，原失败和缺失文件证据保留在 LAB `distributed/fsdp2-bf16-accelerate-r46/`，不计为适配层恢复失败。
+
+R47 修正夹具为真实共享 checkpoint 根目录，并由rank0写一份训练快照，R46输出没有覆盖。R47绑定 source commit `2aa5191c1943c06168d67263e53bc7dad5c1a3d2` 的2620文件 manifest，SHA256 `5e9ff90b92603dadf8145b91c57468d62edece5d8f5ede3e5e51272d56f7fcf5`。Native torch 与 Jittor shim 在物理NPU3/6分别完成 BF16 Accelerate FSDP2 full 8 updates；严格 full 交叉门禁 `atol=2e-6`、`rtol=2e-5` 通过。Jittor prefix 保存于 update3，fresh进程加载后继续至update8；恢复状态、梯度和训练轨迹以exact通过。共享 checkpoint 中有完整模型、优化器、调度器、rank0/1 RNG和训练元数据。Jittor各阶段fallback_delta=0，MPI-free，source unchanged。可复核文件位于 `distributed/fsdp2-bf16-accelerate-r47/`，门禁摘要为 `cross-runtime-check.stdout.log` 与 `resume-training-check.stdout.log`。
+
+该问题的代码根因是 FSDP FULL state/optimizer gather 基于延迟 HCCL op：非rank0经过CPU offload后丢弃图，rank0后续序列化才执行隐藏collective，破坏rank间collective顺序。`compat/torch/installers/distributed.py` 现在在full-state CPU offload前让每个rank `jt.sync_all(True)`，分别覆盖模型态和优化器态；回归测试 `compat/tests/torch/test_checkpoint_full_state_materialization.py` 检查同步先于offload，两项测试已通过。R47 的完整保存恢复复验覆盖该修复。
+
+#### R49：当前源码上的真实Qwen3-0.6B BF16 LoRA Native对拍
+
+R39使用的2500文件清单与当前2620文件清单不同，因此新建R49，不沿用旧源码上的通过结论。R49使用同一共享Qwen3-0.6B权重和固定训练/评估数据，在物理NPU3顺序运行 Native torch_npu 与 Jittor shim；两侧都执行4个optimizer updates、8个microbatches、prefix（2 updates）和fresh-process resume至update4。Source manifest SHA256仍为 `5e9ff90b92603dadf8145b91c57468d62edece5d8f5ede3e5e51272d56f7fcf5`，source commit `2aa5191c1943c06168d67263e53bc7dad5c1a3d2`，文件内容在每个阶段前后都经driver校验。实际参数放置为 `npu:0`；Jittor fallback计数0；Native oracle与shim进程、缓存和环境隔离。
+
+R49 的 full跨runtime报告比较2187项，失败0、超预算元素0，沿用protocol BF16 forward 0.005/0.03 与gradient 0.01/0.05预算。Native、Jittor各自的full对prefix+resume状态比较均为933 tensors exact，训练梯度分段比较各1136项 exact；两侧均有112个trainable参数、4步训练和checkpoint2/4产物。Jittor实际设备和完整梯度健康度由functional/report核验。完整材料位于 LAB `real-model/qwen3-06b-training-npu-cat-fix-r49/bf16-native-deterministic-reference/`；顶层 `execution.json` 的五项比较返回码全0、`all_strict_comparisons_passed=true`。NPU3在阶段后已释放。
+
+R49中Native在首个NPU kernel前启用 deterministic algorithms，而Jittor deterministic policy仍为 `UNIMPLEMENTED`；cross-runtime deterministic-policy matching明确为false。当前通过只证明固定样本顺序的工作流和状态/梯度对拍，不涵盖随机dropout恢复或通用确定性策略一致。R47/R49均未接受性能测试，也不据其fixture给真实大模型FSDP2或吞吐/显存下结论。
+
 ### 按原计划仍需完成
 
-1. R43已关闭原计划的基础FP32/部分混合精度输入梯度矩阵：leaf输入、线性中间激活、LoRA双分支、两步参数更新及168数组跨runtime exact；R39另外覆盖真实Qwen训练梯度。后续继续补视图与其他梯度拓扑，不把现有小fixture外推到全部场景。
-2. 补当前源 BF16 FSDP2 与 Accelerate包装的FSDP2场景，沿用双卡 admission、完整状态/梯度/参数更新比较和 fresh-process 恢复协议。R42只关闭当前源 FP32合成fixture。
-3. 验证 activation checkpoint 重计算语义、确定性算法策略及随机/dropout训练状态恢复，并做同源 Native/Jittor fresh-process 对拍。Qwen R39的固定采样对拍不证明策略一致或随机恢复。
-4. 将较早冻结源码上的 ASC-03 Trainer/Accelerate/safetensors综合工作流证据与当前源清单对应起来；复用已验证部分并明确只需重跑的缺口，不能跨冻结源码外推。
-5. 对已经通过正确性门槛的相同工作负载，配对测量吞吐、延迟、峰值显存与稳定性；JIT/首步/稳态分开，训练与推理分别统计。当前仍没有合格的NPU性能/显存结果。
+1. 在R43基础矩阵和R49真实Qwen对拍之上扩展视图、更多梯度拓扑与输入形状；定位FSDP2分片/混合输入精度下的FP32与部分混合精度梯度差异，现有合成fixture不外推所有布局。
+2. R42（2500文件源码）FP32 FSDP2及R47（当前2620文件源码）BF16 Accelerate FSDP2双卡合成fixture已通过；继续覆盖真实/更复杂模型布局、更多参数和输入梯度路径及FSDP2激活重计算。
+3. 验证 activation checkpoint 重计算语义、两侧确定性策略及随机/dropout训练状态恢复，并做同源 Native/Jittor fresh-process 对拍。R49固定样本顺序通过不证明随机恢复或确定性策略匹配。
+4. 将较早冻结源码上的通用 Trainer/Accelerate/safetensors 综合工作流逐项映射至当前清单；R49覆盖真实Qwen/PEFT/Trainer/checkpoint主链，但不替代其余通用数据加载、保存重载场景。
+5. 对已通过正确性门槛的相同工作负载配对测吞吐、延迟、峰值显存和稳定性；拆分JIT、首步和稳态，分别报告训练与推理。当前没有合格NPU性能/显存结果。
+
+
+### 2026-10-23 提交前源码验证
+
+在当前源码树上重新执行仓库级检查，所有日志与新建 CPU JIT 缓存均保存在 LAB 的 `_tmp/validate-ascend-20261023/` 下，不使用 NPU：
+
+- `bash tools/check_repo_layout.sh` 通过，文档治理检查覆盖 298 个 active Markdown 文件，仓库布局检查通过。
+- `JITTOR_TORCH_SHIM=1 PYTHONPATH=python python -m pytest -q compat/tests/torch/test_checkpoint_full_state_materialization.py` 在预热 ACL 构建缓存上通过，2 passed in 0.10s。
+- `JITTOR_TORCH_SHIM=1 PYTHONPATH=python python -m pytest -q tests/structure` 使用隔离 CPU backend 缓存完成，1558 项收集并执行，1556 passed、2 skipped，588.26s；没有结构测试失败。完整输出为 LAB `_tmp/validate-ascend-20261023/structure-final-cpu.log`。
+
+另有一次显式 ACL 环境的冷缓存 native 收集探测在导入 `jittor_core` 时 SIGABRT，未进入 checkpoint 回归断言，也未执行 NPU 算子；完整堆栈保存在 LAB `_tmp/validate-ascend-20261023/structure-cpu-warm-collect.log`。该尝试不计为 ACL 通过或测试失败，最终结构套件在无 ACL、无 NPU 可见性的 CPU-only 配置下通过。

@@ -65,6 +65,10 @@ class _GradDecoratorCtx:
 def _reduce_norm_group(value, how, group):
     if group is None or group.size() == 1:
         return value
+    # Materialize the local shard norm before enqueueing the HCCL gather.
+    # With uneven flat shards, allowing this reduction to remain lazy can
+    # produce rank-dependent clipping coefficients.
+    value.sync()
     if group.ranks is None:
         return _collectives._reduce_scalar(value, how)
     if group.rank() < 0:
