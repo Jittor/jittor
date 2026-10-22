@@ -53,6 +53,21 @@ def test_npu_autocast_linear_chain_fp32_master_full_grad(dtype_name, input_low, 
             reference = torch.nn.functional.linear(reference_x.to(dtype), base) + reference * .5
     reference_grads = torch.autograd.grad((reference.float() * cotangent).sum(),
                                           [reference_x, reference_a, reference_b])
+    if lora and not input_low:
+        # Autocast backward accumulates the two FP32-leaf branch contributions
+        # before its single compute-dtype rounding. Explicit forward casts round
+        # each branch independently, so they are not a valid input-grad oracle.
+        with torch.autocast("npu", enabled=False), torch.no_grad():
+            low_a = first.weight.detach().to(dtype).float()
+            low_b = second.weight.detach().to(dtype).float()
+            low_base = base.detach().float()
+            grad_out = cotangent.to(dtype).float().reshape(-1, 6)
+            base_dx = grad_out @ low_base
+            chain_dh = ((grad_out * .5).to(dtype).float()) @ low_b
+            chain_dh = chain_dh.to(dtype).float()
+            chain_dx = chain_dh @ low_a
+            expected_x = (base_dx + chain_dx).to(dtype).to(input_dtype).reshape_as(x)
+        reference_grads = (expected_x, *reference_grads[1:])
     pairs = [(actual, reference), *zip(actual_grads, reference_grads)]
     for value in [first.weight, second.weight, *[v for pair in pairs for v in pair]]:
         _resident(value)
