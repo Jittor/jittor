@@ -88,9 +88,14 @@ python "$SCRIPT_ROOT/benchmark_diffusion_ascend.py" \
 ```
 
 Diffusion 入口使用同一 NumPy 初始噪声和实际 pipeline，保存最终 latent、像素、PNG，
-Wan 另存逐帧 NumPy 和 GIF。默认单次无预热明确标为 cold；稳态须显式指定完整生成
+Wan 另存逐帧 NumPy 和 GIF。测速两侧可加 `--timing total`，只在整次生成前后同步；
+callback 只检查步数、保留最后 latent，不安装内部 forward hook，也不报告分段耗时。
+默认 `--timing stages` 的 hook 会绕过 Jittor 自动重放，因此分段诊断不能代替
+无内部 hook 的总耗时比较。Jittor 可显式设置 `--auto-graph-replay-input-mib 8`；
+这只调整输入准入门槛，保留现有 recording 内存预算，不能仅凭此参数宣称启用 device graph。
+默认单次无预热明确标为 cold；稳态须显式指定完整生成
 预热和样本数，不能把首次 JIT 算入稳态。计时包括文本编码、完整去噪循环、VAE 解码
-与 NumPy 后处理，排除加载和文件写入；公开 hook 与每步 callback 均同步，阶段数值
+与 NumPy 后处理，排除加载和文件写入；`stages` 的公开 hook 与每步 callback 均同步，阶段数值
 属于带同步插桩的完整生成耗时。默认 SDXL 为 1024²、20 Euler 步、CFG 5；
 Wan 为 320×512×17 帧、20 FlowMatchEuler 步、CFG 5，较低分辨率结果不能标为
 704×1280。单 prompt / seed 的数值误差与 PSNR 衡量实现间一致性，没有真值质量评分。

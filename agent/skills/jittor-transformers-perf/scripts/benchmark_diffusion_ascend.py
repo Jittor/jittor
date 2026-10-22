@@ -366,6 +366,40 @@ class Boundaries:
             handle.remove()
 
 
+class TotalBoundaries(Boundaries):
+    """Overall latency without hooks that bypass automatic module replay."""
+
+    def attach(self, pipe, text_pipe=None):
+        pass
+
+    def callback(self, pipe, index, timestep, callback_kwargs):
+        if index != len(self.step_ends) or index >= self.steps:
+            raise RuntimeError('Unexpected pipeline callback index')
+        self.step_ends.append(index)
+        if index == self.steps - 1:
+            self.final_latents = callback_kwargs['latents']
+        return callback_kwargs
+
+    def record(self, ended):
+        if len(self.step_ends) != self.steps or self.final_latents is None:
+            raise RuntimeError('Incomplete pipeline callbacks')
+        return dict(total_seconds=ended - self.started)
+
+
+def replay_metadata(module):
+    state = vars(module).get('_auto_graph_replay')
+    if state is None:
+        return None
+    result = {name: getattr(state, name, None)
+              for name in ('seen', 'give_up', 'unstable', 'recaptures')}
+    replay = state.replay
+    if replay is not None:
+        result['replay'] = dict(stats=dict(replay.stats), refused=replay.refused,
+            device_graph_active=bool(replay._cuda_graph), device_graph_refused=replay._graph_refused,
+            estimated_retained_bytes=replay._graph_bytes, retained_bytes_limit=replay._max_retained_bytes)
+    return result
+
+
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--backend', choices=('torch', 'jittor'))
@@ -389,6 +423,10 @@ def parse_args():
     p.add_argument('--seed', type=int, default=20261020)
     p.add_argument('--warmups', type=int, default=0)
     p.add_argument('--samples', type=int, default=1)
+    p.add_argument('--timing', choices=('stages', 'total'), default='stages',
+                   help='total uses only start/end synchronization and no internal forward hooks')
+    p.add_argument('--auto-graph-replay-input-mib', type=int,
+                   help='Jittor only: explicitly tune the replay input threshold; retains the existing memory budget')
     p.add_argument('--attention', choices=('eager', 'sdpa'), default='sdpa')
     p.add_argument('--scheduler', choices=('native', 'euler'), default='euler',
                    help='euler selects Euler for SDXL or FlowMatchEuler for Wan; native preserves the checkpoint scheduler')
@@ -426,6 +464,9 @@ def parse_args():
         p.error('This pinned Diffusers Wan implementation uses its SDPA processor')
     if args.steps < 1 or args.samples < 1 or args.warmups < 0:
         p.error('steps and samples must be positive; warmups must be nonnegative')
+    if args.auto_graph_replay_input_mib is not None and (
+            args.backend != 'jittor' or args.auto_graph_replay_input_mib < 1):
+        p.error('--auto-graph-replay-input-mib requires Jittor and a positive size')
     if args.fps < 1:
         p.error('fps must be positive')
     if args.vae_tile_size is not None and (not args.vae_tiling or args.case != 'wan'):
@@ -484,6 +525,9 @@ def run(args):
                 import jittor as jt
                 stack.enter_context(jt.runtime.scope(use_cuda=0, use_acl=0, backend_fallback='error',
                                                      use_parallel_op_compiler=0, acl_allow_hf32=1))
+                if args.auto_graph_replay_input_mib is not None:
+                    stack.enter_context(jt.runtime.scope(
+                        auto_graph_replay_bytes=args.auto_graph_replay_input_mib << 20))
                 import torch
                 if not hasattr(torch, '_torch_compat_install_context'):
                     raise RuntimeError('Expected Jittor Torch compatibility module')
@@ -512,6 +556,12 @@ def run(args):
                           instrumentation='Public forward hooks and step callbacks; synchronized text modules, first denoiser entry, and every denoising step.',
                           measurement_kind='cold_single_generation' if args.warmups == 0 and args.samples == 1 else ('cold_included' if args.warmups == 0 else 'warm_instrumented_pipeline'),
                           timing_scope='Tokenization/text encoding, latent preparation, complete scheduler/denoising loop, VAE decode and numpy postprocessing. Excludes model load and artifact serialization.')
+            if args.timing == 'total':
+                report.update(instrumentation='Only start/end synchronization; no internal forward hooks or per-step synchronization.',
+                              measurement_kind='warm_total_only_pipeline' if args.warmups else 'cold_included_total_only_pipeline')
+            if jt is not None:
+                report['auto_graph_replay_policy'] = {name: int(getattr(jt.flags, name)) for name in (
+                    'auto_graph_replay', 'auto_graph_replay_bytes', 'auto_graph_replay_retain_bytes')}
             shared_prompt_arrays = None
             report['conditioning_source'] = 'in_process_text_encoder'
             if args.prompt_embeddings:
@@ -678,7 +728,8 @@ def run(args):
                             raise RuntimeError('Preencoded conditioning is not NPU-resident')
                 report['initial_latents_sha256'] = hashlib.sha256(initial.tobytes()).hexdigest()
                 report['initial_latents_shape'] = list(initial.shape)
-                boundaries = Boundaries(sync, args.steps); boundaries.attach(pipe, cpu_text_pipe)
+                boundaries = (TotalBoundaries if args.timing == 'total' else Boundaries)(sync, args.steps)
+                boundaries.attach(pipe, cpu_text_pipe)
                 stack.callback(boundaries.close)
                 records = []
                 for index in range(args.warmups + args.samples):
@@ -725,6 +776,9 @@ def run(args):
                 fallbacks = None if jt is None else jt.core.backend_fallback_count() - fallback_before
                 if fallbacks not in (None, 0):
                     raise RuntimeError(f'Backend fallback attempted {fallbacks} times')
+                if jt is not None:
+                    report['graph_replay'] = {name: replay_metadata(module)
+                        for name, module in pipe.components.items() if isinstance(module, torch.nn.Module)}
                 report.update(status='passed', phase='complete', records=records, seconds=measured,
                               median_seconds=statistics.median(measured),
                               p95_seconds=float(np.percentile(measured, 95)), fallback_count=fallbacks,

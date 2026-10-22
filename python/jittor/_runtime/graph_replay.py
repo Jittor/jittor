@@ -1379,7 +1379,14 @@ def auto_replay_for(module, args, kw):
         return None
     if objects:
         return _stateful_call(module, state, args, kw, objects)
-    signature = _signature(args, kw)
+    # Input shapes alone are not stability: diffusion VAEs cast their weights
+    # around every decode. Capturing again on every rebind executes the eager
+    # warm-up, capture and replay instead of one forward. Wait for unchanged
+    # parameter/buffer holders too. A live capture already owns this list, so
+    # steady calls need no second traversal of the module tree.
+    capture = state.replay._capture if state.replay is not None else None
+    holders = (p for p, _ in capture.params) if capture is not None else _module_vars(module)
+    signature = (_signature(args, kw), tuple((id(p), p.var_ptr) for p in holders))
     if signature != state.signature:
         state.signature = signature
         state.seen = 1
