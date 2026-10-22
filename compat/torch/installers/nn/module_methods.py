@@ -926,6 +926,21 @@ def _module_to_conversion(ds, dev, copy, v):
     Split out of ``_module_to`` so this file holds no closures; ``_module_to``
     hands the decoded (dtype, device, copy) triple over with a partial.
     """
+    frontend_base = next(
+        (base for base in reversed(type(v).__mro__)
+         if "_frontend_backend" in vars(base)), jt.Var)
+    if type(v).to is not frontend_base.to:
+        # Module.to applies each parameter's own Tensor.to protocol. Parameter
+        # subtypes can convert their storage (for example, quantize it) there;
+        # a direct native residency move would bypass that conversion.
+        requested = {}
+        if dev is not None:
+            requested["device"] = dev
+        if ds is not None:
+            requested["dtype"] = dtype._registry[ds]
+        if copy:
+            requested["copy"] = True
+        return v.to(**requested)
     out = v
     if ds is not None and ds in _MODULE_FLOAT_DTYPES:
         is_float = v.dtype.is_float() if hasattr(v.dtype, "is_float") else ("float" in _jittor_dtype_name(v.dtype))

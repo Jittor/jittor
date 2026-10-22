@@ -278,6 +278,7 @@ def make_tensor_type(backend):
         "_frontend_autograd_policy": 3,
         "_frontend_view_base_ownership": True,
         "_frontend_precision_policy": classmethod(_frontend_precision_policy),
+        "_make_subclass": staticmethod(tensor_make_subclass),
         "clone": clone,
         **tensor_object_properties(),
     })
@@ -303,6 +304,19 @@ def clone(input, *, memory_format=None):
         return backend.Var.copy(input, memory_format != "contiguous_format")
 
 
+def tensor_make_subclass(cls, data, requires_grad=False):
+    """Make an independent autograd leaf of ``cls`` over existing storage."""
+    backend = getattr(cls, "_frontend_backend", None)
+    if backend is None or not issubclass(cls, backend.Var):
+        raise TypeError("_make_subclass expects a Torch Tensor subclass")
+    if not isinstance(data, backend.Var):
+        raise TypeError("_make_subclass expects Tensor data")
+    with tensor_frontend(cls, like=data):
+        value = backend.Var.detach(data)
+    value.requires_grad = bool(requires_grad)
+    return value
+
+
 def parameter_new(cls, data=None, requires_grad=True):
     backend = cls._parameter_backend
     with tensor_frontend(cls, like=data):
@@ -315,9 +329,11 @@ def parameter_new(cls, data=None, requires_grad=True):
     return value
 
 
-def parameter_init(self, data=None, requires_grad=True):
+def parameter_init(self, *args, **kwargs):
     # The conversion boundary already initialized the native holder. Python
     # subclasses still receive their real __init__ through normal dispatch.
+    # A subtype may consume more __new__ keywords than Parameter itself; its
+    # inherited no-op initializer must accept those same constructor inputs.
     return None
 
 
