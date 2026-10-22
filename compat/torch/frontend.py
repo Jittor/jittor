@@ -226,6 +226,13 @@ class _TensorMeta(type):
     def __call__(cls, *args, **kwargs):
         backend = vars(cls).get("_frontend_backend")
         if backend is None:
+            # A Tensor subtype may be rebuilt from another holder's __dict__.
+            # Keep its public constructor metadata, but never pass our holder's
+            # private autograd/residency state into the new subtype constructor.
+            from .tensor_object_state import TensorObjectState
+            if isinstance(kwargs.get("_torch_object_state"), TensorObjectState):
+                kwargs = dict(kwargs)
+                kwargs.pop("_torch_object_state")
             return super().__call__(*args, **kwargs)
         # torch's Tensor constructor spells dtype/device/requires_grad/pin_memory
         # as keywords, and downstream code builds tensors that way -- `accelerate`

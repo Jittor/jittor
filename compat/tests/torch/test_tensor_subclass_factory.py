@@ -58,6 +58,33 @@ def test_parameter_subclass_can_accept_constructor_metadata():
     assert jt.core.backend_fallback_count() == before
 
 
+def test_parameter_subclass_does_not_receive_another_tensors_private_state():
+    class WithMetadata(torch.nn.Parameter):
+        def __new__(cls, data, *, tag):
+            value = torch.Tensor._make_subclass(cls, data, True)
+            value.tag = tag
+            return value
+
+    before = jt.core.backend_fallback_count()
+    with jt.flag_scope(use_cuda=1), forbid_backend_fallbacks():
+        donor = torch.tensor([2.], device="cuda")
+        donor._torch_data_owner = donor
+        old_attributes = vars(donor)
+        old_state = old_attributes["_torch_object_state"]
+        metadata = dict(old_attributes, tag="quantized")
+        parameter = WithMetadata(donor, **metadata)
+        assert type(parameter) is WithMetadata
+        assert parameter.tag == "quantized"
+        assert parameter.device.type == "cuda"
+        assert metadata["_torch_object_state"] is old_state
+        assert old_attributes["_torch_object_state"] is old_state
+        assert vars(parameter).get("_torch_object_state") is not old_state
+        (parameter * 3.).sum().backward()
+        np.testing.assert_allclose(parameter.grad.numpy(), [3.])
+        assert jt.core.device_pool_stats(0)[2] > 0
+    assert jt.core.backend_fallback_count() == before
+
+
 def test_module_to_invokes_parameter_subclass_conversion():
     class Convertible(torch.nn.Parameter):
         def __new__(cls, data):
