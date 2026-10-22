@@ -193,6 +193,10 @@ struct CommonOpType : OpByType {
             {"init_bitwise_or", "$1(0)"},
             {"init_bitwise_xor", "$1(0)"},
             {"init_mean", "$1(0)"},
+            // Bit tests, not float comparisons: see type/fp_class_compute.h.
+            {"isnan", "jittor::_fp_isnan($2)"},
+            {"isinf", "jittor::_fp_isinf($2)"},
+            {"isfinite", "jittor::_fp_isfinite($2)"},
         };
 
         // `find`, not `operator[]`: these are static lookup tables and a miss
@@ -240,6 +244,9 @@ struct CommonOpType : OpByType {
              src.find("jittor::_min") != string::npos) &&
             src.find("type/minmax_compute.h") == string::npos)
             includes += "#include \"type/minmax_compute.h\"\n";
+        if (src.find("jittor::_fp_is") != string::npos &&
+            src.find("type/fp_class_compute.h") == string::npos)
+            includes += "#include \"type/fp_class_compute.h\"\n";
         if (includes.empty()) return;
         int i = src.rfind("#include");
         if (i<0) i=0;

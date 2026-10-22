@@ -10,7 +10,6 @@ from .tensor_ops import (
     _Cumsum,
     _SCATTER_REDUCE_JT,
     _classify,
-    _classify_value,
     _cumsum_dim,
     _isfinite_acl,
     _isinf_acl,

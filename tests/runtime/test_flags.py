@@ -151,5 +151,46 @@ class TestFlagScopeIsReentrant(unittest.TestCase):
                          "an exception must not strand the flag")
 
 
+class TestFlagScopeWithoutDeviceFlags(unittest.TestCase):
+    """A scope that sets no device flag takes a shorter path in and out; it
+    has to keep the general path's answers."""
+
+    def setUp(self):
+        self._saved = (jt.flags.no_grad, jt.flags.log_v, jt.flags.compile_options)
+
+    def tearDown(self):
+        jt.flags.no_grad, jt.flags.log_v, jt.flags.compile_options = self._saved
+
+    def test_several_flags_are_set_and_restored(self):
+        jt.flags.no_grad, jt.flags.log_v = 0, 0
+        with jt.flag_scope(no_grad=1, log_v=1):
+            self.assertEqual((jt.flags.no_grad, jt.flags.log_v), (1, 1))
+        self.assertEqual((jt.flags.no_grad, jt.flags.log_v), (0, 0))
+
+    def test_no_grad_takes_more_flags(self):
+        jt.flags.no_grad, jt.flags.log_v = 0, 0
+        with jt.no_grad(log_v=1):
+            self.assertEqual((jt.flags.no_grad, jt.flags.log_v), (1, 1))
+        self.assertEqual((jt.flags.no_grad, jt.flags.log_v), (0, 0))
+
+    def test_a_lone_dict_flag_is_merged_and_restored(self):
+        jt.flags.compile_options = {"outer": 1}
+        with jt.flag_scope(compile_options={"inner": 1}):
+            self.assertEqual(dict(jt.flags.compile_options), {"outer": 1, "inner": 1})
+        self.assertEqual(dict(jt.flags.compile_options), {"outer": 1})
+
+    def test_exit_without_entry_does_nothing(self):
+        jt.flags.no_grad = 0
+        jt.no_grad().__exit__(None, None, None)
+        self.assertFalse(jt.flags.no_grad)
+
+    def test_an_exception_restores_every_flag(self):
+        jt.flags.no_grad, jt.flags.log_v = 0, 0
+        with self.assertRaises(ValueError):
+            with jt.flag_scope(no_grad=1, log_v=1):
+                raise ValueError("boom")
+        self.assertEqual((jt.flags.no_grad, jt.flags.log_v), (0, 0))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -129,6 +129,10 @@ bool LaunchHistory::origin(uint64 id, LaunchOrigin& out) {
 }
 
 void LaunchHistory::record(const LaunchRecord& record) {
+    this->record(record, record.device, record.stream);
+}
+
+void LaunchHistory::record(const LaunchRecord& record, Device device, uintptr_t stream) {
     auto& lease = Impl::lease;
     if (lease.owner.get() != impl.get()) {
         lease.release();
@@ -148,6 +152,8 @@ void LaunchHistory::record(const LaunchRecord& record) {
     std::lock_guard<std::mutex> guard(ring.mutex);
     auto& slot = ring.records[ring.written++ % capacity];
     slot = record;
+    slot.device = device;
+    slot.stream = stream;
     slot.sequence = ++impl->sequence;
 }
 
@@ -222,16 +228,14 @@ void leave_launch_origin_entry(bool outer_active, uint64 outer_origin) {
 }
 LaunchOriginScope::LaunchOriginScope(uint64 origin) : previous(active_origin) { active_origin = origin; }
 LaunchOriginScope::~LaunchOriginScope() { active_origin = previous; }
-LaunchOperationScope::LaunchOperationScope(LaunchRecord value) : previous(active_launch), record(value) {
+LaunchOperationScope::LaunchOperationScope(const LaunchRecord& record) : previous(active_launch) {
     active_launch = &record;
 }
 LaunchOperationScope::~LaunchOperationScope() { active_launch = previous; }
 void record_active_launch(BackendStream stream) {
     if (!active_launch) return;
-    auto record = *active_launch;
-    record.device = stream.device;
-    record.stream = reinterpret_cast<uintptr_t>(stream.handle);
-    runtime_launch_history().record(record);
+    runtime_launch_history().record(*active_launch, stream.device,
+                                    reinterpret_cast<uintptr_t>(stream.handle));
 }
 
 LaunchErrorScope::LaunchErrorScope(Device device, bool exact_stream, uintptr_t stream)

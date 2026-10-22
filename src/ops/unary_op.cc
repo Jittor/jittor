@@ -10,6 +10,7 @@
 #include "ops/unary_op.h"
 #include "ops/layout_propagation.h"
 #include "ops/op_register.h"
+#include "ops/composite/array_op.h"
 
 namespace jittor {
 
@@ -870,7 +871,65 @@ static unordered_set<string> unary_ops = {
     "conj",
 };
 
+namespace {
+static auto make_array = op_constructor<VarPtr, const void*, NanoVector, NanoString>("array");
+
+// A scalar of an integer or bool dtype, read exactly.
+bool read_integral(NanoString dtype, const void* p, long double& v) {
+    #define JT_READ(T, ns) if (dtype == ns) { v = (long double)*(const T*)p; return true; }
+    JT_READ(bool, ns_bool) JT_READ(int8, ns_int8) JT_READ(int16, ns_int16)
+    JT_READ(int32, ns_int32) JT_READ(int64, ns_int64) JT_READ(uint8, ns_uint8)
+    JT_READ(uint16, ns_uint16) JT_READ(uint32, ns_uint32) JT_READ(uint64, ns_uint64)
+    #undef JT_READ
+    return false;
+}
+
+// `v` as `dtype`, the value a cast kernel would produce, when that value is
+// `v` itself -- or is its truth value, for bool. False otherwise: nothing is
+// folded that the kernel could have rounded or wrapped.
+bool write_exact(NanoString dtype, long double v, void* out) {
+    if (dtype == ns_bool) { *(bool*)out = v != 0; return true; }
+    #define JT_WRITE(T, ns) if (dtype == ns) { \
+        T t = (T)v; if ((long double)t != v) return false; *(T*)out = t; return true; }
+    JT_WRITE(int8, ns_int8) JT_WRITE(int16, ns_int16) JT_WRITE(int32, ns_int32)
+    JT_WRITE(uint8, ns_uint8) JT_WRITE(uint16, ns_uint16) JT_WRITE(uint32, ns_uint32)
+    JT_WRITE(float32, ns_float32) JT_WRITE(float64, ns_float64)
+    #undef JT_WRITE
+    if (dtype == ns_int64) {
+        if (v < -9223372036854775808.0L || v >= 9223372036854775808.0L) return false;
+        *(int64*)out = (int64)v; return true;
+    }
+    if (dtype == ns_uint64) {
+        if (v < 0 || v >= 18446744073709551616.0L) return false;
+        *(uint64*)out = (uint64)v; return true;
+    }
+    return false;
+}
+
+// `cast(x)` of a Python number not yet run: the same constant, built in the
+// target dtype. A cast of a one-element array is a kernel of its own -- its
+// output, unlike an array's, may not fuse into the broadcast that reads it
+// (`count_fuse`) -- and so is the array behind it: an integer `clamp`
+// converts each bound to the tensor's dtype this way, and paid for four
+// launches a call that its maximum/minimum kernel now folds in as constants.
+// Only exact conversions of integer and bool values are folded, and only of a
+// Python number, which never requires a gradient.
+VarPtr fold_number_cast(Var* x, NanoString dtype) {
+    if (x->num != 1 || !x->flag(VarFlags::_python_number) || x->is_finished()) return VarPtr();
+    Op* producer = x->input();
+    if (!producer || !producer->is_op(op_ids::array())) return VarPtr();
+    auto* array = static_cast<ArrayOp*>(producer);
+    if (!array->host_value_known()) return VarPtr();
+    long double value;
+    if (!read_integral(x->dtype(), array->ptr<char>(), value)) return VarPtr();
+    alignas(8) char converted[8];
+    if (!write_exact(dtype, value, converted)) return VarPtr();
+    return make_array(converted, x->shape, dtype);
+}
+} // namespace
+
 VarPtr UnaryOp::forward_before_construct(Var* x, NanoString op) {
+    if (op.is_dtype() && op != x->dtype()) return fold_number_cast(x, op);
     if (op != x->dtype()) return VarPtr();
     // Counted as the op the constructor used to build and discard: automatic
     // flushes and module-boundary cuts are placed by this count, and they have

@@ -42,12 +42,22 @@ _CANONICAL_NAMES = {}
 _CANONICAL_NAMES_LIMIT = 256
 
 
+#: `jittor_core.NanoString`, learned from the first one seen here. A native
+#: dtype has neither attribute the general arm probes for, so it paid two
+#: failed lookups before its `str`; indexing asks this of every index Var.
+_NATIVE_DTYPE_TYPE = None
+
+
 def dtype_name(value):
     """Return a canonical name for metadata; this does not enable computation."""
-    if value.__class__ is str:
+    global _NATIVE_DTYPE_TYPE
+    cls = value.__class__
+    if cls is str:
         # The overwhelmingly common non-native spelling, and the one the two
         # attribute probes below can never answer for.
         name = value
+    elif cls is _NATIVE_DTYPE_TYPE:
+        name = str(value)
     elif value is None:
         return None
     else:
@@ -56,6 +66,8 @@ def dtype_name(value):
             name = getattr(value, "__name__", None)
             if not isinstance(name, str):
                 name = str(value)
+                if cls.__name__ == "NanoString" and cls.__module__ == "jittor_core":
+                    _NATIVE_DTYPE_TYPE = cls
     canonical = _CANONICAL_NAMES.get(name)
     if canonical is None:
         canonical = name[6:] if name.startswith("torch.") else name

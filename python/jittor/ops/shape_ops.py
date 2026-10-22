@@ -156,7 +156,14 @@ def stack(x, dim=0):
         raise TypeError("stack: expected a sequence of tensors")
     if isinstance(x, tuple):
         x = list(x)
+    # Two or more inputs are copied into the result anyway, so a plain Var is
+    # taken as it is rather than cloned first: the clone was an op to build
+    # and run per input of every stack. A lone input keeps the jt.array call
+    # it always had, since the result is then just an unsqueeze of it, and so
+    # does a Var subclass, which may carry attributes the paths below read.
+    copy_plain = len(x) < 2
     for i,x_ in enumerate(x):
+        if copy_plain or x_.__class__ is not jt.Var:
             x[i] = jt.array(x_)
     if len(x) < 2:
         return x[0].unsqueeze(dim)

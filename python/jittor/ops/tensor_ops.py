@@ -195,7 +195,6 @@ from .numerical import _isinf_acl
 from .numerical import _isfinite_acl
 from .numerical import _isposinf_acl
 from .numerical import _isneginf_acl
-from .numerical import _classify_value
 from .numerical import _classify
 from .numerical import _classify_acl
 from .numerical import _classify_code
