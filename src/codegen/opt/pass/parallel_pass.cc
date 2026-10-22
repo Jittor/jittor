@@ -383,6 +383,10 @@ static void replace_with_atomic(KernelIR* ir, bool is_cuda, int parallel_depth, 
             try_atomic("a=a^b", {"a", "b"}, "cpu_atomic_xor(&@a,@b)", "atomicXor(&@a,@b)") ||
             try_atomic("a=a&&b", {"a", "b"}, "cpu_atomic_and(&@a,bool(@b))", "atomicAnd(&@a,bool(@b))") ||
             try_atomic("a=a||b", {"a", "b"}, "cpu_atomic_or(&@a,bool(@b))", "atomicOr(&@a,bool(@b))") ||
+            // A bool result spells the same two reductions with the cast the
+            // binary table puts on a bool output.
+            try_atomic("a=bool(a&&b)", {"a", "b"}, "cpu_atomic_and(&@a,bool(@b))", "atomicAnd(&@a,bool(@b))") ||
+            try_atomic("a=bool(a||b)", {"a", "b"}, "cpu_atomic_or(&@a,bool(@b))", "atomicOr(&@a,bool(@b))") ||
             try_atomic("a=((bool(a))!=(bool(b)))", {"a", "b"},
                 "cpu_atomic_xor(&@a,bool(@b))", "atomicXor(&@a,bool(@b))"))
             return;
