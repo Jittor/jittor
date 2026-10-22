@@ -392,7 +392,8 @@ def refuse(reason):
 class _Capture:
     __slots__ = ("inputs", "host_inputs", "outputs", "template", "roots", "state",
                  "state_lists", "prologue", "guards", "signature", "refused", "random",
-                 "frozen_random", "exact", "graph_bytes", "published_gradients")
+                 "frozen_random", "exact", "graph_bytes", "published_gradients",
+                 "gradient_leaves")
 
     def __init__(self):
         self.prologue = []
@@ -402,6 +403,7 @@ class _Capture:
         self.exact = False
         self.graph_bytes = 0
         self.published_gradients = []
+        self.gradient_leaves = []
 
 
 def _finish_normally(roots):
@@ -705,6 +707,10 @@ class StepCapture:
         cap.state = state
         cap.state_lists = ([holder for holder, _, _, _ in state],
                            [old for _, old, _, _ in state])
+        if self._guard_external_backward:
+            cap.gradient_leaves = [
+                (v, v.var_ptr, bool(v.requires_grad))
+                for v in _core._step_leaf_holders(roots)]
         cap.signature = self._call_signature(args, kwargs)
         # What a device recording of this step would hold.
         cap.graph_bytes = working.bytes()
@@ -723,6 +729,9 @@ class StepCapture:
             return "the captured graph was finished, most likely by a read"
         if self._call_signature(args, kwargs) != cap.signature:
             return "the inputs changed shape or dtype, or the gradient mode changed"
+        for holder, var_ptr, requires_grad in cap.gradient_leaves:
+            if holder.var_ptr != var_ptr or bool(holder.requires_grad) != requires_grad:
+                return "a captured leaf was rebound or changed its gradient policy"
         # One native pass over the holders; `_adopt` only for those rebound.
         holders, olds = cap.state_lists
         start = 0

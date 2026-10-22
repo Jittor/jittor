@@ -203,6 +203,38 @@ class TestCompileExternalAutograd:
         assert run.refused is not None
 
 
+    def test_recorded_training_invalidates_after_leaf_freeze_or_thaw(self, device):
+        for freeze in (False, True):
+            p = torch.nn.Parameter(torch.tensor([2.], device=device))
+            q = torch.nn.Parameter(torch.tensor([3.], device=device), requires_grad=freeze)
+            opt = torch.optim.SGD([p, q], lr=.01, foreach=False)
+            x = torch.tensor([.5], device=device)
+
+            def step(x):
+                opt.zero_grad(set_to_none=True)
+                loss = ((p + q) * x).square().sum()
+                loss.backward()
+                opt.step()
+                return loss
+
+            run = torch.compile(step, mode='reduce-overhead')
+            expected = np.array([2., 3.], dtype='float64')
+            for index in range(8):
+                if index == 6:
+                    assert run.stats['graph'] > 0
+                    q.requires_grad_(not freeze)
+                gradient = expected.sum() * .5
+                expected[0] -= .01 * gradient
+                q_active = freeze if index < 6 else not freeze
+                if q_active:
+                    expected[1] -= .01 * gradient
+                run(x)
+                np.testing.assert_allclose([float(p), float(q)], expected,
+                                           rtol=1e-5, atol=1e-6)
+                if freeze and index >= 6:
+                    assert q.grad is None
+            assert 'gradient policy' in run.last_invalidated
+
     def test_backward_probe_rejects_invalid_order_without_losing_scope(self, device):
         outer = jt.core._begin_step_backward_probe()
         inner = jt.core._begin_step_backward_probe()

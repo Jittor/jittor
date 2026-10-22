@@ -5,6 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include "bindings/pybind/py_var_tracer.h"
+#include "bindings/pyjt/py_converter.h"
 #include "core/grad.h"
 #include "runtime/launch_diagnostics.h"
 #include "core/var.h"
@@ -45,6 +46,33 @@ vector<int64> end_step_backward_probe(uint64 token) {
     vector<int64> result(variables.begin(), variables.end());
     std::sort(result.begin(), result.end());
     return result;
+}
+
+PyObject* step_leaf_holders(const vector<VarHolder*>& roots) {
+    unordered_set<Var*> seen, leaves;
+    vector<Var*> stack;
+    for (auto* holder : roots)
+        if (seen.insert(holder->var).second) stack.push_back(holder->var);
+    while (!stack.empty()) {
+        Var* var = stack.back();
+        stack.pop_back();
+        Op* op = var->input();
+        if (var->is_finished() || !op) {
+            leaves.insert(var);
+            continue;
+        }
+        for (Var* input : op->inputs())
+            if (seen.insert(input).second) stack.push_back(input);
+    }
+    PyObjHolder holders(PyList_New(0));
+    if (!holders.obj) return nullptr;
+    // Use the existing Python owner: a thaw may rebind its holder while the
+    // captured graph still refers to the old, permanently stopped Var.
+    for (VarHolder* holder : runtime_holder_state().holders())
+        if (holder->python_owner && leaves.count(holder->var)
+                && PyList_Append(holders.obj, holder->python_owner) < 0)
+            return nullptr;
+    return holders.release();
 }
 
 VarHolder* snapshot_step_gradient(VarHolder* gradient) {

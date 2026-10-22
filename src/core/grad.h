@@ -45,6 +45,10 @@ uint64 begin_step_backward_probe();
 // @pyjt(_end_step_backward_probe)
 vector<int64> end_step_backward_probe(uint64 token);
 
+// Existing Python-owned holders of a retained graph's leaves for replay guards.
+// @pyjt(_step_leaf_holders)
+PyObject* step_leaf_holders(const vector<VarHolder*>& roots);
+
 // Hold the exact Var that a public gradient holder currently names while a
 // captured step may rebind that holder. This creates no producer or copy.
 // @pyjt(_snapshot_step_gradient)
