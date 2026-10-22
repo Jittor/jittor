@@ -155,6 +155,27 @@ def _record_step_state(model, optimizer, scheduler, step, arrays):
     )
 
 
+def _record_rng_state(torch, device, step, arrays):
+    """Record the framework-visible RNG streams at an optimizer boundary."""
+    prefix = "step/%04d/rng" % step
+    arrays[prefix + "/cpu"] = _array(torch.get_rng_state())
+    if device == "npu":
+        owner = getattr(torch, "npu", None)
+        if owner is None or not callable(getattr(owner, "get_rng_state_all", None)):
+            raise AssertionError("NPU training must expose get_rng_state_all")
+        states = owner.get_rng_state_all()
+        if len(states) != int(owner.device_count()):
+            raise AssertionError("NPU RNG state count differs from visible device count")
+        for index, state in enumerate(states):
+            arrays["%s/npu/%04d" % (prefix, index)] = _array(state)
+    elif device == "cuda":
+        states = torch.cuda.get_rng_state_all()
+        if len(states) != int(torch.cuda.device_count()):
+            raise AssertionError("CUDA RNG state count differs from visible device count")
+        for index, state in enumerate(states):
+            arrays["%s/cuda/%04d" % (prefix, index)] = _array(state)
+
+
 def _initialize(torch, path, seed):
     torch.manual_seed(seed)
     base = _make_base_model(torch)
@@ -303,6 +324,7 @@ def _run(args):
                     _assert_values_device(jt, torch, list(inputs.items()), args.device, "Trainer input")
                     loss = super().training_step(current_model, inputs, num_items_in_batch)
                     _assert_values_device(jt, torch, [("loss", loss)], args.device, "Trainer output")
+                    self.trace_arrays["step/%04d/loss/%02d" % (upcoming_step, microbatch)] = _array(loss)
                     gradients = {}
                     for name, parameter in current_model.named_parameters():
                         if not bool(parameter.requires_grad):
@@ -366,6 +388,7 @@ def _run(args):
                     if live_model is None or optimizer is None or scheduler is None:
                         raise AssertionError("Trainer did not expose model/optimizer/scheduler at step end")
                     _record_step_state(live_model, optimizer, scheduler, step, trainer.trace_arrays)
+                    _record_rng_state(torch, args.device, step, trainer.trace_arrays)
                     return control
 
             trainer.add_callback(CaptureTrainerState())
@@ -420,6 +443,7 @@ def _run(args):
                 "stop_after": args.stop_after,
                 "sampler": args.sampler,
                 "model_dropout": args.dropout,
+                "rng_state_recorded_at_each_optimizer_boundary": True,
                 "dataset_size": len(train_dataset),
                 "dataloader_num_workers": args.dataloader_num_workers,
                 "dataloader_prefetch_factor": (
