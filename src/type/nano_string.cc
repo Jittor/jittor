@@ -55,6 +55,9 @@ static unordered_set<string> is_bool = {
     "logical_and",
     "logical_or",
     "logical_xor",
+    "isnan",
+    "isinf",
+    "isfinite",
 };
 
 static unordered_set<string> unary_ops = {
@@ -89,7 +92,10 @@ static unordered_set<string> unary_ops = {
     "sigmoid",
     "erf",
     "erfinv",
-    "relu"
+    "relu",
+    "isnan",
+    "isinf",
+    "isfinite",
 };
 
 static unordered_set<string> float_ops = {
@@ -168,7 +174,8 @@ static unordered_set<string> white_ops = {
 // `UnaryOp::grad`, and relu's gradient `dy * (y > 0)` does too. For relu
 // that is the difference between keeping one extra mask or input per
 // activation and keeping nothing -- the output is saved anyway by the
-// convolution or linear layer that reads it.
+// convolution or linear layer that reads it. The float class predicates are
+// in both lists for the opposite reason: they have no gradient at all.
 static unordered_set<string> no_need_back_in = {
     "void",
     "cast",
@@ -181,6 +188,9 @@ static unordered_set<string> no_need_back_in = {
     "rsqrt",
     "sigmoid",
     "relu",
+    "isnan",
+    "isinf",
+    "isfinite",
 };
 
 static unordered_set<string> no_need_back_out = {
@@ -191,6 +201,9 @@ static unordered_set<string> no_need_back_out = {
     "subtract",
     "multiply",
     "divide",
+    "isnan",
+    "isinf",
+    "isfinite",
 };
 
 #define DEFINE_NS(T) NanoString ns_##T;

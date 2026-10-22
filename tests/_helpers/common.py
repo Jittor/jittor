@@ -340,6 +340,17 @@ def to_numpy(x):
     return np.asarray(x)
 
 
+def kernel_launches(build):
+    """Run ``build`` once to warm it, then return (kernel launches, value) of a second run."""
+    build()
+    jt.sync_all(True)
+    with jt.profile_scope() as rep:
+        value = build()
+        jt.sync_all(True)
+    # One row per distinct kernel; the third column counts its launches.
+    return sum(int(row[2]) for row in rep[1:]), value
+
+
 def _as_wide(got, ref):
     """Both operands at float64, or complex128 when either is complex.
 

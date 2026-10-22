@@ -87,16 +87,27 @@ struct Op : Node {
     void bind_definition(bool required = true) const;
     const OpDef& definition() const;
     BackendId execution_backend() const;
+    // `execution_backend()` for a caller that already knows this op's
+    // `requested_backend()` -- every op of a fused segment shares it.
+    BackendId execution_backend_for(BackendId requested) const;
     virtual BackendId requested_backend() const;
     virtual TensorPlacement graph_placement() const;
     bool executes_on_accelerator() const { return execution_backend() != BackendId::Cpu; }
     const OpImplementation& implementation() const;
+    // The implementation for `backend`, which must be `execution_backend()`.
+    const OpImplementation& implementation_on(BackendId backend) const;
     const Codegen& codegen() const;
     void prepare_fragment(JK& key);
+    // `prepare_fragment` with `execution_backend()` already in hand.
+    void prepare_fragment_on(JK& key, BackendId backend);
     void optimize_generated_source(string& source);
     void prepare_codegen_key(JK& key);
     void prepare_execution(JK& key);
     void execute_prepared(JK& key);
+    // The two above for a caller that has `execution_backend()` in hand: the
+    // executor asks it once per operator and hands it down.
+    void prepare_execution_on(JK& key, BackendId backend);
+    void execute_prepared_on(JK& key, BackendId backend);
     void run_registered();
     inline bool is_op(OpId id) const { return type_id() == id; }
     

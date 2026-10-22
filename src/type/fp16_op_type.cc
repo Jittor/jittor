@@ -184,6 +184,10 @@ struct FP16OpType : OpByType {
             {"init_bitwise_or", "$1(0)"},
             {"init_bitwise_xor", "$1(0)"},
             {"init_mean", "$1(0)"},
+            // Widened to float inside the helper; see type/fp_class_compute.h.
+            {"isnan", "jittor::_fp_isnan($2)"},
+            {"isinf", "jittor::_fp_isinf($2)"},
+            {"isfinite", "jittor::_fp_isfinite($2)"},
         };
 
         auto lookup = [](const unordered_map<string, string>& table,

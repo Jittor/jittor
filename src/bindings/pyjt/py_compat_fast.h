@@ -95,6 +95,15 @@ PyObject* fast_permute(PyObject* self, PyObject* axes);
 // @pyjt(_fast_clamp)
 PyObject* fast_clamp(PyObject* self, PyObject* min_v, PyObject* max_v);
 
+// `jittor.any(x, dims, keepdims)` (`all` when `is_and`) of a bool Var on CPU
+// or CUDA: the logical reduction with a bool result, where `any_`/`all_`
+// reduce a bool input into int32 and the caller then casts that back -- a
+// second kernel for every truth test. NotImplemented for any other dtype or
+// backend, for `dims` other than an int or a sequence of in-range ints,
+// and `any_(...).bool()` takes the call.
+// @pyjt(_logical_reduce)
+PyObject* logical_reduce(PyObject* self, PyObject* dims, bool keepdims, bool is_and);
+
 // `_fast_getitem` and `_fast_cat` as jittor's own `getitem` and `concat`
 // reach them: each Var operand is first read the way a generated binding
 // reads it (`VarHolder::grad_input`, which brings an aliased view up to date

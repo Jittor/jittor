@@ -214,11 +214,16 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
             return op_desc;
         };
         LOGvvv << "Check op needs compile:" << op;
-        ExecutionBackendScope operation_backend_scope(op->requested_backend());
-        TensorPlacementScope placement_scope(op->graph_placement());
+        // One read of the placement for the scopes and the lookup, as in
+        // `run_exec_plan`.
+        const auto placement = op->graph_placement();
+        const auto requested_backend = placement.explicit_backend
+            ? placement.device.backend : execution_target_backend();
+        ExecutionBackendScope operation_backend_scope(requested_backend);
+        TensorPlacementScope placement_scope(placement);
         Float32PrecisionScope precision_scope(op->float32_precision);
         LaunchOriginScope origin_scope(op->launch_origin);
-        op->prepare_execution(jkl);
+        op->prepare_execution_on(jkl, op->execution_backend_for(requested_backend));
         if (jkl.empty()) continue;
 
         // Copy the key before consulting caches; JK is reusable scratch

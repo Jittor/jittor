@@ -52,6 +52,7 @@ ArrayOp::ArrayOp(ArrayArgs&& args) {
         }
     }
     #endif
+    if (keep_inline(args.ptr, output->size)) return;
     // TODO: args.buffer too many copy
     new (&allocation) Allocation(get_array_host_allocator(), output->size);
     backend_copy(allocation.ptr, {}, args.ptr, {}, output->size);
@@ -106,6 +107,12 @@ void ArrayOp::jit_prepare(JK& jk) {
 }
 
 void ArrayOp::run() {
+    if (inline_pending && !allocation.ptr) {
+        // The output takes memory now: the allocation the constructor skipped.
+        new (&allocation) Allocation(get_array_host_allocator(), output->size);
+        std::memcpy(allocation.ptr, inline_value, output->size);
+        inline_pending = false;
+    }
     // Run again, by a kept graph (`keep_graph`): the first run already handed
     // the data to the output, which still holds it -- see
     // `release_kept_storage`, which leaves a constant's memory alone. Running

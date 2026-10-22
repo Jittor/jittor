@@ -167,13 +167,20 @@ BackendId Op::requested_backend() const {
 
 BackendId Op::execution_backend() const {
     if (PREDICT_BRANCH_NOT_TAKEN(host_execution_forced)) return BackendId::Cpu;
-    const auto requested = requested_backend();
+    return execution_backend_for(requested_backend());
+}
+
+BackendId Op::execution_backend_for(BackendId requested) const {
+    if (PREDICT_BRANCH_NOT_TAKEN(host_execution_forced)) return BackendId::Cpu;
     return flag(OpFlags::_cuda) && requested != BackendId::Cpu
         ? requested : BackendId::Cpu;
 }
 
 const OpImplementation& Op::implementation() const {
-    const auto backend = execution_backend();
+    return implementation_on(execution_backend());
+}
+
+const OpImplementation& Op::implementation_on(BackendId backend) const {
     static_assert(alignof(OpImplementation) >= 8, "the backend id is kept in the low bits");
     const uintptr_t cached = implementation_cache.load(std::memory_order_relaxed);
     if (cached && (cached & 7) == (uintptr_t)backend)
@@ -191,7 +198,11 @@ const OpImplementation& Op::implementation() const {
 const Codegen& Op::codegen() const { return implementation().codegen; }
 
 void Op::prepare_fragment(JK& key) {
-    auto callback = codegen().fragment;
+    prepare_fragment_on(key, execution_backend());
+}
+
+void Op::prepare_fragment_on(JK& key, BackendId backend) {
+    auto callback = implementation_on(backend).codegen.fragment;
     USER_CHECK(callback) << "Missing codegen fragment for" << name();
     callback(this, key);
 }
@@ -539,7 +550,8 @@ void Op::prepare_codegen_key(JK& jk) {
     memcheck_all_exist();
     jk << name();
     auto pre_size = jk.size;
-    prepare_fragment(jk);
+    const auto backend = execution_backend();
+    prepare_fragment_on(jk, backend);
     if (jk.size == pre_size) {
         // not a jit op
         bool has_cuda = flag(OpFlags::_cuda);
@@ -550,7 +562,7 @@ void Op::prepare_codegen_key(JK& jk) {
         bool use_int64_t = false;
         // TODO: fused op do not have inputs,
         //   check use_cuda_op from outputs may not be enough
-        bool use_cuda_op = executes_on_accelerator();
+        bool use_cuda_op = backend != BackendId::Cpu;
         for (Var* var : inputs()) {
             if (var->num >= std::numeric_limits<int32_t>::max()
                     || var->storage_span_bytes() / var->dsize() >= std::numeric_limits<int32_t>::max())
@@ -588,11 +600,15 @@ void Op::prepare_codegen_key(JK& jk) {
 }
 
 void Op::prepare_execution(JK& jk) {
+    prepare_execution_on(jk, execution_backend());
+}
+
+void Op::prepare_execution_on(JK& jk, BackendId backend) {
     Float32PrecisionScope precision_scope(float32_precision);
     JT_GBP_SCOPE(gbp_jit_key);
     jk.clear();
     if (is_storage_view()) return;
-    auto callback = codegen().prepare;
+    auto callback = implementation_on(backend).codegen.prepare;
     USER_CHECK(callback) << "Missing codegen preparation for" << name();
     callback(this, jk);
     const auto& identity = definition().compile_identity;
@@ -603,9 +619,13 @@ void Op::prepare_execution(JK& jk) {
 }
 
 void Op::execute_prepared(JK& jk) {
+    execute_prepared_on(jk, execution_backend());
+}
+
+void Op::execute_prepared_on(JK& jk, BackendId backend) {
     Float32PrecisionScope precision_scope(float32_precision);
     if (is_storage_view()) return;
-    const auto& kernel = implementation().kernel;
+    const auto& kernel = implementation_on(backend).kernel;
     if (!jk.empty()) {
         USER_CHECK(kernel.jit) << "Missing JIT kernel for" << name();
         kernel.jit(this, jk);

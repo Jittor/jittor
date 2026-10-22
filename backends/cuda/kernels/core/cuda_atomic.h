@@ -88,6 +88,27 @@ __device__ inline signed char atomicAnd(signed char* a, signed char b) {
 __device__ inline signed char atomicXor(signed char* a, signed char b) {
     return cuda_atomic_narrow_rmw<signed char, 6>(a, b);
 }
+// A bool result of `any`/`all` (parallel_pass.cc: `a=bool(a||b)`). Every
+// thread of the reduction meets at the one output, so the CAS loop above would
+// serialise all of them on its word. A bool is stored as 0 or 1, which turns
+// both into one 32-bit atomic on the word holding it: OR true sets the
+// byte's low bit, AND false clears the byte, and the neighbouring bytes see
+// an OR with 0 or an AND with ones. OR false and AND true change nothing, and
+// a value that is already the answer needs no write.
+__device__ inline bool atomicOr(bool* a, bool b) {
+    bool current = *(volatile bool*)a;
+    if (!b || current) return current;
+    unsigned int* base = (unsigned int*)((size_t)a & ~(size_t)0x3);
+    unsigned int shift = (((size_t)a) & 0x3) * 8;
+    return (atomicOr(base, 1u << shift) >> shift) & 0xffu;
+}
+__device__ inline bool atomicAnd(bool* a, bool b) {
+    bool current = *(volatile bool*)a;
+    if (b || !current) return current;
+    unsigned int* base = (unsigned int*)((size_t)a & ~(size_t)0x3);
+    unsigned int shift = (((size_t)a) & 0x3) * 8;
+    return (atomicAnd(base, ~(0xffu << shift)) >> shift) & 0xffu;
+}
 #endif
 
 namespace jittor {

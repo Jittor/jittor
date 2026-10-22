@@ -27,6 +27,7 @@ struct PlanScratch {
     // count_fuse
     vector<int> father, fuse_level, fuse_queue, unvisited_consumers, group_size;
     vector<BackendId> op_backend;
+    vector<char> op_scalar;
     vector<char> forced_material, half_union, bounded;
     // schedule_hold_release
     vector<int> last_use;
