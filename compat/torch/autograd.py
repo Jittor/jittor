@@ -36,24 +36,15 @@ def _state():
 
 
 def save_for_backward(self, *tensors):
-    # torch stores a tuple; a single un-tupled call still yields a tuple
-    self._saved_tensors = tuple(tensors)
-    # torch also records each saved tensor's version counter and raises
-    # if the tensor was modified in place before backward reads it.
-    # Without that, an in-place edit between forward and backward is
-    # used silently: the backward computes with the NEW values and
-    # returns a gradient for a forward that never happened.
-    # jittor has no version counter, but Var.id is one in practice --
-    # it is stable across reads, sync and numpy(), and changes on
-    # update()/assign()/setitem/augmented assignment.
-    #
-    # Scope: jittor's Function.__call__ tapes its inputs, so what a
-    # forward saves is the taped Var, not the caller's object. This
-    # therefore catches an in-place edit of the tensor the forward
-    # actually saved (the usual case: an intermediate computed inside
-    # forward), not an edit of the caller's original made afterwards.
+    # Forward receives native input tapes. Saving a direct input must retain
+    # the caller's gradient edge so a differentiable backward can reach it.
+    origins = getattr(self, "_torch_saved_input_origins", {})
+    self._saved_tensors = tuple(origins.get(id(t), t) for t in tensors)
+    # Keep the existing holder-rebinding guard on the tensors actually saved.
+    # Forward intermediates retain their own identity and history.
     self._saved_versions = tuple(
-        (t.id if isinstance(t, jt.Var) else None) for t in tensors)
+        (t.id if isinstance(t, jt.Var) else None)
+        for t in self._saved_tensors)
 
 
 def _saved_tensors(self):
@@ -169,7 +160,8 @@ def _call_record_inputs(self, *args, **kw):
     # Torch custom Functions own their backward edge even when forward()
     # returns input.detach(). Clear the stop-grad bit before Jittor tapes the
     # output, or DeepSpeed ZeRO-3's backward-hook wrapper loses that edge.
-    if any(ctx.needs_input_grad) and not jt.flags.no_grad:
+    wrap_execute = any(ctx.needs_input_grad) and not jt.flags.no_grad
+    if wrap_execute:
         execute = ctx.execute
 
         def execute_with_grad(*forward_args, **forward_kw):
@@ -182,7 +174,15 @@ def _call_record_inputs(self, *args, **kw):
             return result
 
         ctx.execute = execute_with_grad
-    out = ctx._run_call(*args, **kw)
+    ctx._torch_caller_inputs = args
+    try:
+        out = ctx._run_call(*args, **kw)
+    finally:
+        # The temporary closure holds a bound execute(ctx). Leaving it on ctx
+        # forms a Python cycle and prolongs saved device allocations until GC.
+        if wrap_execute:
+            ctx.__dict__.pop("execute", None)
+        ctx.__dict__.pop("_torch_caller_inputs", None)
     # Capture each forward OUTPUT's (shape, dtype) so the grad bridge can
     # materialize a zeros grad for outputs that don't reach the backward'd
     # scalar (torch's materialize_grads=True; see grad() below).
@@ -397,11 +397,19 @@ class Function(jt.Function):
     """Torch-style callbacks with native per-call tape and context ownership."""
 
     def execute(self, *args, **kwargs):
-        # Torch records the custom backward edge, not the forward's internal
-        # operations. Input requires_grad metadata stays available to kernels
-        # that prepare their backward buffers during forward.
-        with jt.no_grad():
-            return type(self).forward(self, *args, **kwargs)
+        callers = self.__dict__.pop("_torch_caller_inputs", ())
+        self._torch_saved_input_origins = {
+            id(taped): caller for taped, caller in zip(args, callers)
+            if isinstance(taped, jt.Var) and isinstance(caller, jt.Var)
+        }
+        try:
+            # Only the custom backward edge is recorded. Input requires_grad
+            # metadata remains available to kernels preparing backward buffers.
+            with jt.no_grad():
+                return type(self).forward(self, *args, **kwargs)
+        finally:
+            # Retain only explicitly saved tensors, not every call argument.
+            self.__dict__.pop("_torch_saved_input_origins", None)
 
     __call__ = _call_record_inputs
     save_for_backward = save_for_backward
