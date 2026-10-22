@@ -97,6 +97,9 @@ constexpr int ns_max_len = 16;
     m(erfinv) \
     m(sigmoid) \
     m(relu) \
+    m(isnan) \
+    m(isinf) \
+    m(isfinite) \
     \
     m(uniform) \
     m(normal) \

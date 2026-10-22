@@ -95,14 +95,39 @@ PyObject* fast_permute(PyObject* self, PyObject* axes);
 // @pyjt(_fast_clamp)
 PyObject* fast_clamp(PyObject* self, PyObject* min_v, PyObject* max_v);
 
+// `jittor.any(x, dims, keepdims)` (`all` when `is_and`) of a bool Var on CPU
+// or CUDA: the logical reduction with a bool result, where `any_`/`all_`
+// reduce a bool input into int32 and the caller then casts that back -- a
+// second kernel for every truth test. NotImplemented for any other dtype or
+// backend, for `dims` other than an int or a sequence of in-range ints,
+// and `any_(...).bool()` takes the call.
+// @pyjt(_logical_reduce)
+PyObject* logical_reduce(PyObject* self, PyObject* dims, bool keepdims, bool is_and);
+
 // `_fast_getitem` and `_fast_cat` as jittor's own `getitem` and `concat`
 // reach them: each Var operand is first read the way a generated binding
 // reads it (`VarHolder::grad_input`, which brings an aliased view up to date
 // with its source's in-place writes while gradients are recorded), so the
 // native path sees what the Python path it stands in for would have built on.
+//
+// `gather`: also answer the index forms holding index Vars -- a lone bool
+// mask, a lone index Var, a tuple with index Vars in it -- as jittor's
+// `_fast_getitem` answers them. The caller passes whether that path applies,
+// i.e. whether `Var.getitem` is still jittor's own.
 // @pyjt(_jt_basic_getitem)
-PyObject* jt_basic_getitem(PyObject* self, PyObject* index);
+PyObject* jt_basic_getitem(PyObject* self, PyObject* index, bool gather=false);
 // @pyjt(_jt_concat)
 PyObject* jt_concat(PyObject* tensors, int64 dim);
+
+// `x[index] = value` as jittor's `setitem` and `var_setitem` together build
+// it, for a plain Var `x` (not complex64, not on ACL) and a Var or exact
+// Python int, float or bool `value`: an index of ints, slices, None,
+// Ellipsis and index Vars, or a lone bool mask -- the `ternary` a mask of
+// `x`'s own shape becomes under a scalar or one-element value, its `where()`
+// coordinates otherwise. Returns `x`, assigned. NotImplemented for anything
+// else, and the Python path takes the call. The caller has checked that no
+// setitem kernel is registered and that `Var.setitem` is still jittor's own.
+// @pyjt(_jt_setitem)
+PyObject* jt_setitem(PyObject* self, PyObject* index, PyObject* value);
 
 } // namespace jittor

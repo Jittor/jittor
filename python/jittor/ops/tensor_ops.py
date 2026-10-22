@@ -193,7 +193,6 @@ from .numerical import _simple_for
 from .numerical import _isnan_acl
 from .numerical import _isinf_acl
 from .numerical import _isfinite_acl
-from .numerical import _classify_value
 from .numerical import _classify
 from .numerical import _classify_acl
 from .numerical import _classify_code

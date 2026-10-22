@@ -373,6 +373,14 @@ def _constant_scalar(value, dtype):
 def _creation_shape(fn, shape, dtype):
     '''(shape, dtype) from the ``*shape`` arguments of ones/zeros/empty, which
     accept ``(2, 3)``, ``((2, 3),)`` and a trailing dtype.'''
+    for dim in shape:
+        if dim.__class__ is not ori_int:     # this module's `int` is int32
+            break
+    else:
+        # `ones(2, 3)`: nothing below applies to plain ints but the dtype check.
+        if dtype.__class__ is str and dtype not in _KNOWN_DTYPE_STRINGS:
+            _check_dtype_string(fn, dtype)
+        return shape, dtype
     # is_dtype accepts any str, so a lone string would become the dtype of a
     # 0-d result instead of being reported as a bad shape.
     if len(shape) == 1 and isinstance(shape[0], str):

@@ -612,7 +612,9 @@ workaround.
   where a bool is the defensible answer, so the CPU dtype should be decided with
   the CUDA fix. The `uint8` cases are well defined and CPU performs them.
 - Workaround: cast to `int32` or `bool` before a logical or bitwise reduction on
-  CUDA.
+  CUDA. The public `any()`/`all()` do this for every floating-point input
+  (`x != 0`, NaN true as in torch; `tests/ops/test_half_logical_reduce.py`);
+  the raw `any_`/`all_` and the bitwise reductions are still affected.
 - Evidence: every published reduction crossed with six dtypes, one fresh
   process each, with `location()` asserted so a CPU fallback cannot read as a
   pass; [`test_bitwise_dtype_guard.py`](../../tests/ops/test_bitwise_dtype_guard.py)
@@ -1552,16 +1554,18 @@ workaround.
 ## KI-MEM-002: reading a device tensor relocates it to the host
 
 - Severity: High
-- Status: Open; reproduced on real CUDA on `1a6e203fc`
+- Status: Open for `numpy()`, `repr()` and `tolist()`; reproduced on real CUDA
+  on `1a6e203fc`. Element reads fixed: `item()` reads a device element in
+  place, so `d[0].item()` no longer moves `d`.
 - Owner: memory and executor maintainers
 - Symptom: `b.numpy()` moves a device tensor's storage to the host
   (`location()` goes `device` -> `cpu`). The next device operation migrates it
   back: 0.1214 s against 0.0006 s for the same operation on a resident 40 MiB
   tensor (215x), and device memory goes from +40 MiB to +80 MiB because both
   copies are live. `repr()` and `tolist()` take the same path, so printing a
-  tensor at a REPL relocates it, and `d[0].item()` moves all of `d`. A reduction
-  result is not affected: `u.sum().item()` leaves `u` on the device, so
-  `loss.item()` is fine. PyTorch refuses `.numpy()` on a CUDA tensor instead.
+  tensor at a REPL relocates it. A reduction result and an element read are
+  not affected: `u.sum().item()` and `d[0].item()` leave `u` and `d` on the
+  device. PyTorch refuses `.numpy()` on a CUDA tensor instead.
 - Workaround: read a computed copy, e.g. `(x + 0).numpy()`, which leaves `x` on
   the device (checked on `1a6e203fc`); `x.clone().numpy()` does **not** help,
   because the clone shares `x`'s storage and both move. Avoid `print(x)` and
@@ -1569,10 +1573,10 @@ workaround.
 - Evidence: `tests/core/test_var_residency_contract.py`;
   `tools/probes/side_effect_probe.py` (found the `tolist()` spelling);
   `benchmarks/asv/transfer.py`.
-- Exit condition: `numpy()`, `repr()` and element/slice reads leave the source
-  Var's `location()` unchanged on real CUDA, a device operation right after such
-  a read costs the same as one without it, and the residency contract covers all
-  spellings including the reduction case.
+- Exit condition: `numpy()` and `repr()` leave the source Var's `location()`
+  unchanged on real CUDA, a device operation right after such a read costs the
+  same as one without it, and the residency contract covers all spellings
+  including the reduction and element-read cases.
 
 ## KI-AUTOGRAD-003: register_hook makes the receiver misreport its residency
 

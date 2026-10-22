@@ -36,6 +36,8 @@ public:
     LaunchHistory(const LaunchHistory&) = delete;
     LaunchHistory& operator=(const LaunchHistory&) = delete;
     uint64 intern_origin(const char* file, int line);
+    // `record(base)` with the device and stream the launch went to.
+    void record(const LaunchRecord& base, Device device, uintptr_t stream);
     // The location an `intern_origin` id stands for; false for 0 or an
     // unknown id. Used by the step tracer to name call sites.
     bool origin(uint64 id, LaunchOrigin& out);
@@ -67,10 +69,13 @@ struct LaunchOriginScope {
 
 // Stack-scoped launch ownership is copied before dispatch. A side-stream
 // operation can record the same owner against its actual stream.
+// The record is the caller's, which must outlive the scope: the executor
+// fills one per operator and launches inside it, and copying 176 bytes into
+// the scope -- and out again for every launch -- was a copy per operator for
+// nothing.
 struct LaunchOperationScope {
     const LaunchRecord* previous;
-    LaunchRecord record;
-    explicit LaunchOperationScope(LaunchRecord value);
+    explicit LaunchOperationScope(const LaunchRecord& record);
     ~LaunchOperationScope();
 };
 EXTERN_LIB void record_active_launch(BackendStream stream);

@@ -87,6 +87,18 @@ class flag_scope(_call_no_record_scope):
             flags_bk = {}
             self._flags_bk_stack.append([flags_bk, None])
             try:
+                if len(jt_flags) == 1:
+                    # A lone flag cannot alias another one, so there is no
+                    # snapshot to take before the write.
+                    for k, v in jt_flags.items():
+                        origin = getattr(flags, k)
+                        flags_bk[k] = origin
+                        if isinstance(origin, dict):
+                            for ok, ov in origin.items():
+                                if ok not in v:
+                                    v[ok] = ov
+                        setattr(flags, k, v)
+                    return
                 originals = {key: getattr(flags, key) for key in jt_flags}
                 for k, v in jt_flags.items():
                     origin = originals[k]
@@ -133,10 +145,25 @@ class flag_scope(_call_no_record_scope):
             raise
 
     def __exit__(self, *exc):
-        if not self._flags_bk_stack:
+        stack = self._flags_bk_stack
+        if not stack:
             # __exit__ without a matching __enter__; nothing was saved
             return
-        flags_bk, device_snapshot = self._flags_bk_stack.pop()
+        flags_bk, device_snapshot = stack.pop()
+        if device_snapshot is None and "use_cuda" not in flags_bk and "use_acl" not in flags_bk:
+            # No device flag: nothing to flush, so only the restore below,
+            # with the same rule -- every flag is restored, and the first
+            # restore error is raised unless an exception is unwinding.
+            restore_error = None
+            for k, v in flags_bk.items():
+                try:
+                    setattr(flags, k, v)
+                except BaseException:
+                    if restore_error is None:
+                        restore_error = _sys.exc_info()
+            if restore_error is not None and not (exc and exc[0] is not None):
+                raise restore_error[1].with_traceback(restore_error[2])
+            return
         # Not while an exception is unwinding: the pending work is likely what
         # raised, and a second error here would bury the first one.
         unwinding = len(exc) > 0 and exc[0] is not None
@@ -179,8 +206,10 @@ Example::
 
     '''
     def __init__(self, **jt_flags):
+        # flag_scope.__init__ inlined: this is built around every no-grad op.
         jt_flags["no_grad"] = 1
-        super().__init__(**jt_flags)
+        self.jt_flags = jt_flags
+        self._flags_bk_stack = []
 
 class enable_grad(flag_scope):
     ''' enable_grad scope, all variable created inside this

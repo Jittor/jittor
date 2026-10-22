@@ -6,10 +6,12 @@
 #include "bindings/pyjt/py_tensor_frontend.h"
 #include "bindings/pyjt/py_type_lifetime.h"
 #include "ops/op_register.h"
+#include "core/op.h"
 #include "ops/composite/code_op.h"
 #include <cstring>
 #include "runtime/device.h"
 #include "runtime/backend.h"
+#include "runtime/dispatch_context.h"
 #include <stdexcept>
 #include <descrobject.h>
 
@@ -283,10 +285,214 @@ bool clamp_scalar(PyObject* value) {
 }
 } // namespace
 
-PyObject* jt_basic_getitem(PyObject* self, PyObject* index) {
+namespace {
+auto make_where = op_constructor<vector<VarPtr>, Var*, NanoString>("where");
+
+// An index Var `_fast_getitem` hands to the native getitem as it is: one
+// that is not a mask.
+bool plain_index_var(PyObject* item) {
+    if (!PyObject_TypeCheck(item, &PyjtVarHolder.ht_type)) return false;
+    NanoString dtype = GET_RAW_PTR(VarHolder, item)->var->dtype();
+    return dtype != ns_bool && dtype != ns_uint8;
+}
+
+// `x[index]` for the index forms `_fast_getitem` (ops/indexing.py) passes to
+// the native getitem because they hold index Vars: a lone bool mask, as its
+// `where()` coordinates; a lone index Var; a tuple of ints, slices, None,
+// Ellipsis and index Vars, at least one of them a Var. Each is a gather, so
+// no view is recorded. The ops are the ones that path builds -- `where`, its
+// coordinates submitted as their conversion to Python submits them, then
+// `getitem` -- without the four Python frames, the dtype-name lookups and the
+// coordinate tuple in between: a mask-driven loop indexes by a mask
+// thousands of times per second.
+//
+// NotImplemented, and the Python path decides, for anything else: a uint8
+// mask, a mask inside a tuple, a 0-d mask, a lone index of a Var subclass
+// (whose `_jittor_constant_index_value` the Python path reads), or with a
+// getitem -- or, for a mask, a where -- kernel registered.
+PyObject* var_index_getitem(PyObject* self, PyObject* index) {
+    if (kernel_op_registered("tensor.getitem")) return not_implemented();
+    Var* x = GET_RAW_PTR(VarHolder, self)->var;
+    if (PyObject_TypeCheck(index, &PyjtVarHolder.ht_type)) {
+        if (Py_TYPE(index) != &PyjtVarHolder.ht_type) return not_implemented();
+        Var* cond = GET_RAW_PTR(VarHolder, index)->var;
+        NanoString dtype = cond->dtype();
+        if (dtype == ns_uint8) return not_implemented();
+        if (dtype != ns_bool) {
+            // `_maybe_constant_index_gather` answers a lone 1-d index whose
+            // Var carries a constant value, set as an instance attribute.
+            if (cond->shape.size() == 1 && x->shape.size() >= 1) {
+                PyObject** dict_ptr = _PyObject_GetDictPtr(index);
+                if (dict_ptr && *dict_ptr
+                        && PyDict_GetItemString(*dict_ptr, "_jittor_constant_index_value"))
+                    return not_implemented();
+            }
+            PyTensorFrontendScope scope(self, nullptr, 0, false);
+            VarSlices slices(1);
+            slices.slices[0].set_var(cond);
+            return to_py_object<VarHolder*>(new VarHolder(make_getitem(x, move(slices))));
+        }
+        if (cond->shape.size() == 0 || kernel_op_registered("tensor.where"))
+            return not_implemented();
+        // `cond.where()`, as `jittor_core.ops.where(cond)` builds and returns
+        // it: the binding reads its Var argument through `grad_input`.
+        cond = GET_RAW_PTR(VarHolder, index)->grad_input();
+        vector<unique_ptr<VarHolder>> coords;
+        {
+            PyTensorFrontendScope scope(nullptr, &index, 1, false);
+            for (auto& out : make_where(cond, ns_int64))
+                coords.emplace_back(new VarHolder(move(out)));
+        }
+        for (auto& coord : coords) schedule_pending_from_python(coord.get());
+        PyTensorFrontendScope scope(self, nullptr, 0, false);
+        VarSlices slices(coords.size());
+        for (size_t i = 0; i < coords.size(); i++) slices.slices[i].set_var(coords[i]->var);
+        return to_py_object<VarHolder*>(new VarHolder(make_getitem(x, move(slices))));
+    }
+    if (!PyTuple_CheckExact(index)) return not_implemented();
+    Py_ssize_t n = PyTuple_GET_SIZE(index);
+    bool has_var = false;
+    for (Py_ssize_t i = 0; i < n; i++) {
+        PyObject* item = PyTuple_GET_ITEM(index, i);
+        if (PySlice_Check(item)) {
+            // `_plain_slice`: exact ints or None, nothing the full path
+            // would convert first.
+            auto* sl = (PySliceObject*)item;
+            for (PyObject* part : {sl->start, sl->stop, sl->step})
+                if (part != Py_None && !PyLong_CheckExact(part)) return not_implemented();
+        } else if (plain_index_var(item)) {
+            has_var = true;
+        } else if (!(PyLong_CheckExact(item) || item == Py_None || item == Py_Ellipsis)) {
+            return not_implemented();
+        }
+    }
+    if (!has_var) return not_implemented();
+    vector<unique_ptr<VarHolder>> holders;
+    PyTensorFrontendScope scope(self, nullptr, 0, false);
+    VarSlices slices = from_py_object<VarSlices>(index, holders);
+    return to_py_object<VarHolder*>(new VarHolder(make_getitem(x, move(slices))));
+}
+} // namespace
+
+PyObject* jt_basic_getitem(PyObject* self, PyObject* index, bool gather) {
     if (!PyObject_TypeCheck(self, &PyjtVarHolder.ht_type)) return not_implemented();
     GET_RAW_PTR(VarHolder, self)->grad_input();
+    if (gather && Py_TYPE(self) == &PyjtVarHolder.ht_type
+            && (PyObject_TypeCheck(index, &PyjtVarHolder.ht_type) || PyTuple_CheckExact(index))) {
+        PyObject* result = var_index_getitem(self, index);
+        if (result != Py_NotImplemented) return result;
+        Py_DECREF(result);
+    }
     return fast_getitem(self, index);
+}
+
+namespace {
+auto make_setitem_op = op_constructor<VarPtr, Var*, VarSlices&&, Var*, NanoString>("setitem");
+auto make_ternary_op = op_constructor<VarPtr, Var*, Var*, Var*>("ternary");
+auto make_broadcast_to_op = op_constructor<VarPtr, Var*, NanoVector, NanoVector>("broadcast_to");
+
+// An index `var_index_getitem` or the basic path would take as it is:
+// ints, plain slices, None, Ellipsis and index Vars, alone or in a tuple.
+bool settable_item(PyObject* item) {
+    if (PyLong_CheckExact(item) || item == Py_None || item == Py_Ellipsis) return true;
+    if (PySlice_Check(item)) {
+        auto* sl = (PySliceObject*)item;
+        for (PyObject* part : {sl->start, sl->stop, sl->step})
+            if (part != Py_None && !PyLong_CheckExact(part)) return false;
+        return true;
+    }
+    return plain_index_var(item);
+}
+
+bool exact_number(PyObject* value) {
+    return PyLong_CheckExact(value) || PyFloat_CheckExact(value) || PyBool_Check(value);
+}
+
+// `x.assign(result)`, and `x` back to Python as the assignment returns it.
+PyObject* assign_result(PyObject* self, VarPtr&& result) {
+    unique_ptr<VarHolder> holder(new VarHolder(move(result)));
+    // What returning the result to Python would have done with it.
+    schedule_pending_from_python(holder.get());
+    GET_RAW_PTR(VarHolder, self)->assign(holder.get());
+    Py_INCREF(self);
+    return self;
+}
+} // namespace
+
+PyObject* jt_setitem(PyObject* self, PyObject* index, PyObject* value) {
+    if (Py_TYPE(self) != &PyjtVarHolder.ht_type) return not_implemented();
+    // Exact Vars only, for the value and a lone index: the bindings this
+    // stands in for take their frontend type from a frontend tensor among
+    // their direct arguments.
+    bool value_var = Py_TYPE(value) == &PyjtVarHolder.ht_type;
+    if (!value_var && !exact_number(value)) return not_implemented();
+    if (kernel_op_registered("tensor.setitem")) return not_implemented();
+    auto* holder = GET_RAW_PTR(VarHolder, self);
+    if (holder->var->dtype() == ns_complex64) return not_implemented();
+    // `_acl_assignment_value` converts the value for an ACL target.
+    {
+        auto backend = query_dispatch_context({holder->var}).backend;
+        if (backend == "acl" || backend == "acl_legacy") return not_implemented();
+    }
+    bool mask = false;
+    if (PyObject_TypeCheck(index, &PyjtVarHolder.ht_type)) {
+        NanoString dtype = GET_RAW_PTR(VarHolder, index)->var->dtype();
+        if (dtype == ns_uint8 || Py_TYPE(index) != &PyjtVarHolder.ht_type) return not_implemented();
+        mask = dtype == ns_bool;
+        if (mask && (GET_RAW_PTR(VarHolder, index)->var->shape.size() == 0
+                     || kernel_op_registered("tensor.where")))
+            return not_implemented();
+    } else if (PyTuple_CheckExact(index)) {
+        Py_ssize_t n = PyTuple_GET_SIZE(index);
+        for (Py_ssize_t i = 0; i < n; i++)
+            if (!settable_item(PyTuple_GET_ITEM(index, i))) return not_implemented();
+    } else if (!settable_item(index)) {
+        return not_implemented();
+    }
+
+    PyTensorFrontendScope scope(self, nullptr, 0, false);
+    if (mask) {
+        Var* x = holder->var;
+        Var* cond = GET_RAW_PTR(VarHolder, index)->var;
+        if (cond->shape == x->shape) {
+            // `x.assign(mask.ternary(jt.array(value).broadcast(x.shape), x))`,
+            // and for a one-element Var value `jt.broadcast(value, x.shape)`.
+            VarPtr filled;
+            if (!value_var) {
+                unique_ptr<VarHolder> number(jit_op_maker::array__(value));
+                filled = make_broadcast_to_op(number->var, x->shape, NanoVector());
+            } else {
+                auto* v = GET_RAW_PTR(VarHolder, value);
+                if (v->var->shape.size() == 1 && v->var->shape[0] == 1)
+                    filled = make_broadcast_to_op(v->grad_input(), x->shape, NanoVector());
+            }
+            if (filled) {
+                Var* c = GET_RAW_PTR(VarHolder, index)->grad_input();
+                return assign_result(self, make_ternary_op(c, filled.ptr, holder->grad_input()));
+            }
+        }
+    }
+    // `x.setitem(slices, value)` -- `var_setitem`, with a mask as its
+    // `where()` coordinates -- through the generated binding.
+    vector<unique_ptr<VarHolder>> holders;
+    VarSlices slices;
+    if (mask) {
+        Var* cond = GET_RAW_PTR(VarHolder, index)->grad_input();
+        {
+            PyTensorFrontendScope where_scope(nullptr, &index, 1, false);
+            for (auto& out : make_where(cond, ns_int64))
+                holders.emplace_back(new VarHolder(move(out)));
+        }
+        for (auto& coord : holders) schedule_pending_from_python(coord.get());
+        slices = VarSlices(holders.size());
+        for (size_t i = 0; i < holders.size(); i++) slices.slices[i].set_var(holders[i]->var);
+    } else {
+        slices = from_py_object<VarSlices>(index, holders);
+    }
+    unique_ptr<VarHolder> number;
+    VarHolder* y = from_py_object<VarHolder*>(value, number);
+    return assign_result(self,
+        make_setitem_op(holder->grad_input(), move(slices), y->grad_input(), ns_void));
 }
 
 PyObject* jt_concat(PyObject* tensors, int64 dim) {
@@ -332,6 +538,62 @@ PyObject* fast_clamp(PyObject* self, PyObject* min_v, PyObject* max_v) {
     if (low) value = clamp_select(value.ptr, low.ptr, true);
     if (high) value = clamp_select(value.ptr, high.ptr, false);
     return to_py_object<VarHolder*>(new VarHolder(move(value)));
+}
+
+namespace {
+// The (dims_mask, keepdims_mask) constructor: unlike `reduce(x, op, dims,
+// keepdims)` it keeps a bool input's dtype for the logical reductions.
+auto make_reduce_mask = op_constructor<VarPtr, Var*, NanoString, uint, uint>("reduce");
+} // namespace
+
+PyObject* logical_reduce(PyObject* self, PyObject* dims_obj, bool keepdims, bool is_and) {
+    if (Py_TYPE(self) != &PyjtVarHolder.ht_type) return not_implemented();
+    // Read as the generated `any_` binding would read it.
+    Var* x = GET_RAW_PTR(VarHolder, self)->grad_input();
+    if (x->dtype() != ns_bool) return not_implemented();
+    // The placement and precision the generated binding would build under.
+    PyTensorFrontendScope scope(self, nullptr, 0, false);
+    // ROCm has no narrow atomics (cuda_atomic.h), and the other backends
+    // have not been asked to reduce into a bool.
+    BackendId backend = construction_target_backend(x);
+    if (backend != BackendId::Cpu && backend != BackendId::Cuda) return not_implemented();
+    // `any_` takes one int or a sequence of them; anything else is left to its
+    // overload resolution, and an out-of-range dim to its error.
+    NanoVector dims;
+    if (PyLong_CheckExact(dims_obj)) {
+        int overflow = 0;
+        long long dim = PyLong_AsLongLongAndOverflow(dims_obj, &overflow);
+        if (overflow || (dim == -1 && PyErr_Occurred())) {
+            PyErr_Clear();
+            return not_implemented();
+        }
+        dims.push_back(dim);
+    } else if (Py_TYPE(dims_obj) == &PyjtNanoVector) {
+        dims = from_py_object<NanoVector>(dims_obj);
+    } else if (PyTuple_CheckExact(dims_obj) || PyList_CheckExact(dims_obj)) {
+        Py_ssize_t n = PySequence_Fast_GET_SIZE(dims_obj);
+        PyObject** items = PySequence_Fast_ITEMS(dims_obj);
+        for (Py_ssize_t i = 0; i < n; i++)
+            if (!PyLong_CheckExact(items[i])) return not_implemented();
+        dims = from_py_object<NanoVector>(dims_obj);
+    } else {
+        return not_implemented();
+    }
+    // The mask `ReduceOp(x, op, dims, keepdims)` derives.
+    int64 xdim = x->shape.size();
+    uint reduce_mask = 0;
+    if (!dims.size()) {
+        reduce_mask = xdim >= 32 ? ~0u : (1u << xdim) - 1;
+    } else {
+        for (auto dim : dims) {
+            if (dim < 0) dim += xdim;
+            if (dim < 0 || dim >= xdim) return not_implemented();
+            reduce_mask |= 1u << dim;
+        }
+    }
+    VarPtr y = make_reduce_mask(x, is_and ? ns_logical_and : ns_logical_or,
+                                reduce_mask, keepdims ? ~0u : 0u);
+    return to_py_object<VarHolder*>(new VarHolder(move(y)));
 }
 
 namespace {

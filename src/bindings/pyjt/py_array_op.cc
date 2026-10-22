@@ -204,6 +204,8 @@ ArrayOp::ArrayOp(PyObject* obj) {
         }
     }
     #endif
+    // A Python number -- staged in `scalar` above -- is kept inline.
+    if (!host_ptr && args.ptr == &scalar && keep_inline(args.ptr, size)) return;
     if (!host_ptr) {
         new (&allocation) Allocation(get_array_host_allocator(), output->size);
         host_ptr = allocation.ptr;
