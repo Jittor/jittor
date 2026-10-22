@@ -397,7 +397,11 @@ class Function(jt.Function):
     """Torch-style callbacks with native per-call tape and context ownership."""
 
     def execute(self, *args, **kwargs):
-        return type(self).forward(self, *args, **kwargs)
+        # Torch records the custom backward edge, not the forward's internal
+        # operations. Input requires_grad metadata stays available to kernels
+        # that prepare their backward buffers during forward.
+        with jt.no_grad():
+            return type(self).forward(self, *args, **kwargs)
 
     __call__ = _call_record_inputs
     save_for_backward = save_for_backward
