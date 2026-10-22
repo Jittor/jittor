@@ -1,6 +1,6 @@
 # 新 910B3 多库综合适配记录
 
-本记录对应[综合计划](../testing/2026-10-21-ascend-integrated-compat-plan.md)，唯一活动状态源为[整改看板](../architecture/refactor-board.md)的 ASC 任务。当前最终源码为 **MAIN-r28/123 文件**，manifest SHA256 `d3904da402f4a0c0b17d61102ec8bf704c97391f338415d7f56ac567e311510e`。下文按实际冻结源码区分结果，保留原始失败和未运行项。
+本记录对应[综合计划](../testing/2026-10-21-ascend-integrated-compat-plan.md)，唯一活动状态源为[整改看板](../architecture/refactor-board.md)的 ASC 任务。前半部分保留 2026-10-21 的 MAIN-r28/123 历史验收；2026-10-22 的续验单独绑定 2500 文件源清单 SHA256 ee0146a457c1c8df09a277797c04be3044a0cffdcd8ffdbf93fa6aeb083fd419，包含 src/core/grad.cc 的叶子梯度累加修复。下文按实际冻结源码区分结果，保留原始失败和未运行项。
 
 | 本轮验收 | 实际结论与源码范围 |
 | --- | --- |
@@ -8,12 +8,12 @@
 | 最终主树回归 | source123 完整 structure 1430P/2 CUDA skips、layout P；1432 不同 case 与 source121 逐 node 相同；97.py+1.pyi AST3.7 P，既定 Ruff 相对 HEAD 新增0、减少12 |
 | 八模型及综合 Trainer | 各自 source65 等冻结证据上，八模型完整输出/271 参数+2输入全梯度；Trainer4updates/8micro、61跨runtime检查；连续与2+2恢复216完整状态及轨迹 exact，dropout0顺序fixture |
 | 共享真实权重推理 | 0.6B既有冻结源码BF16完整推理P；source121的1.7B与4B各3输入/15完整数组/58,343,424 logits bitexact、cached/uncached greedy8 exact、actual NPU/fallback0；不是123重跑 |
-| 最终主树 AMP | source123 actual MAIN no-loader 10P/0skip/fallback0，低精度activation/FP32master两步Linear/LoRA目标84完整数组/2880元素bitexact；whole168 strict仍F，两份BF16+FP32input LoRA input_grad共45元素超原阈值 |
-| 真实0.6B BF16 LoRA | source123 R6完整单次工作流rc0，4updates/8micro、112 FP32 master、448全梯度归档、评估生成/adapter保存重载通过；R7由实际step2 checkpoint补fresh2恢复通过：933完整状态与轨迹strict0、224梯度数组及224 dtype标签bitexact；Native同模型全流程交叉未运行 |
-| FSDP2 | own88/r7六fresh worlds/12 rank-phase，FP32 full8及各自3+5精确恢复P；最终MAIN123 NPU0 worlds/0 reports，资源不足；旧120入口archived/source-bound |
+| 最终主树 AMP | source123 原始 no-loader 10P/0skip；其 whole168 严格探针曾有45个 BF16+FP32输入 LoRA input_grad 元素超预算。2026-10-22 叶子梯度修复后，74数组窄探针 bitexact，当前源 Qwen 交叉通过；完整 FP32/混合输入梯度矩阵尚未重跑 |
+| 真实0.6B BF16 LoRA | source123 的 R6/R7 完整训练与恢复通过；2026-10-22 当前2500文件源清单 R39 又完成 Native/Jittor full、prefix、fresh-resume 与全梯度交叉：2187 项、失败0、超预算0；实际 NPU、fallback0 |
+| FSDP2 | own88/r7 属独立历史源码的完整通过；当前2500文件源清单 R36 Native 双卡 full 完成8 updates，PASS。Jittor 双卡 full/resume 尚无终态：缓存别名错误已定位，后续尝试遇 NPU6 外部占用 |
 | 速度/显存 | NPU未验收。1.7B配对流程仅18交替calls后停止，generation steady/decode未完成、rc-2/acceptedfalse；4Bperf未运行，CPU控制器资格不能替代NPU性能 |
 
-尚未达到全部适配退出条件。默认 FP32 整模严格数值差异、FP32input BF16 LoRA 严格输入梯度、activation checkpoint 不重计算、deterministic setter 未实现、最终主树新双卡与完整性能均保留明确边界。raw CPU core 四文件另有46P/9S/1个原样 `test_concat_random` 的300秒超时，未删case、缩规模或放宽超时，不称全部core通过。模型和fixture、性能与功能、旧源与最终源均不混用。后文按时间保留各阶段事实，最新验收见文末。
+尚未达到全部适配退出条件。当前 Qwen 场景的 Native/Jittor BF16 交叉和叶子梯度修复已通过，但更广的 FP32/部分混合精度输入梯度矩阵仍需验证；当前主树 Jittor FSDP2 双卡 full/fresh-resume 仍无终态；activation checkpoint 重计算语义、deterministic setter 与随机/dropout 训练恢复未验收；正确性通过的对应场景尚无合格 NPU 速度/峰值显存比较。raw CPU core 四文件另有46P/9S/1个原样 test_concat_random 的300秒超时，未删case、缩规模或放宽超时，不称全部core通过。模型和fixture、性能与功能、旧源与最终源均不混用。后文按时间保留各阶段事实，最新验收见文末。
 
 ## 源码与环境
 
@@ -442,26 +442,57 @@ R22 使用 source manifest SHA256 aa56c083de1404dcfc744b31edc3dcb973f574d3dcb0d0
 
 ### R23–R24：HCCL/DTensor 串行预热与双卡 admission
 
-R23 在5/6 fresh 空闲快照后启动双卡 Jittor full。约10.97秒时 live monitor 发现外部 PID 1476170 占物理卡5，driver 返回125并只终止本 cohort 的 launcher 进程组。rank0/rank1 日志分别有706和555字节：rank0 已开始 setup_hccl 的 MPI-free HCCL 算子编译，rank1 到达 Jittor import；没有进入模型训练或产生训练阶段报告。launcher PID 1476146 的进程组已核验为空，事后 fresh 快照显示卡5/6均无进程。该次暴露 HCCL 算子首次 JIT 也需要串行预热，R23 的短暂初始化不作为 FSDP 结果；记录在 distributed/r23/。
+R23 在5/6 fresh 空闲快照后启动双卡 Jittor full。约10.97秒时旧 live monitor 将 PID 1476170 识别为外部占用并返回125。后续把占用 PID 与 cohort 的 rank 身份记录核对后，确认它正是本轮 Jittor rank0（物理卡5）；这是监控误判，driver 终止的是本轮自有 launcher 进程组，不是外部任务。rank0/rank1 日志分别有706和555字节：rank0 已开始 setup_hccl 的 MPI-free HCCL 算子编译，rank1 到达 Jittor import；没有进入模型训练或产生训练阶段报告。launcher PID 1476146 的进程组已核验为空，事后 fresh 快照显示卡5/6均无进程。该次仍暴露 HCCL 算子首次 JIT 需要预热，但不计作外部资源抢占或 FSDP 结果；记录在 distributed/r23/。
 
 R24 随后复用相同的冻结源清单，在物理卡5上按 rank role 0、1 顺序运行 R5 的单卡 HCCL/DTensor prewarm worker，并分别使用 R19 的 rank0/rank1 独立 Jittor cache。两份报告均为 PASS：world_size=1 的 FP32/BF16 HCCL collective 与 DTensor factory 检查通过，实际物理设备为5，fallback_after=0，source_unchanged=true；rank0/rank1 返回码均为0。prewarm-complete.json 记录报告 SHA256（rank0 018f6abdc1197191e372b1acef28328516a41186c1dd53bed0ae51c41b8cffbd；rank1 9eacf3d773b7169ca7c2228aee0b1554e1fd69b7ac7ec04c108e852d763ae140）。这仍是两个顺序单 rank 的 warmup，不是双 rank HCCL 或 FSDP2 证明。
 
 R24 双卡 driver 校验 current-source manifest 与 R5 Native baseline 后，在 runtime launcher 创建之前的 fresh admission 检查捕获物理卡6外部 PID 1493168，直接退出。没有创建 launcher、rank worker 或模型输出；admission 前后 npu-smi 快照与 driver traceback 保留于 distributed/r24/。不曾向外部进程发送信号。
 
-本节扩大了串行预热范围到 core、HCCL collective 与 DTensor factory，但 MAIN-r28 Jittor 双卡 FSDP2 full、prefix/resume 交叉仍没有运行通过；R23/R24 也没有性能数据。
+本节扩大了串行预热范围到 core、HCCL collective 与 DTensor factory，但 MAIN-r28 Jittor 双卡 FSDP2 full、prefix/resume 交叉仍没有运行通过；R23 是旧 watchdog 误判、R24 是 launcher 前资源阻断，两者均无性能数据。
 
-### R25–R29：多物理卡尝试与资源抢占复核
+### R25–R29：多物理卡尝试与监控身份复核
 
-R25 使用 fresh 空闲的物理卡3/5启动双卡 Jittor full，约10.64秒时 live monitor 发现外部 PID 1524441 占卡5，driver 返回125。两份 worker 均写出 process-start.json，但没有训练终态；rank0 的 HCCL ops 已加载并开始 communicator 初始化，rank1 到达 Jittor import。自有 launcher PID 1524412 的组已退出；外部 PID 随后不在事后卡表中，没有对其发送信号。R25 日志和 before/during/after 卡表保存在 distributed/r25/。
+R25 使用 fresh 空闲的物理卡3/5启动双卡 Jittor full，约10.64秒时旧 live monitor 将 PID 1524441 报为卡5外部占用并返回125。身份审计确认该 PID 是本轮 Jittor rank1；这是 watchdog 误判，不是外部任务抢占。两份 worker 均写出 process-start.json，但没有训练终态；rank0 的 HCCL ops 已加载并开始 communicator 初始化，rank1 到达 Jittor import。自有 launcher PID 1524412 的组已退出。R25 原始日志与 before/during/after 卡表保存在 distributed/r25/。
 
 R26 建立新根目录，fresh 快照发现卡3已有进程，卡5空闲；因此没有启动 Python driver、launcher 或 worker。随后 R27 用 fresh 空闲卡5/6再次进入 driver，但 driver 在创建 runtime launcher 前捕获卡6外部 PID 1532400 并退出，rank worker 数为0。两次快照分别保存在 distributed/r26/、distributed/r27/。
 
-R28 再用 fresh 空闲卡3/5进入双卡 Jittor full，约11.61秒时发现外部 PID 1610224 占卡5并返回125。两 rank 都有 process-start.json，rank1 到达 HCCL communicator 初始化；无训练终态或完整参数报告。自有 launcher 进程组已空，事后卡表中3/5/6为空，外部进程未被触碰，证据在 distributed/r28/。
+R28 再用 fresh 空闲卡3/5进入双卡 Jittor full，约11.61秒时旧 monitor 将 PID 1610224 报为卡5外部占用并返回125。身份审计确认该 PID 属于本轮 Jittor rank1；这是 watchdog 误判。两 rank 都有 process-start.json，rank1 到达 HCCL communicator 初始化；无训练终态或完整参数报告。自有 launcher 进程组已空，事后卡表中3/5/6为空，证据在 distributed/r28/。
 
 R29 用 fresh 空闲卡3/6启动后约2.14秒，live monitor 捕获外部 PID 1992911 占卡6，driver 返回125；rank日志均为0字节。自有 launcher PID 2013322 及进程组已核验退出；事后卡表仍显示卡6有外部进程，未向其发送信号。完整记录在 distributed/r29/。
 
-这些 cohort 均复用 source manifest SHA256 aa56c083de1404dcfc744b31edc3dcb973f574d3dcb0d048c691d8ffa400d383 与 R24 串行单 rank prewarm 证据，但都没有得到 Jittor FSDP2 full 的训练终态；R25/R28 虽启动到 worker setup，也没有可接受的模型更新或恢复比较。MAIN-r28 双卡 Jittor FSDP2、prefix/resume 与配对性能仍未验收。
+这些 cohort 均复用 source manifest SHA256 aa56c083de1404dcfc744b31edc3dcb973f574d3dcb0d048c691d8ffa400d383 与 R24 串行单 rank prewarm 证据，但都没有得到 Jittor FSDP2 full 的训练终态；R25/R28 虽启动到 worker setup，也没有可接受的模型更新或恢复比较，原因是旧 watchdog 把本轮 rank 误判为外部 PID。R29 的外部占用没有匹配到本轮 rank 身份。MAIN-r28 双卡 Jittor FSDP2、prefix/resume 与配对性能仍未验收。
 
 ### R30：3/5 runtime admission 抢占
 
 R30 在 fresh 快照确认物理卡3/5为空后启动 Jittor full launcher；运行中1.80秒，live monitor 在卡3发现外部 PID 2267027，driver 返回125并终止本 cohort 自己的进程组。rank0/rank1 stdout 均为0字节，没有 rank worker 或训练状态；launcher PID 2268069 及 PGID 已核验退出。事后 fresh 快照仍显示外部 PID 2267027 在卡3，未向其发送信号；记录保存在 distributed/r30/。
+
+## 2026-10-22 续验：梯度累加修复、Qwen 对拍与 FSDP2 监控审计
+
+### BF16 叶子输入梯度累加修复
+
+device-api/input-grad-branches-r9/comparison.json 记录修复前的分支诊断：74个数组中72个完全一致，LoRA两步的总输入梯度有77/2784个元素不同，最大绝对差为 2.74658203125e-4。逐分支复算显示差异来自低精度分支合并时的舍入位置。R10 曾把 AmpGradGuard 扩大到所有梯度合并；该窄探针变成74/74 bitexact，但以当前真实 Qwen 比较暴露副作用：R38 的2187项全交叉中有2项 LoRA-B 梯度超出既有预算（层4、5 q_proj，最大差分别约 0.012847、0.014148）。保留这次失败，不改阈值。
+
+随后将修复缩窄到 src/core/grad.cc 的 FP32 backward leaf 累加：只有目标是 backward leaf 且 dtype 为 FP32 时启用 AmpGradGuard，中间 activation 梯度合并仍保持原路径。当前源清单 ee0146… 下，R11窄探针74/74数组 bitexact；并在 R39真实 Qwen3-0.6B BF16 LoRA Native/Jittor full 对拍中，输入梯度、112个trainable参数的梯度、参数更新及训练/恢复状态均通过原比较预算。未据此宣称所有 FP32 或混合精度输入梯度组合均已覆盖。
+
+### 当前源清单上的真实 Qwen3-0.6B BF16 LoRA 对拍
+
+R39绑定2500文件 manifest SHA256 ee0146a457c1c8df09a277797c04be3044a0cffdcd8ffdbf93fa6aeb083fd419，与本次代码清单一致。Native torch_npu 和 Jittor shim 均在物理 NPU3 顺序执行 full、prefix（2 updates）和 fresh-process resume（续训到4 updates），各训练阶段均有对应实际设备 witness，Jittor fallback为0。full cross result 共2187项，失败0、超预算元素0；另外各自恢复态与梯度比较也通过，驱动记录的5个比较阶段返回码全部为0。比较沿用 protocol 中 forward atol/rtol 0.005/0.03、gradient 0.01/0.05，没有放宽预算。证据在 real-model/qwen3-06b-training-npu-cat-fix-r39/bf16-native-deterministic-reference/，终态为 execution.json，逐项结果为 jittor/cross/result.json。
+
+该 cohort 的 Native 在模型前启用了 deterministic algorithms，而 Jittor 的 deterministic policy 仍记录为未实现；终态明确将 cross-runtime deterministic-policy matching 标为 false。因此这次通过结论针对固定顺序、当前训练 fixture 与采样协议，不能外推成随机 dropout 或通用确定性恢复已经兼容。阶段性 functional-gate.json 是运行前的 Jittor preflight，不能覆盖后续终态执行与交叉报告。
+
+### FSDP2 主树双卡续验与外部进程守卫
+
+当前源清单 ee0146… 上，R36 的 Native torch FSDP2 双卡 full 在物理3/5完成8个 optimizer updates，两个 rank 均有 PASS 终态。其后 Jittor full 在开始模型计算前以 rc3 退出：复用 cache 时传入了 symlink alias，导致 jit_utils was rebuilt and cannot be reloaded in this process。R37 冷预热期间另有真实外部 VLLM EngineCore 进入 NPU5；只终止了本 cohort 自己的进程，未碰该任务。
+
+R38 将缓存路径 canonicalize 后，rank0/rank1 在物理NPU3上按顺序完成 Jittor core、HCCL/DTensor 单卡预热；两份报告均为 PASS、fallback0、源码未变。这不构成双 rank 证明。R38 正式 driver 的首次调用误传相对 manifest 路径，Torch worker 在读取 manifest 时 FileNotFoundError、driver rc1；没有模型计算，原日志保存在 distributed/fsdp2-r38/。
+
+R39 使用绝对路径及新 cohort 启动物理3/6 Native full。运行约154秒后，live monitor 在物理6看到 PID1279830；该 PID 不匹配本轮 rank0/1（1302146/1302147）的身份记录，driver只终止本轮launcher/ranks，rc125。未形成完整rank训练终态；之后复查该PID已消失，未向其发送信号。R40 fresh admission 再用3/6尝试，6.78秒时捕获到物理6 PID1319054；ps 显示其为用户 yizhang 的 step_parts.py bert_base_train 性能探针。该 cohort 在 rank worker 建立前返回125；未向该外部任务发送信号或读取环境。稍后的最新卡表仍见同一探针命令的外部 PID1322005 占用NPU6，NPU3空闲，因此没有可用的双卡组合。R39/R40 原始执行、foreign occupant 和设备快照分别保留在各自 LAB cohort 中。
+
+另审计了历史 watchdog 的 PID 分类：R23 PID1476170是本轮 Jittor rank0；R25 PID1524441、R28 PID1610224均是本轮 Jittor rank1；R31 PID288762/288763分别是本轮 Native rank0/1；R33 PID965070是本轮 Native rank1；R35 PID990566/990567分别是本轮 Native rank0/1。旧 monitor 只按外层 process group 识别自有进程，遗漏了 torchrun/Jittor rank 的独立进程组，因此把这些自有 PID 误报为外部并终止了自己的 launcher。原始 watchdog 文件保留，但这些事件不再记作外部资源占用。R22、R29、R30 等未匹配到 cohort rank 身份的事件仍保留为外部占用；R24/R27 为 launcher 前 admission 阻断。纠正后的 R36 driver 同时核对 rank process-start 记录与 PID/start_ticks/runtime/phase/rank/manifest/物理卡。
+
+### 按原计划仍需完成
+
+1. 等待两个 fresh 空闲 NPU，完成当前源 Jittor FSDP2 双卡 full、Native/Jittor交叉，以及各自 prefix/fresh-resume 的完整状态、梯度和参数更新比较；Native full 已通过，Jittor full/resume 仍待结果。
+2. 在不放宽既有阈值的前提下，扩展 FP32 与部分混合精度的输入梯度探针，覆盖 leaf/intermediate、多分支和真实训练路径；当前窄 leaf 修复与 R39 Qwen 场景通过不替代整张矩阵。
+3. 明确实现或定义 activation checkpoint 重计算语义、确定性算法策略及随机/dropout 状态恢复，做同源 Native/Jittor fresh-process 对拍。
+4. 对每个已通过正确性门槛的相同工作负载配对测量吞吐、延迟、峰值显存与稳定性；NPU性能/显存验收目前仍为空。

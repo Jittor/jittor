@@ -101,6 +101,16 @@ struct AmpGradGuard {
     }
 };
 
+// Match low-precision accumulation for explicit FP32 input leaves. Keep
+// intermediate activation merges in their existing precision: changing those
+// also changes downstream trainable-parameter gradients.
+static VarPtr add_gradients(Op* op, Var* target, Var* accumulated, Var* incoming) {
+    if (!is_backward_leaf(target) || target->ns != ns_float32)
+        return make_binary(accumulated, incoming, ns_add);
+    AmpGradGuard agg(op);
+    return make_binary(accumulated, incoming, ns_add);
+}
+
 struct TraceGradOpRestore {
     Op* previous;
     TraceGradOpRestore() : previous(trace_grad_op) {}
@@ -417,7 +427,7 @@ static vector<VarPtr> grad_impl(
                         auto din = normalize_recorded_gradient(gvars[id], move(dins[i]));
                         auto& grad = grads[id];
                         if (din && grad) {
-                            grad = make_binary(grad, din, ns_add);
+                            grad = add_gradients(op, gvars[id], grad, din);
                         } else
                             grad = move(din);
                     }
@@ -439,7 +449,7 @@ static vector<VarPtr> grad_impl(
                     if (!grad)
                         grad = move(dvar);
                     else if (dvar) {
-                        grad = make_binary(grad, dvar, ns_add);
+                        grad = add_gradients(op, var, grad, dvar);
                         #ifdef PREVENT_LARGE_FUSED_OP
                         gsum ++;
                         if (gsum>=PREVENT_LARGE_FUSED_OP) {
