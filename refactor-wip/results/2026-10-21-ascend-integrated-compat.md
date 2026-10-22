@@ -10,14 +10,14 @@
 | 共享真实权重推理 | 0.6B既有冻结源码BF16完整推理P；source121的1.7B与4B各3输入/15完整数组/58,343,424 logits bitexact、cached/uncached greedy8 exact、actual NPU/fallback0；不是123重跑 |
 | 最终主树 AMP | source123 原始 no-loader 10P/0skip；其 whole168 严格探针曾有45个 BF16+FP32输入 LoRA input_grad 元素超预算。2026-10-22 叶子梯度修复后，74数组窄探针 bitexact，当前源 Qwen 交叉通过；完整 FP32/混合输入梯度矩阵尚未重跑 |
 | 真实0.6B BF16 LoRA | source123 的 R6/R7 完整训练与恢复通过；2026-10-22 当前2500文件源清单 R39 又完成 Native/Jittor full、prefix、fresh-resume 与全梯度交叉：2187 项、失败0、超预算0；实际 NPU、fallback0 |
-| FSDP2 | own88/r7 属独立历史源码的完整通过；当前2500文件源清单 R36 Native 双卡 full 完成8 updates，PASS。Jittor 双卡 full/resume 尚无终态：缓存别名错误已定位，后续尝试遇 NPU6 外部占用 |
+| FSDP2 | own88/r7历史源码通过；当前2500文件源清单 ee0146… 上 R42 Native/Jittor FP32 FSDP2 双 rank full、prefix、fresh-resume均通过；12份rank-phase PASS，full跨runtime atol=2e-6/rtol=2e-5、两侧fresh-resume状态/梯度/轨迹exact通过；物理NPU3/6、Jittor fallback_delta=0、源码未变、MPI-free。仅覆盖当前FP32 fixture；BF16 FSDP2、Accelerate包装待验收，无性能结论 |
 | 速度/显存 | NPU未验收。1.7B配对流程仅18交替calls后停止，generation steady/decode未完成、rc-2/acceptedfalse；4Bperf未运行，CPU控制器资格不能替代NPU性能 |
 
-尚未达到全部适配退出条件。当前 Qwen 场景的 Native/Jittor BF16 交叉和叶子梯度修复已通过，但更广的 FP32/部分混合精度输入梯度矩阵仍需验证；当前主树 Jittor FSDP2 双卡 full/fresh-resume 仍无终态；activation checkpoint 重计算语义、deterministic setter 与随机/dropout 训练恢复未验收；正确性通过的对应场景尚无合格 NPU 速度/峰值显存比较。raw CPU core 四文件另有46P/9S/1个原样 test_concat_random 的300秒超时，未删case、缩规模或放宽超时，不称全部core通过。模型和fixture、性能与功能、旧源与最终源均不混用。后文按时间保留各阶段事实，最新验收见文末。
+尚未达到全部适配退出条件。当前源 Qwen3-0.6B BF16 LoRA 的 Native/Jittor 完整训练、prefix、fresh-process resume 与全梯度交叉已通过；R42 又在当前2500文件源清单上完成 FP32 FSDP2 双卡 full/prefix/resume，关闭了该 fixture 的训练和恢复缺口。尚需补齐更广 FP32/部分混合精度输入梯度矩阵、BF16/Accelerate包装的 FSDP2，以及 activation checkpoint、确定性策略和随机/dropout 恢复的同源交叉。ASC-03 的 Trainer/Accelerate/safetensors 等综合通过证据来自较早冻结源码，当前源 Qwen 只覆盖真实 LoRA 组合，因此若要对当前主树作完整生态声明，还需按计划将未绑定当前清单的组合补验。正确性门槛通过后再做对应场景的 NPU 吞吐、延迟、峰值显存与稳定性配对测量；当前没有合格 NPU 性能/显存结果。raw CPU core 四文件另有46P/9S/1个原样 test_concat_random 的300秒超时，未删case、缩规模或放宽超时，不称全部core通过。模型和fixture、性能与功能、旧源与最终源均不混用。后文按时间保留各阶段事实，最新验收见文末。
 
 ## 源码与环境
 
-初始同步目标为 `origin/wip/cgq-day23-fix-20261021`，HEAD与远端均为 `305c2f0866f163b0549d47b2e4264c5d41a86385`；新分支 `codex/ascend-integrated-compat-20261021`，开始时工作树干净，无该仓库既有运行任务。同步凭据在 `$JITTOR_LAB_ROOT/_state/source-sync-20261021.json`，未合并其他远端分支。
+初始同步目标为 origin/wip/cgq-day23-fix-20261021，HEAD与当时已核验远端均为 305c2f0866f163b0549d47b2e4264c5d41a86385；本任务分支为 codex/ascend-integrated-compat-20261021。按用户要求，分支历史已有两次 origin/2.0-refactor 合并：a962af0119a6b1c6d519948bc605dc1023c63bc2（当时tip 897d9cc61）和 ea3c7db80f7761a6f1632d36472e08d848f120b7（后续六项修复，第二父提交 9da9be98bc543eacef07532471dd0fecc4205550）；当前 HEAD 的 ancestry 包含 origin/wip 基线及该已核验 2.0-refactor tip，因此没有重复造合并提交。2026-10-22 新 fetch 在连接 github.com:443 后 129349ms 超时，独立 ls-remote 亦无响应后经核验终止；这些失败不证明远端最新，当前只能确认分支包含此前验证到的 9da9be98。详细同步记录见 LAB handoff/remote-sync.json。
 
 主机为openEuler22.03 LTS-SP4/aarch64、GCC10.3.1、Python3.11.17、8×Ascend910B3（每卡64 GiB）、驱动25.5.1。用户目录CANN Toolkit/910b ops8.5.0与原生PyTorch2.7.1/torch_npu2.7.1.post2的既有独立环境已完成矩阵/反向smoke；这只证明原生供应商栈，不证明Jittor适配。未改系统驱动/公共Toolkit或其他用户任务。
 
@@ -414,7 +414,7 @@ R6 输入梯度分支探针在 NPU 5、生产 shim、fallback_count=0 下记录�
 
 这是对既有 MAIN-r28 严格 FP32 输入 LoRA probe 失败位置的窄化解释，不是修复，也没有调整数值预算。本轮未改通用 autograd 累积逻辑：现有证据只覆盖该小型分支 fixture，尚未证明一个全局改动在其它 dtype、视图和多分支训练中的安全性。FP32 / 部分混合精度输入梯度差异仍开放，修复后需要原严格矩阵和真实模型梯度重跑。
 
-本轮未得到合格的主树双卡 Jittor FSDP2 完整训练、恢复交叉或 NPU 性能结果；共享卡资源变化期间未接触外部进程、驱动或公共环境。
+截至R40，尚未得到合格的主树双卡 Jittor FSDP2 完整训练、恢复交叉或 NPU 性能结果；共享卡资源变化期间未接触外部进程、驱动或公共环境。后续R42结果见文末。
 
 ### FSDP2 后续 admission 复核（R11–R14）
 
@@ -490,9 +490,20 @@ R39 使用绝对路径及新 cohort 启动物理3/6 Native full。运行约154�
 
 另审计了历史 watchdog 的 PID 分类：R23 PID1476170是本轮 Jittor rank0；R25 PID1524441、R28 PID1610224均是本轮 Jittor rank1；R31 PID288762/288763分别是本轮 Native rank0/1；R33 PID965070是本轮 Native rank1；R35 PID990566/990567分别是本轮 Native rank0/1。旧 monitor 只按外层 process group 识别自有进程，遗漏了 torchrun/Jittor rank 的独立进程组，因此把这些自有 PID 误报为外部并终止了自己的 launcher。原始 watchdog 文件保留，但这些事件不再记作外部资源占用。R22、R29、R30 等未匹配到 cohort rank 身份的事件仍保留为外部占用；R24/R27 为 launcher 前 admission 阻断。纠正后的 R36 driver 同时核对 rank process-start 记录与 PID/start_ticks/runtime/phase/rank/manifest/物理卡。
 
+### R41：双卡准入阻断
+
+R41 启动前的 fresh 快照显示物理NPU3/6空闲；driver再次准入时发现NPU6外部PID1364304，于创建launcher和rank worker前退出，未执行模型计算，也未向该进程发送信号。该次仍是资源阻断，不计为训练验证。原快照和cohort材料保留于 LAB distributed/fsdp2-r41/。
+
+### R42：当前源 FP32 FSDP2 双卡训练与恢复通过
+
+R42绑定当前2500文件 source manifest，SHA256 ee0146a457c1c8df09a277797c04be3044a0cffdcd8ffdbf93fa6aeb083fd419。Native torch 与 Jittor shim 分别在物理NPU3/6完成双rank full（8 updates）、prefix（3 updates）及独立 fresh-process resume（从prefix续至8 updates）；12份rank-phase报告全部为PASS。Native/Jittor完整训练轨迹交叉检查通过，固定阈值为 atol=2e-6、rtol=2e-5；两个runtime各自的full与prefix/resume恢复state、梯度和轨迹比较均按exact通过。逐rank记录核实world_size=2、实际NPU映射、源码哈希未变；Jittor各阶段fallback_delta=0，运行隔离检查为MPI-free。
+
+复核证据位于 LAB distributed/fsdp2-r42/：torch/full/、torch/prefix/、torch/resume/ 与对应 jittor/ 下的rank报告，跨runtime检查为 cross-runtime-check.stdout.log，两侧fresh-process恢复检查为 torch-resume-check.stdout.log 和 jittor-resume-check.stdout.log。完成后物理NPU3/6均已释放。该cohort使用固定FP32合成fixture；不覆盖BF16 FSDP2、Accelerate包装路径、真实模型FSDP2、激活重计算或NPU性能与显存测试。
+
 ### 按原计划仍需完成
 
-1. 等待两个 fresh 空闲 NPU，完成当前源 Jittor FSDP2 双卡 full、Native/Jittor交叉，以及各自 prefix/fresh-resume 的完整状态、梯度和参数更新比较；Native full 已通过，Jittor full/resume 仍待结果。
-2. 在不放宽既有阈值的前提下，扩展 FP32 与部分混合精度的输入梯度探针，覆盖 leaf/intermediate、多分支和真实训练路径；当前窄 leaf 修复与 R39 Qwen 场景通过不替代整张矩阵。
-3. 明确实现或定义 activation checkpoint 重计算语义、确定性算法策略及随机/dropout 状态恢复，做同源 Native/Jittor fresh-process 对拍。
-4. 对每个已通过正确性门槛的相同工作负载配对测量吞吐、延迟、峰值显存与稳定性；NPU性能/显存验收目前仍为空。
+1. 扩展FP32与部分混合精度输入梯度矩阵，覆盖leaf/intermediate、多分支、视图及真实训练路径；R11窄探针和Qwen场景通过不代替完整矩阵，保持原有数值预算。
+2. 补当前源 BF16 FSDP2 与 Accelerate包装的FSDP2场景，沿用双卡 admission、完整状态/梯度/参数更新比较和 fresh-process 恢复协议。R42只关闭当前源 FP32合成fixture。
+3. 验证 activation checkpoint 重计算语义、确定性算法策略及随机/dropout训练状态恢复，并做同源 Native/Jittor fresh-process 对拍。Qwen R39的固定采样对拍不证明策略一致或随机恢复。
+4. 将较早冻结源码上的 ASC-03 Trainer/Accelerate/safetensors综合工作流证据与当前源清单对应起来；复用已验证部分并明确只需重跑的缺口，不能跨冻结源码外推。
+5. 对已经通过正确性门槛的相同工作负载，配对测量吞吐、延迟、峰值显存与稳定性；JIT/首步/稳态分开，训练与推理分别统计。当前仍没有合格的NPU性能/显存结果。
