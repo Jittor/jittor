@@ -1629,6 +1629,22 @@ def _api_c_mod__cuda_clearCublasWorkspaces(*a, **k):
     return None
 
 
+def _api_c_mod__cuda_getCurrentRawStream(device_index):
+    """Return Jittor CUDA's actual per-thread compute stream handle."""
+    if not isinstance(device_index, int) or isinstance(device_index, bool):
+        raise TypeError("getCurrentRawStream expects a CUDA device index")
+    if "cuda" not in jt.core.registered_backends():
+        raise RuntimeError("No CUDA backend is registered")
+    index = current_device() if device_index == -1 else device_index
+    count = jt.core.backend_device_count("cuda")
+    if not 0 <= index < count:
+        raise ValueError("CUDA device index %s is out of range" % device_index)
+    # backends/cuda/runtime/driver.cc::compute_stream returns
+    # cudaStreamPerThread (0x2). The Triton bridge and shim extension headers
+    # use that same handle; 0 would launch on an unordered legacy stream.
+    return 0x2
+
+
 def _api_c_mod__disabled_torch_function_impl(*a, **k):
     return NotImplemented
 
