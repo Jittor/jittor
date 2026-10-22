@@ -133,6 +133,12 @@ def on_replay(hook):
         _ACTIVE.prologue.append(hook)
 
 
+def publish_gradients(leaves):
+    """Remember holders whose final public gradients a captured backward wrote."""
+    if _ACTIVE is not None:
+        _ACTIVE.published_gradients.extend(leaves)
+
+
 def guard(read):
     """Re-capture whenever `read()` differs from its value now."""
     if _ACTIVE is not None:
@@ -386,7 +392,7 @@ def refuse(reason):
 class _Capture:
     __slots__ = ("inputs", "host_inputs", "outputs", "template", "roots", "state",
                  "state_lists", "prologue", "guards", "signature", "refused", "random",
-                 "frozen_random", "exact", "graph_bytes")
+                 "frozen_random", "exact", "graph_bytes", "published_gradients")
 
     def __init__(self):
         self.prologue = []
@@ -395,6 +401,7 @@ class _Capture:
         self.random = None
         self.exact = False
         self.graph_bytes = 0
+        self.published_gradients = []
 
 
 def _finish_normally(roots):
@@ -625,7 +632,15 @@ class StepCapture:
         # (see `_dense`).
         outputs[:] = [_dense(o) for o in outputs]
         records = [(holder, old, _dense(new)) for holder, old, new in records]
-        roots = _unique(outputs + [new for _, _, new in records])
+        published = {}
+        for parameter in cap.published_gradients:
+            gradient = getattr(parameter, "_torch_grad", None)
+            if isinstance(gradient, jt.Var):
+                published[id(gradient)] = gradient
+        gradient_sources = [(holder, _core._snapshot_step_gradient(holder))
+                            for holder in published.values()]
+        roots = _unique([source for _, source in gradient_sources]
+                        + outputs + [new for _, _, new in records])
         # Everything that can refuse is decided before the graph runs: a
         # refused step then runs exactly once, as written. Deciding after --
         # running it kept, then putting the state back and running it again --
@@ -645,12 +660,24 @@ class StepCapture:
             _commit_captured_state(records)
             return None, result
 
-        # A step that synced its own results has run already; running the
-        # kept graph again would take it twice.
-        if any(not r._mem_ptr_now for r in roots):
+        # The optimizer update is still pending. Resolve published readouts
+        # against pre-update parameter bytes before the stateful roots run.
+        if gradient_sources:
             jt.flags.keep_graph = 2
             try:
-                jt.sync(roots, False, False)
+                jt.sync([source for _, source in gradient_sources], True, False)
+            finally:
+                jt.flags.keep_graph = before
+
+        # A step that synced its own results has run already; running the
+        # kept graph again would take it twice.
+        if gradient_sources or any(not r._mem_ptr_now for r in roots):
+            jt.flags.keep_graph = 2
+            try:
+                # The ready owners below require completed gradient bytes.
+                # The first strong batch above ordered these readouts before
+                # the optimizer; this batch executes the whole step once.
+                jt.sync(roots, bool(gradient_sources), False)
             finally:
                 jt.flags.keep_graph = before
 
@@ -660,6 +687,15 @@ class StepCapture:
         state = _commit_captured_state(records)
         with jt.no_grad():
             state = _write_back_in_graph(state, roots)
+
+        recorded_holders = {id(holder) for holder, _, _ in records}
+        with jt.no_grad():
+            for holder, source in gradient_sources:
+                if id(holder) not in recorded_holders:
+                    # `holder` is also the optimizer's gradient slot. The
+                    # source remains a replay root; only the public holder
+                    # changes to an inputless view of its storage.
+                    holder._update(_core._ready_step_gradient(source))
 
         cap.inputs = _input_vars((private_args, private_kwargs), [])
         cap.host_inputs = any(int(v.device_id) < 0 for v in cap.inputs)

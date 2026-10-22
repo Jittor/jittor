@@ -366,6 +366,8 @@ def _backward_impl(self, gradient=None, retain_graph=None, create_graph=False, *
     # between must see the synchronised gradient.
     _run_post_accumulate_hooks(leaves, grad_by_id)
     _owner._ddp_all_reduce_grads(leaves)
+    _step_capture.publish_gradients(
+        parameter for parameter in leaves if id(parameter) in grad_by_id)
     # Independent retain_grad lasts as long as its weakly indexed holder.
     # Preserve bounded cleanup only for legacy non-weak-referenceable Vars.
     if retained:

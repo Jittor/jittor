@@ -75,6 +75,33 @@ PyObject* new_var_data_owner(VarHolder* vh) {
     return capsule;
 }
 
+VarPtr ready_storage_alias(VarHolder* source) {
+    Var* original = source->var;
+    USER_CHECK(original->num >= 0 && !original->flag(VarFlags::_execution_failed)
+            && original->allocator && (original->mem_ptr || !original->size))
+        << "rematerialization needs successfully materialized output storage";
+
+    VarPtr ready(original->shape, original->dtype());
+    ready->storage_strides = original->storage_strides;
+    ready->device_id = original->device_id;
+    ready->placement = original->placement;
+    ready->set_flag(VarFlags::_host_resident, original->flag(VarFlags::_host_resident));
+    ready->set_stop_grad();
+    ready->share_with(original);
+    USER_CHECK(ready->alloc(original->allocator)
+            && ready->mem_ptr == original->mem_ptr
+            && (!original->size || ready->shares_allocation_with(original)))
+        << "allocator cannot share rematerialized output storage";
+
+    // Share mutation detection, not trainability or the source graph's owner.
+    ready->autograd_alias = std::make_shared<AutogradAliasState>();
+    ready->autograd_alias->version = source->ensure_autograd_alias()->version;
+    ready->autograd_alias->creation_version = *ready->autograd_alias->version;
+    // Complete only this new inputless leaf. Original nodes remain untouched.
+    ready->finish_pending_liveness();
+    return ready;
+}
+
 // Holders rebound while a step is being captured, with the Var each held
 // first. See `state_capture_begin`.
 static std::unordered_map<VarHolder*, VarPtr>* state_capture = nullptr;

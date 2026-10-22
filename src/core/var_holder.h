@@ -21,6 +21,9 @@ namespace jittor {
 
 struct VarHolder;
 struct GradCallback;
+// A caller with a successful device-synchronous receipt may publish the
+// existing bytes through an inputless, finished storage owner. No sync here.
+VarPtr ready_storage_alias(VarHolder* source);
 // @pyjt(submit_pending_fetches)
 void submit_pending_fetches();
 VarPtr detach(Var* x);

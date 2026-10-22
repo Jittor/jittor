@@ -403,8 +403,8 @@ MIGRATED_GRAD_DTYPE_USER_BOUNDARIES = {
     # .data can replace storage shape while preserving a recorded producer:
     # validate returned gradient rank and broadcast-compatible extents against
     # that recorded contract. Both are caller-controlled shape boundaries.
-    # A scoped replay probe also rejects caller-controlled thread/LIFO misuse.
-    "src/core/grad.cc": 9,
+    # Replay probes reject thread/LIFO misuse and absent gradient snapshots.
+    "src/core/grad.cc": 10,
 }
 
 
@@ -430,6 +430,7 @@ def test_grad_dtype_boundaries_are_user_errors():
     source = (ROOT / "src/core/grad.cc").read_text()
     assert 'USER_CHECK(!step_backward_probes.empty()' in source
     assert 'step backward probes must end on their creating thread in LIFO order' in source
+    assert 'cannot snapshot an absent step gradient' in source
     assert 'USER_CHECK(loss->is_float())' in source
     assert 'USER_CHECK(var->is_float() || var->dtype().is_complex())' in source
     assert '\n    CHECK(loss->is_float())' not in source

@@ -24,6 +24,82 @@ def _compiled(model, kind):
 
 
 class TestCompileExternalAutograd:
+    def test_published_accumulated_gradient_uses_one_ready_owner(self, device):
+        parameter = torch.nn.Parameter(torch.tensor([2.], device=device))
+        optimizer = torch.optim.SGD([parameter], lr=.1, foreach=False, fused=False)
+        x = torch.tensor([.5], device=device)
+
+        def step(value):
+            optimizer.zero_grad(set_to_none=True)
+            first = (parameter * value).sum()
+            first.backward()
+            second = (parameter * (2. * value)).sum()
+            second.backward()
+            optimizer.step()
+            return second
+
+        run = torch.compile(step, mode='reduce-overhead')
+        losses = []
+        for index in range(6):
+            losses.append(float(run(x)))
+            gradient = parameter.grad
+            assert gradient is optimizer.param_groups[0]['grads'][0]
+            assert gradient._mem_ptr_now
+            np.testing.assert_allclose(float(gradient), 1.5, atol=1e-6)
+            np.testing.assert_allclose(float(gradient.detach().cpu().numpy()[0]),
+                                       1.5, atol=1e-6)
+            if index in (1, 5):
+                before = float(parameter.detach().cpu().numpy()[0])
+                np.testing.assert_allclose(before, 2. - .15 * (index + 1), atol=1e-6)
+                assert float(parameter.detach().cpu().numpy()[0]) == before
+        assert losses[-1] < losses[0]
+        assert run.stats['captured'] == 1
+        assert run.stats['graph'] > 0
+
+    def test_published_gradient_read_cannot_repeat_captured_update(self, device):
+        # A live eager graph can already have published unrelated gradients.
+        # Only gradients from this backward belong in the captured step.
+        unrelated = torch.nn.Parameter(torch.tensor([7.], device=device))
+        (unrelated * 2.).sum().backward()
+        assert float(unrelated.grad) == 2.
+        p = torch.nn.Parameter(torch.tensor([2.], device=device))
+        q = torch.nn.Parameter(torch.tensor([3.], device=device))
+        x = torch.tensor([.5], device=device)
+        opt = torch.optim.SGD([p, q], lr=.01, foreach=False, fused=False)
+
+        def step(value):
+            opt.zero_grad()
+            loss = ((p + q) * value).square().sum()
+            loss.backward()
+            opt.step()
+            return loss
+
+        run = torch.compile(step, mode='reduce-overhead')
+        losses = []
+        for index in range(6):
+            losses.append(float(run(x)))
+            if index not in (1, 5):
+                continue
+            expected_gradient = 2.5 * .99 ** index
+            expected_parameter = 2. - .025 * sum(.99 ** k for k in range(index + 1))
+            before = np.array([float(v.detach().cpu().numpy()[0]) for v in (p, q)])
+            np.testing.assert_allclose(before, [expected_parameter, expected_parameter + 1.],
+                                       rtol=1e-5, atol=1e-6)
+            gradient = p.grad
+            assert gradient is opt.param_groups[0]['grads'][0]
+            assert gradient._mem_ptr_now
+            for observed in (float(gradient), float(gradient),
+                             float(gradient.detach().cpu().numpy()[0])):
+                np.testing.assert_allclose(observed, expected_gradient,
+                                           rtol=1e-5, atol=1e-6)
+            after = np.array([float(v.detach().cpu().numpy()[0]) for v in (p, q)])
+            np.testing.assert_array_equal(after, before)
+        assert losses[-1] < losses[0]
+        assert run.stats['captured'] == 1
+        assert run.stats['replayed'] > 0
+        assert run.stats['graph'] > 0
+        assert float(unrelated.grad) == 2.
+
     def test_forward_gradients_belong_to_original_callers(self, device):
         for kind in ('bound', 'closure', 'functional'):
             for requires_grad in (False, True):

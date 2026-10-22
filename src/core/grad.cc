@@ -47,6 +47,15 @@ vector<int64> end_step_backward_probe(uint64 token) {
     return result;
 }
 
+VarHolder* snapshot_step_gradient(VarHolder* gradient) {
+    USER_CHECK(gradient && gradient->var) << "cannot snapshot an absent step gradient";
+    return new VarHolder(gradient->var);
+}
+
+VarHolder* ready_step_gradient(VarHolder* source) {
+    return new VarHolder(ready_storage_alias(source));
+}
+
 AutogradPolicyState autograd_policy;
 
 void set_autograd_policy(

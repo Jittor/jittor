@@ -45,6 +45,13 @@ uint64 begin_step_backward_probe();
 // @pyjt(_end_step_backward_probe)
 vector<int64> end_step_backward_probe(uint64 token);
 
+// Hold the exact Var that a public gradient holder currently names while a
+// captured step may rebind that holder. This creates no producer or copy.
+// @pyjt(_snapshot_step_gradient)
+VarHolder* snapshot_step_gradient(VarHolder* gradient);
+// @pyjt(_ready_step_gradient)
+VarHolder* ready_step_gradient(VarHolder* source);
+
 /** The recorded differentiable producer of `v`, or null for a backward leaf.
  *
  * This is the graph question `is_leaf` and `grad_fn` are asking, answered from
