@@ -37,6 +37,7 @@ inline acl_data::AclAttrSchema acl_code_attribute_schema(const string& name) {
     auto defaulted = [](acl_data::AclDataValue value) { acl_data::AclAttrField field; field.type=value.type;
         field.required=false; field.has_default=true; field.default_value=std::move(value); return field; };
 
+    if (name == "Gelu" || name == "GeluBackward") return {{"approximate", required(Type::int64)}};
     if (name == "Softmax") return {{"dim", required(Type::int64)}};
     if (name == "SwiGlu") return {{"dim", required(Type::int64)}};
     if (name == "SoftmaxBackward") return {{"dim", required(Type::int64)}};
@@ -100,6 +101,16 @@ void assign_acl_code_attributes(Runner& op, const acl_data::AclDecodedData& deco
         !(name == "TruthReduce" && (op.name == "All" || op.name == "Any")))
         acl_data::internal_error("attribute schema does not belong to actual runner: " + op.name + " / " + name);
 
+    if (name == "Gelu" || name == "GeluBackward") {
+        const auto approximate = fields.at("approximate").int_value;
+        if (approximate != 0 && approximate != 1)
+            acl_data::user_error("GELU approximation must be 0 (none) or 1 (tanh)");
+        auto attr=std::unique_ptr<GeluAttr>(new GeluAttr());
+        attr->approximate=approximate;
+        op.op_attr=std::move(attr);
+        op.jt_name=name == "Gelu" ? "gelu" : "gelubackward";
+        return;
+    }
     if (name == "SwiGlu") {
         acl_set_swiglu_dim(op, fields.at("dim").int_value, 0);
         op.jt_name="swiglu";

@@ -221,7 +221,8 @@ class TestBudget(unittest.TestCase):
         self.assertGreaterEqual(report["effective_cpus"], 1)
         self.assertGreaterEqual(report["threads_per_worker"], 1)
         self.assertAlmostEqual(
-            report["predicted_seconds"], tiers.predicted_smoke_seconds())
+            report["predicted_seconds"],
+            tiers.predicted_smoke_seconds(workers=report["workers"]))
         for item in report["sessions"].values():
             self.assertIn(item["bottleneck"], {"worker_work", "longest_file"})
             self.assertGreater(item["startup_seconds"], 0)
@@ -243,11 +244,16 @@ class TestBudget(unittest.TestCase):
         original = tiers.effective_cpu_count
         try:
             tiers.effective_cpu_count = lambda: 1
-            report = tiers.budget_report(configured_workers=4)
+            reports = (tiers.budget_report(),
+                       tiers.budget_report(configured_workers=4))
         finally:
             tiers.effective_cpu_count = original
-        self.assertEqual(report["configured_workers"], 4)
-        self.assertEqual(report["workers"], 1)
+        for report in reports:
+            self.assertEqual(report["configured_workers"], 4)
+            self.assertEqual(report["workers"], 1)
+            self.assertAlmostEqual(
+                report["predicted_seconds"],
+                tiers.predicted_smoke_seconds(workers=1))
 
     def test_runtime_workers_validates_and_caps_configuration(self):
         self.assertEqual(tiers.runtime_workers(4, available=2), 2)

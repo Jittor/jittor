@@ -68,7 +68,7 @@ def test_public_sdpa_causal_prefill_matches_independent_reference(
     calls = []
     original_call = attention.PromptFlashAttentionACL.__call__
 
-    def record(self, query, key, value, mask):
+    def record(self, query, key, value, mask=None):
         calls.append((tuple(query.shape), tuple(key.shape), tuple(mask.shape)))
         return original_call(self, query, key, value, mask)
 
@@ -141,7 +141,7 @@ def test_public_noncausal_self_attention_matches_independent_reference(
     calls = []
     original_call = attention.PromptFlashAttentionACL.__call__
 
-    def record(self, query, key, value, mask):
+    def record(self, query, key, value, mask=None):
         calls.append(self.is_causal)
         return original_call(self, query, key, value, mask)
 
@@ -161,7 +161,7 @@ def test_causal_and_noncausal_programs_and_masks_do_not_cross_pollute():
     length, width = 17, 64
     for index, causal in enumerate((True, False, True, False)):
         host, tensors = _inputs(1, 2, 2, length, width, seed=301 + index)
-        output = jt.nn.scaled_dot_product_attention(*tensors, is_causal=causal)
+        output = attention._prompt_prefill_310p(*tensors, 1.0 / math.sqrt(width), is_causal=causal)
         output.sync(True)
         np.testing.assert_allclose(
             output.numpy(), _reference(*host, 1.0 / math.sqrt(width), is_causal=causal),
@@ -176,7 +176,7 @@ def test_causal_and_noncausal_programs_and_masks_do_not_cross_pollute():
     expected_full[:, length:] = True
     np.testing.assert_array_equal(actual_full, expected_full)
     # A host read must not poison the next same-mode invocation either.
-    output = jt.nn.scaled_dot_product_attention(*tensors, is_causal=False)
+    output = attention._prompt_prefill_310p(*tensors, 1.0 / math.sqrt(width), is_causal=False)
     output.sync(True)
     assert attention._prompt_full_mask_cache[key].location() == "device"
     np.testing.assert_allclose(
@@ -184,13 +184,14 @@ def test_causal_and_noncausal_programs_and_masks_do_not_cross_pollute():
         rtol=3e-3, atol=4e-4)
 
 
-def test_noncausal_admission_keeps_training_masks_cross_attention_and_other_widths_out():
+def test_noncausal_admission_keeps_training_masks_gqa_and_other_widths_out():
     q = (1, 2, 128, 64)
     supports = attention._supports_prompt_prefill
     assert not supports(q, q, "float16", True, False, None)
     assert not supports(q, q, "float32", False, False, None)
     assert not supports(q, q, "float16", False, False, jt.zeros((128, 128), dtype="bool"))
-    assert not supports(q, (1, 2, 77, 64), "float16", False, False, None)
+    assert supports(q, (1, 2, 77, 64), "float16", False, False, None)
+    assert not supports(q, (1, 2, 77, 64), "float16", False, True, None)
     assert not supports(q, (1, 1, 128, 64), "float16", False, False, None)
     assert not supports((1, 2, 128, 32), (1, 2, 128, 32), "float16", False, False, None)
     assert not supports((129, 2, 128, 64), (129, 2, 128, 64), "float16", False, False, None)

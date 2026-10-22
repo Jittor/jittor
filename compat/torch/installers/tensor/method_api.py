@@ -1454,6 +1454,15 @@ def _true_division(self, other, opname):
         # stays in the tensor dtype because ACL has no float64 arithmetic.
         acl_active = bool(getattr(_owner.jt.compiler, "has_acl", 0)) and (
             bool(getattr(_owner.jt.flags, "use_acl", 0)) and bool(_owner.jt.flags.use_cuda))
+        if (acl_active and opname == '__truediv__' and type(other) is float
+                and other == 1.0 and src_dt in ("float16", "float32")
+                and self.is_contiguous()
+                and _owner.jt.core.dispatch_context([self])[0] in ("acl", "acl_legacy")):
+            # A unit quotient is exact, including NaN/Inf and signed zero.
+            # Copy storage as Torch does; native Var.clone would alias it.
+            # Limit layout to the contiguous case verified on real ACL.
+            from ...frontend import clone
+            return clone(self)
         # Half precision widens to float32 only: that is PyTorch's opmath for
         # it, and a float64 division ran every diffusers attention block's
         # `/ rescale_output_factor` in double -- 15 ms of a 20-step SD1.5

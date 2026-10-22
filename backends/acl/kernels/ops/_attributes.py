@@ -6,6 +6,8 @@ from .acl_data import AclDataInternalError, SCHEMA_VERSION, encode_code_data
 
 
 SCHEMAS = {
+    "Gelu": {"approximate": {"type": "int64"}},
+    "GeluBackward": {"approximate": {"type": "int64"}},
     "Softmax": {"dim": {"type": "int64"}},
     "SoftmaxBackward": {"dim": {"type": "int64"}},
     "SwiGlu": {"dim": {"type": "int64"}},

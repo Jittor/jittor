@@ -2311,12 +2311,21 @@ workaround.
      are unaffected. `tests/backends/acl/test_acl_conv3d.py` checks the
      rejection and inference boundaries; this does not rule out other SDK
      gradient implementations.
+  8. **Small-width FP16 RMSNorm**: CANN 9.1.0 can return incorrect rows
+     when the normalized width is below 16 and there are multiple rows
+     (confirmed 2026-10-22). Mapped, CodeOp, explicitly initialized-output
+     and fresh-descriptor probes reproduce the problem. The public RMSNorm
+     paths use device primitives for these widths; direct calls through the
+     SDK runner reject the affected multi-row shapes before launch.
+     `compat/tests/torch/test_stock_rms_norm_acl.py` covers the portable
+     results, fast-path boundaries and explicit low-level rejection. Other
+     widths and dtypes are not inferred from the rejected cases.
 - Also fixed along the way: `all_acl`/`any_acl` gained the `keepdims`
   parameter the public API added (was a signature regression on every
   NPU); `IndexPutImpl` runner now memcpys base->out itself so a
   `share_with`-aliased output cannot be mistaken for already-copied.
 - Review/expiry condition: re-run `tests/backends/acl/` on the 310P3 when
-  the CANN version changes; a new opp package may close items 3-7.
+  the CANN version changes; a new opp package may close items 3-8.
 
 ## KI-BACKEND-022: getitem integer-index backward can read uninitialized bytes when `setitem_inplace` packs the gradient
 

@@ -136,11 +136,15 @@ def leaky_relu(x, scale=0.01, inplace=False):
 
 
 def gelu_acl(x, approximate="none"):
-    """CANN's aclnnGelu covers the exact form only; tanh keeps the generic path."""
-    if approximate != "none":
+    """CANN V2 preserves the requested exact or tanh algorithm and its gradient."""
+    if approximate not in ("none", "tanh"):
         return None
     if isinstance(x, jt.Var) and _dtype_in(x, _F16_F32_BF16):
-        return GeluACL()(x)
+        # Exact BF16 retains its existing path. New tanh admission is bounded
+        # to the FP16/FP32 algorithms verified on the real ACL device.
+        if approximate == "tanh" and _dtype_in(x, ("bfloat16",)):
+            return None
+        return GeluACL()(x, approximate)
     return None
 
 

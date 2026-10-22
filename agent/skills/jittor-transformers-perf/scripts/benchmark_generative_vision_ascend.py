@@ -11,6 +11,24 @@ def mapped(value, fn):
     return fn(value)
 
 
+def graph_replay_metadata(model):
+    """Read replay counters after timing without executing tensors."""
+    state = vars(model).get("_auto_graph_replay")
+    if state is None:
+        return None
+    result = {name: getattr(state, name, None)
+              for name in ("seen", "give_up", "unstable", "recaptures")}
+    replay = getattr(state, "replay", None)
+    if replay is not None:
+        result["replay"] = dict(
+            stats=dict(replay.stats), refused=replay.refused,
+            device_graph_active=bool(replay._cuda_graph),
+            device_graph_refused=replay._graph_refused,
+            estimated_retained_bytes=replay._graph_bytes,
+            retained_bytes_limit=replay._max_retained_bytes)
+    return result
+
+
 def main():
     p=argparse.ArgumentParser()
     p.add_argument('--backend',choices=['torch','jittor'],required=True)
@@ -126,6 +144,7 @@ def main():
         commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=repo,text=True).strip()
         diff=subprocess.check_output(['git','diff','HEAD'],cwd=repo)
         report=vars(args)|dict(parameters=parameters,spec=spec,torch_file=torch.__file__,torch_version=torch.__version__,transformers=transformers.__version__,diffusers=diffusers.__version__,load_seconds=load_seconds,cold_seconds=cold,seconds=timings,median_seconds=statistics.median(timings),p95_seconds=float(np.percentile(timings,95)),pack_count=pack_count,pack_skipped=pack_skipped,runtime_flags=({'use_cuda':int(jt.flags.use_cuda),'use_acl':int(jt.flags.use_acl)} if jt is not None else None),commit=commit,dirty_sha256=hashlib.sha256(diff).hexdigest(),fallback_count=(jt.core.backend_fallback_count()-fallback_before if jt is not None else None),output_shapes={k:list(v.shape) for k,v in arrays.items()})
+        report['graph_replay'] = graph_replay_metadata(model) if jt is not None else None
         if jt is not None and report['fallback_count']!=0: raise RuntimeError('backend fallback attempted')
         out.write_text(json.dumps(report,indent=2))
         print('PASS',args.case,report['median_seconds'],flush=True)

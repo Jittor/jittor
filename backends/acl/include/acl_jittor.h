@@ -209,6 +209,11 @@ namespace jittor
         }
     };
 
+    struct GeluAttr : AclOpAttr
+    {
+        int64_t approximate = 0;
+    };
+
     struct LeakyReluAttr : AclOpAttr
     {
         float negativeSlope;

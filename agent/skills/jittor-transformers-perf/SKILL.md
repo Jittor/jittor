@@ -356,3 +356,14 @@ SDXL 为 1024² 的单次条件前向，均不能当作完整 CFG 采样耗时�
 一个正点提示，不能外推视频记忆模块。只有通过输出对拍的数据才能作为性能结论。
 组件比较器无论输入顺序如何均核对每个 Jittor 报告的零回退计数。组件报告与比较 JSON
 必须写入外部 lab；`--prepare` 创建的 fixture 目录也必须在 lab 下且位于 checkout 外。
+
+组件报告在计时后读取 `graph_replay` 元数据，记录自动重放次数、设备图是否启用、
+拒绝原因及保留内存估计；读取不执行张量计算。算子 profile 需要至少 5 次完整预热，
+避免把第三次重放时的一次录图尝试误当成稳态重复执行。原生 Torch 的设备图字段为
+`null`，不能据此推断它执行了 Jittor 的录图策略。
+
+310P 的无梯度 FP16、等 head 数 noncausal attention 在没有用户 mask 时可使用
+PFA 的原始 Q/K 长度，包括矩形 cross-attention，无需构造 padding 或 mask。
+有 mask / causal 路径保留各自验证范围；不能简单取消 SDK 对带 mask 矩形输入的
+限制。旧 causal padding 的只读零缓冲区按设备、dtype、shape 缓存并设内存上限，
+不省略实际输入复制、裁剪或因果语义。

@@ -15,6 +15,7 @@ from .ops.norms_op import (
 )
 from .ops.rope_op import ExpandRotaryCacheACL, GroupedQKRmsNormRotaryACL
 from .tensor import embedding_acl
+from ._soc import soc_name
 
 
 def layer_norm_acl(x, normalized_shape, weight, bias, eps, *, allow_bfloat16=False):
@@ -142,6 +143,12 @@ def _rms_norm_cuda_acl(x, gamma, epsilon=1e-06):
     if isinstance(x, jt.Var) and isinstance(gamma, jt.Var) and isinstance(epsilon, Real):
         x_dtype = _jittor_dtype_name(x.dtype)
         epsilon_value = float(epsilon)
+        if (x_dtype == "float16" and x.ndim and x.shape[-1] < 16
+                and soc_name().startswith("Ascend310P")):
+            # The small-width FP16 kernel can return incorrect rows on 310P.
+            # Both mapped and fresh-descriptor CodeOp paths reproduce it;
+            # leave these shapes with device primitives.
+            return None
         if (jt.flags.no_grad and x_dtype == "float16"
                 and _jittor_dtype_name(gamma.dtype) == "float16"):
             try:
