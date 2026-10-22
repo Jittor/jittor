@@ -76,10 +76,20 @@ def _fused_activation(x, act):
     if x._producer_op() == "transpose" and channels_last_source(x) is not None:
         # An add kept channels-last hands out the NCHW view of a result it
         # computed on its operands' storage.
-        add, storage = x._input(0), True
+        sources = x._inputs()
+        if not sources:
+            return None
+        add, storage = sources[0], True
     if add._producer_op() != "binary.add":
         return None
-    a, b = add._input(0), add._input(1)
+    # Both operands from one call. `add._input(0)` and then `add._input(1)`
+    # are two graph entries, and leaving the first may run the auto-flushed
+    # batch the add is in: a ResNet training step at batch 64 lost its add
+    # between the two reads and raised.
+    operands = add._inputs()
+    if len(operands) != 2:
+        return None
+    a, b = operands
     for y, r in ((a, b), (b, a)):
         offer = _RESIDUAL_OFFERS.get(y.id)
         if offer is None or offer[1] != storage:

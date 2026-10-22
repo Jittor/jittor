@@ -502,6 +502,35 @@ class TestActivationAfterInPlaceResidual(unittest.TestCase):
                                            rtol=1e-4, atol=1e-4)
 
 
+class TestResidualActivationAcrossAnAutoFlush(unittest.TestCase):
+    """``relu(bn(conv(x)) + identity)`` while the auto-flush is cutting the graph.
+
+    Finding the residual meant reading the add's two operands with two
+    ``_input`` calls. Each call is a graph entry, and leaving one may submit
+    the auto-flushed batch the add is in -- which executes it, so the second
+    read raised "_input requires an unexecuted tensor". A native ResNet
+    training step hit it at batch 64; ``auto_flush_bytes=0`` takes every
+    flush, which reaches it at a size a test can afford.
+    """
+
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled,
+                         "the residual offer comes from the CUDA training batch norm")
+    def test_a_flushed_add_falls_back_to_a_plain_activation(self):
+        from jittor import models
+        rng = np.random.RandomState(17)
+        x_np = rng.rand(2, 3, 32, 32).astype("float32")
+        with jt.flag_scope(use_cuda=1):
+            net = models.resnet18()
+            net.train()
+            # Gradients tracked for the parameters is part of what reaches it.
+            nn.SGD(net.parameters(), lr=0.01)
+            with jt.flag_scope(auto_flush_bytes=0):
+                got = net(jt.array(x_np)).numpy()
+            with jt.flag_scope(auto_flush_ops=0):
+                expected = net(jt.array(x_np)).numpy()
+        np.testing.assert_allclose(got, expected, rtol=1e-4, atol=1e-4)
+
+
 class TestBatchNormActivation(unittest.TestCase):
     """`relu(batch_norm(x))` in training runs the activation in the norm's pass.
 
