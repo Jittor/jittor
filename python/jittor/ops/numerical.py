@@ -164,12 +164,13 @@ def safe_log(x):
 def _simple_for(x, func):
     """One elementwise C++ expression, compiled at ``-O2`` on purpose.
 
-    Its callers are the float class predicates -- ``isnan``, ``isinf``,
-    ``isfinite`` and the signed-infinity variants -- whose bodies are exactly
-    the expressions ``-ffinite-math-only`` is allowed to fold to a constant:
-    the compiler has been told no operand is ever NaN or infinite, so
-    ``x != x`` becomes false and ``|x| == inf`` becomes false, and every
-    hand-written NaN check silently stops checking.
+    It is for bodies that are exactly the expressions ``-ffinite-math-only`` is
+    allowed to fold to a constant: the compiler has been told no operand is
+    ever NaN or infinite, so ``x != x`` becomes false and ``|x| == inf``
+    becomes false, and every hand-written NaN check silently stops checking.
+    The float class predicates were its callers until they became unary ops
+    that test the bit pattern instead (``type/fp_class_compute.h``), which no
+    flag can fold and which fuse.
 
     This started as a workaround: CPU kernels were built with ``-Ofast``, which
     implies that promise, so the predicate had to escape the fused kernel's
@@ -213,8 +214,8 @@ def _simple_for(x, func):
         flags.compile_options = previous
 
 
-# expression -> kernel source of `_simple_for`; the predicates above use a
-# handful of expressions, and the source was rebuilt on every call.
+# expression -> kernel source of `_simple_for`; callers use a handful of
+# expressions, and the source was rebuilt on every call.
 _SIMPLE_FOR_SOURCES = {}
 
 
@@ -239,22 +240,7 @@ def _isfinite_acl(x):
     return x.abs() < float("inf")
 
 
-def _classify_value(dtype):
-    """The C++ expression these kernels must test, per input dtype.
-
-    Every one of them used to test ``float(x)`` unconditionally. That is a
-    *narrowing* cast for float64: 1e300 is an ordinary finite double and becomes
-    inf as a float, so ``jt.isinf`` said True for it on CPU and CUDA while the
-    ACL path -- which never narrows -- said False. Same public API, different
-    answer per backend.
-
-    float16/bfloat16 still widen to float. That direction is lossless, and
-    neither type has a std::isnan overload to call instead.
-    """
-    return "x" if _jittor_dtype_name(dtype) in ("float32", "float64") else "float(x)"
-
-
-def _classify(x, expr, acl_body, integral):
+def _classify(x, predicate, acl_body, integral):
     """One body for isnan/isinf/isfinite and the two signed-infinity variants.
 
     ``integral`` is the answer for a dtype that has neither nan nor infinity --
@@ -266,48 +252,55 @@ def _classify(x, expr, acl_body, integral):
     x = x if isinstance(x, Var) else jt.array(x)
     if not x.dtype.is_float():
         return (jt.ones if integral else jt.zeros)(x.shape, "bool")
-    return select_kernel("misc.classify", x)(x, expr, acl_body)
+    return select_kernel("misc.classify", x)(x, predicate, acl_body)
 
 
-def _classify_acl(x, expr, acl_body):
+def _classify_acl(x, predicate, acl_body):
     return acl_body(x)
 
 
-def _classify_code(x, expr, acl_body):
-    import jittor as jt
-    return jt.misc._simple_for(x, expr(jt.misc._classify_value(_jittor_dtype_name(x.dtype))))
+def _classify_code(x, predicate, acl_body):
+    """The predicate as a unary op that tests the bit pattern.
+
+    It used to be a ``jt.code`` kernel of its own (``_simple_for``), pinned to
+    ``-O2`` so that no fast-math flag could fold ``x != x`` away. The unary op
+    keeps that guarantee by never comparing floats at all -- see
+    ``type/fp_class_compute.h`` -- and, unlike the code kernel, it fuses with
+    whatever reads or feeds it. The signed variants add a sign test, which no
+    flag can fold either: ``x < 0`` is true of finite negatives too.
+    """
+    if predicate == "isneginf":
+        return (x < 0) & _native_ops.unary(x, "isinf")
+    if predicate == "isposinf":
+        return (x > 0) & _native_ops.unary(x, "isinf")
+    return _native_ops.unary(x, predicate)
 
 
 def isnan(x):
     import jittor as jt
-    return jt.misc._classify(
-        x, lambda v: f"isnan({v})", jt.misc._isnan_acl, False)
+    return jt.misc._classify(x, "isnan", jt.misc._isnan_acl, False)
 
 
 def isfinite(x):
     import jittor as jt
-    return jt.misc._classify(
-        x, lambda v: f"!isnan({v}) && !isinf({v})", jt.misc._isfinite_acl, True)
+    return jt.misc._classify(x, "isfinite", jt.misc._isfinite_acl, True)
 
 
 def isinf(x):
     import jittor as jt
-    return jt.misc._classify(
-        x, lambda v: f"isinf({v})", jt.misc._isinf_acl, False)
+    return jt.misc._classify(x, "isinf", jt.misc._isinf_acl, False)
 
 
 def isneginf(x):
     import jittor as jt
     return jt.misc._classify(
-        x, lambda v: f"x<0 && isinf({v})",
-        lambda v: (v < 0) & jt.misc._isinf_acl(v), False)
+        x, "isneginf", lambda v: (v < 0) & jt.misc._isinf_acl(v), False)
 
 
 def isposinf(x):
     import jittor as jt
     return jt.misc._classify(
-        x, lambda v: f"x>0 && isinf({v})",
-        lambda v: (v > 0) & jt.misc._isinf_acl(v), False)
+        x, "isposinf", lambda v: (v > 0) & jt.misc._isinf_acl(v), False)
 
 
 def rsqrt(x):
