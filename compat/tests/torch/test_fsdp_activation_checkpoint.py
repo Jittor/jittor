@@ -1,10 +1,12 @@
 """Public FSDP checkpoint routing and portable CUDA module state."""
 
 from functools import partial
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 import jittor as jt
+import numpy as np
 import torch
 
 from _helpers import capability
@@ -15,6 +17,7 @@ from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
 from torch.distributed.fsdp.wrap import (
     ModuleWrapPolicy, transformer_auto_wrap_policy, lambda_auto_wrap_policy,
 )
+from jittor.compat.fsdp2._state_dict import _load_full_state_dict
 
 
 class _Block(torch.nn.Module):
@@ -137,6 +140,43 @@ class TestFSDPActivationCheckpoint(unittest.TestCase):
         restored = torch.nn.Sequential(_Block(), _Block())
         restored.load_state_dict(target.state_dict())
         torch.testing.assert_close(restored(value), target(value), rtol=0, atol=0)
+
+    def test_full_state_load_uses_exported_checkpoint_wrapper_key(self):
+        module = _Block()
+        wrapped = checkpoint_wrapper(
+            module, checkpoint_fn=lambda function, *args, **kwargs: function(*args, **kwargs))
+        parameter = module.linear.weight
+        shard_value = jt.Var.copy(parameter.reshape(-1)).stop_grad()
+        shard_value.start_grad()
+        entry = SimpleNamespace(
+            name="weight", owner=module.linear, attr="weight", shard=shard_value,
+            shape=tuple(parameter.shape), numel=parameter.numel(), padded_numel=parameter.numel(),
+            shard_numel=parameter.numel(), requires_grad=True, full_param=None)
+        state = SimpleNamespace(
+            true_fsdp_initialized=True, true_fsdp_params=[entry], true_fsdp_flat=False,
+            true_fsdp_rank=0, true_fsdp_unsharded=False)
+        object.__setattr__(module.linear, "_is_fsdp_module", True)
+        object.__setattr__(module.linear, "_fsdp_state", state)
+        object.__setattr__(module.linear, "weight", shard_value)
+        object.__setattr__(shard_value, "_jittor_fsdp2_state", state)
+        object.__setattr__(shard_value, "_jittor_fsdp2_entry", entry)
+
+        exported = wrapped.state_dict()
+        self.assertIn("linear.weight", exported)
+        self.assertNotIn("_checkpoint_wrapped_module.linear.weight", exported)
+        full_state = {key: value.detach().clone() for key, value in exported.items()}
+        full_state["linear.weight"] = torch.ones_like(parameter) * 2
+        invalid_state = dict(full_state, unexpected=torch.ones(1, device="cuda"))
+        with self.assertRaisesRegex(RuntimeError, "state dict keys mismatch"):
+            _load_full_state_dict(wrapped, invalid_state)
+
+        _load_full_state_dict(wrapped, full_state)
+
+        np.testing.assert_array_equal(
+            shard_value.numpy().reshape(tuple(parameter.shape)),
+            full_state["linear.weight"].numpy(),
+        )
+        self.assertEqual(set(wrapped.state_dict()), set(full_state))
 
     def test_default_mode_is_forwarded_without_remapping(self):
         module = _Block()

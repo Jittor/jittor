@@ -144,8 +144,12 @@ def _shard_optimizer_state_dict(module, state_dict):
 
 def _load_full_state_dict(module, state_dict, strict=True, *, already_replicated=False):
     """Write a caller-broadcast FULL state dict to the existing local shards."""
-    module_names = {id(child): name for name, child in module.named_modules()}
     current = module.state_dict()
+    exported_keys = {}
+    for key, value in current.items():
+        state, entry = shard._fsdp_param_entry(value)
+        if state is not None:
+            exported_keys.setdefault(id(entry), []).append((state, key))
     missing = set(current) - set(state_dict)
     unexpected = set(state_dict) - set(current)
     if strict and (missing or unexpected):
@@ -157,10 +161,17 @@ def _load_full_state_dict(module, state_dict, strict=True, *, already_replicated
         state = getattr(fsdp_module, "_fsdp_state", None)
         if state is None or not getattr(state, "true_fsdp_initialized", False):
             continue
-        prefix = module_names.get(id(fsdp_module), "")
         full_values = []
         for entry in state.true_fsdp_params:
-            key = "{}.{}".format(prefix, entry.name) if prefix else entry.name
+            # State-dict hooks define the portable namespace. Resolve the key
+            # through the exported mapping and the managed parameter identity;
+            # reconstructing it from named_modules() would reintroduce wrapper
+            # internals such as CheckpointWrapper's private child name.
+            key = next((name for owner, name in exported_keys.get(id(entry), ())
+                        if owner is state), None)
+            if key is None:
+                raise KeyError(
+                    "missing exported FSDP parameter for state-dict entry: {}".format(entry.name))
             if key not in state_dict:
                 raise KeyError(
                     "missing FSDP parameter in full state dict: {}".format(key))
