@@ -107,6 +107,7 @@ def _require_npu_adapter_registration():
     expected = {
         "transformers.utils.import_utils": adapter.patch_import_utils,
         "transformers.modeling_flash_attention_utils": adapter.patch_flash_attention_utils,
+        "transformers.trainer": adapter.patch_trainer,
         "accelerate.utils.imports": adapter.patch_accelerate_imports,
         "accelerate": adapter.patch_accelerate,
     }

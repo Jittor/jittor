@@ -134,6 +134,95 @@ del __version__
             finally:
                 sys.path.remove(root)
 
+    def _fake_trainer_policy_fixture(self, version="4.56.2"):
+        package = types.ModuleType("transformers")
+        package.__version__ = version
+        torch_module = types.ModuleType("torch")
+        torch_module.float16 = object()
+        torch_module.bfloat16 = object()
+        torch_module.float32 = object()
+
+        class FakePolicy:
+            def __init__(self, param_dtype=None, reduce_dtype=None, output_dtype=None,
+                         buffer_dtype=None, cast_forward_inputs=True):
+                self.param_dtype = param_dtype
+                self.reduce_dtype = reduce_dtype
+                self.output_dtype = output_dtype
+                self.buffer_dtype = buffer_dtype
+                self.cast_forward_inputs = cast_forward_inputs
+
+        class FakePlugin:
+            fsdp_version = 2
+
+            def __init__(self):
+                self.mixed_precision_policy = FakePolicy()
+                self.validated = False
+
+            def validate_mixed_precision_policy(self):
+                if not isinstance(self.mixed_precision_policy, FakePolicy):
+                    raise TypeError("unexpected policy type")
+                self.validated = True
+
+        class FakeTrainer:
+            def __init__(self, args, plugin):
+                self.args = args
+                self.accelerator = types.SimpleNamespace(
+                    state=types.SimpleNamespace(fsdp_plugin=plugin))
+
+        torch_module.distributed = types.SimpleNamespace(fsdp=types.SimpleNamespace(
+            MixedPrecisionPolicy=FakePolicy, MixedPrecision=FakePolicy))
+        module = types.ModuleType("transformers.trainer")
+        module.Trainer = FakeTrainer
+        module.torch = torch_module
+        return package, module, torch_module, FakePolicy, FakePlugin
+
+    def test_trainer_applies_fsdp2_precision_policy_from_training_args(self):
+        package, module, torch_module, policy_type, plugin_type = self._fake_trainer_policy_fixture()
+        plugin = plugin_type()
+        with mock.patch.dict(sys.modules, {"transformers": package, "torch": torch_module}):
+            self.assertTrue(transformers.patch_trainer(module))
+            module.Trainer(
+                args=types.SimpleNamespace(fsdp_config={"mixed_precision_policy": {
+                    "param_dtype": "bf16", "reduce_dtype": "fp32", "output_dtype": "bf16",
+                }}),
+                plugin=plugin,
+            )
+        policy = plugin.mixed_precision_policy
+        self.assertIsInstance(policy, policy_type)
+        self.assertIs(policy.param_dtype, torch_module.bfloat16)
+        self.assertIs(policy.reduce_dtype, torch_module.float32)
+        self.assertIs(policy.output_dtype, torch_module.bfloat16)
+        self.assertTrue(plugin.validated)
+
+    def test_trainer_leaves_accelerate_policy_unchanged_without_fsdp_policy_config(self):
+        package, module, torch_module, _, plugin_type = self._fake_trainer_policy_fixture()
+        plugin = plugin_type()
+        original = plugin.mixed_precision_policy
+        with mock.patch.dict(sys.modules, {"transformers": package, "torch": torch_module}):
+            self.assertTrue(transformers.patch_trainer(module))
+            module.Trainer(args=types.SimpleNamespace(fsdp_config={}), plugin=plugin)
+        self.assertIs(plugin.mixed_precision_policy, original)
+        self.assertFalse(plugin.validated)
+
+    def test_trainer_rejects_unknown_fsdp_policy_dtype_without_mutating_plugin(self):
+        package, module, torch_module, _, plugin_type = self._fake_trainer_policy_fixture()
+        plugin = plugin_type()
+        original = plugin.mixed_precision_policy
+        with mock.patch.dict(sys.modules, {"transformers": package, "torch": torch_module}):
+            self.assertTrue(transformers.patch_trainer(module))
+            with self.assertRaisesRegex(ValueError, "unsupported FSDP mixed precision dtype"):
+                module.Trainer(args=types.SimpleNamespace(fsdp_config={
+                    "mixed_precision_policy": {"reduce_dtype": "tf32"},
+                }), plugin=plugin)
+        self.assertIs(plugin.mixed_precision_policy, original)
+
+    def test_trainer_policy_bridge_leaves_transformers_five_unchanged(self):
+        package, module, torch_module, _, _ = self._fake_trainer_policy_fixture("5.5.3")
+        original = module.Trainer.__init__
+        with mock.patch.dict(sys.modules, {"transformers": package, "torch": torch_module}):
+            self.assertFalse(transformers.patch_trainer(module))
+        self.assertIs(module.Trainer.__init__, original)
+
     def test_transformers_npu_probe_rejects_real_pytorch_extension(self):
         transformers.register(patcher.register_module_patch)
         patcher.install_module_patches(load_entry_points=False)

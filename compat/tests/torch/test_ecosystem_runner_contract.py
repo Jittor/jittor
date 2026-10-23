@@ -277,11 +277,13 @@ def _npu_adapter_fixture():
 
     adapter = SimpleNamespace(patch_import_utils=lambda: None,
                               patch_flash_attention_utils=lambda: None,
+                              patch_trainer=lambda: None,
                               patch_accelerate_imports=lambda: None,
                               patch_accelerate=lambda: None)
     registered = {
         "transformers.utils.import_utils": (adapter.patch_import_utils,),
         "transformers.modeling_flash_attention_utils": (adapter.patch_flash_attention_utils,),
+        "transformers.trainer": (adapter.patch_trainer,),
         "accelerate.utils.imports": (adapter.patch_accelerate_imports,),
         "accelerate": (adapter.patch_accelerate,),
     }
@@ -325,6 +327,11 @@ def test_npu_trainer_accepts_only_the_registered_owned_adapter_callbacks():
             with unittest.TestCase().assertRaisesRegex(RuntimeError, "not registered.*modeling_flash_attention_utils"):
                 runner._require_npu_adapter_registration()
             registered[flash_path] = flash_callback
+            trainer_path = "transformers.trainer"
+            trainer_callback = registered.pop(trainer_path)
+            with unittest.TestCase().assertRaisesRegex(RuntimeError, "not registered.*transformers.trainer"):
+                runner._require_npu_adapter_registration()
+            registered[trainer_path] = trainer_callback
             registered["accelerate"] = (lambda: None,)
             with unittest.TestCase().assertRaisesRegex(RuntimeError, "not registered.*accelerate"):
                 runner._require_npu_adapter_registration()

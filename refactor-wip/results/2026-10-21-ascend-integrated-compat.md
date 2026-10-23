@@ -902,3 +902,11 @@ R140 cohort位于 `real-model/qwen3-06b-qk-matmul-vjp-r140-card3/`，绑定与R1
 6. 验证激活重计算下的实际重执行、输出/梯度/更新/恢复和峰值显存；覆盖随机sampler、generator、多worker预取、确定性策略及新进程随机状态恢复。
 7. 完成Transformers、Tokenizers、PEFT、Accelerate、safetensors的日常组合场景，涵盖数据处理、梯度累加、Trainer封装、保存/加载和错误路径；单项或synthetic结果不外推为整栈通过。
 8. 只对各自正确性gate已通过的对应配置比较速度、延迟、峰值显存与稳定性；当前仍没有合格的NPU性能结论。
+
+## 2026-10-24 R141 前置：Trainer FSDP2 policy bridge CPU 合约通过，NPU 待验
+
+针对 R140 第1项，已在 adapters/jittor_adapters/transformers.py 增加仅适用于已锁定 Transformers 4.56.2 的 Trainer 初始化补丁：Trainer 创建 Accelerate 后，从 TrainingArguments.fsdp_config 读取 mixed_precision_policy，按实际 FSDP 版本构造 Torch policy 并应用到活动 plugin；支持的 dtype 字符串与字段做白名单校验，plugin validator 异常时恢复原 policy。Transformers 5.5.3 不应用此补丁。适配器单测覆盖 FSDP2 BF16/FP32/BF16 映射、无配置保持默认、非法 dtype 不污染 plugin、5.5.3 不改写；适配器测试17项通过。
+
+真实 Transformers NPU 训练尚未验证此接线。隔离执行 compat/tests/torch/test_ecosystem_runner_contract.py，设置 JITTOR_TORCH_SHIM=1、清空 ASCEND_RT_VISIBLE_DEVICES，并将 HOME、JITTOR_HOME、XDG_CACHE_HOME、TMPDIR 全部指向新 LAB 验证目录 trainer-policy-bridge-20261024。首次 Jittor core 244/244 编译约714秒后，runner contract 18 passed、0 skipped、退出码0；完整日志位于 validation/trainer-policy-bridge-20261024/runner-contract.log，退出码记录为 runner-contract.exit-code。该结果只证明 CPU runner/注册合同与环境隔离，不证明 NPU 实际 plugin policy、FSDP2 更新、梯度或恢复正确，也不覆盖 R139 的失败门槛。新缓存保留在该 LAB 目录；此前误触到的既有用户 Jittor cache未清理。
+
+下一步应以本次代码提交冻结新 source manifest，复制 R139 的真实模型协议建立全新 cohort：Jittor 侧移除 Trainer 构造后的 harness policy 赋值，并在 train 前后断言 TrainingArguments 配置自动生效；Native 侧仅为对拍显式设置等价 plugin policy。启动前通过 driver 对物理NPU fresh admission；若占用则不启动。该cohort仍需保留完整输出/梯度/初始参数/更新的原预算、零回落、物理映射及无监控缺口要求。R139更新gate和R140全图反向定位状态保持不变。

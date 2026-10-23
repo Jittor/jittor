@@ -1,5 +1,6 @@
 """Align optional Transformers backend probes with the Jittor frontend."""
-from functools import lru_cache
+from collections.abc import Mapping
+from functools import lru_cache, wraps
 import importlib.util
 import inspect
 import sys
@@ -185,8 +186,125 @@ def patch_flash_attention_utils(module):
     return True
 
 
+_FSDP_POLICY_DTYPES = {
+    "bf16": "bfloat16",
+    "bfloat16": "bfloat16",
+    "torch.bfloat16": "bfloat16",
+    "fp16": "float16",
+    "float16": "float16",
+    "torch.float16": "float16",
+    "fp32": "float32",
+    "float32": "float32",
+    "torch.float32": "float32",
+}
+
+
+def _resolve_fsdp_policy_dtype(value, torch_module):
+    if not isinstance(value, str):
+        return value
+    name = value.strip().lower()
+    if name in ("none", "no"):
+        return None
+    dtype_name = _FSDP_POLICY_DTYPES.get(name)
+    if dtype_name is None:
+        raise ValueError("unsupported FSDP mixed precision dtype: " + value)
+    return getattr(torch_module, dtype_name)
+
+
+def _apply_trainer_fsdp_policy(trainer, torch_module):
+    """Apply an explicit TrainingArguments FSDP precision policy to Accelerate."""
+    args = getattr(trainer, "args", None)
+    fsdp_config = getattr(args, "fsdp_config", None)
+    if not isinstance(fsdp_config, Mapping):
+        return False
+    configured_policy = fsdp_config.get("mixed_precision_policy")
+    if configured_policy is None:
+        return False
+
+    accelerator = getattr(trainer, "accelerator", None)
+    state = getattr(accelerator, "state", None)
+    plugin = getattr(state, "fsdp_plugin", None)
+    if plugin is None:
+        raise ValueError("fsdp_config.mixed_precision_policy requires an active FSDP plugin")
+
+    fsdp_version = int(getattr(plugin, "fsdp_version", 1))
+    fsdp_api = getattr(getattr(torch_module, "distributed", None), "fsdp", None)
+    if fsdp_version == 2:
+        policy_type = getattr(fsdp_api, "MixedPrecisionPolicy", None)
+        valid_fields = {"param_dtype", "reduce_dtype", "output_dtype", "cast_forward_inputs"}
+    elif fsdp_version == 1:
+        policy_type = getattr(fsdp_api, "MixedPrecision", None)
+        valid_fields = {"param_dtype", "reduce_dtype", "buffer_dtype"}
+    else:
+        raise ValueError("unsupported FSDP version for mixed precision policy: " + str(fsdp_version))
+    if not callable(policy_type):
+        raise UnsupportedAdapterVersion("Torch FSDP mixed precision policy type is unavailable")
+
+    if isinstance(configured_policy, policy_type):
+        policy = configured_policy
+    elif isinstance(configured_policy, Mapping):
+        unknown = set(configured_policy) - valid_fields
+        if unknown:
+            fields = ", ".join(sorted(unknown))
+            raise ValueError("unsupported FSDP mixed precision policy fields: " + fields)
+        if not configured_policy:
+            raise ValueError("fsdp_config.mixed_precision_policy must not be empty")
+        policy = policy_type(**{
+            key: _resolve_fsdp_policy_dtype(value, torch_module)
+            for key, value in configured_policy.items()
+        })
+    else:
+        raise TypeError("fsdp_config.mixed_precision_policy must be a mapping or FSDP policy object")
+
+    previous = getattr(plugin, "mixed_precision_policy", None)
+    plugin.mixed_precision_policy = policy
+    try:
+        validate = getattr(plugin, "validate_mixed_precision_policy", None)
+        if callable(validate):
+            validate()
+    except Exception:
+        plugin.mixed_precision_policy = previous
+        raise
+    return True
+
+
+@required_patch
+def patch_trainer(module):
+    """Bridge mixed precision config omitted by the pinned Trainer constructor."""
+    version = require_version("transformers", SUPPORTED_VERSIONS)
+    if version != "4.56.2":
+        return False
+    trainer_type = vars(module).get("Trainer")
+    original = getattr(trainer_type, "__init__", None) if isinstance(trainer_type, type) else None
+    if not callable(original):
+        raise UnsupportedAdapterVersion("Transformers Trainer constructor is unavailable")
+    try:
+        parameters = inspect.signature(original).parameters
+    except (TypeError, ValueError) as exc:
+        raise UnsupportedAdapterVersion("Transformers Trainer constructor signature is unavailable") from exc
+    if "args" not in parameters:
+        raise UnsupportedAdapterVersion("Transformers Trainer constructor args contract changed")
+    if getattr(original, "_jittor_fsdp_policy_bridge", False):
+        return False
+    torch_module = vars(module).get("torch")
+    if torch_module is None:
+        raise UnsupportedAdapterVersion("Transformers Trainer no longer exposes its Torch frontend")
+
+    @wraps(original)
+    def init(self, *args, **kwargs):
+        result = original(self, *args, **kwargs)
+        _apply_trainer_fsdp_policy(self, torch_module)
+        return result
+
+    init._jittor_fsdp_policy_bridge = True
+    init._jittor_original_init = original
+    replace(trainer_type, "__init__", init, original)
+    return True
+
+
 def register(register_module_patch):
     register_module_patch("transformers.utils.import_utils", patch_import_utils)
     register_module_patch("transformers.modeling_flash_attention_utils", patch_flash_attention_utils)
+    register_module_patch("transformers.trainer", patch_trainer)
     register_module_patch("accelerate.utils.imports", patch_accelerate_imports)
     register_module_patch("accelerate", patch_accelerate)
