@@ -84,7 +84,7 @@ unchanged.
 
 ## Reproduction and evidence
 
-Use the maintained [probe runbook](../../agent/skills/vllm-omni-torch-compat/SKILL.md)
+Use the maintained [probe runbook](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/vllm-omni-torch-compat/SKILL.md)
 with explicit original wheel paths, independent interpreters, private homes,
 verified facade and per-device benchmark caches. Request CPU honestly before
 CUDA; use `--mode grad-audit --model-mode eval` and `--model-mode train` to retain

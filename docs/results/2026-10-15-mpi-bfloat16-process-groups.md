@@ -108,7 +108,7 @@ coverage numerator or wider DeepSpeed support is granted by this MPI batch.
 
 ## Reproduction and evidence
 
-Follow the [distributed verification skill](../../agent/skills/jittor-distributed-verification/SKILL.md)
+Follow the [distributed verification skill](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/jittor-distributed-verification/SKILL.md)
 for independent rank environments, serial first compilation and actual Torch
 identity checks. Run the oracle in fresh roots with `--runtime jittor|torch` and
 `--device cpu|cuda`; compare every numeric NPZ field exactly and audit metadata

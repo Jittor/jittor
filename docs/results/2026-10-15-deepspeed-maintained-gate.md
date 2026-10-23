@@ -46,7 +46,7 @@ All requested tensors are materialized on CUDA and fallback is forbidden/count 0
 
 Install the verified source package and standalone adapter in the native environment;
 use a separate binary Torch interpreter. Follow the
-[runbook](../../agent/skills/deepspeed-torch-compat/SKILL.md) for dependency isolation.
+[runbook](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/deepspeed-torch-compat/SKILL.md) for dependency isolation.
 
 ```bash
 export JITTOR_CI_PYTHON=<native-python>
