@@ -39,7 +39,7 @@ jobs:
       - name: Install native CPU toolchain
         run: |
           apt-get update
-          apt-get install --yes --no-install-recommends build-essential libomp-dev git
+          apt-get install --yes --no-install-recommends build-essential libomp-dev git ca-certificates
       - name: Check out source
         uses: actions/checkout@v6
         with:
@@ -75,7 +75,7 @@ jobs:
       - name: Install native CPU toolchain
         run: |
           apt-get update
-          apt-get install --yes --no-install-recommends build-essential libomp-dev git
+          apt-get install --yes --no-install-recommends build-essential libomp-dev git ca-certificates
       - name: Check out source
         uses: actions/checkout@v6
         with:
