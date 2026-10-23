@@ -5,7 +5,7 @@ Function input/output bookkeeping belongs to each native one-shot call context.
 """
 import contextlib
 from contextvars import ContextVar
-from typing import Optional
+from typing import Callable, Deque, Optional
 import threading
 from collections import deque
 import jittor as jt
@@ -449,7 +449,7 @@ def _backward_callbacks():
     stack = getattr(_callback_tasks, "stack", None)
     if stack is None:
         stack = _callback_tasks.stack = []
-    callbacks = deque()
+    callbacks: Deque[Callable[[], None]] = deque()
     stack.append(callbacks)
     try:
         yield
