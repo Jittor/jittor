@@ -181,8 +181,9 @@ def _optimizer_maybe_has_fsdp_params(opt):
 
 
 def _backward(self, gradient=None, retain_graph=None, create_graph=False, **kw):
-    from ...autograd import _backward_callbacks
-    with _backward_callbacks():
+    from ...autograd import (
+        _backward_callbacks, _torch_grad_accumulation_order)
+    with _backward_callbacks(), _torch_grad_accumulation_order():
         return _backward_impl(self, gradient, retain_graph, create_graph, **kw)
 
 

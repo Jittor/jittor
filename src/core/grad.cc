@@ -4,6 +4,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#include <algorithm>
 #include "bindings/pybind/py_var_tracer.h"
 #include "core/grad.h"
 #include "runtime/launch_diagnostics.h"
@@ -20,6 +21,13 @@ namespace jittor {
 #define PREVENT_LARGE_FUSED_OP 16
 
 AutogradPolicyState autograd_policy;
+static thread_local bool torch_grad_accumulation_reverse = false;
+
+bool set_torch_grad_accumulation_reverse(bool enabled) {
+    bool previous = torch_grad_accumulation_reverse;
+    torch_grad_accumulation_reverse = enabled;
+    return previous;
+}
 
 void set_autograd_policy(
     bool stop_outputs_when_inputs_stopped,
@@ -393,6 +401,17 @@ static vector<VarPtr> grad_impl(
                             && gvar_index.has(in) ? gvar_index.get(in) : -1);
             }
             outgoing.push_back(move(snapshot));
+        }
+
+        // For the Torch compatibility policy, consume independent shared-Var
+        // contributions in reverse forward-op creation order. Keep edges from
+        // one op stable because repeated inputs belong to the same node.
+        if (torch_grad_accumulation_reverse) {
+            std::stable_sort(
+                outgoing.begin(), outgoing.end(),
+                [](const GradOpSnapshot& left, const GradOpSnapshot& right) {
+                    return left.op->id > right.op->id;
+                });
         }
 
         auto& grad = grads[i];

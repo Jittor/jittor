@@ -19,6 +19,19 @@ def _state():
     return get_install_context(jt).state["autograd_api"]
 
 
+@contextlib.contextmanager
+def _torch_grad_accumulation_order():
+    setter = getattr(jt.core, "_set_torch_grad_accumulation_reverse", None)
+    if setter is None:
+        yield
+        return
+    previous = setter(True)
+    try:
+        yield
+    finally:
+        setter(previous)
+
+
 def save_for_backward(self, *tensors):
     # torch stores a tuple; a single un-tupled call still yields a tuple
     self._saved_tensors = tuple(tensors)
@@ -263,7 +276,7 @@ def grad(outputs, inputs, grad_outputs=None, retain_graph=None,
             "materialize_grads=True, but got: allow_unused=False.")
     allow_unused = bool(materialize_grads) if allow_unused is None \
         else bool(allow_unused)
-    with _backward_callbacks():
+    with _backward_callbacks(), _torch_grad_accumulation_order():
         gs = list(jt.core.grad_optional(loss, ins, rg))
     missing = [i for i, value in enumerate(gs) if value is None]
     if missing and materialize_grads:

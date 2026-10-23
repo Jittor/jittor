@@ -825,3 +825,28 @@ summary JSON SHA256为 `81d815c261377f7caaee8d470566d2e26ce37110f9e7533f3af3ff43
 4. **随机状态和确定性恢复。** 继续覆盖随机sampler、数据增强、multiworker预取、显式generator及fresh-process恢复，并解决或明确Native deterministic与Jittor未实现策略的差异。
 5. **日常多库组合。** 补Transformers、Tokenizers、PEFT、Accelerate、safetensors在数据预处理、梯度累加、训练封装、保存/加载及真实FSDP2中的组合用例；单项或synthetic通过不外推成整栈通过。
 6. **性能与显存。** 只对同一模型、数据、dtype、序列长度和更新设置且通过正确性gate的场景，比较稳态吞吐/延迟、峰值显存和稳定性；当前没有合格NPU性能/显存结论。
+
+## 2026-10-24 R134/R135：当前源码 Qwen3 BF16 LoRA 对拍与双卡资源中止
+
+### R134 双卡 FSDP2 预热尝试
+
+R134以HEAD `8a644a69b5bbb1870c9efd9767caff7c24703d5c`作为commit anchor，manifest绑定运行时工作树文件（包括本轮尚未提交的梯度顺序补丁），manifest SHA256为 `4710cce2a360d94cffc902c6852c3384fa21a064ca082239c33ea8daf7d16`，覆盖3337条Git路径（3336个普通文件和1个符号链接）。启动前物理NPU3和NPU6均为空。rank0在物理NPU3首次JIT期间运行685.86秒后，监控在NPU3发现外部进程 `VLLMWorker_TP` PID 2869407；driver只终止了本任务的进程组并以rc=125退出，没有向外部PID发送信号。该次没有完成模型预热或FSDP2训练；原始文件、日志和执行收据保存在LAB `real-model/qwen3-06b-fsdp2-trainer-r134-torch-grad-order/prewarm/prewarm-rank0-attempt1/`。资源中止后留下的173个当前源码JIT对象（约6.4MB）只在R135 manifest复核后供单卡流程复用。foreign occupant JSON、execution JSON和stdout SHA256分别为 `ddd99687b1c7513f3075a5571c54c41781ea6958c4fa8ab256351b5e209e7326`、`51aa80de50ae24a4e5573977b894d7fa5da04da4bec65575820abd4bed365ebb`、`e240c4214b738d3fc9d8e7200916726a7f97cdfddeb3447d19b1fd5b311cc2e2`。
+
+### R135 单卡 Native/Jittor full、分段训练与恢复
+
+修复内容是在Torch兼容入口调用 torch.autograd.grad 和 Tensor.backward 期间启用线程局部的BF16 shared-Var梯度贡献排序策略，按forward op id逆序稳定消费贡献，并在调用结束后恢复此前状态；不改变非Torch兼容图的默认累加顺序。针对 1 + (-1) + 0.001953125 的BF16共享梯度回归测试覆盖两种入口，结果为 1 passed, 31 deselected（44.31秒）。ACL/NPU6定向probe中 torch.autograd.grad 与 Tensor.backward 都返回精确0，实际设备为NPU，fallback delta=0；原始JSON位于LAB diagnostics/bf16-qkv-autograd-order-r1/attempt06/result.json。
+
+R135 建立独立cohort `real-model/qwen3-06b-training-npu-current-r135-torch-grad-order/`，源码提交和manifest与上述R134一致。只使用预检为空闲的物理NPU6，Native torch_npu和Jittor shim分环境、串行执行；每阶段的PID到NPU放置见证均通过，阶段结束卡为空。场景是Qwen3-0.6B BF16 LoRA、固定样本顺序、16条训练样本和4条评估样本、batch 2、梯度累积2、4次更新；不属于FSDP2双卡结果。
+
+Native和Jittor各自执行full四步、first两步保存checkpoint-2，再以新进程从checkpoint-2恢复到step 4。两个运行时各自的full与first+resume比较均通过：933个状态/张量项在零容差下完全一致，样本游标与更新契约一致；四步梯度归档及分段归档逐项精确一致，失败比较和超预算元素均为0。Native/Jittor参数实际放置报告均为`npu:0`，映射到物理NPU6；Jittor fallback_count=0，Native torch_npu没有可用的shim fallback计数。
+
+严格跨运行时结果 `jittor/cross/result.json` 比较完整初始探针、前向、梯度、112个可训练LoRA张量、最终状态和生命周期字段，共2187项，全部通过，failed_comparisons=0、outside_budget_elements=0。沿用protocol SHA256 `ab11ec4b11b95e23ca72075ea7e9012ca91801adf7197fb7cc39c298bc8f9592`，BF16 forward预算为atol=0.005、rtol=0.03，gradient预算为atol=0.01、rtol=0.05，没有放宽门槛。最大forward绝对差为0.0043417215；最大gradient绝对差为0.030277052，出现在microbatch 5的gradient-health L2 norm项，其相对差为0.0124474，仍在既定预算内。Cross JSON SHA256为 `31180bd75fc0cd5779c380df06ac1cf79c24c3ad49cc88d13b8a352b1339058e`。Native/Jittor各自完整输出报告SHA256分别为 `9dd3d51b78ca72561b56ca9d9e6bd3f15afae418b8cb1f679dbd3fe23b975e54` 和 `6ae6bb9fe3ed2f97c62dcbdbf3605c564053dab661bf7dd9ada6bdbcf1f7a53e`。各运行时的fresh-resume比较JSON SHA256分别为 `7a8605d1f4a6d6de511e2aae68b66b087bdd8dab36078f041b855fe409ffb9ec` 和 `e6593d0ae7fe5307222a55e157751f974e447faf333c3575f82de54aeb448afd`；Native/Jittor full-gradient比较JSON SHA256分别为 `baf635770b642c9676e37cfeb9b66bcb7983694e0488e4f1d10176fce4577cbd` 和 `ece3270cc98b0a9d062b571aee2be52585e3abb9264b13214e2c7660e0dd1851`。
+
+Native环境版本为Transformers 4.56.2、Tokenizers 0.22.2、PEFT 0.17.1、Accelerate 1.10.1、safetensors 0.8.0。Jittor full train_loss=3.842697、eval_loss=4.474481；Native full train_loss=3.842866、eval_loss=4.479791。结论依据完整数组比较器和原数值协议，而不是仅按loss接近判断。本cohort没有性能接受标记；执行时间不作为速度或显存结果。该固定顺序单卡结论不覆盖FSDP2、随机sampler、多worker、激活重计算或不同源码冻结点。
+
+### 当前仍需完成
+
+1. 在两个新鲜空闲NPU上重跑真实Qwen3双卡FSDP2完整输出、梯度、LoRA更新和fresh-process optimizer/scheduler恢复；R132严格更新门仍有108/224个LoRA-B数组超预算，R134未进入模型计算，R135单卡结果不能替代。
+2. 继续定位真实FSDP2 FP32与BF16 compute/FP32 input梯度差异，验证nested child+root HCCL；按原预算验收，不放宽数值门。
+3. 验证激活重计算下的输出、梯度、参数更新和恢复，再记录真实峰值显存；验证随机sampler、generator、多worker和新进程随机状态恢复及确定性策略。
+4. 补齐Transformers、Tokenizers、PEFT、Accelerate、safetensors的日常组合场景与错误/保存加载路径。仅对相同正确性配置全部通过的case开展配对速度、延迟、显存与稳定性比较；当前仍没有合格的NPU性能结论。

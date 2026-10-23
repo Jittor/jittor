@@ -39,6 +39,9 @@ void set_autograd_policy(
 // @pyjt(_get_autograd_policy)
 int get_autograd_policy();
 
+// @pyjt(_set_torch_grad_accumulation_reverse)
+bool set_torch_grad_accumulation_reverse(bool enabled);
+
 /** The recorded differentiable producer of `v`, or null for a backward leaf.
  *
  * This is the graph question `is_leaf` and `grad_fn` are asking, answered from
