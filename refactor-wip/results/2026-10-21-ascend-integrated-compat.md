@@ -624,10 +624,18 @@ R76绑定与R75相同的当前提交和3336文件manifest，在物理NPU3分别�
 
 前序Jittor attempt遇到jit_utils首次重建后的进程重载门槛，attempt3在编译阶段被本任务的短时runner提前停止；这些日志和失败输出均保留在同一LAB cohort。用预热所用的`/usr/bin/g++`并按Jittor提示重新启动后，attempt5完成NPU计算并通过；这些准备失败不计入NPU算子失败，也不替代attempt5证据。R76只证明FP16 tanh primitive，不代表FP16 FSDP2或模型训练链路已通过。
 
+### 2026-10-23 R77：当前源码 Accelerate BF16 FSDP2 训练与恢复
+
+R77绑定提交 `b4b344b07` 的3336文件manifest（SHA256 `048aff8211c031b630f18ad14bb0439903fa6c52180822541028f2f7eb3a012c`）。与R74串行预热manifest相比，文件清单只有本报告和ASC看板两份文档不同，生产代码清单完全相同；R77又在当前manifest上依次于物理NPU3、NPU6运行单rank预热，再执行两卡任务。Jittor复用R74已验证的共享cache，cache probe SHA256前后保持 `28fa0074e0dc6d4de34835e874ebba9425536e5f0a1f09bd8638d6b84c76c569`。
+
+Native torch_npu与Jittor shim分别在物理NPU3/6完成Accelerate FSDP2 BF16 synthetic linear fixture的full训练，各8 updates；Jittor另完成update3 prefix与新进程恢复到update8。Native/Jittor full cross-runtime gate按既定 `atol=2e-6, rtol=2e-5` 通过；Jittor full与prefix/resume的模型、优化器、调度器、rank RNG及训练轨迹按exact通过。共享checkpoint包含模型、optimizer、scheduler、两个rank RNG和training metadata。四个launcher阶段return code全为0，rank设备映射均核实为NPU3/NPU6，Jittor fallback增量0、MPI未加载，worker源码前后不变；结束时NPU3/6空闲。完整结果在LAB `distributed/fsdp2-bf16-accelerate-r77/`，摘要为 `result-summary-r77.json`。
+
+R77关闭当前源码上合成linear fixture的Accelerate BF16 FSDP2 full/prefix/fresh-process恢复证据；它不是Qwen FSDP2，不覆盖更复杂的嵌套child+root包装（R71 HCCL错误仍保留），运行耗时也不是性能测试。
+
 ### 按原计划仍需完成
 
-1. **真实模型 FSDP2 与恢复。** R65 已完成真实 Qwen3-0.6B BF16 LoRA 的 Native/Jittor 单卡 full、梯度/参数更新、保存重载及 fresh-process prefix/resume 全流程交叉对拍；这项早先标记的原生训练对拍已关闭。R68/R74也已在最终源码的双卡 root-only Linear/LoRA分支与非连续视图fixture上通过三精度输入梯度、参数梯度和SGD更新。仍需把Qwen/Accelerate训练链路放入真实FSDP2分片场景，并验证优化器/调度器等状态的fresh-process恢复；R71 nested child+root FSDP2的HCCL拓扑错误仍未修复。R76没有覆盖FP16 FSDP2。
+1. **真实模型 FSDP2 与恢复。** R65已完成真实Qwen3-0.6B BF16 LoRA Native/Jittor单卡full、梯度/参数更新、保存重载及fresh-process prefix/resume全流程交叉对拍；这项早先标记的原生训练对拍已关闭。R68/R74在最终源码双卡root-only Linear/LoRA分支和非连续视图fixture上通过三精度梯度/SGD，R77又通过当前源码Accelerate BF16 FSDP2 synthetic full与Jittor fresh-process恢复。仍需把真实Qwen/PEFT/Accelerate链路放入真实FSDP2分片场景，验证模型、optimizer/scheduler状态及恢复；R71 nested child+root FSDP2 HCCL拓扑错误仍未修复，R76也没有覆盖FP16 FSDP2。
 2. **激活重计算。** R69证明当前checkpoint shim不会因Python checkpoint函数而在backward重新执行，也没有模型包装与NPU显存收益证据。需落实支持边界或实现路径，对普通和重计算模型比较完整输出、梯度及参数更新，再采集真实NPU峰值显存。
 3. **随机训练恢复与确定性。** R56/R65只覆盖既有顺序采样和各自dropout训练状态恢复。还需验证随机sampler、数据增强、多worker预取、显式generator及Qwen fresh-process恢复，并明确Native deterministic=true与Jittor UNIMPLEMENTED_FALSE的差异；目前不能声称跨后端随机流一致。
-4. **日常生态组合矩阵。** 继续覆盖Transformers、Tokenizers、PEFT、Accelerate和safetensors在数据处理、训练包装、梯度累加、保存/加载、错误路径中的组合；真实Qwen单卡主链和已有个别FSDP2 fixture不代表所有常用组合。
+4. **日常生态组合矩阵。** 继续覆盖Transformers、Tokenizers、PEFT、Accelerate和safetensors在数据处理、训练包装、梯度累加、保存/加载、错误路径中的组合；真实Qwen单卡主链和已有FSDP2 fixture不代表所有常用组合。
 5. **正确性通过后的性能/显存验收。** 对已通过的相同模型、数据、dtype、序列长度和更新配置成对测量吞吐/延迟、峰值显存及稳定性，把首次JIT、首步和稳态分开报告。目前仍没有合格的NPU性能或显存结论。
