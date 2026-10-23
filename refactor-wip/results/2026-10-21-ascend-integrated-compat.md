@@ -731,3 +731,35 @@ R130 使用当前提交 `f5af805ab30aced4aefc214df257a0b575ca36a2`，source mani
 三种case为FP32 compute / FP32 input、BF16 compute / FP32 input、BF16 compute / BF16 input；每种均比较prediction、loss、输入叶梯度、FP32参数梯度及SGD更新。Native与Jittor两rank共126项，全部通过，mismatch为0，最大绝对差为 `1.4901161193847656e-08`；预算保持 `atol=2e-6, rtol=2e-5`。这使R130的synthetic Linear FSDP2输入梯度覆盖在当前最终源码上通过，但不外推到真实Qwen3、nested child+root HCCL、fresh-process恢复或完整多库训练。
 
 核心产物校验值：comparison JSON SHA256 `a80a5c857c3c3af27e52922fc651a9c29f835c78d2fdf665e53019646f9f0797`；source manifest SHA256如上；预热driver日志SHA256 `226b3d2ed41883cb54f87fbe0914411ff3566986ff979cfe6f0b8cdb95862808`；Native/Jittor launcher日志SHA256分别为 `e1cafd2c968f1f07842b9bcf677930031474179f30a9331d476c570a57800f69` 和 `f085255eae0678d0b12179552f5c5aee48fa8a055f11681b9058858b0d39e3ad`。四份逐rank process final receipt SHA256依次为Torch rank0 `a862ef0fb6b22fda16380bd6b37eb6dfaa0d451fa462c609c0f90b1a05cedb4b`、Torch rank1 `94d2c1a449c99f79a2960b61553673a176bb23c925abe6914267f74cc8bf5405`、Jittor rank0 `4fa027d9c6fbad0a801d73a4987768ebd17c86afb981cdb089be974982758397`、Jittor rank1 `c8213c51af44d21ed4109dfa343e48b835119f8194a2c023a1fab7b26b1af31e`。\n
+
+## 2026-10-23 R131：当前源码真实 Qwen3 BF16 LoRA 双卡复验与反向定位
+
+### 源码、预热与执行
+
+R131 cohort 保存在 LAB real-model/qwen3-06b-fsdp2-trainer-r131-attention-layer-trace/。source manifest 覆盖3336个tracked文件，记录分支 codex/ascend-integrated-compat-20261021、源码提交 8232bc5c025be1886858cc3c8339b0b1bbfd30d3，manifest SHA256为 862458f46bdad625a559781727da3c74ea00abfdb454aa03ed62d9e5af8e7ab3；该提交仅增加R130文档，运行代码对应 f5af805ab30aced4aefc214df257a0b575ca36a2，含BF16弱标量opmath修复。R118/R119失败运行绑定较早的 e67d8924d276e019168fe95493101f46572ff9b5，因此R131也检验了该修复在真实模型上的效果。 R131 per-rank report及smoke summary的source_commit字段实际为null，这是worker读取commit键而manifest使用source_commit键造成的元数据缺口；执行收据、worker source_manifest_sha256及逐文件source unchanged检查均保留，源码身份以source manifest为准，后续worker需修正该字段读取。
+
+按首次JIT串行要求，物理NPU3和NPU6分别进行world-size=1的Qwen3 BF16 LoRA前向/反向预热，returncode均为0，耗时1229.32秒和1223.04秒；收据均报告源码未变、MPI未加载、fallback前后为0，预热总状态PASS。这只是序贯编译/模型路径预热，不作为双卡正确性证据。正式阶段先Native Torch后Jittor shim，均由R131 driver新鲜检查卡3、6，绑定正确物理卡，阶段结束后卡为空；Native和Jittor阶段returncode均为0，耗时424.61秒和183.16秒，monitor gap均为0、foreign occupant均为空。Jittor两rank fallback增量为0。四个rank均完成global_step=1，每rank含112个LoRA参数梯度，模型、fixture、初始adapter、输入样本及source manifest一致。环境版本为Transformers 4.56.2、Accelerate 1.10.1、PEFT 0.17.1、Tokenizers 0.22.2、safetensors 0.8.0。上述阶段耗时仅为验证执行记录，不构成性能比较。
+
+第一次full-driver启动在运行任何模型或NPU阶段前失败：driver错误要求prewarm-complete.json内含该文件实际未写出的source_manifest_sha256字段。原始日志保存在driver-preflight-attempt1.stdout.log（SHA256 0b6c7b01b4b3b62bac067afe961f68dd7dbcbd8d8bd720d77ad9f832a0e7fff9），完整尝试索引在full-stage-attempt-ledger-r131.json。保留原始预热收据未作篡改；attempt2 driver改为验证manifest路径、逐rank成功收据和源码不变标记，并用独立文件名记录attempt2输入。重跑前重新核验3336个源码hash与NPU3/6空闲状态，preflight通过。
+
+### 完整训练数值gate
+
+R131复用既有R119比较器的数值预算，仅更改cohort schema和输出文件名；比较器代码SHA256 63281216328c5a5b68fb4f35b09023a35390e36671572df93bb2573234aad30c，与R119父比较器逐字节相同。预算为logits atol=0.005, rtol=0.03、参数梯度 atol=0.01, rtol=0.05、初始参数逐位相同、参数更新 atol=2e-6, rtol=2e-5；没有放宽预算。
+
+两rank合计比较2组logits、224组参数梯度、224组初始参数和224组post-update参数。logits、梯度及初始参数均通过；更新gate仍为passed=false，每rank54/112个LoRA-B更新数组超预算，合计108/224个，最大绝对差 5.999648965371307e-5，最大预算比约29.99。失败数组为layer0–26的q_proj/v_proj LoRA-B，layer27对应更新数组未超预算。附加符号诊断显示，每rank这56个q/v LoRA-B梯度数组中有54个包含符号不一致，总计1560个元素；每rank严格更新阈值下有1659个元素超差。这与小梯度附近的Adam首步更新差异相符，但尚不能单独作为成因证明。严格比较JSON SHA256为 0950a8f1e3be3173036a703c84246a6b4bc15031a20b90971437ec48ae40323f；LoRA-B符号诊断JSON SHA256为 38000eb4dec1051212313dbf4ba58dc3ad3f530fd1efa4517dfc208817c2116d。
+
+### Attention与block反向定位
+
+Native/Jittor在decoder layer24–27采集的QK matmul、softmax、context matmul共8类前向张量，每rank共32个数组均逐位相同。trace状态显示每侧均捕获全部28层QK/softmax/context调用，计数完整。Jittor对qk_right的中间梯度虽调用了retain流程，但最终grad为missing；因此24–27每层只比较到其余7类保留梯度，trace coverage gate明确为false，不能将结果表述为完整层级定位。
+
+在可比较的7类梯度中，layer27两rank全部逐位相同；layer26、25、24两rank均有差异。decoder.27边界输出梯度逐位相同，而decoder.26边界梯度最大绝对差分别为rank0 7.62939453125e-6、rank1 3.814697265625e-6，仍在既有梯度预算内。o_proj及MLP gate/up/down projection输入梯度在layer27相同，在较低层逐渐出现小差异。当前证据把首个可见差异收窄到layer27反向传播至layer26的路径，attention内部首个可见差异位于layer26；尚未分辨layer27内的MLP、归一化、残差梯度累加或具体算子。attention对拍JSON SHA256为 190835a8803e1511c3c204f82ba0885bc33bca0a327e38ecb406ed682df97947，诊断脚本版本与coverage规则保存在LAB。这里的差异清单不使用通过预算，也不改变正式gate。
+
+R131重复了每rank54/112个更新数组失败，因此f5af805中的弱标量opmath修复单独不足以解决真实Qwen3严格更新差异。当前没有真实FSDP2恢复、激活重计算、随机训练恢复、完整多库组合或合格NPU速度/显存证据。
+
+另外，R71旧现场的Native Torch在hcclCommInitRootInfoConfig阶段就因topology exchange无法连接peer而退出，nested FSDP worker未运行；这不足以归因到Jittor nested child+root实现。该场景仍需在新cohort做两runtime的fresh验证。
+
+### R131关键证据校验值
+
+source manifest SHA256为 862458f46bdad625a559781727da3c74ea00abfdb454aa03ed62d9e5af8e7ab3；prewarm-complete SHA256为 73c540fcfb3547829ac81e1e3dc376700c92bc0161b73492c00e2eeea276d75b；attempt2 Native/Jittor launcher execution receipt SHA256分别为 fb0397a840f2daa8b90a6ec7371cb948c79574721fc725316ea45d840046bc35、f400d182bac843324837a8954b0982b48e555b83d51d78f585722fdaf8069241；R131 smoke summary SHA256为 d376b6c6a9746207822e5613adbe7ce21dcf1ed1f445b7b19d1cda9c92197605。rank0/rank1预热execution SHA256分别为 b004f1d087a753f4e983da0f7cf65483b61301a0988aac82553808875c0697d0、aced039f4ee9967d41ae34ecc94cb51d5b1ecb9991854ea2ed6cf0cb2c296671。原始日志、模型、缓存、arrays和脚本均留在LAB，没有覆盖R118/R119或更早cohort。
+
+下一步保持原严格预算，针对layer27的decoder输入/输出梯度、input/post-attention layernorm、self-attention与MLP模块输出梯度及残差合并点增加采集，并修复Jittor qk_right.grad捕获缺口；定位首个具体反向差异后再改production实现和重跑完整Qwen3 gate。之后仍需做真实FSDP2新进程恢复、nested child+root HCCL、activation checkpoint与随机状态恢复、多库组合；只有相应正确性场景通过后再测性能和显存。
