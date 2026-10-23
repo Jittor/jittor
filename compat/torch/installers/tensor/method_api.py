@@ -1626,9 +1626,19 @@ def _tensor_rsub(self, other):
     return _promoting_binary(self, other, '__rsub__', True)
 
 
+def _weak_scalar_uses_low_precision_opmath(self, other):
+    if type(other) not in (int, float):
+        return False
+    native_api = get_install_context(_owner.jt).state["tensor_native_api"]
+    return _own_dtype_name(self, native_api) in ("float16", "bfloat16")
+
+
 def _tensor_mul(self, other):
     fast = _FAST_BINARY
-    if fast is not None:
+    # The C++ fast path builds a Python scalar in the tensor's dtype. Torch's
+    # weak-scalar path instead multiplies half/bfloat16 values in float32 and
+    # rounds only the result, so let the promoting implementation do that math.
+    if fast is not None and not _weak_scalar_uses_low_precision_opmath(self, other):
         out = _call_fast_binary(fast, self, other, 4)
         if out is not None:
             return out
@@ -1637,7 +1647,7 @@ def _tensor_mul(self, other):
 
 def _tensor_rmul(self, other):
     fast = _FAST_BINARY
-    if fast is not None:
+    if fast is not None and not _weak_scalar_uses_low_precision_opmath(self, other):
         out = _call_fast_binary(fast, self, other, 5)
         if out is not None:
             return out

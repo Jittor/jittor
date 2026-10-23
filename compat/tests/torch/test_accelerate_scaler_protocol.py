@@ -372,6 +372,18 @@ def test_half_weak_scalar_and_typed_scale_keep_distinct_backend_protocols():
         np.testing.assert_array_equal(_values(result), _values(typed))
 
 
+def test_bfloat16_weak_scalar_multiply_uses_float32_opmath():
+    value = torch.tensor([536., -536., 510., -510.],
+                         dtype=torch.bfloat16, device=_DEVICE)
+    scale = 1.0 / (128.0 ** 0.5)
+    expected = (value.float() * scale).to(torch.bfloat16)
+    results = (value * scale, scale * value, value.mul(scale),
+               torch.mul(value, scale), torch.multiply(value, scale))
+    for result in results:
+        assert result.dtype == torch.bfloat16
+        np.testing.assert_array_equal(_values(result), _values(expected))
+
+
 def test_public_sqrt_autocast_preserves_dtype_values_and_backward():
     p = torch.nn.Parameter(torch.tensor([.25, 1.], device=_DEVICE))
     with torch.autocast(_DEVICE, dtype=torch.bfloat16):

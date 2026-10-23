@@ -637,6 +637,56 @@ class TestTorchAutocastNumerics(cu.JittorTestCase):
             self.assertEqual(dtype_name(a.sum()), "float32")
             self.assertEqual(dtype_name(jt.exp(a)), "float32")
 
+    def test_cross_entropy_float32_policy_survives_autocast(self, device):
+        logits_np = np.array([[3.0, -2.0, 1.0], [0.5, 2.0, -3.0]],
+                             dtype=np.float32)
+        targets_np = np.array([0, 2], dtype=np.int64)
+        logits = torch.tensor(logits_np, dtype=torch.float32, requires_grad=True)
+        targets = torch.tensor(targets_np, dtype=torch.long)
+        fallback_before = int(jt.core.backend_fallback_count())
+        with torch.autocast(region_device(device), dtype=torch.bfloat16):
+            loss = torch.nn.functional.cross_entropy(
+                logits, targets, reduction="sum")
+        gradient = jt.grad(loss, [logits])[0].numpy()
+        self.assertEqual(int(jt.core.backend_fallback_count()), fallback_before)
+        shifted = logits_np - logits_np.max(axis=1, keepdims=True)
+        probabilities = np.exp(shifted)
+        probabilities /= probabilities.sum(axis=1, keepdims=True)
+        expected_loss = -np.log(probabilities[
+            np.arange(targets_np.size), targets_np]).sum()
+        expected_gradient = probabilities.copy()
+        expected_gradient[np.arange(targets_np.size), targets_np] -= 1.0
+        self.assertEqual(dtype_name(loss), "float32")
+        np.testing.assert_allclose(float(loss.item()), expected_loss,
+                                   rtol=1e-6, atol=1e-6)
+        np.testing.assert_allclose(gradient, expected_gradient,
+                                   rtol=1e-6, atol=1e-6)
+
+    def test_cross_entropy_fp32_policy_honors_global_amp_register(self, device):
+        logits_np = np.array([[3.0, -2.0, 1.0], [0.5, 2.0, -3.0]],
+                             dtype=np.float32)
+        targets_np = np.array([0, 2], dtype=np.int64)
+        logits = torch.tensor(logits_np, dtype=torch.float32, requires_grad=True)
+        targets = torch.tensor(targets_np, dtype=torch.long)
+        fallback_before = int(jt.core.backend_fallback_count())
+        with jt.flag_scope(amp_reg=jt.amp_flags.prefer_bfloat16):
+            self.assertFalse(torch.is_autocast_enabled(region_device(device)))
+            loss = torch.nn.functional.cross_entropy(logits, targets, reduction="sum")
+        gradient = jt.grad(loss, [logits])[0].numpy()
+        self.assertEqual(int(jt.core.backend_fallback_count()), fallback_before)
+        shifted = logits_np - logits_np.max(axis=1, keepdims=True)
+        probabilities = np.exp(shifted)
+        probabilities /= probabilities.sum(axis=1, keepdims=True)
+        expected_loss = -np.log(probabilities[
+            np.arange(targets_np.size), targets_np]).sum()
+        expected_gradient = probabilities.copy()
+        expected_gradient[np.arange(targets_np.size), targets_np] -= 1.0
+        self.assertEqual(dtype_name(loss), "float32")
+        np.testing.assert_allclose(float(loss.item()), expected_loss,
+                                   rtol=1e-6, atol=1e-6)
+        np.testing.assert_allclose(gradient, expected_gradient,
+                                   rtol=1e-6, atol=1e-6)
+
     def test_a_float32_region_forces_float32(self, device):
         a = jt.random((8, 8), dtype="float32").cast("float16")
         with torch.autocast(region_device(device), dtype=torch.float32):

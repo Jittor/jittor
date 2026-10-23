@@ -107,7 +107,7 @@ def _interpolate(input=None, size=None, scale_factor=None,
                            align_corners=ac)
 
 
-def _cross_entropy(input, target, weight=None, size_average=None,
+def _cross_entropy_impl(input, target, weight=None, size_average=None,
                    ignore_index=-100, reduce=None, reduction="mean",
                    label_smoothing=0.0):
     # torch: a floating-point target with the SAME shape as input is a
@@ -169,6 +169,23 @@ def _cross_entropy(input, target, weight=None, size_average=None,
     if reduction == "none":
         return loss.reshape(target.shape) if input.ndim > 2 else loss
     return loss.sum() / norm
+
+
+def _cross_entropy(input, target, weight=None, size_average=None,
+                   ignore_index=-100, reduce=None, reduction="mean",
+                   label_smoothing=0.0):
+    # Torch keeps cross_entropy in FP32. Jittor's amp_reg is global and can
+    # remain active after an accelerator model-forward autocast wrapper exits,
+    # so the CE implementation must inspect the register itself.
+    if (_jittor_dtype_name(input.dtype) == "float32"
+            and int(getattr(jt.flags, "amp_reg", 0)) != 0):
+        with jt.flag_scope(amp_reg=0):
+            return _cross_entropy_impl(
+                input, target, weight, size_average, ignore_index, reduce,
+                reduction, label_smoothing)
+    return _cross_entropy_impl(
+        input, target, weight, size_average, ignore_index, reduce,
+        reduction, label_smoothing)
 
 
 def _ctc_loss(log_probs, targets, input_lengths, target_lengths, blank=0,
