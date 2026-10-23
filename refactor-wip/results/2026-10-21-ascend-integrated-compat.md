@@ -598,10 +598,24 @@ R67已完成双rank单卡串行预热，但Native driver两个worker都在Torch/
 
 R69在私有 dev 环境、独立冷 JITTOR_HOME/XDG cache 下串行构建并运行CPU探针；绑定提交 `9390fa0e84de651e7e1b01de4d142e04d4333f8b`，探针相关生产文件哈希见LAB `activation-checkpoint-cpu-r69/preflight.json`。通过 `torch.utils.checkpoint.checkpoint(fn, x, use_reentrant=False)` 计算 $x^2$ 后反向，输出梯度为 $(4,-6)$，与解析值一致；Python callback在forward后调用1次、backward后仍为1次。shim同时发出warning，说明直接运行函数、不保留checkpoint重算或节省activation内存。由此确认当前API的数值梯度路径可用但Python函数级backward重算未实现。Jittor引擎另有基于图liveness的内部释放/重建机制；此探针没有测量该机制，亦未测NPU峰值显存或模型级checkpoint。完整日志和摘要位于LAB `activation-checkpoint-cpu-r69/`。
 
+### 2026-10-23 R70/R71：FSDP2 复杂拓扑 harness 修正与保留失败
+
+R70 的临时验证脚本在静态检查时发现缩进错误，未启动 NPU worker。修正后的 R71 先按 rank 顺序完成 NPU3/NPU6 串行预热；一次 Native 双卡运行随后因结果序列化变量被覆盖而未生成有效报告，该失败与完整输出保留。修正序列化后，Native 在“子模块分别 fully_shard 后再包根模块”的嵌套拓扑首个子模块 unshard 时触发 HCCL 拓扑错误（rank num 为 2、topology rank list size 为 1），没有数值结果。该拓扑不作为兼容通过证据，也没有通过改比较预算掩盖失败；原始材料保存在 LAB distributed/fsdp2-complex-r70/ 与 distributed/fsdp2-complex-r71/，R72 改用 root-only FSDP2 包装继续定位。
+
+### 2026-10-23 R72：root-only FSDP2 视图拓扑对拍及 BF16 反向差异
+
+R72 使用分支式 LoRA 形状模型、非连续输入叶 leaf[:, ::2] 与 root-only FSDP2，在物理NPU3/6分别完成 Native 和 Jittor 双 rank full；两侧各自输出、反向及 SGD 阶段正常结束。跨运行时按既定 atol=2e-6、rtol=2e-5 比较324个数组/标量：FP32 compute/FP32 input 通过；BF16 compute/FP32 input 与 BF16 compute/BF16 input 共16个数组超预算，集中在输入叶梯度、base.bias、base.weight 和 lora_b.weight；72项 SGD 更新公式检查通过。预测、loss、head梯度逐位相同。BF16 输入梯度最大绝对差为一个 BF16 ULP（1.52587890625e-5），各参数差异及原始数组见 LAB distributed/fsdp2-complex-r72/cross-runtime-comparison.json。本轮将差异定位到 tanh backward 的低精度中间舍入；未改数值阈值，R72整体保留为 FAIL。
+
+### 2026-10-23 R73/R74：ACL 低精度 tanh opmath 修复与 FSDP2 复验
+
+R73 在直接 BF16 tanh primitive 上以相同输入比较 Native torch_npu 与 Jittor ACL。前向输出逐位相同，但64个梯度值中18个不同、最大绝对差为0.001953125。候选 FP32 opmath 后仅舍入一次与 Native 梯度逐位相同，逐步 BF16 算术则与修复前 Jittor 完全相同；该探针确定反向精度差异，并保留完整运行日志与数组于 LAB diagnostics/tanh-low-precision-r73/。据此将 src/ops/unary_op.cc 中低精度 tanh backward 的 FP32 opmath 条件从 CPU 扩展至 ACL；CUDA 路径维持原算术分支。计算从已保存且舍入后的 tanh 输出构造反向图，避免用重算 cosh 改变低精度导数，并保留更高阶梯度图。
+
+R74 使用当前修改后3336文件源码清单，manifest SHA256 2847d54980320456bc8086a678dac2f242bf4c49a5c19f17a8886ebf2e479a97，源码仅有上述 tanh 文件工作树改动。串行rank预热和NPU3上的直接BF16 tanh回归均通过；直接 primitive 输出与Native参考逐位相同，梯度也逐位相同。随后 Native torch_npu 与 Jittor shim 在物理NPU3/6完成 root-only FSDP2 分支模型 full：FP32 compute/FP32 input、BF16 compute/FP32 input、BF16 compute/BF16 input。输出、loss、非连续输入叶全梯度、所有参数完整梯度及一步 SGD 更新共324个跨runtime数组/标量在原 atol=2e-6、rtol=2e-5 下全部通过（mismatch=0）；rank终态设备映射正确、源码前后不变、MPI未加载，Jittor fallback_delta=0。终态和比较结果位于 LAB distributed/fsdp2-complex-r74/ 的 cross-runtime-comparison.json、两侧 full/rank*.json 与 rank*-process-final.json。R74 关闭该复杂分支/视图 fixture 中 R72 的 BF16 梯度差异，不外推至 FP16、真实模型 FSDP2、FSDP2 fresh-process 恢复、checkpoint 重算或性能/显存。
+
 ### 按原计划仍需完成
 
-1. **扩展 FSDP2 正确性范围。** R68关闭了最终提交主树的小型Linear fixture三精度双卡梯度/SGD验收；继续覆盖真实模型或更复杂参数视图/梯度拓扑、分片布局、优化器状态与fresh-process恢复，保持Native/Jittor隔离和NPU admission。
+1. **扩展 FSDP2 正确性范围。** R74 已在 root-only FSDP2 分支/非连续视图 fixture 上关闭 R72 的三精度输入梯度与参数更新差异；仍需覆盖真实模型、更多分片布局、优化器/调度器状态及 fresh-process 恢复。R71 的嵌套 child+root 包装失败仍保留，不据 R74 外推。
 2. **完善 activation checkpoint。** R69 CPU shim探针确认 `torch.utils.checkpoint.checkpoint` 的函数只调用一次，梯度数值通过但没有Python函数级backward重算；FSDP2 checkpoint wrapper/apply_activation_checkpointing仍未重写模型。需先确定可正确实现的API边界，再比较普通/重计算路径的完整输出与梯度，记录真实重算证据，并在空闲NPU上测峰值显存。R69不是NPU显存或模型级支持证据。
-3. **补随机训练恢复与确定性。** 覆盖真实Qwen场景中的随机sampler、worker预取、多worker和显式generator的fresh-process恢复；处理Native/Jittor deterministic policy不匹配，不宣称随机流相同。
+3. **补随机训练恢复与确定性。** 覆盖真实Qwen场景中的随机sampler、worker预取、多worker和显式generator的fresh-process恢复；处理Native/Jittor deterministic policy不匹配，不宣称随机流相同。R65与R56只覆盖各自既有顺序采样/dropout fixture 的恢复边界。
 4. **补齐日常生态组合矩阵。** 将Transformers、Tokenizers、PEFT、Accelerate、safetensors的数据加载、训练包装、梯度累加、保存/重载与错误路径映射到当前源码；已有真实Qwen主链不替代所有组合。
 5. **做正确性通过场景的配对性能验收。** 对相同模型、数据、dtype、序列长度和更新配置报告吞吐/延迟、峰值显存及稳定性，区分首次JIT、首步和稳态；现在仍没有合格NPU性能结论。

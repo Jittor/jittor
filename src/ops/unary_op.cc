@@ -1140,12 +1140,13 @@ VarPtr UnaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
         return make_binary(dout, make_unary(x, ns_sinh), ns_multiply);
     // Differentiate the saved, rounded output. Recomputing cosh(x) both
     // changes the low-precision derivative and overflows for saturated FP16
-    // inputs. CPU low-precision kernels use FP32 opmath; CUDA follows the
-    // low-precision scalar arithmetic at each operation. The ordinary graph
-    // through out preserves higher-order derivatives on both backends.
+    // inputs. CPU and ACL use FP32 opmath for reduced-precision tanh backward;
+    // CUDA retains its existing low-precision scalar arithmetic. The ordinary
+    // graph through out preserves higher-order derivatives on both backends.
     if (ns == ns_tanh) {
         bool low_precision = x->dtype() == ns_float16 || x->dtype() == ns_bfloat16;
-        bool promote = low_precision && execution_backend() == BackendId::Cpu;
+        bool promote = low_precision && (execution_backend() == BackendId::Cpu
+                                         || execution_backend() == BackendId::Acl);
         VarPtr value = promote ? make_unary(out, ns_float32) : VarPtr(out);
         VarPtr incoming = promote ? make_unary(dout, ns_float32) : VarPtr(dout);
         auto square = make_binary(value, value, ns_multiply);
