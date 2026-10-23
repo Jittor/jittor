@@ -639,3 +639,9 @@ R77关闭当前源码上合成linear fixture的Accelerate BF16 FSDP2 full/prefix
 3. **随机训练恢复与确定性。** R56/R65只覆盖既有顺序采样和各自dropout训练状态恢复。还需验证随机sampler、数据增强、多worker预取、显式generator及Qwen fresh-process恢复，并明确Native deterministic=true与Jittor UNIMPLEMENTED_FALSE的差异；目前不能声称跨后端随机流一致。
 4. **日常生态组合矩阵。** 继续覆盖Transformers、Tokenizers、PEFT、Accelerate和safetensors在数据处理、训练包装、梯度累加、保存/加载、错误路径中的组合；真实Qwen单卡主链和已有FSDP2 fixture不代表所有常用组合。
 5. **正确性通过后的性能/显存验收。** 对已通过的相同模型、数据、dtype、序列长度和更新配置成对测量吞吐/延迟、峰值显存及稳定性，把首次JIT、首步和稳态分开报告。目前仍没有合格的NPU性能或显存结论。
+
+### 2026-10-23 R78：HF Trainer FSDP2 配置探针（CPU-only）
+
+R78以当前提交 `327f6d4bfbc7add8630c3354068caf4067cfe258` 和已安装 Transformers 4.56.2 / Accelerate 1.10.1 做配置探针。构造 `TrainingArguments(fsdp="full_shard auto_wrap", bf16=True, fsdp_config={"transformer_layer_cls_to_wrap": ["Qwen3DecoderLayer"], "use_orig_params": true, "sync_module_states": true, "cpu_ram_efficient_loading": false})` 后，Accelerate 插件报告 `fsdp_version=2`，auto-wrap和transformer类映射均正确。验证同时确认：`TrainingArguments`本身设置`ACCELERATE_USE_FSDP`、wrap策略、类名和`use_orig_params`等环境项，但不会设置`FSDP_VERSION`；实际FSDP2 launcher必须显式设置`FSDP_VERSION=2`。
+
+原始JSON位于LAB `real-model/qwen3-06b-fsdp2-trainer-r78/config-probe-r78.json`。这是无process group、无模型加载、无NPU计算的CPU侧配置验证，只解决后续Trainer入口配置问题；真实Qwen3/PEFT双卡FSDP2训练、梯度/更新对拍和fresh-process恢复尚未启动，R78不作为FSDP2功能通过证据。
