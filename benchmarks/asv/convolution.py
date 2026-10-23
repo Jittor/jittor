@@ -146,6 +146,11 @@ class Conv2dBenchmarks:
         )
         self._run()
         synchronize(backend_name, self.backend, device)
+        if backend_name == "jittor" and mode == "forward_backward":
+            # Backward may release the output's allocation after consuming it.
+            # Materialize it during setup, outside the timed benchmark, before
+            # checking the actual output placement and comparing the oracle.
+            self.output.sync()
         self._assert_device()
         _assert_result(
             as_numpy(backend_name, self.output),
@@ -156,6 +161,8 @@ class Conv2dBenchmarks:
         # Warm a second iteration to exercise graph reuse before ASV times it.
         self._run()
         synchronize(backend_name, self.backend, device)
+        if backend_name == "jittor" and mode == "forward_backward":
+            self.output.sync()
         self._assert_device()
 
     def _assert_device(self):
