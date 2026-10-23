@@ -644,6 +644,10 @@ class Module:
         setattr(self, name ,module)
         return self
 
+    def register_module(self, name, module):
+        """Torch's public spelling for adding or replacing a child module."""
+        return self.add_module(name, module)
+
     @property
     def _modules(self):
         attributes = vars(self)
