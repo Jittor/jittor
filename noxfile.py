@@ -1821,16 +1821,16 @@ _CPU_PROBE = (
 def _cpu_gate_env(session):
     """The environment both CPU tiers run in, and what it refuses to inherit."""
     _root, env = _session_env(session, "cpu")
-    # GitHub's checkout action trusts the workspace through the runner's global
-    # Git config.  The isolated gate replaces HOME, so child Git commands no
-    # longer see that entry and reject the checkout when its owner differs from
-    # the runner uid.  Trust only this checkout for the CPU gate's subprocesses;
-    # do not broaden safe.directory to other repositories or all paths.
+    # safe.directory is multi-valued: adding this checkout through the
+    # environment does not replace an inherited global/system wildcard. Reset
+    # that list first, then trust only this checkout for CPU-gate subprocesses.
     env.update(
         {
-            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_COUNT": "2",
             "GIT_CONFIG_KEY_0": "safe.directory",
-            "GIT_CONFIG_VALUE_0": str(REPO_ROOT),
+            "GIT_CONFIG_VALUE_0": "",
+            "GIT_CONFIG_KEY_1": "safe.directory",
+            "GIT_CONFIG_VALUE_1": str(REPO_ROOT),
         }
     )
     # Nox overlays this mapping on the parent environment, so removing the key

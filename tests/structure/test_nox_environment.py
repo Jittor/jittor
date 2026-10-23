@@ -12,13 +12,18 @@ def test_cpu_gate_trusts_only_its_checkout_with_isolated_home(monkeypatch, tmp_p
     env = module["_cpu_gate_env"](session)
 
     assert env["HOME"] != os.environ.get("HOME")
-    assert env["GIT_CONFIG_COUNT"] == "1"
+    assert env["GIT_CONFIG_COUNT"] == "2"
     assert env["GIT_CONFIG_KEY_0"] == "safe.directory"
-    assert env["GIT_CONFIG_VALUE_0"] == str(module["REPO_ROOT"])
+    assert env["GIT_CONFIG_VALUE_0"] == ""
+    assert env["GIT_CONFIG_KEY_1"] == "safe.directory"
+    assert env["GIT_CONFIG_VALUE_1"] == str(module["REPO_ROOT"])
     # Nox uses None entries to remove inherited variables; make that
-    # overlay concrete before passing it to subprocess.run.
+    # overlay concrete before passing it to subprocess.run. A global wildcard
+    # must not survive the empty multi-value reset above.
     owner_probe = {key: value for key, value in env.items() if value is not None}
     owner_probe["GIT_TEST_ASSUME_DIFFERENT_OWNER"] = "1"
+    global_config = Path(env["HOME"]) / ".gitconfig"
+    global_config.write_text("[safe]\n\tdirectory = *\n", encoding="utf-8")
     trusted = subprocess.run(
         ["git", "-C", str(module["REPO_ROOT"]), "rev-parse", "--show-toplevel"],
         check=True,
