@@ -6,10 +6,10 @@
 | --- | --- | --- | --- | --- |
 | ASC-01 | 独立环境、CPU/ACL 串行构建 | 最终MAIN123 structure1430P2S/layoutP；core压力超时保留 | coord | 最终123路径前后frozen exact，1432不同case与121逐node相同；97.py+1.pyi AST3.7P、configuredRuff新增0/减少12。raw core121实际46P9S1原压力测试300秒超时，未删除/改规模/放宽 |
 | ASC-02 | 双解释器小模型输出/全梯度 | CPU及真实NPU八模型完整对拍通过 | ecosystem | r10沿用规范overlay、source65复验八模型271参数+2输入全梯度；25新阶段及24份明确复用的不可变native参考共49验证阶段全部通过，零回落；见综合报告 |
-| ASC-03 | 多库训练和fresh-process恢复 | R135单卡full/resume通过；Trainer标准FSDP2 policy bridge已加，CPU runner合同18/18通过；真实双卡接线复验待运行，R139更新gate仍失败 | ecosystem | R141 CPU合约不代表NPU验证；R139显式plugin赋值下104/224个LoRA-B更新数组超原预算，layer25反向待定位；FSDP2 fresh恢复仍待，详见综合报告 |
+| ASC-03 | 多库训练和fresh-process恢复 | R145/R146真实Qwen3标准Trainer双卡接线生效；logits、梯度、初始参数通过，LoRA-B更新104/224数组仍超原预算；FSDP2双卡fresh恢复未验 | ecosystem | AdamW公式复核最大残差9.87e-10但两侧梯度范数/clip系数不同；R146第26层Q/K/V .input为共享梯度累计，根因未定，qk_right.grad仍缺失；详见综合报告 |
 | ASC-04 | 共享真实模型推理和LoRA、输入梯度兼容 | 当前提交 Qwen3-0.6B BF16 LoRA full/prefix/fresh-resume通过；当前源码168数组输入梯度矩阵逐位一致 | coord | R65真实Qwen Native/Jittor训练/保存/重载/恢复交叉对拍2187项0失败、两侧恢复933状态项exact、梯度分段各1136项通过。R75绑定bad478395、3336文件manifest，当前树对不可变Native oracle比较168数组/5760元素全部bit-exact，fallback0，原预算未改。R43历史oracle仅作为只读参考，不跨冻结源码外推随机策略或性能；详见综合报告 |
-| ASC-05 | HCCL/DDP/FSDP2两卡场景 | 标准Trainer FSDP2 mixed policy bridge已实现并通过CPU runner合同；910B3双卡clean-monitor复验、恢复及nested HCCL仍待 | distributed | CPU runner 18 passed/0 skipped；R139真实Qwen3双卡仍有104/224更新数组超原预算且Native监控有gap；R140固定upstream局部matmul VJP exact但未解释全图upstream差异。R141实际NPU/正确性未验证，详见综合报告 |
-| ASC-06 | 配对速度/峰值显存/稳定性 | 持久训练控制器CPU资格通过；NPU性能未验收 | coord | CPU735完整状态/252全梯度及736恢复state exact、20host合同P。1.7B实际18交替calls后依指令停止并清空自有进程，rc-2/acceptedfalse，generation steady/decode未完成；4Bperf未运行。R68是正确性fixture且带预热/启动开销，未作为吞吐、延迟或显存证据，不给NPU性能结论 |
+| ASC-05 | HCCL/DDP/FSDP2两卡场景 | R146真实Qwen3 Trainer FSDP2双卡阶段监控干净、映射5/6正确、Jittor fallback=0；严格更新gate仍失败，最终验收未关闭 | distributed | R145 Native monitor gap=1；R146 Native/Jittor gap=0但104/224更新数组超预算；nested child+root HCCL、训练恢复和目标dtype组合仍待；详见综合报告 |
+| ASC-06 | 配对速度/峰值显存/稳定性 | NPU性能未验收；R145/R146正确性更新gate未通过，阶段执行耗时不作性能结论 | coord | CPU735完整状态/252全梯度及736恢复state exact、20host合同P。1.7B实际18交替calls后依指令停止并清空自有进程，rc-2/acceptedfalse，generation steady/decode未完成；4Bperf未运行。仅在对应正确性gate通过后再测NPU速度、峰值显存和稳定性 |
 
 2026-10-21 用户要求暂停新增修改与实验启动，先推送全部工作树独立快照；Day2–3仍未通过。当前交接及新机器推荐分支见[工作区快照交接](../results/2026-10-21-workspace-snapshot-handoff.md)。已运行T5 full允许正常结束，supervisor已暂停后续stage。
 

@@ -910,3 +910,32 @@ R140 cohort位于 `real-model/qwen3-06b-qk-matmul-vjp-r140-card3/`，绑定与R1
 真实 Transformers NPU 训练尚未验证此接线。隔离执行 compat/tests/torch/test_ecosystem_runner_contract.py，设置 JITTOR_TORCH_SHIM=1、清空 ASCEND_RT_VISIBLE_DEVICES，并将 HOME、JITTOR_HOME、XDG_CACHE_HOME、TMPDIR 全部指向新 LAB 验证目录 trainer-policy-bridge-20261024。首次 Jittor core 244/244 编译约714秒后，runner contract 18 passed、0 skipped、退出码0；完整日志位于 validation/trainer-policy-bridge-20261024/runner-contract.log，退出码记录为 runner-contract.exit-code。该结果只证明 CPU runner/注册合同与环境隔离，不证明 NPU 实际 plugin policy、FSDP2 更新、梯度或恢复正确，也不覆盖 R139 的失败门槛。新缓存保留在该 LAB 目录；此前误触到的既有用户 Jittor cache未清理。
 
 下一步应以本次代码提交冻结新 source manifest，复制 R139 的真实模型协议建立全新 cohort：Jittor 侧移除 Trainer 构造后的 harness policy 赋值，并在 train 前后断言 TrainingArguments 配置自动生效；Native 侧仅为对拍显式设置等价 plugin policy。启动前通过 driver 对物理NPU fresh admission；若占用则不启动。该cohort仍需保留完整输出/梯度/初始参数/更新的原预算、零回落、物理映射及无监控缺口要求。R139更新gate和R140全图反向定位状态保持不变。
+
+
+## 2026-10-24 R145：标准 Trainer 双卡首步完整对拍
+
+R145 cohort 位于 LAB `real-model/qwen3-06b-fsdp2-trainer-r145-shared-cache-paired-dual56/`，绑定分支 `codex/ascend-integrated-compat-20261021`、源码提交 `4ad7e5a738d1886111b81e4ac811f135be81e4f0`，source manifest SHA256 为 `97caadcba617299b34fa20a2991a7bc9f5121251b49ba512452736de5d03b0a1`。Native PyTorch 与 Jittor shim 使用同一真实 Qwen3-0.6B BF16 LoRA 输入、权重、初始化参数、Transformers 4.56.2/Accelerate 1.10.1/PEFT 0.17.1/Tokenizers 0.22.2/safetensors 0.8.0 组合，在物理NPU5、6分别完成标准HF Trainer FSDP2一个优化步。Trainer policy bridge 在train前后都报告实际生效的 BF16 参数、FP32 reduce、BF16 输出配置，Jittor侧没有harness后置赋值；两侧每rank112个LoRA参数、global_step=1、train_loss均为3.8984375。Jittor实际参数留在各进程的NPU设备，driver映射rank0/1到物理卡5/6，fallback增量为0。
+
+Native阶段returncode为0、耗时534.17秒，但monitor gap=1且driver标记degraded；Jittor阶段returncode为0、耗时172.67秒、monitor gap=0。两阶段均无foreign occupant。Native的npu-smi rank1汇总曾同时看到[6,5]，driver身份记录仍将该rank绑定到分配卡6，故本cohort不能作为clean-monitor最终验收。阶段耗时仅为执行记录，因参数更新gate失败，不作速度或显存结论。
+
+按既有预算比较两组logits、224组梯度、224组初始参数及224组更新数组：logits、原始参数梯度、初始参数全部通过；更新gate失败，每rank52/112、合计104/224个LoRA-B数组超预算，最大绝对差为 `5.9993762988597155e-5`，最大预算比29.9879。门槛仍为logits `atol=0.005, rtol=0.03`、梯度 `0.01/0.05`、参数更新 `2e-6/2e-5`，未作放宽。每rank有1126个LoRA-B梯度值出现符号差异，差异集中在接近零的值；这不是单独的根因证明。CPU重算保留的NPU梯度、初始参数和更新后数组显示，各运行时的更新都符合各自的首步AdamW公式，最大残差 `9.8690e-10`，大于 `1e-8` 的残差为0；Native/Jittor梯度范数分别为7.25463和7.23548，clip系数分别为0.137843和0.138208。因此AdamW公式实现未解释跨运行时更新偏差，梯度及全局裁剪差异仍需追踪。比较JSON SHA256为 `2c3b108db7a036caff5f9942b564d305125b52e8ac80b97a7774dbe46fa958a3`，公式复核JSON SHA256为 `97d249aebcc74fe5d71b22e0dceb348fffba940c7d41dd42c7df9f3d8ed3c6fa`。
+
+## 2026-10-24 R146：第25/26层反向采集与差异收窄
+
+R146 cohort 位于 LAB `real-model/qwen3-06b-fsdp2-trainer-r146-layer25-linear-vjp-dual56/`，source manifest与R145逐字节相同。只增加第25层投影输出cotangent的观察hook，并在第26层采集Q/K/V投影输出与输入梯度；没有修改模型计算或门槛。Native、Jittor双卡阶段均returncode=0、monitor gap=0、degraded=false、foreign occupant为空，driver映射rank0/1到物理NPU5/6；Jittor fallback增量为0。阶段耗时分别373.15秒和68.68秒，只记作诊断执行记录。四个rank均完成一个Trainer优化步，policy在train前后断言成功。
+
+R146沿用R145相同的严格对拍结果：logits 2组、梯度224组、初始参数224组均通过，更新104/224个LoRA-B数组仍失败，最大绝对差 `5.9993762988597155e-5`、最大预算比29.9879。cross-runtime comparison SHA256为 `87445d023d6998ac30d66a2c3b4eb97a01650b6c548d12b04c2385347d1f6339`。Jittor的 `trace.layer24..27.qk_right.grad` 仍缺失，因此attention内部梯度覆盖仍未闭合。
+
+第25层探针在rank0观察到o_proj/down_proj输出cotangent最大差分别为 `2.3842e-7` 和 `1.1921e-7`；rank1分别为 `7.6294e-6` 和 `4.7684e-7`。对应输入梯度差异仍低于诊断预算，但rank1的gate/up输入梯度最大绝对差为 `1.5259e-5`。第26层Q/V投影输出cotangent在rank0逐位相同，rank1的V逐位相同、Q最大差 `2.9802e-8`；Q/K/V的 `.input` hook数组在每个运行时和rank内彼此逐位相同，却跨运行时有小差异（rank0最大 `9.5367e-7`、rank1最大 `2.3842e-7`）。这确认这些hook读到的是共享hidden-state梯度累计值，不能把它们解释成Q/K/V各自的branch-local VJP。当前证据把差异进一步指向第26层反传中的共享梯度累计/上游路径，但还没有分离具体分支、归一化、残差或累加顺序，也不能归因于单个matmul kernel。layer25诊断JSON SHA256为 `e3a430ad3ee837ab390318b490b5139c5f312f5a1cc12f909290dd5d76a07276`；layer26 localization JSON SHA256为 `59ac1b4902698d78460f5fefea27275c1f252d6326979cc5ac4c9ca8911560c4`。
+
+R145/R146都证明标准Trainer policy bridge已在真实双卡训练中生效，但都没有通过LoRA参数更新gate。下一轮首先保留当前严格预算，补做第26层Q/K/V branch-local VJP重放及输入梯度累计顺序诊断，并关闭qk_right梯度采集缺口；确认具体差异后才改生产实现，再跑新cohort完整输出、梯度、参数更新与恢复对拍。R145 Native监控缺口意味着最终clean-monitor主树双卡验收仍需另建cohort；R146虽然监控干净，更新gate仍失败，不能替代最终正确性验收。
+
+## 按原计划截至R146仍需完成
+
+1. **关闭真实Qwen3首步参数更新差异。** R145和R146均为104/224个LoRA-B更新数组超原门槛；向前的logits、原始梯度、初始参数均通过。需要沿第26层共享hidden-state梯度、Q/K/V分支、归一化与梯度累计顺序继续定位，补齐 `qk_right.grad` 捕获，修复后按原预算重跑。
+2. **干净的最终主树双卡FSDP2验收。** R146两卡monitor干净但严格更新失败；R145 Native有monitor gap。需要在最终冻结主树上做Native/Jittor各自无监控缺口、正确物理映射、零回落的完整复验，并包含保存及新进程恢复的状态核验。
+3. **补全dtype与梯度组合。** 当前主树合成Linear的部分FP32/BF16组合历史通过不能外推到真实Qwen3。仍需按目标矩阵验证FP32和混合精度输入梯度差异，覆盖真实模型与目标FSDP2配置。
+4. **FSDP2训练恢复及多库日常场景。** 验证双卡fresh-process恢复中的LoRA/模型参数、Adam状态、scheduler、数据游标及下一次更新；覆盖Transformers、Tokenizers、PEFT、Accelerate、safetensors的数据处理、梯度累加、Trainer保存/加载和失败路径。已有Jittor LoRA保存/新进程恢复证据不能替代原生Torch同模型交叉验证。
+5. **激活重计算与随机训练恢复。** 检查checkpointed block是否实际重计算，对拍输出、梯度、更新、恢复；覆盖随机sampler、generator、多worker预取和确定性策略，并核对新进程随机状态恢复。
+6. **nested child+root HCCL。** R71只停在Native communicator初始化，不足以判断实现；仍需建立新cohort分别验证Native和Jittor。
+7. **速度、峰值显存与稳定性。** 只在各自正确性gate通过后，对同一模型、输入、精度和FSDP配置开展配对测量。R145/R146的阶段耗时不作为性能结论，目前没有合格的NPU性能结果。
