@@ -788,6 +788,18 @@ struct VarHolder {
         return new VarHolder(var->input()->input(i));
     }
 
+    // Every input of the producer, read in one call; empty once the var has
+    // executed. Two `_input` calls are two graph entries, and leaving the first
+    // may submit an auto-flushed batch that executes the var before the second.
+    // @pyjt(_inputs)
+    inline vector<VarHolder*> _inputs() {
+        vector<VarHolder*> inputs;
+        if (var->is_finished()) return inputs;
+        for (Var* input : var->input()->inputs())
+            inputs.push_back(new VarHolder(input));
+        return inputs;
+    }
+
     /* Add dependency, make var computed after vars
     */
     // @pyjt(_add_dependency)
