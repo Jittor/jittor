@@ -1,5 +1,6 @@
 """FSDP2 parameter metadata, sharding, and forward lifecycle."""
 
+import contextlib
 import types
 import sys
 
@@ -336,6 +337,35 @@ _compute_shard = _storage._compute_shard
 _cast_floating_tree = _storage._cast_floating_tree
 
 
+def _fsdp_forward_amp_scope(policy):
+    """Apply the FSDP compute dtype to floating ops inside its forward.
+
+    Parameters that are outside this FSDP state (for example, root-owned
+    weights around an auto-wrapped transformer layer) can remain FP32 while
+    their inputs have already been cast to the policy dtype. Mirror the
+    forward compute preference for those mixed operands, without changing the
+    optimizer's FP32 master shards or leaking the flag past this module call.
+    """
+    if not getattr(policy, "cast_forward_inputs", True):
+        return contextlib.nullcontext()
+    param_dtype = getattr(policy, "param_dtype", None)
+    target = _jittor_dtype_name(param_dtype) if param_dtype is not None else None
+    if target == "bfloat16":
+        requested = jt.amp_flags.prefer_bfloat16
+    elif target == "float16":
+        requested = jt.amp_flags.prefer16
+    else:
+        return contextlib.nullcontext()
+    precision_mask = (
+        jt.amp_flags.prefer32
+        | jt.amp_flags.prefer16
+        | jt.amp_flags.prefer_bfloat16
+    )
+    current = int(jt.flags.amp_reg)
+    amp_reg = (current & ~precision_mask) | requested
+    return jt.flag_scope(amp_reg=amp_reg)
+
+
 def _unshard_module_params_impl(module):
     state = getattr(module, "_fsdp_state", None)
     if state is None or not getattr(state, "true_fsdp_initialized", False):
@@ -433,7 +463,8 @@ def _execute_with_true_fsdp(module, orig_execute, *args, **kwargs):
             kwargs = _cast_floating_tree(kwargs, target)
         _unshard_module_params(module)
         try:
-            out = orig_execute(*args, **kwargs)
+            with _fsdp_forward_amp_scope(policy):
+                out = orig_execute(*args, **kwargs)
             entries = getattr(state, "true_fsdp_params", ())
             output_dtype = getattr(policy, "output_dtype", None)
             if output_dtype is not None:

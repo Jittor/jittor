@@ -399,24 +399,33 @@ class autocast:
         return self._cache_enabled
 
     def __enter__(self):
+        previous_amp_reg = int(getattr(jt.flags, 'amp_reg', 0))
         self._saved.append((autocast_is_enabled(self.device),
                             autocast_configured_dtype(self.device),
-                            autocast_cache_enabled()))
+                            autocast_cache_enabled(), previous_amp_reg))
         set_autocast_dtype_state(self.device, self.fast_dtype)
         set_autocast_enabled_state(self.device, self._enabled)
         autocast_increment_nesting()
         set_autocast_cache_enabled_state(self._cache_enabled)
+        # amp_reg is process-wide, and FSDP may set a compute preference
+        # without opening an autocast region. An explicit disabled region must
+        # still suppress that preference when no other device's autocast is
+        # active, then restore the exact register value on exit.
+        if not self._enabled and not autocast_any_enabled():
+            jt.flags.amp_reg = 0
         return self
 
     def __exit__(self, *exc):
         if not self._saved:
             return False
-        prev_enabled, prev_dtype, prev_cache = self._saved.pop()
+        prev_enabled, prev_dtype, prev_cache, previous_amp_reg = self._saved.pop()
         if autocast_decrement_nesting() == 0:
             clear_autocast_cache()
         set_autocast_dtype_state(self.device, prev_dtype)
         set_autocast_enabled_state(self.device, prev_enabled)
         set_autocast_cache_enabled_state(prev_cache)
+        if not autocast_any_enabled():
+            jt.flags.amp_reg = previous_amp_reg
         return False
 
     def _fresh(self):

@@ -634,7 +634,7 @@ R77关闭当前源码上合成linear fixture的Accelerate BF16 FSDP2 full/prefix
 
 ### 按原计划仍需完成
 
-1. **真实模型 FSDP2 与恢复。** R65已完成真实Qwen3-0.6B BF16 LoRA Native/Jittor单卡full、梯度/参数更新、保存重载及fresh-process prefix/resume全流程交叉对拍；这项早先标记的原生训练对拍已关闭。R68/R74在最终源码双卡root-only Linear/LoRA分支和非连续视图fixture上通过三精度梯度/SGD，R77又通过当前源码Accelerate BF16 FSDP2 synthetic full与Jittor fresh-process恢复。仍需把真实Qwen/PEFT/Accelerate链路放入真实FSDP2分片场景，验证模型、optimizer/scheduler状态及恢复；R71 nested child+root FSDP2 HCCL拓扑错误仍未修复，R76也没有覆盖FP16 FSDP2。
+1. **真实模型 FSDP2 与恢复。** R65已完成真实Qwen3-0.6B BF16 LoRA单卡full、梯度/参数更新、保存重载及fresh-process prefix/resume对拍；R77完成当前源码synthetic Accelerate BF16 FSDP2 full与恢复。R90/R92/R96的真实Qwen3-0.6B BF16 PEFT/Trainer双卡Native FSDP2 one-step均通过；R91/R93/R96的Jittor FSDP2也完成one-step且fallback=0，但Native/Jittor全输出、梯度和参数更新严格对拍失败，初始LoRA参数与样本一致。R96显示首个可见差异在首层attention context（进入o_proj前），并向后续层放大；仍需定位QK matmul/softmax/context matmul差异、修复后重新通过数值gate，再补真实模型fresh-process FSDP2恢复。R71 nested child+root HCCL错误仍未修复，R76也未覆盖FP16 FSDP2。
 2. **激活重计算。** R69证明当前checkpoint shim不会因Python checkpoint函数而在backward重新执行，也没有模型包装与NPU显存收益证据。需落实支持边界或实现路径，对普通和重计算模型比较完整输出、梯度及参数更新，再采集真实NPU峰值显存。
 3. **随机训练恢复与确定性。** R56/R65只覆盖既有顺序采样和各自dropout训练状态恢复。还需验证随机sampler、数据增强、多worker预取、显式generator及Qwen fresh-process恢复，并明确Native deterministic=true与Jittor UNIMPLEMENTED_FALSE的差异；目前不能声称跨后端随机流一致。
 4. **日常生态组合矩阵。** 继续覆盖Transformers、Tokenizers、PEFT、Accelerate和safetensors在数据处理、训练包装、梯度累加、保存/加载、错误路径中的组合；真实Qwen单卡主链和已有FSDP2 fixture不代表所有常用组合。
@@ -645,3 +645,37 @@ R77关闭当前源码上合成linear fixture的Accelerate BF16 FSDP2 full/prefix
 R78以当前提交 `327f6d4bfbc7add8630c3354068caf4067cfe258` 和已安装 Transformers 4.56.2 / Accelerate 1.10.1 做配置探针。构造 `TrainingArguments(fsdp="full_shard auto_wrap", bf16=True, fsdp_config={"transformer_layer_cls_to_wrap": ["Qwen3DecoderLayer"], "use_orig_params": true, "sync_module_states": true, "cpu_ram_efficient_loading": false})` 后，Accelerate 插件报告 `fsdp_version=2`，auto-wrap和transformer类映射均正确。验证同时确认：`TrainingArguments`本身设置`ACCELERATE_USE_FSDP`、wrap策略、类名和`use_orig_params`等环境项，但不会设置`FSDP_VERSION`；实际FSDP2 launcher必须显式设置`FSDP_VERSION=2`。
 
 原始JSON位于LAB `real-model/qwen3-06b-fsdp2-trainer-r78/config-probe-r78.json`。这是无process group、无模型加载、无NPU计算的CPU侧配置验证，只解决后续Trainer入口配置问题；真实Qwen3/PEFT双卡FSDP2训练、梯度/更新对拍和fresh-process恢复尚未启动，R78不作为FSDP2功能通过证据。
+
+
+## 2026-10-23 R89–R97：真实 Qwen3 BF16 PEFT FSDP2 对拍与 attention 定位
+
+### 源码和已通过的检查
+
+本组运行绑定分支 `codex/ascend-integrated-compat-20261021`、基线提交 `d2748c52ade0d55b2215c06084efaeb736115613`，3336 个 tracked 文件源清单 SHA256 为 `5de7ef03c7fba86af1889641ef497cda0098fc8bb3c009e0c91809def13ccee5`；模型运行时（更新报告/看板前）的 tracked-source 工作树差异 SHA256 为 `61965853b0732e54db7b45efc7e16186be6d1d7ad57a412245ea415410267014`。运行完成后仅追加了本报告与看板文档，生产代码未再变化。该 cohort 的源码差异仅涉及 `compat/torch/amp.py`、`compat/fsdp2/shard.py` 与两个定向测试文件；R89–R97 的 harness 与模型输出均保存在 LAB，没有改写模型权重或已有 cohort。生成目录 `kernel_meta/` 保留为未跟踪内容，不属于源码清单。
+
+AMP/FSDP focused suite 日志在 LAB `real-model/qwen3-06b-fsdp2-trainer-r89/unit-tests/pytest-amp-fidelity-final.log`：81 passed、0 failed、0 skipped，2.34 秒；覆盖 disabled autocast 对外部 FSDP `amp_reg` 的挂起/恢复，以及 FSDP forward mixed-precision register 作用域。`git diff --check` 通过。R90–R97 没有因此扩大数值比较预算。
+
+### 各 cohort 终态
+
+- **R89**：串行 ACL 预热通过；原 Native driver 使用全局 `npu-smi info` 时遇 30 秒查询超时，rank 尚未产出模型报告，未记录 foreign occupant。该次是监控失败，不是训练通过/失败结论。
+- **R90**：Native torch_npu 双 rank、HCCL、global_step=1 完成，112 组梯度和112组LoRA参数均完整，returncode=0。Jittor rank 各自落入新的 rank-local JITTOR_HOME，意外并行编译 295 个对象；确认NPU3/6为空后只终止了这次任务的编译进程，保留Native成功结果和完整Jittor日志。R90 Jittor没有模型结论。
+- **R91**：把Jittor worker改为在rank-state初始化后恢复串行预热过的共享R65缓存，并引用R90冻结Native结果。两侧同一manifest、同一样本ID，Native/Jittor两rank都完成一次HF Trainer FSDP2更新；Jittor物理NPU3/6映射正确、112组梯度和参数快照完整、fallback增量0、returncode=0。比较汇总为2个rank、2组logits、224组梯度、224组初始参数、224组参数更新，`passed=false`。每rank logits 1/1、梯度33/112、更新量56/112超过既定预算；初始LoRA参数112/112 exact。logits最大绝对差分别1.5和1.8125，最大梯度差0.0888671875，更新差最大约`6.0e-5`（原更新预算`atol=2e-6, rtol=2e-5`）。两侧loss分别3.8984375和3.890625。没有放宽预算。
+- **R92**：Native双卡逐层输出采集通过。Jittor阶段的driver在rank1尚无早期身份文件时把本cohort PID短暂报成foreign occupant，returncode=125并中止；foreign记录与rank日志均保留。没有Jittor数值结论。
+- **R93**：worker在运行时初始化前写入精确PID/start ticks/rank/source manifest/device assignment，Jittor-only双卡训练returncode=0，fallback=0；复用R92同manifest的Native输出后严格比较仍失败。逐层输出显示差异随网络深度累积：层0只有少量差异，层1/2开始增加，层3明显扩大，后续层继续增长。
+- **R94、R95**：额外模块输入诊断分别遇到`npu-smi info -t proc-mem -i <card>`超时，driver只中止本cohort；两次结束后NPU3/6均为空。R95虽将轮询间隔改为5秒，但运行循环仍显式传15秒timeout，不能记作30秒timeout修复。
+- **R96**：真正把显式逐卡timeout调用修到30秒，并以5秒间隔轮询。Native与Jittor双卡阶段均returncode=0，真实Qwen FSDP2各完成一个update，设备归属正确、无foreign occupant、Jittor fallback增量0。跨运行时gate仍与R91相同失败。新增的输入快照确认：首层输入、input layernorm、Q/K/V投影输出逐位一致；进入`o_proj`前的attention context已有差异，rank0有49个元素超过诊断阈值、rank1有1个。其后post-attention layernorm及MLP输入/输出差异进一步扩大。这把首个可见偏差定位到eager attention context路径，尚未区分QK matmul、softmax或context matmul。
+- **R97**：在Native worker增加QK matmul、softmax和context matmul追踪；启动前NPU3/6均为空，之后Native阶段因assigned NPU6的proc-mem查询超过30秒被fail-closed中止，returncode=126。该cohort没有Jittor阶段或attention trace结论，日志已保留；中止后设备表为空。
+
+R91/R93/R96报告、逐rank tensor archives、对比JSON、launcher执行记录和日志分别位于LAB `_state/ascend-compat/real-model/qwen3-06b-fsdp2-trainer-r91/`、`...-r93/`、`...-r96/`。R92/R94/R95/R97的失败现场也在对应目录，没有覆盖历史结果。R91/R93/R96的summary现标明比较已完成但`passed=false`，真实模型FSDP2 fresh-process恢复未运行。
+
+### 数值差异解读与边界
+
+R91保存数组的梯度向量相关系数约0.9904，但非零梯度符号约4.1%不同；LoRA-B参数更新符号约4.2%不同。AdamW第一步更新幅度接近学习率`3e-5`，小梯度符号翻转会转成接近`6e-5`的参数差异。因此目前证据更支持“前向/梯度数值漂移经更新放大”，不能把它说成优化器实现已完全等价。输入、样本、初始adapter、FSDP策略、step/world-size/HCCL和设备放置均核对一致；Jittor无回落。完整logits和梯度仍超出既定门槛，当前BF16真实Qwen3 FSDP2组合为**未通过**。
+
+R93/R96的层内快照显示首层Q/K/V投影精确，首个可见差异在`o_proj`输入context；因此下一步应在无监控丢失的运行窗口里单独查QK matmul、FP32 softmax及context matmul。R97专门的attention内部trace没有完成。此结果不外推到单卡R65、synthetic FSDP2 R77，也不因这些旧场景通过而覆盖本次失败。
+
+### 分支同步与后续工作
+
+本地历史包含与`origin/2.0-refactor`的合并提交`9390fa0e84de651e7e1b01de4d142e04d4333f8b`；当前HEAD为`d2748c52ade0d55b2215c06084efaeb736115613`。2026-10-23再次按HTTP/1.1尝试fetch `origin/wip/cgq-day23-fix-20261021`和`origin/2.0-refactor`，GitHub:443连接129.6秒超时；旧tracking refs分别为`305c2f0866f163b0549d47b2e4264c5d41a86385`和`ca56aa802c2acf9a22bca32d1bee3276381ed203`，只能视作上次成功fetch的快照，不能声明当前远端最新。失败已追加到LAB `handoff/remote-sync.json`；本次没有reset、stash、丢弃本地提交或合并任何新远端提交。
+
+仍需先解决attention中BF16输出漂移并在原预算下通过完整logits、梯度、参数更新对拍，然后验证真实Qwen3 FSDP2 fresh-process optimizer/scheduler恢复；继续定位nested child+root HCCL拓扑与FP32/混合精度输入梯度；再覆盖激活重计算、确定性/随机训练恢复和Transformers/Tokenizers/PEFT/Accelerate/safetensors日常组合。只有对应正确性门槛通过后，才测配对吞吐、延迟、峰值显存和稳定性。本轮没有合格NPU性能或显存结果。

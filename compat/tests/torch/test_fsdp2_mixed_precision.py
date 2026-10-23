@@ -94,6 +94,67 @@ def test_forward_policy_casts_float_trees_and_preserves_integer_inputs(cast_inpu
     assert output[1]["indices"].dtype == torch.int64
 
 
+
+@pytest.mark.parametrize(
+    ("policy_dtype", "expected_amp_bit"),
+    [
+        (torch.float16, jt.amp_flags.prefer16),
+        (torch.bfloat16, jt.amp_flags.prefer_bfloat16),
+    ],
+)
+def test_forward_policy_sets_and_restores_compute_amp_register(
+        policy_dtype, expected_amp_bit):
+    policy = MixedPrecisionPolicy(param_dtype=policy_dtype)
+    state = SimpleNamespace(
+        true_fsdp_initialized=True, true_fsdp_params=(),
+        reshard_after_forward=True, mp_policy=policy)
+    module = SimpleNamespace(_fsdp_state=state)
+    original_amp = jt.amp_flags.prefer32 | jt.amp_flags.keep_reduce
+    observed = []
+
+    def forward():
+        observed.append(int(jt.flags.amp_reg))
+        return 1
+
+    with jt.flag_scope(amp_reg=original_amp), mock.patch.object(
+            shard, "_unshard_module_params"), mock.patch.object(
+                shard, "_reshard_module_params"):
+        result = shard._execute_with_true_fsdp(module, forward)
+        assert int(jt.flags.amp_reg) == original_amp
+
+    assert result == 1
+    assert len(observed) == 1
+    assert observed[0] & expected_amp_bit
+    assert not observed[0] & (
+        jt.amp_flags.prefer32 | jt.amp_flags.prefer16
+        if expected_amp_bit == jt.amp_flags.prefer_bfloat16
+        else jt.amp_flags.prefer32 | jt.amp_flags.prefer_bfloat16
+    )
+    assert observed[0] & jt.amp_flags.keep_reduce
+
+
+def test_forward_policy_respects_disabled_input_cast_amp():
+    policy = MixedPrecisionPolicy(
+        param_dtype=torch.bfloat16, cast_forward_inputs=False)
+    state = SimpleNamespace(
+        true_fsdp_initialized=True, true_fsdp_params=(),
+        reshard_after_forward=True, mp_policy=policy)
+    module = SimpleNamespace(_fsdp_state=state)
+    observed = []
+
+    def forward():
+        observed.append(int(jt.flags.amp_reg))
+        return 1
+
+    with jt.flag_scope(amp_reg=jt.amp_flags.prefer32), mock.patch.object(
+            shard, "_unshard_module_params"), mock.patch.object(
+                shard, "_reshard_module_params"):
+        shard._execute_with_true_fsdp(module, forward)
+        assert int(jt.flags.amp_reg) == jt.amp_flags.prefer32
+
+    assert observed == [jt.amp_flags.prefer32]
+
+
 def test_cast_frozen_forward_input_keeps_gradient_graph():
     policy = MixedPrecisionPolicy(param_dtype=torch.bfloat16)
     state = SimpleNamespace(

@@ -309,6 +309,17 @@ class TestTorchAutocastState(_AutocastStateCase):
         self.assertFalse(torch.is_autocast_enabled("cuda"))
         self.assertEqual(str(torch.get_autocast_dtype("cuda")), "torch.float16")
 
+    def test_disabled_region_suspends_and_restores_external_amp_register(self):
+        original_amp = int(jt.flags.amp_reg)
+        external_amp = int(jt.amp_flags.prefer_bfloat16)
+        try:
+            with jt.flag_scope(amp_reg=external_amp):
+                with torch.autocast('cuda', dtype=torch.bfloat16, enabled=False):
+                    self.assertEqual(int(jt.flags.amp_reg), 0)
+                self.assertEqual(int(jt.flags.amp_reg), external_amp)
+        finally:
+            jt.flags.amp_reg = original_amp
+
     def test_nesting_counter_tracks_open_regions(self):
         owner = _owner()
         self.assertEqual(owner.autocast_nesting(), 0)
@@ -407,14 +418,16 @@ class TestTorchAmpCustomFunction(_AutocastStateCase):
         ran inside the enabled region, so an op that documents "I need float32"
         reduced in float16 and nothing said so.
 
-        The region has to name a device type the operand can be *on*: torch's
-        eligibility rule is "floating, not float64, and on the region's device"
-        (``_amp_cast``), and a CPU-only core cannot put a tensor on ``cuda``. So
-        the name follows availability -- asserting the cuda spelling on a CPU
-        core would be asserting a cast the rule correctly refuses.
+        The region has to name the device type the operand is resident on.
+        Jittor exposes ACL accelerator Vars as ``npu``, even though
+        ``jt.has_cuda`` is also true for that backend.
         """
         seen = {}
-        device_type = "cuda" if jt.has_cuda else "cpu"
+        device_type = (
+            "npu" if getattr(jt.compiler, "has_acl", 0)
+            else "cuda" if jt.has_cuda
+            else "cpu"
+        )
 
         @torch.amp.custom_fwd(device_type=device_type, cast_inputs=torch.float32)
         def forward(ctx, value):
