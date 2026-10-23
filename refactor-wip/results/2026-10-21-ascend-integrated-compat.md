@@ -844,9 +844,61 @@ Native和Jittor各自执行full四步、first两步保存checkpoint-2，再以�
 
 Native环境版本为Transformers 4.56.2、Tokenizers 0.22.2、PEFT 0.17.1、Accelerate 1.10.1、safetensors 0.8.0。Jittor full train_loss=3.842697、eval_loss=4.474481；Native full train_loss=3.842866、eval_loss=4.479791。结论依据完整数组比较器和原数值协议，而不是仅按loss接近判断。本cohort没有性能接受标记；执行时间不作为速度或显存结果。该固定顺序单卡结论不覆盖FSDP2、随机sampler、多worker、激活重计算或不同源码冻结点。
 
+## 2026-10-24 R137：当前源码真实 Qwen3 BF16 LoRA 双卡 FSDP2 严格更新对拍
+
+R137 使用当前提交 df495e7c0ab7fc874a3536963954b9af7f83ef21，source manifest SHA256 7f6b138e12dcc998bcef6620fcac1f9af68c13aebcd36220788abe6049016af4。在 NPU3 和 NPU6 分别完成 serial JIT/backward prewarm 后，Native torch_npu 与 Jittor shim 以独立环境、串行阶段完成真实 Qwen3-0.6B BF16 LoRA 的双卡 FSDP2 单次 optimizer update。两侧 launcher returncode 均为0、monitor gap为0，rank0/rank1分别绑定物理NPU3/NPU6；Jittor fallback增量为0。四份rank报告均为global_step=1、world_size=2、HCCL、FSDPVersion=2，mixed policy为 BF16 param/reduce/output，模型、初始LoRA、fixture和样本一致。R137没有做fresh-process optimizer/scheduler恢复，因此不覆盖R135的单卡恢复结论。
+
+未改动既有预算：logits forward atol=0.005/rtol=0.03，parameter gradient atol=0.01/rtol=0.05，post-update delta atol=2e-6/rtol=2e-5，初始参数要求exact。逐rank比较logits、112组参数梯度、112组初始参数和112组参数更新。两rank logits逐位一致；224组梯度均在预算内，最大绝对梯度差0.009765625；224组初始参数均exact。完整更新gate为 passed=false：每rank 52/112组LoRA-B更新数组超预算，合计104/224组；最大绝对更新差 5.999376662657596e-05，最大预算比约29.988。差异集中在BF16低幅LoRA-B梯度：每rank观测到824个梯度符号翻转，且这些元素都落在更新超预算元素中；这与AdamW首步在零初始化LoRA-B上将微小梯度差放大成近两倍学习率的更新差相符，但尚不能据此断定首个生产反向差异节点。训练loss两侧均为3.8984375。比较JSON SHA256为 1b52d9009460282ae57943380e34001ede4c92c42b5e6ddb34e770f9eac044dd。
+
+诊断部分记录398组前向激活数组并逐位相同；438组激活梯度只作定位用，不计入通过门槛。已捕获的decoder.27与decoder.26边界反向值相同，decoder.25一带开始出现小差异，随后向更早层累积；这把搜索范围缩小到上游反向，但还没有识别到具体算子。R137仍有 qk_right.grad Jittor捕获缺口。下一独立cohort R138已准备 layer-26 模块输入/输出反向hook及BF16参数/输出、FP32梯度规约配置，严格数值门保持不变；本报告更新时该cohort尚未运行模型，因物理NPU3被外部VLLM进程占用，必须等双卡重新fresh后再启动。R137原始失败、完整张量和日志留在LAB real-model/qwen3-06b-fsdp2-trainer-r137-grad-order-dual36/；执行时间仅记作验证记录，不作为性能结论。
+
+## 2026-10-24 R138：反向模块trace完成；FP32 reduce配置未实际生效
+
+R138 以独立cohort qwen3-06b-fsdp2-trainer-r138-fp32-reduce-gradtrace-dual36 运行，绑定当前源码commit df495e7c0ab7fc874a3536963954b9af7f83ef21及source manifest v2 SHA256 13d0abf8e059a316da4baf3120e7c121ebb6952de0020526424a47486dc876a8。第一次rank0预热在2.56秒时因沿用R137 manifest而触发源码哈希断言，发生在模型计算前；随后保留原manifest和失败receipt，另建manifest v2。rank0和rank1的Jittor初始化无工作重试分别以rc=3退出，随后各自预热通过，耗时1223.40秒/1219.68秒，物理卡为3/6，loss均为3.540607，fallback增量0、MPI未加载。aggregate收据明确标记not_two_rank_proof。
+
+Native双卡阶段rc=0、耗时491.24秒；Jittor双卡阶段rc=0、耗时172.04秒。两个阶段均为global_step=1、world_size=2、HCCL，PID见证分别正确映射NPU3/NPU6，未记录foreign occupant。Jittor monitor_gap_count=0且fallback_delta=0；Native记录一次30秒npu-smi proc-mem查询超时，monitor_gap_count=1、monitor_degraded=true，超时细节在torch-full-launcher/npu-smi-timeouts.jsonl。故Native计算结果已保存，但监控完整性不足，不能把R138记为完全合格验收。
+
+R138配置请求的是BF16参数/输出、FP32 reduce，但四个rank的实际报告均为param_dtype=torch.bfloat16、reduce_dtype=torch.bfloat16、output_dtype=torch.bfloat16。原因已定位到当前Transformers Trainer/Accelerate接线：Trainer创建Accelerator时未把TrainingArguments.fsdp_config中的mixed_precision_policy传给FSDP plugin，后处理只同步了limit_all_gathers和activation_checkpointing；Accelerate从训练环境创建的plugin按bf16=True使用BF16 reduce。因此R138不是FP32 reduce对照，不能用于判断FP32 reduce能否修复更新差异。下一cohort会在Trainer构造后、train开始前显式给已创建的FSDP2 plugin赋MixedPrecisionPolicy(param_dtype=bfloat16, reduce_dtype=float32, output_dtype=bfloat16)，并把plugin中的实际对象/三种dtype作为启动断言和报告字段。
+
+R138严格比较仍使用原有预算：forward atol=0.005/rtol=0.03，gradient atol=0.01/rtol=0.05，post-update delta atol=2e-6/rtol=2e-5。两rank logits逐位一致，224组参数梯度和224组初始参数通过；更新gate仍失败，每rank52/112、合计104/224个LoRA-B更新数组超预算，最大绝对更新差5.999376662657596e-05，最大预算比约29.988，没有放宽门槛。train_loss均为3.8984375。比较JSON SHA256为0534574d6a18d2756c720ddcd7d9873d3411ea41c5adbc1c1fdd96a19546ef35。
+
+新增hook后，诊断数组增至454组前向激活和494组激活梯度。layer26新增采集到的前向值逐位相同；MLP路径所捕获的梯度为exact，而self-attention Q/K/V投影和input_layernorm路径可见很小的梯度差，最大约9.54e-7，远小于gradient gate。现有capture仍缺Jittor的trace.layer24至layer27.qk_right.grad，且局部小差异尚不能确定首个生产反向算子。R138所有原始输出、配置、timeout和失败attempt保存在LAB real-model/qwen3-06b-fsdp2-trainer-r138-fp32-reduce-gradtrace-dual36/；该cohort不作为FP32 reduce结果或完整监控验收。
+
 ### 当前仍需完成
 
-1. 在两个新鲜空闲NPU上重跑真实Qwen3双卡FSDP2完整输出、梯度、LoRA更新和fresh-process optimizer/scheduler恢复；R132严格更新门仍有108/224个LoRA-B数组超预算，R134未进入模型计算，R135单卡结果不能替代。
-2. 继续定位真实FSDP2 FP32与BF16 compute/FP32 input梯度差异，验证nested child+root HCCL；按原预算验收，不放宽数值门。
-3. 验证激活重计算下的输出、梯度、参数更新和恢复，再记录真实峰值显存；验证随机sampler、generator、多worker和新进程随机状态恢复及确定性策略。
-4. 补齐Transformers、Tokenizers、PEFT、Accelerate、safetensors的日常组合场景与错误/保存加载路径。仅对相同正确性配置全部通过的case开展配对速度、延迟、显存与稳定性比较；当前仍没有合格的NPU性能结论。
+1. 建立R139（或后续新cohort），显式设置并断言Accelerate FSDP2 plugin实际为BF16参数/输出、FP32 reduce；保持所有严格预算，重新跑真实Qwen3双卡Native/Jittor完整update并检查monitor、device placement、fallback和完整对拍。
+2. 用修正后的FSDP2配置继续分析LoRA-B更新差异，并补足Jittor qk_right.grad capture；若原预算仍失败，定位生产反向差异后修复并用新cohort完整复验。
+3. 完成真实FSDP2 Native/Jittor fresh-process optimizer/scheduler恢复，并覆盖global state、LoRA参数/梯度、样本游标和下一步更新；现有R135恢复证据是单卡，R137/R138仅有一次双卡update。
+4. 验证双卡nested child+root HCCL，以及FP32/BF16 compute、FP32输入梯度等组合；结果按各自完整输出/梯度/参数更新门槛验收。
+5. 验证activation checkpoint重计算下的输出、梯度、更新和恢复，再采集峰值显存；另覆盖随机sampler、generator、多worker与新进程随机状态恢复和确定性策略。
+6. 补齐Transformers、Tokenizers、PEFT、Accelerate、safetensors在数据预处理、梯度累加、Trainer封装、保存/加载和错误路径中的日常组合用例，不从单项或synthetic通过外推整栈。
+7. 仅在对应正确性门通过后，比较同配置的速度、延迟、峰值显存和稳定性；目前没有合格的NPU性能结论。
+
+## 2026-10-24 R139：实际 FP32 reduce 策略双卡对拍；LoRA 更新仍失败
+
+R139 在独立cohort `real-model/qwen3-06b-fsdp2-trainer-r139-fp32-policy-hook-dual36/` 运行，当前源码commit为 `df495e7c0ab7fc874a3536963954b9af7f83ef21`，source manifest SHA256为 `0d2bd1c1524e9a62ba0b1aa56bcf370d7b4f7b266e0f7cb4435376e3b8fd01c0`。Harness在Trainer创建后、`train()`前，将Accelerate已创建的FSDP2 plugin policy显式设为BF16参数、FP32梯度规约、BF16输出，并对四个rank在训练前后读取实际policy对象并断言三种dtype。这个实验确实覆盖了FP32 reduce，但赋值由诊断harness完成，**不代表标准 `TrainingArguments.fsdp_config` 已自动接通，也不是生产Transformers/Accelerate配置修复**。
+
+真实Qwen3-0.6B BF16 LoRA、同一初始adapter和固定样本执行双卡FSDP2单次更新。Native和Jittor均为global_step=1、HCCL、rank0/rank1映射物理NPU3/NPU6；Jittor fallback增量为0，无foreign occupant。Jittor stage returncode=0、monitor gap=0；Native计算stage returncode=0，但两次npu-smi查询超时，`monitor_gap_count=2`、`monitor_degraded=true`，所以Native结果已保留用于数值比较，但该cohort不满足完整监控验收。
+
+原有门槛未改变：logits atol=0.005/rtol=0.03，参数梯度 atol=0.01/rtol=0.05，初始参数exact，更新差 atol=2e-6/rtol=2e-5。两rank logits exact；224组参数梯度均在预算内，最大绝对差0.00970458984375；224组初始参数exact。参数更新仍 `passed=false`：104/224组LoRA-B更新数组超预算，最大绝对差 `5.9993762988597155e-05`、最大预算比约29.9879。全图诊断保留454组前向数组和494组激活梯度；layer27与layer26反向边界一致，layer25开始出现小梯度差异并向早层扩大。比较JSON SHA256为 `b0645500f8a385907d2c55fd8ca4c406494aa60c9b5dc4dbbec989b811425e4e`。
+
+对R139归档梯度、初始参数和更新做了CPU侧AdamW首步公式复核，没有启动NPU。每rank 112个全量梯度数组的Native/Jittor L2范数分别为7.2546255352和7.2354765679；`max_grad_norm=1`对应裁剪系数分别为0.1378430899和0.1382078970。按训练学习率3e-5、weight decay 0.01、Adam默认β=(0.9, 0.999)、ε=1e-8及各自裁剪后梯度计算，两个运行时保存的56个LoRA-B更新数组均与AdamW首步式吻合，最大残差分别约8.08e-12和8.00e-12。每rank LoRA-B梯度有1126/344064个元素符号不同。该归档复核说明当前失败与运行时梯度及其全局裁剪系数差异相符，没有显示AdamW首步公式偏差；它不替代FSDP2多步优化器状态或恢复验证。
+
+## 2026-10-24 R140：固定upstream的QK/context matmul局部VJP逐位相同
+
+R140 cohort位于 `real-model/qwen3-06b-qk-matmul-vjp-r140-card3/`，绑定与R139相同的source manifest `0d2bd1c1524e9a62ba0b1aa56bcf370d7b4f7b266e0f7cb4435376e3b8fd01c0`。它从R139 rank0/rank1数组取layer24–27的前向trace，固定使用对应Native全图输出梯度，分别在Native和Jittor上重放QK与context matmul，不执行模型更新。Native在物理NPU3运行29.72秒，Jittor在NPU3运行991.20秒；两个阶段returncode=0、monitor gap=0、owned PID见证通过、无foreign occupant，阶段后卡为空。Jittor约953秒用于重编295个JIT单元，属于本次诊断准备时间，不作为性能测量。
+
+两边局部matmul前向输出以及左右输入/权重VJP共48个数组全部逐位相同，最大绝对差为0。另有32组局部梯度与归档全图Native参考逐位相同，Native和Jittor两套局部结果均通过。比较摘要为152项检查、`passed_exact_diagnostic=true`，comparison JSON SHA256为 `196ea7dcdd1caa78f7d5b9635f426b370098dd1d834038eca96817ef378ad270`，execution summary SHA256为 `29e9e2b3a319757ee12744bb972aa62a289bcd5d7e0485ac0f73773c6bb8131d`。
+
+这个实验把相同输入和Native upstream下的QK/context matmul VJP从当前首要嫌疑中移开；它没有证明完整attention反向一致，因为R139 Native/Jittor在layer24/25捕获的部分matmul输出upstream梯度本身并不相同。Jittor全图的 `trace.layer24..27.qk_right.grad` 仍未捕获。R140不做生产代码修复或训练gate通过结论。
+
+### 截至R140仍需完成
+
+1. 修通标准Transformers Trainer/Accelerate `fsdp_config` 到FSDP2 plugin的mixed precision policy传递，并在不做harness后置赋值的独立cohort中断言实际BF16参数/输出、FP32 reduce；R139仅证明显式赋值的诊断配置确实生效。
+2. 继续定位layer25附近首先出现的全图反向差异。R140已证明固定Native upstream的QK/context matmul局部VJP一致；下一步需采集并比较输出投影/残差/归一化分支的实际upstream和输入梯度，补足Jittor `qk_right.grad`捕获。找到生产算子差异后修复，不通过放宽预算接受更新。
+3. 修复后以新cohort重跑真实Qwen3双卡Native/Jittor完整输出、224组梯度、初始参数和更新对拍；同时保证Native和Jittor监控无gap、NPU映射正确、Jittor fallback为零。
+4. 完成真实双卡FSDP2 fresh-process optimizer/scheduler恢复，核对模型/LoRA状态、优化器与scheduler state、数据游标及恢复后的下一次更新；R135恢复证据仍仅覆盖单卡。
+5. 补齐nested child+root HCCL，以及FP32/BF16 compute、FP32输入梯度等目标dtype组合的完整双runtime验证。
+6. 验证激活重计算下的实际重执行、输出/梯度/更新/恢复和峰值显存；覆盖随机sampler、generator、多worker预取、确定性策略及新进程随机状态恢复。
+7. 完成Transformers、Tokenizers、PEFT、Accelerate、safetensors的日常组合场景，涵盖数据处理、梯度累加、Trainer封装、保存/加载和错误路径；单项或synthetic结果不外推为整栈通过。
+8. 只对各自正确性gate已通过的对应配置比较速度、延迟、峰值显存与稳定性；当前仍没有合格的NPU性能结论。
