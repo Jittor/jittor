@@ -9,7 +9,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import nox
 
@@ -2858,7 +2858,7 @@ def ecosystem_peft(session):
             or any(session.posargs[i] not in ("--output", "--cache-root")
                    for i in range(0, len(session.posargs), 2))):
         session.error("ecosystem_peft allows only output/cache paths; all original L3 phases are required")
-    args = []
+    args: List[str] = []
     for repo in ("peft", "transformers"):
         for kind in ("checkout", "wheel"):
             key = "JITTOR_" + repo.upper() + "_" + kind.upper()
