@@ -2,7 +2,7 @@
 
 本记录对应[综合计划](../testing/2026-10-21-ascend-integrated-compat-plan.md)，唯一活动状态源为[整改看板](../architecture/refactor-board.md)的 ASC 任务。前半部分保留 2026-10-21 的 MAIN-r28/123 历史验收；后续各 cohort 按各自冻结源码区分，不相互外推。R65 真实 Qwen3-0.6B BF16 LoRA 对拍与 R68 最终主树 FSDP2 双卡 Linear 对拍均绑定提交 `9390fa0e84de651e7e1b01de4d142e04d4333f8b`、3336 文件源清单 SHA256 `c00986fb31e15e18860acf60e2ee0059c7dc63afb90ef0a286131d9fc7eb0f9a`；旧 R64/R63 仍只对其原冻结源码有效。下文保留原始失败和未运行项。
 
-> **截至 2026-10-23 R129：** R118 的 CE FP32 amp-register 保护让 Trainer logits 梯度恢复到近逐位一致，但真实 Qwen3 BF16 FSDP2 每 rank 仍有 54/112 个 LoRA 更新后参数数组超原预算。R125 的 `o_proj` 和 R129 的 QK matmul、FP32 softmax、context matmul VJP 在相同上游梯度下都逐元素一致；全模型送入这些算子的上游梯度本身不同，层间快照显示误差沿 decoder 反向传播累积。真实双卡严格 gate 仍未通过，真实 FSDP2 恢复和性能/显存仍未验收；完整证据见文末 R118–R129。
+> **截至 2026-10-23 R130：** R130 在最终源码提交 `f5af805ab30aced4aefc214df257a0b575ca36a2` 上完成双卡 Linear FSDP2 的 FP32/FP32、BF16/FP32 与 BF16/BF16 compute/input 对拍，126 项零 mismatch，最大绝对差 $1.49\times10^{-8}$，预算仍为 `atol=2e-6, rtol=2e-5`；实际设备为 NPU3/6，Jittor fallback 增量为 0。真实 Qwen3 BF16 FSDP2 更新对拍仍有 108/224 个更新后参数数组超预算；R125/R129 的局部 VJP exact 结论不解释跨 decoder 反向上游梯度差异。真实模型恢复、nested HCCL 和性能/显存仍未验收；详见文末 R118–R130。
 
 | 本轮验收 | 实际结论与源码范围 |
 | --- | --- |
@@ -12,10 +12,10 @@
 | 共享真实权重推理 | 0.6B既有冻结源码BF16完整推理P；source121的1.7B与4B各3输入/15完整数组/58,343,424 logits bitexact、cached/uncached greedy8 exact、actual NPU/fallback0；不是123重跑 |
 | 最终主树 AMP | source123 no-loader baseline 10P/0skip；source ee0146… 上 R43 完成 BF16/FP16 × FP32/低精度输入 × Linear/LoRA × 2步共168阵列/5760元素 Native/Jittor 对拍：168/168 bit-exact、最大差0、预算未改。修正共同显式cast参考后，source manifest r2 正式单测 Jittor 10/10通过、Native 8通过/2项Jittor-only跳过 |
 | 真实0.6B BF16 LoRA | R65在提交 9390fa0e84de651e7e1b01de4d142e04d4333f8b、3336文件manifest c00986fb31e15e18860acf60e2ee0059c7dc63afb90ef0a286131d9fc7eb0f9a 完成真实Qwen3-0.6B Native/Jittor full、prefix、fresh-process resume：2187项跨runtime比较0失败/0超预算；两侧恢复状态各933项exact，梯度分段各1136项通过；NPU3、fallback0。R65各自deterministic策略不匹配，且无性能结论 |
-| FSDP2 | R68在最终主树的两rank Linear fixture三种compute/input dtype正反向、输入叶梯度、全参数梯度和SGD更新126项0 mismatch；真实Qwen3 BF16 FSDP2在R118/R119完成one-step但108/224个LoRA更新后参数数组超原预算。R125/R129单算子VJP确认o_proj、QK matmul、softmax和context matmul在固定上游梯度时逐元素一致；完整模型上游梯度仍有差异。真实FSDP2恢复、nested拓扑、输入精度扩展、重计算和性能未验收 |
+| FSDP2 | R130在提交f5af805的最终源码上完成双卡Linear fixture三种compute/input dtype正反向、输入叶梯度、全参数梯度和SGD更新对拍，126项0 mismatch、最大差1.49e-8；真实Qwen3 BF16 FSDP2在R118/R119完成one-step但108/224个LoRA更新后参数数组超原预算。R125/R129单算子VJP确认o_proj、QK matmul、softmax和context matmul在固定上游梯度时逐元素一致；完整模型上游梯度仍有差异。真实FSDP2恢复、nested拓扑、重计算和性能未验收 |
 | 速度/显存 | NPU未验收。1.7B配对流程仅18交替calls后停止，generation steady/decode未完成、rc-2/acceptedfalse；4Bperf未运行，CPU控制器资格不能替代NPU性能 |
 
-尚未达到全部适配退出条件。R65在提交 `9390fa0e84de651e7e1b01de4d142e04d4333f8b` 的3336文件清单上完成真实Qwen3-0.6B BF16 LoRA Native/Jittor full、prefix与fresh-process恢复，跨runtime 2187项比较无失败/无超预算，两侧各自恢复状态933项exact、梯度分段各1136项全通过，Jittor fallback为0；该协议固定顺序且Native deterministic为true、Jittor策略为UNIMPLEMENTED_FALSE，不能宣称两侧随机流或确定性策略匹配。R68在相同提交和源清单上完成最终主树双卡 Linear FSDP2 三种compute/input dtype的梯度与SGD fixture 对拍，126项比较无 mismatch，最大绝对差1.49e-8；R67的失败发生在 Torch/NPU初始化前的临时路径长度断言，已修复到R68并保留原始记录。R68不覆盖真实模型、复杂分片/视图拓扑、恢复或激活重计算。还需验证activation checkpoint真实重计算，覆盖随机sampler、多worker/generator fresh-process恢复并处理deterministic策略不匹配；把常用 Trainer、Accelerate、Tokenizers、PEFT、safetensors 数据加载、训练包装和保存重载组合映射到当前源码；只对正确性通过的对应工作负载测吞吐、延迟、峰值显存和稳定性。当前没有合格的NPU速度/显存结论。raw CPU core四文件另有46P/9S/1个原样test_concat_random的300秒超时，未删case、缩规模或放宽超时，不称全部core通过。模型与fixture、性能与功能、旧源与最终源均不混用。
+尚未达到全部适配退出条件。R65在提交 `9390fa0e84de651e7e1b01de4d142e04d4333f8b` 的3336文件清单上完成真实Qwen3-0.6B BF16 LoRA Native/Jittor full、prefix与fresh-process恢复，跨runtime 2187项比较无失败/无超预算，两侧各自恢复状态933项exact、梯度分段各1136项全通过，Jittor fallback为0；该协议固定顺序且Native deterministic为true、Jittor策略为UNIMPLEMENTED_FALSE，不能宣称两侧随机流或确定性策略匹配。R68在相同旧提交和清单上通过双卡Linear FSDP2 fixture。R130则绑定当前提交 `f5af805ab30aced4aefc214df257a0b575ca36a2`、3336 tracked files 和 source manifest SHA256 `31a590acb78ffcedd4de62f9bd8f84e5f84870a5506c9c046445308b5db51d9e`，三种 compute/input dtype 共126项比较零 mismatch、最大绝对差1.49e-8，两个rank的Jittor fallback增量为0，物理NPU映射为3/6。R130只验证Linear FSDP2输入叶梯度、参数梯度和SGD更新，不能外推到真实Qwen3反向、nested拓扑或恢复。R67的初始化前路径断言失败仍保留且已在R68修复；R68不覆盖真实模型、复杂分片/视图拓扑、恢复或重计算。还需定位Qwen3跨decoder上游梯度差异、修复并复验R71 nested child+root HCCL，验证activation checkpoint真实重计算及随机sampler、多worker/generator fresh-process恢复，并处理deterministic策略不匹配；把常用Trainer、Accelerate、Tokenizers、PEFT、safetensors的数据处理、训练包装和保存重载组合映射到当前源码。只对正确性通过的对应工作负载测吞吐、延迟、峰值显存和稳定性。当前没有合格的NPU速度/显存结论。raw CPU core四文件另有46P/9S/1个原样test_concat_random的300秒超时，未删case、缩规模或放宽超时，不称全部core通过。模型与fixture、性能与功能、旧源与最终源均不混用。
 
 ## 源码与环境
 
@@ -710,10 +710,24 @@ R129 的 35 项诊断检查全为 `changed=0, max_abs=0`：三个算子的前向
 
 R129 对拍 JSON SHA256 `1ab426851d4fd8b72a789e6fca38d0dc536d94959e893817da012048611d5a42`，上游梯度比较 JSON SHA256 `88e711355b7639acf2c999112b5c8f208eee42ecbfe5e368f774a32eede4927c`，Jittor receipt SHA256 `aa7450f308cdde95bf8ddd5e0b018cc70393b6476aa1b9caf9d58c9a6d8778f0`，Native receipt SHA256 `17b439c84d339f4d4db8b69074037781eba920484b8060a43c97982f12ede7ed`。全部原始输入、运行日志、脚本和结果保存在 LAB `real-model/qwen3-06b-attention-vjp-r129-single-rank/`。R126 的源 manifest 已过期，R127/R128 的 probe 键名错误；这些失败分别留存在独立 cohort，且均未产出有效算子数学结果。R129 才是有效对拍。
 
-### 截至 R129 按原计划仍需完成
+### 截至 R130 按原计划仍需完成
 
 1. **修复并通过真实 BF16 Qwen3 双卡 gate。** 已证明 CE FP32 保护让 logits 梯度过关，attention 前向及同上游梯度的 `o_proj` BF16 VJP exact；尚需定位跨 decoder 反向逐步累积的差异，并在不改变 `atol=2e-6, rtol=2e-5` 更新预算下通过完整输出、梯度和更新 gate。只有之后再做真实 FSDP2 fresh-process optimizer/scheduler/RNG 恢复。
-2. **补充 FSDP2 精度与拓扑覆盖。** 验证 FP32、部分混合精度输入梯度；修复并复验 R71 nested child+root HCCL 场景。
+2. **补充 FSDP2 拓扑与真实模型覆盖。** R130 已在当前提交的双卡 Linear fixture 覆盖 FP32/FP32、BF16/FP32 与 BF16/BF16 compute/input 三组合；仍需修复并复验 R71 nested child+root HCCL，并将数值结论扩展到对应真实模型场景。
 3. **验证重计算和随机恢复。** 对 activation checkpoint 比较重计算语义、输出、梯度、更新和 NPU 峰值显存；补随机 sampler、显式 generator、多 worker 及新进程恢复，并记录 Native deterministic 与 Jittor 当前策略差异。
 4. **完成多库日常组合矩阵。** 覆盖 Transformers、Tokenizers、PEFT、Accelerate、safetensors 的数据处理、训练包装、梯度累加、保存/加载和错误路径；单一 Qwen 主链及 synthetic fixture 不能外推为完整兼容。
 5. **最后测性能和显存。** 仅对同一正确性 gate 已通过的配置，成对记录吞吐、延迟、峰值显存及稳定性，分开首次 JIT、首步和稳态。目前仍无合格 NPU 性能或显存结论。
+
+## 2026-10-23 R130：最终源码双卡 FSDP2 输入梯度复验
+
+### 源码与执行
+
+R130 使用当前提交 `f5af805ab30aced4aefc214df257a0b575ca36a2`，source manifest 覆盖3336个tracked文件，SHA256为 `31a590acb78ffcedd4de62f9bd8f84e5f84870a5506c9c046445308b5db51d9e`。所有Native与Jittor rank receipt均报告source unchanged；实验及缓存保存在LAB `_state/ascend-compat/distributed/fsdp2-npu-r130-final-source/`，没有覆盖R68等旧cohort。
+
+按串行首次JIT要求，先后在物理NPU3和NPU6建立各自私有缓存预热，两个rank均returncode=0，耗时1099.13秒和1098.58秒；预热总收据为PASS。Native Torch与Jittor shim随后隔离运行，均使用双rank物理卡3/6映射，rank receipt均为PASS、`mpi_loaded=false`、`source_unchanged=true`。Jittor rank0/rank1的fallback增量均为0，最终设备快照映射为物理NPU3/6；Native与Jittor阶段结束后assigned cards为空，没有foreign NPU occupant。Native执行耗时277.60秒，Jittor执行耗时46.82秒；这只是该验证器的执行记录，不构成性能或显存比较。Native torchrun曾记录一条rendezvous keepalive超时warning，但两个rank均生成PASS final receipt，stage returncode为0且完整对拍通过；原始warning保留在launcher日志。
+
+### 对拍结果
+
+三种case为FP32 compute / FP32 input、BF16 compute / FP32 input、BF16 compute / BF16 input；每种均比较prediction、loss、输入叶梯度、FP32参数梯度及SGD更新。Native与Jittor两rank共126项，全部通过，mismatch为0，最大绝对差为 `1.4901161193847656e-08`；预算保持 `atol=2e-6, rtol=2e-5`。这使R130的synthetic Linear FSDP2输入梯度覆盖在当前最终源码上通过，但不外推到真实Qwen3、nested child+root HCCL、fresh-process恢复或完整多库训练。
+
+核心产物校验值：comparison JSON SHA256 `a80a5c857c3c3af27e52922fc651a9c29f835c78d2fdf665e53019646f9f0797`；source manifest SHA256如上；预热driver日志SHA256 `226b3d2ed41883cb54f87fbe0914411ff3566986ff979cfe6f0b8cdb95862808`；Native/Jittor launcher日志SHA256分别为 `e1cafd2c968f1f07842b9bcf677930031474179f30a9331d476c570a57800f69` 和 `f085255eae0678d0b12179552f5c5aee48fa8a055f11681b9058858b0d39e3ad`。四份逐rank process final receipt SHA256依次为Torch rank0 `a862ef0fb6b22fda16380bd6b37eb6dfaa0d451fa462c609c0f90b1a05cedb4b`、Torch rank1 `94d2c1a449c99f79a2960b61553673a176bb23c925abe6914267f74cc8bf5405`、Jittor rank0 `4fa027d9c6fbad0a801d73a4987768ebd17c86afb981cdb089be974982758397`、Jittor rank1 `c8213c51af44d21ed4109dfa343e48b835119f8194a2c023a1fab7b26b1af31e`。\n
