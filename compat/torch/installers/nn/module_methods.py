@@ -551,17 +551,21 @@ def _load_state_dict(self, state_dict, strict=True, assign=False):
         # Torch snapshots do. Synchronization orders execution without a host
         # device wait before the subsequent native buffer writes.
         jt.sync_all()
-        copied = dict(load_state)
+        remaining = {}
         for key, value in load_state.items():
             target = _find_state_target(self, key)
             if isinstance(target, jt.Var) and isinstance(value, jt.Var):
                 # Loading copies values, without recording a differentiable
-                # in-place update of this existing leaf. Keep the public copy
-                # owner's placement, alias/version and storage semantics.
+                # in-place update of this existing leaf. Native Module
+                # parameters are plain Vars and have no Torch ``copy_`` method.
                 with jt.no_grad():
-                    target.copy_(value)
-                copied[key] = target
-        load_state = copied
+                    if not target._copy_view_into(value):
+                        target._copy_into(value)
+            else:
+                remaining[key] = value
+        # Passing a copied target to the native loader would call update() on
+        # that same holder and rebind its storage, losing detached aliases.
+        load_state = remaining
     # Pre-hooks have already run, before validation and storage-preserving
     # copies. The native loader must not invoke them a second time.
     with self._state_dict_hook_scope(False):
