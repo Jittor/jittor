@@ -182,3 +182,15 @@ class TestAsvEntryPoints(unittest.TestCase):
         self.assertRegex("convolution.Conv2dBenchmarks.time_run", regular)
         self.assertIsNone(regular.search("reductions.ReductionBenchmarks.time_reduce"))
         self.assertIsNotNone(scheduled.search("reductions.ReductionBenchmarks.time_reduce"))
+
+    def test_cpu_test_jobs_install_git_before_checkout(self):
+        jobs = yaml.safe_load((ROOT / ".github/workflows/cpu.yml").read_text())["jobs"]
+        for name in ("smoke", "cpu"):
+            with self.subTest(job=name):
+                steps = jobs[name]["steps"]
+                install_index = next(i for i, step in enumerate(steps)
+                                     if step.get("name") == "Install native CPU toolchain")
+                checkout_index = next(i for i, step in enumerate(steps)
+                                      if step.get("name") == "Check out source")
+                self.assertIn("git", steps[install_index]["run"].split())
+                self.assertLess(install_index, checkout_index)
