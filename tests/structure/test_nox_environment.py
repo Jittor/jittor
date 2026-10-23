@@ -1,7 +1,43 @@
 import os
 from pathlib import Path
+import subprocess
 
 from _helpers.nox_probe import _FakeSession, _load_noxfile
+
+
+def test_cpu_gate_trusts_only_its_checkout_with_isolated_home(monkeypatch, tmp_path):
+    module = _load_noxfile(monkeypatch, tmp_path)
+    session = _FakeSession(tmp_path, "/usr/bin/python3-config")
+
+    env = module["_cpu_gate_env"](session)
+
+    assert env["HOME"] != os.environ.get("HOME")
+    assert env["GIT_CONFIG_COUNT"] == "1"
+    assert env["GIT_CONFIG_KEY_0"] == "safe.directory"
+    assert env["GIT_CONFIG_VALUE_0"] == str(module["REPO_ROOT"])
+    # Nox uses None entries to remove inherited variables; make that
+    # overlay concrete before passing it to subprocess.run.
+    owner_probe = {key: value for key, value in env.items() if value is not None}
+    owner_probe["GIT_TEST_ASSUME_DIFFERENT_OWNER"] = "1"
+    trusted = subprocess.run(
+        ["git", "-C", str(module["REPO_ROOT"]), "rev-parse", "--show-toplevel"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=owner_probe,
+    )
+    assert trusted.stdout.strip() == str(module["REPO_ROOT"])
+
+    untrusted_root = tmp_path / "another-repository"
+    subprocess.run(["git", "init", "--quiet", str(untrusted_root)], check=True)
+    untrusted = subprocess.run(
+        ["git", "-C", str(untrusted_root), "rev-parse", "--show-toplevel"],
+        capture_output=True,
+        text=True,
+        env=owner_probe,
+    )
+    assert untrusted.returncode != 0
+    assert "detected dubious ownership" in untrusted.stderr
 
 
 def test_session_env_uses_the_session_interpreters_python_config(monkeypatch, tmp_path):
