@@ -14,8 +14,9 @@ from .matrix import _bfloat16_matmul_accumulator, _check_matmul_shapes
 
 def linear(x, weight, bias=None):
     """Return ``x * weight.T`` with an optional bias."""
-    accumulator_kernel = select_kernel("linear_bias_accumulator", x, weight, bias) \
-        if bias is not None else None
+    accumulator_kernel = (
+        select_kernel("linear_bias_accumulator", x, weight, bias) if bias is not None else None
+    )
     if accumulator_kernel is not None:
         # The bias belongs to the GEMM's FP32 accumulator. Rounding the product
         # to BF16 before adding it introduces a second rounding, which can
@@ -23,9 +24,14 @@ def linear(x, weight, bias=None):
         # Keep BF16 GEMM operands and the native differentiable backward. The
         # CPU uses the same accumulator boundary with oneDNN or native opmath.
         _check_matmul_shapes(x, weight, trans_b=True, op="linear", names=("input", "weight"))
-        if len(weight.shape) != 2 or len(bias.shape) != 1 \
-                or int(bias.shape[0]) != int(weight.shape[0]):
-            raise jt.JittorShapeError("linear: bias must match the rank-2 weight's output dimension")
+        if (
+            len(weight.shape) != 2
+            or len(bias.shape) != 1
+            or int(bias.shape[0]) != int(weight.shape[0])
+        ):
+            raise jt.JittorShapeError(
+                "linear: bias must match the rank-2 weight's output dimension"
+            )
         return accumulator_kernel(x, weight, bias)
     # A large training product on CUDA: its GEMMs picked by timing, and the
     # bias gradient computed by the weight gradient's where that pays.
@@ -45,9 +51,13 @@ def linear(x, weight, bias=None):
 
 
 def _supports_cpu_bias_accumulator(x, weight, bias):
-    return (isinstance(bias, jt.Var) and x.dtype.is_float() and weight.dtype.is_float()
-            and compute_dtype_name(x, weight) == "bfloat16"
-            and (dtype_name(bias.dtype) == "bfloat16" or jt.flags.amp_reg))
+    return (
+        isinstance(bias, jt.Var)
+        and x.dtype.is_float()
+        and weight.dtype.is_float()
+        and compute_dtype_name(x, weight) == "bfloat16"
+        and (dtype_name(bias.dtype) == "bfloat16" or jt.flags.amp_reg)
+    )
 
 
 def _cpu_bias_accumulator(x, weight, bias):
@@ -63,9 +73,13 @@ def _cpu_bias_accumulator(x, weight, bias):
         return (product + bias.float32()).cast("bfloat16")
 
 
-register_kernel("linear_bias_accumulator", "cpu", _cpu_bias_accumulator,
-                dtypes={"float16", "bfloat16", "float32", "float64"},
-                supports=_supports_cpu_bias_accumulator)
+register_kernel(
+    "linear_bias_accumulator",
+    "cpu",
+    _cpu_bias_accumulator,
+    dtypes={"float16", "bfloat16", "float32", "float64"},
+    supports=_supports_cpu_bias_accumulator,
+)
 
 
 __all__ = ["linear"]
