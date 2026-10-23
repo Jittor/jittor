@@ -819,7 +819,13 @@ def _skip_reason(report):
 
 
 def _is_accelerator_case(report):
-    """Recognize a test whose nodeid names an accelerator path or backend."""
+    """Recognize tests named for a backend or explicitly marked for one."""
+    # TestReport.keywords preserves registered pytest markers. A CUDA-only
+    # test can have a neutral path and nodeid, so its explicit backend marker
+    # is the reliable signal for the execution counter.
+    keywords = getattr(report, "keywords", {})
+    if any(marker in keywords for marker in ("cuda", "rocm", "npu")):
+        return True
     original = str(getattr(report, "nodeid", ""))
     # instantiate_device_type_tests emits classes such as TestNumericCUDA,
     # whose suffix has neither of the legacy "_cuda" / "cuda_" separators.

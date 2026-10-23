@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import jittor as jt
 import numpy as np
+import pytest
 import torch
 
 from _helpers import capability
@@ -18,6 +19,8 @@ from torch.distributed.fsdp.wrap import (
     ModuleWrapPolicy, transformer_auto_wrap_policy, lambda_auto_wrap_policy,
 )
 from jittor.compat.fsdp2._state_dict import _load_full_state_dict
+
+pytestmark = pytest.mark.cuda
 
 
 class _Block(torch.nn.Module):
