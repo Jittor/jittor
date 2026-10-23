@@ -518,11 +518,12 @@ class TestToAndType(Base):
     def test_type_no_arg_returns_name(self):
         # torch.Tensor.type() with no argument returns the torch type-name string.
         def body(dev):
-            self.assertEqual(mk("float32").type(), "torch.FloatTensor", dev)
-            self.assertEqual(mk("int64").type(), "torch.LongTensor", dev)
-            self.assertEqual(mk("int32").type(), "torch.IntTensor", dev)
-            self.assertEqual(mk("uint8").type(), "torch.ByteTensor", dev)
-            self.assertEqual(mk("bool").type(), "torch.BoolTensor", dev)
+            for dtype, name in (("float32", "FloatTensor"), ("int64", "LongTensor"),
+                                ("int32", "IntTensor"), ("uint8", "ByteTensor"),
+                                ("bool", "BoolTensor")):
+                value = mk(dtype)
+                prefix = "torch.cuda." if value.device.type == "cuda" else "torch."
+                self.assertEqual(value.type(), prefix + name, dev)
         both_devices(body)
 
 

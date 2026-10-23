@@ -36,11 +36,17 @@ _OWNER_CACHE: dict = {}
 #: resolution above). Kept here so both are dropped by the one clearer.
 _CONTEXT_CACHE: dict = {}
 
+#: Tensor state changes only when an installation binds a new compatibility
+#: owner. Cache the resolved state with a weak owner identity so hot gradient
+#: setters avoid the global installation lock and Runtime service lookup.
+_STATE_CACHE: WeakKeyDictionary[Any, Any] = WeakKeyDictionary()
+
 
 def _clear_resolution_caches():
     """Drop every memoized binding resolution. Called on rebind only."""
     _OWNER_CACHE.clear()
     _CONTEXT_CACHE.clear()
+    _STATE_CACHE.clear()
 
 
 def _state_locked(function):
@@ -198,8 +204,8 @@ def _state_publication_undo(table, module, old, expected):
 
 
 @_state_locked
-def get_tensor_state(jittor_module):
-    """Return active-owner state through the Runtime, adopting old state once."""
+def _resolve_tensor_state(jittor_module):
+    """Resolve and publish one state while installation ownership is locked."""
     owner = compatibility_owner(jittor_module)
     bound = isinstance(owner, ModuleType) and owner in _OWNERS
     state = _published_state(owner) if bound else _existing_state(owner)
@@ -212,7 +218,25 @@ def get_tensor_state(jittor_module):
         if isinstance(optimizers, list) and not state.active_optimizers:
             state.active_optimizers = optimizers
         _publish_state(owner, state)
+    try:
+        _STATE_CACHE[jittor_module] = (ref(owner), state)
+    except TypeError:
+        # The public API accepts module-shaped objects; an exotic owner that
+        # cannot be weak-referenced keeps the original locked lookup.
+        return state
     return state
+
+
+def get_tensor_state(jittor_module):
+    """Return the active-owner state, resolving it again only after a rebind."""
+    owner = compatibility_owner(jittor_module)
+    try:
+        cached = _STATE_CACHE.get(jittor_module)
+    except TypeError:
+        cached = None
+    if cached is not None and cached[0]() is owner:
+        return cached[1]
+    return _resolve_tensor_state(jittor_module)
 
 
 def latest_optimizer(module):

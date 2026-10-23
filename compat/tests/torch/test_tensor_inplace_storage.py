@@ -75,7 +75,7 @@ class TestTensorInplaceStorage:
             np.testing.assert_array_equal(root.cpu().numpy(), [1., *expected, 8.])
             np.testing.assert_array_equal(snapshot.cpu().numpy(), [1., 2., 4., 8.])
 
-    def test_temporary_base_can_expire_without_losing_storage_alias(self, device):
+    def test_view_retains_base_until_storage_aliases_are_released(self, device):
         for operation, expected in ((lambda x: x.copy_(torch.tensor([9., 10.], device=device)), [9., 10.]),
                                     (lambda x: x.div_(2), [1., 2.]),
                                     (lambda x: x.mul_(3), [6., 12.]),
@@ -88,13 +88,15 @@ class TestTensorInplaceStorage:
             reference = weakref.ref(root)
             del root
             gc.collect()
-            # Torch retains its tensor base; Jittor's provenance is weak.
-            if hasattr(torch, "_torch_compat_install_context"):
-                assert reference() is None
+            assert reference() is not None
+            assert target._base is reference()
             pointers = [x.data_ptr() for x in (target, alias)]
             assert operation(target) is target
             assert pointers == [x.data_ptr() for x in (target, alias)]
             np.testing.assert_array_equal(alias.cpu().numpy(), expected)
+            del target, alias
+            gc.collect()
+            assert reference() is None
 
     def test_parameter_data_and_detached_aliases_see_no_grad_writes(self, device):
         parameter = torch.nn.Parameter(torch.tensor([2., 4.], device=device))
@@ -182,7 +184,9 @@ class TestTensorInplaceStorage:
         root = torch.tensor([[1., 2.], [3., 4.]], device=device)
         target = root.transpose(0, 1)
         if hasattr(torch, "_torch_compat_install_context"):
-            assert not target._storage_view_is_physical()
+            assert target._storage_view_is_physical()
+        assert target.stride() == (1, 2)
+        assert target.data_ptr() == root.data_ptr()
         target.copy_(torch.tensor([[5., 6.], [7., 8.]], device=device))
         np.testing.assert_array_equal(root.cpu().numpy(), [[5., 7.], [6., 8.]])
 
@@ -190,16 +194,18 @@ class TestTensorInplaceStorage:
 instantiate_device_type_tests(TestTensorInplaceStorage, globals())
 
 
-def test_physical_provenance_distinguishes_pending_and_materialized_transpose():
+def test_physical_transpose_provenance_survives_materialization():
     root = torch.tensor([[1., 2.], [3., 4.]])
     physical = root.view(4).narrow(0, 1, 2)
     transpose = root.transpose(0, 1)
     assert physical._storage_view_is_physical()
-    assert not transpose._storage_view_is_physical()
+    assert transpose._storage_view_is_physical()
     physical.sync()
     transpose.sync()
     assert physical._storage_view_is_physical()
-    assert not transpose._storage_view_is_physical()
+    assert transpose._storage_view_is_physical()
+    assert transpose.stride() == (1, 2)
+    assert transpose.data_ptr() == root.data_ptr()
     transpose.copy_(torch.tensor([[5., 6.], [7., 8.]]))
     np.testing.assert_array_equal(root.cpu().numpy(), [[5., 7.], [6., 8.]])
 

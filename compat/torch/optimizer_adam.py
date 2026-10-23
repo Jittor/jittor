@@ -54,8 +54,16 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
         # can be empty or refer to the preceding subgroup/step.
         for pg in self.param_groups:
             _api._sync_adam_group_params(pg)
-            pg["grads"] = [getattr(param, "_torch_grad", None)
-                           for param in pg.get("params", ())]
+            pg["grads"] = [
+                # FSDP2 already applied this shard above. Its public .grad stays
+                # visible until zero_grad(), but must not feed the ordinary Adam
+                # phase of a mixed FSDP/plain group a second time.
+                None
+                if _fsdp2_step is not None
+                and _fsdp2_step.is_fsdp_managed_param(param)
+                else getattr(param, "_torch_grad", None)
+                for param in pg.get("params", ())
+            ]
     if not _api._optimizer_has_ready_grads(self):
         if native_fsdp_loss is not None:
             self.post_step()

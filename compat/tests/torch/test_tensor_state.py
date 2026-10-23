@@ -74,6 +74,17 @@ def test_tensor_state_reuses_explicit_owner_over_legacy_alias():
     assert "stale" not in state
 
 
+def test_tensor_state_repeated_lookup_uses_bound_cache(monkeypatch):
+    from jittor.compat.torch import tensor_state as owner
+    module = _module("cached_tensor_owner")
+    state = get_tensor_state(module)
+    monkeypatch.setattr(
+        owner, "_published_state",
+        lambda *_: pytest.fail("cached lookup returned to Runtime state"),
+    )
+    assert get_tensor_state(module) is state
+
+
 def test_tensor_state_does_not_duplicate_native_requires_grad_state():
     module = _module()
     state = get_tensor_state(module)

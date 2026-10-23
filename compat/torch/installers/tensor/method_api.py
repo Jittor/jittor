@@ -862,9 +862,14 @@ def _cast_if_needed(tensor, dtype):
 
 
 def _var_type(self, dst_type=None, non_blocking=False, **kw):
-    _context = get_install_context(_owner.jt)
     if dst_type is None:
-        return _DTYPE_TO_TYPENAME.get(_jittor_dtype_name(self.dtype), "torch.FloatTensor")
+        name = _DTYPE_TO_TYPENAME.get(_jittor_dtype_name(self.dtype), "torch.FloatTensor")
+        # Built Vars already carry their actual placement. Avoid constructing a
+        # public device object in dtype-bucketing hot loops; unresolved Vars
+        # keep the full residency-aware fallback.
+        backend = int(self.placement_backend)
+        is_cuda = backend == 1 if backend >= 0 else self.device.type == "cuda"
+        return name.replace("torch.", "torch.cuda.", 1) if is_cuda else name
     if isinstance(dst_type, str) and dst_type in _jittor_dtype_name(_TYPENAME_TO_DTYPE):
         return _cast_if_needed(self, _TYPENAME_TO_DTYPE[dst_type])
     ds = _owner._dtype_to_str(dst_type)
