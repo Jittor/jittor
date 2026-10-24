@@ -283,8 +283,11 @@ class _DTensorMeta(type):
 
 
 class DTensor(metaclass=_DTensorMeta):
-    def __init__(self, local_tensor, device_mesh=None, placements=None,
-                 checkpoint_shape=None, checkpoint_offset=None, **kwargs):
+    def __init__(self, local_tensor, device_mesh=None, placements=None, **kwargs):
+        # Checkpoint metadata uses the existing extension kwargs without
+        # widening DTensor's public positional constructor contract.
+        checkpoint_shape = kwargs.pop("checkpoint_shape", None)
+        checkpoint_offset = kwargs.pop("checkpoint_offset", None)
         self._local_tensor = local_tensor
         self._checkpoint_metadata = None
         if checkpoint_shape is not None or checkpoint_offset is not None:

@@ -53,6 +53,10 @@ REQUIRED = (
     "is_fsdp_managed_param",
     "collect_fsdp_full_params_for_backward",
     "fill_fsdp_optimizer_grads_from_grad_map",
+    # Private backward owner accepts explicit current-shard holders while the
+    # legacy public signatures remain unchanged. Both use one implementation.
+    "_collect_fsdp_full_params_for_backward",
+    "_fill_fsdp_grads_from_grad_map",
     # optimizers.py, from step() and zero_grad().
     "optimizer_has_fsdp_params",
     "optimizer_has_non_fsdp_params",

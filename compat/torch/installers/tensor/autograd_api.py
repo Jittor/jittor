@@ -286,7 +286,7 @@ def _backward_impl(self, gradient=None, retain_graph=None, create_graph=False, *
                 leaf_map.setdefault(id(p), p)
                 opt_ids.add(id(p))
     if _fsdp2_backward is not None:
-        for p in _fsdp2_backward.collect_fsdp_full_params_for_backward(
+        for p in _fsdp2_backward._collect_fsdp_full_params_for_backward(
                 fsdp_opts, parameters=fsdp_params):
             if isinstance(p, _NativeVar) and p.requires_grad:
                 leaf_map.setdefault(id(p), p)
@@ -360,7 +360,7 @@ def _backward_impl(self, gradient=None, retain_graph=None, create_graph=False, *
                 prev.add_(gr)
     # fill each optimizer's pg["grads"] so its step(loss=None) consumes them
     if _fsdp2_backward is not None:
-        _fsdp2_backward.fill_fsdp_optimizer_grads_from_grad_map(
+        _fsdp2_backward._fill_fsdp_grads_from_grad_map(
             fsdp_opts, grad_by_id, parameters=fsdp_params)
     for o in opts:
         if _fsdp2_backward is not None and id(o) in fsdp_opt_ids \

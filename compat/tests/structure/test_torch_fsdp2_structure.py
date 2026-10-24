@@ -111,6 +111,8 @@ _OWNERSHIP = {
         "optimizer_has_fsdp_params", "optimizer_has_non_fsdp_params",
         "collect_fsdp_full_params_for_backward",
         "fill_fsdp_optimizer_grads_from_grad_map",
+        "_collect_fsdp_full_params_for_backward",
+        "_fill_fsdp_grads_from_grad_map",
     },
     optimizer: {
         "clear_fsdp_optimizer_grads",
@@ -379,6 +381,25 @@ assert second is jittor.torch_fsdp2_compat
                     elif callable(value):
                         self.assertEqual(value.__module__, module.__name__)
         self.assertIs(fsdp._install_fsdp2_distributed, fsdp.install)
+
+    def test_private_backward_seam_preserves_public_signatures(self):
+        from jittor.compat import fsdp_hooks
+
+        self.assertIs(fsdp_hooks.provider(), fsdp)
+        for name in ("_collect_fsdp_full_params_for_backward", "_fill_fsdp_grads_from_grad_map"):
+            self.assertIn(name, fsdp_hooks.REQUIRED)
+            self.assertIs(getattr(fsdp, name), getattr(grad_sync, name))
+        self.assertEqual(str(inspect.signature(grad_sync.collect_fsdp_full_params_for_backward)),
+                         "(optimizers)")
+        self.assertEqual(str(inspect.signature(grad_sync.fill_fsdp_optimizer_grads_from_grad_map)),
+                         "(optimizers, grad_by_id, *, divide_by_world_size=True)")
+        owners, gradients, result = [], {}, object()
+        with mock.patch.object(grad_sync, "_collect_fsdp_full_params_for_backward", return_value=result) as collect:
+            self.assertIs(grad_sync.collect_fsdp_full_params_for_backward(owners), result)
+            collect.assert_called_once_with(owners, active_only=False)
+        with mock.patch.object(grad_sync, "_fill_fsdp_grads_from_grad_map", return_value=result) as publish:
+            self.assertIs(grad_sync.fill_fsdp_optimizer_grads_from_grad_map(owners, gradients), result)
+            publish.assert_called_once_with(owners, gradients, divide_by_world_size=True, active_only=False)
 
     def test_public_contract_signatures_reflection_and_pickle(self):
         public = sorted(name for name in vars(fsdp) if not name.startswith("_"))
