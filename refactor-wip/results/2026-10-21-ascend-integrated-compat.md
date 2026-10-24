@@ -1018,10 +1018,15 @@ R169与R164在每个rank内的Native快照862个数组、Jittor快照865个数�
 - 将optimizer_api中的参数状态映射、state_dict与load_state_dict实现拆入optimizer_state.py，原模块继续再导出原对象；optimizer_api从981行降为558行，新模块456行，未修改结构门槛。
 - 保留R159 ACL rsqrt Torch VJP改动和回归用例；R169快照与R164逐数组相同，故R170不声称该改动修复真实Qwen3漂移。
 
+
+对R169既有cross-runtime comparison与update-cause JSON做了标准库只读归类，未重新加载NPZ、未import Jittor/Transformers、未调用NPU。两个rank各自112组梯度门均为0 mismatch；LoRA-B共有344,064个梯度元素，其中1,370个符号不同。每rank的51组更新失败数组只来自self_attn.q_proj LoRA-B（26组）和self_attn.v_proj LoRA-B（25组），覆盖layers.0–25：0–24层各两组、25层一组、26–27层为零；这些失败参数的初始值均为零。符号差异计数从layer0的91、layer1的92逐步降到layer25的1，layer26/27为0。该分布与小幅反向差异向低层累积、再穿过零初始化LoRA-B首步AdamW更新的符号边界一致，但不能据此定位源算子或判定AdamW实现有误。离线结果文件为LAB同cohort的update-localization-r169.json，SHA256为a9bc719ed405c6f0fedb361e2e6d6315637551802a582fcbd03152c6f7e7d0ca；下一次探针应优先观察layers.25向0的Q/V输入梯度与共享hidden-state累计，并补齐qk_right捕获。
+
+
 验证：
 - tools/run_test_suite.py --tier core退出码0：Native 103 passed、45 skipped、1 xfailed；Torch shim 238 passed、1 skipped。合计341 passed、46 skipped、1 xfailed。
 - tools/run_test_suite.py --session torch --tier core -- tests/structure退出码0；其中tests/structure目录覆盖1797项，1794 passed、3 skipped，耗时588.58秒。该运行器使用LAB独立JITTOR_HOME、CPU backend和JITTOR_TORCH_SHIM=1；本结果为CPU结构门禁。
 - bash tools/check_repo_layout.sh通过：298个活动Markdown治理与仓库布局均通过；git diff --check通过。
+- R170离线分层定位写入报告/看板后，使用同一Torch CPU运行器对tests/structure/test_docs_structure.py复验，254 passed、1 skipped，退出码0。
 - 以上结果不包含昇腾设备计算、HF真实模型训练、参数更新或恢复验证；R169的102/224更新差异和Native rank1卡映射问题仍原样保留。
 
 ## 按原计划截至R170仍需完成
