@@ -56,7 +56,8 @@ def test_moved_backend_paths_keep_device_and_process_contracts():
         "torch", "test_transaction.py")
     native = gate_scope.selected_files(REPO_ROOT, gate_scope.native_arguments())
     torch = gate_scope.selected_files(REPO_ROOT, gate_scope.torch_arguments())
-    assert "compat/tests/fsdp2/test_fsdp_mesh.py" in native
+    assert "compat/tests/fsdp2/test_fsdp_mesh.py" not in native
+    assert "compat/tests/fsdp2/test_fsdp_mesh.py" in torch
     assert "compat/tests/torch/test_transaction.py" in torch
     native_mock = "tests/structure/backends/acl/test_acl_dtype_preservation.py"
     assert native_mock in native and native_mock not in torch

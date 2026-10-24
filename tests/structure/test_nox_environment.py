@@ -57,6 +57,23 @@ def test_session_env_uses_the_session_interpreters_python_config(monkeypatch, tm
     assert session.calls[0][0][:2] == ("python", "-c")
 
 
+def test_structure_session_installs_xdist_for_execution_recorder(monkeypatch, tmp_path):
+    module = _load_noxfile(monkeypatch, tmp_path)
+
+    class Session(_FakeSession):
+        def __init__(self, root, python_config):
+            super().__init__(root, python_config)
+            self.installs = []
+
+        def install(self, *packages):
+            self.installs.extend(packages)
+
+    session = Session(tmp_path, "/usr/bin/python3.11-config")
+    module["structure"](session)
+
+    assert module["PYTEST_XDIST"] in session.installs
+
+
 def test_nccl_warms_serially_then_launches_native_and_torch_modes(monkeypatch, tmp_path):
     monkeypatch.setenv("nvcc_path", "/opt/cuda/bin/nvcc")
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "3,5")
