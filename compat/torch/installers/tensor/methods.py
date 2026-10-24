@@ -1,6 +1,10 @@
 """Torch tensor methods ownership."""
+import numbers as _numbers
+
 from ...fidelity import Fidelity, register_api_bindings, register_fidelity
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
+from jittor._core.function import Function as _Function
+from jittor._core.var import pow as _native_pow
 
 from .method_api import (
     _CAST_APIS, _UNARY_INPLACE_APIS,
@@ -169,6 +173,17 @@ def _bind_native_binary(jt, natives, mark_cpu_like):
     method_api._FAST_BINARY = jt.core._fast_binary
 
 
+class _TorchPowTwo(_Function):
+    """Keep x*x forward values while using Torch's PowBackward VJP order."""
+
+    def execute(self, x):
+        self.saved_x = x
+        return x.sqr()
+
+    def grad(self, upstream):
+        return (upstream * 2) * self.saved_x.pow(1)
+
+
 def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # Var.dtype natively returns jittor's NanoString, which is unhashable and
     # not == to torch dtype objects. Return the canonical immutable frontend
@@ -178,6 +193,31 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     _bind_native_fast_paths(_owner.jt)
     _NativeVar = _owner.jt.Var
     _native_operators = {name: getattr(Var, name, None) for name in _BINARY_APIS}
+
+    # Jittor's native pow(2) shortcut expands to x*x. Its two-edge product
+    # backward differs by a few float32 ulps from Torch PowBackward's
+    # grad * exponent * x.pow(exponent - 1), which affects BF16 RMSNorm
+    # input gradients after the final cast.
+    def _torch_pow(value, exponent):
+        if (isinstance(value, Var)
+                and isinstance(exponent, _numbers.Real)
+                and not isinstance(exponent, bool)
+                and exponent == 2):
+            return _TorchPowTwo.apply(value)
+        return _native_pow(value, exponent)
+
+    def _torch_pow_method(self, exponent):
+        return _torch_pow(self, exponent)
+
+    def _torch_pow_operator(self, exponent):
+        if (isinstance(exponent, _numbers.Real)
+                and not isinstance(exponent, bool)
+                and exponent == 2):
+            return _TorchPowTwo.apply(self)
+        return _BINARY_APIS['__pow__'](self, exponent)
+
+    Var.pow = _torch_pow_method
+    g.pow = _torch_pow
     _bind_native_binary(_owner.jt, _native_operators, _owner._mark_cpu_like)
 
     if _jittor_dtype_name(_DTYPE_OBJS) is not None and not getattr(Var, "_dtype_wrapped", False):
@@ -658,6 +698,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     })
 
     for name, implementation in _BINARY_APIS.items():
+        if name == '__pow__':
+            implementation = _torch_pow_operator
         if _native_operators[name] is not None:
             setattr(Var, name, implementation)
     for name, implementation in _INPLACE_BINARY_APIS.items():
