@@ -1019,7 +1019,7 @@ R169与R164在每个rank内的Native快照862个数组、Jittor快照865个数�
 - 保留R159 ACL rsqrt Torch VJP改动和回归用例；R169快照与R164逐数组相同，故R170不声称该改动修复真实Qwen3漂移。
 
 
-对R169既有cross-runtime comparison与update-cause JSON做了标准库只读归类，未重新加载NPZ、未import Jittor/Transformers、未调用NPU。两个rank各自112组梯度门均为0 mismatch；LoRA-B共有344,064个梯度元素，其中1,370个符号不同。每rank的51组更新失败数组只来自self_attn.q_proj LoRA-B（26组）和self_attn.v_proj LoRA-B（25组），覆盖layers.0–25：0–24层各两组、25层一组、26–27层为零；这些失败参数的初始值均为零。符号差异计数从layer0的91、layer1的92逐步降到layer25的1，layer26/27为0。该分布与小幅反向差异向低层累积、再穿过零初始化LoRA-B首步AdamW更新的符号边界一致，但不能据此定位源算子或判定AdamW实现有误。离线结果文件为LAB同cohort的update-localization-r169.json，SHA256为a9bc719ed405c6f0fedb361e2e6d6315637551802a582fcbd03152c6f7e7d0ca；下一次探针应优先观察layers.25向0的Q/V输入梯度与共享hidden-state累计，并补齐qk_right捕获。
+对R169既有cross-runtime comparison与update-cause JSON做了标准库只读归类，未重新加载NPZ、未import Jittor/Transformers、未调用NPU。两个rank各自112组梯度门均为0 mismatch；LoRA-B共有344,064个梯度元素，其中1,370个符号不同。每rank的51组更新失败数组只来自self_attn.q_proj LoRA-B（26组）和self_attn.v_proj LoRA-B（25组），覆盖layers.0–25：0–24层各两组、25层一组、26–27层为零；这些失败参数的初始值均为零。符号差异计数从layer0的91、layer1的92逐步降到layer25的1，layer26/27为0。在目前已采集的projection input cotangent中，layers.27/26逐位相同，首次非零差异出现在layer25：rank0最大4.77e-7、rank1最大1.53e-5；随后向低层增长。该分布与小幅反向差异向低层累积、再穿过零初始化LoRA-B首步AdamW更新的符号边界一致，但不能据此定位源算子或判定AdamW实现有误。离线结果文件为LAB同cohort的update-localization-r169.json，SHA256为66c81835b09c9880749fd0c497fe3ba7f093bc0e85fc9425b5e1eb1a188d82ee；下一次探针应优先观察layer26到25边界及后续Q/V输入梯度和共享hidden-state累计，并补齐qk_right捕获。
 
 
 验证：
