@@ -40,4 +40,6 @@ TORCH_MODE_PATHS = (
     "tests/type/test_type_system.py",
     "tests/structure",
     "compat/tests/triton/test_triton_torch_compat.py",
+    # Host-only contract methods still import jittor.compat.triton at module scope.
+    "compat/tests/triton/test_triton_backend.py",
 )
