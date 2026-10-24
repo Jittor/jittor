@@ -8,6 +8,7 @@ import sys
 from types import SimpleNamespace
 
 from ._common import require_version, required_patch, replace, replace_bound_aliases, UnsupportedAdapterVersion
+from ._accelerate_peft import patch_accelerate_peft_fsdp_utils
 
 SUPPORTED_VERSIONS = frozenset(("4.56.2", "5.5.3"))
 ACCELERATE_SUPPORTED_VERSIONS = frozenset(("1.10.1",))
@@ -363,4 +364,5 @@ def register(register_module_patch):
     register_module_patch("transformers.trainer", patch_trainer)
     register_module_patch("accelerate.utils.imports", patch_accelerate_imports)
     register_module_patch("accelerate.utils.fsdp_utils", patch_accelerate_fsdp_utils)
+    register_module_patch("accelerate.utils.fsdp_utils", patch_accelerate_peft_fsdp_utils)
     register_module_patch("accelerate", patch_accelerate)
