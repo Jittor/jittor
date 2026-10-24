@@ -136,10 +136,12 @@ def test_non_strict_model_restore_reports_real_missing_and_unexpected_keys():
 @pytest.mark.skipif(not hasattr(torch, "_torch_compat_install_context"), reason="Jittor unsupported-boundary policy")
 def test_unimplemented_state_dict_options_are_not_silently_accepted():
     model, optimizer = model_and_optimizer()
-    with pytest.raises(NotImplementedError, match="flatten_optimizer_state_dict"):
-        get_optimizer_state_dict(model, optimizer, options=StateDictOptions(flatten_optimizer_state_dict=True))
-    with pytest.raises(NotImplementedError, match="prefix removal"):
-        get_model_state_dict(model, options=StateDictOptions(keep_submodule_prefixes=False))
+    flattened = get_optimizer_state_dict(model, optimizer, options=StateDictOptions(flatten_optimizer_state_dict=True))
+    assert flattened and all(isinstance(key, str) for key in flattened)
+    assert set(get_model_state_dict(model, options=StateDictOptions(keep_submodule_prefixes=False))) == {"weight", "bias"}
+    with pytest.raises(NotImplementedError, match="full_state_dict with flatten_optimizer_state_dict"):
+        set_optimizer_state_dict(model, optimizer, flattened,
+                                 options=StateDictOptions(full_state_dict=True, flatten_optimizer_state_dict=True))
     with pytest.raises(ValueError, match="requires full_state_dict"):
         get_model_state_dict(model, options=StateDictOptions(broadcast_from_rank0=True))
 
@@ -178,7 +180,7 @@ def test_join_uneven_inputs_refuses_before_training_but_balanced_contexts_work(m
 
 
 @pytest.mark.skipif(not hasattr(torch, "_torch_compat_install_context"), reason="Jittor unsupported-boundary policy")
-def test_sharded_dcp_storage_remains_explicitly_unsupported(tmp_path):
+def test_legacy_sharded_tensor_construction_remains_explicitly_unsupported(tmp_path):
     import torch.distributed.checkpoint as dcp
     from torch.distributed.checkpoint.default_planner import DefaultLoadPlanner, DefaultSavePlanner
     from torch.distributed._shard.sharded_tensor import ShardedTensor, empty, init_from_local_shards
@@ -187,19 +189,15 @@ def test_sharded_dcp_storage_remains_explicitly_unsupported(tmp_path):
     previous = stub_policy.set_allow_stub(False)
     try:
         for planner in (DefaultSavePlanner, DefaultLoadPlanner):
-            with pytest.raises(NotImplementedError, match="DTensor chunk metadata"):
-                planner()
+            planner()
         for reader_or_writer in (dcp.FileSystemReader, dcp.FileSystemWriter):
-            with pytest.raises(NotImplementedError, match="DTensor chunk metadata"):
-                reader_or_writer(tmp_path / "sharded")
+            reader_or_writer(tmp_path / "sharded")
         with pytest.raises(NotImplementedError, match="DTensor chunk metadata"):
             ShardedTensor()
         with pytest.raises(NotImplementedError, match="DTensor chunk metadata"):
             init_from_local_shards([torch.ones(2, device=DEVICE)])
         with pytest.raises(NotImplementedError, match="DTensor chunk metadata"):
             empty((2,), dtype=torch.float32)
-        with pytest.raises(NotImplementedError, match="DTensor chunk metadata"):
-            dcp.save({"value": torch.ones(2, device=DEVICE)}, checkpoint_id=tmp_path / "sharded")
         assert not (tmp_path / "sharded").exists()
     finally:
         stub_policy.set_allow_stub(previous)
@@ -269,3 +267,25 @@ def test_fsdp_singleton_full_checkpoint_uses_public_object_collective():
         for field in ("step", "exp_avg", "exp_avg_sq"):
             np.testing.assert_array_equal(array(actual_optimizer["state"][name][field]),
                                           array(saved_optimizer["state"][name][field]))
+
+
+def test_default_dcp_named_state_persists_and_restores_optimizer_continuation(tmp_path):
+    import torch.distributed.checkpoint as dcp
+    model, optimizer = model_and_optimizer()
+    update(model, optimizer)
+    state = dict(zip(("model", "optimizer"), get_state_dict(model, optimizer)))
+    dcp.save(state, checkpoint_id=tmp_path / "checkpoint")
+    assert (tmp_path / "checkpoint").is_dir()
+    update(model, optimizer)
+    expected_model, expected_optimizer = clone_tree(get_state_dict(model, optimizer))
+    restored = dict(zip(("model", "optimizer"), get_state_dict(model, optimizer)))
+    dcp.load(restored, checkpoint_id=tmp_path / "checkpoint")
+    set_state_dict(model, optimizer, model_state_dict=restored["model"], optim_state_dict=restored["optimizer"])
+    update(model, optimizer)
+    actual_model, actual_optimizer = get_state_dict(model, optimizer)
+    for name in expected_model:
+        np.testing.assert_array_equal(array(actual_model[name]), array(expected_model[name]))
+    for name in expected_optimizer["state"]:
+        for field in ("step", "exp_avg", "exp_avg_sq"):
+            np.testing.assert_array_equal(array(actual_optimizer["state"][name][field]),
+                                          array(expected_optimizer["state"][name][field]))

@@ -65,6 +65,10 @@ REQUIRED = (
     # installers/distributed.py, from the distributed-checkpoint state dict.
     "_load_full_state_dict",
     "_get_full_state_dict",
+    "_get_sharded_state_dict",
+    "_load_sharded_state_dict",
+    "_get_sharded_optimizer_state_dict",
+    "_local_sharded_optimizer_state_dict",
     "_gather_optimizer_state_dict",
     "_shard_optimizer_state_dict",
     "refresh_optimizer_fsdp_params",

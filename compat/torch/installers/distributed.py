@@ -770,18 +770,6 @@ def _checkpoint_sharded_unavailable(api):
         _dcp_hint)
 
 
-class FileSystemReader:
-    def __init__(self, path, *a, **k):
-        _checkpoint_sharded_unavailable("torch.distributed.checkpoint.FileSystemReader")
-        self.path = path
-
-
-class FileSystemWriter:
-    def __init__(self, path, *a, **k):
-        _checkpoint_sharded_unavailable("torch.distributed.checkpoint.FileSystemWriter")
-        self.path = path
-
-
 
 class StateDictOptions:
     def __init__(self, *, full_state_dict=False, cpu_offload=False,
@@ -1247,50 +1235,22 @@ _dcp_load_effect = ("return the state dict unchanged without reading the "
                     "weights")
 
 
-_dcp_hint = ("Sharded storage requires DTensor chunk metadata and planner/storage support. "
-             "Use named FULL state-dict transforms with torch.save for supported checkpoints.")
+_dcp_hint = ("Legacy ShardedTensor constructors require DTensor chunk metadata not supplied by this API. "
+             "Default named DTensor checkpoints use the native manifest filesystem path.")
 
 
-def _api_checkpoint_load_state_dict(*args, **kwargs):
-    return _stub_unimplemented('torch.distributed.checkpoint.load_state_dict', _dcp_load_effect, _dcp_hint, stub_result=None)
-
-
-def _api_checkpoint_save_state_dict(*args, **kwargs):
-    return _stub_unimplemented('torch.distributed.checkpoint.save_state_dict', _dcp_save_effect, _dcp_hint, stub_result=None)
-
-
-def _api_checkpoint_load(*args, **kwargs):
-    return _stub_unimplemented('torch.distributed.checkpoint.load', _dcp_load_effect, _dcp_hint, stub_result=None)
-
-
-def _api_checkpoint_save(*args, **kwargs):
-    return _stub_unimplemented('torch.distributed.checkpoint.save', _dcp_save_effect, _dcp_hint, stub_result=None)
-
-
-class DefaultSavePlanner:
-    """Import boundary for callers using FULL, rather than sharded, files."""
-
-    def __init__(self, *args, **kwargs):
-        raise NotImplementedError(
-            "torch.distributed.checkpoint.default_planner.DefaultSavePlanner: "
-            "sharded checkpoint planning is not implemented; use FULL state dicts and torch.save")
-
-
-class DefaultLoadPlanner:
-    def __init__(self, *args, **kwargs):
-        raise NotImplementedError(
-            "torch.distributed.checkpoint.default_planner.DefaultLoadPlanner: "
-            "sharded checkpoint planning is not implemented; use FULL state dicts and torch.load")
+from ..checkpoint_storage import (
+    FileSystemReader, FileSystemWriter, DefaultSavePlanner, DefaultLoadPlanner,
+    load as _api_checkpoint_load, save as _api_checkpoint_save,
+    load_state_dict as _api_checkpoint_load_state_dict,
+    save_state_dict as _api_checkpoint_save_state_dict,
+)
 
 
 def _api_checkpoint_fs_write_item(*args, **kwargs):
     return _stub_unimplemented('torch.distributed.checkpoint.filesystem._write_item', _dcp_save_effect, _dcp_hint, stub_result=None)
 
 
-_api_checkpoint_load_state_dict._jittor_unimplemented = 'torch.distributed.checkpoint.load_state_dict'
-_api_checkpoint_save_state_dict._jittor_unimplemented = 'torch.distributed.checkpoint.save_state_dict'
-_api_checkpoint_load._jittor_unimplemented = 'torch.distributed.checkpoint.load'
-_api_checkpoint_save._jittor_unimplemented = 'torch.distributed.checkpoint.save'
 _api_checkpoint_fs_write_item._jittor_unimplemented = 'torch.distributed.checkpoint.filesystem._write_item'
 
 def _install_distributed(g, registry=None):
@@ -1473,26 +1433,22 @@ def _install_distributed(g, registry=None):
     checkpoint.__path__ = getattr(checkpoint, "__path__", [])
     checkpoint.FileSystemReader = FileSystemReader
     checkpoint.FileSystemWriter = FileSystemWriter
-    # torch.distributed.checkpoint save/load were the identity: dcp.save()
-    # wrote nothing and returned successfully, so a sharded checkpoint was
-    # silently never persisted and dcp.load() silently left the model at its
+    # Bind default filesystem I/O to its canonical native-backed owner.
+    # Legacy low-level chunk writers and ShardedTensor constructors retain
+    # their explicit unsupported policy. Historical no-op I/O left models at
     # current weights. Refuse instead of losing the run.
     checkpoint.load_state_dict = _api_checkpoint_load_state_dict
-    _record_unimplemented('torch.distributed.checkpoint.load_state_dict', _dcp_load_effect, _dcp_hint)
     checkpoint.save_state_dict = _api_checkpoint_save_state_dict
-    _record_unimplemented('torch.distributed.checkpoint.save_state_dict', _dcp_save_effect, _dcp_hint)
     checkpoint.load = _api_checkpoint_load
-    _record_unimplemented('torch.distributed.checkpoint.load', _dcp_load_effect, _dcp_hint)
     checkpoint.save = _api_checkpoint_save
-    _record_unimplemented('torch.distributed.checkpoint.save', _dcp_save_effect, _dcp_hint)
     checkpoint_sd = _types.ModuleType("torch.distributed.checkpoint.state_dict")
     checkpoint_sd.StateDictOptions = StateDictOptions
-    checkpoint_sd.get_model_state_dict = _get_model_state_dict
-    checkpoint_sd.set_model_state_dict = _set_model_state_dict
-    checkpoint_sd.get_optimizer_state_dict = _get_optimizer_state_dict
-    checkpoint_sd.set_optimizer_state_dict = _set_optimizer_state_dict
-    checkpoint_sd.get_state_dict = _api_checkpoint_sd_get_state_dict
-    checkpoint_sd.set_state_dict = _api_checkpoint_sd_set_state_dict
+    checkpoint_sd.get_model_state_dict = get_model_state_dict
+    checkpoint_sd.set_model_state_dict = set_model_state_dict
+    checkpoint_sd.get_optimizer_state_dict = get_optimizer_state_dict
+    checkpoint_sd.set_optimizer_state_dict = set_optimizer_state_dict
+    checkpoint_sd.get_state_dict = get_state_dict
+    checkpoint_sd.set_state_dict = set_state_dict
     checkpoint_planner = _types.ModuleType("torch.distributed.checkpoint.default_planner")
     checkpoint_planner.DefaultSavePlanner = DefaultSavePlanner
     checkpoint_planner.DefaultLoadPlanner = DefaultLoadPlanner
@@ -1585,15 +1541,14 @@ def _install_distributed(g, registry=None):
         "Import-compatible context and hooks do not implement uneven-input communication")
     register_api_bindings(checkpoint, "torch.distributed.checkpoint",
         ("load_state_dict", "save_state_dict", "load", "save", "FileSystemReader", "FileSystemWriter"),
-        Fidelity.UNIMPLEMENTED, "Checkpoint I/O follows the existing explicit unsupported policy")
+        Fidelity.APPROXIMATE, "Default filesystem/planner calls delegate native sharded I/O; native manifest format only")
     register_api_bindings(checkpoint_planner, "torch.distributed.checkpoint.default_planner",
-        ("DefaultSavePlanner", "DefaultLoadPlanner"), Fidelity.UNIMPLEMENTED,
-        "DTensor chunk metadata and sharded planner/storage support are unavailable")
+        ("DefaultSavePlanner", "DefaultLoadPlanner"), Fidelity.APPROXIMATE,
+        "Default planning delegates native tensor intervals; custom planner options reject explicitly")
     register_api_bindings(checkpoint_sd, "torch.distributed.checkpoint.state_dict",
         ("StateDictOptions", "get_model_state_dict", "set_model_state_dict",
          "get_optimizer_state_dict", "set_optimizer_state_dict", "get_state_dict", "set_state_dict"),
-        Fidelity.APPROXIMATE, "Named model/optimizer state transforms and registered FULL FSDP providers; "
-        "unsupported state-dict options reject explicitly; sharded storage remains unsupported")
+        Fidelity.APPROXIMATE, "Canonical named model/optimizer transforms with registered FULL and local-interval FSDP providers")
     register_api_bindings(rendezvous_mod, "torch.distributed.rendezvous", ("rendezvous",),
         Fidelity.APPROXIMATE, "Delegates supported URL, rank, world-size and timeout handling to native stores")
     register_api_bindings(c10d, "torch.distributed.distributed_c10d",

@@ -1315,22 +1315,28 @@ class TestDistributedStubs(StubPolicyBase):
         import sys
         return sys.modules["torch.distributed"]
 
-    def test_dcp_save_is_refused(self):
+    def test_dcp_save_requires_an_explicit_destination(self):
         import sys
         dcp = sys.modules["torch.distributed.checkpoint"]
-        self.assertRefuses(lambda: dcp.save({"w": jt.ones(2)}),
-                           "checkpoint.save", "discarding the checkpoint")
+        with self.assertRaisesRegex(ValueError, "checkpoint_id"):
+            dcp.save({"w": jt.ones(2)})
 
-    def test_dcp_load_is_refused(self):
+    def test_dcp_load_requires_an_explicit_source(self):
         import sys
         dcp = sys.modules["torch.distributed.checkpoint"]
-        self.assertRefuses(lambda: dcp.load({"w": jt.ones(2)}),
-                           "checkpoint.load")
+        with self.assertRaisesRegex(ValueError, "checkpoint_id"):
+            dcp.load({"w": jt.ones(2)})
 
-    def test_dcp_save_stub_fallback(self):
+    def test_dcp_custom_storage_cannot_opt_into_a_stub(self):
         import sys
+        from jittor.compat import stub_policy
         dcp = sys.modules["torch.distributed.checkpoint"]
-        self.assertStubFallback(lambda: dcp.save({"w": jt.ones(2)}))
+        previous = stub_policy.set_allow_stub(True)
+        try:
+            with self.assertRaisesRegex(NotImplementedError, "custom DCP storage"):
+                dcp.save({"w": jt.ones(2)}, storage_writer=object())
+        finally:
+            stub_policy.set_allow_stub(previous)
 
     def test_single_rank_store_still_works(self):
         # One rank has nobody to meet, so a per-process dict IS a correct store.

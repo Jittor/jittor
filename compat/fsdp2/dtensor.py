@@ -283,12 +283,60 @@ class _DTensorMeta(type):
 
 
 class DTensor(metaclass=_DTensorMeta):
-    def __init__(self, local_tensor, device_mesh=None, placements=None, **kwargs):
+    def __init__(self, local_tensor, device_mesh=None, placements=None,
+                 checkpoint_shape=None, checkpoint_offset=None, **kwargs):
         self._local_tensor = local_tensor
+        self._checkpoint_metadata = None
+        if checkpoint_shape is not None or checkpoint_offset is not None:
+            shape = tuple(checkpoint_shape)
+            offset = checkpoint_offset
+            count = int(np.prod(local_tensor.shape, dtype=np.int64))
+            if (any(type(d) is not int or d < 0 for d in shape)
+                    or type(offset) is not int or offset < 0
+                    or offset + count > int(np.prod(shape, dtype=np.int64))):
+                raise ValueError("invalid DTensor checkpoint flat interval")
+            self._checkpoint_metadata = (shape, offset)
         self.device_mesh = device_mesh or DeviceMesh(
             "cuda" if getattr(jt, "has_cuda", 0) else "cpu", (0,))
         self.placements = tuple(placements or (Replicate(),))
         self._spec = types.SimpleNamespace(mesh=self.device_mesh, placements=self.placements)
+
+    @property
+    def checkpoint_metadata(self):
+        return self._checkpoint_metadata
+
+    @property
+    def shape(self):
+        return self._checkpoint_metadata[0] if self._checkpoint_metadata is not None else self._local_tensor.shape
+
+    @property
+    def ndim(self):
+        return len(self.shape)
+
+    def size(self, dim=None):
+        return self.shape if dim is None else self.shape[dim]
+
+    def numel(self):
+        return int(np.prod(self.shape, dtype=np.int64))
+
+    def _checkpoint_copy(self, local):
+        if self._checkpoint_metadata is None:
+            return local
+        shape, offset = self._checkpoint_metadata
+        return type(self)(local, self.device_mesh, self.placements,
+                          checkpoint_shape=shape, checkpoint_offset=offset)
+
+    def detach(self):
+        return self._checkpoint_copy(self._local_tensor.detach())
+
+    def clone(self, *args, **kwargs):
+        return self._checkpoint_copy(self._local_tensor.clone(*args, **kwargs))
+
+    def cpu(self):
+        return self._checkpoint_copy(self._local_tensor.cpu())
+
+    def to(self, *args, **kwargs):
+        return self._checkpoint_copy(self._local_tensor.to(*args, **kwargs))
 
     @staticmethod
     def from_local(local_tensor, device_mesh=None, placements=None, run_check=False,

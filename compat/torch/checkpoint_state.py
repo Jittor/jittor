@@ -41,6 +41,8 @@ def _optimizers(optimizers):
 
 
 def _map_tree(value, function):
+    if getattr(value, "checkpoint_metadata", None) is not None:
+        return value._checkpoint_copy(function(value.to_local()))
     if isinstance(value, jt.Var):
         return function(value)
     if isinstance(value, Mapping):
@@ -217,7 +219,8 @@ def get_model_state_dict(model, *, submodules=None, options=None):
     model = _unwrapped_model(model)
     prefixes = _submodule_prefixes(model, submodules)
     provider = _fsdp(model)
-    result = provider._get_full_state_dict(model) if provider is not None and options.full_state_dict else model.state_dict()
+    result = (provider._get_full_state_dict(model) if options.full_state_dict
+              else provider._get_sharded_state_dict(model)) if provider is not None else model.state_dict()
     if options.ignore_frozen_params:
         frozen = {name for name, parameter in model.named_parameters() if not parameter.requires_grad}
         result = {name: value for name, value in result.items() if name not in frozen}
@@ -259,8 +262,11 @@ def set_model_state_dict(model, state_dict, *, options=None):
                                 for name, value in values.items())
         state = expanded
     provider = _fsdp(model)
-    if provider is not None and options.full_state_dict:
-        provider._load_full_state_dict(model, state, strict=options.strict)
+    if provider is not None:
+        if options.full_state_dict:
+            provider._load_full_state_dict(model, state, strict=options.strict)
+        else:
+            provider._load_sharded_state_dict(model, state, strict=options.strict)
         return None
     loader = model.load_state_dict
     if getattr(loader, "__func__", None) is jt.Module.load_state_dict:
@@ -307,6 +313,8 @@ def get_optimizer_state_dict(model, optimizers, *, submodules=None, options=None
         else:
             ranks[0] = metadata
         result = provider._gather_optimizer_state_dict(model, result, ranks)
+    elif provider is not None:
+        result = provider._get_sharded_optimizer_state_dict(model, result)
     if options.flatten_optimizer_state_dict:
         result = _flatten(result)
     if options.cpu_offload:
@@ -329,8 +337,9 @@ def set_optimizer_state_dict(model, optimizers, optim_state_dict, *, options=Non
     if "state" not in state:
         state = _unflatten(state, model, optimizers)
     provider = _fsdp(model)
-    if provider is not None and options.full_state_dict:
-        state = provider._shard_optimizer_state_dict(model, state)
+    if provider is not None:
+        state = (provider._shard_optimizer_state_dict(model, state) if options.full_state_dict
+                 else provider._local_sharded_optimizer_state_dict(model, state))
     if provider is not None:
         # FULL model loading can replace flat-entry shard views. Rebind the
         # live optimizer through its existing owner before resolving FQNs.

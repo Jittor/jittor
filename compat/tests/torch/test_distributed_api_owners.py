@@ -187,14 +187,16 @@ def test_init_destroy_store_and_backend_validation(distributed_state, monkeypatc
     assert state["initialized"]
 
 
-def test_checkpoint_stubs_keep_policy_and_importable_owner(monkeypatch):
+def test_checkpoint_default_io_keeps_importable_canonical_owner(monkeypatch):
     from jittor.compat import stub_policy
+    from jittor.compat.torch import checkpoint_storage
     dist = compatibility_owner(jt).distributed
     monkeypatch.setattr(stub_policy, "allow_stub", lambda: False)
     for name in ("load", "save", "load_state_dict", "save_state_dict"):
         function = getattr(dist.checkpoint, name)
+        assert function is getattr(checkpoint_storage, name)
         assert "<locals>" not in function.__qualname__
         assert pickle.loads(pickle.dumps(function)) is function
-        assert function._jittor_unimplemented.endswith("." + name)
-        with pytest.raises(NotImplementedError, match="checkpoint"):
-            function({})
+        assert not hasattr(function, "_jittor_unimplemented")
+    with pytest.raises(ValueError, match="checkpoint_id"):
+        dist.checkpoint.save({})
