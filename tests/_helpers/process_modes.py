@@ -5,6 +5,11 @@ NATIVE_MODE_PATHS = ("tests/structure/backends/acl/test_acl_dtype_preservation.p
 
 
 def is_torch_mode_path(path):
+    # Gate paths are usually canonical (compat/tests/...), while pytest's
+    # collection hook and direct selections see the source-tree link spelling.
+    # Both names resolve to the same files and must share one process mode.
+    if path.startswith("python/jittor/compat/"):
+        path = path[len("python/jittor/"):]
     return path.startswith(TORCH_MODE_PATHS) and path not in NATIVE_MODE_PATHS
 
 
