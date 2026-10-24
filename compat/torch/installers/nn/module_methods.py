@@ -514,8 +514,13 @@ def _load_state_dict(self, state_dict, strict=True, assign=False):
                 # Loading copies values, without recording a differentiable
                 # in-place update of this existing leaf. Keep the public copy
                 # owner's placement, alias/version and storage semantics.
+                from ..tensor.method_api import _copy_, _copy_detached_storage
                 with jt.no_grad():
-                    target.copy_(value)
+                    # Native Module parameters are native Vars, without the
+                    # frontend-only copy_ method. Reuse the canonical copy
+                    # owner so retained aliases keep their existing storage.
+                    if not _copy_detached_storage(target, value):
+                        _copy_(target, value)
                 copied[key] = target
         load_state = copied
     _ORIG_MODULE_LOAD_STATE_DICT(self, load_state)

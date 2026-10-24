@@ -289,3 +289,33 @@ def test_default_dcp_named_state_persists_and_restores_optimizer_continuation(tm
         for field in ("step", "exp_avg", "exp_avg_sq"):
             np.testing.assert_array_equal(array(actual_optimizer["state"][name][field]),
                                           array(expected_optimizer["state"][name][field]))
+
+
+@pytest.mark.skipif(not hasattr(torch, "_torch_compat_install_context"), reason="Jittor native DCP leaf storage")
+def test_default_dcp_load_preserves_native_and_frontend_leaf_storage(tmp_path):
+    import jittor as jt
+    import torch.distributed.checkpoint as dcp
+
+    saved = {"frontend": torch.tensor([4., 5.]), "native": jt.array([6., 7.])}
+    dcp.save(saved, checkpoint_id=tmp_path / "checkpoint")
+    targets = {"frontend": torch.nn.Parameter(torch.tensor([1., 2.])),
+               "native": jt.array([2., 3.]).start_grad()}
+    identities = {name: value for name, value in targets.items()}
+    aliases = {name: value.detach() for name, value in targets.items()}
+    snapshots = {name: jt.Var.copy(value) for name, value in targets.items()}
+    pointers = {name: value.device_raw_ptr for name, value in targets.items()}
+    dcp.load(targets, checkpoint_id=tmp_path / "checkpoint")
+    for name, expected in (("frontend", [4., 5.]), ("native", [6., 7.])):
+        value = targets[name]
+        assert value is identities[name]
+        assert value.device_raw_ptr == pointers[name]
+        assert value.requires_grad and value.is_backward_leaf
+        np.testing.assert_array_equal(value.numpy(), expected)
+        np.testing.assert_array_equal(aliases[name].numpy(), expected)
+    np.testing.assert_array_equal(snapshots["frontend"].numpy(), [1., 2.])
+    np.testing.assert_array_equal(snapshots["native"].numpy(), [2., 3.])
+    result = (targets["frontend"] * jt.array([2., 3.])).sum()
+    result = result + (targets["native"] * jt.array([4., 5.])).sum()
+    gradients = jt.grad(result, [targets["frontend"], targets["native"]])
+    np.testing.assert_array_equal(gradients[0].numpy(), [2., 3.])
+    np.testing.assert_array_equal(gradients[1].numpy(), [4., 5.])

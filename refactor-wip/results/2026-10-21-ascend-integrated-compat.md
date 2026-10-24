@@ -2,7 +2,7 @@
 
 本记录对应[综合计划](../testing/2026-10-21-ascend-integrated-compat-plan.md)，唯一活动状态源为[整改看板](../architecture/refactor-board.md)的 ASC 任务。前半部分保留 2026-10-21 的 MAIN-r28/123 历史验收；后续各 cohort 按各自冻结源码区分，不相互外推。R65 真实 Qwen3-0.6B BF16 LoRA 对拍与 R68 最终主树 FSDP2 双卡 Linear 对拍均绑定提交 `9390fa0e84de651e7e1b01de4d142e04d4333f8b`、3336 文件源清单 SHA256 `c00986fb31e15e18860acf60e2ee0059c7dc63afb90ef0a286131d9fc7eb0f9a`；旧 R64/R63 仍只对其原冻结源码有效。下文保留原始失败和未运行项。
 
-> **截至2026-10-24 R190：** R182在提交 `ee2f3e9345085b6bff1ded9519ea10af2c62723f` 的冻结源码上，真实Qwen3-0.6B BF16 LoRA双卡单次更新的完整logits、224组梯度、224组初始参数及224组更新后参数均通过原预算；更新最大绝对差为7.2759576e-12。Native rank1仍曾同时见于物理卡5/6，严格排他映射未通过。R183的Native fresh恢复失败已定位到固定Accelerate版本的空optimizer加载模板；R185的Jittor在首步更新后因默认SHARDED DCP FileSystemWriter未实现而失败。R188梯度裁剪回归CPU7项/NPU7项通过，R189真实ACL确定性开关与恢复1项通过，两项NPU验证fallback增量均为0；不授予完整多步恢复、训练确定性或性能资格。详见文末R182–R190。
+> **截至2026-10-24 R204：** R195在a266f384b加六文件候选上完成检查点专项163P/31个CUDA skip，原R193的8项失败及后续失败全部保留。R198/R201/R203/R204实际CPU singleton的SHARDED保存和fresh续训通过，各97/101/101/101项完整数组strict0，不代表真实双卡分片通过。R194独立Native nested四child加root三dtype实卡流程通过，严格rank0→5/rank1→6、监控gap/foreign/wrong均0且退出后空闲。Jittor R197单卡预热的BF16输入/FP32权重路径失败，正式双卡未启动。R202 FULL恢复的BF16 NaN payload从0x7FC1变0x7FC0，修复验证仍待。真实Qwen多步完整对拍、最终双卡恢复、重计算、随机恢复和NPU性能未验收，详见文末R192–R204。
 
 | 本轮验收 | 实际结论与源码范围 |
 | --- | --- |
@@ -1156,3 +1156,196 @@ R186完整4updates/accum2/split2、两runtime各continuous/interrupt/resume的�
 4. 实现真实activation recompute并验证重执行、闭包参数梯度、RNG preserve与显存；完善Generator合并合同、sampler、多worker预取和随机数据fresh恢复；训练确定性仍需完整fresh验证。
 5. 对受本次变更影响的Transformers/Tokenizers/PEFT/Accelerate/safetensors组合做最终源码回归，保留历史模型矩阵的准确冻结身份。
 6. 仅对应正确性通过后测配对至少10次NPU推理/训练吞吐、延迟、峰值live/reserved显存及稳定性，区分JIT/首步/稳态；当前没有合格NPU性能结果。
+
+
+## 2026-10-24 R192–R204：检查点CPU恢复与nested实卡复验
+
+### 源码与同步边界
+
+R194绑定d2974a3d7fc93aff42333b82b347437bb94048f0加当时四文件候选，
+3343 tracked文件清单SHA256为06f37890c2186a79e4b6ff6debd4cbbce882e6b48ecdb261b569c44aac6e060f。
+之后整合检查点状态修复eaa12822f和Adam叶身份/closure梯度模式修复a266f384b。
+R195 combined-r2及四个CPU singleton cohort绑定a266f384b50cc627022d1b8e203af6f1dfbbdc39加六文件候选，
+涉及legacy同对象别名、FULL物化测试、默认DCP加载、原生Module加载及safe-globals发布。
+R195的3344文件清单SHA256为e981c0073815a5c5a3fa6194f7a0ced438874f48ec7765c82248e32c61591072；
+R197同一代码集合的独立清单为ec8c8d0fb97fa2feb9179c4d582fb775cefd2ce9d6136dd27bb311dad1a887cd。
+全tracked清单以UTF-8/NUL读取Git路径，目录symlink使用SYMLINK前缀加readlink字节哈希，保留中文路径。
+
+新HTTP/1.1 fetch在45秒超时，不证明远端最新。LAB记录为
+_state/ascend-compat/handoff/remote-sync-20261024-111716-r195.json（文件名UTC）。
+已知wip tip 305c2f0866f163b0549d47b2e4264c5d41a86385与2.0-refactor tip
+ca56aa802c2acf9a22bca32d1bee3276381ed203均经merge-base确认是当前HEAD祖先。
+保留既有合并、本地提交和候选，没有reset、stash或push。
+
+### R193/R195：原失败后的真实CPU修复验证
+
+R193为114P/8F，原日志保留。修复覆盖optimizer缺省状态及参数组预校验、
+不存在的FSDP命名hook、Adam更新错误记录AD历史、native Var没有frontend copy_，
+以及旧safe-globals发布遮蔽实际受限解码器注册表。
+复用canonical owner：公开named_parameters配合法FSDP刷新、所有optimizer先计划再加载、
+Adam公式及写回no_grad而closure enable_grad、native Module及DCP使用共享存储copy owner；
+legacy私有checkpoint名字改为同对象canonical别名，移除重复旧实现。
+扩大复验先160P/2F，继续修DCP加载no_grad及补齐FULL host替身refresh记录；
+combined-r2最终163P/31个CUDA skip、13.78秒、rc0。skip均属于仅CPU窗口的加速设备限制。
+新增回归要求原生与前端参数的对象、存储指针、detach别名、旧快照、叶身份及后续全部梯度正确，
+没有豁免真正非叶的requires_grad错误，也未改数值预算。
+
+独立PyTorch2.7.1+cpu执行相同Adam/AdamW新增12个CPU fixture case全部通过，未加载Jittor/torch_npu。
+共同正向CPU offload恢复下一步，完整loss、全部参数/输入梯度、model及Adam状态24项/62元素，
+沿用atol2e-6、rtol2e-5，0超预算、最大绝对差7.450580596923828e-9。
+Native整个StateDictOptions文件原23tests/4errors/1skip保留；
+固定2.7.1在部分partial/strict负向场景有KeyError及畸形参数组接受差异，
+未放宽Jittor更严格的原断言，也未将Native整个文件记为通过。
+
+证据位于LAB _state/ascend-compat/device-api/checkpoint-integration-r193-cpu/及
+device-api/checkpoint-integration-r195-cpu/。
+后者combined-r2/focused.log SHA256为044337b1892d3bb9f090fc461d2ec839aca5c143467958f41e17b8e25d343959；
+cpu-native-options-comparison.json保存全部24项指标，progress-summary-r204.json汇总实际cohort。
+目录symlink曾在清单准备时误当普通文件读取；错误发生在worker前，保留后修正，未用不完整清单运行。
+
+### R198/R201/R203/R204：实际Accelerate SHARDED及PEFT fresh恢复
+
+四格串行复用已归还的显式CPU暖cache，实际固定Accelerate1.10.1与PEFT0.17.1，
+复制当前完整adapter包并核验source/overlay/build recipe/worker前后一致。
+每格独立运行warm、continuous、interrupt、fresh resume及比较器；
+完整输出、输入梯度、全部适用参数梯度、model、optimizer和scheduler即时落盘。
+默认FileSystemWriter/Reader真实读写native manifest和payload，没有切换FULL规避SHARDED。
+fresh恢复后两个Adam状态均推进到step2，fallback增量0。
+
+| Cohort | 实际场景 | strict0完整数组比较 |
+| --- | --- | --- |
+| R198 | 非PEFT、SHARDED、FP32、offload0 | 97项通过 |
+| R201 | PEFT round2、SHARDED、FP32、offload0 | 101项通过 |
+| R203 | PEFT round2、SHARDED、FP32、offload1 | 101项通过 |
+| R204 | PEFT round2、SHARDED、BF16 policy、offload0 | 101项通过 |
+
+这些是world1 CPU本地API/存储/两步恢复，true_fsdp_initialized为false，
+不覆盖双rank分片交集、HCCL、910B3放置或真实Qwen4–10步合同。
+R204当时只验证BF16 policy配置下的恢复；singleton lifecycle未启用，不能据此宣称真实BF16计算。
+BF16原始位断言另含signed zero/NaN、空张量与模型buffer。
+证据分别位于LAB _state/ascend-compat/real-model/下
+dcp-cpu-r198-sharded-fp32-offload0/、dcp-cpu-r201-lora-sharded-fp32-offload0/、
+dcp-cpu-r203-lora-sharded-fp32-offload1/及dcp-cpu-r204-lora-sharded-bf16-offload0/，
+以各自driver.json、recovery-comparison.json和完整NPZ为准。
+
+### R200/R202：FULL恢复仍有BF16原始位缺陷
+
+R200在runtime导入前因TMPDIR过长被fixture拒绝，原尝试保留。
+R202使用短LAB临时路径，warm/continuous/interrupt均rc0；
+fresh resume在BF16 buffer原始位断言失败：0x7FC1变0x7FC0，其余三项一致。
+离线读取原pytorch_model_fsdp.bin确认float32 payload高16位仍含0x7FC1；
+保存未丢该payload，数值cast回BF16会规范化NaN。
+独立Native2.7.1的float32→BF16 cast复现此变化，
+直接BF16 torch.save/load则保持dense/view/empty/scalar全部原始位。
+继续修复canonical原始位编解码，不改fixture或放宽逐位断言。
+证据在LAB real-model/dcp-cpu-r202-full-fp32-offload0/，
+独立审计在real-model/r183-native-audit-20261024/r202-bf16-native-audit.json。
+固定Accelerate在FULL world1强制offload False，不把两个请求值计为两种多rank实现。
+
+### R192/R194/R197：Native nested通过，Jittor预热失败保留
+
+R192两个Native rank在新增observer处失败：公开Shard字符串为S(0)，旧包含Shard的字符串判断错误；
+尚未到原R71 HCCL点，原51个输出文件字节不变。
+R194改用公开placement.is_shard并在断言前fsync元数据，数学和communicator调用不变。
+独立Native实际四child加root，FP32/FP32、BF16/FP32、BF16/BF16三格的完整
+forward/loss、六组参数梯度、输入梯度及SGD更新rc0，66.919805秒。
+PID2009609仅物理5，PID2009610仅物理6；13个采样、gap/foreign/wrong均0，退出后空闲。
+两rank参数梯度和更新一致，36项SGD公式检查最大差0。
+这是Native参考通过，尚无对应Jittor数值通过结论。
+LAB distributed/nested-hccl-preflight-r194-dual56/native-qualification.json
+SHA256为9fb33a5df265b4a9b22ce0b75b6b2989ffc4ecc88a6356a3d452fb8f38fb72d5。
+
+R197同一候选源码开始rank0→rank1串行预热，首个单卡阶段39.773890秒后rc1：
+nested Sequential的BF16路径在mapped_matmul观察到BF16输入与FP32权重。
+world1 HCCL已初始化，正式双卡未启动；gap/foreign/wrong均0，卡5已归还。
+LAB distributed/nested-fsdp2-r197-dual56/保留完整stdout和failure JSON；
+不能用手动cast模型或改变dtype绕过FSDP mixed policy路径。
+绑定Native参考及数学AST只解释复用条件，不替代Jittor执行。
+
+### R205/R206：FULL原始位修复及真实singleton SHARDED恢复
+
+统一BF16编解码已提交：新存储使用uint16原始位，旧float32载荷按高16位解码，
+Torch archive与safetensors复用同一owner，避免数值cast规范化NaN。
+真实CPU定向13P；新增Torch archive夹具先暴露persistent-id元组顺序和缺少version的问题，
+修正为实际格式后，独立PyTorch2.7.1+cpu完整读取dense、非连续view、scalar及empty四种夹具，
+每种BF16原始字节完全一致。原失败日志和夹具保留，未修改原数据与逐位断言。
+
+R205非PEFT/FULL/FP32与R206 PEFT round2/SHARDED/BF16 policy，均完成独立warm、
+continuous、interrupt、fresh resume及完整比较，各阶段rc0，源码及完整adapter包前后不变。
+两格分别97项和101项严格一致，两个Adam状态均推进到step2，fallback增量0。
+两格的true_fsdp_initialized实际为true，区别于R198—R204未进入singleton lifecycle的历史结果。
+R206记录了BF16 policy及真实生命周期，未单独观测每个子Linear的计算dtype，
+不把master参数FP32及输出FP32当作BF16计算证明。
+
+证据在LAB _state/ascend-compat/real-model/dcp-cpu-r205-full-fp32-offload0/、
+dcp-cpu-r206-lora-sharded-bf16-offload0/的driver.json、recovery-comparison.json及完整NPZ；
+BF16夹具在device-api/checkpoint-integration-r195-cpu/bf16-codec-r3/。
+这些CPU singleton结果不替代HCCL2分片交集、910B3执行或真实Qwen多步合同。
+
+### R209：optimizer提前构造与状态迁移仍有两个实际回归
+
+整合FSDP旧参数身份/历史slot迁移及ACL affine reindex后，真实CPU专项247 collected、
+216 executed：214P/2F/31 CUDA skip，29.23秒；原singleton FULL checkpoint及新增mixed policy均通过。
+两个失败是AdamW初始化没有建立参数身份缓存，以及flat模式旧Parameter在断言时仍被保留。
+真实CPU tracing确认后者由参数收集函数递归visit闭包循环引用造成；
+原始失败、完整stdout和源码清单保留，不用gc.collect或放宽原生命周期断言取通过。
+全tracked 3347路径，UTF8/NUL及symlink规则完整覆盖，
+source-before.json SHA256为0f404da928d962ee9b7c4f87836d78ca4b090be46c92e0259391599c7e7cfe2c。
+证据在LAB _state/ascend-compat/device-api/checkpoint-integration-r209-cpu/，
+整合AdamW初始化与闭包修复后，R209 attempt-002真实CPU218P/31 CUDA skip，
+249 collected/218 executed、14.13秒，原两项失败与新增回归均通过；原方法数值/生命周期断言未改。
+完整源码清单SHA256为0979b8f9ed863aff713642ef2de3cd7097808188191ba7931a4cb095ab645f2a，前后不变。
+
+### R196：NPU原始位save越过reindex，fresh load仍失败
+
+attempt-001缺少显式JT_BACKEND=acl，在导入前发现cache recipe偏离暖缓存；
+只核验并停止本任务已记录进程组，未执行数组，保留停止receipt及冷缓存。
+attempt-002使用正确cfgbed66048，原始UInt16 reindex在backend禁止回落时失败，
+fused reindex/void无原生分派；void是算子variant，不是UInt16 dtype映射错误。
+
+复用现有native_indexing字节复制owner修复有界非负affine reindex forward，
+不经过Cast，原fixture与严格逐位预算不变。候选88项host通过、真实SDK两翻译单元语法通过，
+整合后attempt-003首次实际增量JIT串行，物理卡5的save rc0：
+14 leaves实际ACL/index0/npu:0，含BF16 signed zero、NaN payload、整数、empty及真实DTensor metadata；
+fallback 0→0，15个严格parent采样，gap/foreign/wrong均0，退出后健康空闲。
+执行记录SHA256为2ca630d4690eddd12d456f6c6a5ccae4bb075eb69fc595d0cbd6b737cdbca5f2。
+
+随后fresh load rc1：初始化uint16[5]目标触发CANN aclnnExpand不支持DT_UINT16。
+原stdout、完整保存载荷和失败JSON保留；6个采样gap/foreign/wrong均0，退出后健康空闲。
+执行记录SHA256为560b10a59db4060be4fce737f13f39e7e0ba7303b63d7fc9c2230dd73549d930。
+这不是完整保存恢复通过，也不是双rank训练结论。
+storage dtype字节广播复用相同copy planner，146项host及真实SDK语法通过；
+常用浮点/BF16保留原Expand路径，UInt16/UInt32/Int16/Complex64采用原始字节复制。
+整合后的attempt-004在同一0979b8f9完整源码上save与fresh load均rc0，
+14 leaves完整原始字节strict0，两个阶段fallback增量0；15/7个严格parent采样，
+gap/foreign/wrong均0，退出后健康空闲，source/code/overlay前后不变。
+比较JSON SHA256为a59efb4d5969091f7a74f834408c5212c7be53e751200b873e48285bab9b9294；
+save/load执行记录SHA256分别为9cf22aa4a16f122811501863ea58ba77947480e6eecaaecd54fa58bd7dab46b1、
+9d95d190dc0db176948071a79d6b85f9fed376b2dd8d1824d7efab773ea1a738。
+没有改变fixture dtype、数值cast或跳过广播；世界1读写不授予双rank训练或性能结论。
+
+证据在LAB _state/ascend-compat/checkpoint/dcp-native-acl-r196/cohorts/attempt-001/、
+attempt-002/、attempt-003/、attempt-004/；host在checkpoint/acl-reindex-r198-host/及acl-broadcast-storage-host/。
+R209 progress-summary.json绑定了两个NPU执行记录和原始CPU失败；首次SDK语法失败同样保留。
+
+## 按原计划截至R209仍需完成
+
+optimizer缓存/闭包CPU回归及ACL字节结构算子NPU roundtrip已在对应冻结源通过。
+接下来完成nested三dtype最终主树对拍、默认SHARDED双卡保存恢复及R186真实Qwen多步完整轨迹；
+Native/Jittor各自continuous/prefix/fresh恢复strict0、全micro输出/梯度/更新、严格物理映射均须通过。
+R186/R208准备及R196单rank存储通过不代表真实Qwen或双卡模型运行通过。
+真实激活重计算、训练确定性、random sampler/显式generator/多worker恢复、
+eval/predict/best reload与PEFT safetensors保存加载合并继续待验。
+至少10对性能和实际live/reserved显存仍须对应正确性准入，当前没有合格NPU性能。
+最终提交门禁须在整合源码上重跑，R190不能授予后续源码通过。
+本次续跑HTTP/1.1 fetch仍45秒超时，已知wip及2.0-refactor引用仍为本地祖先；
+新remote-sync receipt未授予远端最新结论。
+
+
+### R212：本次整合提交门禁入口
+
+在源码停止修改后，按仓库要求执行CPU native/Torch两种core、Torch模式完整tests/structure、
+布局及文档链接检查；所有原始stdout、逐项退出码与完整tracked清单保存于
+LAB _state/ascend-compat/device-api/checkpoint-closeout-r212/。
+该目录gate-results.json记录本次实际执行结果，source-check.json核验门禁期间源码未变化。
+R190历史门禁不替代本次执行。

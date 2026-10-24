@@ -208,7 +208,6 @@ def _bootstrap_native_distributed(rank, world_size, backend=None, store=None):
     jt.compile_extern.in_mpi = True
 
 
-
     jt.core.Var.mpi_all_reduce = _bootstrap_var_all_reduce
     jt.core.Var.mpi_broadcast = _bootstrap_var_broadcast
     return True
@@ -770,7 +769,6 @@ def _checkpoint_sharded_unavailable(api):
         _dcp_hint)
 
 
-
 class StateDictOptions:
     def __init__(self, *, full_state_dict=False, cpu_offload=False,
                  ignore_frozen_params=False, keep_submodule_prefixes=True,
@@ -784,271 +782,13 @@ class StateDictOptions:
         self.flatten_optimizer_state_dict = bool(flatten_optimizer_state_dict)
 
 
-def _checkpoint_options(options):
-    options = options or StateDictOptions()
-    if options.flatten_optimizer_state_dict:
-        raise NotImplementedError("flatten_optimizer_state_dict is unsupported")
-    if not options.keep_submodule_prefixes:
-        raise NotImplementedError("checkpoint prefix removal is unsupported")
-    if options.broadcast_from_rank0 and not options.full_state_dict:
-        raise ValueError("broadcast_from_rank0 requires full_state_dict=True")
-    return options
-
-
-def _checkpoint_model(model):
-    while getattr(model, "_jittor_ddp_state", None) is not None and hasattr(model, "module"):
-        model = model.module
-    return model
-
-
-def _checkpoint_parameter_names(model):
-    names = {}
-    parameters = {}
-    for name, parameter in model.named_parameters(remove_duplicate=False):
-        parameters[name] = parameter
-        names.setdefault(id(parameter), name)
-        local = getattr(parameter, "to_local", None)
-        if callable(local):
-            names.setdefault(id(local()), name)
-    return names, parameters
-
-
-def _checkpoint_fsdp_provider(model, options):
-    provider = _fsdp_hooks.provider()
-    if provider is None:
-        return None
-    if not any(getattr(child, "_is_fsdp_module", False)
-               for _, child in model.named_modules()):
-        return None
-    if not options.full_state_dict:
-        raise NotImplementedError("FSDP named checkpoints require full_state_dict=True")
-    return provider
-
-
-def _checkpoint_cpu_tree(value):
-    if isinstance(value, jt.Var):
-        return value.detach().clone().cpu()
-    if isinstance(value, dict):
-        return {key: _checkpoint_cpu_tree(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_checkpoint_cpu_tree(item) for item in value]
-    if isinstance(value, tuple):
-        return tuple(_checkpoint_cpu_tree(item) for item in value)
-    return value
-
-
-def _checkpoint_numpy_tree(value):
-    if isinstance(value, jt.Var):
-        return np.array(value.detach().clone().cpu().numpy(), copy=True)
-    if isinstance(value, np.ndarray):
-        return np.array(value, copy=True)
-    if isinstance(value, dict):
-        return {key: _checkpoint_numpy_tree(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_checkpoint_numpy_tree(item) for item in value]
-    if isinstance(value, tuple):
-        return tuple(_checkpoint_numpy_tree(item) for item in value)
-    return value
-
-
-def _checkpoint_broadcast_from_rank0(state_dict):
-    if _distributed_world_size() <= 1:
-        return state_dict
-    payload = (_checkpoint_numpy_tree(state_dict)
-               if _distributed_rank() == 0 else None)
-    objects = [payload]
-    _broadcast_object_list(objects, src=0)
-    if not isinstance(objects[0], dict):
-        raise TypeError("rank 0 FULL state dict broadcast did not produce a mapping")
-    return objects[0]
-
-
-def _checkpoint_offload(value, options):
-    if options.cpu_offload:
-        value = _checkpoint_cpu_tree(value)
-        if options.full_state_dict and _distributed_world_size() > 1 and _process_group.get_rank() != 0:
-            return {}
-    return value
-
-
-def _checkpoint_optimizers(optimizers):
-    if optimizers is None:
-        return []
-    if hasattr(optimizers, "state_dict"):
-        return [optimizers]
-    result = list(optimizers)
-    if any(not hasattr(optimizer, "state_dict") for optimizer in result):
-        raise TypeError("optimizers must contain optimizer objects")
-    return result
-
-
-def _checkpoint_initialize_optimizer(optimizer):
-    # Follow the native DCP public behavior: initialize wholly empty state
-    # through the optimizer's existing zero-gradient update, with lr zero.
-    if len(optimizer.state):
-        return
-    parameters = [parameter for group in optimizer.param_groups
-                  for parameter in group["params"]]
-    if any(parameter.grad is not None for parameter in parameters):
-        return
-    g = get_install_context(jt).target_namespace
-    rates = [group["lr"] for group in optimizer.param_groups]
-    try:
-        for parameter in parameters:
-            if parameter.requires_grad:
-                parameter.grad = g.zeros_like(parameter)
-        for group in optimizer.param_groups:
-            rate = group["lr"]
-            group["lr"] = g.zeros_like(rate) if isinstance(rate, jt.Var) else 0.0
-        optimizer.step(closure=None)
-    finally:
-        for group, rate in zip(optimizer.param_groups, rates):
-            group["lr"] = rate
-        optimizer.zero_grad(set_to_none=True)
-
-
-def _checkpoint_optimizer_layout(optimizer, parameter_names):
-    raw = optimizer.state_dict()
-    if len(raw["param_groups"]) != len(optimizer.param_groups):
-        raise ValueError("optimizer parameter-group count is inconsistent")
-    id_names = {}
-    for saved_group, group in zip(raw["param_groups"], optimizer.param_groups):
-        if len(saved_group["params"]) != len(group["params"]):
-            raise ValueError("optimizer parameter-group size is inconsistent")
-        for saved_id, parameter in zip(saved_group["params"], group["params"]):
-            name = parameter_names.get(id(parameter))
-            if name is None:
-                local = getattr(parameter, "to_local", None)
-                if callable(local):
-                    name = parameter_names.get(id(local()))
-            if name is None:
-                raise ValueError("optimizer parameter is not owned by the model")
-            id_names[saved_id] = name
-    return raw, id_names
-
-
-def _get_model_state_dict(model, *a, options=None, **k):
-    options = _checkpoint_options(options)
-    model = _checkpoint_model(model)
-    provider = _checkpoint_fsdp_provider(model, options)
-    result = provider._get_full_state_dict(model) if provider else model.state_dict(*a, **k)
-    if (provider is not None and options.full_state_dict and options.cpu_offload
-            and _distributed_world_size() > 1):
-        # HCCL-backed Jittor gathers are lazy. Every rank must execute the full
-        # state-dict gather before CPU offload drops nonzero-rank values;
-        # otherwise rank 0's later serialization can issue a hidden collective
-        # after peers have advanced to optimizer-state collectives.
-        jt.sync_all(True)
-    if options.ignore_frozen_params:
-        _, parameters = _checkpoint_parameter_names(model)
-        result = {name: value for name, value in result.items()
-                  if name not in parameters or parameters[name].requires_grad}
-    return _checkpoint_offload(result, options)
-
-
-def _get_optimizer_state_dict(model, optimizers, *, options=None):
-    options = _checkpoint_options(options)
-    model = _checkpoint_model(model)
-    provider = _checkpoint_fsdp_provider(model, options)
-    parameter_names, _ = _checkpoint_parameter_names(model)
-    result = {"state": {}, "param_groups": []}
-    for optimizer in _checkpoint_optimizers(optimizers):
-        if provider:
-            provider.refresh_optimizer_fsdp_params(optimizer)
-        _checkpoint_initialize_optimizer(optimizer)
-        raw, id_names = _checkpoint_optimizer_layout(optimizer, parameter_names)
-        for saved_id, fields in raw["state"].items():
-            name = id_names[saved_id]
-            if name in result["state"]:
-                raise ValueError("multiple optimizers own the same checkpoint parameter: " + name)
-            result["state"][name] = fields
-        for group in raw["param_groups"]:
-            result["param_groups"].append(dict(
-                group, params=[id_names[saved_id] for saved_id in group["params"]]))
-    if provider:
-        metadata = {}
-        for name, fields in result["state"].items():
-            metadata[name] = {}
-            for field, value in fields.items():
-                if field == "step":
-                    metadata[name][field] = ("step", float(value.item()) if isinstance(value, jt.Var) else float(value))
-                elif isinstance(value, jt.Var):
-                    metadata[name][field] = ("tensor", str(value.dtype))
-                else:
-                    metadata[name][field] = ("value", value)
-        ranks = [None] * _distributed_world_size()
-        _native_all_gather_object(ranks, metadata)
-        result = provider._gather_optimizer_state_dict(model, result, ranks)
-    if (provider is not None and options.full_state_dict and options.cpu_offload
-            and _distributed_world_size() > 1):
-        # FULL optimizer-state gathers are lazy too. Execute them on every rank
-        # before CPU offload returns an empty state to nonzero ranks.
-        jt.sync_all(True)
-    return _checkpoint_offload(result, options)
-
-
-def _set_model_state_dict(model, state_dict, *a, options=None, **k):
-    options = _checkpoint_options(options)
-    model = _checkpoint_model(model)
-    provider = _checkpoint_fsdp_provider(model, options)
-    if options.broadcast_from_rank0:
-        if provider is None:
-            raise NotImplementedError(
-                "broadcast_from_rank0 is implemented for registered FULL FSDP state")
-        state_dict = _checkpoint_broadcast_from_rank0(state_dict)
-    if provider:
-        return provider._load_full_state_dict(model, state_dict, strict=options.strict)
-    return model.load_state_dict(state_dict, strict=options.strict)
-
-
-def _set_optimizer_state_dict(model, optimizers, state_dict, *, options=None):
-    options = _checkpoint_options(options)
-    model = _checkpoint_model(model)
-    provider = _checkpoint_fsdp_provider(model, options)
-    if options.broadcast_from_rank0:
-        if provider is None:
-            raise NotImplementedError(
-                "broadcast_from_rank0 is implemented for registered FULL FSDP state")
-        state_dict = _checkpoint_broadcast_from_rank0(state_dict)
-    optimizers = _checkpoint_optimizers(optimizers)
-    parameter_names, _ = _checkpoint_parameter_names(model)
-    layouts = []
-    for optimizer in optimizers:
-        if provider:
-            provider.refresh_optimizer_fsdp_params(optimizer)
-        layouts.append(_checkpoint_optimizer_layout(optimizer, parameter_names))
-    expected_count = sum(len(raw["param_groups"]) for raw, _ in layouts)
-    if len(state_dict.get("param_groups", [])) != expected_count:
-        raise ValueError("checkpoint parameter-group count does not match optimizers")
-    # Validate all group names before any optimizer can consume new lr/state.
-    group_index = 0
-    known_names = set()
-    for raw, id_names in layouts:
-        known_names.update(id_names.values())
-        for group in raw["param_groups"]:
-            names = [id_names[saved_id] for saved_id in group["params"]]
-            incoming = state_dict["param_groups"][group_index]["params"]
-            if len(incoming) != len(names) or set(incoming) != set(names):
-                raise ValueError("checkpoint parameter-group names do not match optimizer")
-            group_index += 1
-    if set(state_dict.get("state", {})) - known_names:
-        raise ValueError("checkpoint state names are not owned by optimizers")
-    if provider:
-        state_dict = provider._shard_optimizer_state_dict(model, state_dict)
-    pending = []
-    group_index = 0
-    for optimizer, (raw, id_names) in zip(optimizers, layouts):
-        groups = []
-        for group in raw["param_groups"]:
-            groups.append(dict(state_dict["param_groups"][group_index],
-                               params=list(group["params"])))
-            group_index += 1
-        states = {saved_id: state_dict["state"][name]
-                  for saved_id, name in id_names.items()
-                  if name in state_dict.get("state", {})}
-        pending.append((optimizer, {"state": states, "param_groups": groups}))
-    for optimizer, raw in pending:
-        optimizer.load_state_dict(raw)
+# Legacy private spellings retain the canonical state owner identity.
+_get_model_state_dict = get_model_state_dict
+_set_model_state_dict = set_model_state_dict
+_get_optimizer_state_dict = get_optimizer_state_dict
+_set_optimizer_state_dict = set_optimizer_state_dict
+_api_checkpoint_sd_get_state_dict = get_state_dict
+_api_checkpoint_sd_set_state_dict = set_state_dict
 
 
 class GradBucket:
@@ -1195,18 +935,6 @@ def _api_rpc_shutdown(*a, **k):
 
 def _api_symmetric_memory_is_symm_mem_enabled_for_group(*a, **k):
     return False
-
-
-def _api_checkpoint_sd_get_state_dict(model, optimizers=None, *a, **k):
-    return (_get_model_state_dict(model, *a, **k),
-            _get_optimizer_state_dict(model, optimizers, options=k.get("options")))
-
-
-def _api_checkpoint_sd_set_state_dict(model, optimizers=None, model_state_dict=None, optim_state_dict=None, *a, **k):
-    result = _set_model_state_dict(model, model_state_dict or {}, *a, **k)
-    if optim_state_dict is not None:
-        _set_optimizer_state_dict(model, optimizers, optim_state_dict, options=k.get("options"))
-    return result
 
 
 def _api_sharded_tensor_init_from_local_shards(shards, *a, **k):

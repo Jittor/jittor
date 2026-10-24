@@ -273,7 +273,13 @@ def load(state_dict, *, checkpoint_id=None, storage_reader=None, planner=None, p
         if isinstance(target, np.ndarray):
             np.copyto(target, source, casting="no")
         else:
-            target.copy_(source)
+            import jittor as jt
+            from .installers.tensor.method_api import _copy_, _copy_detached_storage
+            with jt.no_grad():
+                # Checkpoint restore writes existing leaf storage. Native
+                # Vars do not expose the frontend-only copy_ method.
+                if not _copy_detached_storage(target, source):
+                    _copy_(target, source)
     state_dict.clear()
     state_dict.update(planned)
     return None

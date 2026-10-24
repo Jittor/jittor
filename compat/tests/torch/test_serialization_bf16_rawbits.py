@@ -47,11 +47,13 @@ def fragment(item):
 
 def archive_bytes(words, shape, stride):
     storage = (b'(' + fragment('storage') + b'ctorch\nBFloat16Storage\n' +
-               fragment('0') + fragment(words.size) + fragment('cpu') + b'tQ')
+               fragment('0') + fragment('cpu') + fragment(words.size) + b'tQ')
     data = (b'\x80\x02ctorch._utils\n_rebuild_tensor_v2\n(' + storage +
             fragment(0) + fragment(shape) + fragment(stride) + b'\x89NtR.')
     stream = io.BytesIO()
     with zipfile.ZipFile(stream, 'w') as archive:
+        archive.writestr('archive/version', '3\n')
+        archive.writestr('archive/byteorder', 'little')
         archive.writestr('archive/data.pkl', data)
         archive.writestr('archive/data/0', words.tobytes())
     stream.seek(0)
