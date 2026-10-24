@@ -409,6 +409,124 @@ del __version__
             finally:
                 sys.path.remove(root)
 
+    def _fake_fsdp_optimizer_fixture(self):
+        package = types.ModuleType("accelerate")
+        package.__version__ = "1.10.1"
+        module = types.ModuleType("accelerate.utils.fsdp_utils")
+        options, model, optimizer = object(), object(), object()
+        events = []
+
+        def original(fsdp_plugin, accelerator, optimizer, model, input_dir,
+                     optimizer_index=0, adapter_only=False):
+            events.append(("original", fsdp_plugin.fsdp_version, input_dir,
+                           optimizer_index, adapter_only))
+            return "original result"
+
+        module.load_fsdp_optimizer = original
+        module.OPTIMIZER_NAME = "optimizer"
+        module._prepare_sd_options = lambda fsdp_plugin: options
+        fsdp = types.ModuleType("torch.distributed.fsdp")
+        fsdp.StateDictType = types.SimpleNamespace(FULL_STATE_DICT=object(), SHARDED_STATE_DICT=object())
+        checkpoint = types.ModuleType("torch.distributed.checkpoint")
+        state_dict = types.ModuleType("torch.distributed.checkpoint.state_dict")
+
+        def get_optimizer_state_dict(actual_model, actual_optimizer, *, options):
+            self.assertIs(actual_model, model)
+            self.assertIs(actual_optimizer, optimizer)
+            events.append(("get", options))
+            return {"state": {"lora.weight": {"step": 0, "exp_avg": 0}}}
+
+        def load(state, *, checkpoint_id, storage_reader):
+            events.append(("load", checkpoint_id, storage_reader))
+            # DCP requests only template keys. A fresh optimizer.state_dict()
+            # has no state keys, so the former implementation omitted these.
+            self.assertIn("lora.weight", state["optimizer"]["state"])
+            state["optimizer"]["state"]["lora.weight"] = {"step": 7, "exp_avg": 13}
+
+        def set_optimizer_state_dict(actual_model, actual_optimizer, state, *, options):
+            self.assertIs(actual_model, model)
+            self.assertIs(actual_optimizer, optimizer)
+            events.append(("set", state, options))
+
+        state_dict.get_optimizer_state_dict = get_optimizer_state_dict
+        state_dict.set_optimizer_state_dict = set_optimizer_state_dict
+        checkpoint.load = load
+        checkpoint.FileSystemReader = lambda path: ("reader", path)
+        distributed = types.ModuleType("torch.distributed")
+        distributed.checkpoint = checkpoint
+        distributed.fsdp = fsdp
+        frontend = types.ModuleType("torch")
+        frontend.distributed = distributed
+        modules = {"accelerate": package, "accelerate.utils.fsdp_utils": module,
+                   "torch": frontend, "torch.distributed": distributed,
+                   "torch.distributed.fsdp": fsdp, "torch.distributed.checkpoint": checkpoint,
+                   "torch.distributed.checkpoint.state_dict": state_dict}
+        plugin = types.SimpleNamespace(fsdp_version=2, state_dict_type=fsdp.StateDictType.SHARDED_STATE_DICT)
+        accelerator = types.SimpleNamespace(wait_for_everyone=lambda: events.append(("barrier",)))
+        return modules, module, plugin, accelerator, model, optimizer, options, events
+
+    def test_fsdp2_sharded_optimizer_restore_loads_saved_fqn_state(self):
+        modules, module, plugin, accelerator, model, optimizer, options, events = self._fake_fsdp_optimizer_fixture()
+        alias = types.ModuleType("transformers.trainer")
+        original = module.load_fsdp_optimizer
+        alias.load_fsdp_optimizer = original
+        modules[alias.__name__] = alias
+        with mock.patch.dict(sys.modules, modules):
+            patcher.register_module_patch("accelerate.utils.fsdp_utils", transformers.patch_accelerate_fsdp_utils)
+            patcher.install_module_patches(load_entry_points=False)
+            self.assertIsNot(module.load_fsdp_optimizer, original)
+            self.assertIs(alias.load_fsdp_optimizer, module.load_fsdp_optimizer)
+            self.assertFalse(transformers.patch_accelerate_fsdp_utils(module))
+            module.load_fsdp_optimizer(plugin, accelerator, optimizer, model, "/checkpoints/checkpoint-1",
+                                       optimizer_index=2, adapter_only=True)
+            self.assertEqual([event[0] for event in events], ["barrier", "get", "load", "set"])
+            self.assertEqual(events[2], ("load", "/checkpoints/checkpoint-1/optimizer_2",
+                                         ("reader", "/checkpoints/checkpoint-1/optimizer_2")))
+            self.assertIs(events[1][1], options)
+            self.assertEqual(events[-1][1], {"state": {"lora.weight": {"step": 7, "exp_avg": 13}}})
+            self.assertIs(events[-1][2], options)
+            patcher.uninstall_module_patches()
+            self.assertIs(module.load_fsdp_optimizer, original)
+            self.assertIs(alias.load_fsdp_optimizer, original)
+
+    def test_fsdp2_optimizer_restore_accepts_an_optimizer_directory(self):
+        fixture = self._fake_fsdp_optimizer_fixture()
+        modules, module, plugin, accelerator, model, optimizer, _, events = fixture
+        with mock.patch.dict(sys.modules, modules):
+            transformers.patch_accelerate_fsdp_utils(module)
+            directory = Path("/checkpoints/checkpoint-1/optimizer_3")
+            module.load_fsdp_optimizer(plugin, accelerator, optimizer, model, directory, optimizer_index=3)
+            self.assertEqual(events[2], ("load", directory, ("reader", directory)))
+
+    def test_fsdp_optimizer_restore_preserves_fsdp1_and_full_state_loaders(self):
+        fixture = self._fake_fsdp_optimizer_fixture()
+        modules, module, plugin, accelerator, model, optimizer, _, events = fixture
+        with mock.patch.dict(sys.modules, modules):
+            transformers.patch_accelerate_fsdp_utils(module)
+            plugin.fsdp_version = 1
+            self.assertEqual(module.load_fsdp_optimizer(plugin, accelerator, optimizer, model, "/checkpoint",
+                                                        optimizer_index=4, adapter_only=True), "original result")
+            plugin.fsdp_version = 2
+            plugin.state_dict_type = modules["torch.distributed.fsdp"].StateDictType.FULL_STATE_DICT
+            self.assertEqual(module.load_fsdp_optimizer(plugin, accelerator, optimizer, model, "/checkpoint",
+                                                        optimizer_index=5), "original result")
+            self.assertEqual(events, [("original", 1, "/checkpoint", 4, True),
+                                      ("original", 2, "/checkpoint", 5, False)])
+
+    def test_fsdp_optimizer_restore_rejects_unverified_contract_and_version(self):
+        fixture = self._fake_fsdp_optimizer_fixture()
+        modules, module, *_ = fixture
+        original = module.load_fsdp_optimizer
+        with mock.patch.dict(sys.modules, modules):
+            module._prepare_sd_options = lambda: None
+            with self.assertRaisesRegex(UnsupportedAdapterVersion, "checkpoint contract changed"):
+                transformers.patch_accelerate_fsdp_utils(module)
+            self.assertIs(module.load_fsdp_optimizer, original)
+            modules["accelerate"].__version__ = "1.11.0"
+            with self.assertRaisesRegex(UnsupportedAdapterVersion, "1.11.0"):
+                transformers.patch_accelerate_fsdp_utils(module)
+            self.assertIs(module.load_fsdp_optimizer, original)
+
     def test_transformers_recognizes_the_deployed_torchvision_facade(self):
         transformers.register(patcher.register_module_patch)
         patcher.install_module_patches(load_entry_points=False)

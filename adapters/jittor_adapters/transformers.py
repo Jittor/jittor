@@ -3,6 +3,7 @@ from collections.abc import Mapping
 from functools import lru_cache, wraps
 import importlib.util
 import inspect
+import os
 import sys
 from types import SimpleNamespace
 
@@ -302,9 +303,64 @@ def patch_trainer(module):
     return True
 
 
+
+@required_patch
+def patch_accelerate_fsdp_utils(module):
+    """Restore pinned FSDP2 sharded optimizer checkpoints with FQN keys.
+
+    Accelerate saves FSDP2 with ``get_optimizer_state_dict``, but its loader
+    passes a fresh optimizer's empty integer-keyed state to DCP. DCP loads only
+    the requested keys, so Adam moments and update counters are omitted.
+    """
+    require_version("accelerate", ACCELERATE_SUPPORTED_VERSIONS)
+    original = vars(module).get("load_fsdp_optimizer")
+    prepare_options = vars(module).get("_prepare_sd_options")
+    parameters = ("fsdp_plugin", "accelerator", "optimizer", "model", "input_dir",
+                  "optimizer_index", "adapter_only")
+    if (not callable(original) or tuple(inspect.signature(original).parameters) != parameters
+            or not callable(prepare_options)
+            or tuple(inspect.signature(prepare_options).parameters) != ("fsdp_plugin",)
+            or vars(module).get("OPTIMIZER_NAME") != "optimizer"):
+        raise UnsupportedAdapterVersion("Accelerate FSDP optimizer checkpoint contract changed")
+    if getattr(original, "_jittor_fsdp_optimizer_restore", False):
+        return False
+
+    @wraps(original)
+    def load_fsdp_optimizer(fsdp_plugin, accelerator, optimizer, model, input_dir,
+                            optimizer_index=0, adapter_only=False):
+        from torch.distributed.fsdp import StateDictType
+
+        if (fsdp_plugin.fsdp_version != 2
+                or fsdp_plugin.state_dict_type == StateDictType.FULL_STATE_DICT):
+            return original(fsdp_plugin, accelerator, optimizer, model, input_dir,
+                            optimizer_index=optimizer_index, adapter_only=adapter_only)
+
+        import torch.distributed.checkpoint as dist_cp
+        from torch.distributed.checkpoint.state_dict import (
+            get_optimizer_state_dict, set_optimizer_state_dict,
+        )
+
+        accelerator.wait_for_everyone()
+        options = prepare_options(fsdp_plugin)
+        checkpoint_dir = (os.path.join(input_dir, "optimizer_%d" % optimizer_index)
+                          if "optimizer" not in os.fspath(input_dir) else input_dir)
+        state = {"optimizer": get_optimizer_state_dict(model, optimizer, options=options)}
+        dist_cp.load(state, checkpoint_id=checkpoint_dir,
+                     storage_reader=dist_cp.FileSystemReader(checkpoint_dir))
+        set_optimizer_state_dict(model, optimizer, state["optimizer"], options=options)
+
+    load_fsdp_optimizer._jittor_fsdp_optimizer_restore = True
+    load_fsdp_optimizer._jittor_original_loader = original
+    replace(module, "load_fsdp_optimizer", load_fsdp_optimizer, original)
+    replace_bound_aliases("accelerate", "load_fsdp_optimizer", original, load_fsdp_optimizer)
+    replace_bound_aliases("transformers", "load_fsdp_optimizer", original, load_fsdp_optimizer)
+    return True
+
+
 def register(register_module_patch):
     register_module_patch("transformers.utils.import_utils", patch_import_utils)
     register_module_patch("transformers.modeling_flash_attention_utils", patch_flash_attention_utils)
     register_module_patch("transformers.trainer", patch_trainer)
     register_module_patch("accelerate.utils.imports", patch_accelerate_imports)
+    register_module_patch("accelerate.utils.fsdp_utils", patch_accelerate_fsdp_utils)
     register_module_patch("accelerate", patch_accelerate)
