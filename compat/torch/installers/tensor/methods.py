@@ -5,6 +5,7 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from .method_api import (
     _CAST_APIS, _UNARY_INPLACE_APIS,
     _api_fill,
+    _api_fill_diagonal,
     _api_zero,
     _api_add,
     _api_sub,
@@ -18,6 +19,7 @@ from .method_api import (
     _api_ne_alias,
     _api_nonzero,
     _api_normal,
+    _api_random,
     _api_uniform,
     _api_tolist,
     _api_contiguous,
@@ -66,6 +68,7 @@ from .method_api import (
     _clamp,
     _complex_scalar_var,
     _copy_,
+    _optimizer_update,
     _data_get,
     _data_owner_uses_device,
     _data_set,
@@ -206,6 +209,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         _torch_setitem._torch_mask_bcast = True
         Var.__setitem__ = _torch_setitem
 
+    Var._optimizer_update = _optimizer_update
+
     # in-place tensor ops torch code uses heavily (jittor exposes assign()).
     # _ip() preserves grad-tracking: jittor's assign() adopts the source's
     # stop_grad flag, which would freeze a trainable parameter.
@@ -225,6 +230,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # inside @torch.no_grad(); Jittor's native bound initializers adopt the
     # constant source's stop-grad flag and permanently freeze the parameter.
     Var.fill_ = _api_fill
+    Var.fill_diagonal_ = _api_fill_diagonal
     Var.zero_ = _api_zero
     Var.add_ = _api_add
     Var.sub_ = _api_sub
@@ -278,6 +284,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     if not hasattr(Var, "argwhere"):
         Var.argwhere = _api_argwhere_alias
     Var.normal_ = _api_normal
+    Var.random_ = _api_random
     Var.uniform_ = _api_uniform
 
     # torch tensors are hashable by identity (they define __eq__ elementwise but
@@ -654,5 +661,5 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             setattr(Var, name, implementation)
 
     register_api_bindings(Var, 'torch.Tensor',
-        ('T', '__iadd__', '__isub__', '__imul__', '__itruediv__', '__deepcopy__', '__getitem__', '__hash__', '__invert__', '__ne__', '__reduce__', '__reduce_ex__', '__setitem__', 'add_', 'addmm', 'argwhere', 'as_strided', 'backward', 'baddbmm', 'clamp', 'clamp_', 'clip', 'clip_', 'contiguous', 'copy_', 'cpu', 'cuda', 'cumprod', 'cumsum', 'data', 'data_ptr', 'detach', 'device', 'div_', 'dtype', 'element_size', 'fill_', 'get_device', 'grad', 'grad_fn', 'is_complex', 'is_contiguous', 'is_cpu', 'is_cuda', 'is_floating_point', 'is_leaf', 'is_meta', 'is_mps', 'is_nested', 'is_pinned', 'is_signed', 'is_xpu', 'mT', 'mul_', 'narrow', 'ne', 'nelement', 'new_empty', 'new_full', 'new_ones', 'new_tensor', 'new_zeros', 'nonzero', 'norm', 'normal_', 'numpy', 'pin_memory', 'requires_grad', 'requires_grad_', 'retain_grad', 'retains_grad', 'set_', 'squeeze', 'storage', 'storage_offset', 'stride', 'sub_', 'tile', 'to', 'tolist', 'type', 'uniform_', 'untyped_storage', 'where', 'zero_') + tuple(_BINARY_APIS.keys() | _CAST_APIS.keys() | _UNARY_INPLACE_APIS.keys()),
+        ('T', '__iadd__', '__isub__', '__imul__', '__itruediv__', '__deepcopy__', '__getitem__', '__hash__', '__invert__', '__ne__', '__reduce__', '__reduce_ex__', '__setitem__', 'add_', 'addmm', 'argwhere', 'as_strided', 'backward', 'baddbmm', 'clamp', 'clamp_', 'clip', 'clip_', 'contiguous', 'copy_', 'cpu', 'cuda', 'cumprod', 'cumsum', 'data', 'data_ptr', 'detach', 'device', 'div_', 'dtype', 'element_size', 'fill_', 'fill_diagonal_', 'get_device', 'grad', 'grad_fn', 'is_complex', 'is_contiguous', 'is_cpu', 'is_cuda', 'is_floating_point', 'is_leaf', 'is_meta', 'is_mps', 'is_nested', 'is_pinned', 'is_signed', 'is_xpu', 'mT', 'mul_', 'narrow', 'ne', 'nelement', 'new_empty', 'new_full', 'new_ones', 'new_tensor', 'new_zeros', 'nonzero', 'norm', 'normal_', 'numpy', 'pin_memory', 'random_', 'requires_grad', 'requires_grad_', 'retain_grad', 'retains_grad', 'set_', 'squeeze', 'storage', 'storage_offset', 'stride', 'sub_', 'tile', 'to', 'tolist', 'type', 'uniform_', 'untyped_storage', 'where', 'zero_') + tuple(_BINARY_APIS.keys() | _CAST_APIS.keys() | _UNARY_INPLACE_APIS.keys()),
         Fidelity.APPROXIMATE, 'Tensor operations share the native Var/Op graph and explicit frontend state; unsupported layouts, device capabilities, and retained compatibility approximations remain restricted')

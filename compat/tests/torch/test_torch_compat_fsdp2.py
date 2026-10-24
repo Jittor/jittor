@@ -1003,7 +1003,7 @@ class TestFSDP2Compat(unittest.TestCase):
         self.assertEqual(scaler.state_dict(), {"enabled": False})
         scaler.load_state_dict({"enabled": True})
         self.assertEqual(scaler.state_dict(), {"enabled": True})
-        self.assertIs(checkpoint_wrapper(module), module)
+        self.assertIsNot(checkpoint_wrapper(module), module)
         self.assertEqual(tuple(checkpoint(module, jt.ones((1, 3))).shape), (1, 2))
 
     def test_fsdp_module_metaclass_composes_with_abc(self):

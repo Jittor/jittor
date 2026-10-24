@@ -349,7 +349,7 @@ def silu(x, inplace=False):     # inplace: accepted for torch/mmcv compat, ignor
         # by a narrow multiply adds a rounding step absent from the opmath
         # implementation. Keep native AD connected through the widening cast.
         dtype = x.dtype
-        with jt.flag_scope(amp_reg=0):
+        with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
             wide = x.float32()
             return (wide * wide.sigmoid()).cast(dtype)
     return x * x.sigmoid()

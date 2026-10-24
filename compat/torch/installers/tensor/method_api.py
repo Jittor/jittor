@@ -211,7 +211,22 @@ def _copy_detached_storage(self, value):
     if (tuple(self.shape) != tuple(value.shape)
             or self.dtype != value.dtype):
         return False
+    from jittor._runtime import step_capture
+    if step_capture.active():
+        # The capture logs graph writes and commits them to the original
+        # storage at its boundary. Executing a store here would run part of
+        # the step before that transaction can accept or refuse the graph.
+        return False
     if self.numel():
+        # Establish the destination before a storage-preserving write. A
+        # pending view may already alias a materialized base; graph rebinding
+        # would lose that storage, its overlap guards and its gradient history.
+        if not self._mem_ptr_now:
+            self.sync(False, False)
+        if not self._mem_ptr_now:
+            # A deferred capture may still have no backing storage. Retain its
+            # graph write instead of calling the imperative primitive on null.
+            return False
         # Resolve pending readers (including clone snapshots) before changing
         # bytes. _copy_into owns placement, stream ordering and dense copies.
         _owner.jt.sync_all()
@@ -282,6 +297,13 @@ def _ip(self, value, preserve_storage=False):
         _context = get_install_context(_owner.jt)
         _context.state["tensor_native_api"]["_native_requires_grad"].__set__(target, False)
     return self
+
+
+def _optimizer_update(self, value):
+    # Optimizers write values without building an autograd edge. Reuse the
+    # same storage, pending-reader and version rules as public in-place ops.
+    with _owner.jt.no_grad():
+        return _ip(self, value, preserve_storage=True)
 
 
 def _copy_(self, other, non_blocking=False):
@@ -1607,6 +1629,31 @@ def _api_fill(self, val):
     return _ip(self, value, preserve_storage=True)
 
 
+def _api_fill_diagonal(self, fill_value, wrap=False):
+    """Fill the shared diagonal in place on the tensor's own device."""
+    shape = tuple(self.shape)
+    if len(shape) < 2:
+        raise RuntimeError("dimensions must be at least 2")
+    if len(shape) > 2 and len(set(shape)) != 1:
+        raise RuntimeError("all dimensions of input must be of equal length")
+
+    from jittor._core.var import device_scope_like
+    with device_scope_like(self):
+        if len(shape) == 2 and wrap and shape[0] > shape[1] and shape[1]:
+            columns = shape[1]
+            step = columns + 1
+            length = (shape[0] * columns + step - 1) // step
+            linear = _owner.jt.arange(length, dtype="int64") * step
+            indices = (linear // columns, linear % columns)
+        else:
+            length = min(shape)
+            diagonal = _owner.jt.arange(length, dtype="int64")
+            indices = (diagonal,) * len(shape)
+        if length:
+            self[indices] = fill_value
+    return self
+
+
 def _api_zero(self):
     if _fill_captured_state(self, 0):
         return self
@@ -1684,6 +1731,31 @@ def _random_inplace(self, draw, *parameters, generator=None):
 def _api_normal(self, mean=0.0, std=1.0, generator=None):
     from ..nn_init import _normal_values
     return _random_inplace(self, _normal_values, mean, std, generator=generator)
+
+
+def _random_integer_values(tensor, generator=None):
+    """Draw Torch random_ integers on the destination tensor's device."""
+    dtype = _jittor_dtype_name(tensor.dtype)
+    bits = {"bool": 1, "uint8": 8, "int8": 7, "int16": 15,
+            "int32": 31, "int64": 63, "float16": 11,
+            "bfloat16": 8, "float32": 24, "float64": 53}.get(dtype)
+    if bits is None:
+        raise TypeError("torch.Tensor.random_ requires a real or integral tensor")
+    from jittor._core.var import device_scope_like
+    with device_scope_like(tensor), _owner.jt.no_grad():
+        # Keep each piece exactly representable in the native random sampler.
+        remaining = bits
+        value = None
+        while remaining:
+            width = min(remaining, 21)
+            piece = _owner.jt.randint(0, 1 << width, tensor.shape, "int64")
+            value = piece if value is None else value * (1 << width) + piece
+            remaining -= width
+        return value.cast(dtype)
+
+
+def _api_random(self):
+    return _random_inplace(self, _random_integer_values)
 
 
 def _api_uniform(self, a=0.0, b=1.0, generator=None):

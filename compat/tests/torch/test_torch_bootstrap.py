@@ -841,6 +841,24 @@ class TestTorchBootstrap(unittest.TestCase):
         self.assertEqual(environ["JITTOR_TORCH_PROJECT_ROOT"], result.project_root)
         self.assertEqual(environ["JITTOR_TORCH_RUNTIME_ROOT"], result.runtime_root)
 
+    @unittest.skipUnless(os.name == "posix", "AF_UNIX pathname budget is POSIX-specific")
+    def test_short_tmpdir_fallback_preserves_socket_headroom(self):
+        from jittor.compat.shim import preflight
+
+        preferred = pathlib.Path("/") / ("项目" * 40) / "runtime" / "tmp"
+        long_temp_root = pathlib.Path("/") / ("t" * 70)
+        with mock.patch.object(
+            preflight.tempfile, "gettempdir", return_value=os.fspath(long_temp_root)
+        ):
+            selected = preflight._short_enough_tmpdir(preferred)
+
+        digest = preflight.hashlib.sha1(os.fspath(preferred).encode("utf-8")).hexdigest()[:10]
+        self.assertEqual(selected, pathlib.Path("/tmp") / ("jt-%s" % digest))
+        self.assertLessEqual(
+            len(os.fsencode(os.fspath(selected))) + preflight._TMPDIR_SOCKET_HEADROOM,
+            preflight._SUN_PATH_MAX,
+        )
+
     def _preflight_env(self, directory, **extra):
         environ = {"HOME": directory, "JITTOR_TORCH_SHIM": "1",
                    "JITTOR_TORCH_KEEP_CUDA": "1"}

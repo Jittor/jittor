@@ -28,7 +28,7 @@ from jittor.compat.torch.publication import (
     namespace_owner,
 )
 from ..diagnostics import EXPECTED, swallowed
-from ..transaction import ActivationTransaction, _MISSING
+from ..transaction import ActivationTransaction, _MISSING, set_env
 
 
 class ActivationStatus(NamedTuple):
@@ -208,6 +208,19 @@ def _activate_once(
                 transaction=transaction,
             )
             _publish_torch_module(transaction, published, jt)
+            # A subprocess cannot inherit the in-memory ``sys.modules['torch']``
+            # publication.  Give it the same deployed shim package that an
+            # explicit ``enable`` call uses, so child processes do not import
+            # the real PyTorch wheel before the shim has a chance to claim it.
+            runtime_root = getattr(_preflight_result, "runtime_root", "")
+            if runtime_root:
+                shim_site = _ensure_dir(pathlib.Path(runtime_root) / "site-packages",
+                                        "the torch shim's child-process site")
+                _deploy_torch_shim(shim_site)
+                _write_build_sitecustomize(shim_site)
+                project_dir = pathlib.Path.cwd()
+                set_env("PYTHONPATH", _pythonpath_for_child(
+                    [shim_site, jittor_python_root(), project_dir]))
             if _transaction is not None:
                 _transaction.adopt(transaction)
             transaction.commit()

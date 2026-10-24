@@ -107,7 +107,7 @@ they are not relabeled as this clean public-launcher measurement.
 
 Reproduce the dedicated gate with the installed independent interpreters, explicit
 oneDNN/toolchain paths and fresh external artifact directories as described by the
-[DeepSpeed runbook](../../agent/skills/deepspeed-torch-compat/SKILL.md). CUDA requires
+[DeepSpeed runbook](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/deepspeed-torch-compat/SKILL.md). CUDA requires
 explicitly allocated two-card `CUDA_VISIBLE_DEVICES`. CPU MPI backend verification
 additionally requires a real OpenMPI toolchain; it is not a CPU `jtrun` command.
 The maintained entry in either case is `nox -s ecosystem_deepspeed_multirank`.

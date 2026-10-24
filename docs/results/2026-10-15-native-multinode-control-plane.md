@@ -83,7 +83,7 @@ FP32 reduce-scatter 均由原 fixture 检查。每 rank 持有 35 个存储元�
 四类 RNG 是 Python/NumPy/native CPU/native CUDA 的后续实际抽样，恢复后与生产端逐位一致。
 工具无 Torch/Jittor import，也没有以重算代替原始 GPU 执行。
 
-复算用法见 [distributed verification skill](../../agent/skills/jittor-distributed-verification/SKILL.md)。
+复算用法见 [distributed verification skill](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/jittor-distributed-verification/SKILL.md)。
 本轮结果为 `recheck-bc07.json`；维护者还用独立自写 NumPy 审计重新得到同样的 680/368/160
 结果，并将测量快照中 2,804 个常规文件与对应历史 Git blobs 逐一对照匹配。独立审计记录在
 `$JITTOR_LAB_ROOT/_state/jtrun-control-integration-bd17/independent-source-raw-audit.json`

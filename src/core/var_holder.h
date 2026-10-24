@@ -21,6 +21,9 @@ namespace jittor {
 
 struct VarHolder;
 struct GradCallback;
+// A caller with a successful device-synchronous receipt may publish the
+// existing bytes through an inputless, finished storage owner. No sync here.
+VarPtr ready_storage_alias(VarHolder* source);
 // @pyjt(submit_pending_fetches)
 void submit_pending_fetches();
 VarPtr detach(Var* x);
@@ -99,10 +102,13 @@ struct DataView {
 
 /** The base object for the numpy array `Var.data` returns.
  *
- * It holds two claims, for two different reasons:
+ * It holds three claims, for different reasons:
  *
- *  - an extra liveness on the Var that was current when `.data` was taken, so
- *    the allocation the view points at cannot be freed.  The base used to be
+ *  - an allocator reference to the exact exported allocation. A later device
+ *    consumer can migrate the Var and replace its storage while the ndarray
+ *    still points at the old host block; Var liveness alone cannot pin it.
+ *  - extra liveness on the Var that was current when `.data` was taken, even
+ *    after the holder is rebound. The base used to be
  *    the VarHolder's PyObject, which pins the python wrapper but not the
  *    memory: `assign` keeps the wrapper and swaps a *different* Var into it,
  *    releasing the old one.  `a = v.data; v.assign(other); a[0]` then read
@@ -333,6 +339,13 @@ struct VarHolder {
     // @pyjt(__get__id)
     inline int64 id() {
         return var->id;
+    }
+
+    // Tracked in-place aliases share this epoch. Reading it does not create
+    // alias state or execute a graph. Raw external pointer writes are untracked.
+    // @pyjt(_autograd_version)
+    inline uint64 autograd_version() {
+        return var->autograd_alias ? *var->autograd_alias->version : 0;
     }
 
     // @pyjt(__get__var_ptr)

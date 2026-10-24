@@ -265,8 +265,10 @@ void SharedReducePass::run() {
     auto parallel = op->get_loop_option("parallel");
     auto use_shared_reduce = op->get_loop_option("use_shared_reduce", 1);
     if (use_shared_reduce == 0) return;
-    if (para_opt_level < 4) return;
     bool is_cuda = op->executes_on_accelerator();
+    // A consumer may require the one-block-per-output fold to fuse a partial
+    // reduction without changing the process-wide optimization policy.
+    if (para_opt_level < 4 && !(is_cuda && use_shared_reduce == 2)) return;
     if (is_cuda) parallel = 1;
     if (!parallel) return;
     for (uint i = 0; i < ir->children.size(); ++i) {

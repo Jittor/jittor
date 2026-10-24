@@ -88,7 +88,7 @@ they do not count as implemented functionality.
 
 ## Reproduction and regression
 
-The reusable [DeepSpeed runbook](../../agent/skills/deepspeed-torch-compat/SKILL.md)
+The reusable [DeepSpeed runbook](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/deepspeed-torch-compat/SKILL.md)
 describes isolated package installation and the dedicated `nox -s
 ecosystem_deepspeed` entry. It requires an independent oracle and actual dependency
 execution; absent dependencies cannot turn into acceptance skips. This dedicated

@@ -45,7 +45,7 @@ New rows use the exact `flash-attention-training` protocol and distinct implemen
 
 ## Maintained entry and immutable evidence
 
-Use the [Flash skill setup](../../agent/skills/flash-attention-torch-compat/SKILL.md), including explicit `JITTOR_FLASH_ATTN_HEAD_DIMS=32,64` and `JITTOR_FLASH_ATTN_DTYPES=fp16,bf16`. Use private pre-provisioned candidate and independent binary-Torch interpreters, an explicitly allocated GPU, the actual pinned upstream checkout, local reference wheel/native build manifest and full official Torch wheel proof. Set `JITTOR_FLASH_ATTN_SOURCE_PROOF` to a JSON containing the four real paths (`upstream`, `wheel`, `oracle_build`, `torch_wheel_proof`), then:
+Use the [Flash skill setup](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/flash-attention-torch-compat/SKILL.md), including explicit `JITTOR_FLASH_ATTN_HEAD_DIMS=32,64` and `JITTOR_FLASH_ATTN_DTYPES=fp16,bf16`. Use private pre-provisioned candidate and independent binary-Torch interpreters, an explicitly allocated GPU, the actual pinned upstream checkout, local reference wheel/native build manifest and full official Torch wheel proof. Set `JITTOR_FLASH_ATTN_SOURCE_PROOF` to a JSON containing the four real paths (`upstream`, `wheel`, `oracle_build`, `torch_wheel_proof`), then:
 
 ```bash
 JITTOR_TEST_DEVICES=cuda JITTOR_FLASH_ATTN_EVIDENCE_DIR=<new-external-case-root> \

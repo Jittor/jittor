@@ -19,11 +19,10 @@ Integers are unaffected and must stay that way: ``lowest()`` *is* their
 identity, and there is no integer infinity to lose. The integer test below is
 the control for that half of the dispatch.
 
-The *half-precision* table (``fp16_op_type.cc``) carries the same defect in a
-worse form, and that is KI-OPS-012: its identities are plain finite literals
-(``-32768.0f`` on the CPU path, ``-65000.0f``/``-1e38`` on the CUDA one), and
-``-32768`` is *above* float16's lowest finite value of -65504. So there the
-reduction is wrong on finite input, not only on infinities.
+The half-precision table (``fp16_op_type.cc``, KI-OPS-012) also used finite
+literals: ``-32768.0f`` on CPU and ``-65000.0f``/``-1e38`` on CUDA. Those
+sit above the respective dtype's lowest finite value, so reductions were
+wrong even on finite input. Both tables now fold from infinities.
 
 The CUDA class asserts the correct behaviour for float32/float64 and passes; it
 is kept in the same file on purpose, because for that half the defect was a
@@ -35,7 +34,6 @@ from _helpers import capability as _test_capability
 import unittest
 
 import numpy as np
-import pytest
 
 import jittor as jt
 
@@ -146,15 +144,24 @@ class TestMinMaxReductionIdentityCuda(_IdentityContract, unittest.TestCase):
     def test_infinite_reductions_use_the_right_identity(self):
         self._check_infinite_identity()
 
-    @pytest.mark.xfail(strict=True,
-                       reason="KI-OPS-012: the CUDA half identities are finite literals")
     def test_half_precision_reductions_use_the_right_identity(self):
-        # The CUDA half table still spells its identities as -65000.0f / -1e38
-        # for float16 and bfloat16. Both sit above the dtype's lowest finite
-        # value, so this is the same wrong answer as the CPU one had -- and it
-        # is stated as an expected failure rather than fixed, because a fix for
-        # it cannot be verified on this machine.
         self._check_half_identity()
+
+    def test_half_precision_row_reductions_preserve_extrema_and_dtype(self):
+        with jt.flag_scope(use_cuda=1):
+            for dtype, bound in (("float16", 65504.0),
+                                 ("bfloat16", 3.3895313892515355e38)):
+                raw = np.array([[-np.inf, -np.inf], [-bound, -bound],
+                                [bound, bound], [np.inf, np.inf]], dtype="float32")
+                value = self._var(raw, "float32").cast(dtype)
+                reference = value.float32().numpy().copy()
+                for operation in ("max", "min"):
+                    with self.subTest(dtype=dtype, operation=operation):
+                        result = getattr(value, operation)(-1)
+                        self.assertEqual(str(result.dtype), dtype)
+                        np.testing.assert_array_equal(
+                            result.float32().numpy(),
+                            getattr(reference, operation)(axis=-1))
 
 
 if __name__ == "__main__":

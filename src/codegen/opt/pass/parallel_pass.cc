@@ -545,8 +545,8 @@ void ParallelPass::run() {
                 new_block.push_back("int p2 = std::min(thread_num, " + S(cuda_thread_num) + ");");
             } else {
                 new_block.push_back("tn0=NanoVector::get_nbits(thread_num)-2;");
-                new_block.push_back("int p1 = std::max(thread_num/1024, 1);");
-                new_block.push_back("int p2 = std::min(thread_num, 1024);");
+                new_block.push_back("int p1 = std::max(thread_num/" + S(cuda_thread_num) + ", 1);");
+                new_block.push_back("int p2 = std::min(thread_num, " + S(cuda_thread_num) + ");");
             }
         } else if (new_loops.size()) {
             // Enter the omp region with the number of threads actually handed

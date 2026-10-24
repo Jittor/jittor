@@ -685,7 +685,7 @@ def cat(tensors, dim=0, out=None, axis=None):
     if out is None and axis is None and type(dim) is int:
         fast = (_FAST_CAT or _bind_fast_cat())(tensors, dim)
         if fast is not NotImplemented:
-            return fast
+            return _cat_grad_result(fast, tensors)
         # The native fast path above declines whenever a backend registers its
         # own concat kernel (ACL does), so on ACL every `cat` falls through the
         # whole frontend below -- the `__torch_function__` scan, the `None`
@@ -708,7 +708,7 @@ def cat(tensors, dim=0, out=None, axis=None):
                         uniform = False
                         break
             if uniform:
-                return _jt_concat(list(seq), dim)
+                return _cat_grad_result(_jt_concat(list(seq), dim), seq)
     g = compatibility_owner(jt)
     if axis is not None: dim = axis      # torch accepts axis= (mmrotate PSC head)
     # Honor the __torch_function__ protocol: tensordict (and other tensor-likes)
@@ -772,7 +772,15 @@ def cat(tensors, dim=0, out=None, axis=None):
         d = in_dtypes.pop()
         if _jittor_dtype_name(out_var.dtype) != d:
             out_var = out_var.cast(d)
-    return _cat_result(out_var, out)
+    return _cat_result(_cat_grad_result(out_var, fixed), out)
+
+
+def _cat_grad_result(value, tensors):
+    # Native concat may mark a new destination trainable for frozen inputs.
+    if isinstance(value, jt.Var) and (jt.flags.no_grad or not any(
+            isinstance(t, jt.Var) and t.requires_grad for t in tensors)):
+        return value.detach()
+    return value
 
 
 def _cat_result(value, out):

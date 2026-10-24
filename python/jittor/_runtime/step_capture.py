@@ -133,6 +133,12 @@ def on_replay(hook):
         _ACTIVE.prologue.append(hook)
 
 
+def publish_gradients(leaves):
+    """Remember holders whose final public gradients a captured backward wrote."""
+    if _ACTIVE is not None:
+        _ACTIVE.published_gradients.extend(leaves)
+
+
 def guard(read):
     """Re-capture whenever `read()` differs from its value now."""
     if _ACTIVE is not None:
@@ -386,7 +392,8 @@ def refuse(reason):
 class _Capture:
     __slots__ = ("inputs", "host_inputs", "outputs", "template", "roots", "state",
                  "state_lists", "prologue", "guards", "signature", "refused", "random",
-                 "frozen_random", "exact", "graph_bytes")
+                 "frozen_random", "exact", "graph_bytes", "published_gradients",
+                 "gradient_leaves")
 
     def __init__(self):
         self.prologue = []
@@ -395,6 +402,8 @@ class _Capture:
         self.random = None
         self.exact = False
         self.graph_bytes = 0
+        self.published_gradients = []
+        self.gradient_leaves = []
 
 
 def _finish_normally(roots):
@@ -425,9 +434,23 @@ def _adopt(holder, old):
     if (tuple(holder.shape) != tuple(old.shape)
             or str(_native_dtype(holder)) != str(_native_dtype(old))):
         return False
-    old._copy_into(holder)
-    holder._update(old)
+    with jt.no_grad():
+        old._copy_into(holder)
+        holder._update(old)
     return True
+
+
+def _commit_captured_state(records):
+    """Commit graph writes into the storage read by the captured step."""
+    state = []
+    with jt.no_grad():
+        for holder, old, new in records:
+            inplace = old._mem_ptr_now == new._mem_ptr_now
+            if not inplace:
+                old._copy_into(new, False)
+            holder._update(old)
+            state.append((holder, old, new, inplace))
+    return state
 
 
 def _unique(vars_):
@@ -481,12 +504,14 @@ def _write_back_in_graph(state, roots):
 class StepCapture:
     """A callable that replays `fn`'s captured step. See the module docstring."""
 
-    def __init__(self, fn, *, record=True, exact_random=False, max_retained_bytes=None):
+    def __init__(self, fn, *, record=True, exact_random=False, max_retained_bytes=None,
+                 _guard_external_backward=False):
         """`exact_random` refuses a step that draws random numbers rather than
         drawing them from a capture's own stream; `max_retained_bytes` bounds
         what a device recording may keep allocated (see `_record_cuda_graph`).
         """
         self._fn = fn
+        self._guard_external_backward = _guard_external_backward
         self._exact_random = exact_random
         self._max_retained_bytes = max_retained_bytes
         self._capture = None
@@ -516,10 +541,44 @@ class StepCapture:
         """Why the step is not replayed, or None."""
         return self._refused
 
+    def _call_signature(self, args, kwargs):
+        signature = _signature(args, kwargs)
+        if self._guard_external_backward:
+            return signature, bool(jt.flags.no_grad)
+        return signature
+
     def _eager(self, args, kwargs):
         self.stats["eager"] += 1
         with _no_auto():
-            return self._fn(*args, **kwargs)
+            if not self._guard_external_backward or self._refused is not None:
+                return self._fn(*args, **kwargs)
+            grad_enabled = not bool(jt.flags.no_grad)
+            token = _core._begin_step_backward_probe()
+            completed = False
+            try:
+                result = self._fn(*args, **kwargs)
+                completed = True
+            finally:
+                consumed = set(_core._end_step_backward_probe(token))
+                if not completed:
+                    # The failed warmup cannot establish capture eligibility.
+                    self._seen = None
+            outputs = []
+            try:
+                _output_template(result, outputs, {}, _object_ids((args, kwargs)))
+            except _Unreplayable as exc:
+                self._refused = str(exc)
+            if grad_enabled and not consumed:
+                # Frozen or detached outputs do not establish a permanent
+                # no-autograd contract: closure parameters may be unfrozen.
+                self._refused = (
+                    "a grad-enabled call must complete backward for whole-step replay; "
+                    "inference replay requires a no_grad scope")
+            if any(v.requires_grad and int(v.id) not in consumed for v in outputs):
+                self._refused = (
+                    "the call returns differentiable outputs for an external backward; "
+                    "whole-step replay has no external autograd boundary")
+            return result
 
     # -- capture -------------------------------------------------------
     def _capture_now(self, args, kwargs):
@@ -531,7 +590,8 @@ class StepCapture:
 
         def private_copy(value):
             copy = _empty_like(value)
-            copy._copy_into(value)
+            with jt.no_grad():
+                copy._copy_into(value)
             return copy
         private_args, private_kwargs = _map_inputs((args, kwargs), private_copy)
 
@@ -574,7 +634,15 @@ class StepCapture:
         # (see `_dense`).
         outputs[:] = [_dense(o) for o in outputs]
         records = [(holder, old, _dense(new)) for holder, old, new in records]
-        roots = _unique(outputs + [new for _, _, new in records])
+        published = {}
+        for parameter in cap.published_gradients:
+            gradient = getattr(parameter, "_torch_grad", None)
+            if isinstance(gradient, jt.Var):
+                published[id(gradient)] = gradient
+        gradient_sources = [(holder, _core._snapshot_step_gradient(holder))
+                            for holder in published.values()]
+        roots = _unique([source for _, source in gradient_sources]
+                        + outputs + [new for _, _, new in records])
         # Everything that can refuse is decided before the graph runs: a
         # refused step then runs exactly once, as written. Deciding after --
         # running it kept, then putting the state back and running it again --
@@ -591,28 +659,45 @@ class StepCapture:
         if cap.refused is not None:
             self._refused = cap.refused
             _finish_normally(roots)
+            _commit_captured_state(records)
             return None, result
+
+        # The optimizer update is still pending. Resolve published readouts
+        # against pre-update parameter bytes before the stateful roots run.
+        if gradient_sources:
+            jt.flags.keep_graph = 2
+            try:
+                jt.sync([source for _, source in gradient_sources], True, False)
+            finally:
+                jt.flags.keep_graph = before
 
         # A step that synced its own results has run already; running the
         # kept graph again would take it twice.
-        if any(not r._mem_ptr_now for r in roots):
+        if gradient_sources or any(not r._mem_ptr_now for r in roots):
             jt.flags.keep_graph = 2
             try:
-                jt.sync(roots, False, False)
+                # The ready owners below require completed gradient bytes.
+                # The first strong batch above ordered these readouts before
+                # the optimizer; this batch executes the whole step once.
+                jt.sync(roots, bool(gradient_sources), False)
             finally:
                 jt.flags.keep_graph = before
 
         # Point every rebound holder back at its old Var, which the graph
         # reads, and give it the new value. The step has run once, so this is
         # its update; every replay repeats it.
-        state = []
-        for holder, old, new in records:
-            inplace = old._mem_ptr_now == new._mem_ptr_now
-            if not inplace:
-                old._copy_into(new, False)
-            holder._update(old)
-            state.append((holder, old, new, inplace))
-        state = _write_back_in_graph(state, roots)
+        state = _commit_captured_state(records)
+        with jt.no_grad():
+            state = _write_back_in_graph(state, roots)
+
+        recorded_holders = {id(holder) for holder, _, _ in records}
+        with jt.no_grad():
+            for holder, source in gradient_sources:
+                if id(holder) not in recorded_holders:
+                    # `holder` is also the optimizer's gradient slot. The
+                    # source remains a replay root; only the public holder
+                    # changes to an inputless view of its storage.
+                    holder._update(_core._ready_step_gradient(source))
 
         cap.inputs = _input_vars((private_args, private_kwargs), [])
         cap.host_inputs = any(int(v.device_id) < 0 for v in cap.inputs)
@@ -622,23 +707,31 @@ class StepCapture:
         cap.state = state
         cap.state_lists = ([holder for holder, _, _, _ in state],
                            [old for _, old, _, _ in state])
-        cap.signature = _signature(args, kwargs)
+        if self._guard_external_backward:
+            cap.gradient_leaves = [
+                (v, v.var_ptr, bool(v.requires_grad))
+                for v in _core._step_leaf_holders(roots)]
+        cap.signature = self._call_signature(args, kwargs)
         # What a device recording of this step would hold.
         cap.graph_bytes = working.bytes()
         return cap, self._results(cap, outputs)
 
     def _results(self, cap, sources):
         outs = [_empty_like(o) for o in cap.outputs]
-        for out, src in zip(outs, sources):
-            out._copy_into(src, False)
+        with jt.no_grad():
+            for out, src in zip(outs, sources):
+                out._copy_into(src, False)
         return _rebuild(cap.template, outs)
 
     # -- guards --------------------------------------------------------
     def _stale(self, cap, args, kwargs):
         if _core._first_finished(cap.roots) >= 0:
             return "the captured graph was finished, most likely by a read"
-        if _signature(args, kwargs) != cap.signature:
-            return "the inputs changed shape or dtype"
+        if self._call_signature(args, kwargs) != cap.signature:
+            return "the inputs changed shape or dtype, or the gradient mode changed"
+        for holder, var_ptr, requires_grad in cap.gradient_leaves:
+            if holder.var_ptr != var_ptr or bool(holder.requires_grad) != requires_grad:
+                return "a captured leaf was rebound or changed its gradient policy"
         # One native pass over the holders; `_adopt` only for those rebound.
         holders, olds = cap.state_lists
         start = 0
@@ -657,9 +750,10 @@ class StepCapture:
 
     # -- replay --------------------------------------------------------
     def _write_back(self, cap):
-        for _, old, new, inplace in cap.state:
-            if not inplace:
-                old._copy_into(new, False)
+        with jt.no_grad():
+            for _, old, new, inplace in cap.state:
+                if not inplace:
+                    old._copy_into(new, False)
 
     def _record_cuda_graph(self, cap):
         """Record one replay -- the step and its write-backs -- as a device graph."""
@@ -694,8 +788,9 @@ class StepCapture:
             try:
                 jt.sync(cap.roots, False, False)
                 self._write_back(cap)
-                for out, src in zip(outs, cap.outputs):
-                    out._copy_into(src, False)
+                with jt.no_grad():
+                    for out, src in zip(outs, cap.outputs):
+                        out._copy_into(src, False)
             finally:
                 handle = _core.graph_capture_end()
         except Exception as exc:            # a capture poisons its stream
@@ -717,8 +812,9 @@ class StepCapture:
             hook()
         if self._cuda_graph and cap.host_inputs:
             _core.graph_wait()
-        for captured, given in zip(cap.inputs, _input_vars((args, kwargs), [])):
-            captured._copy_into(given)
+        with jt.no_grad():
+            for captured, given in zip(cap.inputs, _input_vars((args, kwargs), [])):
+                captured._copy_into(given)
         if self._cuda_graph and not _core.graph_leaves_moved(self._cuda_graph):
             _core.graph_launch(self._cuda_graph)
             self.stats["graph"] += 1
@@ -745,6 +841,12 @@ class StepCapture:
         return self._results(cap, cap.outputs)
 
     def __call__(self, *args, **kwargs):
+        if self._guard_external_backward and any(
+                v.requires_grad for v in _input_vars((args, kwargs), [])):
+            # A private byte copy is not an autograd edge to the caller's input.
+            # Keep the original CUDA graph rather than publishing missing grads.
+            self.invalidate()
+            self._refused = "whole-step replay cannot preserve differentiable input gradients"
         if self._refused is not None:
             return self._eager(args, kwargs)
         cap = self._capture
@@ -758,7 +860,7 @@ class StepCapture:
                 self._refused = "the step kept changing, so it was re-captured too often"
                 return self._eager(args, kwargs)
         if cap is None:
-            signature = _signature(args, kwargs)
+            signature = self._call_signature(args, kwargs)
             if signature != self._seen:
                 # The first call of a signature runs as written: it builds
                 # whatever the step creates lazily, which must exist -- and

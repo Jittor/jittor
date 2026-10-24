@@ -44,6 +44,9 @@ struct HostExecutionScope {
 struct Op : Node {
     Float32PrecisionPolicy float32_precision;
     uint64 launch_origin = 0;
+    // Functional construction provenance; temporary fused wrappers never
+    // replace the ownership of their original member producers.
+    uint64 rematerialization_owner = 0;
     // Dense-only kernels receive explicit contiguous graph inputs at the
     // generated construction boundary, before storing their Var members.
     static constexpr bool accepts_storage_strides = false;

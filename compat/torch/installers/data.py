@@ -207,6 +207,36 @@ class _BatchSampler(_Sampler):
         return n // self.batch_size if self.drop_last else (n + self.batch_size - 1) // self.batch_size
 
 
+class _UnbatchedSampler(_Sampler):
+    """Yield one index at a time for ``DataLoader(batch_size=None)``."""
+    def __init__(self, sampler):
+        self.sampler = sampler
+
+    def __iter__(self):
+        return iter(([index] for index in self.sampler))
+
+    def __len__(self):
+        return len(self.sampler)
+
+
+class _IterableBatchSampler(_Sampler):
+    """Batch values from an IterableDataset for the shared loader iterator."""
+    def __init__(self, dataset, batch_size=1, drop_last=False):
+        self.dataset = dataset
+        self.batch_size = 1 if batch_size is None else int(batch_size)
+        self.drop_last = bool(drop_last)
+
+    def __iter__(self):
+        batch = []
+        for value in self.dataset:
+            batch.append(value)
+            if len(batch) == self.batch_size:
+                yield batch
+                batch = []
+        if batch and not self.drop_last:
+            yield batch
+
+
 class _DistributedSampler(_Sampler):
     def __init__(self, dataset, num_replicas=None, rank=None, shuffle=True,
                  seed=0, drop_last=False):
@@ -282,7 +312,9 @@ class _SingleProcessDataLoaderIter(_BaseDataLoaderIter):
 
     def __next__(self):
         batch_indices = next(self._batch_iter)
-        return self._loader.collate_fn([self._loader.dataset[i] for i in batch_indices])
+        values = (batch_indices if self._loader._iterable_dataset else
+                  [self._loader.dataset[i] for i in batch_indices])
+        return values[0] if self._loader.batch_size is None else self._loader.collate_fn(values)
 
 
 class _WorkerInfo:
@@ -346,7 +378,9 @@ class _MultiProcessingDataLoaderIter(_BaseDataLoaderIter):
 
     def _fetch(self, batch_indices):
         loader = self._loader
-        return loader.collate_fn([loader.dataset[i] for i in batch_indices])
+        values = (batch_indices if loader._iterable_dataset else
+                  [loader.dataset[i] for i in batch_indices])
+        return values[0] if loader.batch_size is None else loader.collate_fn(values)
 
     def _fill(self):
         want = self._num_workers * self._prefetch
@@ -406,6 +440,7 @@ class _DataLoader:
                  worker_init_fn=None, generator=None, prefetch_factor=None,
                  persistent_workers=False, **kwargs):
         self.dataset = dataset
+        self._iterable_dataset = not hasattr(dataset, "__len__")
         self.batch_size = batch_size
         self.drop_last = drop_last
         self.num_workers = num_workers
@@ -423,9 +458,11 @@ class _DataLoader:
             self.sampler = None
         else:
             self.sampler = sampler if sampler is not None else (
-                _RandomSampler(dataset, generator=generator) if shuffle else _SequentialSampler(dataset)
-            )
-            self.batch_sampler = _BatchSampler(self.sampler, batch_size, drop_last)
+                _IterableBatchSampler(dataset, batch_size, drop_last) if self._iterable_dataset else
+                (_RandomSampler(dataset, generator=generator) if shuffle else _SequentialSampler(dataset)))
+            self.batch_sampler = (_IterableBatchSampler(dataset, batch_size, drop_last) if self._iterable_dataset else
+                                  (_UnbatchedSampler(self.sampler) if batch_size is None
+                                  else _BatchSampler(self.sampler, batch_size, drop_last)))
         self._iterator = None
     def __iter__(self):
         if int(self.num_workers or 0) > 0:
@@ -443,21 +480,29 @@ def _generate_state(base_seed, worker_id):
     return [rng.randrange(0, 2**32) for _ in range(4)]
 
 
-def _checkpoint(fn, *args, use_reentrant=None, **kwargs):
-    """Run fn directly: correct values, but no activation recompute.
+def _checkpoint(fn, *args, use_reentrant=None, preserve_rng_state=True,
+                context_fn=None, determinism_check="default", debug=False, **kwargs):
+    """Adapt Torch's reentrant checkpoint to native activation replay.
 
-    jittor has no gradient-checkpointing primitive, so the activation
-    memory this API exists to save is NOT saved and `use_reentrant`
-    has no meaning here. The result is numerically identical, which is
-    why this stays a pass-through rather than an error -- but the
-    memory guarantee the caller asked for is absent.
+    Nested tensors and keyword arguments are supported. Non-reentrant replay,
+    custom context_fn and debug tracing are deliberately rejected until their
+    distinct contracts have native implementations.
     """
-    _stub_policy_data.degraded(
-        "torch.utils.checkpoint.checkpoint",
-        "the wrapped function is run directly, so activations are kept "
-        "and no memory is saved",
-        "use_reentrant has no effect on jittor.")
-    return fn(*args, **kwargs)
+    if use_reentrant is False:
+        raise NotImplementedError("non-reentrant activation checkpointing is not implemented")
+    if context_fn is not None or debug or determinism_check != "default":
+        raise NotImplementedError("checkpoint supports only default replay contexts and determinism checks")
+    from ..amp import autocast, autocast_is_enabled, autocast_configured_dtype, autocast_cache_enabled
+    device = "npu" if jt.flags.use_cuda and jt.compiler.has_acl else "cuda" if jt.flags.use_cuda else "cpu"
+    enabled = autocast_is_enabled(device)
+    dtype = autocast_configured_dtype(device)
+    cache_enabled = autocast_cache_enabled()
+
+    def replay_context():
+        return autocast(device_type=device, enabled=enabled, dtype=dtype, cache_enabled=cache_enabled)
+
+    return jt.autograd.checkpoint(fn, *args, preserve_rng_state=preserve_rng_state,
+                                  context_fn=replay_context, **kwargs)
 
 
 def _default_convert(value):
@@ -504,7 +549,8 @@ for _name, _implementation in _DATA_APIS.items():
     )
 register_fidelity(
     "torch.utils.checkpoint.checkpoint", _checkpoint, Fidelity.APPROXIMATE,
-    "evaluates the function directly; no activation recomputation or memory saving",
+    "native first-order reentrant activation replay with RNG and captured parameter gradients; "
+    "non-reentrant and debug/context_fn variants are not implemented",
 )
 register_fidelity(
     "torchdata.stateful_dataloader.StatefulDataLoader", StatefulDataLoader,
@@ -561,7 +607,9 @@ def install(ctx):
         g.utils.data = _modules["torch.utils.data"]
     if "torch.utils.checkpoint" not in _modules:
         _ckpt = _types2.ModuleType("torch.utils.checkpoint")
-        _ckpt.checkpoint = _checkpoint
         _modules["torch.utils.checkpoint"] = _ckpt
-        g.utils.checkpoint = _ckpt
+    else:
+        _ckpt = _modules["torch.utils.checkpoint"]
+    _ckpt.checkpoint = _checkpoint
+    g.utils.checkpoint = _ckpt
     _install_torchdata_stateful_dataloader(g, ctx.registry)

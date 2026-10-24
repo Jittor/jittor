@@ -75,6 +75,15 @@ class TestSharedReduce(unittest.TestCase):
         self.assertNotIn("shared_reduce<", source)
         self.assertIn("_wr_mask", source)
 
+    def test_explicit_block_fold_at_default_level(self):
+        self.assertEqual(jt.introspection.policy.runtime.para_opt_level, 3)
+        source, error = self._reduce((257, 257), (1,), 51, use_shared_reduce=2)
+        self.assertLess(error, 1e-5)
+        self.assertIn("shared_reduce<", source)
+        self.assertIn("if (threadIdx.x == 0)", source)
+        self.assertNotIn("_wr_mask", source)
+        self.assertEqual(jt.introspection.policy.runtime.para_opt_level, 3)
+
     def test_level_4_uses_one_block_write(self):
         from contextlib import ExitStack as _TestPolicyStack
         with _TestPolicyStack() as _test_policy_stack:

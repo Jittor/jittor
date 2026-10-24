@@ -28,10 +28,12 @@ if str(TEST_ROOT) not in sys.path:
     sys.path.insert(0, str(TEST_ROOT))
 
 from _helpers.child_process import run_python_child  # noqa: E402
+from _helpers.process_modes import is_torch_mode_path  # noqa: E402
 
 #: A native file, and a Torch-mode file that is cheap to collect.
 _NATIVE_TARGET = "tests/runtime/test_flags.py"
 _TORCH_TARGET = "compat/tests/torch/test_torch_compiler_fidelity.py"
+_TORCH_TRITON_BACKEND_TARGET = "compat/tests/triton/test_triton_backend.py"
 
 
 #: ``compiler.JIT_UTILS_UPDATED_EXIT_CODE``. Duplicated rather than imported
@@ -81,6 +83,20 @@ def test_conftest_does_not_read_the_command_line_to_choose_a_mode():
     assert offenders == [], (
         "conftest.py reads sys.argv at line(s) %s; the process mode comes from "
         "JITTOR_TORCH_SHIM" % offenders)
+
+
+def test_process_mode_owns_both_compat_path_spellings():
+    """The gate's runnable symlink path must retain its canonical mode."""
+    assert is_torch_mode_path("compat/tests/fsdp2/test_fsdp2_flat_policy.py")
+    assert is_torch_mode_path(
+        "python/jittor/compat/tests/fsdp2/test_fsdp2_flat_policy.py")
+    assert not is_torch_mode_path("python/jittor/compat/tests/data/test_dataset.py")
+
+
+def test_triton_backend_compat_tests_are_torch_mode():
+    """Backend contract methods still import the Torch compatibility frontend."""
+    assert is_torch_mode_path(_TORCH_TRITON_BACKEND_TARGET)
+    assert not is_torch_mode_path(_NATIVE_TARGET)
 
 
 def test_naming_a_torch_path_alongside_a_native_one_does_not_change_its_meaning():

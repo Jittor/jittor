@@ -86,6 +86,15 @@ def test_the_two_sessions_do_not_run_the_same_file_twice():
     assert sorted(native & torch) == []
 
 
+def test_public_fsdp2_compat_tests_do_not_enter_native_collection():
+    """Importing compat FSDP2 loads its Torch-facing helper modules."""
+    target = "compat/tests/fsdp2/test_fsdp2_flat_policy.py"
+    native = gate_scope.selected_files(REPO_ROOT, gate_scope.native_arguments())
+    torch = gate_scope.selected_files(REPO_ROOT, gate_scope.torch_arguments())
+    assert target not in native
+    assert target in torch
+
+
 def test_every_exclusion_states_a_reason_and_still_exists():
     problems = []
     for entry in gate_scope.EXCLUDED:

@@ -1,6 +1,6 @@
 """Torch numerical linalg operations."""
 
-def eye(n, m=None, dtype=None, device=None, requires_grad=False, **kwargs):
+def eye(n, m=None, dtype=None, device=None, requires_grad=False, out=None, **kwargs):
     """Create a square or rectangular identity matrix, on ``device``.
 
     ``device=`` used to be swallowed by ``**kwargs``: this function entered
@@ -22,9 +22,23 @@ def eye(n, m=None, dtype=None, device=None, requires_grad=False, **kwargs):
     from ...nested import _torch_register_leaf
     from ...tensor_state import compatibility_owner
     target = compatibility_owner(jt)
+    if out is not None:
+        if dtype is not None and _dtype_to_str(dtype) != _dtype_to_str(out.dtype):
+            raise RuntimeError("eye: dtype must match out dtype")
+        if device is not None and target.device(device) != out.device:
+            raise RuntimeError("eye: device must match out device")
+        dtype, device = out.dtype, out.device
     with tensor_frontend(target.Var, device=device):
         result = _init.eye(shape, _dtype_to_str(dtype) or "float32")
         result.requires_grad = bool(requires_grad)
+    if out is not None:
+        if tuple(out.shape) != shape:
+            out.assign(result)
+        else:
+            out.copy_(result)
+        if requires_grad:
+            out.requires_grad_(True)
+        return out
     if requires_grad:
         _torch_register_leaf(result)
     return result

@@ -19,6 +19,7 @@
 #include "core/executor.h"
 #include "runtime/device.h"
 #include "runtime/random_generator.h"
+#include "runtime/rematerialization_scope.h"
 
 namespace jittor {
 
@@ -52,7 +53,7 @@ CurandRandomOp::CurandRandomOp(NanoVector shape, NanoString dtype, NanoString ty
         from_generator = true;
         philox_seed = (uint64)generator->state->seed_;
         philox_offset = (uint64)generator->state->reserve_cuda(raw);
-    }
+    } else rematerialization_preserve_rng = rematerialization_preserves_rng();
 }
 
 void CurandRandomOp::jit_prepare(JK& jk) {
@@ -75,6 +76,26 @@ void CurandRandomOp::jit_run() {
 // curand_uniform_double is avoided: it also takes a curand4 but uses only
 // half of it, for a single double.
 static constexpr int kPhiloxUnitsPerThread = 4;
+
+// A replay owns a separate host generator. Its destruction during unwinding
+// must not replace a failed kernel's primary exception.
+struct RematerializationCurandGenerator {
+    curandGenerator_t generator = nullptr;
+    void restore(uint64 seed, uint64 offset) {
+        checkCudaErrors(curandCreateGenerator(&generator, CURAND_RNG_PSEUDO_DEFAULT));
+        checkCudaErrors(curandSetPseudoRandomGeneratorSeed(generator, seed));
+        checkCudaErrors(curandSetGeneratorOffset(generator, offset));
+        checkCudaErrors(curandSetStream(generator, cudaStreamPerThread));
+    }
+    void close() {
+        auto owned = generator;
+        generator = nullptr;
+        checkCudaErrors(curandDestroyGenerator(owned));
+    }
+    ~RematerializationCurandGenerator() {
+        if (generator) curandDestroyGenerator(generator);
+    }
+};
 
 template <class T, bool NORMAL>
 __global__ static void philox_random_kernel(T* __restrict__ x, index_t num,
@@ -121,7 +142,19 @@ void CurandRandomOp::jit_run() {
         return;
     }
     // Draws without a jt.Generator share the global curand host generator.
-    curandGenerator_t local_gen = curand_bind_stream();
+    const bool rematerialization_replay = rematerialization_preserve_rng && rematerialization_rng_saved;
+    RematerializationCurandGenerator private_rng;
+    curandGenerator_t local_gen;
+    if (rematerialization_replay) {
+        private_rng.restore(rematerialization_seed, rematerialization_offset);
+        local_gen = private_rng.generator;
+    } else {
+        local_gen = curand_bind_stream();
+        if (rematerialization_preserve_rng) {
+            rematerialization_seed = curand_generator_seed(current_device());
+            rematerialization_offset = curand_generator_offset(current_device());
+        }
+    }
     // curandGenerateUniform has no parity requirement; curandGenerateNormal
     // wants an even count for pseudorandom generators. The old code rounded
     // the count up for both and wrote one element past the end of the output
@@ -148,12 +181,12 @@ void CurandRandomOp::jit_run() {
     // failing at JIT-compile time, not a normal C++ diagnostic). Comments
     // for this block live above it, comma-free, for exactly that reason.
     @if(@strcmp(@R,uniform)==0,
-        curand_advance(current_device(), num);
+        if (!rematerialization_replay) curand_advance(current_device(), num);
         checkCudaErrors(curandGenerateUniform@TT (local_gen, x, num));
     ,
         index_t normal_cost = num/2;
         if (num & 1) normal_cost = (num-1)/2 + 1;
-        curand_advance(current_device(), normal_cost);
+        if (!rematerialization_replay) curand_advance(current_device(), normal_cost);
         if (num & 1) {
             if (num > 1)
                 checkCudaErrors(curandGenerateNormal@TT (local_gen, x, num-1, 0, 1));
@@ -167,6 +200,8 @@ void CurandRandomOp::jit_run() {
             checkCudaErrors(curandGenerateNormal@TT (local_gen, x, num, 0, 1));
         }
     )
+    if (rematerialization_replay) private_rng.close();
+    else if (rematerialization_preserve_rng) rematerialization_rng_saved = true;
 }
 #endif // JIT_cpu
 #endif // JIT
