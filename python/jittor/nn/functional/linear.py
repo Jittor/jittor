@@ -61,7 +61,7 @@ def _supports_cpu_bias_accumulator(x, weight, bias):
 
 
 def _cpu_bias_accumulator(x, weight, bias):
-    with jt.flag_scope(amp_reg=0):
+    with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
         x, weight, bias = (value.cast("bfloat16") for value in (x, weight, bias))
         shape = x.shape[:-1] + (weight.shape[0],)
         # An inferred dimension beside K=0 loses the known number of rows.

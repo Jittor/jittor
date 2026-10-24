@@ -67,7 +67,7 @@ def _opmath_scope(query):
     # Explicit FP32 operands must stay FP32 inside a caller's autocast region.
     # Float32/64 attention keeps its existing policy and implementation.
     return (
-        jt.flag_scope(amp_reg=0)
+        jt.flag_scope(amp_reg=jt.amp_flags.disabled)
         if _jittor_dtype_name(query.dtype) in ("float16", "bfloat16")
         else nullcontext()
     )

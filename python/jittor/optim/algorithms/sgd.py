@@ -40,14 +40,14 @@ def momentum_initialized_flags(pg):
 
 
 def _torch_scaled_product(value, alpha):
-    with jt.flag_scope(amp_reg=0):
+    with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
         coefficient = jt.array(alpha, dtype="float32").stop_grad()
         return (value.float32() * coefficient).cast(value.dtype).stop_fuse()
 
 
 def _torch_scaled_add(value, other, alpha, *, round_alpha=False):
     """Scaled add with one output cast; optionally round alpha to the tensor dtype."""
-    with jt.flag_scope(amp_reg=0):
+    with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
         coefficient = jt.array(alpha, dtype="float32").stop_grad()
         if round_alpha:
             coefficient = coefficient.cast(value.dtype).float32().stop_grad()

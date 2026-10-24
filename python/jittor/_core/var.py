@@ -97,6 +97,8 @@ class amp_flags:
     fails if they drift.
     """
 
+    #: disable every automatic mixed-precision preference in a scoped opmath path
+    disabled = 0
     #: force float32 for ops whose inputs are all non-scalar floats
     prefer32 = 1
     #: force float16 (bfloat16 if an input is bfloat16) for the same
