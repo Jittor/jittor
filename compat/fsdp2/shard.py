@@ -316,7 +316,7 @@ def _init_true_fsdp_state_impl(module, state):
                 "FSDP2 cannot shard ParameterList/ParameterDict: its parameter "
                 "storage needs container-aware replacement at every shard transition")
     total_numel = sum(common._param_numel(param) for _, _, _, param in params)
-    return _storage._init_true_fsdp_state_impl(
+    initialized = _storage._init_true_fsdp_state_impl(
         module,
         state,
         params,
@@ -325,6 +325,11 @@ def _init_true_fsdp_state_impl(module, state):
         flat=common._fsdp2_flat_enabled(ws, total_numel),
         api=sys.modules[__name__],
     )
+    # Optimizers may already own the full parameters. Give those exact objects
+    # the same entry identity as the new shard, without retaining them in state.
+    for (_, _, _, original), entry in zip(params, state.true_fsdp_params):
+        _mark_fsdp_param_var(original, state, entry, "retired")
+    return initialized
 
 
 def _unshard_module_params(module):

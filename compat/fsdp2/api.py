@@ -291,6 +291,8 @@ def fully_shard(module, *, mesh=None, reshard_after_forward=True,
     _inject_fsdp_methods(module)
     shard._init_true_fsdp_state(module, st)
     shard._install_true_fsdp_execute(module)
+    if getattr(st, "true_fsdp_initialized", False):
+        optimizer._refresh_all_optimizer_fsdp_params((st,))
     return module
 
 

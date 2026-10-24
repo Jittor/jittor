@@ -69,7 +69,7 @@ def _sync_adam_group_params(pg, *, replacements=()):
     current = tuple(pg.get("params", ()))
     if len(current) == len(previous) and all(a is b for a, b in zip(current, previous)):
         return
-    from jittor.optim.algorithms.adam import _state_buffer
+    from jittor.optim.base import _state_buffer
     rebound = {id(old): (old, new) for old, new in replacements}
     identities = []
     for parameter in previous:
