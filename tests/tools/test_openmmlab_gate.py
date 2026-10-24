@@ -227,10 +227,15 @@ class OpenMMLabGateTests(unittest.TestCase):
         fake._enabled = lambda name: True
         fake._torch_shim_is_active = lambda: True
         fake._distributions_available = lambda names: True
+        training_fake = types.ModuleType("_ecosystem_openmmlab_harness")
+        training_fake.compare_training = lambda *args: None
         path = ROOT / "compat/tests/torch/test_ecosystem_openmmlab.py"
         spec = importlib.util.spec_from_file_location("openmmlab_admission_probe", path)
         module = importlib.util.module_from_spec(spec)
-        with mock.patch.dict(sys.modules, {"_ecosystem_harness": fake}):
+        with mock.patch.dict(sys.modules, {
+            "_ecosystem_harness": fake,
+            "_ecosystem_openmmlab_harness": training_fake,
+        }):
             spec.loader.exec_module(module)
         gate = module.EcosystemOpenMMLab()
         with self.assertRaisesRegex(AssertionError, "independent real Torch"):

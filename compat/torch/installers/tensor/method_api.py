@@ -309,6 +309,19 @@ def _copy_(self, other, non_blocking=False):
     return _ip(self, src, preserve_storage=True)
 
 
+def _record_stream(self, stream):
+    from ..cuda.api import _Stream
+    if not isinstance(stream, _Stream):
+        raise TypeError("record_stream expects a torch.cuda.Stream")
+    if self.device.type == "cuda":
+        if stream.device.index != self.device.index:
+            raise RuntimeError("record_stream stream and tensor devices differ")
+        # Logical streams share one native execution stream. Complete pending
+        # use before ZeRO can release or replace this tensor's storage.
+        _owner.jt.sync_all(True)
+    return None
+
+
 def _norm_size(args):
     # torch allows new_ones(2,3), new_ones((2,3)), or new_ones(<NanoVector/Size>)
     # -- unwrap any single iterable that isn't itself a scalar int/Var.
@@ -849,9 +862,14 @@ def _cast_if_needed(tensor, dtype):
 
 
 def _var_type(self, dst_type=None, non_blocking=False, **kw):
-    _context = get_install_context(_owner.jt)
     if dst_type is None:
-        return _DTYPE_TO_TYPENAME.get(_jittor_dtype_name(self.dtype), "torch.FloatTensor")
+        name = _DTYPE_TO_TYPENAME.get(_jittor_dtype_name(self.dtype), "torch.FloatTensor")
+        # Built Vars already carry their actual placement. Avoid constructing a
+        # public device object in dtype-bucketing hot loops; unresolved Vars
+        # keep the full residency-aware fallback.
+        backend = int(self.placement_backend)
+        is_cuda = backend == 1 if backend >= 0 else self.device.type == "cuda"
+        return name.replace("torch.", "torch.cuda.", 1) if is_cuda else name
     if isinstance(dst_type, str) and dst_type in _jittor_dtype_name(_TYPENAME_TO_DTYPE):
         return _cast_if_needed(self, _TYPENAME_TO_DTYPE[dst_type])
     ds = _owner._dtype_to_str(dst_type)
@@ -1328,7 +1346,14 @@ def _var_norm(self, p="fro", dim=None, keepdims=None, *rest,
 def _binary_native(opname, left, right, native_api=None):
     if native_api is None:
         native_api = get_install_context(_owner.jt).state["tensor_native_api"]
-    result = native_api["operators"][opname](left, right)
+    # CPU autocast only lowers selected matrix/convolution ops. Pointwise
+    # arithmetic must keep the dtype of its inputs: e.g. the FP32 residual
+    # after `bf16_output.float() - target` must not round back to BF16.
+    if _owner.jt.flags.amp_reg and not _owner.jt.flags.use_cuda:
+        with _owner.jt.flag_scope(amp_reg=0):
+            result = native_api["operators"][opname](left, right)
+    else:
+        result = native_api["operators"][opname](left, right)
     return _owner._mark_cpu_like(result, left, right)
 
 
@@ -1467,7 +1492,7 @@ _FAST_BINARY_OPERATORS = ('__add__', '__radd__', '__sub__', '__rsub__',
 
 def _tensor_add(self, other):
     fast = _FAST_BINARY
-    if fast is not None:
+    if fast is not None and not (_owner.jt.flags.amp_reg and not _owner.jt.flags.use_cuda):
         out = fast(self, other, 0)
         if out is not None:
             return out
@@ -1476,7 +1501,7 @@ def _tensor_add(self, other):
 
 def _tensor_radd(self, other):
     fast = _FAST_BINARY
-    if fast is not None:
+    if fast is not None and not (_owner.jt.flags.amp_reg and not _owner.jt.flags.use_cuda):
         out = fast(self, other, 1)
         if out is not None:
             return out
@@ -1485,7 +1510,7 @@ def _tensor_radd(self, other):
 
 def _tensor_sub(self, other):
     fast = _FAST_BINARY
-    if fast is not None:
+    if fast is not None and not (_owner.jt.flags.amp_reg and not _owner.jt.flags.use_cuda):
         out = fast(self, other, 2)
         if out is not None:
             return out
@@ -1494,7 +1519,7 @@ def _tensor_sub(self, other):
 
 def _tensor_rsub(self, other):
     fast = _FAST_BINARY
-    if fast is not None:
+    if fast is not None and not (_owner.jt.flags.amp_reg and not _owner.jt.flags.use_cuda):
         out = fast(self, other, 3)
         if out is not None:
             return out
@@ -1503,7 +1528,7 @@ def _tensor_rsub(self, other):
 
 def _tensor_mul(self, other):
     fast = _FAST_BINARY
-    if fast is not None:
+    if fast is not None and not (_owner.jt.flags.amp_reg and not _owner.jt.flags.use_cuda):
         out = fast(self, other, 4)
         if out is not None:
             return out
@@ -1512,7 +1537,7 @@ def _tensor_mul(self, other):
 
 def _tensor_rmul(self, other):
     fast = _FAST_BINARY
-    if fast is not None:
+    if fast is not None and not (_owner.jt.flags.amp_reg and not _owner.jt.flags.use_cuda):
         out = fast(self, other, 5)
         if out is not None:
             return out
@@ -1545,7 +1570,7 @@ def _tensor_rpow(self, other):
 
 def _tensor_truediv(self, other):
     fast = _FAST_BINARY
-    if fast is not None:
+    if fast is not None and not (_owner.jt.flags.amp_reg and not _owner.jt.flags.use_cuda):
         out = fast(self, other, 6)
         if out is not None:
             return out
@@ -1554,7 +1579,7 @@ def _tensor_truediv(self, other):
 
 def _tensor_rtruediv(self, other):
     fast = _FAST_BINARY
-    if fast is not None:
+    if fast is not None and not (_owner.jt.flags.amp_reg and not _owner.jt.flags.use_cuda):
         out = fast(self, other, 7)
         if out is not None:
             return out

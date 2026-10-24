@@ -59,6 +59,7 @@ from .method_api import (
     _is_pinned,
     _pin_memory,
     _set_,
+    _record_stream,
     _assign_data_owner,
     _backward,
     _baddbmm,
@@ -313,6 +314,11 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         Var.storage = _api_storage
     if not hasattr(Var, "untyped_storage"):
         Var.untyped_storage = _api_untyped_storage
+    Var.record_stream = _record_stream
+    register_fidelity(
+        "torch.Tensor.record_stream", _record_stream, Fidelity.APPROXIMATE,
+        "Synchronizes native work before storage can be reused; logical CUDA "
+        "streams have no independent allocator lifetime.")
     if not hasattr(Var, "data_ptr"):
         # Tensor.data_ptr is the first element address, not Python object
         # identity. The native accessor synchronizes without migrating it.

@@ -128,7 +128,7 @@ CPU 原生集合的 14 项跳过包括六个 storage CUDA fixture 与八个 CUDA
 断言保留。
 
 原生 CUDA 唯一失败仍为
-[KI-CODEGEN-005](../../agent/manuals/known-issues.md#ki-codegen-005-cuda-full-sum-materializes-a-pending-expanded-elementwise-consumer)：
+[KI-CODEGEN-005](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/known-issues.md#ki-codegen-005-cuda-full-sum-materializes-a-pending-expanded-elementwise-consumer)：
 该节点数值正确，实际增长 68,157,440 字节，原预算 16,777,216 字节；与子代理干净远端基线
 重现相同，不把整套原生 CUDA 记为全绿，也不修改或 xfail 该断言。
 布局、MANIFEST、空白检查和新增两测试文件 Ruff 通过。

@@ -1,21 +1,19 @@
 """Native FSDP arithmetic, lifetime and checkpoint contracts."""
 
-import sys
 
 import jittor as jt
 import numpy as np
 import pytest
 from jittor.distributed import checkpoint
 from jittor.distributed.fsdp import FullyShardedDataParallel, MixedPrecisionPolicy, fully_shard
+from jittor.autograd.policy import NATIVE, get_policy
 from _helpers.native_fsdp import model, optimizer, run_step, equal
 
 
 @pytest.mark.parametrize("kind", ["sgd", "adamw"])
 @pytest.mark.parametrize("accumulate", [1, 2])
 def test_complete_gradient_update_accumulation_and_resume(kind, accumulate, tmp_path):
-    assert "torch" not in sys.modules and not any(
-        n.startswith("jittor.compat") for n in sys.modules
-    )
+    assert get_policy() is NATIVE
     module = FullyShardedDataParallel(model(jt, native=True))
     opt = optimizer(jt, module, kind)
     baseline = model(jt, native=True)

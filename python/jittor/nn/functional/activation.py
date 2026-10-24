@@ -276,6 +276,12 @@ def gelu(x, approximate='none'):
         >>> nn.gelu(a)
         jt.Var([-0.134547   0.9882567  6.128115 ], dtype=float32)
     '''
+    # Training keeps the exact BF16 forward and backward in one CUDA kernel
+    # each. It has a separate dispatch name so its registration does not
+    # disable the native no-grad GELU route below for other dtypes.
+    fast = try_dispatch("nn.gelu.training", x, approximate=approximate)
+    if fast is not None:
+        return fast
     if approximate == 'none' and _FAST_GELU is not None:
         # The body below, built natively when the frontend's binary operators
         # are bound and no "nn.gelu" kernel is registered; None otherwise.

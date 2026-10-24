@@ -6,6 +6,7 @@ Function input/output bookkeeping belongs to each native one-shot call context.
 import contextlib
 import threading
 from collections import deque
+from typing import Callable, Deque
 import jittor as jt
 import numpy as np
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
@@ -375,6 +376,11 @@ class Function(jt.Function):
     """Torch-style callbacks with native per-call tape and context ownership."""
 
     def execute(self, *args, **kwargs):
+        setup_context = getattr(type(self), "setup_context", None)
+        if setup_context is not None:
+            result = type(self).forward(*args, **kwargs)
+            setup_context(self, args, result)
+            return result
         return type(self).forward(self, *args, **kwargs)
 
     __call__ = _call_record_inputs
@@ -427,7 +433,7 @@ def _backward_callbacks():
     stack = getattr(_callback_tasks, "stack", None)
     if stack is None:
         stack = _callback_tasks.stack = []
-    callbacks = deque()
+    callbacks: Deque[Callable[[], None]] = deque()
     stack.append(callbacks)
     try:
         yield

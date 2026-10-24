@@ -249,7 +249,7 @@ fresh derived comparison files are retained. The complete seal covers **199 file
 Unversioned commands, actual platform files, raw arrays, independent rechecks,
 failed attempts, official wheel inputs and `scorecard-installed-source-v4.json`
 are under `$JITTOR_LAB_ROOT/_state/vllm-installed-source/20261015/`.
-Reproduce through the updated [vLLM skill](../../agent/skills/vllm-torch-compat/SKILL.md)
+Reproduce through the updated [vLLM skill](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/vllm-torch-compat/SKILL.md)
 with real source/wheel inputs, fresh independent interpreters and new external
 output paths. This result grants no whole model, engine, Omni, training,
 pretrained, additional backend or performance support.

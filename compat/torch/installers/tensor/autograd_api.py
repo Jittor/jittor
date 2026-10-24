@@ -11,6 +11,13 @@ def _register_leaf(v):
 
 def _initial_leaf_gradient(parameter, gradient):
     """Apply AccumulateGrad's dense layout contract without changing AD edges."""
+    # ZeRO-3 releases the visible parameter storage after forward while its
+    # original shape remains in ds_shape. Its backward hook consumes the full
+    # gradient before the parameter is gathered again.
+    full_shape = getattr(parameter, "ds_shape", None)
+    if (tuple(parameter.shape) == (0,) and full_shape is not None
+            and tuple(full_shape) == tuple(gradient.shape)):
+        return gradient
     sizes, strides = tuple(parameter.shape), parameter.stride()
     extent = 1
     dense = True

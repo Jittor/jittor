@@ -1,7 +1,6 @@
 """Native wrapper ownership is optional, GC-visible and independent of Torch."""
 
 import gc
-import sys
 import weakref
 from concurrent.futures import ThreadPoolExecutor
 
@@ -10,6 +9,7 @@ import pytest
 
 import jittor as jt
 from jittor._runtime.fallback import forbid_backend_fallbacks
+from jittor.autograd.policy import NATIVE, get_policy
 from _helpers.device_types import instantiate_device_type_tests
 
 
@@ -34,7 +34,7 @@ def physical(value, device):
 
 @pytest.fixture(autouse=True)
 def native_only():
-    assert 'torch' not in sys.modules and 'jittor.compat.torch' not in sys.modules
+    assert get_policy() is NATIVE
     with forbid_backend_fallbacks():
         yield
         jt.sync_all(True)

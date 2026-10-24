@@ -23,6 +23,9 @@ jobs:
   smoke:
     needs: baseline
     name: nox / smoke
+    # Four xdist workers share a four-CPU container.
+    env:
+      use_parallel_op_compiler: "1"
     runs-on: ${{ needs.baseline.outputs.host_runner }}
     container:
       image: ${{ needs.baseline.outputs.cpu_ci_image }}
@@ -32,18 +35,25 @@ jobs:
     # tests/structure/test_gate_tiers.py, arithmetically, against measured
     # per-file costs; an assertion on elapsed wall clock would fail on a busy
     # runner for reasons that have nothing to do with the change. The number
-    # below is the runner's patience, and it has to cover the pip installs and
-    # a cache miss, not just the tests.
-    timeout-minutes: 45
+    # below must cover a cold JIT cache too: the first fork run reached only
+    # 73% of native tests in 45 minutes, before the Torch session started.
+    timeout-minutes: 150
     steps:
+      # The CPU image has no git: checkout must create a real repository for
+      # source-closure tests, and nox sessions need system-level trust because
+      # they use separate HOME directories.
+      - name: Install native CPU toolchain and git
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends build-essential libomp-dev git ca-certificates
       - name: Check out source
         uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - name: Install native CPU toolchain
-        run: |
-          apt-get update
-          apt-get install --yes --no-install-recommends build-essential libomp-dev
+      - name: Trust the checkout
+        run: git config --system --add safe.directory "${GITHUB_WORKSPACE}"
+      - name: Locate build cache
+        run: echo "JITTOR_LAB_ROOT=${RUNNER_TEMP}/jittor-lab" >> "${GITHUB_ENV}"
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -55,7 +65,7 @@ jobs:
       - name: Restore the Jittor build cache
         uses: actions/cache/restore@v4
         with:
-          path: ${{ github.workspace }}/../jittor-lab/_state/nox/cache
+          path: ${{ runner.temp }}/jittor-lab/_state/nox/cache
           key: jittor-build-${{ runner.os }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}
           restore-keys: |
             jittor-build-${{ runner.os }}-
@@ -65,6 +75,8 @@ jobs:
   cpu:
     needs: baseline
     name: nox / cpu
+    env:
+      use_parallel_op_compiler: "1"
     runs-on: ${{ needs.baseline.outputs.host_runner }}
     container:
       image: ${{ needs.baseline.outputs.cpu_ci_image }}
@@ -72,14 +84,21 @@ jobs:
     # the manual probes and the independent-PyTorch oracle.
     timeout-minutes: 240
     steps:
+      # The CPU image has no git: checkout must create a real repository for
+      # source-closure tests, and nox sessions need system-level trust because
+      # they use separate HOME directories.
+      - name: Install native CPU toolchain and git
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends build-essential libomp-dev git ca-certificates
       - name: Check out source
         uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - name: Install native CPU toolchain
-        run: |
-          apt-get update
-          apt-get install --yes --no-install-recommends build-essential libomp-dev
+      - name: Trust the checkout
+        run: git config --system --add safe.directory "${GITHUB_WORKSPACE}"
+      - name: Locate build cache
+        run: echo "JITTOR_LAB_ROOT=${RUNNER_TEMP}/jittor-lab" >> "${GITHUB_ENV}"
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -97,7 +116,7 @@ jobs:
       - name: Restore the Jittor build cache
         uses: actions/cache/restore@v4
         with:
-          path: ${{ github.workspace }}/../jittor-lab/_state/nox/cache
+          path: ${{ runner.temp }}/jittor-lab/_state/nox/cache
           key: jittor-build-${{ runner.os }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}
           restore-keys: |
             jittor-build-${{ runner.os }}-
@@ -113,7 +132,7 @@ jobs:
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: ${{ github.workspace }}/../jittor-lab/_state/nox/cache
+          path: ${{ runner.temp }}/jittor-lab/_state/nox/cache
           key: jittor-build-${{ runner.os }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}
 
   benchmark:

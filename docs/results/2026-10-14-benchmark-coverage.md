@@ -47,7 +47,7 @@ CPU 卷积与 Accelerate 使用通用 CPU kernel；本次没有给出 CPU 优化
 ## 复现与产物
 
 从仓库根目录执行，实际计时需使用已配置的解释器、设备和独立编译缓存；完整参数
-见[基准说明](../performance/benchmarking.md)与[覆盖矩阵](../../benchmarks/README.md)。
+见[基准说明](../performance/benchmarking.md)与[覆盖矩阵](https://github.com/Jittor/jittor/blob/2.0-refactor/benchmarks/README.md)。
 
 ```bash
 python -S benchmarks/catalog.py --json

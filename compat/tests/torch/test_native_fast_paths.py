@@ -11,6 +11,7 @@ cases it must leave alone.
 """
 
 import contextlib
+import math
 import unittest
 
 import numpy as np
@@ -575,6 +576,93 @@ class TestNativeGelu(unittest.TestCase):
         np.testing.assert_allclose(torch.nn.functional.gelu(y, approximate="tanh").numpy(),
                                    expected, rtol=1e-5, atol=1e-6)
         self.assertIsNone(jt.core._fast_gelu(torch.arange(4, device=_cuda())))
+
+
+    @unittest.skipUnless(_CUDA_KERNELS, "the BF16 GELU training kernel needs CUDA")
+    def test_bfloat16_training_uses_one_kernel_with_matching_gradients(self):
+        from contextlib import nullcontext
+        from jittor._runtime.dispatch import override_kernel, select_kernel
+        from jittor.backends.cuda.kernels.nn import gelu_training_cuda as gelu_cuda
+
+        rng = np.random.RandomState(20261023)
+        x_np = (rng.randn(32, 2048) * 3).astype("float32")
+        cot_np = rng.randn(32, 2048).astype("float32")
+
+        def run(fused):
+            x = jt.array(x_np).cast("bfloat16")
+            cotangent = jt.array(cot_np).cast("bfloat16")
+            context = (
+                nullcontext()
+                if fused
+                else override_kernel("nn.gelu.training", "cuda", None)
+            )
+            with context:
+                if fused:
+                    selected = select_kernel(
+                        "nn.gelu.training", x, approximate="none")
+                    self.assertIs(
+                        selected, gelu_cuda._gelu_training_cuda.__wrapped__)
+                output = jt.nn.gelu(x)
+                grad_x = jt.grad((output * cotangent).sum(), [x])[0]
+                return [
+                    np.array(value.float32().numpy(), copy=True)
+                    for value in (output, grad_x)
+                ]
+
+        expected = run(False)
+        actual = run(True)
+        for name, got, ref in zip(("output", "grad_x"), actual, expected):
+            self.assertTrue(np.isfinite(got).all())
+            relative_l2 = np.linalg.norm((got - ref).ravel()) / max(
+                np.linalg.norm(ref.ravel()), 1e-30)
+            self.assertLess(
+                relative_l2, 1e-4,
+                "CUDA BF16 GELU %s rel_l2=%g" % (name, relative_l2))
+
+        # Independently check both formulas using the actual BF16 inputs.
+        x_bf16 = np.array(
+            jt.array(x_np).cast("bfloat16").float32().numpy(), copy=True)
+        cot_bf16 = np.array(
+            jt.array(cot_np).cast("bfloat16").float32().numpy(), copy=True)
+        erf = np.fromiter(
+            (math.erf(float(value) * 0.7071067811865476)
+             for value in x_bf16.flat),
+            dtype=np.float32,
+            count=x_bf16.size,
+        ).reshape(x_bf16.shape)
+        cdf = 0.5 * (1.0 + erf)
+        pdf = 0.3989422804014327 * np.exp(-0.5 * x_bf16 * x_bf16)
+        formula = (0.5 * x_bf16 * (1.0 + erf),
+                   cot_bf16 * (cdf + x_bf16 * pdf))
+        for name, got, ref in zip(("output", "grad_x"), actual, formula):
+            relative_l2 = np.linalg.norm((got - ref).ravel()) / max(
+                np.linalg.norm(ref.ravel()), 1e-30)
+            self.assertLess(
+                relative_l2, 5e-3,
+                "CUDA BF16 GELU formula %s rel_l2=%g"
+                % (name, relative_l2))
+
+        x32 = jt.array(x_np)
+        self.assertIsNone(select_kernel(
+            "nn.gelu.training", x32, approximate="none"))
+
+    @unittest.skipUnless(_CUDA_KERNELS, "the BF16 GELU training kernel needs CUDA")
+    def test_bfloat16_training_grid_stride_covers_large_tensor(self):
+        # The launch grid is capped at 65536 blocks; cross that boundary so
+        # both the forward and backward grid-stride loops must revisit it.
+        count = 65536 * 256 + 1
+        x = jt.ones((count,), dtype="bfloat16")
+        x.start_grad()
+        output = jt.nn.gelu(x)
+        grad_x = jt.grad(output.sum(), [x])[0]
+        endpoints = np.array([
+            output[0].float32().item(),
+            output[-1].float32().item(),
+            grad_x[0].float32().item(),
+            grad_x[-1].float32().item(),
+        ])
+        self.assertTrue(np.isfinite(endpoints).all())
+        np.testing.assert_array_equal(endpoints[[0, 2]], endpoints[[1, 3]])
 
 
     @unittest.skipUnless(_CUDA_KERNELS, "the one-kernel GELU is built on CUDA")

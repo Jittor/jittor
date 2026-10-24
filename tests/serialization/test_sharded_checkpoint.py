@@ -24,7 +24,7 @@ from _helpers.native_checkpoint import (
 
 @pytest.mark.parametrize("restore_existing", [False, True])
 def test_native_training_resume_and_rng(tmp_path, restore_existing):
-    assert "torch" not in sys.modules
+    torch_before = sys.modules.get("torch")
     model, optimizer = model_optimizer()
     reference = numpy_trajectory(5)
     for step in range(3):
@@ -53,7 +53,7 @@ def test_native_training_resume_and_rng(tmp_path, restore_existing):
         got = training_step(fresh, resumed)
         assert_trace(got, expected[index], exact=True)
         assert_trace(got, reference[index + 3])
-    assert "torch" not in sys.modules
+    assert sys.modules.get("torch") is torch_before
 
 
 @pytest.mark.parametrize("restore_existing", [False, True])

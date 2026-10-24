@@ -206,7 +206,7 @@ print(matmul_transpose(a, b))
 
     def test_res2net(self):
         import jittor.models
-        net = jittor.models.res2net50(True)
+        net = jittor.models.res2net50(False)
         img = jt.random((2,3,224,224))
         out = net(img)
         print(out.shape, out.sum())

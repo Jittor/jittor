@@ -491,8 +491,8 @@ class TestDatasetDeepcopy(unittest.TestCase):
 
 
 class TestWorkerExceptionPropagation(unittest.TestCase):
-    """An exception raised inside a worker must come back to the caller as an
-    exception of the same class. It used to be delivered as SIGINT to the
+    """A built-in exception raised inside a worker must reach the caller with
+    the same class. It used to be delivered as SIGINT to the
     parent, which jittor's handler then turned into an immediate process exit
     -- indistinguishable from the user pressing Ctrl-C, and impossible to
     catch."""
@@ -535,7 +535,7 @@ if __name__ == "__main__":
             % (r.returncode, out[-2000:], err[-3000:]))
         assert "STILL_ALIVE" in out, out[-2000:] + err[-2000:]
         assert "NO_EXCEPTION" not in out, out[-2000:]
-        # The worker's own class, so `except ValueError` around the loop works.
+        # Preserve the built-in class, so `except ValueError` around the loop works.
         assert "RAISED=ValueError" in out, out[-2000:]
         assert "HAS_MESSAGE=True" in out, out[-2000:]
         assert "HAS_TRACEBACK=True" in out, out[-2000:]

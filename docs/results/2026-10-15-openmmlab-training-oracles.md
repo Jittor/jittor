@@ -132,7 +132,7 @@ from the model acceptance evidence.
 ## Reproduction and artifact ownership
 
 Reusable entrypoints are
-[`openmmlab_training_probe.py`](../../agent/skills/torch-compat-repo-runbook/scripts/openmmlab_training_probe.py),
+[`openmmlab_training_probe.py`](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/torch-compat-repo-runbook/scripts/openmmlab_training_probe.py),
 [`test_ecosystem_openmmlab.py`](../../compat/tests/torch/test_ecosystem_openmmlab.py) and the
 `ecosystem_openmmlab` session. Provision the two pinned downstream checkouts in separate genuine
 Torch and Jittor interpreters, then run the oracle probe first and supply its `.weights.npz` to the

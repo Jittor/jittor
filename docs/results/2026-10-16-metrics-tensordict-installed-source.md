@@ -51,7 +51,7 @@ The new `_metric_td_installation.py` keeps library pins and TensorDict's actual 
 
 ## Reproduce and audit
 
-Use the maintained [`component_measure.py`](../../agent/skills/torch-compat-repo-runbook/scripts/component_measure.py), [`verify_repo.py`](../../agent/skills/torch-compat-repo-runbook/scripts/verify_repo.py) and [`training_probe.py`](../../agent/skills/torch-compat-repo-runbook/scripts/training_probe.py). Install core/frontend normally into the candidate prefix and keep a separate genuine binary Torch prefix. Pin both upstream commits, official remotes and wheels above; fetch TensorDict's actual `v0.10.0` release tag and verify its peeled commit. A tagless checkout honestly inventories as `source@SHA` and is refused for this release profile.
+Use the maintained [`component_measure.py`](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/torch-compat-repo-runbook/scripts/component_measure.py), [`verify_repo.py`](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/torch-compat-repo-runbook/scripts/verify_repo.py) and [`training_probe.py`](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/torch-compat-repo-runbook/scripts/training_probe.py). Install core/frontend normally into the candidate prefix and keep a separate genuine binary Torch prefix. Pin both upstream commits, official remotes and wheels above; fetch TensorDict's actual `v0.10.0` release tag and verify its peeled commit. A tagless checkout honestly inventories as `source@SHA` and is refused for this release profile.
 
 Each runtime's executable launcher must restore its own four runtime paths after `verify_repo` sanitizes child environments, then forward to:
 

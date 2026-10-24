@@ -109,7 +109,7 @@ explicit CUDA allocation are covered by host contracts.
 
 ## Reproduction and artifact binding
 
-Use the [VERL runbook](../../agent/skills/verl-torch-compat/SKILL.md) for environment prerequisites and
+Use the [VERL runbook](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/verl-torch-compat/SKILL.md) for environment prerequisites and
 `nox -s ecosystem_verl`. The source-only inventory and fixed-platform scorecard contract are documented
 in [downstream scorecards](../development/downstream-scorecards.md).
 

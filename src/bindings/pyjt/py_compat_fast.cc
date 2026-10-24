@@ -141,6 +141,9 @@ PyObject* fast_cat(PyObject* tensors, int64 dim) {
     NanoVector out_shape;
     for (int d = 0; d < ndim; d++) out_shape.push_back(d == dim ? total : shape[d]);
     VarPtr out = make_empty(out_shape, dtype);
+    // The scratch allocation is not a differentiable input to concatenation.
+    // Only the tensors copied into it may contribute gradient edges.
+    out->set_stop_grad();
     int64 offset = 0;
     for (auto* v : vars) {
         VarSlices slices(ndim);
