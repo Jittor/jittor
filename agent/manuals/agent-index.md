@@ -99,5 +99,6 @@ GitHub issue 与 PR 中。原始日志、缓存和大体积产物放在 `$JITTOR
 - [vllm-torch-compat](../skills/vllm-torch-compat/SKILL.md)：vLLM。
 - [vllm-omni-torch-compat](../skills/vllm-omni-torch-compat/SKILL.md)：vLLM-Omni 的 MiniMax-H3 推理。
 - [verl-torch-compat](../skills/verl-torch-compat/SKILL.md)：verl（PPO、FSDP2、权重传输）。
+- [datatrove-torch-compat](../skills/datatrove-torch-compat/SKILL.md)：DataTrove CPU token dataset 与本地 JSONL 管线验证。
 - [trellis-torch-compat](../skills/trellis-torch-compat/SKILL.md)：TRELLIS.2 3D 生成 pipeline。
 - [torchquantum-readme-validation](../skills/torchquantum-readme-validation/SKILL.md)：TorchQuantum README 用法验证。
