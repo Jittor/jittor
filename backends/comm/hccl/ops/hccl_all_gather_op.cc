@@ -20,6 +20,8 @@ namespace jittor {
 
 static auto hccl_all_gather =
     op_constructor<VarPtr, Var*, int>("hccl_all_gather");
+static auto hccl_reduce_scatter =
+    op_constructor<VarPtr, Var*, int>("hccl_reduce_scatter");
 
 HcclAllGatherOp::HcclAllGatherOp(Var* x, int group_id)
     : x(x), group_id(group_id) {
@@ -37,8 +39,7 @@ void HcclAllGatherOp::infer_shape() {
 }
 
 VarPtr HcclAllGatherOp::grad(Var* out, Var* dout, Var* v, int v_index) {
-    LOGf << "not implemented";
-    return nullptr;
+    return hccl_reduce_scatter(dout, group_id);
 }
 
 void HcclAllGatherOp::jit_prepare(JK& jk) {

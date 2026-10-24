@@ -40,6 +40,10 @@ namespace jittor
     {
         if (dim != nullptr)
             aclDestroyIntArray(dim);
+        if (extrema_output_tensor_ != nullptr)
+            aclDestroyTensor(extrema_output_tensor_);
+        if (extrema_output_buffer_ != nullptr)
+            aclrtFree(extrema_output_buffer_);
     }
 
     void ReduceOpRunner::setupInputDesc()
@@ -132,6 +136,29 @@ namespace jittor
             auto ret = CreateAclTensor(outputShapes[idx], out_[idx]->mem_ptr, out_[idx]->size, get_dtype(out_[idx]->dtype()), &outputTensors[idx], use_nchw, out_[idx]);
             if (ret != ACL_SUCCESS) LOGf << name << ": output tensor creation failed. ERROR:" << ret;
         }
+
+        // Amax/Amin expose no output-dtype argument: CANN requires the result
+        // descriptor to have the input dtype. Jittor's fused AMP graph can
+        // still have a float32 cast feeding an extrema reduction whose public
+        // output is float16. Reduce into an input-typed buffer and cast to the
+        // graph's real output in executeOp.
+        if ((op_idx == 11 || op_idx == 12) &&
+            in_[0]->dtype() != out_[0]->dtype())
+        {
+            uint64_t buffer_size = in_[0]->dsize();
+            for (int64_t extent : outputShapes[0])
+                buffer_size *= extent;
+            ret = aclrtMalloc(
+                &extrema_output_buffer_, buffer_size,
+                ACL_MEM_MALLOC_HUGE_FIRST);
+            if (ret != ACL_SUCCESS)
+                LOGf << name << ": extrema intermediate allocation failed. ERROR:" << ret;
+            ret = CreateAclTensor(
+                outputShapes[0], extrema_output_buffer_, buffer_size,
+                get_dtype(in_[0]->dtype()), &extrema_output_tensor_, use_nchw);
+            if (ret != ACL_SUCCESS)
+                LOGf << name << ": extrema intermediate tensor creation failed. ERROR:" << ret;
+        }
     }
 
     void ReduceOpRunner::executeOp(AclOpRegistry::const_iterator &it)
@@ -152,13 +179,17 @@ namespace jittor
         }
         case 11:
         {
-            ret = aclnnAmaxGetWorkspaceSize(inputTensors[0], dim, keepdims, outputTensors[0], &workspaceSize, &executor);
+            aclTensor *reduce_output = extrema_output_tensor_ != nullptr
+                ? extrema_output_tensor_ : outputTensors[0];
+            ret = aclnnAmaxGetWorkspaceSize(inputTensors[0], dim, keepdims, reduce_output, &workspaceSize, &executor);
             launch(ret, aclnnAmax, true);
             break;
         }
         case 12:
         {
-            ret = aclnnAminGetWorkspaceSize(inputTensors[0], dim, keepdims, outputTensors[0], &workspaceSize, &executor);
+            aclTensor *reduce_output = extrema_output_tensor_ != nullptr
+                ? extrema_output_tensor_ : outputTensors[0];
+            ret = aclnnAminGetWorkspaceSize(inputTensors[0], dim, keepdims, reduce_output, &workspaceSize, &executor);
             launch(ret, aclnnAmin, true);
             break;
         }
@@ -250,6 +281,19 @@ namespace jittor
             LOGir << "no such reduce!!";
             exit(-1);
         }
+        }
+        if (extrema_output_tensor_ != nullptr)
+        {
+            ret = aclnnCastGetWorkspaceSize(
+                extrema_output_tensor_, get_dtype(out_[0]->dtype()),
+                outputTensors[0], &workspaceSize, &executor);
+            launch(ret, aclnnCast, false);
+            // The temporary storage belongs to this stack runner and is freed
+            // immediately after run(). Keep both launches on aclstream, then
+            // wait once before releasing it.
+            ret = aclrtSynchronizeStream(aclstream);
+            if (ret != ACL_SUCCESS)
+                LOGf << name << ": extrema cast synchronization failed. ERROR:" << ret;
         }
         return;
     }

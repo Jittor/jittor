@@ -52,6 +52,35 @@ class TestAutogradPolicy(unittest.TestCase):
                 self.assertEqual(output.numpy().tolist(), [2.0])
                 self.assertEqual(target.numpy().tolist(), [3.0])
 
+    def _check_concat_inputs(self):
+        for count in (2, 65):
+            for op in (jt.concat, jt.stack):
+                stopped = jt.array([1.0, 2.0]).stop_grad()
+                with jt.autograd.policy_scope(jt.autograd.EXPLICIT_REQUIRES_GRAD):
+                    output = op([stopped] * count)
+                    self.assertTrue(output.is_stop_grad())
+                    trainable = jt.array([1.0, 2.0])
+                    trainable.start_grad()
+                    output = op([trainable] * count)
+                    gradient = jt.grad(output.sum(), trainable)
+                    self.assertEqual(gradient.numpy().tolist(), [float(count)] * 2)
+                    self.assertTrue(trainable.requires_grad)
+                with jt.autograd.policy_scope(jt.autograd.NATIVE):
+                    self.assertFalse(op([stopped] * count).is_stop_grad())
+
+    def test_concat_scratch_is_not_a_trainable_input(self):
+        self._check_concat_inputs()
+
+    def test_native_all_empty_concat_keeps_factory_policy(self):
+        with jt.autograd.policy_scope(jt.autograd.NATIVE):
+            source = jt.empty([0], dtype="float32").stop_grad()
+            self.assertTrue(jt.concat([source, source]).requires_grad)
+
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA is not available")
+    def test_concat_scratch_is_not_a_trainable_input_cuda(self):
+        with jt.flag_scope(use_cuda=1):
+            self._check_concat_inputs()
+
     def test_policy_scope_restores_after_exception(self):
         jt.autograd.set_policy(jt.autograd.NATIVE)
         with self.assertRaisesRegex(RuntimeError, "sentinel"):

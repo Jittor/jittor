@@ -13,7 +13,7 @@ from jittor.compat.torch.tensor_state import compatibility_owner
 
 def test_family_installers_only_bind_objects():
     entries = {
-        "data": ("install", "_install_torchdata_stateful_dataloader"),
+        "data": ("install",),
         "tensor": ("install", "install_methods"),
         "tensor.methods": ("_install_tensor_methods",),
         "nn.extras": ("_install_nn_extras",),

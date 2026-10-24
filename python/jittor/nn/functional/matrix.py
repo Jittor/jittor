@@ -279,6 +279,33 @@ def _check_matmul_shapes(a, b, trans_a=False, trans_b=False, op="matmul", names=
             )
 
 
+def _column_major_flattened_matrix(x):
+    """A dense physical transpose of this operand, never its historical base.
+
+    A detached transpose is a new AD leaf. Constructing the inverse physical
+    permutation from that leaf preserves its edge while exposing column-major
+    matrices directly to cuBLAS. Leading batch axes must collapse without a
+    copy; a general batched transpose does not satisfy that condition.
+    """
+    if x.ndim < 2 or x._storage_is_contiguous():
+        return None
+    shape = tuple(x.shape)
+    if any(size <= 0 for size in shape):
+        return None
+    strides = tuple(x._storage_strides())
+    rows = 1
+    for axis in range(len(shape) - 2, -1, -1):
+        if shape[axis] != 1 and strides[axis] != rows:
+            return None
+        rows *= shape[axis]
+    if shape[-1] != 1 and strides[-1] != rows:
+        return None
+    physical = x._storage_permute((len(shape) - 1,) + tuple(range(len(shape) - 1)))
+    if not physical._storage_is_contiguous():
+        raise RuntimeError("column-major matrix permutation must be dense")
+    return physical if x.ndim == 2 else jt.ops.reshape(physical, (shape[-1], rows))
+
+
 def matmul_transpose(a, b, *, _op="matmul_transpose", _names=("a", "b")):
     """
     returns a * b^T
@@ -297,6 +324,19 @@ def matmul_transpose(a, b, *, _op="matmul_transpose", _names=("a", "b")):
             "matmul_transpose: b must be 2-D once a is, but got "
             "a:%s%s and b:%s%s" % (a.dtype, list(a.shape), b.dtype, list(b.shape))
         )
+    if (not a._storage_is_contiguous() or not b._storage_is_contiguous()) \
+            and _cublas_can_take(a, b):
+        column_a = _column_major_flattened_matrix(a)
+        column_b = _column_major_flattened_matrix(b)
+        if column_a is not None or column_b is not None:
+            original_shape = tuple(a.shape[:-1]) + (b.shape[0],)
+            left = column_a if column_a is not None else a
+            if column_a is None and (left.ndim < 2 or not left._storage_is_contiguous()):
+                left = left.reshape((-1, left.shape[-1]))
+            right = column_b if column_b is not None else b
+            result = _matmul_2d_cublas(left, right, column_a is not None, column_b is None)
+            return result if tuple(result.shape) == original_shape else result.reshape(original_shape)
+
     # A batched `a` is flattened and the result un-flattened, but by falling
     # through rather than recursing into this function. A recursive branch for
     # exactly this case used to sit above the `b` rank check, and it undid the
@@ -510,6 +550,13 @@ def _matmul_kernel_dispatch(op, a, b, trans_a, trans_b):
 def _transpose_base_last2(x):
     query = getattr(x, "_is_last2_transpose_view", None)
     if query is not None and query():
+        # Torch no-grad views retain transpose provenance, but start_grad's
+        # reversible alias normalization can put a CloneOp above that view.
+        # Do not peel through the detach/alias boundary: use the actual
+        # transposed operand on the same device instead of reconnecting its
+        # earlier graph. Other invalid producers still fail in the core guard.
+        if x._producer_name() == "clone":
+            return None
         return x._transpose_view_base()
     return None
 

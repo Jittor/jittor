@@ -53,6 +53,20 @@ def _linear_grads(weight, bias, inputs, target):
 )
 class TestFSDP2Nccl(unittest.TestCase):
     @jt.flag_scope(use_cuda=1, use_parallel_op_compiler=0)
+    def test_detached_state_export_storage_snapshot(self):
+        if int(jt.world_size) != 2:
+            self.skipTest("detached export matrix requires exactly two ranks")
+        import torch
+        from _detached_export import run
+
+        dist = torch.distributed
+        dist.init_process_group(backend="cpu:gloo,cuda:nccl",
+                                rank=int(jt.rank), world_size=int(jt.world_size))
+        report = run(torch, jt=jt)
+        self.assertEqual(report["cases_passed"], 4)
+        self.assertEqual(int(jt.core.backend_fallback_count()), 0)
+
+    @jt.flag_scope(use_cuda=1, use_parallel_op_compiler=0)
     def test_nested_sharding_and_full_state_reload(self):
         class NestedModel(nn.Module):
             def __init__(self):

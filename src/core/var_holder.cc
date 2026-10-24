@@ -810,6 +810,36 @@ VarHolder* VarHolder::storage_permute(NanoVector axes) {
 
 VarHolder* VarHolder::transpose_view_base() {
     USER_CHECK(is_last2_transpose_view()) << "tensor is not a live last-two-axis transpose view";
+    if (auto* producer = var->input()) {
+        // Storage view records flatten to the root, but autograd targets may
+        // be an intermediate reshape. Replaying those records constructs a
+        // different Var and disconnects that exact pre-transpose target.
+        // Unit-axis transposes forward to reshape; cuTT/fused transposes keep
+        // the same single data edge. Preserve it while giving Python a fresh
+        // holder, not the source Var's existing holder back-pointer.
+        static const OpId reshape_id = get_op_id("reshape");
+        static const OpId fuse_transpose_id = get_op_id("fuse_transpose");
+        USER_CHECK(producer->is_op(op_ids::transpose()) ||
+                   producer->is_op(fuse_transpose_id) ||
+                   producer->is_op(reshape_id) ||
+                   string(producer->name()) == "cutt_transpose")
+            << "transpose view has an unsupported live producer:" << producer->name();
+        USER_CHECK(producer->inputs().size()) << "transpose view producer has no source";
+        Var* source = producer->input(0);
+        const int rank = var->shape.size();
+        USER_CHECK(source->shape.size() == var->shape.size() && source->dtype() == var->dtype())
+            << "transpose view producer source has incompatible rank or dtype";
+        if (producer->is_op(reshape_id))
+            USER_CHECK(source->shape[rank-2] == 1 || source->shape[rank-1] == 1)
+                << "transpose view reshape producer must only move unit axes";
+        for (int i=0; i<rank; ++i) {
+            int axis = i < rank-2 ? i : (i == rank-2 ? rank-1 : rank-2);
+            USER_CHECK(source->shape[i] == var->shape[axis])
+                << "transpose view producer source has incompatible shape";
+        }
+        return new VarHolder(make_getitem(source, VarSlices(0)));
+    }
+    USER_CHECK(var->is_finished()) << "pending transpose view has no producer";
     VarPtr value(view->base->var);
     // Give the Python result its own Var/holder identity. The full basic view
     // aliases storage without stealing the source Var's holder back-pointer.
@@ -1245,7 +1275,13 @@ VarHolder* VarHolder::check_inplace_autograd() {
 }
 
 void VarHolder::record_inplace_write() {
-    if (!var->autograd_alias) return;
+    if (!var->autograd_alias) {
+        // Explicit Tensor policy counts the first real write even if nobody
+        // has queried the version or created an alias yet. Native policy keeps
+        // its existing no-state fast path; detach/data counters stay unchanged.
+        if (!autograd_policy.stop_outputs_when_inputs_stopped) return;
+        ensure_autograd_alias();
+    }
     ++*var->autograd_alias->version;
 
 }
@@ -1395,13 +1431,18 @@ void VarHolder::clear_collectable_grad_hook() {
 int64 VarHolder::grad_fn_node_id() {
     observe_alias_history();
     Op* op = backward_grad_fn(var);
-    return op ? op->id : -1;
+    if (op) return op->id;
+    const auto* history = released_backward_history(var);
+    return history ? history->node_id : -1;
 }
 
 int64 VarHolder::grad_fn_op_id() {
     observe_alias_history();
     Op* op = backward_grad_fn(var);
-    if (!op) return -1;
+    if (!op) {
+        const auto* history = released_backward_history(var);
+        return history ? history->op_id : -1;
+    }
     // Op::type_id() resolves through get_op_info, which raises for a name that
     // was never registered. A query behind an attribute read must not raise, so
     // an unregistered op answers with the id OpInfo reserves for "unresolved".
@@ -1412,7 +1453,9 @@ int64 VarHolder::grad_fn_op_id() {
 string VarHolder::grad_fn_name() {
     observe_alias_history();
     Op* op = backward_grad_fn(var);
-    return op ? op->name_ex() : string();
+    if (op) return op->name_ex();
+    const auto* history = released_backward_history(var);
+    return history ? history->name : string();
 }
 
 string VarHolder::to_string() {

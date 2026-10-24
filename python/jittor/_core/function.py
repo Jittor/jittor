@@ -1,6 +1,6 @@
 """One-call autograd contexts and their taped gradient nodes."""
 from collections.abc import Sequence
-from jittor_core import Var, tape_together
+from jittor_core import Var, tape_together, _is_tensor_carrier
 from .flags import flags
 from .module import Module
 
@@ -88,7 +88,7 @@ can also be None)::
         # Only positional arguments are taped, so a Var passed by keyword would
         # silently come back with no gradient. Say so instead.
         for k, v in kw.items():
-            if isinstance(v, Var) and not v.is_stop_grad():
+            if _is_tensor_carrier(v) and not v.is_stop_grad():
                 raise TypeError(
                     f"{owner}: pass differentiable Var arguments positionally, "
                     f"not as the keyword {k!r}. Keyword arguments are not taped, "
@@ -130,7 +130,7 @@ can also be None)::
         taped_outputs = []
         input_mask = [-1] * len(args)
         for i,v in enumerate(args):
-            if isinstance(v, Var):
+            if _is_tensor_carrier(v):
                 if v.is_stop_grad():
                     # -2 in input_mask represents it is stop_grad
                     input_mask[i] = -2
@@ -146,7 +146,7 @@ can also be None)::
         # asks the ABC.
         res_type = type(ori_res)
         many = (res_type is tuple or res_type is list
-                or (not isinstance(ori_res, Var)
+                or (not _is_tensor_carrier(ori_res)
                     and isinstance(ori_res, Sequence)))
         if many:
             res = list(ori_res)
@@ -154,7 +154,7 @@ can also be None)::
             res = [ori_res]
         output_mask = [-1] * len(res)
         for i,v in enumerate(res):
-            if isinstance(v, Var):
+            if _is_tensor_carrier(v):
                 v = v.tape()
                 output_mask[i] = len(taped_outputs)
                 res[i] = v

@@ -525,6 +525,9 @@ struct Node {
     void own_both_liveness();
     void finish_pending_liveness();
     void set_stop_grad();
+    // Internal backward teardown only. Keep the no-argument ABI unchanged.
+    void set_stop_grad_for_graph_release();
+    void set_stop_grad_impl(bool preserve_history);
 };
 
 inline Node::output_t& Node::input_t::reverse() {

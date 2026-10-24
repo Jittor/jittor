@@ -166,4 +166,113 @@ def install_extern(context: BuildContext) -> bool:
 
 def post_process(context: BuildContext) -> None:
     if context.config.has_acl:
-        context.config.resources["acl_initializer"].init_acl_ops()
+        initializer = context.config.resources.get("acl_initializer")
+        if initializer is None or not callable(getattr(initializer, "init_acl_ops", None)):
+            raise RuntimeError("ACL initializer resource is unavailable")
+        if context.native_core is None:
+            raise RuntimeError("ACL device metadata requires the loaded native core")
+        initializer.init_acl_ops()
+        info = getattr(initializer, "_device_info", None)
+        if info is None:
+            # configure() runs before the native provider library is loaded.
+            # Binding its symbols there would rely on RTLD_LAZY. Compile this
+            # small binding only after core load, using the injected service.
+            info = context.compile_module('''
+#include "acl_runtime.h"
+namespace jittor {
+// @pyjt(acl_device_name)
+string acl_device_name(int device);
+}''', context.config.cc_flags)
+            if not callable(getattr(info, "acl_device_name", None)):
+                raise RuntimeError("ACL device metadata binding is incomplete")
+            initializer._device_info = info
+        elif not callable(getattr(info, "acl_device_name", None)):
+            raise RuntimeError("ACL device metadata resource is invalid")
+        rng = getattr(initializer, "_rng_info", None)
+        rng_names = ("acl_get_rng_state", "acl_set_rng_state", "acl_get_rng_state_all",
+                     "acl_set_rng_state_all", "acl_manual_seed", "acl_manual_seed_all",
+                     "acl_initial_seed")
+        if rng is None:
+            # Same post-core native binding boundary as device metadata. The
+            # provider owns all mutable RNG state, never this Python module.
+            rng = context.compile_module('''
+#include "acl_runtime.h"
+namespace jittor {
+// @pyjt(acl_get_rng_state)
+string acl_get_rng_state(int device);
+// @pyjt(acl_set_rng_state)
+void acl_set_rng_state(int device, const string& blob);
+// @pyjt(acl_get_rng_state_all)
+vector<string> acl_get_rng_state_all();
+// @pyjt(acl_set_rng_state_all)
+void acl_set_rng_state_all(const vector<string>& blobs);
+// @pyjt(acl_manual_seed)
+void acl_manual_seed(int device, int64 seed);
+// @pyjt(acl_manual_seed_all)
+void acl_manual_seed_all(int64 seed);
+// @pyjt(acl_initial_seed)
+int64 acl_initial_seed(int device);
+}''', context.config.cc_flags)
+            if not all(callable(getattr(rng, name, None)) for name in rng_names):
+                raise RuntimeError("ACL RNG binding is incomplete")
+            initializer._rng_info = rng
+        elif not all(callable(getattr(rng, name, None)) for name in rng_names):
+            raise RuntimeError("ACL RNG resource is invalid")
+
+
+def get_device_name(index):
+    """Query a visible device's real SoC name without changing device policy."""
+    import operator
+    from jittor.build import compiler
+
+    if isinstance(index, bool):
+        raise TypeError("ACL device index must be an integer, not bool")
+    index = operator.index(index)
+    if not compiler.build_config.has_acl:
+        raise RuntimeError("ACL device names require the ACL backend")
+    initializer = compiler.build_config.resources.get("acl_initializer")
+    info = getattr(initializer, "_device_info", None)
+    query = getattr(info, "acl_device_name", None)
+    if not callable(query):
+        raise RuntimeError("ACL device metadata was not initialized after core load")
+    return query(index)
+
+
+def _rng_info():
+    from jittor.build import compiler
+    if not compiler.build_config.has_acl:
+        raise RuntimeError("ACL RNG requires the ACL backend")
+    initializer = compiler.build_config.resources.get("acl_initializer")
+    rng = getattr(initializer, "_rng_info", None)
+    if rng is None:
+        raise RuntimeError("ACL RNG was not initialized after core load")
+    return rng
+
+
+def get_rng_state(device):
+    """Opaque same-runtime ACL stream state, not cuRAND or torch_npu bytes."""
+    return _rng_info().acl_get_rng_state(device)
+
+
+def set_rng_state(device, state):
+    return _rng_info().acl_set_rng_state(device, state)
+
+
+def get_rng_state_all():
+    return _rng_info().acl_get_rng_state_all()
+
+
+def set_rng_state_all(states):
+    return _rng_info().acl_set_rng_state_all(states)
+
+
+def manual_seed(device, seed):
+    return _rng_info().acl_manual_seed(device, seed)
+
+
+def manual_seed_all(seed):
+    return _rng_info().acl_manual_seed_all(seed)
+
+
+def initial_seed(device):
+    return _rng_info().acl_initial_seed(device)

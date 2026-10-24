@@ -302,6 +302,27 @@ class TestGather(Base):
                     np.take_along_axis(x, idx, axis=1), msg=f"gather method {dev}")
         both_devices(body)
 
+    def test_gather_backward_scatter_adds_into_source_shape(self):
+        x = np.arange(24).reshape(2, 3, 4).astype("float32") / 10
+        idx = np.array(
+            [[[1, 1, 3], [1, 1, 0], [3, 3, 2]],
+             [[0, 0, 1], [2, 2, 3], [2, 2, 0]]], dtype="int64")
+        weights = np.arange(18).reshape(2, 3, 3).astype("float32") + 1
+        expected = np.zeros_like(x)
+        for coordinate in np.ndindex(idx.shape):
+            expected[coordinate[:2] + (idx[coordinate],)] += weights[coordinate]
+
+        def body(dev):
+            source = t(x)
+            source.requires_grad_(True)
+            output = torch.gather(source, 2, t(idx))
+            loss = (output * t(weights)).sum()
+            loss.backward()
+            self.ac(source.grad.numpy(), expected,
+                    msg=f"gather backward source shape {dev}")
+
+        both_devices(body)
+
 
 # ---------------------------------------------------------------------------
 # index_select  (every dim; method + functional)

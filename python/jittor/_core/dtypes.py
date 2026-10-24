@@ -98,7 +98,29 @@ def var_dtype_name(var):
         cls = jittor_core.Var
         getter = getattr(cls, "_frontend_native_dtype", None) or cls.__dict__["dtype"]
         globals()["_VAR_DTYPE"] = getter
-    return str(getter.__get__(var))
+    if isinstance(var, getter.__objclass__):
+        return str(getter.__get__(var))
+    # A real independent TensorBase is a sibling, not a Var subclass. Never
+    # invoke Var's C descriptor on that sibling or read its frontend dtype table.
+    import jittor_core
+    from types import GetSetDescriptorType
+    if not jittor_core._is_tensor_carrier(var):
+        raise TypeError("native dtype requires an initialized tensor carrier")
+    cls = type(var)
+    getter = getattr(cls, "_frontend_native_dtype", None)
+    if getter is None:
+        # Raw owned roots have not installed the frontend property. Resolve
+        # their own genuine native descriptor through their physical MRO.
+        for base in cls.__mro__:
+            candidate = vars(base).get("dtype")
+            if isinstance(candidate, GetSetDescriptorType):
+                getter = candidate
+                break
+    if (not isinstance(getter, GetSetDescriptorType)
+            or getter.__name__ != "dtype"
+            or getter.__objclass__ not in cls.__mro__):
+        raise TypeError("native dtype descriptor must belong to the actual carrier")
+    return str(getter.__get__(var, cls))
 
 
 def dtype_for_compute(value):

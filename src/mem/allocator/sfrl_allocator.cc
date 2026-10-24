@@ -18,6 +18,7 @@
 #include "runtime/device.h"
 #include "runtime/backend.h"
 #include "runtime/profiler/step_trace.h"
+#include "mem/mem_info.h"
 
 namespace jittor {
 
@@ -259,6 +260,7 @@ CachingBlock* CachingBlockPool::pop_block(size_t size) {
 list<SFRLAllocator*> SFRLAllocator::sfrl_allocators;
 //SFRLAllocator
 SFRLAllocator::~SFRLAllocator() {
+    forget_pool_memory(this);
     sfrl_allocators.erase(iter);
     for (auto it = occupied_blocks.begin(); it != occupied_blocks.end(); ++it) {
         delete it->second;
@@ -379,6 +381,7 @@ void SFRLAllocator::try_free_this_allocator() {
         && unused_memory > min_free_size) {
         release_cached(large_blocks, unused_memory - (long long)min_free_size);
         release_cached(small_blocks, unused_memory - (long long)min_free_size);
+        record_pool_memory(this);
     }
 }
 
@@ -464,6 +467,7 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
         } catch (...) {
             release_cached(large_blocks);
             release_cached(small_blocks);
+            record_pool_memory(this);
             gc_all();
             ptr = underlying->alloc(alloc_size, under_allocation);
         }
@@ -497,6 +501,7 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
     step_trace_mem(stm_pool, device(), block->size, this, allocation);
     if (PREDICT_BRANCH_NOT_TAKEN(capture_held_frees != nullptr))
         note_capture_touch(block);
+    record_pool_memory(this);
     return block->memory_ptr;
 }
 
@@ -530,6 +535,7 @@ void SFRLAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
     } else {
         --block->share_times;
     }
+    record_pool_memory(this);
 }
 
 void SFRLAllocator::gc() {
@@ -541,6 +547,7 @@ void SFRLAllocator::gc() {
     if (!lock.owns_lock()) return;
     release_cached(small_blocks);
     release_cached(large_blocks);
+    record_pool_memory(this);
 }
 
 void SFRLAllocator::note_capture_touch(CachingBlock* block) {
@@ -620,6 +627,7 @@ void SFRLAllocator::fence_capture(vector<Allocation>& held) {
         note_device_alloc(device(), block->size);
         held.emplace_back(block->memory_ptr, id, block->size, this);
     }
+    record_pool_memory(this);
     spans.clear();
 }
 

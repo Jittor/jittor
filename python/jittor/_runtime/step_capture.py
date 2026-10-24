@@ -158,6 +158,14 @@ def live_fused_update(impl, lr, steps, indices, read_lr, frozen, found_inf=None,
     `owner`, and taken off the step the kernel sees -- the bias correction of
     the step after a skip is what it would have been in eager mode.
     """
+    # A real public scalar can be externally mutated. Do not replay a
+    # graph whose bookkeeping would bypass that canonical state owner.
+    # Eager execution still uses the SAME slots and original math.
+    if hasattr(steps, "owner") and hasattr(steps.owner, "policy"):
+        refuse("persistent public Adam scalar replay is not admitted")
+        if found_inf is not None:
+            raise NotImplementedError("persistent Adam found_inf replay is not admitted")
+        return lr
     if (not getattr(impl, "accepts_live_step", False) or not indices
             or len({int(steps[i]) for i in indices}) != 1):
         refuse("this optimizer update cannot read its step count on the device")

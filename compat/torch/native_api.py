@@ -6,7 +6,7 @@ autograd policy. Native-only utilities are not exposed through missing reads.
 """
 from .api_delegates import bind_delegates
 from .context import get_install_context
-from .frontend import tensor_frontend
+from .frontend import first_tensor, tensor_frontend
 from .fidelity import Fidelity, register_fidelity
 
 
@@ -65,12 +65,25 @@ class NativeOperation:
             for name, value in defaults.items():
                 kwargs.setdefault(name, value)
         device = None
-        if self._operation_key in ("fft.fftfreq", "fft.rfftfreq"):
+        factory = self._operation_key in ("fft.fftfreq", "fft.rfftfreq")
+        if factory:
             kwargs = dict(kwargs)
             device = kwargs.pop("device", None)
-        with tensor_frontend(context.state["Var"], device=device):
+        like = None if factory else first_tensor(context.state["Var"], args, kwargs)
+        with tensor_frontend(context.state["Var"], device=device,
+                             like=like, default_placement=factory):
             if isinstance(implementation, type) and issubclass(implementation, context.native_backend.Function):
                 implementation = implementation()
+            if self._operation_key in ("mul", "multiply", "sub", "subtract"):
+                from .amp import _pointwise_cuda_autocast
+                with _pointwise_cuda_autocast(like):
+                    return implementation(*args, **kwargs)
+            if (self._operation_key == "rsqrt"
+                    and getattr(getattr(like, "device", None), "type", None) == "cuda"):
+                from .amp import _jittor_dtype_name, _pointwise_cuda_autocast
+                if _jittor_dtype_name(like.dtype) == "float32":
+                    with _pointwise_cuda_autocast(like):
+                        return implementation(*args, **kwargs)
             return implementation(*args, **kwargs)
 
     def __reduce__(self):

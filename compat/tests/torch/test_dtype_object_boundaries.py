@@ -58,8 +58,8 @@ def test_dtype_objects_reach_native_overloads_and_numpy_construction(torch, name
 @pytest.mark.xfail(strict=True, reason="KI-COMPAT-014: complex128 is a frontend placeholder but a core dtype, so the core boundaries accept it")
 def test_placeholder_dtypes_are_metadata_only_at_every_boundary(torch):
     value = torch.tensor([1.0])
-    placeholders = [item for name, item in dtype._registry.items()
-                    if name not in dtype._supported]
+    placeholders = [item for name, item in torch.dtype._registry.items()
+                    if name not in torch.dtype._supported]
     assert placeholders
     for selected in placeholders:
         assert {selected: selected.name}[selected] == selected.name

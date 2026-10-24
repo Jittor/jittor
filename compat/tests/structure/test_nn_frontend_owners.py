@@ -41,6 +41,29 @@ class NativeModule:
                 yield name, value, role
 
 
+class SpatialConv1d(NativeModule):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1,
+                 padding=0, dilation=1, groups=1, bias=True, padding_mode='zeros'):
+        if kernel_size == 0:
+            raise ValueError('native constructor rejection')
+        self.in_channels, self.out_channels = in_channels, out_channels
+        self.kernel_size, self.stride = (kernel_size, 1), (stride, 1)
+        self.padding = padding if isinstance(padding, str) else (padding, 0)
+        self.dilation = (dilation, 1)
+        self.groups, self.padding_mode = groups, padding_mode
+        self.weight = object()
+        self._conv = [types.SimpleNamespace(kernel_size=self.kernel_size,
+            stride=self.stride, padding=self.padding, dilation=self.dilation,
+            groups=groups, padding_mode=padding_mode,
+            _reversed_padding_repeated_twice=('original', 'cached'))]
+
+    def execute(self, value):
+        inner = self._conv[0]
+        return (value, self.weight, inner.kernel_size, inner.stride, inner.padding,
+                inner.dilation, inner.groups, inner.padding_mode,
+                inner._reversed_padding_repeated_twice)
+
+
 class TestNNFrontendOwners(unittest.TestCase):
     def setUp(self):
         replaced = patch.dict(sys.modules)
@@ -69,7 +92,14 @@ class TestNNFrontendOwners(unittest.TestCase):
         sys.modules[dtypes.__name__] = dtypes
         frontend = types.ModuleType("_nn_owner_probe.frontend")
         frontend.tensor_frontend = lambda tensor_type, **scope: nullcontext()
+        frontend._default_tensor_dtype = lambda backend: "float32"
         frontend.make_parameter_type = lambda backend, tensor_type: Parameter
+        lookup = next(node for node in ast.parse((SOURCE / "frontend.py").read_text()).body
+                      if isinstance(node, ast.FunctionDef) and node.name == "first_tensor")
+        lookup_namespace = {}
+        exec(compile(ast.Module(body=[lookup], type_ignores=[]), "frontend.py", "exec"),
+             lookup_namespace)
+        frontend.first_tensor = lookup_namespace["first_tensor"]
         sys.modules[frontend.__name__] = frontend
         self.frontend = self.load("nn_frontend")
         self.containers = sys.modules["_nn_owner_probe.parameter_containers"]
@@ -112,6 +142,35 @@ class TestNNFrontendOwners(unittest.TestCase):
                 super().__init__()
                 self.tag = "derived"
         self.assertEqual(Derived().tag, "derived")
+
+    def test_conv1d_public_axes_and_original_native_math_owner(self):
+        self.backend.nn.Conv1d = SpatialConv1d
+        before = dict(vars(SpatialConv1d))
+        adapted = self.owner.adapt_class(SpatialConv1d)
+        self.assertIs(adapted.execute, self.frontend._conv1d_execute)
+        for size in (4, (4,), [4]):
+            layer = adapted(2, 2, size, stride=[2], padding=(3,), dilation=[2])
+            self.assertEqual((layer.kernel_size, layer.stride, layer.padding, layer.dilation,
+                              layer.output_padding, layer.transposed),
+                             ((4,), (2,), (3,), (2,), (0,), False))
+            self.assertEqual(layer._conv[0].kernel_size, (4, 1))
+            layer.stride, layer.padding, layer.dilation = (3,), [1], (2,)
+            layer.groups, layer.padding_mode = 2, "reflect"
+            layer.kernel_size = (9,)
+            weight = layer.weight
+            self.assertEqual(layer.execute(None), (None, weight, (4, 1), (3, 1),
+                (1, 0), (2, 1), 2, "reflect", ("original", "cached")))
+        for padding in ("same", "valid"):
+            self.assertEqual(adapted(2, 2, [4], padding=padding).execute(None)[4], padding)
+        self.assertEqual(dict(vars(SpatialConv1d)), before)
+        self.assertEqual(SpatialConv1d(2, 2, 4).kernel_size, (4, 1))
+        for name in ("kernel_size", "stride", "padding", "dilation"):
+            values = dict(kernel_size=4)
+            values[name] = [1, 2]
+            with self.assertRaises(ValueError):
+                adapted(2, 2, **values)
+        with self.assertRaises(TypeError):
+            adapted(2, 2, 4, kernel_size=4)
 
     def test_external_and_global_children_keep_source_objects_unchanged(self):
         class Child(NativeModule):
@@ -183,6 +242,43 @@ class TestNNFrontendOwners(unittest.TestCase):
                     self.assertFalse(any(isinstance(child, (ast.FunctionDef, ast.ClassDef))
                                          and child is not node for child in ast.walk(node)),
                                      (filename, node.name))
+
+    def test_module_input_lookup_handles_nested_keywords_and_cycles(self):
+        value = Tensor()
+        cyclic = []
+        cyclic.append(cyclic)
+        with patch.object(Tensor, "_frontend_backend", self.backend, create=True):
+            self.assertIs(self.frontend._first_tensor(self.owner, (cyclic,), {"inputs": [value]}), value)
+            self.assertIsNone(self.frontend._first_tensor(self.owner, (cyclic,), {"count": 2}))
+
+    def test_input_lookup_preserves_positional_then_keyword_order(self):
+        first, second = Tensor(), Tensor()
+        with patch.object(Tensor, "_frontend_backend", self.backend, create=True):
+            self.assertIs(self.frontend._first_tensor(self.owner, ([first], second), {"x": second}), first)
+            self.assertIs(self.frontend._first_tensor(self.owner, (), {"a": {"x": first}, "b": second}), first)
+
+    def test_input_lookup_requires_tensor_type_backend_and_its_var_identity(self):
+        value = Tensor()
+        self.assertIsNone(self.frontend._first_tensor(self.owner, (value,), {}))
+        class ForeignVar:
+            pass
+        class ForeignTensor(ForeignVar):
+            _frontend_backend = types.SimpleNamespace(Var=ForeignVar)
+        foreign = ForeignTensor()
+        owner = types.SimpleNamespace(backend=self.backend, tensor_type=ForeignTensor)
+        self.assertIs(self.frontend._first_tensor(owner, ([value, foreign],), {}), foreign)
+        self.assertIsNone(self.frontend._first_tensor(owner, (value,), {}))
+
+    def test_module_call_passes_input_placement_to_native_scratch_scope(self):
+        value = Tensor()
+        class Echo(NativeModule):
+            def execute(self, *, batch):
+                return batch["x"][0]
+        module = self.owner.adapt_class(Echo)()
+        with patch.object(Tensor, "_frontend_backend", self.backend, create=True):
+            with patch.object(self.frontend, "tensor_frontend", return_value=nullcontext()) as scope:
+                self.assertIs(module(batch={"x": [value]}), value)
+        scope.assert_called_once_with(Tensor, like=value, default_placement=False)
 
 
 if __name__ == "__main__":

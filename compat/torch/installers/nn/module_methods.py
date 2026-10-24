@@ -14,6 +14,7 @@ from ...context import registry_for
 from ...fidelity import Fidelity, register_fidelity
 from ...nested import _torch_register_leaf
 from ...tensor_state import get_tensor_state
+from ...types import _dtype_registry, _is_dtype
 from ...types import _device_is_cpu, _device_is_cuda, _is_index, _make_cpu_resident, _make_cuda_resident, current_accelerator_index, device, dtype, _cuda_index_of
 from ....diagnostics import EXPECTED, swallowed
 from ....stub_policy import unimplemented as _unimplemented
@@ -41,9 +42,11 @@ def _pipelining_from_environment():
 _ORIG_MODULE_EXECUTE = nn.Module.execute
 _ORIG_MODULE_DISPATCH_CALL = nn.Module._dispatch_call
 _ORIG_MODULE_NAMED_PARAMETERS = nn.Module.named_parameters
+_ORIG_MODULE_NAMED_VARS = nn.Module._named_vars
 _ORIG_MODULE_NAMED_BUFFERS = nn.Module.named_buffers
 _ORIG_MODULE_NAMED_MODULES = nn.Module.named_modules
 _ORIG_MODULE_LOAD_STATE_DICT = nn.Module.load_state_dict
+_ORIG_MODULE_STATE_DICT = nn.Module.state_dict
 _ORIG_MODULE_PARAMETERS = nn.Module.parameters
 _ORIG_MODULE_PARAMETER_MAP = nn.Module.__dict__["_parameters"].fget
 
@@ -456,6 +459,21 @@ def _state_dict_key_diff(root, state_dict):
     return missing, unexpected, mismatched
 
 
+def _state_dict(self, *args, destination=None, prefix="", keep_vars=False):
+    """Use Torch's detached default without changing native Module defaults."""
+    # Match Torch's legacy positional precedence; do not forward these as
+    # native positional arguments (native starts with to= and recurse=).
+    if args:
+        if destination is None:
+            destination = args[0]
+        if len(args) > 1 and prefix == "":
+            prefix = args[1]
+        if len(args) > 2 and keep_vars is False:
+            keep_vars = args[2]
+    return _ORIG_MODULE_STATE_DICT(
+        self, destination=destination, prefix=prefix, keep_vars=keep_vars)
+
+
 def _load_state_dict(self, state_dict, strict=True, assign=False):
     """Torch's ``load_state_dict``: honours ``strict`` and returns the keys."""
     missing, unexpected, mismatched = _state_dict_key_diff(self, state_dict)
@@ -773,6 +791,11 @@ def _module_replace_vars(self, convert, recurse=True):
         modules = [self]
     if not modules or modules[0] is not self:
         modules.insert(0, self)
+    fsdp_handled = set()
+    if any(getattr(module, "_is_fsdp_module", False) for module in modules):
+        provider = _fsdp_hooks.provider()
+        if provider is not None:
+            fsdp_handled = provider._convert_module_storage(self, convert)
     if getattr(type(self), "_frontend_tensor_type", None) is not None:
         for module in modules:
             # The role accessor also covers ParameterList/ParameterDict, whose
@@ -781,6 +804,8 @@ def _module_replace_vars(self, convert, recurse=True):
                 if role not in ("parameter", "buffer", "non_persistent_buffer"):
                     continue
                 identity = id(value)
+                if identity in fsdp_handled:
+                    continue
                 if identity not in converted:
                     replacement = convert(value)
                     if role == "parameter":
@@ -793,7 +818,7 @@ def _module_replace_vars(self, convert, recurse=True):
                                 _make_cpu_resident(value, inplace=True)
                         replacement = value
                         gradient = getattr(value, "_torch_grad", None)
-                        if isinstance(gradient, jt.Var):
+                        if jt.core._is_tensor_carrier(gradient):
                             new_gradient = convert(gradient)
                             if new_gradient is not gradient:
                                 gradient.assign(new_gradient)
@@ -828,6 +853,8 @@ def _module_replace_vars(self, convert, recurse=True):
                         if not (is_public_param or is_buffer):
                             continue
                     vid = id(value)
+                    if vid in fsdp_handled:
+                        continue
                     if vid in converted:
                         new_value = converted[vid]
                     else:
@@ -917,7 +944,7 @@ def _module_to(self, *args, **kwargs):
     if kwargs.get("dtype") is not None:
         scanned.append(kwargs["dtype"])
     for a in scanned:
-        if isinstance(a, dtype):
+        if _is_dtype(a):
             ds = a.name
         elif isinstance(a, device):
             dev = a
@@ -928,15 +955,16 @@ def _module_to(self, *args, **kwargs):
             # torch's Module.to(non_blocking) flag; not a device.
             continue
         elif _is_index(a):
-            # `model.to(1)` is `model.to("cuda:1")` in torch. A bare int used
-            # to match none of these branches and be dropped, so the module
+            # An ordinal names the configured accelerator (CUDA or NPU).
+            # A bare int used to match none of these branches and be dropped,
+            # so the module
             # stayed where it was and the caller was told nothing -- the
             # Module-level twin of the `Tensor.to(1)` hole closed in section 31
             # of docs/results/2026-09-14-vllm-omni-h3-enablement.md.
-            dev = device("cuda", int(a))
+            dev = device(a)
         elif isinstance(a, str):
             bare = a.replace("torch.", "")
-            if bare in dtype._registry:
+            if bare in _dtype_registry():
                 ds = bare
             elif bare.split(":")[0] in ("cpu", "cuda", "npu"):
                 dev = bare
@@ -950,6 +978,11 @@ def _module_to(self, *args, **kwargs):
                     "reporting that the move to %r succeeded" % (a,),
                     "This layer places tensors on cpu, cuda and npu only.",
                     stub_result=None)
+    # Keyword ordinals do not pass through the positional scan. Normalize
+    # them through the same validated device owner, also rejecting bool rather
+    # than reporting a successful no-op. to_empty delegates through this path.
+    if isinstance(dev, bool) or _is_index(dev):
+        dev = device(dev)
     if _device_is_cuda(dev):
         jt.flags.use_cuda = 1
     if dev is not None or ds is not None:
@@ -1101,7 +1134,7 @@ def _get_parameter(self, target):
     # named_parameters() lookup deduplicates tied weights, so a valid alias
     # such as lm_head.weight disappears behind embed_tokens.weight.
     parameters = getattr(mod, "_parameters", {})
-    if (isinstance(v, jt.Var) and leaf in parameters
+    if (jt.core._is_tensor_carrier(v) and leaf in parameters
             and parameters[leaf] is v):
         return v
     raise AttributeError(f"`{target}` is not a parameter")
@@ -1119,7 +1152,11 @@ def _get_buffer(self, target):
         raise AttributeError(f"`{target}` is not a buffer")
     v = getattr(mod, leaf)
     buffers = getattr(mod, "_buffers", {})
-    if (isinstance(v, jt.Var) and leaf in buffers
+    # Native tensor enumeration omits None, but register_buffer records its
+    # name even for an uninitialized placeholder. It remains a valid buffer.
+    if v is None and leaf in vars(mod).get("_buffer_names", ()):
+        return None
+    if (jt.core._is_tensor_carrier(v) and leaf in buffers
             and buffers[leaf] is v):
         return v
     raise AttributeError(f"`{target}` is not a buffer")
@@ -1132,7 +1169,7 @@ def _register_parameter(self, name, param):
     # a torch-authored class otherwise only registers by that wrapper, and
     # the value handed here need not have gone through it (vLLM builds its
     # typed ModelWeightParameter through its own metaclass __call__).
-    if param is not None and not isinstance(param, jt.Var):
+    if param is not None and not jt.core._is_tensor_carrier(param):
         raise TypeError("registered parameter must be a tensor or None")
     self.__dict__.setdefault("_parameter_names", set()).add(name)
     self.__dict__.setdefault("_non_parameter_names", set()).discard(name)
@@ -1191,6 +1228,13 @@ register_fidelity(
     "Yields ('', self) first then descendants, as torch does. memo= and "
     "remove_duplicate= are honored. Container children are enumerated through "
     "jittor's named_modules, so ordering within a ModuleList follows insertion.")
+register_fidelity(
+    "torch.nn.Module.state_dict", _state_dict, Fidelity.APPROXIMATE,
+    "Defaults to detached tensors; keep_vars=True preserves live objects. "
+    "destination and prefix delegate to native state enumeration. Native "
+    "parameter/buffer traversal is retained; full Torch state-dict hooks, "
+    "extra-state/version metadata and positional-argument warnings are not "
+    "claimed.")
 register_fidelity(
     "torch.nn.Module.load_state_dict", _load_state_dict, Fidelity.APPROXIMATE,
     "Returns a namedtuple with missing_keys/unexpected_keys like torch, and "
@@ -1330,7 +1374,8 @@ def _install_module_methods(nn, registry=None):
     M.named_buffers = _named_buffers
     M.named_modules = _named_modules
     M.load_state_dict = _load_state_dict
-    M._parameters = property(_parameter_map_get, _parameter_map_set)
+    M.state_dict = _state_dict
+    M._parameters = property(_nn_frontend.module_parameter_map_get, _parameter_map_set)
     M.parameters = _parameters
     M.train = _train
     M.eval = _eval
@@ -1365,7 +1410,7 @@ def _install_module_methods(nn, registry=None):
         M._non_persistent_buffers_set = property(_nonpersist_set)
 
     register_api_bindings(M, 'torch.nn.Module',
-        ('__setattr__', 'buffers', 'cpu', 'cuda', 'double', 'eval', 'execute', 'float', 'forward', 'get_buffer', 'get_execution_pipelining', 'get_parameter', 'get_submodule', 'half', 'load_state_dict', 'named_buffers', 'named_modules', 'named_parameters', 'npu', 'parameters', 'register_parameter', 'set_execution_pipelining', 'to', 'to_empty', 'train', 'type', 'zero_grad') + tuple(()),
+        ('__setattr__', 'buffers', 'cpu', 'cuda', 'double', 'eval', 'execute', 'float', 'forward', 'get_buffer', 'get_execution_pipelining', 'get_parameter', 'get_submodule', 'half', 'load_state_dict', 'named_buffers', 'named_modules', 'named_parameters', 'npu', 'parameters', 'register_parameter', 'set_execution_pipelining', 'state_dict', 'to', 'to_empty', 'train', 'type', 'zero_grad') + tuple(()),
         Fidelity.APPROXIMATE, 'Module state and parameter management over native holders; Torch lazy iterator, meta, and layout semantics are approximate')
     register_api_bindings(M, 'torch.nn.Module', ('extra_repr',),
         Fidelity.EXACT, 'Torch Module default extra_repr is empty; explicit subclass overrides retain normal MRO precedence')

@@ -33,7 +33,8 @@ _EXPORTS = (
 
 
 def clear_fsdp_optimizer_grads(opt):
-    for pg in getattr(opt, "param_groups", []):
+    from jittor.optim.base import optimizer_execution_groups
+    for pg in optimizer_execution_groups(opt):
         grads = pg.get("grads")
         if grads is None:
             continue
@@ -45,7 +46,20 @@ def clear_fsdp_optimizer_grads(opt):
 def _assign_preserve_trainability(target, value, was_trainable=None):
     if was_trainable is None:
         was_trainable = not target.is_stop_grad()
-    target.assign(value)
+    state, entry = shard._fsdp_param_entry(target)
+    if (state is not None and entry is not None and entry.shard is target
+            and getattr(state, "frontend_type", None) is not None
+            and getattr(state, "true_fsdp_world_size", None) == 1
+            and not getattr(state, "true_fsdp_flat", False)
+            and tuple(target.shape) == tuple(value.shape)
+            and target.dtype == value.dtype and target.device == value.device):
+        # Persistent plain to_local() aliases must keep seeing optimizer writes.
+        # Rebinding the Parameter holder would leave detached aliases on the
+        # previous allocation. Use the public no-grad imperative store instead.
+        with common._frontend_scope(state), jt.no_grad():
+            target.copy_(value)
+    else:
+        target.assign(value)
     if was_trainable and target.is_stop_grad():
         target.start_grad()
     elif not was_trainable and not target.is_stop_grad():
@@ -54,7 +68,8 @@ def _assign_preserve_trainability(target, value, was_trainable=None):
 
 
 def refresh_optimizer_fsdp_params(opt, state_ids=None):
-    for pg in getattr(opt, "param_groups", []):
+    from jittor.optim.base import optimizer_execution_groups
+    for pg in optimizer_execution_groups(opt):
         params = pg.get("params", [])
         replacements = []
         for i, param in enumerate(list(params)):
@@ -124,9 +139,9 @@ def _adam_hparams(opt, pg):
 def _adam_update_for_param(opt, pg, param, grad, value, momentum, *,
                            decoupled_weight_decay, n_step):
     lr, eps, weight_decay, betas = _adam_hparams(opt, pg)
-    if not isinstance(value, jt.Var) or list(value.shape) != list(param.shape):
+    if not jt.core._is_tensor_carrier(value) or list(value.shape) != list(param.shape):
         value = jt.zeros_like(param).stop_grad()
-    if not isinstance(momentum, jt.Var) or list(momentum.shape) != list(param.shape):
+    if not jt.core._is_tensor_carrier(momentum) or list(momentum.shape) != list(param.shape):
         momentum = jt.zeros_like(param).stop_grad()
     updated = adam_update(
         param, grad, value, momentum, lr=lr, eps=eps, weight_decay=weight_decay,
@@ -183,9 +198,20 @@ def optimizer_step(opt, loss=None, retain_graph=False, *, native_kind=None):
     Non-FSDP parameters are intentionally left untouched so the caller can run the
     original optimizer step for them.
     """
+    from jittor.optim.base import optimizer_execution_groups
     states = grad_sync._fsdp_states_from_optimizers([opt])
     if not states:
         return False
+    owner = vars(opt).get("_torch_adam_state_owner")
+    if owner is not None:
+        owner.validate_groups()
+    # The FSDP adapter enters here before the native optimizer's pre_step().
+    # That native hook normally moves moment/momentum buffers with parameters
+    # which were migrated after optimizer construction.  Skipping it leaves,
+    # for example, an explicit CPU Adam moment beside an NPU parameter and the
+    # first update then fails while adding the moment to the NPU gradient.
+    # Reuse the same placement repair before any sharded optimizer arithmetic.
+    _realign_state_buffers(optimizer_execution_groups(opt))
     if loss is not None:
         grad_by_id = {}
         targets = grad_sync.collect_fsdp_full_params_for_backward([opt])
@@ -209,17 +235,17 @@ def optimizer_step(opt, loss=None, retain_graph=False, *, native_kind=None):
     # regular Optimizer.pre_step() hook that realigns lazily-created state
     # buffers after a parameter moves between CPU and CUDA. Keep moment and
     # variance buffers on the current local shard before mixed-precision math.
-    _realign_state_buffers(getattr(opt, "param_groups", ()))
+    _realign_state_buffers(optimizer_execution_groups(opt))
     has_fsdp_grad = False
-    for pg in getattr(opt, "param_groups", []):
+    for pg in optimizer_execution_groups(opt):
         grads = pg.get("grads") or []
         for i, param in enumerate(pg.get("params", [])):
             if not shard.is_fsdp_managed_param(param):
                 continue
             grad = grads[i] if i < len(grads) else None
-            if not isinstance(grad, jt.Var):
+            if not jt.core._is_tensor_carrier(grad):
                 grad = getattr(param, "_torch_grad", None)
-            if isinstance(grad, jt.Var):
+            if jt.core._is_tensor_carrier(grad):
                 has_fsdp_grad = True
                 break
         if has_fsdp_grad:
@@ -240,7 +266,7 @@ def optimizer_step(opt, loss=None, retain_graph=False, *, native_kind=None):
         id(state): not state.true_fsdp_flat_shard.is_stop_grad()
         for state in states if getattr(state, "true_fsdp_flat", False)
     }
-    for pg in getattr(opt, "param_groups", []):
+    for pg in optimizer_execution_groups(opt):
         grads = pg.get("grads") or []
         param_steps = _optimizer_param_steps(pg)
         values = pg.get("values")
@@ -259,9 +285,9 @@ def optimizer_step(opt, loss=None, retain_graph=False, *, native_kind=None):
             if state is None:
                 continue
             grad = grads[i] if i < len(grads) else None
-            if not isinstance(grad, jt.Var):
+            if not jt.core._is_tensor_carrier(grad):
                 grad = getattr(param, "_torch_grad", None)
-            if not isinstance(grad, jt.Var):
+            if not jt.core._is_tensor_carrier(grad):
                 continue
             param_steps[i] = int(param_steps[i]) + 1
             if kind == "sgd":
@@ -276,6 +302,9 @@ def optimizer_step(opt, loss=None, retain_graph=False, *, native_kind=None):
                     n_step=param_steps[i])
                 values[i] = new_value
                 momentums[i] = new_momentum
+                owner = pg.get("_torch_adam_state_owner")
+                if owner is not None:
+                    owner.publish_buffers(pg)
             if getattr(state, "true_fsdp_flat", False):
                 key = (id(state), id(entry))
                 flat_updates[key] = new_param
@@ -285,7 +314,7 @@ def optimizer_step(opt, loss=None, retain_graph=False, *, native_kind=None):
                     entry.shard, new_param,
                     entry_trainable[(id(state), id(entry))])
                 object.__setattr__(entry.shard, "_torch_grad", grad)
-                object.__setattr__(entry.owner, entry.attr, entry.shard)
+                shard._bind_entry(entry, entry.shard)
                 entry.full_param = None
 
     for state in states:
@@ -320,9 +349,9 @@ def optimizer_step(opt, loss=None, retain_graph=False, *, native_kind=None):
             elif not was_trainable and not entry.shard.is_stop_grad():
                 entry.shard.stop_grad()
             grad = flat_public_grads.get(key)
-            if isinstance(grad, jt.Var):
+            if jt.core._is_tensor_carrier(grad):
                 object.__setattr__(entry.shard, "_torch_grad", grad)
-            object.__setattr__(entry.owner, entry.attr, entry.shard)
+            shard._bind_entry(entry, entry.shard)
             entry.full_param = None
         state.true_fsdp_unsharded = False
 
@@ -361,14 +390,14 @@ def sharded_sgd_step(module, loss, lr=1e-4, *, divide_by_world_size=True):
         for entry, was_trainable in zip(state.true_fsdp_params, entry_trainable):
             if was_trainable and entry.shard.is_stop_grad():
                 entry.shard.start_grad()
-            object.__setattr__(entry.owner, entry.attr, entry.shard)
+            shard._bind_entry(entry, entry.shard)
             entry.full_param = None
         state.true_fsdp_unsharded = False
         return grads
     for entry, grad in zip(state.true_fsdp_params, grads):
         _assign_preserve_trainability(
             entry.shard, (entry.shard - grad * lr).stop_grad())
-        object.__setattr__(entry.owner, entry.attr, entry.shard)
+        shard._bind_entry(entry, entry.shard)
         entry.full_param = None
     state.true_fsdp_unsharded = False
     return grads

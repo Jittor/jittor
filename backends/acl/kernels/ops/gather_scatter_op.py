@@ -18,6 +18,7 @@ class GatherACL(jt.Function):
             "Scatter", [tmp, self.index, grad_output], output_dtypes=[grad_output.dtype],
             output_shapes=[tmp.shape], attributes={"axis": self.dim, "reduction": 1},
         )[0]
+        return grad_input, None, None
 
 
 class ScatterACL(jt.Function):

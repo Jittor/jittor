@@ -3,6 +3,7 @@
 from _helpers import capability as _test_capability
 
 import math
+import os
 import unittest
 
 import numpy as np
@@ -104,6 +105,51 @@ class TestGradientManagement(unittest.TestCase):
                 _clip_grad_norm_device([grad], 1.0, 2.0, error_if_nonfinite=True)
 
         both_devices(body)
+
+    def test_clip_grad_norm_finite_check_preserves_returned_device(self):
+        from jittor._runtime.fallback import forbid_backend_fallbacks
+
+        def body(dev):
+            for grouped in (False, True):
+                with forbid_backend_fallbacks():
+                    before = jt.core.backend_fallback_count()
+                    grads = [jt.array(np.array([3.0, 4.0], dtype="float32")),
+                             jt.array(np.array([-12.0], dtype="float32"))]
+                    if grouped:
+                        # Exercise grouped FSDP norms without pretending that a
+                        # replicated singleton requires a real collective.
+                        for grad in grads:
+                            object.__setattr__(grad, "_fsdp_norm_group", None)
+                    total = _clip_grad_norm_device(
+                        grads, 5.0, 2.0, error_if_nonfinite=True,
+                        shard_reduce=grouped)
+                    for value in [total] + grads:
+                        value.sync()
+                        self.assertEqual(jt.core.dispatch_context([value])[0], dev)
+                        self.assertEqual(value.location(), "device" if dev == "cuda" else "cpu")
+                    # Placement is checked before any host read. This is an
+                    # explicit native-device contract, not an import smoke.
+                    norm_value, first, second = jt.fetch_sync([total] + grads)
+                    np.testing.assert_allclose(norm_value, 13.0, rtol=2e-6, atol=2e-6)
+                    coefficient = 5.0 / (13.0 + 1e-6)
+                    np.testing.assert_allclose(first, np.array([3.0, 4.0]) * coefficient,
+                                               rtol=2e-6, atol=2e-6)
+                    np.testing.assert_allclose(second, np.array([-12.0]) * coefficient,
+                                               rtol=2e-6, atol=2e-6)
+                    self.assertEqual(jt.core.backend_fallback_count() - before, 0)
+
+        # Unlike the legacy mixed-device cases, this new contract runs one
+        # explicitly selected backend per process.
+        requested = os.environ.get("JITTOR_TEST_DEVICES", "cpu").split(",")
+        self.assertEqual(len(requested), 1, "select one backend per process")
+        name = requested[0].strip()
+        self.assertIn(name, ("cpu", "cuda"))
+        if name == "cuda":
+            capability = _test_capability.check_accelerator("cuda", backend=jt)
+            if not capability.enabled:
+                self.skipTest("accelerator prerequisite: " + capability.reason)
+        with jt.flag_scope(use_cuda=int(name == "cuda")):
+            body(name)
 
     def test_clip_grad_norm_nonfinite_propagates_when_allowed(self):
         def body(dev):

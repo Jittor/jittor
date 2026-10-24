@@ -16,7 +16,7 @@ from .tensor_state import get_tensor_state
 
 from .optimizer_api import (
     adam_step, adamw_step, _STEP_APIS, _INITIALIZER_APIS,
-    _state_getter, _lbfgs_type,
+    _state_getter, _state_setter, _lbfgs_type,
     LBFGS,
     _OptState,
     _ParamState,
@@ -67,6 +67,8 @@ def _adamw_skips_step_on_device(self):
     captured step skips an overflow without reading anything back. Any other
     update leaves the decision to the scaler, on the host.
     """
+    if vars(self).get("_torch_adam_state_owner") is not None:
+        return False  # Until actual found_inf/capture state is admitted.
     from jittor._runtime.dispatch import select_kernel
     from .optimizer_api import _torch_param_steps
     for pg in self.param_groups:
@@ -105,6 +107,8 @@ def _install_optimizers(g, registry=None):
         existing = make_optimizer_frontend(_optim, g.Var)
         g.optim = existing
     _optim = existing
+    for _suffix, _owner in vars(_optim).get("_canonical_optimizer_owners", {}).items():
+        _modules[_owner.__name__] = _owner
     Base = getattr(_optim, "Optimizer", None)
     if Base is None:
         raise RuntimeError("jittor.optim has no Optimizer owner")
@@ -131,7 +135,7 @@ def _install_optimizers(g, registry=None):
     # exp_avg_sq via mask/cat, del old key, set new key after replacing the param).
     if not hasattr(Base, "_torch_state_installed"):
         Base._OptState = _OptState
-        Base.state = property(_state_getter)
+        Base.state = property(_state_getter, _state_setter)
         Base._torch_state_installed = True
     if not getattr(Base, "_torch_state_dict_wrapped", False):
         _native_load_state_dict = Base.load_state_dict
@@ -154,7 +158,7 @@ def _install_optimizers(g, registry=None):
     # 3DGS builds the exposure optimizer as torch.optim.Adam([self._exposure]).
     for _cls_name in ("Adam", "AdamW", "RMSprop", "Adan"):
         _cls = getattr(_optim, _cls_name, None)
-        if _cls is None or getattr(_cls, "_torch_lr_default", False):
+        if _cls is None or vars(_cls).get("_torch_lr_default", False):
             continue
         _ci = _cls.__init__
         _native_initializers[_cls_name] = _ci

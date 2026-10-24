@@ -67,6 +67,49 @@ def _assert_leaf_and_backward(value, dtype, device, requires_grad):
     np.testing.assert_array_equal(_array(value.grad), np.full(tuple(value.shape), 5.))
 
 
+@contextlib.contextmanager
+def _ambient_factory_device(device):
+    # The shim's public device context sets native placement without injecting
+    # device= into the factory call, which would bypass its no-kwargs fast path.
+    with torch.device(device):
+        yield
+
+
+@pytest.mark.parametrize("args", [
+    (16,), ((2, 3),), ([2, 3],), (2, 3), (torch.Size((2, 3)),), ((),),
+])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+@pytest.mark.parametrize("requires_grad", [None, False, True],
+                         ids=["omitted", "false", "true"])
+@pytest.mark.parametrize("inside_no_grad", [False, True])
+def test_empty_default_gradient_random_fill_and_reenabled_backward(
+        args, dtype, requires_grad, inside_no_grad, factory_device):
+    previous_dtype = torch.get_default_dtype()
+    try:
+        torch.set_default_dtype(dtype)
+        with _ambient_factory_device(factory_device):
+            options = {} if requires_grad is None else {"requires_grad": requires_grad}
+            with torch.no_grad() if inside_no_grad else contextlib.nullcontext():
+                value = torch.empty(*args, **options)
+                assert value.requires_grad == bool(requires_grad)
+                assert value.is_leaf and value.grad_fn is None
+                generator = torch.Generator(device=factory_device).manual_seed(53)
+                before, global_before = generator.get_state(), _states()
+                if requires_grad and not inside_no_grad:
+                    with pytest.raises(RuntimeError, match="leaf"):
+                        value.uniform_(0., 16., generator=generator)
+                    # No reading uninitialized storage, even on the reject path.
+                    np.testing.assert_array_equal(_array(generator.get_state()), _array(before))
+                    _same_states(_states(), global_before)
+                else:
+                    assert value.uniform_(0., 16., generator=generator) is value
+                    assert torch.isfinite(value).all().item()
+                    assert ((value >= 0.) & (value <= 16.)).all().item()
+            _assert_leaf_and_backward(value, dtype, factory_device, bool(requires_grad))
+    finally:
+        torch.set_default_dtype(previous_dtype)
+
+
 @pytest.mark.parametrize("name,args", FACTORIES)
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 @pytest.mark.parametrize("requires_grad", [False, True])

@@ -57,8 +57,12 @@ KERNELS = (
 
 def install():
     for operation, implementation in KERNELS:
+        supports = None
+        if implementation in (neural.matmul_acl, neural.bmm_acl):
+            supports = neural.matmul_supported
+        elif implementation is neural.softmax_acl:
+            supports = neural.softmax_supported
         register_kernel(
             operation, "acl", implementation,
-            supports=(neural.softmax_supported
-                      if implementation is neural.softmax_acl else None),
+            supports=supports,
         )

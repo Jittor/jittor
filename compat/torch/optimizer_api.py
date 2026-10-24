@@ -21,6 +21,12 @@ def _init(self, *a, **k):
     _context = get_install_context(jt)
     _orig_init = _context.state["optimizer_native_api"]['_orig_init']
     _orig_init(self, *a, **k)
+    _register_initialized_optimizer(self)
+
+
+def _register_initialized_optimizer(self):
+    """Register native-bridge and owned optimizers after their real init."""
+    from jittor.optim.base import optimizer_execution_groups
     # Maintain a registry of ALL live optimizers (not just the last). torch
     # supports several optimizers active at once (3DGS has a Gaussian Adam +
     # an exposure Adam); loss.backward() must fill grads for every one. Hold
@@ -29,7 +35,7 @@ def _init(self, *a, **k):
     reg[:] = [r for r in reg if r() is not None and r() is not self]
     reg.append(_weakref.ref(self))
     try:
-        for pg in self.param_groups:
+        for pg in optimizer_execution_groups(self):
             pg.setdefault("lr", self.lr)
     except EXPECTED as exc:
         swallowed("torch/optimizers.py _init: for pg in self.param_groups:", exc)
@@ -37,18 +43,26 @@ def _init(self, *a, **k):
     # this optimizer existed. Keep the published objects themselves: clipping,
     # clearing and another optimizer must observe the same gradient storage.
     published = [(pg, [getattr(parameter, "_torch_grad", None)
-                       for parameter in pg["params"]])
-                 for pg in self.param_groups]
-    if any(isinstance(gradient, jt.Var)
+                       if getattr(parameter, "_jittor_fsdp2_state", None) is None
+                       else None for parameter in pg["params"]])
+                 for pg in optimizer_execution_groups(self)]
+    if any(jt.core._is_tensor_carrier(gradient)
            for _, gradients in published for gradient in gradients):
         for pg, gradients in published:
             pg["grads"] = gradients
+            self._grad_map.update(
+                (id(parameter), gradient)
+                for parameter, gradient in zip(pg["params"], gradients)
+                if jt.core._is_tensor_carrier(parameter) and jt.core._is_tensor_carrier(gradient))
         object.__setattr__(self, "_Optimizer__zero_grad", False)
 
 
 def _torch_param_steps(pg):
     _sync_adam_group_params(pg)
     params = list(pg.get("params", []))
+    owner = pg.get("_torch_adam_state_owner")
+    if owner is not None:
+        return owner.sync_group(pg)
     steps = pg.get("_torch_steps")
     if not isinstance(steps, list):
         steps = pg["_torch_steps"] = [0] * len(params)
@@ -80,7 +94,10 @@ def _sync_adam_group_params(pg, *, replacements=()):
         identities.append(replacement[1] if replacement is not None
                           and replacement[0] is parameter else parameter)
     positions = {id(parameter): index for index, parameter in enumerate(identities)}
-    for key in ("m", "values", "_torch_steps"):
+    owner = pg.get("_torch_adam_state_owner")
+    if owner is not None:
+        owner.rebind(replacements)
+    for key in (("m", "values") if owner is not None else ("m", "values", "_torch_steps")):
         old_values = pg.get(key, ())
         result = []
         for parameter in current:
@@ -88,9 +105,13 @@ def _sync_adam_group_params(pg, *, replacements=()):
             if old_index is not None and identities[old_index] is parameter and old_index < len(old_values):
                 result.append(old_values[old_index])
             else:
-                result.append(0 if key == "_torch_steps" else _state_buffer(parameter))
+                result.append(0 if key == "_torch_steps" else (
+                    owner.reset_buffer(parameter) if owner is not None
+                    else _state_buffer(parameter)))
         pg[key] = result
     pg["_torch_adam_params"] = current
+    if owner is not None:
+        owner.sync_group(pg)
 
 
 def _torch_optimizer_kind(opt):
@@ -261,13 +282,35 @@ class _OptState:
         return self._find(param)
 
 
+def _adam_state_decoupled_policy(kind, group, *, loading=False):
+    """Publish the implemented Adam policy; never load an unsupported variant.
+
+    AdamW loads always retain decoupled decay, as torch.optim.AdamW.__setstate__
+    requires. Adam(True) needs a distinct update contract not implemented by the
+    current Adam/FSDP paths; reject it before changing any optimizer state.
+    """
+    value = group.get("decoupled_weight_decay", kind == "adamw")
+    if type(value) is not bool:
+        raise TypeError("optimizer decoupled_weight_decay must be bool")
+    if kind == "adamw" and loading:
+        return True
+    if value != (kind == "adamw"):
+        raise NotImplementedError(
+            "optimizer decoupled_weight_decay differs from the supported "
+            "Adam(False)/AdamW(True) update policy")
+    return value
+
+
 def _state_dict_torch(self):
     _context = get_install_context(jt)
     g = _context.target_namespace
     kind = _torch_optimizer_kind(self)
+    if kind in ("adam", "adamw"):
+        return _state_dict_persistent_adam(self)
     param_ids: Dict[int, int] = {}
     param_groups = []
     next_id = 0
+    owner = _persistent_adam_owner(self) if kind in ("adam", "adamw") else None
     for pg in self.param_groups:
         group = {}
         params = []
@@ -280,11 +323,12 @@ def _state_dict_torch(self):
             params.append(pid)
         for k, v in pg.items():
             if k in ("params", "grads", "m", "values", "v", "d",
-                     "pre_grad", "_torch_steps", "_torch_adam_params", _MOMENTUM_INITIALIZED):
+                     "pre_grad", "_torch_steps", "_torch_adam_params", "_torch_adam_state_owner", _MOMENTUM_INITIALIZED):
                 continue
             group[k] = v
         group.setdefault("lr", pg.get("lr", getattr(self, "lr", 0.0)))
         if kind in ("adam", "adamw"):
+            group["decoupled_weight_decay"] = _adam_state_decoupled_policy(kind, pg)
             group.setdefault("betas", pg.get(
                 "betas", getattr(self, "betas", (0.9, 0.999))))
             group.setdefault("eps", pg.get(
@@ -322,6 +366,10 @@ def _state_dict_torch(self):
             group.setdefault("differentiable", False)
         group["params"] = params
         param_groups.append(group)
+    if owner is not None:
+        state = {(param_ids[id(p)] if isinstance(p, g.Tensor) else p): record
+                 for p, record in owner.public_state.items()}
+        return {"state": state, "param_groups": param_groups}
     state = {}
     for pg in self.param_groups:
         steps = _torch_param_steps(pg)
@@ -360,8 +408,13 @@ def _state_dict_torch(self):
 def _load_state_dict_torch(self, state_dict):
     _context = get_install_context(jt)
     _native_load_state_dict = _context.state["optimizer_native_api"]['_native_load_state_dict']
+    if _torch_optimizer_kind(self) in ("adam", "adamw") and (
+            not isinstance(state_dict, Mapping) or "param_groups" not in state_dict):
+        raise NotImplementedError("owned Adam requires the public Torch checkpoint format")
     if not isinstance(state_dict, Mapping) or "param_groups" not in state_dict:
         return _native_load_state_dict(self, state_dict)
+    if _torch_optimizer_kind(self) in ("adam", "adamw"):
+        return _load_persistent_adam(self, state_dict)
     saved_groups = state_dict.get("param_groups", [])
     saved_state = state_dict.get("state", {})
     kind = _torch_optimizer_kind(self)
@@ -377,6 +430,10 @@ def _load_state_dict_torch(self, state_dict):
     for saved_pg, current_pg in zip(saved_groups, self.param_groups):
         if not isinstance(saved_pg, Mapping):
             raise TypeError("loaded optimizer parameter group must be a mapping")
+        saved_pg = dict(saved_pg)
+        if kind in ("adam", "adamw"):
+            saved_pg["decoupled_weight_decay"] = _adam_state_decoupled_policy(
+                kind, saved_pg, loading=True)
         saved_params = saved_pg.get("params", [])
         if not isinstance(saved_params, (list, tuple)):
             raise TypeError("loaded optimizer group params must be a sequence")
@@ -461,9 +518,10 @@ def _load_state_dict_torch(self, state_dict):
 
 
 def _zero_grad_compat(self, set_to_none=True):
+    from jittor.optim.base import optimizer_execution_groups
     _context = get_install_context(jt)
     _orig_zero = _context.state["optimizer_native_api"]['_orig_zero']
-    for _pg in getattr(self, "param_groups", []):
+    for _pg in optimizer_execution_groups(self):
         _params = list(_pg.get("params", []))
         _new_grads: List[Any] = []
         if set_to_none:
@@ -475,13 +533,13 @@ def _zero_grad_compat(self, set_to_none=True):
                 _old = _old_grads[_i] if _i < len(_old_grads) else None
                 _published = (
                     getattr(_p, "_torch_grad", None)
-                    if isinstance(_p, jt.Var) else None
+                    if jt.core._is_tensor_carrier(_p) else None
                 )
-                if isinstance(_p, jt.Var) and (
-                        isinstance(_old, jt.Var)
-                        or isinstance(_published, jt.Var)):
+                if jt.core._is_tensor_carrier(_p) and (
+                        jt.core._is_tensor_carrier(_old)
+                        or jt.core._is_tensor_carrier(_published)):
                     _existing = (
-                        _old if isinstance(_old, jt.Var)
+                        _old if jt.core._is_tensor_carrier(_old)
                         else _published
                     )
                     _existing.update(jt.zeros_like(_existing))
@@ -489,12 +547,12 @@ def _zero_grad_compat(self, set_to_none=True):
                     _new_grads.append(_existing)
                 else:
                     _new_grads.append(None)
-            if any(isinstance(_g, jt.Var) for _g in _new_grads):
+            if any(jt.core._is_tensor_carrier(_g) for _g in _new_grads):
                 _pg["grads"] = _new_grads
             else:
                 _pg.pop("grads", None)
         for _i, _p in enumerate(_params):
-            if not isinstance(_p, jt.Var):
+            if not jt.core._is_tensor_carrier(_p):
                 continue
             _value = None
             if not set_to_none and _i < len(_new_grads):
@@ -508,10 +566,17 @@ def _zero_grad_compat(self, set_to_none=True):
         object.__setattr__(self, "_grad_map", {})
     except (AttributeError, TypeError) as exc:
         swallowed("torch/optimizers.py _zero_grad_compat: object.__setattr__(self, '_grad_map', {})", exc)
+    # The public adapter has already cleared each existing gradient above.
+    # Native zero_grad assumes dense Var slots and would clear them a second
+    # time (or dereference an unused parameter's None). Keep its DDP bookkeeping
+    # while telling it that no gradient-buffer work remains.
+    object.__setattr__(self, "_Optimizer__zero_grad", True)
     result = _orig_zero(self)
     _fsdp2_zero = _fsdp_hooks.provider()
     if _fsdp2_zero is not None and _fsdp2_zero.optimizer_has_fsdp_params(self):
         _fsdp2_zero.refresh_visible_full_grads(self)
+        if set_to_none:
+            _fsdp2_zero._release_cleared_optimizer_grad_cache(self)
     object.__setattr__(self, "_torch_backward_advanced_n_step", False)
     return result
 
@@ -525,31 +590,34 @@ def _backward_with_step_marker(self, *args, **kwargs):
 
 
 def _optimizer_has_ready_grads(opt):
-    for _pg in getattr(opt, "param_groups", []):
+    from jittor.optim.base import optimizer_execution_groups
+    for _pg in optimizer_execution_groups(opt):
         _grads = _pg.get("grads")
         if not _grads:
             continue
         for _p, _g in zip(_pg.get("params", []), _grads):
-            if isinstance(_p, jt.Var) and isinstance(_g, jt.Var) and list(_p.shape) == list(_g.shape):
+            if jt.core._is_tensor_carrier(_p) and jt.core._is_tensor_carrier(_g) and list(_p.shape) == list(_g.shape):
                 return True
     return False
 
 
 def _advance_ready_param_steps(opt):
-    for pg in getattr(opt, "param_groups", []):
+    from jittor.optim.base import optimizer_execution_groups
+    for pg in optimizer_execution_groups(opt):
         steps = _torch_param_steps(pg)
         grads = pg.get("grads") or []
         for i, (param, grad) in enumerate(zip(pg.get("params", []), grads)):
-            if isinstance(param, jt.Var) and isinstance(grad, jt.Var) \
+            if jt.core._is_tensor_carrier(param) and jt.core._is_tensor_carrier(grad) \
                     and list(param.shape) == list(grad.shape):
                 steps[i] = int(steps[i]) + 1
 
 
 def _advance_trainable_param_steps(opt):
-    for pg in getattr(opt, "param_groups", []):
+    from jittor.optim.base import optimizer_execution_groups
+    for pg in optimizer_execution_groups(opt):
         steps = _torch_param_steps(pg)
         for i, param in enumerate(pg.get("params", [])):
-            if isinstance(param, jt.Var) and param.requires_grad:
+            if jt.core._is_tensor_carrier(param) and param.requires_grad:
                 steps[i] = int(steps[i]) + 1
 
 
@@ -590,6 +658,8 @@ def _lsd(self, state):
 
 
 def _state_getter(self):
+    if _torch_optimizer_kind(self) in ("adam", "adamw"):
+        return _persistent_adam_owner(self).public_state
     return get_install_context(jt).target_namespace.optim.Optimizer._OptState(self)
 
 
@@ -660,6 +730,11 @@ def _step_with_closure(self, loss, retain_graph, closure, kwargs, native_kind):
     _advance_ready_param_steps(self)
     from .optimizers import replay_books_of_step
     replay_books_of_step(self)
+    # zero_grad(set_to_none=True) legitimately removes empty public slots.
+    # Native algorithms walk every group, including entirely unused groups.
+    for pg in self.param_groups:
+        if "grads" not in pg:
+            pg["grads"] = [None] * len(pg.get("params", []))
     self.post_step = _torch_post_step
     try:
         # Torch optimizer updates do not record parameter writes. The closure
@@ -717,11 +792,16 @@ def adam_init(self, params, lr=1e-3, *args, **kwargs):
 def _initialize_adam(self, params, lr, args, kwargs, name):
     # The update selector already consumes this execution option; the native
     # initializer does not take Torch's spelling. Preserve group overrides.
+    from jittor.optim.base import optimizer_execution_groups
     foreach = kwargs.pop('foreach', None)
     result = _initialize_default(self, params, lr, args, kwargs, name)
-    for group in self.param_groups:
+    for group in optimizer_execution_groups(self):
         group.setdefault('foreach', foreach)
         group['_torch_adam_params'] = tuple(group['params'])
+        group.setdefault('fused', getattr(self, 'fused', None))
+        for key, value in self.defaults.items():
+            group.setdefault(key, value)
+    _persistent_adam_owner(self)
     return result
 
 
@@ -744,3 +824,90 @@ _INITIALIZER_APIS = {
     'RMSprop': rmsprop_init,
     'Adan': adan_init,
 }
+
+
+def _load_persistent_adam(self, state_dict):
+    owner = _persistent_adam_owner(self)
+    groups, saved = state_dict.get('param_groups'), state_dict.get('state', {})
+    if not isinstance(groups, (list, tuple)) or not isinstance(saved, Mapping):
+        raise TypeError('loaded optimizer groups/state have invalid types')
+    if len(groups) != len(self.param_groups):
+        raise ValueError('loaded state dict has a different number of parameter groups')
+    plans = []
+    assigned_keys = set()
+    for current, source in zip(self.param_groups, groups):
+        if not isinstance(source, Mapping):
+            raise TypeError('loaded optimizer parameter group must be a mapping')
+        source = dict(source)
+        source['decoupled_weight_decay'] = _adam_state_decoupled_policy(
+            _torch_optimizer_kind(self), source, loading=True)
+        ids = source.get('params')
+        if not isinstance(ids, (list, tuple)) or len(ids) != len(current['params']):
+            raise ValueError("loaded state dict contains a parameter group that doesn't match the size of optimizer's group")
+        entries = []
+        for key in ids:
+            assigned_keys.add(key)
+            missing = object()
+            value = saved.get(key, missing)
+            if value is missing:
+                entries.append(None)
+            else:
+                if not isinstance(value, Mapping):
+                    raise TypeError('loaded optimizer parameter state must be a mapping')
+                entries.append(value)
+        plans.append((current, source, entries))
+    records = owner.load_plan(plans)
+    # All groups and actual step conversions were validated before mutation.
+    for current, source, _ in plans:
+        parameters = current['params']
+        names = current.get('param_names')
+        current.clear()
+        current.update(source)
+        current['params'] = parameters
+        if names is not None and 'param_names' not in source:
+            current['param_names'] = names
+    owner.apply_load(records, extra=((key, value) for key, value in saved.items()
+                                     if key not in assigned_keys))
+    return None
+
+
+def _persistent_adam_owner(self):
+    from .optimizer_state import state_owner
+    from jittor.optim.algorithms.adam import _state_buffer
+    return state_owner(self, get_install_context(jt).target_namespace, _public_adam_state_buffer)
+
+
+
+
+def _state_setter(self, value):
+    if _torch_optimizer_kind(self) in ('adam', 'adamw'):
+        _persistent_adam_owner(self).adopt_public_state(value)
+        return
+    raise AttributeError('legacy optimizer state is read-only')
+
+
+def _state_dict_persistent_adam(self):
+    # Same public group packing as Torch: all caller config fields, shallow
+    # values, integer parameter IDs. No internal-name blacklist or sanitization.
+    g = get_install_context(jt).target_namespace
+    owner = _persistent_adam_owner(self)
+    ids, groups = {}, []
+    for group in self.param_groups:
+        parameters = []
+        for parameter in group['params']:
+            ids.setdefault(id(parameter), len(ids))
+            parameters.append(ids[id(parameter)])
+        packed = {key: value for key, value in group.items() if key != 'params'}
+        packed['params'] = parameters
+        groups.append(packed)
+    state = {(ids[id(parameter)] if isinstance(parameter, g.Tensor) else parameter): entry
+             for parameter, entry in owner.public_state.items()}
+    return {'state': state, 'param_groups': groups}
+
+
+def _public_adam_state_buffer(parameter):
+    from .frontend import tensor_frontend
+    from jittor.optim.algorithms.adam import _state_buffer
+    tensor_type = get_install_context(jt).state['optimizer_frontend_native']['tensor_type']
+    with tensor_frontend(tensor_type):
+        return _state_buffer(parameter)

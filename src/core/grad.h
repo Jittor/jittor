@@ -38,12 +38,11 @@ void set_autograd_policy(
 // @pyjt(_get_autograd_policy)
 int get_autograd_policy();
 
-/** The recorded differentiable producer of `v`, or null for a backward leaf.
+/** The live differentiable producer of `v`, or null if none is executable.
  *
- * This is the graph question `is_leaf` and `grad_fn` are asking, answered from
- * the graph rather than guessed: `v` is a **backward leaf** exactly when this
- * returns null. The two spellings are one query so they cannot disagree, which
- * is also torch's invariant (`t.is_leaf == (t.grad_fn is None)`).
+ * grad() only walks these real edges. Public history can additionally retain
+ * a producer's value identity after a completed retain_graph=False backward
+ * and later materialization remove the executable Op. It never restores it.
  *
  * The answer is the conjunction of the two things a gradient needs:
  *
@@ -62,16 +61,21 @@ int get_autograd_policy();
  * Producer identity and current target eligibility are distinct: `grad()` may
  * skip a currently frozen input while `v` still has its recorded grad_fn.
  *
- * Cost is O(the producer's arity): a handful of flag reads, no traversal, no
- * side table, no epoch. That matters because this runs behind an attribute
- * read. It also means there is nothing to cache and so nothing to invalidate:
- * the query reads the live graph, and the graph it reads is exactly the graph
- * backward liveness keeps alive for as long as `v` can be differentiated.
+ * Live-edge lookup costs O(the producer's arity), with no graph traversal.
+ * Historical lookup reads a bounded value record and its input stop tokens;
+ * explicit stop/rewrite validity is separate from executable graph liveness.
  */
 Op* backward_grad_fn(Var* v);
 
-/** Whether `v` is a leaf of the backward graph. See backward_grad_fn. */
-inline bool is_backward_leaf(Var* v) { return backward_grad_fn(v) == nullptr; }
+struct ReleasedBackwardProducer;
+const ReleasedBackwardProducer* released_backward_history(Var* v);
+bool has_backward_history(Var* v);
+// Native graph-mutation seams: no callbacks, allocations or graph ownership.
+void invalidate_backward_history(Node* node);
+void note_backward_producer_removal(Node* producer);
+
+/** Public history/leaf query, not permission to walk a released graph. */
+inline bool is_backward_leaf(Var* v) { return !has_backward_history(v); }
 
 vector<VarPtr> grad(
     Var* loss,

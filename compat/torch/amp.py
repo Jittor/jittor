@@ -14,6 +14,7 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import collections.abc as _collections_abc
 import functools as _functools
+from contextlib import contextmanager as _contextmanager
 
 import numpy as np
 import jittor as jt
@@ -150,6 +151,41 @@ def autocast_is_enabled(device_type=None):
     """
     base = "cuda" if device_type is None else _autocast_device_type(device_type)
     return bool(_autocast_state.enabled.get(base, False))
+
+
+@_contextmanager
+def _optional_dtype_cuda_autocast(input, dtype):
+    """ATen softmax/log_softmax fp32_set_opt_dtype, CUDA scope only.
+
+    Explicit dtype wins. Float64/nonfloating input is not automatically cast.
+    Disable only the operation's nested CUDA autocast scope so a real FP32
+    input cannot be lowered again by the native AMP register. This is an input
+    cast before computation, never a narrowed result relabelled as FP32.
+    """
+    if input.device.type != "cuda" or not autocast_is_enabled("cuda"):
+        yield dtype
+        return
+    selected = dtype
+    if dtype is None and _jittor_dtype_name(input.dtype) in (
+            "float16", "bfloat16", "float32"):
+        selected = "float32"
+    with autocast("cuda", enabled=False):
+        yield selected
+
+
+@_contextmanager
+def _pointwise_cuda_autocast(input):
+    """Keep natural dtype promotion for one explicitly selected CUDA op.
+
+    No input/result cast, formula replacement, global region disable or native
+    kernel change. CPU/non-CUDA/inactive paths execute their original policy.
+    The standard nested autocast context restores flags even on exceptions.
+    """
+    if getattr(getattr(input, "device", None), "type", None) != "cuda" or not autocast_is_enabled("cuda"):
+        yield
+        return
+    with autocast("cuda", enabled=False):
+        yield
 
 
 def autocast_dtype(device_type=None):

@@ -105,3 +105,69 @@ def test_a_size_changing_rebind_stales_a_lazy_view_instead_of_aborting(transpose
     x._update(jt.zeros((0,), "float32"))
     assert x.numel() == 0
     np.testing.assert_array_equal(flat.numpy(), np.arange(12, dtype="float32"))
+
+
+@pytest.mark.parametrize("shape", [(1, 2), (2, 3)], ids=["unit_axis", "matrix"])
+@pytest.mark.parametrize("side", ["left", "right"])
+@pytest.mark.parametrize("materialized", [False, True], ids=["lazy", "synced"])
+def test_matmul_keeps_exact_pretranspose_reshape_gradient_targets(
+        transpose_device, shape, side, materialized):
+    """The relay must preserve graph identity, not merely matching storage.
+
+    Two rebinds construct new forward intermediates, as repeated checkpoint
+    loads do. This is native math/target ownership, not an FSDP/PPO test.
+    """
+    fallback_before = jt.core.backend_fallback_count()
+    backend = "cuda" if jt.flags.use_cuda else "cpu"
+    root = jt.array(np.zeros(int(np.prod(shape)), dtype="float32"))
+    expected_ordinal = int(jt.core.dispatch_context([root])[1])
+    root_holder = id(root)
+    for offset in (0, 1):
+        weights = (np.arange(2, 2 + int(np.prod(shape)), dtype="float32") + offset).reshape(shape)
+        root.assign(jt.array(weights.reshape(-1)))
+        root.start_grad()
+        assert id(root) == root_holder
+        full = root.reshape(shape)
+        full_holder, full_node = id(full), full.id
+        transposed = full.transpose(-1, -2)
+        assert transposed._is_last2_transpose_view()
+        if materialized:
+            transposed.sync()
+        if side == "right":
+            inputs = np.arange(1, 1 + 2 * shape[1], dtype="float32").reshape(2, shape[1])
+            x = jt.array(inputs)
+            output = jt.matmul(x, transposed)
+            expected_output = inputs.astype("float64") @ weights.astype("float64").T
+            expected_full = 2 * expected_output.T @ inputs.astype("float64")
+            expected_input = 2 * expected_output @ weights.astype("float64")
+        else:
+            inputs = np.arange(1, 1 + 2 * shape[0], dtype="float32").reshape(shape[0], 2)
+            x = jt.array(inputs)
+            output = jt.matmul(transposed, x)
+            expected_output = weights.astype("float64").T @ inputs.astype("float64")
+            expected_full = 2 * inputs.astype("float64") @ expected_output.T
+            expected_input = 2 * weights.astype("float64") @ expected_output
+        if backend == "cuda":
+            assert output._producer_name() == "cublas_matmul", "the transpose relay must remain active"
+        loss = output.sqr().sum()
+        gradients = jt.core.grad_optional(loss, [full, root, x], False)
+        assert len(gradients) == 3 and all(gradient is not None for gradient in gradients)
+        assert id(full) == full_holder and full.id == full_node
+        expected_gradients = [expected_full, expected_full.reshape(-1), expected_input]
+        values = [output, full, root, x] + list(gradients)
+        # Check every live result before reading any tensor on the host.
+        for value in values:
+            value.sync()
+            actual_backend, ordinal = jt.core.dispatch_context([value])
+            assert actual_backend == backend
+            assert value.location() == ("device" if backend == "cuda" else "cpu")
+            if backend == "cuda":
+                assert int(ordinal) == int(value.device_id) == expected_ordinal
+        assert tuple(output.shape) == expected_output.shape
+        np.testing.assert_allclose(output.cpu().numpy(), expected_output, rtol=1e-5, atol=1e-5)
+        for gradient, expected in zip(gradients, expected_gradients):
+            assert tuple(gradient.shape) == expected.shape
+            actual = np.array(gradient.cpu().numpy(), copy=True)
+            assert np.isfinite(actual).all()
+            np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
+        assert jt.core.backend_fallback_count() == fallback_before == 0

@@ -1,5 +1,14 @@
+import ast
+from functools import wraps
+import hashlib
+import os
+import pathlib
 import re
 from pathlib import Path
+import sys
+import threading
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -69,3 +78,103 @@ def test_activation_passes_outer_transaction_and_clears_inner_install_state():
     assert "transaction=_transaction" in runtime
     assert "transaction=transaction" in integrations
     assert "context.state.pop(\"_install_transaction\", None)" in torch_install
+
+
+class _BeforePreflightWrites(RuntimeError):
+    """Stop the actual orchestration before filesystem/native runtime changes."""
+
+
+def _host_activation_boundary():
+    """Execute source-owned activation/preflight functions, never import Jittor.
+
+    Only installation/transaction services are stubs. The caller argument,
+    env-vs-cwd selection and project-path normalization execute actual source.
+    """
+    events = {}
+    state = {"installed": False, "phase": "inactive"}
+
+    class Transaction:
+        _lock = threading.RLock()
+
+        def __init__(self, name):
+            self.name = name
+
+        def acquire(self):
+            pass
+
+        def release(self):
+            pass
+
+        def rollback(self):
+            events["rolled_back"] = True
+
+    def before_writes(path, purpose):
+        events["resolved_runtime"] = path
+        raise _BeforePreflightWrites(purpose)
+
+    def source_functions(path, names, namespace):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        selected = [node for node in tree.body
+                    if isinstance(node, ast.FunctionDef) and node.name in names]
+        assert {node.name for node in selected} == set(names)
+        future = ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0)
+        module = ast.fix_missing_locations(ast.Module(body=[future] + selected, type_ignores=[]))
+        exec(compile(module, str(path), "exec"), namespace)
+
+    preflight = {"os": os, "pathlib": pathlib, "hashlib": hashlib,
+                 "_TRUTHY": {"1", "true", "yes", "on"},
+                 "require_independent_frontend": lambda **kwargs: None,
+                 "_ensure_dir": before_writes}
+    source_functions(ROOT / "compat/shim/preflight.py",
+                     ("is_truthy", "project_dir", "project_runtime_root", "prepare_import_environment"),
+                     preflight)
+    normalize_project = preflight["project_dir"]
+
+    def project_path(path=None):
+        result = normalize_project(path)
+        events["resolved_project"] = result
+        return result
+
+    preflight["project_dir"] = project_path
+
+    def prepare(**kwargs):
+        events["preflight_arguments"] = kwargs
+        return preflight["prepare_import_environment"](**kwargs)
+
+    runtime = {"os": os, "pathlib": pathlib, "sys": sys, "wraps": wraps,
+               "ActivationTransaction": Transaction,
+               "_require_independent_frontend": lambda *args: None,
+               "torch_namespace_claimable": lambda root: True,
+               "_runtime_state": lambda root: state,
+               "is_truthy": preflight["is_truthy"],
+               "prepare_import_environment": prepare}
+    source_functions(RUNTIME, ("_serialized_activation", "_activate_once", "activate"), runtime)
+    return runtime["activate"], events
+
+
+@pytest.mark.parametrize("project_argument,environment,expected", (
+    (None, "configured-project", "configured-project"),
+    (None, None, "unrelated-cwd"),
+    ("explicit-project", "configured-project", "explicit-project"),
+    ("explicit-project/entry.py", "configured-project", "explicit-project"),
+    ("", "configured-project", "unrelated-cwd"),
+))
+def test_activation_defers_project_precedence_to_preflight(tmp_path, monkeypatch, project_argument, environment, expected):
+    """activate(default None) must not turn cwd into an explicit override."""
+    cwd = tmp_path / "unrelated-cwd"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    monkeypatch.setenv("JITTOR_TORCH_RUNTIME_ROOT", str(tmp_path / "runtime-cache"))
+    if environment is None:
+        monkeypatch.delenv("JITTOR_TORCH_PROJECT_ROOT", raising=False)
+    else:
+        monkeypatch.setenv("JITTOR_TORCH_PROJECT_ROOT", str(tmp_path / environment))
+    argument = None if project_argument is None else ("" if project_argument == "" else tmp_path / project_argument)
+    activate, events = _host_activation_boundary()
+    with pytest.raises(_BeforePreflightWrites):
+        activate(project_root=argument, _root_module=object(), verbose=False, strict=False,
+                 configure_cuda=False)
+    assert events["resolved_project"] == (tmp_path / expected).resolve()
+    assert events["preflight_arguments"]["project_root"] is argument
+    assert events["resolved_runtime"] == (tmp_path / "runtime-cache").resolve()
+    assert events["rolled_back"] is True

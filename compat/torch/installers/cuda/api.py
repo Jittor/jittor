@@ -17,7 +17,8 @@ from ...fidelity import Fidelity, register_fidelity
 from ....stub_policy import unimplemented as _unimplemented
 
 from ...types import (
-    device, dtype, _cuda_index_of, _device_is_cpu,
+    device, dtype, _cuda_index_of, _device_is_cpu, _is_index,
+    _dtype_registry, _is_dtype,
 )
 from ....diagnostics import EXPECTED, swallowed
 
@@ -893,27 +894,21 @@ def _cuda_mem_get_info_fn():
     if _cuda_runtime().memgetinfo[0] is not None:
         return _cuda_runtime().memgetinfo[0]
     fn = False
-    try:
+    if jt.compiler.has_cuda:
         import ctypes as _ct
-        lib = None
-        for _n in ("libcudart.so", "libcudart.so.12", "libcudart.so.11.0"):
-            try:
-                lib = _ct.CDLL(_n)
-                break
-            except OSError:
-                lib = None
-        if lib is not None:
-            lib.cudaMemGetInfo.argtypes = [_ct.POINTER(_ct.c_size_t),
-                                           _ct.POINTER(_ct.c_size_t)]
-            lib.cudaMemGetInfo.restype = _ct.c_int
-            def fn(_lib=lib, _ct=_ct):
-                free, total = _ct.c_size_t(0), _ct.c_size_t(0)
-                if _lib.cudaMemGetInfo(_ct.byref(free), _ct.byref(total)) != 0:
-                    return None
-                return (int(free.value), int(total.value))
-    except EXPECTED as exc:
-        swallowed("torch/installers/cuda/api.py _cuda_mem_get_info_fn: import ctypes as _ct", exc)
-        fn = False
+        # Reuse the compiler's selected absolute runtime resource. A bare
+        # libcudart name can resolve to another toolkit via the interpreter's
+        # RPATH, even when LD_LIBRARY_PATH names our compiler's CUDA toolkit.
+        # A missing/broken selected runtime must remain an explicit error.
+        lib = jt.compiler.preload_cuda_library("cudart", required=True)
+        lib.cudaMemGetInfo.argtypes = [_ct.POINTER(_ct.c_size_t),
+                                       _ct.POINTER(_ct.c_size_t)]
+        lib.cudaMemGetInfo.restype = _ct.c_int
+        def fn(_lib=lib, _ct=_ct):
+            free, total = _ct.c_size_t(0), _ct.c_size_t(0)
+            if _lib.cudaMemGetInfo(_ct.byref(free), _ct.byref(total)) != 0:
+                return None
+            return (int(free.value), int(total.value))
     _cuda_runtime().memgetinfo[0] = fn
     return fn
 
@@ -1015,11 +1010,19 @@ def _parse_to(*args, **kwargs):
     dtype_arg = kwargs.get("dtype", None)
     non_blocking = kwargs.get("non_blocking", False)
     for arg in args:
+        # TensorDict delegates .to(local_rank) to this parser. Dropping an
+        # integer here turns the whole container move into a silent no-op.
+        # Reuse device's validated current-accelerator resolution (including
+        # NPU); bool is a non_blocking argument, not a device ordinal.
+        if _is_index(arg):
+            if dev is None:
+                dev = device(arg)
+            continue
         if isinstance(arg, jt.Var):
             dev = getattr(arg, "device", dev)
             dtype_arg = getattr(arg, "dtype", dtype_arg)
             continue
-        if isinstance(arg, dtype) or str(arg).replace("torch.", "") in dtype._registry:
+        if _is_dtype(arg) or str(arg).replace("torch.", "") in _dtype_registry():
             if dtype_arg is None:
                 dtype_arg = arg
             continue
@@ -1027,7 +1030,7 @@ def _parse_to(*args, **kwargs):
             if dev is None:
                 dev = arg
             continue
-        if arg in getattr(dtype, "_registry", {}).values():
+        if any(arg is value for value in _dtype_registry().values()):
             if dtype_arg is None:
                 dtype_arg = arg
     if isinstance(dev, str):
@@ -1266,7 +1269,7 @@ def _rng_state_pack(seed, offset):
 def _rng_state_unpack(state):
     import struct
     from jittor._core.dtypes import dtype_name
-    if not isinstance(state, jt.Var) or dtype_name(state.dtype) != "uint8":
+    if not jt.core._is_tensor_carrier(state) or dtype_name(state.dtype) != "uint8":
         raise TypeError("CUDA RNG state must be a CPU ByteTensor")
     if len(state.shape) != 1 or state.device.type != "cpu":
         raise TypeError("CUDA RNG state must be a one-dimensional CPU ByteTensor")

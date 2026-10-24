@@ -1,6 +1,7 @@
 from ._code import code_with_attributes
 from ._attributes import attribute_program, code_program, runner_for_alias
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
+from jittor._runtime.dispatch import dispatch_context
 import os
 from jittor_utils import env_or_try_find
 import jittor_utils
@@ -23,14 +24,25 @@ getitem_forward = getitem_cmd
 _slice_zero_cache = OrderedDict()
 
 
-def _cached_slice_zero(shape, dtype):
-    device_id = int(getattr(jt.flags, "device_id", -1))
-    key = (device_id, tuple(shape), _jittor_dtype_name(dtype))
+def _cached_slice_zero(shape, dtype, x):
+    placement = dispatch_context(x)
+    if placement.backend not in ("acl", "acl_legacy") or placement.device_id < 0:
+        raise ValueError("ACL slice zero requires an input on an actual ACL device")
+    key = (("acl", placement.device_id), tuple(shape), _jittor_dtype_name(dtype))
     value = _slice_zero_cache.get(key)
     if value is not None:
         _slice_zero_cache.move_to_end(key)
         return value
-    value = jt.zeros(shape, dtype=dtype).stop_grad()
+    # This is a backend-internal CodeOp operand, not a public *_like factory
+    # default. A caller's tensor_frontend CPU placement must not win over x's
+    # actual ACL placement here. BackendId::Acl is 2 (runtime/backend.h).
+    # Override only this graph-construction scope and restore even on failure;
+    # do not change runtime flags, default factories, or caller frontend type.
+    token = jt.core._set_tensor_placement(2, placement.device_id)
+    try:
+        value = jt.zeros(shape, dtype=dtype).stop_grad()
+    finally:
+        jt.core._reset_tensor_placement(token)
     _slice_zero_cache[key] = value
     if len(_slice_zero_cache) > 32:
         _slice_zero_cache.popitem(last=False)
@@ -91,7 +103,7 @@ def basic_slice_acl(x, slices):
     program, output_shape, fill_shapes = entry
     inputs = [x]
     for fill_shape in fill_shapes:
-        inputs.append(_cached_slice_zero(fill_shape, x.dtype))
+        inputs.append(_cached_slice_zero(fill_shape, x.dtype, x))
     return acl_emit(program, inputs, [x.dtype], [output_shape])[0]
 
 

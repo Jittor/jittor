@@ -515,6 +515,8 @@ class TestTorchCompatStructure(unittest.TestCase):
             [
                 "optional.torchmetrics",
                 "optional.transformers",
+                "optional.tensordict_nested",
+                "optional.verl_nested",
                 "optional.tensordict",
                 "optional.safetensors",
                 "optional.flash-attn",

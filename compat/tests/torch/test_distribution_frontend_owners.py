@@ -105,3 +105,13 @@ def test_adapter_state_is_per_frontend_and_native_classes_are_untouched():
     assert type(left.mean) is TensorA and type(right.mean) is TensorB
     assert isinstance(left, first.adapt(Base)) and not isinstance(left, second.adapt(Base))
     assert vars(Normal) == before
+
+
+def test_constraint_module_keeps_moduletype_subclass_attributes():
+    torch = compatibility_owner(jt)
+    constraints = torch.distributions.constraints
+
+    assert constraints.real is jt.distributions.constraints.real
+    assert constraints.positive is jt.distributions.constraints.positive
+    assert callable(constraints.dependent_property)
+    assert constraints.interval(1, 3).check(2)

@@ -1,9 +1,34 @@
 """A failed ACL graph must not mask scope errors or corrupt device policy."""
 
+import threading
+
 import pytest
 
 from _helpers.capability import require_accelerator
 from _helpers.child_process import run_child_script
+
+
+def test_set_device_establishes_context_on_a_fresh_host_thread():
+    require_accelerator("acl")
+    import jittor as jt
+
+    seen = {}
+
+    def worker():
+        try:
+            jt.set_device(0)
+            value = jt.array([2.0, 3.0]) + 1.0
+            value.sync()
+            seen["device"] = jt.current_device()
+            seen["value"] = value.numpy().tolist()
+        except BaseException as error:
+            seen["error"] = repr(error)
+
+    thread = threading.Thread(target=worker, name="fresh-acl-context")
+    thread.start()
+    thread.join()
+    assert "error" not in seen, seen
+    assert seen == {"device": 0, "value": [3.0, 4.0]}, seen
 
 
 @pytest.mark.parametrize("boundary", ["body", "sync", "exit"])

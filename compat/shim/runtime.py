@@ -230,7 +230,7 @@ def _activate_once(
     prepared = _preflight_result
     if not bool(getattr(prepared, "active", False)):
         prepared = prepare_import_environment(
-            project_root=project_root or pathlib.Path.cwd(),
+            project_root=project_root,
             runtime_root=runtime_root,
             force=True,
             local_home=local_home,

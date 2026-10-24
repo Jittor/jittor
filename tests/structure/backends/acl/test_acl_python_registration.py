@@ -195,6 +195,19 @@ def test_acl_matrix_transpose_flags_reach_the_shared_provider(providers):
     assert providers.calls[0] == ("MatmulACL", "construct", (True,), {})
 
 
+def test_acl_matmul_declines_mixed_or_non_float_pairs_before_provider(providers):
+    providers.install.install()
+    fp32 = _Tensor((2, 4), "float32")
+    fp16 = _Tensor((2, 4), "float16")
+    integer = _Tensor((2, 4), "int32")
+
+    assert providers.dispatch.select_kernel("matmul", fp32, fp32, False, False) \
+        is providers.neural.matmul_acl
+    assert providers.dispatch.select_kernel("matmul", fp16, fp32, False, False) is None
+    assert providers.dispatch.select_kernel("batched_matmul", fp32, fp16, False, False) is None
+    assert providers.dispatch.select_kernel("matmul", integer, integer, False, False) is None
+
+
 @pytest.mark.parametrize(
     "dtype,dilation,return_indices,op",
     [

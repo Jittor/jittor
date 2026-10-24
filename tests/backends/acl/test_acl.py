@@ -515,6 +515,35 @@ class TestACL(unittest.TestCase):
         self.assertEqual(str(max_val.dtype), "int32")
         self.assertEqual(str(long_val.dtype), "int64")
         self.assertEqual(jt.core.backend_fallback_count(), before)
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_mapped_matmul_casts_float32_cotangent_for_float16_backward(self):
+        class Float32Cotangent(jt.Function):
+            def execute(self, value):
+                return value
+
+            def grad(self, grad_output):
+                return grad_output.float32()
+
+        a_np = np.arange(12, dtype=np.float16).reshape(3, 4) / 10
+        b_np = np.arange(20, dtype=np.float16).reshape(4, 5) / 10
+        a = jt.array(a_np)
+        b = jt.array(b_np)
+        product = jt.matmul(a, b)
+        loss = Float32Cotangent.apply(product).sum()
+        grad_a, grad_b = jt.grad(loss, [a, b])
+        actual = _fetch_acl(self, [product, grad_a, grad_b])
+
+        np.testing.assert_allclose(
+            actual[0], a_np @ b_np, rtol=2e-3, atol=2e-3
+        )
+        np.testing.assert_allclose(
+            actual[1], np.ones((3, 5), dtype=np.float16) @ b_np.T,
+            rtol=2e-3, atol=2e-3,
+        )
+        np.testing.assert_allclose(
+            actual[2], a_np.T @ np.ones((3, 5), dtype=np.float16),
+            rtol=2e-3, atol=2e-3,
+        )
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_float_arg_reduce_runs_on_acl(self):
@@ -607,6 +636,69 @@ class TestACL(unittest.TestCase):
         actual = source.gather(1, index).numpy()
 
         np.testing.assert_array_equal(actual, [[3], [4]])
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_gather_backward_restores_input_shape_and_accumulates(self):
+        from jittor._runtime.fallback import forbid_backend_fallbacks
+
+        cases = (
+            ((2, 3, 7), -1, (2, 3, 1)),
+            ((2, 3, 7), 2, (2, 3, 3)),
+            ((2, 3, 7), 1, (1, 2, 4)),
+            ((3, 4), 0, (2, 3)),
+            ((1, 31, 151936), -1, (1, 31, 1)),
+        )
+        for dtype in ("float32", "bfloat16"):
+            for source_shape, dim, index_shape in cases:
+                with self.subTest(dtype=dtype, shape=source_shape, dim=dim,
+                                  index_shape=index_shape):
+                    axis = dim % len(source_shape)
+                    # Every selected position on an axis points to its last
+                    # source element: index width > 1 deliberately collides.
+                    index_np = np.full(index_shape, source_shape[axis] - 1,
+                                       dtype=np.int64)
+                    weights = ((np.arange(np.prod(index_shape)) % 5) - 2
+                               ).reshape(index_shape).astype(np.float32)
+                    expected = np.zeros(source_shape, dtype=np.float32)
+                    for coordinate in np.ndindex(index_shape):
+                        destination = list(coordinate)
+                        destination[axis] = int(index_np[coordinate])
+                        expected[tuple(destination)] += weights[coordinate]
+                    before = jt.core.backend_fallback_count()
+                    with forbid_backend_fallbacks():
+                        source = jt.ones(source_shape, dtype=dtype)
+                        output = source.gather(dim, jt.array(index_np))
+                        gradient = jt.grad(
+                            (output * jt.array(weights).cast(dtype)).sum(), source)
+                        self.assertEqual(tuple(gradient.shape), source_shape)
+                        actual, actual_grad = _fetch_acl(
+                            self, [output, gradient], as_float=True)
+                    np.testing.assert_array_equal(actual, np.ones(index_shape))
+                    np.testing.assert_array_equal(actual_grad, expected)
+                    self.assertEqual(jt.core.backend_fallback_count(), before)
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_truth_reductions_preserve_keepdims_and_dispatch_signature(self):
+        from jittor._runtime.fallback import forbid_backend_fallbacks
+
+        values = np.array([[[0, 1, -2], [0, 0, 0]],
+                           [[1, 1, 1], [0, 2, 0]]], dtype=np.float32)
+        for dtype in ("bool", "float32"):
+            for name in ("any", "all"):
+                for dim in (None, 0, -1, (0, 2), ()):
+                    for keepdims in (False, True):
+                        with self.subTest(dtype=dtype, name=name, dim=dim, keepdims=keepdims):
+                            before = jt.core.backend_fallback_count()
+                            with forbid_backend_fallbacks():
+                                source = jt.array(values).cast(dtype)
+                                output = getattr(jt, name)(source, dim, keepdims=keepdims)
+                                self.assertEqual(str(output.dtype), "bool")
+                                actual = _fetch_acl(self, [output])[0]
+                            expected = getattr(np, name)(
+                                values, axis=None if dim in (None, ()) else dim,
+                                keepdims=keepdims)
+                            np.testing.assert_array_equal(actual, np.atleast_1d(expected))
+                            self.assertEqual(jt.core.backend_fallback_count(), before)
 
     @jt.flag_scope(use_acl=1)
     def test_array(self):

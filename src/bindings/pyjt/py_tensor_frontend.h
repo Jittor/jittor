@@ -7,6 +7,22 @@
 
 namespace jittor {
 
+struct VarHolder;
+// Private native definition owner. No Python arbitrary-root registration API.
+EXTERN_LIB void record_varholder_binding_definitions(const PyType_Slot* slots, size_t count);
+EXTERN_LIB bool is_varholder_carrier_type(PyTypeObject* type);
+EXTERN_LIB bool is_varholder_carrier(PyObject* object);
+// Genuine initialized native holders; no name, marker or Python isinstance hook.
+// @pyjt(_is_tensor_carrier)
+inline bool is_tensor_carrier(PyObject* object) {
+    return is_varholder_carrier(object);
+}
+EXTERN_LIB bool is_owned_tensor_carrier_type(PyTypeObject* type);
+EXTERN_LIB PyObject* wrap_owned_tensor_carrier(VarHolder* holder, PyTypeObject* type);
+// Creates an inactive native holder root. Does NOT install compat Tensor.
+// @pyjt(_create_owned_tensor_base_type)
+PyObject* create_owned_tensor_base_type();
+
 // Returns a new reference; absent an explicit frontend, this is native Var.
 EXTERN_LIB PyObject* current_tensor_frontend_type();
 

@@ -248,7 +248,11 @@ def _broadcast_state(state, options):
 def set_model_state_dict(model, state_dict, *, options=None):
     options = _options(options)
     model = _unwrapped_model(model)
-    state = _broadcast_state(state_dict, options)
+    provider = _fsdp(model)
+    full_provider = provider is not None and options.full_state_dict
+    # The FSDP owner validates the complete options and transports FULL
+    # tensors. Ordinary modules retain the coordinator's broadcast contract.
+    state = state_dict if full_provider else _broadcast_state(state_dict, options)
     if state and all(isinstance(key, _torch().nn.Module) for key in state):
         modules = {id(module): name for name, module in model.named_modules()}
         expanded = {}
@@ -258,10 +262,9 @@ def set_model_state_dict(model, state_dict, *, options=None):
                 expanded.update(((prefix + "." if prefix else "") + name, value)
                                 for name, value in values.items())
         state = expanded
-    provider = _fsdp(model)
-    if provider is not None and options.full_state_dict:
-        provider._load_full_state_dict(model, state, strict=options.strict)
-        return None
+    if full_provider:
+        return provider._load_full_state_dict(
+            model, state, strict=options.strict, options=options)
     loader = model.load_state_dict
     if getattr(loader, "__func__", None) is jt.Module.load_state_dict:
         # Native Module lacks Torch's strict/copying contract. Use the

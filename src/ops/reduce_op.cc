@@ -9,6 +9,7 @@
 #include "core/var.h"
 #include "ops/reduce_op.h"
 #include "ops/op_register.h"
+#include "ops/composite/op_capability.h"
 #include "core/executor.h"
 #include "runtime/backend.h"
 #include "runtime/device.h"
@@ -23,6 +24,24 @@ static auto make_reduce = op_constructor<VarPtr, Var*, NanoString, NanoVector, b
 static auto make_reduce2 = op_constructor<VarPtr, Var*, NanoString, uint, uint>("reduce");
 static auto make_ternary = op_constructor<VarPtr, Var*, Var*, Var*>("ternary");
 static auto make_number = op_constructor<VarPtr, float, Var*>("number");
+
+// Native reductions created by autograd must share the same backend route
+// as explicit sums. Inverse broadcasting constructs ReduceOp in C++, so a
+// Python Var.sum wrapper alone cannot enforce its rounded reduction order.
+static VarPtr try_ordered_sum(Var* x, NanoString op, uint mask, uint keep) {
+    #ifdef HAS_ACCELERATOR
+    if (op == ns_add) {
+        keep &= mask;  // Generic ReduceOp ignores keep bits on unreduced axes.
+        const auto backend = construction_target_backend(x);
+        if (backend != BackendId::Cpu) {
+            auto construct = find_op_capability<VarPtr, Var*, uint, uint>(
+                backend, OpCapability::OrderedSum, x, mask, keep);
+            if (construct) return construct(x, mask, keep);
+        }
+    }
+    #endif
+    return nullptr;
+}
 
 unordered_set<string> reduce_ops = {
     /**
@@ -294,6 +313,10 @@ ReduceOp::ReduceOp(Var* x, NanoString op, NanoVector dims, bool keepdims)
             reduce_mask |= 1u<<dim;
         }
     }
+    if (auto ordered = try_ordered_sum(x, ns, reduce_mask, this->keepdims_mask)) {
+        forward(ordered);
+        return;
+    }
     // if (x->dtype() == ns_bool && ns == ns_add)
     if (x->dtype() == ns_bool)
         y = create_output(nullptr, ns_int32);
@@ -339,6 +362,10 @@ ReduceOp::ReduceOp(Var* x, NanoString op, uint dims_mask, uint keepdims_mask)
             "(bitwise and shift reductions are not defined for floating-point or complex types).";
     reduce_mask = dims_mask;
     this->keepdims_mask = keepdims_mask;
+    if (auto ordered = try_ordered_sum(x, ns, reduce_mask, this->keepdims_mask)) {
+        forward(ordered);
+        return;
+    }
     y = create_output(nullptr, reduce_dtype_infer(ns, x->ns, policy.preserve_reduction_dtype));
 }
 

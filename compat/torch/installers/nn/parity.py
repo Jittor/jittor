@@ -26,17 +26,8 @@ def install_parity(ctx):
 
 
     conv = registry.ensure("torch.nn.modules.conv")
-    conv._ConvNd = getattr(
-        conv,
-        "_ConvNd",
-        abc_base(
-            "_ConvNd",
-            getattr(nn, "Conv", None),
-            getattr(nn, "Conv1d", None),
-            getattr(nn, "Conv2d", None),
-            getattr(nn, "Conv3d", None),
-        ),
-    )
+    # An actual shared initialization base, not an ABC virtual registration.
+    conv._ConvNd = ctx.state["nn_frontend_owner"].ConvNd
     conv._ConvTransposeNd = getattr(
         conv,
         "_ConvTransposeNd",

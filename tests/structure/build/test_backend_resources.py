@@ -69,6 +69,15 @@ def test_cuda_library_inventory_includes_cutt_support_sources(resolver):
     assert len(files) == len(set(files))
 
 
+def test_backend_python_modules_live_in_distributable_packages():
+    missing = sorted(
+        str(path.relative_to(ROOT))
+        for path in (ROOT / "backends").rglob("*.py")
+        if not (path.parent / "__init__.py").is_file()
+    )
+    assert missing == []
+
+
 def test_source_bridge_resolves_canonical_kernel_modules_without_bootstrap():
     with patch.dict(sys.modules):
         for name in tuple(sys.modules):

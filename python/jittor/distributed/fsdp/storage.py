@@ -6,6 +6,7 @@ owns the actual partition, materialization and lifetime calculations.
 
 import jittor as jt
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
+from jittor._core.carrier_protocol import copy_native_tensor
 
 
 def _parameter_requires_grad(param):
@@ -18,7 +19,7 @@ def _parameter_requires_grad(param):
 
 def _materialize_initial_shard(shard):
     """Own only a rank-local copy, not the sliced full parameter storage."""
-    shard = jt.Var.copy(shard).stop_grad()
+    shard = copy_native_tensor(shard).stop_grad()
     shard.sync()
     return shard
 
@@ -197,6 +198,43 @@ def _unshard_module_params_impl(module, *, api):
     return module
 
 
+def _prepare_forward_inputs(state, args, kwargs):
+    policy = getattr(state, "mp_policy", None)
+    param_dtype = getattr(policy, "param_dtype", None)
+    if param_dtype is not None and getattr(policy, "cast_forward_inputs", True):
+        target = _jittor_dtype_name(param_dtype)
+        args = _cast_floating_tree(args, target)
+        kwargs = _cast_floating_tree(kwargs, target)
+    return args, kwargs, policy
+
+
+def _finish_forward_output(module, state, args, kwargs, out, policy, *, api):
+    common = api.common
+    frozen_forward_synced = False
+    entries = getattr(state, "true_fsdp_params", ())
+    output_dtype = getattr(policy, "output_dtype", None)
+    if output_dtype is not None:
+        out = _cast_floating_tree(out, _jittor_dtype_name(output_dtype))
+    module_parameters = getattr(module, "parameters", None)
+    has_trainable_module_param = bool(
+        module_parameters is not None
+        and any(param.requires_grad for param in module_parameters())
+    )
+    if (
+        entries
+        and not any(getattr(entry, "requires_grad", True) for entry in entries)
+        and not has_trainable_module_param
+        and getattr(state, "reshard_after_forward", True)
+    ):
+        if not common._primary_input_requires_grad(args, kwargs):
+            out = common._materialize_frozen_output(out)
+        roots = common._tensor_values(out)
+        if roots:
+            jt.submit_pending(*roots, device_sync=True)
+        frozen_forward_synced = True
+    return out, frozen_forward_synced
+
+
 def _execute_with_true_fsdp(module, orig_execute, *args, api, **kwargs):
     """Run one forward with this module's parameters unsharded.
 
@@ -234,36 +272,13 @@ def _execute_with_true_fsdp(module, orig_execute, *args, api, **kwargs):
     setattr(state, "true_fsdp_execute_depth", depth + 1)
     frozen_forward_synced = False
     try:
-        policy = getattr(state, "mp_policy", None)
-        param_dtype = getattr(policy, "param_dtype", None)
-        if param_dtype is not None and getattr(policy, "cast_forward_inputs", True):
-            target = _jittor_dtype_name(param_dtype)
-            args = _cast_floating_tree(args, target)
-            kwargs = _cast_floating_tree(kwargs, target)
+        args, kwargs, policy = _prepare_forward_inputs(state, args, kwargs)
         api._unshard_module_params(module)
         try:
             out = orig_execute(*args, **kwargs)
-            entries = getattr(state, "true_fsdp_params", ())
-            output_dtype = getattr(policy, "output_dtype", None)
-            if output_dtype is not None:
-                out = _cast_floating_tree(out, _jittor_dtype_name(output_dtype))
-            module_parameters = getattr(module, "parameters", None)
-            has_trainable_module_param = bool(
-                module_parameters is not None
-                and any(param.requires_grad for param in module_parameters())
+            out, frozen_forward_synced = _finish_forward_output(
+                module, state, args, kwargs, out, policy, api=api
             )
-            if (
-                entries
-                and not any(getattr(entry, "requires_grad", True) for entry in entries)
-                and not has_trainable_module_param
-                and getattr(state, "reshard_after_forward", True)
-            ):
-                if not common._primary_input_requires_grad(args, kwargs):
-                    out = common._materialize_frozen_output(out)
-                roots = common._tensor_values(out)
-                if roots:
-                    jt.submit_pending(*roots, device_sync=True)
-                frozen_forward_synced = True
             return out
         finally:
             if getattr(state, "reshard_after_forward", True):

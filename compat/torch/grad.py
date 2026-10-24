@@ -6,6 +6,7 @@ re-exported at the bottom of this module so every historical import path keeps
 resolving to the same objects.
 """
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
+from jittor._core.carrier_protocol import copy_native_tensor
 
 import numpy as np
 from typing import Any, Dict, List, cast
@@ -94,7 +95,7 @@ def _get_total_norm_device(grads, norm_type=2.0, error_if_nonfinite=False,
     """
     import math as _math
 
-    grads = [g for g in grads if isinstance(g, jt.Var)]
+    grads = [g for g in grads if jt.core._is_tensor_carrier(g)]
     if not grads:
         return jt.array(0.0)
 
@@ -119,7 +120,7 @@ def _get_total_norm_device(grads, norm_type=2.0, error_if_nonfinite=False,
             total = values.sum()
         else:
             total = (values ** p).sum() ** (1 / p)
-        if error_if_nonfinite and not _math.isfinite(float(total.item())):
+        if error_if_nonfinite and not _math.isfinite(float(copy_native_tensor(total).item())):
             raise RuntimeError("The total norm for gradients is non-finite")
         return total
 
@@ -164,7 +165,10 @@ def _get_total_norm_device(grads, norm_type=2.0, error_if_nonfinite=False,
             total = _across((ax ** p).sum(), "sum") ** (1.0 / p)
 
     if error_if_nonfinite:
-        total_value = float(total.item())
+        # Native item() may migrate its Var to host storage. Inspect a scalar
+        # copy so the returned norm and the device clipping operand remain on
+        # their original backend, matching Torch's public device contract.
+        total_value = float(copy_native_tensor(total).item())
         if not _math.isfinite(total_value):
             raise RuntimeError(
                 "The total norm of order %s for gradients is non-finite, so it "
@@ -176,7 +180,7 @@ def _get_total_norm_device(grads, norm_type=2.0, error_if_nonfinite=False,
 
 def _clip_grads_with_norm_device(grads, max_norm, total_norm):
     """Scale gradient Vars using an already-computed total norm."""
-    grads = [g for g in grads if isinstance(g, jt.Var)]
+    grads = [g for g in grads if jt.core._is_tensor_carrier(g)]
     if not grads:
         return
 
@@ -190,8 +194,13 @@ def _clip_grads_with_norm_device(grads, max_norm, total_norm):
     # CUDA fmin-style minimum may select the finite operand for NaN. Torch
     # propagates a NaN total norm into every gradient when errors are disabled.
     coef = jt.ternary(jt.isnan(raw_coef), raw_coef, coef)
-    for g in grads:
-        g.update(g * coef.cast(_jittor_dtype_name(g.dtype)))
+    # Tensor.mul_ already owns ordered, device-resident writes through dense
+    # and strided storage aliases. update() rebinds the holder and can leave
+    # optimizer buckets or caller-held detached gradients reading old bytes.
+    from .installers.tensor.method_api import _api_mul
+    with jt.no_grad():
+        for g in grads:
+            _api_mul(g, coef.cast(_jittor_dtype_name(g.dtype)))
 
 
 def _clip_grad_norm_device(grads, max_norm, norm_type=2.0,
@@ -204,7 +213,7 @@ def _clip_grad_norm_device(grads, max_norm, norm_type=2.0,
     than the single flat reduction used here. The device coefficient removes
     the per-step D2H sync previously caused by ``total.item()``.
     """
-    grads = [g for g in grads if isinstance(g, jt.Var)]
+    grads = [g for g in grads if jt.core._is_tensor_carrier(g)]
     total = _get_total_norm_device(grads, norm_type, error_if_nonfinite,
                                    shard_reduce=shard_reduce)
     _clip_grads_with_norm_device(grads, max_norm, total)

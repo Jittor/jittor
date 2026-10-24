@@ -15,6 +15,9 @@ def eye(n, m=None, dtype=None, device=None, requires_grad=False, **kwargs):
     from . import (
         _dtype_to_str,
     )
+    from ...types import _validate_layout
+    if "layout" in kwargs:
+        _validate_layout(kwargs["layout"])
     shape = (int(n), int(n)) if m is None else (int(n), int(m))
     import jittor as jt
     import jittor.init as _init

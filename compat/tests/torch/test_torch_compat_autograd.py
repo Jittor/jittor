@@ -53,6 +53,67 @@ class Base(unittest.TestCase):
         np.testing.assert_allclose(g, r, atol=atol, rtol=rtol, err_msg=msg)
 
 
+class TestScalarReadbackPlacement(Base):
+    def _placement(self, tensor, device):
+        tensor.sync()
+        backend, ordinal = jt.core.dispatch_context([tensor])
+        self.assertEqual(backend, device)
+        self.assertEqual(tensor.location(), "device" if device == "cuda" else "cpu")
+        if device == "cuda":
+            self.assertEqual(tensor.device_id, ordinal)
+        return backend, ordinal, tensor.location()
+
+    def _scalar_readback(self, device):
+        with jt.runtime.scope(use_cuda=int(device == "cuda"), backend_fallback="error"):
+            before = jt.core.backend_fallback_count()
+            for mode in ("direct", "detached", "slice", "parameter", "scalar_parameter"):
+                with self.subTest(device=device, mode=mode):
+                    raw = [3.] if mode == "scalar_parameter" else [1., -2., 3.]
+                    source = torch.tensor(raw, device=device, requires_grad=True)
+                    if mode in ("parameter", "scalar_parameter"):
+                        source = torch.nn.Parameter(source)
+                    loss = (source * source).sum()
+                    target = loss if mode == "direct" else (source if mode == "scalar_parameter" else (source[2] if mode == "slice" else loss.detach()))
+                    tensors = (source, loss, target)
+                    placements = [self._placement(tensor, device) for tensor in tensors]
+                    self.assertEqual(target.item(), 3. if mode in ("slice", "scalar_parameter") else 14.)
+                    self.assertEqual([self._placement(tensor, device) for tensor in tensors], placements)
+                    loss.backward()
+                    self.assertIsNotNone(source.grad)
+                    self._placement(source.grad, device)
+                    actual = source.grad.detach().cpu().numpy()
+                    self.assertTrue(np.array_equal(actual, 2 * np.array(raw, dtype=np.float32)),
+                                    "scalar readback changed the complete gradient")
+            for dtype, values, expected, expected_type in (
+                    (torch.int64, [2, 3], 3, int), (torch.bool, [False, True], True, bool)):
+                with self.subTest(device=device, dtype=str(dtype)):
+                    source = torch.tensor(values, dtype=dtype, device=device)
+                    target = source[1]
+                    placements = [self._placement(t, device) for t in (source, target)]
+                    result = target.item()
+                    self.assertEqual(result, expected)
+                    self.assertIs(type(result), expected_type)
+                    self.assertEqual([self._placement(t, device) for t in (source, target)], placements)
+            self.assertEqual(jt.core.backend_fallback_count(), before)
+
+    def test_scalar_item_cpu_preserves_storage_and_gradient(self):
+        self._scalar_readback("cpu")
+
+    def test_scalar_item_cuda_preserves_storage_and_gradient(self):
+        if not _test_capability.check_accelerator("cuda", backend=jt).enabled:
+            self.skipTest("CUDA scalar readback requires an available CUDA backend")
+        self._scalar_readback("cuda")
+
+    def test_scalar_item_rejects_empty_and_multiple_elements(self):
+        with jt.runtime.scope(use_cuda=0):
+            for count in (0, 2):
+                expected_error = (
+                    r"item\(\) needs a Var with exactly one element, "
+                    rf"but this one has {count} \(shape \[{count},\]\)")
+                with self.subTest(count=count), self.assertRaisesRegex(RuntimeError, expected_error):
+                    torch.empty(count, device="cpu").item()
+
+
 class TestCustomFunctionCompatibility(Base):
     def test_native_function_skips_torch_context_recording(self):
 

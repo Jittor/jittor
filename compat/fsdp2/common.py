@@ -7,7 +7,8 @@ from functools import wraps
 import jittor as jt
 # Device-local factories and shape calculations are shared with native FSDP.
 from jittor.distributed.fsdp.common import (  # noqa: F401 -- internal reexports
-    StateRecord, _flatten_var, _ceil_div, _pad_flat, _zeros_like_shape,
+    StateRecord, _flatten_var, _ceil_div, _pad_flat as _native_pad_flat,
+    _zeros_like_shape as _native_zeros_like_shape, _factory_scope_like,
     _param_numel, _value_requires_grad, _primary_input_requires_grad,
     _materialize_frozen_output, _tensor_values,
 )
@@ -22,11 +23,23 @@ from ..collectives import (          # noqa: F401
     _all_gather_shards as _world_all_gather_shards,
     _in_true_distributed,
     _nccl_ops,
+    _hccl_collective,
     _rank,
     _reduce_scatter_padded as _world_reduce_scatter_padded,
     _slice_flat,
     _world_size,
 )
+
+
+def _pad_flat(flat, padded_numel):
+    with _factory_scope_like(flat, override=True):
+        return _native_pad_flat(flat, padded_numel)
+
+
+def _zeros_like_shape(reference, shape, dtype=None):
+    with _factory_scope_like(reference, override=True):
+        return _native_zeros_like_shape(reference, shape, dtype=dtype)
+
 
 def _frontend_scope(state):
     tensor_type = getattr(state, "frontend_type", None)
@@ -66,11 +79,55 @@ def _reduce_scatter_padded(value, group=None):
         raise RuntimeError("FSDP collective called by a nonmember")
     if group.size() == 1:
         return value
-    if group._get_backend_name() == "nccl":
+    backend = group._get_backend_name()
+    if backend == "nccl":
         return _nccl_ops().nccl_reduce_scatter(value, group._backend_handle)
+    if backend == "hccl":
+        ops = getattr(jt.compile_extern, "hccl_ops", None)
+        reduce_scatter = getattr(ops, "hccl_reduce_scatter", None)
+        if not callable(reduce_scatter):
+            raise RuntimeError(
+                "Jittor HCCL reduce_scatter is not available for FSDP2")
+        return _hccl_collective(reduce_scatter, value, group._backend_handle)
     reduced = group._all_reduce(value, "sum")
-    size = int(reduced.shape[0]) // group.size()
-    return _slice_flat(reduced, group.rank() * size, size)
+    return _partition_reduced_shard(reduced, group.rank(), group.size())
+
+
+def _partition_reduced_shard(reduced, rank, world_size):
+    """Publish one equal shard after an all-reduce fallback.
+
+    CANN 9 ``SliceV2`` can infer a tail slice one element short for very large
+    odd-half boundaries (for example 269820162 split into two 134910081
+    shards).  The tensor was padded to an exact multiple before this helper,
+    so ACL's native SplitWithSize expresses the partition directly and avoids
+    that backend shape-inference defect.  A reduce-scatter result is detached
+    optimizer storage, hence the inference-only ACL split has the right
+    autograd semantics here.
+    """
+    rank, world_size = int(rank), int(world_size)
+    if world_size <= 0 or rank < 0 or rank >= world_size:
+        raise RuntimeError(
+            "invalid reduce-scatter partition rank %s of %s" %
+            (rank, world_size)
+        )
+    total = int(reduced.shape[0])
+    if total % world_size:
+        raise RuntimeError(
+            "reduce-scatter input length %s is not divisible by world size %s" %
+            (total, world_size)
+        )
+    shard_size = total // world_size
+    backend, _device_id = jt.core.dispatch_context([reduced])
+    if backend in ("acl", "acl_legacy"):
+        # Anchor the collective before attaching an inference-only split.
+        # Otherwise Jittor's lazy graph placer may inherit the split's host
+        # execution context backwards and try to schedule hccl_all_reduce on
+        # CPU, for which (correctly) no kernel exists.
+        reduced.sync()
+        with jt.flag_scope(no_grad=1):
+            return jt.split(
+                reduced, [shard_size] * world_size, dim=0)[rank]
+    return _slice_flat(reduced, rank * shard_size, shard_size)
 
 def _prod(xs):
     out = 1
@@ -89,13 +146,13 @@ def _full_gradient_from_shard(gradient, state, entry):
             getattr(current.shard, "_torch_grad", None)
             for current in state.true_fsdp_params
         ]
-        if any(isinstance(value, jt.Var) for value in stored):
+        if any(jt.core._is_tensor_carrier(value) for value in stored):
             parts = []
             real_numel = 0
             for current, value in zip(state.true_fsdp_params, stored):
                 if current is entry:
                     value = gradient
-                if not isinstance(value, jt.Var):
+                if not jt.core._is_tensor_carrier(value):
                     value = jt.zeros_like(current.shard)
                 part_numel = _param_numel(value)
                 if part_numel:

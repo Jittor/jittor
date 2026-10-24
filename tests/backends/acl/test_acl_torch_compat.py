@@ -232,6 +232,35 @@ class TestACLTorchCompat(unittest.TestCase):
         self.assertFalse(np.array_equal(after, before))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_single_rank_fsdp_adamw_realigns_state_after_npu_move(self):
+        from jittor.compat import fsdp2
+
+        # verl can construct the optimizer while the module is still on its
+        # loading placement, then move/wrap the parameters for FSDP.  The FSDP
+        # optimizer adapter bypasses native pre_step(), so it must perform the
+        # same state-buffer placement repair itself.
+        model = torch.nn.Linear(4, 2)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        model.to("npu")
+        fsdp2.fully_shard(model)
+
+        before = model.weight.detach().clone()
+        loss = model(torch.ones((2, 4), device="npu")).square().mean()
+        loss.backward()
+        optimizer.step()
+        jt.sync_all(True)
+
+        self.assertEqual(model.weight.placement_backend, 2)
+        self.assertEqual(model.weight.location(), "device")
+        self.assertTrue(np.isfinite(model.weight.detach().cpu().numpy()).all())
+        self.assertFalse(torch.equal(model.weight.detach().cpu(), before.cpu()))
+        for state in optimizer.state.values():
+            for value in state.values():
+                if isinstance(value, jt.Var):
+                    self.assertEqual(value.placement_backend, 2)
+                    self.assertEqual(value.location(), "device")
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_standard_rms_norm_bfloat16_matches_pytorch_order(self):
         class FixtureRMSNorm(torch.nn.Module):
             def __init__(self, weight):
@@ -454,13 +483,30 @@ class TestACLTorchCompat(unittest.TestCase):
         np.testing.assert_array_equal(values[1], expected)
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_roll_int64_tokens_stays_on_acl(self):
+        from jittor._runtime.fallback import forbid_backend_fallbacks
+
+        raw = np.arange(24, dtype=np.int64).reshape(2, 3, 4) + 2**40
+        before = jt.core.backend_fallback_count()
+        with forbid_backend_fallbacks():
+            source = torch.tensor(raw, device="npu", dtype=torch.int64)
+            for shifts, dims in ((-1, 0), (3, -1), ((-2, 5), (0, 2)), (7, None)):
+                with self.subTest(shifts=shifts, dims=dims):
+                    output = torch.roll(source, shifts=shifts, dims=dims)
+                    self.assertEqual(output.dtype, torch.int64)
+                    _assert_acl_device(self, output)
+                    np.testing.assert_array_equal(output.detach().cpu().numpy(),
+                                                  np.roll(raw, shifts, axis=dims))
+            self.assertEqual(jt.core.backend_fallback_count(), before)
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_roll_bfloat16_forward_backward_stays_on_acl(self):
         rng = np.random.RandomState(20260901)
         source_np = _bfloat16_round(rng.randn(2, 3, 8).astype("float32"))
         cotangent_np = _bfloat16_round(rng.randn(2, 3, 8).astype("float32"))
         source = torch.tensor(
-            source_np, dtype=torch.bfloat16).requires_grad_(True)
-        cotangent = torch.tensor(cotangent_np, dtype=torch.bfloat16)
+            source_np, dtype=torch.bfloat16, device="npu").requires_grad_(True)
+        cotangent = torch.tensor(cotangent_np, dtype=torch.bfloat16, device="npu")
 
         output = torch.roll(source, shifts=4, dims=-1)
         flat = torch.roll(source, shifts=5)
@@ -746,6 +792,87 @@ class TestACLTorchCompat(unittest.TestCase):
                 actual, expected, rtol=3e-4, atol=3e-4
             )
 
+    @jt.flag_scope(use_acl=1, use_cuda=1, backend_fallback="error")
+    def test_conv3d_forward_backward_stays_on_acl(self):
+        rng = np.random.RandomState(20260929)
+        source_np = rng.randn(2, 3, 3, 5, 5).astype("float32")
+        weight_np = rng.randn(4, 3, 2, 3, 3).astype("float32")
+        loss_weight_np = rng.randn(2, 4, 2, 5, 5).astype("float32")
+
+        source = torch.tensor(source_np)
+        weight = torch.tensor(weight_np)
+        source.requires_grad_(True)
+        weight.requires_grad_(True)
+        output = torch.nn.functional.conv3d(source, weight, padding=(0, 1, 1))
+        gradients = torch.autograd.grad(
+            (output * torch.tensor(loss_weight_np)).sum(),
+            (source, weight),
+        )
+        candidate = jt.fetch_sync([output] + list(gradients))
+
+        with jt.flag_scope(use_acl=0, use_cuda=0):
+            reference_source = torch.tensor(source_np)
+            reference_weight = torch.tensor(weight_np)
+            reference_source.requires_grad_(True)
+            reference_weight.requires_grad_(True)
+            reference_output = torch.nn.functional.conv3d(
+                reference_source, reference_weight, padding=(0, 1, 1)
+            )
+            reference_gradients = torch.autograd.grad(
+                (reference_output * torch.tensor(loss_weight_np)).sum(),
+                (reference_source, reference_weight),
+            )
+            reference = jt.fetch_sync(
+                [reference_output] + list(reference_gradients)
+            )
+
+        for actual, expected in zip(candidate, reference):
+            np.testing.assert_allclose(
+                actual, expected, rtol=4e-4, atol=4e-4
+            )
+
+    @jt.flag_scope(use_acl=1, use_cuda=1, backend_fallback="error")
+    def test_no_grad_linear_does_not_enter_cuda_lt_fast_path(self):
+        """The Qwen3.5 visual QKV shape remains an ACL matmul plus bias.
+
+        ACL deliberately shares the legacy ``use_cuda`` runtime switch.  A
+        CUDA-only optimisation must therefore identify the compiled provider,
+        not that compatibility flag; otherwise this exact no-grad Linear
+        becomes an unmarked CUDA CodeOp on NPU.
+        """
+        rng = np.random.RandomState(20260930)
+        source_np = (rng.randn(16, 768) * 0.02).astype("float16")
+        weight_np = (rng.randn(2304, 768) * 0.02).astype("float32")
+        bias_np = (rng.randn(2304) * 0.02).astype("float32")
+
+        source = torch.tensor(source_np, device="npu")
+        weight = torch.tensor(weight_np, device="npu")
+        bias = torch.tensor(bias_np, device="npu")
+        with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+            output = torch.nn.functional.linear(source, weight, bias)
+            candidate = _fetch_acl(self, [output], as_float=True)[0]
+
+        reference = (
+            source_np.astype("float32")
+            @ weight_np.astype("float16").astype("float32").T
+            + bias_np.astype("float16").astype("float32")
+        ).astype("float16").astype("float32")
+        np.testing.assert_allclose(candidate, reference, rtol=3e-3, atol=3e-3)
+
+    @jt.flag_scope(use_acl=1, use_cuda=1, backend_fallback="error")
+    def test_amp_extrema_casts_from_cann_required_output_dtype(self):
+        """Fused cast->amax/amin keeps the AMP-requested public dtype."""
+        values = np.array([1.5, -7.0, 3.25, 9.5, -2.0], dtype="float16")
+        for operation, expected in (("max", 9.5), ("min", -7.0)):
+            with self.subTest(operation=operation):
+                source = torch.tensor(values, device="npu")
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    widened = source.float()
+                    output = getattr(widened, operation)()
+                self.assertEqual(str(output.dtype), "torch.float16")
+                actual = _fetch_acl(self, [output], as_float=True)[0]
+                np.testing.assert_allclose(actual, expected, rtol=0, atol=0)
+
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_silu_forward_backward_stays_on_acl(self):
         source_np = np.array(
@@ -855,6 +982,44 @@ class TestACLTorchCompat(unittest.TestCase):
 
         for actual, expected in zip(candidate, reference):
             np.testing.assert_allclose(actual, expected, rtol=3e-5, atol=3e-5)
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_sdpa_float16_gqa_fallback_forward_backward_stays_on_acl(self):
+        rng = np.random.RandomState(20260929)
+        query_np = (rng.randn(2, 8, 12, 16) * 0.1).astype("float16")
+        key_np = (rng.randn(2, 2, 12, 16) * 0.1).astype("float16")
+        value_np = (rng.randn(2, 2, 12, 16) * 0.1).astype("float16")
+        inputs = [
+            torch.tensor(value, device="npu").requires_grad_(True)
+            for value in (query_np, key_np, value_np)
+        ]
+        output = torch.nn.functional.scaled_dot_product_attention(
+            *inputs, dropout_p=0.0, is_causal=True, enable_gqa=True
+        )
+        grads = torch.autograd.grad(output.float().sum(), inputs)
+        actual = _fetch_acl(self, [output] + list(grads), as_float=True)
+
+        repeated_key = np.repeat(key_np, 4, axis=1)
+        repeated_value = np.repeat(value_np, 4, axis=1)
+        with jt.flag_scope(use_acl=0, use_cuda=0):
+            reference_inputs = [
+                torch.tensor(value).requires_grad_(True)
+                for value in (query_np, repeated_key, repeated_value)
+            ]
+            reference_output = torch.nn.functional.scaled_dot_product_attention(
+                *reference_inputs, dropout_p=0.0, is_causal=True
+            )
+            reference_grads = torch.autograd.grad(
+                reference_output.float().sum(), reference_inputs
+            )
+            reference = jt.fetch_sync(
+                [reference_output.float(), reference_grads[0].float()]
+            )
+
+        np.testing.assert_allclose(actual[0], reference[0], rtol=3e-3, atol=3e-3)
+        np.testing.assert_allclose(actual[1], reference[1], rtol=3e-3, atol=3e-3)
+        self.assertTrue(np.isfinite(actual[2]).all())
+        self.assertTrue(np.isfinite(actual[3]).all())
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_sdpa_causal_and_additive_backward_stay_on_acl(self):
@@ -993,6 +1158,21 @@ class TestACLTorchCompat(unittest.TestCase):
         value = torch.tensor([1.0], dtype=torch.float32, device=device)
         joined = torch.cat((empty, value))
         np.testing.assert_array_equal(joined.cpu().numpy(), [1.0])
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_int64_count_with_float_epsilon_stays_float32_on_acl(self):
+        # verl's masked_mean computes mask.sum() + 1e-8.  PyTorch treats the
+        # Python float as a wrapped scalar and lifts an integral tensor to the
+        # default floating dtype, not to a same-width float64 tensor.  ACL has
+        # no float64 tensor arithmetic, so the wrong promotion also becomes a
+        # strict-backend failure before the quotient can be read back.
+        count = torch.tensor([1, 1], dtype=torch.int64).sum()
+        denominator = count + 1e-8
+        quotient = torch.tensor([0.0], dtype=torch.float32).sum() / denominator
+
+        self.assertEqual(denominator.dtype, torch.float32)
+        self.assertEqual(quotient.dtype, torch.float32)
+        self.assertEqual(quotient.item(), 0.0)
 
     def test_default_device_follows_execution_flag(self):
         with jt.flag_scope(use_acl=0, use_cuda=0):

@@ -87,7 +87,7 @@ API_PATHS = {
 }
 
 UNIMPLEMENTED_PATHS = {
-    "torch": ("ScriptModule", "SymBool", "SymFloat", "SymInt"),
+    "torch": ("ScriptModule", "SymBool", "SymFloat"),
     "torch.jit": ("ScriptModule",),
     "torch.types": ("Storage",),
     "torch.types.Storage": ("element_size", "_new_shared", "_write_file", "__deepcopy__"),

@@ -17,6 +17,11 @@ struct RandomOp : Op {
     static constexpr uint32 backend_mask = OpBackendAny;
     Var* output;
     NanoString type;
+    // CPU integer distribution parameters. This changes RandomOp's ABI;
+    // rebuild the core, generated wrappers, and JIT/extension consumers.
+    bool integer_random = false;
+    int64 integer_low = 0;
+    int64 integer_high = 0; // inclusive, unlike the public exclusive bound
     // Non-null: draws consume (and advance) THIS generator's own
     // independent, device-native RNG state instead of the process-global
     // one -- captured as a shared_ptr (not the raw RandomGenerator* passed
@@ -24,6 +29,9 @@ struct RandomOp : Op {
     // of the Python-side Generator wrapper's own lifetime.
     shared_ptr<RandomGeneratorState> gen;
     RandomOp(NanoVector shape, NanoString dtype=ns_float32, NanoString type=ns_uniform, RandomGenerator* generator=nullptr);
+
+    // @pybind(random_int64)
+    RandomOp(NanoVector shape, int64 low, int64 high, bool high_none, RandomGenerator* generator);
 
     const char* name() const override { return "random"; }
     DECLARE_jit_run;

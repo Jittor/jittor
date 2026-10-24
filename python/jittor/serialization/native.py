@@ -6,6 +6,25 @@ import pickle
 
 from jittor_core import Var
 
+def _rebuild_var(data, dtype):
+    """Rebuild native values without the ordinary factory's 64-bit narrowing.
+
+    Placement still follows the caller's native construction context. This is
+    not the Torch Tensor reducer and does not serialize an autograd graph.
+    """
+    from jittor._core.flags import flag_scope
+    with flag_scope(auto_convert_64_to_32=0):
+        return Var(data, dtype)
+
+
+def _reduce_var(value):
+    """Snapshot a separate host copy; never move the caller's Var to the host."""
+    from jittor._core.dtypes import dtype_name
+    dtype = dtype_name(value.dtype)
+    snapshot = value._copy_to_cpu().stop_grad()
+    return _rebuild_var, (snapshot.numpy(), dtype)
+
+
 def dfs_to_numpy(x):
     if isinstance(x, list):
         for i in range(len(x)):

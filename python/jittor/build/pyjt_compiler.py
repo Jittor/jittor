@@ -15,6 +15,51 @@ from typing import Any, Dict, List
 
 hash_to_key_map: Dict[int, str] = {}
 
+class _VarHolderBindingDefinitions:
+    """One codegen owner for VarHolder's existing binding definitions.
+
+    These are C++ source fragments, not Python descriptors or runtime types.
+    Native Var remains their only consumer; no new carrier is enabled here.
+    """
+
+    __slots__ = ("_methods", "_getsets", "_slots", "_lifetime")
+
+    def __init__(self, methods, getsets, slots, lifetime):
+        self._methods = tuple(methods)
+        self._getsets = tuple(getsets)
+        self._slots = tuple(slots)
+        self._lifetime = lifetime
+
+    def methods_source(self):
+        return ",".join(self._methods)
+
+    def getsets_source(self):
+        return ",".join(self._getsets)
+
+    def slots_source(self):
+        return "".join(self._slots)
+
+    def lifetime_source(self):
+        return self._lifetime
+
+    def native_owner_registration_source(self, slot_names):
+        """Register actual static C definitions, never a ready type/dictionary."""
+        entries = [
+            ("Py_tp_new", "tp.tp_new"), ("Py_tp_methods", "class_defs"),
+            ("Py_tp_getset", "class_getsets"), ("Py_tp_traverse", "tp.tp_traverse"),
+            ("Py_tp_clear", "tp.tp_clear"), ("Py_tp_free", "tp.tp_free"),
+        ]
+        for name in slot_names:
+            short = name.split("->")[-1]
+            entries.append(("Py_" + short, "tp." + name))
+        if len({key for key, value in entries}) != len(entries):
+            raise ValueError("duplicate native VarHolder type slot")
+        rows = "".join("{" + key + ", reinterpret_cast<void*>(" + value + ")},\n"
+                       for key, value in entries)
+        return ("static const PyType_Slot owned_varholder_definitions[] = {\n" + rows +
+                "{0, nullptr}};\nrecord_varholder_binding_definitions(owned_varholder_definitions, "
+                "sizeof(owned_varholder_definitions)/sizeof(owned_varholder_definitions[0]));")
+
 def parse_attrs(s):
     '''parse @attrs(..., x=y) syntax'''
     attrs: Dict[str, Any] = {}
@@ -695,6 +740,7 @@ def compile_src(src, h, basename):
     class_gets = OrderedDict()
     class_sets = OrderedDict()
     class_slots_code = []
+    class_slot_names = []
     submodule_defs_code = []
     def_targets: "OrderedDict[str, List[Dict[str, Any]]]" = OrderedDict()
     # A binding header may describe either a class or a submodule; the
@@ -1135,6 +1181,7 @@ def compile_src(src, h, basename):
             class_slots_code.append(f"""
             tp.{slot_name} = {func};
             """)
+            class_slot_names.append(slot_name)
             continue
         need_static = ""
         if df["is_scope_def"] and df["is_static"] and \
@@ -1221,6 +1268,11 @@ def compile_src(src, h, basename):
         }};
         tp.tp_free = PyObject_GC_Del;
         """
+    varholder_definitions = (
+        _VarHolderBindingDefinitions(
+            class_defs_code, class_getsets_code, class_slots_code, gc_type_code)
+        if class_name == "VarHolder" else None
+    )
     src_code = ""
     if include_name.endswith("var_slices.h"):
         src_code += '#include "core/var_holder.h"\n'
@@ -1249,10 +1301,10 @@ def compile_src(src, h, basename):
         {
         f'''
         static PyMethodDef class_defs[] = {{
-            {",".join(class_defs_code)}
+            {varholder_definitions.methods_source() if varholder_definitions is not None else ",".join(class_defs_code)}
         }};
         static PyGetSetDef class_getsets[] = {{
-            {",".join(class_getsets_code)}
+            {varholder_definitions.getsets_source() if varholder_definitions is not None else ",".join(class_getsets_code)}
         }};
 
         static PyNumberMethods number_methods = {{0}};
@@ -1274,13 +1326,13 @@ def compile_src(src, h, basename):
         tp.tp_new = PyType_GenericNew;
         tp.tp_flags = Py_TPFLAGS_DEFAULT;
         {"tp.tp_flags |= Py_TPFLAGS_BASETYPE;" if class_name == "VarHolder" else ""}
-        {gc_type_code}
+        {varholder_definitions.lifetime_source() if varholder_definitions is not None else gc_type_code}
         {"tp.tp_flags |= Py_TPFLAGS_HEAPTYPE; htp.ht_name = htp.ht_qualname = to_py_object<string>(tp.tp_name);"
         if "heaptype" in class_info["attrs"] else ""}
         tp.tp_methods = &class_defs[0];
         tp.tp_getset = &class_getsets[0];
-        {"".join(class_slots_code)};
-        ASSERT(0==PyType_Ready(&tp)) << (PyErr_Print(), 0);
+        {varholder_definitions.slots_source() if varholder_definitions is not None else "".join(class_slots_code)};
+        ASSERT(0==PyType_Ready(&tp)) << (PyErr_Print(), 0);{chr(10) + "        " + varholder_definitions.native_owner_registration_source(class_slot_names) if varholder_definitions is not None else ""}
         Py_INCREF(&tp);
         ASSERT(0==PyModule_AddObject(m, "{class_info["pynames"][0]}", (PyObject*)&tp));
         ''' if class_name is not None else ""

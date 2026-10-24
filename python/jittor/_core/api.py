@@ -111,6 +111,7 @@ from .function import (
     Function,
     GradHooker,
 )
+from .extrema import maximum, minimum
 
 from .diagnostics import (
     ExitHooks,
@@ -202,6 +203,8 @@ __all__ = (
     "log_capture_scope",
     "make_module",
     "masked_fill",
+    "maximum",
+    "minimum",
     "multiply_",
     "ne",
     "new_empty",

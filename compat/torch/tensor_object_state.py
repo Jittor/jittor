@@ -5,6 +5,7 @@ class TensorObjectState:
     __slots__ = (
         "grad", "data_owner", "data_path", "scalar_marker",
         "force_cpu", "force_cuda", "rms_norm_unit_weight", "retains_grad",
+        "nested_symbol_cache",
     )
 
     def __init__(self):
@@ -16,6 +17,7 @@ class TensorObjectState:
         self.force_cuda = False
         self.rms_norm_unit_weight = None
         self.retains_grad = False
+        self.nested_symbol_cache = None
 
 
 _FIELDS = (

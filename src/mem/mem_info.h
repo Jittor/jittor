@@ -94,4 +94,19 @@ int64 device_memory_window_start(int device);
 // @pyjt(_device_memory_window_peak)
 int64 device_memory_window_peak(int device);
 
+/// Driver-wide free/total bytes for the requested accelerator device.
+// @pyjt(device_memory_info)
+vector<int64> device_memory_info(int device);
+
+/// Allocated/reserved bytes and peaks across the SFRL/Temp allocator stack.
+// @pyjt(device_pool_memory_stats)
+vector<int64> device_pool_memory_stats(int device);
+// @pyjt(reset_device_memory_peaks)
+void reset_device_memory_peaks(int device);
+
+struct Allocator;
+void record_pool_memory(Allocator* pool);
+void forget_pool_memory(Allocator* pool);
+void mark_device_memory_stats_unsupported(int device);
+
 } // jittor

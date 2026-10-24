@@ -42,8 +42,7 @@ static void to_fetch(void* user_data) {
 
 struct Init {
 Init() {
-    if (!get_device_count()) return;
-    backend_stream({accelerator_backend_id(), 0}, BackendStreamKind::Copy);
+    // Create side streams only when a fetch actually uses the async path.
 }
 ~Init() {
     if (!get_device_count()) return;
@@ -124,8 +123,7 @@ void FetchOp::run() {
     uint64 src_devices = 0;
     int entry_device = current_device();
     int copy_device = 0;
-    auto copy_stream = backend_stream(
-        {accelerator_backend_id(), copy_device}, BackendStreamKind::Copy);
+    BackendStream copy_stream{};
     event_queue.flush();
     #endif
     LOGvvvv << "fetch" << fetch_vars.size() << "vars" << fetch_vars;
@@ -134,7 +132,21 @@ void FetchOp::run() {
         auto& allocation = allocations[i];
 
         #ifdef HAS_ACCELERATOR
-        if (v->allocator->is_cuda()) {
+        if (!v->size || allocation_device(v->allocator).backend == BackendId::Acl) {
+            // The legacy dual staging pool belongs to device zero. ACL has
+            // neither cross-device event waits nor peer copies, so routing a
+            // rank's snapshot through that pool is invalid. Use the canonical
+            // source-device D2H copy; it synchronizes the source compute stream
+            // before returning. This is an explicit synchronous host read, not
+            // a compute fallback, and never migrates or changes the live Var.
+            new (&allocation) Allocation(cpu_allocator, v->size);
+            if (v->size)
+                backend_copy(allocation.ptr, {}, v->mem_ptr,
+                    allocation_device(v->allocator), v->size);
+        } else if (v->allocator->is_cuda()) {
+            if (!has_device_copy)
+                copy_stream = backend_stream(
+                    {accelerator_backend_id(), copy_device}, BackendStreamKind::Copy);
             // The event that orders this fetch after the kernels that
             // produced v has to be recorded on v's *own* device: stream 0 is
             // whichever device is current, and an event of another device

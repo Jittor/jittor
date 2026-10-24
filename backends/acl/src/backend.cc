@@ -5,12 +5,14 @@
 #include "runtime/backend.h"
 #include "runtime/backend_streams.h"
 #include "runtime/device_state.h"
+#include "runtime/rng_state.h"
 #include "mem/allocator.h"
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <exception>
 #include <map>
 #include <memory>
@@ -770,6 +772,57 @@ void peer_access(int from, int to) {
 struct Finalizer { ~Finalizer() { shutdown_acl_backend(); } } finalizer;
 
 } // namespace
+
+// Compatibility spellings only. The core runtime owns every ACL stream,
+// serialization format, async barrier and state mutation.
+string acl_get_rng_state(int device) {
+    return rng_state("acl", device);
+}
+
+void acl_set_rng_state(int device, const string& blob) {
+    set_rng_state("acl", blob, device);
+}
+
+vector<string> acl_get_rng_state_all() {
+    return rng_states("acl");
+}
+
+void acl_set_rng_state_all(const vector<string>& blobs) {
+    set_rng_states("acl", blobs);
+}
+
+void acl_manual_seed(int device, int64 seed) {
+    if (seed < 0)
+        throw std::invalid_argument("NPU manual_seed supports 0..INT64_MAX only");
+    rng_manual_seed("acl", static_cast<uint64>(seed), device);
+}
+
+void acl_manual_seed_all(int64 seed) {
+    if (seed < 0)
+        throw std::invalid_argument("NPU manual_seed supports 0..INT64_MAX only");
+    rng_manual_seed_all("acl", static_cast<uint64>(seed));
+}
+
+int64 acl_initial_seed(int device) {
+    const auto seed = rng_initial_seed("acl", device);
+    // Preserve the old signed binding's seed bits; the native API remains
+    // uint64 and the single owner/RandomAttr use these exact same 64 bits.
+    int64 result;
+    static_assert(sizeof(result) == sizeof(seed), "ACL seed width mismatch");
+    std::memcpy(&result, &seed, sizeof(result));
+    return result;
+}
+
+string acl_device_name(int device) {
+    string name;
+    on_device(device, [&] {
+        const char* queried = aclrtGetSocName();
+        if (!queried || !queried[0])
+            throw std::runtime_error("aclrtGetSocName returned no device name");
+        name = queried;
+    });
+    return name;
+}
 
 int acl_runtime_current_device() {
     // Hot path: one thread-local read on a single-device process, otherwise a

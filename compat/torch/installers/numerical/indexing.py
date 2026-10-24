@@ -1,5 +1,24 @@
 """Torch numerical indexing operations."""
 
+def gather(input, dim, index, *, sparse_grad=False, out=None):
+    """Adapt Torch names and frontend scope; native gather owns math/VJP."""
+    from . import jt, _native_gather
+    from ...context import get_install_context
+    from ...frontend import tensor_frontend
+
+    if sparse_grad:
+        raise NotImplementedError("gather sparse gradients are not implemented")
+    if out is not None:
+        raise NotImplementedError("gather(out=...) is not implemented")
+    tensor_type = get_install_context(jt).state["Var"]
+    with tensor_frontend(tensor_type, like=input, default_placement=False):
+        return _native_gather(input, dim, index)
+
+
+def _tensor_gather(self, dim, index, *, sparse_grad=False):
+    return gather(self, dim, index, sparse_grad=sparse_grad)
+
+
 def take_along_dim(input, indices, dim=None):
     """Gather values after broadcasting indices outside the gather dimension."""
     from . import (
@@ -13,6 +32,30 @@ def take_along_dim(input, indices, dim=None):
     if list(indices.shape) != target:
         indices = jt.broadcast(indices, target)
     return jt.gather(input, d, indices)
+
+
+def masked_fill(input, mask, value, *, out=None):
+    """Torch argument/frontend boundary; selection math stays native."""
+    from . import jt, _native_masked_fill, _jittor_dtype_name
+    from ...context import get_install_context
+    from ...frontend import tensor_frontend
+
+    if out is not None:
+        raise NotImplementedError("masked_fill(out=...) is not implemented")
+    if not jt.core._is_tensor_carrier(input) or not jt.core._is_tensor_carrier(mask):
+        raise TypeError("masked_fill expects Tensor input and mask")
+    if _jittor_dtype_name(mask.dtype) != "bool":
+        raise RuntimeError("masked_fill requires a boolean mask")
+    if jt.core.dispatch_context([input]) != jt.core.dispatch_context([mask]):
+        raise RuntimeError("masked_fill input and mask must share a device")
+    if jt.core._is_tensor_carrier(value):
+        if value.ndim != 0:
+            raise RuntimeError("masked_fill value Tensor must be zero-dimensional")
+        if jt.core.dispatch_context([input]) != jt.core.dispatch_context([value]):
+            raise RuntimeError("masked_fill input and value must share a device")
+    tensor_type = get_install_context(jt).state["Var"]
+    with tensor_frontend(tensor_type, like=input, default_placement=False):
+        return _native_masked_fill(input, mask, value)
 
 
 def _masked_select_impl(input, mask, out=None):
@@ -37,24 +80,29 @@ def split_with_sizes(input, split_sizes, dim=0):
 def equal(a, b):
     """Return a Python bool for Torch's same-shape, elementwise equality."""
     from . import (
-        EXPECTED,
         _NestedTensor,
         jt,
-        swallowed,
     )
-    try:
-        if isinstance(a, _NestedTensor) or isinstance(b, _NestedTensor):
-            return bool(a.equal(b)) if isinstance(a, _NestedTensor) else False
-        if not isinstance(a, jt.Var) or not isinstance(b, jt.Var):
-            return bool(a == b)
-        if tuple(a.shape) != tuple(b.shape):
-            return False
-        if a.numel() == 0:
-            return True
-        return bool((a == b).all().item())
-    except EXPECTED as exc:
-        swallowed("torch/installers/numerical.py equal", exc)
+    if isinstance(a, _NestedTensor) or isinstance(b, _NestedTensor):
+        return bool(a.equal(b)) if isinstance(a, _NestedTensor) else False
+    if not jt.core._is_tensor_carrier(a) or not jt.core._is_tensor_carrier(b):
+        raise TypeError("equal(): both inputs must be tensors")
+    if jt.core.dispatch_context([a]) != jt.core.dispatch_context([b]):
+        raise RuntimeError("equal(): tensors must be on the same device")
+    if tuple(a.shape) != tuple(b.shape):
         return False
+    if a.numel() == 0:
+        return True
+    # Torch also accepts identical storage/layout without examining NaN values.
+    # The native address query synchronizes in place; it does not copy to host.
+    if (a.dtype == b.dtype
+            and a._storage_offset() == b._storage_offset()
+            and tuple(a._storage_strides()) == tuple(b._storage_strides())
+            and a._storage_address == b._storage_address):
+        return True
+    from ...frontend import tensor_frontend
+    with tensor_frontend(type(a), like=a, default_placement=False):
+        return bool(jt.all(jt.ops.equal(a, b)).item())
 
 
 def tensor_split(input, indices_or_sections, dim=0):

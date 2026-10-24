@@ -26,8 +26,10 @@ void RandomGeneratorState::set_seed(int64 seed) {
 int64 RandomGeneratorState::reserve_cuda(int64 raw_count) {
     ASSERT(raw_count >= 0);
     int64 base = cuda_offset;
-    USER_CHECK(!__builtin_add_overflow(cuda_offset, raw_count, &cuda_offset))
+    int64 next;
+    USER_CHECK(!__builtin_add_overflow(cuda_offset, raw_count, &next))
         << "Generator: CUDA stream position overflows int64";
+    cuda_offset = next;
     return base;
 }
 

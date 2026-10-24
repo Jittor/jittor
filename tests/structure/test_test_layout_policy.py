@@ -117,6 +117,7 @@ def test_sessionstart_executes_accelerator_and_legacy_selection_guards(monkeypat
 
 
 def test_compat_working_directory_uses_repository_relative_execution_accounting(monkeypatch):
+    monkeypatch.setattr(pytest_policy, "_torch_mode_is_active", lambda: True)
     monkeypatch.setattr(pytest_policy, "_SELECTED_FILES", set())
     monkeypatch.setattr(pytest_policy, "_PYTEST_ROOT", REPO_ROOT / "compat")
     config = SimpleNamespace(args=["tests/structure/test_factory_install_owners.py"],
@@ -141,4 +142,48 @@ def test_sessionfinish_flushes_worker_survey_and_keeps_execution_gate(monkeypatc
                               exitstatus=0)
     pytest_policy.pytest_sessionfinish(session, 0)
     assert flushed == [".gw2"]
+    assert session.exitstatus == 1
+
+
+@pytest.mark.parametrize("torch_mode", [False, True])
+def test_snapshot_and_collection_share_exact_process_mode_owner(monkeypatch, torch_mode):
+    monkeypatch.setattr(pytest_policy, "_torch_mode_is_active", lambda: torch_mode)
+    monkeypatch.setattr(pytest_policy, "_SELECTED_FILES", set())
+    config = SimpleNamespace(args=["tests/structure"],
+                             invocation_params=SimpleNamespace(dir=REPO_ROOT),
+                             option=SimpleNamespace(ignore=[]))
+    selected = gate_scope.selected_files(REPO_ROOT, ["tests/structure"])
+    expected = {path for path in selected
+                if pytest_policy.pytest_ignore_collect(REPO_ROOT / path, config) is not True}
+    assert expected  # Never accept erasing the whole selection.
+    pytest_policy._snapshot_selected_files(config)
+    assert pytest_policy._SELECTED_FILES == expected
+    native = "tests/structure/backends/acl/test_acl_dtype_preservation.py"
+    torch = "tests/structure/test_gate_scope.py"
+    assert (native in pytest_policy._SELECTED_FILES) is (not torch_mode)
+    assert (torch in pytest_policy._SELECTED_FILES) is torch_mode
+
+
+@pytest.mark.parametrize("torch_mode", [False, True])
+def test_same_mode_file_that_collected_nothing_still_fails_strict_gate(monkeypatch, torch_mode):
+    monkeypatch.setattr(pytest_policy, "_torch_mode_is_active", lambda: torch_mode)
+    monkeypatch.setattr(pytest_policy, "_SELECTED_FILES", set())
+    monkeypatch.setattr(pytest_policy, "_COLLECTED_FILES", set())
+    target = ("tests/structure/test_gate_scope.py" if torch_mode else
+              "tests/structure/backends/acl/test_acl_dtype_preservation.py")
+    config = SimpleNamespace(args=[target], invocation_params=SimpleNamespace(dir=REPO_ROOT),
+                             option=SimpleNamespace(ignore=[], collectonly=False))
+    assert pytest_policy.pytest_ignore_collect(REPO_ROOT / target, config) is None
+    pytest_policy._snapshot_selected_files(config)
+    assert pytest_policy._SELECTED_FILES == {target}
+    assert pytest_policy._files_that_collected_nothing() == [target]
+    monkeypatch.setattr(pytest_policy, "_flush_worker_state_leaks", lambda session: None)
+    monkeypatch.setattr(pytest_policy, "_required_accelerator_executions", lambda: 0)
+    monkeypatch.setattr(pytest_policy, "_MISSING_REAL_TORCH", [])
+    monkeypatch.setattr(pytest_policy, "_requires_execution", lambda: True)
+    monkeypatch.setattr(pytest_policy, "_execution_exemptions", lambda: {})
+    monkeypatch.setattr(pytest_policy, "_files_that_executed_nothing", lambda: [])
+    monkeypatch.setattr(pytest_policy, "_other_skip_count", lambda: 0)
+    session = SimpleNamespace(config=config, exitstatus=0)
+    pytest_policy.pytest_sessionfinish(session, 0)
     assert session.exitstatus == 1

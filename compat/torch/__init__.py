@@ -14,6 +14,8 @@ from typing import Tuple
 from .._aliases import _torch_namespace as _torch_namespace_snapshot
 from .context import InstallContext, InstallReport, InstallStepError, ModuleRegistry
 from .contracts import InstallStep
+from .publication import namespace_owner
+from .optimizer_state import reconcile_optimizer_state
 from ..transaction import InstallTransaction, active_transaction, _MISSING
 from .functional import (
     _diff,
@@ -42,6 +44,8 @@ from .grad_scaler import (
 from .lr_scheduler import _install_lr_scheduler
 from .nested import (
     _NestedTensor,
+    nested_tensor_type,
+    nested_tensor_rebuild,
     _rebuild_nested_tensor,
     _rebuild_var_from_numpy,
     _TorchSize,
@@ -180,6 +184,8 @@ _REQUIRED_STEPS: Tuple[InstallStep, ...] = (
 _OPTIONAL_STEPS: Tuple[InstallStep, ...] = (
     ("optional.torchmetrics", utilities.install_torchmetrics),
     ("optional.transformers", utilities.install_transformers),
+    ("optional.tensordict_nested", utilities.install_tensordict_nested),
+    ("optional.verl_nested", utilities.install_verl_nested),
     ("optional.tensordict", autograd_installer.install_tensordict),
     ("optional.safetensors", _install_optional_safetensors),
     ("optional.flash-attn", utilities.install_flash),
@@ -429,4 +435,8 @@ __all__ = [
     "device",
     "dtype",
     "install",
+    "namespace_owner",
+    "reconcile_optimizer_state",
+    "nested_tensor_type",
+    "nested_tensor_rebuild",
 ]

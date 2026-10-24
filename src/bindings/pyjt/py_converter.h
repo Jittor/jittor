@@ -534,6 +534,8 @@ inline void _fill_scalar_array_args(ArrayArgs& args, T2 value, NanoString dtype)
 }
 
 DEF_IS(ArrayArgs, T) from_py_object(PyObject* obj) {
+    USER_CHECK(!is_owned_tensor_carrier_type(Py_TYPE(obj)))
+        << "inactive TensorBase ArrayArgs coercion is not implemented; no host fetch fallback";
     if (PyFloat_CheckExact(obj)) {
         T args;
         _fill_scalar_array_args(args, (float32)PyFloat_AS_DOUBLE(obj), ns_float32);
@@ -626,7 +628,7 @@ EXTERN_LIB VarHolder* array_(ArrayArgs&&);
 EXTERN_LIB VarHolder* array__(PyObject* obj);
 }
 DEF_IS(VarHolder*, bool) is_type(PyObject* obj) {
-    return PyObject_TypeCheck(obj, &PyjtVarHolder.ht_type) ||
+    return is_varholder_carrier(obj) ||
         is_type<ArrayArgs>(obj);
 }
 
@@ -638,6 +640,8 @@ DEF_IS(VarHolder*, PyObject*) to_py_object(T a) {
     // null even if a collection runs before they are filled in.
     PyObjHolder frontend_type(current_tensor_frontend_type());
     auto vh_type = reinterpret_cast<PyTypeObject*>(frontend_type.obj);
+    if (is_owned_tensor_carrier_type(vh_type))
+        return wrap_owned_tensor_carrier(a, vh_type);
     PyObjHolder obj(vh_type->tp_alloc(vh_type, 0));
     auto ptr = GET_RAW_PTR(T, obj.obj);
     // The instance dict is left NULL and created on demand. `tp_alloc` zeroes
@@ -660,7 +664,7 @@ DEF_IS(VarHolder*, PyObject*) to_py_object(T a) {
 
 
 DEF_IS(VarHolder*, T) from_py_object(PyObject* obj) {
-    CHECK(PyObject_TypeCheck(obj, &PyjtVarHolder.ht_type));
+    CHECK(is_varholder_carrier(obj));
     return GET_RAW_PTR(VarHolder, obj);
 }
 
@@ -668,7 +672,7 @@ DEF_IS(VarHolder*, T) from_py_object(PyObject* obj) {
 void mark_python_number(VarHolder* holder);
 
 DEF_IS(VarHolder*, T) from_py_object(PyObject* obj, unique_ptr<VarHolder>& holder) {
-    if (PyObject_TypeCheck(obj, &PyjtVarHolder.ht_type))
+    if (is_varholder_carrier(obj))
         return GET_RAW_PTR(VarHolder, obj);
     holder.reset(jit_op_maker::array__(obj));
     if (PyFloat_CheckExact(obj) || PyLong_CheckExact(obj) || PyBool_Check(obj)
@@ -705,7 +709,7 @@ struct DataView;
 struct VarHolder;
 EXTERN_LIB PyObject* new_var_data_owner(VarHolder* vh);
 DEF_IS(DataView, PyObject*) to_py_object(T a) {
-    vector<int64_t> byte_strides;
+    vector<npy_intp> byte_strides;
     for (auto stride : a.storage_strides)
         byte_strides.push_back(stride * a.dtype.dsize());
     bool overlapping = false;
@@ -1148,7 +1152,7 @@ DEF_IS(GradCallback, T) from_py_object(PyObject* obj) {
                 if (obj == Py_None) {
                     dins[i] = nullptr;
                 } else {
-                    USER_CHECK(PyObject_TypeCheck(obj, &PyjtVarHolder.ht_type)) << "returned grad("<<Py_TYPE(obj)->tp_name<<") is not jittor variable";
+                    USER_CHECK(is_varholder_carrier(obj)) << "returned grad("<<Py_TYPE(obj)->tp_name<<") is not jittor variable";
                     auto vh = from_py_object<typename T::VarHolderPtr>(obj);
                     dins[i] = vh->var;
                 }

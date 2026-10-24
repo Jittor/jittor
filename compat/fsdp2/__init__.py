@@ -75,6 +75,7 @@ __all__ = (
 _SUBMODULE_NAMES = (
     "api", "common", "compat_types", "config", "dtensor", "grad_sync",
     "installer", "optimizer", "shard", "public_helpers",
+    "owned_dtensor", "owned_module",
 )
 for _submodule_name in _SUBMODULE_NAMES:
     globals().pop(_submodule_name, None)
@@ -102,7 +103,14 @@ from jittor.compat import fsdp_hooks as _fsdp_hooks
 from ._state_dict import (_get_full_state_dict, _load_full_state_dict,
                          _gather_optimizer_state_dict, _shard_optimizer_state_dict,
                          _optimizer_checkpoint_parameter_names)
+from ._module_conversion import _convert_module_storage
+from .grad_sync import _release_cleared_optimizer_grad_cache
+from ._detached import _detach_fsdp_tensor, _to_detached_fsdp_tensor
 
+from ._resident_backward import (
+    task_scope as _resident_backward_task_scope,
+    current as _resident_backward_task_current,
+)
 _fsdp_hooks.register(sys.modules[__name__])
 
 del _module, _name, _submodule_name

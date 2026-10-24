@@ -102,6 +102,98 @@ class TestDepthwiseConvCPU(unittest.TestCase):
         np.testing.assert_allclose(actual_weight, expected_weight, atol=1e-6, rtol=1e-6)
 
 
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
+class TestDepthwiseConvFp32Fma(unittest.TestCase):
+    """Public CUDA Conv1d cancellation/VJP regression, not a PPO acceptance."""
+
+    def test_strict_fp32_accumulated_input_vjp(self):
+        a, b = np.float32(1 + 2 ** -23), np.float32(1 - 2 ** -23)
+        scale, residual = np.float32(2 ** 30), np.float32(-2 ** -16)
+        scaled_b = np.float32(scale * b)
+        x_array = np.array([[[-1, b], [-1, b]]], dtype=np.float32)
+        weight_array = np.array([[[a, 1]], [[1, a]]], dtype=np.float32)
+        dy_array = np.array([[[-scale, scaled_b, 0],
+                              [scaled_b, -scale, 0]]], dtype=np.float32)
+        with jt.runtime.scope(use_cuda=1, device_id=0, amp_reg=0, no_grad=0,
+                              backend_fallback="error", cuda_kernel_math="strict"):
+            self.assertEqual(jt.core.backend_fallback_count(), 0)
+            for repeat in range(2):
+                with self.subTest(repeat=repeat):
+                    x, weight, dy = map(jt.array, (x_array, weight_array, dy_array))
+                    output = jt.nn.conv1d(x, weight, padding=1, groups=2)
+                    dx = jt.grad((output * dy).sum(), x)
+                    jt.sync_all()
+                    for value in (x, weight, dy, output, dx):
+                        self.assertEqual(jt.core.dispatch_context([value]), ("cuda", 0))
+                        self.assertEqual(value.location(), "device")
+                        self.assertEqual(int(value.device_id), 0)
+                    actual = dx.numpy().copy()
+                    centers = actual[0, :, 0]
+                    self.assertTrue(bool(np.logical_or(centers == 0, centers == residual).all()))
+                    self.assertTrue(bool((np.abs(centers - residual) <=
+                                          (1e-5 + 1e-5 * np.abs(residual))).any()),
+                                    "FMA input VJP residual must survive one accumulation order")
+                    self.assertTrue(bool(np.array_equal(actual[0, :, 1],
+                        np.array([scaled_b, np.float32(-scale * a)], dtype=np.float32))))
+                    self.assertTrue(bool(np.array_equal(x.numpy(), x_array)))
+                    self.assertTrue(bool(np.array_equal(weight.numpy(), weight_array)))
+                    self.assertTrue(bool(np.array_equal(dy.numpy(), dy_array)))
+            self.assertEqual(jt.core.backend_fallback_count(), 0)
+
+    def test_strict_fp32_conv1d_cancellation_and_vjp(self):
+        a = np.float32(1.0 + 2.0 ** -23)
+        b = np.float32(1.0 - 2.0 ** -23)
+        residual = np.float32(-2.0 ** -46)
+        with jt.runtime.scope(use_cuda=1, device_id=0, amp_reg=0, no_grad=0,
+                              backend_fallback="error", cuda_kernel_math="strict"):
+            self.assertEqual(jt.core.backend_fallback_count(), 0,
+                             "pre-existing backend fallback")
+            for batch in (1, 2):
+                with self.subTest(batch=batch):
+                    x_array = np.broadcast_to(
+                        np.array([-1.0, b], dtype=np.float32), (batch, 2, 2)).copy()
+                    w_array = np.broadcast_to(
+                        np.array([1.0, a], dtype=np.float32), (2, 1, 2)).copy()
+                    x, weight = jt.array(x_array), jt.array(w_array)
+                    flags = (bool(x.requires_grad), bool(weight.requires_grad))
+                    self.assertTrue(all(flags), "native public operands must be trainable")
+                    output = jt.nn.conv1d(x, weight, padding=1, groups=2)
+                    cropped = output[:, :, :2]
+                    dx, dw = jt.grad(cropped[:, :, 1].sum(), [x, weight])
+                    jt.sync_all()
+                    for tensor in (x, weight, output, cropped, dx, dw):
+                        self.assertEqual(jt.core.dispatch_context([tensor]), ("cuda", 0),
+                                         "actual CUDA0 dispatch required")
+                        self.assertEqual(int(tensor.device_id), 0, "actual CUDA0 ordinal required")
+                        self.assertEqual(tensor.location(), "device", "actual CUDA storage required")
+                    actual_y = output.numpy().copy()
+                    actual_crop = cropped.numpy().copy()
+                    actual_dx, actual_dw = dx.numpy().copy(), dw.numpy().copy()
+                    expected_y = np.broadcast_to(
+                        np.array([-a, residual, b], dtype=np.float32), (batch, 2, 3))
+                    expected_dx = np.broadcast_to(
+                        np.array([1.0, a], dtype=np.float32), (batch, 2, 2))
+                    expected_dw = np.broadcast_to(
+                        np.array([-batch, np.float32(batch) * b], dtype=np.float32), (2, 1, 2))
+                    # Full-value exact supplemental precision check, stronger than
+                    # the unchanged 1e-5 independent public CUDA comparison.
+                    self.assertTrue(bool(np.array_equal(actual_y, expected_y)),
+                                    "complete fused forward")
+                    self.assertTrue(bool(np.array_equal(actual_crop, expected_y[:, :, :2])),
+                                    "complete crop")
+                    self.assertTrue(bool(np.array_equal(actual_dx, expected_dx)),
+                                    "complete analytic input VJP")
+                    self.assertTrue(bool(np.array_equal(actual_dw, expected_dw)),
+                                    "complete analytic weight VJP")
+                    self.assertTrue(bool(np.array_equal(x.numpy(), x_array)),
+                                    "original input bytes unchanged")
+                    self.assertTrue(bool(np.array_equal(weight.numpy(), w_array)),
+                                    "original weight bytes unchanged")
+                    self.assertEqual((bool(x.requires_grad), bool(weight.requires_grad)), flags,
+                                     "original input flags unchanged")
+            self.assertEqual(jt.core.backend_fallback_count(), 0, "CUDA test backend fallback")
+
+
 def load_parameters(m1, m2):
     m1.save('/tmp/temp.pk')
     m2.load('/tmp/temp.pk')

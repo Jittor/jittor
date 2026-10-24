@@ -66,6 +66,24 @@ class TestBasicSlicing(Base):
             self.ac(tx[1:, ::2].numpy(), x[1:, ::2], msg=f"x[1:,::2] {dev}")
         both_devices(body)
 
+    def test_single_integral_tensor_slice_bounds(self):
+        x = self.x1
+        def body(dev):
+            tx = t(x)
+            stop = torch.tensor(6, dtype=torch.int64)
+            start = torch.tensor(1, dtype=torch.int32)
+            step = torch.tensor(2, dtype=torch.int64)
+            self.ac(tx[:stop].numpy(), x[:6], msg=f"x[:tensor] {dev}")
+            self.ac(tx[start:stop:step].numpy(), x[1:6:2], msg=f"tensor slice bounds {dev}")
+        both_devices(body)
+
+    def test_invalid_tensor_slice_bounds_match_torch_contract(self):
+        tx = t(self.x1)
+        for bound in (torch.tensor(3.0), torch.tensor([1, 2], dtype=torch.int64)):
+            with self.assertRaisesRegex(
+                    TypeError, "only integer tensors of a single element can be converted to an index"):
+                tx[:bound]
+
     def test_negative_index_and_slice(self):
         x = self.x2
         def body(dev):
@@ -355,6 +373,76 @@ class TestEllipsisNewaxis(Base):
             self.ac(ty[:, None, :, None].numpy(), y[:, None, :, None],
                     msg=f"y[:,None,:,None] {dev}")
         both_devices(body)
+
+
+class TestHostTensorIndexPlacement(unittest.TestCase):
+    """Host index is preserved; gathered values/full gradients use data device."""
+    def _placement(self, value, device, ordinal=0):
+        value.sync()
+        backend, actual_ordinal = jt.core.dispatch_context([value])
+        self.assertEqual(backend, device)
+        self.assertEqual(value.location(), "cpu" if device == "cpu" else "device")
+        if device == "cuda":
+            self.assertEqual(int(actual_ordinal), ordinal)
+            self.assertEqual(int(value.device_id), ordinal)
+
+    def _exercise(self, device, ordinal=0):
+        from jittor._runtime.fallback import forbid_backend_fallbacks
+        target = "cpu" if device == "cpu" else "cuda:%d" % ordinal
+        raw = np.arange(12, dtype=np.float32).reshape(3, 4)
+        before = int(jt.core.backend_fallback_count())
+        with forbid_backend_fallbacks():
+            for case in ("rows64", "rows32", "tuple", "mask"):
+                with self.subTest(case=case):
+                    source = torch.tensor(raw, device=target, requires_grad=True)
+                    indices_np = (np.array([True, False, True]) if case == "mask"
+                                  else np.array([2, 0, 2]))
+                    dtype = (torch.bool if case == "mask" else
+                             torch.int32 if case == "rows32" else torch.int64)
+                    indices = torch.tensor(indices_np, dtype=dtype, device="cpu")
+                    self._placement(indices, "cpu")
+                    selection = (slice(None), indices) if case == "tuple" else indices
+                    result = source[selection]
+                    expected = raw[:, indices_np] if case == "tuple" else raw[indices_np]
+                    cotangent_np = np.arange(1, expected.size + 1, dtype=np.float32).reshape(expected.shape)
+                    cotangent = torch.tensor(cotangent_np, device=target)
+                    loss = (result * cotangent).sum()
+                    gradient, = torch.autograd.grad(loss, (source,))
+                    expected_gradient = np.zeros_like(raw)
+                    if case == "tuple":
+                        for col, selected in enumerate(indices_np):
+                            expected_gradient[:, selected] += cotangent_np[:, col]
+                    elif case == "mask":
+                        expected_gradient[indices_np] = cotangent_np
+                    else:
+                        for row, selected in enumerate(indices_np):
+                            expected_gradient[selected] += cotangent_np[row]
+                    observed = (source, result, cotangent, loss, gradient)
+                    for value in observed: self._placement(value, device, ordinal)
+                    actual_result = np.array(result.detach().cpu().numpy(), copy=True)
+                    actual_gradient = np.array(gradient.detach().cpu().numpy(), copy=True)
+                    np.testing.assert_array_equal(actual_result, expected)
+                    np.testing.assert_array_equal(actual_gradient, expected_gradient)
+                    for value in observed: self._placement(value, device, ordinal)
+                    self._placement(indices, "cpu")
+                    np.testing.assert_array_equal(indices.detach().cpu().numpy(), indices_np)
+                    self._placement(indices, "cpu")
+        self.assertEqual(int(jt.core.backend_fallback_count()), before)
+        self.assertEqual(before, 0)
+
+    def test_host_indices_cpu(self):
+        with jt.runtime.scope(use_cuda=0, backend_fallback="error"):
+            self._exercise("cpu")
+
+    def test_host_indices_cuda(self):
+        import os
+        if not _test_capability.check_accelerator("cuda", backend=jt).enabled:
+            self.skipTest("No CUDA found")
+        ordinal = int(os.environ.get("JITTOR_TEST_DEVICE_INDEX", "0"))
+        self.assertGreaterEqual(ordinal, 0)
+        torch.cuda.set_device(ordinal)
+        with jt.runtime.scope(use_cuda=1, backend_fallback="error"):
+            self._exercise("cuda", ordinal)
 
 
 if __name__ == "__main__":

@@ -68,9 +68,20 @@ ParsedState parse_state(const string& payload, const string& backend, int device
         throw std::invalid_argument("RNG state version/backend/device/header mismatch");
     if (backend == "cpu") {
         uint64 minimum, maximum;
-        if (result.offset != 0 || !(input >> minimum >> maximum >> std::ws >> result.engine)
+        if (result.offset != 0 || !(input >> minimum >> maximum >> std::ws)
                 || minimum != std::default_random_engine::min()
                 || maximum != std::default_random_engine::max())
+            throw std::invalid_argument("RNG host engine state mismatch");
+        // The supported default engines are LCGs with one serialized state
+        // integer. Their standard-library extractor accepts out-of-range
+        // values; validate the original token before restoring the engine.
+        const auto engine_position = input.tellg();
+        uint64 raw_state;
+        if (!(input >> raw_state) || raw_state < minimum || raw_state > maximum)
+            throw std::invalid_argument("Out-of-range RNG host engine state");
+        input.clear();
+        input.seekg(engine_position);
+        if (!(input >> result.engine))
             throw std::invalid_argument("RNG host engine state mismatch");
     } else {
         string kind;

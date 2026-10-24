@@ -82,6 +82,11 @@ static void setitem_inplace(SetitemOp* op) {
     }
 
     VarSlices vs = op->vs;
+    // An empty index writes the entire tensor. There is no first slice to
+    // inspect (transpose-view backward also generates this form). Keep the
+    // output/input alias above, but let the ordinary kernel write the value.
+    if (vs.n == 0 || input->shape.size() == 0)
+        return;
     if (!(data->is_finished() == 0 && 
           (data->outputs().size() == 1 || 
            (!input_op 
@@ -91,6 +96,13 @@ static void setitem_inplace(SetitemOp* op) {
         return;
     auto data_op = data->input();
     if (data_op->flag(OpFlags::_custom_flag))
+        return;
+    // A reindex reduction initializes its output before accumulating into it.
+    // Computing it directly inside the pending destination's allocation can
+    // co-fuse that local initialization with the destination's full zero fill,
+    // losing the latter outside the slice. Keep output/input reuse, but give
+    // this two-phase producer its own buffer and let setitem copy the result.
+    if (data_op->is_op(op_ids::reindex_reduce()))
         return;
 
     // The value is computed straight into the region it is written to, and
@@ -162,6 +174,16 @@ static void getitem_inplace(GetitemOp* op) {
 
     VarSlices vs = op->vs;
     auto in_shape = in->shape;
+
+    // The empty tuple is a full storage view, including for rank-zero input.
+    // Do not read slices[0] from its zero-length allocation.
+    if (vs.n == 0) {
+        ou->share_with(in, 0);
+        op->ns.set(GetitemOp::_inplace);
+        return;
+    }
+    if (in_shape.size() == 0)
+        return;
 
     for (int i = vs.n - 1; i > 0; --i) {
         VarSlice s = vs.slices[i];

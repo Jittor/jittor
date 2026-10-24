@@ -28,6 +28,7 @@ unordered_map<string,string> common_op_type_cuda_map = {
     {"abs", "@if(@strcmp($1,float32)==0,::fabsf(($2)),@if(@strcmp($1,float64)==0,::fabs(($2)),::abs(($2))))"},
     {"conj", "($2)"},   // conj(real) is identity (torch parity)
     {"log", "@if(@strcmp($1,float32)==0,::logf(($1)($2)),::log(($1)($2)))"},
+    {"log1p", "@if(@strcmp($1,float32)==0,(($1)::log1pf(($1)($2))),(($1)::log1p(($1)($2))))"},
     {"exp", "@if(@strcmp($1,float32)==0,::expf(($1)($2)),::exp(($1)($2)))"},
     {"sqrt", "@if(@strcmp($1,float32)==0,::sqrtf(($1)($2)),::sqrt(($1)($2)))"},
     // numpy and torch round halves to even (round(0.5)==0, round(2.5)==2);
@@ -57,7 +58,8 @@ unordered_map<string,string> common_op_type_cuda_map = {
     {"atanh", "@if(@strcmp($1,float32)==0,(($1) ::atanhf(($2))),(($1) ::atanh(($2))))"},
     // Double inputs must reach double exp; expf silently narrows their
     // forward values and every derivative that reuses the sigmoid output.
-    {"sigmoid", "(($1) (1.0f/(1.0f+@if(@strcmp($1,float64)==0,::exp,::expf)((::min($1(-($2)), $1(@if(@strcmp($1,float32)==0,30,300))))))))"},
+    // Do not clamp the negative tail: valid small results must stay small.
+    {"sigmoid", "(($1) (1.0f/(1.0f+@if(@strcmp($1,float64)==0,::exp,::expf)(-($1)($2)))))"},
     {"relu", "((($1)($2)>($1)(0.0f))?($1)($2):($1)(0.0f))"},
     {"erf", "@if(@strcmp($1,float32)==0,(($1) ::erff(($2))),(($1) ::erf(($2))))"},
     {"erfinv", "@if(@strcmp($1,float32)==0,(($1) ::erfinvf(($1)($2))),(($1) ::erfinv(($1)($2))))"},
@@ -107,6 +109,7 @@ struct CommonOpType : OpByType {
             {"abs", "std::abs($2)"},
             {"conj", "($2)"},   // conj(real) is identity (torch parity)
             {"log", "std::log(($1)($2))"},
+            {"log1p", "(($1)std::log1p(($1)($2)))"},
             {"exp", "std::exp(($1)($2))"},
             {"sqrt", "std::sqrt(($1)($2))"},
             // half-to-even, matching numpy/torch -- see the CUDA table.
@@ -131,12 +134,15 @@ struct CommonOpType : OpByType {
             {"atan", "(($1) std::atan(($2)))"},
             {"tanh", "(($1) std::tanh(($2)))"},
             {"atanh", "(($1) std::atanh(($2)))"},
-            {"sigmoid", "(($1) (1.0f/(1.0f+std::exp(std::min($1(-($2)), $1(@if(@strcmp($1,float32)==0,30,300)))))))"},
+            {"sigmoid", "(($1)(($1)(1)/(($1)(1)+std::exp(-($1)($2)))))"},
             {"relu", "((($1)($2)>($1)(0.0f))?($1)($2):($1)(0.0f))"},
             {"erf", "(($1) std::erf(($2)))"},
             {"erfinv", "(jittor::_erfinv($2))"},
             {"cast", "(($1)($2))"},
-            {"pow", "std::pow(($2),($4))"},
+            // Mixed integer/float std::pow can return double even for a
+            // logical float32 output. Fusion uses auto intermediates: keep
+            // the declared output rounding before a wider consumer sees it.
+            {"pow", "(($1)std::pow(($2),($4)))"},
             {"maximum", "jittor::_max($1($2), $1($4))"},
             {"minimum", "jittor::_min($1($2), $1($4))"},
             // Floats go through NumPy's divmod (type/floor_divide_compute.h):

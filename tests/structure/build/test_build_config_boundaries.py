@@ -7,7 +7,10 @@ from dataclasses import FrozenInstanceError
 import importlib.util
 import os
 from pathlib import Path
+import shutil
+import subprocess
 import sys
+import sysconfig
 from types import SimpleNamespace
 
 import pytest
@@ -266,3 +269,61 @@ def test_nccl_loader_does_not_probe_nvidia_for_non_nvidia_build():
     exec(compile(ast.Module(body=[function], type_ignores=[]), str(path), "exec"), namespace)
     assert namespace["setup_nccl"]() is None
     assert namespace["use_nccl"] is False
+
+
+def _syntax_only(source, *flags):
+    """Check a standalone translation unit, without linking or starting JIT."""
+    compiler = shutil.which("clang++") or shutil.which("g++")
+    if compiler is None:
+        pytest.skip("C++ compiler not installed: standalone syntax check unavailable")
+    result = subprocess.run(
+        [compiler, "-std=c++14", "-fsyntax-only", "-x", "c++",
+         "-I" + str(ROOT / "src"), *flags, "-"],
+        input=source, text=True, capture_output=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_array_op_header_defines_var_before_inline_storage_access():
+    # No prior Var include: the header must own the dependency of its ptr().
+    _syntax_only('#include "ops/composite/array_op.h"\n'
+                 'void probe(jittor::ArrayOp* op) { (void)op->ptr<float>(); }\n')
+
+
+def test_stack_vector_iterator_uses_existing_const_element_access():
+    _syntax_only('#include "utils/stack_vector.h"\n'
+                 'int probe() { jittor::StackVector<int> v; v.push_back(7); '
+                 'return *v.begin(); }\n')
+
+
+def test_memory_header_declares_allocator_callbacks_and_both_measurement_apis():
+    # Updating the pool ledger must not remove upstream's separate window API.
+    _syntax_only('#include "mem/mem_info.h"\n'
+                 'void probe(jittor::Allocator* a) { '
+                 'jittor::record_pool_memory(a); jittor::forget_pool_memory(a); '
+                 'jittor::mark_device_memory_stats_unsupported(0); '
+                 '(void)jittor::device_pool_memory_stats(0); '
+                 '(void)jittor::device_memory_info(0); '
+                 'jittor::reset_device_memory_peaks(0); '
+                 '(void)jittor::device_memory_window_start(0); '
+                 '(void)jittor::device_memory_window_peak(0); }\n')
+
+
+def test_numpy_data_view_stride_type_compiles_for_nested_containers():
+    # NumPy's ABI uses pointer-sized npy_intp, not a platform's int64_t alias.
+    _syntax_only('#include "core/var_holder.h"\n'
+                 '#include "bindings/pyjt/py_converter.h"\n'
+                 'void probe(jittor::DataView a, '
+                 'const std::vector<jittor::DataView>& v, '
+                 'const std::map<std::string, jittor::DataView>& m) { '
+                 '(void)jittor::to_py_object<jittor::DataView>(a); '
+                 '(void)jittor::to_py_object<std::vector<jittor::DataView>>(v); '
+                 '(void)jittor::to_py_object<std::map<std::string, jittor::DataView>>(m); }\n',
+                 '-I' + sysconfig.get_path('include'))
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS SDK ucontext feature macros")
+@pytest.mark.parametrize("flags", [(), ("-D_XOPEN_SOURCE=600", "-D_DARWIN_C_SOURCE=1")])
+def test_macos_log_translation_unit_sets_feature_macros_before_system_headers(flags):
+    source = (ROOT / "src/utils/log.cc").read_text()
+    _syntax_only(source, "-Werror=macro-redefined", *flags)

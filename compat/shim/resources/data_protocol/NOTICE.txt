@@ -1,0 +1,17 @@
+Bounded generic Torch data protocol source reuse (PyTorch v2.8.0 semantics).
+
+Source provenance is the genuine installed Torch source cache used by the
+independent Native oracle. Exact original SHA256 values and modifications are
+recorded in the SOURCE_ONLY handoff manifest. No Native torch._C library or
+arbitrary installed Torch source is loaded by these compatibility resources.
+
+The DataPipe base/type/iterator-hook/serialization, graph/sharding and import-dill
+algorithms preserve original source. They do not reproduce the full upstream
+DataPipe package initializer or its transform catalogue. The worker metadata and
+default_convert algorithm are bounded extracts. See LICENSE.pytorch for the
+original copyright, redistribution conditions and disclaimer.
+
+The _utils package's exit flag and actual numpy import availability retain the
+original Python algorithm. Worker-process loops, signals and pinning explicitly
+raise NotImplementedError. The plain map/workers0 loader does not execute them.
+Its checkpoint algorithm remains in the genuine external torchdata0.11 package.

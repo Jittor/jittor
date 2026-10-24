@@ -1,10 +1,13 @@
 #pragma once
 #include "core/common.h"
 #include <acl/acl.h>
+#include "acl_rng_state.h"
 
 namespace jittor {
 
 EXTERN_LIB int acl_runtime_current_device();
+// A real driver query; preserves the caller's current device and factory mode.
+EXTERN_LIB string acl_device_name(int device);
 EXTERN_LIB aclrtStream acl_current_stream();
 EXTERN_LIB void shutdown_acl_backend() noexcept;
 

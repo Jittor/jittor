@@ -16,6 +16,8 @@ class ChildAdoption:
         if id(value) in self.memo:
             return self.memo[id(value)]
         owner = self.owner
+        if isinstance(value, owner.Module):
+            return value
         if isinstance(value, owner.native_module):
             # Shared native children retain all tensor identities, even when
             # those tensors are also exposed directly on the enclosing module.

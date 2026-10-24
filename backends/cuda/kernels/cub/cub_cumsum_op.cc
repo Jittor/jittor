@@ -51,6 +51,11 @@ void CubCumsumOp::jit_prepare(JK& jk) {
     // generated `#define` as "200" (0x200) and the kernel ran with a
     // 200-thread block instead of 512. Only `=` runs hex_to_dec on the value.
     jk << "«BLOCK_THREADS=" << JK::hex(x->dsize() >= 8 ? 512 : 1024);
+    // A narrow precision route; all other dtype/shape/layout keys stay CUB.
+    jk << "«SKLANSKY64=" << JK::hex(x->dtype() == ns_float32
+        && x->shape.size() == 2 && x->shape[0] > 1
+        && x->shape[0] <= 0xffffffffLL && x->shape[1] == 64
+        && x->is_contiguous());
 }
 
 VarPtr CubCumsumOp::grad(Var* out, Var* dout, Var* v, int v_index) {
@@ -112,9 +117,70 @@ __global__ void BlockScanKernel(Tx* __restrict__ xp, Ty* __restrict__ yp, int ba
     }
 }
 
+#if SKLANSKY64
+// FP32 row64: the same inclusive Sklansky stages as Torch2.8 ScanUtils.cuh.
+// Thread geometry is derived from the actual number of rows, not fixed to16.
+// Reverse reads/writes mirrored columns, so the existing grad owner is reused.
+__global__ void Sklansky64Kernel(const float* __restrict__ xp, float* __restrict__ yp,
+        uint64 rows, uint log_threads_x) {
+    __shared__ float values[1024];
+    const uint threads_x = 1u << log_threads_x;
+    float* row_buf = values + 2 * threads_x * threadIdx.y;
+    for (uint64 block_row = uint64(blockIdx.x) * blockDim.y; block_row < rows;
+            block_row += uint64(blockDim.y) * gridDim.x) {
+        const uint64 row = block_row + threadIdx.y;
+        const bool exists = row < rows;
+        float carry = 0.0f;
+        for (uint col = 0; col < 64; col += 2 * threads_x) {
+            const uint col1 = col + threadIdx.x;
+            const uint col2 = col + threads_x + threadIdx.x;
+            if (exists) {
+                row_buf[threadIdx.x] = col1 < 64 ? xp[row * 64 +
+                    (reverse ? 63 - col1 : col1)] : 0.0f;
+                row_buf[threads_x + threadIdx.x] = col2 < 64 ? xp[row * 64 +
+                    (reverse ? 63 - col2 : col2)] : 0.0f;
+                if (threadIdx.x == 0)
+                    row_buf[0] = row_buf[0] + carry;
+            }
+            __syncthreads();
+            for (uint m = 0; m <= log_threads_x; ++m) {
+                if (exists) {
+                    const uint s = 1u << m;
+                    const uint a = ((threadIdx.x >> m) << (m + 1)) | s;
+                    const uint target = a + threadIdx.x % s;
+                    const uint source = a - 1;
+                    row_buf[target] = row_buf[target] + row_buf[source];
+                }
+                __syncthreads();
+            }
+            if (exists) {
+                if (col1 < 64)
+                    yp[row * 64 + (reverse ? 63 - col1 : col1)] = row_buf[threadIdx.x];
+                if (col2 < 64)
+                    yp[row * 64 + (reverse ? 63 - col2 : col2)] = row_buf[threads_x + threadIdx.x];
+                carry = row_buf[2 * threads_x - 1];
+            }
+            __syncthreads();
+        }
+    }
+}
+#endif
+
 void CubCumsumOp::jit_run() {
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Ty>();
+#if SKLANSKY64
+    const uint64 rows = x->shape[0];
+    uint log_rows = 0;
+    while ((uint64(1) << log_rows) < rows) ++log_rows;
+    // Keep the uint arithmetic of Torch's get_log_num_threads_x_inner_scan.
+    const uint diff = 6u - log_rows;
+    const uint log_x = std::min(std::max((9u + diff) / 2u, 4u), 9u);
+    const dim3 threads(1u << log_x, 512u / (1u << log_x));
+    const uint blocks = uint(std::min<uint64>((rows + threads.y - 1) / threads.y, 65535));
+    Sklansky64Kernel<<<blocks, threads>>>(xp, yp, rows, log_x);
+    return;
+#endif
     if (x->shape.size() == 1){
         int num_items = x->shape[0];
 

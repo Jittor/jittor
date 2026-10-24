@@ -1,4 +1,5 @@
 """Public Torch save/load and portable tensor payload conversion."""
+from collections import OrderedDict as _OrderedDict
 import os as _os_pickle
 import pickle as _pickle
 import numpy as np
@@ -11,24 +12,89 @@ from .security import _portable_pickle_load
 from .torch_archive import _load_torch_pt
 
 _VAR_TAG = "__jt_var__"
+_LIST_IN_PROGRESS = object()
+_STORAGE_REFS = object()
 
 
-def _to_portable(obj, snapshots):
+def _loaded_storage_alias(storage, requires_grad, parameter):
+    """Distinct loaded holders share bytes, not autograd version counters."""
+    g = get_install_context(jt).target_namespace
+    from ..frontend import tensor_frontend
+    with tensor_frontend(g.Var):
+        value = storage._storage_data_alias()
+        value.requires_grad = bool(requires_grad)
+        if parameter:
+            value = g.nn.Parameter(value, requires_grad=value.requires_grad)
+    return value
+
+
+def _dense_snapshot_region(value):
+    """Process-local physical identity, only after source materialization.
+
+    General offset/strided/cross-dtype storage reconstruction is not covered.
+    No address or allocator identity is serialized.
+    """
+    pointer = int(value._mem_ptr_now)
+    shape = tuple(int(size) for size in value.shape)
+    strides = tuple(int(step) for step in value._storage_strides())
+    canonical = []
+    step = 1
+    for size in reversed(shape):
+        canonical.insert(0, step)
+        step *= size
+    if (not pointer or not int(value.numel()) or not value._storage_is_contiguous()
+            or int(value._storage_offset()) != 0 or strides != tuple(canonical)):
+        return None
+    return (value.location(), int(value.placement_backend), int(value.device_id),
+            pointer, int(value.nbytes), _jittor_dtype_name(value.dtype), shape, strides)
+
+
+def _validate_ordered_attrs(attrs, _seen=None):
+    """Do not silently replace callable OrderedDict metadata with None."""
+    import types
+    if _seen is None:
+        _seen = set()
+    if id(attrs) in _seen:
+        return
+    _seen.add(id(attrs))
+    if isinstance(attrs, (types.FunctionType, types.MethodType, types.BuiltinFunctionType)):
+        raise TypeError("callable OrderedDict attributes are not portable")
+    if isinstance(attrs, dict):
+        for item in attrs.values():
+            _validate_ordered_attrs(item, _seen)
+        if isinstance(attrs, _OrderedDict):
+            _validate_ordered_attrs(vars(attrs), _seen)
+    elif isinstance(attrs, (list, tuple)):
+        for item in attrs:
+            _validate_ordered_attrs(item, _seen)
+
+
+def _to_portable(obj, snapshots, _memo=None):
+    if _memo is None:
+        _memo = {}
+    if id(obj) in _memo:
+        if _memo[id(obj)] is _LIST_IN_PROGRESS:
+            raise TypeError("recursive list subclass is not portable")
+        return _memo[id(obj)]
     g = get_install_context(jt).target_namespace
     # Tensor.shape is backed by jittor_core.NanoVector. PyTorch exposes the
     # equivalent value as the picklable torch.Size tuple subclass.
     if (type(obj).__name__ == "NanoVector"
             and type(obj).__module__ == "jittor_core"):
-        return g.Size(tuple(int(value) for value in obj))
-    if isinstance(obj, jt.Var):
+        value = g.Size(tuple(int(value) for value in obj))
+        _memo[id(obj)] = value
+        return value
+    if jt.core._is_tensor_carrier(obj):
         # Batched fetch supplies a host copy without moving live tensors.
         # Persist the native name, not the frontend object's torch-prefixed
         # display string or an importable Python dtype class reference.
-        return {_VAR_TAG: True, "data": snapshots[id(obj)],
+        value = {_VAR_TAG: True, "data": snapshots[id(obj)],
                 "dtype": _jittor_dtype_name(obj.dtype),
                 "requires_grad": bool(obj.requires_grad),
                 "parameter": isinstance(obj, g.nn.Parameter),
                 "device": str(getattr(obj, "device", "cpu"))}
+        _memo[id(obj)] = value
+        return value
     # Drop non-picklable callables (e.g. an LR scheduler's local lr_lambda
     # closure in an extra/scheduler state_dict). torch's LambdaLR.state_dict
     # does the same -- the lambda is rebuilt on load, not restored.
@@ -36,42 +102,89 @@ def _to_portable(obj, snapshots):
     if isinstance(obj, (_t.FunctionType, _t.LambdaType, _t.MethodType, _t.BuiltinFunctionType)):
         return None
     if isinstance(obj, dict):
-        return {k: _to_portable(v, snapshots) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        items = [_to_portable(v, snapshots) for v in obj]
-        # Coerce list/tuple SUBCLASSES (e.g. the shim's local _ParamList in
-        # an optimizer state_dict) to plain list/tuple -- local classes are
-        # not picklable. Preserve namedtuples.
-        if isinstance(obj, tuple):
-            if hasattr(obj, "_fields"):
-                try:
-                    return type(obj)(*items)
-                except EXPECTED as exc:
-                    swallowed("torch/serialization.py _to_portable: return type(obj)(*items)", exc)
-                    return tuple(items)
-            return tuple(items)
-        return list(items)
+        value = _OrderedDict() if isinstance(obj, _OrderedDict) else {}
+        _memo[id(obj)] = value
+        for key, item in obj.items():
+            value[key] = _to_portable(item, snapshots, _memo)
+        if isinstance(obj, _OrderedDict):
+            _validate_ordered_attrs(vars(obj))
+            value.__dict__ = _to_portable(vars(obj), snapshots, _memo)
+        return value
+    if isinstance(obj, list):
+        value = []
+        _memo[id(obj)] = value
+        value.extend(_to_portable(v, snapshots, _memo) for v in obj)
+        return value
+    if isinstance(obj, tuple):
+        items = [_to_portable(v, snapshots, _memo) for v in obj]
+        # A recursive tuple/list graph may have memoized this tuple while
+        # visiting its children, as in copy.deepcopy's immutable handling.
+        if id(obj) in _memo:
+            return _memo[id(obj)]
+        if hasattr(obj, "_fields"):
+            try:
+                value = type(obj)(*items)
+            except EXPECTED as exc:
+                swallowed("torch/serialization.py _to_portable: return type(obj)(*items)", exc)
+                value = tuple(items)
+        else:
+            value = tuple(items)
+        _memo[id(obj)] = value
+        return value
     return obj
 
 
-def _from_portable(obj, source_devices):
+def _from_portable(obj, source_devices, _memo=None):
+    if _memo is None:
+        _memo = {}
+    if id(obj) in _memo:
+        if _memo[id(obj)] is _LIST_IN_PROGRESS:
+            raise TypeError("recursive list subclass is not portable")
+        return _memo[id(obj)]
     g = get_install_context(jt).target_namespace
     if isinstance(obj, dict):
         if obj.get(_VAR_TAG):
             # from_numpy preserves wide dtypes (float64/int64); jt.array narrows
             # them to float32/int32 -> torch.save/load silently downcast checkpoints.
-            value = g.tensor(obj["data"], dtype=obj.get("dtype"),
-                             device="cpu",
-                             requires_grad=bool(obj.get("requires_grad", False)))
-            if obj.get("parameter", False):
-                value = g.nn.Parameter(value, requires_grad=value.requires_grad)
+            # Pickle preserves the identity of each fetched ndarray. The save
+            # side shares that object only for the same physical dense region,
+            # never merely equal values. Keep old payloads readable unchanged.
+            key = (id(obj["data"]), obj.get("dtype"), obj.get("device", "cpu"))
+            storage_key = (_STORAGE_REFS, key)
+            if storage_key not in _memo:
+                # A backing storage has no user's autograd history. Restore
+                # trainability only on fresh holders, including the first one.
+                _memo[storage_key] = g.tensor(obj["data"], dtype=obj.get("dtype"),
+                                            device="cpu", requires_grad=False)
+            value = _loaded_storage_alias(
+                _memo[storage_key], obj.get("requires_grad", False),
+                obj.get("parameter", False))
             source_devices[id(value)] = obj.get("device", "cpu")
+            source_devices.setdefault(_STORAGE_REFS, {})[id(value)] = key
+            _memo[id(obj)] = value
             return value
-        return {k: _from_portable(v, source_devices) for k, v in obj.items()}
+        value = _OrderedDict() if isinstance(obj, _OrderedDict) else {}
+        _memo[id(obj)] = value
+        for key, item in obj.items():
+            value[key] = _from_portable(item, source_devices, _memo)
+        if isinstance(obj, _OrderedDict):
+            value.__dict__ = _from_portable(vars(obj), source_devices, _memo)
+        return value
+    if type(obj) is list:
+        value = []
+        _memo[id(obj)] = value
+        value.extend(_from_portable(v, source_devices, _memo) for v in obj)
+        return value
     if isinstance(obj, (list, tuple)):
+        if isinstance(obj, list):
+            _memo[id(obj)] = _LIST_IN_PROGRESS
         t = type(obj)
-        values = [_from_portable(v, source_devices) for v in obj]
-        return t(*values) if hasattr(obj, "_fields") else t(values)
+        values = [_from_portable(v, source_devices, _memo) for v in obj]
+        if id(obj) in _memo and _memo[id(obj)] is not _LIST_IN_PROGRESS:
+            return _memo[id(obj)]
+        value = t(*values) if hasattr(obj, "_fields") else t(values)
+        _memo[id(obj)] = value
+        return value
     return obj
 
 
@@ -80,40 +193,73 @@ class _TensorSnapshots:
         self.tensors = []
         self.seen = set()
         self.values = {}
+        self.fetch_tensors = []
+        self.aliases = {}
+        self.regions = {}
 
     def collect(self, value):
         if id(value) in self.seen:
             return
         self.seen.add(id(value))
-        if isinstance(value, jt.Var):
+        if jt.core._is_tensor_carrier(value):
             self.tensors.append(value)
         elif isinstance(value, dict):
             for item in value.values():
                 self.collect(item)
+            if isinstance(value, _OrderedDict):
+                _validate_ordered_attrs(vars(value))
+                self.collect(vars(value))
         elif isinstance(value, (list, tuple)):
             for item in value:
                 self.collect(item)
 
+    def prepare(self, preserve_storage):
+        if not preserve_storage:
+            self.fetch_tensors = self.tensors
+            return
+        # Finish lazy writes before observing actual addresses. Reading a
+        # nonmaterialized holder id is not evidence of shared storage.
+        jt.sync_all(True)
+        regions = {}
+        for value in self.tensors:
+            key = _dense_snapshot_region(value)
+            self.regions[id(value)] = key
+            leader = regions.get(key) if key is not None else None
+            if leader is None:
+                leader = id(value)
+                self.fetch_tensors.append(value)
+                if key is not None:
+                    regions[key] = leader
+            self.aliases[id(value)] = leader
+
     def capture(self, *arrays):
         self.values.update((id(value), np.array(array, copy=True))
-                           for value, array in zip(self.tensors, arrays))
+                           for value, array in zip(self.fetch_tensors, arrays))
+        for identity, leader in self.aliases.items():
+            self.values[identity] = self.values[leader]
 
 
-def _snapshot_tensors(obj):
+def _snapshot_tensors(obj, preserve_storage=False):
     """Host values for codecs without changing source tensor residency."""
     snapshot = _TensorSnapshots()
     snapshot.collect(obj)
+    snapshot.prepare(preserve_storage)
     if snapshot.tensors:
         # Fetch copies to host without moving the source sharing group.
-        jt.fetch(*snapshot.tensors, snapshot.capture)
+        jt.fetch(*snapshot.fetch_tensors, snapshot.capture)
     jt.sync_all(True)
+    if preserve_storage:
+        for value in snapshot.tensors:
+            before = snapshot.regions[id(value)]
+            if before is not None and _dense_snapshot_region(value) != before:
+                raise RuntimeError("checkpoint source storage changed during fetch")
     if len(snapshot.values) != len(snapshot.tensors):
         raise RuntimeError("checkpoint tensor fetch did not complete")
     return snapshot.values
 
 
 def save(obj, f, *a, **k):
-    portable = _to_portable(obj, _snapshot_tensors(obj))
+    portable = _to_portable(obj, _snapshot_tensors(obj, preserve_storage=True))
     if hasattr(f, "write"):
         _pickle.dump(portable, f)
         return
@@ -131,7 +277,34 @@ def _preserve_parameter(obj, moved, g):
     return moved
 
 
-def _apply_map_location(obj, map_location, _depth=0, source_devices=None):
+def _apply_map_location(obj, map_location, _depth=0, source_devices=None, _memo=None):
+    if _memo is None:
+        _memo = {}
+    if id(obj) in _memo:
+        if _memo[id(obj)] is _LIST_IN_PROGRESS:
+            raise TypeError("recursive list subclass is not portable")
+        return _memo[id(obj)]
+    storage = (source_devices or {}).get(_STORAGE_REFS, {}).get(id(obj))
+    storage_key = (_STORAGE_REFS, storage)
+    if storage is not None:
+        g = get_install_context(jt).target_namespace
+        if storage_key not in _memo:
+            # Map an untracked backing once, then rebuild EVERY user holder.
+            # Moving a trainable first Tensor would otherwise create a copy
+            # grad_fn and make checkpoint leaf behavior depend on dict order.
+            backing = _loaded_storage_alias(obj, False, False)
+            devices = {id(backing): source_devices[id(obj)]}
+            _memo[storage_key] = _apply_map_location_impl(
+                backing, map_location, _depth, devices, _memo)
+        value = _loaded_storage_alias(_memo[storage_key], obj.requires_grad,
+                                      isinstance(obj, g.nn.Parameter))
+    else:
+        value = _apply_map_location_impl(obj, map_location, _depth, source_devices, _memo)
+    _memo[id(obj)] = value
+    return value
+
+
+def _apply_map_location_impl(obj, map_location, _depth, source_devices, _memo):
     """Move every loaded Var to the requested device.
 
     `map_location` was documented as "(ignored)": a checkpoint saved from
@@ -143,22 +316,40 @@ def _apply_map_location(obj, map_location, _depth=0, source_devices=None):
     if map_location is None and not source_devices:
         return obj
     if isinstance(obj, dict):
-        return {k: _apply_map_location(v, map_location, _depth + 1, source_devices)
-                for k, v in obj.items()}
+        value = _OrderedDict() if isinstance(obj, _OrderedDict) else {}
+        _memo[id(obj)] = value
+        for key, item in obj.items():
+            value[key] = _apply_map_location(item, map_location, _depth + 1, source_devices, _memo)
+        if isinstance(obj, _OrderedDict):
+            value.__dict__ = _apply_map_location(vars(obj), map_location, _depth + 1, source_devices, _memo)
+        return value
+    if type(obj) is list:
+        value = []
+        _memo[id(obj)] = value
+        value.extend(_apply_map_location(v, map_location, _depth + 1, source_devices, _memo) for v in obj)
+        return value
     if isinstance(obj, (list, tuple)):
-        built = [_apply_map_location(v, map_location, _depth + 1, source_devices) for v in obj]
+        if isinstance(obj, list):
+            _memo[id(obj)] = _LIST_IN_PROGRESS
+        built = [_apply_map_location(v, map_location, _depth + 1, source_devices, _memo) for v in obj]
+        if id(obj) in _memo and _memo[id(obj)] is not _LIST_IN_PROGRESS:
+            return _memo[id(obj)]
         if isinstance(obj, tuple):
             if hasattr(obj, "_fields"):
-                return type(obj)(*built)
-            return tuple(built) if type(obj) is tuple else type(obj)(built)
-        return type(obj)(built) if type(obj) is not list else built
-    if not isinstance(obj, jt.Var):
+                value = type(obj)(*built)
+            else:
+                value = tuple(built) if type(obj) is tuple else type(obj)(built)
+        else:
+            value = type(obj)(built)
+        _memo[id(obj)] = value
+        return value
+    if not jt.core._is_tensor_carrier(obj):
         return obj
     source = (source_devices or {}).get(id(obj), "cpu")
     target = map_location if map_location is not None else source
     if callable(target) and not isinstance(target, (str, dict)):
         moved = target(obj, source)
-        if isinstance(moved, jt.Var):
+        if jt.core._is_tensor_carrier(moved):
             return _preserve_parameter(obj, moved, g)
         target = source
     if isinstance(target, dict):

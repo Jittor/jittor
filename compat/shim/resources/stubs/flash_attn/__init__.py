@@ -51,6 +51,7 @@ __all__ = [
     "flash_attn_varlen_func",
     "flash_attn_varlen_qkvpacked_func",
     "flash_attn_varlen_kvpacked_func",
+    "flash_attn_with_kvcache",
     "flashattn_jittor_backend",
     "flashattn_jittor_last_error",
     "is_flashattn_jittor_available",
@@ -114,6 +115,22 @@ def _native_required():
             "JITTOR_FLASHATTN_JITTOR_REQUIRED",
         )
     )
+
+
+def flash_attn_with_kvcache(*args, **kwargs):
+    """Expose the optional cache entry without claiming a math implementation.
+
+    Transformers imports this alongside the ordinary training entry points,
+    even for cache-free attention. Actual cache calls require a backend that
+    implements cache mutation and its complete contract; dense attention alone
+    is not a substitute.
+    """
+    function = _native_function("flash_attn_with_kvcache")
+    if function is None:
+        raise NotImplementedError(
+            "flash_attn_with_kvcache requires a native backend with KV-cache "
+            "support; the Jittor math attention facade does not implement it")
+    return function(*args, **kwargs)
 
 
 def _call_native(name, *args, **kwargs):
@@ -186,9 +203,13 @@ def _sdpa_segment(q, k, v, causal, softmax_scale, dropout_p):
     qh = q.permute(1, 0, 2).unsqueeze(0)   # [1,H,Lq,Cq]
     kh = k.permute(1, 0, 2).unsqueeze(0)   # [1,H,Lk,C]
     vh = v.permute(1, 0, 2).unsqueeze(0)   # [1,H,Lk,Cv]
+    enable_gqa = (
+        int(qh.shape[-3]) != int(kh.shape[-3])
+        or int(qh.shape[-3]) != int(vh.shape[-3])
+    )
     oh = F.scaled_dot_product_attention(
         qh, kh, vh, dropout_p=dropout_p,
-        is_causal=bool(causal), scale=softmax_scale)
+        is_causal=bool(causal), scale=softmax_scale, enable_gqa=enable_gqa)
     return oh.squeeze(0).permute(1, 0, 2)  # [Lq,H,Cv]
 
 
@@ -269,9 +290,13 @@ def _dense_core(q, k, v, causal, softmax_scale, dropout_p):
     qh = q.permute(0, 2, 1, 3)             # [B,H,Lq,Cq]
     kh = k.permute(0, 2, 1, 3)             # [B,H,Lk,C]
     vh = v.permute(0, 2, 1, 3)             # [B,H,Lk,Cv]
+    enable_gqa = (
+        int(qh.shape[-3]) != int(kh.shape[-3])
+        or int(qh.shape[-3]) != int(vh.shape[-3])
+    )
     oh = F.scaled_dot_product_attention(
         qh, kh, vh, dropout_p=dropout_p,
-        is_causal=bool(causal), scale=softmax_scale)
+        is_causal=bool(causal), scale=softmax_scale, enable_gqa=enable_gqa)
     return oh.permute(0, 2, 1, 3)          # [B,Lq,H,Cv]
 
 

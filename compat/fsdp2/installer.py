@@ -199,6 +199,10 @@ def install_with_registry(dist, torch_module=None, registry=None):
         (optimizer, ("sharded_sgd_step", "local_sharded_state_dict")),
     ):
         exports.update((name, getattr(owner, name)) for name in names)
+    from ..torch.context import get_install_context
+    from .owned_module import owned_fsdp_module_type
+    exports["FSDPModule"] = owned_fsdp_module_type(
+        get_install_context(registry.root_module))
     for mod in (fsdp_mod, fsdp_api_mod, fsdp_full_mod, fsdp_fully_pkg,
                 fsdp_fully_mod, fsdp_fully_api_mod, comp_fsdp_mod,
                 comp_fsdp_fully_mod, comp_fsdp_api_mod):
@@ -224,6 +228,15 @@ def install_with_registry(dist, torch_module=None, registry=None):
     fsdp_collectives_mod.all_gather = public_helpers.all_gather
     fsdp_collectives_mod.reduce_scatter = public_helpers.reduce_scatter
     _install_wrap_helpers(fsdp_wrap_mod)
+
+    from ..torch.context import get_install_context
+    from .owned_dtensor import owned_dtensor_type
+    exports["DTensor"] = owned_dtensor_type(get_install_context(registry.root_module))
+    # Lazy implementation imports must follow the package's existing private
+    # publication rule, not enlarge its pinned public API after activation.
+    package = sys.modules[__package__]
+    for name in ("owned_dtensor", "owned_module"):
+        vars(package).pop(name, None)
 
     tensor_factories = {
         name: getattr(dtensor, name)

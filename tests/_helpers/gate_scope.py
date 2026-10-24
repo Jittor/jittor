@@ -99,6 +99,10 @@ ENVIRONMENT_SKIP_PATTERNS = (
     # asserts directory permissions cannot hold when the suite runs as root,
     # because root bypasses them.
     "root ignores",
+    # This exact SDK-only compile probe has two flag variants and is guarded
+    # by sys.platform != "darwin". A Linux runner cannot exercise the macOS
+    # ucontext headers; no generic SDK/platform token is accepted here.
+    "macos sdk ucontext feature macros",
     # A CPU without simultaneous multithreading: the OpenMP cases that limit a
     # run to one thread per physical core have nothing to limit there
     # (`tests/runtime/test_openmp_threads.py`).

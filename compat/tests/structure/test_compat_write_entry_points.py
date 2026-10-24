@@ -286,6 +286,7 @@ CLASSIFIED = {
     (C + "torch/amp.py", "_refresh_amp_register", "flags"): "runtime",
     # node_order is set and restored inside one optimizer step.
     (C + "torch/optimizer_adam.py", "_adam_step", "flags"): "runtime",
+    (C + "torch/optimizer_adam.py", "_apply_adam_updates", "flags"): "runtime",
     (C + "torch/optimizer_api.py", "_step_with_closure", "flags"): "runtime",
     (C + "torch/optimizer_api.py", "_torch_post_step", "flags"): "runtime",
     (C + "torch/serialization/portable.py", "_apply_map_location", "flags"): "runtime",

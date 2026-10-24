@@ -3,6 +3,7 @@
 import jittor as jt
 from jittor import nn
 from functools import lru_cache
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from jittor._runtime.backend_libraries import library_resource
 from jittor._runtime.dispatch import optional_kernel, select_kernel
 
@@ -283,10 +284,273 @@ CHECK(0 == cudaGetLastError());
     return CodeSoftmaxStreaming
 
 
+def _supports_warp_softmax_f32(a):
+    """Bounded dense last-axis input; all other routes keep their old owner."""
+    if _jittor_dtype_name(a.dtype) != "float32" or not a.shape:
+        return False
+    length = int(a.shape[-1])
+    total = int(a.numel())
+    return (32 <= length <= 1024 and 0 < total <= ((1 << 31) - 1) // 4
+            and a._storage_is_contiguous())
+
+
+@lru_cache(maxsize=32)
+def _softmax_warp_f32_cls(length):
+    """FP32 persistent-warp fold, with a separately rounded backward product.
+
+    The lane tree follows the installed Torch2.8 PersistentSoftmax.cuh.
+    No broad reassociation or fast-math compiler switch is needed.
+    """
+    if type(length) is not int or not 32 <= length <= 1024:
+        raise ValueError("bounded FP32 softmax length required")
+    power = 1 << (length - 1).bit_length()
+    iterations = power // 32
+    batch = 2 if power <= 128 else 1
+
+    class WarpSoftmaxF32(jt.Function):
+        def execute(self, x):
+            source = r"""
+            __global__ static void warp_softmax_f32(
+                const float* input, float* output, int rows) {
+                const int lane = threadIdx.x;
+                const int first = (blockIdx.x * 4 + threadIdx.y) * BATCH;
+                #pragma unroll
+                for (int b = 0; b < BATCH; ++b) {
+                    const int row = first + b;
+                    float value[ITERATIONS];
+                    #pragma unroll
+                    for (int i = 0; i < ITERATIONS; ++i) {
+                        const int column = lane + i * 32;
+                        value[i] = row < rows && column < LENGTH
+                            ? input[row * LENGTH + column] : -INFINITY;
+                    }
+                    float maximum = value[0];
+                    #pragma unroll
+                    for (int i = 0; i < ITERATIONS; ++i)
+                        maximum = maximum > value[i] ? maximum : value[i];
+                    #pragma unroll
+                    for (int offset = 16; offset > 0; offset >>= 1) {
+                        float other = __shfl_xor_sync(0xffffffffu, maximum, offset);
+                        maximum = maximum < other ? other : maximum;
+                    }
+                    float total = 0.0f;
+                    #pragma unroll
+                    for (int i = 0; i < ITERATIONS; ++i) {
+                        value[i] = expf(value[i] - maximum);
+                        total = total + value[i];
+                    }
+                    #pragma unroll
+                    for (int offset = 16; offset > 0; offset >>= 1)
+                        total = total + __shfl_xor_sync(0xffffffffu, total, offset);
+                    if (row < rows) {
+                        #pragma unroll
+                        for (int i = 0; i < ITERATIONS; ++i) {
+                            const int column = lane + i * 32;
+                            if (column < LENGTH)
+                                output[row * LENGTH + column] = value[i] / total;
+                        }
+                    }
+                }
+            }
+            const int rows = in0->num / LENGTH;
+            warp_softmax_f32<<<(rows + 4 * BATCH - 1) / (4 * BATCH), dim3(32, 4)>>>(
+                in0_p, out0_p, rows);
+            CHECK(0 == cudaGetLastError());
+            """
+            source = source.replace("ITERATIONS", str(iterations)).replace(
+                "BATCH", str(batch)).replace("LENGTH", str(length))
+            self.output = jt.code(x.shape, x.dtype, [x],
+                                  cuda_header="#include <math.h>", cuda_src=source)
+            return self.output
+
+        def grad(self, gradient):
+            if gradient is None:
+                return None
+            source = r"""
+            __global__ static void warp_softmax_f32_grad(
+                const float* output, const float* gradient, float* result, int rows) {
+                const int lane = threadIdx.x;
+                const int first = (blockIdx.x * 4 + threadIdx.y) * BATCH;
+                #pragma unroll
+                for (int b = 0; b < BATCH; ++b) {
+                    const int row = first + b;
+                    float y[ITERATIONS], gy[ITERATIONS];
+                    float total = 0.0f;
+                    #pragma unroll
+                    for (int i = 0; i < ITERATIONS; ++i) {
+                        const int column = lane + i * 32;
+                        const bool valid = row < rows && column < LENGTH;
+                        y[i] = valid ? output[row * LENGTH + column] : 0.0f;
+                        const float dy = valid ? gradient[row * LENGTH + column] : 0.0f;
+                        gy[i] = __fmul_rn(dy, y[i]);
+                        total = total + gy[i];
+                    }
+                    #pragma unroll
+                    for (int offset = 16; offset > 0; offset >>= 1)
+                        total = total + __shfl_xor_sync(0xffffffffu, total, offset);
+                    if (row < rows) {
+                        #pragma unroll
+                        for (int i = 0; i < ITERATIONS; ++i) {
+                            const int column = lane + i * 32;
+                            if (column < LENGTH)
+                                result[row * LENGTH + column] = __fmaf_rn(-y[i], total, gy[i]);
+                        }
+                    }
+                }
+            }
+            const int rows = in0->num / LENGTH;
+            warp_softmax_f32_grad<<<(rows + 4 * BATCH - 1) / (4 * BATCH), dim3(32, 4)>>>(
+                in0_p, in1_p, out0_p, rows);
+            CHECK(0 == cudaGetLastError());
+            """
+            source = source.replace("ITERATIONS", str(iterations)).replace(
+                "BATCH", str(batch)).replace("LENGTH", str(length))
+            return jt.code(self.output.shape, self.output.dtype, [self.output, gradient],
+                           cuda_header="#include <math.h>", cuda_src=source)
+
+    return WarpSoftmaxF32
+
+
+def _supports_large_softmax_f32(x):
+    if not x.shape or _jittor_dtype_name(x.dtype) != 'float32':
+        return False
+    columns=int(x.shape[-1]);total=int(x.numel())
+    return (131072 <= columns <= 262144 and columns % 4 == 0
+            and 0 < total <= ((1 << 31)-1)//4
+            and 1 <= total//columns <= 64 and x._storage_is_contiguous()
+            and x._storage_offset() % 4 == 0)
+
+
+@lru_cache(maxsize=1)
+def _softmax_large_f32_cls():
+    class LargeSoftmaxF32(jt.Function):
+        def execute(self,x):
+            if not _supports_large_softmax_f32(x):
+                raise ValueError('bounded dense aligned FP32 CUDA row required')
+            self.output=jt.code(x.shape,x.dtype,[x],cuda_header='#include <float.h>\n#include <math.h>',cuda_src=r'''
+            __global__ static void large_softmax_f32(
+                const float* input,float* output,int columns) {
+                const int t=threadIdx.x,lane=t&31,warp=t>>5;
+                __shared__ float partial[32];
+                __shared__ float maximum,total;
+                input+=blockIdx.x*columns;output+=blockIdx.x*columns;
+                float local=-FLT_MAX;
+                const int vectors_end=columns-columns%4096;
+                for(int i=t*4;i<vectors_end;i+=4096) {
+                    const float4 v=*reinterpret_cast<const float4*>(input+i);
+                    local=local < v.x ? v.x : local;
+                    local=local < v.y ? v.y : local;
+                    local=local < v.z ? v.z : local;
+                    local=local < v.w ? v.w : local;
+                }
+                for(int i=vectors_end+t;i<columns;i+=1024)
+                    local=local < input[i] ? input[i] : local;
+                for(int shift=16;shift;shift>>=1) {
+                    const float other=__shfl_down_sync(0xffffffffu,local,shift);
+                    local=local < other ? other : local;
+                }
+                if(lane==0)partial[warp]=local;
+                __syncthreads();
+                local=t<32?partial[lane]:-FLT_MAX;
+                if(warp==0) {
+                    for(int shift=16;shift;shift>>=1) {
+                        const float other=__shfl_down_sync(0xffffffffu,local,shift);
+                        local=local < other ? other : local;
+                    }
+                    if(lane==0)maximum=local;
+                }
+                __syncthreads();
+                local=0.0f;
+                for(int i=t*4;i<vectors_end;i+=4096) {
+                    const float4 v=*reinterpret_cast<const float4*>(input+i);
+                    local+=expf(v.x-maximum);local+=expf(v.y-maximum);
+                    local+=expf(v.z-maximum);local+=expf(v.w-maximum);
+                }
+                for(int i=vectors_end+t;i<columns;i+=1024)
+                    local+=expf(input[i]-maximum);
+                for(int shift=16;shift;shift>>=1)
+                    local+=__shfl_down_sync(0xffffffffu,local,shift);
+                __syncthreads();
+                if(lane==0)partial[warp]=local;
+                __syncthreads();
+                local=t<32?partial[lane]:0.0f;
+                if(warp==0) {
+                    for(int shift=16;shift;shift>>=1)
+                        local+=__shfl_down_sync(0xffffffffu,local,shift);
+                    if(lane==0)total=local;
+                }
+                __syncthreads();
+                for(int i=t;i<columns;i+=1024)
+                    output[i]=expf(input[i]-maximum)/total;
+            }
+            const int columns=in0->shape[in0->shape.size()-1];
+            large_softmax_f32<<<in0->num/columns,1024>>>(in0_p,out0_p,columns);
+            CHECK(0 == cudaGetLastError());
+            ''')
+            return self.output
+
+        def grad(self,dy):
+            if dy is None:
+                return None
+            # The native reference rounds dy*output in an independent launch.
+            # A separate buffer also prevents an unintended fused dot-product.
+            scaled=jt.code(self.output.shape,self.output.dtype,[dy.contiguous(),self.output],cuda_src=r'''
+            __global__ static void prescale(const float* dy,const float* y,float* gy,int n) {
+                const int i=blockIdx.x*256+threadIdx.x;
+                if(i<n)gy[i]=__fmul_rn(dy[i],y[i]);
+            }
+            prescale<<<(in0->num+255)/256,256>>>(in0_p,in1_p,out0_p,in0->num);
+            CHECK(0 == cudaGetLastError());
+            ''')
+            return jt.code(self.output.shape,self.output.dtype,[self.output,scaled],cuda_src=r'''
+            __global__ static void large_softmax_f32_vjp(
+                const float* y,const float* gy,float* dx,int columns) {
+                const int t=threadIdx.x;
+                __shared__ float partial[512];
+                y+=blockIdx.x*columns;gy+=blockIdx.x*columns;dx+=blockIdx.x*columns;
+                float value=0.0f;
+                const int vectors_end=columns-columns%2048;
+                for(int i=t*4;i<vectors_end;i+=2048) {
+                    const float4 v=*reinterpret_cast<const float4*>(gy+i);
+                    value+=v.x;value+=v.y;value+=v.z;value+=v.w;
+                }
+                for(int i=vectors_end+t;i<columns;i+=512)value+=gy[i];
+                partial[t]=value;
+                __syncthreads();
+                // Large-row backward uses SoftMax.cu blockReduce, not its
+                // forward warp-shuffle blockReduceWarp reduction tree.
+                if(t<16) {
+                    float subtotal=0.0f;
+                    for(int j=0;j<32;++j)subtotal+=partial[t*32+j];
+                    __syncwarp(0x0000ffffu);
+                    partial[t]=subtotal;
+                }
+                __syncthreads();
+                if(t==0) {
+                    float total=0.0f;
+                    for(int j=0;j<16;++j)total+=partial[j];
+                    partial[0]=total;
+                }
+                __syncthreads();
+                for(int i=t;i<columns;i+=512)
+                    dx[i]=fmaf(-y[i],partial[0],gy[i]);
+            }
+            const int columns=in0->shape[in0->shape.size()-1];
+            large_softmax_f32_vjp<<<in0->num/columns,512>>>(in0_p,in1_p,out0_p,columns);
+            CHECK(0 == cudaGetLastError());
+            ''')
+    return LargeSoftmaxF32
+
+
+
 @optional_kernel("nn.softmax", "cuda", dtypes=("float16", "bfloat16", "float32"),
                  supports=_supports_softmax)
 def _softmax_v1(a, log=False, zero_all_neg_inf=False, dim=-1):
     length = int(a.shape[-1])
+    if not bool(log) and not bool(zero_all_neg_inf) and _supports_warp_softmax_f32(a):
+        return _softmax_warp_f32_cls(length)()(a)
+    if not bool(log) and not bool(zero_all_neg_inf) and _supports_large_softmax_f32(a):
+        return _softmax_large_f32_cls().apply(a)
     kind, threads = _softmax_schedule(length)
     cls = (_softmax_v1_cls(length, bool(log), bool(zero_all_neg_inf))
            if kind == "register" else

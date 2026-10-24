@@ -82,6 +82,11 @@ class TestNativeProcessGroup(unittest.TestCase):
         self.assertEqual(calls, [("reduce", (6, "sum", 7)),
                                  ("broadcast", (6, 1, 8))])
 
+    def test_single_rank_world_all_reduce_is_identity_without_native_method(self):
+        self.runtime.in_mpi = False
+        tensor = object()
+        self.assertIs(self.module.ProcessGroup()._all_reduce(tensor, "sum"), tensor)
+
     def test_backend_handle_and_collectives(self):
         from contextlib import nullcontext
 

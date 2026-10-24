@@ -4,6 +4,16 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#ifdef __APPLE__
+// ucontext.h requires X/Open visibility on macOS. Keep Darwin extensions
+// visible too, and choose feature macros before any system header is parsed.
+#ifndef _XOPEN_SOURCE
+#define _XOPEN_SOURCE 700
+#endif
+#ifndef _DARWIN_C_SOURCE
+#define _DARWIN_C_SOURCE 1
+#endif
+#endif
 #include <string.h>
 #include <signal.h>
 #ifndef _WIN32

@@ -7,6 +7,7 @@
 #pragma once
 #include <cstring>
 #include "core/op.h"
+#include "core/var.h"
 #include "mem/allocator.h"
 
 typedef struct _object PyObject;

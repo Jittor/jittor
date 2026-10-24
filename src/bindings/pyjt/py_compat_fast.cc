@@ -40,7 +40,7 @@ void forget_dtype_table(PyObject* type) {
 } // namespace
 
 PyObject* frontend_dtype(PyObject* self) {
-    if (!PyObject_TypeCheck(self, &PyjtVarHolder.ht_type))
+    if (!is_varholder_carrier(self))
         throw std::runtime_error("_frontend_dtype needs a Var");
     PyTypeObject* type = Py_TYPE(self);
     auto found = dtype_tables.find(type);
@@ -141,6 +141,9 @@ PyObject* fast_cat(PyObject* tensors, int64 dim) {
     NanoVector out_shape;
     for (int d = 0; d < ndim; d++) out_shape.push_back(d == dim ? total : shape[d]);
     VarPtr out = make_empty(out_shape, dtype);
+    // Match the Python concat path: the fresh destination is scratch storage,
+    // not a trainable input. Gradients come from the values inserted below.
+    out.set_stop_grad(true);
     int64 offset = 0;
     for (auto* v : vars) {
         VarSlices slices(ndim);
@@ -702,6 +705,10 @@ PyObject* fast_binary(PyObject* self, PyObject* other, int code) {
     if (code < 0 || code >= B_COUNT || !binary_slots[code] || !mark_cpu_like_fn
             || !is_var(self))
         return none();
+    // Internal casts/arrays are constructed here before the generated binary
+    // slot enters its own scope. They must already use the caller's frontend
+    // policy, including stopped-input propagation, not the native legacy one.
+    PyTensorFrontendScope scope(self, &other, 1, false);
     NanoString own = GET_RAW_PTR(VarHolder, self)->var->dtype();
     bool division = code >= B_TRUEDIV;
     bool scalar = false;

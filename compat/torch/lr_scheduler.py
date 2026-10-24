@@ -8,6 +8,7 @@ from ..diagnostics import EXPECTED, swallowed
 
 
 import math as _math
+import types as _types
 from typing import Any, cast
 
 def _base_lrs(opt):
@@ -115,6 +116,25 @@ class LambdaLR(LRScheduler):
         _load_lambda_state_dict(self, sd)
     def get_lr(self):
         return [b * fn(self.last_epoch) for b, fn in zip(self.base_lrs, self.lr_lambdas)]
+
+    def state_dict(self):
+        # Functions (including local lambdas) are supplied by the constructor,
+        # not a portable checkpoint. Callable objects contribute only their
+        # attribute state; restoring must retain the destination callable.
+        state = {name: value for name, value in self.__dict__.items()
+                 if name not in ("optimizer", "lr_lambdas")}
+        state["lr_lambdas"] = [
+            None if isinstance(callback, _types.FunctionType) else callback.__dict__.copy()
+            for callback in self.lr_lambdas]
+        return state
+
+    def load_state_dict(self, state_dict):
+        state = dict(state_dict)
+        callback_states = state.pop("lr_lambdas")
+        self.__dict__.update(state)
+        for index, attributes in enumerate(callback_states):
+            if attributes is not None:
+                self.lr_lambdas[index].__dict__.update(attributes)
 
 
 class MultiplicativeLR(LRScheduler):

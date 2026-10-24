@@ -967,6 +967,35 @@ class TestTorchBootstrap(unittest.TestCase):
             self.assertEqual(len(exts[0].sources), 2)
             self.assertTrue(exts[0].setup_py.endswith("setup.py"))
 
+    def test_setup_build_child_cannot_recursively_autobuild_itself(self):
+        from jittor.compat.shim import build as shim_build
+
+        with tempfile.TemporaryDirectory(dir=str(_TEST_STATE_ROOT)) as d:
+            root = pathlib.Path(d, "recursive_ext")
+            root.mkdir()
+            setup_py = root / "setup.py"
+            setup_py.write_text(
+                "from torch.utils.cpp_extension import BuildExtension\n",
+                encoding="utf-8",
+            )
+            extension = shim_build.NativeExtension(
+                root=os.fspath(root),
+                setup_py=os.fspath(setup_py),
+                reason="test extension",
+            )
+            with mock.patch.object(
+                shim_build, "_needs_build", return_value=True
+            ), mock.patch.object(shim_build.subprocess, "run") as run:
+                shim_build.build_extension_dirs(
+                    [extension],
+                    env={"JITTOR_TORCH_SKIP_EXT_BUILD": "0"},
+                    verbose=False,
+                )
+
+        child_env = run.call_args.kwargs["env"]
+        self.assertEqual(child_env["JITTOR_TORCH_SKIP_EXT_BUILD"], "1")
+        self.assertEqual(run.call_args.kwargs["cwd"], os.fspath(root))
+
     def test_explicit_project_runtime_defaults_to_user_cache(self):
         from jittor.compat.shim.preflight import project_runtime_root
 

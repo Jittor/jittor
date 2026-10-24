@@ -628,6 +628,20 @@ class TestTorchAutocastNumerics(cu.JittorTestCase):
         with torch.autocast(region_device(device), dtype=torch.float32):
             self.assertEqual(dtype_name(a + a), "float32")
 
+    def test_bfloat16_region_preserves_explicit_fp32_stability_islands(self, device):
+        """BF16 autocast must never approximate FP32 work with IEEE float16.
+
+        Models such as Qwen3.5 intentionally retain recurrent state in FP32
+        for exponent range. Existing BF16 operands already keep their dtype
+        without Prefer16; all-FP32 work stays FP32 until Jittor has a distinct
+        BF16 autocast register.
+        """
+        fp32 = jt.random((8, 8), dtype="float32")
+        bf16 = fp32.cast("bfloat16")
+        with torch.autocast(region_device(device), dtype=torch.bfloat16):
+            self.assertEqual(dtype_name(fp32 * fp32), "float32")
+            self.assertEqual(dtype_name(bf16 * bf16), "bfloat16")
+
     def test_an_enabled_false_region_changes_nothing(self, device):
         a = jt.random((8, 8), dtype="float32")
         with torch.autocast(region_device(device), dtype=torch.float16,

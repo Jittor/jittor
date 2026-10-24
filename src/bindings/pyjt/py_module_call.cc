@@ -149,8 +149,7 @@ const TypeInfo& info_of(PyTypeObject* type) {
     TypeInfo info;
     PyObjHolder owner(PyObject_GetAttrString((PyObject*)type, "_nn_frontend_owner"));
     info.tensor_type = PyObject_GetAttrString(owner.obj, "tensor_type");
-    PyObjHolder native(PyObject_GetAttrString(owner.obj, "native_module"));
-    info.native_call = PyObject_GetAttrString(native.obj, "__call__");
+    info.native_call = PyObject_GetAttrString(owner.obj, "module_call");
     if (!info.tensor_type || !info.native_call)
         throw std::runtime_error("torch frontend module type without its owner");
     PyObject* own_dispatch = PyObject_GetAttrString((PyObject*)type, "_dispatch_call");
@@ -176,17 +175,30 @@ const TypeInfo& info_of(PyTypeObject* type) {
     return type_info.emplace(type, info).first->second;
 }
 
-PyObject* first_var(PyObject* args, PyObject* kwargs) {
+PyObject* first_var(PyObject* args, PyObject* kwargs, bool& needs_deep_search) {
+    needs_deep_search = false;
     Py_ssize_t n = PyTuple_GET_SIZE(args);
     for (Py_ssize_t i = 0; i < n; i++) {
         PyObject* value = PyTuple_GET_ITEM(args, i);
         if (PyObject_TypeCheck(value, &PyjtVarHolder.ht_type)) return value;
+        // A nested operand can precede a later direct Var. Let the canonical
+        // Python search resolve containers (including cycles), before scopes
+        // change; do not invent a second recursive traversal here.
+        if (PyDict_Check(value) || PyList_Check(value) || PyTuple_Check(value)) {
+            needs_deep_search = true;
+            return nullptr;
+        }
     }
     if (kwargs) {
         PyObject *key, *value;
         Py_ssize_t pos = 0;
-        while (PyDict_Next(kwargs, &pos, &key, &value))
+        while (PyDict_Next(kwargs, &pos, &key, &value)) {
             if (PyObject_TypeCheck(value, &PyjtVarHolder.ht_type)) return value;
+            if (PyDict_Check(value) || PyList_Check(value) || PyTuple_Check(value)) {
+                needs_deep_search = true;
+                return nullptr;
+            }
+        }
     }
     return nullptr;
 }
@@ -1007,7 +1019,9 @@ PyObject* module_call_native(PyObject* module, PyObject* args, PyObject* kwargs)
     // Placement follows the first tensor argument; without one that has an
     // explicit placement, an active `with torch.device(...)` would decide,
     // and that resolution stays in Python.
-    PyObject* like = first_var(args, kwargs);
+    bool needs_deep_search;
+    PyObject* like = first_var(args, kwargs, needs_deep_search);
+    if (needs_deep_search) return call_with(slow, module, args, kwargs);
     Var* like_var = like ? GET_RAW_PTR(VarHolder, like)->var : nullptr;
     if (!like_var || !like_var->placement.explicit_backend) {
         PyObjHolder active(PyObject_CallObject(device_context, nullptr));
