@@ -286,24 +286,26 @@ def _load_sharded_state_dict(module, state_dict, strict=True):
     # Prepare every new local shard before changing any model owner.
     pending = []
     for state, values in groups.values():
-        if getattr(state, "true_fsdp_flat", False):
-            pieces = [values.get(id(entry), entry.shard) for entry in state.true_fsdp_params]
-            value = jt.concat(pieces, dim=0) if len(pieces) > 1 else pieces[0]
-            pending.append((state, None, common._pad_flat(value, state.true_fsdp_flat_shard_numel)))
-        else:
-            for entry in state.true_fsdp_params:
-                if id(entry) in values:
-                    pending.append((state, entry, common._pad_flat(values[id(entry)], entry.shard_numel)))
+        with common._frontend_scope(state):
+            if getattr(state, "true_fsdp_flat", False):
+                pieces = [values.get(id(entry), entry.shard) for entry in state.true_fsdp_params]
+                value = jt.concat(pieces, dim=0) if len(pieces) > 1 else pieces[0]
+                pending.append((state, None, common._pad_flat(value, state.true_fsdp_flat_shard_numel)))
+            else:
+                for entry in state.true_fsdp_params:
+                    if id(entry) in values:
+                        pending.append((state, entry, common._pad_flat(values[id(entry)], entry.shard_numel)))
     for state, entry, value in pending:
-        if entry is None:
-            state.true_fsdp_flat_shard.update(value)
-            shard._refresh_flat_entry_shards(state)
-        else:
-            entry.shard.update(value)
-        for current_entry in state.true_fsdp_params:
-            object.__setattr__(current_entry.owner, current_entry.attr, current_entry.shard)
-            current_entry.full_param = None
-        state.true_fsdp_unsharded = False
+        with common._frontend_scope(state):
+            if entry is None:
+                state.true_fsdp_flat_shard.update(value)
+                shard._refresh_flat_entry_shards(state)
+            else:
+                entry.shard.update(value)
+            for current_entry in state.true_fsdp_params:
+                object.__setattr__(current_entry.owner, current_entry.attr, current_entry.shard)
+                current_entry.full_param = None
+            state.true_fsdp_unsharded = False
     for target, value in ordinary:
         target.assign(value)
     return None

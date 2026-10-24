@@ -6,6 +6,7 @@ Real CPU/HCCL tensor placement and BF16 device execution are separate gates.
 
 import ast
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 import importlib.util
 import hashlib
 import json
@@ -310,10 +311,30 @@ def test_default_store_bridge_reuses_rendezvous_without_a_second_group(runtime, 
 
 
 def test_actual_provider_model_shards_round_trip_without_gather(runtime):
+    scope_active = [False]
+    scope_events = []
+    @contextmanager
+    def frontend_scope(state):
+        assert not scope_active[0]
+        scope_active[0] = True
+        scope_events.append("enter")
+        try:
+            yield
+        finally:
+            scope_events.append("leave")
+            scope_active[0] = False
+    def guarded_concat(values, dim):
+        assert scope_active[0], "checkpoint concat must keep the state frontend placement scope"
+        return local(np.concatenate(values))
+    def guarded_pad(value, count):
+        assert scope_active[0], "checkpoint padding must keep the state frontend placement scope"
+        return local(np.pad(value, (0, count - value.size)))
     class Local(np.ndarray):
         def detach(self): return self
         def clone(self): return self.copy().view(Local)
-        def update(self, value): np.copyto(self, value)
+        def update(self, value):
+            assert scope_active[0], "checkpoint shard write must keep the state frontend placement scope"
+            np.copyto(self, value)
         def assign(self, value): np.copyto(self, value)
     def local(value): return np.asarray(value, dtype=np.float32).view(Local)
     storage_nodes = ast.parse((ROOT / "python/jittor/distributed/fsdp/storage.py").read_text()).body
@@ -323,7 +344,7 @@ def test_actual_provider_model_shards_round_trip_without_gather(runtime):
     common = types.SimpleNamespace(
         _flatten_var=lambda value: value.reshape(-1),
         _slice_flat=lambda value, offset, count: value[offset:offset + count],
-        _pad_flat=lambda value, count: local(np.pad(value, (0, count - value.size))))
+        _pad_flat=guarded_pad, _frontend_scope=frontend_scope)
     entries = []
     def refresh(state):
         for entry in state.true_fsdp_params:
@@ -332,7 +353,7 @@ def test_actual_provider_model_shards_round_trip_without_gather(runtime):
     shard = types.SimpleNamespace(_flat_local_overlap=namespace["_flat_local_overlap"],
                                   _refresh_flat_entry_shards=refresh,
                                   _fsdp_param_entry=lambda value: (None, None))
-    provider = {"np": np, "jt": types.SimpleNamespace(concat=lambda values, dim: local(np.concatenate(values))),
+    provider = {"np": np, "jt": types.SimpleNamespace(concat=guarded_concat),
                 "common": common, "shard": shard, "dtensor": types.SimpleNamespace(DTensor=runtime.dtensor, Shard=lambda dim: object()),
                 "_checkpoint_entries": lambda module: entries,
                 "_checkpoint_tensor": lambda value, reference, preserve_dtype=False: local(value.copy())}
@@ -363,6 +384,8 @@ def test_actual_provider_model_shards_round_trip_without_gather(runtime):
         provider["_load_sharded_state_dict"](model, saved)
         np.testing.assert_array_equal(state.true_fsdp_flat_shard, expected)
         assert not state.true_fsdp_unsharded
+        assert not scope_active[0]
+    assert scope_events == ["enter", "leave", "enter", "leave"] * 3
 
 
 @pytest.mark.parametrize("failure", ["missing_rank", "missing_payload"])
