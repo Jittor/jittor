@@ -2,28 +2,22 @@
 
 本记录对应[综合计划](../testing/2026-10-21-ascend-integrated-compat-plan.md)，唯一活动状态源为[整改看板](../architecture/refactor-board.md)的 ASC 任务。前半部分保留 2026-10-21 的 MAIN-r28/123 历史验收；后续各 cohort 按各自冻结源码区分，不相互外推。R65 真实 Qwen3-0.6B BF16 LoRA 对拍与 R68 最终主树 FSDP2 双卡 Linear 对拍均绑定提交 `9390fa0e84de651e7e1b01de4d142e04d4333f8b`、3336 文件源清单 SHA256 `c00986fb31e15e18860acf60e2ee0059c7dc63afb90ef0a286131d9fc7eb0f9a`；旧 R64/R63 仍只对其原冻结源码有效。下文保留原始失败和未运行项。
 
-> **截至 2026-10-23 R130：** R130 在最终源码提交 `f5af805ab30aced4aefc214df257a0b575ca36a2` 上完成双卡 Linear FSDP2 的 FP32/FP32、BF16/FP32 与 BF16/BF16 compute/input 对拍，126 项零 mismatch，最大绝对差 $1.49\times10^{-8}$，预算仍为 `atol=2e-6, rtol=2e-5`；实际设备为 NPU3/6，Jittor fallback 增量为 0。真实 Qwen3 BF16 FSDP2 更新对拍仍有 108/224 个更新后参数数组超预算；R125/R129 的局部 VJP exact 结论不解释跨 decoder 反向上游梯度差异。真实模型恢复、nested HCCL 和性能/显存仍未验收；详见文末 R118–R130。
-
-> **R132/R133 历史状态（2026-10-23）：** R132真实Qwen3 BF16双卡完整训练的严格更新gate仍失败，108/224个LoRA-B更新数组超预算。R133在物理NPU6用R132捕获的Native/Jittor两种上游梯度重放Q/K/V base/LoRA分支，并比较Q/V LoRA A/B参数梯度；80/80个数组跨runtime逐位一致，fallback增量为0。R132的Q/K/V `.input` hook key是同一共享hidden-state累计梯度，不是各projection的branch-local VJP。当前调查重点因此转向原始完整图的共享梯度累计、其上游反向路径及optimizer/update路径；R133局部诊断没有关闭完整训练gate。
-
-> **截至2026-10-24 R170：** R169真实Qwen3-0.6B BF16 LoRA双卡对拍的forward、224组梯度和224组初始参数通过，但102/224个LoRA-B更新数组仍超原预算，Native rank1物理卡排他映射也未通过核验。R170修复了3项Torch shim CPU回归并拆分优化器状态模块；Native/Torch Core为341 passed、46 skipped、1 xfailed，tests/structure为1794 passed、3 skipped，layout通过。R170没有新跑NPU模型，所以不改变R169更新失败、恢复待验和无合格性能结论。
-
-> **截至2026-10-24 R176：** R169的102/224个LoRA-B更新数组仍超原预算；当前source manifest fd03f62972e2245e24d8498cd25f819139f8e6f8上的R173/R174局部o_proj与QK VJP均逐位一致。R172/R175/R176把可见的细小偏差收窄到Q/K RMSNorm输入梯度；R176手写反向候选虽减少部分不一致元素，仍未逐位匹配Native，故没有合入生产代码。真实双卡、恢复、随机/重计算、nested HCCL及性能/显存验收仍未完成。
-> **截至2026-10-24 R181：** 当前源码提交 fcf3571d024e7394babd8f4c601dab633d30bb1c 上，生产 Torch shim Pow2 前向/反向在16组已保存的Qwen3 BF16 layer26/27 Q/K RMSNorm输入重放中，输出和输入梯度均与隔离原生 PyTorch 逐位一致（两类各16/16组，最大差0）。NPU3实际执行、Jittor fallback增量0。该项是局部VJP修复证据，R169全模型102/224个LoRA-B更新数组仍待在新cohort完整复验；FSDP2、恢复、nested HCCL与性能/显存仍未验收。详见R181节。
+> **截至2026-10-24 R190：** R182在提交 `ee2f3e9345085b6bff1ded9519ea10af2c62723f` 的冻结源码上，真实Qwen3-0.6B BF16 LoRA双卡单次更新的完整logits、224组梯度、224组初始参数及224组更新后参数均通过原预算；更新最大绝对差为7.2759576e-12。Native rank1仍曾同时见于物理卡5/6，严格排他映射未通过。R183的Native fresh恢复失败已定位到固定Accelerate版本的空optimizer加载模板；R185的Jittor在首步更新后因默认SHARDED DCP FileSystemWriter未实现而失败。R188梯度裁剪回归CPU7项/NPU7项通过，R189真实ACL确定性开关与恢复1项通过，两项NPU验证fallback增量均为0；不授予完整多步恢复、训练确定性或性能资格。详见文末R182–R190。
 
 | 本轮验收 | 实际结论与源码范围 |
 | --- | --- |
 | 用户环境 | cgq 私有 Conda/Python3.11.17、CANN8.5.0、原生 Torch2.7.1/torch_npu2.7.1.post2 实卡 smoke；项目 dev 与独立 oracle 分离，安装目标均在私有目录 |
-| 最终主树回归 | source123 完整 structure 1430P/2 CUDA skips、layout P；1432 不同 case 与 source121 逐 node 相同；97.py+1.pyi AST3.7 P，既定 Ruff 相对 HEAD 新增0、减少12 |
+| 历史MAIN-r28回归 | source123 完整 structure 1430P/2 CUDA skips、layout P；1432 不同 case 与 source121 逐 node 相同；97.py+1.pyi AST3.7 P，既定 Ruff 相对 HEAD 新增0、减少12 |
+| R190 CPU提交门禁 | Native core103P/45S/1xfail、Torch core238P/1S，合计341P/46S/1xfail；完整tests/structure连同Torch core共1794P/3S，637.98秒、rc0；layout与internal links通过。梯度管理另CPU7P/NPU7P；不授予完整模型恢复资格 |
 | R170 CPU Core/structure | Core：Native 103 passed/45 skipped/1 xfailed，Torch 238 passed/1 skipped，combined 341 passed/46 skipped/1 xfailed，rc=0；额外 tests/structure：1794 passed/3 skipped，rc=0；layout通过。均为CPU门禁，不更新任何NPU模型结论 |
 | 八模型及综合 Trainer | 各自 source65 等冻结证据上，八模型完整输出/271 参数+2输入全梯度；Trainer4updates/8micro、61跨runtime检查；连续与2+2恢复216完整状态及轨迹 exact，历史fixture为dropout0顺序；R51/R56另对dropout=0.15的tiny BERT LoRA做Native/Jittor各自fresh-process恢复 |
 | 共享真实权重推理 | 0.6B既有冻结源码BF16完整推理P；source121的1.7B与4B各3输入/15完整数组/58,343,424 logits bitexact、cached/uncached greedy8 exact、actual NPU/fallback0；不是123重跑 |
 | 最终主树 AMP | source123 no-loader baseline 10P/0skip；source ee0146… 上 R43 完成 BF16/FP16 × FP32/低精度输入 × Linear/LoRA × 2步共168阵列/5760元素 Native/Jittor 对拍：168/168 bit-exact、最大差0、预算未改。修正共同显式cast参考后，source manifest r2 正式单测 Jittor 10/10通过、Native 8通过/2项Jittor-only跳过 |
-| 真实0.6B BF16 LoRA | R65在其冻结源码上的full/prefix/fresh-resume对拍通过；R169在其冻结源码上仍有102/224 LoRA-B更新数组失败、预算未改。R181当前源码只完成16组保存激活的Pow2/RMSNorm局部输出与输入梯度逐位复验，不代表全模型更新或恢复通过；详见R181 |
-| FSDP2 | R130双卡Linear fixture三种dtype组合126项无mismatch；R169真实Qwen3双卡Native/Jittor阶段rc=0且Jittor fallback增量0，但更新gate失败；Native rank1的PID同时见于物理卡6和5，不能作为排他物理映射验收。完整训练恢复、nested拓扑、重计算与性能未验收 |
+| 真实0.6B BF16 LoRA | R65的历史完整恢复保留原源码边界；R182新源码双卡单步完整logits、224梯度/初始参数/更新均通过，原预算未改。R183 Native恢复FAIL；R185 Jittor完成首步更新后SHARDED存储FAIL。完整逐步轨迹与最终源码恢复待验 |
+| FSDP2 | R130 Linear的三种dtype组合保留原冻结边界；R182真实模型单步数值通过，但Native rank1仍见于5/6两卡，严格映射待验。R185默认SHARDED保存失败；完整训练恢复、nested拓扑、重计算与性能未验收 |
 | 速度/显存 | NPU未验收。1.7B配对流程仅18交替calls后停止，generation steady/decode未完成、rc-2/acceptedfalse；4Bperf未运行，CPU控制器资格不能替代NPU性能 |
 
-尚未达到全部适配退出条件。R65在提交 `9390fa0e84de651e7e1b01de4d142e04d4333f8b` 的3336文件清单上完成真实Qwen3-0.6B BF16 LoRA Native/Jittor full、prefix与fresh-process恢复，跨runtime 2187项比较无失败/无超预算，两侧各自恢复状态933项exact、梯度分段各1136项全通过，Jittor fallback为0；该协议固定顺序且Native deterministic为true、Jittor策略为UNIMPLEMENTED_FALSE，不能宣称两侧随机流或确定性策略匹配。R68在相同旧提交和清单上通过双卡Linear FSDP2 fixture。R130则绑定当前提交 `f5af805ab30aced4aefc214df257a0b575ca36a2`、3336 tracked files 和 source manifest SHA256 `31a590acb78ffcedd4de62f9bd8f84e5f84870a5506c9c046445308b5db51d9e`，三种 compute/input dtype 共126项比较零 mismatch、最大绝对差1.49e-8，两个rank的Jittor fallback增量为0，物理NPU映射为3/6。R130只验证Linear FSDP2输入叶梯度、参数梯度和SGD更新，不能外推到真实Qwen3反向、nested拓扑或恢复。R67的初始化前路径断言失败仍保留且已在R68修复；R68不覆盖真实模型、复杂分片/视图拓扑、恢复或重计算。还需定位Qwen3跨decoder上游梯度差异、修复并复验R71 nested child+root HCCL，验证activation checkpoint真实重计算及随机sampler、多worker/generator fresh-process恢复，并处理deterministic策略不匹配；把常用Trainer、Accelerate、Tokenizers、PEFT、safetensors的数据处理、训练包装和保存重载组合映射到当前源码。只对正确性通过的对应工作负载测吞吐、延迟、峰值显存和稳定性。当前没有合格的NPU速度/显存结论。raw CPU core四文件另有46P/9S/1个原样test_concat_random的300秒超时，未删case、缩规模或放宽超时，不称全部core通过。模型与fixture、性能与功能、旧源与最终源均不混用。
+尚未达到全部适配退出条件。R65在提交 `9390fa0e84de651e7e1b01de4d142e04d4333f8b` 的3336文件清单上完成真实Qwen3-0.6B BF16 LoRA Native/Jittor full、prefix与fresh-process恢复，跨runtime 2187项比较无失败/无超预算，两侧各自恢复状态933项exact、梯度分段各1136项全通过，Jittor fallback为0；该协议固定顺序且Native deterministic为true、Jittor策略为UNIMPLEMENTED_FALSE，不能宣称两侧随机流或确定性策略匹配。R68在相同旧提交和清单上通过双卡Linear FSDP2 fixture。R130则绑定当前提交 `f5af805ab30aced4aefc214df257a0b575ca36a2`、3336 tracked files 和 source manifest SHA256 `31a590acb78ffcedd4de62f9bd8f84e5f84870a5506c9c046445308b5db51d9e`，三种 compute/input dtype 共126项比较零 mismatch、最大绝对差1.49e-8，两个rank的Jittor fallback增量为0，物理NPU映射为3/6。R130只验证Linear FSDP2输入叶梯度、参数梯度和SGD更新，不能外推到真实Qwen3反向、nested拓扑或恢复。R67的初始化前路径断言失败仍保留且已在R68修复；R68不覆盖真实模型、复杂分片/视图拓扑、恢复或重计算。R169历史更新差异已在R182限定单步协议中通过复验；还需完成最终主树多步完整轨迹及恢复、复验R71 nested child+root HCCL，验证activation checkpoint真实重计算及随机sampler、多worker/generator fresh-process恢复，并处理deterministic策略不匹配；把常用Trainer、Accelerate、Tokenizers、PEFT、safetensors的数据处理、训练包装和保存重载组合映射到当前源码。只对正确性通过的对应工作负载测吞吐、延迟、峰值显存和稳定性。当前没有合格的NPU速度/显存结论。raw CPU core四文件另有46P/9S/1个原样test_concat_random的300秒超时，未删case、缩规模或放宽超时，不称全部core通过。模型与fixture、性能与功能、旧源与最终源均不混用。
 
 ## 源码与环境
 
@@ -1100,11 +1094,65 @@ R181绑定提交 fcf3571d024e7394babd8f4c601dab633d30bb1c、3339个tracked文件
 
 R181的完整NPZ、报告、manifest、运行日志和NPU监控全部保留在LAB cohort；CPU单测与core日志位于 _state/test-suite/pow-two-target/。
 
-## 按原计划截至R181仍需完成
+## 2026-10-24 R182–R190：真实单步更新、恢复故障及裁剪修复
 
-1. **关闭真实Qwen3首步更新差异。** R169仍有102/224个LoRA-B更新数组超原预算。R181已将生产Torch shim Pow2反向顺序修正，并在16组保存的BF16 Q/K RMSNorm输入上与Native逐位一致；但没有重跑完整模型，所以不能据此关闭R169更新失败。下一步以R181源码新建cohort，重跑完整输出、224组梯度、224组初始参数和224组更新并保持原预算；通过后再验fresh-process恢复。
-2. **完成当前主树双卡FSDP2与严格映射。** R169绑定较早源码，且Native rank1 PID曾同时见于卡5/6；要在fresh空闲NPU上重做当前源码的真实Trainer双卡对拍，核实每个Native rank只落在分配物理卡、Jittor fallback为0、监控无gap。补真实FP32/BF16 compute与FP32/BF16输入梯度目标组合，不能用R130 Linear fixture外推。
-3. **完成真实训练恢复闭环。** 在当前源码比较模型/LoRA、Adam、scheduler、数据游标及fresh-process恢复后的下一次更新。较早R65交叉恢复和Jittor自身LoRA恢复不能替代此验收。
-4. **补齐日常生态、激活重计算与随机恢复。** 覆盖Transformers、Tokenizers、PEFT、Accelerate、safetensors的常见数据处理、梯度累加、Trainer包装、checkpoint保存/加载和错误路径；证明activation checkpoint确实重执行，并覆盖随机sampler、显式generator、多worker预取、确定性设置及fresh-process随机状态恢复。
-5. **完成nested child+root HCCL验收。** Native/Jittor分别核实child与root communicator及所需dtype，不从单卡或Linear fixture外推。
-6. **最后测性能与显存。** 仅对对应正确性gate通过的相同工作负载比较吞吐、延迟、峰值显存和稳定性，区分首次编译、首步和稳态。当前没有合格NPU速度/显存结论。
+### R182：真实Qwen3-0.6B BF16 LoRA单步数值通过
+
+冻结HEAD为 `ee2f3e9345085b6bff1ded9519ea10af2c62723f`，3339个tracked文件manifest SHA256为 `9843decf48326baedd8ba946281fdac767d6a1bbda8c326fd19375477a6617a1`。LAB cohort为 `real-model/qwen3-06b-pow2-full-lora-r182-dual56/`。Native和Jittor分别新进程运行，Native 387.842秒、Jittor 165.369秒，均rc0、monitor gap0、无foreign occupant；Jittor fallback增量0，结束后卡空。Native rank0 PID1326918仅见于卡5，rank1 PID1326919参数为npu:1、但PID同时见于卡6和卡5；Jittor PID1345297/1345298分别只见于卡5/6。因此数值比较通过，严格Native排他物理映射仍未验收，阶段耗时不作性能。
+
+完整logits、224组参数梯度和224组初始参数逐位一致；224组更新参数均满足未改变的atol2e-6/rtol2e-5，最大绝对差7.2759576e-12。forward预算仍为.005/.03，gradient仍为.01/.05。这只关闭本冻结源码、该单步协议中的更新差异，不能外推4–10步、完整恢复、随机策略或性能。comparison SHA256为 `2da35fdb3e28c2b4bee9bc486d87e24f059f8ae70b6b2ead6239c7c070fbd8ff`；runner summary为 `d46b06d7e48dc41ed3b25e74a8bde1a7afcd949e891dfe7288f5794dee7a8661`。
+
+### R183/R184：保留Native恢复失败与Jittor裁剪失败
+
+`real-model/qwen3-06b-fsdp2-resume-r183-dual56/` 的Native continuous2、interrupt1、fresh resume到2三个阶段均rc0、无foreign、monitor gap0。恢复仍FAIL：连续Adam step2、恢复step1；每rank 112/112组最终LoRA参数不同、最大绝对差2.4981113710964564e-5，483组trainer状态中224组不同。末条sample及scheduler匹配不抵消Adam状态失败。原checkpoint实际包含112组step1状态及56组非零moment，不能把失败归于未保存。
+
+独立oracle-cpu审计原样安装的Accelerate1.10.1函数发现：保存使用FQN getter，加载却用fresh optimizer空数字键state_dict作为DCP模板，结果未请求moment。候选改为公共get_optimizer_state_dict模板后，真实checkpoint的112组状态、下一次更新和step2与直接恢复reference strict0。审计属于CPU定位证据，adapter候选仍待主树整合及真实模型NPU恢复；审计文件位于 `real-model/r183-native-audit-20261024/`，不计作新的NPU阶段。
+
+R183原Jittor阶段先因LAB缺少diagnose_matmul helper失败；R184补齐helper后，真实训练在clip的0维coef乘4096元素梯度处报cannot broadcast x [] to [4096]，rc1、61.948秒、monitor gap0、无foreign。两次失败及原日志保留，不覆盖。
+
+R183/R184 worker仅采集每phase首次logits/梯度与训练返回后末态，没有完整第二步轨迹；initial_parameter_values在checkpoint加载前采集，不能称为恢复初态。后续需即时保存每micro/clip/update状态的新harness。
+
+### R185：修复裁剪后完成首步，默认SHARDED保存失败
+
+基于ee2f3e9加 `compat/torch/grad.py` 和现有梯度测试两处dirty源码，全部3339文件manifest SHA256为 `0d58f68e0dc8a9239d23bda622dc69d47e02b66dab02d40c7b141f6520b50616`。每个local梯度形状显式broadcast设备端裁剪系数，未引入host item或改变裁剪数值预算。
+
+新cohort `real-model/qwen3-06b-fsdp2-resume-r185-dual56/` 的rank0/1分别串行预热1249.193/1265.942秒，实际卡5/6、fallback0、源码未变，两者退出后才双卡运行。正式Jittor continuous rc1、166.634秒、monitor gap0、无foreign，PID1717076/1717077分别在卡5/6，结束后卡空。已完成首步optimizer update，loss3.8984、grad_norm7.25462532043457、lr3e-5；随后Accelerate默认SHARDED保存调用FileSystemWriter触发NotImplementedError。未改FULL来绕过。execution SHA256为 `24dc877d76949e9d5da3c259ac4cdc6578897accb23bbfc6e69ef035d632363a`。
+
+本cohort把fallback scope改为覆盖实际trainer.train；Native文件显式绑定复用R183不可变结果，不算新Native运行。worker失败前尚未即时落盘完整逐步数组，因此不提供完整轨迹通过结论。首次JIT固定g++、python-config、cache_name及MPI-off，后续复用需保持相同构建配置。
+
+### R187/R188：梯度裁剪CPU/NPU回归
+
+CPU现有梯度管理文件全部7项通过、0skip、38.53秒，日志位于R185的 `grad-management-cpu.log`；新增4096元素用例另有R184独立1P/6 deselected记录。
+
+`device-api/clip-gradient-regression-r187-card5/` 因漏带预热编译器路径触发jit_utils重建，未进入测试或NPU计算；R188 attempt1在恢复正确配方后按保护要求rc3请求fresh-process重试。原日志保留。R188 attempt2 rc0、118.741秒，pytest7 passed/0skip、95.11秒；18次clip调用记录包含4096元素实际ACL0输入与norm，CPU子例记录真实CPU。PID1770032只观察到卡5，monitor gap0、foreign0、fallback0到0、源码前后与R185 manifest一致、结束后卡空。
+
+R188 attempt2 result SHA256为 `f7371869329fbf2c60744316e259585114fcacb038adb1a47edd699ba44374b0`，execution为 `d3ed9bf56ed34fc92e62b22fdf11219bad4dc6fd86bf8c4f0aef6873fb38b3e9`，pytest/stdout为 `514c51f59c7f2bcc6ef9bcd1eed46534d284af1866d03055ab41cd7b9a655fb2`。
+
+### R189：真实ACL确定性策略接口复验
+
+在同R185源码manifest上运行现有test_npu_deterministic_policy_toggles_backend_and_restores_state。attempt1因启动未source CANN、未找到ACL compiler而导入失败，未进入NPU计算；修正启动环境后，`device-api/deterministic-policy-r189-card5/attempt2/` rc0、23.802秒，1passed/0skip。测试True/False/True均核验真实backend flag、ACL求和，拒绝warn_only及错误类型，finally恢复原False。额外witness context为ACL0、sum4，fallback0到0，PID1826641实际卡5、monitor gap0、foreign0、结束后卡空、源码未变。
+
+result SHA256为 `9980bcccb1331cf8d7d8a8369dca120f661c496cd8e97031fd3faf7aaff0bb26`，stdout为 `4e13bd0efd0b04edf397401014c70418fcc1f1c1a16a492b5812f0f01a828442`。合并后源码已具备ACL策略setter/getter，本文历史UNIMPLEMENTED_FALSE只描述原冻结源码；这不证明完整训练算法可复现或双方性能策略一致。
+
+### 源码同步与后续准入
+
+2026-10-24 17:53的fetch及独立ls-remote均成功，wip为305c2f0866f163b0549d47b2e4264c5d41a86385、2.0-refactor为ca56aa802c2acf9a22bca32d1bee3276381ed203，均为当前HEAD祖先；既有9390fa0合并包含该2.0 tip，无需重复合并。18:26恢复时fetch与ls-remote各50秒超时，跟踪ref未改变，但不能据此声称远端仍然最新。两次收据与既有失败历史均留LAB handoff/remote-sync*.json。
+
+R186完整4updates/accum2/split2、两runtime各continuous/interrupt/resume的逐步harness只完成静态/离线正负测试，尚未模型执行。SHARDED存储、FQN优化器adapter、sampler/ForkRng候选仍处于独立worktree，未合入本段计算源码、未授予NPU通过。所有原始日志、NPZ、checkpoint、manifest、缓存与机器路径均为LAB未版本化产物。
+
+### R190：裁剪修复的提交门禁
+
+本轮没有新增模型计算。主树保持ee2f3e9加裁剪实现/测试及报告/ASC看板四个明确文件冻结，CPU运行前后文件SHA一致。Native core为103 passed/45 skipped/1 xfailed、465.73秒；Torch core为238 passed/1 skipped、567.90秒；合计341 passed/46 skipped/1 xfailed，两个session退出码均0。后续命令tools/run_test_suite.py --session torch --tier core -- tests/structure覆盖完整structure目录并同时重复Torch core，合计1794 passed/3 skipped、637.98秒、退出码0；不把这个总数误写为纯structure目录的case数。布局检查通过298份活动Markdown，内部链接检查通过284文件，git diff --check通过。
+
+门禁日志及逐文件hash位于LAB未版本化 `device-api/clip-and-policy-closeout-r190/gate-results.json`；core.log SHA256为 `04f28b11473fa4619bbdfa6fe5936b13790337c2cfedf9500d2344b04c13af7b`，structure.log为 `7694aac38580f415f9544ffac6a1bd5b4182282bc697ad66db7135273e27210f`。仓内旧kernel_meta只包含本任务已退出PID引用和空临时目录，核验路径及PID均不活跃后整体归档到本cohort，保留文件hash和原路径收据，没有暂存生成物。
+
+后续DCP/adapter/PEFT修复尚未包含在本次门禁源码中；其主机合同通过不能替代整合后的真实CPU/HCCL张量、完整模型及新进程恢复。R186工具在执行前审阅中已恢复完整16train/4eval、原batch2/accum2/4updates/split2和SequentialSampler，split为双卡epoch边界；确定性政策也必须在新运行显式设置并保存真实值，旧两行重复/默认随机sampler候选没有模型执行。完整生命周期、batch1及随机中间cursor仍单独待验。
+
+## 按原计划截至R190仍需完成
+
+1. 以整合后冻结主树完成真实Qwen3 BF16 LoRA 4–10次更新及完整逐步输出/所有梯度/更新对拍；修复默认SHARDED保存及Native优化器加载，双方fresh恢复核验model/Adam/scheduler/RNG/data cursor与下一次更新，same-runtime strict0。
+2. 完成最终双卡FSDP2严格rank物理映射、no_sync累积、真实分片、保存恢复、FP32及混合精度输入梯度组合；R182只授予该单步数值资格。
+3. 完成nested child+root HCCL及所需dtype组合，不从Linear或单步真实模型外推。
+4. 实现真实activation recompute并验证重执行、闭包参数梯度、RNG preserve与显存；完善Generator合并合同、sampler、多worker预取和随机数据fresh恢复；训练确定性仍需完整fresh验证。
+5. 对受本次变更影响的Transformers/Tokenizers/PEFT/Accelerate/safetensors组合做最终源码回归，保留历史模型矩阵的准确冻结身份。
+6. 仅对应正确性通过后测配对至少10次NPU推理/训练吞吐、延迟、峰值live/reserved显存及稳定性，区分JIT/首步/稳态；当前没有合格NPU性能结果。

@@ -195,7 +195,11 @@ def _clip_grads_with_norm_device(grads, max_norm, total_norm):
     # propagates a NaN total norm into every gradient when errors are disabled.
     coef = jt.ternary(jt.isnan(raw_coef), raw_coef, coef)
     for g in grads:
-        g.update(g * coef.cast(_jittor_dtype_name(g.dtype)))
+        # The fast binary path on ACL does not infer a broadcast mask for a
+        # typed 0-d Var. Materialize the scalar view at each local gradient
+        # shape before multiplying (FSDP2 can expose 1-D parameter shards).
+        scale = coef.cast(_jittor_dtype_name(g.dtype)).broadcast(g.shape)
+        g.update(g * scale)
 
 
 def _clip_grad_norm_device(grads, max_norm, norm_type=2.0,

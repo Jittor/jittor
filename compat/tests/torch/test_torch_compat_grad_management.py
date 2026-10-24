@@ -97,6 +97,21 @@ class TestGradientManagement(unittest.TestCase):
 
         both_devices(body)
 
+    def test_clip_grad_norm_scalar_scale_for_wide_gradient(self):
+        def body(dev):
+            gradient = jt.array(np.ones((4096,), dtype="float32"))
+            total = _clip_grad_norm_device([gradient], 1.0, 2.0)
+            total_value, clipped = jt.fetch_sync([total, gradient])
+            self.assertAlmostEqual(
+                float(total_value.reshape(-1)[0]), 64.0, places=4,
+                msg=f"wide gradient norm on {dev}")
+            np.testing.assert_allclose(
+                clipped, np.full((4096,), 1.0 / 64.0, dtype="float32"),
+                rtol=1e-5, atol=1e-6,
+                err_msg=f"wide gradient clipping on {dev}")
+
+        both_devices(body)
+
     def test_clip_grad_norm_nonfinite_error(self):
         def body(dev):
             grad = jt.array(np.array([1.0, np.inf], dtype="float32"))
