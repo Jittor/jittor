@@ -522,9 +522,9 @@ def adam_init(self, params, lr=1e-3, *args, **kwargs):
 
 
 def _initialize_adam(self, params, lr, args, kwargs, name):
-    # The update selector already consumes this execution option; the native
-    # initializer does not take Torch's spelling. Preserve group overrides.
-    foreach = kwargs.pop('foreach', None)
+    # Native Adam has no foreach argument. AdamW's frontend validates its
+    # options itself, so keep that argument on its existing initialization path.
+    foreach = kwargs.pop('foreach', None) if name == 'Adam' else kwargs.get('foreach')
     result = _initialize_default(self, params, lr, args, kwargs, name)
     for group in self.param_groups:
         group.setdefault('foreach', foreach)
@@ -533,7 +533,7 @@ def _initialize_adam(self, params, lr, args, kwargs, name):
 
 def adamw_init(self, params, lr=1e-3, *args, **kwargs):
     if len(args) < 3 and "weight_decay" not in kwargs: kwargs["weight_decay"] = 0.01
-    return _initialize_default(self, params, lr, args, kwargs, 'AdamW')
+    return _initialize_adam(self, params, lr, args, kwargs, 'AdamW')
 
 
 def rmsprop_init(self, params, lr=1e-3, *args, **kwargs):

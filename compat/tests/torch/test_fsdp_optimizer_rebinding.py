@@ -5,6 +5,7 @@ These local tests exercise the metadata/cache boundary without collectives;
 """
 
 import weakref
+import gc
 import os
 from unittest import mock
 
@@ -36,6 +37,39 @@ def _rotation(old):
 
 
 class TestFsdpOptimizerRebinding:
+    def test_adam_initializers_record_parameter_identity_before_first_step(self, device):
+        for algorithm in (torch.optim.Adam, torch.optim.AdamW):
+            for foreach in (None, False):
+                first = _parameter([1., 2.], device)
+                second = _parameter([3.], device)
+                optimizer = algorithm([{"params": [first]}, {"params": [second]}],
+                                      lr=.1, foreach=foreach)
+                for group, parameter in zip(optimizer.param_groups, (first, second)):
+                    assert len(group["_torch_adam_params"]) == 1
+                    assert group["_torch_adam_params"][0] is parameter
+                    assert group["foreach"] is foreach
+                assert optimizer.n_step == 0
+
+    def test_owner_enumeration_releases_parameter_without_cyclic_gc(self, device):
+        from jittor.compat.fsdp2.shard import _named_parameters_with_owner
+
+        model = torch.nn.Linear(2, 1, bias=False).to(device)
+        marker = StateRecord()
+        object.__setattr__(model.weight, "_fsdp_cache_lifetime_probe", marker)
+        lifetime = weakref.ref(marker)
+        del marker
+        was_enabled = gc.isenabled()
+        gc.disable()
+        try:
+            parameters = _named_parameters_with_owner(model)
+            assert parameters[0][0] == "weight" and parameters[0][3] is model.weight
+            model.weight = torch.nn.Parameter(torch.tensor([[3., 4.]], device=device))
+            del parameters
+            assert lifetime() is None, "owner enumeration retained a superseded Parameter"
+        finally:
+            if was_enabled:
+                gc.enable()
+
     def test_empty_checkpoint_resolves_names_after_initialization_rotates_views(self, device):
         from torch.distributed.checkpoint.state_dict import get_optimizer_state_dict
 

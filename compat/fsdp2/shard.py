@@ -251,7 +251,12 @@ def _named_parameters_with_owner(module, recurse=True):
                     child_prefix = f"{prefix}.{name}" if prefix else str(name)
                     visit(value, child_prefix)
 
-    visit(module)
+    try:
+        visit(module)
+    finally:
+        # The recursive visitor captures itself and out. Break that cycle now
+        # so superseded Parameters do not wait for cyclic GC to be released.
+        visit = None
     return out
 
 
