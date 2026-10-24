@@ -513,6 +513,17 @@ del __version__
             self.assertEqual(events, [("original", 1, "/checkpoint", 4, True),
                                       ("original", 2, "/checkpoint", 5, False)])
 
+    def test_fsdp_optimizer_restore_delegates_local_and_unknown_state_types(self):
+        fixture = self._fake_fsdp_optimizer_fixture()
+        modules, module, plugin, accelerator, model, optimizer, _, events = fixture
+        with mock.patch.dict(sys.modules, modules):
+            transformers.patch_accelerate_fsdp_utils(module)
+            for state_type in ("LOCAL_STATE_DICT", object()):
+                plugin.state_dict_type = state_type
+                self.assertEqual(module.load_fsdp_optimizer(plugin, accelerator, optimizer, model, "/checkpoint"),
+                                 "original result")
+            self.assertEqual(events, [("original", 2, "/checkpoint", 0, False)] * 2)
+
     def test_fsdp_optimizer_restore_rejects_unverified_contract_and_version(self):
         fixture = self._fake_fsdp_optimizer_fixture()
         modules, module, *_ = fixture

@@ -331,7 +331,7 @@ def patch_accelerate_fsdp_utils(module):
         from torch.distributed.fsdp import StateDictType
 
         if (fsdp_plugin.fsdp_version != 2
-                or fsdp_plugin.state_dict_type == StateDictType.FULL_STATE_DICT):
+                or fsdp_plugin.state_dict_type != StateDictType.SHARDED_STATE_DICT):
             return original(fsdp_plugin, accelerator, optimizer, model, input_dir,
                             optimizer_index=optimizer_index, adapter_only=adapter_only)
 
