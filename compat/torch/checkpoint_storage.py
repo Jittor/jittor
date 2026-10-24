@@ -261,7 +261,7 @@ def load(state_dict, *, checkpoint_id=None, storage_reader=None, planner=None, p
         manifest = _read_manifest(native, reader.path)
         record = manifest["records"][0]
         _validate_template(state_dict, record["tree"], record)
-        restored = native.load(reader.path, process_group=process_group,
+        restored = native.load(reader.path, process_group=process_group, store=context[3],
                                tensor_shards=_targets(state_dict, native))
         planned = _plan(state_dict, restored, native, copies)
     except (OSError, TypeError, ValueError, KeyError, RuntimeError, NotImplementedError) as failure:

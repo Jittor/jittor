@@ -144,7 +144,7 @@ def save(state, checkpoint_id, *, process_group=None, store=None,
     return str(directory / "manifest.json")
 
 
-def load(checkpoint_id, *, process_group=None, tensor_shards=None):
+def load(checkpoint_id, *, process_group=None, store=None, tensor_shards=None):
     """Validate every payload, then return a reconstructed native state tree.
 
     ``tensor_shards`` maps JSON-pointer tensor paths to ``TensorShard`` target
@@ -152,8 +152,10 @@ def load(checkpoint_id, *, process_group=None, tensor_shards=None):
     Without targets, global tensor leaves are fully reconstructed. Rank-local
     values follow the caller's global rank; arbitrary world-size RNG migration
     is intentionally unsupported.
+    An explicit store is reused for the existing process group, taking
+    priority over its native default Store lookup.
     """
-    rank, _, ranks, _ = _context(process_group)
+    rank, _, ranks, _ = _context(process_group, store)
     manifest = read_manifest(checkpoint_id)
     return restore_tree(checkpoint_id, manifest, ranks[rank], tensor_shards)
 

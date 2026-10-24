@@ -407,3 +407,127 @@ def test_incomplete_checkpoint_rejects_before_any_target_changes(runtime, tmp_pa
     for state in targets:
         for value in state["model"].values():
             assert not value.to_local().any()
+
+
+@pytest.mark.parametrize("subgroup", [False, True])
+def test_fresh_load_reuses_cached_store_without_default_group_store(
+        runtime, tmp_path, monkeypatch, subgroup):
+    """Fresh frontend state must forward its existing Store to native load."""
+    workers, run = runtime.workers(3)
+    store = runtime.dist.get_default_store()
+    group = object() if subgroup else None
+    global_ranks = [2, 5, 8] if subgroup else [0, 1, 2]
+    def global_rank(selected, index):
+        assert selected is group
+        return global_ranks[index]
+    runtime.dist.get_global_rank = global_rank
+    saved = make_sharded_states(runtime, fill=True)
+    run(lambda rank, bridge: bridge.save(saved[rank], checkpoint_id=tmp_path,
+                                          process_group=group))
+    assert runtime.serializer.read_manifest(tmp_path)["ranks"] == global_ranks
+
+    # Recreate the same source modules as a fresh process would. The native
+    # launcher group remains active, with no native default-group Store.
+    workers, run = runtime.workers(3)
+    runtime.dist.get_default_store = lambda: None
+    calls = [[] for _ in workers]
+    states = []
+    for rank, (native, bridge) in enumerate(workers):
+        state = {"store": store}
+        states.append(state)
+        context = types.ModuleType(bridge.__name__ + ".context")
+        context.get_install_context = lambda jt, state=state: types.SimpleNamespace(
+            state={"distributed_api": {"state": state}})
+        bridge.__package__ = bridge.__name__
+        monkeypatch.setitem(sys.modules, context.__name__, context)
+        original = native._context
+        def traced(process_group=None, store=None, original=original, events=calls[rank]):
+            events.append((process_group, store))
+            return original(process_group, store)
+        monkeypatch.setattr(native, "_context", traced)
+    stores = types.ModuleType("jittor.distributed.store")
+    stores.rendezvous = lambda *args, **kwargs: pytest.fail(
+        "cached Store restore must not rendezvous again")
+    monkeypatch.setitem(sys.modules, stores.__name__, stores)
+
+    targets = make_sharded_states(runtime)
+    identities = [[id(value.to_local()) for value in state["model"].values()]
+                  for state in targets]
+    run(lambda rank, bridge: bridge.load(targets[rank], checkpoint_id=tmp_path,
+                                          process_group=group))
+    for rank, state in enumerate(targets):
+        assert calls[rank] == [(group, store), (group, store)]
+        assert states[rank]["store"] is store
+        assert identities[rank] == [id(value.to_local()) for value in state["model"].values()]
+        for name in ("a", "b", "c"):
+            np.testing.assert_array_equal(state["model"][name].to_local(),
+                                          saved[rank]["model"][name].to_local())
+            assert state["model"][name].checkpoint_metadata == saved[rank]["model"][name].checkpoint_metadata
+            for field in ("exp_avg", "exp_avg_sq", "step"):
+                source = saved[rank]["optimizer"]["state"][name][field]
+                target = state["optimizer"]["state"][name][field]
+                if field != "step":
+                    source, target = source.to_local(), target.to_local()
+                np.testing.assert_array_equal(target, source)
+        assert state["optimizer"]["param_groups"] == saved[rank]["optimizer"]["param_groups"]
+    assert runtime.dist.get_default_store() is None
+
+
+@pytest.mark.parametrize("group_kind", ["default", "explicit", "subgroup"])
+def test_native_load_explicit_store_preserves_group_global_rank_and_payload(
+        runtime, tmp_path, monkeypatch, group_kind):
+    workers, run = runtime.workers(2)
+    store = runtime.dist.get_default_store()
+    group = None if group_kind == "default" else object()
+    ranks = [4, 9] if group_kind == "subgroup" else [0, 1]
+    def global_rank(selected, index):
+        assert selected is group
+        return ranks[index]
+    runtime.dist.get_global_rank = global_rank
+    source = np.arange(7, dtype=np.int32)
+    run(lambda rank, bridge: workers[rank][0].save(
+        {"value": source, "rank": workers[rank][0].RankLocal(ranks[rank])},
+        tmp_path, process_group=group, store=store))
+    calls = []
+    def no_default_store():
+        calls.append(True)
+        pytest.fail("explicit Store must take priority over default lookup")
+    monkeypatch.setattr(runtime.dist, "get_default_store", no_default_store)
+    restored = run(lambda rank, bridge: workers[rank][0].load(
+        tmp_path, process_group=group, store=store))
+    for rank, state in enumerate(restored):
+        np.testing.assert_array_equal(state["value"], source)
+        assert state["rank"] == ranks[rank]
+    assert not calls
+
+
+def test_native_load_legacy_world_one_call_needs_no_store(runtime, tmp_path):
+    workers, run = runtime.workers(1)
+    native = workers[0][0]
+    runtime.dist.get_default_store = lambda: None
+    source = np.arange(5, dtype=np.float32)
+    native.save({"value": source}, tmp_path)
+    np.testing.assert_array_equal(native.load(tmp_path)["value"], source)
+
+
+def test_native_load_missing_multi_rank_store_rejects_before_read(runtime, tmp_path, monkeypatch):
+    workers, run = runtime.workers(1)
+    native = workers[0][0]
+    runtime.current.rank, runtime.current.world = 0, 2
+    runtime.dist.get_default_store = lambda: None
+    monkeypatch.setattr(native, "read_manifest", lambda path: pytest.fail(
+        "missing Store must reject before reading checkpoint data"))
+    with pytest.raises(ValueError, match="multi-rank checkpoint requires"):
+        native.load(tmp_path)
+
+
+def test_native_load_nonmember_rejects_with_explicit_store_before_read(runtime, tmp_path, monkeypatch):
+    workers, run = runtime.workers(1)
+    native = workers[0][0]
+    store = runtime.dist.get_default_store()
+    runtime.current.rank, runtime.current.world = -1, 2
+    group = object()
+    monkeypatch.setattr(native, "read_manifest", lambda path: pytest.fail(
+        "nonmember must reject before reading checkpoint data"))
+    with pytest.raises(ValueError, match="not a process-group member"):
+        native.load(tmp_path, process_group=group, store=store)

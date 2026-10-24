@@ -2,7 +2,7 @@
 
 本记录对应[综合计划](../testing/2026-10-21-ascend-integrated-compat-plan.md)，唯一活动状态源为[整改看板](../architecture/refactor-board.md)的 ASC 任务。前半部分保留 2026-10-21 的 MAIN-r28/123 历史验收；后续各 cohort 按各自冻结源码区分，不相互外推。R65 真实 Qwen3-0.6B BF16 LoRA 对拍与 R68 最终主树 FSDP2 双卡 Linear 对拍均绑定提交 `9390fa0e84de651e7e1b01de4d142e04d4333f8b`、3336 文件源清单 SHA256 `c00986fb31e15e18860acf60e2ee0059c7dc63afb90ef0a286131d9fc7eb0f9a`；旧 R64/R63 仍只对其原冻结源码有效。下文保留原始失败和未运行项。
 
-> **截至2026-10-24 R213及本轮FSDP整合：** 独立Native真实Qwen3-0.6B BF16 LoRA完成continuous4、interrupt2、fresh resume至4，124份完整轨迹、71项合同及57,078项指标strict0通过；三个阶段均rc0、monitor gap/foreign/wrong为0，绑定b41960f35完整3347文件。R205/R206 CPU恢复97/101项及R196单rankNPU14 leaves原始位往返已通过。FSDP无optimizer、旧参数alias、idle和frozen问题经候选CPU193P/31skip后整合为ea6648aba/bfb53ce18，尚待最终主树NPU。R208-v4双卡默认SHARDED的Native三阶段和JT continuous通过；JT interrupt计算及保存rc0，但退出时PID归属竞态导致资源验收FAIL，fresh resume未启动。真实Qwen最终全交叉、双卡完整恢复、真正重计算、随机恢复和性能仍未完成，详见文末本轮章节。
+> **截至2026-10-24 R217/R219/R220：** R213独立Native真实Qwen三阶段124轨迹strict0通过，最终主树真实Qwen全交叉仍待。R217新双卡默认SHARDED cohort完成两rank串行预热、Native三阶段及Jittor连续/中断共7个严格资源合格阶段，真实正常退出证明通过；Jittor fresh resume因原生load未接收前端Store而FAIL，原70份NPZ和两rank失败保留。R219显式Store透传修复在隔离树host21P后整合至主树待提交内容，R220实际core341P、compat FSDP/checkpoint专项201P；扩大原生checkpoint回归为24P/6F，旧4abc模块在相同真实runtime复现同6个native FSDP pending错误，单独保持未修。私有重计算候选3c4742967d真实CPU29P，尚未合入公开Torch接口或主树；NPU重计算、随机恢复、最终主树nested与合格性能仍待，详见文末。
 
 | 本轮验收 | 实际结论与源码范围 |
 | --- | --- |
@@ -1519,3 +1519,101 @@ SHA256为05c30bca2fb7f301e09db25a5ae6d444b411af7a16ffd58d5abe9bbd2207a249。
 coldcore-v3-5b9fb27a0-r1/firstwarm/；尚无候选运行通过结论，未合入主树。
 其CPU188–191和独立JH/cache与主树结构检查分离，仅一个候选coldcore JIT；
 其它NPU/Jittor新模型任务等待该首次编译终态。
+
+
+## R217实际双卡恢复失败与R219/R220 Store修复（2026-10-24）
+
+本节新增真实执行证据；前述R208-v4退出归属失败和R217源码准备记录继续保留原时点范围。
+R217的runs/fp32-model-offload0-001绑定干净主树4abc114fea79f18f35398ae5c649c623efd00dcb、
+完整3349 tracked清单f5142375e2ba8a40f15dd132c8cde8c212148effb4411c2703c7c371b25ac324。
+原worker/compare、数值预算、Native deterministic True协议与严格placement/fallback条件未改。
+
+| 实际阶段 | 结果与资源验收 |
+| --- | --- |
+| Jittor rank0/rank1各自world1串行预热 | 两阶段rc0；只授予world1预热 |
+| Native continuous、interrupt、fresh resume | 三阶段rc0、qualified |
+| Jittor continuous、interrupt | 两阶段rc0、qualified，完整保存完成 |
+| Jittor fresh resume | rc1、qualified=false、NOT_SEALED，未进入恢复更新 |
+| 完整Native/Jittor交叉 | 未运行，整个cohort保持FAIL |
+
+前七阶段均真实完成NORMAL_EXIT_PROVEN，monitor gap/foreign/wrong全部0，
+worker/supervisor正常退出0且postempty通过；说明新的完成握手已实际通过world1及HCCL2，
+不再仅有host模拟证据。失败阶段postempty通过不抵消功能失败。
+两rank原始failure.json均为DCP load validation failed，原因是
+multi-rank checkpoint requires a native process-group Store。
+前端_io_context已取得同一有效Store，save显式传递，但native.load无store形参且重新查空default Store。
+此错误发生在READY之前；监控的“未seal就退出”为后续现象，不改变实际根因。
+70份实际NPZ、所有日志/完整已有梯度和checkpoint均保留，失败rank各留initial-0000，
+没有凭缺失的恢复更新宣布通过。parent-terminal-audit-001.json SHA256为
+4e44c03497955da4362a7b5bcc8068644fda883e526df54813f2d63c640aefd8；
+全部3349源运行期间不变，结束后原父进程及精确rank身份均已消失。
+
+R219在隔离worktree以原有host MemoryStore/runtime doubles加真实manifest/payload I/O，
+先在旧代码复现默认group和非连续global ranks subgroup两项失败，再完成候选21P/0skip。
+首轮默认tmp位置不合本任务约定的记录保留，随后在LAB私有HOME/tmp/basetemp重现旧2F并验证候选。
+中文候选提交d47812b83f2a73c65026605bb430ea86847a5c4c只修改两个生产模块和原host测试文件：
+native.load新增keyword-only store=None并交给既有_context，compat.load传入context[3]。
+_Context、Store/communicator生命周期、模板与payload校验、全rank一致拒绝及复制逻辑未改；
+不重新初始化通信、不修改默认Store、不伪造world或放宽数值条件。
+delivery.json SHA256为f784da849713b9346442d066e81afa4969f763b527cc9bf7a85468e7708707ba。
+
+主树R220 CPU实际范围为4abc加上述三文件字节，完整3349清单SHA256
+ecff83350a13d07ec933cedb3ef61a56e1686fce544f8fd17c3839698de53c96。
+门禁期间源码和tracked集合不变，原始命令、junit与日志位于LAB
+checkpoint/dcp-load-store-main-r220/，gate-results.json SHA256为
+636869f93eb426e42d8430154e1ceb9059ab0e1c46c591b5ced29164d382dff0。
+
+| R220实际CPU门禁 | 结果 |
+| --- | --- |
+| Native core与Torch core | 103P/45skip/1xfail及238P/1skip，合计341P，rc0 |
+| 13文件compat FSDP/checkpoint专项 | 232 collected，201P、31 accelerator skip，rc0 |
+| 原生tests/serialization/test_sharded_checkpoint.py整文件 | 30 executed，24P/6F，rc1 |
+| 布局、内部链接、diff检查 | rc0 |
+
+原生六项失败均在完成原training_step后保存时由native_forward_pending拒绝，
+尚未执行本次改变的load路径。另以git-show提取4abc原checkpoint.py，在同一真实native runtime
+加载执行旧模块，其他native源码逐字等于4abc，原六项再次全部出现相同错误；
+该证据是精确模块基线复现，未伪称另一整棵冻结工作树通过或失败。
+原完整30项和旧基线六项stdout/junit均保持。已发现native FSDP的_prepare_backward/_finish_backward
+现只有定义而无调用路径，后续按其canonical owner定位；不删除pending状态拒绝来通过保存。
+因此R220扩大回归整体仍含6F；Store CPU证据不授予双卡修复或真实Qwen恢复通过，
+需要新cohort实卡验证，原R217失败不得改判。
+本次提交的完整结构、布局与链接门禁单列在R220 structure-final-001/；
+其冻结清单包含本节及ASC条目更新，CPU运行到结构门禁之间仅两份证据文档改变，
+另外3347个tracked文件逐字核验保持一致。
+
+本次恢复任务前server HTTP/1.1 fetch实际rc0，fresh client ls-remote核实wip tip
+305c2f0866f163b0549d47b2e4264c5d41a86385和2.0-refactor tip
+ca56aa802c2acf9a22bca32d1bee3276381ed203均与tracking相同且已为HEAD祖先。
+无需再次造合并；未reset、stash或push。完整receipt在R220 remote-sync.json，
+此前fetch超时记录保留，不回写成成功。
+
+## 私有真实重计算CPU原型：失败修正与29项通过（2026-10-24）
+
+隔离候选5b9fb27a0完成246TU首次coldcore构建后，原quick第一项重复target测试真实失败：
+第二个目标梯度为None。2e574d63b仅在private checkpoint_region边界去重targets后，
+调用既有native VJP并按原索引分别包装结果；普通grad_impl与清理语义、原29断言均未改。
+新cohort增量构建后quick5P，原失败源码归档及原core独立副本保留。
+
+随后完整focused29实际28P/1F，唯一失败在weakref.ref(jt.Var)准备阶段，
+尚未调用_flatten，不能据此推断展平实现泄漏。3c4742967d只修正该测试的真实观测：
+使用纯读取native holder registry，禁自动GC，加入真实Var自循环阳性对照，
+并在spec存活、尚未执行GC时要求删除x/flat后holder精确回基线，零容差；
+finally恢复原GC开关。其余28方法AST、生产模块、原core字节不变。
+source/host变异检查能拒绝visit自循环和spec持有Tensor，但不据此替代runtime。
+
+新lifecycle-focused-v9-3c4742967d-r1真实CPU结果为29 collected/executed、
+29P/0F/0skip、rc0。原闭包/全部梯度、duplicate/nonleaf/nested/alias、
+allocator2激活释放、默认与显式RNG及custom backward随机断言均实际执行。
+完整3351源清单前后clean且unchanged，core SHA256保持
+2bee25c71d3636e7b390439cd22ceb519203b277528d57e9988e04667650e444，
+canonical15项环境检查全true；原worker/PGID结束为空。
+outcome.json SHA256为7728353a5098ee51c89a336f97fb035c09258c35049f26f77e39067707631544；
+artifact-manifest.json为65fcea8a960c76c3aea600a22cf5c27db56e9401a2196ce8df0fc7c8a08c4517。
+这些通过由原全数组/精确计数断言支持，PASS未另行输出全部数组或holder序列。
+上述产物位于LAB recompute-rng-audit-20261024/activation-recompute-private-v1-runtime/，
+原weakref失败及完整输出不变。
+
+此结果仅授予private原生CPU原型29项合同；尚未整合主树，
+公开Torch checkpoint/wrapper、noexcept有效误用负例、既有AD/RNG回归、
+真实Module/FSDP组合、NPU重计算与实际显存收益仍待验收。
