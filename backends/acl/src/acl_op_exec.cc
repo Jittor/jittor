@@ -399,6 +399,18 @@ namespace jittor
         for (auto *op : ops)
         {
             if (op->name() == string("array")) continue;
+            // Structural reindex uses the shared byte-copy owner, not an
+            // arithmetic variant named by Op::ns (which is legitimately void).
+            if (op->name() == string("reindex"))
+            {
+                auto reason = acl_reindex_unsupported_reason(op);
+                if (!reason.empty()) return "reindex: " + reason;
+                for (auto *input : op->inputs())
+                    if (!acl_has_dtype(input->dtype())) return "reindex unsupported input dtype";
+                for (auto *output : op->outputs())
+                    if (!acl_has_dtype(output->dtype())) return "reindex unsupported output dtype";
+                continue;
+            }
             const auto name = fused_acl_name(op);
             if (name.empty()) return string("unregistered fused operator variant: ") + op->name() + "/" + string(op->ns.to_cstring());
             auto found = acl_op_registry().find(name);
@@ -491,7 +503,11 @@ namespace jittor
                     if (op_indeg[out] == 0)
                         queue.push(out);
                 }
-                if (current_op->name() == string("contiguous"))
+                if (current_op->name() == string("reindex"))
+                {
+                    exec_native_acl_reindex(current_op);
+                }
+                else if (current_op->name() == string("contiguous"))
                 {
                     AclExecutionRunner<UnaryOpRunner> runner;
                     runner.add(current_op->inputs().front(), true);
@@ -721,6 +737,7 @@ namespace jittor
 
     static unordered_map<string, std::function<void(Op *)>> acl_ops = {
         {"getitem", exec_native_acl_getitem},
+        {"reindex", exec_native_acl_reindex},
         {"setitem", exec_native_acl_setitem},
         // jittor's own transpose op is one aclnnPermute -- exactly what the ACL
         // CodeOp override used to build, but through jt.code: several us of
@@ -907,6 +924,8 @@ namespace jittor
                     unsupported = string(op->name()) + " does not support output dtype " + string(output->dtype().to_cstring());
             if (unsupported.empty() && op->name() == string("getitem"))
                 unsupported = acl_getitem_unsupported_reason(op);
+            if (unsupported.empty() && op->name() == string("reindex"))
+                unsupported = acl_reindex_unsupported_reason(op);
             if (unsupported.empty() && op->name() == string("setitem"))
                 unsupported = acl_setitem_unsupported_reason(op);
             if (op->name() == string("argsort"))
