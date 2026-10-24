@@ -542,8 +542,15 @@ class Optimizer(object):
             if _param_requires_grad(p):
                 params_has_grad.append(p)
 
-        # sync prev params
-        jt.sync(params_has_grad)
+        from jittor.distributed.fsdp.optimizer import _prepare_backward, _finish_backward
+        grad_targets, fsdp_parameter_ids = _prepare_backward(
+            self, params, params_has_grad, retain_graph)
+        if fsdp_parameter_ids and self.__input_params:
+            raise NotImplementedError("native FSDP does not support extra optimizer input parameters")
+
+        # Gathered parameters own the forward graph; the canonical FSDP owner
+        # returns local shard gradients before optimizer holders are updated.
+        jt.sync(grad_targets)
 
         readiness_plan = _native_ddp_readiness_plan(
             self, params_has_grad, self.__input_params)
@@ -653,7 +660,8 @@ class Optimizer(object):
         else:
             # Legacy path remains authoritative for no_sync, MPI, mixed
             # optimizer/DDP groups, input gradients and non-NCCL backends.
-            grads = jt.grad(loss, params_has_grad, retain_graph)
+            grads = jt.grad(loss, grad_targets, retain_graph)
+            grads = _finish_backward(params, grad_targets, grads)
 
             pid = 0
             entries = []
@@ -704,8 +712,9 @@ class Optimizer(object):
                 value._add_dependency(dep)
                 dep = [value]
 
+            managed_parameter_ids = ddp_parameter_ids | fsdp_parameter_ids
             for parameter, gradient in entries:
-                if id(parameter) in ddp_parameter_ids:
+                if id(parameter) in managed_parameter_ids:
                     continue
                 gradient.assign(gradient.mpi_all_reduce("mean"))
                 add_dep(gradient._input(0))
@@ -714,7 +723,7 @@ class Optimizer(object):
                 add_dep(gradient._input(0))
             if self.n_step % self.param_sync_iter == 0:
                 for parameter in params:
-                    if id(parameter) in ddp_parameter_ids:
+                    if id(parameter) in managed_parameter_ids:
                         continue
                     parameter.assign(parameter.mpi_broadcast())
                     add_dep(parameter)
@@ -737,6 +746,8 @@ class Optimizer(object):
             _assert_ddp_step_ready,
         )
         _assert_ddp_step_ready(self)
+        from jittor.distributed.fsdp.optimizer import _assert_step_ready
+        _assert_step_ready(self)
         jt.flags.node_order = 1
 
     def post_step(self):

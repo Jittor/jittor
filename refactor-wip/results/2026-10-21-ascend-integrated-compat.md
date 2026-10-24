@@ -2,7 +2,7 @@
 
 本记录对应[综合计划](../testing/2026-10-21-ascend-integrated-compat-plan.md)，唯一活动状态源为[整改看板](../architecture/refactor-board.md)的 ASC 任务。前半部分保留 2026-10-21 的 MAIN-r28/123 历史验收；后续各 cohort 按各自冻结源码区分，不相互外推。R65 真实 Qwen3-0.6B BF16 LoRA 对拍与 R68 最终主树 FSDP2 双卡 Linear 对拍均绑定提交 `9390fa0e84de651e7e1b01de4d142e04d4333f8b`、3336 文件源清单 SHA256 `c00986fb31e15e18860acf60e2ee0059c7dc63afb90ef0a286131d9fc7eb0f9a`；旧 R64/R63 仍只对其原冻结源码有效。下文保留原始失败和未运行项。
 
-> **截至2026-10-24 R217/R219/R220：** R213独立Native真实Qwen三阶段124轨迹strict0通过，最终主树真实Qwen全交叉仍待。R217新双卡默认SHARDED cohort完成两rank串行预热、Native三阶段及Jittor连续/中断共7个严格资源合格阶段，真实正常退出证明通过；Jittor fresh resume因原生load未接收前端Store而FAIL，原70份NPZ和两rank失败保留。R219显式Store透传修复在隔离树host21P后整合至主树待提交内容，R220实际core341P、compat FSDP/checkpoint专项201P；扩大原生checkpoint回归为24P/6F，旧4abc模块在相同真实runtime复现同6个native FSDP pending错误，单独保持未修。私有重计算候选3c4742967d真实CPU29P，尚未合入公开Torch接口或主树；NPU重计算、随机恢复、最终主树nested与合格性能仍待，详见文末。
+> **截至2026-10-24—25 R217002/R224：** R217新双卡cohort002在56fc6faa7完整3349源上通过8阶段、38检查和694指标，Native/Jittor完整连续/中断/fresh恢复及跨runtime通过，Store缺失已在对应实卡场景修复；原001失败保留。R224把native FSDP canonical optimizer接线及lazy同对象导出整合后，实际native检查点/FSDP48P、core341P、compat专项201P，原六项pending失败与追加export失败均保留后已修。当前bool确定性setter/getter已真实接ACL runtime，本轮显式tensor前及final两flagTrue；旧UNIMPLEMENTED_FALSE描述不适用当前源码。R213独立Native真实Qwen124轨迹strict0仍保留原范围，最终主树真实Qwen全交叉、nested NPU、随机恢复和合格性能仍待。private CPU29P之外的两析构误用负例确认SIGABRT；e019词法lease候选仅独立源码修复，38项与新二进制待验，未合主树。
 
 | 本轮验收 | 实际结论与源码范围 |
 | --- | --- |
@@ -1617,3 +1617,122 @@ artifact-manifest.json为65fcea8a960c76c3aea600a22cf5c27db56e9401a2196ce8df0fc7c
 此结果仅授予private原生CPU原型29项合同；尚未整合主树，
 公开Torch checkpoint/wrapper、noexcept有效误用负例、既有AD/RNG回归、
 真实Module/FSDP组合、NPU重计算与实际显存收益仍待验收。
+
+
+## R217 cohort002：Store修复后的实际HCCL2完整恢复（2026-10-24）
+
+本节对应主树中文提交56fc6faa7bd43444a962620ca2e287d425b45c8a，
+完整3349源manifest SHA256为40a0e815b89963d8fc4967283aa22a6dc8481e3fd238899a31f965e1383397f5。
+运行前重新检查健康空闲两卡及磁盘；原001失败和全部工具/数组原字节保留。
+新runs/fp32-model-offload0-002完整执行两rank各world1串行warm、Native三阶段、
+Jittor三阶段，共8阶段全部rc0/qualified，gap/foreign/wrong全部0，
+各阶段NORMAL_EXIT_PROVEN、worker/supervisor真实退出0、postempty通过。
+最后Jittor fresh resume实际完成恢复更新，原Store缺失没有再发生。
+
+完整compare原38检查全部通过，含6项frozen/trainable合同与32项完整数组比较，
+共694指标（454数值及240原始位/非数值字节精确项）。
+Native与Jittor各自continuous-prefix/fresh恢复预算atol=rtol=0；
+数值exact最大差0，raw BF16特殊位和scheduler非数值状态按原字节合同通过。
+跨runtime最大绝对差：forward1.4901161193847656e-08，
+gradient9.313225746154785e-10，update3.725290298461914e-09。
+原R208比较器保留既有forward/gradient预算，未事后修改；
+父端额外核验所有数值forward/gradient的max_abs均不超过计划FP32 atol1e-5，
+无需使用rtol余量，不能把原比较器的较宽字段隐去或描述为改过FP32预算。
+
+78份实际NPZ完整保存，包含完整输出/输入梯度/参数梯度、参数、optimizer、
+scheduler、checkpoint存储和原始BF16特殊位；不以loss切片代替。
+comparison.json SHA256为733dc61ffeabdec3bb40588648679a0b0aa61ce23dd7c88bccfa6c62c82b3d9d；
+summary.json为b8d3920ffc17c7724f79456a19b94c950a956f5060ebb5723068d08232676f38。
+父端parent-terminal-audit-004.json为
+0cf861f7537b30098265118289c4f8d86c867d99339285defe114f7e6477f27f，
+逐份绑定78份NPZ、8阶段exit/资源、完整源不变及原父/各精确rank身份均已消失。
+三次父端诊断打印分别误按list读取named checks、未区分metadata check及max_abs=None；
+原observer错误另存，不更改正式summary/comparison，亦不作为模型失败或补造数组。
+全部原始证据位于LAB distributed/dcp-training-r217-dual56/runs/fp32-model-offload0-002/。
+
+资格限定：tiny FP32 PEFT Linear、HCCL2、默认SHARDED model/offload0；
+不授予真实Qwen、nested三dtype、随机dropout或NPU性能。
+后续R222/R224改变了native Python文件，需要为最终主树重新绑定新cohort，
+不把本节3349源通过直接改写成后续3350源硬件通过。
+
+### 当前确定性接口的实际范围
+
+本次14份deterministic-before记录全部requested=True、Python实际True；
+Jittor backend实际True，final观察同样True。
+Native在torch_npu导入前设置True；Jittor在import后、显式tensor前设置True，
+不声称其import内部初始化已受该设置控制。
+当前compat core.py getter直接调用backend_get，bool setter同步已有工作后调用backend_set；
+ACL backend真实使用aclrtGet/SetSysParamOpt(ACL_OPT_DETERMINISTIC)，错误和未知值抛出。
+因此旧交接的setter未实现/getter False或UNIMPLEMENTED_FALSE不能用于当前行为判断。
+
+core.py仍把整项use_deterministic_algorithms静态fidelity登记为UNIMPLEMENTED，
+同处detail又说明真实runtime setter及warn_only拒绝；该登记只记录属性，不替换实现。
+warn_only=True仍明确不支持，完整PyTorch确定性语义及广泛随机恢复未验收。
+本轮受控fixture各自严格恢复通过不能外推所有算子、随机训练或性能场景。
+
+## R222—R224：修复native FSDP optimizer生命周期及公共延迟导出（2026-10-24—25）
+
+扩大原生回归发现R220的六项pending错误后，先保留同runtime旧4abc模块六项实际复现，
+再核对历史ae1a9bf1f确曾存在canonical接线；不凭路径git-log未命中推断从未接线，
+也未在未核实后续commit时指认具体丢接提交。
+独立中文候选23e0d15648d15f3fe9155037d24895da766bcc50恢复已有
+_prepare_backward→full targets sync→legacy grad→_finish_backward以及pre_step的_assert_step_ready。
+FSDP ID排除两条legacy collective、extra input拒绝保持；
+整个DDP readiness fast分支AST不变，普通optimizer math无副本。
+新增11项source/host合同旧5F/6P、候选11P，只作为接线前置。
+
+R223首次整合实际native checkpoint+FSDP为47P/1F：
+原30项checkpoint全通过，之前六项失败已消失；nn FSDP17P，
+唯一失败是fresh child从jittor.nn.parallel导入FullyShardedDataParallel时ImportError。
+中文候选e4f789052cb853b3d75140d500346d0d6153dbb4只用PEP562延迟返回canonical同一类，
+__all__列名，未知属性拒绝，owner导入错误原样传播；
+不eager加载FSDP、不引入Torch/compat、不复制实现。
+原nn/test_native_fsdp.py整文件不改；新增7项host旧4P/3F，合并候选18P。
+
+R224在56fc加上述三文件的实际3350源上重新验证：
+
+| 实际CPU门禁 | 结果 |
+| --- | --- |
+| 原生serialization checkpoint及nn FSDP完整两文件 | 48 collected/executed、48P、0skip，rc0 |
+| Native/Torch core | 103P/45skip/1xfail与238P/1skip，合计341P，rc0 |
+| compat FSDP/checkpoint专项13文件 | 232 collected、201P/31 accelerator skip，rc0 |
+| 布局、内部链接、diff | 全部rc0 |
+
+48项覆盖SGD/AdamW、累积、完整梯度/更新及恢复、pending/partial/stale拒绝、
+失败forward释放、布局损坏拒绝和真实fresh child的lazy同对象/native来源/无Torch无compat合同。
+这些是CPU对应范围；native多rank实现原CUDA/NCCL限制未改变，不宣称native多rankNPU。
+source-before.json SHA256为a24eae82583a4f48b7e7d77fa52913f50dec51da92ee097770cb3e7fc8aaf086，
+gate-results.json为dae0d8f1cb040e1ca21f4a14097843597fda0f2d16ca04182233bbffb9671256，
+native-checkpoint-junit.xml为800470cd5cef76847dc76770b7236bb92fafb62d2d63511fed55a7e1161eccf9。
+全部3350源和tracked集合运行期间不变，source-check rc正常；R223及其唯一失败原样保留。
+证据在LAB checkpoint/native-fsdp-optimizer-main-r223/和-r224/，
+提交的完整结构/布局/链接门禁单列R224 structure-final-001/，
+从CPU冻结清单至该结构门禁之间仅ASC看板与本报告两文件更新，其余3348文件逐字相同。
+
+R223的server fetch再次25秒超时，未开始整合/计算的失败attempt保留；
+fresh client ls-remote核实两目标tip仍分别305c2f086和ca56aa802，
+与tracking相同且已为HEAD祖先，故无新增远端合并。
+不把此前R220成功fetch或本次client核验写成R223 server fetch成功，
+不reset/stash/push，也未干预他人进程。
+
+### 重计算生命周期的新增失败与隔离候选
+
+private 3c的CPU29P未覆盖非法active scope生命周期。有效v11子进程实际确认：
+region非LIFO最后引用销毁与RNG跨线程最后引用销毁均自然SIGABRT(-6)，
+原CHECK抛std::runtime_error穿过noexcept析构触发terminate。
+监督rc0只表示证据收集完成，功能安全保持FAIL。
+results.json SHA256为3597f407b8db44210d6d4346f8bb41f152e93b5c72d7dad871a5574d90a799aa，
+位于LAB recompute-rng-audit-20261024/activation-recompute-private-v1-runtime/
+lifecycle-negative-v11-3c4742967d-r1/。
+v10的/proc解析监控失败保留，不用其stderr补称有效SIGABRT验证。
+
+独立候选4d81d3720a将可转移metadata与active State分离，active资源由owner线程C++词法
+callback lease/RAII持有；handle析构不再leave或跨线程解锁，显式finish/exit先检查owner/LIFO。
+复用GraphLockSuspend使Python callback可等待另一线程销毁metadata；
+RNG callback返回前恢复outer并释放entry，之后才构建原VJP。
+e019ac41ec进一步让GenericAlloc返回nullptr时直接保留原PyErr返回，
+避免进入会LOGf的PyObjHolder(nullptr)。
+仅private worktree七文件，原29数学/全数组/释放/RNG断言均保持，新增9节点共38；
+3头生成绑定、host控制流和source变异通过仍只作source证据。
+原core2bee不作为新候选二进制；新增量构建和38项实际运行须单独记录，
+本节不授予该候选runtime/NPU通过，不合入主树。

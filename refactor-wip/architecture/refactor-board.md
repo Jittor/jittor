@@ -4,12 +4,12 @@
 
 | 编号 | 本轮范围 | 状态 | 负责 | 证据/下一步 |
 | --- | --- | --- | --- | --- |
-| ASC-01 | 独立环境、CPU/ACL串行构建 | R220主树core341P、compat专项201P；server fetch成功且两目标tip已整合 | coord | 扩大native checkpoint24P/6F，旧4abc模块同6F；前次完整structure1656P；本次结构门禁单列R220，详见综合报告 |
+| ASC-01 | 独立环境、CPU/ACL串行构建 | R224主树native检查点/FSDP48P、core341P、compat专项201P；远端tip已核实且整合 | coord | 完整3350源门禁不变；R220 server fetch成功与R223超时/client核验分开保留，结构门禁单列R224，详见综合报告 |
 | ASC-02 | 双解释器小模型输出/全梯度 | CPU及真实NPU八模型完整对拍通过 | ecosystem | r10沿用规范overlay、source65复验八模型271参数+2输入全梯度；25新阶段及24份明确复用的不可变native参考共49验证阶段全部通过，零回落；见综合报告 |
-| ASC-03 | 多库训练和fresh-process恢复 | R217双卡7阶段正常退出资源P，JT fresh load因Store传递FAIL；R219 host21P后整合待提交 | ecosystem | R220 compat201P；扩大native checkpoint24P/6F已在旧模块复现；Store实卡新cohort与真实Qwen全交叉仍待 |
-| ASC-04 | 真实权重闭环、LoRA和输入梯度 | R213独立Native真实BF16 LoRA全恢复P；private重计算3c4742967d真实CPU29P | coord | 原duplicate/weakref失败保留；private29P未授予公开Torch/NPU重计算，R214真实Qwen六阶段、随机恢复与性能仍待，详见综合报告 |
-| ASC-05 | HCCL/DDP/FSDP2两卡场景 | R194 Native nested三dtype实卡P；无optimizer/alias/idle/frozen修复已整合，R220 compat201P | distributed | 最终主树nested/unused/collective恢复仍待；新增native FSDP pending六失败在旧4abc模块同现，沿canonical optimizer seam定位 |
-| ASC-06 | 配对速度/峰值显存/稳定性 | 无合格NPU性能结果；R182单步耗时、R188/R189定向合同测试均不作性能 | coord | 对应完整正确性gate通过后，以相同配置至少10对交替测量吞吐/延迟/live与reserved峰值，区分JIT/首步/稳态；详见综合报告 |
+| ASC-03 | 多库训练和fresh-process恢复 | R217002双卡SHARDED完整8阶段/38检查/694指标P；Store实卡恢复修复 | ecosystem | 绑定56fc/3349源，Native/JT各自恢复strict0；原001失败保留，最终新主树真实Qwen六阶段全交叉仍待 |
+| ASC-04 | 真实权重闭环、LoRA和输入梯度 | R213独立Native真实BF16 LoRA全恢复P；private3c CPU29P后两析构误用SIGABRT | coord | private e019词法lease已独立实现/38节点待运行，未授予公开Torch/NPU重计算；R214真实Qwen、随机恢复与性能仍待 |
+| ASC-05 | HCCL/DDP/FSDP2两卡场景 | R217002 tiny HCCL2恢复全交叉P；native optimizer接线/lazy导出修后CPU48P | distributed | 无optimizer/alias/idle/frozen已整合；最终新主树nested三dtype、unused/collective复验仍待；原CPU6F与export失败保留 |
+| ASC-06 | 配对速度/峰值显存/稳定性 | 无合格NPU性能；当前显式tensor前确定性True已实测，memory工具仍source/host | coord | 对应完整正确性通过后至少10对同步交替测量与live/reserved峰值，区分JIT/首步/稳态；不以flags或host模拟授予性能 |
 
 2026-10-21 用户要求暂停新增修改与实验启动，先推送全部工作树独立快照；Day2–3仍未通过。当前交接及新机器推荐分支见[工作区快照交接](../results/2026-10-21-workspace-snapshot-handoff.md)。已运行T5 full允许正常结束，supervisor已暂停后续stage。
 
