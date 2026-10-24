@@ -276,7 +276,8 @@ class _TensorMeta(type):
             elif isinstance(args[0], backend.Var):
                 result = backend.Var.clone(args[0])
                 result._set_view_of(args[0], Ellipsis)
-                result.requires_grad = requires_grad
+                if requested_requires_grad is not None:
+                    result.requires_grad = requires_grad
                 return finish(result, device, args[0])
             else:
                 result = backend.array(args[0], dtype=dtype)

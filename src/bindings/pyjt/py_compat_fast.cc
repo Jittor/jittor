@@ -673,7 +673,15 @@ PyObject* scalar_division(PyObject* self, PyObject* other, NanoString own) {
     PyTensorFrontendScope scope(self, nullptr, 0, false);
     PyObject* out;
     if (own == ns_float64) {
-        out = binary_slots[B_TRUEDIV](self, other);
+        // The Python operator converts this literal through Jittor's generic
+        // scalar binding, which narrows it before float64 division. The
+        // `_true_division` path materializes a float64 0-d Var instead, so
+        // mirror that operand here to keep the native shortcut bit-identical.
+        double value = PyFloat_AS_DOUBLE(other);
+        PyObjHolder b(wrap_like(self, new VarHolder(make_array(
+            &value, {}, ns_float64))));
+        GET_RAW_PTR(VarHolder, b.obj)->stop_grad();
+        out = binary_slots[B_TRUEDIV](self, b.obj);
     } else {
         NanoString wide = own == ns_float32 ? ns_float64 : ns_float32;
         double value = PyFloat_AS_DOUBLE(other);

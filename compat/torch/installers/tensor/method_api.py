@@ -5,7 +5,10 @@ import numbers
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from ...context import get_install_context
 from ...frontend import tensor_frontend
-from ...types import _make_cpu_resident, _make_cuda_resident, _var_is_cpu_resident
+from ...types import (
+    _PYTHON_SCALAR_DTYPES, _make_cpu_resident,
+    _make_cuda_resident, _var_is_cpu_resident,
+)
 from ....stub_policy import degraded as _degraded, unimplemented as _unimplemented
 from ..core import _promote_pair
 from ..numerical.sparse import _SparseCOO

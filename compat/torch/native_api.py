@@ -119,12 +119,45 @@ class NativeOperation:
         return operation, (self._operation_key,)
 
 
+_TORCH_RSQRT_ACL_FUNCTIONS = {}
+
+
+def _torch_rsqrt_acl(context, implementation, input):
+    """Use the ACL composition for forward and Torch's rsqrt VJP order."""
+    native = context.native_backend
+    key = (native, implementation)
+    function_type = _TORCH_RSQRT_ACL_FUNCTIONS.get(key)
+    if function_type is None:
+        class _TorchRsqrtACL(native.Function):
+            def execute(self, value):
+                self.input_dtype = value.dtype
+                self.output = implementation(value)
+                return self.output
+
+            def grad(self, upstream):
+                with native.flag_scope(amp_reg=0):
+                    cube = self.output.pow(3).cast(self.input_dtype)
+                    return (-0.5 * upstream) * cube
+
+        function_type = _TorchRsqrtACL
+        _TORCH_RSQRT_ACL_FUNCTIONS[key] = function_type
+    return function_type.apply(input)
+
+
 def _torch_rsqrt(context, implementation, input):
-    """CUDA autocast runs reciprocal square root in FP32 for reduced inputs."""
+    """Preserve Torch's CUDA autocast and ACL rsqrt backward contracts."""
     from jittor._core.dtypes import dtype_name
     from .amp import autocast_is_enabled
     native = context.native_backend
-    if (dtype_name(input.dtype) in ("float16", "bfloat16")
+    if (isinstance(input, native.Var)
+            and native.core.dispatch_context([input])[0] == "acl"
+            and dtype_name(input.dtype) in (
+                "float16", "bfloat16", "float32", "float64")):
+        with native.flag_scope(amp_reg=0):
+            return _torch_rsqrt_acl(context, implementation, input)
+    if (hasattr(input, "dtype")
+            and dtype_name(input.dtype) in ("float16", "bfloat16")
+            and isinstance(input, native.Var)
             and native.core.dispatch_context([input])[0] == "cuda"
             and autocast_is_enabled("cuda")):
         input = input.float32()

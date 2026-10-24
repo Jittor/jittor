@@ -4,12 +4,12 @@
 
 | 编号 | 本轮范围 | 状态 | 负责 | 证据/下一步 |
 | --- | --- | --- | --- | --- |
-| ASC-01 | 独立环境、CPU/ACL 串行构建 | 最终MAIN123 structure1430P2S/layoutP；core压力超时保留 | coord | 最终123路径前后frozen exact，1432不同case与121逐node相同；97.py+1.pyi AST3.7P、configuredRuff新增0/减少12。raw core121实际46P9S1原压力测试300秒超时，未删除/改规模/放宽 |
+| ASC-01 | 独立环境、CPU/ACL串行构建 | 最终MAIN123 structure1430P2S/layoutP；R170 Core和structure通过 | coord | R170 CPU Core共341P/46S/1xfail、额外structure1794P/3S，layout P；仍不代表NPU模型验收。既有123源码门禁与历史压力超时保留原结论 |
 | ASC-02 | 双解释器小模型输出/全梯度 | CPU及真实NPU八模型完整对拍通过 | ecosystem | r10沿用规范overlay、source65复验八模型271参数+2输入全梯度；25新阶段及24份明确复用的不可变native参考共49验证阶段全部通过，零回落；见综合报告 |
-| ASC-03 | 多库训练和fresh-process恢复 | R145/R146真实Qwen3标准Trainer双卡接线生效；logits、梯度、初始参数通过，LoRA-B更新104/224数组仍超原预算；FSDP2双卡fresh恢复未验 | ecosystem | AdamW公式复核最大残差9.87e-10但两侧梯度范数/clip系数不同；R146第26层Q/K/V .input为共享梯度累计，根因未定，qk_right.grad仍缺失；详见综合报告 |
+| ASC-03 | 多库训练和fresh-process恢复 | R169真实Qwen3完整双卡比较：forward、224组梯度、224组初始参数通过；102/224个LoRA-B更新数组超原预算。R170 Torch Core 238P/1S，但不改变模型失败状态 | ecosystem | 保持原数值预算，定位跨层上游梯度漂移；再做模型/LoRA/Adam/scheduler/数据游标fresh-process恢复；详见综合报告 |
 | ASC-04 | 共享真实模型推理和LoRA、输入梯度兼容 | 当前提交 Qwen3-0.6B BF16 LoRA full/prefix/fresh-resume通过；当前源码168数组输入梯度矩阵逐位一致 | coord | R65真实Qwen Native/Jittor训练/保存/重载/恢复交叉对拍2187项0失败、两侧恢复933状态项exact、梯度分段各1136项通过。R75绑定bad478395、3336文件manifest，当前树对不可变Native oracle比较168数组/5760元素全部bit-exact，fallback0，原预算未改。R43历史oracle仅作为只读参考，不跨冻结源码外推随机策略或性能；详见综合报告 |
-| ASC-05 | HCCL/DDP/FSDP2两卡场景 | R146真实Qwen3 Trainer FSDP2双卡阶段监控干净、映射5/6正确、Jittor fallback=0；严格更新gate仍失败，最终验收未关闭 | distributed | R145 Native monitor gap=1；R146 Native/Jittor gap=0但104/224更新数组超预算；nested child+root HCCL、训练恢复和目标dtype组合仍待；详见综合报告 |
-| ASC-06 | 配对速度/峰值显存/稳定性 | NPU性能未验收；R145/R146正确性更新gate未通过，阶段执行耗时不作性能结论 | coord | CPU735完整状态/252全梯度及736恢复state exact、20host合同P。1.7B实际18交替calls后依指令停止并清空自有进程，rc-2/acceptedfalse，generation steady/decode未完成；4Bperf未运行。仅在对应正确性gate通过后再测NPU速度、峰值显存和稳定性 |
+| ASC-05 | HCCL/DDP/FSDP2两卡场景 | R169 Native/Jittor双卡rc=0、monitor gap=0、无foreign；Jittor映射卡5/6且fallback=0。Native rank1参数在npu:1，但同一PID也出现在物理卡5，排他映射仍待核验；更新gate失败 | distributed | 核实并收紧Native rank与物理卡绑定后在最终冻结树复验；补恢复、nested child+root HCCL与dtype组合；详见综合报告 |
+| ASC-06 | 配对速度/峰值显存/稳定性 | 无合格NPU性能结果；R169真实训练更新gate仍失败，R168仅为算子合同测试 | coord | 对应正确性gate通过后，按相同模型、数据、dtype与训练配置比较吞吐、延迟、峰值显存和稳定性；详见综合报告 |
 
 2026-10-21 用户要求暂停新增修改与实验启动，先推送全部工作树独立快照；Day2–3仍未通过。当前交接及新机器推荐分支见[工作区快照交接](../results/2026-10-21-workspace-snapshot-handoff.md)。已运行T5 full允许正常结束，supervisor已暂停后续stage。
 

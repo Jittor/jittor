@@ -266,3 +266,32 @@ def test_acl_standard_rmsnorm_bf16_autocast_preserves_hf_fp32_math_and_gradients
         np.testing.assert_array_equal(array(observed), array(expected))
         for actual, expected_grad in zip(observed_grads, expected_grads):
             np.testing.assert_array_equal(array(actual), array(expected_grad))
+
+
+@pytest.mark.npu
+@pytest.mark.parametrize("input_dtype", [torch.float32, torch.bfloat16])
+def test_acl_torch_rsqrt_backward_uses_torch_vjp_order(input_dtype):
+    capability.require_accelerator("acl")
+    from jittor._runtime.fallback import forbid_backend_fallbacks
+
+    source = np.array([[0.125, 0.25, 0.5, 1.0],
+                       [2.0, 4.0, 8.0, 16.0]], dtype=np.float32)
+    upstream_source = np.array([[0.5, -0.25, 1.5, -2.0],
+                                [0.125, -0.75, 0.375, -1.25]], dtype=np.float32)
+    settings = {"use_cuda": 1, "use_acl": 1, "backend_fallback": "error"}
+    with jt.runtime.scope(**settings), forbid_backend_fallbacks():
+        before = jt.core.backend_fallback_count()
+        value = torch.tensor(source, dtype=input_dtype, device="npu", requires_grad=True)
+        upstream = torch.tensor(upstream_source, dtype=input_dtype, device="npu")
+        output = torch.rsqrt(value)
+        input_grad, = torch.autograd.grad((output * upstream).sum(), (value,))
+
+        expected = (-0.5 * upstream) * output.pow(3).to(input_dtype)
+
+        assert output.dtype == input_dtype
+        assert output.device.type == input_grad.device.type == "npu"
+        assert input_grad.dtype == input_dtype
+        assert tuple(jt.core.dispatch_context([output])) == ("acl", 0)
+        assert tuple(jt.core.dispatch_context([input_grad])) == ("acl", 0)
+        np.testing.assert_array_equal(array(input_grad), array(expected))
+        assert jt.core.backend_fallback_count() - before == 0
