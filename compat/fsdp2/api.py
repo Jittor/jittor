@@ -243,7 +243,7 @@ def fully_shard(module, *, mesh=None, reshard_after_forward=True,
     st.ignored_params = tuple(ignored_params or ())
     st.dp_mesh_dims = dp_mesh_dims
     st.kwargs = dict(kwargs)
-    if common._in_true_distributed() and not getattr(st, "true_fsdp_initialized", False):
+    if common._can_initialize_fsdp(shard_group) and not getattr(st, "true_fsdp_initialized", False):
         target_type = st.mesh.device_type
         cuda_index = int(jt.current_device()) if target_type == "cuda" else None
         target_device = ("cuda:%d" % cuda_index

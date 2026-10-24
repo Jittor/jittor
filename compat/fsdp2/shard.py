@@ -296,10 +296,10 @@ def _init_true_fsdp_state_impl(module, state):
     if getattr(state, "true_fsdp_initialized", False):
         return state
     state.true_fsdp_module = module
-    if not common._in_true_distributed():
+    group = getattr(state, "shard_group", None)
+    if not common._can_initialize_fsdp(group):
         state.true_fsdp_initialized = False
         return state
-    group = getattr(state, "shard_group", None)
     ws = common._world_size() if group is None else group.size()
     rank = common._rank() if group is None else group.rank()
     entries = []

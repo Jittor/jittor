@@ -28,6 +28,13 @@ from ..collectives import (          # noqa: F401
     _world_size,
 )
 
+
+def _can_initialize_fsdp(shard_group):
+    """Run the shared lifecycle for an actual distributed or singleton mesh."""
+    return _in_true_distributed() or (
+        _world_size() == 1 and shard_group is not None and shard_group.size() == 1)
+
+
 def _frontend_scope(state):
     tensor_type = getattr(state, "frontend_type", None)
     if tensor_type is None:
