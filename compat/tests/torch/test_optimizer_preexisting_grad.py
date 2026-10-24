@@ -118,3 +118,86 @@ def test_no_existing_gradient_leaves_parameter_unchanged(name, device):
     optimizer.step()
     assert parameter.grad is None
     np.testing.assert_array_equal(numbers(parameter, device), [1., -2.])
+
+
+@pytest.mark.parametrize('name', ['Adam', 'AdamW'])
+@pytest.mark.parametrize('foreach', [None, False])
+@pytest.mark.parametrize('device', DEVICE_CASES)
+def test_adam_update_preserves_parameter_leaf_and_reversible_freeze(name, foreach, device):
+    parameter = torch.nn.Parameter(torch.tensor([1., -2.], device=device))
+    optimizer = getattr(torch.optim, name)(
+        [parameter], lr=.125, weight_decay=.02, foreach=foreach,
+    )
+    gradient = torch.tensor([.5, -.25], device=device)
+    parameter.grad = gradient
+    before = numbers(parameter, device)
+    for _ in range(2):
+        optimizer.step()
+        assert optimizer.param_groups[0]['params'][0] is parameter
+        assert isinstance(parameter, torch.nn.Parameter)
+        assert parameter.grad is gradient
+        assert parameter.requires_grad and parameter.is_leaf
+        assert parameter.grad_fn is None
+        parameter.requires_grad_(False)
+        assert not parameter.requires_grad and parameter.is_leaf
+        parameter.requires_grad_(True)
+        assert parameter.requires_grad and parameter.is_leaf
+        assert parameter.grad_fn is None
+        for key in ('exp_avg', 'exp_avg_sq'):
+            moment = optimizer.state[parameter][key]
+            assert not moment.requires_grad and moment.is_leaf
+            assert moment.grad_fn is None
+        intermediate = parameter * 2
+        assert not intermediate.is_leaf and intermediate.grad_fn is not None
+        with pytest.raises(RuntimeError, match='only change requires_grad flags of leaf'):
+            intermediate.requires_grad_(False)
+        assert intermediate.requires_grad and not intermediate.is_leaf
+    assert not np.array_equal(numbers(parameter, device), before)
+
+
+@pytest.mark.parametrize('name', ['Adam', 'AdamW'])
+@pytest.mark.parametrize('outer_grad_enabled', [True, False])
+@pytest.mark.parametrize('device', DEVICE_CASES)
+def test_adam_closure_enables_grad_and_restores_outer_mode(name, outer_grad_enabled, device):
+    parameter = torch.nn.Parameter(torch.tensor([1., -2.], device=device))
+    optimizer = getattr(torch.optim, name)([parameter], lr=.125, foreach=False)
+    losses = []
+
+    def closure():
+        assert torch.is_grad_enabled()
+        optimizer.zero_grad()
+        loss = parameter.square().sum()
+        loss.backward()
+        losses.append(loss)
+        return loss
+
+    with torch.set_grad_enabled(outer_grad_enabled):
+        result = optimizer.step(closure)
+        assert torch.is_grad_enabled() is outer_grad_enabled
+    assert result is losses[0] and len(losses) == 1
+    assert parameter.requires_grad and parameter.is_leaf
+    assert parameter.grad_fn is None and parameter.grad is not None
+    assert not np.array_equal(numbers(parameter, device), [1., -2.])
+
+
+@pytest.mark.parametrize('name', ['Adam', 'AdamW'])
+@pytest.mark.parametrize('outer_grad_enabled', [True, False])
+@pytest.mark.parametrize('device', DEVICE_CASES)
+def test_adam_closure_exception_restores_grad_mode_without_update(name, outer_grad_enabled, device):
+    parameter = torch.nn.Parameter(torch.tensor([1., -2.], device=device))
+    optimizer = getattr(torch.optim, name)([parameter], lr=.125, foreach=False)
+    calls = []
+    error = ValueError('closure failed before optimizer update')
+
+    def closure():
+        calls.append(torch.is_grad_enabled())
+        raise error
+
+    with torch.set_grad_enabled(outer_grad_enabled):
+        with pytest.raises(ValueError, match='closure failed before optimizer update') as caught:
+            optimizer.step(closure)
+        assert torch.is_grad_enabled() is outer_grad_enabled
+    assert caught.value is error and calls == [True]
+    np.testing.assert_array_equal(numbers(parameter, device), [1., -2.])
+    assert parameter.requires_grad and parameter.is_leaf
+    assert parameter.grad_fn is None and parameter.grad is None
