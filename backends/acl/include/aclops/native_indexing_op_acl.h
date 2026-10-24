@@ -13,9 +13,12 @@ struct Op;
 std::string acl_getitem_unsupported_reason(Op* op);
 std::string acl_setitem_unsupported_reason(Op* op);
 std::string acl_reindex_unsupported_reason(Op* op);
+bool acl_broadcast_uses_byte_copy(Op* op);
+std::string acl_broadcast_unsupported_reason(Op* op);
 void exec_native_acl_getitem(Op* op);
 void exec_native_acl_setitem(Op* op);
 void exec_native_acl_reindex(Op* op);
+void exec_native_acl_broadcast(Op* op);
 
 namespace acl_indexing {
 
@@ -394,6 +397,44 @@ inline std::string make_set_plan(const Selection& selection,
         if (plan.elements && value_shape[i] != 1) plan.source_strides[leading + i] = value_strides[i];
     }
     return finish_plan(plan, value_bytes, selection.storage_bytes);
+}
+
+// Align the native broadcast masks before using the existing assignment plan.
+// A bcast bit with no keepdims bit inserts a new output axis (explicit dims);
+// a bit in both masks consumes an existing one-element input axis.
+inline std::string make_broadcast_plan(const std::vector<size_t>& input_shape,
+                                       const std::vector<size_t>& output_shape,
+                                       uint32_t bcast_mask, uint32_t keepdims_mask,
+                                       size_t element_bytes, CopyPlan& plan) {
+    if (!element_bytes) return "zero dtype width";
+    if (output_shape.empty() || output_shape.size() > 32)
+        return "broadcast requires an output rank between 1 and 32";
+    if (keepdims_mask & ~bcast_mask) return "broadcast keepdims mask is not a subset of bcast mask";
+    if (output_shape.size() < 32 &&
+        ((bcast_mask | keepdims_mask) >> output_shape.size()))
+        return "broadcast mask exceeds output rank";
+    std::vector<size_t> aligned(output_shape.size(), 1);
+    size_t input_axis = 0;
+    for (size_t axis = 0; axis < output_shape.size(); ++axis) {
+        const bool broadcast = (bcast_mask >> axis) & 1u;
+        if (broadcast) {
+            if ((keepdims_mask >> axis) & 1u) {
+                if (input_axis >= input_shape.size() || input_shape[input_axis] != 1)
+                    return "broadcast kept axis requires a one-element input dimension";
+                ++input_axis;
+            }
+        } else {
+            if (input_axis >= input_shape.size()) return "broadcast input rank is too small";
+            aligned[axis] = input_shape[input_axis++];
+            if (aligned[axis] != output_shape[axis])
+                return "broadcast nonexpanded dimension differs from input";
+        }
+    }
+    if (input_axis != input_shape.size()) return "broadcast input dimensions are not fully consumed";
+    Selection selection;
+    auto reason = make_selection(output_shape, {}, element_bytes, selection);
+    if (!reason.empty()) return reason;
+    return make_set_plan(selection, aligned, plan);
 }
 
 inline bool address_end(uintptr_t base, size_t offset, uintptr_t& result) {

@@ -411,6 +411,12 @@ namespace jittor
                     if (!acl_has_dtype(output->dtype())) return "reindex unsupported output dtype";
                 continue;
             }
+            if (op->name() == string("broadcast_to") && acl_broadcast_uses_byte_copy(op))
+            {
+                auto reason = acl_broadcast_unsupported_reason(op);
+                if (!reason.empty()) return "broadcast_to: " + reason;
+                continue;
+            }
             const auto name = fused_acl_name(op);
             if (name.empty()) return string("unregistered fused operator variant: ") + op->name() + "/" + string(op->ns.to_cstring());
             auto found = acl_op_registry().find(name);
@@ -506,6 +512,11 @@ namespace jittor
                 if (current_op->name() == string("reindex"))
                 {
                     exec_native_acl_reindex(current_op);
+                }
+                else if (current_op->name() == string("broadcast_to") &&
+                         acl_broadcast_uses_byte_copy(current_op))
+                {
+                    exec_native_acl_broadcast(current_op);
                 }
                 else if (current_op->name() == string("contiguous"))
                 {
