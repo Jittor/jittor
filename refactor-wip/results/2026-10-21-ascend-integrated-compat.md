@@ -1029,12 +1029,29 @@ R169与R164在每个rank内的Native快照862个数组、Jittor快照865个数�
 - R170离线分层定位写入报告/看板后，使用同一Torch CPU运行器对tests/structure/test_docs_structure.py复验，254 passed、1 skipped，退出码0。
 - 以上结果不包含昇腾设备计算、HF真实模型训练、参数更新或恢复验证；R169的102/224更新差异和Native rank1卡映射问题仍原样保留。
 
-## 按原计划截至R170仍需完成
+## 2026-10-24 R171/R172：Qwen3 attention context与RMSNorm VJP定位
 
-1. **关闭真实Qwen3首步更新差异。** 保持原预算；从R169 decoder反向链上游诊断继续分离共享梯度累计、bf16 cast边界、attention与归一化的贡献，补齐qk_right观测；只有明确证据支持时再改生产代码。Native/Jittor完整输出、参数梯度、初始参数及LoRA更新需再次对拍。
-2. **完成最终冻结主树双卡FSDP2与恢复。** 收紧Native rank到物理卡的隔离与收据，消除rank1 PID跨卡观察后重跑；随后验证model/LoRA、Adam、scheduler、数据游标及fresh-process恢复后的下一次更新。R169的工作树manifest与当前新增文档不是同一快照，不能称为提交版本验收。
-3. **补齐真实dtype与输入梯度矩阵。** 覆盖目标FSDP2配置中的FP32、BF16 compute及FP32/BF16输入梯度组合；R130 Linear fixture、R168 rsqrt合同均不能外推到真实Qwen3。
-4. **完成日常生态组合。** 继续覆盖Transformers、Tokenizers、PEFT、Accelerate、safetensors的数据处理、梯度累加、Trainer包装、checkpoint保存/加载与错误路径，并执行同模型原生PyTorch交叉。已有Jittor自身LoRA保存恢复不替代该项。
-5. **验证激活重计算、确定性与随机恢复。** 证明checkpoint block确实重执行；覆盖随机sampler、显式generator、多worker预取和fresh-process随机状态，比较输出、梯度、更新与恢复。
-6. **验收nested child+root HCCL。** Native/Jittor分别验证child及root communicator和目标dtype，不从其他拓扑外推。
-7. **只对正确性通过场景比较性能。** 在配置相同的正确性通过负载上测吞吐、延迟、峰值显存与稳定性，区分首编译、首步、稳态。当前没有合格NPU性能/显存结果。
+两个诊断cohort均绑定当前主树提交 `d2910102697bbcd6fab9993f8b72c6d3aa0312d8`、source manifest SHA256 `6b72327b1139f6dad49a792c4e78b065680f74d8c073332186b6d80c7ac2ecb7`，使用R169捕获的Native/Jittor激活与上游梯度；均为单卡局部重放，不执行完整模型更新，不改变R169原门槛。
+
+### R171：layer25 context matmul VJP
+
+LAB cohort为 `real-model/qwen3-06b-attention-context-vjp-r171-card3/`。物理NPU3依次运行隔离的Native oracle和Jittor shim；两个成功阶段均returncode=0、monitor gap=0、无foreign occupant，Jittor fallback增量为0，阶段后卡空。Jittor首次attempt仅因harness重复复用同一context manager在VJP前失败；修正为每个case创建新scope后，在新attempt完成，不覆盖失败日志。
+
+对两个rank、Native/Jittor两套快照重放layer25 context matmul，固定相同输入和cotangent后，12组输出、左右输入VJP数组全部逐位相同；各运行时重放也精确复现其自身保存的全图输出及输入梯度。离线全图快照显示context operands/output前向逐位相同，但context输出收到的上游cotangent已有差异：rank0最大2.3842e-7、rank1最大3.8147e-6；context-left梯度跨运行时最大差分别为3.0518e-5和4.8828e-4，context-right最大差为7.6294e-6。由此可排除这组固定输入下context matmul局部VJP为差异起点，证据指向其上游反向链；这不能定位到具体attention分支或共享梯度累计。比较JSON SHA256为 `1d98a44c6344bda44f02061233808bab28ccaf6b1eef4ca18de1ee9b74ca00ab`。
+
+### R172：layer26/27 Qwen3 RMSNorm VJP
+
+LAB cohort为 `real-model/qwen3-06b-qnorm-vjp-r172-card3/`，对真实模型layer26/27的Q/K RMSNorm，使用R169 rank0/rank1的Native/Jittor输入与cotangent做Native/Jittor交叉重放。Native成功结果是attempt2；attempt1因driver漏传权重快照参数、在设备初始化前退出。Jittor attempt2因driver后续环境合并覆盖暖缓存路径而启动冷编译，随后只终止本任务自身进程组；保留该日志和执行记录。修正缓存路径与attempt映射后，Jittor attempt3复用R171缓存，在NPU3用20.26秒完成。成功Native/Jittor阶段均returncode=0、monitor gap=0、无foreign occupant，阶段后卡空；Jittor fallback增量为0。运行前检查确认物理NPU3无进程且利用率/AICore为0。
+
+32组同输入比较中所有RMSNorm输出均逐位相同；仅6组输入梯度数组有非零差异，共12个元素，最大绝对差5.9605e-8。两运行时的各自重放对照全图保存梯度时，也各仅有3组输入梯度数组出现同量级的3个差异元素，最大值同为5.9605e-8。该结果说明当前局部RMSNorm路径基本复现各自全图，但其微小输入梯度差异不足以解释R169中LoRA-B更新的主要偏差；没有修改生产代码或放宽预算。comparison JSON SHA256为 `c1cab953a794a284c74498142183eb17bc536ca099149e0c9d145f8d303a3a05`，runner summary SHA256为 `c28a3322737a1d9d59eeccd15132a5c9481cfc9971c75877343065e1c0c4fffa`。
+
+R171/R172所有数组、完整日志、NPU监控、失败attempt、探针与比较脚本及缓存均保留在各自LAB cohort。下一步仍需采集layer25 context上游的attention输出投影、残差及相关共享hidden-state累计边界，补齐全图 `qk_right` 梯度观察；在明确生产差异之前不做数值门槛调整。
+
+## 按原计划截至R172仍需完成
+
+1. **关闭真实Qwen3首步更新差异。** R169仍有102/224个LoRA-B更新数组超原预算；R171/R172只排除了两个固定输入局部VJP，不是模型修复。继续拆分layer25上游attention/投影/残差和BF16共享梯度累计，补齐 `qk_right`；只有生产根因证据明确后才修代码，之后以新cohort重跑完整输出、224组梯度、初始参数和更新，保持原门槛。
+2. **完成当前主树双卡FSDP2与严格映射。** R169绑定较早源码，且Native rank1 PID曾同时见于卡5/6；要在当前冻结源码和fresh空闲NPU上重做真实Trainer双卡对拍，核实每个Native rank只落在分配的物理卡、Jittor fallback为0及监控无gap。另需覆盖真实FP32/BF16 compute与FP32/BF16输入梯度的目标组合；R130 Linear fixture不能外推。
+3. **完成真实训练恢复闭环。** 比较模型/LoRA、Adam、scheduler、数据游标及恢复后的下一步更新；现有Jittor自身LoRA新进程恢复和R65较早冻结源码结果均不能替代当前源码上的原生交叉验收。
+4. **补齐日常生态与随机训练场景。** 覆盖Transformers、Tokenizers、PEFT、Accelerate、safetensors的常见数据处理、梯度累加、Trainer包装、checkpoint保存加载及错误路径；另外验证激活重计算确实重执行，覆盖随机sampler、显式generator、多worker预取、确定性设置和fresh-process随机状态恢复。
+5. **完成nested child+root HCCL验收。** Native/Jittor分别核实child与root communicator及所需dtype，不从Linear fixture或其他拓扑外推。
+6. **最后测性能与显存。** 只对对应正确性gate通过的相同工作负载比较吞吐、延迟、峰值显存和稳定性，区分首次编译、首步和稳态。目前没有合格NPU速度/显存结论。
