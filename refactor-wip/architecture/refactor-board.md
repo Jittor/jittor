@@ -6,9 +6,9 @@
 | --- | --- | --- | --- | --- |
 | ASC-01 | 独立环境、CPU/ACL串行构建 | 最终MAIN123 structure1430P2S/layoutP；R170 Core和structure通过 | coord | R170 CPU Core共341P/46S/1xfail、额外structure1794P/3S，layout P；仍不代表NPU模型验收。既有123源码门禁与历史压力超时保留原结论 |
 | ASC-02 | 双解释器小模型输出/全梯度 | CPU及真实NPU八模型完整对拍通过 | ecosystem | r10沿用规范overlay、source65复验八模型271参数+2输入全梯度；25新阶段及24份明确复用的不可变native参考共49验证阶段全部通过，零回落；见综合报告 |
-| ASC-03 | 多库训练和fresh-process恢复 | R169全模型更新仍102/224 LoRA-B数组超预算；R173 layer25 o_proj、R174 layer26 QK局部VJP逐位一致；R172/R175/R176 RMSNorm输入梯度仍有最多5.96e-8差异，手写VJP候选未逐位通过 | ecosystem | 定位并修复全图首个反向差异，保持原预算；重跑完整模型输出/224组梯度/参数更新，再验fresh-process恢复，详见综合报告 |
+| ASC-03 | 多库训练和fresh-process恢复 | R181生产Torch shim Pow2路径在16组Qwen3 BF16 RMSNorm局部重放中输出/输入梯度逐位匹配Native；R169完整模型仍有102/224个LoRA-B更新数组超预算，尚未重跑 | ecosystem | 以R181源码建立新cohort重跑完整Qwen3 Native/Jittor输出、224组梯度、初始参数与224组更新；通过后再验fresh-process恢复，数值预算不变，详见综合报告 |
 | ASC-04 | 共享真实模型推理和LoRA、输入梯度兼容 | 当前提交 Qwen3-0.6B BF16 LoRA full/prefix/fresh-resume通过；当前源码168数组输入梯度矩阵逐位一致 | coord | R65真实Qwen Native/Jittor训练/保存/重载/恢复交叉对拍2187项0失败、两侧恢复933状态项exact、梯度分段各1136项通过。R75绑定bad478395、3336文件manifest，当前树对不可变Native oracle比较168数组/5760元素全部bit-exact，fallback0，原预算未改。R43历史oracle仅作为只读参考，不跨冻结源码外推随机策略或性能；详见综合报告 |
-| ASC-05 | HCCL/DDP/FSDP2两卡场景 | R169真实双卡更新gate失败且Native rank1排他映射待核验；R171–R176均为NPU3单卡局部诊断，Jittor零回落、无监控缺口，不构成FSDP2验收 | distributed | 在资源空闲时完成当前主树双卡真实模型/FSDP2对拍及Native排他物理卡核验；补训练恢复、nested child+root HCCL和dtype组合，详见综合报告 |
+| ASC-05 | HCCL/DDP/FSDP2两卡场景 | R169真实双卡更新gate失败且Native rank1排他映射待核验；R171–R176及R181均为NPU3单卡局部诊断，不能作为FSDP2验收 | distributed | 在资源空闲时完成当前主树双卡真实模型/FSDP2对拍及Native排他物理卡核验；补训练恢复、nested child+root HCCL和dtype组合，详见综合报告 |
 | ASC-06 | 配对速度/峰值显存/稳定性 | 无合格NPU性能结果；R169真实训练更新gate仍失败，R168仅为算子合同测试 | coord | 对应正确性gate通过后，按相同模型、数据、dtype与训练配置比较吞吐、延迟、峰值显存和稳定性；详见综合报告 |
 
 2026-10-21 用户要求暂停新增修改与实验启动，先推送全部工作树独立快照；Day2–3仍未通过。当前交接及新机器推荐分支见[工作区快照交接](../results/2026-10-21-workspace-snapshot-handoff.md)。已运行T5 full允许正常结束，supervisor已暂停后续stage。
