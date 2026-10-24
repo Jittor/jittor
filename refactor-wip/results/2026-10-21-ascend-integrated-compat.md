@@ -2,7 +2,7 @@
 
 本记录对应[综合计划](../testing/2026-10-21-ascend-integrated-compat-plan.md)，唯一活动状态源为[整改看板](../architecture/refactor-board.md)的 ASC 任务。前半部分保留 2026-10-21 的 MAIN-r28/123 历史验收；后续各 cohort 按各自冻结源码区分，不相互外推。R65 真实 Qwen3-0.6B BF16 LoRA 对拍与 R68 最终主树 FSDP2 双卡 Linear 对拍均绑定提交 `9390fa0e84de651e7e1b01de4d142e04d4333f8b`、3336 文件源清单 SHA256 `c00986fb31e15e18860acf60e2ee0059c7dc63afb90ef0a286131d9fc7eb0f9a`；旧 R64/R63 仍只对其原冻结源码有效。下文保留原始失败和未运行项。
 
-> **截至2026-10-24 R204：** R195在a266f384b加六文件候选上完成检查点专项163P/31个CUDA skip，原R193的8项失败及后续失败全部保留。R198/R201/R203/R204实际CPU singleton的SHARDED保存和fresh续训通过，各97/101/101/101项完整数组strict0，不代表真实双卡分片通过。R194独立Native nested四child加root三dtype实卡流程通过，严格rank0→5/rank1→6、监控gap/foreign/wrong均0且退出后空闲。Jittor R197单卡预热的BF16输入/FP32权重路径失败，正式双卡未启动。R202 FULL恢复的BF16 NaN payload从0x7FC1变0x7FC0，修复验证仍待。真实Qwen多步完整对拍、最终双卡恢复、重计算、随机恢复和NPU性能未验收，详见文末R192–R204。
+> **截至2026-10-24 R213及本轮FSDP整合：** 独立Native真实Qwen3-0.6B BF16 LoRA完成continuous4、interrupt2、fresh resume至4，124份完整轨迹、71项合同及57,078项指标strict0通过；三个阶段均rc0、monitor gap/foreign/wrong为0，绑定b41960f35完整3347文件。R205/R206 CPU恢复97/101项及R196单rankNPU14 leaves原始位往返已通过。FSDP无optimizer、旧参数alias、idle和frozen问题经候选CPU193P/31skip后整合为ea6648aba/bfb53ce18，尚待最终主树NPU。R208-v4双卡默认SHARDED的Native三阶段和JT continuous通过；JT interrupt计算及保存rc0，但退出时PID归属竞态导致资源验收FAIL，fresh resume未启动。真实Qwen最终全交叉、双卡完整恢复、真正重计算、随机恢复和性能仍未完成，详见文末本轮章节。
 
 | 本轮验收 | 实际结论与源码范围 |
 | --- | --- |
@@ -13,7 +13,7 @@
 | 八模型及综合 Trainer | 各自 source65 等冻结证据上，八模型完整输出/271 参数+2输入全梯度；Trainer4updates/8micro、61跨runtime检查；连续与2+2恢复216完整状态及轨迹 exact，历史fixture为dropout0顺序；R51/R56另对dropout=0.15的tiny BERT LoRA做Native/Jittor各自fresh-process恢复 |
 | 共享真实权重推理 | 0.6B既有冻结源码BF16完整推理P；source121的1.7B与4B各3输入/15完整数组/58,343,424 logits bitexact、cached/uncached greedy8 exact、actual NPU/fallback0；不是123重跑 |
 | 最终主树 AMP | source123 no-loader baseline 10P/0skip；source ee0146… 上 R43 完成 BF16/FP16 × FP32/低精度输入 × Linear/LoRA × 2步共168阵列/5760元素 Native/Jittor 对拍：168/168 bit-exact、最大差0、预算未改。修正共同显式cast参考后，source manifest r2 正式单测 Jittor 10/10通过、Native 8通过/2项Jittor-only跳过 |
-| 真实0.6B BF16 LoRA | R65的历史完整恢复保留原源码边界；R182新源码双卡单步完整logits、224梯度/初始参数/更新均通过，原预算未改。R183 Native恢复FAIL；R185 Jittor完成首步更新后SHARDED存储FAIL。完整逐步轨迹与最终源码恢复待验 |
+| 真实0.6B BF16 LoRA | R65历史及R182单步保留原范围；R213补齐独立Native 112个LoRA参数的真实双卡4updates/2+2恢复，完整124轨迹strict0及资源验收通过。Jittor最终源码完整对应轨迹与全交叉仍待；旧R183/R185失败保留 |
 | FSDP2 | R130 Linear的三种dtype组合保留原冻结边界；R182真实模型单步数值通过，但Native rank1仍见于5/6两卡，严格映射待验。R185默认SHARDED保存失败；完整训练恢复、nested拓扑、重计算与性能未验收 |
 | 速度/显存 | NPU未验收。1.7B配对流程仅18交替calls后停止，generation steady/decode未完成、rc-2/acceptedfalse；4Bperf未运行，CPU控制器资格不能替代NPU性能 |
 
@@ -21,7 +21,7 @@
 
 ## 源码与环境
 
-初始同步目标为 origin/wip/cgq-day23-fix-20261021，HEAD与当时已核验远端均为 305c2f0866f163b0549d47b2e4264c5d41a86385；本任务分支为 codex/ascend-integrated-compat-20261021。按用户要求，分支历史已有两次 origin/2.0-refactor 合并：a962af0119a6b1c6d519948bc605dc1023c63bc2（当时tip 897d9cc61）和 ea3c7db80f7761a6f1632d36472e08d848f120b7（后续六项修复，第二父提交 9da9be98bc543eacef07532471dd0fecc4205550）；当前 HEAD 的 ancestry 包含 origin/wip 基线及该已核验 2.0-refactor tip，因此没有重复造合并提交。2026-10-22 新 fetch 在连接 github.com:443 后 129349ms 超时，独立 ls-remote 亦无响应后经核验终止；这些失败不证明远端最新，当前只能确认分支包含此前验证到的 9da9be98。详细同步记录见 LAB handoff/remote-sync.json。
+初始同步目标为 origin/wip/cgq-day23-fix-20261021，HEAD与当时已核验远端均为 305c2f0866f163b0549d47b2e4264c5d41a86385；本任务分支为 codex/ascend-integrated-compat-20261021。按用户要求，分支历史已有两次 origin/2.0-refactor 合并：a962af0119a6b1c6d519948bc605dc1023c63bc2（当时tip 897d9cc61）和 ea3c7db80f7761a6f1632d36472e08d848f120b7（后续六项修复，第二父提交 9da9be98bc543eacef07532471dd0fecc4205550）；当前 HEAD 的 ancestry 包含 origin/wip 基线及该已核验 2.0-refactor tip，因此没有重复造合并提交。2026-10-22 新 fetch 在连接 github.com:443 后 129349ms 超时，独立 ls-remote 亦无响应后经核验终止；这些失败不证明远端最新，当次只能确认分支包含此前验证到的 9da9be98。详细同步记录见 LAB handoff/remote-sync.json。
 
 主机为openEuler22.03 LTS-SP4/aarch64、GCC10.3.1、Python3.11.17、8×Ascend910B3（每卡64 GiB）、驱动25.5.1。用户目录CANN Toolkit/910b ops8.5.0与原生PyTorch2.7.1/torch_npu2.7.1.post2的既有独立环境已完成矩阵/反向smoke；这只证明原生供应商栈，不证明Jittor适配。未改系统驱动/公共Toolkit或其他用户任务。
 
@@ -1349,3 +1349,173 @@ eval/predict/best reload与PEFT safetensors保存加载合并继续待验。
 LAB _state/ascend-compat/device-api/checkpoint-closeout-r212/。
 该目录gate-results.json记录本次实际执行结果，source-check.json核验门禁期间源码未变化。
 R190历史门禁不替代本次执行。
+
+
+## R213及FSDP候选整合验收（2026-10-24）
+
+本节区分独立Native oracle、Jittor对应运行及待验候选，不将b41960f35上的结论外推到新整合源码。
+两目标远端在本机使用HTTP/1.1 ls-remote重新核实：wip/cgq-day23-fix-20261021仍为
+305c2f0866f163b0549d47b2e4264c5d41a86385，2.0-refactor仍为
+ca56aa802c2acf9a22bca32d1bee3276381ed203，两者与server tracking一致且均为本分支祖先，无需重复合并。
+server本轮fetch仍20秒超时，不能声称fetch成功；fresh远端tip证据来自本机实际成功查询。
+LAB handoff/remote-sync-client-verified-1792846918166974556.json记录方法、输出与祖先核验，
+SHA256为08bb78b794ba477c5ae8c0c1537a493c99c6b8028dc91b05d4bc988d38bee184，旧receipt保留。
+
+### R213：真实Qwen Native连续、中断与新进程恢复通过
+
+n001连续训练完成4updates但监控gap3，仍保留FAIL，不复用作新门禁。
+n002重新从continuous开始，独立oracle-npu-cann、同一冻结worker、共享原始权重/adapter/fixture，
+16条训练和4条评估fixture、每卡batch2、累积2、112个LoRA参数、split2/total4。
+monitor使用CPU176–179，launcher/workers使用184–191；每阶段核验真实mask与PID/starttime，
+每次assigned物理5/6 Health OK，查询上限30秒、poll5秒，最终仍要求零gap。
+
+| 阶段 | 两rank各自完整NPZ | 实际耗时（秒，仅诊断） | 结果 |
+| --- | --- | --- | --- |
+| continuous | 30 | 215.485266 | rc0、qualified、19 samples、gap/foreign/wrong均0 |
+| interrupt | 16 | 224.017636 | rc0、qualified、21 samples、gap/foreign/wrong均0 |
+| fresh resume | 16 | 208.871526 | rc0、qualified、18 samples、gap/foreign/wrong均0 |
+
+124份完整轨迹、71项合同和57,078项逐项比较全部通过；所有带数值预算的指标atol=rtol=0，
+所有可计算max_abs均为0。检查完整micro输出/梯度、裁剪、参数更新、Adam状态、scheduler、
+CPU/NPU/Python/NumPy RNG、数据游标和fresh进程；loaded2边界沿原协议暂不比较RNG，
+首个恢复iterator及以后重新包含RNG。全部112个trainable参数及frozen不变检查通过。
+每rank实际参数npu:0且只枚举一张卡，父端真实物理放置分别5/6；Native无shim。
+deterministic True在torch_npu导入及显式tensor前设置。所有自有rank身份均已终端。
+
+源码为b41960f3586cbc1737e2f56a2e566baf42f31f02，完整3347 tracked源清单SHA256
+4b4781f7bee966ef05b6e446cf8f48d49294a1a0c5d388e137d844ab0ef8732e。
+实际输出为LAB r213-n002/qwen3-06b-fsdp2-trajectory-r186-dual56/，
+工具索引位于real-model/qwen3-06b-native-trajectory-r213/cohorts/n002。
+comparison-native-r213.json SHA256为327834e8cdbcb90dfe1471b2d0bb78855226aedf252578d591d716f48ce850c9，
+summary-native-r213.json为8f78f3ec6a4ac9375d4b9878bf7f4f22fa3de3199475740b1a86e051aa4d075b，
+parent-audit-n002.json为b706efc091b7d1ceaf31efbfda051687eccc024532b7cc0c8152eb8f9542db7a。
+本节只授予NATIVE_ORACLE_PASS；Jittor、全cross-runtime、eval/predict/generation和性能均未据此通过。
+
+### 无optimizer反向、旧alias与空闲FSDP状态修复
+
+b419真实CPU六进程最小复现确认：ordinary有/无optimizer四参数梯度均正确；
+singleton FSDP没有optimizer时used梯度缺失，有optimizer时正确；旧Parameter alias读取None，
+而current shard已有正确梯度。完整输出、输入梯度及有optimizer参数梯度与普通模型strict0。
+修复显式登记当前shard到既有弱holder registry，通过实际lifecycle/module/state/entry校验选择
+本次forward full参数，复用一次原生AD及原reducer；不扫描live graph或伪造optimizer。
+旧alias getter/setter跟随当前entry，idle state不额外unshard或修改已有grad/optimizer flags。
+frozen full gradient保持None，flat原owner仍自然补零；不放宽原nonflat scatter计数。
+私有seam显式登记，旧public helper真实签名和原public golden保持。
+DTensor的checkpoint_shape/offset回到既有kwargs通道，metadata语义及clone/detach/roundtrip保留。
+
+候选attempt001收集失败、attempt002的114P/4F/31skip以及完整基线对照均保留。
+两项frozen计数和DTensor公开签名差异在MAIN独立单项及同顺序对照中也实际复现，
+本轮已修复；不把baseline失败留作最终通过的例外。
+attempt003真实224 collected、193 executed，193P/31 accelerator skip、101.01秒、rc0：
+原19项、8项idle、mixed31、accum14、rebinding11、preexisting31、structure13、
+checkpoint host13、state_dict14、options23、placement10、native module3、full materialize3全部通过。
+原19测试SHA、全部旧数值/计数断言及public golden c8153c4b...未改。
+五canonical模块真实来源/SHA、全3347 MAIN和7个暖cache文件SHA/mtime均核验，
+own worker为空。证据在LAB distributed/fsdp-public-grad-candidate-host/cpu-candidate-attempt-003/，
+candidate-delivery.json SHA256为487be954585e1861424d4b515d5253a8a2b2d3a884258ea7ec994afbb5d93640。
+
+主树已按序保留提交整合为ea6648aba21250d69c34611ea8635881a9b25f2e、
+bfb53ce18cf3ba06fada2ef9d11cf2f14915a1e8，未push。
+上述候选CPU证据不授予新主树NPU/world2；本次整合core/完整structure门禁及NPU复验另记实际结果。
+
+### R208-v3/v4：默认SHARDED双卡训练仍未完成恢复
+
+v3首次warm的Linear pre-hook在lazy Var尚无mem_ptr时读location得到none而失败；
+不是据device标签认定已实际NPU。v4仅在原observer读取metadata前，使用既有native targeted sync
+物化当次inputs和weight，原dtype/backend/device/location强断言保持。
+不做cast/readback/global sync；Native分支不变，剔除此两行后整份worker文本/AST等于v3。
+39项host合同通过，两个rank serial warm实际34.941602/64.360861秒，均qualified/gap0；
+三个Linear全部输入/权重已记录ACL0、npu:0和device驻留，fallback为0。
+
+v4默认SHARDED、FP32 model、offload0实际Native continuous/interrupt/resume分别
+179.465847/190.466885/199.060232秒，均rc0及严格资源qualified。
+Jittor continuous48.505684秒、两rank各7份NPZ，rc0且qualified。
+Jittor interrupt35.670427秒、两rank各4份NPZ及PASS报告、launcher rc0；
+但监控尾部记录PID2494992在归属验证前消失，将其列为foreign，因此qualified=false。
+此前观察到该PID的本任务精确身份及物理5仍不能覆盖此次缺失验证；原FAIL保持，
+不将消失PID一概重分类为own。gap0、wrong0、退出后健康空闲不抵消foreign失败。
+fresh resume和完整Native/Jittor比较均未启动。新cohort需用明确completion handshake
+保持worker活着完成最终live归属核验，再按协议退出与fresh post检查，不忽略竞态。
+
+实际证据在LAB distributed/dcp-training-r208-dual56-v3/及-v4/，
+v4 runs/fp32-model-offload0-001/保留全部stdout、trace、完整NPZ、存储和execution。
+v4绑定b419完整源清单3fb2acf3832fccb65583ab8f5624cf949c227fbde70bfa0388fb3f4ccfe11045，
+worker c777e03b164eb83aab1b29bfa25a349f5225d6fa0849c3879d2cea66c81f2beb。
+这些存储/训练结果不授予真实Qwen、最终新主树或性能通过。
+
+### 重计算与后续退出条件
+
+原公共checkpoint真实CPU六场景诊断中，closure两格输出/全梯度正确但fn仅调用一次；
+preserve_rng_state三格在调用前TypeError，no_grad通过。完整原失败与数组保留于
+LAB recompute-rng-audit-20261024/activation-recompute-v1-real-b419/。
+原生private region候选5b9fb27a0在隔离worktree完成6TU及两生成binding语法、
+11项host检查和29个待运行节点；尚未构建候选core或跑Jittor，未合入主树。
+另Native CPU显式Generator8格和自定义backward随机4格实测支持默认流仅在forward replay恢复、
+显式Generator继续消费的合同；不修改既有Generator协议或断言。
+
+接下来须完成最终主树nested三dtype完整NPU梯度/更新、默认SHARDED双卡fresh恢复、
+R214真实Qwen Native3/Jittor3的全部轨迹交叉，及真实重计算、随机sampler/generator/多worker恢复、
+日常eval/predict/best reload与PEFT safetensors保存加载合并。
+对应正确性通过后才做至少10对NPU配对性能与live/reserved峰值显存；当前仍无合格NPU性能。
+旧2026-10-21截止epoch不再沿用，本轮未指定新截止时间或goal预算。
+
+
+## R216：FSDP修复整合后的主树门禁（2026-10-24）
+
+本节对应主树bfb53ce18cf3ba06fada2ef9d11cf2f14915a1e8及当次两份证据文档改动；
+八个FSDP相关文件在运行前已与候选交付逐字核对，未将候选CPU结论直接写成主树通过。
+本次实际门禁结果如下，原始日志与命令位于LAB device-api/fsdp-closeout-r216/。
+
+| 门禁 | 实际结果 |
+| --- | --- |
+| native core | 103P、45skip、1xfail，rc0 |
+| Torch core | 238P、1skip，rc0 |
+| 13文件FSDP/检查点专项 | 224 collected、193 executed，193P、31 accelerator skip，rc0 |
+| 完整Torch模式tests/structure | 1658 collected、1658 executed，1656P、2 accelerator skip，rc0 |
+| 布局、内部文档链接、git diff --check | 全部rc0 |
+
+Native首次进入本次显式空NVCC flags对应的CPU缓存分区，实际串行构建244个core编译单元及所需算子；
+其构建和测试墙钟不作为模型性能。两种core合计341P、46skip、1xfail。
+专项保留原19项无optimizer/alias测试、8项idle负向与既有mixed precision、累积、rebinding、
+preexisting grad、checkpoint storage/state/options/placement等完整断言，未修改数值预算或公开golden。
+全部3349 tracked文件使用严格UTF8/NUL路径和symlink payload绑定，门禁期间未变化；
+source-check确认tracked集合相同，父端结束后再次逐文件核验，原门禁进程组已空。
+
+source-before.json SHA256为c8d50f751401505ec34595d54a7b664985115d030ef0f1d06ba5b06f067b3303，
+gate-results.json为58a9a40311de167c8866c0c1a1120fe558f90069bfccf4d6e5ea92d177612604，
+source-check.json为065507293a64977eb06906f3f9547462da1196b6d68a64200aeba7bbd42c8bdd。
+本节授予上述主树CPU范围，不授予NPU、world2、真实Qwen六阶段或性能通过。
+本次证据文档更新后，按文档范围单独复验；实际记录在LAB device-api/evidence-docs-closeout-r218/。
+
+### 新cohort的完成握手与运行入口
+
+R208-v4中断阶段退出归属失败原样保留。新的共享完成握手位于LAB
+distributed/resource-completion-handshake-v1/：原worker自然返回后保持上下文存活，
+父端以原严格资源函数完成最终live身份和放置核验，再放行正常解释器/runtime清理。
+记录真实inner与supervisor退出码、ACK和pidfd；清理异常、非零退出或产物改写仍拒绝。
+原classify、stop_owned、资格谓词逐字保留，最终资格为原条件与新完成证明同时成立。
+源码与fixture/site/tool实际内容由接入driver在seal前及正常退出后重新核验，
+不以identity中的manifest SHA替代磁盘实查。
+
+CPython3.11纯stdlib串行host-attempt-006实际28项合同通过，包含正常atexit、
+提前零退出、非零SystemExit、错误身份/nonce、消失和复用PID、foreign/gap/wrong placement、
+产物改写、清理信号/异常/超时及post非空。原前五次失败保持。
+host-result.json SHA256为649cf8b57f14ce4d3d162e28e01bd9662e22e5f65e3a7d0dd94976442eef74e8；
+最终helper-source-pins.json为d21e9a2288156b313a71d4419e252c53cf7d7c0fe15014a37800e2ef468f5b29。
+父端实际重核pins、各case及原monitor字节，parent-review-001.json
+SHA256为1a1d1fea6c911afc99a0e3feba8d22ccc58253253b3ce06228af38e07e0de789。
+这些是host协议证据，真实NPU握手仍待运行。
+
+R217默认SHARDED续跑包保留v4 worker及比较器原字节；16项离线/host与7项最终源码负向通过，
+新site完整17源码加8metadata，RECORD按实际文件重建。source-host-delivery.json
+SHA256为e78182d0a08896874a9d7b9c6b82c5a3fb7eaeb89fd9a132007b33bc13ffe863。
+R214真实Qwen正式六阶段接入同一helper，原worker、完整8batch预热、比较器/policy/hook不变；
+原25项与新增17项host共42P，final-preparation-completion-source-only.json
+SHA256为05c30bca2fb7f301e09db25a5ae6d444b411af7a16ffd58d5abe9bbd2207a249。
+两者均未据此启动或通过新模型cohort；预热仍保留各自原严格资源合同。
+
+隔离重计算候选5b9fb27a0保留原29项断言，首次真实CPU coldcore构建已启动，
+记录于LAB recompute-rng-audit-20261024/activation-recompute-private-v1-runtime/
+coldcore-v3-5b9fb27a0-r1/firstwarm/；尚无候选运行通过结论，未合入主树。
+其CPU188–191和独立JH/cache与主树结构检查分离，仅一个候选coldcore JIT；
+其它NPU/Jittor新模型任务等待该首次编译终态。

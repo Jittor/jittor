@@ -4,11 +4,11 @@
 
 | 编号 | 本轮范围 | 状态 | 负责 | 证据/下一步 |
 | --- | --- | --- | --- | --- |
-| ASC-01 | 独立环境、CPU/ACL串行构建 | R209修复后专项218P/31 CUDA skips；R212整合门禁见报告 | coord | 全源冻结后core/完整structure/layout/links；fetch45秒超时不认定最新，详见综合报告 |
+| ASC-01 | 独立环境、CPU/ACL串行构建 | R216主树core341P、FSDP专项193P、完整structure1656P；两目标远端tip已核实为祖先 | coord | 3349 tracked门禁期间不变，布局/链接通过；server fetch超时与client核验证据分别保留，详见综合报告 |
 | ASC-02 | 双解释器小模型输出/全梯度 | CPU及真实NPU八模型完整对拍通过 | ecosystem | r10沿用规范overlay、source65复验八模型271参数+2输入全梯度；25新阶段及24份明确复用的不可变native参考共49验证阶段全部通过，零回落；见综合报告 |
-| ASC-03 | 多库训练和fresh-process恢复 | R205/R206 CPU恢复97/101项strict0；R196 NPU14 leaves保存及fresh加载逐位通过 | ecosystem | 世界1实际ACL零回落及严格parent监控通过；默认SHARDED双卡训练恢复、真实Qwen完整轨迹仍待，详见综合报告 |
-| ASC-04 | 共享真实模型推理和LoRA、输入梯度兼容 | R65历史冻结源完整恢复和R75输入梯度保留原范围；当前R182仅真实BF16单步数值通过，R189 ACL确定性接口1P | coord | 最终主树完整模型/输入梯度及训练确定性待验，历史source65/121/123不跨源外推；重计算、随机恢复与性能仍待，详见综合报告 |
-| ASC-05 | HCCL/DDP/FSDP2两卡场景 | R194 Native nested三dtype实卡P、严格5/6；R197 Jittor预热BF16输入/FP32权重FAIL | distributed | 正式nested双卡尚未启动；修mixed policy后验最终主树分片保存恢复，R182单步不外推，详见综合报告 |
+| ASC-03 | 多库训练和fresh-process恢复 | R213独立Native真实Qwen三阶段124轨迹strict0通过；R205/R206 CPU及R196单rank原始位恢复通过 | ecosystem | R208-v4默认SHARDED双卡Native三阶段通过、JT连续通过；JT中断rc0但退出监控归属FAIL，fresh resume未启动；全交叉仍待 |
+| ASC-04 | 真实权重闭环、LoRA和输入梯度 | R213 Native真实BF16 LoRA 4updates/112参数完整恢复通过；Jittor历史与R182单步保留原范围 | coord | R214最终源码完整paired待运行；真实重计算私有原型正在隔离CPU首次coldcore构建，尚无运行通过，随机恢复与性能仍待，详见综合报告 |
+| ASC-05 | HCCL/DDP/FSDP2两卡场景 | R194 Native nested三dtype实卡P；无optimizer/旧alias/idle/frozen修复候选CPU193P后整合 | distributed | 两中文本地提交ea6648aba/bfb53ce18；最终主树NPU nested与双卡unused/collective恢复仍待，原R210失败保留 |
 | ASC-06 | 配对速度/峰值显存/稳定性 | 无合格NPU性能结果；R182单步耗时、R188/R189定向合同测试均不作性能 | coord | 对应完整正确性gate通过后，以相同配置至少10对交替测量吞吐/延迟/live与reserved峰值，区分JIT/首步/稳态；详见综合报告 |
 
 2026-10-21 用户要求暂停新增修改与实验启动，先推送全部工作树独立快照；Day2–3仍未通过。当前交接及新机器推荐分支见[工作区快照交接](../results/2026-10-21-workspace-snapshot-handoff.md)。已运行T5 full允许正常结束，supervisor已暂停后续stage。
