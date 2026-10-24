@@ -4,7 +4,7 @@
 # entries: 1139
 # Regenerate only after reviewing every path and content change.
 fb0d15cb73dc519400967b63b0091df66a8c4388e3cb7dd107b8fc40fcc5054f  jittor-2.0.0.dist-info/METADATA
-3dae459f989808c720d32b65710c693c2d25e45495fa1a8d426715b4934f7534  jittor-2.0.0.dist-info/RECORD
+f21960c9b48f596fcf8c6e7b26f97d3b37850823206abc81d50fd0925285bd62  jittor-2.0.0.dist-info/RECORD
 2b6eb4118ce7cd7b09601406aa623c553c4476265836f0d9c16f5c061f7efcc0  jittor-2.0.0.dist-info/WHEEL
 435a22ada7651633d681246096725d6b8a5d15b729df61706c5637cbc58c39c7  jittor-2.0.0.dist-info/entry_points.txt
 8b18f18c9c43b17e6e2bcdefc8df9d423c12e6769d5d13cf6a46fed31e7e1666  jittor-2.0.0.dist-info/licenses/LICENSE.txt
@@ -499,7 +499,7 @@ b24db5e7cfc079c6d051f8942cf8e78ee8a6c52c269e01364be4cd22b0da0c42  jittor/contrib
 f7747c36855f3adbbc51d652e8aa6ad3ddd8ab031ae16d51aadca42670ae65d8  jittor/contrib/math_util/src/igamma.h
 2f7dc6f037353e2b69bdff02639ec63aa387666d5be7312db05ba5de73cf6a9d  jittor/dataset/__init__.py
 51d896b0383a8a4ef747e39cdee5db745913026c9f5e9f593debc4172e0edc45  jittor/dataset/cifar.py
-51cd544f65a0430505e3bb977c8bfa38cea5d0831f67af45227b049affed8214  jittor/dataset/dataset.py
+9a27ae460068736e7f87d3efc806c40dea3f7467fb94ac399a2fea9b4db979b6  jittor/dataset/dataset.py
 4baa85edb5003f71f4b3b5b9e66306cf19c92c4bdad1e61f3627e3d25adad065  jittor/dataset/mnist.py
 f6d831846a083985f92232caf63ac6064f1fc6434aacedad2ac8610ac4bfc4f2  jittor/dataset/sampler.py
 fa9908f6bec2d5b4370f83e70bc7b1ab3f0b6e1fdb092c5c6a3045783860fa49  jittor/dataset/utils.py
