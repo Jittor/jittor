@@ -630,6 +630,7 @@ def _schema_type(annotation, function, torch_module, error):
     direct = {
         tensor_type: "Tensor",
         int: "SymInt",
+        torch_module.SymInt: "SymInt",
         float: "float",
         bool: "bool",
         str: "str",

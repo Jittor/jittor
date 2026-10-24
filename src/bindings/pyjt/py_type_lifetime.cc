@@ -1,4 +1,5 @@
 #include "bindings/pyjt/py_type_lifetime.h"
+#include "bindings/pyjt/py_obj_holder.h"
 #include <stdexcept>
 #include <unordered_map>
 
@@ -41,9 +42,12 @@ void on_type_collected(PyObject* type, void (*forget)(PyObject* type)) {
             if (!collected_callback)
                 throw std::runtime_error("cannot create the type collection callback");
         }
-        PyObject* weak = PyWeakref_NewRef(type, collected_callback);
-        if (!weak) throw std::runtime_error("cannot watch a type for collection");
-        found = watched.emplace(type, Watch{weak, {}}).first;
+        PyObjHolder weak;
+        weak.obj = PyWeakref_NewRef(type, collected_callback);
+        if (!weak.obj) throw std::runtime_error("cannot watch a type for collection");
+        auto inserted = watched.emplace(type, Watch{weak.obj, {}});
+        found = inserted.first;
+        if (inserted.second) weak.release();
     }
     for (auto known : found->second.forget)
         if (known == forget) return;

@@ -350,6 +350,14 @@ def build_extension_dirs(
         build_temp_path, build_lib_path = _setuptools_build_dirs(ext_root, child_env)
         build_root = _setuptools_build_root(ext_root, child_env)
         child_env["JITTOR_TORCH_EXTENSIONS_DIR"] = os.fspath(build_root)
+        # ``setup.py`` commonly imports ``torch.utils.cpp_extension``.  Under
+        # the deployed shim that import activates the compatibility runtime in
+        # the child process; without this guard it scans the current extension
+        # project and launches the same ``setup.py build_ext`` again forever.
+        # The parent is already responsible for this build, so only suppress
+        # automatic *nested* builds in the child.  BuildExtension itself stays
+        # installed and still compiles the declared extension normally.
+        child_env["JITTOR_TORCH_SKIP_EXT_BUILD"] = "1"
         if not force and not _needs_build(ext, env=child_env):
             _log(verbose, "extension up-to-date: %s" % ext.root)
             continue

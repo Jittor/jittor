@@ -302,3 +302,62 @@ def test_tensor_state_retry_reuses_the_staged_state_after_rollback():
     retry = transaction.retry()
     assert bind_tensor_state(native, target, retry, state=state) is state
     assert get_tensor_state(native) is get_tensor_state(target) is state
+
+
+def test_grad_fn_pool_shares_native_ids_but_not_owners():
+    from jittor.compat.torch.installers.tensor.autograd_api import _TorchGradFn
+    first, second = TorchTensorState(), TorchTensorState()
+    held = first.intern_grad_fn(13, 2, "public_fixture", _TorchGradFn)
+    assert first.intern_grad_fn(13, 2, "public_fixture", _TorchGradFn) is held
+    assert first.intern_grad_fn(14, 2, "public_fixture", _TorchGradFn) is not held
+    assert second.intern_grad_fn(13, 2, "public_fixture", _TorchGradFn) is not held
+
+
+def test_grad_fn_pool_does_not_own_wrapper_lifetime():
+    from jittor.compat.torch.installers.tensor.autograd_api import _TorchGradFn
+    state = TorchTensorState()
+    held = state.intern_grad_fn(13, 2, "public_fixture", _TorchGradFn)
+    reference = weakref.ref(held)
+    assert len(state.grad_fn_wrappers) == 1
+    del held
+    gc.collect()
+    assert reference() is None
+    assert len(state.grad_fn_wrappers) == 0
+
+
+def test_grad_fn_pool_uses_one_factory_call_under_contention():
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    from time import sleep
+    from jittor.compat.torch.installers.tensor.autograd_api import _TorchGradFn
+    state = TorchTensorState()
+    barrier = Barrier(4)
+    calls = []
+    def factory(*arguments):
+        calls.append(1)
+        sleep(.01)  # Release the GIL while the owner lock protects creation.
+        return _TorchGradFn(*arguments)
+    def query(_):
+        barrier.wait(timeout=20)
+        return state.intern_grad_fn(13, 2, "public_fixture", factory)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        wrappers = list(pool.map(query, range(4)))
+    assert len(calls) == 1
+    assert all(item is wrappers[0] for item in wrappers)
+
+
+def test_native_missing_producer_never_uses_cached_wrapper():
+    from jittor.compat.torch.installers.tensor.autograd_api import _grad_fn
+    class MetadataOnlyHolder:
+        grad_fn_node_id = -1
+        @property
+        def grad_fn_op_id(self):
+            raise AssertionError("missing producer must not query stale metadata")
+        @property
+        def grad_fn_name(self):
+            raise AssertionError("missing producer must not query stale metadata")
+        def __hash__(self):
+            raise AssertionError("producer lookup must not hash Tensor holders")
+        def __eq__(self, other):
+            raise AssertionError("producer lookup must not compare Tensor holders")
+    assert _grad_fn(MetadataOnlyHolder()) is None

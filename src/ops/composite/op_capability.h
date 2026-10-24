@@ -14,6 +14,8 @@ enum class OpCapability : uint32 {
     Conv2d,
     Conv2dBackwardInput,
     Conv2dBackwardWeight,
+    RandomInteger,
+    OrderedSum,
 };
 
 struct OpCapabilityEntry {

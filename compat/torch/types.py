@@ -4,7 +4,9 @@ import os
 import threading
 import types as _python_types
 import typing
+from types import MappingProxyType
 from typing import cast
+from weakref import WeakKeyDictionary
 
 import jittor as jt
 from ..diagnostics import EXPECTED, swallowed
@@ -31,6 +33,61 @@ class _CallableBool(int):
     __str__ = __repr__
 
 
+class layout:
+    """Immutable public layout identities; only reviewed canonical values exist."""
+    __slots__ = ()
+
+    def __new__(cls, *args, **kwargs):
+        raise TypeError("torch.layout cannot be constructed directly")
+
+    def __init_subclass__(cls, **kwargs):
+        raise TypeError("torch.layout cannot be subclassed")
+
+    def __setattr__(self, name, value):
+        raise AttributeError("torch.layout objects are immutable")
+
+    def __repr__(self):
+        return "torch." + _layout_name(self)
+
+    __str__ = __repr__
+    __hash__ = object.__hash__
+
+    def __reduce__(self):
+        return _restore_layout, (_layout_name(self),)
+
+
+# No per-instance name/state can be rewritten with object.__setattr__.
+# Public construction is closed; a forged object.__new__(layout) has no label.
+strided = object.__new__(layout)
+jagged = object.__new__(layout)
+_LAYOUTS = ((strided, "strided"), (jagged, "jagged"))
+
+
+def _layout_name(value):
+    if type(value) is layout:
+        for canonical, name in _LAYOUTS:
+            if value is canonical:
+                return name
+    raise TypeError("noncanonical torch.layout object")
+
+
+def _validate_layout(value):
+    """Admit None or a closed public identity, never a display string."""
+    if value is None:
+        return strided
+    _layout_name(value)
+    return value
+
+
+def _restore_layout(name):
+    if type(name) is not str:
+        raise TypeError("serialized layout name must be an exact string")
+    for canonical, candidate in _LAYOUTS:
+        if name == candidate:
+            return canonical
+    raise ValueError("unknown serialized torch.layout name")
+
+
 class dtype:
     """Immutable Torch dtype identity, independent of Python strings."""
     __slots__ = ("name", "_is_fp")
@@ -46,6 +103,14 @@ class dtype:
     def __new__(cls, name, is_floating_point=False):
         if not isinstance(name, str):
             raise TypeError("dtype name must be a string")
+        # Legacy str-subclass pickle constructors still name this private
+        # class. Restore the active installation's canonical public singleton.
+        registry = _dtype_registry()
+        canonical = registry.get(name)
+        if canonical is not None:
+            return canonical
+        if registry is not dtype._registry:
+            raise ValueError("unknown serialized torch.dtype name")
         if name in cls._registry:
             return cls._registry[name]
         obj = super().__new__(cls)
@@ -127,10 +192,99 @@ class dtype:
         return self.name
 
 def _restore_dtype(name, is_floating_point):
-    return dtype(name, is_floating_point)
+    if not isinstance(name, str) or type(is_floating_point) is not bool:
+        raise TypeError("invalid serialized torch.dtype identity")
+    registry = _dtype_registry()
+    value = registry.get(name)
+    if value is None:
+        if registry is not dtype._registry:
+            raise ValueError("unknown serialized torch.dtype name")
+        value = dtype(name, is_floating_point)
+    if bool(value.is_floating_point) != is_floating_point:
+        raise ValueError("invalid serialized torch.dtype state")
+    return value
+
+
+# Admission is by actual registered class and canonical instance identity,
+# never a class's display name or a caller-controlled instance attribute.
+_OWNED_DTYPE_RECORDS = WeakKeyDictionary()
+_DTYPE_ALIASES = MappingProxyType({
+    "float": "float32", "double": "float64", "half": "float16",
+    "short": "int16", "int": "int32", "long": "int64",
+    "cfloat": "complex64", "cdouble": "complex128",
+})
+
+
+def _owned_dtype_record(value):
+    records = _OWNED_DTYPE_RECORDS.get(type(value))
+    record = records.get(id(value)) if records is not None else None
+    if record is None or record[0] is not value:
+        raise TypeError("noncanonical torch.dtype object")
+    return record
+
+
+def _owned_dtype_name(value):
+    return _owned_dtype_record(value)[1]
+
+
+def _owned_dtype_is_fp(value):
+    return _owned_dtype_record(value)[2]
+
+
+def _owned_dtype_new(cls, *args, **kwargs):
+    raise TypeError("cannot create 'torch.dtype' instances")
+
+
+def _owned_dtype_reduce(value):
+    # Pickle's global-attribute protocol resolves the real public singleton,
+    # rather than invoking the intentionally closed public constructor.
+    return _owned_dtype_name(value)
+
+
+def _is_dtype(value):
+    if type(value) in _OWNED_DTYPE_RECORDS:
+        _owned_dtype_record(value)
+        return True
+    return type(value) is dtype and dtype._registry.get(value.name) is value
+
+
+def _dtype_registry():
+    from .context import get_install_context
+    context = get_install_context(jt, required=False)
+    if context is not None and "dtypes" in context.state:
+        public_type = context.state["dtype_type"]
+        return public_type._registry
+    return dtype._registry
+
+
+def _new_owned_dtype_type():
+    # These are real methods on a newly constructed object-only public class,
+    # not a private base or a post-installation identity rewrite.
+    methods = (
+        "__setattr__", "__init_subclass__", "is_floating_point", "is_complex",
+        "itemsize", "element_size", "is_float", "is_bool", "is_int",
+        "is_unsigned", "__repr__", "__str__", "__eq__", "__hash__",
+        "__setstate__", "_jittor_compute_name",
+    )
+    namespace = {name: vars(dtype)[name] for name in methods}
+    namespace.update({
+        "__module__": "torch", "__qualname__": "dtype", "__slots__": (),
+        "__doc__": dtype.__doc__, "__new__": _owned_dtype_new,
+        "__reduce__": _owned_dtype_reduce,
+        "name": property(_owned_dtype_name),
+        "_is_fp": property(_owned_dtype_is_fp),
+        "_supported": dtype._supported,
+    })
+    return type("dtype", (object,), namespace)
 
 
 def _make_dtypes(ns):
+    current = vars(ns).get("dtype")
+    if current in _OWNED_DTYPE_RECORDS:
+        objs = dict(current._registry)
+        objs.update((alias, objs[name]) for alias, name in _DTYPE_ALIASES.items())
+        return objs
+    public_type = _new_owned_dtype_type()
     specs = [
         ("float32", True), ("float64", True), ("float16", True),
         ("bfloat16", True),
@@ -154,20 +308,19 @@ def _make_dtypes(ns):
         ("uint5", False), ("uint6", False), ("uint7", False),
     ]
     objs = {}
+    records = {}
     for name, is_fp in specs:
-        objs[name] = dtype(name, is_fp)
-    objs["float"] = objs["float32"]
-    objs["double"] = objs["float64"]
-    objs["half"] = objs["float16"]
-    objs["short"] = objs["int16"]
-    objs["int"] = objs["int32"]
-    objs["long"] = objs["int64"]
-    objs["cfloat"] = objs["complex64"]
-    objs["cdouble"] = objs["complex128"]
+        value = object.__new__(public_type)
+        objs[name] = value
+        records[id(value)] = (value, name, is_fp)
+    _OWNED_DTYPE_RECORDS[public_type] = MappingProxyType(records)
+    public_type._registry = MappingProxyType(objs.copy())
+    objs.update((alias, objs[name]) for alias, name in _DTYPE_ALIASES.items())
     for k, v in objs.items():
         setattr(ns, k, v)
+    ns.dtype = public_type
     from jittor._core.dtypes import register_dtype_type
-    register_dtype_type(dtype)
+    register_dtype_type(public_type)
     return objs
 
 
@@ -189,11 +342,11 @@ def _dtype_to_str(d, *, require_compute=True):
     """
     if d is None:
         return None
-    if isinstance(d, dtype):
+    if _is_dtype(d):
         return d._jittor_compute_name if require_compute else d.name
     if isinstance(d, str):
         name = d.replace("torch.", "")
-        registered = dtype._registry.get(name)
+        registered = _dtype_registry().get(name)
         if registered is None:
             return name
         return registered._jittor_compute_name if require_compute else registered.name
@@ -413,7 +566,7 @@ def active_device_context() -> typing.Optional[device]:
 Number = typing.Union[int, float, bool]
 Device = typing.Optional[typing.Union[device, str, int]]
 FileLike = typing.Union[str, os.PathLike, typing.IO[bytes]]
-SymInt = int
+from .symbolic import SymInt
 SymFloat = float
 SymBool = bool
 py_sym_types = (SymInt, SymFloat, SymBool)
@@ -579,7 +732,7 @@ def _move_to_cuda_index(v, dev, default_index=None):
     idx = _cuda_index_of(dev)
     if idx is None:
         idx = default_index
-    if idx is None or idx < 0 or not isinstance(v, jt.Var):
+    if idx is None or idx < 0 or not jt.core._is_tensor_carrier(v):
         return v
     try:
         current = int(v.device_id)
@@ -603,7 +756,7 @@ def _var_is_cpu_resident(v):
     jtorch's C++ is_cpu()/device() report -- NOT the global use_cuda flag. A
     not-yet-materialized Var reports 'none'; treat that as following the global
     flag (it will land per use_cuda when realized)."""
-    if isinstance(v, jt.Var) and v.placement_backend >= 0:
+    if jt.core._is_tensor_carrier(v) and v.placement_backend >= 0:
         return v.placement_backend == 0
     try:
         if getattr(v, "_jittor_torch_force_cpu", False):
@@ -626,7 +779,7 @@ def _var_is_cpu_resident(v):
 
 
 def _var_has_cpu_residency_hint(v):
-    if isinstance(v, jt.Var) and v.placement_backend >= 0:
+    if jt.core._is_tensor_carrier(v) and v.placement_backend >= 0:
         return v.placement_backend == 0
     try:
         return bool(getattr(v, "_jittor_torch_force_cpu", False))
@@ -642,7 +795,7 @@ def _make_cpu_resident(v, inplace=False):
     the native Var storage migration when available and keep the old NumPy
     rebuild only as a fallback for older cores.
     """
-    if not isinstance(v, jt.Var):
+    if not jt.core._is_tensor_carrier(v):
         return v
     if v.placement_backend >= 0:
         if v.placement_backend == 0:
@@ -650,7 +803,7 @@ def _make_cpu_resident(v, inplace=False):
         moved = v._copy_to_cpu()
         if inplace:
             trainable = bool(v.requires_grad)
-            v.assign(moved.detach())
+            v._update(moved.detach(), logical_write=False)
             v.requires_grad = trainable
             return v
         return moved
@@ -697,7 +850,7 @@ def _make_cuda_resident(v, force=False, inplace=False, device=None):
     Prefer native storage migration over a NumPy round-trip. The latter remains
     as a compatibility fallback for unmaterialized or older-core Vars.
     """
-    if not isinstance(v, jt.Var):
+    if not jt.core._is_tensor_carrier(v):
         return v
     if v.placement_backend >= 0:
         from .frontend import _placement_request
@@ -714,7 +867,7 @@ def _make_cuda_resident(v, force=False, inplace=False, device=None):
         moved = v.to_device(index)
         if inplace:
             trainable = bool(v.requires_grad)
-            v.assign(moved.detach())
+            v._update(moved.detach(), logical_write=False)
             v.requires_grad = trainable
             return v
         return moved

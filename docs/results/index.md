@@ -57,6 +57,8 @@
 2026-09-21-flowey-merge-verification
 2026-09-22-complex-svd-grad-and-complex128
 2026-09-22-sgd-dampening-and-native-vmap-gaps
+2026-09-22-verl-v0.9.1-cpu-compatibility
+2026-09-23-verl-npu-training-progress
 2026-09-24-torch-compat-real-models
 2026-09-25-profiling-tools
 2026-10-05-high-rank-and-downstream-core-gaps

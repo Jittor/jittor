@@ -111,6 +111,14 @@ def _concat_direct(arr, dim, dtype):
     # destination on the ambient device and dispatch_context rejects every
     # setitem below.
     output = _empty_where_the_inputs_are(arr[0], output_shape, dtype)
+    # This allocation is scratch storage, not a differentiable input. Leaving
+    # its factory-default grad flag enabled creates a spurious dependency when
+    # every actual input is stopped (including Torch inference outputs).
+    # Functional setitem still builds gradients from each real trainable value.
+    if output_shape[dim] != 0:
+        output.stop_grad()
+    # An all-empty concat performs no writes: preserve the existing native
+    # factory-only policy rather than changing its legacy grad flag here.
     slices = [slice(None)] * len(output_shape)
     offset = 0
     for value in arr:

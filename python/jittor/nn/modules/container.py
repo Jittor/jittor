@@ -4,12 +4,25 @@ import collections
 import types
 
 import jittor as jt
-from jittor._core.module import _WALK_CHILDREN
+from jittor._core.module import _WALK_CHILDREN, module_protocol
 
 
 def _layer_children(container):
     """The ``(key, submodule)`` pairs `Sequential.dfs` descends into."""
-    return [(key, value) for key, value in container.layers.items() if isinstance(value, jt.Module)]
+    return [(key, value) for key, value in container.layers.items() if module_protocol(container).is_module(value)]
+
+
+def container_setattr(self, key, value):
+    if isinstance(key, str) and key.isdigit() and int(key) < len(self.layers):
+        self.add_module(key, value)
+        return
+    return module_protocol(self).module_type.__setattr__(self, key, value)
+
+
+def container_getattr(self, key):
+    if "layers" in self.__dict__ and key in self.__dict__["layers"]:
+        return self.__dict__["layers"][key]
+    return module_protocol(self).module_type.__getattr__(self, key)
 
 
 class Sequential(jt.Module):
@@ -22,7 +35,7 @@ class Sequential(jt.Module):
                 for key, module in mod.items():
                     self.add_module(key, module)
             elif isinstance(mod, (list, tuple, types.GeneratorType)) or (
-                hasattr(mod, "__iter__") and not isinstance(mod, jt.Module)
+                hasattr(mod, "__iter__") and not module_protocol(self).is_module(mod)
             ):
                 # torch's ModuleList accepts ANY iterable of modules (incl. a
                 # generator, e.g. DINO: ModuleList(build(l) for l in layers)).
@@ -113,19 +126,8 @@ class Sequential(jt.Module):
     def _modules(self):
         return self.layers
 
-    def __setattr__(self, key, value) -> None:
-        if isinstance(key, str) and key.isdigit():
-            if int(key) < len(self.layers):
-                self.add_module(key, value)
-            else:
-                super().__setattr__(key, value)
-        else:
-            super().__setattr__(key, value)
-
-    def __getattr__(self, key):
-        if "layers" in self.__dict__ and key in self.__dict__["layers"]:
-            return self.__dict__["layers"][key]
-        return super().__getattr__(key)
+    __setattr__ = container_setattr
+    __getattr__ = container_getattr
 
 
 __all__ = ["Sequential"]

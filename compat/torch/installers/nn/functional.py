@@ -3,6 +3,35 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import jittor as jt
 from jittor import nn
 from ...types import _dtype_to_str
+from ...frontend import tensor_frontend
+
+
+def _layer_norm(input, normalized_shape, weight=None, bias=None, eps=1e-5):
+    """Adapt Torch's owned tensors to the existing native normalization.
+
+    The CUDA single-axis inference relay still assumes legacy Var affine
+    operands. A singleton normalization axis selects the existing general
+    native implementation without changing the elements being reduced.
+    Views keep all three autograd paths; no math, flags or registry is patched.
+    Remove this workaround after KI-BACKEND-021 is fixed and revalidated.
+    """
+    context = get_install_context(jt)
+    shape = tuple(normalized_shape)
+    if (not shape or len(shape) > input.ndim
+            or tuple(input.shape[-len(shape):]) != shape):
+        raise RuntimeError("layer_norm normalized_shape must match trailing input dimensions")
+    for name, value in (("weight", weight), ("bias", bias)):
+        if jt.core._is_tensor_carrier(value) and tuple(value.shape) != shape:
+            raise RuntimeError("layer_norm %s must match normalized_shape" % name)
+    native = context.state["nn_functional_native"]["_jt_layer_norm"]
+    with tensor_frontend(context.state["Var"], like=input, default_placement=False):
+        if len(shape) == 1 and jt.core.dispatch_context([input])[0] == "cuda":
+            axis = input.ndim - 1
+            weight = weight.unsqueeze(0) if jt.core._is_tensor_carrier(weight) else weight
+            bias = bias.unsqueeze(0) if jt.core._is_tensor_carrier(bias) else bias
+            result = native(input.unsqueeze(axis), (1,) + shape, weight, bias, eps)
+            return result.squeeze(axis)
+        return native(input, shape, weight, bias, eps)
 
 def _pixel_shuffle(input, upscale_factor):
     r = upscale_factor
@@ -77,12 +106,29 @@ from types import MappingProxyType
 from .loss_modules import LOSS_CLASSES, PixelShuffle, PixelUnshuffle
 from .extra_api import _adapt_extra
 
+def _softplus(input, beta=1.0, threshold=20.0):
+    """CUDA AMP promotion before the original native softplus computation."""
+    if type(beta) is str or type(threshold) is str:
+        raise TypeError("softplus beta and threshold must not be str")
+    context = get_install_context(jt)
+    native = context.state["nn_functional_native"]["_jt_softplus"]
+    if _jittor_dtype_name(input.dtype) not in ("float16", "bfloat16", "float32"):
+        return native(input, beta=beta, threshold=threshold)
+    from ...amp import _optional_dtype_cuda_autocast
+    with _optional_dtype_cuda_autocast(input, None) as selected:
+        if selected is not None:
+            input = input.cast(_dtype_to_str(selected))
+        return native(input, beta=beta, threshold=threshold)
+
+
 def _softmax(input, dim=-1, _stacklevel=3, dtype=None):
     _context = get_install_context(jt)
     _jt_softmax = _context.state["nn_functional_native"]['_jt_softmax']
-    if dtype is not None:
-        input = input.cast(_dtype_to_str(dtype))
-    return _jt_softmax(input, dim=dim)
+    from ...amp import _optional_dtype_cuda_autocast
+    with _optional_dtype_cuda_autocast(input, dtype) as selected:
+        if selected is not None:
+            input = input.cast(_dtype_to_str(selected))
+        return _jt_softmax(input, dim=dim)
 
 
 def _log_softmax(input, dim=None, _stacklevel=3, dtype=None):
@@ -91,9 +137,11 @@ def _log_softmax(input, dim=None, _stacklevel=3, dtype=None):
     # logits). The native function takes no dtype, as with softmax above.
     _context = get_install_context(jt)
     _jt_log_softmax = _context.state["nn_functional_native"]['_jt_log_softmax']
-    if dtype is not None:
-        input = input.cast(_dtype_to_str(dtype))
-    return _jt_log_softmax(input, dim=dim)
+    from ...amp import _optional_dtype_cuda_autocast
+    with _optional_dtype_cuda_autocast(input, dtype) as selected:
+        if selected is not None:
+            input = input.cast(_dtype_to_str(selected))
+        return _jt_log_softmax(input, dim=dim)
 
 
 def _interpolate(input=None, size=None, scale_factor=None,
@@ -274,6 +322,9 @@ def _install_functional(ctx):
     if hasattr(nn, "log_softmax"):
         _jt_log_softmax = nn.log_softmax
         F.log_softmax = _log_softmax
+    if hasattr(nn, "softplus"):
+        _jt_softplus = nn.softplus
+        F.softplus = _softplus
     if hasattr(nn, "linear"): F.linear = nn.linear
     if hasattr(nn, "interpolate"):
         # torch.nn.functional.interpolate defaults to mode='nearest', but
@@ -364,7 +415,8 @@ def _install_functional(ctx):
         import numpy as _np_ctc
         _CNEG = -1e30
         F.ctc_loss = _ctc_loss
-    if hasattr(nn, "layer_norm"): F.layer_norm = nn.layer_norm
+    _jt_layer_norm = nn.layer_norm
+    F.layer_norm = _layer_norm
     if hasattr(nn, "embedding"): F.embedding = nn.embedding
     nn.functional = F
     g.nn.functional = nn.functional
@@ -375,15 +427,17 @@ def _install_functional(ctx):
 
     ctx.state["nn_functional_native"] = MappingProxyType({
         "loss_functions": MappingProxyType(_loss_functions),
+        "_jt_softplus": locals().get("_jt_softplus"),
         "_jt_softmax": locals().get("_jt_softmax"),
         "_jt_log_softmax": locals().get("_jt_log_softmax"),
         "_jt_interpolate": locals().get("_jt_interpolate"),
         "_jt_ce": locals().get("_jt_ce"),
+        "_jt_layer_norm": _jt_layer_norm,
         "_CNEG": locals().get("_CNEG"),
     })
 
     register_api_bindings(F, 'torch.nn.functional',
-        ('celu', 'cross_entropy', 'ctc_loss', 'embedding', 'gelu', 'gumbel_softmax', 'interpolate', 'layer_norm', 'linear', 'log_softmax', 'logsigmoid', 'pixel_shuffle', 'pixel_unshuffle', 'poisson_nll_loss', 'relu', 'rms_norm', 'selu', 'softmax', 'softmin', 'tanhshrink', 'threshold', 'triplet_margin_loss') + tuple(()),
+        ('celu', 'cross_entropy', 'ctc_loss', 'embedding', 'gelu', 'gumbel_softmax', 'interpolate', 'layer_norm', 'linear', 'log_softmax', 'logsigmoid', 'pixel_shuffle', 'pixel_unshuffle', 'poisson_nll_loss', 'relu', 'rms_norm', 'selu', 'softplus', 'softmax', 'softmin', 'tanhshrink', 'threshold', 'triplet_margin_loss') + tuple(()),
         Fidelity.APPROXIMATE, 'Native neural-network mathematics with Torch argument adaptation; dtype, backend, and optional parameter restrictions apply')
     register_api_bindings(F, "torch.nn.functional",
         ("binary_cross_entropy", "cosine_embedding_loss", "gaussian_nll_loss",

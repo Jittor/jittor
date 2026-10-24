@@ -1,5 +1,6 @@
 """Stable Torch shape and reduction adapters using native Tensor operations."""
 from ...context import get_install_context
+from ...types import _dtype_registry, _is_dtype
 from . import jt, np, dtype, _jittor_dtype_name, _dtype_to_str, _diff, _trapz, nn
 from .method_api import _ip
 
@@ -74,10 +75,10 @@ def _torch_size(self, dim=None):
 
 
 def _dtype_itemsize_name(ds):
-    d = dtype._registry.get(ds)
+    d = _dtype_registry().get(ds)
     if d is not None:
         return d.itemsize
-    return dtype(ds).itemsize
+    raise TypeError("unknown dtype itemsize: %s" % ds)
 
 
 def _bitcast(self, dt):
@@ -146,7 +147,7 @@ def _reshape_or_view(self, shape, _kw, *, allow_copy):
         if _named is not None:
             shape = _named if isinstance(_named, (tuple, list)) else (_named,)
             shape = (tuple(int(s) for s in shape),)
-    if len(shape) == 1 and isinstance(shape[0], dtype):
+    if len(shape) == 1 and _is_dtype(shape[0]):
         return _bitcast(self, shape[0])
     if len(shape) == 1 and isinstance(shape[0], tuple) and type(shape[0]) is not tuple:
         shape = (tuple(int(s) for s in shape[0]),)
@@ -205,7 +206,7 @@ def _norm_reduce_kw(a, k):
 
 
 def _looks_like_dtype(x):
-    return isinstance(x, dtype) or (isinstance(x, str) and x.replace("torch.", "") in dtype._registry)
+    return _is_dtype(x) or (isinstance(x, str) and x.replace("torch.", "") in _dtype_registry())
 
 
 def _torch_var_sum(self, *a, **k):
@@ -406,7 +407,8 @@ def _shape_expm1(self):
 
 
 def _shape_log1p(self):
-    return jt.log(self + 1)
+    from ..numerical.elementwise import log1p
+    return log1p(self)
 
 
 def _shape_square(self):
@@ -423,6 +425,101 @@ def _shape_clamp_min(self, v):
 
 def _shape_clamp_max(self, v):
     return jt.minimum(self, v)
+
+
+def _shape_matmul(self, other):
+    # The existing public delegate owns native math, placement and result type.
+    return get_install_context(jt).target_namespace.matmul(self, other)
+
+
+def _shape_masked_fill(self, mask, value):
+    return get_install_context(jt).target_namespace.masked_fill(self, mask, value)
+
+
+def _shape_repeat_interleave(self, repeats, dim=None, *, output_size=None):
+    import operator
+    from ...frontend import tensor_frontend
+    if not jt.core._is_tensor_carrier(repeats):
+        repeats = operator.index(repeats)
+        if repeats < 0:
+            raise RuntimeError("repeats must be non-negative")
+    source = self if self.ndim else self.reshape(1)
+    if dim is not None:
+        dim = operator.index(dim)
+        if not -source.ndim <= dim < source.ndim:
+            raise IndexError("repeat_interleave dimension out of range")
+    if isinstance(repeats, int) and output_size is not None:
+        length = source.numel() if dim is None else source.shape[dim]
+        if operator.index(output_size) != length * repeats:
+            raise RuntimeError("repeat_interleave output_size does not match repeats")
+    context = get_install_context(jt)
+    with tensor_frontend(context.state["Var"], like=self, default_placement=False):
+        result = context.target_namespace.repeat_interleave(source, repeats, dim=dim, output_size=output_size)
+        # Native repeat-one may alias its input. Torch's method owns a new
+        # result, including the flatten spelling; cloning keeps the real VJP.
+        return result.clone() if isinstance(repeats, int) and repeats == 1 else result
+
+
+def _shape_unbind(self, dim=0):
+    """Expose the existing native unbind through the owned Tensor frontend."""
+    import operator
+    from ...frontend import tensor_frontend
+    dim = operator.index(dim)
+    if not self.ndim or not -self.ndim <= dim < self.ndim:
+        raise IndexError("unbind dimension out of range")
+    dim %= self.ndim
+    context = get_install_context(jt)
+    with tensor_frontend(context.state["Var"], like=self, default_placement=False):
+        return tuple(context.target_namespace.unbind(self, dim=dim))
+
+
+def _shape_split(self, split_size, dim=0):
+    import operator
+    from ...frontend import tensor_frontend
+    if not self.ndim:
+        raise RuntimeError("split expects at least a one-dimensional tensor")
+    dim = operator.index(dim)
+    if not -self.ndim <= dim < self.ndim:
+        raise IndexError("split dimension out of range")
+    dim %= self.ndim
+    length = self.shape[dim]
+    if isinstance(split_size, (list, tuple)):
+        sections = [operator.index(size) for size in split_size]
+        if any(size < 0 for size in sections) or sum(sections) != length:
+            raise RuntimeError("split sizes must be non-negative and sum to the dimension")
+    else:
+        sections = operator.index(split_size)
+        if sections < 0 or (sections == 0 and length):
+            raise RuntimeError("split_size must be positive for a nonempty dimension")
+    context = get_install_context(jt)
+    with tensor_frontend(context.state["Var"], like=self, default_placement=False):
+        if isinstance(sections, int) and length == 0:
+            # Native split's empty integer form returns no pieces; Torch
+            # returns one real empty view, produced by the existing index op.
+            parts = (self[(slice(None),) * dim + (slice(0, 0),)],)
+        else:
+            parts = context.target_namespace.split(self, sections, dim=dim)
+        start = 0
+        for part in parts:
+            stop = start + part.shape[dim]
+            if not part._is_view():
+                part._set_view_of(self, (slice(None),) * dim + (slice(start, stop),))
+            start = stop
+    return tuple(parts)
+
+
+def _shape_tril(self, diagonal=0):
+    return get_install_context(jt).target_namespace.tril(self, diagonal=diagonal)
+
+
+def _shape_triu(self, diagonal=0):
+    return get_install_context(jt).target_namespace.triu(self, diagonal=diagonal)
+
+
+def _shape_matmul_operator(self, other):
+    if not jt.core._is_tensor_carrier(other):
+        return NotImplemented
+    return _shape_matmul(self, other)
 
 
 def _shape_bmm(self, other):

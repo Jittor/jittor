@@ -427,6 +427,97 @@ class TestAdaptivePool(Base):
 # nn.Conv2d / nn.MaxPool2d / nn.AvgPool2d module forward
 # ---------------------------------------------------------------------------
 class TestModuleForward(Base):
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled,
+                     'real CUDA required; no CPU fallback evidence')
+    def test_cuda_conv1d_spatial_metadata_and_complete_vjp(self):
+        self.assertTrue(jt.compiler.is_cuda)
+        self.assertFalse(jt.compiler.has_acl)
+        cases = ((4, 1, 3, 1, False), ((4,), (2,), (3,), (1,), False),
+                 ([4], [1], [3], [2], False), (4, 1, 'same', 1, False),
+                 (4, 1, 3, 1, True))
+        hx = (np.arange(18, dtype=np.float32).reshape(1, 2, 9) - 7) / np.float32(19)
+        hw = (np.arange(8, dtype=np.float32).reshape(2, 1, 4) - 3) / np.float32(23)
+
+        def descriptor(value):
+            native = getattr(value, '_var', value)
+            return (value.device.type, value.device.index, str(value.dtype),
+                    tuple(value.shape), tuple(value.stride()), value.storage_offset(),
+                    bool(value.requires_grad), bool(value.is_leaf), value.grad_fn is None,
+                    native.location(), int(native.device_id), int(native.placement_backend),
+                    jt.core.dispatch_context([native]))
+
+        def snapshot(value):
+            native = getattr(value, '_var', value)
+            native.sync()
+            self.assertEqual(jt.core.dispatch_context([native]), ('cuda', 0))
+            self.assertEqual(native.location(), 'device')
+            self.assertEqual(int(native.device_id), 0)
+            self.assertEqual(int(native.placement_backend), 1)
+            before = descriptor(value)
+            with torch.no_grad():
+                transport = value.detach().clone()
+                self.assertIsNot(transport, value)
+                getattr(transport, '_var', transport).sync()
+                self.assertEqual(transport.device.type, 'cuda')
+                self.assertEqual(transport.device.index, 0)
+                self.assertNotEqual(transport.data_ptr(), value.data_ptr())
+                result = np.array(transport.cpu().numpy(), copy=True)
+            self.assertEqual(descriptor(value), before)  # No restorative source sync.
+            self.assertEqual(result.dtype, np.dtype('float32'))
+            self.assertTrue(bool(np.isfinite(result).all()), 'complete finite CUDA payload')
+            return result
+
+        with jt.runtime.scope(use_cuda=1, device_id=0, backend_fallback='error',
+                              cuda_kernel_math='strict', amp_reg=0, no_grad=0):
+            self.assertEqual(jt.core.backend_fallback_count(), 0)
+            for index, (kernel, stride, padding, dilation, mutate) in enumerate(cases):
+                with self.subTest(case=index):
+                    with torch.device('cuda:0'):
+                        layer = torch.nn.Conv1d(2, 2, kernel, stride=stride, padding=padding,
+                                               dilation=dilation, groups=2, bias=False)
+                    layer = layer.to(device='cuda:0', dtype=torch.float32)
+                    expected_stride = (2,) if index == 1 else (1,)
+                    expected_dilation = (2,) if index == 2 else (1,)
+                    expected_padding = 'same' if index == 3 else (3,)
+                    self.assertEqual((layer.kernel_size, layer.stride, layer.padding,
+                        layer.dilation, layer.output_padding, layer.transposed),
+                        ((4,), expected_stride, expected_padding, expected_dilation, (0,), False))
+                    if mutate:
+                        layer.stride, layer.padding, layer.dilation = (2,), (1,), (2,)
+                    s, d = layer.stride[0], layer.dilation[0]
+                    left = d * 3 // 2 if layer.padding == 'same' else layer.padding[0]
+                    right = d * 3 - left if layer.padding == 'same' else left
+                    length = (9 + left + right - d * 3 - 1) // s + 1
+                    hdy = (np.arange(2 * length, dtype=np.float32).reshape(1, 2, length) - 5) / np.float32(29)
+                    # Independent host reference: complete Y and both VJPs, all fields.
+                    ry = np.zeros((1, 2, length), dtype=np.float64)
+                    rx, rw = np.zeros(hx.shape, dtype=np.float64), np.zeros(hw.shape, dtype=np.float64)
+                    for c in range(2):
+                        for output in range(length):
+                            for k in range(4):
+                                source = output * s - left + k * d
+                                if 0 <= source < 9:
+                                    xv, wv, dv = float(hx[0, c, source]), float(hw[c, 0, k]), float(hdy[0, c, output])
+                                    ry[0, c, output] += xv * wv
+                                    rx[0, c, source] += dv * wv
+                                    rw[c, 0, k] += dv * xv
+                    x = torch.tensor(hx, device='cuda:0', dtype=torch.float32, requires_grad=True)
+                    with torch.no_grad():
+                        layer.weight.copy_(torch.tensor(hw, device='cuda:0', dtype=torch.float32))
+                    dy = torch.tensor(hdy, device='cuda:0', dtype=torch.float32)
+                    y = layer(x)
+                    dx, dw = torch.autograd.grad(y, (x, layer.weight), grad_outputs=dy, allow_unused=False)
+                    for value, expected in ((y, ry), (dx, rx), (dw, rw)):
+                        self.assertIsNotNone(value)
+                        actual = snapshot(value)
+                        self.assertEqual(actual.shape, expected.shape)
+                        self.assertTrue(bool(np.all(np.abs(actual.astype('float64') - expected)
+                            <= 1e-5 + 1e-5 * np.abs(expected))), 'complete independent Y/VJP')
+                    for value, expected in ((x, hx), (layer.weight, hw), (dy, hdy)):
+                        self.assertTrue(bool(np.array_equal(snapshot(value), expected)),
+                                        'original public operands unchanged')
+            self.assertEqual(jt.core.backend_fallback_count(), 0)
+
     def test_conv2d_module(self):
         rs = np.random.RandomState(20)
         x = rs.randn(2, 3, 8, 8).astype("float32")

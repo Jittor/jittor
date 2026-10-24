@@ -70,9 +70,10 @@ def relu6_ref(x):
 
 
 def softplus_ref(x, beta=1.0, threshold=20.0):
-    # mirrors nn.softplus: 1/beta*log(1+exp(min(beta*x,threshold))) + max(x-threshold/beta,0)
-    return (1.0 / beta) * np.log(1.0 + np.exp(np.minimum(beta * x, threshold))) \
-        + np.maximum(x - threshold / beta, 0.0)
+    # Strict ATen threshold; stable branch avoids overflow in np.where.
+    scaled = beta * x
+    nonlinear = (np.maximum(scaled, 0) + np.log1p(np.exp(-np.abs(scaled)))) / beta
+    return np.where(scaled > threshold, x, nonlinear)
 
 
 def hardswish_ref(x):

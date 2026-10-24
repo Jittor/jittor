@@ -4,11 +4,11 @@ This module contains source moved from the former monolithic installer without
 changing the compatibility semantics.
 """
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
+from typing import Generic as _Generic, TypeVar as _TypeVar
+
+_T_co = _TypeVar("_T_co", covariant=True)
 
 import collections as _collections_data
-import concurrent.futures as _futures_data
-import itertools as _itertools_data
-import threading as _threading_data
 
 import jittor as jt
 
@@ -18,48 +18,14 @@ from ... import stub_policy as _stub_policy_data
 from ...diagnostics import EXPECTED, swallowed
 
 
-def _install_torchdata_stateful_dataloader(g, registry=None):
-    """Provide torchdata.stateful_dataloader for verl trainer imports.
-
-    Newer torchdata packages may omit the stateful_dataloader namespace while
-    verl still imports it.  A single-process fallback can use the installed
-    torch.utils.data.DataLoader and expose no-op state_dict hooks.
-    """
-    _modules = registry_for(g, registry).module_map
-    import types as _types
-
-    torchdata = _modules.get("torchdata")
-    if torchdata is None:
-        torchdata = _types.ModuleType("torchdata")
-        torchdata.__version__ = "0.0.jittor"
-        _modules["torchdata"] = torchdata
-
-    stateful = _types.ModuleType("torchdata.stateful_dataloader")
-    sampler_mod = _types.ModuleType("torchdata.stateful_dataloader.sampler")
-    data_mod = getattr(getattr(g, "utils", None), "data", None)
-    base_loader = getattr(data_mod, "DataLoader", object)
-    if base_loader is _DataLoader:
-        stateful.StatefulDataLoader = StatefulDataLoader
-    else:
-        stateful.StatefulDataLoader = _stateful_loader_type(
-            base_loader, get_install_context(g))
-    if data_mod is not None:
-        for name in ("RandomSampler", "SequentialSampler", "BatchSampler", "Sampler"):
-            if hasattr(data_mod, name):
-                setattr(sampler_mod, name, getattr(data_mod, name))
-    _modules["torchdata.stateful_dataloader"] = stateful
-    _modules["torchdata.stateful_dataloader.sampler"] = sampler_mod
-    setattr(torchdata, "stateful_dataloader", stateful)
-
-
-class _TorchDataset:
+class _TorchDataset(_Generic[_T_co]):
     def __getitem__(self, i):
         raise NotImplementedError
     def __add__(self, other):
         return _ConcatDataset([self, other])
 
 
-class _IterableDataset(_TorchDataset):
+class _IterableDataset(_TorchDataset[_T_co]):
     def __iter__(self):
         raise NotImplementedError
 
@@ -100,7 +66,7 @@ class _Subset(_TorchDataset):
         return self.dataset[self.indices[idx]]
 
 
-class _Sampler:
+class _Sampler(_Generic[_T_co]):
     def __init__(self, data_source=None):
         self.data_source = data_source
     def __iter__(self):
@@ -270,136 +236,131 @@ def _default_collate(batch):
     return batch
 
 
+class _MapDatasetFetcher:
+    """Map-style fetch owner; checkpoint/cursor state belongs to torchdata."""
+
+    def __init__(self, dataset, auto_collation, collate_fn, drop_last):
+        self.dataset = dataset
+        self.auto_collation = auto_collation
+        self.collate_fn = collate_fn
+        self.drop_last = drop_last
+
+    def fetch(self, possibly_batched_index):
+        if self.auto_collation:
+            getitems = getattr(self.dataset, "__getitems__", None)
+            if getitems:
+                data = getitems(possibly_batched_index)
+            else:
+                data = [self.dataset[index] for index in possibly_batched_index]
+        else:
+            data = self.dataset[possibly_batched_index]
+        return self.collate_fn(data)
+
+
+class _DatasetKind:
+    Map = 0
+    Iterable = 1
+
+    @staticmethod
+    def create_fetcher(kind, dataset, auto_collation, collate_fn, drop_last):
+        if kind == _DatasetKind.Map:
+            return _MapDatasetFetcher(dataset, auto_collation, collate_fn, drop_last)
+        if kind == _DatasetKind.Iterable:
+            raise NotImplementedError("IterableDataset fetch protocol is not implemented")
+        raise ValueError("unknown DataLoader dataset kind")
+
+
+class _InfiniteConstantSampler(_Sampler):
+    def __iter__(self):
+        while True:
+            yield None
+
+
 class _BaseDataLoaderIter:
+    """Single-process map protocol used by real, separately installed torchdata.
+
+    No state_dict keys, cursor reconstruction or third-party module replacement
+    are implemented here. Unsupported capabilities fail before sampler/RNG use.
+    """
+
+    def __init__(self, loader):
+        if loader._dataset_kind != _DatasetKind.Map:
+            raise NotImplementedError("only map-style DataLoader iterators are implemented")
+        if loader.num_workers != 0 or loader.persistent_workers:
+            raise NotImplementedError("stateful worker-process protocol is not implemented")
+        if loader.pin_memory or loader.pin_memory_device:
+            raise NotImplementedError("pinned DataLoader protocol is not implemented")
+        if loader.timeout != 0:
+            raise ValueError("single-process DataLoader requires timeout=0")
+        self._dataset = loader.dataset
+        self._shared_seed = None
+        self._pg = None
+        self._dataset_kind = loader._dataset_kind
+        self._IterableDataset_len_called = loader._IterableDataset_len_called
+        self._auto_collation = loader._auto_collation
+        self._drop_last = loader.drop_last
+        self._index_sampler = loader._index_sampler
+        self._num_workers = loader.num_workers
+        dist = _torch_ns().distributed
+        if dist.is_available() and dist.is_initialized():
+            self._world_size, self._rank = dist.get_world_size(), dist.get_rank()
+        else:
+            self._world_size, self._rank = 1, 0
+        self._pin_memory = False
+        self._pin_memory_device = None
+        self._timeout = loader.timeout
+        self._collate_fn = loader.collate_fn
+        self._sampler_iter = iter(self._index_sampler)
+        # Match the upstream iterator's one real generator draw, including the
+        # generator object supplied by the caller. Do not invent a Python seed.
+        torch = _torch_ns()
+        self._base_seed = torch.empty((), dtype=torch.int64).random_(
+            generator=loader.generator).item()
+        self._persistent_workers = loader.persistent_workers
+        self._num_yielded = 0
+
     def __iter__(self):
         return self
+
+    def _reset(self, loader, first_iter=False):
+        self._sampler_iter = iter(self._index_sampler)
+        self._num_yielded = 0
+        self._IterableDataset_len_called = loader._IterableDataset_len_called
+
+    def _next_index(self):
+        return next(self._sampler_iter)
+
+    def _next_data(self):
+        raise NotImplementedError
+
+    def __next__(self):
+        data = self._next_data()
+        self._num_yielded += 1
+        return data
+
+    def __len__(self):
+        return len(self._index_sampler)
+
+    def __getstate__(self):
+        raise NotImplementedError("DataLoader iterators cannot be pickled")
 
 
 class _SingleProcessDataLoaderIter(_BaseDataLoaderIter):
     def __init__(self, loader):
-        self._loader = loader
-        self._batch_iter = iter(loader.batch_sampler)
+        super().__init__(loader)
+        self._dataset_fetcher = _DatasetKind.create_fetcher(
+            self._dataset_kind, self._dataset, self._auto_collation,
+            self._collate_fn, self._drop_last)
 
-    def __next__(self):
-        batch_indices = next(self._batch_iter)
-        return self._loader.collate_fn([self._loader.dataset[i] for i in batch_indices])
-
-
-class _WorkerInfo:
-    def __init__(self, id, num_workers, seed, dataset):
-        self.id = id
-        self.num_workers = num_workers
-        self.seed = seed
-        self.dataset = dataset
-
-
-_worker_state = _threading_data.local()
+    def _next_data(self):
+        return self._dataset_fetcher.fetch(self._next_index())
 
 
 def _get_worker_info():
-    return getattr(_worker_state, "info", None)
+    return _torch_ns().utils.data._utils.worker.get_worker_info()
 
 
-class _MultiProcessingDataLoaderIter(_BaseDataLoaderIter):
-    """Real background fetching for DataLoader(num_workers>0).
-
-    This class used to be ``pass``: DataLoader recorded num_workers,
-    prefetch_factor, worker_init_fn and persistent_workers and then
-    built a single-process iterator regardless, so every input pipeline
-    silently ran serially in the training thread -- which reads as "the
-    framework is slow" rather than "the flag did nothing".
-
-    Batches are now prepared by ``num_workers`` background workers with
-    a bounded look-ahead of ``prefetch_factor`` batches each, delivered
-    strictly in order.  The workers are threads, not processes (see the
-    one-time warning): datasets here hold jittor Vars, which do not
-    survive a fork, and the win being bought -- overlapping file IO and
-    decode with compute -- is available to threads.
-    """
-
-    def __init__(self, loader):
-        self._loader = loader
-        self._batch_iter = iter(loader.batch_sampler)
-        self._num_workers = max(1, int(loader.num_workers or 0))
-        prefetch = loader.prefetch_factor
-        self._prefetch = max(1, int(prefetch if prefetch else 2))
-        self._timeout = float(loader.timeout or 0) or None
-        self._pending = _collections_data.deque()
-        base_seed = 0
-        try:
-            base_seed = int(jt.get_seed())
-        except EXPECTED as exc:
-            swallowed("torch/installers/data.py __init__: base_seed = int(jt.get_seed())", exc)
-            base_seed = 0
-        self._pool = _futures_data.ThreadPoolExecutor(
-            max_workers=self._num_workers,
-            thread_name_prefix="jt-dataloader",
-            initializer=_init_worker,
-            initargs=(loader, base_seed))
-        _stub_policy_data.degraded(
-            "torch.utils.data.DataLoader(num_workers>0)",
-            "batches are prefetched by %d worker THREADS rather than "
-            "worker processes" % self._num_workers,
-            "Datasets holding jittor Vars cannot be forked; "
-            "pass num_workers=0 for strictly serial fetching.")
-        self._fill()
-
-    def _fetch(self, batch_indices):
-        loader = self._loader
-        return loader.collate_fn([loader.dataset[i] for i in batch_indices])
-
-    def _fill(self):
-        want = self._num_workers * self._prefetch
-        while len(self._pending) < want:
-            try:
-                batch_indices = next(self._batch_iter)
-            except StopIteration:
-                return
-            self._pending.append(self._pool.submit(self._fetch, batch_indices))
-
-    def __next__(self):
-        if not self._pending:
-            self._shutdown()
-            raise StopIteration
-        future = self._pending.popleft()
-        try:
-            batch = future.result(timeout=self._timeout)
-        except _futures_data.TimeoutError:
-            self._shutdown()
-            raise RuntimeError(
-                "DataLoader timed out after %s seconds waiting for a "
-                "worker batch" % self._timeout)
-        self._fill()
-        return batch
-
-    def _shutdown(self):
-        pool = getattr(self, "_pool", None)
-        if pool is not None and not self._loader.persistent_workers:
-            self._pool = None
-            pool.shutdown(wait=False)
-
-    def __del__(self):
-        try:
-            pool = getattr(self, "_pool", None)
-            if pool is not None:
-                pool.shutdown(wait=False)
-        except EXPECTED as exc:
-            swallowed("torch/installers/data.py __del__: pool = getattr(self, '_pool', None)", exc)
-
-
-_worker_ids = _itertools_data.count()
-
-
-def _init_worker(loader, base_seed):
-    worker_id = next(_worker_ids) % max(1, int(loader.num_workers or 1))
-    _worker_state.info = _WorkerInfo(
-        worker_id, int(loader.num_workers or 0),
-        base_seed + worker_id, loader.dataset)
-    if loader.worker_init_fn is not None:
-        loader.worker_init_fn(worker_id)
-
-
-class _DataLoader:
+class _DataLoader(_Generic[_T_co]):
     def __init__(self, dataset, batch_size=1, shuffle=False, sampler=None,
                  batch_sampler=None, num_workers=0, collate_fn=None,
                  pin_memory=False, drop_last=False, timeout=0,
@@ -414,8 +375,15 @@ class _DataLoader:
         self.prefetch_factor = prefetch_factor
         self.persistent_workers = persistent_workers
         self.multiprocessing_context = kwargs.get("multiprocessing_context", None)
+        self.pin_memory_device = kwargs.get("pin_memory_device", "")
+        self.in_order = kwargs.get("in_order", True)
+        self._dataset_kind = (_DatasetKind.Iterable if isinstance(dataset, _IterableDataset)
+                              else _DatasetKind.Map)
+        self._IterableDataset_len_called = None
         self.shuffle = shuffle
-        self.collate_fn = collate_fn if collate_fn is not None else _default_collate
+        self.collate_fn = (collate_fn if collate_fn is not None else
+                           (_default_collate if batch_size is not None or batch_sampler is not None
+                            else _default_convert))
         self.worker_init_fn = worker_init_fn
         self.generator = generator
         if batch_sampler is not None:
@@ -425,22 +393,47 @@ class _DataLoader:
             self.sampler = sampler if sampler is not None else (
                 _RandomSampler(dataset, generator=generator) if shuffle else _SequentialSampler(dataset)
             )
-            self.batch_sampler = _BatchSampler(self.sampler, batch_size, drop_last)
+            if batch_size is None:
+                if drop_last:
+                    raise ValueError("batch_size=None is incompatible with drop_last")
+                self.batch_sampler = None
+            else:
+                self.batch_sampler = _BatchSampler(self.sampler, batch_size, drop_last)
         self._iterator = None
     def __iter__(self):
-        if int(self.num_workers or 0) > 0:
-            self._iterator = _MultiProcessingDataLoaderIter(self)
-        else:
-            self._iterator = _SingleProcessDataLoaderIter(self)
+        self.check_worker_number_rationality()
+        self._iterator = _SingleProcessDataLoaderIter(self)
         return self._iterator
+    @property
+    def _auto_collation(self):
+        return self.batch_sampler is not None
+
+    @property
+    def _index_sampler(self):
+        return self.batch_sampler if self._auto_collation else self.sampler
+
+    @property
+    def multiprocessing_context(self):
+        return self.__multiprocessing_context
+
+    @multiprocessing_context.setter
+    def multiprocessing_context(self, value):
+        if value is not None:
+            if self.num_workers == 0:
+                raise ValueError("multiprocessing_context requires num_workers > 0")
+            raise NotImplementedError("worker-process context protocol is not implemented")
+        self.__multiprocessing_context = None
+
+    def check_worker_number_rationality(self):
+        # The real torchdata constructor calls this before choosing its worker
+        # iterator. Do not pretend our legacy thread pool is worker processes.
+        if self.num_workers != 0 or self.persistent_workers:
+            raise NotImplementedError("stateful worker-process protocol is not implemented")
+
     def __len__(self):
-        return len(self.batch_sampler)
-
-
-def _generate_state(base_seed, worker_id):
-    import random as _random_worker
-    rng = _random_worker.Random(int(base_seed) + int(worker_id))
-    return [rng.randrange(0, 2**32) for _ in range(4)]
+        if self._dataset_kind != _DatasetKind.Map:
+            raise NotImplementedError("IterableDataset length protocol is not implemented")
+        return len(self._index_sampler)
 
 
 def _checkpoint(fn, *args, use_reentrant=None, **kwargs):
@@ -461,28 +454,7 @@ def _checkpoint(fn, *args, use_reentrant=None, **kwargs):
 
 
 def _default_convert(value):
-    return value
-
-
-class _StatefulLoaderState:
-    def state_dict(self):
-        return {}
-
-    def load_state_dict(self, state_dict):
-        return None
-
-
-class StatefulDataLoader(_StatefulLoaderState, _DataLoader):
-    pass
-
-
-def _stateful_loader_type(base_loader, context):
-    """Retain an explicitly supplied loader base without copying its behavior."""
-    adapters = context.state.setdefault("stateful_loader_types", {})
-    if base_loader not in adapters:
-        adapters[base_loader] = type("StatefulDataLoader", (_StatefulLoaderState, base_loader),
-                                     {"__module__": "torchdata.stateful_dataloader"})
-    return adapters[base_loader]
+    return _torch_ns().utils.data._utils.collate.default_convert(value)
 
 
 _DATA_APIS = {
@@ -498,70 +470,23 @@ _DATA_APIS = {
 for _name, _implementation in _DATA_APIS.items():
     register_fidelity(
         "torch.utils.data." + _name, _implementation, Fidelity.APPROXIMATE,
-        "Jittor datasets and ordered batching; workers use threads rather than "
-        "processes, default_convert preserves its input, and pinned-memory "
-        "and complete Torch worker semantics are not provided",
+        "Map-style ordered workers0 batching; genuine generic conversion; "
+        "worker-process, IterableDataset and pinned-memory execution explicitly "
+        "reject unsupported use. Full TorchData/DataPipe behavior is not provided.",
     )
 register_fidelity(
     "torch.utils.checkpoint.checkpoint", _checkpoint, Fidelity.APPROXIMATE,
     "evaluates the function directly; no activation recomputation or memory saving",
 )
-register_fidelity(
-    "torchdata.stateful_dataloader.StatefulDataLoader", StatefulDataLoader,
-    Fidelity.APPROXIMATE, "ordered data loading; checkpoint state is empty and is not restored",
-)
-
 
 def install(ctx):
+    import types as _types2
+    from ..data_protocol import install as install_protocol
     _modules = ctx.registry.module_map
     g = ctx.jittor_module
-    import types as _types2
-    if "torch.utils.data" not in _modules:
-        _data = _types2.ModuleType("torch.utils.data")
-
-        for _name, _value in _DATA_APIS.items():
-            setattr(_data, _name, _value)
-        _modules["torch.utils.data"] = _data
-        g.utils.data = _data
-        _du = _types2.ModuleType("torch.utils.data._utils")
-        _duc = _types2.ModuleType("torch.utils.data._utils.collate")
-        _duw = _types2.ModuleType("torch.utils.data._utils.worker")
-        _duc.default_collate = _default_collate
-        _du.collate = _duc
-        _duw._generate_state = _generate_state
-        _du.worker = _duw
-        _modules["torch.utils.data._utils"] = _du
-        _modules["torch.utils.data._utils.collate"] = _duc
-        _modules["torch.utils.data._utils.worker"] = _duw
-        _data._utils = _du
-        _dist_data = _types2.ModuleType("torch.utils.data.distributed")
-        _dist_data.DistributedSampler = _DistributedSampler
-        _modules["torch.utils.data.distributed"] = _dist_data
-        _data.distributed = _dist_data
-        _dataset_mod = _types2.ModuleType("torch.utils.data.dataset")
-        for _name in ("Dataset", "IterableDataset", "TensorDataset", "ConcatDataset", "Subset"):
-            setattr(_dataset_mod, _name, getattr(_data, _name))
-        _modules["torch.utils.data.dataset"] = _dataset_mod
-        _data.dataset = _dataset_mod
-        _sampler_mod = _types2.ModuleType("torch.utils.data.sampler")
-        for _name in ("Sampler", "SequentialSampler", "RandomSampler", "SubsetRandomSampler", "BatchSampler", "DistributedSampler"):
-            setattr(_sampler_mod, _name, getattr(_data, _name))
-        _modules["torch.utils.data.sampler"] = _sampler_mod
-        _data.sampler = _sampler_mod
-        _dataloader_mod = _types2.ModuleType("torch.utils.data.dataloader")
-        _dataloader_mod.DataLoader = _DataLoader
-        _dataloader_mod.default_collate = _default_collate
-        _dataloader_mod._DatasetKind = type("_DatasetKind", (), {"Iterable": 0, "Map": 1})
-        _dataloader_mod._BaseDataLoaderIter = _BaseDataLoaderIter
-        _dataloader_mod._SingleProcessDataLoaderIter = _SingleProcessDataLoaderIter
-        _dataloader_mod._MultiProcessingDataLoaderIter = _MultiProcessingDataLoaderIter
-        _modules["torch.utils.data.dataloader"] = _dataloader_mod
-        _data.dataloader = _dataloader_mod
-    else:
-        g.utils.data = _modules["torch.utils.data"]
+    install_protocol(ctx)
     if "torch.utils.checkpoint" not in _modules:
         _ckpt = _types2.ModuleType("torch.utils.checkpoint")
         _ckpt.checkpoint = _checkpoint
         _modules["torch.utils.checkpoint"] = _ckpt
         g.utils.checkpoint = _ckpt
-    _install_torchdata_stateful_dataloader(g, ctx.registry)

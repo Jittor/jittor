@@ -129,7 +129,7 @@ def test_every_optional_capability_is_owned_by_a_library():
             assert "get_op_info(" not in source, path
             declarations += re.findall(r"OpCapability::(\w+)", source)
     assert set(declarations) == {
-        "SegmentedArgReduce", "SegmentedArgsort", "Where", "Random", "Transpose",
+        "SegmentedArgReduce", "SegmentedArgsort", "Where", "Random", "RandomInteger", "Transpose",
         "Matmul", "Conv2d", "Conv2dBackwardInput", "Conv2dBackwardWeight",
     }
-    assert len(declarations) == 13
+    assert len(declarations) == 14

@@ -30,6 +30,8 @@
 #include "mem/allocator/stat_allocator.h"
 #include "mem/allocator/temp_allocator.h"
 #include "mem/mem_info.h"
+#include "mem/pool_memory_stats.h"
+#include "mem/allocator/nfef_allocator.h"
 #include "mem/swap.h"
 #include "core/executor.h"
 #include "bindings/pybind/py_var_tracer.h"
@@ -377,6 +379,56 @@ int64 device_memory_window_peak(int device) {
 
 int64 device_memory_allocated_total(int device) {
     return sfrl_device_allocated_bytes(device);
+}
+
+static PoolMemoryStats& pool_memory_stats() {
+    // Pools can outlive process globals during shutdown.
+    static auto* stats = new PoolMemoryStats;
+    return *stats;
+}
+
+void record_pool_memory(Allocator* pool) {
+    if (pool->is_cuda())
+        pool_memory_stats().update(pool, pool->device(), pool->used_memory,
+                                   pool->used_memory + pool->unused_memory);
+}
+
+void forget_pool_memory(Allocator* pool) {
+    pool_memory_stats().forget(pool);
+}
+
+void mark_device_memory_stats_unsupported(int device) {
+    pool_memory_stats().unsupported(device);
+}
+
+static void check_memory_device(int device) {
+    USER_CHECK(device >= 0 && device < get_device_count())
+        << "Invalid accelerator device for memory query:" << device;
+}
+
+vector<int64> device_memory_info(int device) {
+    check_memory_device(device);
+    size_t free = 0, total = 0;
+    backend_ops(accelerator_backend_id()).memory_info(device, free, total);
+    USER_CHECK(total > 0 && free <= total) << "Invalid driver memory information";
+    return {int64(free), int64(total)};
+}
+
+static void check_pool_memory_device(int device) {
+    check_memory_device(device);
+    USER_CHECK(use_sfrl_allocator && !use_nfef_allocator)
+        << "Device pool statistics require the SFRL/Temp allocator stack";
+}
+
+vector<int64> device_pool_memory_stats(int device) {
+    check_pool_memory_device(device);
+    auto stats = pool_memory_stats().read(device);
+    return {stats.allocated, stats.reserved, stats.peak_allocated, stats.peak_reserved};
+}
+
+void reset_device_memory_peaks(int device) {
+    check_pool_memory_device(device);
+    pool_memory_stats().read(device, true);
 }
 
 } // jittor

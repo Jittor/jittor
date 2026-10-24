@@ -121,7 +121,7 @@ _RERECORD_LIMIT = 8
 #: Ops whose output depends on more than their inputs. A captured graph
 #: replays the values it recorded, so a graph containing one of these is not
 #: re-runnable at all and capture refuses rather than repeating a draw.
-_NONDETERMINISTIC_OPS = ("random", "curand_random")
+_NONDETERMINISTIC_OPS = ("random", "curand_random", "curand_random_int")
 
 
 class _no_auto:

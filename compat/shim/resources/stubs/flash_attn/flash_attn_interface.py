@@ -12,6 +12,7 @@ from . import (  # noqa: F401
     flash_attn_varlen_func,
     flash_attn_varlen_kvpacked_func,
     flash_attn_varlen_qkvpacked_func,
+    flash_attn_with_kvcache,
     flashattn_jittor_backend,
     flashattn_jittor_last_error,
     is_flashattn_jittor_available,

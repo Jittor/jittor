@@ -106,7 +106,7 @@ def _materialize_frozen_output(value):
 
 
 def _tensor_values(value):
-    if isinstance(value, jt.Var):
+    if jt.core._is_tensor_carrier(value):
         return [value]
     if isinstance(value, dict):
         return [tensor for item in value.values() for tensor in _tensor_values(item)]

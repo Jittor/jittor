@@ -10,6 +10,7 @@
 
 #include "mem/allocator/temp_allocator.h"
 #include "runtime/profiler/step_trace.h"
+#include "mem/mem_info.h"
 
 namespace jittor {
 
@@ -17,6 +18,7 @@ DEFINE_FLAG(int, use_temp_allocator, 1, "Enable temp allocator");
 vector<TempAllocator*> TempAllocator::temp_allocators;
 
 TempAllocator::~TempAllocator() {
+    forget_pool_memory(this);
     while (!cached_blocks.empty()) {
         auto it = cached_blocks.begin();
         TempCachingBlock* block = it->second;
@@ -95,6 +97,7 @@ void* TempAllocator::alloc(size_t size, size_t& allocation) {
     occupied_id_mapper[block->id] = block;
     allocation = block->id;
     step_trace_mem(stm_temp, device(), block->size, this, allocation);
+    record_pool_memory(this);
     return block->memory_ptr;
 }
 
@@ -138,6 +141,7 @@ void TempAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
     if (can_add) {
         cached_blocks[get_key(block)] = block;
     }
+    record_pool_memory(this);
 }
 
 void TempAllocator::gc() {
@@ -153,6 +157,7 @@ void TempAllocator::gc() {
         cached_blocks.erase(it);
         delete block;
     }
+    record_pool_memory(this);
 }
 
 bool TempAllocator::share_with(size_t size, size_t allocation, size_t offset) {

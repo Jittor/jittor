@@ -9,7 +9,6 @@ import copy as _copy2
 import types as _types_nn_private
 from ...context import get_install_context
 from ...types import _dtype_to_str
-from ...tensor_state import latest_optimizer
 from ...grad import _clip_grad_norm_device
 from ....diagnostics import EXPECTED, swallowed
 from .... import fsdp_hooks as _fsdp_hooks
@@ -168,20 +167,12 @@ def _flex_attention(*args, **kwargs):
 
 
 def _grads_of(params):
-    _context = get_install_context(jt)
-    _torch_target = _context.target_namespace
     params = list(params)
-    opt = latest_optimizer(_torch_target)
     out = []
     for p in params:
-        gg = None
-        if opt is not None:
-            try: gg = opt.find_grad(p)
-            except EXPECTED as exc:
-                swallowed("torch/installers/nn.py _grads_of: gg = opt.find_grad(p)", exc)
-                gg = None
-        if gg is None:
-            gg = getattr(p, "grad", None)
+        # Tensor.grad already resolves the actual owner and preserves None.
+        # A foreign optimizer must never supply or resurrect this gradient.
+        gg = getattr(p, "grad", None)
         if gg is not None:
             out.append(gg)
     return out
@@ -205,20 +196,24 @@ def _parameters_are_sharded(parameters):
     if fsdp is None:
         return False
     for p in parameters:
-        if isinstance(p, _jt.Var) and fsdp.is_fsdp_managed_param(p):
+        if _jt.core._is_tensor_carrier(p) and fsdp.is_fsdp_managed_param(p):
             return True
     return False
 
 
 def clip_grad_norm_(parameters, max_norm, norm_type=2.0,
                     error_if_nonfinite=False, **k):
-    if isinstance(parameters, _jt.Var):
+    if _jt.core._is_tensor_carrier(parameters):
         parameters = [parameters]
     parameters = list(parameters)
     grads = _grads_of(parameters)
-    return _clip_grad_norm_device(
-        grads, max_norm, norm_type, error_if_nonfinite,
-        shard_reduce=_parameters_are_sharded(parameters))
+    from ...frontend import tensor_frontend
+    tensor_type = get_install_context(jt).state["Var"]
+    with tensor_frontend(tensor_type, like=grads[0] if grads else None,
+                         default_placement=False):
+        return _clip_grad_norm_device(
+            grads, max_norm, norm_type, error_if_nonfinite,
+            shard_reduce=_parameters_are_sharded(parameters))
 
 
 def clip_grad_value_(parameters, clip_value, **k):
@@ -779,6 +774,9 @@ def embedding_init(self, num_embeddings, embedding_dim, padding_idx=None,
     _torch_target = _context.target_namespace
     native_embedding_init = _context.state["nn_extra_native"]['native_embedding_init']
     target_dtype = dtype if dtype is not None else _torch_target.get_default_dtype()
+    if _weight is not None:
+        # Own a parameter holder without changing the caller's tensor flags.
+        _weight = _torch_target.nn.Parameter(_weight, requires_grad=not _freeze)
     native_embedding_init(
         self, num_embeddings, embedding_dim, padding_idx,
         _dtype_to_str(target_dtype), max_norm, norm_type,

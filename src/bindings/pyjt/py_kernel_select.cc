@@ -83,7 +83,7 @@ const vector<Candidate>& lookup(const string& op, const string& backend) {
 }
 
 bool is_var(PyObject* value) {
-    return PyObject_TypeCheck(value, &PyjtVarHolder.ht_type);
+    return is_varholder_carrier(value);
 }
 
 // The Vars among `values`, in argument order, through tuples, lists and

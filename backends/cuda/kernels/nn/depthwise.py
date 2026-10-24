@@ -2,6 +2,7 @@
 
 import jittor as jt
 from jittor._runtime.backend_libraries import library_resource
+from jittor._core.dtypes import dtype_name as _dtype_name
 
 
 def depthwise_forward(x, weight, output_shape, stride, padding, dilation):
@@ -68,7 +69,12 @@ def depthwise_forward(x, weight, output_shape, stride, padding, dilation):
                 }
             }
         }
-        """,
+        """.replace(
+            "value += r_weight[h_f * filter_width + w_f] * input_data[offset];",
+            "value = fmaf(float(r_weight[h_f * filter_width + w_f]), float(input_data[offset]), float(value));"
+            if _dtype_name(x.dtype) == _dtype_name(weight.dtype) == "float32"
+            else "value += r_weight[h_f * filter_width + w_f] * input_data[offset];",
+        ),
         cuda_src=f"""
             @alias(input, in0)
             @alias(filter, in1)
@@ -110,7 +116,111 @@ def depthwise_forward(x, weight, output_shape, stride, padding, dilation):
         )
 
 
+def _supports_ordered_depthwise_1d(x, weight, grad, kernel_size,
+                                  stride, padding, dilation):
+    """Bound the deterministic FP32 multiplier-one 1-D CUDA VJP path.
+
+    Other geometries and dtypes keep their existing implementation. Conv1d
+    maps to NCH1 here; contiguity is required before direct pointer indexing.
+    """
+    if not (x.ndim == weight.ndim == grad.ndim == 4):
+        return False
+    n, channels, length, width = x.shape
+    out_channels, multiplier, kernel, filter_width = weight.shape
+    return (n > 0 and channels > 0 and length > 0 and kernel > 0
+            and width == filter_width == multiplier == 1
+            and channels == out_channels and tuple(kernel_size) == (kernel, 1)
+            and tuple(stride) == tuple(dilation) == (1, 1)
+            and tuple(padding) == (kernel - 1, 0)
+            and tuple(grad.shape) == (n, channels, length + kernel - 1, 1)
+            and all(_dtype_name(v.dtype) == "float32" and v._storage_is_contiguous()
+                    for v in (x, weight, grad))
+            and max(int(v.numel()) for v in (x, weight, grad)) < (1 << 29))
+
+
+def _ordered_depthwise_1d_backward(x, weight, grad):
+    """Fixed tap order for dX and ordered warp reductions for dW.
+
+    One block owns each filter element: there is no atomic accumulation.
+    The two warp folds and warp-per-batch traversal also avoid changing
+    reduction order with the sequence length. This is a first-order VJP;
+    it does not add a double-backward contract to the depthwise custom op.
+    """
+    return jt.code([x.shape, weight.shape], [x.dtype, weight.dtype],
+                   [x, weight, grad], cuda_header="#include <math.h>",
+                   cuda_src=_ORDERED_DEPTHWISE_1D_CUDA)
+
+
+_ORDERED_DEPTHWISE_1D_CUDA = r'''
+__global__ static void aligned_depthwise_input(
+        const float* g, const float* w, float* result,
+        int count, int channels, int length, int kernel, int padding, int outlen) {
+    int first = blockIdx.x * blockDim.x + threadIdx.x;
+    int step = gridDim.x * blockDim.x;
+    for (int i = first; i < count; i += step) {
+        int t = i % length;
+        int plane = i / length;
+        int channel = plane % channels;
+        float value = 0.0f;
+        for (int k = 0; k < kernel; ++k) {
+            int at = t + padding - k;
+            if (at >= 0 && at < outlen)
+                value = fmaf(w[channel * kernel + k], g[plane * outlen + at], value);
+        }
+        result[i] = value;
+    }
+}
+__device__ __forceinline__ float aligned_warp_fold(float value) {
+    for (int shift = 16; shift; shift >>= 1)
+        value += __shfl_down_sync(0xffffffffu, value, shift);
+    return value;
+}
+__global__ static void aligned_depthwise_weight(
+        const float* x, const float* g, float* result,
+        int batches, int channels, int length, int kernel, int padding, int outlen) {
+    __shared__ float fragments[8];
+    int tid = threadIdx.x;
+    int lane = tid & 31, warp = tid >> 5;
+    int warps = blockDim.x >> 5;
+    int channel = blockIdx.x / kernel, tap = blockIdx.x % kernel;
+    float value = 0.0f;
+    for (int batch = warp; batch < batches; batch += warps) {
+        int plane = batch * channels + channel;
+        for (int pos = lane; pos < outlen; pos += 32) {
+            int at = pos + tap - padding;
+            if (at >= 0 && at < length)
+                value = fmaf(x[plane * length + at], g[plane * outlen + pos], value);
+        }
+    }
+    value = aligned_warp_fold(value);
+    __syncthreads();
+    if (lane == 0) fragments[warp] = value;
+    __syncthreads();
+    value = tid < warps ? fragments[lane] : 0.0f;
+    if (warp == 0) value = aligned_warp_fold(value);
+    if (tid == 0) result[blockIdx.x] = value;
+}
+int batches = in0_shape0, channels = in0_shape1, length = in0_shape2;
+int kernel = in1_shape2, outlen = in2_shape2;
+int count = batches * channels * length;
+int blocks = (count + 255) / 256;
+if (blocks > 4096) blocks = 4096;
+aligned_depthwise_input<<<blocks,256>>>(
+    (const float*)in2_p,(const float*)in1_p,(float*)out0_p,
+    count,channels,length,kernel,kernel-1,outlen);
+CHECK(0 == cudaGetLastError());
+int warps = batches < 8 ? batches : 8;
+aligned_depthwise_weight<<<channels*kernel,32*warps>>>(
+    (const float*)in0_p,(const float*)in2_p,(float*)out1_p,
+    batches,channels,length,kernel,kernel-1,outlen);
+CHECK(0 == cudaGetLastError());
+'''
+
+
 def depthwise_backward(x, weight, grad, kernel_size, stride, padding, dilation):
+    if _supports_ordered_depthwise_1d(x, weight, grad, kernel_size,
+                                     stride, padding, dilation):
+        return _ordered_depthwise_1d_backward(x, weight, grad)
     Kh, Kw = kernel_size
     return jt.code([x.shape, weight.shape], [x.dtype, weight.dtype], [x, weight, grad],
         cuda_header = f"#include <{library_resource('cub', 'home')}cub/cub.cuh>"+"""
@@ -232,7 +342,12 @@ def depthwise_backward(x, weight, grad, kernel_size, stride, padding, dilation):
         }
         CudaAtomicAddWithWarp(&filter_grad_data[gbid], s);
     }
-        """,
+        """.replace(
+            "value +=\n                            output_grad_data[output_grad_offset] *\n                            r_weight[h_f * filter_width + w_f];",
+            "value = fmaf(float(output_grad_data[output_grad_offset]), float(r_weight[h_f * filter_width + w_f]), float(value));"
+            if _dtype_name(x.dtype) == _dtype_name(weight.dtype) == _dtype_name(grad.dtype) == "float32"
+            else "value +=\n                            output_grad_data[output_grad_offset] *\n                            r_weight[h_f * filter_width + w_f];",
+        ),
     cuda_src=f"""
     // source for backward to data
         @alias(input, in0)

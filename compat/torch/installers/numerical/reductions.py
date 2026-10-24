@@ -203,6 +203,10 @@ def logsumexp(input, dim, keepdim=False):
     from . import (
         jt,
     )
+    from jittor.nn.functional.softmax import _logsumexp_cuda_fastpath
+    fused = _logsumexp_cuda_fastpath(input, dim, keepdim=keepdim)
+    if fused is not None:
+        return fused
     m = input.max(dim, keepdims=True)
     out = m + jt.log(jt.exp(input - m).sum(dim, keepdims=True))
     # Back to the input's dtype for the two half types. The shift-exp-sum-log
@@ -224,4 +228,6 @@ def logsumexp(input, dim, keepdim=False):
     nd = input.ndim
     dims = [d % nd for d in dims]
     target = [s for i, s in enumerate(input.shape) if i not in dims]
-    return out.reshape(target) if target else out.reshape(-1)
+    # Reducing every axis produces a real scalar. A one-element vector would
+    # stack to (N, 1), silently broadcasting row-wise log-probabilities to NxN.
+    return out.reshape(tuple(target))

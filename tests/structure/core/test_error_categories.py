@@ -189,7 +189,9 @@ MIGRATED_UNARY_OP_USER_BOUNDARIES = {
     # 2 since 2026-09-11: `bitwise_not` on a float now says so instead of
     # reaching `~x` in the generated kernel and letting g++ answer "wrong type
     # argument to bit-complement". See tests/ops/test_bitwise_dtype_guard.py.
-    "src/ops/unary_op.cc": 2,
+    # 2026-10-14: 2 -> 3. Native real log1p explicitly rejects complex
+    # caller inputs before generating a real-only kernel.
+    "src/ops/unary_op.cc": 3,
 }
 
 MIGRATED_CURAND_USER_BOUNDARIES = {
@@ -640,9 +642,24 @@ def test_py_array_user_boundary_migration_is_explicit_and_bounded():
 
 def test_random_type_user_boundary_migration_is_explicit_and_bounded():
     source = (ROOT / "src/ops/composite/random_op.cc").read_text()
-    actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+    # The separate integer overload owns backend/capability errors, not the
+    # original floating constructor's distribution-type boundary.
+    source = source.split("// Separate overload/capability preserves the floating constructor contract.", 1)[0]
+    actual = _count_user_check_sites(source)
     assert actual == MIGRATED_RANDOM_TYPE_USER_BOUNDARIES[
         "src/ops/composite/random_op.cc"]
+
+
+def test_random_integer_backend_boundaries_are_separate_and_explicit():
+    source = (ROOT / "src/ops/composite/random_op.cc").read_text()
+    marker = "// Separate overload/capability preserves the floating constructor contract."
+    assert source.count(marker) == 1
+    integer = source.split(marker, 1)[1].split("void RandomOp::jit_prepare", 1)[0]
+    assert _count_user_check_sites(integer) == 3
+    for check in ("USER_CHECK(backend == BackendId::Cuda)",
+                  "USER_CHECK(integer_random)", "USER_CHECK(false)"):
+        assert integer.count(check) == 1
+    assert _count_user_check_sites(source) == 4
 
 
 def test_py_caller_user_boundary_migration_is_explicit_and_bounded():
@@ -654,6 +671,9 @@ def test_py_caller_user_boundary_migration_is_explicit_and_bounded():
 
 def test_unary_op_user_boundary_migration_is_explicit_and_bounded():
     source = (ROOT / "src/ops/unary_op.cc").read_text()
+    assert "USER_CHECK(ns.is_unary() | ns.is_dtype());" in source
+    assert ("if (ns == ns_log1p)\n        USER_CHECK(!x->dtype().is_complex())") in source
+    assert "USER_CHECK(x->dtype().is_int() || x->dtype().is_bool())" in source
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_UNARY_OP_USER_BOUNDARIES[
         "src/ops/unary_op.cc"]

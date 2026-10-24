@@ -220,7 +220,7 @@ def function_grad(self, *grad_outputs):
 
 
 def _as_list(x):
-    if isinstance(x, jt.Var):
+    if jt.core._is_tensor_carrier(x):
         return [x]
     return list(x)
 
@@ -242,7 +242,7 @@ def grad(outputs, inputs, grad_outputs=None, retain_graph=None,
         # grad_output of ones -- a different vector-Jacobian product from
         # the one the caller forgot to specify, with no error.
         non_scalar = [tuple(o.shape) for o in outs
-                      if isinstance(o, jt.Var) and o.numel() != 1]
+                      if jt.core._is_tensor_carrier(o) and o.numel() != 1]
         if non_scalar:
             raise RuntimeError(
                 "grad can be implicitly created only for scalar outputs "
@@ -263,32 +263,47 @@ def grad(outputs, inputs, grad_outputs=None, retain_graph=None,
             "materialize_grads=True, but got: allow_unused=False.")
     allow_unused = bool(materialize_grads) if allow_unused is None \
         else bool(allow_unused)
+    # Core returns one consumable result per native node. Different holders
+    # may refer to the same node; Python identity/storage aliasing is not this
+    # autograd identity. Preserve original order and strongly-held inputs.
+    unique_inputs = []
+    input_slots = []
+    node_slots = {}
+    for tensor in ins:
+        if jt.core._is_tensor_carrier(tensor):
+            node_id = tensor.id
+            if node_id not in node_slots:
+                node_slots[node_id] = len(unique_inputs)
+                unique_inputs.append(tensor)
+            input_slots.append(node_slots[node_id])
+        else:
+            # Leave invalid target validation to the existing native boundary.
+            input_slots.append(len(unique_inputs))
+            unique_inputs.append(tensor)
     with _backward_callbacks():
-        gs = list(jt.core.grad_optional(loss, ins, rg))
-    missing = [i for i, value in enumerate(gs) if value is None]
-    if missing and materialize_grads:
-        for i in missing:
-            gs[i] = jt.zeros_like(ins[i])
-            if create_graph:
-                gs[i].start_grad()
-            else:
-                gs[i].stop_grad()
-    elif missing and not allow_unused:
+        unique_grads = list(jt.core.grad_optional(loss, unique_inputs, rg))
+    missing = [i for i, slot in enumerate(input_slots)
+               if unique_grads[slot] is None]
+    if missing and not materialize_grads and not allow_unused:
         raise RuntimeError(
             "One of the differentiated Tensors appears to not have been "
             "used in the graph. Set allow_unused=True if this is desired.")
     if not create_graph:
-        # detach() severs the graph edge but leaves jittor's requires_grad
-        # flag set, and torch reports requires_grad=False here; clear it on
-        # the detached copy so the *returned* tensor answers like torch's
-        # without touching the graph the caller may still be using.
-        detached = []
-        for g in gs:
-            if isinstance(g, jt.Var):
-                g = g.detach()
-                g.stop_grad()
-            detached.append(g)
-        gs = detached
+        # Postprocess each USED node once so duplicate input positions return
+        # the same public gradient object. Never detach an unused factory leaf.
+        for i, gradient in enumerate(unique_grads):
+            if jt.core._is_tensor_carrier(gradient):
+                gradient = gradient.detach()
+                gradient.stop_grad()
+                unique_grads[i] = gradient
+    gs = [unique_grads[slot] for slot in input_slots]
+    if materialize_grads:
+        namespace = get_install_context(jt).target_namespace
+        for i in missing:
+            # Public factory owns Tensor type, input placement and leaf setup.
+            # Native Torch materializes unused gradients as grad-enabled leaves
+            # independently of create_graph; do not share distinct missing slots.
+            gs[i] = namespace.zeros_like(ins[i], requires_grad=True)
     return tuple(gs)
 
 
@@ -301,7 +316,7 @@ def backward(tensors, grad_tensors=None, retain_graph=None,
     gts = None if grad_tensors is None else _as_list(grad_tensors)
     for i, t in enumerate(ts):
         gt = None if gts is None else gts[i]
-        t.backward(gradient=gt, retain_graph=retain_graph)
+        t.backward(gradient=gt, retain_graph=retain_graph, create_graph=create_graph)
     return None
 
 

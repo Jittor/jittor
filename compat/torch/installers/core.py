@@ -28,7 +28,7 @@ from ..amp import (
     set_autocast_enabled_state as _set_autocast_enabled,
 )
 from ..types import (
-    _dtype_to_str,
+    _dtype_to_str, _validate_layout, _is_dtype,
     _make_dtypes, device, dtype, make_torch_types_module,
     SymBool, SymFloat, SymInt,
 )
@@ -99,6 +99,8 @@ def _set_install_flag(ctx, name, value):
 
 
 def install(ctx):
+    from ..vitals import initialize_vitals
+    initialize_vitals()
     g = ctx.jittor_module
     ctx.registry.publish("torch", g)
     g.torch = g
@@ -170,9 +172,15 @@ def install(ctx):
     except EXPECTED as exc:
         swallowed("torch/installers/core.py install: import os as _os", exc)
     _DTYPE_OBJS = _make_dtypes(g)
-    g.dtype = dtype
+    ctx.state["dtype_type"] = g.dtype
     g.device = device
     g.SymInt = SymInt
+    register_fidelity(
+        "torch.SymInt", g.SymInt, Fidelity.APPROXIMATE,
+        "Finite jagged shape metadata: owner/holder logical identity, integer "
+        "coefficient products, determined comparisons and metadata copy/pickle; "
+        "not generic symbolic allocation, ShapeEnv/guards, kernel lowering, "
+        "float/bool symbolic arithmetic, tracing or autograd equivalence")
     g.SymFloat = SymFloat
     g.SymBool = SymBool
     g.GradScaler = _GradScaler        # picked up by torch.amp/torch.cuda.amp in the shim
@@ -188,6 +196,7 @@ def install(ctx):
     from ..frontend import make_tensor_type
     tensor_type = make_tensor_type(ctx.native_backend)
     ctx.state["Var"] = tensor_type
+    ctx.state["TensorBase"] = tensor_type._frontend_tensor_base
     g.Var = g.Tensor = tensor_type
     g.clone = tensor_type.clone
 
@@ -451,7 +460,7 @@ def _get_rng_state():
 
 def _set_rng_state(state):
     ctx = _misc_context()
-    if not isinstance(state, jt.Var):
+    if not jt.core._is_tensor_carrier(state):
         raise TypeError("RNG state must be a CPU ByteTensor")
     if _jittor_dtype_name(state.dtype) != "uint8" or len(state.shape) != 1:
         raise TypeError("RNG state must be a one-dimensional ByteTensor; legacy seed-only states cannot restore a stream")
@@ -716,7 +725,7 @@ def can_cast(from_dtype, to_dtype):
 def set_default_dtype(d):
     ctx = _misc_context()
     _state = ctx.state["core_misc"]
-    if not isinstance(d, dtype) or _dtype_to_str(d) not in (
+    if not _is_dtype(d) or _dtype_to_str(d) not in (
         "float16",
         "bfloat16",
         "float32",
@@ -801,12 +810,10 @@ def empty_strided(size, stride, *, dtype=None, layout=None, device=None,
     jittor tensors are contiguous, so `stride` cannot be honored: the result
     has `size` with contiguous strides. vLLM-Omni's offload calls this only to
     get an independent buffer and then `copy_`s into it, so the values are
-    exact. A non-strided `layout` is refused rather than silently ignored.
+    exact. Canonical strided and jagged arguments both select this dense
+    factory; the result remains strided, as in the reviewed native contract.
     """
-    if layout is not None and "strided" not in str(layout):
-        raise NotImplementedError(
-            "torch.empty_strided(layout=%r): only the strided layout exists"
-            % (layout,))
+    _validate_layout(layout)
     g = _misc_context().target_namespace
     return g.empty(tuple(size), dtype=dtype, device=device,
                    requires_grad=requires_grad, pin_memory=pin_memory)
@@ -916,7 +923,7 @@ def _result_type_info(x):
     # lost its dtype.
     if isinstance(x, (Var, jt.Var)):
         return (_dtype_to_str(x.dtype), 1 if len(x.shape) == 0 else 0)
-    if isinstance(x, dtype) or (
+    if _is_dtype(x) or (
         isinstance(x, str) and _dtype_to_str(x) in _jittor_dtype_name(_DTYPE_OBJS)
     ):
         return (_dtype_to_str(x), 0)

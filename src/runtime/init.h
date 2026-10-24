@@ -35,6 +35,21 @@ Returns the seed of jittor random number generator.
 // @pyjt(get_seed)
 int get_seed();
 
+/** Opaque same-runtime CPU engine snapshot. Flushes pending eager graphs;
+ * does not capture kept/replay graphs or any accelerator/Python/NumPy RNG.
+ */
+// @pyjt(get_cpu_rng_state)
+string get_cpu_rng_state();
+
+/** Restore a validated complete CPU engine snapshot, never seed callbacks.
+ * Invalid/foreign/legacy seed-only states are rejected before flushing graphs.
+ */
+// @pyjt(set_cpu_rng_state)
+void set_cpu_rng_state(const string& state);
+
+// @pyjt(get_cpu_rng_seed)
+int get_cpu_rng_seed();
+
 void add_set_seed_callback(set_seed_callback callback);
 
 extern

@@ -23,7 +23,8 @@ from .diagnostics import EXPECTED, swallowed
 
 __all__ = ["_world_size", "_rank", "_in_true_distributed", "_nccl_ops",
            "_slice_flat", "_all_gather_shards", "_reduce_scatter_padded",
-           "_all_reduce_mean", "_broadcast_from_rank0", "_reduce_scalar"]
+           "_hccl_collective", "_all_reduce_mean", "_broadcast_from_rank0",
+           "_reduce_scalar"]
 
 
 def _world_size():
@@ -93,6 +94,63 @@ def _slice_flat(flat, start, length):
     return flat[start:start + length]
 
 
+def _hccl_collective(function, value, *args):
+    """Create an HCCL op with an explicit ACL output placement.
+
+    Autograd returns a lazy Var before its producer graph has necessarily been
+    assigned a backend.  Such a Var can still report CPU here even in an ACL
+    worker.  HCCL ops have no CPU implementation (by design), so leaving the
+    output unplaced lets the lazy executor select CPU for the collective.  An
+    explicit output placement makes the collective the accelerator anchor for
+    that pending producer graph, just as an explicitly placed model parameter
+    does for forward all-gather.
+    """
+    device_id = int(getattr(value, "device_id", -1))
+    if device_id < 0:
+        device_id = max(int(getattr(jt.flags, "device_id", 0)), 0)
+    trace = os.environ.get("JITTOR_VERL_FATAL_TRACE") == "1"
+    if trace:
+        print(
+            "JITTOR_VERL_HCCL_INPUT placement=%d device=%d dispatch=%s use_acl=%d" % (
+                int(getattr(value, "placement_backend", -1)),
+                int(getattr(value, "device_id", -1)),
+                jt.core.dispatch_context([value]),
+                int(bool(getattr(jt.flags, "use_acl", 0))),
+            ),
+            flush=True,
+        )
+    token = jt.core._set_tensor_placement(2, device_id)  # BackendId::Acl
+    try:
+        # A collective is a communication boundary, not an elementwise node.
+        # If it fuses with the following divide/slice/stop-grad chain, the
+        # fused group's terminal (host-visible) output can make the executor
+        # request a CPU implementation for this internal HCCL op. Mark the
+        # collective output as a fusion barrier while its ACL placement is
+        # active so backend selection is made for the communication op itself.
+        with jt.flag_scope(no_fuse=1):
+            result = function(value, *args)
+        if trace:
+            print(
+                "JITTOR_VERL_HCCL_OUTPUT placement=%d device=%d dispatch=%s" % (
+                    int(getattr(result, "placement_backend", -1)),
+                    int(getattr(result, "device_id", -1)),
+                    jt.core.dispatch_context([result]),
+                ),
+                flush=True,
+            )
+        # FSDP consumes this as detached optimizer-gradient storage. Execute
+        # the communication while the ACL placement scope is still active;
+        # otherwise a later host-visible unused-gradient flag can become the
+        # first graph synchronization point and make the lazy execution plan
+        # inherit CPU for this already-created HCCL node. This intentionally
+        # prioritizes correctness over overlap until the planner can preserve
+        # per-op backend placement across that deferred graph.
+        result.sync()
+        return result
+    finally:
+        jt.core._reset_tensor_placement(token)
+
+
 def _all_gather_shards(local_shard):
     # On one rank the gather is the local shard itself. Say so before reaching
     # for a collective: ``fully_shard`` on a single process is a supported
@@ -104,6 +162,16 @@ def _all_gather_shards(local_shard):
         from jittor import distributed
         if distributed.get_backend() == "mpi":
             return distributed.all_gather(local_shard)
+    # MPI-free Ascend publishes native HCCL ops, but no Var.mpi_all_gather.
+    # Select by this tensor's backend rather than whichever communicator was
+    # imported first; an ACL tensor must never enter NCCL or a host fallback.
+    backend, _device_id = jt.core.dispatch_context([local_shard])
+    if backend in ("acl", "acl_legacy"):
+        ops = getattr(jt.compile_extern, "hccl_ops", None)
+        gather = getattr(ops, "hccl_all_gather", None)
+        if not callable(gather):
+            raise RuntimeError("Jittor HCCL all_gather is not available for the ACL tensor")
+        return gather(local_shard)
     ops = _nccl_ops()
     if ops is not None and callable(getattr(ops, "nccl_all_gather", None)):
         return ops.nccl_all_gather(local_shard)
@@ -117,14 +185,46 @@ def _reduce_scatter_padded(full_grad):
     # shard is the whole padded gradient.
     if _world_size() <= 1:
         return full_grad
+    backend, _device_id = jt.core.dispatch_context([full_grad])
+    ops = getattr(jt.compile_extern, "hccl_ops", None)
+    reduce_scatter = getattr(ops, "hccl_reduce_scatter", None)
+    # A freshly-created gradient is still a lazy graph value here. On ACL its
+    # producer may not have been placed yet, so dispatch_context can temporarily
+    # report CPU even though the active runtime and collective backend are HCCL.
+    # The ambient ACL flag is authoritative for a WORLD collective; relying only
+    # on the lazy value made large FSDP gradients fall through to mpi_all_reduce
+    # and then fail because hccl_all_reduce has (correctly) no CPU kernel.
+    use_hccl = bool(getattr(jt.flags, "use_acl", 0)) and callable(reduce_scatter)
+    if backend in ("acl", "acl_legacy") or use_hccl:
+        if not callable(reduce_scatter):
+            raise RuntimeError(
+                "Jittor HCCL reduce_scatter is not available for the ACL tensor")
+        return _hccl_collective(reduce_scatter, full_grad)
     ops = _nccl_ops()
     if ops is not None and callable(getattr(ops, "nccl_reduce_scatter", None)):
         return ops.nccl_reduce_scatter(full_grad)
     # Correct fallback for environments with all_reduce but without native
     # reduce_scatter.  It communicates more than needed, but preserves semantics.
     reduced = full_grad.mpi_all_reduce("sum")
-    shard = int(reduced.shape[0]) // max(_world_size(), 1)
-    return _slice_flat(reduced, _rank() * shard, shard)
+    rank, world_size = _rank(), max(_world_size(), 1)
+    total = int(reduced.shape[0])
+    if total % world_size:
+        raise RuntimeError(
+            "reduce-scatter input length %s is not divisible by world size %s" %
+            (total, world_size)
+        )
+    shard = total // world_size
+    backend, _device_id = jt.core.dispatch_context([reduced])
+    if backend in ("acl", "acl_legacy"):
+        # CANN 9 SliceV2 is off by one on some very large tail slices. The
+        # padded input is an exact partition, so SplitWithSize is both more
+        # direct and reliable. This is detached optimizer-gradient storage.
+        # Materialize HCCL first so the lazy graph placer cannot inherit the
+        # inference-only split's host context and put the collective on CPU.
+        reduced.sync()
+        with jt.flag_scope(no_grad=1):
+            return jt.split(reduced, [shard] * world_size, dim=0)[rank]
+    return _slice_flat(reduced, rank * shard, shard)
 
 
 def _all_reduce_mean(var):

@@ -128,4 +128,24 @@ def install_module_namespace(nn, registry=None):
         if hasattr(nn, class_name):
             setattr(container_mod, class_name, getattr(nn, class_name))
     setattr(modules_pkg, "container", container_mod)
+    # This is the same installation-owned Linear type, not a second wrapper
+    # or a metadata-only alias. Publish its declared canonical import owner.
+    linear_mod = modules.get("torch.nn.modules.linear")
+    if linear_mod is None:
+        linear_mod = types.ModuleType("torch.nn.modules.linear")
+        modules["torch.nn.modules.linear"] = linear_mod
+    for class_name in ("Linear", "Bilinear", "Identity", "NonDynamicallyQuantizableLinear"):
+        if hasattr(nn, class_name):
+            setattr(linear_mod, class_name, getattr(nn, class_name))
+    setattr(modules_pkg, "linear", linear_mod)
+    # Publish real canonical imports as well as class metadata. Otherwise a
+    # claimed torch.nn.modules.sparse.Embedding would not be importable there.
+    sparse_mod = modules.get("torch.nn.modules.sparse")
+    if sparse_mod is None:
+        sparse_mod = types.ModuleType("torch.nn.modules.sparse")
+        modules["torch.nn.modules.sparse"] = sparse_mod
+    for class_name in ("Embedding", "EmbeddingBag"):
+        if hasattr(nn, class_name):
+            setattr(sparse_mod, class_name, getattr(nn, class_name))
+    setattr(modules_pkg, "sparse", sparse_mod)
     return modules_pkg

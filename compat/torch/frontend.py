@@ -84,7 +84,7 @@ def _placement_request(backend, device, like=None, default_placement=True):
     ``with torch.device(...)`` still applies.
     """
     if device is None:
-        if isinstance(like, backend.Var) and like.placement_backend >= 0:
+        if backend.core._is_tensor_carrier(like) and like.placement_backend >= 0:
             return int(like.placement_backend), max(int(like.device_id), 0)
         # `with torch.device(d):` -- torch builds new tensors on `d`. `like`
         # keeps priority above because `torch.empty_like(x)` inherits x's
@@ -132,6 +132,32 @@ def _placement_request(backend, device, like=None, default_placement=True):
         raise RuntimeError("Invalid %s device index %s; visible device count is %s" %
                            (name, index, count))
     return {"cuda": 1, "acl": 2, "acl_legacy": 2, "rocm": 3, "corex": 4}[selected], int(index)
+
+
+def first_tensor(tensor_type, args, kwargs):
+    # No backend, no placement to follow -- `tensor_frontend` passes those
+    # straight through too.
+    backend = getattr(tensor_type, "_frontend_backend", None)
+    if backend is None:
+        return None
+    # Keep the installation's backend identity, including for native Var
+    # operands nested in a batch container. Inspect positional values first,
+    # then keyword insertion order, without recursing into arbitrary objects.
+    pending = [kwargs, args]
+    seen = set()
+    while pending:
+        value = pending.pop()
+        if backend.core._is_tensor_carrier(value):
+            return value
+        if id(value) in seen:
+            continue
+        seen.add(id(value))
+        if isinstance(value, dict):
+            pending.extend(reversed(tuple(value.values())))
+        elif isinstance(value, (tuple, list)):
+            pending.extend(reversed(value))
+    return None
+
 
 
 class tensor_frontend:
@@ -223,6 +249,18 @@ def frontend_factory(function, tensor_type):
 
 
 class _TensorMeta(type):
+    def __instancecheck__(cls, value):
+        if super().__instancecheck__(value):
+            return True
+        # Jagged tensors are public Tensor objects, represented by a Python
+        # wrapper rather than a native Var. Recognize only this installation's
+        # packed Tensor payload, and only at Tensor (not Parameter/subclasses).
+        if vars(cls).get("_frontend_backend") is not None:
+            from .nested import _NestedTensor
+            return (isinstance(value, _NestedTensor)
+                    and super().__instancecheck__(value.values()))
+        return False
+
     def __call__(cls, *args, **kwargs):
         backend = vars(cls).get("_frontend_backend")
         if backend is None:
@@ -253,8 +291,9 @@ class _TensorMeta(type):
                 raise TypeError("Tensor expects data or integer dimensions")
             elif isinstance(args[0], (backend.NanoVector, _TorchSize)):
                 result = backend.empty(tuple(args[0]), dtype=dtype)
-            elif isinstance(args[0], backend.Var):
-                result = backend.Var.clone(args[0])
+            elif backend.core._is_tensor_carrier(args[0]):
+                from jittor._core.carrier_protocol import native_api
+                result = native_api(cls, args[0])["clone"](args[0])
                 # The native view owner preserves both the storage and the
                 # creation-mode-dependent gradient edge. An inherited flag
                 # under no_grad does not explicitly activate an accumulator.
@@ -270,17 +309,52 @@ class _TensorMeta(type):
 
 def make_tensor_type(backend):
     """Create the installation's real type without writing to native Var."""
+    from .nested import _TorchSize
     from .tensor_object_state import tensor_object_properties
-    return _TensorMeta("Tensor", (backend.Var,), {
+    # Keep the native descriptor before the installer projects backend.Var to
+    # Tensor. Resolving backend.Var.shape inside the getter would then recurse.
+    from jittor._core.carrier_protocol import capture_native_api, bind_tensor_protocol
+    tensor_base = backend.core.Var
+    factory = getattr(backend.core, "_create_owned_tensor_base_type", None)
+    if factory is not None:
+        try:
+            tensor_base = factory()
+        except NotImplementedError:
+            # The optional owned-root ABI is interpreter-specific. Keep the
+            # supported Var-backed frontend on other interpreters; do not
+            # suppress compiler, registration, or arbitrary runtime failures.
+            pass
+    native = ({"shape": tensor_base.shape} if tensor_base is backend.core.Var
+              else capture_native_api(tensor_base, backend))
+    native_shape = native["shape"]
+
+    def shape(tensor):
+        # Native NanoVector is backend metadata, not public/pickleable Size.
+        # Read fresh dimensions without materializing or changing native Var.
+        return _TorchSize(native_shape.__get__(tensor, type(tensor)))
+
+    tensor_type = _TensorMeta("Tensor", (tensor_base,), {
         "__module__": "torch",
         "__slots__": ("__weakref__",),
         "_frontend_backend": backend,
+        "_frontend_tensor_base": tensor_base,
+        "_frontend_native_api": native,
         "_frontend_autograd_policy": 3,
         "_frontend_view_base_ownership": True,
         "_frontend_precision_policy": classmethod(_frontend_precision_policy),
         "clone": clone,
+        "shape": property(shape),
         **tensor_object_properties(),
     })
+    bind_tensor_protocol(tensor_type, backend)
+    if tensor_base is backend.core.Var:
+        from types import MappingProxyType
+        # bind_tensor_protocol already captured the genuine legacy delegates,
+        # including the saved native to_device descriptor rather than its
+        # Python wrapper. Publish the complete table before installation.
+        tensor_type._frontend_native_api = MappingProxyType(dict(
+            tensor_type._frontend_legacy_native_api, shape=native_shape))
+    return tensor_type
 
 
 def clone(input, *, memory_format=None):
@@ -288,29 +362,51 @@ def clone(input, *, memory_format=None):
     import jittor as backend
     from .tensor_state import compatibility_owner
     from .types import _var_is_cpu_resident
-    if not isinstance(input, backend.Var):
+    if not backend.core._is_tensor_carrier(input):
         raise TypeError("clone expects a tensor")
     if memory_format not in (None, "preserve_format", "contiguous_format"):
         raise NotImplementedError("clone supports preserve_format and contiguous_format")
     target = compatibility_owner(backend)
+    from jittor._core.carrier_protocol import native_api
+    native_copy = native_api(target.Var, input)["copy"]
     with tensor_frontend(target.Var, like=input):
         if input.placement_backend < 0 and backend.flags.use_cuda and _var_is_cpu_resident(input):
             with backend.flag_scope(use_cuda=0):
-                result = backend.Var.copy(input, memory_format != "contiguous_format")
+                result = native_copy(input, memory_format != "contiguous_format")
                 result.sync()
                 setattr(result, "_jittor_torch_force_cpu", True)
             return result
-        return backend.Var.copy(input, memory_format != "contiguous_format")
+        return native_copy(input, memory_format != "contiguous_format")
+
+
+class _ParameterMeta(_TensorMeta):
+    def __instancecheck__(cls, value):
+        # Torch custom tensor subclasses keep their actual type when made a
+        # Parameter; _is_param marks that role, not a changed Python MRO.
+        if (vars(cls).get("_torch_compat_type", False)
+                and isinstance(value, cls.__bases__[0])
+                and getattr(value, "_is_param", False)):
+            return True
+        return super().__instancecheck__(value)
 
 
 def parameter_new(cls, data=None, requires_grad=True):
     backend = cls._parameter_backend
+    tensor_type = cls._frontend_result_type
+    if (data is not None and isinstance(data, tensor_type)
+            and type(data) is not tensor_type and type(data) is not cls):
+        value = data.detach().requires_grad_(bool(requires_grad))
+        if type(value) is not type(data):
+            raise RuntimeError("custom Tensor.detach() must preserve its type for Parameter construction")
+        value._is_param = True
+        return value
     with tensor_frontend(cls, like=data):
         if data is None:
             value = backend.empty((0,), dtype=_default_tensor_dtype(backend))
         else:
-            source = data if isinstance(data, backend.Var) else backend.array(data)
-            value = backend.Var.detach(source)
+            source = data if backend.core._is_tensor_carrier(data) else backend.array(data)
+            from jittor._core.carrier_protocol import native_api
+            value = native_api(cls, source)["detach"](source)
     value.requires_grad = bool(requires_grad)
     return value
 
@@ -323,7 +419,7 @@ def parameter_init(self, data=None, requires_grad=True):
 
 def make_parameter_type(backend, tensor_type):
     """Bind the native backend and Tensor subtype to stable parameter methods."""
-    return type("Parameter", (tensor_type,), {
+    return _ParameterMeta("Parameter", (tensor_type,), {
         "__module__": "torch.nn.parameter", "__slots__": (),
         "_parameter_backend": backend, "_frontend_result_type": tensor_type,
         "_torch_compat_type": True,
@@ -345,10 +441,13 @@ def _python_state(value):
 
 
 def reduce_tensor(value):
+    dtype = _jittor_dtype_name(value.dtype)
+    requires_grad = value.requires_grad
+    device = str(value.device)
+    array = value.detach().cpu().numpy()
     return (
         rebuild_tensor,
-        (type(value), value.numpy(), _jittor_dtype_name(value.dtype), value.requires_grad,
-         str(value.device)),
+        (type(value), array, dtype, requires_grad, device),
         _python_state(value),
     )
 
@@ -358,15 +457,19 @@ def rebuild_tensor(tensor_type, array, dtype, requires_grad, device=None):
     # pickle restores its Python state after this object has entered the memo.
     backend = tensor_type._frontend_backend
     with tensor_frontend(tensor_type, device=device):
-        value = backend.array(array, dtype=dtype)
+        with backend.no_grad():
+            value = backend.array(array, dtype=dtype)
         value.requires_grad = requires_grad
     return value
 
 
 def deepcopy_tensor(value, memo):
     from copy import deepcopy
-    result = rebuild_tensor(type(value), value.numpy(), _jittor_dtype_name(value.dtype),
-                            value.requires_grad, str(value.device))
+    dtype = _jittor_dtype_name(value.dtype)
+    requires_grad = value.requires_grad
+    device = str(value.device)
+    array = value.detach().cpu().numpy()
+    result = rebuild_tensor(type(value), array, dtype, requires_grad, device)
     memo[id(value)] = result
     result.__dict__.update(deepcopy(_python_state(value), memo))
     return result

@@ -7,6 +7,7 @@
 #include "mem/allocator.h"
 #include "core/node.h"
 #include "core/op.h"
+#include "core/grad.h"
 #include "core/var.h"
 #include <algorithm>
 #include <cstdlib>
@@ -300,6 +301,7 @@ void Node::free() {
     // fix has to keep the planning thread and this one from overlapping at all
     // -- `graph_mutation_mutex()` -- not keep this node alive.
     flags.set(NodeFlags::_queued_for_free);
+    note_backward_producer_removal(this);
     free_buffer().push_back(this);
     for (auto in : _inputs) {
         in.node->erase_output(in.back_index);
@@ -556,6 +558,7 @@ void Node::finish_pending_liveness() {
 
 void Node::release_inputs() {
     CHECK_EXIST;
+    invalidate_backward_history(this);
     if (!_inputs.size()) return;
     std::lock_guard<GraphMutationMutex> guard(graph_mutation_mutex());
     SetupFreeBuffer setup_free_buffer;
@@ -631,6 +634,7 @@ void Node::set_inputs(Node* const* nodes, size_t count) {
 
 void Node::add_inputs(const vector<Node*>& nodes) {
     CHECK_EXIST;
+    invalidate_backward_history(this);
     LOGvvvv << "add inputs" << nodes << "to" << this;
     ASSERT(!is_finished());
     std::lock_guard<GraphMutationMutex> guard(graph_mutation_mutex());
@@ -661,7 +665,23 @@ void Node::add_inputs(const vector<Var*>& nodes) {
 }
 
 void Node::set_stop_grad() {
+    set_stop_grad_impl(false);
+}
+
+void Node::set_stop_grad_for_graph_release() {
+    ASSERT(is_var());
+    set_stop_grad_impl(true);
+}
+
+void Node::set_stop_grad_impl(bool preserve_history) {
     CHECK_EXIST;
+    // Explicit permanent stop must invalidate even an ALREADY stopped Var.
+    // _graph_freed is not a cause marker and is deliberately not consulted.
+    if (!preserve_history) {
+        if (is_var() && var()->backward_history_stop_token)
+            var()->backward_history_stop_token->permanently_stopped = true;
+        invalidate_backward_history(this);
+    }
     if (is_stop_grad()) return;
     std::lock_guard<GraphMutationMutex> guard(graph_mutation_mutex());
     SetupFreeBuffer setup_free_buffer;

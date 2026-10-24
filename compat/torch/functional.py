@@ -75,9 +75,23 @@ def _torch_norm_impl(input, p="fro", dim=None, keepdim=False, dtype=None):
 
 
 def _torch_where_select(condition, input, other):
+    from .context import get_install_context
+    from .frontend import first_tensor, tensor_frontend
+
+    context = get_install_context(jt)
+    tensor_type = context.state["Var"]
+    like = first_tensor(tensor_type, (condition, input, other), {})
+    with tensor_frontend(tensor_type, like=like, default_placement=False):
+        return _torch_where_select_impl(condition, input, other)
+
+
+def _torch_where_select_impl(condition, input, other):
     vals = []
     for x in (condition, input, other):
-        vals.append(x if isinstance(x, jt.Var) else jt.array(x))
+        # Python operands are constants, not newly trainable native leaves.
+        # Preserve existing Tensor edges; stopping the result would also sever
+        # a genuinely trainable input/other branch.
+        vals.append(x if jt.core._is_tensor_carrier(x) else jt.array(x).stop_grad())
     cond, a, b = vals
 
     shapes = [tuple(int(d) for d in x.shape) for x in (cond, a, b)]

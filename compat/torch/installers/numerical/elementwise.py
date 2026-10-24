@@ -1,11 +1,38 @@
 """Torch numerical elementwise operations."""
 
+def maximum(input, other, *, out=None):
+    """Torch's pairwise maximum uses the native shared-tie VJP policy."""
+    from . import jt
+    if out is not None:
+        raise NotImplementedError('maximum out= is not supported')
+    from ...amp import _pointwise_cuda_autocast
+    with _pointwise_cuda_autocast(input):
+        return jt.maximum(input, other, tie_grad='split')
+
+
+def minimum(input, other, *, out=None):
+    """Torch's pairwise minimum uses the native shared-tie VJP policy."""
+    from . import jt
+    if out is not None:
+        raise NotImplementedError('minimum out= is not supported')
+    from ...amp import _pointwise_cuda_autocast
+    with _pointwise_cuda_autocast(input):
+        return jt.minimum(input, other, tie_grad='split')
+
+
 def log1p(x):
     """Compute ``log(1 + x)`` elementwise."""
     from . import (
         jt,
     )
-    return jt.log(1.0 + x)
+    from jittor._core.dtypes import dtype_name
+    from ...context import get_install_context
+    from ...types import _dtype_to_str
+    name = dtype_name(x.dtype)
+    if name == "bool" or name.startswith(("int", "uint")):
+        default = get_install_context(jt).target_namespace.get_default_dtype()
+        x = x.cast(_dtype_to_str(default))
+    return jt.ops.log1p(x)
 
 
 def reciprocal(x):
@@ -30,9 +57,11 @@ def softmax(input, dim=None, dtype=None, **kwargs):
         _dtype_to_str,
         jt,
     )
-    if dtype is not None:
-        input = input.cast(_dtype_to_str(dtype))
-    return jt.nn.softmax(input, dim=dim)
+    from ...amp import _optional_dtype_cuda_autocast
+    with _optional_dtype_cuda_autocast(input, dtype) as selected:
+        if selected is not None:
+            input = input.cast(_dtype_to_str(selected))
+        return jt.nn.softmax(input, dim=dim)
 
 
 def log_softmax(input, dim=None, dtype=None, **kwargs):
@@ -45,9 +74,11 @@ def log_softmax(input, dim=None, dtype=None, **kwargs):
         _dtype_to_str,
         jt,
     )
-    if dtype is not None:
-        input = input.cast(_dtype_to_str(dtype))
-    return jt.nn.log_softmax(input, dim=dim)
+    from ...amp import _optional_dtype_cuda_autocast
+    with _optional_dtype_cuda_autocast(input, dtype) as selected:
+        if selected is not None:
+            input = input.cast(_dtype_to_str(selected))
+        return jt.nn.log_softmax(input, dim=dim)
 
 
 def relu(input, **kwargs):
@@ -258,29 +289,31 @@ def div(input, other, *, rounding_mode=None, out=None):
     ``out`` is accepted for API shape compatibility and is not populated, the
     same boundary the other approximate fallbacks in this package keep.
     """
-    from . import (
-        _native_div,
-        jt,
-    )
+    from ...amp import _pointwise_cuda_autocast
+    with _pointwise_cuda_autocast(input):
+        from . import (
+            _native_div,
+            jt,
+        )
 
-    if rounding_mode not in (None, "trunc", "floor"):
-        raise RuntimeError(
-            "div expected rounding_mode to be one of None, 'trunc', or 'floor' "
-            "but found %r" % (rounding_mode,))
-    if rounding_mode is None:
-        return _native_div(input, other)
-    floored = jt.floor_divide(input, other)
-    if rounding_mode == "floor":
-        return floored
-    if _integer_result(floored.dtype):
-        # `%` follows the floor convention, so a zero remainder is exactly
-        # "divisible", and the quotient needs correcting only when the two
-        # operands have opposite signs.
-        remainder = input % other
-        opposite_signs = (input < 0) != (other < 0)
-        return floored + (remainder != 0) * opposite_signs
-    quotient = _native_div(input, other)
-    return jt.ternary(quotient < 0, jt.ceil(quotient), jt.floor(quotient))
+        if rounding_mode not in (None, "trunc", "floor"):
+            raise RuntimeError(
+                "div expected rounding_mode to be one of None, 'trunc', or 'floor' "
+                "but found %r" % (rounding_mode,))
+        if rounding_mode is None:
+            return _native_div(input, other)
+        floored = jt.floor_divide(input, other)
+        if rounding_mode == "floor":
+            return floored
+        if _integer_result(floored.dtype):
+            # `%` follows the floor convention, so a zero remainder is exactly
+            # "divisible", and the quotient needs correcting only when the two
+            # operands have opposite signs.
+            remainder = input % other
+            opposite_signs = (input < 0) != (other < 0)
+            return floored + (remainder != 0) * opposite_signs
+        quotient = _native_div(input, other)
+        return jt.ternary(quotient < 0, jt.ceil(quotient), jt.floor(quotient))
 
 
 #: ``torch.divide`` is documented as an alias of ``torch.div`` and accepts the

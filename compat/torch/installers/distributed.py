@@ -70,6 +70,20 @@ def _backend_matches_active(requested_backend, active_backend):
     return active_device is not None and device_backends.get(active_device) == active
 
 
+def _backend_for_device(requested_backend, device):
+    """Return the backend selected for *device* by a PyTorch backend spec."""
+    requested = str(requested_backend).strip().lower()
+    if ":" not in requested:
+        return requested
+    for item in requested.split(","):
+        item_device, separator, backend = item.strip().partition(":")
+        if not separator or not item_device.strip() or not backend.strip():
+            return None
+        if item_device.strip() == str(device).strip().lower():
+            return backend.strip()
+    return None
+
+
 def _bootstrap_var_all_reduce(self, op="mean"):
     ops = jt.compile_extern.nccl_ops
     world_size = jt.compile_extern.world_size
@@ -83,6 +97,62 @@ def _bootstrap_var_all_reduce(self, op="mean"):
 def _bootstrap_var_broadcast(self, root=0):
     ops = jt.compile_extern.nccl_ops
     return ops.nccl_broadcast(self, int(root))
+
+
+def _bootstrap_hccl_all_reduce(self, op="mean"):
+    ops = jt.compile_extern.hccl_ops
+    result = ops.hccl_all_reduce(self, "sum" if op == "mean" else op)
+    return result / jt.compile_extern.world_size if op == "mean" else result
+
+
+def _bootstrap_hccl_broadcast(self, root=0):
+    return jt.compile_extern.hccl_ops.hccl_broadcast(self, int(root))
+
+
+def _bootstrap_hccl(rank, world_size):
+    """Initialize genuine HCCL after import, as required by Ray workers.
+
+    The caller supplies a fresh shared rendezvous path. This is HCCL only,
+    not an implementation of the CPU Gloo backend of a composite request.
+    """
+    if not getattr(jt.compiler, "has_acl", False):
+        raise RuntimeError("Jittor dynamic HCCL bootstrap requires ACL")
+    rootinfo = os.environ.get("JT_HCCL_ROOTINFO_FILE", "").strip()
+    if not rootinfo:
+        raise RuntimeError(
+            "dynamic HCCL requires JT_HCCL_ROOTINFO_FILE naming a fresh "
+            "rendezvous file on storage shared by all ranks")
+    visible = [value for value in os.environ.get(
+        "ASCEND_RT_VISIBLE_DEVICES", "").split(",") if value.strip()]
+    local_rank = 0 if len(visible) == 1 else int(os.environ.get("LOCAL_RANK", rank))
+    print(
+        "JITTOR_TORCH_HCCL_BOOTSTRAP "
+        "rank={} world_size={} local_rank={} visible={}".format(
+            int(rank), int(world_size), local_rank,
+            ",".join(visible) if visible else "<unset>",
+        ),
+        flush=True,
+    )
+    set_env("JT_HCCL_WORLD_SIZE", int(world_size))
+    set_env("JT_HCCL_RANK", int(rank))
+    set_env("JT_HCCL_LOCAL_RANK", local_rank)
+    set_env("use_mpi", "0")
+    set_flag(jt.flags, "device_id", local_rank)
+    set_flag(jt.flags, "use_cuda", 1)
+    jt.compile_extern.setup_hccl(no_mpi=True)
+    module = jt.compile_extern.hccl_mod
+    ops = jt.compile_extern.hccl_ops
+    if module is None or ops is None:
+        raise RuntimeError("Jittor HCCL setup did not publish collective ops")
+    from jittor_utils import lock as _jit_lock
+    with _jit_lock.unlock_scope():
+        module.hccl_init()
+    jt.compile_extern.rank = int(rank)
+    jt.compile_extern.world_size = int(world_size)
+    jt.compile_extern.in_mpi = True
+    jt.core.Var.mpi_all_reduce = _bootstrap_hccl_all_reduce
+    jt.core.Var.mpi_broadcast = _bootstrap_hccl_broadcast
+    return True
 
 
 def _clear_stale_rendezvous(rootinfo, rank):
@@ -112,9 +182,9 @@ def _clear_stale_rendezvous(rootinfo, rank):
     for path in stale:
         try:
             os.remove(path)
-        except FileNotFoundError as exc:
-            swallowed("distributed.py clearing stale rendezvous file %s" % path,
-                      exc)
+        except FileNotFoundError:
+            # Already absent is the successful cleanup state, not a failure.
+            continue
         except OSError as error:
             warnings.warn(
                 "could not remove the stale rendezvous file %s: %s; a rerun on "
@@ -128,6 +198,9 @@ def _clear_stale_rendezvous_atexit(rootinfo):
             glob.glob(rootinfo + ".hb*") + glob.glob(rootinfo + ".tmp"):
         try:
             os.remove(path)
+        except FileNotFoundError:
+            # Startup or another cleanup may already have removed the store.
+            continue
         except OSError as exc:
             swallowed("distributed.py atexit clearing stale rendezvous file %s"
                       % path, exc)
@@ -137,9 +210,12 @@ def _bootstrap_native_distributed(rank, world_size, backend=None, store=None):
     if not _is_truthy(os.environ.get("JITTOR_TORCH_DISTRIBUTED_AUTO_INIT")):
         return False
     backend_name = str(backend or "nccl").lower()
-    if "nccl" not in backend_name:
+    if _backend_for_device(backend_name, "npu") == "hccl":
+        return _bootstrap_hccl(rank, world_size)
+    if _backend_for_device(backend_name, "cuda") != "nccl":
         raise NotImplementedError(
-            "Jittor dynamic torch.distributed bootstrap currently supports NCCL only"
+            "Jittor dynamic torch.distributed bootstrap supports NCCL or "
+            "explicit HCCL only; CPU Gloo is not provided"
         )
     if not getattr(jt, "has_cuda", False):
         raise RuntimeError("Jittor dynamic NCCL bootstrap requires CUDA")
@@ -316,6 +392,56 @@ def _native_all_gather_flat(tensor, group=None):
     return _collectives._all_gather_shards(flat)
 
 
+def _ensure_collective_thread_device():
+    """Restore the rank's ACL device in threads that issue HCCL collectives.
+
+    CANN current-device state is thread-local.  Async trainers legitimately
+    invoke ``torch.distributed.barrier`` through ``asyncio.to_thread``; that
+    executor thread has no ACL device even though the Ray worker's task thread
+    initialized HCCL correctly.  Bind the same logical device before creating
+    a control tensor.  This is deliberately limited to an active HCCL backend
+    and does not move ordinary CPU collective inputs to an accelerator.
+    """
+    if getattr(jt.compile_extern, "hccl_ops", None) is None:
+        return
+    raw = os.environ.get("JT_HCCL_LOCAL_RANK")
+    if raw is None:
+        visible = [value for value in os.environ.get(
+            "ASCEND_RT_VISIBLE_DEVICES", "").split(",") if value.strip()]
+        raw = "0" if len(visible) == 1 else os.environ.get(
+            "LOCAL_RANK", os.environ.get("RANK", "0"))
+    try:
+        logical_device = int(raw)
+    except (TypeError, ValueError) as error:
+        raise RuntimeError(
+            "HCCL collective thread requires an integer logical device rank"
+        ) from error
+    jt.core.set_device(logical_device)
+
+
+def _control_tensor(value):
+    """Encode host protocol data on the active device collective backend.
+
+    The transfer is part of object communication, not a tensor compute
+    fallback. Ordinary CPU tensor collectives are not silently moved.
+    """
+    _ensure_collective_thread_device()
+    tensor = jt.array(value)
+    if (getattr(jt.compile_extern, "hccl_ops", None) is not None or
+            getattr(jt.compile_extern, "nccl_ops", None) is not None):
+        tensor = tensor.cuda()
+    return tensor
+
+
+def _require_collective_tensor_device(tensor):
+    if getattr(jt.compile_extern, "hccl_ops", None) is not None:
+        backend, _device_id = jt.core.dispatch_context([tensor])
+        if backend not in ("acl", "acl_legacy"):
+            raise RuntimeError(
+                "HCCL tensor collectives require NPU tensors; a CPU tensor "
+                "requires a separate CPU communication backend")
+
+
 def _native_all_gather_object(object_list, obj, group=None):
     size = _require_supported_group(group)
     if len(object_list) < size:
@@ -324,9 +450,8 @@ def _native_all_gather_object(object_list, obj, group=None):
     if size == 1:
         object_list[0] = obj
         return None
-
     payload = pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL)
-    local_length = jt.array(np.asarray([len(payload)], dtype=np.int32))
+    local_length = _control_tensor(np.asarray([len(payload)], dtype=np.int32))
     lengths = np.asarray(
         _native_all_gather_flat(local_length, group=group).numpy(), dtype=np.int32
     ).reshape(-1)
@@ -335,7 +460,7 @@ def _native_all_gather_object(object_list, obj, group=None):
     if payload:
         encoded[:len(payload)] = np.frombuffer(payload, dtype=np.uint8).astype(np.int32)
     gathered = np.asarray(
-        _native_all_gather_flat(jt.array(encoded), group=group).numpy(), dtype=np.int32
+        _native_all_gather_flat(_control_tensor(encoded), group=group).numpy(), dtype=np.int32
     ).reshape(size, max_length)
     for rank, length in enumerate(lengths):
         raw = gathered[rank, :int(length)].astype(np.uint8).tobytes()
@@ -398,11 +523,24 @@ def _init_process_group(*args, **kwargs):
         )
     backend = kwargs.get("backend", args[0] if args else None)
     backend_name = str(backend).lower() if backend is not None else None
-    if requested_world_size > 1 and not _native_distributed_active():
-        _bootstrap_native_distributed(
+    native_ready = _native_distributed_active()
+    hccl_ready = (getattr(jt.compile_extern, "hccl_ops", None) is not None
+                  and bool(getattr(jt, "in_mpi", False))
+                  and os.environ.get("JT_HCCL_WORLD_SIZE") is not None)
+    if (requested_world_size > 1 or backend_name == "hccl") and not (native_ready or hccl_ready):
+        bootstrapped = _bootstrap_native_distributed(
             requested_rank, requested_world_size, backend=backend,
             store=store,
         )
+        if backend_name == "hccl" and not bootstrapped:
+            raise RuntimeError(
+                "HCCL bootstrap is disabled; use the native HCCL launcher or "
+                "enable JITTOR_TORCH_DISTRIBUTED_AUTO_INIT")
+    if (backend_name == "hccl" and not native_ready and
+            getattr(jt.compile_extern, "hccl_ops", None) is None):
+        raise RuntimeError(
+            "HCCL is not initialized; use the native HCCL launcher or enable "
+            "JITTOR_TORCH_DISTRIBUTED_AUTO_INIT with a fresh rendezvous file")
     if requested_world_size > 1 and not _native_distributed_active():
         raise RuntimeError(
             "multi-rank torch.distributed requires launching Jittor with "
@@ -468,6 +606,7 @@ def _all_reduce(tensor, op=None, group=None, async_op=False):
         # flush: syncing here would make a non-participant pay for -- and wait
         # on -- work it is not part of.
         return _collective_result(tensor, async_op, issued=False)
+    _require_collective_tensor_device(tensor)
     reduce_name = _reduce_name(op, _ReduceOp)
     if group is not None and hasattr(group, "_all_reduce"):
         result = group._all_reduce(tensor, reduce_name)
@@ -475,7 +614,7 @@ def _all_reduce(tensor, op=None, group=None, async_op=False):
         return _collective_result(tensor, async_op, issued=True)
     if size > 1:
         if reduce_name in ("sum", "mean"):
-            result = tensor.mpi_all_reduce(reduce_name)
+            result = _process_group.all_reduce(tensor, op=reduce_name, group=group)
         else:
             gathered = _native_all_gather_flat(tensor).reshape(
                 (size,) + tuple(tensor.shape))
@@ -493,6 +632,9 @@ def _all_reduce(tensor, op=None, group=None, async_op=False):
 
 def _all_gather(tensor_list, tensor, group=None, async_op=False):
     size = _require_supported_group(group)
+    _require_collective_tensor_device(tensor)
+    for output in tensor_list:
+        _require_collective_tensor_device(output)
     if len(tensor_list) < size:
         raise ValueError("all_gather output list is shorter than group size")
     if size == 1:
@@ -510,6 +652,8 @@ def _all_gather(tensor_list, tensor, group=None, async_op=False):
 def _all_gather_into_tensor(output_tensor, input_tensor, group=None,
                             async_op=False):
     size = _require_supported_group(group)
+    _require_collective_tensor_device(input_tensor)
+    _require_collective_tensor_device(output_tensor)
     gathered = (
         input_tensor.reshape((-1,)) if size == 1
         else _native_all_gather_flat(input_tensor, group=group)
@@ -520,11 +664,11 @@ def _all_gather_into_tensor(output_tensor, input_tensor, group=None,
 
 def _broadcast(tensor, src=0, group=None, async_op=False, group_src=None):
     size = _require_supported_group(group)
+    _require_collective_tensor_device(tensor)
     root = int(src if group_src is None else
                _api_dist_get_global_rank(group, group_src))
     if size > 1:
-        result = (_process_group.broadcast(tensor, src=root, group=group)
-                  if group is not None else tensor.mpi_broadcast(root))
+        result = _process_group.broadcast(tensor, src=root, group=group)
         _copy_tensor(tensor, result)
     return _collective_result(tensor, async_op, issued=size > 1)
 
@@ -533,7 +677,7 @@ def _barrier(group=None, async_op=False, device_ids=None):
     size = _require_supported_group(group)
     marker = None
     if size > 1:
-        marker = jt.array(np.asarray([_distributed_rank()], dtype=np.int32))
+        marker = _control_tensor(np.asarray([_distributed_rank()], dtype=np.int32))
         marker = marker.mpi_all_reduce("sum")
         marker.sync()
     return _collective_result(marker, async_op, issued=False)

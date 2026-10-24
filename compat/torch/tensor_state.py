@@ -7,7 +7,7 @@ private registries can be adopted once, but are never published as aliases.
 from __future__ import annotations
 
 from types import ModuleType
-from weakref import WeakKeyDictionary, ref
+from weakref import WeakKeyDictionary, WeakValueDictionary, ref
 from functools import wraps
 from typing import Any, List
 
@@ -100,6 +100,93 @@ class TorchTensorState(HolderRegistry):
         # Weak references to every live Torch-compatible optimizer.  Keep this
         # beside leaf/retain state so installers share one ownership boundary.
         self.active_optimizers = []
+        # Producer ids are native graph identities, not Tensor hash/equality
+        # keys. Values carry scalar metadata only and must not retain a graph.
+        self.grad_fn_wrappers = WeakValueDictionary()
+        from .symbolic import _NestedSymbolOwner
+        self.nested_symbol_owner = _NestedSymbolOwner()
+        self.nested_symints = {}
+        self.next_nested_symbol = 0
+
+    def _new_nested_symint(self):
+        from .symbolic import SymInt, _NestedIntNode, _NestedSymbolToken
+        token = _NestedSymbolToken(self.nested_symbol_owner.identity, self.next_nested_symbol)
+        self.next_nested_symbol += 1
+        return SymInt(_NestedIntNode(token))
+
+    def _legacy_nested_symint(self, source, symbol=None):
+        from jittor import core
+        from .symbolic import _LegacyNestedSymbolCache
+        from .tensor_object_state import get_tensor_object_state
+        if not isinstance(source, core.Var) or getattr(type(source), "_frontend_backend", None) is not None:
+            raise TypeError("weak-reference-ineligible native Var required")
+        # Native Var owns a GC-traversed instance dict but no weakref slot.
+        # Its holder owns this small cache; the cache must never own the holder.
+        state = get_tensor_object_state(source, create=True)
+        cache = getattr(state, "nested_symbol_cache", None)
+        if cache is None:
+            cache = state.nested_symbol_cache = _LegacyNestedSymbolCache()
+        elif type(cache) is not _LegacyNestedSymbolCache:
+            raise TypeError("invalid holder-owned nested symbol cache")
+        if symbol is not None:
+            cache.put(self.nested_symbol_owner, symbol)
+            return symbol
+        value = cache.get(self.nested_symbol_owner)
+        if value is None:
+            value = self._new_nested_symint()
+            cache.put(self.nested_symbol_owner, value)
+        return value
+
+    @_state_locked
+    def nested_symint(self, source):
+        return self._nested_symint(source)
+
+    @_state_locked
+    def alias_nested_symint(self, source, template):
+        """Bind a metadata key to the template key without retaining either.
+
+        Both lookup and publication are under the installation/state lock.
+        Existing terms are immutable snapshots; rebinding affects only future
+        lookups and never allocates a throwaway symbolic identity.
+        """
+        symbol = self._nested_symint(template)
+        return self._nested_symint(source, symbol)
+
+    def _nested_symint(self, source, symbol=None):
+        key = id(source)
+        entry = self.nested_symints.get(key)
+        if entry is not None and entry[0]() is source:
+            if symbol is not None:
+                self.nested_symints[key] = (entry[0], symbol)
+                return symbol
+            return entry[1]
+        state_ref = ref(self)
+
+        def expired(reference):
+            state = state_ref()
+            if state is not None:
+                with InstallTransaction._lock:
+                    current = state.nested_symints.get(key)
+                    if current is not None and current[0] is reference:
+                        del state.nested_symints[key]
+
+        try:
+            reference = ref(source, expired)
+        except TypeError:
+            # Catch only stdlib weakref rejection; legacy admission is explicit.
+            return self._legacy_nested_symint(source, symbol)
+        value = self._new_nested_symint() if symbol is None else symbol
+        self.nested_symints[key] = (reference, value)
+        return value
+
+    @_state_locked
+    def intern_grad_fn(self, node_id, op_id, name, factory):
+        """Share a held producer wrapper within this installed Torch owner."""
+        wrapper = self.grad_fn_wrappers.get(node_id)
+        if wrapper is None:
+            wrapper = factory(node_id, op_id, name)
+            self.grad_fn_wrappers[node_id] = wrapper
+        return wrapper
 
     @property
     def leaf_params(self):

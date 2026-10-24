@@ -1,7 +1,7 @@
 # Known-Issues Ledger
 
 - Status: Maintained
-- Last reviewed: 2026-10-13
+- Last reviewed: 2026-10-20
 - Baseline: `1a6e203fc`
 - Owner: Jittor core maintainers
 - Review when: an entry is fixed or narrowed, a strict expected failure
@@ -1334,6 +1334,45 @@ workaround.
 - Exit condition: `argsort`'s ACL constructor is registered with the
   signature `ordering_ops.py` asks for, and the eight cases pass.
 
+## KI-BACKEND-021: CUDA LayerNorm treats the independent Tensor affine buffers as scalars
+
+- Severity: High
+- Status: Open, confirmed 2026-10-20 on `5a120a315ed2f213d937b546116101006643f87d`
+  plus the preserved compatibility worktree. Native defect remains open; the
+  user-approved scope is compat-only, and the CUDA frontend workaround below
+  is validated on `d0fd6f577b6b025f0e2eecc08962f89a3ff7bb64` plus preserved work.
+- Owner: CUDA normalization and native autograd maintainers
+- Symptom: a real-CUDA `torch.nn.functional.layer_norm` with four-element
+  public Tensor weight/bias raises `JittorError` while converting weight to
+  float in `backends/cuda/kernels/nn/layer_norm_cuda.py`. The original verl
+  Qwen3.5-0.8B PPO originally hit this in old-policy log-prob calculation. The
+  compat workaround moves it beyond this failure; no full L2 parity is granted.
+- Cause: the CUDA inference helper uses legacy `isinstance(..., jt.Var)`
+  checks, so independent Tensor affine operands take its scalar branch.
+  The shared `python/jittor/_core/flags.py::_output_requires_grad` walker
+  also recognizes only legacy Var. Do not work around either by boxing Tensor
+  as Var, changing public identity/grad flags, or duplicating LayerNorm in an adapter.
+- Workaround: the owned Torch functional/module frontend expands a singleton
+  normalized axis and delegates to the existing general native LayerNorm and
+  its backward, then restores the result shape. Real CUDA LayerNorm 6/6 and
+  the combined 53/53 pass against independent PyTorch; candidate fallback=0.
+  No Var boxing, input grad-flag change, duplicate math or registry mutation.
+  This is CUDA FP32 frontend evidence, not a native fix, NPU/CPU acceptance,
+  complete PPO L2 or performance acceptance. Disabling
+  `JITTOR_LAYERNORM_SCALAR_FAST` alone still has no accepted workaround proof.
+- Evidence: the dated [verl validation report](../../docs/results/2026-09-23-verl-npu-training-progress.md)
+  and maintained `compat/tests/torch/test_layer_norm_carrier_cuda.py`.
+  Immutable lab-state tool `source-sync-5a120a31-20261019/fresh-runtime-preflight-v1/verl_fresh5a_layernorm_carrier_CUDA_DIAGNOSTIC_MAIN_v1.py`
+  runs the offline FP32 two-case CUDA fixture with explicit scalar-fast flag.
+  Native PyTorch CUDA 2/2; candidate default 0/2; candidate flag-zero 1/2;
+  candidate fallback_count=0 in both failed runs. No CPU framework test or
+  backend/core source change was performed for this diagnosis.
+- Exit condition: recognize both actual tensor carrier families in gradient
+  eligibility and CUDA affine selection, pass the default-path real-CUDA
+  forward/full x-weight-bias VJP controls with unchanged error/device checks,
+  and re-run the original PPO forward. Local LayerNorm success alone does not
+  grant complete PPO L2/L1-L5.
+
 ## KI-OPS-002: integer floor-division ROCm verification incomplete
 
 - Severity: Critical (until verified on the backend)
@@ -1463,6 +1502,27 @@ workaround.
   [Ascend 910B validation](../../docs/results/2026-08-28-ascend-910b-validation.md).
 - Exit condition: pass the remaining dtype matrix on a real NPU and the complete
   matrix on a real ROCm device.
+
+## KI-SEMANTICS-004: canonical CPU RNG restore accepts out-of-range engine states
+
+- Severity: Critical (malformed RNG checkpoint can silently corrupt continuation)
+- Status: Open (verification pending: CPU); reproduced 2026-10-15 on
+  `d87f6ba338114ca13e83a7b1072aac931f4175c3` plus frozen312 changes.
+- Owner: native RNG/state maintainers
+- Symptom: canonical `set_rng_state("cpu", state)` accepts engine values below
+  the encoded minimum and above its maximum instead of rejecting atomically.
+- Cause: the standard-library LCG extractor does not enforce engine range;
+  the legacy V1 reader checked it, but the new canonical owner did not.
+- Workaround: restore only untampered state from the same supported runtime;
+  do not route Torch back to the legacy int-seed interface.
+- Evidence: real CPU `TestCpuRngState::test_canonical_owner_roundtrip_and_invalid_states_are_atomic`
+  rejects two negative controls at the expected-exception assertion, with
+  14 other subtests passing. A source-owner range fix and permanent regression
+  are present on `0751e425` plus manifest320; real rebuilt validation is pending.
+  See [the validation report](../../docs/results/2026-09-23-verl-npu-training-progress.md).
+- Exit condition: real rebuilt CPU default-stream roundtrip/invalid-state
+  atomicity, full-width seeds, lazy-work ordering and affected core gates pass;
+  verify that the ACL state branch and native Generator owner are unchanged.
 
 ## KI-DTYPE-002: implicit array construction narrows 64-bit NumPy values
 
@@ -1901,6 +1961,132 @@ workaround.
 - Exit condition: either a deterministic repro and a fix, or enough clean
   runs across cards that the single observation is treated as a one-off
   and this entry closed.
+## KI-COMPAT-025: materialized arithmetic output loses its public nonleaf history after backward
+
+- Severity: Medium
+- Status: Open; reproduced 2026-10-16 on `fcc5515d29abecde1fff8275c9141235e7fbf514`
+  plus the source419 changes bound in the linked report; reconfirmed on source421.
+- Owner: native autograd and Torch Tensor maintainers
+- Symptom: on actual CPU, create a trainable dense tensor, compute `y=x*2+1`,
+  materialize with `jittor.sync_all()`, then call `y.sum().backward()`.
+  The candidate changes y from nonleaf/nonempty grad_fn to leaf/None while
+  requires_grad stays true; independent PyTorch keeps its original history.
+  Full input gradients remain exactly correct in this reproduction.
+- Cause: the public query delegates to the native live-graph producer query.
+  Actual source421 CPU graph observations show the original held output's
+  producer edge changes from one to zero after materialized backward, while
+  the same output remains trainable. Preserving a named intermediate prevents
+  this transition in the control. Historical identity is not retained separately
+  from executable graph connectivity; permitting stopped inputs alone cannot
+  repair a missing producer edge. Exact lifetime-preserving repair remains open.
+  A separate ordinary VERL clipping control also exposes this metadata failure;
+  neither control establishes the cause of the historical CUDA PPO error.
+  An expanded independent CPU regression confirms 44/44 native public cases;
+  the candidate has 14 passed and 30 failed subcases (16 leaf-history assertion
+  failures and 14 held-grad_fn Python identity failures). The current public
+  getter at that source421 baseline constructed a fresh wrapper on each read;
+  stable wrapper identity is a separate boundary from native producer-edge
+  lifetime. Source425 now interns live-producer wrappers in the existing owner
+  state through weak values and the installation lock; actual CPU GC, owner
+  isolation and contention controls pass. The unchanged 44-case history control
+  improves to 26 passed / 18 failed: 16 leaf assertions and two held-wrapper
+  identity assertions after the released-graph error path still fail. The
+  separate differentiable copy control also remains RED; native metadata is
+  not repaired or invented by this wrapper pool. Assertions following
+  an earlier failed assertion were not executed and are not counted as passed.
+  Source427 applies a native value-history repair with a fresh ABI build.
+  Actual native CPU delayed-release/stop controls pass six methods and 40
+  subtests, repeated with same-PID source/core/stamp/SELF binding and fallback0.
+  The unchanged independent Torch control remains 44/44; candidate improves
+  to 38/44, with differentiable copy history (two dtypes) and missing released-
+  graph errors (four quadratic scenarios) still RED. The old control stopped
+  earlier on history assertions in some scenarios, so this does not prove a
+  new regression. A source inspection identifies that loss outside targets'
+  successors can leave the old released-node traversal empty; no general fix
+  is yet verified. Stronger post-completion stop/internal-stop/Op-stop controls,
+  maintained new-core regressions and actual CUDA validation remain pending.
+  CPU metadata success is not complete PPO L2 or CUDA evidence.
+- Workaround: none for the stated public metadata contract. Avoiding explicit
+  materialization passes the four-cell control's narrow unmaterialized branch,
+  but is not a general fix or justification to omit metadata checks.
+- Evidence: independent CPU four-cell control (prequery on/off by materialization
+  on/off), source419 manifest, same-PID CPU core and zero fallback, documented in
+  [the validation report](../../docs/results/2026-09-23-verl-npu-training-progress.md).
+  Unversioned controller `verl_public_leaf419_cpu_pair_20261016.py` SHA256
+  `9858d19db80a09a97b0b649a42a5300306d8197edc0685891ac123842173e515`;
+  safe-summary SHA256
+  `61ddbd84139f48c3b6ee440f842c17a1ccc0114dbb9655f500ac5cdd8cc6291c`.
+- Exit condition: preserve recorded leaf/producer identity across materialization
+  and backward while retaining released-graph errors, detach/stop behavior and
+  correct full VJPs; add permanent CPU/CUDA regressions and rerun the unchanged
+  strict metadata control. CUDA is not yet verified for this reproduction.
+
+## KI-COMPAT-024: Qwen3.5 CUDA PPO complete-gradient parity exceeds the fixed tolerance
+
+- Severity: Medium
+- Status: Open; reproduced 2026-10-11 on baseline `7a18abf295668d9b19da5fa1657f5606e84b65a0`
+  plus the uncommitted patches identified in the linked result report.
+- Owner: Torch compatibility and numerical backend maintainers
+- Symptom: the three-step FP32/eager pure-text Qwen3.5-0.8B learned-critic PPO
+  fixture completes on actual CUDA with zero candidate fallback, but 27 of
+  3,933 arrays fail the predefined `atol=rtol=1e-5` comparison against independent
+  PyTorch CUDA. Maximum actor/critic parameter-gradient absolute errors are
+  `3.0517578e-5` / `6.4849854e-5`; this blocks complete L2 acceptance.
+- Cause: not yet isolated. Functional gated-delta operation ordering and ordinary
+  GEMM/reduction paths require independent minimal reproduction; completion and
+  nearly identical updated weights do not rule out a gradient discrepancy.
+- Workaround: none for the stated complete-gradient acceptance. Retain the failed
+  artifacts and threshold; actor-only sampled-gradient observations are narrower
+  evidence, not a substitute for this gate.
+- Evidence: `probe_training_workflow.py` schema 4, three steps, learned critic,
+  FP32 CUDA, fixed model revision and `lr=1e-6`; original
+  `compare_training_workflow.py --atol 1e-5 --rtol 1e-5` returns fail. Exact script
+  hashes and unversioned artifact identifiers are recorded in
+  [the CUDA validation report](../../docs/results/2026-09-23-verl-npu-training-progress.md).
+- Exit condition: isolate and address the discrepancy, then rerun the unchanged
+  independent complete-gradient CUDA contract successfully, with full parameter
+  and input-gradient coverage and zero fallback.
+
+## KI-COMPAT-016: complete CUDA Ray PPO correctness remains unverified
+
+- Severity: High
+- Status: Open; reproduced 2026-10-12 on baseline `7a18abf295668d9b19da5fa1657f5606e84b65a0`
+  plus the uncommitted patches identified in the linked result report.
+- Owner: Torch compatibility and runtime maintainers
+- Symptom: an original CUDA PPO fit return and passing component gates do not
+  establish complete numerical, state-transition, checkpoint-resume or all-worker
+  device/fallback correctness. Historical single-card FP32 V55 passed its full
+  948-gradient and loss/input numerical scope at `atol=rtol=1e-4`, but retained
+  874 local-gradient storage-offset groups, three input metadata scopes, nine
+  configuration records and initial Critic metadata as strict failures. Stricter
+  `1e-5` diagnostics also failed. These belong to their recorded old source
+  profile, not automatically to this publication branch, BF16 or dual-card runs.
+- Cause: no single mechanism has been established for all historical failures.
+  Transport, gradient publication, storage/aliasing, device observation and
+  backend-numerical defects have distinct reproductions and scoped repairs.
+  Successful helpers, forwards or sampled states cannot replace the original
+  full-trainer contract. Genuine differing type/base/device/storage fields must
+  remain observable, not renamed or normalized into equality.
+- Workaround: none for the full trainer contract. Successful standalone
+  transport or actor-only fixtures cannot replace full-run same-input and
+  complete-gradient correctness checks. Use only the separately documented,
+  source-bound historical contracts; they do not confer current full L2-L5.
+- Evidence: the original resident-reference/strict-FP32 profile uses a shared
+  fixed critic head, upstream NumPy DataProto transport and independent PyTorch
+  CUDA. The bounded V55 result, exact source/artifact identifiers and separate
+  historical Ascend contract are preserved in
+  [the PPO validation record](../../docs/results/2026-09-23-verl-npu-training-progress.md).
+  The unreduced investigation and unversioned artifacts remain in the original
+  development worktree; this short ledger does not reclassify their failures.
+- Current verification boundary: complete multistep CUDA numerical/parameter
+  trajectories, fresh-process checkpoint continuation, strict metadata and
+  whole-system L5 require source-bound revalidation. Observed model-role zero
+  fallback does not establish arbitrary helper-worker execution. Intentional
+  upstream host sampling, coordination and offload are not CUDA execution claims.
+  L4 speed has not been strictly validated for this publication.
+- Exit condition: isolate the actual failing primitive/runtime boundary, then
+  complete independent multi-step full-trainer CUDA correctness validation,
+  including actual worker device/fallback evidence, without swallowing failures.
 
 ## KI-COMPAT-001: Torch namespaces publish native-only helpers and imported symbols
 
@@ -1958,9 +2144,19 @@ workaround.
 
 ## KI-COMPAT-003: a nested tensor is not a Tensor
 
-- Severity: Low (a stand-in for the few `torch.nested` paths verl reaches)
+- Severity: Medium (jagged Tensor identity and public symbolic-size semantics)
 - Status: Open
 - Owner: torch compatibility
+- Current independent frontend (2026-10-20, baseline d0fd6f57 plus preserved
+  V42 overlay): virtual isinstance recognition and finite symbolic shapes are
+  present, but actual NestedTensor bases/MRO still contain only the standalone
+  wrapper/object, not Tensor/TensorBase. The historical false-isinstance and
+  concrete -1 symptoms below must not be presented as current behavior.
+  Genuine carrier migration must also reject/dispatch unsupported jagged math;
+  merely giving packed dense storage a public name would silently compute the
+  wrong contract. Current real-CUDA clone/to holes and full packed VJP fixes
+  pass both83/83 regressions, but unchanged strict jagged inheritance still
+  fails (Native7/7, Candidate6/7). See V42 in the linked CUDA result report.
 - Symptom: `isinstance(torch.nested.as_nested_tensor(...), torch.Tensor)` is
   False here and True in torch 2.13; code that type-checks before branching takes
   the dense path.
@@ -1971,8 +2167,23 @@ workaround.
 - Workaround: none.
 - Evidence: `compat/tests/torch/test_torch_compat_ops.py::TestNestedTensor::test_nested_jagged_basic`
   asserts the gap as it stands, so closing it turns the test red.
+  Additional public CPU oracle at `fcc5515d29abecde1fff8275c9141235e7fbf514`
+  plus the preserved worktree, verified 2026-10-16: Native Torch 2.8.0 passes
+  both `jagged_dim=1/2` cases; candidate fails both. `shape[axis]`, `size(axis)`
+  and `size()[axis]` return Native SymInt versus candidate exact int `-1`.
+  Native conversion to int/index raises; the candidate silently returns `-1`;
+  comparison with `-1` and `< 0` also diverges. Complete fixed values/offsets
+  bytes and source flags remain unchanged, actual CPU storage is checked and
+  candidate fallback stays zero. This is not merely a type-label difference
+  and does not establish the cause of PPO logits/gradient drift.
+  Unversioned lab artifacts: `public-jagged-size413-cpu-v1/native.json` SHA256
+  `764fc0f9dab94c28946924d61bb31234e22231048af159cb6b3abaaed9f36899`;
+  `candidate.json` SHA256
+  `ccb3ba2beb64e916957b85dea78b9797de7f64b2fda264283965b292c5b1420a`.
 - Exit condition: nested tensors are Tensors with jagged storage, and the test is
-  updated to the torch answer.
+  updated to the torch answer; validate real symbolic ragged extents and public
+  shape/size operations against an independent oracle on CPU and target device,
+  not by wrapping a concrete sentinel or dropping observer fields.
 
 ## KI-COMPAT-004: Tensor aliases lack mutation guards and dynamic source trainability
 
@@ -2132,6 +2343,216 @@ workaround.
   (the two core-op spellings by name do not raise for complex128).
 - Exit condition: complex128 is a supported frontend dtype end to end (or the
   core refuses it again by design), and the case XPASSes and loses its marker.
+
+## KI-COMPAT-018: Embedding supplied weights retain the caller's holder and gradient flags
+
+- Severity: Critical (silent trainability and external gradient-state changes)
+- Status: Open; reproduced 2026-10-14 on `cded3102` plus the report's frozen
+  uncommitted source manifest209.
+- Owner: Torch compatibility / public NN frontend maintainers
+- Symptom: constructing `torch.nn.Embedding(4, 3, _weight=w)` from an ordinary
+  CPU Tensor with `requires_grad=False` leaves `weight` as the same stopped
+  Tensor instead of a distinct trainable Parameter. `_freeze=True` can stop
+  the original caller's trainable holder. Existing Parameter input also keeps
+  the same holder instead of constructing an independently flagged Parameter.
+- Cause: the public wrapper passes the supplied Tensor unchanged to the native
+  constructor, and generic NN adoption deliberately protects external objects.
+  The native Embedding and generic external-object protection are not the
+  correct owners for a Torch-only constructor correction.
+- Workaround: avoid explicit `_weight` where possible; that does not preserve
+  this supplied-weight sharing contract. Do not change the caller's gradient
+  flags merely to make a validation fixture proceed.
+- Evidence: the report's v213 public CPU regression runs the same eight
+  source-grad/freeze/Tensor-or-Parameter combinations independently: all native
+  combinations pass, all candidate combinations fail construction assertions.
+  See [the validation report](../../docs/results/2026-09-23-verl-npu-training-progress.md).
+  The wrapper correction is integrated in the report's 7ed9b3b5 working tree.
+  Actual CPU v282 now passes constructor, forward and full analytic gradient
+  checks, but all four trainable cases fail the external source's post-SGD
+  values: the parameter is updated while its detached storage alias is stale.
+  This remaining native optimizer writeback issue is not a proven cause of
+  the full Qwen PPO gradient discrepancy. Actual same-card CUDA v292 passes
+  all eight combinations independently on Native and Jittor, with zero
+  fallback. The CPU portable storage-alias update defect remains open.
+- Exit condition: preserve source flags/grad, construct a distinct Parameter
+  sharing the original storage, and independently pass full forward, gradient
+  and SGD alias-update regressions on CPU and real CUDA, including freeze and
+  existing Parameter inputs; keep native construction semantics unchanged.
+
+## KI-COMPAT-019: AdamW public state dict omits the decoupled-weight-decay field
+
+- Severity: Medium (public optimizer checkpoint metadata divergence)
+- Status: Open; reproduced 2026-10-14 on `cded3102` plus frozen source manifest209.
+- Owner: Torch compatibility / optimizer maintainers
+- Symptom: `torch.optim.AdamW([{'params': []}], lr=1e-6).state_dict()` omits
+  `param_groups[0]['decoupled_weight_decay']`; independent PyTorch 2.8.0
+  publishes the boolean True. The explicitly empty group is legal and needs
+  no tensor creation or JIT compilation.
+- Cause: the public state export adds other Adam/AdamW defaults but not this
+  field. Existing AdamW update math is decoupled; this observation alone does
+  not demonstrate incorrect numerical updates or explain PPO gradient errors.
+- Workaround: none for strict public-state compatibility; do not discard the
+  reference field from a full-state comparison to make it pass.
+- Evidence: private v228 identical public CPU regression, native exit0 and
+  candidate exit1, recorded in
+  [the validation report](../../docs/results/2026-09-23-verl-npu-training-progress.md).
+- Exit condition: publish semantically correct Adam/AdamW group metadata,
+  preserve public load-state behavior, and independently verify before/after
+  multi-step state export and load roundtrips on CPU and real CUDA without
+  silently accepting unsupported decoupled Adam update modes.
+
+## KI-COMPAT-020: optimizer gradient ownership and update-state fidelity
+
+- Severity: High (silent missed updates and incomplete public-state behavior)
+- Status: Open; CPU defects reproduced and partly fixed 2026-10-14 on
+  `7ed9b3b52b658d2a3c1ac390eba09087c5e80f95` plus source manifests in the report.
+- Owner: Torch compatibility / native optimizer maintainers
+- Symptom: an optimizer created after Tensor.backward or manual p.grad
+  assignment ignores the preexisting gradient. Standard step also builds a
+  differentiable parameter-update graph, and zero_grad(False) dereferences
+  None for an unused parameter. An unused group's removed gradient slots
+  can cause KeyError after a new public gradient assignment.
+- Cause: constructor registration misses already-published parameter gradients;
+  native update/clear conventions differ from Torch's gradient ownership and
+  no-grad update contract. Shared-storage writeback remains separately open
+  under KI-COMPAT-018. The mixed preexisting/None slots also require checking
+  the supported opt.backward/step(loss) extension, not only standard Torch.
+- Evidence: actual independent CPU v246 has native 4/4 passes and candidate
+  2/4 missed-update cases (maximum parameter error 0.09375). In v282 the
+  identical permanent SGD/AdamW test passes all 16 standard public cases on
+  both frameworks, including repeated step, two groups, None/zero clearing,
+  full analytic parameters and AdamW moments. Actual same-card CUDA v292
+  also passes all 16 cases independently on both frameworks, with zero
+  fallback. Extension paths, closures, portable alias writeback and wider
+  regressions are not certified by this.
+  See [the validation report](../../docs/results/2026-09-23-verl-npu-training-progress.md).
+- Workaround: no general workaround; do not move optimizer creation or clear
+  unused gradients merely to make a correctness fixture pass.
+- Scoped CPU fix (2026-10-16, source421): clipping and ordinary optimizer
+  gradient publication/accumulation now reuse existing storage/layout owners.
+  Independent CPU four-method/18-case regressions pass on both frameworks,
+  and original VERL clipping preserves aliases in six public CPU cases.
+  Maintained CPU core and targeted regressions also pass. This does not certify
+  CUDA, pure FSDP publication, closures, kept graphs or the complete issue.
+- Exit condition: pass independent CPU and real CUDA gradient/state/closure
+  regressions, preserve native extension behavior and storage aliases, and
+  complete affected maintained core tests without hidden fallback or repr dumps.
+
+## KI-COMPAT-021: integrated FSDP checkpoint coordinator loses loader options and result
+
+- Severity: High (public load policy and transport contract divergence)
+- Status: Open; source-pinned HOST reproduction on 2026-10-14 at
+  `ad47b58143f5c54e83114f923e23c0c69322130a` plus preserved local changes.
+- Owner: Torch checkpoint coordinator / FSDP state maintainers
+- Fix under validation (2026-10-15, `d87f6ba3` plus local changes): the
+  coordinator now preserves complete options/result and leaves FULL transport
+  to the provider, while retaining upstream Module-key expansion and ordinary
+  broadcast/native/custom loader dispatch. The permanent actual-coordinator
+  HOST regression changes from six failing sub-assertions to 10 passing test
+  methods. This is not real-device checkpoint/resume or multi-rank evidence;
+  the issue stays open until the exit conditions below are verified.
+- Symptom: the new checkpoint coordinator forwards only strict to the local
+  FULL loader and returns None instead of its incompatibility result. An
+  explicit broadcast=False becomes the loader's default True; unsupported
+  option validators are bypassed. The outer broadcast additionally sends a
+  full state object before the local loader's metadata/device tensor protocol.
+- Cause: integration between the upstream coordinator and the preserved
+  option-aware loader, not an omitted upstream conflict resolution.
+- Evidence: 11 independent HOST controls execute the actual AST owners with
+  a recording provider; passing controls reproduce the defects, not a fix.
+  See [the validation report](../../docs/results/2026-09-23-verl-npu-training-progress.md).
+  Actual device loading and multi-rank effects have not been measured. The
+  single-rank PPO subset requests broadcast=True and ignores the result;
+  this issue is not a proven cause of the full PPO gradient discrepancy.
+- Workaround: none for the full public contract; do not restore the stale
+  facade branch over the new coordinator or drop options from the test.
+- Exit condition: preserve the upstream coordinator, forward complete public
+  options to one transport owner, return the actual result, and verify strict,
+  non-strict, CPU-offloaded, tied/frozen parameter and optimizer continuation
+  behavior on real devices, including both broadcast policies across ranks.
+
+## KI-COMPAT-022: jagged container lacks independent autograd-node metadata
+
+- Severity: High (missing public metadata and unsupported trainable-node identity)
+- Status: Open; actual full CUDA PPO input inspection failed on 2026-10-15
+  (Asia/Shanghai), at `ad47b58143f5c54e83114f923e23c0c69322130a` plus manifest293.
+- Owner: Torch nested-tensor / autograd compatibility maintainers
+- Symptom: reading a data-only jagged input's public grad raises AttributeError;
+  is_leaf, retains_grad and grad_fn are also absent. The packed values buffer is
+  not an independent jagged autograd node and must not supply its node identity.
+- Evidence: full288 original fit failed before the original critic loss returned;
+  independent native CPU/CUDA metadata controls and eight-case permanent
+  regressions pass. See [the validation report](../../docs/results/2026-09-23-verl-npu-training-progress.md).
+- Fix under validation: data-only (requires_grad=False) jagged metadata now
+  reports grad/grad_fn=None, is_leaf=True and retains_grad=False without reading
+  packed gradients or changing the graph. Real candidate CPU validation passes
+  all eight permanent cases with zero fallback; real same-card CUDA v299
+  independently passes the same eight cases with zero fallback.
+  Trainable access explicitly raises NotImplementedError rather
+  than fabricating None/leaf state or borrowing values' gradient ownership.
+- Workaround: no general trainable jagged-node workaround; dense values can
+  still participate in their existing graph, which is not jagged-node support.
+- Exit condition: independently verify data-only CPU/CUDA regressions and
+  actual PPO capture, then implement genuine trainable jagged-node gradient,
+  retain, leaf/view and grad-mode semantics with full values/input VJP checks.
+
+## KI-COMPAT-023: differentiable copy rebinds the destination to the source graph/storage
+
+- Severity: Critical (incorrect leaf identity and unintended storage sharing)
+- Status: Open; reproduced 2026-10-15 on `0751e425` plus manifest320 and
+  `d404c702` plus manifest330 (CPU333).
+- Owner: native storage/autograd and Torch Tensor maintainers
+- Symptom: grad-enabled `destination.copy_(leaf)` incorrectly reports a leaf;
+  copying a nonleaf shares its data pointer instead of independent target storage.
+- Cause: the no-grad imperative copy path is correctly separate, but the
+  differentiable path passes the RHS directly to holder assign/update, which
+  rebinds its graph and allocation. A same-dtype cast is not a copying node.
+- Workaround: none for the public differentiable in-place contract; a cloned
+  RHS alone must not be advertised as preserving the target's existing aliases.
+- Evidence: real CPU321 `TestCopySourceIsolation::test_cpu` fails grad_leaf
+  and grad_nonleaf subcases at lines 167/168; rebuilt CPU333 repeats both failures.
+  Independent CPU323 and CUDA326
+  original tests pass; current candidate CUDA is not yet measured. Native
+  CopyOp copies to a new allocation, while copy_into retains storage without
+  creating an autograd node; neither alone proves the full contract.
+  See [the validation report](../../docs/results/2026-09-23-verl-npu-training-progress.md).
+- Exit condition: independently verify complete forward/VJP and metadata on
+  CPU/CUDA, target pointer and detached/view aliases, old-target zero edge,
+  pending readers, overlap rejection and saved-backward mutation safety;
+  retain the existing no-grad backend-copy path and native storage ownership.
+
+## KI-COMPAT-017: no-grad copy through a detached storage alias disables the source gradient
+
+- Severity: High
+- Status: Open pending permanent regressions; reproduced 2026-10-14 before
+  v190 on `3495d443`. The targeted fix passes independent CPU/CUDA controls
+  on the report's frozen v190 source manifest; broader semantics are unclaimed.
+- Owner: Torch compatibility maintainers
+- Pre-fix symptom: for a trainable Parameter `p`, `with torch.no_grad():
+  alias = p.detach(); alias.copy_(p)` changes `p.requires_grad` to False.
+  Copying a fresh differentiable same-storage view instead changes the view's
+  gradient policy. Independent PyTorch preserves both. Subsequent complete VJP
+  is unavailable in the first candidate case, not a passing zero gradient.
+- Cause: the same-dtype cast may forward the original source Var; the Torch
+  in-place adapter delegates to native assignment, which adopts destination
+  trainability on that source. A cloned output alone also needs storage-alias
+  validation; restoring source flags after assignment is not a remedy.
+- Fix under validation: same-shape contiguous no-grad copies use the existing
+  device copy-into path; other paths isolate the source with frontend clone
+  before the existing in-place mechanism. No native assign or source-flag
+  restoration changes. Non-contiguous destinations and all broadcast cases
+  are not covered by this evidence.
+- Evidence: private source-pinned `alias182-{native,candidate}-{cpu,cuda}-v1`
+  controls in [the CUDA validation report](../../docs/results/2026-09-23-verl-npu-training-progress.md).
+  Native passes 36/36 on each device; candidate passes 28/36 on each, with
+  fallback zero and actual device residency. The expanded nine-case v191
+  control passes 9/9 natively and 1/9 on the pre-fix candidate on both devices;
+  after the fix v196 passes 9/9 in all four independent CPU/CUDA processes,
+  with zero candidate fallback. All arrays remain in RAM. CPU core v195
+  also passes; private diagnostic tests still need permanent integration.
+- Exit condition: the unchanged independent CPU/CUDA full-value, flags,
+  original-gradient-reference, storage-sharing and complete-VJP controls pass;
+  add permanent real-device regressions and rerun affected Torch core tests.
 
 ## KI-COMPAT-015: portable Torch SGD updates leave detached parameter aliases stale
 

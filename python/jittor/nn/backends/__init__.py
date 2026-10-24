@@ -12,6 +12,8 @@ from jittor.backends.cuda.kernels.nn.layer_norm_cuda import _layer_norm_no_grad_
 from jittor.backends.cuda.kernels.nn.layer_norm_training_cuda import _layer_norm_cuda
 from jittor.backends.cuda.kernels.nn.group_norm_cuda import _group_norm_cuda as _group_norm_cuda
 from jittor.backends.cuda.kernels.nn.rms_norm_training_cuda import _rms_norm_training_cuda
+from jittor.backends.cuda.kernels.nn import silu_cuda as silu_cuda
+from jittor.backends.cuda.kernels.nn import softplus_cuda as softplus_cuda
 from jittor.backends.cuda.kernels.nn import softmax_cuda as softmax_cuda
 # Publishes the CUDA `nn.scaled_dot_product_attention` kernel by import,
 # like every line above. Registering from inside `attention.py`'s call

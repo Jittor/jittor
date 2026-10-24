@@ -21,6 +21,8 @@ const char* op_capability_name(OpCapability capability) {
         case OpCapability::SegmentedArgsort: return "segmented_argsort";
         case OpCapability::Where: return "where";
         case OpCapability::Random: return "random";
+        case OpCapability::RandomInteger: return "random_integer";
+        case OpCapability::OrderedSum: return "ordered_sum";
         case OpCapability::Transpose: return "transpose";
         case OpCapability::Matmul: return "matmul";
         case OpCapability::Conv2d: return "conv2d";

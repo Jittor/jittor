@@ -1,7 +1,7 @@
 """Advanced indexing tensor operations."""
 
 import numbers as _numbers
-from jittor_core import Var
+from jittor_core import Var, _is_tensor_carrier
 from .._core.dtypes import dtype_name as _jittor_dtype_name
 from .._runtime.dispatch import try_dispatch
 
@@ -110,7 +110,7 @@ def _indexing_dim(op, x, dim):
 
 
 def _indexing_index(op, x, dim, index, bounded):
-    """The ``index`` argument of gather/scatter: a Var of ``x``'s rank.
+    """The ``index`` argument of gather/scatter: a tensor of ``x``'s rank.
 
     ``gather``/``scatter`` build a reindex expression out of ``index.shape``
     and one ``i{k}`` per remaining axis. When ``index`` has a different rank
@@ -120,8 +120,8 @@ def _indexing_index(op, x, dim, index, bounded):
     ``.gather(0, jt.zeros((3,6)))`` read four columns into six. torch rejects
     both; so does this.
     """
-    if not isinstance(index, Var):
-        raise TypeError("%s: index must be a jt.Var, got %s"
+    if not _is_tensor_carrier(index):
+        raise TypeError("%s: index must be a native tensor, got %s"
                         % (op, type(index).__name__))
     # Torch compatibility exposes ``Var.dtype`` as a frontend dtype object,
     # whose ``is_complex`` is a property, while native NanoString exposes

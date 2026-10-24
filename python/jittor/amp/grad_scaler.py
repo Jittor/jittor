@@ -200,8 +200,9 @@ class GradScaler:
         raise ValueError("outputs must be a Var or an iterable of Vars")
 
     def _grads(self, optimizer):
+        from jittor.optim.base import optimizer_execution_groups
         gs = []
-        for pg in getattr(optimizer, "param_groups", []):
+        for pg in optimizer_execution_groups(optimizer):
             for g in (pg.get("grads", []) or []):
                 if g is not None:
                     gs.append(g)

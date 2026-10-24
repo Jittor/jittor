@@ -124,6 +124,12 @@ Allocator* get_allocator(Device device, bool temp_allocator);
 // @pyjt(gc)
 void gc_all();
 
+// Reclaim only idle cached blocks on one physical accelerator device.
+// Never collects host pools or migrates/frees live tensor storage. Like gc_all,
+// a busy pool may defer collection to avoid cross-pool allocator deadlocks.
+// @pyjt(gc_device_cache)
+void gc_device_cache(int device);
+
 void migrate_to_cpu(Var* var, Allocator* allocator);
 void migrate_to_gpu(Var* var, Allocator* allocator);
 

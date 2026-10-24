@@ -6,7 +6,7 @@ import weakref
 import itertools
 import numpy as np
 from builtins import int as ori_int
-from jittor_core import Var, ops
+from jittor_core import Var, ops, _is_tensor_carrier
 from .hooks import _RemovableHandle, grad_hooker
 
 #: jittor's flags object and the automatic-replay policy, bound on first use.
@@ -17,6 +17,54 @@ _auto_replay_for = None
 
 # This annotation historically refers to the native cast, not builtin bool.
 bool = ops.bool
+
+
+class ModuleProtocol:
+    """Own real class roots, never virtual isinstance or a rewritten MRO."""
+    def __init__(self, module_type, tensor_type):
+        self._module_type = weakref.ref(module_type)
+        self.tensor_type = tensor_type
+
+    @property
+    def module_type(self):
+        root = self._module_type()
+        if root is None:
+            raise RuntimeError("module protocol owner has expired")
+        return root
+
+    def is_module(self, value):
+        return isinstance(value, self.module_type)
+
+    def is_tensor(self, value):
+        return _is_tensor_carrier(value)
+
+    @property
+    def module_call(self):
+        # One canonical call implementation reads the same root state as C++.
+        return Module.__call__
+
+
+_MODULE_PROTOCOLS = weakref.WeakKeyDictionary()
+
+
+def register_module_protocol(module_type, tensor_type):
+    if not isinstance(module_type, type) or not isinstance(tensor_type, type):
+        raise TypeError("module protocol roots must be actual types")
+    if module_type in _MODULE_PROTOCOLS:
+        raise RuntimeError("module protocol root is already registered")
+    if module_type.__bases__ != (object,):
+        raise TypeError("module protocol requires an independent direct object root")
+    protocol = ModuleProtocol(module_type, tensor_type)
+    _MODULE_PROTOCOLS[module_type] = protocol
+    return protocol
+
+
+def module_protocol(module):
+    for base in type(module).__mro__:
+        protocol = _MODULE_PROTOCOLS.get(base)
+        if protocol is not None:
+            return protocol
+    raise TypeError("object has no registered module protocol")
 
 
 def _uniq(x):
@@ -48,7 +96,7 @@ class _WriteThroughDict(dict):
         # replaced, so a registered buffer stays a buffer (not reclassified as a
         # trainable parameter) when accelerate reassigns it from the checkpoint.
         old = getattr(self._owner, k, None)
-        if old is not None and isinstance(v, Var):
+        if old is not None and _is_tensor_carrier(v):
             for _flag in ("is_buffer", "persistent"):
                 if hasattr(old, _flag):
                     try: setattr(v, _flag, getattr(old, _flag))
@@ -154,7 +202,7 @@ class _ModuleChildren(MutableMapping):
         attributes = vars(self._module())
         placeholders = attributes.get("_module_none_names", ())
         return iter(tuple(name for name, value in attributes.items()
-                          if isinstance(value, Module)
+                          if module_protocol(self._module()).is_module(value)
                           or (value is None and name in placeholders)))
 
     def __len__(self):
@@ -166,7 +214,7 @@ class _ModuleChildren(MutableMapping):
         if name not in attributes:
             raise KeyError(name)
         value = attributes[name]
-        if isinstance(value, Module) or (value is None and name in
+        if module_protocol(self._module()).is_module(value) or (value is None and name in
                                         attributes.get("_module_none_names", ())):
             return value
         raise KeyError(name)
@@ -176,7 +224,7 @@ class _ModuleChildren(MutableMapping):
             raise TypeError("module name must be a string")
         if not name or "." in name:
             raise KeyError("module name must be nonempty and cannot contain '.'")
-        if value is not None and not isinstance(value, Module):
+        if value is not None and not module_protocol(self._module()).is_module(value):
             raise TypeError("registered child must be a Module or None")
         owner = self._module()
         if value is None:
@@ -239,7 +287,7 @@ class Module:
         # policy. Ordering matters for cost: this branch is taken by every
         # submodule -- 56 of the 57 module calls in an 8-layer transformer
         # forward -- and it has to stay one attribute read and a jump.
-        if Module._call_depth:
+        if module_protocol(self).module_type._call_depth:
             return self._dispatch_call(*args, **kw)
         flags = _FLAGS
         if flags is None:
@@ -256,13 +304,13 @@ class Module:
         # inference graph took 4.1 ms of host time to build, 3.6 with the
         # depth kept.
         replay = _auto_replay_for(self, args, kw) if flags.auto_graph_replay else None
-        Module._call_depth = 1
+        module_protocol(self).module_type._call_depth = 1
         try:
             if replay is not None:
                 return replay(*args, **kw)
             return self._dispatch_call(*args, **kw)
         finally:
-            Module._call_depth = 0
+            module_protocol(self).module_type._call_depth = 0
 
     def _dispatch_call(self, *args, **kw):
         """What ``__call__`` runs once the hooks have had their say.
@@ -326,7 +374,7 @@ class Module:
         carry its own ``if isinstance(v, ParameterList): dc = v.params``.
         '''
         return [(k, v) for k, v in self.__dict__.items()
-                if isinstance(v, Var) and not (type(k) is str and k[:1] == "_")]
+                if _is_tensor_carrier(v) and not (type(k) is str and k[:1] == "_")]
 
     def _var_roles(self):
         ''' Classify every Var this module owns: ``[(key, var, role)]``.
@@ -347,7 +395,7 @@ class Module:
         # A second attribute pointing at a Var that register_buffer() already named
         # is an ALIAS of that buffer -- not a second buffer, and not a parameter.
         # torch has no such case at all: only the _buffers entry counts there.
-        registered = ({id(d[n]) for n in buffer_names if isinstance(d.get(n), Var)}
+        registered = ({id(d[n]) for n in buffer_names if _is_tensor_carrier(d.get(n))}
                       if buffer_names else ())
         out = []
         for key, var in self._var_attrs():
@@ -469,16 +517,16 @@ class Module:
         ps = dict(self._named_vars("state", recurse, remove_duplicate=False))
         if keep_vars is False:
             for k, v in ps.items():
-                if isinstance(v, Var):
+                if module_protocol(self).is_tensor(v):
                     ps[k] = v.detach()
         if to == "numpy":
             for k,v in ps.items():
-                if isinstance(v, Var):
+                if module_protocol(self).is_tensor(v):
                     ps[k] = v.numpy()
         elif to == "torch":
             import torch
             for k,v in ps.items():
-                if isinstance(v, Var):
+                if module_protocol(self).is_tensor(v):
                     # from_numpy, not torch.Tensor(...): the latter is
                     # torch.FloatTensor, so it casts EVERY entry to float32.
                     # A state dict carries integer and bool buffers as well as
@@ -578,7 +626,7 @@ class Module:
         '''
         ms = []
         def callback(parents, k, v, n):
-            if isinstance(v, Module):
+            if module_protocol(self).is_module(v):
                 ms.append(v)
         self.dfs([], None, callback, None)
         return _uniq(ms)
@@ -603,7 +651,7 @@ class Module:
     def _iter_named_modules(self, memo=None):
         ''' `named_modules` as a generator, for a caller that may stop early. '''
         for name, module in _walk(self, memo=memo):
-            if isinstance(module, Module):
+            if module_protocol(self).is_module(module):
                 yield name, module
 
     def add_module(self, name, module):
@@ -719,7 +767,7 @@ class Module:
     def _add_hook(self, name, func, prepend=False, **info):
         """Append (or prepend) one hook and return the handle that removes it."""
         hooks = self._hooks(name, create=True)
-        key = next(Module._hook_serial)
+        key = next(module_protocol(self).module_type._hook_serial)
         hooks[key] = (func, info)
         if prepend:
             hooks.move_to_end(key, last=False)
@@ -795,7 +843,7 @@ class Module:
             if len(kw):
                 LOG.w("backward hook not support kw")
             for func, _info in list(bohooks.values()):
-                if isinstance(ret, Var):
+                if module_protocol(self).is_tensor(ret):
                     ret = grad_hooker((ret,), func)[0]
                 else:
                     ret = grad_hooker(ret, func)
@@ -932,7 +980,7 @@ Returns a handle that removes both halves.
         cd = []
         seen = set()
         def callback(parents, k, v, n):
-            if len(parents) == 1 and isinstance(v, Module):
+            if len(parents) == 1 and module_protocol(self).is_module(v):
                 if id(v) not in seen:
                     cd.append(v)
                     seen.add(id(v))
@@ -948,9 +996,9 @@ Returns a handle that removes both halves.
         # subtree at every node => exponential blowup / RecursionError on deep
         # wrapped models. torch's extra_repr never recurses into sub-modules; mirror
         # that by short-circuiting any nested extra_repr triggered mid-render.
-        if getattr(Module, "_in_extra_repr", False):
+        if getattr(module_protocol(self).module_type, "_in_extra_repr", False):
             return ""
-        Module._in_extra_repr = True
+        module_protocol(self).module_type._in_extra_repr = True
         try:
             ss = []
             n = len(self.__init__.__code__.co_varnames)
@@ -958,11 +1006,11 @@ Returns a handle that removes both halves.
                 n -= len(self.__init__.__defaults__)
             for i, k in enumerate(self.__init__.__code__.co_varnames[1:]):
                 v = getattr(self, k) if hasattr(self, k) else None
-                if isinstance(v, Var): v = v.peek()
+                if module_protocol(self).is_tensor(v): v = v.peek()
                 s = f"{k}={v}" if i >= n else str(v)
                 ss.append(s)
         finally:
-            Module._in_extra_repr = False
+            module_protocol(self).module_type._in_extra_repr = False
         return ", ".join(ss)
 
     def apply(self, func):
@@ -998,7 +1046,7 @@ Returns a handle that removes both halves.
                         v = getattr(v, k)
                         if v is None:
                             continue
-                        assert isinstance(v, (Module, Var)), \
+                        assert (module_protocol(self).is_module(v) or module_protocol(self).is_tensor(v)), \
                             f"expect a jittor Module or Var, but got <{v.__class__.__name__}>, key: {key}"
                     else:
                         end = 1
@@ -1008,11 +1056,11 @@ Returns a handle that removes both halves.
                     n_failed += 1
                     LOG.w(f'load parameter {key} failed ...')
             else:
-                assert isinstance(v, Var), \
+                assert module_protocol(self).is_tensor(v), \
                     f"expect a jittor Var, but got <{v.__class__.__name__}>, key: {key}"
                 if isinstance(params[key], np.ndarray) or isinstance(params[key], list):
                     param = array(params[key])
-                elif isinstance(params[key], Var):
+                elif module_protocol(self).is_tensor(params[key]):
                     param = params[key]
                 else:
                     # assume is pytorch tensor
@@ -1055,7 +1103,7 @@ Returns a handle that removes both halves.
         # under the torch-compat layer (the Parameter/.grad bridge creates a reference
         # cycle), so model.save() RecursionError'd on torch-as-jittor. numpy values are
         # portable and load_state_dict/load() restore them; a fresh dict, model untouched.
-        params = {k: (v.numpy() if isinstance(v, Var) else v) for k, v in params.items()}
+        params = {k: (v.numpy() if module_protocol(self).is_tensor(v) else v) for k, v in params.items()}
         safepickle(params, path)
 
     def load(self, path: str):
@@ -1127,7 +1175,7 @@ Returns a handle that removes both halves.
         torch users use: ``with jt.no_grad():`` around inference.
         """
         def callback(parents, k, v, n):
-            if isinstance(v, Module):
+            if module_protocol(self).is_module(v):
                 v.is_train = is_train
         self.dfs([], None, callback, None)
         return self
@@ -1174,11 +1222,11 @@ Returns a handle that removes both halves.
 
     def __setattr__(self, key, value):
         attributes = self.__dict__
-        if value is None and isinstance(attributes.get(key), Module):
+        if value is None and module_protocol(self).is_module(attributes.get(key)):
             attributes.setdefault("_module_none_names", set()).add(key)
         elif value is not None:
             attributes.get("_module_none_names", set()).discard(key)
-        if isinstance(value, Var) and not key.startswith("_"):
+        if _is_tensor_carrier(value) and not key.startswith("_"):
             attrs = self.__dict__
             buffers = attrs.get("_buffer_names", ())
             parameters = attrs.setdefault("_parameter_names", set())
@@ -1252,7 +1300,7 @@ Returns a handle that removes both halves.
     def named_children(self,):
         childs = []
         for k,v in self.__dict__.items():
-            if isinstance(v,Module):
+            if module_protocol(self).is_module(v):
                 childs.append((k,v))
         return childs
 
@@ -1303,8 +1351,88 @@ Returns a handle that removes both halves.
 def _module_children(module):
     """The ``(key, submodule)`` pairs `Module.dfs` descends into."""
     return [(key, value) for key, value in module.__dict__.items()
-            if isinstance(value, Module)]
+            if module_protocol(module).is_module(value)]
 
+
+
+def module_protocol_members():
+    """Reviewed shared implementation objects, without inheriting native Module."""
+    return {
+        '__init__': Module.__init__,
+        '__getstate__': Module.__getstate__,
+        '__setstate__': Module.__setstate__,
+        'execute': Module.execute,
+        '__call__': Module.__call__,
+        '_dispatch_call': Module._dispatch_call,
+        '__repr__': Module.__repr__,
+        '_get_name': Module._get_name,
+        'dfs': Module.dfs,
+        '__str__': Module.__str__,
+        '_var_attrs': Module._var_attrs,
+        '_var_roles': Module._var_roles,
+        '_named_vars': Module._named_vars,
+        '_iter_named_vars': Module._iter_named_vars,
+        'parameters': Module.parameters,
+        'state_dict': Module.state_dict,
+        'named_parameters': Module.named_parameters,
+        'load_state_dict': Module.load_state_dict,
+        '_load_from_state_dict': Module._load_from_state_dict,
+        'cuda': Module.cuda,
+        'npu': Module.npu,
+        '_move_to_accelerator': Module._move_to_accelerator,
+        'modules': Module.modules,
+        'named_modules': Module.named_modules,
+        '_iter_named_modules': Module._iter_named_modules,
+        'add_module': Module.add_module,
+        '_modules': Module._modules,
+        '_parameters': Module._parameters,
+        'requires_grad_': Module.requires_grad_,
+        '_hooks': Module._hooks,
+        '_has_hooks': Module._has_hooks,
+        '_add_hook': Module._add_hook,
+        '_run_forward_hooks': Module._run_forward_hooks,
+        '__hooked_call__': Module.__hooked_call__,
+        'register_forward_hook': Module.register_forward_hook,
+        'remove_forward_hook': Module.remove_forward_hook,
+        'register_pre_forward_hook': Module.register_pre_forward_hook,
+        'register_forward_pre_hook': Module.register_forward_pre_hook,
+        'remove_pre_forward_hook': Module.remove_pre_forward_hook,
+        'register_input_backward_hook': Module.register_input_backward_hook,
+        'remove_input_backward_hook': Module.remove_input_backward_hook,
+        'register_output_backward_hook': Module.register_output_backward_hook,
+        'remove_output_backward_hook': Module.remove_output_backward_hook,
+        'register_backward_hook': Module.register_backward_hook,
+        'remove_backward_hook': Module.remove_backward_hook,
+        '_place_hooker': Module._place_hooker,
+        'children': Module.children,
+        'extra_repr': Module.extra_repr,
+        'apply': Module.apply,
+        'load_parameters': Module.load_parameters,
+        'save': Module.save,
+        'load': Module.load,
+        '_set_training': Module._set_training,
+        'eval': Module.eval,
+        'train': Module.train,
+        'is_training': Module.is_training,
+        'training': Module.training,
+        'mpi_param_broadcast': Module.mpi_param_broadcast,
+        '__setattr__': Module.__setattr__,
+        '__getattr__': Module.__getattr__,
+        'register_buffer': Module.register_buffer,
+        '_buffers': Module._buffers,
+        'named_buffers': Module.named_buffers,
+        'named_children': Module.named_children,
+        '_convert_float_vars': Module._convert_float_vars,
+        'float64': Module.float64,
+        'float32': Module.float32,
+        'float16': Module.float16,
+        'bfloat16': Module.bfloat16,
+        'half': Module.half,
+        'float_auto': Module.float_auto,
+    }
+
+
+register_module_protocol(Module, Var)
 
 _WALK_CHILDREN[Module.dfs] = _module_children
 

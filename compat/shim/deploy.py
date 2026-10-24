@@ -1,6 +1,6 @@
 """Reproducible deployment of the jittor torch-shim into a python environment.
 
-Installs the shim so that `import torch` (and torchvision/torchaudio/torchdata)
+Installs the shim so that `import torch` (and torchvision/torchaudio)
 resolve to jittor, letting torch-targeted libraries (transformers, diffusers,
 LlamaFactory, ...) run unmodified. Replaces the error-prone manual `cp` documented
 in README.md with a single command:
@@ -110,6 +110,10 @@ def _stub_python_files(stubs):
         if not os.path.isdir(package_root):
             continue
         if package == "__pycache__":
+            continue
+        # torchdata is a genuine pure-Python downstream provider. Never replace
+        # its source, version or package owner with a deployed compatibility stub.
+        if package == "torchdata":
             continue
         package_init = os.path.join(package_root, "__init__.py")
         if not os.path.isfile(package_init):

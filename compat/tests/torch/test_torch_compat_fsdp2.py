@@ -18,7 +18,10 @@ from _helpers.child_process import run_python_child
 from jittor.compat import fsdp2 as canonical_fsdp
 from jittor.compat.fsdp2 import grad_sync as fsdp_grad_sync
 from jittor.compat.fsdp2 import shard as fsdp_shard
-from jittor.compat.torch.installers.distributed import _backend_matches_active
+from jittor.compat.torch.installers.distributed import (
+    _backend_for_device,
+    _backend_matches_active,
+)
 from jittor.compat.torch.tensor_state import get_tensor_state
 
 #: Keep this module on one xdist worker.
@@ -227,6 +230,29 @@ class TestFSDP2Compat(unittest.TestCase):
         state.true_fsdp_last_grads = ()
         with self.assertRaisesRegex(ReferenceError, "gradient has been released"):
             stale.to_local()
+
+    def test_gradient_methods_resolve_accumulated_published_gradient(self):
+        _, state, entries, _ = self._fake_fsdp_state(([1.0, 2.0],))
+        entry = entries[0]
+        published = fsdp_shard._mark_fsdp_param_var(
+            jt.array([1.0, 2.0]).stop_grad(), state, entry, "grad_shard")
+        contribution = fsdp_shard._mark_fsdp_param_var(
+            jt.array([3.0, 4.0]).stop_grad(), state, entry, "grad_shard")
+        # The latest reduce-scatter contains only this microbatch; the public
+        # optimizer slot contains both. DTensor accessors must expose the slot.
+        state.true_fsdp_last_grads = (contribution,)
+        object.__setattr__(entry.shard, "_torch_grad", published)
+        published.update(published + contribution)
+
+        self.assertIs(published.to_local(), published)
+        np.testing.assert_array_equal(published.numpy(), [4.0, 6.0])
+        np.testing.assert_array_equal(published.full_tensor().numpy(), [4.0, 6.0])
+        # In-place clipping updates the same public gradient, not the raw
+        # contribution retained as a communication diagnostic.
+        published.update(published * 0.5)
+        self.assertIs(published.to_local(), published)
+        np.testing.assert_array_equal(published.full_tensor().numpy(), [2.0, 3.0])
+        np.testing.assert_array_equal(contribution.numpy(), [3.0, 4.0])
 
     def test_reshard_releases_only_frozen_full_parameters(self):
         _, state, entries, full = self._fake_fsdp_state(
@@ -937,6 +963,8 @@ class TestFSDP2Compat(unittest.TestCase):
         self.assertIsInstance(module, FSDPModule)
         self.assertNotIsInstance(module, FullyShardedDataParallel)
         self.assertEqual([id(p) for p in module.parameters()], param_ids)
+        self.assertTrue(module._get_fsdp_state().true_fsdp_initialized)
+        self.assertEqual(module._get_fsdp_state().true_fsdp_world_size, 1)
         np.testing.assert_allclose(module(x).numpy(), ref, atol=1e-6)
         self.assertEqual(sorted(module.state_dict().keys()), ["bias", "weight"])
 
@@ -1112,6 +1140,15 @@ class TestFSDP2Compat(unittest.TestCase):
             _backend_matches_active("cpu:gloo,cuda:gloo", "nccl")
         )
         self.assertFalse(_backend_matches_active("gloo,nccl", "nccl"))
+        self.assertEqual(
+            _backend_for_device("cpu:gloo,npu:hccl", "npu"), "hccl"
+        )
+        self.assertEqual(
+            _backend_for_device("cpu:gloo,cuda:nccl", "cuda"), "nccl"
+        )
+        self.assertIsNone(
+            _backend_for_device("cpu:gloo,cuda:nccl", "npu")
+        )
 
     def test_dtensor_and_private_import_paths(self):
         from torch.distributed.device_mesh import init_device_mesh

@@ -54,6 +54,70 @@ def pool_naive(x, size, op):
 ops = ["maximum", "minimum", "multiply", "add"]
 
 class TestReindexReduceOp(unittest.TestCase):
+    def test_pending_reduction_slice_store_keeps_zero_background(self):
+        with jt.runtime.scope(gopt_disable=0, backend_fallback="error"):
+            before = jt.core.backend_fallback_count()
+            expected = np.zeros(12, dtype=np.float32)
+            expected[7:11] = [1, -2, 3, -4]
+            for repeat in range(2):
+                for index, raw in (("i0", [1, -2, 3, -4]),
+                                   ("i0-1", [0, 1, -2, 3, -4, 0])):
+                    with self.subTest(repeat=repeat, index=index):
+                        base = jt.zeros(12, dtype="float32")
+                        data = jt.array(raw, dtype="float32").reindex_reduce(
+                            "add", [4], [index])
+                        result = base.setitem(slice(7, 11), data)
+                        result.sync()
+                        backend, ordinal = jt.core.dispatch_context([result])
+                        device = "cuda" if jt.flags.use_cuda else "cpu"
+                        self.assertEqual(backend, device)
+                        self.assertEqual(result.location(), "device" if jt.flags.use_cuda else "cpu")
+                        if jt.flags.use_cuda:
+                            self.assertEqual(result.device_id, ordinal)
+                            host = result.clone().stop_grad().cpu()
+                        else:
+                            host = result
+                        self.assertTrue(np.array_equal(host.numpy(), expected),
+                                        "complete slice-store values/background differ")
+            self.assertEqual(jt.core.backend_fallback_count(), before)
+
+    def test_slice_pad_stack_full_gradient_keeps_zero_background(self):
+        with jt.runtime.scope(gopt_disable=0, backend_fallback="error"):
+            before = jt.core.backend_fallback_count()
+            weights = np.arange(1, 17, dtype=np.float32).reshape(2, 8) / 8
+            for widths in ((0, 0), (0, 2), (1, 2), (-1, -1)):
+                with self.subTest(widths=widths):
+                    source = jt.array(np.arange(76, dtype=np.float32) / 16).start_grad()
+                    bias = jt.array(np.float32(0)).start_grad()
+                    values = source + bias
+                    rows = [jt.nn.pad(values[29:37], widths), jt.nn.pad(values[67:75], widths)]
+                    cotangent = weights[:, 1:-1] if widths == (-1, -1) else np.pad(weights, ((0, 0), widths))
+                    output = jt.stack(rows)
+                    loss = (output * jt.array(cotangent)).sum()
+                    loss.sync()
+                    gradient, bias_gradient = jt.grad(loss, (source, bias))
+                    expected = np.zeros(76, dtype=np.float32)
+                    if widths == (-1, -1):
+                        expected[30:36] = weights[0, 1:-1]
+                        expected[68:74] = weights[1, 1:-1]
+                    else:
+                        expected[29:37] = weights[0]
+                        expected[67:75] = weights[1]
+                    for tensor, reference in ((gradient, expected), (bias_gradient, np.array(expected.sum(), dtype=np.float32))):
+                        tensor.sync()
+                        backend, ordinal = jt.core.dispatch_context([tensor])
+                        device = "cuda" if jt.flags.use_cuda else "cpu"
+                        self.assertEqual(backend, device)
+                        self.assertEqual(tensor.location(), "device" if jt.flags.use_cuda else "cpu")
+                        if jt.flags.use_cuda:
+                            self.assertEqual(tensor.device_id, ordinal)
+                            host = tensor.clone().stop_grad().cpu()
+                        else:
+                            host = tensor
+                        self.assertTrue(np.array_equal(host.numpy(), reference),
+                                        "complete slice-pad gradient/bias differs")
+            self.assertEqual(jt.core.backend_fallback_count(), before)
+
     def test_shape_count_is_a_catchable_user_error(self):
         value = jt.random([3])
         with self.assertRaisesRegex(

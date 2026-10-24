@@ -249,8 +249,8 @@ def _classify(x, predicate, acl_body, integral):
     saying it directly is what lets the float kernel keep the input's own type.
     """
     import jittor as jt
-    x = x if isinstance(x, Var) else jt.array(x)
-    if not x.dtype.is_float():
+    x = x if jt.core._is_tensor_carrier(x) else jt.array(x)
+    if not jt.core.NanoString(_jittor_dtype_name(x.dtype)).is_float():
         return (jt.ones if integral else jt.zeros)(x.shape, "bool")
     return select_kernel("misc.classify", x)(x, predicate, acl_body)
 
@@ -305,6 +305,9 @@ def isposinf(x):
 
 def rsqrt(x):
     import jittor as jt
+    result = try_dispatch("tensor.rsqrt", x)
+    if result is not None:
+        return result
     return 1/jt.sqrt(x)
 
 

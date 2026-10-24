@@ -113,6 +113,9 @@ BACKEND_GRAD_COVERAGE = (
      "cuda_numpy"),
 
     # ---- CUDA, hand-written kernels as jt.Function. Real hardware here. ---
+    ("backends/cuda/kernels/misc/rsqrt_cuda.py", "_RsqrtCUDA",
+     "compat/tests/torch/test_rsqrt_precision.py::TestRsqrtPublicPrecision::test_cuda",
+     "cuda_numpy"),
     ("backends/cuda/kernels/cublas/lt_linear_cuda.py", "_LtLinearProduct",
      "tests/nn/test_lt_linear_cuda.py::TestLtLinearTraining::test_gradients_match_the_cpu_in_every_dtype",
      "cuda_cpu_jittor"),
@@ -137,6 +140,9 @@ BACKEND_GRAD_COVERAGE = (
     ("backends/cuda/kernels/nn/channel_bias_cuda.py", "ChannelBiasCUDA",
      "tests/nn/test_norm.py::TestChannelBias::test_cuda_forward_and_bias_gradient",
      "cuda_cpu_jittor"),
+    ("backends/cuda/kernels/nn/last_axis_mean_cuda.py", "LastAxisMeanCUDA",
+     "tests/backends/cuda/test_last_axis_mean.py::TestLastAxisMeanCUDA::test_public_vjp_and_prefix_shapes",
+     "cuda_numpy"),
     ("backends/cuda/kernels/nn/full_reduce_cuda.py", "FullSumCUDA",
      "tests/backends/cuda/test_full_reduce.py::TestFullReduce::test_gradients",
      "cuda_numpy"),
@@ -152,6 +158,27 @@ BACKEND_GRAD_COVERAGE = (
     ("backends/cuda/kernels/nn/rms_norm_training_cuda.py", "RMSNormTrainingCUDA",
      "tests/nn/test_norm.py::TestRMSNorm::test_cuda_training_forward_and_all_gradients",
      "cuda_cpu_jittor"),
+    ("backends/cuda/kernels/nn/silu_cuda.py", "_SiLUCUDA",
+     "tests/backends/cuda/test_silu_cuda.py::TestSiLUCuda::test_input_and_cotangent_second_derivatives",
+     "cuda_numpy"),
+    ("backends/cuda/kernels/nn/silu_cuda.py", "_SiLUBackwardCUDA",
+     "tests/backends/cuda/test_silu_cuda.py::TestSiLUCuda::test_input_and_cotangent_second_derivatives",
+     "cuda_numpy"),
+    ("backends/cuda/kernels/nn/softplus_cuda.py", "_SoftplusCUDA",
+     "tests/backends/cuda/test_softplus_cuda.py::TestSoftplusCUDA::test_input_and_cotangent_second_derivatives",
+     "cuda_numpy"),
+    ("backends/cuda/kernels/nn/last_axis_mean_cuda.py", "LargeLastAxisSumCUDA",
+     "tests/backends/cuda/test_large_last_axis_sum.py::TestLargeLastAxisSumCUDA::test_complete_public_sum_and_vjp",
+     "cuda_numpy"),
+    ("backends/cuda/kernels/nn/last_axis_mean_cuda.py", "LogsumexpLastF32",
+     "tests/backends/cuda/test_large_logsumexp.py::TestLargeLogsumexpCUDA::test_complete_forward_vjp_and_scalar_shape",
+     "cuda_numpy"),
+    ("backends/cuda/kernels/nn/softmax_cuda.py", "LargeSoftmaxF32",
+     "tests/backends/cuda/test_large_softmax.py::TestLargeSoftmaxCUDA::test_complete_forward_and_vjp",
+     "cuda_numpy"),
+    ("backends/cuda/kernels/nn/softmax_cuda.py", "WarpSoftmaxF32",
+     "tests/backends/cuda/test_small_softmax.py::TestSmallSoftmaxCUDA::test_public_forward_and_complete_vjp",
+     "cuda_numpy"),
     ("backends/cuda/kernels/nn/softmax_cuda.py", "CodeSoftmax",
      "tests/backends/cuda/test_softmax_cuda_grad.py::TestSoftmaxCudaGrad::test_every_schedule_matches_an_exact_float64_reference",
      "cuda_exact_and_cpu"),
@@ -314,6 +341,10 @@ BACKEND_GRAD_COVERAGE = (
      "HcclAllGatherOp",
      "tests/backends/comm/hccl/test_hccl_check_macros.py::TestHcclCheckMacros::test_finalizer_does_not_use_the_throwing_macro",
      "unsupported_hardware"),
+    ("backends/comm/hccl/ops/hccl_reduce_scatter_op.cc",
+     "HcclReduceScatterOp",
+     "tests/backends/comm/hccl/test_hccl_check_macros.py::TestHcclCheckMacros::test_all_gather_gradient_uses_native_reduce_scatter",
+     "npu_hardware"),
     ("backends/comm/hccl/ops/hccl_all_reduce_op.cc",
      "HcclAllReduceOp",
      "tests/backends/acl/test_acl.py::TestACL::test_product_reduction_forward_backward",
@@ -581,6 +612,10 @@ def test_the_manifest_is_exactly_the_gradients_in_the_tree():
 def test_the_manifest_has_no_duplicate_rows():
     keys = [(source, symbol) for source, symbol, _, _ in BACKEND_GRAD_COVERAGE]
     assert len(keys) == len(set(keys)), "duplicate rows in BACKEND_GRAD_COVERAGE"
+
+
+
+
 
 
 def test_every_route_names_a_test_that_exists():

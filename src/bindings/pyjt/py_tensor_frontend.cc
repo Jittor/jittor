@@ -5,10 +5,155 @@
 #include "bindings/pyjt/py_converter.h"
 #include "runtime/device.h"
 #include <stdexcept>
+#include <structmember.h>
+#include <unordered_set>
+#include <climits>
 
 namespace jittor {
 
 extern PyHeapTypeObject PyjtVarHolder;
+
+namespace {
+// GIL-held definition/lifetime state; only the factory below can add roots.
+const PyType_Slot* holder_binding_definitions = nullptr;
+size_t holder_binding_definition_count = 0;
+std::unordered_set<PyTypeObject*> owned_tensor_roots;
+void forget_owned_tensor_root(PyObject* type) {
+    owned_tensor_roots.erase(reinterpret_cast<PyTypeObject*>(type));
+}
+constexpr size_t holder_dict_offset = sizeof(PyObject) + sizeof(VarHolder);
+constexpr size_t holder_object_size = holder_dict_offset + sizeof(PyObject*) + sizeof(uint64);
+bool owned_prefix_layout(PyTypeObject* type) {
+#if PY_MAJOR_VERSION == 3 && PY_MINOR_VERSION == 11 && PY_MICRO_VERSION == 13
+    if (Py_Version != 0x030B0DF0UL) return false;
+    if (PyInterpreterState_GetID(PyInterpreterState_Get()) != 0) return false;
+    return type->tp_basicsize >= Py_ssize_t(holder_object_size)
+        && type->tp_itemsize == 0 && type->tp_dictoffset == Py_ssize_t(holder_dict_offset)
+        && type->tp_alloc == PyType_GenericAlloc && type->tp_free == PyObject_GC_Del
+        && (type->tp_weaklistoffset == 0
+            || (type->tp_weaklistoffset >= Py_ssize_t(holder_object_size)
+                && type->tp_weaklistoffset <= type->tp_basicsize - Py_ssize_t(sizeof(PyObject*))))
+        && (type->tp_flags & Py_TPFLAGS_HAVE_GC)
+        && !(type->tp_flags & Py_TPFLAGS_MANAGED_DICT);
+#else
+    return false;
+#endif
+}
+PyObject* owned_carrier_new(PyTypeObject*, PyObject*, PyObject*) {
+    PyErr_SetString(PyExc_TypeError, "inactive TensorBase supports core result construction only");
+    return nullptr;
+}
+int owned_carrier_init(PyObject*, PyObject*, PyObject*) {
+    PyErr_SetString(PyExc_TypeError, "inactive TensorBase cannot be reinitialized");
+    return -1;
+}
+} // namespace
+
+void record_varholder_binding_definitions(const PyType_Slot* slots, size_t count) {
+    USER_CHECK(slots && count && slots[count-1].slot == 0)
+        << "complete native VarHolder binding definitions required";
+    if (holder_binding_definitions) {
+        USER_CHECK(slots == holder_binding_definitions && count == holder_binding_definition_count)
+            << "native definition owner cannot be replaced";
+        return;
+    }
+    holder_binding_definitions = slots; // static generated definitions, no type/dict copy
+    holder_binding_definition_count = count;
+}
+
+bool is_owned_tensor_carrier_type(PyTypeObject* type) {
+    if (!type || !owned_prefix_layout(type)) return false;
+    for (auto* root : owned_tensor_roots)
+        if (PyType_IsSubtype(type, root)) return true;
+    return false;
+}
+
+bool is_varholder_carrier_type(PyTypeObject* type) {
+    return type && (PyType_IsSubtype(type, &PyjtVarHolder.ht_type)
+        || is_owned_tensor_carrier_type(type));
+}
+
+bool is_varholder_carrier(PyObject* object) {
+    if (!object) return false;
+    if (PyObject_TypeCheck(object, &PyjtVarHolder.ht_type)) return true;
+    return is_owned_tensor_carrier_type(Py_TYPE(object))
+        && GET_INITED_FLAG(VarHolder, 1, object) == 1;
+}
+
+PyObject* create_owned_tensor_base_type() {
+#if PY_MAJOR_VERSION != 3 || PY_MINOR_VERSION != 11 || PY_MICRO_VERSION != 13
+    PyErr_SetString(PyExc_NotImplementedError, "owned TensorBase requires reviewed CPython 3.11.13");
+    return nullptr;
+#else
+    if (Py_Version != 0x030B0DF0UL) {
+        PyErr_SetString(PyExc_NotImplementedError, "owned TensorBase requires runtime CPython 3.11.13 final");
+        return nullptr;
+    }
+    if (PyInterpreterState_GetID(PyInterpreterState_Get()) != 0) {
+        PyErr_SetString(PyExc_NotImplementedError, "owned TensorBase does not support subinterpreters");
+        return nullptr;
+    }
+    USER_CHECK(holder_binding_definitions) << "native VarHolder definitions not initialized";
+    static_assert(holder_object_size <= INT_MAX, "PyType_Spec basicsize overflow");
+    static PyMemberDef members[] = {
+        {const_cast<char*>("__dictoffset__"), T_PYSSIZET, Py_ssize_t(holder_dict_offset), READONLY, nullptr},
+        {nullptr, 0, 0, 0, nullptr}
+    };
+    vector<PyType_Slot> slots(holder_binding_definitions,
+        holder_binding_definitions + holder_binding_definition_count);
+    slots.pop_back();
+    // No Python path may expose an uninitialized native prefix. Core result
+    // conversion below placement-news exactly once, bypassing these slots.
+    for (auto& slot : slots) {
+        if (slot.slot == Py_tp_new) slot.pfunc = reinterpret_cast<void*>(owned_carrier_new);
+        if (slot.slot == Py_tp_init) slot.pfunc = reinterpret_cast<void*>(owned_carrier_init);
+    }
+    slots.push_back({Py_tp_members, members});
+    slots.push_back({0, nullptr});
+    PyType_Spec spec = {"torch._C.TensorBase", int(holder_object_size), 0,
+        Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE | Py_TPFLAGS_HAVE_GC | Py_TPFLAGS_IMMUTABLETYPE,
+        slots.data()};
+    // CPython3.11 copies member definitions and owns its new heap type/name.
+    PyObjHolder result;
+    result.obj = PyType_FromSpec(&spec);
+    if (!result.obj) return nullptr;
+    auto* type = reinterpret_cast<PyTypeObject*>(result.obj);
+    USER_CHECK(type->tp_base == &PyBaseObject_Type && PyTuple_GET_SIZE(type->tp_bases) == 1
+        && PyTuple_GET_ITEM(type->tp_bases, 0) == reinterpret_cast<PyObject*>(&PyBaseObject_Type)
+        && PyTuple_GET_SIZE(type->tp_mro) == 2
+        && PyTuple_GET_ITEM(type->tp_mro, 0) == result.obj
+        && PyTuple_GET_ITEM(type->tp_mro, 1) == reinterpret_cast<PyObject*>(&PyBaseObject_Type)
+        && owned_prefix_layout(type))
+        << "owned TensorBase physical root/layout mismatch";
+    // Watch BEFORE membership: any failure leaves no stale admitted pointer.
+    on_type_collected(result.obj, forget_owned_tensor_root);
+    owned_tensor_roots.insert(type);
+    return result.release();
+#endif
+}
+
+PyObject* wrap_owned_tensor_carrier(VarHolder* value, PyTypeObject* type) {
+    unique_ptr<VarHolder> pending(value);
+    USER_CHECK(value && value->var) << "constructed native holder payload required";
+    USER_CHECK(is_owned_tensor_carrier_type(type)) << "core-created TensorBase carrier required";
+    PyObjHolder result;
+    result.obj = type->tp_alloc(type, 0);
+    if (!result.obj) {
+        PyObject *error_type, *error_value, *error_traceback;
+        PyErr_Fetch(&error_type, &error_value, &error_traceback);
+        pending.reset(); // release graph while preserving the allocation error
+        if (PyErr_Occurred()) PyErr_WriteUnraisable(nullptr);
+        PyErr_Restore(error_type, error_value, error_traceback);
+        return nullptr;
+    }
+    auto* holder = GET_RAW_PTR(VarHolder, result.obj);
+    new (holder) VarHolder(pending.get()); // existing non-allocating holder move
+    pending.release(); // move constructor has released old wrapper storage
+    GET_INITED_FLAG(VarHolder, 1, result.obj) = 1;
+    bind_python_tensor_owner(result.obj);
+    schedule_pending_from_python(holder);
+    return result.release();
+}
 
 void bind_python_tensor_owner(PyObject* object) {
     bool retain = false;
@@ -83,7 +228,7 @@ PyObject* selected_type() {
 
 bool is_frontend_instance(PyObject* value) {
     return value && Py_TYPE(value) != &PyjtVarHolder.ht_type
-        && PyObject_TypeCheck(value, &PyjtVarHolder.ht_type);
+        && is_varholder_carrier(value);
 }
 
 PyObject* frontend_candidate(PyObject* value, bool scan_sequences) {
@@ -111,9 +256,8 @@ PyObject* current_tensor_frontend_type() {
 
 PyObject* set_tensor_frontend_type(PyObject* type) {
     USER_CHECK(type && PyType_Check(type)
-        && PyType_IsSubtype(reinterpret_cast<PyTypeObject*>(type),
-                            &PyjtVarHolder.ht_type))
-        << "tensor frontend must be a real Var type or subtype";
+        && is_varholder_carrier_type(reinterpret_cast<PyTypeObject*>(type)))
+        << "tensor frontend must be a core-owned VarHolder carrier type";
     frontend_context_set = true;
     PyObject* token = PyContextVar_Set(context_variable(), type);
     if (!token)

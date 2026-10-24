@@ -58,8 +58,24 @@ def log_sigmoid(x):
     return jt.log(jt.sigmoid(x))
 
 
+def _logsumexp_cuda_fastpath(x, dim, keepdim=False):
+    # Lazy import follows the existing softmax ownership boundary. Backend
+    # selection, not a frontend flag or a host tensor copy, decides residency.
+    backend = getattr(_logsumexp_cuda_fastpath, "_backend", None)
+    if backend is None:
+        from jittor.backends.cuda.kernels.nn.last_axis_mean_cuda import (
+            _large_last_axis_logsumexp_cuda,
+        )
+        backend = _large_last_axis_logsumexp_cuda
+        _logsumexp_cuda_fastpath._backend = backend
+    return backend(x, dim=dim, keepdim=keepdim)
+
+
 def logsumexp(x, dim, keepdims=False, keepdim=False):
     keep = keepdim or keepdims
+    fused = _logsumexp_cuda_fastpath(x, dim, keepdim=keep)
+    if fused is not None:
+        return fused
     maximum = jt.max(x, dim, keepdims=True)
     result = (x - maximum).exp().sum(dim, keepdims=True).log() + maximum
     # The shift-exp-sum-log chain runs in float32 for a half input -- `exp` is

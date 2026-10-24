@@ -473,6 +473,12 @@ struct VarHolder {
     void set_requires_grad(bool flag);
     void set_requires_grad_impl(bool flag);
     std::shared_ptr<AutogradAliasState> ensure_autograd_alias();
+    // Native shared logical-write metadata; the Torch spelling belongs to compat.
+    // Reading does not materialize data, consume view history or advance writes.
+    // @pyjt(__get__inplace_version)
+    inline uint64 inplace_version() {
+        return *ensure_autograd_alias()->version;
+    }
     // @pyjt(_check_inplace_autograd)
     // @attrs(return_self)
     VarHolder* check_inplace_autograd();
@@ -492,7 +498,8 @@ struct VarHolder {
     /**
      * Whether this Var is a leaf of the backward graph: it requires gradient
      * and no differentiable predecessor can send it one. Always equal to
-     * ``grad_fn_node_id == -1``.
+     * ``grad_fn_node_id == -1``. A completed releasing backward can preserve
+     * the producer's value identity without keeping executable graph edges.
      *
      * This is the graph fact ``torch.Tensor.is_leaf`` reports; the
      * compatibility layer is what maps torch's spelling onto it. See

@@ -66,10 +66,11 @@ class TestInferSchema(unittest.TestCase):
             torch.types.__all__,
             ["Number", "Device", "FileLike", "Storage"],
         )
-        self.assertIs(torch.SymInt, int)
+        self.assertIsNot(torch.SymInt, int)
+        self.assertFalse(isinstance(3, torch.SymInt))
         self.assertIs(torch.SymFloat, float)
         self.assertIs(torch.SymBool, bool)
-        self.assertEqual(torch.types.py_sym_types, (int, float, bool))
+        self.assertEqual(torch.types.py_sym_types, (torch.SymInt, float, bool))
 
     def test_tag_enum_matches_public_torch_contract(self):
         expected = {

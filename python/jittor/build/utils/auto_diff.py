@@ -360,7 +360,7 @@ class Hook:
                     if hasattr(p, "is_stop_grad"):
                         if p.is_stop_grad():
                             continue
-                        grad = pg["grads"][i]
+                        grad = opt.find_grad(p)
                     else:
                         grad = p.grad
                     pname = self.get_param_name(p)

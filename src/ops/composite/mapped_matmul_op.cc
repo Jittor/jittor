@@ -13,6 +13,7 @@ namespace jittor {
 
 static auto make_mapped_matmul =
     op_constructor<VarPtr, Var*, Var*, bool, bool, bool>("mapped_matmul");
+static auto make_unary = op_constructor<VarPtr, Var*, NanoString>("unary");
 
 MappedMatmulOp::MappedMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b, bool allow_reduced_precision) : a(a), b(b), trans_a(trans_a), trans_b(trans_b), allow_reduced_precision(allow_reduced_precision) {
     set_flag(OpFlags::_cuda, 1);
@@ -42,14 +43,24 @@ VarPtr MappedMatmulOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     // own gradient. Written back in the pre-transpose layout, so no transpose
     // node is introduced, and with the reduced-precision setting of the
     // forward rather than of whenever the backward is built.
+    // Autocast may run this product in float16 while a later float32 loss
+    // hands its cotangent straight through an add/subtract edge. aclnnMatmul
+    // requires equal operand dtypes, and the gradient of a float16 product is
+    // a float16 gradient (a preceding parameter cast will then promote it to
+    // the parameter dtype). Align here rather than rejecting a valid mixed-
+    // precision backward at construction time.
+    VarPtr aligned_dout;
+    if (dout->dtype() != a->dtype())
+        aligned_dout = make_unary(dout, a->dtype());
+    Var* product_grad = aligned_dout ? aligned_dout.ptr : dout;
     if (v_index == 0) {
         if (trans_a)
-            return make_mapped_matmul(b, dout, trans_b, 1, allow_reduced_precision);
-        return make_mapped_matmul(dout, b, 0, trans_b^1, allow_reduced_precision);
+            return make_mapped_matmul(b, product_grad, trans_b, 1, allow_reduced_precision);
+        return make_mapped_matmul(product_grad, b, 0, trans_b^1, allow_reduced_precision);
     }
     if (trans_b)
-        return make_mapped_matmul(dout, a, 1, trans_a, allow_reduced_precision);
-    return make_mapped_matmul(a, dout, trans_a^1, 0, allow_reduced_precision);
+        return make_mapped_matmul(product_grad, a, 1, trans_a, allow_reduced_precision);
+    return make_mapped_matmul(a, product_grad, trans_a^1, 0, allow_reduced_precision);
 }
 
 void MappedMatmulOp::infer_shape() {

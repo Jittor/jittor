@@ -38,7 +38,7 @@ PyObject* make_pyjt_array(const vector<int64>& shape, const string& dtype, const
 }
 
 void get_pyjt_array(PyObject* obj, vector<int64>& shape, string& dtype, void*& data) {
-    CHECK(PyObject_TypeCheck(obj, &PyjtVarHolder.ht_type)) << "Not a jittor array" << Py_TYPE(obj);
+    CHECK(is_varholder_carrier(obj)) << "Not a jittor array" << Py_TYPE(obj);
     auto vh = GET_RAW_PTR(VarHolder, obj);
     if (!vh->var->mem_ptr)
         vh->sync();
@@ -81,6 +81,8 @@ VarHolder* reuse_np_array(PyObject* obj) {
 }
 
 ArrayOp::ArrayOp(PyObject* obj) {
+    USER_CHECK(!is_owned_tensor_carrier_type(Py_TYPE(obj)))
+        << "inactive TensorBase array reboxing is not implemented; no host fetch fallback";
     ArrayArgs args;
     PyObjHolder holder;
     args.ptr = nullptr;

@@ -127,6 +127,15 @@ def test_collective_group_identity_reduction_and_work(distributed_state):
     assert owner._autograd_all_reduce(tensor, group=absent) is tensor
 
 
+def test_hccl_control_threads_restore_their_logical_device(monkeypatch):
+    calls = []
+    monkeypatch.setenv("JT_HCCL_LOCAL_RANK", "3")
+    monkeypatch.setattr(owner.jt.compile_extern, "hccl_ops", object())
+    monkeypatch.setattr(owner.jt.core, "set_device", calls.append)
+    owner._ensure_collective_thread_device()
+    assert calls == [3]
+
+
 def test_gather_and_broadcast_argument_routes(distributed_state, monkeypatch):
     _, group, _ = distributed_state
     source = Tensor([7, 8])

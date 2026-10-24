@@ -7,6 +7,10 @@
 #include "runtime/device.h"
 #include "runtime/backend.h"
 #include <random>
+#include <locale>
+#include <sstream>
+#include <stdexcept>
+#include <type_traits>
 
 #include <csignal>
 #include "runtime/init.h"
@@ -21,6 +25,8 @@
 #include "core/op.h"
 #include "core/executor.h"
 #include "runtime/float32_precision.h"
+#include "runtime/executor_entry.h"
+#include "core/var_holder.h"
 
 namespace jittor {
 
@@ -157,6 +163,80 @@ void add_set_seed_callback(set_seed_callback callback) {
 
 std::default_random_engine* get_random_engine() {
     return &runtime_rng_state().host_engine;
+}
+
+static string cpu_rng_state_header() {
+    std::ostringstream out;
+    out.imbue(std::locale::classic());
+    out << "JITTOR_CPU_RNG_V1\n";
+#if defined(_LIBCPP_VERSION)
+    out << "libc++:" << _LIBCPP_VERSION;
+#elif defined(__GLIBCXX__)
+    out << "libstdc++:" << __GLIBCXX__;
+#else
+    throw std::runtime_error("CPU RNG snapshots require a supported standard library");
+#endif
+    // default_random_engine is implementation-defined. Identify the concrete
+    // engine, not just its spelling; foreign formats must never be accepted.
+    if (std::is_same<std::default_random_engine, std::minstd_rand0>::value)
+        out << "\nminstd_rand0";
+    else if (std::is_same<std::default_random_engine, std::minstd_rand>::value)
+        out << "\nminstd_rand";
+    else
+        throw std::runtime_error("Unsupported default CPU random engine snapshot format");
+    out << '\n';
+    return out.str();
+}
+
+static string encode_cpu_rng_state(const std::default_random_engine& engine, int seed) {
+    std::ostringstream out;
+    out.imbue(std::locale::classic());
+    out << cpu_rng_state_header() << seed << '\n' << engine;
+    return out.str();
+}
+
+string get_cpu_rng_state() {
+    async_exec_wait();
+    ExecutorEntryScope entry;
+    sync_all(true);
+    auto& rng = runtime_rng_state();
+    return encode_cpu_rng_state(rng.host_engine, static_cast<int>(rng.host_seed));
+}
+
+void set_cpu_rng_state(const string& state) {
+    const auto header = cpu_rng_state_header();
+    if (state.size() > 4096 || state.compare(0, header.size(), header) != 0)
+        throw std::invalid_argument("Invalid or incompatible Jittor CPU RNG state");
+    std::istringstream input(state.substr(header.size()));
+    input.imbue(std::locale::classic());
+    int seed;
+    std::default_random_engine restored;
+    // libstdc++'s LCG extractor replaces flags with dec (without skipws).
+    // Consume our seed/engine separator before handing it the engine token.
+    if (!(input >> seed >> std::ws >> restored) || encode_cpu_rng_state(restored, seed) != state)
+        throw std::invalid_argument("Malformed Jittor CPU RNG state");
+    // The supported engines are LCGs whose serialized state is one integer.
+    // Their stream extraction does not consistently reject out-of-range states.
+    std::istringstream range_check(state.substr(state.find_last_of('\n') + 1));
+    range_check.imbue(std::locale::classic());
+    unsigned long long raw;
+    if (!(range_check >> raw) || raw < std::default_random_engine::min()
+            || raw > std::default_random_engine::max())
+        throw std::invalid_argument("Out-of-range Jittor CPU RNG engine state");
+    // Parse first so rejected states neither change the engine nor run pending
+    // random work. A valid restore establishes a quiescent lazy execution edge.
+    async_exec_wait();
+    ExecutorEntryScope entry;
+    sync_all(true);
+    auto& rng = runtime_rng_state();
+    rng.host_engine = restored;
+    rng.host_seed = static_cast<uint64>(seed);
+}
+
+int get_cpu_rng_seed() {
+    async_exec_wait();
+    ExecutorEntryScope entry;
+    return static_cast<int>(runtime_rng_state().host_seed);
 }
 
 #ifdef HAS_ACCELERATOR

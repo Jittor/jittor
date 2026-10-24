@@ -50,6 +50,19 @@ _native_any = jt.any
 #: install would call itself.
 _native_div = jt.div
 
+# Capture before publication: the wrapper must not call its installed alias.
+_native_masked_fill = jt.masked_fill
+_native_gather = jt.gather
+
+from .indexing import gather, _tensor_gather
+
+register_fidelity(
+    "torch.gather", gather, Fidelity.APPROXIMATE,
+    "Torch argument names and Tensor method delegate values and dense gradients "
+    "to native gather; sparse_grad and out are explicitly unsupported, and native "
+    "index dtype, bounds and backend limitations remain",
+)
+
 from .reductions import _reduce_alias
 
 from .reductions import all
@@ -285,6 +298,7 @@ _LOG1P_FIDELITY_DETAIL = (
 )
 
 from .elementwise import log1p
+from .elementwise import maximum, minimum
 
 register_fidelity(
     "torch.log1p",
@@ -886,22 +900,13 @@ register_fidelity(
 )
 
 _MASKED_FILL_FIDELITY_DETAIL = (
-    "publishes Jittor's own masked_fill (`jt.ternary(mask, value, x)`) under "
-    "Torch's functional spelling; values, the broadcasting mask and the output "
-    "dtype match, device and layout semantics are omitted"
+    "delegates selection and autograd to native masked_fill under the installed "
+    "Tensor frontend and operand placement; same-device boolean masks and zero-dimensional "
+    "Tensor/scalar values are supported; native dtype/layout limits remain and "
+    "out writes are explicitly unsupported"
 )
 
-#: Torch publishes ``masked_fill`` as a top-level function as well as a Tensor
-#: method, and Jittor's function is already the same selection, so this installer
-#: only *publishes* the name -- the way ``autocast = _autocast`` above does.
-#:
-#: It cannot go through ``_bind_missing``: that helper skips any name the module
-#: already has, and ``jt.masked_fill`` exists, so the name was skipped and never
-#: reached the sealed ``torch`` facade -- ``jt.masked_fill(x, m, v)`` worked while
-#: ``torch.masked_fill(x, m, v)`` raised ``AttributeError``. Longformer's
-#: sliding-window attention calls the functional spelling with a
-#: ``[batch, 1, 1, 1]`` mask against ``[batch, heads, seq, seq]`` scores.
-masked_fill = jt.masked_fill
+from .indexing import masked_fill
 
 register_fidelity(
     "torch.masked_fill",
@@ -1173,7 +1178,12 @@ def install(ctx):
     _bind_missing(g, "log_softmax", log_softmax)
     _bind_missing(g, "relu", relu)
     # elementwise / functional top-level forms missing from jittor's top level
-    _bind_missing(g, "log1p", log1p)
+    # The real native primitive exists; Torch still owns int promotion.
+    g.log1p = log1p
+    g.maximum = maximum
+    g.minimum = minimum
+    Var.maximum = maximum
+    Var.minimum = minimum
     _bind_missing(g, "reciprocal", reciprocal)
     _bind_missing(g, "lerp", lerp)
     # torch.div/divide take a `rounding_mode`, which the native op does not, so
@@ -1310,6 +1320,8 @@ def install(ctx):
     # helper skips the name and it never reaches the sealed facade -- which is
     # how `torch.masked_fill` raised AttributeError while `jt.masked_fill` worked.
     g.masked_fill = masked_fill
+    g.gather = gather
+    Var.gather = _tensor_gather
     _bind_missing(g, "split_with_sizes", split_with_sizes)
     _bind_missing(g, "_shape_as_tensor", _shape_as_tensor)
     _bind_missing(g, "nan_to_num_", nan_to_num_)

@@ -6,6 +6,7 @@ include backends/acl/include/acl_foreach_coefficients.h
 include backends/acl/include/acl_fused_ascendc.h
 include backends/acl/include/acl_jittor.h
 include backends/acl/include/acl_op_registry.h
+include backends/acl/include/acl_rng_state.h
 include backends/acl/include/acl_runtime.h
 include backends/acl/include/acl_workspace.h
 include backends/acl/include/aclnn/aclnn.h
@@ -124,6 +125,8 @@ include backends/comm/hccl/ops/hccl_broadcast_op.cc
 include backends/comm/hccl/ops/hccl_broadcast_op.h
 include backends/comm/hccl/ops/hccl_reduce_op.cc
 include backends/comm/hccl/ops/hccl_reduce_op.h
+include backends/comm/hccl/ops/hccl_reduce_scatter_op.cc
+include backends/comm/hccl/ops/hccl_reduce_scatter_op.h
 include backends/comm/hccl/src/hccl_wrapper.cc
 include backends/comm/mpi/inc/mpi_wrapper.h
 include backends/comm/mpi/ops/mpi_all_reduce_op.cc
@@ -178,6 +181,7 @@ include backends/cuda/include/helper_image.h
 include backends/cuda/include/helper_string.h
 include backends/cuda/include/helper_timer.h
 include backends/cuda/include/jittor_accelerator.h
+include backends/cuda/include/ordered_nonlast_sum.h
 include backends/cuda/include/stream_compat.h
 include backends/cuda/kernels/core/candidate_op.cc
 include backends/cuda/kernels/core/cuda_atomic.h
@@ -185,6 +189,8 @@ include backends/cuda/kernels/core/getitem_prefix.cc
 include backends/cuda/kernels/core/indexing_codegen.cc
 include backends/cuda/kernels/core/indexing_codegen.h
 include backends/cuda/kernels/core/indexing_schedule_codegen.cc
+include backends/cuda/kernels/core/ordered_sum_codegen.cc
+include backends/cuda/kernels/core/ordered_sum_op.cc
 include backends/cuda/kernels/core/setitem_prefix.cc
 include backends/cuda/kernels/core/transpose_op.cc
 include backends/cuda/kernels/core/where_op.cc
@@ -230,6 +236,8 @@ include backends/cuda/kernels/cudnn/cudnn_test_op.h
 include backends/cuda/kernels/cufft/cufft_fft_op.cc
 include backends/cuda/kernels/cufft/cufft_fft_op.h
 include backends/cuda/kernels/curand/curand_capabilities.cc
+include backends/cuda/kernels/curand/curand_random_int_op.cc
+include backends/cuda/kernels/curand/curand_random_int_op.h
 include backends/cuda/kernels/curand/curand_random_op.cc
 include backends/cuda/kernels/curand/curand_random_op.h
 include backends/cuda/kernels/cusparse/cusparse_spmmcoo_op.cc
@@ -380,6 +388,8 @@ include docs/results/2026-09-19-torch-compat-runbook-verification.md
 include docs/results/2026-09-21-flowey-merge-verification.md
 include docs/results/2026-09-22-complex-svd-grad-and-complex128.md
 include docs/results/2026-09-22-sgd-dampening-and-native-vmap-gaps.md
+include docs/results/2026-09-22-verl-v0.9.1-cpu-compatibility.md
+include docs/results/2026-09-23-verl-npu-training-progress.md
 include docs/results/2026-09-24-torch-compat-real-models.md
 include docs/results/2026-09-25-profiling-tools.md
 include docs/results/2026-10-05-high-rank-and-downstream-core-gaps.md
@@ -473,6 +483,7 @@ include docs/results/2026-10-16-sgd-execution-options.md
 include docs/results/2026-10-16-transformers-main-source-training.md
 include docs/results/2026-10-16-transformers-maintained-cpu-nightly.md
 include docs/results/2026-10-16-verl-maintained-cpu-nightly.md
+include docs/results/2026-10-21-submit-pending-owned-carrier-cuda.md
 include docs/results/index.md
 include docs/tutorials/index.md
 include examples/README.md
@@ -708,6 +719,7 @@ include src/mem/allocator/temp_allocator.cc
 include src/mem/allocator/temp_allocator.h
 include src/mem/mem_info.cc
 include src/mem/mem_info.h
+include src/mem/pool_memory_stats.h
 include src/mem/swap.cc
 include src/mem/swap.h
 include src/ops/binary_op.cc
@@ -756,6 +768,8 @@ include src/ops/composite/op_capability.cc
 include src/ops/composite/op_capability.h
 include src/ops/composite/op_dispatch.h
 include src/ops/composite/op_registration.h
+include src/ops/composite/ordered_sum_op.cc
+include src/ops/composite/ordered_sum_op.h
 include src/ops/composite/random_op.cc
 include src/ops/composite/random_op.h
 include src/ops/composite/reinterpret_view_op.cc
@@ -881,6 +895,7 @@ include src/tests/test_op_register.cc
 include src/tests/test_op_relay.cc
 include src/tests/test_parallel_compiler.cc
 include src/tests/test_pass_manager.cc
+include src/tests/test_pool_memory_stats.cc
 include src/tests/test_setitem_op.cc
 include src/tests/test_sfrl_allocator.cc
 include src/tests/test_str_utils.cc

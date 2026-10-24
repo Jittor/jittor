@@ -1,7 +1,10 @@
 """Stable Torch Tensor method implementations; install only binds these objects."""
 from importlib import import_module
-from jittor._core.dtypes import dtype_name as _jittor_dtype_name
+import operator as _operator
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name, var_dtype_name as _native_var_dtype_name
 from ...context import get_install_context
+from ...types import strided as _strided
+from ...types import _dtype_registry, _is_dtype
 from ...types import _PYTHON_SCALAR_DTYPES, _make_cpu_resident, _make_cuda_resident, _var_is_cpu_resident
 from ....stub_policy import degraded as _degraded, unimplemented as _unimplemented
 from ..core import _promote_pair
@@ -37,6 +40,11 @@ _TYPENAME_TO_DTYPE = {v: k for k, v in _DTYPE_TO_TYPENAME.items()}
 
 _TYPENAME_TO_DTYPE.update({v.replace("torch.", "torch.cuda."): k
                            for k, v in _DTYPE_TO_TYPENAME.items()})
+
+
+def _api_layout(self):
+    """Dense frontend layout metadata, independent of contiguity or device."""
+    return _strided
 
 
 def _dtype_get(self):
@@ -164,46 +172,86 @@ def _set_data_owner(view, slices, value):
     return _write_data_owner_numpy(view, value, slices)
 
 
+def _normalize_torch_boolean_indices(self, slices):
+    """Torch mask spelling; actual coordinates stay native and on device."""
+    is_tensor = _owner.jt.core._is_tensor_carrier
+    items = slices if isinstance(slices, tuple) else (slices,)
+    def mask_rank(item):
+        if is_tensor(item) and _jittor_dtype_name(item.dtype) in ("bool", "uint8"):
+            return item.ndim
+        return 0
+    if not any(mask_rank(item) > 0 for item in items):
+        return slices
+    if sum(item is Ellipsis for item in items) > 1:
+        raise IndexError("an index can only have a single ellipsis")
+    def consumed(item):
+        if item is None or item is Ellipsis or isinstance(item, bool):return 0
+        return mask_rank(item) or 1
+    ellipsis_width = max(0, self.ndim - sum(consumed(item) for item in items))
+    axis = 0
+    normalized = []
+    from ...frontend import tensor_frontend
+    context = get_install_context(_owner.jt)
+    with tensor_frontend(context.state["Var"], like=self, default_placement=False):
+        for item in items:
+            rank = mask_rank(item)
+            if rank:
+                if tuple(item.shape) != tuple(self.shape[axis:axis + rank]):
+                    raise IndexError("boolean mask shape does not match indexed tensor")
+                condition = item != 0 if _jittor_dtype_name(item.dtype) == "uint8" else item
+                normalized.extend(context.target_namespace.where(condition))
+                axis += rank
+            else:
+                normalized.append(item)
+                axis += ellipsis_width if item is Ellipsis else consumed(item)
+    return tuple(normalized)
+
+
 def _torch_setitem(self, slices, value):
-    _context = get_install_context(_owner.jt)
-    _native = _context.state["tensor_native_api"]
-    _orig_setitem = _native['_orig_setitem']
     if _set_data_owner(self, slices, value):
         return self
-    if isinstance(value, _NativeVar):
-        # torch copies a value into the destination's placement, so
-        # `cuda_t[...] = cpu_value` and `cpu_t[...] = cuda_value` both work.
-        # Jittor dispatches the assignment on placement and rejects the mix
-        # ("Expected all tensor inputs on the same backend and device"), which
-        # is what a layout block hits when it writes a host grid into a device
-        # position tensor. Move the value onto the destination's placement
-        # first; the same-placement path is untouched.
+    is_tensor = _owner.jt.core._is_tensor_carrier
+    sources_require_grad = bool(self.requires_grad) or (
+        is_tensor(value) and bool(value.requires_grad))
+    if is_tensor(value):
         if _var_is_cpu_resident(value) and not _var_is_cpu_resident(self):
             value = _make_cuda_resident(value)
         elif not _var_is_cpu_resident(value) and _var_is_cpu_resident(self):
             value = _make_cpu_resident(value)
-    try:
-        mask = slices
-        if isinstance(mask, _NativeVar) and _jittor_dtype_name(mask.dtype) in ("bool", "uint8") \
-                and isinstance(value, _NativeVar) \
-                and len(mask.shape) < len(self.shape):
-            # Region selected by a lower-rank bool mask has shape
-            # (N, *self.shape[mask.ndim:]). Drop only provably redundant
-            # leading singleton axes from value until ranks agree.
-            region_rank = 1 + (len(self.shape) - len(mask.shape))
-            while len(value.shape) > region_rank and value.shape[0] == 1:
-                value = value.squeeze(0)
-    except _owner.EXPECTED as exc:
-        _owner.swallowed("torch/installers/tensor.py _torch_setitem: mask = slices", exc)
-    result = _orig_setitem(self, slices, value)
-    return result
+    mask = slices
+    if is_tensor(mask) and _jittor_dtype_name(mask.dtype) in ("bool", "uint8") \
+            and is_tensor(value) and len(mask.shape) < len(self.shape):
+        region_rank = 1 + (len(self.shape) - len(mask.shape))
+        while len(value.shape) > region_rank and value.shape[0] == 1:
+            value = value.squeeze(0)
+    from ...frontend import tensor_frontend, clone as frontend_clone
+    from jittor.ops.indexing import setitem as native_setitem
+    context = get_install_context(_owner.jt)
+    with tensor_frontend(context.state["Var"], like=self, default_placement=False):
+        slices = _normalize_torch_boolean_indices(self, slices)
+        # Stage the update on a differentiable native copy. The public native
+        # entry owns indexing normalization; publish the result to self once
+        # through the Torch in-place/autograd boundary below.
+        staged = frontend_clone(self)
+        if (sources_require_grad and not _owner.jt.flags.no_grad
+                and not staged.requires_grad
+                and (_jittor_dtype_name(staged.dtype) in _FP_DTYPES
+                     or _jittor_dtype_name(staged.dtype) in ("complex64", "complex128"))):
+            # Native assignment preserves the destination's gradient policy.
+            # Activate only this private staging copy before writing a real
+            # RHS edge; the original Tensor is still checked/published by _ip.
+            context.state["tensor_native_api"]["_native_requires_grad"].__set__(staged, True)
+        result = native_setitem(staged, slices, value)
+    if not sources_require_grad:
+        result = result.detach().stop_grad()
+    return _ip(self, result)
 
 
 def _copy_detached_storage(self, value):
     # Optimizer buckets retain detached aliases of dense slices. Rebinding a
     # holder would leave those aliases reading the old allocation. Only use
     # the native imperative store when no differentiable RHS edge is needed.
-    if not isinstance(value, _NativeVar):
+    if not _owner.jt.core._is_tensor_carrier(value):
         return False
     if not (_owner.jt.flags.no_grad
             or (not self.requires_grad and not value.requires_grad)):
@@ -255,7 +303,7 @@ def _ip(self, value, preserve_storage=False):
     # must backpropagate into `h`). A value built under no_grad is stop-grad,
     # so the frozen-under-no_grad case above is unaffected. Read before the
     # assignment, which hands the target's flags over to the value's Var.
-    gains_grad = (not was_trainable and isinstance(value, _NativeVar)
+    gains_grad = (not was_trainable and _owner.jt.core._is_tensor_carrier(value)
                   and not value.is_stop_grad() and bool(value.requires_grad))
     if gains_grad and (target.is_stop_grad() or target._is_view()):
         # A detached/clone reset has a permanent stop-grad bit. Native assign
@@ -285,7 +333,7 @@ def _ip(self, value, preserve_storage=False):
 
 
 def _copy_(self, other, non_blocking=False):
-    src = other if isinstance(other, _NativeVar) else _owner.jt.array(other)
+    src = other if _owner.jt.core._is_tensor_carrier(other) else _owner.jt.array(other)
     if hasattr(self, "dtype") and _jittor_dtype_name(src.dtype) != _jittor_dtype_name(self.dtype):
         src = src.cast(_jittor_dtype_name(self.dtype))
     # torch's `copy_` is in place: the destination keeps its own device, and a
@@ -474,7 +522,16 @@ class _Storage:
     def __init__(self, var):
         self._var = var
     def data_ptr(self):
-        return id(self._var)
+        var = self._var
+        if not int(var.numel()):
+            # A real empty view retains its native allocation owner; a
+            # standalone empty allocation has no addressable storage bytes.
+            base = var._view_base_object()
+            return _Storage(base).data_ptr() if base is not None and base is not var else 0
+        # Observe the actual allocation in place, not a Python object ID.
+        # The native pointer names the first element; storage_offset is in
+        # this tensor's dtype units, including reinterpretation views.
+        return int(var._storage_address) - int(var._storage_offset()) * _storage_dsize(var)
     def size(self):
         return int(self._var.numel())
     def nbytes(self):
@@ -547,6 +604,49 @@ def _is_basic_index(index):
     return isinstance(index, _owner.numbers.Integral) and not isinstance(index, (bool, _owner.np.bool_))
 
 
+_TORCH_INDEX_DTYPES = {
+    "bool", "uint8", "int8", "int16", "int32", "int64",
+}
+
+
+def _torch_slice_bound(value):
+    """Materialize a single integral Tensor used as a Python slice bound."""
+    if not isinstance(value, _NativeVar):
+        return value
+    if (_jittor_dtype_name(value.dtype) not in _TORCH_INDEX_DTYPES
+            or int(value.numel()) != 1):
+        raise TypeError("only integer tensors of a single element can be converted to an index")
+    return _operator.index(value)
+
+
+def _normalize_torch_slices(index):
+    if isinstance(index, slice):
+        return slice(
+            _torch_slice_bound(index.start),
+            _torch_slice_bound(index.stop),
+            _torch_slice_bound(index.step),
+        )
+    if isinstance(index, tuple):
+        return tuple(_normalize_torch_slices(item) for item in index)
+    return index
+
+
+def _normalize_torch_index_devices(self, index):
+    """Torch permits host indices for device data; core gathers stay strict."""
+    if isinstance(index, tuple):
+        return tuple(_normalize_torch_index_devices(self, item) for item in index)
+    if (isinstance(index, _NativeVar)
+            and _jittor_dtype_name(index.dtype) in ("int32", "int64", "bool", "uint8")
+            and _var_is_cpu_resident(index)):
+        target = _device(self)
+        if target.type in ("cuda", "npu"):
+            # A public device copy, not a host gather or mutation of the
+            # original index. Device indices on a different ordinal/backend
+            # are untouched so the core's mixed-device refusal still applies.
+            return index.to(device=target)
+    return index
+
+
 def _torch_getitem(self, slices):
     # PyTorch accepts NumPy integer/bool arrays as advanced indices.
     # Convert them before the native fast path or the dispatcher sees them.
@@ -567,18 +667,32 @@ def _torch_getitem(self, slices):
     _context = get_install_context(_owner.jt)
     _native = _context.state["tensor_native_api"]
     _orig_getitem = _native['_orig_getitem']
-    out = _orig_getitem(self, slices)
-    if isinstance(out, _NativeVar) and _owner._var_has_cpu_residency_hint(self):
+    # CPython normalizes objects implementing ``__index__`` when it consumes a
+    # slice. Jittor's native binding accepts a slice object directly, so a Var
+    # bound can otherwise reach the core as an invalid raw integer. PyTorch
+    # accepts one-element integral/bool tensors here (including device tensors)
+    # and rejects floating or multi-element tensors before dispatch.
+    slices = _normalize_torch_slices(slices)
+    slices = _normalize_torch_index_devices(self, slices)
+    original_slices = slices
+    slices = _normalize_torch_boolean_indices(self, slices)
+    if slices is original_slices:
+        out = _orig_getitem(self, slices)
+    else:
+        from ...frontend import tensor_frontend
+        with tensor_frontend(_context.state["Var"], like=self, default_placement=False):
+            out = _orig_getitem(self, slices)
+    if _owner.jt.core._is_tensor_carrier(out) and _owner._var_has_cpu_residency_hint(self):
         out = _owner._mark_cpu_like(out, self)
     # The core owns basic-index views and flattens them to their root.
     # Complete that record for Torch-only slice spellings; advanced
     # indexing stays a copy. No Python parent chain is needed.
-    if isinstance(out, _NativeVar) and _is_basic_index(slices):
+    if _owner.jt.core._is_tensor_carrier(out) and _is_basic_index(slices):
         if not out._is_view():
             out._set_view_of(self, slices)
         try:
             data_owner = getattr(self, "_torch_data_owner", None)
-            if isinstance(data_owner, _NativeVar):
+            if _owner.jt.core._is_tensor_carrier(data_owner):
                 out._torch_data_owner = data_owner
                 out._torch_data_path = getattr(
                     self, "_torch_data_path", ()
@@ -661,6 +775,11 @@ def _data_set(self, value):
 
 
 def _to(self, *args, **kwargs):
+    if getattr(self, "_jittor_fsdp2_detached_snapshot", None) is not None:
+        provider = _owner._fsdp_hooks.provider()
+        if provider is None:
+            raise RuntimeError("detached FSDP tensor conversion has no registered provider")
+        return provider._to_detached_fsdp_tensor(self, args, kwargs, _to)
     ds = None
     dev = None
     copy = bool(kwargs.get("copy", False))
@@ -683,7 +802,7 @@ def _to(self, *args, **kwargs):
     if kwargs.get("dtype") is not None:
         scanned.append(kwargs["dtype"])
     for a in scanned:
-        if isinstance(a, _owner.dtype):
+        if _is_dtype(a):
             ds = a.name
         elif isinstance(a, _owner.device):
             dev = a
@@ -712,7 +831,7 @@ def _to(self, *args, **kwargs):
             dev = "cuda:%d" % int(a)
         elif isinstance(a, str):
             bare = a.replace("torch.", "")
-            if bare in _owner.dtype._registry:
+            if bare in _dtype_registry():
                 ds = bare
             elif bare.split(":")[0] in ("cpu", "cuda", "npu"):
                 dev = bare
@@ -781,6 +900,12 @@ def _var_detach(self):
         out = out.stop_grad()
     if getattr(self, "_torch_0d", False):
         out._torch_0d = True
+    if (getattr(self, "_jittor_fsdp2_state", None) is not None
+            or getattr(self, "_jittor_fsdp2_detached_snapshot", None) is not None):
+        provider = _owner._fsdp_hooks.provider()
+        if provider is None:
+            raise RuntimeError("FSDP tensor detach has no registered provider")
+        out = provider._detach_fsdp_tensor(self, out, _native_detach)
     return out
 
 
@@ -808,6 +933,20 @@ def _var_numpy(self, *args, **kwargs):
     if getattr(self, "_torch_0d", False) and getattr(out, "size", 0) == 1:
         return out.reshape(())
     return out
+
+
+def _var_item(self):
+    # Native item() parks its Var (and storage aliases) on the host. Torch's
+    # scalar readback must leave the original tensor on its actual device.
+    # Validate non-scalars through the native entry before attempting a copy.
+    native = get_install_context(_owner.jt).state["tensor_native_api"]
+    item = native["_native_item"]
+    if self.numel() != 1:
+        return item(self)
+    # The canonical native cpu() uses an independent device-copy operation,
+    # including unplaced frontend Vars. Avoid the legacy compat migration
+    # helper, whose clone may still alias its source's storage.
+    return item(native["_native_device_copy"](self, -1))
 
 
 def _var_cpu(self, *a, **k):
@@ -1343,17 +1482,12 @@ _SCALAR_KEEPS_DTYPE = {
 
 
 def _own_dtype_name(value, native_api):
-    """A Var's native dtype name, without the torch dtype object round trip.
+    """Read the actual carrier's native dtype, not a sibling's descriptor.
 
-    `.dtype` on a frontend tensor builds the torch dtype object from the native
-    name, and `_jittor_dtype_name` turns it back into that name; an elementwise
-    operator asked both questions for both operands, and a diffusers step makes
-    thousands of them.
+    Keep the promotion call signature while using the native domain's
+    owner-aware reader for both public TensorBase and legacy Var carriers.
     """
-    descriptor = native_api['_native_desc']
-    if descriptor is None:
-        return _jittor_dtype_name(value.dtype)
-    return str(descriptor.__get__(value, type(value)))
+    return _native_var_dtype_name(value)
 
 
 def _promoting_binary(self, other, opname, reflected):
@@ -1384,13 +1518,25 @@ def _promoting_binary(self, other, opname, reflected):
     # `_extend_tokens` list concatenation). Match torch: defer to the sequence.
     if isinstance(other, (list, tuple)):
         return NotImplemented
-    out = _binary_native(opname, self, other, native_api)
-    if isinstance(other, (bool, int, float)) and isinstance(out, _NativeVar):
+    if isinstance(other, (bool, int, float)):
         own = _own_dtype_name(self, native_api)
         if own in _SCALAR_KEEPS_DTYPE.get(type(other), ()):
             expected = own
         else:
             expected = _owner._dtype_to_str(g.result_type(self, other))
+        # Do the wrapped-scalar promotion before launching the native op.
+        # In particular, torch promotes ``int64_tensor + 1e-8`` to the
+        # default float32 dtype.  Letting Jittor first infer this expression
+        # as float64 and casting the result afterwards is too late for ACL:
+        # its Cast kernel rejects the intermediate int64 -> float64 tensor.
+        # Pre-casting the tensor is both torch-correct and keeps the whole
+        # expression representable on the strict device backend.
+        left = self if expected is None or own == expected else self.cast(expected)
+        out = _binary_native(opname, left, other, native_api)
+    else:
+        expected = None
+        out = _binary_native(opname, self, other, native_api)
+    if isinstance(out, _NativeVar):
         if expected is not None and _own_dtype_name(out, native_api) != expected:
             out = out.cast(expected)
     return out
@@ -1421,6 +1567,11 @@ def _true_division(self, other, opname):
         return NotImplemented
     sd = _scalar_dtype_name(other)
     if sd is not None:
+        # Native scalar conversion accepts exact floats. Torch also accepts
+        # float subclasses; read their stored value without an overridden
+        # __float__ hook, and keep the conversion at the compat boundary.
+        if isinstance(other, float) and type(other) is not float:
+            other = float.__float__(other)
         # A Python scalar joins type promotion only when it is of a higher
         # category than the tensor (torch's `result_type`), so a float16 tensor
         # divided by 1.0 stays float16. Promoting the pair as if the scalar were
@@ -1450,7 +1601,7 @@ def _true_division(self, other, opname):
         else:
             b = other
         out = _binary_native(opname, a, b)
-        if isinstance(out, _NativeVar) and _jittor_dtype_name(out.dtype) != tgt:
+        if _owner.jt.core._is_tensor_carrier(out) and _jittor_dtype_name(out.dtype) != tgt:
             out = out.cast(tgt)
         return out
     return _binary_native(opname, self, other)
@@ -1465,58 +1616,68 @@ _FAST_BINARY_OPERATORS = ('__add__', '__radd__', '__sub__', '__rsub__',
                           '__mul__', '__rmul__', '__truediv__', '__rtruediv__')
 
 
+def _pointwise_binary_autocast_scope(input):
+    from ...amp import _pointwise_cuda_autocast
+    return _pointwise_cuda_autocast(input)
+
 def _tensor_add(self, other):
-    fast = _FAST_BINARY
-    if fast is not None:
-        out = fast(self, other, 0)
-        if out is not None:
-            return out
-    return _promoting_binary(self, other, '__add__', False)
+    with _pointwise_binary_autocast_scope(self):
+        fast = _FAST_BINARY
+        if fast is not None:
+            out = fast(self, other, 0)
+            if out is not None:
+                return out
+        return _promoting_binary(self, other, '__add__', False)
 
 
 def _tensor_radd(self, other):
-    fast = _FAST_BINARY
-    if fast is not None:
-        out = fast(self, other, 1)
-        if out is not None:
-            return out
-    return _promoting_binary(self, other, '__radd__', True)
+    with _pointwise_binary_autocast_scope(self):
+        fast = _FAST_BINARY
+        if fast is not None:
+            out = fast(self, other, 1)
+            if out is not None:
+                return out
+        return _promoting_binary(self, other, '__radd__', True)
 
 
 def _tensor_sub(self, other):
-    fast = _FAST_BINARY
-    if fast is not None:
-        out = fast(self, other, 2)
-        if out is not None:
-            return out
-    return _promoting_binary(self, other, '__sub__', False)
+    with _pointwise_binary_autocast_scope(self):
+        fast = _FAST_BINARY
+        if fast is not None:
+            out = fast(self, other, 2)
+            if out is not None:
+                return out
+        return _promoting_binary(self, other, '__sub__', False)
 
 
 def _tensor_rsub(self, other):
-    fast = _FAST_BINARY
-    if fast is not None:
-        out = fast(self, other, 3)
-        if out is not None:
-            return out
-    return _promoting_binary(self, other, '__rsub__', True)
+    with _pointwise_binary_autocast_scope(self):
+        fast = _FAST_BINARY
+        if fast is not None:
+            out = fast(self, other, 3)
+            if out is not None:
+                return out
+        return _promoting_binary(self, other, '__rsub__', True)
 
 
 def _tensor_mul(self, other):
-    fast = _FAST_BINARY
-    if fast is not None:
-        out = fast(self, other, 4)
-        if out is not None:
-            return out
-    return _promoting_binary(self, other, '__mul__', False)
+    with _pointwise_binary_autocast_scope(self):
+        fast = _FAST_BINARY
+        if fast is not None:
+            out = fast(self, other, 4)
+            if out is not None:
+                return out
+        return _promoting_binary(self, other, '__mul__', False)
 
 
 def _tensor_rmul(self, other):
-    fast = _FAST_BINARY
-    if fast is not None:
-        out = fast(self, other, 5)
-        if out is not None:
-            return out
-    return _promoting_binary(self, other, '__rmul__', True)
+    with _pointwise_binary_autocast_scope(self):
+        fast = _FAST_BINARY
+        if fast is not None:
+            out = fast(self, other, 5)
+            if out is not None:
+                return out
+        return _promoting_binary(self, other, '__rmul__', True)
 
 
 def _tensor_floordiv(self, other):
@@ -1544,21 +1705,23 @@ def _tensor_rpow(self, other):
 
 
 def _tensor_truediv(self, other):
-    fast = _FAST_BINARY
-    if fast is not None:
-        out = fast(self, other, 6)
-        if out is not None:
-            return out
-    return _true_division(self, other, '__truediv__')
+    with _pointwise_binary_autocast_scope(self):
+        fast = _FAST_BINARY
+        if fast is not None:
+            out = fast(self, other, 6)
+            if out is not None:
+                return out
+        return _true_division(self, other, '__truediv__')
 
 
 def _tensor_rtruediv(self, other):
-    fast = _FAST_BINARY
-    if fast is not None:
-        out = fast(self, other, 7)
-        if out is not None:
-            return out
-    return _true_division(self, other, '__rtruediv__')
+    with _pointwise_binary_autocast_scope(self):
+        fast = _FAST_BINARY
+        if fast is not None:
+            out = fast(self, other, 7)
+            if out is not None:
+                return out
+        return _true_division(self, other, '__rtruediv__')
 
 
 _BINARY_APIS = {
@@ -1681,6 +1844,66 @@ def _random_inplace(self, draw, *parameters, generator=None):
     return _ip(self, value, preserve_storage=True)
 
 
+def _random_int64_bounds(args, keywords):
+    """Public overload routing only; all distribution math belongs to core."""
+    if len(args) > 2 or set(keywords) - {"from", "to"}:
+        raise TypeError("random_ expects (), (to), or (from, to)")
+    if len(args) == 2:
+        if keywords:
+            raise TypeError("random_ received duplicate bounds")
+        low, high = args
+    elif len(args) == 1:
+        if "from" in keywords:
+            raise TypeError("random_ received duplicate bounds")
+        if "to" in keywords:
+            low, high = args[0], keywords["to"]
+        else:
+            if args[0] is None:
+                raise TypeError("random_ single upper bound must be an integer")
+            low, high = 0, args[0]
+    else:
+        if keywords.get("to", 0) is None and "from" not in keywords:
+            raise TypeError("random_ to=None requires an explicit lower bound")
+        low, high = keywords.get("from", 0), keywords.get("to", None)
+    def integer(value):
+        if isinstance(value, bool):
+            raise TypeError("random_ bounds must be integers, not bool")
+        value = _operator.index(value)
+        if not -(1 << 63) <= value < (1 << 63):
+            raise OverflowError("random_ bound cannot be represented as int64")
+        return value
+    low = integer(low)
+    if high is not None:
+        high = integer(high)
+        if low >= high:
+            raise RuntimeError("random_ expects from < to")
+    return low, 0 if high is None else high, high is None
+
+
+def _random_int64_values(self, low, high, high_none, generator=None):
+    from ..factories import _native_generator
+    if (_jittor_dtype_name(self.dtype) != "int64"
+            or self.device.type not in ("cpu", "cuda")):
+        raise NotImplementedError("random_ currently supports CPU and CUDA int64 only")
+    if self.is_cuda and generator is None:
+        raise NotImplementedError("random_ currently requires an explicit CUDA Generator")
+    # Validate destination BEFORE reserving words. The initial contract is a
+    # contiguous dense tensor/window (including scalar/empty); arbitrary
+    # strided/expanded/nested stores remain explicitly unsupported here.
+    if self.is_nested or not self._storage_is_contiguous():
+        raise NotImplementedError("random_ currently requires contiguous dense storage")
+    self._check_inplace_autograd()
+    with _new_scope(self, None), _owner.jt.no_grad():
+        native = _native_generator(generator)
+        return _owner.jt.ops.random_int64(tuple(self.shape), low, high, high_none, native)
+
+
+def _api_random(self, *args, generator=None, **keywords):
+    low, high, high_none = _random_int64_bounds(args, keywords)
+    return _random_inplace(self, _random_int64_values, low, high, high_none,
+                           generator=generator)
+
+
 def _api_normal(self, mean=0.0, std=1.0, generator=None):
     from ..nn_init import _normal_values
     return _random_inplace(self, _normal_values, mean, std, generator=generator)
@@ -1761,6 +1984,12 @@ def _api_data_ptr(self):
 
 def _api_is_contiguous(self, *a, **k):
     return self._storage_is_contiguous()
+
+
+def _api_version(self):
+    """Read the sole native shared logical-write counter without a Python cache."""
+    native = get_install_context(_owner.jt).state["tensor_native_api"]
+    return native["_native_inplace_version"].__get__(self, type(self))
 
 
 def _api_is_leaf(self):

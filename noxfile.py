@@ -234,6 +234,7 @@ CUDA_TESTS = (
     # below carries the measurement that says why.
     "tests/backends/parity/test_device_parity.py",
     "compat/tests/torch/test_torch_compat_cuda_tf32.py",
+    "compat/tests/torch/test_copy_source_isolation.py::TestCopySourceIsolation::test_cuda",
     "tests/ops/test_ops.py",
     "tests/models/test_network_training_parity.py",
 )

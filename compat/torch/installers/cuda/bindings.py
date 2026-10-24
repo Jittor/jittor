@@ -291,6 +291,15 @@ def _install_cuda(g, registry=None):
         _mod.max_memory_allocated = getattr(_mod, "max_memory_allocated", _api_mod_max_memory_allocated)
         setattr(g, _dev_ns, _mod)
 
+    from .npu_memory import install as install_npu_memory
+    install_npu_memory(g.npu, _modules)
+    from .npu_device import get_device_name as npu_get_device_name
+    g.npu.get_device_name = npu_get_device_name
+    from .npu_device import install as install_npu_device
+    install_npu_device(g.npu)
+    from .npu_random import install as install_npu_random
+    install_npu_random(g.npu, _modules)
+
     if "torch.multiprocessing" not in _modules:
         import multiprocessing as _mp
         _modules["torch.multiprocessing"] = _mp
@@ -347,6 +356,8 @@ def _install_cuda(g, registry=None):
         _modules["torch._C._nn"] = nn_c
         _modules["torch._C._functorch"] = functorch_c
     g._C = _modules["torch._C"]
+    # Publish precisely the root that owns this installation's Tensor payload.
+    g._C.TensorBase = get_install_context(g).state["TensorBase"]
     if not hasattr(g._C, "_autograd"):
         g._C._autograd = _types.SimpleNamespace()
     g._C._autograd._push_saved_tensors_default_hooks = _api_g__C__autograd__push_saved_tensors_default_hooks

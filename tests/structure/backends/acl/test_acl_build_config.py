@@ -13,6 +13,11 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[4]
 SOURCE = ROOT / "backends/acl/__init__.py"
+_RNG_BINDING_NAMES = (
+    "acl_get_rng_state", "acl_set_rng_state", "acl_get_rng_state_all",
+    "acl_set_rng_state_all", "acl_manual_seed", "acl_manual_seed_all",
+    "acl_initial_seed",
+)
 
 
 def _load_module(monkeypatch, name, path):
@@ -53,6 +58,8 @@ def setup(acl, monkeypatch, tmp_path):
     library = object()
     converter = SimpleNamespace(process=lambda *args: "converted",
                                 init_acl_ops=lambda: calls.append(("init",)))
+    metadata = SimpleNamespace(acl_device_name=lambda index: "driver-device-%d" % index)
+    rng = SimpleNamespace(**{name: lambda *args: None for name in _RNG_BINDING_NAMES})
     base = api.BuildConfig(
         cc_path="/host/bin/c++", kernel_flags=" -O2 ",
         cc_flags="-std=c++14 -I/source/src", jittor_path="/source",
@@ -61,13 +68,17 @@ def setup(acl, monkeypatch, tmp_path):
     )
     def compile_module(source, flags):
         calls.append(("compile", source, flags))
+        if "@pyjt(acl_device_name)" in source:
+            return metadata
+        if "@pyjt(acl_get_rng_state)" in source:
+            return rng
         return converter
     def load_library(name, mode):
         calls.append(("load", name, mode))
         return library
     context = api.BuildContext(base, compile_module, load_library=load_library)
     return SimpleNamespace(api=api, context=context, base=base, calls=calls,
-                           library=library, converter=converter)
+                           library=library, converter=converter, metadata=metadata, rng=rng)
 
 
 def test_configure_returns_complete_value_without_global_writes(acl, setup):
@@ -220,7 +231,16 @@ def test_configuration_failures_propagate(acl, setup, service):
 
 
 def test_post_process_uses_returned_converter(acl, setup, monkeypatch):
+    from dataclasses import replace
     config = acl.configure(setup.context)
+    # configure runs before core loading, so only the self-contained operator
+    # initializer may be bound there. The native device-name symbol is later.
+    assert [call[0] for call in setup.calls] == ["load", "compile"]
+    assert "acl_device_name" not in setup.calls[1][1]
+    assert not hasattr(setup.converter, "_device_info")
+    assert not hasattr(setup.converter, "_rng_info")
+    native_core = object()
+    context = replace(setup.context.with_config(config), native_core=native_core)
     flags = SimpleNamespace(use_cuda_host_allocator=0, use_parallel_op_compiler=1,
                             amp_reg=8)
     pool = SimpleNamespace(pool_use_code_op=True)
@@ -229,17 +249,128 @@ def test_post_process_uses_returned_converter(acl, setup, monkeypatch):
         amp_flags=SimpleNamespace(reduce16_no_fp32_acc=2, keep_reduce=4),
     )
     monkeypatch.setitem(sys.modules, "jittor", fake_jittor)
-    acl.post_process(setup.context.with_config(config))
+    acl.post_process(context)
     # These defaults are native BackendOps.execution policies now, not
     # mutations of CPU/Torch state during ACL bootstrap.
     assert pool.pool_use_code_op is True
     assert flags.use_cuda_host_allocator == 0
     assert flags.use_parallel_op_compiler == 1
     assert flags.amp_reg == 8
-    assert setup.calls[-1] == ("init",)
+    assert [call[0] for call in setup.calls] == ["load", "compile", "init", "compile", "compile"]
+    assert "@pyjt(acl_device_name)" in setup.calls[-2][1]
+    assert "@pyjt(acl_get_rng_state)" in setup.calls[-1][1]
+    assert setup.calls[-2][2] == setup.calls[-1][2] == config.cc_flags
+    assert set(vars(setup.rng)) == set(_RNG_BINDING_NAMES)
+    assert all(callable(getattr(setup.rng, name)) for name in _RNG_BINDING_NAMES)
+    assert setup.converter._device_info is setup.metadata
+    assert setup.converter._rng_info is setup.rng
+    assert context.native_core is native_core
+    before = list(setup.calls)
+    acl.post_process(context)
+    # The historical initializer remains callable; a repeated post-process
+    # must not recompile/replace its already-published metadata module.
+    assert setup.calls == before + [("init",)]
+    assert setup.converter._device_info is setup.metadata
+    assert setup.converter._rng_info is setup.rng
+    assert pool.pool_use_code_op is True
+    assert vars(flags) == {"use_cuda_host_allocator": 0,
+                           "use_parallel_op_compiler": 1, "amp_reg": 8}
     before = list(setup.calls)
     acl.post_process(setup.context)
     assert setup.calls == before
+
+
+@pytest.mark.parametrize("missing", ["native_core", "initializer"])
+def test_post_process_requires_core_and_initializer_before_work(acl, setup, missing):
+    from dataclasses import replace
+    config = acl.configure(setup.context)
+    if missing == "initializer":
+        resources = dict(config.resources)
+        resources.pop("acl_initializer")
+        config = config.evolve(resources=resources)
+    context = replace(setup.context.with_config(config),
+                      native_core=None if missing == "native_core" else object())
+    before = list(setup.calls)
+    with pytest.raises(RuntimeError, match="loaded native core" if missing == "native_core" else "initializer"):
+        acl.post_process(context)
+    assert setup.calls == before
+    assert not hasattr(setup.converter, "_device_info")
+
+
+@pytest.mark.parametrize("broken", ["compile_error", "incomplete_binding"])
+def test_post_process_metadata_failure_is_not_published_and_can_retry(acl, setup, broken):
+    from dataclasses import replace
+    config = acl.configure(setup.context)
+    calls = []
+
+    def compile_metadata(source, flags):
+        calls.append((source, flags))
+        if broken == "compile_error":
+            raise RuntimeError("metadata compiler failed")
+        return SimpleNamespace()
+
+    context = replace(setup.context.with_config(config), native_core=object(),
+                      compile_module=compile_metadata)
+    message = "metadata compiler failed" if broken == "compile_error" else "incomplete"
+    with pytest.raises(RuntimeError, match=message):
+        acl.post_process(context)
+    assert len(calls) == 1 and "@pyjt(acl_device_name)" in calls[0][0]
+    assert not hasattr(setup.converter, "_device_info")
+    # A failed binding must not poison this provider resource for a retry.
+    acl.post_process(replace(context, compile_module=setup.context.compile_module))
+    assert setup.converter._device_info is setup.metadata
+    assert setup.converter._rng_info is setup.rng
+
+
+@pytest.mark.parametrize("broken", ["compile_error", *_RNG_BINDING_NAMES])
+def test_post_process_rng_failure_is_not_published_and_can_retry(acl, setup, broken):
+    from dataclasses import replace
+    config = acl.configure(setup.context)
+    calls = []
+    incomplete = dict(vars(setup.rng))
+    if broken != "compile_error":
+        incomplete.pop(broken)
+
+    def compile_binding(source, flags):
+        calls.append((source, flags))
+        if "@pyjt(acl_device_name)" in source:
+            return setup.metadata
+        assert "@pyjt(acl_get_rng_state)" in source
+        if broken == "compile_error":
+            raise RuntimeError("RNG compiler failed")
+        return SimpleNamespace(**incomplete)
+
+    context = replace(setup.context.with_config(config), native_core=object(),
+                      compile_module=compile_binding)
+    message = "RNG compiler failed" if broken == "compile_error" else "ACL RNG binding is incomplete"
+    with pytest.raises(RuntimeError, match=message):
+        acl.post_process(context)
+    assert len(calls) == 2 and all(flags == config.cc_flags for _, flags in calls)
+    assert setup.converter._device_info is setup.metadata
+    assert not hasattr(setup.converter, "_rng_info")
+    # Reuse valid metadata, but require a real successful RNG binding retry.
+    before = len(setup.calls)
+    acl.post_process(replace(context, compile_module=setup.context.compile_module))
+    assert [call[0] for call in setup.calls[before:]] == ["init", "compile"]
+    assert "@pyjt(acl_get_rng_state)" in setup.calls[-1][1]
+    assert setup.converter._rng_info is setup.rng
+
+
+@pytest.mark.parametrize("missing", _RNG_BINDING_NAMES)
+def test_post_process_rejects_invalid_cached_rng_resource(acl, setup, missing):
+    from dataclasses import replace
+    config = acl.configure(setup.context)
+    setup.converter._device_info = setup.metadata
+    callbacks = dict(vars(setup.rng))
+    callbacks[missing] = None
+    invalid = SimpleNamespace(**callbacks)
+    setup.converter._rng_info = invalid
+    context = replace(setup.context.with_config(config), native_core=object())
+    before = list(setup.calls)
+    with pytest.raises(RuntimeError, match="ACL RNG resource is invalid"):
+        acl.post_process(context)
+    assert setup.calls == before + [("init",)]
+    assert setup.converter._rng_info is invalid
 
 
 def test_backend_has_no_mutable_configuration_or_compiler_imports(acl):

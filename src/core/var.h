@@ -46,6 +46,21 @@ struct AutogradAliasState {
     }
 };
 
+// Shared HISTORY metadata only. Neither object can own a Var, Op or Tensor.
+struct BackwardHistoryStopToken {
+    int64 source_var_id;
+    bool permanently_stopped = false;
+};
+struct ReleasedBackwardProducer {
+    int64 owner_var_id;
+    int64 node_id;
+    int64 op_id;
+    string name;
+    vector<std::shared_ptr<const BackwardHistoryStopToken>> eligible_inputs;
+    bool completed = false;
+    bool producer_removed = false;
+};
+
 struct Var : Node {
     NanoVector shape;
     // Element strides; empty means the canonical dense layout. Offset remains
@@ -73,6 +88,11 @@ struct Var : Node {
     // the recorded producer/accumulator's gradient contract. Allocated only
     // on that exceptional transition; ordinary Vars carry no shape copy.
     std::shared_ptr<const NanoVector> recorded_gradient_shape;
+    // These fields are NOT copied by assign_var, detach or view rebasing.
+    // Local grad() ownership of the small record handles reentrant capture
+    // without holding this Var or completing a different attempt's record.
+    std::shared_ptr<ReleasedBackwardProducer> released_backward_producer;
+    std::shared_ptr<BackwardHistoryStopToken> backward_history_stop_token;
     void refresh_alias_requires_grad();
     void check_alias_history() const;
     // Atomic: constructed and released from the compile workers too.

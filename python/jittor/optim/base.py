@@ -62,7 +62,7 @@ def _optimizer_arithmetic(tensors, coefficients, *, enabled=True):
         jt.add, jt.multiply, jt.divide, jt.subtract))
 
 def _grad_matches_param(p, g):
-    return isinstance(g, jt.Var) and list(g.shape) == list(p.shape)
+    return jt.core._is_tensor_carrier(g) and list(g.shape) == list(p.shape)
 
 def _param_requires_grad(p):
     return bool(p.requires_grad)
@@ -108,7 +108,7 @@ def _realign_state_buffers(param_groups):
             if len(buffers) != len(params):
                 continue
             for param, buffer in zip(params, buffers):
-                if not isinstance(buffer, jt.Var) or not isinstance(param, jt.Var):
+                if not jt.core._is_tensor_carrier(buffer) or not jt.core._is_tensor_carrier(param):
                     continue
                 # The same raw placement is the same device, whatever the
                 # ambient flag says -- and it is what every step of an
@@ -160,6 +160,32 @@ def _update_preserve_dtype(target, value):
         value = value.to(target.dtype)
     target.update(value)
 
+def initialize_optimizer_storage(self, params, lr, param_sync_iter=10000):
+    self.param_groups = []
+    self.lr = lr
+    self.param_sync_iter = param_sync_iter
+
+    if len(params) == 0:
+        raise ValueError("Length of parameters should not be zero")
+    if not isinstance(params[0], dict):
+        params = [{'params': params}]
+    for pg in params:
+        if not isinstance(pg, dict):
+            raise TypeError("optimizer parameter groups must be dictionaries")
+        # A group is walked on every step and saved with the optimizer, so
+        # it holds a list, whatever iterable it was given -- a module's
+        # `parameters()` under the torch frontend produces as it is walked.
+        if not isinstance(pg.get('params'), (list, tuple)) and 'params' in pg:
+            pg['params'] = list(pg['params'])
+        self.param_groups.append(pg)
+    self.n_step = 0
+    # __zero_grad is a value for fast determ the grad is zero or not
+    # so we can omit 0+x
+    self._Optimizer__zero_grad = True
+    self._grad_map = {}
+    self._Optimizer__input_params = []
+
+
 class Optimizer(object):
     """ Basic class of Optimizer.
 
@@ -169,29 +195,11 @@ class Optimizer(object):
         optimizer.step(loss)
     """
     def __init__(self, params, lr, param_sync_iter=10000):
-        self.param_groups = []
-        self.lr = lr
-        self.param_sync_iter = param_sync_iter
+        initialize_optimizer_storage(self, params, lr, param_sync_iter)
 
-        if len(params) == 0:
-            raise ValueError("Length of parameters should not be zero")
-        if not isinstance(params[0], dict):
-            params = [{'params': params}]
-        for pg in params:
-            if not isinstance(pg, dict):
-                raise TypeError("optimizer parameter groups must be dictionaries")
-            # A group is walked on every step and saved with the optimizer, so
-            # it holds a list, whatever iterable it was given -- a module's
-            # `parameters()` under the torch frontend produces as it is walked.
-            if not isinstance(pg.get('params'), (list, tuple)) and 'params' in pg:
-                pg['params'] = list(pg['params'])
-            self.param_groups.append(pg)
-        self.n_step = 0
-        # __zero_grad is a value for fast determ the grad is zero or not
-        # so we can omit 0+x
-        self.__zero_grad = True
-        self._grad_map = {}
-        self.__input_params = []
+    def _execution_param_groups(self, *, include=None):
+        # Native semantics remain the same actual list/dictionaries.
+        return self.param_groups if include is None else [include]
 
     def add_param_group(self, group):
         if 'params' in group and not isinstance(group['params'], (list, tuple)):
@@ -257,16 +265,17 @@ class Optimizer(object):
             opt.step()
 
         """
+        from jittor.optim.base import optimizer_execution_groups
         if self.__zero_grad: return
         grads = []
-        for pg in self.param_groups:
+        for pg in optimizer_execution_groups(self):
             for p, g in zip(pg["params"], pg["grads"]):
                 if not _param_requires_grad(p) or not _grad_matches_param(p, g): continue
                 grads.append(g.flatten())
         if len(grads) == 0: return
         total_norm = jt.norm(jt.concat(grads), norm_type)
         clip_coef = jt.minimum(max_norm / (total_norm + 1e-6), 1.0)
-        for pg in self.param_groups:
+        for pg in optimizer_execution_groups(self):
             for p, g in zip(pg["params"], pg["grads"]):
                 if not _param_requires_grad(p) or not _grad_matches_param(p, g): continue
                 g.update(g*clip_coef)
@@ -331,12 +340,13 @@ class Optimizer(object):
         gradient (`update`, `assign`, `+=`) rebinds the holder to a new Var and
         leaves the one cached here alone.
         '''
+        from jittor.optim.base import optimizer_execution_groups
         if not self.__zero_grad:
             # id(grad holder) -> a zeros Var of its shape. Per instance, not
             # per class: a class attribute would be shared by every optimizer
             # in the process and would never be released.
             cache = self.__dict__.setdefault("_zero_grad_cache", {})
-            for pg in self.param_groups:
+            for pg in optimizer_execution_groups(self):
                 for g in pg.get("grads", ()):
                     key = id(g)
                     zero = cache.get(key)
@@ -344,7 +354,7 @@ class Optimizer(object):
                         zero = cache[key] = jt.zeros_like(g).stop_grad()
                     g.update(zero)
         seen_ddp_states = set()
-        for pg in self.param_groups:
+        for pg in optimizer_execution_groups(self):
             for p in pg["params"]:
                 state = getattr(p, "_jittor_ddp_state", None)
                 if state is not None and id(state) not in seen_ddp_states:
@@ -386,9 +396,10 @@ class Optimizer(object):
 
         '''
         # clean prev grads
+        from jittor.optim.base import optimizer_execution_groups
         params = []
         params_has_grad = []
-        for pg in self.param_groups:
+        for pg in optimizer_execution_groups(self):
             for p in pg['params']:
                 params.append(p)
                 if _param_requires_grad(p):
@@ -424,7 +435,7 @@ class Optimizer(object):
         # set up grads in param_groups
         pid = 0
         entries = []
-        for pg in self.param_groups:
+        for pg in optimizer_execution_groups(self):
             if "grads" not in pg:
                 pg["grads"] = [ jt.zeros_like(p).stop_grad().stop_fuse() for p in pg['params'] ]
             pg_grads = pg["grads"]
@@ -494,9 +505,10 @@ class Optimizer(object):
                     ...
                     self.post_step()
         """
+        from jittor.optim.base import optimizer_execution_groups
         if loss is not None:
             self.backward(loss, retain_graph)
-        _realign_state_buffers(self.param_groups)
+        _realign_state_buffers(optimizer_execution_groups(self))
         from jittor.nn.parallel.distributed_data_parallel import (
             _assert_ddp_step_ready,
         )
@@ -521,8 +533,9 @@ class Optimizer(object):
 
 
     def step(self, loss=None, retain_graph=False):
+        from jittor.optim.base import optimizer_execution_groups
         self.pre_step(loss, retain_graph)
-        for pg in self.param_groups:
+        for pg in optimizer_execution_groups(self):
             lr = pg.get("lr", self.lr)
             for p, g in zip(pg["params"], pg["grads"]):
                 if not _param_requires_grad(p) or not _grad_matches_param(p, g): continue
@@ -530,8 +543,9 @@ class Optimizer(object):
         self.post_step()
 
     def _build_grad_map(self):
+        from jittor.optim.base import optimizer_execution_groups
         _grad_map = {}
-        for pg in self.param_groups:
+        for pg in optimizer_execution_groups(self):
             for p, g in zip(pg["params"], pg["grads"]):
                 if not _grad_matches_param(p, g):
                     continue
@@ -561,3 +575,23 @@ def opt_grad(v:jt.Var, opt:Optimizer):
 
 
 jt.Var.opt_grad = opt_grad
+
+
+_frontend_optimizer_roots = []
+
+
+def register_frontend_optimizer_root(root):
+    if not isinstance(root, type) or root.__bases__ != (object,):
+        raise TypeError('frontend optimizer root must actually inherit object')
+    if root not in _frontend_optimizer_roots:
+        _frontend_optimizer_roots.append(root)
+
+
+def is_optimizer_instance(value):
+    return isinstance(value, (Optimizer, *tuple(_frontend_optimizer_roots)))
+
+
+def optimizer_execution_groups(optimizer):
+    """Private update/gradient-storage access, never a public view swap."""
+    method = getattr(optimizer, '_execution_param_groups', None)
+    return (getattr(optimizer, 'param_groups', ()) if method is None else method())

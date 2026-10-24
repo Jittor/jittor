@@ -105,7 +105,7 @@ def _maxmin(which, x, *args, **kwargs):
     other = kwargs.get("other", None)
     pos = list(args)
     if pos:
-        if isinstance(pos[0], _owner.jt.Var):
+        if _owner.jt.core._is_tensor_carrier(pos[0]):
             other = pos[0]
         else:
             dim = pos[0]
@@ -113,14 +113,19 @@ def _maxmin(which, x, *args, **kwargs):
                 keepdim = pos[1]
     if other is not None:
         if which == "max":
-            return _owner._NATIVE_MAXIMUM(x, other)
-        return _owner._NATIVE_MINIMUM(x, other)
+            from ..numerical.elementwise import maximum
+            return maximum(x, other)
+        from ..numerical.elementwise import minimum
+        return minimum(x, other)
     if dim is None:
-        # native scalar reduction via the captured METHOD (0-dim scalar);
-        # NOT x.max(), which now routes back into this wrapper (recursion).
-        if which == "max":
-            return _owner._NATIVE_MAX_METHOD(x)
-        return _owner._NATIVE_MIN_METHOD(x)
+        # The generated native reduction accepts the public Tensor carrier;
+        # the captured legacy Var method descriptor does not.
+        from ...context import get_install_context
+        from ...frontend import tensor_frontend
+        context = get_install_context(_owner.jt)
+        native = _owner._NATIVE_MAX if which == "max" else _owner._NATIVE_MIN
+        with tensor_frontend(context.state["Var"], like=x, default_placement=False):
+            return native(x)
     index_of = _owner.argmax if which == "max" else _owner.argmin
     idx = index_of(x, dim=dim, keepdim=keepdim)
     if getattr(_owner.jt.compiler, "has_acl", 0):

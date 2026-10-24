@@ -65,7 +65,7 @@ def array(data, dtype=None):
         data = list(data)
     elif isinstance(data, core.NanoVector):     # e.g. jt.array(some_var.shape)
         data = list(data)                       # NB: `int` is shadowed by the dtype here
-    if isinstance(data, core.Var):
+    if core._is_tensor_carrier(data):
         if dtype is None:
             ret = data.clone()
         else:
@@ -321,7 +321,7 @@ def submit_pending(*vars, device_sync=False):
     if not vars:
         raise ValueError("submit_pending requires at least one Var")
     for var in vars:
-        if not isinstance(var, Var):
+        if not core._is_tensor_carrier(var):
             raise TypeError("submit_pending expects Var arguments")
         submit = getattr(var, "submit_pending", None)
         # Older generated bindings expose only the C++ executor entry point on
@@ -434,7 +434,7 @@ def ones(*shape, dtype="float32"):
     return _constant_scalar(1, dtype).broadcast(shape)
 
 @contextmanager
-def placement_scope_like(x):
+def placement_scope_like(x, *, override=False):
     """Run a block under `x`'s explicit tensor placement, if it has one.
 
     Allocation helpers (`jt.empty`, `jt.ones`, ...) follow the *ambient*
@@ -449,11 +449,17 @@ def placement_scope_like(x):
     outranks it: `torch.zeros_like(gpu, device="cpu")` has already placed the
     construction on the host, and re-scoping to the source's device would hand
     back a CUDA tensor.
+
+    Internal operand-owned allocations (for example FSDP gradient padding)
+    may set ``override=True``: their placement is dictated by that operand,
+    not by the frontend's ambient factory default. Public ``*_like`` factories
+    leave this false so an explicit user device still wins. Unplaced native
+    tensors do not invent a backend, even in override mode.
     """
     import jittor as jt
     # `int` is shadowed in this module by jittor's integer dtype constructor.
     backend = ori_int(x.placement_backend)
-    if backend < 0 or jt.core._current_tensor_placement() is not None:
+    if backend < 0 or (not override and jt.core._current_tensor_placement() is not None):
         yield
         return
     device = max(ori_int(x.device_id), 0)
@@ -1703,13 +1709,13 @@ Example 2::
         raise TypeError("fetch callback must be callable")
     args = list(args[:-1])
     if len(args)>0 and isinstance(args[0], Sequence) \
-        and len(args[0])>=1 and isinstance(args[0][0], Var):
+        and len(args[0])>=1 and core._is_tensor_carrier(args[0][0]):
         raise TypeError("jt.Var should not inside a list or tuple.")
 
     var_map = []
     variables = []
     for i, v in enumerate(args):
-        if isinstance(v, Var):
+        if core._is_tensor_carrier(v):
             variables.append(v)
             var_map.append(i)
             args[i] = None
@@ -1808,7 +1814,8 @@ Var.__array_priority__ = 2000
 
 Var.__module__ = "jittor"
 
-Var.__reduce__ = lambda self: (Var, (self.data,))
+from jittor.serialization.native import _reduce_var
+Var.__reduce__ = _reduce_var
 
 # DLPack. Var.dlpack()/dlpack_device() are the real pyjt-bound C++ methods
 # (bindings/pyjt/dlpack.cc); aliased to the protocol's actual dunder names

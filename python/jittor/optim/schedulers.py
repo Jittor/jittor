@@ -1,10 +1,10 @@
 """Learning-rate schedulers bundled with the optimizer facade."""
 
-from .base import Optimizer
+from .base import Optimizer, is_optimizer_instance
 
 class LRScheduler:
     def __init__(self,optimizer, last_epoch=-1):
-        if not isinstance(optimizer, Optimizer):
+        if not is_optimizer_instance(optimizer):
             raise TypeError("LRScheduler requires an Optimizer")
         self.optimizer = optimizer
 

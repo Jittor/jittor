@@ -278,6 +278,23 @@ void gc_all() {
     for (auto* allocator : all) allocator->gc();
 }
 
+void gc_device_cache(int device) {
+    USER_CHECK(device >= 0 && device < get_device_count())
+        << "Invalid accelerator device for cache collection:" << device;
+    vector<Allocator*> pools;
+    {
+        std::lock_guard<std::mutex> guard(allocators_mutex);
+        for (auto& kv : allocators) {
+            auto* pool = kv.second.get();
+            if (pool->is_cuda() && pool->device() == device)
+                pools.push_back(pool);
+        }
+    }
+    // As in gc_all, release the registry lock before entering any pool lock.
+    // gc() only returns unused blocks; failures propagate to the caller.
+    for (auto* pool : pools) pool->gc();
+}
+
 static void migrate_empty_var(Var* var, Allocator* allocator) {
     // a zero-sized var carries no data, so leaving its share group *is* the
     // whole migration; the free below drops its reference to the parent block

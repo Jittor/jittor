@@ -82,6 +82,30 @@ def adam_update(param, grad, value, momentum, *, lr, eps, weight_decay,
     return param - momentum * step_size / (jt.sqrt(value) + eps)
 
 
+
+def initialize_adam_storage(self, eps, betas, weight_decay):
+    self.eps = eps
+    self.betas = betas
+    self.weight_decay = weight_decay
+    for group in self._execution_param_groups():
+        initialize_adam_group(group)
+
+
+def initialize_adam_group(group):
+    values = group['values'] = []
+    m = group['m'] = []
+    for parameter in group['params']:
+        values.append(_state_buffer(parameter))
+        m.append(_state_buffer(parameter))
+
+
+def add_adam_param_group(self, group):
+    if not isinstance(group.get('params'), (list, tuple)):
+        group['params'] = list(group['params'])
+    execution = self._execution_param_groups(include=group)[0]
+    initialize_adam_group(execution)
+    self.param_groups.append(group)
+
 class Adam(Optimizer):
     """ Adam Optimizer.
 
@@ -92,31 +116,16 @@ class Adam(Optimizer):
     """
     def __init__(self, params, lr, eps=1e-8, betas=(0.9, 0.999), weight_decay=0):
         super().__init__(params, lr)
-        self.eps = eps
-        self.betas = betas
-        self.weight_decay = weight_decay
-        # assert weight_decay==0, "weight_decay is not supported yet"
-
-        # initialize required arguments for each param_groups
-        for pg in self.param_groups:
-            values = pg["values"] = []
-            m = pg["m"] = []
-            for p in pg["params"]:
-                values.append(_state_buffer(p))
-                m.append(_state_buffer(p))
+        initialize_adam_storage(self, eps, betas, weight_decay)
 
     def add_param_group(self, group):
-        values = group["values"] = []
-        m = group["m"] = []
-        for p in group["params"]:
-            values.append(_state_buffer(p))
-            m.append(_state_buffer(p))
-        self.param_groups.append(group)
+        add_adam_param_group(self, group)
 
     def step(self, loss=None, retain_graph=False):
+        from jittor.optim.base import optimizer_execution_groups
         self.pre_step(loss, retain_graph)
         jt.flags.node_order = 1
-        for pg in self.param_groups:
+        for pg in optimizer_execution_groups(self):
             # bias correction counts optimizer steps, not backward calls
             n = float(self._advance_step_count(pg))
             # get arguments from each param_groups
@@ -143,31 +152,16 @@ class AdamW(Optimizer):
     def __init__(self, params, lr, eps=1e-8, betas=(0.9, 0.999),
                  weight_decay=0, fused=None):
         super().__init__(params, lr)
-        self.eps = eps
-        self.betas = betas
-        self.weight_decay = weight_decay
+        initialize_adam_storage(self, eps, betas, weight_decay)
         self.fused = fused
-        # assert weight_decay==0, "weight_decay is not supported yet"
-
-        # initialize required arguments for each param_groups
-        for pg in self.param_groups:
-            values = pg["values"] = []
-            m = pg["m"] = []
-            for p in pg["params"]:
-                values.append(_state_buffer(p))
-                m.append(_state_buffer(p))
 
     def add_param_group(self, group):
-        values = group["values"] = []
-        m = group["m"] = []
-        for p in group["params"]:
-            values.append(_state_buffer(p))
-            m.append(_state_buffer(p))
-        self.param_groups.append(group)
+        add_adam_param_group(self, group)
 
     def step(self, loss=None, retain_graph=False):
+        from jittor.optim.base import optimizer_execution_groups
         self.pre_step(loss, retain_graph)
-        for pg in self.param_groups:
+        for pg in optimizer_execution_groups(self):
             # bias correction counts optimizer steps, not backward calls
             n = float(self._advance_step_count(pg))
             # get arguments from each param_groups

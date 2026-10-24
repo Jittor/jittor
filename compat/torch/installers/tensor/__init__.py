@@ -30,7 +30,7 @@ from ..factories import _install_random_and_linspace, _set_use_cuda, _wrap_const
 
 from ..numerical import log_softmax as _numerical_log_softmax, masked_select as _numerical_masked_select, softmax as _numerical_softmax
 
-from ...types import _DEVICE_CTX_STACK, _device_is_cpu, _device_is_cuda, _dtype_to_str, _make_cpu_resident, _make_cuda_resident, _mark_cpu_like, _var_has_cpu_residency_hint, _var_is_cpu_resident, current_accelerator_index, device, dtype, _cuda_index_of, _is_index, _move_to_cuda_index
+from ...types import _DEVICE_CTX_STACK, _device_is_cpu, _device_is_cuda, _dtype_to_str, _make_cpu_resident, _make_cuda_resident, _mark_cpu_like, _var_has_cpu_residency_hint, _var_is_cpu_resident, current_accelerator_index, device, dtype, layout, strided, jagged, _cuda_index_of, _is_index, _move_to_cuda_index
 
 from ...fidelity import Fidelity, register_fidelity
 
@@ -524,6 +524,8 @@ def _array_keep_dtype(data):
 
 
 def tensor(data, dtype=None, device=None, requires_grad=False, **kw):
+    if "layout" in kw:
+        raise TypeError("torch.tensor does not accept a layout keyword")
     g = compatibility_owner(jt)
     Var = g.Var
     with tensor_frontend(Var, device=device, like=data):
@@ -587,7 +589,9 @@ def as_tensor(data, dtype=None, device=None):
     g = compatibility_owner(jt)
     Var = g.Var
     with tensor_frontend(Var, device=device, like=data):
-        if isinstance(data, jt.Var):
+        # The owned Tensor is a sibling of legacy Var. Keep its identity and
+        # graph instead of feeding it through NumPy/object-array construction.
+        if isinstance(data, (Var, jt.Var)):
             r = data if isinstance(data, Var) else g.Tensor(data)
             if dtype is not None and _jittor_dtype_name(r.dtype) != _dtype_to_str(dtype):
                 r = r.cast(_dtype_to_str(dtype))
@@ -641,20 +645,29 @@ def frombuffer(buffer, *, dtype, count=-1, offset=0, requires_grad=False):
         return v
 
 
-class layout:  # torch.layout placeholder
-    pass
-
-
 class memory_format:
     pass
 
 
 def _nested_from_tensors(tensors, *a, layout=None, **k):
+    if layout is None or layout is strided:
+        raise NotImplementedError("strided nested tensors are not implemented")
+    if layout is not jagged:
+        raise RuntimeError("unsupported nested tensor layout")
     return _NestedTensor.from_tensors(tensors, ragged_idx=k.pop("ragged_idx", 1))
 
 
 def _nested_from_jagged(values, offsets, *a, **k):
-    return _NestedTensor.from_jagged(values, offsets, ragged_idx=k.pop("ragged_idx", None))
+    return _NestedTensor.from_jagged(values, offsets,
+        ragged_idx=k.pop("jagged_dim", k.pop("ragged_idx", None)), lengths=k.pop("lengths", None))
+
+
+def _nested_to_padded_tensor(input, padding, output_size=None, out=None):
+    result = input.to_padded_tensor(padding, output_size=output_size)
+    if out is not None:
+        out.copy_(result)
+        return out
+    return result
 
 
 def _check_to_pybool(cond):
@@ -785,7 +798,19 @@ def _cat_result(value, out):
 
 def stack(tensors, dim=0, *, axis=None, out=None):
     if axis is not None: dim = axis
-    res = _jt_stack(list(tensors), dim)
+    tensors = list(tensors)
+    from ...amp import autocast, autocast_is_enabled
+    # Stack is structural, not an autocast-to-low-precision operation. The
+    # native concat underneath otherwise merges even two FP32 inputs through
+    # the ambient BF16 arithmetic promotion register. Preserve native input
+    # promotion by disabling that register only for this original operation;
+    # do not round the result to BF16 and then cast it back to FP32.
+    if (tensors and jt.core._is_tensor_carrier(tensors[0])
+            and tensors[0].device.type == "cuda" and autocast_is_enabled("cuda")):
+        with autocast("cuda", enabled=False):
+            res = _jt_stack(tensors, dim)
+    else:
+        res = _jt_stack(tensors, dim)
     if out is not None:
         out.assign(res)
         return out
@@ -946,8 +971,8 @@ def install(ctx):
     g.nan = _math.nan
     g.pi = _math.pi
     g.e = _math.e
-    g.strided = "strided"
-    g.jagged = "jagged"
+    g.strided = strided
+    g.jagged = jagged
     g.contiguous_format = "contiguous_format"
     g.preserve_format = "preserve_format"
     g.channels_last = "channels_last"
@@ -960,6 +985,8 @@ def install(ctx):
     nested_mod.as_nested_tensor = _nested_from_tensors
     nested_mod.nested_tensor = _nested_from_tensors
     nested_mod.nested_tensor_from_jagged = _nested_from_jagged
+    nested_mod.narrow = _NestedTensor.narrow
+    nested_mod.to_padded_tensor = _nested_to_padded_tensor
     g.nested = nested_mod
     _modules["torch.nested"] = nested_mod
     nested_internal_mod = _types_nested.ModuleType("torch.nested._internal")
@@ -1025,6 +1052,14 @@ from .shape_api import (
     _shape_square_,
     _shape_clamp_min,
     _shape_clamp_max,
+    _shape_matmul,
+    _shape_masked_fill,
+    _shape_repeat_interleave,
+    _shape_split,
+    _shape_unbind,
+    _shape_tril,
+    _shape_triu,
+    _shape_matmul_operator,
     _shape_bmm,
     _shape_mm,
     _shape_mv,
@@ -1148,7 +1183,9 @@ def install_methods(ctx):
     if not hasattr(Var, "neg"):         Var.neg = _shape_neg
     if not hasattr(Var, "reciprocal"):  Var.reciprocal = _shape_reciprocal
     if not hasattr(Var, "expm1"):       Var.expm1 = _shape_expm1
-    if not hasattr(Var, "log1p"):       Var.log1p = _shape_log1p
+    # Frontend Tensor only: keep Torch promotion without replacing
+    # the native Var descriptor introduced by genuine log1p.
+    Var.log1p = _shape_log1p
     if not hasattr(Var, "square"):      Var.square = _shape_square
     if not hasattr(Var, "square_"):     Var.square_ = _shape_square_
     if not hasattr(Var, "clamp_min"):   Var.clamp_min = _shape_clamp_min
@@ -1157,6 +1194,15 @@ def install_methods(ctx):
     if _orig_index_add_inplace is not None and not getattr(_orig_index_add_inplace, "_torch_returns_self", False):
         _index_add_inplace._torch_returns_self = True
         Var.index_add_ = _index_add_inplace
+    # Bind only this installation's independent public Tensor.
+    Var.matmul = _shape_matmul
+    Var.__matmul__ = _shape_matmul_operator
+    Var.masked_fill = _shape_masked_fill
+    Var.repeat_interleave = _shape_repeat_interleave
+    Var.split = _shape_split
+    Var.unbind = _shape_unbind
+    Var.tril = _shape_tril
+    Var.triu = _shape_triu
     if not hasattr(Var, "bmm"):         Var.bmm = _shape_bmm
     if not hasattr(Var, "mm"):          Var.mm = _shape_mm
     if not hasattr(Var, "mv"):          Var.mv = _shape_mv
@@ -1184,5 +1230,5 @@ def install_methods(ctx):
     })
 
     register_api_bindings(Var, 'torch.Tensor',
-        ('bmm', 'clamp_max', 'clamp_min', 'diff', 'eq', 'expm1', 'fliplr', 'flipud', 'fmod', 'ge', 'gt', 'index_add_', 'le', 'log1p', 'lt', 'mm', 'mv', 'ne', 'neg', 'reciprocal', 'relu', 'relu_', 'remainder', 'reshape', 'size', 'softplus', 'square', 'square_', 'sum', 'trapezoid', 'trapz', 'view') + tuple(_SHAPE_REDUCTION_APIS.keys()),
+        ('bmm', 'clamp_max', 'clamp_min', 'diff', 'eq', 'expm1', 'fliplr', 'flipud', 'fmod', 'ge', 'gt', 'index_add_', 'le', 'log1p', 'lt', 'masked_fill', 'mm', 'mv', 'ne', 'neg', 'reciprocal', 'relu', 'relu_', 'remainder', 'repeat_interleave', 'reshape', 'size', 'softplus', 'split', 'square', 'square_', 'sum', 'trapezoid', 'trapz', 'unbind', 'view') + tuple(_SHAPE_REDUCTION_APIS.keys()),
         Fidelity.APPROXIMATE, 'Tensor operations share the native Var/Op graph and explicit frontend state; unsupported layouts, device capabilities, and retained compatibility approximations remain restricted')

@@ -1,5 +1,8 @@
 """Module-level utility APIs; installation only publishes their namespace."""
 from collections import OrderedDict, defaultdict
+import sys
+import traceback
+from ..vitals import set_vital
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
@@ -97,6 +100,50 @@ from urllib.parse import urlparse as _urlparse_hub
 
 def _utilities_context():
     return get_install_context(jt)
+
+
+class KeyErrorMessage(str):
+    r"""str subclass that returns itself in repr"""
+
+    __slots__ = ()
+
+    def __repr__(self):
+        return self
+
+
+class ExceptionWrapper:
+    r"""Wraps an exception plus traceback to communicate across threads"""
+
+    def __init__(self, exc_info=None, where="in background"):
+        # It is important that we don't store exc_info, see
+        # NOTE [ Python Traceback Reference Cycle Problem ]
+        if exc_info is None:
+            exc_info = sys.exc_info()
+        self.exc_type = exc_info[0]
+        self.exc_msg = "".join(traceback.format_exception(*exc_info))
+        self.where = where
+
+    def reraise(self):
+        r"""Reraises the wrapped exception in the current thread"""
+        # Format a message such as: "Caught ValueError in DataLoader worker
+        # process 2. Original Traceback:", followed by the traceback.
+        msg = f"Caught {self.exc_type.__name__} {self.where}.\nOriginal {self.exc_msg}"
+        if self.exc_type == KeyError:
+            # KeyError calls repr() on its argument (usually a dict key). This
+            # makes stack traces unreadable. It will not be changed in Python
+            # (https://bugs.python.org/issue2651), so we work around it.
+            msg = KeyErrorMessage(msg)
+        elif getattr(self.exc_type, "message", None):
+            # Some exceptions have first argument as non-str but explicitly
+            # have message field
+            raise self.exc_type(message=msg)
+        try:
+            exception = self.exc_type(msg)
+        except Exception:
+            # If the exception takes multiple arguments or otherwise can't
+            # be constructed, don't try to instantiate since we don't know how to
+            raise RuntimeError(msg) from None
+        raise exception
 
 
 class _NodeDef:
@@ -754,11 +801,29 @@ def _install_amp_namespace(g, _modules):
 
 
 
+def _running_with_deploy():
+    # PyTorch v2.8.0 torch/__init__.py:40-41: query real import sentinel.
+    return sys.modules.get("torch._meta_registrations", None) is object
+
+
 def install(ctx):
     _modules = ctx.registry.module_map
     g = ctx.jittor_module
+    g.set_vital = set_vital
+    g._running_with_deploy = _running_with_deploy
+    register_fidelity(
+        "torch.set_vital", set_vital, Fidelity.APPROXIMATE,
+        "Three str inputs: real process-owned sticky environment gate, state writes "
+        "and bool return; read_vitals, destructor output, CUDA events and non-str "
+        "pybind conversions are not implemented.",
+    )
+    register_fidelity(
+        "torch._running_with_deploy", _running_with_deploy, Fidelity.EXACT,
+        "Queries the actual torch._meta_registrations import sentinel.",
+    )
     # ---- torch._utils ----
     _tutils = _types2.ModuleType("torch._utils")
+    _tutils.ExceptionWrapper = ExceptionWrapper
     _tutils._flatten_dense_tensors = _flatten_dense_tensors
     _tutils._unflatten_dense_tensors = _unflatten_dense_tensors
     _tutils._take_tensors = _take_tensors
@@ -922,6 +987,14 @@ def install_torchmetrics(ctx):
 
 def install_transformers(ctx):
     return _install_external_adapter(ctx, "jittor_transformers")
+
+
+def install_tensordict_nested(ctx):
+    return _install_external_adapter(ctx, "jittor_tensordict")
+
+
+def install_verl_nested(ctx):
+    return _install_external_adapter(ctx, "jittor_verl")
 
 
 def install_flash(ctx):

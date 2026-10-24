@@ -47,6 +47,12 @@ __all__ = ["register", "provider", "is_registered", "reset", "REQUIRED"]
 #: is pinned byte-for-byte by tests/structure/test_torch_fsdp2_structure.py;
 #: adding seam plumbing to it would widen the torch API for no one's benefit.
 REQUIRED = (
+    # Tensor.detach preserves the existing FSDP tagged-carrier export protocol
+    # through captured storage aliases, not live optimizer state.
+    "_detach_fsdp_tensor",
+    "_to_detached_fsdp_tensor",
+    "_resident_backward_task_scope",
+    "_resident_backward_task_current",
     # installers/tensor.py, from Tensor.backward(): which params FSDP owns,
     # which full params the backward must treat as leaves, and how the
     # resulting grad map is handed back to the sharded optimizers.
@@ -59,6 +65,7 @@ REQUIRED = (
     "optimizer_step",
     "clear_fsdp_optimizer_grads",
     "refresh_visible_full_grads",
+    "_release_cleared_optimizer_grad_cache",
     # installers/nn.py, from Module.__call__: run one forward with this
     # module's parameters unsharded.
     "_execute_with_true_fsdp",
@@ -69,6 +76,8 @@ REQUIRED = (
     "refresh_optimizer_fsdp_params",
     "_gather_optimizer_state_dict",
     "_shard_optimizer_state_dict",
+    # nn module conversions migrate owned storage, not each published view.
+    "_convert_module_storage",
 )
 
 _provider = None

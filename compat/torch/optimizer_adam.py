@@ -18,6 +18,7 @@ def _update_in_target_dtype(target, value):
 
 def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay):
     from . import optimizer_api as _api
+    _api._persistent_adam_owner(self).validate_groups()
     native_fsdp_loss = None
     if closure is None and callable(loss):
         closure = loss
@@ -60,8 +61,26 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
     if not getattr(self, "_torch_backward_advanced_n_step", False):
         self.n_step = int(getattr(self, "n_step", 0)) + 1
         step_capture.on_replay(lambda: setattr(self, "n_step", int(self.n_step) + 1))
+    with jt.no_grad():
+        _apply_adam_updates(self, decoupled_weight_decay)
+    # The torch loss.backward(); optimizer.step() spelling keeps grads
+    # until an explicit zero_grad(). Preserve Jittor's historical
+    # step(loss) behavior for callers using that native shorthand.
+    if (loss is not None and closure is None) or native_fsdp_loss is not None:
+        self.post_step()
+    else:
+        jt.flags.node_order = 0
+    object.__setattr__(self, "_torch_backward_advanced_n_step", False)
+    return native_fsdp_loss if native_fsdp_loss is not None else loss
+
+
+def _apply_adam_updates(self, decoupled_weight_decay):
+    """Run shared native update mathematics without building a training graph."""
+    from jittor.optim.base import optimizer_execution_groups
+    from . import optimizer_api as _api
+    from jittor._runtime import step_capture
     jt.flags.node_order = 1
-    for pg in self.param_groups:
+    for pg in optimizer_execution_groups(self):
         lr = pg.get("lr", self.lr)
         eps = pg.get("eps", self.eps)
         weight_decay = pg.get("weight_decay", self.weight_decay)
@@ -91,7 +110,7 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
         if want_fused:
             for i, (p, g, v, m) in enumerate(zip(
                     pg["params"], grads, pg["values"], pg["m"])):
-                if not p.requires_grad or not isinstance(g, jt.Var) \
+                if not p.requires_grad or not jt.core._is_tensor_carrier(g) \
                         or list(g.shape) != list(p.shape):
                     continue
                 active.append((p, m, v, g, int(param_steps[i])))
@@ -102,7 +121,7 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
             stepped = []
             for i, (p, g, v, m) in enumerate(zip(
                     pg["params"], grads, pg["values"], pg["m"])):
-                if not p.requires_grad or not isinstance(g, jt.Var) \
+                if not p.requires_grad or not jt.core._is_tensor_carrier(g) \
                         or list(g.shape) != list(p.shape):
                     continue
                 param_steps[i] = int(param_steps[i]) + 1
@@ -128,7 +147,7 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
         for i, (p, g, v, m) in enumerate(zip(
                 pg["params"], grads, pg["values"], pg["m"])):
             was_trainable = bool(p.requires_grad)
-            if not was_trainable or not isinstance(g, jt.Var) or list(g.shape) != list(p.shape):
+            if not was_trainable or not jt.core._is_tensor_carrier(g) or list(g.shape) != list(p.shape):
                 continue
             param_steps[i] = int(param_steps[i]) + 1
             _update_in_target_dtype(p, adam_update(
@@ -142,12 +161,3 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
                     p.start_grad()
             except EXPECTED as exc:
                 swallowed("torch/optimizers.py _adam_step_torch: if was_trainable and p.is_stop_grad():", exc)
-    # The torch loss.backward(); optimizer.step() spelling keeps grads
-    # until an explicit zero_grad(). Preserve Jittor's historical
-    # step(loss) behavior for callers using that native shorthand.
-    if (loss is not None and closure is None) or native_fsdp_loss is not None:
-        self.post_step()
-    else:
-        jt.flags.node_order = 0
-    object.__setattr__(self, "_torch_backward_advanced_n_step", False)
-    return native_fsdp_loss if native_fsdp_loss is not None else loss

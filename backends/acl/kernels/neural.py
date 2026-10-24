@@ -49,6 +49,19 @@ def bmm_acl(x1, x2, trans_a=False, trans_b=False):
     return BmmACL(trans_b)(x1, x2)
 
 
+def matmul_supported(x1, x2, trans_a=False, trans_b=False):
+    """Whether the native ACL matmul can consume this pair as-is.
+
+    The mapped op intentionally requires one floating dtype for both operands.
+    Declining a mixed pair here lets the common matrix dispatcher apply its
+    autocast/promotion rule and retry the same provider with two cast tensors.
+    Calling the provider first instead surfaced the mapped-op assertion before
+    that retry could happen (Qwen3.5 autocast activation fp16, FSDP weight
+    fp32).  Non-floating pairs likewise keep their portable implementation.
+    """
+    return x1.dtype == x2.dtype and _dtype_in(x1, _F16_F32_BF16)
+
+
 def matmul_acl(x1, x2, trans_a=False, trans_b=False):
     if trans_a:
         x1 = _transpose_last_two(x1)

@@ -169,6 +169,26 @@ class TestHcclCheckMacros(unittest.TestCase):
         self.assertIn("HCCLCHECK_PEEK", body)
         self.assertNotIn("HCCLCHECK(", body)
 
+    def test_bfloat16_uses_canns_native_hccl_dtype(self):
+        source = (_HCCL_HEADER.parent.parent / "src" / "hccl_wrapper.cc").read_text()
+        self.assertIn(
+            "#define JT_HCCL_DTYPE_bfloat16 HcclDataType::HCCL_DATA_TYPE_BFP16",
+            source,
+        )
+        self.assertNotIn(
+            "#define JT_HCCL_DTYPE_bfloat16 hccl_dtype_unsupported(dtype)",
+            source,
+        )
+
+    def test_all_gather_gradient_uses_native_reduce_scatter(self):
+        ops = _HCCL_HEADER.parent.parent / "ops"
+        gather = (ops / "hccl_all_gather_op.cc").read_text()
+        reduce_scatter = (ops / "hccl_reduce_scatter_op.cc").read_text()
+        self.assertIn("return hccl_reduce_scatter(dout, group_id);", gather)
+        self.assertIn("HcclReduceScatter(", reduce_scatter)
+        self.assertIn("HCCL_REDUCE_SUM", reduce_scatter)
+        self.assertIn("return hccl_all_gather(dout, group_id);", reduce_scatter)
+
 
 if __name__ == "__main__":
     unittest.main()

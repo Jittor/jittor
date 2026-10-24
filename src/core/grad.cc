@@ -126,49 +126,80 @@ inline static bool requires_grad(Var* v) {
         && !v->flag(VarFlags::_requires_grad_disabled);
 }
 
+// One eligibility predicate shared by live lookup and pre-gradient capture.
+static bool eligible_backward_history_input(Var* v, Op* op, Node::input_t& e) {
+    if (e.reverse().index < 0 || e.node->var()->is_stop_grad()) return false;
+    if (!is_requires_grad_disabled_edge(e.node, op)
+            || lookup_unrecorded_view_edge(e.node, op)) return true;
+    auto state = v->autograd_alias;
+    return state && state->recorded_view_history && !state->created_without_grad
+        && !state->source_edge_enabled
+        && state->creation_version == *state->version;
+}
+
 Op* backward_grad_fn(Var* v) {
     ASSERT(v != nullptr);
     if (!requires_grad(v)) return nullptr;
     Op* op = v->input();
-    // No producer: a graph source, or a producer that has already been freed --
-    // and it can only have been freed if nothing needed it for backward, which
-    // is the same answer.
+    // No executable producer. Released public history is a separate value
+    // query, and must never supply an Op* to grad() or its traversal.
     if (!op) return nullptr;
     // detach() stops the *op*, not the var it produced (ops/clone_op.cc), so a
     // detached var requires grad and is still a leaf. Reading the var's own
     // flag would have missed this and called it a non-leaf.
     if (op->is_stop_grad()) return nullptr;
-    for (auto& e : op->_inputs) {
-        // Control dependency: make_grad refuses a negative index, so this edge
-        // exists for ordering only.
-        if (e.reverse().index < 0) continue;
-        Var* in = e.node->var();
-        // A later reversible freeze of an input does not erase the producer
-        // already recorded for this output. Edges disabled at construction
-        // are checked below; permanent stop-grad still ends the graph.
-        if (in->is_stop_grad()) continue;
-        // An unrecorded view can require grad and create a producer even
-        // though this particular input has no backward edge. This differs
-        // from an input explicitly frozen when the op was constructed.
-        if (is_requires_grad_disabled_edge(in, op)
-                && !lookup_unrecorded_view_edge(in, op)) continue;
-        return op;
-    }
-    // A recorded view can rebase over a store made while its source was
-    // frozen. It still has a producer and accepts its own gradient, although
-    // the rebased producer's input-edge snapshot deliberately carries no
-    // gradient back to that source, even after the source is enabled again.
-    if (v->autograd_alias && v->autograd_alias->recorded_view_history
-            && !v->autograd_alias->created_without_grad
-            && !v->autograd_alias->source_edge_enabled
-            && v->autograd_alias->creation_version == *v->autograd_alias->version) {
-        // Reversible edge snapshots may be disabled, but a permanent stop on
-        // every real input still terminates this producer's native history.
-        for (auto& e : op->_inputs)
-            if (e.reverse().index >= 0 && !e.node->var()->is_stop_grad())
-                return op;
-    }
+    for (auto& e : op->_inputs)
+        if (eligible_backward_history_input(v, op, e)) return op;
     return nullptr;
+}
+
+const ReleasedBackwardProducer* released_backward_history(Var* v) {
+    const auto* history = v->released_backward_producer.get();
+    if (!requires_grad(v) || v->flag(VarFlags::_unrecorded_view) || !history
+            || !history->completed || history->owner_var_id != v->id) return nullptr;
+    Op* current = v->input();
+    if (current) {
+        if (current->id != history->node_id || current->is_stop_grad()) return nullptr;
+    } else if (!history->producer_removed) return nullptr;
+    for (const auto& token : history->eligible_inputs)
+        if (token && !token->permanently_stopped) return history;
+    return nullptr;
+}
+
+bool has_backward_history(Var* v) {
+    return backward_grad_fn(v) != nullptr || released_backward_history(v) != nullptr;
+}
+
+void invalidate_backward_history(Node* node) {
+    if (node->is_var()) {
+        node->var()->released_backward_producer.reset();
+        return;
+    }
+    for (auto& e : node->_outputs) {
+        if (!e.node->is_var()) continue;
+        auto& history = e.node->var()->released_backward_producer;
+        if (history && history->node_id == node->id) history.reset();
+    }
+}
+
+void note_backward_producer_removal(Node* producer) {
+    if (producer->is_var()) return;
+    // Even if a caller changed the Op stop bit outside the normal entry,
+    // deleting that barrier must never revive a previously captured record.
+    if (producer->is_stop_grad()) {
+        invalidate_backward_history(producer);
+        return;
+    }
+    // Called after free()'s keep/recompute guards, BEFORE either edge list
+    // changes. Works for late materialization and nested free-buffer scopes.
+    for (auto& e : producer->_outputs) {
+        if (!e.node->is_var()) continue;
+        Var* v = e.node->var();
+        auto* history = v->released_backward_producer.get();
+        if (history && history->owner_var_id == v->id
+                && history->node_id == producer->id && v->input() == producer)
+            history->producer_removed = true;
+    }
 }
 
 inline static void assign_attrs(Var* a, Var* b) {
@@ -293,6 +324,38 @@ vector<VarPtr> grad(
         }
     LOGvv << "Size of grad vars:" << gvars.size();
     
+    // PREPARE before constructing ANY gradient. Ownership of these small
+    // records, not Vars/Ops, prevents reentrant/failed attempts being completed
+    // by a different grad invocation. Exceptions leave completed=false.
+    vector<std::shared_ptr<ReleasedBackwardProducer>> prepared_history;
+    if (!retain_graph) {
+        unordered_set<Var*> held_vars;
+        for (auto& vh : runtime_holder_state().holders()) held_vars.insert(vh->var);
+        for (Var* v : gvars) {
+            if (!held_vars.count(v)) continue;
+            Op* producer = backward_grad_fn(v);
+            if (!producer) continue;
+            auto history = std::make_shared<ReleasedBackwardProducer>();
+            history->owner_var_id = v->id;
+            history->node_id = producer->id;
+            history->op_id = (producer->registered_op_id || has_op(producer->name()))
+                ? producer->type_id() : 0;
+            history->name = producer->name_ex();
+            for (auto& e : producer->_inputs) {
+                if (!eligible_backward_history_input(v, producer, e)) continue;
+                Var* in = e.node->var();
+                if (!in->backward_history_stop_token)
+                    in->backward_history_stop_token = std::make_shared<BackwardHistoryStopToken>(
+                        BackwardHistoryStopToken{in->id, false});
+                ASSERT(in->backward_history_stop_token->source_var_id == in->id);
+                history->eligible_inputs.push_back(in->backward_history_stop_token);
+            }
+            if (history->eligible_inputs.empty()) continue;
+            v->released_backward_producer = history;
+            prepared_history.push_back(move(history));
+        }
+    }
+
     vector<VarPtr> grads(gvars.size());
     vector<VarPtr> results(targets.size());
     vector<int> target_id(targets.size());
@@ -480,14 +543,18 @@ vector<VarPtr> grad(
         for (int i=int(gvars.size())-1; i>=0; i--)
             if (!held_vars.count(gvars[i]) && gvars[i]->liveness.backward.active()) {
                 gvars[i]->set_flag(VarFlags::_graph_freed);
-                gvars[i]->set_stop_grad();
+                gvars[i]->set_stop_grad_for_graph_release();
             }
         for (int i=0; i<grads.size(); i++)
             if (grads[i]) {
                 grads[i]->set_flag(VarFlags::_graph_freed);
-                grads[i]->set_stop_grad();
+                grads[i]->set_stop_grad_for_graph_release();
             }
     }
+    // The producer can still be alive here: never discard the candidate.
+    // A later actual free event will mark producer_removed without keeping
+    // the Op alive. No exceptional exit can publish a completed attempt.
+    for (const auto& history : prepared_history) history->completed = true;
     return results;
 }
 

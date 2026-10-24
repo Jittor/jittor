@@ -1,12 +1,54 @@
 """Stable Tensor gradient APIs using the shared native Var/Op graph."""
+from contextlib import contextmanager
 from importlib import import_module
+import os
 from ...context import get_install_context
+from jittor._core.var import placement_scope_like as _placement_scope_like
 from jittor._runtime import step_capture as _step_capture
 _owner = import_module(__package__)
-_NativeVar = _owner.jt.Var
+# Both native Var and the independent TensorBase own the same native graph.
+# Admission must test that real initialized carrier, not legacy inheritance.
+_is_tensor_carrier = _owner.jt.core._is_tensor_carrier
+
+
+@contextmanager
+def _fsdp_grad_placement_scope(reference):
+    """Allocate FSDP autograd results on the full parameter's accelerator.
+
+    Native Jittor tensors created under the ambient accelerator can carry a
+    device_id without an explicit placement_backend.  placement_scope_like()
+    deliberately does nothing for those tensors, so cover the ACL spelling
+    explicitly while retaining its normal path for published placements.
+    """
+    if reference is None:
+        yield
+        return
+    backend = int(getattr(reference, "placement_backend", -1))
+    device_id = int(getattr(reference, "device_id", -1))
+    if os.environ.get("JITTOR_VERL_FATAL_TRACE") == "1":
+        print("JITTOR_VERL_FSDP_GRAD_SCOPE backend=%d device=%d use_acl=%d" % (
+            backend, device_id, int(bool(getattr(_owner.jt.flags, "use_acl", 0)))),
+            flush=True)
+    if backend > 0:
+        with _placement_scope_like(reference, override=True):
+            yield
+        return
+    if bool(getattr(_owner.jt.flags, "use_acl", 0)) and device_id >= 0:
+        token = _owner.jt.core._set_tensor_placement(2, device_id)
+        try:
+            yield
+        finally:
+            _owner.jt.core._reset_tensor_placement(token)
+        return
+    yield
 
 def _register_leaf(v):
     _owner._torch_register_leaf(v)
+
+
+def _owned_leaf_gradient(parameter, gradient):
+    wrap = getattr(type(parameter), "_frontend_gradient", None)
+    return wrap(parameter, gradient) if wrap is not None else gradient
 
 
 def _initial_leaf_gradient(parameter, gradient):
@@ -19,7 +61,7 @@ def _initial_leaf_gradient(parameter, gradient):
             dense = dense and strides[axis] == extent
             extent *= sizes[axis]
     if not dense:
-        return gradient.contiguous()
+        return _owned_leaf_gradient(parameter, gradient.contiguous())
     grad_sizes, grad_strides = tuple(gradient.shape), gradient.stride()
     # .data may have reduced the visible rank after this gradient's contract
     # was recorded. Check only existing stride axes, never index beyond the
@@ -30,7 +72,7 @@ def _initial_leaf_gradient(parameter, gradient):
         for i, size in enumerate(grad_sizes)
     )
     if obeys:
-        return gradient
+        return _owned_leaf_gradient(parameter, gradient)
     # Existing as_strided implements dense permutations as real native views.
     # Avoid empty_strided's documented contiguous-only allocation restriction.
     target = get_install_context(_owner.jt).target_namespace
@@ -39,7 +81,7 @@ def _initial_leaf_gradient(parameter, gradient):
         if not parameter.is_contiguous():
             result = result.reshape(-1).as_strided(sizes, strides)
         result.copy_(gradient)
-    return result
+    return _owned_leaf_gradient(parameter, result)
 
 
 def _rg_get(self):
@@ -63,7 +105,7 @@ def _rg_set(self, v):
         fsdp_entry.requires_grad = v
         for peer in (getattr(fsdp_entry, "shard", None),
                      getattr(fsdp_entry, "full_param", None)):
-            if not isinstance(peer, _NativeVar) or peer is self:
+            if not _is_tensor_carrier(peer) or peer is self:
                 continue
             _native_requires_grad.__set__(peer, v)
             if v:
@@ -72,7 +114,7 @@ def _rg_set(self, v):
             flat = getattr(fsdp_state, "true_fsdp_flat_shard", None)
             any_trainable = any(getattr(entry, "requires_grad", True)
                                 for entry in fsdp_state.true_fsdp_params)
-            if isinstance(flat, _NativeVar):
+            if _is_tensor_carrier(flat):
                 _native_requires_grad.__set__(flat, any_trainable)
                 if any_trainable:
                     _register_leaf(flat)
@@ -121,7 +163,7 @@ def _run_post_accumulate_hooks(leaves, grad_by_id):
                     raise RuntimeError("Tensor post accumulate grad hook must return None")
 
 
-def _fill_opt_grads(opt, grad_by_id, filled_param_ids=None):
+def _fill_opt_grads(opt, grad_by_id, filled_param_ids=None, create_graph=False):
     # Replicate the grad-storage half of jittor's Optimizer.backward() but
     # from an already-computed {id(param): grad} map (so a SINGLE jt.grad
     # pass feeds every optimizer + every leaf — no N-times-repeated backward).
@@ -129,15 +171,16 @@ def _fill_opt_grads(opt, grad_by_id, filled_param_ids=None):
     # next backward overwrites rather than accumulates) and tolerates a param
     # whose shape changed (3DGS densify replaces params) by replacing — not
     # .update()-ing — the stored grad Var.
+    from jittor.optim.base import optimizer_execution_groups
     zero = getattr(opt, "_Optimizer__zero_grad", True)
     if filled_param_ids is None:
         filled_param_ids = set()
-    for pg in opt.param_groups:
+    for pg in optimizer_execution_groups(opt):
         grads_list = pg.get("grads")
         if grads_list is None:
             grads_list = pg["grads"] = [None] * len(pg["params"])
         for i, p in enumerate(pg["params"]):
-            if not isinstance(p, _NativeVar) or not p.requires_grad:
+            if not _is_tensor_carrier(p) or not p.requires_grad:
                 continue
             g = grad_by_id.get(id(p))
             if g is None:
@@ -147,17 +190,29 @@ def _fill_opt_grads(opt, grad_by_id, filled_param_ids=None):
                     grads_list.append(None)
                 grads_list[i] = getattr(p, "_torch_grad", None)
                 continue
-            g = g.stop_grad()
+            if not create_graph:
+                # _backward already supplied a fresh stopped publication copy.
+                g = g.stop_grad()
             existing = grads_list[i] if i < len(grads_list) else None
-            if not isinstance(existing, _NativeVar):
+            if not _is_tensor_carrier(existing):
                 existing = getattr(p, "_torch_grad", None)
-            if isinstance(existing, _NativeVar) and list(existing.shape) == list(g.shape):
+            if _is_tensor_carrier(existing) and list(existing.shape) == list(g.shape):
                 if not zero:
                     g = g + existing
-                existing.update(g)
-                stored = existing
+                if create_graph:
+                    # A differentiable accumulation must preserve the old
+                    # gradient object and both contributions' graph edges.
+                    stored = g
+                else:
+                    # The public gradient and optimizer slot share this
+                    # storage; accumulation must not rebind it away from
+                    # detached aliases or replace an explicitly set layout.
+                    from .method_api import _copy_
+                    with _owner.jt.no_grad():
+                        _copy_(existing, g)
+                    stored = existing
             else:
-                stored = g
+                stored = g if create_graph else _initial_leaf_gradient(p, g)
             while len(grads_list) <= i:
                 grads_list.append(None)
             grads_list[i] = stored
@@ -182,8 +237,16 @@ def _optimizer_maybe_has_fsdp_params(opt):
 
 def _backward(self, gradient=None, retain_graph=None, create_graph=False, **kw):
     from ...autograd import _backward_callbacks
-    with _backward_callbacks():
-        return _backward_impl(self, gradient, retain_graph, create_graph, **kw)
+    from contextlib import nullcontext
+    provider = _owner._fsdp_hooks.provider()
+    scope = (provider._resident_backward_task_scope(
+        kw.get("inputs"), create_graph, retain_graph, set(kw) - {"inputs"})
+        if provider is not None else nullcontext(None))
+    with scope as resident_task, _backward_callbacks():
+        result = _backward_impl(self, gradient, retain_graph, create_graph, **kw)
+        if resident_task is not None:
+            resident_task.queue_finish()
+        return result
 
 
 def _backward_impl(self, gradient=None, retain_graph=None, create_graph=False, **kw):
@@ -203,7 +266,7 @@ def _backward_impl(self, gradient=None, retain_graph=None, create_graph=False, *
     # manual chain rule from a custom head -- silently computed the
     # UNWEIGHTED gradient d(sum(y))/dx and trained on the wrong numbers.
     if gradient is not None:
-        grad_var = gradient if isinstance(gradient, _NativeVar) else _owner.jt.array(gradient)
+        grad_var = gradient if _is_tensor_carrier(gradient) else _owner.jt.array(gradient)
         if tuple(grad_var.shape) != tuple(self.shape):
             try:
                 grad_var = grad_var.broadcast(self.shape)
@@ -253,7 +316,12 @@ def _backward_impl(self, gradient=None, retain_graph=None, create_graph=False, *
     # torch code such as 3DGS replaces parameters during densification, and
     # stale strong refs in the registry would otherwise keep old params and
     # their Jittor graphs alive until OOM.
-    fsdp_opts = [o for o in opts if _optimizer_maybe_has_fsdp_params(o)]
+    provider = _owner._fsdp_hooks.provider()
+    resident_task = provider._resident_backward_task_current() if provider is not None else None
+    if resident_task is not None:
+        resident_task.validate_optimizers(opts)
+    fsdp_opts = ([] if resident_task is not None else
+                 [o for o in opts if _optimizer_maybe_has_fsdp_params(o)])
     # Ask the seam rather than importing fsdp2: this file is *below* fsdp2
     # in the dependency order (see jittor/compat/fsdp_hooks.py). The guard
     # above already proves the answer cannot be None when it matters --
@@ -264,10 +332,14 @@ def _backward_impl(self, gradient=None, retain_graph=None, create_graph=False, *
     leaf_map = {}
     opt_ids = set()
     filled_param_ids = set()
+    fsdp_grad_reference = None
     for o in opts:
         for pg in getattr(o, "param_groups", []):
             for p in pg.get("params", []):
-                if not isinstance(p, _NativeVar) or not p.requires_grad:
+                if not _is_tensor_carrier(p) or not p.requires_grad:
+                    continue
+                if resident_task is not None and id(p) in resident_task.canonical_ids:
+                    opt_ids.add(id(p))
                     continue
                 if _fsdp2_backward is not None and _fsdp2_backward.is_fsdp_managed_param(p):
                     opt_ids.add(id(p))
@@ -276,15 +348,32 @@ def _backward_impl(self, gradient=None, retain_graph=None, create_graph=False, *
                 opt_ids.add(id(p))
     if _fsdp2_backward is not None and fsdp_opts:
         for p in _fsdp2_backward.collect_fsdp_full_params_for_backward(fsdp_opts):
-            if isinstance(p, _NativeVar) and p.requires_grad:
+            if _is_tensor_carrier(p) and p.requires_grad:
                 leaf_map.setdefault(id(p), p)
                 opt_ids.add(id(p))
+                # FSDP all-gather publishes the accelerator placement on the
+                # full parameter. Keep one such parameter as the allocation
+                # owner for the gradients created by grad_optional below.
+                # Without this scope the torch frontend's CPU factory default
+                # marks a lazy BF16 full gradient as explicitly CPU; the later
+                # HCCL reduce-scatter then inherits CPU and has no valid kernel.
+                if (fsdp_grad_reference is None
+                        or (int(getattr(fsdp_grad_reference,
+                                        "placement_backend", -1)) < 0
+                            and int(getattr(p, "placement_backend", -1)) > 0)):
+                    fsdp_grad_reference = p
+    if resident_task is not None:
+        opt_ids.update(resident_task.owned_ids)
+        for p in resident_task.targets:
+            leaf_map.setdefault(id(p), p)
+        if fsdp_grad_reference is None and resident_task.targets:
+            fsdp_grad_reference = resident_task.targets[0]
     tensor_state = _owner.get_tensor_state(_owner.jt)
     retained = tensor_state.retained
     retained_ids = set()
     if retained:
         for v in list(retained.values()):
-            if isinstance(v, _NativeVar) and v.requires_grad:
+            if _is_tensor_carrier(v) and v.requires_grad:
                 leaf_map.setdefault(id(v), v)
                 retained_ids.add(id(v))
     if opts:
@@ -296,20 +385,27 @@ def _backward_impl(self, gradient=None, retain_graph=None, create_graph=False, *
             keep_non_parameters=True,
         )
         for v in list(tensor_state.leaf_params.values()):
-            if isinstance(v, _NativeVar) and v.requires_grad and v.is_backward_leaf:
+            if _is_tensor_carrier(v) and v.requires_grad and v.is_backward_leaf:
                 leaf_map.setdefault(id(v), v)
     else:
         _owner._torch_prune_leaf_registry()
         for v in list(tensor_state.leaf_params.values()):
-            if isinstance(v, _NativeVar) and v.requires_grad and v.is_backward_leaf:
+            if _is_tensor_carrier(v) and v.requires_grad and v.is_backward_leaf:
                 leaf_map.setdefault(id(v), v)
+    if resident_task is not None:
+        # C is only a publication target, never a differentiation target.
+        for key in resident_task.canonical_ids:
+            leaf_map.pop(key, None)
     if not leaf_map:
         return None
     leaves = list(leaf_map.values())
     # torch leaves a disconnected target at grad=None. Keep jt.grad's
     # historical zero-materialization untouched and use the compatibility
     # core entry point that preserves missing gradients explicitly.
-    grads = _owner.jt.core.grad_optional(self, leaves, retain_graph)
+    with _fsdp_grad_placement_scope(fsdp_grad_reference):
+        # Leave VJP scalarization and public gradient publication outside this scope.
+        with (_owner.jt.enable_grad() if create_graph else _owner.jt.no_grad()):
+            grads = _owner.jt.core.grad_optional(self, leaves, retain_graph)
     grad_by_id = {}
     for p, gr in zip(leaves, grads):
         if gr is None:
@@ -325,7 +421,10 @@ def _backward_impl(self, gradient=None, retain_graph=None, create_graph=False, *
         if gr.dtype != p.dtype:
             gr = gr.cast(p.dtype)
         if not create_graph:
+            # Match autograd.grad(False): stop only a fresh returned copy,
+            # never the raw gradient or a source graph retained by the caller.
             gr = gr.detach()
+            gr.stop_grad()
         grad_by_id[id(p)] = gr
         if id(p) not in opt_ids:
             # non-optimizer leaf (retain_grad screenspace etc.): accumulate
@@ -341,8 +440,12 @@ def _backward_impl(self, gradient=None, retain_graph=None, create_graph=False, *
             prev = getattr(p, "_torch_grad", None)
             if prev is None:
                 object.__setattr__(p, "_torch_grad", _initial_leaf_gradient(p, gr))
+            elif create_graph:
+                object.__setattr__(p, "_torch_grad", prev + gr)
             else:
                 prev.add_(gr)
+    if resident_task is not None:
+        resident_task.publish(grad_by_id, _initial_leaf_gradient, _run_post_accumulate_hooks)
     # fill each optimizer's pg["grads"] so its step(loss=None) consumes them
     if _fsdp2_backward is not None and fsdp_opts:
         _fsdp2_backward.fill_fsdp_optimizer_grads_from_grad_map(fsdp_opts, grad_by_id)
@@ -350,7 +453,7 @@ def _backward_impl(self, gradient=None, retain_graph=None, create_graph=False, *
         if _fsdp2_backward is not None and id(o) in fsdp_opt_ids \
                 and not _fsdp2_backward.optimizer_has_non_fsdp_params(o):
             continue
-        _fill_opt_grads(o, grad_by_id, filled_param_ids)
+        _fill_opt_grads(o, grad_by_id, filled_param_ids, create_graph=create_graph)
     # DDP's synchronisation point, deliberately here rather than next to
     # grad_optional above: it has to average the *accumulated* gradient.
     # `no_sync()` exists so several micro-batches accumulate locally and
@@ -362,7 +465,9 @@ def _backward_impl(self, gradient=None, retain_graph=None, create_graph=False, *
     # step() consumes together. Still before backward() returns, which is
     # what torch's autograd hooks guarantee: clipping and norm logging in
     # between must see the synchronised gradient.
-    _run_post_accumulate_hooks(leaves, grad_by_id)
+    ordinary_leaves = ([p for p in leaves if id(p) not in resident_task.owned_ids]
+                       if resident_task is not None else leaves)
+    _run_post_accumulate_hooks(ordinary_leaves, grad_by_id)
     _owner._ddp_all_reduce_grads(leaves)
     # Independent retain_grad lasts as long as its weakly indexed holder.
     # Preserve bounded cleanup only for legacy non-weak-referenceable Vars.
@@ -383,6 +488,10 @@ def _grad_get(self):
         o = r() if callable(r) else r
         if o is None:
             continue
+        slots = _param_slots(o, self)
+        if not any(i < len(pg.get("grads", ())) and pg["grads"][i] is not None
+                   for pg, i in slots if pg.get("grads") is not None):
+            continue
         try:
             return o.find_grad(self)
         except _owner.EXPECTED as exc:
@@ -402,6 +511,7 @@ def _param_slots(opt, param):
     densification does ``group["params"][0] = new``) or a group added later
     is rebuilt, never trusted.
     """
+    from jittor.optim.base import optimizer_execution_groups
     index = opt.__dict__.get("_torch_param_slots")
     if index is not None:
         slots = index.get(id(param))
@@ -413,7 +523,7 @@ def _param_slots(opt, param):
             else:
                 return slots
     index = {}
-    for pg in getattr(opt, "param_groups", []):
+    for pg in optimizer_execution_groups(opt):
         for i, p in enumerate(pg.get("params", [])):
             index.setdefault(id(p), []).append((pg, i))
     object.__setattr__(opt, "_torch_param_slots", index)
@@ -421,6 +531,7 @@ def _param_slots(opt, param):
 
 
 def _grad_set(self, value):
+    from jittor.optim.base import optimizer_execution_groups
     object.__setattr__(self, "_torch_grad", value)
     fsdp_entry = getattr(self, "_jittor_fsdp2_entry", None)
     fsdp_role = getattr(self, "_jittor_fsdp2_role", None)
@@ -453,7 +564,7 @@ def _grad_set(self, value):
             # An FSDP shard answers for its full parameter too, which only a
             # scan comparing entries finds.
             slots = []
-            for pg in getattr(o, "param_groups", []):
+            for pg in optimizer_execution_groups(o):
                 for i, p in enumerate(pg.get("params", [])):
                     same_fsdp_entry = getattr(p, "_jittor_fsdp2_entry", None) is fsdp_entry
                     if p is not self and not same_fsdp_entry:
@@ -487,7 +598,7 @@ def _grad_set(self, value):
 
 
 class _TorchGradFn:
-    __slots__ = ("node_id", "op_id", "name")
+    __slots__ = ("node_id", "op_id", "name", "__weakref__")
 
     def __init__(self, node_id, op_id, name):
         self.node_id = int(node_id)
@@ -506,10 +617,23 @@ class _TorchGradFn:
 
 
 def _grad_fn(self):
-    node_id = int(self.grad_fn_node_id)
+    try:
+        node_id = self.grad_fn_node_id
+    except _owner.jt.JittorError as error:
+        # Only the generic native metadata-query error becomes Torch's public
+        # RuntimeError. Typed/internal errors and later graph/intern failures
+        # remain their original exceptions; the original args/cause survive.
+        if type(error) is not _owner.jt.JittorError:
+            raise
+        raise RuntimeError(*error.args) from error
+    node_id = int(node_id)
     if node_id == -1:
         return None
-    return _TorchGradFn(node_id, self.grad_fn_op_id, self.grad_fn_name)
+    # Native metadata alone decides whether a producer exists. Interning must
+    # never turn a native None into a cached historical/executable producer.
+    state = _owner.get_tensor_state(_owner.jt)
+    return state.intern_grad_fn(node_id, self.grad_fn_op_id,
+                               self.grad_fn_name, _TorchGradFn)
 
 
 def _retain_grad(self):

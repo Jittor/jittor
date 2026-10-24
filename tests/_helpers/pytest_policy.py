@@ -936,7 +936,9 @@ def _snapshot_selected_files(config):
                     for item in getattr(config.option, "ignore", []) or []
                 ],
             )
-            if not _refuses_collection(REPO_ROOT / path)
+            # Use the same owner as collection: opposite-mode files are not
+            # empty test files in this session. None keeps this mode's files.
+            if pytest_ignore_collect(REPO_ROOT / path, config) is not True
         )
     except Exception:
         pass

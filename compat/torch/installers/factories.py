@@ -11,13 +11,14 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import functools
 import inspect
+import operator
 from ..context import get_install_context
 from ..api_delegates import bind_delegates
 
 import jittor as jt
 import numpy as np
 
-from ..types import _dtype_to_str
+from ..types import _dtype_to_str, _validate_layout
 from ..nested import _torch_register_leaf
 from ..fidelity import Fidelity, register_fidelity
 from ...diagnostics import EXPECTED, swallowed
@@ -59,6 +60,8 @@ _EMPTY_LIKE_FIDELITY_DETAIL = (
 
 
 def _invoke_factory(name, args, kwargs):
+    if name in ("empty", "zeros", "ones", "full", "arange") and "layout" in kwargs:
+        _validate_layout(kwargs["layout"])
     context = get_install_context(jt)
     implementation = context.state.get("factory_implementations", {}).get(name)
     if implementation is None:
@@ -141,12 +144,26 @@ def randperm(*args, **kwargs):
     return _invoke_factory("randperm", args, kwargs)
 
 
-def tril(*args, **kwargs):
-    return _invoke_factory("tril", args, kwargs)
+def _triangular(name, input, diagonal, out):
+    context = get_install_context(jt)
+    if not isinstance(input, context.target_namespace.Tensor):
+        raise TypeError("%s(): input must be a Tensor" % name)
+    if input.dim() < 2:
+        raise RuntimeError("%s(): input must have at least two dimensions" % name)
+    if isinstance(diagonal, bool):
+        raise TypeError("%s(): diagonal must be an integer, not bool" % name)
+    diagonal = operator.index(diagonal)
+    if out is not None:
+        raise NotImplementedError("torch.%s out= is not supported" % name)
+    return _invoke_factory(name, (input,), {"diagonal": diagonal})
 
 
-def triu(*args, **kwargs):
-    return _invoke_factory("triu", args, kwargs)
+def tril(input, diagonal=0, *, out=None):
+    return _triangular("tril", input, diagonal, out)
+
+
+def triu(input, diagonal=0, *, out=None):
+    return _triangular("triu", input, diagonal, out)
 
 
 def zeros(*args, **kwargs):
@@ -248,6 +265,8 @@ def _shape_arg(v):
 
 
 def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
+    if name in ("empty", "zeros", "ones", "full", "arange") and "layout" in kwargs:
+        _validate_layout(kwargs["layout"])
     g = get_install_context(jt).target_namespace
     # ACL adapters call jt.empty thousands of times; keep the FP32 fast path.
     if (name == "empty" and not kwargs and args and
@@ -260,6 +279,8 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
         if native_shape:
             out = orig(*args)
             out._jittor_torch_ext_mutable = True
+            # Native allocations track gradients; Torch factories opt in.
+            out.requires_grad_(False)
             return out
     # _invoke_factory already established native construction placement.
     _requires_grad = bool(kwargs.get("requires_grad", False))
@@ -351,6 +372,11 @@ def _wrap_constructors(g):
                  "rand_like", "tril", "triu", "normal"):
         original = getattr(g, name, None)
         if original is None or original is FACTORY_APIS.get(name):
+            continue
+        if name in _TENSOR_ARGUMENT:
+            # Triangular transforms preserve their input's native history;
+            # constructor leaf/gradient options must never be applied to them.
+            _publish_factory(g, name, original)
             continue
         try:
             signature = inspect.signature(original)

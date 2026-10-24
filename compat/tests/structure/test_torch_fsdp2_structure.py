@@ -70,7 +70,7 @@ _OWNERSHIP = {
     common: {
         "_flatten_var", "_ceil_div", "_pad_flat", "_param_numel",
         "_primary_input_requires_grad", "_materialize_frozen_output", "_tensor_values",
-        "_prod", "_fsdp2_flat_enabled",
+        "_prod", "_fsdp2_flat_enabled", "_pad_flat",
         # The frozen-forward and gradient-shape helpers `shard` calls around
         # `_execute_with_true_fsdp`, which arrived with PR 18031's memory and
         # lifecycle group.
@@ -120,7 +120,7 @@ _OWNERSHIP = {
         "local_sharded_state_dict",
     },
     api: {
-        "_FSDPModuleMeta", "FSDPModule", "_FSDP_METHODS",
+        "FSDPModule", "_FSDP_METHODS",
         "_inject_fsdp_methods", "fully_shard", "register_fsdp_forward_method",
         "share_comm_ctx", "FullyShardedDataParallel", "ShardedGradScaler",
     },
@@ -350,7 +350,7 @@ assert second is jittor.torch_fsdp2_compat
         reexports = {
             common: {
                 name: (native_fsdp_common.__name__, name)
-                for name in ("_flatten_var", "_ceil_div", "_pad_flat", "_param_numel",
+                for name in ("_flatten_var", "_ceil_div", "_param_numel",
                              "_primary_input_requires_grad", "_materialize_frozen_output",
                              "_tensor_values")
             },
@@ -498,11 +498,22 @@ assert value is fsdp2.DeviceMesh
 
         fsdp_mod = importlib.import_module("torch.distributed.fsdp")
         self.assertIs(fsdp_mod.FSDP, fsdp.FullyShardedDataParallel)
-        self.assertIs(fsdp_mod.FSDPModule, fsdp.FSDPModule)
-        self.assertIs(
-            importlib.import_module("torch.distributed.tensor").DTensor,
-            fsdp.DTensor,
-        )
+        from jittor.compat.fsdp2.owned_module import owned_fsdp_module_type
+        from jittor.compat.fsdp2.owned_dtensor import owned_dtensor_type
+        from jittor.compat.torch.context import get_install_context
+        torch = importlib.import_module("torch")
+        marker = owned_fsdp_module_type(get_install_context(torch))
+        self.assertIs(fsdp_mod.FSDPModule, marker)
+        self.assertIsNot(marker, fsdp.FSDPModule)
+        self.assertIs(type(marker), type)
+        self.assertEqual(marker.__bases__, (object,))
+        self.assertEqual(marker.__module__, "torch.distributed.fsdp")
+        self.assertIs(pickle.loads(pickle.dumps(marker)), marker)
+        distributed_type = importlib.import_module("torch.distributed.tensor").DTensor
+        self.assertIs(distributed_type, owned_dtensor_type(get_install_context(torch)))
+        self.assertEqual(distributed_type.__bases__, (torch.Tensor,))
+        self.assertIs(importlib.import_module("torch.distributed._tensor").DTensor,
+                      distributed_type)
         origin_values = (
             importlib.import_module("torch.distributed.fsdp.wrap").enable_wrap,
             importlib.import_module("torch.distributed.fsdp.wrap").wrap,

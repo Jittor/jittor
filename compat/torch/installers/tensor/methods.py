@@ -18,6 +18,7 @@ from .method_api import (
     _api_ne_alias,
     _api_nonzero,
     _api_normal,
+    _api_random,
     _api_uniform,
     _api_tolist,
     _api_contiguous,
@@ -33,7 +34,9 @@ from .method_api import (
     _api_data_ptr,
     _api_is_contiguous,
     _api_is_leaf,
+    _api_version,
     _api_is_sparse,
+    _api_layout,
     _api_retains_grad,
     _api_is_cpu,
     _api_is_mps,
@@ -116,6 +119,7 @@ from .method_api import (
     _var_detach,
     _var_detach_inplace,
     _var_get_device,
+    _var_item,
     _var_norm,
     _var_numpy,
     _var_type,
@@ -173,6 +177,11 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     _owner = _import_module(__package__)
     _bind_native_fast_paths(_owner.jt)
     _NativeVar = _owner.jt.Var
+    _native_item = _type_attribute(Var, "item")
+    _native_inplace_version = _type_attribute(Var, "inplace_version")
+    _native_device_copy = Var._frontend_native_api["to_device"]
+    _native_clone = Var._frontend_native_api["clone"]
+    _native_copy = Var._frontend_native_api["copy"]
     _native_operators = {name: getattr(Var, name, None) for name in _BINARY_APIS}
     _bind_native_binary(_owner.jt, _native_operators, _owner._mark_cpu_like)
 
@@ -262,7 +271,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     g.ne = _torch_ne
     g.not_equal = _torch_ne
     Var.ne = _api_ne
-    Var.__ne__ = _api_ne_alias
+    # Keep the explicit six-way carrier comparison protocol installed by
+    # bind_tensor_protocol; do not replace __ne__ with arithmetic emulation.
 
     # torch's Tensor.nonzero(as_tuple=False) returns an (N, ndim) index matrix;
     # nonzero(as_tuple=True) instead returns a tuple of ndim 1-D index Vars (one
@@ -278,6 +288,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     if not hasattr(Var, "argwhere"):
         Var.argwhere = _api_argwhere_alias
     Var.normal_ = _api_normal
+    Var.random_ = _api_random
     Var.uniform_ = _api_uniform
 
     # torch tensors are hashable by identity (they define __eq__ elementwise but
@@ -409,7 +420,11 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # Keep the compatibility spelling on Var so it follows the graph instead
     # of silently calling every intermediate a leaf.
     Var.is_leaf = property(_api_is_leaf)
+    Var._version = property(_api_version)
     Var.is_sparse = property(_api_is_sparse)
+    Var.layout = property(_api_layout)
+    register_api_bindings(Var, 'torch.Tensor', ('layout',), Fidelity.EXACT,
+                          'Dense frontend tensors expose the canonical strided layout singleton.')
     register_api_bindings(Var, 'torch.Tensor', ('is_sparse',), Fidelity.EXACT,
                           'Native Var has dense storage; sparse construction is unsupported.')
     # torch's nested-tensor flag; jittor has no nested tensors -> always False.
@@ -452,7 +467,10 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
 
     _native_numpy = Var.numpy
     Var.numpy = _var_numpy
+    Var.item = _var_item
     Var.tolist = _api_tolist
+    register_api_bindings(Var, 'torch.Tensor', ('item',), Fidelity.APPROXIMATE,
+                          'Scalar readback preserves original storage/device; dtype support remains bounded by native item')
 
     # torch's Tensor.cpu()/.cuda() MIGRATE the tensor's residency (native exts
     # check tensor.is_cpu()). jittor's base Var.cpu just clones (stays on GPU)
@@ -641,6 +659,11 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         '_native_detach': locals().get('_native_detach'),
         '_native_nonzero': locals().get('_native_nonzero'),
         '_native_norm': locals().get('_native_norm'),
+        '_native_item': _native_item,
+        '_native_inplace_version': _native_inplace_version,
+        '_native_device_copy': _native_device_copy,
+        '_native_clone': _native_clone,
+        '_native_copy': _native_copy,
         '_native_numpy': locals().get('_native_numpy'),
         '_native_requires_grad': locals().get('_native_requires_grad'),
         '_native_squeeze': locals().get('_native_squeeze'),
@@ -654,5 +677,5 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             setattr(Var, name, implementation)
 
     register_api_bindings(Var, 'torch.Tensor',
-        ('T', '__iadd__', '__isub__', '__imul__', '__itruediv__', '__deepcopy__', '__getitem__', '__hash__', '__invert__', '__ne__', '__reduce__', '__reduce_ex__', '__setitem__', 'add_', 'addmm', 'argwhere', 'as_strided', 'backward', 'baddbmm', 'clamp', 'clamp_', 'clip', 'clip_', 'contiguous', 'copy_', 'cpu', 'cuda', 'cumprod', 'cumsum', 'data', 'data_ptr', 'detach', 'device', 'div_', 'dtype', 'element_size', 'fill_', 'get_device', 'grad', 'grad_fn', 'is_complex', 'is_contiguous', 'is_cpu', 'is_cuda', 'is_floating_point', 'is_leaf', 'is_meta', 'is_mps', 'is_nested', 'is_pinned', 'is_signed', 'is_xpu', 'mT', 'mul_', 'narrow', 'ne', 'nelement', 'new_empty', 'new_full', 'new_ones', 'new_tensor', 'new_zeros', 'nonzero', 'norm', 'normal_', 'numpy', 'pin_memory', 'requires_grad', 'requires_grad_', 'retain_grad', 'retains_grad', 'set_', 'squeeze', 'storage', 'storage_offset', 'stride', 'sub_', 'tile', 'to', 'tolist', 'type', 'uniform_', 'untyped_storage', 'where', 'zero_') + tuple(_BINARY_APIS.keys() | _CAST_APIS.keys() | _UNARY_INPLACE_APIS.keys()),
+        ('T', '_version', '__iadd__', '__isub__', '__imul__', '__itruediv__', '__deepcopy__', '__getitem__', '__hash__', '__invert__', '__ne__', '__reduce__', '__reduce_ex__', '__setitem__', 'add_', 'addmm', 'argwhere', 'as_strided', 'backward', 'baddbmm', 'clamp', 'clamp_', 'clip', 'clip_', 'contiguous', 'copy_', 'cpu', 'cuda', 'cumprod', 'cumsum', 'data', 'data_ptr', 'detach', 'device', 'div_', 'dtype', 'element_size', 'fill_', 'get_device', 'grad', 'grad_fn', 'is_complex', 'is_contiguous', 'is_cpu', 'is_cuda', 'is_floating_point', 'is_leaf', 'is_meta', 'is_mps', 'is_nested', 'is_pinned', 'is_signed', 'is_xpu', 'mT', 'mul_', 'narrow', 'ne', 'nelement', 'new_empty', 'new_full', 'new_ones', 'new_tensor', 'new_zeros', 'nonzero', 'norm', 'normal_', 'numpy', 'pin_memory', 'random_', 'requires_grad', 'requires_grad_', 'retain_grad', 'retains_grad', 'set_', 'squeeze', 'storage', 'storage_offset', 'stride', 'sub_', 'tile', 'to', 'tolist', 'type', 'uniform_', 'untyped_storage', 'where', 'zero_') + tuple(_BINARY_APIS.keys() | _CAST_APIS.keys() | _UNARY_INPLACE_APIS.keys()),
         Fidelity.APPROXIMATE, 'Tensor operations share the native Var/Op graph and explicit frontend state; unsupported layouts, device capabilities, and retained compatibility approximations remain restricted')

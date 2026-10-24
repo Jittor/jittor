@@ -15,6 +15,12 @@ _HAS_FLASH_ATTN = importlib.util.find_spec("flash_attn") is not None
 
 
 def _sdpa_reference(query, key, value, scale=None):
+    if query.shape[-2] != key.shape[-2]:
+        assert query.shape[-2] % key.shape[-2] == 0
+        key = np.repeat(key, query.shape[-2] // key.shape[-2], axis=-2)
+    if query.shape[-2] != value.shape[-2]:
+        assert query.shape[-2] % value.shape[-2] == 0
+        value = np.repeat(value, query.shape[-2] // value.shape[-2], axis=-2)
     factor = query.shape[-1] ** -0.5 if scale is None else scale
     scores = np.einsum("blhd,bshd->bhls", query, key) * factor
     scores -= scores.max(axis=-1, keepdims=True)
@@ -98,6 +104,33 @@ class TestFlashAttnCompat(unittest.TestCase):
             got = output.numpy()
 
         np.testing.assert_array_equal(got, np.zeros_like(value))
+
+    def test_dense_and_varlen_math_fallback_support_gqa(self):
+        import flash_attn
+
+        q_array = self.random.randn(2, 3, 4, 4).astype("float32")
+        k_array = self.random.randn(2, 3, 2, 4).astype("float32")
+        v_array = self.random.randn(2, 3, 2, 4).astype("float32")
+        with _native_jittor.flag_scope(use_cuda=1):
+            dense = flash_attn.flash_attn_func(
+                self._tensor(q_array), self._tensor(k_array), self._tensor(v_array)
+            )
+            cu_seqlens = torch.tensor([0, 3, 6], dtype=torch.int32, device="cuda")
+            varlen = flash_attn.flash_attn_varlen_func(
+                self._tensor(q_array.reshape(6, 4, 4)),
+                self._tensor(k_array.reshape(6, 2, 4)),
+                self._tensor(v_array.reshape(6, 2, 4)),
+                cu_seqlens,
+                cu_seqlens,
+                3,
+                3,
+            )
+            got_dense = dense.numpy()
+            got_varlen = varlen.numpy().reshape(2, 3, 4, 4)
+
+        expected = _sdpa_reference(q_array, k_array, v_array)
+        np.testing.assert_allclose(got_dense, expected, atol=2e-5, rtol=2e-5)
+        np.testing.assert_allclose(got_varlen, expected, atol=2e-5, rtol=2e-5)
 
 
 class TestPackedEntryDeviceGuard(unittest.TestCase):
