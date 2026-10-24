@@ -1,10 +1,10 @@
 # Jittor wheel contents baseline (SHA-256 and exact archive member paths)
 # source-wheel: jittor-2.0.0-py3-none-any.whl
-# source-wheel-sha256: ff39ce16a00487dad95e881ee53b3284b60bcf312abb75d1733f9226cc2f53dd
+# source-wheel-sha256: b9a8e25e69881e582f0b9ef15d91b0b4608c04272136faf61bd0dc973341f036
 # entries: 1134
 # Regenerate only after reviewing every path and content change.
 fb0d15cb73dc519400967b63b0091df66a8c4388e3cb7dd107b8fc40fcc5054f  jittor-2.0.0.dist-info/METADATA
-c0f0cf37f6b3e879f12807f2a8a9d7bba9949665801f81924ce342190f81f602  jittor-2.0.0.dist-info/RECORD
+e41796227be3d24f05a595d8b720f1921dadc571dff933e6422e40987a00f8a7  jittor-2.0.0.dist-info/RECORD
 2b6eb4118ce7cd7b09601406aa623c553c4476265836f0d9c16f5c061f7efcc0  jittor-2.0.0.dist-info/WHEEL
 435a22ada7651633d681246096725d6b8a5d15b729df61706c5637cbc58c39c7  jittor-2.0.0.dist-info/entry_points.txt
 8b18f18c9c43b17e6e2bcdefc8df9d423c12e6769d5d13cf6a46fed31e7e1666  jittor-2.0.0.dist-info/licenses/LICENSE.txt
@@ -599,7 +599,7 @@ ee2cf65e0b974394713a3d65b833a6ced081bbebab456d7daa79bdf66c6c17a4  jittor/nn/dual
 0f967587f44311ad56e095fb8ad5e23269d921442d70dc3bfc10f11bf5d71288  jittor/nn/functional/__init__.py
 8c24650c8fbe38c1001d7169fd7235c51bcce4c38ddf95088cf2b5df4cd2d167  jittor/nn/functional/_amp.py
 fe59c68cc11ca0410a994fc16a73292cd26588ba285458c445a122dd147194d5  jittor/nn/functional/_layout.py
-2d932574427613c7aff492f3af426aeb273e2d16a7c717c92a5ee3b833aac6a0  jittor/nn/functional/activation.py
+f746a6c6b525be812f955f6f34c4bb933fc40fa51b575868df0dd3ce47548611  jittor/nn/functional/activation.py
 5f0533638c0cff81d91052803ceed1b8b609de4f99d007298734e706b6dbfcda  jittor/nn/functional/attention.py
 2d136fc2aab18de1601e7cf6e2b6b2ee010e0d950c58c084357ba984e6e77fbe  jittor/nn/functional/autograd.py
 41095ca40bbd3373dedcfacc886f75a911dadb93688e59f0f22a0d8f7eaeb646  jittor/nn/functional/complex.py
@@ -876,7 +876,7 @@ a1a7a46f9b6c2d562a1193ebb0779edb699e1de5ad1abb575948e24635898283  jittor/src/cor
 ae8b79083b01af19f52a3f5c9ad43085e8679965fad7a3468b07075fdef20a11  jittor/src/core/var.cc
 8f319ff31f1bf5d8029f196e4be1cdea2ba79832cb2f01c199227763630917b6  jittor/src/core/var.h
 b4c945e4f18c95c739fa6245deddaab2f47218a4922ad3604664b8593ae087d9  jittor/src/core/var_holder.cc
-451ca782eb8d67ea96d57cc710e11fba9dca44de69f1087c782180dee6594e0a  jittor/src/core/var_holder.h
+0fc128b9100b1936229e0e28c504782dd3cc64740b819b61d78987d0417cde73  jittor/src/core/var_holder.h
 98359e2b9ec5017d964f196e0ab4903a3276d5a2da99b7de008e0bdac3168d61  jittor/src/core/var_slices.cc
 64237b7becaa262ff82996a8eed319914c9c2d20cd6820cb52227b9eab9d0334  jittor/src/core/var_slices.h
 4f606fbda014fff793c68793d140bd6ebe98a3b9f81de29911098e44f9cbca12  jittor/src/debug/nan_checker.cc
