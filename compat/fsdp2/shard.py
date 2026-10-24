@@ -13,6 +13,7 @@ from jittor import nn
 
 from . import common, dtensor
 from ..torch.parameter_containers import ParameterDictAdapter, ParameterListAdapter
+from ..torch.tensor_state import get_tensor_state
 from ..diagnostics import EXPECTED, swallowed
 
 
@@ -53,7 +54,10 @@ def _flat_entry_slices(state, flat_var):
 
 @common._state_frontend
 def _refresh_flat_entry_shards(state):
-    return _storage._refresh_flat_entry_shards(state, api=sys.modules[__name__])
+    result = _storage._refresh_flat_entry_shards(state, api=sys.modules[__name__])
+    for entry in state.true_fsdp_params:
+        get_tensor_state(jt).leaf_params[id(entry.shard)] = entry.shard
+    return result
 
 
 class _ShardTensorMethod:
@@ -334,6 +338,10 @@ def _init_true_fsdp_state_impl(module, state):
     # the same entry identity as the new shard, without retaining them in state.
     for (_, _, _, original), entry in zip(params, state.true_fsdp_params):
         _mark_fsdp_param_var(original, state, entry, "retired")
+        # Public backward is independent of whether an optimizer exists. Index
+        # the current holder, with its explicit entry metadata, in the existing
+        # weak leaf registry; never retain a full parameter or a retired alias.
+        get_tensor_state(jt).leaf_params[id(entry.shard)] = entry.shard
     return initialized
 
 
