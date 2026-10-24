@@ -159,6 +159,40 @@ def _dtype(value):
     return dtype.removeprefix("torch.") if hasattr(dtype, "removeprefix") else dtype.replace("torch.", "", 1)
 
 
+def _validate_template(target, node, record, path=""):
+    """Validate the complete target schema before allocating decoded leaves."""
+    kind = node["kind"]
+    local, metadata = _local(target)
+    if _tensor(local):
+        if kind != "tensor":
+            raise ValueError("checkpoint target is not a tensor at " + path)
+        spec = record["tensors"][node["path"]]
+        shape = tuple(metadata[0]) if metadata is not None else tuple(local.shape)
+        if shape != tuple(spec["shape"]):
+            raise ValueError("checkpoint target global shape mismatch at " + path)
+        if _dtype(local) != spec["dtype"]:
+            raise ValueError("checkpoint target dtype mismatch at " + path)
+        return
+    if isinstance(target, Mapping):
+        if kind != "dict":
+            raise ValueError("checkpoint target mapping differs at " + path)
+        items = dict(node["items"])
+        if set(target) != set(items):
+            raise ValueError("checkpoint keys differ; partial/empty DCP templates are unsupported at " + path)
+        for key, value in target.items():
+            _validate_template(value, items[key], record, _pointer(path, key))
+        return
+    if isinstance(target, (tuple, list)):
+        expected = "tuple" if isinstance(target, tuple) else "list"
+        if kind != expected or len(node["items"]) != len(target):
+            raise ValueError("checkpoint sequence type/length differs at " + path)
+        for index, (value, saved) in enumerate(zip(target, node["items"])):
+            _validate_template(value, saved, record, _pointer(path, index))
+        return
+    if kind not in ("value", "numpy_scalar"):
+        raise ValueError("checkpoint scalar target differs from saved tensor/container at " + path)
+
+
 def _plan(target, restored, native, copies, path=""):
     local, metadata = _local(target)
     if _tensor(local):
@@ -224,7 +258,9 @@ def load(state_dict, *, checkpoint_id=None, storage_reader=None, planner=None, p
     try:
         if not isinstance(state_dict, dict):
             raise TypeError("DCP state_dict must be a dictionary")
-        _read_manifest(native, reader.path)
+        manifest = _read_manifest(native, reader.path)
+        record = manifest["records"][0]
+        _validate_template(state_dict, record["tree"], record)
         restored = native.load(reader.path, process_group=process_group,
                                tensor_shards=_targets(state_dict, native))
         planned = _plan(state_dict, restored, native, copies)

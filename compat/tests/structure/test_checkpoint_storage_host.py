@@ -213,11 +213,12 @@ def test_custom_and_pytorch_formats_remain_explicitly_unsupported(runtime, tmp_p
         bridge.load({}, checkpoint_id=tmp_path)
 
 
-def test_missing_target_keys_and_shapes_fail_before_copy(runtime, tmp_path):
+def test_missing_target_keys_and_shapes_fail_before_copy(runtime, tmp_path, monkeypatch):
     workers, run = runtime.workers(1)
     bridge = workers[0][1]
     bridge.save({"first": np.ones(3, dtype=np.float32), "last": np.ones(2, dtype=np.float32)}, checkpoint_id=tmp_path)
     target = np.zeros(3, dtype=np.float32)
+    monkeypatch.setattr(workers[0][0], "load", lambda *args, **kwargs: pytest.fail("invalid templates must reject before tensor decoding"))
     with pytest.raises(runtime.serializer.CheckpointError, match="partial/empty DCP templates"):
         bridge.load({"first": target}, checkpoint_id=tmp_path)
     assert not target.any()
