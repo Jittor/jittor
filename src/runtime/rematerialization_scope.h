@@ -7,6 +7,21 @@ namespace jittor {
 
 struct Var;
 
+// Construction provenance belongs to the calling thread, not a global flag.
+EXTERN_LIB uint64 rematerialization_construction_owner();
+EXTERN_LIB bool rematerialization_has_recording_owner();
+EXTERN_LIB bool rematerialization_preserves_rng();
+EXTERN_LIB void rematerialization_mark_kept(Var* value);
+
+// Must be nested inside ExecutorEntryScope and span the complete submission.
+struct RematerializationExecutionScope {
+    void* frame = nullptr;
+    RematerializationExecutionScope();
+    ~RematerializationExecutionScope();
+    RematerializationExecutionScope(const RematerializationExecutionScope&) = delete;
+    RematerializationExecutionScope& operator=(const RematerializationExecutionScope&) = delete;
+};
+
 // Used under executor entry ownership. Existing retained buffers belong to
 // their caller and must not become disposable keep_graph=2 intermediates.
 struct RematerializationRetentionScope {
@@ -22,6 +37,7 @@ struct RematerializationRetentionScope {
 // executor on the materializing thread. Explicit nested materializers still
 // establish their own retention policy.
 struct RematerializationCallbackScope {
+    void* owner_callback = nullptr;
     bool active = false;
     int previous_keep_graph = 0;
     size_t previous_visible_from = 0;

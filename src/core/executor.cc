@@ -16,6 +16,7 @@
 #endif
 #include "runtime/device.h"
 #include "runtime/executor_entry.h"
+#include "runtime/rematerialization_scope.h"
 #include "runtime/async_exec.h"
 #include "runtime/graph_capture.h"
 #include "runtime/submission_pipeline.h"
@@ -563,6 +564,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync, boo
     // has to be a lock. Explicit dynamic-input prerequisite submissions are
     // on this thread and pass straight through; constructors never submit.
     ExecutorEntryScope entry;
+    RematerializationExecutionScope rematerialization;
     StepTraceBatchScope trace_batch;
     exec_called ++;
     auto& pipeline = runtime_submission_pipeline();

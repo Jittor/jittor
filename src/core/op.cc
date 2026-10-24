@@ -25,6 +25,7 @@
 #include "core/grad.h"
 #include "ops/op_register.h"
 #include "utils/graph_build_profile.h"
+#include "runtime/rematerialization_scope.h"
 
 namespace jittor {
 
@@ -80,6 +81,7 @@ bool lookup_unrecorded_view_edge(Node* source, Node* target) {
 }
 
 Op::Op() {
+    rematerialization_owner = rematerialization_construction_owner();
     launch_origin = capture_launch_origin();
     float32_precision = current_float32_precision_policy();
     flags.set(NodeFlags::_var, 0);

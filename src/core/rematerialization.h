@@ -11,4 +11,24 @@ namespace jittor {
 // @pyjt(_materialize_remat_outputs)
 vector<VarHolder*> materialize_remat_outputs(const vector<VarHolder*>& outputs);
 
+struct RematerializationOwnerFrame;
+
+// Private construction recording and exact native topology ownership. Closing
+// stops recording; release gives back only this lease's introduced kept bits.
+// @pyjt(_RematerializationLease)
+// @attrs(heaptype)
+struct RematerializationLease {
+    std::shared_ptr<RematerializationOwnerFrame> frame;
+    // @pyjt(__init__)
+    RematerializationLease(bool preserve_rng_state=true);
+    // @pyjt(__dealloc__)
+    ~RematerializationLease();
+    // @pyjt(close)
+    void close();
+    // @pyjt(release)
+    void release();
+    // @pyjt(pin_count)
+    int64 pin_count();
+};
+
 } // namespace jittor
