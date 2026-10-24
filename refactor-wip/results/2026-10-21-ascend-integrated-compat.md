@@ -8,6 +8,8 @@
 
 > **截至2026-10-24 R170：** R169真实Qwen3-0.6B BF16 LoRA双卡对拍的forward、224组梯度和224组初始参数通过，但102/224个LoRA-B更新数组仍超原预算，Native rank1物理卡排他映射也未通过核验。R170修复了3项Torch shim CPU回归并拆分优化器状态模块；Native/Torch Core为341 passed、46 skipped、1 xfailed，tests/structure为1794 passed、3 skipped，layout通过。R170没有新跑NPU模型，所以不改变R169更新失败、恢复待验和无合格性能结论。
 
+> **截至2026-10-24 R176：** R169的102/224个LoRA-B更新数组仍超原预算；当前source manifest fd03f62972e2245e24d8498cd25f819139f8e6f8上的R173/R174局部o_proj与QK VJP均逐位一致。R172/R175/R176把可见的细小偏差收窄到Q/K RMSNorm输入梯度；R176手写反向候选虽减少部分不一致元素，仍未逐位匹配Native，故没有合入生产代码。真实双卡、恢复、随机/重计算、nested HCCL及性能/显存验收仍未完成。
+
 | 本轮验收 | 实际结论与源码范围 |
 | --- | --- |
 | 用户环境 | cgq 私有 Conda/Python3.11.17、CANN8.5.0、原生 Torch2.7.1/torch_npu2.7.1.post2 实卡 smoke；项目 dev 与独立 oracle 分离，安装目标均在私有目录 |
@@ -1047,11 +1049,39 @@ LAB cohort为 `real-model/qwen3-06b-qnorm-vjp-r172-card3/`，对真实模型laye
 
 R171/R172所有数组、完整日志、NPU监控、失败attempt、探针与比较脚本及缓存均保留在各自LAB cohort。下一步仍需采集layer25 context上游的attention输出投影、残差及相关共享hidden-state累计边界，补齐全图 `qk_right` 梯度观察；在明确生产差异之前不做数值门槛调整。
 
-## 按原计划截至R172仍需完成
+## 2026-10-24 R173–R176：layer25/26反向链与RMSNorm VJP继续定位
 
-1. **关闭真实Qwen3首步更新差异。** R169仍有102/224个LoRA-B更新数组超原预算；R171/R172只排除了两个固定输入局部VJP，不是模型修复。继续拆分layer25上游attention/投影/残差和BF16共享梯度累计，补齐 `qk_right`；只有生产根因证据明确后才修代码，之后以新cohort重跑完整输出、224组梯度、初始参数和更新，保持原门槛。
-2. **完成当前主树双卡FSDP2与严格映射。** R169绑定较早源码，且Native rank1 PID曾同时见于卡5/6；要在当前冻结源码和fresh空闲NPU上重做真实Trainer双卡对拍，核实每个Native rank只落在分配的物理卡、Jittor fallback为0及监控无gap。另需覆盖真实FP32/BF16 compute与FP32/BF16输入梯度的目标组合；R130 Linear fixture不能外推。
-3. **完成真实训练恢复闭环。** 比较模型/LoRA、Adam、scheduler、数据游标及恢复后的下一步更新；现有Jittor自身LoRA新进程恢复和R65较早冻结源码结果均不能替代当前源码上的原生交叉验收。
-4. **补齐日常生态与随机训练场景。** 覆盖Transformers、Tokenizers、PEFT、Accelerate、safetensors的常见数据处理、梯度累加、Trainer包装、checkpoint保存加载及错误路径；另外验证激活重计算确实重执行，覆盖随机sampler、显式generator、多worker预取、确定性设置和fresh-process随机状态恢复。
-5. **完成nested child+root HCCL验收。** Native/Jittor分别核实child与root communicator及所需dtype，不从Linear fixture或其他拓扑外推。
-6. **最后测性能与显存。** 只对对应正确性gate通过的相同工作负载比较吞吐、延迟、峰值显存和稳定性，区分首次编译、首步和稳态。目前没有合格NPU速度/显存结论。
+这些新cohort使用R169保存的四份Native/Jittor rank快照和共享Qwen3-0.6B权重，绑定当前提交 `fd03f62972e2245e24d8498cd25f819139f8e6f8`、3338个tracked文件及source manifest SHA256 `117cbf200c91a9ed801a563ec7e144d27fa8a13384b0cb7ec811de88699a1e34`。该提交只新增前一轮报告/看板文档，运行时源码与R171/R172使用的 `d2910102697bbcd6fab9993f8b72c6d3aa0312d8`相同。全部是物理NPU3单卡局部诊断，不执行完整模型更新。
+
+### R173：layer25 attention output projection
+
+LAB cohort为 `real-model/qwen3-06b-oproj-vjp-r173-card3/`。从共享 safetensors 独立提取 `model.layers.25.self_attn.o_proj.weight`，确认BF16权重形状为 \(1024\times2048\)，在Native与Jittor上分别用相同context输入和o_proj输出cotangent重放Linear前向与输入VJP。两个runtime的8组同输入输出/梯度数组逐位一致；两边重放也都精确复现各自全图保存的8组数组。成功阶段均returncode=0、monitor gap=0、无foreign occupant；Jittor fallback增量0，阶段后卡空。
+
+准备过程保留了三个未触及NPU的失败记录：权重提取预检最初误写为方阵，修正为实际1024×2048；首次driver使用文档提交前的d291 manifest而在fresh admission前退出，随后重算全部3338 tracked file hashes，确认仅两份文档变化并绑定fd03；首次离线分析因JSON metadata key未去除NPZ namespace而退出，修正索引后完成。日志和执行收据均留在该cohort。comparison JSON SHA256为 `bcaa900d607a0950baaa1323036295f157aa70237470e3b5eb75b872cc92a5bd`。
+
+### R174：layer26 QK matmul与缺失qk_right重放
+
+LAB cohort为 `real-model/qwen3-06b-qk-layer26-vjp-r174-card3/`。对layer26保存的qk_left/qk_right及qk_out cotangent分别由Native与Jittor重放。12组同输入输出与左右VJP全部逐位相同；每个runtime重放Native保存的两rank qk_right梯度都精确，重放其余已保存全图输出/梯度也为零差异。原Jittor全图 qk_right hook仍缺失，因此其右侧梯度只记为同输入局部重放值，不冒充全图捕获。
+
+离线核对R169 layer26 attention trace：QK operands、qk_out、softmax输入/输出和context operands/输出前向全部逐位相同；qk_left、qk_out、softmax_in/softmax_out、context_left/context_right/context_out已保存梯度跨runtime也逐位相同。Jittor qk_right全图梯度未捕获。R174把QK matmul及已采集的softmax/context梯度移出当前首要差异源，但没有覆盖Q/K RMSNorm VJP。comparison JSON SHA256为 `531a4c5adc62e6f86d2122c6e30ac009ad34fc44b14a00920302d536c2c39b42`；offline attention frontier SHA256为 `1d41404dc3f7e162106f6b602d9d7ffbd0ce6dd86228388448e953515559dc92`。
+
+### R173离线梯度前沿
+
+同批CPU NumPy-only归档分析未加载Jittor/Torch，也未调用NPU。layer26 MLP各模块梯度跨runtime逐位相同；可见非零差异集中在Q/K路径和input_layernorm梯度：rank0 k_proj输出梯度最多3元素/5.96e-8，rank1 q_proj最多2元素/2.98e-8；共享投影输入梯度分别最多9元素/9.54e-7及10元素/2.38e-7。每个runtime内block→MLP/down_proj及self_attn→o_proj对应cotangent逐位一致。layer25 block输出cotangent已各出现少量差异（rank0 4元素/1.19e-7，rank1 2元素/4.77e-7），并沿norm/attention支路向context梯度传递。该分布与R172层26/27 Q/K RMSNorm的微小输入梯度差异吻合，但仍不能证明它们足以造成整个LoRA更新gate失败。layer25与layer26 frontier JSON SHA256分别为 `e656a3f49340517d429ec05fe9e57c694f053e5e2fc56949719a93936a8452ab`、`c6488b3e55b886ffef1dce093f1146aab5f54b29baf7f15d7b21055cffb4b682`。
+
+### R175/R176：RMSNorm手写VJP候选，没有采纳生产修复
+
+LAB cohort分别为 `real-model/qwen3-06b-rmsnorm-manual-vjp-r175-card3/`、`real-model/qwen3-06b-rmsnorm-vjp-order-r176-card3/`。Native和Jittor普通Qwen3 RMSNorm路径复现各自全图输出逐位相同；同输入比较的输出也逐位相同。标准Jittor与Native对照的16个输入梯度数组中有6组、共12个元素不一致，最大差5.9605e-8。
+
+R175加入只在诊断worker里的手写输入VJP，将归一化乘法分支与均方/rsqrt分支显式组合；16组梯度中仍有6组、8个元素不一致，最大差仍为5.9605e-8。R176再比较五种Pow梯度乘法与mean缩放顺序，五个候选逐数组相同，结果仍是6组、8个元素不一致。forward没有改变。该候选没有通过逐位门槛，未修改生产代码、未放宽数值预算，也未推断其足以修复R169更新失败。R175 comparison JSON SHA256为 `b391f6b1e82f014dee48879981ede7f5531ad2c38bb7fa1a0fbfaaa5a1d2b91c`；R176 comparison JSON和runner summary SHA256分别为 `534f1f634123e9db8dc76c7406e004dd4c92f67df7e195c11766dea7fb974411`、`16adb46ab33aeb019e06a8c5440e2ea915f3406d899e63a641bc51f936409833`。
+
+R173–R176 Native/Jittor均按顺序在NPU3完成，成功阶段monitor gap=0、无foreign occupant、阶段后卡空，Jittor fallback增量为0。首次冷JIT复用R171同源缓存，不与其它任务并行；完整tensor、报告、失败准备日志及缓存均留在相应LAB cohort。没有新增生产源码修复或完整模型验收。
+
+## 按原计划截至R176仍需完成
+
+1. **关闭真实Qwen3首步更新差异。** R169仍有102/224个LoRA-B更新数组超原预算。R171/R173/R174只排除了固定输入下的context matmul、o_proj与QK局部VJP；R172/R175/R176将可见细小偏差收窄到Q/K RMSNorm输入梯度，但候选VJP仍不逐位匹配，也未证明是全模型更新失败的唯一根因。继续定位NPU梯度累加/Norm VJP首个差异；找到可验证的生产修复后，以当前源码重跑完整输出、224组梯度、初始参数和更新，保持全部原预算。
+2. **完成当前主树双卡FSDP2与严格映射。** R169绑定较早源码，且Native rank1 PID曾同时见于卡5/6；要在fresh空闲NPU上重做当前源码的真实Trainer双卡对拍，核实每个Native rank只落在分配物理卡、Jittor fallback为0、监控无gap。补真实FP32/BF16 compute与FP32/BF16输入梯度目标组合，不能用R130 Linear fixture外推。
+3. **完成真实训练恢复闭环。** 在当前源码比较模型/LoRA、Adam、scheduler、数据游标及fresh-process恢复后的下一次更新。较早R65交叉恢复和Jittor自身LoRA恢复不能替代此验收。
+4. **补齐日常生态、激活重计算与随机恢复。** 覆盖Transformers、Tokenizers、PEFT、Accelerate、safetensors的常见数据处理、梯度累加、Trainer包装、checkpoint保存/加载和错误路径；证明activation checkpoint确实重执行，并覆盖随机sampler、显式generator、多worker预取、确定性设置及fresh-process随机状态恢复。
+5. **完成nested child+root HCCL验收。** Native/Jittor分别核实child与root communicator及所需dtype，不从单卡或Linear fixture外推。
+6. **最后测性能与显存。** 仅对对应正确性gate通过的相同工作负载比较吞吐、延迟、峰值显存和稳定性，区分首次编译、首步和稳态。当前没有合格NPU速度/显存结论。
