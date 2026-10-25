@@ -912,6 +912,7 @@ include src/type/pow_compute.h
 include src/type/stream_load.h
 include src/utils/cache_compile.cc
 include src/utils/cache_compile.h
+include src/utils/cgroup_memory.h
 include src/utils/cross_platform.h
 include src/utils/cstr.h
 include src/utils/deleter.h
