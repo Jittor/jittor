@@ -213,6 +213,17 @@ class Conv1d(jt.Module):
     >>> output = conv(input)
     '''
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True, padding_mode='zeros'):
+        # Conv1d stores its spatial axis as the height of an inner Conv2d.
+        # Normalize one-element sequences before adding that inner width axis.
+        values = []
+        for name, value in (("kernel_size", kernel_size), ("stride", stride),
+                            ("padding", padding), ("dilation", dilation)):
+            if isinstance(value, (list, tuple)):
+                if len(value) != 1:
+                    raise ValueError("Conv1d %s must be an int or one-element sequence" % name)
+                value = value[0]
+            values.append(value)
+        kernel_size, stride, padding, dilation = values
         assert in_channels > 0, 'in_channels must be positive'
         assert out_channels > 0, 'out_channels must be positive'
         _check_padding_options(padding, padding_mode, _pair(stride))

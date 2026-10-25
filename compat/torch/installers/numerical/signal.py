@@ -38,6 +38,8 @@ def kaiser_window(window_length, periodic=True, beta=12.0, *, dtype=None,
     if selected not in ("float16", "bfloat16", "float32", "float64"):
         raise RuntimeError("kaiser_window requires a floating point dtype")
     length = int(window_length)
+    if length < 0:
+        raise RuntimeError("kaiser_window requires non-negative window_length, got %d" % length)
     if length <= 1:
         window = np.ones(max(length, 0), np.float64)
     else:
