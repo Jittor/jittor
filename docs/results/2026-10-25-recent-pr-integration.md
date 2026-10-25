@@ -215,7 +215,7 @@ passed/1 skipped，合计 **324 passed/45 skipped/1 xfailed**；`tests/structure
 | 缺陷 | 处置 | 证据 |
 | --- | --- | --- |
 | KI-COMPAT-016 | fused AdamW 写回改走保留存储的 `_update_preserve_dtype` | 存储身份 128 passed；直接与传递旧输出 8 passed；CPU+CUDA |
-| KI-COMPILER-008 | `precompile` 保留异常类别；@ 解析、# 指令、花括号、@for/@strcmp/@alias、arity 迁移 `USER_CHECK` 并给出用户构造名；其余文件在总账中收窄 | 新回归 2 passed；代码生成/错误契约 83 passed；C++ JIT 93 passed |
+| KI-COMPILER-008 | `precompile` 保留异常类别；@ 解析、# 指令、花括号、@for/@strcmp/@alias、arity 迁移 `USER_CHECK`；kernel_ir/cache_compile/op_register 的公开路径同样迁移，expr/swap 记录为非公开 | 定向 181 passed/5 skipped/4 xfailed；C++ JIT 93 passed |
 | KI-COMPAT-014 | complex128 成为前端 dtype（构造、cast、type、报告），complex32 仍占位 | 83 passed/10 skipped |
 | KI-DTYPE-003/004 | Python float 对 float64 保持 53 位；工厂结果不再按弱标量提升，放置由 `_is_constant` 维持 | CPU 77 passed；CUDA 55 passed；strict xfail 标记移除 |
 | KI-COMPAT-007 / KI-AUTOGRAD-003 | 基线已修复，补齐 `copy_`-no_grad 与 register_hook 驻留回归 | 7 passed/1 skipped |
@@ -229,4 +229,9 @@ passed/1 skipped，合计 **324 passed/45 skipped/1 xfailed**；`tests/structure
 | 18031 第二批语义 | `Tensor.type_as`、反射标量留在张量后端、TensorDataset 单次 gather、掩码写入梯度、expand 标量维、torchvision resize/pad/color/crop、Conv1d device/dtype、advanced-index/0-dim 设备对齐 | CPU 373 passed/16 skipped；CUDA 定向 14+2 passed |
 
 本表不把 partial 文件或单个用例的成功写成整库、整后端验收；NPU/ROCm/310P 与多机集合
-通信仍未验证。LayerNorm 快路径与 autocast Conv2d bias 两项仍在进行中。
+通信仍未验证。KI-COMPAT-012 的机制已修复（进程内 shim 发布 torch distribution 元数据，
+元数据回归通过），但下游 Transformers/Diffusers 用例仍需在装有这些包的环境验收。
+LayerNorm 快路径与 autocast Conv2d bias 两项仍在进行中。另：一次裸 pytest 宽扫描在
+验证 venv 中把 `tests._helpers` 解析到 `.pth` 里的 modelscope `tests` 包而报
+ModuleNotFoundError；那是验证环境遮蔽，不是产品缺陷，正式门禁走
+`tools/run_test_suite.py` 不受影响。
