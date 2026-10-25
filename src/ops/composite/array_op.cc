@@ -31,8 +31,10 @@ ArrayOp::ArrayOp(ArrayArgs&& args) {
         output->set_flag(VarFlags::_force_fuse);
         set_type(OpType::element);
     }
-    if (shape.size() == 0)
+    if (shape.size() == 0) {
         output->set_flag(VarFlags::_is_scalar);
+        output->set_flag(VarFlags::_is_constant);
+    }
     #ifdef HAS_ACCELERATOR
     // Fused scalar values are emitted inside generated kernels on both backends.
     if (requested_backend() != BackendId::Cpu && output->flag(VarFlags::_force_fuse))

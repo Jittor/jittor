@@ -57,6 +57,7 @@ VarPtr storage_view_transpose(Var* v, NanoVector axes) {
     // axes change; otherwise the layout kernel can produce float32 storage
     // for a logical float16/bfloat16 result.
     result->set_flag(VarFlags::_is_scalar, v->flag(VarFlags::_is_scalar));
+    result->set_flag(VarFlags::_is_constant, v->flag(VarFlags::_is_constant));
     return result;
 }
 

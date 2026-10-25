@@ -31,6 +31,13 @@ struct ArrayOp : Op {
     // allocation and release were most of what building one cost.
     alignas(8) char inline_value[8];
     bool inline_pending = false;
+    // The exact value of a Python float this op was built from. The staging
+    // union in py_array_op.cc narrows it to float32, which is what
+    // `jt.array(0.5)` and every float32/half operand must keep seeing; a
+    // binary op against a float64 operand rebuilds the constant from this
+    // instead of from the 24-bit narrowing (KI-DTYPE-003).
+    double python_float = 0;
+    bool has_python_float = false;
     // @pybind(None)
     ArrayOp(const void* ptr, NanoVector shape, NanoString dtype=ns_float32);
 

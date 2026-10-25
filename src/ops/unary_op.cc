@@ -998,6 +998,7 @@ UnaryOp::UnaryOp(Var* x, NanoString op) : x(x) {
     }
     y = create_output(nullptr, dtype);
     y->set_flag(VarFlags::_is_scalar, x->flag(VarFlags::_is_scalar));
+    y->set_flag(VarFlags::_is_constant, x->flag(VarFlags::_is_constant));
     bool bin = ns.get(NanoString::_no_need_back_in);
     bool bout = ns.get(NanoString::_no_need_back_out);
     if (bin || bout) {

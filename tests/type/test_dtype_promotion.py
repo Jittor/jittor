@@ -158,23 +158,19 @@ class TestScalarPromotion(unittest.TestCase):
         self.assertEqual((v * 2.0).numpy()[0], 2.0)
         self.assertEqual((v / 3.0).numpy()[0], 1.0 / 3.0)
 
-    @unittest.expectedFailure
     def test_float64_tensor_with_an_inexact_python_float_keeps_its_value(self):
-        """KI-DTYPE-003: the scalar is narrowed to float32 even against float64.
+        """KI-DTYPE-003: the scalar keeps all 53 bits against float64.
 
         `test_float_tensor_keeps_its_own_width` above pins the *dtype* using
-        2.0, which float32 represents exactly -- so it cannot see this defect at
-        all. Every python float reaches a kernel through
+        2.0, which float32 represents exactly -- so it cannot see the defect
+        this pins. A python float reaches a kernel through
         `scalar.f32 = PyFloat_AS_DOUBLE(obj)` in `ArrayOp::ArrayOp(PyObject*)`,
-        and `_is_scalar` then correctly keeps it out of dtype promotion, which is
-        what hides it: the result dtype is right and only the value is wrong.
-        Real torch treats a python float as a weak double against a float64
-        tensor and answers all four of these exactly.
-
-        Expected failure until a python float keeps its value against a float64
-        operand (KI-DTYPE-003). It is `expectedFailure` rather than a skip
-        because this suite runs with `xfail_strict`, so the day it starts passing
-        the run turns red and says so.
+        which is the right default for `jt.array(0.5)` and every float32/half
+        operand, but it drops 29 mantissa bits in a float64 computation.
+        `binary_op.cc` therefore rebuilds the constant from the exact double
+        when the result dtype is float64. Real torch treats a python float as
+        a weak double against a float64 tensor and answers all four of these
+        exactly.
         """
         v = _var("float64", [1.0])
         cases = {
@@ -185,6 +181,38 @@ class TestScalarPromotion(unittest.TestCase):
         }
         for name, (got, want) in cases.items():
             self.assertEqual(got, want, msg=name)
+
+    def test_python_float_on_the_left_keeps_its_value(self):
+        """The weak double widens from either side of the operator."""
+        v = _var("float64", [1.0])
+        self.assertEqual((0.1 * v).numpy()[0], 0.1)
+        self.assertEqual((0.1 + v).numpy()[0], 1.0 + 0.1)
+
+    def test_a_float32_operand_still_computes_in_float32(self):
+        """The widening above is for float64 results only.
+
+        `0.1` is not exact in float32, and rounding the product of the exact
+        double and a float32 to float32 is not the same as multiplying in
+        float32. For x = float32(15 * 1e-3) the two answers are one ULP apart.
+        torch computes the float32 arithmetic, and a float32 tensor must keep
+        taking that path -- otherwise this fix would change ordinary float32
+        results.
+        """
+        xval = np.float32(np.float32(15.0) * np.float32(1e-3))
+        x = _var("float32", [xval])
+        want = np.float32(xval * np.float32(0.1))
+        self.assertEqual((x * 0.1).numpy()[0], want)
+        # the float32 answer really is distinguishable from the double one
+        self.assertNotEqual(np.float32(np.float64(xval) * 0.1), want)
+
+    def test_array_of_a_python_float_stays_float32(self):
+        """`jt.array(0.5)` keeps the native default dtype.
+
+        KI-DTYPE-003 must not widen this path: `jt.array(0.5)` is a float32
+        tensor, not a weak scalar.
+        """
+        self.assertEqual(str(jt.array(0.5).dtype), "float32")
+        self.assertEqual(jt.array(0.5).item(), 0.5)
 
     def test_int_scalar_keeps_the_tensor_dtype(self):
         for name in ("int8", "uint8", "int64", "uint32"):

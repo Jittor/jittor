@@ -240,11 +240,12 @@ Var* Op::create_output(NanoVector shape, NanoString dtype) {
     return output;
 }
 
-// A pending Var marked _is_scalar is torch's CPU scalar: it has no data
-// anywhere yet, and it is the `2` in `x * 2`, the `1` a gradient starts from,
-// or a broadcast/unary of one (array_op.cc sets the flag on a rank-zero
-// source; broadcast_to_op.cc and unary_op.cc carry it forward). Such a value
-// follows the operand it meets instead of forcing a device error.
+// A pending Var marked _is_scalar or _is_constant is torch's CPU scalar: it
+// has no data anywhere yet, and it is the `2` in `x * 2`, the `1` a gradient
+// starts from, or a broadcast/unary/device-copy of one. A rank-zero ArrayOp
+// sets both bits (array_op.cc); broadcast_to_op.cc, unary_op.cc and
+// device_copy_op.cc carry them forward. Such a value follows the operand it
+// meets instead of forcing a device error.
 //
 // Both halves of that test are load-bearing, and each has a test:
 // element count alone sweeps in a real one-element user tensor that already
@@ -252,14 +253,17 @@ Var* Op::create_output(NanoVector shape, NanoString dtype) {
 // caller deliberately built on cuda:0 and merely has not synced yet --
 // silently, where torch raises. See tests/backends/cuda/test_cuda_multi_device.py.
 //
-// One edge remains and is accepted: `jt.zeros(n)` is `unary(0).broadcast(n)`,
-// and _is_scalar comes through the broadcast, so an unsynced zeros/ones does
-// follow its operand. It is a constant with no data anywhere, produced
-// bit-identically on either card, so this is constant placement rather than
-// moving something the caller computed. device-placement.md §5 has the
-// reasoning and why a third condition would cost more than it buys.
+// One edge remains and is accepted: `jt.zeros(n)` is `unary(0).broadcast(n)`.
+// A factory result clears `_is_scalar` on the full-shape result so it promotes
+// as a tensor (KI-DTYPE-004), but `_is_constant` still comes through the
+// broadcast, so an unsynced zeros/ones does follow its operand. It is a
+// constant with no data anywhere, produced bit-identically on either card, so
+// this is constant placement rather than moving something the caller computed.
+// device-placement.md section 5 has the reasoning and why a third condition
+// would cost more than it buys.
 static inline bool is_pending_scalar(Var* v) {
-    return !v->is_finished() && v->flag(VarFlags::_is_scalar)
+    return !v->is_finished()
+        && (v->flag(VarFlags::_is_scalar) || v->flag(VarFlags::_is_constant))
         && !v->flag(VarFlags::_placement_published);
 }
 
