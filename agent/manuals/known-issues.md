@@ -259,32 +259,6 @@ workaround.
   `src/ops/reindex_reduce_op.cc` (`ystride`) the same contiguous-input gate the
   elementwise and reduce ops have.
 
-## KI-CODEGEN-005: CUDA full sum materializes a pending expanded elementwise consumer
-
-- Severity: Medium (performance and an existing CUDA allocation contract failure).
-- Status: Open, independently reproduced on clean `4a4a480e628dae634a9d660f320c3aa957341e99`
-  and the leaf/view follow-up on 2026-10-15.
-- Owner: CUDA reduction and JIT fusion maintainers.
-- Symptom: with CUDA globally enabled, `(jt.ones((4096, 1)).expand(4096, 4096) * 2).sum()`
-  returns the correct value but allocates 68,157,440 bytes after synchronizing
-  the source, exceeding the existing 16,777,216-byte budget.
-- Cause: the default public full sum selects the two-stage CUDA code kernel
-  in `backends/cuda/kernels/nn/full_reduce_cuda.py`. Its opaque input boundary
-  materializes the preceding multiply. The expand itself still shares storage;
-  disabling the tuner or selecting strict math does not remove this boundary.
-- Workaround: explicitly pass all reduction axes, e.g. `.sum((0, 1))` for this
-  two-dimensional expression. That selects the existing native fused reduction
-  and allocated 1,048,576 bytes in the same CUDA process. Reduction order and
-  last-bit numerics may differ from the default two-stage implementation.
-- Evidence: `tests/core/test_view_storage.py::test_expand_does_not_materialize_when_it_is_consumed`
-  with `JT_USE_CUDA=1 JITTOR_TORCH_SHIM=0`; baseline, isolated, strict-math,
-  profiler and route-control logs under the unversioned
-  `$JITTOR_LAB_ROOT/_state/leaf-view-integration/`. Historical mixed-device
-  58-node view runs executed this unscoped node on CPU, so are not CUDA proof.
-- Exit condition: the original allocation budget passes on actual CUDA without
-  hiding a full-size intermediate, and full-sum numerical, gradient and
-  deterministic-resume contracts still pass.
-
 ## KI-CODEGEN-002: the `split{i}` and `parallel` loop options cannot be combined
 
 - Severity: Limitation (a compile error, never a wrong result; blocks a tuner
