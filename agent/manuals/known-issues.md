@@ -2214,17 +2214,6 @@ workaround.
   `# type: ignore`, no relaxed configuration); delete the entry when
   `python/jittor` and `backends/` are covered.
 
-## KI-TEST-015: storage-view fixtures do not yet provide a clean inplace gate
-
-- Severity: Medium
-- Status: Open; confirmed on `deb54e50d` and unchanged integration `1fa76c8cc` (2026-10-25).
-- Owner: Torch compatibility storage-view and test maintainers.
-- Symptom: three CPU cases in `test_tensor_inplace_storage.py` fail on both the preserved local-work baseline and the integration before the saved-output preservation fix. This prevents citing this file as an entirely passing storage-alias gate.
-- Cause: the two transpose cases assert a logical-view representation, but their current fixture selects the physical storage-view path. The temporary-base weak-reference lifetime assertion remains unresolved. These observations do not establish a production numerical or storage corruption defect; the tests currently mix representation/lifetime assumptions with behavior checks.
-- Workaround: report these exact failures separately from passing pointer, alias and saved-output checks; do not skip them or treat a partial run as a green file.
-- Evidence: `python/jittor/compat/tests/torch/test_tensor_inplace_storage.py::TestTensorInplaceStorageCPU::test_temporary_base_can_expire_without_losing_storage_alias`, `python/jittor/compat/tests/torch/test_tensor_inplace_storage.py::TestTensorInplaceStorageCPU::test_transpose_writeback_retains_logical_axis_order`, and `python/jittor/compat/tests/torch/test_tensor_inplace_storage.py::test_physical_provenance_distinguishes_pending_and_materialized_transpose`. With an isolated CPU cache, run `JITTOR_TORCH_SHIM=1 JITTOR_TEST_DEVICES=cpu JT_USE_CUDA=0 JT_BUILD_NVCC_PATH= PYTHONPATH=python python -m pytest -q python/jittor/compat/tests/torch/test_tensor_inplace_storage.py -k 'temporary_base_can_expire or transpose_writeback_retains or physical_provenance_distinguishes'`. Both controls report 3 failed / 11 deselected; this is not newly introduced by the PR integration.
-- Exit condition: establish the intended weak-reference ownership contract and make its regression pass; construct and verify explicitly selected logical and physical transpose cases against their intended public behavior; then rerun this file on CPU and relevant real accelerator devices with no hidden exclusions. Delete this entry only once those contracts and the complete gate agree.
-
 ## KI-EXEC-015: warmed optimizer replay does not preserve pending external forward readers
 
 - Severity: High
