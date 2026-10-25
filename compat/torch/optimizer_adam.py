@@ -128,9 +128,9 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
                 active, lr_arg, b0, b1, weight_decay, eps)
             for (p, m, v, _, _), (new_p, new_m, new_v) in zip(
                     active, updates):  # fused_adamw keeps each input's dtype
-                p.update(new_p)
-                m.update(new_m)
-                v.update(new_v)
+                _update_preserve_dtype(p, new_p)
+                _update_preserve_dtype(m, new_m)
+                _update_preserve_dtype(v, new_v)
                 if p.is_stop_grad():
                     p.start_grad()
             continue

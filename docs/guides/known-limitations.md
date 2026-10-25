@@ -48,7 +48,6 @@
 | `KI-COMPAT-002` | `torch.ops.aten` 没有原生算子面 | `import vllm_omni` 到不了头 |
 | `KI-COMPAT-003` | nested tensor 不是 `Tensor` | `isinstance(torch.nested.as_nested_tensor(...), torch.Tensor)` 为假 |
 | `KI-COMPAT-004` | 工厂函数的结果不是反向叶子 | `torch.ones(3, requires_grad=True).is_leaf` 为假；梯度本身正确 |
-| `KI-COMPAT-016` | clean committed fused AdamW 更新会让旧前向的反向失去参数梯度 | 使用 `fused=False`；本地存储写回修改的通过结果不代表发布源码 |
 | `KI-COMPAT-007` | `no_grad` 下 `w.copy_(x)` 且 `x` 需要梯度时，`w` 的梯度丢失 | 反向后 `w.grad` 仍是 `None` |
 | `KI-AUTOGRAD-003` | `register_hook` 让接收方误报自己的驻留设备 | 只影响自省，不影响计算 |
 | — | 没有 Lightning 兼容层 | `pytorch_lightning` / `lightning` 不被支持；自研的 `jittor.lightning` 已于 2026-07 删除 |
