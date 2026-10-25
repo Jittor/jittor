@@ -1050,6 +1050,16 @@ class VerifyRunnerTests(unittest.TestCase):
                     0,
                 )
 
+    def test_runtime_environment_preserves_parent_loader_path(self):
+        spec = importlib.util.spec_from_file_location("verify_repo_loader_env", SCRIPTS / "verify_repo.py")
+        verify = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(verify)
+        with mock.patch.dict(os.environ, {"LD_LIBRARY_PATH": "/python/lib"}):
+            inherited = verify._runtime_environment({}, "torch", "cpu", Path("unused"))
+            explicit = verify._runtime_environment({"LD_LIBRARY_PATH": "/explicit/lib"}, "torch", "cpu", Path("unused"))
+        self.assertEqual(inherited["LD_LIBRARY_PATH"], "/python/lib")
+        self.assertEqual(explicit["LD_LIBRARY_PATH"], "/explicit/lib")
+
 
 if __name__ == "__main__":
     unittest.main()

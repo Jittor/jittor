@@ -211,6 +211,8 @@ def _cases_module():
 
 def _runtime_environment(env, runtime, device, directory):
     run_env = dict(env)
+    if "LD_LIBRARY_PATH" not in run_env and "LD_LIBRARY_PATH" in os.environ:
+        run_env["LD_LIBRARY_PATH"] = os.environ["LD_LIBRARY_PATH"]
     if runtime == "jittor":
         cache_root = run_env.get("JITTOR_ECOSYSTEM_CACHE_ROOT", "").strip()
         cache_directory = (Path(cache_root).expanduser().resolve() / device
