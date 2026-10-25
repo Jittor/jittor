@@ -132,6 +132,34 @@ def test_portable_roundtrip_dtype_parameter_view_and_map_location(tmp_path, dest
     _torch_prune_leaf_registry()
 
 
+def test_portable_snapshot_fills_one_value_per_operand_including_views():
+    """A batched capture must fill a slot for every tensor, views included.
+
+    A non-contiguous operand used to reach the fetch binding unchanged, where
+    it was replaced by a *lazy* contiguous copy. `submit_pending_fetches` only
+    runs a fetch whose operands are already materialized, so the copy stayed
+    pending and `_snapshot_tensors` raised "checkpoint tensor fetch did not
+    complete" for a transposed view.
+    """
+    torch = compatibility_owner(jt)
+    base = torch.tensor(np.arange(6, dtype=np.float64).reshape(2, 3))
+    view = base.transpose(0, 1)
+    permuted = torch.tensor(
+        np.arange(24, dtype=np.float64).reshape(2, 3, 4)).permute(2, 0, 1)
+    contiguous = base[0:1]
+    before = (view.data_ptr(), tuple(view.stride()))
+    snapshot = portable._snapshot_tensors(
+        {"base": base, "view": view, "permuted": permuted,
+         "contiguous": contiguous})
+    assert len(snapshot) == 4
+    np.testing.assert_array_equal(snapshot[id(view)], np.arange(6).reshape(2, 3).T)
+    np.testing.assert_array_equal(
+        snapshot[id(permuted)], np.arange(24).reshape(2, 3, 4).transpose(2, 0, 1))
+    np.testing.assert_array_equal(
+        snapshot[id(contiguous)], np.arange(6).reshape(2, 3)[0:1])
+    assert (view.data_ptr(), tuple(view.stride())) == before
+
+
 @pytest.mark.parametrize("extension", (".pt", ".pkl"))
 def test_weights_only_format_probe_never_executes_payload(tmp_path, extension):
     torch = compatibility_owner(jt)
