@@ -34,6 +34,13 @@ import sys
 
 MARKER = "JITTOR-SESSION-COMPLETE"
 
+#: The counts the plugin prints on its final line. Parsed rather than trusted
+#: from a sentinel alone so a log-only run gets the same executed/collected
+#: comparison.
+_MARKER_COUNTS = re.compile(
+    r"^JITTOR-SESSION-COMPLETE collected=(\d+) executed=(\d+)\s*$",
+    re.MULTILINE)
+
 #: What a finished pytest writes. Any of these means the run reached its end.
 _SUMMARY = re.compile(
     r"(=+\s*(no tests ran|.*\b\d+ (passed|failed|error|errors|skipped|xfailed|xpassed)\b).*)"
@@ -54,6 +61,12 @@ def evidence(log_text, sentinel):
     if log_text is None:
         return False, "nothing", {}
     if MARKER in log_text:
+        match = _MARKER_COUNTS.search(log_text)
+        if match:
+            return True, "marker", {
+                "collected": int(match.group(1)),
+                "executed": int(match.group(2)),
+            }
         return True, "marker", {}
     if _SUMMARY.search(log_text):
         return True, "summary", {}
@@ -125,6 +138,16 @@ def main(argv=None):
         return 1
 
     collected = detail.get("collected")
+    executed = detail.get("executed")
+    if collected is not None and executed is not None and executed < collected:
+        # The session reached its end, but the tests did not all do so. A test
+        # that never produced a terminal report is the same loss of coverage
+        # as a session that died, just caught one step later.
+        print("FAIL: session finished but executed %d of %d collected tests; "
+              "%d never reached a result. That is a truncated selection even "
+              "though pytest reached its summary."
+              % (executed, collected, collected - executed))
+        return 1
     if args.expect_collected is not None and collected is not None:
         if collected < args.expect_collected:
             print("FAIL: session finished but collected %d of an expected %d; "

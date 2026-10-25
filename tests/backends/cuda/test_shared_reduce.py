@@ -65,7 +65,7 @@ class TestSharedReduce(unittest.TestCase):
         expected = value.sum(axis=tuple(dims))
         scale = max(1.0, float(np.abs(expected).max()))
         error = float(np.abs(got.reshape(expected.shape) - expected).max()) / scale
-        source = open(rep[1][1]).read()
+        source = open(rep[1][1], encoding="utf-8").read()
         return source, error
 
     def test_off_at_the_default_level(self):
@@ -102,7 +102,7 @@ class TestSharedReduce(unittest.TestCase):
         # rather than spelling a path, so the next move fails loudly instead.
         path = os.path.join(backend_root(jt.compiler.jittor_path, "cuda"),
                             "kernels", "core", "cuda_atomic.h")
-        source = open(path).read()
+        source = open(path, encoding="utf-8").read()
         self.assertIn("inline static T shared_reduce(T u)", source)
         body = source.split("inline static T shared_reduce(T u)", 1)[1]
         body = body.split("\n}\n", 1)[0]

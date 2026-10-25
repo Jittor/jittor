@@ -1,4 +1,5 @@
 """Host-only Nox session recorder shared by gate contract tests."""
+import json
 import runpy
 import sys
 import types
@@ -27,6 +28,21 @@ class _FakeSession:
 
     def run(self, *args, **kwargs):
         self.calls.append((args, kwargs))
+        # A real pytest session writes its completion sentinel in
+        # ``pytest_sessionfinish``; the gate run helpers verify it. A fake run
+        # therefore has to leave one too, or every contract test that reaches
+        # `_run_pytest_checked` would report a process death.
+        env = kwargs.get("env") or {}
+        sentinel = env.get("JITTOR_SESSION_SENTINEL")
+        if sentinel and "pytest" in args:
+            path = Path(sentinel)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({
+                "marker": "JITTOR-SESSION-COMPLETE",
+                "collected": 0,
+                "executed": 0,
+                "exitstatus": 0,
+            }), encoding="utf-8")
         return self.python_config + "\n"
 
     def error(self, message):

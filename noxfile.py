@@ -803,6 +803,53 @@ def _install_compat_source(session, env, runner=None):
     _COMPAT_SOURCE_INSTALLS.add(key)
 
 
+#: The completion detector, shared with ``tools/run_test_suite.py``. A native
+#: crash ends the interpreter, so pytest writes no result line and no summary;
+#: the log just stops. The plugin inside pytest records that the session
+#: reached its end, and this checker turns its absence into a failed gate.
+SESSION_CHECKER = REPO_ROOT / "tools" / "check_session_completed.py"
+
+
+def _check_completed_session(sentinel):
+    """Return ``(ok, message)`` from the completion checker."""
+    checked = subprocess.run(
+        [sys.executable, str(SESSION_CHECKER), "--sentinel", str(sentinel)],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+    )
+    return checked.returncode == 0, (checked.stdout or "") + (checked.stderr or "")
+
+
+def _run_pytest_checked(session, argv, env, *, external=False):
+    """Run one pytest invocation and prove it reached ``pytest_sessionfinish``.
+
+    The sentinel path is per invocation and removed first: a path left by an
+    earlier group would make a dead session look finished, which is the one
+    failure this check exists to make impossible.
+    """
+    sentinel = Path(session.create_tmp()) / "session-complete.json"
+    sentinel.unlink(missing_ok=True)
+    env = env.copy()
+    env["JITTOR_SESSION_SENTINEL"] = str(sentinel)
+    try:
+        session.run(*argv, env=env, external=external)
+    except BaseException:
+        # pytest already failed, so re-raise unchanged. Say what the absence
+        # means here, though: a nonzero exit alone does not tell a reader that
+        # the tests after the crash never ran.
+        if not sentinel.exists():
+            session.log(
+                "pytest ended before writing its completion sentinel: the "
+                "interpreter stopped mid-run, so any tests after that point "
+                "never executed"
+            )
+        raise
+    ok, message = _check_completed_session(sentinel)
+    if not ok:
+        session.error(message)
+
+
 def _run_pytest_once(session, args, env, runner=None, timeout=900):
     """One pytest process for one whole set of paths.
 
@@ -813,14 +860,17 @@ def _run_pytest_once(session, args, env, runner=None, timeout=900):
     """
     python = runner or "python"
     _install_compat_source(session, env, runner)
-    session.run(
-        python,
-        "-m",
-        "pytest",
-        "-v",
-        "--timeout=%d" % timeout,
-        *args,
-        env=env,
+    _run_pytest_checked(
+        session,
+        (
+            python,
+            "-m",
+            "pytest",
+            "-v",
+            "--timeout=%d" % timeout,
+            *args,
+        ),
+        env,
         external=runner is not None,
     )
 
@@ -1193,18 +1243,16 @@ def structure(session):
     if not session.posargs:
         native_env = env.copy()
         native_env["JITTOR_TORCH_SHIM"] = "0"
-        session.run(
-            "python", "-m", "pytest", "-v", "--timeout=600", *NATIVE_MODE_PATHS, env=native_env
+        _run_pytest_checked(
+            session,
+            ("python", "-m", "pytest", "-v", "--timeout=600", *NATIVE_MODE_PATHS),
+            native_env,
         )
     env = _mode_env(env, test_paths)
-    session.run(
-        "python",
-        "-m",
-        "pytest",
-        "-v",
-        "--timeout=600",
-        *test_paths,
-        env=env,
+    _run_pytest_checked(
+        session,
+        ("python", "-m", "pytest", "-v", "--timeout=600", *test_paths),
+        env,
     )
 
 

@@ -30,7 +30,7 @@ def relay_sources(build, tag):
     for row in rep[1:]:
         for cell in row:
             if isinstance(cell, str) and cell.endswith(".cc") and os.path.exists(cell):
-                with open(cell) as f:
+                with open(cell, encoding="utf-8") as f:
                     src = f.read()
                 if "relay_groups[" in src:
                     srcs.append(src)

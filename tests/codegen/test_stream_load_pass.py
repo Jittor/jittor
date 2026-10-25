@@ -71,7 +71,8 @@ class TestStreamLoadPass(unittest.TestCase):
         with jt.profile_scope() as rep:
             z = x * 3 + 1
             z.sync()
-        sources = [open(row[1]).read() for row in rep[1:] if row[1].endswith(".cc")]
+        sources = [open(row[1], encoding="utf-8").read()
+                   for row in rep[1:] if row[1].endswith(".cc")]
         self.assertTrue(any("jt_stream_ld(" in src and "streamed_inputs" in src
                             for src in sources), "no kernel loads through jt_stream_ld")
 

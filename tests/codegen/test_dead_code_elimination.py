@@ -33,7 +33,7 @@ class TestVoidDiscardElimination(unittest.TestCase):
         with jt.profile_scope(compile_options={"test_void_discard": tag}) as rep:
             value = build()
         self.assertGreaterEqual(len(rep), 2)
-        with open(rep[1][1]) as source:
+        with open(rep[1][1], encoding="utf-8") as source:
             return value, source.read()
 
     def test_reduce_kernel_has_no_discard_markers(self):

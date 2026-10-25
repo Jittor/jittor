@@ -60,6 +60,7 @@ SESSIONS = ("native", "torch")
 BACKENDS = ("cpu", "cuda")
 
 _COUNT = re.compile(r"(\d+) (passed|failed|skipped|error|errors|xfailed|xpassed)")
+CHECKER = REPO_ROOT / "tools" / "check_session_completed.py"
 _WARMUP_MARKERS = {"cpu": "JITTOR_TEST_SUITE_CPU_READY",
                    "cuda": "JITTOR_TEST_SUITE_CUDA_READY"}
 _WARMUP_ATTEMPTS = 3
@@ -127,7 +128,8 @@ def _set_nvcc(environment, nvcc):
     environment["nvcc_path"] = nvcc
 
 
-def _session_environment(session, serial_compile=False, backend="cpu"):
+def _session_state(session, backend="cpu"):
+    """The scratch directory for one (session, backend) pytest process."""
     # One JIT cache per (backend, session). A CUDA core and a CPU core are
     # different objects compiled from the same sources, and sharing a
     # JITTOR_HOME between them means every switch rebuilds the tree. The CPU
@@ -137,6 +139,11 @@ def _session_environment(session, serial_compile=False, backend="cpu"):
     state = _lab_root() / "_state" / "test-suite" / name
     (state / "home").mkdir(parents=True, exist_ok=True)
     (state / "tmp").mkdir(parents=True, exist_ok=True)
+    return state
+
+
+def _session_environment(session, serial_compile=False, backend="cpu"):
+    state = _session_state(session, backend)
     environment = dict(os.environ)
     environment["JITTOR_HOME"] = str(state / "home")
     environment["TMPDIR"] = str(state / "tmp")
@@ -165,6 +172,10 @@ def _session_environment(session, serial_compile=False, backend="cpu"):
     # still counted as a successful suite, making the CLI a weaker gate than
     # the command it is meant to reproduce.
     environment["JITTOR_TEST_REQUIRE_EXECUTION"] = "1"
+    # Positive evidence that pytest reached ``pytest_sessionfinish``. A process
+    # that dies mid-run leaves this absent, which is how the gate tells a
+    # truncated session from a short one. The checker below is what reads it.
+    environment["JITTOR_SESSION_SENTINEL"] = str(state / "session.json")
     # Set, never inherited -- like every other name in this function. On by
     # default, like the gate: it used to be forced off here with no reason
     # recorded, which made this script measure something `nox -s cpu` does not
@@ -387,6 +398,24 @@ def _runtime_jobs(requested):
     return runtime_workers(configured, available=effective_cpu_count())
 
 
+def _check_session_completion(log_path, log_text, sentinel, environment=None):
+    """Run the completion checker over a session's log and sentinel.
+
+    Returns ``(ok, message)``. The checker -- not this script -- owns the
+    decision, so a missing marker, a missing sentinel and ``executed <
+    collected`` all fail here exactly as they do when it is run by hand.
+    ``log_path`` receives the captured stdout; passing it explicitly keeps the
+    helper callable from a test without touching the gate's state directory.
+    """
+    log_path = Path(log_path)
+    log_path.write_text(log_text, encoding="utf-8")
+    checked = run_python_child(
+        [str(CHECKER), "--log", str(log_path), "--sentinel", str(sentinel)],
+        cwd=REPO_ROOT, env=environment, inherit=False, merge_stderr=True,
+        timeout=120)
+    return checked.returncode == 0, checked.stdout
+
+
 def _run(session, extra, quiet, tier="full", jobs=None, serial_compile=False,
          backend="cpu"):
     environment = _session_environment(session, serial_compile=serial_compile,
@@ -411,14 +440,30 @@ def _run(session, extra, quiet, tier="full", jobs=None, serial_compile=False,
     if warmup_code != 0:
         return warmup_code, {}, warmup_output
     print(" ".join(command), flush=True)
+    # A sentinel from an earlier run would make a dead session look finished.
+    sentinel = Path(environment["JITTOR_SESSION_SENTINEL"])
+    sentinel.unlink(missing_ok=True)
     # timeout=0: a whole-suite run has no natural bound, and capping it would
     # turn a long run into a failure rather than reporting one.
     completed = run_python_child(
         command[1:], cwd=REPO_ROOT, env=environment, inherit=False,
         merge_stderr=True, timeout=0)
     print(completed.stdout, flush=True)
-    output = warmup_output + "\n" + completed.stdout
-    return completed.returncode, _parse_counts(completed.stdout), output
+    completed_ok, completion_message = _check_session_completion(
+        _session_state(session, backend) / "pytest.log",
+        completed.stdout,
+        environment["JITTOR_SESSION_SENTINEL"],
+        environment,
+    )
+    code = completed.returncode
+    if not completed_ok:
+        # The checker's message names the last nodeid and the size of the gap;
+        # printing it here keeps the runner's output the place a reader looks.
+        print(completion_message, flush=True)
+        if code == 0:
+            code = 1
+    output = warmup_output + "\n" + completed.stdout + completion_message
+    return code, _parse_counts(completed.stdout), output
 
 
 def main():
