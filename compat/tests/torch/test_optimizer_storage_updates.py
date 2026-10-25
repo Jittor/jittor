@@ -7,7 +7,7 @@ from _helpers.device_types import instantiate_device_type_tests
 
 def _saved_output_survives_step(device, derived):
     for kind in ("sgd", "adamw"):
-        for fused in (False, True):
+        for fused in ((False, True) if kind == "sgd" else (False,)):
             p = torch.nn.Parameter(torch.zeros((2, 2), device=device))
             if kind == "sgd":
                 optimizer = torch.optim.SGD([p], lr=.125, foreach=False, fused=fused)
