@@ -45,13 +45,17 @@ _DEVICES = [("cpu", 0)] + ([("cuda", 1)] if _test_capability.any_accelerator_ena
 
 
 def both_devices(fn):
+    # `torch.tensor(...)` follows torch's default device, which the frontend
+    # keeps at CPU: `jt.flags.use_cuda` says the accelerator is enabled, not
+    # that it is where a device-less tensor goes. The explicit device context
+    # is what actually places the constructed tensors on the accelerator.
     for name, use_cuda in _DEVICES:
-        with jt.flag_scope(use_cuda=use_cuda):
+        with jt.flag_scope(use_cuda=use_cuda), torch.device(name):
             fn(name)
 
 
-def t(a):
-    return torch.tensor(a)
+def t(a, device=None):
+    return torch.tensor(a, device=device)
 
 
 class Base(unittest.TestCase):
@@ -240,13 +244,15 @@ class TestLayerNorm(Base):
         ref = (x - mu) / np.sqrt(var + 1e-5) * w + b
         with jt.flag_scope(use_cuda=1), jt.no_grad():
             ln = nn.LayerNorm(32)
-            ln.weight.update(t(w)); ln.bias.update(t(b))
-            self.ac(ln(t(x)).numpy(), ref, atol=1e-4, msg="ln no_grad cuda 3d")
+            ln.weight.update(t(w, device="cuda"))
+            ln.bias.update(t(b, device="cuda"))
+            self.assertEqual(ln.weight.device.type, "cuda")
+            out = ln(t(x, device="cuda"))
+            self.assertEqual(out.device.type, "cuda")
+            self.ac(out.numpy(), ref, atol=1e-4, msg="ln no_grad cuda 3d")
 
     @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
-    @unittest.expectedFailure
     def test_ln_no_grad_cuda_dynamic_rows_share_source(self):
-        # KI-TEST-010: the CUDA no-grad LayerNorm fast path is not taken under the Torch frontend.
         rng = np.random.RandomState(219)
         arrays = [
             rng.randn(2, 8, 32).astype("float32"),
@@ -261,7 +267,11 @@ class TestLayerNorm(Base):
 
         with jt.flag_scope(use_cuda=1), jt.no_grad():
             ln = nn.LayerNorm(32)
-            inputs = [t(array) for array in arrays]
+            # Constructed under the torch frontend, a module's parameters take
+            # its default device (CPU), so the identity affine is placed here.
+            ln.weight = t(np.ones(32, dtype="float32"), device="cuda")
+            ln.bias = t(np.zeros(32, dtype="float32"), device="cuda")
+            inputs = [t(array, device="cuda") for array in arrays]
             try:
                 jt.code = capture_code
                 outputs = [ln(value) for value in inputs]
@@ -274,21 +284,20 @@ class TestLayerNorm(Base):
                 mean = array.mean(-1, keepdims=True)
                 var = array.var(-1, keepdims=True)
                 ref = (array - mean) / np.sqrt(var + 1e-5)
+                self.assertEqual(output.device.type, "cuda")
                 self.ac(output.numpy(), ref, atol=1e-4,
                         msg="ln dynamic rows shared source")
 
     @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
-    @unittest.expectedFailure
     def test_ln_no_grad_cuda_bfloat16_private_opt_in(self):
-        # KI-TEST-010: the CUDA no-grad LayerNorm fast path is not taken under the Torch frontend.
         rng = np.random.RandomState(220)
         x_np = rng.randn(2, 5, 1536).astype("float32")
         weight_np = (1 + 0.1 * rng.randn(1536)).astype("float32")
         bias_np = (0.1 * rng.randn(1536)).astype("float32")
         with jt.flag_scope(use_cuda=1), jt.no_grad():
-            x = t(x_np).bfloat16()
-            weight = t(weight_np)
-            bias = t(bias_np)
+            x = t(x_np, device="cuda").bfloat16()
+            weight = t(weight_np, device="cuda")
+            bias = t(bias_np, device="cuda")
             self.assertIsNone(_layer_norm_no_grad_cuda(
                 x, (1536,), weight, bias, 1e-6))
             out = _layer_norm_no_grad_cuda(
@@ -304,6 +313,7 @@ class TestLayerNorm(Base):
                 out.float32(), ref.float32(),
             ])
         self.assertEqual(str(out.dtype), "torch.bfloat16")
+        self.assertEqual(out.device.type, "cuda")
         np.testing.assert_allclose(
             out_np, ref_np, atol=0.016, rtol=0.008)
 
@@ -316,7 +326,7 @@ class TestLayerNorm(Base):
         extreme_np[3] = 0
         extreme_np[3, 0] = np.inf
         with jt.flag_scope(use_cuda=1), jt.no_grad():
-            extreme = t(extreme_np).bfloat16()
+            extreme = t(extreme_np, device="cuda").bfloat16()
             out = _layer_norm_no_grad_cuda(
                 extreme, (1536,), 1.0, 0.0, 1e-6,
                 allow_bfloat16=True)
@@ -338,9 +348,7 @@ class TestLayerNorm(Base):
             np.isnan(affine_np[2:]), np.ones((2, 1536), dtype=bool))
 
     @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
-    @unittest.expectedFailure
     def test_ln_no_grad_cuda_fast_path_float32_and_float16(self):
-        # KI-TEST-010: the CUDA no-grad LayerNorm fast path is not taken under the Torch frontend.
         rng = np.random.RandomState(218)
         # Patch the module that DEFINES the composite path, not the jt.nn
         # facade that re-exports it. layer_norm() calls its own module-local
@@ -361,10 +369,11 @@ class TestLayerNorm(Base):
                 mu = x.mean(-1, keepdims=True); var = x.var(-1, keepdims=True)
                 ref = (x - mu) / np.sqrt(var + 1e-5) * w + b
                 ln = nn.LayerNorm(32)
-                ln.weight = t(w)
-                ln.bias = t(b)
-                out = ln(t(x))
+                ln.weight = t(w, device="cuda")
+                ln.bias = t(b, device="cuda")
+                out = ln(t(x, device="cuda"))
                 self.assertEqual(str(out.dtype), "torch.float32")
+                self.assertEqual(out.device.type, "cuda")
                 self.ac(out.numpy(), ref, atol=1e-4,
                         msg="ln fused no_grad cuda float32")
 
@@ -385,12 +394,13 @@ class TestLayerNorm(Base):
                         ref = ref.astype("float16").astype("float32")
                         ln = nn.LayerNorm(hidden)
                         dtype = "float16"
-                        ln.weight = t(w).cast(dtype)
-                        ln.bias = t(b).cast(dtype)
-                        out = ln(t(x).cast(dtype))
+                        ln.weight = t(w, device="cuda").cast(dtype)
+                        ln.bias = t(b, device="cuda").cast(dtype)
+                        out = ln(t(x, device="cuda").cast(dtype))
                         got = out.float32().numpy()
                         label = f"ln fused no_grad cuda fp16 h{hidden} lowvar={low_variance}"
                         self.assertEqual(str(out.dtype), "torch." + dtype)
+                        self.assertEqual(out.device.type, "cuda")
                         self.ac(got, ref, atol=2e-3, rtol=5e-4, msg=label)
                         rel_l2 = np.linalg.norm((got - ref).ravel()) / max(
                             np.linalg.norm(ref.ravel()), 1e-30)
@@ -406,9 +416,11 @@ class TestLayerNorm(Base):
         try:
             with jt.flag_scope(use_cuda=1), jt.no_grad():
                 os.environ["JITTOR_LAYERNORM_SCALAR_FAST"] = "0"
-                ref = F.layer_norm(t(x), (128,), 1.0, 0.0, eps=1e-6)
+                value = t(x, device="cuda")
+                ref = F.layer_norm(value, (128,), 1.0, 0.0, eps=1e-6)
                 os.environ["JITTOR_LAYERNORM_SCALAR_FAST"] = "1"
-                out = F.layer_norm(t(x), (128,), 1.0, 0.0, eps=1e-6)
+                out = F.layer_norm(value, (128,), 1.0, 0.0, eps=1e-6)
+                self.assertEqual(out.device.type, "cuda")
                 self.ac(out.numpy(), ref.numpy(), atol=1e-4, msg="ln scalar affine fast")
         finally:
             if old is None:
