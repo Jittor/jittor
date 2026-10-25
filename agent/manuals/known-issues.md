@@ -1878,27 +1878,6 @@ PY
   tolerance for the scheduled SGD step (and its CPU/CUDA spellings), with a
   regression that fails on the unfixed tree.
 
-## KI-COMPAT-018: portable checkpoint save leaves its batched tensor fetch unfilled
-
-- Severity: High (saving a state dict raises instead of writing)
-- Status: Open; reproduced on `280d44854` and current `2.0-refactor` (CPU,
-  Torch frontend).
-- Owner: serialization and executor batch-fetch maintainers.
-- Symptom: `compat/tests/torch/test_serialization_api_owners.py::test_portable_roundtrip_dtype_parameter_view_and_map_location`
-  (`[file]` and `[bytes]`) and `::test_safetensors_dtype_bytes_reader_and_numpy_delegate`
-  raise `RuntimeError: checkpoint tensor fetch did not complete` from
-  `python/jittor/compat/torch/serialization/portable.py:117`: after
-  `jt.sync(tensors)`, `jt.fetch(*tensors, capture)` and a device sync, fewer
-  capture values are filled than tensors submitted.
-- Cause: not isolated. The batched `jt.fetch` capture path does not complete on
-  this CPU build; whether a tensor's residency, a view, or the batch submission
-  drops an entry is unmeasured.
-- Workaround: read each tensor individually (`.numpy()`/`item()`) before
-  building the archive instead of the batched portable capture.
-- Evidence: the nodes above with a Torch frontend.
-- Exit condition: the portable save fills one value per tensor and the three
-  nodes pass on CPU, with a regression pinned on the unfixed tree.
-
 ## KI-COMPAT-019: bfloat16 autocast training diverges from float32 on CUDA
 
 - Severity: Medium (silent training-numerics divergence under autocast)
