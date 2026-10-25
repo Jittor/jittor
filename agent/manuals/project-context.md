@@ -59,8 +59,7 @@ changes: [2.0 migration notes](../../docs/releases/2.0.md).
   Commands for hardware day are in [deferred-hardware.md](deferred-hardware.md).
 - **Silent numerics.** cuDNN autotuning coupled to scheduling (KI-EXEC-003).
 - **Torch frontend gaps.** torchmetrics on CUDA (KI-COMPAT-010), RNN off cuDNN
-  (KI-COMPAT-011), in-process shim metadata (KI-COMPAT-012), autocast Conv2d bias
-  (KI-COMPAT-013).
+  (KI-COMPAT-011), in-process shim metadata (KI-COMPAT-012).
 - **Executor and liveness.** Threaded writers to one parameter (KI-EXEC-005,
   KI-EXEC-007), liveness underflows (KI-EXEC-008, KI-EXEC-009), the op-level
   parallel compiler (KI-COMPILER-001).

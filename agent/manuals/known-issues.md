@@ -1739,21 +1739,6 @@ workaround.
   Transformers/Diffusers installed (the metadata mechanism itself is covered by
   `compat/tests/torch/test_torch_shim_distribution_metadata.py`).
 
-## KI-COMPAT-013: under `torch.autocast` a `Conv2d` module with a bias returns float32
-
-- Severity: Medium (an autocast divergence from PyTorch: downstream half
-  kernels receive a float32 activation)
-- Status: Open; recorded on HEAD in the 2026-09-24 report, reproduced
-  2026-10-12 on CPU and CUDA. The case runs as a strict expected failure.
-- Owner: torch compatibility / AMP maintainers
-- Symptom: `with torch.autocast("cuda", dtype=torch.float16): torch.nn.Conv2d(4, 8, 3, padding=1, bias=True)(x)`
-  gives float32 for a float32 input; PyTorch gives float16.
-- Cause: not isolated; suspected that the module path adds its float32 bias
-  after the autocast cast and promotes back.
-- Workaround: cast the output, or keep the bias in the compute dtype.
-- Evidence: `compat/tests/torch/test_torch_compat_unimplemented.py::TestAutocast::test_autocast_conv2d_module_keeps_the_compute_dtype_through_a_bias`.
-- Exit condition: the case XPASSes and loses its marker.
-
 ## KI-DIST-001: FSDP2 flat sharding peaks above the unsharded model
 
 - Severity: Limitation (memory; numerics are correct)
