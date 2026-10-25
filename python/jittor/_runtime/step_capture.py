@@ -61,7 +61,7 @@ import numpy as np
 import jittor as jt
 import jittor_core as _core
 
-from .graph_replay import (_RERECORD_LIMIT, _Unreplayable, _WorkingSet, _dense, _empty_like,
+from .graph_replay import (_capture_barriers, _RERECORD_LIMIT, _Unreplayable, _WorkingSet, _dense, _empty_like,
                            _host_state, _module_vars, _native_dtype, _object_ids, _training,
                            _graph_has_nondeterministic_op,
                            _input_vars, _map_inputs, _no_auto, _output_template,
@@ -612,8 +612,11 @@ class StepCapture:
         records = []
         readbacks = _core._host_readback_count()
         try:
-            with _no_auto():
+            with _capture_barriers() as barriers, _no_auto():
                 result = self._fn(*private_args, **private_kwargs)
+                if barriers:
+                    cap.refused = cap.refused or (
+                        "the step contains an opaque operation: " + barriers[0])
         finally:
             records = _core._state_capture_end()
             jt.flags.auto_flush_ops = flush_before
@@ -841,6 +844,9 @@ class StepCapture:
         return self._results(cap, cap.outputs)
 
     def __call__(self, *args, **kwargs):
+        if _core.graph_capture_active():
+            # Leave leaf synchronization and graph recording to the caller.
+            return self._eager(args, kwargs)
         if self._guard_external_backward and any(
                 v.requires_grad for v in _input_vars((args, kwargs), [])):
             # A private byte copy is not an autograd edge to the caller's input.

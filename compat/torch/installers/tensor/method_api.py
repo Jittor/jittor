@@ -1841,6 +1841,7 @@ def _api_untyped_storage(self):
 
 
 def _api_data_ptr(self):
+    _owner.jt.graph_replay_barrier("Tensor.data_ptr exposes storage to an external consumer")
     return int(self._storage_address)
 
 

@@ -457,6 +457,7 @@
   "grad_hooker",
   "grad_optional",
   "graph_check",
+  "graph_replay_barrier",
   "greater",
   "greater_equal",
   "half",
