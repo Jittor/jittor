@@ -68,8 +68,7 @@ changes: [2.0 migration notes](../../docs/releases/2.0.md).
   matmul/conv relays (KI-TUNER-001), UNet reductions and elementwise kernels
   (KI-CODEGEN-003, KI-CODEGEN-004, KI-COMPAT-009), pipelined memory and backward
   submission (KI-EXEC-004, KI-EXEC-010).
-- **Gate trust.** LayerNorm fast-path cases (KI-TEST-010), gate cost
-  (KI-TEST-012, KI-TEST-013).
+- **Gate trust.** Gate cost (KI-TEST-012, KI-TEST-013).
 - **Research.** [Agent-operable optimization](../../docs/research/agentic-optimization.md)
   is a proposal only; no autonomous mutation path exists.
 

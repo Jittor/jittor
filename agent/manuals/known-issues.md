@@ -118,24 +118,6 @@ workaround.
   hook keyed by code object observes the same calls), delete the exclusion list
   and re-take the Torch baseline.
 
-## KI-TEST-010: three `test_torch_compat_norm.py` LayerNorm fast-path cases fail
-
-- Severity: Low (values elsewhere in the file pass)
-- Status: Open; reproduced on `1a6e203fc` (CUDA); the three cases run as strict
-  expected failures
-- Owner: torch compatibility / normalization kernels
-- Symptom: `compat/tests/torch/test_torch_compat_norm.py::TestLayerNorm::test_ln_no_grad_cuda_fast_path_float32_and_float16`
-  (`CUDA no-grad LayerNorm missed its fused path`),
-  `::test_ln_no_grad_cuda_dynamic_rows_share_source` (`0 != 2`) and
-  `::test_ln_no_grad_cuda_bfloat16_private_opt_in`
-  (`'NoneType' object has no attribute 'float32'`).
-- Cause: not isolated; suspected the fused LayerNorm kernel selection changed
-  under the Torch frontend without these tests following.
-- Workaround: none needed for results.
-- Evidence: `JITTOR_TORCH_SHIM=1 python -m pytest -q compat/tests/torch/test_torch_compat_norm.py -k ln_no_grad_cuda`.
-- Exit condition: the three cases pass, or are rewritten to pin the path the
-  frontend is meant to take.
-
 ## KI-TEST-012: the PR smoke tier takes about 390 s, not under five minutes
 
 - Severity: Limitation (gate cost)
