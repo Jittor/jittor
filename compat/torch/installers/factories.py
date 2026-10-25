@@ -58,6 +58,21 @@ _EMPTY_LIKE_FIDELITY_DETAIL = (
 )
 
 
+def _is_meta_device_request(value):
+    """Whether a ``device=`` argument names the meta device.
+
+    Jittor has no meta backend; callers that honour the request do so through
+    the observable-meta contract (see ``device.__enter__``), not by silently
+    picking a real device.
+    """
+    if value is None:
+        return False
+    name = getattr(value, "type", None)
+    if name is None:
+        name = str(value).split(":", 1)[0]
+    return name == "meta"
+
+
 def _invoke_factory(name, args, kwargs):
     context = get_install_context(jt)
     implementation = context.state.get("factory_implementations", {}).get(name)
@@ -69,7 +84,6 @@ def _invoke_factory(name, args, kwargs):
         mean = kwargs.get("mean", args[0] if args else None)
         std = kwargs.get("std", args[1] if len(args) > 1 else None)
         like = mean if isinstance(mean, jt.Var) else std if isinstance(std, jt.Var) else None
-    from ..types import _is_meta_device_request
     requested = kwargs.get("device")
     meta = _is_meta_device_request(requested)
     # torch's meta tensors carry shape/dtype only; Jittor has no meta backend,
