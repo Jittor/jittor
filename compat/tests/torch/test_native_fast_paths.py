@@ -45,6 +45,19 @@ _CUDA_KERNELS = torch.cuda.is_available() and bool(getattr(jt.compiler, "is_cuda
 
 
 class TestFastCat(unittest.TestCase):
+    def test_frozen_inputs_and_grad_mode(self):
+        for device in ("cpu", _cuda()):
+            with self.subTest(device=device):
+                frozen = torch.ones((2, 3), device=device).requires_grad_(False)
+                trainable = torch.ones((2, 3), device=device).requires_grad_(True)
+                self.assertFalse(torch.cat((frozen, frozen), dim=0).requires_grad)
+                self.assertFalse(torch.cat((frozen, frozen), axis=0).requires_grad)
+                self.assertTrue(torch.cat((frozen, trainable), dim=0).requires_grad)
+                with torch.no_grad():
+                    self.assertFalse(torch.cat((frozen, trainable), dim=0).requires_grad)
+                self.assertFalse(frozen.requires_grad)
+                self.assertTrue(trainable.requires_grad)
+
     def test_values_dims_and_dtypes(self):
         device = _cuda()
         rng = np.random.RandomState(0)

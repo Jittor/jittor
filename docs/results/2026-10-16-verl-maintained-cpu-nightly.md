@@ -103,7 +103,7 @@ Read-only exact source and wheel inputs can be supplied using `--source-cache` a
 `--wheel-cache`; dependency resolution, source verification, actual installation and pip checks
 still execute. The ordinary `python -m nox -s ecosystem_verl_training` entry remains reusable
 with explicitly configured independent interpreters and installed package sites, as documented
-in the [VERL skill](../../agent/skills/verl-torch-compat/SKILL.md).
+in the [VERL skill](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/verl-torch-compat/SKILL.md).
 
 The nox session allocates a new evidence directory per invocation outside disposable session
 scratch. `JITTOR_VERL_EVIDENCE_DIR` can select another external output root; repeated case

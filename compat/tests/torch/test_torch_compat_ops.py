@@ -225,6 +225,20 @@ class TestShapeOps(Base):
 
 
 class TestComparisonWhere(Base):
+    def test_where_frozen_result_grad_flags(self):
+        def body(dev):
+            condition = torch.tensor([[True, False]], device=dev)
+            frozen = torch.tensor(0.0, device=dev)
+            trainable = torch.ones((1, 2), device=dev, requires_grad=True)
+            self.assertFalse(torch.where(condition, frozen, -3.0).requires_grad)
+            self.assertTrue(torch.where(condition, trainable, frozen).requires_grad)
+            with torch.no_grad():
+                self.assertFalse(torch.where(condition, trainable, frozen).requires_grad)
+            self.assertFalse(frozen.requires_grad)
+            self.assertTrue(trainable.requires_grad)
+
+        both_devices(body)
+
     def test_clamp_boundary_gradient_matches_torch(self):
         values = np.array(
             [-1.10, -1.00, -0.50, 0.50, 1.00, 1.10], dtype="float32"

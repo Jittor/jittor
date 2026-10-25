@@ -51,7 +51,20 @@ def _flat_entry_slices(state, flat_var):
 
 @common._state_frontend
 def _refresh_flat_entry_shards(state):
-    return _storage._refresh_flat_entry_shards(state, api=sys.modules[__name__])
+    result = _storage._refresh_flat_entry_shards(state, api=sys.modules[__name__])
+    _bind_parameter_aliases(state, "shard")
+    return result
+
+
+def _bind_entry_aliases(entry, value):
+    for owner, attr in getattr(entry, "aliases", ((entry.owner, entry.attr),)):
+        object.__setattr__(owner, attr, value)
+
+
+def _bind_parameter_aliases(state, role):
+    for entry in getattr(state, "true_fsdp_params", ()):
+        value = entry.full_param if role == "full" else entry.shard
+        _bind_entry_aliases(entry, value)
 
 
 class _ShardTensorMethod:
@@ -89,6 +102,20 @@ class _ShardTensorMethod:
         return self.function(tensor, *args, **kwargs)
 
 
+def _fsdp_var_size(var, dim=None):
+    """A sharded parameter's Torch-facing size is its global parameter size."""
+    entry = getattr(var, "_jittor_fsdp2_entry", None)
+    shape = tuple(getattr(entry, "shape", tuple(var.shape)))
+    if dim is None:
+        return shape
+    dim = int(dim)
+    if dim < 0:
+        dim += len(shape)
+    if dim < 0 or dim >= len(shape):
+        raise IndexError("dimension out of range")
+    return shape[dim]
+
+
 def _parameter_requires_grad(param):
     return _storage._parameter_requires_grad(param)
 
@@ -99,6 +126,9 @@ def _mark_fsdp_param_var(var, state, entry, role):
         object.__setattr__(var, "_jittor_fsdp2_entry", entry)
         object.__setattr__(var, "_jittor_fsdp2_module", getattr(state, "true_fsdp_module", None))
         object.__setattr__(var, "_jittor_fsdp2_role", role)
+        object.__setattr__(
+            var, "size", _ShardTensorMethod(_fsdp_var_size, state, entry, role)
+        )
         object.__setattr__(
             var,
             "_dtensor_device_mesh",
@@ -253,6 +283,38 @@ def _named_parameters_with_owner(module, recurse=True):
     return out
 
 
+def _parameter_aliases(module, recurse=True):
+    aliases = {}
+    visited = set()
+
+    def visit(mod):
+        if id(mod) in visited:
+            return
+        visited.add(id(mod))
+        for name, value, role in mod._var_roles():
+            if role == "parameter":
+                aliases.setdefault(id(value), []).append((mod, name))
+        if recurse:
+            for _, child in child_items(mod):
+                if isinstance(child, nn.Module):
+                    visit(child)
+
+    def child_items(mod):
+        try:
+            items = mod.named_children()
+            if items is not None:
+                return list(items)
+        except EXPECTED as exc:
+            swallowed("fsdp2/shard.py _parameter_aliases: items = mod.named_children()", exc)
+        modules = getattr(mod, "_modules", None)
+        if callable(modules):
+            modules = modules()
+        return list(modules.items()) if isinstance(modules, dict) else []
+
+    visit(module)
+    return aliases
+
+
 def _iter_modules(module, recurse=True):
     if recurse and hasattr(module, "modules"):
         try:
@@ -306,6 +368,7 @@ def _init_true_fsdp_state_impl(module, state):
         for item in _named_parameters_with_owner(module, recurse=True)
         if not is_fsdp_managed_param(item[3]) and id(item[3]) not in ignored_ids
     ]
+    aliases = _parameter_aliases(module, recurse=True)
     for _, owner, _, _ in params:
         if isinstance(owner, (nn.ParameterList, ParameterListAdapter, ParameterDictAdapter)):
             raise NotImplementedError(
@@ -313,7 +376,7 @@ def _init_true_fsdp_state_impl(module, state):
                 "storage needs container-aware replacement at every shard transition"
             )
     total_numel = sum(common._param_numel(param) for _, _, _, param in params)
-    return _storage._init_true_fsdp_state_impl(
+    initialized = _storage._init_true_fsdp_state_impl(
         module,
         state,
         params,
@@ -322,6 +385,10 @@ def _init_true_fsdp_state_impl(module, state):
         flat=common._fsdp2_flat_enabled(ws, total_numel),
         api=sys.modules[__name__],
     )
+    for entry, (_, owner, attr, param) in zip(state.true_fsdp_params, params):
+        entry.aliases = aliases.get(id(param), ((owner, attr),))
+    _bind_parameter_aliases(state, "shard")
+    return initialized
 
 
 def _unshard_module_params(module):
@@ -338,11 +405,19 @@ def _cast_floating_tree(value, target):
 
 
 def _unshard_module_params_impl(module):
-    return _storage._unshard_module_params_impl(module, api=sys.modules[__name__])
+    result = _storage._unshard_module_params_impl(module, api=sys.modules[__name__])
+    state = getattr(module, "_fsdp_state", None)
+    if state is not None and getattr(state, "true_fsdp_unsharded", False):
+        _bind_parameter_aliases(state, "full")
+    return result
 
 
 def _reshard_module_params(module):
-    return _storage._reshard_module_params(module)
+    result = _storage._reshard_module_params(module)
+    state = getattr(module, "_fsdp_state", None)
+    if state is not None and not getattr(state, "true_fsdp_unsharded", False):
+        _bind_parameter_aliases(state, "shard")
+    return result
 
 
 #: Attribute on the FSDP state counting how deep we are inside this module's

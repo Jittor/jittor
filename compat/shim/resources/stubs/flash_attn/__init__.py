@@ -183,6 +183,14 @@ def _sdpa_segment(q, k, v, causal, softmax_scale, dropout_p):
     Treats the single segment as a batch of 1; SDPA wants [B,H,L,E]."""
     if q.shape[0] == 0:
         return torch.zeros((0, q.shape[1], v.shape[2]), dtype=q.dtype, device=q.device)
+    # flash-attn accepts grouped-query attention: q may have more heads than
+    # k/v, with each KV head shared by an integral group of query heads.
+    if q.shape[1] != k.shape[1]:
+        if k.shape[1] == 0 or q.shape[1] % k.shape[1]:
+            raise ValueError("query heads must be an integer multiple of key/value heads")
+        repeats = q.shape[1] // k.shape[1]
+        k = k.repeat_interleave(repeats, dim=1)
+        v = v.repeat_interleave(repeats, dim=1)
     qh = q.permute(1, 0, 2).unsqueeze(0)   # [1,H,Lq,Cq]
     kh = k.permute(1, 0, 2).unsqueeze(0)   # [1,H,Lk,C]
     vh = v.permute(1, 0, 2).unsqueeze(0)   # [1,H,Lk,Cv]

@@ -116,7 +116,7 @@ configured CPU and CUDA sessions with `JITTOR_TORCH_SHIM=1`, `PYTHONPATH=python`
 and `JITTOR_TEST_DEVICES` set to the actual backend. CPU must explicitly disable
 CUDA as above. The existing multi-rank entry is
 `compat/tests/fsdp2/test_fsdp2_nccl.py`; use the
-[distributed verification procedure](../../agent/skills/jittor-distributed-verification/SKILL.md)
+[distributed verification procedure](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/jittor-distributed-verification/SKILL.md)
 with independent rank caches and the recorded two-rank selector. The exact
 external runners, environment files and selectors are bound by the artifact
 manifest below.

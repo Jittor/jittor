@@ -95,20 +95,22 @@ def loss_parallel(*args, **kwargs):
     yield
 
 
-def _checkpoint_identity(module):
-    return module
-
-
 def _checkpoint_wrapper(module=None, *args, **kwargs):
-    return _checkpoint_identity if module is None else module
+    from .activation_checkpoint import checkpoint_wrapper
+    if module is None:
+        from functools import partial
+        return partial(checkpoint_wrapper, *args, **kwargs)
+    return checkpoint_wrapper(module, *args, **kwargs)
 
 
 def _apply_activation_checkpointing(model, *args, **kwargs):
-    return model
+    from .activation_checkpoint import apply_activation_checkpointing
+    return apply_activation_checkpointing(model, *args, **kwargs)
 
 
 def _checkpoint(module, *args, **kwargs):
-    return module(*args, **kwargs)
+    from torch.utils.checkpoint import checkpoint
+    return checkpoint(module, *args, **kwargs)
 
 
 class ModuleWrapPolicy:
@@ -116,7 +118,7 @@ class ModuleWrapPolicy:
         self.module_classes = tuple(module_classes)
 
     def __call__(self, module, recurse, nonwrapped_numel):
-        return isinstance(module, self.module_classes)
+        return True if recurse else isinstance(module, self.module_classes)
 
 
 class CustomPolicy:

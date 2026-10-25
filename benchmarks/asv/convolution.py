@@ -146,6 +146,10 @@ class Conv2dBenchmarks:
         )
         self._run()
         synchronize(backend_name, self.backend, device)
+        if backend_name == "jittor":
+            # Forward results are lazy, and backward may release their storage.
+            # Materialize during setup before checking placement and the oracle.
+            self.output.sync()
         self._assert_device()
         _assert_result(
             as_numpy(backend_name, self.output),
@@ -156,6 +160,8 @@ class Conv2dBenchmarks:
         # Warm a second iteration to exercise graph reuse before ASV times it.
         self._run()
         synchronize(backend_name, self.backend, device)
+        if backend_name == "jittor":
+            self.output.sync()
         self._assert_device()
 
     def _assert_device(self):

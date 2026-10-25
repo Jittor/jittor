@@ -16,6 +16,11 @@ from _helpers.assertions import expect_error
 from _helpers.numerical_grad import ngrad
 
 class TestSlice(unittest.TestCase):
+    def test_large_positive_slice_start(self):
+        x = jt.array([3.0, 4.0])
+        self.assertEqual(x[10**14:0].shape, [0])
+        self.assertEqual(x[10**14::-1].numpy().tolist(), [4.0, 3.0])
+
     def test_string_slice_overflow_is_a_catchable_user_error(self):
         value = jt.ones((2,))
         expect_error(

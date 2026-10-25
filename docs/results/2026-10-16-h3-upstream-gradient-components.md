@@ -91,7 +91,7 @@ component run does not re-execute or relabel the earlier complete-model runs.
 
 ## Explicit training opt-in: proposal, not an implementation
 
-Under the [adaptation skill](../../agent/skills/downstream-library-adaptation/SKILL.md),
+Under the [adaptation skill](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/downstream-library-adaptation/SKILL.md),
 these library-private kernels belong to the third-row adapter/upstream-fix
 category. They do not establish a missing public Torch/core capability.
 Prefer an upstream explicit differentiable training API; otherwise propose a

@@ -149,7 +149,7 @@ were corrected without altering native tensor APIs or checkpoint validation.
 
 ## Reproduction and artifact binding
 
-Use the [distributed verification skill](../../agent/skills/jittor-distributed-verification/SKILL.md)
+Use the [distributed verification skill](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/jittor-distributed-verification/SKILL.md)
 with separate native and binary-Torch interpreters, private per-rank caches and
 serial first compilation. CPU validation explicitly hides CUDA. The reusable
 oracle tool is:

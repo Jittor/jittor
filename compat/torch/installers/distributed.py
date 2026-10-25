@@ -19,6 +19,7 @@ from ..checkpoint_state import (
     get_optimizer_state_dict, set_optimizer_state_dict,
     get_model_state_dict, set_model_state_dict, get_state_dict, set_state_dict,
 )
+from ..ddp_comm_hooks import install_ddp_comm_hooks
 from ..fidelity import Fidelity, register_api_bindings
 from ...diagnostics import EXPECTED, swallowed
 from ...transaction import set_env, set_flag
@@ -316,6 +317,22 @@ def _native_all_gather_flat(tensor, group=None):
     return _collectives._all_gather_shards(flat)
 
 
+# Bound temporary Jittor buffers while object collectives carry large FULL
+# model state dictionaries. Payload lengths use int64, so the serialized size
+# itself is not limited by the int32 element buffers used for byte transport.
+_OBJECT_COLLECTIVE_CHUNK_BYTES = 64 * 1024 * 1024
+
+
+def _encode_object_length(length):
+    return np.asarray([length], dtype=np.uint64).view(np.int32)
+
+
+def _decode_object_lengths(words, size):
+    words = np.asarray(words, dtype=np.int32).reshape(size, 2).view(np.uint32)
+    return (words[:, 0].astype(np.uint64)
+            | (words[:, 1].astype(np.uint64) << np.uint64(32)))
+
+
 def _native_all_gather_object(object_list, obj, group=None):
     size = _require_supported_group(group)
     if len(object_list) < size:
@@ -326,20 +343,35 @@ def _native_all_gather_object(object_list, obj, group=None):
         return None
 
     payload = pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL)
-    local_length = jt.array(np.asarray([len(payload)], dtype=np.int32))
-    lengths = np.asarray(
-        _native_all_gather_flat(local_length, group=group).numpy(), dtype=np.int32
-    ).reshape(-1)
+    # Jittor's NCCL path can corrupt int64 values gathered as a tiny tensor
+    # (the 2.52 GB Swift checkpoint length arrived negative). Transport each
+    # uint64 length as two int32 words, whose byte patterns NCCL preserves.
+    local_words = _encode_object_length(len(payload))
+    lengths = _decode_object_lengths(
+        _native_all_gather_flat(jt.array(local_words), group=group).numpy(), size
+    )
     max_length = int(lengths.max()) if lengths.size else 0
-    encoded = np.zeros((max_length,), dtype=np.int32)
-    if payload:
-        encoded[:len(payload)] = np.frombuffer(payload, dtype=np.uint8).astype(np.int32)
-    gathered = np.asarray(
-        _native_all_gather_flat(jt.array(encoded), group=group).numpy(), dtype=np.int32
-    ).reshape(size, max_length)
+    chunk_bytes = int(_OBJECT_COLLECTIVE_CHUNK_BYTES)
+    if chunk_bytes <= 0:
+        raise ValueError("object collective chunk size must be positive")
+    received = [bytearray(int(length)) for length in lengths]
+    for offset in range(0, max_length, chunk_bytes):
+        width = min(chunk_bytes, max_length - offset)
+        encoded = np.zeros((width,), dtype=np.int32)
+        chunk = payload[offset:offset + width]
+        if chunk:
+            encoded[:len(chunk)] = np.frombuffer(chunk, dtype=np.uint8).astype(np.int32)
+        gathered = np.asarray(
+            _native_all_gather_flat(jt.array(encoded), group=group).numpy(),
+            dtype=np.int32,
+        ).reshape(size, width)
+        for rank, length in enumerate(lengths):
+            count = min(width, max(0, int(length) - offset))
+            if count:
+                received[rank][offset:offset + count] = gathered[
+                    rank, :count].astype(np.uint8).tobytes()
     for rank, length in enumerate(lengths):
-        raw = gathered[rank, :int(length)].astype(np.uint8).tobytes()
-        object_list[rank] = pickle.loads(raw)
+        object_list[rank] = pickle.loads(received[rank])
     return None
 
 
@@ -1022,6 +1054,9 @@ def _install_distributed(g, registry=None):
     if dist is None:
         dist = _types.ModuleType("torch.distributed")
         _modules["torch.distributed"] = dist
+    # Executable leaves need a filesystem spec for ``python -m``; publishing
+    # a synthetic module in the registry alone cannot provide that entry point.
+    dist.__path__ = [os.path.join(os.path.dirname(__file__), "..", "distributed_cli")]
     state = {"initialized": _native_distributed_active(), "store": None}
     world_group = _JittorProcessGroup(name="world")
     pg_map = {world_group: (world_group._get_backend_name(),)}
@@ -1079,6 +1114,7 @@ def _install_distributed(g, registry=None):
         setattr(dist, sub, mod)
 
     dist.algorithms.__path__ = getattr(dist.algorithms, "__path__", [])
+    install_ddp_comm_hooks(_modules, dist.algorithms)
     const_mod = _modules.get("torch.distributed.constants")
     if const_mod is None:
         const_mod = _types.ModuleType("torch.distributed.constants")

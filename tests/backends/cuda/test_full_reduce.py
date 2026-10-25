@@ -101,6 +101,52 @@ class TestFullReduce(unittest.TestCase):
             np.testing.assert_allclose(jt.grad((x * x).sum(), x).numpy(),
                                        2 * reference, atol=1e-4)
 
+    def test_pending_broadcast_producer_does_not_materialize(self):
+        with jt.flag_scope(use_cuda=1):
+            base = jt.ones((4096, 1))
+            base.sync()
+            with jt.flag_scope(use_stat_allocator=1):
+                before = jt.introspection.counters.allocator.allocated_bytes
+                total = (base.expand(4096, 4096) * 2).sum()
+                total.sync()
+                grew = jt.introspection.counters.allocator.allocated_bytes - before
+            self.assertEqual(float(total.numpy()), 4096 * 4096 * 2)
+            self.assertLess(grew, 4096 * 4096)
+
+    def test_fused_producers_keep_accuracy_repeatability_and_gradients(self):
+        with jt.flag_scope(use_cuda=1):
+            for shape, expanded in (((4096, 1), (4096, 4096)),
+                                    ((257, 257), (257, 257)),
+                                    ((2, 513, 1), (2, 513, 33))):
+                data = np.random.RandomState(711).randn(*shape).astype("float32")
+                repeats = int(np.prod(expanded)) // data.size
+                for mean in (False, True):
+                    divisor = int(np.prod(expanded)) if mean else 1
+                    reference = 2 * data.astype("float64").sum() * repeats / divisor
+                    values = []
+                    for trial in range(5):
+                        base = jt.array(data)
+                        producer = base.expand(expanded) * 2
+                        result = producer.mean() if mean else producer.sum()
+                        values.append(float(result.numpy()))
+                        if trial == 0:
+                            np.testing.assert_allclose(jt.grad(result, base).numpy(),
+                                                       2 * repeats / divisor,
+                                                       rtol=1e-5, atol=1e-6)
+                    np.testing.assert_allclose(values, reference, rtol=1e-5)
+                    self.assertEqual(len(set(values)), 1, (shape, mean, values))
+
+    def test_disabled_block_fold_and_lower_level_keep_full_reduce(self):
+        data = np.random.RandomState(712).randn(128, 256).astype("float32")
+        for options in ({"compile_options": {"use_shared_reduce": 0}},
+                        {"para_opt_level": 0}):
+            with jt.flag_scope(use_cuda=1, **options):
+                x = jt.array(data)
+                np.testing.assert_allclose(float((x * 2).sum().numpy()),
+                                           2 * data.astype("float64").sum(), rtol=1e-5)
+                np.testing.assert_allclose(jt.grad((x * 2).mean(), x).numpy(),
+                                           2 / data.size, rtol=1e-5)
+
     def test_cpu_results_are_unchanged(self):
         # A float32 sum is order-dependent, and the CPU reduction's order is not
         # fixed: hoisting the accumulator out of the output store let the compiler

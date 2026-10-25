@@ -37,11 +37,14 @@ def sdk_fixture(tmp_path):
     return sdk
 
 
-def test_specs_resolve_only_native_source_and_quote_paths(tmp_path):
+@pytest.mark.parametrize("parent_name", ["source", "cuda-workspace"])
+def test_specs_resolve_only_native_source_and_quote_paths(tmp_path, parent_name):
     build = load_build()
     sdk = sdk_fixture(tmp_path)
-    blas = build.library_build(sdk, ROCM, "hipblas")
-    scan = build.library_build(sdk, ROCM, "rocprim")
+    rocm_root = tmp_path / parent_name / "rocm"
+    shutil.copytree(ROCM / "libraries", rocm_root / "libraries")
+    blas = build.library_build(sdk, rocm_root, "hipblas")
+    scan = build.library_build(sdk, rocm_root, "rocprim")
     assert blas.libraries == ("hipblas",)
     assert blas.library_dirs == (str(sdk / "lib64"),)
     assert scan.libraries == scan.library_dirs == ()
@@ -50,8 +53,11 @@ def test_specs_resolve_only_native_source_and_quote_paths(tmp_path):
     for spec in (blas, scan):
         assert spec.sources
         assert all(Path(path).is_file() for path in spec.sources)
-        assert all(ROCM / "libraries" in Path(path).parents for path in spec.sources)
-        assert all("cuda" not in path for path in spec.sources)
+        assert all(rocm_root / "libraries" in Path(path).parents for path in spec.sources)
+        # Backend ownership is relative to its source root, not the checkout
+        # parent (which can legitimately be named cuda-workspace).
+        assert all("cuda" not in Path(path).relative_to(rocm_root).as_posix()
+                   for path in spec.sources)
     assert any(path.endswith("scan.cu") for path in scan.sources)
     with pytest.raises(AttributeError):
         blas.name = "cublas"

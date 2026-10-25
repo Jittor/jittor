@@ -80,8 +80,8 @@ struct FP16OpType : OpByType {
             {"mod", "$1(jittor::_floor_mod_float((float)($2), (float)($4)))"},
             {"fmod", "$1(jittor::_fmod_ieee((float)($2), (float)($4)))"},
             {"floor_divide", "$1(jittor::_floor_divide_float((float)($2), (float)($4)))"},
-            {"init_maximum", "@if(@strcmp($1,float16)==0,-65000.0f,-1e38)"},
-            {"init_minimum", "@if(@strcmp($1,float16)==0,65000.0f,1e38)"},
+            {"init_maximum", "::numeric_min<float>()"},
+            {"init_minimum", "::numeric_max<float>()"},
             {"equal", "(($2)==($4))"},
         };
 

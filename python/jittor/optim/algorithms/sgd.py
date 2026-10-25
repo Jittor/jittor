@@ -6,8 +6,11 @@ from ..._core.dtypes import dtype_name
 from ..._runtime.dispatch import dispatch_context, register_kernel, select_kernel
 
 from ..base import (
-    Optimizer, _grad_matches_param, _param_requires_grad,
-    _state_buffer, _update_preserve_dtype,
+    Optimizer,
+    _grad_matches_param,
+    _param_requires_grad,
+    _state_buffer,
+    _update_preserve_dtype,
 )
 
 #: Per-parameter list, parallel to ``params``: whether that parameter's
@@ -32,30 +35,38 @@ def momentum_initialized_flags(pg):
         flags = pg[MOMENTUM_INITIALIZED] = [False] * len(params)
     while len(flags) < len(params):
         flags.append(False)
-    del flags[len(params):]
+    del flags[len(params) :]
     return flags
 
 
 def _torch_scaled_product(value, alpha):
-    with jt.flag_scope(amp_reg=0):
+    with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
         coefficient = jt.array(alpha, dtype="float32").stop_grad()
         return (value.float32() * coefficient).cast(value.dtype).stop_fuse()
 
 
-def _torch_scaled_add(value, other, alpha):
-    """CUDA low-precision scaled addition: float32 opmath, one output cast.
-
-    This policy is deliberately CUDA-only. Torch CPU vector blocks and scalar
-    tails round differently; native CPU arithmetic remains unchanged.
-    """
-    with jt.flag_scope(amp_reg=0):
+def _torch_scaled_add(value, other, alpha, *, round_alpha=False):
+    """Scaled add with one output cast; optionally round alpha to the tensor dtype."""
+    with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
         coefficient = jt.array(alpha, dtype="float32").stop_grad()
+        if round_alpha:
+            coefficient = coefficient.cast(value.dtype).float32().stop_grad()
         return (value.float32() + other.float32() * coefficient).cast(value.dtype).stop_fuse()
 
 
-def sgd_update(param, grad, velocity, *, lr, momentum=0, weight_decay=0,
-               dampening=0, nesterov=False, momentum_initialized=False,
-               torch_math=False):
+def sgd_update(
+    param,
+    grad,
+    velocity,
+    *,
+    lr,
+    momentum=0,
+    weight_decay=0,
+    dampening=0,
+    nesterov=False,
+    momentum_initialized=False,
+    torch_math=False,
+):
     """Native SGD arithmetic shared by full parameters and FSDP shards.
 
     ``momentum_initialized`` says whether ``velocity`` already holds a
@@ -70,25 +81,42 @@ def sgd_update(param, grad, velocity, *, lr, momentum=0, weight_decay=0,
     ``torch_math`` selects single-rounding CUDA float16/bfloat16 updates. It
     does not change native defaults, CPU arithmetic or float32 fused kernels.
     """
-    low_precision = (torch_math and dtype_name(param.dtype) in ("float16", "bfloat16")
-                     and dispatch_context(param).backend == "cuda")
-    dp = (grad if weight_decay == 0 else
-          _torch_scaled_add(grad, param, weight_decay) if low_precision else
-          param * weight_decay + grad)
+    backend = dispatch_context(param).backend
+    cpu_bfloat16 = dtype_name(param.dtype) == "bfloat16" and backend == "cpu"
+    low_precision = cpu_bfloat16 or (
+        torch_math and dtype_name(param.dtype) in ("float16", "bfloat16") and backend == "cuda"
+    )
+    dp = (
+        grad
+        if weight_decay == 0
+        else _torch_scaled_add(grad, param, weight_decay, round_alpha=cpu_bfloat16)
+        if low_precision
+        else param * weight_decay + grad
+    )
     if momentum == 0 and not nesterov:
-        return (_torch_scaled_add(param, dp, -lr) if low_precision else
-                param - dp * lr)
+        return (
+            _torch_scaled_add(param, dp, -lr, round_alpha=cpu_bfloat16)
+            if low_precision
+            else param - dp * lr
+        )
     if not momentum_initialized:
         _update_preserve_dtype(velocity, dp)
     else:
         if low_precision:
             previous = _torch_scaled_product(velocity, momentum)
-            _update_preserve_dtype(velocity, _torch_scaled_add(previous, dp, 1 - dampening))
+            _update_preserve_dtype(
+                velocity,
+                _torch_scaled_add(previous, dp, 1 - dampening, round_alpha=cpu_bfloat16),
+            )
         else:
             _update_preserve_dtype(velocity, momentum * velocity + dp * (1 - dampening))
     if low_precision:
-        direction = _torch_scaled_add(dp, velocity, momentum) if nesterov else velocity
-        return _torch_scaled_add(param, direction, -lr)
+        direction = (
+            _torch_scaled_add(dp, velocity, momentum, round_alpha=cpu_bfloat16)
+            if nesterov
+            else velocity
+        )
+        return _torch_scaled_add(param, direction, -lr, round_alpha=cpu_bfloat16)
     return param - (dp + momentum * velocity if nesterov else velocity) * lr
 
 
@@ -121,8 +149,8 @@ def _acl_fused_sgd_updates(entries, lr, momentum, weight_decay, dampening, neste
     gradients = [entry[1] for entry in entries]
     velocities = [entry[2] for entry in entries]
     new_parameters, new_velocities = fused_sgd_acl(
-        parameters, velocities, gradients, lr, momentum, weight_decay,
-        dampening, nesterov, step)
+        parameters, velocities, gradients, lr, momentum, weight_decay, dampening, nesterov, step
+    )
     return list(zip(new_parameters, new_velocities))
 
 
@@ -132,8 +160,7 @@ def _acl_fused_sgd_updates(entries, lr, momentum, weight_decay, dampening, neste
 # the registration is what makes an unsupported dtype fall back to the portable
 # update instead of failing, and bfloat16 stays out until its parity with the
 # portable update is measured rather than assumed.
-register_kernel("optim.sgd_fused", "acl", _acl_fused_sgd_updates,
-                dtypes=("float32",))
+register_kernel("optim.sgd_fused", "acl", _acl_fused_sgd_updates, dtypes=("float32",))
 
 # Registers the CUDA entry for the same operator. Imported for its side effect
 # and last, so that a build without the CUDA kernels still gets the ACL one.
@@ -141,15 +168,25 @@ from jittor.backends.cuda.kernels.optim import fused_sgd_cuda as _fused_sgd_cuda
 
 
 class SGD(Optimizer):
-    """ SGD Optimizer.
+    """SGD Optimizer.
 
     Example::
 
         optimizer = nn.SGD(model.parameters(), lr, momentum=0.9)
         optimizer.step(loss)
     """
-    def __init__(self, params, lr, momentum=0, weight_decay=0, dampening=0, nesterov=False,
-                 fused=None, torch_math=False):
+
+    def __init__(
+        self,
+        params,
+        lr,
+        momentum=0,
+        weight_decay=0,
+        dampening=0,
+        nesterov=False,
+        fused=None,
+        torch_math=False,
+    ):
         super().__init__(params, lr)
         # None means "wherever a backend publishes a fused update"; only ACL
         # does, and only for the dtypes its kernels cover, so everything else
@@ -200,6 +237,7 @@ class SGD(Optimizer):
 
     def step(self, loss=None, retain_graph=False):
         from jittor._runtime import step_capture
+
         self.pre_step(loss, retain_graph=retain_graph)
         jt.flags.node_order = 1
         for pg in self.param_groups:
@@ -227,8 +265,11 @@ class SGD(Optimizer):
             # same update in PyTorch. `v` is then left at whatever it held;
             # turning momentum on later resumes from zeros, which is what this
             # optimizer has always started from.
-            active_index = [i for i, (p, g) in enumerate(zip(pg["params"], pg["grads"]))
-                            if _param_requires_grad(p) and _grad_matches_param(p, g)]
+            active_index = [
+                i
+                for i, (p, g) in enumerate(zip(pg["params"], pg["grads"]))
+                if _param_requires_grad(p) and _grad_matches_param(p, g)
+            ]
             if not active_index:
                 continue
             active = [(pg["params"][i], pg["grads"][i], pg["values"][i]) for i in active_index]
@@ -242,8 +283,9 @@ class SGD(Optimizer):
             requested_foreach = pg.get("foreach", getattr(self, "foreach", None))
             if requested_fused and requested_foreach:
                 raise RuntimeError("`fused` and `foreach` cannot be `True` together.")
-            if (requested_fused is not False
-                    and (requested_fused is True or requested_foreach is not False)):
+            if requested_fused is not False and (
+                requested_fused is True or requested_foreach is not False
+            ):
                 # Momentum-free is considered too. That shortcut is a single
                 # pass, but it is a single pass *per parameter*: two elementwise
                 # ops and a holder rebind, 96 times for an 8-layer transformer,
@@ -267,30 +309,38 @@ class SGD(Optimizer):
                 # kernel to select and the same script trained.
                 fused = select_kernel(
                     "optim.sgd_fused",
-                    [var for item in active for var in item
-                     if isinstance(var, jt.Var)])
+                    [var for item in active for var in item if isinstance(var, jt.Var)],
+                )
             if fused is not None:
                 rate = lr
                 if step_capture.active():
                     rate = step_capture.live_rate(
-                        fused, lambda pg=pg: pg.get("lr", self.lr),
-                        lambda pg=pg: (pg.get("momentum", self.momentum),
-                                       pg.get("weight_decay", self.weight_decay),
-                                       pg.get("dampening", self.dampening),
-                                       pg.get("nesterov", self.nesterov)))
+                        fused,
+                        lambda pg=pg: pg.get("lr", self.lr),
+                        lambda pg=pg: (
+                            pg.get("momentum", self.momentum),
+                            pg.get("weight_decay", self.weight_decay),
+                            pg.get("dampening", self.dampening),
+                            pg.get("nesterov", self.nesterov),
+                        ),
+                    )
                 # The fused kernels take one first-step switch per launch, so
                 # buffers seeding now and buffers continuing their recurrence
                 # go in separate launches (`step` 1 and 2). Without momentum
                 # the switch is unused and the list stays one launch.
                 batches = [active_index]
                 if uses_momentum:
-                    batches = [[i for i in active_index if not initialized[i]],
-                               [i for i in active_index if initialized[i]]]
+                    batches = [
+                        [i for i in active_index if not initialized[i]],
+                        [i for i in active_index if initialized[i]],
+                    ]
                 for step, batch in zip((1, 2), batches):
                     if not batch:
                         continue
                     entries = [(pg["params"][i], pg["grads"][i], pg["values"][i]) for i in batch]
-                    updates = fused(entries, rate, momentum, weight_decay, dampening, nesterov, step)
+                    updates = fused(
+                        entries, rate, momentum, weight_decay, dampening, nesterov, step
+                    )
                     for (p, _, v), (new_p, new_v) in zip(entries, updates):
                         # Without momentum the velocity buffer holds nothing
                         # the step needs, and a kernel that keeps it updates it
@@ -303,16 +353,33 @@ class SGD(Optimizer):
             else:
                 # Baked into the graph as numbers; a captured step re-captures
                 # when they change.
-                step_capture.guard(lambda pg=pg: (pg.get("lr", self.lr), pg.get("momentum", self.momentum),
-                                                  pg.get("weight_decay", self.weight_decay),
-                                                  pg.get("dampening", self.dampening),
-                                                  pg.get("nesterov", self.nesterov), self.torch_math))
+                step_capture.guard(
+                    lambda pg=pg: (
+                        pg.get("lr", self.lr),
+                        pg.get("momentum", self.momentum),
+                        pg.get("weight_decay", self.weight_decay),
+                        pg.get("dampening", self.dampening),
+                        pg.get("nesterov", self.nesterov),
+                        self.torch_math,
+                    )
+                )
                 for i, (p, g, v) in zip(active_index, active):
                     # `p * 0 + g` is a whole extra pass over the parameter.
-                    _update_preserve_dtype(p, sgd_update(
-                        p, g, v, lr=lr, momentum=momentum, weight_decay=weight_decay,
-                        dampening=dampening, nesterov=nesterov,
-                        momentum_initialized=initialized[i], torch_math=self.torch_math))
+                    _update_preserve_dtype(
+                        p,
+                        sgd_update(
+                            p,
+                            g,
+                            v,
+                            lr=lr,
+                            momentum=momentum,
+                            weight_decay=weight_decay,
+                            dampening=dampening,
+                            nesterov=nesterov,
+                            momentum_initialized=initialized[i],
+                            torch_math=self.torch_math,
+                        ),
+                    )
             if uses_momentum:
                 # Whether a buffer seeds is baked into the step too (which
                 # launch it is in, or which formula): a captured seeding step

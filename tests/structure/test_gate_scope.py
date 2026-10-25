@@ -17,6 +17,7 @@ from pathlib import Path
 import sys
 
 import pytest
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TEST_ROOT = REPO_ROOT / "tests"
@@ -84,6 +85,15 @@ def test_the_two_sessions_do_not_run_the_same_file_twice():
     native = gate_scope.selected_files(REPO_ROOT, gate_scope.native_arguments())
     torch = gate_scope.selected_files(REPO_ROOT, gate_scope.torch_arguments())
     assert sorted(native & torch) == []
+
+
+def test_public_fsdp2_compat_tests_do_not_enter_native_collection():
+    """Importing compat FSDP2 loads its Torch-facing helper modules."""
+    target = "compat/tests/fsdp2/test_fsdp2_flat_policy.py"
+    native = gate_scope.selected_files(REPO_ROOT, gate_scope.native_arguments())
+    torch = gate_scope.selected_files(REPO_ROOT, gate_scope.torch_arguments())
+    assert target not in native
+    assert target in torch
 
 
 def test_every_exclusion_states_a_reason_and_still_exists():
@@ -260,6 +270,36 @@ def test_full_nox_session_is_the_periodic_complete_gate():
         encoding="utf-8"
     )
     assert "python -m nox -s full" in workflow
+
+
+def test_backend_workflow_caches_use_the_same_runner_temp_root_as_nox():
+    """Keep CPU and CUDA nox caches under the same Actions temp root (10.28)."""
+    expected_cache = "${{ runner.temp }}/jittor-lab/_state/nox/cache"
+    jobs = {
+        "cpu.yml": ("smoke", "cpu"),
+        "cuda.yml": ("cuda", "benchmark-cuda"),
+    }
+    for filename, job_names in jobs.items():
+        workflow = yaml.safe_load(
+            (REPO_ROOT / ".github" / "workflows" / filename).read_text(encoding="utf-8")
+        )
+        for job_name in job_names:
+            steps = workflow["jobs"][job_name]["steps"]
+            root_steps = [
+                step for step in steps if step.get("name") == "Set the Jittor state root"
+            ]
+            assert len(root_steps) == 1
+            assert 'JITTOR_LAB_ROOT=${RUNNER_TEMP}/jittor-lab' in root_steps[0]["run"]
+            assert '"$GITHUB_ENV"' in root_steps[0]["run"]
+            cache_steps = [
+                step
+                for step in steps
+                if step.get("uses", "").startswith("actions/cache/")
+                and step.get("with", {}).get("key", "").startswith("jittor-build")
+            ]
+            assert cache_steps
+            assert all(step["with"]["path"] == expected_cache for step in cache_steps)
+            assert all(".." not in step["with"]["path"] for step in cache_steps)
 
 
 def test_skip_reason_buckets_are_stable_and_other_is_counted(monkeypatch):

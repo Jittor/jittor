@@ -142,8 +142,7 @@ def _amp_retypes_output_to_half():
     ``keep_reduce | keep_white``, which does not retype anything to a half, and
     declining oneDNN there was a 99x slowdown bought for nothing.
     """
-    return bool(int(jt.flags.amp_reg) & (jt.amp_flags.prefer16
-                                       | jt.amp_flags.prefer_bfloat16))
+    return bool(int(jt.flags.amp_reg) & (jt.amp_flags.prefer16 | jt.amp_flags.prefer_bfloat16))
 
 
 def _supports_mkl(a, b, trans_a=False, trans_b=False):

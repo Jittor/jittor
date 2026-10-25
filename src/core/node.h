@@ -161,6 +161,8 @@ struct OpFlags {
         // of the same name, which is why they are in different enums now.
         _requires_grad_disabled,
         _requires_grad_snapshot,
+        // Grouping/gradient-only inputs: forward needs neither their bytes,
+        // their extents nor execution of their providers (currently Tapes).
         _no_input_storage,
         _end,
     };

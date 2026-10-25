@@ -14,7 +14,10 @@ The reference is float64 numpy.
 """
 
 from _helpers import capability as _test_capability
+import gc
+import sys
 import unittest
+import weakref
 
 import numpy as np
 
@@ -50,6 +53,86 @@ class TestFusedAttentionF32(unittest.TestCase):
         self.scope = jt.flag_scope(use_cuda=1)
         self.scope.__enter__()
         self.addCleanup(self.scope.__exit__, None, None, None)
+
+    def test_mask_callback_handles_retired_owner_and_stale_reference(self):
+        cache = self.kernel._LAST_MASK
+        saved = cache[:]
+        previous_hook = sys.unraisablehook
+        errors = []
+
+        class Owner:
+            pass
+
+        owner = Owner()
+        ref = weakref.ref(owner, self.kernel._forget_mask)
+        try:
+            self.kernel._LAST_MASK = None
+            sys.unraisablehook = errors.append
+            del owner
+            gc.collect()
+            self.assertEqual(errors, [])
+            self.assertIsNone(ref())
+            self.kernel._LAST_MASK = cache
+            first, second = object(), object()
+            cache[:] = [second, None, None, "marker"]
+            self.kernel._forget_mask(first)
+            self.assertIs(cache[0], second)
+            self.kernel._forget_mask(second)
+            self.assertEqual(cache, [None, None, None, None])
+        finally:
+            sys.unraisablehook = previous_hook
+            self.kernel._LAST_MASK = cache
+            cache[:] = saved
+
+    def test_nearly_saturated_probabilities_backward(self):
+        # These original parity samples have tiny Q/K gradients. Reconstructing
+        # scores with a different scale/dot order breaks their normalization.
+        for causal, seeds in ((False, (821, 831, 841)),
+                              (True, (861, 871, 881))):
+            with self.subTest(causal=causal):
+                shape = (1, 1, 4, 6)
+                q, k, v = (np.random.RandomState(seed).uniform(
+                    -9, 9, size=shape).astype("float32") for seed in seeds)
+                dout = np.random.RandomState(1234).standard_normal(shape).astype("float32")
+                expected = _reference(q, k, v, causal, dout)
+                jq, jk, jv = (jt.array(a) for a in (q, k, v))
+                calls = []
+                original = self.kernel._forward
+
+                def counted(*args):
+                    calls.append(1)
+                    return original(*args)
+
+                self.kernel._forward = counted
+                try:
+                    out = scaled_dot_product_attention(jq, jk, jv, is_causal=causal)
+                    grads = jt.grad((out * jt.array(dout)).sum(), [jq, jk, jv])
+                    actual = [a.numpy().copy() for a in [out] + list(grads)]
+                finally:
+                    self.kernel._forward = original
+                self.assertEqual(calls, [1])
+                for index, (got, want) in enumerate(zip(actual, expected)):
+                    self.assertTrue(np.isfinite(got).all())
+                    error = np.abs(got.astype("float64") - want)
+                    # The existing device-parity budgets, without relaxation.
+                    net_tol, pe_tol = (2e-4, 2e-3) if index == 0 else (2e-3, 5e-3)
+                    self.assertLess(float(error.max() / (np.abs(want).max() + 1e-30)), net_tol)
+                    self.assertLess(float((error / (np.abs(want) + 1e-3)).max()), pe_tol)
+
+    def test_constant_values_have_zero_query_and_key_gradients(self):
+        rng = np.random.RandomState(913)
+        shape = (1, 1, 7, 6)
+        q, k = (rng.uniform(-9, 9, size=shape).astype("float32") for _ in range(2))
+        v = np.broadcast_to(rng.randn(1, 1, 1, 6), shape).astype("float32")
+        dout = rng.randn(*shape).astype("float32")
+        for causal in (False, True):
+            with self.subTest(causal=causal):
+                jq, jk, jv = (jt.array(a) for a in (q, k, v))
+                out = scaled_dot_product_attention(jq, jk, jv, is_causal=causal)
+                dq, dk = jt.grad((out * jt.array(dout)).sum(), [jq, jk])
+                # With identical values the result is independent of Q and K.
+                np.testing.assert_allclose(dq.numpy(), 0., atol=1e-10, rtol=0.)
+                np.testing.assert_allclose(dk.numpy(), 0., atol=1e-10, rtol=0.)
 
     def _check(self, b, h, lq, lk, d, causal, mask=None):
         rng = np.random.RandomState(d + lq)
@@ -113,6 +196,9 @@ class TestFusedAttentionF32(unittest.TestCase):
         mask = (np.random.RandomState(4).randn(2, 1, 64, 64) * 0.5).astype("float32")
         mask[0, ..., 40:] = np.finfo(np.float32).min
         mask[1, ..., :9] = np.finfo(np.float32).min
+        # The forward remains uniform here; backward must retain 1 / key_count
+        # even when adding log(key_count) to finfo.min would round it away.
+        mask[1, :, 7, :] = np.finfo(np.float32).min
         self._check(2, 3, 64, 64, 64, False, mask)
 
     def test_an_additive_mask_per_head(self):
