@@ -883,7 +883,9 @@ class TestConvBiasFuses(unittest.TestCase):
         e_np = rng.randn(2, 16, 1, 1).astype("float32")
 
         def run(use_cuda):
-            with jt.flag_scope(use_cuda=use_cuda):
+            # Compared with the CPU at 2e-3, so the convolution is true
+            # float32: cuDNN's default lets it use tf32, as torch's does.
+            with jt.flag_scope(use_cuda=use_cuda, float32_cudnn_precision="highest"):
                 x, w, b, e = (jt.array(t) for t in (x_np, w_np, b_np, e_np))
                 y = jt.nn.conv2d(x, w, b, padding=1) + e
                 grads = jt.grad((y * y).sum(), [x, w, b])

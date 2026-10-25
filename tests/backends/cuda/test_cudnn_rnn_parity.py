@@ -67,9 +67,18 @@ def _run(layer, x_np, h_np, c_np, use_cuda):
     return names, got
 
 
+@_test_preserve_policy(jt, 'float32_cudnn_precision')
 @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
 class TestCudnnRnnMatchesTheRecurrence(unittest.TestCase):
     SEQ, BATCH, INPUT, HIDDEN = 5, 3, 4, 6
+
+    def setUp(self):
+        # A parity check at 5e-6 needs true float32 on the cuDNN side: the
+        # default lets cuDNN use tf32, as torch's does, which is 1e-4 out.
+        from contextlib import ExitStack as _TestPolicyStack
+        stack = _TestPolicyStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(jt.runtime.scope(float32_cudnn_precision="highest"))
 
     def _check(self, cls, mode, **kw):
         rng = np.random.RandomState(0)
@@ -122,10 +131,10 @@ class TestCudnnRnnMatchesTheRecurrence(unittest.TestCase):
         self._check(nn.RNN, "rnn", nonlinearity="tanh", bias=False)
 
 
-@_test_preserve_policy(jt, 'float32_matmul_precision', 'cuda_allow_cudnn_tf32')
+@_test_preserve_policy(jt, 'float32_cudnn_precision', 'cuda_allow_cudnn_tf32')
 @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
 class TestRnnFollowsTheFloat32Policy(unittest.TestCase):
-    """`float32_matmul_precision` reaches the RNN, and it is measurable.
+    """`float32_cudnn_precision` reaches the RNN, and it is measurable.
 
     The RNN set no math type for float32, so it got cuDNN's default -- which
     on Ampere and later *allows tf32*. An fp32 LSTM ran at tf32 whatever
@@ -143,7 +152,7 @@ class TestRnnFollowsTheFloat32Policy(unittest.TestCase):
         from contextlib import ExitStack as _TestPolicyStack
         _test_policy_stack = _TestPolicyStack()
         self.addCleanup(_test_policy_stack.close)
-        self._saved = (jt.introspection.policy.runtime.float32_matmul_precision,
+        self._saved = (jt.introspection.policy.runtime.float32_cudnn_precision,
                        jt.introspection.policy.runtime.cuda_allow_cudnn_tf32)
         _test_policy_stack.enter_context(jt.runtime.scope(cuda_allow_cudnn_tf32=0))
 
@@ -176,7 +185,7 @@ class TestRnnFollowsTheFloat32Policy(unittest.TestCase):
             for (name, value), (_, p) in zip(saved, _params(layer)):
                 p.assign(jt.array(value))
 
-            _test_policy_stack.enter_context(jt.runtime.scope(float32_matmul_precision=tier))
+            _test_policy_stack.enter_context(jt.runtime.scope(float32_cudnn_precision=tier))
             _, got = _run(layer, x, h, c, use_cuda=1)
             # skip output/h_n/c_n/d_input; compare the weight gradients
             got_grads = got[4:]
