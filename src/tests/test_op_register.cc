@@ -459,4 +459,84 @@ JIT_TEST(op_constructor_resolves_lazily) {
     CHECK(b->input()->is_op(get_op_id("unary")));
 }
 
+// The native provider registry is the ABI seam backend authors call. Its op and
+// provider names are caller input, so an unknown or conflicting one must be a
+// catchable UserError; the consistency assertions that follow a successful
+// lookup remain internal.
+JIT_TEST(op_registration_input_errors_are_user_errors) {
+    NativeOpRegistry registry;
+    registry.register_op({"jit_test_user_error_dup", "first", ""});
+
+    bool caught = false;
+    try {
+        registry.register_op({"jit_test_user_error_dup", "second", ""});
+    } catch (const UserError& e) {
+        caught = true;
+        CHECK(string(e.what()).find("different source path") != string::npos)
+            << e.what();
+    }
+    CHECK(caught) << "duplicate op name from a different source must be a user error";
+
+    caught = false;
+    try {
+        registry.register_provider(NativeProviderRegistration(""));
+    } catch (const UserError& e) {
+        caught = true;
+        CHECK(string(e.what()).find("is incomplete") != string::npos) << e.what();
+    }
+    CHECK(caught) << "an incomplete provider registration must be a user error";
+
+    registry.register_provider("jit_test_user_error_provider");
+    caught = false;
+    try {
+        registry.register_provider("jit_test_user_error_provider");
+    } catch (const UserError& e) {
+        caught = true;
+        CHECK(string(e.what()).find("already registered") != string::npos)
+            << e.what();
+    }
+    CHECK(caught) << "re-registering a provider must be a user error";
+
+    caught = false;
+    try {
+        registry.bind_provider("jit_test_no_such_op", "jit_test_user_error_provider");
+    } catch (const UserError& e) {
+        caught = true;
+        CHECK(string(e.what()).find("no such op is registered") != string::npos)
+            << e.what();
+    }
+    CHECK(caught) << "binding an unknown op must be a user error";
+
+    caught = false;
+    try {
+        registry.bind_provider("jit_test_user_error_dup", "jit_test_no_such_provider");
+    } catch (const UserError& e) {
+        caught = true;
+        CHECK(string(e.what()).find("the provider is not registered") != string::npos)
+            << e.what();
+    }
+    CHECK(caught) << "binding an unknown provider must be a user error";
+
+    caught = false;
+    try {
+        registry.resolve_provider("jit_test_user_error_dup", "jit_test_no_such_provider");
+    } catch (const UserError& e) {
+        caught = true;
+        CHECK(string(e.what()).find("is not registered") != string::npos) << e.what();
+    }
+    CHECK(caught) << "resolving against an unknown provider must be a user error";
+
+    registry.register_provider("jit_test_user_error_provider_2");
+    registry.bind_provider("jit_test_user_error_dup", "jit_test_user_error_provider");
+    caught = false;
+    try {
+        registry.resolve_provider("jit_test_user_error_dup", "jit_test_user_error_provider_2");
+    } catch (const UserError& e) {
+        caught = true;
+        CHECK(string(e.what()).find("is not bound to provider") != string::npos)
+            << e.what();
+    }
+    CHECK(caught) << "resolving an unbound op/provider pair must be a user error";
+}
+
 }
