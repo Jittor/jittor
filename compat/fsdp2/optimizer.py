@@ -374,7 +374,7 @@ def optimizer_step(opt, loss=None, retain_graph=False, *, native_kind=None):
                     entry.shard, new_param,
                     entry_trainable[(id(state), id(entry))])
                 object.__setattr__(entry.shard, "_torch_grad", grad)
-                object.__setattr__(entry.owner, entry.attr, entry.shard)
+                shard._storage._set_module_parameter(entry, entry.shard)
                 entry.full_param = None
 
     for state in states:
@@ -411,7 +411,7 @@ def optimizer_step(opt, loss=None, retain_graph=False, *, native_kind=None):
             grad = flat_public_grads.get(key)
             if isinstance(grad, jt.Var):
                 object.__setattr__(entry.shard, "_torch_grad", grad)
-            object.__setattr__(entry.owner, entry.attr, entry.shard)
+            shard._storage._set_module_parameter(entry, entry.shard)
             entry.full_param = None
         state.true_fsdp_unsharded = False
 
@@ -450,14 +450,14 @@ def sharded_sgd_step(module, loss, lr=1e-4, *, divide_by_world_size=True):
         for entry, was_trainable in zip(state.true_fsdp_params, entry_trainable):
             if was_trainable and entry.shard.is_stop_grad():
                 entry.shard.start_grad()
-            object.__setattr__(entry.owner, entry.attr, entry.shard)
+            shard._storage._set_module_parameter(entry, entry.shard)
             entry.full_param = None
         state.true_fsdp_unsharded = False
         return grads
     for entry, grad in zip(state.true_fsdp_params, grads):
         _assign_preserve_trainability(
             entry.shard, (entry.shard - grad * lr).stop_grad())
-        object.__setattr__(entry.owner, entry.attr, entry.shard)
+        shard._storage._set_module_parameter(entry, entry.shard)
         entry.full_param = None
     state.true_fsdp_unsharded = False
     return grads

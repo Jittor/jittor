@@ -8,6 +8,24 @@ import jittor as jt
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 
+def _register_parameter_alias(entry, owner, attr):
+    """Record a second registration of one logical parameter, without a Var."""
+    if owner is entry.owner and attr == entry.attr:
+        return
+    aliases = getattr(entry, "parameter_aliases", None)
+    if aliases is None:
+        aliases = entry.parameter_aliases = []
+    if not any(current is owner and name == attr for current, name in aliases):
+        aliases.append((owner, attr))
+
+
+def _set_module_parameter(entry, parameter):
+    """Publish the exact same holder at every registration of an FSDP entry."""
+    object.__setattr__(entry.owner, entry.attr, parameter)
+    for owner, attr in getattr(entry, "parameter_aliases", ()):
+        object.__setattr__(owner, attr, parameter)
+
+
 def _parameter_requires_grad(param):
     """Read torch-facing trainability without conflating it with graph stop."""
     try:
@@ -73,7 +91,7 @@ def _reshard_module_params(module):
     if not getattr(state, "true_fsdp_unsharded", False):
         return module
     for entry in state.true_fsdp_params:
-        object.__setattr__(entry.owner, entry.attr, entry.shard)
+        _set_module_parameter(entry, entry.shard)
         if not getattr(entry, "requires_grad", True):
             # A frozen parameter is not a sync_sharded_grads() target. Drop the
             # state's explicit full reference after forward so an entirely
@@ -173,7 +191,7 @@ def _unshard_module_params_impl(module, *, api):
                     full.start_grad()
             elif not full.is_stop_grad():
                 full.stop_grad()
-            object.__setattr__(entry.owner, entry.attr, full)
+            _set_module_parameter(entry, full)
     else:
         for entry in state.true_fsdp_params:
             gathered = common._all_gather_shards(
@@ -192,7 +210,7 @@ def _unshard_module_params_impl(module, *, api):
                     full.start_grad()
             elif not full.is_stop_grad():
                 full.stop_grad()
-            object.__setattr__(entry.owner, entry.attr, full)
+            _set_module_parameter(entry, full)
     state.true_fsdp_unsharded = True
     return module
 
@@ -330,7 +348,7 @@ def _init_true_fsdp_state_impl(module, state, params, *, world_size, rank, flat,
             state.true_fsdp_flat_shard.stop_grad()
         api._refresh_flat_entry_shards(state)
         for entry in entries:
-            object.__setattr__(entry.owner, entry.attr, entry.shard)
+            _set_module_parameter(entry, entry.shard)
         state.true_fsdp_unsharded = False
         return state
 
@@ -364,7 +382,7 @@ def _init_true_fsdp_state_impl(module, state, params, *, world_size, rank, flat,
                 local.start_grad()
         elif not local.is_stop_grad():
             local.stop_grad()
-        object.__setattr__(owner, attr, local)
+        _set_module_parameter(entries[-1], local)
     state.true_fsdp_initialized = True
     state.true_fsdp_rank = rank
     state.true_fsdp_world_size = ws

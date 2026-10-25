@@ -192,7 +192,7 @@ def _load_full_state_dict(module, state_dict, strict=True):
         for entry in state.true_fsdp_params:
             if getattr(entry, "requires_grad", True) and entry.shard.is_stop_grad():
                 entry.shard.start_grad()
-            object.__setattr__(entry.owner, entry.attr, entry.shard)
+            shard._storage._set_module_parameter(entry, entry.shard)
             entry.full_param = None
         state.true_fsdp_unsharded = False
     for key in set(current) & set(state_dict) - consumed:
@@ -303,7 +303,7 @@ def _load_sharded_state_dict(module, state_dict, strict=True):
             else:
                 entry.shard.update(value)
             for current_entry in state.true_fsdp_params:
-                object.__setattr__(current_entry.owner, current_entry.attr, current_entry.shard)
+                shard._storage._set_module_parameter(current_entry, current_entry.shard)
                 current_entry.full_param = None
             state.true_fsdp_unsharded = False
     for target, value in ordinary:

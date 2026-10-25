@@ -2,7 +2,7 @@
 
 本记录对应[综合计划](../testing/2026-10-21-ascend-integrated-compat-plan.md)，唯一活动状态源为[整改看板](../architecture/refactor-board.md)的 ASC 任务。前半部分保留 2026-10-21 的 MAIN-r28/123 历史验收；后续各 cohort 按各自冻结源码区分，不相互外推。R65 真实 Qwen3-0.6B BF16 LoRA 对拍与 R68 最终主树 FSDP2 双卡 Linear 对拍均绑定提交 `9390fa0e84de651e7e1b01de4d142e04d4333f8b`、3336 文件源清单 SHA256 `c00986fb31e15e18860acf60e2ee0059c7dc63afb90ef0a286131d9fc7eb0f9a`；旧 R64/R63 仍只对其原冻结源码有效。下文保留原始失败和未运行项。
 
-> **截至2026-10-24—25 R217002/R224：** R217新双卡cohort002在56fc6faa7完整3349源上通过8阶段、38检查和694指标，Native/Jittor完整连续/中断/fresh恢复及跨runtime通过，Store缺失已在对应实卡场景修复；原001失败保留。R224把native FSDP canonical optimizer接线及lazy同对象导出整合后，实际native检查点/FSDP48P、core341P、compat专项201P，原六项pending失败与追加export失败均保留后已修。当前bool确定性setter/getter已真实接ACL runtime，本轮显式tensor前及final两flagTrue；旧UNIMPLEMENTED_FALSE描述不适用当前源码。R213独立Native真实Qwen124轨迹strict0仍保留原范围，最终主树真实Qwen全交叉、nested NPU、随机恢复和合格性能仍待。private CPU29P之外的两析构误用负例确认SIGABRT；e019词法lease候选仅独立源码修复，38项与新二进制待验，未合主树。
+> **截至2026-10-25 R230：** 两指定远端fresh fetch成功，整合基线为73083ccb0；R230候选含3351份源码/新增测试。同state tied参数原主树真实CPU复现后统一全部注册点重绑，CPU专项9P、native检查点/FSDP48P、core341P、既有compat专项201P。同一73083/3350源的q005 Native连续/中断/fresh恢复71检查、57078指标strict0；JT完成四更新后因冻结清单310→311失败，完整数组还确认累计梯度丢失、公开gradient shape与optimizer键差异。R229最终双卡nested三阶段资源合格，FP32数值30/30P且两rank输入梯度exact；两种BF16各15/30P，整体仍FAIL。private e019重计算CPU38P、原AD七整文件43P/13原CUDA跳过，仅属私有核心。公开Torch/HF/NPU重计算、随机训练恢复与合格NPU性能仍未验收。Native显存接口实测通过不等于JT接口或性能通过。
 
 | 本轮验收 | 实际结论与源码范围 |
 | --- | --- |
@@ -1736,3 +1736,142 @@ e019ac41ec进一步让GenericAlloc返回nullptr时直接保留原PyErr返回，
 3头生成绑定、host控制流和source变异通过仍只作source证据。
 原core2bee不作为新候选二进制；新增量构建和38项实际运行须单独记录，
 本节不授予该候选runtime/NPU通过，不合入主树。
+
+
+## R225—R230：真实Qwen失败定位、nested复验与共享参数修复（2026-10-25）
+
+本节区分已封存的73083ccb0、3350文件NPU cohort与R230追加测试后的3351候选源。
+没有沿用旧执行窗口。以下LAB证据均未版本化，位于 $JITTOR_LAB_ROOT；
+完整数组、日志、缓存与原失败不放入主仓库。
+
+### q005：Native全恢复通过，Jittor完整四更新后保留失败
+
+R214/q002共享helper签名缺参、R225/q003实际outer monitor缺参原失败保留。
+R226修复实际调用后，q004 Native三阶段与原比较器全部71检查、57078指标strict0。
+q004 JT首micro前因错误要求实现类名必须为SequentialSampler而失败。
+R227保持公开factory与采样数学，改查公开类精确身份、Python整数全集、长度及完整0至15顺序，
+另存真实实现类名；没有给实现类改名或放宽数值比较。
+
+新q005源清单SHA256为e1356d8856b3d6f2652c666abbc1f1b70d99b15b3c2c465c49f058e3d941bf87。
+串行两rank全8batch/112梯度预热通过。Native连续/中断/fresh恢复分别248.372、274.901、
+196.460秒，monitor_samples分别21、22、16，均qualified/rc0、gap/foreign/wrong为0。
+JT双rank通过公开sampler身份与完整顺序，执行8micro/4updates，fallback增量均0；
+原冻结完整清单断言失败，159.215秒、18份样本、gap/foreign/wrong均0。
+正常seal被正确拒绝，外层CompletionError不是首个模型错误。
+JT interrupt/resume未运行，整轮不能验收。
+
+两rank frozen-before均310项、after均311项；原310项完整shape/dtype/hash全部未变，
+唯一新增lm_head.weight与原embed_tokens.weight完整值hash相同。
+这指向共享注册点去重身份，不写成已证明冻结值被优化器改变；
+原JSON未记录两个属性的Python id，真实身份错误由R230 CPU最小复现另证。
+
+父端原比较器未改，读取全部可用数组：Native71/71P、57078指标strict0、最大差0。
+JT连续训练已有58份可比capture，原检查均FAIL。初始数值、首micro forward/loss与梯度数值exact，
+但公开grad shape与完整materialized shape不一致；optimizer group额外448项来自m、values、_torch_steps、_torch_adam_params四个内部字段，Adam slots另有local形状及step存储类型差异。
+首update第二micro起有真实梯度差，不把metadata问题当成全部解释。
+现有forward32指标8失败、gradient4480指标1376失败、update4704指标2288失败；
+最大绝对差依次3.125、0.17578125、3.2904209e-5。
+预算仍forward0.005/0.03、gradient0.01/0.05、update2e-6/2e-5，各自恢复0/0。
+
+首update112梯度×两rank共1146880元素的只读代数诊断显示：
+JT第二micro与Native第二micro减首micro两rank平均值的最大残差4.656613e-10；
+直接Native差0.17578125。这是定位累计梯度丢失的证据，尚非修复验收。
+原完整失败、每micro数组、参数/Adam/调度器状态均保留。
+
+入口为LAB r227-q005/qwen3-06b-fsdp2-trajectory-r186-dual56/；
+_state/ascend-compat/real-model/r227-q005-original-diagnostic-20261025-r1/summary.json
+SHA256为8e7b8cfd9ff672a02ee8b850f65ed5dad2110201dff5e774a7ece8b774fb1d45，
+完整原比较为9b0cd2644edaf845b6806d0c8e47b11658081289bfae719cb7f05ce06bdcb0a1，
+代数诊断为e51f20459450f7a662bf4f31b02ae18ca0186d0d9a5bd95a1d2e56fae1f9c94e。
+父端terminal审计1fe7399353e759209dd0744191d4e6bab5c4709cc46d21a0f397337c51c3d4c2
+绑定2529原文件、198份NPZ、全部源不变及24精确身份消失。
+父端首次proc CLI错误与samples字段误读保留，数量以原execution.json的monitor_samples及纠错003为准；
+原模型和资源结果未重写。
+
+### R229：FP32 nested输入梯度复验通过，BF16仍不通过
+
+父端在R228上卡前发现同名局部completion_artifacts递归解析自身，
+实际调用因expected_root参数TypeError；旧19P/10P没有覆盖execute实际注册闭包。
+保留原包与负例，新R229只改局部命名和入口标签。新增14项host真正调用execute至
+真实completion.install，执行实际注册闭包的完整source/site/tool/shared/Native校验及原artifact owner，
+成功与损坏负控均通过。
+
+R229 fresh准入后串行两rank world1三dtype预热，再运行原HCCL2三case。
+清单SHA256为8a289885060400e4eb67eae4a177e17d91312ea7bfce3bb244ffb143c9a23c23。
+三阶段52.902、75.052、53.678秒，monitor_samples为6、9、5，均qualified/rc0；
+实际物理放置正确、fallback0、gap/foreign/wrong0。
+正常seal、worker/supervisor退出、postempty与完整源不变均通过。
+Native仍是独立冻结R194参考，不称当前MAIN Native重跑。
+
+原比较器共324项、90数值数组；固定False/highest/HF32off/autocastoff、
+atol2e-6/rtol2e-5未改。FP32 compute/FP32 input为30/30P，
+两rank完整输入梯度最大差0，其余最大差7.450581e-9。
+BF16 compute搭配FP32或BF16 input各15/30P，各15项超预算；
+各case最大差0.00048828125，输入梯度差0.0000152587890625。
+72项SGD公式检查全通过，整体比较仍FAIL。
+全部六份preassert完整leaf、本地参数梯度、None/布局/放置信息均保存。
+
+LAB入口为_state/ascend-compat/distributed/nested-fsdp2-r229-dual56/attempts/attempt-001/。
+父端terminal审计1f84aa47c0365794fa202ced2b8ee4d297a4d5f85da0511f460ee5fe9b1b5280
+绑定416文件、10精确身份均消失、3350源不变及缓存无owner。
+FP32结论只归此冻结源、拓扑和协议，不外推R230、新模型、混合精度或性能。
+
+### R230：统一同state tied参数所有注册点的holder切换
+
+先在未修改的73083原主树及核验CPU暖core上真实运行public fully_shard，
+wrap后embedding.weight与head.weight身份断言失败，worker自然rc1；
+before/after完整值、注册id、shape/dtype与traceback保留于LAB
+_state/ascend-compat/distributed/fsdp2-tied-parameter-cpu-red-20261025-r1/。
+
+随后整合四canonical owner：收集同state全部注册点，逻辑storage仍单entry；
+init/unshard/reshard/optimizer/FULL与SHARDED load统一薄委托同一setter，
+所有注册点接收同一holder。没有Qwen retie特判、忽略lm_head或改冻结断言。
+Native自有FSDP原alias拒绝边界不变。跨已单独wrapped child-state共享还需独立
+forward生命周期合同，本修复没有把它记为支持。
+
+新增9项真实CPU全部通过：flat开关、冻结/可训练、root直接别名8格与容器负控；
+验证wrap/forward/backward/SGD/手动unshard-reshard/公开FULL及SHARDED load后的身份、
+单entry、optimizer去重，并比较完整output、全部适用梯度和更新。
+扩大原13文件首轮200P/31skip/1F：host AST fixture未提供新canonical setter依赖。
+原失败保留，fixture改取实际setter，保留原数值/padding/scope全部断言并追加
+第二注册点load后同holder断言；复验201P/31原accelerator skip。
+原生检查点/FSDP完整两文件48P；native/Torch core341P/46skip/1xfail，均rc0。
+以上仅为CPU对应范围；新3351源NPU与完整Qwen恢复仍待，结构/布局/链接门禁另记下文。
+
+代码与原日志在LAB _state/ascend-compat/distributed/fsdp2-tied-parameter-main-r230/。
+初始source-delivery SHA256为6921ac9c29b45196a3a7c52418b3124044d0118ba8edb7734015f4f2633799ff；
+最终CPU清单source-before-v2.json为9020ae6433c84ebb540faf48e82b779da189320f707f6e32650b7dd68e851fa5，
+包括全部3350 tracked及明确新增测试共3351，不遗漏未暂存新文件。
+fresh fetch见LAB _state/ascend-compat/handoff/resume-remote-1792941503/；
+两目标tip仍305c2f086与ca56aa802且均为HEAD祖先，没有重复合并、reset、stash或push。
+
+### 私有重计算和显存证据的范围更新
+
+private e019/cfdb新core的原数学/全数组/RNG/释放及生命周期专项实际38P；
+两析构误用在新候选真实进程中正常拒绝并rc0，旧SIGABRT(-6)保留。
+原autograd七个完整文件56 collected、43P/13原CUDA skip。
+最近complex64 gradfunctional整文件7P，99份完整NumPy数组逐字节验证，
+父端审计b81e620072a65c4a53fdb037096b7786418957c54c156678412dc5cbb6a2f521。
+剩余六A文件与B至F组未完成；私有core未合MAIN，不授予公开checkpoint/HF/FSDP重计算。
+Native CPU checkpoint34协议与wrapper17协议仅提供参考，预期拒绝、no_grad已分列；
+不是34/17项Jittor功能已实现。
+
+Native NPU显存基线28公开调用、生命周期204调用实际通过；
+4MiB分配、别名持有、释放、缓存保留与empty_cache/reset分开记录。
+父端审计分别e0b97bb51504e547913382294cd704a51a53568ba208dd9751d34ab0db8e25b0、
+b62d26e89af34227f67a5fe85642466735f7802ee87ca2126bec6549bcf28ec7，
+入口为LAB _state/ascend-compat/performance/。
+JT独立warm-r1在import阶段rc3；warm-r2因路径改变触发冷构建，由父端核验精确自有组后取消。
+完整缓存差异、原SIGTERM退出与副本保留，均未进入数学或公开显存API，
+中断缓存未获准复用。仍无JT显存接口实卡验收或合格速度/峰值显存比较。
+
+### R230最终提交门禁
+
+最终完整tests/structure实际1674P/2原accelerator skip，pytest470.04秒、控制器474.464秒、rc0；
+layout检查298份active Markdown通过，内部链接284文件通过，diff检查通过。
+命令、完整JUnit和日志位于LAB _state/ascend-compat/distributed/fsdp2-tied-parameter-main-r230/final-gates-001/。
+results.json SHA256为8c71e413c186b5b30ecfa60af6e7c67ba6a75682908eff3d3d5147ffaee78464，
+structure-junit.xml为4b02d5dc17264d2a825db2d9110ecae740a982b7ed20809d247d65c4db7c4aa2。
+门禁期间3351份文件逐字不变，source-before.json为0c42475857f37717b0cbe968bd6a7e487fede83fb57439df1a3ac2b9add29069。
+结构完成后仅ASC-01及本报告补记实际门禁结果与完整状态差异，其他3349份源/测试保持相同；
+提交前再次检查最终文档layout、链接和diff，不把文档追加视为新的模型/NPU复验。

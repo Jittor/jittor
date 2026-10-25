@@ -221,7 +221,7 @@ def _fsdp_var_redistribute(self, device_mesh=None, placements=None, **kwargs):
     return self
 
 
-def _named_parameters_with_owner(module, recurse=True):
+def _named_parameters_with_owner(module, recurse=True, remove_duplicate=True):
     out = []
     seen = set()
 
@@ -244,7 +244,7 @@ def _named_parameters_with_owner(module, recurse=True):
 
     def visit(mod, prefix=""):
         for name, value, role in mod._var_roles():
-            if role != "parameter" or id(value) in seen:
+            if role != "parameter" or (remove_duplicate and id(value) in seen):
                 continue
             seen.add(id(value))
             pname = f"{prefix}.{name}" if prefix else str(name)
@@ -315,11 +315,20 @@ def _init_true_fsdp_state_impl(module, state):
     ignored_ids = {
         id(param) for param in getattr(state, "ignored_params", ())
     }
-    params = [
-        item for item in _named_parameters_with_owner(module, recurse=True)
-        if not is_fsdp_managed_param(item[3]) and id(item[3]) not in ignored_ids
-    ]
-    for _, owner, _, _ in params:
+    registrations = _named_parameters_with_owner(
+        module, recurse=True, remove_duplicate=False)
+    params = []
+    seen = set()
+    for item in registrations:
+        parameter = item[3]
+        if (id(parameter) in seen or is_fsdp_managed_param(parameter)
+                or id(parameter) in ignored_ids):
+            continue
+        seen.add(id(parameter))
+        params.append(item)
+    for _, owner, _, parameter in registrations:
+        if id(parameter) not in seen:
+            continue
         if isinstance(owner, (nn.ParameterList, ParameterListAdapter, ParameterDictAdapter)):
             raise NotImplementedError(
                 "FSDP2 cannot shard ParameterList/ParameterDict: its parameter "
@@ -342,6 +351,18 @@ def _init_true_fsdp_state_impl(module, state):
         # the current holder, with its explicit entry metadata, in the existing
         # weak leaf registry; never retain a full parameter or a retired alias.
         get_tensor_state(jt).leaf_params[id(entry.shard)] = entry.shard
+    # Discovery deduplicates storage, not module registrations. Keep every
+    # registration belonging to this state tied to the same current holder.
+    # Cross-state sharing needs a separate forward-lifetime contract.
+    rebound = {}
+    for _, owner, attr, parameter in registrations:
+        parameter_state, entry = _fsdp_param_entry(parameter)
+        if entry is None or parameter_state is not state:
+            continue
+        _storage._register_parameter_alias(entry, owner, attr)
+        rebound[id(entry)] = entry
+    for entry in rebound.values():
+        _storage._set_module_parameter(entry, entry.shard)
     return initialized
 
 
@@ -404,7 +425,7 @@ def _unshard_module_params_impl(module):
                     full.start_grad()
             elif not full.is_stop_grad():
                 full.stop_grad()
-            object.__setattr__(entry.owner, entry.attr, full)
+            _storage._set_module_parameter(entry, full)
     else:
         for entry in state.true_fsdp_params:
             gathered = common._all_gather_shards(
@@ -419,7 +440,7 @@ def _unshard_module_params_impl(module):
                     full.start_grad()
             elif not full.is_stop_grad():
                 full.stop_grad()
-            object.__setattr__(entry.owner, entry.attr, full)
+            _storage._set_module_parameter(entry, full)
     state.true_fsdp_unsharded = True
     return module
 

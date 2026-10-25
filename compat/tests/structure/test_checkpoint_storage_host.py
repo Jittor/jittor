@@ -338,9 +338,12 @@ def test_actual_provider_model_shards_round_trip_without_gather(runtime):
         def assign(self, value): np.copyto(self, value)
     def local(value): return np.asarray(value, dtype=np.float32).view(Local)
     storage_nodes = ast.parse((ROOT / "python/jittor/distributed/fsdp/storage.py").read_text()).body
-    overlap = next(node for node in storage_nodes if isinstance(node, ast.FunctionDef) and node.name == "_flat_local_overlap")
+    storage_helpers = [node for node in storage_nodes
+                       if isinstance(node, ast.FunctionDef)
+                       and node.name in {"_flat_local_overlap", "_set_module_parameter"}]
+    assert len(storage_helpers) == 2
     namespace = {}
-    exec(compile(ast.Module(body=[overlap], type_ignores=[]), "storage.py", "exec"), namespace)
+    exec(compile(ast.Module(body=storage_helpers, type_ignores=[]), "storage.py", "exec"), namespace)
     common = types.SimpleNamespace(
         _flatten_var=lambda value: value.reshape(-1),
         _slice_flat=lambda value, offset, count: value[offset:offset + count],
@@ -352,7 +355,9 @@ def test_actual_provider_model_shards_round_trip_without_gather(runtime):
             entry.shard = state.true_fsdp_flat_shard[start:start + count]
     shard = types.SimpleNamespace(_flat_local_overlap=namespace["_flat_local_overlap"],
                                   _refresh_flat_entry_shards=refresh,
-                                  _fsdp_param_entry=lambda value: (None, None))
+                                  _fsdp_param_entry=lambda value: (None, None),
+                                  _storage=types.SimpleNamespace(
+                                      _set_module_parameter=namespace["_set_module_parameter"]))
     provider = {"np": np, "jt": types.SimpleNamespace(concat=guarded_concat),
                 "common": common, "shard": shard, "dtensor": types.SimpleNamespace(DTensor=runtime.dtensor, Shard=lambda dim: object()),
                 "_checkpoint_entries": lambda module: entries,
@@ -364,17 +369,20 @@ def test_actual_provider_model_shards_round_trip_without_gather(runtime):
     exec(compile(ast.Module(body=nodes, type_ignores=[]), "_state_dict.py", "exec"), provider)
     for rank in range(3):
         owner = types.SimpleNamespace()
+        alias_owner = types.SimpleNamespace()
         state = types.SimpleNamespace(true_fsdp_flat=True, true_fsdp_rank=rank, true_fsdp_flat_shard_numel=4,
                                       true_fsdp_flat_shard=local(np.arange(rank * 4, rank * 4 + 4) + 1),
                                       true_fsdp_params=[], true_fsdp_unsharded=False, mesh=object())
         entries.clear()
         for name, offset, count in (("a", 0, 3), ("b", 3, 5), ("c", 8, 2)):
-            entry = types.SimpleNamespace(flat_offset=offset, numel=count, shape=(count,), owner=owner, attr=name)
+            entry = types.SimpleNamespace(flat_offset=offset, numel=count, shape=(count,),
+                                          owner=owner, attr=name,
+                                          parameter_aliases=[(alias_owner, name)])
             state.true_fsdp_params.append(entry)
             entries.append((name, state, entry))
         refresh(state)
         for entry in state.true_fsdp_params:
-            setattr(owner, entry.attr, entry.shard)
+            namespace["_set_module_parameter"](entry, entry.shard)
         model = types.SimpleNamespace(state_dict=lambda: {entry.attr: entry.shard for entry in state.true_fsdp_params})
         saved = provider["_get_sharded_state_dict"](model)
         expected = state.true_fsdp_flat_shard.copy()
@@ -382,6 +390,9 @@ def test_actual_provider_model_shards_round_trip_without_gather(runtime):
             expected[2:] = 0  # Collective padding is not persisted.
         state.true_fsdp_flat_shard[:] = 0
         provider["_load_sharded_state_dict"](model, saved)
+        for entry in state.true_fsdp_params:
+            assert getattr(owner, entry.attr) is entry.shard
+            assert getattr(alias_owner, entry.attr) is entry.shard
         np.testing.assert_array_equal(state.true_fsdp_flat_shard, expected)
         assert not state.true_fsdp_unsharded
         assert not scope_active[0]
