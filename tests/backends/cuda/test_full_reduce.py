@@ -102,16 +102,25 @@ class TestFullReduce(unittest.TestCase):
                                        2 * reference, atol=1e-4)
 
     def test_pending_broadcast_producer_does_not_materialize(self):
+        # Every spelling the fast path redirects must stay under the same
+        # budget: a materialized 4096x4096 float32 producer is 64 MiB, four
+        # times the whole allowance here.
+        cases = (("Var.sum", lambda p: p.sum(), False),
+                 ("Var.mean", lambda p: p.mean(), True),
+                 ("jt.sum", jt.sum, False),
+                 ("jt.mean", jt.mean, True))
         with jt.flag_scope(use_cuda=1):
             base = jt.ones((4096, 1))
             base.sync()
-            with jt.flag_scope(use_stat_allocator=1):
-                before = jt.introspection.counters.allocator.allocated_bytes
-                total = (base.expand(4096, 4096) * 2).sum()
-                total.sync()
-                grew = jt.introspection.counters.allocator.allocated_bytes - before
-            self.assertEqual(float(total.numpy()), 4096 * 4096 * 2)
-            self.assertLess(grew, 4096 * 4096)
+            for name, reduce, is_mean in cases:
+                with jt.flag_scope(use_stat_allocator=1):
+                    before = jt.introspection.counters.allocator.allocated_bytes
+                    total = reduce(base.expand(4096, 4096) * 2)
+                    total.sync()
+                    grew = jt.introspection.counters.allocator.allocated_bytes - before
+                expected = 2.0 if is_mean else 4096 * 4096 * 2
+                self.assertEqual(float(total.numpy()), expected, name)
+                self.assertLess(grew, 4096 * 4096, (name, grew))
 
     def test_fused_producers_keep_accuracy_repeatability_and_gradients(self):
         with jt.flag_scope(use_cuda=1):
