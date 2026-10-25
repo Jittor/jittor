@@ -689,7 +689,20 @@ class StepCapture:
         # Point every rebound holder back at its old Var, which the graph
         # reads, and give it the new value. The step has run once, so this is
         # its update; every replay repeats it.
-        state = _commit_captured_state(records)
+        #
+        # Committing is part of the capture, not a normal batch: `old` is a
+        # storage the backward saved, so the copy resolves those readers
+        # first (`VarHolder::copy_into`) -- which is the backward, and with it
+        # the forward whose activations it saved. Outside `keep_graph` that
+        # batch finishes those nodes, so the replay no longer has a forward to
+        # run and reuses the captured one for every later input: an SGD step
+        # replayed against a new batch returned the loss of the batch it was
+        # captured on, and its update used that step's gradients.
+        jt.flags.keep_graph = 2
+        try:
+            state = _commit_captured_state(records)
+        finally:
+            jt.flags.keep_graph = before
         with jt.no_grad():
             state = _write_back_in_graph(state, roots)
 
