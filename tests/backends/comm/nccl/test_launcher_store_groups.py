@@ -46,7 +46,7 @@ def test_reordered_distinct_singleton_groups_keep_world_intact():
     assert jt.core.backend_fallback_count() == before
 
 
-@pytest.mark.skipif(not _EXTERNAL, reason='requires launcher-owned Store subgroup transport')
+@pytest.mark.skipif(not _EXTERNAL, reason='requires multi-rank CUDA launcher-owned Store subgroup transport')
 def test_group_order_mismatch_refuses_before_nccl_init():
     ranks = [0, 1] if dist.get_rank() == 0 else [1, 0]
     with pytest.raises(ValueError, match='rank order differs'):

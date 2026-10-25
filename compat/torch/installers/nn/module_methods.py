@@ -509,7 +509,7 @@ def _load_state_dict(self, state_dict, strict=True, assign=False):
                 # in-place update of this existing leaf. Keep the public copy
                 # owner's placement, alias/version and storage semantics.
                 with jt.no_grad():
-                    target.copy_(value)
+                    target._copy_into(value)
                 copied[key] = target
         load_state = copied
     _ORIG_MODULE_LOAD_STATE_DICT(self, load_state)

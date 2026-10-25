@@ -514,12 +514,26 @@ def _draw_from_generator(name, generator, args, kwargs):
         t = jt.bernoulli(src, generator=native)
     else:
         raise NotImplementedError("%s does not support an explicit native generator" % name)
-    if _creates_fresh_leaf(name, args, kwargs):
+    fresh_leaf = _creates_fresh_leaf(name, args, kwargs)
+    tensor_normal_inputs = (
+        (mean, std) if name == "normal" else ()
+    )
+    has_tensor_normal_inputs = any(
+        isinstance(value, jt.Var) for value in tensor_normal_inputs
+    )
+    inherited_grad = any(
+        isinstance(value, jt.Var) and value.requires_grad
+        for value in tensor_normal_inputs
+    )
+    if fresh_leaf or (name == "normal" and not inherited_grad):
         t = t.detach()
     t._jittor_torch_ext_mutable = True
-    requires_grad = bool(kwargs.get("requires_grad", False))
-    t.requires_grad_(requires_grad)
-    if requires_grad:
+    requires_grad = inherited_grad if has_tensor_normal_inputs else bool(
+        kwargs.get("requires_grad", False)
+    )
+    if bool(t.requires_grad) != requires_grad:
+        t.requires_grad_(requires_grad)
+    if requires_grad and fresh_leaf:
         _torch_register_leaf(t)
     return t
 

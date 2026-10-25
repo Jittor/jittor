@@ -205,11 +205,10 @@ class TestAutocast(StubPolicyBase):
             out = torch.nn.functional.conv3d(x, weight, bias, padding=1)
         self.assertEqual(str(out.dtype), "float16")
 
-    @unittest.expectedFailure
     def test_autocast_conv2d_module_keeps_the_compute_dtype_through_a_bias(self):
-        # KI-COMPAT-013: under autocast a Conv2d module with a bias returns float32.
-        module = torch.nn.Conv2d(4, 8, 3, padding=1, bias=True)
-        x = jt.random((1, 4, 8, 8), dtype="float32")
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        module = torch.nn.Conv2d(4, 8, 3, padding=1, bias=True).to(device)
+        x = torch.rand((1, 4, 8, 8), dtype=torch.float32, device=device)
         with torch.autocast("cuda", dtype=torch.float16):
             out = module(x)
         # The module hands back a shim tensor, whose dtype prints torch-style.

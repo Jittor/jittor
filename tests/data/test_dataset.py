@@ -129,7 +129,10 @@ class YourDataset5(Dataset):
 
 class TestDataset2(unittest.TestCase):
     def test_dataset_use_jittor(self):
-        dataset = YourDataset().set_attrs(batch_size=256, shuffle=True, num_workers=4)
+        # Exercise every worker without making one batch exceed the dataset's
+        # five-second liveness timeout on a four-CPU CI runner.
+        dataset = YourDataset().set_attrs(
+            total_len=512, batch_size=32, shuffle=True, num_workers=4)
         dataset.tmp = jt.array([1,2,3,4,5])
         dataset.tmp.sync()
         for x, y in dataset:

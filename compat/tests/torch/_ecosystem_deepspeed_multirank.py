@@ -253,11 +253,19 @@ def _rank_main(arguments, launcher):
     environment = _rank_environment("jittor", rank, os.environ.get("CUDA_VISIBLE_DEVICES", ""),
                                     args.cache_root, args.package_site, device=device)
     if launcher == "jtrun":
-        # Do not replace the public launcher's rank/device/root-info controls.
+        # Do not replace the public launcher's rank/device/store controls. The
+        # wrapper execs the actual Engine rank, so the launcher-owned TCPStore
+        # must remain reachable for Jittor's NCCL initialization in that rank.
+        required = ("MASTER_ADDR", "MASTER_PORT", "JITTOR_LAUNCHER_RUN_ID")
+        if (os.environ.get("JITTOR_LAUNCHER_EXTERNAL_STORE") != "1"
+                or any(not os.environ.get(name) for name in required)):
+            raise ValueError("jtrun must provide its external store endpoint to Engine ranks")
         environment.update({name: value for name, value in os.environ.items()
-                            if name.startswith("JT_NCCL_")})
-    environment.pop("MASTER_ADDR", None)
-    environment.pop("MASTER_PORT", None)
+                            if name.startswith("JT_NCCL_") or name in required
+                            or name == "JITTOR_LAUNCHER_EXTERNAL_STORE"})
+    else:
+        environment.pop("MASTER_ADDR", None)
+        environment.pop("MASTER_PORT", None)
     control = directory / "rendezvous"
     if not control.is_dir():
         raise ValueError("Engine ranks require their shared case control plane")

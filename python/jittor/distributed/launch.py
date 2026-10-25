@@ -144,10 +144,9 @@ def _resolve_rendezvous(args):
             raise ValueError('multi-node launch requires a shared nonzero --master-port')
         if args.node_rank != 0:
             return address, port  # A client must never bind a remote host address.
-    if port == 0:
-        port = _find_free_port(address)
-    else:
-        _check_port_available(address, port)
+    # Keep 0 unresolved: the launcher-owned TCPStore binds it atomically and
+    # reports the kernel-selected port. Probing by bind-and-close leaves a race
+    # in which an unrelated concurrent test can claim the advertised port.
     return address, port
 
 
@@ -297,7 +296,7 @@ def _rank_environment(args, rank, backend, devices, rootinfo, master_addr, maste
     })
     for name in ('JITTOR_LAUNCHER_EXTERNAL_STORE', 'JITTOR_LAUNCHER_RUN_ID', 'JT_NCCL_LOCAL_WORLD_RANKS'):
         env.pop(name, None)
-    if nodes > 1:
+    if getattr(args, 'launcher_external_store', False):
         env.update({'JITTOR_LAUNCHER_EXTERNAL_STORE': '1', 'JITTOR_LAUNCHER_RUN_ID': args.rdzv_id,
                     'JT_NCCL_LOCAL_WORLD_RANKS': ','.join(str(node * args.nproc + index) for index in range(args.nproc))})
     return env, backend_local_rank, device
@@ -330,6 +329,12 @@ def main(argv=None):
                   "visible device(s); ranks past the list run unmasked".format(
                       args.nproc, backend, len(devices)), file=sys.stderr, flush=True)
         master_addr, master_port = _resolve_rendezvous(args)
+        args.launcher_external_store = backend == "nccl"
+        if not args.launcher_external_store:
+            master_port = (_find_free_port(master_addr) if master_port == 0
+                           else master_port)
+            if args.master_port is not None or os.environ.get("MASTER_PORT"):
+                _check_port_available(master_addr, master_port)
     except ValueError as error:
         print("[jtrun] error: {}".format(error), file=sys.stderr, flush=True)
         return 2
@@ -339,6 +344,8 @@ def main(argv=None):
         args.logdir, "{}_rootinfo_{}.bin".format(backend, os.getpid())))
     if os.path.exists(rootinfo):
         os.remove(rootinfo)
+    if args.launcher_external_store and args.rdzv_id is None:
+        args.rdzv_id = "local-{}".format(os.getpid())
 
     if backend == "nccl":
         # Decide NCCL peer-to-peer once in the launcher so every rank inherits
@@ -374,12 +381,13 @@ def main(argv=None):
         old_handlers[signum] = signal.signal(signum, forward_signal)
 
     try:
-        if args.nnodes > 1:
+        if args.launcher_external_store:
             spec = importlib.util.spec_from_file_location(
                 '_jittor_launcher_control', os.path.join(os.path.dirname(__file__), '_launcher_control.py'))
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
             control = module.AgentControl(args, backend, master_addr, master_port, rootinfo)
+            master_port = control.raw.port
         for rank in range(args.nproc):
             if stop_signal is not None:
                 break

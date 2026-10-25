@@ -13,10 +13,15 @@ import tempfile
 import time
 import unittest
 
+import pytest
+
 import jittor_utils as jit_utils
 from jittor_utils import probe
 
 from _helpers.child_process import run_python_child
+
+
+pytestmark = pytest.mark.xdist_group("probe_cache_process_state")
 
 
 class TestProbeCache(unittest.TestCase):

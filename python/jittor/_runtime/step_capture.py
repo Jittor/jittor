@@ -77,6 +77,12 @@ _ACTIVE = None
 _GIVE_UP_AFTER = 8
 
 
+def _copy_storage(target, source, *args):
+    """Copy replay-owned bytes without recording a public in-place mutation."""
+    with jt.no_grad():
+        target._copy_into(source, *args)
+
+
 def active():
     """Whether a step is being captured right now."""
     return _ACTIVE is not None
@@ -425,8 +431,9 @@ def _adopt(holder, old):
     if (tuple(holder.shape) != tuple(old.shape)
             or str(_native_dtype(holder)) != str(_native_dtype(old))):
         return False
-    old._copy_into(holder)
-    holder._update(old)
+    with jt.no_grad():
+        old._copy_into(holder)
+        holder._update(old)
     return True
 
 
@@ -531,7 +538,7 @@ class StepCapture:
 
         def private_copy(value):
             copy = _empty_like(value)
-            copy._copy_into(value)
+            _copy_storage(copy, value)
             return copy
         private_args, private_kwargs = _map_inputs((args, kwargs), private_copy)
 
@@ -608,9 +615,12 @@ class StepCapture:
         state = []
         for holder, old, new in records:
             inplace = old._mem_ptr_now == new._mem_ptr_now
-            if not inplace:
-                old._copy_into(new, False)
-            holder._update(old)
+            # Restoring captured optimizer state is an internal storage move,
+            # not a differentiable in-place mutation of the public parameter.
+            with jt.no_grad():
+                if not inplace:
+                    old._copy_into(new, False)
+                holder._update(old)
             state.append((holder, old, new, inplace))
         state = _write_back_in_graph(state, roots)
 
@@ -630,7 +640,7 @@ class StepCapture:
     def _results(self, cap, sources):
         outs = [_empty_like(o) for o in cap.outputs]
         for out, src in zip(outs, sources):
-            out._copy_into(src, False)
+            _copy_storage(out, src, False)
         return _rebuild(cap.template, outs)
 
     # -- guards --------------------------------------------------------
@@ -659,7 +669,7 @@ class StepCapture:
     def _write_back(self, cap):
         for _, old, new, inplace in cap.state:
             if not inplace:
-                old._copy_into(new, False)
+                _copy_storage(old, new, False)
 
     def _record_cuda_graph(self, cap):
         """Record one replay -- the step and its write-backs -- as a device graph."""
@@ -695,7 +705,7 @@ class StepCapture:
                 jt.sync(cap.roots, False, False)
                 self._write_back(cap)
                 for out, src in zip(outs, cap.outputs):
-                    out._copy_into(src, False)
+                    _copy_storage(out, src, False)
             finally:
                 handle = _core.graph_capture_end()
         except Exception as exc:            # a capture poisons its stream
@@ -718,7 +728,7 @@ class StepCapture:
         if self._cuda_graph and cap.host_inputs:
             _core.graph_wait()
         for captured, given in zip(cap.inputs, _input_vars((args, kwargs), [])):
-            captured._copy_into(given)
+            _copy_storage(captured, given)
         if self._cuda_graph and not _core.graph_leaves_moved(self._cuda_graph):
             _core.graph_launch(self._cuda_graph)
             self.stats["graph"] += 1

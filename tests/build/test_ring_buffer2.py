@@ -16,6 +16,7 @@ import jittor.transform as trans
 from tqdm import tqdm
 import pytest
 
+
 class BBox:
     def __init__(self, x):
         self.x = x
@@ -69,7 +70,7 @@ def test_ring_buffer():
     assert n_byte == buffer.total_pop() and n_byte == buffer.total_push()
 
     test_send_recv(np.random.rand(10,10))
-    n_byte += 1 + 16 + 4 + 10*10*8
+    n_byte += 1 + 1 + 2*8 + 4 + 10*10*8
     assert n_byte == buffer.total_pop() and n_byte == buffer.total_push(), \
         (n_byte, buffer.total_pop(), n_byte, buffer.total_push())
     view = np.arange(100, dtype=np.float64).reshape(10, 10)[:, ::2]
@@ -88,6 +89,17 @@ def test_ring_buffer():
         exc_type=RuntimeError,
         match="Buffer size too small",
     )
+
+
+def test_ring_buffer_high_rank_array():
+    """Array metadata is serialized by value, including spilled shapes."""
+    value = np.arange(2, dtype=np.float64).reshape((1,) * 10 + (2,))
+    buffer = jt.RingBuffer(512)
+    buffer.push(value)
+    np.testing.assert_array_equal(buffer.pop().data, value)
+    expected_bytes = 1 + 1 + value.ndim * 8 + 4 + value.nbytes
+    assert buffer.total_push() == expected_bytes
+    assert buffer.total_pop() == expected_bytes
 
 
 class TestRingBuffer(unittest.TestCase):

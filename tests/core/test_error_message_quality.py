@@ -161,6 +161,10 @@ class TestOperatorFailurePutsTheReasonFirst(unittest.TestCase):
             with self.assertRaises(RuntimeError) as caught:
                 failing.sync()
         text = str(caught.exception)
+        # trace_py_var records process-global node metadata.  This test turns
+        # tracing on only for one failure, so leave no stale creation site for
+        # the next test executed by the same pytest worker.
+        jt.clear_trace_data()
         self.assertIn("test_error_message_quality.py", text,
                       "the creation site is missing from the report:\n" + text)
         self.assertNotIn("JT_TRACE_PY_VAR", text,

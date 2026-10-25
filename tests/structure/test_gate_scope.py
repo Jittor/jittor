@@ -262,6 +262,27 @@ def test_full_nox_session_is_the_periodic_complete_gate():
     assert "python -m nox -s full" in workflow
 
 
+def test_xdist_controller_receives_the_workers_collection_metadata():
+    """Files deselected in a worker must not look uncollected on the controller."""
+    from types import SimpleNamespace
+    from _helpers import pytest_policy as policy
+
+    previous = set(policy._COLLECTED_FILES)
+    try:
+        policy._COLLECTED_FILES.clear()
+        policy._COLLECTED_FILES.update({"tests/a.py", "tests/slow.py"})
+        worker = SimpleNamespace(workeroutput={})
+        policy._publish_worker_collection(worker)
+
+        policy._COLLECTED_FILES.clear()
+        node = SimpleNamespace(workeroutput=worker.workeroutput)
+        policy.pytest_testnodedown(node, None)
+        assert policy._COLLECTED_FILES == {"tests/a.py", "tests/slow.py"}
+    finally:
+        policy._COLLECTED_FILES.clear()
+        policy._COLLECTED_FILES.update(previous)
+
+
 def test_skip_reason_buckets_are_stable_and_other_is_counted(monkeypatch):
     """10.05: accepted environment reasons are separated from unexplained ones."""
     from _helpers import pytest_policy as policy

@@ -92,7 +92,11 @@ ENVIRONMENT_SKIP_PATTERNS = (
     # covered by accident; these did not, so a CPU-only session reported the
     # files as unexplained and the whole selection exited non-zero with every
     # test passing.
-    "tensordict", "mmcv", "mmengine", "deepspeed", "trellis",
+    "accelerate", "tensordict", "mmcv", "mmengine", "deepspeed", "trellis",
+    "onednn",
+    # Deliberate long-running/source-bound integration gates remain visible in
+    # smoke, but are not configuration failures unless explicitly requested.
+    "opt-in",
     # The safetensors format tests: the optional package is not installed.
     "safetensors",
     # Facts about the *runner* rather than the machine's hardware: a case that

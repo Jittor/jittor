@@ -637,6 +637,24 @@ _FILES_WITH_ITEMS = set()
 #: ``pytest_collection_modifyitems`` and ``pytest_deselected``; the pair is what
 #: lets ``_files_that_collected_nothing()`` mean collection.
 _COLLECTED_FILES = set()
+
+
+def _publish_worker_collection(config):
+    """Send collection metadata that xdist does not report to its controller."""
+    worker_output = getattr(config, "workeroutput", None)
+    if worker_output is not None:
+        worker_output["jittor_collected_files"] = sorted(_COLLECTED_FILES)
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_testnodedown(node, error):
+    """Merge each xdist worker's collected and deselected file set."""
+    del error
+    _COLLECTED_FILES.update(
+        getattr(node, "workeroutput", {}).get("jittor_collected_files", ())
+    )
+
+
 _SKIP_REASON_BUCKETS = Counter()
 #: {lowercased reason: n} for the skips that landed in `other`, so the report can
 #: name them instead of printing a count that reds a run and explains nothing.
@@ -1162,6 +1180,7 @@ def pytest_sessionfinish(session, exitstatus):
     something or be listed in ``gate_scope.EXECUTES_NOTHING`` with a reason.
     """
     _flush_worker_state_leaks(session)
+    _publish_worker_collection(session.config)
     required_accelerator = _required_accelerator_executions()
     if required_accelerator and _ACCELERATOR_EXECUTED < required_accelerator:
         session.exitstatus = 1

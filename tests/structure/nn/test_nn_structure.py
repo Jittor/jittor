@@ -478,20 +478,24 @@ class TestPublicBindings(unittest.TestCase):
     """Contracts users write against directly, none of which name a file."""
 
     def test_tensor_method_bindings_stay_on_public_functions(self):
-        for name in ("matmul", "prelu", "hardswish", "hardsigmoid", "rrelu", "log_sigmoid"):
-            with self.subTest(name=name):
-                self.assertIs(getattr(jittor.Var, name), getattr(nn, name))
-        for name in ("softmax", "log_softmax", "logsumexp", "backward"):
-            with self.subTest(compatibility_override=name):
-                self.assertTrue(callable(getattr(jittor.Var, name)))
-        # The operator is a thin guard over `nn.matmul`: it returns
-        # NotImplemented for a non-Var operand so the reflected method runs.
-        from jittor.nn import _bindings
-        self.assertIs(jittor.Var.__matmul__, _bindings._var_matmul)
-        for name in ("real", "imag"):
-            with self.subTest(complex_accessor=name):
-                self.assertIsInstance(getattr(jittor.Var, name), property)
-        self.assertTrue(callable(jittor.Var.angle))
+        # vmap installs process-lifetime dispatch wrappers on first use. This
+        # contract describes a clean public import, so assert it in a clean
+        # process instead of depending on which file xdist assigned here first.
+        script = """
+import jittor
+import jittor.nn as nn
+for name in ("matmul", "prelu", "hardswish", "hardsigmoid", "rrelu", "log_sigmoid"):
+    assert getattr(jittor.Var, name) is getattr(nn, name), name
+for name in ("softmax", "log_softmax", "logsumexp", "backward"):
+    assert callable(getattr(jittor.Var, name)), name
+from jittor.nn import _bindings
+assert jittor.Var.__matmul__ is _bindings._var_matmul
+for name in ("real", "imag"):
+    assert isinstance(getattr(jittor.Var, name), property), name
+assert callable(jittor.Var.angle)
+"""
+        result = run_python_child(["-c", script], cwd=REPO_ROOT)
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
     def test_key_reexports_and_aliases_remain_stable(self):
         from jittor import depthwise_conv, misc, optim
