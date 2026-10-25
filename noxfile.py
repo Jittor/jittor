@@ -2,6 +2,7 @@
 
 from __future__ import print_function
 
+import hashlib
 import json
 import math
 import os
@@ -9,7 +10,8 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
+import zipfile
 
 import nox
 
@@ -217,6 +219,16 @@ CPU_TORCH_ORACLE_TESTS = (
     "tests/nn/test_batchnorm.py",
     "tests/nn/test_loss.py",
     "tests/nn/test_relu.py",
+    # Weight conversion and archive round-trip only assert anything against a
+    # real PyTorch; in the native gate they skip for the oracle's absence.
+    "tests/nn/test_state_dict_dtypes.py::TestStateDictDtypes::"
+    "test_torch_conversion_keeps_every_dtype",
+    "tests/nn/test_state_dict_dtypes.py::TestStateDictDtypes::"
+    "test_values_survive_the_conversion",
+    "tests/nn/test_state_dict_dtypes.py::TestStateDictDtypes::"
+    "test_a_value_that_float32_cannot_hold",
+    "tests/serialization/test_native_serialization_ownership.py::"
+    "test_torch_archive_save_load_roundtrip",
     "tests/models/test_network_training_parity.py",
 )
 CUDA_TESTS = (
@@ -1289,12 +1301,32 @@ def packaging(session):
         session.error("expected exactly one sdist-derived wheel, found %d" % len(sdist_wheels))
     wheel_args = tuple(session.posargs)
     for wheel in (wheels[0], sdist_wheels[0]):
+        record_args: Tuple[str, ...] = ()
+        if "--old-wheel" in wheel_args:
+            # dist-info/RECORD is derived from every wheel member and therefore
+            # changes whenever an explicitly approved source member changes.
+            # Approve the derived file itself; otherwise a reviewed change can
+            # never pass this audit.
+            with zipfile.ZipFile(str(wheel)) as archive:
+                records = [
+                    name for name in archive.namelist()
+                    if name.endswith(".dist-info/RECORD")
+                ]
+                if len(records) != 1:
+                    session.error(
+                        "expected exactly one wheel RECORD, found %d" % len(records))
+                record_args = (
+                    "--allow-content-change",
+                    hashlib.sha256(archive.read(records[0])).hexdigest(),
+                    records[0],
+                )
         session.run(
             "python",
             "tools/release/check_wheel_contents.py",
             "compare",
             str(wheel),
             *wheel_args,
+            *record_args,
             env=env,
         )
 
@@ -1455,6 +1487,20 @@ def _record_asv(
             env=env,
             external=external,
         )
+        if not external and default_machine == "jittor-ci-cpu":
+            # The first timed ASV case is matmul. A trivial tensor only warms
+            # jittor_core; matmul also builds oneDNN, which can exceed ASV's
+            # per-case timeout. Use the same cache, interpreter, and shape.
+            warm_env = dict(env)
+            warm_env["PYTHONPATH"] = str(REPO_ROOT / "python")
+            session.run(
+                "python",
+                "-c",
+                "import jittor as jt; "
+                "jt.matmul(jt.ones((8, 256, 256), dtype='float32'), "
+                "jt.ones((8, 256, 256), dtype='float32')).sync()",
+                env=warm_env,
+            )
         session.run(
             *(
                 tuple(asv_command)
