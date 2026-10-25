@@ -2,6 +2,8 @@
 
 import pytest
 
+from _helpers.checkpoint_cuda import accelerator
+
 import jittor as jt
 import torch
 from jittor._runtime.fallback import forbid_backend_fallbacks
