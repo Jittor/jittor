@@ -314,7 +314,8 @@ class _SingleProcessDataLoaderIter(_BaseDataLoaderIter):
         batch_indices = next(self._batch_iter)
         values = (batch_indices if self._loader._iterable_dataset else
                   [self._loader.dataset[i] for i in batch_indices])
-        return values[0] if self._loader.batch_size is None else self._loader.collate_fn(values)
+        return self._loader.collate_fn(
+            values[0] if self._loader.batch_size is None else values)
 
 
 class _WorkerInfo:
@@ -380,7 +381,7 @@ class _MultiProcessingDataLoaderIter(_BaseDataLoaderIter):
         loader = self._loader
         values = (batch_indices if loader._iterable_dataset else
                   [loader.dataset[i] for i in batch_indices])
-        return values[0] if loader.batch_size is None else loader.collate_fn(values)
+        return loader.collate_fn(values[0] if loader.batch_size is None else values)
 
     def _fill(self):
         want = self._num_workers * self._prefetch
@@ -440,7 +441,8 @@ class _DataLoader:
                  worker_init_fn=None, generator=None, prefetch_factor=None,
                  persistent_workers=False, **kwargs):
         self.dataset = dataset
-        self._iterable_dataset = not hasattr(dataset, "__len__")
+        self._iterable_dataset = (isinstance(dataset, _IterableDataset)
+                                  or not hasattr(dataset, "__len__"))
         self.batch_size = batch_size
         self.drop_last = drop_last
         self.num_workers = num_workers
@@ -450,7 +452,8 @@ class _DataLoader:
         self.persistent_workers = persistent_workers
         self.multiprocessing_context = kwargs.get("multiprocessing_context", None)
         self.shuffle = shuffle
-        self.collate_fn = collate_fn if collate_fn is not None else _default_collate
+        self.collate_fn = (collate_fn if collate_fn is not None else
+                           (_default_convert if batch_size is None else _default_collate))
         self.worker_init_fn = worker_init_fn
         self.generator = generator
         if batch_sampler is not None:
