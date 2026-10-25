@@ -1780,9 +1780,10 @@ workaround.
 ## KI-COMPAT-012: in-process `JITTOR_TORCH_SHIM=1` publishes no `torch` distribution metadata
 
 - Severity: Medium (Transformers and Diffusers decide PyTorch is absent)
-- Status: Open; recorded on HEAD in the 2026-09-24 report, reproduced
-  2026-10-12 where those libraries are installed (the gates do not install them,
-  so the cases skip there)
+- Status: Open (verification pending: downstream install). `c6aef610a` makes
+  the in-process shim register a process-local torch distribution finder on
+  activation and remove it on release; the metadata-dependent library cases
+  still need Transformers/Diffusers installed on the acceptance machine.
 - Owner: torch compatibility maintainers
 - Symptom: `AutoModel ... requires the PyTorch library but it was not found in
   your environment` / `UNet2DModel requires the PyTorch library` from
@@ -1796,8 +1797,9 @@ workaround.
 - Workaround: deploy the shim (`jittor-torch-shim`, see
   `docs/compatibility/torch-shim.md`) rather than enabling it in-process.
 - Evidence: the four test files above on a machine with transformers/diffusers.
-- Exit condition: the in-process shim answers `importlib.metadata.version("torch")`
-  and those cases run.
+- Exit condition: the four evidence files' cases run on an environment with
+  Transformers/Diffusers installed (the metadata mechanism itself is covered by
+  `compat/tests/torch/test_torch_shim_distribution_metadata.py`).
 
 ## KI-COMPAT-013: under `torch.autocast` a `Conv2d` module with a bias returns float32
 
