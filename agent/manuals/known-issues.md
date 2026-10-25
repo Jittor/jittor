@@ -48,7 +48,7 @@ may name one refuted attempt when repeating it is the likely mistake.
   deleted entries included:
   `git log -p -- agent/manuals/known-issues.md | grep -o "KI-EXEC-[0-9]*" | sort -u | tail -1`.
   An id is never reused. (`KI-BACKEND-006` was once reused by mistake; the
-  later entry was renumbered `KI-BACKEND-014`.)
+  later entry was given a fresh id.)
 - Code comments, test messages and documents cite the id. The change that
   deletes or renumbers an entry also rewords those citations
   (`git grep -n "KI-<AREA>-<NNN>"`); dated `docs/results/` reports may keep a
@@ -542,35 +542,6 @@ workaround.
   compute-bound cost measurement with a pinned fusion shape, and the contract
   test and the numerics page change with it.
 
-## KI-BACKEND-009: CUDA cannot compile a logical or narrow-integer reduction
-
-- Severity: High (a family of reductions is unusable on CUDA, and the error does
-  not name the dtype or the operation)
-- Status: Open; reproduced 2026-09-11 on CUDA
-- Owner: reduce operator and CUDA codegen maintainers
-- Symptom: `x.any_()`, `x.all_()` and the bitwise reductions are published API.
-  On CUDA they raise `parallel_compiler.cc: Error happened during compilation`
-  with an nvcc transcript for `logical_and`/`logical_or`/`logical_xor` over
-  `uint8`, `float32` and `float64`, and for `bitwise_and`/`bitwise_or`/
-  `bitwise_xor` over `uint8`. CPU answers all 66 operation-dtype combinations;
-  `bool`, `int32` and `int64` work on both devices, which is why the tests did
-  not notice.
-- Cause: not isolated in the CUDA reduction codegen. The float cases are also a
-  semantic question: CPU returns a float (`0.0`) for `logical_xor` over floats
-  where a bool is the defensible answer, so the CPU dtype should be decided with
-  the CUDA fix. The `uint8` cases are well defined and CPU performs them.
-- Workaround: cast to `int32` or `bool` before a logical or bitwise reduction on
-  CUDA. The public `any()`/`all()` do this for every floating-point input
-  (`x != 0`, NaN true as in torch; `tests/ops/test_half_logical_reduce.py`);
-  the raw `any_`/`all_` and the bitwise reductions are still affected.
-- Evidence: every published reduction crossed with six dtypes, one fresh
-  process each, with `location()` asserted so a CPU fallback cannot read as a
-  pass; [`test_bitwise_dtype_guard.py`](../../tests/ops/test_bitwise_dtype_guard.py)
-  already rejects the float rows of the bitwise family on both devices.
-- Exit condition: the 66-cell matrix agrees between the two devices in value and
-  dtype and a test holds it; the float rows may be resolved by rejecting them on
-  both devices with a clear message.
-
 ## KI-BACKEND-011: the oneDNN CPU path is float32-only and its per-call cost is unmeasured
 
 - Severity: Limitation (narrower dtype support; performance unverified)
@@ -636,30 +607,6 @@ workaround.
 - Exit condition: add the gradient tests (and the HCCL implementation), change
   their `kind`, and run them on the hardware; the structure test then lets the
   manual's list shrink.
-
-## KI-BACKEND-014: cublas_test / cudnn_test are dispatched to the host and have no kernel there
-
-- Severity: Medium (two library self-test ops cannot run; the libraries
-  themselves are fine)
-- Status: Open; two repair attempts refuted. `TestCublasTestOp` and
-  `TestCudnnTestOp` run as strict expected failures. Renumbered from `KI-BACKEND-006`,
-  an id that had already been used.
-- Owner: CUDA backend maintainers
-- Symptom: `tests/backends/cuda/test_cublas_test_op.py` fails two of its three
-  classes with `op.cc: No kernel registered for cublas_test on cpu` (likewise
-  `cudnn_test`); `TestCubTestOp` passes.
-- Cause: `CubTestOp` declares `set_flag(OpFlags::_cpu, 0); set_flag(OpFlags::_cuda, 1);`
-  and guards its body with `#ifdef JIT_cuda`. `CublasTestOp` and `CudnnTestOp`
-  declare no backend and guard their bodies with `#ifdef JIT_cpu`, so they
-  default to the host, where `Op::implementation()` finds nothing. Adding only
-  the flags produces a CUDA library with no `jit_run`
-  (`undefined symbol: _ZN6jittor12CublasTestOp7jit_runEv`); adding the flags and
-  switching the guard to `JIT_cuda` also broke `TestCubTestOp` (3 failed instead
-  of 2), so the three ops are coupled through something outside their files.
-- Workaround: none needed; the libraries are exercised by the real ops.
-- Evidence: the test file above.
-- Exit condition: all three classes pass, with the coupling behind the second
-  attempt understood rather than worked around.
 
 ## KI-BACKEND-016: ACL 507035 in batched strided-conv backward (sd15_unet_train, resnet50_train)
 
@@ -1326,29 +1273,6 @@ workaround.
   random data is within 10% of the `std::max` figure on the same benchmark.
   **Name the input pattern when you measure**: monotone and random data differ by
   up to 4x on the same kernel.
-
-## KI-OPS-012: the CUDA half-precision max/min reduction folds from a finite literal
-
-- Severity: Critical (silent wrong value on finite input as well as infinities,
-  half dtypes only)
-- Status: Open on CUDA; reproduced by inspection, unverified on a device. The CPU
-  half is fixed.
-- Owner: reduction operator maintainers
-- Symptom: the CUDA reduction identity for float16/bfloat16 is a finite literal,
-  so `max([-inf, -inf])` cannot answer `-inf`, and `max([-65504, -65504])`
-  (float16's lowest finite value) answers a value that is not in the input; `min`
-  mirrors it. Integer and float32/float64 reductions are unaffected.
-- Cause: the CUDA map in [`fp16_op_type.cc`](../../src/type/fp16_op_type.cc) sets
-  `init_maximum`/`init_minimum` to `-65000.0f`/`-1e38` (and the mirror). It
-  should use `-CUDART_INF_F`/`CUDART_INF_F` for both half types, which means
-  reaching `type/cuda_limits.h`; that header is pushed only by `parallel_pass`,
-  not by the half post-pass, so the change must bring the include with it.
-- Workaround: reduce half tensors in float32 on CUDA when the identity matters.
-- Evidence: [`test_minmax_reduction_identity.py`](../../tests/ops/test_minmax_reduction_identity.py):
-  the CPU class passes; the CUDA class carries the same body as a strict
-  expected failure.
-- Exit condition: the CUDA class's strict expected failure XPASSes on a device
-  (i.e. the CUDA rows answer from an infinity) and the marker is removed.
 
 ## KI-OPS-015: the CUDA backward of `scaled_dot_product_attention` misses the device-parity per-element budget
 

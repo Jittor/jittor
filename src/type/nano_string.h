@@ -480,7 +480,7 @@ inline NanoString reduce_dtype_infer(NanoString op, NanoString x, bool preserve_
     // published `any_`/`all_` document an int32 result (the bool-input rule in
     // `ReduceOp` does the same); a floating-point input has no such contract.
     // It used to give the input's float dtype and a value of 0.0/1.0, and on
-    // CUDA it did not compile at all (KI-BACKEND-009): the per-thread
+    // CUDA it did not compile at all: the per-thread
     // accumulator of the logical reduction is rewritten into `a & bool(b)`,
     // which has no float meaning, and the flush has no float atomic. bool is
     // the answer both NumPy and torch give, and it makes that accumulator

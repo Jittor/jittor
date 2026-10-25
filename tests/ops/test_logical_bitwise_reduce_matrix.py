@@ -6,8 +6,8 @@
 
 """The published logical and bitwise reductions, over every dtype, on both devices.
 
-KI-BACKEND-009 was a family of reductions that the CPU answered and CUDA could
-not compile. Six operations are published -- ``logical_and`` (``all_``),
+The logical and bitwise folds were once a family that the CPU answered and
+CUDA could not compile. Six operations are published -- ``logical_and`` (``all_``),
 ``logical_or`` (``any_``), ``logical_xor`` and the three bitwise folds -- and
 they are legal for eleven dtypes, so there are 66 cells that have to agree
 between the devices.

@@ -134,7 +134,7 @@ struct FP16OpType : OpByType {
             {"mod", "$1(jittor::_floor_mod_float((float)($2), (float)($4)))"},
             {"fmod", "$1(jittor::_fmod_ieee((float)($2), (float)($4)))"},
             {"floor_divide", "$1(jittor::_floor_divide_float((float)($2), (float)($4)))"},
-            // KI-OPS-012: an infinity, not a finite literal. `-32768.0f` is
+            // An infinity, not a finite literal. `-32768.0f` is
             // *above* float16's lowest finite value (-65504), so `max` of a
             // tensor that is entirely -65504 -- an ordinary number, the edge of
             // the format -- answered -32768, a value that was not in its input.
@@ -212,7 +212,7 @@ struct FP16OpType : OpByType {
             // neither the half conversion below nor a cast of the accumulator
             // is needed: `&&`/`||`/`!=` already convert both sides to bool.
             // Skipping this matters for a *bool* result (a floating-point
-            // logical reduction, KI-BACKEND-009): the loop below compares each
+            // logical reduction): the loop below compares each
             // argument dtype with the result dtype and, because bool is not a
             // half type, would rewrite the bool accumulator as
             // `float16(yp)` -- which then no longer matches the reduction

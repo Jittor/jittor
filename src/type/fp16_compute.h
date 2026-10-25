@@ -10,7 +10,7 @@
 
 // For the reduce identities of the half dtypes: `common.h` pulls in neither
 // <limits> nor <cmath>, and the CPU half table answers from
-// `std::numeric_limits<float>::infinity()` (KI-OPS-012).
+// `std::numeric_limits<float>::infinity()`.
 #include <limits>
 
 #if defined(JIT_cuda) && !defined(IS_ACL)

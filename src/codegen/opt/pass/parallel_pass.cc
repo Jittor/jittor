@@ -391,7 +391,7 @@ static void replace_with_atomic(KernelIR* ir, bool is_cuda, int parallel_depth, 
                 "cpu_atomic_xor(&@a,bool(@b))", "atomicXor(&@a,bool(@b))") ||
             // The same XOR when the result dtype is bool: the tables wrap a
             // bool output in a cast, so a float logical-xor reduction (which
-            // returns bool since KI-BACKEND-009) arrives as
+            // returns bool) arrives as
             // `a=bool((bool(a))!=(bool(b)))` and the pattern above no longer
             // matches. Without this the whole fused operator failed with
             // "Expr not match" for float32/float64 on CUDA.
