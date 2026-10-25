@@ -21,7 +21,7 @@ The contracts pinned here are the ones that surprised a reader at the REPL:
   ``device`` answers with where it *will* land;
 * reading a device Var's data -- ``numpy()``, ``repr()``, ``tolist()`` -- copies
   it to the host and leaves the Var where it lies; ``location()`` keeps
-  reporting ``"device"`` because the storage never moved (KI-MEM-002);
+  reporting ``"device"`` because the storage never moved;
 * ``device_id`` keeps the source device across ``cpu()`` while ``device`` and
   ``location()`` follow the data.
 """
@@ -77,7 +77,7 @@ class TestReadingDoesNotRelocate(unittest.TestCase):
 
     ``numpy()``, ``repr()`` and ``tolist()`` all reach the data through the
     native fetch primitive, which used to call ``migrate_to_cpu`` and replace
-    the Var's device storage with a host block (KI-MEM-002). The next device
+    the Var's device storage with a host block. The next device
     operation then copied it back -- measured at 20x the cost of the same
     operation on a tensor that was never read, with both copies live in device
     memory meanwhile. The primitive now materialises a host copy and leaves the

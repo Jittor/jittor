@@ -1415,33 +1415,6 @@ workaround.
 - Exit condition: remove each sub-item only with focused CPU and accelerator
   tests for its operation and derivative order.
 
-## KI-MEM-002: reading a device tensor relocates it to the host
-
-- Severity: High
-- Status: Open for `numpy()`, `repr()` and `tolist()`; reproduced on real CUDA
-  on `1a6e203fc`. Element reads fixed: `item()` reads a device element in
-  place, so `d[0].item()` no longer moves `d`.
-- Owner: memory and executor maintainers
-- Symptom: `b.numpy()` moves a device tensor's storage to the host
-  (`location()` goes `device` -> `cpu`). The next device operation migrates it
-  back: 0.1214 s against 0.0006 s for the same operation on a resident 40 MiB
-  tensor (215x), and device memory goes from +40 MiB to +80 MiB because both
-  copies are live. `repr()` and `tolist()` take the same path, so printing a
-  tensor at a REPL relocates it. A reduction result and an element read are
-  not affected: `u.sum().item()` and `d[0].item()` leave `u` and `d` on the
-  device. PyTorch refuses `.numpy()` on a CUDA tensor instead.
-- Workaround: read a computed copy, e.g. `(x + 0).numpy()`, which leaves `x` on
-  the device (checked on `1a6e203fc`); `x.clone().numpy()` does **not** help,
-  because the clone shares `x`'s storage and both move. Avoid `print(x)` and
-  element indexing on large device tensors in hot paths.
-- Evidence: `tests/core/test_var_residency_contract.py`;
-  `tools/probes/side_effect_probe.py` (found the `tolist()` spelling);
-  `benchmarks/asv/transfer.py`.
-- Exit condition: `numpy()` and `repr()` leave the source Var's `location()`
-  unchanged on real CUDA, a device operation right after such a read costs the
-  same as one without it, and the residency contract covers all spellings
-  including the reduction and element-read cases.
-
 ## KI-EXEC-002: a profile scope cannot measure work launched before it opened
 
 - Severity: Limitation

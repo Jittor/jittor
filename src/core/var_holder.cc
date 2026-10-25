@@ -1584,7 +1584,7 @@ VarHolder* VarHolder::sync(bool device_sync, bool weak_sync) {
 // A read used to call `migrate_to_cpu`, which replaced the Var's storage with
 // a host block. The next device operation then had to copy it back -- measured
 // at 20x the cost of the same operation on a tensor that was never read, with
-// both copies live in between (KI-MEM-002). A read is a query: it hands the
+// both copies live in between. A read is a query: it hands the
 // caller bytes, it does not move the tensor. So copy into a buffer the
 // returned ArrayArgs owns and leave `var->mem_ptr` where it is.
 //

@@ -31,7 +31,6 @@
 | `KI-CODEGEN-002` | `split{i}` 与 `parallel` 两个循环选项不能同时用 | 编译错误，不会算错；挡住一类 tuner 配置 |
 | `KI-TUNER-001` | 手写元算子乘积形态下 matmul/conv relay 不触发，落到通用 kernel | 用户常走的路径已修；手写形态仍慢很多 |
 | `KI-OPS-006` | NaN 正确的 CPU max/min 归约只有一半速度 | 结果正确，吞吐减半（已改善一半） |
-| `KI-MEM-002` | 读一个设备张量会把它搬回主机 | 读过的张量之后的算子可能在 CPU 上继续 |
 | `KI-EXEC-004` | 流水执行多付 43% 峰值显存 | 已测量并接受的取舍，见[流水执行](../notes/pipelined-execution.md) |
 | `KI-EXEC-010` | 反向构图不参与流水提交 | 构反向图期间设备空闲 |
 | `KI-COMPAT-009` | float32 张量除以 Python float 时按 float64 计算 | 结果与 PyTorch 一致，代价是多一次宽类型运算 |
