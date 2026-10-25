@@ -265,6 +265,9 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
     _requires_grad = bool(kwargs.get("requires_grad", False))
     fresh_like = name in ("empty_like", "zeros_like", "ones_like", "full_like")
     fresh_leaf = _creates_fresh_leaf(name, args, kwargs)
+    input_requires_grad = not fresh_leaf and any(
+        isinstance(value, jt.Var) and value.requires_grad
+        for value in tuple(args) + tuple(kwargs.values()))
     for k in _DROP:
         kwargs.pop(k, None)
     # Jittor shape conversion rejects numpy scalars; normalize them.
@@ -325,16 +328,20 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
             # accepts one. Pop it and cast the result instead.
             _cast_to = _dtype_to_str(kwargs.pop("dtype"))
     out = orig(*args, **kwargs)
-    if _cast_to is not None:
+    # Typed factories can already return the requested dtype. A final cast
+    # should convert values, rather than repeat frontend dispatch unchanged.
+    if (_cast_to is not None and
+            _jittor_dtype_name(out.dtype) != _jittor_dtype_name(_cast_to)):
         out = out.cast(_cast_to)
-    if fresh_leaf:
-        # Allocation helpers may use broadcast/cast internally. Those graph
-        # nodes are not the history of a newly created Torch leaf.
+    if fresh_leaf or not (_requires_grad or input_requires_grad):
+        # Internal allocation/cast nodes do not create public history for a
+        # fresh factory, or for an operation whose tensor inputs are stopped.
         out = out.detach()
     out._jittor_torch_ext_mutable = True
-    out.requires_grad_(_requires_grad)
-    if _requires_grad:
-        _torch_register_leaf(out)
+    if fresh_leaf or (_requires_grad and not out.requires_grad):
+        out.requires_grad_(_requires_grad)
+        if _requires_grad:
+            _torch_register_leaf(out)
     return out
 
 
