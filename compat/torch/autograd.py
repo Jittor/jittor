@@ -406,6 +406,11 @@ class Function(jt.Function):
             # Only the custom backward edge is recorded. Input requires_grad
             # metadata remains available to kernels preparing backward buffers.
             with jt.no_grad():
+                setup_context = getattr(type(self), "setup_context", None)
+                if setup_context is not None:
+                    result = type(self).forward(*args, **kwargs)
+                    setup_context(self, args, result)
+                    return result
                 return type(self).forward(self, *args, **kwargs)
         finally:
             # Retain only explicitly saved tensors, not every call argument.
