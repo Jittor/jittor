@@ -155,3 +155,48 @@ wheel 0.45.1 的隔离 canonical 工具构建，保留既有 METADATA/WHEEL/lice
 本报告的结论是按变更内容选择并整合当前分支所需修复，而不是关闭所有未完成的下游
 能力。表中未选内容和真实设备边界继续由相应 PR/问题总账承担；不将旧图表、旧适配
 等级或旧环境 wheel hash 升格为本次最终发布结论。
+
+## 同日第二轮补整合
+
+- Status: 已整合；CPU core、结构门禁与定向 CUDA 执行通过，未跑完整 smoke/full。
+- Baseline: `280d44854b3aeeb0e30b02b7b2e4e14e7a94b1ba` 及其上方逐 PR 处置已提交。
+- Final commit of this round: `220c0bc02`（另加本报告提交）。
+- Owner: Jittor core and compatibility maintainers。
+- Review when: 上表处置、下游 adapter 准入面或所声明设备范围变化。
+
+本轮只补上一节明确记为“尚缺/未整合”、且能在当前环境验证的部分；不重新导入已被
+拒绝的旧 owner、私有 Tensor/ProcessGroup 接口、历史 wheel/CI 基线或 NPU 专用实现。
+
+| 组 | 来源 | 合入内容 | 本轮证据 |
+| --- | --- | --- | --- |
+| 门禁收集 | #18052 新增两提交 | xdist worker 的 collected-file 集合在 session policy 前汇聚到 controller；CUDA 不可用时保留 backend 身份的跳过原因 | gate-scope 18 passed；真实 `-n 2` 24 passed |
+| 类型契约 | #18051 残差 | `copy(..., preserve_format=False)` 存根默认值（其余四处已在树内） | 结构测试通过 |
+| DeepSpeed | #18050 | `_finite`/`_norm` 公开 API 快路径、`torch._C._current_graph_task_id`、owner-state 弱缓存、NCCL wheel 选择、concat scratch 无梯度边、BF16 GELU 训练核 | adapter 49 passed；concat/grad/NCCL 25 passed；真实 CUDA GELU 14 passed/2 skipped |
+| Torch 语义 | #18031 | `Tensor.type_as` 继承 dtype 与 device、反射标量留在张量后端、TensorDataset 单次 gather（并修正双重 collate） | 190 passed；TensorDataset 9 passed；CUDA 定向 2 passed |
+| 工厂语义 | #18043 | `device="meta"` 工厂参数的可观测 meta 身份 | 6 passed |
+| Adagrad | #18038 | 原生 dense FP32 Adagrad、`torch.optim.Adagrad` 接线与状态迁移；sparse/foreach/fused/differentiable 显式拒绝 | 45 passed/1 skipped（含优化器回归） |
+| verl 生态 | #18053 | tensordict、verl、transformers_loading、transformers_qwen35 adapter 及公开 compat 入口 | 门禁测试 27 passed；adapter 自测 283 passed/15 skipped |
+| vLLM | #18048 | `Tensor.exponential_`、buffers/model_loader/runner_policy、采样/分页/日志概率/UVA 回归 | vLLM harness 120 passed/72 environment skipped；主树定向 208 passed/75 skipped |
+| 门禁与打包 | #18034/#18037 | declared skip bucket 优先于 torch、native-only 文件不进入 Torch 快照、wheel RECORD 审批、ASV matmul 预热、CPU cache 键隔离 | 41 passed |
+| 仓库一致性 | — | HEAD 已提交的 results 文档未在生成 `MANIFEST.in` 中登记，结构门禁在基线上即失败；重新生成 | packaging 8 passed |
+
+再次确认不合入：
+
+- **#18046**：进程级 `core_source_signature` 记忆化曾由 `2872b4b3c` 引入、由 `23eb049a3`
+  以同进程源码失效与 extracted-function 回归为由回退。本轮不重新引入；它也不是实测
+  热点。
+- **#18050 的 `_zero.py` 与 `ds_shape`**：前者直接驱动 Tensor 的
+  `_storage_is_contiguous`/`_copy_into`/`_mem_ptr_now` 私有接口，后者把 DeepSpeed 私有
+  元数据放进公共梯度语义，均按上一节处置移除。
+- **#18036/#18039/#18043 的 NPU/310P 专用部分、#18035 的旧 CUDA 内核版本、#18031 的旧
+  RNG/分布式 owner**：无 NPU/ROCm 硬件或已被当前实现取代，保持未验证/不导入。
+- **#18054/#18049/#18033/#18042/#18030/#18044/#18045/#18047**：已由当前实现覆盖。
+
+验证环境与边界：Python 3.11.16、g++ 11.5.0、CUDA 12.2.140（conda nvcc）与真实
+RTX 4090（sm_89）；CPU core 为 native 98 passed/44 skipped/1 xfailed 与 Torch 226
+passed/1 skipped，合计 **324 passed/45 skipped/1 xfailed**；`tests/structure`
+**1541 passed/6 skipped**。DeepSpeed、vLLM、verl、tensordict 上游包未安装，生态测试
+只覆盖 stub/fixture 契约与门禁可见行为，不能记为真机端到端验收；NPU、ROCm、310P 与
+多机集合通信未验证。本轮未运行完整 smoke/full，不声明整棵测试树通过。集成期间同一
+工作树内另一个会话的 smoke 进程自 `22:0x` 起无 CPU 进展并持续到收尾，本轮没有把它
+的任何部分计为结果。
