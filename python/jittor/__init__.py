@@ -64,7 +64,7 @@ _NATIVE_OP_EXPORTS = (
     "floor_divide", "floor_int", "fmod", "fuse_transpose", "fused_adamw",
     "fused_sgd", "getitem",
     "greater", "greater_equal", "index", "index_var", "int16", "int32",
-    "int64", "int8", "left_shift", "less", "less_equal", "log",
+    "int64", "int8", "left_shift", "less", "less_equal", "log", "log1p",
     "logical_and", "logical_not", "logical_or", "logical_xor", "max",
     "maximum", "mean", "min", "minimum", "mod", "mul", "multiply",
     "negative", "not_equal", "numpy_code", "pow", "prod", "product",

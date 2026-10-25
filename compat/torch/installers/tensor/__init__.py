@@ -1156,7 +1156,8 @@ def install_methods(ctx):
     if not hasattr(Var, "neg"):         Var.neg = _shape_neg
     if not hasattr(Var, "reciprocal"):  Var.reciprocal = _shape_reciprocal
     if not hasattr(Var, "expm1"):       Var.expm1 = _shape_expm1
-    if not hasattr(Var, "log1p"):       Var.log1p = _shape_log1p
+    # Keep Torch integer promotion on the frontend Tensor only.
+    Var.log1p = _shape_log1p
     if not hasattr(Var, "square"):      Var.square = _shape_square
     if not hasattr(Var, "square_"):     Var.square_ = _shape_square_
     if not hasattr(Var, "clamp_min"):   Var.clamp_min = _shape_clamp_min

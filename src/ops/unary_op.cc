@@ -386,6 +386,9 @@ static unordered_set<string> unary_ops = {
      */
     "log",
 
+    /** Computes log(1+x) with native log1p accuracy for real inputs. */
+    "log1p",
+
     /**
      Returns the exponential of the input ``x``. 
 
@@ -946,6 +949,9 @@ UnaryOp::UnaryOp(Var* x, NanoString op) : x(x) {
     set_type(OpType::element);
     ns = op;
     USER_CHECK(ns.is_unary() | ns.is_dtype());
+    if (ns == ns_log1p)
+        USER_CHECK(!x->dtype().is_complex())
+            << "log1p: complex inputs are not supported by the native real kernel";
     // `bitwise_not` has no meaning for a float, and without this the mistake is
     // only noticed by g++: the generated kernel reaches a raw `~x` and answers
     // "wrong type argument to bit-complement", quoting a line of the template
@@ -1064,6 +1070,11 @@ VarPtr UnaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     }
     if (ns == ns_log)
         return make_binary(dout, x, ns_divide);
+    if (ns == ns_log1p) {
+        auto one = make_number(1, x);
+        auto denominator = make_binary(x, one, ns_add);
+        return make_binary(dout, denominator, ns_divide);
+    }
     if (ns == ns_exp)
         return make_binary(dout, y, ns_multiply);
     if (ns == ns_sqrt){
@@ -1163,6 +1174,16 @@ VarPtr UnaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     }
     // dsigmoid(x) = sigmoid(x) - sigmoid(x)^2
     if (ns == ns_sigmoid) {
+        if (x->dtype() == ns_float32 || x->dtype() == ns_float64) {
+            // Preserve the rounded-output ATen order in strict kernels:
+            // dout * (1 - out) * out. Subtracting a rounded out*out from
+            // out loses relative precision near positive saturation.
+            auto one = make_number(1, out);
+            auto r = make_binary(one, out, ns_subtract);
+            r = make_binary(dout, r, ns_multiply);
+            return make_binary(r, out, ns_multiply);
+        }
+        // Lower-precision paths are left unchanged by this FP32/FP64 fix.
         auto r = make_binary(out, out, ns_multiply);
         r = make_binary(out, r, ns_subtract);
         return make_binary(dout, r, ns_multiply);

@@ -1183,7 +1183,8 @@ def install(ctx):
     _bind_missing(g, "log_softmax", log_softmax)
     _bind_missing(g, "relu", relu)
     # elementwise / functional top-level forms missing from jittor's top level
-    _bind_missing(g, "log1p", log1p)
+    # Native log1p owns the computation; Torch owns integer promotion.
+    g.log1p = log1p
     _bind_missing(g, "reciprocal", reciprocal)
     _bind_missing(g, "lerp", lerp)
     # torch.div/divide take a `rounding_mode`, which the native op does not, so

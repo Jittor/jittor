@@ -406,7 +406,8 @@ def _shape_expm1(self):
 
 
 def _shape_log1p(self):
-    return jt.log(self + 1)
+    from ..numerical.elementwise import log1p
+    return log1p(self)
 
 
 def _shape_square(self):

@@ -42,6 +42,7 @@ struct FP16OpType : OpByType {
             {"abs", "::__habs($2)"},
             {"conj", "($2)"},   // conj(real) is identity (torch parity)
             {"log", "::hlog(($1)($2))"},
+            {"log1p", "(($1)::log1pf(float32($2)))"},
             {"exp", "::hexp(($1)($2))"},
             {"sqrt", "::hsqrt(($1)($2))"},
             // half-to-even, matching numpy/torch and the float32/float64
@@ -92,6 +93,7 @@ struct FP16OpType : OpByType {
             {"abs", "std::abs($2)"},
             {"conj", "($2)"},   // conj(real) is identity (torch parity)
             {"log", "std::log(($1)($2))"},
+            {"log1p", "(($1)std::log1p(float32($2)))"},
             {"exp", "std::exp(($1)($2))"},
             {"sqrt", "std::sqrt(($1)($2))"},
             {"round", "(($1)std::nearbyint(($2)))"},
