@@ -4,9 +4,9 @@
 
 | 编号 | 本轮范围 | 状态 | 负责 | 证据/下一步 |
 | --- | --- | --- | --- | --- |
-| ASC-01 | 独立环境、CPU/ACL串行构建 | R230 fresh fetch成功；同state tied参数修复CPU9P、native48P、core341P、compat201P | coord | 两指定远端tip均已整合；R230完整3351候选源与旧3350 NPU证据区分，结构1674P/2 accelerator skip，详见综合报告 |
+| ASC-01 | 独立环境、CPU/ACL串行构建 | R232公开累计grad视图CPU18P、native48P、core341P、compat205P | coord | server fetch超时与fresh client两tip核验分列；3351源结构1674P/2 accelerator skip；NPU复验单列综合报告 |
 | ASC-02 | 双解释器小模型输出/全梯度 | CPU及真实NPU八模型完整对拍通过 | ecosystem | r10沿用规范overlay、source65复验八模型271参数+2输入全梯度；25新阶段及24份明确复用的不可变native参考共49验证阶段全部通过，零回落；见综合报告 |
-| ASC-03 | 多库训练和fresh-process恢复 | q005 Native六rank阶段与71检查/57078指标strict0；JT四更新后冻结清单FAIL | ecosystem | 旧R217002 tiny SHARDED全交叉P保留；q005完整数组另确认累计梯度、公开shape与状态键差异，最终真实Qwen六阶段仍待 |
+| ASC-03 | 多库训练和fresh-process恢复 | q005 Native71检查/57078指标strict0；R232累计grad公开视图CPU红绿通过 | ecosystem | C3修同state tied身份；R232只修发布引用，100共同数组与独立NativeCPU bitexact；最终新主树真实Qwen六阶段仍待 |
 | ASC-04 | 真实权重闭环、LoRA和输入梯度 | private e019 CPU38P；原始AD七整文件43P/13 CUDA skips；公开重计算仍待 | coord | 两原SIGABRT已在词法lease候选实际消失，未合主树；Native checkpoint34协议与wrapper17协议仅作参考，随机训练恢复/NPU性能仍待 |
 | ASC-05 | HCCL/DDP/FSDP2两卡场景 | R229三NPU阶段qualified；FP32双rank输入梯度exact；BF16两case仍FAIL | distributed | 绑定73083/3350，FP32数值30/30P、两BF16各15/30P；R230同state alias CPU9P及专项201P，新源NPU和跨已有child-state共享仍待 |
 | ASC-06 | 配对速度/峰值显存/稳定性 | Native显存基线28调用及生命周期204调用P；尚无合格NPU性能 | coord | JT独立warm原rc3与受控取消保留，未进入数学/API；先对应正确性、JT公开显存接口实测，再至少10对同步交替速度/峰值测量 |

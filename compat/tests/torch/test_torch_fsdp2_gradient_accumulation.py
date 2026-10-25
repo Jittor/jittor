@@ -211,3 +211,82 @@ def test_one_optimizer_zero_grad_preserves_other_parameters_pending_grad():
         np.testing.assert_allclose(state.true_fsdp_pending_full_grads[1].numpy(), [7.])
         grad_sync.refresh_visible_full_grads(second_opt)
     assert state.true_fsdp_pending_full_grads is None
+
+
+@pytest.mark.parametrize("flat", [False, True])
+@pytest.mark.parametrize("read_first", [False, True])
+def test_public_accumulated_gradient_views_keep_optimizer_buffer(
+        flat, read_first, monkeypatch, tmp_path):
+    """Full/local views expose the same accumulated buffer used by step()."""
+    import torch
+    from torch.distributed.device_mesh import init_device_mesh
+    from torch.distributed.fsdp import fully_shard
+
+    monkeypatch.setenv("JITTOR_FSDP2_FLAT", "1" if flat else "0")
+    weight = np.asarray([[0.25, -0.125], [0.5, 0.75]], dtype=np.float32)
+    inputs = [
+        np.asarray([[1., 2.], [-1., 3.]], dtype=np.float32),
+        np.asarray([[0., 4.], [2., -1.]], dtype=np.float32),
+    ]
+    targets = [
+        np.asarray([[0.5, -0.25], [1., 0.125]], dtype=np.float32),
+        np.asarray([[0.25, 0.5], [-0.5, 1.]], dtype=np.float32),
+    ]
+    model = torch.nn.Linear(2, 2, bias=False)
+    with torch.no_grad():
+        model.weight.copy_(torch.tensor(weight))
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=0.01, weight_decay=0.01, foreach=False)
+    fully_shard(model, mesh=init_device_mesh("cpu", (1,)))
+    optimizer.zero_grad(set_to_none=True)
+    expected = np.zeros_like(weight)
+    first_gradient = None
+    for micro, (x, target) in enumerate(zip(inputs, targets)):
+        prediction = model(torch.tensor(x))
+        loss = (prediction - torch.tensor(target)).square().mean() / 2
+        loss.backward()
+        # Independent derivative of mean(square(linear(x)-target))/2.
+        expected += ((x @ weight.T - target).T @ x) / target.size
+        gradient = model.weight.grad
+        assert gradient is not None
+        raw = gradient.detach().cpu().numpy().copy()
+        observe = read_first or micro == 1
+        full = (gradient.full_tensor().detach().cpu().numpy().copy()
+                if observe else np.empty((0,), dtype=np.float32))
+        local = (gradient.to_local().detach().cpu().numpy().copy()
+                 if observe else np.empty((0,), dtype=np.float32))
+        # Preserve the complete failed observation before any value assertion.
+        np.savez(tmp_path / ("micro-%d.npz" % micro),
+                 prediction=prediction.detach().cpu().numpy(),
+                 loss=loss.detach().cpu().numpy(),
+                 expected_gradient=expected.copy(), raw_gradient=raw,
+                 public_full_gradient=full, public_local_gradient=local)
+        np.testing.assert_array_equal(raw.reshape(weight.shape), expected)
+        if observe:
+            np.testing.assert_array_equal(full, expected)
+            np.testing.assert_array_equal(local.reshape(weight.shape), expected)
+        if first_gradient is None:
+            first_gradient = gradient
+        else:
+            assert gradient is first_gradient
+        entry = model.weight._jittor_fsdp2_entry
+        state = model._fsdp_state
+        index = next(i for i, item in enumerate(state.true_fsdp_params)
+                     if item is entry)
+        assert state.true_fsdp_last_grads[index] is gradient
+        assert entry.last_grad is gradient
+
+    expected_norm = float(np.linalg.norm(expected))
+    norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+    scale = min(1.0, 0.5 / (expected_norm + 1e-6))
+    clipped = expected * scale
+    full = model.weight.grad.full_tensor().detach().cpu().numpy().copy()
+    raw = model.weight.grad.detach().cpu().numpy().copy()
+    np.savez(tmp_path / "clipped.npz", expected_gradient=clipped,
+             public_full_gradient=full, raw_gradient=raw,
+             expected_norm=np.asarray(expected_norm),
+             actual_norm=norm.detach().cpu().numpy())
+    np.testing.assert_allclose(float(norm), expected_norm, rtol=1e-6, atol=1e-7)
+    np.testing.assert_allclose(full, clipped, rtol=1e-6, atol=1e-7)
+    np.testing.assert_allclose(raw.reshape(weight.shape), clipped,
+                               rtol=1e-6, atol=1e-7)

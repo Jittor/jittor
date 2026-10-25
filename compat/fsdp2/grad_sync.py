@@ -522,7 +522,15 @@ def _fill_fsdp_grads_from_grad_map(optimizers, grad_by_id, *,
         for index, entry in enumerate(state.true_fsdp_params):
             key = (id(state), id(entry))
             grad = entry_grad.get(key)
-            if key in filled_entries or grad is None:
+            if key in filled_entries:
+                # full_tensor()/to_local() resolve through this list. Publish
+                # the accumulated optimizer slot, not only this micro's shard.
+                stored = entry.shard._torch_grad
+                entry.last_grad = stored
+                if index < len(published):
+                    published[index] = stored
+                continue
+            if grad is None:
                 continue
             existing = getattr(entry.shard, "_torch_grad", None)
             if isinstance(existing, jt.Var) and list(existing.shape) == list(grad.shape):

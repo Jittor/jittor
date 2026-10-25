@@ -2,7 +2,7 @@
 
 本记录对应[综合计划](../testing/2026-10-21-ascend-integrated-compat-plan.md)，唯一活动状态源为[整改看板](../architecture/refactor-board.md)的 ASC 任务。前半部分保留 2026-10-21 的 MAIN-r28/123 历史验收；后续各 cohort 按各自冻结源码区分，不相互外推。R65 真实 Qwen3-0.6B BF16 LoRA 对拍与 R68 最终主树 FSDP2 双卡 Linear 对拍均绑定提交 `9390fa0e84de651e7e1b01de4d142e04d4333f8b`、3336 文件源清单 SHA256 `c00986fb31e15e18860acf60e2ee0059c7dc63afb90ef0a286131d9fc7eb0f9a`；旧 R64/R63 仍只对其原冻结源码有效。下文保留原始失败和未运行项。
 
-> **截至2026-10-25 R230：** 两指定远端fresh fetch成功，整合基线为73083ccb0；R230候选含3351份源码/新增测试。同state tied参数原主树真实CPU复现后统一全部注册点重绑，CPU专项9P、native检查点/FSDP48P、core341P、既有compat专项201P。同一73083/3350源的q005 Native连续/中断/fresh恢复71检查、57078指标strict0；JT完成四更新后因冻结清单310→311失败，完整数组还确认累计梯度丢失、公开gradient shape与optimizer键差异。R229最终双卡nested三阶段资源合格，FP32数值30/30P且两rank输入梯度exact；两种BF16各15/30P，整体仍FAIL。private e019重计算CPU38P、原AD七整文件43P/13原CUDA跳过，仅属私有核心。公开Torch/HF/NPU重计算、随机训练恢复与合格NPU性能仍未验收。Native显存接口实测通过不等于JT接口或性能通过。
+> **截至2026-10-26 R232：** 已有本地提交c3b1990bb修复同state tied参数身份。R232进一步确认公开full_tensor/to_local优先解析了本micro梯度而非optimizer累计buffer，只修发布引用；真实CPU原14P/新增4F到18P，扩大专项205P/31原accelerator skip、native48P、core341P。另2 NativeCPU+8 Jittor新进程的100共同完整数组逐字节一致，显式no_sync首grad发布范围差别保留。以上不是NPU/完整模型通过；最终新主树Qwen六阶段仍待。此前73083/3350源的Native真实Qwen71检查/57078指标strict0；R229 nested FP32数值30/30P、双rank输入梯度exact，两BF16各15/30P，整体FAIL。私有重计算、随机训练恢复及合格NPU性能继续保留未完成范围。
 
 | 本轮验收 | 实际结论与源码范围 |
 | --- | --- |
@@ -1875,3 +1875,72 @@ structure-junit.xml为4b02d5dc17264d2a825db2d9110ecae740a982b7ed20809d247d65c4db
 门禁期间3351份文件逐字不变，source-before.json为0c42475857f37717b0cbe968bd6a7e487fede83fb57439df1a3ac2b9add29069。
 结构完成后仅ASC-01及本报告补记实际门禁结果与完整状态差异，其他3349份源/测试保持相同；
 提交前再次检查最终文档layout、链接和diff，不把文档追加视为新的模型/NPU复验。
+
+
+## R231—R232：公开累计梯度视图的实际红绿修复（2026-10-25—26）
+
+本节细化此前q005的“少首micro贡献”诊断。R231在C3源上用两个独立binary NativeCPU
+参考与8个真实singleton shim FSDP进程，覆盖flat、逐micro同步/显式no_sync后同步及
+首micro是否完整materialize梯度。普通同步时，公开full_tensor第二micro有差异，
+但完整输出及两次参数更新与Native byte-exact；显式no_sync后同步的post-sync梯度也exact。
+只读v3直接读取Var底层存储，四份真实梯度与两次更新全部byte-exact，
+而两个第二micro的公开full_tensor错误；public grad与state last-grad确为不同对象。
+因此上节数组现象不能直接表述为AD数学漏掉首micro，更准确的已证缺陷是公开读取错选buffer。
+原q005 NPU全部差异是否由此解释仍未证明。
+
+原v2通过to_local尝试读底层仍经过相同resolver，其OTHER_OUTCOME与全部结果保留。
+v3直接storage诊断SHA256为a408ddef4b58a061e85b4674285c6b32a05b6802ae23e1c4bdf5c619bcd3de64；
+12 worker身份与自有组均消失、3351源不变、MAIN clean的最终审计为
+15f583fb0d66a768ba660f763ee7106a26abedf48b1545ab5d7ffaba753519a2。
+证据位于LAB _state/ascend-compat/distributed/fsdp2-gradient-accumulation-public-r231/。
+
+R232先新增真实public singleton回归，原生产代码下整文件14P、4个新增case全部F：
+每个失败均为第二micro完整4元素full gradient不符，最大绝对差2.34375。
+raw、full/local、完整prediction/loss与独立NumPy闭式导数在断言前保存。
+失败保留在LAB _state/ascend-compat/distributed/fsdp2-public-gradient-main-r232/grad-red-001/，
+没有-k/-m过滤、缩规模或放宽预算。最初父端控制脚本拼接elf语法错误在runtime前退出，
+原脚本与单独失败收据保留，新v2控制器通过compile后才首次启动测试；不算模型失败。
+
+唯一生产改动在compat/fsdp2/grad_sync.py的_fill_fsdp_grads_from_grad_map：
+optimizer-owned条目复用累计public slot后，entry.last_grad及state.true_fsdp_last_grads
+同步指向该已发布对象，full_tensor/to_local resolver不再读最新单micro临时值。
+没有新增Tensor计算、改变AD/collective/Adam公式；其余15个函数AST逐字不变，
+逆替换能恢复整个原模块。新模块SHA256为
+f18556c1fb8726990ef8a7f939b1442b85b67120ffa51cfcaa6a991dd6e5ca3b。
+同一回归文件复验18P/0skip，同时验证同一buffer身份、独立完整导数、full/local视图及裁剪norm/值；
+比较预算和四case原字节保持，原始小数组未覆盖。
+
+| R232实际CPU范围 | 结果 |
+| --- | --- |
+| 原累计梯度整文件及四个真实public回归 | 18P/0skip，原14P/4F保留 |
+| 同state tied完整生命周期整文件 | 9P/0skip |
+| 原FSDP/optimizer/checkpoint专项13文件 | 236 collected、205P/31原accelerator skip |
+| 原生checkpoint/FSDP完整两文件 | 48P/0skip |
+| Native/Torch core | 341P/46skip/1xfail |
+
+另外保持R231原训练worker SHA256
+69cf820ace2446d1b369f9e216a17e01f2cced8a4f44224757fefeef898cb33b不变，
+新起2个独立binary NativeCPU与8个真实shim singleton进程。
+全部100份共同完整输出/loss/post-sync梯度与两次更新的shape/dtype/字节exact；
+common array比较SHA256为51f8e96d5a8719f1e378d9c091937618115806c76f56580a0c3bd17910bcc32f。
+显式FSDP no_sync且观察首micro的两个case仍各缺两份相对unsharded Native的首grad观察，
+原差别完整列出，不把共同数学通过外推Native FSDP2全部发布合同或NPU通过。
+其入口为LAB fsdp2-public-gradient-main-r232/independent-public-matrix-001/，
+在完整3351源清单上执行，未借用历史PASS冒称新runtime。
+
+本轮server fetch返回124，原日志保留；fresh本机Git HTTP1.1 ls-remote实际rc0，
+两tip仍305c2f086与ca56aa802，与tracking相同且为HEAD祖先。
+记录在LAB _state/ascend-compat/handoff/remote-r232-20261025-r1/；
+不将client核验写成server fetch成功，不reset/stash/push。
+最终结构/布局/链接门禁及新源NPU六阶段复验分别记录，尚未凭CPU结果授予硬件资格。
+
+### R232最终提交门禁
+
+完整tests/structure实际1674P/2原accelerator skip，pytest472.34秒、控制器476.600秒、rc0；
+layout298份active Markdown与内部链接284文件均通过，完整3351源在门禁期间逐字不变。
+LAB fsdp2-public-gradient-main-r232/final-gates-001/results.json SHA256为c86e48d55dee09ddd6bfa28f772b4575c7df057d53c8e5d1254f82dc124f206e，
+structure-junit.xml为e5ea5deeb225fb945f41c70163a97372e1b39ffcd02782deb579116a897ccb34，
+source-before.json为190ba8bfc52deae86e65663a281d7d8b8cc09448e8d1f60a94a3e12e2d5bf3f9。
+门禁后仅ASC-01与本报告补记实际结果，其余3349源/测试不变；最终文档再查layout/links/diff。
+本轮CPU通过不替代新主树NPU：后续使用原R227完整六阶段入口、新q006 cohort、新源码清单与fresh资源；
+保留原比较器3f8d91a1898889788a0be45ad7457b0d1d589461b6763277ecaf2d3620f65bb8及全部固定预算。
