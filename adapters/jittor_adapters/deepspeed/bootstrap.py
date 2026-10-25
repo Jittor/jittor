@@ -23,7 +23,6 @@ from .._common import (
 )
 from ._finite import make_has_inf_or_nan
 from ._norm import make_global_norm
-from ._zero import make_zero_optimizer_methods
 
 SUPPORTED_VERSIONS = frozenset(("0.19.7",))
 UPSTREAM_COMMIT = "f5af15c2b4da10411e340850c00ba0cb5b14fd87"
@@ -34,7 +33,6 @@ SOURCE_SHA256 = {
     "deepspeed.elasticity.utils": "fa66cffd55fe492b2d64aac4a748641707b3aa5f6990012fc71dc1c4c3b6fa27",
     "deepspeed.utils.torch": "3482342c7dbbb1d2aade2a937ea0e93d51dbf12371c014ba534beee34f66dc46",
     "deepspeed.runtime.utils": "7abe78ded0be93f1ac41bc6cfde6035ac594cf8857784d96027e910236db9c67",
-    "deepspeed.runtime.zero.stage_1_and_2": "f878e5677ab1da63e905e221e0a4d6f7e8f06851adbc03f016b80bb4dd315a7f",
 }
 _OWNER = "deepspeed.activation"
 
@@ -92,13 +90,6 @@ def _install_finite_check(module):
     replace(module, "has_inf_or_nan", replacement, original)
     replace_bound_aliases(
         "deepspeed", "has_inf_or_nan", original, replacement)
-
-
-def _install_zero_optimizer(module):
-    methods = make_zero_optimizer_methods(
-        module, native=jt, cuda_allowed=_cuda_norm_allowed(jt.capability))
-    for name, (original, replacement) in methods.items():
-        replace(module.DeepSpeedZeroOptimizer, name, replacement, original)
 
 
 def _install_global_norm(module):
@@ -226,9 +217,6 @@ class _Loader(importlib.abc.Loader):
                                 module.check_internal_apis_for_count_used_parameters)
                         _install_finite_check(module)
                         _install_global_norm(module)
-                        return
-                    if self.name == "deepspeed.runtime.zero.stage_1_and_2":
-                        _install_zero_optimizer(module)
                         return
                     name, replacement = {
                         "deepspeed.comm.torch": ("build_shm_op", _unavailable_shm),
