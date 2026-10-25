@@ -200,3 +200,33 @@ passed/1 skipped，合计 **324 passed/45 skipped/1 xfailed**；`tests/structure
 多机集合通信未验证。本轮未运行完整 smoke/full，不声明整棵测试树通过。集成期间同一
 工作树内另一个会话的 smoke 进程自 `22:0x` 起无 CPU 进展并持续到收尾，本轮没有把它
 的任何部分计为结果。
+
+## 2026-10-26 持续修复与测试补全
+
+- Status: 进行中；下表条目已修复并在 CPU 与真实 CUDA 上验证，问题总账已相应关闭或收窄。
+- Start baseline: `ffb0f9987`（第二轮整合后）。
+- Owner: Jittor core and compatibility maintainers.
+- Review when: 下列修复、门禁接入或所声明设备范围变化。
+
+环境：Python 3.11.16、g++ 11.5.0、CUDA 12.2.140（conda nvcc）、RTX 4090（sm_89）。
+每个 worktree 使用独立 `JITTOR_HOME`/`TMPDIR`；首次编译串行。上游 DeepSpeed/vLLM/verl
+仍未安装，相关结论只覆盖 stub/fixture 契约。
+
+| 缺陷 | 处置 | 证据 |
+| --- | --- | --- |
+| KI-COMPAT-016 | fused AdamW 写回改走保留存储的 `_update_preserve_dtype` | 存储身份 128 passed；直接与传递旧输出 8 passed；CPU+CUDA |
+| KI-COMPILER-008 | `precompile` 保留异常类别；@ 解析、# 指令、花括号、@for/@strcmp/@alias、arity 迁移 `USER_CHECK` 并给出用户构造名；其余文件在总账中收窄 | 新回归 2 passed；代码生成/错误契约 83 passed；C++ JIT 93 passed |
+| KI-COMPAT-014 | complex128 成为前端 dtype（构造、cast、type、报告），complex32 仍占位 | 83 passed/10 skipped |
+| KI-DTYPE-003/004 | Python float 对 float64 保持 53 位；工厂结果不再按弱标量提升，放置由 `_is_constant` 维持 | CPU 77 passed；CUDA 55 passed；strict xfail 标记移除 |
+| KI-COMPAT-007 / KI-AUTOGRAD-003 | 基线已修复，补齐 `copy_`-no_grad 与 register_hook 驻留回归 | 7 passed/1 skipped |
+| KI-TEST-015 | storage-view 夹具区分逻辑/物理转置并修正生命周期断言 | 文件 14 passed |
+| KI-TEST-002 | `run_test_suite` 与 nox 接入 `check_session_completed.py`；xdist 汇聚、setup-skip 计数 | 结构/工具 72 passed |
+| KI-TEST-007 | `test_fused_op_relay_matmul` 在三个历史污染文件之后均通过 | 三种顺序各 2/4/5 passed |
+| KI-TEST-011 | 生成源码与缓存按 UTF-8 读取（全树同类读取一并修正） | C locale + 关闭 locale coercion/UTF-8 模式，CUDA 1 passed |
+| KI-OPS-014 | 全掩码 `finfo.min` 行已由 max 与 `1/l` 分离修复（基线已有） | dense-additive/key-padding CUDA 2 passed |
+| KI-MEM-002 | host 读取返回副本，不迁移源存储 | CUDA 驻留契约 16 passed；CPU 6 passed |
+| KI-OPS-012 / KI-BACKEND-009 / KI-BACKEND-014 | 半精度 max/min 恒等值（基线已有）、逻辑/位归约的 16/64 位原子与 bool 结果、cublas/cudnn 自测算子设备化 | 归约矩阵+minmax 24 passed；三个库自测类 3 passed；均在 RTX 4090 |
+| 18031 第二批语义 | `Tensor.type_as`、反射标量留在张量后端、TensorDataset 单次 gather、掩码写入梯度、expand 标量维、torchvision resize/pad/color/crop、Conv1d device/dtype、advanced-index/0-dim 设备对齐 | CPU 373 passed/16 skipped；CUDA 定向 14+2 passed |
+
+本表不把 partial 文件或单个用例的成功写成整库、整后端验收；NPU/ROCm/310P 与多机集合
+通信仍未验证。LayerNorm 快路径与 autocast Conv2d bias 两项仍在进行中。
