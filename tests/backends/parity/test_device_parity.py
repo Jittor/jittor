@@ -241,6 +241,17 @@ class TestDeviceParity(JittorTestCase):
     # order leaves ~1e-6 -- legitimate reorder, not a kernel bug). PE_ATOL=1e-3 absorbs
     # that (floor = GRAD_PE_TOL*PE_ATOL = 5e-6 absolute, ~3x over the worst observed noise)
     # while still catching any drop/corruption of a coordinate above ~1e-3 in magnitude.
+    # One operator used to exceed GRAD_PE_TOL here and was a real kernel defect,
+    # not reorder noise: the fused float32 CUDA backward rebuilt the softmax row
+    # term as sum(dO * O) from the ROUNDED output, which loses the small Q/K
+    # gradient of a near-one-hot row (KI-OPS-015, max per-element rel 6.80e-3).
+    # Recomputing that term from dP in float64, and scaling Q once as the forward
+    # does (4c722fee0), leaves the CUDA gradients ~1e-7 from a float64 oracle; the
+    # remaining CPU-vs-CUDA per-element difference on these samples (7.5e-4
+    # non-causal, 2.0e-3 causal) is the CPU composite's own float32 error, so no
+    # per-operator budget is needed.
+    # tests/backends/cuda/test_fused_attention_f32.py::
+    # test_nearly_saturated_probabilities_backward pins the fused kernel on them.
     FWD_TOL = 2e-4
     GRAD_TOL = 2e-3
     FWD_PE_TOL = 2e-3      # per-element relative, forward
