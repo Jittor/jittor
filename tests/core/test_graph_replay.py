@@ -786,7 +786,10 @@ class TestGraphReplayCuda(TestGraphReplay):
         for mode in ("explicit", "step", "automatic"):
             with self.subTest(mode=mode), jt.no_grad(), jt.flag_scope(auto_graph_replay=1):
                 model = Pure()
-                value = jt.ones((8,))
+                # A mutable input must be a materialized leaf before recording;
+                # an unbuilt ones factory may be folded into the captured kernel.
+                value = jt.array(np.ones((8,), dtype="float32"))
+                value.sync(True, False)
                 with jt.flag_scope(auto_graph_replay=0):
                     model(value).sync(True, False)  # Compile before recording.
                 run = (jt.graph_replay(model) if mode == "explicit" else
