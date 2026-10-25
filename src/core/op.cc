@@ -445,6 +445,41 @@ void Op::init() {
     }
 }
 
+vector<Var*> saved_storage_readers(const vector<Var*>& written, Op* writer) {
+    vector<Var*> pending(written), saved;
+    auto visit = [&](Var* value) {
+        if (std::find(pending.begin(), pending.end(), value) == pending.end())
+            pending.push_back(value);
+    };
+    for (size_t i=0; i<pending.size(); ++i) {
+        Var* value = pending[i];
+        if (value->share_next)
+            for (Var* member=value->share_next; member!=value; member=member->share_next)
+                visit(member);
+        for (Op* reader : value->outputs()) {
+            if (reader == writer) continue;
+            for (Var* out : reader->outputs()) {
+                // Kept graphs run only through their replay owner, including
+                // when an imperative write commits an already executed step.
+                if (out->flag(VarFlags::_kept)) continue;
+                if (out->share_src == value) {
+                    visit(out);
+                } else if (!out->mem_ptr && out->liveness.backward.active()) {
+                    if (out->flag(VarFlags::_needed_by_backward)) {
+                        if (std::find(saved.begin(), saved.end(), out) == saved.end())
+                            saved.push_back(out);
+                    } else {
+                        // A nonsaved intermediate such as x+1 still connects
+                        // the written allocation to a later saved exp result.
+                        visit(out);
+                    }
+                }
+            }
+        }
+    }
+    return saved;
+}
+
 void order_after_readers(Op* op, const vector<Var*>& written) {
     // A view of a written var reads it wherever its own readers do, so their
     // readers count too: an output still asking to share its storage
@@ -478,6 +513,9 @@ void order_after_readers(Op* op, const vector<Var*>& written) {
             }
         }
     }
+    for (Var* saved : saved_storage_readers(written, op))
+        if (std::find(after.begin(), after.end(), saved) == after.end())
+            after.push_back(saved);
     if (after.empty()) return;
     // A reader upstream of the op -- the forward a gradient is computed
     // from -- is ordered already by the data it feeds it, and an edge would

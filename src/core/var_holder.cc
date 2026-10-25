@@ -398,6 +398,10 @@ static void validate_logical_copy_alias(VarHolder* target, VarHolder* source) {
 void VarHolder::copy_into(VarHolder* src, bool sync_src) {
     check_inplace_autograd();
     ExecutorEntryScope entry;
+    // Preserve saved values before a physical write can invalidate their
+    // recomputation inputs. Holder sinks may have fused those values away.
+    auto readers = saved_storage_readers({var});
+    if (!readers.empty()) runtime_executor().run_sync(readers, false, false);
     // Neither sync waits on the device; both only resolve what the Var is
     // still pending on. The copy itself is stream-ordered against the work
     // already queued, which is what makes this usable once per step.

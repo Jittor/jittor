@@ -5,6 +5,30 @@ import torch
 from _helpers.device_types import instantiate_device_type_tests
 
 
+def _saved_output_survives_step(device, derived):
+    for kind in ("sgd", "adamw"):
+        for fused in (False, True):
+            p = torch.nn.Parameter(torch.zeros((2, 2), device=device))
+            if kind == "sgd":
+                optimizer = torch.optim.SGD([p], lr=.125, foreach=False, fused=fused)
+            else:
+                optimizer = torch.optim.AdamW([p], lr=.125, eps=.125,
+                                              betas=(.5, .5), weight_decay=.25,
+                                              foreach=False, fused=fused)
+            # Leave this forward unobserved. Reducing it must not discard
+            # an exp output which its later backward saves independently
+            # of the parameter's storage and input-saving version guards.
+            old_output = (p + 1).exp().sum() if derived else p.exp().sum()
+            (p * torch.tensor([[.25, .5], [.75, 1.]], device=device)).sum().backward()
+            optimizer.step()
+            optimizer.zero_grad()
+            old_output.backward()
+            assert p.grad is not None and p.grad.device.type == device
+            expected = np.full((2, 2), np.e if derived else 1.)
+            np.testing.assert_allclose(p.grad.detach().cpu().numpy(), expected,
+                                       rtol=2e-6, atol=2e-7)
+
+
 class TestOptimizerStorageUpdates:
     def test_portable_sgd_keeps_aliases_and_published_gradients(self, device):
         for momentum, nesterov, dampening in ((0., False, 0.),
@@ -50,6 +74,12 @@ class TestOptimizerStorageUpdates:
                                                expected, rtol=1e-6, atol=1e-7)
                 np.testing.assert_allclose(snapshot.cpu().numpy(), before, rtol=1e-6)
                 np.testing.assert_array_equal(published.cpu().numpy(), gradient)
+
+    def test_saved_output_survives_step(self, device):
+        _saved_output_survives_step(device, derived=False)
+
+    def test_transitive_saved_output_survives_step(self, device):
+        _saved_output_survives_step(device, derived=True)
 
     def test_strided_parameter_updates_its_retained_storage(self, device):
         p = torch.tensor([[1., 2.], [3., 4.]], device=device).t().detach().requires_grad_(True)
