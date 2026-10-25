@@ -1168,6 +1168,7 @@ def pytest_sessionfinish(session, exitstatus):
     something or be listed in ``gate_scope.EXECUTES_NOTHING`` with a reason.
     """
     _flush_worker_state_leaks(session)
+    _publish_xdist_collected_files(session.config, _COLLECTED_FILES)
     required_accelerator = _required_accelerator_executions()
     if required_accelerator and _ACCELERATOR_EXECUTED < required_accelerator:
         session.exitstatus = 1
@@ -1201,6 +1202,32 @@ def pytest_sessionfinish(session, exitstatus):
     unexplained += [path for path in _files_that_collected_nothing() if path not in exemptions]
     if unexplained or _other_skip_count() > 0:
         session.exitstatus = 1
+
+
+_XDIST_COLLECTED_FILES_KEY = "jittor_collected_files"
+
+
+def _publish_xdist_collected_files(config, collected_files):
+    """Send worker-side collection facts to the xdist controller.
+
+    Collection hooks run in workers, but ``pytest_sessionfinish`` also runs in
+    the controller. Without this handoff the controller sees an empty
+    ``_COLLECTED_FILES`` and reports every selected file as uncollected, even
+    after it has received thousands of test reports from the workers.
+    """
+    if _xdist_worker_id(config) is None:
+        return
+    workeroutput = getattr(config, "workeroutput", None)
+    if workeroutput is not None:
+        workeroutput[_XDIST_COLLECTED_FILES_KEY] = sorted(collected_files)
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_testnodedown(node, error):
+    """Merge collection facts before the controller evaluates session policy."""
+    workeroutput = getattr(node, "workeroutput", None) or {}
+    collected_files = workeroutput.get(_XDIST_COLLECTED_FILES_KEY, ())
+    _COLLECTED_FILES.update(collected_files)
 
 
 def _install_api_coverage(session):

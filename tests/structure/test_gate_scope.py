@@ -12,9 +12,11 @@ same files as the gate.
 """
 
 import ast
+import importlib
 import os
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -105,6 +107,30 @@ def test_every_exclusion_states_a_reason_and_still_exists():
         if not (REPO_ROOT / path).exists():
             problems.append("%s is excluded but no longer exists" % path)
     assert problems == [], "\n".join(problems)
+
+
+def test_xdist_controller_receives_worker_collection_before_session_policy():
+    """Parallel collection must preserve real empty-file detection."""
+    policy = importlib.import_module("_helpers.pytest_policy")
+    selected_before = set(policy._SELECTED_FILES)
+    collected_before = set(policy._COLLECTED_FILES)
+    try:
+        policy._SELECTED_FILES.clear()
+        policy._SELECTED_FILES.update({"tests/collected.py", "tests/empty.py"})
+        policy._COLLECTED_FILES.clear()
+
+        worker = SimpleNamespace(workerinput={"workerid": "gw0"}, workeroutput={})
+        policy._publish_xdist_collected_files(worker, {"tests/collected.py"})
+
+        controller = SimpleNamespace(workeroutput=worker.workeroutput)
+        policy.pytest_testnodedown(controller, None)
+
+        assert policy._files_that_collected_nothing() == ["tests/empty.py"]
+    finally:
+        policy._SELECTED_FILES.clear()
+        policy._SELECTED_FILES.update(selected_before)
+        policy._COLLECTED_FILES.clear()
+        policy._COLLECTED_FILES.update(collected_before)
 
 
 def test_the_gate_covers_almost_the_whole_tree():
