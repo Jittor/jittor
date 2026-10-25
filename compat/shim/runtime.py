@@ -21,6 +21,10 @@ from .preflight import (
     jittor_python_root, prepare_import_environment, prepend_sys_path,
     require_independent_frontend as _require_independent_frontend,
 )
+from .torch_metadata import (
+    is_published as _is_distribution_metadata_published,
+    publish as _publish_torch_metadata, release as _release_torch_metadata,
+)
 from jittor.compat._aliases import torch_namespace_claimable, torch_namespace_owned
 from jittor.compat.torch.publication import (
     bind_published_namespace, independent_torch_namespace,
@@ -102,6 +106,20 @@ def _publish_torch_module(transaction, module, owner):
         transaction.record(sys.modules, "torch", owner, module)
         return
     transaction.publish_module(sys.modules, "torch", module)
+
+
+def _publish_distribution_metadata(transaction):
+    """Make ``importlib.metadata`` answer ``version("torch")`` after activation.
+
+    Libraries such as Transformers decide from distribution metadata, not from
+    an import, whether PyTorch is installed. Registration is process-local and
+    reversible: the activation transaction records its removal, so a failed
+    install publishes nothing.
+    """
+    existing = _is_distribution_metadata_published()
+    finder = _publish_torch_metadata()
+    if transaction is not None and not existing:
+        transaction.record_undo(lambda: _release_torch_metadata(finder))
 
 
 def _publish_registry_root(transaction, registry, module):
@@ -221,6 +239,7 @@ def _activate_once(
                 project_dir = pathlib.Path.cwd()
                 set_env("PYTHONPATH", _pythonpath_for_child(
                     [shim_site, jittor_python_root(), project_dir]))
+            _publish_distribution_metadata(transaction)
             if _transaction is not None:
                 _transaction.adopt(transaction)
             transaction.commit()
@@ -303,6 +322,7 @@ def _activate_once(
         sys.modules["torch"] = published
     else:
         _publish_torch_module(_transaction, published, jt)
+    _publish_distribution_metadata(_transaction)
     try:
         from jittor.compat.shim.cpp_extension.torch_utils import install_cpp_extension
         install_cpp_extension(
