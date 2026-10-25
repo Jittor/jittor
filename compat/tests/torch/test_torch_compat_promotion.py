@@ -526,5 +526,14 @@ class TestToAndType(Base):
         both_devices(body)
 
 
+class TestStringRepetition(unittest.TestCase):
+    def test_string_repetition_uses_a_singleton_integer_tensor(self):
+        self.assertEqual("ab" * torch.tensor(3), "ababab")
+        with self.assertRaisesRegex(TypeError, "single element"):
+            "ab" * torch.tensor([1, 2])
+        with self.assertRaisesRegex(TypeError, "single element"):
+            "ab" * torch.tensor(2.0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

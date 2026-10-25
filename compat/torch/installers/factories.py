@@ -85,6 +85,15 @@ def _invoke_factory(name, args, kwargs):
         std = kwargs.get("std", args[1] if len(args) > 1 else None)
         like = mean if isinstance(mean, jt.Var) else std if isinstance(std, jt.Var) else None
     requested = kwargs.get("device")
+    # ``torch.arange(tensor_bound)`` inherits the bound tensor's device when no
+    # explicit device is supplied. This matters for CUDA scalar bounds used by
+    # multimodal position-grid construction. Keep the general factory default
+    # for ordinary Python bounds and never let a tensor step decide placement.
+    if requested is None and name == "arange":
+        for value in args[:2]:
+            if isinstance(value, jt.Var):
+                requested = "cuda" if value.is_cuda else "cpu"
+                break
     meta = _is_meta_device_request(requested)
     # torch's meta tensors carry shape/dtype only; Jittor has no meta backend,
     # so the same contract `with torch.device("meta")` uses applies here: the
@@ -316,9 +325,18 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
                  (isinstance(args[0], tuple) and type(args[0]) is not tuple)):
         args = (tuple(int(x) for x in args[0]),) + tuple(args[1:])
     # Torch also allows shape via size=.
-    if "size" in kwargs and not args:
+    if name == "normal" and "size" in kwargs and not args:
+        size = _shape_arg(kwargs.pop("size"))
+        mean = kwargs.pop("mean", 0.0)
+        std = kwargs.pop("std", 1.0)
+        args = (mean, std, size)
+    elif "size" in kwargs and not args:
         sz = kwargs.pop("size")
-        args = (tuple(sz),) if hasattr(sz, "__len__") else (sz,)
+        # Route the keyword spelling through the same scalar-dimension
+        # normalization as the positional spelling. Multimodal audio encoders
+        # commonly compute a padded length as a CUDA 0-D tensor and pass it
+        # through ``torch.full(size=(..., length))``.
+        args = (_shape_arg(sz),)
     # torch.full(size, fill_value=...) / full_like(input, fill_value=...):
     # jittor's full(shape, val) / full_like(x, val) take the value as the 2nd
     # positional. transformers' beam scorer passes fill_value= as a keyword, so

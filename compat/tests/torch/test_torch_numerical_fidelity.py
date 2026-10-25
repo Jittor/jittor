@@ -401,6 +401,12 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         self.assertIn(
             "clamp", fidelity.fidelity_of("torch.nan_to_num").detail)
 
+    def test_type_accepts_typed_tensor_class(self):
+        with _native_jittor.flag_scope(use_cuda=0):
+            value = torch.tensor([1.0]).type(torch.BoolTensor)
+            self.assertEqual(str(value.dtype), "torch.bool")
+            self.assertTrue(bool(value.item()))
+
     def test_nan_to_num_default_bounds_match_numpy(self):
         values = np.array(
             [1.5, np.nan, np.inf, -np.inf, -2.0], dtype="float32")

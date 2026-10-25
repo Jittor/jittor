@@ -154,6 +154,29 @@ def _bind_native_fast_paths(jt):
     jt.core._compat_fast_bind(tracing)
 
 
+def _install_expand_shape_adapter(Var):
+    """Accept scalar tensor dimensions in ``Tensor.expand`` shape arguments.
+
+    PyTorch permits a 0-D tensor (and SymInt-like scalar) as a dimension. A
+    Jittor ``broadcast`` call receives a Python shape vector and therefore
+    needs those values materialized as integers. Shape conversion is metadata
+    handling; the expanded tensor remains a native view on its original
+    device.
+    """
+    native = getattr(Var, "expand", None)
+    if native is None or getattr(native, "_torch_shape_adapter", False):
+        return
+
+    def expand(self, *shape):
+        if len(shape) == 1 and isinstance(shape[0], (tuple, list)):
+            shape = tuple(shape[0])
+        normalized = tuple(int(value) for value in shape)
+        return native(self, *normalized)
+
+    expand._torch_shape_adapter = True
+    Var.expand = expand
+
+
 def _bind_native_binary(jt, natives, mark_cpu_like):
     """Hand `_fast_binary` the native operators the frontend replaces.
 
@@ -179,6 +202,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     _owner = _import_module(__package__)
     _bind_native_fast_paths(_owner.jt)
     _NativeVar = _owner.jt.Var
+    _install_expand_shape_adapter(Var)
     _native_operators = {name: getattr(Var, name, None) for name in _BINARY_APIS}
     _bind_native_binary(_owner.jt, _native_operators, _owner._mark_cpu_like)
 

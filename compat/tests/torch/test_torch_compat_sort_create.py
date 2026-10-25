@@ -241,6 +241,17 @@ class TestCreation(Base):
                     msg=f"ones_like {dev}")
             self.ac(torch.full((2, 3), 1.5).numpy(), np.full((2, 3), 1.5, "float32"),
                     msg=f"full {dev}")
+            # Tensor-valued shape dimensions work for both Torch spellings.
+            # The keyword path previously passed the device scalar directly to
+            # Jittor's shape parser instead of materializing metadata as int.
+            dynamic = torch.tensor([3], dtype=torch.int64).max()
+            for actual in (
+                    torch.full((2, dynamic), 4.0),
+                    torch.full(size=(2, dynamic), fill_value=4.0)):
+                self.ac(actual.numpy(), np.full((2, 3), 4.0, "float32"),
+                        msg=f"full dynamic size {dev}")
+                if dev == "cuda":
+                    self.assertTrue(actual.is_cuda)
         both_devices(body)
 
 

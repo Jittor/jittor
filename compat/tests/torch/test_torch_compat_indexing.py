@@ -178,6 +178,39 @@ class TestBooleanMask(Base):
             self.ac(x.numpy(), ref, msg=f"bool mask setitem rhs bcast {dev}")
         both_devices(body)
 
+    def test_mask_setitem_rank1_rhs_reduces_gradient(self):
+        # Wav2Vec2's SpecAugment assigns a trainable hidden-size vector to all
+        # selected time steps. The RHS gradient must reduce over those steps
+        # to the vector's original shape instead of exposing one row per hit.
+        mask = np.array([[True, False, True, False]], dtype=bool)
+        def body(dev):
+            base = torch.zeros((1, 4, 3), dtype=torch.float32,
+                               requires_grad=True)
+            hidden = base * 1.0
+            replacement = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32,
+                                       requires_grad=True)
+            hidden[t(mask)] = replacement
+            hidden.sum().backward()
+            self.assertEqual(tuple(replacement.grad.shape), (3,))
+            self.ae(replacement.grad.numpy(), np.array([2., 2., 2.]),
+                    msg=f"rank1 RHS grad {dev}")
+        both_devices(body)
+
+    def test_mask_setitem_per_row_rhs_preserves_gradient(self):
+        # Vision-language mergers assign one hidden vector per selected image
+        # token. Native Jittor setitem used to drop this RHS graph entirely.
+        mask = np.array([[True, False, True, False]], dtype=bool)
+        def body(dev):
+            source = torch.tensor([[1., 2., 3.], [4., 5., 6.]],
+                                  dtype=torch.float32, requires_grad=True)
+            hidden = torch.zeros((1, 4, 3), dtype=torch.float32)
+            hidden[t(mask)] = source
+            hidden.sum().backward()
+            self.assertIsNotNone(source.grad)
+            self.ae(source.grad.numpy(), np.ones((2, 3), dtype=np.float32),
+                    msg=f"per-row RHS grad {dev}")
+        both_devices(body)
+
 
 class TestIndexSelect(Base):
     def test_index_select_dim0(self):
