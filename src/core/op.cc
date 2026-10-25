@@ -255,7 +255,7 @@ Var* Op::create_output(NanoVector shape, NanoString dtype) {
 //
 // One edge remains and is accepted: `jt.zeros(n)` is `unary(0).broadcast(n)`.
 // A factory result clears `_is_scalar` on the full-shape result so it promotes
-// as a tensor (KI-DTYPE-004), but `_is_constant` still comes through the
+// as a tensor, but `_is_constant` still comes through the
 // broadcast, so an unsynced zeros/ones does follow its operand. It is a
 // constant with no data anywhere, produced bit-identically on either card, so
 // this is constant placement rather than moving something the caller computed.

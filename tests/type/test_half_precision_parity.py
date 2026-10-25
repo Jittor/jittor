@@ -350,10 +350,10 @@ class TestHalfPythonScalar(unittest.TestCase):
     that the only rounding is the one the output dtype forces. The four
     expressions below are bit-identical to real torch 2.13 on CPU and CUDA, and
     they pin the weak-scalar model that also makes `float64_var * 0.1` exact
-    (KI-DTYPE-003).
+    .
 
     They were long a strict expected failure because `jt.ones(1)` was itself a
-    weak scalar (KI-DTYPE-004): `jt.ones(1).float16() * 0.1` came back float32.
+    weak scalar: `jt.ones(1).float16() * 0.1` came back float32.
     The values are torch's, transcribed.
     """
 
@@ -386,7 +386,7 @@ class TestHalfPythonScalar(unittest.TestCase):
     def test_the_other_direction_uses_the_factory_dtype(self):
         """A float32 factory against a half tensor stays float32.
 
-        KI-DTYPE-004's other direction: `jt.zeros(3)` used to adopt the half
+        The other direction: `jt.zeros(3)` used to adopt the half
         operand's width, because its rank-zero source's `_is_scalar` came
         through the broadcast. A factory result is a tensor, and torch
         promotes float32 with float16 to float32.

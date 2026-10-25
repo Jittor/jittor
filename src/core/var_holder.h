@@ -224,7 +224,7 @@ struct VarHolder {
     // A factory result (`jt.ones`/`zeros`/`full`) is a tensor, not the Python
     // number it was built from: leaving `_is_scalar` set made it promote as a
     // wrapped number, so `jt.ones(4).float16() * 0.1` came back float32
-    // (KI-DTYPE-004). `_is_constant` is set so placement still lets an
+    // `_is_constant` is set so placement still lets an
     // unsynced constant follow its operand's device; only dtype promotion
     // stops seeing the result as a scalar.
     // @pyjt(_as_tensor)

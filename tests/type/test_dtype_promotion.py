@@ -149,7 +149,7 @@ class TestScalarPromotion(unittest.TestCase):
     def test_float64_tensor_with_an_exact_python_float_is_exact(self):
         """The control for the two tests below: exact scalars are already exact.
 
-        Whatever a fix for KI-DTYPE-003 does, scales that float32 represents
+        Whatever the weak-double handling does, scales that float32 represents
         exactly must keep answering exactly -- 2.0 and 3.0 both are, so `v / 3.0`
         is correctly rounded in either precision. This is the half that passes
         today and must not regress.
@@ -159,7 +159,7 @@ class TestScalarPromotion(unittest.TestCase):
         self.assertEqual((v / 3.0).numpy()[0], 1.0 / 3.0)
 
     def test_float64_tensor_with_an_inexact_python_float_keeps_its_value(self):
-        """KI-DTYPE-003: the scalar keeps all 53 bits against float64.
+        """A Python-float scalar keeps all 53 bits against float64.
 
         `test_float_tensor_keeps_its_own_width` above pins the *dtype* using
         2.0, which float32 represents exactly -- so it cannot see the defect
@@ -208,7 +208,7 @@ class TestScalarPromotion(unittest.TestCase):
     def test_array_of_a_python_float_stays_float32(self):
         """`jt.array(0.5)` keeps the native default dtype.
 
-        KI-DTYPE-003 must not widen this path: `jt.array(0.5)` is a float32
+        The weak-double path must not widen this one: `jt.array(0.5)` is a float32
         tensor, not a weak scalar.
         """
         self.assertEqual(str(jt.array(0.5).dtype), "float32")

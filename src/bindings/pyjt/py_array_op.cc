@@ -93,7 +93,7 @@ ArrayOp::ArrayOp(PyObject* obj) {
     if (PyFloat_CheckExact(obj)) {
         // Keep the exact double alongside the float32 staging copy: a Python
         // float against a float64 operand is a weak double and must not lose
-        // 29 mantissa bits (KI-DTYPE-003). binary_op.cc rebuilds the constant
+        // 29 mantissa bits. binary_op.cc rebuilds the constant
         // at float64 from `python_float` when promotion asks for one.
         double value = PyFloat_AS_DOUBLE(obj);
         python_float = value;

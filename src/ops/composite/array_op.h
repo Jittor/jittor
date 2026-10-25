@@ -35,7 +35,7 @@ struct ArrayOp : Op {
     // union in py_array_op.cc narrows it to float32, which is what
     // `jt.array(0.5)` and every float32/half operand must keep seeing; a
     // binary op against a float64 operand rebuilds the constant from this
-    // instead of from the 24-bit narrowing (KI-DTYPE-003).
+    // instead of from the 24-bit narrowing.
     double python_float = 0;
     bool has_python_float = false;
     // @pybind(None)

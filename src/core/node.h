@@ -123,7 +123,7 @@ struct VarFlags {
         // ArrayOp source, and the broadcasts/casts/views of one. `_is_scalar`
         // used to be the only marker a constant had, but a factory now clears
         // it on its full-shape result so that `jt.ones(4)` promotes as the
-        // tensor it is (KI-DTYPE-004). Placement still has to let the same
+        // tensor it is. Placement still has to let the same
         // unsynced constant follow its operand's device (op.cc
         // `is_pending_scalar`), so that fact gets its own bit.
         _is_constant,

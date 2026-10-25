@@ -14,7 +14,6 @@
 | 编号 | 现象 | 影响 |
 | --- | --- | --- |
 | `KI-DTYPE-002` | `jt.array` 隐式构造会把 64 位 NumPy 值收窄到 32 位 | 当前默认行为，有显式逃生口；混 float64 数据时要显式指定 dtype |
-| `KI-DTYPE-003` | Python float 与 float64 张量运算时按 float32 参与 | 静默丢 29 位尾数，float64 计算要留意 |
 | `KI-OPS-012` | 半精度 max/min 归约从有限字面量折叠 | CUDA half 上可能给出错值（CPU 那半已修并验证） |
 | `KI-OPS-014` | 一行 key 全是 `finfo.min` 时，float32 融合注意力的反向当成概率全为 1 | 前向正确；只在整行被 mask 掉时出现 |
 | `KI-SEMANTICS-003` | 浮点比较的后端验证不完整 | CPU/CUDA 与 NPU float32 已验证，其余 NPU dtype 与 ROCm 未验证 |

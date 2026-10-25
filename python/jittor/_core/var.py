@@ -435,8 +435,8 @@ def ones(*shape, dtype="float32"):
             raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
     # A factory result is a tensor, not the wrapped number it was built from:
     # without `_as_tensor` the rank-zero constant's `_is_scalar` survives the
-    # broadcast and `jt.ones(4) * 0.1` promotes like the Python `1`
-    # (KI-DTYPE-004). Placement still follows the operand's device because
+    # broadcast and `jt.ones(4) * 0.1` promotes like the Python `1`.
+    # Placement still follows the operand's device because
     # `_is_constant` carries through the broadcast.
     return _constant_scalar(1, dtype).broadcast(shape)._as_tensor()
 
@@ -548,7 +548,7 @@ def zeros(*shape, dtype="float32"):
     for dim in shape:
         if dim < 0:
             raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
-    # See `ones`: the result is a tensor, not a wrapped number (KI-DTYPE-004).
+    # See `ones`: the result is a tensor, not a wrapped number.
     return _constant_scalar(0, dtype).broadcast(shape)._as_tensor()
 
 def new_zeros(x, size):
@@ -584,7 +584,7 @@ def full(shape,val,dtype="float32"):
     for dim in shape:
         if dim < 0:
             raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
-    # See `ones`: the result is a tensor, not a wrapped number (KI-DTYPE-004).
+    # See `ones`: the result is a tensor, not a wrapped number.
     return _constant_scalar(val, dtype).broadcast(shape)._as_tensor()
 
 def new_full(x, size, val):

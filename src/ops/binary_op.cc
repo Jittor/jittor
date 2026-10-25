@@ -461,7 +461,7 @@ static VarPtr broadcast_binary(Var* x, Var* y, NanoString op) {
     return make_binary(xp, yp, op);
 }
 
-// KI-DTYPE-003. `ArrayOp(PyObject*)` stages a Python float as float32, which
+// `ArrayOp(PyObject*)` stages a Python float as float32, which
 // is what `jt.array(0.5)` and every float32/float16 operand should see. In
 // torch a Python float is a weak double, though: the result dtype is already
 // right (a scalar does not take part in promotion), so the defect is only in
