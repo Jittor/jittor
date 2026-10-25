@@ -195,6 +195,12 @@ Var/Op 图与元算子仍与原生 Jittor 共用，没有单独的 Torch 执行�
 - **前端入口。** `tensor_frontend(type, device=..., like=...)` 在不改 Runtime 默认的情况下
   限定构造。工厂函数、`Tensor`/`new_*` 构造、clone/deepcopy/pickle、`to`/`cpu`/`cuda`、
   序列化的 `map_location` 都走这条边界；设备报告与数据 owner 路由读的是原生放置。
+- **模块 forward。** 放置参考是第一个带显式放置的张量参数；没有这样的参数时，用它自己
+  显式放置的张量（参数/缓冲区）而不是 Runtime 默认（`nn_frontend._placement_reference`，
+  原生快路径同名逻辑在 `first_placed_module_var`）。默认 CPU 放置的模块配未放置的加速器
+  输入时，forward 因此留在参数所在的 CPU；否则中间结果会落在加速器而参数留在主机，便携
+  卷积路径（autocast 下会走它）的第一个二元算子就拒绝混放置。显式放置
+  冲突仍按上面的规则报错，这条只决定"没有任何输入放置时"的默认。
 
 `BackendId` 让 ACL、ROCm、Corex 构建也有同样的 CPU/加速器划分，但运行时每个构建/进程仍只
 选一种加速器，**不提供跨加速器族的拷贝**，也不声称缺失硬件上的验证。定向用例在
