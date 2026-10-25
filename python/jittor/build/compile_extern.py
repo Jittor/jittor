@@ -893,12 +893,14 @@ def setup_nccl(store=None):
     nccl_include_path = build_env("nccl_include_path", environ=os.environ)
     nccl_lib_path = build_env("nccl_lib_path", environ=os.environ)
     nccl_lib_name = None
+    nccl_from_wheel = False
 
     if nccl_lib_path is None or nccl_include_path is None:
         if cuda_wheel_stack and cuda_wheel_stack.component_dir("nccl"):
             nccl_include_path = cuda_wheel_stack.include_dirs("nccl")[0]
             nccl_lib_path = cuda_wheel_stack.lib_dirs("nccl")[0]
             nccl_lib_name = cuda_wheel_stack.find_library("nccl")
+            nccl_from_wheel = True
         else:
             found = find_system_nccl()
             if found:
@@ -933,8 +935,9 @@ def setup_nccl(store=None):
     LOG.v(f"nccl_include_path: {nccl_include_path}")
     LOG.v(f"nccl_lib_path: {nccl_lib_path}")
     LOG.v(f"nccl_lib_name: {nccl_lib_name}")
-    # We do not link manualy, link in custom ops
-    if cuda_wheel_stack and cuda_wheel_stack.component_dir("nccl"):
+    # Load the same NCCL selected for headers and linking. An installed
+    # wheel must not override an explicit include/lib pair at runtime.
+    if nccl_from_wheel:
         preload_cuda_library("nccl", required=True)
     else:
         ctypes.CDLL(nccl_lib_name, dlopen_flags)

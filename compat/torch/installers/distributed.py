@@ -484,6 +484,12 @@ def _get_world_size(group=None):
     return _group_size(group)
 
 
+def _current_graph_task_id():
+    # Jittor has no PyTorch reentrant graph-task identifier. DeepSpeed uses
+    # -1 to mean an ordinary forward, distinct from checkpoint recomputation.
+    return -1
+
+
 class _ReduceOp:
     SUM = 0
     MEAN = 1
@@ -1339,6 +1345,7 @@ def _install_distributed(g, registry=None):
 
     if not hasattr(g, "_C"):
         g._C = _CNS()
+    g._C._current_graph_task_id = _current_graph_task_id
     _install_fsdp2_distributed(dist, g, registry=registry)
     g.distributed = dist
     register_api_bindings(dist, "torch.distributed",
