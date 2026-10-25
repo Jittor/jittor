@@ -801,6 +801,16 @@ def _to(self, *args, **kwargs):
     return out
 
 
+
+def _type_as(self, other):
+    """Match ``Tensor.type_as`` by inheriting dtype and device from ``other``."""
+    if not isinstance(other, _NativeVar):
+        raise TypeError("type_as expects a Tensor argument")
+    # Passing the tensor itself through ``_to`` applies both its dtype and
+    # device. Jittor's native ``type_as`` only changes dtype, which leaves
+    # CUDA constants created by Transformers on the host.
+    return _to(self, other)
+
 def _var_detach(self):
     _context = get_install_context(_owner.jt)
     Var = _context.state["Var"]
@@ -1424,6 +1434,16 @@ def _promoting_binary(self, other, opname, reflected):
     # `_extend_tokens` list concatenation). Match torch: defer to the sequence.
     if isinstance(other, (list, tuple)):
         return NotImplemented
+    if reflected and isinstance(other, (bool, int, float)):
+        # Jittor may materialize a Python scalar on CPU for reflected ops
+        # (notably ``base ** cuda_tensor``). Keep the scalar on the Var's
+        # backend so the native operation cannot create a mixed-device graph.
+        scalar = _owner.jt.array(other, dtype=_jittor_dtype_name(self.dtype))
+        if bool(getattr(self, "is_cuda", False)):
+            scalar = scalar.cuda()
+        elif bool(getattr(self, "is_cpu", False)):
+            scalar = scalar.cpu()
+        other = scalar
     out = _binary_native(opname, self, other, native_api)
     if isinstance(other, (bool, int, float)) and isinstance(out, _NativeVar):
         own = _own_dtype_name(self, native_api)
