@@ -29,6 +29,8 @@ _DTYPE_TO_TYPENAME = {
     "int64": "torch.LongTensor", "int32": "torch.IntTensor",
     "int16": "torch.ShortTensor", "int8": "torch.CharTensor",
     "uint8": "torch.ByteTensor", "bool": "torch.BoolTensor",
+    "complex64": "torch.ComplexFloatTensor",
+    "complex128": "torch.ComplexDoubleTensor",
 }
 
 
@@ -453,7 +455,7 @@ def _new_full(self, size, fill_value, dtype=None, device=None, requires_grad=Fal
     # x.new_full(x.shape, v)); both are iterable with __len__.
     shp = tuple(int(s) for s in size) if hasattr(size, "__len__") else (int(size),)
     with _new_scope(self, device):
-        return _new_finish(_owner.jt.full(shp, fill_value).cast(dt), device, requires_grad)
+        return _new_finish(_owner.jt.full(shp, fill_value, dt), device, requires_grad)
 
 
 def _new_empty(self, *size, dtype=None, device=None, requires_grad=False, **kw):

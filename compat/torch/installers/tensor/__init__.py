@@ -840,6 +840,14 @@ class BoolTensor(metaclass=_TypedTensorMeta):
     _jdtype = 'bool'
 
 
+class ComplexFloatTensor(metaclass=_TypedTensorMeta):
+    _jdtype = 'complex64'
+
+
+class ComplexDoubleTensor(metaclass=_TypedTensorMeta):
+    _jdtype = 'complex128'
+
+
 _TYPED_TENSOR_CLASSES = {
     'FloatTensor': FloatTensor,
     'DoubleTensor': DoubleTensor,
@@ -851,6 +859,8 @@ _TYPED_TENSOR_CLASSES = {
     'CharTensor': CharTensor,
     'ByteTensor': ByteTensor,
     'BoolTensor': BoolTensor,
+    'ComplexFloatTensor': ComplexFloatTensor,
+    'ComplexDoubleTensor': ComplexDoubleTensor,
 }
 
 def _check_condition(condition, message, exception):

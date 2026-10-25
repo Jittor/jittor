@@ -373,7 +373,25 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
             # ones_like / tril / triu have no dtype param in jittor; torch
             # accepts one. Pop it and cast the result instead.
             _cast_to = _dtype_to_str(kwargs.pop("dtype"))
-    out = orig(*args, **kwargs)
+    # rand_like/randn_like inherit the input dtype when dtype= is omitted, so
+    # the complex check must see that inherited dtype, not just an explicit one.
+    _draw_dtype = _cast_to
+    if (_draw_dtype is None and name.endswith("_like") and args
+            and isinstance(args[0], jt.Var)):
+        _inherited = _jittor_dtype_name(args[0].dtype)
+        if _inherited in _COMPLEX_COMPONENTS:
+            _draw_dtype = _inherited
+    if _draw_dtype in _COMPLEX_COMPONENTS and name in _COMPLEX_RANDOM_FACTORIES:
+        shape = _complex_random_shape(name, args)
+        if shape is None:
+            raise NotImplementedError(
+                "torch.%s on a complex dtype needs a resolvable shape for the "
+                "two-draw composition" % name)
+        out = _complex_random(name, shape, _draw_dtype)
+    elif _cast_to in _COMPLEX_COMPONENTS and name == "normal":
+        _complex_normal_refusal()
+    else:
+        out = orig(*args, **kwargs)
     # Typed factories can already return the requested dtype. A final cast
     # should convert values, rather than repeat frontend dispatch unchanged.
     if (_cast_to is not None and
@@ -437,6 +455,51 @@ def _linspace_adapter(original, *args, dtype=None, **kwargs):
 #: generator* returns -- jittor's randint is int32 -- because a generator picks
 #: the stream a draw comes from and nothing else.
 _INTEGER_DRAWS = {"randperm": "int64", "randint": "int32"}
+
+#: Native complex dtypes and the real dtype each part is drawn from.
+_COMPLEX_COMPONENTS = {"complex64": "float32", "complex128": "float64"}
+
+#: Random factories defined over a complex dtype. torch draws the real
+#: and imaginary parts independently over the same shape and distribution.
+_COMPLEX_RANDOM_FACTORIES = frozenset({
+    "rand", "randn", "rand_like", "randn_like",
+})
+
+
+def _complex_random_shape(name, args):
+    """The shape a complex random factory would draw (None if unresolvable)."""
+    if name.endswith("_like"):
+        return (tuple(int(s) for s in args[0].shape) if args else None)
+    if len(args) == 1:
+        resolved = _shape_tuple(args[0])
+        if resolved is not None:
+            return resolved
+    if args and all(_is_dim(a) for a in args):
+        return tuple(int(a) for a in args)
+    return None
+
+
+def _complex_random(name, shape, dtype, generator=None):
+    """Draw a complex tensor from two independent real native draws.
+
+    Jittor instantiates its random kernels over real scalar types, so a
+    complex dtype request never compiles. torch defines rand/randn on a
+    complex dtype as two independent draws over the same shape, one for
+    the real part and one for the imaginary part; composing them here
+    keeps the draw on the native real kernels instead of narrowing it to
+    a dtype the core does not compute.
+    """
+    component = _COMPLEX_COMPONENTS[dtype]
+    distribution = "normal" if name.startswith("randn") else "uniform"
+    real = jt.random(list(shape), component, distribution, generator=generator)
+    imag = jt.random(list(shape), component, distribution, generator=generator)
+    return jt.nn.view_as_complex(jt.stack([real, imag], dim=-1))
+
+
+def _complex_normal_refusal():
+    raise NotImplementedError(
+        "torch.normal does not sample complex dtypes: the core has no "
+        "complex normal kernel; use torch.randn for a complex normal draw")
 
 
 def _is_dim(value):
@@ -542,9 +605,14 @@ def _draw_from_generator(name, generator, args, kwargs):
     else:
         cast_to = _dtype_to_str(get_install_context(jt).target_namespace.get_default_dtype())
     if name in ("randn", "randn_like", "rand", "rand_like"):
-        distribution = "normal" if name.startswith("randn") else "uniform"
-        t = jt.random(shape, cast_to, distribution, generator=native)
+        if cast_to in _COMPLEX_COMPONENTS:
+            t = _complex_random(name, shape, cast_to, generator=native)
+        else:
+            distribution = "normal" if name.startswith("randn") else "uniform"
+            t = jt.random(shape, cast_to, distribution, generator=native)
     elif name == "normal":
+        if cast_to in _COMPLEX_COMPONENTS:
+            _complex_normal_refusal()
         t = jt.normal(mean, std, size=shape, dtype=cast_to, generator=native)
     elif name == "randint":
         if "high" in kwargs:
