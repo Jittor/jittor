@@ -1856,28 +1856,6 @@ PY
 ```
 
 
-## KI-COMPAT-017: a warmed torch.compile replay of an SGD step diverges from eager
-
-- Severity: High (silent wrong parameters after a compiled step)
-- Status: Open; reproduced on `280d44854` and current `2.0-refactor` (CPU,
-  Torch frontend). The failure is deterministic in the maintained test.
-- Owner: step capture/replay and optimizer maintainers.
-- Symptom: `compat/tests/torch/test_torch_compile_replay.py::TestCompileTrainingCpu::test_an_sgd_step_is_replayed_with_its_schedule`
-  compares the first output after eager and replayed steps. The replayed
-  parameters differ by up to `0.1205` (rtol/atol `1e-5`/`1e-6`); the same node
-  fails on the pre-session baseline, so it is not caused by the recent dtype,
-  storage or fetcher changes.
-- Cause: not isolated. The step's learning-rate schedule is supposed to be
-  carried through `step_capture`/replay; either the scheduled rate or the
-  captured write set is not reproduced. The eager/replay pair agrees before
-  warm-up, so the divergence appears with replay.
-- Workaround: run the step eagerly (`torch.compile(..., backend="eager")`) or
-  keep the optimizer outside the compiled region until this is fixed.
-- Evidence: the node above with `JITTOR_TORCH_SHIM=1 PYTHONPATH=compat/shim/resources:python`.
-- Exit condition: eager and replayed first iterations agree within the test's
-  tolerance for the scheduled SGD step (and its CPU/CUDA spellings), with a
-  regression that fails on the unfixed tree.
-
 ## KI-COMPAT-019: bfloat16 autocast training diverges from float32 on CUDA
 
 - Severity: Medium (silent training-numerics divergence under autocast)
